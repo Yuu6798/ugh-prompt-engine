@@ -12081,9 +12081,12 @@ def test_m2e_full_cell_registry_keeps_level_string_order_not_ladder_order(
 ) -> None:
     campaign_path = _write_m2e_campaign(tmp_path)
     campaign = harness._load_m2e_campaign(campaign_path)
-    cells, fixtures_sha256_by_level, repeats_min = harness._m2e_full_cell_registry(campaign)
+    cells, fixtures_sha256_by_level, repeats_min, bars_sha256 = harness._m2e_full_cell_registry(
+        campaign
+    )
     assert set(fixtures_sha256_by_level) == set(harness._M2E_LEVEL_LADDER)
     assert repeats_min == 2
+    assert len(bars_sha256) == 64
     same_bed_clip_levels = [
         c[1]
         for c in cells
@@ -12176,10 +12179,41 @@ def test_generate_m2e_shard_map_records_inputs_registry_digest_and_cells(
     assert doc["n_shards"] == 6
     campaign_sha256 = hashlib.sha256(Path(campaign_path).read_bytes()).hexdigest()
     assert doc["campaign_sha256"] == campaign_sha256
+    # E-47（PR #242 Codex P2 是正）: 実効 bars の sha256 を地図が刻む。
+    assert doc["bars_sha256"] == hashlib.sha256(harness.BARS_PATH.read_bytes()).hexdigest()
+    assert doc["bars_path_relative"] is not None
     for cell in doc["cells"]:
         assert cell["entry_id"] == harness._m2e_entry_id(
             cell["clip_id"], cell["bed_id"], cell["level"]
         )
+
+
+def _write_custom_base_bars(tmp_path: Path, *, repeats_min: int) -> Path:
+    """`m2_accuracy_bars.yaml`（`repeats_min` の供給元）のカスタム複製を書く。
+
+    E-47（PR #242 Codex P2）回帰テスト専用: `--make-shard-map --bars <custom>` が
+    実際に読まれることを、`repeats_min` の変化を通じて外形から確認する。
+    """
+    import yaml as _yaml
+
+    doc = _yaml.safe_load(harness.BARS_PATH.read_text(encoding="utf-8"))
+    doc["m2_accuracy_bars"]["repeats_min"] = repeats_min
+    path = tmp_path / "custom_m2_accuracy_bars.yaml"
+    path.write_text(_yaml.safe_dump(doc, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def test_generate_m2e_shard_map_honors_a_custom_bars_path(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    custom_bars_path = _write_custom_base_bars(tmp_path, repeats_min=3)
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, bars_path=custom_bars_path, **_C6_TEST_SHARD_KWARGS
+    )
+    assert doc["repeats_min"] == 3
+    assert doc["n_cells"] == 2 * 4 * 2 * 3  # 2 clip(BedOne) * 4 level * 2 arm * repeats_min=3
+    expected_bars_sha256 = hashlib.sha256(Path(custom_bars_path).read_bytes()).hexdigest()
+    assert doc["bars_sha256"] == expected_bars_sha256
+    assert doc["bars_sha256"] != hashlib.sha256(harness.BARS_PATH.read_bytes()).hexdigest()
 
 
 def test_generate_m2e_shard_map_rejects_cap_violations(tmp_path: Path) -> None:
@@ -12278,6 +12312,52 @@ def test_require_m2e_shard_map_matches_registry_detects_fixtures_drift(tmp_path:
     Path(fixtures_path).write_text(original + "\n# drift\n", encoding="utf-8")
     with pytest.raises(ValueError, match="fixtures_sha256_by_level"):
         harness._require_m2e_shard_map_matches_registry(doc, campaign)
+
+
+def test_require_m2e_shard_map_matches_registry_detects_a_bars_mismatch(tmp_path: Path) -> None:
+    """E-47（PR #242 Codex P2）: 別世代の bars で組まれた地図を検出する。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    custom_bars_path = _write_custom_base_bars(tmp_path, repeats_min=3)
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, bars_path=custom_bars_path, **_C6_TEST_SHARD_KWARGS
+    )
+    # 既定 BARS_PATH（repeats_min=2）で検証すると bars_sha256 が食い違う。
+    with pytest.raises(ValueError, match="bars_sha256"):
+        harness._require_m2e_shard_map_matches_registry(doc, campaign)
+    # 生成時と同じ --bars を渡せば通る。
+    harness._require_m2e_shard_map_matches_registry(
+        doc, campaign, bars_path=custom_bars_path
+    )  # 例外を投げない
+
+
+def test_require_m2e_shard_map_matches_registry_detects_tampered_shard_assignment(
+    tmp_path: Path,
+) -> None:
+    """E-49（PR #242 Codex P1）: セル鍵は保ったまま shard_id を書き換えた地図を拒否する。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    assert doc["n_shards"] > 1  # 改変が「無意味な変更」にならないことの前提
+    mutated = copy.deepcopy(doc)
+    for cell in mutated["cells"]:
+        cell["shard_id"] = 0
+    mutated["n_shards"] = 1
+    with pytest.raises(ValueError, match="shard_id"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_require_m2e_shard_map_matches_registry_detects_tampered_n_shards_only(
+    tmp_path: Path,
+) -> None:
+    """E-49: 個々の shard_id は正しいまま `n_shards` だけを書き換えた地図も拒否する。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["n_shards"] = mutated["n_shards"] + 1
+    with pytest.raises(ValueError, match="n_shards"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
 
 
 def test_m2e_shard_cells_for_preserves_order_and_attaches_cost(tmp_path: Path) -> None:
@@ -12781,6 +12861,109 @@ def test_execute_m2e_shard_detects_shard_map_drift_before_running(tmp_path: Path
     original = Path(fixtures_path).read_text(encoding="utf-8")
     Path(fixtures_path).write_text(original + "\n# drift\n", encoding="utf-8")
     with pytest.raises(ValueError, match="fixtures_sha256_by_level"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=tmp_path / "store_A",
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+
+
+def test_execute_m2e_shard_does_not_count_unavailable_cells_as_completed(
+    tmp_path: Path,
+) -> None:
+    """E-46（PR #242 Codex P1）: `outcome != "measured"` のセルを completed から外し、
+
+    理由つきで未完側（`cells_unavailable`）へ計上する。shard 全体は中断しない。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    cell_store = tmp_path / "store_A"
+    result = harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=cell_store,
+        workers=1,
+        measure_fn=_shard_queue_fakes.unavailable,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    expected_total = len([c for c in map_doc["cells"] if c["shard_id"] == 0])
+    assert expected_total > 0
+    assert result["cells_completed"] == 0
+    assert result["cells_measured"] == []
+    assert result["cells_resumed"] == []
+    assert len(result["cells_unavailable"]) == expected_total
+    for ref in result["cells_unavailable"]:
+        assert ref["reason"] == "fake unavailable for E-46 regression test"
+    assert result["cells_truncated"] == []
+    assert result["cells_not_started"] == []  # 全セルが試された——unavailable は未着手ではない
+    # unavailable セルはチェックポイントを書かない。
+    assert list(cell_store.glob("cell_*.json")) == []
+
+
+def test_execute_m2e_shard_unavailable_cells_still_block_the_next_shard(
+    tmp_path: Path,
+) -> None:
+    """E-46: unavailable はレコードを残さないので、次 shard は昇順実行の関所で拒否される
+
+    （「完了」を偽らないことの外部から見た帰結）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    assert map_doc["n_shards"] >= 2
+    cell_store = tmp_path / "store_A"
+    harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=cell_store,
+        workers=1,
+        measure_fn=_shard_queue_fakes.unavailable,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    with pytest.raises(ValueError, match="昇順実行"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=1,
+            campaign=campaign,
+            cell_store=cell_store,
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+
+
+def test_execute_m2e_shard_rechecks_pinned_source_closure_after_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-48（PR #242 Codex P2）: shard 実行記録の構築・書き出し前に
+
+    `_require_unchanged_since_load()` を呼ぶ（既存 run/census 経路と同じ post-execution
+    ガード）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+
+    def _boom() -> None:
+        raise RuntimeError("simulated post-execution source drift")
+
+    monkeypatch.setattr(harness, "_require_unchanged_since_load", _boom)
+    with pytest.raises(RuntimeError, match="simulated post-execution source drift"):
         harness.execute_m2e_shard(
             map_doc=map_doc,
             map_sha256=map_sha256,

@@ -28,3 +28,22 @@ def sleep(task: "Dict[str, Any]") -> "Dict[str, Any]":
 def raise_error(task: "Dict[str, Any]") -> "Dict[str, Any]":
     """常に失敗する fake（例外伝播テスト用）。"""
     raise RuntimeError("fake shard worker failure")
+
+
+def unavailable(task: "Dict[str, Any]") -> "Dict[str, Any]":
+    """`outcome == "unavailable"` を返す fake（E-46 回帰テスト用）。
+
+    `_measure_or_resume_external_clip_row` が抽出器スタック未導入セルに対して
+    行う「チェックポイントを書かない」を模す——この fake もセルレコードを一切
+    書かない。ワーカーとしては正常に返る（例外を投げない）点が `raise_error` との
+    違い——キュー機構からは「完了」扱いになるが、`execute_m2e_shard` はこれを
+    `cells_completed` から除外し `cells_unavailable` へ計上しなければならない。
+    """
+    return {
+        "resumed": False,
+        "measured": False,
+        "mismatches": [],
+        "outcome": "unavailable",
+        "detail": "fake unavailable for E-46 regression test",
+    }
+

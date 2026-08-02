@@ -1392,6 +1392,28 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
 **r4/r6 の運用**: 本測定は run・evaluate ともに
 `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 ... --pin-threads` で起動する（runbook §5 以降）。
 
+**E-46〜E-49（PR #242 Codex 第 1 巡・C6 シャード実行機のレビュー是正）。**
+
+- **E-46（P1）**: `outcome == "unavailable"` のセルはチェックポイントを書かないのに、
+  キュー機構は正常応答として `completed` に数え、未完リストにも載らなかった——次
+  shard が「先行 shard 未完了」で fail-closed になるまで矛盾が顕在化しない会計上の
+  穴だった。`execute_m2e_shard` は非 `measured` のセルを `cells_completed` から外し、
+  理由つきで `cells_unavailable` へ計上する（§8.6「未完として記録する」の会計を
+  「打ち切り」以外の未完種別にも揃える）。shard 全体は中断しない——セルは独立で、
+  許可式が既に壁時計を有界化している。
+- **E-47（P2）**: `--make-shard-map --bars <custom>` は CLI 上受理されるのに registry
+  構築は常にモジュール既定の `BARS_PATH` を読んでいた。`--bars` を registry 構築・
+  検証まで貫通させ、実効 bars の sha256 を地図へ刻む（`bars_sha256`）。
+- **E-49（P2）**: `_require_m2e_shard_map_matches_registry` はセル鍵の集合一致しか
+  見ておらず、鍵を保ったまま `shard_id`/`n_shards` だけを書き換えた地図（凍結
+  パッキングアルゴリズムと `R_max` 契約を丸ごとバイパスする改変）を通してしまった。
+  地図の記録した入力から `_assign_m2e_shard_ids` で割当を再計算し、全セルの
+  `shard_id` と `n_shards` の完全一致を要求する——**地図は科学ではなく
+  スケジューリングだが、改変検出は台帳と同格**という § 8.5 の規律をここでも守る。
+- **E-48（P2）**: 数時間かかりうるキュー完走後、shard 実行記録の構築・書き出し前に
+  `_require_unchanged_since_load()` を呼んでいなかった（run/census 経路は呼ぶ）。
+  同じ post-execution ガードを shard モードにも及ぼす。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

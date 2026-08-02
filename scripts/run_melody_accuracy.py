@@ -10137,11 +10137,13 @@ def _m2e_entry_id(clip_id: str, bed_id: str, level: str) -> str:
 
 def _m2e_full_cell_registry(
     campaign: "Dict[str, Dict[str, Path]]",
-) -> "Tuple[List[Tuple[str, str, str, str, int]], Dict[str, str], int]":
+    *,
+    bars_path: Path = BARS_PATH,
+) -> "Tuple[List[Tuple[str, str, str, str, int]], Dict[str, str], int, str]":
     """§8.5 のセル台帳（1280 セル）を lexical order で列挙する。
 
-    戻り値: (cells, fixtures_sha256_by_level, repeats_min)。`cells` の各要素は
-    `(bed_id, level, clip_id, arm, repeat_index)` の 5-tuple——設計 §8.5 の
+    戻り値: (cells, fixtures_sha256_by_level, repeats_min, bars_sha256)。`cells` の
+    各要素は `(bed_id, level, clip_id, arm, repeat_index)` の 5-tuple——設計 §8.5 の
     `(bed_id, level, clip_id, arm, repeat_idx)` lexical order そのもの（level は
     ラダー添字ではなく**文字列のまま**——決定済み設計判断 3: `'+12dB' < '+6dB' <
     '-6dB' < '0dB'` という物理量と無関係な順序になるが「直して」はならない）。
@@ -10150,8 +10152,14 @@ def _m2e_full_cell_registry(
     読まない（manifest 未生成のうちに地図を作れるようにするため。§8.5「シャード地図は
     科学ではなくスケジューリングである」の実装上の帰結: 地図生成は音声実体を必要と
     しない）。
+
+    `bars_path`（E-47・PR #242 Codex P2 是正）: `--make-shard-map --bars <custom>` が
+    指定した bars を registry 構築・検証まで貫通させる。既定はモジュール既定の
+    `BARS_PATH`（従来どおりの挙動）。戻り値の `bars_sha256` を地図に刻むことで、
+    別世代の bars で組まれた地図を後から検出できる（`_require_m2e_shard_map_matches_
+    registry` が照合する）。
     """
-    bars, bars_sha256 = load_bars(BARS_PATH)
+    bars, bars_sha256 = load_bars(bars_path)
     bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
     repeats_min = int(bar_block["repeats_min"])
     arms = _categories_owned_by("m2e_accuracy_bars.yaml")
@@ -10175,7 +10183,7 @@ def _m2e_full_cell_registry(
                 for repeat_index in range(repeats_min):
                     cells.append((bed_id, level, clip_id, arm, repeat_index))
     cells.sort()
-    return cells, fixtures_sha256_by_level, repeats_min
+    return cells, fixtures_sha256_by_level, repeats_min, bars_sha256
 
 
 def _m2e_shard_cell_cost(arm: str, *, t_direct: float, t_stem: float) -> float:
@@ -10240,12 +10248,18 @@ def generate_m2e_shard_map(
     t_stem: float,
     startup_cost: float,
     session_budget: float = _M2E_DEFAULT_SESSION_BUDGET_S,
+    bars_path: Path = BARS_PATH,
 ) -> "Dict[str, Any]":
     """§8.5 のシャード地図を生成する（生成器 `--make-shard-map` の実体）。
 
-    自由変数なし: 入力（`t_direct`/`t_stem`/`startup_cost`/`session_budget`/campaign の
-    中身）が同じなら出力は一意（`generated_utc` を除く——テストは `_utc_now` を
-    monkeypatch してバイト一致を固定する）。
+    自由変数なし: 入力（`t_direct`/`t_stem`/`startup_cost`/`session_budget`/campaign/
+    `bars_path` の中身）が同じなら出力は一意（`generated_utc` を除く——テストは
+    `_utc_now` を monkeypatch してバイト一致を固定する）。
+
+    `bars_path`（E-47・PR #242 Codex P2 是正）: CLI `--bars` の指定を registry 構築
+    （`repeats_min` の供給元）まで貫通させる。既定はモジュール既定の `BARS_PATH`。
+    実効 bars の sha256 を地図へ記録する（`_require_m2e_shard_map_matches_registry`
+    が消費時に照合する）。
     """
     if not (t_direct > 0):
         raise ValueError(f"generate_m2e_shard_map: t_direct {t_direct!r} は正数のみ許可する")
@@ -10265,7 +10279,9 @@ def generate_m2e_shard_map(
     campaign_sha256 = hashlib.sha256(campaign_bytes).hexdigest()
     campaign = _load_m2e_campaign(campaign_path)
 
-    cells, fixtures_sha256_by_level, repeats_min = _m2e_full_cell_registry(campaign)
+    cells, fixtures_sha256_by_level, repeats_min, bars_sha256 = _m2e_full_cell_registry(
+        campaign, bars_path=bars_path
+    )
     shard_ids, cap, n_shards = _assign_m2e_shard_ids(
         cells,
         t_direct=t_direct,
@@ -10309,6 +10325,8 @@ def generate_m2e_shard_map(
         },
         "campaign_path_relative": _repo_relative_path(campaign_path),
         "campaign_sha256": campaign_sha256,
+        "bars_path_relative": _repo_relative_path(Path(bars_path).resolve()),
+        "bars_sha256": bars_sha256,
         "fixtures_sha256_by_level": fixtures_sha256_by_level,
         "repeats_min": repeats_min,
         "n_cells": len(cell_records),
@@ -10329,6 +10347,7 @@ def _load_m2e_shard_map(path: "str | Path") -> "Tuple[Dict[str, Any], str]":
     for required in (
         "inputs",
         "campaign_sha256",
+        "bars_sha256",
         "fixtures_sha256_by_level",
         "repeats_min",
         "n_shards",
@@ -10341,16 +10360,38 @@ def _load_m2e_shard_map(path: "str | Path") -> "Tuple[Dict[str, Any], str]":
 
 
 def _require_m2e_shard_map_matches_registry(
-    map_doc: "Dict[str, Any]", campaign: "Dict[str, Dict[str, Path]]"
+    map_doc: "Dict[str, Any]",
+    campaign: "Dict[str, Dict[str, Path]]",
+    *,
+    bars_path: Path = BARS_PATH,
 ) -> None:
-    """地図の `cells` が現在の campaign から再計算した台帳と 1:1 で一致することを要求する。
+    """地図の `cells` が現在の campaign から再計算した台帳・割当と一致することを要求する。
 
     欠け・重複・余剰のいずれも fail-closed（§8.5「セル台帳は不可侵」の実行時側の
     立証）。台帳が動いた（fixtures が改訂された・`repeats_min` が変わった等）状態の
     まま古い地図を消費すると、測っていないセルを完了扱いにしたり、存在しないセルへ
     `shard_id` を割り当てたりする。
+
+    E-49（PR #242 Codex P1 是正）: セル鍵の集合一致だけでは、鍵は保ったまま
+    `shard_id` の値や `n_shards` だけを書き換えた地図（例: 全セルを shard 0 に
+    寄せて `n_shards: 1` を名乗る）を素通ししてしまう——凍結パッキングアルゴリズムと
+    `R_max` 契約を丸ごとバイパスできることになる。**地図は科学ではなく
+    スケジューリングだが、改変検出は台帳と同格で要求する**: 地図が記録した入力
+    （S/T_direct/T_stem/B_session）から `_assign_m2e_shard_ids` で割当を再計算し、
+    全セルの `shard_id` と `n_shards` の完全一致を要求する。
+
+    `bars_path`（E-47・PR #242 Codex P2 是正）: `--bars` の指定を検証まで貫通させ、
+    地図が刻んだ `bars_sha256` と実効 bars の実体を照合する。
     """
-    registry_cells, fixtures_sha256_by_level, repeats_min = _m2e_full_cell_registry(campaign)
+    registry_cells, fixtures_sha256_by_level, repeats_min, bars_sha256 = _m2e_full_cell_registry(
+        campaign, bars_path=bars_path
+    )
+    if map_doc.get("bars_sha256") != bars_sha256:
+        raise ValueError(
+            f"shard map: bars_sha256 {map_doc.get('bars_sha256')!r} が --bars {bars_path} "
+            f"の実体 {bars_sha256!r} と不一致; 別世代の bars（repeats_min 等の共有スカラー "
+            "供給元）で組まれた地図を消費しない (fail-closed)"
+        )
     if map_doc.get("fixtures_sha256_by_level") != fixtures_sha256_by_level:
         raise ValueError(
             "shard map: fixtures_sha256_by_level が現在の campaign の実体と不一致; "
@@ -10364,6 +10405,7 @@ def _require_m2e_shard_map_matches_registry(
     registry_set = set(registry_cells)
     map_set: "set" = set()
     duplicates: "List[Tuple[str, str, str, str, int]]" = []
+    declared_shard_id: "Dict[Tuple[str, str, str, str, int], Any]" = {}
     for record in map_doc["cells"]:
         key = (
             record["bed_id"],
@@ -10375,6 +10417,7 @@ def _require_m2e_shard_map_matches_registry(
         if key in map_set:
             duplicates.append(key)
         map_set.add(key)
+        declared_shard_id[key] = record.get("shard_id")
     if duplicates:
         raise ValueError(f"shard map: セル鍵が重複している ({duplicates[:5]}) (fail-closed)")
     missing = registry_set - map_set
@@ -10383,6 +10426,30 @@ def _require_m2e_shard_map_matches_registry(
         raise ValueError(
             f"shard map: 台帳と一致しない (missing={len(missing)}, extra={len(extra)}); "
             "セル台帳は不可侵——地図は再生成すること (fail-closed)"
+        )
+
+    inputs = map_doc["inputs"]
+    expected_shard_ids, _cap, expected_n_shards = _assign_m2e_shard_ids(
+        registry_cells,
+        t_direct=float(inputs["t_direct_s"]),
+        t_stem=float(inputs["t_stem_s"]),
+        startup_cost=float(inputs["startup_cost_s"]),
+        session_budget=float(inputs["session_budget_s"]),
+    )
+    expected_shard_id_by_key = dict(zip(registry_cells, expected_shard_ids))
+    mismatched = sorted(
+        key for key in registry_set if declared_shard_id.get(key) != expected_shard_id_by_key[key]
+    )
+    if mismatched:
+        raise ValueError(
+            f"shard map: {len(mismatched)} 件のセルの shard_id が、地図の記録した入力"
+            "（S/T_direct/T_stem/B_session）から凍結アルゴリズムで再計算した割当と "
+            f"一致しない（例: {mismatched[:3]}）; 改変された割当で実行しない (fail-closed)"
+        )
+    if int(map_doc.get("n_shards", -1)) != expected_n_shards:
+        raise ValueError(
+            f"shard map: n_shards {map_doc.get('n_shards')!r} が再計算値 "
+            f"{expected_n_shards!r} と不一致 (fail-closed)"
         )
 
 
@@ -10551,6 +10618,10 @@ def _shard_measure_and_record_cell(
         "measured": entry_id in cells_measured,
         "mismatches": cell_store_mismatches,
         "outcome": clip_row.get("outcome"),
+        # E-46（PR #242 Codex P1 是正）: outcome == "unavailable" のときの理由
+        # （`_build_external_clip_row` が刻む 1 行説明）。`execute_m2e_shard` が
+        # completed から外して未完側へ回すときに使う。
+        "detail": clip_row.get("detail"),
     }
 
 
@@ -10717,7 +10788,7 @@ def execute_m2e_shard(
             f"execute_m2e_shard: shard_id {shard_id!r} が地図の n_shards={n_shards!r} 以上 "
             "(fail-closed)"
         )
-    _require_m2e_shard_map_matches_registry(map_doc, campaign)
+    _require_m2e_shard_map_matches_registry(map_doc, campaign, bars_path=bars_path)
 
     thread_pinning = _apply_thread_pinning() if require_thread_pinning else None
 
@@ -10808,12 +10879,29 @@ def execute_m2e_shard(
             "entry_id": entry["entry_id"],
         }
 
-    resumed_refs = [_cell_ref(c["cell"]) for c in result["completed"] if c["result"]["resumed"]]
-    measured_refs = [_cell_ref(c["cell"]) for c in result["completed"] if c["result"]["measured"]]
+    # E-46（PR #242 Codex P1 是正）: `_measure_or_resume_external_clip_row` は
+    # `outcome == "unavailable"`（抽出器スタック未導入）のセルにチェックポイントを
+    # 書かない（§8.6「未完として記録する」と同じ精神）。しかしワーカーはこの場合も
+    # 例外なく正常に返るため、`run_m2e_shard_queue` の `completed` にはそのまま
+    # 積まれてしまう——ここで区別しないと、レコードの無いセルを「完了」と数えた
+    # shard 実行記録が、次 shard の `_require_prior_m2e_shards_complete` で初めて
+    # 矛盾として顕在化する（記録は嘘をつかないが、会計が食い違う）。
+    # **shard 全体は中断しない**——セルは独立でよく、許可式が既に壁時計を有界化して
+    # いるため、unavailable を理由に他のセルの実行機会を奪う必要が無い。
+    measured_completed = [c for c in result["completed"] if c["result"]["outcome"] == "measured"]
+    unavailable_completed = [
+        c for c in result["completed"] if c["result"]["outcome"] != "measured"
+    ]
+    resumed_refs = [_cell_ref(c["cell"]) for c in measured_completed if c["result"]["resumed"]]
+    measured_refs = [_cell_ref(c["cell"]) for c in measured_completed if c["result"]["measured"]]
+    unavailable_refs = [
+        {**_cell_ref(c["cell"]), "reason": c["result"].get("detail") or "unavailable"}
+        for c in unavailable_completed
+    ]
     truncated_refs = [_cell_ref(c) for c in result["truncated"]]
     not_started_refs = [_cell_ref(c) for c in result["not_started"]]
 
-    return {
+    record = {
         "schema_version": _M2E_SHARD_RUN_SCHEMA,
         "started_utc": started_utc,
         "finished_utc": _utc_now(),
@@ -10829,12 +10917,20 @@ def execute_m2e_shard(
         "t_stem_s": float(map_doc["inputs"]["t_stem_s"]),
         "elapsed_seconds": result["elapsed_seconds"],
         "cells_total": len(shard_cells),
-        "cells_completed": len(result["completed"]),
+        "cells_completed": len(measured_completed),
         "cells_resumed": resumed_refs,
         "cells_measured": measured_refs,
+        "cells_unavailable": unavailable_refs,
         "cells_truncated": truncated_refs,
         "cells_not_started": not_started_refs,
     }
+    # E-48（PR #242 Codex P2 是正）: 数時間かかりうるキュー完走後、shard 実行記録を
+    # 組み立てる・書き出す**前**に、load 時に pin した first-party ソース閉包が
+    # 実行中に差し替わっていないことを確認する（既存の run/evaluate/census 経路と
+    # 同じ post-execution ガード。差し替わっていれば「pin した digest」と「次回
+    # import されるコード」が食い違い、書いたセルの由来が保証できなくなる）。
+    _require_unchanged_since_load()
+    return record
 
 
 # census phase は「渡されたか」を問う必要がある——値の比較では既定値の明示指定を検出
@@ -11086,7 +11182,11 @@ def main() -> int:
             raise SystemExit(
                 "--make-shard-map には --t-direct / --t-stem / --startup-cost が必須"
             )
-        protected = {Path(args.campaign).resolve(), Path(BARS_PATH).resolve()}
+        # E-47（PR #242 Codex P2 是正）: `--bars` の指定を保護集合・生成の両方まで
+        # 貫通させる（従来は保護のみ `BARS_PATH` 固定で、生成は常にモジュール既定を
+        # 読んでいたため、カスタム --bars が「読まれる」と help に書きながら実際には
+        # 無視されていた）。
+        protected = {Path(args.campaign).resolve(), Path(args.bars).resolve()}
         for level_paths in _load_m2e_campaign(args.campaign).values():
             protected.update(level_paths.values())
         if Path(args.out).resolve() in protected:
@@ -11105,6 +11205,7 @@ def main() -> int:
             t_stem=args.t_stem,
             startup_cost=args.startup_cost,
             session_budget=args.session_budget,
+            bars_path=args.bars,
         )
         payload = yaml.safe_dump(
             shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
@@ -11158,7 +11259,12 @@ def main() -> int:
                 "と別の campaign を消費しない (fail-closed)"
             )
         campaign = _load_m2e_campaign(args.campaign)
-        protected = {Path(args.shard_map).resolve(), Path(args.campaign).resolve()}
+        # E-47: `--bars`（registry 検証・tolerance/est_voiced_floor の供給元）も保護する。
+        protected = {
+            Path(args.shard_map).resolve(),
+            Path(args.campaign).resolve(),
+            Path(args.bars).resolve(),
+        }
         for level_paths in campaign.values():
             protected.update(level_paths.values())
         cell_store_root = Path(args.cell_store).resolve()
@@ -11166,7 +11272,7 @@ def main() -> int:
         if out_resolved in protected:
             raise SystemExit(
                 f"--out {args.out} は shard 実行の入力（shard-map / campaign / manifest / "
-                "fixtures）と同じパスを指している; 入力を実行記録で上書きしない "
+                "fixtures / bars）と同じパスを指している; 入力を実行記録で上書きしない "
                 "(fail-closed)"
             )
         if out_resolved == cell_store_root or cell_store_root in out_resolved.parents:
@@ -11188,6 +11294,7 @@ def main() -> int:
         print(
             f"  shard {shard_run['shard_id']}/{shard_run['n_shards']}: "
             f"completed={shard_run['cells_completed']}/{shard_run['cells_total']} "
+            f"unavailable={len(shard_run['cells_unavailable'])} "
             f"truncated={len(shard_run['cells_truncated'])} "
             f"not_started={len(shard_run['cells_not_started'])}"
         )
