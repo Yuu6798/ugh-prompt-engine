@@ -2534,6 +2534,31 @@ import numpy as np  # noqa: E402
 # unchanged_since_bind` docstring 参照。境界の正直会計あり）。
 _require_scorer_native_unchanged_since_bind()
 
+def _package_code_state_for_bind(name: str) -> "Tuple[str, Optional[str]]":
+    """1 パッケージのコード hash を束縛用に採る（未導入は `(state, None)`）。
+
+    `packages_code_sha256` と同じ判定規約を単体で使うための薄い包み——未導入は
+    「実行されない」ので skip、**導入済みで hash できない場合は送出**（実装の一部を
+    覆わない pin を環境同一性として使わない）。
+    """
+    from svp_rpe.melody.provenance import (
+        STATE_ABSENT,
+        STATE_UNHASHABLE,
+        package_code_state,
+    )
+
+    state, digest = package_code_state(name)
+    if state == STATE_ABSENT:
+        return state, None
+    if state == STATE_UNHASHABLE or not digest:
+        raise RuntimeError(
+            f"実行パッケージ {name!r} は導入済みだがコード hash を採れない "
+            "(namespace/zip 配置・読めないファイル); 実装を覆わない pin を環境同一性と "
+            "して使わない (fail-closed)"
+        )
+    return state, digest
+
+
 # 束縛（bind）: **`import soundfile` より前**に libsndfile 実体を pin する。import 後に
 # 束縛すると、実体が差し替えられた場合にプロセスは dlopen 済みの旧 libsndfile で読み
 # 続けたまま新しい bytes の digest を名乗る（numpy/scipy は `_scorer_pins` が既に
@@ -2542,6 +2567,16 @@ _require_scorer_native_unchanged_since_bind()
 _LOADED_DIST_NATIVE_PINS: Dict[str, str] = {
     "soundfile": _scorer_dist_native_sha256("soundfile", verify_pre_bind_gates=False)
 }
+# 同じ理由で **コード側**も import 前に束縛する。native だけ pin しても、
+# `soundfile.py`（libsndfile を叩く Python ラッパ）が import 後に差し替えられれば、
+# デコードは in-memory の旧ラッパを通り続けるのに digest は新しいディスクを指す。
+# numpy/scipy 等 `_SCORER_RUNTIME_PACKAGES` のコード pin は `_scorer_pins` が既に
+# import 前束縛済み——ここはその機構が覆っていない module scope の残り。
+_LOADED_RUNTIME_CODE_PINS: Dict[str, str] = {}
+for _eager in ("soundfile",):
+    _eager_state, _eager_digest = _package_code_state_for_bind(_eager)
+    if _eager_digest is not None:
+        _LOADED_RUNTIME_CODE_PINS[_eager] = _eager_digest
 
 import soundfile as sf  # noqa: E402
 import yaml  # noqa: E402
@@ -5325,16 +5360,40 @@ def _env_digest_runtime_code() -> "Tuple[str, Tuple[str, ...]]":
     プロセス内で 1 度だけ計算する（初回 ~9 秒）。プロセス内でのコード差し替えは
     `_require_unchanged_since_load()` の post-run 再計算が別途捕まえる。
     """
-    from svp_rpe.melody.provenance import packages_code_sha256
-
-    names = _runtime_code_package_names()
-    digest, covered = packages_code_sha256(names)   # 送出は伝播させる (fail-closed)
-    if not digest or not covered:
+    _bind_runtime_code_pins(_runtime_code_package_names())
+    if not _LOADED_RUNTIME_CODE_PINS:
         raise RuntimeError(
-            f"実行スタック {names} のうち 1 つも実装 hash を採れなかった; "
-            "何も覆っていない pin を環境同一性として使わない (fail-closed)"
+            f"実行スタック {_runtime_code_package_names()} のうち 1 つも実装 hash を "
+            "採れなかった; 何も覆っていない pin を環境同一性として使わない (fail-closed)"
         )
-    return digest, tuple(covered)
+    return _fold_runtime_code_pins(), tuple(sorted(_LOADED_RUNTIME_CODE_PINS))
+
+
+def _bind_runtime_code_pins(names: "Tuple[str, ...]") -> None:
+    """`names` のコード hash を**まだ束縛していないものだけ**確定させる。
+
+    `soundfile` のように本モジュールが module scope で import するものは、既に
+    import 直前で束縛済み（`_LOADED_RUNTIME_CODE_PINS` の初期値）。残りは
+    crepe / torch / demucs / librosa 等の遅延 import で、初回の `env_digest` 計算が
+    import より前に走るためここで束縛できる。
+    """
+    for name in names:
+        if name in _LOADED_RUNTIME_CODE_PINS:
+            continue
+        _state, digest = _package_code_state_for_bind(name)
+        if digest is not None:
+            _LOADED_RUNTIME_CODE_PINS[name] = digest
+
+
+def _fold_runtime_code_pins() -> str:
+    """束縛済みコード pin を 1 本の digest へ畳む（名前込みで順序非依存）。"""
+    folded = hashlib.sha256()
+    for name, digest in sorted(_LOADED_RUNTIME_CODE_PINS.items()):
+        folded.update(name.encode("utf-8"))
+        folded.update(b"\0")
+        folded.update(digest.encode("ascii"))
+        folded.update(b"\0")
+    return folded.hexdigest()
 
 
 def _env_digest_dist_native() -> "Tuple[Tuple[str, str], ...]":
@@ -5436,16 +5495,16 @@ def _require_runtime_code_unchanged_since_bind() -> None:
     `_require_dist_native_unchanged_since_bind()` は本体ディレクトリ外のネイティブしか
     見ないため、この窓はどちらでも覆われない。**memoize を迂回して読み直す。**
     """
-    from svp_rpe.melody.provenance import packages_code_sha256
+    from svp_rpe.melody.provenance import package_code_state
 
-    expected_digest, expected_covered = _env_digest_runtime_code()
-    digest, covered = packages_code_sha256(_runtime_code_package_names(), use_cache=False)
-    if digest != expected_digest or tuple(covered) != expected_covered:
-        raise RuntimeError(
-            f"run_accuracy: 実行スタックの実装 hash が束縛時点（{expected_digest!r} / "
-            f"{expected_covered}）と不一致（現在 {digest!r} / {tuple(covered)}）; "
-            "走ったコードと digest が食い違うセルを保存・resume・合算させない (fail-closed)"
-        )
+    for name, expected in sorted(_LOADED_RUNTIME_CODE_PINS.items()):
+        _state, current = package_code_state(name, use_cache=False)
+        if current != expected:
+            raise RuntimeError(
+                f"run_accuracy: {name!r} の実装 hash が束縛時点の pin（{expected!r}）と "
+                f"不一致（現在 {current!r}）; 走ったコードと digest が食い違うセルを "
+                "保存・resume・合算させない (fail-closed)"
+            )
 
 
 def _env_digest_numeric_runtime() -> Dict[str, Any]:
@@ -6079,10 +6138,15 @@ def run_accuracy(
     # 同じ規律を非 scorer パッケージの同梱ネイティブにも課す（uncached でディスクを
     # 読み直し、束縛時点の pin と比較する）。`env_digest` は束縛値を名乗るので、
     # run 中に差し替えられていればここで落とす。
-    _require_dist_native_unchanged_since_bind()
-    # 実装 hash（memoize 済み）も読み直す——遅延 import のパッケージは「digest 計算
-    # 後・import 前」に差し替えられうる（上 2 つの検査はどちらもその窓を覆わない）。
-    _require_runtime_code_unchanged_since_bind()
+    # `env_digest` を束縛した run（`--cell-store` / M2e）だけに課す。素の run は
+    # `env_digest_value is None` で環境同一性を名乗らない契約であり、そこで高価な
+    # 全ツリー走査を 2 本足しても drift 保護にならない上、hash 不能な optional
+    # パッケージがあると従来通っていた M2a/M2c run を新たに落とす。
+    if env_digest_value is not None:
+        _require_dist_native_unchanged_since_bind()
+        # 実装 hash も読み直す——遅延 import のパッケージは「束縛後・import 前」に
+        # 差し替えられうる（上 2 つの検査はどちらもその窓を覆わない）。
+        _require_runtime_code_unchanged_since_bind()
     # Codex 16 巡目 P2-B: `numeric_runtime_config` は category loop（scoring）完了後・
     # かつ上の `_require_unchanged_since_load()`（post-run スコアラー pin 再計算）の
     # **後**にここで確定させる（`_numeric_runtime_config` / `_scorer_optional_

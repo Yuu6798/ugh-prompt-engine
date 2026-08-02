@@ -9734,6 +9734,9 @@ def test_env_digest_folds_the_distribution_native_pins(
     # 束縛時点の値を返す（ディスクを読み直さない）——import 後に実体が差し替わっても
     # 「走っていない実装」の digest を名乗らせないため。
     assert "soundfile" in harness._LOADED_DIST_NATIVE_PINS   # import 前に束縛済み
+    # コード側（`soundfile.py` のラッパ）も import 前に束縛する——native だけ pin して
+    # も、ラッパが差し替われば in-memory の旧実装で読み続けたまま新 digest を名乗る。
+    assert "soundfile" in harness._LOADED_RUNTIME_CODE_PINS
 
     baseline = harness._env_digest()
     monkeypatch.setattr(harness, "_env_digest_dist_native", lambda: (("numpy", "9" * 64),))
@@ -9750,12 +9753,8 @@ def test_runtime_code_drift_since_bind_is_rejected(monkeypatch: pytest.MonkeyPat
     harness._env_digest_runtime_code()   # 束縛値を先に確定させる（patch 前の実体）
     harness._require_runtime_code_unchanged_since_bind()
 
-    import svp_rpe.melody.provenance as provenance
-
-    monkeypatch.setattr(
-        provenance, "packages_code_sha256", lambda names, **kw: ("9" * 64, ("numpy",))
-    )
-    with pytest.raises(RuntimeError, match="束縛時点"):
+    monkeypatch.setitem(harness._LOADED_RUNTIME_CODE_PINS, "numpy", "9" * 64)
+    with pytest.raises(RuntimeError, match="束縛時点の pin"):
         harness._require_runtime_code_unchanged_since_bind()
 
 
@@ -9777,13 +9776,16 @@ def test_env_digest_fails_closed_when_runtime_code_cannot_be_hashed(
     """
     harness._env_digest_runtime_code.cache_clear()
 
-    def _boom(names, **kwargs):
-        raise RuntimeError("namespace layout: cannot fingerprint")
-
     import svp_rpe.melody.provenance as provenance
 
-    monkeypatch.setattr(provenance, "packages_code_sha256", _boom)
-    with pytest.raises(RuntimeError, match="cannot fingerprint"):
+    monkeypatch.setattr(
+        provenance,
+        "package_code_state",
+        lambda name, **kw: (provenance.STATE_UNHASHABLE, None),
+    )
+    # 束縛済み pin を空にして「これから束縛する」状態にする（実 gate を通すため）。
+    monkeypatch.setattr(harness, "_LOADED_RUNTIME_CODE_PINS", {})
+    with pytest.raises(RuntimeError, match="コード hash を採れない"):
         harness._env_digest_runtime_code()
     harness._env_digest_runtime_code.cache_clear()
 
@@ -9795,7 +9797,11 @@ def test_env_digest_fails_closed_when_nothing_is_covered(
     harness._env_digest_runtime_code.cache_clear()
     import svp_rpe.melody.provenance as provenance
 
-    monkeypatch.setattr(provenance, "packages_code_sha256", lambda names, **kw: (None, ()))
+    # すべて未導入（= 実行されない）に見せる: 覆えた pin が 1 つも無い状態。
+    monkeypatch.setattr(
+        provenance, "package_code_state", lambda name, **kw: (provenance.STATE_ABSENT, None)
+    )
+    monkeypatch.setattr(harness, "_LOADED_RUNTIME_CODE_PINS", {})
     with pytest.raises(RuntimeError, match="何も覆っていない"):
         harness._env_digest_runtime_code()
     harness._env_digest_runtime_code.cache_clear()
