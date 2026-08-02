@@ -642,6 +642,17 @@ def test_level_ladder_order_is_frozen() -> None:
 # ---------------------------------------------------------------------------
 
 
+# 採用ベッドは凍結値 2 件（設計 §3.3-3 / §6.2）。`build` はこれを要求するので、
+# 合成テストも 2 件で回す（1 件だと「別の規模の帯」になり、実運用で起きえない形）。
+_TWO_BEDS = ["Artist A - Track One", "Artist B - Track Two"]
+
+
+def _write_two_beds(bed_root: Path) -> "list[str]":
+    for track in _TWO_BEDS:
+        _write_bed(bed_root / track)
+    return list(_TWO_BEDS)
+
+
 def _fake_bed_pins(bed_root: Path, tracks) -> dict:
     """`m2e_bed_fixtures.yaml` 相当の pin を、合成ベッドの実 digest から組む。
 
@@ -682,8 +693,8 @@ def test_cli_screen_binds_the_bed_to_its_registered_stem_pins(
 ) -> None:
     """P2: 登録後に `screen` を回し直すとき、素材が pin と一致することを要求する。"""
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    pins = _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    _write_two_beds(bed_root)
+    pins = _fake_bed_pins(bed_root, _TWO_BEDS)
     pins["Artist A - Track One"]["expected_stem_sha256"]["drums"] = "0" * 64
     monkeypatch.setattr(mk, "load_registered_beds", lambda: pins)
     monkeypatch.setattr(mk, "registered_n_max_samples", lambda: mk.FRAME_LEN * 4)
@@ -814,11 +825,9 @@ def test_build_is_deterministic(tmp_path, monkeypatch) -> None:
     vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
+    _write_two_beds(bed_root)
 
-    monkeypatch.setattr(
-        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
-    )
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
     digests = []
     for run in ("a", "b"):
         out_dir = tmp_path / f"out_{run}"
@@ -827,7 +836,7 @@ def test_build_is_deterministic(tmp_path, monkeypatch) -> None:
         mk.build(
             vocadito_root=vocadito_root,
             bed_root=bed_root,
-            tracks=["Artist A - Track One"],
+            tracks=list(_TWO_BEDS),
             levels=["0dB"],
             out_dir=out_dir,
             registered_utc="2026-08-01",
@@ -851,15 +860,13 @@ def test_build_refuses_when_vocadito_bytes_drifted(tmp_path, monkeypatch) -> Non
     pins["vocadito_1"]["expected_audio_sha256"] = "0" * 64
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    monkeypatch.setattr(
-        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
-    )
+    _write_two_beds(bed_root)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
     with pytest.raises(mk.GenerationError, match="再取得・再エンコードは禁止"):
         mk.build(
             vocadito_root=vocadito_root,
             bed_root=bed_root,
-            tracks=["Artist A - Track One"],
+            tracks=list(_TWO_BEDS),
             levels=["0dB"],
             out_dir=tmp_path / "out",
             registered_utc="2026-08-01",
@@ -920,14 +927,14 @@ def test_build_rejects_a_bed_whose_stem_digest_differs(tmp_path, monkeypatch) ->
     vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    bad = _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    _write_two_beds(bed_root)
+    bad = _fake_bed_pins(bed_root, _TWO_BEDS)
     bad["Artist A - Track One"]["expected_stem_sha256"]["drums"] = "0" * 64
     monkeypatch.setattr(mk, "load_registered_beds", lambda: bad)
     with pytest.raises(mk.GenerationError, match="事前登録 pin .* と不一致"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
-            tracks=["Artist A - Track One"], levels=["0dB"],
+            tracks=_TWO_BEDS, levels=["0dB"],
             out_dir=tmp_path / "out", registered_utc="2026-08-01",
         )
 
@@ -939,14 +946,14 @@ def test_build_rejects_a_bed_window_that_differs_from_the_screened_one(
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    drifted = _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    _write_two_beds(bed_root)
+    drifted = _fake_bed_pins(bed_root, _TWO_BEDS)
     drifted["Artist A - Track One"]["bed_window_sha256"] = "0" * 64
     monkeypatch.setattr(mk, "load_registered_beds", lambda: drifted)
     with pytest.raises(mk.GenerationError, match="ベッド窓の sha256"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
-            tracks=["Artist A - Track One"], levels=["0dB"],
+            tracks=_TWO_BEDS, levels=["0dB"],
             out_dir=tmp_path / "out", registered_utc="2026-08-01",
         )
 
@@ -956,7 +963,7 @@ def test_build_refuses_to_publish_inside_the_repository(tmp_path, monkeypatch) -
     with pytest.raises(mk.GenerationError, match="リポジトリ"):
         mk.build(
             vocadito_root=tmp_path, bed_root=tmp_path,
-            tracks=["Artist A - Track One"], levels=["0dB"],
+            tracks=_TWO_BEDS, levels=["0dB"],
             out_dir=mk.ROOT / "m2e_out", registered_utc="2026-08-01",
         )
 
@@ -966,14 +973,15 @@ def test_build_rejects_a_bed_that_is_not_accepted(tmp_path, monkeypatch) -> None
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    not_accepted = _fake_bed_pins(bed_root, ["Artist A - Track One"])
-    not_accepted["Artist A - Track One"]["accepted"] = False
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: not_accepted)
+    _write_two_beds(bed_root)
+    _write_bed(bed_root / "Artist C - Screened Out")
+    pins = _fake_bed_pins(bed_root, _TWO_BEDS + ["Artist C - Screened Out"])
+    pins["Artist C - Screened Out"]["accepted"] = False   # 採用 2 件は保ったまま
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: pins)
     with pytest.raises(mk.GenerationError, match="accepted ではない"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
-            tracks=["Artist A - Track One"], levels=["0dB"],
+            tracks=_TWO_BEDS + ["Artist C - Screened Out"], levels=["0dB"],
             out_dir=tmp_path / "out", registered_utc="2026-08-01",
         )
 
@@ -986,10 +994,8 @@ def test_build_leaves_no_partial_bundle_when_generation_fails(tmp_path, monkeypa
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1", "vocadito_2"])
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    monkeypatch.setattr(
-        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
-    )
+    _write_two_beds(bed_root)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
     calls = {"n": 0}
     original = mk.apply_level
 
@@ -1004,7 +1010,7 @@ def test_build_leaves_no_partial_bundle_when_generation_fails(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="injected failure"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
-            tracks=["Artist A - Track One"], levels=["0dB"],
+            tracks=_TWO_BEDS, levels=["0dB"],
             out_dir=out_dir, registered_utc="2026-08-01",
         )
     assert not out_dir.exists(), "公開先に部分 bundle が見えている"
@@ -1016,10 +1022,10 @@ def test_build_leaves_no_partial_bundle_when_generation_fails(tmp_path, monkeypa
     monkeypatch.setattr(mk, "apply_level", original)
     summary = mk.build(
         vocadito_root=vocadito_root, bed_root=bed_root,
-        tracks=["Artist A - Track One"], levels=["0dB"],
+        tracks=_TWO_BEDS, levels=["0dB"],
         out_dir=out_dir, registered_utc="2026-08-01",
     )
-    assert summary["levels"]["0dB"]["n_entries"] == 2
+    assert summary["levels"]["0dB"]["n_entries"] == 4   # 2 clip × 2 bed
     assert (out_dir / "fixtures_p00.yaml").is_file()
     assert _staging_dirs(out_dir) == []
 
@@ -1034,10 +1040,8 @@ def test_build_removes_its_staging_on_keyboard_interrupt(tmp_path, monkeypatch) 
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    monkeypatch.setattr(
-        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
-    )
+    _write_two_beds(bed_root)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
 
     def _interrupt(voice, bed, level):
         raise KeyboardInterrupt
@@ -1047,7 +1051,7 @@ def test_build_removes_its_staging_on_keyboard_interrupt(tmp_path, monkeypatch) 
     with pytest.raises(KeyboardInterrupt):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
-            tracks=["Artist A - Track One"], levels=["0dB"],
+            tracks=_TWO_BEDS, levels=["0dB"],
             out_dir=out_dir, registered_utc="2026-08-01",
         )
     assert not out_dir.exists()
@@ -1076,14 +1080,12 @@ def test_build_emits_a_dated_registered_utc(tmp_path, monkeypatch) -> None:
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    monkeypatch.setattr(
-        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
-    )
+    _write_two_beds(bed_root)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
     out_dir = tmp_path / "out"
     mk.build(
         vocadito_root=vocadito_root, bed_root=bed_root,
-        tracks=["Artist A - Track One"], levels=["0dB"],
+        tracks=_TWO_BEDS, levels=["0dB"],
         out_dir=out_dir, registered_utc="2026-08-01",
     )
     doc = yaml.safe_load((out_dir / "fixtures_p00.yaml").read_text())
@@ -1130,15 +1132,13 @@ def test_build_rejects_an_invalid_registered_utc_before_writing_anything(
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    monkeypatch.setattr(
-        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
-    )
+    _write_two_beds(bed_root)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
     out_dir = tmp_path / "out"
     with pytest.raises(mk.GenerationError, match="registered_utc"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
-            tracks=["Artist A - Track One"], levels=["0dB"],
+            tracks=_TWO_BEDS, levels=["0dB"],
             out_dir=out_dir, registered_utc="garbage",
         )
     assert not list(out_dir.glob("**/*.wav"))
@@ -1149,16 +1149,14 @@ def test_build_refuses_a_non_empty_out_dir(tmp_path, monkeypatch) -> None:
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
-    _write_bed(bed_root / "Artist A - Track One")
-    monkeypatch.setattr(
-        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
-    )
+    _write_two_beds(bed_root)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     (out_dir / "stale.txt").write_text("leftover", encoding="utf-8")
     with pytest.raises(mk.GenerationError, match="空でない"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
-            tracks=["Artist A - Track One"], levels=["0dB"],
+            tracks=_TWO_BEDS, levels=["0dB"],
             out_dir=out_dir, registered_utc="2026-08-01",
         )

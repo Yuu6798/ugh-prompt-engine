@@ -902,6 +902,15 @@ def _build_into_staging(
     # （accepted でない track を渡した場合は下の per-track 検査が個別の理由で落とす。
     #   ここで見るのは「accepted なのに渡されていない」= 欠落のみ。）
     accepted = {name for name, pin in registered_beds.items() if pin.get("accepted")}
+    # 採用ベッドは **ちょうど 2 件**（設計 §3.3-3「通過した 2 件で停止」・§6.2 の
+    # `40 clip × 2 bed = 80 entry`）。登録簿の編集で 1 件/3 件になっていると、
+    # `--bed` がその集合を覆う限りここは通り、40/120 entry の bundle を**生成し切って
+    # から**ハーネス側で落ちる（320 本の WAV を作った後で気づくのは高くつく）。
+    if len(accepted) != 2:
+        raise GenerationError(
+            f"事前登録の accepted ベッドが {len(accepted)} 件（{sorted(accepted)}）で、"
+            "凍結値 2 件と一致しない; 別の規模の帯を生成しない (fail-closed)"
+        )
     missing = sorted(accepted - set(tracks))
     if missing:
         raise GenerationError(

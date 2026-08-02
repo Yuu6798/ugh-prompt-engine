@@ -2685,6 +2685,9 @@ EXTERNAL_FIXTURES_PATH = (
 # この分離をしている（registry.yaml → m2_accuracy_bars.yaml → m2c_external_fixtures.yaml）。
 # 3 例目として同じ流儀に従う。**M2b / M2c の再実測は行わない。**
 M2E_BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_accuracy_bars.yaml"
+# M2e ベッド登録簿（r3 で pin 済み）。ハーネスは中身を解釈しないが、生成物が名乗る
+# `builder.m2e_bed_fixtures_sha256` を**測る側の実体**と突き合わせるために持つ。
+M2E_BED_FIXTURES_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_bed_fixtures.yaml"
 
 _EXPECTED_BARS_SCHEMA = "m2-accuracy-bars/0.1"
 # M2e のバーは `m2-accuracy-bars/0.1` を名乗らせない（設計 §5.1-2）。
@@ -3839,14 +3842,21 @@ def _require_registered_m2e_cohort(fixtures_doc: Dict[str, Any], *, where: str) 
             "入力登録簿 digest）が無い; どの混合式・どの登録簿から出た音か立証できない "
             "pin ファイルで測らない (fail-closed)"
         )
-    declared_m2c = builder.get("m2c_fixtures_sha256")
-    actual_m2c = hashlib.sha256(Path(EXTERNAL_FIXTURES_PATH).read_bytes()).hexdigest()
-    if declared_m2c != actual_m2c:
-        raise ValueError(
-            f"{where}: fixtures が名乗る m2c registry digest {declared_m2c!r} が、測る側の "
-            f"{_repo_relative_path(EXTERNAL_FIXTURES_PATH)} の実体 {actual_m2c!r} と不一致; "
-            "別の clip 登録簿から作られたミックスを測らない (fail-closed)"
-        )
+    # **宣言された入力 digest は全部照合する。** clip 側だけ見て bed 側を見逃すと、
+    # 採用ベッドや窓 pin を書き換えた登録簿から作られた自己整合な 80 entry bundle が、
+    # コホート検査も音声 hash 照合も通ってしまう（provenance を名乗るだけで検証されない）。
+    for key, path in (
+        ("m2c_fixtures_sha256", EXTERNAL_FIXTURES_PATH),
+        ("m2e_bed_fixtures_sha256", M2E_BED_FIXTURES_PATH),
+    ):
+        declared = builder.get(key)
+        actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        if declared != actual:
+            raise ValueError(
+                f"{where}: fixtures が名乗る {key} {declared!r} が、測る側の "
+                f"{_repo_relative_path(path)} の実体 {actual!r} と不一致; "
+                "別の登録簿から作られたミックスを測らない (fail-closed)"
+            )
     registered_clips = set(load_external_fixtures(EXTERNAL_FIXTURES_PATH)[0]["fixtures"])
     by_bed: Dict[str, set] = {}
     for key in fixtures:
