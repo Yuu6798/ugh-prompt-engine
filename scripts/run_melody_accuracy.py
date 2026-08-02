@@ -5300,6 +5300,11 @@ def _env_digest_thread_settings() -> Dict[str, Any]:
     return settings
 
 
+def _runtime_code_package_names() -> "Tuple[str, ...]":
+    """`env_digest` が実装 hash を採る対象（束縛時と post-run 再検証で同一集合を使う）。"""
+    return tuple(sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())))
+
+
 @functools.lru_cache(maxsize=1)
 def _env_digest_runtime_code() -> "Tuple[str, Tuple[str, ...]]":
     """route の実行スタックの**実装 hash**（版文字列だけでは足りない）。
@@ -5322,7 +5327,7 @@ def _env_digest_runtime_code() -> "Tuple[str, Tuple[str, ...]]":
     """
     from svp_rpe.melody.provenance import packages_code_sha256
 
-    names = tuple(sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())))
+    names = _runtime_code_package_names()
     digest, covered = packages_code_sha256(names)   # 送出は伝播させる (fail-closed)
     if not digest or not covered:
         raise RuntimeError(
@@ -5419,6 +5424,28 @@ def _bind_all_dist_native_pins() -> "Tuple[Tuple[str, str], ...]":
 # 残りの推論スタックを**この時点で**束縛する。crepe / torch / demucs / librosa は
 # すべて関数内 import なので、module import が終わったここはまだ「import 前」である。
 _bind_all_dist_native_pins()
+
+
+def _require_runtime_code_unchanged_since_bind() -> None:
+    """実装 hash が束縛（初回計算）時から変わっていないことを要求する（post-run）。
+
+    `_env_digest_runtime_code()` は memoize されるので、**crepe / tensorflow /
+    librosa のような遅延 import のパッケージ**が「digest 計算後・import 前」に
+    差し替えられると、推論は新しい bytes を実行するのに digest は旧 bytes を指す。
+    `_require_unchanged_since_load()` は first-party と scorer しか、
+    `_require_dist_native_unchanged_since_bind()` は本体ディレクトリ外のネイティブしか
+    見ないため、この窓はどちらでも覆われない。**memoize を迂回して読み直す。**
+    """
+    from svp_rpe.melody.provenance import packages_code_sha256
+
+    expected_digest, expected_covered = _env_digest_runtime_code()
+    digest, covered = packages_code_sha256(_runtime_code_package_names(), use_cache=False)
+    if digest != expected_digest or tuple(covered) != expected_covered:
+        raise RuntimeError(
+            f"run_accuracy: 実行スタックの実装 hash が束縛時点（{expected_digest!r} / "
+            f"{expected_covered}）と不一致（現在 {digest!r} / {tuple(covered)}）; "
+            "走ったコードと digest が食い違うセルを保存・resume・合算させない (fail-closed)"
+        )
 
 
 def _env_digest_numeric_runtime() -> Dict[str, Any]:
@@ -6053,6 +6080,9 @@ def run_accuracy(
     # 読み直し、束縛時点の pin と比較する）。`env_digest` は束縛値を名乗るので、
     # run 中に差し替えられていればここで落とす。
     _require_dist_native_unchanged_since_bind()
+    # 実装 hash（memoize 済み）も読み直す——遅延 import のパッケージは「digest 計算
+    # 後・import 前」に差し替えられうる（上 2 つの検査はどちらもその窓を覆わない）。
+    _require_runtime_code_unchanged_since_bind()
     # Codex 16 巡目 P2-B: `numeric_runtime_config` は category loop（scoring）完了後・
     # かつ上の `_require_unchanged_since_load()`（post-run スコアラー pin 再計算）の
     # **後**にここで確定させる（`_numeric_runtime_config` / `_scorer_optional_

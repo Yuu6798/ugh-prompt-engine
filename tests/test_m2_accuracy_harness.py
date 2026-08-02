@@ -9740,6 +9740,25 @@ def test_env_digest_folds_the_distribution_native_pins(
     assert harness._env_digest() != baseline
 
 
+def test_runtime_code_drift_since_bind_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P1: 遅延 import のパッケージが「digest 計算後・import 前」に差し替わる窓。
+
+    `_require_unchanged_since_load`（first-party + scorer）も
+    `_require_dist_native_unchanged_since_bind`（本体外ネイティブ）もこの窓を覆わない
+    ので、memoize を迂回して読み直す検査が要る。
+    """
+    harness._env_digest_runtime_code()   # 束縛値を先に確定させる（patch 前の実体）
+    harness._require_runtime_code_unchanged_since_bind()
+
+    import svp_rpe.melody.provenance as provenance
+
+    monkeypatch.setattr(
+        provenance, "packages_code_sha256", lambda names, **kw: ("9" * 64, ("numpy",))
+    )
+    with pytest.raises(RuntimeError, match="束縛時点"):
+        harness._require_runtime_code_unchanged_since_bind()
+
+
 def test_dist_native_drift_since_bind_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     """P1: 束縛後に同梱ネイティブが差し替わったら post-run で落とす（uncached 比較）。"""
     harness._require_dist_native_unchanged_since_bind()   # 現状は一致
