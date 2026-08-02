@@ -7589,6 +7589,11 @@ def _registered_clip_ids() -> "List[str]":
     return sorted(harness.load_external_fixtures(harness.EXTERNAL_FIXTURES_PATH)[0]["fixtures"])
 
 
+def _registered_bed_ids() -> "List[str]":
+    """事前登録の accepted ベッドの `bed_id`（合成コホートもこの実 id を使う）。"""
+    return sorted(harness._registered_m2e_bed_ids())
+
+
 def _m2e_cohort_doc(
     beds: int,
     clips: "Optional[List[str]]" = None,
@@ -7597,7 +7602,12 @@ def _m2e_cohort_doc(
     builder: Any = None,
     per_bed_clips: "Optional[Dict[int, List[str]]]" = None,
 ) -> "Dict[str, Any]":
-    """凍結コホート gate 用の合成 fixtures doc（clip id は**実登録簿**から採る）。"""
+    """凍結コホート gate 用の合成 fixtures doc（clip id / bed_id は**実登録簿**から採る）。
+
+    `beds` が登録数を超える分は合成 id（`BedExtra{n}`）で埋める——「余分な bed」を
+    作るためであり、登録側と一致してはならない。
+    """
+    registered_beds = _registered_bed_ids()
     if builder is None:
         builder = {
             key: hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -7610,9 +7620,10 @@ def _m2e_cohort_doc(
     base = _registered_clip_ids() if clips is None else clips
     fixtures: "Dict[str, Any]" = {}
     for b in range(beds):
+        bed_id = registered_beds[b] if b < len(registered_beds) else f"BedExtra{b}"
         bed_clips = (per_bed_clips or {}).get(b, base)
         for clip in bed_clips:
-            fixtures[f"vremix_{clip}_Bed{b}_{tag}"] = {}
+            fixtures[f"vremix_{clip}_{bed_id}_{tag}"] = {}
     return {"builder": builder, "fixtures": fixtures}
 
 
@@ -7645,6 +7656,29 @@ def test_registered_m2e_cohort_rejects_divergent_clip_sets_per_bed() -> None:
     doc = _m2e_cohort_doc(2, per_bed_clips={0: registered, 1: swapped})
     with pytest.raises(ValueError, match="clip 集合が事前登録"):
         _ORIG_M2E_COHORT(doc, where="t")
+
+
+def test_registered_m2e_cohort_rejects_foreign_bed_ids() -> None:
+    """P2: 2 bed × 40 clip でも、**どのベッドか**が登録と違えば別の帯である。"""
+    doc = _m2e_cohort_doc(2)
+    registered = _registered_bed_ids()
+    renamed = {
+        key.replace(f"_{registered[0]}_", "_ForeignBed_"): value
+        for key, value in doc["fixtures"].items()
+    }
+    doc["fixtures"] = renamed
+    with pytest.raises(ValueError, match="accepted ベッド"):
+        _ORIG_M2E_COHORT(doc, where="t")
+
+
+def test_harness_bed_slug_matches_the_generator_convention() -> None:
+    """`bed_id` の導出規約が生成器と測る側で割れていないこと（実登録簿の全 50 曲）。"""
+    import make_vremix_fixtures as mk
+
+    tracks = mk.load_registered_beds()
+    assert len(tracks) == mk.M2E_EXPECTED_BED_COUNT
+    for track in tracks:
+        assert harness._m2e_bed_slug(track) == mk.bed_slug(track)
 
 
 def test_registered_m2e_cohort_requires_builder_provenance() -> None:

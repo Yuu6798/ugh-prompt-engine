@@ -3814,6 +3814,32 @@ _M2E_EXPECTED_CLIPS_PER_BED = 40
 _M2E_EXPECTED_ENTRIES_PER_LEVEL = _M2E_EXPECTED_BED_COUNT * _M2E_EXPECTED_CLIPS_PER_BED
 
 
+def _m2e_bed_slug(track_name: str) -> str:
+    """MUSDB トラック名 → entry id の `bed_id`（生成器 `bed_slug()` と**同一規約**）。
+
+    生成器（`scripts/make_vremix_fixtures.py`）を測る側から import しない代わりに、
+    置換規則をここに写す——両者の一致は `tests/test_m2_accuracy_harness.py` が
+    実登録簿の全トラック名で機械検証する（`_serialize_wav_float32` と同じ流儀:
+    規約が 2 つに割れるより、同じものを 2 箇所で作って一致を強制する）。
+    """
+    return re.sub(r"[^A-Za-z0-9]+", "-", track_name).strip("-")
+
+
+def _registered_m2e_bed_ids() -> "set[str]":
+    """`m2e_bed_fixtures.yaml` の `accepted: true` ベッドの `bed_id` 集合。"""
+    doc = _yaml_load_no_dup_keys(
+        Path(M2E_BED_FIXTURES_PATH).read_bytes(), what=M2E_BED_FIXTURES_PATH.name
+    )
+    beds = doc.get("beds") if isinstance(doc, dict) else None
+    if not isinstance(beds, dict) or not beds:
+        raise ValueError(f"{M2E_BED_FIXTURES_PATH}: beds が空 (fail-closed)")
+    return {
+        _m2e_bed_slug(str(track))
+        for track, pin in beds.items()
+        if isinstance(pin, dict) and pin.get("accepted") is True
+    }
+
+
 def _require_registered_m2e_cohort(fixtures_doc: Dict[str, Any], *, where: str) -> None:
     """M2e fixtures が**凍結コホートそのもの**であることを要求する（fail-closed）。
 
@@ -3864,6 +3890,7 @@ def _require_registered_m2e_cohort(fixtures_doc: Dict[str, Any], *, where: str) 
                 "別の登録簿から作られたミックスを測らない (fail-closed)"
             )
     registered_clips = set(load_external_fixtures(EXTERNAL_FIXTURES_PATH)[0]["fixtures"])
+    registered_beds = _registered_m2e_bed_ids()
     by_bed: Dict[str, set] = {}
     for key in fixtures:
         parts = str(key).split("_")
@@ -3880,6 +3907,15 @@ def _require_registered_m2e_cohort(fixtures_doc: Dict[str, Any], *, where: str) 
             f"{_M2E_EXPECTED_CLIPS_PER_BED} clip = {_M2E_EXPECTED_ENTRIES_PER_LEVEL} entry）"
             f"と一致しない（bed 別 clip 数={detail} / 総数={len(fixtures)}）; 部分コホートを "
             "水準の証拠として測らない (fail-closed)"
+        )
+    # **bed も同定する。** 件数と clip 集合だけでは、任意の 2 本のベッドで作った帯が
+    # 「凍結 2 ベッドのコホート」を名乗って通ってしまう（登録簿 digest は入力の同一性を
+    # 示すだけで、その中の *どの* ベッドを使ったかは fixtures 側からしか分からない）。
+    if set(by_bed) != registered_beds:
+        raise ValueError(
+            f"{where}: bed_id 集合 {sorted(by_bed)} が事前登録の accepted ベッド "
+            f"{sorted(registered_beds)} と一致しない; 別のベッドで作った帯を凍結コホート "
+            "として測らない (fail-closed)"
         )
     for bed, clips in sorted(by_bed.items()):
         if clips != registered_clips:
