@@ -9228,6 +9228,30 @@ def _m2e_census_expected_cells(repeats_min: int) -> int:
     )
 
 
+def _m2e_normalized_cohort_ids(level: str, clip_ids: "List[str]") -> "Tuple[str, ...]":
+    """entry id から水準タグを剥がした**正規化コホート**（= (clip, bed) の集合）を返す。
+
+    id 規約は `vremix_{clip_id}_{bed_id}_{level_tag}`（§6.2）なので、水準が違えば id も
+    違う——水準間で id 集合をそのまま比べることはできない。タグを剥がして初めて
+    「4 水準が同じ 80 個の (clip, bed) を測ったか」を問える。
+
+    タグが期待どおりでない id は fail-closed。`level: "+6dB"` を名乗る verdict が
+    `p12` の id を運んでいれば、それは**同じミックスを 2 回測って別水準として並べた**
+    ものであり、破断曲線が 1 水準の複製から組み上がる（PR #241 Codex P1）。
+    """
+    suffix = f"_{_M2E_LEVEL_TAGS[level]}"
+    normalized: "List[str]" = []
+    for clip_id in clip_ids:
+        if not isinstance(clip_id, str) or not clip_id.endswith(suffix):
+            raise ValueError(
+                f"aggregate_m2e_census: level {level!r} の entry id {clip_id!r} が期待する "
+                f"水準タグ {suffix!r} で終わっていない; 別水準のミックスを当該水準の観測と "
+                "して数えない（破断曲線が 1 水準の複製から組み上がる）(fail-closed)"
+            )
+        normalized.append(clip_id[: -len(suffix)])
+    return tuple(sorted(normalized))
+
+
 def _require_homogeneous_census_inputs(
     verdicts: "List[Dict[str, Any]]",
     *,
@@ -9437,6 +9461,7 @@ def aggregate_m2e_census(
 
     cells: "Dict[str, Dict[str, Any]]" = {}
     missing: "List[Dict[str, Any]]" = []
+    normalized_by_level: "Dict[str, Tuple[str, ...]]" = {}
     observed_cells = 0
     for level in _M2E_LEVEL_LADDER:
         for arm in arms:
@@ -9464,6 +9489,14 @@ def aggregate_m2e_census(
                 if isinstance(clip_ids, list) and isinstance(cell["n_rows"], int)
                 else 0
             )
+            if isinstance(clip_ids, list):
+                # 水準タグの検査は**件数と独立**に行う（短いコホートでもラベルの
+                # 食い違いは食い違いである）。正規化結果を水準横断の照合に使うのは
+                # per-cell 検査を通ったセルだけ——短いコホートを「別コホート」として
+                # 報告すると、本当の原因（件数不足）が見えなくなる。
+                normalized = _m2e_normalized_cohort_ids(level, clip_ids)
+                if not problems:
+                    normalized_by_level[level] = normalized
             if problems:
                 missing.append(
                     {"level": level, "arm": arm, "reason": "; ".join(problems)}
@@ -9498,6 +9531,20 @@ def aggregate_m2e_census(
                     "同じミックスを 2 経路で測るのがアーム比較の定義であり、別素材・別世代の "
                     "観測を同じ水準の 2 アームとして並べない (fail-closed)"
                 )
+
+    # **4 水準が同じコホートを測ったこと**を要求する（PR #241 Codex P1）。水準ごとに
+    # fixtures 世代が違えば、各水準は 80 件を満たしながら**別の 80 件**でありうる——
+    # アーム間の照合は同一水準の中しか見ておらず、水準を跨いだ同一性は誰も問うて
+    # いなかった。id 規約の水準タグを剥がした正規化コホートで突き合わせる
+    # （`normalized_by_level` は上の per-cell ループで、検査を通ったセルだけ埋まる）。
+    distinct_cohorts = set(normalized_by_level.values())
+    if len(distinct_cohorts) > 1:
+        differing = sorted(normalized_by_level)
+        raise ValueError(
+            f"aggregate_m2e_census: 水準間で正規化コホートが一致しない（{differing} の "
+            "うち少なくとも 1 つが別の (clip, bed) 集合）; 別コホートの水準を並べた破断"
+            "曲線は 1 本の曲線ではない (fail-closed)"
+        )
 
     complete = not missing and observed_cells == expected_cells
 
@@ -9753,6 +9800,11 @@ def main() -> int:
             bars_path=args.bars,
             m2e_bars_path=args.m2e_bars,
         )
+        # 書き出す**直前に** load 時 pin の不変を再確認する（PR #241 Codex P2・
+        # run / evaluate と同じ post-execution ガード）。集計中にソースが差し替わると、
+        # census は「現 checkout と一致する」と検査したはずのコード pin を名乗りながら、
+        # 実際には別 bytes の下で組まれた成果物になる。
+        _require_unchanged_since_load()
         _atomic_write_text(args.out, json.dumps(census, indent=2, sort_keys=True))
         print(f"wrote census to {args.out}")
         print(

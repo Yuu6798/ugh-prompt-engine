@@ -10767,8 +10767,10 @@ def test_cli_rejects_a_misplaced_cell_store_role(
 # ---------------------------------------------------------------------------
 
 
-def _expand_clip_ids(count: int) -> "List[str]":
-    return [f"vremix_vocadito_{i}_BedOne_p12" for i in range(count)]
+def _expand_clip_ids(count: int, level: str = "+12dB") -> "List[str]":
+    """§6.2 の id 規約 `vremix_{clip_id}_{bed_id}_{level_tag}` に従う合成 id。"""
+    tag = harness._M2E_LEVEL_TAGS[level]
+    return [f"vremix_vocadito_{i}_BedOne_{tag}" for i in range(count)]
 
 
 def _m2e_census_verdicts(
@@ -10796,7 +10798,9 @@ def _m2e_census_verdicts(
         direct = verdict["categories"]["V_remix_real_direct"]
         direct["level"] = level
         direct["ladder_index"] = harness._m2e_ladder_index(level)
-        direct["clip_ids"] = _expand_clip_ids(harness._M2E_EXPECTED_ENTRIES_PER_LEVEL)
+        direct["clip_ids"] = _expand_clip_ids(
+            harness._M2E_EXPECTED_ENTRIES_PER_LEVEL, level
+        )
         if level != "+12dB":
             direct["status"] = "level_record_only"
             direct.pop("bar_satisfied", None)
@@ -10899,7 +10903,7 @@ def test_census_counts_a_short_cohort_as_missing_not_complete(tmp_path: Path) ->
     """clip 数が凍結コホートに満たない水準は census を満たさない（縮んだ帯を通さない）。"""
     verdicts = _m2e_census_verdicts(tmp_path)
     for arm in ("V_remix_real_direct", "V_remix_real_stem"):
-        verdicts[2]["categories"][arm]["clip_ids"] = _expand_clip_ids(79)
+        verdicts[2]["categories"][arm]["clip_ids"] = _expand_clip_ids(79, "0dB")
     census = _census(tmp_path, verdicts)
     assert census["complete"] is False
     assert census["band_verdict"] is None
@@ -10943,7 +10947,11 @@ def test_census_rejects_a_foreign_bars_generation(tmp_path: Path) -> None:
 def test_census_rejects_arms_that_measured_different_mixes(tmp_path: Path) -> None:
     """§6.2「アームは manifest を分けない」——件数が揃っていても中身がずれたら別の帯。"""
     verdicts = _m2e_census_verdicts(tmp_path)
-    shifted = [f"{cid}_x" for cid in verdicts[0]["categories"]["V_remix_real_stem"]["clip_ids"]]
+    tag = harness._M2E_LEVEL_TAGS["+12dB"]
+    shifted = [
+        f"vremix_vocadito_{i}_BedTwo_{tag}"
+        for i in range(harness._M2E_EXPECTED_ENTRIES_PER_LEVEL)
+    ]
     verdicts[0]["categories"]["V_remix_real_stem"]["clip_ids"] = shifted
     with pytest.raises(ValueError, match="アーム間で clip_ids が一致しない"):
         _census(tmp_path, verdicts)
@@ -11106,3 +11114,51 @@ def test_cli_census_protects_the_base_bars_file(
     with pytest.raises(SystemExit, match="census の入力"):
         harness.main()
     assert BARS_PATH.read_bytes() == before
+
+
+def test_census_rejects_a_level_whose_ids_carry_another_levels_tag(tmp_path: Path) -> None:
+    """PR #241 Codex P1: `level` の申告と entry id の水準タグが食い違えば拒否する。
+
+    `+6dB` を名乗る verdict が `p12` の id を運んでいれば、それは**同じミックスを
+    2 回測って別水準として並べた**もの——破断曲線が 1 水準の複製から組み上がる。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[1]["categories"][arm]["clip_ids"] = _expand_clip_ids(
+            harness._M2E_EXPECTED_ENTRIES_PER_LEVEL, "+12dB"
+        )
+    with pytest.raises(ValueError, match="水準タグ"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_levels_measured_on_different_cohorts(tmp_path: Path) -> None:
+    """PR #241 Codex P1: 各水準が 80 件を満たしても、**別の 80 件**なら 1 本の曲線ではない。
+
+    アーム間の照合は同一水準の中しか見ないので、水準を跨いだ同一性は別に問う必要が
+    ある（id 規約の水準タグを剥がした正規化コホートで突き合わせる）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    tag = harness._M2E_LEVEL_TAGS["0dB"]
+    other_cohort = [
+        f"vremix_vocadito_{i}_BedTwo_{tag}"
+        for i in range(harness._M2E_EXPECTED_ENTRIES_PER_LEVEL)
+    ]
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[2]["categories"][arm]["clip_ids"] = other_cohort
+    with pytest.raises(ValueError, match="正規化コホートが一致しない"):
+        _census(tmp_path, verdicts)
+
+
+def test_normalized_cohort_ids_strip_only_the_expected_level_tag() -> None:
+    """正規化は水準タグだけを剥がす（clip / bed の同一性はそのまま残る）。"""
+    ids = ["vremix_vocadito_1_BedOne_p06", "vremix_vocadito_2_BedTwo_p06"]
+    assert harness._m2e_normalized_cohort_ids("+6dB", ids) == (
+        "vremix_vocadito_1_BedOne",
+        "vremix_vocadito_2_BedTwo",
+    )
+    # 同じ (clip, bed) なら別水準でも同じ正規化になる（これが水準横断照合の前提）。
+    assert harness._m2e_normalized_cohort_ids(
+        "0dB", ["vremix_vocadito_1_BedOne_p00"]
+    ) == ("vremix_vocadito_1_BedOne",)
+    with pytest.raises(ValueError, match="水準タグ"):
+        harness._m2e_normalized_cohort_ids("0dB", ["vremix_vocadito_1_BedOne_p12"])
