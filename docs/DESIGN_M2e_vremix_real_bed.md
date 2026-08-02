@@ -1090,6 +1090,32 @@ verdict のみ・加算。単一性は従来から要求済みで、値を成果
 セルだけにする——短いコホートを「別コホート」と報告すると本当の原因（件数不足）が
 見えなくなるため。
 
+**E-13. 混合式の provenance を水準横断で照合する**（PR #241 Codex P1 で是正）。
+**破断曲線は主生産物であり、混合式が水準間で混ざれば曲線として成立しない。** ところが
+水準ごとに fixtures ファイルは別なので `external_fixtures_sha256` の水準横断比較は意味を
+持たず、mixer（`make_vremix_fixtures.py`）を変えて一部の水準を作り直しても、id は同じ・
+per-level hash は元々違う・harness のコード pin は mixer を含まない、で誰も気付けなかった。
+fixtures 自身が名乗る `builder`（run 側で `_require_registered_m2e_cohort` が実体照合済み）を
+verdict へ写し、集計器が水準横断の一致を要求する。
+
+> **「現行 mixer とも一致していること」までは要求しない。** ミックスの音声 bytes は
+> fixtures の sha256 で既に pin されており、測定の正しさは mixer の現在値に依存しない。
+> 現行一致まで求めると、完了済みキャンペーンが後日の無関係な mixer 変更で無効になり、
+> 「一度測って後で集計する」という本トラックのモデルと衝突する。
+
+**E-14. `metrics` の形を、成果物へ載せる前に確かめる**（PR #241 Codex P2 で是正）。
+`load_verdict` は top-level schema と bytes 束縛しか見ないので、`metrics` が欠損・`null`・
+短縮でも他の per-cell 検査は全部通り、`census_complete` を出したうえで `level_response` に
+欠測が載る（帯の判定だけは `bar_satisfied` から出る）。`repeats_min` 件の有限数値である
+ことをセルを数える前に要求する。なお **NaN / inf はさらに手前**（`_json_loads_no_dup_keys`
+の非有限リテラル拒否）で落ちるため、ここで扱うのは有限値の欠損・短縮である。
+
+**E-15. census が読まない引数はすべて拒否する**（PR #241 Codex P2 で是正）。
+census が実際に読むのは `--census` / `--out` / `--bars` / `--m2e-bars` の 4 つだけ。
+`--external-manifest` 等を黙って無視すると、渡した側は「census がその manifest に束縛
+された」と信じうる——成果物はそれを一度も読まない。当初の検査は 5 フラグしか見ておらず、
+コメントの主張（「run/evaluate のどのフェーズ引数とも組み合わせない」）より実装が狭かった。
+
 **E-12. コホートの一意性を件数と別に要求する**（PR #241 Codex P2 で是正）。
 `len(clip_ids) == 80` だけでは、80 要素あっても重複していれば**異なる測定は 80 未満**で
 あり、`observed_cells` は重複を数える。全水準・全アームで同じように重複していれば E-6 /

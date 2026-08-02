@@ -11226,3 +11226,117 @@ def test_census_rejects_duplicated_clip_ids_within_a_cell(tmp_path: Path) -> Non
     assert census["band_verdict"] is None
     assert census["observed_cells_total"] == 0
     assert all("重複がある" in m["reason"] for m in census["missing"])
+
+
+def test_census_rejects_levels_built_by_different_mixers(tmp_path: Path) -> None:
+    """PR #241 Codex P1: **破断曲線は主生産物であり、混合式が混ざれば曲線として成立しない。**
+
+    水準ごとに fixtures ファイルは別なので `external_fixtures_sha256` の水準横断比較は
+    意味を持たない——mixer を変えて一部の水準を作り直しても、id は同じ・per-level hash は
+    元々違う・harness のコード pin は mixer を含まない、で誰も気付けなかった。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    verdicts[2]["m2e_builder_provenance"] = {
+        "generator_code_sha256": "e" * 64,
+        "m2c_fixtures_sha256": "f" * 64,
+        "m2e_bed_fixtures_sha256": "0" * 64,
+    }
+    with pytest.raises(ValueError, match="m2e_builder_provenance が揃っていない"):
+        _census(tmp_path, verdicts)
+
+
+def test_evaluate_carries_the_builder_provenance_into_m2e_verdicts(tmp_path: Path) -> None:
+    """E-13 の前提: run 側で実体照合済みの `builder` を verdict へ写す。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    verdict = _m2e_evaluate(tmp_path, reports)
+    assert "m2e_builder_provenance" in verdict
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        None,
+        [],
+        "not-a-list",
+        [{"raw_pitch_accuracy": 1.0}],  # 短縮（repeats_min=2 に 1 件しかない）
+        [{"raw_pitch_accuracy": None}, {"raw_pitch_accuracy": None}],
+    ],
+)
+def test_census_requires_well_formed_metrics_before_counting_a_cell(
+    broken: Any, tmp_path: Path
+) -> None:
+    """PR #241 Codex P2: `metrics` が欠損・null・短縮でも他の検査は全部通ってしまう。
+
+    その結果 `census_complete` を出したうえで `level_response` に欠測が載り、帯の判定
+    だけは `bar_satisfied` から出る。**成果物に載せる値は、載せる前に形を確かめる。**
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[3]["categories"][arm]["metrics"] = broken
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    assert census["level_response"] is None
+    assert any("metrics" in m["reason"] for m in census["missing"])
+
+
+def test_verdict_with_non_finite_metrics_cannot_even_be_loaded(tmp_path: Path) -> None:
+    """NaN/inf は per-cell 検査より**手前**（JSON ロード）で落ちる。
+
+    `_json_loads_no_dup_keys` が非有限リテラルを拒否するため、そもそも artifact に
+    ならない。上のテストが有限値の欠損・短縮だけを扱っているのはこのため。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    raw = json.dumps(verdicts[0]).replace('"n_rows": 2', '"n_rows": NaN')
+    with pytest.raises(ValueError, match="非有限リテラル"):
+        harness.ReportArtifact.from_bytes(raw.encode("utf-8"), path=None)
+
+
+@pytest.mark.parametrize(
+    "flag, value",
+    [
+        ("--external-manifest", "manifest.json"),
+        ("--specs", "specs.yaml"),
+        ("--workers", "4"),
+        ("--cell-store-role", "evaluate"),
+    ],
+)
+def test_cli_census_rejects_every_unused_phase_flag(
+    flag: str, value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """census が読むのは --census / --out / --bars / --m2e-bars だけ。
+
+    黙って無視して「その引数に束縛された」と誤解させない。
+    """
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "census.json"),
+            "--census", str(verdict_path),
+            flag, value,
+        ),
+    )
+    with pytest.raises(SystemExit, match="census phase では無効"):
+        harness.main()
+
+
+def test_cli_census_rejects_pin_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "census.json"),
+            "--census", str(verdict_path),
+            "--pin-threads",
+        ),
+    )
+    with pytest.raises(SystemExit, match="census phase では無効"):
+        harness.main()

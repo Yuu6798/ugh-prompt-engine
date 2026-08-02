@@ -8854,6 +8854,16 @@ def evaluate_m2_bars(
         # 成果物へ持ち出す。**M2e カテゴリを含む verdict にのみ現れる**（他の verdict は
         # 1 バイトも変わらない）。
         verdict["env_digest"] = next(iter(env_digests))
+        # C5（設計判断 E-13）: **混合式の provenance を成果物へ持ち出す。**
+        # 水準ごとに fixtures ファイルは別なので `external_fixtures_sha256` の水準横断
+        # 比較は意味を持たない——mixer（`make_vremix_fixtures.py`）を変えて一部の水準を
+        # 作り直しても、id は同じ・per-level hash は元々違う・harness のコード pin は
+        # mixer を含まない、で誰も気付けない。fixtures 自身が名乗る `builder` は run 側で
+        # 実体と照合済み（`_require_registered_m2e_cohort`）なので、その検証済みの値を
+        # verdict へ写し、集計器が水準横断の一致を要求できるようにする。
+        verdict["m2e_builder_provenance"] = copy.deepcopy(
+            external_fixtures_data.get("builder")
+        )
 
     # C2: 測り直しを起こす前に、`store_B` が提出 report を産んだ `store_A` と重なって
     # いないことを確かめる（CLI の 2 引数比較は evaluate では走らないため、ここが
@@ -9290,6 +9300,15 @@ def _require_homogeneous_census_inputs(
         # `_require_homogeneous_numeric_runtime_config` を既に課しているので、水準を
         # 跨ぐ集計だけが弱いという非対称になっていた（PR #241 Codex P1）。
         "numeric_runtime_config",
+        # 混合式の provenance（E-13・PR #241 Codex P1）。**破断曲線は主生産物であり、
+        # 混合式が水準間で混ざれば曲線として成立しない。**
+        #
+        # 「現行 mixer とも一致していること」までは要求しない: ミックスの音声 bytes は
+        # fixtures の sha256 で既に pin されており、測定の正しさは mixer の現在値に
+        # 依存しない。現行一致まで要求すると、完了済みキャンペーンが後日の無関係な
+        # mixer 変更で無効になり、「一度測って後で集計する」という本トラックのモデルと
+        # 衝突する（run 側は測定時点で実体照合を済ませている）。
+        "m2e_builder_provenance",
     )
     for field in fields:
         values = {json.dumps(v.get(field), sort_keys=True) for v in verdicts}
@@ -9507,6 +9526,22 @@ def aggregate_m2e_census(
                 problems.append("repeats が bit 一致していない")
             if cell["status"] not in ("census_pending", "level_record_only"):
                 problems.append(f"status {cell['status']!r} が M2e の想定値でない")
+            # **`metrics` の形も要求する**（PR #241 Codex P2）。`load_verdict` は
+            # top-level schema と bytes 束縛しか見ないので、`metrics` が欠損・`null`・
+            # 短縮でも他の検査は全部通り、`census_complete` を出したうえで
+            # `level_response` に欠測が載る（帯の判定だけは `bar_satisfied` から出る）。
+            # 成果物に載せる値は、載せる前に形を確かめる。
+            metrics_list = cell["metrics"]
+            if not isinstance(metrics_list, list) or len(metrics_list) != repeats_min:
+                problems.append(
+                    f"metrics が {repeats_min} 件の list でない "
+                    f"（{len(metrics_list) if isinstance(metrics_list, list) else metrics_list!r}）"
+                )
+            else:
+                try:
+                    _require_finite_metrics(arm, metrics_list)
+                except ValueError as exc:
+                    problems.append(f"metrics が有限数値でない（{exc}）")
             counted = (
                 len(clip_ids) * cell["n_rows"]
                 if isinstance(clip_ids, list) and isinstance(cell["n_rows"], int)
@@ -9802,17 +9837,28 @@ def main() -> int:
     if args.census:
         # census は run/evaluate のどのフェーズ引数とも組み合わせない。測っていない
         # 次元・使わない資源を名乗らせない規律（`--repeat-index` 等と同型）。
-        for flag, value in (
-            ("--categories", args.categories),
-            ("--level", args.level),
-            ("--cell-store", args.cell_store),
-            ("--eval-cell-store", args.eval_cell_store),
-            ("--repeat-index", args.repeat_index),
+        # census が**実際に読む**のは `--census` / `--out` / `--bars` / `--m2e-bars` の
+        # 4 つだけ。それ以外は黙って無視されるのではなく拒否する（PR #241 Codex P2）——
+        # 例えば `--external-manifest` を渡した wrapper は「census がその manifest に
+        # 束縛される」と信じうるが、成果物はそれを一度も読まない。
+        for flag, value, unused_when in (
+            ("--categories", args.categories, None),
+            ("--level", args.level, None),
+            ("--cell-store", args.cell_store, None),
+            ("--eval-cell-store", args.eval_cell_store, None),
+            ("--repeat-index", args.repeat_index, None),
+            ("--external-manifest", args.external_manifest, None),
+            ("--external-fixtures", args.external_fixtures, EXTERNAL_FIXTURES_PATH),
+            ("--specs", args.specs, SPECS_PATH),
+            ("--workers", args.workers, 1),
+            ("--pin-threads", args.pin_threads, False),
+            ("--cell-store-role", args.cell_store_role, _CELL_STORE_ROLE_RUN),
         ):
-            if value is not None:
+            if value != unused_when:
                 raise SystemExit(
-                    f"{flag} は census phase では無効（census は verdict を集めるだけで "
-                    "測定も評価もしない）"
+                    f"{flag} は census phase では無効（census が読むのは --census / "
+                    "--out / --bars / --m2e-bars だけで、測定も評価もしない; 黙って "
+                    "無視して「その引数に束縛された」と誤解させない）"
                 )
         protected = {Path(p).resolve() for p in args.census}
         protected.add(Path(args.m2e_bars).resolve())
