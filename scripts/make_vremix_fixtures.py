@@ -107,12 +107,24 @@ _NoDuplicateKeyLoader.add_constructor(
 )
 
 
-def load_registry_yaml(path: Path) -> Dict[str, Any]:
-    """登録簿 YAML を重複キー拒否で読む（`load_registered_*` の唯一の入口）。"""
-    doc = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_NoDuplicateKeyLoader)
+def load_registry_snapshot(path: Path) -> Tuple[Dict[str, Any], str]:
+    """登録簿 YAML を **1 回だけ読み**、その bytes から doc と digest を同時に導く。
+
+    parse と `sha256` を別々の読み込みから取ると、その間に登録簿が編集された場合に
+    「古い pin で音を作り、新しい登録簿を名乗る provenance」が成立する——生成物は
+    内部整合し、新しい登録簿が checkout に残る限り下流の digest 照合も通る。
+    照合対象の bytes は 1 つでなければならない（stem 側の `read_stem_pinned` と同じ規律）。
+    """
+    data = Path(path).read_bytes()
+    doc = yaml.load(data.decode("utf-8"), Loader=_NoDuplicateKeyLoader)
     if not isinstance(doc, dict):
         raise GenerationError(f"{path}: YAML mapping でない (fail-closed)")
-    return doc
+    return doc, hashlib.sha256(data).hexdigest()
+
+
+def load_registry_yaml(path: Path) -> Dict[str, Any]:
+    """登録簿 YAML を重複キー拒否で読む（`load_registered_*` の唯一の入口）。"""
+    return load_registry_snapshot(path)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -580,19 +592,23 @@ def require_valid_registered_utc(value: str) -> None:
         )
 
 
-def load_bed_fixtures_doc() -> Dict[str, Any]:
+def load_bed_fixtures_doc(doc: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """`m2e_bed_fixtures.yaml` を schema 検証つきで読む（**この登録簿の唯一の入口**）。
 
     schema discriminator の照合をここに集約する。読む側ごとに素の
     `load_registry_yaml` を呼ぶと、片方（`load_registered_beds`）は未知 schema を
     拒否するのに片方（窓の読み出し）は素通しする、という不揃いが生まれる。
+
+    `doc` を渡すと**その snapshot を検証する**（読み直さない）。digest を刻む側が
+    parse と hash を同じ bytes から導くための入口である。
     """
-    if not M2E_BED_FIXTURES_PATH.is_file():
-        raise GenerationError(
-            f"{M2E_BED_FIXTURES_PATH} が無い; ベッドの事前登録 pin なしにミックスを "
-            "生成しない (fail-closed)"
-        )
-    doc = load_registry_yaml(M2E_BED_FIXTURES_PATH)
+    if doc is None:
+        if not M2E_BED_FIXTURES_PATH.is_file():
+            raise GenerationError(
+                f"{M2E_BED_FIXTURES_PATH} が無い; ベッドの事前登録 pin なしにミックスを "
+                "生成しない (fail-closed)"
+            )
+        doc = load_registry_yaml(M2E_BED_FIXTURES_PATH)
     version = doc.get("schema_version")
     if version != M2E_BED_FIXTURES_SCHEMA:
         raise GenerationError(
@@ -603,9 +619,9 @@ def load_bed_fixtures_doc() -> Dict[str, Any]:
     return doc
 
 
-def load_registered_beds() -> Dict[str, Dict[str, Any]]:
+def load_registered_beds(doc: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     """`m2e_bed_fixtures.yaml` の採用ベッド pin を読む（§9・r3 で登録済み）。"""
-    beds = load_bed_fixtures_doc().get("beds")
+    beds = load_bed_fixtures_doc(doc).get("beds")
     if not isinstance(beds, dict) or not beds:
         raise GenerationError(f"{M2E_BED_FIXTURES_PATH}: beds が空 (fail-closed)")
     for track, pin in beds.items():
@@ -645,9 +661,13 @@ def load_registered_beds() -> Dict[str, Dict[str, Any]]:
     return beds
 
 
-def load_registered_clips() -> Dict[str, Dict[str, str]]:
-    """`m2c_external_fixtures.yaml` の 40 clip pin を読む（**唯一の真**）。"""
-    doc = load_registry_yaml(M2C_FIXTURES_PATH)
+def load_registered_clips(doc: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, str]]:
+    """`m2c_external_fixtures.yaml` の 40 clip pin を読む（**唯一の真**）。
+
+    `doc` を渡すとその snapshot を検証する（`load_bed_fixtures_doc` と同じ規律）。
+    """
+    if doc is None:
+        doc = load_registry_yaml(M2C_FIXTURES_PATH)
     version = doc.get("schema_version")
     if version != M2C_FIXTURES_SCHEMA:
         raise GenerationError(
@@ -887,8 +907,18 @@ def _build_into_staging(
     registered_utc: str,
 ) -> Dict[str, Any]:
     """`build` の本体（この実行が所有する `staging` の中だけで完結する）。"""
-    clips = load_registered_clips()
-    registered_beds = load_registered_beds()
+    # 入力登録簿は **bytes を 1 回だけ読み**、pin の解釈と provenance の digest を
+    # その同じ snapshot から導く（build は数十分走るので、その間の編集で「古い pin で
+    # 作った音が新しい登録簿を名乗る」が成立しうる）。
+    clip_doc, clip_registry_sha256 = load_registry_snapshot(M2C_FIXTURES_PATH)
+    if not M2E_BED_FIXTURES_PATH.is_file():
+        raise GenerationError(
+            f"{M2E_BED_FIXTURES_PATH} が無い; ベッドの事前登録 pin なしにミックスを "
+            "生成しない (fail-closed)"
+        )
+    bed_doc, bed_registry_sha256 = load_registry_snapshot(M2E_BED_FIXTURES_PATH)
+    clips = load_registered_clips(clip_doc)
+    registered_beds = load_registered_beds(bed_doc)
     out_dir = staging
     mix_dir = out_dir / "mix"
     annotation_dir = out_dir / "annotations"
@@ -974,11 +1004,12 @@ def _build_into_staging(
         annotation_pins[clip_id] = clips[clip_id]["expected_annotation_sha256"]
 
     # 生成側 provenance（混合式 = 本スクリプトの bytes と、入力登録簿 2 本の digest）。
+    # 登録簿の digest は**上で parse した snapshot そのもの**から来る（読み直さない）。
     # 全水準で同一なのでループ外で 1 度だけ作る。
     builder_provenance = {
         "generator_code_sha256": _sha256_file(Path(__file__).resolve()),
-        "m2c_fixtures_sha256": _sha256_file(M2C_FIXTURES_PATH),
-        "m2e_bed_fixtures_sha256": _sha256_file(M2E_BED_FIXTURES_PATH),
+        "m2c_fixtures_sha256": clip_registry_sha256,
+        "m2e_bed_fixtures_sha256": bed_registry_sha256,
     }
 
     summary: Dict[str, Any] = {"levels": {}, "beds": slugs, "builder": builder_provenance}

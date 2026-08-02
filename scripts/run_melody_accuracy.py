@@ -2688,6 +2688,9 @@ M2E_BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_accuracy_bar
 # M2e ベッド登録簿（r3 で pin 済み）。ハーネスは中身を解釈しないが、生成物が名乗る
 # `builder.m2e_bed_fixtures_sha256` を**測る側の実体**と突き合わせるために持つ。
 M2E_BED_FIXTURES_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_bed_fixtures.yaml"
+# 混合式そのもの（生成器のコード）。生成物が名乗る `builder.generator_code_sha256` を
+# **測る側が持っている実体**と突き合わせるために持つ（登録簿 pin と同じ扱い）。
+M2E_MIXER_SCRIPT_PATH = ROOT / "scripts" / "make_vremix_fixtures.py"
 
 _EXPECTED_BARS_SCHEMA = "m2-accuracy-bars/0.1"
 # M2e のバーは `m2-accuracy-bars/0.1` を名乗らせない（設計 §5.1-2）。
@@ -3842,10 +3845,13 @@ def _require_registered_m2e_cohort(fixtures_doc: Dict[str, Any], *, where: str) 
             "入力登録簿 digest）が無い; どの混合式・どの登録簿から出た音か立証できない "
             "pin ファイルで測らない (fail-closed)"
         )
-    # **宣言された入力 digest は全部照合する。** clip 側だけ見て bed 側を見逃すと、
+    # **宣言された digest は全部照合する。** clip 側だけ見て bed 側を見逃すと、
     # 採用ベッドや窓 pin を書き換えた登録簿から作られた自己整合な 80 entry bundle が、
     # コホート検査も音声 hash 照合も通ってしまう（provenance を名乗るだけで検証されない）。
+    # **混合式（生成器のコード）も同じ**——非空を確かめるだけでは、改変した混合式で
+    # 作った音が「凍結式の証拠」として測られる。3 本とも実体と突き合わせる。
     for key, path in (
+        ("generator_code_sha256", M2E_MIXER_SCRIPT_PATH),
         ("m2c_fixtures_sha256", EXTERNAL_FIXTURES_PATH),
         ("m2e_bed_fixtures_sha256", M2E_BED_FIXTURES_PATH),
     ):

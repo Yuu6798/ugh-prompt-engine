@@ -7577,13 +7577,12 @@ def _m2e_cohort_doc(
     """凍結コホート gate 用の合成 fixtures doc（clip id は**実登録簿**から採る）。"""
     if builder is None:
         builder = {
-            "generator_code_sha256": "0" * 64,
-            "m2c_fixtures_sha256": hashlib.sha256(
-                Path(harness.EXTERNAL_FIXTURES_PATH).read_bytes()
-            ).hexdigest(),
-            "m2e_bed_fixtures_sha256": hashlib.sha256(
-                Path(harness.M2E_BED_FIXTURES_PATH).read_bytes()
-            ).hexdigest(),
+            key: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            for key, path in (
+                ("generator_code_sha256", harness.M2E_MIXER_SCRIPT_PATH),
+                ("m2c_fixtures_sha256", harness.EXTERNAL_FIXTURES_PATH),
+                ("m2e_bed_fixtures_sha256", harness.M2E_BED_FIXTURES_PATH),
+            )
         }
     base = _registered_clip_ids() if clips is None else clips
     fixtures: "Dict[str, Any]" = {}
@@ -7631,9 +7630,15 @@ def test_registered_m2e_cohort_requires_builder_provenance() -> None:
         _ORIG_M2E_COHORT(_m2e_cohort_doc(2, builder={}), where="t")
 
 
-@pytest.mark.parametrize("key", ["m2c_fixtures_sha256", "m2e_bed_fixtures_sha256"])
+@pytest.mark.parametrize(
+    "key", ["generator_code_sha256", "m2c_fixtures_sha256", "m2e_bed_fixtures_sha256"]
+)
 def test_registered_m2e_cohort_rejects_a_foreign_input_registry_digest(key: str) -> None:
-    """P2: 宣言された入力 digest は clip 側も bed 側も**全部**照合する。"""
+    """P2: 宣言された digest は混合式も clip 側も bed 側も**全部**照合する。
+
+    `generator_code_sha256` を非空チェックだけで通すと、改変した混合式で作った音が
+    「凍結式の証拠」としてコホート検査も音声 hash 照合も通ってしまう。
+    """
     doc = _m2e_cohort_doc(2)
     doc["builder"][key] = "9" * 64
     with pytest.raises(ValueError, match=key):

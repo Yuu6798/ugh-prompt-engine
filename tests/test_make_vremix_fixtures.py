@@ -696,7 +696,7 @@ def test_cli_screen_binds_the_bed_to_its_registered_stem_pins(
     _write_two_beds(bed_root)
     pins = _fake_bed_pins(bed_root, _TWO_BEDS)
     pins["Artist A - Track One"]["expected_stem_sha256"]["drums"] = "0" * 64
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: pins)
     monkeypatch.setattr(mk, "registered_n_max_samples", lambda: mk.FRAME_LEN * 4)
     args = argparse.Namespace(
         bed_root=str(bed_root), track="Artist A - Track One",
@@ -767,14 +767,14 @@ def _fake_vocadito(tmp_path: Path, clip_ids) -> tuple[Path, dict]:
 def test_build_emits_manifest_fixtures_and_generation_record(tmp_path, monkeypatch) -> None:
     clip_ids = ["vocadito_1", "vocadito_2"]
     vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     for track in ("Artist A - Track One", "Artist B - Track Two"):
         _write_bed(bed_root / track)
 
     monkeypatch.setattr(
         mk, "load_registered_beds",
-        lambda: _fake_bed_pins(bed_root, ["Artist A - Track One", "Artist B - Track Two"]),
+        lambda *_a: _fake_bed_pins(bed_root, ["Artist A - Track One", "Artist B - Track Two"]),
     )
     out_dir = tmp_path / "out"
     summary = mk.build(
@@ -823,11 +823,11 @@ def test_build_is_deterministic(tmp_path, monkeypatch) -> None:
     """同一入力 → 生成ミックスの bytes が完全一致（seed 不使用）。"""
     clip_ids = ["vocadito_1"]
     vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
 
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, _TWO_BEDS))
     digests = []
     for run in ("a", "b"):
         out_dir = tmp_path / f"out_{run}"
@@ -858,10 +858,10 @@ def test_build_refuses_when_vocadito_bytes_drifted(tmp_path, monkeypatch) -> Non
     clip_ids = ["vocadito_1"]
     vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
     pins["vocadito_1"]["expected_audio_sha256"] = "0" * 64
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, _TWO_BEDS))
     with pytest.raises(mk.GenerationError, match="再取得・再エンコードは禁止"):
         mk.build(
             vocadito_root=vocadito_root,
@@ -925,12 +925,12 @@ def test_build_rejects_a_bed_whose_stem_digest_differs(tmp_path, monkeypatch) ->
     """P1-3: ベッド stem を committed pin と照合する（破損・差し替えを通さない）。"""
     clip_ids = ["vocadito_1"]
     vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
     bad = _fake_bed_pins(bed_root, _TWO_BEDS)
     bad["Artist A - Track One"]["expected_stem_sha256"]["drums"] = "0" * 64
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: bad)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: bad)
     with pytest.raises(mk.GenerationError, match="事前登録 pin .* と不一致"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
@@ -944,12 +944,12 @@ def test_build_rejects_a_bed_window_that_differs_from_the_screened_one(
 ) -> None:
     """P2: stem pin は素材を同定するが、そこから作る窓は実装を通って出てくる。"""
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
     drifted = _fake_bed_pins(bed_root, _TWO_BEDS)
     drifted["Artist A - Track One"]["bed_window_sha256"] = "0" * 64
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: drifted)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: drifted)
     with pytest.raises(mk.GenerationError, match="ベッド窓の sha256"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
@@ -971,13 +971,13 @@ def test_build_refuses_to_publish_inside_the_repository(tmp_path, monkeypatch) -
 def test_build_rejects_a_bed_that_is_not_accepted(tmp_path, monkeypatch) -> None:
     """スクリーニングを通っていないベッドでミックスを作らない。"""
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
     _write_bed(bed_root / "Artist C - Screened Out")
     pins = _fake_bed_pins(bed_root, _TWO_BEDS + ["Artist C - Screened Out"])
     pins["Artist C - Screened Out"]["accepted"] = False   # 採用 2 件は保ったまま
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: pins)
     with pytest.raises(mk.GenerationError, match="accepted ではない"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
@@ -992,10 +992,10 @@ def test_build_leaves_no_partial_bundle_when_generation_fails(tmp_path, monkeypa
     「空でない出力先は拒否」と噛み合うと、中断した実行が次回を塞いでしまう。
     """
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1", "vocadito_2"])
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, _TWO_BEDS))
     calls = {"n": 0}
     original = mk.apply_level
 
@@ -1038,10 +1038,10 @@ def _staging_dirs(out_dir: Path) -> list[Path]:
 def test_build_removes_its_staging_on_keyboard_interrupt(tmp_path, monkeypatch) -> None:
     """`KeyboardInterrupt` でも staging を置き去りにしない（`BaseException` 経路）。"""
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, _TWO_BEDS))
 
     def _interrupt(voice, bed, level):
         raise KeyboardInterrupt
@@ -1058,15 +1058,59 @@ def test_build_removes_its_staging_on_keyboard_interrupt(tmp_path, monkeypatch) 
     assert _staging_dirs(out_dir) == []
 
 
+def test_builder_provenance_hashes_the_snapshot_it_parsed(tmp_path, monkeypatch) -> None:
+    """P2: build 中に登録簿が編集されても、刻む digest は**parse した bytes** のもの。
+
+    parse と hash を別々の読み込みから取ると「古い pin で作った音が新しい登録簿を
+    名乗る」が成立し、新しい登録簿が checkout に残る限り測る側の照合も通ってしまう。
+    """
+    registry_copies = {}
+    for attr in ("M2C_FIXTURES_PATH", "M2E_BED_FIXTURES_PATH"):
+        copy = tmp_path / f"registry_{attr}.yaml"
+        copy.write_bytes(getattr(mk, attr).read_bytes())
+        monkeypatch.setattr(mk, attr, copy)
+        registry_copies[attr] = (copy, mk._sha256_file(copy))
+
+    real_snapshot = mk.load_registry_snapshot
+
+    def snapshot_then_edit(path: Path):
+        parsed = real_snapshot(path)
+        # 読み終えた**直後**に登録簿が差し替わる（長い build 中の編集を模す）。
+        Path(path).write_bytes(Path(path).read_bytes() + b"\n# edited mid-build\n")
+        return parsed
+
+    monkeypatch.setattr(mk, "load_registry_snapshot", snapshot_then_edit)
+
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
+    bed_root = tmp_path / "beds"
+    _write_two_beds(bed_root)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, _TWO_BEDS))
+    out_dir = tmp_path / "out"
+    summary = mk.build(
+        vocadito_root=vocadito_root, bed_root=bed_root,
+        tracks=_TWO_BEDS, levels=["0dB"],
+        out_dir=out_dir, registered_utc="2026-08-01",
+    )
+    builder = summary["builder"]
+    assert builder["m2c_fixtures_sha256"] == registry_copies["M2C_FIXTURES_PATH"][1]
+    assert builder["m2e_bed_fixtures_sha256"] == registry_copies["M2E_BED_FIXTURES_PATH"][1]
+    # 編集後の実体とは一致しない（= 読み直していないことの証拠）。
+    for attr, (copy, _pinned) in registry_copies.items():
+        assert builder[
+            "m2c_fixtures_sha256" if attr == "M2C_FIXTURES_PATH" else "m2e_bed_fixtures_sha256"
+        ] != mk._sha256_file(copy)
+
+
 def test_build_requires_every_accepted_bed(tmp_path, monkeypatch) -> None:
     """P1: `--bed` を 1 本落とすと、内部整合した**部分コホート**が出てしまう。"""
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     tracks = ["Artist A - Track One", "Artist B - Track Two"]
     for track in tracks:
         _write_bed(bed_root / track)
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, tracks))
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, tracks))
     with pytest.raises(mk.GenerationError, match="部分コホート"):
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
@@ -1078,10 +1122,10 @@ def test_build_requires_every_accepted_bed(tmp_path, monkeypatch) -> None:
 def test_build_emits_a_dated_registered_utc(tmp_path, monkeypatch) -> None:
     """P1-2: `registered_utc: null` はハーネスが読めない。実値を書くこと。"""
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, _TWO_BEDS))
     out_dir = tmp_path / "out"
     mk.build(
         vocadito_root=vocadito_root, bed_root=bed_root,
@@ -1130,10 +1174,10 @@ def test_build_rejects_an_invalid_registered_utc_before_writing_anything(
 ) -> None:
     """非空チェックだけでは数百本の WAV を書いた後に下流で落ちる。生成前に止める。"""
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, _TWO_BEDS))
     out_dir = tmp_path / "out"
     with pytest.raises(mk.GenerationError, match="registered_utc"):
         mk.build(
@@ -1147,10 +1191,10 @@ def test_build_rejects_an_invalid_registered_utc_before_writing_anything(
 def test_build_refuses_a_non_empty_out_dir(tmp_path, monkeypatch) -> None:
     """P2（最小対処）: 前回実行の残骸と混ざらないよう空の出力先を要求する。"""
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
-    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
     bed_root = tmp_path / "beds"
     _write_two_beds(bed_root)
-    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, _TWO_BEDS))
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, _TWO_BEDS))
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     (out_dir / "stale.txt").write_text("leftover", encoding="utf-8")
