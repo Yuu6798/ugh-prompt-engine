@@ -164,6 +164,10 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
             "source": "test_fixture_stub",
         },
     )
+    # 同じ理由で M2e の凍結コホート gate（2 bed × 40 clip = 80 entry）も無効化する。
+    # 機構テストは数 entry の合成 fixtures を使う（80 entry を実抽出で回すのは非現実的）。
+    # 実 gate は専用テスト群 `test_registered_m2e_cohort_*` が固定する。
+    monkeypatch.setattr(harness, "_require_registered_m2e_cohort", lambda *a, **k: None)
 
 
 @pytest.fixture(scope="session")
@@ -244,6 +248,8 @@ _ORIG_REVERIFY = harness._reverify_category_measurement
 _ORIG_ATTEST = harness._require_attested_registration
 # 外部素材 fixtures の事前登録 attestation（bars 側 `_ORIG_ATTEST` と対称、M2c）。
 _ORIG_EXTERNAL_ATTEST = harness._require_attested_external_fixtures_registration
+# 同上（M2e の凍結コホート gate）。autouse fixture が no-op へ差し替える前の実体。
+_ORIG_M2E_COHORT = harness._require_registered_m2e_cohort
 # autouse fixture が `[]` へ正規化する前の実体（H16 の機構そのものをテストする際に
 # 明示的に復元して使う）。
 _ORIG_SCORER_COMPILE_EXPECTED_PATHS = harness._scorer_compile_expected_paths
@@ -887,6 +893,9 @@ def test_stubbed_scorer_pins_never_triggers_rglob_forensics(
     calls: Dict[str, int] = {
         "package_code_sha256": 0,
         "packages_code_sha256": 0,
+        # `env_digest` 系の束縛経路（`_bind_runtime_code_pins` → `package_code_state`）も
+        # 同じ重い rglob を踏む。名前が違うだけで守るべき性質は同じなので数える。
+        "package_code_state": 0,
     }
     bind_inference_calls: Dict[str, int] = {"n": 0}
     real_package_code_sha256 = harness.package_code_sha256
@@ -913,6 +922,14 @@ def test_stubbed_scorer_pins_never_triggers_rglob_forensics(
         harness, "bind_inference_code_pins", _counting_bind_inference_code_pins
     )
     monkeypatch.setattr(provenance, "packages_code_sha256", _counting_packages_code_sha256)
+
+    real_package_code_state = provenance.package_code_state
+
+    def _counting_package_code_state(*args: Any, **kwargs: Any) -> Any:
+        calls["package_code_state"] += 1
+        return real_package_code_state(*args, **kwargs)
+
+    monkeypatch.setattr(provenance, "package_code_state", _counting_package_code_state)
     monkeypatch.setattr(harness, "_require_scorer_native_unchanged_since_bind", lambda: None)
 
     report1 = _fake_run(
@@ -932,7 +949,11 @@ def test_stubbed_scorer_pins_never_triggers_rglob_forensics(
     # run_accuracy は report1/report2 の 2 回とも bind_inference_code_pins を呼ぶ
     # はず——stub 自体は呼ばれる契約（0 だと逆に seam が外れている疑い）。
     assert bind_inference_calls["n"] == 2, bind_inference_calls
-    assert calls == {"package_code_sha256": 0, "packages_code_sha256": 0}, (
+    assert calls == {
+        "package_code_sha256": 0,
+        "packages_code_sha256": 0,
+        "package_code_state": 0,
+    }, (
         f"forensics 呼び出しが検出された: {calls}; scorer/inference いずれかの stub が "
         "漏れて実 forensics に接続している"
     )
@@ -4093,6 +4114,29 @@ def test_cli_rejects_out_path_colliding_with_protected_inputs(tmp_path, monkeypa
     with pytest.raises(SystemExit, match="凍結入力"):
         harness.main()
     assert BARS_PATH.read_bytes() == before
+
+
+@pytest.mark.parametrize("out_rel", ["cell_deadbeef.json", "nested/report.json", ""])
+def test_cli_rejects_out_path_inside_the_cell_store(out_rel, tmp_path, monkeypatch) -> None:
+    """P2: run report でセルチェックポイントを上書きさせない。
+
+    `--out` が `--cell-store` 配下にあると、resume に使ったセルを同じ run が消し、
+    次回は crepe 推論からの再測定になる。走る前に落とす。
+    """
+    cell_store = tmp_path / "cells"
+    cell_store.mkdir()
+    out = cell_store / out_rel if out_rel else cell_store
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out", str(out),
+            "--cell-store", str(cell_store),
+            "--repeat-index", "0",
+        ],
+    )
+    with pytest.raises(SystemExit, match="--cell-store"):
+        harness.main()
 
 
 @pytest.mark.parametrize(
@@ -7556,6 +7600,130 @@ def test_evaluate_m2_bars_rejects_partial_cohort_row(tmp_path: Path) -> None:
         )
 
 
+def _registered_clip_ids() -> "List[str]":
+    return sorted(harness.load_external_fixtures(harness.EXTERNAL_FIXTURES_PATH)[0]["fixtures"])
+
+
+def _registered_bed_ids() -> "List[str]":
+    """事前登録の accepted ベッドの `bed_id`（合成コホートもこの実 id を使う）。"""
+    return sorted(harness._registered_m2e_bed_ids())
+
+
+def _m2e_cohort_doc(
+    beds: int,
+    clips: "Optional[List[str]]" = None,
+    *,
+    tag: str = "p12",
+    builder: Any = None,
+    per_bed_clips: "Optional[Dict[int, List[str]]]" = None,
+) -> "Dict[str, Any]":
+    """凍結コホート gate 用の合成 fixtures doc（clip id / bed_id は**実登録簿**から採る）。
+
+    `beds` が登録数を超える分は合成 id（`BedExtra{n}`）で埋める——「余分な bed」を
+    作るためであり、登録側と一致してはならない。
+    """
+    registered_beds = _registered_bed_ids()
+    if builder is None:
+        builder = {
+            key: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            for key, path in (
+                ("generator_code_sha256", harness.M2E_MIXER_SCRIPT_PATH),
+                ("m2c_fixtures_sha256", harness.EXTERNAL_FIXTURES_PATH),
+                ("m2e_bed_fixtures_sha256", harness.M2E_BED_FIXTURES_PATH),
+            )
+        }
+    base = _registered_clip_ids() if clips is None else clips
+    fixtures: "Dict[str, Any]" = {}
+    for b in range(beds):
+        bed_id = registered_beds[b] if b < len(registered_beds) else f"BedExtra{b}"
+        bed_clips = (per_bed_clips or {}).get(b, base)
+        for clip in bed_clips:
+            fixtures[f"vremix_{clip}_{bed_id}_{tag}"] = {}
+    return {"builder": builder, "fixtures": fixtures}
+
+
+def test_registered_m2e_cohort_accepts_the_frozen_shape() -> None:
+    """2 bed × 40 clip = 80 entry ちょうどなら通る。"""
+    _ORIG_M2E_COHORT(_m2e_cohort_doc(2), where="t")
+
+
+@pytest.mark.parametrize(
+    ("beds", "delta"),
+    [
+        (2, -1),   # 同じ clip を両 bed から落とす（矩形は保たれる = 78 entry）
+        (1, 0),    # bed を丸ごと落とす（矩形は保たれる = 40 entry）
+        (3, 0),    # 余分な bed
+        (2, +1),   # 未登録 clip を 1 件足す（81 entry）
+    ],
+)
+def test_registered_m2e_cohort_rejects_a_resized_cohort(beds: int, delta: int) -> None:
+    """P2: 矩形性だけでは縮んだ帯を捕まえられない——絶対量を要求する。"""
+    clips = _registered_clip_ids()
+    clips = clips[:delta] if delta < 0 else clips + ["vocadito_unregistered"] * delta
+    with pytest.raises(ValueError, match="凍結値|clip 集合が事前登録"):
+        _ORIG_M2E_COHORT(_m2e_cohort_doc(beds, clips), where="t")
+
+
+def test_registered_m2e_cohort_rejects_divergent_clip_sets_per_bed() -> None:
+    """P2: 両 bed が 40 件でも中身がずれていれば直積の 1 セルが欠ける。"""
+    registered = _registered_clip_ids()
+    swapped = registered[:-1] + ["vocadito_unregistered"]   # 件数は 40 のまま中身がずれる
+    doc = _m2e_cohort_doc(2, per_bed_clips={0: registered, 1: swapped})
+    with pytest.raises(ValueError, match="clip 集合が事前登録"):
+        _ORIG_M2E_COHORT(doc, where="t")
+
+
+def test_registered_m2e_cohort_rejects_foreign_bed_ids() -> None:
+    """P2: 2 bed × 40 clip でも、**どのベッドか**が登録と違えば別の帯である。"""
+    doc = _m2e_cohort_doc(2)
+    registered = _registered_bed_ids()
+    renamed = {
+        key.replace(f"_{registered[0]}_", "_ForeignBed_"): value
+        for key, value in doc["fixtures"].items()
+    }
+    doc["fixtures"] = renamed
+    with pytest.raises(ValueError, match="accepted ベッド"):
+        _ORIG_M2E_COHORT(doc, where="t")
+
+
+def test_harness_bed_slug_matches_the_generator_convention() -> None:
+    """`bed_id` の導出規約が生成器と測る側で割れていないこと（実登録簿の全 50 曲）。"""
+    import make_vremix_fixtures as mk
+
+    tracks = mk.load_registered_beds()
+    assert len(tracks) == mk.M2E_EXPECTED_BED_COUNT
+    for track in tracks:
+        assert harness._m2e_bed_slug(track) == mk.bed_slug(track)
+
+
+def test_registered_m2e_cohort_requires_builder_provenance() -> None:
+    """P2: 混合式・入力登録簿を名乗らない pin ファイルでは測らない。"""
+    with pytest.raises(ValueError, match="builder provenance"):
+        _ORIG_M2E_COHORT(_m2e_cohort_doc(2, builder={}), where="t")
+
+
+@pytest.mark.parametrize(
+    "key", ["generator_code_sha256", "m2c_fixtures_sha256", "m2e_bed_fixtures_sha256"]
+)
+def test_registered_m2e_cohort_rejects_a_foreign_input_registry_digest(key: str) -> None:
+    """P2: 宣言された digest は混合式も clip 側も bed 側も**全部**照合する。
+
+    `generator_code_sha256` を非空チェックだけで通すと、改変した混合式で作った音が
+    「凍結式の証拠」としてコホート検査も音声 hash 照合も通ってしまう。
+    """
+    doc = _m2e_cohort_doc(2)
+    doc["builder"][key] = "9" * 64
+    with pytest.raises(ValueError, match=key):
+        _ORIG_M2E_COHORT(doc, where="t")
+
+
+def test_registered_m2e_cohort_rejects_a_foreign_id_convention() -> None:
+    ids = _m2e_cohort_doc(2)
+    ids["fixtures"]["not_a_vremix_id"] = {}
+    with pytest.raises(ValueError, match="§6.2 の規約"):
+        _ORIG_M2E_COHORT(ids, where="t")
+
+
 def test_external_fixtures_registration_attestation_finds_committed_blob() -> None:
     """(3) commit 済み凍結 fixtures は git 履歴で立証でき、登録時点が得られる。
 
@@ -8227,3 +8395,1529 @@ def test_cli_run_default_categories_omits_v_direct_without_manifest(
     assert exit_code == 0
     report = json.loads(out_path.read_text(encoding="utf-8"))
     assert set(report["categories"]) == {"S_direct", "S_fullstack"}
+
+
+# ---------------------------------------------------------------------------
+# M2e: V-remix 実ベッド帯の配線（`docs/DESIGN_M2e_vremix_real_bed.md`）
+#   §5.2 カテゴリ所有権 / §5.3 条件 block / §6.1 category specs / §6.2 水準規律 /
+#   §6.3 routing 追加
+# ---------------------------------------------------------------------------
+
+M2E_BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_accuracy_bars.yaml"
+
+# 追加**前**の 4 キーの route 列（設計 §6.3 の必須テスト: 完全一致であること）。
+_ROUTES_BEFORE_M2E: Dict[str, List[Tuple[str, str, str, str, bool]]] = {
+    "vocal_track": [
+        ("pyin_direct", "none", "pyin", "", True),
+        ("demucs_vocals_then_pyin", "demucs_vocals", "pyin", "", True),
+        ("demucs_vocals_then_crepe", "demucs_vocals", "crepe", "", True),
+        ("demucs_vocals_then_melodia", "demucs_vocals", "melodia", "", True),
+    ],
+    "clear_lead": [
+        ("pyin_direct", "none", "pyin", "", True),
+        ("melodia_direct", "none", "melodia", "", True),
+        ("crepe_direct", "none", "crepe", "", True),
+    ],
+    "full_mix": [
+        ("demucs_vocals_then_crepe", "demucs_vocals", "crepe", "", True),
+        ("melodia_direct", "none", "melodia", "", True),
+        ("basic_pitch_direct", "none", "basic_pitch", "melodia", True),
+    ],
+    "chord_pad_no_melody": [
+        ("not_applicable", "none", "none", "", False),
+        ("pyin_negative_control", "none", "pyin", "", True),
+    ],
+}
+
+
+def _route_tuple(route: Any) -> Tuple[str, str, str, str, bool]:
+    return (route.name, route.preprocessing, route.extractor, route.assist, route.applies)
+
+
+def test_m2e_routing_leaves_the_existing_input_kinds_untouched() -> None:
+    """既存 4 キーの route 列が追加前と**完全一致**すること（設計 §6.3 の必須テスト）。
+
+    `_ROUTES` の既存キーへの route 追加は禁止（`full_mix` に `crepe_direct` を足す案は
+    M1 / M4 の選択挙動を変えうるので却下）。加算的な新キーのみ許す。
+    """
+    from svp_rpe.melody import routing
+
+    for input_kind, expected in _ROUTES_BEFORE_M2E.items():
+        actual = [_route_tuple(r) for r in routing.select_routes(input_kind)]
+        assert actual == expected, input_kind
+
+
+def test_m2e_full_mix_direct_probe_is_a_single_crepe_direct_route() -> None:
+    """「フルミックスを、分離を通さず直接抽出器に当てる」= direct アームの測定対象そのもの。"""
+    from svp_rpe.melody import routing
+
+    assert "full_mix_direct_probe" in routing.INPUT_KINDS
+    routes = routing.select_routes("full_mix_direct_probe")
+    assert [_route_tuple(r) for r in routes] == [("crepe_direct", "none", "crepe", "", True)]
+
+
+def test_m2e_full_mix_direct_probe_is_referenced_only_by_the_direct_arm() -> None:
+    """新キーを参照するのは `_CATEGORY_SPECS` の `V_remix_real_direct` 行のみ（§6.3）。"""
+    referencing = sorted(
+        category
+        for category, spec in harness._CATEGORY_SPECS.items()
+        if spec["input_kind"] == "full_mix_direct_probe"
+    )
+    assert referencing == ["V_remix_real_direct"]
+
+
+def test_m2e_categories_are_registered_as_external_without_fixture_ids() -> None:
+    """§6.1: `kind: "external"` なので fixture_id / composite_id は持たない。"""
+    for category, expected_route in (
+        ("V_remix_real_direct", "crepe_direct"),
+        ("V_remix_real_stem", "demucs_vocals_then_crepe"),
+    ):
+        spec = harness._CATEGORY_SPECS[category]
+        assert spec["kind"] == "external"
+        assert spec["route_name"] == expected_route
+        assert "fixture_id" not in spec and "composite_id" not in spec
+        assert spec["bars_file"] == "m2e_accuracy_bars.yaml"
+    # 命名規律（§5.5）: 帯名に `real` を含める。
+    assert all("real" in c for c in harness._categories_owned_by("m2e_accuracy_bars.yaml"))
+
+
+def test_m2e_stem_arm_is_not_diagnostic_only() -> None:
+    """ベッドが実プロ音源になった以上 `{}`（バーなし）の根拠は成立しない（§5.4）。
+
+    これは**締める方向**の変更であり、一方向規律に反しない（規律が禁じるのは緩和のみ）。
+    """
+    assert harness._DIAGNOSTIC_ONLY_CATEGORIES == frozenset({"S_fullstack"})
+
+
+def test_every_category_declares_a_bars_file_owner() -> None:
+    """§5.2: 所有ファイルが未指定のカテゴリがあれば拒否（分離が開ける唯一の穴）。"""
+    for category, spec in harness._CATEGORY_SPECS.items():
+        assert spec.get("bars_file") in harness._BARS_FILES, category
+    owned = {
+        name: set(harness._categories_owned_by(name)) for name in harness._BARS_FILES
+    }
+    assert owned["m2_accuracy_bars.yaml"] == {"S_direct", "S_fullstack", "V_direct"}
+    assert owned["m2e_accuracy_bars.yaml"] == {"V_remix_real_direct", "V_remix_real_stem"}
+    # 同名カテゴリが 2 ファイルに現れない（写像なので構成上そうなる、を明示的に固定）。
+    assert not (owned["m2_accuracy_bars.yaml"] & owned["m2e_accuracy_bars.yaml"])
+
+
+@pytest.mark.parametrize(
+    ("bars_file", "expect"),
+    [(None, "bars_file を宣言していない"), ("nope.yaml", "未登録")],
+)
+def test_category_bars_ownership_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, bars_file, expect
+) -> None:
+    specs = copy.deepcopy(harness._CATEGORY_SPECS)
+    if bars_file is None:
+        specs["S_direct"].pop("bars_file")
+    else:
+        specs["S_direct"]["bars_file"] = bars_file
+    monkeypatch.setattr(harness, "_CATEGORY_SPECS", specs)
+    with pytest.raises(RuntimeError, match=expect):
+        harness._require_category_bars_ownership()
+
+
+def test_committed_m2_bars_still_load_after_m2e_categories_were_registered() -> None:
+    """回帰: `_CATEGORY_SPECS` に M2e を足しても `m2_accuracy_bars.yaml` の検証は誤爆しない。
+
+    検証は**所有カテゴリのみ**を対象にするので、M2e のバーがこのファイルに無いことを
+    「欠落」と見なさない（見なせば M2b / M2c の commit 済み記録が理由なく赤くなる）。
+    """
+    bars, _sha256 = harness.load_bars(BARS_PATH)
+    block = bars["m2_accuracy_bars"]
+    assert "V_remix_real_direct" not in block
+    assert harness.bars_file_identity(bars.data) == "m2_accuracy_bars.yaml"
+
+
+# --- M2e bars ファイルの合成（有効な最小形と、その 1 箇所だけを壊した変種）--------
+
+_M2E_BARS_TEMPLATE = {
+    "schema_version": "m2e-accuracy-bars/0.1",
+    "registered_utc": "2026-08-01",
+    "m2e_accuracy_bars": {
+        "V_remix_real_direct": {"min_rpa": 0.65, "max_octave_gap": 0.10},
+        "V_remix_real_stem": {"min_rpa": 0.65, "max_octave_gap": 0.10},
+        "one_way_rule": (
+            "m2_accuracy_bars.yaml と同じ一方向規律（registered_utc つき・実測前凍結・"
+            "実測後に緩めない）をこのファイルにも適用する。"
+        ),
+    },
+    "m2e_measurement_conditions": {
+        "level_margin_db": 20.0,
+        "V_remix_real_direct": {
+            "gate_level": "+12dB",
+            "levels": ["+12dB", "+6dB", "0dB", "-6dB"],
+        },
+        "V_remix_real_stem": {
+            "gate_level": "+12dB",
+            "levels": ["+12dB", "+6dB", "0dB", "-6dB"],
+        },
+    },
+    "provenance": {
+        "derived_from": {
+            "file": "m2_accuracy_bars.yaml",
+            # **実 digest**。loader は宣言した出所の bytes と一致することを要求する
+            # （形だけ整った provenance は出所へ結び付いていない・Codex 9 巡目 P2）。
+            "sha256": hashlib.sha256(BARS_PATH.read_bytes()).hexdigest(),
+            "category": "V_fullstack",
+        }
+    },
+}
+
+
+def _write_m2e_bars(tmp_path: Path, mutate=None, name: str = "m2e_accuracy_bars.yaml") -> Path:
+    import yaml as _yaml
+
+    doc = copy.deepcopy(_M2E_BARS_TEMPLATE)
+    if mutate is not None:
+        mutate(doc)
+    path = tmp_path / name
+    path.write_text(_yaml.safe_dump(doc, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def test_m2e_bars_load_and_expose_the_frozen_conditions(tmp_path: Path) -> None:
+    bars, sha256 = harness.load_bars(_write_m2e_bars(tmp_path))
+    assert harness.bars_file_identity(bars.data) == "m2e_accuracy_bars.yaml"
+    assert len(sha256) == 64
+    conditions = bars["m2e_measurement_conditions"]
+    assert conditions["level_margin_db"] == 20.0
+    assert conditions["V_remix_real_direct"]["gate_level"] == "+12dB"
+    # 両アームとも `("min_rpa", "max_octave_gap")`。VFA はバー外（§5.3）。
+    for category in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert set(bars["m2e_accuracy_bars"][category]) == {"min_rpa", "max_octave_gap"}
+        assert "max_vfa" not in bars["m2e_accuracy_bars"][category]
+
+
+def _wrong_provenance_digest(doc):
+    doc["provenance"]["derived_from"]["sha256"] = "0" * 64
+
+
+def _unknown_provenance_file(doc):
+    doc["provenance"]["derived_from"]["file"] = "not_a_bars_file.yaml"
+
+
+def _absent_provenance_category(doc):
+    doc["provenance"]["derived_from"]["category"] = "V_does_not_exist"
+
+
+@pytest.mark.parametrize(
+    "mutate, match",
+    [
+        (_wrong_provenance_digest, "実 digest"),
+        (_unknown_provenance_file, "既知の bars"),
+        (_absent_provenance_category, "に存在しない"),
+    ],
+)
+def test_m2e_bars_provenance_must_bind_to_the_declared_source(tmp_path, mutate, match) -> None:
+    """形だけ整った provenance は装飾でしかない——宣言した出所の実体へ結び付ける。"""
+    with pytest.raises(ValueError, match=match):
+        harness.load_bars(_write_m2e_bars(tmp_path, mutate))
+
+
+def _drop_conditions(doc):
+    doc.pop("m2e_measurement_conditions")
+
+
+def _drop_one_category_conditions(doc):
+    doc["m2e_measurement_conditions"].pop("V_remix_real_stem")
+
+
+def _gate_level_outside_levels(doc):
+    doc["m2e_measurement_conditions"]["V_remix_real_direct"]["gate_level"] = "+24dB"
+
+
+def _reorder_levels(doc):
+    doc["m2e_measurement_conditions"]["V_remix_real_direct"]["levels"] = [
+        "+12dB",
+        "+6dB",
+        "-6dB",
+        "0dB",
+    ]
+
+
+def _extend_ladder_upward(doc):
+    doc["m2e_measurement_conditions"]["V_remix_real_direct"]["levels"] = [
+        "+18dB",
+        "+12dB",
+        "+6dB",
+        "0dB",
+        "-6dB",
+    ]
+
+
+def _loosen_margin(doc):
+    doc["m2e_measurement_conditions"]["level_margin_db"] = 10.0
+
+
+def _redeclare_shared_scalar(doc):
+    doc["m2e_accuracy_bars"]["tolerance_cents"] = 80
+
+
+def _gate_level_inside_bar_block(doc):
+    doc["m2e_accuracy_bars"]["V_remix_real_direct"]["gate_level"] = "+12dB"
+
+
+def _drop_one_way_rule(doc):
+    doc["m2e_accuracy_bars"].pop("one_way_rule")
+
+
+def _drop_derived_from(doc):
+    doc["provenance"].pop("derived_from")
+
+
+def _own_a_foreign_category(doc):
+    doc["m2e_accuracy_bars"]["V_direct"] = {"min_rpa": 0.10, "max_octave_gap": 0.90}
+
+
+def _drop_a_required_bar_key(doc):
+    doc["m2e_accuracy_bars"]["V_remix_real_stem"].pop("max_octave_gap")
+
+
+def _empty_a_bar(doc):
+    doc["m2e_accuracy_bars"]["V_remix_real_stem"] = {}
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        (_drop_conditions, "条件 block"),
+        (_drop_one_category_conditions, "条件 block を欠く"),
+        (_gate_level_outside_levels, "gate_level"),
+        (_reorder_levels, "凍結ラダー"),
+        (_extend_ladder_upward, "凍結ラダー"),
+        (_loosen_margin, "20 dB 不変量"),
+        (_redeclare_shared_scalar, "共有スカラー"),
+        (_gate_level_inside_bar_block, "未知の閾値キー"),
+        (_drop_one_way_rule, "one_way_rule"),
+        (_drop_derived_from, "derived_from"),
+        (_own_a_foreign_category, "所有者"),
+        (_drop_a_required_bar_key, "必須閾値"),
+        (_empty_a_bar, "空/欠落"),
+    ],
+)
+def test_m2e_bars_are_fail_closed(tmp_path: Path, mutate, expect) -> None:
+    """条件 block と所有権の検査は 1 箇所壊すだけで落ちる（緩められる余地を残さない）。"""
+    with pytest.raises(ValueError, match=expect):
+        harness.load_bars(_write_m2e_bars(tmp_path, mutate))
+
+
+def test_m2e_bars_cannot_claim_the_m2_schema(tmp_path: Path) -> None:
+    """§5.1-2: M2e のバーに `m2-accuracy-bars/0.1` を名乗らせない。"""
+
+    def _claim_m2_schema(doc):
+        doc["schema_version"] = "m2-accuracy-bars/0.1"
+
+    with pytest.raises(ValueError, match="m2_accuracy_bars"):
+        harness.load_bars(_write_m2e_bars(tmp_path, _claim_m2_schema))
+
+
+def test_unknown_bars_schema_is_rejected(tmp_path: Path) -> None:
+    def _unknown(doc):
+        doc["schema_version"] = "m2z-accuracy-bars/9.9"
+
+    with pytest.raises(ValueError, match="unsupported"):
+        harness.load_bars(_write_m2e_bars(tmp_path, _unknown))
+
+
+# --- 水準軸（§6.2）--------------------------------------------------------
+
+
+def test_level_ladder_and_tags_are_frozen_in_declaration_order() -> None:
+    """§3.3.1: `level` は文字列辞書順で並べない（物理量と無関係な順序になる）。"""
+    assert harness._M2E_LEVEL_LADDER == ("+12dB", "+6dB", "0dB", "-6dB")
+    assert [harness._m2e_ladder_index(x) for x in harness._M2E_LEVEL_LADDER] == [0, 1, 2, 3]
+    assert sorted(harness._M2E_LEVEL_LADDER) == ["+12dB", "+6dB", "-6dB", "0dB"]
+    assert harness._M2E_LEVEL_TAGS == {
+        "+12dB": "p12",
+        "+6dB": "p06",
+        "0dB": "p00",
+        "-6dB": "m06",
+    }
+
+
+def _write_m2e_external_fixture_set(
+    tmp_path: Path,
+    clip_specs: "Dict[str, Tuple[List[float], List[float]]]",
+    *,
+    level: str = "+12dB",
+) -> Tuple[Path, Path]:
+    """M2e 用の manifest + `m2e-external-fixtures/0.1` の pin ファイルを書く。
+
+    実生成物と同じく **top-level `level`** を持つ（`make_vremix_fixtures.build` は
+    水準ごとに 1 本書き、そこに自分がどの水準を pin したかを宣言する）。run 側は
+    これを `--level` と突き合わせる。
+
+    entry id の `level_tag` も宣言水準に追随させる（設計 §6.2 の id 規約
+    `vremix_{clip_id}_{bed_id}_{level_tag}`）。ハーネスは宣言と id 側の実体を
+    束縛するので、ここで `p12` 固定にすると規約違反の pin ファイルになる。
+    """
+    tag = harness._M2E_LEVEL_TAGS[level]
+    clip_specs = {
+        f"{clip_id.rsplit('_', 1)[0]}_{tag}": spec for clip_id, spec in clip_specs.items()
+    }
+    external_dir = tmp_path / "external_m2e"
+    external_dir.mkdir(exist_ok=True)
+    manifest_entries: List[Dict[str, str]] = []
+    fixture_lines = [
+        'schema_version: "m2e-external-fixtures/0.1"',
+        'registered_utc: "2026-08-01"',
+        f'level: "{level}"',
+        "fixtures:",
+    ]
+    for clip_id, (times, freqs) in clip_specs.items():
+        audio_path = external_dir / f"{clip_id}.wav"
+        audio_path.write_bytes(_EXTERNAL_WAVEFORM)
+        annotation_bytes = _external_annotation_csv(times, freqs)
+        (external_dir / f"{clip_id}.csv").write_bytes(annotation_bytes)
+        manifest_entries.append(
+            {
+                "id": clip_id,
+                "audio_path": f"external_m2e/{clip_id}.wav",
+                "annotation_path": f"external_m2e/{clip_id}.csv",
+            }
+        )
+        fixture_lines.append(f"  {clip_id}:")
+        fixture_lines.append(f'    expected_audio_sha256: "{_EXTERNAL_AUDIO_SHA256}"')
+        fixture_lines.append(
+            f'    expected_annotation_sha256: "{hashlib.sha256(annotation_bytes).hexdigest()}"'
+        )
+    manifest_path = tmp_path / "m2e_manifest.json"
+    manifest_path.write_text(json.dumps(manifest_entries), encoding="utf-8")
+    fixtures_path = tmp_path / "m2e_external_fixtures.yaml"
+    fixtures_path.write_text("\n".join(fixture_lines) + "\n", encoding="utf-8")
+    return manifest_path, fixtures_path
+
+
+_VREMIX_CLIPS = {
+    "vremix_vocadito_1_BedOne_p12": (_CLIP001_TIMES, _CLIP001_FREQS),
+    "vremix_vocadito_2_BedOne_p12": (_CLIP002_TIMES, _CLIP002_FREQS),
+}
+
+
+def _vremix_ids(level: str) -> "List[str]":
+    """当該水準での entry id 群（§6.2: `vremix_{clip_id}_{bed_id}_{level_tag}`）。"""
+    tag = harness._M2E_LEVEL_TAGS[level]
+    return [f"{clip_id.rsplit('_', 1)[0]}_{tag}" for clip_id in _VREMIX_CLIPS]
+
+
+def _m2e_fake_runner(shift_cents: float = 0.0):
+    # entry id の `level_tag` は水準ごとに変わる（§6.2 の id 規約）。参照表は
+    # 全水準ぶんの id を持たせておく——runner は id からしか正解を引けないため。
+    refs = {}
+    for clip_id, (times, freqs) in _VREMIX_CLIPS.items():
+        stem = clip_id.rsplit("_", 1)[0]
+        for tag in harness._M2E_LEVEL_TAGS.values():
+            refs[f"{stem}_{tag}"] = (tuple(times), tuple(freqs))
+    return _make_fake_external_runner(refs, shift_cents=shift_cents)
+
+
+def _m2e_run(tmp_path: Path, *, level: str, shift_cents: float = 0.0, **kwargs) -> Dict[str, Any]:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level=level
+    )
+    return _fake_run(
+        categories=("V_remix_real_direct",),
+        route_runner=_m2e_fake_runner(shift_cents),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        level=level,
+        **kwargs,
+    )
+
+
+def test_run_accuracy_requires_a_level_for_level_bearing_categories(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="水準軸を持つため level"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+        )
+
+
+def test_run_accuracy_rejects_an_unregistered_level(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="事前登録"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+24dB",
+        )
+
+
+def test_run_accuracy_rejects_a_level_on_a_run_without_a_level_axis() -> None:
+    """測っていない次元を report に名乗らせない。"""
+    with pytest.raises(ValueError, match="水準軸を持つカテゴリを 1 つも"):
+        harness.run_accuracy(
+            categories=("S_direct",),
+            route_runner=_make_fake_runner(shift_cents=0.0),
+            level="+12dB",
+        )
+
+
+def test_m2e_run_records_the_level_and_the_owning_bars_pin(tmp_path: Path) -> None:
+    report = _m2e_run(tmp_path, level="0dB")
+    row = report["categories"]["V_remix_real_direct"]
+    assert report["level"] == "0dB"
+    assert row["outcome"] == "measured"
+    assert row["level"] == "0dB"
+    assert row["ladder_index"] == 2
+    assert row["input_kind"] == "full_mix_direct_probe"
+    assert row["route"] == "crepe_direct"
+    assert row["bars_file"] == "m2e_accuracy_bars.yaml"
+    assert len(row["bars_file_sha256"]) == 64
+    # top-level の bars pin は共有スカラーの供給元（M2 側）のまま。
+    _bars, m2_sha256 = harness.load_bars(BARS_PATH)
+    assert report["bars_sha256"] == m2_sha256
+    assert row["bars_file_sha256"] != m2_sha256
+
+
+def test_m2_rows_keep_their_bars_pin_pointing_at_the_m2_file() -> None:
+    report = _fake_run(route_runner=_make_fake_runner(shift_cents=0.0))
+    _bars, m2_sha256 = harness.load_bars(BARS_PATH)
+    for category in ("S_direct", "S_fullstack"):
+        row = report["categories"][category]
+        assert row["bars_file"] == "m2_accuracy_bars.yaml"
+        assert row["bars_file_sha256"] == m2_sha256
+        assert "level" not in row       # 水準軸を持たないカテゴリには刻まない
+
+
+def _m2e_evaluate(tmp_path: Path, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    return harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        external_manifest_path=tmp_path / "m2e_manifest.json",
+        external_fixtures_path=tmp_path / "m2e_external_fixtures.yaml",
+    )
+
+
+def test_m2e_gate_level_applies_the_bar(tmp_path: Path) -> None:
+    """`gate_level`（+12dB）ではバーが当たる。**ただし合否は出さない。**
+
+    設計 §6.2/§11: 帯の判定は全 1280 セル（4 水準 × 2 アーム）の census が揃って
+    初めて出る。1 回の evaluate は 1 水準しか見ないので census を立証できない
+    ——バーの結果は `bar_satisfied` に残しつつ `status` は `census_pending`。
+    """
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    verdict = _m2e_evaluate(tmp_path, reports)
+    result = verdict["categories"]["V_remix_real_direct"]
+    assert result["status"] == "census_pending"
+    assert result["bar_satisfied"] is True
+    assert result["failures"] == []
+    assert result["level"] == "+12dB"
+    assert result["gate_level"] == "+12dB"
+    assert result["ladder_index"] == 0
+    assert verdict["level"] == "+12dB"
+    assert verdict["m2e_bars_sha256"] == result["bars_file_sha256"]
+
+
+def test_m2e_gate_level_records_bar_violations_without_a_verdict(tmp_path: Path) -> None:
+    """バー違反は `bar_satisfied=False` + `failures` に残る（が `fail` とは言わない）。"""
+    reports = [_m2e_run(tmp_path, level="+12dB", shift_cents=500.0) for _ in range(2)]
+    verdict = _m2e_evaluate(tmp_path, reports)
+    result = verdict["categories"]["V_remix_real_direct"]
+    assert result["status"] == "census_pending"
+    assert result["bar_satisfied"] is False
+    assert any("min_rpa" in f for f in result["failures"])
+
+
+def test_m2e_never_emits_pass_or_fail_from_a_single_level(tmp_path: Path) -> None:
+    """P1: 部分 census（1 水準・片アーム）から publish 可能な判定を出さない。"""
+    for level in ("+12dB", "+6dB", "0dB", "-6dB"):
+        work = tmp_path / level.replace("+", "p")
+        work.mkdir(parents=True, exist_ok=True)
+        reports = [_m2e_run(work, level=level) for _ in range(2)]
+        verdict = _m2e_evaluate(work, reports)
+        statuses = {c["status"] for c in verdict["categories"].values() if "level" in c}
+        assert statuses <= {"census_pending", "level_record_only"}, (level, statuses)
+
+
+@pytest.mark.parametrize("level", ["+6dB", "0dB", "-6dB"])
+def test_m2e_non_gate_levels_are_record_only(tmp_path: Path, level: str) -> None:
+    """§6.2 fail-closed: `level != gate_level` の run にバーを適用しない。
+
+    500 cent ずらして RPA を大きく割った row でも **fail にならない**（そもそも判定を
+    出さない）ことで、「バーが当たっていない」ことを積極的に固定する。
+    """
+    reports = [_m2e_run(tmp_path, level=level, shift_cents=500.0) for _ in range(2)]
+    verdict = _m2e_evaluate(tmp_path, reports)
+    result = verdict["categories"]["V_remix_real_direct"]
+    assert result["status"] == "level_record_only"
+    assert result["level"] == level
+    assert result["gate_level"] == "+12dB"
+    assert "failures" not in result
+    # 破断曲線の記録専用なので、計測値そのものは残る。
+    assert result["metrics"]
+    assert result["status"] != "diagnostic_only"   # バーが無い帯とは区別する
+
+
+def test_m2e_evaluate_rejects_mixed_levels(tmp_path: Path) -> None:
+    """別水準の run を「同じ測定の反復」として評価しない。"""
+    reports = [_m2e_run(tmp_path, level="+12dB"), _m2e_run(tmp_path, level="0dB")]
+    with pytest.raises(ValueError, match="level が単一でない"):
+        _m2e_evaluate(tmp_path, reports)
+
+
+def test_m2e_evaluate_rejects_mixed_env_digests(tmp_path: Path) -> None:
+    """P2: 別環境で採ったセルを同じ帯の反復として合算しない（§8.7）。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    reports[0]["env_digest"] = "a" * 64
+    reports[1]["env_digest"] = "b" * 64
+    with pytest.raises(ValueError, match="env_digest が揃っていない"):
+        _m2e_evaluate(tmp_path, reports)
+
+    # 片方だけ記録がある場合も揃っていない（`--cell-store` 有無が混ざった反復）。
+    del reports[1]["env_digest"]
+    with pytest.raises(ValueError, match="env_digest が揃っていない"):
+        _m2e_evaluate(tmp_path, reports)
+
+
+@pytest.mark.parametrize("placeholder", ["", "unknown", "0" * 63])
+def test_m2e_evaluate_rejects_malformed_env_digests(tmp_path: Path, placeholder: str) -> None:
+    """P2: **揃っていても** sha256 の形でなければ環境を名乗ったことにならない。
+
+    非空文字列で通してしまうと、`""` や `"unknown"` を共有する別環境の report 同士が
+    「単一環境」として合算される。
+    """
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    for report in reports:
+        report["env_digest"] = placeholder
+    with pytest.raises(ValueError, match="env_digest が揃っていない"):
+        _m2e_evaluate(tmp_path, reports)
+
+
+def test_m2e_evaluate_rejects_a_foreign_bars_generation(tmp_path: Path) -> None:
+    """row が名乗る帯登録が評価器の読んだものと違えば拒否する。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    reports[0]["categories"]["V_remix_real_direct"]["bars_file_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="bars_file_sha256"):
+        _m2e_evaluate(tmp_path, reports)
+
+
+def test_cli_run_default_categories_excludes_m2e(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """既定集合は `m2_accuracy_bars.yaml` の所有カテゴリに限る（§5.2）。
+
+    M2e を暗黙の既定へ混ぜると、既存の M2c 流儀の呼び出しが `--level` 未指定で
+    即座に落ちる。M2e は `--categories` で明示的に選ぶ。
+    """
+    assert harness._categories_owned_by("m2_accuracy_bars.yaml") == (
+        "S_direct",
+        "S_fullstack",
+        "V_direct",
+    )
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--evaluate",
+            str(out_path),
+            "--level",
+            "+12dB",
+        ],
+    )
+    with pytest.raises(SystemExit, match="--level は run phase 専用"):
+        harness.main()
+
+
+# --- セルチェックポイント（設計 §8.7・opt-in）------------------------------
+#
+# 実行単位は 1 セル = `(clip_id, bed_id, level, arm, repeat_idx)`。本ハーネスの
+# 内部表現では `entry_id`（manifest の id。`vremix_{clip_id}_{bed_id}_{level_tag}`
+# が clip/bed/level を既に畳む）と `category`（= arm）でこれを表すため、セル鍵は
+# `(category, level, entry_id, repeat_index)`。fail-closed の要点は「レコードが
+# あっても入力/環境 digest が 1 つでも食い違えばスキップしない」——バーを緩める
+# ときと同じ「見なかったことにしない」規律をそのままここへ適用する。
+
+
+def test_cell_store_absent_leaves_report_shape_unchanged(tmp_path: Path) -> None:
+    """`--cell-store` 未指定なら report / row に新フィールドが 1 つも増えない
+
+    （挙動無変更の契約）。既存の committed record・既存テストが本機能の追加で
+    影響を受けないことの根拠。
+
+    **例外は `env_digest`**（2026-08-01・Codex 21 巡目 P2）。M2e は「環境を跨いで
+    セルを合算しない」を前提にしており、evaluate は report の `env_digest` でしか
+    それを検査できない。よって M2e run はチェックポイント機構の有無に依らず
+    必ず環境を名乗る——記録の欠落を許すと、別環境の 2 本が「どちらも環境を
+    名乗らないまま」反復として通る。
+    """
+    report = _m2e_run(tmp_path, level="+12dB")
+    assert isinstance(report["env_digest"], str) and report["env_digest"]
+    for key in (
+        "cell_store_relative",
+        "repeat_index",
+        "workers",
+        "cells_resumed",
+        "cells_measured",
+        "cell_store_mismatches",
+    ):
+        assert key not in report
+    row = report["categories"]["V_remix_real_direct"]
+    for key in ("_cell_store_resumed", "_cell_store_measured", "_cell_store_mismatches"):
+        assert key not in row
+
+
+def test_cell_store_round_trip_resumes_and_reuses_stale_results(tmp_path: Path) -> None:
+    """(a) 同じ入力/環境なら 2 回目は測り直さず resume し、clip row が bit 一致する。
+
+    2 回目は `shift_cents` を変えて呼ぶ——**実際に再測定していれば**別の観測値に
+    なるはずの入力を与えたうえで、resume されたセルが 1 回目の cached row を
+    そのまま返す（= 決定論による偶然の一致ではなく、本当に再測定を skip した
+    ことの直接証拠）。
+    """
+    cell_store = tmp_path / "cell_store"
+    report1 = _m2e_run(
+        tmp_path, level="+12dB", shift_cents=0.0, cell_store=cell_store, repeat_index=0
+    )
+    row1 = report1["categories"]["V_remix_real_direct"]
+    assert report1["cells_resumed"] == []
+    assert sorted(report1["cells_measured"]) == sorted(_VREMIX_CLIPS)
+    assert report1["cell_store_mismatches"] == []
+    assert report1["cell_store_relative"] == harness._repo_relative_path(cell_store)
+    assert report1["repeat_index"] == 0
+    assert report1["workers"] == 1
+    assert re.fullmatch(r"[0-9a-f]{64}", report1["env_digest"])
+
+    report2 = _m2e_run(
+        tmp_path, level="+12dB", shift_cents=999.0, cell_store=cell_store, repeat_index=0
+    )
+    row2 = report2["categories"]["V_remix_real_direct"]
+    assert sorted(report2["cells_resumed"]) == sorted(_VREMIX_CLIPS)
+    assert report2["cells_measured"] == []
+    assert report2["cell_store_mismatches"] == []
+    assert row1["clips"] == row2["clips"]
+
+
+def test_cell_store_generator_code_mismatch_forces_remeasurement(tmp_path: Path) -> None:
+    """自前コードが変わったセルは resume しない（`env_digest` は third-party しか見ない）。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_1_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["generator_code_sha256"] == harness._LOADED_GENERATOR_CODE_SHA256
+    record["generator_code_sha256"] = "e" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    assert target_clip not in report2["cells_resumed"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "generator_code_sha256" in mismatch_fields
+
+
+def test_cell_store_record_without_the_expected_schema_is_not_resumed(tmp_path: Path) -> None:
+    """P2: レコード形式そのものに版を要求する（同一性フィールドが揃っていても）。
+
+    版が違えば「別の意味論で書かれた測定」を現行の解釈で読むことになる。版無し
+    （旧世代）・未知版のどちらも resume 対象にしない。
+    """
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_1_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["schema_version"] == harness._EXPECTED_CELL_RECORD_SCHEMA
+    record["schema_version"] = "m2-cell-record/9.9"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    assert target_clip not in report2["cells_resumed"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "schema_version" in mismatch_fields
+
+    # 版キーを丸ごと落とした旧世代レコードも同じく resume しない。
+    record.pop("schema_version")
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    report3 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report3["cells_measured"]
+
+
+def test_cell_store_tolerance_change_forces_remeasurement(tmp_path: Path) -> None:
+    """採点閾値が変われば同じセルでも別の測定（bars 改訂で旧採点値を resume しない）。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_1_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert "tolerance_cents" in record and "est_voiced_floor" in record
+    record["tolerance_cents"] = record["tolerance_cents"] + 7.0
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "tolerance_cents" in mismatch_fields
+
+
+def test_two_arm_run_does_not_collide_on_the_frozen_copy(tmp_path: Path) -> None:
+    """direct / stem を 1 run で測っても凍結コピーが衝突しない。
+
+    凍結コピーは書いた直後に `0400` になるので、2 本目のアームが同じパスへ
+    `write_bytes` すると非 root では `PermissionError` になる（root では再現しない）。
+    アームごとにディレクトリを分けて構造的に消してある。
+    """
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level="+12dB"
+    )
+    seen: "List[str]" = []
+    runner = _m2e_fake_runner()
+
+    def _tracking_runner(path, route):
+        seen.append(path)
+        return runner(path, route)
+
+    report = _fake_run(
+        categories=("V_remix_real_direct", "V_remix_real_stem"),
+        route_runner=_tracking_runner,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        level="+12dB",
+    )
+    assert set(report["categories"]) == {"V_remix_real_direct", "V_remix_real_stem"}
+    # 同一 clip の凍結コピーがアーム間で**別パス**になっている（上書きが起きない）。
+    assert len(seen) == 2 * len(_VREMIX_CLIPS)
+    assert len(set(seen)) == len(seen)
+
+
+def test_run_accuracy_rejects_a_fixture_level_that_differs_from_the_run_level(
+    tmp_path: Path,
+) -> None:
+    """`fixtures_m06.yaml` を `--level +12dB` で回せない（別水準の音を測って別水準の
+    ゲートとして刻むと、ゲート判定と破断曲線の両方が汚染される）。"""
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level="-6dB"
+    )
+    with pytest.raises(ValueError, match="食い違う"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+        )
+
+
+def test_run_accuracy_rejects_m2c_fixtures_for_an_m2e_category(tmp_path: Path) -> None:
+    """M2e カテゴリを M2c の pin ファイルで回せない。
+
+    `--external-fixtures` は既定値を持つので、M2e カテゴリ + M2c manifest は
+    **ベッドの入っていないきれいな歌声**で cohort も hash も通り、要求水準の
+    ゲートとして row が刻まれてしまう。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="水準軸を持つカテゴリに schema_version"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+        )
+
+
+def test_run_accuracy_rejects_m2e_fixtures_for_an_m2c_category(tmp_path: Path) -> None:
+    """逆向きも塞ぐ（帯のミックスを水準宣言なしのカテゴリで測らない）。"""
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level="+12dB"
+    )
+    with pytest.raises(ValueError, match="水準軸を持たないカテゴリに M2e"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_run_accuracy_rejects_m2e_fixtures_without_a_declared_level(tmp_path: Path) -> None:
+    """水準宣言の無い M2e pin ファイルでは測らない（何を測ったか宣言できない）。"""
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    text = fixtures_path.read_text(encoding="utf-8")
+    fixtures_path.write_text(
+        "\n".join(line for line in text.splitlines() if not line.startswith("level:")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="凍結ラダー"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+        )
+
+
+def test_cell_store_env_digest_mismatch_forces_remeasurement(tmp_path: Path) -> None:
+    """(b) `env_digest` 不一致セルは resume せず再測定し、不一致を報告する。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_1_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["env_digest"] = "0" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    assert target_clip not in report2["cells_resumed"]
+    other_clip = next(c for c in _VREMIX_CLIPS if c != target_clip)
+    assert other_clip in report2["cells_resumed"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "env_digest" in mismatch_fields
+
+
+def test_cell_store_records_and_propagates_the_measurement_start_time(tmp_path: Path) -> None:
+    """P1: セルは**測定を開始した時刻**を持ち、run はその最古を report へ伝える。
+
+    resume だけを見ていると run の `started_utc` は「今回の起動時刻」なので、
+    事前登録より前に測ったセルが後の run 経由で「登録後の測定」として通ってしまう。
+    刻むのは完了時刻ではない——長いセルは登録前に始まって登録後に終わりうる。
+    """
+    cell_store = tmp_path / "cell_store"
+    report1 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    first = report1["earliest_cell_started_utc"]
+    assert harness._parse_recorded_utc(first, where="t", field="measurement_started_utc")
+
+    # 全セルを resume する 2 本目でも、伝わるのは**測り始めた時刻**であり起動時刻ではない。
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert report2["cells_resumed"] and not report2["cells_measured"]
+    assert report2["earliest_cell_started_utc"] == first
+    assert report2["started_utc"] >= first
+
+
+def test_evaluate_rejects_cells_measured_before_registration(tmp_path: Path) -> None:
+    """P1: 登録より前に測ったセルを、後の run 経由で洗浄させない。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    for report in reports:
+        report["earliest_cell_started_utc"] = "2020-01-01T00:00:00+00:00"
+    with pytest.raises(ValueError, match="測定開始時点"):
+        _m2e_evaluate(tmp_path, reports)
+
+
+def test_cell_store_without_measurement_start_time_is_not_resumed(tmp_path: Path) -> None:
+    """P1: 測定開始時刻を名乗らないセルは resume しない（時刻を後から埋めない）。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    target_clip = "vremix_vocadito_1_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    del record["measurement_started_utc"]
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    assert target_clip not in report2["cells_resumed"]
+    assert "measurement_started_utc" in {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+
+
+def test_cell_store_input_digest_mismatch_forces_remeasurement(tmp_path: Path) -> None:
+    """(b') 入力 digest（`audio_sha256`）不一致セルも同様に resume せず再測定する。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_2_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["audio_sha256"] = "f" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    assert target_clip not in report2["cells_resumed"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "audio_sha256" in mismatch_fields
+
+
+def test_cell_store_never_reuses_a_record_across_repeat_index(tmp_path: Path) -> None:
+    """(c) 別 `repeat_index` はキャッシュミス —— n>=2 の bit 一致契約を守るための核心。
+
+    鍵→パスの写像自体が `repeat_index` を折り込むため、別 repeat の記録を誤って
+    再生することは if 分岐の有無に関係なく**構造的に**起こり得ない（2 回目の
+    repeat_index=1 実行が別ファイルへ書くことを直接確認する）。
+    """
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=1)
+    assert report2["cells_resumed"] == []
+    assert sorted(report2["cells_measured"]) == sorted(_VREMIX_CLIPS)
+
+    clip_id = next(iter(_VREMIX_CLIPS))
+    path0 = harness._cell_store_record_path(
+        cell_store, category="V_remix_real_direct", level="+12dB", entry_id=clip_id, repeat_index=0
+    )
+    path1 = harness._cell_store_record_path(
+        cell_store, category="V_remix_real_direct", level="+12dB", entry_id=clip_id, repeat_index=1
+    )
+    assert path0 != path1
+    assert path0.is_file()
+    assert path1.is_file()
+
+
+def test_cell_store_never_reuses_a_record_across_level(tmp_path: Path) -> None:
+    """(c') 別 `level` もキャッシュミス（水準ごとに別セル）。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    report2 = _m2e_run(tmp_path, level="0dB", cell_store=cell_store, repeat_index=0)
+    assert report2["cells_resumed"] == []
+    # entry id は水準ごとに `level_tag` が変わる（§6.2 の id 規約）。
+    assert sorted(report2["cells_measured"]) == sorted(_vremix_ids("0dB"))
+
+
+def test_cell_store_never_reuses_a_record_across_category(tmp_path: Path) -> None:
+    """(c'') 別 `category`（= arm）もキャッシュミス（direct/stem を取り違えない）。"""
+    cell_store = tmp_path / "cell_store"
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    common_kwargs: Dict[str, Any] = dict(
+        route_runner=_m2e_fake_runner(),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        level="+12dB",
+        cell_store=cell_store,
+        repeat_index=0,
+    )
+    _fake_run(categories=("V_remix_real_direct",), **common_kwargs)
+    report2 = _fake_run(categories=("V_remix_real_stem",), **common_kwargs)
+    assert report2["cells_resumed"] == []
+    assert sorted(report2["cells_measured"]) == sorted(_VREMIX_CLIPS)
+
+
+def test_cell_store_records_workers_verbatim(tmp_path: Path) -> None:
+    """`--workers`（設計 §8.3 の `P`）は実行を変えず、report とセルレコードへ verbatim
+    に記録されるだけであること。"""
+    cell_store = tmp_path / "cell_store"
+    report = _m2e_run(
+        tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0, workers=4
+    )
+    assert report["workers"] == 4
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=next(iter(_VREMIX_CLIPS)),
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["workers"] == 4
+    assert record["repeat_index"] == 0
+    assert record["category"] == "V_remix_real_direct"
+    assert record["level"] == "+12dB"
+
+
+def test_run_accuracy_rejects_cell_store_without_repeat_index(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="repeat_index"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+            cell_store=tmp_path / "cell_store",
+        )
+
+
+def test_run_accuracy_rejects_repeat_index_without_cell_store(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="cell_store が無い"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+            repeat_index=0,
+        )
+
+
+def test_run_accuracy_rejects_a_negative_repeat_index(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="repeat_index -1"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+            cell_store=tmp_path / "cell_store",
+            repeat_index=-1,
+        )
+
+
+def test_cli_cell_store_requires_repeat_index(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--cell-store",
+            str(tmp_path / "cell_store"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--repeat-index は --cell-store 指定時に必須"):
+        harness.main()
+
+
+def test_cli_repeat_index_requires_cell_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_melody_accuracy.py", "--out", str(out_path), "--repeat-index", "0"],
+    )
+    with pytest.raises(SystemExit, match="--repeat-index は --cell-store と併用"):
+        harness.main()
+
+
+def test_cli_repeat_index_rejects_negative_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--cell-store",
+            str(tmp_path / "cell_store"),
+            "--repeat-index",
+            "-1",
+        ],
+    )
+    with pytest.raises(SystemExit, match="0 以上の整数のみ"):
+        harness.main()
+
+
+def test_cli_cell_store_is_rejected_in_evaluate_phase(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--evaluate",
+            str(out_path),
+            "--cell-store",
+            str(tmp_path / "cell_store"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--cell-store は run phase 専用"):
+        harness.main()
+
+
+def test_cli_repeat_index_is_rejected_in_evaluate_phase(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--evaluate",
+            str(out_path),
+            "--repeat-index",
+            "0",
+        ],
+    )
+    with pytest.raises(SystemExit, match="--repeat-index は run phase 専用"):
+        harness.main()
+
+
+def test_reverification_child_never_receives_cell_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """設計 §8.7: 測り直し子プロセスは `--cell-store` / `--repeat-index` / `--workers`
+
+    を絶対に受け取らない——受け取ればチェックポイントから resume でき、評価器の
+    「独立に測り直して bit 一致を確認する」publish 条件が「セルレコードを自分自身と
+    比較するだけ」の空虚な成功になる（本機能で最も危険な穴）。
+    `_run_external_verification_in_fresh_process` の command 組み立てには
+    そもそも `--cell-store` を積む分岐が無い——本テストはその不在を固定する。
+    """
+    captured: Dict[str, Any] = {}
+
+    class _FakeCompletedProcess:
+        returncode = 1
+        stdout = ""
+        stderr = "boom (deliberately induced failure to avoid a real subprocess)"
+
+    def _fake_subprocess_run(command, **kwargs):
+        captured["command"] = command
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(harness.subprocess, "run", _fake_subprocess_run)
+
+    specs_path = tmp_path / "specs.yaml"
+    bars_path = tmp_path / "bars.yaml"
+    fixtures_path = tmp_path / "fixtures.yaml"
+    manifest_path = tmp_path / "manifest.json"
+    m2e_bars_path = tmp_path / "m2e_bars.yaml"
+    for p in (specs_path, bars_path, fixtures_path, manifest_path, m2e_bars_path):
+        p.write_text("placeholder", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="測り直しプロセスが失敗した"):
+        harness._run_external_verification_in_fresh_process(
+            "V_remix_real_direct",
+            0,
+            tmp_dir=tmp_path,
+            external_manifest_path=manifest_path,
+            specs_path=specs_path,
+            bars_path=bars_path,
+            external_fixtures_path=fixtures_path,
+            expected_specs_sha256="0" * 64,
+            m2e_bars_path=m2e_bars_path,
+            level="+12dB",
+        )
+
+    command = captured["command"]
+    assert "--cell-store" not in command
+    assert "--repeat-index" not in command
+    assert "--workers" not in command
+
+
+def test_env_digest_is_a_64_hex_sha256_and_reacts_to_thread_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_env_digest()` はスレッド設定を折り込む（設計 §8.7）: `OMP_NUM_THREADS` が
+    変われば digest も変わる。未導入パッケージ（本テスト環境では `crepe`）は明示
+    マーカーで記録され、黙ってフィールドが消えたりしない。
+    """
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.delenv("MKL_NUM_THREADS", raising=False)
+    baseline = harness._env_digest()
+    assert re.fullmatch(r"[0-9a-f]{64}", baseline)
+
+    monkeypatch.setenv("OMP_NUM_THREADS", "3")
+    changed = harness._env_digest()
+    assert changed != baseline
+
+    versions = harness._env_digest_package_versions()
+    # 手書きリストは床であって天井ではない——route の実行スタック（登録表由来）を
+    # 全部畳む。取りこぼすと、その版が動いても digest が変わらず旧セルが resume される。
+    assert set(versions) >= set(harness._ENV_DIGEST_PACKAGES)
+    assert set(versions) >= set(harness._runtime_package_names())
+    assert {"tensorflow", "keras", "resampy", "hmmlearn", "soxr", "numba", "llvmlite"} <= set(
+        versions
+    )
+    for name, value in versions.items():
+        assert value == harness._ENV_DIGEST_ABSENT_MARKER or isinstance(value, str)
+
+
+@pytest.mark.parametrize(
+    "name", ["OPENBLAS_NUM_THREADS", "OPENBLAS_CORETYPE", "NPY_DISABLE_CPU_FEATURES", "MKL_CBWR"]
+)
+def test_env_digest_reacts_to_result_affecting_numeric_runtime_env(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: バイト列を変えずに数値を変える構成は `env_digest` に畳まれていること。
+
+    畳まれていないと、構成を変えた後のセッションが旧構成のセルを resume したまま
+    新構成を名乗る report を出し、同質性検査も通ってしまう。
+    """
+    monkeypatch.delenv(name, raising=False)
+    baseline = harness._env_digest()
+    monkeypatch.setenv(name, "1")
+    assert harness._env_digest() != baseline
+
+
+def test_env_digest_folds_the_runtime_implementation_hashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: 版据え置きの in-place patch は版文字列では捕まらない——実装 hash を畳む。
+
+    畳んでいなければ、rebuild された実装の下で旧実装のセルが resume される。
+    """
+    digest, covered = harness._env_digest_runtime_code()
+    assert re.fullmatch(r"[0-9a-f]{64}", digest)
+    # 実行スタックの主要どころが実際に覆われていること（空の pin で「揃った」にしない）。
+    assert {"numpy", "librosa", "soundfile", "mir_eval"} <= set(covered)
+
+    baseline = harness._env_digest()
+    monkeypatch.setattr(
+        harness, "_env_digest_runtime_code", lambda: ("9" * 64, ("numpy",))
+    )
+    assert harness._env_digest() != baseline
+
+
+def test_env_digest_folds_the_distribution_native_pins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: 本体ディレクトリ**外**の同梱ネイティブ（`numpy.libs/` の OpenBLAS 等）。
+
+    `packages_code_sha256` は package root 配下しか覆わないので、版据え置きの BLAS
+    差し替えは `runtime_code` では動かない。
+    """
+    pins = dict(harness._env_digest_dist_native())
+    assert {"numpy", "scipy"} <= set(pins)
+    assert all(re.fullmatch(r"[0-9a-f]{64}", v) for v in pins.values())
+
+    # 束縛時点の値を返す（ディスクを読み直さない）——import 後に実体が差し替わっても
+    # 「走っていない実装」の digest を名乗らせないため。
+    assert "soundfile" in harness._LOADED_DIST_NATIVE_PINS   # import 前に束縛済み
+    # コード側（`soundfile.py` のラッパ）も import 前に束縛する——native だけ pin して
+    # も、ラッパが差し替われば in-memory の旧実装で読み続けたまま新 digest を名乗る。
+    assert "soundfile" in harness._LOADED_RUNTIME_CODE_PINS
+
+    baseline = harness._env_digest()
+    monkeypatch.setattr(harness, "_env_digest_dist_native", lambda: (("numpy", "9" * 64),))
+    assert harness._env_digest() != baseline
+
+
+def test_cells_written_by_a_drifting_run_are_quarantined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: post-run 検査で落ちた run が書いたセルを、resume 可能なまま残さない。
+
+    検査は run の最後にしか走らない（毎セルで全ツリー再走査は非現実的）ので、落ちた
+    時点で既に書かれたセルはディスクに残る。実装を元へ戻せば次の run は同じ
+    `env_digest` を計算し、差し替え中の実装が産んだ row を resume してしまう。
+    """
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    written = sorted(cell_store.glob("cell_*.json"))
+    assert written, "前提: 1 本目でセルが書かれている"
+    for path in written:      # 2 本目が再測定するよう、既存セルを無効化する
+        path.unlink()
+
+    def _boom() -> None:
+        raise RuntimeError("run_accuracy: 実装 hash が束縛時点の pin と不一致（試験）")
+
+    monkeypatch.setattr(harness, "_require_runtime_code_unchanged_since_bind", _boom)
+    with pytest.raises(RuntimeError, match="束縛時点の pin"):
+        _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    assert sorted(cell_store.glob("cell_*.json")) == []          # resume されない
+    assert sorted(cell_store.glob("cell_*.quarantined-*"))       # 証拠は残す
+
+
+def test_runtime_code_drift_since_bind_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P1: 遅延 import のパッケージが「digest 計算後・import 前」に差し替わる窓。
+
+    `_require_unchanged_since_load`（first-party + scorer）も
+    `_require_dist_native_unchanged_since_bind`（本体外ネイティブ）もこの窓を覆わない
+    ので、memoize を迂回して読み直す検査が要る。
+    """
+    harness._env_digest_runtime_code()   # 束縛値を先に確定させる（patch 前の実体）
+    harness._require_runtime_code_unchanged_since_bind()
+
+    monkeypatch.setitem(harness._LOADED_RUNTIME_CODE_PINS, "numpy", "9" * 64)
+    with pytest.raises(RuntimeError, match="束縛時点の pin"):
+        harness._require_runtime_code_unchanged_since_bind()
+
+
+def test_dist_native_drift_since_bind_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P1: 束縛後に同梱ネイティブが差し替わったら post-run で落とす（uncached 比較）。"""
+    harness._require_dist_native_unchanged_since_bind()   # 現状は一致
+    monkeypatch.setitem(harness._LOADED_DIST_NATIVE_PINS, "numpy", "9" * 64)
+    with pytest.raises(RuntimeError, match="束縛時点の pin"):
+        harness._require_dist_native_unchanged_since_bind()
+
+
+def test_env_digest_fails_closed_when_runtime_code_cannot_be_hashed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: hash 不能を理由文字列へ畳まない（同じ理由 = 同じ digest で resume が通る）。
+
+    導入済みで hash できないパッケージは**実際に測定を実行する**ので、「解決できな
+    かった事実」を環境同一性として再利用してはならない。
+    """
+    harness._env_digest_runtime_code.cache_clear()
+
+    import svp_rpe.melody.provenance as provenance
+
+    monkeypatch.setattr(
+        provenance,
+        "package_code_state",
+        lambda name, **kw: (provenance.STATE_UNHASHABLE, None),
+    )
+    # 束縛済み pin を空にして「これから束縛する」状態にする（実 gate を通すため）。
+    monkeypatch.setattr(harness, "_LOADED_RUNTIME_CODE_PINS", {})
+    with pytest.raises(RuntimeError, match="コード hash を採れない"):
+        harness._env_digest_runtime_code()
+    harness._env_digest_runtime_code.cache_clear()
+
+
+def test_env_digest_fails_closed_when_nothing_is_covered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: 1 つも覆えなかった pin を環境同一性として使わない。"""
+    harness._env_digest_runtime_code.cache_clear()
+    import svp_rpe.melody.provenance as provenance
+
+    # すべて未導入（= 実行されない）に見せる: 覆えた pin が 1 つも無い状態。
+    monkeypatch.setattr(
+        provenance, "package_code_state", lambda name, **kw: (provenance.STATE_ABSENT, None)
+    )
+    monkeypatch.setattr(harness, "_LOADED_RUNTIME_CODE_PINS", {})
+    with pytest.raises(RuntimeError, match="何も覆っていない"):
+        harness._env_digest_runtime_code()
+    harness._env_digest_runtime_code.cache_clear()
+
+
+def test_cell_store_record_path_depends_on_the_full_key(tmp_path: Path) -> None:
+    """鍵→パス写像が `category`/`level`/`entry_id`/`repeat_index` の全 4 要素に
+    依存すること（1 つでも変えれば別ファイルになる）。"""
+    base = dict(category="V_remix_real_direct", level="+12dB", entry_id="clip001", repeat_index=0)
+    reference = harness._cell_store_record_path(tmp_path, **base)
+    for changed_field, changed_value in (
+        ("category", "V_remix_real_stem"),
+        ("level", "0dB"),
+        ("entry_id", "clip002"),
+        ("repeat_index", 1),
+    ):
+        variant = dict(base)
+        variant[changed_field] = changed_value
+        assert harness._cell_store_record_path(tmp_path, **variant) != reference
+
+
+# ---------------------------------------------------------------------------
+# C4（設計 rev.6 §8.9.3）: `env_digest` に CPU 同一性を含める
+# ---------------------------------------------------------------------------
+
+
+def test_env_digest_includes_cpu_identity() -> None:
+    """CPU を畳まない `env_digest` は「合算してよいか」の判定として壊れている。
+
+    命令セットの異なる CPU（AVX2 / AVX-512 等）で走った 2 つのセルが同一 digest を
+    持つと、数値経路が分岐してもそれを検出できない。実測でも同一セッション中に
+    コンテナ実体が `Xeon @ 2.80GHz` → `Xeon @ 2.10GHz`（AVX-512 あり）へ入れ替わり、
+    壁時計が 2.2 倍変動した——旧実装ではこの 2 つが同じ digest になる。
+    """
+    identity = harness._env_digest_cpu_identity()
+    assert set(identity) == {"model_name", "flags", "logical_cpus", "platform_machine"}
+    # Linux の CI/実測機では実値が取れる。取れない環境でも黙って省かず明示マーカー。
+    assert identity["model_name"]
+    if isinstance(identity["flags"], list):
+        # 完全集合をソートして畳む（抜粋にすると対象外フラグの変化を取りこぼす）。
+        assert identity["flags"] == sorted(identity["flags"])
+        assert len(identity["flags"]) > 0
+
+
+def test_env_digest_changes_when_cpu_identity_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CPU 同一性が変われば `env_digest` が動くこと（畳み込まれている証明）。"""
+    baseline = harness._env_digest()
+    monkeypatch.setattr(
+        harness,
+        "_env_digest_cpu_identity",
+        lambda: {
+            "model_name": "Some Other CPU @ 9.99GHz",
+            "flags": ["avx", "avx2"],
+            "logical_cpus": 64,
+            "platform_machine": "x86_64",
+        },
+    )
+    assert harness._env_digest() != baseline
+
+
+def test_env_digest_cpu_identity_absent_marker_when_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/proc/cpuinfo` が読めない環境でも黙って省かず、明示マーカーを残す。"""
+    original_read_text = Path.read_text
+
+    def _fail_cpuinfo(self, *args, **kwargs):
+        if str(self) == "/proc/cpuinfo":
+            raise OSError("unreadable")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _fail_cpuinfo)
+    identity = harness._env_digest_cpu_identity()
+    assert identity["model_name"] == harness._ENV_DIGEST_ABSENT_MARKER
+    assert identity["flags"] == harness._ENV_DIGEST_ABSENT_MARKER

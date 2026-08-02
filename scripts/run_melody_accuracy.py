@@ -38,15 +38,20 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
+import functools
 import hashlib
 import json
 import math
 import os
+import platform
 import re
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -2529,6 +2534,50 @@ import numpy as np  # noqa: E402
 # unchanged_since_bind` docstring 参照。境界の正直会計あり）。
 _require_scorer_native_unchanged_since_bind()
 
+def _package_code_state_for_bind(name: str) -> "Tuple[str, Optional[str]]":
+    """1 パッケージのコード hash を束縛用に採る（未導入は `(state, None)`）。
+
+    `packages_code_sha256` と同じ判定規約を単体で使うための薄い包み——未導入は
+    「実行されない」ので skip、**導入済みで hash できない場合は送出**（実装の一部を
+    覆わない pin を環境同一性として使わない）。
+    """
+    from svp_rpe.melody.provenance import (
+        STATE_ABSENT,
+        STATE_UNHASHABLE,
+        package_code_state,
+    )
+
+    state, digest = package_code_state(name)
+    if state == STATE_ABSENT:
+        return state, None
+    if state == STATE_UNHASHABLE or not digest:
+        raise RuntimeError(
+            f"実行パッケージ {name!r} は導入済みだがコード hash を採れない "
+            "(namespace/zip 配置・読めないファイル); 実装を覆わない pin を環境同一性と "
+            "して使わない (fail-closed)"
+        )
+    return state, digest
+
+
+# 束縛（bind）: **`import soundfile` より前**に libsndfile 実体を pin する。import 後に
+# 束縛すると、実体が差し替えられた場合にプロセスは dlopen 済みの旧 libsndfile で読み
+# 続けたまま新しい bytes の digest を名乗る（numpy/scipy は `_scorer_pins` が既に
+# import 前束縛済み。ここはその機構が覆っていない module scope の残り）。
+# 完全集合の束縛は定義が出揃った後に `_bind_all_dist_native_pins()` が追記する。
+_LOADED_DIST_NATIVE_PINS: Dict[str, str] = {
+    "soundfile": _scorer_dist_native_sha256("soundfile", verify_pre_bind_gates=False)
+}
+# 同じ理由で **コード側**も import 前に束縛する。native だけ pin しても、
+# `soundfile.py`（libsndfile を叩く Python ラッパ）が import 後に差し替えられれば、
+# デコードは in-memory の旧ラッパを通り続けるのに digest は新しいディスクを指す。
+# numpy/scipy 等 `_SCORER_RUNTIME_PACKAGES` のコード pin は `_scorer_pins` が既に
+# import 前束縛済み——ここはその機構が覆っていない module scope の残り。
+_LOADED_RUNTIME_CODE_PINS: Dict[str, str] = {}
+for _eager in ("soundfile",):
+    _eager_state, _eager_digest = _package_code_state_for_bind(_eager)
+    if _eager_digest is not None:
+        _LOADED_RUNTIME_CODE_PINS[_eager] = _eager_digest
+
 import soundfile as sf  # noqa: E402
 import yaml  # noqa: E402
 from build_melody_bench import build_signal  # noqa: E402
@@ -2548,6 +2597,12 @@ from svp_rpe.melody.extractors import observe_via_route_with_provenance  # noqa:
 from svp_rpe.melody.observability import MelodyObservation  # noqa: E402
 from svp_rpe.melody.routing import MelodyRoute, select_routes  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
+# M2e §8.7: セルレコードの atomic write は既存の共通実装を再利用する（新しい書き込み
+# 機構を作らない、と設計が明示している）。`_atomic_write_text`（本ファイル既存）とは
+# 別物 —— あちらは `--out` の verdict/report 専用に育った独自実装で、fsync まで含めて
+# 意図的に厚い。セルレコードは大量（最大 1280 件）に書くため、utils 側の薄い実装を
+# そのまま使う。
+from svp_rpe.utils.atomic_io import atomic_write_text as _cell_store_atomic_write_text  # noqa: E402
 
 
 def _runtime_input_paths() -> "set[Path]":
@@ -2668,8 +2723,23 @@ BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yam
 EXTERNAL_FIXTURES_PATH = (
     ROOT / "tests" / "fixtures" / "melody_bench" / "m2c_external_fixtures.yaml"
 )
+# M2e（`docs/DESIGN_M2e_vremix_real_bed.md` §5.1）: M2e の帯は **別ファイル**に置く。
+# `m2_accuracy_bars.yaml` へ追記すると `bars_sha256` が変わり、commit 済みの
+# M2b / M2c verdict の pin が壊れる——それはこの機構の**偽陽性**である（M2b / M2c が
+# 使ったバーの中身は 1 バイトも変わらないため）。リポジトリは同じ理由で既に 2 回
+# この分離をしている（registry.yaml → m2_accuracy_bars.yaml → m2c_external_fixtures.yaml）。
+# 3 例目として同じ流儀に従う。**M2b / M2c の再実測は行わない。**
+M2E_BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_accuracy_bars.yaml"
+# M2e ベッド登録簿（r3 で pin 済み）。ハーネスは中身を解釈しないが、生成物が名乗る
+# `builder.m2e_bed_fixtures_sha256` を**測る側の実体**と突き合わせるために持つ。
+M2E_BED_FIXTURES_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_bed_fixtures.yaml"
+# 混合式そのもの（生成器のコード）。生成物が名乗る `builder.generator_code_sha256` を
+# **測る側が持っている実体**と突き合わせるために持つ（登録簿 pin と同じ扱い）。
+M2E_MIXER_SCRIPT_PATH = ROOT / "scripts" / "make_vremix_fixtures.py"
 
 _EXPECTED_BARS_SCHEMA = "m2-accuracy-bars/0.1"
+# M2e のバーは `m2-accuracy-bars/0.1` を名乗らせない（設計 §5.1-2）。
+_EXPECTED_M2E_BARS_SCHEMA = "m2e-accuracy-bars/0.1"
 # run report 自身のスキーマ discriminator。report の形が変わっても現在検査している
 # フィールドが残っていると、evaluate が新旧を区別せず旧セマンティクスで解釈しうる
 # （Codex P2）。bars と同じ規律を report にも適用し、未知/欠落は評価前に弾く。
@@ -2681,6 +2751,26 @@ _EXPECTED_SPECS_SCHEMA = "m2-accuracy-specs/0.1"
 _EXPECTED_VERDICT_SCHEMA = "m2-accuracy-verdict/0.1"
 # 外部素材の事前登録 pin ファイルのスキーマ discriminator（M2c、同じ規律）。
 _EXPECTED_EXTERNAL_FIXTURES_SCHEMA = "m2c-external-fixtures/0.1"
+# M2e（設計 §10）: 帯ごとに pin ファイルを分ける（M2c の登録集合へ V-remix ミックスの
+# hash を追記すると `external_fixtures_sha256` が変わり、commit 済み M2c verdict の pin が
+# 壊れる）。**受理する schema の集合を r1 の時点で開けておく**——r3（`P-c`）と r6（`P-d`）は
+# いずれも「code change なし」の段階なので、そこで新 schema を通すためのコード変更が
+# 必要になると段階の契約が壊れる。未知の schema は従来どおり fail-closed で拒否する。
+_EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA = "m2e-external-fixtures/0.1"
+_EXPECTED_EXTERNAL_FIXTURES_SCHEMAS: Tuple[str, ...] = (
+    _EXPECTED_EXTERNAL_FIXTURES_SCHEMA,
+    _EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA,
+)
+# §8.7 セル台帳レコードの schema discriminator。**持続する成果物**なので、他の
+# 登録簿と同じく版を名乗らせる——同一性フィールドが揃っていても、レコードの
+# 意味論（どのフィールドが何を指すか）が変われば別物である。版が無い/未知の
+# レコードは resume 対象にしない（`_cell_record_mismatches` が不一致として扱い、
+# そのセルは再測定される）。
+# 0.2 → 0.3（2026-08-02）: 時刻フィールドを完了時刻 `measured_utc` から**測定開始
+# 時刻** `measurement_started_utc` へ改めた（事前登録の順序検査が要求するのは開始で
+# あって完了ではない——長いセルは登録前に始まって登録後に終わりうる）。旧版の
+# レコードは版の不一致で resume されず再測定される——時刻を後から埋めることはしない。
+_EXPECTED_CELL_RECORD_SCHEMA = "m2-cell-record/0.3"
 
 # バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
 # 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
@@ -2697,7 +2787,118 @@ _REQUIRED_BAR_KEYS_BY_CATEGORY: Dict[str, Tuple[str, ...]] = {
     # 精神だが、正解が外部注釈（自動生成ではない）なので max_vfa は事前登録しない
     # （設計 Memo M2c・m2_accuracy_bars.yaml の V_direct 節参照）。
     "V_direct": ("min_rpa", "max_octave_gap"),
+    # M2e（設計 §5.3）: 両アームとも `("min_rpa", "max_octave_gap")`。**VFA / VR は
+    # バー外・診断記録のみ** —— M2d が voicing 非信頼を確定済みで、下流の M3 / M4 は
+    # 抽出器 voicing を消費しない（M3 は共有有声整列のみ・M4 は axis_evidence のみ）。
+    # 消費されない軸で帯全体を fail させると S_direct の再演になる。
+    "V_remix_real_direct": ("min_rpa", "max_octave_gap"),
+    "V_remix_real_stem": ("min_rpa", "max_octave_gap"),
 }
+
+# バーを持つカテゴリが宣言しなければならない**測定条件**キー（設計 §5.3）。
+# `gate_level` / `levels` は judge が数値比較する閾値ではなく「何を測ったか」の宣言
+# であり、`_BAR_THRESHOLD_RANGES`（有限数値・値域つき）を通せない。通すために検査を
+# 緩めることは禁止（設計 附録A-4）。よって**バー block の兄弟**として独立の条件
+# block に置き、専用の必須キー表で fail-closed 検証する。
+_REQUIRED_CONDITION_KEYS_BY_CATEGORY: Dict[str, Tuple[str, ...]] = {
+    "V_remix_real_direct": ("gate_level", "levels"),
+    "V_remix_real_stem": ("gate_level", "levels"),
+}
+
+# M2e §3.4.1 の 20 dB 不変量。**実験全体で唯一の宣言**であり、`m2e_bed_fixtures.yaml`
+# の `residual_db <= -26.0` は導出値。ここで凍結値として持つのは「条件 block が
+# 宣言した値がこの不変量と一致すること」を機械検証するため（緩める方向の書き換えを
+# 設計文書の目視レビューに委ねない）。
+_M2E_LEVEL_MARGIN_DB = 20.0
+
+# M2e §3.6 の水準ラダー（4 点・**順序込みで**凍結）。文字列としては並べない
+# （§3.3.1: `"+12dB" / "+6dB" / "0dB" / "-6dB"` をバイト辞書順に並べると
+# `+12dB, +6dB, -6dB, 0dB` となり物理量と無関係な順序になる）。整列にはこの宣言順の
+# 添字 `ladder_index` を使う。
+_M2E_LEVEL_LADDER: Tuple[str, ...] = ("+12dB", "+6dB", "0dB", "-6dB")
+# entry id 規約（設計 §6.2）: `vremix_{clip_id}_{bed_id}_{level_tag}`。
+_M2E_LEVEL_TAGS: Dict[str, str] = {
+    "+12dB": "p12",
+    "+6dB": "p06",
+    "0dB": "p00",
+    "-6dB": "m06",
+}
+
+
+def _m2e_ladder_index(level: str) -> int:
+    """水準ラダーの宣言順添字（設計 §3.3.1 の `ladder_index`）。"""
+    return _M2E_LEVEL_LADDER.index(level)
+
+
+# ---------------------------------------------------------------------------
+# M2e §8.7 — セルチェックポイント（opt-in・既定 off で挙動無変更）
+# ---------------------------------------------------------------------------
+#
+# 実行単位は 1 セル = (clip_id, bed_id, level, arm, repeat_idx)。本ハーネスの
+# 内部表現では `entry_id`（= manifest の id。M2e では `vremix_{clip_id}_{bed_id}_
+# {level_tag}` が clip/bed/level を既に畳んでいる）と `category`（= arm。
+# `V_remix_real_direct` / `V_remix_real_stem`）でこれを表す。よってセル鍵は
+# `(category, level, entry_id, repeat_index)` の 4 要素タプルになる
+# （`_cell_store_record_path` / `_measure_or_resume_external_clip_row` 参照）。
+
+# `env_digest` に折り込む third-party パッケージ（設計 §8.7）。torch は demucs の
+# 依存で明示列挙が要る（demucs 自体は動作しても torch のマイナーバージョン差で
+# BLAS/カーネル選択が変わりうるため独立に記録する）。
+_ENV_DIGEST_PACKAGES: Tuple[str, ...] = (
+    "torch",
+    "demucs",
+    "crepe",
+    "librosa",
+    "soundfile",
+    "numpy",
+)
+# 未導入パッケージ・未解決の重みを「黙って省く」のではなく明示マーカーで記録する
+# （設計 §8.7 実装ノート: 欠落自体が環境の一部であり、記録から落とすと
+# 「重みが再取得され別 digest になった」と「単に記録されなかった」が区別できない）。
+_ENV_DIGEST_ABSENT_MARKER = "absent"
+
+
+# ---------------------------------------------------------------------------
+# bars ファイルの同一性とカテゴリ所有権（設計 §5.2）
+# ---------------------------------------------------------------------------
+# 各カテゴリは **ちょうど 1 つの bars ファイルに所有される**。所有権は
+# `_CATEGORY_SPECS` の各行が持つ `bars_file` で表現し、バー検証は**所有カテゴリのみ**
+# を対象に行う（他ファイルのカテゴリの不在を欠落と見なさない）。この分離がなければ、
+# `_CATEGORY_SPECS` に M2e カテゴリを足した瞬間 `m2_accuracy_bars.yaml` の検証が
+# 「M2e のバーが空だ」と誤爆する。
+#
+# ファイル同一性は **パス名ではなく `schema_version`** から決める。テストや測り直し
+# 子プロセスは bytes を tmp へ凍結複製して別名で渡すため、ファイル名に依存した判定は
+# その経路で崩れる。
+_BARS_FILES: Dict[str, Dict[str, Any]] = {
+    "m2_accuracy_bars.yaml": {
+        "schema": _EXPECTED_BARS_SCHEMA,
+        "block_key": "m2_accuracy_bars",
+        "conditions_key": None,
+        # 共有スカラー（tolerance_cents / est_voiced_confidence_floor / repeats_min）を
+        # 宣言するのはこのファイルだけ（設計 §5.1-4: 二重定義は必ず食い違う）。
+        "declares_shared_scalars": True,
+        "default_path": BARS_PATH,
+    },
+    "m2e_accuracy_bars.yaml": {
+        "schema": _EXPECTED_M2E_BARS_SCHEMA,
+        "block_key": "m2e_accuracy_bars",
+        "conditions_key": "m2e_measurement_conditions",
+        "declares_shared_scalars": False,
+        "default_path": M2E_BARS_PATH,
+    },
+}
+
+_BARS_FILE_BY_SCHEMA: Dict[str, str] = {
+    spec["schema"]: name for name, spec in _BARS_FILES.items()
+}
+
+# 共有スカラー: M2 側の値を使い、M2e 側で**再宣言しない**（設計 §5.1-4）。
+_SHARED_BAR_SCALARS: Tuple[str, ...] = (
+    "tolerance_cents",
+    "est_voiced_confidence_floor",
+    "repeats_min",
+)
 
 # カテゴリ → (fixture/composite id, select_routes 用 input_kind, 期待する route 名)。
 # route 名は `svp_rpe.melody.routing._ROUTES` の既存表から**そのまま**選ぶ
@@ -2711,12 +2912,14 @@ _CATEGORY_SPECS: Dict[str, Dict[str, str]] = {
         "fixture_id": "m2_s_direct_melody",
         "input_kind": "clear_lead",
         "route_name": "crepe_direct",
+        "bars_file": "m2_accuracy_bars.yaml",
     },
     "S_fullstack": {
         "kind": "fullstack",
         "composite_id": "m2_s_fullstack_mix",
         "input_kind": "full_mix",
         "route_name": "demucs_vocals_then_crepe",
+        "bars_file": "m2_accuracy_bars.yaml",
     },
     # M2c: V_direct（実声・分離なし）は合成 spec ではなく `--external-manifest` が
     # 指す外部素材（音声 + 注釈 CSV）に対して測る。`kind: "external"` の row は
@@ -2728,8 +2931,71 @@ _CATEGORY_SPECS: Dict[str, Dict[str, str]] = {
         "kind": "external",
         "input_kind": "clear_lead",
         "route_name": "crepe_direct",
+        "bars_file": "m2_accuracy_bars.yaml",
+    },
+    # M2e（設計 §6.1）: V-remix 実ベッド帯の 2 アーム。`kind: "external"` なので
+    # `fixture_id` / `composite_id` は持たない（`V_direct` と同じ）。入力は実声
+    # （vocadito）と実伴奏（MUSDB18-HQ stem）をオフラインの
+    # `scripts/make_vremix_fixtures.py` が混ぜた**実ファイル**であり、正解はミックスで
+    # 変化しない vocadito の注釈——`kind: "external"` の定義そのもの。ハーネスに
+    # 新しい合成経路（`kind: "fullstack"`）を足さず、音声波形はリポジトリに入らない。
+    "V_remix_real_direct": {
+        "kind": "external",
+        # §6.3 で新設した加算的キー。フルミックスを `clear_lead` と宣言すると素材の
+        # 宣言が虚偽になるため、`full_mix_direct_probe` でしか表現できない。
+        "input_kind": "full_mix_direct_probe",
+        "route_name": "crepe_direct",
+        "bars_file": "m2e_accuracy_bars.yaml",
+    },
+    "V_remix_real_stem": {
+        "kind": "external",
+        "input_kind": "full_mix",  # 既存のまま（route も既存メニューから選ぶ）
+        "route_name": "demucs_vocals_then_crepe",
+        "bars_file": "m2e_accuracy_bars.yaml",
     },
 }
+
+
+def _categories_owned_by(bars_file: str) -> "Tuple[str, ...]":
+    """`bars_file` が所有するカテゴリ（設計 §5.2）。"""
+    return tuple(
+        sorted(
+            category
+            for category, spec in _CATEGORY_SPECS.items()
+            if spec.get("bars_file") == bars_file
+        )
+    )
+
+
+def _require_category_bars_ownership() -> None:
+    """カテゴリ所有権の fail-closed 検証（設計 §5.2・import 時に 1 回）。
+
+    - 所有ファイルが未指定のカテゴリがあれば拒否する。「どこにも属さない」カテゴリは
+      検証を素通りする——**分離が開ける唯一の穴なのでここで塞ぐ**。
+    - 未知の bars ファイル名を所有者に指名することも拒否する（typo で穴が開く）。
+
+    「2 ファイルに同名カテゴリが現れたら拒否」は、`_CATEGORY_SPECS` が category →
+    単一 `bars_file` の写像である以上ここでは構成上起こりえない。実ファイル側の同名
+    block は `_require_well_formed_bars` が「そのファイルが所有しないカテゴリの block」
+    として拒否する。
+    """
+    for category, spec in _CATEGORY_SPECS.items():
+        bars_file = spec.get("bars_file")
+        if not isinstance(bars_file, str) or not bars_file:
+            raise RuntimeError(
+                f"_CATEGORY_SPECS: category {category!r} が bars_file を宣言していない; "
+                "どの bars ファイルにも所有されないカテゴリは検証を素通りする "
+                "(fail-closed)"
+            )
+        if bars_file not in _BARS_FILES:
+            raise RuntimeError(
+                f"_CATEGORY_SPECS: category {category!r} の bars_file {bars_file!r} が "
+                f"未登録; 既知は {sorted(_BARS_FILES)} (fail-closed)"
+            )
+
+
+_require_category_bars_ownership()
+
 
 RouteRunner = Callable[[str, MelodyRoute], Tuple[MelodyObservation, Dict[str, Any]]]
 
@@ -3317,25 +3583,203 @@ def load_report(path: "str | Path") -> ReportArtifact:
     return ReportArtifact.from_bytes(raw, path=path)
 
 
+def bars_file_identity(doc: Dict[str, Any]) -> str:
+    """bars ドキュメントの `schema_version` から**所有ファイル同一性**を決める。
+
+    パス名ではなく schema で決める理由（設計 §5.2 の実装上の要請）: 測り直し子
+    プロセスやテストは bars bytes を tmp へ凍結複製して別名で渡すため、ファイル名に
+    依存した判定はその経路で崩れる。schema_version は artifact 自身が名乗る
+    discriminator なので複製しても付いて回る。
+    """
+    version = doc.get("schema_version")
+    bars_file = _BARS_FILE_BY_SCHEMA.get(version)
+    if bars_file is None:
+        raise ValueError(
+            f"unsupported m2_accuracy_bars schema_version {version!r}; "
+            f"expected one of {sorted(_BARS_FILE_BY_SCHEMA)} (fail-closed)"
+        )
+    return bars_file
+
+
+def _require_measurement_conditions(doc: Dict[str, Any], *, bars_file: str) -> None:
+    """条件 block（`gate_level` / `levels` / `level_margin_db`）を検証する（設計 §5.3）。
+
+    条件 block は **バー block の兄弟**でなければならない——バー block の中へ入れると
+    loader が dict 値をカテゴリと誤認する（そして `_BAR_THRESHOLD_RANGES` が非数値の
+    閾値キーとして拒否する）。バーは judge が数値比較する閾値、`gate_level` / `levels`
+    は「何を測ったか」の宣言であり、別の種類の対象である（附録A-4 の是正）。
+
+    fail-closed:
+
+    - **バーを持つカテゴリが条件 block を欠いたら拒否**
+    - `gate_level ∈ levels` でなければ拒否
+    - `levels` が凍結ラダーと完全一致（**順序込み**）でなければ拒否
+    - `level_margin_db` が §3.4.1 の 20 dB 不変量と一致しなければ拒否
+    - そのファイルが所有しないカテゴリの条件 block があれば拒否
+    """
+    import math
+
+    conditions_key = _BARS_FILES[bars_file]["conditions_key"]
+    owned = _categories_owned_by(bars_file)
+    if conditions_key is None:
+        # 条件 block を持たないファイル（M2）で、所有カテゴリが条件を要求しないこと。
+        needs = [c for c in owned if c in _REQUIRED_CONDITION_KEYS_BY_CATEGORY]
+        if needs:
+            raise RuntimeError(
+                f"{bars_file}: category {needs} が測定条件を要求するのに、このファイルは "
+                "条件 block を持たない (fail-closed)"
+            )
+        return
+
+    conditions = doc.get(conditions_key)
+    if not isinstance(conditions, dict) or not conditions:
+        raise ValueError(
+            f"{bars_file}: 条件 block {conditions_key!r} が無い/空; 水準宣言なしに帯を "
+            "登録しない (fail-closed)"
+        )
+
+    margin = conditions.get("level_margin_db")
+    if isinstance(margin, bool) or not isinstance(margin, (int, float)):
+        raise ValueError(
+            f"{bars_file}: {conditions_key}.level_margin_db {margin!r} が数値でない "
+            "(fail-closed)"
+        )
+    if not math.isfinite(float(margin)) or float(margin) != _M2E_LEVEL_MARGIN_DB:
+        raise ValueError(
+            f"{bars_file}: {conditions_key}.level_margin_db {margin!r} が凍結された "
+            f"20 dB 不変量 {_M2E_LEVEL_MARGIN_DB} と不一致; 余裕は実験全体で 1 つの宣言で "
+            "あり、素材に合わせて動かさない (fail-closed)"
+        )
+
+    declared = {k: v for k, v in conditions.items() if isinstance(v, dict)}
+    unowned = sorted(set(declared) - set(owned))
+    if unowned:
+        raise ValueError(
+            f"{bars_file}: 条件 block に、このファイルが所有しないカテゴリ {unowned} が "
+            "ある (fail-closed)"
+        )
+
+    for category in owned:
+        required = _REQUIRED_CONDITION_KEYS_BY_CATEGORY.get(category)
+        if required is None:
+            continue
+        entry = declared.get(category)
+        if not entry:
+            raise ValueError(
+                f"{bars_file}: category {category!r} がバーを持つのに条件 block を欠く; "
+                "何を測ったかの宣言なしに合否を出さない (fail-closed)"
+            )
+        missing = [key for key in required if key not in entry]
+        if missing:
+            raise ValueError(
+                f"{bars_file}: category {category!r} の条件 block が必須キー {missing} を "
+                "欠く (fail-closed)"
+            )
+        levels = entry["levels"]
+        if not isinstance(levels, list) or tuple(levels) != _M2E_LEVEL_LADDER:
+            raise ValueError(
+                f"{bars_file}: category {category!r} の levels {levels!r} が凍結ラダー "
+                f"{list(_M2E_LEVEL_LADDER)} と（順序込みで）一致しない; 水準を足す/減らす/"
+                "並べ替えることは破断曲線の定義を変える (fail-closed)"
+            )
+        gate_level = entry["gate_level"]
+        if gate_level not in levels:
+            raise ValueError(
+                f"{bars_file}: category {category!r} の gate_level {gate_level!r} が "
+                f"levels {levels!r} に含まれない (fail-closed)"
+            )
+
+
+def _require_m2e_bars_provenance(doc: Dict[str, Any], *, bars_file: str) -> None:
+    """分離した bars ファイルが要求する provenance を検証する（設計 §5.1-1/-3）。
+
+    - **一方向規律の明示的継承**（`one_way_rule` を非空文字列で持つこと）。暗黙の
+      継承にしない。
+    - **転用値の出所の記録**（`provenance.derived_from`）。ファイルを跨いだ時点で
+      出所が追えなくなるため、転用元のファイル・その時点の sha256・カテゴリを残す。
+    """
+    if _BARS_FILES[bars_file]["declares_shared_scalars"]:
+        return  # M2 本体は既存の provenance 契約（specs_sha256 等）のまま
+    block = doc[_BARS_FILES[bars_file]["block_key"]]
+    one_way = block.get("one_way_rule")
+    if not isinstance(one_way, str) or not one_way.strip():
+        raise ValueError(
+            f"{bars_file}: バー block が one_way_rule を非空文字列で持たない; 分離した "
+            "ファイルへの一方向規律の継承を暗黙にしない (fail-closed)"
+        )
+    derived = doc.get("provenance", {}).get("derived_from")
+    if not isinstance(derived, dict):
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from が無い; 転用値の出所はファイルを跨いだ "
+            "時点で追えなくなる (fail-closed)"
+        )
+    for key in ("file", "sha256", "category"):
+        value = derived.get(key)
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"{bars_file}: provenance.derived_from.{key} が非空文字列でない "
+                "(fail-closed)"
+            )
+    if not _is_sha256(derived["sha256"]):
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.sha256 {derived['sha256']!r} が "
+            "64 桁 lowercase hex でない (fail-closed)"
+        )
+    # 形だけ整った provenance は装飾にすぎない。**宣言した出所の実体へ結び付ける**:
+    # 宣言ファイルが既知の bars ファイルであり、その committed bytes の digest が
+    # 宣言値と一致し、宣言カテゴリが実際にそのファイルに在ることまで要求する。
+    # （一方向規律により bars ファイルは凍結後に変わらないので、この一致は安定する。
+    #   もし出所が変わったなら、それは「転用値がまだ出所を反映しているか」を
+    #   問い直すべき時であり、黙って通してよい変化ではない。）
+    source_name = derived["file"]
+    if source_name not in _BARS_FILES:
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.file {source_name!r} が既知の bars "
+            f"ファイル {sorted(_BARS_FILES)} でない (fail-closed)"
+        )
+    source_path = Path(_BARS_FILES[source_name]["default_path"])
+    if not source_path.is_file():
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.file {source_name!r} の実体 "
+            f"{source_path} が無い (fail-closed)"
+        )
+    source_bytes = source_path.read_bytes()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    if source_sha256 != derived["sha256"]:
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.sha256 {derived['sha256']} が "
+            f"{source_name} の実 digest {source_sha256} と不一致; 転用元の bytes へ "
+            "結び付いていない provenance を受理しない (fail-closed)"
+        )
+    source_doc = _yaml_load_no_dup_keys(source_bytes, what=source_name)
+    source_block = source_doc.get(_BARS_FILES[source_name]["block_key"])
+    if not isinstance(source_block, dict) or derived["category"] not in source_block:
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.category {derived['category']!r} が "
+            f"{source_name} に存在しない (fail-closed)"
+        )
+
+
 def load_bars(path: Path = BARS_PATH) -> Tuple[BarsArtifact, str]:
-    """m2_accuracy_bars.yaml を single read で (BarsArtifact, sha256) として返す。
+    """bars YAML を single read で (BarsArtifact, sha256) として返す。
 
     read → hash → parse を 1 操作にまとめ、その 3 つを `BarsArtifact` に束ねる
     （digest と parsed data が切り離されないようにする。Codex P2）。
+
+    M2e（設計 §5.2）: 対象ファイルの同一性を `schema_version` から決め、**そのファイルが
+    所有するカテゴリのみ**を検証する。既定は従来どおり `m2_accuracy_bars.yaml`。
     """
     data = Path(path).read_bytes()
     bars = _yaml_load_no_dup_keys(data, what="m2_accuracy_bars.yaml")
-    version = bars.get("schema_version")
-    if version != _EXPECTED_BARS_SCHEMA:
-        raise ValueError(
-            f"unsupported m2_accuracy_bars schema_version {version!r}; "
-            f"expected {_EXPECTED_BARS_SCHEMA} (fail-closed)"
-        )
-    if "m2_accuracy_bars" not in bars:
-        raise ValueError("m2_accuracy_bars.yaml is missing the 'm2_accuracy_bars' block")
+    bars_file = bars_file_identity(bars)
+    block_key = _BARS_FILES[bars_file]["block_key"]
+    if block_key not in bars:
+        raise ValueError(f"{bars_file} is missing the {block_key!r} block")
     # 「実測前に凍結した」という主張の土台なので、閾値そのものより前に登録日を検証する。
     _require_dated_registration(bars)
-    _require_well_formed_bars(bars["m2_accuracy_bars"])
+    _require_well_formed_bars(bars[block_key], bars_file=bars_file)
+    _require_measurement_conditions(bars, bars_file=bars_file)
+    _require_m2e_bars_provenance(bars, bars_file=bars_file)
     sha256 = hashlib.sha256(data).hexdigest()
     return BarsArtifact(bars, sha256, data), sha256
 
@@ -3367,10 +3811,10 @@ def load_external_fixtures_with_raw(
     data = Path(path).read_bytes()
     fixtures_doc = _yaml_load_no_dup_keys(data, what="m2c_external_fixtures.yaml")
     version = fixtures_doc.get("schema_version")
-    if version != _EXPECTED_EXTERNAL_FIXTURES_SCHEMA:
+    if version not in _EXPECTED_EXTERNAL_FIXTURES_SCHEMAS:
         raise ValueError(
             f"unsupported m2c_external_fixtures schema_version {version!r}; "
-            f"expected {_EXPECTED_EXTERNAL_FIXTURES_SCHEMA!r} (fail-closed)"
+            f"expected one of {list(_EXPECTED_EXTERNAL_FIXTURES_SCHEMAS)} (fail-closed)"
         )
     _parse_registered_utc(fixtures_doc.get("registered_utc"), where="m2c_external_fixtures.yaml")
     fixtures = fixtures_doc.get("fixtures")
@@ -3384,6 +3828,207 @@ def load_external_fixtures_with_raw(
         )
     sha256 = hashlib.sha256(data).hexdigest()
     return fixtures_doc, sha256, data
+
+
+def _require_external_fixtures_schema_for_category(
+    fixtures_doc: Dict[str, Any], *, category: str, where: str
+) -> None:
+    """カテゴリと pin ファイルの schema を束縛する（fail-closed）。
+
+    水準軸を持つカテゴリ（M2e）を **M2c の pin ファイル**で回せてはならない。
+    `--external-fixtures` は既定値を持つため、M2e カテゴリと M2c manifest を
+    組み合わせると **ベッドの入っていない 40 clip のきれいな歌声**が cohort 一致も
+    hash 照合も通り、要求水準（例 +12 dB）のゲートとして row が刻まれる。
+    schema が M2e でなければ、水準の一致を見る以前に測ってはいけない。
+    """
+    version = fixtures_doc.get("schema_version")
+    if category in _REQUIRED_CONDITION_KEYS_BY_CATEGORY:
+        if version != _EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA:
+            raise ValueError(
+                f"{where}: 水準軸を持つカテゴリに schema_version {version!r} の pin "
+                f"ファイルが渡された（要求: {_EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA!r}）; "
+                "ベッドの入っていない素材を帯の水準として測らない (fail-closed)"
+            )
+    elif version == _EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA:
+        raise ValueError(
+            f"{where}: 水準軸を持たないカテゴリに M2e の pin ファイルが渡された; "
+            "帯のミックスを水準の宣言なしに測らない (fail-closed)"
+        )
+
+
+# 1 水準あたりの凍結コホート（設計 §6.2: `40 clip × 2 bed = 80 entry`）。総セル数
+# 1280 = 80 × 4 水準 × 2 アーム × n=2 の内訳そのものなので、ここが縮めば帯が別物になる。
+_M2E_EXPECTED_BED_COUNT = 2
+_M2E_EXPECTED_CLIPS_PER_BED = 40
+_M2E_EXPECTED_ENTRIES_PER_LEVEL = _M2E_EXPECTED_BED_COUNT * _M2E_EXPECTED_CLIPS_PER_BED
+
+
+def _m2e_bed_slug(track_name: str) -> str:
+    """MUSDB トラック名 → entry id の `bed_id`（生成器 `bed_slug()` と**同一規約**）。
+
+    生成器（`scripts/make_vremix_fixtures.py`）を測る側から import しない代わりに、
+    置換規則をここに写す——両者の一致は `tests/test_m2_accuracy_harness.py` が
+    実登録簿の全トラック名で機械検証する（`_serialize_wav_float32` と同じ流儀:
+    規約が 2 つに割れるより、同じものを 2 箇所で作って一致を強制する）。
+    """
+    return re.sub(r"[^A-Za-z0-9]+", "-", track_name).strip("-")
+
+
+def _registered_m2e_bed_ids() -> "set[str]":
+    """`m2e_bed_fixtures.yaml` の `accepted: true` ベッドの `bed_id` 集合。"""
+    doc = _yaml_load_no_dup_keys(
+        Path(M2E_BED_FIXTURES_PATH).read_bytes(), what=M2E_BED_FIXTURES_PATH.name
+    )
+    beds = doc.get("beds") if isinstance(doc, dict) else None
+    if not isinstance(beds, dict) or not beds:
+        raise ValueError(f"{M2E_BED_FIXTURES_PATH}: beds が空 (fail-closed)")
+    return {
+        _m2e_bed_slug(str(track))
+        for track, pin in beds.items()
+        if isinstance(pin, dict) and pin.get("accepted") is True
+    }
+
+
+def _require_registered_m2e_cohort(fixtures_doc: Dict[str, Any], *, where: str) -> None:
+    """M2e fixtures が**凍結コホートそのもの**であることを要求する（fail-closed）。
+
+    fixtures と manifest を同じだけ切り詰めると両者は一致するので、cohort 完全一致の
+    比較では縮んだ帯を検出できない——「同じ clip を両 bed から落とす」「bed を丸ごと
+    落とす」は矩形性すら壊さない。**生成器側の保証は生成物と一緒に旅をしない**ので、
+    測る側が絶対量を独立に要求する: 2 bed × 40 clip = 80 entry（§6.2）。
+
+    件数だけでは足りない。**各 bed の clip 集合を登録簿の 40 ID 集合そのもの**へ
+    束縛する——両 bed が 40 件ずつでも中身がずれていれば（片方が `vocadito_1..40`、
+    もう片方が `vocadito_2..41`）直積の 1 セルが欠け、登録されていない clip が
+    紛れ込んだ帯になる。manifest を同じようにずらせば下流の cohort 比較も通る。
+
+    テストは合成 fixtures（数 entry）を多用するため、本 gate は
+    `_require_attested_external_fixtures_registration` と同じ流儀で autouse fixture が
+    無効化し、**専用テスト群が実 gate を固定する**。
+    """
+    fixtures = fixtures_doc.get("fixtures")
+    if not isinstance(fixtures, dict) or not fixtures:
+        raise ValueError(f"{where}: M2e fixtures が空 (fail-closed)")
+    # 生成側 provenance（`make_vremix_fixtures.build` が刻む混合式・入力登録簿の
+    # digest）を、**測る側が持っている登録簿**と突き合わせる。ミックスが committed
+    # pin と hash 一致していても、それが「登録済み 40 clip から凍結式で作られた」
+    # ことは WAV 自身からは分からない。
+    builder = fixtures_doc.get("builder")
+    if not isinstance(builder, dict) or not builder.get("generator_code_sha256"):
+        raise ValueError(
+            f"{where}: M2e fixtures に builder provenance（generator_code_sha256 / "
+            "入力登録簿 digest）が無い; どの混合式・どの登録簿から出た音か立証できない "
+            "pin ファイルで測らない (fail-closed)"
+        )
+    # **宣言された digest は全部照合する。** clip 側だけ見て bed 側を見逃すと、
+    # 採用ベッドや窓 pin を書き換えた登録簿から作られた自己整合な 80 entry bundle が、
+    # コホート検査も音声 hash 照合も通ってしまう（provenance を名乗るだけで検証されない）。
+    # **混合式（生成器のコード）も同じ**——非空を確かめるだけでは、改変した混合式で
+    # 作った音が「凍結式の証拠」として測られる。3 本とも実体と突き合わせる。
+    for key, path in (
+        ("generator_code_sha256", M2E_MIXER_SCRIPT_PATH),
+        ("m2c_fixtures_sha256", EXTERNAL_FIXTURES_PATH),
+        ("m2e_bed_fixtures_sha256", M2E_BED_FIXTURES_PATH),
+    ):
+        declared = builder.get(key)
+        actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        if declared != actual:
+            raise ValueError(
+                f"{where}: fixtures が名乗る {key} {declared!r} が、測る側の "
+                f"{_repo_relative_path(path)} の実体 {actual!r} と不一致; "
+                "別の登録簿から作られたミックスを測らない (fail-closed)"
+            )
+    registered_clips = set(load_external_fixtures(EXTERNAL_FIXTURES_PATH)[0]["fixtures"])
+    registered_beds = _registered_m2e_bed_ids()
+    by_bed: Dict[str, set] = {}
+    for key in fixtures:
+        parts = str(key).split("_")
+        if len(parts) < 4 or parts[0] != "vremix":
+            raise ValueError(
+                f"{where}: entry id {key!r} が §6.2 の規約 "
+                "`vremix_{clip_id}_{bed_id}_{level_tag}` に合わない (fail-closed)"
+            )
+        by_bed.setdefault(parts[-2], set()).add("_".join(parts[1:-2]))
+    detail = {bed: len(clips) for bed, clips in sorted(by_bed.items())}
+    if len(by_bed) != _M2E_EXPECTED_BED_COUNT or len(fixtures) != _M2E_EXPECTED_ENTRIES_PER_LEVEL:
+        raise ValueError(
+            f"{where}: M2e コホートが凍結値（{_M2E_EXPECTED_BED_COUNT} bed × "
+            f"{_M2E_EXPECTED_CLIPS_PER_BED} clip = {_M2E_EXPECTED_ENTRIES_PER_LEVEL} entry）"
+            f"と一致しない（bed 別 clip 数={detail} / 総数={len(fixtures)}）; 部分コホートを "
+            "水準の証拠として測らない (fail-closed)"
+        )
+    # **bed も同定する。** 件数と clip 集合だけでは、任意の 2 本のベッドで作った帯が
+    # 「凍結 2 ベッドのコホート」を名乗って通ってしまう（登録簿 digest は入力の同一性を
+    # 示すだけで、その中の *どの* ベッドを使ったかは fixtures 側からしか分からない）。
+    if set(by_bed) != registered_beds:
+        raise ValueError(
+            f"{where}: bed_id 集合 {sorted(by_bed)} が事前登録の accepted ベッド "
+            f"{sorted(registered_beds)} と一致しない; 別のベッドで作った帯を凍結コホート "
+            "として測らない (fail-closed)"
+        )
+    for bed, clips in sorted(by_bed.items()):
+        if clips != registered_clips:
+            missing = sorted(registered_clips - clips)
+            extra = sorted(clips - registered_clips)
+            raise ValueError(
+                f"{where}: bed {bed!r} の clip 集合が事前登録の "
+                f"{len(registered_clips)} clip と一致しない（欠落={missing[:5]} / "
+                f"余分={extra[:5]}）; 登録されていない clip を含む帯を測らない (fail-closed)"
+            )
+
+
+def _require_external_fixtures_level_match(
+    fixtures_doc: Dict[str, Any], *, level: Optional[str], where: str
+) -> None:
+    """M2e pin ファイルが名乗る水準と、run が要求した `--level` を束縛する（fail-closed）。
+
+    `fixtures_*.yaml` は水準ごとに 1 本あり、top-level `level` に自分がどの水準の
+    ミックスを pin しているかを書いている。run 側が `--level` をラダー所属だけで
+    検証すると、`fixtures_m06.yaml` を `--level +12dB` で回した場合に **−6 dB の音を
+    測って +12 dB のゲートとして row を刻む**ことが成立する。row は内部整合するので
+    後段からは見えず、ゲート判定と破断曲線の両方が汚染される。
+
+    束縛はここ 1 箇所で足りる: manifest の音声 bytes は `expected_audio_sha256` で
+    fixtures の各 entry へ既に縛られているため、`level` を fixtures 側で確定すれば
+    「どの水準の音を測っているか」は一意に決まる。
+    """
+    if fixtures_doc.get("schema_version") != _EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA:
+        return
+    declared = fixtures_doc.get("level")
+    if declared not in _M2E_LEVEL_LADDER:
+        raise ValueError(
+            f"{where}: {_EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA} の 'level' {declared!r} が "
+            f"凍結ラダー {list(_M2E_LEVEL_LADDER)} に無い; どの水準を pin したのか宣言の "
+            "無い fixtures で測らない (fail-closed)"
+        )
+    if level is None:
+        raise ValueError(
+            f"{where}: fixtures が水準 {declared!r} を宣言しているのに run 側の level が "
+            "無い (fail-closed)"
+        )
+    if declared != level:
+        raise ValueError(
+            f"{where}: fixtures が pin した水準 {declared!r} と run が要求した水準 "
+            f"{level!r} が食い違う; 別水準の音を測って要求水準の row として刻むと、"
+            "ゲート判定と破断曲線の両方が汚染される (fail-closed)"
+        )
+    # top-level `level` は 1 行の宣言でしかない。`fixtures_m06.yaml` を複製して
+    # `level` だけ `+12dB` に書き換えると、entry id は全部 `_m06` のまま・pin された
+    # 音も −6 dB のミックスのまま**宣言だけ**が gate 水準になる。id 規約（§6.2:
+    # `vremix_{clip_id}_{bed_id}_{level_tag}`）は凍結されているので、宣言を id 側の
+    # 実体へ束縛できる。
+    fixtures = fixtures_doc.get("fixtures")
+    if not isinstance(fixtures, dict) or not fixtures:
+        raise ValueError(f"{where}: M2e fixtures が空 (fail-closed)")
+    expected_suffix = f"_{_M2E_LEVEL_TAGS[declared]}"
+    mislabeled = sorted(k for k in fixtures if not str(k).endswith(expected_suffix))
+    if mislabeled:
+        raise ValueError(
+            f"{where}: 宣言水準 {declared!r} に対し id が {expected_suffix!r} で終わらない "
+            f"entry がある（{mislabeled[:5]}{' …' if len(mislabeled) > 5 else ''}）; "
+            "宣言だけ書き換えた pin ファイルで別水準の音を測らない (fail-closed)"
+        )
+    _require_registered_m2e_cohort(fixtures_doc, where=where)
 
 
 def load_external_fixtures(path: Path = EXTERNAL_FIXTURES_PATH) -> Tuple[Dict[str, Any], str]:
@@ -3406,15 +4051,37 @@ _BAR_THRESHOLD_RANGES: Dict[str, Tuple[float, float]] = {
 }
 
 
-def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
+def _require_well_formed_bars(
+    bar_block: Dict[str, Any], *, bars_file: str = "m2_accuracy_bars.yaml"
+) -> None:
     """凍結バー自身の型・有限性・定義域を検証する（fail-closed）。
 
     metrics 側の NaN は塞いだが、**バー側**にも同じ穴がある: `min_rpa: .nan` を
     書いた bars を `--bars` で渡すと `raw_pitch_accuracy < NaN` が常に False になり、
     「未定義のバー」の下で pass が publish できてしまう（Codex P1）。閾値は判定の
     基準そのものなので、読み込み時点で弾く。
+
+    M2e（設計 §5.2）: 検証は **`bars_file` が所有するカテゴリのみ**を対象とする。
+    他ファイルのカテゴリの不在を欠落と見なさない（見なすと分離した瞬間に既存
+    ファイルの検証が「新帯のバーが空だ」と誤爆する）。共有スカラーを宣言できるのも
+    所有権を持つ 1 ファイルだけ（§5.1-4: 二重定義は必ず食い違う）。
     """
     import math
+
+    file_spec = _BARS_FILES[bars_file]
+    if not file_spec["declares_shared_scalars"]:
+        # 共有スカラーは再宣言せず参照する（設計 §5.1-4）。書けてしまうと、
+        # M2 側と食い違う値が静かに効く経路が開く。
+        redeclared = [key for key in _SHARED_BAR_SCALARS if key in bar_block]
+        if redeclared:
+            raise ValueError(
+                f"{bars_file}: 共有スカラー {redeclared} を再宣言している; "
+                f"{', '.join(_SHARED_BAR_SCALARS)} は m2_accuracy_bars.yaml の値を参照し、"
+                "帯ごとに別値を持たせない（二重定義は必ず食い違う・fail-closed）"
+            )
+        _require_owned_categories_well_formed(bar_block, bars_file=bars_file)
+        _require_bar_threshold_domains(bar_block, bars_file=bars_file)
+        return
 
     tolerance = bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS)
     if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)):
@@ -3455,10 +4122,18 @@ def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
             "[0, 1] の外 (fail-closed)"
         )
 
+    _require_owned_categories_well_formed(bar_block, bars_file=bars_file)
+    _require_bar_threshold_domains(bar_block, bars_file=bars_file)
+
+
+def _require_owned_categories_well_formed(
+    bar_block: Dict[str, Any], *, bars_file: str
+) -> None:
+    """`bars_file` が所有するカテゴリのバー存在・必須キーを検証する（fail-closed）。"""
     # 受け入れゲートを持つべきカテゴリのバーが空/欠落だと、`evaluate_m2_bars` の
     # 「バーなし → diagnostic_only」分岐に落ちて RPA/VFA 判定が黙って消える。
     # 事前登録されたカテゴリのうち診断専用でないものは、閾値の存在を要求する。
-    for category in sorted(_CATEGORY_SPECS):
+    for category in _categories_owned_by(bars_file):
         if category in _DIAGNOSTIC_ONLY_CATEGORIES:
             if bar_block.get(category):
                 raise ValueError(
@@ -3486,9 +4161,28 @@ def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
                 "部分的なバーは事前登録されたゲートの一部を黙って無効化する (fail-closed)"
             )
 
+
+def _require_bar_threshold_domains(bar_block: Dict[str, Any], *, bars_file: str) -> None:
+    """バー block の各閾値の型・有限性・定義域と、block の所有権を検証する。
+
+    所有権（設計 §5.2）: **そのファイルが所有しないカテゴリの block があれば拒否**する。
+    ただし `_CATEGORY_SPECS` に行を持たない名前（例: `V_fullstack` = 事前登録済み・
+    未配線）は従来どおり許す——「帯の登録はハーネス配線を前提にしない」という既存の
+    先例を、分離を理由に壊さないため。塞ぐべきは「他ファイルが所有するカテゴリの
+    バーを、こちらのファイルにも書く」という二重定義の穴である。
+    """
+    import math
+
     for category, bar in bar_block.items():
         if not isinstance(bar, dict):
             continue
+        owner = _CATEGORY_SPECS.get(category, {}).get("bars_file")
+        if owner is not None and owner != bars_file:
+            raise ValueError(
+                f"{bars_file}: category {category!r} の block を持っているが、その所有者は "
+                f"{owner!r}; 同名カテゴリのバーが 2 ファイルに現れる状態を作らない "
+                "(fail-closed)"
+            )
         for key, value in bar.items():
             if key not in _BAR_THRESHOLD_RANGES:
                 raise ValueError(
@@ -3873,19 +4567,33 @@ def _parse_external_annotation_csv(raw: bytes, *, clip_id: str) -> Tuple[Tuple[f
     )
 
 
-def _build_external_clip_row(
+@dataclass(frozen=True)
+class _ExternalClipInputs:
+    """1 clip の音声/注釈を読み、登録済み sha256 と照合済みの中間結果（設計 §8.7）。
+
+    `_build_external_clip_row` の入力読み込み部分を抽出した値オブジェクト。§8.7 の
+    セルチェックポイントは「抽出器を走らせる前に」入力 digest を確定させる必要が
+    あるため（resume 可否をそこで判定する）、読み込み+照合だけを独立に呼べるように
+    切り出した。`_build_external_clip_row` 自身もこれを受け取れるようにし、
+    ハッシュ計算ロジックを複製しない。
+    """
+
+    audio_path: Path
+    audio_bytes: bytes
+    audio_sha256: str
+    annotation_sha256: str
+    ref_times: Tuple[float, ...]
+    ref_freqs: Tuple[float, ...]
+
+
+def _read_external_clip_inputs(
     clip_id: str,
     entry: Dict[str, Any],
     *,
     manifest_dir: Path,
     fixtures: Dict[str, Any],
-    tolerance_cents: float,
-    est_voiced_floor: float,
-    route: MelodyRoute,
-    runner: RouteRunner,
-    tmp_dir: Path,
-) -> Dict[str, Any]:
-    """1 clip の外部素材を測り、per-clip row（設計 Memo M2c）を返す。"""
+) -> _ExternalClipInputs:
+    """clip_id の音声/注釈を読み、登録済み sha256 と fail-closed で照合する（設計 Memo M2c）。"""
     if clip_id not in fixtures:
         raise ValueError(
             f"external manifest: clip id {clip_id!r} が m2c_external_fixtures.yaml に "
@@ -3915,6 +4623,46 @@ def _build_external_clip_row(
         )
 
     ref_times, ref_freqs = _parse_external_annotation_csv(annotation_bytes, clip_id=clip_id)
+    return _ExternalClipInputs(
+        audio_path=audio_path,
+        audio_bytes=audio_bytes,
+        audio_sha256=audio_sha256,
+        annotation_sha256=annotation_sha256,
+        ref_times=ref_times,
+        ref_freqs=ref_freqs,
+    )
+
+
+def _build_external_clip_row(
+    clip_id: str,
+    entry: Dict[str, Any],
+    *,
+    manifest_dir: Path,
+    fixtures: Dict[str, Any],
+    tolerance_cents: float,
+    est_voiced_floor: float,
+    route: MelodyRoute,
+    runner: RouteRunner,
+    tmp_dir: Path,
+    inputs: "Optional[_ExternalClipInputs]" = None,
+) -> Dict[str, Any]:
+    """1 clip の外部素材を測り、per-clip row（設計 Memo M2c）を返す。
+
+    `inputs` を渡すと音声/注釈の read + hash + 照合を再実行しない（設計 §8.7 の
+    セルチェックポイントが resume 可否判定のために先に読んでいる場合。
+    `_read_external_clip_inputs` 参照）。省略時は従来どおりここで読む
+    （挙動無変更 —— `--cell-store` 未使用の呼び出し経路は本引数を渡さない）。
+    """
+    if inputs is None:
+        inputs = _read_external_clip_inputs(
+            clip_id, entry, manifest_dir=manifest_dir, fixtures=fixtures
+        )
+
+    audio_path = inputs.audio_path
+    audio_bytes = inputs.audio_bytes
+    audio_sha256 = inputs.audio_sha256
+    annotation_sha256 = inputs.annotation_sha256
+    ref_times, ref_freqs = inputs.ref_times, inputs.ref_freqs
 
     row: Dict[str, Any] = {
         "clip_id": clip_id,
@@ -4031,6 +4779,158 @@ def _average_external_clip_metrics(clip_rows: List[Dict[str, Any]]) -> Dict[str,
     return averaged
 
 
+def _measure_or_resume_external_clip_row(
+    clip_id: str,
+    entry: Dict[str, Any],
+    *,
+    manifest_dir: Path,
+    fixtures: Dict[str, Any],
+    tolerance_cents: float,
+    est_voiced_floor: float,
+    route: MelodyRoute,
+    runner: RouteRunner,
+    tmp_dir: Path,
+    category: str,
+    level: Optional[str],
+    cell_store: Optional[Path],
+    repeat_index: Optional[int],
+    env_digest: Optional[str],
+    workers: int,
+    cells_resumed: List[str],
+    cells_measured: List[str],
+    cell_started_utc: List[str],
+    cell_written_paths: List[str],
+    cell_store_mismatches: "List[Dict[str, Any]]",
+) -> Dict[str, Any]:
+    """1 clip を測るか、設計 §8.7 のセル台帳から resume する。
+
+    `cell_store` が `None` なら `_build_external_clip_row` へそのまま素通しする
+    ——**挙動無変更の契約**（`--cell-store` 未指定時は既存 report に 1 バイトも
+    フィールドが増えない）。
+    """
+    if cell_store is None:
+        return _build_external_clip_row(
+            clip_id,
+            entry,
+            manifest_dir=manifest_dir,
+            fixtures=fixtures,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+            route=route,
+            runner=runner,
+            tmp_dir=tmp_dir,
+        )
+
+    assert repeat_index is not None and env_digest is not None  # run_accuracy が保証済み
+
+    # 設計 §8.7 の順序制約: 抽出器を走らせる**前**に入力 digest を確定させる
+    # （resume 可否をここで判定するため）。ハッシュ計算ロジックは
+    # `_read_external_clip_inputs` に集約し複製しない。
+    inputs = _read_external_clip_inputs(
+        clip_id, entry, manifest_dir=manifest_dir, fixtures=fixtures
+    )
+    record_path = _cell_store_record_path(
+        cell_store, category=category, level=level, entry_id=clip_id, repeat_index=repeat_index
+    )
+    if record_path.is_file():
+        record = _json_loads_no_dup_keys(
+            record_path.read_bytes(), what=f"cell record {record_path}"
+        )
+        mismatches = _cell_record_mismatches(
+            record,
+            category=category,
+            level=level,
+            entry_id=clip_id,
+            repeat_index=repeat_index,
+            audio_sha256=inputs.audio_sha256,
+            annotation_sha256=inputs.annotation_sha256,
+            env_digest=env_digest,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+        )
+        if not mismatches:
+            # 取得時刻を**セルと一緒に旅させる**。resume だけを見ている限り、run の
+            # `started_utc` は「今回の起動時刻」なので、事前登録より前に測ったセルが
+            # 後の run を経由して「登録後の測定」として attestation を通ってしまう。
+            try:
+                _parse_recorded_utc(
+                    record.get("measurement_started_utc"),
+                    where=f"cell record {record_path}",
+                    field="measurement_started_utc",
+                )
+            except ValueError as exc:
+                cell_store_mismatches.append(
+                    {
+                        "entry_id": clip_id,
+                        "field": "measurement_started_utc",
+                        "expected": "UTC timestamp",
+                        "actual": f"{record.get('measurement_started_utc')!r} ({exc})",
+                    }
+                )
+            else:
+                cells_resumed.append(clip_id)
+                cell_started_utc.append(str(record["measurement_started_utc"]))
+                # 呼び出し元がこの dict を（`row.pop` 等で）変異させても、他セルの
+                # record 内容へ波及しないよう deep copy を返す。
+                return copy.deepcopy(record["clip_row"])
+        else:
+            cell_store_mismatches.extend(mismatches)
+
+    # **抽出を始める前**に時刻を採る。完了時刻だと、登録前に始まった長いセルが
+    # 抽出中に登録が commit されることで「登録より後に測った」を名乗れてしまう
+    # （事前登録の順序検査は「測定の開始」を要求しており、完了ではない）。
+    measurement_started_utc = _utc_now()
+    started = time.monotonic()
+    row = _build_external_clip_row(
+        clip_id,
+        entry,
+        manifest_dir=manifest_dir,
+        fixtures=fixtures,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+        route=route,
+        runner=runner,
+        tmp_dir=tmp_dir,
+        inputs=inputs,
+    )
+    elapsed_seconds = time.monotonic() - started
+    cells_measured.append(clip_id)
+    cell_started_utc.append(measurement_started_utc)
+    if row.get("outcome") == "measured":
+        # `outcome == "unavailable"`（抽出器スタック未導入）はセルレコードに残さない
+        # ——設計 §8.6 の「打ち切ったら『未完』として記録する（失敗値を書かない）」
+        # と同じ精神。次回実行時は provisioning が整っていれば普通に再測定される。
+        record = {
+            "schema_version": _EXPECTED_CELL_RECORD_SCHEMA,
+            "category": category,
+            "level": level,
+            "entry_id": clip_id,
+            "repeat_index": repeat_index,
+            "audio_sha256": inputs.audio_sha256,
+            "annotation_sha256": inputs.annotation_sha256,
+            "env_digest": env_digest,
+            # `env_digest` は third-party の版しか畳まない——**自前コードを変えても
+            # 動かない**。生成器コード pin をセル同一性へ入れておかないと、抽出・
+            # 前処理・採点を書き換えた次のセッションが旧セルを resume し、report は
+            # 新しい `generator_code_sha256` を名乗る（= 古い測定を現行コードの結果と
+            # して報告する）。evaluate の再測定まで検出が遅れるのも高くつく。
+            "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
+            # 採点に効く凍結値。bars を改訂して同じ store を再利用すると、旧 clip_row が
+            # 新しい bars digest を纏って resume される（採点値は旧閾値のまま）。
+            "tolerance_cents": tolerance_cents,
+            "est_voiced_floor": est_voiced_floor,
+            "clip_row": row,
+            # このセルの**測定を開始した**時刻。resume するとき run 側の起動時刻では
+            # 立証できない「登録より後に測り始めた」を、セル自身に持たせる。
+            "measurement_started_utc": measurement_started_utc,
+            "elapsed_seconds": elapsed_seconds,
+            "workers": workers,
+        }
+        _cell_store_atomic_write_text(record_path, json.dumps(record, indent=2, sort_keys=True))
+        cell_written_paths.append(str(record_path))
+    return row
+
+
 def _run_external_category(
     category: str,
     category_spec: Dict[str, str],
@@ -4042,9 +4942,28 @@ def _run_external_category(
     route: MelodyRoute,
     runner: RouteRunner,
     tmp_dir: Path,
+    level: Optional[str] = None,
+    cell_store: Optional[Path] = None,
+    repeat_index: Optional[int] = None,
+    env_digest: Optional[str] = None,
+    workers: int = 1,
 ) -> Dict[str, Any]:
-    """カテゴリ V（外部素材）1 本の run report row を作る（設計 Memo M2c）。"""
+    """カテゴリ V（外部素材）1 本の run report row を作る（設計 Memo M2c）。
+
+    `cell_store` が与えられれば設計 §8.7 のセルチェックポイントを使う。row には
+    内部専用キー `_cell_store_resumed` / `_cell_store_measured` /
+    `_cell_store_mismatches` を積んで返す —— 呼び出し元 `run_accuracy` がこれを
+    pop して run 全体の bookkeeping へ畳み込む（複数 external カテゴリを 1 run で
+    測る場合の集約点はカテゴリ単位でなく run 単位のため）。`cell_store` が `None`
+    ならこれらのキーは一切現れない（挙動無変更の契約）。
+    """
     fixtures_doc, fixtures_sha256 = load_external_fixtures(external_fixtures_path)
+    _require_external_fixtures_schema_for_category(
+        fixtures_doc, category=category, where=f"run_accuracy: category {category!r}"
+    )
+    _require_external_fixtures_level_match(
+        fixtures_doc, level=level, where=f"run_accuracy: category {category!r}"
+    )
     fixtures = fixtures_doc["fixtures"]
     if not fixtures:
         raise ValueError(
@@ -4061,9 +4980,24 @@ def _run_external_category(
         where=f"run_accuracy: category {category!r}",
     )
 
+    # 凍結コピーは **アーム（カテゴリ）ごとの専用ディレクトリ**へ置く。
+    # `_build_external_clip_row` は `tmp_dir/<clip_id>.wav` を書いた直後に 0400 を
+    # 立てるため、同一 run で 2 アーム（direct / stem）を測ると 2 本目の
+    # `write_bytes` が **PermissionError で落ちる**（root では再現しない・Codex P1）。
+    # 「消してから書き直す」ではなくパスを分けることで、衝突を構造的に消す
+    # （凍結コピーが上書きされうる経路自体を作らない）。
+    arm_tmp_dir = resolve_confined(f"arm-{category}", tmp_dir)
+    arm_tmp_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    cells_resumed: List[str] = []
+    cells_measured: List[str] = []
+    cell_started_utc: List[str] = []
+    cell_written_paths: List[str] = []
+    cell_store_mismatches: "List[Dict[str, Any]]" = []
+
     clip_rows: List[Dict[str, Any]] = []
     for entry in sorted(entries, key=lambda e: e["id"]):
-        clip_row = _build_external_clip_row(
+        clip_row = _measure_or_resume_external_clip_row(
             entry["id"],
             entry,
             manifest_dir=manifest_dir,
@@ -4072,7 +5006,18 @@ def _run_external_category(
             est_voiced_floor=est_voiced_floor,
             route=route,
             runner=runner,
-            tmp_dir=tmp_dir,
+            tmp_dir=arm_tmp_dir,
+            category=category,
+            level=level,
+            cell_store=cell_store,
+            repeat_index=repeat_index,
+            env_digest=env_digest,
+            workers=workers,
+            cells_resumed=cells_resumed,
+            cells_measured=cells_measured,
+            cell_started_utc=cell_started_utc,
+            cell_written_paths=cell_written_paths,
+            cell_store_mismatches=cell_store_mismatches,
         )
         clip_rows.append(clip_row)
 
@@ -4084,6 +5029,12 @@ def _run_external_category(
         "external_manifest_path_relative": _repo_relative_path(manifest_path),
         "external_fixtures_sha256": fixtures_sha256,
     }
+    if cell_store is not None:
+        row["_cell_store_resumed"] = cells_resumed
+        row["_cell_store_measured"] = cells_measured
+        row["_cell_store_started_utc"] = cell_started_utc
+        row["_cell_store_written_paths"] = cell_written_paths
+        row["_cell_store_mismatches"] = cell_store_mismatches
 
     unavailable = [c for c in clip_rows if c.get("outcome") == "unavailable"]
     if unavailable:
@@ -4316,9 +5267,507 @@ def _execution_paths() -> Dict[str, Any]:
     }
 
 
+def _env_digest_package_versions() -> Dict[str, str]:
+    """route の実行スタック全体の配布バージョンを引く（未導入は明示マーカー）。
+
+    手書きの `_ENV_DIGEST_PACKAGES` だけでは実行スタックを取りこぼす——`tensorflow` /
+    `keras` / `resampy` / `hmmlearn` / `soxr` / `numba` / `llvmlite` が動いても
+    digest は変わらず、旧構成のセルが新構成を名乗る report の下で resume される。
+    リポジトリは `_runtime_package_names()` に**登録表から導いた完全集合**を既に
+    持っている（同じ取りこぼしを実行 pin 側で一度直している）ので、そちらと合流させる。
+    手書きリストは床として残す（登録表に無い `demucs`/`crepe` 等を落とさないため）。
+    """
+    import importlib.metadata
+
+    versions: Dict[str, str] = {}
+    for name in sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())):
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = _ENV_DIGEST_ABSENT_MARKER
+    return versions
+
+
+def _env_digest_demucs_weights() -> Dict[str, Any]:
+    """demucs 重み digest（設計 §8.7）。`resolve_separation_weights` を再利用する。
+
+    未導入/未取得は `LearnedModelUnavailable` で解決失敗するので、それを拾って
+    「解決できなかった事実」を記録する（例外を上へ伝播させて run 全体を落とさない）。
+    理由文字列を含めるため、解決できた場合と解決できない場合とで payload の形が
+    構造的に異なり、`env_digest` は必ず変わる。
+    """
+    try:
+        from svp_rpe.rpe.learned.source_separation_adapter import (
+            resolve_separation_weights,
+        )
+
+        weights = resolve_separation_weights()
+    except Exception as exc:  # LearnedModelUnavailable 含む fail-closed でない記録
+        return {"resolved": False, "reason": f"{type(exc).__name__}: {exc}"}
+    return {"resolved": True, "sha256": weights.sha256}
+
+
+def _env_digest_crepe_weights() -> Dict[str, Any]:
+    """crepe 重み digest（設計 §8.7）。推論は行わず artifact 解決のみ
+
+    （`extractor_weights_fingerprint` は解決失敗を `None` に畳んで返す非送出 API
+    — `melody/provenance.py` docstring 参照）。これにより「セルを resume すべきか」
+    を抽出器を実際に走らせずに判定できる（§8.7 の順序制約）。
+    """
+    try:
+        from svp_rpe.melody.provenance import extractor_weights_fingerprint
+
+        fingerprint = extractor_weights_fingerprint("crepe")
+    except Exception as exc:  # import 失敗等も同じ形で記録する
+        return {"resolved": False, "reason": f"{type(exc).__name__}: {exc}"}
+    if fingerprint is None:
+        return {"resolved": False, "reason": "crepe weights not provisioned"}
+    return {"resolved": True, "sha256": fingerprint.sha256}
+
+
+def _env_digest_thread_settings() -> Dict[str, Any]:
+    """スレッド設定（設計 §8.7・§8.3 の並列不変性前提）。"""
+    settings: Dict[str, Any] = {
+        "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS", _ENV_DIGEST_ABSENT_MARKER),
+        "MKL_NUM_THREADS": os.environ.get("MKL_NUM_THREADS", _ENV_DIGEST_ABSENT_MARKER),
+    }
+    try:
+        import torch
+
+        settings["torch_num_threads"] = torch.get_num_threads()
+    except Exception:
+        settings["torch_num_threads"] = _ENV_DIGEST_ABSENT_MARKER
+    return settings
+
+
+def _runtime_code_package_names() -> "Tuple[str, ...]":
+    """`env_digest` が実装 hash を採る対象（束縛時と post-run 再検証で同一集合を使う）。"""
+    return tuple(sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())))
+
+
+@functools.lru_cache(maxsize=1)
+def _env_digest_runtime_code() -> "Tuple[str, Tuple[str, ...]]":
+    """route の実行スタックの**実装 hash**（版文字列だけでは足りない）。
+
+    `importlib.metadata.version()` は、パッケージが版を据え置いたまま in-place で
+    patch/rebuild された場合に動かない——`env_digest` が同じままなので
+    `_cell_record_mismatches` は旧実装で採ったセルを新ランタイムの下で resume する。
+    リポジトリは実装 hash を既に持っている（`provenance.packages_code_sha256`。
+    実行 pin 側が使っているのと同じ関数）ので、それを畳む。
+
+    **hash できなければ送出をそのまま伝播させる（fail-closed）。** 失敗を理由文字列へ
+    畳むと、その後にそのパッケージが in-place で patch されても理由は同じ文字列のまま
+    ——`env_digest` が動かず、旧実装のセルが resume され、別実装で走った 2 本の M2e
+    report が合算される（塞ごうとしている退行そのもの）。重みの未解決
+    （`_env_digest_demucs_weights`）とは違い、**導入済みで hash できないパッケージは
+    実際に測定を実行する**ので、「解決できなかった事実」を環境同一性として再利用しない。
+
+    プロセス内で 1 度だけ計算する（初回 ~9 秒）。プロセス内でのコード差し替えは
+    `_require_unchanged_since_load()` の post-run 再計算が別途捕まえる。
+    """
+    _bind_runtime_code_pins(_runtime_code_package_names())
+    if not _LOADED_RUNTIME_CODE_PINS:
+        raise RuntimeError(
+            f"実行スタック {_runtime_code_package_names()} のうち 1 つも実装 hash を "
+            "採れなかった; 何も覆っていない pin を環境同一性として使わない (fail-closed)"
+        )
+    return _fold_runtime_code_pins(), tuple(sorted(_LOADED_RUNTIME_CODE_PINS))
+
+
+def _bind_runtime_code_pins(names: "Tuple[str, ...]") -> None:
+    """`names` のコード hash を**まだ束縛していないものだけ**確定させる。
+
+    `soundfile` のように本モジュールが module scope で import するものは、既に
+    import 直前で束縛済み（`_LOADED_RUNTIME_CODE_PINS` の初期値）。残りは
+    crepe / torch / demucs / librosa 等の遅延 import で、初回の `env_digest` 計算が
+    import より前に走るためここで束縛できる。
+    """
+    for name in names:
+        if name in _LOADED_RUNTIME_CODE_PINS:
+            continue
+        _state, digest = _package_code_state_for_bind(name)
+        if digest is not None:
+            _LOADED_RUNTIME_CODE_PINS[name] = digest
+
+
+def _fold_runtime_code_pins() -> str:
+    """束縛済みコード pin を 1 本の digest へ畳む（名前込みで順序非依存）。"""
+    folded = hashlib.sha256()
+    for name, digest in sorted(_LOADED_RUNTIME_CODE_PINS.items()):
+        folded.update(name.encode("utf-8"))
+        folded.update(b"\0")
+        folded.update(digest.encode("ascii"))
+        folded.update(b"\0")
+    return folded.hexdigest()
+
+
+def _env_digest_dist_native() -> "Tuple[Tuple[str, str], ...]":
+    """**束縛時点**の同梱ネイティブ pin（`_LOADED_DIST_NATIVE_PINS`）を返す。
+
+    ディスクを読み直さない——import 後に実体が差し替わると、プロセスは dlopen 済みの
+    旧実装で推論を続けたまま新しい bytes の digest を名乗る（`env_digest` が
+    「走っていない実装」を指す）。束縛は `_bind_dist_native_pins` が import より前に
+    行い、drift は `_require_dist_native_unchanged_since_bind()` が post-run に
+    uncached で検出する。
+    """
+    return tuple(sorted(_LOADED_DIST_NATIVE_PINS.items()))
+
+
+def _bind_dist_native_pins(names: "Tuple[str, ...]") -> None:
+    """`names` の同梱ネイティブ pin を**まだ束縛していないものだけ**確定させる。
+
+    呼び出しは 2 段階（どちらも import より前に置く）:
+
+    1. `import soundfile` の直前 — 本モジュールが module scope で import する
+       third-party のうち、scorer 機構（`_scorer_pins` が numpy/scipy を束縛済み）が
+       覆っていないもの。libsndfile はここで pin しないと「import 後に束縛」になる。
+    2. 定義が出揃った後（`_runtime_package_names` が使えるようになった時点）— 残りの
+       推論スタック。crepe/torch/demucs/librosa はすべて関数内 import なので、この
+       時点はまだ import 前である。
+
+    未導入は skip（実行されない）。導入済みで pin を採れない場合は送出を伝播させる。
+    """
+    import importlib.util
+
+    for name in names:
+        if name in _LOADED_DIST_NATIVE_PINS:
+            continue
+        try:
+            spec = importlib.util.find_spec(name)
+        except Exception:
+            spec = None
+        if spec is None:
+            continue    # 未導入 = 実行されない
+        _LOADED_DIST_NATIVE_PINS[name] = _scorer_dist_native_sha256(
+            name, verify_pre_bind_gates=False
+        )
+
+
+def _quarantine_cell_records(paths: "List[str]") -> None:
+    """この run が書いたセルレコードを resume されない名前へ退避する。
+
+    削除しない——「何が起きたか」を後から読めるようにするため（`.quarantined-*` は
+    `_cell_store_record_path` が生成する名前と一致しないので resume 経路には乗らない）。
+    退避自体が失敗しても元の例外を握り潰さない（best-effort・失敗は stderr へ）。
+    """
+    for path in paths:
+        record = Path(path)
+        try:
+            if record.is_file():
+                record.rename(record.with_suffix(f".json.quarantined-{uuid.uuid4().hex[:8]}"))
+        except OSError as exc:   # 退避不能でも元の fail-closed を優先する
+            print(f"warning: セルレコードの隔離に失敗 {record}: {exc}", file=sys.stderr)
+
+
+def _require_dist_native_unchanged_since_bind() -> None:
+    """束縛済み同梱ネイティブが run 中に差し替わっていないことを要求する（post-run）。
+
+    scorer 側の `_require_scorer_native_unchanged_since_bind` と同じ役割を、
+    非 scorer パッケージ（soundfile/librosa/soxr…）にも与える。**uncached で読み直す**
+    ——束縛値との純粋なディスク比較であり、memoize すると差し替えを見逃す。
+    """
+    for name, expected in sorted(_LOADED_DIST_NATIVE_PINS.items()):
+        current = _scorer_dist_native_sha256(
+            name, use_cache=False, verify_pre_bind_gates=False
+        )
+        if current != expected:
+            raise RuntimeError(
+                f"run_accuracy: {name!r} の同梱ネイティブ実体が束縛時点の pin "
+                f"（{expected!r}）と不一致（現在 {current!r}）; dlopen 済みの旧実装で "
+                "測った row に新しい実体の digest を名乗らせない (fail-closed)"
+            )
+
+
+def _bind_all_dist_native_pins() -> "Tuple[Tuple[str, str], ...]":
+    """推論スタック全体の同梱ネイティブ（パッケージ本体ディレクトリ **外**）を束縛する。
+
+    `packages_code_sha256` はパッケージ root 配下しか覆わないので、`numpy.libs/` /
+    `scipy.libs/` に置かれる OpenBLAS/LAPACK は**実装 hash に入らない**。配布版を
+    据え置いたまま BLAS バイナリが差し替え/再ビルドされると `env_digest` が動かず、
+    旧バックエンドで計算したセルが新バックエンドの run で resume される。ハーネスは
+    この pin を既に持っている（`_scorer_dist_native_sha256`。実行 pin 側と同じ関数）。
+
+    `verify_pre_bind_gates=False` で呼ぶ: pre-bind ゲート（`/proc/self/maps` 全域
+    スキャン）は**初回束縛専用**で、ここで再実行すると無関係な JIT マッピングを
+    「束縛前の先読み」と誤認して over-strict に落ちる（`_require_scorer_native_
+    unchanged_since_bind` が mid-run で同じ理由により無効化しているのと同じ）。
+
+    未導入は skip（実行されない）。**導入済みで pin を採れない場合は送出を伝播**
+    させる——失敗を安定した文字列へ畳むと、その後の差し替えでも digest が動かない。
+    """
+    _bind_dist_native_pins(
+        tuple(sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())))
+    )
+    return _env_digest_dist_native()
+
+
+def _require_runtime_code_unchanged_since_bind() -> None:
+    """実装 hash が束縛（初回計算）時から変わっていないことを要求する（post-run）。
+
+    `_env_digest_runtime_code()` は memoize されるので、**crepe / tensorflow /
+    librosa のような遅延 import のパッケージ**が「digest 計算後・import 前」に
+    差し替えられると、推論は新しい bytes を実行するのに digest は旧 bytes を指す。
+    `_require_unchanged_since_load()` は first-party と scorer しか、
+    `_require_dist_native_unchanged_since_bind()` は本体ディレクトリ外のネイティブしか
+    見ないため、この窓はどちらでも覆われない。**memoize を迂回して読み直す。**
+    """
+    from svp_rpe.melody.provenance import package_code_state
+
+    for name, expected in sorted(_LOADED_RUNTIME_CODE_PINS.items()):
+        _state, current = package_code_state(name, use_cache=False)
+        if current != expected:
+            raise RuntimeError(
+                f"run_accuracy: {name!r} の実装 hash が束縛時点の pin（{expected!r}）と "
+                f"不一致（現在 {current!r}）; 走ったコードと digest が食い違うセルを "
+                "保存・resume・合算させない (fail-closed)"
+            )
+
+
+def _env_digest_numeric_runtime() -> Dict[str, Any]:
+    """数値結果に効く実行時構成（`_numeric_runtime_config` と同じ env 集合）。
+
+    `_env_digest_thread_settings` は `OMP_/MKL_NUM_THREADS` しか見ていなかったが、
+    `OPENBLAS_NUM_THREADS` / `OPENBLAS_CORETYPE` / `NPY_DISABLE_CPU_FEATURES` /
+    `MKL_CBWR` などは **バイト列を一切変えないまま縮約順序を変え、数値を変える**
+    ——本リポジトリはその実測事故（`median_cent_error` の 1.352838 ↔ 1.353400
+    双安定）を `_NUMERIC_RUNTIME_ENV_PREFIXES` のコメントに記録している。畳まなければ
+    構成変更後のセッションが旧構成のセルを resume し、report は新構成を名乗る。
+
+    **`threadpool_info` は意図的に含めない。** `env_digest` は category loop の**前**に
+    評価されるため、ここで `_threadpool_runtime_info()` を呼ぶと threadpoolctl を新規
+    import してしまい、`_scorer_optional_participated` による post-run pin 再計算へ
+    「scoring 自身の participate」として混入する（`_numeric_runtime_config` docstring
+    の Codex 16 巡目 P2-A の症状そのもの）。BLAS 実装の入れ替えは `packages` の版と
+    ここの env で大半が動くが、**版も env も同じまま実装だけ差し替える経路は
+    env_digest では捕まらない**——宣言された穴として残す（記録は
+    `numeric_runtime_config` に残るので、事後の原因帰属はできる）。
+    """
+    env: Dict[str, Optional[str]] = {}
+    for key in sorted(os.environ):
+        if key.startswith(_NUMERIC_RUNTIME_ENV_PREFIXES) or key in _NUMERIC_RUNTIME_ENV_EXACT_NAMES:
+            env[key] = os.environ[key]
+    return {
+        "env": env,
+        # numpy が実際に dispatch した SIMD 集合（`NPY_DISABLE_CPU_FEATURES` は
+        # cpuinfo の flags を変えないまま dispatch を変えるため、CPU 同一性だけでは
+        # 足りない）。numpy は既に import 済みなので新規 import は起こさない。
+        "numpy_simd_dispatch": _numpy_simd_dispatch_info(),
+    }
+
+
+def _env_digest_cpu_identity() -> Dict[str, Any]:
+    """CPU 同一性（設計 §8.9.3・rev.6 — `env_digest` に含める）。
+
+    2.2 倍のインスタンス間分散は**スケジューリングの問題として現れたが、再現性の
+    問題でもある**。版とスレッド設定だけを畳んだ digest では、命令セットの異なる
+    CPU（AVX2 / AVX-512 等）で走った 2 つのセルが同一の `env_digest` を持ちうる。
+    数値経路が分岐してもそれを検出する手段が無く、**合算の可否判定そのものが壊れる**。
+
+    畳むもの: CPU モデル名と命令セットフラグ。フラグは**ソート済みの完全集合**を使う
+    （抜粋にすると、抜粋対象外のフラグが変わったときに digest が動かない）。
+    読めない環境では明示マーカーを入れ、黙って省かない。
+    """
+    identity: Dict[str, Any] = {
+        "model_name": _ENV_DIGEST_ABSENT_MARKER,
+        "flags": _ENV_DIGEST_ABSENT_MARKER,
+        "logical_cpus": _ENV_DIGEST_ABSENT_MARKER,
+        "platform_machine": platform.machine() or _ENV_DIGEST_ABSENT_MARKER,
+    }
+    try:
+        identity["logical_cpus"] = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        pass
+    try:
+        raw = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return identity
+    for line in raw.splitlines():
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key == "model name" and identity["model_name"] == _ENV_DIGEST_ABSENT_MARKER:
+            identity["model_name"] = value
+        elif key == "flags" and identity["flags"] == _ENV_DIGEST_ABSENT_MARKER:
+            # 完全集合をソートして畳む（順序は BIOS/カーネルで揺れうるため）。
+            identity["flags"] = sorted(value.split())
+    return identity
+
+
+def _env_digest() -> str:
+    """設計 §8.7 の `env_digest`: 環境同一性を畳んだ 64-hex sha256。
+
+    折り込む要素: Python 版・{torch, demucs, crepe, librosa, soundfile, numpy} の
+    版・demucs 重み digest・crepe 重み digest・スレッド設定
+    （`OMP_NUM_THREADS`/`MKL_NUM_THREADS`/`torch.get_num_threads()`）・
+    **CPU 同一性（モデル名 + 命令セットフラグ。rev.6 §8.9.3）**。
+
+    **重い import はしない**（呼び出し元が `--cell-store` 使用時にのみ本関数を呼ぶ
+    ことで、モジュール import 時の重い依存 import を避ける契約 — 各ヘルパーは
+    torch/demucs/crepe を関数内 import で遅延させる）。未導入パッケージ・未解決の
+    重みは明示マーカーで記録し、黙って省かない（§8.7 実装ノート）。
+    """
+    # 束縛は**ここで**行う（module import 時ではない）。素の run（`env_digest` を
+    # 名乗らない M2a/M2c）は本関数を呼ばないので、選択されていない optional
+    # パッケージ（TensorFlow/Keras/Demucs 等）の配置不良で import 中に落ちることが
+    # 無くなる。crepe / torch / demucs / librosa はすべて関数内 import で、本関数は
+    # category loop の**前**に呼ばれるため「import 前束縛」は保たれる。
+    #
+    # 対象集合は**選択カテゴリで絞らない**——絞ると同じ環境でもカテゴリ選択が違う run
+    # 同士で `env_digest` が変わり、セルの合算可否判定が壊れる（環境同一性は run の
+    # 引数ではなく環境の性質でなければならない）。
+    _bind_all_dist_native_pins()
+    _runtime_code = _env_digest_runtime_code()
+    payload: Dict[str, Any] = {
+        "python_version": sys.version,
+        "packages": _env_digest_package_versions(),
+        "demucs_weights": _env_digest_demucs_weights(),
+        "crepe_weights": _env_digest_crepe_weights(),
+        "thread_settings": _env_digest_thread_settings(),
+        # 数値に効く実行時構成（BLAS スレッド/CPU ターゲット/SIMD 無効化/再現モード）。
+        "numeric_runtime": _env_digest_numeric_runtime(),
+        # 実行スタックの**実装 hash**。版据え置きの in-place patch は版文字列では
+        # 捕まらず、旧実装で採ったセルが新ランタイムの下で resume される。
+        "runtime_code": {"sha256": _runtime_code[0], "covered": list(_runtime_code[1])},
+        # 本体ディレクトリ外の同梱ネイティブ（`numpy.libs/` の OpenBLAS 等）。
+        # 版据え置きの BLAS 差し替えは `runtime_code` では捕まらない。
+        "dist_native": dict(_env_digest_dist_native()),
+        # rev.6 §8.9.3: CPU を畳まない env_digest は「合算してよいか」の判定として
+        # 壊れている。命令セットが違えば数値経路が分かれうるため。
+        "cpu_identity": _env_digest_cpu_identity(),
+    }
+    canonical = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _cell_store_record_path(
+    cell_store: Path,
+    *,
+    category: str,
+    level: Optional[str],
+    entry_id: str,
+    repeat_index: int,
+) -> Path:
+    """セル鍵 `(category, level, entry_id, repeat_index)` からレコードパスを導く。
+
+    ファイル名は生の `entry_id`（manifest 由来のユーザ供給文字列）から直接組み立て
+    ない —— sha256 digest だけをファイル名にすることで、衝突・パス脱出の懸念を
+    構造的に消す（`_require_safe_external_id` の字句検証済みとはいえ二重防御）。
+
+    **これは同時に「別 repeat の記録を誤って再生できない」ことの実装でもある**
+    （設計 §8.7 の指示: if 分岐による回避ではなく、鍵→パスの写像自体が
+    `repeat_index` / `level` / `category` の 1 つでも違えば別ファイルになることを
+    保証する。呼び出し元がこの写像を経由する限り、異なる repeat の記録を同じパスで
+    読み書きすることは構造的に起こり得ない）。
+    """
+    key_json = json.dumps(
+        {
+            "category": category,
+            "level": level,
+            "entry_id": entry_id,
+            "repeat_index": repeat_index,
+        },
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(key_json.encode("utf-8")).hexdigest()
+    return Path(cell_store) / f"cell_{digest}.json"
+
+
+def _cell_record_mismatches(
+    record: Any,
+    *,
+    category: str,
+    level: Optional[str],
+    entry_id: str,
+    repeat_index: int,
+    audio_sha256: str,
+    annotation_sha256: str,
+    env_digest: str,
+    tolerance_cents: float,
+    est_voiced_floor: float,
+) -> "List[Dict[str, Any]]":
+    """既存セルレコードと現在の入力/環境の不一致を列挙する（設計 §8.7 再開規則）。
+
+    空リストなら resume 可（=スキップ）。1 件でもあれば **スキップしない** ——
+    再測定したうえで不一致の事実だけを report の `cell_store_mismatches` へ記録する
+    （バーを緩めず「見なかったことにしない」という本リポジトリ全体の fail-closed
+    規律をそのまま適用する）。
+
+    鍵フィールド（category/level/entry_id/repeat_index）も比較対象に含める。通常
+    この関数へ来るのは `_cell_store_record_path` が鍵の sha256 から一意に決めた
+    ファイルを読んだ後なので鍵は一致しているはずだが、レコードが手で書き換え/破損
+    したケースを黙って resume しないための多重防御（§8.7「複数環境のセルを1つの
+    帯として合算することは禁止」と同じ精神）。
+    """
+    if not isinstance(record, dict):
+        raise ValueError(f"cell record が JSON object でない (fail-closed): {record!r}")
+    current: Dict[str, Any] = {
+        # レコード形式そのものの discriminator。同一性フィールドが全部揃っていても、
+        # 版が違えば「別の意味論で書かれた測定」を現行の解釈で読むことになる。
+        # 版の無い旧レコードは `None` として不一致になる——それが正しい。
+        "schema_version": _EXPECTED_CELL_RECORD_SCHEMA,
+        "category": category,
+        "level": level,
+        "entry_id": entry_id,
+        "repeat_index": repeat_index,
+        "audio_sha256": audio_sha256,
+        "annotation_sha256": annotation_sha256,
+        "env_digest": env_digest,
+        # 生成器コードが変われば同一セルでも別の測定である（`env_digest` は
+        # third-party の版しか見ないため、自前コードの変更を捕まえられない）。
+        # 旧世代のレコードにはこのキーが無く `None` として不一致になる——それが
+        # 正しい: 素性の分からないセルを黙って resume しない。
+        "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
+        # 採点に効く凍結値（bars 改訂で動く）。`bars_sha256` は row へ後から刻まれる
+        # ので、閾値が変わったセルを resume すると**旧採点値に新 bars の pin が付く**。
+        "tolerance_cents": tolerance_cents,
+        "est_voiced_floor": est_voiced_floor,
+    }
+    mismatches: "List[Dict[str, Any]]" = []
+    for field, expected in current.items():
+        actual = record.get(field)
+        if actual != expected:
+            mismatches.append(
+                {"entry_id": entry_id, "field": field, "expected": expected, "actual": actual}
+            )
+    return mismatches
+
+
 # ---------------------------------------------------------------------------
 # run phase
 # ---------------------------------------------------------------------------
+
+
+def _annotate_row_bars_pin(
+    row: Dict[str, Any],
+    category: str,
+    *,
+    level: Optional[str],
+    bars_path: Path,
+    bars_sha256: str,
+    extra_bars: Dict[str, Tuple["BarsArtifact", str, Path]],
+) -> None:
+    """row へ「どの bars ファイルの下で測ったか」の pin を刻む（設計 §5.2）。
+
+    bars ファイルを分離した以上、report の top-level `bars_sha256`（= 共有スカラーを
+    供給する `m2_accuracy_bars.yaml`）だけでは、M2e カテゴリがどの世代のバーの下で
+    測られたかを表現できない。カテゴリ単位で**相対パスと sha256 の両方**を記録する。
+
+    水準軸を持つカテゴリには `level` も刻む——「何を測ったか」の宣言は row 側に
+    無ければ、後から別水準の row と混ぜたことを検出できない。
+    """
+    bars_file = _CATEGORY_SPECS[category]["bars_file"]
+    if bars_file in extra_bars:
+        _artifact, artifact_sha256, artifact_path = extra_bars[bars_file]
+        row["bars_file"] = bars_file
+        row["bars_file_relative"] = _repo_relative_path(artifact_path)
+        row["bars_file_sha256"] = artifact_sha256
+    else:
+        row["bars_file"] = bars_file
+        row["bars_file_relative"] = _repo_relative_path(bars_path)
+        row["bars_file_sha256"] = bars_sha256
+    if category in _REQUIRED_CONDITION_KEYS_BY_CATEGORY:
+        row["level"] = level
+        row["ladder_index"] = _m2e_ladder_index(level) if level is not None else None
 
 
 def run_accuracy(
@@ -4327,9 +5776,14 @@ def run_accuracy(
     route_runner: Optional[RouteRunner] = None,
     specs_path: Path = SPECS_PATH,
     bars_path: Path = BARS_PATH,
+    m2e_bars_path: Path = M2E_BARS_PATH,
+    level: Optional[str] = None,
     tolerance_cents: Optional[float] = None,
     external_manifest_path: Optional[Path] = None,
     external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
+    cell_store: Optional[Path] = None,
+    repeat_index: Optional[int] = None,
+    workers: int = 1,
 ) -> Dict[str, Any]:
     """カテゴリ S（合成正解つき）+ カテゴリ V（外部素材、M2c）の精度 run を実行し report dict を返す。
 
@@ -4344,7 +5798,36 @@ def run_accuracy(
     未知の `categories` 値は `_CATEGORY_SPECS` に無ければ fail-fast。`categories` に
     `kind: "external"` のカテゴリ（M2c 現在は V_direct のみ）が含まれる場合、
     `external_manifest_path` の指定が必須（未指定は fail-closed）。
+
+    `cell_store`（設計 §8.7・opt-in）: 与えると外部素材カテゴリの各 clip を
+    1 セル = `(category, level, entry_id, repeat_index)` として
+    `_cell_store` 配下へ atomic write でチェックポイントし、既存レコードが
+    入力/環境 digest と一致すれば再測定をスキップする（詳細は
+    `_measure_or_resume_external_clip_row` / `_cell_record_mismatches`）。
+    **既定 `None` では report に新フィールドが一切増えない**——`--cell-store`
+    未使用の既存呼び出しはこの実装が入る前と bit 一致の report を返す契約。
+    `repeat_index` は `cell_store` 指定時のみ必須（未指定・負値は fail-closed）。
+    `workers` はセルレコードへ記録するだけで実行そのものは変えない（本ハーネスは
+    単一プロセスのまま。設計 §8.3 の cost 再現性のための記録専用フィールド）。
     """
+    if cell_store is not None and repeat_index is None:
+        raise ValueError(
+            "run_accuracy: cell_store が指定されたが repeat_index が無い; セル鍵 "
+            "(category, level, entry_id, repeat_index) の repeat_index を欠いたまま "
+            "チェックポイントを書かない (fail-closed)"
+        )
+    if cell_store is None and repeat_index is not None:
+        raise ValueError(
+            "run_accuracy: repeat_index が指定されたが cell_store が無い; セル "
+            "チェックポイントを使わない run に測っていない次元を持たせない "
+            "(fail-closed)"
+        )
+    if repeat_index is not None and repeat_index < 0:
+        raise ValueError(
+            f"run_accuracy: repeat_index {repeat_index!r} が負; セル鍵の "
+            "repeat_index は 0 以上の整数を要求する (fail-closed)"
+        )
+
     bind_inference_code_pins()
     # 注入された runner は正解 F0 と「それらしい」hash を自由に返せる（テストの
     # フェイク抽出器がまさにそれ）。実抽出器を一切走らせずにバーを満たす row を
@@ -4377,6 +5860,52 @@ def run_accuracy(
             "(fail-closed)"
         )
 
+    # M2e（設計 §6.2）: `level` は**カテゴリではなく run の次元**である。
+    # `_CATEGORY_SPECS` には持ち込まず、run report の各 row と cat_result に記録する。
+    bars_files_needed = sorted({_CATEGORY_SPECS[c]["bars_file"] for c in categories})
+    extra_bars: Dict[str, Tuple["BarsArtifact", str, Path]] = {}
+    for bars_file in bars_files_needed:
+        if bars_file == "m2_accuracy_bars.yaml":
+            continue  # 共有スカラーの供給元として上で既にロード済み
+        if bars_file != "m2e_accuracy_bars.yaml":
+            raise RuntimeError(
+                f"run_accuracy: 未対応の bars_file {bars_file!r} (fail-closed)"
+            )
+        artifact, artifact_sha256 = load_bars(m2e_bars_path)
+        if bars_file_identity(artifact.data) != bars_file:
+            raise ValueError(
+                f"run_accuracy: --m2e-bars {m2e_bars_path} が {bars_file!r} の "
+                "schema_version を名乗っていない (fail-closed)"
+            )
+        extra_bars[bars_file] = (artifact, artifact_sha256, Path(m2e_bars_path))
+
+    level_categories = [
+        c for c in categories if c in _REQUIRED_CONDITION_KEYS_BY_CATEGORY
+    ]
+    if level_categories:
+        if level is None:
+            raise ValueError(
+                f"run_accuracy: category(s) {level_categories} は水準軸を持つため level の "
+                "指定が必須（CLI: --level）; どの水準を測ったか不明な row を作らない "
+                "(fail-closed)"
+            )
+        for category in level_categories:
+            artifact = extra_bars[_CATEGORY_SPECS[category]["bars_file"]][0]
+            conditions_key = _BARS_FILES[_CATEGORY_SPECS[category]["bars_file"]][
+                "conditions_key"
+            ]
+            declared_levels = artifact.data[conditions_key][category]["levels"]
+            if level not in declared_levels:
+                raise ValueError(
+                    f"run_accuracy: level {level!r} が category {category!r} の事前登録 "
+                    f"levels {declared_levels!r} にない (fail-closed)"
+                )
+    elif level is not None:
+        raise ValueError(
+            f"run_accuracy: level {level!r} が指定されたが、水準軸を持つカテゴリを 1 つも "
+            "測っていない; 測っていない次元を report に名乗らせない (fail-closed)"
+        )
+
     effective_tolerance = (
         tolerance_cents
         if tolerance_cents is not None
@@ -4397,6 +5926,8 @@ def run_accuracy(
         "specs_sha256": specs_sha256,
         "specs_path_relative": _repo_relative_path(specs_path),
         "bars_path_relative": _repo_relative_path(bars_path),
+        # M2e §6.2: run の水準次元（水準軸を持つカテゴリを測らない run では None）。
+        "level": level,
         "tolerance_cents": effective_tolerance,
         "est_voiced_confidence_floor": est_voiced_floor,
         "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
@@ -4415,6 +5946,29 @@ def run_accuracy(
         "categories": {},
     }
     results.update(_LOADED_SCORER_PINS)
+
+    # 設計 §8.7: `env_digest` は `--cell-store` 使用時に計算する（`cell_store is None`
+    # の通常 run では呼ばない —— 重い optional import を避ける契約・挙動無変更の
+    # 契約の両方を満たす）。
+    #
+    # **例外: M2e カテゴリを含む run では常に計算する**（Codex 21 巡目 P2）。帯は
+    # 「環境を跨いでセルを合算しない」を前提にしており（§8.7）、evaluate は report
+    # の `env_digest` でしかそれを検査できない。`--cell-store` 未使用の 2 本を別環境
+    # （別 CPU・別パッチ版）で採ると、どちらも digest を持たないまま「同じ測定の
+    # 反復」として通ってしまう。M2e にとって環境は run の次元なので、記録は
+    # チェックポイント機構の有無と独立に必要である。
+    effective_cell_store = Path(cell_store) if cell_store is not None else None
+    m2e_in_run = any(
+        _CATEGORY_SPECS[cat]["bars_file"] == "m2e_accuracy_bars.yaml" for cat in categories
+    )
+    env_digest_value: Optional[str] = (
+        _env_digest() if (effective_cell_store is not None or m2e_in_run) else None
+    )
+    run_cells_resumed: List[str] = []
+    run_cells_measured: List[str] = []
+    run_cell_started_utc: List[str] = []
+    run_cell_written_paths: List[str] = []
+    run_cell_store_mismatches: "List[Dict[str, Any]]" = []
 
     with tempfile.TemporaryDirectory(prefix="melody-accuracy-") as tmp:
         for category in categories:
@@ -4437,6 +5991,30 @@ def run_accuracy(
                     route=route,
                     runner=runner,
                     tmp_dir=Path(tmp),
+                    level=level,
+                    cell_store=effective_cell_store,
+                    repeat_index=repeat_index,
+                    env_digest=env_digest_value,
+                    workers=workers,
+                )
+                if effective_cell_store is not None:
+                    # `_run_external_category` は run 単位の bookkeeping をカテゴリ
+                    # row の内部専用キーとして積んで返す（複数 external カテゴリを
+                    # 1 run で測る場合の集約点は categories dict でなく run 単位の
+                    # ため）。ここで pop して run 側リストへ畳み込み、
+                    # `results["categories"][category]` には残さない。
+                    run_cells_resumed.extend(row.pop("_cell_store_resumed"))
+                    run_cells_measured.extend(row.pop("_cell_store_measured"))
+                    run_cell_started_utc.extend(row.pop("_cell_store_started_utc"))
+                    run_cell_written_paths.extend(row.pop("_cell_store_written_paths"))
+                    run_cell_store_mismatches.extend(row.pop("_cell_store_mismatches"))
+                _annotate_row_bars_pin(
+                    row,
+                    category,
+                    level=level,
+                    bars_path=bars_path,
+                    bars_sha256=bars_sha256,
+                    extra_bars=extra_bars,
                 )
                 results["categories"][category] = row
                 if row.get("outcome") == "measured":
@@ -4499,6 +6077,14 @@ def run_accuracy(
                     "ref_frame_count": len(ref_times),
                     "ref_voiced_frame_count": sum(1 for f in ref_freqs if f > 0.0),
                 }
+                _annotate_row_bars_pin(
+                    row,
+                    category,
+                    level=level,
+                    bars_path=bars_path,
+                    bars_sha256=bars_sha256,
+                    extra_bars=extra_bars,
+                )
                 os.chmod(tmp, 0o500)
                 try:
                     try:
@@ -4577,6 +6163,27 @@ def run_accuracy(
     # 差し替わっていれば「report が pin した digest」と「次回 import されるコード」が
     # 食い違い、後続の evaluate が誤った provenance を受理しうる（Codex P1）。
     _post_run_scorer_pins = _require_unchanged_since_load()
+    # 同じ規律を非 scorer パッケージの同梱ネイティブにも課す（uncached でディスクを
+    # 読み直し、束縛時点の pin と比較する）。`env_digest` は束縛値を名乗るので、
+    # run 中に差し替えられていればここで落とす。
+    # `env_digest` を束縛した run（`--cell-store` / M2e）だけに課す。素の run は
+    # `env_digest_value is None` で環境同一性を名乗らない契約であり、そこで高価な
+    # 全ツリー走査を 2 本足しても drift 保護にならない上、hash 不能な optional
+    # パッケージがあると従来通っていた M2a/M2c run を新たに落とす。
+    if env_digest_value is not None:
+        try:
+            _require_dist_native_unchanged_since_bind()
+            # 実装 hash も読み直す——遅延 import のパッケージは「束縛後・import 前」に
+            # 差し替えられうる（上 2 つの検査はどちらもその窓を覆わない）。
+            _require_runtime_code_unchanged_since_bind()
+        except RuntimeError:
+            # **この run が書いたセルを隔離してから落とす。** 検査は run の最後にしか
+            # 走らないので（毎セルで全ツリーを再走査するのは 80 セル × 数秒で非現実的）、
+            # 落ちた時点で既に書かれたセルがディスクに残る。実装を元へ戻せば次の run は
+            # 同じ `env_digest` を計算し、**差し替え中の実装が産んだ row を resume して
+            # しまう**。resume されない名前へ退避し、証拠としては残す。
+            _quarantine_cell_records(run_cell_written_paths)
+            raise
     # Codex 16 巡目 P2-B: `numeric_runtime_config` は category loop（scoring）完了後・
     # かつ上の `_require_unchanged_since_load()`（post-run スコアラー pin 再計算）の
     # **後**にここで確定させる（`_numeric_runtime_config` / `_scorer_optional_
@@ -4613,6 +6220,31 @@ def run_accuracy(
     # 無改変を区別するための coverage 検証に使う。
     results["scorer_compile_observed_paths"] = sorted(_SCORER_COMPILE_OBSERVED_PATHS)
     results["scorer_compile_expected_paths"] = _scorer_compile_expected_paths()
+    # 設計 §8.7: `--cell-store` 使用時のみ report へ追加フィールドを積む。
+    # `cell_store is None` の run にはこのブロックの副作用が一切無いため、
+    # 既存呼び出しは 1 バイトも変わらない report を返す（挙動無変更の契約）。
+    if effective_cell_store is not None:
+        results["cell_store_relative"] = _repo_relative_path(effective_cell_store)
+        results["repeat_index"] = repeat_index
+        results["workers"] = workers
+        results["cells_resumed"] = run_cells_resumed
+        results["cells_measured"] = run_cells_measured
+        results["cell_store_mismatches"] = run_cell_store_mismatches
+        # この report の数値を産んだセルの**最も古い測定開始時刻**。resume したセルは
+        # 今回の `started_utc` より前に測り始められているので、事前登録の順序検査は
+        # こちらを見なければ「登録前の測定」を後の run で洗浄できてしまう。
+        # 文字列の辞書順でなく**時刻としての最小**を採る（`+00:00` と `Z` のように
+        # 同じ時刻が別表記になりうる形式で辞書順比較すると順序を取り違える）。
+        if run_cell_started_utc:
+            results["earliest_cell_started_utc"] = min(
+                run_cell_started_utc,
+                key=lambda value: _parse_recorded_utc(
+                    value, where="cell record", field="measurement_started_utc"
+                ),
+            )
+    # M2e run では `--cell-store` の有無に依らず記録する（上の算出コメント参照）。
+    if env_digest_value is not None:
+        results["env_digest"] = env_digest_value
     results["recorded_utc"] = _utc_now()
     return results
 
@@ -5171,6 +6803,8 @@ def _reverify_category_measurement(
     external_manifest_path: Optional[Path] = None,
     external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
     external_fixtures_raw: Optional[bytes] = None,
+    m2e_bars_raw: Optional[bytes] = None,
+    level: Optional[str] = None,
 ) -> None:
     """`category` の kind に応じて S（specs 由来合成）/ V（外部素材、M2c）の測り直しへ振り分ける。
 
@@ -5186,6 +6820,12 @@ def _reverify_category_measurement(
                 f"evaluate_m2_bars: category {category!r} は外部素材カテゴリだが "
                 "external_fixtures_raw が渡されていない (fail-closed)"
             )
+        if category_spec["bars_file"] != "m2_accuracy_bars.yaml" and m2e_bars_raw is None:
+            raise RuntimeError(
+                f"evaluate_m2_bars: category {category!r} は別 bars ファイルに所有される "
+                "が m2e_bars_raw が渡されていない; 測り直し子へ帯登録を凍結転写できない "
+                "(fail-closed)"
+            )
         _reverify_external_category_measurement(
             category,
             rows,
@@ -5196,6 +6836,8 @@ def _reverify_category_measurement(
             verification_runner=verification_runner,
             external_manifest_path=external_manifest_path,
             external_fixtures_path=external_fixtures_path,
+            m2e_bars_raw=m2e_bars_raw,
+            level=level,
         )
         return
     _reverify_direct_or_fullstack_category_measurement(
@@ -5355,6 +6997,8 @@ def _run_external_verification_in_fresh_process(
     bars_path: Path,
     external_fixtures_path: Path,
     expected_specs_sha256: str,
+    m2e_bars_path: Optional[Path] = None,
+    level: Optional[str] = None,
 ) -> Dict[str, Any]:
     """外部素材カテゴリ（M2c）の測り直し 1 回分を新規プロセス（素の CLI run）で実行する。
 
@@ -5387,6 +7031,21 @@ def _run_external_verification_in_fresh_process(
         "--external-fixtures",
         str(Path(external_fixtures_path).resolve()),
     ]
+    # M2e: 分離した帯登録と run の水準次元も**明示的に**子へ引き渡す（CLI 既定へ
+    # 暗黙に頼ると、子が別世代の帯登録・別水準を測りうる）。
+    if m2e_bars_path is not None:
+        command += ["--m2e-bars", str(Path(m2e_bars_path).resolve())]
+    if level is not None:
+        command += ["--level", level]
+    # M2e §8.7 セルチェックポイント: この子プロセスへは **`--cell-store` を絶対に
+    # 渡さない**（意図的な省略・本機能で最も危険な穴）。ここは評価器が「report の
+    # metrics が実測結果であること」を独立に確かめるための測り直しであり、子が
+    # チェックポイントから resume すると、測り直しは「セルレコード（=提出 report を
+    # 生んだのと同じ測定）を自分自身と比較する」だけになり、bit 一致の検証が
+    # 恒常的に空虚な成功を返す publish 条件になる（fail-closed の意味が消える）。
+    # `command` に `--cell-store` を積む分岐は存在せず、`--workers` /
+    # `--repeat-index` も同様に渡さない——`test_reverification_child_never_receives_cell_store`
+    # がこの不在を固定する。
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPYCACHEPREFIX"] = str(tmp_dir / f"pyc-fresh-ext-{index}")
@@ -5422,6 +7081,8 @@ def _reverify_external_category_measurement(
     verification_runner: Optional[RouteRunner],
     external_manifest_path: Optional[Path],
     external_fixtures_path: Path,
+    m2e_bars_raw: Optional[bytes] = None,
+    level: Optional[str] = None,
 ) -> None:
     """外部素材カテゴリ（M2c）を評価器自身が `repeats` 回独立に測り直す。
 
@@ -5469,6 +7130,23 @@ def _reverify_external_category_measurement(
         specs_copy.write_bytes(specs_raw)
         fixtures_copy = Path(tmp) / "m2c_external_fixtures.yaml"
         fixtures_copy.write_bytes(external_fixtures_raw)
+        # M2e: 分離した帯登録も**評価器が実際に読んだ bytes**を凍結複製して子へ渡す
+        # （`bars`/`specs_raw`/`external_fixtures_raw` と同型の TOCTOU 回避）。
+        m2e_bars_copy: Optional[Path] = None
+        if m2e_bars_raw is not None:
+            m2e_bars_copy = Path(tmp) / "m2e_accuracy_bars.yaml"
+            m2e_bars_copy.write_bytes(m2e_bars_raw)
+        extra_run_kwargs: Dict[str, Any] = {}
+        if m2e_bars_copy is not None:
+            extra_run_kwargs["m2e_bars_path"] = m2e_bars_copy
+        if level is not None:
+            extra_run_kwargs["level"] = level
+        # M2e §8.7: `cell_store` / `repeat_index` は意図的に `extra_run_kwargs` へ
+        # 積まない（in-process 版 `verification_runner is not None` 経路。fresh
+        # process 経路の同じ規律は `_run_external_verification_in_fresh_process`
+        # docstring 参照）。測り直しは提出 report と独立に測定した bit 一致を
+        # publish 条件にするための機構であり、チェックポイントから resume すると
+        # 「レコードを自分自身と比較する」だけになって検証が空虚になる。
         for index in range(repeats):
             if verification_runner is not None:
                 verification = run_accuracy(
@@ -5478,6 +7156,7 @@ def _reverify_external_category_measurement(
                     bars_path=bars_path,
                     external_manifest_path=external_manifest_path,
                     external_fixtures_path=fixtures_copy,
+                    **extra_run_kwargs,
                 )
                 vrow = verification["categories"][category]
             else:
@@ -5490,6 +7169,8 @@ def _reverify_external_category_measurement(
                     bars_path=bars_path,
                     external_fixtures_path=fixtures_copy,
                     expected_specs_sha256=expected_specs_sha256,
+                    m2e_bars_path=m2e_bars_copy,
+                    level=level,
                 )
             if vrow.get("outcome") != "measured":
                 raise RuntimeError(
@@ -6327,6 +8008,7 @@ def evaluate_m2_bars(
     bars_sha256: str,
     specs_path: Path = SPECS_PATH,
     bars_path: Path = BARS_PATH,
+    m2e_bars_path: Path = M2E_BARS_PATH,
     external_manifest_path: Optional[Path] = None,
     external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
 ) -> Dict[str, Any]:
@@ -6360,6 +8042,12 @@ def evaluate_m2_bars(
     - S_fullstack: バーが空（`{}`）なので判定せず、`status="diagnostic_only"`
       として計測値のみ記録する（設計 §8: S_fullstack の低値を理由に crepe を
       責めない）。
+    - **M2e（`V_remix_real_*`）は合否を出さない。** `gate_level` ではバーを当てて
+      `bar_satisfied` / `failures` に証拠を残すが `status="census_pending"` に留める
+      ——設計 §6.2/§11 が「全 1280 セル（4 水準 × 2 アーム）の census が揃うまで
+      帯の判定を出さない」を要求する一方、1 回の evaluate は構造上 1 水準しか
+      見ないため、このコールから census を立証できない（帯の判定は r6/r7 の
+      水準横断集計の仕事）。`gate_level` 以外は従来どおり `level_record_only`。
     """
     # digest と parsed data の束縛を検証してから閾値を読む。素の dict（手組み・load 後に
     # 変異させた mapping）は受理しない——閾値を書き換えたまま元の凍結 digest を名乗る
@@ -6500,17 +8188,33 @@ def evaluate_m2_bars(
         started = _parse_recorded_utc(
             report.get("started_utc"), where=f"reports[{idx}]", field="started_utc"
         )
+        # チェックポイントから resume した report は、**今回の起動時刻より前に測られた
+        # セル**を含む。`started_utc` だけを見ると、事前登録より前に採った測定を後の
+        # run 経由で「登録後の測定」として通せてしまう（洗浄経路）。セルが名乗る最古の
+        # 取得時刻があれば、それを測定の開始時点として扱う。
+        earliest_cell = report.get("earliest_cell_started_utc")
+        if earliest_cell is not None:
+            started = min(
+                started,
+                _parse_recorded_utc(
+                    earliest_cell,
+                    where=f"reports[{idx}]",
+                    field="earliest_cell_started_utc",
+                ),
+            )
         if started > recorded:
             raise ValueError(
-                f"evaluate_m2_bars: reports[{idx}] の started_utc "
-                f"{report.get('started_utc')!r} が recorded_utc "
+                f"evaluate_m2_bars: reports[{idx}] の測定開始時点 "
+                f"{started.isoformat()} が recorded_utc "
                 f"{report.get('recorded_utc')!r} より後; 開始が完了より後の測定記録は "
                 "成立しない (fail-closed)"
             )
         if started < latest_registration:
             raise ValueError(
-                f"evaluate_m2_bars: reports[{idx}] の started_utc "
-                f"{report.get('started_utc')!r} が、適用するバーの最新登録時点 "
+                f"evaluate_m2_bars: reports[{idx}] の測定開始時点 "
+                f"{started.isoformat()}（started_utc={report.get('started_utc')!r} / "
+                f"earliest_cell_started_utc={report.get('earliest_cell_started_utc')!r} の"
+                f"早い方）が、適用するバーの最新登録時点 "
                 f"{latest_registration.isoformat()} より前; 測定の開始時点で存在しなかった "
                 "閾値を事前登録として提示させない (fail-closed)"
             )
@@ -6629,6 +8333,12 @@ def evaluate_m2_bars(
         "categories": {},
     }
     verdict["report_pins"] = report_pins
+    # M2e（§5.2 / §6.2）: 使った bars ファイルの相対パスと sha256、および run の水準
+    # 次元を verdict へ刻む。M2e カテゴリを含まない evaluate では None のまま残る。
+    verdict["m2e_bars_sha256"] = None
+    verdict["m2e_bars_path_relative"] = None
+    verdict["m2e_bars_registration_attestation"] = None
+    verdict["level"] = None
 
     all_categories = sorted({cat for report in reports for cat in report.get("categories", {})})
     if not all_categories:
@@ -6649,6 +8359,75 @@ def evaluate_m2_bars(
             f"事前登録された {sorted(_CATEGORY_SPECS)} 以外は insufficient_repeats としてすら "
             "verdict に記録しない (fail-closed)"
         )
+
+    # M2e（設計 §5.2）: 所有する bars ファイルが分かれたので、M2e カテゴリが 1 つでも
+    # 報告されていればその**別ファイル**を評価器自身が独立にロードし、事前登録の git
+    # 立証まで課す（`m2c_external_fixtures.yaml` と同じ「使う場合のみ課す」流儀）。
+    m2e_categories_in_reports = sorted(
+        cat
+        for cat in all_categories
+        if _CATEGORY_SPECS[cat]["bars_file"] == "m2e_accuracy_bars.yaml"
+    )
+    m2e_bars: Optional[BarsArtifact] = None
+    m2e_bars_sha256: Optional[str] = None
+    m2e_bars_data: Dict[str, Any] = {}
+    m2e_registration_attestation: Optional[Dict[str, Any]] = None
+    m2e_level: Optional[str] = None
+    if m2e_categories_in_reports:
+        m2e_bars, m2e_bars_sha256 = load_bars(m2e_bars_path)
+        if bars_file_identity(m2e_bars.data) != "m2e_accuracy_bars.yaml":
+            raise ValueError(
+                f"evaluate_m2_bars: {m2e_bars_path} が m2e_accuracy_bars.yaml の "
+                "schema_version を名乗っていない (fail-closed)"
+            )
+        m2e_bars_data = m2e_bars.verify(m2e_bars_sha256)
+        m2e_started_by_index = [
+            (idx, started)
+            for idx, started in started_by_index
+            if any(
+                cat in m2e_categories_in_reports for cat in reports[idx].get("categories", {})
+            )
+        ]
+        m2e_registration_attestation = _require_attested_registration(
+            m2e_bars_path, m2e_bars.raw, m2e_started_by_index
+        )
+        # 水準は run の次元（§6.2）。repeats 間で食い違う水準を「同じ測定の反復」と
+        # 数えない——別水準の row を混ぜた平均は破断曲線の点ですらない。
+        levels = {report.get("level") for report in reports if any(
+            cat in m2e_categories_in_reports for cat in report.get("categories", {})
+        )}
+        if len(levels) != 1 or None in levels:
+            raise ValueError(
+                f"evaluate_m2_bars: M2e カテゴリを含む report の level が単一でない "
+                f"（{sorted(str(v) for v in levels)}）; 別水準の run を同じ測定の反復として "
+                "評価しない (fail-closed)"
+            )
+        m2e_level = levels.pop()
+        # 同じ理由で **環境も run の次元**である（§8.7: `env_digest` を跨いだセルの
+        # 合算を禁止）。repeats が別環境（別 CPU・別パッチ版）で採られていると
+        # `env_digest` が食い違うが、指標が bit 一致してしまえば下流からは見えない。
+        # **非 null で単一**であることを要求する——未記録同士を許すと「どちらも
+        # 環境を名乗らない 2 本」が反復として通り、CPU 同一性を後から復元できない
+        # （M2e run は `--cell-store` の有無に依らず必ず記録する。上の run 側参照）。
+        env_digests = {
+            report.get("env_digest") for report in reports if any(
+                cat in m2e_categories_in_reports for cat in report.get("categories", {})
+            )
+        }
+        # **形も要求する。** 非空文字列でありさえすればよい検査だと、`""` や
+        # `"unknown"` のような placeholder を持つ別環境の report 同士が「揃っている」
+        # として合算されうる——環境を名乗っていないことが、名乗っていることに化ける。
+        if len(env_digests) != 1 or not _is_sha256(next(iter(env_digests))):
+            raise ValueError(
+                f"evaluate_m2_bars: M2e カテゴリを含む report の env_digest が揃っていない "
+                f"（{sorted(str(v) for v in env_digests)}）; 環境を名乗らない report・別環境で "
+                "採ったセルを同じ帯の反復として合算しない (fail-closed)"
+            )
+        verdict["m2e_bars_sha256"] = m2e_bars_sha256
+        verdict["m2e_bars_path_relative"] = _repo_relative_path(m2e_bars_path)
+        verdict["m2e_bars_registration_attestation"] = m2e_registration_attestation
+        verdict["level"] = m2e_level
+
     for category in all_categories:
         rows = [report["categories"][category] for report in reports if category in report["categories"]]
         outcomes = {row["outcome"] for row in rows}
@@ -6671,6 +8450,33 @@ def evaluate_m2_bars(
             continue
 
         category_kind = _CATEGORY_SPECS[category]["kind"]
+        category_bars_file = _CATEGORY_SPECS[category]["bars_file"]
+        is_m2e = category_bars_file == "m2e_accuracy_bars.yaml"
+
+        if is_m2e:
+            # 分離した bars ファイルの pin を row 単位で束縛する（設計 §5.2）。
+            # M2 / M2c カテゴリにこの要求を課さないのは、それらのバー世代が report の
+            # top-level `bars_sha256` で既に厳密に束縛されているため（commit 済み記録は
+            # このフィールド以前の世代であり、遡って要求しても pin は強くならない）。
+            for idx, row in enumerate(rows):
+                if row.get("bars_file_sha256") != m2e_bars_sha256:
+                    raise ValueError(
+                        f"evaluate_m2_bars: category {category!r} rows[{idx}] の "
+                        f"bars_file_sha256 {row.get('bars_file_sha256')!r} が評価器の読んだ "
+                        f"{m2e_bars_sha256!r} と不一致; 別世代の帯登録で測った row に "
+                        "凍結バーを適用しない (fail-closed)"
+                    )
+                if row.get("level") != m2e_level:
+                    raise ValueError(
+                        f"evaluate_m2_bars: category {category!r} rows[{idx}] の level "
+                        f"{row.get('level')!r} が report の level {m2e_level!r} と不一致 "
+                        "(fail-closed)"
+                    )
+            cat_result["bars_file"] = category_bars_file
+            cat_result["bars_file_sha256"] = m2e_bars_sha256
+            cat_result["bars_file_relative"] = _repo_relative_path(m2e_bars_path)
+            cat_result["level"] = m2e_level
+            cat_result["ladder_index"] = _m2e_ladder_index(m2e_level)
 
         # repeats として数える前に (a) row が本当にその事前登録 fixture・経路の観測か、
         # (b) 同一 model stack で測られたか を証明する（Codex P1×2）。
@@ -6708,9 +8514,25 @@ def evaluate_m2_bars(
             external_manifest_path=external_manifest_path,
             external_fixtures_path=external_fixtures_path,
             external_fixtures_raw=external_fixtures_raw,
+            m2e_bars_raw=m2e_bars.raw if is_m2e and m2e_bars is not None else None,
+            level=m2e_level if is_m2e else None,
         )
 
-        bar = bar_block.get(category, {})
+        # 判定規律（設計 §6.2・fail-closed）: **`level != gate_level` の run に
+        # バーを適用しない。** `gate_level` 以外の水準は**破断曲線の記録専用**であり
+        # 合否を出さない（§5.4 の「単点トリップワイヤ」の実装上の意味はこれ）。
+        gate_level: Optional[str] = None
+        if is_m2e:
+            conditions_key = _BARS_FILES[category_bars_file]["conditions_key"]
+            gate_level = m2e_bars_data[conditions_key][category]["gate_level"]
+            cat_result["gate_level"] = gate_level
+            bar = (
+                m2e_bars_data[_BARS_FILES[category_bars_file]["block_key"]].get(category, {})
+                if m2e_level == gate_level
+                else {}
+            )
+        else:
+            bar = bar_block.get(category, {})
 
         if category_kind == "external":
             # M2c: 母数の独立再計算は「凍結 spec」ではなく clip 単位の自己整合性
@@ -6766,6 +8588,13 @@ def evaluate_m2_bars(
         # であって「たまたま両方バー内」ではない。乖離はバーの有無と独立に記録する。
         cat_result["repeats_bit_identical"] = bit_identical
 
+        if is_m2e and m2e_level != gate_level:
+            # 破断曲線の記録専用。合否は出さない（§5.4 / §6.2）。バーは存在するが
+            # 適用しないので `diagnostic_only`（＝バーがそもそも無い帯）とも区別する。
+            cat_result["status"] = "level_record_only"
+            verdict["categories"][category] = cat_result
+            continue
+
         if not bar:
             # S_fullstack: バーなし・診断記録のみ（設計 §3/§8）。
             # `load_bars` が空バーを診断専用カテゴリに限っているが、`evaluate_m2_bars` を
@@ -6802,8 +8631,20 @@ def evaluate_m2_bars(
                     f"repeat[{repeat_idx}] octave_gap {metrics['octave_gap']:.4f} "
                     f"> max_octave_gap {bar['max_octave_gap']}"
                 )
-        cat_result["status"] = "pass" if not failures else "fail"
         cat_result["failures"] = failures
+        if is_m2e:
+            # 設計 §6.2（「帯の判定は `gate_level` の run が §11 のセル census を
+            # 満たしたときにのみ出る」）と §11（全 1280 セルが揃うまで帯の判定を
+            # 出さない）。**1 回の evaluate は構造上 1 水準しか見ない**——
+            # 上流で「M2e カテゴリを含む report の level は単一」を要求しているので、
+            # このコールから 4 水準 × 2 アームの census を立証する術が無い。
+            # したがってバーは当てる（証拠は `bar_satisfied` / `failures` に残す）が、
+            # **合否という語は出さない**。帯の判定は r6/r7 の水準横断集計が census を
+            # 満たしたときに出す（その集計器は未実装・`HANDOFF.md` の残タスク）。
+            cat_result["bar_satisfied"] = not failures
+            cat_result["status"] = "census_pending"
+        else:
+            cat_result["status"] = "pass" if not failures else "fail"
         verdict["categories"][category] = cat_result
 
     # verdict を返す（= publish する）直前に、load 時に pin したコードが
@@ -6907,6 +8748,24 @@ def main() -> int:
         help="run report(s) にバーを適用して verdict を出す（未指定なら run phase）",
     )
     parser.add_argument("--bars", type=Path, default=BARS_PATH)
+    parser.add_argument(
+        "--m2e-bars",
+        type=Path,
+        default=M2E_BARS_PATH,
+        metavar="m2e_accuracy_bars.yaml",
+        help="M2e 帯（V_remix_real_*）の事前登録バー。M2 のバーとは意図的に別ファイル "
+        "（設計 §5.1: 追記すると commit 済み M2b/M2c verdict の pin が壊れる）。"
+        "共有スカラー（tolerance_cents / est_voiced_confidence_floor / repeats_min）は "
+        "こちらに書かず --bars 側を参照する",
+    )
+    parser.add_argument(
+        "--level",
+        default=None,
+        metavar="LEVEL",
+        help="M2e の水準（歌声/ベッドの RMS 比。設計 §3.6 のラダー: "
+        f"{' / '.join(_M2E_LEVEL_LADDER)}）。水準軸を持つカテゴリを測る run では必須。"
+        "`gate_level` 以外の水準は破断曲線の記録専用で、evaluate はバーを適用しない",
+    )
     parser.add_argument("--specs", type=Path, default=SPECS_PATH)
     parser.add_argument(
         "--categories",
@@ -6934,6 +8793,33 @@ def main() -> int:
         help="外部素材カテゴリの事前登録 pin ファイル（既定: 凍結 committed ファイル）。"
         "測り直し子プロセスへの明示転送・`--out` 保護のためテストでの差し替えを想定",
     )
+    parser.add_argument(
+        "--cell-store",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="設計 §8.7 のセルチェックポイント用ディレクトリ（opt-in・既定 None）。"
+        "指定すると外部素材カテゴリの各 clip を 1 セルとして記録し、既存レコードが "
+        "入力/環境 digest と一致すれば再測定をスキップする。未指定時は report に "
+        "新フィールドが一切増えない（挙動無変更）。指定時は --repeat-index が必須",
+    )
+    parser.add_argument(
+        "--repeat-index",
+        type=int,
+        default=None,
+        metavar="N",
+        help="このプロセスが担う repeat の番号（0 始まり）。--cell-store 指定時は "
+        "必須・0 以上の整数のみ（セル鍵 (category, level, entry_id, repeat_index) "
+        "の一部）。--cell-store 未指定時に渡すのは fail-closed で拒否する",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="P",
+        help="設計 §8.3 の並列度 P。実行そのものは変えない（本ハーネスは単一プロセス "
+        "のまま）——--cell-store 使用時にセルレコードへコスト再現用に記録するだけ",
+    )
     args = parser.parse_args()
     _require_out_outside_git_metadata(args.out)
 
@@ -6944,8 +8830,21 @@ def main() -> int:
         # 指していないか **書く前に** 確認する。上書きすると verdict の証拠そのもの
         # （repeat evidence・凍結設定）が消え、report_pins の hash も実体と食い違う
         # （Codex P2 指摘）。
+        if args.level is not None:
+            raise SystemExit(
+                "--level は run phase 専用（evaluate は report が記録した level を読む）"
+            )
+        if args.cell_store is not None:
+            raise SystemExit(
+                "--cell-store は run phase 専用（evaluate は report が記録した値を読む）"
+            )
+        if args.repeat_index is not None:
+            raise SystemExit(
+                "--repeat-index は run phase 専用（evaluate は report が記録した値を読む）"
+            )
         protected = {Path(p).resolve() for p in args.evaluate}
         protected.add(Path(args.bars).resolve())
+        protected.add(Path(args.m2e_bars).resolve())
         protected.add(Path(args.specs).resolve())
         protected.add(Path(args.external_fixtures).resolve())
         if args.external_manifest is not None:
@@ -6982,6 +8881,7 @@ def main() -> int:
             specs_path=args.specs,
             # 事前登録の git 立証（Codex P2 第 28 巡）は供給された bars の実パスに対して行う。
             bars_path=args.bars,
+            m2e_bars_path=args.m2e_bars,
             external_manifest_path=args.external_manifest,
             external_fixtures_path=args.external_fixtures,
         )
@@ -6993,6 +8893,7 @@ def main() -> int:
 
     run_protected = {
         Path(args.bars).resolve(),
+        Path(args.m2e_bars).resolve(),
         Path(args.specs).resolve(),
         Path(args.external_fixtures).resolve(),
     }
@@ -7009,6 +8910,18 @@ def main() -> int:
             "または provenance 対象のソースと同じパスを指している; これらを run report で "
             "上書きしない (fail-closed)"
         )
+    # セルストアの木も保護する。`--out` が `--cell-store` 配下を指していると、run は
+    # そこにあるチェックポイントを resume に使った上で、最後の `_atomic_write_text` が
+    # 同じパスを run report で**置き換える**——成功した run が自分の再利用資産を消し、
+    # 次回は高価な再測定になる（セル 1 つ = crepe 推論 1 回）。
+    if args.cell_store is not None:
+        cell_store_root = Path(args.cell_store).resolve()
+        out_resolved = Path(args.out).resolve()
+        if out_resolved == cell_store_root or cell_store_root in out_resolved.parents:
+            raise SystemExit(
+                f"--out {args.out} が --cell-store {args.cell_store} 配下にある; "
+                "run report でセルチェックポイントを上書きしない (fail-closed)"
+            )
     run_kwargs: Dict[str, Any] = {}
     if args.categories:
         run_kwargs["categories"] = tuple(args.categories)
@@ -7020,11 +8933,43 @@ def main() -> int:
         # `run_accuracy` 自身の既定（S_direct/S_fullstack のみ）に委ねる——V_direct は
         # manifest 必須で fail-closed（`run_accuracy` の要件チェック）のため、manifest
         # が無い状態で既定に含めると省略呼び出しが即座に落ちてしまう。
-        run_kwargs["categories"] = tuple(sorted(_CATEGORY_SPECS))
+        #
+        # M2e（設計 §5.2）: 既定集合は **`m2_accuracy_bars.yaml` が所有するカテゴリ**に
+        # 限る。M2e カテゴリ（別ファイル所有・水準軸あり・別 manifest）を暗黙の既定へ
+        # 混ぜると、既存の M2c 流儀の呼び出し（`--external-manifest` のみ）が `--level`
+        # 未指定で即座に落ちる。M2e は `--categories` で明示的に選ぶ。
+        run_kwargs["categories"] = _categories_owned_by("m2_accuracy_bars.yaml")
     if args.external_manifest is not None:
         run_kwargs["external_manifest_path"] = args.external_manifest
     run_kwargs["external_fixtures_path"] = args.external_fixtures
-    result = run_accuracy(specs_path=args.specs, bars_path=args.bars, **run_kwargs)
+    # 設計 §8.7: --repeat-index は --cell-store 指定時のみ必須・かつそのときのみ
+    # 許可する（どちらか片方だけの指定は「測っていない次元を report に名乗らせない」
+    # という repo 全体の規律に反するので CLI レベルで早期に落とす。`run_accuracy`
+    # 自身も同じ検査を ValueError で持つ——直接呼び出すテスト経路のための多重防御）。
+    if args.cell_store is not None and args.repeat_index is None:
+        raise SystemExit(
+            "--repeat-index は --cell-store 指定時に必須（セル鍵 "
+            "(category, level, entry_id, repeat_index) の repeat_index を欠いたまま "
+            "チェックポイントを書かない）"
+        )
+    if args.cell_store is None and args.repeat_index is not None:
+        raise SystemExit(
+            "--repeat-index は --cell-store と併用したときのみ有効（測っていない次元を "
+            "report に名乗らせない）"
+        )
+    if args.repeat_index is not None and args.repeat_index < 0:
+        raise SystemExit(f"--repeat-index {args.repeat_index} は 0 以上の整数のみ許可する")
+    if args.cell_store is not None:
+        run_kwargs["cell_store"] = args.cell_store
+        run_kwargs["repeat_index"] = args.repeat_index
+    result = run_accuracy(
+        specs_path=args.specs,
+        bars_path=args.bars,
+        m2e_bars_path=args.m2e_bars,
+        level=args.level,
+        workers=args.workers,
+        **run_kwargs,
+    )
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
     print(f"wrote run report to {args.out}")
     for category, row in result["categories"].items():

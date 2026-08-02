@@ -207,6 +207,8 @@ tests/ / docs/ / examples/     # pytest / design documents (index: docs/README.m
 | [`docs/melodia_confidence_scale.md`](docs/melodia_confidence_scale.md) | Melodia が全ゼロ被覆を返した原因診断: 凍結床×アダプタ設定×Melodia 値域の三者関係（`magnitudeCompression` 掃引で判明） |
 | [`docs/DESIGN_M2_extraction_accuracy.md`](docs/DESIGN_M2_extraction_accuracy.md) | M2 設計書: 抽出精度検証 (RPA/RCA)、mir_eval 採用、正解 3 カテゴリ S/V/X、M2a–M2d 分割 |
 | [`docs/m2_error_model.md`](docs/m2_error_model.md) | M2d crepe ルート誤差モデル（M3 の第 1 入力）: pitch 中心誤差/octave error rate/voicing false-alarm/材質別分散 |
+| [`docs/DESIGN_M2e_vremix_real_bed.md`](docs/DESIGN_M2e_vremix_real_bed.md) | M2e 統合正本: vocadito 歌声 × MUSDB18-HQ 実ベッドの決定論ミックスで「主旋律の支配度がどこまで下がると音高追跡が壊れるか」を測る帯（4 水準ラダー・2 アーム・1280 セル）。主生産物は破断曲線であり昇格させない |
+| [`docs/m2e_provisioning_runbook.md`](docs/m2e_provisioning_runbook.md) | M2e プロビジョニング runbook（実行者非依存）: 重み・vocadito pin・MUSDB18-HQ 取得と pin 三層・ベッド screening・ミックス生成・lockfile/`env_digest` の手順 |
 | [`docs/DESIGN_M3_melody_comparator.md`](docs/DESIGN_M3_melody_comparator.md) | M3 旋律比較器設計書: 正規化・NW 対応付け・多軸類似（contour/interval/rhythm）・M3d 校正計画 |
 | [`docs/melody_comparator.md`](docs/melody_comparator.md) | M3 実装: `MelodySequences`・NW 整列・`MelodyComparisonReport`。総合スコアは恒久禁止、軸別 evidence のみ |
 | [`docs/DESIGN_M4_recast_melody_anchor.md`](docs/DESIGN_M4_recast_melody_anchor.md) | M4 設計書: M3 evidence を Recast の `experimental` anchor へ翻訳（axis_policy opt-in・G1–G3 ゲート・会計分離）。実装 = `recast/experimental.py`、golden E2E = `tests/test_recast_m4d_melody_e2e.py` |
