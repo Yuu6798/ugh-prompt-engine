@@ -1199,6 +1199,20 @@ evaluate の独立測り直し（publish 条件）であり、per-clip digest �
 `except ValueError` を素通りして census 全体がクラッシュしていた。報告可能な不備は
 報告するのが census の目的（E-11）であり、要素型を明示検査して `problems` へ落とす。
 
+**E-32. clip_ids 要素の非文字列破損をクラッシュでなく census_incomplete として報告する**
+（PR #241 Codex P2 で是正）。E-31 と同型の残り穴——`clip_ids` に非 str 要素（dict/list
+等）が混ざると `set(clip_ids)` が `TypeError`（unhashable type）で census 全体を
+クラッシュさせていた。全要素 str の場合のみ重複検査と `_m2e_normalized_cohort_ids`
+（水準タグ検査・E-8 の fail-closed raise）へ進む——タグ不一致の raise 自体は変えず、
+「型が壊れている場合にそこへ到達させない」ことだけを変える。
+
+**E-33. 不備理由から計測 field 名・値を除く**（PR #241 Codex P2 で是正）。E-3 の
+「census が揃うまで metrics を成果物に存在させない」は `missing[].reason` にも及ぶ——
+metric 系の `problems` 文言に validator 例外テキストをそのまま埋めており、これは
+`census_incomplete` が公開する成果物への自己違反だった。理由は一般コード（「計測記録
+が…契約を満たさない」等）だけで書き、詳細診断は census の仕事ではなく verdict 側を
+直接読めば得られる。E-3 の文字列不在テストを不正値セル経路にも拡張して固定した。
+
 **E-18. `bar_satisfied == not failures` を読み戻しで再検証する**（PR #241 Codex P2 で是正）。
 `evaluate_m2_bars` はこの不変条件を確立するが、集計器は読み戻し時に一度も検証して
 いなかった。型（E-16）が正しくても関係が壊れていれば、`true` + 非空 `failures` は

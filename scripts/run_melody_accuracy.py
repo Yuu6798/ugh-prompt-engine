@@ -9641,10 +9641,26 @@ def aggregate_m2e_census(
                 continue
             problems: "List[str]" = []
             clip_ids = cell["clip_ids"]
+            clip_ids_all_str = isinstance(clip_ids, list) and all(
+                isinstance(c, str) for c in clip_ids
+            )
             if not isinstance(clip_ids, list) or len(clip_ids) != _M2E_EXPECTED_ENTRIES_PER_LEVEL:
                 problems.append(
                     f"clip 数 {len(clip_ids) if isinstance(clip_ids, list) else clip_ids!r} が "
                     f"凍結コホート {_M2E_EXPECTED_ENTRIES_PER_LEVEL} と不一致"
+                )
+            elif not clip_ids_all_str:
+                # E-32: 要素型を先に検査する（PR #241 Codex P2・E-31 と同型の残り穴）。
+                # 非 str 要素（dict/list 等）が混ざると直後の `set(clip_ids)` が
+                # **TypeError**（unhashable type）で census 全体をクラッシュさせる——
+                # 本来出すべき `census_incomplete` が出せない。全要素 str の場合のみ
+                # 重複検査（このブロック）と `_m2e_normalized_cohort_ids`（下の水準タグ
+                # 検査ブロック）へ進む。値そのものは埋め込まない（個数と index のみ）。
+                non_str_indices = [i for i, c in enumerate(clip_ids) if not isinstance(c, str)]
+                problems.append(
+                    f"clip_ids に文字列でない要素がある（{len(non_str_indices)} 件・index "
+                    f"{non_str_indices[:5]}）; 形の壊れた台帳をクラッシュではなく未完として "
+                    "報告する"
                 )
             elif len(set(clip_ids)) != len(clip_ids):
                 # **件数だけでは足りない**（PR #241 Codex P2）。80 要素あっても重複して
@@ -9672,12 +9688,16 @@ def aggregate_m2e_census(
             # 短縮でも他の検査は全部通り、`census_complete` を出したうえで
             # `level_response` に欠測が載る（帯の判定だけは `bar_satisfied` から出る）。
             # 成果物に載せる値は、載せる前に形を確かめる。
+            # E-33: この節の不備理由は**計測 field 名・値を含めない**（PR #241 Codex
+            # P2）。E-3 は「census が揃うまで metrics を成果物に存在させない」を宣言して
+            # おり、テストは文書全 bytes への文字列不在まで検査している——その禁止は
+            # `census_complete` 時の `level_response` だけでなく、`census_incomplete` 時
+            # の `missing[].reason` にも及ぶ。validator 例外テキスト（field 名・値入り）
+            # をそのまま埋めていたのは自己違反だった。詳細診断は census の仕事ではなく、
+            # verdict 側を直接読めば得られる——ここでは一般コードだけを報告する。
             metrics_list = cell["metrics"]
             if not isinstance(metrics_list, list) or len(metrics_list) != repeats_min:
-                problems.append(
-                    f"metrics が {repeats_min} 件の list でない "
-                    f"（{len(metrics_list) if isinstance(metrics_list, list) else metrics_list!r}）"
-                )
+                problems.append(f"計測記録が {repeats_min} 件の list でない")
             else:
                 # E-31: 要素型を先に検査する（PR #241 Codex P2）。外側 list の長さしか
                 # 見ていないと、要素が `null` 等の非 dict のとき `_require_finite_metrics`
@@ -9691,24 +9711,22 @@ def aggregate_m2e_census(
                     i for i, m in enumerate(metrics_list) if not isinstance(m, dict)
                 ]
                 if non_object_indices:
-                    for i in non_object_indices:
-                        problems.append(
-                            f"metrics[{i}] {metrics_list[i]!r} が JSON object でない; "
-                            "形の壊れた計測記録を census がクラッシュではなく未完として報告する"
-                        )
+                    problems.append(
+                        f"計測記録に JSON object でない要素がある（{len(non_object_indices)} 件）"
+                    )
                 else:
                     try:
                         _require_finite_metrics(arm, metrics_list)
-                    except ValueError as exc:
-                        problems.append(f"metrics が有限数値でない（{exc}）")
+                    except ValueError:
+                        problems.append("計測記録が有限数値の契約を満たさない")
                     # E-27: 平均で保存される不変条件のみ再適用する（`_require_
                     # average_stable_metric_invariants` docstring に採否の経緯を記録）。
                     try:
                         _require_average_stable_metric_invariants(
                             arm, metrics_list, frozen_tolerance_cents=frozen_tolerance_cents
                         )
-                    except ValueError as exc:
-                        problems.append(f"metrics が平均安定不変条件に反する（{exc}）")
+                    except ValueError:
+                        problems.append("計測記録が平均安定不変条件を満たさない")
                 # E-28: `repeats_bit_identical` の申告は評価器の独立測り直しが立証する
                 # が、census が**公開する** per-repeat metrics 自体が申告どおり相互
                 # bit 一致していることは、boolean 申告と独立に検査できる必要条件
@@ -9716,10 +9734,7 @@ def aggregate_m2e_census(
                 # 食い違う verdict を数えない。**十分条件ではない**——平均が偶然一致して
                 # clip が異なるケースは検出できない（宣言された限界、設計ノート E-28）。
                 if len({json.dumps(m, sort_keys=True) for m in metrics_list}) != 1:
-                    problems.append(
-                        "metrics が repeats_bit_identical=True を名乗りながら repeat 間で "
-                        "bit 一致していない"
-                    )
+                    problems.append("計測記録が repeat 間で bit 一致しない")
             # E-20: アーム対の素性 hash にも存在と形を要求する（PR #241 Codex P1・E-17 と
             # 同じ論法）。両アームが揃って欠けば `None == None` でアーム間照合が空転し、
             # 無関係な音源世代の対が「対」として数えられる。
@@ -9734,11 +9749,15 @@ def aggregate_m2e_census(
                 if isinstance(clip_ids, list) and isinstance(cell["n_rows"], int)
                 else 0
             )
-            if isinstance(clip_ids, list):
+            if clip_ids_all_str:
                 # 水準タグの検査は**件数と独立**に行う（短いコホートでもラベルの
                 # 食い違いは食い違いである）。正規化結果を水準横断の照合に使うのは
                 # per-cell 検査を通ったセルだけ——短いコホートを「別コホート」として
                 # 報告すると、本当の原因（件数不足）が見えなくなる。
+                # E-32: `_m2e_normalized_cohort_ids` 自身も非 str 要素で ValueError を
+                # 投げる（E-8 の fail-closed）が、それは「捕まえて problems へ落とす」
+                # 設計ではなく「呼ばない」設計にする——`clip_ids_all_str` で事前に
+                # 型を揃えたセルだけがここへ到達する。
                 normalized = _m2e_normalized_cohort_ids(level, clip_ids)
                 if not problems:
                     normalized_by_level[level] = normalized

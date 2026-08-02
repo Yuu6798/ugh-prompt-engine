@@ -11300,7 +11300,8 @@ def test_census_requires_well_formed_metrics_before_counting_a_cell(
     assert census["status"] == "census_incomplete"
     assert census["band_verdict"] is None
     assert census["level_response"] is None
-    assert any("metrics" in m["reason"] for m in census["missing"])
+    # E-33: 不備理由は「metrics」という語自体を使わない（計測 field 名・値を含めない）。
+    assert any("計測記録" in m["reason"] for m in census["missing"])
 
 
 def test_verdict_with_non_finite_metrics_cannot_even_be_loaded(tmp_path: Path) -> None:
@@ -11703,9 +11704,11 @@ def test_census_checks_average_stable_metric_invariants(tmp_path: Path) -> None:
     level = harness._M2E_LEVEL_LADDER[0]
     gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
     for arm in ("V_remix_real_direct", "V_remix_real_stem"):
-        reason = gaps[(level, arm)]
-        assert "平均安定不変条件" in reason
-        assert "raw_chroma_accuracy" in reason
+        # E-33: 不備理由は一般コードのみで、field 名・値は埋め込まない
+        # （`raw_chroma_accuracy` 等の計測 field 名は reason に現れない）。
+        assert "平均安定不変条件" in gaps[(level, arm)]
+    blob = json.dumps(census, sort_keys=True)
+    assert "raw_chroma_accuracy" not in blob
 
 
 def test_census_rejects_metrics_that_contradict_the_identity_flag(tmp_path: Path) -> None:
@@ -11749,3 +11752,55 @@ def test_census_reports_non_object_metric_records_as_incomplete(
     gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
     for arm in ("V_remix_real_direct", "V_remix_real_stem"):
         assert "JSON object でない" in gaps[(level, arm)]
+
+
+# ---------------------------------------------------------------------------
+# E-32 / E-33（PR #241 Codex 第 9 巡: P2×2）。clip_ids 要素型のクラッシュ回避
+# （E-31 と同型の残り穴）と、不備理由からの計測データ漏出の停止（E-3 への自己違反）。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("broken_element", [{}, []])
+def test_census_reports_unhashable_clip_id_elements_as_incomplete(
+    broken_element: Any, tmp_path: Path
+) -> None:
+    """E-32: `clip_ids` に非文字列要素（dict/list）が混ざると、直後の
+
+    `set(clip_ids)` が **TypeError**（unhashable type）で census 全体を
+    クラッシュさせる——E-31 と同型の残り穴。**raise させず** per-cell の
+    `problems`（= `census_incomplete`）として報告することを固定する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[1]["categories"][arm]["clip_ids"][0] = broken_element
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[1]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "文字列でない" in gaps[(level, arm)]
+
+
+def test_census_incomplete_from_invalid_metrics_leaks_no_measurement_text(
+    tmp_path: Path,
+) -> None:
+    """E-33: 不備理由に validator 例外テキスト（field 名・値入り）を埋めると、
+
+    `census_incomplete` の `missing[].reason` へ計測データが漏れる——E-3
+    （揃うまで metrics を成果物に存在させない）への自己違反だった。既存の
+    文字列不在テスト（`test_census_incomplete_contains_no_metrics_at_all`）は
+    「水準ごと欠けた」経路しかカバーしていなかったので、不正値セル経路にも
+    同じ禁止を固定する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        for metrics in verdicts[1]["categories"][arm]["metrics"]:
+            metrics["raw_pitch_accuracy"] = 2.0  # 域外（[0, 1] の外）だが有限
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    blob = json.dumps(census, sort_keys=True)
+    for forbidden in ("raw_pitch_accuracy", "octave_gap", "voicing_recall", "metrics"):
+        assert forbidden not in blob, forbidden
