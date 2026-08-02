@@ -8740,6 +8740,12 @@ def test_level_ladder_and_tags_are_frozen_in_declaration_order() -> None:
     }
 
 
+# 合成 M2e fixtures が名乗る builder provenance（実物と同じ 3 digest の形）。
+_FAKE_MIXER_CODE_SHA256 = "a1" * 32
+_FAKE_M2C_FIXTURES_SHA256 = "b2" * 32
+_FAKE_BED_FIXTURES_SHA256 = "c3" * 32
+
+
 def _write_m2e_external_fixture_set(
     tmp_path: Path,
     clip_specs: "Dict[str, Tuple[List[float], List[float]]]",
@@ -8767,6 +8773,13 @@ def _write_m2e_external_fixture_set(
         'schema_version: "m2e-external-fixtures/0.1"',
         'registered_utc: "2026-08-01"',
         f'level: "{level}"',
+        # 実 fixtures（`make_vremix_fixtures.build` の生成物）は必ず builder provenance を
+        # 持つ（run 側 `_require_registered_m2e_cohort` が実体照合する）。合成 fixtures にも
+        # 同じ形を持たせないと、C5 の混合式照合（E-13/E-17）が試せない。
+        "builder:",
+        f'  generator_code_sha256: "{_FAKE_MIXER_CODE_SHA256}"',
+        f'  m2c_fixtures_sha256: "{_FAKE_M2C_FIXTURES_SHA256}"',
+        f'  m2e_bed_fixtures_sha256: "{_FAKE_BED_FIXTURES_SHA256}"',
         "fixtures:",
     ]
     for clip_id, (times, freqs) in clip_specs.items():
@@ -11249,7 +11262,11 @@ def test_evaluate_carries_the_builder_provenance_into_m2e_verdicts(tmp_path: Pat
     """E-13 の前提: run 側で実体照合済みの `builder` を verdict へ写す。"""
     reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
     verdict = _m2e_evaluate(tmp_path, reports)
-    assert "m2e_builder_provenance" in verdict
+    assert verdict["m2e_builder_provenance"] == {
+        "generator_code_sha256": _FAKE_MIXER_CODE_SHA256,
+        "m2c_fixtures_sha256": _FAKE_M2C_FIXTURES_SHA256,
+        "m2e_bed_fixtures_sha256": _FAKE_BED_FIXTURES_SHA256,
+    }
 
 
 @pytest.mark.parametrize(
@@ -11365,4 +11382,57 @@ def test_census_requires_failures_to_be_a_list(tmp_path: Path) -> None:
     for arm in ("V_remix_real_direct", "V_remix_real_stem"):
         verdicts[0]["categories"][arm]["failures"] = "min_rpa を割った"
     with pytest.raises(ValueError, match="failures .* list でない"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_verdicts_that_all_omit_the_builder_provenance(
+    tmp_path: Path,
+) -> None:
+    """PR #241 Codex P1: **「全部欠けている」を「揃っている」と見なさない。**
+
+    等値検査は `v.get(field)` を比べるので、全 verdict がフィールドを持たなければ
+    `None` 同士で一致し、E-13 の照合は**フィールドを剥がすだけで無効化**できた。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict.pop("m2e_builder_provenance", None)
+    with pytest.raises(ValueError, match="m2e_builder_provenance を名乗っていない"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize(
+    "key", ["generator_code_sha256", "m2c_fixtures_sha256", "m2e_bed_fixtures_sha256"]
+)
+def test_census_requires_each_builder_digest_to_be_a_sha256(key: str, tmp_path: Path) -> None:
+    """混合式の素性を「名乗るだけ」の申告を照合済みとして扱わない。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        provenance = dict(verdict["m2e_builder_provenance"] or {})
+        provenance[key] = "not-a-digest"
+        verdict["m2e_builder_provenance"] = provenance
+    with pytest.raises(ValueError, match=f"{key} .* 64-hex sha256 でない"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize(
+    "bar_satisfied, failures",
+    [
+        (True, ["repeat[0] raw_pitch_accuracy 0.10 < min_rpa 0.65"]),
+        (False, []),
+    ],
+)
+def test_census_rejects_a_gate_result_that_contradicts_its_failures(
+    bar_satisfied: bool, failures: "List[str]", tmp_path: Path
+) -> None:
+    """PR #241 Codex P2: `evaluate` が確立した `bar_satisfied == not failures` を読み戻しで再検証する。
+
+    型が正しくても関係が壊れていれば、`true` + 非空 failures は**失敗の証拠を同梱した
+    まま pass を publish** し、逆は理由の無い fail を publish する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        gate = verdicts[0]["categories"][arm]
+        gate["bar_satisfied"] = bar_satisfied
+        gate["failures"] = failures
+    with pytest.raises(ValueError, match="矛盾する"):
         _census(tmp_path, verdicts)

@@ -9375,6 +9375,24 @@ def _require_homogeneous_census_inputs(
             f"aggregate_m2e_census: repeats_min {common['repeats_min']!r} が 2 未満または "
             "整数でない (fail-closed)"
         )
+    # **「全部欠けている」を「揃っている」と見なさない**（PR #241 Codex P1）。
+    # 上の等値検査は `v.get(field)` を比べるので、全 verdict がこのフィールドを持たなければ
+    # `None` 同士で一致し、E-13 の照合はフィールドを剥がすだけで無効化できてしまう。
+    # `env_digest` には形の要求を置いたのにここには置いていない、という非対称だった。
+    builder = common["m2e_builder_provenance"]
+    if not isinstance(builder, dict):
+        raise ValueError(
+            f"aggregate_m2e_census: verdict が m2e_builder_provenance を名乗っていない "
+            f"（{builder!r}）; どの混合式で作られたミックスを測った判定なのか立証できない "
+            "まま破断曲線を組まない (fail-closed)"
+        )
+    for key in ("generator_code_sha256", "m2c_fixtures_sha256", "m2e_bed_fixtures_sha256"):
+        if not _is_sha256(builder.get(key)):
+            raise ValueError(
+                f"aggregate_m2e_census: m2e_builder_provenance の {key} "
+                f"{builder.get(key)!r} が 64-hex sha256 でない; 混合式の素性を名乗るだけの "
+                "申告を照合済みとして扱わない (fail-closed)"
+            )
     return common
 
 
@@ -9687,6 +9705,19 @@ def aggregate_m2e_census(
             raise ValueError(
                 f"aggregate_m2e_census: arm {arm!r} の failures {cell['failures']!r} が "
                 "list でない; 判定の根拠として成果物へ載せる値の形を確かめる (fail-closed)"
+            )
+        # **`evaluate_m2_bars` が確立した不変条件を読み戻しで再検証する**
+        # （PR #241 Codex P2）: `bar_satisfied == not failures`。型が正しくても関係が
+        # 壊れていれば、`bar_satisfied: true` + 非空 `failures` は**失敗の証拠を同梱
+        # したまま pass を publish する**し、逆は理由の無い fail を publish する。
+        # 型を要求しただけでは足りない——**値どうしの整合も要求する**。
+        arm_failures = cell["failures"] or []
+        if cell["bar_satisfied"] != (not arm_failures):
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の bar_satisfied "
+                f"{cell['bar_satisfied']!r} が failures {arm_failures!r} と矛盾する "
+                "（evaluate は bar_satisfied == not failures を確立している）; "
+                "根拠と結論が食い違う判定を publish しない (fail-closed)"
             )
         band[arm] = {
             "gate_level": gate_level,
