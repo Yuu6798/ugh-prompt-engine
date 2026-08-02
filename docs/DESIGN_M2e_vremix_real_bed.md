@@ -1114,6 +1114,39 @@ CLI の未使用フラグ拒否（E-15）も**値比較では不完全**だっ�
 そのものを追跡し、census phase では既定値と同じ値でも渡された事実を拒否する。
 census 検査の直後にセンチネルを実既定へ正規化し、run/evaluate 経路へ漏らさない。
 
+**E-22. 帯判定セルの gate_level を凍結条件と束縛する**（PR #241 Codex P1 で是正）。
+セルの選択は verdict の自己申告（top-level `level`）に依存しているため、category 側の
+`gate_level` 申告も凍結値（`conditions[arm]["gate_level"]`）と束縛しなければ、別水準で
+当てたバーの結果が帯の判定として publish されうる。`bar_satisfied` を使う前に要求する。
+
+**E-23. 凍結閾値を census 自身が metrics へ再適用する**（PR #241 Codex P1 で是正）。E-18 は
+`bar_satisfied ↔ failures` を束縛したが、**metrics ↔ 判定**は誰も束縛していなかった。
+metrics だけを書き換えれば「凍結バーを割る metrics を `level_response` に載せながら
+pass を出す」成果物が組めた。census 自身が読んだ凍結バーを evaluate と同一の比較方向
+（`min_rpa` は < / `max_vfa` は > / `max_octave_gap` は >）で再適用し、`bar_satisfied`
+との一致を要求する。**derived failures の文字列照合はしない**——E-18 が
+`bar_satisfied↔failures` を、本検査が `metrics↔bar_satisfied` を束縛すれば連鎖は閉じ、
+失敗文字列の形式へ結合するのは brittle で over-engineering という裁定（per-cell 検査で
+`repeats_bit_identical is True` を既に要求しているため、bit 不一致由来の failure が
+band ループへ混入する経路も無い）。
+
+**E-24. numeric_runtime_config のキー集合を生成側の形と束縛する**（PR #241 Codex P1 で
+是正）。E-19 の「非空 dict」検査は `{"unknown": true}` のような placeholder を通してしまう。
+生成側（`_numeric_runtime_config()`）が実際に返すトップレベルキー集合を凍結定数
+`_NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS` として持ち、束縛する。census 内で producer を
+直接呼ばないのは、計測 instrumentation（threadpoolctl 等）の import を評価器プロセスへ
+持ち込まないため——代わりにテスト
+(`test_numeric_runtime_config_required_keys_match_the_producer`) が producer との機械
+同期を enforce する。`generator_code_sha256` は既に現 checkout と照合済みのため、生成側
+の形が世代間で動いてもこの検査が誤爆する経路は無い。
+
+**E-25. 公開 census bytes の pin を stdout へ残す**（PR #241 Codex P2 で是正）。書き込みに
+渡すのと同一の snapshot から sha256 を導出し、`census sha256: <hex>` として stdout へ出す
+（`json.dumps` の二重実行も同時に解消）。本リポジトリの計測 runbook は stdout を
+`*_stdout.txt` として dated record に保存する既存の流儀なので、この pin はそこに残る。
+文書内への自己埋め込みは自己言及（hash が自身を含む bytes を対象にできない）になるため
+せず、sidecar ファイルの新設も本段階では過剰と判断した（裁定）。
+
 **E-18. `bar_satisfied == not failures` を読み戻しで再検証する**（PR #241 Codex P2 で是正）。
 `evaluate_m2_bars` はこの不変条件を確立するが、集計器は読み戻し時に一度も検証して
 いなかった。型（E-16）が正しくても関係が壊れていれば、`true` + 非空 `failures` は

@@ -9212,6 +9212,15 @@ def _external_manifest_protected_paths(
 # である。ここがその立証を行う唯一の場所であり、**帯の判定が出る唯一の場所**でもある。
 _M2E_CENSUS_SCHEMA = "m2e-census/0.1"
 
+# E-24: census が要求する numeric_runtime_config のトップレベルキー集合。
+# `_numeric_runtime_config()` の返す形と機械同期される（テスト
+# test_numeric_runtime_config_required_keys_match_the_producer が enforce）。
+# census 内でその関数を直接呼ばないのは、計測 instrumentation の import
+# （threadpoolctl 等）を評価器プロセスへ持ち込まないため。
+_NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS = frozenset(
+    {"env", "cpu_count", "sched_affinity_count", "numpy_simd_dispatch", "threadpool_info"}
+)
+
 
 def load_verdict(path: "str | Path") -> ReportArtifact:
     """verdict JSON を single read で読む（read → hash → parse の 1 操作）。
@@ -9403,6 +9412,17 @@ def _require_homogeneous_census_inputs(
             f"aggregate_m2e_census: verdict が numeric_runtime_config を名乗っていない "
             f"（{nrc!r}）; env_digest が threadpool_info を畳まない宣言された穴は、この"
             "記録の照合を前提に許容されている——記録なしでは前提が成立しない (fail-closed)"
+        )
+    # E-24: 「非空 dict」だけでは `{"unknown": True}` のような placeholder が通る
+    # （PR #241 Codex P1）。生成側（`_numeric_runtime_config()`）が実際に返すトップ
+    # レベルキー集合と束縛する。`generator_code_sha256` は既に現 checkout と照合済み
+    # なので、生成側の形が世代間で動いてもこの検査が誤爆する経路は無い——ここで見て
+    # いるのは「生成側と同じ checkout が今この形を返す」という 1 点のみである。
+    if set(nrc) != _NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS:
+        raise ValueError(
+            f"aggregate_m2e_census: numeric_runtime_config のキー集合 {sorted(nrc)} が "
+            f"生成側の形 {sorted(_NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS)} と不一致; "
+            "placeholder を証拠として数えない (fail-closed)"
         )
     # 共有スカラーも census 成果物へそのまま載せるので、載せる前に形を確かめる
     # （E-14 と同じ規律。等値検査だけでは `None` 同士・文字列同士でも揃ってしまう）。
@@ -9729,6 +9749,16 @@ def aggregate_m2e_census(
                 f"{cell['bar_satisfied']!r} が bool でない; 真偽でない値を真偽として "
                 "評価すると fail が pass に化ける (fail-closed)"
             )
+        # E-22: 帯判定セルの gate_level 申告を凍結条件と束縛する（PR #241 Codex P1）。
+        # セルの選択は verdict の自己申告（top-level `level`）に依存しているため、
+        # category 側の `gate_level` 申告も凍結値（`conditions[arm]["gate_level"]`）と
+        # 束縛しなければ、別水準で当てたバーの結果が帯の判定として publish されうる。
+        if cell["gate_level"] != gate_level:
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の verdict が名乗る gate_level "
+                f"{cell['gate_level']!r} が凍結条件の {gate_level!r} と不一致; 別水準で "
+                "当てたバーの結果を帯の判定として publish しない (fail-closed)"
+            )
         # 併記する `failures` も形を要求する（成果物へそのまま載せるため）。
         if cell["failures"] is not None and not isinstance(cell["failures"], list):
             raise ValueError(
@@ -9747,6 +9777,31 @@ def aggregate_m2e_census(
                 f"{cell['bar_satisfied']!r} が failures {arm_failures!r} と矛盾する "
                 "（evaluate は bar_satisfied == not failures を確立している）; "
                 "根拠と結論が食い違う判定を publish しない (fail-closed)"
+            )
+        # E-23: 凍結閾値を census 自身が再適用し、metrics と bar_satisfied の整合を要求する
+        # （PR #241 Codex P1）。E-18 は bar_satisfied↔failures を束縛したが、metrics だけを
+        # 書き換えれば「凍結バーを割る metrics を level_response に載せながら pass を出す」
+        # 成果物が組めた。比較方向は evaluate と同一（min_rpa は < / max_vfa は > /
+        # max_octave_gap は >）。failures の文字列照合はしない——E-18 が bar_satisfied↔
+        # failures を、本検査が metrics↔bar_satisfied を束縛すれば連鎖は閉じる（文字列
+        # 形式への結合は brittle で over-engineering）。per-cell 検査で
+        # repeats_bit_identical is True を既に要求しているため、evaluate 側で bit 不一致
+        # 由来の failure が混ざるケースは band ループへ到達しない（整合は閾値のみで閉じる）。
+        frozen_bar = m2e_bars_data[_BARS_FILES["m2e_accuracy_bars.yaml"]["block_key"]].get(arm, {})
+        recomputed_satisfied = True
+        for metrics in cell["metrics"]:
+            if "min_rpa" in frozen_bar and metrics["raw_pitch_accuracy"] < frozen_bar["min_rpa"]:
+                recomputed_satisfied = False
+            if "max_vfa" in frozen_bar and metrics["voicing_false_alarm"] > frozen_bar["max_vfa"]:
+                recomputed_satisfied = False
+            if "max_octave_gap" in frozen_bar and metrics["octave_gap"] > frozen_bar["max_octave_gap"]:
+                recomputed_satisfied = False
+        if recomputed_satisfied != cell["bar_satisfied"]:
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の bar_satisfied "
+                f"{cell['bar_satisfied']!r} が、凍結バーを metrics へ再適用した結果 "
+                f"{recomputed_satisfied!r} と不一致; 判定と計測値が食い違う verdict を "
+                "publish しない (fail-closed)"
             )
         band[arm] = {
             "gate_level": gate_level,
@@ -9968,8 +10023,14 @@ def main() -> int:
         # census は「現 checkout と一致する」と検査したはずのコード pin を名乗りながら、
         # 実際には別 bytes の下で組まれた成果物になる。
         _require_unchanged_since_load()
-        _atomic_write_text(args.out, json.dumps(census, indent=2, sort_keys=True))
+        payload = json.dumps(census, indent=2, sort_keys=True)
+        # E-25: 公開した bytes の pin を、書いたのと同一の snapshot から導出して stdout へ
+        # 残す（PR #241 Codex P2）。runbook の流儀では stdout が *_stdout.txt として dated
+        # record に保存されるため、後日の改変・部分置換をこの pin で検出できる。文書内へ
+        # の自己埋め込みは自己言及になるためしない（sidecar 追加も本段階では過剰）。
+        _atomic_write_text(args.out, payload)
         print(f"wrote census to {args.out}")
+        print(f"  census sha256: {hashlib.sha256(payload.encode('utf-8')).hexdigest()}")
         print(
             f"  cells: {census['observed_cells_total']}/{census['expected_cells_total']} "
             f"({census['status']})"

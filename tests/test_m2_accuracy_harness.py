@@ -11551,3 +11551,88 @@ def test_cli_run_phase_still_uses_the_real_defaults_after_sentinel(
     assert calls[0]["workers"] == 1
     assert calls[0]["cell_store_role"] == harness._CELL_STORE_ROLE_RUN
     assert calls[0]["external_fixtures_path"] == harness.EXTERNAL_FIXTURES_PATH
+
+
+# ---------------------------------------------------------------------------
+# E-22〜E-25（PR #241 Codex 第 6 巡: P1×3 + P2）: 帯判定セルの gate_level 束縛・
+# 凍結閾値の再適用・numeric_runtime_config のスキーマ束縛・出力 bytes の pin。
+# ---------------------------------------------------------------------------
+
+
+def test_census_binds_the_gate_result_to_the_frozen_gate_level(tmp_path: Path) -> None:
+    """E-22: セルの選択は verdict の自己申告（top-level `level`）に依存するので、
+
+    category 側の `gate_level` 申告も凍結条件と束縛しなければ、別水準で当てたバーの
+    結果が帯の判定として publish されうる。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+            verdict["categories"][arm]["gate_level"] = "+6dB"
+    with pytest.raises(ValueError, match="gate_level"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize(
+    "broken_field, broken_value",
+    [("raw_pitch_accuracy", 0.10), ("octave_gap", 0.99)],
+)
+def test_census_replays_the_frozen_bar_against_the_pinned_metrics(
+    broken_field: str, broken_value: float, tmp_path: Path
+) -> None:
+    """E-23: metrics だけを書き換えれば「凍結バーを割る metrics を level_response に
+
+    載せながら pass を出す」成果物が組めていた。census 自身が凍結バーを metrics へ
+    再適用し、bar_satisfied との整合を要求する（`bar_satisfied` / `failures` は
+    そのまま = pass を装ったまま metrics だけ壊す）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        for metrics in verdicts[0]["categories"][arm]["metrics"]:
+            metrics[broken_field] = broken_value
+    with pytest.raises(ValueError, match="再適用した結果"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_a_placeholder_runtime_config_shape(tmp_path: Path) -> None:
+    """E-24: 「非空 dict」だけでは `{"unknown": True}` のような placeholder が通る。
+
+    生成側（`_numeric_runtime_config()`）が実際に返すキー集合と束縛する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["numeric_runtime_config"] = {"unknown": True}
+    with pytest.raises(ValueError, match="キー集合"):
+        _census(tmp_path, verdicts)
+
+
+def test_numeric_runtime_config_required_keys_match_the_producer() -> None:
+    """E-24 の機械同期: 凍結キー集合が実際の producer と食い違えば即座に気付く。"""
+    assert harness._NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS == frozenset(
+        harness._numeric_runtime_config().keys()
+    )
+
+
+def test_cli_census_prints_the_output_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """E-25: 公開した census bytes の sha256 を、書き込みと同一 snapshot から stdout へ残す。"""
+    paths = []
+    for index, verdict in enumerate(_m2e_census_verdicts(tmp_path)):
+        path = tmp_path / f"verdict_{index}.json"
+        path.write_text(json.dumps(verdict, sort_keys=True), encoding="utf-8")
+        paths.append(str(path))
+    bars_path = _write_m2e_bars(tmp_path)
+    out = tmp_path / "census.json"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv("--out", str(out), "--census", *paths, "--m2e-bars", str(bars_path)),
+    )
+    assert harness.main() == 0
+    captured = capsys.readouterr()
+    digest_lines = [line for line in captured.out.splitlines() if "census sha256:" in line]
+    assert len(digest_lines) == 1
+    printed_digest = digest_lines[0].split("census sha256:")[1].strip()
+    assert printed_digest == hashlib.sha256(out.read_bytes()).hexdigest()
