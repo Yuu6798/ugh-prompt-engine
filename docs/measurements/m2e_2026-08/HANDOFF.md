@@ -81,13 +81,19 @@ fail-closed（すべて **resolve 後**のパスで判定・各 1 テスト）:
 帯の判定を出す。
 
 ```bash
-python scripts/run_melody_accuracy.py --out <census>.json \
-    --census <verdict_p12>.json <verdict_p06>.json <verdict_p00>.json <verdict_m06>.json \
-    | tee <census_stdout>.txt
+set -o pipefail  # tee が Python の非ゼロ exit（fail-closed 拒否）を隠さないようにする
+python scripts/run_melody_accuracy.py \
+    --out docs/measurements/m2e_2026-08/census.json \
+    --census docs/measurements/m2e_2026-08/verdict_p12.json \
+             docs/measurements/m2e_2026-08/verdict_p06.json \
+             docs/measurements/m2e_2026-08/verdict_p00.json \
+             docs/measurements/m2e_2026-08/verdict_m06.json \
+    | tee docs/measurements/m2e_2026-08/census_stdout.txt
 ```
 
 stdout の `census sha256:` 行が公開 bytes の pin。`*_stdout.txt` として dated record に
-保存すること（保存しない実行は pin を残さない）。
+保存すること（保存しない実行は pin を残さない）。`pipefail` を欠くと `tee` の exit 0 が
+census の fail-closed 拒否を隠す——自動化はこの行ごとコピーすること。
 
 - 期待セル数は**積として再計算**する（80 × 4 水準 × 2 アーム × `repeats_min` = 1280）。
   `1280` を定数で書いていない（設計判断 E-2）。
@@ -140,14 +146,14 @@ C2/C3 以前の evaluate は実効 `P = 1`（10.0 h ÷ 160 セル = 225 s/セル
 
 ```bash
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-    --out <run_report>.json --categories V_remix_real_direct --level +12dB \
-    --external-manifest <manifest>.json --external-fixtures <fixtures>.yaml \
-    --cell-store <store_A> --repeat-index 0 --pin-threads
+    --out build/m2e/run_p12_r0.json --categories V_remix_real_direct --level +12dB \
+    --external-manifest build/m2e/manifest_p12.json --external-fixtures build/m2e/fixtures_p12.yaml \
+    --cell-store build/m2e/store_A --repeat-index 0 --pin-threads
 
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-    --out <verdict>.json --evaluate <run_report_0>.json <run_report_1>.json \
-    --external-manifest <manifest>.json --external-fixtures <fixtures>.yaml \
-    --eval-cell-store <store_B> --workers 2 --pin-threads
+    --out build/m2e/verdict_p12.json --evaluate build/m2e/run_p12_r0.json build/m2e/run_p12_r1.json \
+    --external-manifest build/m2e/manifest_p12.json --external-fixtures build/m2e/fixtures_p12.yaml \
+    --eval-cell-store build/m2e/store_B --workers 2 --pin-threads
 ```
 
 `--workers 2` なのは上記の頭打ち（`repeats_min = 2`）による。`--eval-cell-store` には
