@@ -9679,18 +9679,36 @@ def aggregate_m2e_census(
                     f"（{len(metrics_list) if isinstance(metrics_list, list) else metrics_list!r}）"
                 )
             else:
-                try:
-                    _require_finite_metrics(arm, metrics_list)
-                except ValueError as exc:
-                    problems.append(f"metrics が有限数値でない（{exc}）")
-                # E-27: 平均で保存される不変条件のみ再適用する（`_require_
-                # average_stable_metric_invariants` docstring に採否の経緯を記録）。
-                try:
-                    _require_average_stable_metric_invariants(
-                        arm, metrics_list, frozen_tolerance_cents=frozen_tolerance_cents
-                    )
-                except ValueError as exc:
-                    problems.append(f"metrics が平均安定不変条件に反する（{exc}）")
+                # E-31: 要素型を先に検査する（PR #241 Codex P2）。外側 list の長さしか
+                # 見ていないと、要素が `null` 等の非 dict のとき `_require_finite_metrics`
+                # 内の `in` 演算が **TypeError** を投げ、`except ValueError` を素通りして
+                # census 全体がクラッシュする——本来出すべき `census_incomplete` が
+                # 出せない（E-11 の裁定違反状態）。`except` を `(ValueError, TypeError)`
+                # へ広げる案は採らない（genuine bug を握りつぶす）——明示の型検査で先に
+                # 落とすのが正しい。型検査を通った場合のみ深い検査（有限性・平均安定
+                # 不変条件）へ進む。
+                non_object_indices = [
+                    i for i, m in enumerate(metrics_list) if not isinstance(m, dict)
+                ]
+                if non_object_indices:
+                    for i in non_object_indices:
+                        problems.append(
+                            f"metrics[{i}] {metrics_list[i]!r} が JSON object でない; "
+                            "形の壊れた計測記録を census がクラッシュではなく未完として報告する"
+                        )
+                else:
+                    try:
+                        _require_finite_metrics(arm, metrics_list)
+                    except ValueError as exc:
+                        problems.append(f"metrics が有限数値でない（{exc}）")
+                    # E-27: 平均で保存される不変条件のみ再適用する（`_require_
+                    # average_stable_metric_invariants` docstring に採否の経緯を記録）。
+                    try:
+                        _require_average_stable_metric_invariants(
+                            arm, metrics_list, frozen_tolerance_cents=frozen_tolerance_cents
+                        )
+                    except ValueError as exc:
+                        problems.append(f"metrics が平均安定不変条件に反する（{exc}）")
                 # E-28: `repeats_bit_identical` の申告は評価器の独立測り直しが立証する
                 # が、census が**公開する** per-repeat metrics 自体が申告どおり相互
                 # bit 一致していることは、boolean 申告と独立に検査できる必要条件

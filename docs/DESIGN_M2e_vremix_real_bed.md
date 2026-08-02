@@ -1193,6 +1193,12 @@ evaluate の独立測り直し（publish 条件）であり、per-clip digest �
 足して census で再検証するのは E-1（evaluate のゲートを二重実装しない）に反するため
 行わない。
 
+**E-31. metrics 要素の非 object 破損をクラッシュでなく census_incomplete として報告する**
+（PR #241 Codex P2 で是正）。E-14 は外側 list しか見ていなかった——要素が `null` 等の
+非 dict だと `_require_finite_metrics` 内の `in` 演算が `TypeError` を投げ、
+`except ValueError` を素通りして census 全体がクラッシュしていた。報告可能な不備は
+報告するのが census の目的（E-11）であり、要素型を明示検査して `problems` へ落とす。
+
 **E-18. `bar_satisfied == not failures` を読み戻しで再検証する**（PR #241 Codex P2 で是正）。
 `evaluate_m2_bars` はこの不変条件を確立するが、集計器は読み戻し時に一度も検証して
 いなかった。型（E-16）が正しくても関係が壊れていれば、`true` + 非空 `failures` は

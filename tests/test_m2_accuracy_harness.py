@@ -11725,3 +11725,27 @@ def test_census_rejects_metrics_that_contradict_the_identity_flag(tmp_path: Path
     gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
     for arm in ("V_remix_real_direct", "V_remix_real_stem"):
         assert "bit 一致" in gaps[(level, arm)]
+
+
+@pytest.mark.parametrize("broken_element", [None, "not-a-dict"])
+def test_census_reports_non_object_metric_records_as_incomplete(
+    broken_element: Any, tmp_path: Path
+) -> None:
+    """E-31: 外側 list の長さしか見ていないと、要素が非 dict のとき
+
+    `_require_finite_metrics` 内の `in` 演算が **TypeError** を投げ、
+    `except ValueError` を素通りして census 全体がクラッシュする——本来出すべき
+    `census_incomplete` が出せない（E-11 の裁定違反状態）。**raise させず**
+    per-cell の `problems`（= `census_incomplete`）として報告することを固定する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[1]["categories"][arm]["metrics"][1] = broken_element
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[1]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "JSON object でない" in gaps[(level, arm)]
