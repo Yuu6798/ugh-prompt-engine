@@ -1099,6 +1099,21 @@ E-13 の等値検査は `verdict.get(field)` を比べるので、**全 verdict 
 > 同質性検査を「値が揃っているか」だけで書くと、**不在は常に揃う**。証拠を要求する
 > フィールドには、比較の前に**存在と形**を課す必要がある。
 
+**E-19〜E-21. E-17 の一般則を全証拠フィールドへ適用し切る**（PR #241 Codex P1×2 + P2 で是正）。
+E-17 は builder provenance だけを塞いだが、同じ論法——**不在は常に揃う**——が当たる箇所が
+3 つ残っていた。(1) `numeric_runtime_config`: `env_digest` が `threadpool_info` を畳まない
+宣言された穴は、この記録の照合を前提に許容されている——記録なしでは前提が成立しない。
+存在と非空 dict を要求する。(2) アーム対の `external_manifest_sha256` /
+`external_fixtures_sha256`: 両アームが揃って欠けば `None == None` で対の照合が空転する。
+per-cell 検査で 64-hex sha256 を要求する（raise ではなく `problems` へ——E-11 の裁定どおり
+部分測定は報告する）。(3) 共有スカラー（`tolerance_cents` / `est_voiced_confidence_floor`）:
+成果物へそのまま載せる値なので有限数値を要求する（E-14 と同じ規律・これは自己点検で発見）。
+
+CLI の未使用フラグ拒否（E-15）も**値比較では不完全**だった——`--workers 1` のような
+既定値の明示指定は検出できない。センチネル既定値（`_ARGPARSE_UNSET`）で「渡されたか」
+そのものを追跡し、census phase では既定値と同じ値でも渡された事実を拒否する。
+census 検査の直後にセンチネルを実既定へ正規化し、run/evaluate 経路へ漏らさない。
+
 **E-18. `bar_satisfied == not failures` を読み戻しで再検証する**（PR #241 Codex P2 で是正）。
 `evaluate_m2_bars` はこの不変条件を確立するが、集計器は読み戻し時に一度も検証して
 いなかった。型（E-16）が正しくても関係が壊れていれば、`true` + 非空 `failures` は

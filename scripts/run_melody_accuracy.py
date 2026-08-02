@@ -9393,6 +9393,26 @@ def _require_homogeneous_census_inputs(
                 f"{builder.get(key)!r} が 64-hex sha256 でない; 混合式の素性を名乗るだけの "
                 "申告を照合済みとして扱わない (fail-closed)"
             )
+    # E-19: `numeric_runtime_config` にも存在と形を要求する（PR #241 Codex P1・E-17 と
+    # 同じ論法）。`env_digest` は `threadpool_info` を意図的に畳まないので、この記録の
+    # 照合が唯一の防壁である——全 verdict がフィールドを欠けば `None` 同士で「揃い」、
+    # 別 BLAS/threadpool 構成の判定が census_complete に合流できてしまう。
+    nrc = common["numeric_runtime_config"]
+    if not isinstance(nrc, dict) or not nrc:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict が numeric_runtime_config を名乗っていない "
+            f"（{nrc!r}）; env_digest が threadpool_info を畳まない宣言された穴は、この"
+            "記録の照合を前提に許容されている——記録なしでは前提が成立しない (fail-closed)"
+        )
+    # 共有スカラーも census 成果物へそのまま載せるので、載せる前に形を確かめる
+    # （E-14 と同じ規律。等値検査だけでは `None` 同士・文字列同士でも揃ってしまう）。
+    for scalar_key in ("tolerance_cents", "est_voiced_confidence_floor"):
+        scalar = common[scalar_key]
+        if isinstance(scalar, bool) or not isinstance(scalar, (int, float)) or not math.isfinite(scalar):
+            raise ValueError(
+                f"aggregate_m2e_census: {scalar_key} {scalar!r} が有限数値でない; "
+                "凍結スカラーを名乗らない判定を census に数えない (fail-closed)"
+            )
     return common
 
 
@@ -9560,6 +9580,15 @@ def aggregate_m2e_census(
                     _require_finite_metrics(arm, metrics_list)
                 except ValueError as exc:
                     problems.append(f"metrics が有限数値でない（{exc}）")
+            # E-20: アーム対の素性 hash にも存在と形を要求する（PR #241 Codex P1・E-17 と
+            # 同じ論法）。両アームが揃って欠けば `None == None` でアーム間照合が空転し、
+            # 無関係な音源世代の対が「対」として数えられる。
+            for provenance_key in ("external_manifest_sha256", "external_fixtures_sha256"):
+                if not _is_sha256(cell[provenance_key]):
+                    problems.append(
+                        f"{provenance_key} {cell[provenance_key]!r} が 64-hex sha256 でない"
+                        "（素性を名乗らないアームを対にしない）"
+                    )
             counted = (
                 len(clip_ids) * cell["n_rows"]
                 if isinstance(clip_ids, list) and isinstance(cell["n_rows"], int)
@@ -9742,6 +9771,11 @@ def aggregate_m2e_census(
     return census
 
 
+# census phase は「渡されたか」を問う必要がある——値の比較では既定値の明示指定を検出
+# できない（PR #241 Codex P2）。
+_ARGPARSE_UNSET = object()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True, help="出力 JSON の書き出し先")
@@ -9781,7 +9815,7 @@ def main() -> int:
         f"{' / '.join(_M2E_LEVEL_LADDER)}）。水準軸を持つカテゴリを測る run では必須。"
         "`gate_level` 以外の水準は破断曲線の記録専用で、evaluate はバーを適用しない",
     )
-    parser.add_argument("--specs", type=Path, default=SPECS_PATH)
+    parser.add_argument("--specs", type=Path, default=_ARGPARSE_UNSET)
     parser.add_argument(
         "--categories",
         nargs="+",
@@ -9803,7 +9837,7 @@ def main() -> int:
     parser.add_argument(
         "--external-fixtures",
         type=Path,
-        default=EXTERNAL_FIXTURES_PATH,
+        default=_ARGPARSE_UNSET,
         metavar="m2c_external_fixtures.yaml",
         help="外部素材カテゴリの事前登録 pin ファイル（既定: 凍結 committed ファイル）。"
         "測り直し子プロセスへの明示転送・`--out` 保護のためテストでの差し替えを想定",
@@ -9840,7 +9874,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--cell-store-role",
-        default=_CELL_STORE_ROLE_RUN,
+        default=_ARGPARSE_UNSET,
         choices=list(_CELL_STORE_ROLES),
         help="このプロセスが書くセルレコードの役割（既定 run）。**evaluate は "
         "測り直しの子プロセス専用**で、評価器が自動で付ける——手で渡すものではない。"
@@ -9862,7 +9896,7 @@ def main() -> int:
     parser.add_argument(
         "--workers",
         type=int,
-        default=1,
+        default=_ARGPARSE_UNSET,
         metavar="P",
         help="設計 §8.3 の並列度 P。**run phase と evaluate phase で意味が非対称**"
         "（設計判断 D-2）: run phase では宣言値で実行そのものは変えない（clip ループは "
@@ -9889,24 +9923,29 @@ def main() -> int:
         # 4 つだけ。それ以外は黙って無視されるのではなく拒否する（PR #241 Codex P2）——
         # 例えば `--external-manifest` を渡した wrapper は「census がその manifest に
         # 束縛される」と信じうるが、成果物はそれを一度も読まない。
-        for flag, value, unused_when in (
-            ("--categories", args.categories, None),
-            ("--level", args.level, None),
-            ("--cell-store", args.cell_store, None),
-            ("--eval-cell-store", args.eval_cell_store, None),
-            ("--repeat-index", args.repeat_index, None),
-            ("--external-manifest", args.external_manifest, None),
-            ("--external-fixtures", args.external_fixtures, EXTERNAL_FIXTURES_PATH),
-            ("--specs", args.specs, SPECS_PATH),
-            ("--workers", args.workers, 1),
-            ("--pin-threads", args.pin_threads, False),
-            ("--cell-store-role", args.cell_store_role, _CELL_STORE_ROLE_RUN),
+        # センチネル化した 4 つ（--specs / --external-fixtures / --workers /
+        # --cell-store-role）は「渡されたか」そのものを問う（値比較では既定値の明示
+        # 指定を検出できない: PR #241 Codex P2 / E-21）。--pin-threads は store_true
+        # で「既定値の明示指定」が構造上不可能なので従来どおり True 判定のまま。
+        for flag, rejected in (
+            ("--categories", args.categories is not None),
+            ("--level", args.level is not None),
+            ("--cell-store", args.cell_store is not None),
+            ("--eval-cell-store", args.eval_cell_store is not None),
+            ("--repeat-index", args.repeat_index is not None),
+            ("--external-manifest", args.external_manifest is not None),
+            ("--external-fixtures", args.external_fixtures is not _ARGPARSE_UNSET),
+            ("--specs", args.specs is not _ARGPARSE_UNSET),
+            ("--workers", args.workers is not _ARGPARSE_UNSET),
+            ("--pin-threads", args.pin_threads is True),
+            ("--cell-store-role", args.cell_store_role is not _ARGPARSE_UNSET),
         ):
-            if value != unused_when:
+            if rejected:
                 raise SystemExit(
                     f"{flag} は census phase では無効（census が読むのは --census / "
                     "--out / --bars / --m2e-bars だけで、測定も評価もしない; 黙って "
-                    "無視して「その引数に束縛された」と誤解させない）"
+                    "無視して「その引数に束縛された」と誤解させない。既定値と同じ値を "
+                    "渡しても、渡された事実そのものを拒否する）"
                 )
         protected = {Path(p).resolve() for p in args.census}
         protected.add(Path(args.m2e_bars).resolve())
@@ -9943,6 +9982,17 @@ def main() -> int:
             for arm, result in sorted(census["band_verdict"].items()):
                 print(f"  {arm} @ {result['gate_level']}: {result['status']}")
         return 0
+    # センチネルを実際の既定値へ戻す（census phase 以外の経路はここから先で従来どおりの
+    # 値を見る。センチネルが下流へ漏れる経路を作らない）。census 拒否検査は上のブロック
+    # 内でセンチネルのまま行っており、この正規化は他の全検査より前に置く。
+    if args.specs is _ARGPARSE_UNSET:
+        args.specs = SPECS_PATH
+    if args.external_fixtures is _ARGPARSE_UNSET:
+        args.external_fixtures = EXTERNAL_FIXTURES_PATH
+    if args.workers is _ARGPARSE_UNSET:
+        args.workers = 1
+    if args.cell_store_role is _ARGPARSE_UNSET:
+        args.cell_store_role = _CELL_STORE_ROLE_RUN
     if args.workers < 1:
         raise SystemExit(f"--workers {args.workers} は 1 以上の整数のみ許可する")
     # `--cell-store-role` は run phase のセル書き込みにしか意味が無い。測っていない

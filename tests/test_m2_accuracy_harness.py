@@ -11436,3 +11436,118 @@ def test_census_rejects_a_gate_result_that_contradicts_its_failures(
         gate["failures"] = failures
     with pytest.raises(ValueError, match="矛盾する"):
         _census(tmp_path, verdicts)
+
+
+# ---------------------------------------------------------------------------
+# E-19〜E-21（PR #241 レビュー是正 + 自己点検）: E-17 と同じ論法——**不在は常に揃う**
+# ——が当たる箇所を全証拠フィールドへ適用し切る。
+# ---------------------------------------------------------------------------
+
+
+def test_census_rejects_verdicts_that_all_omit_the_numeric_runtime_config(
+    tmp_path: Path,
+) -> None:
+    """E-19: 全 verdict が numeric_runtime_config を欠けば `None` 同士で「揃う」。
+
+    `env_digest` は `threadpool_info` を意図的に畳まない——その穴は「記録は
+    `numeric_runtime_config` に残る」という前提で許容されている。フィールドを剥がす
+    だけで E-17 と同型の照合が無効化できてしまう非対称だった。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict.pop("numeric_runtime_config", None)
+    with pytest.raises(ValueError, match="numeric_runtime_config を名乗っていない"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize("scalar_key", ["tolerance_cents", "est_voiced_confidence_floor"])
+def test_census_requires_finite_shared_scalars(scalar_key: str, tmp_path: Path) -> None:
+    """自己点検: 共有スカラーも census 成果物へそのまま載せるので、載せる前に形を確かめる。
+
+    等値検査だけでは `None` 同士でも揃ってしまう（E-14 と同じ規律）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict[scalar_key] = None
+    with pytest.raises(ValueError, match="有限数値でない"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize(
+    "field", ["external_manifest_sha256", "external_fixtures_sha256"]
+)
+def test_census_counts_arms_without_provenance_hashes_as_missing(
+    field: str, tmp_path: Path
+) -> None:
+    """E-20: 両アームが揃って素性 hash を欠けば `None == None` でアーム間照合が空転する。
+
+    per-cell 検査で拾い、raise ではなく `census_incomplete` として報告する（E-11 の
+    裁定どおり——素性を名乗らないアームは「そのセルを未完として報告する」）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    level = harness._M2E_LEVEL_LADDER[1]
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[1]["categories"][arm].pop(field, None)
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "64-hex sha256 でない" in gaps[(level, arm)]
+
+
+@pytest.mark.parametrize(
+    "flag, value",
+    [
+        ("--workers", "1"),
+        ("--cell-store-role", "run"),
+        ("--specs", str(harness.SPECS_PATH)),
+    ],
+)
+def test_cli_census_rejects_explicitly_supplied_default_values(
+    flag: str, value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-21: 値比較では「渡されたか」を問えない——既定値と同じ値の明示指定も拒否する。
+
+    `--workers 1` は argparse の結果としては省略と区別が付かない。センチネル既定値
+    （`_ARGPARSE_UNSET`）で「渡された事実」そのものを追跡する。
+    """
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "census.json"),
+            "--census", str(verdict_path),
+            flag, value,
+        ),
+    )
+    with pytest.raises(SystemExit, match="census phase では無効"):
+        harness.main()
+
+
+def test_cli_run_phase_still_uses_the_real_defaults_after_sentinel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-21 の pin: センチネル化後も run phase の既定は生きている（実測はしない）。
+
+    census 検査の直後に正規化を置いているので、run/evaluate 経路にはセンチネルが
+    一切漏れない——`run_accuracy` が実際の既定パス/既定値を受け取ることを確認する。
+    """
+    calls: "List[Dict[str, Any]]" = []
+
+    def _spy(**kwargs: Any) -> Dict[str, Any]:
+        calls.append(kwargs)
+        return {"categories": {}}
+
+    monkeypatch.setattr(harness, "run_accuracy", _spy)
+    monkeypatch.setattr(sys, "argv", _cli_argv("--out", str(tmp_path / "r.json")))
+
+    assert harness.main() == 0
+    assert len(calls) == 1
+    assert calls[0]["specs_path"] == harness.SPECS_PATH
+    assert calls[0]["workers"] == 1
+    assert calls[0]["cell_store_role"] == harness._CELL_STORE_ROLE_RUN
+    assert calls[0]["external_fixtures_path"] == harness.EXTERNAL_FIXTURES_PATH
