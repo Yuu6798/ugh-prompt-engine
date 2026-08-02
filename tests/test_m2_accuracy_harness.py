@@ -9700,6 +9700,27 @@ def test_env_digest_reacts_to_result_affecting_numeric_runtime_env(
     assert harness._env_digest() != baseline
 
 
+def test_env_digest_folds_the_runtime_implementation_hashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: 版据え置きの in-place patch は版文字列では捕まらない——実装 hash を畳む。
+
+    畳んでいなければ、rebuild された実装の下で旧実装のセルが resume される。
+    """
+    covered = dict(harness._env_digest_runtime_code())
+    assert covered["resolved"] is True
+    # 実行スタックの主要どころが実際に覆われていること（空の pin で「揃った」にしない）。
+    assert {"numpy", "librosa", "soundfile", "mir_eval"} <= set(covered["covered"])
+
+    baseline = harness._env_digest()
+    monkeypatch.setattr(
+        harness,
+        "_env_digest_runtime_code",
+        lambda: (("resolved", True), ("sha256", "9" * 64), ("covered", ("numpy",))),
+    )
+    assert harness._env_digest() != baseline
+
+
 def test_cell_store_record_path_depends_on_the_full_key(tmp_path: Path) -> None:
     """鍵→パス写像が `category`/`level`/`entry_id`/`repeat_index` の全 4 要素に
     依存すること（1 つでも変えれば別ファイルになる）。"""

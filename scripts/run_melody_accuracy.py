@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import ast
 import copy
+import functools
 import hashlib
 import json
 import math
@@ -5290,6 +5291,38 @@ def _env_digest_thread_settings() -> Dict[str, Any]:
     return settings
 
 
+@functools.lru_cache(maxsize=1)
+def _env_digest_runtime_code() -> "Tuple[Tuple[str, Any], ...]":
+    """route の実行スタックの**実装 hash**（版文字列だけでは足りない）。
+
+    `importlib.metadata.version()` は、パッケージが版を据え置いたまま in-place で
+    patch/rebuild された場合に動かない——`env_digest` が同じままなので
+    `_cell_record_mismatches` は旧実装で採ったセルを新ランタイムの下で resume する。
+    リポジトリは実装 hash を既に持っている（`provenance.packages_code_sha256`。
+    実行 pin 側が使っているのと同じ関数）ので、それを畳む。
+
+    導入済みなのに hash できない（namespace/zip 配置等）場合、`packages_code_sha256`
+    は送出する——ここでは run を落とさず**失敗の事実を payload に載せる**
+    （`_env_digest_demucs_weights` と同じ流儀。形が変わるので digest は必ず変わる）。
+
+    プロセス内で 1 度だけ計算する（初回 ~9 秒）。プロセス内でのコード差し替えは
+    `_require_unchanged_since_load()` の post-run 再計算が別途捕まえる。戻り値は
+    lru_cache のためタプル（`_env_digest` が dict へ戻す）。
+    """
+    from svp_rpe.melody.provenance import packages_code_sha256
+
+    names = tuple(sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())))
+    try:
+        digest, covered = packages_code_sha256(names)
+    except Exception as exc:
+        return (("resolved", False), ("reason", f"{type(exc).__name__}: {exc}"))
+    return (
+        ("resolved", True),
+        ("sha256", digest or _ENV_DIGEST_ABSENT_MARKER),
+        ("covered", tuple(covered)),
+    )
+
+
 def _env_digest_numeric_runtime() -> Dict[str, Any]:
     """数値結果に効く実行時構成（`_numeric_runtime_config` と同じ env 集合）。
 
@@ -5381,6 +5414,9 @@ def _env_digest() -> str:
         "thread_settings": _env_digest_thread_settings(),
         # 数値に効く実行時構成（BLAS スレッド/CPU ターゲット/SIMD 無効化/再現モード）。
         "numeric_runtime": _env_digest_numeric_runtime(),
+        # 実行スタックの**実装 hash**。版据え置きの in-place patch は版文字列では
+        # 捕まらず、旧実装で採ったセルが新ランタイムの下で resume される。
+        "runtime_code": dict(_env_digest_runtime_code()),
         # rev.6 §8.9.3: CPU を畳まない env_digest は「合算してよいか」の判定として
         # 壊れている。命令セットが違えば数値経路が分かれうるため。
         "cpu_identity": _env_digest_cpu_identity(),
