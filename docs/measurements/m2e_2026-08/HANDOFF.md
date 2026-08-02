@@ -127,6 +127,12 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
 resume し、独立検証が自分自身との比較に化ける。evaluate は提出 report の
 `cell_store_relative` と突き合わせて fail-closed に拒否する。
 
+**`store_A` をコピーして `store_B` を作るのも禁止**（経路検査は通ってしまうが、
+コピーされたレコードは run 由来なので独立計算ではない）。セルレコードは
+`store_role`（`run` / `evaluate`）を持ち、役割の異なるレコードは resume されず
+再測定される（rev.6 §8.9.4 D-5）——コストは戻るが、正しさは戻る。
+`store_B` は**空ディレクトリから始めること**。
+
 **`P` の効果は実測比で示すこと**（`総時間 / P` の外挿値を成果として書かない・§3.2）。
 C2/C3 の PR では fake backend の実測比を記載した。r4 では実スタックで測り直す。
 
