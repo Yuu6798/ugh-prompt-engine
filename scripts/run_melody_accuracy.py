@@ -9271,12 +9271,73 @@ def _m2e_normalized_cohort_ids(level: str, clip_ids: "List[str]") -> "Tuple[str,
     return tuple(sorted(normalized))
 
 
+def _require_average_stable_metric_invariants(
+    arm: str, metrics_list: "List[Dict[str, Any]]", *, frozen_tolerance_cents: float
+) -> None:
+    """`_require_metrics_contract` の不変条件のうち、算術平均で保存されるものだけを
+
+    census 側で再適用する（PR #241 Codex P1・E-27）。
+
+    まず `_require_metrics_contract` をそのまま census の平均済み metrics に当てる
+    実装を試した——**通らなかった**。evaluate は external カテゴリで contract を
+    **clip metrics** にのみ適用し、census が持つカテゴリ平均 metrics（`row["metrics"]`
+    = `_average_external_clip_metrics` の出力）には `_require_finite_metrics` しか
+    当てていない。`voiced_chroma_correct_frame_count` は算術平均で非整数 float に
+    なりうるため（`_average_external_clip_metrics` docstring）、full contract の
+    整数不変条件は平均後の値では成立が保証されない（実測でも 2 clip 平均が非整数に
+    なるケースを確認した）。
+
+    census は clip 単位の証拠を持たない（E-1: evaluate のゲートを二重実装しない）ので
+    contract 全体は当てられない——しかし以下は**単純算術平均で厳密に保存される**ため
+    census 側でも意味を持つ:
+
+    - (a) `metrics.tolerance_cents`: 平均前は clip 間で同一値であることが
+      `_average_external_clip_metrics` 自身の fail-closed 検査で保証されており、
+      平均後もその値のまま残る（定数の平均は定数）。凍結値との厳密一致を要求する。
+    - (b) `raw_chroma_accuracy >= raw_pitch_accuracy`: clip ごとに成立する非負差
+      （`octave_gap_i = rca_i - rpa_i >= 0`）の算術平均は非負なので、平均後も成立する。
+    - (c) `octave_gap == raw_chroma_accuracy - raw_pitch_accuracy`: 算術平均は
+      加減算と可換（`mean(rca_i - rpa_i) == mean(rca_i) - mean(rpa_i)`）なので、
+      浮動小数点誤差の範囲で成立する。
+    """
+    for repeat_idx, metrics in enumerate(metrics_list):
+        where = f"arm {arm!r} repeat[{repeat_idx}]"
+        for field in ("raw_pitch_accuracy", "raw_chroma_accuracy", "octave_gap", "tolerance_cents"):
+            if field not in metrics:
+                raise ValueError(f"{where} の metrics が {field} を欠く")
+            value = metrics[field]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{where} の {field} {value!r} が数値でない")
+
+        nested_tolerance = float(metrics["tolerance_cents"])
+        if nested_tolerance != float(frozen_tolerance_cents):
+            raise ValueError(
+                f"{where} の metrics.tolerance_cents {nested_tolerance!r} が凍結値 "
+                f"{frozen_tolerance_cents} と不一致"
+            )
+        rpa = float(metrics["raw_pitch_accuracy"])
+        rca = float(metrics["raw_chroma_accuracy"])
+        gap = float(metrics["octave_gap"])
+        if rca < rpa - 1e-9:
+            raise ValueError(
+                f"{where} の raw_chroma_accuracy {rca!r} が raw_pitch_accuracy {rpa!r} を "
+                "下回る（chroma 一致は pitch 一致の必要条件）"
+            )
+        if abs(gap - (rca - rpa)) > 1e-9:
+            raise ValueError(
+                f"{where} の octave_gap {gap!r} が raw_chroma_accuracy - raw_pitch_accuracy "
+                f"({rca - rpa!r}) と一致しない"
+            )
+
+
 def _require_homogeneous_census_inputs(
     verdicts: "List[Dict[str, Any]]",
     *,
     m2e_bars_sha256: str,
     bars_sha256: str,
     frozen_repeats_min: int,
+    frozen_tolerance_cents: float,
+    frozen_est_voiced_floor: float,
 ) -> Dict[str, Any]:
     """集計してよい verdict 群かを検査し、共通スカラーを返す（fail-closed）。
 
@@ -9426,12 +9487,25 @@ def _require_homogeneous_census_inputs(
         )
     # 共有スカラーも census 成果物へそのまま載せるので、載せる前に形を確かめる
     # （E-14 と同じ規律。等値検査だけでは `None` 同士・文字列同士でも揃ってしまう）。
-    for scalar_key in ("tolerance_cents", "est_voiced_confidence_floor"):
+    # E-26: 有限性だけでは足りない（PR #241 Codex P1）。E-7（repeats_min）で自分が
+    # 適用した規律との非対称——verdict が名乗る `tolerance_cents` / `est_voiced_
+    # confidence_floor` は、census 自身が読んだ基底バーの**実値**とも突き合わせる。
+    # 50 cents で測った metrics を 5 cents の測定として publish しない。
+    for scalar_key, frozen_value in (
+        ("tolerance_cents", frozen_tolerance_cents),
+        ("est_voiced_confidence_floor", frozen_est_voiced_floor),
+    ):
         scalar = common[scalar_key]
         if isinstance(scalar, bool) or not isinstance(scalar, (int, float)) or not math.isfinite(scalar):
             raise ValueError(
                 f"aggregate_m2e_census: {scalar_key} {scalar!r} が有限数値でない; "
                 "凍結スカラーを名乗らない判定を census に数えない (fail-closed)"
+            )
+        if float(scalar) != float(frozen_value):
+            raise ValueError(
+                f"aggregate_m2e_census: {scalar_key} {scalar!r} が凍結バーの実値 "
+                f"{frozen_value!r} と不一致; 50 cents で測った metrics を 5 cents の測定と "
+                "して publish しない (fail-closed)"
             )
     return common
 
@@ -9469,7 +9543,14 @@ def aggregate_m2e_census(
     # 集計器は**自分で読んだ凍結ファイル**から `repeats_min` を取り、verdict の自己申告は
     # それとの一致を要求するだけにする（PR #241 Codex P2）。
     bars, bars_sha256 = load_bars(bars_path)
-    frozen_repeats_min = int(bars.verify(bars_sha256)["m2_accuracy_bars"]["repeats_min"])
+    bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
+    frozen_repeats_min = int(bar_block["repeats_min"])
+    # E-26: `tolerance_cents` / `est_voiced_confidence_floor` も、`evaluate_m2_bars`
+    # が `_require_frozen_tolerance` / `_require_frozen_est_voicing_floor` で読むのと
+    # 同じ block（`bar_block`）から抽出する。census 自身の readback がここで凍結値を
+    # 独自解釈すると、evaluate の関所と census の関所が別の「凍結値」を指しうる。
+    frozen_tolerance_cents = float(bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
+    frozen_est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])
     arms = _categories_owned_by("m2e_accuracy_bars.yaml")
 
     parsed: "List[Dict[str, Any]]" = []
@@ -9502,6 +9583,8 @@ def aggregate_m2e_census(
         m2e_bars_sha256=m2e_bars_sha256,
         bars_sha256=bars_sha256,
         frozen_repeats_min=frozen_repeats_min,
+        frozen_tolerance_cents=frozen_tolerance_cents,
+        frozen_est_voiced_floor=frozen_est_voiced_floor,
     )
     repeats_min = frozen_repeats_min
     expected_cells = _m2e_census_expected_cells(repeats_min)
@@ -9600,6 +9683,25 @@ def aggregate_m2e_census(
                     _require_finite_metrics(arm, metrics_list)
                 except ValueError as exc:
                     problems.append(f"metrics が有限数値でない（{exc}）")
+                # E-27: 平均で保存される不変条件のみ再適用する（`_require_
+                # average_stable_metric_invariants` docstring に採否の経緯を記録）。
+                try:
+                    _require_average_stable_metric_invariants(
+                        arm, metrics_list, frozen_tolerance_cents=frozen_tolerance_cents
+                    )
+                except ValueError as exc:
+                    problems.append(f"metrics が平均安定不変条件に反する（{exc}）")
+                # E-28: `repeats_bit_identical` の申告は評価器の独立測り直しが立証する
+                # が、census が**公開する** per-repeat metrics 自体が申告どおり相互
+                # bit 一致していることは、boolean 申告と独立に検査できる必要条件
+                # （PR #241 Codex P1）。bit 一致を名乗りながら公開 metrics が repeat 間で
+                # 食い違う verdict を数えない。**十分条件ではない**——平均が偶然一致して
+                # clip が異なるケースは検出できない（宣言された限界、設計ノート E-28）。
+                if len({json.dumps(m, sort_keys=True) for m in metrics_list}) != 1:
+                    problems.append(
+                        "metrics が repeats_bit_identical=True を名乗りながら repeat 間で "
+                        "bit 一致していない"
+                    )
             # E-20: アーム対の素性 hash にも存在と形を要求する（PR #241 Codex P1・E-17 と
             # 同じ論法）。両アームが揃って欠けば `None == None` でアーム間照合が空転し、
             # 無関係な音源世代の対が「対」として数えられる。
@@ -9690,8 +9792,12 @@ def aggregate_m2e_census(
         "m2e_bars_sha256": m2e_bars_sha256,
         "m2e_bars_path_relative": _repo_relative_path(m2e_bars_path),
         "env_digest": common["env_digest"],
-        "tolerance_cents": common["tolerance_cents"],
-        "est_voiced_confidence_floor": common["est_voiced_confidence_floor"],
+        # E-26: `common[...]` ではなく凍結値を書く（E-7 の `repeats_min` と同型）。
+        # `_require_homogeneous_census_inputs` は verdict の申告が凍結値と厳密一致する
+        # ことを既に検査しているので値は同じだが、成果物の供給源を「集計器が読んだ
+        # 凍結ファイル」に統一する。
+        "tolerance_cents": frozen_tolerance_cents,
+        "est_voiced_confidence_floor": frozen_est_voiced_floor,
         "repeats_min": repeats_min,
         "levels": list(_M2E_LEVEL_LADDER),
         "arms": list(arms),

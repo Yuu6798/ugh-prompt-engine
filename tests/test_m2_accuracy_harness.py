@@ -10878,6 +10878,11 @@ def test_census_complete_emits_the_band_verdict_and_all_four_levels(tmp_path: Pa
     assert census["unlocks_m4_g2"] is False
     assert any("別の曲" in limit for limit in census["declared_limits"])
 
+    # E-26: 成果物の共有スカラーは verdict の自己申告（`common[...]`）ではなく、
+    # census 自身が読んだ凍結バー（`BARS_PATH` の `m2_accuracy_bars` block）由来。
+    assert census["tolerance_cents"] == 50.0
+    assert census["est_voiced_confidence_floor"] == 0.30
+
 
 def test_census_emits_fail_when_the_gate_level_bar_is_violated(tmp_path: Path) -> None:
     """バー違反は帯の `fail` として出る（census が揃っている場合に限る）。"""
@@ -11585,11 +11590,23 @@ def test_census_replays_the_frozen_bar_against_the_pinned_metrics(
     載せながら pass を出す」成果物が組めていた。census 自身が凍結バーを metrics へ
     再適用し、bar_satisfied との整合を要求する（`bar_satisfied` / `failures` は
     そのまま = pass を装ったまま metrics だけ壊す）。
+
+    `octave_gap == raw_chroma_accuracy - raw_pitch_accuracy` の関係（E-27 が per-cell で
+    再検査する）は保ったまま壊す——単独フィールドだけを書き換えると E-27 が先に
+    per-cell で拾って `census_incomplete` にしてしまい、本テストが確かめたい E-23
+    （band ループでの凍結バー再適用）まで到達しない。
     """
     verdicts = _m2e_census_verdicts(tmp_path)
     for arm in ("V_remix_real_direct", "V_remix_real_stem"):
         for metrics in verdicts[0]["categories"][arm]["metrics"]:
             metrics[broken_field] = broken_value
+            # rca は動かさず、rpa/gap の一方を broken_value に合わせて連動させ、
+            # gap == rca - rpa を保つ（E-27 を素通りさせて E-23 まで到達させる）。
+            rca = metrics["raw_chroma_accuracy"]
+            if broken_field == "raw_pitch_accuracy":
+                metrics["octave_gap"] = rca - broken_value
+            elif broken_field == "octave_gap":
+                metrics["raw_pitch_accuracy"] = rca - broken_value
     with pytest.raises(ValueError, match="再適用した結果"):
         _census(tmp_path, verdicts)
 
@@ -11636,3 +11653,75 @@ def test_cli_census_prints_the_output_digest(
     assert len(digest_lines) == 1
     printed_digest = digest_lines[0].split("census sha256:")[1].strip()
     assert printed_digest == hashlib.sha256(out.read_bytes()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# E-26〜E-28（PR #241 Codex 第 7 巡: P1×4 のうち採用 3 件。E-29/E-30 はコード変更なし
+# — docs のみ / 見送り）。共有スカラーの凍結束縛・平均安定不変条件・repeat 整合。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "scalar_key, broken_value",
+    [("tolerance_cents", 5.0), ("est_voiced_confidence_floor", 0.9)],
+)
+def test_census_binds_shared_scalars_to_the_frozen_bars(
+    scalar_key: str, broken_value: float, tmp_path: Path
+) -> None:
+    """E-26: 有限性だけでは足りない——凍結バーの実値と厳密一致を要求する。
+
+    E-7（`repeats_min`）で自分が適用した規律との非対称だった。50 cents で測った
+    metrics を 5 cents の測定として publish しない。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict[scalar_key] = broken_value
+    with pytest.raises(ValueError, match="凍結"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_checks_average_stable_metric_invariants(tmp_path: Path) -> None:
+    """E-27: 平均で保存される不変条件（chroma >= pitch）を per-cell 検査に入れる。
+
+    evaluate は external カテゴリの contract を clip metrics にのみ適用しており、
+    census が持つ平均済み metrics には課していない——census は平均で保存される
+    サブセットだけを独自に再適用する（コード内コメント / 設計ノート E-27 に採否の
+    経緯を記録）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        for metrics in verdicts[0]["categories"][arm]["metrics"]:
+            # raw_chroma_accuracy < raw_pitch_accuracy は mir_eval が返さない組
+            # （chroma 一致は pitch 一致の必要条件）。
+            metrics["raw_chroma_accuracy"] = 0.10
+            metrics["raw_pitch_accuracy"] = 0.90
+            metrics["octave_gap"] = metrics["raw_chroma_accuracy"] - metrics["raw_pitch_accuracy"]
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[0]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        reason = gaps[(level, arm)]
+        assert "平均安定不変条件" in reason
+        assert "raw_chroma_accuracy" in reason
+
+
+def test_census_rejects_metrics_that_contradict_the_identity_flag(tmp_path: Path) -> None:
+    """E-28: `repeats_bit_identical: true` を名乗りながら公開 metrics が repeat 間で
+
+    食い違う verdict を数えない（必要条件。十分条件でないことは E-28 の docstring /
+    設計ノートに宣言された限界として記録）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[0]["categories"][arm]["metrics"][1]["raw_pitch_accuracy"] += 1e-9
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[0]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "bit 一致" in gaps[(level, arm)]

@@ -1140,12 +1140,58 @@ band ループへ混入する経路も無い）。
 同期を enforce する。`generator_code_sha256` は既に現 checkout と照合済みのため、生成側
 の形が世代間で動いてもこの検査が誤爆する経路は無い。
 
+**census の保証境界の宣言**（PR #241 Codex 第 7 巡「Validate runtime configuration
+values」・E-30。見送り裁定）。E-19（存在）→ E-24（キー集合）→ 本指摘（値・ネスト構造の
+検証）と、同じ指摘が 1 段ずつ深くなった。ここで境界を宣言する: **census の保証は
+(1) 自分が publish するフィールドの形と相互整合、(2) 合算可否を決める証拠フィールドの
+verdict 間 byte 等値 + 形（キー集合まで）+ 凍結ファイル・現 checkout への pin、である。**
+値・ネスト構造まで producer schema を複製して検証することは、evaluate のゲートの二重
+実装（E-1 で却下）へ漸近し、かつ偽造耐性は増えない——bars/generator/evaluator の pin を
+実値でコピーする偽造者は、値スキーマも同様にコピーできる。偽造に対する実根拠は
+`verdict_pins`・dated record・evaluate の独立測り直しであり、census はその上の readback
+整合層である。以後、この境界の内側の指摘は採用し、外側は本宣言を参照して見送る。
+
 **E-25. 公開 census bytes の pin を stdout へ残す**（PR #241 Codex P2 で是正）。書き込みに
 渡すのと同一の snapshot から sha256 を導出し、`census sha256: <hex>` として stdout へ出す
 （`json.dumps` の二重実行も同時に解消）。本リポジトリの計測 runbook は stdout を
 `*_stdout.txt` として dated record に保存する既存の流儀なので、この pin はそこに残る。
 文書内への自己埋め込みは自己言及（hash が自身を含む bytes を対象にできない）になるため
-せず、sidecar ファイルの新設も本段階では過剰と判断した（裁定）。
+せず、sidecar ファイルの新設も本段階では過剰と判断した（裁定）。runbook 側でも stdout
+保存をコマンドに組み込んだ（E-29）。
+
+**E-26. 共有スカラーを凍結バーの実値と束縛する**（PR #241 Codex P1 で是正）。E-19 の
+有限性検査だけでは、verdict が「50 cents で測った」と自己申告した metrics をそのまま
+publish できてしまう——E-7（`repeats_min`）で自分が適用した規律との非対称だった。
+census 自身が読んだ基底バー（`bar_block = bars_data["m2_accuracy_bars"]`。
+`evaluate_m2_bars` の `_require_frozen_tolerance` / `_require_frozen_est_voicing_floor`
+が読むのと同じ block）の実値と厳密一致を要求する。成果物へ載せる値も `common[...]`
+ではなく凍結値そのものにする（E-7 の `repeats_min` と同型——供給源を「集計器が読んだ
+凍結ファイル」に統一する）。
+
+**E-27. 平均で保存される metric 不変条件のみ census で再適用する**（スコープ限定採用・
+PR #241 Codex P1 で是正）。まず `_require_metrics_contract` を census の平均済み
+metrics へそのまま適用する実装を試したが、**通らなかった**——evaluate は external
+カテゴリで contract を **clip metrics** にのみ適用し、census が持つカテゴリ平均
+metrics（`_average_external_clip_metrics` の出力）には `_require_finite_metrics` しか
+課していない（`voiced_chroma_correct_frame_count` が算術平均で非整数 float になり
+うるため、実測でも確認した）。census は clip 単位の証拠を持たないため（E-1）contract
+全体は当てられないが、単純算術平均で厳密に保存される 3 点を per-cell 検査に追加した:
+(a) `metrics.tolerance_cents == 凍結値`（clip 間の一致が前提のため平均でも保存）、
+(b) `raw_chroma_accuracy >= raw_pitch_accuracy`（非負差の平均は非負）、
+(c) `octave_gap == raw_chroma_accuracy - raw_pitch_accuracy`（平均は加減算と可換）。
+違反は raise ではなく per-cell の `problems`（= `census_incomplete`）へ（E-11 の裁定と
+同型）。
+
+**E-28. repeat 間の bit 一致を必要条件として再検査する**（必要条件のみ採用・
+PR #241 Codex P1 で是正）。`repeats_bit_identical` の boolean 申告は evaluate の独立
+測り直しが立証するが、census が**公開する** per-repeat metrics list 自体が申告どおり
+相互 bit 一致していることは、boolean 申告と独立に検査できる。
+`len({json.dumps(m, sort_keys=True) for m in metrics_list}) != 1` を per-cell の
+`problems` へ積む。**宣言された限界**: 平均が偶然一致して clip が異なるケースは、
+verdict が per-clip 証拠を運ばないため census からは検出できない。bit 一致の実根拠は
+evaluate の独立測り直し（publish 条件）であり、per-clip digest を verdict schema へ
+足して census で再検証するのは E-1（evaluate のゲートを二重実装しない）に反するため
+行わない。
 
 **E-18. `bar_satisfied == not failures` を読み戻しで再検証する**（PR #241 Codex P2 で是正）。
 `evaluate_m2_bars` はこの不変条件を確立するが、集計器は読み戻し時に一度も検証して

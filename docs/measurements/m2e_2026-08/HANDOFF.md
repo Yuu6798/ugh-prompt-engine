@@ -82,8 +82,12 @@ fail-closed（すべて **resolve 後**のパスで判定・各 1 テスト）:
 
 ```bash
 python scripts/run_melody_accuracy.py --out <census>.json \
-    --census <verdict_p12>.json <verdict_p06>.json <verdict_p00>.json <verdict_m06>.json
+    --census <verdict_p12>.json <verdict_p06>.json <verdict_p00>.json <verdict_m06>.json \
+    | tee <census_stdout>.txt
 ```
+
+stdout の `census sha256:` 行が公開 bytes の pin。`*_stdout.txt` として dated record に
+保存すること（保存しない実行は pin を残さない）。
 
 - 期待セル数は**積として再計算**する（80 × 4 水準 × 2 アーム × `repeats_min` = 1280）。
   `1280` を定数で書いていない（設計判断 E-2）。
