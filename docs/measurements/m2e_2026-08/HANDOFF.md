@@ -97,13 +97,17 @@ python scripts/run_melody_accuracy.py \
              docs/measurements/m2e_2026-08/verdict_p06.json \
              docs/measurements/m2e_2026-08/verdict_p00.json \
              docs/measurements/m2e_2026-08/verdict_m06.json \
-    | tee "docs/measurements/m2e_2026-08/census_stdout_$(date -u +%Y%m%dT%H%M%SZ).txt"
+    | tee "docs/measurements/m2e_2026-08/census_stdout_$(date -u +%Y%m%dT%H%M%SZ)_$$.txt"
 ```
 
 stdout の `census sha256:` 行が公開 bytes の pin。stdout は**実行ごとに別ファイル**へ
-保存する（固定名だと再実行の truncate が、失敗した実行でも前回の pin 記録を消す）。
-成功した実行の `census.json` と、その実行の `census_stdout_*.txt` を**対で** dated
-record として commit すること（保存しない実行は pin を残さない）。`pipefail` を欠くと
+保存する（固定名だと再実行の truncate が、失敗した実行でも前回の pin 記録を消す。
+ファイル名の PID `_$$` は同一秒内の**逐次**再実行での衝突も防ぐ）。**census を並行
+実行しないこと**——`census.json` 自体が単一の固定パスであり、stdout 名の衝突回避では
+主成果物の競合は防げない。census は 1 キャンペーンの最終集計を 1 回行う逐次ステップで
+あり、並行自動化の対象にしない。成功した実行の `census.json` と、その実行の
+`census_stdout_*.txt` を**対で** dated record として commit すること（保存しない実行は
+pin を残さない）。`pipefail` を欠くと
 `tee` の exit 0 が census の fail-closed 拒否を隠す——自動化はこの行ごとコピーすること。
 
 - 期待セル数は**積として再計算**する（80 × 4 水準 × 2 アーム × `repeats_min` = 1280）。
