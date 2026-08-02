@@ -14,6 +14,7 @@ Claude が起草し、User が Codex に渡す Task Brief を蓄積する。
 
 | ID | Title | Phase | Created | Status |
 |---|---|---|---|---|
+| M2E-C6 | シャード実行機（§8.6 実行契約: 地図生成器 + shard_id 起動・動的キュー・開始許可式・打ち切り） | melody M2e（r6 前に必須） | 2026-08-02 | pending |
 
 ## In Progress / Merged
 
