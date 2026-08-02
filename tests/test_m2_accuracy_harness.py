@@ -10815,6 +10815,7 @@ def _as_verdict_artifact(verdict: Dict[str, Any]) -> Any:
 def _census(tmp_path: Path, verdicts: "List[Dict[str, Any]]") -> Dict[str, Any]:
     return harness.aggregate_m2e_census(
         [_as_verdict_artifact(v) for v in verdicts],
+        bars_path=BARS_PATH,
         m2e_bars_path=_write_m2e_bars(tmp_path),
     )
 
@@ -11049,3 +11050,59 @@ def test_cli_census_writes_the_document_and_protects_its_inputs(
     )
     with pytest.raises(SystemExit, match="census の入力"):
         harness.main()
+
+
+def test_census_rejects_arms_whose_inputs_have_different_provenance(tmp_path: Path) -> None:
+    """PR #241 Codex P1: **id の一致だけでは足りない。**
+
+    2 つの manifest が同じ 80 個の `clip_ids` を持ちながら、別世代の音声・別世代の
+    登録簿を指すことはありうる——id は名前であって bytes ではない。row が既に運んで
+    いる素性の hash そのものを照合する。
+    """
+    for field in ("external_manifest_sha256", "external_fixtures_sha256"):
+        verdicts = _m2e_census_verdicts(tmp_path)
+        verdicts[0]["categories"]["V_remix_real_stem"][field] = "9" * 64
+        with pytest.raises(ValueError, match=f"アーム間で {field} が一致しない"):
+            _census(tmp_path, verdicts)
+
+
+def test_census_denominator_comes_from_the_frozen_bars_not_the_verdict(
+    tmp_path: Path,
+) -> None:
+    """PR #241 Codex P2: `repeats_min` は census の**分母**を決める。
+
+    verdict が小さく名乗れば期待セル数が減り、半分終わった帯が「揃った」ことになる。
+    集計器は自分で読んだ凍結ファイルの値を使い、verdict の自己申告はそれとの一致を
+    要求するだけにする。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["repeats_min"] = 1
+    with pytest.raises(ValueError, match="census の分母"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_a_foreign_base_bars_generation(tmp_path: Path) -> None:
+    """共有スカラーの供給元（基底バー）も凍結ファイルと照合する。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["bars_sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="別世代の共有スカラー"):
+        _census(tmp_path, verdicts)
+
+
+def test_cli_census_protects_the_base_bars_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """census は基底バーを**読む**ので、`--out` で潰せてはならない。"""
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text("{}", encoding="utf-8")
+    before = BARS_PATH.read_bytes()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv("--out", str(BARS_PATH), "--census", str(verdict_path)),
+    )
+    with pytest.raises(SystemExit, match="census の入力"):
+        harness.main()
+    assert BARS_PATH.read_bytes() == before

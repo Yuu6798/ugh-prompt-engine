@@ -9229,7 +9229,11 @@ def _m2e_census_expected_cells(repeats_min: int) -> int:
 
 
 def _require_homogeneous_census_inputs(
-    verdicts: "List[Dict[str, Any]]", *, m2e_bars_sha256: str
+    verdicts: "List[Dict[str, Any]]",
+    *,
+    m2e_bars_sha256: str,
+    bars_sha256: str,
+    frozen_repeats_min: int,
 ) -> Dict[str, Any]:
     """集計してよい verdict 群かを検査し、共通スカラーを返す（fail-closed）。
 
@@ -9265,6 +9269,24 @@ def _require_homogeneous_census_inputs(
             )
         common[field] = verdicts[0].get(field)
 
+    # 基底 bars（共有スカラーの供給元）も**集計器が読んだ凍結ファイル**と突き合わせる
+    # （PR #241 Codex P2）。`m2e_bars_sha256` だけを照合して `bars_sha256` を自己申告の
+    # まま成果物へ写すのは非対称であり、共有スカラーの世代を立証しないまま名乗ることに
+    # なる。とくに `repeats_min` は**census の分母を決める**——verdict が `1` を名乗れば
+    # 期待セル数が半分になり、半分終わった帯が「揃った」ことになる。
+    if common["bars_sha256"] != bars_sha256:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の bars_sha256 {common['bars_sha256']!r} が "
+            f"集計器の読んだ基底バー {bars_sha256!r} と不一致; 別世代の共有スカラー"
+            "（tolerance_cents / est_voiced_confidence_floor / repeats_min）の下で出た "
+            "判定を現行世代の帯として publish しない (fail-closed)"
+        )
+    if common["repeats_min"] != frozen_repeats_min:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の repeats_min {common['repeats_min']!r} が "
+            f"凍結値 {frozen_repeats_min!r} と不一致; census の分母を verdict の自己申告に "
+            "決めさせない（小さく名乗れば未完の帯が揃ったことになる）(fail-closed)"
+        )
     if common["m2e_bars_sha256"] != m2e_bars_sha256:
         raise ValueError(
             f"aggregate_m2e_census: verdict の m2e_bars_sha256 "
@@ -9308,6 +9330,7 @@ def _require_homogeneous_census_inputs(
 def aggregate_m2e_census(
     verdicts: "List[ReportArtifact]",
     *,
+    bars_path: Path = BARS_PATH,
     m2e_bars_path: Path = M2E_BARS_PATH,
 ) -> Dict[str, Any]:
     """4 水準 × 2 アームの verdict を集め、census が揃ったときにだけ帯の判定を出す。
@@ -9333,6 +9356,11 @@ def aggregate_m2e_census(
     """
     m2e_bars, m2e_bars_sha256 = load_bars(m2e_bars_path)
     m2e_bars_data = m2e_bars.verify(m2e_bars_sha256)
+    # 共有スカラー（`repeats_min` 等）の供給元は M2e 側ではなく基底バーである（§5.1-4）。
+    # 集計器は**自分で読んだ凍結ファイル**から `repeats_min` を取り、verdict の自己申告は
+    # それとの一致を要求するだけにする（PR #241 Codex P2）。
+    bars, bars_sha256 = load_bars(bars_path)
+    frozen_repeats_min = int(bars.verify(bars_sha256)["m2_accuracy_bars"]["repeats_min"])
     arms = _categories_owned_by("m2e_accuracy_bars.yaml")
 
     parsed: "List[Dict[str, Any]]" = []
@@ -9360,8 +9388,13 @@ def aggregate_m2e_census(
         parsed.append(data)
         pins.append(artifact.pin())
 
-    common = _require_homogeneous_census_inputs(parsed, m2e_bars_sha256=m2e_bars_sha256)
-    repeats_min = int(common["repeats_min"])
+    common = _require_homogeneous_census_inputs(
+        parsed,
+        m2e_bars_sha256=m2e_bars_sha256,
+        bars_sha256=bars_sha256,
+        frozen_repeats_min=frozen_repeats_min,
+    )
+    repeats_min = frozen_repeats_min
     expected_cells = _m2e_census_expected_cells(repeats_min)
 
     conditions = m2e_bars_data[_BARS_FILES["m2e_accuracy_bars.yaml"]["conditions_key"]]
@@ -9389,6 +9422,8 @@ def aggregate_m2e_census(
                 )
             observed.setdefault(level, {})[arm] = {
                 "verdict_index": index,
+                "external_manifest_sha256": cat.get("external_manifest_sha256"),
+                "external_fixtures_sha256": cat.get("external_fixtures_sha256"),
                 "status": cat.get("status"),
                 "n_rows": cat.get("n_rows"),
                 "clip_ids": cat.get("clip_ids"),
@@ -9442,17 +9477,27 @@ def aggregate_m2e_census(
             }
     # アーム間で**同じミックスを測ったこと**を要求する（§6.2「アームは manifest を
     # 分けない」の下流検査）。件数が揃っていても中身がずれていれば別の帯である。
+    #
+    # **id の一致だけでは足りない**（PR #241 Codex P1）。2 つの manifest が同じ 80 個の
+    # `clip_ids` を持ちながら、別世代の音声・別世代の登録簿を指すことはありうる——
+    # id は名前であって bytes ではない。row は既に `external_manifest_sha256` /
+    # `external_fixtures_sha256` を運んでいるので、**素性の hash そのもの**を照合する。
     for level, per_arm in sorted(observed.items()):
-        id_sets = {
-            arm: tuple(cell["clip_ids"]) if isinstance(cell["clip_ids"], list) else None
-            for arm, cell in per_arm.items()
-        }
-        if len(set(id_sets.values())) > 1:
-            raise ValueError(
-                f"aggregate_m2e_census: level {level!r} のアーム間で clip_ids が一致しない; "
-                "同じミックスを 2 経路で測るのがアーム比較の定義であり、別集合の観測を "
-                "同じ水準の 2 アームとして並べない (fail-closed)"
-            )
+        for field, what in (
+            ("clip_ids", "clip_ids"),
+            ("external_manifest_sha256", "external_manifest_sha256"),
+            ("external_fixtures_sha256", "external_fixtures_sha256"),
+        ):
+            values = {
+                arm: tuple(cell[field]) if isinstance(cell[field], list) else cell[field]
+                for arm, cell in per_arm.items()
+            }
+            if len(set(values.values())) > 1:
+                raise ValueError(
+                    f"aggregate_m2e_census: level {level!r} のアーム間で {what} が一致しない; "
+                    "同じミックスを 2 経路で測るのがアーム比較の定義であり、別素材・別世代の "
+                    "観測を同じ水準の 2 アームとして並べない (fail-closed)"
+                )
 
     complete = not missing and observed_cells == expected_cells
 
@@ -9461,7 +9506,8 @@ def aggregate_m2e_census(
         "census_recorded_utc": _utc_now(),
         "generator_code_sha256": common["generator_code_sha256"],
         "evaluator_code_sha256": common["evaluator_code_sha256"],
-        "bars_sha256": common["bars_sha256"],
+        "bars_sha256": bars_sha256,
+        "bars_path_relative": _repo_relative_path(bars_path),
         "m2e_bars_sha256": m2e_bars_sha256,
         "m2e_bars_path_relative": _repo_relative_path(m2e_bars_path),
         "env_digest": common["env_digest"],
@@ -9693,6 +9739,9 @@ def main() -> int:
                 )
         protected = {Path(p).resolve() for p in args.census}
         protected.add(Path(args.m2e_bars).resolve())
+        # 基底バーも保護する（PR #241 Codex P2）。census は共有スカラーの供給元として
+        # これを**読む**ので、`--out` で潰せてはならない。
+        protected.add(Path(args.bars).resolve())
         protected.update(_generator_code_paths())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
@@ -9700,7 +9749,9 @@ def main() -> int:
                 "ソース）と同じパスを指している; 入力を集計結果で上書きしない (fail-closed)"
             )
         census = aggregate_m2e_census(
-            [load_verdict(path) for path in args.census], m2e_bars_path=args.m2e_bars
+            [load_verdict(path) for path in args.census],
+            bars_path=args.bars,
+            m2e_bars_path=args.m2e_bars,
         )
         _atomic_write_text(args.out, json.dumps(census, indent=2, sort_keys=True))
         print(f"wrote census to {args.out}")
