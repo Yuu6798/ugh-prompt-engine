@@ -10546,8 +10546,108 @@ def test_verdict_is_unchanged_when_the_new_evaluate_flags_are_absent(tmp_path: P
     # フラグを使ったときだけ、**宣言した実行構成**が 1 キーで載る（`P` 依存の実測量は
     # 載せない——効果は別途 `P` を振った実測比で示す）。
     with_workers = _m2e_evaluate_with(tmp_path, reports, workers=2)
-    assert with_workers["evaluate_execution"] == {"workers": 2}
-    eval_store = tmp_path / "store_B_verdict"
+    assert with_workers["evaluate_execution"] == {
+        "workers": 2,
+        "effective_workers_per_category": 2,
+    }
+    eval_store = ROOT / "build" / "store_B_verdict"
     with_store = _m2e_evaluate_with(tmp_path, reports, eval_cell_store=eval_store, workers=4)
     assert with_store["evaluate_execution"]["workers"] == 4
     assert "eval_cell_store_relative" in with_store["evaluate_execution"]
+
+
+# ---------------------------------------------------------------------------
+# PR #240 レビュー（Codex P1×2）の是正。
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_rejects_an_eval_cell_store_that_is_the_reports_run_store(
+    tmp_path: Path,
+) -> None:
+    """C2/D-4: `store_B` が**提出 report を産んだ `store_A`** と重なれば拒否する。
+
+    CLI の `--cell-store` × `--eval-cell-store` 比較は evaluate phase では走らない
+    （evaluate は `--cell-store` 自体を拒否する）。本番で効く関所はこちら——report が
+    刻む `cell_store_relative` を渡せば、子は鍵の一致する run のセルをそのまま resume し、
+    独立検証が自分自身との比較に化ける。
+    """
+    run_store = ROOT / "does-not-need-to-exist" / "store_A"
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    for report in reports:
+        report["cell_store_relative"] = run_store.relative_to(ROOT).as_posix()
+
+    with pytest.raises(ValueError, match="自分自身との比較に化ける"):
+        _m2e_evaluate_with(tmp_path, reports, eval_cell_store=run_store)
+
+    # 入れ子（両方向）も拒否する。
+    with pytest.raises(ValueError, match="入れ子になっている"):
+        _m2e_evaluate_with(tmp_path, reports, eval_cell_store=run_store / "inner")
+    for report in reports:
+        report["cell_store_relative"] = (
+            (run_store / "inner").relative_to(ROOT).as_posix()
+        )
+    with pytest.raises(ValueError, match="入れ子になっている"):
+        _m2e_evaluate_with(tmp_path, reports, eval_cell_store=run_store)
+
+
+def test_evaluate_fails_closed_when_the_reports_run_store_path_is_unrecoverable(
+    tmp_path: Path,
+) -> None:
+    """repo 外の store で走った run は `cell_store_relative: None` になる。
+
+    重なりを立証も反証もできないので素通しにしない（「復元できないから通す」は
+    このゲートを名目だけにする）。
+    """
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    for report in reports:
+        report["cell_store_relative"] = None
+    with pytest.raises(ValueError, match="パスを復元できない"):
+        _m2e_evaluate_with(tmp_path, reports, eval_cell_store=tmp_path / "store_B")
+
+
+def test_evaluate_accepts_a_disjoint_eval_cell_store(tmp_path: Path) -> None:
+    """重なっていなければ通る（上の 2 テストが「常に落ちる」検査でないことの担保）。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    for report in reports:
+        report["cell_store_relative"] = "build/store_A"
+    verdict = _m2e_evaluate_with(
+        tmp_path, reports, eval_cell_store=ROOT / "build" / "store_B"
+    )
+    assert verdict["evaluate_execution"]["eval_cell_store_relative"] == "build/store_B"
+
+
+def test_cli_rejects_an_eval_cell_store_tree_containing_protected_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2/D-4: 子は `store_B` 配下へ `cell_<digest>.json` を atomic replace で書くため、
+
+    保護入力がその木の中にあると、名前の一致した入力を置き換えて自分の証拠を壊しうる。
+    """
+    store = tmp_path / "store_B"
+    store.mkdir()
+    report_path = store / "run1.json"  # 評価入力が store_B の木の中にある
+    report_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "verdict.json"),
+            "--evaluate", str(report_path),
+            "--eval-cell-store", str(store),
+        ),
+    )
+    with pytest.raises(SystemExit, match="評価入力が含まれている"):
+        harness.main()
+
+
+def test_evaluate_execution_records_the_effective_worker_cap(tmp_path: Path) -> None:
+    """C3: `workers > repeats_min` は効かない——**黙って頭打ちにしない**。
+
+    1 カテゴリの測り直しは `repeats_min` 本の子しか起こさないので、宣言値だけを
+    載せると「P=4 で回した」と読めてしまう。実効値を併記する（PR #240 Codex P1）。
+    """
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    verdict = _m2e_evaluate_with(tmp_path, reports, workers=4)
+    assert verdict["evaluate_execution"]["workers"] == 4
+    assert verdict["evaluate_execution"]["effective_workers_per_category"] == 2
+    assert verdict["repeats_min"] == 2

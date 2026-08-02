@@ -948,6 +948,16 @@ C2/C3 以前の `--workers` は**両フェーズで記録専用**だった（hel
 `_run_external_category` のコメントに明記し、run が逐次であることは
 `test_run_phase_clip_loop_stays_sequential_even_with_many_workers` が pin する。
 
+**宣言された限界**（PR #240 Codex P1 で顕在化）: 1 カテゴリの測り直しは `repeats_min`
+本の子しか起こさないため、実効並列度は **`min(P, repeats_min)` で頭打ち**になる。
+凍結 `repeats_min = 2` なので `--workers 4` でも実効 2 であり、§8.9.2-(2) の見積もり
+「10.0 h → 約 2.9 h」ではなく **10.0 h → 約 5.0 h** が現状で得られる値である。
+`2.9 h` へ届かせるには repeat より下の粒度（clip / シャード / カテゴリ）の並列化が要り、
+それは「1 子プロセス = 1 カテゴリ row」という測り直しの成果物の形と、その row を
+提出 row と bit 比較する publish 条件の形を変える——**本実装の範囲外・別ブリーフ**
+（C5 と同じ扱い）。実効値は verdict の
+`evaluate_execution.effective_workers_per_category` に刻み、黙って頭打ちにしない。
+
 並列化の実装は `concurrent.futures.ThreadPoolExecutor(max_workers=P)` で
 **既存の `subprocess.run` を最大 P 本同時に保つ**形（`ProcessPoolExecutor` は使わない
 ——測定は既に別プロセスで走っており、in-process の worker プロセスを挟むと
@@ -981,6 +991,23 @@ r6 が丸ごと通らない**（HANDOFF §3.1 の裏返し）。
 
 `--pin-threads` 未使用時は run も evaluate も従来どおり（新フィールドゼロ）で、
 run↔evaluate の条件は「どちらも未固定」で一致する。
+
+**D-4. `store_A` との重なり検査は CLI ではなく「評価対象 report」に対して置く**
+（PR #240 Codex P1 で是正）。当初は `--cell-store` × `--eval-cell-store` の 2 引数を
+比較していたが、**evaluate phase は `--cell-store` 自体を拒否するので、その分岐は本番の
+呼び出しでは一度も走らない**。一方 run report は `cell_store_relative` を刻んでいるため、
+その値を `--eval-cell-store` に渡すことは実際にできてしまい、鍵
+`(category, level, entry_id, repeat_index)` が一致する run のセルを子がそのまま resume
+する——「独立に測り直して bit 一致」が**自分自身との比較**に化け、F2 で塞いだ穴が別の
+入口から開く。よって関所は `evaluate_m2_bars` に置き、**評価対象 report が名乗る store**
+との同一性・入れ子を resolve 後に拒否する。`cell_store_relative` が `None`（repo 外の
+store で走った run）は重なりを立証も反証もできないので fail-closed にする。
+
+併せて、`store_B` の木に評価入力（report / manifest member / fixtures / provenance 対象の
+ソース）が含まれる指定も拒否する。子は `store_B` 配下へ `cell_<digest>.json` を atomic
+replace で書くため、名前の一致した入力を置き換えて自分の証拠を壊しうる。関所は
+「起こりうる出力名を列挙する」形ではなく「保護入力が木の中に無いことを要求する」形に
+置く（出力名の集合はセル鍵の数だけあり、列挙は関所として脆い）。
 
 **r4/r6 の運用**: 本測定は run・evaluate ともに
 `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 ... --pin-threads` で起動する（runbook §5 以降）。

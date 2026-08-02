@@ -82,6 +82,15 @@ C2/C3 以前の evaluate は実効 `P = 1`（10.0 h ÷ 160 セル = 225 s/セル
 254.2 s と一致する）。`--workers P` が evaluate phase の**実効並列度**になった。
 `B_session` も実行環境も変更していない。
 
+> **実効値は `min(P, repeats_min)` で頭打ちになる**（PR #240 Codex P1・宣言された限界）。
+> 1 カテゴリの測り直しは `repeats_min` 本の子しか起こさず、凍結 `repeats_min = 2`
+> なので **`--workers 4` を渡しても実効 2**。したがって rev.6 §8.9.2-(2) が見積もった
+> 「10.0 h → 約 2.9 h」ではなく、**現状で得られるのは 10.0 h → 約 5.0 h**。
+> `2.9 h` へ届かせるには repeat より下の粒度（clip / シャード / カテゴリ）の並列化が
+> 要り、それは測り直しの成果物の形（1 子 = 1 カテゴリ row）を変えるため**別ブリーフ**。
+> verdict の `evaluate_execution.effective_workers_per_category` に実効値を刻む
+> （黙って頭打ちにしない）。
+
 **publish が要求するのは「fresh process であること」と「run の結果を読まないこと」で
 あって、逐次であることではない。**
 
@@ -110,8 +119,13 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
     --out <verdict>.json --evaluate <run_report_0>.json <run_report_1>.json \
     --external-manifest <manifest>.json --external-fixtures <fixtures>.yaml \
-    --eval-cell-store <store_B> --workers 4 --pin-threads
+    --eval-cell-store <store_B> --workers 2 --pin-threads
 ```
+
+`--workers 2` なのは上記の頭打ち（`repeats_min = 2`）による。`--eval-cell-store` には
+**run が使った `store_A` を渡してはならない**——渡すと測り直しの子が run のセルを
+resume し、独立検証が自分自身との比較に化ける。evaluate は提出 report の
+`cell_store_relative` と突き合わせて fail-closed に拒否する。
 
 **`P` の効果は実測比で示すこと**（`総時間 / P` の外挿値を成果として書かない・§3.2）。
 C2/C3 の PR では fake backend の実測比を記載した。r4 では実スタックで測り直す。
