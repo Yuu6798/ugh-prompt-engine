@@ -9311,21 +9311,22 @@ def test_cell_store_env_digest_mismatch_forces_remeasurement(tmp_path: Path) -> 
     assert "env_digest" in mismatch_fields
 
 
-def test_cell_store_records_and_propagates_the_measurement_time(tmp_path: Path) -> None:
-    """P1: セルは**自分を測った時刻**を持ち、run はその最古を report へ伝える。
+def test_cell_store_records_and_propagates_the_measurement_start_time(tmp_path: Path) -> None:
+    """P1: セルは**測定を開始した時刻**を持ち、run はその最古を report へ伝える。
 
     resume だけを見ていると run の `started_utc` は「今回の起動時刻」なので、
     事前登録より前に測ったセルが後の run 経由で「登録後の測定」として通ってしまう。
+    刻むのは完了時刻ではない——長いセルは登録前に始まって登録後に終わりうる。
     """
     cell_store = tmp_path / "cell_store"
     report1 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
-    first = report1["earliest_cell_measured_utc"]
-    assert harness._parse_recorded_utc(first, where="t", field="measured_utc")
+    first = report1["earliest_cell_started_utc"]
+    assert harness._parse_recorded_utc(first, where="t", field="measurement_started_utc")
 
-    # 全セルを resume する 2 本目でも、伝わるのは**測った時刻**であり起動時刻ではない。
+    # 全セルを resume する 2 本目でも、伝わるのは**測り始めた時刻**であり起動時刻ではない。
     report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
     assert report2["cells_resumed"] and not report2["cells_measured"]
-    assert report2["earliest_cell_measured_utc"] == first
+    assert report2["earliest_cell_started_utc"] == first
     assert report2["started_utc"] >= first
 
 
@@ -9333,13 +9334,13 @@ def test_evaluate_rejects_cells_measured_before_registration(tmp_path: Path) -> 
     """P1: 登録より前に測ったセルを、後の run 経由で洗浄させない。"""
     reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
     for report in reports:
-        report["earliest_cell_measured_utc"] = "2020-01-01T00:00:00+00:00"
+        report["earliest_cell_started_utc"] = "2020-01-01T00:00:00+00:00"
     with pytest.raises(ValueError, match="測定開始時点"):
         _m2e_evaluate(tmp_path, reports)
 
 
-def test_cell_store_without_measured_utc_is_not_resumed(tmp_path: Path) -> None:
-    """P1: 取得時刻を名乗らないセルは resume しない（時刻を後から埋めない）。"""
+def test_cell_store_without_measurement_start_time_is_not_resumed(tmp_path: Path) -> None:
+    """P1: 測定開始時刻を名乗らないセルは resume しない（時刻を後から埋めない）。"""
     cell_store = tmp_path / "cell_store"
     _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
     target_clip = "vremix_vocadito_1_BedOne_p12"
@@ -9351,13 +9352,13 @@ def test_cell_store_without_measured_utc_is_not_resumed(tmp_path: Path) -> None:
         repeat_index=0,
     )
     record = json.loads(record_path.read_text(encoding="utf-8"))
-    del record["measured_utc"]
+    del record["measurement_started_utc"]
     record_path.write_text(json.dumps(record), encoding="utf-8")
 
     report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
     assert target_clip in report2["cells_measured"]
     assert target_clip not in report2["cells_resumed"]
-    assert "measured_utc" in {
+    assert "measurement_started_utc" in {
         m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
     }
 
@@ -9671,7 +9672,13 @@ def test_env_digest_is_a_64_hex_sha256_and_reacts_to_thread_settings(
     assert changed != baseline
 
     versions = harness._env_digest_package_versions()
-    assert set(versions) == set(harness._ENV_DIGEST_PACKAGES)
+    # 手書きリストは床であって天井ではない——route の実行スタック（登録表由来）を
+    # 全部畳む。取りこぼすと、その版が動いても digest が変わらず旧セルが resume される。
+    assert set(versions) >= set(harness._ENV_DIGEST_PACKAGES)
+    assert set(versions) >= set(harness._runtime_package_names())
+    assert {"tensorflow", "keras", "resampy", "hmmlearn", "soxr", "numba", "llvmlite"} <= set(
+        versions
+    )
     for name, value in versions.items():
         assert value == harness._ENV_DIGEST_ABSENT_MARKER or isinstance(value, str)
 

@@ -2721,10 +2721,11 @@ _EXPECTED_EXTERNAL_FIXTURES_SCHEMAS: Tuple[str, ...] = (
 # 意味論（どのフィールドが何を指すか）が変われば別物である。版が無い/未知の
 # レコードは resume 対象にしない（`_cell_record_mismatches` が不一致として扱い、
 # そのセルは再測定される）。
-# 0.2（2026-08-02）: `measured_utc` を必須化した（resume したセルの取得時刻を
-# 事前登録 attestation へ伝播させるため）。0.1 のレコードは版の不一致で resume されず
-# 再測定される——時刻を後から埋めることはしない。
-_EXPECTED_CELL_RECORD_SCHEMA = "m2-cell-record/0.2"
+# 0.2 → 0.3（2026-08-02）: 時刻フィールドを完了時刻 `measured_utc` から**測定開始
+# 時刻** `measurement_started_utc` へ改めた（事前登録の順序検査が要求するのは開始で
+# あって完了ではない——長いセルは登録前に始まって登録後に終わりうる）。旧版の
+# レコードは版の不一致で resume されず再測定される——時刻を後から埋めることはしない。
+_EXPECTED_CELL_RECORD_SCHEMA = "m2-cell-record/0.3"
 
 # バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
 # 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
@@ -4752,7 +4753,7 @@ def _measure_or_resume_external_clip_row(
     workers: int,
     cells_resumed: List[str],
     cells_measured: List[str],
-    cell_measured_utc: List[str],
+    cell_started_utc: List[str],
     cell_store_mismatches: "List[Dict[str, Any]]",
 ) -> Dict[str, Any]:
     """1 clip を測るか、設計 §8.7 のセル台帳から resume する。
@@ -4807,28 +4808,32 @@ def _measure_or_resume_external_clip_row(
             # 後の run を経由して「登録後の測定」として attestation を通ってしまう。
             try:
                 _parse_recorded_utc(
-                    record.get("measured_utc"),
+                    record.get("measurement_started_utc"),
                     where=f"cell record {record_path}",
-                    field="measured_utc",
+                    field="measurement_started_utc",
                 )
             except ValueError as exc:
                 cell_store_mismatches.append(
                     {
                         "entry_id": clip_id,
-                        "field": "measured_utc",
+                        "field": "measurement_started_utc",
                         "expected": "UTC timestamp",
-                        "actual": f"{record.get('measured_utc')!r} ({exc})",
+                        "actual": f"{record.get('measurement_started_utc')!r} ({exc})",
                     }
                 )
             else:
                 cells_resumed.append(clip_id)
-                cell_measured_utc.append(str(record["measured_utc"]))
+                cell_started_utc.append(str(record["measurement_started_utc"]))
                 # 呼び出し元がこの dict を（`row.pop` 等で）変異させても、他セルの
                 # record 内容へ波及しないよう deep copy を返す。
                 return copy.deepcopy(record["clip_row"])
         else:
             cell_store_mismatches.extend(mismatches)
 
+    # **抽出を始める前**に時刻を採る。完了時刻だと、登録前に始まった長いセルが
+    # 抽出中に登録が commit されることで「登録より後に測った」を名乗れてしまう
+    # （事前登録の順序検査は「測定の開始」を要求しており、完了ではない）。
+    measurement_started_utc = _utc_now()
     started = time.monotonic()
     row = _build_external_clip_row(
         clip_id,
@@ -4843,9 +4848,8 @@ def _measure_or_resume_external_clip_row(
         inputs=inputs,
     )
     elapsed_seconds = time.monotonic() - started
-    measured_utc = _utc_now()
     cells_measured.append(clip_id)
-    cell_measured_utc.append(measured_utc)
+    cell_started_utc.append(measurement_started_utc)
     if row.get("outcome") == "measured":
         # `outcome == "unavailable"`（抽出器スタック未導入）はセルレコードに残さない
         # ——設計 §8.6 の「打ち切ったら『未完』として記録する（失敗値を書かない）」
@@ -4870,9 +4874,9 @@ def _measure_or_resume_external_clip_row(
             "tolerance_cents": tolerance_cents,
             "est_voiced_floor": est_voiced_floor,
             "clip_row": row,
-            # このセルを**実際に測った**時刻。resume するとき run 側の起動時刻では
-            # 立証できない「登録より後に測った」を、セル自身に持たせる。
-            "measured_utc": measured_utc,
+            # このセルの**測定を開始した**時刻。resume するとき run 側の起動時刻では
+            # 立証できない「登録より後に測り始めた」を、セル自身に持たせる。
+            "measurement_started_utc": measurement_started_utc,
             "elapsed_seconds": elapsed_seconds,
             "workers": workers,
         }
@@ -4940,7 +4944,7 @@ def _run_external_category(
 
     cells_resumed: List[str] = []
     cells_measured: List[str] = []
-    cell_measured_utc: List[str] = []
+    cell_started_utc: List[str] = []
     cell_store_mismatches: "List[Dict[str, Any]]" = []
 
     clip_rows: List[Dict[str, Any]] = []
@@ -4963,7 +4967,7 @@ def _run_external_category(
             workers=workers,
             cells_resumed=cells_resumed,
             cells_measured=cells_measured,
-            cell_measured_utc=cell_measured_utc,
+            cell_started_utc=cell_started_utc,
             cell_store_mismatches=cell_store_mismatches,
         )
         clip_rows.append(clip_row)
@@ -4979,7 +4983,7 @@ def _run_external_category(
     if cell_store is not None:
         row["_cell_store_resumed"] = cells_resumed
         row["_cell_store_measured"] = cells_measured
-        row["_cell_store_measured_utc"] = cell_measured_utc
+        row["_cell_store_started_utc"] = cell_started_utc
         row["_cell_store_mismatches"] = cell_store_mismatches
 
     unavailable = [c for c in clip_rows if c.get("outcome") == "unavailable"]
@@ -5214,11 +5218,19 @@ def _execution_paths() -> Dict[str, Any]:
 
 
 def _env_digest_package_versions() -> Dict[str, str]:
-    """`_ENV_DIGEST_PACKAGES` の配布バージョンを引く（未導入は明示マーカー）。"""
+    """route の実行スタック全体の配布バージョンを引く（未導入は明示マーカー）。
+
+    手書きの `_ENV_DIGEST_PACKAGES` だけでは実行スタックを取りこぼす——`tensorflow` /
+    `keras` / `resampy` / `hmmlearn` / `soxr` / `numba` / `llvmlite` が動いても
+    digest は変わらず、旧構成のセルが新構成を名乗る report の下で resume される。
+    リポジトリは `_runtime_package_names()` に**登録表から導いた完全集合**を既に
+    持っている（同じ取りこぼしを実行 pin 側で一度直している）ので、そちらと合流させる。
+    手書きリストは床として残す（登録表に無い `demucs`/`crepe` 等を落とさないため）。
+    """
     import importlib.metadata
 
     versions: Dict[str, str] = {}
-    for name in _ENV_DIGEST_PACKAGES:
+    for name in sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())):
         try:
             versions[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -5704,7 +5716,7 @@ def run_accuracy(
     )
     run_cells_resumed: List[str] = []
     run_cells_measured: List[str] = []
-    run_cell_measured_utc: List[str] = []
+    run_cell_started_utc: List[str] = []
     run_cell_store_mismatches: "List[Dict[str, Any]]" = []
 
     with tempfile.TemporaryDirectory(prefix="melody-accuracy-") as tmp:
@@ -5742,7 +5754,7 @@ def run_accuracy(
                     # `results["categories"][category]` には残さない。
                     run_cells_resumed.extend(row.pop("_cell_store_resumed"))
                     run_cells_measured.extend(row.pop("_cell_store_measured"))
-                    run_cell_measured_utc.extend(row.pop("_cell_store_measured_utc"))
+                    run_cell_started_utc.extend(row.pop("_cell_store_started_utc"))
                     run_cell_store_mismatches.extend(row.pop("_cell_store_mismatches"))
                 _annotate_row_bars_pin(
                     row,
@@ -5945,16 +5957,16 @@ def run_accuracy(
         results["cells_resumed"] = run_cells_resumed
         results["cells_measured"] = run_cells_measured
         results["cell_store_mismatches"] = run_cell_store_mismatches
-        # この report の数値を産んだセルの**最も古い取得時刻**。resume したセルは
-        # 今回の `started_utc` より前に測られているので、事前登録の順序検査は
+        # この report の数値を産んだセルの**最も古い測定開始時刻**。resume したセルは
+        # 今回の `started_utc` より前に測り始められているので、事前登録の順序検査は
         # こちらを見なければ「登録前の測定」を後の run で洗浄できてしまう。
         # 文字列の辞書順でなく**時刻としての最小**を採る（`+00:00` と `Z` のように
         # 同じ時刻が別表記になりうる形式で辞書順比較すると順序を取り違える）。
-        if run_cell_measured_utc:
-            results["earliest_cell_measured_utc"] = min(
-                run_cell_measured_utc,
+        if run_cell_started_utc:
+            results["earliest_cell_started_utc"] = min(
+                run_cell_started_utc,
                 key=lambda value: _parse_recorded_utc(
-                    value, where="cell record", field="measured_utc"
+                    value, where="cell record", field="measurement_started_utc"
                 ),
             )
     # M2e run では `--cell-store` の有無に依らず記録する（上の算出コメント参照）。
@@ -7907,14 +7919,14 @@ def evaluate_m2_bars(
         # セル**を含む。`started_utc` だけを見ると、事前登録より前に採った測定を後の
         # run 経由で「登録後の測定」として通せてしまう（洗浄経路）。セルが名乗る最古の
         # 取得時刻があれば、それを測定の開始時点として扱う。
-        earliest_cell = report.get("earliest_cell_measured_utc")
+        earliest_cell = report.get("earliest_cell_started_utc")
         if earliest_cell is not None:
             started = min(
                 started,
                 _parse_recorded_utc(
                     earliest_cell,
                     where=f"reports[{idx}]",
-                    field="earliest_cell_measured_utc",
+                    field="earliest_cell_started_utc",
                 ),
             )
         if started > recorded:
@@ -7928,7 +7940,7 @@ def evaluate_m2_bars(
             raise ValueError(
                 f"evaluate_m2_bars: reports[{idx}] の測定開始時点 "
                 f"{started.isoformat()}（started_utc={report.get('started_utc')!r} / "
-                f"earliest_cell_measured_utc={report.get('earliest_cell_measured_utc')!r} の"
+                f"earliest_cell_started_utc={report.get('earliest_cell_started_utc')!r} の"
                 f"早い方）が、適用するバーの最新登録時点 "
                 f"{latest_registration.isoformat()} より前; 測定の開始時点で存在しなかった "
                 "閾値を事前登録として提示させない (fail-closed)"
