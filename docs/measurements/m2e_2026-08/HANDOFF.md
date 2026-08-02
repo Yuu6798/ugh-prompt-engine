@@ -97,13 +97,14 @@ python scripts/run_melody_accuracy.py \
              docs/measurements/m2e_2026-08/verdict_p06.json \
              docs/measurements/m2e_2026-08/verdict_p00.json \
              docs/measurements/m2e_2026-08/verdict_m06.json \
-    | tee "docs/measurements/m2e_2026-08/census_stdout_$(date -u +%Y%m%dT%H%M%SZ)_$$.txt"
+    | tee "$(mktemp "docs/measurements/m2e_2026-08/census_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
 ```
 
 stdout の `census sha256:` 行が公開 bytes の pin。stdout は**実行ごとに別ファイル**へ
-保存する（固定名だと再実行の truncate が、失敗した実行でも前回の pin 記録を消す。
-ファイル名の PID `_$$` は同一秒内の**逐次**再実行での衝突も防ぐ）。**census を並行
-実行しないこと**——`census.json` 自体が単一の固定パスであり、stdout 名の衝突回避では
+保存する（固定名だと再実行の truncate が、失敗した実行でも前回の pin 記録を消す）。
+`mktemp` が呼び出しごとに一意名を保証する（`$$` は永続シェルの PID のため同一シェル
+からの同一秒リトライでは不変であり防護にならない）。**census を並行実行しないこと**
+——`census.json` 自体が単一の固定パスであり、stdout 名の衝突回避では
 主成果物の競合は防げない。census は 1 キャンペーンの最終集計を 1 回行う逐次ステップで
 あり、並行自動化の対象にしない。成功した実行の `census.json` と、その実行の
 `census_stdout_*.txt` を**対で** dated record として commit すること（保存しない実行は

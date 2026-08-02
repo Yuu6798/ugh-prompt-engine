@@ -9105,7 +9105,8 @@ def evaluate_m2_bars(
             # このコールから 4 水準 × 2 アームの census を立証する術が無い。
             # したがってバーは当てる（証拠は `bar_satisfied` / `failures` に残す）が、
             # **合否という語は出さない**。帯の判定は r6/r7 の水準横断集計が census を
-            # 満たしたときに出す（その集計器は未実装・`HANDOFF.md` の残タスク）。
+            # 満たしたときに出す（その集計器は `aggregate_m2e_census`（`--census`）
+            # として実装済み）。
             cat_result["bar_satisfied"] = not failures
             cat_result["status"] = "census_pending"
         else:
