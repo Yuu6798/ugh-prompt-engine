@@ -1090,6 +1090,20 @@ verdict のみ・加算。単一性は従来から要求済みで、値を成果
 セルだけにする——短いコホートを「別コホート」と報告すると本当の原因（件数不足）が
 見えなくなるため。
 
+**E-10. `numeric_runtime_config` も水準横断で照合する**（PR #241 Codex P1 で是正）。
+`env_digest` は **`threadpool_info` を意図的に含めない**（計測のための threadpoolctl
+import が scoring の pin へ混入するのを避けるため）。その穴は「記録は
+`numeric_runtime_config` に残るので事後の原因帰属はできる」という前提で**宣言された穴**
+として許容されている——**その記録を照合しなければ前提が成立しない**。evaluate は 1 水準の
+中で `_require_homogeneous_numeric_runtime_config` を既に課しているので、水準を跨ぐ集計
+だけが弱いという非対称になっていた。同質性の検査対象に加える。
+
+**E-11. アーム間照合は per-cell 検査を通ったセル同士でのみ行う**（PR #241 Codex P2 で是正）。
+片アームが `insufficient_repeats` で欠けている水準は「**部分測定**」であって「別素材」では
+ない。完了したアームの値と欠けたアームの `None` を突き合わせて raise すると、**census が
+本来出すべき `census_incomplete` の報告そのものが出せなくなる**——部分測定を報告するのが
+census の目的なので、ここで落としてはならない。E-8 の水準横断照合と同じ扱いに揃える。
+
 **E-9. 書き出す直前に load 時 pin の不変を再確認する**（PR #241 Codex P2 で是正）。
 run / evaluate と同じ post-execution ガード（`_require_unchanged_since_load()`）を census の
 `_atomic_write_text` 直前にも置く。集計中にソースが差し替わると、census は「現 checkout と

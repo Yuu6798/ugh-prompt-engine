@@ -9282,6 +9282,14 @@ def _require_homogeneous_census_inputs(
         "est_voiced_confidence_floor",
         "repeats_min",
         "env_digest",
+        # `env_digest` は **`threadpool_info` を意図的に含めない**（`_env_digest_numeric_
+        # runtime` docstring: 計測のための threadpoolctl import が scoring の pin へ
+        # 混入するのを避けるため）。その穴は「記録は `numeric_runtime_config` に残る」
+        # という前提で宣言された穴として許容されている——**その記録を照合しなければ
+        # 前提が成立しない**。evaluate は 1 水準の中で
+        # `_require_homogeneous_numeric_runtime_config` を既に課しているので、水準を
+        # 跨ぐ集計だけが弱いという非対称になっていた（PR #241 Codex P1）。
+        "numeric_runtime_config",
     )
     for field in fields:
         values = {json.dumps(v.get(field), sort_keys=True) for v in verdicts}
@@ -9462,6 +9470,8 @@ def aggregate_m2e_census(
     cells: "Dict[str, Dict[str, Any]]" = {}
     missing: "List[Dict[str, Any]]" = []
     normalized_by_level: "Dict[str, Tuple[str, ...]]" = {}
+    # per-cell 検査を通ったセルだけを集めた木（アーム間照合はこれを使う）。
+    sound_cells: "Dict[str, Dict[str, Dict[str, Any]]]" = {}
     observed_cells = 0
     for level in _M2E_LEVEL_LADDER:
         for arm in arms:
@@ -9503,6 +9513,7 @@ def aggregate_m2e_census(
                 )
             else:
                 observed_cells += counted
+                sound_cells.setdefault(level, {})[arm] = cell
             cells.setdefault(level, {})[arm] = {
                 "cells": counted,
                 "complete": not problems,
@@ -9515,7 +9526,13 @@ def aggregate_m2e_census(
     # `clip_ids` を持ちながら、別世代の音声・別世代の登録簿を指すことはありうる——
     # id は名前であって bytes ではない。row は既に `external_manifest_sha256` /
     # `external_fixtures_sha256` を運んでいるので、**素性の hash そのもの**を照合する。
-    for level, per_arm in sorted(observed.items()):
+    #
+    # 照合は **per-cell 検査を通ったセル同士**でのみ行う（PR #241 Codex P2）。片アームが
+    # `insufficient_repeats` で欠けている水準は「部分測定」であって「別素材」ではない
+    # ——完了したアームの値と欠けたアームの `None` を突き合わせて raise すると、
+    # **census が本来出すべき `census_incomplete` の報告そのものが出せなくなる**。
+    # 部分測定を報告するのが census の目的なので、ここで落としてはならない。
+    for level, per_arm in sorted(sound_cells.items()):
         for field, what in (
             ("clip_ids", "clip_ids"),
             ("external_manifest_sha256", "external_manifest_sha256"),

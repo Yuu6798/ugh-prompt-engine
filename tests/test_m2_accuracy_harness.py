@@ -11162,3 +11162,45 @@ def test_normalized_cohort_ids_strip_only_the_expected_level_tag() -> None:
     ) == ("vremix_vocadito_1_BedOne",)
     with pytest.raises(ValueError, match="水準タグ"):
         harness._m2e_normalized_cohort_ids("0dB", ["vremix_vocadito_1_BedOne_p12"])
+
+
+def test_census_rejects_levels_with_different_numeric_runtime_configs(
+    tmp_path: Path,
+) -> None:
+    """PR #241 Codex P1: `env_digest` は `threadpool_info` を意図的に含めない。
+
+    その穴は「記録は `numeric_runtime_config` に残る」という前提で許容されている
+    宣言された穴であり、**その記録を照合しなければ前提が成立しない**。evaluate は
+    1 水準の中で既に同質性を課しているので、水準を跨ぐ集計だけが弱いという非対称に
+    なっていた。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    verdicts[1]["numeric_runtime_config"] = {"threadpool_info": [{"internal_api": "openblas"}]}
+    with pytest.raises(ValueError, match="numeric_runtime_config が揃っていない"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_reports_a_partially_measured_level_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    """PR #241 Codex P2: 片アームだけ欠けた水準は「部分測定」であって「別素材」ではない。
+
+    完了したアームの値と欠けたアームの `None` を突き合わせて raise すると、
+    **census が本来出すべき `census_incomplete` の報告そのものが出せなくなる**。
+    部分測定を報告するのが census の目的なので、ここで落としてはならない。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    # +6dB の stem アームだけが repeats 不足で判定に至らなかった、という実際に起こる形。
+    stem = verdicts[1]["categories"]["V_remix_real_stem"]
+    stem["status"] = "insufficient_repeats"
+    for key in ("clip_ids", "external_manifest_sha256", "external_fixtures_sha256", "metrics"):
+        stem.pop(key, None)
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    assert ("+6dB", "V_remix_real_stem") in gaps
+    assert "V_remix_real_direct" not in [arm for _lvl, arm in gaps]
+    # 欠けた 1 アームぶん（80 clip × 2 repeats）だけが不足している。
+    assert census["observed_cells_total"] == census["expected_cells_total"] - 160
