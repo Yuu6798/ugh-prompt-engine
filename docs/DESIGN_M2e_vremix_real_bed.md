@@ -1031,6 +1031,48 @@ resume しない**——素性の分からないセルを通さない。
 > (1) と (2) は「どこに置いたか」、(3) は「誰が計算したか」を問う。前者だけでは
 > コピーで抜けられる。
 
+#### 8.9.5 実装ノート（2026-08-02・C5 水準横断 census 集計）
+
+§6.2 が「帯の判定は `gate_level` の run が §11 のセル census を満たしたときにのみ出る」と
+定め、2026-08-01 の実装ノートが「その集計器は未実装」と宣言していた穴を埋める。
+**`aggregate_m2e_census` が帯の判定を出す唯一の場所である。**
+
+**E-1. 入力は verdict であって run report ではない。** report から再判定すると
+`evaluate_m2_bars` の全ゲート（測り直しによる独立検証・provenance 照合・pin 束縛）を
+二重実装することになり、2 つの判定経路が食い違う余地を作る。verdict は既にそれらを
+通過した成果物なので、集計器は「揃っているか」だけを問う。
+
+**E-2. 期待セル数は積として再計算する。** `1280` を定数で書かない
+（`_m2e_census_expected_cells` = コホート幅 80 × ラダー長 4 × アーム数 2 × `repeats_min`）。
+定数はコホート・ラダー・アーム・repeats のどれかが動いたときそれを黙って通すが、積は
+必ず食い違う（§6.2「総抽出回数の一致確認。一致しない実装は誤り」）。
+
+**E-3. census が揃うまで metrics を成果物に存在させない。** §11 は部分集合での平均 RPA・
+途中の破断曲線・見通しの表明を禁じている。「出さない」ではなく**文書に存在させない**
+ことで、下流が偶然読んでしまう経路ごと消す（`band_verdict` / `level_response` は
+`null`、`cells` は件数のみ）。テストは census 文書の全 bytes に `raw_pitch_accuracy` /
+`metrics` 等が現れないことを固定する。
+
+**E-4. 環境同一性を要求する。** §8.7 の「複数環境のセルを 1 つの帯として合算することは
+禁止」を水準横断の集計面へそのまま適用し、全 verdict の `env_digest` 一致を fail-closed で
+要求する。そのため `evaluate_m2_bars` は M2e verdict に `env_digest` を刻む（M2e を含む
+verdict のみ・加算。単一性は従来から要求済みで、値を成果物へ持ち出しただけ）。
+**運用上の含意**: 4 水準を別インスタンスで測ると CPU 差で `env_digest` が割れ、census は
+揃わない（§8.4 の 2.2 倍分散はこの形でも現れる）。これは不便ではなく、§8.7 が要求している
+ことそのものである。
+
+**E-5. 通過しても昇格しない。** `promotes_route` / `unlocks_m4_g2` を常に `false` として、
+`declared_limits`（§7.2 の 4 点）とともに**成果物へ埋め込む**。読み手が設計文書へ戻らなく
+ても、この帯が何を解錠しないかが判定と同じ場所にある。
+
+その他の関所: (level, arm) の重複拒否（コピーした verdict で census を埋めさせない）、
+アーム間の `clip_ids` 一致（§6.2「アームは manifest を分けない」の下流検査）、
+`m2e_bars_sha256` は verdict の自己申告ではなく**集計器が読んだ凍結ファイル**と照合、
+`generator_code_sha256` / `evaluator_code_sha256` は現 checkout と 3 段照合。
+
+CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate のフェーズ引数は
+すべて fail-closed）。
+
 **r4/r6 の運用**: 本測定は run・evaluate ともに
 `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 ... --pin-threads` で起動する（runbook §5 以降）。
 

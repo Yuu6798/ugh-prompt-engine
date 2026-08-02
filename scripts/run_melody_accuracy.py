@@ -8847,6 +8847,13 @@ def evaluate_m2_bars(
         verdict["m2e_bars_path_relative"] = _repo_relative_path(m2e_bars_path)
         verdict["m2e_bars_registration_attestation"] = m2e_registration_attestation
         verdict["level"] = m2e_level
+        # C5（設計判断 E-4）: 水準横断集計は**環境同一性を検査できなければならない**
+        # （§8.7「複数環境のセルを 1 つの帯として合算することは禁止」）。verdict が
+        # `env_digest` を名乗らないと、集計器は 4 水準が同じ環境で測られたかを
+        # 判定する手段を持たない——上でその単一性を既に要求しているので、値をここで
+        # 成果物へ持ち出す。**M2e カテゴリを含む verdict にのみ現れる**（他の verdict は
+        # 1 バイトも変わらない）。
+        verdict["env_digest"] = next(iter(env_digests))
 
     # C2: 測り直しを起こす前に、`store_B` が提出 report を産んだ `store_A` と重なって
     # いないことを確かめる（CLI の 2 引数比較は evaluate では走らないため、ここが
@@ -9185,6 +9192,350 @@ def _external_manifest_protected_paths(
     return protected
 
 
+# ---------------------------------------------------------------------------
+# C5 — 水準横断の census 集計（帯の判定を出す唯一の場所・rev.6 §6.2 / §11）
+# ---------------------------------------------------------------------------
+#
+# `evaluate_m2_bars` は M2e カテゴリに `pass` / `fail` を出さない。**1 回の evaluate は
+# 構造上 1 水準しか見ない**（M2e を含む report の level は単一であることを fail-closed で
+# 要求している）ため、そのコールから 4 水準 × 2 アームの census を立証する術が無いから
+# である。ここがその立証を行う唯一の場所であり、**帯の判定が出る唯一の場所**でもある。
+_M2E_CENSUS_SCHEMA = "m2e-census/0.1"
+
+
+def load_verdict(path: "str | Path") -> ReportArtifact:
+    """verdict JSON を single read で読む（read → hash → parse の 1 操作）。
+
+    `load_report` と同じ束縛（raw bytes / digest / parsed data）を使う——集計器は
+    「pin した bytes と実際に集計した内容」が食い違わないことを、report と同じ強さで
+    要求する。schema の検査は `aggregate_m2e_census` 側で行う。
+    """
+    raw = Path(path).read_bytes()
+    return ReportArtifact.from_bytes(raw, path=path)
+
+
+def _m2e_census_expected_cells(repeats_min: int) -> int:
+    """期待セル総数を**構成要素の積として再計算する**（§6.2「総抽出回数の一致確認」）。
+
+    `1280` という定数を書かない。コホート幅・ラダー長・アーム数・repeats のどれかが
+    動いたとき、定数はそれを黙って通す一方、積は必ず食い違う。
+    """
+    return (
+        _M2E_EXPECTED_ENTRIES_PER_LEVEL
+        * len(_M2E_LEVEL_LADDER)
+        * len(_categories_owned_by("m2e_accuracy_bars.yaml"))
+        * repeats_min
+    )
+
+
+def _require_homogeneous_census_inputs(
+    verdicts: "List[Dict[str, Any]]", *, m2e_bars_sha256: str
+) -> Dict[str, Any]:
+    """集計してよい verdict 群かを検査し、共通スカラーを返す（fail-closed）。
+
+    **異なる帯登録・異なるコード・異なる環境で出た verdict を 1 つの帯として合算しない。**
+    §8.7 の「複数環境のセルを合算しない」を、水準横断の集計面へそのまま適用する
+    （設計判断 E-4）。`m2e_bars_sha256` は verdict の自己申告ではなく**集計器が読んだ
+    凍結ファイル**と突き合わせる——別世代のバーで出た判定を現行バーの帯として publish
+    しないため。
+    """
+    if not verdicts:
+        raise ValueError(
+            "aggregate_m2e_census: verdict が 1 件も渡されていない; 集計対象なしに "
+            "帯の census を名乗らない (fail-closed)"
+        )
+    common: Dict[str, Any] = {}
+    fields = (
+        "bars_sha256",
+        "m2e_bars_sha256",
+        "generator_code_sha256",
+        "evaluator_code_sha256",
+        "tolerance_cents",
+        "est_voiced_confidence_floor",
+        "repeats_min",
+        "env_digest",
+    )
+    for field in fields:
+        values = {json.dumps(v.get(field), sort_keys=True) for v in verdicts}
+        if len(values) != 1:
+            raise ValueError(
+                f"aggregate_m2e_census: verdict 間で {field} が揃っていない "
+                f"（{sorted(values)}）; 別の帯登録・別コード・別環境で出た判定を 1 つの "
+                "帯として合算しない (fail-closed)"
+            )
+        common[field] = verdicts[0].get(field)
+
+    if common["m2e_bars_sha256"] != m2e_bars_sha256:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の m2e_bars_sha256 "
+            f"{common['m2e_bars_sha256']!r} が集計器の読んだ帯登録 {m2e_bars_sha256!r} と "
+            "不一致; 別世代のバーの下で出た判定を現行バーの帯として publish しない "
+            "(fail-closed)"
+        )
+    # 集計器自身のコードと、判定を出したコードの一致（`evaluate_m2_bars` の 3 段照合と
+    # 同型）。集計は判定を**新たに publish する**行為なので、その根拠が現 checkout で
+    # 再現可能であることを要求する。
+    current_generator = _generator_code_sha256()
+    if common["generator_code_sha256"] != current_generator:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の generator_code_sha256 "
+            f"{common['generator_code_sha256']!r} が現 checkout の {current_generator!r} と "
+            "不一致; 別世代のコードが産んだ判定を現行コードの帯として publish しない "
+            "(fail-closed)"
+        )
+    current_evaluator = _evaluator_code_sha256()
+    if common["evaluator_code_sha256"] != current_evaluator:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の evaluator_code_sha256 "
+            f"{common['evaluator_code_sha256']!r} が現 checkout の {current_evaluator!r} と "
+            "不一致 (fail-closed)"
+        )
+    # **形も要求する**（`""` や `"unknown"` の placeholder が「揃っている」に化けない）。
+    if not _is_sha256(common["env_digest"]):
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の env_digest {common['env_digest']!r} が "
+            "64-hex sha256 でない; 環境を名乗らない判定を帯の census に数えない "
+            "(fail-closed)"
+        )
+    if not isinstance(common["repeats_min"], int) or common["repeats_min"] < 2:
+        raise ValueError(
+            f"aggregate_m2e_census: repeats_min {common['repeats_min']!r} が 2 未満または "
+            "整数でない (fail-closed)"
+        )
+    return common
+
+
+def aggregate_m2e_census(
+    verdicts: "List[ReportArtifact]",
+    *,
+    m2e_bars_path: Path = M2E_BARS_PATH,
+) -> Dict[str, Any]:
+    """4 水準 × 2 アームの verdict を集め、census が揃ったときにだけ帯の判定を出す。
+
+    設計 §6.2 / §11 の実装。**この関数だけが帯の判定を出す。**
+
+    設計判断（rev.6 §8.9.5 実装ノート）:
+
+    - **E-1 入力は verdict であって run report ではない。** report から再判定すると
+      evaluate の全ゲート（測り直しによる独立検証・provenance 照合・pin 束縛）を
+      二重実装することになり、2 つの判定経路が食い違う余地を作る。verdict は既に
+      それらを通過した成果物なので、集計器は「揃っているか」だけを問う。
+    - **E-2 期待セル数は積として再計算する**（`_m2e_census_expected_cells`）。
+    - **E-3 census が揃うまで metrics を一切載せない。** §11 は部分集合での平均 RPA・
+      途中の破断曲線・見通しの表明を禁じている。「出さない」ではなく「**成果物に
+      存在させない**」ことで、下流が偶然読んでしまう経路ごと消す。
+    - **E-4 環境同一性を要求する**（§8.7）。
+    - **E-5 通過しても昇格しない。** `promotes_route` / `unlocks_m4_g2` を常に `false`
+      として成果物に埋め込む（§5.4 / §7.2: 歌声と伴奏は別の曲であるため）。
+
+    揃っていないときに出せるのは census のみ——完了セル数 / 期待数、(水準, アーム) 別の
+    完了状況、欠けている組。**判定・平均・曲線は出さない。**
+    """
+    m2e_bars, m2e_bars_sha256 = load_bars(m2e_bars_path)
+    m2e_bars_data = m2e_bars.verify(m2e_bars_sha256)
+    arms = _categories_owned_by("m2e_accuracy_bars.yaml")
+
+    parsed: "List[Dict[str, Any]]" = []
+    pins: "List[Dict[str, Any]]" = []
+    for index, artifact in enumerate(verdicts):
+        if not isinstance(artifact, ReportArtifact):
+            raise ValueError(
+                f"aggregate_m2e_census: verdicts[{index}] は load_verdict() が返す "
+                f"artifact でなければならない（受け取った型: {type(artifact).__name__}）; "
+                "digest と内容が切り離された入力を集計しない (fail-closed)"
+            )
+        data = artifact.verify()
+        if data.get("schema_version") != _EXPECTED_VERDICT_SCHEMA:
+            raise ValueError(
+                f"aggregate_m2e_census: verdicts[{index}] の schema_version "
+                f"{data.get('schema_version')!r} が {_EXPECTED_VERDICT_SCHEMA!r} でない "
+                "(fail-closed)"
+            )
+        if not any(arm in data.get("categories", {}) for arm in arms):
+            raise ValueError(
+                f"aggregate_m2e_census: verdicts[{index}] に M2e カテゴリ "
+                f"{list(arms)} が 1 つも無い; 帯と無関係な verdict を census の入力に "
+                "数えない (fail-closed)"
+            )
+        parsed.append(data)
+        pins.append(artifact.pin())
+
+    common = _require_homogeneous_census_inputs(parsed, m2e_bars_sha256=m2e_bars_sha256)
+    repeats_min = int(common["repeats_min"])
+    expected_cells = _m2e_census_expected_cells(repeats_min)
+
+    conditions = m2e_bars_data[_BARS_FILES["m2e_accuracy_bars.yaml"]["conditions_key"]]
+
+    # (level, arm) → セル情報。**同じ組が 2 回来たら拒否する**（同じ測定を 2 回数えて
+    # census を満たしたことにしない——コピーした verdict で 1280 を埋められては
+    # ならない）。
+    observed: "Dict[str, Dict[str, Dict[str, Any]]]" = {}
+    for index, data in enumerate(parsed):
+        level = data.get("level")
+        if level not in _M2E_LEVEL_LADDER:
+            raise ValueError(
+                f"aggregate_m2e_census: verdicts[{index}] の level {level!r} が事前登録 "
+                f"ラダー {list(_M2E_LEVEL_LADDER)} にない (fail-closed)"
+            )
+        for arm in arms:
+            cat = data.get("categories", {}).get(arm)
+            if cat is None:
+                continue
+            if arm in observed.get(level, {}):
+                raise ValueError(
+                    f"aggregate_m2e_census: (level={level!r}, arm={arm!r}) の verdict が "
+                    "複数ある; 同じ測定を二重に数えて census を満たしたことにしない "
+                    "(fail-closed)"
+                )
+            observed.setdefault(level, {})[arm] = {
+                "verdict_index": index,
+                "status": cat.get("status"),
+                "n_rows": cat.get("n_rows"),
+                "clip_ids": cat.get("clip_ids"),
+                "repeats_bit_identical": cat.get("repeats_bit_identical"),
+                "outcomes": cat.get("outcomes"),
+                "bar_satisfied": cat.get("bar_satisfied"),
+                "failures": cat.get("failures"),
+                "gate_level": cat.get("gate_level"),
+                "metrics": cat.get("metrics"),
+            }
+
+    cells: "Dict[str, Dict[str, Any]]" = {}
+    missing: "List[Dict[str, Any]]" = []
+    observed_cells = 0
+    for level in _M2E_LEVEL_LADDER:
+        for arm in arms:
+            cell = observed.get(level, {}).get(arm)
+            if cell is None:
+                missing.append({"level": level, "arm": arm, "reason": "verdict_absent"})
+                continue
+            problems: "List[str]" = []
+            clip_ids = cell["clip_ids"]
+            if not isinstance(clip_ids, list) or len(clip_ids) != _M2E_EXPECTED_ENTRIES_PER_LEVEL:
+                problems.append(
+                    f"clip 数 {len(clip_ids) if isinstance(clip_ids, list) else clip_ids!r} が "
+                    f"凍結コホート {_M2E_EXPECTED_ENTRIES_PER_LEVEL} と不一致"
+                )
+            if cell["n_rows"] != repeats_min:
+                problems.append(f"n_rows {cell['n_rows']!r} が repeats_min {repeats_min} と不一致")
+            if cell["outcomes"] != ["measured"]:
+                problems.append(f"outcomes {cell['outcomes']!r} が ['measured'] でない")
+            if cell["repeats_bit_identical"] is not True:
+                problems.append("repeats が bit 一致していない")
+            if cell["status"] not in ("census_pending", "level_record_only"):
+                problems.append(f"status {cell['status']!r} が M2e の想定値でない")
+            counted = (
+                len(clip_ids) * cell["n_rows"]
+                if isinstance(clip_ids, list) and isinstance(cell["n_rows"], int)
+                else 0
+            )
+            if problems:
+                missing.append(
+                    {"level": level, "arm": arm, "reason": "; ".join(problems)}
+                )
+            else:
+                observed_cells += counted
+            cells.setdefault(level, {})[arm] = {
+                "cells": counted,
+                "complete": not problems,
+                "problems": problems,
+            }
+    # アーム間で**同じミックスを測ったこと**を要求する（§6.2「アームは manifest を
+    # 分けない」の下流検査）。件数が揃っていても中身がずれていれば別の帯である。
+    for level, per_arm in sorted(observed.items()):
+        id_sets = {
+            arm: tuple(cell["clip_ids"]) if isinstance(cell["clip_ids"], list) else None
+            for arm, cell in per_arm.items()
+        }
+        if len(set(id_sets.values())) > 1:
+            raise ValueError(
+                f"aggregate_m2e_census: level {level!r} のアーム間で clip_ids が一致しない; "
+                "同じミックスを 2 経路で測るのがアーム比較の定義であり、別集合の観測を "
+                "同じ水準の 2 アームとして並べない (fail-closed)"
+            )
+
+    complete = not missing and observed_cells == expected_cells
+
+    census: Dict[str, Any] = {
+        "schema_version": _M2E_CENSUS_SCHEMA,
+        "census_recorded_utc": _utc_now(),
+        "generator_code_sha256": common["generator_code_sha256"],
+        "evaluator_code_sha256": common["evaluator_code_sha256"],
+        "bars_sha256": common["bars_sha256"],
+        "m2e_bars_sha256": m2e_bars_sha256,
+        "m2e_bars_path_relative": _repo_relative_path(m2e_bars_path),
+        "env_digest": common["env_digest"],
+        "tolerance_cents": common["tolerance_cents"],
+        "est_voiced_confidence_floor": common["est_voiced_confidence_floor"],
+        "repeats_min": repeats_min,
+        "levels": list(_M2E_LEVEL_LADDER),
+        "arms": list(arms),
+        "expected_cells_total": expected_cells,
+        "observed_cells_total": observed_cells,
+        "cells": cells,
+        "missing": missing,
+        "complete": complete,
+        "verdict_pins": pins,
+        # E-5: 通過しても昇格しない（§5.4 / §7.2）。**成果物に埋め込む**——読み手が
+        # 設計文書へ戻らなくても、この帯が何を解錠しないかが判定と同じ場所にある。
+        "promotes_route": False,
+        "unlocks_m4_g2": False,
+        "declared_limits": [
+            "歌声（vocadito）と伴奏（MUSDB18-HQ）は別の曲であり、和声的に不整合である。"
+            "抽出が易しくなるか難しくなるかは一意に決まらないため、本帯の結果を根拠に "
+            "V_fullstack へ昇格させない（§7.2）。",
+            "ベッドは MUSDB18-HQ test split の先頭 2 曲であり、ジャンル・編成の代表性を "
+            "主張しない（§7.2）。",
+            "+12dB は実運用のミックス balance ではなくトリップワイヤ専用の人工的水準 "
+            "である（§7.2）。",
+            "stem アームは水準軸に沿った単調性を仮定しないため、「+12dB で割れたら下の "
+            "水準も割れる」という下方伝播を主張しない（§5.4）。",
+        ],
+    }
+
+    if not complete:
+        # §11: 揃わないまま出せるのは**センサスのみ**。平均 RPA・破断曲線・
+        # 「通りそう / 落ちそう」の見通しを成果物に**存在させない**（E-3）。
+        census["band_verdict"] = None
+        census["level_response"] = None
+        census["status"] = "census_incomplete"
+        return census
+
+    # ここから先は census が揃った場合のみ。
+    band: Dict[str, Any] = {}
+    for arm in arms:
+        gate_level = conditions[arm]["gate_level"]
+        cell = observed[gate_level][arm]
+        if cell["status"] != "census_pending" or cell["bar_satisfied"] is None:
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の gate_level {gate_level!r} の "
+                f"verdict にバー適用の証拠（bar_satisfied）が無い（status="
+                f"{cell['status']!r}）; バーが当たっていない水準から帯の判定を出さない "
+                "(fail-closed)"
+            )
+        band[arm] = {
+            "gate_level": gate_level,
+            "status": "pass" if cell["bar_satisfied"] else "fail",
+            "failures": cell["failures"] or [],
+        }
+    census["band_verdict"] = band
+    # §11「4 水準は常に全点提示する」——事後に「一番良かった水準」を選んで報告する
+    # ことは禁止なので、成果物は常にラダー全点を持つ。
+    census["level_response"] = {
+        arm: [
+            {
+                "level": level,
+                "ladder_index": _m2e_ladder_index(level),
+                "metrics": observed[level][arm]["metrics"],
+            }
+            for level in _M2E_LEVEL_LADDER
+        ]
+        for arm in arms
+    }
+    census["status"] = "census_complete"
+    return census
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True, help="出力 JSON の書き出し先")
@@ -9194,6 +9545,16 @@ def main() -> int:
         type=Path,
         metavar="REPORT.json",
         help="run report(s) にバーを適用して verdict を出す（未指定なら run phase）",
+    )
+    parser.add_argument(
+        "--census",
+        nargs="+",
+        type=Path,
+        metavar="VERDICT.json",
+        help="C5（設計 §6.2 / §11）: 4 水準 × 2 アームの verdict を集めて census 完全性を "
+        "検査し、**揃っているときにだけ**帯の判定を出す。揃っていなければ出せるのは "
+        "census のみ（完了セル数 / 期待数・(水準, アーム) 別の完了状況・欠けている組）で、"
+        "平均 RPA も破断曲線も成果物に存在しない。--evaluate とは排他",
     )
     parser.add_argument("--bars", type=Path, default=BARS_PATH)
     parser.add_argument(
@@ -9309,6 +9670,52 @@ def main() -> int:
     )
     args = parser.parse_args()
     _require_out_outside_git_metadata(args.out)
+    if args.census and args.evaluate:
+        raise SystemExit(
+            "--census と --evaluate は排他（census は evaluate が出した verdict を "
+            "集める後段であり、同じ起動で両方を行うと「自分が今出した判定を自分で "
+            "集計する」ことになる）"
+        )
+    if args.census:
+        # census は run/evaluate のどのフェーズ引数とも組み合わせない。測っていない
+        # 次元・使わない資源を名乗らせない規律（`--repeat-index` 等と同型）。
+        for flag, value in (
+            ("--categories", args.categories),
+            ("--level", args.level),
+            ("--cell-store", args.cell_store),
+            ("--eval-cell-store", args.eval_cell_store),
+            ("--repeat-index", args.repeat_index),
+        ):
+            if value is not None:
+                raise SystemExit(
+                    f"{flag} は census phase では無効（census は verdict を集めるだけで "
+                    "測定も評価もしない）"
+                )
+        protected = {Path(p).resolve() for p in args.census}
+        protected.add(Path(args.m2e_bars).resolve())
+        protected.update(_generator_code_paths())
+        if Path(args.out).resolve() in protected:
+            raise SystemExit(
+                f"--out {args.out} は census の入力（verdict / 帯登録 / provenance 対象の "
+                "ソース）と同じパスを指している; 入力を集計結果で上書きしない (fail-closed)"
+            )
+        census = aggregate_m2e_census(
+            [load_verdict(path) for path in args.census], m2e_bars_path=args.m2e_bars
+        )
+        _atomic_write_text(args.out, json.dumps(census, indent=2, sort_keys=True))
+        print(f"wrote census to {args.out}")
+        print(
+            f"  cells: {census['observed_cells_total']}/{census['expected_cells_total']} "
+            f"({census['status']})"
+        )
+        if census["band_verdict"] is None:
+            # 揃っていないときに print してよいのは census だけ（§11）。
+            for gap in census["missing"]:
+                print(f"  missing: {gap['level']} / {gap['arm']}: {gap['reason']}")
+        else:
+            for arm, result in sorted(census["band_verdict"].items()):
+                print(f"  {arm} @ {result['gate_level']}: {result['status']}")
+        return 0
     if args.workers < 1:
         raise SystemExit(f"--workers {args.workers} は 1 以上の整数のみ許可する")
     # `--cell-store-role` は run phase のセル書き込みにしか意味が無い。測っていない

@@ -22,7 +22,7 @@
 | r3 (P-c) | `m2e_bed_fixtures.yaml` / `m2e_accuracy_bars.yaml` | **完了** |
 | — | **C2** store 分離（rev.6 §8.9.2-(1)） | **完了**（2026-08-02・`--eval-cell-store`） |
 | — | **C3** evaluate の並列化（rev.6 §8.9.2-(2)） | **完了**（2026-08-02・`--workers` + `--pin-threads`） |
-| — | **C5** 水準横断 census 集計 | **未着手** ← 次はここ（別ブリーフ・r7 で使う） |
+| — | **C5** 水準横断 census 集計 | **完了**（2026-08-02・`--census`） |
 | r4 | r2-0（`P` / 並列不変性ゲート / `S`・`T_*` / `env_digest` / lockfile） | 未実施 |
 | r5 (P-c′) | `m2e_r2_shard_map.yaml` | 未実施 |
 | r6 (P-d) | 本測定（**code change 厳禁**） | 未実施 |
@@ -31,7 +31,12 @@
 **C2 / C3 は r6 開始前に landing させること**（r6 は code change を禁じているため、
 r6 に入ってからでは入れられない。F2 と同じ論法・rev.6 §8.9.4）。
 **→ 2026-08-02 に landing 済み。** 設計判断 D-1（軌跡 digest）/ D-2（`--workers` の
-非対称）/ D-3（スレッド固定の対称性）の裁定と根拠は rev.6 §8.9.4 実装ノート。
+非対称）/ D-3（スレッド固定の対称性）/ D-4・D-5（独立性 3 層）の裁定と根拠は
+rev.6 §8.9.4 実装ノート。
+
+**C5 も同日 landing した**（rev.6 §8.9.5・設計判断 E-1〜E-5）。C5 は r7 で使う集計器で
+r6 の code freeze の制約下には無かったが、先に入れておくことで r6 以降に必要な
+code change が無くなる。**r6 前に入れるべきコード変更はすべて完了している。**
 
 ---
 
@@ -65,16 +70,35 @@ fail-closed（すべて **resolve 後**のパスで判定・各 1 テスト）:
 > 保たれるのではない。** ここを取り違えると、F2 で塞いだ穴（publish がキャッシュを
 > 自分自身と比較する）を別の形で開けることになる。
 
-### C5 — 水準横断の census 集計（帯の判定を出す唯一の場所）
+### C5 — 水準横断の census 集計（帯の判定を出す唯一の場所）— **完了（2026-08-02）**
 
-`evaluate_m2_bars` は M2e カテゴリに `pass` / `fail` を出さない（2026-08-01 実装ノート・
-設計 §6.2）。`gate_level` でバーは当たるが、結果は `bar_satisfied` / `failures` に残り
-`status` は `census_pending` に留まる——**1 回の evaluate は 1 水準しか見ない**ので、
-そこから 4 水準 × 2 アーム = 1280 セルの census を立証できないため。
+`evaluate_m2_bars` は M2e カテゴリに `pass` / `fail` を出さない（設計 §6.2）。
+`gate_level` でバーは当たるが結果は `bar_satisfied` / `failures` に残り `status` は
+`census_pending` に留まる——**1 回の evaluate は 1 水準しか見ない**ため。
 
-やること（r6/r7 で必要になる）: 4 水準 × 2 アームの verdict を集めて census 完全性を
-検査し、揃っているときにだけ帯の判定を出す集計器。**部分集合で平均 RPA や破断曲線を
-出さない**（§11）。集計器が無い間は判定が存在しない状態が正しい。
+実装: `aggregate_m2e_census`（CLI `--census VERDICT.json...`）。**帯の判定が出る唯一の
+場所**。4 水準 × 2 アームの verdict を集め、census 完全性を検査し、揃っているときにだけ
+帯の判定を出す。
+
+```bash
+python scripts/run_melody_accuracy.py --out <census>.json \
+    --census <verdict_p12>.json <verdict_p06>.json <verdict_p00>.json <verdict_m06>.json
+```
+
+- 期待セル数は**積として再計算**する（80 × 4 水準 × 2 アーム × `repeats_min` = 1280）。
+  `1280` を定数で書いていない（設計判断 E-2）。
+- **揃わないときは metrics が文書に存在しない**（`band_verdict` / `level_response` は
+  `null`、`cells` は件数のみ）。部分集合の平均 RPA・途中の破断曲線・見通しは
+  「出さない」のではなく**書き込まない**（E-3・§11）。
+- 全 verdict の `env_digest` 一致を要求する（E-4・§8.7）。**4 水準を別インスタンスで
+  測ると CPU 差で census は揃わない**——不便ではなく §8.7 の要求そのもの。
+  そのため `evaluate_m2_bars` は M2e verdict に `env_digest` を刻むようになった。
+- 揃ったときの出力: `gate_level` での帯判定（アーム別 pass/fail）+ **4 水準全点**の
+  `level_response`（§11「事後に一番良かった水準を選ばない」）+ `promotes_route: false` /
+  `unlocks_m4_g2: false` / `declared_limits`（§7.2 の 4 点）。
+
+**部分集合で平均 RPA や破断曲線を出さない**（§11）。集計器が無い間は判定が存在しない
+状態が正しい——その状態は解消されたが、**census が揃うまでは依然として判定は出ない。**
 
 ### C3 — evaluate の並列化（rev.6 §8.9.2-(2)）— **完了（2026-08-02）**
 
@@ -234,10 +258,9 @@ demucs の vocals stem の `stem_sha256` が run 間で変わる（`residual_db`
 
 ## 5. 次にやる順序
 
-1. ~~**C2 / C3 を実装**（本 PR とは別 PR）。r6 前に landing。~~ **完了（2026-08-02）**
-   ——残るのは **C5**（水準横断 census 集計）。C5 は r7 で使う集計器で r6 の code freeze の
-   制約下に無いため別ブリーフ。C5 が landing するまで帯判定は `census_pending` のまま
-   であり、**それが正しい状態**（判定器が無い間は判定が存在しない）。
+1. ~~**C2 / C3 を実装**。r6 前に landing。~~ **完了（2026-08-02）**
+   ~~残るのは C5~~ **C5 も完了（2026-08-02・`--census`）**。r6 前に必要な code change は
+   すべて landing した。以降の段階は code change を伴わない。
 2. **ミックス生成**: `make_vremix_fixtures.py build` で 320 本
    （40 clip × 2 bed × 4 水準）+ manifest/fixtures/生成記録。runbook §5。
 3. **r4（r2-0）**: `P` 決定・並列不変性ゲート・`S`/`T_*` 校正・`env_digest` 確定・
