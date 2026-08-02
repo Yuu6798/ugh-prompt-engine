@@ -8740,6 +8740,12 @@ def test_level_ladder_and_tags_are_frozen_in_declaration_order() -> None:
     }
 
 
+# 合成 M2e fixtures が名乗る builder provenance（実物と同じ 3 digest の形）。
+_FAKE_MIXER_CODE_SHA256 = "a1" * 32
+_FAKE_M2C_FIXTURES_SHA256 = "b2" * 32
+_FAKE_BED_FIXTURES_SHA256 = "c3" * 32
+
+
 def _write_m2e_external_fixture_set(
     tmp_path: Path,
     clip_specs: "Dict[str, Tuple[List[float], List[float]]]",
@@ -8767,6 +8773,13 @@ def _write_m2e_external_fixture_set(
         'schema_version: "m2e-external-fixtures/0.1"',
         'registered_utc: "2026-08-01"',
         f'level: "{level}"',
+        # 実 fixtures（`make_vremix_fixtures.build` の生成物）は必ず builder provenance を
+        # 持つ（run 側 `_require_registered_m2e_cohort` が実体照合する）。合成 fixtures にも
+        # 同じ形を持たせないと、C5 の混合式照合（E-13/E-17）が試せない。
+        "builder:",
+        f'  generator_code_sha256: "{_FAKE_MIXER_CODE_SHA256}"',
+        f'  m2c_fixtures_sha256: "{_FAKE_M2C_FIXTURES_SHA256}"',
+        f'  m2e_bed_fixtures_sha256: "{_FAKE_BED_FIXTURES_SHA256}"',
         "fixtures:",
     ]
     for clip_id, (times, freqs) in clip_specs.items():
@@ -10760,3 +10773,1099 @@ def test_cli_rejects_a_misplaced_cell_store_role(
     )
     with pytest.raises(SystemExit, match=match):
         harness.main()
+
+
+# ---------------------------------------------------------------------------
+# C5 — 水準横断の census 集計（rev.6 §6.2 / §11）。帯の判定が出る唯一の場所。
+# ---------------------------------------------------------------------------
+
+
+def _expand_clip_ids(count: int, level: str = "+12dB") -> "List[str]":
+    """§6.2 の id 規約 `vremix_{clip_id}_{bed_id}_{level_tag}` に従う合成 id。"""
+    tag = harness._M2E_LEVEL_TAGS[level]
+    return [f"vremix_vocadito_{i}_BedOne_{tag}" for i in range(count)]
+
+
+def _m2e_census_verdicts(
+    tmp_path: Path, *, shift_cents: float = 0.0
+) -> "List[Dict[str, Any]]":
+    """4 水準 × 2 アームぶんの verdict を、**実 verdict 1 本から**派生させて作る。
+
+    土台は `_m2e_evaluate` が実際に返す dict なので、集計器が読むフィールド名・型が
+    本物と食い違わないことを担保する（合成 dict だけで書くと verdict の形が変わった
+    ときにテストだけ通り続ける）。派生で変えるのは census が見る次元だけ:
+
+    - `level` / `ladder_index`（フェイク素材で 4 水準を実測すると 8 run 必要になる）
+    - `clip_ids` を凍結コホート幅（80）へ（フェイク素材は 2 clip しか持たない）
+    - `gate_level` 以外は `level_record_only` へ（バー適用の証拠を持たない実物の形）
+    - stem アームを direct の複製として追加（`_m2e_run` は direct のみ測る）
+    """
+    reports = [
+        _m2e_run(tmp_path, level="+12dB", shift_cents=shift_cents) for _ in range(2)
+    ]
+    gate_verdict = _m2e_evaluate(tmp_path, reports)
+    verdicts: "List[Dict[str, Any]]" = []
+    for level in harness._M2E_LEVEL_LADDER:
+        verdict = copy.deepcopy(gate_verdict)
+        verdict["level"] = level
+        direct = verdict["categories"]["V_remix_real_direct"]
+        direct["level"] = level
+        direct["ladder_index"] = harness._m2e_ladder_index(level)
+        direct["clip_ids"] = _expand_clip_ids(
+            harness._M2E_EXPECTED_ENTRIES_PER_LEVEL, level
+        )
+        if level != "+12dB":
+            direct["status"] = "level_record_only"
+            direct.pop("bar_satisfied", None)
+            direct.pop("failures", None)
+        verdict["categories"]["V_remix_real_stem"] = copy.deepcopy(direct)
+        verdicts.append(verdict)
+    return verdicts
+
+
+def _as_verdict_artifact(verdict: Dict[str, Any]) -> Any:
+    """dict の verdict を、raw/digest/parsed が整合した artifact へ包む。"""
+    raw = json.dumps(verdict, sort_keys=True).encode("utf-8")
+    return harness.ReportArtifact.from_bytes(raw, path=None)
+
+
+def _census(tmp_path: Path, verdicts: "List[Dict[str, Any]]") -> Dict[str, Any]:
+    return harness.aggregate_m2e_census(
+        [_as_verdict_artifact(v) for v in verdicts],
+        bars_path=BARS_PATH,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+    )
+
+
+def test_expected_cell_total_is_recomputed_as_a_product_not_a_constant() -> None:
+    """§6.2「総抽出回数の一致確認」: 80 × 4 水準 × 2 アーム × n=2 = 1280。
+
+    `1280` を定数で書くと、コホート幅・ラダー長・アーム数・repeats のどれかが動いた
+    ときに定数はそれを黙って通す。積なら必ず食い違う。
+    """
+    assert harness._m2e_census_expected_cells(2) == 1280
+    assert harness._m2e_census_expected_cells(3) == 1920
+    assert (
+        harness._m2e_census_expected_cells(2)
+        == harness._M2E_EXPECTED_ENTRIES_PER_LEVEL
+        * len(harness._M2E_LEVEL_LADDER)
+        * len(harness._categories_owned_by("m2e_accuracy_bars.yaml"))
+        * 2
+    )
+
+
+def test_census_complete_emits_the_band_verdict_and_all_four_levels(tmp_path: Path) -> None:
+    """census が揃ったときにだけ帯の判定が出る。**4 水準は常に全点提示**（§11）。"""
+    census = _census(tmp_path, _m2e_census_verdicts(tmp_path))
+    assert census["status"] == "census_complete"
+    assert census["complete"] is True
+    assert census["observed_cells_total"] == census["expected_cells_total"] == 1280
+    assert census["missing"] == []
+
+    band = census["band_verdict"]
+    assert sorted(band) == ["V_remix_real_direct", "V_remix_real_stem"]
+    for arm, result in band.items():
+        assert result["gate_level"] == "+12dB"
+        assert result["status"] == "pass", (arm, result["failures"])
+
+    # 事後に「一番良かった水準」を選べないよう、成果物は常にラダー全点を持つ。
+    for arm, points in census["level_response"].items():
+        assert [p["level"] for p in points] == list(harness._M2E_LEVEL_LADDER)
+        assert [p["ladder_index"] for p in points] == [0, 1, 2, 3]
+
+    # E-5: 通過しても昇格しない・M4 G2 を解錠しない（§5.4 / §7.2）。
+    assert census["promotes_route"] is False
+    assert census["unlocks_m4_g2"] is False
+    assert any("別の曲" in limit for limit in census["declared_limits"])
+
+    # E-26: 成果物の共有スカラーは verdict の自己申告（`common[...]`）ではなく、
+    # census 自身が読んだ凍結バー（`BARS_PATH` の `m2_accuracy_bars` block）由来。
+    assert census["tolerance_cents"] == 50.0
+    assert census["est_voiced_confidence_floor"] == 0.30
+
+
+def test_census_emits_fail_when_the_gate_level_bar_is_violated(tmp_path: Path) -> None:
+    """バー違反は帯の `fail` として出る（census が揃っている場合に限る）。"""
+    census = _census(tmp_path, _m2e_census_verdicts(tmp_path, shift_cents=500.0))
+    assert census["status"] == "census_complete"
+    for arm, result in census["band_verdict"].items():
+        assert result["status"] == "fail", arm
+        assert any("min_rpa" in f for f in result["failures"])
+
+
+@pytest.mark.parametrize("dropped", ["-6dB", "0dB"])
+def test_census_incomplete_contains_no_metrics_at_all(dropped: str, tmp_path: Path) -> None:
+    """§11: 揃わないまま出せるのは**センサスのみ**。
+
+    「平均 RPA を出さない」ではなく「**成果物に存在させない**」ことで、下流が偶然
+    読んでしまう経路ごと消す（設計判断 E-3）。
+    """
+    verdicts = [v for v in _m2e_census_verdicts(tmp_path) if v["level"] != dropped]
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["complete"] is False
+    assert census["band_verdict"] is None
+    assert census["level_response"] is None
+    assert census["observed_cells_total"] < census["expected_cells_total"]
+    assert {(m["level"], m["arm"]) for m in census["missing"]} == {
+        (dropped, "V_remix_real_direct"),
+        (dropped, "V_remix_real_stem"),
+    }
+    # 文書のどこにも指標が現れないこと（平均 RPA・破断曲線・見通しの禁止の実装）。
+    blob = json.dumps(census, sort_keys=True)
+    for forbidden in ("raw_pitch_accuracy", "octave_gap", "metrics", "voicing_recall"):
+        assert forbidden not in blob, forbidden
+
+
+def test_census_counts_a_short_cohort_as_missing_not_complete(tmp_path: Path) -> None:
+    """clip 数が凍結コホートに満たない水準は census を満たさない（縮んだ帯を通さない）。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[2]["categories"][arm]["clip_ids"] = _expand_clip_ids(79, "0dB")
+    census = _census(tmp_path, verdicts)
+    assert census["complete"] is False
+    assert census["band_verdict"] is None
+    assert any("凍結コホート" in m["reason"] for m in census["missing"])
+
+
+def test_census_rejects_a_duplicated_level_arm(tmp_path: Path) -> None:
+    """同じ (水準, アーム) を 2 回数えて census を満たしたことにしない。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    verdicts.append(copy.deepcopy(verdicts[0]))
+    with pytest.raises(ValueError, match="二重に数えて"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_verdicts_from_a_different_environment(tmp_path: Path) -> None:
+    """§8.7: 複数環境のセルを 1 つの帯として合算しない（設計判断 E-4）。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    verdicts[1]["env_digest"] = "f" * 64
+    with pytest.raises(ValueError, match="env_digest が揃っていない"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_a_placeholder_env_digest(tmp_path: Path) -> None:
+    """環境を名乗らない judgement を census に数えない（形も要求する）。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["env_digest"] = "unknown"
+    with pytest.raises(ValueError, match="64-hex sha256 でない"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_a_foreign_bars_generation(tmp_path: Path) -> None:
+    """別世代のバーの下で出た判定を、現行バーの帯として publish しない。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["m2e_bars_sha256"] = "a" * 64
+    with pytest.raises(ValueError, match="別世代のバーの下で出た判定"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_arms_that_measured_different_mixes(tmp_path: Path) -> None:
+    """§6.2「アームは manifest を分けない」——件数が揃っていても中身がずれたら別の帯。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    tag = harness._M2E_LEVEL_TAGS["+12dB"]
+    shifted = [
+        f"vremix_vocadito_{i}_BedTwo_{tag}"
+        for i in range(harness._M2E_EXPECTED_ENTRIES_PER_LEVEL)
+    ]
+    verdicts[0]["categories"]["V_remix_real_stem"]["clip_ids"] = shifted
+    with pytest.raises(ValueError, match="アーム間で clip_ids が一致しない"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_a_verdict_without_m2e_categories(tmp_path: Path) -> None:
+    """帯と無関係な verdict を census の入力に数えない。"""
+    report = _fake_run(route_runner=_make_fake_runner(shift_cents=0.0))
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(report), _as_report_artifact(_fake_run(
+            route_runner=_make_fake_runner(shift_cents=0.0)
+        ))],
+        bars,
+        bars_sha256=bars_sha256,
+    )
+    with pytest.raises(ValueError, match="M2e カテゴリ"):
+        _census(tmp_path, [verdict])
+
+
+def test_census_rejects_an_empty_input(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="1 件も渡されていない"):
+        _census(tmp_path, [])
+
+
+def test_evaluate_records_env_digest_on_m2e_verdicts_only(tmp_path: Path) -> None:
+    """E-4 の前提: M2e verdict は `env_digest` を名乗る（他の verdict は増えない）。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    m2e_verdict = _m2e_evaluate(tmp_path, reports)
+    assert re.fullmatch(r"[0-9a-f]{64}", m2e_verdict["env_digest"])
+
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    plain = harness.evaluate_m2_bars(
+        [
+            _as_report_artifact(_fake_run(route_runner=_make_fake_runner(shift_cents=0.0)))
+            for _ in range(2)
+        ],
+        bars,
+        bars_sha256=bars_sha256,
+    )
+    assert "env_digest" not in plain
+
+
+def test_cli_rejects_census_combined_with_evaluate_or_phase_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """census は evaluate の後段であり、同じ起動で両方は行わない。"""
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "census.json"),
+            "--census", str(verdict_path),
+            "--evaluate", str(verdict_path),
+        ),
+    )
+    with pytest.raises(SystemExit, match="排他"):
+        harness.main()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "census.json"),
+            "--census", str(verdict_path),
+            "--level", "+12dB",
+        ),
+    )
+    with pytest.raises(SystemExit, match="census phase では無効"):
+        harness.main()
+
+
+def test_cli_census_writes_the_document_and_protects_its_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI 経由で census が書き出せること + `--out` が入力を潰さないこと。"""
+    paths = []
+    for index, verdict in enumerate(_m2e_census_verdicts(tmp_path)):
+        path = tmp_path / f"verdict_{index}.json"
+        path.write_text(json.dumps(verdict, sort_keys=True), encoding="utf-8")
+        paths.append(str(path))
+    bars_path = _write_m2e_bars(tmp_path)
+    out = tmp_path / "census.json"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(out), "--census", *paths, "--m2e-bars", str(bars_path)
+        ),
+    )
+    assert harness.main() == 0
+    census = json.loads(out.read_text(encoding="utf-8"))
+    assert census["status"] == "census_complete"
+    assert census["schema_version"] == harness._M2E_CENSUS_SCHEMA
+    assert len(census["verdict_pins"]) == 4
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv("--out", paths[0], "--census", *paths, "--m2e-bars", str(bars_path)),
+    )
+    with pytest.raises(SystemExit, match="census の入力"):
+        harness.main()
+
+
+def test_census_rejects_arms_whose_inputs_have_different_provenance(tmp_path: Path) -> None:
+    """PR #241 Codex P1: **id の一致だけでは足りない。**
+
+    2 つの manifest が同じ 80 個の `clip_ids` を持ちながら、別世代の音声・別世代の
+    登録簿を指すことはありうる——id は名前であって bytes ではない。row が既に運んで
+    いる素性の hash そのものを照合する。
+    """
+    for field in ("external_manifest_sha256", "external_fixtures_sha256"):
+        verdicts = _m2e_census_verdicts(tmp_path)
+        verdicts[0]["categories"]["V_remix_real_stem"][field] = "9" * 64
+        with pytest.raises(ValueError, match=f"アーム間で {field} が一致しない"):
+            _census(tmp_path, verdicts)
+
+
+def test_census_denominator_comes_from_the_frozen_bars_not_the_verdict(
+    tmp_path: Path,
+) -> None:
+    """PR #241 Codex P2: `repeats_min` は census の**分母**を決める。
+
+    verdict が小さく名乗れば期待セル数が減り、半分終わった帯が「揃った」ことになる。
+    集計器は自分で読んだ凍結ファイルの値を使い、verdict の自己申告はそれとの一致を
+    要求するだけにする。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["repeats_min"] = 1
+    with pytest.raises(ValueError, match="census の分母"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_a_foreign_base_bars_generation(tmp_path: Path) -> None:
+    """共有スカラーの供給元（基底バー）も凍結ファイルと照合する。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["bars_sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="別世代の共有スカラー"):
+        _census(tmp_path, verdicts)
+
+
+def test_cli_census_protects_the_base_bars_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """census は基底バーを**読む**ので、`--out` で潰せてはならない。"""
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text("{}", encoding="utf-8")
+    before = BARS_PATH.read_bytes()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv("--out", str(BARS_PATH), "--census", str(verdict_path)),
+    )
+    with pytest.raises(SystemExit, match="census の入力"):
+        harness.main()
+    assert BARS_PATH.read_bytes() == before
+
+
+def test_census_rejects_a_level_whose_ids_carry_another_levels_tag(tmp_path: Path) -> None:
+    """PR #241 Codex P1: `level` の申告と entry id の水準タグが食い違えば拒否する。
+
+    `+6dB` を名乗る verdict が `p12` の id を運んでいれば、それは**同じミックスを
+    2 回測って別水準として並べた**もの——破断曲線が 1 水準の複製から組み上がる。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[1]["categories"][arm]["clip_ids"] = _expand_clip_ids(
+            harness._M2E_EXPECTED_ENTRIES_PER_LEVEL, "+12dB"
+        )
+    with pytest.raises(ValueError, match="水準タグ"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_levels_measured_on_different_cohorts(tmp_path: Path) -> None:
+    """PR #241 Codex P1: 各水準が 80 件を満たしても、**別の 80 件**なら 1 本の曲線ではない。
+
+    アーム間の照合は同一水準の中しか見ないので、水準を跨いだ同一性は別に問う必要が
+    ある（id 規約の水準タグを剥がした正規化コホートで突き合わせる）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    tag = harness._M2E_LEVEL_TAGS["0dB"]
+    other_cohort = [
+        f"vremix_vocadito_{i}_BedTwo_{tag}"
+        for i in range(harness._M2E_EXPECTED_ENTRIES_PER_LEVEL)
+    ]
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[2]["categories"][arm]["clip_ids"] = other_cohort
+    with pytest.raises(ValueError, match="正規化コホートが一致しない"):
+        _census(tmp_path, verdicts)
+
+
+def test_normalized_cohort_ids_strip_only_the_expected_level_tag() -> None:
+    """正規化は水準タグだけを剥がす（clip / bed の同一性はそのまま残る）。"""
+    ids = ["vremix_vocadito_1_BedOne_p06", "vremix_vocadito_2_BedTwo_p06"]
+    assert harness._m2e_normalized_cohort_ids("+6dB", ids) == (
+        "vremix_vocadito_1_BedOne",
+        "vremix_vocadito_2_BedTwo",
+    )
+    # 同じ (clip, bed) なら別水準でも同じ正規化になる（これが水準横断照合の前提）。
+    assert harness._m2e_normalized_cohort_ids(
+        "0dB", ["vremix_vocadito_1_BedOne_p00"]
+    ) == ("vremix_vocadito_1_BedOne",)
+    with pytest.raises(ValueError, match="水準タグ"):
+        harness._m2e_normalized_cohort_ids("0dB", ["vremix_vocadito_1_BedOne_p12"])
+
+
+def test_census_rejects_levels_with_different_numeric_runtime_configs(
+    tmp_path: Path,
+) -> None:
+    """PR #241 Codex P1: `env_digest` は `threadpool_info` を意図的に含めない。
+
+    その穴は「記録は `numeric_runtime_config` に残る」という前提で許容されている
+    宣言された穴であり、**その記録を照合しなければ前提が成立しない**。evaluate は
+    1 水準の中で既に同質性を課しているので、水準を跨ぐ集計だけが弱いという非対称に
+    なっていた。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    verdicts[1]["numeric_runtime_config"] = {"threadpool_info": [{"internal_api": "openblas"}]}
+    with pytest.raises(ValueError, match="numeric_runtime_config が揃っていない"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_reports_a_partially_measured_level_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    """PR #241 Codex P2: 片アームだけ欠けた水準は「部分測定」であって「別素材」ではない。
+
+    完了したアームの値と欠けたアームの `None` を突き合わせて raise すると、
+    **census が本来出すべき `census_incomplete` の報告そのものが出せなくなる**。
+    部分測定を報告するのが census の目的なので、ここで落としてはならない。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    # +6dB の stem アームだけが repeats 不足で判定に至らなかった、という実際に起こる形。
+    stem = verdicts[1]["categories"]["V_remix_real_stem"]
+    stem["status"] = "insufficient_repeats"
+    for key in ("clip_ids", "external_manifest_sha256", "external_fixtures_sha256", "metrics"):
+        stem.pop(key, None)
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    assert ("+6dB", "V_remix_real_stem") in gaps
+    assert "V_remix_real_direct" not in [arm for _lvl, arm in gaps]
+    # 欠けた 1 アームぶん（80 clip × 2 repeats）だけが不足している。
+    assert census["observed_cells_total"] == census["expected_cells_total"] - 160
+
+
+def test_census_rejects_duplicated_clip_ids_within_a_cell(tmp_path: Path) -> None:
+    """PR #241 Codex P2: 件数だけでは足りない——80 要素でも重複すれば測定は 80 未満。
+
+    全水準・全アームで同じように重複していれば等値検査も通るため、**1280 の異なる
+    測定なしに「1280 セル完了」を報告できてしまう**。`load_verdict` は受け取った
+    bytes を hash するだけで一意性は証明しない。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        level = verdict["level"]
+        half = _expand_clip_ids(harness._M2E_EXPECTED_ENTRIES_PER_LEVEL // 2, level)
+        for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+            # 40 件を 2 回並べて「80 件」に見せる（水準・アームで一貫させる）。
+            verdict["categories"][arm]["clip_ids"] = half + half
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    assert census["observed_cells_total"] == 0
+    assert all("重複がある" in m["reason"] for m in census["missing"])
+
+
+def test_census_rejects_levels_built_by_different_mixers(tmp_path: Path) -> None:
+    """PR #241 Codex P1: **破断曲線は主生産物であり、混合式が混ざれば曲線として成立しない。**
+
+    水準ごとに fixtures ファイルは別なので `external_fixtures_sha256` の水準横断比較は
+    意味を持たない——mixer を変えて一部の水準を作り直しても、id は同じ・per-level hash は
+    元々違う・harness のコード pin は mixer を含まない、で誰も気付けなかった。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    verdicts[2]["m2e_builder_provenance"] = {
+        "generator_code_sha256": "e" * 64,
+        "m2c_fixtures_sha256": "f" * 64,
+        "m2e_bed_fixtures_sha256": "0" * 64,
+    }
+    with pytest.raises(ValueError, match="m2e_builder_provenance が揃っていない"):
+        _census(tmp_path, verdicts)
+
+
+def test_evaluate_carries_the_builder_provenance_into_m2e_verdicts(tmp_path: Path) -> None:
+    """E-13 の前提: run 側で実体照合済みの `builder` を verdict へ写す。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    verdict = _m2e_evaluate(tmp_path, reports)
+    assert verdict["m2e_builder_provenance"] == {
+        "generator_code_sha256": _FAKE_MIXER_CODE_SHA256,
+        "m2c_fixtures_sha256": _FAKE_M2C_FIXTURES_SHA256,
+        "m2e_bed_fixtures_sha256": _FAKE_BED_FIXTURES_SHA256,
+    }
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        None,
+        [],
+        "not-a-list",
+        [{"raw_pitch_accuracy": 1.0}],  # 短縮（repeats_min=2 に 1 件しかない）
+        [{"raw_pitch_accuracy": None}, {"raw_pitch_accuracy": None}],
+    ],
+)
+def test_census_requires_well_formed_metrics_before_counting_a_cell(
+    broken: Any, tmp_path: Path
+) -> None:
+    """PR #241 Codex P2: `metrics` が欠損・null・短縮でも他の検査は全部通ってしまう。
+
+    その結果 `census_complete` を出したうえで `level_response` に欠測が載り、帯の判定
+    だけは `bar_satisfied` から出る。**成果物に載せる値は、載せる前に形を確かめる。**
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[3]["categories"][arm]["metrics"] = broken
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    assert census["level_response"] is None
+    # E-33: 不備理由は「metrics」という語自体を使わない（計測 field 名・値を含めない）。
+    assert any("計測記録" in m["reason"] for m in census["missing"])
+
+
+def test_verdict_with_non_finite_metrics_cannot_even_be_loaded(tmp_path: Path) -> None:
+    """NaN/inf は per-cell 検査より**手前**（JSON ロード）で落ちる。
+
+    `_json_loads_no_dup_keys` が非有限リテラルを拒否するため、そもそも artifact に
+    ならない。上のテストが有限値の欠損・短縮だけを扱っているのはこのため。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    raw = json.dumps(verdicts[0]).replace('"n_rows": 2', '"n_rows": NaN')
+    with pytest.raises(ValueError, match="非有限リテラル"):
+        harness.ReportArtifact.from_bytes(raw.encode("utf-8"), path=None)
+
+
+@pytest.mark.parametrize(
+    "flag, value",
+    [
+        ("--external-manifest", "manifest.json"),
+        ("--specs", "specs.yaml"),
+        ("--workers", "4"),
+        ("--cell-store-role", "evaluate"),
+    ],
+)
+def test_cli_census_rejects_every_unused_phase_flag(
+    flag: str, value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """census が読むのは --census / --out / --bars / --m2e-bars だけ。
+
+    黙って無視して「その引数に束縛された」と誤解させない。
+    """
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "census.json"),
+            "--census", str(verdict_path),
+            flag, value,
+        ),
+    )
+    with pytest.raises(SystemExit, match="census phase では無効"):
+        harness.main()
+
+
+def test_cli_census_rejects_pin_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "census.json"),
+            "--census", str(verdict_path),
+            "--pin-threads",
+        ),
+    )
+    with pytest.raises(SystemExit, match="census phase では無効"):
+        harness.main()
+
+
+@pytest.mark.parametrize("truthy_non_bool", ["false", "no", 0.0, 1, [], {}])
+def test_census_requires_an_actual_boolean_gate_result(
+    truthy_non_bool: Any, tmp_path: Path
+) -> None:
+    """PR #241 Codex P2: `is None` を通っただけでは `"false"` が残り、真偽評価は**真**になる。
+
+    **fail が pass として publish される**——帯の判定を出す唯一の場所で起こりうる
+    最悪の失敗形。`load_verdict` は bytes 束縛と top-level schema しか見ないので、
+    category フィールドの型は集計器が独立に要求する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[0]["categories"][arm]["bar_satisfied"] = truthy_non_bool
+    with pytest.raises(ValueError, match="bool でない"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_requires_failures_to_be_a_list(tmp_path: Path) -> None:
+    """判定の根拠として成果物へそのまま載せる値なので、形を確かめる。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[0]["categories"][arm]["failures"] = "min_rpa を割った"
+    with pytest.raises(ValueError, match="failures .* list でない"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_verdicts_that_all_omit_the_builder_provenance(
+    tmp_path: Path,
+) -> None:
+    """PR #241 Codex P1: **「全部欠けている」を「揃っている」と見なさない。**
+
+    等値検査は `v.get(field)` を比べるので、全 verdict がフィールドを持たなければ
+    `None` 同士で一致し、E-13 の照合は**フィールドを剥がすだけで無効化**できた。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict.pop("m2e_builder_provenance", None)
+    with pytest.raises(ValueError, match="m2e_builder_provenance を名乗っていない"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize(
+    "key", ["generator_code_sha256", "m2c_fixtures_sha256", "m2e_bed_fixtures_sha256"]
+)
+def test_census_requires_each_builder_digest_to_be_a_sha256(key: str, tmp_path: Path) -> None:
+    """混合式の素性を「名乗るだけ」の申告を照合済みとして扱わない。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        provenance = dict(verdict["m2e_builder_provenance"] or {})
+        provenance[key] = "not-a-digest"
+        verdict["m2e_builder_provenance"] = provenance
+    with pytest.raises(ValueError, match=f"{key} .* 64-hex sha256 でない"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize(
+    "bar_satisfied, failures",
+    [
+        (True, ["repeat[0] raw_pitch_accuracy 0.10 < min_rpa 0.65"]),
+        (False, []),
+    ],
+)
+def test_census_rejects_a_gate_result_that_contradicts_its_failures(
+    bar_satisfied: bool, failures: "List[str]", tmp_path: Path
+) -> None:
+    """PR #241 Codex P2: `evaluate` が確立した `bar_satisfied == not failures` を読み戻しで再検証する。
+
+    型が正しくても関係が壊れていれば、`true` + 非空 failures は**失敗の証拠を同梱した
+    まま pass を publish** し、逆は理由の無い fail を publish する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        gate = verdicts[0]["categories"][arm]
+        gate["bar_satisfied"] = bar_satisfied
+        gate["failures"] = failures
+    with pytest.raises(ValueError, match="矛盾する"):
+        _census(tmp_path, verdicts)
+
+
+# ---------------------------------------------------------------------------
+# E-19〜E-21（PR #241 レビュー是正 + 自己点検）: E-17 と同じ論法——**不在は常に揃う**
+# ——が当たる箇所を全証拠フィールドへ適用し切る。
+# ---------------------------------------------------------------------------
+
+
+def test_census_rejects_verdicts_that_all_omit_the_numeric_runtime_config(
+    tmp_path: Path,
+) -> None:
+    """E-19: 全 verdict が numeric_runtime_config を欠けば `None` 同士で「揃う」。
+
+    `env_digest` は `threadpool_info` を意図的に畳まない——その穴は「記録は
+    `numeric_runtime_config` に残る」という前提で許容されている。フィールドを剥がす
+    だけで E-17 と同型の照合が無効化できてしまう非対称だった。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict.pop("numeric_runtime_config", None)
+    with pytest.raises(ValueError, match="numeric_runtime_config を名乗っていない"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize("scalar_key", ["tolerance_cents", "est_voiced_confidence_floor"])
+def test_census_requires_finite_shared_scalars(scalar_key: str, tmp_path: Path) -> None:
+    """自己点検: 共有スカラーも census 成果物へそのまま載せるので、載せる前に形を確かめる。
+
+    等値検査だけでは `None` 同士でも揃ってしまう（E-14 と同じ規律）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict[scalar_key] = None
+    with pytest.raises(ValueError, match="有限数値でない"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize(
+    "field", ["external_manifest_sha256", "external_fixtures_sha256"]
+)
+def test_census_counts_arms_without_provenance_hashes_as_missing(
+    field: str, tmp_path: Path
+) -> None:
+    """E-20: 両アームが揃って素性 hash を欠けば `None == None` でアーム間照合が空転する。
+
+    per-cell 検査で拾い、raise ではなく `census_incomplete` として報告する（E-11 の
+    裁定どおり——素性を名乗らないアームは「そのセルを未完として報告する」）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    level = harness._M2E_LEVEL_LADDER[1]
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[1]["categories"][arm].pop(field, None)
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "64-hex sha256 でない" in gaps[(level, arm)]
+
+
+@pytest.mark.parametrize(
+    "flag, value",
+    [
+        ("--workers", "1"),
+        ("--cell-store-role", "run"),
+        ("--specs", str(harness.SPECS_PATH)),
+    ],
+)
+def test_cli_census_rejects_explicitly_supplied_default_values(
+    flag: str, value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-21: 値比較では「渡されたか」を問えない——既定値と同じ値の明示指定も拒否する。
+
+    `--workers 1` は argparse の結果としては省略と区別が付かない。センチネル既定値
+    （`_ARGPARSE_UNSET`）で「渡された事実」そのものを追跡する。
+    """
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "census.json"),
+            "--census", str(verdict_path),
+            flag, value,
+        ),
+    )
+    with pytest.raises(SystemExit, match="census phase では無効"):
+        harness.main()
+
+
+def test_cli_run_phase_still_uses_the_real_defaults_after_sentinel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-21 の pin: センチネル化後も run phase の既定は生きている（実測はしない）。
+
+    census 検査の直後に正規化を置いているので、run/evaluate 経路にはセンチネルが
+    一切漏れない——`run_accuracy` が実際の既定パス/既定値を受け取ることを確認する。
+    """
+    calls: "List[Dict[str, Any]]" = []
+
+    def _spy(**kwargs: Any) -> Dict[str, Any]:
+        calls.append(kwargs)
+        return {"categories": {}}
+
+    monkeypatch.setattr(harness, "run_accuracy", _spy)
+    monkeypatch.setattr(sys, "argv", _cli_argv("--out", str(tmp_path / "r.json")))
+
+    assert harness.main() == 0
+    assert len(calls) == 1
+    assert calls[0]["specs_path"] == harness.SPECS_PATH
+    assert calls[0]["workers"] == 1
+    assert calls[0]["cell_store_role"] == harness._CELL_STORE_ROLE_RUN
+    assert calls[0]["external_fixtures_path"] == harness.EXTERNAL_FIXTURES_PATH
+
+
+# ---------------------------------------------------------------------------
+# E-22〜E-25（PR #241 Codex 第 6 巡: P1×3 + P2）: 帯判定セルの gate_level 束縛・
+# 凍結閾値の再適用・numeric_runtime_config のスキーマ束縛・出力 bytes の pin。
+# ---------------------------------------------------------------------------
+
+
+def test_census_binds_the_gate_result_to_the_frozen_gate_level(tmp_path: Path) -> None:
+    """E-22: セルの選択は verdict の自己申告（top-level `level`）に依存するので、
+
+    category 側の `gate_level` 申告も凍結条件と束縛しなければ、別水準で当てたバーの
+    結果が帯の判定として publish されうる。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+            verdict["categories"][arm]["gate_level"] = "+6dB"
+    with pytest.raises(ValueError, match="gate_level"):
+        _census(tmp_path, verdicts)
+
+
+@pytest.mark.parametrize(
+    "broken_field, broken_value",
+    [("raw_pitch_accuracy", 0.10), ("octave_gap", 0.99)],
+)
+def test_census_replays_the_frozen_bar_against_the_pinned_metrics(
+    broken_field: str, broken_value: float, tmp_path: Path
+) -> None:
+    """E-23: metrics だけを書き換えれば「凍結バーを割る metrics を level_response に
+
+    載せながら pass を出す」成果物が組めていた。census 自身が凍結バーを metrics へ
+    再適用し、bar_satisfied との整合を要求する（`bar_satisfied` / `failures` は
+    そのまま = pass を装ったまま metrics だけ壊す）。
+
+    `octave_gap == raw_chroma_accuracy - raw_pitch_accuracy` の関係（E-27 が per-cell で
+    再検査する）は保ったまま壊す——単独フィールドだけを書き換えると E-27 が先に
+    per-cell で拾って `census_incomplete` にしてしまい、本テストが確かめたい E-23
+    （band ループでの凍結バー再適用）まで到達しない。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        for metrics in verdicts[0]["categories"][arm]["metrics"]:
+            metrics[broken_field] = broken_value
+            # rca は動かさず、rpa/gap の一方を broken_value に合わせて連動させ、
+            # gap == rca - rpa を保つ（E-27 を素通りさせて E-23 まで到達させる）。
+            rca = metrics["raw_chroma_accuracy"]
+            if broken_field == "raw_pitch_accuracy":
+                metrics["octave_gap"] = rca - broken_value
+            elif broken_field == "octave_gap":
+                metrics["raw_pitch_accuracy"] = rca - broken_value
+    with pytest.raises(ValueError, match="再適用した結果"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_rejects_a_placeholder_runtime_config_shape(tmp_path: Path) -> None:
+    """E-24: 「非空 dict」だけでは `{"unknown": True}` のような placeholder が通る。
+
+    生成側（`_numeric_runtime_config()`）が実際に返すキー集合と束縛する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["numeric_runtime_config"] = {"unknown": True}
+    with pytest.raises(ValueError, match="キー集合"):
+        _census(tmp_path, verdicts)
+
+
+def test_numeric_runtime_config_required_keys_match_the_producer() -> None:
+    """E-24 の機械同期: 凍結キー集合が実際の producer と食い違えば即座に気付く。"""
+    assert harness._NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS == frozenset(
+        harness._numeric_runtime_config().keys()
+    )
+
+
+def test_cli_census_prints_the_output_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """E-25: 公開した census bytes の sha256 を、書き込みと同一 snapshot から stdout へ残す。"""
+    paths = []
+    for index, verdict in enumerate(_m2e_census_verdicts(tmp_path)):
+        path = tmp_path / f"verdict_{index}.json"
+        path.write_text(json.dumps(verdict, sort_keys=True), encoding="utf-8")
+        paths.append(str(path))
+    bars_path = _write_m2e_bars(tmp_path)
+    out = tmp_path / "census.json"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv("--out", str(out), "--census", *paths, "--m2e-bars", str(bars_path)),
+    )
+    assert harness.main() == 0
+    captured = capsys.readouterr()
+    digest_lines = [line for line in captured.out.splitlines() if "census sha256:" in line]
+    assert len(digest_lines) == 1
+    printed_digest = digest_lines[0].split("census sha256:")[1].strip()
+    assert printed_digest == hashlib.sha256(out.read_bytes()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# E-26〜E-28（PR #241 Codex 第 7 巡: P1×4 のうち採用 3 件。E-29/E-30 はコード変更なし
+# — docs のみ / 見送り）。共有スカラーの凍結束縛・平均安定不変条件・repeat 整合。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "scalar_key, broken_value",
+    [("tolerance_cents", 5.0), ("est_voiced_confidence_floor", 0.9)],
+)
+def test_census_binds_shared_scalars_to_the_frozen_bars(
+    scalar_key: str, broken_value: float, tmp_path: Path
+) -> None:
+    """E-26: 有限性だけでは足りない——凍結バーの実値と厳密一致を要求する。
+
+    E-7（`repeats_min`）で自分が適用した規律との非対称だった。50 cents で測った
+    metrics を 5 cents の測定として publish しない。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict[scalar_key] = broken_value
+    with pytest.raises(ValueError, match="凍結"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_checks_average_stable_metric_invariants(tmp_path: Path) -> None:
+    """E-27: 平均で保存される不変条件（chroma >= pitch）を per-cell 検査に入れる。
+
+    evaluate は external カテゴリの contract を clip metrics にのみ適用しており、
+    census が持つ平均済み metrics には課していない——census は平均で保存される
+    サブセットだけを独自に再適用する（コード内コメント / 設計ノート E-27 に採否の
+    経緯を記録）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        for metrics in verdicts[0]["categories"][arm]["metrics"]:
+            # raw_chroma_accuracy < raw_pitch_accuracy は mir_eval が返さない組
+            # （chroma 一致は pitch 一致の必要条件）。
+            metrics["raw_chroma_accuracy"] = 0.10
+            metrics["raw_pitch_accuracy"] = 0.90
+            metrics["octave_gap"] = metrics["raw_chroma_accuracy"] - metrics["raw_pitch_accuracy"]
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[0]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        # E-33: 不備理由は一般コードのみで、field 名・値は埋め込まない
+        # （`raw_chroma_accuracy` 等の計測 field 名は reason に現れない）。
+        assert "平均安定不変条件" in gaps[(level, arm)]
+    blob = json.dumps(census, sort_keys=True)
+    assert "raw_chroma_accuracy" not in blob
+
+
+def test_census_rejects_metrics_that_contradict_the_identity_flag(tmp_path: Path) -> None:
+    """E-28: `repeats_bit_identical: true` を名乗りながら公開 metrics が repeat 間で
+
+    食い違う verdict を数えない（必要条件。十分条件でないことは E-28 の docstring /
+    設計ノートに宣言された限界として記録）。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[0]["categories"][arm]["metrics"][1]["raw_pitch_accuracy"] += 1e-9
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[0]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "bit 一致" in gaps[(level, arm)]
+
+
+@pytest.mark.parametrize("broken_element", [None, "not-a-dict"])
+def test_census_reports_non_object_metric_records_as_incomplete(
+    broken_element: Any, tmp_path: Path
+) -> None:
+    """E-31: 外側 list の長さしか見ていないと、要素が非 dict のとき
+
+    `_require_finite_metrics` 内の `in` 演算が **TypeError** を投げ、
+    `except ValueError` を素通りして census 全体がクラッシュする——本来出すべき
+    `census_incomplete` が出せない（E-11 の裁定違反状態）。**raise させず**
+    per-cell の `problems`（= `census_incomplete`）として報告することを固定する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[1]["categories"][arm]["metrics"][1] = broken_element
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[1]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "JSON object でない" in gaps[(level, arm)]
+
+
+# ---------------------------------------------------------------------------
+# E-32 / E-33（PR #241 Codex 第 9 巡: P2×2）。clip_ids 要素型のクラッシュ回避
+# （E-31 と同型の残り穴）と、不備理由からの計測データ漏出の停止（E-3 への自己違反）。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("broken_element", [{}, []])
+def test_census_reports_unhashable_clip_id_elements_as_incomplete(
+    broken_element: Any, tmp_path: Path
+) -> None:
+    """E-32: `clip_ids` に非文字列要素（dict/list）が混ざると、直後の
+
+    `set(clip_ids)` が **TypeError**（unhashable type）で census 全体を
+    クラッシュさせる——E-31 と同型の残り穴。**raise させず** per-cell の
+    `problems`（= `census_incomplete`）として報告することを固定する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[1]["categories"][arm]["clip_ids"][0] = broken_element
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[1]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "文字列でない" in gaps[(level, arm)]
+
+
+def test_census_incomplete_from_invalid_metrics_leaks_no_measurement_text(
+    tmp_path: Path,
+) -> None:
+    """E-33: 不備理由に validator 例外テキスト（field 名・値入り）を埋めると、
+
+    `census_incomplete` の `missing[].reason` へ計測データが漏れる——E-3
+    （揃うまで metrics を成果物に存在させない）への自己違反だった。既存の
+    文字列不在テスト（`test_census_incomplete_contains_no_metrics_at_all`）は
+    「水準ごと欠けた」経路しかカバーしていなかったので、不正値セル経路にも
+    同じ禁止を固定する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        for metrics in verdicts[1]["categories"][arm]["metrics"]:
+            metrics["raw_pitch_accuracy"] = 2.0  # 域外（[0, 1] の外）だが有限
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    blob = json.dumps(census, sort_keys=True)
+    for forbidden in ("raw_pitch_accuracy", "octave_gap", "voicing_recall", "metrics"):
+        assert forbidden not in blob, forbidden
+
+
+def test_census_reports_oversized_metric_values_as_incomplete(tmp_path: Path) -> None:
+    """E-34: 400 桁級の JSON 整数が metrics に入ると、`_require_finite_metrics` 内の
+
+    `float()` 変換が **OverflowError** を投げ、`except ValueError` を素通りして
+    census 全体がクラッシュする（E-31/E-32 と同型: 本来出すべき `census_incomplete`
+    が出せない）。**raise させず** per-cell の `problems` として報告することを固定
+    し、E-33 の一般コード（計測データ非漏出）が維持されることもあわせて確認する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        for metrics in verdicts[1]["categories"][arm]["metrics"]:
+            metrics["raw_pitch_accuracy"] = 10**400
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[1]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "有限数値の契約を満たさない" in gaps[(level, arm)]
+    # E-33 の維持確認: 巨大整数であっても計測 field 名は成果物に現れない。
+    blob = json.dumps(census, sort_keys=True)
+    for forbidden in ("raw_pitch_accuracy", "octave_gap", "voicing_recall", "metrics"):
+        assert forbidden not in blob, forbidden
+
+
+# ---------------------------------------------------------------------------
+# E-44 / E-45（PR #241 Codex 第 18 巡: P2×2）。非 object の category record を
+# クラッシュでなく census_incomplete として報告する（E-32 と同型）。publish する
+# failures の要素形状を要求する（E-16/E-18/E-22 と同じ帯 publish の fail-closed 層）。
+# ---------------------------------------------------------------------------
+
+
+def test_census_reports_a_non_object_category_record_as_incomplete(tmp_path: Path) -> None:
+    """E-44: category 値が object でない場合、収集段の `.get` 連鎖が
+
+    **AttributeError** で census 全体をクラッシュさせていた（E-32・clip_ids の非 str
+    要素と同型の残り穴）。**raise させず** per-cell の `problems`（= `census_incomplete`）
+    として報告することを固定する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    verdicts[1]["categories"]["V_remix_real_direct"] = ["not", "an", "object"]
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[1]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    assert "category record が object でない" in gaps[(level, "V_remix_real_direct")]
+
+
+def test_census_rejects_a_non_string_failures_element(tmp_path: Path) -> None:
+    """E-45: `failures: [None]` は list 型検査・`bar_satisfied == not failures` 整合
+
+    検査の両方を通過してしまい、非 str 要素がそのまま `band_verdict` へ publish
+    される。E-16/E-18/E-22 と同じ層（帯 publish の fail-closed 検査）で各要素の形を
+    要求する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path, shift_cents=500.0)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[0]["categories"][arm]["failures"] = [None]
+    with pytest.raises(ValueError, match="非空文字列でない"):
+        _census(tmp_path, verdicts)

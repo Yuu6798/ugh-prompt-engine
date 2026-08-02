@@ -8847,6 +8847,23 @@ def evaluate_m2_bars(
         verdict["m2e_bars_path_relative"] = _repo_relative_path(m2e_bars_path)
         verdict["m2e_bars_registration_attestation"] = m2e_registration_attestation
         verdict["level"] = m2e_level
+        # C5（設計判断 E-4）: 水準横断集計は**環境同一性を検査できなければならない**
+        # （§8.7「複数環境のセルを 1 つの帯として合算することは禁止」）。verdict が
+        # `env_digest` を名乗らないと、集計器は 4 水準が同じ環境で測られたかを
+        # 判定する手段を持たない——上でその単一性を既に要求しているので、値をここで
+        # 成果物へ持ち出す。**M2e カテゴリを含む verdict にのみ現れる**（他の verdict は
+        # 1 バイトも変わらない）。
+        verdict["env_digest"] = next(iter(env_digests))
+        # C5（設計判断 E-13）: **混合式の provenance を成果物へ持ち出す。**
+        # 水準ごとに fixtures ファイルは別なので `external_fixtures_sha256` の水準横断
+        # 比較は意味を持たない——mixer（`make_vremix_fixtures.py`）を変えて一部の水準を
+        # 作り直しても、id は同じ・per-level hash は元々違う・harness のコード pin は
+        # mixer を含まない、で誰も気付けない。fixtures 自身が名乗る `builder` は run 側で
+        # 実体と照合済み（`_require_registered_m2e_cohort`）なので、その検証済みの値を
+        # verdict へ写し、集計器が水準横断の一致を要求できるようにする。
+        verdict["m2e_builder_provenance"] = copy.deepcopy(
+            external_fixtures_data.get("builder")
+        )
 
     # C2: 測り直しを起こす前に、`store_B` が提出 report を産んだ `store_A` と重なって
     # いないことを確かめる（CLI の 2 引数比較は evaluate では走らないため、ここが
@@ -9088,7 +9105,8 @@ def evaluate_m2_bars(
             # このコールから 4 水準 × 2 アームの census を立証する術が無い。
             # したがってバーは当てる（証拠は `bar_satisfied` / `failures` に残す）が、
             # **合否という語は出さない**。帯の判定は r6/r7 の水準横断集計が census を
-            # 満たしたときに出す（その集計器は未実装・`HANDOFF.md` の残タスク）。
+            # 満たしたときに出す（その集計器は `aggregate_m2e_census`（`--census`）
+            # として実装済み）。
             cat_result["bar_satisfied"] = not failures
             cat_result["status"] = "census_pending"
         else:
@@ -9185,6 +9203,837 @@ def _external_manifest_protected_paths(
     return protected
 
 
+# ---------------------------------------------------------------------------
+# C5 — 水準横断の census 集計（帯の判定を出す唯一の場所・rev.6 §6.2 / §11）
+# ---------------------------------------------------------------------------
+#
+# `evaluate_m2_bars` は M2e カテゴリに `pass` / `fail` を出さない。**1 回の evaluate は
+# 構造上 1 水準しか見ない**（M2e を含む report の level は単一であることを fail-closed で
+# 要求している）ため、そのコールから 4 水準 × 2 アームの census を立証する術が無いから
+# である。ここがその立証を行う唯一の場所であり、**帯の判定が出る唯一の場所**でもある。
+_M2E_CENSUS_SCHEMA = "m2e-census/0.1"
+
+# E-24: census が要求する numeric_runtime_config のトップレベルキー集合。
+# `_numeric_runtime_config()` の返す形と機械同期される（テスト
+# test_numeric_runtime_config_required_keys_match_the_producer が enforce）。
+# census 内でその関数を直接呼ばないのは、計測 instrumentation の import
+# （threadpoolctl 等）を評価器プロセスへ持ち込まないため。
+_NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS = frozenset(
+    {"env", "cpu_count", "sched_affinity_count", "numpy_simd_dispatch", "threadpool_info"}
+)
+
+
+def load_verdict(path: "str | Path") -> ReportArtifact:
+    """verdict JSON を single read で読む（read → hash → parse の 1 操作）。
+
+    `load_report` と同じ束縛（raw bytes / digest / parsed data）を使う——集計器は
+    「pin した bytes と実際に集計した内容」が食い違わないことを、report と同じ強さで
+    要求する。schema の検査は `aggregate_m2e_census` 側で行う。
+    """
+    raw = Path(path).read_bytes()
+    return ReportArtifact.from_bytes(raw, path=path)
+
+
+def _m2e_census_expected_cells(repeats_min: int) -> int:
+    """期待セル総数を**構成要素の積として再計算する**（§6.2「総抽出回数の一致確認」）。
+
+    `1280` という定数を書かない。コホート幅・ラダー長・アーム数・repeats のどれかが
+    動いたとき、定数はそれを黙って通す一方、積は必ず食い違う。
+    """
+    return (
+        _M2E_EXPECTED_ENTRIES_PER_LEVEL
+        * len(_M2E_LEVEL_LADDER)
+        * len(_categories_owned_by("m2e_accuracy_bars.yaml"))
+        * repeats_min
+    )
+
+
+def _m2e_normalized_cohort_ids(level: str, clip_ids: "List[str]") -> "Tuple[str, ...]":
+    """entry id から水準タグを剥がした**正規化コホート**（= (clip, bed) の集合）を返す。
+
+    id 規約は `vremix_{clip_id}_{bed_id}_{level_tag}`（§6.2）なので、水準が違えば id も
+    違う——水準間で id 集合をそのまま比べることはできない。タグを剥がして初めて
+    「4 水準が同じ 80 個の (clip, bed) を測ったか」を問える。
+
+    タグが期待どおりでない id は fail-closed。`level: "+6dB"` を名乗る verdict が
+    `p12` の id を運んでいれば、それは**同じミックスを 2 回測って別水準として並べた**
+    ものであり、破断曲線が 1 水準の複製から組み上がる（PR #241 Codex P1）。
+    """
+    suffix = f"_{_M2E_LEVEL_TAGS[level]}"
+    normalized: "List[str]" = []
+    for clip_id in clip_ids:
+        if not isinstance(clip_id, str) or not clip_id.endswith(suffix):
+            raise ValueError(
+                f"aggregate_m2e_census: level {level!r} の entry id {clip_id!r} が期待する "
+                f"水準タグ {suffix!r} で終わっていない; 別水準のミックスを当該水準の観測と "
+                "して数えない（破断曲線が 1 水準の複製から組み上がる）(fail-closed)"
+            )
+        normalized.append(clip_id[: -len(suffix)])
+    return tuple(sorted(normalized))
+
+
+def _require_average_stable_metric_invariants(
+    arm: str, metrics_list: "List[Dict[str, Any]]", *, frozen_tolerance_cents: float
+) -> None:
+    """`_require_metrics_contract` の不変条件のうち、算術平均で保存されるものだけを
+
+    census 側で再適用する（PR #241 Codex P1・E-27）。
+
+    まず `_require_metrics_contract` をそのまま census の平均済み metrics に当てる
+    実装を試した——**通らなかった**。evaluate は external カテゴリで contract を
+    **clip metrics** にのみ適用し、census が持つカテゴリ平均 metrics（`row["metrics"]`
+    = `_average_external_clip_metrics` の出力）には `_require_finite_metrics` しか
+    当てていない。`voiced_chroma_correct_frame_count` は算術平均で非整数 float に
+    なりうるため（`_average_external_clip_metrics` docstring）、full contract の
+    整数不変条件は平均後の値では成立が保証されない（実測でも 2 clip 平均が非整数に
+    なるケースを確認した）。
+
+    census は clip 単位の証拠を持たない（E-1: evaluate のゲートを二重実装しない）ので
+    contract 全体は当てられない——しかし以下は**単純算術平均で厳密に保存される**ため
+    census 側でも意味を持つ:
+
+    - (a) `metrics.tolerance_cents`: 平均前は clip 間で同一値であることが
+      `_average_external_clip_metrics` 自身の fail-closed 検査で保証されており、
+      平均後もその値のまま残る（定数の平均は定数）。凍結値との厳密一致を要求する。
+    - (b) `raw_chroma_accuracy >= raw_pitch_accuracy`: clip ごとに成立する非負差
+      （`octave_gap_i = rca_i - rpa_i >= 0`）の算術平均は非負なので、平均後も成立する。
+    - (c) `octave_gap == raw_chroma_accuracy - raw_pitch_accuracy`: 算術平均は
+      加減算と可換（`mean(rca_i - rpa_i) == mean(rca_i) - mean(rpa_i)`）なので、
+      浮動小数点誤差の範囲で成立する。
+    """
+    for repeat_idx, metrics in enumerate(metrics_list):
+        where = f"arm {arm!r} repeat[{repeat_idx}]"
+        for field in ("raw_pitch_accuracy", "raw_chroma_accuracy", "octave_gap", "tolerance_cents"):
+            if field not in metrics:
+                raise ValueError(f"{where} の metrics が {field} を欠く")
+            value = metrics[field]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{where} の {field} {value!r} が数値でない")
+
+        nested_tolerance = float(metrics["tolerance_cents"])
+        if nested_tolerance != float(frozen_tolerance_cents):
+            raise ValueError(
+                f"{where} の metrics.tolerance_cents {nested_tolerance!r} が凍結値 "
+                f"{frozen_tolerance_cents} と不一致"
+            )
+        rpa = float(metrics["raw_pitch_accuracy"])
+        rca = float(metrics["raw_chroma_accuracy"])
+        gap = float(metrics["octave_gap"])
+        if rca < rpa - 1e-9:
+            raise ValueError(
+                f"{where} の raw_chroma_accuracy {rca!r} が raw_pitch_accuracy {rpa!r} を "
+                "下回る（chroma 一致は pitch 一致の必要条件）"
+            )
+        if abs(gap - (rca - rpa)) > 1e-9:
+            raise ValueError(
+                f"{where} の octave_gap {gap!r} が raw_chroma_accuracy - raw_pitch_accuracy "
+                f"({rca - rpa!r}) と一致しない"
+            )
+
+
+def _require_homogeneous_census_inputs(
+    verdicts: "List[Dict[str, Any]]",
+    *,
+    m2e_bars_sha256: str,
+    bars_sha256: str,
+    frozen_repeats_min: int,
+    frozen_tolerance_cents: float,
+    frozen_est_voiced_floor: float,
+) -> Dict[str, Any]:
+    """集計してよい verdict 群かを検査し、共通スカラーを返す（fail-closed）。
+
+    **異なる帯登録・異なるコード・異なる環境で出た verdict を 1 つの帯として合算しない。**
+    §8.7 の「複数環境のセルを合算しない」を、水準横断の集計面へそのまま適用する
+    （設計判断 E-4）。`m2e_bars_sha256` は verdict の自己申告ではなく**集計器が読んだ
+    凍結ファイル**と突き合わせる——別世代のバーで出た判定を現行バーの帯として publish
+    しないため。
+    """
+    if not verdicts:
+        raise ValueError(
+            "aggregate_m2e_census: verdict が 1 件も渡されていない; 集計対象なしに "
+            "帯の census を名乗らない (fail-closed)"
+        )
+    common: Dict[str, Any] = {}
+    fields = (
+        "bars_sha256",
+        "m2e_bars_sha256",
+        "generator_code_sha256",
+        "evaluator_code_sha256",
+        "tolerance_cents",
+        "est_voiced_confidence_floor",
+        "repeats_min",
+        "env_digest",
+        # `env_digest` は **`threadpool_info` を意図的に含めない**（`_env_digest_numeric_
+        # runtime` docstring: 計測のための threadpoolctl import が scoring の pin へ
+        # 混入するのを避けるため）。その穴は「記録は `numeric_runtime_config` に残る」
+        # という前提で宣言された穴として許容されている——**その記録を照合しなければ
+        # 前提が成立しない**。evaluate は 1 水準の中で
+        # `_require_homogeneous_numeric_runtime_config` を既に課しているので、水準を
+        # 跨ぐ集計だけが弱いという非対称になっていた（PR #241 Codex P1）。
+        "numeric_runtime_config",
+        # 混合式の provenance（E-13・PR #241 Codex P1）。**破断曲線は主生産物であり、
+        # 混合式が水準間で混ざれば曲線として成立しない。**
+        #
+        # 「現行 mixer とも一致していること」までは要求しない: ミックスの音声 bytes は
+        # fixtures の sha256 で既に pin されており、測定の正しさは mixer の現在値に
+        # 依存しない。現行一致まで要求すると、完了済みキャンペーンが後日の無関係な
+        # mixer 変更で無効になり、「一度測って後で集計する」という本トラックのモデルと
+        # 衝突する（run 側は測定時点で実体照合を済ませている）。
+        "m2e_builder_provenance",
+    )
+    for field in fields:
+        values = {json.dumps(v.get(field), sort_keys=True) for v in verdicts}
+        if len(values) != 1:
+            raise ValueError(
+                f"aggregate_m2e_census: verdict 間で {field} が揃っていない "
+                f"（{sorted(values)}）; 別の帯登録・別コード・別環境で出た判定を 1 つの "
+                "帯として合算しない (fail-closed)"
+            )
+        common[field] = verdicts[0].get(field)
+
+    # 基底 bars（共有スカラーの供給元）も**集計器が読んだ凍結ファイル**と突き合わせる
+    # （PR #241 Codex P2）。`m2e_bars_sha256` だけを照合して `bars_sha256` を自己申告の
+    # まま成果物へ写すのは非対称であり、共有スカラーの世代を立証しないまま名乗ることに
+    # なる。とくに `repeats_min` は**census の分母を決める**——verdict が `1` を名乗れば
+    # 期待セル数が半分になり、半分終わった帯が「揃った」ことになる。
+    if common["bars_sha256"] != bars_sha256:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の bars_sha256 {common['bars_sha256']!r} が "
+            f"集計器の読んだ基底バー {bars_sha256!r} と不一致; 別世代の共有スカラー"
+            "（tolerance_cents / est_voiced_confidence_floor / repeats_min）の下で出た "
+            "判定を現行世代の帯として publish しない (fail-closed)"
+        )
+    if common["repeats_min"] != frozen_repeats_min:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の repeats_min {common['repeats_min']!r} が "
+            f"凍結値 {frozen_repeats_min!r} と不一致; census の分母を verdict の自己申告に "
+            "決めさせない（小さく名乗れば未完の帯が揃ったことになる）(fail-closed)"
+        )
+    if common["m2e_bars_sha256"] != m2e_bars_sha256:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の m2e_bars_sha256 "
+            f"{common['m2e_bars_sha256']!r} が集計器の読んだ帯登録 {m2e_bars_sha256!r} と "
+            "不一致; 別世代のバーの下で出た判定を現行バーの帯として publish しない "
+            "(fail-closed)"
+        )
+    # 集計器自身のコードと、判定を出したコードの一致（`evaluate_m2_bars` の 3 段照合と
+    # 同型）。集計は判定を**新たに publish する**行為なので、その根拠が現 checkout で
+    # 再現可能であることを要求する。
+    current_generator = _generator_code_sha256()
+    if common["generator_code_sha256"] != current_generator:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の generator_code_sha256 "
+            f"{common['generator_code_sha256']!r} が現 checkout の {current_generator!r} と "
+            "不一致; 別世代のコードが産んだ判定を現行コードの帯として publish しない "
+            "(fail-closed)"
+        )
+    current_evaluator = _evaluator_code_sha256()
+    if common["evaluator_code_sha256"] != current_evaluator:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の evaluator_code_sha256 "
+            f"{common['evaluator_code_sha256']!r} が現 checkout の {current_evaluator!r} と "
+            "不一致 (fail-closed)"
+        )
+    # **形も要求する**（`""` や `"unknown"` の placeholder が「揃っている」に化けない）。
+    if not _is_sha256(common["env_digest"]):
+        raise ValueError(
+            f"aggregate_m2e_census: verdict の env_digest {common['env_digest']!r} が "
+            "64-hex sha256 でない; 環境を名乗らない判定を帯の census に数えない "
+            "(fail-closed)"
+        )
+    if not isinstance(common["repeats_min"], int) or common["repeats_min"] < 2:
+        raise ValueError(
+            f"aggregate_m2e_census: repeats_min {common['repeats_min']!r} が 2 未満または "
+            "整数でない (fail-closed)"
+        )
+    # **「全部欠けている」を「揃っている」と見なさない**（PR #241 Codex P1）。
+    # 上の等値検査は `v.get(field)` を比べるので、全 verdict がこのフィールドを持たなければ
+    # `None` 同士で一致し、E-13 の照合はフィールドを剥がすだけで無効化できてしまう。
+    # `env_digest` には形の要求を置いたのにここには置いていない、という非対称だった。
+    builder = common["m2e_builder_provenance"]
+    if not isinstance(builder, dict):
+        raise ValueError(
+            f"aggregate_m2e_census: verdict が m2e_builder_provenance を名乗っていない "
+            f"（{builder!r}）; どの混合式で作られたミックスを測った判定なのか立証できない "
+            "まま破断曲線を組まない (fail-closed)"
+        )
+    for key in ("generator_code_sha256", "m2c_fixtures_sha256", "m2e_bed_fixtures_sha256"):
+        if not _is_sha256(builder.get(key)):
+            raise ValueError(
+                f"aggregate_m2e_census: m2e_builder_provenance の {key} "
+                f"{builder.get(key)!r} が 64-hex sha256 でない; 混合式の素性を名乗るだけの "
+                "申告を照合済みとして扱わない (fail-closed)"
+            )
+    # E-19: `numeric_runtime_config` にも存在と形を要求する（PR #241 Codex P1・E-17 と
+    # 同じ論法）。`env_digest` は `threadpool_info` を意図的に畳まないので、この記録の
+    # 照合が唯一の防壁である——全 verdict がフィールドを欠けば `None` 同士で「揃い」、
+    # 別 BLAS/threadpool 構成の判定が census_complete に合流できてしまう。
+    nrc = common["numeric_runtime_config"]
+    if not isinstance(nrc, dict) or not nrc:
+        raise ValueError(
+            f"aggregate_m2e_census: verdict が numeric_runtime_config を名乗っていない "
+            f"（{nrc!r}）; env_digest が threadpool_info を畳まない宣言された穴は、この"
+            "記録の照合を前提に許容されている——記録なしでは前提が成立しない (fail-closed)"
+        )
+    # E-24: 「非空 dict」だけでは `{"unknown": True}` のような placeholder が通る
+    # （PR #241 Codex P1）。生成側（`_numeric_runtime_config()`）が実際に返すトップ
+    # レベルキー集合と束縛する。`generator_code_sha256` は既に現 checkout と照合済み
+    # なので、生成側の形が世代間で動いてもこの検査が誤爆する経路は無い——ここで見て
+    # いるのは「生成側と同じ checkout が今この形を返す」という 1 点のみである。
+    if set(nrc) != _NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS:
+        raise ValueError(
+            f"aggregate_m2e_census: numeric_runtime_config のキー集合 {sorted(nrc)} が "
+            f"生成側の形 {sorted(_NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS)} と不一致; "
+            "placeholder を証拠として数えない (fail-closed)"
+        )
+    # 共有スカラーも census 成果物へそのまま載せるので、載せる前に形を確かめる
+    # （E-14 と同じ規律。等値検査だけでは `None` 同士・文字列同士でも揃ってしまう）。
+    # E-26: 有限性だけでは足りない（PR #241 Codex P1）。E-7（repeats_min）で自分が
+    # 適用した規律との非対称——verdict が名乗る `tolerance_cents` / `est_voiced_
+    # confidence_floor` は、census 自身が読んだ基底バーの**実値**とも突き合わせる。
+    # 50 cents で測った metrics を 5 cents の測定として publish しない。
+    for scalar_key, frozen_value in (
+        ("tolerance_cents", frozen_tolerance_cents),
+        ("est_voiced_confidence_floor", frozen_est_voiced_floor),
+    ):
+        scalar = common[scalar_key]
+        if isinstance(scalar, bool) or not isinstance(scalar, (int, float)) or not math.isfinite(scalar):
+            raise ValueError(
+                f"aggregate_m2e_census: {scalar_key} {scalar!r} が有限数値でない; "
+                "凍結スカラーを名乗らない判定を census に数えない (fail-closed)"
+            )
+        if float(scalar) != float(frozen_value):
+            raise ValueError(
+                f"aggregate_m2e_census: {scalar_key} {scalar!r} が凍結バーの実値 "
+                f"{frozen_value!r} と不一致; 50 cents で測った metrics を 5 cents の測定と "
+                "して publish しない (fail-closed)"
+            )
+    return common
+
+
+def aggregate_m2e_census(
+    verdicts: "List[ReportArtifact]",
+    *,
+    bars_path: Path = BARS_PATH,
+    m2e_bars_path: Path = M2E_BARS_PATH,
+) -> Dict[str, Any]:
+    """4 水準 × 2 アームの verdict を集め、census が揃ったときにだけ帯の判定を出す。
+
+    設計 §6.2 / §11 の実装。**この関数だけが帯の判定を出す。**
+
+    設計判断（rev.6 §8.9.5 実装ノート）:
+
+    - **E-1 入力は verdict であって run report ではない。** report から再判定すると
+      evaluate の全ゲート（測り直しによる独立検証・provenance 照合・pin 束縛）を
+      二重実装することになり、2 つの判定経路が食い違う余地を作る。verdict は既に
+      それらを通過した成果物なので、集計器は「揃っているか」だけを問う。
+    - **E-2 期待セル数は積として再計算する**（`_m2e_census_expected_cells`）。
+    - **E-3 census が揃うまで metrics を一切載せない。** §11 は部分集合での平均 RPA・
+      途中の破断曲線・見通しの表明を禁じている。「出さない」ではなく「**成果物に
+      存在させない**」ことで、下流が偶然読んでしまう経路ごと消す。
+    - **E-4 環境同一性を要求する**（§8.7）。
+    - **E-5 通過しても昇格しない。** `promotes_route` / `unlocks_m4_g2` を常に `false`
+      として成果物に埋め込む（§5.4 / §7.2: 歌声と伴奏は別の曲であるため）。
+
+    揃っていないときに出せるのは census のみ——完了セル数 / 期待数、(水準, アーム) 別の
+    完了状況、欠けている組。**判定・平均・曲線は出さない。**
+    """
+    m2e_bars, m2e_bars_sha256 = load_bars(m2e_bars_path)
+    m2e_bars_data = m2e_bars.verify(m2e_bars_sha256)
+    # 共有スカラー（`repeats_min` 等）の供給元は M2e 側ではなく基底バーである（§5.1-4）。
+    # 集計器は**自分で読んだ凍結ファイル**から `repeats_min` を取り、verdict の自己申告は
+    # それとの一致を要求するだけにする（PR #241 Codex P2）。
+    bars, bars_sha256 = load_bars(bars_path)
+    bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
+    frozen_repeats_min = int(bar_block["repeats_min"])
+    # E-26: `tolerance_cents` / `est_voiced_confidence_floor` も、`evaluate_m2_bars`
+    # が `_require_frozen_tolerance` / `_require_frozen_est_voicing_floor` で読むのと
+    # 同じ block（`bar_block`）から抽出する。census 自身の readback がここで凍結値を
+    # 独自解釈すると、evaluate の関所と census の関所が別の「凍結値」を指しうる。
+    frozen_tolerance_cents = float(bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
+    frozen_est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])
+    arms = _categories_owned_by("m2e_accuracy_bars.yaml")
+
+    parsed: "List[Dict[str, Any]]" = []
+    pins: "List[Dict[str, Any]]" = []
+    for index, artifact in enumerate(verdicts):
+        if not isinstance(artifact, ReportArtifact):
+            raise ValueError(
+                f"aggregate_m2e_census: verdicts[{index}] は load_verdict() が返す "
+                f"artifact でなければならない（受け取った型: {type(artifact).__name__}）; "
+                "digest と内容が切り離された入力を集計しない (fail-closed)"
+            )
+        data = artifact.verify()
+        if data.get("schema_version") != _EXPECTED_VERDICT_SCHEMA:
+            raise ValueError(
+                f"aggregate_m2e_census: verdicts[{index}] の schema_version "
+                f"{data.get('schema_version')!r} が {_EXPECTED_VERDICT_SCHEMA!r} でない "
+                "(fail-closed)"
+            )
+        if not any(arm in data.get("categories", {}) for arm in arms):
+            raise ValueError(
+                f"aggregate_m2e_census: verdicts[{index}] に M2e カテゴリ "
+                f"{list(arms)} が 1 つも無い; 帯と無関係な verdict を census の入力に "
+                "数えない (fail-closed)"
+            )
+        parsed.append(data)
+        pins.append(artifact.pin())
+
+    common = _require_homogeneous_census_inputs(
+        parsed,
+        m2e_bars_sha256=m2e_bars_sha256,
+        bars_sha256=bars_sha256,
+        frozen_repeats_min=frozen_repeats_min,
+        frozen_tolerance_cents=frozen_tolerance_cents,
+        frozen_est_voiced_floor=frozen_est_voiced_floor,
+    )
+    repeats_min = frozen_repeats_min
+    expected_cells = _m2e_census_expected_cells(repeats_min)
+
+    conditions = m2e_bars_data[_BARS_FILES["m2e_accuracy_bars.yaml"]["conditions_key"]]
+
+    # (level, arm) → セル情報。**同じ組が 2 回来たら拒否する**（同じ測定を 2 回数えて
+    # census を満たしたことにしない——コピーした verdict で 1280 を埋められては
+    # ならない）。
+    observed: "Dict[str, Dict[str, Dict[str, Any]]]" = {}
+    for index, data in enumerate(parsed):
+        level = data.get("level")
+        if level not in _M2E_LEVEL_LADDER:
+            raise ValueError(
+                f"aggregate_m2e_census: verdicts[{index}] の level {level!r} が事前登録 "
+                f"ラダー {list(_M2E_LEVEL_LADDER)} にない (fail-closed)"
+            )
+        for arm in arms:
+            cat = data.get("categories", {}).get(arm)
+            if cat is None:
+                continue
+            if arm in observed.get(level, {}):
+                raise ValueError(
+                    f"aggregate_m2e_census: (level={level!r}, arm={arm!r}) の verdict が "
+                    "複数ある; 同じ測定を二重に数えて census を満たしたことにしない "
+                    "(fail-closed)"
+                )
+            # E-44: category 値が object でない場合、直後の `.get` 連鎖が
+            # **AttributeError** で census 全体をクラッシュさせる（PR #241 Codex P2・
+            # E-32「clip_ids の非 str 要素」と同型の残り穴）。ここで isinstance を
+            # 検査し、malformed マーカー付きレコードを observed へ格納する——値そのもの
+            # は埋め込まず type 名のみ記録する（E-33 の規律）。per-cell 検査段が
+            # このマーカーを見て他の検査をスキップし、census_incomplete として報告する。
+            if not isinstance(cat, dict):
+                observed.setdefault(level, {})[arm] = {
+                    "verdict_index": index,
+                    "malformed_category": True,
+                    "malformed_category_type": type(cat).__name__,
+                }
+                continue
+            observed.setdefault(level, {})[arm] = {
+                "verdict_index": index,
+                "external_manifest_sha256": cat.get("external_manifest_sha256"),
+                "external_fixtures_sha256": cat.get("external_fixtures_sha256"),
+                "status": cat.get("status"),
+                "n_rows": cat.get("n_rows"),
+                "clip_ids": cat.get("clip_ids"),
+                "repeats_bit_identical": cat.get("repeats_bit_identical"),
+                "outcomes": cat.get("outcomes"),
+                "bar_satisfied": cat.get("bar_satisfied"),
+                "failures": cat.get("failures"),
+                "gate_level": cat.get("gate_level"),
+                "metrics": cat.get("metrics"),
+            }
+
+    cells: "Dict[str, Dict[str, Any]]" = {}
+    missing: "List[Dict[str, Any]]" = []
+    normalized_by_level: "Dict[str, Tuple[str, ...]]" = {}
+    # per-cell 検査を通ったセルだけを集めた木（アーム間照合はこれを使う）。
+    sound_cells: "Dict[str, Dict[str, Dict[str, Any]]]" = {}
+    observed_cells = 0
+    for level in _M2E_LEVEL_LADDER:
+        for arm in arms:
+            cell = observed.get(level, {}).get(arm)
+            if cell is None:
+                missing.append({"level": level, "arm": arm, "reason": "verdict_absent"})
+                continue
+            problems: "List[str]" = []
+            # E-44: 収集段が malformed マーカーを積んだセル（category 値が object
+            # でなかった verdict）はここで打ち切る（PR #241 Codex P2・E-32 と同型の
+            # 残り穴）。以降の per-cell 検査は `cell["clip_ids"]` 等の直接キーアクセスを
+            # 前提にしており、malformed マーカーはそれらのキーを持たない——検査を続けると
+            # 別の KeyError で census 全体をクラッシュさせる。
+            if cell.get("malformed_category"):
+                problems.append(
+                    f"category record が object でない"
+                    f"（{cell.get('malformed_category_type')!r}）; 形の壊れた台帳を"
+                    "クラッシュではなく未完として報告する"
+                )
+                missing.append({"level": level, "arm": arm, "reason": "; ".join(problems)})
+                cells.setdefault(level, {})[arm] = {
+                    "cells": 0,
+                    "complete": False,
+                    "problems": problems,
+                }
+                continue
+            clip_ids = cell["clip_ids"]
+            clip_ids_all_str = isinstance(clip_ids, list) and all(
+                isinstance(c, str) for c in clip_ids
+            )
+            if not isinstance(clip_ids, list) or len(clip_ids) != _M2E_EXPECTED_ENTRIES_PER_LEVEL:
+                problems.append(
+                    f"clip 数 {len(clip_ids) if isinstance(clip_ids, list) else clip_ids!r} が "
+                    f"凍結コホート {_M2E_EXPECTED_ENTRIES_PER_LEVEL} と不一致"
+                )
+            elif not clip_ids_all_str:
+                # E-32: 要素型を先に検査する（PR #241 Codex P2・E-31 と同型の残り穴）。
+                # 非 str 要素（dict/list 等）が混ざると直後の `set(clip_ids)` が
+                # **TypeError**（unhashable type）で census 全体をクラッシュさせる——
+                # 本来出すべき `census_incomplete` が出せない。全要素 str の場合のみ
+                # 重複検査（このブロック）と `_m2e_normalized_cohort_ids`（下の水準タグ
+                # 検査ブロック）へ進む。値そのものは埋め込まない（個数と index のみ）。
+                non_str_indices = [i for i, c in enumerate(clip_ids) if not isinstance(c, str)]
+                problems.append(
+                    f"clip_ids に文字列でない要素がある（{len(non_str_indices)} 件・index "
+                    f"{non_str_indices[:5]}）; 形の壊れた台帳をクラッシュではなく未完として "
+                    "報告する"
+                )
+            elif len(set(clip_ids)) != len(clip_ids):
+                # **件数だけでは足りない**（PR #241 Codex P2）。80 要素あっても重複して
+                # いれば異なる測定は 80 未満であり、`observed_cells` は重複を数える。
+                # 全水準・全アームで同じように重複していれば下の等値検査も通るため、
+                # **1280 の異なる測定なしに「1280 セル完了」を報告できてしまう**。
+                # `load_verdict` は受け取った bytes を hash するだけで一意性は証明しない。
+                duplicated = sorted({cid for cid in clip_ids if clip_ids.count(cid) > 1})
+                problems.append(
+                    f"clip_ids に重複がある（{duplicated[:3]}"
+                    f"{' ほか' if len(duplicated) > 3 else ''}・"
+                    f"相異なるのは {len(set(clip_ids))} 件）; 重複を数えて census を "
+                    "満たしたことにしない"
+                )
+            if cell["n_rows"] != repeats_min:
+                problems.append(f"n_rows {cell['n_rows']!r} が repeats_min {repeats_min} と不一致")
+            if cell["outcomes"] != ["measured"]:
+                problems.append(f"outcomes {cell['outcomes']!r} が ['measured'] でない")
+            if cell["repeats_bit_identical"] is not True:
+                problems.append("repeats が bit 一致していない")
+            if cell["status"] not in ("census_pending", "level_record_only"):
+                problems.append(f"status {cell['status']!r} が M2e の想定値でない")
+            # **`metrics` の形も要求する**（PR #241 Codex P2）。`load_verdict` は
+            # top-level schema と bytes 束縛しか見ないので、`metrics` が欠損・`null`・
+            # 短縮でも他の検査は全部通り、`census_complete` を出したうえで
+            # `level_response` に欠測が載る（帯の判定だけは `bar_satisfied` から出る）。
+            # 成果物に載せる値は、載せる前に形を確かめる。
+            # E-33: この節の不備理由は**計測 field 名・値を含めない**（PR #241 Codex
+            # P2）。E-3 は「census が揃うまで metrics を成果物に存在させない」を宣言して
+            # おり、テストは文書全 bytes への文字列不在まで検査している——その禁止は
+            # `census_complete` 時の `level_response` だけでなく、`census_incomplete` 時
+            # の `missing[].reason` にも及ぶ。validator 例外テキスト（field 名・値入り）
+            # をそのまま埋めていたのは自己違反だった。詳細診断は census の仕事ではなく、
+            # verdict 側を直接読めば得られる——ここでは一般コードだけを報告する。
+            metrics_list = cell["metrics"]
+            if not isinstance(metrics_list, list) or len(metrics_list) != repeats_min:
+                problems.append(f"計測記録が {repeats_min} 件の list でない")
+            else:
+                # E-31: 要素型を先に検査する（PR #241 Codex P2）。外側 list の長さしか
+                # 見ていないと、要素が `null` 等の非 dict のとき `_require_finite_metrics`
+                # 内の `in` 演算が **TypeError** を投げ、`except ValueError` を素通りして
+                # census 全体がクラッシュする——本来出すべき `census_incomplete` が
+                # 出せない（E-11 の裁定違反状態）。`except` を `(ValueError, TypeError)`
+                # へ広げる案は採らない（genuine bug を握りつぶす）——明示の型検査で先に
+                # 落とすのが正しい。型検査を通った場合のみ深い検査（有限性・平均安定
+                # 不変条件）へ進む。
+                non_object_indices = [
+                    i for i, m in enumerate(metrics_list) if not isinstance(m, dict)
+                ]
+                if non_object_indices:
+                    problems.append(
+                        f"計測記録に JSON object でない要素がある（{len(non_object_indices)} 件）"
+                    )
+                else:
+                    # E-34: `except` は `(ValueError, OverflowError)` に広げる（PR #241
+                    # Codex P2）。400 桁級の JSON 整数（`isinstance(value, int)` は
+                    # 真だが `float(value)` が表現できない）が metrics に入ると、この
+                    # 呼び出し内の `float()` 変換が **OverflowError** を投げ、
+                    # `except ValueError` を素通りして census 全体がクラッシュする
+                    # （E-31/E-32 と同型: 本来出すべき `census_incomplete` が出せない）。
+                    # **E-31 とは except 拡大の裁定が異なる**: TypeError は「呼び出し側
+                    # の前提（要素が mapping であること）の検査漏れ」の信号であり、
+                    # 前提は明示検査で塞ぐのが正解だった。対して OverflowError は
+                    # 「値が有限 float で表現できない」という**この validator が判定
+                    # すべき値域違反そのもの**であり、事前検査で塞ぐには float 変換の
+                    # 意味論を複製することになる——だから except を広げる。
+                    try:
+                        _require_finite_metrics(arm, metrics_list)
+                    except (ValueError, OverflowError):
+                        problems.append("計測記録が有限数値の契約を満たさない")
+                    # E-27: 平均で保存される不変条件のみ再適用する（`_require_
+                    # average_stable_metric_invariants` docstring に採否の経緯を記録）。
+                    # `float()` 変換を含むため E-34 と同じ理由で OverflowError も拾う。
+                    try:
+                        _require_average_stable_metric_invariants(
+                            arm, metrics_list, frozen_tolerance_cents=frozen_tolerance_cents
+                        )
+                    except (ValueError, OverflowError):
+                        problems.append("計測記録が平均安定不変条件を満たさない")
+                # E-28: `repeats_bit_identical` の申告は評価器の独立測り直しが立証する
+                # が、census が**公開する** per-repeat metrics 自体が申告どおり相互
+                # bit 一致していることは、boolean 申告と独立に検査できる必要条件
+                # （PR #241 Codex P1）。bit 一致を名乗りながら公開 metrics が repeat 間で
+                # 食い違う verdict を数えない。**十分条件ではない**——平均が偶然一致して
+                # clip が異なるケースは検出できない（宣言された限界、設計ノート E-28）。
+                if len({json.dumps(m, sort_keys=True) for m in metrics_list}) != 1:
+                    problems.append("計測記録が repeat 間で bit 一致しない")
+            # E-20: アーム対の素性 hash にも存在と形を要求する（PR #241 Codex P1・E-17 と
+            # 同じ論法）。両アームが揃って欠けば `None == None` でアーム間照合が空転し、
+            # 無関係な音源世代の対が「対」として数えられる。
+            for provenance_key in ("external_manifest_sha256", "external_fixtures_sha256"):
+                if not _is_sha256(cell[provenance_key]):
+                    problems.append(
+                        f"{provenance_key} {cell[provenance_key]!r} が 64-hex sha256 でない"
+                        "（素性を名乗らないアームを対にしない）"
+                    )
+            counted = (
+                len(clip_ids) * cell["n_rows"]
+                if isinstance(clip_ids, list) and isinstance(cell["n_rows"], int)
+                else 0
+            )
+            if clip_ids_all_str:
+                # 水準タグの検査は**件数と独立**に行う（短いコホートでもラベルの
+                # 食い違いは食い違いである）。正規化結果を水準横断の照合に使うのは
+                # per-cell 検査を通ったセルだけ——短いコホートを「別コホート」として
+                # 報告すると、本当の原因（件数不足）が見えなくなる。
+                # E-32: `_m2e_normalized_cohort_ids` 自身も非 str 要素で ValueError を
+                # 投げる（E-8 の fail-closed）が、それは「捕まえて problems へ落とす」
+                # 設計ではなく「呼ばない」設計にする——`clip_ids_all_str` で事前に
+                # 型を揃えたセルだけがここへ到達する。
+                normalized = _m2e_normalized_cohort_ids(level, clip_ids)
+                if not problems:
+                    normalized_by_level[level] = normalized
+            if problems:
+                missing.append(
+                    {"level": level, "arm": arm, "reason": "; ".join(problems)}
+                )
+            else:
+                observed_cells += counted
+                sound_cells.setdefault(level, {})[arm] = cell
+            cells.setdefault(level, {})[arm] = {
+                "cells": counted,
+                "complete": not problems,
+                "problems": problems,
+            }
+    # アーム間で**同じミックスを測ったこと**を要求する（§6.2「アームは manifest を
+    # 分けない」の下流検査）。件数が揃っていても中身がずれていれば別の帯である。
+    #
+    # **id の一致だけでは足りない**（PR #241 Codex P1）。2 つの manifest が同じ 80 個の
+    # `clip_ids` を持ちながら、別世代の音声・別世代の登録簿を指すことはありうる——
+    # id は名前であって bytes ではない。row は既に `external_manifest_sha256` /
+    # `external_fixtures_sha256` を運んでいるので、**素性の hash そのもの**を照合する。
+    #
+    # 照合は **per-cell 検査を通ったセル同士**でのみ行う（PR #241 Codex P2）。片アームが
+    # `insufficient_repeats` で欠けている水準は「部分測定」であって「別素材」ではない
+    # ——完了したアームの値と欠けたアームの `None` を突き合わせて raise すると、
+    # **census が本来出すべき `census_incomplete` の報告そのものが出せなくなる**。
+    # 部分測定を報告するのが census の目的なので、ここで落としてはならない。
+    for level, per_arm in sorted(sound_cells.items()):
+        for field, what in (
+            ("clip_ids", "clip_ids"),
+            ("external_manifest_sha256", "external_manifest_sha256"),
+            ("external_fixtures_sha256", "external_fixtures_sha256"),
+        ):
+            values = {
+                arm: tuple(cell[field]) if isinstance(cell[field], list) else cell[field]
+                for arm, cell in per_arm.items()
+            }
+            if len(set(values.values())) > 1:
+                raise ValueError(
+                    f"aggregate_m2e_census: level {level!r} のアーム間で {what} が一致しない; "
+                    "同じミックスを 2 経路で測るのがアーム比較の定義であり、別素材・別世代の "
+                    "観測を同じ水準の 2 アームとして並べない (fail-closed)"
+                )
+
+    # **4 水準が同じコホートを測ったこと**を要求する（PR #241 Codex P1）。水準ごとに
+    # fixtures 世代が違えば、各水準は 80 件を満たしながら**別の 80 件**でありうる——
+    # アーム間の照合は同一水準の中しか見ておらず、水準を跨いだ同一性は誰も問うて
+    # いなかった。id 規約の水準タグを剥がした正規化コホートで突き合わせる
+    # （`normalized_by_level` は上の per-cell ループで、検査を通ったセルだけ埋まる）。
+    distinct_cohorts = set(normalized_by_level.values())
+    if len(distinct_cohorts) > 1:
+        differing = sorted(normalized_by_level)
+        raise ValueError(
+            f"aggregate_m2e_census: 水準間で正規化コホートが一致しない（{differing} の "
+            "うち少なくとも 1 つが別の (clip, bed) 集合）; 別コホートの水準を並べた破断"
+            "曲線は 1 本の曲線ではない (fail-closed)"
+        )
+
+    complete = not missing and observed_cells == expected_cells
+
+    census: Dict[str, Any] = {
+        "schema_version": _M2E_CENSUS_SCHEMA,
+        "census_recorded_utc": _utc_now(),
+        "generator_code_sha256": common["generator_code_sha256"],
+        "evaluator_code_sha256": common["evaluator_code_sha256"],
+        "bars_sha256": bars_sha256,
+        "bars_path_relative": _repo_relative_path(bars_path),
+        "m2e_bars_sha256": m2e_bars_sha256,
+        "m2e_bars_path_relative": _repo_relative_path(m2e_bars_path),
+        "env_digest": common["env_digest"],
+        # E-26: `common[...]` ではなく凍結値を書く（E-7 の `repeats_min` と同型）。
+        # `_require_homogeneous_census_inputs` は verdict の申告が凍結値と厳密一致する
+        # ことを既に検査しているので値は同じだが、成果物の供給源を「集計器が読んだ
+        # 凍結ファイル」に統一する。
+        "tolerance_cents": frozen_tolerance_cents,
+        "est_voiced_confidence_floor": frozen_est_voiced_floor,
+        "repeats_min": repeats_min,
+        "levels": list(_M2E_LEVEL_LADDER),
+        "arms": list(arms),
+        "expected_cells_total": expected_cells,
+        "observed_cells_total": observed_cells,
+        "cells": cells,
+        "missing": missing,
+        "complete": complete,
+        "verdict_pins": pins,
+        # E-5: 通過しても昇格しない（§5.4 / §7.2）。**成果物に埋め込む**——読み手が
+        # 設計文書へ戻らなくても、この帯が何を解錠しないかが判定と同じ場所にある。
+        "promotes_route": False,
+        "unlocks_m4_g2": False,
+        "declared_limits": [
+            "歌声（vocadito）と伴奏（MUSDB18-HQ）は別の曲であり、和声的に不整合である。"
+            "抽出が易しくなるか難しくなるかは一意に決まらないため、本帯の結果を根拠に "
+            "V_fullstack へ昇格させない（§7.2）。",
+            "ベッドは MUSDB18-HQ test split の先頭 2 曲であり、ジャンル・編成の代表性を "
+            "主張しない（§7.2）。",
+            "+12dB は実運用のミックス balance ではなくトリップワイヤ専用の人工的水準 "
+            "である（§7.2）。",
+            "stem アームは水準軸に沿った単調性を仮定しないため、「+12dB で割れたら下の "
+            "水準も割れる」という下方伝播を主張しない（§5.4）。",
+        ],
+    }
+
+    if not complete:
+        # §11: 揃わないまま出せるのは**センサスのみ**。平均 RPA・破断曲線・
+        # 「通りそう / 落ちそう」の見通しを成果物に**存在させない**（E-3）。
+        census["band_verdict"] = None
+        census["level_response"] = None
+        census["status"] = "census_incomplete"
+        return census
+
+    # ここから先は census が揃った場合のみ。
+    band: Dict[str, Any] = {}
+    for arm in arms:
+        gate_level = conditions[arm]["gate_level"]
+        cell = observed[gate_level][arm]
+        if cell["status"] != "census_pending" or cell["bar_satisfied"] is None:
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の gate_level {gate_level!r} の "
+                f"verdict にバー適用の証拠（bar_satisfied）が無い（status="
+                f"{cell['status']!r}）; バーが当たっていない水準から帯の判定を出さない "
+                "(fail-closed)"
+            )
+        # **bool そのものを要求する**（PR #241 Codex P2）。`is None` を通っただけでは
+        # `"false"` のような非空文字列が残り、下の真偽評価は**真**になる——
+        # **fail が pass として publish される**、この機構で最悪の失敗形である。
+        # `load_verdict` は bytes 束縛と top-level schema しか見ないので、category
+        # フィールドの型は集計器が独立に要求する。
+        if not isinstance(cell["bar_satisfied"], bool):
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の bar_satisfied "
+                f"{cell['bar_satisfied']!r} が bool でない; 真偽でない値を真偽として "
+                "評価すると fail が pass に化ける (fail-closed)"
+            )
+        # E-22: 帯判定セルの gate_level 申告を凍結条件と束縛する（PR #241 Codex P1）。
+        # セルの選択は verdict の自己申告（top-level `level`）に依存しているため、
+        # category 側の `gate_level` 申告も凍結値（`conditions[arm]["gate_level"]`）と
+        # 束縛しなければ、別水準で当てたバーの結果が帯の判定として publish されうる。
+        if cell["gate_level"] != gate_level:
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の verdict が名乗る gate_level "
+                f"{cell['gate_level']!r} が凍結条件の {gate_level!r} と不一致; 別水準で "
+                "当てたバーの結果を帯の判定として publish しない (fail-closed)"
+            )
+        # 併記する `failures` も形を要求する（成果物へそのまま載せるため）。
+        if cell["failures"] is not None and not isinstance(cell["failures"], list):
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の failures {cell['failures']!r} が "
+                "list でない; 判定の根拠として成果物へ載せる値の形を確かめる (fail-closed)"
+            )
+        # E-45: `failures` の各要素も非空文字列であることを要求する（PR #241 Codex P2）。
+        # `failures: [null]` は直前の list 型検査・下の `bar_satisfied == not failures`
+        # 整合検査の両方を通過してしまい、非 str 要素がそのまま band_verdict へ publish
+        # される。E-16/E-18/E-22 と同じ層（帯 publish の fail-closed 検査）に揃える。
+        # 値そのものは埋め込まない——非 str 要素の index のみ記載する。
+        if cell["failures"] is not None:
+            bad_failure_indices = [
+                i for i, f in enumerate(cell["failures"]) if not (isinstance(f, str) and f)
+            ]
+            if bad_failure_indices:
+                raise ValueError(
+                    f"aggregate_m2e_census: arm {arm!r} の failures の要素 index "
+                    f"{bad_failure_indices} が非空文字列でない; 判定の根拠として成果物へ "
+                    "載せる値の形を確かめる (fail-closed)"
+                )
+        # **`evaluate_m2_bars` が確立した不変条件を読み戻しで再検証する**
+        # （PR #241 Codex P2）: `bar_satisfied == not failures`。型が正しくても関係が
+        # 壊れていれば、`bar_satisfied: true` + 非空 `failures` は**失敗の証拠を同梱
+        # したまま pass を publish する**し、逆は理由の無い fail を publish する。
+        # 型を要求しただけでは足りない——**値どうしの整合も要求する**。
+        arm_failures = cell["failures"] or []
+        if cell["bar_satisfied"] != (not arm_failures):
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の bar_satisfied "
+                f"{cell['bar_satisfied']!r} が failures {arm_failures!r} と矛盾する "
+                "（evaluate は bar_satisfied == not failures を確立している）; "
+                "根拠と結論が食い違う判定を publish しない (fail-closed)"
+            )
+        # E-23: 凍結閾値を census 自身が再適用し、metrics と bar_satisfied の整合を要求する
+        # （PR #241 Codex P1）。E-18 は bar_satisfied↔failures を束縛したが、metrics だけを
+        # 書き換えれば「凍結バーを割る metrics を level_response に載せながら pass を出す」
+        # 成果物が組めた。比較方向は evaluate と同一（min_rpa は < / max_vfa は > /
+        # max_octave_gap は >）。failures の文字列照合はしない——E-18 が bar_satisfied↔
+        # failures を、本検査が metrics↔bar_satisfied を束縛すれば連鎖は閉じる（文字列
+        # 形式への結合は brittle で over-engineering）。per-cell 検査で
+        # repeats_bit_identical is True を既に要求しているため、evaluate 側で bit 不一致
+        # 由来の failure が混ざるケースは band ループへ到達しない（整合は閾値のみで閉じる）。
+        frozen_bar = m2e_bars_data[_BARS_FILES["m2e_accuracy_bars.yaml"]["block_key"]].get(arm, {})
+        recomputed_satisfied = True
+        for metrics in cell["metrics"]:
+            if "min_rpa" in frozen_bar and metrics["raw_pitch_accuracy"] < frozen_bar["min_rpa"]:
+                recomputed_satisfied = False
+            if "max_vfa" in frozen_bar and metrics["voicing_false_alarm"] > frozen_bar["max_vfa"]:
+                recomputed_satisfied = False
+            if "max_octave_gap" in frozen_bar and metrics["octave_gap"] > frozen_bar["max_octave_gap"]:
+                recomputed_satisfied = False
+        if recomputed_satisfied != cell["bar_satisfied"]:
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の bar_satisfied "
+                f"{cell['bar_satisfied']!r} が、凍結バーを metrics へ再適用した結果 "
+                f"{recomputed_satisfied!r} と不一致; 判定と計測値が食い違う verdict を "
+                "publish しない (fail-closed)"
+            )
+        band[arm] = {
+            "gate_level": gate_level,
+            "status": "pass" if cell["bar_satisfied"] else "fail",
+            "failures": cell["failures"] or [],
+        }
+    census["band_verdict"] = band
+    # §11「4 水準は常に全点提示する」——事後に「一番良かった水準」を選んで報告する
+    # ことは禁止なので、成果物は常にラダー全点を持つ。
+    census["level_response"] = {
+        arm: [
+            {
+                "level": level,
+                "ladder_index": _m2e_ladder_index(level),
+                "metrics": observed[level][arm]["metrics"],
+            }
+            for level in _M2E_LEVEL_LADDER
+        ]
+        for arm in arms
+    }
+    census["status"] = "census_complete"
+    return census
+
+
+# census phase は「渡されたか」を問う必要がある——値の比較では既定値の明示指定を検出
+# できない（PR #241 Codex P2）。
+_ARGPARSE_UNSET = object()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True, help="出力 JSON の書き出し先")
@@ -9194,6 +10043,16 @@ def main() -> int:
         type=Path,
         metavar="REPORT.json",
         help="run report(s) にバーを適用して verdict を出す（未指定なら run phase）",
+    )
+    parser.add_argument(
+        "--census",
+        nargs="+",
+        type=Path,
+        metavar="VERDICT.json",
+        help="C5（設計 §6.2 / §11）: 4 水準 × 2 アームの verdict を集めて census 完全性を "
+        "検査し、**揃っているときにだけ**帯の判定を出す。揃っていなければ出せるのは "
+        "census のみ（完了セル数 / 期待数・(水準, アーム) 別の完了状況・欠けている組）で、"
+        "平均 RPA も破断曲線も成果物に存在しない。--evaluate とは排他",
     )
     parser.add_argument("--bars", type=Path, default=BARS_PATH)
     parser.add_argument(
@@ -9214,7 +10073,7 @@ def main() -> int:
         f"{' / '.join(_M2E_LEVEL_LADDER)}）。水準軸を持つカテゴリを測る run では必須。"
         "`gate_level` 以外の水準は破断曲線の記録専用で、evaluate はバーを適用しない",
     )
-    parser.add_argument("--specs", type=Path, default=SPECS_PATH)
+    parser.add_argument("--specs", type=Path, default=_ARGPARSE_UNSET)
     parser.add_argument(
         "--categories",
         nargs="+",
@@ -9236,7 +10095,7 @@ def main() -> int:
     parser.add_argument(
         "--external-fixtures",
         type=Path,
-        default=EXTERNAL_FIXTURES_PATH,
+        default=_ARGPARSE_UNSET,
         metavar="m2c_external_fixtures.yaml",
         help="外部素材カテゴリの事前登録 pin ファイル（既定: 凍結 committed ファイル）。"
         "測り直し子プロセスへの明示転送・`--out` 保護のためテストでの差し替えを想定",
@@ -9273,7 +10132,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--cell-store-role",
-        default=_CELL_STORE_ROLE_RUN,
+        default=_ARGPARSE_UNSET,
         choices=list(_CELL_STORE_ROLES),
         help="このプロセスが書くセルレコードの役割（既定 run）。**evaluate は "
         "測り直しの子プロセス専用**で、評価器が自動で付ける——手で渡すものではない。"
@@ -9295,7 +10154,7 @@ def main() -> int:
     parser.add_argument(
         "--workers",
         type=int,
-        default=1,
+        default=_ARGPARSE_UNSET,
         metavar="P",
         help="設計 §8.3 の並列度 P。**run phase と evaluate phase で意味が非対称**"
         "（設計判断 D-2）: run phase では宣言値で実行そのものは変えない（clip ループは "
@@ -9309,6 +10168,95 @@ def main() -> int:
     )
     args = parser.parse_args()
     _require_out_outside_git_metadata(args.out)
+    if args.census and args.evaluate:
+        raise SystemExit(
+            "--census と --evaluate は排他（census は evaluate が出した verdict を "
+            "集める後段であり、同じ起動で両方を行うと「自分が今出した判定を自分で "
+            "集計する」ことになる）"
+        )
+    if args.census:
+        # census は run/evaluate のどのフェーズ引数とも組み合わせない。測っていない
+        # 次元・使わない資源を名乗らせない規律（`--repeat-index` 等と同型）。
+        # census が**実際に読む**のは `--census` / `--out` / `--bars` / `--m2e-bars` の
+        # 4 つだけ。それ以外は黙って無視されるのではなく拒否する（PR #241 Codex P2）——
+        # 例えば `--external-manifest` を渡した wrapper は「census がその manifest に
+        # 束縛される」と信じうるが、成果物はそれを一度も読まない。
+        # センチネル化した 4 つ（--specs / --external-fixtures / --workers /
+        # --cell-store-role）は「渡されたか」そのものを問う（値比較では既定値の明示
+        # 指定を検出できない: PR #241 Codex P2 / E-21）。--pin-threads は store_true
+        # で「既定値の明示指定」が構造上不可能なので従来どおり True 判定のまま。
+        for flag, rejected in (
+            ("--categories", args.categories is not None),
+            ("--level", args.level is not None),
+            ("--cell-store", args.cell_store is not None),
+            ("--eval-cell-store", args.eval_cell_store is not None),
+            ("--repeat-index", args.repeat_index is not None),
+            ("--external-manifest", args.external_manifest is not None),
+            ("--external-fixtures", args.external_fixtures is not _ARGPARSE_UNSET),
+            ("--specs", args.specs is not _ARGPARSE_UNSET),
+            ("--workers", args.workers is not _ARGPARSE_UNSET),
+            ("--pin-threads", args.pin_threads is True),
+            ("--cell-store-role", args.cell_store_role is not _ARGPARSE_UNSET),
+        ):
+            if rejected:
+                raise SystemExit(
+                    f"{flag} は census phase では無効（census が読むのは --census / "
+                    "--out / --bars / --m2e-bars だけで、測定も評価もしない; 黙って "
+                    "無視して「その引数に束縛された」と誤解させない。既定値と同じ値を "
+                    "渡しても、渡された事実そのものを拒否する）"
+                )
+        protected = {Path(p).resolve() for p in args.census}
+        protected.add(Path(args.m2e_bars).resolve())
+        # 基底バーも保護する（PR #241 Codex P2）。census は共有スカラーの供給元として
+        # これを**読む**ので、`--out` で潰せてはならない。
+        protected.add(Path(args.bars).resolve())
+        protected.update(_generator_code_paths())
+        if Path(args.out).resolve() in protected:
+            raise SystemExit(
+                f"--out {args.out} は census の入力（verdict / 帯登録 / provenance 対象の "
+                "ソース）と同じパスを指している; 入力を集計結果で上書きしない (fail-closed)"
+            )
+        census = aggregate_m2e_census(
+            [load_verdict(path) for path in args.census],
+            bars_path=args.bars,
+            m2e_bars_path=args.m2e_bars,
+        )
+        # 書き出す**直前に** load 時 pin の不変を再確認する（PR #241 Codex P2・
+        # run / evaluate と同じ post-execution ガード）。集計中にソースが差し替わると、
+        # census は「現 checkout と一致する」と検査したはずのコード pin を名乗りながら、
+        # 実際には別 bytes の下で組まれた成果物になる。
+        _require_unchanged_since_load()
+        payload = json.dumps(census, indent=2, sort_keys=True)
+        # E-25: 公開した bytes の pin を、書いたのと同一の snapshot から導出して stdout へ
+        # 残す（PR #241 Codex P2）。runbook の流儀では stdout が *_stdout.txt として dated
+        # record に保存されるため、後日の改変・部分置換をこの pin で検出できる。文書内へ
+        # の自己埋め込みは自己言及になるためしない（sidecar 追加も本段階では過剰）。
+        _atomic_write_text(args.out, payload)
+        print(f"wrote census to {args.out}")
+        print(f"  census sha256: {hashlib.sha256(payload.encode('utf-8')).hexdigest()}")
+        print(
+            f"  cells: {census['observed_cells_total']}/{census['expected_cells_total']} "
+            f"({census['status']})"
+        )
+        if census["band_verdict"] is None:
+            # 揃っていないときに print してよいのは census だけ（§11）。
+            for gap in census["missing"]:
+                print(f"  missing: {gap['level']} / {gap['arm']}: {gap['reason']}")
+        else:
+            for arm, result in sorted(census["band_verdict"].items()):
+                print(f"  {arm} @ {result['gate_level']}: {result['status']}")
+        return 0
+    # センチネルを実際の既定値へ戻す（census phase 以外の経路はここから先で従来どおりの
+    # 値を見る。センチネルが下流へ漏れる経路を作らない）。census 拒否検査は上のブロック
+    # 内でセンチネルのまま行っており、この正規化は他の全検査より前に置く。
+    if args.specs is _ARGPARSE_UNSET:
+        args.specs = SPECS_PATH
+    if args.external_fixtures is _ARGPARSE_UNSET:
+        args.external_fixtures = EXTERNAL_FIXTURES_PATH
+    if args.workers is _ARGPARSE_UNSET:
+        args.workers = 1
+    if args.cell_store_role is _ARGPARSE_UNSET:
+        args.cell_store_role = _CELL_STORE_ROLE_RUN
     if args.workers < 1:
         raise SystemExit(f"--workers {args.workers} は 1 以上の整数のみ許可する")
     # `--cell-store-role` は run phase のセル書き込みにしか意味が無い。測っていない

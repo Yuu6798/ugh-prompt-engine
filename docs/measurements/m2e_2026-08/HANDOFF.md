@@ -22,7 +22,8 @@
 | r3 (P-c) | `m2e_bed_fixtures.yaml` / `m2e_accuracy_bars.yaml` | **完了** |
 | — | **C2** store 分離（rev.6 §8.9.2-(1)） | **完了**（2026-08-02・`--eval-cell-store`） |
 | — | **C3** evaluate の並列化（rev.6 §8.9.2-(2)） | **完了**（2026-08-02・`--workers` + `--pin-threads`） |
-| — | **C5** 水準横断 census 集計 | **未着手** ← 次はここ（別ブリーフ・r7 で使う） |
+| — | **C5** 水準横断 census 集計 | **完了**（2026-08-02・`--census`） |
+| — | **C6** シャード実行機（§8.6 の実行契約: shard_id 起動・地図の消費・時間許可・打ち切り） | **未着手** ← r6 前に必須（別ブリーフ） |
 | r4 | r2-0（`P` / 並列不変性ゲート / `S`・`T_*` / `env_digest` / lockfile） | 未実施 |
 | r5 (P-c′) | `m2e_r2_shard_map.yaml` | 未実施 |
 | r6 (P-d) | 本測定（**code change 厳禁**） | 未実施 |
@@ -31,7 +32,20 @@
 **C2 / C3 は r6 開始前に landing させること**（r6 は code change を禁じているため、
 r6 に入ってからでは入れられない。F2 と同じ論法・rev.6 §8.9.4）。
 **→ 2026-08-02 に landing 済み。** 設計判断 D-1（軌跡 digest）/ D-2（`--workers` の
-非対称）/ D-3（スレッド固定の対称性）の裁定と根拠は rev.6 §8.9.4 実装ノート。
+非対称）/ D-3（スレッド固定の対称性）/ D-4・D-5（独立性 3 層）の裁定と根拠は
+rev.6 §8.9.4 実装ノート。
+
+**C5 も同日 landing した**（rev.6 §8.9.5・設計判断 E-1〜E-5）。C5 は r7 で使う集計器で
+r6 の code freeze の制約下には無かったが、先に入れておくことで r6 以降に必要な
+code change を減らせる。
+
+**ただし C6（シャード実行機）が未着手であり、「r6 前に必要な code change はすべて
+完了している」という 2026-08-02 の記述は過大だった**（PR #241 レビューで顕在化）。
+設計 §8.6 の実行契約——`shard_id` を引数に取り当該 shard のセルのみを対象とする・
+`elapsed + cost(cell) <= B_session` の開始許可・`B_session + 600s` 打ち切り・
+shard_id 昇順実行——は現行ハーネスに存在しない。現行の run コマンドは水準まるごとを
+対象とし、セル台帳（§8.7・F2）の resume で中断復帰はできるが、§8.6 の時間管理・
+shard スコープは持たない。**C6 が landing するまで r6 は開始できない。**
 
 ---
 
@@ -65,16 +79,70 @@ fail-closed（すべて **resolve 後**のパスで判定・各 1 テスト）:
 > 保たれるのではない。** ここを取り違えると、F2 で塞いだ穴（publish がキャッシュを
 > 自分自身と比較する）を別の形で開けることになる。
 
-### C5 — 水準横断の census 集計（帯の判定を出す唯一の場所）
+### C5 — 水準横断の census 集計（帯の判定を出す唯一の場所）— **完了（2026-08-02）**
 
-`evaluate_m2_bars` は M2e カテゴリに `pass` / `fail` を出さない（2026-08-01 実装ノート・
-設計 §6.2）。`gate_level` でバーは当たるが、結果は `bar_satisfied` / `failures` に残り
-`status` は `census_pending` に留まる——**1 回の evaluate は 1 水準しか見ない**ので、
-そこから 4 水準 × 2 アーム = 1280 セルの census を立証できないため。
+`evaluate_m2_bars` は M2e カテゴリに `pass` / `fail` を出さない（設計 §6.2）。
+`gate_level` でバーは当たるが結果は `bar_satisfied` / `failures` に残り `status` は
+`census_pending` に留まる——**1 回の evaluate は 1 水準しか見ない**ため。
 
-やること（r6/r7 で必要になる）: 4 水準 × 2 アームの verdict を集めて census 完全性を
-検査し、揃っているときにだけ帯の判定を出す集計器。**部分集合で平均 RPA や破断曲線を
-出さない**（§11）。集計器が無い間は判定が存在しない状態が正しい。
+実装: `aggregate_m2e_census`（CLI `--census VERDICT.json...`）。**帯の判定が出る唯一の
+場所**。4 水準 × 2 アームの verdict を集め、census 完全性を検査し、揃っているときにだけ
+帯の判定を出す。
+
+```bash
+set -o pipefail  # tee が Python の非ゼロ exit（fail-closed 拒否）を隠さないようにする
+python scripts/run_melody_accuracy.py \
+    --out docs/measurements/m2e_2026-08/census.json \
+    --census docs/measurements/m2e_2026-08/verdict_p12.json \
+             docs/measurements/m2e_2026-08/verdict_p06.json \
+             docs/measurements/m2e_2026-08/verdict_p00.json \
+             docs/measurements/m2e_2026-08/verdict_m06.json \
+    | tee "$(mktemp "docs/measurements/m2e_2026-08/census_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
+```
+
+stdout の `census sha256:` 行が公開 bytes の pin。stdout は**実行ごとに別ファイル**へ
+保存する（固定名だと再実行の truncate が、失敗した実行でも前回の pin 記録を消す）。
+`mktemp` が呼び出しごとに一意名を保証する（`$$` は永続シェルの PID のため同一シェル
+からの同一秒リトライでは不変であり防護にならない）。**census を並行実行しないこと**
+——`census.json` 自体が単一の固定パスであり、stdout 名の衝突回避では
+主成果物の競合は防げない。census は 1 キャンペーンの最終集計を 1 回行う逐次ステップで
+あり、並行自動化の対象にしない。成功した実行の `census.json` と、その実行の
+`census_stdout_*.txt` を**対で** dated record として commit すること（保存しない実行は
+pin を残さない）。`pipefail` を欠くと
+`tee` の exit 0 が census の fail-closed 拒否を隠す——自動化はこの行ごとコピーすること。
+
+- 期待セル数は**積として再計算**する（80 × 4 水準 × 2 アーム × `repeats_min` = 1280）。
+  `1280` を定数で書いていない（設計判断 E-2）。
+- **揃わないときは metrics が文書に存在しない**（`band_verdict` / `level_response` は
+  `null`、`cells` は件数のみ）。部分集合の平均 RPA・途中の破断曲線・見通しは
+  「出さない」のではなく**書き込まない**（E-3・§11）。
+- 全 verdict の `env_digest` 一致を要求する（E-4・§8.7）。**4 水準を別インスタンスで
+  測ると CPU 差で census は揃わない**——不便ではなく §8.7 の要求そのもの。
+  そのため `evaluate_m2_bars` は M2e verdict に `env_digest` を刻むようになった。
+- 揃ったときの出力: `gate_level` での帯判定（アーム別 pass/fail）+ **4 水準全点**の
+  `level_response`（§11「事後に一番良かった水準を選ばない」）+ `promotes_route: false` /
+  `unlocks_m4_g2: false` / `declared_limits`（§7.2 の 4 点）。
+
+**部分集合で平均 RPA や破断曲線を出さない**（§11）。集計器が無い間は判定が存在しない
+状態が正しい——その状態は解消されたが、**census が揃うまでは依然として判定は出ない。**
+
+### C6 — シャード実行機（rev.6 §8.6）— **未着手**
+
+設計 §8.6「1回の実行の契約」が要求する実行機は、現行ハーネスに存在しない
+（PR #241 レビューで顕在化）。要求は:
+
+- `--shard-id` 相当の引数で起動し、その shard のセルのみを対象とする（**1回 = 1シャード**）。
+- `m2e_r2_shard_map.yaml`（§8.5・`cell → shard_id` の全対応表）を読むリーダー。
+- **新しいセルを開始してよいのは `elapsed + cost(cell) <= B_session` のときのみ**という
+  開始許可式。
+- 実行中セルが `B_session + 600s` を超えたら打ち切り、失敗値でなく「未完」として記録。
+- `shard_id` の昇順で実行（飛ばせるのはその shard が全セル digest 一致で完了済みの場合のみ）。
+
+現行の run コマンドは水準まるごとを対象とし、shard 単位にも時間予算にも対応しない。
+§8.5 の規律（**セル台帳は不可侵・シャード地図は再計算可能——「シャード地図は科学では
+なくスケジューリングである」**）を尊重した実装が要る。**r6 前に landing が必須**
+（r6 は code change 厳禁のため、C2/C3 と同じ論法）。**C5（census）とは混ぜない**
+——別ブリーフとして実装する（C5 を C2/C3 から分離したのと同じスコープ判断）。
 
 ### C3 — evaluate の並列化（rev.6 §8.9.2-(2)）— **完了（2026-08-02）**
 
@@ -110,17 +178,45 @@ C2/C3 以前の evaluate は実効 `P = 1`（10.0 h ÷ 160 セル = 225 s/セル
 
 **r4/r6 の起動形**（3 点固定を必ず適用すること・§3.1）:
 
+**前提**: `build/m2e/` は runbook §5 の `make_vremix_fixtures.py build --out-dir`
+の出力先（`manifest_p12.json` / `fixtures_p12.yaml` 等が水準ごとに揃う）。このうち
+`--external-fixtures` が指す pin ファイルだけは、回す前に**下記の committed パスへ
+commit しておくこと**——`build/` 配下は gitignored（非 commit の作業成果物）であり、
+evaluate の `_require_attested_external_fixtures_registration` は fixtures blob が
+HEAD の祖先 commit に無いと fail-closed で拒否する（§5「生成した
+`fixtures_<tag>.yaml` は測定前に repo へ commit すること」）。manifest・音声・run
+report・セルストアは非 commit の作業成果物のままでよい（fixtures だけが git 履歴
+立証の対象）。
+
 ```bash
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-    --out <run_report>.json --categories V_remix_real_direct --level +12dB \
-    --external-manifest <manifest>.json --external-fixtures <fixtures>.yaml \
-    --cell-store <store_A> --repeat-index 0 --pin-threads
+# 1 水準ぶんの run（repeat 0/1 × 両アームを 1 run 報告に収める。--categories は複数可）
+for r in 0 1; do
+  OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+      --out build/m2e/run_p12_r${r}.json \
+      --categories V_remix_real_direct V_remix_real_stem --level +12dB \
+      --external-manifest build/m2e/manifest_p12.json \
+      --external-fixtures tests/fixtures/melody_bench/m2e_vremix_fixtures_p12.yaml \
+      --cell-store build/m2e/store_A --repeat-index ${r} --pin-threads
+done
 
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-    --out <verdict>.json --evaluate <run_report_0>.json <run_report_1>.json \
-    --external-manifest <manifest>.json --external-fixtures <fixtures>.yaml \
-    --eval-cell-store <store_B> --workers 2 --pin-threads
+    --out docs/measurements/m2e_2026-08/verdict_p12.json \
+    --evaluate build/m2e/run_p12_r0.json build/m2e/run_p12_r1.json \
+    --external-manifest build/m2e/manifest_p12.json \
+    --external-fixtures tests/fixtures/melody_bench/m2e_vremix_fixtures_p12.yaml \
+    --eval-cell-store build/m2e/store_B --workers 2 --pin-threads
 ```
+
+両アームを 1 run に収めるのは census がアーム対の同一 manifest を要求するため（E-6）。
+verdict の `--out` は `docs/measurements/m2e_2026-08/` 配下——verdict は最終的に
+commit される dated record であり（m2b/m2c の前例どおり）、上の C5 census コマンドは
+まさにこの場所から 4 水準ぶんを読む。run report・store・manifest・音声は作業成果物
+として `build/m2e/` のままでよい。残り 3 水準（p06/p00/m06）も同じ形で繰り返して 4
+verdict を census へ渡す——この 4 行を 1 セッションで回すという意味ではない。
+**中断復帰はセル台帳（§8.7・F2）が機構として担う。** 分割・実行順は §8.6 の実行契約
+（`shard_id` 起動）によるが、**その実行機は未実装（C6・§2 参照）**。上の run コマンドは
+r4 の校正・スモーク用の「1 水準まるごと」の形であり、r6 本測定は C6 実装後に
+`shard_id` 起動で回す。
 
 `--workers 2` なのは上記の頭打ち（`repeats_min = 2`）による。`--eval-cell-store` には
 **run が使った `store_A` を渡してはならない**——渡すと測り直しの子が run のセルを
@@ -234,17 +330,20 @@ demucs の vocals stem の `stem_sha256` が run 間で変わる（`residual_db`
 
 ## 5. 次にやる順序
 
-1. ~~**C2 / C3 を実装**（本 PR とは別 PR）。r6 前に landing。~~ **完了（2026-08-02）**
-   ——残るのは **C5**（水準横断 census 集計）。C5 は r7 で使う集計器で r6 の code freeze の
-   制約下に無いため別ブリーフ。C5 が landing するまで帯判定は `census_pending` のまま
-   であり、**それが正しい状態**（判定器が無い間は判定が存在しない）。
+1. ~~**C2 / C3 を実装**。r6 前に landing。~~ **完了（2026-08-02）**
+   ~~残るのは C5~~ **C5 も完了（2026-08-02・`--census`）**。**C6（シャード実行機・
+   §2 参照）が未着手で残っている**——「以降の段階は code change を伴わない」は
+   2026-08-02 時点の過大な記述だった（PR #241 レビューで顕在化・撤回）。
 2. **ミックス生成**: `make_vremix_fixtures.py build` で 320 本
    （40 clip × 2 bed × 4 水準）+ manifest/fixtures/生成記録。runbook §5。
 3. **r4（r2-0）**: `P` 決定・並列不変性ゲート・`S`/`T_*` 校正・`env_digest` 確定・
    lockfile commit。**3 点スレッド固定を必ず適用**。
-4. **r5**: `m2e_r2_shard_map.yaml` を本測定開始前に commit。
-5. **r6**: 本測定（code change 厳禁）。`N_shards > R_max = 12` なら §8.8 で User 決裁へ。
-6. **r7**: 破断曲線 + stem アーム 4 点。**昇格宣言をしない。M4 G2 は解錠しない。**
+4. **C6 を実装**（別ブリーフ）。r5 のシャード地図は §8.6 の実行契約を消費する前提の
+   成果物なので、C6 の landing を r5 の前提とする。
+5. **r5**: `m2e_r2_shard_map.yaml` を本測定開始前に commit。
+6. **r6**: 本測定（code change 厳禁）。`shard_id` 起動（C6）で回す。
+   `N_shards > R_max = 12` なら §8.8 で User 決裁へ。
+7. **r7**: 破断曲線 + stem アーム 4 点。**昇格宣言をしない。M4 G2 は解錠しない。**
 
 報告規律（§11）: **1280 セルが揃うまで帯の判定を出さない。** 部分集合での平均 RPA・
 途中の破断曲線・見通しの表明は禁止。出せるのは census のみ。

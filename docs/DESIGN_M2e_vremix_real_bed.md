@@ -643,7 +643,8 @@ M2e の入力は、実声（vocadito・外部素材・外部注釈）と実伴�
   （「M2e カテゴリを含む report の level は単一」を fail-closed で要求しているため）
   ので、そのコールから 4 水準 × 2 アーム = 1280 セルの census を立証する術が無い。
   立証できない以上、判定の語を出してはならない。帯の判定は **r6/r7 の水準横断集計**
-  が census を満たしたときに出す（その集計器は未実装。`HANDOFF.md` の残タスク）。
+  が census を満たしたときに出す（その集計器は `aggregate_m2e_census`（CLI `--census`）
+  として実装済み）。
 
 ### 6.3 routing — 追加1件（既存メニューは1件も変えない）
 
@@ -1030,6 +1031,313 @@ resume しない**——素性の分からないセルを通さない。
 > **(2) 評価対象 report が名乗る store との関係**（D-4）→ **(3) レコード自身の役割**（D-5）。
 > (1) と (2) は「どこに置いたか」、(3) は「誰が計算したか」を問う。前者だけでは
 > コピーで抜けられる。
+
+#### 8.9.5 実装ノート（2026-08-02・C5 水準横断 census 集計）
+
+§6.2 が「帯の判定は `gate_level` の run が §11 のセル census を満たしたときにのみ出る」と
+定め、2026-08-01 の実装ノートが「その集計器は未実装」と宣言していた穴を埋める。
+**`aggregate_m2e_census` が帯の判定を出す唯一の場所である。**
+
+**E-1. 入力は verdict であって run report ではない。** report から再判定すると
+`evaluate_m2_bars` の全ゲート（測り直しによる独立検証・provenance 照合・pin 束縛）を
+二重実装することになり、2 つの判定経路が食い違う余地を作る。verdict は既にそれらを
+通過した成果物なので、集計器は「揃っているか」だけを問う。
+
+**E-2. 期待セル数は積として再計算する。** `1280` を定数で書かない
+（`_m2e_census_expected_cells` = コホート幅 80 × ラダー長 4 × アーム数 2 × `repeats_min`）。
+定数はコホート・ラダー・アーム・repeats のどれかが動いたときそれを黙って通すが、積は
+必ず食い違う（§6.2「総抽出回数の一致確認。一致しない実装は誤り」）。
+
+**E-3. census が揃うまで metrics を成果物に存在させない。** §11 は部分集合での平均 RPA・
+途中の破断曲線・見通しの表明を禁じている。「出さない」ではなく**文書に存在させない**
+ことで、下流が偶然読んでしまう経路ごと消す（`band_verdict` / `level_response` は
+`null`、`cells` は件数のみ）。テストは census 文書の全 bytes に `raw_pitch_accuracy` /
+`metrics` 等が現れないことを固定する。
+
+**E-4. 環境同一性を要求する。** §8.7 の「複数環境のセルを 1 つの帯として合算することは
+禁止」を水準横断の集計面へそのまま適用し、全 verdict の `env_digest` 一致を fail-closed で
+要求する。そのため `evaluate_m2_bars` は M2e verdict に `env_digest` を刻む（M2e を含む
+verdict のみ・加算。単一性は従来から要求済みで、値を成果物へ持ち出しただけ）。
+**運用上の含意**: 4 水準を別インスタンスで測ると CPU 差で `env_digest` が割れ、census は
+揃わない（§8.4 の 2.2 倍分散はこの形でも現れる）。これは不便ではなく、§8.7 が要求している
+ことそのものである。
+
+**E-5. 通過しても昇格しない。** `promotes_route` / `unlocks_m4_g2` を常に `false` として、
+`declared_limits`（§7.2 の 4 点）とともに**成果物へ埋め込む**。読み手が設計文書へ戻らなく
+ても、この帯が何を解錠しないかが判定と同じ場所にある。
+
+**E-6. アーム間の同一性は id ではなく素性の hash で問う**（PR #241 Codex P1 で是正）。
+当初はアーム間で `clip_ids` の一致だけを見ていたが、**id は名前であって bytes ではない**
+——2 つの manifest が同じ 80 個の id を持ちながら別世代の音声・別世代の登録簿を指す
+ことはありうる。row は既に `external_manifest_sha256` / `external_fixtures_sha256` を
+運んでいるので、その 3 つすべての一致を要求する。
+
+**E-7. census の分母を verdict の自己申告に決めさせない**（PR #241 Codex P2 で是正）。
+`repeats_min` は期待セル数（分母）を決めるので、verdict が `1` を名乗れば半分終わった帯が
+「揃った」ことになる。集計器は**自分で読んだ基底バー**から `repeats_min` を取り、verdict の
+申告はそれとの一致を要求するだけにする。同じ理由で `bars_sha256`（共有スカラーの供給元）
+も凍結ファイルと照合し、CLI は `--out` が基底バーを潰さないよう保護する
+（当初は `m2e_bars` だけを照合・保護しており非対称だった）。
+
+**E-8. 水準横断のコホート同一性を要求する**（PR #241 Codex P1 で是正）。E-6 のアーム間
+照合は**同一水準の中しか見ない**ため、水準ごとに fixtures 世代が違えば各水準は 80 件を
+満たしながら**別の 80 件**でありうる——破断曲線が別コホートの寄せ集めになる。id 規約
+`vremix_{clip_id}_{bed_id}_{level_tag}` の水準タグを剥がした**正規化コホート**で 4 水準を
+突き合わせる。あわせて、各水準の id が**その水準のタグ**で終わることも要求する
+（`level: "+6dB"` を名乗る verdict が `p12` の id を運んでいれば、同じミックスを 2 回
+測って別水準として並べたことになり、曲線が 1 水準の複製から組み上がる）。
+
+タグ検査は件数と独立に行い、正規化結果を水準横断照合に使うのは per-cell 検査を通った
+セルだけにする——短いコホートを「別コホート」と報告すると本当の原因（件数不足）が
+見えなくなるため。
+
+**E-17. 「全部欠けている」を「揃っている」と見なさない**（PR #241 Codex P1 で是正）。
+E-13 の等値検査は `verdict.get(field)` を比べるので、**全 verdict がそのフィールドを
+持たなければ `None` 同士で一致**し、照合はフィールドを剥がすだけで無効化できた。
+`env_digest` には形の要求（64-hex）を置いたのに builder provenance には置いていない、
+という非対称。dict であることと 3 つの digest が sha256 であることを要求する。
+
+> 同質性検査を「値が揃っているか」だけで書くと、**不在は常に揃う**。証拠を要求する
+> フィールドには、比較の前に**存在と形**を課す必要がある。
+
+**E-19〜E-21. E-17 の一般則を全証拠フィールドへ適用し切る**（PR #241 Codex P1×2 + P2 で是正）。
+E-17 は builder provenance だけを塞いだが、同じ論法——**不在は常に揃う**——が当たる箇所が
+3 つ残っていた。(1) `numeric_runtime_config`: `env_digest` が `threadpool_info` を畳まない
+宣言された穴は、この記録の照合を前提に許容されている——記録なしでは前提が成立しない。
+存在と非空 dict を要求する。(2) アーム対の `external_manifest_sha256` /
+`external_fixtures_sha256`: 両アームが揃って欠けば `None == None` で対の照合が空転する。
+per-cell 検査で 64-hex sha256 を要求する（raise ではなく `problems` へ——E-11 の裁定どおり
+部分測定は報告する）。(3) 共有スカラー（`tolerance_cents` / `est_voiced_confidence_floor`）:
+成果物へそのまま載せる値なので有限数値を要求する（E-14 と同じ規律・これは自己点検で発見）。
+
+CLI の未使用フラグ拒否（E-15）も**値比較では不完全**だった——`--workers 1` のような
+既定値の明示指定は検出できない。センチネル既定値（`_ARGPARSE_UNSET`）で「渡されたか」
+そのものを追跡し、census phase では既定値と同じ値でも渡された事実を拒否する。
+census 検査の直後にセンチネルを実既定へ正規化し、run/evaluate 経路へ漏らさない。
+
+**E-22. 帯判定セルの gate_level を凍結条件と束縛する**（PR #241 Codex P1 で是正）。
+セルの選択は verdict の自己申告（top-level `level`）に依存しているため、category 側の
+`gate_level` 申告も凍結値（`conditions[arm]["gate_level"]`）と束縛しなければ、別水準で
+当てたバーの結果が帯の判定として publish されうる。`bar_satisfied` を使う前に要求する。
+
+**E-23. 凍結閾値を census 自身が metrics へ再適用する**（PR #241 Codex P1 で是正）。E-18 は
+`bar_satisfied ↔ failures` を束縛したが、**metrics ↔ 判定**は誰も束縛していなかった。
+metrics だけを書き換えれば「凍結バーを割る metrics を `level_response` に載せながら
+pass を出す」成果物が組めた。census 自身が読んだ凍結バーを evaluate と同一の比較方向
+（`min_rpa` は < / `max_vfa` は > / `max_octave_gap` は >）で再適用し、`bar_satisfied`
+との一致を要求する。**derived failures の文字列照合はしない**——E-18 が
+`bar_satisfied↔failures` を、本検査が `metrics↔bar_satisfied` を束縛すれば連鎖は閉じ、
+失敗文字列の形式へ結合するのは brittle で over-engineering という裁定（per-cell 検査で
+`repeats_bit_identical is True` を既に要求しているため、bit 不一致由来の failure が
+band ループへ混入する経路も無い）。
+
+**E-24. numeric_runtime_config のキー集合を生成側の形と束縛する**（PR #241 Codex P1 で
+是正）。E-19 の「非空 dict」検査は `{"unknown": true}` のような placeholder を通してしまう。
+生成側（`_numeric_runtime_config()`）が実際に返すトップレベルキー集合を凍結定数
+`_NUMERIC_RUNTIME_CONFIG_REQUIRED_KEYS` として持ち、束縛する。census 内で producer を
+直接呼ばないのは、計測 instrumentation（threadpoolctl 等）の import を評価器プロセスへ
+持ち込まないため——代わりにテスト
+(`test_numeric_runtime_config_required_keys_match_the_producer`) が producer との機械
+同期を enforce する。`generator_code_sha256` は既に現 checkout と照合済みのため、生成側
+の形が世代間で動いてもこの検査が誤爆する経路は無い。
+
+**census の保証境界の宣言**（PR #241 Codex 第 7 巡「Validate runtime configuration
+values」・E-30。見送り裁定）。E-19（存在）→ E-24（キー集合）→ 本指摘（値・ネスト構造の
+検証）と、同じ指摘が 1 段ずつ深くなった。ここで境界を宣言する: **census の保証は
+(1) 自分が publish するフィールドの形と相互整合、(2) 合算可否を決める証拠フィールドの
+verdict 間 byte 等値 + 形（キー集合まで）+ 凍結ファイル・現 checkout への pin、である。**
+値・ネスト構造まで producer schema を複製して検証することは、evaluate のゲートの二重
+実装（E-1 で却下）へ漸近し、かつ偽造耐性は増えない——bars/generator/evaluator の pin を
+実値でコピーする偽造者は、値スキーマも同様にコピーできる。偽造に対する実根拠は
+`verdict_pins`・dated record・evaluate の独立測り直しであり、census はその上の readback
+整合層である。以後、この境界の内側の指摘は採用し、外側は本宣言を参照して見送る。
+
+**E-25. 公開 census bytes の pin を stdout へ残す**（PR #241 Codex P2 で是正）。書き込みに
+渡すのと同一の snapshot から sha256 を導出し、`census sha256: <hex>` として stdout へ出す
+（`json.dumps` の二重実行も同時に解消）。本リポジトリの計測 runbook は stdout を
+`*_stdout.txt` として dated record に保存する既存の流儀なので、この pin はそこに残る。
+文書内への自己埋め込みは自己言及（hash が自身を含む bytes を対象にできない）になるため
+せず、sidecar ファイルの新設も本段階では過剰と判断した（裁定）。runbook 側でも stdout
+保存をコマンドに組み込んだ（E-29）。
+
+**E-40. stdout の保存先を per-run の日付つきファイル名にする**（一部採用・PR #241
+Codex P2 で是正）。**採用**: 固定名 `census_stdout.txt` は `tee` が truncate で開くため、
+再実行が census の fail-closed 拒否で落ちても、`census.json` は残るのに前回の正当な
+pin 記録だけが消えるという破壊経路があった。`census_stdout_$(date -u
++%Y%m%dT%H%M%SZ).txt` へ変更し、成功した実行の `census.json` と対で commit する運用に
+した。**見送り**: JSON と digest を 2 ファイルまとめて atomic に publish する staging
+機構。`census.json` 自体は既に atomic write で digest 行は書き込み後に出るため、
+「新 census が pin 無しで残る」のは `tee` 自体の書き込み失敗（コマンド全体が非ゼロで
+終わり操作者が再実行する状況）に限られる。per-run 命名で再実行が破壊なしに両方を
+再生成できる以上、2 ファイル横断の atomicity は runbook の 1 ステップに対して過剰
+（E-25/E-29 の sidecar 見送りと同じ判断）。
+
+**E-41 追記**（一部採用・PR #241 Codex P2）。同一秒の**逐次**再実行（自動リトライ等）
+での日付名衝突を防ぐため PID（`_$$`）を付与した。**並行 census 実行への耐性は
+非サポートと明文化**（`census.json` 自体が単一の固定パスであり、stdout 名の衝突回避
+では主成果物の競合を防げないため）。
+
+**E-42 追記**（採用・PR #241 Codex P2）。`_$$` は**永続シェル自身の PID** であり、
+同一シェルからの同一秒リトライでは値が変わらず、E-41 の付与は防護になっていなかった
+（裁定の穴）。呼び出しごとに一意な名前を生成する `mktemp` へ置換した。並行実行非
+サポートの制約（E-41）は不変——`mktemp` も stdout 名だけの保護であり、単一固定パスの
+`census.json` 側の競合は依然防げない。
+
+**E-43 追記**（採用・PR #241 Codex P2）。§6.2 実装ノートと `run_melody_accuracy.py` の
+evaluator コメントに残っていた「その集計器は未実装」という 2026-08-01 当時の宣言を、
+実装済みの `aggregate_m2e_census`（CLI `--census`）への参照へ更新した（コメントのみ・
+挙動変更なし）。
+
+**E-44. category 値が object でない場合を census_incomplete として報告する**
+（PR #241 Codex P2 で是正）。E-32（clip_ids の非 str 要素）と同型の残り穴——収集段の
+`.get` 連鎖が `AttributeError` で census 全体をクラッシュさせていた。収集段で
+isinstance を検査し、malformed マーカー付きレコードを observed へ格納する。per-cell
+検査段はこのマーカーを見て他の検査を打ち切り、`problems` へ落とす（raise ではなく
+`census_incomplete`——E-11 の裁定どおり）。
+
+**E-45. publish する failures の要素形状を要求する**（PR #241 Codex P2 で是正）。
+E-30 が宣言した保証境界の内側（自分が publish するフィールドの形と相互整合）を補完
+する——`failures: [null]` は list 型検査・`bar_satisfied == not failures` 整合検査の
+両方を素通りし、非 str 要素がそのまま `band_verdict` へ publish されていた。
+E-16/E-18/E-22 と同じ層（帯 publish の fail-closed raise）に揃え、各要素が非空文字列
+であることを要求する。
+
+**E-26. 共有スカラーを凍結バーの実値と束縛する**（PR #241 Codex P1 で是正）。E-19 の
+有限性検査だけでは、verdict が「50 cents で測った」と自己申告した metrics をそのまま
+publish できてしまう——E-7（`repeats_min`）で自分が適用した規律との非対称だった。
+census 自身が読んだ基底バー（`bar_block = bars_data["m2_accuracy_bars"]`。
+`evaluate_m2_bars` の `_require_frozen_tolerance` / `_require_frozen_est_voicing_floor`
+が読むのと同じ block）の実値と厳密一致を要求する。成果物へ載せる値も `common[...]`
+ではなく凍結値そのものにする（E-7 の `repeats_min` と同型——供給源を「集計器が読んだ
+凍結ファイル」に統一する）。
+
+**E-27. 平均で保存される metric 不変条件のみ census で再適用する**（スコープ限定採用・
+PR #241 Codex P1 で是正）。まず `_require_metrics_contract` を census の平均済み
+metrics へそのまま適用する実装を試したが、**通らなかった**——evaluate は external
+カテゴリで contract を **clip metrics** にのみ適用し、census が持つカテゴリ平均
+metrics（`_average_external_clip_metrics` の出力）には `_require_finite_metrics` しか
+課していない（`voiced_chroma_correct_frame_count` が算術平均で非整数 float になり
+うるため、実測でも確認した）。census は clip 単位の証拠を持たないため（E-1）contract
+全体は当てられないが、単純算術平均で厳密に保存される 3 点を per-cell 検査に追加した:
+(a) `metrics.tolerance_cents == 凍結値`（clip 間の一致が前提のため平均でも保存）、
+(b) `raw_chroma_accuracy >= raw_pitch_accuracy`（非負差の平均は非負）、
+(c) `octave_gap == raw_chroma_accuracy - raw_pitch_accuracy`（平均は加減算と可換）。
+違反は raise ではなく per-cell の `problems`（= `census_incomplete`）へ（E-11 の裁定と
+同型）。
+
+**E-28. repeat 間の bit 一致を必要条件として再検査する**（必要条件のみ採用・
+PR #241 Codex P1 で是正）。`repeats_bit_identical` の boolean 申告は evaluate の独立
+測り直しが立証するが、census が**公開する** per-repeat metrics list 自体が申告どおり
+相互 bit 一致していることは、boolean 申告と独立に検査できる。
+`len({json.dumps(m, sort_keys=True) for m in metrics_list}) != 1` を per-cell の
+`problems` へ積む。**宣言された限界**: 平均が偶然一致して clip が異なるケースは、
+verdict が per-clip 証拠を運ばないため census からは検出できない。bit 一致の実根拠は
+evaluate の独立測り直し（publish 条件）であり、per-clip digest を verdict schema へ
+足して census で再検証するのは E-1（evaluate のゲートを二重実装しない）に反するため
+行わない。
+
+**E-31. metrics 要素の非 object 破損をクラッシュでなく census_incomplete として報告する**
+（PR #241 Codex P2 で是正）。E-14 は外側 list しか見ていなかった——要素が `null` 等の
+非 dict だと `_require_finite_metrics` 内の `in` 演算が `TypeError` を投げ、
+`except ValueError` を素通りして census 全体がクラッシュしていた。報告可能な不備は
+報告するのが census の目的（E-11）であり、要素型を明示検査して `problems` へ落とす。
+
+**E-32. clip_ids 要素の非文字列破損をクラッシュでなく census_incomplete として報告する**
+（PR #241 Codex P2 で是正）。E-31 と同型の残り穴——`clip_ids` に非 str 要素（dict/list
+等）が混ざると `set(clip_ids)` が `TypeError`（unhashable type）で census 全体を
+クラッシュさせていた。全要素 str の場合のみ重複検査と `_m2e_normalized_cohort_ids`
+（水準タグ検査・E-8 の fail-closed raise）へ進む——タグ不一致の raise 自体は変えず、
+「型が壊れている場合にそこへ到達させない」ことだけを変える。
+
+**E-33. 不備理由から計測 field 名・値を除く**（PR #241 Codex P2 で是正）。E-3 の
+「census が揃うまで metrics を成果物に存在させない」は `missing[].reason` にも及ぶ——
+metric 系の `problems` 文言に validator 例外テキストをそのまま埋めており、これは
+`census_incomplete` が公開する成果物への自己違反だった。理由は一般コード（「計測記録
+が…契約を満たさない」等）だけで書き、詳細診断は census の仕事ではなく verdict 側を
+直接読めば得られる。E-3 の文字列不在テストを不正値セル経路にも拡張して固定した。
+
+**E-34. 巨大整数 metrics の OverflowError クラッシュを census_incomplete として報告する**
+（PR #241 Codex P2 で是正）。400 桁級の JSON 整数（`isinstance(value, int)` は真だが
+`float(value)` が表現できない）が metrics に入ると `float()` 変換が `OverflowError` を
+投げ、`except ValueError` を素通りして census 全体がクラッシュしていた（E-31/E-32 と
+同型）。`except` を `(ValueError, OverflowError)` へ拡大し、E-33 の一般コードで報告する。
+**E-31 とは except 拡大の裁定が異なる**: `TypeError` は呼び出し側の前提（要素が
+mapping であること）の検査漏れの信号で明示検査が正解だったが、`OverflowError` は
+「値が有限 float で表現できない」という validator が判定すべき値域違反そのものであり、
+事前検査で塞ぐには float 変換の意味論を複製することになる——だから except を広げる。
+
+**E-18. `bar_satisfied == not failures` を読み戻しで再検証する**（PR #241 Codex P2 で是正）。
+`evaluate_m2_bars` はこの不変条件を確立するが、集計器は読み戻し時に一度も検証して
+いなかった。型（E-16）が正しくても関係が壊れていれば、`true` + 非空 `failures` は
+**失敗の証拠を同梱したまま pass を publish** し、逆は理由の無い fail を publish する。
+**型を要求しただけでは足りない——値どうしの整合も要求する。**
+
+**E-16. 帯の判定を導く値は bool そのものを要求する**（PR #241 Codex P2 で是正）。
+`bar_satisfied is None` を通しただけでは `"false"` のような**非空文字列が残り、真偽評価は
+真になる**——**fail が pass として publish される**、この機構で最悪の失敗形である
+（しかも起こる場所は「帯の判定を出す唯一の場所」）。`load_verdict` は bytes 束縛と
+top-level schema しか見ないので、category フィールドの型は集計器が独立に要求する。
+成果物へそのまま載せる `failures` も同様に list であることを要求する。
+
+**E-13. 混合式の provenance を水準横断で照合する**（PR #241 Codex P1 で是正）。
+**破断曲線は主生産物であり、混合式が水準間で混ざれば曲線として成立しない。** ところが
+水準ごとに fixtures ファイルは別なので `external_fixtures_sha256` の水準横断比較は意味を
+持たず、mixer（`make_vremix_fixtures.py`）を変えて一部の水準を作り直しても、id は同じ・
+per-level hash は元々違う・harness のコード pin は mixer を含まない、で誰も気付けなかった。
+fixtures 自身が名乗る `builder`（run 側で `_require_registered_m2e_cohort` が実体照合済み）を
+verdict へ写し、集計器が水準横断の一致を要求する。
+
+> **「現行 mixer とも一致していること」までは要求しない。** ミックスの音声 bytes は
+> fixtures の sha256 で既に pin されており、測定の正しさは mixer の現在値に依存しない。
+> 現行一致まで求めると、完了済みキャンペーンが後日の無関係な mixer 変更で無効になり、
+> 「一度測って後で集計する」という本トラックのモデルと衝突する。
+
+**E-14. `metrics` の形を、成果物へ載せる前に確かめる**（PR #241 Codex P2 で是正）。
+`load_verdict` は top-level schema と bytes 束縛しか見ないので、`metrics` が欠損・`null`・
+短縮でも他の per-cell 検査は全部通り、`census_complete` を出したうえで `level_response` に
+欠測が載る（帯の判定だけは `bar_satisfied` から出る）。`repeats_min` 件の有限数値である
+ことをセルを数える前に要求する。なお **NaN / inf はさらに手前**（`_json_loads_no_dup_keys`
+の非有限リテラル拒否）で落ちるため、ここで扱うのは有限値の欠損・短縮である。
+
+**E-15. census が読まない引数はすべて拒否する**（PR #241 Codex P2 で是正）。
+census が実際に読むのは `--census` / `--out` / `--bars` / `--m2e-bars` の 4 つだけ。
+`--external-manifest` 等を黙って無視すると、渡した側は「census がその manifest に束縛
+された」と信じうる——成果物はそれを一度も読まない。当初の検査は 5 フラグしか見ておらず、
+コメントの主張（「run/evaluate のどのフェーズ引数とも組み合わせない」）より実装が狭かった。
+
+**E-12. コホートの一意性を件数と別に要求する**（PR #241 Codex P2 で是正）。
+`len(clip_ids) == 80` だけでは、80 要素あっても重複していれば**異なる測定は 80 未満**で
+あり、`observed_cells` は重複を数える。全水準・全アームで同じように重複していれば E-6 /
+E-8 の等値検査も通るため、**1280 の異なる測定なしに「1280 セル完了」を報告できてしまう**。
+`load_verdict` は受け取った bytes を hash するだけで一意性を証明しないので、集計器が
+独立に要求する。
+
+**E-10. `numeric_runtime_config` も水準横断で照合する**（PR #241 Codex P1 で是正）。
+`env_digest` は **`threadpool_info` を意図的に含めない**（計測のための threadpoolctl
+import が scoring の pin へ混入するのを避けるため）。その穴は「記録は
+`numeric_runtime_config` に残るので事後の原因帰属はできる」という前提で**宣言された穴**
+として許容されている——**その記録を照合しなければ前提が成立しない**。evaluate は 1 水準の
+中で `_require_homogeneous_numeric_runtime_config` を既に課しているので、水準を跨ぐ集計
+だけが弱いという非対称になっていた。同質性の検査対象に加える。
+
+**E-11. アーム間照合は per-cell 検査を通ったセル同士でのみ行う**（PR #241 Codex P2 で是正）。
+片アームが `insufficient_repeats` で欠けている水準は「**部分測定**」であって「別素材」では
+ない。完了したアームの値と欠けたアームの `None` を突き合わせて raise すると、**census が
+本来出すべき `census_incomplete` の報告そのものが出せなくなる**——部分測定を報告するのが
+census の目的なので、ここで落としてはならない。E-8 の水準横断照合と同じ扱いに揃える。
+
+**E-9. 書き出す直前に load 時 pin の不変を再確認する**（PR #241 Codex P2 で是正）。
+run / evaluate と同じ post-execution ガード（`_require_unchanged_since_load()`）を census の
+`_atomic_write_text` 直前にも置く。集計中にソースが差し替わると、census は「現 checkout と
+一致する」と検査したはずのコード pin を名乗りながら、実際には別 bytes の下で組まれた
+成果物になる。
+
+その他の関所: (level, arm) の重複拒否（コピーした verdict で census を埋めさせない）、
+`m2e_bars_sha256` は verdict の自己申告ではなく**集計器が読んだ凍結ファイル**と照合、
+`generator_code_sha256` / `evaluator_code_sha256` は現 checkout と 3 段照合。
+
+CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate のフェーズ引数は
+すべて fail-closed）。
 
 **r4/r6 の運用**: 本測定は run・evaluate ともに
 `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 ... --pin-threads` で起動する（runbook §5 以降）。
