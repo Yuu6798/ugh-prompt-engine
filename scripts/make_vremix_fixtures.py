@@ -45,6 +45,16 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# 混合式（= 本ファイル）の digest を **import 時点**で確定させる。build は数十分走る
+# ので、その間に本ファイルが編集されると、プロセスは**古い in-memory の関数**を実行
+# し続けたまま新しい bytes の digest を刻みうる——「実行されなかったコード」に音を
+# 帰属させる provenance ができ、新しいファイルが checkout に残る限り測る側の照合も
+# 通ってしまう。ハーネス側 `_LOADED_GENERATOR_CODE_SHA256` と同じ規律（load 時に
+# 固定し、publish 前に不変を確認する）。
+_LOADED_GENERATOR_CODE_SHA256 = hashlib.sha256(
+    Path(__file__).resolve().read_bytes()
+).hexdigest()
+
 # --- 凍結定数（設計 §4・自由変数を残さない）---------------------------------
 XFADE_SEC = 0.010          # §4.2 タイル連結のクロスフェード長
 FRAME_LEN = 2048           # §4.3 RMS フレーム長
@@ -1007,7 +1017,7 @@ def _build_into_staging(
     # 登録簿の digest は**上で parse した snapshot そのもの**から来る（読み直さない）。
     # 全水準で同一なのでループ外で 1 度だけ作る。
     builder_provenance = {
-        "generator_code_sha256": _sha256_file(Path(__file__).resolve()),
+        "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
         "m2c_fixtures_sha256": clip_registry_sha256,
         "m2e_bed_fixtures_sha256": bed_registry_sha256,
     }
@@ -1094,6 +1104,16 @@ def _build_into_staging(
             "generation_record": str(published / record_path.name),
             "n_factor_below_one": sum(1 for r in records.values() if r["factor"] < 1.0),
         }
+    # publish の直前に「走ったコード」が今もディスク上のそれであることを確認する。
+    # 刻んだ digest は import 時のものなので、build 中に本ファイルが書き換わっていれば
+    # bundle は**存在しないコード状態**を名乗ることになる（測る側はそれを検出できない）。
+    actual_code = _sha256_file(Path(__file__).resolve())
+    if actual_code != _LOADED_GENERATOR_CODE_SHA256:
+        raise GenerationError(
+            f"{Path(__file__).name} が build 中に変わった（load 時 "
+            f"{_LOADED_GENERATOR_CODE_SHA256} → 現在 {actual_code}）; 走ったコードと "
+            "ディスク上のコードが食い違う bundle を publish しない (fail-closed)"
+        )
     # 全水準を書き終えてから**一度だけ**公開する（ここまでは外から見えない）。
     published.parent.mkdir(parents=True, exist_ok=True)
     if published.exists():

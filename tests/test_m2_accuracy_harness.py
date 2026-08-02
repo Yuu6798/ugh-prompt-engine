@@ -4101,6 +4101,29 @@ def test_cli_rejects_out_path_colliding_with_protected_inputs(tmp_path, monkeypa
     assert BARS_PATH.read_bytes() == before
 
 
+@pytest.mark.parametrize("out_rel", ["cell_deadbeef.json", "nested/report.json", ""])
+def test_cli_rejects_out_path_inside_the_cell_store(out_rel, tmp_path, monkeypatch) -> None:
+    """P2: run report でセルチェックポイントを上書きさせない。
+
+    `--out` が `--cell-store` 配下にあると、resume に使ったセルを同じ run が消し、
+    次回は crepe 推論からの再測定になる。走る前に落とす。
+    """
+    cell_store = tmp_path / "cells"
+    cell_store.mkdir()
+    out = cell_store / out_rel if out_rel else cell_store
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out", str(out),
+            "--cell-store", str(cell_store),
+            "--repeat-index", "0",
+        ],
+    )
+    with pytest.raises(SystemExit, match="--cell-store"):
+        harness.main()
+
+
 @pytest.mark.parametrize(
     "source_rel",
     ["scripts/run_melody_accuracy.py", "src/svp_rpe/melody/accuracy.py"],
@@ -8908,6 +8931,20 @@ def test_m2e_evaluate_rejects_mixed_env_digests(tmp_path: Path) -> None:
 
     # 片方だけ記録がある場合も揃っていない（`--cell-store` 有無が混ざった反復）。
     del reports[1]["env_digest"]
+    with pytest.raises(ValueError, match="env_digest が揃っていない"):
+        _m2e_evaluate(tmp_path, reports)
+
+
+@pytest.mark.parametrize("placeholder", ["", "unknown", "0" * 63])
+def test_m2e_evaluate_rejects_malformed_env_digests(tmp_path: Path, placeholder: str) -> None:
+    """P2: **揃っていても** sha256 の形でなければ環境を名乗ったことにならない。
+
+    非空文字列で通してしまうと、`""` や `"unknown"` を共有する別環境の report 同士が
+    「単一環境」として合算される。
+    """
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    for report in reports:
+        report["env_digest"] = placeholder
     with pytest.raises(ValueError, match="env_digest が揃っていない"):
         _m2e_evaluate(tmp_path, reports)
 

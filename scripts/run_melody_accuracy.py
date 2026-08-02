@@ -7996,7 +7996,10 @@ def evaluate_m2_bars(
                 cat in m2e_categories_in_reports for cat in report.get("categories", {})
             )
         }
-        if len(env_digests) != 1 or not isinstance(next(iter(env_digests)), str):
+        # **形も要求する。** 非空文字列でありさえすればよい検査だと、`""` や
+        # `"unknown"` のような placeholder を持つ別環境の report 同士が「揃っている」
+        # として合算されうる——環境を名乗っていないことが、名乗っていることに化ける。
+        if len(env_digests) != 1 or not _is_sha256(next(iter(env_digests))):
             raise ValueError(
                 f"evaluate_m2_bars: M2e カテゴリを含む report の env_digest が揃っていない "
                 f"（{sorted(str(v) for v in env_digests)}）; 環境を名乗らない report・別環境で "
@@ -8489,6 +8492,18 @@ def main() -> int:
             "または provenance 対象のソースと同じパスを指している; これらを run report で "
             "上書きしない (fail-closed)"
         )
+    # セルストアの木も保護する。`--out` が `--cell-store` 配下を指していると、run は
+    # そこにあるチェックポイントを resume に使った上で、最後の `_atomic_write_text` が
+    # 同じパスを run report で**置き換える**——成功した run が自分の再利用資産を消し、
+    # 次回は高価な再測定になる（セル 1 つ = crepe 推論 1 回）。
+    if args.cell_store is not None:
+        cell_store_root = Path(args.cell_store).resolve()
+        out_resolved = Path(args.out).resolve()
+        if out_resolved == cell_store_root or cell_store_root in out_resolved.parents:
+            raise SystemExit(
+                f"--out {args.out} が --cell-store {args.cell_store} 配下にある; "
+                "run report でセルチェックポイントを上書きしない (fail-closed)"
+            )
     run_kwargs: Dict[str, Any] = {}
     if args.categories:
         run_kwargs["categories"] = tuple(args.categories)

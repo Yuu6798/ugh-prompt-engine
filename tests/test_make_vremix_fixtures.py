@@ -1058,6 +1058,35 @@ def test_build_removes_its_staging_on_keyboard_interrupt(tmp_path, monkeypatch) 
     assert _staging_dirs(out_dir) == []
 
 
+def test_build_refuses_to_publish_when_the_mixer_changed_mid_build(tmp_path, monkeypatch) -> None:
+    """P2: 走った混合式とディスク上の混合式が食い違う bundle を publish しない。
+
+    刻む digest は import 時のもの。build 中に本ファイルが編集されると、プロセスは
+    古い in-memory の関数を実行し続けたまま「存在しないコード状態」を名乗る。
+    """
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda *_a: pins)
+    bed_root = tmp_path / "beds"
+    _write_two_beds(bed_root)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda *_a: _fake_bed_pins(bed_root, _TWO_BEDS))
+    # 実ファイルには触れない——load 時 pin のほうをずらして同じ食い違いを作る。
+    monkeypatch.setattr(mk, "_LOADED_GENERATOR_CODE_SHA256", "0" * 64)
+    out_dir = tmp_path / "out"
+    with pytest.raises(mk.GenerationError, match="build 中に変わった"):
+        mk.build(
+            vocadito_root=vocadito_root, bed_root=bed_root,
+            tracks=_TWO_BEDS, levels=["0dB"],
+            out_dir=out_dir, registered_utc="2026-08-01",
+        )
+    assert not out_dir.exists()          # 部分 bundle を残さない
+    assert _staging_dirs(out_dir) == []
+
+
+def test_loaded_generator_code_sha256_matches_the_file_at_import(tmp_path) -> None:
+    """load 時 pin は本ファイルそのものの digest である（測る側が照合する値）。"""
+    assert mk._LOADED_GENERATOR_CODE_SHA256 == mk._sha256_file(Path(mk.__file__).resolve())
+
+
 def test_builder_provenance_hashes_the_snapshot_it_parsed(tmp_path, monkeypatch) -> None:
     """P2: build 中に登録簿が編集されても、刻む digest は**parse した bytes** のもの。
 
