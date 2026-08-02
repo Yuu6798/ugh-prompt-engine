@@ -10651,3 +10651,112 @@ def test_evaluate_execution_records_the_effective_worker_cap(tmp_path: Path) -> 
     assert verdict["evaluate_execution"]["workers"] == 4
     assert verdict["evaluate_execution"]["effective_workers_per_category"] == 2
     assert verdict["repeats_min"] == 2
+
+
+def test_cell_record_binds_the_store_role_not_only_the_path(tmp_path: Path) -> None:
+    """C2: **パスの分離は計算の独立を意味しない**（PR #240 Codex P1）。
+
+    `store_A` を別ディレクトリへコピーすれば `--eval-cell-store` の経路検査は通り、
+    コピーされたレコードは鍵・入力・環境・生成器 digest を**全部**満たす（とくに
+    `repeat_index` は run の 0..n-1 と測り直しの 0..repeats-1 が正面から衝突する）。
+    役割をレコード自身に束縛して、evaluate のキャッシュで run 由来のレコードを
+    resume させない。
+    """
+    record = {
+        "schema_version": harness._EXPECTED_CELL_RECORD_SCHEMA,
+        "category": "V_remix_real_direct",
+        "level": "+12dB",
+        "entry_id": "clip001",
+        "repeat_index": 0,
+        "audio_sha256": "a" * 64,
+        "annotation_sha256": "b" * 64,
+        "env_digest": "c" * 64,
+        "generator_code_sha256": harness._LOADED_GENERATOR_CODE_SHA256,
+        "tolerance_cents": 50.0,
+        "est_voiced_floor": 0.5,
+        "store_role": harness._CELL_STORE_ROLE_RUN,
+    }
+    common = dict(
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id="clip001",
+        repeat_index=0,
+        audio_sha256="a" * 64,
+        annotation_sha256="b" * 64,
+        env_digest="c" * 64,
+        tolerance_cents=50.0,
+        est_voiced_floor=0.5,
+    )
+    # run のキャッシュとしては resume 可（他の同一性フィールドは全て一致している）。
+    assert harness._cell_record_mismatches(
+        record, store_role=harness._CELL_STORE_ROLE_RUN, **common
+    ) == []
+    # **同じレコードを evaluate のキャッシュに置くと resume されない。**
+    mismatches = harness._cell_record_mismatches(
+        record, store_role=harness._CELL_STORE_ROLE_EVALUATE, **common
+    )
+    assert [m["field"] for m in mismatches] == ["store_role"]
+    assert mismatches[0]["expected"] == harness._CELL_STORE_ROLE_EVALUATE
+    assert mismatches[0]["actual"] == harness._CELL_STORE_ROLE_RUN
+
+    # 役割を名乗らない旧レコードも resume しない（素性の分からないセルを通さない）。
+    legacy = {k: v for k, v in record.items() if k != "store_role"}
+    assert any(
+        m["field"] == "store_role"
+        for m in harness._cell_record_mismatches(
+            legacy, store_role=harness._CELL_STORE_ROLE_RUN, **common
+        )
+    )
+
+
+def test_reverification_child_is_told_to_write_evaluate_role_cells(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """C2: 測り直しの子は `--cell-store-role evaluate` を受け取る。"""
+    eval_store = tmp_path / "store_B"
+    eval_store.mkdir()
+    command, _env = _capture_reverification_child_command(
+        monkeypatch, tmp_path, eval_cell_store=eval_store
+    )
+    assert command[command.index("--cell-store-role") + 1] == "evaluate"
+
+
+def test_in_process_verification_writes_evaluate_role_cells(tmp_path: Path) -> None:
+    """in-process 検証経路（テスト専用）でも役割は evaluate になる。"""
+    report = _m2e_run(tmp_path, level="+12dB")
+    row = report["categories"]["V_remix_real_direct"]
+    eval_store = tmp_path / "store_B_role"
+    eval_store.mkdir()
+    harness._reverify_external_category_measurement(
+        "V_remix_real_direct",
+        [row],
+        repeats=2,
+        verification_runner=_m2e_fake_runner(),
+        eval_cell_store=eval_store,
+        **_m2e_reverify_inputs(tmp_path),
+    )
+    written = sorted(eval_store.glob("cell_*.json"))
+    assert written
+    for path in written:
+        assert json.loads(path.read_text(encoding="utf-8"))["store_role"] == "evaluate"
+
+
+@pytest.mark.parametrize(
+    "argv_tail, match",
+    [
+        (["--cell-store-role", "evaluate"], "--cell-store と併用"),
+        (["--evaluate", "R", "--cell-store-role", "evaluate"], "run phase 専用"),
+    ],
+)
+def test_cli_rejects_a_misplaced_cell_store_role(
+    argv_tail: "List[str]", match: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """役割は「セルを書く run」でしか意味を持たない（測っていない次元を名乗らせない）。"""
+    report_path = tmp_path / "run1.json"
+    report_path.write_text("{}", encoding="utf-8")
+    tail = [str(report_path) if a == "R" else a for a in argv_tail]
+    monkeypatch.setattr(
+        sys, "argv", _cli_argv("--out", str(tmp_path / "out.json"), *tail)
+    )
+    with pytest.raises(SystemExit, match=match):
+        harness.main()

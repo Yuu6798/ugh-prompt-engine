@@ -2772,7 +2772,19 @@ _EXPECTED_EXTERNAL_FIXTURES_SCHEMAS: Tuple[str, ...] = (
 # 時刻** `measurement_started_utc` へ改めた（事前登録の順序検査が要求するのは開始で
 # あって完了ではない——長いセルは登録前に始まって登録後に終わりうる）。旧版の
 # レコードは版の不一致で resume されず再測定される——時刻を後から埋めることはしない。
-_EXPECTED_CELL_RECORD_SCHEMA = "m2-cell-record/0.3"
+# 0.3 → 0.4（2026-08-02・C2）: `store_role` を必須フィールドに加えた（PR #240 Codex P1）。
+# **パスの分離は計算の独立を意味しない**——`store_A` を別ディレクトリへコピーすれば
+# 経路検査は通り、コピーされたレコードは他の同一性フィールドを全部満たすので、検証の子が
+# run のセルを resume して publish が再び自己比較になる。役割をレコード自身に束縛し、
+# evaluate のキャッシュで run 由来のレコードを resume しないことで、この経路を消す。
+_EXPECTED_CELL_RECORD_SCHEMA = "m2-cell-record/0.4"
+
+# セルレコードの**役割**（`store_role`）。run が書いたセルと evaluate の測り直しが
+# 書いたセルは、同じ鍵・同じ入力・同じ環境でも**別の計算**であり、混ぜると
+# 「独立に測り直して bit 一致」という publish 条件が自己比較に化ける。
+_CELL_STORE_ROLE_RUN = "run"
+_CELL_STORE_ROLE_EVALUATE = "evaluate"
+_CELL_STORE_ROLES = (_CELL_STORE_ROLE_RUN, _CELL_STORE_ROLE_EVALUATE)
 
 # バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
 # 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
@@ -4885,6 +4897,7 @@ def _measure_or_resume_external_clip_row(
     cell_started_utc: List[str],
     cell_written_paths: List[str],
     cell_store_mismatches: "List[Dict[str, Any]]",
+    store_role: str = _CELL_STORE_ROLE_RUN,
     record_est_trajectory: bool = False,
 ) -> Dict[str, Any]:
     """1 clip を測るか、設計 §8.7 のセル台帳から resume する。
@@ -4933,6 +4946,7 @@ def _measure_or_resume_external_clip_row(
             env_digest=env_digest,
             tolerance_cents=tolerance_cents,
             est_voiced_floor=est_voiced_floor,
+            store_role=store_role,
         )
         if not mismatches:
             # 取得時刻を**セルと一緒に旅させる**。resume だけを見ている限り、run の
@@ -5006,6 +5020,8 @@ def _measure_or_resume_external_clip_row(
             # 新しい bars digest を纏って resume される（採点値は旧閾値のまま）。
             "tolerance_cents": tolerance_cents,
             "est_voiced_floor": est_voiced_floor,
+            # このセルを産んだのは run か、evaluate の測り直しか（C2・PR #240）。
+            "store_role": store_role,
             "clip_row": row,
             # このセルの**測定を開始した**時刻。resume するとき run 側の起動時刻では
             # 立証できない「登録より後に測り始めた」を、セル自身に持たせる。
@@ -5034,6 +5050,7 @@ def _run_external_category(
     repeat_index: Optional[int] = None,
     env_digest: Optional[str] = None,
     workers: int = 1,
+    store_role: str = _CELL_STORE_ROLE_RUN,
 ) -> Dict[str, Any]:
     """カテゴリ V（外部素材）1 本の run report row を作る（設計 Memo M2c）。
 
@@ -5113,6 +5130,7 @@ def _run_external_category(
             cell_started_utc=cell_started_utc,
             cell_written_paths=cell_written_paths,
             cell_store_mismatches=cell_store_mismatches,
+            store_role=store_role,
             record_est_trajectory=record_est_trajectory,
         )
         clip_rows.append(clip_row)
@@ -5834,6 +5852,7 @@ def _cell_record_mismatches(
     env_digest: str,
     tolerance_cents: float,
     est_voiced_floor: float,
+    store_role: str,
 ) -> "List[Dict[str, Any]]":
     """既存セルレコードと現在の入力/環境の不一致を列挙する（設計 §8.7 再開規則）。
 
@@ -5871,6 +5890,14 @@ def _cell_record_mismatches(
         # ので、閾値が変わったセルを resume すると**旧採点値に新 bars の pin が付く**。
         "tolerance_cents": tolerance_cents,
         "est_voiced_floor": est_voiced_floor,
+        # C2（PR #240 Codex P1）: **パスの分離は計算の独立を意味しない。**
+        # `store_A` を別ディレクトリへコピーすれば `--eval-cell-store` の経路検査は
+        # 通り、コピーされたレコードは上の同一性フィールドを**全部**満たす（鍵・入力・
+        # 環境・生成器 digest がそのまま一致する。とくに `repeat_index` は run の
+        # 0..n-1 と測り直しの 0..repeats-1 が正面から衝突する）。結果、検証の子が run の
+        # セルを resume し、publish が再び自己比較になる。役割をレコード自身に束縛して、
+        # evaluate のキャッシュで run 由来のレコードを resume させない。
+        "store_role": store_role,
     }
     mismatches: "List[Dict[str, Any]]" = []
     for field, expected in current.items():
@@ -5935,6 +5962,7 @@ def run_accuracy(
     repeat_index: Optional[int] = None,
     workers: int = 1,
     thread_pinning: Optional[Dict[str, Any]] = None,
+    cell_store_role: str = _CELL_STORE_ROLE_RUN,
 ) -> Dict[str, Any]:
     """カテゴリ S（合成正解つき）+ カテゴリ V（外部素材、M2c）の精度 run を実行し report dict を返す。
 
@@ -6157,6 +6185,7 @@ def run_accuracy(
                     repeat_index=repeat_index,
                     env_digest=env_digest_value,
                     workers=workers,
+                    store_role=cell_store_role,
                 )
                 if effective_cell_store is not None:
                     # `_run_external_category` は run 単位の bookkeeping をカテゴリ
@@ -7240,6 +7269,12 @@ def _run_external_verification_in_fresh_process(
             # 段階で消える（`_cell_store_record_path`）。
             "--repeat-index",
             str(index),
+            # C2（PR #240 Codex P1）: 子が書くセルへ **evaluate 役割**を刻ませる。
+            # `store_B` が `store_A` のコピーであっても、run 由来のレコードは役割の
+            # 不一致で resume されず測り直される——パスの分離だけでは計算の独立を
+            # 保証できないため、独立性をレコード自身に束縛する。
+            "--cell-store-role",
+            _CELL_STORE_ROLE_EVALUATE,
         ]
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -7373,6 +7408,7 @@ def _reverify_external_category_measurement(
                 if eval_cell_store is not None:
                     run_kwargs["cell_store"] = eval_cell_store
                     run_kwargs["repeat_index"] = index
+                    run_kwargs["cell_store_role"] = _CELL_STORE_ROLE_EVALUATE
                 if thread_pinning is not None:
                     run_kwargs["thread_pinning"] = thread_pinning
                 verification = run_accuracy(
@@ -9236,6 +9272,16 @@ def main() -> int:
         "未指定時は verdict に新フィールドが一切増えない（挙動無変更）",
     )
     parser.add_argument(
+        "--cell-store-role",
+        default=_CELL_STORE_ROLE_RUN,
+        choices=list(_CELL_STORE_ROLES),
+        help="このプロセスが書くセルレコードの役割（既定 run）。**evaluate は "
+        "測り直しの子プロセス専用**で、評価器が自動で付ける——手で渡すものではない。"
+        "パスの分離だけでは計算の独立を保証できない（store_A をコピーすれば経路検査は "
+        "通り、同一性フィールドも全部一致する）ため、役割をレコード自身に束縛し、"
+        "evaluate のキャッシュで run 由来のレコードを resume しない (C2)",
+    )
+    parser.add_argument(
         "--pin-threads",
         action="store_true",
         help="スレッド 3 点固定（OMP_NUM_THREADS / MKL_NUM_THREADS / "
@@ -9265,6 +9311,19 @@ def main() -> int:
     _require_out_outside_git_metadata(args.out)
     if args.workers < 1:
         raise SystemExit(f"--workers {args.workers} は 1 以上の整数のみ許可する")
+    # `--cell-store-role` は run phase のセル書き込みにしか意味が無い。測っていない
+    # 次元を名乗らせない規律（`--repeat-index` と同型）。
+    if args.cell_store_role != _CELL_STORE_ROLE_RUN:
+        if args.evaluate:
+            raise SystemExit(
+                "--cell-store-role は run phase 専用（evaluate 自身はセルを書かない; "
+                "測り直しの子へは評価器が自動で付ける）"
+            )
+        if args.cell_store is None:
+            raise SystemExit(
+                "--cell-store-role は --cell-store と併用したときのみ有効"
+                "（セルを書かない run に役割を名乗らせない）"
+            )
     # store 分離（C2）の関係検査は**フェーズ判定より先に**行う。フェーズ別の拒否
     # （run 専用 / evaluate 専用）を先に通すと、2 つの store が重なった指定が
     # 「フェーズが違う」というだけの理由で弾かれ、重なりそのものは一度も検査されない。
@@ -9488,6 +9547,7 @@ def main() -> int:
         level=args.level,
         workers=args.workers,
         thread_pinning=thread_pinning,
+        cell_store_role=args.cell_store_role,
         **run_kwargs,
     )
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
