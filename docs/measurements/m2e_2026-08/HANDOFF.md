@@ -145,16 +145,28 @@ C2/C3 以前の evaluate は実効 `P = 1`（10.0 h ÷ 160 セル = 225 s/セル
 **r4/r6 の起動形**（3 点固定を必ず適用すること・§3.1）:
 
 ```bash
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-    --out build/m2e/run_p12_r0.json --categories V_remix_real_direct --level +12dB \
-    --external-manifest build/m2e/manifest_p12.json --external-fixtures build/m2e/fixtures_p12.yaml \
-    --cell-store build/m2e/store_A --repeat-index 0 --pin-threads
+# 1 水準ぶんの run（repeat 0/1 × 両アームを 1 run 報告に収める。--categories は複数可）
+for r in 0 1; do
+  OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+      --out build/m2e/run_p12_r${r}.json \
+      --categories V_remix_real_direct V_remix_real_stem --level +12dB \
+      --external-manifest build/m2e/manifest_p12.json \
+      --external-fixtures build/m2e/fixtures_p12.yaml \
+      --cell-store build/m2e/store_A --repeat-index ${r} --pin-threads
+done
 
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-    --out build/m2e/verdict_p12.json --evaluate build/m2e/run_p12_r0.json build/m2e/run_p12_r1.json \
-    --external-manifest build/m2e/manifest_p12.json --external-fixtures build/m2e/fixtures_p12.yaml \
+    --out build/m2e/verdict_p12.json \
+    --evaluate build/m2e/run_p12_r0.json build/m2e/run_p12_r1.json \
+    --external-manifest build/m2e/manifest_p12.json \
+    --external-fixtures build/m2e/fixtures_p12.yaml \
     --eval-cell-store build/m2e/store_B --workers 2 --pin-threads
 ```
+
+両アームを 1 run に収めるのは census がアーム対の同一 manifest を要求するため（E-6）。
+残り 3 水準（p06/p00/m06）も同じ形で繰り返して 4 verdict を census へ渡す——実際の
+分割・実行順・中断復帰は r5 のシャード地図（`m2e_r2_shard_map.yaml`）が決めるのであって、
+この 4 行を 1 セッションで回すという意味ではない（§8.5）。
 
 `--workers 2` なのは上記の頭打ち（`repeats_min = 2`）による。`--eval-cell-store` には
 **run が使った `store_A` を渡してはならない**——渡すと測り直しの子が run のセルを
