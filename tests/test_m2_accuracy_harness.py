@@ -11869,3 +11869,1028 @@ def test_census_rejects_a_non_string_failures_element(tmp_path: Path) -> None:
         verdicts[0]["categories"][arm]["failures"] = [None]
     with pytest.raises(ValueError, match="非空文字列でない"):
         _census(tmp_path, verdicts)
+
+
+# ---------------------------------------------------------------------------
+# C6 — シャード実行機（`.claude/briefs/M2E-C6-shard-runner.md` /
+# `docs/DESIGN_M2e_vremix_real_bed.md` §8.4-§8.8）
+# ---------------------------------------------------------------------------
+#
+# キュー/許可式/打ち切りの機構テスト（`run_m2e_shard_queue`）は実 multiprocessing
+# （spawn）を経由する。fake の `measure_fn` を `tests/_shard_queue_fakes.py`
+# （`run_melody_accuracy` を import しない軽量モジュール）に置くのは意図的な選択:
+# spawn の子プロセスは pickle された callable の `__module__` を import し直すため、
+# fake がこのファイル（`run_melody_accuracy` を import 済み・実測 ≈24s/回）に居ると
+# 子プロセス起動のたびに同じ import 連鎖を再生してしまう。機構そのものは実測定を
+# 一切必要としないため、依存を切り離すことで対称かつ高速なテストにする。
+#
+# 一方、resume 互換（AC の核心）を確かめるテストは `_shard_measure_and_record_cell`
+# を multiprocessing を経由せず**直接呼ぶ**（設計判断・Test Strategy「fake backend
+# での統合テストは P=1 の in-process 経路で行う」）——フェイク抽出器
+# （`_m2e_fake_runner`）はテストローカルなクロージャで pickle 不能だが、直接呼び出し
+# 経路なら問題にならない。
+
+
+def _write_m2e_campaign(
+    tmp_path: Path,
+    clip_specs: "Optional[Dict[str, Tuple[List[float], List[float]]]]" = None,
+) -> Path:
+    """4 水準ぶんの M2e fixtures + manifest を書き、campaign yaml へまとめる（C6 テスト用）。
+
+    campaign は**パスのみ**（決定済み設計判断 2）。4 水準とも同じ (clip_id, bed_id)
+    集合（`_VREMIX_CLIPS` 既定）を使う——水準文字列順の pin テストがこれに依存する。
+    """
+    import yaml as _yaml
+
+    if clip_specs is None:
+        clip_specs = _VREMIX_CLIPS
+    level_paths: Dict[str, Dict[str, str]] = {}
+    for level in harness._M2E_LEVEL_LADDER:
+        level_dir = tmp_path / harness._M2E_LEVEL_TAGS[level]
+        level_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+            level_dir, clip_specs, level=level
+        )
+        level_paths[level] = {
+            "external_manifest": str(manifest_path),
+            "external_fixtures": str(fixtures_path),
+        }
+    campaign_path = tmp_path / "m2e_campaign.yaml"
+    campaign_path.write_text(
+        _yaml.safe_dump({"schema_version": "m2e-campaign/0.1", "levels": level_paths}),
+        encoding="utf-8",
+    )
+    return campaign_path
+
+
+# `_write_m2e_campaign` 既定コホート（1 bed × 2 clip）での 1 shard 分の実測コスト設定。
+# `t_direct=5.0 / t_stem=10.0 / startup_cost=2.0 / session_budget=50.0` は
+# n_cells=32（2 clip × 4 level × 2 arm × repeats_min=2）に対し n_shards=6 になる
+# （cap=0.85*50-2=40.5）ことを直接検証済み。C6 テスト全体でこの組を再利用する。
+_C6_TEST_SHARD_KWARGS: Dict[str, float] = {
+    "t_direct": 5.0,
+    "t_stem": 10.0,
+    "startup_cost": 2.0,
+    "session_budget": 50.0,
+}
+
+
+def _bars_tolerance_and_floor() -> "Tuple[float, float]":
+    bars, bars_sha256 = harness.load_bars(harness.BARS_PATH)
+    bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
+    tolerance_cents = float(bar_block.get("tolerance_cents", harness.DEFAULT_TOLERANCE_CENTS))
+    est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])
+    return tolerance_cents, est_voiced_floor
+
+
+def _record_cells_via_fake_runner(
+    records: "List[Dict[str, Any]]",
+    campaign: "Dict[str, Dict[str, Path]]",
+    cell_store: Path,
+    *,
+    env_digest: str,
+    tolerance_cents: float,
+    est_voiced_floor: float,
+) -> None:
+    """`records`（地図の cell dict 群）を実際に `_shard_measure_and_record_cell` で測る。
+
+    `_shard_measure_and_record_cell` を multiprocessing を経由せず直接呼ぶ——テスト
+    ローカルなフェイク runner のクロージャは pickle できないため（設計判断・
+    Test Strategy）。「先行 shard が完了済み」な状態をテストで再現するのに使う。
+    """
+    manifest_cache: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
+    fixtures_cache: "Dict[str, Dict[str, Any]]" = {}
+    for record in records:
+        level = record["level"]
+        if level not in fixtures_cache:
+            fixtures_doc, _sha = harness.load_external_fixtures(campaign[level]["external_fixtures"])
+            fixtures_cache[level] = fixtures_doc["fixtures"]
+            entries, _msha, manifest_path = harness._load_external_manifest(
+                campaign[level]["external_manifest"]
+            )
+            manifest_cache[level] = (entries, manifest_path.parent)
+        entries, manifest_dir = manifest_cache[level]
+        entry = next(e for e in entries if e["id"] == record["entry_id"])
+        task = {
+            "bed_id": record["bed_id"],
+            "level": level,
+            "clip_id": record["clip_id"],
+            "arm": record["arm"],
+            "repeat_index": record["repeat_index"],
+            "entry_id": record["entry_id"],
+            "entry": entry,
+            "fixtures": fixtures_cache[level],
+            "manifest_dir": str(manifest_dir),
+            "tolerance_cents": tolerance_cents,
+            "est_voiced_floor": est_voiced_floor,
+            "cell_store": str(cell_store),
+            "env_digest": env_digest,
+            "workers": 1,
+        }
+        harness._shard_measure_and_record_cell(task, runner=_m2e_fake_runner())
+
+
+# ---------------------------------------------------------------------------
+# 生成器: campaign ローダー
+# ---------------------------------------------------------------------------
+
+
+def test_load_m2e_campaign_rejects_unknown_schema(tmp_path: Path) -> None:
+    path = tmp_path / "campaign.yaml"
+    path.write_text("schema_version: not-the-right-one\nlevels: {}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="schema_version"):
+        harness._load_m2e_campaign(path)
+
+
+def test_load_m2e_campaign_requires_exact_ladder_levels(tmp_path: Path) -> None:
+    path = tmp_path / "campaign.yaml"
+    path.write_text(
+        "schema_version: m2e-campaign/0.1\n"
+        "levels:\n"
+        "  '+12dB': {external_manifest: a.json, external_fixtures: a.yaml}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="凍結ラダー"):
+        harness._load_m2e_campaign(path)
+
+
+def test_load_m2e_campaign_requires_exact_key_set_per_level(tmp_path: Path) -> None:
+    path = tmp_path / "campaign.yaml"
+    levels = "\n".join(
+        f"  '{level}': {{external_manifest: a.json, external_fixtures: a.yaml, extra: 1}}"
+        for level in harness._M2E_LEVEL_LADDER
+    )
+    path.write_text(f"schema_version: m2e-campaign/0.1\nlevels:\n{levels}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="external_manifest, external_fixtures"):
+        harness._load_m2e_campaign(path)
+
+
+def test_write_m2e_campaign_round_trips_through_the_loader(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    assert set(campaign) == set(harness._M2E_LEVEL_LADDER)
+    for level_paths in campaign.values():
+        assert level_paths["external_manifest"].is_file()
+        assert level_paths["external_fixtures"].is_file()
+
+
+# ---------------------------------------------------------------------------
+# entry id の写像（§6.2: `vremix_{clip_id}_{bed_id}_{level_tag}`）
+# ---------------------------------------------------------------------------
+
+
+def test_m2e_entry_id_and_parse_entry_id_round_trip() -> None:
+    entry_id = harness._m2e_entry_id("vocadito_7", "Angels-In-Amplifiers", "+6dB")
+    assert entry_id == "vremix_vocadito_7_Angels-In-Amplifiers_p06"
+    clip_id, bed_id = harness._m2e_parse_entry_id(entry_id)
+    assert clip_id == "vocadito_7"
+    assert bed_id == "Angels-In-Amplifiers"
+
+
+def test_m2e_parse_entry_id_rejects_malformed_id() -> None:
+    with pytest.raises(ValueError, match="§6.2"):
+        harness._m2e_parse_entry_id("not_a_vremix_id")
+
+
+# ---------------------------------------------------------------------------
+# セル台帳の lexical order（決定済み設計判断 3: level は文字列のまま、直さない）
+# ---------------------------------------------------------------------------
+
+
+def test_m2e_cell_lexical_order_is_bed_then_level_then_clip_then_arm_then_repeat() -> None:
+    cells = [
+        ("BedTwo", "0dB", "clipA", "V_remix_real_direct", 0),
+        ("BedOne", "-6dB", "clipA", "V_remix_real_direct", 0),
+        ("BedOne", "+12dB", "clipB", "V_remix_real_direct", 0),
+        ("BedOne", "+12dB", "clipA", "V_remix_real_stem", 0),
+        ("BedOne", "+12dB", "clipA", "V_remix_real_direct", 1),
+        ("BedOne", "+12dB", "clipA", "V_remix_real_direct", 0),
+    ]
+    assert sorted(cells) == [
+        ("BedOne", "+12dB", "clipA", "V_remix_real_direct", 0),
+        ("BedOne", "+12dB", "clipA", "V_remix_real_direct", 1),
+        ("BedOne", "+12dB", "clipA", "V_remix_real_stem", 0),
+        ("BedOne", "+12dB", "clipB", "V_remix_real_direct", 0),
+        ("BedOne", "-6dB", "clipA", "V_remix_real_direct", 0),
+        ("BedTwo", "0dB", "clipA", "V_remix_real_direct", 0),
+    ]
+
+
+def test_m2e_full_cell_registry_keeps_level_string_order_not_ladder_order(
+    tmp_path: Path,
+) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    cells, fixtures_sha256_by_level, repeats_min = harness._m2e_full_cell_registry(campaign)
+    assert set(fixtures_sha256_by_level) == set(harness._M2E_LEVEL_LADDER)
+    assert repeats_min == 2
+    same_bed_clip_levels = [
+        c[1]
+        for c in cells
+        if c[0] == "BedOne"
+        and c[2] == "vocadito_1"
+        and c[3] == "V_remix_real_direct"
+        and c[4] == 0
+    ]
+    # lexical: '+12dB' < '+6dB' < '-6dB' < '0dB' — ラダー表示順 (+12/+6/0/-6) とは違う。
+    assert same_bed_clip_levels == ["+12dB", "+6dB", "-6dB", "0dB"]
+    assert same_bed_clip_levels != list(harness._M2E_LEVEL_LADDER)
+
+
+# ---------------------------------------------------------------------------
+# シャード幅アルゴリズム（§8.5 の凍結擬似コードの逐語実装）
+# ---------------------------------------------------------------------------
+
+
+def test_assign_m2e_shard_ids_matches_the_frozen_pseudocode() -> None:
+    cells = sorted(
+        (
+            ("bedA", "+12dB", f"clip{i}", arm, r)
+            for i in range(3)
+            for arm in ("V_remix_real_direct", "V_remix_real_stem")
+            for r in range(2)
+        )
+    )
+    shard_ids, cap, n_shards = harness._assign_m2e_shard_ids(
+        cells, t_direct=10.0, t_stem=20.0, startup_cost=5.0, session_budget=100.0
+    )
+    assert cap == pytest.approx(80.0)
+    assert n_shards == 3
+    assert shard_ids == [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2]
+
+
+def test_assign_m2e_shard_ids_rejects_cap_leq_zero() -> None:
+    cells = [("bedA", "+12dB", "clip0", "V_remix_real_direct", 0)]
+    with pytest.raises(ValueError, match="1 セルすら"):
+        harness._assign_m2e_shard_ids(
+            cells, t_direct=10.0, t_stem=20.0, startup_cost=100.0, session_budget=50.0
+        )
+
+
+def test_assign_m2e_shard_ids_rejects_cap_below_max_cost() -> None:
+    cells = [("bedA", "+12dB", "clip0", "V_remix_real_stem", 0)]
+    with pytest.raises(ValueError, match="1 セルすら"):
+        harness._assign_m2e_shard_ids(
+            cells, t_direct=1.0, t_stem=100.0, startup_cost=0.0, session_budget=10.0
+        )
+
+
+# ---------------------------------------------------------------------------
+# 生成器: `generate_m2e_shard_map`
+# ---------------------------------------------------------------------------
+
+
+def test_generate_m2e_shard_map_is_byte_identical_for_the_same_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml as _yaml
+
+    monkeypatch.setattr(harness, "_utc_now", lambda: "2026-08-02T00:00:00+00:00")
+    campaign_path = _write_m2e_campaign(tmp_path)
+    doc1 = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    doc2 = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    assert doc1 == doc2
+    b1 = _yaml.safe_dump(doc1, sort_keys=True, default_flow_style=False, allow_unicode=True)
+    b2 = _yaml.safe_dump(doc2, sort_keys=True, default_flow_style=False, allow_unicode=True)
+    assert b1 == b2
+
+
+def test_generate_m2e_shard_map_records_inputs_registry_digest_and_cells(
+    tmp_path: Path,
+) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    assert doc["schema_version"] == harness._M2E_SHARD_MAP_SCHEMA
+    assert doc["inputs"] == {
+        "startup_cost_s": 2.0,
+        "t_direct_s": 5.0,
+        "t_stem_s": 10.0,
+        "session_budget_s": 50.0,
+        "cap_s": pytest.approx(0.85 * 50.0 - 2.0),
+        "margin": 0.85,
+    }
+    assert set(doc["fixtures_sha256_by_level"]) == set(harness._M2E_LEVEL_LADDER)
+    assert doc["repeats_min"] == 2
+    assert doc["n_cells"] == 2 * 4 * 2 * 2  # 2 clip(BedOne) * 4 level * 2 arm * repeats_min
+    assert len(doc["cells"]) == doc["n_cells"]
+    assert doc["n_shards"] == 6
+    campaign_sha256 = hashlib.sha256(Path(campaign_path).read_bytes()).hexdigest()
+    assert doc["campaign_sha256"] == campaign_sha256
+    for cell in doc["cells"]:
+        assert cell["entry_id"] == harness._m2e_entry_id(
+            cell["clip_id"], cell["bed_id"], cell["level"]
+        )
+
+
+def test_generate_m2e_shard_map_rejects_cap_violations(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    with pytest.raises(ValueError, match="1 セルすら"):
+        harness.generate_m2e_shard_map(
+            campaign_path=campaign_path,
+            t_direct=5.0,
+            t_stem=10.0,
+            startup_cost=1000.0,
+            session_budget=50.0,
+        )
+
+
+def test_generate_m2e_shard_map_rejects_n_shards_over_r_max(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    # cap = 0.85 * 1.7647058823529411 - 0 ≈ 1.5 → 各セルが cap を超えない最小の余地しか
+    # 無く、cost=1.0 のセル 32 個すべてが個別 shard になる（n_shards=32 > R_max=12）。
+    with pytest.raises(ValueError, match="R_max"):
+        harness.generate_m2e_shard_map(
+            campaign_path=campaign_path,
+            t_direct=1.0,
+            t_stem=1.0,
+            startup_cost=0.0,
+            session_budget=1.7647058823529411,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 地図ローダー + 台帳整合性（欠け・重複・余剰の fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def test_load_m2e_shard_map_rejects_unknown_schema(tmp_path: Path) -> None:
+    path = tmp_path / "map.yaml"
+    path.write_text("schema_version: not-it\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="schema_version"):
+        harness._load_m2e_shard_map(path)
+
+
+def test_load_m2e_shard_map_requires_all_top_level_keys(tmp_path: Path) -> None:
+    path = tmp_path / "map.yaml"
+    path.write_text(f"schema_version: {harness._M2E_SHARD_MAP_SCHEMA}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="inputs"):
+        harness._load_m2e_shard_map(path)
+
+
+def test_require_m2e_shard_map_matches_registry_accepts_a_freshly_generated_map(
+    tmp_path: Path,
+) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    harness._require_m2e_shard_map_matches_registry(doc, campaign)  # 例外を投げない
+
+
+def test_require_m2e_shard_map_matches_registry_detects_a_missing_cell(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["cells"].pop()
+    with pytest.raises(ValueError, match="台帳と一致しない"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_require_m2e_shard_map_matches_registry_detects_an_extra_cell(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    extra = copy.deepcopy(mutated["cells"][0])
+    extra["clip_id"] = "not_a_real_clip"
+    extra["entry_id"] = "vremix_not_a_real_clip_BedOne_p12"
+    mutated["cells"].append(extra)
+    with pytest.raises(ValueError, match="台帳と一致しない"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_require_m2e_shard_map_matches_registry_detects_a_duplicate_cell(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["cells"].append(copy.deepcopy(mutated["cells"][0]))
+    with pytest.raises(ValueError, match="重複"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_require_m2e_shard_map_matches_registry_detects_fixtures_drift(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    fixtures_path = campaign["+12dB"]["external_fixtures"]
+    original = Path(fixtures_path).read_text(encoding="utf-8")
+    Path(fixtures_path).write_text(original + "\n# drift\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="fixtures_sha256_by_level"):
+        harness._require_m2e_shard_map_matches_registry(doc, campaign)
+
+
+def test_m2e_shard_cells_for_preserves_order_and_attaches_cost(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    shard0 = harness._m2e_shard_cells_for(doc, 0)
+    expected = [c for c in doc["cells"] if c["shard_id"] == 0]
+    assert [c["entry_id"] for c in shard0] == [c["entry_id"] for c in expected]
+    assert shard0  # 非空であること（テスト自体が空振りしていないことの確認）
+    for cell in shard0:
+        expected_cost = 5.0 if cell["arm"] == "V_remix_real_direct" else 10.0
+        assert cell["cost"] == expected_cost
+
+
+# ---------------------------------------------------------------------------
+# 昇順実行 + 「飛ばせるのは完了済み shard のみ」（`_require_prior_m2e_shards_complete`）
+# ---------------------------------------------------------------------------
+
+
+def test_require_prior_m2e_shards_complete_is_a_noop_for_shard_zero(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    harness._require_prior_m2e_shards_complete(
+        doc,
+        0,
+        cell_store=tmp_path / "store_A",
+        campaign=campaign,
+        env_digest="anything",
+        tolerance_cents=50.0,
+        est_voiced_floor=0.3,
+    )  # 例外を投げない
+
+
+def test_require_prior_m2e_shards_complete_rejects_when_prior_shard_unmeasured(
+    tmp_path: Path,
+) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    assert doc["n_shards"] >= 2
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    with pytest.raises(ValueError, match="昇順実行"):
+        harness._require_prior_m2e_shards_complete(
+            doc,
+            1,
+            cell_store=tmp_path / "store_A",
+            campaign=campaign,
+            env_digest=harness._env_digest(),
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+        )
+
+
+def test_require_prior_m2e_shards_complete_passes_once_shard_zero_is_fully_recorded(
+    tmp_path: Path,
+) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    assert doc["n_shards"] >= 2
+    cell_store = tmp_path / "store_A"
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    shard0 = [c for c in doc["cells"] if c["shard_id"] == 0]
+    _record_cells_via_fake_runner(
+        shard0,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    harness._require_prior_m2e_shards_complete(
+        doc,
+        1,
+        cell_store=cell_store,
+        campaign=campaign,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )  # 例外を投げない
+
+
+def test_require_prior_m2e_shards_complete_rejects_env_digest_mismatch(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    assert doc["n_shards"] >= 2
+    cell_store = tmp_path / "store_A"
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    shard0 = [c for c in doc["cells"] if c["shard_id"] == 0]
+    _record_cells_via_fake_runner(
+        shard0,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    with pytest.raises(ValueError, match="昇順実行"):
+        harness._require_prior_m2e_shards_complete(
+            doc,
+            1,
+            cell_store=cell_store,
+            campaign=campaign,
+            env_digest="0" * 64,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+        )
+
+
+# ---------------------------------------------------------------------------
+# resume 互換（最重要 AC）: シャード実行機のセルレコードは既存 resume 経路そのもの
+# ---------------------------------------------------------------------------
+
+
+def test_shard_measure_and_record_cell_writes_a_run_role_schema_correct_record(
+    tmp_path: Path,
+) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    cell_store = tmp_path / "store_A"
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    target = doc["cells"][0]
+    _record_cells_via_fake_runner(
+        [target],
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category=target["arm"],
+        level=target["level"],
+        entry_id=target["entry_id"],
+        repeat_index=target["repeat_index"],
+    )
+    assert record_path.is_file()
+    record = json.loads(record_path.read_text())
+    assert record["schema_version"] == harness._EXPECTED_CELL_RECORD_SCHEMA
+    assert record["store_role"] == harness._CELL_STORE_ROLE_RUN
+    assert record["category"] == target["arm"]
+    assert record["level"] == target["level"]
+    assert record["entry_id"] == target["entry_id"]
+    assert record["repeat_index"] == target["repeat_index"]
+    assert record["env_digest"] == env_digest
+
+
+def test_shard_measure_and_record_cell_second_call_resumes(tmp_path: Path) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    cell_store = tmp_path / "store_A"
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    target = doc["cells"][0]
+
+    _record_cells_via_fake_runner(
+        [target], campaign, cell_store,
+        env_digest=env_digest, tolerance_cents=tolerance_cents, est_voiced_floor=est_voiced_floor,
+    )
+    record_path = harness._cell_store_record_path(
+        cell_store, category=target["arm"], level=target["level"],
+        entry_id=target["entry_id"], repeat_index=target["repeat_index"],
+    )
+    first_written = record_path.read_bytes()
+
+    _record_cells_via_fake_runner(
+        [target], campaign, cell_store,
+        env_digest=env_digest, tolerance_cents=tolerance_cents, est_voiced_floor=est_voiced_floor,
+    )
+    # resume されたのでレコードは書き直されない（bytes 不変）。
+    assert record_path.read_bytes() == first_written
+
+
+def test_shard_measure_and_record_cell_records_are_resumed_by_the_whole_level_run(
+    tmp_path: Path,
+) -> None:
+    """resume 互換の核心 AC: シャード実行機が書いたセルレコードを、既存の「1 水準
+    まるごと」run phase が digest 一致で resume できる。
+    """
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level="+12dB"
+    )
+    entries, _sha, manifest_abspath = harness._load_external_manifest(manifest_path)
+    fixtures_doc, _fsha = harness.load_external_fixtures(fixtures_path)
+    entry_id = _vremix_ids("+12dB")[0]
+    entry = next(e for e in entries if e["id"] == entry_id)
+    clip_id, bed_id = harness._m2e_parse_entry_id(entry_id)
+
+    cell_store = tmp_path / "store_A"
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    task = {
+        "bed_id": bed_id,
+        "level": "+12dB",
+        "clip_id": clip_id,
+        "arm": "V_remix_real_direct",
+        "repeat_index": 0,
+        "entry_id": entry_id,
+        "entry": entry,
+        "fixtures": fixtures_doc["fixtures"],
+        "manifest_dir": str(manifest_abspath.parent),
+        "tolerance_cents": tolerance_cents,
+        "est_voiced_floor": est_voiced_floor,
+        "cell_store": str(cell_store),
+        "env_digest": env_digest,
+        "workers": 1,
+    }
+    result = harness._shard_measure_and_record_cell(task, runner=_m2e_fake_runner())
+    assert result["measured"] is True
+    assert result["resumed"] is False
+    assert result["outcome"] == "measured"
+
+    report = _fake_run(
+        categories=("V_remix_real_direct",),
+        route_runner=_m2e_fake_runner(),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        level="+12dB",
+        cell_store=cell_store,
+        repeat_index=0,
+    )
+    assert entry_id in report["cells_resumed"]
+    assert report["cell_store_mismatches"] == []
+
+
+def test_shard_worker_measure_cell_rejects_env_digest_mismatch() -> None:
+    with pytest.raises(RuntimeError, match="env_digest 不一致"):
+        harness._shard_worker_measure_cell({"env_digest": "0" * 64})
+
+
+# ---------------------------------------------------------------------------
+# 動的キュー + 開始許可式 + 打ち切り（`run_m2e_shard_queue`。実 multiprocessing・
+# `tests/_shard_queue_fakes.py` の軽量 top-level fake を注入）
+# ---------------------------------------------------------------------------
+
+
+def test_run_m2e_shard_queue_completes_all_cells_in_order() -> None:
+    import _shard_queue_fakes
+
+    cells = [{"id": f"c{i}", "cost": 1.0} for i in range(4)]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=1000.0,
+        hang_grace_seconds=60.0,
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+    )
+    assert [c["cell"]["id"] for c in result["completed"]] == [c["id"] for c in cells]
+    assert result["truncated"] == []
+    assert result["not_started"] == []
+    assert all(c["result"]["measured"] for c in result["completed"])
+
+
+def test_run_m2e_shard_queue_denies_admission_when_cost_exceeds_budget_from_the_start() -> None:
+    import _shard_queue_fakes
+
+    cells = [{"id": "too-big", "cost": 100.0}]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=1.0,
+        hang_grace_seconds=60.0,
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+    )
+    assert result["completed"] == []
+    assert [c["id"] for c in result["not_started"]] == ["too-big"]
+
+
+def test_run_m2e_shard_queue_does_not_backfill_with_a_cheaper_later_cell() -> None:
+    """配布順は §8.5 order に従う——高コストで拒否された後、より安い後続セルにも
+    進まない（bin-packing ではない）。"""
+    import _shard_queue_fakes
+
+    cells = [
+        {"id": "cheap-first", "cost": 0.01},
+        {"id": "too-big", "cost": 1000.0},
+        {"id": "cheap-after", "cost": 0.01},
+    ]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=0.5,
+        hang_grace_seconds=60.0,
+        workers=2,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+    )
+    assert [c["cell"]["id"] for c in result["completed"]] == ["cheap-first"]
+    assert [c["id"] for c in result["not_started"]] == ["too-big", "cheap-after"]
+
+
+def test_run_m2e_shard_queue_admits_sequentially_then_denies_after_elapsed_grows() -> None:
+    import _shard_queue_fakes
+
+    cells = [
+        {"id": "first", "cost": 0.2},
+        {"id": "second", "cost": 0.2},
+    ]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=0.25,
+        hang_grace_seconds=60.0,
+        workers=1,
+        measure_fn=_shard_queue_fakes.sleep,
+        initializer=None,
+    )
+    assert [c["cell"]["id"] for c in result["completed"]] == ["first"]
+    assert [c["id"] for c in result["not_started"]] == ["second"]
+
+
+def test_run_m2e_shard_queue_truncates_a_hung_cell_without_waiting_for_it_to_finish() -> None:
+    import _shard_queue_fakes
+
+    cells = [{"id": "hangs", "cost": 0.01, "actual_duration_s": 5.0}]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=0.05,
+        hang_grace_seconds=0.05,
+        workers=1,
+        measure_fn=_shard_queue_fakes.sleep,
+        initializer=None,
+        poll_interval=0.02,
+    )
+    assert result["completed"] == []
+    assert [c["id"] for c in result["truncated"]] == ["hangs"]
+    assert result["not_started"] == []
+    # 実際に 5s 待たず、hang_grace 超過後すぐ打ち切ったこと（正常終了・エラーではない）。
+    assert result["elapsed_seconds"] < 2.0
+
+
+def test_run_m2e_shard_queue_propagates_a_worker_exception_and_aborts() -> None:
+    import _shard_queue_fakes
+
+    cells = [{"id": "boom", "cost": 0.01}]
+    with pytest.raises(RuntimeError, match="fake shard worker failure"):
+        harness.run_m2e_shard_queue(
+            cells,
+            session_budget=10.0,
+            hang_grace_seconds=60.0,
+            workers=1,
+            measure_fn=_shard_queue_fakes.raise_error,
+            initializer=None,
+        )
+
+
+def test_run_m2e_shard_queue_runs_cells_concurrently_when_workers_allow() -> None:
+    import _shard_queue_fakes
+
+    cells = [
+        {"id": "a", "cost": 0.2, "actual_duration_s": 0.2},
+        {"id": "b", "cost": 0.2, "actual_duration_s": 0.2},
+    ]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=10.0,
+        hang_grace_seconds=60.0,
+        workers=2,
+        measure_fn=_shard_queue_fakes.sleep,
+        initializer=None,
+    )
+    assert len(result["completed"]) == 2
+    # 逐次なら 0.4s 以上かかる。並列なら 0.2s + overhead に収まるはず。
+    assert result["elapsed_seconds"] < 0.35
+
+
+# ---------------------------------------------------------------------------
+# 1 shard 分の実行機オーケストレーション（`execute_m2e_shard`）。real multiprocessing
+# だが `_shard_queue_fakes.ok` を注入して実測定は行わない（機構テストと同じ理由）。
+# ---------------------------------------------------------------------------
+
+
+def _generate_and_load_shard_map(tmp_path: Path) -> "Tuple[Dict[str, Any], str, Path, Dict[str, Dict[str, Path]]]":
+    import yaml as _yaml
+
+    campaign_path = _write_m2e_campaign(tmp_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    map_doc, map_sha256 = harness._load_m2e_shard_map(map_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    return map_doc, map_sha256, campaign_path, campaign
+
+
+def test_execute_m2e_shard_returns_a_shard_record_without_report_like_keys(
+    tmp_path: Path,
+) -> None:
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    result = harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=tmp_path / "store_A",
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    assert result["schema_version"] == harness._M2E_SHARD_RUN_SCHEMA
+    for forbidden in (
+        "categories", "metrics", "verdict", "band_verdict", "run_report", "level_response",
+    ):
+        assert forbidden not in result
+    assert result["shard_id"] == 0
+    assert result["shard_map_sha256"] == map_sha256
+    expected_total = len([c for c in map_doc["cells"] if c["shard_id"] == 0])
+    assert result["cells_total"] == expected_total
+    assert result["cells_completed"] == expected_total
+    assert result["cells_truncated"] == []
+    assert result["cells_not_started"] == []
+
+
+def test_execute_m2e_shard_rejects_shard_id_out_of_range(tmp_path: Path) -> None:
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    with pytest.raises(ValueError, match="n_shards"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=map_doc["n_shards"],
+            campaign=campaign,
+            cell_store=tmp_path / "store_A",
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+
+
+def test_execute_m2e_shard_rejects_when_prior_shard_is_incomplete(tmp_path: Path) -> None:
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    assert map_doc["n_shards"] >= 2
+    with pytest.raises(ValueError, match="昇順実行"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=1,
+            campaign=campaign,
+            cell_store=tmp_path / "store_A",
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+
+
+def test_execute_m2e_shard_allows_shard_when_prior_shard_is_fully_recorded(
+    tmp_path: Path,
+) -> None:
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    assert map_doc["n_shards"] >= 2
+    cell_store = tmp_path / "store_A"
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    shard0 = [c for c in map_doc["cells"] if c["shard_id"] == 0]
+    _record_cells_via_fake_runner(
+        shard0, campaign, cell_store,
+        env_digest=env_digest, tolerance_cents=tolerance_cents, est_voiced_floor=est_voiced_floor,
+    )
+    result = harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=1,
+        campaign=campaign,
+        cell_store=cell_store,
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    expected_total = len([c for c in map_doc["cells"] if c["shard_id"] == 1])
+    assert result["cells_completed"] == expected_total == result["cells_total"]
+
+
+def test_execute_m2e_shard_detects_shard_map_drift_before_running(tmp_path: Path) -> None:
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    fixtures_path = campaign["+12dB"]["external_fixtures"]
+    original = Path(fixtures_path).read_text(encoding="utf-8")
+    Path(fixtures_path).write_text(original + "\n# drift\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="fixtures_sha256_by_level"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=tmp_path / "store_A",
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+
+
+# ---------------------------------------------------------------------------
+# CLI 配線（`--make-shard-map` / `--shard-id`）
+# ---------------------------------------------------------------------------
+
+
+def test_main_make_shard_map_writes_a_file_and_requires_force_to_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    argv = [
+        "run_melody_accuracy.py",
+        "--make-shard-map",
+        "--campaign", str(campaign_path),
+        "--t-direct", "5.0",
+        "--t-stem", "10.0",
+        "--startup-cost", "2.0",
+        "--session-budget", "50.0",
+        "--out", str(out_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert harness.main() == 0
+    assert out_path.is_file()
+    first_bytes = out_path.read_bytes()
+
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="--force"):
+        harness.main()
+    assert out_path.read_bytes() == first_bytes
+
+    monkeypatch.setattr(sys, "argv", argv + ["--force"])
+    assert harness.main() == 0
+    assert out_path.read_bytes() == first_bytes  # 同一入力 → バイト一致
+
+
+def test_main_make_shard_map_rejects_unrelated_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_path = _write_m2e_campaign(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--level", "+12dB",
+            "--out", str(tmp_path / "shard_map.yaml"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--level"):
+        harness.main()
+
+
+def test_main_shard_id_and_evaluate_are_mutually_exclusive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--evaluate", str(tmp_path / "report.json"),
+            "--out", str(tmp_path / "out.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="排他"):
+        harness.main()
+
+
+def test_main_shard_id_and_census_are_mutually_exclusive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--census", str(tmp_path / "verdict.json"),
+            "--out", str(tmp_path / "out.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="排他"):
+        harness.main()
+
+
+def test_main_shard_id_requires_shard_map_and_campaign_and_cell_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_melody_accuracy.py", "--shard-id", "0", "--out", str(tmp_path / "out.json")],
+    )
+    with pytest.raises(SystemExit, match="--shard-map"):
+        harness.main()

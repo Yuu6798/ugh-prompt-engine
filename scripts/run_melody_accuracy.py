@@ -44,6 +44,7 @@ import functools
 import hashlib
 import json
 import math
+import multiprocessing
 import os
 import platform
 import re
@@ -10029,6 +10030,806 @@ def aggregate_m2e_census(
     return census
 
 
+# ---------------------------------------------------------------------------
+# C6 — シャード実行機（rev.6 §8.4-§8.8・地図生成器 `--make-shard-map` + 消費器
+# `--shard-id`/`--shard-map`）
+# ---------------------------------------------------------------------------
+#
+# 設計 Memo `.claude/briefs/M2E-C6-shard-runner.md` の実装。シャード地図は科学ではなく
+# スケジューリングである（§8.5）——セル台帳（fixtures が決める 1280 セルの集合）は
+# 不可侵、シャード地図（どのセルをどの回に回すか）は `T_*`/`S`/`B_session` が変われば
+# 再計算してよい。本節は 2 つの成果物だけを持つ: (a) 地図生成器
+# `generate_m2e_shard_map`、(b) 1 shard 分の実行機 `execute_m2e_shard`。
+# **shard モードは run report / verdict / census のいずれも出さない**——per-level の
+# run report は、全セル完了後に既存の「1 水準まるごと」run が store から 100% resume
+# して生成する（M2e report の単一水準不変条件は無変更）。
+
+_EXPECTED_M2E_CAMPAIGN_SCHEMA = "m2e-campaign/0.1"
+_M2E_SHARD_MAP_SCHEMA = "m2e-shard-map/0.1"
+_M2E_SHARD_RUN_SCHEMA = "m2e-shard-run/0.1"
+# §8.5: 余裕係数（凍結・変更禁止。実測が速かったからといって上げてはならない）。
+_M2E_SHARD_CAP_MARGIN = 0.85
+# §8.2 の既定 B_session（秒）。CLI `--session-budget` の既定値と同じ。
+_M2E_DEFAULT_SESSION_BUDGET_S = 7200.0
+# §8.8: 実行回数の上限（凍結）。
+_M2E_R_MAX = 12
+# §8.6: ハングの絶対上限は B_session + 600s（凍結）。
+_M2E_HANG_GRACE_S = 600.0
+# 動的キューのポーリング間隔（実装の都合値。時間予算そのものには影響しない）。
+_M2E_SHARD_POLL_INTERVAL_S = 0.05
+
+
+def _load_m2e_campaign(path: "str | Path") -> "Dict[str, Dict[str, Path]]":
+    """M2e campaign ファイル（パスのみ）を読み、水準ごとの manifest/fixtures パスを返す。
+
+    設計判断 2（Memo M2E-C6）: campaign は**パスのみ**を持つ——各水準の external
+    manifest / external fixtures の所在。科学的パラメータ（`T_*`/`S`/`B_session`等）は
+    一切含めない（それは CLI 引数 / bars / fixtures / 地図側の責務）。凍結ラダー 4 水準
+    ちょうどを要求する (fail-closed)。パスは campaign ファイルの位置基準で相対解決する。
+    """
+    campaign_path = Path(path).resolve()
+    data = campaign_path.read_bytes()
+    doc = _yaml_load_no_dup_keys(data, what=campaign_path.name)
+    if not isinstance(doc, dict) or doc.get("schema_version") != _EXPECTED_M2E_CAMPAIGN_SCHEMA:
+        raise ValueError(
+            f"{campaign_path}: schema_version が {_EXPECTED_M2E_CAMPAIGN_SCHEMA!r} でない "
+            "(fail-closed)"
+        )
+    levels = doc.get("levels")
+    if not isinstance(levels, dict) or set(levels) != set(_M2E_LEVEL_LADDER):
+        raise ValueError(
+            f"{campaign_path}: levels のキー集合 "
+            f"{sorted(levels) if isinstance(levels, dict) else levels!r} が凍結ラダー "
+            f"{list(_M2E_LEVEL_LADDER)} と一致しない (fail-closed)"
+        )
+    campaign_dir = campaign_path.parent
+    resolved: "Dict[str, Dict[str, Path]]" = {}
+    for level, level_paths in levels.items():
+        if not isinstance(level_paths, dict) or set(level_paths) != {
+            "external_manifest",
+            "external_fixtures",
+        }:
+            raise ValueError(
+                f"{campaign_path}: levels[{level!r}] が "
+                "{external_manifest, external_fixtures} ちょうどを持たない (fail-closed)"
+            )
+        resolved_level: "Dict[str, Path]" = {}
+        for key, value in level_paths.items():
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"{campaign_path}: levels[{level!r}].{key} が非空文字列でない "
+                    "(fail-closed)"
+                )
+            resolved_level[key] = (campaign_dir / value).resolve()
+        resolved[level] = resolved_level
+    return resolved
+
+
+def _m2e_parse_entry_id(entry_id: str) -> "Tuple[str, str]":
+    """entry id `vremix_{clip_id}_{bed_id}_{level_tag}`（§6.2）から (clip_id, bed_id) を返す。
+
+    `_require_registered_m2e_cohort` と同じ切り出し規約（`_m2e_bed_slug` は非英数字を
+    ハイフンにしか正規化しないため bed_id は下線を含まず、末尾から 2 番目の下線区切り
+    要素が bed_id と一意に決まる）。
+    """
+    parts = str(entry_id).split("_")
+    if len(parts) < 4 or parts[0] != "vremix":
+        raise ValueError(
+            f"_m2e_parse_entry_id: entry id {entry_id!r} が §6.2 の規約 "
+            "`vremix_{clip_id}_{bed_id}_{level_tag}` に合わない (fail-closed)"
+        )
+    bed_id = parts[-2]
+    clip_id = "_".join(parts[1:-2])
+    return clip_id, bed_id
+
+
+def _m2e_entry_id(clip_id: str, bed_id: str, level: str) -> str:
+    """(clip_id, bed_id, level) → entry id（§6.2 の逆写像）。"""
+    return f"vremix_{clip_id}_{bed_id}_{_M2E_LEVEL_TAGS[level]}"
+
+
+def _m2e_full_cell_registry(
+    campaign: "Dict[str, Dict[str, Path]]",
+) -> "Tuple[List[Tuple[str, str, str, str, int]], Dict[str, str], int]":
+    """§8.5 のセル台帳（1280 セル）を lexical order で列挙する。
+
+    戻り値: (cells, fixtures_sha256_by_level, repeats_min)。`cells` の各要素は
+    `(bed_id, level, clip_id, arm, repeat_index)` の 5-tuple——設計 §8.5 の
+    `(bed_id, level, clip_id, arm, repeat_idx)` lexical order そのもの（level は
+    ラダー添字ではなく**文字列のまま**——決定済み設計判断 3: `'+12dB' < '+6dB' <
+    '-6dB' < '0dB'` という物理量と無関係な順序になるが「直して」はならない）。
+
+    台帳は fixtures（+ 基底バーの `repeats_min`）だけから決まる——manifest はここでは
+    読まない（manifest 未生成のうちに地図を作れるようにするため。§8.5「シャード地図は
+    科学ではなくスケジューリングである」の実装上の帰結: 地図生成は音声実体を必要と
+    しない）。
+    """
+    bars, bars_sha256 = load_bars(BARS_PATH)
+    bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
+    repeats_min = int(bar_block["repeats_min"])
+    arms = _categories_owned_by("m2e_accuracy_bars.yaml")
+
+    fixtures_sha256_by_level: "Dict[str, str]" = {}
+    cells: "List[Tuple[str, str, str, str, int]]" = []
+    for level in _M2E_LEVEL_LADDER:
+        if level not in campaign:
+            raise ValueError(
+                f"_m2e_full_cell_registry: campaign に水準 {level!r} が無い (fail-closed)"
+            )
+        fixtures_path = campaign[level]["external_fixtures"]
+        fixtures_doc, fixtures_sha256 = load_external_fixtures(fixtures_path)
+        _require_external_fixtures_level_match(
+            fixtures_doc, level=level, where=f"_m2e_full_cell_registry: level {level!r}"
+        )
+        fixtures_sha256_by_level[level] = fixtures_sha256
+        for entry_id in fixtures_doc["fixtures"]:
+            clip_id, bed_id = _m2e_parse_entry_id(entry_id)
+            for arm in arms:
+                for repeat_index in range(repeats_min):
+                    cells.append((bed_id, level, clip_id, arm, repeat_index))
+    cells.sort()
+    return cells, fixtures_sha256_by_level, repeats_min
+
+
+def _m2e_shard_cell_cost(arm: str, *, t_direct: float, t_stem: float) -> float:
+    """§8.5 の `cost(cell) = T_direct if cell.arm == "direct" else T_stem`。"""
+    return t_direct if arm == "V_remix_real_direct" else t_stem
+
+
+def _assign_m2e_shard_ids(
+    cells: "List[Tuple[str, str, str, str, int]]",
+    *,
+    t_direct: float,
+    t_stem: float,
+    startup_cost: float,
+    session_budget: float,
+) -> "Tuple[List[int], float, int]":
+    """§8.5 の凍結アルゴリズムを逐語実装する（アルゴリズムの改良禁止）。
+
+    ```
+    cap = 0.85 * B_session - S
+    cost(cell) = T_direct if cell.arm == "direct" else T_stem
+    order = 全セルを (bed_id, level, clip_id, arm, repeat_idx) の lexical order で整列
+    s = 0 ; acc = 0
+    for cell in order:
+        c = cost(cell)
+        if acc > 0 and acc + c > cap:
+            s += 1 ; acc = 0
+        cell.shard_id = s
+        acc += c
+    N_shards = s + 1
+    ```
+
+    `cells` は呼び出し元が既に lexical order で整列済みであること
+    （`_m2e_full_cell_registry` が保証する）。戻り値は `(shard_ids, cap, n_shards)`。
+    """
+    cap = _M2E_SHARD_CAP_MARGIN * session_budget - startup_cost
+    if cap <= 0 or cap < max(t_direct, t_stem):
+        raise ValueError(
+            f"generate_m2e_shard_map: cap={cap!r} (= {_M2E_SHARD_CAP_MARGIN} * "
+            f"B_session({session_budget!r}) - S({startup_cost!r})) が 0 以下か "
+            f"max(T_direct={t_direct!r}, T_stem={t_stem!r}) を下回る; 1 セルすら 1 回の "
+            "実行に収まらない。本測定は開始しない。S / T_direct / T_stem を添えて "
+            "User 決裁へ差し戻す (fail-closed・設計 §8.5)"
+        )
+    shard_ids: "List[int]" = []
+    s = 0
+    acc = 0.0
+    for _bed_id, _level, _clip_id, arm, _repeat_index in cells:
+        c = _m2e_shard_cell_cost(arm, t_direct=t_direct, t_stem=t_stem)
+        if acc > 0 and acc + c > cap:
+            s += 1
+            acc = 0.0
+        shard_ids.append(s)
+        acc += c
+    n_shards = s + 1
+    return shard_ids, cap, n_shards
+
+
+def generate_m2e_shard_map(
+    *,
+    campaign_path: "str | Path",
+    t_direct: float,
+    t_stem: float,
+    startup_cost: float,
+    session_budget: float = _M2E_DEFAULT_SESSION_BUDGET_S,
+) -> "Dict[str, Any]":
+    """§8.5 のシャード地図を生成する（生成器 `--make-shard-map` の実体）。
+
+    自由変数なし: 入力（`t_direct`/`t_stem`/`startup_cost`/`session_budget`/campaign の
+    中身）が同じなら出力は一意（`generated_utc` を除く——テストは `_utc_now` を
+    monkeypatch してバイト一致を固定する）。
+    """
+    if not (t_direct > 0):
+        raise ValueError(f"generate_m2e_shard_map: t_direct {t_direct!r} は正数のみ許可する")
+    if not (t_stem > 0):
+        raise ValueError(f"generate_m2e_shard_map: t_stem {t_stem!r} は正数のみ許可する")
+    if startup_cost < 0:
+        raise ValueError(
+            f"generate_m2e_shard_map: startup_cost {startup_cost!r} は 0 以上のみ許可する"
+        )
+    if not (session_budget > 0):
+        raise ValueError(
+            f"generate_m2e_shard_map: session_budget {session_budget!r} は正数のみ許可する"
+        )
+
+    campaign_path = Path(campaign_path).resolve()
+    campaign_bytes = campaign_path.read_bytes()
+    campaign_sha256 = hashlib.sha256(campaign_bytes).hexdigest()
+    campaign = _load_m2e_campaign(campaign_path)
+
+    cells, fixtures_sha256_by_level, repeats_min = _m2e_full_cell_registry(campaign)
+    shard_ids, cap, n_shards = _assign_m2e_shard_ids(
+        cells,
+        t_direct=t_direct,
+        t_stem=t_stem,
+        startup_cost=startup_cost,
+        session_budget=session_budget,
+    )
+    if n_shards > _M2E_R_MAX:
+        raise ValueError(
+            f"generate_m2e_shard_map: N_shards={n_shards} が R_max={_M2E_R_MAX} を超える "
+            f"(S={startup_cost!r}, T_direct={t_direct!r}, T_stem={t_stem!r}, "
+            f"B_session={session_budget!r}, cap={cap!r}); 本測定は開始しない。次の3択を "
+            "User 決裁へ提示する (§8.8・自動縮退はしない): "
+            "(1) R_max を引き上げる（規模は不変・回数だけ増える）, "
+            "(2) 実行環境を変更して P を上げる（r2-0 からやり直す）, "
+            "(3) clip 数を削る（休止中の縮退手順・附録B。User の明示的決裁のみ）"
+        )
+
+    cell_records = [
+        {
+            "bed_id": bed_id,
+            "level": level,
+            "clip_id": clip_id,
+            "arm": arm,
+            "repeat_index": repeat_index,
+            "entry_id": _m2e_entry_id(clip_id, bed_id, level),
+            "shard_id": shard_id,
+        }
+        for (bed_id, level, clip_id, arm, repeat_index), shard_id in zip(cells, shard_ids)
+    ]
+    return {
+        "schema_version": _M2E_SHARD_MAP_SCHEMA,
+        "generated_utc": _utc_now(),
+        "inputs": {
+            "startup_cost_s": startup_cost,
+            "t_direct_s": t_direct,
+            "t_stem_s": t_stem,
+            "session_budget_s": session_budget,
+            "cap_s": cap,
+            "margin": _M2E_SHARD_CAP_MARGIN,
+        },
+        "campaign_path_relative": _repo_relative_path(campaign_path),
+        "campaign_sha256": campaign_sha256,
+        "fixtures_sha256_by_level": fixtures_sha256_by_level,
+        "repeats_min": repeats_min,
+        "n_cells": len(cell_records),
+        "n_shards": n_shards,
+        "cells": cell_records,
+    }
+
+
+def _load_m2e_shard_map(path: "str | Path") -> "Tuple[Dict[str, Any], str]":
+    """シャード地図 YAML を single read で `(parsed dict, sha256)` として返す。"""
+    map_path = Path(path).resolve()
+    data = map_path.read_bytes()
+    doc = _yaml_load_no_dup_keys(data, what=map_path.name)
+    if not isinstance(doc, dict) or doc.get("schema_version") != _M2E_SHARD_MAP_SCHEMA:
+        raise ValueError(
+            f"{map_path}: schema_version が {_M2E_SHARD_MAP_SCHEMA!r} でない (fail-closed)"
+        )
+    for required in (
+        "inputs",
+        "campaign_sha256",
+        "fixtures_sha256_by_level",
+        "repeats_min",
+        "n_shards",
+        "n_cells",
+        "cells",
+    ):
+        if required not in doc:
+            raise ValueError(f"{map_path}: {required!r} を欠く (fail-closed)")
+    return doc, hashlib.sha256(data).hexdigest()
+
+
+def _require_m2e_shard_map_matches_registry(
+    map_doc: "Dict[str, Any]", campaign: "Dict[str, Dict[str, Path]]"
+) -> None:
+    """地図の `cells` が現在の campaign から再計算した台帳と 1:1 で一致することを要求する。
+
+    欠け・重複・余剰のいずれも fail-closed（§8.5「セル台帳は不可侵」の実行時側の
+    立証）。台帳が動いた（fixtures が改訂された・`repeats_min` が変わった等）状態の
+    まま古い地図を消費すると、測っていないセルを完了扱いにしたり、存在しないセルへ
+    `shard_id` を割り当てたりする。
+    """
+    registry_cells, fixtures_sha256_by_level, repeats_min = _m2e_full_cell_registry(campaign)
+    if map_doc.get("fixtures_sha256_by_level") != fixtures_sha256_by_level:
+        raise ValueError(
+            "shard map: fixtures_sha256_by_level が現在の campaign の実体と不一致; "
+            "地図が生成された後に fixtures が変わった (fail-closed)"
+        )
+    if int(map_doc.get("repeats_min", -1)) != repeats_min:
+        raise ValueError(
+            f"shard map: repeats_min {map_doc.get('repeats_min')!r} が現在の凍結値 "
+            f"{repeats_min!r} と不一致 (fail-closed)"
+        )
+    registry_set = set(registry_cells)
+    map_set: "set" = set()
+    duplicates: "List[Tuple[str, str, str, str, int]]" = []
+    for record in map_doc["cells"]:
+        key = (
+            record["bed_id"],
+            record["level"],
+            record["clip_id"],
+            record["arm"],
+            record["repeat_index"],
+        )
+        if key in map_set:
+            duplicates.append(key)
+        map_set.add(key)
+    if duplicates:
+        raise ValueError(f"shard map: セル鍵が重複している ({duplicates[:5]}) (fail-closed)")
+    missing = registry_set - map_set
+    extra = map_set - registry_set
+    if missing or extra:
+        raise ValueError(
+            f"shard map: 台帳と一致しない (missing={len(missing)}, extra={len(extra)}); "
+            "セル台帳は不可侵——地図は再生成すること (fail-closed)"
+        )
+
+
+def _m2e_shard_cells_for(map_doc: "Dict[str, Any]", shard_id: int) -> "List[Dict[str, Any]]":
+    """地図から `shard_id` に属するセルだけを、地図に記録された順序のまま抜き出す。
+
+    地図の `cells` は §8.5 order で書かれている（`generate_m2e_shard_map` が保証）ので、
+    ここでの絞り込みは順序を破らない。各要素に `cost`（秒）を付与する。
+    """
+    inputs = map_doc["inputs"]
+    t_direct = float(inputs["t_direct_s"])
+    t_stem = float(inputs["t_stem_s"])
+    return [
+        dict(record, cost=_m2e_shard_cell_cost(record["arm"], t_direct=t_direct, t_stem=t_stem))
+        for record in map_doc["cells"]
+        if record["shard_id"] == shard_id
+    ]
+
+
+def _require_prior_m2e_shards_complete(
+    map_doc: "Dict[str, Any]",
+    shard_id: int,
+    *,
+    cell_store: Path,
+    campaign: "Dict[str, Dict[str, Path]]",
+    env_digest: str,
+    tolerance_cents: float,
+    est_voiced_floor: float,
+) -> None:
+    """`shard_id` 未満の全 shard が digest 一致で完了していることを要求する（fail-closed）。
+
+    §8.6「`shard_id` の昇順で実行する。飛ばしてよいのは、その shard の全セルが digest
+    一致で完了済みの場合のみ」の実装。既存の resume 判定
+    （`_cell_store_record_path` / `_cell_record_mismatches`）をそのまま再利用する——
+    別の判定基準を作ると「シャード実行機が完了とみなした」と「1 水準まるごとの run が
+    resume する」が食い違いうる（resume 互換 AC の根拠）。
+    """
+    prior_cells = [r for r in map_doc["cells"] if r["shard_id"] < shard_id]
+    if not prior_cells:
+        return
+    manifest_cache: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
+    fixtures_cache: "Dict[str, Dict[str, Any]]" = {}
+    incomplete: "List[str]" = []
+    for record in prior_cells:
+        level = record["level"]
+        if level not in fixtures_cache:
+            fixtures_doc, _sha = load_external_fixtures(campaign[level]["external_fixtures"])
+            fixtures_cache[level] = fixtures_doc["fixtures"]
+            entries, _manifest_sha256, manifest_path = _load_external_manifest(
+                campaign[level]["external_manifest"]
+            )
+            manifest_cache[level] = (entries, manifest_path.parent)
+        fixtures = fixtures_cache[level]
+        entries, manifest_dir = manifest_cache[level]
+        entry_id = record["entry_id"]
+        entry = next((e for e in entries if e["id"] == entry_id), None)
+        label = f"{entry_id}/{record['arm']}/repeat{record['repeat_index']}"
+        if entry is None:
+            incomplete.append(f"{label} (manifest に無い)")
+            continue
+        record_path = _cell_store_record_path(
+            cell_store,
+            category=record["arm"],
+            level=level,
+            entry_id=entry_id,
+            repeat_index=record["repeat_index"],
+        )
+        if not record_path.is_file():
+            incomplete.append(f"{label} (未測定)")
+            continue
+        inputs = _read_external_clip_inputs(
+            entry_id, entry, manifest_dir=manifest_dir, fixtures=fixtures
+        )
+        stored = _json_loads_no_dup_keys(
+            record_path.read_bytes(), what=f"cell record {record_path}"
+        )
+        mismatches = _cell_record_mismatches(
+            stored,
+            category=record["arm"],
+            level=level,
+            entry_id=entry_id,
+            repeat_index=record["repeat_index"],
+            audio_sha256=inputs.audio_sha256,
+            annotation_sha256=inputs.annotation_sha256,
+            env_digest=env_digest,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+            store_role=_CELL_STORE_ROLE_RUN,
+        )
+        if mismatches:
+            incomplete.append(f"{label} (digest 不一致)")
+    if incomplete:
+        raise ValueError(
+            f"shard {shard_id}: 先行 shard（shard_id < {shard_id}）に digest 一致で完了して"
+            f"いないセルがある（{incomplete[:10]}{' ほか' if len(incomplete) > 10 else ''}）; "
+            "昇順実行を要求する。飛ばせるのは全セルが完了済みの shard のみ "
+            "(fail-closed・設計 §8.6)"
+        )
+
+
+def _shard_measure_and_record_cell(
+    task: "Dict[str, Any]", *, runner: RouteRunner
+) -> "Dict[str, Any]":
+    """1 セルを測るか resume する（`_measure_or_resume_external_clip_row` の per-cell 呼び出し）。
+
+    テスト seam: `runner` は非 picklable でもよい——この関数を直接呼ぶ経路（fake
+    backend 統合テスト・resume 互換テストが使う「P=1 の in-process 経路」）と、
+    `_shard_worker_measure_cell` からモジュール既定 runner で呼ばれる multiprocessing
+    経路の両方から使われる。`task` 自身は picklable な primitives のみで構成する
+    （spawn context を跨ぐため）。
+
+    レコードパス・書き込み機構は `_measure_or_resume_external_clip_row` /
+    `_cell_store_record_path` / `atomic_io` をそのまま共有する——これが shard 実行機の
+    セルレコードが既存の「1 水準まるごと」run による resume と互換であることの根拠。
+    """
+    category = task["arm"]
+    level = task["level"]
+    entry_id = task["entry_id"]
+    repeat_index = task["repeat_index"]
+    entry = task["entry"]
+    fixtures = task["fixtures"]
+    manifest_dir = Path(task["manifest_dir"])
+    category_spec = _CATEGORY_SPECS[category]
+    route = _select_named_route(category_spec["input_kind"], category_spec["route_name"])
+    record_est_trajectory = _category_records_est_trajectory(category)
+
+    cells_resumed: "List[str]" = []
+    cells_measured: "List[str]" = []
+    cell_started_utc: "List[str]" = []
+    cell_written_paths: "List[str]" = []
+    cell_store_mismatches: "List[Dict[str, Any]]" = []
+
+    with tempfile.TemporaryDirectory(prefix="m2e-shard-cell-") as tmp:
+        clip_row = _measure_or_resume_external_clip_row(
+            entry_id,
+            entry,
+            manifest_dir=manifest_dir,
+            fixtures=fixtures,
+            tolerance_cents=task["tolerance_cents"],
+            est_voiced_floor=task["est_voiced_floor"],
+            route=route,
+            runner=runner,
+            tmp_dir=Path(tmp),
+            category=category,
+            level=level,
+            cell_store=Path(task["cell_store"]),
+            repeat_index=repeat_index,
+            env_digest=task["env_digest"],
+            workers=task["workers"],
+            cells_resumed=cells_resumed,
+            cells_measured=cells_measured,
+            cell_started_utc=cell_started_utc,
+            cell_written_paths=cell_written_paths,
+            cell_store_mismatches=cell_store_mismatches,
+            store_role=_CELL_STORE_ROLE_RUN,
+            record_est_trajectory=record_est_trajectory,
+        )
+    return {
+        "bed_id": task["bed_id"],
+        "level": level,
+        "clip_id": task["clip_id"],
+        "arm": category,
+        "repeat_index": repeat_index,
+        "entry_id": entry_id,
+        "resumed": entry_id in cells_resumed,
+        "measured": entry_id in cells_measured,
+        "mismatches": cell_store_mismatches,
+        "outcome": clip_row.get("outcome"),
+    }
+
+
+def _shard_pool_initializer() -> None:
+    """multiprocessing ワーカー起動時のスレッド 3 点固定（決定済み設計判断 5）。
+
+    env 2 点（OMP/MKL）は**親プロセスが pool 起動前に**検証済み（`execute_m2e_shard`）
+    ——spawn の子は親の環境変数をそのまま引き継ぐため、ここでの再検証は多重防御。
+    `torch.set_num_threads(1)` はプロセスごとに効かせる必要があるため、initializer 内
+    （＝各ワーカーで 1 回）で適用する。
+    """
+    _apply_thread_pinning()
+
+
+def _shard_worker_measure_cell(task: "Dict[str, Any]") -> "Dict[str, Any]":
+    """multiprocessing ワーカーの既定エントリポイント（picklable・top-level）。
+
+    env_digest を再計算し、親が積んだ期待値と一致しなければこのセルを開始しない
+    （設計 §8.6・fail-closed）。例外は `apply_async().get()` で親へ伝播し shard 実行を
+    中断する——「セルレコードを書かず打ち切る」ハング経路とは別の、環境不整合による
+    即時中断。
+    """
+    expected_env_digest = task["env_digest"]
+    actual_env_digest = _env_digest()
+    if actual_env_digest != expected_env_digest:
+        raise RuntimeError(
+            f"shard worker: env_digest 不一致 (expected={expected_env_digest!r}, "
+            f"actual={actual_env_digest!r}); ワーカーの環境が親と食い違うため、この "
+            "セルを開始しない (fail-closed・設計 §8.6)"
+        )
+    return _shard_measure_and_record_cell(task, runner=observe_via_route_with_provenance)
+
+
+def run_m2e_shard_queue(
+    cells: "List[Dict[str, Any]]",
+    *,
+    session_budget: float,
+    hang_grace_seconds: float = _M2E_HANG_GRACE_S,
+    workers: int,
+    measure_fn: "Callable[[Dict[str, Any]], Dict[str, Any]]" = _shard_worker_measure_cell,
+    initializer: "Optional[Callable[[], None]]" = _shard_pool_initializer,
+    clock: "Callable[[], float]" = time.monotonic,
+    poll_interval: float = _M2E_SHARD_POLL_INTERVAL_S,
+) -> "Dict[str, Any]":
+    """§8.6 の動的キュー + 開始許可式 + 打ち切りを実装する（1 shard 分）。
+
+    `cells` は当該 shard のセルのみ、§8.5 order で既に整列済み、各要素は `cost`
+    （秒）キーを持つこと（`_m2e_shard_cells_for` が組み立てる）。配布は 1 セルずつ
+    （静的等分ではない）。admission 判定（`elapsed + cost(cell) <= session_budget`）は
+    親側の単調クロックで行う。
+
+    テスト可能性（設計判断・Test Strategy）: `measure_fn` は picklable な top-level
+    callable を注入できる（spawn は monkeypatch を継承しないため）。**常に
+    multiprocessing（spawn context）の Pool を経由する**——`workers == 1` でも
+    プロセス境界を跨ぐ（§8.4 の `S` = プロセスプール起動〜モデルロード完了、という
+    定義と、ハング打ち切りに実プロセス `terminate()` が要ることの両方に整合させる
+    ため）。
+
+    打ち切り: いずれかの in-flight セルの壁時計が `session_budget + hang_grace_seconds`
+    を超えたら pool を `terminate()` する。その時点で in-flight だった全セル（trigger
+    したセル自身を含む）は「打ち切り」として記録し、セルレコードは書かない
+    （`terminate()` が実プロセスを kill するため、書き込みが完了している保証がない
+    ——設計 §8.6「セルレコードを書かず、未完として記録する」の実装上の帰結）。
+    以降のセル（未着手）へは進まない（「超過は異常ではなく通常状態」であり、延長は
+    しない）。
+    """
+    if workers < 1:
+        raise ValueError(f"run_m2e_shard_queue: workers {workers!r} は 1 以上のみ許可する")
+
+    ctx = multiprocessing.get_context("spawn")
+    pool = ctx.Pool(processes=workers, initializer=initializer)
+    start = clock()
+    completed: "List[Dict[str, Any]]" = []
+    truncated: "List[Dict[str, Any]]" = []
+    not_started: "List[Dict[str, Any]]" = []
+    # index -> (AsyncResult, セルが dispatch された壁時計, cell)
+    in_flight: "Dict[int, Tuple[Any, float, Dict[str, Any]]]" = {}
+    next_index = 0
+    aborted_exception: "Optional[BaseException]" = None
+    terminated_for_hang = False
+
+    try:
+        while True:
+            elapsed = clock() - start
+            admitted_any = False
+            while len(in_flight) < workers and next_index < len(cells):
+                cell = cells[next_index]
+                if elapsed + cell["cost"] > session_budget:
+                    break
+                async_result = pool.apply_async(measure_fn, (cell,))
+                in_flight[next_index] = (async_result, clock(), cell)
+                next_index += 1
+                admitted_any = True
+                elapsed = clock() - start
+            if not in_flight:
+                break  # 実行中が無く、これ以上許可できるセルも無い
+            ready_indices = [idx for idx, (ar, _started, _cell) in in_flight.items() if ar.ready()]
+            for idx in ready_indices:
+                async_result, _cell_started_wall, cell = in_flight.pop(idx)
+                try:
+                    result = async_result.get()
+                except BaseException as exc:  # noqa: BLE001 — 親へ即座に伝播し shard を中断する
+                    aborted_exception = exc
+                    break
+                completed.append({"cell": cell, "result": result})
+            if aborted_exception is not None:
+                break
+            hung_idx = None
+            for idx, (_async_result, cell_started_wall, _cell) in in_flight.items():
+                if clock() - cell_started_wall > session_budget + hang_grace_seconds:
+                    hung_idx = idx
+                    break
+            if hung_idx is not None:
+                terminated_for_hang = True
+                break
+            if not ready_indices and not admitted_any:
+                time.sleep(poll_interval)
+    finally:
+        if aborted_exception is not None or terminated_for_hang:
+            pool.terminate()
+        else:
+            pool.close()
+        pool.join()
+
+    if aborted_exception is not None:
+        raise aborted_exception
+
+    if terminated_for_hang:
+        truncated.extend(cell for _idx, (_ar, _started, cell) in in_flight.items())
+    not_started.extend(cells[next_index:])
+
+    return {
+        "completed": completed,
+        "truncated": truncated,
+        "not_started": not_started,
+        "elapsed_seconds": clock() - start,
+    }
+
+
+def execute_m2e_shard(
+    *,
+    map_doc: "Dict[str, Any]",
+    map_sha256: str,
+    shard_id: int,
+    campaign: "Dict[str, Dict[str, Path]]",
+    cell_store: "str | Path",
+    bars_path: Path = BARS_PATH,
+    workers: int = 1,
+    measure_fn: "Callable[[Dict[str, Any]], Dict[str, Any]]" = _shard_worker_measure_cell,
+    initializer: "Optional[Callable[[], None]]" = _shard_pool_initializer,
+    require_thread_pinning: bool = True,
+    clock: "Callable[[], float]" = time.monotonic,
+) -> "Dict[str, Any]":
+    """1 shard 分の実行（§8.6「1回の実行の契約」の実体）。
+
+    **shard モードは run report / verdict / census のいずれも出さない。** 成果物は
+    (a) `cell_store` 配下のセルレコード、(b) 本関数が返す shard 実行記録のみ。
+    """
+    if shard_id < 0:
+        raise ValueError(f"execute_m2e_shard: shard_id {shard_id!r} は 0 以上のみ許可する")
+    n_shards = int(map_doc["n_shards"])
+    if shard_id >= n_shards:
+        raise ValueError(
+            f"execute_m2e_shard: shard_id {shard_id!r} が地図の n_shards={n_shards!r} 以上 "
+            "(fail-closed)"
+        )
+    _require_m2e_shard_map_matches_registry(map_doc, campaign)
+
+    thread_pinning = _apply_thread_pinning() if require_thread_pinning else None
+
+    env_digest = _env_digest()
+    bars, bars_sha256 = load_bars(bars_path)
+    bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
+    tolerance_cents = float(bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
+    est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])
+
+    cell_store = Path(cell_store)
+    _require_prior_m2e_shards_complete(
+        map_doc,
+        shard_id,
+        cell_store=cell_store,
+        campaign=campaign,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+
+    shard_cells = _m2e_shard_cells_for(map_doc, shard_id)
+    if not shard_cells:
+        raise ValueError(
+            f"execute_m2e_shard: shard_id {shard_id!r} に該当するセルが地図に無い "
+            "(fail-closed)"
+        )
+
+    levels_needed = sorted({record["level"] for record in shard_cells})
+    manifest_by_level: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
+    fixtures_by_level: "Dict[str, Dict[str, Any]]" = {}
+    for level in levels_needed:
+        fixtures_doc, _sha = load_external_fixtures(campaign[level]["external_fixtures"])
+        fixtures_by_level[level] = fixtures_doc["fixtures"]
+        entries, _manifest_sha256, manifest_path = _load_external_manifest(
+            campaign[level]["external_manifest"]
+        )
+        manifest_by_level[level] = (entries, manifest_path.parent)
+
+    tasks: "List[Dict[str, Any]]" = []
+    for record in shard_cells:
+        level = record["level"]
+        entries, manifest_dir = manifest_by_level[level]
+        entry = next((e for e in entries if e["id"] == record["entry_id"]), None)
+        if entry is None:
+            raise ValueError(
+                f"execute_m2e_shard: entry {record['entry_id']!r} (level {level!r}) が "
+                "manifest に無い (fail-closed)"
+            )
+        tasks.append(
+            {
+                "bed_id": record["bed_id"],
+                "level": level,
+                "clip_id": record["clip_id"],
+                "arm": record["arm"],
+                "repeat_index": record["repeat_index"],
+                "entry_id": record["entry_id"],
+                "entry": entry,
+                "fixtures": fixtures_by_level[level],
+                "manifest_dir": str(manifest_dir),
+                "tolerance_cents": tolerance_cents,
+                "est_voiced_floor": est_voiced_floor,
+                "cell_store": str(cell_store),
+                "env_digest": env_digest,
+                "workers": workers,
+                "cost": record["cost"],
+            }
+        )
+
+    session_budget = float(map_doc["inputs"]["session_budget_s"])
+    started_utc = _utc_now()
+    result = run_m2e_shard_queue(
+        tasks,
+        session_budget=session_budget,
+        hang_grace_seconds=_M2E_HANG_GRACE_S,
+        workers=workers,
+        measure_fn=measure_fn,
+        initializer=initializer,
+        clock=clock,
+    )
+
+    def _cell_ref(entry: "Dict[str, Any]") -> "Dict[str, Any]":
+        return {
+            "bed_id": entry["bed_id"],
+            "level": entry["level"],
+            "clip_id": entry["clip_id"],
+            "arm": entry["arm"],
+            "repeat_index": entry["repeat_index"],
+            "entry_id": entry["entry_id"],
+        }
+
+    resumed_refs = [_cell_ref(c["cell"]) for c in result["completed"] if c["result"]["resumed"]]
+    measured_refs = [_cell_ref(c["cell"]) for c in result["completed"] if c["result"]["measured"]]
+    truncated_refs = [_cell_ref(c) for c in result["truncated"]]
+    not_started_refs = [_cell_ref(c) for c in result["not_started"]]
+
+    return {
+        "schema_version": _M2E_SHARD_RUN_SCHEMA,
+        "started_utc": started_utc,
+        "finished_utc": _utc_now(),
+        "shard_id": shard_id,
+        "n_shards": n_shards,
+        "env_digest": env_digest,
+        "workers": workers,
+        "thread_pinning": thread_pinning,
+        "shard_map_sha256": map_sha256,
+        "session_budget_s": session_budget,
+        "hang_grace_s": _M2E_HANG_GRACE_S,
+        "t_direct_s": float(map_doc["inputs"]["t_direct_s"]),
+        "t_stem_s": float(map_doc["inputs"]["t_stem_s"]),
+        "elapsed_seconds": result["elapsed_seconds"],
+        "cells_total": len(shard_cells),
+        "cells_completed": len(result["completed"]),
+        "cells_resumed": resumed_refs,
+        "cells_measured": measured_refs,
+        "cells_truncated": truncated_refs,
+        "cells_not_started": not_started_refs,
+    }
+
+
 # census phase は「渡されたか」を問う必要がある——値の比較では既定値の明示指定を検出
 # できない（PR #241 Codex P2）。
 _ARGPARSE_UNSET = object()
@@ -10166,8 +10967,224 @@ def main() -> int:
         "repeat より下の粒度＝clip/シャード単位の並列化は本実装の範囲外・別ブリーフ）。"
         "verdict の evaluate_execution.effective_workers_per_category に実効値を刻む",
     )
+    parser.add_argument(
+        "--make-shard-map",
+        action="store_true",
+        help="C6（設計 §8.5）: campaign + T_direct/T_stem/S/B_session から §8.5 の凍結"
+        "アルゴリズムでシャード地図を生成する。同一入力からはバイト一致の地図が出る "
+        "（generated_utc を除く）。--evaluate/--census/--shard-id とは排他",
+    )
+    parser.add_argument(
+        "--campaign",
+        type=Path,
+        default=None,
+        metavar="m2e_campaign.yaml",
+        help="M2e campaign ファイル（水準ごとの external manifest / external fixtures の "
+        "所在のみを持つ。科学的パラメータは含まない）。--make-shard-map と --shard-id の "
+        "両方が要求する",
+    )
+    parser.add_argument(
+        "--t-direct",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="r2-0 で校正した direct アームの単位コスト T_direct（秒/セル）。"
+        "--make-shard-map 専用",
+    )
+    parser.add_argument(
+        "--t-stem",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="r2-0 で校正した stem アームの単位コスト T_stem（秒/セル）。--make-shard-map 専用",
+    )
+    parser.add_argument(
+        "--startup-cost",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="S: プロセスプール起動〜モデルロード完了までの固定コスト（秒）。"
+        "--make-shard-map 専用",
+    )
+    parser.add_argument(
+        "--session-budget",
+        type=float,
+        default=_M2E_DEFAULT_SESSION_BUDGET_S,
+        metavar="SECONDS",
+        help=f"B_session（設計 §8.2・既定 {_M2E_DEFAULT_SESSION_BUDGET_S:.0f}s = 2.0h）。"
+        "--make-shard-map 専用（実行機は地図に記録された値をそのまま使う）",
+    )
+    parser.add_argument(
+        "--shard-map",
+        type=Path,
+        default=None,
+        metavar="m2e_r2_shard_map.yaml",
+        help="C6 実行機: `--make-shard-map` が生成した地図。--shard-id と併用必須",
+    )
+    parser.add_argument(
+        "--shard-id",
+        type=int,
+        default=None,
+        metavar="N",
+        help="C6 実行機（設計 §8.6）: この shard のセルのみを対象に実行する（1回 = "
+        "1シャード）。昇順実行を要求する（先行 shard が全セル digest 一致で完了して"
+        "いないと fail-closed）。--evaluate/--census/--make-shard-map とは排他。"
+        "run report / verdict / census のいずれも出さない——成果物は --cell-store の "
+        "セルレコードと --out の shard 実行記録のみ",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="`--make-shard-map` で `--out` が既に存在する場合の明示上書き許可"
+        "（既定は fail-closed で拒否・シャード地図の黙示上書き禁止）",
+    )
     args = parser.parse_args()
     _require_out_outside_git_metadata(args.out)
+    if args.make_shard_map and args.shard_id is not None:
+        raise SystemExit(
+            "--make-shard-map と --shard-id は排他（地図生成器と実行機は別モード）"
+        )
+    if args.make_shard_map and (args.evaluate or args.census):
+        raise SystemExit("--make-shard-map は --evaluate / --census と排他")
+    if args.shard_id is not None and (args.evaluate or args.census):
+        raise SystemExit(
+            "--shard-id は --evaluate / --census と排他（shard モードは run report / "
+            "verdict / census のいずれも出さない）"
+        )
+    if args.make_shard_map:
+        for flag, rejected in (
+            ("--shard-map", args.shard_map is not None),
+            ("--level", args.level is not None),
+            ("--categories", args.categories is not None),
+            ("--external-manifest", args.external_manifest is not None),
+            ("--external-fixtures", args.external_fixtures is not _ARGPARSE_UNSET),
+            ("--specs", args.specs is not _ARGPARSE_UNSET),
+            ("--cell-store", args.cell_store is not None),
+            ("--repeat-index", args.repeat_index is not None),
+            ("--eval-cell-store", args.eval_cell_store is not None),
+            ("--cell-store-role", args.cell_store_role is not _ARGPARSE_UNSET),
+            ("--pin-threads", args.pin_threads is True),
+            ("--workers", args.workers is not _ARGPARSE_UNSET),
+        ):
+            if rejected:
+                raise SystemExit(
+                    f"{flag} は --make-shard-map と併用しない（地図生成器が読むのは "
+                    "--campaign / --t-direct / --t-stem / --startup-cost / "
+                    "--session-budget / --out / --bars だけ; 黙って無視して束縛された "
+                    "と誤解させない (fail-closed)）"
+                )
+        if args.campaign is None:
+            raise SystemExit("--make-shard-map には --campaign が必須")
+        if args.t_direct is None or args.t_stem is None or args.startup_cost is None:
+            raise SystemExit(
+                "--make-shard-map には --t-direct / --t-stem / --startup-cost が必須"
+            )
+        protected = {Path(args.campaign).resolve(), Path(BARS_PATH).resolve()}
+        for level_paths in _load_m2e_campaign(args.campaign).values():
+            protected.update(level_paths.values())
+        if Path(args.out).resolve() in protected:
+            raise SystemExit(
+                f"--out {args.out} は地図生成の入力（campaign / manifest / fixtures / "
+                "bars）と同じパスを指している; 入力を地図で上書きしない (fail-closed)"
+            )
+        if Path(args.out).exists() and not args.force:
+            raise SystemExit(
+                f"--out {args.out} が既に存在する; 明示 --force か別パスの --out を使う "
+                "(fail-closed・シャード地図の黙示上書き禁止・設計判断 1)"
+            )
+        shard_map = generate_m2e_shard_map(
+            campaign_path=args.campaign,
+            t_direct=args.t_direct,
+            t_stem=args.t_stem,
+            startup_cost=args.startup_cost,
+            session_budget=args.session_budget,
+        )
+        payload = yaml.safe_dump(
+            shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
+        )
+        _atomic_write_text(args.out, payload)
+        print(f"wrote shard map to {args.out}")
+        print(f"  n_shards: {shard_map['n_shards']} / n_cells: {shard_map['n_cells']}")
+        print(f"  cap_s: {shard_map['inputs']['cap_s']:.3f}")
+        return 0
+    if args.shard_id is not None:
+        for flag, rejected in (
+            ("--level", args.level is not None),
+            ("--categories", args.categories is not None),
+            ("--external-manifest", args.external_manifest is not None),
+            ("--external-fixtures", args.external_fixtures is not _ARGPARSE_UNSET),
+            ("--specs", args.specs is not _ARGPARSE_UNSET),
+            ("--repeat-index", args.repeat_index is not None),
+            ("--eval-cell-store", args.eval_cell_store is not None),
+            ("--cell-store-role", args.cell_store_role is not _ARGPARSE_UNSET),
+            ("--pin-threads", args.pin_threads is True),
+            ("--t-direct", args.t_direct is not None),
+            ("--t-stem", args.t_stem is not None),
+            ("--startup-cost", args.startup_cost is not None),
+            ("--session-budget", args.session_budget != _M2E_DEFAULT_SESSION_BUDGET_S),
+        ):
+            if rejected:
+                raise SystemExit(
+                    f"{flag} は --shard-id と併用しない（実行機が読むのは --shard-map / "
+                    "--campaign / --cell-store / --workers / --bars / --out だけ; スレッド "
+                    "3 点固定は常に適用するため --pin-threads は無効。黙って無視して束縛 "
+                    "されたと誤解させない (fail-closed)）"
+                )
+        if args.shard_map is None:
+            raise SystemExit("--shard-id には --shard-map が必須")
+        if args.campaign is None:
+            raise SystemExit("--shard-id には --campaign が必須")
+        if args.cell_store is None:
+            raise SystemExit(
+                "--shard-id には --cell-store が必須（セル台帳への書き込み先）"
+            )
+        if args.shard_id < 0:
+            raise SystemExit(f"--shard-id {args.shard_id} は 0 以上のみ許可する")
+        workers = args.workers if args.workers is not _ARGPARSE_UNSET else 1
+        if workers < 1:
+            raise SystemExit(f"--workers {workers} は 1 以上の整数のみ許可する")
+        map_doc, map_sha256 = _load_m2e_shard_map(args.shard_map)
+        campaign_sha256 = hashlib.sha256(Path(args.campaign).read_bytes()).hexdigest()
+        if map_doc.get("campaign_sha256") != campaign_sha256:
+            raise SystemExit(
+                f"--campaign {args.campaign} が地図の campaign_sha256 と不一致; 地図生成時 "
+                "と別の campaign を消費しない (fail-closed)"
+            )
+        campaign = _load_m2e_campaign(args.campaign)
+        protected = {Path(args.shard_map).resolve(), Path(args.campaign).resolve()}
+        for level_paths in campaign.values():
+            protected.update(level_paths.values())
+        cell_store_root = Path(args.cell_store).resolve()
+        out_resolved = Path(args.out).resolve()
+        if out_resolved in protected:
+            raise SystemExit(
+                f"--out {args.out} は shard 実行の入力（shard-map / campaign / manifest / "
+                "fixtures）と同じパスを指している; 入力を実行記録で上書きしない "
+                "(fail-closed)"
+            )
+        if out_resolved == cell_store_root or cell_store_root in out_resolved.parents:
+            raise SystemExit(
+                f"--out {args.out} が --cell-store {args.cell_store} 配下にある; 実行記録で "
+                "セルチェックポイントを上書きしない (fail-closed)"
+            )
+        shard_run = execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=args.shard_id,
+            campaign=campaign,
+            cell_store=args.cell_store,
+            bars_path=args.bars,
+            workers=workers,
+        )
+        _atomic_write_text(args.out, json.dumps(shard_run, indent=2, sort_keys=True))
+        print(f"wrote shard run record to {args.out}")
+        print(
+            f"  shard {shard_run['shard_id']}/{shard_run['n_shards']}: "
+            f"completed={shard_run['cells_completed']}/{shard_run['cells_total']} "
+            f"truncated={len(shard_run['cells_truncated'])} "
+            f"not_started={len(shard_run['cells_not_started'])}"
+        )
+        return 0
     if args.census and args.evaluate:
         raise SystemExit(
             "--census と --evaluate は排他（census は evaluate が出した verdict を "
