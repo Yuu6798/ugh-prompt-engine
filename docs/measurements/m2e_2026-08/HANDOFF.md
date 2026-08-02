@@ -144,6 +144,16 @@ C2/C3 以前の evaluate は実効 `P = 1`（10.0 h ÷ 160 セル = 225 s/セル
 
 **r4/r6 の起動形**（3 点固定を必ず適用すること・§3.1）:
 
+**前提**: `build/m2e/` は runbook §5 の `make_vremix_fixtures.py build --out-dir`
+の出力先（`manifest_p12.json` / `fixtures_p12.yaml` 等が水準ごとに揃う）。このうち
+`--external-fixtures` が指す pin ファイルだけは、回す前に**下記の committed パスへ
+commit しておくこと**——`build/` 配下は gitignored（非 commit の作業成果物）であり、
+evaluate の `_require_attested_external_fixtures_registration` は fixtures blob が
+HEAD の祖先 commit に無いと fail-closed で拒否する（§5「生成した
+`fixtures_<tag>.yaml` は測定前に repo へ commit すること」）。manifest・音声・run
+report・セルストアは非 commit の作業成果物のままでよい（fixtures だけが git 履歴
+立証の対象）。
+
 ```bash
 # 1 水準ぶんの run（repeat 0/1 × 両アームを 1 run 報告に収める。--categories は複数可）
 for r in 0 1; do
@@ -151,22 +161,26 @@ for r in 0 1; do
       --out build/m2e/run_p12_r${r}.json \
       --categories V_remix_real_direct V_remix_real_stem --level +12dB \
       --external-manifest build/m2e/manifest_p12.json \
-      --external-fixtures build/m2e/fixtures_p12.yaml \
+      --external-fixtures tests/fixtures/melody_bench/m2e_vremix_fixtures_p12.yaml \
       --cell-store build/m2e/store_A --repeat-index ${r} --pin-threads
 done
 
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-    --out build/m2e/verdict_p12.json \
+    --out docs/measurements/m2e_2026-08/verdict_p12.json \
     --evaluate build/m2e/run_p12_r0.json build/m2e/run_p12_r1.json \
     --external-manifest build/m2e/manifest_p12.json \
-    --external-fixtures build/m2e/fixtures_p12.yaml \
+    --external-fixtures tests/fixtures/melody_bench/m2e_vremix_fixtures_p12.yaml \
     --eval-cell-store build/m2e/store_B --workers 2 --pin-threads
 ```
 
 両アームを 1 run に収めるのは census がアーム対の同一 manifest を要求するため（E-6）。
-残り 3 水準（p06/p00/m06）も同じ形で繰り返して 4 verdict を census へ渡す——実際の
-分割・実行順・中断復帰は r5 のシャード地図（`m2e_r2_shard_map.yaml`）が決めるのであって、
-この 4 行を 1 セッションで回すという意味ではない（§8.5）。
+verdict の `--out` は `docs/measurements/m2e_2026-08/` 配下——verdict は最終的に
+commit される dated record であり（m2b/m2c の前例どおり）、上の C5 census コマンドは
+まさにこの場所から 4 水準ぶんを読む。run report・store・manifest・音声は作業成果物
+として `build/m2e/` のままでよい。残り 3 水準（p06/p00/m06）も同じ形で繰り返して 4
+verdict を census へ渡す——実際の分割・実行順・中断復帰は r5 のシャード地図
+（`m2e_r2_shard_map.yaml`）が決めるのであって、この 4 行を 1 セッションで回すという
+意味ではない（§8.5）。
 
 `--workers 2` なのは上記の頭打ち（`repeats_min = 2`）による。`--eval-cell-store` には
 **run が使った `store_A` を渡してはならない**——渡すと測り直しの子が run のセルを
