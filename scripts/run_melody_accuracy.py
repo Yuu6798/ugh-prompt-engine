@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import concurrent.futures
 import copy
 import functools
 import hashlib
@@ -46,6 +47,7 @@ import math
 import os
 import platform
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -2770,7 +2772,19 @@ _EXPECTED_EXTERNAL_FIXTURES_SCHEMAS: Tuple[str, ...] = (
 # 時刻** `measurement_started_utc` へ改めた（事前登録の順序検査が要求するのは開始で
 # あって完了ではない——長いセルは登録前に始まって登録後に終わりうる）。旧版の
 # レコードは版の不一致で resume されず再測定される——時刻を後から埋めることはしない。
-_EXPECTED_CELL_RECORD_SCHEMA = "m2-cell-record/0.3"
+# 0.3 → 0.4（2026-08-02・C2）: `store_role` を必須フィールドに加えた（PR #240 Codex P1）。
+# **パスの分離は計算の独立を意味しない**——`store_A` を別ディレクトリへコピーすれば
+# 経路検査は通り、コピーされたレコードは他の同一性フィールドを全部満たすので、検証の子が
+# run のセルを resume して publish が再び自己比較になる。役割をレコード自身に束縛し、
+# evaluate のキャッシュで run 由来のレコードを resume しないことで、この経路を消す。
+_EXPECTED_CELL_RECORD_SCHEMA = "m2-cell-record/0.4"
+
+# セルレコードの**役割**（`store_role`）。run が書いたセルと evaluate の測り直しが
+# 書いたセルは、同じ鍵・同じ入力・同じ環境でも**別の計算**であり、混ぜると
+# 「独立に測り直して bit 一致」という publish 条件が自己比較に化ける。
+_CELL_STORE_ROLE_RUN = "run"
+_CELL_STORE_ROLE_EVALUATE = "evaluate"
+_CELL_STORE_ROLES = (_CELL_STORE_ROLE_RUN, _CELL_STORE_ROLE_EVALUATE)
 
 # バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
 # 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
@@ -4633,6 +4647,74 @@ def _read_external_clip_inputs(
     )
 
 
+# M2e §8.3 の並列不変性ゲートが比較する artifact のフォーマット識別子。
+# **直列化仕様を変えたら必ずこの版も上げる**（同じ識別子で別 bytes を畳むと、
+# 別仕様で採った digest 同士が「一致しなかった」ではなく「別物として一致した／
+# しなかった」の区別を失う）。
+_EST_TRAJECTORY_DIGEST_MAGIC = b"m2e-est-trajectory/1\n"
+
+
+def _est_trajectory_sha256(
+    frame_times: "Tuple[float, ...]", est_freqs: "Tuple[float, ...]"
+) -> str:
+    """推定ピッチ軌跡 `(frame_times, est_freqs)` の canonical 直列化の sha256。
+
+    設計 §8.3 の並列不変性ゲート（`P=1` と `P=決定値` で**軌跡が完全一致**）が
+    比較する artifact。**精度値（RPA 等）の一致では不十分**——平均化・丸め・
+    フレーム集計を経た指標は、軌跡が違っても偶然一致しうる。
+
+    直列化仕様（`_EST_TRAJECTORY_DIGEST_MAGIC` = `m2e-est-trajectory/1`。テストで pin）:
+
+    1. マジック `b"m2e-est-trajectory/1\\n"`
+    2. フレーム数 `n` を `struct.pack("<Q", n)`
+    3. `i = 0..n-1` について `struct.pack("<dd", frame_times[i], est_freqs[i])`
+
+    **float の `repr()` / `json` 表現は使わない。** テキスト表現は Python 版・
+    プラットフォーム・locale で揺れうるため、同じ軌跡が別 digest を持ちうる
+    （`_serialize_wav_float32` が明示 struct pack を使うのと同じ流儀）。IEEE754
+    binary64 の little-endian bytes をそのまま畳む。
+
+    正規化と fail-closed:
+
+    - `-0.0` は `0.0` へ正規化する（bytes が違うが値は同じ。無声フレームの
+      符号ゆらぎで digest が割れるのを防ぐ）。
+    - 非有限値（NaN/inf）は拒否する。NaN は payload によって bytes が違い、
+      「同じ NaN」が別 digest を持ちうる——digest が黙って比較不能になるより、
+      その場で落ちる方がよい。
+    - 長さ不一致も拒否する（時刻と周波数の対応が壊れた軌跡を畳まない）。
+    """
+    if len(frame_times) != len(est_freqs):
+        raise ValueError(
+            f"_est_trajectory_sha256: frame_times {len(frame_times)} と est_freqs "
+            f"{len(est_freqs)} の長さが不一致; 時刻と周波数の対応が取れない軌跡を "
+            "digest にしない (fail-closed)"
+        )
+    chunks: List[bytes] = [_EST_TRAJECTORY_DIGEST_MAGIC, struct.pack("<Q", len(frame_times))]
+    for index, (t, f) in enumerate(zip(frame_times, est_freqs)):
+        t = float(t)
+        f = float(f)
+        if not (math.isfinite(t) and math.isfinite(f)):
+            raise ValueError(
+                f"_est_trajectory_sha256: frame {index} が非有限 (time={t!r}, freq={f!r}); "
+                "NaN/inf は bit 表現が一意でなく digest 比較が黙って壊れる (fail-closed)"
+            )
+        # `-0.0` → `0.0`（`x == 0.0` は `-0.0` にも真）。
+        chunks.append(struct.pack("<dd", 0.0 if t == 0.0 else t, 0.0 if f == 0.0 else f))
+    return hashlib.sha256(b"".join(chunks)).hexdigest()
+
+
+def _category_records_est_trajectory(category: str) -> bool:
+    """`est_trajectory_sha256` を row へ刻むカテゴリか（**M2e カテゴリに限る**）。
+
+    設計判断 D-1(b): 全カテゴリの row へ足すと、commit 済みの M2b/M2c 記録と
+    突き合わせるテストが期待値差分で割れ、そこで schema を広げて吸収する誘惑が
+    生じる（PR #71 型の churn）。M2e カテゴリだけに限定すれば既存 fixture は
+    バイト不変のまま、r4 で実 run に対して実ゲートを回せる。
+    """
+    spec = _CATEGORY_SPECS.get(category)
+    return bool(spec) and spec.get("bars_file") == "m2e_accuracy_bars.yaml"
+
+
 def _build_external_clip_row(
     clip_id: str,
     entry: Dict[str, Any],
@@ -4645,6 +4727,7 @@ def _build_external_clip_row(
     runner: RouteRunner,
     tmp_dir: Path,
     inputs: "Optional[_ExternalClipInputs]" = None,
+    record_est_trajectory: bool = False,
 ) -> Dict[str, Any]:
     """1 clip の外部素材を測り、per-clip row（設計 Memo M2c）を返す。
 
@@ -4652,6 +4735,11 @@ def _build_external_clip_row(
     セルチェックポイントが resume 可否判定のために先に読んでいる場合。
     `_read_external_clip_inputs` 参照）。省略時は従来どおりここで読む
     （挙動無変更 —— `--cell-store` 未使用の呼び出し経路は本引数を渡さない）。
+
+    `record_est_trajectory`（D-1(b)・M2e カテゴリのみ True）を立てると
+    `outcome == "measured"` の row に `est_trajectory_sha256` を刻む（§8.3 の
+    並列不変性ゲートの比較対象）。`unavailable` の row には**キーごと置かない**
+    ——測っていない軌跡に sentinel を置いて schema を広げない。
     """
     if inputs is None:
         inputs = _read_external_clip_inputs(
@@ -4732,6 +4820,14 @@ def _build_external_clip_row(
     row["metrics"] = metrics.to_dict()
     row["est_frame_count"] = len(est_freqs)
     row["est_voiced_frame_count"] = sum(1 for f in est_freqs if f > 0.0)
+    if record_est_trajectory:
+        # §8.3 の並列不変性ゲートが比較する artifact。**採点に使ったのと同じ
+        # snapshot**（`observation.frame_times` と `est_freqs`）から導く——別途
+        # 読み直すと「digest を採った bytes」と「実際に採点した bytes」が
+        # 食い違いうる。
+        row["est_trajectory_sha256"] = _est_trajectory_sha256(
+            tuple(observation.frame_times), tuple(est_freqs)
+        )
     row["source_model"] = observation.source_model
     for key, value in route_provenance.items():
         row[f"provenance_{key}"] = value
@@ -4801,6 +4897,8 @@ def _measure_or_resume_external_clip_row(
     cell_started_utc: List[str],
     cell_written_paths: List[str],
     cell_store_mismatches: "List[Dict[str, Any]]",
+    store_role: str = _CELL_STORE_ROLE_RUN,
+    record_est_trajectory: bool = False,
 ) -> Dict[str, Any]:
     """1 clip を測るか、設計 §8.7 のセル台帳から resume する。
 
@@ -4819,6 +4917,7 @@ def _measure_or_resume_external_clip_row(
             route=route,
             runner=runner,
             tmp_dir=tmp_dir,
+            record_est_trajectory=record_est_trajectory,
         )
 
     assert repeat_index is not None and env_digest is not None  # run_accuracy が保証済み
@@ -4847,6 +4946,7 @@ def _measure_or_resume_external_clip_row(
             env_digest=env_digest,
             tolerance_cents=tolerance_cents,
             est_voiced_floor=est_voiced_floor,
+            store_role=store_role,
         )
         if not mismatches:
             # 取得時刻を**セルと一緒に旅させる**。resume だけを見ている限り、run の
@@ -4892,6 +4992,7 @@ def _measure_or_resume_external_clip_row(
         runner=runner,
         tmp_dir=tmp_dir,
         inputs=inputs,
+        record_est_trajectory=record_est_trajectory,
     )
     elapsed_seconds = time.monotonic() - started
     cells_measured.append(clip_id)
@@ -4919,6 +5020,8 @@ def _measure_or_resume_external_clip_row(
             # 新しい bars digest を纏って resume される（採点値は旧閾値のまま）。
             "tolerance_cents": tolerance_cents,
             "est_voiced_floor": est_voiced_floor,
+            # このセルを産んだのは run か、evaluate の測り直しか（C2・PR #240）。
+            "store_role": store_role,
             "clip_row": row,
             # このセルの**測定を開始した**時刻。resume するとき run 側の起動時刻では
             # 立証できない「登録より後に測り始めた」を、セル自身に持たせる。
@@ -4947,6 +5050,7 @@ def _run_external_category(
     repeat_index: Optional[int] = None,
     env_digest: Optional[str] = None,
     workers: int = 1,
+    store_role: str = _CELL_STORE_ROLE_RUN,
 ) -> Dict[str, Any]:
     """カテゴリ V（外部素材）1 本の run report row を作る（設計 Memo M2c）。
 
@@ -4994,8 +5098,16 @@ def _run_external_category(
     cell_started_utc: List[str] = []
     cell_written_paths: List[str] = []
     cell_store_mismatches: "List[Dict[str, Any]]" = []
+    # D-1(b): 軌跡 digest は M2e カテゴリの row にだけ刻む（既存 M2b/M2c 記録は
+    # バイト不変）。
+    record_est_trajectory = _category_records_est_trajectory(category)
 
     clip_rows: List[Dict[str, Any]] = []
+    # **run phase の clip ループは逐次のまま据え置く**（設計判断 D-2）。並列化は
+    # evaluate phase の検証プロセス側だけに入れる——run 側のスケーリングは r5 の
+    # シャード地図（`m2e_r2_shard_map.yaml`）が担う設計であり、run の実行形態を
+    # 変えると r4 で校正する `T_*` の意味が変わる。
+    # `test_run_phase_clip_loop_stays_sequential_even_with_many_workers` が固定。
     for entry in sorted(entries, key=lambda e: e["id"]):
         clip_row = _measure_or_resume_external_clip_row(
             entry["id"],
@@ -5018,6 +5130,8 @@ def _run_external_category(
             cell_started_utc=cell_started_utc,
             cell_written_paths=cell_written_paths,
             cell_store_mismatches=cell_store_mismatches,
+            store_role=store_role,
+            record_est_trajectory=record_est_trajectory,
         )
         clip_rows.append(clip_row)
 
@@ -5338,6 +5452,60 @@ def _env_digest_thread_settings() -> Dict[str, Any]:
     except Exception:
         settings["torch_num_threads"] = _ENV_DIGEST_ABSENT_MARKER
     return settings
+
+
+def _apply_thread_pinning() -> Dict[str, Any]:
+    """スレッド 3 点固定（`OMP_NUM_THREADS` / `MKL_NUM_THREADS` / `torch.set_num_threads`）。
+
+    HANDOFF §3.1 の実測: 前 2 点だけでは足りない。3 点目を欠くと demucs の vocals
+    stem の `stem_sha256` が run 間で変わり（`residual_db` は 1e-6 dB で安定するのに
+    bytes は変わる）、ハーネスは `stem_sha256` を model stack 署名に含めるため
+    **stem アームの repeats が「別 model stack」として fail-closed になる**。
+
+    設計判断 D-3: **固定は run と evaluate で同一でなければならない。** 検証の子だけを
+    固定すると、固定していない run が産んだ row と bit 一致しなくなる——publish 条件は
+    「独立に測り直して bit 一致」なので、ここが割れると r6 が丸ごと通らない。
+
+    本関数は**実際に測るプロセス**（run phase と、`--pin-threads` を受けた測り直しの子）
+    だけが呼ぶ適用器である。評価器プロセスは何も測らないので呼ばない——代わりに
+    `_thread_pinning_contract_from_reports` が評価対象 report から契約を導き、
+    `_run_external_verification_in_fresh_process` が子へ伝えて子 report の申告と
+    再照合する（詳細は前者の docstring）。
+
+    env は**設定せず検査する**。OpenMP / MKL のスレッド数はランタイムのロード時に
+    確定するため、プロセス開始後に `os.environ` を書いても効かない——「設定した」と
+    report に書きながら実際には未固定で測る、という最悪の形になる。
+    """
+    unpinned = [
+        f"{name}={os.environ.get(name)!r}"
+        for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS")
+        if os.environ.get(name) != "1"
+    ]
+    if unpinned:
+        raise SystemExit(
+            "--pin-threads: プロセス環境の " + " / ".join(unpinned) + ' が "1" でない; '
+            "OpenMP/MKL のスレッド数はランタイムのロード時に確定するため、プロセス開始"
+            "後に設定しても効かない（固定したと名乗りながら未固定で測ることになる）。"
+            "`OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` を設定して起動し直すこと (fail-closed)"
+        )
+    pinning: Dict[str, Any] = {"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+    try:
+        import torch
+    except Exception:
+        # torch 非導入の環境（direct アームだけを回す構成・素の CI）では 3 点目は
+        # 存在しない。黙って省かず明示マーカーを残す（`_env_digest_*` と同じ流儀）。
+        pinning["torch_num_threads"] = _ENV_DIGEST_ABSENT_MARKER
+        return pinning
+    torch.set_num_threads(1)
+    observed = torch.get_num_threads()
+    if observed != 1:
+        raise SystemExit(
+            f"--pin-threads: torch.set_num_threads(1) 後も torch.get_num_threads() が "
+            f"{observed!r}; 固定が効いていない環境で stem の bit 一致を要求しても "
+            "publish 条件が満たせない (fail-closed)"
+        )
+    pinning["torch_num_threads"] = observed
+    return pinning
 
 
 def _runtime_code_package_names() -> "Tuple[str, ...]":
@@ -5684,6 +5852,7 @@ def _cell_record_mismatches(
     env_digest: str,
     tolerance_cents: float,
     est_voiced_floor: float,
+    store_role: str,
 ) -> "List[Dict[str, Any]]":
     """既存セルレコードと現在の入力/環境の不一致を列挙する（設計 §8.7 再開規則）。
 
@@ -5721,6 +5890,14 @@ def _cell_record_mismatches(
         # ので、閾値が変わったセルを resume すると**旧採点値に新 bars の pin が付く**。
         "tolerance_cents": tolerance_cents,
         "est_voiced_floor": est_voiced_floor,
+        # C2（PR #240 Codex P1）: **パスの分離は計算の独立を意味しない。**
+        # `store_A` を別ディレクトリへコピーすれば `--eval-cell-store` の経路検査は
+        # 通り、コピーされたレコードは上の同一性フィールドを**全部**満たす（鍵・入力・
+        # 環境・生成器 digest がそのまま一致する。とくに `repeat_index` は run の
+        # 0..n-1 と測り直しの 0..repeats-1 が正面から衝突する）。結果、検証の子が run の
+        # セルを resume し、publish が再び自己比較になる。役割をレコード自身に束縛して、
+        # evaluate のキャッシュで run 由来のレコードを resume させない。
+        "store_role": store_role,
     }
     mismatches: "List[Dict[str, Any]]" = []
     for field, expected in current.items():
@@ -5784,6 +5961,8 @@ def run_accuracy(
     cell_store: Optional[Path] = None,
     repeat_index: Optional[int] = None,
     workers: int = 1,
+    thread_pinning: Optional[Dict[str, Any]] = None,
+    cell_store_role: str = _CELL_STORE_ROLE_RUN,
 ) -> Dict[str, Any]:
     """カテゴリ S（合成正解つき）+ カテゴリ V（外部素材、M2c）の精度 run を実行し report dict を返す。
 
@@ -5807,8 +5986,18 @@ def run_accuracy(
     **既定 `None` では report に新フィールドが一切増えない**——`--cell-store`
     未使用の既存呼び出しはこの実装が入る前と bit 一致の report を返す契約。
     `repeat_index` は `cell_store` 指定時のみ必須（未指定・負値は fail-closed）。
-    `workers` はセルレコードへ記録するだけで実行そのものは変えない（本ハーネスは
-    単一プロセスのまま。設計 §8.3 の cost 再現性のための記録専用フィールド）。
+
+    `workers` は **run phase では宣言値（記録専用）**である（設計判断 D-2 の
+    非対称: evaluate phase では `evaluate_m2_bars` の実効並列度になる）。run の clip
+    ループは逐次のまま据え置く——run 側のスケーリングは r5 のシャード地図が担う設計で、
+    実行形態を変えると r4 で校正する `T_*` の意味が変わるため。セルレコードへは
+    設計 §8.3 の cost 再現性のために記録する。
+
+    `thread_pinning`（設計判断 D-3・`_apply_thread_pinning` の戻り値）を渡すと
+    `results["thread_pinning"]` として report に刻む。evaluate 側はこの申告を
+    **測り直しの契約として検証**し、子へ同じ条件を伝える（run と evaluate でスレッド
+    条件が食い違うと bit 一致が壊れる）。**既定 `None` では report に新フィールドが
+    一切増えない。**
     """
     if cell_store is not None and repeat_index is None:
         raise ValueError(
@@ -5996,6 +6185,7 @@ def run_accuracy(
                     repeat_index=repeat_index,
                     env_digest=env_digest_value,
                     workers=workers,
+                    store_role=cell_store_role,
                 )
                 if effective_cell_store is not None:
                     # `_run_external_category` は run 単位の bookkeeping をカテゴリ
@@ -6242,6 +6432,12 @@ def run_accuracy(
                     value, where="cell record", field="measurement_started_utc"
                 ),
             )
+    # 設計判断 D-3: スレッド固定は run と evaluate で同一でなければならない。
+    # `--pin-threads` を使った run はその事実を report に刻み、evaluate はこの申告を
+    # 契約として検証する（`_thread_pinning_contract_from_reports`）。
+    # `thread_pinning is None`（既定）の run は 1 バイトも変わらない。
+    if thread_pinning is not None:
+        results["thread_pinning"] = thread_pinning
     # M2e run では `--cell-store` の有無に依らず記録する（上の算出コメント参照）。
     if env_digest_value is not None:
         results["env_digest"] = env_digest_value
@@ -6805,6 +7001,9 @@ def _reverify_category_measurement(
     external_fixtures_raw: Optional[bytes] = None,
     m2e_bars_raw: Optional[bytes] = None,
     level: Optional[str] = None,
+    eval_cell_store: Optional[Path] = None,
+    workers: int = 1,
+    thread_pinning: Optional[Dict[str, Any]] = None,
 ) -> None:
     """`category` の kind に応じて S（specs 由来合成）/ V（外部素材、M2c）の測り直しへ振り分ける。
 
@@ -6812,6 +7011,11 @@ def _reverify_category_measurement(
     `_reverify_external_category_measurement` へ委譲する（`--external-manifest` が
     評価に渡されていなければ fail-closed）。`external_fixtures_raw` は評価器が実際に
     読んだ fixtures bytes（`bars`/`specs_raw` と同型の凍結複製用）。
+
+    C2/C3（`eval_cell_store` / `workers` / `thread_pinning`）は**外部素材カテゴリ
+    専用**である。S カテゴリの測り直しは合成 fixture の再生成なので 10 h 級の
+    コストを持たず、分離 store も並列化も要らない（触らない = 既存の挙動を 1 バイトも
+    変えない）。
     """
     category_spec = _CATEGORY_SPECS[category]
     if category_spec["kind"] == "external":
@@ -6838,6 +7042,9 @@ def _reverify_category_measurement(
             external_fixtures_path=external_fixtures_path,
             m2e_bars_raw=m2e_bars_raw,
             level=level,
+            eval_cell_store=eval_cell_store,
+            workers=workers,
+            thread_pinning=thread_pinning,
         )
         return
     _reverify_direct_or_fullstack_category_measurement(
@@ -6999,6 +7206,8 @@ def _run_external_verification_in_fresh_process(
     expected_specs_sha256: str,
     m2e_bars_path: Optional[Path] = None,
     level: Optional[str] = None,
+    eval_cell_store: Optional[Path] = None,
+    thread_pinning: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """外部素材カテゴリ（M2c）の測り直し 1 回分を新規プロセス（素の CLI run）で実行する。
 
@@ -7037,18 +7246,48 @@ def _run_external_verification_in_fresh_process(
         command += ["--m2e-bars", str(Path(m2e_bars_path).resolve())]
     if level is not None:
         command += ["--level", level]
-    # M2e §8.7 セルチェックポイント: この子プロセスへは **`--cell-store` を絶対に
-    # 渡さない**（意図的な省略・本機能で最も危険な穴）。ここは評価器が「report の
-    # metrics が実測結果であること」を独立に確かめるための測り直しであり、子が
-    # チェックポイントから resume すると、測り直しは「セルレコード（=提出 report を
-    # 生んだのと同じ測定）を自分自身と比較する」だけになり、bit 一致の検証が
-    # 恒常的に空虚な成功を返す publish 条件になる（fail-closed の意味が消える）。
-    # `command` に `--cell-store` を積む分岐は存在せず、`--workers` /
-    # `--repeat-index` も同様に渡さない——`test_reverification_child_never_receives_cell_store`
-    # がこの不在を固定する。
+    # C2（store 分離・rev.6 §8.9.2-(1)）: この子プロセスへは **run が使った
+    # `--cell-store`（= `store_A`）を絶対に渡さない**（本機能で最も危険な穴）。
+    # ここは評価器が「report の metrics が実測結果であること」を独立に確かめるための
+    # 測り直しであり、子が run のチェックポイントから resume すると、測り直しは
+    # 「セルレコード（= 提出 report を生んだのと同じ測定）を自分自身と比較する」
+    # だけになり、bit 一致の検証が恒常的に空虚な成功を返す publish 条件になる。
+    #
+    # **独立性は「store を分ける」ことで保たれるのであって、「再開できない」ことで
+    # 保たれるのではない。** 渡してよいのは evaluate 専用の `store_B`
+    # （`--eval-cell-store`）だけで、`store_A` と重ならないことは `main()` の CLI 検査が
+    # resolve 後のパス関係で fail-closed に確かめている（同一パス / 入れ子の両方向）。
+    # `store_A` を積む分岐はこの関数に存在しない——
+    # `test_reverification_child_never_receives_the_run_cell_store` がその不在と、
+    # `store_B` が渡ることの両方を固定する。
+    if eval_cell_store is not None:
+        command += [
+            "--cell-store",
+            str(Path(eval_cell_store).resolve()),
+            # セル鍵の `repeat_index` は**この測り直しの通し番号**。repeats 間で別セルに
+            # なることで、「別 repeat の記録を誤って再生する」経路が鍵→パスの写像の
+            # 段階で消える（`_cell_store_record_path`）。
+            "--repeat-index",
+            str(index),
+            # C2（PR #240 Codex P1）: 子が書くセルへ **evaluate 役割**を刻ませる。
+            # `store_B` が `store_A` のコピーであっても、run 由来のレコードは役割の
+            # 不一致で resume されず測り直される——パスの分離だけでは計算の独立を
+            # 保証できないため、独立性をレコード自身に束縛する。
+            "--cell-store-role",
+            _CELL_STORE_ROLE_EVALUATE,
+        ]
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPYCACHEPREFIX"] = str(tmp_dir / f"pyc-fresh-ext-{index}")
+    # C3 + D-3: 並列に子を起こすなら 3 点固定は必須（HANDOFF §3.1）。env 2 点は
+    # **子の起動前**に置く（プロセス開始後の設定は OpenMP/MKL に効かない）。3 点目
+    # （`torch.set_num_threads(1)`）は子自身が `--pin-threads` で適用し、その事実を
+    # report の `thread_pinning` に刻む——親はそれを下で照合する（宣言だけで検証
+    # されない値を作らない）。
+    if thread_pinning is not None:
+        env["OMP_NUM_THREADS"] = "1"
+        env["MKL_NUM_THREADS"] = "1"
+        command += ["--pin-threads"]
     proc = subprocess.run(command, capture_output=True, text=True, env=env)
     if proc.returncode != 0 or not report_path.is_file():
         tail = " / ".join((proc.stderr or "").strip().splitlines()[-3:])
@@ -7061,6 +7300,13 @@ def _run_external_verification_in_fresh_process(
     _require_fresh_process_report_provenance(
         verification, category, expected_specs_sha256=expected_specs_sha256
     )
+    if thread_pinning is not None and verification.get("thread_pinning") != thread_pinning:
+        raise RuntimeError(
+            f"evaluate_m2_bars: category {category!r} の測り直し {index} 回目の子 report の "
+            f"thread_pinning {verification.get('thread_pinning')!r} が、評価対象 report から "
+            f"導いた契約 {thread_pinning!r} と不一致; スレッド条件が食い違う測定を同じ測定の "
+            "再現と数えない（D-3: 固定は run と evaluate で同一でなければならない）(fail-closed)"
+        )
     row = verification.get("categories", {}).get(category)
     if not isinstance(row, dict):
         raise RuntimeError(
@@ -7083,6 +7329,9 @@ def _reverify_external_category_measurement(
     external_fixtures_path: Path,
     m2e_bars_raw: Optional[bytes] = None,
     level: Optional[str] = None,
+    eval_cell_store: Optional[Path] = None,
+    workers: int = 1,
+    thread_pinning: Optional[Dict[str, Any]] = None,
 ) -> None:
     """外部素材カテゴリ（M2c）を評価器自身が `repeats` 回独立に測り直す。
 
@@ -7105,6 +7354,11 @@ def _reverify_external_category_measurement(
         raise ValueError(
             f"_reverify_external_category_measurement: repeats {repeats!r} が 2 未満; "
             "決定論確認は n>=2 の独立実行を要件とする (fail-closed)"
+        )
+    if workers < 1:
+        raise ValueError(
+            f"_reverify_external_category_measurement: workers {workers!r} が 1 未満; "
+            "設計 §8.3 の並列度 P は 1 以上の整数のみ (fail-closed)"
         )
     if external_manifest_path is None:
         raise RuntimeError(
@@ -7141,14 +7395,22 @@ def _reverify_external_category_measurement(
             extra_run_kwargs["m2e_bars_path"] = m2e_bars_copy
         if level is not None:
             extra_run_kwargs["level"] = level
-        # M2e §8.7: `cell_store` / `repeat_index` は意図的に `extra_run_kwargs` へ
-        # 積まない（in-process 版 `verification_runner is not None` 経路。fresh
-        # process 経路の同じ規律は `_run_external_verification_in_fresh_process`
-        # docstring 参照）。測り直しは提出 report と独立に測定した bit 一致を
-        # publish 条件にするための機構であり、チェックポイントから resume すると
-        # 「レコードを自分自身と比較する」だけになって検証が空虚になる。
-        for index in range(repeats):
+        # C2（rev.6 §8.9.2-(1)）: run が使った `store_A` は**この経路にも一切現れない**。
+        # `extra_run_kwargs` へ積むのは evaluate 専用の `store_B`（`eval_cell_store`）
+        # だけで、`repeat_index` は測り直しの通し番号を使う。測り直しが run の
+        # チェックポイントから resume できると「レコードを自分自身と比較する」だけに
+        # なって検証が空虚になる——それを防ぐのは store の分離であって、再開不能性
+        # ではない（fresh process 経路の同じ規律は
+        # `_run_external_verification_in_fresh_process` docstring 参照）。
+        def _verify_once(index: int) -> Dict[str, Any]:
             if verification_runner is not None:
+                run_kwargs = dict(extra_run_kwargs)
+                if eval_cell_store is not None:
+                    run_kwargs["cell_store"] = eval_cell_store
+                    run_kwargs["repeat_index"] = index
+                    run_kwargs["cell_store_role"] = _CELL_STORE_ROLE_EVALUATE
+                if thread_pinning is not None:
+                    run_kwargs["thread_pinning"] = thread_pinning
                 verification = run_accuracy(
                     categories=(category,),
                     route_runner=verification_runner,
@@ -7156,7 +7418,7 @@ def _reverify_external_category_measurement(
                     bars_path=bars_path,
                     external_manifest_path=external_manifest_path,
                     external_fixtures_path=fixtures_copy,
-                    **extra_run_kwargs,
+                    **run_kwargs,
                 )
                 vrow = verification["categories"][category]
             else:
@@ -7171,6 +7433,8 @@ def _reverify_external_category_measurement(
                     expected_specs_sha256=expected_specs_sha256,
                     m2e_bars_path=m2e_bars_copy,
                     level=level,
+                    eval_cell_store=eval_cell_store,
+                    thread_pinning=thread_pinning,
                 )
             if vrow.get("outcome") != "measured":
                 raise RuntimeError(
@@ -7185,7 +7449,35 @@ def _reverify_external_category_measurement(
                     f"提出 report の {expected_manifest_sha256!r} と不一致; 別 manifest を "
                     "測った検証 run を同じ測定の再現と数えない (fail-closed)"
                 )
-            verification_rows.append(vrow)
+            return vrow
+
+        # C3（rev.6 §8.9.2-(2)）: 検証の子を**最大 `workers` 本まで同時に起こす**。
+        # publish が要求するのは「fresh process であること」と「run の結果を読まない
+        # こと」であって、逐次であることではない。
+        #
+        # `ProcessPoolExecutor` は使わない——測定は既に `subprocess.run` の別プロセスで
+        # 走っており、in-process の worker プロセスを挟むと fresh-process 契約
+        # （`_require_fresh_process_report_provenance` が検査する「素の CLI 実行」）が
+        # 曖昧になる。ここのスレッドは**子の完了を待つだけ**で、測定そのものは一切
+        # 実行しない。`max_workers=P` が同時起動数の上限をそのまま与える。
+        #
+        # 結果は `index` 順の固定席へ書き戻す（完了順に append すると `P` によって
+        # 順序が変わり、下の bit 一致比較・エラー選択が `P` 依存になる）。
+        slots: "List[Optional[Dict[str, Any]]]" = [None] * repeats
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_verify_once, index) for index in range(repeats)]
+            failures: "List[BaseException]" = []
+            for index, future in enumerate(futures):
+                # `as_completed` ではなく **index 順**に回収する。複数の測り直しが
+                # 失敗したとき、どのエラーが表に出るかが実行タイミングで変わっては
+                # ならない（`P` に依存する量を作らない）。
+                try:
+                    slots[index] = future.result()
+                except BaseException as exc:  # noqa: BLE001 — 最小 index の失敗を再送出
+                    failures.append(exc)
+            if failures:
+                raise failures[0]
+        verification_rows.extend(row for row in slots if row is not None)
     _require_homogeneous_model_stack(category, rows + verification_rows)
     verification_clip_lists = [vrow["clips"] for vrow in verification_rows]
     if len({json.dumps(c, sort_keys=True) for c in verification_clip_lists}) > 1:
@@ -8001,6 +8293,113 @@ def _require_matching_generator_code(reports: List[Dict[str, Any]]) -> str:
     return digests[0]
 
 
+def _require_eval_cell_store_disjoint_from_run_stores(
+    reports: "List[ReportArtifact]", eval_cell_store: Path
+) -> None:
+    """C2: `store_B` が**提出 report を産んだ `store_A`** と重ならないことを要求する。
+
+    CLI の `--cell-store` × `--eval-cell-store` 検査だけでは足りない（PR #240 Codex P1）:
+    evaluate phase は `--cell-store` そのものを拒否するので、あの条件分岐は**本番の
+    呼び出しでは一度も走らない**。一方 run report は `cell_store_relative` を刻んでいる
+    ので、`--eval-cell-store` にその値を渡すことは実際にできてしまう——そうすると
+    測り直しの子は鍵 `(category, level, entry_id, repeat_index)` が一致する run のセルを
+    そのまま resume し、「独立に測り直して bit 一致」の検証が**自分自身との比較**に
+    化ける（F2 で塞いだ穴が別の入口から開く）。
+
+    したがって関所は「CLI に 2 つの引数が並んだとき」ではなく「評価対象 report が
+    名乗る store と重なるとき」に置く。比較は **resolve 後**（`..`・symlink で
+    抜けられる形にしない）。
+
+    `cell_store_relative` が `None`（repo 外の store で走った run）は、重なりを
+    立証も反証もできないので **fail-closed** にする——「復元できないから素通し」は
+    このゲートを名目だけにする。
+    """
+    eval_root = Path(eval_cell_store).resolve()
+    for index, report in enumerate(reports):
+        if "cell_store_relative" not in report:
+            continue  # `--cell-store` を使わずに測った run（重なる store が存在しない）
+        declared = report.get("cell_store_relative")
+        if not isinstance(declared, str) or not declared:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{index}] は run 用セルストアを使ったと名乗って "
+                f"いるが、そのパスを復元できない（cell_store_relative={declared!r}; repo 外の "
+                "store で走った run）; --eval-cell-store がその store と重なっていないことを "
+                "立証できないまま測り直しを起こさない (fail-closed)"
+            )
+        run_root = (ROOT / declared).resolve()
+        if run_root == eval_root:
+            raise ValueError(
+                f"evaluate_m2_bars: --eval-cell-store {eval_root} が reports[{index}] を産んだ "
+                f"run のセルストアと同じパス; 測り直しの子が run のセルをそのまま resume し、"
+                "「独立に測り直して bit 一致」の検証が自分自身との比較に化ける (fail-closed)"
+            )
+        if run_root in eval_root.parents or eval_root in run_root.parents:
+            raise ValueError(
+                f"evaluate_m2_bars: --eval-cell-store {eval_root} と reports[{index}] を産んだ "
+                f"run のセルストア {run_root} が入れ子になっている; 独立であるべき 2 つの計算が "
+                "同じ木を共有し、走査・掃除で互いを汚染しうる (fail-closed)"
+            )
+
+
+def _thread_pinning_contract_from_reports(
+    reports: "List[ReportArtifact]",
+) -> Dict[str, Any]:
+    """設計判断 D-3: 評価対象の run が名乗るスレッド固定を検証し、**測り直しの契約**として返す。
+
+    `--pin-threads` の下では測り直しの子が `OMP=1 / MKL=1 / torch=1` で走る。run 側が
+    固定されていなければ、その子が産む row は提出 row と bit 一致しない——publish 条件が
+    「独立に測り直して bit 一致」である以上、ここが割れると帯の本測定が丸ごと通らない
+    （HANDOFF §3.1: 3 点目を欠くと stem の `stem_sha256` が run 間で変わる）。
+
+    契約は**評価対象の report から導く**（評価器が自分で `_apply_thread_pinning()` を
+    呼んで比べるのではない）。理由は 2 つ:
+
+    - 束縛時点と使用時点を一致させる。子へ渡すべき条件は「提出 row を産んだ run の
+      条件」であって、評価器プロセスのたまたまの状態ではない。
+    - 評価器自身は**何も測らない**。ここで固定のために torch を import すると、評価器
+      プロセスの import 集合が動き、`_require_scorer_compile_observation_covers_imported_modules`
+      など「素の CLI 実行であること」を検査する自己ゲート群を余計に揺らす。
+
+    導いた契約は `_run_external_verification_in_fresh_process` が子へ渡し、**子 report の
+    申告と再照合する**——「宣言されているが検証されていない」値を作らない。
+    """
+    declarations: "List[Any]" = []
+    for index, report in enumerate(reports):
+        declared = report.get("thread_pinning")
+        if declared is None:
+            raise ValueError(
+                f"evaluate_m2_bars: --pin-threads で評価しているが reports[{index}] が "
+                "thread_pinning を名乗っていない; スレッド未固定の run が産んだ row は "
+                "固定済みの測り直しと bit 一致しないため publish 条件を満たせない "
+                "（D-3: 固定は run と evaluate で同一でなければならない）(fail-closed)"
+            )
+        declarations.append(declared)
+    contract = declarations[0]
+    for index, declared in enumerate(declarations):
+        if declared != contract:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{index}] の thread_pinning {declared!r} が "
+                f"reports[0] の {contract!r} と不一致; 別スレッド条件で測った run を同じ "
+                "測定の反復として評価しない (fail-closed)"
+            )
+    # **形も要求する。** 「固定した」と名乗るだけの申告（`OMP=8` など）を契約として
+    # 子へ配ると、固定されていない条件が「固定として検証済み」に化ける。
+    if contract.get("OMP_NUM_THREADS") != "1" or contract.get("MKL_NUM_THREADS") != "1":
+        raise ValueError(
+            f"evaluate_m2_bars: report の thread_pinning {contract!r} が"
+            '3 点固定の形をしていない（OMP_NUM_THREADS / MKL_NUM_THREADS がともに "1" '
+            "であること）; "
+            "固定を名乗るだけの申告を測り直しの契約にしない (fail-closed)"
+        )
+    if contract.get("torch_num_threads") not in (1, _ENV_DIGEST_ABSENT_MARKER):
+        raise ValueError(
+            f"evaluate_m2_bars: report の thread_pinning の torch_num_threads "
+            f"{contract.get('torch_num_threads')!r} が 1 でも「未導入」マーカーでもない; "
+            "3 点目が効いていない run の row を固定済みとして扱わない (fail-closed)"
+        )
+    return copy.deepcopy(contract)
+
+
 def evaluate_m2_bars(
     reports: "List[ReportArtifact]",
     bars: BarsArtifact,
@@ -8011,6 +8410,9 @@ def evaluate_m2_bars(
     m2e_bars_path: Path = M2E_BARS_PATH,
     external_manifest_path: Optional[Path] = None,
     external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
+    eval_cell_store: Optional[Path] = None,
+    workers: int = 1,
+    pin_threads: bool = False,
 ) -> Dict[str, Any]:
     """n>=`repeats_min` の run report に凍結バーを機械適用する（設計 §4/§6）。
 
@@ -8048,6 +8450,24 @@ def evaluate_m2_bars(
       帯の判定を出さない」を要求する一方、1 回の evaluate は構造上 1 水準しか
       見ないため、このコールから census を立証できない（帯の判定は r6/r7 の
       水準横断集計の仕事）。`gate_level` 以外は従来どおり `level_record_only`。
+
+    C2（`eval_cell_store` = `store_B`・rev.6 §8.9.2-(1)）: 与えると外部素材カテゴリの
+    測り直しが**evaluate 専用の**セルストアへチェックポイントし、中断から復帰できる。
+    run が使った `store_A` はこの経路に一切現れない（重なりは CLI が resolve 後の
+    パス関係で fail-closed に拒否する）。**publish の独立性は store を分けることで
+    保たれるのであって、復帰できないことで保たれるのではない。**
+
+    C3（`workers` = `P`・rev.6 §8.9.2-(2)）: 外部素材カテゴリの測り直しの子プロセスを
+    最大 `P` 本まで同時に起こす。設計判断 D-2 の非対称に注意——`--workers` は
+    **run phase では宣言値（記録のみ）/ evaluate phase では実効並列度**である。
+
+    D-3（`pin_threads`）: 立てると (a) 評価対象の全 report が**同じ**スレッド固定を
+    名乗ることを要求し（`_thread_pinning_contract_from_reports`）、(b) その契約を測り直しの
+    子へ伝え、(c) 子 report の申告と再照合する。run と evaluate でスレッド条件が食い違うと
+    bit 一致（= publish 条件）が壊れるため。**評価器自身は何も測らないので、評価器の
+    プロセスにスレッド固定を適用することはしない**（余計な import で自己ゲートを揺らさない）。
+
+    **3 つとも既定（`None`/`1`/`False`）では verdict は 1 バイトも変わらない。**
     """
     # digest と parsed data の束縛を検証してから閾値を読む。素の dict（手組み・load 後に
     # 変異させた mapping）は受理しない——閾値を書き換えたまま元の凍結 digest を名乗る
@@ -8428,6 +8848,31 @@ def evaluate_m2_bars(
         verdict["m2e_bars_registration_attestation"] = m2e_registration_attestation
         verdict["level"] = m2e_level
 
+    # C2: 測り直しを起こす前に、`store_B` が提出 report を産んだ `store_A` と重なって
+    # いないことを確かめる（CLI の 2 引数比較は evaluate では走らないため、ここが
+    # 本番で効く唯一の関所・PR #240 Codex P1）。
+    if eval_cell_store is not None:
+        _require_eval_cell_store_disjoint_from_run_stores(reports, eval_cell_store)
+    # D-3: 測り直しを起こす前に、提出 report のスレッド条件を契約として確定させる
+    # （高価な測り直しを走らせてから bit 不一致で落ちるより、原因が明示的）。
+    thread_pinning = _thread_pinning_contract_from_reports(reports) if pin_threads else None
+    # C2/C3: 既定（`None`/`1`/`False`）では verdict に 1 バイトも増やさない。
+    if eval_cell_store is not None or workers != 1 or thread_pinning is not None:
+        evaluate_execution: Dict[str, Any] = {"workers": workers}
+        # **黙って頭打ちにしない**（PR #240 Codex P1）。1 カテゴリの測り直しは
+        # `repeats_min` 本の子しか起こさないので、`workers > repeats_min` の分は
+        # 効かない。宣言値だけを載せると「P=4 で回した」と読めてしまうため、
+        # 実効値も併記する（どちらも宣言・導出された構成値であって実測量ではない）。
+        evaluate_execution["effective_workers_per_category"] = min(workers, repeats_min)
+        if eval_cell_store is not None:
+            evaluate_execution["eval_cell_store_relative"] = _repo_relative_path(eval_cell_store)
+        if thread_pinning is not None:
+            evaluate_execution["thread_pinning"] = thread_pinning
+        # ここに載せるのは**宣言した実行構成**だけである（`P` に依存して変わる
+        # 実測量——所要時間・スケーリング比——は verdict に載せない。§8.3 の飽和
+        # 判定と混同されるため、効果は別途 `P` を振った実測比で示す）。
+        verdict["evaluate_execution"] = evaluate_execution
+
     for category in all_categories:
         rows = [report["categories"][category] for report in reports if category in report["categories"]]
         outcomes = {row["outcome"] for row in rows}
@@ -8516,6 +8961,9 @@ def evaluate_m2_bars(
             external_fixtures_raw=external_fixtures_raw,
             m2e_bars_raw=m2e_bars.raw if is_m2e and m2e_bars is not None else None,
             level=m2e_level if is_m2e else None,
+            eval_cell_store=eval_cell_store,
+            workers=workers,
+            thread_pinning=thread_pinning,
         )
 
         # 判定規律（設計 §6.2・fail-closed）: **`level != gate_level` の run に
@@ -8813,15 +9261,122 @@ def main() -> int:
         "の一部）。--cell-store 未指定時に渡すのは fail-closed で拒否する",
     )
     parser.add_argument(
+        "--eval-cell-store",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="rev.6 §8.9.2-(1) の **evaluate 専用**セルストア（store_B・opt-in）。"
+        "測り直しの子プロセスがここへチェックポイントし、中断から復帰できるようになる。"
+        "--cell-store（store_A = run 用）とは独立で、同一パス・一方が他方の配下は "
+        "fail-closed。run phase（--evaluate なし）で渡すのも fail-closed。"
+        "未指定時は verdict に新フィールドが一切増えない（挙動無変更）",
+    )
+    parser.add_argument(
+        "--cell-store-role",
+        default=_CELL_STORE_ROLE_RUN,
+        choices=list(_CELL_STORE_ROLES),
+        help="このプロセスが書くセルレコードの役割（既定 run）。**evaluate は "
+        "測り直しの子プロセス専用**で、評価器が自動で付ける——手で渡すものではない。"
+        "パスの分離だけでは計算の独立を保証できない（store_A をコピーすれば経路検査は "
+        "通り、同一性フィールドも全部一致する）ため、役割をレコード自身に束縛し、"
+        "evaluate のキャッシュで run 由来のレコードを resume しない (C2)",
+    )
+    parser.add_argument(
+        "--pin-threads",
+        action="store_true",
+        help="スレッド 3 点固定（OMP_NUM_THREADS / MKL_NUM_THREADS / "
+        "torch.set_num_threads）。設計判断 D-3: run と evaluate で**同じ**条件でなければ "
+        "測り直しの bit 一致（= publish 条件）が壊れる。run phase ではこのプロセスに固定を "
+        "適用し report の thread_pinning に刻む（env 2 点は**起動前に**設定されている "
+        "必要がある。未設定は fail-closed —— プロセス開始後の設定は OpenMP/MKL に効かない）。"
+        "evaluate phase は何も測らないので自プロセスには適用せず、評価対象 report が名乗る "
+        "固定を契約として検証し、測り直しの子へ伝えて子 report の申告と再照合する",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
         metavar="P",
-        help="設計 §8.3 の並列度 P。実行そのものは変えない（本ハーネスは単一プロセス "
-        "のまま）——--cell-store 使用時にセルレコードへコスト再現用に記録するだけ",
+        help="設計 §8.3 の並列度 P。**run phase と evaluate phase で意味が非対称**"
+        "（設計判断 D-2）: run phase では宣言値で実行そのものは変えない（clip ループは "
+        "逐次のまま。run 側のスケーリングは r5 のシャード地図が担う）——--cell-store "
+        "使用時にセルレコードへコスト再現用に記録するだけ。evaluate phase では"
+        "**実効並列度**で、外部素材カテゴリの測り直しの子プロセスを最大 P 本まで同時に "
+        "起こす。**ただし 1 カテゴリあたりの子は repeats_min 本しかない**ので、実効値は "
+        "min(P, repeats_min) で頭打ちになる（凍結 repeats_min=2 のとき P>2 は効かない。"
+        "repeat より下の粒度＝clip/シャード単位の並列化は本実装の範囲外・別ブリーフ）。"
+        "verdict の evaluate_execution.effective_workers_per_category に実効値を刻む",
     )
     args = parser.parse_args()
     _require_out_outside_git_metadata(args.out)
+    if args.workers < 1:
+        raise SystemExit(f"--workers {args.workers} は 1 以上の整数のみ許可する")
+    # `--cell-store-role` は run phase のセル書き込みにしか意味が無い。測っていない
+    # 次元を名乗らせない規律（`--repeat-index` と同型）。
+    if args.cell_store_role != _CELL_STORE_ROLE_RUN:
+        if args.evaluate:
+            raise SystemExit(
+                "--cell-store-role は run phase 専用（evaluate 自身はセルを書かない; "
+                "測り直しの子へは評価器が自動で付ける）"
+            )
+        if args.cell_store is None:
+            raise SystemExit(
+                "--cell-store-role は --cell-store と併用したときのみ有効"
+                "（セルを書かない run に役割を名乗らせない）"
+            )
+    # store 分離（C2）の関係検査は**フェーズ判定より先に**行う。フェーズ別の拒否
+    # （run 専用 / evaluate 専用）を先に通すと、2 つの store が重なった指定が
+    # 「フェーズが違う」というだけの理由で弾かれ、重なりそのものは一度も検査されない。
+    if args.eval_cell_store is not None:
+        eval_store_root = Path(args.eval_cell_store).resolve()
+        if args.cell_store is not None:
+            # **resolve 後**に比較する（symlink・相対パス・`..` で素通りする形にしない）。
+            run_store_root = Path(args.cell_store).resolve()
+            if run_store_root == eval_store_root:
+                raise SystemExit(
+                    f"--eval-cell-store {args.eval_cell_store} が --cell-store "
+                    f"{args.cell_store} と同じパス（resolve 後 {eval_store_root}）を指している; "
+                    "evaluate が run のチェックポイントから resume できると、測り直しは "
+                    "「提出 report を生んだのと同じ測定を自分自身と比較する」だけになり、"
+                    "publish の独立性が消える (fail-closed)"
+                )
+            if run_store_root in eval_store_root.parents:
+                raise SystemExit(
+                    f"--eval-cell-store {args.eval_cell_store} が --cell-store "
+                    f"{args.cell_store} の配下にある; 木が入れ子だと run 用と evaluate 用の "
+                    "セルが同じ走査・掃除の対象になり、独立であるべき 2 つの計算が"
+                    "互いを汚染しうる (fail-closed)"
+                )
+            if eval_store_root in run_store_root.parents:
+                raise SystemExit(
+                    f"--cell-store {args.cell_store} が --eval-cell-store "
+                    f"{args.eval_cell_store} の配下にある; 木が入れ子だと run 用と evaluate 用の "
+                    "セルが同じ走査・掃除の対象になり、独立であるべき 2 つの計算が"
+                    "互いを汚染しうる (fail-closed)"
+                )
+        if not args.evaluate:
+            raise SystemExit(
+                "--eval-cell-store は evaluate phase 専用（run phase のチェックポイントは "
+                "--cell-store 側。run が evaluate 用 store へ書けると、測り直しが自分の "
+                "検証対象と同じセルを読むことになり store 分離の意味が消える）"
+            )
+        # `--cell-store` 側と同型の保護: verdict がセルチェックポイントを上書きすると、
+        # 成功した evaluate が自分の再利用資産を消し、次回は高価な再測定になる。
+        out_resolved = Path(args.out).resolve()
+        if out_resolved == eval_store_root or eval_store_root in out_resolved.parents:
+            raise SystemExit(
+                f"--out {args.out} が --eval-cell-store {args.eval_cell_store} 配下にある; "
+                "verdict でセルチェックポイントを上書きしない (fail-closed)"
+            )
+    # D-3: `--pin-threads` の意味はフェーズで役割が分かれる（条件そのものは同一）。
+    #   run phase      : このプロセスに 3 点固定を**適用**し、その事実を report に刻む。
+    #   evaluate phase : 何も測らないので自プロセスには適用しない。評価対象 report が
+    #                    名乗る固定を**契約として検証**し、測り直しの子へ伝えて子 report の
+    #                    申告と再照合する（`evaluate_m2_bars` / D-3 の実装ノート）。
+    # 評価器で torch を import しないのは、`_require_scorer_compile_observation_covers_
+    # imported_modules` などの「素の CLI 実行であること」を問う自己ゲートを、測定に
+    # 関係しない import で揺らさないため。
+    thread_pinning = _apply_thread_pinning() if (args.pin_threads and not args.evaluate) else None
 
     if args.evaluate:
         if args.categories:
@@ -8865,6 +9420,26 @@ def main() -> int:
                 "manifest+fixtures+member / provenance 対象のソース）と同じパスを指している; "
                 "入力を verdict で上書きしない (fail-closed)"
             )
+        # 同じ保護を **`--eval-cell-store` の木にも**課す（PR #240 Codex P1）。
+        # 上の検査は `--out` という 1 本のパスしか見ないが、測り直しの子は `store_B` 配下へ
+        # `cell_<digest>.json` を **atomic replace** で書く。保護入力がその木の中にあると、
+        # 名前が偶然一致した入力を子が置き換えうる——チェックポイントの公開が自分の
+        # 証拠を壊す経路になる。子を起こす前に、木ごと重なりを拒否する
+        # （prospective な出力名を列挙するのではなく、保護入力が木の中に無いことを要求
+        # する——出力名の集合はセル鍵の数だけあり、列挙は関所として脆い）。
+        if args.eval_cell_store is not None:
+            eval_store_root = Path(args.eval_cell_store).resolve()
+            inside = sorted(
+                str(p) for p in protected
+                if p == eval_store_root or eval_store_root in p.parents
+            )
+            if inside:
+                raise SystemExit(
+                    f"--eval-cell-store {args.eval_cell_store} の木に評価入力が含まれている "
+                    f"（{inside[:3]}{' ほか' if len(inside) > 3 else ''}）; 測り直しの子は "
+                    "この木へ cell_<digest>.json を atomic replace で書くため、名前の一致した "
+                    "入力を置き換えて自分の証拠を壊しうる (fail-closed)"
+                )
 
         # read → hash → parse を `load_report` の 1 操作にまとめる（read と hash の間に
         # 差し替えが入る TOCTOU を避け、pin と評価対象を束縛する）。pin は
@@ -8884,6 +9459,9 @@ def main() -> int:
             m2e_bars_path=args.m2e_bars,
             external_manifest_path=args.external_manifest,
             external_fixtures_path=args.external_fixtures,
+            eval_cell_store=args.eval_cell_store,
+            workers=args.workers,
+            pin_threads=args.pin_threads,
         )
         _atomic_write_text(args.out, json.dumps(verdict, indent=2, sort_keys=True))
         print(f"wrote verdict to {args.out}")
@@ -8968,6 +9546,8 @@ def main() -> int:
         m2e_bars_path=args.m2e_bars,
         level=args.level,
         workers=args.workers,
+        thread_pinning=thread_pinning,
+        cell_store_role=args.cell_store_role,
         **run_kwargs,
     )
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))

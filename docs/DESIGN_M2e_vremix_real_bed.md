@@ -915,6 +915,125 @@ CPU（AVX2 / AVX-512 等）で走った 2 つのセルが、同一の `env_diges
 させる**必要がある（F2 と同じ論法）。既存の pin（`bed_window_sha256` 等）はハッシュ対象
 そのものが変わらないため無効化されない。`env_digest` の値は変わるので、変更日を記録する。
 
+#### 8.9.4 実装ノート（2026-08-02・C2/C3 landing 時の設計判断 D-1/D-2/D-3）
+
+§8.9.2 の 2 点（store 分離・evaluate 並列化）を実装するにあたって確定させた 3 つの
+判断を、根拠つきで記録する。**§8.9.1〜8.9.3 の本文・凍結値・閾値は変更していない。**
+
+**D-1. 並列不変性ゲートが比較する artifact = `est_trajectory_sha256`（M2e row 限定）。**
+§8.3 のゲートは「`P=1` と `P=決定値` で**推定ピッチ軌跡が完全一致**」を要求するが、
+実装には比較対象そのものが無かった（row には `est_frame_count` /
+`est_voiced_frame_count` と指標値しか無い）。**精度値の一致では代替しない**——平均化・
+丸め・フレーム集計を経た指標は、軌跡が違っても偶然一致しうる。
+
+採用: `_est_trajectory_sha256`（`scripts/run_melody_accuracy.py`）を新設し、
+**M2e カテゴリ（`bars_file == m2e_accuracy_bars.yaml`）の `outcome == "measured"` の
+clip row にだけ**刻む。全カテゴリへ足す案は却下——既存 M2b/M2c の commit 済み記録と
+突き合わせるテストが期待値差分で割れ、そこで schema を広げて吸収する誘惑が生じる。
+テスト専用機構に留める案も却下——r4（r2-0）は**実 run に対して**ゲートを回す手順で
+あり、永続フィールドが無ければ回せない。`unavailable` の row には**キーごと置かない**
+（測っていない軌跡に sentinel を置かない）。
+
+直列化仕様（`m2e-est-trajectory/1`。docstring とテストで pin）: マジック →
+`struct.pack("<Q", n)` → 各フレーム `struct.pack("<dd", time, freq)`。**float の
+`repr()` / JSON 表現は使わない**（テキスト表現はプラットフォームで揺れうる）。
+`-0.0` は `0.0` へ正規化し、非有限値と長さ不一致は fail-closed。
+
+**D-2. `--workers` は run phase と evaluate phase で意味が非対称である。**
+C2/C3 以前の `--workers` は**両フェーズで記録専用**だった（help: 「実行そのものは
+変えない」）。C3 で **evaluate phase のみ実効並列度**にし、**run phase は逐次のまま
+据え置く**。理由: run 側のスケーリングは §8.5 のシャード地図（`m2e_r2_shard_map.yaml`）
+が担う設計であり、run の実行形態を今変えると r4 で校正する `T_*` の意味が変わる。
+この非対称は help 文・`run_accuracy` / `evaluate_m2_bars` の docstring・
+`_run_external_category` のコメントに明記し、run が逐次であることは
+`test_run_phase_clip_loop_stays_sequential_even_with_many_workers` が pin する。
+
+**宣言された限界**（PR #240 Codex P1 で顕在化）: 1 カテゴリの測り直しは `repeats_min`
+本の子しか起こさないため、実効並列度は **`min(P, repeats_min)` で頭打ち**になる。
+凍結 `repeats_min = 2` なので `--workers 4` でも実効 2 であり、§8.9.2-(2) の見積もり
+「10.0 h → 約 2.9 h」ではなく **10.0 h → 約 5.0 h** が現状で得られる値である。
+`2.9 h` へ届かせるには repeat より下の粒度（clip / シャード / カテゴリ）の並列化が要り、
+それは「1 子プロセス = 1 カテゴリ row」という測り直しの成果物の形と、その row を
+提出 row と bit 比較する publish 条件の形を変える——**本実装の範囲外・別ブリーフ**
+（C5 と同じ扱い）。実効値は verdict の
+`evaluate_execution.effective_workers_per_category` に刻み、黙って頭打ちにしない。
+
+並列化の実装は `concurrent.futures.ThreadPoolExecutor(max_workers=P)` で
+**既存の `subprocess.run` を最大 P 本同時に保つ**形（`ProcessPoolExecutor` は使わない
+——測定は既に別プロセスで走っており、in-process の worker プロセスを挟むと
+fresh-process 契約が曖昧になる。ここのスレッドは子の完了を待つだけで測定はしない）。
+結果は `index` 順の固定席へ書き戻し、失敗も**最小 index のものを再送出**する
+（どのエラーが表に出るかが `P` に依存してはならない）。
+
+**D-3. スレッド 3 点固定は run と evaluate で同一でなければならない（最大のリスク）。**
+検証の子だけを `OMP=1 / MKL=1 / torch=1` に固定すると、固定していない run が産んだ row と
+bit 一致しなくなる。publish 条件は「独立に測り直して bit 一致」なので、**ここが割れると
+r6 が丸ごと通らない**（HANDOFF §3.1 の裏返し）。
+
+採用: `--pin-threads` を **run phase / evaluate phase の両方**に露出する（条件そのものは
+同一だが、フェーズで役割が分かれる）。
+
+- **run phase**: `_apply_thread_pinning()` でこのプロセスに固定を適用し、その事実を
+  report の `thread_pinning` に刻む。env 2 点は**設定せず検査する**——OpenMP/MKL の
+  スレッド数はランタイムのロード時に確定するため、プロセス開始後に `os.environ` を
+  書いても効かず、「固定したと report に書きながら実際には未固定で測る」最悪の形になる。
+  3 点目（`torch.set_num_threads(1)`）は適用したうえで `torch.get_num_threads()` で
+  効いたことを確認する。
+- **evaluate phase**: 評価器は**何も測らない**ので自プロセスには固定を適用しない
+  （測定に関係しない torch import で `_require_scorer_compile_observation_covers_
+  imported_modules` などの自己ゲートを揺らさないため）。代わりに (a) 評価対象 report が
+  名乗る固定を**契約として検証**し（`_thread_pinning_contract_from_reports`。全 report で
+  一致すること + `OMP/MKL == "1"` かつ `torch_num_threads ∈ {1, 未導入マーカー}` の
+  形であること）、(b) 子へ env 2 点 + `--pin-threads` を渡し、(c) 子 report の
+  `thread_pinning` 申告を親が再照合する（**宣言されているが検証されていない値を作らない**）。
+  契約を評価器の状態でなく report から導くのは、**束縛時点と使用時点を一致させる**ため
+  ——子へ渡すべき条件は「提出 row を産んだ run の条件」である。
+
+`--pin-threads` 未使用時は run も evaluate も従来どおり（新フィールドゼロ）で、
+run↔evaluate の条件は「どちらも未固定」で一致する。
+
+**D-4. `store_A` との重なり検査は CLI ではなく「評価対象 report」に対して置く**
+（PR #240 Codex P1 で是正）。当初は `--cell-store` × `--eval-cell-store` の 2 引数を
+比較していたが、**evaluate phase は `--cell-store` 自体を拒否するので、その分岐は本番の
+呼び出しでは一度も走らない**。一方 run report は `cell_store_relative` を刻んでいるため、
+その値を `--eval-cell-store` に渡すことは実際にできてしまい、鍵
+`(category, level, entry_id, repeat_index)` が一致する run のセルを子がそのまま resume
+する——「独立に測り直して bit 一致」が**自分自身との比較**に化け、F2 で塞いだ穴が別の
+入口から開く。よって関所は `evaluate_m2_bars` に置き、**評価対象 report が名乗る store**
+との同一性・入れ子を resolve 後に拒否する。`cell_store_relative` が `None`（repo 外の
+store で走った run）は重なりを立証も反証もできないので fail-closed にする。
+
+併せて、`store_B` の木に評価入力（report / manifest member / fixtures / provenance 対象の
+ソース）が含まれる指定も拒否する。子は `store_B` 配下へ `cell_<digest>.json` を atomic
+replace で書くため、名前の一致した入力を置き換えて自分の証拠を壊しうる。関所は
+「起こりうる出力名を列挙する」形ではなく「保護入力が木の中に無いことを要求する」形に
+置く（出力名の集合はセル鍵の数だけあり、列挙は関所として脆い）。
+
+**D-5. パスの分離は計算の独立を意味しない——役割をレコード自身に束縛する**
+（PR #240 Codex P1 で是正）。D-4 の経路検査は「`store_B` が `store_A` と別の場所にある」
+ことしか言えない。`store_A` を別ディレクトリへ**コピー**すれば経路検査は通り、
+コピーされたレコードは `_cell_record_mismatches` の同一性フィールドを**全部**満たす
+——鍵・入力・環境・生成器 digest がそのまま一致し、とくに `repeat_index` は run の
+`0..n-1` と測り直しの `0..repeats-1` が正面から衝突する。結果、検証の子が run のセルを
+resume し、publish が再び自己比較になる（F2 で塞いだ穴の三度目の入口）。
+
+よってセルレコードに **`store_role`（`run` / `evaluate`）を必須フィールド**として持たせ、
+役割の不一致を resume 拒否事由にする（schema `m2-cell-record/0.3 → 0.4`）。測り直しの子には
+評価器が `--cell-store-role evaluate` を自動で付ける。**役割を名乗らない旧レコードも
+resume しない**——素性の分からないセルを通さない。
+
+「store ごとの一意識別子」ではなく役割にしたのは、識別子だと store の初期化手順
+（ID の生成・保管）に依存し、その手順を飛ばした store が黙って通る余地が残るため。
+役割は書き手が常に知っている値なので、初期化に依存せず全レコードに必ず入る。
+
+> 独立性の関所は 3 層になった: **(1) CLI の引数関係**（同一・入れ子）→
+> **(2) 評価対象 report が名乗る store との関係**（D-4）→ **(3) レコード自身の役割**（D-5）。
+> (1) と (2) は「どこに置いたか」、(3) は「誰が計算したか」を問う。前者だけでは
+> コピーで抜けられる。
+
+**r4/r6 の運用**: 本測定は run・evaluate ともに
+`OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 ... --pin-threads` で起動する（runbook §5 以降）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

@@ -20,8 +20,9 @@
 | — (P-b″) | **C4** `env_digest` に CPU 同一性（rev.6 §8.9.3） | **完了** |
 | r2 | 全 50 曲スクリーニング → 採用 2 件 | **完了**（[`r2_screening.md`](r2_screening.md)） |
 | r3 (P-c) | `m2e_bed_fixtures.yaml` / `m2e_accuracy_bars.yaml` | **完了** |
-| — | **C2** store 分離（rev.6 §8.9.2-(1)） | **未着手** ← 次はここ |
-| — | **C3** evaluate の並列化（rev.6 §8.9.2-(2)） | **未着手** |
+| — | **C2** store 分離（rev.6 §8.9.2-(1)） | **完了**（2026-08-02・`--eval-cell-store`） |
+| — | **C3** evaluate の並列化（rev.6 §8.9.2-(2)） | **完了**（2026-08-02・`--workers` + `--pin-threads`） |
+| — | **C5** 水準横断 census 集計 | **未着手** ← 次はここ（別ブリーフ・r7 で使う） |
 | r4 | r2-0（`P` / 並列不変性ゲート / `S`・`T_*` / `env_digest` / lockfile） | 未実施 |
 | r5 (P-c′) | `m2e_r2_shard_map.yaml` | 未実施 |
 | r6 (P-d) | 本測定（**code change 厳禁**） | 未実施 |
@@ -29,33 +30,36 @@
 
 **C2 / C3 は r6 開始前に landing させること**（r6 は code change を禁じているため、
 r6 に入ってからでは入れられない。F2 と同じ論法・rev.6 §8.9.4）。
+**→ 2026-08-02 に landing 済み。** 設計判断 D-1（軌跡 digest）/ D-2（`--workers` の
+非対称）/ D-3（スレッド固定の対称性）の裁定と根拠は rev.6 §8.9.4 実装ノート。
 
 ---
 
 ## 2. 残タスクの仕様
 
-### C2 — store 分離（rev.6 §8.9.2-(1)）
+### C2 — store 分離（rev.6 §8.9.2-(1)）— **完了（2026-08-02）**
 
 ```
-run フェーズ      → store_A に書く / store_A のみ読む
-evaluate（検証）  → store_B に書く / store_B のみ読む   ← run の結果は一切読まない
+run フェーズ      → store_A に書く / store_A のみ読む   （--cell-store）
+evaluate（検証）  → store_B に書く / store_B のみ読む   （--eval-cell-store）
 publish 条件      → store_A と store_B を突き合わせる（両方とも完全な独立計算）
 ```
 
-現状: F2 が実装した `--cell-store` は run 用（= `store_A`）。
-`_run_external_verification_in_fresh_process` は子へ `--cell-store` を**渡していない**
-（そのため evaluate は再開不能）。
+実装: `--eval-cell-store PATH`（evaluate phase 専用）。
+`_run_external_verification_in_fresh_process` は指定時に子へ
+`--cell-store <store_B> --repeat-index <i>` を積む。**`store_A` を渡す経路は無い**。
+再開可否は従来どおり `env_digest` 一致で fail-closed（§8.7 の再開規則をそのまま適用）。
 
-やること: evaluate 用の `store_B` を受け取る経路を足し、検証の子へ `store_B` を渡す。
-**`store_A` を渡す経路は作らない**（現在の禁止は `store_A` に対してのみ維持する）。
-再開可否は `env_digest` 一致で fail-closed（§8.7 の再開規則をそのまま適用）。
+fail-closed（すべて **resolve 後**のパスで判定・各 1 テスト）:
 
-fail-closed 要件:
+- `store_A == store_B`
+- 一方が他方の配下（両方向）
+- `--eval-cell-store` を run phase（`--evaluate` なし）で指定
+- `--out` が `store_B` 配下
 
-- `store_A` と `store_B` が同一パス、または一方が他方の配下にある場合は拒否する。
-- 検証の子のコマンドラインに `store_A` が現れないことをテストで固定する
-  （F2 の `test_reverification_child_never_receives_cell_store` を、
-  「`store_A` は渡らない／`store_B` は渡る」へ発展させる）。
+子のコマンドラインに `store_A` が現れないことは
+`test_reverification_child_never_receives_the_run_cell_store` が
+「`store_A` は渡らない／`store_B` は渡る」の両側で固定する。
 
 > **独立性は「store を分ける」ことで保たれるのであって、「再開できない」ことで
 > 保たれるのではない。** ここを取り違えると、F2 で塞いだ穴（publish がキャッシュを
@@ -72,25 +76,65 @@ fail-closed 要件:
 検査し、揃っているときにだけ帯の判定を出す集計器。**部分集合で平均 RPA や破断曲線を
 出さない**（§11）。集計器が無い間は判定が存在しない状態が正しい。
 
-### C3 — evaluate の並列化（rev.6 §8.9.2-(2)）
+### C3 — evaluate の並列化（rev.6 §8.9.2-(2)）— **完了（2026-08-02）**
 
-現状の evaluate は実効 `P = 1`（10.0 h ÷ 160 セル = 225 s/セルが単セル実測 254.2 s と
-一致する）。`P = 4` で **10.0 h → 約 2.9 h**。`B_session` も実行環境も変更しない。
+C2/C3 以前の evaluate は実効 `P = 1`（10.0 h ÷ 160 セル = 225 s/セルが単セル実測
+254.2 s と一致する）。`--workers P` が evaluate phase の**実効並列度**になった。
+`B_session` も実行環境も変更していない。
+
+> **実効値は `min(P, repeats_min)` で頭打ちになる**（PR #240 Codex P1・宣言された限界）。
+> 1 カテゴリの測り直しは `repeats_min` 本の子しか起こさず、凍結 `repeats_min = 2`
+> なので **`--workers 4` を渡しても実効 2**。したがって rev.6 §8.9.2-(2) が見積もった
+> 「10.0 h → 約 2.9 h」ではなく、**現状で得られるのは 10.0 h → 約 5.0 h**。
+> `2.9 h` へ届かせるには repeat より下の粒度（clip / シャード / カテゴリ）の並列化が
+> 要り、それは測り直しの成果物の形（1 子 = 1 カテゴリ row）を変えるため**別ブリーフ**。
+> verdict の `evaluate_execution.effective_workers_per_category` に実効値を刻む
+> （黙って頭打ちにしない）。
 
 **publish が要求するのは「fresh process であること」と「run の結果を読まないこと」で
-あって、逐次であることではない。** run を `P = 4` で回しながら検証だけ `P = 1` を
-要求するのは、§8.3 の並列不変性ゲートがまさにその同一性を検査している以上、一貫しない。
+あって、逐次であることではない。**
 
-実装上の注意:
+実装（設計判断は rev.6 §8.9.4 実装ノート）:
 
-- `_reverify_external_category_measurement` の `for index in range(repeats)` は
-  逐次に子を起こしている。ここと、`_run_external_category` の manifest ループの
-  両方が並列化の対象になりうる。
-- **どちらを並列化しても、セルごとの結果が `P` に依存してはならない。** 各ワーカーで
-  `OMP_NUM_THREADS=1` / `MKL_NUM_THREADS=1` / `torch.set_num_threads(1)` を固定する
-  （下記 §3 の実測を参照。3 点目を欠くと stem の bytes が run 間で変わる）。
-- §8.3 の並列不変性ゲート（`P=1` と `P=決定値` で**ピッチ軌跡の sha256 が完全一致**）を
-  テストで固定すること。**精度値の一致では不十分**。
+- 並列化したのは `_reverify_external_category_measurement`（検証の子）**だけ**。
+  `_run_external_category` の clip ループ（run phase）は**逐次のまま据え置いた**
+  ——run 側のスケーリングは r5 のシャード地図が担う設計であり、実行形態を変えると
+  r4 で校正する `T_*` の意味が変わる（D-2）。したがって **`--workers` は run phase では
+  宣言値 / evaluate phase では実効値**という非対称な意味を持つ。
+- スレッド 3 点固定は `--pin-threads` として **run / evaluate の両方**に露出する（D-3）。
+  env 2 点は起動前に設定されている必要があり（未設定は fail-closed）、3 点目は
+  ハーネスが適用する。evaluate は評価対象 report が同じ固定を名乗ることを照合し、
+  子へも同じ固定を伝えて子 report の申告を再照合する。
+- 並列不変性ゲート（§8.3）は `est_trajectory_sha256`（M2e row 限定の新フィールド・D-1）で
+  `P=1` と `P=4` の**完全一致**を固定した。**精度値の一致では代替していない。**
+
+**r4/r6 の起動形**（3 点固定を必ず適用すること・§3.1）:
+
+```bash
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+    --out <run_report>.json --categories V_remix_real_direct --level +12dB \
+    --external-manifest <manifest>.json --external-fixtures <fixtures>.yaml \
+    --cell-store <store_A> --repeat-index 0 --pin-threads
+
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+    --out <verdict>.json --evaluate <run_report_0>.json <run_report_1>.json \
+    --external-manifest <manifest>.json --external-fixtures <fixtures>.yaml \
+    --eval-cell-store <store_B> --workers 2 --pin-threads
+```
+
+`--workers 2` なのは上記の頭打ち（`repeats_min = 2`）による。`--eval-cell-store` には
+**run が使った `store_A` を渡してはならない**——渡すと測り直しの子が run のセルを
+resume し、独立検証が自分自身との比較に化ける。evaluate は提出 report の
+`cell_store_relative` と突き合わせて fail-closed に拒否する。
+
+**`store_A` をコピーして `store_B` を作るのも禁止**（経路検査は通ってしまうが、
+コピーされたレコードは run 由来なので独立計算ではない）。セルレコードは
+`store_role`（`run` / `evaluate`）を持ち、役割の異なるレコードは resume されず
+再測定される（rev.6 §8.9.4 D-5）——コストは戻るが、正しさは戻る。
+`store_B` は**空ディレクトリから始めること**。
+
+**`P` の効果は実測比で示すこと**（`総時間 / P` の外挿値を成果として書かない・§3.2）。
+C2/C3 の PR では fake backend の実測比を記載した。r4 では実スタックで測り直す。
 
 ---
 
@@ -190,7 +234,10 @@ demucs の vocals stem の `stem_sha256` が run 間で変わる（`residual_db`
 
 ## 5. 次にやる順序
 
-1. **C2 / C3 を実装**（本 PR とは別 PR）。r6 前に landing。
+1. ~~**C2 / C3 を実装**（本 PR とは別 PR）。r6 前に landing。~~ **完了（2026-08-02）**
+   ——残るのは **C5**（水準横断 census 集計）。C5 は r7 で使う集計器で r6 の code freeze の
+   制約下に無いため別ブリーフ。C5 が landing するまで帯判定は `census_pending` のまま
+   であり、**それが正しい状態**（判定器が無い間は判定が存在しない）。
 2. **ミックス生成**: `make_vremix_fixtures.py build` で 320 本
    （40 clip × 2 bed × 4 水準）+ manifest/fixtures/生成記録。runbook §5。
 3. **r4（r2-0）**: `P` 決定・並列不変性ゲート・`S`/`T_*` 校正・`env_digest` 確定・
