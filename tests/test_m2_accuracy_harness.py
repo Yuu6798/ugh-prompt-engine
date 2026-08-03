@@ -13797,6 +13797,52 @@ def test_main_shard_id_prints_a_sha256_matching_the_written_record_bytes(
     assert f"shard record sha256: {expected_sha256}" in captured.out
 
 
+def test_main_shard_id_wires_the_preflight_manifest_snapshot_into_execute_m2e_shard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-126（PR #242 第29巡 Codex 是正）: `main()` の `--shard-id` 経路が
+
+    preflight（`--out` 保護入力検査・E-123）で読んだ manifest スナップショットを
+    `execute_m2e_shard(preflight_manifest_by_level=...)` として実際に渡す
+    （配線確認・軽量な CLI レベルテスト。詳細な「再オープンしない」ことの実証は
+    `test_execute_m2e_shard_uses_the_preflight_manifest_snapshot_and_never_reopens_it`）。
+    """
+    import yaml as _yaml
+
+    map_doc, map_sha256, campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+
+    captured_kwargs: "Dict[str, Any]" = {}
+
+    def _capturing_execute(**kwargs: Any) -> "Dict[str, Any]":
+        captured_kwargs.update(kwargs)
+        return _fake_shard_run_record(map_doc, 0)
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _capturing_execute)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(tmp_path / "shard_run.json"),
+        ],
+    )
+    assert harness.main() == 0
+    snapshot = captured_kwargs.get("preflight_manifest_by_level")
+    assert snapshot is not None
+    assert set(snapshot) == set(harness._M2E_LEVEL_LADDER)
+
+
 def test_execute_m2e_shard_does_not_reopen_fixtures_already_validated_by_the_registry_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -13830,6 +13876,55 @@ def test_execute_m2e_shard_does_not_reopen_fixtures_already_validated_by_the_reg
         require_thread_pinning=False,
     )
     assert len(calls) == len(harness._M2E_LEVEL_LADDER)
+
+
+def test_execute_m2e_shard_uses_the_preflight_manifest_snapshot_and_never_reopens_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-126（PR #242 第29巡 Codex 是正）: CLI preflight（`--out` 保護入力検査・
+
+    E-123）が読んだ manifest スナップショットを `preflight_manifest_by_level`
+    経由で `execute_m2e_shard` へ渡すと、先行 shard 検証・task 構築のどちらも
+    これを再オープンしない（`_load_external_manifest` の呼び出し総数が 0 に
+    なることで実証）。地図検証後・実行段で manifest ファイルが破損しても task
+    構築はスナップショットを使い続ける（再オープンしないことの機能面での帰結。
+    E-57 の fixtures 版と同じ形）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    _referenced, preflight_manifest_by_level, _sha = harness._m2e_manifest_referenced_paths(
+        campaign
+    )
+    # preflight 後に全水準の manifest を破損させる——再オープンが実際に起きれば
+    # JSON パース失敗で例外になる。
+    for level_paths in campaign.values():
+        Path(level_paths["external_manifest"]).write_text(
+            "not valid json{{{", encoding="utf-8"
+        )
+
+    calls: "List[str]" = []
+    real_load = harness._load_external_manifest
+
+    def _tracking_load(path: Any) -> Any:
+        calls.append(str(path))
+        return real_load(path)
+
+    monkeypatch.setattr(harness, "_load_external_manifest", _tracking_load)
+    result = harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=tmp_path / "store_A",
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+        preflight_manifest_by_level=preflight_manifest_by_level,
+    )
+    assert result["cells_completed"] == result["cells_total"]
+    assert calls == []
 
 
 def test_execute_m2e_shard_uses_the_validated_fixtures_snapshot_even_if_the_file_is_swapped(
@@ -16750,6 +16845,30 @@ def test_acquire_m2e_out_reservation_releases_the_sidecar_on_keyboard_interrupt(
     with pytest.raises(KeyboardInterrupt):
         harness._acquire_m2e_out_reservation(out_path, "token\n")
     assert not sidecar_path.exists()
+
+
+def test_acquire_m2e_shard_claim_releases_the_claim_on_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-128（PR #242 第29巡 Codex 是正）: `_acquire_m2e_shard_claim` も
+
+    `_acquire_m2e_out_reservation`（E-124）と同型の穴——`os.fdopen`/`write` の
+    区間で `KeyboardInterrupt` が飛んでも、`O_EXCL` で作った shard claim は
+    削除されてから再送出される（以前は `except Exception` だったため素通りし、
+    同一 `shard_id` の以後の全起動を「claim が既に存在する」という誤った案内で
+    永久にブロックしていた）。O_EXCL 取得サイトはこの関数と
+    `_acquire_m2e_out_reservation` の 2 箇所のみ（grep で全数確認済み・E-128）
+    であり、両方が同じ形へ揃ったことでこのファミリーを終端する。
+    """
+    claim_path = tmp_path / "shard_0.claim"
+
+    def _raise_keyboard_interrupt(*args: Any, **kwargs: Any) -> Any:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(harness.os, "fdopen", _raise_keyboard_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        harness._acquire_m2e_shard_claim(claim_path)
+    assert not claim_path.exists()
 
 
 def test_main_make_shard_map_rejects_when_the_out_reservation_sidecar_already_exists(

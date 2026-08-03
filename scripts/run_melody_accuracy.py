@@ -11852,6 +11852,13 @@ def _acquire_m2e_shard_claim(claim_path: Path) -> None:
     fail-closed で拒否する（並行実行は非サポート。クラッシュ孤児で claim が残った場合は
     claim ファイルを手動削除してから再実行する）。内容は診断用（PID + ISO8601）で
     機構としての意味は持たない——存在自体が排他の唯一の根拠。
+
+    E-128（PR #242 第29巡 Codex 是正）: `os.fdopen`/`write` の区間は
+    `except Exception` ではなく `except BaseException` で覆う——`_acquire_m2e_
+    out_reservation`（E-124）と同型の穴。`KeyboardInterrupt`/`SystemExit`/
+    `GeneratorExit` は `Exception` のサブクラスではないため、書き込み中に
+    これらが飛ぶと claim は削除されずに残り、以後の同一 `shard_id` の全起動が
+    「claim が既に存在する」という誤った案内で永久にブロックされる。
     """
     claim_path.parent.mkdir(parents=True, exist_ok=True)
     payload = f"pid={os.getpid()}\nclaimed_utc={_utc_now()}\n"
@@ -11871,7 +11878,7 @@ def _acquire_m2e_shard_claim(claim_path: Path) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(payload)
-    except Exception:
+    except BaseException:
         claim_path.unlink(missing_ok=True)
         raise
 
@@ -12037,6 +12044,7 @@ def execute_m2e_shard(
     initializer: "Optional[Callable[[], None]]" = _shard_pool_initializer,
     require_thread_pinning: bool = True,
     clock: "Callable[[], float]" = time.monotonic,
+    preflight_manifest_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
 ) -> "Dict[str, Any]":
     """1 shard 分の実行（§8.6「1回の実行の契約」の実体）。
 
@@ -12072,6 +12080,17 @@ def execute_m2e_shard(
     **同時**に本関数入口で捕捉する（以前は claim 取得・地図検証・manifest 読取後、
     `run_m2e_shard_queue` 呼び出し直前で別途捕捉しており、`start`/`elapsed_seconds`
     が指す起点と provenance が食い違っていた）。
+
+    `preflight_manifest_by_level`（E-126・PR #242 第29巡 Codex 是正）: CLI の
+    preflight（`--out` の保護入力検査・E-123）が既に読んだ manifest のパース済み
+    スナップショット（`{level: (entries, manifest_dir)}`）を渡せば、先行 shard
+    検証（E-104 の `excluded_manifest_by_level`）・task 構築の既存 manifest
+    引き回し機構（E-72）にこれを種付けする——優先順位は「E-104 の除外真実性
+    再スキャンが読んだもの」＞「preflight が読んだもの」＞「未指定なら本関数が
+    新規に読む」（E-104 のスナップショットは除外真実性検証と一体で digest が
+    立証済みのため、より新しい preflight スナップショットで上書きしない）。
+    未指定（既定 `None`）なら従来どおり内部で読む（直接呼ぶテスト等の後方互換
+    経路）。
     """
     if shard_id < 0:
         raise ValueError(f"execute_m2e_shard: shard_id {shard_id!r} は 0 以上のみ許可する")
@@ -12157,6 +12176,12 @@ def execute_m2e_shard(
         fixtures_by_level = validated_fixtures_by_level
         for level in levels_needed:
             if level in manifest_by_level:
+                continue
+            # E-126: 次点は CLI preflight（`--out` 保護入力検査・E-123）が既に
+            # 読んだスナップショット——E-104 の除外真実性スキャンで読まれて
+            # いない level でも、preflight が既に読んでいれば再オープンしない。
+            if preflight_manifest_by_level is not None and level in preflight_manifest_by_level:
+                manifest_by_level[level] = preflight_manifest_by_level[level]
                 continue
             entries, _manifest_sha256, manifest_path = _load_external_manifest(
                 campaign[level]["external_manifest"]
@@ -12981,11 +13006,14 @@ def main() -> int:
         # shard 検査・task 構築）ので、manifest が指す audio_path/annotation_path
         # の実体も無条件で保護集合へ展開する（`--make-shard-map` 側と同型——
         # manifest の**ファイルパス**自体は既に保護されているが、manifest が
-        # **指す**実ファイルは含まれていなかった）。この preflight 読取は
-        # 保護集合の構築専用（E-125 は `--make-shard-map` 側のみを対象とする——
-        # `--shard-id` 側は `execute_m2e_shard` が独自の `manifest_by_level`
-        # 引き回し機構を既に持つため、ここでは戻り値のスナップショットは使わない）。
-        referenced_paths, _preflight_manifest_by_level, _preflight_manifest_sha256_by_level = (
+        # **指す**実ファイルは含まれていなかった）。
+        # E-126（PR #242 第29巡 Codex 是正）: 戻り値のスナップショット
+        # （`preflight_manifest_by_level`）は破棄せず、下の `execute_m2e_shard`
+        # 呼び出しへそのまま引き渡す——`execute_m2e_shard` 内の既存
+        # `manifest_by_level` 引き回し機構（E-72/E-104）へ種付けすることで、
+        # ここで既に読んだ manifest を先行 shard 検証・task 構築で再度開かない
+        # （E-125 の `--make-shard-map` 側対応と対になる shard 側の完備化）。
+        referenced_paths, preflight_manifest_by_level, _preflight_manifest_sha256_by_level = (
             _m2e_manifest_referenced_paths(campaign)
         )
         protected.update(referenced_paths)
@@ -13098,6 +13126,10 @@ def main() -> int:
                     cell_store=args.cell_store,
                     bars_path=args.bars,
                     workers=workers,
+                    # E-126: preflight（保護入力検査・E-123）が既に読んだ manifest
+                    # スナップショットを引き渡す（未指定時は None・従来どおり
+                    # 内部で読む）。
+                    preflight_manifest_by_level=preflight_manifest_by_level,
                 )
             except BaseException:
                 # E-96: execute_m2e_shard が失敗するあらゆる経路（shard claim

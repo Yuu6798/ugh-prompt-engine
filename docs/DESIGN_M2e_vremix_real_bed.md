@@ -1963,6 +1963,31 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   ショット由来のまま一貫する。`--shard-id` 側は独自の `manifest_by_level`
   引き回し機構を既に持つため対象外。回帰テスト付き）。
 
+**E-126〜E-128（PR #242 第29巡）。**
+
+- **E-126**: E-125 の shard 側対応。`--shard-id` の保護入力検査（E-123）が
+  読んだ manifest スナップショットを破棄せず、`execute_m2e_shard()` の新規
+  引数 `preflight_manifest_by_level` として渡す——先行 shard 検証（E-104 の
+  除外真実性再スキャン）が既に読んだ水準を最優先、次点でこの preflight
+  スナップショットを使い、どちらにも無い水準だけ新規に読む優先順位とした。
+  manifest の読取が preflight の 1 回に統一される（回帰テスト付き）。
+- **E-127**（docs のみ）: HANDOFF r6 until ループの実行記録検査スニペットは
+  JSON パース失敗・必須キー欠損を素通しし、Python の素の未捕捉例外が既定の
+  exit 1 を返すため、意図的な「truncated/not_started のみ残存につき再実行」
+  （同じく exit 1）と区別が付かなかった——壊れた実行記録を検証済みの未完と
+  誤認し、cells_unavailable（E-113）と同型の「リトライで直らない失敗」を
+  盲目的に再実行し続ける経路があった。パース・検証を明示的に try/except で
+  捕捉し、fatal 用の exit 3 へ分離。シェル側は 0（完了）/1（検証済み未完）/
+  2（cells_unavailable 非空）以外のコードすべてを fatal とみなして即座に
+  終了する規約へ改めた。
+- **E-128**: shard claim（`shard_<id>.claim`）取得ヘルパ
+  `_acquire_m2e_shard_claim` も E-124 と同型の穴（`os.fdopen`/`write` 区間の
+  `except Exception`）を持っていた——`except BaseException` へ揃えた。
+  併せて `O_CREAT|O_EXCL` によるファイル取得サイトを grep で全数列挙し
+  （`_acquire_m2e_shard_claim`/`_acquire_m2e_out_reservation` の 2 箇所のみと
+  確認）、同型の穴が他に残っていないことを確認した——このファミリーを終端
+  する（回帰テスト付き）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

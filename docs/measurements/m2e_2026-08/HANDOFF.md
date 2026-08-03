@@ -327,27 +327,48 @@ for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('do
     # 限定する——cells_unavailable（CREPE/Demucs/重み不在等、環境起因で消えない
     # 未完）が非空なら、盲目的に再実行し続けず即座にレシピを終了しオペレータ対応へ
     # 回す（失敗の永久リトライを禁じた E-88 の精神を cells_unavailable にも適用）。
-    # exit 0 = shard 完了（break）／1 = truncated・not_started のみ残存（再実行）／
-    # 2 = cells_unavailable 非空（即時終了）。
+    # exit 0 = shard 完了（break）／1 = 検証済みで truncated・not_started のみ残存
+    # （再実行）／2 = cells_unavailable 非空（即時終了）／3 = パース失敗・キー欠損・
+    # 検証失敗（fatal・即停止）。E-127（PR #242 第29巡 Codex 是正）: 旧レシピは
+    # JSON パース失敗や必須キー欠損を素通しし、Python の素の未捕捉例外が既定で
+    # exit 1 を返すため「truncated/not_started のみ残存」（意図的な exit 1）と
+    # 区別が付かず、壊れた実行記録を検証済みの未完と誤認して盲目的に再実行し
+    # 続けてしまっていた（cells_unavailable と同型の「リトライで直らない失敗」を
+    # 見逃す穴）。パース・検証は明示的に try/except で捕捉し、3 という別コードへ
+    # 分離する——シェル側は 0/1/2 以外（3 を含む未知のコードすべて）を fatal と
+    # みなして即座に終了する。
     # `|| CHECK_STATUS=$?`（E-120）: 上と同じ理由——`set -e` 下では非ゼロ sys.exit
     # を素朴に `CHECK_STATUS=$?` で捕捉する形は機能しない。
     CHECK_STATUS=0
     python -c "
 import json, sys
-with open('$OUT') as f:
-    r = json.load(f)
-if r['cells_unavailable']:
+try:
+    with open('$OUT') as f:
+        r = json.load(f)
+    unavailable = r['cells_unavailable']
+    completed = r['cells_completed']
+    total = r['cells_total']
+except Exception as exc:
+    print(f'shard record parse/validation failed: {exc!r}', file=sys.stderr)
+    sys.exit(3)
+if unavailable:
     sys.exit(2)
-sys.exit(0 if r['cells_completed'] == r['cells_total'] else 1)
+sys.exit(0 if completed == total else 1)
 " || CHECK_STATUS=$?
-    if [ "$CHECK_STATUS" -eq 2 ]; then
+    if [ "$CHECK_STATUS" -eq 0 ]; then
+      break
+    elif [ "$CHECK_STATUS" -eq 1 ]; then
+      : # 検証済みで truncated/not_started のみが残存——同一 shard_id を再実行する。
+    elif [ "$CHECK_STATUS" -eq 2 ]; then
       echo "shard $N: cells_unavailable が非空——CREPE/Demucs/重み不在等はリトライで直らない。" >&2
       echo "原因を確認してから対応すること (fail-closed・E-113)" >&2
       exit 1
-    elif [ "$CHECK_STATUS" -eq 0 ]; then
-      break
+    else
+      echo "shard $N: 実行記録の検査自体が失敗した (CHECK_STATUS=$CHECK_STATUS)。JSON パース失敗・" >&2
+      echo "キー欠損・検証失敗のいずれか——リトライでは直らない。原因を確認してから対応すること " >&2
+      echo "(fail-closed・E-127)" >&2
+      exit 1
     fi
-    # CHECK_STATUS == 1: truncated/not_started のみが残存——同一 shard_id を再実行する。
   done
 done
 ```
