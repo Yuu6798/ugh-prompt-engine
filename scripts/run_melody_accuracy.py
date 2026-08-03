@@ -11572,6 +11572,17 @@ def execute_m2e_shard(
     を `O_EXCL` で作り、同一 `shard_id` の並行実行を排他する
     （`_acquire_m2e_shard_claim` の docstring に Memo 根拠の撤回を記録）。正常終了・
     例外経路のどちらでも try/finally で確実に解放する。
+
+    bars スナップショット（E-78・PR #242 第8巡 Codex 是正）: `_require_m2e_shard_map_
+    matches_registry` が返す `(bars, bars_sha256)` をそのまま tolerance_cents/
+    est_voiced_floor の導出・worker 供給まで引き回す（再オープンしない。E-57/E-72
+    と同族の TOCTOU 是正）。
+
+    除外検証の store 束縛（E-79・PR #242 第8巡 Codex 是正）: `_require_m2e_shard_map_
+    matches_registry` へ本関数が実際に書き込む `cell_store` を渡す——地図の
+    `excluded_completed_cells.cell_store_relative` が実行時 `--cell-store` と一致する
+    ことを要求し、除外真実性の digest 検証もこの実行 store に対して行う（地図が別
+    store 向けに宣言した除外を、別の store への実行に束縛して信用しない）。
     """
     if shard_id < 0:
         raise ValueError(f"execute_m2e_shard: shard_id {shard_id!r} は 0 以上のみ許可する")
@@ -11594,14 +11605,19 @@ def execute_m2e_shard(
     try:
         # E-57: 地図検証で読取・hash 検証済みの fixtures 文書をそのまま実行段へ引き回す
         # （再オープンしない）。E-52 と同族の TOCTOU 是正。
-        validated_fixtures_by_level = _require_m2e_shard_map_matches_registry(
-            map_doc, campaign, bars_path=bars_path
+        # E-79: 実際に書き込む cell_store を渡し、除外真実性検証をこの store へ束縛する。
+        validated_fixtures_by_level, bars_snapshot = _require_m2e_shard_map_matches_registry(
+            map_doc, campaign, bars_path=bars_path, cell_store=cell_store
         )
 
         thread_pinning = _apply_thread_pinning() if require_thread_pinning else None
 
         env_digest = _env_digest()
-        bars, bars_sha256 = load_bars(bars_path)
+        # E-78: 地図検証で読取・検証済みの bars をそのまま実行段へ引き回す（再オープン
+        # しない）。E-57/E-72 と同族の TOCTOU 是正——検証後に bars が差し替わっても、
+        # 実行はここで固定したスナップショットのまま tolerance_cents/est_voiced_floor
+        # を導出し、worker へ供給する。
+        bars, bars_sha256 = bars_snapshot
         bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
         tolerance_cents = float(bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
         est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])

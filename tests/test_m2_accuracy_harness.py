@@ -14779,3 +14779,167 @@ def test_execute_m2e_shard_wires_a_worker_error_hook_that_quarantines_completed_
     ]
     on_worker_error(fake_completed_so_far)
     assert quarantined == [["/fake/store/ok_cell.json"]]
+
+
+def test_execute_m2e_shard_uses_the_validated_bars_snapshot_even_if_the_file_is_swapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-78（PR #242 第8巡 Codex 是正）: 地図検証**後**に bars ファイルが壊れても、
+
+    実行段は検証時のスナップショットを使い続ける（再オープンしないことの機能面での
+    帰結）。破損は `load_bars` が確実に拒否する形（`m2_accuracy_bars` ブロック欠落）
+    にする——もし実行段が再オープンしていれば、この破損ファイルの parse で必ず失敗する。
+    """
+    import _shard_queue_fakes
+    import yaml as _yaml
+
+    campaign_path = _write_m2e_campaign(tmp_path)
+    custom_bars_path = _write_custom_base_bars(tmp_path, repeats_min=2)
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, bars_path=custom_bars_path, **_C6_TEST_SHARD_KWARGS
+    )
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    map_doc, map_sha256 = harness._load_m2e_shard_map(map_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+
+    real_validate = harness._require_m2e_shard_map_matches_registry
+
+    def _validate_then_corrupt(*args: Any, **kwargs: Any) -> Any:
+        result = real_validate(*args, **kwargs)
+        bars_doc = _yaml.safe_load(custom_bars_path.read_text(encoding="utf-8"))
+        del bars_doc["m2_accuracy_bars"]  # 再オープンされれば load_bars が確実に拒否する
+        custom_bars_path.write_text(_yaml.safe_dump(bars_doc), encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(harness, "_require_m2e_shard_map_matches_registry", _validate_then_corrupt)
+    result = harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=tmp_path / "store_A",
+        bars_path=custom_bars_path,
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    expected_total = len([c for c in map_doc["cells"] if c["shard_id"] == 0])
+    assert result["cells_completed"] == expected_total
+
+
+def test_require_m2e_shard_map_matches_registry_rejects_a_cell_store_mismatched_with_the_map(
+    tmp_path: Path,
+) -> None:
+    """E-79（PR #242 第8巡 Codex 是正）: 地図の `excluded_completed_cells.
+
+    cell_store_relative` と実行時に渡された `cell_store` が一致しなければ拒否する
+    （除外検証を実行 store へ束縛する）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    full_doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS
+    )
+    to_complete = full_doc["cells"][:1]
+    cell_store = _m2e_root_cell_store(tmp_path)
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        to_complete,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, cell_store=cell_store, **_C6_TEST_SHARD_KWARGS
+    )
+    other_store = _m2e_root_cell_store(tmp_path)
+    with pytest.raises(ValueError, match="cell_store_relative"):
+        harness._require_m2e_shard_map_matches_registry(doc, campaign, cell_store=other_store)
+
+
+def test_require_m2e_shard_map_matches_registry_accepts_a_truthful_exclusion_bound_to_the_actual_store(
+    tmp_path: Path,
+) -> None:
+    """E-79: 実行 store を明示的に渡しても、地図の記録した store と一致すれば通る。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    full_doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS
+    )
+    to_complete = full_doc["cells"][:1]
+    cell_store = _m2e_root_cell_store(tmp_path)
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        to_complete,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, cell_store=cell_store, **_C6_TEST_SHARD_KWARGS
+    )
+    # 例外を投げなければ合格（実行 store を明示しても地図の記録した store と一致すれば通る）。
+    harness._require_m2e_shard_map_matches_registry(doc, campaign, cell_store=cell_store)
+
+
+def test_execute_m2e_shard_rejects_a_cell_store_mismatched_with_the_map_exclusions(
+    tmp_path: Path,
+) -> None:
+    """E-79: `execute_m2e_shard` に渡した `--cell-store` が地図の宣言した除外根拠
+
+    store と異なれば、測定を試みる前に拒否する（除外検証の実行 store 束縛の配線）。
+    """
+    import _shard_queue_fakes
+    import yaml as _yaml
+
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    full_doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS
+    )
+    to_complete = full_doc["cells"][:1]
+    declared_store = _m2e_root_cell_store(tmp_path)
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        to_complete,
+        campaign,
+        declared_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, cell_store=declared_store, **_C6_TEST_SHARD_KWARGS
+    )
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    map_doc, map_sha256 = harness._load_m2e_shard_map(map_path)
+
+    other_store = tmp_path / "store_different"
+    with pytest.raises(ValueError, match="cell_store_relative"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=other_store,
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )

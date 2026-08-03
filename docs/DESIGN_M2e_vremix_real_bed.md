@@ -1619,6 +1619,20 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   成功経路と同じ 3 種の pin 再検証を通し、失敗すれば完走分の written_paths を隔離
   する（フック自身は例外を握り潰し、常に worker の元例外が伝播する）。
 
+**E-78〜E-79（PR #242 第8巡）。**
+
+- **E-78**: `_require_m2e_shard_map_matches_registry` が地図検証時に読んだ bars と、
+  `execute_m2e_shard` が tolerance_cents/est_voiced_floor 導出・worker 供給のために
+  読む bars が別読取だった（TOCTOU）——検証後に bars が差し替わっても実行段は
+  気付けない。地図検証が `(bars, bars_sha256)` を戻り値として返し、実行段はそれを
+  そのまま引き回す形へ改めた（E-57/E-72 と同族）。
+- **E-79**: `excluded_completed_cells` の除外真実性検証が、地図が記録した
+  `cell_store_relative` からのみ store を解決しており、`execute_m2e_shard` に実際に
+  渡された `--cell-store` との一致を検証していなかった——地図の除外宣言を、それとは
+  異なる store への実行に束縛して信用してしまいうる。`_require_m2e_shard_map_
+  matches_registry` に実行時 `cell_store` を渡し、地図の宣言 store との一致を要求
+  した上で、真実性 digest 検査もこの実行 store に対して行う形へ改めた。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
