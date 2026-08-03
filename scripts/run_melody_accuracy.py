@@ -10461,6 +10461,13 @@ def _m2e_completed_cell_keys(
     と同族の TOCTOU 回避）。未指定（既定 `None`）なら従来どおり内部で読む
     （直接呼ぶテスト等の後方互換経路）。両者は対で渡すこと（片方だけ渡すと、
     種付けされた水準の `manifest_sha256_by_level` が欠けたまま返る）。
+    E-133（PR #242 第32巡 Codex 是正）: 種付けスナップショットは preflight が
+    読んだ全水準ぶんを持ちうるが、戻り値の `manifest_sha256_by_level`/
+    `manifest_by_level` は種付けの有無に関わらず常に `cells` に実際に登場した
+    水準だけへ絞り込む（種付けなし経路と挙動を一致させる——さもないと E-95 の
+    記録側（生成時に除外セルが実際に属する水準だけへ絞った
+    `manifest_sha256_by_level`）との照合が、種付けの有無だけで結果の変わる
+    誤検出を起こす）。
 
     戻り値は `(completed, manifest_sha256_by_level, manifest_by_level)`。
     `manifest_sha256_by_level`（E-95・PR #242 第15巡 Codex 是正）は本関数が実際に
@@ -10495,6 +10502,14 @@ def _m2e_completed_cell_keys(
         dict(manifest_sha256_snapshot_by_level) if manifest_sha256_snapshot_by_level else {}
     )
     completed: "set" = set()
+    # E-133（PR #242 第32巡 Codex 是正）: 種付け（`manifest_snapshot_by_level`/
+    # `manifest_sha256_snapshot_by_level`）は preflight が読んだ全水準ぶんを持ちうる
+    # ため、種付けなし（内部で読む）経路と挙動を揃えるには、`cells` に実際に登場
+    # した水準だけへ戻り値を絞り込む必要がある——絞り込まないと、呼び出し元
+    # （`_require_m2e_shard_map_matches_registry`）の E-95 照合（生成時に記録した
+    # 「除外セルが実際に属する水準」限定の `manifest_sha256_by_level` との一致
+    # 検査）が、種付けの有無だけで結果の変わる誤検出を起こす。
+    touched_levels: "set" = {level for _bed_id, level, _clip_id, _arm, _repeat_index in cells}
     for bed_id, level, clip_id, arm, repeat_index in cells:
         if level not in manifest_cache:
             entries, manifest_sha256, manifest_path = _load_external_manifest(
@@ -10540,6 +10555,15 @@ def _m2e_completed_cell_keys(
         )
         if not mismatches:
             completed.add((bed_id, level, clip_id, arm, repeat_index))
+    # E-133: 種付けされた水準のうち `cells` に登場しないものは戻り値から落とす
+    # （種付けなし経路は元々ここに現れない——`manifest_cache`/`manifest_sha256_
+    # by_level` は `cells` を舐めるループでしか埋まらないため）。
+    manifest_sha256_by_level = {
+        level: sha256 for level, sha256 in manifest_sha256_by_level.items() if level in touched_levels
+    }
+    manifest_cache = {
+        level: snapshot for level, snapshot in manifest_cache.items() if level in touched_levels
+    }
     return completed, manifest_sha256_by_level, manifest_cache
 
 
@@ -10823,6 +10847,8 @@ def _require_m2e_shard_map_matches_registry(
     *,
     bars_path: Path = BARS_PATH,
     cell_store: "Optional[str | Path]" = None,
+    manifest_snapshot_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
+    manifest_sha256_snapshot_by_level: "Optional[Dict[str, str]]" = None,
 ) -> "Tuple[Dict[str, Dict[str, Any]], Tuple[Any, str], Dict[str, Tuple[List[Dict[str, Any]], Path]]]":
     """地図の `cells` が現在の campaign から再計算した台帳・割当と一致することを要求する。
 
@@ -10847,6 +10873,19 @@ def _require_m2e_shard_map_matches_registry(
     `cell_store_relative` と実行時 `--cell-store` の一致を要求した上で、真実性
     check 自体もこの実行 store に対して行う）。未指定（既定 `None`）なら従来どおり
     地図の記録した store のみで検証する（直接呼ぶテスト等の後方互換経路）。
+
+    `manifest_snapshot_by_level`/`manifest_sha256_snapshot_by_level`（E-133・
+    PR #242 第32巡 Codex 是正）: CLI の preflight（`--out` 保護入力検査・E-123）が
+    既に読んだ manifest のパース済みスナップショットと sha256 を渡せば、除外
+    真実性の再スキャン（`_m2e_completed_cell_keys` 経由・excluded_keys が非空の
+    ときのみ発火）はここで manifest ファイルを再度開かない——除外検証・digest
+    計算・戻り値（`excluded_manifest_by_level`）のすべてがこの単一スナップ
+    ショット由来になる。E-125（`generate_m2e_shard_map` 側）・E-126
+    （`execute_m2e_shard` の task 構築側）と同族の TOCTOU 完備化で、これにより
+    `--shard-id` 経路の manifest 読取は preflight の 1 回へ完全に一本化される
+    （E-126 が導入した「rescan 優先・preflight 次点」という優先順位は、rescan
+    自体が同じ preflight 実体を消費するため実質的な縮退になる）。未指定
+    （既定 `None`）なら従来どおり内部で読む（直接呼ぶテスト等の後方互換経路）。
 
     E-49（PR #242 第1巡 Codex P1 是正）: セル鍵の集合一致だけでは、鍵は保ったまま
     `shard_id` の値や `n_shards` だけを書き換えた地図（例: 全セルを shard 0 に
@@ -10987,6 +11026,8 @@ def _require_m2e_shard_map_matches_registry(
             verify_cell_store = excluded_cell_store
         # 除外の真実性: 宣言された除外セルが実際に store で digest 一致完了して
         # いることを要求する（判定基準は生成器と同一の _m2e_completed_cell_keys）。
+        # E-133: preflight（保護入力検査・E-123）が既に読んだ manifest スナップ
+        # ショットを引き回す（未指定時は None・スキャン内部が従来どおり読む）。
         actually_complete, rescan_manifest_sha256_by_level, excluded_manifest_by_level = (
             _m2e_completed_cell_keys(
                 sorted(excluded_keys),
@@ -10995,6 +11036,8 @@ def _require_m2e_shard_map_matches_registry(
                 fixtures_by_level=fixtures_by_level,
                 bars_path=bars_path,
                 bars_snapshot=(bars, bars_sha256),
+                manifest_snapshot_by_level=manifest_snapshot_by_level,
+                manifest_sha256_snapshot_by_level=manifest_sha256_snapshot_by_level,
             )
         )
         not_actually_complete = excluded_keys - actually_complete
@@ -12063,6 +12106,7 @@ def execute_m2e_shard(
     require_thread_pinning: bool = True,
     clock: "Callable[[], float]" = time.monotonic,
     preflight_manifest_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
+    preflight_manifest_sha256_by_level: "Optional[Dict[str, str]]" = None,
 ) -> "Dict[str, Any]":
     """1 shard 分の実行（§8.6「1回の実行の契約」の実体）。
 
@@ -12099,16 +12143,20 @@ def execute_m2e_shard(
     `run_m2e_shard_queue` 呼び出し直前で別途捕捉しており、`start`/`elapsed_seconds`
     が指す起点と provenance が食い違っていた）。
 
-    `preflight_manifest_by_level`（E-126・PR #242 第29巡 Codex 是正）: CLI の
-    preflight（`--out` の保護入力検査・E-123）が既に読んだ manifest のパース済み
-    スナップショット（`{level: (entries, manifest_dir)}`）を渡せば、先行 shard
-    検証（E-104 の `excluded_manifest_by_level`）・task 構築の既存 manifest
-    引き回し機構（E-72）にこれを種付けする——優先順位は「E-104 の除外真実性
-    再スキャンが読んだもの」＞「preflight が読んだもの」＞「未指定なら本関数が
-    新規に読む」（E-104 のスナップショットは除外真実性検証と一体で digest が
-    立証済みのため、より新しい preflight スナップショットで上書きしない）。
-    未指定（既定 `None`）なら従来どおり内部で読む（直接呼ぶテスト等の後方互換
-    経路）。
+    `preflight_manifest_by_level`/`preflight_manifest_sha256_by_level`（E-126・
+    PR #242 第29巡 Codex 是正／E-133・PR #242 第32巡 Codex 是正で除外真実性
+    再スキャン自体にも種付けするよう完備化）: CLI の preflight（`--out` の
+    保護入力検査・E-123）が既に読んだ manifest のパース済みスナップショット
+    （`{level: (entries, manifest_dir)}`）と sha256 を渡せば、(a)
+    `_require_m2e_shard_map_matches_registry` 経由の除外真実性再スキャン
+    （E-104 の `_m2e_completed_cell_keys` 呼び出し）、(b) 先行 shard 検証の
+    `excluded_manifest_by_level`、(c) task 構築の既存 manifest 引き回し機構
+    （E-72）の全段にこれを種付けする——除外つき地図でも manifest 読取は
+    preflight の 1 回へ完全に一本化される（E-126 が導入した「E-104 の除外真実性
+    再スキャンが読んだもの」＞「preflight が読んだもの」という優先順位は、
+    E-133 により rescan 自体が同じ preflight 実体を消費するため実質的な縮退に
+    なる）。未指定（既定 `None`）なら従来どおり内部で読む（直接呼ぶテスト等の
+    後方互換経路）。
     """
     if shard_id < 0:
         raise ValueError(f"execute_m2e_shard: shard_id {shard_id!r} は 0 以上のみ許可する")
@@ -12142,12 +12190,20 @@ def execute_m2e_shard(
         # E-79: 実際に書き込む cell_store を渡し、除外真実性検証をこの store へ束縛する。
         # E-104: 除外真実性の再スキャンが読んだ manifest スナップショットも受け取り、
         # 先行 shard 検査・task 構築へ引き回す（再オープンしない）。
+        # E-133: preflight（保護入力検査・E-123）が既に読んだ manifest スナップ
+        # ショットを除外真実性再スキャンへ種付けする（未指定時は None・従来
+        # どおり内部で読む）——manifest 読取を preflight の 1 回へ一本化する。
         (
             validated_fixtures_by_level,
             bars_snapshot,
             excluded_manifest_by_level,
         ) = _require_m2e_shard_map_matches_registry(
-            map_doc, campaign, bars_path=bars_path, cell_store=cell_store
+            map_doc,
+            campaign,
+            bars_path=bars_path,
+            cell_store=cell_store,
+            manifest_snapshot_by_level=preflight_manifest_by_level,
+            manifest_sha256_snapshot_by_level=preflight_manifest_sha256_by_level,
         )
 
         thread_pinning = _apply_thread_pinning() if require_thread_pinning else None
@@ -13033,12 +13089,16 @@ def main() -> int:
         # manifest の**ファイルパス**自体は既に保護されているが、manifest が
         # **指す**実ファイルは含まれていなかった）。
         # E-126（PR #242 第29巡 Codex 是正）: 戻り値のスナップショット
-        # （`preflight_manifest_by_level`）は破棄せず、下の `execute_m2e_shard`
-        # 呼び出しへそのまま引き渡す——`execute_m2e_shard` 内の既存
-        # `manifest_by_level` 引き回し機構（E-72/E-104）へ種付けすることで、
-        # ここで既に読んだ manifest を先行 shard 検証・task 構築で再度開かない
-        # （E-125 の `--make-shard-map` 側対応と対になる shard 側の完備化）。
-        referenced_paths, preflight_manifest_by_level, _preflight_manifest_sha256_by_level = (
+        # （`preflight_manifest_by_level`/`preflight_manifest_sha256_by_level`）は
+        # 破棄せず、下の `execute_m2e_shard` 呼び出しへそのまま引き渡す——
+        # `execute_m2e_shard` 内の既存 `manifest_by_level` 引き回し機構
+        # （E-72/E-104）へ種付けすることで、ここで既に読んだ manifest を先行
+        # shard 検証・task 構築で再度開かない（E-125 の `--make-shard-map` 側
+        # 対応と対になる shard 側の完備化）。E-133（PR #242 第32巡 Codex 是正）:
+        # sha256 スナップショットも保持し、除外真実性再スキャン自体（E-104）へも
+        # 種付けする——これにより除外つき地図でも manifest 読取が preflight の
+        # 1 回へ完全に一本化される。
+        referenced_paths, preflight_manifest_by_level, preflight_manifest_sha256_by_level = (
             _m2e_manifest_referenced_paths(campaign)
         )
         protected.update(referenced_paths)
@@ -13151,10 +13211,12 @@ def main() -> int:
                     cell_store=args.cell_store,
                     bars_path=args.bars,
                     workers=workers,
-                    # E-126: preflight（保護入力検査・E-123）が既に読んだ manifest
-                    # スナップショットを引き渡す（未指定時は None・従来どおり
-                    # 内部で読む）。
+                    # E-126/E-133: preflight（保護入力検査・E-123）が既に読んだ
+                    # manifest スナップショット + sha256 を引き渡す（未指定時は
+                    # None・従来どおり内部で読む）——除外真実性再スキャン・先行
+                    # shard 検証・task 構築のすべてがこれを消費する。
                     preflight_manifest_by_level=preflight_manifest_by_level,
+                    preflight_manifest_sha256_by_level=preflight_manifest_sha256_by_level,
                 )
             except BaseException:
                 # E-96: execute_m2e_shard が失敗するあらゆる経路（shard claim

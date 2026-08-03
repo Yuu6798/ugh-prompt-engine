@@ -13977,6 +13977,109 @@ def test_execute_m2e_shard_uses_the_preflight_manifest_snapshot_and_never_reopen
     assert calls == []
 
 
+def test_execute_m2e_shard_seeds_the_exclusion_truthfulness_rescan_with_the_preflight_manifest_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-133（PR #242 第32巡 Codex 是正）: 除外つき地図（`excluded_completed_cells`
+
+    が非空）を実行する際、除外真実性の再スキャン（`_require_m2e_shard_map_matches_
+    registry` 内・`_m2e_completed_cell_keys` 経由・E-104）は `execute_m2e_shard(
+    preflight_manifest_by_level=..., preflight_manifest_sha256_by_level=...)` で
+    渡された CLI preflight（`--out` 保護入力検査・E-123）のスナップショットを消費し、
+    manifest ファイルを再度開かない。E-126 の既存テスト（除外なしの地図）は task
+    構築側の消費経路しか通らないため、この回帰では明示的に `--cell-store` 経由で
+    除外つき地図を組み、除外真実性再スキャンの経路自体を通す。preflight 後に全水準の
+    manifest を破損させても実行が成功すること（`_load_external_manifest` の呼び出し
+    総数が 0 になることで実証）で、除外検証・digest・戻り値のすべてが単一の
+    preflight スナップショットへ一本化されていることを裏付ける。
+    """
+    import _shard_queue_fakes
+    import yaml as _yaml
+
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    full_doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS
+    )
+    to_complete = full_doc["cells"][:1]
+
+    cell_store = _m2e_root_cell_store(tmp_path)
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        to_complete,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+
+    # 地図生成側（`--make-shard-map`）自身の preflight スナップショット（E-123/E-125）
+    # を実際に種付けして地図を組む——記録される
+    # `excluded_completed_cells.manifest_sha256_by_level` を、下で実行側が別途読む
+    # preflight スナップショットと同じ内容（全水準ぶん）に揃えるため。
+    _gen_referenced, gen_preflight_manifest_by_level, gen_preflight_manifest_sha256_by_level = (
+        harness._m2e_manifest_referenced_paths(campaign)
+    )
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path,
+        cell_store=cell_store,
+        manifest_snapshot_by_level=gen_preflight_manifest_by_level,
+        manifest_sha256_snapshot_by_level=gen_preflight_manifest_sha256_by_level,
+        **_C6_TEST_SHARD_KWARGS,
+    )
+    # 除外つき地図であることを前提として確認する（さもないと除外真実性再スキャン
+    # 自体が発火せず、E-133 が閉じた経路を回帰できない）。
+    assert doc["excluded_completed_cells"]["cells"]
+
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    map_doc, map_sha256 = harness._load_m2e_shard_map(map_path)
+
+    # 実行側（`--shard-id`）自身の preflight（`--out` 保護入力検査・E-123）が読む
+    # のと同じスナップショットを、別途の呼び出しで再現する（地図生成とは別プロセス
+    # 起動が同じ未改変 manifest を独立に読む、という実運用の形を模する）。
+    _run_referenced, preflight_manifest_by_level, preflight_manifest_sha256_by_level = (
+        harness._m2e_manifest_referenced_paths(campaign)
+    )
+    assert preflight_manifest_sha256_by_level == gen_preflight_manifest_sha256_by_level
+
+    # preflight 後に全水準の manifest を破損させる——除外真実性再スキャンが実際に
+    # 再オープンすれば JSON パース失敗で例外になる。
+    for level_paths in campaign.values():
+        Path(level_paths["external_manifest"]).write_text(
+            "not valid json{{{", encoding="utf-8"
+        )
+
+    calls: "List[str]" = []
+    real_load = harness._load_external_manifest
+
+    def _tracking_load(path: Any) -> Any:
+        calls.append(str(path))
+        return real_load(path)
+
+    monkeypatch.setattr(harness, "_load_external_manifest", _tracking_load)
+    result = harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=cell_store,
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+        preflight_manifest_by_level=preflight_manifest_by_level,
+        preflight_manifest_sha256_by_level=preflight_manifest_sha256_by_level,
+    )
+    assert result["cells_completed"] == result["cells_total"]
+    assert calls == []
+
+
 def test_execute_m2e_shard_uses_the_validated_fixtures_snapshot_even_if_the_file_is_swapped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -2030,6 +2030,28 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   エラーなく走ること（`bash -n` で確認）、変数を export した場合は検証を
   通過すること、未定義のままだと `:?` が即座に停止することを実測確認した。
 
+**E-133（PR #242 第32巡）。**
+
+- **E-133**: `--shard-id` で除外つき地図を実行する際の除外真実性再スキャン
+  （E-104 の `prior_manifest_by_level` を返す経路）が manifest を再オープン
+  しており、E-126 の優先順位（rescan > preflight）によりその再スキャン結果が
+  task 構築の消費実体になっていた——preflight の保護検査（E-123）が見ていない
+  スナップショットが消費される乖離が残っていた。`_require_m2e_shard_map_
+  matches_registry`/`execute_m2e_shard` に `manifest_snapshot_by_level`/
+  `manifest_sha256_snapshot_by_level`（`preflight_manifest_by_level`/
+  `preflight_manifest_sha256_by_level`）を追加し、除外真実性再スキャン
+  （`_m2e_completed_cell_keys`）へ preflight のスナップショットを種付けする
+  形へ改めた。種付けは preflight が読んだ全水準ぶんを持ちうるため、
+  `_m2e_completed_cell_keys` の戻り値（`manifest_sha256_by_level`/
+  `manifest_by_level`）を常に `cells` に実際に登場した水準だけへ絞り込む
+  よう修正し、E-95（生成時に除外セルが実際に属する水準だけへ絞った記録との
+  照合）が種付けの有無だけで誤検出を起こさないようにした。これにより
+  `--shard-id` 経路の manifest 読取は preflight の 1 回へ完全に一本化され、
+  E-126 が導入した「rescan 優先・preflight 次点」という優先順位は、rescan
+  自体が同じ preflight 実体を消費するため実質的な縮退になった——manifest
+  読取一本化（E-72/E-104/E-123/E-125/E-126 の系譜）はここで終端する
+  （回帰テスト付き）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
