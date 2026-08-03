@@ -1429,12 +1429,11 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   source_separator.py` の変更を要する）は本ラウンドでは行わない**——`src/svp_rpe/**`
   は Design Memo の Scope OUT であり、既存の `source_separator` 系テスト群が
   「呼び出しごとに新しい `Separator` が構築される」契約に依存した fake を持つため、
-  変更すれば影響範囲が本ブリーフの検証対象を超える。重みロード（最もコストの高い
-  部分）の前倒しにより `S`/`T_*` の分離は実質的に改善するが、逐語一致ではない
-  ——**エスカレーション事項**として記録する（別ブリーフでの再検討に委ねる）。
-  preload は注入可能な callable（既定 `_default_m2e_model_preload`）とし、テストは
-  「initializer が preload を呼ぶ」ことだけを記録用 fake で検証する（テスト環境に
-  実モデルが無いため）。
+  変更すれば影響範囲が本ブリーフの検証対象を超える。preload は注入可能な callable
+  （既定 `_default_m2e_model_preload`）とし、テストは「initializer が preload を
+  呼ぶ」ことだけを記録用 fake で検証する（テスト環境に実モデルが無いため）。
+  preload の効果の正確な記載・in-process 保持への昇格是非は E-63 が扱う
+  （記載は是正済み・保持化は見送り）。
 - **E-51（P2）**: shard 実行記録の `--out` に no-clobber が無く、リトライ時に既存の
   dated record を黙って上書きできた。地図生成と同じ流儀（明示 `--force` は作らない
   ——dated record は per-run 命名が前提）で、高価なキュー開始**前**に fail-closed で
@@ -1495,6 +1494,42 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   loader（`_parse_m2e_campaign_bytes`）に二段検証を一元実装する: (1) 字句——絶対
   パス・`..` 成分を拒否、(2) 解決後——`(ROOT / value).resolve()` が
   `Path.is_relative_to(ROOT)` を満たすことを要求（symlink 経由の脱出も拒否）。
+
+**E-61〜E-65（PR #242 第4巡・続き）。**
+
+- **E-61（P2）**: post-execution ガードは E-48（first-party ソース閉包）しか
+  shard モードに配線されておらず、通常 run 経路が課す同梱ネイティブ・実装 hash の
+  束縛後差し替え検査（`_require_dist_native_unchanged_since_bind()` /
+  `_require_runtime_code_unchanged_since_bind()`）を欠いていた。キュー完走後にこの
+  2 検査を通し、失敗時は本 shard が新規に書いたセルレコード（resume は含まない）を
+  `_quarantine_cell_records` で隔離してから raise する（run 経路と同じ失敗時パターン）。
+- **E-62（P2）**: `session_budget > 0` だけでは `inf` を弾けず、`--session-budget inf`
+  は cap を無限大にして 1 shard の地図を通し、admission も打ち切りも無効化する。
+  生成・実行の両受け口が通る `_assign_m2e_shard_ids`（+ `generate_m2e_shard_map` の
+  早期チェック）に `math.isfinite(session_budget)` を追加した。
+- **E-63（見送り・境界宣言）**: Demucs `Separator` の per-call 再構築を worker 内で
+  in-process 保持化する提案は見送る。per-call 再構築コストは全 stem セルに一様で
+  あり、r2-0 の `T_stem` 実測にも同一コードパスで含まれるため（E-50 の preload が
+  一回性スパイク——重みダウンロード・OS ページキャッシュ/フレームワーク初期化——を
+  `S` へ前倒し済みであれば）、`S`/`T_*` の分離とシャード幅の正しさ（cap 計算）は
+  崩れない。保持化には `src/svp_rpe/io/source_separator.py` の per-call 構築契約の
+  変更を要し同ファイルは Scope OUT のため、r4 実測で再構築コストが `T_stem` の
+  有意割合と判明した場合に別ブリーフで保持化の seam を検討する。
+  `_default_m2e_model_preload` の docstring を、preload の効果が「in-process 保持」
+  ではなく「一回性スパイクの `S` への前倒し」であると正確な記載へ是正した
+  （コード挙動は無変更）。
+- **E-64（P2）**: `--shard-map`/`--campaign` は shard 専用フラグだが、`--shard-id` の
+  指定漏れ等でどちらの shard モードも起きていない場合、dispatch はこれらを黙って
+  無視して通常の run/evaluate/census へ入ってしまっていた。dispatch 前に、どちらの
+  shard モードも起きていないのにこれらが供給されていれば fail-closed で拒否する。
+- **E-65（P1）**: 打ち切り期限が各セルの dispatch 時刻基準（`cell_started_wall +
+  B_session + hang_grace_seconds`）だったため、`B_session` 終盤に配布されたセルは
+  そこからさらに満額の猶予を得てしまい、§8.6「1 回の実行の壁時計上限」を大きく
+  超過しうる（例: 7200s 目に配布されたセルが 14400s+ まで shard を生かし続ける）。
+  打ち切り期限を shard 開始時刻基準の絶対期限（`start + B_session +
+  hang_grace_seconds`・全 in-flight セル共通）へ是正した。許可式
+  （`elapsed + cost(cell) <= B_session`）が admitted セルの開始を `B_session` 以内に
+  既に制約しているため、各セルは最低 `hang_grace_seconds` 分の猶予を保証される。
 
 ## 9. provenance と pin
 

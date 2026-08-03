@@ -10289,7 +10289,20 @@ def _assign_m2e_shard_ids(
 
     `cells` は呼び出し元が既に lexical order で整列済みであること
     （`_m2e_full_cell_registry` が保証する）。戻り値は `(shard_ids, cap, n_shards)`。
+
+    `session_budget`（E-62・PR #242 第4巡 Codex P2 是正）: `inf`/`nan` を拒否する
+    （生成・実行の両受け口——本関数は `generate_m2e_shard_map` と
+    `_require_m2e_shard_map_matches_registry` の双方から呼ばれる共有経路）。
+    `session_budget = inf` だと cap も無限大になり、`N_shards <= R_max` の関所を
+    1 shard のまま素通りして §8.8 の実行回数上限も §8.6 のハング絶対上限も
+    無効化してしまう（`session_budget > 0` だけでは inf を弾けない）。
     """
+    if not math.isfinite(session_budget):
+        raise ValueError(
+            f"_assign_m2e_shard_ids: session_budget {session_budget!r} は有限の正数のみ "
+            "許可する（inf/nan は §8.6 のハング絶対上限・§8.8 の実行回数上限を無効化する "
+            "ため拒否する）(fail-closed)"
+        )
     cap = _M2E_SHARD_CAP_MARGIN * session_budget - startup_cost
     if cap <= 0 or cap < max(t_direct, t_stem):
         raise ValueError(
@@ -10349,9 +10362,10 @@ def generate_m2e_shard_map(
         raise ValueError(
             f"generate_m2e_shard_map: startup_cost {startup_cost!r} は 0 以上のみ許可する"
         )
-    if not (session_budget > 0):
+    if not (math.isfinite(session_budget) and session_budget > 0):
         raise ValueError(
-            f"generate_m2e_shard_map: session_budget {session_budget!r} は正数のみ許可する"
+            f"generate_m2e_shard_map: session_budget {session_budget!r} は有限の正数のみ "
+            "許可する（inf/nan は拒否する・E-62）"
         )
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError(
@@ -10776,6 +10790,10 @@ def _shard_measure_and_record_cell(
         # （`_build_external_clip_row` が刻む 1 行説明）。`execute_m2e_shard` が
         # completed から外して未完側へ回すときに使う。
         "detail": clip_row.get("detail"),
+        # E-61（PR #242 第4巡 Codex P2 是正）: このセルが**新規に書いた**レコードパス
+        # （resume は含まない）。`execute_m2e_shard` が post-execution の runtime pin
+        # 再検証に失敗したとき、`_quarantine_cell_records` へ渡す隔離対象を集めるため。
+        "written_paths": list(cell_written_paths),
     }
 
 
@@ -10797,19 +10815,27 @@ def _default_m2e_model_preload() -> None:
     同じ module-level キャッシュ）を、実音声なしで直接呼んで eager 化する。新しい
     ロード機構は作らない。
 
-    **Demucs**: `demucs.api.Separator` の構築（＝重みロード）を initializer 内で
-    行う。**既知の限界**: `svp_rpe.io.source_separator._separate_stems_with_api` は
-    呼び出しのたびに新しい `Separator` を構築する契約になっており（既存テスト群
-    （`tests/test_source_separator.py` 等）がその契約に依存した fake で観測する）、
-    その per-call 構築を worker 内で恒久的に回避する配線は
-    `src/svp_rpe/io/source_separator.py` の変更を要する。`src/svp_rpe/**` は
+    **Demucs**: `demucs.api.Separator` を initializer 内で 1 回構築し、破棄する
+    （in-process 保持はしない・**既知の限界**）。`svp_rpe.io.source_separator.
+    _separate_stems_with_api` は呼び出しのたびに新しい `Separator` を構築する契約
+    になっており（既存テスト群（`tests/test_source_separator.py` 等）がその契約に
+    依存した fake で観測する）、その per-call 構築を worker 内で恒久的に回避する
+    配線は `src/svp_rpe/io/source_separator.py` の変更を要する。`src/svp_rpe/**` は
     Design Memo の Scope OUT であり、変更すれば影響範囲が本ブリーフの検証対象
     （`tests/test_m2_accuracy_harness.py`）を超えて既存の `source_separator` 系
-    テスト群へ及ぶため、本セッションでは行わない。ここでは重みロード（最もコストの
-    高い部分）を initializer 内で 1 回実行し、OS のページキャッシュ・フレームワーク
-    初期化コストを前倒しするに留める——per-call の `Separator` オブジェクト再構築
-    自体は残るため、`S`/`T_*` の分離は実質的に改善されるが厳密な逐語一致ではない。
-    **エスカレーション事項**（設計判断が必要な場合は別ブリーフで再検討する）。
+    テスト群へ及ぶため、本セッションでは行わない。
+
+    **preload の実際の効果（E-63・PR #242 第4巡 Codex 裁定「見送り」・是正済み記載）**:
+    ここで前倒しされるのは重み**ダウンロード**（初回のみ）と OS ページキャッシュ・
+    フレームワーク初期化コストという**一回性のスパイク**であり、`Separator`
+    オブジェクトの in-memory 保持ではない——per-call の `Separator` 再構築コスト
+    自体は全 stem セルに一様にかかり続ける。この一様な per-call コストは r2-0 の
+    `T_stem` 実測にも同一コードパスで含まれるため（初回スパイクだけが `S` へ
+    前倒しされていれば）、`S`/`T_*` の分離とシャード幅の正しさ（cap 計算）は
+    崩れない。E-63 では in-process 保持化への昇格を見送った（`src/svp_rpe/io/
+    source_separator.py` の per-call 構築契約を変更する必要があり Scope OUT のため）
+    ——r4 実測で per-call 再構築コストが `T_stem` の有意割合と判明すれば、別ブリーフ
+    で保持化の seam を検討する。
     """
     try:
         from svp_rpe.rpe.learned.crepe_adapter import ensure_crepe_available
@@ -10936,6 +10962,9 @@ def _reconcile_truncated_m2e_cell(cell: "Dict[str, Any]") -> "Optional[Dict[str,
         "mismatches": [],
         "outcome": outcome or "measured",
         "detail": detail,
+        # E-61: 照合できたレコードは本 shard の実行時間帯に書かれた実在ファイル。
+        # runtime pin 再検証が事後に失敗すれば、これも隔離対象に含める。
+        "written_paths": [str(record_path)],
     }
 
 
@@ -10965,9 +10994,10 @@ def run_m2e_shard_queue(
     定義と、ハング打ち切りに実プロセス `terminate()` が要ることの両方に整合させる
     ため）。
 
-    打ち切り: いずれかの in-flight セルの壁時計が `session_budget + hang_grace_seconds`
-    を超えたら pool を `terminate()` する。以降のセル（未着手）へは進まない
-    （「超過は異常ではなく通常状態」であり、延長はしない）。
+    打ち切り: shard 開始時刻からの経過が `session_budget + hang_grace_seconds`
+    （全 in-flight セル共通の絶対期限・E-65 是正）を超えたら pool を `terminate()`
+    する。以降のセル（未着手）へは進まない（「超過は異常ではなく通常状態」であり、
+    延長はしない）。
 
     E-54（PR #242 第2巡 Codex P2 是正）: `pool.terminate()` は worker の atomic
     `os.replace()` 成功と `AsyncResult` の ready 化との間の窓で発火しうる——その
@@ -11023,12 +11053,16 @@ def run_m2e_shard_queue(
                 completed.append({"cell": cell, "result": result})
             if aborted_exception is not None:
                 break
-            hung_idx = None
-            for idx, (_async_result, cell_started_wall, _cell) in in_flight.items():
-                if clock() - cell_started_wall > session_budget + hang_grace_seconds:
-                    hung_idx = idx
-                    break
-            if hung_idx is not None:
+            # E-65（PR #242 第4巡 Codex P1 是正）: 打ち切り期限は shard 開始時刻
+            # （`start`）基準の絶対期限——全 in-flight セルに共通。以前は各セルの
+            # dispatch 時刻 (`cell_started_wall`) 基準だったため、B_session の終盤に
+            # 配布されたセルは、そこからさらに満額の B_session + hang_grace_seconds
+            # を得てしまい、§8.6「1 回の実行の壁時計上限」を大きく超過しうる
+            # （例: 7200s 目に配布されたセルが 14400s+ まで shard を生かし続ける）。
+            # 許可式（`elapsed + cost(cell) <= session_budget`）が admitted セルの
+            # 開始時刻を B_session 以内に既に制約しているので、shard 開始基準でも
+            # 各セルは最低 hang_grace_seconds 分 + 自コスト分の猶予を持つ。
+            if clock() - start > session_budget + hang_grace_seconds:
                 terminated_for_hang = True
                 break
             if not ready_indices and not admitted_any:
@@ -11175,6 +11209,12 @@ def execute_m2e_shard(
         reconcile_hung_cell=_reconcile_truncated_m2e_cell,
     )
 
+    # E-61（PR #242 第4巡 Codex P2 是正）: 本 shard が新規に書いたレコードパスを
+    # 集める（resume は含まない）。runtime pin 再検証が事後に失敗した場合の隔離対象。
+    shard_written_paths: "List[str]" = []
+    for _completed in result["completed"]:
+        shard_written_paths.extend(_completed["result"].get("written_paths") or [])
+
     def _cell_ref(entry: "Dict[str, Any]") -> "Dict[str, Any]":
         return {
             "bed_id": entry["bed_id"],
@@ -11236,6 +11276,18 @@ def execute_m2e_shard(
     # 同じ post-execution ガード。差し替わっていれば「pin した digest」と「次回
     # import されるコード」が食い違い、書いたセルの由来が保証できなくなる）。
     _require_unchanged_since_load()
+    # E-61（PR #242 第4巡 Codex P2 是正）: E-48 は first-party ソース閉包しか見ない。
+    # 通常 run 経路（`env_digest_value is not None` 分岐）と同じく、同梱ネイティブ・
+    # 実装 hash の束縛後差し替えも検査する——shard モードは常に `env_digest` を
+    # 束縛するため、run 側のような条件分岐は要らない。失敗時は本 shard が書いた
+    # セルレコードを隔離してから落とす（差し替え中の実装が産んだ row を次 shard が
+    # resume しないように——run 側の失敗時パターンをそのまま踏襲する）。
+    try:
+        _require_dist_native_unchanged_since_bind()
+        _require_runtime_code_unchanged_since_bind()
+    except RuntimeError:
+        _quarantine_cell_records(shard_written_paths)
+        raise
     return record
 
 
@@ -11460,6 +11512,22 @@ def main() -> int:
             "--shard-id は --evaluate / --census と排他（shard モードは run report / "
             "verdict / census のいずれも出さない）"
         )
+    # E-64（PR #242 第4巡 Codex P2 是正）: `--shard-map`/`--campaign` は shard 専用の
+    # フラグ（`--make-shard-map` か `--shard-id` のどちらかと必ず組む）。どちらの
+    # shard モードも起きていないのにこれらが供給されていれば、黙って無視して通常
+    # run/evaluate/census へ入るのではなく、dispatch 前に fail-closed で拒否する
+    # （`--shard-id` の指定漏れ等で意図しない run report が出るのを防ぐ）。
+    if not args.make_shard_map and args.shard_id is None:
+        for flag, supplied in (
+            ("--shard-map", args.shard_map is not None),
+            ("--campaign", args.campaign is not None),
+        ):
+            if supplied:
+                raise SystemExit(
+                    f"{flag} は --make-shard-map か --shard-id のどちらかと組み合わせる "
+                    "shard 専用フラグ; どちらも指定されていないので黙って通常の "
+                    "run/evaluate/census へ入らない (fail-closed)"
+                )
     if args.make_shard_map:
         for flag, rejected in (
             ("--shard-map", args.shard_map is not None),
