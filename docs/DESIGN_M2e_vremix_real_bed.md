@@ -1893,6 +1893,22 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   出ず、tee しないと再現できない。census/shard 実行記録と同じ流儀の tee を
   追加し、地図とこの stdout log を対で commit する旨を注記した（docs のみ）。
 
+**E-119〜E-120（PR #242 第25巡）。**
+
+- **E-119**: `--force` の既存出力スナップショット取得（`out_resolved.read_bytes()`）
+  が `except OSError` で `PermissionError` 等も「存在しない」と黙って扱っていた
+  ——`--force` はその後 claim で既存ファイルを置換でき、生成/公開が失敗した際の
+  ロールバックは「復元すべき中身」を知らないまま unlink してしまう（原本を失う）。
+  `FileNotFoundError` のみを「未存在」として受理し、他の読取エラーは claim 取得
+  （＝原本への最初の書き込み）より前に fail-closed で中断する形へ改めた
+  （`--shard-id` 側の同型サイトも同時に是正。回帰テスト付き）。
+- **E-120**: HANDOFF r6 レシピが `set -o pipefail` のみで `set -e` を欠いていた
+  ため、地図生成が非ゼロで終了しても（例: `N_shards > R_max`）シェルは停止せず、
+  古い/存在しない地図のまま手順 2 の until ループへ進みうる。`set -e -o pipefail`
+  へ改め、until ループ内の `STATUS`/`CHECK_STATUS` 明示判定（E-88/E-113）は
+  `cmd || VAR=$?` へ書き換えて errexit と両立させた（`cmd; VAR=$?` の素朴な形は
+  `cmd` の非ゼロで捕捉前にシェルごと落ちる。docs のみ）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

@@ -12590,10 +12590,23 @@ def main() -> int:
         # E-111: `--force` は非空の既存レコードも上書き対象にできる（`--shard-id`
         # 側は常に 0 バイト予約のみ）ため、原状復帰は「存在したか」の bool ではなく
         # 元の bytes そのもの（`_rollback_m2e_out_reservation` 参照）で行う。
+        # E-119（PR #242 第25巡 Codex 是正）: `except OSError` は `PermissionError`
+        # （書込可能なディレクトリに読取不可の既存ファイルがある等）も「存在しない」と
+        # 黙って扱ってしまう——`--force` はその後 claim で既存ファイルを置換でき、
+        # 生成/公開が失敗した場合のロールバックは「原状復帰すべき中身」を知らないまま
+        # unlink してしまう（原本を失う）。`FileNotFoundError` のみを「未存在」として
+        # 受理し、他の読取エラーは claim 取得（＝原本への最初の書き込み）より前に
+        # fail-closed で中断する（`/etc/ld.so.preload` 読取の E-... と同型の作法）。
         try:
             out_original_bytes = out_resolved.read_bytes()
-        except OSError:
+        except FileNotFoundError:
             out_original_bytes = None
+        except OSError as exc:
+            raise SystemExit(
+                f"--out {args.out} の既存内容を確認できない "
+                f"({type(exc).__name__}: {exc}); --force の原状復帰の基準（既存内容）を "
+                "立証できないまま予約・上書きを進めない (fail-closed・E-119)"
+            ) from exc
         shard_map_claim_token = (
             "m2e-shard-map-reservation/1\n"
             f"pid={os.getpid()}\n"
@@ -12817,10 +12830,21 @@ def main() -> int:
         # E-111: 原状復帰は bool ではなく元の bytes そのもので行う
         # （`_rollback_m2e_out_reservation` 参照。--shard-id 側は E-51 の
         # no-clobber により常に「0 バイト予約」のみが「存在した」場合に相当する）。
+        # E-119（PR #242 第25巡 Codex 是正）: 地図生成側と同型の穴——`except OSError`
+        # は `PermissionError` も「存在しない」と黙って扱う。`FileNotFoundError`
+        # のみを「未存在」として受理し、他の読取エラーは claim 取得前に fail-closed
+        # で中断する（--shard-id 側は常に 0 バイト予約のみが対象だが、その 0 バイト
+        # ファイル自体が読取不可という同型の壊れ方はありうる）。
         try:
             out_original_bytes = out_resolved.read_bytes()
-        except OSError:
+        except FileNotFoundError:
             out_original_bytes = None
+        except OSError as exc:
+            raise SystemExit(
+                f"--out {args.out} の既存内容を確認できない "
+                f"({type(exc).__name__}: {exc}); 原状復帰の基準（既存内容）を立証できない "
+                "まま予約を進めない (fail-closed・E-119)"
+            ) from exc
         shard_run_claim_token = (
             "m2e-shard-run-reservation/1\n"
             f"shard_id={args.shard_id}\n"

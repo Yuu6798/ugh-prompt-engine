@@ -16672,3 +16672,113 @@ def test_main_make_shard_map_restores_a_non_utf8_forced_existing_out_as_raw_byte
     with pytest.raises(RuntimeError, match="simulated map generation failure"):
         harness.main()
     assert out_path.read_bytes() == original_bytes
+
+
+def test_main_make_shard_map_aborts_before_reservation_when_forced_out_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-119（PR #242 第25巡 Codex 是正）: `--force` の既存出力スナップショット取得
+
+    （`read_bytes`）が `FileNotFoundError` 以外の `OSError`（`PermissionError` 等）を
+    上げる場合、「存在しない」と混同せず claim 取得（＝原本への最初の書き込み）より
+    前に fail-closed で中断する——予約サイドカーも作らず、既存の中身も一切変更しない。
+    """
+    import pathlib
+
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    original_bytes = b"not-a-reservation-existing-record"
+    out_path.write_bytes(original_bytes)
+    sidecar_path = tmp_path / "shard_map.yaml.claim"
+    real_read_bytes = pathlib.Path.read_bytes
+
+    def _fake_read_bytes(self: Path, *args: Any, **kwargs: Any) -> bytes:
+        if self == out_path.resolve():
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_bytes(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", _fake_read_bytes)
+    monkeypatch.setattr(
+        harness,
+        "generate_m2e_shard_map",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("generate_m2e_shard_map must not run when the snapshot read fails")
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--force",
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="PermissionError"):
+        harness.main()
+    assert real_read_bytes(out_path) == original_bytes
+    assert not sidecar_path.exists()
+
+
+def test_main_shard_id_aborts_before_reservation_when_existing_out_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-119（PR #242 第25巡 Codex 是正）: `--shard-id` 側でも同型の穴——0 バイト
+
+    予約ファイルのスナップショット取得が `PermissionError` を上げる場合、claim
+    取得前に fail-closed で中断する（`--make-shard-map` 側と同じ是正の shard 実行機
+    側）。
+    """
+    import pathlib
+
+    import yaml as _yaml
+
+    map_doc, map_sha256, campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    out_path = tmp_path / "shard_run.json"
+    out_path.write_bytes(b"")  # mktemp の 0 バイト予約
+    sidecar_path = tmp_path / "shard_run.json.claim"
+    real_read_bytes = pathlib.Path.read_bytes
+
+    def _fake_read_bytes(self: Path, *args: Any, **kwargs: Any) -> bytes:
+        if self == out_path.resolve():
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_bytes(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", _fake_read_bytes)
+    monkeypatch.setattr(
+        harness,
+        "execute_m2e_shard",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("execute_m2e_shard must not run when the snapshot read fails")
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="PermissionError"):
+        harness.main()
+    assert real_read_bytes(out_path) == b""
+    assert not sidecar_path.exists()

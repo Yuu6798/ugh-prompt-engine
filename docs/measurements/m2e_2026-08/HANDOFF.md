@@ -256,7 +256,13 @@ commit する**（§8.5「確定した `cell → shard_id` の全対応表を `m
 合わせる（`build/m2e/` は非 commit の作業成果物、fixtures は committed pin）。
 
 ```bash
-set -o pipefail  # tee が Python の非ゼロ exit（fail-closed 拒否）を隠さないようにする
+set -e -o pipefail  # E-120: -e で地図生成の非ゼロ exit を含むレシピ全体を即停止する
+# （pipefail だけでは `$?` にその非ゼロが載るだけでシェルは止まらず、手順 1 が
+# 失敗しても手順 2 の until ループへ素通りしうる）。以下の until ループ内で
+# `STATUS`/`CHECK_STATUS` を明示判定する箇所は `cmd || VAR=$?`（`||` の右辺は
+# errexit の対象外）で -e と両立させている——`cmd; VAR=$?` の素朴な形だと `cmd`
+# の非ゼロで `VAR=$?` に到達する前にシェルごと落ち、E-88/E-113 の診断分岐が
+# 効かなくなる。
 
 # 1. 地図生成（r2-0 で確定した S/T_direct/T_stem/P を渡す。同一入力ならバイト一致）。
 #    --workers "$P"（E-59）: T_direct/T_stem を校正したときの P を地図へ記録する
@@ -292,16 +298,19 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
 for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml'))['n_shards'] - 1)") ))); do
   while :; do
     OUT="$(mktemp "build/m2e/shard_run_${N}_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.json")"
+    STATUS=0
     OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
         --shard-id "$N" \
         --shard-map docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml \
         --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
         --cell-store build/m2e/store_A --workers "$P" \
         --out "$OUT" \
-        | tee "$(mktemp "build/m2e/shard_run_${N}_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
-    # `set -o pipefail`（冒頭で宣言済み）により、`$?` は tee ではなく実行機自体の
-    # exit status を指す。非ゼロは即終了（E-88・失敗の永久リトライ禁止）。
-    STATUS=$?
+        | tee "$(mktemp "build/m2e/shard_run_${N}_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")" \
+        || STATUS=$?
+    # `set -o pipefail`（冒頭で宣言済み）により、`STATUS` は tee ではなく実行機
+    # 自体の exit status を指す。非ゼロは即終了（E-88・失敗の永久リトライ禁止）。
+    # `|| STATUS=$?`（E-120）: `set -e` 下でパイプライン自体に素朴に `STATUS=$?`
+    # を続けると、非ゼロで捕捉前にシェルごと落ちる——`||` の右辺で捕捉する。
     if [ "$STATUS" -ne 0 ]; then
       echo "shard $N の実行が非ゼロ exit ($STATUS) で終了した。claim 衝突・pin 失敗・" >&2
       echo "不正地図等の可能性がある——原因を確認してから再実行すること (fail-closed・E-88)" >&2
@@ -320,6 +329,9 @@ for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('do
     # 回す（失敗の永久リトライを禁じた E-88 の精神を cells_unavailable にも適用）。
     # exit 0 = shard 完了（break）／1 = truncated・not_started のみ残存（再実行）／
     # 2 = cells_unavailable 非空（即時終了）。
+    # `|| CHECK_STATUS=$?`（E-120）: 上と同じ理由——`set -e` 下では非ゼロ sys.exit
+    # を素朴に `CHECK_STATUS=$?` で捕捉する形は機能しない。
+    CHECK_STATUS=0
     python -c "
 import json, sys
 with open('$OUT') as f:
@@ -327,8 +339,7 @@ with open('$OUT') as f:
 if r['cells_unavailable']:
     sys.exit(2)
 sys.exit(0 if r['cells_completed'] == r['cells_total'] else 1)
-"
-    CHECK_STATUS=$?
+" || CHECK_STATUS=$?
     if [ "$CHECK_STATUS" -eq 2 ]; then
       echo "shard $N: cells_unavailable が非空——CREPE/Demucs/重み不在等はリトライで直らない。" >&2
       echo "原因を確認してから対応すること (fail-closed・E-113)" >&2
