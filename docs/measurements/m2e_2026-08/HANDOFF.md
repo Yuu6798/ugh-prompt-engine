@@ -313,13 +313,16 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
 #    黙って回し続けると気付かれないまま資源を浪費する。`--out`（mktemp 予約）が
 #    exit 0 なのに 0 バイトのまま（実行記録が書き出されていない）場合も異常として
 #    即終了する。
-for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml'))['n_shards'] - 1)") ))); do
+# E-136（PR #242 第34巡 Codex 是正）: 地図パスをループ内で一貫して参照できる
+# よう変数へ束縛する（`--shard-map` 引数・下記の期待セル数照合の両方で使う）。
+SHARD_MAP_PATH="docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml"
+for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('$SHARD_MAP_PATH'))['n_shards'] - 1)") ))); do
   while :; do
     OUT="$(mktemp "build/m2e/shard_run_${N}_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.json")"
     STATUS=0
     OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
         --shard-id "$N" \
-        --shard-map docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml \
+        --shard-map "$SHARD_MAP_PATH" \
         --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
         --cell-store build/m2e/store_A --workers "$P" \
         --out "$OUT" \
@@ -375,11 +378,21 @@ for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('do
     # `cells_completed` の**部分集合**であり加算対象ではない——単純に
     # `completed + resumed + 未完各種` を合計すると二重計上になる）を全数検証し、
     # いずれかの失敗も exit 3（fatal・E-127 の規約を踏襲）へ落とす。
+    # E-136（PR #242 第34巡 Codex 是正）: E-134 の会計不変条件は record**内部**の
+    # 整合性（measured/resumed/未完各種の内訳が record 自身の cells_total/
+    # cells_completed と合う）しか見ておらず、record が「セル 0 件・total=0・
+    # completed=0」のように**全体として空**でも内部整合は保たれるため、この
+    # 空記録は exit 0（完了）を通ってしまう穴が残っていた——shard 実行が
+    # 早期に異常終了して空の record を書いた場合でも「完了」と誤認しうる。
+    # 地図（`$SHARD_MAP_PATH`）を読み、shard `$N` に実際に割り当てられている
+    # セル数（`cells[].shard_id == $N` の件数）を独立に数え、record の
+    # cells_total と一致することを要求する——地図側の台帳と record 側の
+    # 自己申告が食い違う（空記録を含む）場合は fatal（exit 3）とする。
     # `|| CHECK_STATUS=$?`（E-120）: 上と同じ理由——`set -e` 下では非ゼロ sys.exit
     # を素朴に `CHECK_STATUS=$?` で捕捉する形は機能しない。
     CHECK_STATUS=0
     python -c "
-import json, sys
+import json, sys, yaml
 
 EXPECTED_SCHEMA = 'm2e-shard-run/0.1'
 EXPECTED_SHARD_ID = $N
@@ -428,6 +441,28 @@ unavailable = require_list('cells_unavailable')
 truncated = require_list('cells_truncated')
 not_started = require_list('cells_not_started')
 
+# E-136: 地図側の台帳から shard $N の期待セル数を独立に導出し、record 自身の
+# cells_total と照合する（record 内部だけでは検出できない「全体として空の
+# record」を塞ぐ）。
+try:
+    with open('$SHARD_MAP_PATH') as f:
+        shard_map = yaml.safe_load(f)
+except Exception as exc:
+    fatal(f'shard map read failed: {exc!r}')
+
+if not isinstance(shard_map, dict) or not isinstance(shard_map.get('cells'), list):
+    fatal(f'shard map at $SHARD_MAP_PATH is malformed (missing cells list)')
+
+expected_total = sum(
+    1 for c in shard_map['cells']
+    if isinstance(c, dict) and c.get('shard_id') == EXPECTED_SHARD_ID
+)
+if expected_total != total:
+    fatal(
+        f'cells_total({total}) != shard-map-derived expected cell count for shard '
+        f'{EXPECTED_SHARD_ID} ({expected_total})'
+    )
+
 # E-92 の相互排他分割: 1 セルは measured か resumed のどちらか一方にのみ属す。
 if len(measured) + len(resumed) != completed:
     fatal(
@@ -456,8 +491,8 @@ sys.exit(0 if completed == total else 1)
       exit 1
     else
       echo "shard $N: 実行記録の検査自体が失敗した (CHECK_STATUS=$CHECK_STATUS)。schema_version・" >&2
-      echo "shard_id・型・会計不変条件のいずれかの検証に失敗した——リトライでは直らない。原因を" >&2
-      echo "確認してから対応すること (fail-closed・E-127/E-134)" >&2
+      echo "shard_id・型・会計不変条件・地図由来の期待セル数のいずれかの検証に失敗した——" >&2
+      echo "リトライでは直らない。原因を確認してから対応すること (fail-closed・E-127/E-134/E-136)" >&2
       exit 1
     fi
   done

@@ -2080,6 +2080,19 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   no-clobber 検査（`--force` 分岐）より前に無条件で走るため、`--make-shard-map
   --force` を併用しても拒否は変わらない（回帰テスト付き）。
 
+**E-136（PR #242 第34巡・docs のみ）。**
+
+- **E-136**: E-134 の会計不変条件は実行記録**内部**の整合性（measured/resumed/
+  未完各種の内訳が record 自身の cells_total/cells_completed と合う）しか
+  見ておらず、「セル 0 件・cells_total=0・cells_completed=0」のように record
+  が**全体として空**でも内部整合は保たれるため、この空記録が exit 0（完了）を
+  素通りしてしまう穴が残っていた。HANDOFF r6 の検査スニペットに、シャード地図
+  （`m2e_r2_shard_map.yaml`。ループが既に使う変数 `SHARD_MAP_PATH` に束縛して
+  参照を一本化）を読み、shard `$N` に実際に割り当てられているセル数
+  （`cells[].shard_id == $N` の件数）を独立に導出して record の cells_total と
+  照合する検証を追加した——不一致（空記録を含む）は fatal（exit 3）。
+  正常完了・total 不一致（空記録含む）の両ケースを bash で実測確認した。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
