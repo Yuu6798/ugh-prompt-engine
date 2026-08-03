@@ -314,7 +314,7 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
 #    exit 0 なのに 0 バイトのまま（実行記録が書き出されていない）場合も異常として
 #    即終了する。
 # E-136（PR #242 第34巡 Codex 是正）: 地図パスをループ内で一貫して参照できる
-# よう変数へ束縛する（`--shard-map` 引数・下記の期待セル数照合の両方で使う）。
+# よう変数へ束縛する（`--shard-map` 引数・下記の検証双方で使う）。
 SHARD_MAP_PATH="docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml"
 # E-137（PR #242 第35巡 Codex 是正）: `n_shards` を検証せず `seq 0 $(( n_shards -
 # 1 ))` へ直接渡すと、n_shards が 0（生成器は本来 0 を作らないが改変・破損を
@@ -324,28 +324,61 @@ SHARD_MAP_PATH="docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml"
 # `seq` は FIRST > LAST を**エラーにせず空展開**するため、for ループが 1 度も
 # 実行されずに（測定を1件も行わないまま）レシピが「成功」扱いで完走してしまう
 # ——r6 完走を偽装する穴。ループ範囲を構築する**前**に地図を読み、n_shards が
-# 非 bool の正整数であることを明示検証する（失敗はそのまま python の非ゼロ
-# exit（3）となり、`set -e` がレシピ全体を即座に停止する——`STATUS`/
+# 非 bool の正整数であることを明示検証する。
+# E-140（PR #242 第36巡 Codex 是正）: 「非 bool の正整数」だけでは、生成器が
+# 出し得ない値（改変・破損）——例えば `n_shards: 13`——も通してしまう。§8.8 で
+# 凍結した `R_max = 12`（`generate_m2e_shard_map`/`_require_m2e_shard_map_
+# matches_registry` 共有の `_M2E_R_MAX`）を上限として明示し、`1 <= n_shards
+# <= 12` の範囲外は fail-closed で拒否する——`seq` がこの範囲外の巨大な N まで
+# 実体化する前に preflight で止める。
+# E-139（PR #242 第36巡 Codex 是正）: E-138 は per-shard 検査のたびに地図
+# ファイルを個別に再読取・再ハッシュしていた——検証対象は「preflight が見た
+# のと同一の地図実体」であるべきで、shard ごとに独立に読み直すと、shard 間で
+# 地図が差し替わっても各回の検査は自分がその時点で読んだ bytes に対しては
+# 自己無矛盾に通ってしまい、「全 shard が同一地図実体で走った」ことまでは
+# 立証しない。ここ（一度きりの preflight）で地図を単一読取の bytes として読み、
+# その内容を不変のスナップショット（`SHARD_MAP_SNAPSHOT`）へ書き出し、sha256 を
+# `SHARD_MAP_SHA256_PINNED` として捕捉する——n_shards の検証・以降の全 shard の
+# per-shard 検査（期待セル数・セル参照集合の導出、E-136/E-141）は、この 1 回
+# だけ読んだ bytes（のスナップショット）に完全に一本化される。per-shard 検査は
+# record の `shard_map_sha256` をこの pinned 値とだけ比較し（検査のたびに地図を
+# 再読取・再ハッシュしない）、不一致（＝その shard の実行が pin と異なる地図
+# 実体を消費した）を fatal（exit 3）とする。失敗はそのまま python の非ゼロ
+# exit（3）となり、`set -e` がレシピ全体を即座に停止する（`STATUS`/
 # `CHECK_STATUS` のような捕捉は不要: ここはリトライ対象ではなく地図そのものが
-# 壊れている場合の一度きりの preflight）。検証済みの値をそのままループ範囲の
-# 導出にも使う（同じファイルを 2 度読まない・E-72/E-125 と同族の TOCTOU 回避）。
-N_SHARDS=$(python -c "
-import sys, yaml
+# 壊れている場合の一度きりの preflight）。
+SHARD_MAP_SNAPSHOT="$(mktemp "build/m2e/shard_map_pinned_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.yaml")"
+PREFLIGHT_OUTPUT=$(python -c "
+import hashlib, sys, yaml
 
-with open('$SHARD_MAP_PATH') as f:
-    doc = yaml.safe_load(f)
+with open('$SHARD_MAP_PATH', 'rb') as f:
+    shard_map_bytes = f.read()
+
+with open('$SHARD_MAP_SNAPSHOT', 'wb') as f:
+    f.write(shard_map_bytes)
+
+try:
+    doc = yaml.safe_load(shard_map_bytes)
+except Exception as exc:
+    print(f'shard map parse failed: {exc!r}', file=sys.stderr)
+    sys.exit(3)
 
 if not isinstance(doc, dict):
     print(f'shard map at $SHARD_MAP_PATH is not a mapping: {doc!r}', file=sys.stderr)
     sys.exit(3)
 
 n_shards = doc.get('n_shards')
-if isinstance(n_shards, bool) or not isinstance(n_shards, int) or n_shards < 1:
-    print(f'shard map n_shards is not a non-bool positive int: {n_shards!r}', file=sys.stderr)
+if isinstance(n_shards, bool) or not isinstance(n_shards, int) or not (1 <= n_shards <= 12):
+    print(
+        f'shard map n_shards is not a non-bool int in [1, 12] (frozen R_max, '
+        f'design section 8.8): {n_shards!r}',
+        file=sys.stderr,
+    )
     sys.exit(3)
 
-print(n_shards)
+print(n_shards, hashlib.sha256(shard_map_bytes).hexdigest())
 ")
+read -r N_SHARDS SHARD_MAP_SHA256_PINNED <<< "$PREFLIGHT_OUTPUT"
 for N in $(seq 0 $((N_SHARDS - 1))); do
   while :; do
     OUT="$(mktemp "build/m2e/shard_run_${N}_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.json")"
@@ -422,7 +455,7 @@ for N in $(seq 0 $((N_SHARDS - 1))); do
     # を素朴に `CHECK_STATUS=$?` で捕捉する形は機能しない。
     CHECK_STATUS=0
     python -c "
-import hashlib, json, sys, yaml
+import json, sys, yaml
 
 EXPECTED_SCHEMA = 'm2e-shard-run/0.1'
 EXPECTED_SHARD_ID = $N
@@ -477,33 +510,40 @@ not_started = require_list('cells_not_started')
 # E-138（PR #242 第35巡 Codex 是正）: E-136 は「検査が読んだ地図」と「実行が
 # 実際に消費した地図」が同一実体である保証を欠いていた——地図が実行**後**・
 # 検査**前**に差し替えられても（cells の中身や shard_id 割当が変わっても
-# 件数だけ偶然一致すれば）検出できない。地図を単一読取の bytes として読み、
-# その sha256 が record 自身の `shard_map_sha256`（`execute_m2e_shard` が
-# 実際に消費した地図の sha256・`_load_m2e_shard_map` と同じ計算式）と一致する
-# ことを**セル数を数える前に**要求する（不一致は fatal）。以降のセル数照合も
-# この同一 bytes から parse し、hash 比較後に別の読取へ切り替えない
-# （E-72/E-125 と同族の TOCTOU 回避）。
+# 件数だけ偶然一致すれば）検出できない。地図の sha256 が record 自身の
+# \`shard_map_sha256\`（\`execute_m2e_shard\` が実際に消費した地図の sha256・
+# \`_load_m2e_shard_map\` と同じ計算式）と一致することを**セル数を数える前に**
+# 要求する（不一致は fatal）。
+# E-139（PR #242 第36巡 Codex 是正）: 検査のたびに地図ファイルを個別に
+# 再読取・再ハッシュするのではなく、preflight で一度だけ捕捉した
+# \`SHARD_MAP_SHA256_PINNED\` とだけ比較する——同一地図実体で全 shard が走った
+# ことの立証は preflight 側の単一読取スナップショット（\`SHARD_MAP_SNAPSHOT\`）
+# が担う（このスクリプトはそのスナップショットだけを読む・元の \`$SHARD_MAP_PATH\`
+# は二度と読まない）。この python -c 引数は bash の二重引用符文字列でもあるため、
+# 未エスケープのバッククォートはコマンド置換として解釈され、存在しないコマンドの
+# 実行試行と stderr 汚染を招く（実測で発見・是正——このコメント内の全バック
+# クォートは \` とエスケープ済み）。
+EXPECTED_MAP_SHA256 = '$SHARD_MAP_SHA256_PINNED'
+record_map_sha256 = r.get('shard_map_sha256')
+if record_map_sha256 != EXPECTED_MAP_SHA256:
+    fatal(
+        f'record shard_map_sha256({record_map_sha256!r}) != pinned shard map hash '
+        f'({EXPECTED_MAP_SHA256!r})'
+    )
+
 try:
-    with open('$SHARD_MAP_PATH', 'rb') as f:
+    with open('$SHARD_MAP_SNAPSHOT', 'rb') as f:
         shard_map_bytes = f.read()
 except Exception as exc:
-    fatal(f'shard map read failed: {exc!r}')
-
-shard_map_sha256 = hashlib.sha256(shard_map_bytes).hexdigest()
-record_map_sha256 = r.get('shard_map_sha256')
-if record_map_sha256 != shard_map_sha256:
-    fatal(
-        f'record shard_map_sha256({record_map_sha256!r}) != shard map at '
-        f'$SHARD_MAP_PATH ({shard_map_sha256!r})'
-    )
+    fatal(f'shard map snapshot read failed: {exc!r}')
 
 try:
     shard_map = yaml.safe_load(shard_map_bytes)
 except Exception as exc:
-    fatal(f'shard map parse failed: {exc!r}')
+    fatal(f'shard map snapshot parse failed: {exc!r}')
 
 if not isinstance(shard_map, dict) or not isinstance(shard_map.get('cells'), list):
-    fatal(f'shard map at $SHARD_MAP_PATH is malformed (missing cells list)')
+    fatal(f'shard map snapshot at $SHARD_MAP_SNAPSHOT is malformed (missing cells list)')
 
 expected_total = sum(
     1 for c in shard_map['cells']
@@ -529,6 +569,73 @@ if completed + len(unavailable) + len(truncated) + len(not_started) != total:
         f'cells_total({total})'
     )
 
+# E-141（PR #242 第36巡 Codex 是正）: 配列長の会計（直上の E-92/E-134 由来の
+# 検証）だけでは、「セル A の参照が cells_truncated と cells_not_started の
+# 両方に重複計上されつつ、セル B の参照はどの配列にも現れない」といった、
+# 総数だけ辻褄が合う入れ替わりを検出できない。5 配列（measured/resumed/
+# unavailable/truncated/not_started）それぞれのセル参照を正規化 5-tuple
+# （bed_id, level, clip_id, arm, repeat_index——§6.2 の正準鍵。
+# \`execute_m2e_shard\` 内部の \`_cell_ref\` が実際に記録するフィールド形式に
+# 合わせた）へ変換し、(a) 5 配列を合算した全参照が重複なし（＝配列間でも
+# 重複しない＝相互に非交差）、(b) その合併集合が pinned 地図（スナップショット）
+# の shard $N のセル集合と完全一致することを要求する。いずれの違反も fatal
+# （exit 3）とする。
+
+
+def cell_refs(list_value, list_name):
+    refs = []
+    for entry in list_value:
+        if not isinstance(entry, dict):
+            fatal(f'{list_name} contains a non-object entry: {entry!r}')
+        missing = [
+            key for key in ('bed_id', 'level', 'clip_id', 'arm', 'repeat_index')
+            if key not in entry
+        ]
+        if missing:
+            fatal(f'{list_name} entry is missing {missing!r}: {entry!r}')
+        refs.append(
+            (entry['bed_id'], entry['level'], entry['clip_id'], entry['arm'], entry['repeat_index'])
+        )
+    return refs
+
+
+all_refs = (
+    cell_refs(measured, 'cells_measured')
+    + cell_refs(resumed, 'cells_resumed')
+    + cell_refs(unavailable, 'cells_unavailable')
+    + cell_refs(truncated, 'cells_truncated')
+    + cell_refs(not_started, 'cells_not_started')
+)
+if len(all_refs) != len(set(all_refs)):
+    seen = set()
+    dupes = []
+    for ref in all_refs:
+        if ref in seen:
+            dupes.append(ref)
+        seen.add(ref)
+    fatal(
+        'cell references are not duplicate-free / pairwise disjoint across '
+        f'cells_measured/resumed/unavailable/truncated/not_started: {dupes[:5]!r}'
+    )
+
+try:
+    expected_refs = {
+        (c['bed_id'], c['level'], c['clip_id'], c['arm'], c['repeat_index'])
+        for c in shard_map['cells']
+        if isinstance(c, dict) and c.get('shard_id') == EXPECTED_SHARD_ID
+    }
+except KeyError as exc:
+    fatal(f'shard map snapshot cell entry is missing {exc.args[0]!r}')
+
+actual_refs = set(all_refs)
+if actual_refs != expected_refs:
+    missing_refs = list(expected_refs - actual_refs)[:5]
+    extra_refs = list(actual_refs - expected_refs)[:5]
+    fatal(
+        f'cell reference union != shard-map-derived cell set for shard '
+        f'{EXPECTED_SHARD_ID}: missing={missing_refs!r} extra={extra_refs!r}'
+    )
+
 if unavailable:
     sys.exit(2)
 sys.exit(0 if completed == total else 1)
@@ -543,9 +650,9 @@ sys.exit(0 if completed == total else 1)
       exit 1
     else
       echo "shard $N: 実行記録の検査自体が失敗した (CHECK_STATUS=$CHECK_STATUS)。schema_version・" >&2
-      echo "shard_id・型・会計不変条件・地図由来の期待セル数・地図 hash のいずれかの検証に" >&2
-      echo "失敗した——リトライでは直らない。原因を確認してから対応すること " >&2
-      echo "(fail-closed・E-127/E-134/E-136/E-138)" >&2
+      echo "shard_id・型・会計不変条件・地図由来の期待セル数・pinned 地図 hash・セル参照集合の" >&2
+      echo "いずれかの検証に失敗した——リトライでは直らない。原因を確認してから対応すること " >&2
+      echo "(fail-closed・E-127/E-134/E-136/E-138/E-139/E-141)" >&2
       exit 1
     fi
   done
