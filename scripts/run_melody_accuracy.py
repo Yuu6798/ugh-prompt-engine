@@ -2605,6 +2605,7 @@ from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
 # 別物 —— あちらは `--out` の verdict/report 専用に育った独自実装で、fsync まで含めて
 # 意図的に厚い。セルレコードは大量（最大 1280 件）に書くため、utils 側の薄い実装を
 # そのまま使う。
+from svp_rpe.utils.atomic_io import atomic_write_bytes as _cell_store_atomic_write_bytes  # noqa: E402
 from svp_rpe.utils.atomic_io import atomic_write_text as _cell_store_atomic_write_text  # noqa: E402
 
 
@@ -10671,6 +10672,19 @@ def generate_m2e_shard_map(
                 "実行側の除外検証（fail-closed）が常に落ちる地図を作らない (E-66)"
             )
         cells = [c for c in cells if c not in excluded_keys]
+        # E-115（PR #242 第22巡 Codex 是正）: --cell-store により残セルが 0 件
+        # （台帳の全セルが既に digest 一致で完了済み）になる場合、n_shards=1・
+        # n_cells=0 の空地図を黙って生成しない——その時点で r6 は完了しており、
+        # 意味のない地図という成果物を積み重ねる代わりに fail-closed で明示する
+        # （HANDOFF §5 のレシピ注記参照。「地図は科学ではなくスケジューリング」
+        # という §8.5 の前提は「スケジュールする対象が 1 件以上ある」ことを暗黙に
+        # 含む）。
+        if not cells:
+            raise ValueError(
+                f"generate_m2e_shard_map: --cell-store {cell_store_resolved} により残セルが "
+                "0 件（台帳の全セルが既に完了済み）; 空のシャード地図は生成しない——全セル完了・"
+                "地図不要（r6 は次フェーズへ進む） (fail-closed・E-115)"
+            )
 
     shard_ids, cap, n_shards = _assign_m2e_shard_ids(
         cells,
@@ -11862,9 +11876,17 @@ def _rollback_m2e_out_reservation(
     元の bytes をそのまま復元すれば、mktemp の 0 バイト予約（`original_bytes
     == b""`）・非空の既存レコード（`--force`）のどちらでも安全に原状復帰する。
     未存在だったなら（`original_bytes is None`）削除する。
+
+    E-114（PR #242 第22巡 Codex 是正）: 以前は `_atomic_write_text(out_resolved,
+    original_bytes.decode("utf-8"))` を経由していた——`--force` の上書き対象が
+    非 UTF-8 な既存ファイルだった場合、この `decode("utf-8")` 自体が
+    `UnicodeDecodeError` を送出し、ロールバックを呼び出した**元の**例外
+    （生成失敗の本当の原因）を隠して別の例外にすり替えてしまう。text 変換を
+    一切経由せず `utils/atomic_io.atomic_write_bytes` へ bytes のまま渡す形へ
+    改め、この decode 失敗の経路自体を消した。
     """
     if original_bytes is not None:
-        _atomic_write_text(out_resolved, original_bytes.decode("utf-8"))
+        _cell_store_atomic_write_bytes(out_resolved, original_bytes)
     else:
         out_resolved.unlink(missing_ok=True)
 

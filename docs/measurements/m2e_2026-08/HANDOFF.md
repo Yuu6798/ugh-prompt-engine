@@ -308,15 +308,30 @@ for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('do
       exit 1
     fi
     # 実行記録を検査する: cells_completed == cells_total（未完 3 種がすべて空）に
-    # なっていれば shard N は完了——次の shard_id へ進む。そうでなければ（exit 0 かつ
-    # 実行記録が正常に書かれた上で未完セルが残っている場合のみ）同一 shard_id を
-    # 再実行する。
+    # なっていれば shard N は完了——次の shard_id へ進む。E-113（PR #242 第22巡
+    # Codex 是正）: リトライ継続は「未完が truncated / not_started のみ」の場合に
+    # 限定する——cells_unavailable（CREPE/Demucs/重み不在等、環境起因で消えない
+    # 未完）が非空なら、盲目的に再実行し続けず即座にレシピを終了しオペレータ対応へ
+    # 回す（失敗の永久リトライを禁じた E-88 の精神を cells_unavailable にも適用）。
+    # exit 0 = shard 完了（break）／1 = truncated・not_started のみ残存（再実行）／
+    # 2 = cells_unavailable 非空（即時終了）。
     python -c "
 import json, sys
 with open('$OUT') as f:
     r = json.load(f)
+if r['cells_unavailable']:
+    sys.exit(2)
 sys.exit(0 if r['cells_completed'] == r['cells_total'] else 1)
-" && break
+"
+    CHECK_STATUS=$?
+    if [ "$CHECK_STATUS" -eq 2 ]; then
+      echo "shard $N: cells_unavailable が非空——CREPE/Demucs/重み不在等はリトライで直らない。" >&2
+      echo "原因を確認してから対応すること (fail-closed・E-113)" >&2
+      exit 1
+    elif [ "$CHECK_STATUS" -eq 0 ]; then
+      break
+    fi
+    # CHECK_STATUS == 1: truncated/not_started のみが残存——同一 shard_id を再実行する。
   done
 done
 ```
@@ -348,6 +363,9 @@ done
   （§8.5・完了済みセルのレコードは影響を受けない）。セル台帳（fixtures）自体を
   変えてはならない——変えると地図生成器・実行機の両方が `_require_m2e_shard_map_
   matches_registry` で fail-closed になる（意図どおり）。
+- **E-115**: 上記の地図引き直しで `--cell-store` 配下の残セルが 0 件（全セル
+  完了済み）になっている場合、地図生成器は空の地図を作らず明示エラーで拒否する
+  （fail-closed）——その時点で r6 は完了しており、次フェーズ（r7）へ進む。
 
 ---
 

@@ -1847,6 +1847,28 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   （`False == 0` により `shard_id: false` が `shard_id: 0` と黙って比較上
   一致しうる）。同じ無強制整数ヘルパで格納前に検証する形へ改めた。
 
+**E-113〜E-115（PR #242 第22巡）。**
+
+- **E-113（P1）**: HANDOFF の r6 リトライレシピは `cells_completed ==
+  cells_total` のみで再実行可否を判定しており、`cells_unavailable`
+  （CREPE/Demucs/重み不在等、環境起因で再実行しても消えない未完）が残っていても
+  盲目的に同一 shard を再実行し続けていた。リトライ継続を「未完が
+  truncated / not_started のみ」の場合に限定し、`cells_unavailable` が非空なら
+  即座にレシピを終了してオペレータ対応へ回す形へ改めた（失敗の永久リトライを
+  禁じた E-88 の精神を `cells_unavailable` にも及ぼす。docs のみ）。
+- **E-114**: `--force` 時の原状復帰（`_rollback_m2e_out_reservation`）が
+  `original_bytes.decode("utf-8")` を経由していたため、非 UTF-8 な既存出力を
+  `--force` で上書き対象にしていた場合、復元時の `UnicodeDecodeError` が元の
+  生成失敗エラーを隠してしまう経路があった。`utils/atomic_io.atomic_write_bytes`
+  を直接使い、decode を経由せず元の bytes をそのまま atomic に書き戻す形へ
+  改めた（回帰テスト付き）。
+- **E-115**: `--make-shard-map --cell-store` で台帳の残セルが 0 件（全セル
+  完了済み）になる場合でも、`n_shards=1・n_cells=0` の空地図を黙って生成
+  していた——r6 は次フェーズへ進む段階であり地図という成果物自体が不要
+  なのに、意味のない空地図が commit 対象として積み上がりうる。残セル 0 件を
+  fail-closed の明示エラーで拒否し、地図を生成しない形へ改めた（HANDOFF
+  レシピにも分岐注記。回帰テスト付き）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

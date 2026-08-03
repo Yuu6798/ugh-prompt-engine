@@ -14229,6 +14229,41 @@ def test_generate_m2e_shard_map_excludes_completed_cells_when_cell_store_given(
     assert doc["n_cells"] == len(all_cells) - len(to_complete)
 
 
+def test_generate_m2e_shard_map_rejects_an_empty_replacement_map_when_all_cells_complete(
+    tmp_path: Path,
+) -> None:
+    """E-115（PR #242 第22巡 Codex 是正）: `--cell-store` により残セルが 0 件
+
+    （台帳の全セルが既に digest 一致で完了済み）になる場合、地図生成器は空の
+    地図を生成せず fail-closed の明示エラーで拒否する（r6 は次フェーズへ進む
+    段階であり、地図という成果物自体が不要）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    full_doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS
+    )
+    all_cells = full_doc["cells"]
+    assert all_cells
+
+    cell_store = _m2e_root_cell_store(tmp_path)
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        all_cells,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+
+    with pytest.raises(ValueError, match="残セルが 0"):
+        harness.generate_m2e_shard_map(
+            campaign_path=campaign_path, cell_store=cell_store, **_C6_TEST_SHARD_KWARGS
+        )
+
+
 def test_generate_m2e_shard_map_without_cell_store_records_no_exclusions(
     tmp_path: Path,
 ) -> None:
@@ -16452,3 +16487,47 @@ def test_main_make_shard_map_preserves_a_forced_existing_out_when_generation_rai
     with pytest.raises(RuntimeError, match="simulated map generation failure"):
         harness.main()
     assert out_path.read_text(encoding="utf-8") == original_content
+
+
+def test_main_make_shard_map_restores_a_non_utf8_forced_existing_out_as_raw_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-114（PR #242 第22巡 Codex 是正）: `--force` の原状復帰は元の bytes を
+
+    text デコード経由せずそのまま atomic に書き戻す。非 UTF-8 な既存ファイルを
+    `--force` の上書き対象にした場合、旧実装（`original_bytes.decode("utf-8")`）
+    は復元時に `UnicodeDecodeError` を投げ、元の生成失敗エラー（このテストでは
+    `RuntimeError`）を隠して別の例外にすり替えてしまっていた。非 UTF-8 バイト列を
+    既存ファイルとして置いた上で生成失敗を注入し、(a) 元の `RuntimeError` が
+    そのまま伝播すること（復元自体が別の例外を投げて隠さないこと）、(b) 復元後の
+    ファイルが元の bytes と完全一致すること（0 バイトへ truncate されないこと）を
+    検証する。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    original_bytes = b"pre-existing: \xff\xfe binary content\n"
+    out_path.write_bytes(original_bytes)
+
+    def _fake_generate_that_fails(**kwargs: Any) -> "Dict[str, Any]":
+        raise RuntimeError("simulated map generation failure")
+
+    monkeypatch.setattr(harness, "generate_m2e_shard_map", _fake_generate_that_fails)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--force",
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="simulated map generation failure"):
+        harness.main()
+    assert out_path.read_bytes() == original_bytes
