@@ -316,7 +316,37 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
 # E-136（PR #242 第34巡 Codex 是正）: 地図パスをループ内で一貫して参照できる
 # よう変数へ束縛する（`--shard-map` 引数・下記の期待セル数照合の両方で使う）。
 SHARD_MAP_PATH="docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml"
-for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('$SHARD_MAP_PATH'))['n_shards'] - 1)") ))); do
+# E-137（PR #242 第35巡 Codex 是正）: `n_shards` を検証せず `seq 0 $(( n_shards -
+# 1 ))` へ直接渡すと、n_shards が 0（生成器は本来 0 を作らないが改変・破損を
+# 排除しない）や壊れた値（例: YAML の `true`——Python では bool は int の
+# サブクラスで `True - 1 == 0` となり `seq 0 0` が単一の偽 shard を作ってしまう）
+# の場合に穴がある。とりわけ n_shards=0 は `seq 0 -1` を生み、GNU coreutils の
+# `seq` は FIRST > LAST を**エラーにせず空展開**するため、for ループが 1 度も
+# 実行されずに（測定を1件も行わないまま）レシピが「成功」扱いで完走してしまう
+# ——r6 完走を偽装する穴。ループ範囲を構築する**前**に地図を読み、n_shards が
+# 非 bool の正整数であることを明示検証する（失敗はそのまま python の非ゼロ
+# exit（3）となり、`set -e` がレシピ全体を即座に停止する——`STATUS`/
+# `CHECK_STATUS` のような捕捉は不要: ここはリトライ対象ではなく地図そのものが
+# 壊れている場合の一度きりの preflight）。検証済みの値をそのままループ範囲の
+# 導出にも使う（同じファイルを 2 度読まない・E-72/E-125 と同族の TOCTOU 回避）。
+N_SHARDS=$(python -c "
+import sys, yaml
+
+with open('$SHARD_MAP_PATH') as f:
+    doc = yaml.safe_load(f)
+
+if not isinstance(doc, dict):
+    print(f'shard map at $SHARD_MAP_PATH is not a mapping: {doc!r}', file=sys.stderr)
+    sys.exit(3)
+
+n_shards = doc.get('n_shards')
+if isinstance(n_shards, bool) or not isinstance(n_shards, int) or n_shards < 1:
+    print(f'shard map n_shards is not a non-bool positive int: {n_shards!r}', file=sys.stderr)
+    sys.exit(3)
+
+print(n_shards)
+")
+for N in $(seq 0 $((N_SHARDS - 1))); do
   while :; do
     OUT="$(mktemp "build/m2e/shard_run_${N}_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.json")"
     STATUS=0
@@ -392,7 +422,7 @@ for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('$S
     # を素朴に `CHECK_STATUS=$?` で捕捉する形は機能しない。
     CHECK_STATUS=0
     python -c "
-import json, sys, yaml
+import hashlib, json, sys, yaml
 
 EXPECTED_SCHEMA = 'm2e-shard-run/0.1'
 EXPECTED_SHARD_ID = $N
@@ -444,11 +474,33 @@ not_started = require_list('cells_not_started')
 # E-136: 地図側の台帳から shard $N の期待セル数を独立に導出し、record 自身の
 # cells_total と照合する（record 内部だけでは検出できない「全体として空の
 # record」を塞ぐ）。
+# E-138（PR #242 第35巡 Codex 是正）: E-136 は「検査が読んだ地図」と「実行が
+# 実際に消費した地図」が同一実体である保証を欠いていた——地図が実行**後**・
+# 検査**前**に差し替えられても（cells の中身や shard_id 割当が変わっても
+# 件数だけ偶然一致すれば）検出できない。地図を単一読取の bytes として読み、
+# その sha256 が record 自身の `shard_map_sha256`（`execute_m2e_shard` が
+# 実際に消費した地図の sha256・`_load_m2e_shard_map` と同じ計算式）と一致する
+# ことを**セル数を数える前に**要求する（不一致は fatal）。以降のセル数照合も
+# この同一 bytes から parse し、hash 比較後に別の読取へ切り替えない
+# （E-72/E-125 と同族の TOCTOU 回避）。
 try:
-    with open('$SHARD_MAP_PATH') as f:
-        shard_map = yaml.safe_load(f)
+    with open('$SHARD_MAP_PATH', 'rb') as f:
+        shard_map_bytes = f.read()
 except Exception as exc:
     fatal(f'shard map read failed: {exc!r}')
+
+shard_map_sha256 = hashlib.sha256(shard_map_bytes).hexdigest()
+record_map_sha256 = r.get('shard_map_sha256')
+if record_map_sha256 != shard_map_sha256:
+    fatal(
+        f'record shard_map_sha256({record_map_sha256!r}) != shard map at '
+        f'$SHARD_MAP_PATH ({shard_map_sha256!r})'
+    )
+
+try:
+    shard_map = yaml.safe_load(shard_map_bytes)
+except Exception as exc:
+    fatal(f'shard map parse failed: {exc!r}')
 
 if not isinstance(shard_map, dict) or not isinstance(shard_map.get('cells'), list):
     fatal(f'shard map at $SHARD_MAP_PATH is malformed (missing cells list)')
@@ -491,8 +543,9 @@ sys.exit(0 if completed == total else 1)
       exit 1
     else
       echo "shard $N: 実行記録の検査自体が失敗した (CHECK_STATUS=$CHECK_STATUS)。schema_version・" >&2
-      echo "shard_id・型・会計不変条件・地図由来の期待セル数のいずれかの検証に失敗した——" >&2
-      echo "リトライでは直らない。原因を確認してから対応すること (fail-closed・E-127/E-134/E-136)" >&2
+      echo "shard_id・型・会計不変条件・地図由来の期待セル数・地図 hash のいずれかの検証に" >&2
+      echo "失敗した——リトライでは直らない。原因を確認してから対応すること " >&2
+      echo "(fail-closed・E-127/E-134/E-136/E-138)" >&2
       exit 1
     fi
   done
