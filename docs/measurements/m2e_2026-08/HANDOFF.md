@@ -286,10 +286,20 @@ set -e -o pipefail  # E-120: -e で地図生成の非ゼロ exit を含むレシ
 #    --workers "$P"（E-59）: T_direct/T_stem を校正したときの P を地図へ記録する
 #    （§8.4「production と同じ P」の契約）。手順 2 の実行機は省略時にこの値を採用し、
 #    明示指定時は一致を要求する。
+# E-143（PR #242 第38巡 Codex 是正）: `--cell-store build/m2e/store_A`（手順 2 の
+# shard 実行と同じ store）を渡す——E-66 の除外パッキング（digest 一致で完了済みの
+# セルを残セルの計算・N_shards 算出から除く）を正規手順で実際に効かせるため。
+# 未指定のままだと常に全 1280 セルを対象にパッキングしてしまい、r4 の校正実行や
+# 中断セッションが既に書いたセルも再スケジュール対象に含まれ続け、R_max(12) を
+# 見かけ上超過する（§8.8 の 3 択への誤った差し戻し）・完了済みセルを無駄に
+# shard 待ち行列へ積む、のいずれも起こりうる。store が空/新規（本測定の初回）
+# なら除外対象が無いため全 1280 セルのパッキングと完全に同一になる——挙動の
+# 後方互換は保たれる。
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
     --make-shard-map \
     --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
     --t-direct "$T_DIRECT" --t-stem "$T_STEM" --startup-cost "$S" --workers "$P" \
+    --cell-store build/m2e/store_A \
     --out docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml \
     | tee "$(mktemp "docs/measurements/m2e_2026-08/shard_map_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
 # → commit する（本測定開始前・§8.5）。N_shards > R_max(12) なら §8.8 の 3 択へ
@@ -726,7 +736,11 @@ done
   セルが digest 一致で 100% resume され、水準ごとの run report が生成される
   （resume 互換 AC）。そこから先は上記 C5 census レシピと同じ形。
 - `T_*`/`S`/`B_session` を変更した場合は**未完セルについてのみ**地図を引き直す
-  （§8.5・完了済みセルのレコードは影響を受けない）。セル台帳（fixtures）自体を
+  （§8.5・完了済みセルのレコードは影響を受けない）。手順 1 と同じコマンド
+  （`--cell-store build/m2e/store_A` を含む・E-143）を、§8.4 の再測り直しで
+  得た新しい `T_*`/`S` に差し替えてそのまま再実行すればよい——`--cell-store`
+  が E-66 の除外パッキングで完了済みセルを自動的に地図から外すため、「未完
+  セルのみ」の再パッキングは追加操作なしで成立する。セル台帳（fixtures）自体を
   変えてはならない——変えると地図生成器・実行機の両方が `_require_m2e_shard_map_
   matches_registry` で fail-closed になる（意図どおり）。
 - **E-115**: 上記の地図引き直しで `--cell-store` 配下の残セルが 0 件（全セル
