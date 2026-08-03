@@ -12533,7 +12533,22 @@ def main() -> int:
         protected = {Path(args.campaign).resolve(), Path(args.bars).resolve()}
         for level_paths in campaign_for_preflight.values():
             protected.update(level_paths.values())
-        if Path(args.out).resolve() in protected:
+        # E-117（PR #242 第24巡 Codex 是正）: `--out` を入口で 1 回だけ resolve し、
+        # 以降の保護パス検査・no-clobber 検査・予約取得・claim 書き込み・公開
+        # （atomic write）・token 検証・ロールバックの全段でこの単一スナップショット
+        # を使う（`args.out` は後段で経路に使わない・エラーメッセージの表示にのみ
+        # 使う）。以前は保護・予約系が `out_resolved`/`out_resolved_for_map` へ
+        # 複数回 `Path(args.out).resolve()` していた一方、公開の 2 箇所
+        # （claim トークン・最終 payload の `_atomic_write_text`）だけが未解決の
+        # `args.out` のままだった——`--out` の最終要素が symlink だと、予約系は
+        # 実体パスを見て所有権を判定するのに、`_atomic_write_text` の
+        # `os.replace(tmp, path)` は symlink 自体を置換する（symlink の指す実体
+        # ではなく symlink エントリそのものが新しい通常ファイルに置き換わる）ため、
+        # 予約が守っていたはずの実体とは別の場所（symlink の位置）に中身が書かれ、
+        # 原状復帰（`_rollback_m2e_out_reservation`）は実体側を触ってしまう——
+        # 予約・公開・ロールバックが同じファイルを指さない不整合を生んでいた。
+        out_resolved = Path(args.out).resolve()
+        if out_resolved in protected:
             raise SystemExit(
                 f"--out {args.out} は地図生成の入力（campaign / manifest / fixtures / "
                 "bars）と同じパスを指している; 入力を地図で上書きしない (fail-closed)"
@@ -12546,7 +12561,6 @@ def main() -> int:
         # 未指定なら比較対象が無い）。
         if args.cell_store is not None:
             cell_store_root = Path(args.cell_store).resolve()
-            out_resolved = Path(args.out).resolve()
             if out_resolved == cell_store_root or cell_store_root in out_resolved.parents:
                 raise SystemExit(
                     f"--out {args.out} が --cell-store {args.cell_store} 配下にある; 地図の "
@@ -12555,7 +12569,7 @@ def main() -> int:
         # E-55（PR #242 第3巡 Codex P1 是正）: `--out "$(mktemp ...)"` が作る 0 バイトの
         # 予約ファイルは上書き対象として許容し、非空の既存レコードのみ fail-closed で
         # 拒否する（--shard-id 側の E-51 no-clobber と同じ規則に揃える）。
-        if Path(args.out).exists() and Path(args.out).stat().st_size > 0 and not args.force:
+        if out_resolved.exists() and out_resolved.stat().st_size > 0 and not args.force:
             raise SystemExit(
                 f"--out {args.out} が既に存在する（0 バイトではない）; 明示 --force か "
                 "別パスの --out を使う (fail-closed・シャード地図の黙示上書き禁止・"
@@ -12573,12 +12587,11 @@ def main() -> int:
         # shard-run 側（E-94/E-96/E-106）と同じ排他予約を適用する——地図生成も
         # 長時間かかりうるため、no-clobber 検査通過〜公開の窓で 2 起動が同じ
         # 予約状態（0 バイト/不存在）を狙って通過しうる。ヘルパを共通化して流用する。
-        out_resolved_for_map = Path(args.out).resolve()
         # E-111: `--force` は非空の既存レコードも上書き対象にできる（`--shard-id`
         # 側は常に 0 バイト予約のみ）ため、原状復帰は「存在したか」の bool ではなく
         # 元の bytes そのもの（`_rollback_m2e_out_reservation` 参照）で行う。
         try:
-            out_original_bytes = out_resolved_for_map.read_bytes()
+            out_original_bytes = out_resolved.read_bytes()
         except OSError:
             out_original_bytes = None
         shard_map_claim_token = (
@@ -12587,18 +12600,16 @@ def main() -> int:
             f"claimed_utc={_utc_now()}\n"
         )
         try:
-            out_claim_sidecar = _acquire_m2e_out_reservation(
-                out_resolved_for_map, shard_map_claim_token
-            )
+            out_claim_sidecar = _acquire_m2e_out_reservation(out_resolved, shard_map_claim_token)
         except FileExistsError:
             raise SystemExit(
                 f"--out {args.out} の予約は他の起動が保持している（サイドカー "
-                f"{out_resolved_for_map.with_name(f'{out_resolved_for_map.name}.claim')} が "
+                f"{out_resolved.with_name(f'{out_resolved.name}.claim')} が "
                 "既に存在する）; 並行実行は非サポート。クラッシュ孤児ならサイドカーを "
                 "手動削除して再実行する (fail-closed・E-111)"
             ) from None
         try:
-            _atomic_write_text(args.out, shard_map_claim_token)
+            _atomic_write_text(out_resolved, shard_map_claim_token)
             try:
                 shard_map = generate_m2e_shard_map(
                     campaign_path=args.campaign,
@@ -12612,20 +12623,18 @@ def main() -> int:
                     campaign_snapshot=(campaign_for_preflight, campaign_sha256_for_preflight),
                 )
             except BaseException:
-                _rollback_m2e_out_reservation(
-                    out_resolved_for_map, original_bytes=out_original_bytes
-                )
+                _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
             payload = yaml.safe_dump(
                 shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
             )
             try:
-                current_out_content = out_resolved_for_map.read_text(encoding="utf-8")
+                current_out_content = out_resolved.read_text(encoding="utf-8")
             except OSError:
                 current_out_content = None
             if current_out_content != shard_map_claim_token:
-                spill_path = out_resolved_for_map.with_name(
-                    f"{out_resolved_for_map.name}.spill-{uuid.uuid4().hex[:8]}.yaml"
+                spill_path = out_resolved.with_name(
+                    f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.yaml"
                 )
                 _atomic_write_text(spill_path, payload)
                 raise SystemExit(
@@ -12635,11 +12644,9 @@ def main() -> int:
                     "確認してから手動で --out へ配置すること (fail-closed・E-111)"
                 )
             try:
-                _atomic_write_text(args.out, payload)
+                _atomic_write_text(out_resolved, payload)
             except BaseException:
-                _rollback_m2e_out_reservation(
-                    out_resolved_for_map, original_bytes=out_original_bytes
-                )
+                _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
             print(f"wrote shard map to {args.out}")
         finally:
@@ -12830,8 +12837,15 @@ def main() -> int:
                 "(fail-closed・E-94)"
             ) from None
 
+        # E-117（PR #242 第24巡 Codex 是正）: claim・payload の公開は入口で resolve
+        # 済みの `out_resolved` を使う（`args.out` は使わない）——予約・token 検証・
+        # ロールバックは既に `out_resolved` 基準だったが、公開の 2 箇所（claim
+        # トークン・最終 payload）だけが未解決の `args.out` のままだった。`--out`
+        # の最終要素が symlink だと `_atomic_write_text` の `os.replace` は symlink
+        # 自体を置換してしまい（symlink の指す実体へは書かない）、予約が守っていた
+        # 実体とは別の場所へ中身が書かれる経路があった（地図生成側と同型の穴）。
         try:
-            _atomic_write_text(args.out, shard_run_claim_token)
+            _atomic_write_text(out_resolved, shard_run_claim_token)
             try:
                 shard_run = execute_m2e_shard(
                     map_doc=map_doc,
@@ -12870,7 +12884,7 @@ def main() -> int:
             # バックを適用する（E-96 の範囲拡張——以前は公開段の失敗だけ未保護
             # だった）。
             try:
-                _atomic_write_text(args.out, shard_run_payload)
+                _atomic_write_text(out_resolved, shard_run_payload)
             except BaseException:
                 _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise

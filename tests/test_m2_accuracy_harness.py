@@ -13592,6 +13592,44 @@ def test_main_make_shard_map_accepts_a_zero_byte_existing_out_as_a_mktemp_reserv
     assert out_path.stat().st_size > 0
 
 
+def test_main_make_shard_map_publishes_through_a_symlinked_out_to_its_real_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-117（PR #242 第24巡 Codex 是正）: `--out` の最終要素が symlink（0 バイトの
+
+    実体を指す・mktemp 予約の symlink 版）でも、予約・公開・ロールバックの全段が
+    同じ解決済みパス（実体）を指す——以前は公開の `_atomic_write_text` だけが
+    未解決の `args.out`（symlink そのもの）へ書いており、`os.replace` が symlink
+    自体を置き換えてしまう（実体側は空のまま）ため、公開直前の token 検証が
+    「別の内容へ差し替わっていた」という偽の競合エラーで落ちていた。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    real_target = tmp_path / "real_shard_map.yaml"
+    real_target.write_bytes(b"")  # mktemp の 0 バイト予約を模す（symlink の実体側）
+    out_symlink = tmp_path / "shard_map_link.yaml"
+    out_symlink.symlink_to(real_target)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "2",
+            "--out", str(out_symlink),
+        ],
+    )
+    assert harness.main() == 0
+    assert out_symlink.is_symlink()  # symlink 自体は置換されず生き残る
+    assert real_target.is_file()
+    assert real_target.stat().st_size > 0
+    assert out_symlink.read_bytes() == real_target.read_bytes()
+
+
 def test_main_make_shard_map_rejects_a_non_empty_existing_out_without_force(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -13670,6 +13708,53 @@ def test_main_shard_id_accepts_a_zero_byte_existing_out_as_a_mktemp_reservation(
     assert harness.main() == 0
     assert out_path.stat().st_size > 0
     assert json.loads(out_path.read_text(encoding="utf-8"))["shard_id"] == 0
+
+
+def test_main_shard_id_publishes_through_a_symlinked_out_to_its_real_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-117（PR #242 第24巡 Codex 是正）: `--shard-id` 側でも `--out` の最終要素が
+
+    symlink（0 バイトの実体を指す）で予約・公開・ロールバックが同じ解決済みパスを
+    指す（`_main_make_shard_map_publishes_through_a_symlinked_out_to_its_real_target`
+    と同型の穴の shard 実行機側）。
+    """
+    import yaml as _yaml
+
+    map_doc, map_sha256, campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    real_target = tmp_path / "real_shard_run.json"
+    real_target.write_bytes(b"")  # mktemp の 0 バイト予約を模す（symlink の実体側）
+    out_symlink = tmp_path / "shard_run_link.json"
+    out_symlink.symlink_to(real_target)
+
+    monkeypatch.setattr(
+        harness, "execute_m2e_shard", lambda **kwargs: _fake_shard_run_record(map_doc, 0)
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(out_symlink),
+        ],
+    )
+    assert harness.main() == 0
+    assert out_symlink.is_symlink()  # symlink 自体は置換されず生き残る
+    assert real_target.is_file()
+    assert real_target.stat().st_size > 0
+    assert json.loads(real_target.read_text(encoding="utf-8"))["shard_id"] == 0
+    assert out_symlink.read_bytes() == real_target.read_bytes()
 
 
 def test_main_shard_id_prints_a_sha256_matching_the_written_record_bytes(

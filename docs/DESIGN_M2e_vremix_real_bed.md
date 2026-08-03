@@ -1876,6 +1876,23 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   同型の `int()`/`float()` 無検査強制も同じ無強制ヘルパへ統一した。地図由来の
   数値フィールドを扱う型検証ファミリーはこれで終端する（回帰テスト付き）。
 
+**E-117〜E-118（PR #242 第24巡）。**
+
+- **E-117**: `--shard-id`/`--make-shard-map` の `--out` 公開経路で、予約取得・
+  token 検証・ロールバックは入口で resolve 済みの実体パスを基準にしていたが、
+  claim・最終 payload の `_atomic_write_text` だけが未解決の `args.out`
+  （symlink そのもの）を使っていた——`--out` の最終要素が symlink だと
+  `os.replace` は symlink 自体を置換してしまい（実体へは書かない）、予約が
+  守っていた実体とは別の場所へ中身が書かれる／公開直前の token 検証が実体側の
+  空のままの内容と食い違って偽の競合エラーを出す経路があった。入口で 1 回だけ
+  resolve したパスを両モードの予約・claim・公開・token 検証・ロールバックの
+  全段で一貫使用する形へ改めた（回帰テスト付き）。
+- **E-118**: HANDOFF r6 レシピの地図生成コマンド（`--make-shard-map`）だけ、
+  census/shard 実行記録と同じ dated log tee を欠いていた——地図は生成時刻を
+  bytes に含めない設計（E-67）のため、生成時刻と地図 sha256 は stdout にしか
+  出ず、tee しないと再現できない。census/shard 実行記録と同じ流儀の tee を
+  追加し、地図とこの stdout log を対で commit する旨を注記した（docs のみ）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

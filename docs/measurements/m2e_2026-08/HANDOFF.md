@@ -266,9 +266,14 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
     --make-shard-map \
     --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
     --t-direct "$T_DIRECT" --t-stem "$T_STEM" --startup-cost "$S" --workers "$P" \
-    --out docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml
+    --out docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml \
+    | tee "$(mktemp "docs/measurements/m2e_2026-08/shard_map_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
 # → commit する（本測定開始前・§8.5）。N_shards > R_max(12) なら §8.8 の 3 択へ
 #   User 決裁（生成器がここで fail-closed に停止する）。
+# E-118（PR #242 第24巡 Codex 是正）: 地図は生成時刻を bytes に含めない（E-67）ため
+# `generated at` / `shard map sha256` は stdout にしか出ない——census/shard 実行記録と
+# 同じ流儀で dated log を tee し、地図（`m2e_r2_shard_map.yaml`）とこの
+# `shard_map_stdout_*.txt` を対で commit すること。
 
 # 2. shard を昇順に実行する（N は 0 から N_shards-1 まで）。§8.6「未完セルは次回の
 #    実行でそのまま resume される」の「次回の実行」とは**同一 shard_id の再実行**
