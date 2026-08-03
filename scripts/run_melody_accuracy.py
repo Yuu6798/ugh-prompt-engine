@@ -12884,14 +12884,21 @@ def main() -> int:
                         )
                     except BaseException:
                         pass
-                    # E-122: 非空原本ケースは `_atomic_write_text(out_resolved, payload)`
-                    # 自体が失敗した場合のみここに来うるが、その失敗は「置換を試みて
-                    # 失敗した」だけであり、原本はまだ無傷（`os.replace` は失敗時に
-                    # 元ファイルを変更しない）——ロールバック（書き戻し）は不要かつ、
-                    # 元 bytes を明示的に書き戻す操作自体が新たな失敗点を増やすだけ
-                    # なので行わない。
-                    if not out_has_nonempty_original:
-                        _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
+                    # E-129（PR #242 第30巡 Codex 是正）: E-122 は「この except に
+                    # 来た＝`_atomic_write_text(out_resolved, payload)` が失敗した
+                    # ＝`os.replace` は失敗時に元ファイルを変えないので原本は無傷」
+                    # と仮定して非空原本ケースのロールバックを省略していたが、これは
+                    # 誤り——`KeyboardInterrupt`/`SystemExit` は `os.replace` が実際
+                    # には**成功した直後**の任意のバイトコード境界でも配送されうる
+                    # ため、「この except に来た」ことは「置換が失敗した」ことを
+                    # 意味しない。その場合、非空原本ケースは新 payload が恒久的に
+                    # 居座ったまま fail-closed 終了し、**終了状態（失敗）と成果物
+                    # 状態（置換成功）が食い違う**——原本は永久に失われる。新 payload
+                    # は直上の spill で既に保全済みなので、原本を無条件で atomic
+                    # 復元しても情報は失われない（`_rollback_m2e_out_reservation` は
+                    # 「実際には書いていなければ元と同じ内容を書き戻すだけ」の
+                    # no-op 相当になるので、あらゆる分岐で安全に呼べる）。
+                    _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
             print(f"wrote shard map to {args.out}")
         finally:

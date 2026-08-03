@@ -17167,6 +17167,64 @@ def test_main_make_shard_map_replaces_a_forced_nonempty_out_on_success(
     assert not sidecar_path.exists()
 
 
+def test_main_make_shard_map_restores_a_forced_original_when_baseexception_follows_a_successful_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-129（PR #242 第30巡 Codex 是正）: 公開スコープ（E-121）の BaseException が
+
+    `_atomic_write_text(out_resolved, payload)` の実際の `os.replace` 成功
+    **直後**に飛んだ場合でも（`KeyboardInterrupt`/`SystemExit` は任意のバイト
+    コード境界で配送されうるため「この except に来た」＝「置換が失敗した」を
+    意味しない）、非空原本（`--force`）は atomic に復元される——以前は
+    「原本はまだ無傷」という誤った仮定でロールバックを省略しており、終了状態
+    （失敗）と成果物状態（置換成功のまま居座り）が食い違っていた。新 payload は
+    直上の spill で既に保全されているため、原本を復元しても情報は失われない。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    original_bytes = b"pre-existing: content\n"
+    out_path.write_bytes(original_bytes)
+    sidecar_path = tmp_path / "shard_map.yaml.claim"
+
+    real_atomic_write_text = harness._atomic_write_text
+
+    def _flaky_atomic_write_text(path: Any, text: str) -> None:
+        # 実際の atomic 置換を最後まで完了させたうえで、その**直後**に
+        # BaseException を飛ばす（KeyboardInterrupt が os.replace 成功直後の
+        # バイトコード境界で配送された状況を模す）。
+        real_atomic_write_text(path, text)
+        if Path(path).resolve() == out_path.resolve():
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(harness, "_atomic_write_text", _flaky_atomic_write_text)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--force",
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(KeyboardInterrupt):
+        harness.main()
+    # 原本が atomic に復元されている（置換成功後の中身が居座っていない）。
+    assert out_path.read_bytes() == original_bytes
+    assert not sidecar_path.exists()
+    # 新 payload（置換に成功した地図の中身）は spill で保全されている。
+    spills = list(tmp_path.glob("shard_map.yaml.spill-*.recovery"))
+    assert len(spills) == 1
+    spilled = json.loads(spills[0].read_text(encoding="utf-8"))
+    assert spilled["n_shards"] >= 1
+
+
 def test_main_make_shard_map_aborts_before_reservation_when_forced_out_is_unreadable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
