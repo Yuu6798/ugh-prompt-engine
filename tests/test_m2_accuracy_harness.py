@@ -15440,3 +15440,26 @@ def test_main_shard_id_rejects_when_a_protected_input_is_inside_the_cell_store(
     )
     with pytest.raises(SystemExit, match="出力ツリー"):
         harness.main()
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [("t_direct_s", -1.0), ("startup_cost_s", -1.0)],
+)
+def test_require_m2e_shard_map_matches_registry_rejects_negative_recorded_inputs(
+    field: str, bad_value: float, tmp_path: Path
+) -> None:
+    """E-91（PR #242 第13巡 Codex 是正）: 改変された地図が記録した入力
+
+    （`t_direct_s` / `startup_cost_s` 等）が符号制約（T_direct>0 / S>=0）に違反
+    すると、isfinite だけでは弾けなかった readback 経路でも fail-closed で拒否
+    する（E-68 の符号制約を生成器だけでなく readback にも適用する。単一の
+    バリデータへ集約——`_assign_m2e_shard_ids` は generate/readback の共有経路）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["inputs"][field] = bad_value
+    with pytest.raises(ValueError, match="有限の"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)

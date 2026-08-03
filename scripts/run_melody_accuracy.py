@@ -10310,18 +10310,16 @@ def _assign_m2e_shard_ids(
     （実行側の再計算はここを経由する）がこれらを持ち込む経路も塞ぐため、4 入力
     全数を検査する（E-68 の同型穴の列挙原則を実行側にも及ぼす）。
     """
-    for _name, _value in (
-        ("session_budget", session_budget),
-        ("startup_cost", startup_cost),
-        ("t_direct", t_direct),
-        ("t_stem", t_stem),
-    ):
-        if not math.isfinite(_value):
-            raise ValueError(
-                f"_assign_m2e_shard_ids: {_name} {_value!r} は有限値のみ許可する（inf/nan は "
-                "§8.6 のハング絶対上限・§8.8 の実行回数上限・1 セル容量ゲートを無効化する "
-                "ため拒否する）(fail-closed・E-62/E-68)"
-            )
+    # E-91（PR #242 第13巡 Codex 是正）: E-68 は isfinite のみをこの共有 readback
+    # 経路（本関数は generate/readback 双方から呼ばれる）へ及ぼしていたが、符号
+    # 制約（T_direct>0/T_stem>0/B_session>0/S>=0）は生成器側の入口検査
+    # （`_require_m2e_shard_map_finite_input`）にしか無かった——改変された地図が
+    # 負の t_direct 等を持ち込んでも、isfinite さえ満たせば readback を素通り
+    # しえた。単一のバリデータへ集約し、生成・読取の両方に同じ入力域制約を適用する。
+    _require_m2e_shard_map_finite_input("session_budget", session_budget)
+    _require_m2e_shard_map_finite_input("startup_cost", startup_cost, allow_zero=True)
+    _require_m2e_shard_map_finite_input("t_direct", t_direct)
+    _require_m2e_shard_map_finite_input("t_stem", t_stem)
     cap = _M2E_SHARD_CAP_MARGIN * session_budget - startup_cost
     if cap <= 0 or cap < max(t_direct, t_stem):
         raise ValueError(
@@ -10359,13 +10357,17 @@ def _require_m2e_shard_map_finite_input(name: str, value: float, *, allow_zero: 
     確実には弾けない——**同型穴の列挙原則**により、生成器の float 入力
     （`t_direct`/`t_stem`/`startup_cost`/`session_budget`）全数に `math.isfinite`
     を統一的に要求する（単一のこの関数へ集約）。
+
+    E-91（PR #242 第13巡 Codex 是正）: `_assign_m2e_shard_ids`（生成・readback の
+    共有経路）からも呼ばれる——符号制約は生成器の入口検査だけでなく、改変された
+    地図を読み戻す経路にも同じ強さで適用する。
     """
     ok = math.isfinite(value) and (value >= 0 if allow_zero else value > 0)
     if not ok:
         requirement = "0 以上" if allow_zero else "正数"
         raise ValueError(
-            f"generate_m2e_shard_map: {name} {value!r} は有限の{requirement}のみ許可する "
-            "(fail-closed・E-68)"
+            f"shard map: {name} {value!r} は有限の{requirement}のみ許可する "
+            "(fail-closed・E-68/E-91)"
         )
 
 

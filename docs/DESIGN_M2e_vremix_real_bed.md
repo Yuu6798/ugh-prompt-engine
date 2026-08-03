@@ -1708,6 +1708,15 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   または配下にあるケースは未検査だった（公開されたセルチェックポイントを
   入力として消費しうる）。同じ判定を逆方向にも追加した。
 
+**E-91（PR #242 第13巡）。**
+
+- **E-91**: `_assign_m2e_shard_ids`（生成・readback の共有経路）は E-68 の
+  isfinite 検査は敷いていたが、符号制約（T_direct>0 / T_stem>0 / B_session>0 /
+  S>=0）は生成器 `generate_m2e_shard_map` の入口検査にしか無かった——改変された
+  地図が負の `t_direct_s` 等を持ち込んでも、isfinite さえ満たせば readback を
+  素通りしえた。単一のバリデータ（`_require_m2e_shard_map_finite_input`）へ
+  集約し、生成・読取の両方に同じ入力域制約を適用する形へ改めた。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
