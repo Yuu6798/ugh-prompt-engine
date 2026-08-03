@@ -1486,6 +1486,16 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   実行側は `--workers` 省略時に地図の値を採用、明示指定時は地図の値との完全一致を
   要求する（不一致は高価なキューへ入る前に fail-closed）。
 
+**E-60（PR #242 第4巡・campaign パスの ROOT 封じ込め）。**
+
+- **E-60**: campaign が宣言する `external_manifest`/`external_fixtures` は repo root
+  基準の相対パスという規約（決定済み設計判断 2）だったが、実装は解決するだけで
+  規約を検査していなかった——絶対パスや `..` 遡上、ROOT 外へ解決される symlink を
+  経由すれば任意のファイルを読ませられた。生成・実行の両経路が通る単一の campaign
+  loader（`_parse_m2e_campaign_bytes`）に二段検証を一元実装する: (1) 字句——絶対
+  パス・`..` 成分を拒否、(2) 解決後——`(ROOT / value).resolve()` が
+  `Path.is_relative_to(ROOT)` を満たすことを要求（symlink 経由の脱出も拒否）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

@@ -11899,21 +11899,32 @@ def _write_m2e_campaign(
 
     campaign は**パスのみ**（決定済み設計判断 2）。4 水準とも同じ (clip_id, bed_id)
     集合（`_VREMIX_CLIPS` 既定）を使う——水準文字列順の pin テストがこれに依存する。
+
+    E-60（PR #242 第4巡 Codex 是正）: campaign が指す `external_manifest`/
+    `external_fixtures` は repo root 配下の相対パスのみを許可する（絶対パス拒否）。
+    pytest の `tmp_path` は ROOT 外（OS 標準の一時領域）なので、外部素材は既存の
+    非 commit 作業領域規約（`build/`・`.gitignore` 済み）に倣い `ROOT / "build"` 配下の
+    一意なディレクトリへ書き、campaign には ROOT からの相対パスを記録する。
+    campaign ファイル自身（`campaign_path`）は ROOT 配下の制約対象ではないので、
+    従来どおり `tmp_path` に置く。
     """
     import yaml as _yaml
 
     if clip_specs is None:
         clip_specs = _VREMIX_CLIPS
+    build_dir = harness.ROOT / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    asset_root = Path(tempfile.mkdtemp(prefix="m2e_campaign_assets_", dir=str(build_dir)))
     level_paths: Dict[str, Dict[str, str]] = {}
     for level in harness._M2E_LEVEL_LADDER:
-        level_dir = tmp_path / harness._M2E_LEVEL_TAGS[level]
+        level_dir = asset_root / harness._M2E_LEVEL_TAGS[level]
         level_dir.mkdir(parents=True, exist_ok=True)
         manifest_path, fixtures_path = _write_m2e_external_fixture_set(
             level_dir, clip_specs, level=level
         )
         level_paths[level] = {
-            "external_manifest": str(manifest_path),
-            "external_fixtures": str(fixtures_path),
+            "external_manifest": manifest_path.relative_to(harness.ROOT).as_posix(),
+            "external_fixtures": fixtures_path.relative_to(harness.ROOT).as_posix(),
         }
     campaign_path = tmp_path / "m2e_campaign.yaml"
     campaign_path.write_text(
@@ -12024,6 +12035,88 @@ def test_load_m2e_campaign_requires_exact_key_set_per_level(tmp_path: Path) -> N
     path.write_text(f"schema_version: m2e-campaign/0.1\nlevels:\n{levels}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="external_manifest, external_fixtures"):
         harness._load_m2e_campaign(path)
+
+
+# ---------------------------------------------------------------------------
+# E-60（PR #242 第4巡 Codex 是正）: campaign パスの ROOT 封じ込め
+# ---------------------------------------------------------------------------
+
+
+def _m2e_campaign_yaml_with_override(*, key: str, value: str) -> str:
+    """4 水準ぶんの campaign YAML を組み立て、最初の水準の `key` だけ `value` に差し替える。"""
+    levels = "\n".join(
+        f"  '{level}': {{external_manifest: a.json, external_fixtures: a.yaml}}"
+        for level in harness._M2E_LEVEL_LADDER
+    )
+    old_value = "a.json" if key == "external_manifest" else "a.yaml"
+    levels = levels.replace(f"{key}: {old_value}", f"{key}: {value}", 1)
+    return f"schema_version: m2e-campaign/0.1\nlevels:\n{levels}\n"
+
+
+def test_load_m2e_campaign_rejects_an_absolute_manifest_path(tmp_path: Path) -> None:
+    """E-60: 絶対パスは字句検証で拒否する（解決を試みる前に落ちる）。"""
+    path = tmp_path / "campaign.yaml"
+    path.write_text(
+        _m2e_campaign_yaml_with_override(key="external_manifest", value="/etc/passwd"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="絶対パス"):
+        harness._load_m2e_campaign(path)
+
+
+def test_load_m2e_campaign_rejects_a_dotdot_traversal_path(tmp_path: Path) -> None:
+    """E-60: `..` 成分は字句検証で拒否する（repo root からの遡上を許さない）。"""
+    path = tmp_path / "campaign.yaml"
+    path.write_text(
+        _m2e_campaign_yaml_with_override(
+            key="external_fixtures", value="../../../etc/passwd"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="遡上"):
+        harness._load_m2e_campaign(path)
+
+
+def test_load_m2e_campaign_rejects_a_symlink_that_resolves_outside_root(
+    tmp_path: Path,
+) -> None:
+    """E-60: 字句上は ROOT 配下でも、symlink 解決後に ROOT 外へ出るパスは拒否する
+
+    （解決後検証・`Path.is_relative_to` による二段目のゲート）。
+    """
+    outside_dir = tmp_path / "outside_root"
+    outside_dir.mkdir()
+    (outside_dir / "leak.json").write_text("[]", encoding="utf-8")
+
+    build_dir = harness.ROOT / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    link_name = f"m2e_test_symlink_escape_{tmp_path.name}"
+    link_path = build_dir / link_name
+    if link_path.is_symlink() or link_path.exists():
+        link_path.unlink()
+    link_path.symlink_to(outside_dir, target_is_directory=True)
+    try:
+        path = tmp_path / "campaign.yaml"
+        path.write_text(
+            _m2e_campaign_yaml_with_override(
+                key="external_manifest", value=f"build/{link_name}/leak.json"
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="repo root の外"):
+            harness._load_m2e_campaign(path)
+    finally:
+        link_path.unlink(missing_ok=True)
+
+
+def test_load_m2e_campaign_accepts_a_repo_root_relative_path(tmp_path: Path) -> None:
+    """E-60: 通常の repo-root 相対パスは引き続き通る（拒否一辺倒にしない）。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    for level_paths in campaign.values():
+        for resolved_path in level_paths.values():
+            assert resolved_path.is_relative_to(harness.ROOT)
+            assert resolved_path.is_file()
 
 
 def test_write_m2e_campaign_round_trips_through_the_loader(tmp_path: Path) -> None:
