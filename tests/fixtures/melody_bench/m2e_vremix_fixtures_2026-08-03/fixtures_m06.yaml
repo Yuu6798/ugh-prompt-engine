@@ -1,0 +1,248 @@
+builder:
+  generator_code_sha256: c75b95a7d16dab519653912aa4d87e640f9c6a5b818b1c500e6f85140ce31c5f
+  m2c_fixtures_sha256: 91b08852dabe3584de289c5ad5d9aafd7a40c8d3c2e14b2dbd8f599acc03b92f
+  m2e_bed_fixtures_sha256: 96958d68fd83d5d5b718620b930a72acd88795e1cfaa394b60c8cfc9ddd394f3
+fixtures:
+  vremix_vocadito_10_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: b62573c234fe091acdc7f7ac75259df12d5a8b2bd89f5b803bfc0f433c085e96
+    expected_audio_sha256: f9fb6dd458e97f81854d1a3fcac23f4b5b39d9b6fb276a3d7e09c807cf66683b
+  vremix_vocadito_10_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: b62573c234fe091acdc7f7ac75259df12d5a8b2bd89f5b803bfc0f433c085e96
+    expected_audio_sha256: 45e204f6b9412eeea462061728f1c71287e235cfd2be3f61c12ad03d0d606ea0
+  vremix_vocadito_11_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 3649b1c134df2c7630e37f614adf05b67b186f3f494a8cc6551a12b3d8a593d1
+    expected_audio_sha256: df847877629e9a03bba7e8390d4f1d852754b07bca635a9b38d717780a47f63e
+  vremix_vocadito_11_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 3649b1c134df2c7630e37f614adf05b67b186f3f494a8cc6551a12b3d8a593d1
+    expected_audio_sha256: 428639013ab758db1dce1cd858f96d20dbd9d9e090d85ab5f34b92000afeb279
+  vremix_vocadito_12_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: c58207b659b08a3ba35baeda01d3ac31231a4c8e5c3b3906ccdc37799e6d0b34
+    expected_audio_sha256: 0efb581373f25a5dd8bcf0824ddc9c447ca08af9afc7d5595a8f7123dbbffb21
+  vremix_vocadito_12_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: c58207b659b08a3ba35baeda01d3ac31231a4c8e5c3b3906ccdc37799e6d0b34
+    expected_audio_sha256: 62ab969676e074c0bb2ac6032c32117aec38bc145437ee47e090886ea0704d72
+  vremix_vocadito_13_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: db131bc7ac4413649c4c20a9938fc7af66a731367c769fcc91480a9f27d95847
+    expected_audio_sha256: ee8ae907d44c2173fd27291bee9c3ec745290f6d6e2beced83c5cd0ba7848e02
+  vremix_vocadito_13_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: db131bc7ac4413649c4c20a9938fc7af66a731367c769fcc91480a9f27d95847
+    expected_audio_sha256: 4c994df4837ad78b9d454d4d4946b057d9ec248b5364e475d991ca627fecfd2b
+  vremix_vocadito_14_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 4d765f594d38e18ab514ab1afba93147ac6564be4cfc62f9c268de0e9949f88c
+    expected_audio_sha256: e283478748f35b20881629fd8b154c99c556db73dae7139e66fd2c8de0eb1132
+  vremix_vocadito_14_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 4d765f594d38e18ab514ab1afba93147ac6564be4cfc62f9c268de0e9949f88c
+    expected_audio_sha256: eb2696a80944a93b03b312f2566a39e249f751fc0fc18a9265c4f2dcb6395577
+  vremix_vocadito_15_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 740a77c865d6dcdae2af05328230d88c97cc2d95a54a4ef44d1cde49a53afafa
+    expected_audio_sha256: 9b03d6a71017622accee71dba6db2ef30454f872e55167956081fa23f738d8b2
+  vremix_vocadito_15_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 740a77c865d6dcdae2af05328230d88c97cc2d95a54a4ef44d1cde49a53afafa
+    expected_audio_sha256: 81288e10ffa4ba0282a679e1df3e1c998b2ba8d0558bba9e871af6b39be392ff
+  vremix_vocadito_16_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: fb06556c007943d6d2793af5dd6ba0ac43a1ab5e1180777bfc795564028ea8cf
+    expected_audio_sha256: 6db443433bef73525d0d2ec68647952395a96150088b0dd6138b7b2e3a23828a
+  vremix_vocadito_16_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: fb06556c007943d6d2793af5dd6ba0ac43a1ab5e1180777bfc795564028ea8cf
+    expected_audio_sha256: ecddf220bc7275ba72c8c0ec95c639d0aacb9483d7b209c135006b352c8bb155
+  vremix_vocadito_17_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: d865f0cd526a030f19ba674ebf6c8956fdd8d8b4a0732a539fdb5a35ee86dc29
+    expected_audio_sha256: 50019ed82ffb011a9596a5d33bc9704e9088935c608e59f57ca913ff1444ca6d
+  vremix_vocadito_17_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: d865f0cd526a030f19ba674ebf6c8956fdd8d8b4a0732a539fdb5a35ee86dc29
+    expected_audio_sha256: 9ba5d4fe7bb1ba1e530ab0df12771d237d33355f5db7046189efaaef0ab61f65
+  vremix_vocadito_18_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 83ad770e3afd14cad289bf4f7b2ec3a745c12d0fd047d031da70d8de24fda34b
+    expected_audio_sha256: de404232fd9776f0dcc500bc166fc7a97c768b61691832321a25de7d8e81f063
+  vremix_vocadito_18_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 83ad770e3afd14cad289bf4f7b2ec3a745c12d0fd047d031da70d8de24fda34b
+    expected_audio_sha256: 006873e2ad5c34bdc7d99df3eeb3e93267ceb47a662ee7704c3c9ab40360725d
+  vremix_vocadito_19_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 12b8692cdc1d08d9813ce6c5d93105a43321155f78eeb331afd4a04df3cd58ce
+    expected_audio_sha256: 5721ae913d4303c47ad0d54cdbd990dc49151008544486ab69bb4f73be7e7d60
+  vremix_vocadito_19_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 12b8692cdc1d08d9813ce6c5d93105a43321155f78eeb331afd4a04df3cd58ce
+    expected_audio_sha256: a433158a25c3bbb52a87119460bafd44eea408a4438c38fef2f4f5aad4878679
+  vremix_vocadito_1_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: dd10beba57b94d37b1d3263f5deca3b780adc7ec90f1d43bb00099b02c2878e5
+    expected_audio_sha256: e74c6189b344588e38592d60c94e00d9a38dc4abf66c6914ed3051cae9080c35
+  vremix_vocadito_1_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: dd10beba57b94d37b1d3263f5deca3b780adc7ec90f1d43bb00099b02c2878e5
+    expected_audio_sha256: 15d84a5ec8608cfa0e87505c72aa0cace4bd41e55777471d0a0a30374afa16c2
+  vremix_vocadito_20_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: e09cff1461c2d3ebedcd46093297c44bb00bc705d630d11a6b6e0b8323a047d9
+    expected_audio_sha256: f09366d6ff0241ec09dc796f5084f455ef8cb52ac3972e098bb8b819e19a7e45
+  vremix_vocadito_20_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: e09cff1461c2d3ebedcd46093297c44bb00bc705d630d11a6b6e0b8323a047d9
+    expected_audio_sha256: fcd6ef2e8dce37129c28f579f9daca07e79637023045ccac39c7adeea72ca7d5
+  vremix_vocadito_21_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 683af807f48f0a04718e02a45128fc2ee848307cd9b7eb0ac06de2218645791c
+    expected_audio_sha256: bdaa9ef623e51aa68046ea862d6bafc117c1223378a4c25ace30035c51228dba
+  vremix_vocadito_21_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 683af807f48f0a04718e02a45128fc2ee848307cd9b7eb0ac06de2218645791c
+    expected_audio_sha256: eeb2478d8151d1339bc9964557c80ffca21290c82e9446b6703dd396e6e4451b
+  vremix_vocadito_22_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: f6fbca9e262fe338f3ca8f99be5d08d8a4080a5b09337f4ba7f8366b0b159464
+    expected_audio_sha256: 8e7c09ff493339369f2fd54474675d9cb429b3c9731bbd923df52c10653dc1b2
+  vremix_vocadito_22_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: f6fbca9e262fe338f3ca8f99be5d08d8a4080a5b09337f4ba7f8366b0b159464
+    expected_audio_sha256: 9158bc95da868d642502aa7a8383199bd34adf9733ba4c8d986a22a9e991628e
+  vremix_vocadito_23_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 1bbb29db223ac10d5bf7219145deefe4336c3f46692bf8f5d3963077543f6930
+    expected_audio_sha256: f69d8db6fcc095f4952dc160684b567fa6c07d52cb928aed04c953f39fdc8ed1
+  vremix_vocadito_23_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 1bbb29db223ac10d5bf7219145deefe4336c3f46692bf8f5d3963077543f6930
+    expected_audio_sha256: ccf62f4c5c6efcd819a7f48f2a67e77e192ffa104a311a43c5ac8b4eb7b2a756
+  vremix_vocadito_24_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: e0b877b9679fcf7ee5eae7e41c8b1fd44328f681d2c9f2e2008f76559e0f54d4
+    expected_audio_sha256: 2bf9dca396d99cf89184e4b44b3d4b7b34a7f477799e334df842c3a359740dc1
+  vremix_vocadito_24_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: e0b877b9679fcf7ee5eae7e41c8b1fd44328f681d2c9f2e2008f76559e0f54d4
+    expected_audio_sha256: 64b917873c716d4b09852814d6208d059975bfdd4139971bbda51e0cddf526ff
+  vremix_vocadito_25_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: bde7f5aca8cb7baacaed37d2e74178ba93b3c838280504dd488e47e2ab958e20
+    expected_audio_sha256: 0ec61934fc3121838109cfaf4fb0152df140866969a318d0267c31796bd632ef
+  vremix_vocadito_25_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: bde7f5aca8cb7baacaed37d2e74178ba93b3c838280504dd488e47e2ab958e20
+    expected_audio_sha256: 7d727c6fb91d73cc4a1280486a856739a736c9a22eb80d766b8bf7ef91e4232e
+  vremix_vocadito_26_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 4ab0aef2a982eb729e24bca42941e5e453376c1aa5c802f0136c07ea45397d6b
+    expected_audio_sha256: 154c7a3b9a67bd51e0f78f96e15e6ea83dca648e6bc7c1b135477c477263cce3
+  vremix_vocadito_26_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 4ab0aef2a982eb729e24bca42941e5e453376c1aa5c802f0136c07ea45397d6b
+    expected_audio_sha256: 9b1bafef0391aaac368dffa9940721a7b02c9d7f282333d802c7672ff690cba9
+  vremix_vocadito_27_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 71d3640f13e4360837c9e77dfa611fcd599dd76c47aeb454cc51699c6261fc01
+    expected_audio_sha256: f5bbd7d256831ad0b1a30763204c2408de0c9ced8c1adb5fe007762dd94e5095
+  vremix_vocadito_27_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 71d3640f13e4360837c9e77dfa611fcd599dd76c47aeb454cc51699c6261fc01
+    expected_audio_sha256: 954d86b7216d29994b4658b98455c6482196d5290ab1c850c83868c06affcca9
+  vremix_vocadito_28_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 9bc2f3a1ececf51f4cde93010cfa75d2362ce971b27e91c2ca04d9161abbe346
+    expected_audio_sha256: 7d5934b5fd6ef1ab3b3831754517ab95807a9f55c4674571ab392d9857375d79
+  vremix_vocadito_28_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 9bc2f3a1ececf51f4cde93010cfa75d2362ce971b27e91c2ca04d9161abbe346
+    expected_audio_sha256: e6194cfb2cbdeceb7011606b4587b97b657d9e07cb002eb4e23d14ddbbdbd3ad
+  vremix_vocadito_29_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: f6c3f413e03265fdfbeb9b370ee4d2cabb1edfb0eec4eba7e41f6faaaf1b73fc
+    expected_audio_sha256: 3e5e1c92c8a5e99509b2bc75e87e28f7faa2594f215285fc214c508e413c743d
+  vremix_vocadito_29_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: f6c3f413e03265fdfbeb9b370ee4d2cabb1edfb0eec4eba7e41f6faaaf1b73fc
+    expected_audio_sha256: 214bd340d59a804e2533545fc49707574e3cf24e6b25a794a1328d7c9fae7a25
+  vremix_vocadito_2_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 4d515029c036312e8d04545470c3d5dc5db3132dec54813624faee7d84cd6363
+    expected_audio_sha256: 09aae1742d5b1a38d3aed9e89e55ba7aa5bd6bf49abc1480a4c385df78bb0308
+  vremix_vocadito_2_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 4d515029c036312e8d04545470c3d5dc5db3132dec54813624faee7d84cd6363
+    expected_audio_sha256: 31b402754c7649da8750c4ca1cc0f820ded541c263bf7efc4ae89febc38e0787
+  vremix_vocadito_30_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 6f584e8d0aaf514efbb7986a049c01b0887491bf40bc43ec03a566c3a24f0924
+    expected_audio_sha256: 6351f2b6d2579c0f17b509363bdf8c799bd94ecd5927f27c4480288b09c2dba1
+  vremix_vocadito_30_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 6f584e8d0aaf514efbb7986a049c01b0887491bf40bc43ec03a566c3a24f0924
+    expected_audio_sha256: fdf399909c365e2b2dfb719da378489f22319e96cf5309df52bc2c5a4c1921b3
+  vremix_vocadito_31_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 33b5787525e86b1ef7851d8f4df257ece0c709315dd3ae18b83e7e05a42f3934
+    expected_audio_sha256: 060929c21f4df789825526ea5958d813fc7813d9ddf818cbb59c12c97e5351c6
+  vremix_vocadito_31_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 33b5787525e86b1ef7851d8f4df257ece0c709315dd3ae18b83e7e05a42f3934
+    expected_audio_sha256: be2cc258aceb2ad5554814524a28be18afc86ed0ca82846c3edfcff3486c0f5a
+  vremix_vocadito_32_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 63ea4ef4788a54dc3ec9e3abb3a1b68bd5f47392d2d3359f36e5b131dc42f2fe
+    expected_audio_sha256: d2e76e783852b9222aa90068000b82bc4d74a71b4eaca2a4219dab09212af686
+  vremix_vocadito_32_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 63ea4ef4788a54dc3ec9e3abb3a1b68bd5f47392d2d3359f36e5b131dc42f2fe
+    expected_audio_sha256: ac30702418d5b7fda693ec83bb50902d9e5b49e3d69599f1720441378601307f
+  vremix_vocadito_33_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: cf553bfb06c17445e36d24c9a1c13c6501d0ac0687aebc19c0e242b45d809dd4
+    expected_audio_sha256: 83c7f70cc84aa21eb41abe226b9a9ba624fa6772ea9382954d5431e6360c7663
+  vremix_vocadito_33_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: cf553bfb06c17445e36d24c9a1c13c6501d0ac0687aebc19c0e242b45d809dd4
+    expected_audio_sha256: 5e0ffa990eb18cb0e445817558ab8f8db68ac6dfca916c9c1fd06b0cfa498fbd
+  vremix_vocadito_34_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 74e80a72860ff758162a015a213026939723ec4190635b17c9261d6b079d2740
+    expected_audio_sha256: f600bd9cc33fa18c4f059ad63f4b667db5e10cd72c81c339939fd0b829d541e8
+  vremix_vocadito_34_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 74e80a72860ff758162a015a213026939723ec4190635b17c9261d6b079d2740
+    expected_audio_sha256: f9f052f55fe1b3a1981ecbdc6107398e5476c798667c54abaca8fbeaaaa7cbe2
+  vremix_vocadito_35_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: a2327fff128c5355ea4e6e9ca6f6fca04a8d04f5b4085cf082bd86952cebc1dc
+    expected_audio_sha256: 6948ab016bb986737d870c2d07a6479b91a6129581f6f77e834a5f762813bf04
+  vremix_vocadito_35_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: a2327fff128c5355ea4e6e9ca6f6fca04a8d04f5b4085cf082bd86952cebc1dc
+    expected_audio_sha256: 63947ab2933ae25f35b4374f29de8b733bea3ad7f8419ba704ade4a82375ac90
+  vremix_vocadito_36_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: b9e8b5721a596f4f6272337072b976e0d8d92f9b5501f876a8f5afb6f46e8296
+    expected_audio_sha256: cb94fff6ca6b926187681015f37a476f17e526f7902ecf847d5e51064425260d
+  vremix_vocadito_36_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: b9e8b5721a596f4f6272337072b976e0d8d92f9b5501f876a8f5afb6f46e8296
+    expected_audio_sha256: bf3cd225b34c5e131d663dd6bd557ed94a5dcc995a09db4e014cf32203658be5
+  vremix_vocadito_37_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 9d28fa1df8baf180fd35f5049c4cdd7a675b0a2c81857fa7893a04a39cbdfeb7
+    expected_audio_sha256: 272ed5f3bfc56cc9877778c963a2e7ac512f9ae8c704e589d266497b4552af65
+  vremix_vocadito_37_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 9d28fa1df8baf180fd35f5049c4cdd7a675b0a2c81857fa7893a04a39cbdfeb7
+    expected_audio_sha256: 6fcb39473e614930fac1db8b931517cc5b5c96c73535e4cef10c7fdc7150e146
+  vremix_vocadito_38_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 59d2f8a9c8772e76021eeb61d69bee7f368f653ea323e7f6a4117cdd527463b0
+    expected_audio_sha256: fea7d9220bb1f3fffdc73a613a78e6dc647a60c7fecd8bda0db4ef52779227ef
+  vremix_vocadito_38_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 59d2f8a9c8772e76021eeb61d69bee7f368f653ea323e7f6a4117cdd527463b0
+    expected_audio_sha256: 20ffedd6ebca01c19d8110978a79f8d715580bd6026856d618b82ff3e3d1f99a
+  vremix_vocadito_39_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 96c7462f7edcd3af715647b609a24559c60efabf0d6a77d6273062479991a6a6
+    expected_audio_sha256: a6903edb16cfc704797b308d0b62f13e27ac694bfff741ff1d70f3b6d9dc1548
+  vremix_vocadito_39_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 96c7462f7edcd3af715647b609a24559c60efabf0d6a77d6273062479991a6a6
+    expected_audio_sha256: cc9fbe758e88c2b82d2ac3c0324316016cc387f463b7882b9f0b5884e8332992
+  vremix_vocadito_3_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 18f48fc77df7dd43c1e4bc588a79482b1d330768d63b76b90e82998573582b6a
+    expected_audio_sha256: b78b04c7440bba675fa0471d88f1d02c4d654484ff54d0ee2dcd7ca13fb5d47a
+  vremix_vocadito_3_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 18f48fc77df7dd43c1e4bc588a79482b1d330768d63b76b90e82998573582b6a
+    expected_audio_sha256: 7ca7145381d2a5dc739de6039294b3d049d988a6ba339321da826af474db076b
+  vremix_vocadito_40_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 4ba1a1c1a8e8b068cee17affee35df893270900964b4974b8457fefc4ce93e8e
+    expected_audio_sha256: bf1227200a7e214f7797040ba000bebb24df087c089a6a281d5d949a374bdd80
+  vremix_vocadito_40_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 4ba1a1c1a8e8b068cee17affee35df893270900964b4974b8457fefc4ce93e8e
+    expected_audio_sha256: ec2fb69261cb90f00390aae49b658c85ee96dec597afdcb6bb609117096df484
+  vremix_vocadito_4_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: fb0a5b73a66edc0bac5aaec64f82eccd95d5a54781b354ab9020056803cf3d08
+    expected_audio_sha256: 2d40675923ebe7e5f173e97d1aa5d8aae7abadfb19c6feea14fea718ee34786a
+  vremix_vocadito_4_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: fb0a5b73a66edc0bac5aaec64f82eccd95d5a54781b354ab9020056803cf3d08
+    expected_audio_sha256: ed2692a9c553a73ddacc6bc340ef12cc8c9d24f3f305bc58d0ce43ac82cdd066
+  vremix_vocadito_5_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 561eb6ac03530a3219cf1a8eab9f0c14b1c4571185f0e059b61643325e4642ca
+    expected_audio_sha256: 7073a25635a50b76c06da7302ec490df97d5fe15ea7dec18c6050f8af45b1b19
+  vremix_vocadito_5_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 561eb6ac03530a3219cf1a8eab9f0c14b1c4571185f0e059b61643325e4642ca
+    expected_audio_sha256: cbb98ff3eda249bcde1de4272149c5e9ccd68eba0bb73a30ebe916ba9a257b61
+  vremix_vocadito_6_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 443e7f37172ef683f687fba39ab87710f22af2227e8fdb9031b2faa3002eb002
+    expected_audio_sha256: a484d54aa7e921f217eff5d011434519daafa3c842fdbabbb74a2b861fb2a0e4
+  vremix_vocadito_6_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 443e7f37172ef683f687fba39ab87710f22af2227e8fdb9031b2faa3002eb002
+    expected_audio_sha256: ff31b723c9df992c92c68ce2093c0e0d3a40b5d90b148ae4f87a43103f591e3b
+  vremix_vocadito_7_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: 9dfd339c44bd32a8891288ea3625fcda703932fe76c4ce8f073c005874f63393
+    expected_audio_sha256: b8813ce37e0d156e46824b90debaac0600ecb12ac7e486fac680393088efca5c
+  vremix_vocadito_7_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: 9dfd339c44bd32a8891288ea3625fcda703932fe76c4ce8f073c005874f63393
+    expected_audio_sha256: e716450dc891e6c8bcd7c8c9d6e0a8e64ca9f06333c61ddb2c3cdd1abec60590
+  vremix_vocadito_8_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: d4865ca325062a0985f8c8cf099844d9430ad445668bbd8d6bc3f786a346b457
+    expected_audio_sha256: 29d1ac9192298738039f914407b065f16ce471c2b73cb0eabb23bee05294cdc9
+  vremix_vocadito_8_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: d4865ca325062a0985f8c8cf099844d9430ad445668bbd8d6bc3f786a346b457
+    expected_audio_sha256: fb59ee2c72d321e0e4e9f077e01aa14652a643c3cfe1509537a41728f75d53c3
+  vremix_vocadito_9_Angels-In-Amplifiers-I-m-Alright_m06:
+    expected_annotation_sha256: b5936116058e717ec4fda99ddc323d471059debd9fb599809c59a41888c48126
+    expected_audio_sha256: 3b63e913940cc72fb0b17915550c63dd5b29cf5c9f2e61bcc582be60e0d028d2
+  vremix_vocadito_9_Arise-Run-Run-Run_m06:
+    expected_annotation_sha256: b5936116058e717ec4fda99ddc323d471059debd9fb599809c59a41888c48126
+    expected_audio_sha256: c6314b5f1d698d64a53cf497800a6603694820314866fbd2def87d7ac30143d5
+level: -6dB
+registered_utc: '2026-08-03'
+schema_version: m2e-external-fixtures/0.1
