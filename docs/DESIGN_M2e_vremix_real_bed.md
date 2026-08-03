@@ -1794,6 +1794,43 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   `terminated_for_hang` を立てて E-93 と同じ abort 後始末（terminate・
   drain/reconcile）の経路を通す形へ改めた。
 
+**E-104〜E-106（PR #242 第19巡）。**
+
+- **E-104**: 除外真実性の再スキャン（`_m2e_completed_cell_keys`）が読んだ
+  manifest のパース済み内容が呼び出し元へ渡らず、`execute_m2e_shard` の先行
+  shard 検査・task 構築が同じ level の manifest を別読み（TOCTOU）していた
+  （E-72/E-95 の抜け）。パース済みスナップショットも戻り値へ含め、
+  `_require_prior_m2e_shards_complete` の新設 `manifest_by_level` シードとして
+  引き回す形へ改めた。
+- **E-105**: E-101 で追加した無強制型検査バリデータが、実際には readback・
+  execute の 4 箇所の `float()` 変換前に配線されていなかった疑いの指摘
+  （実際には同一 PR 内の後続実装で配線済みだったが、経路経由の回帰テストが
+  無く「バリデータ単体テストのみ」で終わっていた）。経路経由（
+  `_require_m2e_shard_map_matches_registry`/`execute_m2e_shard` を実際に
+  呼ぶ）の回帰テストへ差し替えた。
+- **E-106**: E-96 のロールバックは `execute_m2e_shard` の失敗経路のみを対象に
+  しており、公開段（token 確認〜`_atomic_write_text`）自体の失敗（`os.replace`
+  失敗等）は無防備だった。所有権確認（token 一致）を通過した後の失敗にも
+  同じロールバックを適用する範囲拡張を行った。
+
+**E-107〜E-110（PR #242 第20巡）。**
+
+- **E-107（P1）**: E-103 は idle 退出（in_flight ゼロ）の直前に絶対期限を検査し
+  超過時のみ terminate していたが、期限**内**でも一度もタスクを dispatch して
+  いない worker の `initializer` がハングしていれば `pool.close()`+`join()` は
+  無期限にブロックしうる。idle 退出は期限の残量に関わらず常に terminate で
+  畳む形へ改めた（E-103 の期限検査自体は維持）。
+- **E-108**: セルレコードの `repeat_index` が bool（`false`）だと、Python の
+  `False == 0` により `repeat_index: 0` のセルと鍵タプルが黙って衝突し、
+  台帳比較（set/dict 演算）を素通りしうる——E-83/E-97/E-101/E-102 と同型の穴。
+  鍵構築・登録簿比較の前に非 bool 整数として検証する形へ改めた。
+- **E-109**: サイドカー予約（`os.open(..., O_CREAT|O_EXCL)`）が `--out` の親
+  ディレクトリを自動作成していなかった——`_atomic_write_text` の挙動と食い
+  違い、未存在のネストディレクトリ配下の `--out` で `FileNotFoundError` が
+  予約検査を経ずに漏れていた。同じ規約へ揃えた。
+- **E-110**: `--shard-id` の未使用引数拒否リストに `--force`（`--make-shard-map`
+  専用の no-clobber 上書き許可フラグ）が抜けていた。追加した。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
