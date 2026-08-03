@@ -15394,4 +15394,49 @@ def test_generate_m2e_shard_map_reuses_the_bars_snapshot_for_exclusion_scanning(
         cell_store=cell_store,
         **_C6_TEST_SHARD_KWARGS,
     )
-    assert doc["excluded_completed_cells"] == {"cell_store_relative": None, "cells": []}
+    # 例外なく完走すれば合格（除外スキャンが再オープンしていれば必ず ValueError に
+    # なる）。cell_store は空なので除外対象セルは無い。
+    assert doc["excluded_completed_cells"]["cells"] == []
+
+
+def test_main_shard_id_rejects_when_a_protected_input_is_inside_the_cell_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-90（PR #242 第12巡 Codex 是正）: 解決済み保護入力（campaign が指す
+
+    manifest/fixtures 等）が `--cell-store` の root と同一または配下にあると、
+    公開されたセルチェックポイントを入力として消費してしまいうる——実行前に
+    fail-closed で拒否する（E-81 の逆方向）。
+    """
+    import yaml as _yaml
+
+    map_doc, _map_sha256, campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    # campaign が指す fixtures の共通祖先ディレクトリ（`_write_m2e_campaign` が
+    # 書いた asset_root）を --cell-store に据える——保護入力がその配下に来る。
+    first_level = next(iter(campaign))
+    fixtures_path = Path(campaign[first_level]["external_fixtures"])
+    cell_store = fixtures_path.parent.parent
+
+    def _must_not_be_called(**kwargs: Any) -> "Dict[str, Any]":
+        raise AssertionError("execute_m2e_shard must not run")
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _must_not_be_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(tmp_path / "shard_run.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="出力ツリー"):
+        harness.main()

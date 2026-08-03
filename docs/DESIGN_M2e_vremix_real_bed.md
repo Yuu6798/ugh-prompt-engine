@@ -1689,6 +1689,25 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   弾かれる）、公開直前に現在の内容が自分の claim のままであることを確認して
   から置換する（不一致なら実行記録を一時パスへ退避してから fail-closed）。
 
+**E-88〜E-90（PR #242 第12巡）。**
+
+- **E-88（docs のみ）**: E-73 の until ループは、`tee` 経由の実行機自体の exit
+  status を検査しておらず、失敗（claim 衝突・pin 失敗・不正地図等）を無限に
+  リトライしうる恒久失敗ループの穴があった。`set -o pipefail`（既に宣言済み）
+  の下で実行機自体の exit status を検査し、非ゼロなら即座にレシピを終了する
+  （リトライは「exit 0 かつ未完セルが残っている」場合のみ）よう HANDOFF を
+  書き換えた。
+- **E-89**: `generate_m2e_shard_map` の `--cell-store` 除外スキャン
+  （`_m2e_completed_cell_keys`）が bars を独自に再読取していた——registry 構築
+  （`_m2e_full_cell_registry`）が既に読んだのと別の読取（TOCTOU）。E-78 と
+  同じ形で、本関数入口で一度だけ読んだ `(bars, bars_sha256)` を両方へ渡す形へ
+  改めた（生成側の TOCTOU 族完備化）。
+- **E-90**: `--shard-id` の保護パス検査は `--out` が `--cell-store` 配下に
+  あることは拒否していた（E-51 系）が、逆方向——解決済み保護入力（campaign が
+  指す manifest/fixtures・shard-map・bars）が `--cell-store` の root と同一
+  または配下にあるケースは未検査だった（公開されたセルチェックポイントを
+  入力として消費しうる）。同じ判定を逆方向にも追加した。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
