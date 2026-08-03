@@ -14943,3 +14943,75 @@ def test_execute_m2e_shard_rejects_a_cell_store_mismatched_with_the_map_exclusio
             initializer=None,
             require_thread_pinning=False,
         )
+
+
+def test_execute_m2e_shard_quarantines_written_cells_when_first_party_pin_drifts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-86（PR #242 第11巡 Codex 是正）: first-party 検査
+
+    （`_require_unchanged_since_load`）の失敗でも、dist native / runtime code と
+    同じく本 shard が書いたセルレコードを隔離してから raise する（以前は
+    first-party だけがこの隔離経路の外にあり、失敗時に written_paths が通常
+    store に残る非対称があった）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+
+    quarantined: "List[List[str]]" = []
+    monkeypatch.setattr(
+        harness, "_quarantine_cell_records", lambda paths: quarantined.append(list(paths))
+    )
+
+    def _boom() -> "Dict[str, Any]":
+        raise RuntimeError("simulated first-party pin drift")
+
+    monkeypatch.setattr(harness, "_require_unchanged_since_load", _boom)
+    with pytest.raises(RuntimeError, match="simulated first-party pin drift"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=tmp_path / "store_A",
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+    # 隔離は正確に 1 回だけ呼ばれる——失敗時は shard 実行記録（成功記録）を返さない。
+    assert len(quarantined) == 1
+
+
+def test_execute_m2e_shard_constructs_tasks_for_a_populated_shard_using_the_validated_snapshots(
+    tmp_path: Path,
+) -> None:
+    """E-87（PR #242 第11巡 Codex P1 是正）: `_require_m2e_shard_map_matches_registry`
+
+    の戻り値 `(fixtures_by_level, bars_snapshot)` を展開せず丸ごと
+    `validated_fixtures_by_level` へ代入すると、非空 shard の task 構築
+    （`fixtures_by_level[level]` の添字アクセス等）が `TypeError` で全滅する。
+    P=1 の非空 shard を実際に task 構築 → `run_m2e_shard_queue` 投入 → 完了まで
+    通し、`cells_completed` が shard の全セル数と一致することを直接確認する
+    （同型の破綻を将来も検出できるようにする回帰テスト）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    shard0_cells = [c for c in map_doc["cells"] if c["shard_id"] == 0]
+    assert len(shard0_cells) >= 1  # 非空であることが前提（空なら本テストの意味が無い）
+    result = harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=tmp_path / "store_A",
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    assert result["cells_completed"] == len(shard0_cells)
+    assert result["cells_unavailable"] == []
+    assert result["cells_truncated"] == []

@@ -1633,6 +1633,19 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   matches_registry` に実行時 `cell_store` を渡し、地図の宣言 store との一致を要求
   した上で、真実性 digest 検査もこの実行 store に対して行う形へ改めた。
 
+**E-86〜E-87（PR #242 第11巡）。**
+
+- **E-86**: 実行後検査 3 種のうち first-party（`_require_unchanged_since_load`）
+  だけが隔離保護 try の**手前**で raise していたため、その失敗時は dist native /
+  runtime code とは非対称に shard_written_paths が通常 store に残ってしまって
+  いた。3 種すべてを同じ「失敗時 quarantine → raise」try/except へ統合した。
+- **E-87（P1）**: E-78 の WIP 段階で `_require_m2e_shard_map_matches_registry` の
+  戻り値対 `(fixtures_by_level, bars_snapshot)` を未展開のまま
+  `validated_fixtures_by_level` へ代入しており、非空 shard の task 構築が
+  `TypeError` で全滅する穴があった。両値を展開する形へ修正し、非空 shard を
+  実際に task 構築〜キュー投入〜完了まで通す統合テストを追加した（既存テストが
+  この破綻を検出できなかったため）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

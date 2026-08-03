@@ -11375,6 +11375,16 @@ def run_m2e_shard_queue(
     捕捉・隔離まで完結させる契約——呼び出し元が「保全済みパスを隔離してから
     元例外を伝播」を自分で実装する）。
 
+    E-80（PR #242 第9巡 Codex 是正）: 同一ポーリングで複数の `AsyncResult` が
+    同時に ready なとき、以前は最初の例外で ready_indices の for ループを即座に
+    break していたため、その後ろに並んでいた既に ready だった成功セルの結果が
+    `completed` へ積まれずに失われていた（`on_worker_error` の隔離ネットにも
+    載らない穴）。ready バッチは最後まで drain してから中断し、`break` 時点で
+    まだ `in_flight` に残っていた（ready ではなかった）セルも
+    `reconcile_hung_cell`（E-54 と同じ digest 一致照合）で「実際に publish
+    済みか」を確認してから `completed` へ加える——`pool.terminate()` の瞬間との
+    競合で書き終えていたレコードを取りこぼさない。
+
     `start`（E-76・PR #242 第7巡 Codex P1 是正）: 省略（既定 `None`）なら Pool 構築
     直後にここで捕捉する（従来どおり）。呼び出し元が明示的に渡せば、その値を
     admission 会計（`elapsed = clock() - start`）と打ち切り期限
@@ -11422,8 +11432,16 @@ def run_m2e_shard_queue(
                 try:
                     result = async_result.get()
                 except BaseException as exc:  # noqa: BLE001 — 親へ即座に伝播し shard を中断する
-                    aborted_exception = exc
-                    break
+                    # E-80（PR #242 第9巡 Codex 是正）: 同一バッチで複数の AsyncResult が
+                    # 同時に ready なとき、以前はここで即座に break しており、この exc
+                    # より後ろに並んでいた**既に ready だった**成功セルが `completed` へ
+                    # 積まれずに失われていた——`on_worker_error`（E-77）の隔離ネットにも
+                    # 載らないまま、書き上がった published レコードが会計から漏れる穴
+                    # だった。最初の例外は保持しつつ、同じバッチの残りは drain し続ける
+                    # （2 件目以降の例外は握り潰す——伝播するのは常に最初の例外 1 つ）。
+                    if aborted_exception is None:
+                        aborted_exception = exc
+                    continue
                 completed.append({"cell": cell, "result": result})
             if aborted_exception is not None:
                 break
@@ -11449,7 +11467,19 @@ def run_m2e_shard_queue(
         pool.join()
 
     if aborted_exception is not None:
-        # E-77: フックを試すが、フック自身が例外を送出しても常に元の
+        # E-80（PR #242 第9巡 Codex 是正）: この時点で `in_flight` に残っているのは
+        # 「break した時点でまだ ready ではなかった」セルのみ（ready 済みは上の
+        # for ループで既に pop・drain 済み）。`pool.terminate()`（finally 節）が
+        # これらを未完のまま殺す前提だが、実際には terminate() の瞬間との窓で
+        # atomic replace が先に完了していることがある（E-54 と同型の競合）。
+        # `reconcile_hung_cell` による digest 一致照合で「実際に publish 済みか」を
+        # 確認してから `completed` へ足す——確認せず切り捨てると、たまたま書き
+        # 終えていたレコードが `on_worker_error` の隔離ネットからも漏れる。
+        for _idx, (_ar, _started, cell) in in_flight.items():
+            reconciled = reconcile_hung_cell(cell) if reconcile_hung_cell is not None else None
+            if reconciled is not None:
+                completed.append({"cell": cell, "result": reconciled})
+        # フックを試すが、フック自身が例外を送出しても常に元の
         # aborted_exception を再送出する（フックの失敗で worker 例外の情報を
         # 握り潰さない・フックは自身の例外を自前で処理しきる契約だが、念のため
         # 二重の防御として本関数側でも捕捉する）。
@@ -11792,14 +11822,19 @@ def execute_m2e_shard(
         # 実行中に差し替わっていないことを確認する（既存の run/evaluate/census 経路と
         # 同じ post-execution ガード。差し替わっていれば「pin した digest」と「次回
         # import されるコード」が食い違い、書いたセルの由来が保証できなくなる）。
-        _require_unchanged_since_load()
         # E-61（PR #242 第4巡 Codex P2 是正）: E-48 は first-party ソース閉包しか見ない。
         # 通常 run 経路（`env_digest_value is not None` 分岐）と同じく、同梱ネイティブ・
         # 実装 hash の束縛後差し替えも検査する——shard モードは常に `env_digest` を
-        # 束縛するため、run 側のような条件分岐は要らない。失敗時は本 shard が書いた
-        # セルレコードを隔離してから落とす（差し替え中の実装が産んだ row を次 shard が
-        # resume しないように——run 側の失敗時パターンをそのまま踏襲する）。
+        # 束縛するため、run 側のような条件分岐は要らない。
+        # E-86（PR #242 第11巡 Codex 是正）: 以前は first-party 検査（`_require_
+        # unchanged_since_load`）だけがこの try の**外**にあり、単独で失敗すると
+        # shard_written_paths が隔離されないまま通常 store に残っていた（dist
+        # native / runtime code とは非対称な扱い）。3 種すべてを同じ
+        # 「失敗時 quarantine → raise」経路へ統合する——差し替え中の実装が産んだ
+        # row を次 shard が resume しないように（run 側の失敗時パターンをそのまま
+        # 踏襲する）。
         try:
+            _require_unchanged_since_load()
             _require_dist_native_unchanged_since_bind()
             _require_runtime_code_unchanged_since_bind()
         except RuntimeError:
@@ -12119,6 +12154,20 @@ def main() -> int:
                 f"--out {args.out} は地図生成の入力（campaign / manifest / fixtures / "
                 "bars）と同じパスを指している; 入力を地図で上書きしない (fail-closed)"
             )
+        # E-81（PR #242 第9巡 Codex 是正）: `--make-shard-map --cell-store`（E-66）は
+        # 除外真実性検証のため `cell_store` 配下のセルレコードを読む——`--out` が
+        # その配下（root 自身または子孫）を指すと、地図の書き出しが既存セル
+        # チェックポイントを上書きしうる。`--shard-id` 側の同種保護（E-51 系）と
+        # 揃え、`--force` でも例外を許さない（--cell-store が指定された場合のみ；
+        # 未指定なら比較対象が無い）。
+        if args.cell_store is not None:
+            cell_store_root = Path(args.cell_store).resolve()
+            out_resolved = Path(args.out).resolve()
+            if out_resolved == cell_store_root or cell_store_root in out_resolved.parents:
+                raise SystemExit(
+                    f"--out {args.out} が --cell-store {args.cell_store} 配下にある; 地図の "
+                    "書き出しでセルチェックポイントを上書きしない (fail-closed・E-81)"
+                )
         # E-55（PR #242 第3巡 Codex P1 是正）: `--out "$(mktemp ...)"` が作る 0 バイトの
         # 予約ファイルは上書き対象として許容し、非空の既存レコードのみ fail-closed で
         # 拒否する（--shard-id 側の E-51 no-clobber と同じ規則に揃える）。
