@@ -11640,6 +11640,11 @@ def execute_m2e_shard(
     `excluded_completed_cells.cell_store_relative` が実行時 `--cell-store` と一致する
     ことを要求し、除外真実性の digest 検証もこの実行 store に対して行う（地図が別
     store 向けに宣言した除外を、別の store への実行に束縛して信用しない）。
+
+    `started_utc`（E-84・PR #242 第10巡 Codex 是正）: `start`（単調クロック）と
+    **同時**に本関数入口で捕捉する（以前は claim 取得・地図検証・manifest 読取後、
+    `run_m2e_shard_queue` 呼び出し直前で別途捕捉しており、`start`/`elapsed_seconds`
+    が指す起点と provenance が食い違っていた）。
     """
     if shard_id < 0:
         raise ValueError(f"execute_m2e_shard: shard_id {shard_id!r} は 0 以上のみ許可する")
@@ -11652,7 +11657,14 @@ def execute_m2e_shard(
 
     # E-76: start は preflight（登録簿再構築・先行セル hash・manifest 読取・pool
     # 構築）より前に捕捉する——これらの所要時間を admission 会計・打ち切り期限に含める。
+    # E-84（PR #242 第10巡 Codex 是正）: `started_utc`（実行記録の provenance）も
+    # `start`（単調クロック）と**同時**にここで捕捉する——以前は
+    # `run_m2e_shard_queue` 呼び出し直前（claim 取得・地図検証・manifest 読取後）
+    # で別途 `_utc_now()` していたため、「shard 開始時刻」を名乗る値が実際には
+    # preflight 分だけ遅れていた（`start`／`elapsed_seconds` が指す起点と食い違う
+    # 自己矛盾）。
     start = clock()
+    started_utc = _utc_now()
     cell_store = Path(cell_store)
     cell_store.mkdir(parents=True, exist_ok=True)
     # E-74: 同一 shard_id の並行実行を排他する（Memo の「昇順強制で足りる」という
@@ -11767,7 +11779,7 @@ def execute_m2e_shard(
                 _quarantine_cell_records(written_paths_so_far)
 
         session_budget = float(map_doc["inputs"]["session_budget_s"])
-        started_utc = _utc_now()
+        # E-84: started_utc は本関数入口で `start` と同時に捕捉済み（再捕捉しない）。
         result = run_m2e_shard_queue(
             tasks,
             session_budget=session_budget,
@@ -12274,7 +12286,23 @@ def main() -> int:
         # 明示指定時は地図の値と一致することを要求する（不一致は fail-closed。
         # T_direct/T_stem/S は校正時の P の下で測ったものであり、異なる P で実行すると
         # コストモデルの前提が崩れる）。
-        map_workers = int(map_doc["inputs"]["workers"])
+        # E-83（PR #242 第10巡 Codex 是正）: `int(...)` は非 bool の正整数以外
+        # （`1.5` は切り捨てて 1 に、`true` は 1 に）を黙って正常値として受理して
+        # しまう——地図の workers は校正時の P（§8.4 のコスト契約の前提）なので、
+        # 形が崩れた値を静かに丸めず fail-closed で拒否する（生成器
+        # `generate_m2e_shard_map` の workers 検証と同じ形状要件）。
+        raw_map_workers = map_doc["inputs"]["workers"]
+        if (
+            isinstance(raw_map_workers, bool)
+            or not isinstance(raw_map_workers, int)
+            or raw_map_workers < 1
+        ):
+            raise SystemExit(
+                f"shard map: inputs.workers {raw_map_workers!r} は 1 以上の整数（bool 不可）"
+                "のみ許可する; §8.4 のコスト契約の前提（校正時の P）を表す値が崩れている "
+                "(fail-closed・E-83)"
+            )
+        map_workers = raw_map_workers
         if args.workers is _ARGPARSE_UNSET:
             workers = map_workers
         else:
@@ -12333,6 +12361,23 @@ def main() -> int:
                 "使う。mktemp の 0 バイト予約ファイルは上書き対象として許容する）"
                 "(fail-closed)"
             )
+        # E-85（PR #242 第10巡 Codex 是正）: no-clobber 検査の通過〜公開
+        # （`_atomic_write_text` での置換）までの窓が無防備だった——`execute_m2e_shard`
+        # は数時間かかりうるため、この窓で別起動が同じ 0 バイト予約 / 不存在 --out を
+        # 狙って同じ no-clobber 検査を通過しうる（二重実行・上書き競合）。検査の直後、
+        # `--out` へ起動固有 claim（shard_id + PID + ISO8601）を atomic write する——
+        # これでファイルは非空になり、以後の別起動は既存の no-clobber 検査（0 バイト
+        # のみ許容）で弾かれる。公開直前には現在の `--out` の内容が自分の claim の
+        # ままであることを確認してから置換する（不一致なら、誰かが割り込んで claim /
+        # 内容を差し替えたということ——実行記録を失わないよう一時パスへ退避出力し、
+        # fail-closed で案内する）。
+        shard_run_claim_token = (
+            "m2e-shard-run-reservation/1\n"
+            f"shard_id={args.shard_id}\n"
+            f"pid={os.getpid()}\n"
+            f"claimed_utc={_utc_now()}\n"
+        )
+        _atomic_write_text(args.out, shard_run_claim_token)
         shard_run = execute_m2e_shard(
             map_doc=map_doc,
             map_sha256=map_sha256,
@@ -12343,6 +12388,21 @@ def main() -> int:
             workers=workers,
         )
         shard_run_payload = json.dumps(shard_run, indent=2, sort_keys=True)
+        try:
+            current_out_content = out_resolved.read_text(encoding="utf-8")
+        except OSError:
+            current_out_content = None
+        if current_out_content != shard_run_claim_token:
+            spill_path = out_resolved.with_name(
+                f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.json"
+            )
+            _atomic_write_text(spill_path, shard_run_payload)
+            raise SystemExit(
+                f"--out {args.out} の claim が公開直前に別の内容へ差し替わっていた "
+                "（予約時に書いた自分の claim トークンと不一致）; 別起動との競合の "
+                f"疑いがある。実行記録は失わないよう {spill_path} へ退避した——原因を "
+                "確認してから手動で --out へ配置すること (fail-closed・E-85)"
+            )
         _atomic_write_text(args.out, shard_run_payload)
         print(f"wrote shard run record to {args.out}")
         # E-56（PR #242 第3巡 Codex P2 是正）: census の E-25 と同じ流儀で、書いたのと

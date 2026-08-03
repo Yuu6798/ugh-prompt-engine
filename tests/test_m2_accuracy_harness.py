@@ -15087,3 +15087,165 @@ def test_main_make_shard_map_rejects_an_out_nested_inside_the_cell_store(
     )
     with pytest.raises(SystemExit, match="配下にある"):
         harness.main()
+
+
+def test_execute_m2e_shard_does_not_quarantine_a_pre_existing_record_reconciled_from_a_hang(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-82（PR #242 第10巡 Codex 是正）: ハング打ち切り照合で見つかったレコードが
+
+    dispatch **前**から既に有効だった場合、resumed に分類し written_paths
+    （quarantine 対象）から除外する——以前は無条件に「この起動が書いた」として
+    扱っていたため、後続の pin 失敗時にこの起動と無関係な既存レコードまで
+    隔離してしまっていた。
+    """
+    import _shard_queue_fakes
+    import yaml as _yaml
+
+    campaign_path = _write_m2e_campaign(tmp_path)
+    fast_kwargs = dict(
+        t_direct=0.05, t_stem=0.05, startup_cost=0.01, session_budget=0.3, workers=1
+    )
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **fast_kwargs)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    map_doc, map_sha256 = harness._load_m2e_shard_map(map_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+
+    shard0_cells = [c for c in map_doc["cells"] if c["shard_id"] == 0]
+    assert shard0_cells  # 非空前提
+    target = shard0_cells[0]  # workers=1 の下で最初に dispatch される（唯一 in-flight）
+
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        [target],
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category=target["arm"],
+        level=target["level"],
+        entry_id=target["entry_id"],
+        repeat_index=target["repeat_index"],
+    )
+    assert record_path.is_file()
+    original_bytes = record_path.read_bytes()
+
+    # hang_grace を短縮し、実測を待たず打ち切り経路へ入る（session_budget は地図の
+    # 0.3s と合わせて、打ち切り期限を高々 0.4s 程度に抑える）。
+    monkeypatch.setattr(harness, "_M2E_HANG_GRACE_S", 0.1)
+
+    def _pin_boom() -> None:
+        raise RuntimeError("simulated dist-native pin drift")
+
+    monkeypatch.setattr(harness, "_require_dist_native_unchanged_since_bind", _pin_boom)
+
+    with pytest.raises(RuntimeError, match="simulated dist-native pin drift"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=cell_store,
+            workers=1,
+            measure_fn=_shard_queue_fakes.always_hangs,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+    # 実行前から在ったレコードは quarantine 対象に含まれない——rename もされず、
+    # 内容もそのまま残っていること。
+    assert record_path.is_file()
+    assert record_path.read_bytes() == original_bytes
+    assert list(cell_store.rglob("*.quarantined-*")) == []
+
+
+@pytest.mark.parametrize("bad_workers", [1.5, True, 0])
+def test_main_shard_id_rejects_a_malformed_workers_in_the_map(
+    bad_workers: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-83（PR #242 第10巡 Codex 是正）: 地図の `inputs.workers` が非 bool の
+
+    正整数でなければ（`1.5`・`true`・`0`）、`int()` で黙って丸めず fail-closed で
+    拒否する（§8.4 のコスト契約の前提が崩れた地図を実行しない）。
+    """
+    import yaml as _yaml
+
+    map_doc, _map_sha256, campaign_path, _campaign = _generate_and_load_shard_map(tmp_path)
+    mutated = copy.deepcopy(map_doc)
+    mutated["inputs"]["workers"] = bad_workers
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(mutated, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+
+    def _must_not_be_called(**kwargs: Any) -> "Dict[str, Any]":
+        raise AssertionError("execute_m2e_shard must not run with a malformed workers")
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _must_not_be_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(tmp_path / "shard_run.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="workers"):
+        harness.main()
+
+
+def test_execute_m2e_shard_captures_started_utc_at_the_shard_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-84（PR #242 第10巡 Codex 是正）: `started_utc` は `start`（単調クロック）と
+
+    同時に shard 入口で捕捉する——以前は claim 取得・地図検証・manifest 読取後
+    （`run_m2e_shard_queue` 呼び出し直前）で別途捕捉しており、preflight の所要
+    時間だけ遅れた値になっていた（`start`/`elapsed_seconds` が指す起点との自己
+    矛盾）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    real_validate = harness._require_m2e_shard_map_matches_registry
+    preflight_finished_utc: "List[str]" = []
+
+    def _slow_validate(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(0.2)
+        result = real_validate(*args, **kwargs)
+        preflight_finished_utc.append(harness._utc_now())
+        return result
+
+    monkeypatch.setattr(harness, "_require_m2e_shard_map_matches_registry", _slow_validate)
+    result = harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=tmp_path / "store_A",
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    assert preflight_finished_utc
+    # started_utc は地図検証（0.2s の遅延を模した preflight）より前に捕捉されている
+    # こと——ISO 8601 は辞書順比較が時刻順と一致する。
+    assert result["started_utc"] < preflight_finished_utc[0]

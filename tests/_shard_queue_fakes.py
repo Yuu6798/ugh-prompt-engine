@@ -58,6 +58,18 @@ def sleep_then_ok_or_raise(task: "Dict[str, Any]") -> "Dict[str, Any]":
     return {"resumed": False, "measured": True, "mismatches": [], "outcome": "measured"}
 
 
+def always_hangs(task: "Dict[str, Any]") -> "Dict[str, Any]":
+    """`task` の内容に関係なく確実に長時間 sleep するだけの fake（ハング打ち切り
+
+    テスト専用）。`execute_m2e_shard` が組み立てる task dict は `actual_duration_s`
+    を持たないため、`sleep` fake は `cost`（通常は数秒未満）しか眠らない——
+    E-82 回帰テストのようにハング打ち切りを狙って再現するには、cost に関係なく
+    確実に打ち切り期限を超えて眠り続ける fake が要る。
+    """
+    time.sleep(30.0)
+    return {"resumed": False, "measured": True, "mismatches": [], "outcome": "measured"}
+
+
 def unavailable(task: "Dict[str, Any]") -> "Dict[str, Any]":
     """`outcome == "unavailable"` を返す fake（E-46 回帰テスト用）。
 
