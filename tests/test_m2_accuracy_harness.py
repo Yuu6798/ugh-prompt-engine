@@ -14235,7 +14235,11 @@ def test_generate_m2e_shard_map_without_cell_store_records_no_exclusions(
     """E-66: `--cell-store` 未指定なら従来形（除外なし・後方互換）。"""
     campaign_path = _write_m2e_campaign(tmp_path)
     doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
-    assert doc["excluded_completed_cells"] == {"cell_store_relative": None, "cells": []}
+    assert doc["excluded_completed_cells"] == {
+        "cell_store_relative": None,
+        "cells": [],
+        "manifest_sha256_by_level": {},
+    }
 
 
 def test_require_m2e_shard_map_matches_registry_accepts_a_truthful_exclusion_map(
@@ -15704,3 +15708,135 @@ def test_execute_m2e_shard_rejects_a_malformed_n_shards_before_touching_the_queu
             initializer=None,
             require_thread_pinning=False,
         )
+
+
+def test_main_shard_id_rejects_when_the_out_reservation_sidecar_already_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-94（PR #242 第15巡 Codex 是正）: `--out` の予約サイドカー（`<out>.claim`）が
+
+    既に存在すれば、実行を試みる前に fail-closed で拒否する（`os.replace` ベース
+    の後勝ち上書きではなく `O_EXCL` による真の排他）。
+    """
+    import yaml as _yaml
+
+    map_doc, _map_sha256, campaign_path, _campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    out_path = tmp_path / "shard_run.json"
+    sidecar_path = tmp_path / "shard_run.json.claim"
+    sidecar_path.write_text("held by another launch\n", encoding="utf-8")
+
+    def _must_not_be_called(**kwargs: Any) -> "Dict[str, Any]":
+        raise AssertionError("execute_m2e_shard must not run when the reservation sidecar exists")
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _must_not_be_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="予約は他の起動が保持している"):
+        harness.main()
+    assert sidecar_path.read_text(encoding="utf-8") == "held by another launch\n"
+
+
+def test_main_shard_id_rolls_back_the_out_reservation_when_execution_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-96（PR #242 第15巡 Codex 是正）: `execute_m2e_shard` が例外で失敗すると、
+
+    `--out` の claim token を予約前の状態（mktemp 予約由来なら 0 バイト）へ
+    原状復帰し、サイドカーも解放する——失敗した起動の claim を残すと、以後の
+    どの起動も no-clobber で永久に弾かれてしまう。
+    """
+    import yaml as _yaml
+
+    map_doc, _map_sha256, campaign_path, _campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    out_path = tmp_path / "shard_run.json"
+    out_path.write_bytes(b"")
+    sidecar_path = tmp_path / "shard_run.json.claim"
+
+    def _fake_execute_that_fails(**kwargs: Any) -> "Dict[str, Any]":
+        raise RuntimeError("simulated shard execution failure")
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _fake_execute_that_fails)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="simulated shard execution failure"):
+        harness.main()
+    assert out_path.is_file()
+    assert out_path.stat().st_size == 0
+    assert not sidecar_path.exists()
+
+
+def test_main_shard_id_removes_a_previously_absent_out_when_execution_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-96: `--out` が元々不存在だった場合は、失敗時に claim ごと削除して
+
+    不存在へ戻す（0 バイトへ truncate するのではない——mktemp 予約と違い、元の
+    状態は「不存在」）。
+    """
+    import yaml as _yaml
+
+    map_doc, _map_sha256, campaign_path, _campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    out_path = tmp_path / "shard_run.json"
+    sidecar_path = tmp_path / "shard_run.json.claim"
+
+    def _fake_execute_that_fails(**kwargs: Any) -> "Dict[str, Any]":
+        raise RuntimeError("simulated shard execution failure")
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _fake_execute_that_fails)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="simulated shard execution failure"):
+        harness.main()
+    assert not out_path.exists()
+    assert not sidecar_path.exists()

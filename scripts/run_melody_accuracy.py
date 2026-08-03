@@ -12038,7 +12038,7 @@ def main() -> int:
     parser.add_argument(
         "--m2e-bars",
         type=Path,
-        default=M2E_BARS_PATH,
+        default=_ARGPARSE_UNSET,
         metavar="m2e_accuracy_bars.yaml",
         help="M2e 帯（V_remix_real_*）の事前登録バー。M2 のバーとは意図的に別ファイル "
         "（設計 §5.1: 追記すると commit 済み M2b/M2c verdict の pin が壊れる）。"
@@ -12273,6 +12273,10 @@ def main() -> int:
             ("--eval-cell-store", args.eval_cell_store is not None),
             ("--cell-store-role", args.cell_store_role is not _ARGPARSE_UNSET),
             ("--pin-threads", args.pin_threads is True),
+            # E-98（PR #242 第16巡 Codex 是正）: 地図生成器は M2e 帯（--m2e-bars）を
+            # 一切読まない（tolerance_cents 等の共有スカラーは --bars 側から取る）——
+            # E-64 ゲートの列挙に元々抜けていた。センチネル化し明示指定を拒否する。
+            ("--m2e-bars", args.m2e_bars is not _ARGPARSE_UNSET),
         ):
             if rejected:
                 raise SystemExit(
@@ -12381,6 +12385,9 @@ def main() -> int:
             ("--t-stem", args.t_stem is not None),
             ("--startup-cost", args.startup_cost is not None),
             ("--session-budget", args.session_budget != _M2E_DEFAULT_SESSION_BUDGET_S),
+            # E-98（PR #242 第16巡 Codex 是正）: 実行機も M2e 帯（--m2e-bars）を
+            # 一切読まない（E-71 ゲートの列挙に元々抜けていた）。
+            ("--m2e-bars", args.m2e_bars is not _ARGPARSE_UNSET),
         ):
             if rejected:
                 raise SystemExit(
@@ -12591,6 +12598,13 @@ def main() -> int:
             f"not_started={len(shard_run['cells_not_started'])}"
         )
         return 0
+    # E-98（PR #242 第16巡 Codex 是正）: --m2e-bars をセンチネル化した（両 shard
+    # モードは明示指定を拒否——上の 2 ブロックで検査済み）ので、それ以外の経路
+    # （census/evaluate/run）へ渡す前に、既定の M2E_BARS_PATH へ正規化する。
+    # census 分岐がこの直後で --m2e-bars を直接消費するため、この正規化は
+    # census 分岐より前に置く。
+    if args.m2e_bars is _ARGPARSE_UNSET:
+        args.m2e_bars = M2E_BARS_PATH
     if args.census and args.evaluate:
         raise SystemExit(
             "--census と --evaluate は排他（census は evaluate が出した verdict を "
