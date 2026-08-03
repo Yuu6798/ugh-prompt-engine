@@ -15314,6 +15314,59 @@ def test_main_make_shard_map_rejects_an_out_matching_a_manifest_referenced_audio
     assert audio_path.read_bytes() == original_audio_bytes  # 実体は無傷
 
 
+def test_main_make_shard_map_does_not_reopen_manifests_already_read_by_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-125（PR #242 第28巡 Codex 是正）: `--cell-store` 指定時、preflight
+
+    （E-123 の manifest 参照パス保護）が読んだ manifest スナップショットを
+    `generate_m2e_shard_map` → `_m2e_completed_cell_keys`（除外真実性スキャン）
+    へ引き回し、ここでは再オープンしない——各水準の manifest を最初の読取
+    直後に破損させても、2 回目の読取が実際に起きなければその破損は決して
+    観測されない（起きれば `_load_external_manifest` が壊れた JSON で例外に
+    なり、`harness.main()` が非ゼロ終了する）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+
+    real_load = harness._load_external_manifest
+    calls: "List[str]" = []
+    corrupted: "set[str]" = set()
+
+    def _tracking_load(path: Any) -> Any:
+        calls.append(str(path))
+        result = real_load(path)
+        resolved = str(Path(path).resolve())
+        # 最初の読取（preflight）が終わった直後に manifest を破損させる——
+        # 2 回目の読取が本当に起きなければ、この破損は決して観測されない。
+        if resolved not in corrupted:
+            corrupted.add(resolved)
+            Path(path).write_text("not valid json{{{", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(harness, "_load_external_manifest", _tracking_load)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--cell-store", str(cell_store),
+            "--out", str(tmp_path / "shard_map.yaml"),
+        ],
+    )
+    assert harness.main() == 0
+    # 各水準ちょうど 1 回（preflight のみ）——除外スキャンでの再読込が無いこと。
+    assert len(calls) == len(harness._M2E_LEVEL_LADDER)
+
+
 def test_execute_m2e_shard_does_not_quarantine_a_pre_existing_record_reconciled_from_a_hang(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -16672,6 +16725,31 @@ def test_require_m2e_shard_map_matches_registry_rejects_a_malformed_cell_shard_i
     mutated["cells"][0]["shard_id"] = bad_shard_id
     with pytest.raises(ValueError, match="shard_id"):
         harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_acquire_m2e_out_reservation_releases_the_sidecar_on_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-124（PR #242 第28巡 Codex 是正）: `os.fdopen`/`write` の区間で
+
+    `KeyboardInterrupt`（`Exception` のサブクラスではない）が飛んでも、
+    `O_EXCL` で作ったサイドカーは削除されてから再送出される——以前は
+    `except Exception` だったため、これらの `BaseException` 派生は素通りし
+    サイドカーが孤児のまま残り、以後の全起動を「他の起動が予約を保持している」
+    という誤った案内で永久にブロックしていた（呼び出し元の `finally` は本関数が
+    正常 return できなかった場合には届かないため、後始末は本関数内で完結
+    させる必要がある）。
+    """
+    out_path = tmp_path / "shard_map.yaml"
+    sidecar_path = tmp_path / "shard_map.yaml.claim"
+
+    def _raise_keyboard_interrupt(*args: Any, **kwargs: Any) -> Any:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(harness.os, "fdopen", _raise_keyboard_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        harness._acquire_m2e_out_reservation(out_path, "token\n")
+    assert not sidecar_path.exists()
 
 
 def test_main_make_shard_map_rejects_when_the_out_reservation_sidecar_already_exists(

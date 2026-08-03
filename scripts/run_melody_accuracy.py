@@ -10432,6 +10432,8 @@ def _m2e_completed_cell_keys(
     fixtures_by_level: "Dict[str, Dict[str, Any]]",
     bars_path: Path = BARS_PATH,
     bars_snapshot: "Optional[Tuple[Any, str]]" = None,
+    manifest_snapshot_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
+    manifest_sha256_snapshot_by_level: "Optional[Dict[str, str]]" = None,
 ) -> "Tuple[set, Dict[str, str], Dict[str, Tuple[List[Dict[str, Any]], Path]]]":
     """`cells`（registry の 5-tuple 群）のうち `cell_store` に digest 一致で完了
 
@@ -10450,6 +10452,15 @@ def _m2e_completed_cell_keys(
     `bars_snapshot`（E-78・PR #242 第8巡 Codex 是正）: 呼び出し元が既に読んだ
     `(bars, bars_sha256)` を渡せば、ここでは bars ファイルを再度開かない。未指定
     （既定 `None`）なら従来どおり `bars_path` から読む。
+
+    `manifest_snapshot_by_level`/`manifest_sha256_snapshot_by_level`（E-125・
+    PR #242 第28巡 Codex 是正）: 呼び出し元（`generate_m2e_shard_map` 経由の
+    CLI preflight・E-123 の manifest 参照パス保護）が既に読んだ manifest の
+    パース済みスナップショット + sha256 を渡せば、内部の `manifest_cache` を
+    これで種付けし、対応する水準の manifest をここでは再度開かない（E-57/E-72
+    と同族の TOCTOU 回避）。未指定（既定 `None`）なら従来どおり内部で読む
+    （直接呼ぶテスト等の後方互換経路）。両者は対で渡すこと（片方だけ渡すと、
+    種付けされた水準の `manifest_sha256_by_level` が欠けたまま返る）。
 
     戻り値は `(completed, manifest_sha256_by_level, manifest_by_level)`。
     `manifest_sha256_by_level`（E-95・PR #242 第15巡 Codex 是正）は本関数が実際に
@@ -10474,8 +10485,15 @@ def _m2e_completed_cell_keys(
     env_digest = _env_digest()
     cell_store = Path(cell_store)
 
-    manifest_cache: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
-    manifest_sha256_by_level: "Dict[str, str]" = {}
+    # E-125: 呼び出し元が既に読んだ manifest スナップショットで種付けする——
+    # 種付けされた水準は下のループで再オープンされない（`level not in
+    # manifest_cache` が False になる）。
+    manifest_cache: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = (
+        dict(manifest_snapshot_by_level) if manifest_snapshot_by_level else {}
+    )
+    manifest_sha256_by_level: "Dict[str, str]" = (
+        dict(manifest_sha256_snapshot_by_level) if manifest_sha256_snapshot_by_level else {}
+    )
     completed: "set" = set()
     for bed_id, level, clip_id, arm, repeat_index in cells:
         if level not in manifest_cache:
@@ -10565,6 +10583,8 @@ def generate_m2e_shard_map(
     bars_path: Path = BARS_PATH,
     cell_store: "Optional[str | Path]" = None,
     campaign_snapshot: "Optional[Tuple[Dict[str, Dict[str, Path]], str]]" = None,
+    manifest_snapshot_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
+    manifest_sha256_snapshot_by_level: "Optional[Dict[str, str]]" = None,
 ) -> "Dict[str, Any]":
     """§8.5 のシャード地図を生成する（生成器 `--make-shard-map` の実体）。
 
@@ -10607,6 +10627,15 @@ def generate_m2e_shard_map(
     ——preflight と生成の間にファイルが差し替わっても、生成は検査時点のスナップ
     ショットのまま進む）。未指定（既定 `None`）なら `campaign_path` から読む
     （直接呼ぶテスト等の従来経路）。
+
+    `manifest_snapshot_by_level`/`manifest_sha256_snapshot_by_level`（E-125・
+    PR #242 第28巡 Codex 是正）: CLI の preflight（`--cell-store` 指定時の
+    manifest 参照パス保護・E-123）が既に読んだ manifest のパース済みスナップ
+    ショット（`{level: (entries, manifest_dir)}`）と sha256（`{level: sha256}`）
+    を渡せば、`--cell-store` 指定時の除外真実性スキャン（`_m2e_completed_cell_
+    keys`）はここで manifest ファイルを再度開かない（E-70 の manifest 版・
+    TOCTOU 回避）。未指定（既定 `None`）なら従来どおりスキャン内部で読む
+    （直接呼ぶテスト等の後方互換経路。`cell_store is None` なら未使用）。
     """
     # E-68（PR #242 第5巡 Codex P2 是正）: 生成器の float 入力全数（t_direct/t_stem/
     # startup_cost/session_budget）へ isfinite + 符号検査を統一的に敷く（単一の
@@ -10651,6 +10680,11 @@ def generate_m2e_shard_map(
                 fixtures_by_level=fixtures_by_level,
                 bars_path=bars_path,
                 bars_snapshot=(bars, bars_sha256),
+                # E-125: preflight（E-123 の manifest 参照パス保護）が既に読んだ
+                # スナップショットを引き回す（未指定時は None・スキャン内部が
+                # 従来どおり読む）。
+                manifest_snapshot_by_level=manifest_snapshot_by_level,
+                manifest_sha256_snapshot_by_level=manifest_sha256_snapshot_by_level,
             )
         )
         # E-95: この生成時スキャンは登録簿全体（4 水準）を走査するため
@@ -11863,6 +11897,18 @@ def _acquire_m2e_out_reservation(out_resolved: Path, token: str) -> Path:
     場面もあるが、`--out` は `shard_id` と独立に指定できるため別物として扱う）。
     E-109（第20巡 Codex 是正）: `os.open` の前に親ディレクトリを作る
     （`_atomic_write_text` と同じ挙動へ整合）。
+
+    E-124（PR #242 第28巡 Codex 是正）: `os.fdopen`/`f.write` の区間は
+    `except Exception` ではなく `except BaseException` で覆う——
+    `KeyboardInterrupt`/`SystemExit`/`GeneratorExit` は `Exception` のサブ
+    クラスではないため、書き込み中にこれらが飛ぶと（Ctrl-C・呼び出し元の
+    早期 SystemExit 等）サイドカーは削除されずに残る。呼び出し元の
+    `finally: out_claim_sidecar.unlink(...)` は本関数が正常 return して
+    `out_claim_sidecar` を束縛できた場合にしか届かない（本関数内で例外に
+    なれば呼び出し元の変数はそもそも代入されない）ため、後始末は本関数
+    内で完結させる必要がある——さもないと `O_EXCL` の孤児 claim が残り、
+    以後の全起動が「他の起動が予約を保持している」という誤った案内で
+    永久にブロックされる（手動削除が必須になる）。
     """
     sidecar = out_resolved.with_name(f"{out_resolved.name}.claim")
     sidecar.parent.mkdir(parents=True, exist_ok=True)
@@ -11870,7 +11916,7 @@ def _acquire_m2e_out_reservation(out_resolved: Path, token: str) -> Path:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(token)
-    except Exception:
+    except BaseException:
         sidecar.unlink(missing_ok=True)
         raise
     return sidecar
@@ -11929,10 +11975,11 @@ def _m2e_best_effort_spill_payload(doc: "Dict[str, Any]") -> str:
 
 def _m2e_manifest_referenced_paths(
     campaign: "Dict[str, Dict[str, Path]]",
-) -> "set[Path]":
-    """`campaign` の全水準の manifest が参照する `audio_path`/`annotation_path` の
+) -> "Tuple[set[Path], Dict[str, Tuple[List[Dict[str, Any]], Path]], Dict[str, str]]":
+    """`campaign` の全水準の manifest を読み、preflight 保護用の参照パス集合と
 
-    解決済みパス集合を返す（E-123・PR #242 第27巡 Codex 是正）。
+    再利用可能なスナップショットの両方を返す（E-123・PR #242 第27巡 Codex 是正
+    ／E-125・PR #242 第28巡 Codex 是正で戻り値をスナップショットまで拡張）。
 
     地図生成（`--make-shard-map --cell-store` 指定時の除外真実性スキャン——
     `_m2e_completed_cell_keys`）・実行（`--shard-id` の先行 shard 検査・task
@@ -11942,15 +11989,27 @@ def _m2e_manifest_referenced_paths(
     **ファイルパス**しか含んでおらず、manifest が**指す**個々の audio/
     annotation の実体パスは含んでいなかった——`--out` がそのいずれかと同じ
     パスを指すと、地図生成/実行の書き出しが実測入力そのものを上書きしうる。
-    ここで manifest を実際に読み、参照先を展開して返す。呼び出し元が
-    `protected` 集合へ合流させる。
+    ここで manifest を実際に読み、参照先を展開して返す（第 1 戻り値。呼び出し元が
+    `protected` 集合へ合流させる）。
+
+    E-125: 第 2/第 3 戻り値（`manifest_by_level`/`manifest_sha256_by_level`）は
+    ここで読んだ manifest のパース済みスナップショット + sha256——E-72/E-104 と
+    同じ形（`{level: (entries, manifest_dir)}` / `{level: sha256}`）。呼び出し元
+    （`--make-shard-map` preflight）はこれを `generate_m2e_shard_map` 経由で
+    `_m2e_completed_cell_keys`（除外真実性スキャン）へ引き回せば、同じ manifest
+    ファイルを再度開かない（TOCTOU 回避。E-95 が記録する manifest digest も
+    このスナップショット由来のまま一貫する）。
     """
     referenced: "set[Path]" = set()
-    for level_paths in campaign.values():
-        entries, _manifest_sha256, manifest_path = _load_external_manifest(
+    manifest_by_level: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
+    manifest_sha256_by_level: "Dict[str, str]" = {}
+    for level, level_paths in campaign.items():
+        entries, manifest_sha256, manifest_path = _load_external_manifest(
             level_paths["external_manifest"]
         )
         manifest_dir = manifest_path.parent
+        manifest_by_level[level] = (entries, manifest_dir)
+        manifest_sha256_by_level[level] = manifest_sha256
         for entry in entries:
             referenced.add(
                 _resolve_external_member_path(
@@ -11962,7 +12021,7 @@ def _m2e_manifest_referenced_paths(
                     manifest_dir, entry["annotation_path"], what="annotation_path"
                 )
             )
-    return referenced
+    return referenced, manifest_by_level, manifest_sha256_by_level
 
 
 def execute_m2e_shard(
@@ -12600,8 +12659,21 @@ def main() -> int:
         # して加える（`--cell-store` 未指定時は地図生成が manifest を一切読まない
         # ので対象外のまま——「manifest 未生成のうちに地図を作れる」という §8.5
         # の設計判断を壊さない）。
+        # E-125（PR #242 第28巡 Codex 是正）: ここで読んだ manifest スナップショット
+        # （`preflight_manifest_by_level`/`preflight_manifest_sha256_by_level`）は
+        # 下の `generate_m2e_shard_map(...)` 呼び出しへ引き回す——除外真実性スキャン
+        # （`_m2e_completed_cell_keys`）が同じ manifest ファイルを再度開かないように
+        # する（E-72/E-104 と同族の TOCTOU 回避）。`--cell-store` 未指定時は
+        # `None`（従来どおり `generate_m2e_shard_map` 側で読む）。
+        preflight_manifest_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = (
+            None
+        )
+        preflight_manifest_sha256_by_level: "Optional[Dict[str, str]]" = None
         if args.cell_store is not None:
-            protected.update(_m2e_manifest_referenced_paths(campaign_for_preflight))
+            referenced_paths, preflight_manifest_by_level, preflight_manifest_sha256_by_level = (
+                _m2e_manifest_referenced_paths(campaign_for_preflight)
+            )
+            protected.update(referenced_paths)
         # E-117（PR #242 第24巡 Codex 是正）: `--out` を入口で 1 回だけ resolve し、
         # 以降の保護パス検査・no-clobber 検査・予約取得・claim 書き込み・公開
         # （atomic write）・token 検証・ロールバックの全段でこの単一スナップショット
@@ -12718,6 +12790,11 @@ def main() -> int:
                     workers=args.workers,
                     cell_store=args.cell_store,
                     campaign_snapshot=(campaign_for_preflight, campaign_sha256_for_preflight),
+                    # E-125: preflight（保護パス集合の構築・E-123）が既に読んだ
+                    # manifest スナップショットを引き回す（未指定時は None・
+                    # `generate_m2e_shard_map` 側が従来どおり読む）。
+                    manifest_snapshot_by_level=preflight_manifest_by_level,
+                    manifest_sha256_snapshot_by_level=preflight_manifest_sha256_by_level,
                 )
             except BaseException:
                 # E-122: 非空原本ケースは原本に一切書いていないので、ロールバック
@@ -12904,8 +12981,14 @@ def main() -> int:
         # shard 検査・task 構築）ので、manifest が指す audio_path/annotation_path
         # の実体も無条件で保護集合へ展開する（`--make-shard-map` 側と同型——
         # manifest の**ファイルパス**自体は既に保護されているが、manifest が
-        # **指す**実ファイルは含まれていなかった）。
-        protected.update(_m2e_manifest_referenced_paths(campaign))
+        # **指す**実ファイルは含まれていなかった）。この preflight 読取は
+        # 保護集合の構築専用（E-125 は `--make-shard-map` 側のみを対象とする——
+        # `--shard-id` 側は `execute_m2e_shard` が独自の `manifest_by_level`
+        # 引き回し機構を既に持つため、ここでは戻り値のスナップショットは使わない）。
+        referenced_paths, _preflight_manifest_by_level, _preflight_manifest_sha256_by_level = (
+            _m2e_manifest_referenced_paths(campaign)
+        )
+        protected.update(referenced_paths)
         cell_store_root = Path(args.cell_store).resolve()
         # E-90（PR #242 第12巡 Codex 是正）: E-81 の逆方向——解決済み保護入力
         # （campaign が指す manifest/fixtures・shard-map・bars）が `--cell-store` の

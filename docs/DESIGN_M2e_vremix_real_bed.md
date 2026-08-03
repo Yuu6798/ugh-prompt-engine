@@ -1944,6 +1944,25 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   加えた（`--make-shard-map` は `--cell-store` 指定時のみ・`--shard-id` は常時。
   回帰テスト付き）。
 
+**E-124〜E-125（PR #242 第28巡）。**
+
+- **E-124**: `_acquire_m2e_out_reservation()` はサイドカー（`O_CREAT|O_EXCL`）
+  作成成功後の `os.fdopen`/`write` 区間を `except Exception` で覆っていた——
+  `KeyboardInterrupt`/`SystemExit`/`GeneratorExit` は `Exception` のサブクラス
+  ではないため、書き込み中にこれらが飛ぶとサイドカーは削除されずに残る
+  （呼び出し元の `finally` は本関数が正常 return できた場合にしか届かない）。
+  以後の全起動が「他の起動が予約を保持している」という誤った案内で永久に
+  ブロックされ、手動削除が必須になる経路があった。`except Exception` を
+  `except BaseException` へ改め、後始末を関数内で完結させた（回帰テスト付き）。
+- **E-125**: E-123 の preflight（`--cell-store` 指定時の manifest 参照パス保護）
+  が読んだ manifest スナップショットを、`_m2e_manifest_referenced_paths` の
+  戻り値拡張（`manifest_by_level`/`manifest_sha256_by_level` を追加で返す）
+  経由で `generate_m2e_shard_map` → `_m2e_completed_cell_keys`（除外真実性
+  スキャン）へ引き回し、生成段での manifest 再オープンを排除した（E-72/E-104
+  と同族の TOCTOU 完備化——記録される manifest digest はこの単一スナップ
+  ショット由来のまま一貫する。`--shard-id` 側は独自の `manifest_by_level`
+  引き回し機構を既に持つため対象外。回帰テスト付き）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
