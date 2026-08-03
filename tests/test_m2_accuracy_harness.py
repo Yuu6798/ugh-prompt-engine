@@ -14156,3 +14156,387 @@ def test_run_m2e_shard_queue_bases_the_hang_deadline_on_shard_start_not_dispatch
     # 延びてしまうところを、実測フル suite 並行実行下のジッタを吸収する余裕を
     # 持たせつつ、dispatch 基準よりは十分早いことを検証する閾値にする。
     assert 0.5 < result["elapsed_seconds"] < 1.05
+
+
+# ---------------------------------------------------------------------------
+# PR #242 第5巡 Codex レビュー是正（E-66〜E-69）
+# ---------------------------------------------------------------------------
+
+
+def _m2e_root_cell_store(tmp_path: Path) -> Path:
+    """E-66 テスト用: ROOT 配下の一意な cell_store ディレクトリを作る。
+
+    `excluded_completed_cells.cell_store_relative` は ROOT 配下の相対パスしか
+    記録できない（`_repo_relative_path` が ROOT 外を `None` にする）ため、E-60 と
+    同じ `build/`（gitignored 済みの非 commit 作業領域）規約を使う。
+    """
+    build_dir = harness.ROOT / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    store_dir = Path(tempfile.mkdtemp(prefix="m2e_test_cell_store_", dir=str(build_dir)))
+    return store_dir
+
+
+def test_generate_m2e_shard_map_excludes_completed_cells_when_cell_store_given(
+    tmp_path: Path,
+) -> None:
+    """E-66（PR #242 第5巡 Codex 是正）: `--cell-store` 指定時、digest 一致で完了
+
+    済みのセルはパッキングから除外され、`excluded_completed_cells` に記録される
+    （§8.5「未完セルについてのみ再適用」の実装）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    full_doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS
+    )
+    all_cells = full_doc["cells"]
+    assert len(all_cells) >= 2
+    to_complete = all_cells[:1]
+
+    cell_store = _m2e_root_cell_store(tmp_path)
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        to_complete,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+
+    partial_kwargs = dict(_C6_TEST_SHARD_KWARGS)
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, cell_store=cell_store, **partial_kwargs
+    )
+    excluded_keys = {
+        (c["bed_id"], c["level"], c["clip_id"], c["arm"], c["repeat_index"])
+        for c in doc["excluded_completed_cells"]["cells"]
+    }
+    expected_keys = {
+        (c["bed_id"], c["level"], c["clip_id"], c["arm"], c["repeat_index"])
+        for c in to_complete
+    }
+    assert excluded_keys == expected_keys
+    assert doc["excluded_completed_cells"]["cell_store_relative"] == cell_store.relative_to(
+        harness.ROOT
+    ).as_posix()
+    packed_keys = {
+        (c["bed_id"], c["level"], c["clip_id"], c["arm"], c["repeat_index"]) for c in doc["cells"]
+    }
+    assert packed_keys.isdisjoint(excluded_keys)
+    assert doc["n_cells"] == len(all_cells) - len(to_complete)
+
+
+def test_generate_m2e_shard_map_without_cell_store_records_no_exclusions(
+    tmp_path: Path,
+) -> None:
+    """E-66: `--cell-store` 未指定なら従来形（除外なし・後方互換）。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    assert doc["excluded_completed_cells"] == {"cell_store_relative": None, "cells": []}
+
+
+def test_require_m2e_shard_map_matches_registry_accepts_a_truthful_exclusion_map(
+    tmp_path: Path,
+) -> None:
+    """E-66: 除外が実際に store の完了状況と一致していれば地図検証は通る（正常系）。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    full_doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS
+    )
+    to_complete = full_doc["cells"][:1]
+    cell_store = _m2e_root_cell_store(tmp_path)
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        to_complete,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, cell_store=cell_store, **_C6_TEST_SHARD_KWARGS
+    )
+    # 例外を投げなければ合格。
+    harness._require_m2e_shard_map_matches_registry(doc, campaign)
+
+
+def test_require_m2e_shard_map_matches_registry_rejects_an_untruthful_exclusion(
+    tmp_path: Path,
+) -> None:
+    """E-66: 除外集合が「完了済み」と宣言しても、store に digest 一致の記録が
+
+    無ければ fail-closed で拒否する（除外の真実性検証）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    full_doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS
+    )
+    to_complete = full_doc["cells"][:1]
+    cell_store = _m2e_root_cell_store(tmp_path)
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        to_complete,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, cell_store=cell_store, **_C6_TEST_SHARD_KWARGS
+    )
+    # 除外を宣言したセルの実レコードを消し、宣言だけを残す（虚偽の除外を模す）。
+    target = to_complete[0]
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category=target["arm"],
+        level=target["level"],
+        entry_id=target["entry_id"],
+        repeat_index=target["repeat_index"],
+    )
+    record_path.unlink()
+    with pytest.raises(ValueError, match="真実性"):
+        harness._require_m2e_shard_map_matches_registry(doc, campaign)
+
+
+def test_require_m2e_shard_map_matches_registry_rejects_an_excluded_cell_outside_the_registry(
+    tmp_path: Path,
+) -> None:
+    """E-66: 除外集合が台帳に無いセルを含む地図は拒否する。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["excluded_completed_cells"] = {
+        "cell_store_relative": "build/does-not-matter",
+        "cells": [
+            {
+                "bed_id": "NotARealBed",
+                "level": "+12dB",
+                "clip_id": "not_a_real_clip",
+                "arm": "V_remix_real_direct",
+                "repeat_index": 0,
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="台帳に存在しない"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+@pytest.mark.parametrize("field", ["t_direct", "t_stem", "startup_cost", "session_budget"])
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf")])
+def test_generate_m2e_shard_map_rejects_non_finite_float_inputs(
+    field: str, bad_value: float, tmp_path: Path
+) -> None:
+    """E-68（PR #242 第5巡 Codex P2 是正）: 生成器の float 入力全数
+
+    （t_direct/t_stem/startup_cost/session_budget）が nan/inf を拒否する
+    （同型穴の列挙原則。`--startup-cost nan` は cap=NaN を生み全比較を無効化する）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    kwargs = dict(_C6_TEST_SHARD_KWARGS)
+    kwargs[field] = bad_value
+    with pytest.raises(ValueError, match="有限"):
+        harness.generate_m2e_shard_map(campaign_path=campaign_path, **kwargs)
+
+
+def test_main_make_shard_map_rejects_a_nan_startup_cost_from_the_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-68: CLI `--startup-cost nan` も同じ受け口で拒否される（コーディネータ提示例）。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "nan",
+            "--session-budget", "50.0",
+            "--workers", "2",
+            "--out", str(tmp_path / "shard_map.yaml"),
+        ],
+    )
+    with pytest.raises(ValueError, match="有限"):
+        harness.main()
+
+
+def test_require_m2e_shard_map_matches_registry_reapplies_r_max_on_readback(
+    tmp_path: Path,
+) -> None:
+    """E-69（PR #242 第5巡 Codex P2 是正）: shard_id/n_shards の再計算が改変後の
+
+    入力からは整合していても、`R_max` を超える地図は読み戻しでも拒否する
+    （`generate_m2e_shard_map` が出し得ない成果物を実行させない）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+
+    registry_cells, _fx_sha, _repeats_min, _bars_sha, _fx_by_level = (
+        harness._m2e_full_cell_registry(campaign)
+    )
+    # cap をセル 1 個分ぎりぎりまで絞り、全セルを個別 shard にする
+    # （`test_generate_m2e_shard_map_rejects_n_shards_over_r_max` と同じ数値・
+    # R_max=12 を超える n_shards になることが既に検証済み）。
+    tampered = {
+        "t_direct": 1.0,
+        "t_stem": 1.0,
+        "startup_cost": 0.0,
+        "session_budget": 1.7647058823529411,
+    }
+    shard_ids, cap, n_shards = harness._assign_m2e_shard_ids(registry_cells, **tampered)
+    assert n_shards > harness._M2E_R_MAX
+
+    mutated["inputs"]["t_direct_s"] = tampered["t_direct"]
+    mutated["inputs"]["t_stem_s"] = tampered["t_stem"]
+    mutated["inputs"]["startup_cost_s"] = tampered["startup_cost"]
+    mutated["inputs"]["session_budget_s"] = tampered["session_budget"]
+    mutated["inputs"]["cap_s"] = cap
+    mutated["n_shards"] = n_shards
+    mutated["cells"] = [
+        {
+            "bed_id": bed_id,
+            "level": level,
+            "clip_id": clip_id,
+            "arm": arm,
+            "repeat_index": repeat_index,
+            "entry_id": harness._m2e_entry_id(clip_id, bed_id, level),
+            "shard_id": shard_id,
+        }
+        for (bed_id, level, clip_id, arm, repeat_index), shard_id in zip(
+            registry_cells, shard_ids
+        )
+    ]
+    with pytest.raises(ValueError, match="R_max"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+# ---------------------------------------------------------------------------
+# PR #242 第6巡 Codex レビュー是正（E-70〜E-72）
+# ---------------------------------------------------------------------------
+
+
+def test_main_make_shard_map_reads_campaign_bytes_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-70（PR #242 第6巡 Codex 是正）: preflight（保護パス検査）と地図生成が同一の
+
+    campaign スナップショットを共有し、CLI 起動あたり campaign の読取は 1 回だけ
+    （E-52 と同族の TOCTOU 是正）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    resolved = campaign_path.resolve()
+    real_read_bytes = Path.read_bytes
+    read_calls: List[bool] = []
+
+    def _tracking_read_bytes(self: Path) -> bytes:
+        if self == resolved:
+            read_calls.append(True)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _tracking_read_bytes)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "2",
+            "--out", str(tmp_path / "shard_map.yaml"),
+        ],
+    )
+    assert harness.main() == 0
+    assert len(read_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "argv_extra",
+    [
+        ["--t-direct", "5.0"],
+        ["--t-stem", "10.0"],
+        ["--startup-cost", "2.0"],
+        ["--session-budget", "100.0"],
+        ["--force"],
+    ],
+)
+def test_main_rejects_generate_only_flags_without_a_shard_mode(
+    argv_extra: "List[str]", tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-71（PR #242 第6巡 Codex P2 是正・E-64 の完備化）: 地図生成専用フラグ
+
+    （--t-direct/--t-stem/--startup-cost/明示 --session-budget/--force）は
+    --make-shard-map / --shard-id のどちらとも組にならなければ、dispatch 前に
+    fail-closed で拒否する（黙って通常 run に入らない）。
+    """
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_melody_accuracy.py", *argv_extra, "--out", str(tmp_path / "out.json")],
+    )
+    with pytest.raises(SystemExit, match="shard/地図生成専用フラグ"):
+        harness.main()
+
+
+def test_execute_m2e_shard_reuses_the_manifest_snapshot_from_prior_shard_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-72（PR #242 第6巡 Codex P2 是正）: 先行 shard 完了検証が読んだ manifest を
+
+    task 構築ループが再利用し、同じ level の manifest を再オープンしない
+    （E-57 の fixtures 引き回しと同じ形の TOCTOU 是正）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    assert map_doc["n_shards"] >= 2
+    cell_store = tmp_path / "store_A"
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    shard0 = [c for c in map_doc["cells"] if c["shard_id"] == 0]
+    _record_cells_via_fake_runner(
+        shard0,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+
+    calls: List[str] = []
+    real_load = harness._load_external_manifest
+
+    def _tracking_load(path: Any) -> Any:
+        calls.append(str(path))
+        return real_load(path)
+
+    monkeypatch.setattr(harness, "_load_external_manifest", _tracking_load)
+    harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=1,
+        campaign=campaign,
+        cell_store=cell_store,
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    levels_touched = {c["level"] for c in map_doc["cells"] if c["shard_id"] in (0, 1)}
+    assert len(calls) == len(levels_touched)
