@@ -15903,3 +15903,29 @@ def test_main_shard_id_rejects_an_explicit_m2e_bars_flag(
     )
     with pytest.raises(SystemExit, match="--m2e-bars"):
         harness.main()
+
+
+def test_main_rejects_session_budget_equal_to_the_default_without_a_shard_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-100（PR #242 第17巡 Codex 是正）: `--session-budget` を既定値からの差分で
+
+    「明示指定」を近似していた旧実装は、既定値と**同値**の明示指定
+    （`--session-budget 7200`）を「未指定」と取り違えて素通りしていた。
+    `_ARGPARSE_UNSET` センチネルへ統一後は、値によらず shard モード外での
+    明示指定を拒否する。
+    """
+    report_path = tmp_path / "run1.json"
+    report_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--session-budget", "7200",
+            "--evaluate", str(report_path),
+            "--out", str(tmp_path / "verdict.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--session-budget"):
+        harness.main()

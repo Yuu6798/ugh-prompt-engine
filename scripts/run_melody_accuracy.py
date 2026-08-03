@@ -10388,6 +10388,24 @@ def _require_m2e_shard_map_integer_field(name: str, value: "Any") -> int:
     return value
 
 
+def _require_m2e_shard_map_numeric_field(name: str, value: "Any") -> float:
+    """地図のスケジューリング入力（`t_direct_s` 等）が非 bool の数値スカラー
+
+    （int/float）であることを `float()` 強制の**前**に要求し、`float(value)` を
+    返す（E-101・PR #242 第17巡 Codex 是正。`_require_m2e_shard_map_integer_field`
+    と同型——単一ヘルパへ集約）。`float("7200")`（文字列）や `float(True)`（bool）
+    は黙って強制変換に成功してしまう——地図の生値が既に破損している兆候
+    （文字列化・bool 化）を、後段の isfinite/符号検査（E-68/E-91）より前に
+    fail-closed で拒否する。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"shard map: {name} {value!r} は数値（bool・文字列は不可）のみ許可する "
+            "(fail-closed・E-101)"
+        )
+    return float(value)
+
+
 def _m2e_completed_cell_keys(
     cells: "List[Tuple[str, str, str, str, int]]",
     campaign: "Dict[str, Dict[str, Path]]",
@@ -12396,7 +12414,9 @@ def main() -> int:
             ("--t-direct", args.t_direct is not None),
             ("--t-stem", args.t_stem is not None),
             ("--startup-cost", args.startup_cost is not None),
-            ("--session-budget", args.session_budget != _M2E_DEFAULT_SESSION_BUDGET_S),
+            # E-100（PR #242 第17巡 Codex 是正）: センチネル方式へ統一（既定値と
+            # 同値の明示指定も正しく検出する）。
+            ("--session-budget", args.session_budget is not _ARGPARSE_UNSET),
             # E-98（PR #242 第16巡 Codex 是正）: 実行機も M2e 帯（--m2e-bars）を
             # 一切読まない（E-71 ゲートの列挙に元々抜けていた）。
             ("--m2e-bars", args.m2e_bars is not _ARGPARSE_UNSET),
