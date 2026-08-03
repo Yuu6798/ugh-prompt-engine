@@ -10505,6 +10505,22 @@ def generate_m2e_shard_map(
     渡しても検出できず、admission 判定の前提（コストは校正時の `P` で測ったもの）が
     黙って崩れる。実行機（`--shard-id`）は `--workers` 省略時にこの値を採用し、
     明示指定時は一致を要求する（fail-closed）。
+
+    `cell_store`（E-66・PR #242 第5巡 Codex 是正）: 指定すると、registry の各セルを
+    `_require_prior_m2e_shards_complete` と同じ digest 一致基準で判定し、既に
+    完了しているセルをパッキングから除外する（§8.5「未完セルについてのみ再適用」の
+    実装）。N_shards / R_max / cap は**残セルのみ**で評価する——完了済みセルの
+    レコードは影響を受けない。除外したセルの鍵（5-tuple のみ・shard_id は持たない）
+    と除外根拠（`cell_store` の repo-relative パス）を地図の
+    `excluded_completed_cells` へ記録する。未指定（既定 `None`）なら従来どおり
+    全セルをパッキングする（後方互換・`excluded_completed_cells.cells` は空になる）。
+
+    `campaign_snapshot`（E-70・PR #242 第6巡 Codex 是正）: CLI の preflight（保護
+    パス集合の構築）が既に読んだ `(campaign, campaign_sha256)` スナップショットを
+    渡せば、ここでは campaign ファイルを再度開かない（E-52 と同族の TOCTOU 是正
+    ——preflight と生成の間にファイルが差し替わっても、生成は検査時点のスナップ
+    ショットのまま進む）。未指定（既定 `None`）なら `campaign_path` から読む
+    （直接呼ぶテスト等の従来経路）。
     """
     # E-68（PR #242 第5巡 Codex P2 是正）: 生成器の float 入力全数（t_direct/t_stem/
     # startup_cost/session_budget）へ isfinite + 符号検査を統一的に敷く（単一の
@@ -10520,12 +10536,38 @@ def generate_m2e_shard_map(
         )
 
     campaign_path = Path(campaign_path).resolve()
-    # E-52: campaign_sha256 と parse を単一読取から導出する。
-    campaign, campaign_sha256 = _load_m2e_campaign_with_sha256(campaign_path)
+    if campaign_snapshot is not None:
+        # E-70: CLI preflight が既に読んだスナップショットを再利用する（再オープンしない）。
+        campaign, campaign_sha256 = campaign_snapshot
+    else:
+        # E-52: campaign_sha256 と parse を単一読取から導出する。
+        campaign, campaign_sha256 = _load_m2e_campaign_with_sha256(campaign_path)
 
-    cells, fixtures_sha256_by_level, repeats_min, bars_sha256, _fixtures_by_level = (
+    cells, fixtures_sha256_by_level, repeats_min, bars_sha256, fixtures_by_level = (
         _m2e_full_cell_registry(campaign, bars_path=bars_path)
     )
+
+    # E-66: --cell-store 指定時は digest 一致で完了済みのセルをパッキングから除外する。
+    excluded_keys: "set" = set()
+    excluded_cell_store_relative: "Optional[str]" = None
+    if cell_store is not None:
+        cell_store_resolved = Path(cell_store).resolve()
+        excluded_keys = _m2e_completed_cell_keys(
+            cells,
+            campaign,
+            cell_store_resolved,
+            fixtures_by_level=fixtures_by_level,
+            bars_path=bars_path,
+        )
+        excluded_cell_store_relative = _repo_relative_path(cell_store_resolved)
+        if excluded_keys and excluded_cell_store_relative is None:
+            raise ValueError(
+                f"generate_m2e_shard_map: --cell-store {cell_store_resolved} が repo root "
+                "の外にあるため、除外根拠（cell_store_relative）を地図へ記録できない; "
+                "実行側の除外検証（fail-closed）が常に落ちる地図を作らない (E-66)"
+            )
+        cells = [c for c in cells if c not in excluded_keys]
+
     shard_ids, cap, n_shards = _assign_m2e_shard_ids(
         cells,
         t_direct=t_direct,
@@ -10576,6 +10618,21 @@ def generate_m2e_shard_map(
         "n_cells": len(cell_records),
         "n_shards": n_shards,
         "cells": cell_records,
+        # E-66: 除外した完了済みセル（鍵のみ・shard_id は持たない）+ 除外根拠。
+        # cell_store 未指定時は空（後方互換・従来形と同じ挙動）。
+        "excluded_completed_cells": {
+            "cell_store_relative": excluded_cell_store_relative,
+            "cells": [
+                {
+                    "bed_id": bed_id,
+                    "level": level,
+                    "clip_id": clip_id,
+                    "arm": arm,
+                    "repeat_index": repeat_index,
+                }
+                for bed_id, level, clip_id, arm, repeat_index in sorted(excluded_keys)
+            ],
+        },
     }
 
 
@@ -10678,7 +10735,62 @@ def _require_m2e_shard_map_matches_registry(
             f"（例: {bad_entry_ids[:3]}）; entry_id だけを改変した地図で別 clip を測る "
             "経路を許さない (fail-closed)"
         )
-    registry_set = set(registry_cells)
+    # E-66（PR #242 第5巡 Codex 是正）: 地図が「未完セルについてのみ」組まれている
+    # 場合、除外された完了済みセルの鍵集合を読み取る。以降の台帳比較はこの除外集合を
+    # 引いた「残セルの台帳」を基準にする。除外の真実性（実際に store で digest 一致
+    # 完了しているか）も検証する——地図が虚偽の除外を宣言して未測定セルの存在を
+    # 隠す経路を許さない。`excluded_completed_cells` を持たない旧世代の地図は空
+    # 除外として扱う（後方互換・従来どおり全台帳を要求する）。
+    excluded_doc = map_doc.get("excluded_completed_cells") or {}
+    excluded_records = excluded_doc.get("cells") or []
+    excluded_keys: "set" = set()
+    for record in excluded_records:
+        excluded_keys.add(
+            (
+                record["bed_id"],
+                record["level"],
+                record["clip_id"],
+                record["arm"],
+                record["repeat_index"],
+            )
+        )
+    registry_full_set = set(registry_cells)
+    excluded_not_in_registry = excluded_keys - registry_full_set
+    if excluded_not_in_registry:
+        raise ValueError(
+            "shard map: excluded_completed_cells が台帳に存在しないセルを "
+            f"{len(excluded_not_in_registry)} 件含む（例: "
+            f"{sorted(excluded_not_in_registry)[:3]}）; セル台帳は不可侵 (fail-closed)"
+        )
+    if excluded_keys:
+        cell_store_relative = excluded_doc.get("cell_store_relative")
+        if not cell_store_relative:
+            raise ValueError(
+                "shard map: excluded_completed_cells.cells が非空なのに "
+                "cell_store_relative を欠く; 除外の根拠を検証できない (fail-closed)"
+            )
+        excluded_cell_store = _require_m2e_excluded_cell_store_relative_confined_to_root(
+            cell_store_relative
+        )
+        # 除外の真実性: 宣言された除外セルが実際に store で digest 一致完了して
+        # いることを要求する（判定基準は生成器と同一の _m2e_completed_cell_keys）。
+        actually_complete = _m2e_completed_cell_keys(
+            sorted(excluded_keys),
+            campaign,
+            excluded_cell_store,
+            fixtures_by_level=fixtures_by_level,
+            bars_path=bars_path,
+        )
+        not_actually_complete = excluded_keys - actually_complete
+        if not_actually_complete:
+            raise ValueError(
+                f"shard map: excluded_completed_cells が {len(not_actually_complete)} 件の "
+                f"セルを完了済みと宣言しているが、store {cell_store_relative!r} では digest "
+                f"一致で完了していない（例: {sorted(not_actually_complete)[:3]}）; 除外の "
+                "真実性を立証できない地図は実行しない (fail-closed)"
+            )
+    expected_registry_cells = [c for c in registry_cells if c not in excluded_keys]
+    registry_set = set(expected_registry_cells)
     map_set: "set" = set()
     duplicates: "List[Tuple[str, str, str, str, int]]" = []
     declared_shard_id: "Dict[Tuple[str, str, str, str, int], Any]" = {}
@@ -10715,14 +10827,16 @@ def _require_m2e_shard_map_matches_registry(
         )
         for record in map_doc["cells"]
     ]
-    if declared_order != registry_cells:
+    if declared_order != expected_registry_cells:
         first_mismatch = next(
             (
                 i
-                for i, (declared, expected) in enumerate(zip(declared_order, registry_cells))
+                for i, (declared, expected) in enumerate(
+                    zip(declared_order, expected_registry_cells)
+                )
                 if declared != expected
             ),
-            min(len(declared_order), len(registry_cells)),
+            min(len(declared_order), len(expected_registry_cells)),
         )
         raise ValueError(
             "shard map: cells の並び順が凍結 lexical order（§8.5 order）と一致しない "
@@ -10733,7 +10847,7 @@ def _require_m2e_shard_map_matches_registry(
 
     inputs = map_doc["inputs"]
     expected_shard_ids, _cap, expected_n_shards = _assign_m2e_shard_ids(
-        registry_cells,
+        expected_registry_cells,
         t_direct=float(inputs["t_direct_s"]),
         t_stem=float(inputs["t_stem_s"]),
         startup_cost=float(inputs["startup_cost_s"]),
@@ -10752,7 +10866,7 @@ def _require_m2e_shard_map_matches_registry(
             f"R_max={_M2E_R_MAX} を超える; generate_m2e_shard_map はこの入力の組を "
             "拒否するはずであり、生成器をバイパスした地図を実行しない (fail-closed・E-69)"
         )
-    expected_shard_id_by_key = dict(zip(registry_cells, expected_shard_ids))
+    expected_shard_id_by_key = dict(zip(expected_registry_cells, expected_shard_ids))
     mismatched = sorted(
         key for key in registry_set if declared_shard_id.get(key) != expected_shard_id_by_key[key]
     )
@@ -10796,7 +10910,7 @@ def _require_prior_m2e_shards_complete(
     tolerance_cents: float,
     est_voiced_floor: float,
     fixtures_by_level: "Optional[Dict[str, Dict[str, Any]]]" = None,
-) -> None:
+) -> "Dict[str, Tuple[List[Dict[str, Any]], Path]]":
     """`shard_id` 未満の全 shard が digest 一致で完了していることを要求する（fail-closed）。
 
     §8.6「`shard_id` の昇順で実行する。飛ばしてよいのは、その shard の全セルが digest
@@ -10810,11 +10924,18 @@ def _require_prior_m2e_shards_complete(
     検証済みスナップショットを渡せば、ここで fixtures ファイルを再度開かない
     （TOCTOU 回避）。未指定（既定 `None` — 直接呼ぶテスト等）ならこれまでどおり
     `campaign` からその場で読む。
+
+    戻り値は本関数が読んだ manifest のスナップショット（E-72・PR #242 第6巡 Codex
+    是正）: `{level: (entries, manifest_dir)}`。呼び出し元（`execute_m2e_shard`）の
+    task 構築ループは、この shard に必要な水準のうちここで既に読んだものを再利用し、
+    同じ manifest ファイルを再度開かない（先行 shard 検証と task 構築が別々の
+    read で同一 level の manifest を消費する TOCTOU——E-57 の fixtures 引き回しと
+    同じ形）。`prior_cells` が空なら（`shard_id == 0` 等）空の `{}` を返す。
     """
     prior_cells = [r for r in map_doc["cells"] if r["shard_id"] < shard_id]
-    if not prior_cells:
-        return
     manifest_cache: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
+    if not prior_cells:
+        return manifest_cache
     fixtures_cache: "Dict[str, Dict[str, Any]]" = {}
     incomplete: "List[str]" = []
     for record in prior_cells:
@@ -10875,6 +10996,7 @@ def _require_prior_m2e_shards_complete(
             "昇順実行を要求する。飛ばせるのは全セルが完了済みの shard のみ "
             "(fail-closed・設計 §8.6)"
         )
+    return manifest_cache
 
 
 def _shard_measure_and_record_cell(
@@ -11295,7 +11417,10 @@ def execute_m2e_shard(
     est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])
 
     cell_store = Path(cell_store)
-    _require_prior_m2e_shards_complete(
+    # E-72（PR #242 第6巡 Codex P2 是正）: 戻り値は先行 shard 検証が既に読んだ manifest
+    # スナップショット——task 構築ループが同じ level を再オープンしないよう引き回す
+    # （E-57 の fixtures 引き回しと同じ形の TOCTOU 是正）。
+    prior_manifest_by_level = _require_prior_m2e_shards_complete(
         map_doc,
         shard_id,
         cell_store=cell_store,
@@ -11314,10 +11439,15 @@ def execute_m2e_shard(
         )
 
     levels_needed = sorted({record["level"] for record in shard_cells})
-    manifest_by_level: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
+    # E-72: 先行 shard 検証が既に読んだ level はそのまま再利用し、未読の level だけ読む。
+    manifest_by_level: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = dict(
+        prior_manifest_by_level
+    )
     # E-57: 地図検証時に hash 検証済みの fixtures をそのまま使う（再オープンしない）。
     fixtures_by_level = validated_fixtures_by_level
     for level in levels_needed:
+        if level in manifest_by_level:
+            continue
         entries, _manifest_sha256, manifest_path = _load_external_manifest(
             campaign[level]["external_manifest"]
         )
@@ -11674,20 +11804,29 @@ def main() -> int:
             "--shard-id は --evaluate / --census と排他（shard モードは run report / "
             "verdict / census のいずれも出さない）"
         )
-    # E-64（PR #242 第4巡 Codex P2 是正）: `--shard-map`/`--campaign` は shard 専用の
-    # フラグ（`--make-shard-map` か `--shard-id` のどちらかと必ず組む）。どちらの
-    # shard モードも起きていないのにこれらが供給されていれば、黙って無視して通常
-    # run/evaluate/census へ入るのではなく、dispatch 前に fail-closed で拒否する
-    # （`--shard-id` の指定漏れ等で意図しない run report が出るのを防ぐ）。
+    # E-64（PR #242 第4巡 Codex P2 是正）・E-71（PR #242 第6巡 Codex P2 是正・完備化）:
+    # `--shard-map`/`--campaign`/`--t-direct`/`--t-stem`/`--startup-cost`/明示指定の
+    # `--session-budget`/`--force` は shard/地図生成専用のフラグ（`--make-shard-map` か
+    # `--shard-id` のどちらかと必ず組む）。どちらの shard モードも起きていないのに
+    # これらが供給されていれば、黙って無視して通常 run/evaluate/census へ入るのでは
+    # なく、dispatch 前に fail-closed で拒否する（`--shard-id`/`--make-shard-map` の
+    # 指定漏れ等で意図しない run report が出るのを防ぐ）。`--session-budget` は既定値と
+    # 同じ「明示指定なし」を区別できないため、既定値からの差分を「明示指定」の代理
+    # 指標として使う（`--shard-id` 側の排他チェックと同じ流儀・E-71 で新設はしない）。
     if not args.make_shard_map and args.shard_id is None:
         for flag, supplied in (
             ("--shard-map", args.shard_map is not None),
             ("--campaign", args.campaign is not None),
+            ("--t-direct", args.t_direct is not None),
+            ("--t-stem", args.t_stem is not None),
+            ("--startup-cost", args.startup_cost is not None),
+            ("--session-budget", args.session_budget != _M2E_DEFAULT_SESSION_BUDGET_S),
+            ("--force", args.force is True),
         ):
             if supplied:
                 raise SystemExit(
                     f"{flag} は --make-shard-map か --shard-id のどちらかと組み合わせる "
-                    "shard 専用フラグ; どちらも指定されていないので黙って通常の "
+                    "shard/地図生成専用フラグ; どちらも指定されていないので黙って通常の "
                     "run/evaluate/census へ入らない (fail-closed)"
                 )
     if args.make_shard_map:
@@ -11698,7 +11837,9 @@ def main() -> int:
             ("--external-manifest", args.external_manifest is not None),
             ("--external-fixtures", args.external_fixtures is not _ARGPARSE_UNSET),
             ("--specs", args.specs is not _ARGPARSE_UNSET),
-            ("--cell-store", args.cell_store is not None),
+            # E-66（PR #242 第5巡 Codex 是正）: --cell-store は --make-shard-map の
+            # 除外リストから外し、opt-in の任意引数として受理する（未完セルのみの
+            # 再パッキング）。--repeat-index はそれでも生成器が読まないため引き続き拒否。
             ("--repeat-index", args.repeat_index is not None),
             ("--eval-cell-store", args.eval_cell_store is not None),
             ("--cell-store-role", args.cell_store_role is not _ARGPARSE_UNSET),
@@ -11708,8 +11849,8 @@ def main() -> int:
                 raise SystemExit(
                     f"{flag} は --make-shard-map と併用しない（地図生成器が読むのは "
                     "--campaign / --t-direct / --t-stem / --startup-cost / "
-                    "--session-budget / --workers / --out / --bars だけ; 黙って無視して "
-                    "束縛されたと誤解させない (fail-closed)）"
+                    "--session-budget / --workers / --cell-store / --out / --bars だけ; "
+                    "黙って無視して束縛されたと誤解させない (fail-closed)）"
                 )
         if args.campaign is None:
             raise SystemExit("--make-shard-map には --campaign が必須")
@@ -11731,8 +11872,16 @@ def main() -> int:
         # 貫通させる（従来は保護のみ `BARS_PATH` 固定で、生成は常にモジュール既定を
         # 読んでいたため、カスタム --bars が「読まれる」と help に書きながら実際には
         # 無視されていた）。
+        # E-70（PR #242 第6巡 Codex 是正）: campaign は preflight（保護パス集合の構築）で
+        # 一度だけ読み、同一スナップショット + digest を生成側へ引き渡す
+        # （`campaign_snapshot=`）——別々に読むと、この間にファイルが差し替わった場合、
+        # 保護パス検査が見た campaign と実際に registry を供給する campaign が別 bytes
+        # に由来しうる（E-52 と同族の TOCTOU）。
+        campaign_for_preflight, campaign_sha256_for_preflight = _load_m2e_campaign_with_sha256(
+            args.campaign
+        )
         protected = {Path(args.campaign).resolve(), Path(args.bars).resolve()}
-        for level_paths in _load_m2e_campaign(args.campaign).values():
+        for level_paths in campaign_for_preflight.values():
             protected.update(level_paths.values())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
@@ -11756,6 +11905,8 @@ def main() -> int:
             session_budget=args.session_budget,
             bars_path=args.bars,
             workers=args.workers,
+            cell_store=args.cell_store,
+            campaign_snapshot=(campaign_for_preflight, campaign_sha256_for_preflight),
         )
         payload = yaml.safe_dump(
             shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
