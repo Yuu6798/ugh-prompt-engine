@@ -13936,3 +13936,219 @@ def test_main_shard_id_explicit_workers_mismatching_the_map_is_rejected(
     )
     with pytest.raises(SystemExit, match="不一致"):
         harness.main()
+
+
+# ---------------------------------------------------------------------------
+# PR #242 第4巡 Codex レビュー是正（E-61〜E-65）
+# ---------------------------------------------------------------------------
+
+
+def test_execute_m2e_shard_quarantines_written_cells_when_dist_native_pin_drifts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-61（PR #242 第4巡 Codex P2 是正）: キュー完走後の同梱ネイティブ pin 再検証が
+
+    失敗したら、本 shard が書いたセルレコードを隔離してから raise する
+    （既存 run 経路の失敗時パターンをそのまま踏襲）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+
+    quarantined: "List[List[str]]" = []
+    monkeypatch.setattr(
+        harness, "_quarantine_cell_records", lambda paths: quarantined.append(list(paths))
+    )
+
+    def _boom() -> None:
+        raise RuntimeError("simulated dist-native pin drift")
+
+    monkeypatch.setattr(harness, "_require_dist_native_unchanged_since_bind", _boom)
+    with pytest.raises(RuntimeError, match="simulated dist-native pin drift"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=tmp_path / "store_A",
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+    # 隔離は正確に 1 回だけ呼ばれる——失敗時は shard 実行記録（成功記録）を返さない。
+    assert len(quarantined) == 1
+
+
+def test_execute_m2e_shard_quarantines_written_cells_when_runtime_code_pin_drifts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-61: 実装 hash（`_require_runtime_code_unchanged_since_bind`）側の失敗でも
+
+    同じく隔離してから raise する（2 検査のどちらもガードされていることの確認）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+
+    quarantined: "List[List[str]]" = []
+    monkeypatch.setattr(
+        harness, "_quarantine_cell_records", lambda paths: quarantined.append(list(paths))
+    )
+
+    def _boom() -> None:
+        raise RuntimeError("simulated runtime code pin drift")
+
+    monkeypatch.setattr(harness, "_require_runtime_code_unchanged_since_bind", _boom)
+    with pytest.raises(RuntimeError, match="simulated runtime code pin drift"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=tmp_path / "store_A",
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+    assert len(quarantined) == 1
+
+
+def test_generate_m2e_shard_map_rejects_an_infinite_session_budget(tmp_path: Path) -> None:
+    """E-62（PR #242 第4巡 Codex P2 是正）: `session_budget = inf` は cap を無限大にし、
+
+    admission 判定・打ち切りの両方を無効化するため拒否する
+    （`session_budget > 0` だけでは inf を弾けない）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    kwargs = dict(_C6_TEST_SHARD_KWARGS)
+    kwargs["session_budget"] = float("inf")
+    with pytest.raises(ValueError, match="有限"):
+        harness.generate_m2e_shard_map(campaign_path=campaign_path, **kwargs)
+
+
+def test_generate_m2e_shard_map_rejects_a_nan_session_budget(tmp_path: Path) -> None:
+    """E-62: `nan` も拒否する。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    kwargs = dict(_C6_TEST_SHARD_KWARGS)
+    kwargs["session_budget"] = float("nan")
+    with pytest.raises(ValueError, match="有限"):
+        harness.generate_m2e_shard_map(campaign_path=campaign_path, **kwargs)
+
+
+def test_require_m2e_shard_map_matches_registry_rejects_an_infinite_recorded_session_budget(
+    tmp_path: Path,
+) -> None:
+    """E-62: 実行側の受け口（地図が記録した `inputs.session_budget_s` を
+
+    `_assign_m2e_shard_ids` の再計算へ渡す経路）も `inf` を拒否する
+    （改変された地図で無限打ち切りを持ち込ませない）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["inputs"]["session_budget_s"] = float("inf")
+    with pytest.raises(ValueError, match="有限"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_main_make_shard_map_rejects_an_infinite_session_budget_from_the_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-62: CLI `--session-budget inf` も生成器の受け口で拒否される。
+
+    `generate_m2e_shard_map` は `ValueError` を送出し、CLI 側はこれを `SystemExit`
+    へ変換しない（他の `generate_m2e_shard_map` 由来のバリデーション——R_max 超過等
+    ——と同じ伝播経路）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "inf",
+            "--workers", "2",
+            "--out", str(tmp_path / "shard_map.yaml"),
+        ],
+    )
+    with pytest.raises(ValueError, match="有限"):
+        harness.main()
+
+
+def test_main_rejects_shard_map_flag_without_a_shard_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-64（PR #242 第4巡 Codex P2 是正）: `--shard-map` のみで `--shard-id` も
+
+    `--make-shard-map` も無ければ、通常 run へ黙って入らず dispatch 前に fail-closed
+    で拒否する。
+    """
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-map", str(tmp_path / "map.yaml"),
+            "--out", str(tmp_path / "out.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--shard-map"):
+        harness.main()
+
+
+def test_main_rejects_campaign_flag_without_a_shard_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-64: `--campaign` のみでも同様に拒否する。"""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--campaign", str(tmp_path / "campaign.yaml"),
+            "--out", str(tmp_path / "out.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--campaign"):
+        harness.main()
+
+
+def test_run_m2e_shard_queue_bases_the_hang_deadline_on_shard_start_not_dispatch_time() -> None:
+    """E-65（PR #242 第4巡 Codex P1 是正）: 打ち切り期限は shard 開始時刻基準の絶対
+
+    期限——各セルの dispatch 時刻を基準にしない。`B_session` 終盤に配布されたセルへ
+    そこから満額の `B_session + hang_grace_seconds` を与えると、shard の壁時計上限を
+    大きく超過しうる。ここでは早めに完了する 1 セル目のあとに 2 セル目を終盤で配布し、
+    2 セル目がハングした場合の打ち切りが「shard 開始 + B_session + hang_grace」付近
+    （dispatch 時刻基準よりずっと早い）で起きることを実測で確認する。
+    """
+    import _shard_queue_fakes
+
+    cells = [
+        {"id": "quick", "cost": 0.05, "actual_duration_s": 0.3},
+        {"id": "hangs", "cost": 0.05, "actual_duration_s": 4.0},
+    ]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=0.5,
+        hang_grace_seconds=0.3,
+        workers=1,
+        measure_fn=_shard_queue_fakes.sleep,
+        initializer=None,
+        poll_interval=0.02,
+    )
+    assert [c["cell"]["id"] for c in result["completed"]] == ["quick"]
+    assert [c["id"] for c in result["truncated"]] == ["hangs"]
+    # shard 開始基準（session_budget + hang_grace_seconds = 0.8s）付近で打ち切られる
+    # ——「hangs」自身の dispatch 時刻（quick の 0.3s 後）基準なら 1.1s 近くまで生き
+    # 延びてしまうところを、実測フル suite 並行実行下のジッタを吸収する余裕を
+    # 持たせつつ、dispatch 基準よりは十分早いことを検証する閾値にする。
+    assert 0.5 < result["elapsed_seconds"] < 1.05
