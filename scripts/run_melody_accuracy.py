@@ -10846,13 +10846,32 @@ def _require_m2e_shard_map_matches_registry(
         )
 
     inputs = map_doc["inputs"]
-    expected_shard_ids, _cap, expected_n_shards = _assign_m2e_shard_ids(
+    expected_shard_ids, expected_cap, expected_n_shards = _assign_m2e_shard_ids(
         expected_registry_cells,
         t_direct=float(inputs["t_direct_s"]),
         t_stem=float(inputs["t_stem_s"]),
         startup_cost=float(inputs["startup_cost_s"]),
         session_budget=float(inputs["session_budget_s"]),
     )
+    # E-75（PR #242 第7巡 Codex P2 是正）: cap_s/margin/n_cells は再計算するだけで
+    # 捨てていた（cap は `_cap` に破棄、margin/n_cells はそもそも比較していなかった）
+    # ——地図が cells/shard_id を無傷に保ったまま、これら派生メタデータだけを改変
+    # しても検出できなかった。E-49/E-69 と同枠で、再計算値との完全一致を要求する。
+    if float(inputs.get("cap_s", float("nan"))) != expected_cap:
+        raise ValueError(
+            f"shard map: inputs.cap_s {inputs.get('cap_s')!r} が再計算値 {expected_cap!r} "
+            "と不一致 (fail-closed・E-75)"
+        )
+    if float(inputs.get("margin", float("nan"))) != _M2E_SHARD_CAP_MARGIN:
+        raise ValueError(
+            f"shard map: inputs.margin {inputs.get('margin')!r} が凍結値 "
+            f"{_M2E_SHARD_CAP_MARGIN!r} と不一致 (fail-closed・E-75・設計 §8.5)"
+        )
+    if int(map_doc.get("n_cells", -1)) != len(expected_registry_cells):
+        raise ValueError(
+            f"shard map: n_cells {map_doc.get('n_cells')!r} が再計算値 "
+            f"{len(expected_registry_cells)!r} と不一致 (fail-closed・E-75)"
+        )
     # E-69（PR #242 第5巡 Codex P2 是正）: 再計算した割当・n_shards が整合していても
     # `R_max` を超えうる——記録された入力（S/T_direct/T_stem/B_session）を改変すれば、
     # 割当・n_shards を「その改変後の入力からは正しく」再生成できてしまうため、上の
@@ -11260,6 +11279,7 @@ def run_m2e_shard_queue(
     clock: "Callable[[], float]" = time.monotonic,
     poll_interval: float = _M2E_SHARD_POLL_INTERVAL_S,
     reconcile_hung_cell: "Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]]" = None,
+    on_worker_error: "Optional[Callable[[List[Dict[str, Any]]], None]]" = None,
 ) -> "Dict[str, Any]":
     """§8.6 の動的キュー + 開始許可式 + 打ち切りを実装する（1 shard 分）。
 
@@ -11292,6 +11312,18 @@ def run_m2e_shard_queue(
     知らない（テストは合成セルで機構を検証する）——実際の digest 一致照合
     （`_cell_store_record_path` / `_cell_record_mismatches`）は
     `execute_m2e_shard` 側の `_reconcile_truncated_m2e_cell` が担う。
+
+    `on_worker_error`（E-77・PR #242 第7巡 Codex P2 是正）: いずれかの worker が
+    例外を送出した場合、本関数は既定では `completed` を呼び出し元へ返さずに直接
+    `aborted_exception` を再送出する——`execute_m2e_shard` の post-execution pin
+    再検証（E-48/E-61）が完走済み worker の written_paths を一切見られず、完走分の
+    隔離判断もできない穴になっていた。`on_worker_error`（既定 `None` = 何もしない）
+    を渡せば、`aborted_exception` を再送出する**直前**にその時点の `completed`
+    リストを渡して呼ぶ——`reconcile_hung_cell` と同じ「機構は形式を知らない・
+    意味論は呼び出し元が注入する」設計。フックが例外を送出しても、本関数は
+    その例外ではなく常に元の `aborted_exception` を再送出する（フック内で
+    捕捉・隔離まで完結させる契約——呼び出し元が「保全済みパスを隔離してから
+    元例外を伝播」を自分で実装する）。
     """
     if workers < 1:
         raise ValueError(f"run_m2e_shard_queue: workers {workers!r} は 1 以上のみ許可する")
@@ -11356,6 +11388,15 @@ def run_m2e_shard_queue(
         pool.join()
 
     if aborted_exception is not None:
+        # E-77: フックを試すが、フック自身が例外を送出しても常に元の
+        # aborted_exception を再送出する（フックの失敗で worker 例外の情報を
+        # 握り潰さない・フックは自身の例外を自前で処理しきる契約だが、念のため
+        # 二重の防御として本関数側でも捕捉する）。
+        if on_worker_error is not None:
+            try:
+                on_worker_error(completed)
+            except BaseException:  # noqa: BLE001 — 元例外を最優先で伝播する
+                pass
         raise aborted_exception
 
     if terminated_for_hang:
@@ -11373,6 +11414,69 @@ def run_m2e_shard_queue(
         "not_started": not_started,
         "elapsed_seconds": clock() - start,
     }
+
+
+def _m2e_collect_written_paths(completed_entries: "List[Dict[str, Any]]") -> "List[str]":
+    """`run_m2e_shard_queue` の `completed` エントリ群から `written_paths` を集める。
+
+    成功経路（E-61）と worker 例外経路（E-77・`on_worker_error` フック）の双方が
+    使う共通ヘルパー——集計基準を 1 箇所に保つ。
+    """
+    paths: "List[str]" = []
+    for entry in completed_entries:
+        paths.extend(entry["result"].get("written_paths") or [])
+    return paths
+
+
+def _m2e_shard_claim_path(cell_store: Path, shard_id: int) -> Path:
+    """`shard_id` の排他 claim ファイルのパス（`cell_store` 配下）。"""
+    return Path(cell_store) / f"shard_{shard_id}.claim"
+
+
+def _acquire_m2e_shard_claim(claim_path: Path) -> None:
+    """`claim_path` を `O_EXCL` で作り、同一 shard の並行実行を排他する
+
+    （E-74・PR #242 第7巡 Codex 是正・**Memo 根拠の撤回**）。
+
+    Design Memo は「`shard_id` の昇順強制が同一 shard の並行実行を防ぐ」としていたが
+    誤りだった——`_require_prior_m2e_shards_complete` は `shard_id` **未満**の shard
+    しか検査しないため、同じ `shard_id` への 2 並行実行はどちらもこの検査を通過し、
+    同じセル鍵を同時に測定して同じチェックポイントパスへ atomic replace で衝突しうる
+    （どちらかの隔離・上書きが他方の有効なレコードを消しうる）。既存の claim があれば
+    fail-closed で拒否する（並行実行は非サポート。クラッシュ孤児で claim が残った場合は
+    claim ファイルを手動削除してから再実行する）。内容は診断用（PID + ISO8601）で
+    機構としての意味は持たない——存在自体が排他の唯一の根拠。
+    """
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = f"pid={os.getpid()}\nclaimed_utc={_utc_now()}\n"
+    try:
+        fd = os.open(str(claim_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        existing = ""
+        try:
+            existing = claim_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+        raise ValueError(
+            f"execute_m2e_shard: shard claim {claim_path} が既に存在する"
+            f"（{existing!r}）; 並行実行は非サポート。クラッシュ孤児なら claim を "
+            "手動削除して再実行する (fail-closed・E-74)"
+        ) from None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+    except Exception:
+        claim_path.unlink(missing_ok=True)
+        raise
+
+
+def _release_m2e_shard_claim(claim_path: Path) -> None:
+    """`_acquire_m2e_shard_claim` が作った claim を削除する。
+
+    正常終了・例外経路のどちらでも `execute_m2e_shard` の try/finally から確実に
+    呼ばれる（"確実に削除" が E-74 の要求）。
+    """
+    claim_path.unlink(missing_ok=True)
 
 
 def execute_m2e_shard(
@@ -11483,6 +11587,22 @@ def execute_m2e_shard(
             }
         )
 
+    def _on_worker_error(completed_so_far: "List[Dict[str, Any]]") -> None:
+        """E-77（PR #242 第7巡 Codex P2 是正）: worker 例外の再送出**前**に呼ばれる。
+
+        通常の成功経路（E-48/E-61）と同じ post-execution pin 再検証（first-party・
+        同梱ネイティブ・実装 hash）を通し、失敗すればここまでに完走した worker の
+        written_paths を隔離する。例外を握り潰さない——`run_m2e_shard_queue` 側の
+        契約により、本フックが何を投げても最終的に伝播するのは worker の元例外。
+        """
+        written_paths_so_far = _m2e_collect_written_paths(completed_so_far)
+        try:
+            _require_unchanged_since_load()
+            _require_dist_native_unchanged_since_bind()
+            _require_runtime_code_unchanged_since_bind()
+        except RuntimeError:
+            _quarantine_cell_records(written_paths_so_far)
+
     session_budget = float(map_doc["inputs"]["session_budget_s"])
     started_utc = _utc_now()
     result = run_m2e_shard_queue(
@@ -11496,13 +11616,12 @@ def execute_m2e_shard(
         # E-54: 打ち切り時点で in-flight だったセルを、既存の digest 一致 resume 判定で
         # 照合してから truncated へ振り分ける（書き上がっていたレコードは completed）。
         reconcile_hung_cell=_reconcile_truncated_m2e_cell,
+        on_worker_error=_on_worker_error,
     )
 
     # E-61（PR #242 第4巡 Codex P2 是正）: 本 shard が新規に書いたレコードパスを
     # 集める（resume は含まない）。runtime pin 再検証が事後に失敗した場合の隔離対象。
-    shard_written_paths: "List[str]" = []
-    for _completed in result["completed"]:
-        shard_written_paths.extend(_completed["result"].get("written_paths") or [])
+    shard_written_paths = _m2e_collect_written_paths(result["completed"])
 
     def _cell_ref(entry: "Dict[str, Any]") -> "Dict[str, Any]":
         return {
