@@ -11341,7 +11341,12 @@ def _reconcile_truncated_m2e_cell(cell: "Dict[str, Any]") -> "Optional[Dict[str,
     pre_existing = bool(cell.get("_pre_dispatch_had_valid_record"))
     return {
         "resumed": pre_existing,
-        "measured": True,
+        # E-92（PR #242 第14巡 Codex 是正）: 通常の worker 経路（`entry_id in
+        # cells_resumed` / `entry_id in cells_measured`）は resumed/measured を
+        # 互いに排他な分類として扱う——resumed なら measured ではない。以前は
+        # ここで measured を無条件 True にしていたため、pre-existing（resumed）な
+        # セルが cells_resumed と cells_measured の両方に二重計上されていた。
+        "measured": not pre_existing,
         "mismatches": [],
         "outcome": outcome or "measured",
         "detail": detail,
@@ -11425,6 +11430,15 @@ def run_m2e_shard_queue(
     （`start + session_budget + hang_grace_seconds`）の絶対基準として採用する——
     `execute_m2e_shard` はこれを使って、本関数呼び出しより前の preflight 所要時間を
     両方の会計へ含める。
+
+    E-93（PR #242 第14巡 Codex P1 是正）: `async_result.get()` の外——admission
+    判定・`time.sleep`・打ち切り期限チェックの `clock()` 呼び出し等——で
+    `BaseException`（`KeyboardInterrupt`/`SystemExit` 等）が逸出しても、
+    `pool.terminate()` と in_flight の drain/reconcile（E-80 と同じ経路）・
+    `on_worker_error` フック呼び出しを必ず経由してから元例外を再送出する。以前は
+    この経路だけ `aborted_exception`/`terminated_for_hang` のどちらも設定されず、
+    finally が `pool.close()`（in-flight の自然完了待ち）へ落ちてハング worker が
+    あれば無期限にブロックし、実行後検査（quarantine 経路）も迂回していた。
     """
     if workers < 1:
         raise ValueError(f"run_m2e_shard_queue: workers {workers!r} は 1 以上のみ許可する")
@@ -11447,52 +11461,74 @@ def run_m2e_shard_queue(
 
     try:
         while True:
-            elapsed = clock() - start
-            admitted_any = False
-            while len(in_flight) < workers and next_index < len(cells):
-                cell = cells[next_index]
-                if elapsed + cell["cost"] > session_budget:
-                    break
-                async_result = pool.apply_async(measure_fn, (cell,))
-                in_flight[next_index] = (async_result, clock(), cell)
-                next_index += 1
-                admitted_any = True
+            # E-93（PR #242 第14巡 Codex P1 是正）: この try は `async_result.get()`
+            # 専用の内側 try（例外セルの分類）とは別に、ループ本体**全体**を囲む。
+            # `KeyboardInterrupt`/`SystemExit` 等が admission 判定・`time.sleep`・
+            # `ar.ready()` 呼び出しなど、内側の get() の**外**で逸出すると、以前は
+            # `aborted_exception`/`terminated_for_hang` のどちらも設定されないまま
+            # finally が `pool.close()` へ落ち、ハング中の worker があれば
+            # `pool.join()` が無期限にブロックしていた——さらに、この経路では
+            # in_flight の drain/reconcile も `on_worker_error` フックも一切
+            # 通らず、公開済みかもしれないレコードが実行後検査を迂回していた。
+            # 親側から逸出するあらゆる `BaseException` を abort として扱い、
+            # 必ず `pool.terminate()` → drain/reconcile → フック呼び出しの経路へ
+            # 通してから元例外を再送出する。
+            try:
                 elapsed = clock() - start
-            if not in_flight:
-                break  # 実行中が無く、これ以上許可できるセルも無い
-            ready_indices = [idx for idx, (ar, _started, _cell) in in_flight.items() if ar.ready()]
-            for idx in ready_indices:
-                async_result, _cell_started_wall, cell = in_flight.pop(idx)
-                try:
-                    result = async_result.get()
-                except BaseException as exc:  # noqa: BLE001 — 親へ即座に伝播し shard を中断する
-                    # E-80（PR #242 第9巡 Codex 是正）: 同一バッチで複数の AsyncResult が
-                    # 同時に ready なとき、以前はここで即座に break しており、この exc
-                    # より後ろに並んでいた**既に ready だった**成功セルが `completed` へ
-                    # 積まれずに失われていた——`on_worker_error`（E-77）の隔離ネットにも
-                    # 載らないまま、書き上がった published レコードが会計から漏れる穴
-                    # だった。最初の例外は保持しつつ、同じバッチの残りは drain し続ける
-                    # （2 件目以降の例外は握り潰す——伝播するのは常に最初の例外 1 つ）。
-                    if aborted_exception is None:
-                        aborted_exception = exc
-                    continue
-                completed.append({"cell": cell, "result": result})
-            if aborted_exception is not None:
+                admitted_any = False
+                while len(in_flight) < workers and next_index < len(cells):
+                    cell = cells[next_index]
+                    if elapsed + cell["cost"] > session_budget:
+                        break
+                    async_result = pool.apply_async(measure_fn, (cell,))
+                    in_flight[next_index] = (async_result, clock(), cell)
+                    next_index += 1
+                    admitted_any = True
+                    elapsed = clock() - start
+                if not in_flight:
+                    break  # 実行中が無く、これ以上許可できるセルも無い
+                ready_indices = [
+                    idx for idx, (ar, _started, _cell) in in_flight.items() if ar.ready()
+                ]
+                for idx in ready_indices:
+                    async_result, _cell_started_wall, cell = in_flight.pop(idx)
+                    try:
+                        result = async_result.get()
+                    except BaseException as exc:  # noqa: BLE001 — 親へ即座に伝播し shard を中断する
+                        # E-80（PR #242 第9巡 Codex 是正）: 同一バッチで複数の
+                        # AsyncResult が同時に ready なとき、以前はここで即座に
+                        # break しており、この exc より後ろに並んでいた**既に
+                        # ready だった**成功セルが `completed` へ積まれずに
+                        # 失われていた——`on_worker_error`（E-77）の隔離ネットにも
+                        # 載らないまま、書き上がった published レコードが会計から
+                        # 漏れる穴だった。最初の例外は保持しつつ、同じバッチの
+                        # 残りは drain し続ける（2 件目以降の例外は握り潰す——
+                        # 伝播するのは常に最初の例外 1 つ）。
+                        if aborted_exception is None:
+                            aborted_exception = exc
+                        continue
+                    completed.append({"cell": cell, "result": result})
+                if aborted_exception is not None:
+                    break
+                # E-65（PR #242 第4巡 Codex P1 是正）: 打ち切り期限は shard 開始時刻
+                # （`start`）基準の絶対期限——全 in-flight セルに共通。以前は各セルの
+                # dispatch 時刻 (`cell_started_wall`) 基準だったため、B_session の
+                # 終盤に配布されたセルは、そこからさらに満額の
+                # B_session + hang_grace_seconds を得てしまい、§8.6「1 回の実行の
+                # 壁時計上限」を大きく超過しうる（例: 7200s 目に配布されたセルが
+                # 14400s+ まで shard を生かし続ける）。許可式
+                # （`elapsed + cost(cell) <= session_budget`）が admitted セルの
+                # 開始時刻を B_session 以内に既に制約しているので、shard 開始基準
+                # でも各セルは最低 hang_grace_seconds 分 + 自コスト分の猶予を持つ。
+                if clock() - start > session_budget + hang_grace_seconds:
+                    terminated_for_hang = True
+                    break
+                if not ready_indices and not admitted_any:
+                    time.sleep(poll_interval)
+            except BaseException as exc:  # noqa: BLE001 — E-93: 親側の逸出は必ず abort 経路へ
+                if aborted_exception is None:
+                    aborted_exception = exc
                 break
-            # E-65（PR #242 第4巡 Codex P1 是正）: 打ち切り期限は shard 開始時刻
-            # （`start`）基準の絶対期限——全 in-flight セルに共通。以前は各セルの
-            # dispatch 時刻 (`cell_started_wall`) 基準だったため、B_session の終盤に
-            # 配布されたセルは、そこからさらに満額の B_session + hang_grace_seconds
-            # を得てしまい、§8.6「1 回の実行の壁時計上限」を大きく超過しうる
-            # （例: 7200s 目に配布されたセルが 14400s+ まで shard を生かし続ける）。
-            # 許可式（`elapsed + cost(cell) <= session_budget`）が admitted セルの
-            # 開始時刻を B_session 以内に既に制約しているので、shard 開始基準でも
-            # 各セルは最低 hang_grace_seconds 分 + 自コスト分の猶予を持つ。
-            if clock() - start > session_budget + hang_grace_seconds:
-                terminated_for_hang = True
-                break
-            if not ready_indices and not admitted_any:
-                time.sleep(poll_interval)
     finally:
         if aborted_exception is not None or terminated_for_hang:
             pool.terminate()

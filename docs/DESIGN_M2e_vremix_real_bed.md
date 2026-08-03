@@ -1717,6 +1717,26 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   素通りしえた。単一のバリデータ（`_require_m2e_shard_map_finite_input`）へ
   集約し、生成・読取の両方に同じ入力域制約を適用する形へ改めた。
 
+**E-92〜E-93（PR #242 第14巡）。**
+
+- **E-92**: `_reconcile_truncated_m2e_cell`（E-82）が pre-existing（resumed）な
+  セルの `measured` を無条件 True のままにしており、通常の worker 経路
+  （`entry_id in cells_resumed`/`entry_id in cells_measured` は互いに排他）と
+  異なり、同一セルが `cells_resumed` と `cells_measured` の両方に二重計上
+  されていた。pre-existing の場合は `measured: False` とし、resumed のみに
+  分類する形へ改めた。
+- **E-93（P1）**: `async_result.get()` 専用の内側 try/except の**外**——admission
+  判定・`time.sleep`・打ち切り期限チェックの `clock()` 呼び出し等——で
+  `KeyboardInterrupt`/`SystemExit` 等の `BaseException` が逸出すると、
+  `aborted_exception`/`terminated_for_hang` のどちらも設定されないまま finally
+  が `pool.close()`（in-flight の自然完了待ち）へ落ち、ハング worker があれば
+  `pool.join()` が無期限にブロックし、さらに in_flight の drain/reconcile・
+  `on_worker_error` フックのどちらも通らず、公開済みかもしれないレコードが
+  実行後検査を迂回していた。ループ本体全体を囲む外側 try/except を追加し、
+  親側で逸出したあらゆる `BaseException` を abort として扱い、必ず
+  `pool.terminate()` → drain/reconcile → フック呼び出しの経路へ通してから
+  元例外を再送出する形へ改めた。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

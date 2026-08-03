@@ -15463,3 +15463,131 @@ def test_require_m2e_shard_map_matches_registry_rejects_negative_recorded_inputs
     mutated["inputs"][field] = bad_value
     with pytest.raises(ValueError, match="有限の"):
         harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_execute_m2e_shard_reports_a_pre_existing_reconciled_cell_as_resumed_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-92（PR #242 第14巡 Codex 是正）: dispatch 前から在った有効レコードが
+
+    ハング打ち切り照合で reconcile されたセルは、`cells_resumed` のみに載り
+    `cells_measured` には載らない（通常の worker 経路と同じ「resumed と measured
+    は互いに排他」という分類を踏襲する。以前は measured が無条件 True だった
+    ため、同一セルが両方に二重計上されていた）。
+    """
+    import _shard_queue_fakes
+    import yaml as _yaml
+
+    campaign_path = _write_m2e_campaign(tmp_path)
+    fast_kwargs = dict(
+        t_direct=0.05, t_stem=0.05, startup_cost=0.01, session_budget=0.3, workers=1
+    )
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **fast_kwargs)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    map_doc, map_sha256 = harness._load_m2e_shard_map(map_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+
+    shard0_cells = [c for c in map_doc["cells"] if c["shard_id"] == 0]
+    assert shard0_cells
+    target = shard0_cells[0]
+
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        [target],
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+
+    monkeypatch.setattr(harness, "_M2E_HANG_GRACE_S", 0.1)
+    result = harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=cell_store,
+        workers=1,
+        measure_fn=_shard_queue_fakes.always_hangs,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    target_ref = {
+        "bed_id": target["bed_id"],
+        "level": target["level"],
+        "clip_id": target["clip_id"],
+        "arm": target["arm"],
+        "repeat_index": target["repeat_index"],
+        "entry_id": target["entry_id"],
+    }
+    assert target_ref in result["cells_resumed"]
+    assert target_ref not in result["cells_measured"]
+
+
+class _FakeParentAbort(BaseException):
+    """E-93 回帰テスト専用: 親側で逸出する独自 BaseException（KeyboardInterrupt の代役）。
+
+    実プロセスで `KeyboardInterrupt` を狙って再現するのは困難なため、`clock` に
+    注入した fake から本例外を送出し、`async_result.get()` の**外**で親側の
+    BaseException が逸出した状況を決定論的に模す。
+    """
+
+
+def test_run_m2e_shard_queue_terminates_and_reconciles_on_a_parent_side_abort() -> None:
+    """E-93（PR #242 第14巡 Codex P1 是正）: `async_result.get()` の外——ここでは
+
+    打ち切り期限チェックの `clock()` 呼び出し——で `BaseException` が逸出しても、
+    `pool.terminate()` と in_flight の drain/reconcile・`on_worker_error` フックを
+    経由してから元例外を再送出する（以前は close()/join() に落ちてハング worker
+    で無期限にブロックし、実行後検査も迂回していた）。
+    """
+    import _shard_queue_fakes
+
+    cells = [{"id": "hangs", "cost": 0.01}]
+    real_clock = time.monotonic
+    call_count = [0]
+
+    def _clock_that_aborts() -> float:
+        call_count[0] += 1
+        # 1 セル dispatch 直後・打ち切り期限チェックの時点（実測トレースで 5 回目の
+        # 呼び出し）で親側の逸出を模す——in_flight に dispatch 済みセルが残っている
+        # 状態で abort させる。
+        if call_count[0] > 4:
+            raise _FakeParentAbort("simulated parent-side abort")
+        return real_clock()
+
+    reconciled_cells: "List[Dict[str, Any]]" = []
+
+    def _reconcile(cell: "Dict[str, Any]") -> "Optional[Dict[str, Any]]":
+        reconciled_cells.append(cell)
+        return None
+
+    on_worker_error_calls: "List[List[Dict[str, Any]]]" = []
+
+    def _on_worker_error(completed_so_far: "List[Dict[str, Any]]") -> None:
+        on_worker_error_calls.append(list(completed_so_far))
+
+    with pytest.raises(_FakeParentAbort):
+        harness.run_m2e_shard_queue(
+            cells,
+            session_budget=10.0,
+            hang_grace_seconds=60.0,
+            workers=1,
+            measure_fn=_shard_queue_fakes.always_hangs,
+            initializer=None,
+            clock=_clock_that_aborts,
+            reconcile_hung_cell=_reconcile,
+            on_worker_error=_on_worker_error,
+            poll_interval=0.01,
+        )
+    assert len(reconciled_cells) == 1
+    assert reconciled_cells[0]["id"] == "hangs"
+    assert len(on_worker_error_calls) == 1
