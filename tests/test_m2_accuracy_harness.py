@@ -16357,6 +16357,68 @@ def test_main_shard_id_rolls_back_the_out_reservation_when_publication_fails(
     assert not sidecar_path.exists()
 
 
+def test_main_shard_id_rolls_back_and_spills_when_serialization_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-121（PR #242 第26巡 Codex 是正）: 直列化（`json.dumps`）自体が失敗しても、
+
+    「実行完了後〜公開完了まで」の残り全段が --out のロールバック範囲に入る——
+    実行記録は best-effort な形で spill へ保全したうえで --out を原状復帰し、
+    サイドカーを解放して元の例外を再送出する（`--out` は次回起動から見て再利用
+    可能な状態に戻る。以前は直列化の失敗が --out に自分の claim トークンだけを
+    残したままロールバックされない穴だった）。
+    """
+    import yaml as _yaml
+
+    map_doc, _map_sha256, campaign_path, _campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    out_path = tmp_path / "shard_run.json"
+    out_path.write_bytes(b"")  # mktemp の 0 バイト予約
+    sidecar_path = tmp_path / "shard_run.json.claim"
+
+    fake_record = _fake_shard_run_record(map_doc, 0)
+    monkeypatch.setattr(harness, "execute_m2e_shard", lambda **kwargs: fake_record)
+
+    real_json_dumps = json.dumps
+
+    def _flaky_json_dumps(*args: Any, **kwargs: Any) -> str:
+        # 厳格な一次直列化（`default=` を渡さない呼び出し）だけを壊す——
+        # `_m2e_best_effort_spill_payload` の緩和フォールバック（`default=str`）は
+        # 素通しし、spill が実際に別経路で成功することを検証する。
+        if "default" not in kwargs:
+            raise RuntimeError("simulated json.dumps failure")
+        return real_json_dumps(*args, **kwargs)
+
+    monkeypatch.setattr(harness.json, "dumps", _flaky_json_dumps)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="simulated json.dumps failure"):
+        harness.main()
+    assert out_path.is_file()
+    assert out_path.stat().st_size == 0
+    assert not sidecar_path.exists()
+    spills = list(tmp_path.glob("shard_run.json.spill-*.recovery"))
+    assert len(spills) == 1
+    spilled = json.loads(spills[0].read_text(encoding="utf-8"))
+    assert spilled["shard_id"] == 0
+
+
 def test_run_m2e_shard_queue_terminates_on_a_normal_idle_exit_within_the_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -16589,6 +16651,53 @@ def test_main_make_shard_map_rolls_back_the_out_reservation_when_generation_rais
     assert out_path.is_file()
     assert out_path.stat().st_size == 0
     assert not sidecar_path.exists()
+
+
+def test_main_make_shard_map_rolls_back_and_spills_when_serialization_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-121（PR #242 第26巡 Codex 是正）: 直列化（`yaml.safe_dump`）自体が失敗しても、
+
+    「生成完了後〜公開完了まで」の残り全段が --out のロールバック範囲に入る——
+    地図は best-effort な形で spill へ保全したうえで --out を原状復帰し、
+    サイドカーを解放して元の例外を再送出する（`--out` は次回起動から見て再利用
+    可能な状態に戻る。以前は直列化の失敗が --out に自分の claim トークンだけを
+    残したままロールバックされない穴だった）。
+    """
+
+    def _flaky_yaml_safe_dump(*args: Any, **kwargs: Any) -> str:
+        raise RuntimeError("simulated yaml.safe_dump failure")
+
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    out_path.write_bytes(b"")  # mktemp の 0 バイト予約
+    sidecar_path = tmp_path / "shard_map.yaml.claim"
+
+    monkeypatch.setattr(harness.yaml, "safe_dump", _flaky_yaml_safe_dump)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="simulated yaml.safe_dump failure"):
+        harness.main()
+    assert out_path.is_file()
+    assert out_path.stat().st_size == 0
+    assert not sidecar_path.exists()
+    spills = list(tmp_path.glob("shard_map.yaml.spill-*.recovery"))
+    assert len(spills) == 1
+    spilled = json.loads(spills[0].read_text(encoding="utf-8"))
+    assert spilled["n_shards"] >= 1
 
 
 def test_main_make_shard_map_preserves_a_forced_existing_out_when_generation_raises(

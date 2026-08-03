@@ -1909,6 +1909,20 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   `cmd || VAR=$?` へ書き換えて errexit と両立させた（`cmd; VAR=$?` の素朴な形は
   `cmd` の非ゼロで捕捉前にシェルごと落ちる。docs のみ）。
 
+**E-121（PR #242 第26巡）。**
+
+- **E-121**: 直列化（`--shard-id` の `json.dumps`／`--make-shard-map` の
+  `yaml.safe_dump`）とその直後の token 検証が、実行/生成完了後の
+  BaseException ロールバック範囲（E-96/E-106）の**外**にあった——直列化自体が
+  失敗すると `--out` に自分の claim トークンだけが残ったままロールバックされず
+  （サイドカーは `finally` で解放されるため、次回起動は壊れた `--out` を
+  非空の既存レコードとして掴む）。直列化を含む「実行/生成完了後〜公開完了まで」
+  の残り全段を同じロールバック範囲に入れ、失敗時は実行記録/地図
+  （`_m2e_best_effort_spill_payload`: 型を緩めた `json.dumps(default=str)` →
+  それも失敗すれば `repr()`）を spill してから `--out` を原状復帰する形へ改めた
+  （「別起動が claim を差し替えていた」分岐は既存どおり spill 済み・ロールバック
+  対象外のまま維持。回帰テスト付き）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

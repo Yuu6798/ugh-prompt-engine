@@ -11907,6 +11907,26 @@ def _rollback_m2e_out_reservation(
         out_resolved.unlink(missing_ok=True)
 
 
+def _m2e_best_effort_spill_payload(doc: "Dict[str, Any]") -> str:
+    """公開直前の直列化失敗時、spill 用に `doc` を可能な限り堅牢に文字列化する
+
+    （E-121・PR #242 第26巡 Codex 是正）。
+
+    厳格な直列化（`json.dumps(doc, indent=2, sort_keys=True)` / `yaml.safe_dump(doc,
+    ...)`、どちらも `default=` 相当の緩和なし）が失敗しても、実行記録・地図の実データ
+    （`doc`）自体はまだメモリ上に生きている——spill による保全をここで諦めない。
+    型を緩めた `json.dumps(doc, default=str)` をまず試み、それすら失敗すれば
+    （`str()` 自体が壊れた極端な型混入等）最後の手段として `repr(doc)` を返す
+    （組み込みコンテナ + プリミティブに対して `repr` は失敗しない）。呼び出し元は
+    戻り値の形式（JSON か repr か）を仮定せず、spill ファイルは「人間が手動復旧に
+    使う best-effort な記録」として扱うこと。
+    """
+    try:
+        return json.dumps(doc, indent=2, sort_keys=True, default=str)
+    except BaseException:
+        return repr(doc)
+
+
 def execute_m2e_shard(
     *,
     map_doc: "Dict[str, Any]",
@@ -12638,28 +12658,52 @@ def main() -> int:
             except BaseException:
                 _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
-            payload = yaml.safe_dump(
-                shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
-            )
+            # E-121（PR #242 第26巡 Codex 是正）: 直列化（`yaml.safe_dump`）を含む
+            # 「生成完了後〜公開完了まで」の残り全段を、直上の `generate_m2e_shard_map`
+            # と同じ BaseException ロールバック範囲に入れる——以前は直列化とその直後
+            # の token 検証がこの範囲の外にあり、直列化自体が失敗すると `--out` に
+            # 自分の claim トークンだけが残ったままロールバックされず（サイドカーは
+            # `finally` で解放されるので、次回起動は壊れた `--out` を非空の既存
+            # レコードとして掴んでしまう）。地図（`shard_map` dict）はまだメモリ上に
+            # 生きているので、`_m2e_best_effort_spill_payload` で可能な限り堅牢な
+            # 形へ落として spill してからロールバックする（spill 自体の失敗は
+            # ロールバック・再送出を妨げない）。「別起動が claim を差し替えていた」
+            # 分岐（既に spill 済み・fail-closed で案内済み）はロールバック対象外
+            # （`out_original_bytes` を書き戻すと、別起動が公開した中身を破壊する）。
+            mismatch_already_handled = False
             try:
-                current_out_content = out_resolved.read_text(encoding="utf-8")
-            except OSError:
-                current_out_content = None
-            if current_out_content != shard_map_claim_token:
-                spill_path = out_resolved.with_name(
-                    f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.yaml"
+                payload = yaml.safe_dump(
+                    shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
                 )
-                _atomic_write_text(spill_path, payload)
-                raise SystemExit(
-                    f"--out {args.out} の claim が公開直前に別の内容へ差し替わっていた "
-                    "（予約時に書いた自分の claim トークンと不一致）; 別起動との競合の "
-                    f"疑いがある。地図は失わないよう {spill_path} へ退避した——原因を "
-                    "確認してから手動で --out へ配置すること (fail-closed・E-111)"
-                )
-            try:
+                try:
+                    current_out_content = out_resolved.read_text(encoding="utf-8")
+                except OSError:
+                    current_out_content = None
+                if current_out_content != shard_map_claim_token:
+                    mismatch_already_handled = True
+                    spill_path = out_resolved.with_name(
+                        f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.yaml"
+                    )
+                    _atomic_write_text(spill_path, payload)
+                    raise SystemExit(
+                        f"--out {args.out} の claim が公開直前に別の内容へ差し替わっていた "
+                        "（予約時に書いた自分の claim トークンと不一致）; 別起動との競合の "
+                        f"疑いがある。地図は失わないよう {spill_path} へ退避した——原因を "
+                        "確認してから手動で --out へ配置すること (fail-closed・E-111)"
+                    )
                 _atomic_write_text(out_resolved, payload)
             except BaseException:
-                _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
+                if not mismatch_already_handled:
+                    try:
+                        spill_path = out_resolved.with_name(
+                            f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.recovery"
+                        )
+                        _atomic_write_text(
+                            spill_path, _m2e_best_effort_spill_payload(shard_map)
+                        )
+                    except BaseException:
+                        pass
+                    _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
             print(f"wrote shard map to {args.out}")
         finally:
@@ -12885,32 +12929,51 @@ def main() -> int:
                 # 衝突・pin 失敗・不正地図等）で --out を原状復帰する。
                 _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
-            shard_run_payload = json.dumps(shard_run, indent=2, sort_keys=True)
+            # E-121（PR #242 第26巡 Codex 是正）: 直列化（`json.dumps`）を含む
+            # 「実行完了後〜公開完了まで」の残り全段を、直上の `execute_m2e_shard`
+            # と同じ BaseException ロールバック範囲に入れる（E-106 の範囲拡張の
+            # さらなる拡張）——以前は直列化とその直後の token 検証がこの範囲の外に
+            # あり、直列化自体が失敗すると `--out` に自分の claim トークンだけが
+            # 残ったままロールバックされず（サイドカーは `finally` で解放される
+            # ので、次回起動は壊れた `--out` を非空の既存レコードとして掴んで
+            # しまう）。実行記録（`shard_run` dict）はまだメモリ上に生きているので、
+            # `_m2e_best_effort_spill_payload` で可能な限り堅牢な形へ落として spill
+            # してからロールバックする（spill 自体の失敗はロールバック・再送出を
+            # 妨げない）。「別起動が claim を差し替えていた」分岐（既に spill 済み・
+            # fail-closed で案内済み）はロールバック対象外（`out_original_bytes` を
+            # 書き戻すと、別起動が公開した中身を破壊する）。
+            mismatch_already_handled = False
             try:
-                current_out_content = out_resolved.read_text(encoding="utf-8")
-            except OSError:
-                current_out_content = None
-            if current_out_content != shard_run_claim_token:
-                spill_path = out_resolved.with_name(
-                    f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.json"
-                )
-                _atomic_write_text(spill_path, shard_run_payload)
-                raise SystemExit(
-                    f"--out {args.out} の claim が公開直前に別の内容へ差し替わっていた "
-                    "（予約時に書いた自分の claim トークンと不一致）; 別起動との競合の "
-                    f"疑いがある。実行記録は失わないよう {spill_path} へ退避した——原因を "
-                    "確認してから手動で --out へ配置すること (fail-closed・E-85)"
-                )
-            # E-106（PR #242 第19巡 Codex 是正）: token 確認（上の分岐）を通過した
-            # ということは、公開直前まで所有権が自分にあったと立証できている。
-            # `_atomic_write_text` 自体が失敗しても（os.replace 失敗等）、その
-            # 事実は変わらないので、execute_m2e_shard の失敗経路と同じロール
-            # バックを適用する（E-96 の範囲拡張——以前は公開段の失敗だけ未保護
-            # だった）。
-            try:
+                shard_run_payload = json.dumps(shard_run, indent=2, sort_keys=True)
+                try:
+                    current_out_content = out_resolved.read_text(encoding="utf-8")
+                except OSError:
+                    current_out_content = None
+                if current_out_content != shard_run_claim_token:
+                    mismatch_already_handled = True
+                    spill_path = out_resolved.with_name(
+                        f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.json"
+                    )
+                    _atomic_write_text(spill_path, shard_run_payload)
+                    raise SystemExit(
+                        f"--out {args.out} の claim が公開直前に別の内容へ差し替わっていた "
+                        "（予約時に書いた自分の claim トークンと不一致）; 別起動との競合の "
+                        f"疑いがある。実行記録は失わないよう {spill_path} へ退避した——原因を "
+                        "確認してから手動で --out へ配置すること (fail-closed・E-85)"
+                    )
                 _atomic_write_text(out_resolved, shard_run_payload)
             except BaseException:
-                _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
+                if not mismatch_already_handled:
+                    try:
+                        spill_path = out_resolved.with_name(
+                            f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.recovery"
+                        )
+                        _atomic_write_text(
+                            spill_path, _m2e_best_effort_spill_payload(shard_run)
+                        )
+                    except BaseException:
+                        pass
+                    _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
             print(f"wrote shard run record to {args.out}")
         finally:
