@@ -15591,3 +15591,116 @@ def test_run_m2e_shard_queue_terminates_and_reconciles_on_a_parent_side_abort() 
     assert len(reconciled_cells) == 1
     assert reconciled_cells[0]["id"] == "hangs"
     assert len(on_worker_error_calls) == 1
+
+
+def test_require_m2e_shard_map_matches_registry_rejects_duplicate_excluded_cells(
+    tmp_path: Path,
+) -> None:
+    """E-99（PR #242 第17巡 Codex 是正）: `excluded_completed_cells.cells` に
+
+    同一 5-tuple が重複していると、set 構築で黙って畳まず fail-closed で拒否する。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    sample_cell = mutated["cells"][0]
+    dup_record = {
+        "bed_id": sample_cell["bed_id"],
+        "level": sample_cell["level"],
+        "clip_id": sample_cell["clip_id"],
+        "arm": sample_cell["arm"],
+        "repeat_index": sample_cell["repeat_index"],
+    }
+    mutated["excluded_completed_cells"] = {
+        "cell_store_relative": "build/does-not-matter",
+        "cells": [dup_record, dict(dup_record)],
+        "manifest_sha256_by_level": {},
+    }
+    campaign = harness._load_m2e_campaign(campaign_path)
+    with pytest.raises(ValueError, match="重複"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+@pytest.mark.parametrize("bad_manifest_field", [1.5, True])
+def test_require_m2e_shard_map_matches_registry_rejects_a_tampered_manifest_sha256_record(
+    tmp_path: Path, bad_manifest_field: Any
+) -> None:
+    """E-95（PR #242 第15巡 Codex 是正）: 除外判定の走査で読んだ per-level manifest
+
+    の sha256 が地図の記録と食い違うと、除外真実性は個々のセル digest 一致でも
+    fail-closed で拒否する（別世代の manifest を挟んで除外決定と実行時検証が
+    食い違う経路を塞ぐ）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    full_doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS
+    )
+    to_complete = full_doc["cells"][:1]
+    cell_store = _m2e_root_cell_store(tmp_path)
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    _record_cells_via_fake_runner(
+        to_complete,
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path, cell_store=cell_store, **_C6_TEST_SHARD_KWARGS
+    )
+    assert doc["excluded_completed_cells"]["manifest_sha256_by_level"]  # 非空前提
+    mutated = copy.deepcopy(doc)
+    level = to_complete[0]["level"]
+    mutated["excluded_completed_cells"]["manifest_sha256_by_level"][level] = str(
+        bad_manifest_field
+    )
+    with pytest.raises(ValueError, match="manifest_sha256_by_level"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+@pytest.mark.parametrize("bad_n_shards", [1.5, True])
+def test_require_m2e_shard_map_matches_registry_rejects_a_malformed_n_shards(
+    bad_n_shards: Any, tmp_path: Path
+) -> None:
+    """E-97（PR #242 第15巡 Codex 是正）: 地図の `n_shards` が非 bool の整数で
+
+    なければ（`1.5`・`true`）、`int()` で黙って丸めず fail-closed で拒否する
+    （E-83 の `workers` 検証と同型）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["n_shards"] = bad_n_shards
+    with pytest.raises(ValueError, match="整数"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+@pytest.mark.parametrize("bad_n_shards", [1.5, True])
+def test_execute_m2e_shard_rejects_a_malformed_n_shards_before_touching_the_queue(
+    bad_n_shards: Any, tmp_path: Path
+) -> None:
+    """E-97: `execute_m2e_shard` 自身の入口検査（shard_id 境界チェックの前提）も
+
+    同じ形状検証を敷く。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    mutated = copy.deepcopy(map_doc)
+    mutated["n_shards"] = bad_n_shards
+    with pytest.raises(ValueError, match="整数"):
+        harness.execute_m2e_shard(
+            map_doc=mutated,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=tmp_path / "store_A",
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )

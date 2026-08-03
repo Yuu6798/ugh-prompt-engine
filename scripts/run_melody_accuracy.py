@@ -10609,6 +10609,17 @@ def generate_m2e_shard_map(
             bars_path=bars_path,
             bars_snapshot=(bars, bars_sha256),
         )
+        # E-95: この生成時スキャンは登録簿全体（4 水準）を走査するため
+        # `excluded_scan_manifest_sha256_by_level` も 4 水準分になるが、実行側の
+        # 真実性再検証（readback）は除外セル**のみ**を対象に再スキャンする
+        # ——実際に除外された水準の集合しか持たない。両者を同じ形で比較できる
+        # よう、記録側も除外セルが実際に属する水準へ絞り込む。
+        excluded_levels = {key[1] for key in excluded_keys}
+        excluded_scan_manifest_sha256_by_level = {
+            level: sha256
+            for level, sha256 in excluded_scan_manifest_sha256_by_level.items()
+            if level in excluded_levels
+        }
         excluded_cell_store_relative = _repo_relative_path(cell_store_resolved)
         if excluded_keys and excluded_cell_store_relative is None:
             raise ValueError(
@@ -10812,15 +10823,28 @@ def _require_m2e_shard_map_matches_registry(
     excluded_doc = map_doc.get("excluded_completed_cells") or {}
     excluded_records = excluded_doc.get("cells") or []
     excluded_keys: "set" = set()
+    excluded_duplicates: "List[Tuple[str, str, str, str, int]]" = []
     for record in excluded_records:
-        excluded_keys.add(
-            (
-                record["bed_id"],
-                record["level"],
-                record["clip_id"],
-                record["arm"],
-                record["repeat_index"],
-            )
+        excluded_key = (
+            record["bed_id"],
+            record["level"],
+            record["clip_id"],
+            record["arm"],
+            record["repeat_index"],
+        )
+        # E-99（PR #242 第17巡 Codex 是正）: set への追加は重複を黙って畳む——地図が
+        # 同一セルを 2 回以上「除外済み」と宣言していても、その事実自体は検出でき
+        # ない（除外の正当性は個々に立証されるため実害は薄いが、地図が壊れている
+        # 兆候を握り潰さない。台帳は不可侵の原則に倣い fail-closed で顕在化する）。
+        if excluded_key in excluded_keys:
+            excluded_duplicates.append(excluded_key)
+        excluded_keys.add(excluded_key)
+    if excluded_duplicates:
+        raise ValueError(
+            "shard map: excluded_completed_cells.cells に "
+            f"{len(excluded_duplicates)} 件の重複がある（例: "
+            f"{excluded_duplicates[:3]}）; 除外一覧は各セル高々 1 回のみ許可する "
+            "(fail-closed・E-99)"
         )
     registry_full_set = set(registry_cells)
     excluded_not_in_registry = excluded_keys - registry_full_set
