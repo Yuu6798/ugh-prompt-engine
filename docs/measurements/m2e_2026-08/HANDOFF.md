@@ -23,7 +23,7 @@
 | — | **C2** store 分離（rev.6 §8.9.2-(1)） | **完了**（2026-08-02・`--eval-cell-store`） |
 | — | **C3** evaluate の並列化（rev.6 §8.9.2-(2)） | **完了**（2026-08-02・`--workers` + `--pin-threads`） |
 | — | **C5** 水準横断 census 集計 | **完了**（2026-08-02・`--census`） |
-| — | **C6** シャード実行機（§8.6 の実行契約: shard_id 起動・地図の消費・時間許可・打ち切り） | **未着手** ← r6 前に必須（別ブリーフ） |
+| — | **C6** シャード実行機（§8.6 の実行契約: shard_id 起動・地図の消費・時間許可・打ち切り） | **完了**（2026-08-02・地図生成器 `--make-shard-map` + 実行機 `--shard-id`/`--shard-map`） |
 | r4 | r2-0（`P` / 並列不変性ゲート / `S`・`T_*` / `env_digest` / lockfile） | 未実施 |
 | r5 (P-c′) | `m2e_r2_shard_map.yaml` | 未実施 |
 | r6 (P-d) | 本測定（**code change 厳禁**） | 未実施 |
@@ -39,13 +39,13 @@ rev.6 §8.9.4 実装ノート。
 r6 の code freeze の制約下には無かったが、先に入れておくことで r6 以降に必要な
 code change を減らせる。
 
-**ただし C6（シャード実行機）が未着手であり、「r6 前に必要な code change はすべて
-完了している」という 2026-08-02 の記述は過大だった**（PR #241 レビューで顕在化）。
+**C6（シャード実行機）も landing した**（2026-08-02・`.claude/briefs/M2E-C6-shard-runner.md`）。
 設計 §8.6 の実行契約——`shard_id` を引数に取り当該 shard のセルのみを対象とする・
 `elapsed + cost(cell) <= B_session` の開始許可・`B_session + 600s` 打ち切り・
-shard_id 昇順実行——は現行ハーネスに存在しない。現行の run コマンドは水準まるごとを
-対象とし、セル台帳（§8.7・F2）の resume で中断復帰はできるが、§8.6 の時間管理・
-shard スコープは持たない。**C6 が landing するまで r6 は開始できない。**
+shard_id 昇順実行——を `scripts/run_melody_accuracy.py` の `--make-shard-map`
+（地図生成器）/ `--shard-id --shard-map`（実行機）として実装済み。実装ノートは
+rev.6 §8.9.4 D-6。**これで r6 前に必要な code change はすべて完了した**（r4/r5 の
+実測残タスクのみが残る）。
 
 ---
 
@@ -126,23 +126,39 @@ pin を残さない）。`pipefail` を欠くと
 **部分集合で平均 RPA や破断曲線を出さない**（§11）。集計器が無い間は判定が存在しない
 状態が正しい——その状態は解消されたが、**census が揃うまでは依然として判定は出ない。**
 
-### C6 — シャード実行機（rev.6 §8.6）— **未着手**
+### C6 — シャード実行機（rev.6 §8.6）— **完了（2026-08-02）**
 
-設計 §8.6「1回の実行の契約」が要求する実行機は、現行ハーネスに存在しない
-（PR #241 レビューで顕在化）。要求は:
+設計 §8.6「1回の実行の契約」が要求する実行機を
+`.claude/briefs/M2E-C6-shard-runner.md` に基づき実装した（実装ノート: rev.6
+§8.9.4 D-6）。要求だった 5 点はすべて満たす:
 
-- `--shard-id` 相当の引数で起動し、その shard のセルのみを対象とする（**1回 = 1シャード**）。
-- `m2e_r2_shard_map.yaml`（§8.5・`cell → shard_id` の全対応表）を読むリーダー。
-- **新しいセルを開始してよいのは `elapsed + cost(cell) <= B_session` のときのみ**という
-  開始許可式。
-- 実行中セルが `B_session + 600s` を超えたら打ち切り、失敗値でなく「未完」として記録。
-- `shard_id` の昇順で実行（飛ばせるのはその shard が全セル digest 一致で完了済みの場合のみ）。
+- `--shard-id N --shard-map PATH` で起動し、その shard のセルのみを対象とする
+  （**1回 = 1シャード**）。
+- 地図生成器 `--make-shard-map`（入力: `--campaign` / `--t-direct` / `--t-stem` /
+  `--startup-cost` / `--session-budget`）が §8.5 の凍結擬似コードを逐語実装し、
+  `cell → shard_id` の全対応表を持つ地図 YAML を生成する（同一入力からバイト一致）。
+- **新しいセルを開始してよいのは `elapsed + cost(cell) <= B_session` のときのみ**と
+  いう開始許可式を、親プロセスの単調クロックで動的キュー（1 セルずつ配布）として
+  実装した。
+- 実行中セルが `B_session + 600s` を超えたら、multiprocessing pool を
+  `terminate()` して打ち切り、失敗値でなく「未完」として shard 実行記録に残す
+  （セルレコードは書かない）。
+- `shard_id` の昇順で実行し、飛ばせるのはその shard が全セル digest 一致で
+  完了済みの場合のみ（`_require_prior_m2e_shards_complete` が既存の
+  `_cell_store_record_path` / `_cell_record_mismatches` をそのまま再利用——
+  resume 互換 AC の根拠）。
 
-現行の run コマンドは水準まるごとを対象とし、shard 単位にも時間予算にも対応しない。
-§8.5 の規律（**セル台帳は不可侵・シャード地図は再計算可能——「シャード地図は科学では
-なくスケジューリングである」**）を尊重した実装が要る。**r6 前に landing が必須**
-（r6 は code change 厳禁のため、C2/C3 と同じ論法）。**C5（census）とは混ぜない**
-——別ブリーフとして実装する（C5 を C2/C3 から分離したのと同じスコープ判断）。
+campaign ファイル（`m2e-campaign/0.1`。各水準の external manifest / external
+fixtures の所在のみを持つ）は
+[`docs/measurements/m2e_2026-08/m2e_campaign.example.yaml`](m2e_campaign.example.yaml)
+がテンプレート。実ファイルの manifest パスは `build/m2e/` 配下の想定パス（非
+commit の作業成果物）でよく、fixtures パスは committed pin ファイルを指す
+（存在検証は実行時）。
+
+shard モードは run report / verdict / census のいずれも出さない——成果物は
+(a) `--cell-store` 配下のセルレコード、(b) `--out` の shard 実行記録
+（dated JSON）のみ。per-level の run report は、全セル完了後に既存の「1 水準
+まるごと」run が store から 100% resume して生成する（下記 §5 r6 レシピ参照）。
 
 ### C3 — evaluate の並列化（rev.6 §8.9.2-(2)）— **完了（2026-08-02）**
 
@@ -214,9 +230,8 @@ commit される dated record であり（m2b/m2c の前例どおり）、上の
 として `build/m2e/` のままでよい。残り 3 水準（p06/p00/m06）も同じ形で繰り返して 4
 verdict を census へ渡す——この 4 行を 1 セッションで回すという意味ではない。
 **中断復帰はセル台帳（§8.7・F2）が機構として担う。** 分割・実行順は §8.6 の実行契約
-（`shard_id` 起動）によるが、**その実行機は未実装（C6・§2 参照）**。上の run コマンドは
-r4 の校正・スモーク用の「1 水準まるごと」の形であり、r6 本測定は C6 実装後に
-`shard_id` 起動で回す。
+（`shard_id` 起動）による。上の run コマンドは r4 の校正・スモーク用の「1 水準まるごと」
+の形であり、**r6 本測定は C6 実装済みの `shard_id` 起動（下記レシピ）で回す。**
 
 `--workers 2` なのは上記の頭打ち（`repeats_min = 2`）による。`--eval-cell-store` には
 **run が使った `store_A` を渡してはならない**——渡すと測り直しの子が run のセルを
@@ -231,6 +246,506 @@ resume し、独立検証が自分自身との比較に化ける。evaluate は�
 
 **`P` の効果は実測比で示すこと**（`総時間 / P` の外挿値を成果として書かない・§3.2）。
 C2/C3 の PR では fake backend の実測比を記載した。r4 では実スタックで測り直す。
+
+**r6 の起動形**（C6・§8.6 の実行契約。`shard_id` 昇順で 1 回 = 1 shard）:
+
+r4（r2-0）で確定した `S` / `T_direct` / `T_stem` を使って地図を生成し、**本測定開始前に
+commit する**（§8.5「確定した `cell → shard_id` の全対応表を `m2e_r2_shard_map.yaml`
+として本測定の開始前に commit する」）。campaign ファイルは
+[`m2e_campaign.example.yaml`](m2e_campaign.example.yaml) をコピーして実パスに
+合わせる（`build/m2e/` は非 commit の作業成果物、fixtures は committed pin）。
+
+```bash
+set -e -o pipefail  # E-120: -e で地図生成の非ゼロ exit を含むレシピ全体を即停止する
+# （pipefail だけでは `$?` にその非ゼロが載るだけでシェルは止まらず、手順 1 が
+# 失敗しても手順 2 の until ループへ素通りしうる）。以下の until ループ内で
+# `STATUS`/`CHECK_STATUS` を明示判定する箇所は `cmd || VAR=$?`（`||` の右辺は
+# errexit の対象外）で -e と両立させている——`cmd; VAR=$?` の素朴な形だと `cmd`
+# の非ゼロで `VAR=$?` に到達する前にシェルごと落ち、E-88/E-113 の診断分岐が
+# 効かなくなる。
+
+# E-130（PR #242 第30巡 Codex 是正）・E-132（PR #242 第31巡 Codex 是正）:
+# T_DIRECT/T_STEM/S/P は r4（r2-0 校正）の実測値——**このブロックを実行する前に
+# シェルへ export しておくこと**（例: `export T_DIRECT=5.2 T_STEM=9.8 S=1.9 P=2`。
+# 具体的な数値はプレースホルダではなくシェルの実際の代入文として書く）。
+# §8.4 により**セッション毎に測り直す**——前セッションの値をシェル履歴等から
+# 持ち越して使い回してはならない（校正が古い実行環境を代表しなくなる）。
+# E-132: 以前は `T_DIRECT=<r4 実測>` のようなプレースホルダ代入行をここに
+# 書いていたが、`<`/`>` は bash のリダイレクト演算子であり、このブロックを
+# そのまま bash へコピーすると構文エラーになる（実測確認済み）。代入行は
+# 削除し、事前 export の要求 + 下記の空検証のみへ改めた。`set -e` だけでは
+# 未定義変数の展開（空文字列化）を検出できない（`-u`/`nounset` 相当が無いと
+# `--t-direct ""` のように黙って壊れた引数を渡してしまう）ため、`:?` で
+# 明示的に空検証する。
+: "${T_DIRECT:?r4 の実測値を export しておくこと}" \
+  "${T_STEM:?r4 の実測値を export しておくこと}" \
+  "${S:?r4 の実測値を export しておくこと}" \
+  "${P:?校正時と同じ並列度を export しておくこと}"
+
+# 1. 地図生成（r2-0 で確定した S/T_direct/T_stem/P を渡す。同一入力ならバイト一致）。
+#    --workers "$P"（E-59）: T_direct/T_stem を校正したときの P を地図へ記録する
+#    （§8.4「production と同じ P」の契約）。手順 2 の実行機は省略時にこの値を採用し、
+#    明示指定時は一致を要求する。
+# E-143（PR #242 第38巡 Codex 是正）: `--cell-store build/m2e/store_A`（手順 2 の
+# shard 実行と同じ store）を渡す——E-66 の除外パッキング（digest 一致で完了済みの
+# セルを残セルの計算・N_shards 算出から除く）を正規手順で実際に効かせるため。
+# 未指定のままだと常に全 1280 セルを対象にパッキングしてしまい、r4 の校正実行や
+# 中断セッションが既に書いたセルも再スケジュール対象に含まれ続け、R_max(12) を
+# 見かけ上超過する（§8.8 の 3 択への誤った差し戻し）・完了済みセルを無駄に
+# shard 待ち行列へ積む、のいずれも起こりうる。store が空/新規（本測定の初回）
+# なら除外対象が無いため全 1280 セルのパッキングと完全に同一になる——挙動の
+# 後方互換は保たれる。
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+    --make-shard-map \
+    --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
+    --t-direct "$T_DIRECT" --t-stem "$T_STEM" --startup-cost "$S" --workers "$P" \
+    --cell-store build/m2e/store_A \
+    --out docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml \
+    | tee "$(mktemp "docs/measurements/m2e_2026-08/shard_map_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
+# → commit する（本測定開始前・§8.5）。N_shards > R_max(12) なら §8.8 の 3 択へ
+#   User 決裁（生成器がここで fail-closed に停止する）。
+# E-118（PR #242 第24巡 Codex 是正）: 地図は生成時刻を bytes に含めない（E-67）ため
+# `generated at` / `shard map sha256` は stdout にしか出ない——census/shard 実行記録と
+# 同じ流儀で dated log を tee し、地図（`m2e_r2_shard_map.yaml`）とこの
+# `shard_map_stdout_*.txt` を対で commit すること。
+
+# 2. shard を昇順に実行する（N は 0 から N_shards-1 まで）。§8.6「未完セルは次回の
+#    実行でそのまま resume される」の「次回の実行」とは**同一 shard_id の再実行**
+#    を指す——1 回の実行が B_session に収まらず unavailable/truncated/not_started
+#    のいずれかが残った場合、until ループで実行記録を検査し、当該 shard の全セルが
+#    完了する（cells_completed == cells_total）までは同じ shard_id を再実行してから
+#    次の shard_id へ進む（E-73）。素朴に for ループで N をインクリメントするだけの
+#    旧レシピでは、未完のまま次 shard へ進んで先行 shard 完了検査に必ず落ちていた。
+#    E-88（PR #242 第12巡 Codex 是正）: リトライは「exit 0 かつ実行記録 JSON が
+#    正常に書かれており未完セルが残っている」場合のみに限定する——**非ゼロ exit は
+#    即座にレシピ全体を終了する**（失敗の永久リトライを禁止）。claim 衝突・pin
+#    失敗・不正地図はいずれもリトライでは解決しないオペレータ判断案件であり、
+#    黙って回し続けると気付かれないまま資源を浪費する。`--out`（mktemp 予約）が
+#    exit 0 なのに 0 バイトのまま（実行記録が書き出されていない）場合も異常として
+#    即終了する。
+# E-136（PR #242 第34巡 Codex 是正）: 地図パスをループ内で一貫して参照できる
+# よう変数へ束縛する（`--shard-map` 引数・下記の検証双方で使う）。
+SHARD_MAP_PATH="docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml"
+# E-137（PR #242 第35巡 Codex 是正）: `n_shards` を検証せず `seq 0 $(( n_shards -
+# 1 ))` へ直接渡すと、n_shards が 0（生成器は本来 0 を作らないが改変・破損を
+# 排除しない）や壊れた値（例: YAML の `true`——Python では bool は int の
+# サブクラスで `True - 1 == 0` となり `seq 0 0` が単一の偽 shard を作ってしまう）
+# の場合に穴がある。とりわけ n_shards=0 は `seq 0 -1` を生み、GNU coreutils の
+# `seq` は FIRST > LAST を**エラーにせず空展開**するため、for ループが 1 度も
+# 実行されずに（測定を1件も行わないまま）レシピが「成功」扱いで完走してしまう
+# ——r6 完走を偽装する穴。ループ範囲を構築する**前**に地図を読み、n_shards が
+# 非 bool の正整数であることを明示検証する。
+# E-140（PR #242 第36巡 Codex 是正）: 「非 bool の正整数」だけでは、生成器が
+# 出し得ない値（改変・破損）——例えば `n_shards: 13`——も通してしまう。§8.8 で
+# 凍結した `R_max = 12`（`generate_m2e_shard_map`/`_require_m2e_shard_map_
+# matches_registry` 共有の `_M2E_R_MAX`）を上限として明示し、`1 <= n_shards
+# <= 12` の範囲外は fail-closed で拒否する——`seq` がこの範囲外の巨大な N まで
+# 実体化する前に preflight で止める。
+# E-139（PR #242 第36巡 Codex 是正）: E-138 は per-shard 検査のたびに地図
+# ファイルを個別に再読取・再ハッシュしていた——検証対象は「preflight が見た
+# のと同一の地図実体」であるべきで、shard ごとに独立に読み直すと、shard 間で
+# 地図が差し替わっても各回の検査は自分がその時点で読んだ bytes に対しては
+# 自己無矛盾に通ってしまい、「全 shard が同一地図実体で走った」ことまでは
+# 立証しない。ここ（一度きりの preflight）で地図を単一読取の bytes として読み、
+# その内容を不変のスナップショット（`SHARD_MAP_SNAPSHOT`）へ書き出し、sha256 を
+# `SHARD_MAP_SHA256_PINNED` として捕捉する——n_shards の検証・以降の全 shard の
+# per-shard 検査（期待セル数・セル参照集合の導出、E-136/E-141）は、この 1 回
+# だけ読んだ bytes（のスナップショット）に完全に一本化される。per-shard 検査は
+# record の `shard_map_sha256` をこの pinned 値とだけ比較し（検査のたびに地図を
+# 再読取・再ハッシュしない）、不一致（＝その shard の実行が pin と異なる地図
+# 実体を消費した）を fatal（exit 3）とする。失敗はそのまま python の非ゼロ
+# exit（3）となり、`set -e` がレシピ全体を即座に停止する（`STATUS`/
+# `CHECK_STATUS` のような捕捉は不要: ここはリトライ対象ではなく地図そのものが
+# 壊れている場合の一度きりの preflight）。
+SHARD_MAP_SNAPSHOT="$(mktemp "build/m2e/shard_map_pinned_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.yaml")"
+PREFLIGHT_OUTPUT=$(python -c "
+import hashlib, sys, yaml
+
+with open('$SHARD_MAP_PATH', 'rb') as f:
+    shard_map_bytes = f.read()
+
+with open('$SHARD_MAP_SNAPSHOT', 'wb') as f:
+    f.write(shard_map_bytes)
+
+try:
+    doc = yaml.safe_load(shard_map_bytes)
+except Exception as exc:
+    print(f'shard map parse failed: {exc!r}', file=sys.stderr)
+    sys.exit(3)
+
+if not isinstance(doc, dict):
+    print(f'shard map at $SHARD_MAP_PATH is not a mapping: {doc!r}', file=sys.stderr)
+    sys.exit(3)
+
+n_shards = doc.get('n_shards')
+if isinstance(n_shards, bool) or not isinstance(n_shards, int) or not (1 <= n_shards <= 12):
+    print(
+        f'shard map n_shards is not a non-bool int in [1, 12] (frozen R_max, '
+        f'design section 8.8): {n_shards!r}',
+        file=sys.stderr,
+    )
+    sys.exit(3)
+
+print(n_shards, hashlib.sha256(shard_map_bytes).hexdigest())
+")
+read -r N_SHARDS SHARD_MAP_SHA256_PINNED <<< "$PREFLIGHT_OUTPUT"
+for N in $(seq 0 $((N_SHARDS - 1))); do
+  while :; do
+    OUT="$(mktemp "build/m2e/shard_run_${N}_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.json")"
+    STATUS=0
+    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+        --shard-id "$N" \
+        --shard-map "$SHARD_MAP_PATH" \
+        --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
+        --cell-store build/m2e/store_A --workers "$P" \
+        --out "$OUT" \
+        | tee "$(mktemp "build/m2e/shard_run_${N}_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")" \
+        || STATUS=$?
+    # `set -o pipefail`（冒頭で宣言済み）により、`STATUS` は tee ではなく実行機
+    # 自体の exit status を指す。非ゼロは即終了（E-88・失敗の永久リトライ禁止）。
+    # `|| STATUS=$?`（E-120）: `set -e` 下でパイプライン自体に素朴に `STATUS=$?`
+    # を続けると、非ゼロで捕捉前にシェルごと落ちる——`||` の右辺で捕捉する。
+    if [ "$STATUS" -ne 0 ]; then
+      echo "shard $N の実行が非ゼロ exit ($STATUS) で終了した。claim 衝突・pin 失敗・" >&2
+      echo "不正地図等の可能性がある——原因を確認してから再実行すること (fail-closed・E-88)" >&2
+      exit "$STATUS"
+    fi
+    if [ ! -s "$OUT" ]; then
+      echo "shard $N: --out $OUT が exit 0 なのに空のまま（実行記録が書かれていない）。" >&2
+      echo "異常終了の疑い——原因を確認してから再実行すること (fail-closed・E-88)" >&2
+      exit 1
+    fi
+    # 実行記録を検査する: cells_completed == cells_total（未完 3 種がすべて空）に
+    # なっていれば shard N は完了——次の shard_id へ進む。E-113（PR #242 第22巡
+    # Codex 是正）: リトライ継続は「未完が truncated / not_started のみ」の場合に
+    # 限定する——cells_unavailable（CREPE/Demucs/重み不在等、環境起因で消えない
+    # 未完）が非空なら、盲目的に再実行し続けず即座にレシピを終了しオペレータ対応へ
+    # 回す（失敗の永久リトライを禁じた E-88 の精神を cells_unavailable にも適用）。
+    # exit 0 = shard 完了（break）／1 = 検証済みで truncated・not_started のみ残存
+    # （再実行）／2 = cells_unavailable 非空（即時終了）／3 = パース失敗・キー欠損・
+    # 検証失敗（fatal・即停止）。E-127（PR #242 第29巡 Codex 是正）: 旧レシピは
+    # JSON パース失敗や必須キー欠損を素通しし、Python の素の未捕捉例外が既定で
+    # exit 1 を返すため「truncated/not_started のみ残存」（意図的な exit 1）と
+    # 区別が付かず、壊れた実行記録を検証済みの未完と誤認して盲目的に再実行し
+    # 続けてしまっていた（cells_unavailable と同型の「リトライで直らない失敗」を
+    # 見逃す穴）。パース・検証は明示的に try/except で捕捉し、3 という別コードへ
+    # 分離する——シェル側は 0/1/2 以外（3 を含む未知のコードすべて）を fatal と
+    # みなして即座に終了する。
+    # E-134（PR #242 第33巡 Codex 是正）: E-127 は「パース失敗・キー欠損」しか
+    # 検査しておらず、0/1 を返す**前**の検証が cells_unavailable/cells_completed/
+    # cells_total の 3 キーの**存在**（dict 添字アクセスが KeyError で例外化する
+    # ことに依存）に留まっていた——schema_version の不一致（別世代の実行機/別
+    # スキーマの record）・shard_id の不一致（別 shard の record を誤って渡す
+    # コピペ事故）・型崩れ（cells_total が文字列化されている等）・会計の破綻
+    # （cells_measured/cells_resumed/cells_unavailable/cells_truncated/
+    # cells_not_started の内訳が cells_total と合わない壊れた record）のいずれも
+    # 素通しし、0/1 判定（「完了」/「truncated・not_started のみ残存」）を汚染
+    # された record に対して下してしまいうる穴だった。0/1 を返す前に、
+    # schema_version 一致・shard_id 一致（期待値は `$N`）・cells_total/
+    # cells_completed が非 bool 整数・cells_measured/cells_resumed/
+    # cells_unavailable/cells_truncated/cells_not_started がいずれも list・
+    # 会計不変条件（`len(measured) + len(resumed) == completed` かつ
+    # `completed + len(unavailable) + len(truncated) + len(not_started) ==
+    # total`——`execute_m2e_shard` の実フィールド名・E-92 が確立した
+    # measured/resumed の相互排他分割に合わせる。`cells_resumed` は
+    # `cells_completed` の**部分集合**であり加算対象ではない——単純に
+    # `completed + resumed + 未完各種` を合計すると二重計上になる）を全数検証し、
+    # いずれかの失敗も exit 3（fatal・E-127 の規約を踏襲）へ落とす。
+    # E-136（PR #242 第34巡 Codex 是正）: E-134 の会計不変条件は record**内部**の
+    # 整合性（measured/resumed/未完各種の内訳が record 自身の cells_total/
+    # cells_completed と合う）しか見ておらず、record が「セル 0 件・total=0・
+    # completed=0」のように**全体として空**でも内部整合は保たれるため、この
+    # 空記録は exit 0（完了）を通ってしまう穴が残っていた——shard 実行が
+    # 早期に異常終了して空の record を書いた場合でも「完了」と誤認しうる。
+    # 地図（`$SHARD_MAP_PATH`）を読み、shard `$N` に実際に割り当てられている
+    # セル数（`cells[].shard_id == $N` の件数）を独立に数え、record の
+    # cells_total と一致することを要求する——地図側の台帳と record 側の
+    # 自己申告が食い違う（空記録を含む）場合は fatal（exit 3）とする。
+    # `|| CHECK_STATUS=$?`（E-120）: 上と同じ理由——`set -e` 下では非ゼロ sys.exit
+    # を素朴に `CHECK_STATUS=$?` で捕捉する形は機能しない。
+    CHECK_STATUS=0
+    python -c "
+import json, sys, yaml
+
+EXPECTED_SCHEMA = 'm2e-shard-run/0.1'
+EXPECTED_SHARD_ID = $N
+
+
+def fatal(msg):
+    print(f'shard record validation failed: {msg}', file=sys.stderr)
+    sys.exit(3)
+
+
+try:
+    with open('$OUT') as f:
+        r = json.load(f)
+except Exception as exc:
+    fatal(f'JSON parse failed: {exc!r}')
+
+if not isinstance(r, dict):
+    fatal(f'shard record is not a JSON object: {r!r}')
+if r.get('schema_version') != EXPECTED_SCHEMA:
+    fatal(f'schema_version {r.get(\"schema_version\")!r} != {EXPECTED_SCHEMA!r}')
+
+
+def require_int(key):
+    v = r.get(key)
+    if isinstance(v, bool) or not isinstance(v, int):
+        fatal(f'{key} is not a non-bool int: {v!r}')
+    return v
+
+
+def require_list(key):
+    v = r.get(key)
+    if not isinstance(v, list):
+        fatal(f'{key} is not a list: {v!r}')
+    return v
+
+
+shard_id = require_int('shard_id')
+if shard_id != EXPECTED_SHARD_ID:
+    fatal(f'shard_id {shard_id!r} != expected {EXPECTED_SHARD_ID!r}')
+
+total = require_int('cells_total')
+completed = require_int('cells_completed')
+measured = require_list('cells_measured')
+resumed = require_list('cells_resumed')
+unavailable = require_list('cells_unavailable')
+truncated = require_list('cells_truncated')
+not_started = require_list('cells_not_started')
+
+# E-136: 地図側の台帳から shard $N の期待セル数を独立に導出し、record 自身の
+# cells_total と照合する（record 内部だけでは検出できない「全体として空の
+# record」を塞ぐ）。
+# E-138（PR #242 第35巡 Codex 是正）: E-136 は「検査が読んだ地図」と「実行が
+# 実際に消費した地図」が同一実体である保証を欠いていた——地図が実行**後**・
+# 検査**前**に差し替えられても（cells の中身や shard_id 割当が変わっても
+# 件数だけ偶然一致すれば）検出できない。地図の sha256 が record 自身の
+# \`shard_map_sha256\`（\`execute_m2e_shard\` が実際に消費した地図の sha256・
+# \`_load_m2e_shard_map\` と同じ計算式）と一致することを**セル数を数える前に**
+# 要求する（不一致は fatal）。
+# E-139（PR #242 第36巡 Codex 是正）: 検査のたびに地図ファイルを個別に
+# 再読取・再ハッシュするのではなく、preflight で一度だけ捕捉した
+# \`SHARD_MAP_SHA256_PINNED\` とだけ比較する——同一地図実体で全 shard が走った
+# ことの立証は preflight 側の単一読取スナップショット（\`SHARD_MAP_SNAPSHOT\`）
+# が担う（このスクリプトはそのスナップショットだけを読む・元の \`$SHARD_MAP_PATH\`
+# は二度と読まない）。この python -c 引数は bash の二重引用符文字列でもあるため、
+# 未エスケープのバッククォートはコマンド置換として解釈され、存在しないコマンドの
+# 実行試行と stderr 汚染を招く（実測で発見・是正——このコメント内の全バック
+# クォートは \` とエスケープ済み）。
+EXPECTED_MAP_SHA256 = '$SHARD_MAP_SHA256_PINNED'
+record_map_sha256 = r.get('shard_map_sha256')
+if record_map_sha256 != EXPECTED_MAP_SHA256:
+    fatal(
+        f'record shard_map_sha256({record_map_sha256!r}) != pinned shard map hash '
+        f'({EXPECTED_MAP_SHA256!r})'
+    )
+
+try:
+    with open('$SHARD_MAP_SNAPSHOT', 'rb') as f:
+        shard_map_bytes = f.read()
+except Exception as exc:
+    fatal(f'shard map snapshot read failed: {exc!r}')
+
+try:
+    shard_map = yaml.safe_load(shard_map_bytes)
+except Exception as exc:
+    fatal(f'shard map snapshot parse failed: {exc!r}')
+
+if not isinstance(shard_map, dict) or not isinstance(shard_map.get('cells'), list):
+    fatal(f'shard map snapshot at $SHARD_MAP_SNAPSHOT is malformed (missing cells list)')
+
+expected_total = sum(
+    1 for c in shard_map['cells']
+    if isinstance(c, dict) and c.get('shard_id') == EXPECTED_SHARD_ID
+)
+if expected_total != total:
+    fatal(
+        f'cells_total({total}) != shard-map-derived expected cell count for shard '
+        f'{EXPECTED_SHARD_ID} ({expected_total})'
+    )
+
+# E-92 の相互排他分割: 1 セルは measured か resumed のどちらか一方にのみ属す。
+if len(measured) + len(resumed) != completed:
+    fatal(
+        f'cells_measured({len(measured)}) + cells_resumed({len(resumed)}) != '
+        f'cells_completed({completed})'
+    )
+# cells_resumed は cells_completed の部分集合（加算対象ではない）。
+if completed + len(unavailable) + len(truncated) + len(not_started) != total:
+    fatal(
+        f'cells_completed({completed}) + cells_unavailable({len(unavailable)}) + '
+        f'cells_truncated({len(truncated)}) + cells_not_started({len(not_started)}) != '
+        f'cells_total({total})'
+    )
+
+# E-141（PR #242 第36巡 Codex 是正）: 配列長の会計（直上の E-92/E-134 由来の
+# 検証）だけでは、「セル A の参照が cells_truncated と cells_not_started の
+# 両方に重複計上されつつ、セル B の参照はどの配列にも現れない」といった、
+# 総数だけ辻褄が合う入れ替わりを検出できない。5 配列（measured/resumed/
+# unavailable/truncated/not_started）それぞれのセル参照を正規化 5-tuple
+# （bed_id, level, clip_id, arm, repeat_index——§6.2 の正準鍵。
+# \`execute_m2e_shard\` 内部の \`_cell_ref\` が実際に記録するフィールド形式に
+# 合わせた）へ変換し、(a) 5 配列を合算した全参照が重複なし（＝配列間でも
+# 重複しない＝相互に非交差）、(b) その合併集合が pinned 地図（スナップショット）
+# の shard $N のセル集合と完全一致することを要求する。いずれの違反も fatal
+# （exit 3）とする。
+# E-142（PR #242 第37巡 Codex 是正）: E-141 の正規化は各スカラーの型を検査
+# せずタプル化していた——\`repeat_index: false\` は Python では bool が int の
+# サブクラスであるため \`0\` と同値化し、本来の \`repeat_index: 0\` セルと
+# 黙って衝突・すり替わりうる（E-108 と同型の穴）。\`bed_id: []\` のような
+# unhashable な値は tuple 化はできても \`set(all_refs)\` の時点で
+# \`TypeError: unhashable type\` を送出し、この関数群のどこにも try/except が
+# 無かったため Python の未捕捉例外の既定 exit（1）で終了してしまう——これは
+# 「検証済みで truncated/not_started のみ残存」（意図的な exit 1・E-127 の
+# 規約）と区別が付かず、正規化そのものが失敗した壊れた record を盲目的に
+# リトライしてしまう穴だった（E-127 が JSON パース・キー欠損について塞いだのと
+# 同型の漏れが、この後で追加した E-141 の集合演算経路には及んでいなかった）。
+# identity 4 フィールド（bed_id/level/clip_id/arm）は str・repeat_index は
+# 非 bool の整数であることを明示検証し、違反は fatal（exit 3）とする。
+# さらに正規化〜集合比較の全体を try/except で覆い、想定外の例外（unhashable
+# の TypeError 等、明示検証が想定していない壊れ方）もすべて fatal（exit 3）へ
+# ルーティングする——exit 1 への漏れを構造的に排除する。地図側セル
+# （\`expected_refs\`）の正規化にも同じスカラー検証を適用する（CLI 側の
+# \`_require_m2e_cell_repeat_index\` 等で既に検証済みの地図だが、この検査
+# スクリプト自身は CLI の検証結果を信用せず自己完結で検証する——fail-closed の
+# 原則を検査コード自身にも及ぼす）。
+
+
+def require_cell_ref_scalars(entry, source_name):
+    for key in ('bed_id', 'level', 'clip_id', 'arm'):
+        value = entry.get(key)
+        if not isinstance(value, str):
+            fatal(f'{source_name} entry {key!r} is not a str: {value!r}')
+    repeat_index = entry.get('repeat_index')
+    if isinstance(repeat_index, bool) or not isinstance(repeat_index, int):
+        fatal(f'{source_name} entry repeat_index is not a non-bool int: {repeat_index!r}')
+
+
+def cell_refs(list_value, list_name):
+    refs = []
+    for entry in list_value:
+        if not isinstance(entry, dict):
+            fatal(f'{list_name} contains a non-object entry: {entry!r}')
+        missing = [
+            key for key in ('bed_id', 'level', 'clip_id', 'arm', 'repeat_index')
+            if key not in entry
+        ]
+        if missing:
+            fatal(f'{list_name} entry is missing {missing!r}: {entry!r}')
+        require_cell_ref_scalars(entry, list_name)
+        refs.append(
+            (entry['bed_id'], entry['level'], entry['clip_id'], entry['arm'], entry['repeat_index'])
+        )
+    return refs
+
+
+try:
+    all_refs = (
+        cell_refs(measured, 'cells_measured')
+        + cell_refs(resumed, 'cells_resumed')
+        + cell_refs(unavailable, 'cells_unavailable')
+        + cell_refs(truncated, 'cells_truncated')
+        + cell_refs(not_started, 'cells_not_started')
+    )
+    if len(all_refs) != len(set(all_refs)):
+        seen = set()
+        dupes = []
+        for ref in all_refs:
+            if ref in seen:
+                dupes.append(ref)
+            seen.add(ref)
+        fatal(
+            'cell references are not duplicate-free / pairwise disjoint across '
+            f'cells_measured/resumed/unavailable/truncated/not_started: {dupes[:5]!r}'
+        )
+
+    expected_refs = set()
+    for c in shard_map['cells']:
+        if not isinstance(c, dict) or c.get('shard_id') != EXPECTED_SHARD_ID:
+            continue
+        missing = [
+            key for key in ('bed_id', 'level', 'clip_id', 'arm', 'repeat_index')
+            if key not in c
+        ]
+        if missing:
+            fatal(f'shard map snapshot cell entry is missing {missing!r}: {c!r}')
+        require_cell_ref_scalars(c, 'shard map snapshot cell')
+        expected_refs.add(
+            (c['bed_id'], c['level'], c['clip_id'], c['arm'], c['repeat_index'])
+        )
+
+    actual_refs = set(all_refs)
+    if actual_refs != expected_refs:
+        missing_refs = list(expected_refs - actual_refs)[:5]
+        extra_refs = list(actual_refs - expected_refs)[:5]
+        fatal(
+            f'cell reference union != shard-map-derived cell set for shard '
+            f'{EXPECTED_SHARD_ID}: missing={missing_refs!r} extra={extra_refs!r}'
+        )
+except SystemExit:
+    raise
+except Exception as exc:
+    fatal(f'cell reference validation failed unexpectedly: {exc!r}')
+
+if unavailable:
+    sys.exit(2)
+sys.exit(0 if completed == total else 1)
+" || CHECK_STATUS=$?
+    if [ "$CHECK_STATUS" -eq 0 ]; then
+      break
+    elif [ "$CHECK_STATUS" -eq 1 ]; then
+      : # 検証済みで truncated/not_started のみが残存——同一 shard_id を再実行する。
+    elif [ "$CHECK_STATUS" -eq 2 ]; then
+      echo "shard $N: cells_unavailable が非空——CREPE/Demucs/重み不在等はリトライで直らない。" >&2
+      echo "原因を確認してから対応すること (fail-closed・E-113)" >&2
+      exit 1
+    else
+      echo "shard $N: 実行記録の検査自体が失敗した (CHECK_STATUS=$CHECK_STATUS)。schema_version・" >&2
+      echo "shard_id・型・会計不変条件・地図由来の期待セル数・pinned 地図 hash・セル参照集合・" >&2
+      echo "セル参照スカラー型のいずれかの検証に失敗した（想定外の例外も含む）——リトライでは" >&2
+      echo "直らない。原因を確認してから対応すること " >&2
+      echo "(fail-closed・E-127/E-134/E-136/E-138/E-139/E-141/E-142)" >&2
+      exit 1
+    fi
+  done
+done
+```
+
+- **E-55**: `mktemp` は 0 バイトの予約ファイルを先に作る——実行機はこれを上書き対象
+  として許容する（非空の既存ファイルのみ拒否・fail-closed）。上記の `--out`/tee 先
+  レシピはこの前提で書かれている。
+- **E-74（同一 shard の排他 claim）**: `--cell-store build/m2e/store_A` 配下に
+  `shard_<N>.claim` が作られ、同じ `shard_id` の並行実行を防ぐ。**クラッシュ孤児**
+  （コンテナ強制終了等で claim が残ったまま実行機が終了した場合）に遭遇したら、
+  `rm build/m2e/store_A/shard_<N>.claim` で手動削除してから再実行する（claim の中身
+  は PID + 時刻の診断情報のみで、削除しても測定済みセルレコードには影響しない）。
+- `--workers "$P"`（E-59）: 省略すれば手順 1 が地図に記録した `P` を採用する。明示
+  指定するなら地図の `P` と完全一致する必要がある（不一致は fail-closed）——上記の
+  ように手順 1・2 で同じ `$P` を使えば自動的に一致する。
+- shard 実行記録（`--out`）は run report ではない——run report / verdict / census の
+  いずれも出さない（成果物は `--cell-store` のセルレコードとこの実行記録のみ）。
+  `build/m2e/` は非 commit の作業成果物なので、実行記録は dated として残すだけでよい
+  （commit 対象ではない）。
+- 先行 shard（`shard_id < N`）に digest 一致で完了していないセルが 1 つでもあると
+  fail-closed で拒否する——**昇順を飛ばさない**こと。1 回の実行が
+  `B_session`（既定 7200s = 2.0h・§8.2）で終わらなくても延長しない
+  （超過は異常ではなく通常状態・§8.6）。未完セルは次回の実行でそのまま resume される。
+- **全 shard 完了後**、既存の「1 水準まるごと」run（上の r4/r6 起動形の `for r in 0 1`
+  ブロック）を同じ `--cell-store build/m2e/store_A` で回すと、shard 実行機が書いた
+  セルが digest 一致で 100% resume され、水準ごとの run report が生成される
+  （resume 互換 AC）。そこから先は上記 C5 census レシピと同じ形。
+- `T_*`/`S`/`B_session` を変更した場合は**未完セルについてのみ**地図を引き直す
+  （§8.5・完了済みセルのレコードは影響を受けない）。手順 1 と同じコマンド
+  （`--cell-store build/m2e/store_A` を含む・E-143）を、§8.4 の再測り直しで
+  得た新しい `T_*`/`S` に差し替えてそのまま再実行すればよい——`--cell-store`
+  が E-66 の除外パッキングで完了済みセルを自動的に地図から外すため、「未完
+  セルのみ」の再パッキングは追加操作なしで成立する。セル台帳（fixtures）自体を
+  変えてはならない——変えると地図生成器・実行機の両方が `_require_m2e_shard_map_
+  matches_registry` で fail-closed になる（意図どおり）。
+- **E-115**: 上記の地図引き直しで `--cell-store` 配下の残セルが 0 件（全セル
+  完了済み）になっている場合、地図生成器は空の地図を作らず明示エラーで拒否する
+  （fail-closed）——その時点で r6 は完了しており、次フェーズ（r7）へ進む。
 
 ---
 
@@ -331,18 +846,22 @@ demucs の vocals stem の `stem_sha256` が run 間で変わる（`residual_db`
 ## 5. 次にやる順序
 
 1. ~~**C2 / C3 を実装**。r6 前に landing。~~ **完了（2026-08-02）**
-   ~~残るのは C5~~ **C5 も完了（2026-08-02・`--census`）**。**C6（シャード実行機・
-   §2 参照）が未着手で残っている**——「以降の段階は code change を伴わない」は
-   2026-08-02 時点の過大な記述だった（PR #241 レビューで顕在化・撤回）。
+   ~~残るのは C5~~ **C5 も完了（2026-08-02・`--census`）**。
+   ~~C6（シャード実行機）が未着手~~ **C6 も完了（2026-08-02・`--make-shard-map` /
+   `--shard-id`）**——「以降の段階は code change を伴わない」は 2026-08-02 時点の
+   過大な記述だった（PR #241 レビューで顕在化・撤回）が、**今度こそ r6 前に必要な
+   code change はすべて完了した**。
 2. **ミックス生成**: `make_vremix_fixtures.py build` で 320 本
    （40 clip × 2 bed × 4 水準）+ manifest/fixtures/生成記録。runbook §5。
 3. **r4（r2-0）**: `P` 決定・並列不変性ゲート・`S`/`T_*` 校正・`env_digest` 確定・
    lockfile commit。**3 点スレッド固定を必ず適用**。
-4. **C6 を実装**（別ブリーフ）。r5 のシャード地図は §8.6 の実行契約を消費する前提の
-   成果物なので、C6 の landing を r5 の前提とする。
-5. **r5**: `m2e_r2_shard_map.yaml` を本測定開始前に commit。
-6. **r6**: 本測定（code change 厳禁）。`shard_id` 起動（C6）で回す。
-   `N_shards > R_max = 12` なら §8.8 で User 決裁へ。
+4. ~~**C6 を実装**（別ブリーフ）~~ **完了（2026-08-02）**。地図生成器
+   `--make-shard-map` と実行機 `--shard-id`/`--shard-map` は landing 済み
+   （§2 C6 節・§5 上記の r6 起動形レシピ参照）。
+5. **r5**: `m2e_r2_shard_map.yaml` を本測定開始前に commit（`--make-shard-map` で
+   r4 の `S`/`T_direct`/`T_stem` から生成する。上記 r6 起動形レシピの手順 1）。
+6. **r6**: 本測定（code change 厳禁）。`shard_id` 起動（C6・上記レシピの手順 2）で
+   回す。`N_shards > R_max = 12` なら §8.8 で User 決裁へ。
 7. **r7**: 破断曲線 + stem アーム 4 点。**昇格宣言をしない。M4 G2 は解錠しない。**
 
 報告規律（§11）: **1280 セルが揃うまで帯の判定を出さない。** 部分集合での平均 RPA・

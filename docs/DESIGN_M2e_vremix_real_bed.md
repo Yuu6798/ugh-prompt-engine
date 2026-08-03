@@ -1032,6 +1032,58 @@ resume しない**——素性の分からないセルを通さない。
 > (1) と (2) は「どこに置いたか」、(3) は「誰が計算したか」を問う。前者だけでは
 > コピーで抜けられる。
 
+**D-6. シャード実行機（C6・§8.6 の実行契約）は既存のセル測定・記録経路を「呼び出す」
+だけで、新しい書き込み経路を作らない。** 実装（`scripts/run_melody_accuracy.py`）は
+`generate_m2e_shard_map`（§8.5 の凍結擬似コードの逐語実装。地図 YAML に
+入力値・fixtures 4 本の sha256・`cell → shard_id` 全対応表・`N_shards`・生成時刻を
+記録し、同一入力からバイト一致で出る）と `execute_m2e_shard`（1 shard の実行機）に
+分かれる。5 点を記録する:
+
+- **セル測定は `_measure_or_resume_external_clip_row` の per-cell 呼び出しに一本化**
+  （`_shard_measure_and_record_cell`）。レコードパス・書き込みは
+  `_cell_store_record_path` / `svp_rpe.utils.atomic_io` をそのまま共有し、
+  `store_role` は常に `run`（D-5 の役割区分をそのまま踏襲）。これが resume 互換
+  AC（既存の「1 水準まるごと」run phase が shard 実行機の書いたセルを resume できる）
+  の根拠であり、セルレコード schema（`m2-cell-record/0.4`）へのフィールド追加は
+  ゼロ。
+- **動的キューは常に multiprocessing（spawn context）を経由する**（`P = 1` でも）。
+  §8.4 の `S`（プロセスプール起動〜モデルロード完了）という定義、および
+  「実行中セルが `B_session + 600s` を超えたら**実プロセスを `terminate()` して**
+  打ち切る」という契約の両方が、in-process 呼び出しでは実装できない（Python の
+  通常の関数呼び出しは安全に強制中断できない）ため。打ち切り時点で in-flight
+  だったセル（trigger したセル自身を含む）は「打ち切り」として shard 実行記録に
+  残し、セルレコードは書かない（`terminate()` が実プロセスを kill するため、
+  書き込み完了の保証がない——「セルレコードを書かず、未完として記録する」の
+  実装上の帰結）。
+- **開始許可式 `elapsed + cost(cell) <= B_session` の `elapsed` は親の単調クロック**
+  （`time.monotonic`）で測り、配布は §8.5 order を厳守する動的キュー（1 セルずつ）。
+  ある1セルが許可式を満たせず拒否されると、それ以降のセル（より安価でも）へは
+  進まない——bin-packing ではなく「配布順は §8.5 order に従う」の実装。
+- **ワーカーは env_digest を自分で再計算し、親の期待値と一致しなければそのセルを
+  開始しない**（`_shard_worker_measure_cell`）。不一致は shard 実行を即座に中断する
+  例外として扱う——ハング打ち切り（正常終了として記録）とは別の、環境不整合による
+  fail-closed 停止。スレッド 3 点固定は env 2 点をプロセスプール起動前に親側で検証し、
+  `torch.set_num_threads(1)` は各ワーカーの `initializer` 内で適用する（決定済み
+  設計判断 5 のとおり）。**モデル preload も同じ initializer 内で行う——E-50 参照
+  （2026-08-02 時点の初版実装ではここを「スレッド固定のみ」としていたが、その判断は
+  誤りとして撤回した）。**
+- **campaign ファイル**（`m2e-campaign/0.1`）はパスのみを持つ（各水準の external
+  manifest / external fixtures の所在）。地図の読み込み・実行開始前に、campaign が
+  指す fixtures を現在の committed 実体と再照合し（`_require_m2e_shard_map_matches_
+  registry`）、欠け・重複・余剰のいずれも fail-closed にする——セル台帳（fixtures が
+  決める 1280 セルの集合）は不可侵、シャード地図（どのセルをどの回に回すか）だけが
+  再計算可能という §8.5 の規律を実行時にも立証する。
+
+キュー/許可式/打ち切りの機構テストは picklable な top-level fake
+（`tests/_shard_queue_fakes.py`）を実 multiprocessing（spawn）へ注入して検証する
+——このモジュールは意図的に `run_melody_accuracy` を import しない。fake が
+`run_melody_accuracy` を import 済みのモジュール（本体・テストファイルとも）に
+居ると、spawn の子プロセスが pickle された callable の `__module__` を import し
+直すたびに同じ重い import 連鎖（本環境で実測 ≈24 秒/回）を再生し、テスト全体が
+実用的でなくなることを実測で確認した。resume 互換を確かめるテストは
+`_shard_measure_and_record_cell` を multiprocessing を経由せず直接呼ぶ（fake
+backend 統合テストは P=1 の in-process 経路で行うという Test Strategy どおり）。
+
 #### 8.9.5 実装ノート（2026-08-02・C5 水準横断 census 集計）
 
 §6.2 が「帯の判定は `gate_level` の run が §11 のセル census を満たしたときにのみ出る」と
@@ -1341,6 +1393,805 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
 
 **r4/r6 の運用**: 本測定は run・evaluate ともに
 `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 ... --pin-threads` で起動する（runbook §5 以降）。
+
+**E-46〜E-49（PR #242 Codex 第 1 巡・C6 シャード実行機のレビュー是正）。**
+
+- **E-46（P1）**: `outcome == "unavailable"` のセルはチェックポイントを書かないのに、
+  キュー機構は正常応答として `completed` に数え、未完リストにも載らなかった——次
+  shard が「先行 shard 未完了」で fail-closed になるまで矛盾が顕在化しない会計上の
+  穴だった。`execute_m2e_shard` は非 `measured` のセルを `cells_completed` から外し、
+  理由つきで `cells_unavailable` へ計上する（§8.6「未完として記録する」の会計を
+  「打ち切り」以外の未完種別にも揃える）。shard 全体は中断しない——セルは独立で、
+  許可式が既に壁時計を有界化している。
+- **E-47（P2）**: `--make-shard-map --bars <custom>` は CLI 上受理されるのに registry
+  構築は常にモジュール既定の `BARS_PATH` を読んでいた。`--bars` を registry 構築・
+  検証まで貫通させ、実効 bars の sha256 を地図へ刻む（`bars_sha256`）。
+- **E-49（P2）**: `_require_m2e_shard_map_matches_registry` はセル鍵の集合一致しか
+  見ておらず、鍵を保ったまま `shard_id`/`n_shards` だけを書き換えた地図（凍結
+  パッキングアルゴリズムと `R_max` 契約を丸ごとバイパスする改変）を通してしまった。
+  地図の記録した入力から `_assign_m2e_shard_ids` で割当を再計算し、全セルの
+  `shard_id` と `n_shards` の完全一致を要求する——**地図は科学ではなく
+  スケジューリングだが、改変検出は台帳と同格**という § 8.5 の規律をここでも守る。
+- **E-48（P2）**: 数時間かかりうるキュー完走後、shard 実行記録の構築・書き出し前に
+  `_require_unchanged_since_load()` を呼んでいなかった（run/census 経路は呼ぶ）。
+  同じ post-execution ガードを shard モードにも及ぼす。
+
+**E-50〜E-54（PR #242 Codex 第 2 巡・C6 シャード実行機のレビュー是正）。**
+
+- **E-50（P2・D-6 の判断撤回）**: 決定済み設計判断 5「initializer でモデルロード」
+  （§8.4 の `S` = プロセスプール起動〜モデルロード完了、という定義と一致させる）から
+  初版実装が逸脱していた（initializer はスレッド固定のみ行い、モデルは per-cell の
+  遅延ロードのままだった）。**その判断（D-6 の記載）を撤回する。** `_shard_pool_
+  initializer` で CREPE（`crepe.core.build_and_load_model` という既存の遅延ロード
+  singleton を実音声なしで直接呼ぶ）を eager load する。Demucs は
+  `demucs.api.Separator` の構築（＝重みロード）を initializer 内で行い `S` へ前倒し
+  するが、**per-call の `Separator` 再構築そのものを回避する配線（`src/svp_rpe/io/
+  source_separator.py` の変更を要する）は本ラウンドでは行わない**——`src/svp_rpe/**`
+  は Design Memo の Scope OUT であり、既存の `source_separator` 系テスト群が
+  「呼び出しごとに新しい `Separator` が構築される」契約に依存した fake を持つため、
+  変更すれば影響範囲が本ブリーフの検証対象を超える。preload は注入可能な callable
+  （既定 `_default_m2e_model_preload`）とし、テストは「initializer が preload を
+  呼ぶ」ことだけを記録用 fake で検証する（テスト環境に実モデルが無いため）。
+  preload の効果の正確な記載・in-process 保持への昇格是非は E-63 が扱う
+  （記載は是正済み・保持化は見送り）。
+- **E-51（P2）**: shard 実行記録の `--out` に no-clobber が無く、リトライ時に既存の
+  dated record を黙って上書きできた。地図生成と同じ流儀（明示 `--force` は作らない
+  ——dated record は per-run 命名が前提）で、高価なキュー開始**前**に fail-closed で
+  拒否する。
+- **E-52（P2）**: `campaign_sha256` の計算（生成器）と `_load_m2e_campaign` の parse
+  （生成器・実行機の双方）が別々の `read_bytes()` 呼び出しだった——呼び出しの間に
+  ファイル（シンボリックリンク先を含む）が差し替わると、地図が pin する digest と
+  実際に registry を供給した bytes が食い違いうる。`_load_m2e_campaign_with_sha256`
+  へ一本化し、単一の bytes スナップショットから digest と parse の両方を導出する。
+- **E-53（P2）**: E-49 の再計算検証は鍵引き dict 比較だったため、`map_doc["cells"]`
+  **内の並び順**は見ていなかった——shard_id を保ったまま同一 shard 内でレコードを
+  並べ替えた地図も通ってしまい、動的キューが改変された順序で配布・実行しうる。
+  再生成した正準順序（§8.5 order でソート済みの `registry_cells`）と
+  `map_doc["cells"]` の**並び順を含めた完全一致**を要求する。
+- **E-54（P2）**: `pool.terminate()` は worker の atomic `os.replace()` 成功と
+  `AsyncResult` の ready 化との間の窓で発火しうる——その場合セルレコードは既に
+  書き上がっているのに、単純な「in-flight は全部打ち切り」では「未完」と誤って
+  記録してしまう。打ち切り後、in-flight だった各セルを既存の digest 一致 resume
+  判定（`_cell_store_record_path` / `_cell_record_mismatches`）で照合し
+  （`_reconcile_truncated_m2e_cell`）、書き上がっているレコードは completed として
+  計上する（`run_m2e_shard_queue` 自身は `reconcile_hung_cell` フックとして受け取り、
+  セルレコードの形式を知らないままキュー機構だけを担う）。
+
+**E-55〜E-59（PR #242 Codex 第 3 巡・C6 シャード実行機のレビュー是正）。**
+
+- **E-55（P1）**: HANDOFF の起動レシピ `--out "$(mktemp ...)"` は 0 バイトの予約
+  ファイルを先に作るため、E-51 の no-clobber が非空・0 バイトを区別せず一律拒否し、
+  ドキュメント化された起動方法そのものが軒並み失敗していた。`--shard-id`・
+  `--make-shard-map` 双方の事前チェックを「非空の既存ファイルのみ拒否・0 バイトの
+  既存ファイルは mktemp の予約として上書き対象を許容」へ変更する。HANDOFF にも
+  この規約（mktemp の 0 バイト予約は上書き対象、非空の既存記録は拒否）を注記する。
+- **E-56（P2）**: census の E-25 と同じ流儀で、shard 実行記録も atomic write と同一の
+  encoded bytes から sha256 を導出し `shard record sha256: <hex>` を stdout へ印字する
+  （HANDOFF のレシピは stdout を tee するため、dated record にこの pin が残る）。
+- **E-57（P2）**: `_require_m2e_shard_map_matches_registry` は既に fixtures を読取・
+  hash 検証しているのに、`execute_m2e_shard` の task 構築ループが同じ fixtures
+  ファイルを再度開いていた（E-52 と同族の TOCTOU）。検証済みの `fixtures_by_level`
+  スナップショットを戻り値として実行段へ引き回し、再オープンを排除する。
+- **E-58（P2）**: E-53 の並び順完全一致検証は 5-tuple（bed_id/level/clip_id/arm/
+  repeat_index）が無傷であることは確認するが、`entry_id` 自体の改変は見ていなかった
+  ——`entry_id` だけを別セルの値に書き換えれば、5-tuple が正しくても別 clip の
+  manifest entry / チェックポイントを消費できてしまう。全セルについて
+  `entry_id == _m2e_entry_id(clip_id, bed_id, level)`（§6.2 の正準写像）の一致を
+  正準比較へ追加する。
+- **E-59（P2）**: 地図は `T_direct`/`T_stem` を校正したときの並列度 `P` を記録して
+  いなかったため、実行機は任意の `--workers`（既定 1）を無検査で受理でき、§8.4
+  「production と同じ `P` で回したときの単位コスト」という契約を実行時に破れた。
+  地図生成側は `--workers` を必須にして `inputs.workers` へ校正時の `P` を記録し、
+  実行側は `--workers` 省略時に地図の値を採用、明示指定時は地図の値との完全一致を
+  要求する（不一致は高価なキューへ入る前に fail-closed）。
+
+**E-60（PR #242 第4巡・campaign パスの ROOT 封じ込め）。**
+
+- **E-60**: campaign が宣言する `external_manifest`/`external_fixtures` は repo root
+  基準の相対パスという規約（決定済み設計判断 2）だったが、実装は解決するだけで
+  規約を検査していなかった——絶対パスや `..` 遡上、ROOT 外へ解決される symlink を
+  経由すれば任意のファイルを読ませられた。生成・実行の両経路が通る単一の campaign
+  loader（`_parse_m2e_campaign_bytes`）に二段検証を一元実装する: (1) 字句——絶対
+  パス・`..` 成分を拒否、(2) 解決後——`(ROOT / value).resolve()` が
+  `Path.is_relative_to(ROOT)` を満たすことを要求（symlink 経由の脱出も拒否）。
+
+**E-61〜E-65（PR #242 第4巡・続き）。**
+
+- **E-61（P2）**: post-execution ガードは E-48（first-party ソース閉包）しか
+  shard モードに配線されておらず、通常 run 経路が課す同梱ネイティブ・実装 hash の
+  束縛後差し替え検査（`_require_dist_native_unchanged_since_bind()` /
+  `_require_runtime_code_unchanged_since_bind()`）を欠いていた。キュー完走後にこの
+  2 検査を通し、失敗時は本 shard が新規に書いたセルレコード（resume は含まない）を
+  `_quarantine_cell_records` で隔離してから raise する（run 経路と同じ失敗時パターン）。
+- **E-62（P2）**: `session_budget > 0` だけでは `inf` を弾けず、`--session-budget inf`
+  は cap を無限大にして 1 shard の地図を通し、admission も打ち切りも無効化する。
+  生成・実行の両受け口が通る `_assign_m2e_shard_ids`（+ `generate_m2e_shard_map` の
+  早期チェック）に `math.isfinite(session_budget)` を追加した。
+- **E-63（見送り・境界宣言）**: Demucs `Separator` の per-call 再構築を worker 内で
+  in-process 保持化する提案は見送る。per-call 再構築コストは全 stem セルに一様で
+  あり、r2-0 の `T_stem` 実測にも同一コードパスで含まれるため（E-50 の preload が
+  一回性スパイク——重みダウンロード・OS ページキャッシュ/フレームワーク初期化——を
+  `S` へ前倒し済みであれば）、`S`/`T_*` の分離とシャード幅の正しさ（cap 計算）は
+  崩れない。保持化には `src/svp_rpe/io/source_separator.py` の per-call 構築契約の
+  変更を要し同ファイルは Scope OUT のため、r4 実測で再構築コストが `T_stem` の
+  有意割合と判明した場合に別ブリーフで保持化の seam を検討する。
+  `_default_m2e_model_preload` の docstring を、preload の効果が「in-process 保持」
+  ではなく「一回性スパイクの `S` への前倒し」であると正確な記載へ是正した
+  （コード挙動は無変更）。
+- **E-64（P2）**: `--shard-map`/`--campaign` は shard 専用フラグだが、`--shard-id` の
+  指定漏れ等でどちらの shard モードも起きていない場合、dispatch はこれらを黙って
+  無視して通常の run/evaluate/census へ入ってしまっていた。dispatch 前に、どちらの
+  shard モードも起きていないのにこれらが供給されていれば fail-closed で拒否する。
+- **E-65（P1）**: 打ち切り期限が各セルの dispatch 時刻基準（`cell_started_wall +
+  B_session + hang_grace_seconds`）だったため、`B_session` 終盤に配布されたセルは
+  そこからさらに満額の猶予を得てしまい、§8.6「1 回の実行の壁時計上限」を大きく
+  超過しうる（例: 7200s 目に配布されたセルが 14400s+ まで shard を生かし続ける）。
+  打ち切り期限を shard 開始時刻基準の絶対期限（`start + B_session +
+  hang_grace_seconds`・全 in-flight セル共通）へ是正した。許可式
+  （`elapsed + cost(cell) <= B_session`）が admitted セルの開始を `B_session` 以内に
+  既に制約しているため、各セルは最低 `hang_grace_seconds` 分の猶予を保証される。
+
+**E-66〜E-69（PR #242 第5巡・続き）。**
+
+- **E-66**: §8.5「未完セルについてのみ再適用」の契約が未実装だった——`--make-shard-map`
+  は毎回全セルを再パッキングし、部分完了後の再地図生成が完了セルも含めて
+  N_shards/R_max/cap を評価していた。`--make-shard-map` に任意の `--cell-store` を
+  追加: 指定すると `_require_prior_m2e_shards_complete` と同じ digest 一致基準
+  （`_m2e_completed_cell_keys`）で完了セルを判定し、パッキングから除外する（cap/
+  N_shards/R_max は残セルのみで評価）。除外セルの鍵と根拠（`cell_store` の
+  repo-relative パス）を `excluded_completed_cells` へ記録する。実行側
+  （`_require_m2e_shard_map_matches_registry`）は台帳から除外集合を引いた「残台帳」
+  で従来の完全一致検証を行い、加えて除外の真実性（宣言された除外セルが実際に
+  store で完了しているか）を同じ基準で再検証する（fail-closed）。`--cell-store`
+  未指定時は除外なし（後方互換）。
+- **E-67（Memo AC 不整合の是正）**: Design Memo は「地図に生成時刻を記録する」と
+  「同一入力 → バイト一致」を両方要求していたが、壁時計から読む生成時刻を bytes に
+  含めながらバイト一致を謳うのは自己矛盾する（起草バグ）。`generated_utc` を地図
+  bytes から外し、CLI が生成完了時に `generated at <ISO8601 UTC> / shard map
+  sha256: <hex>` を stdout へ印字する形へ改める（HANDOFF のレシピは tee するため
+  dated record に残る）。決定論テストは `_utc_now` の monkeypatch なしの素の 2 回
+  呼び出しでバイト一致を検証する形へ改めた。
+- **E-68**: `--startup-cost nan` は `startup_cost < 0` を素通りし cap が NaN になる
+  ——以降の全比較が NaN 相手には常に false になり、1 セル容量ゲートも `R_max`
+  ゲートも無検査で素通りする（`session_budget` に限らない同型穴）。生成器の float
+  入力全数（t_direct/t_stem/startup_cost/session_budget）へ `math.isfinite` + 符号
+  検査を単一のバリデータ（`_require_m2e_shard_map_finite_input`）へ集約し統一的に
+  敷く。共有の `_assign_m2e_shard_ids`（実行側の再計算経路）にも同じ 4 入力の
+  isfinite 検査を及ぼした。
+- **E-69**: readback の再計算検証（E-49）は shard_id/n_shards の完全一致を見るが、
+  改変された入力から整合的に再生成された地図が `R_max` を超えていても検出しな
+  かった——`generate_m2e_shard_map` はこの入力の組を拒否するはずであり、生成器を
+  バイパスした地図のはずである。`expected_n_shards > R_max` を readback 検証へ
+  追加した。
+
+**E-70〜E-72（PR #242 第6巡）。**
+
+- **E-70**: map モードの preflight（保護パス検査）が campaign を読み、
+  `generate_m2e_shard_map` が再度読んでいた（E-52 と同族の残り TOCTOU）。CLI は
+  `_load_m2e_campaign_with_sha256` で 1 回だけ読み、同一スナップショット + digest を
+  `generate_m2e_shard_map(campaign_snapshot=...)` 経由で生成側へ引き渡す。
+- **E-71（E-64 の完備化）**: E-64 のゲートは `--shard-map`/`--campaign` しか
+  拒否しておらず、地図生成専用フラグ（`--t-direct`/`--t-stem`/`--startup-cost`/
+  明示指定の `--session-budget`/`--force`）は無関係な `run` へ黙って入りえた。
+  同じゲートへこれら 5 フラグを追加した（`--session-budget` は明示指定を検出
+  できないため既定値との差分を代理指標にする——`--shard-id` 側の排他チェックと
+  同じ流儀）。
+- **E-72**: `_require_prior_m2e_shards_complete`（先行 shard 完了検証）と
+  `execute_m2e_shard` の task 構築ループが、同一 level の manifest を別々に
+  読んでいた。前者の戻り値を manifest スナップショットとして後者へ引き渡し
+  （E-57 の fixtures 引き回しと同じ形）、未読の level だけ新規に読む。
+
+**E-73〜E-77（PR #242 第7巡）。**
+
+- **E-73（P1・docs のみ）**: HANDOFF §5 の r6 レシピは shard を単純な for ループで
+  昇順実行していたが、1 回の実行が未完（unavailable/truncated/not_started のいずれか
+  非空）で終わっても素通りして次の shard_id へ進んでいた——§8.6「未完は次回の実行で
+  resume される」の「次回」は**同一 shard_id の再実行**を指すのに、レシピはそれを
+  実装していなかった。実行記録を検査し `cells_completed == cells_total` になるまで
+  同一 shard_id を until ループで再実行してから次へ進む形へ改めた。
+- **E-74（Memo 根拠の撤回）**: Design Memo は「`shard_id` の昇順強制が同一 shard の
+  並行実行を防ぐ」としていたが誤りだった——`_require_prior_m2e_shards_complete` は
+  `shard_id` **未満**の shard しか検査しないため、同じ `shard_id` への 2 並行実行は
+  どちらもこの検査を通過し、同じセル鍵を同時に測定して同じチェックポイントパスへ
+  atomic replace で衝突しうる。`cell_store` 配下に `shard_<id>.claim` を `O_EXCL` で
+  作る最小限の排他を導入した（内容は PID + ISO8601 の診断情報のみ）。正常終了・
+  例外経路のどちらでも try/finally で確実に解放する。既存 claim があれば fail-closed
+  で拒否する（並行実行は非サポート）。クラッシュ孤児の回復手順は HANDOFF に記載。
+- **E-75**: readback の再計算検証は `cap`/`n_shards` を再計算しても `cap_s` は
+  捨て、`inputs.margin`（凍結 0.85）・`n_cells` はそもそも比較していなかった——
+  cells/shard_id を無傷に保ったままこれら派生メタデータだけを改変しても検出でき
+  なかった。E-49/E-69 と同枠で、再計算した `cap`・凍結 `margin`・
+  `len(expected_registry_cells)` との完全一致を要求する。
+- **E-76（P1）**: `start` の捕捉が `run_m2e_shard_queue` 内部（登録簿再構築・先行
+  セル全数の digest 一致 hash・manifest 読取・pool 構築の**後**）にあったため、
+  これらの preflight の所要時間が admission 会計にも `B_session + 600s` の打ち切り
+  期限にも含まれていなかった——後続 shard ほど preflight が重くなるため、§8.6
+  「1 回の実行の壁時計上限」を preflight 分だけ超過しうる。`start` の捕捉を
+  `execute_m2e_shard` の入口（claim 取得の直前）へ移し、`run_m2e_shard_queue` へ
+  明示的に渡す（省略時は従来どおり内部で捕捉・後方互換）。
+- **E-77**: worker が例外を送出すると、`run_m2e_shard_queue` は `execute_m2e_shard`
+  の post-execution pin 再検証（E-48/E-61）を経由せずに直接例外を再送出しており、
+  既に完走していた worker の written_paths も失われていた——実行後に runtime bytes
+  が差し替わっていても、その shard の完走分セルは隔離されないまま resume 対象で
+  残りうる。`run_m2e_shard_queue` に `on_worker_error` フックを追加し（
+  `reconcile_hung_cell` と同じ「機構は意味論を知らない」設計）、例外の再送出**前**に
+  その時点の `completed` を渡して呼ぶ。`execute_m2e_shard` 側のフック実装は
+  成功経路と同じ 3 種の pin 再検証を通し、失敗すれば完走分の written_paths を隔離
+  する（フック自身は例外を握り潰し、常に worker の元例外が伝播する）。
+
+**E-78〜E-79（PR #242 第8巡）。**
+
+- **E-78**: `_require_m2e_shard_map_matches_registry` が地図検証時に読んだ bars と、
+  `execute_m2e_shard` が tolerance_cents/est_voiced_floor 導出・worker 供給のために
+  読む bars が別読取だった（TOCTOU）——検証後に bars が差し替わっても実行段は
+  気付けない。地図検証が `(bars, bars_sha256)` を戻り値として返し、実行段はそれを
+  そのまま引き回す形へ改めた（E-57/E-72 と同族）。
+- **E-79**: `excluded_completed_cells` の除外真実性検証が、地図が記録した
+  `cell_store_relative` からのみ store を解決しており、`execute_m2e_shard` に実際に
+  渡された `--cell-store` との一致を検証していなかった——地図の除外宣言を、それとは
+  異なる store への実行に束縛して信用してしまいうる。`_require_m2e_shard_map_
+  matches_registry` に実行時 `cell_store` を渡し、地図の宣言 store との一致を要求
+  した上で、真実性 digest 検査もこの実行 store に対して行う形へ改めた。
+
+**E-86〜E-87（PR #242 第11巡）。**
+
+- **E-86**: 実行後検査 3 種のうち first-party（`_require_unchanged_since_load`）
+  だけが隔離保護 try の**手前**で raise していたため、その失敗時は dist native /
+  runtime code とは非対称に shard_written_paths が通常 store に残ってしまって
+  いた。3 種すべてを同じ「失敗時 quarantine → raise」try/except へ統合した。
+- **E-87（P1）**: E-78 の WIP 段階で `_require_m2e_shard_map_matches_registry` の
+  戻り値対 `(fixtures_by_level, bars_snapshot)` を未展開のまま
+  `validated_fixtures_by_level` へ代入しており、非空 shard の task 構築が
+  `TypeError` で全滅する穴があった。両値を展開する形へ修正し、非空 shard を
+  実際に task 構築〜キュー投入〜完了まで通す統合テストを追加した（既存テストが
+  この破綻を検出できなかったため）。
+
+**E-80〜E-81（PR #242 第9巡）。**
+
+- **E-80**: 同一ポーリングで複数の `AsyncResult` が同時に ready なとき、
+  以前は最初の例外で ready_indices の for ループを即座に break しており、
+  その後ろに並んでいた既に ready だった成功セルの結果が `completed` へ
+  積まれずに失われていた——`on_worker_error`（E-77）の隔離ネットにも載らない
+  まま published レコードが会計から漏れうる穴だった。ready バッチを最後まで
+  drain してから中断し、break 時点で `in_flight` に残っていた（ready では
+  なかった）セルも `reconcile_hung_cell`（E-54 と同じ digest 一致照合）で
+  publish 済みかを確認してから `completed` へ加える形へ改めた。
+- **E-81**: `--make-shard-map --out` の保護パス集合に `--cell-store` 配下
+  （root + 子孫）が入っていなかった——`--shard-id` 側には既にある同種保護
+  （E-51 系）が地図生成側には抜けていた。同じ判定を `--make-shard-map` 分岐
+  にも追加した。
+
+**E-82〜E-85（PR #242 第10巡）。**
+
+- **E-82**: `_reconcile_truncated_m2e_cell`（E-54）が、打ち切り時点で見つけた
+  digest 一致レコードを無条件に「この起動が書いた」として `resumed: False` /
+  `written_paths` へ計上していた——dispatch **前**から既に有効だったレコード
+  （前回起動の resume 対象）も同じ扱いになり、後続の pin 失敗時にこの起動と
+  無関係な既存レコードまで隔離してしまいうる。dispatch 前にセルごとの有効
+  レコード存在をスナップショットし（`_pre_dispatch_had_valid_record`）、
+  reconcile ではこれに照らして resumed / written_paths を正しく区別する形へ
+  改めた。
+- **E-83**: `int(map_doc["inputs"]["workers"])` は非 bool の正整数以外
+  （`1.5` は切り捨てて 1 に、`true` は 1 に）を黙って正常値として受理して
+  しまっていた——地図の workers は §8.4 のコスト契約の前提（校正時の P）
+  なので、生成器 `generate_m2e_shard_map` と同じ形状検証（非 bool・正整数）を
+  読取側にも敷いた。
+- **E-84**: `started_utc`（shard 実行記録の provenance）の捕捉が、`start`
+  （単調クロック・E-76 で入口へ移した）より後（claim 取得・地図検証・
+  manifest 読取後、`run_m2e_shard_queue` 呼び出し直前）にあり、`start`/
+  `elapsed_seconds` が指す起点と自己矛盾していた。`started_utc` の捕捉も
+  `start` と同時に本関数入口へ移した。
+- **E-85**: `--shard-id --out` の no-clobber 検査（0 バイト予約は許容）通過〜
+  公開（`_atomic_write_text`）までの窓が無防備だった——`execute_m2e_shard` は
+  数時間かかりうるため、この窓で別起動が同じ 0 バイト予約 / 不存在 `--out` を
+  狙って同じ検査を通過しうる。検査直後に起動固有 claim（shard_id + PID +
+  ISO8601）を `--out` へ atomic write し（以後の別起動は既存 no-clobber で
+  弾かれる）、公開直前に現在の内容が自分の claim のままであることを確認して
+  から置換する（不一致なら実行記録を一時パスへ退避してから fail-closed）。
+
+**E-88〜E-90（PR #242 第12巡）。**
+
+- **E-88（docs のみ）**: E-73 の until ループは、`tee` 経由の実行機自体の exit
+  status を検査しておらず、失敗（claim 衝突・pin 失敗・不正地図等）を無限に
+  リトライしうる恒久失敗ループの穴があった。`set -o pipefail`（既に宣言済み）
+  の下で実行機自体の exit status を検査し、非ゼロなら即座にレシピを終了する
+  （リトライは「exit 0 かつ未完セルが残っている」場合のみ）よう HANDOFF を
+  書き換えた。
+- **E-89**: `generate_m2e_shard_map` の `--cell-store` 除外スキャン
+  （`_m2e_completed_cell_keys`）が bars を独自に再読取していた——registry 構築
+  （`_m2e_full_cell_registry`）が既に読んだのと別の読取（TOCTOU）。E-78 と
+  同じ形で、本関数入口で一度だけ読んだ `(bars, bars_sha256)` を両方へ渡す形へ
+  改めた（生成側の TOCTOU 族完備化）。
+- **E-90**: `--shard-id` の保護パス検査は `--out` が `--cell-store` 配下に
+  あることは拒否していた（E-51 系）が、逆方向——解決済み保護入力（campaign が
+  指す manifest/fixtures・shard-map・bars）が `--cell-store` の root と同一
+  または配下にあるケースは未検査だった（公開されたセルチェックポイントを
+  入力として消費しうる）。同じ判定を逆方向にも追加した。
+
+**E-91（PR #242 第13巡）。**
+
+- **E-91**: `_assign_m2e_shard_ids`（生成・readback の共有経路）は E-68 の
+  isfinite 検査は敷いていたが、符号制約（T_direct>0 / T_stem>0 / B_session>0 /
+  S>=0）は生成器 `generate_m2e_shard_map` の入口検査にしか無かった——改変された
+  地図が負の `t_direct_s` 等を持ち込んでも、isfinite さえ満たせば readback を
+  素通りしえた。単一のバリデータ（`_require_m2e_shard_map_finite_input`）へ
+  集約し、生成・読取の両方に同じ入力域制約を適用する形へ改めた。
+
+**E-92〜E-93（PR #242 第14巡）。**
+
+- **E-92**: `_reconcile_truncated_m2e_cell`（E-82）が pre-existing（resumed）な
+  セルの `measured` を無条件 True のままにしており、通常の worker 経路
+  （`entry_id in cells_resumed`/`entry_id in cells_measured` は互いに排他）と
+  異なり、同一セルが `cells_resumed` と `cells_measured` の両方に二重計上
+  されていた。pre-existing の場合は `measured: False` とし、resumed のみに
+  分類する形へ改めた。
+- **E-93（P1）**: `async_result.get()` 専用の内側 try/except の**外**——admission
+  判定・`time.sleep`・打ち切り期限チェックの `clock()` 呼び出し等——で
+  `KeyboardInterrupt`/`SystemExit` 等の `BaseException` が逸出すると、
+  `aborted_exception`/`terminated_for_hang` のどちらも設定されないまま finally
+  が `pool.close()`（in-flight の自然完了待ち）へ落ち、ハング worker があれば
+  `pool.join()` が無期限にブロックし、さらに in_flight の drain/reconcile・
+  `on_worker_error` フックのどちらも通らず、公開済みかもしれないレコードが
+  実行後検査を迂回していた。ループ本体全体を囲む外側 try/except を追加し、
+  親側で逸出したあらゆる `BaseException` を abort として扱い、必ず
+  `pool.terminate()` → drain/reconcile → フック呼び出しの経路へ通してから
+  元例外を再送出する形へ改めた。
+
+**E-94〜E-97（PR #242 第15巡）。**
+
+- **E-94**: E-85 の `--out` 予約は `os.replace`（atomic だが後勝ち上書き可能）
+  だけが所有権の根拠で、2 起動がほぼ同時に到達すると検出は公開直前のみ
+  （事後）だった。サイドカー `<out>.claim` を `O_CREAT|O_EXCL` で作る真の排他
+  プリミティブへ切り替え、所有権の根拠を一本化した（`--out` 本体への token
+  書き込みは診断用として維持）。
+- **E-95**: 除外真実性の検証が、生成時の除外判定が読んだ manifest と実行時の
+  再スキャンが読んだ manifest の同一性を pin していなかった（個々のセルの
+  digest 一致だけでは manifest 全体の世代差し替えを検出できない）。生成時
+  スキャンで読んだ per-level manifest sha256 を `excluded_completed_cells.
+  manifest_sha256_by_level` へ記録し、readback の再スキャンと一致することを
+  fail-closed で要求する形へ改めた。
+- **E-96**: `execute_m2e_shard` が失敗するあらゆる経路（shard claim 衝突・pin
+  失敗・不正地図等）で、`--out` に書いた claim token が残ったままになって
+  いた——以後のどの起動も no-clobber で永久に弾かれ、`--out` パスが使用不能に
+  なる。失敗時は `--out` を予約前の状態（mktemp 予約由来なら 0 バイトへ・不存在
+  由来なら削除）へ原状復帰し、E-94 のサイドカーも解放する try/finally を敷いた。
+- **E-97**: `int(map_doc["n_shards"])` は非 bool の整数以外（`1.5`・`true`）を
+  黙って受理してしまう——E-83（workers）と同型の穴。単一ヘルパ
+  （`_require_m2e_shard_map_integer_field`）へ集約し、readback・execute の
+  両方に同じ無強制型検査を敷いた。
+
+**E-98（PR #242 第16巡）。**
+
+- **E-98**: `--m2e-bars` は両 shard モードとも一切読まない（tolerance_cents 等
+  の共有スカラーは `--bars` 側から取る設計）が、E-64/E-71 ゲートの未使用引数
+  列挙から漏れていた。`_ARGPARSE_UNSET` センチネル化し、両モードで明示指定を
+  拒否する形へ改めた。
+
+**E-99〜E-101（PR #242 第17巡）。**
+
+- **E-99**: `excluded_completed_cells.cells` の 5-tuple 重複が set 構築時に
+  黙って畳まれ、検出されなかった（台帳は不可侵の原則に反する）。重複を
+  検出して fail-closed で拒否する形へ改めた。
+- **E-100**: `--session-budget` は既定値からの差分で「明示指定」を近似して
+  いたため、既定値と**同値**の明示指定（`--session-budget 7200`）を「未指定」
+  と取り違えて素通りしていた。他のセンチネル済みフラグと同じ
+  `_ARGPARSE_UNSET` 方式へ統一した。
+- **E-101**: 地図のスケジューリング入力（`t_direct_s` 等）を `float()` 強制の
+  前に型検査していなかった——文字列やbool が黙って強制変換に成功してしまう
+  （E-83/E-97 と同型の穴）。単一ヘルパ（`_require_m2e_shard_map_numeric_field`）
+  へ集約し、readback・execute の両方に無強制型検査を敷いた。
+
+**E-102〜E-103（PR #242 第18巡）。**
+
+- **E-102**: `int(map_doc["repeats_min"])` も E-83/E-97 と同型の穴があった。
+  同じ整数ヘルパへ統合した。
+- **E-103（P1）**: admission 不成立でキューが空のまま退出する分岐が、退出の
+  **前**に絶対期限（`session_budget + hang_grace_seconds`）を検査していな
+  かった——`terminated_for_hang` が立たないまま finally が `pool.close()`
+  （in-flight の自然完了待ち）へ落ち、`initializer` 自体がハングしている
+  worker（一度もタスクを dispatch していなくても）がいれば `pool.join()` が
+  無期限にブロックしうる。退出直前にも同じ絶対期限検査を敷き、超過時は
+  `terminated_for_hang` を立てて E-93 と同じ abort 後始末（terminate・
+  drain/reconcile）の経路を通す形へ改めた。
+
+**E-104〜E-106（PR #242 第19巡）。**
+
+- **E-104**: 除外真実性の再スキャン（`_m2e_completed_cell_keys`）が読んだ
+  manifest のパース済み内容が呼び出し元へ渡らず、`execute_m2e_shard` の先行
+  shard 検査・task 構築が同じ level の manifest を別読み（TOCTOU）していた
+  （E-72/E-95 の抜け）。パース済みスナップショットも戻り値へ含め、
+  `_require_prior_m2e_shards_complete` の新設 `manifest_by_level` シードとして
+  引き回す形へ改めた。
+- **E-105**: E-101 で追加した無強制型検査バリデータが、実際には readback・
+  execute の 4 箇所の `float()` 変換前に配線されていなかった疑いの指摘
+  （実際には同一 PR 内の後続実装で配線済みだったが、経路経由の回帰テストが
+  無く「バリデータ単体テストのみ」で終わっていた）。経路経由（
+  `_require_m2e_shard_map_matches_registry`/`execute_m2e_shard` を実際に
+  呼ぶ）の回帰テストへ差し替えた。
+- **E-106**: E-96 のロールバックは `execute_m2e_shard` の失敗経路のみを対象に
+  しており、公開段（token 確認〜`_atomic_write_text`）自体の失敗（`os.replace`
+  失敗等）は無防備だった。所有権確認（token 一致）を通過した後の失敗にも
+  同じロールバックを適用する範囲拡張を行った。
+
+**E-107〜E-110（PR #242 第20巡）。**
+
+- **E-107（P1）**: E-103 は idle 退出（in_flight ゼロ）の直前に絶対期限を検査し
+  超過時のみ terminate していたが、期限**内**でも一度もタスクを dispatch して
+  いない worker の `initializer` がハングしていれば `pool.close()`+`join()` は
+  無期限にブロックしうる。idle 退出は期限の残量に関わらず常に terminate で
+  畳む形へ改めた（E-103 の期限検査自体は維持）。
+- **E-108**: セルレコードの `repeat_index` が bool（`false`）だと、Python の
+  `False == 0` により `repeat_index: 0` のセルと鍵タプルが黙って衝突し、
+  台帳比較（set/dict 演算）を素通りしうる——E-83/E-97/E-101/E-102 と同型の穴。
+  鍵構築・登録簿比較の前に非 bool 整数として検証する形へ改めた。
+- **E-109**: サイドカー予約（`os.open(..., O_CREAT|O_EXCL)`）が `--out` の親
+  ディレクトリを自動作成していなかった——`_atomic_write_text` の挙動と食い
+  違い、未存在のネストディレクトリ配下の `--out` で `FileNotFoundError` が
+  予約検査を経ずに漏れていた。同じ規約へ揃えた。
+- **E-110**: `--shard-id` の未使用引数拒否リストに `--force`（`--make-shard-map`
+  専用の no-clobber 上書き許可フラグ）が抜けていた。追加した。
+
+**E-111〜E-112（PR #242 第21巡）。**
+
+- **E-111**: `--make-shard-map --out` は E-94/E-96/E-106 と同じ排他予約の対象
+  外だった——地図生成も長時間かかりうるため、no-clobber 検査通過〜公開の窓で
+  2 起動が同じ予約状態を狙って通過しうる。予約・原状復帰のヘルパ
+  （`_acquire_m2e_out_reservation`/`_rollback_m2e_out_reservation`）を
+  shard-run 側と共通化し、`--make-shard-map` 側にも適用した。原状復帰は
+  「存在したか」の bool ではなく元の bytes そのもので行う形に設計変更した
+  （`--force` は非空の既存レコードも上書き対象にできるため、bool ベースの
+  0 バイト truncate では `--force` が上書きしようとした既存の中身を失敗時に
+  破壊してしまう——`--shard-id` 側は常に 0 バイト予約のみが対象なので実害は
+  無いが、両ブランチで同じ関数を共有するため両方とも bytes ベースへ揃えた）。
+- **E-112**: セルの `shard_id` も E-108 の `repeat_index` と同型の穴があった
+  （`False == 0` により `shard_id: false` が `shard_id: 0` と黙って比較上
+  一致しうる）。同じ無強制整数ヘルパで格納前に検証する形へ改めた。
+
+**E-113〜E-115（PR #242 第22巡）。**
+
+- **E-113（P1）**: HANDOFF の r6 リトライレシピは `cells_completed ==
+  cells_total` のみで再実行可否を判定しており、`cells_unavailable`
+  （CREPE/Demucs/重み不在等、環境起因で再実行しても消えない未完）が残っていても
+  盲目的に同一 shard を再実行し続けていた。リトライ継続を「未完が
+  truncated / not_started のみ」の場合に限定し、`cells_unavailable` が非空なら
+  即座にレシピを終了してオペレータ対応へ回す形へ改めた（失敗の永久リトライを
+  禁じた E-88 の精神を `cells_unavailable` にも及ぼす。docs のみ）。
+- **E-114**: `--force` 時の原状復帰（`_rollback_m2e_out_reservation`）が
+  `original_bytes.decode("utf-8")` を経由していたため、非 UTF-8 な既存出力を
+  `--force` で上書き対象にしていた場合、復元時の `UnicodeDecodeError` が元の
+  生成失敗エラーを隠してしまう経路があった。`utils/atomic_io.atomic_write_bytes`
+  を直接使い、decode を経由せず元の bytes をそのまま atomic に書き戻す形へ
+  改めた（回帰テスト付き）。
+- **E-115**: `--make-shard-map --cell-store` で台帳の残セルが 0 件（全セル
+  完了済み）になる場合でも、`n_shards=1・n_cells=0` の空地図を黙って生成
+  していた——r6 は次フェーズへ進む段階であり地図という成果物自体が不要
+  なのに、意味のない空地図が commit 対象として積み上がりうる。残セル 0 件を
+  fail-closed の明示エラーで拒否し、地図を生成しない形へ改めた（HANDOFF
+  レシピにも分岐注記。回帰テスト付き）。
+- **E-116**: `n_cells` の readback 検証だけが `int(...)` 強制のまま残っていた
+  （`workers`/`n_shards`/`repeats_min`/`repeat_index`/`shard_id` は E-83/E-97/
+  E-101/E-102/E-108/E-112 で既に無強制ヘルパへ移行済み）。C6 セクション全体を
+  grep で掃討し、`n_cells` に加え `cap_s`/`margin`（readback の派生メタデータ
+  比較）と `t_direct_s`/`t_stem_s`（`_m2e_shard_cells_for` の消費点）に残っていた
+  同型の `int()`/`float()` 無検査強制も同じ無強制ヘルパへ統一した。地図由来の
+  数値フィールドを扱う型検証ファミリーはこれで終端する（回帰テスト付き）。
+
+**E-117〜E-118（PR #242 第24巡）。**
+
+- **E-117**: `--shard-id`/`--make-shard-map` の `--out` 公開経路で、予約取得・
+  token 検証・ロールバックは入口で resolve 済みの実体パスを基準にしていたが、
+  claim・最終 payload の `_atomic_write_text` だけが未解決の `args.out`
+  （symlink そのもの）を使っていた——`--out` の最終要素が symlink だと
+  `os.replace` は symlink 自体を置換してしまい（実体へは書かない）、予約が
+  守っていた実体とは別の場所へ中身が書かれる／公開直前の token 検証が実体側の
+  空のままの内容と食い違って偽の競合エラーを出す経路があった。入口で 1 回だけ
+  resolve したパスを両モードの予約・claim・公開・token 検証・ロールバックの
+  全段で一貫使用する形へ改めた（回帰テスト付き）。
+- **E-118**: HANDOFF r6 レシピの地図生成コマンド（`--make-shard-map`）だけ、
+  census/shard 実行記録と同じ dated log tee を欠いていた——地図は生成時刻を
+  bytes に含めない設計（E-67）のため、生成時刻と地図 sha256 は stdout にしか
+  出ず、tee しないと再現できない。census/shard 実行記録と同じ流儀の tee を
+  追加し、地図とこの stdout log を対で commit する旨を注記した（docs のみ）。
+
+**E-119〜E-120（PR #242 第25巡）。**
+
+- **E-119**: `--force` の既存出力スナップショット取得（`out_resolved.read_bytes()`）
+  が `except OSError` で `PermissionError` 等も「存在しない」と黙って扱っていた
+  ——`--force` はその後 claim で既存ファイルを置換でき、生成/公開が失敗した際の
+  ロールバックは「復元すべき中身」を知らないまま unlink してしまう（原本を失う）。
+  `FileNotFoundError` のみを「未存在」として受理し、他の読取エラーは claim 取得
+  （＝原本への最初の書き込み）より前に fail-closed で中断する形へ改めた
+  （`--shard-id` 側の同型サイトも同時に是正。回帰テスト付き）。
+- **E-120**: HANDOFF r6 レシピが `set -o pipefail` のみで `set -e` を欠いていた
+  ため、地図生成が非ゼロで終了しても（例: `N_shards > R_max`）シェルは停止せず、
+  古い/存在しない地図のまま手順 2 の until ループへ進みうる。`set -e -o pipefail`
+  へ改め、until ループ内の `STATUS`/`CHECK_STATUS` 明示判定（E-88/E-113）は
+  `cmd || VAR=$?` へ書き換えて errexit と両立させた（`cmd; VAR=$?` の素朴な形は
+  `cmd` の非ゼロで捕捉前にシェルごと落ちる。docs のみ）。
+
+**E-121（PR #242 第26巡）。**
+
+- **E-121**: 直列化（`--shard-id` の `json.dumps`／`--make-shard-map` の
+  `yaml.safe_dump`）とその直後の token 検証が、実行/生成完了後の
+  BaseException ロールバック範囲（E-96/E-106）の**外**にあった——直列化自体が
+  失敗すると `--out` に自分の claim トークンだけが残ったままロールバックされず
+  （サイドカーは `finally` で解放されるため、次回起動は壊れた `--out` を
+  非空の既存レコードとして掴む）。直列化を含む「実行/生成完了後〜公開完了まで」
+  の残り全段を同じロールバック範囲に入れ、失敗時は実行記録/地図
+  （`_m2e_best_effort_spill_payload`: 型を緩めた `json.dumps(default=str)` →
+  それも失敗すれば `repr()`）を spill してから `--out` を原状復帰する形へ改めた
+  （「別起動が claim を差し替えていた」分岐は既存どおり spill 済み・ロールバック
+  対象外のまま維持。回帰テスト付き）。
+
+**E-122〜E-123（PR #242 第27巡）。**
+
+- **E-122**: `--force` が非空の既存レコードを上書き対象にする場合でも、予約
+  直後に claim token を原本へ書き込んでいた——生成中に SIGKILL・電源断等で
+  プロセスが不意に落ちると、ロールバックの拠り所（`out_original_bytes`）は
+  メモリ上にしか無く、原本自体も token で上書きされたまま永久に失われる経路が
+  あった。所有権の唯一の真の根拠は既にサイドカー（`<out>.claim`・O_CREAT|
+  O_EXCL・E-94）なので、非空原本ケースは原本に一切書き込まず、公開直前の token
+  検証もサイドカー自身の内容確認に置き換え、最終 atomic 置換の 1 回だけを原本へ
+  の唯一の書き込みとした（absent/0 バイト予約ケースは失うものが無いため従来の
+  token 書き込み・読み戻し検証を維持。回帰テスト付き）。
+- **E-123**: `--cell-store` 指定時の地図生成（除外真実性スキャン）・shard 実行
+  （先行 shard 検査・task 構築）はどちらも campaign の manifest を実際に読み、
+  参照する audio/annotation の実ファイルを開くが、preflight の保護パス集合は
+  manifest の**ファイルパス**自体しか含んでおらず、manifest が**指す**個々の
+  実体パスは含んでいなかった——`--out` がそのいずれかと同じパスを指すと、地図/
+  実行記録の書き出しが実測入力そのものを上書きしうる。`_m2e_manifest_
+  referenced_paths` で全水準の manifest を読み、参照先を保護集合へ展開して
+  加えた（`--make-shard-map` は `--cell-store` 指定時のみ・`--shard-id` は常時。
+  回帰テスト付き）。
+
+**E-124〜E-125（PR #242 第28巡）。**
+
+- **E-124**: `_acquire_m2e_out_reservation()` はサイドカー（`O_CREAT|O_EXCL`）
+  作成成功後の `os.fdopen`/`write` 区間を `except Exception` で覆っていた——
+  `KeyboardInterrupt`/`SystemExit`/`GeneratorExit` は `Exception` のサブクラス
+  ではないため、書き込み中にこれらが飛ぶとサイドカーは削除されずに残る
+  （呼び出し元の `finally` は本関数が正常 return できた場合にしか届かない）。
+  以後の全起動が「他の起動が予約を保持している」という誤った案内で永久に
+  ブロックされ、手動削除が必須になる経路があった。`except Exception` を
+  `except BaseException` へ改め、後始末を関数内で完結させた（回帰テスト付き）。
+- **E-125**: E-123 の preflight（`--cell-store` 指定時の manifest 参照パス保護）
+  が読んだ manifest スナップショットを、`_m2e_manifest_referenced_paths` の
+  戻り値拡張（`manifest_by_level`/`manifest_sha256_by_level` を追加で返す）
+  経由で `generate_m2e_shard_map` → `_m2e_completed_cell_keys`（除外真実性
+  スキャン）へ引き回し、生成段での manifest 再オープンを排除した（E-72/E-104
+  と同族の TOCTOU 完備化——記録される manifest digest はこの単一スナップ
+  ショット由来のまま一貫する。`--shard-id` 側は独自の `manifest_by_level`
+  引き回し機構を既に持つため対象外。回帰テスト付き）。
+
+**E-126〜E-128（PR #242 第29巡）。**
+
+- **E-126**: E-125 の shard 側対応。`--shard-id` の保護入力検査（E-123）が
+  読んだ manifest スナップショットを破棄せず、`execute_m2e_shard()` の新規
+  引数 `preflight_manifest_by_level` として渡す——先行 shard 検証（E-104 の
+  除外真実性再スキャン）が既に読んだ水準を最優先、次点でこの preflight
+  スナップショットを使い、どちらにも無い水準だけ新規に読む優先順位とした。
+  manifest の読取が preflight の 1 回に統一される（回帰テスト付き）。
+- **E-127**（docs のみ）: HANDOFF r6 until ループの実行記録検査スニペットは
+  JSON パース失敗・必須キー欠損を素通しし、Python の素の未捕捉例外が既定の
+  exit 1 を返すため、意図的な「truncated/not_started のみ残存につき再実行」
+  （同じく exit 1）と区別が付かなかった——壊れた実行記録を検証済みの未完と
+  誤認し、cells_unavailable（E-113）と同型の「リトライで直らない失敗」を
+  盲目的に再実行し続ける経路があった。パース・検証を明示的に try/except で
+  捕捉し、fatal 用の exit 3 へ分離。シェル側は 0（完了）/1（検証済み未完）/
+  2（cells_unavailable 非空）以外のコードすべてを fatal とみなして即座に
+  終了する規約へ改めた。
+- **E-128**: shard claim（`shard_<id>.claim`）取得ヘルパ
+  `_acquire_m2e_shard_claim` も E-124 と同型の穴（`os.fdopen`/`write` 区間の
+  `except Exception`）を持っていた——`except BaseException` へ揃えた。
+  併せて `O_CREAT|O_EXCL` によるファイル取得サイトを grep で全数列挙し
+  （`_acquire_m2e_shard_claim`/`_acquire_m2e_out_reservation` の 2 箇所のみと
+  確認）、同型の穴が他に残っていないことを確認した——このファミリーを終端
+  する（回帰テスト付き）。
+
+**E-129〜E-130（PR #242 第30巡）。**
+
+- **E-129**: E-122 は「公開スコープ（E-121）の except に来た＝
+  `_atomic_write_text(out_resolved, payload)` が失敗した＝原本は無傷」と
+  仮定し、非空原本（`--force`）ケースのロールバックを省略していたが誤り
+  だった——`KeyboardInterrupt`/`SystemExit` は `os.replace` が実際には成功
+  した**直後**の任意のバイトコード境界でも配送されうるため、この except に
+  来たことは置換の失敗を意味しない。この場合、新 payload が恒久的に居座った
+  まま fail-closed 終了し、終了状態（失敗）と成果物状態（置換成功）が食い
+  違って原本が永久に失われていた。新 payload は直上の spill で既に保全
+  されるため情報は失わずに、所有権不一致（`mismatch_already_handled`）が
+  立証されているケースを除いて原本を無条件で atomic 復元する形へ改めた
+  （`_rollback_m2e_out_reservation` は書いていなければ同内容の書き戻しに
+  なるだけで安全。shard-run 側は非空原本ケース自体が存在しないため元々
+  無条件ロールバックで問題なし——確認のみで変更なし。回帰テスト付き）。
+- **E-130**（docs のみ）: HANDOFF r6 レシピが `$T_DIRECT`/`$T_STEM`/`$S`/`$P`
+  を使用しながら、これらを定義する明示ステップを欠いていた——`set -e` だけ
+  では未定義変数の空文字列展開を検出できず、黙って壊れた引数を渡しうる。
+  地図生成コマンドの前に、r4（r2-0 校正）の実測値を代入する明示ステップと
+  `:?` による空検証を追加した（セッション毎に測り直す・前セッション値の
+  持ち越し禁止を注記）。
+
+**E-131〜E-132（PR #242 第31巡）。**
+
+- **E-131**: `run_m2e_shard_queue` は worker がセルレコードを atomic 公開した
+  **直後**（return 前）に例外を上げるケースを扱っていなかった——このセルは
+  `async_result.get()` の例外処理より前に `in_flight` から pop 済みのため、
+  E-80 の abort 照合（`in_flight.items()` を舐める経路）の対象外になり、
+  `on_worker_error` にも公開済みレコードの written_path が渡らない——pin
+  ドリフト時の quarantine を逃れてしまう穴だった。worker 例外の処理時に、
+  E-54/E-82 と同じ `reconcile_hung_cell`（digest 一致 resume 検査）でそのセルを
+  照合し、公開済みなら written_paths（quarantine 対象）へ計上できるよう
+  `completed` へ足してから例外処理を続ける形へ改めた（pre-existing 除外規則は
+  `reconcile_hung_cell` 側に既にあるため変更なし。回帰テスト付き）。
+- **E-132**（P1・docs のみ）: E-130 が追加した `T_DIRECT=<r4 実測>` 形式の
+  プレースホルダ代入行は、`<`/`>` が bash のリダイレクト演算子であるため、
+  レシピをそのまま bash へコピーすると構文エラーになる（実測確認済み）。
+  4 代入行を削除し、「実行前に 4 変数を export しておくこと」を要求する
+  コメント + 既存の `:?` 検証のみへ改めた。bash へのコピーで手順全体が構文
+  エラーなく走ること（`bash -n` で確認）、変数を export した場合は検証を
+  通過すること、未定義のままだと `:?` が即座に停止することを実測確認した。
+
+**E-133（PR #242 第32巡）。**
+
+- **E-133**: `--shard-id` で除外つき地図を実行する際の除外真実性再スキャン
+  （E-104 の `prior_manifest_by_level` を返す経路）が manifest を再オープン
+  しており、E-126 の優先順位（rescan > preflight）によりその再スキャン結果が
+  task 構築の消費実体になっていた——preflight の保護検査（E-123）が見ていない
+  スナップショットが消費される乖離が残っていた。`_require_m2e_shard_map_
+  matches_registry`/`execute_m2e_shard` に `manifest_snapshot_by_level`/
+  `manifest_sha256_snapshot_by_level`（`preflight_manifest_by_level`/
+  `preflight_manifest_sha256_by_level`）を追加し、除外真実性再スキャン
+  （`_m2e_completed_cell_keys`）へ preflight のスナップショットを種付けする
+  形へ改めた。種付けは preflight が読んだ全水準ぶんを持ちうるため、
+  `_m2e_completed_cell_keys` の戻り値（`manifest_sha256_by_level`/
+  `manifest_by_level`）を常に `cells` に実際に登場した水準だけへ絞り込む
+  よう修正し、E-95（生成時に除外セルが実際に属する水準だけへ絞った記録との
+  照合）が種付けの有無だけで誤検出を起こさないようにした。これにより
+  `--shard-id` 経路の manifest 読取は preflight の 1 回へ完全に一本化され、
+  E-126 が導入した「rescan 優先・preflight 次点」という優先順位は、rescan
+  自体が同じ preflight 実体を消費するため実質的な縮退になった——manifest
+  読取一本化（E-72/E-104/E-123/E-125/E-126 の系譜）はここで終端する
+  （回帰テスト付き）。
+
+**E-134〜E-135（PR #242 第33巡）。**
+
+- **E-134**（docs のみ）: HANDOFF r6 until ループの実行記録検査スニペット
+  （E-127）は 0/1 を返す前の検証が cells_unavailable/cells_completed/
+  cells_total の 3 キーの**存在**（dict 添字アクセスの KeyError 依存）に
+  留まっており、schema_version 不一致・shard_id 不一致（コピペ事故）・型崩れ・
+  会計の破綻した record を素通しして 0/1 判定を汚染された record に対して
+  下しうる穴が残っていた。0/1 を返す前に schema_version 一致・shard_id 一致・
+  cells_total/cells_completed の型（非 bool 整数）・cells_measured/
+  cells_resumed/cells_unavailable/cells_truncated/cells_not_started の型
+  （list）・会計不変条件を全数検証する形へ改めた。会計不変条件は
+  `execute_m2e_shard` の実フィールド名と E-92 が確立した measured/resumed の
+  相互排他分割に合わせ、`len(measured) + len(resumed) == completed` かつ
+  `completed + len(unavailable) + len(truncated) + len(not_started) ==
+  total` とした（`cells_resumed` は `cells_completed` の部分集合であり、
+  単純な `completed + resumed + 未完各種` の合計は二重計上になる——実装の
+  実フィールド名に忠実に導出した）。検証失敗はすべて exit 3（fatal・E-127 の
+  規約を踏襲）。正常系（完了/truncated 残存/unavailable 残存）と壊れ系
+  （schema 不一致・shard_id 不一致・型崩れ・会計破綻・JSON パース失敗・
+  bool 誤認・キー欠損）の全ケースを bash で実測確認した。
+- **E-135**: run/evaluate/census が既に敷いている保護規律を shard モードにも
+  及ぼす——観測を実際に産む first-party ソース閉包（`_generator_code_paths`）
+  を `--make-shard-map`/`--shard-id` 双方の保護パス集合に追加し、`--out` が
+  ハーネス自身のソースファイルと同じパスを指す起動を、予約（サイドカー
+  作成）より前に fail-closed で拒否するようにした。この検査は既存の
+  no-clobber 検査（`--force` 分岐）より前に無条件で走るため、`--make-shard-map
+  --force` を併用しても拒否は変わらない（回帰テスト付き）。
+
+**E-136（PR #242 第34巡・docs のみ）。**
+
+- **E-136**: E-134 の会計不変条件は実行記録**内部**の整合性（measured/resumed/
+  未完各種の内訳が record 自身の cells_total/cells_completed と合う）しか
+  見ておらず、「セル 0 件・cells_total=0・cells_completed=0」のように record
+  が**全体として空**でも内部整合は保たれるため、この空記録が exit 0（完了）を
+  素通りしてしまう穴が残っていた。HANDOFF r6 の検査スニペットに、シャード地図
+  （`m2e_r2_shard_map.yaml`。ループが既に使う変数 `SHARD_MAP_PATH` に束縛して
+  参照を一本化）を読み、shard `$N` に実際に割り当てられているセル数
+  （`cells[].shard_id == $N` の件数）を独立に導出して record の cells_total と
+  照合する検証を追加した——不一致（空記録を含む）は fatal（exit 3）。
+  正常完了・total 不一致（空記録含む）の両ケースを bash で実測確認した。
+
+**E-137〜E-138（PR #242 第35巡・docs のみ）。**
+
+- **E-137**: r6 レシピは `for N in $(seq 0 $(( n_shards - 1 )))` へ地図の
+  `n_shards` を未検証のまま渡していた——`n_shards=0`（生成器は本来作らないが
+  改変・破損を排除しない）は `seq 0 -1` を生み、GNU coreutils の `seq` は
+  FIRST > LAST を**エラーにせず空展開**するため for ループが 1 度も実行され
+  ずにレシピが「成功」扱いで完走してしまう（測定を1件も行わないまま r6 完走を
+  偽装する穴）。`n_shards: true` のような bool 値も Python では
+  `True - 1 == 0` となり単一の偽 shard を作ってしまう。ループ範囲を構築する
+  **前**に地図を読み `n_shards` が非 bool の正整数であることを明示検証する
+  ステップを追加した（検証済みの値をそのままループ範囲の導出にも使い、地図を
+  2 度読まない）。失敗はそのまま python の非ゼロ exit（3）となり `set -e` が
+  レシピ全体を即座に停止する。n_shards が 0／`true`／正常値の 3 ケースを
+  bash で実測確認した。
+- **E-138**: E-136 の期待セル数照合は「検査が読んだ地図」と「実行が実際に
+  消費した地図」が同一実体である保証を欠いていた——地図が実行後・検査前に
+  差し替えられても、cells の中身や shard_id 割当が変わった別世代の地図で
+  たまたま同じセル数になれば検出できない。地図を単一読取の bytes として読み、
+  その sha256 が record 自身の `shard_map_sha256`（`execute_m2e_shard` が
+  実際に消費した地図の sha256・`_load_m2e_shard_map` と同じ計算式）と一致する
+  ことをセル数を数える前に要求する形へ改めた（不一致は fatal）。以降のセル数
+  照合もこの同一 bytes から parse し、hash 比較後に別の読取へ切り替えない。
+  一致／不一致（同じセル数で内容の異なる別地図）の両ケースを bash で実測
+  確認した。
+
+**E-139〜E-141（PR #242 第36巡・docs のみ）。**
+
+- **E-139**: E-138 は per-shard 検査のたびに地図ファイルを個別に再読取・
+  再ハッシュしており、shard 間で地図が差し替わっても各回の検査は自分がその
+  時点で読んだ bytes に対しては自己無矛盾に通ってしまい「全 shard が同一
+  地図実体で走った」ことまでは立証しなかった。E-137 の preflight（一度きり）
+  で地図を単一読取の bytes として読み、不変のスナップショットへ書き出して
+  sha256 を `SHARD_MAP_SHA256_PINNED` として捕捉するよう改めた——n_shards の
+  検証・以降の全 shard の期待セル数/セル参照集合の導出は、この 1 回だけ読んだ
+  bytes（のスナップショット）に完全に一本化される。per-shard 検査は record の
+  `shard_map_sha256` をこの pinned 値とだけ比較し（検査のたびに地図を再読取・
+  再ハッシュしない）。pin 一致／すり替え地図（hash 不一致）の両ケースを bash
+  で実測確認した。
+- **E-140**: E-137 の n_shards 検証（非 bool 正整数）だけでは、生成器が
+  出し得ない値（改変・破損。例: `n_shards: 13`）を通してしまう。§8.8 で凍結
+  した `R_max = 12`（`_M2E_R_MAX`）を上限として明示し、`1 <= n_shards <= 12`
+  の範囲外は fail-closed で拒否するよう追加した——`seq` がこの範囲外の巨大な
+  N まで実体化する前に preflight で止める。n_shards が 13／1000000000（いずれも
+  seq 未実行のまま即 exit 3）／正常値の 3 ケースを bash で実測確認した。
+- **E-141**: per-shard 検査は配列長の会計（E-92/E-134）しか見ておらず、
+  「セル A の参照が複数配列に重複計上されつつセル B の参照はどの配列にも
+  現れない」といった、総数だけ辻褄が合う入れ替わりを検出できなかった。5 配列
+  （measured/resumed/unavailable/truncated/not_started）それぞれのセル参照を
+  正規化 5-tuple（bed_id, level, clip_id, arm, repeat_index——§6.2 の正準鍵。
+  `execute_m2e_shard` 内部の `_cell_ref` が実際に記録するフィールド形式に
+  合わせた）へ変換し、(a) 5 配列合算の全参照が重複なし（＝配列間でも相互に
+  非交差）、(b) その合併集合が pinned 地図（E-139 のスナップショット）の
+  shard N のセル集合と完全一致することを追加検証した。違反は fatal（exit 3）。
+  正常／同一参照の重複／異 shard セルの混入／参照欠落の 4 ケースを bash で
+  実測確認した。この実測の過程で、E-138/E-139/E-141 の説明コメントに含めた
+  バッククォート（`` ` ``）が per-shard 検査の `python -c "..."` 引数（bash の
+  二重引用符文字列でもある）内でコマンド置換として解釈され、存在しないコマンド
+  実行の試行によって stderr が汚染される副作用（機能は壊さないが、
+  「手順が構文エラーなく走ることの実測確認」の趣旨からは外れるノイズ）を
+  検出した——該当コメント中のバッククォートを全数エスケープ（`` \` ``）して
+  是正した（E-138 由来の既存コメントも含む・回帰確認済み）。
+
+**E-142（PR #242 第37巡・docs のみ）。**
+
+- **E-142**: E-141 の正規化（5-tuple 化）は各スカラーの型を検査せずタプル化
+  していた——`repeat_index: false` は Python では bool が int のサブクラスで
+  あるため `0` と同値化し、本来の `repeat_index: 0` セルと黙って衝突・
+  すり替わりうる（E-108 と同型の穴）。`bed_id: []` のような unhashable な値は
+  タプル化はできても `set(all_refs)` の時点で `TypeError` を送出し、この
+  経路には try/except が無かったため Python の未捕捉例外の既定 exit（1）で
+  終了してしまい、「検証済みで truncated/not_started のみ残存」（意図的な
+  exit 1・E-127 の規約）と区別が付かず、正規化そのものが失敗した壊れた
+  record を盲目的にリトライしてしまう穴だった。identity 4 フィールド
+  （bed_id/level/clip_id/arm）は str・repeat_index は非 bool の整数である
+  ことを明示検証し、違反は fatal（exit 3）とする形へ改めた。さらに正規化〜
+  集合比較の全体を try/except（`SystemExit` は re-raise・`Exception` のみ
+  捕捉）で覆い、想定外の例外もすべて fatal（exit 3）へルーティングして
+  exit 1 への漏れを構造的に排除した。地図側セル（`expected_refs`）の正規化
+  にも同じスカラー検証を適用した（CLI 側で検証済みの地図だが、検査スクリプト
+  自身が CLI の検証結果を信用せず自己完結で検証する）。
+  `repeat_index: false`（exit 3・bool が 0 と同値化して通過しないこと）／
+  `bed_id: []`（exit 3・exit 1 に化けないこと）／正常（exit 0）に加え、
+  既存の重複検出（E-141）・truncated 残存の再実行判定（exit 1）が
+  try/except 導入後も従来どおり機能することを bash で実測確認した。
+
+**E-143（PR #242 第38巡・docs のみ・P1）。**
+
+- **E-143**: HANDOFF r6 レシピの地図生成コマンド（手順 1・`--make-shard-map`）が
+  `--cell-store` を渡していなかったため、E-66 の除外パッキング（digest 一致で
+  完了済みのセルを残セルの計算・N_shards 算出から除く）が正規手順では一度も
+  発火しない状態だった——r4 の校正実行や中断セッションが既に書いたセルも
+  常に全 1280 セルの一部として再パッキングされ続け、R_max(12) を見かけ上
+  超過して §8.8 の 3 択へ不要に差し戻されたり、完了済みセルを無駄に shard
+  待ち行列へ積んだりしうる。手順 2（shard 実行）と同じ `--cell-store
+  build/m2e/store_A` を手順 1 のコマンドへ追加した。store が空/新規（本測定の
+  初回）なら除外対象が無く全 1280 セルのパッキングと完全に同一になるため
+  後方互換は保たれる。§8.4 の再測り直し→地図引き直し（セッション再開時）の
+  記述も、同じ `--cell-store` 付きコマンドをそのまま再実行すれば「未完セル
+  のみ」の再パッキングが追加操作なしで成立する旨を明記して整合させた。
 
 ## 9. provenance と pin
 

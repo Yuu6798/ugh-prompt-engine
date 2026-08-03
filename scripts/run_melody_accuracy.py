@@ -44,6 +44,7 @@ import functools
 import hashlib
 import json
 import math
+import multiprocessing
 import os
 import platform
 import re
@@ -2604,6 +2605,7 @@ from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
 # 別物 —— あちらは `--out` の verdict/report 専用に育った独自実装で、fsync まで含めて
 # 意図的に厚い。セルレコードは大量（最大 1280 件）に書くため、utils 側の薄い実装を
 # そのまま使う。
+from svp_rpe.utils.atomic_io import atomic_write_bytes as _cell_store_atomic_write_bytes  # noqa: E402
 from svp_rpe.utils.atomic_io import atomic_write_text as _cell_store_atomic_write_text  # noqa: E402
 
 
@@ -10029,6 +10031,2413 @@ def aggregate_m2e_census(
     return census
 
 
+# ---------------------------------------------------------------------------
+# C6 — シャード実行機（rev.6 §8.4-§8.8・地図生成器 `--make-shard-map` + 消費器
+# `--shard-id`/`--shard-map`）
+# ---------------------------------------------------------------------------
+#
+# 設計 Memo `.claude/briefs/M2E-C6-shard-runner.md` の実装。シャード地図は科学ではなく
+# スケジューリングである（§8.5）——セル台帳（fixtures が決める 1280 セルの集合）は
+# 不可侵、シャード地図（どのセルをどの回に回すか）は `T_*`/`S`/`B_session` が変われば
+# 再計算してよい。本節は 2 つの成果物だけを持つ: (a) 地図生成器
+# `generate_m2e_shard_map`、(b) 1 shard 分の実行機 `execute_m2e_shard`。
+# **shard モードは run report / verdict / census のいずれも出さない**——per-level の
+# run report は、全セル完了後に既存の「1 水準まるごと」run が store から 100% resume
+# して生成する（M2e report の単一水準不変条件は無変更）。
+
+_EXPECTED_M2E_CAMPAIGN_SCHEMA = "m2e-campaign/0.1"
+_M2E_SHARD_MAP_SCHEMA = "m2e-shard-map/0.1"
+_M2E_SHARD_RUN_SCHEMA = "m2e-shard-run/0.1"
+# §8.5: 余裕係数（凍結・変更禁止。実測が速かったからといって上げてはならない）。
+_M2E_SHARD_CAP_MARGIN = 0.85
+# §8.2 の既定 B_session（秒）。CLI `--session-budget` の既定値と同じ。
+_M2E_DEFAULT_SESSION_BUDGET_S = 7200.0
+# §8.8: 実行回数の上限（凍結）。
+_M2E_R_MAX = 12
+# §8.6: ハングの絶対上限は B_session + 600s（凍結）。
+_M2E_HANG_GRACE_S = 600.0
+# 動的キューのポーリング間隔（実装の都合値。時間予算そのものには影響しない）。
+_M2E_SHARD_POLL_INTERVAL_S = 0.05
+
+
+def _require_m2e_campaign_path_confined_to_root(
+    value: str, *, campaign_path: Path, level: str, key: str
+) -> Path:
+    """campaign が指す相対パスを ROOT 配下へ封じ込める（E-60・PR #242 第4巡 Codex 是正）。
+
+    二段検証: (1) 字句——絶対パス・`..` 成分を拒否（symlink 解決の前に意図を弾く）、
+    (2) 解決後——`(ROOT / value).resolve()` が ROOT 配下（`Path.is_relative_to`）に
+    留まることを要求する（symlink 経由で ROOT 外へ脱出する構成も (1) をすり抜けた
+    後にここで拒否される）。`_parse_m2e_campaign_bytes` からのみ呼ぶ——生成
+    （`generate_m2e_shard_map`）・実行（`execute_m2e_shard`）の双方がここを通る
+    単一の campaign loader 経路（`_load_m2e_campaign_with_sha256` / `_load_m2e_campaign`）
+    に一元実装する。エラーメッセージは campaign が宣言した相対パス文字列のみを含み、
+    解決後の絶対パスは含めない (fail-closed 流儀)。
+    """
+    candidate = Path(value)
+    if candidate.is_absolute():
+        raise ValueError(
+            f"{campaign_path}: levels[{level!r}].{key} が絶対パス {value!r} を指す; "
+            "repo root からの相対パスのみ許可する (fail-closed)"
+        )
+    if ".." in candidate.parts:
+        raise ValueError(
+            f"{campaign_path}: levels[{level!r}].{key} の {value!r} が `..` 成分を含む; "
+            "repo root 配下からの遡上を許可しない (fail-closed)"
+        )
+    resolved = (ROOT / candidate).resolve()
+    if not resolved.is_relative_to(ROOT):
+        raise ValueError(
+            f"{campaign_path}: levels[{level!r}].{key} の {value!r} が解決後に repo root "
+            "の外を指す（symlink 経由の脱出を含む）; repo root 配下のみ許可する "
+            "(fail-closed)"
+        )
+    return resolved
+
+
+def _parse_m2e_campaign_bytes(
+    campaign_path: Path, data: bytes
+) -> "Dict[str, Dict[str, Path]]":
+    """既に読み込んだ campaign bytes を parse する（single-read 束縛の内部実装）。
+
+    `_load_m2e_campaign_with_sha256` からのみ呼ぶ——直接呼ぶと read と parse が別の
+    bytes に由来しうる（E-52 が塞ごうとしている穴そのもの）。
+    """
+    doc = _yaml_load_no_dup_keys(data, what=campaign_path.name)
+    if not isinstance(doc, dict) or doc.get("schema_version") != _EXPECTED_M2E_CAMPAIGN_SCHEMA:
+        raise ValueError(
+            f"{campaign_path}: schema_version が {_EXPECTED_M2E_CAMPAIGN_SCHEMA!r} でない "
+            "(fail-closed)"
+        )
+    levels = doc.get("levels")
+    if not isinstance(levels, dict) or set(levels) != set(_M2E_LEVEL_LADDER):
+        raise ValueError(
+            f"{campaign_path}: levels のキー集合 "
+            f"{sorted(levels) if isinstance(levels, dict) else levels!r} が凍結ラダー "
+            f"{list(_M2E_LEVEL_LADDER)} と一致しない (fail-closed)"
+        )
+    resolved: "Dict[str, Dict[str, Path]]" = {}
+    for level, level_paths in levels.items():
+        if not isinstance(level_paths, dict) or set(level_paths) != {
+            "external_manifest",
+            "external_fixtures",
+        }:
+            raise ValueError(
+                f"{campaign_path}: levels[{level!r}] が "
+                "{external_manifest, external_fixtures} ちょうどを持たない (fail-closed)"
+            )
+        resolved_level: "Dict[str, Path]" = {}
+        for key, value in level_paths.items():
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"{campaign_path}: levels[{level!r}].{key} が非空文字列でない "
+                    "(fail-closed)"
+                )
+            # repo root 基準で解決する（campaign ファイル自身の位置基準ではない）。
+            # HANDOFF §5 のレシピは `build/m2e/...` / `tests/fixtures/...` を repo
+            # root からの相対パスとして書く規約なので、それとそのまま揃える——
+            # campaign 自身は `docs/measurements/m2e_2026-08/` に置く想定であり、
+            # ファイル位置基準だと `../../../build/...` のような脆いパスを強いる。
+            # E-60: ROOT 配下への封じ込め（絶対パス・`..` 遡上・symlink 脱出を拒否）。
+            resolved_level[key] = _require_m2e_campaign_path_confined_to_root(
+                value, campaign_path=campaign_path, level=level, key=key
+            )
+        resolved[level] = resolved_level
+    return resolved
+
+
+def _load_m2e_campaign_with_sha256(
+    path: "str | Path",
+) -> "Tuple[Dict[str, Dict[str, Path]], str]":
+    """M2e campaign ファイル（パスのみ）を single read で (parsed, sha256) として返す。
+
+    設計判断 2（Memo M2E-C6）: campaign は**パスのみ**を持つ——各水準の external
+    manifest / external fixtures の所在。科学的パラメータ（`T_*`/`S`/`B_session`等）は
+    一切含めない（それは CLI 引数 / bars / fixtures / 地図側の責務）。凍結ラダー 4 水準
+    ちょうどを要求する (fail-closed)。パスは repo root（`ROOT`）基準で相対解決する。
+
+    E-52（PR #242 第2巡 Codex P2 是正）: `campaign_sha256` の計算と parse を**同一
+    bytes スナップショット**から導出する。別々に `read_bytes()` すると、呼び出しの
+    間にファイル（またはシンボリックリンク先）が差し替わった場合、digest と parse
+    結果が別 bytes に由来しうる——地図が「実際に registry を供給した bytes ではない
+    bytes」を pin することになる。
+    """
+    campaign_path = Path(path).resolve()
+    data = campaign_path.read_bytes()
+    resolved = _parse_m2e_campaign_bytes(campaign_path, data)
+    return resolved, hashlib.sha256(data).hexdigest()
+
+
+def _load_m2e_campaign(path: "str | Path") -> "Dict[str, Dict[str, Path]]":
+    """`_load_m2e_campaign_with_sha256` の doc のみを返す薄いラッパ。
+
+    sha256 を必要としない軽量な読み取り専用（protected-path 集合の構築等）向け。
+    digest とセットで必要な経路（地図生成・実行）は
+    `_load_m2e_campaign_with_sha256` を直接使うこと（E-52・単一読取束縛）。
+    """
+    resolved, _sha256 = _load_m2e_campaign_with_sha256(path)
+    return resolved
+
+
+def _m2e_parse_entry_id(entry_id: str) -> "Tuple[str, str]":
+    """entry id `vremix_{clip_id}_{bed_id}_{level_tag}`（§6.2）から (clip_id, bed_id) を返す。
+
+    `_require_registered_m2e_cohort` と同じ切り出し規約（`_m2e_bed_slug` は非英数字を
+    ハイフンにしか正規化しないため bed_id は下線を含まず、末尾から 2 番目の下線区切り
+    要素が bed_id と一意に決まる）。
+    """
+    parts = str(entry_id).split("_")
+    if len(parts) < 4 or parts[0] != "vremix":
+        raise ValueError(
+            f"_m2e_parse_entry_id: entry id {entry_id!r} が §6.2 の規約 "
+            "`vremix_{clip_id}_{bed_id}_{level_tag}` に合わない (fail-closed)"
+        )
+    bed_id = parts[-2]
+    clip_id = "_".join(parts[1:-2])
+    return clip_id, bed_id
+
+
+def _m2e_entry_id(clip_id: str, bed_id: str, level: str) -> str:
+    """(clip_id, bed_id, level) → entry id（§6.2 の逆写像）。"""
+    return f"vremix_{clip_id}_{bed_id}_{_M2E_LEVEL_TAGS[level]}"
+
+
+def _m2e_full_cell_registry(
+    campaign: "Dict[str, Dict[str, Path]]",
+    *,
+    bars_path: Path = BARS_PATH,
+    bars_snapshot: "Optional[Tuple[Any, str]]" = None,
+) -> "Tuple[List[Tuple[str, str, str, str, int]], Dict[str, str], int, str, Dict[str, Dict[str, Any]]]":
+    """§8.5 のセル台帳（1280 セル）を lexical order で列挙する。
+
+    戻り値: (cells, fixtures_sha256_by_level, repeats_min, bars_sha256,
+    fixtures_by_level)。`cells` の各要素は `(bed_id, level, clip_id, arm,
+    repeat_index)` の 5-tuple——設計 §8.5 の `(bed_id, level, clip_id, arm,
+    repeat_idx)` lexical order そのもの（level はラダー添字ではなく**文字列の
+    まま**——決定済み設計判断 3: `'+12dB' < '+6dB' < '-6dB' < '0dB'` という物理量と
+    無関係な順序になるが「直して」はならない）。`fixtures_by_level` は各水準の
+    `fixtures_doc["fixtures"]`（検証済みの生 dict）——E-57・PR #242 第3巡 Codex P2
+    是正: 呼び出し元がこの検証済みスナップショットを引き回し、同じ fixtures ファイルを
+    再度開かない（TOCTOU 回避。E-52 と同族）。
+
+    台帳は fixtures（+ 基底バーの `repeats_min`）だけから決まる——manifest はここでは
+    読まない（manifest 未生成のうちに地図を作れるようにするため。§8.5「シャード地図は
+    科学ではなくスケジューリングである」の実装上の帰結: 地図生成は音声実体を必要と
+    しない）。
+
+    `bars_path`（E-47・PR #242 Codex P2 是正）: `--make-shard-map --bars <custom>` が
+    指定した bars を registry 構築・検証まで貫通させる。既定はモジュール既定の
+    `BARS_PATH`（従来どおりの挙動）。戻り値の `bars_sha256` を地図に刻むことで、
+    別世代の bars で組まれた地図を後から検出できる（`_require_m2e_shard_map_matches_
+    registry` が照合する）。
+
+    `bars_snapshot`（E-78・PR #242 第8巡 Codex 是正）: 呼び出し元が既に読んだ
+    `(bars, bars_sha256)` を渡せば、ここでは bars ファイルを再度開かない（E-57/E-72
+    と同族の TOCTOU 是正）。未指定（既定 `None`）なら従来どおり `bars_path` から読む。
+    """
+    if bars_snapshot is not None:
+        bars, bars_sha256 = bars_snapshot
+    else:
+        bars, bars_sha256 = load_bars(bars_path)
+    bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
+    repeats_min = int(bar_block["repeats_min"])
+    arms = _categories_owned_by("m2e_accuracy_bars.yaml")
+
+    fixtures_sha256_by_level: "Dict[str, str]" = {}
+    fixtures_by_level: "Dict[str, Dict[str, Any]]" = {}
+    cells: "List[Tuple[str, str, str, str, int]]" = []
+    for level in _M2E_LEVEL_LADDER:
+        if level not in campaign:
+            raise ValueError(
+                f"_m2e_full_cell_registry: campaign に水準 {level!r} が無い (fail-closed)"
+            )
+        fixtures_path = campaign[level]["external_fixtures"]
+        fixtures_doc, fixtures_sha256 = load_external_fixtures(fixtures_path)
+        _require_external_fixtures_level_match(
+            fixtures_doc, level=level, where=f"_m2e_full_cell_registry: level {level!r}"
+        )
+        fixtures_sha256_by_level[level] = fixtures_sha256
+        fixtures_by_level[level] = fixtures_doc["fixtures"]
+        for entry_id in fixtures_doc["fixtures"]:
+            clip_id, bed_id = _m2e_parse_entry_id(entry_id)
+            for arm in arms:
+                for repeat_index in range(repeats_min):
+                    cells.append((bed_id, level, clip_id, arm, repeat_index))
+    cells.sort()
+    return cells, fixtures_sha256_by_level, repeats_min, bars_sha256, fixtures_by_level
+
+
+def _m2e_shard_cell_cost(arm: str, *, t_direct: float, t_stem: float) -> float:
+    """§8.5 の `cost(cell) = T_direct if cell.arm == "direct" else T_stem`。"""
+    return t_direct if arm == "V_remix_real_direct" else t_stem
+
+
+def _assign_m2e_shard_ids(
+    cells: "List[Tuple[str, str, str, str, int]]",
+    *,
+    t_direct: float,
+    t_stem: float,
+    startup_cost: float,
+    session_budget: float,
+) -> "Tuple[List[int], float, int]":
+    """§8.5 の凍結アルゴリズムを逐語実装する（アルゴリズムの改良禁止）。
+
+    ```
+    cap = 0.85 * B_session - S
+    cost(cell) = T_direct if cell.arm == "direct" else T_stem
+    order = 全セルを (bed_id, level, clip_id, arm, repeat_idx) の lexical order で整列
+    s = 0 ; acc = 0
+    for cell in order:
+        c = cost(cell)
+        if acc > 0 and acc + c > cap:
+            s += 1 ; acc = 0
+        cell.shard_id = s
+        acc += c
+    N_shards = s + 1
+    ```
+
+    `cells` は呼び出し元が既に lexical order で整列済みであること
+    （`_m2e_full_cell_registry` が保証する）。戻り値は `(shard_ids, cap, n_shards)`。
+
+    `session_budget`（E-62・PR #242 第4巡 Codex P2 是正）・全入力（E-68・PR #242
+    第5巡 Codex P2 是正）: `inf`/`nan` を拒否する（生成・実行の両受け口——本関数は
+    `generate_m2e_shard_map` と `_require_m2e_shard_map_matches_registry` の双方から
+    呼ばれる共有経路）。`session_budget = inf` だと cap も無限大になり、
+    `N_shards <= R_max` の関所を 1 shard のまま素通りして §8.8 の実行回数上限も
+    §8.6 のハング絶対上限も無効化してしまう。`startup_cost = nan` は
+    `cap = margin*B_session - NaN = NaN` を生み、以降の全比較が `False` になって
+    1 セル容量ゲートも `R_max` ゲートも無検査で素通りする——`t_direct`/`t_stem` の
+    非有限も `max(t_direct, t_stem)` を介して同じ穴になりうる。改変された地図
+    （実行側の再計算はここを経由する）がこれらを持ち込む経路も塞ぐため、4 入力
+    全数を検査する（E-68 の同型穴の列挙原則を実行側にも及ぼす）。
+    """
+    # E-91（PR #242 第13巡 Codex 是正）: E-68 は isfinite のみをこの共有 readback
+    # 経路（本関数は generate/readback 双方から呼ばれる）へ及ぼしていたが、符号
+    # 制約（T_direct>0/T_stem>0/B_session>0/S>=0）は生成器側の入口検査
+    # （`_require_m2e_shard_map_finite_input`）にしか無かった——改変された地図が
+    # 負の t_direct 等を持ち込んでも、isfinite さえ満たせば readback を素通り
+    # しえた。単一のバリデータへ集約し、生成・読取の両方に同じ入力域制約を適用する。
+    _require_m2e_shard_map_finite_input("session_budget", session_budget)
+    _require_m2e_shard_map_finite_input("startup_cost", startup_cost, allow_zero=True)
+    _require_m2e_shard_map_finite_input("t_direct", t_direct)
+    _require_m2e_shard_map_finite_input("t_stem", t_stem)
+    cap = _M2E_SHARD_CAP_MARGIN * session_budget - startup_cost
+    if cap <= 0 or cap < max(t_direct, t_stem):
+        raise ValueError(
+            f"generate_m2e_shard_map: cap={cap!r} (= {_M2E_SHARD_CAP_MARGIN} * "
+            f"B_session({session_budget!r}) - S({startup_cost!r})) が 0 以下か "
+            f"max(T_direct={t_direct!r}, T_stem={t_stem!r}) を下回る; 1 セルすら 1 回の "
+            "実行に収まらない。本測定は開始しない。S / T_direct / T_stem を添えて "
+            "User 決裁へ差し戻す (fail-closed・設計 §8.5)"
+        )
+    shard_ids: "List[int]" = []
+    s = 0
+    acc = 0.0
+    for _bed_id, _level, _clip_id, arm, _repeat_index in cells:
+        c = _m2e_shard_cell_cost(arm, t_direct=t_direct, t_stem=t_stem)
+        if acc > 0 and acc + c > cap:
+            s += 1
+            acc = 0.0
+        shard_ids.append(s)
+        acc += c
+    n_shards = s + 1
+    return shard_ids, cap, n_shards
+
+
+def _require_m2e_shard_map_finite_input(name: str, value: float, *, allow_zero: bool = False) -> None:
+    """生成器の float 入力に共通の isfinite + 符号検査を統一的に敷く
+
+    （E-68・PR #242 第5巡 Codex P2 是正）。
+
+    `--startup-cost nan` は `startup_cost < 0` を素通りし `cap = margin * B_session -
+    NaN = NaN` を生む——以降の `cap <= 0` 等の全比較が NaN 相手には常に `False` に
+    なるため、1 セル容量ゲートも `R_max` ゲートも無検査で素通りし、1280 セルが
+    まるごと 1 shard に詰め込まれる。`t_direct > 0` のような単純な符号比較だけでは
+    `inf`（正数比較は素通りする）も `nan`（比較は常に `False` になるので符号検査
+    自体は偶然に落ちるが、根本原因は同じ「非有限値が算術に混入する」ことにある）も
+    確実には弾けない——**同型穴の列挙原則**により、生成器の float 入力
+    （`t_direct`/`t_stem`/`startup_cost`/`session_budget`）全数に `math.isfinite`
+    を統一的に要求する（単一のこの関数へ集約）。
+
+    E-91（PR #242 第13巡 Codex 是正）: `_assign_m2e_shard_ids`（生成・readback の
+    共有経路）からも呼ばれる——符号制約は生成器の入口検査だけでなく、改変された
+    地図を読み戻す経路にも同じ強さで適用する。
+    """
+    ok = math.isfinite(value) and (value >= 0 if allow_zero else value > 0)
+    if not ok:
+        requirement = "0 以上" if allow_zero else "正数"
+        raise ValueError(
+            f"shard map: {name} {value!r} は有限の{requirement}のみ許可する "
+            "(fail-closed・E-68/E-91)"
+        )
+
+
+def _require_m2e_shard_map_integer_field(name: str, value: "Any") -> int:
+    """地図の整数フィールド（`n_shards` 等）が非 bool の整数であることを要求し、
+
+    その値をそのまま返す（E-83/E-97・PR #242 第10/15巡 Codex 是正の共通形。
+    E-83 の `workers` 検証と同型——単一ヘルパへ集約）。`int(x)` は `1.5`
+    （切り捨て）や `True`（bool は int のサブクラス）を黙って受理してしまう——
+    地図のスケジューリング・カウント系フィールドは形が崩れた値を静かに丸めず
+    fail-closed で拒否する。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"shard map: {name} {value!r} は整数（bool 不可）のみ許可する "
+            "(fail-closed・E-83/E-97)"
+        )
+    return value
+
+
+def _require_m2e_shard_map_numeric_field(name: str, value: "Any") -> float:
+    """地図のスケジューリング入力（`t_direct_s` 等）が非 bool の数値スカラー
+
+    （int/float）であることを `float()` 強制の**前**に要求し、`float(value)` を
+    返す（E-101・PR #242 第17巡 Codex 是正。`_require_m2e_shard_map_integer_field`
+    と同型——単一ヘルパへ集約）。`float("7200")`（文字列）や `float(True)`（bool）
+    は黙って強制変換に成功してしまう——地図の生値が既に破損している兆候
+    （文字列化・bool 化）を、後段の isfinite/符号検査（E-68/E-91）より前に
+    fail-closed で拒否する。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"shard map: {name} {value!r} は数値（bool・文字列は不可）のみ許可する "
+            "(fail-closed・E-101)"
+        )
+    return float(value)
+
+
+def _require_m2e_cell_repeat_index(value: "Any") -> int:
+    """セルレコードの `repeat_index` が非 bool の整数であることを要求し、
+
+    その値をそのまま返す（E-108・PR #242 第20巡 Codex 是正）。Python では
+    `False == 0` / `hash(False) == hash(0)` のため、`repeat_index: false` の
+    セルは鍵タプル（`_require_m2e_shard_map_integer_field` 等と同型の穴）で
+    `repeat_index: 0` のセルと**黙って衝突**し、台帳比較（set/dict 演算）を
+    素通りしうる——鍵構築・registry 比較の**前**に fail-closed で拒否する。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"shard map: repeat_index {value!r} は整数（bool 不可）のみ許可する "
+            "(fail-closed・E-108)"
+        )
+    return value
+
+
+def _m2e_completed_cell_keys(
+    cells: "List[Tuple[str, str, str, str, int]]",
+    campaign: "Dict[str, Dict[str, Path]]",
+    cell_store: "str | Path",
+    *,
+    fixtures_by_level: "Dict[str, Dict[str, Any]]",
+    bars_path: Path = BARS_PATH,
+    bars_snapshot: "Optional[Tuple[Any, str]]" = None,
+    manifest_snapshot_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
+    manifest_sha256_snapshot_by_level: "Optional[Dict[str, str]]" = None,
+) -> "Tuple[set, Dict[str, str], Dict[str, Tuple[List[Dict[str, Any]], Path]]]":
+    """`cells`（registry の 5-tuple 群）のうち `cell_store` に digest 一致で完了
+
+    済みの鍵集合を返す（E-66・PR #242 第5巡 Codex 是正）。
+
+    判定基準は `_require_prior_m2e_shards_complete` と同一
+    （`_cell_store_record_path` / `_cell_record_mismatches` の resume 判定）——
+    「地図生成器が除外してよい」と「シャード実行機が完了とみなす」を同じ基準に
+    保つ（別基準を作ると両者が食い違い、除外したのに実行機が未完と扱う/その逆が
+    起こりうる）。`fixtures_by_level` は呼び出し元が registry 構築時に既に読取・
+    hash 検証済みのスナップショットで、ここでは再オープンしない（E-57 と同族）。
+    manifest に無い・レコードが無い・壊れている・digest 不一致のいずれも「完了と
+    立証できない」として鍵集合から単に除く（fail-closed——除外の可否は保守的に
+    倒す。パッキング対象に残るだけで、測定自体は妨げない）。
+
+    `bars_snapshot`（E-78・PR #242 第8巡 Codex 是正）: 呼び出し元が既に読んだ
+    `(bars, bars_sha256)` を渡せば、ここでは bars ファイルを再度開かない。未指定
+    （既定 `None`）なら従来どおり `bars_path` から読む。
+
+    `manifest_snapshot_by_level`/`manifest_sha256_snapshot_by_level`（E-125・
+    PR #242 第28巡 Codex 是正）: 呼び出し元（`generate_m2e_shard_map` 経由の
+    CLI preflight・E-123 の manifest 参照パス保護）が既に読んだ manifest の
+    パース済みスナップショット + sha256 を渡せば、内部の `manifest_cache` を
+    これで種付けし、対応する水準の manifest をここでは再度開かない（E-57/E-72
+    と同族の TOCTOU 回避）。未指定（既定 `None`）なら従来どおり内部で読む
+    （直接呼ぶテスト等の後方互換経路）。両者は対で渡すこと（片方だけ渡すと、
+    種付けされた水準の `manifest_sha256_by_level` が欠けたまま返る）。
+    E-133（PR #242 第32巡 Codex 是正）: 種付けスナップショットは preflight が
+    読んだ全水準ぶんを持ちうるが、戻り値の `manifest_sha256_by_level`/
+    `manifest_by_level` は種付けの有無に関わらず常に `cells` に実際に登場した
+    水準だけへ絞り込む（種付けなし経路と挙動を一致させる——さもないと E-95 の
+    記録側（生成時に除外セルが実際に属する水準だけへ絞った
+    `manifest_sha256_by_level`）との照合が、種付けの有無だけで結果の変わる
+    誤検出を起こす）。
+
+    戻り値は `(completed, manifest_sha256_by_level, manifest_by_level)`。
+    `manifest_sha256_by_level`（E-95・PR #242 第15巡 Codex 是正）は本関数が実際に
+    読んだ（`cells` に登場した水準の）manifest の sha256——呼び出し元
+    （`generate_m2e_shard_map`）はこれを地図へ記録し、実行側
+    （`_require_m2e_shard_map_matches_registry`）は除外真実性の再スキャンで読んだ
+    manifest がこれと一致することを要求する（生成時の除外判定と実行時の真実性
+    検証が、別世代の manifest を黙って跨がないようにする）。
+    `manifest_by_level`（E-104・PR #242 第19巡 Codex 是正）は読んだ manifest の
+    パース済みスナップショット `{level: (entries, manifest_dir)}`——実行側の
+    除外真実性再スキャンが読んだこのスナップショットを `execute_m2e_shard` の
+    先行 shard 検査・task 構築まで引き回せば、同じ manifest ファイルを再度
+    開かない（E-72/E-57 と同族の TOCTOU 完備化）。
+    """
+    if bars_snapshot is not None:
+        bars, bars_sha256 = bars_snapshot
+    else:
+        bars, bars_sha256 = load_bars(bars_path)
+    bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
+    tolerance_cents = float(bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
+    est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])
+    env_digest = _env_digest()
+    cell_store = Path(cell_store)
+
+    # E-125: 呼び出し元が既に読んだ manifest スナップショットで種付けする——
+    # 種付けされた水準は下のループで再オープンされない（`level not in
+    # manifest_cache` が False になる）。
+    manifest_cache: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = (
+        dict(manifest_snapshot_by_level) if manifest_snapshot_by_level else {}
+    )
+    manifest_sha256_by_level: "Dict[str, str]" = (
+        dict(manifest_sha256_snapshot_by_level) if manifest_sha256_snapshot_by_level else {}
+    )
+    completed: "set" = set()
+    # E-133（PR #242 第32巡 Codex 是正）: 種付け（`manifest_snapshot_by_level`/
+    # `manifest_sha256_snapshot_by_level`）は preflight が読んだ全水準ぶんを持ちうる
+    # ため、種付けなし（内部で読む）経路と挙動を揃えるには、`cells` に実際に登場
+    # した水準だけへ戻り値を絞り込む必要がある——絞り込まないと、呼び出し元
+    # （`_require_m2e_shard_map_matches_registry`）の E-95 照合（生成時に記録した
+    # 「除外セルが実際に属する水準」限定の `manifest_sha256_by_level` との一致
+    # 検査）が、種付けの有無だけで結果の変わる誤検出を起こす。
+    touched_levels: "set" = {level for _bed_id, level, _clip_id, _arm, _repeat_index in cells}
+    for bed_id, level, clip_id, arm, repeat_index in cells:
+        if level not in manifest_cache:
+            entries, manifest_sha256, manifest_path = _load_external_manifest(
+                campaign[level]["external_manifest"]
+            )
+            manifest_cache[level] = (entries, manifest_path.parent)
+            manifest_sha256_by_level[level] = manifest_sha256
+        entries, manifest_dir = manifest_cache[level]
+        entry_id = _m2e_entry_id(clip_id, bed_id, level)
+        entry = next((e for e in entries if e["id"] == entry_id), None)
+        if entry is None:
+            continue
+        record_path = _cell_store_record_path(
+            cell_store,
+            category=arm,
+            level=level,
+            entry_id=entry_id,
+            repeat_index=repeat_index,
+        )
+        if not record_path.is_file():
+            continue
+        try:
+            inputs = _read_external_clip_inputs(
+                entry_id, entry, manifest_dir=manifest_dir, fixtures=fixtures_by_level[level]
+            )
+            stored = _json_loads_no_dup_keys(
+                record_path.read_bytes(), what=f"cell record {record_path}"
+            )
+        except (ValueError, OSError):
+            continue
+        mismatches = _cell_record_mismatches(
+            stored,
+            category=arm,
+            level=level,
+            entry_id=entry_id,
+            repeat_index=repeat_index,
+            audio_sha256=inputs.audio_sha256,
+            annotation_sha256=inputs.annotation_sha256,
+            env_digest=env_digest,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+            store_role=_CELL_STORE_ROLE_RUN,
+        )
+        if not mismatches:
+            completed.add((bed_id, level, clip_id, arm, repeat_index))
+    # E-133: 種付けされた水準のうち `cells` に登場しないものは戻り値から落とす
+    # （種付けなし経路は元々ここに現れない——`manifest_cache`/`manifest_sha256_
+    # by_level` は `cells` を舐めるループでしか埋まらないため）。
+    manifest_sha256_by_level = {
+        level: sha256 for level, sha256 in manifest_sha256_by_level.items() if level in touched_levels
+    }
+    manifest_cache = {
+        level: snapshot for level, snapshot in manifest_cache.items() if level in touched_levels
+    }
+    return completed, manifest_sha256_by_level, manifest_cache
+
+
+def _require_m2e_excluded_cell_store_relative_confined_to_root(value: str) -> Path:
+    """地図の `excluded_completed_cells.cell_store_relative` を ROOT 配下へ封じ込める
+
+    （E-66・PR #242 第5巡 Codex 是正）。E-60 と同じ二段検証（字句——絶対パス・`..`
+    拒否／解決後——ROOT 配下要求）を独立実装として適用する——campaign パス検証
+    （`_require_m2e_campaign_path_confined_to_root`）とは別関数のまま保ち、既に
+    確定した E-60 の挙動・回帰テストへ影響しない。
+    """
+    candidate = Path(value)
+    if candidate.is_absolute():
+        raise ValueError(
+            "shard map: excluded_completed_cells.cell_store_relative が絶対パス "
+            f"{value!r} を指す; repo root からの相対パスのみ許可する (fail-closed)"
+        )
+    if ".." in candidate.parts:
+        raise ValueError(
+            f"shard map: excluded_completed_cells.cell_store_relative の {value!r} が "
+            "`..` 成分を含む; repo root 配下からの遡上を許可しない (fail-closed)"
+        )
+    resolved = (ROOT / candidate).resolve()
+    if not resolved.is_relative_to(ROOT):
+        raise ValueError(
+            f"shard map: excluded_completed_cells.cell_store_relative の {value!r} が "
+            "解決後に repo root の外を指す（symlink 経由の脱出を含む）; repo root 配下のみ "
+            "許可する (fail-closed)"
+        )
+    return resolved
+
+
+def generate_m2e_shard_map(
+    *,
+    campaign_path: "str | Path",
+    t_direct: float,
+    t_stem: float,
+    startup_cost: float,
+    workers: int,
+    session_budget: float = _M2E_DEFAULT_SESSION_BUDGET_S,
+    bars_path: Path = BARS_PATH,
+    cell_store: "Optional[str | Path]" = None,
+    campaign_snapshot: "Optional[Tuple[Dict[str, Dict[str, Path]], str]]" = None,
+    manifest_snapshot_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
+    manifest_sha256_snapshot_by_level: "Optional[Dict[str, str]]" = None,
+) -> "Dict[str, Any]":
+    """§8.5 のシャード地図を生成する（生成器 `--make-shard-map` の実体）。
+
+    自由変数なし: 入力（`t_direct`/`t_stem`/`startup_cost`/`workers`/`session_budget`/
+    campaign/`bars_path` の中身）が同じなら出力は完全にバイト一致する。
+
+    `generated_utc` を持たない（E-67・PR #242 第5巡 Codex P2 是正・Memo AC 不整合の
+    是正）: Design Memo は「地図に生成時刻を記録する」と「同一入力 → バイト一致」を
+    両方要求していたが、壁時計から読む生成時刻を bytes に含めながらバイト一致を
+    謳うのは自己矛盾する（起草バグ）。生成時刻は地図の**内容**ではなく生成
+    **イベント**の provenance なので、地図 bytes からは外し、CLI が生成完了時に
+    `generated at <ISO8601 UTC> / shard map sha256: <hex>` を stdout へ印字する形へ
+    改める（HANDOFF のレシピは stdout を tee するため dated record に残る。日付の
+    永続的な担保は commit 自体が持つ）。
+
+    `bars_path`（E-47・PR #242 Codex P2 是正）: CLI `--bars` の指定を registry 構築
+    （`repeats_min` の供給元）まで貫通させる。既定はモジュール既定の `BARS_PATH`。
+    実効 bars の sha256 を地図へ記録する（`_require_m2e_shard_map_matches_registry`
+    が消費時に照合する）。
+
+    `workers`（E-59・PR #242 第3巡 Codex P2 是正）: r2-0 で `T_direct`/`T_stem` を
+    校正したときの並列度 `P`。§8.4「production と同じ `P` で回したときの単位コスト」
+    という契約を地図へ束縛する——校正時の `P` を記録しないと、実行時に別の `P` を
+    渡しても検出できず、admission 判定の前提（コストは校正時の `P` で測ったもの）が
+    黙って崩れる。実行機（`--shard-id`）は `--workers` 省略時にこの値を採用し、
+    明示指定時は一致を要求する（fail-closed）。
+
+    `cell_store`（E-66・PR #242 第5巡 Codex 是正）: 指定すると、registry の各セルを
+    `_require_prior_m2e_shards_complete` と同じ digest 一致基準で判定し、既に
+    完了しているセルをパッキングから除外する（§8.5「未完セルについてのみ再適用」の
+    実装）。N_shards / R_max / cap は**残セルのみ**で評価する——完了済みセルの
+    レコードは影響を受けない。除外したセルの鍵（5-tuple のみ・shard_id は持たない）
+    と除外根拠（`cell_store` の repo-relative パス）を地図の
+    `excluded_completed_cells` へ記録する。未指定（既定 `None`）なら従来どおり
+    全セルをパッキングする（後方互換・`excluded_completed_cells.cells` は空になる）。
+
+    `campaign_snapshot`（E-70・PR #242 第6巡 Codex 是正）: CLI の preflight（保護
+    パス集合の構築）が既に読んだ `(campaign, campaign_sha256)` スナップショットを
+    渡せば、ここでは campaign ファイルを再度開かない（E-52 と同族の TOCTOU 是正
+    ——preflight と生成の間にファイルが差し替わっても、生成は検査時点のスナップ
+    ショットのまま進む）。未指定（既定 `None`）なら `campaign_path` から読む
+    （直接呼ぶテスト等の従来経路）。
+
+    `manifest_snapshot_by_level`/`manifest_sha256_snapshot_by_level`（E-125・
+    PR #242 第28巡 Codex 是正）: CLI の preflight（`--cell-store` 指定時の
+    manifest 参照パス保護・E-123）が既に読んだ manifest のパース済みスナップ
+    ショット（`{level: (entries, manifest_dir)}`）と sha256（`{level: sha256}`）
+    を渡せば、`--cell-store` 指定時の除外真実性スキャン（`_m2e_completed_cell_
+    keys`）はここで manifest ファイルを再度開かない（E-70 の manifest 版・
+    TOCTOU 回避）。未指定（既定 `None`）なら従来どおりスキャン内部で読む
+    （直接呼ぶテスト等の後方互換経路。`cell_store is None` なら未使用）。
+    """
+    # E-68（PR #242 第5巡 Codex P2 是正）: 生成器の float 入力全数（t_direct/t_stem/
+    # startup_cost/session_budget）へ isfinite + 符号検査を統一的に敷く（単一の
+    # バリデータへ集約。E-62 で session_budget に敷いた isfinite を他の 3 入力へも
+    # 及ぼす——同型穴の列挙原則）。
+    _require_m2e_shard_map_finite_input("t_direct", t_direct)
+    _require_m2e_shard_map_finite_input("t_stem", t_stem)
+    _require_m2e_shard_map_finite_input("startup_cost", startup_cost, allow_zero=True)
+    _require_m2e_shard_map_finite_input("session_budget", session_budget)
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError(
+            f"generate_m2e_shard_map: workers {workers!r} は 1 以上の整数のみ許可する"
+        )
+
+    campaign_path = Path(campaign_path).resolve()
+    if campaign_snapshot is not None:
+        # E-70: CLI preflight が既に読んだスナップショットを再利用する（再オープンしない）。
+        campaign, campaign_sha256 = campaign_snapshot
+    else:
+        # E-52: campaign_sha256 と parse を単一読取から導出する。
+        campaign, campaign_sha256 = _load_m2e_campaign_with_sha256(campaign_path)
+
+    # E-89（PR #242 第12巡 Codex 是正）: bars を本関数の入口で一度だけ読み、registry
+    # 構築・除外スキャン（--cell-store 指定時）の双方へ同一スナップショットを渡す
+    # （E-78 の生成側対応・TOCTOU 族の完備化——実行側では既に同じ形へ揃えている）。
+    bars, bars_sha256 = load_bars(bars_path)
+    cells, fixtures_sha256_by_level, repeats_min, bars_sha256, fixtures_by_level = (
+        _m2e_full_cell_registry(campaign, bars_path=bars_path, bars_snapshot=(bars, bars_sha256))
+    )
+
+    # E-66: --cell-store 指定時は digest 一致で完了済みのセルをパッキングから除外する。
+    excluded_keys: "set" = set()
+    excluded_cell_store_relative: "Optional[str]" = None
+    excluded_scan_manifest_sha256_by_level: "Dict[str, str]" = {}
+    if cell_store is not None:
+        cell_store_resolved = Path(cell_store).resolve()
+        excluded_keys, excluded_scan_manifest_sha256_by_level, _excluded_scan_manifest_cache = (
+            _m2e_completed_cell_keys(
+                cells,
+                campaign,
+                cell_store_resolved,
+                fixtures_by_level=fixtures_by_level,
+                bars_path=bars_path,
+                bars_snapshot=(bars, bars_sha256),
+                # E-125: preflight（E-123 の manifest 参照パス保護）が既に読んだ
+                # スナップショットを引き回す（未指定時は None・スキャン内部が
+                # 従来どおり読む）。
+                manifest_snapshot_by_level=manifest_snapshot_by_level,
+                manifest_sha256_snapshot_by_level=manifest_sha256_snapshot_by_level,
+            )
+        )
+        # E-95: この生成時スキャンは登録簿全体（4 水準）を走査するため
+        # `excluded_scan_manifest_sha256_by_level` も 4 水準分になるが、実行側の
+        # 真実性再検証（readback）は除外セル**のみ**を対象に再スキャンする
+        # ——実際に除外された水準の集合しか持たない。両者を同じ形で比較できる
+        # よう、記録側も除外セルが実際に属する水準へ絞り込む。
+        excluded_levels = {key[1] for key in excluded_keys}
+        excluded_scan_manifest_sha256_by_level = {
+            level: sha256
+            for level, sha256 in excluded_scan_manifest_sha256_by_level.items()
+            if level in excluded_levels
+        }
+        excluded_cell_store_relative = _repo_relative_path(cell_store_resolved)
+        if excluded_keys and excluded_cell_store_relative is None:
+            raise ValueError(
+                f"generate_m2e_shard_map: --cell-store {cell_store_resolved} が repo root "
+                "の外にあるため、除外根拠（cell_store_relative）を地図へ記録できない; "
+                "実行側の除外検証（fail-closed）が常に落ちる地図を作らない (E-66)"
+            )
+        cells = [c for c in cells if c not in excluded_keys]
+        # E-115（PR #242 第22巡 Codex 是正）: --cell-store により残セルが 0 件
+        # （台帳の全セルが既に digest 一致で完了済み）になる場合、n_shards=1・
+        # n_cells=0 の空地図を黙って生成しない——その時点で r6 は完了しており、
+        # 意味のない地図という成果物を積み重ねる代わりに fail-closed で明示する
+        # （HANDOFF §5 のレシピ注記参照。「地図は科学ではなくスケジューリング」
+        # という §8.5 の前提は「スケジュールする対象が 1 件以上ある」ことを暗黙に
+        # 含む）。
+        if not cells:
+            raise ValueError(
+                f"generate_m2e_shard_map: --cell-store {cell_store_resolved} により残セルが "
+                "0 件（台帳の全セルが既に完了済み）; 空のシャード地図は生成しない——全セル完了・"
+                "地図不要（r6 は次フェーズへ進む） (fail-closed・E-115)"
+            )
+
+    shard_ids, cap, n_shards = _assign_m2e_shard_ids(
+        cells,
+        t_direct=t_direct,
+        t_stem=t_stem,
+        startup_cost=startup_cost,
+        session_budget=session_budget,
+    )
+    if n_shards > _M2E_R_MAX:
+        raise ValueError(
+            f"generate_m2e_shard_map: N_shards={n_shards} が R_max={_M2E_R_MAX} を超える "
+            f"(S={startup_cost!r}, T_direct={t_direct!r}, T_stem={t_stem!r}, "
+            f"B_session={session_budget!r}, cap={cap!r}); 本測定は開始しない。次の3択を "
+            "User 決裁へ提示する (§8.8・自動縮退はしない): "
+            "(1) R_max を引き上げる（規模は不変・回数だけ増える）, "
+            "(2) 実行環境を変更して P を上げる（r2-0 からやり直す）, "
+            "(3) clip 数を削る（休止中の縮退手順・附録B。User の明示的決裁のみ）"
+        )
+
+    cell_records = [
+        {
+            "bed_id": bed_id,
+            "level": level,
+            "clip_id": clip_id,
+            "arm": arm,
+            "repeat_index": repeat_index,
+            "entry_id": _m2e_entry_id(clip_id, bed_id, level),
+            "shard_id": shard_id,
+        }
+        for (bed_id, level, clip_id, arm, repeat_index), shard_id in zip(cells, shard_ids)
+    ]
+    return {
+        "schema_version": _M2E_SHARD_MAP_SCHEMA,
+        "inputs": {
+            "startup_cost_s": startup_cost,
+            "t_direct_s": t_direct,
+            "t_stem_s": t_stem,
+            "workers": workers,
+            "session_budget_s": session_budget,
+            "cap_s": cap,
+            "margin": _M2E_SHARD_CAP_MARGIN,
+        },
+        "campaign_path_relative": _repo_relative_path(campaign_path),
+        "campaign_sha256": campaign_sha256,
+        "bars_path_relative": _repo_relative_path(Path(bars_path).resolve()),
+        "bars_sha256": bars_sha256,
+        "fixtures_sha256_by_level": fixtures_sha256_by_level,
+        "repeats_min": repeats_min,
+        "n_cells": len(cell_records),
+        "n_shards": n_shards,
+        "cells": cell_records,
+        # E-66: 除外した完了済みセル（鍵のみ・shard_id は持たない）+ 除外根拠。
+        # cell_store 未指定時は空（後方互換・従来形と同じ挙動）。
+        "excluded_completed_cells": {
+            "cell_store_relative": excluded_cell_store_relative,
+            "cells": [
+                {
+                    "bed_id": bed_id,
+                    "level": level,
+                    "clip_id": clip_id,
+                    "arm": arm,
+                    "repeat_index": repeat_index,
+                }
+                for bed_id, level, clip_id, arm, repeat_index in sorted(excluded_keys)
+            ],
+            # E-95（PR #242 第15巡 Codex 是正）: 除外判定の走査で読んだ per-level
+            # manifest の sha256——実行側の除外真実性再検証（readback）が同じ
+            # manifest を消費していることを照合する（別世代の manifest を挟んで
+            # 除外決定と真実性検証が食い違う経路を塞ぐ）。
+            "manifest_sha256_by_level": excluded_scan_manifest_sha256_by_level,
+        },
+    }
+
+
+def _load_m2e_shard_map(path: "str | Path") -> "Tuple[Dict[str, Any], str]":
+    """シャード地図 YAML を single read で `(parsed dict, sha256)` として返す。"""
+    map_path = Path(path).resolve()
+    data = map_path.read_bytes()
+    doc = _yaml_load_no_dup_keys(data, what=map_path.name)
+    if not isinstance(doc, dict) or doc.get("schema_version") != _M2E_SHARD_MAP_SCHEMA:
+        raise ValueError(
+            f"{map_path}: schema_version が {_M2E_SHARD_MAP_SCHEMA!r} でない (fail-closed)"
+        )
+    for required in (
+        "inputs",
+        "campaign_sha256",
+        "bars_sha256",
+        "fixtures_sha256_by_level",
+        "repeats_min",
+        "n_shards",
+        "n_cells",
+        "cells",
+    ):
+        if required not in doc:
+            raise ValueError(f"{map_path}: {required!r} を欠く (fail-closed)")
+    return doc, hashlib.sha256(data).hexdigest()
+
+
+def _require_m2e_shard_map_matches_registry(
+    map_doc: "Dict[str, Any]",
+    campaign: "Dict[str, Dict[str, Path]]",
+    *,
+    bars_path: Path = BARS_PATH,
+    cell_store: "Optional[str | Path]" = None,
+    manifest_snapshot_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
+    manifest_sha256_snapshot_by_level: "Optional[Dict[str, str]]" = None,
+) -> "Tuple[Dict[str, Dict[str, Any]], Tuple[Any, str], Dict[str, Tuple[List[Dict[str, Any]], Path]]]":
+    """地図の `cells` が現在の campaign から再計算した台帳・割当と一致することを要求する。
+
+    欠け・重複・余剰のいずれも fail-closed（§8.5「セル台帳は不可侵」の実行時側の
+    立証）。台帳が動いた（fixtures が改訂された・`repeats_min` が変わった等）状態の
+    まま古い地図を消費すると、測っていないセルを完了扱いにしたり、存在しないセルへ
+    `shard_id` を割り当てたりする。
+
+    戻り値は `(fixtures_by_level, bars_snapshot, excluded_manifest_by_level)`。
+    `fixtures_by_level`（E-57・PR #242 第3巡 Codex P2 是正）と
+    `bars_snapshot == (bars, bars_sha256)`（E-78・PR #242 第8巡 Codex 是正）は
+    いずれも検証済みスナップショット——呼び出し元（`execute_m2e_shard`）はこれらを
+    実行段でも引き回し、同じ fixtures / bars ファイルを再度開かない（TOCTOU 回避。
+    E-52 と同族）。`excluded_manifest_by_level`（E-104・PR #242 第19巡 Codex 是正）
+    は除外真実性の再スキャンで読んだ manifest のパース済みスナップショット
+    （除外なしなら空）——呼び出し元はこれを先行 shard 検査・task 構築へ引き回し、
+    同じ水準の manifest を再度開かない（E-72 と同族）。
+
+    `cell_store`（E-79・PR #242 第8巡 Codex 是正）: `execute_m2e_shard` が実際に
+    書き込む store を渡すと、`excluded_completed_cells` の除外真実性検証を
+    「地図が記録した store」ではなく「その実行 store」へ束縛する（地図の
+    `cell_store_relative` と実行時 `--cell-store` の一致を要求した上で、真実性
+    check 自体もこの実行 store に対して行う）。未指定（既定 `None`）なら従来どおり
+    地図の記録した store のみで検証する（直接呼ぶテスト等の後方互換経路）。
+
+    `manifest_snapshot_by_level`/`manifest_sha256_snapshot_by_level`（E-133・
+    PR #242 第32巡 Codex 是正）: CLI の preflight（`--out` 保護入力検査・E-123）が
+    既に読んだ manifest のパース済みスナップショットと sha256 を渡せば、除外
+    真実性の再スキャン（`_m2e_completed_cell_keys` 経由・excluded_keys が非空の
+    ときのみ発火）はここで manifest ファイルを再度開かない——除外検証・digest
+    計算・戻り値（`excluded_manifest_by_level`）のすべてがこの単一スナップ
+    ショット由来になる。E-125（`generate_m2e_shard_map` 側）・E-126
+    （`execute_m2e_shard` の task 構築側）と同族の TOCTOU 完備化で、これにより
+    `--shard-id` 経路の manifest 読取は preflight の 1 回へ完全に一本化される
+    （E-126 が導入した「rescan 優先・preflight 次点」という優先順位は、rescan
+    自体が同じ preflight 実体を消費するため実質的な縮退になる）。未指定
+    （既定 `None`）なら従来どおり内部で読む（直接呼ぶテスト等の後方互換経路）。
+
+    E-49（PR #242 第1巡 Codex P1 是正）: セル鍵の集合一致だけでは、鍵は保ったまま
+    `shard_id` の値や `n_shards` だけを書き換えた地図（例: 全セルを shard 0 に
+    寄せて `n_shards: 1` を名乗る）を素通ししてしまう——凍結パッキングアルゴリズムと
+    `R_max` 契約を丸ごとバイパスできることになる。**地図は科学ではなく
+    スケジューリングだが、改変検出は台帳と同格で要求する**: 地図が記録した入力
+    （S/T_direct/T_stem/B_session）から `_assign_m2e_shard_ids` で割当を再計算し、
+    全セルの `shard_id` と `n_shards` の完全一致を要求する。
+
+    E-53（PR #242 第2巡 Codex P2 是正）: E-49 の再計算は鍵引き dict 比較のため、
+    `map_doc["cells"]` **内の並び順**は見ていなかった——shard_id を保ったまま
+    同一 shard 内でレコードを並べ替えた地図も通ってしまい、`_m2e_shard_cells_for` /
+    動的キューがその改変順序のまま配布・実行する（§8.5 の凍結 lexical 配布順に
+    違反する）。よって鍵集合・shard_id の一致に加え、`map_doc["cells"]` の**並び順を
+    含めた完全一致**を、再生成した正準順序（`registry_cells` そのもの——§8.5 order で
+    既にソート済み）と比較して要求する。
+
+    E-58（PR #242 第3巡 Codex P2 是正）: 5-tuple（bed_id/level/clip_id/arm/
+    repeat_index）が無傷でも `entry_id` だけを別セルのものへ書き換えられると、
+    キューは改変された `entry_id` の manifest entry / チェックポイントを消費して
+    しまう（本来の clip を測らないまま「完了」を報告しうる）。全セルについて
+    `entry_id == _m2e_entry_id(clip_id, bed_id, level)`（§6.2 の正準写像）を要求する。
+
+    `bars_path`（E-47・PR #242 第1巡 Codex P2 是正）: `--bars` の指定を検証まで
+    貫通させ、地図が刻んだ `bars_sha256` と実効 bars の実体を照合する。
+    """
+    # E-78: bars を本関数の入口で一度だけ読み、以降（registry 構築・除外真実性検証）は
+    # このスナップショットを引き回す（内部で複数回 load_bars を呼ばない）。
+    bars, bars_sha256 = load_bars(bars_path)
+    registry_cells, fixtures_sha256_by_level, repeats_min, _bars_sha256_unused, fixtures_by_level = (
+        _m2e_full_cell_registry(campaign, bars_path=bars_path, bars_snapshot=(bars, bars_sha256))
+    )
+    if map_doc.get("bars_sha256") != bars_sha256:
+        raise ValueError(
+            f"shard map: bars_sha256 {map_doc.get('bars_sha256')!r} が --bars {bars_path} "
+            f"の実体 {bars_sha256!r} と不一致; 別世代の bars（repeats_min 等の共有スカラー "
+            "供給元）で組まれた地図を消費しない (fail-closed)"
+        )
+    if map_doc.get("fixtures_sha256_by_level") != fixtures_sha256_by_level:
+        raise ValueError(
+            "shard map: fixtures_sha256_by_level が現在の campaign の実体と不一致; "
+            "地図が生成された後に fixtures が変わった (fail-closed)"
+        )
+    # E-102（PR #242 第18巡 Codex 是正）: `int(...)` は非 bool の整数以外
+    # （`2.5`・`"2"`）を黙って受理してしまう——E-83/E-97 と同型の穴。
+    if _require_m2e_shard_map_integer_field(
+        "repeats_min", map_doc.get("repeats_min")
+    ) != repeats_min:
+        raise ValueError(
+            f"shard map: repeats_min {map_doc.get('repeats_min')!r} が現在の凍結値 "
+            f"{repeats_min!r} と不一致 (fail-closed)"
+        )
+    # E-58: entry_id の正準束縛（5-tuple が無傷でも entry_id だけの改変を検出する）。
+    bad_entry_ids = [
+        record.get("entry_id")
+        for record in map_doc["cells"]
+        if record.get("entry_id")
+        != _m2e_entry_id(record["clip_id"], record["bed_id"], record["level"])
+    ]
+    if bad_entry_ids:
+        raise ValueError(
+            f"shard map: {len(bad_entry_ids)} 件のセルの entry_id が §6.2 の正準写像 "
+            f"（vremix_{{clip_id}}_{{bed_id}}_{{level_tag}}）と一致しない"
+            f"（例: {bad_entry_ids[:3]}）; entry_id だけを改変した地図で別 clip を測る "
+            "経路を許さない (fail-closed)"
+        )
+    # E-66（PR #242 第5巡 Codex 是正）: 地図が「未完セルについてのみ」組まれている
+    # 場合、除外された完了済みセルの鍵集合を読み取る。以降の台帳比較はこの除外集合を
+    # 引いた「残セルの台帳」を基準にする。除外の真実性（実際に store で digest 一致
+    # 完了しているか）も検証する——地図が虚偽の除外を宣言して未測定セルの存在を
+    # 隠す経路を許さない。`excluded_completed_cells` を持たない旧世代の地図は空
+    # 除外として扱う（後方互換・従来どおり全台帳を要求する）。
+    excluded_doc = map_doc.get("excluded_completed_cells") or {}
+    excluded_records = excluded_doc.get("cells") or []
+    excluded_keys: "set" = set()
+    excluded_duplicates: "List[Tuple[str, str, str, str, int]]" = []
+    for record in excluded_records:
+        excluded_key = (
+            record["bed_id"],
+            record["level"],
+            record["clip_id"],
+            record["arm"],
+            _require_m2e_cell_repeat_index(record["repeat_index"]),
+        )
+        # E-99（PR #242 第17巡 Codex 是正）: set への追加は重複を黙って畳む——地図が
+        # 同一セルを 2 回以上「除外済み」と宣言していても、その事実自体は検出でき
+        # ない（除外の正当性は個々に立証されるため実害は薄いが、地図が壊れている
+        # 兆候を握り潰さない。台帳は不可侵の原則に倣い fail-closed で顕在化する）。
+        if excluded_key in excluded_keys:
+            excluded_duplicates.append(excluded_key)
+        excluded_keys.add(excluded_key)
+    if excluded_duplicates:
+        raise ValueError(
+            "shard map: excluded_completed_cells.cells に "
+            f"{len(excluded_duplicates)} 件の重複がある（例: "
+            f"{excluded_duplicates[:3]}）; 除外一覧は各セル高々 1 回のみ許可する "
+            "(fail-closed・E-99)"
+        )
+    registry_full_set = set(registry_cells)
+    excluded_not_in_registry = excluded_keys - registry_full_set
+    if excluded_not_in_registry:
+        raise ValueError(
+            "shard map: excluded_completed_cells が台帳に存在しないセルを "
+            f"{len(excluded_not_in_registry)} 件含む（例: "
+            f"{sorted(excluded_not_in_registry)[:3]}）; セル台帳は不可侵 (fail-closed)"
+        )
+    # E-104（PR #242 第19巡 Codex 是正）: 除外真実性の再スキャンで読んだ manifest
+    # のパース済みスナップショット——除外なし（従来形）なら空のまま返す。
+    excluded_manifest_by_level: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
+    if excluded_keys:
+        cell_store_relative = excluded_doc.get("cell_store_relative")
+        if not cell_store_relative:
+            raise ValueError(
+                "shard map: excluded_completed_cells.cells が非空なのに "
+                "cell_store_relative を欠く; 除外の根拠を検証できない (fail-closed)"
+            )
+        excluded_cell_store = _require_m2e_excluded_cell_store_relative_confined_to_root(
+            cell_store_relative
+        )
+        # E-79: 実行が実際に使う cell_store（execute_m2e_shard から渡された引数）が
+        # あれば、地図が記録した store と一致することを要求し、真実性検証も**実行
+        # store**へ束縛する——地図の cell_store_relative がどこか別の store 向けの
+        # 宣言であっても、実行が別の --cell-store を指せば地図の除外を信用しない
+        # （地図の記録した store だけを見て検証すると、実行時の実 store とすり替え
+        # られていても気付けない）。
+        if cell_store is not None:
+            actual_cell_store = Path(cell_store).resolve()
+            if actual_cell_store != excluded_cell_store:
+                raise ValueError(
+                    "shard map: excluded_completed_cells.cell_store_relative "
+                    f"{cell_store_relative!r}（解決後 {excluded_cell_store}）が実行時の "
+                    f"--cell-store {actual_cell_store} と一致しない; 地図が別 store 向けに "
+                    "宣言した除外を、別の store への書き込みに束縛して信用しない "
+                    "(fail-closed・E-79)"
+                )
+            verify_cell_store = actual_cell_store
+        else:
+            verify_cell_store = excluded_cell_store
+        # 除外の真実性: 宣言された除外セルが実際に store で digest 一致完了して
+        # いることを要求する（判定基準は生成器と同一の _m2e_completed_cell_keys）。
+        # E-133: preflight（保護入力検査・E-123）が既に読んだ manifest スナップ
+        # ショットを引き回す（未指定時は None・スキャン内部が従来どおり読む）。
+        actually_complete, rescan_manifest_sha256_by_level, excluded_manifest_by_level = (
+            _m2e_completed_cell_keys(
+                sorted(excluded_keys),
+                campaign,
+                verify_cell_store,
+                fixtures_by_level=fixtures_by_level,
+                bars_path=bars_path,
+                bars_snapshot=(bars, bars_sha256),
+                manifest_snapshot_by_level=manifest_snapshot_by_level,
+                manifest_sha256_snapshot_by_level=manifest_sha256_snapshot_by_level,
+            )
+        )
+        not_actually_complete = excluded_keys - actually_complete
+        if not_actually_complete:
+            raise ValueError(
+                f"shard map: excluded_completed_cells が {len(not_actually_complete)} 件の "
+                f"セルを完了済みと宣言しているが、store {cell_store_relative!r} では digest "
+                f"一致で完了していない（例: {sorted(not_actually_complete)[:3]}）; 除外の "
+                "真実性を立証できない地図は実行しない (fail-closed)"
+            )
+        # E-95（PR #242 第15巡 Codex 是正）: 除外真実性の再スキャンで読んだ
+        # manifest が、生成時の除外判定が読んだ manifest（地図に記録済み）と
+        # 一致することを要求する——個々のセルの digest 一致だけでは、manifest
+        # 全体が別世代へ差し替わっていても検出できない（entry の中身が偶然
+        # 不変なら気付けない）。
+        recorded_manifest_sha256_by_level = excluded_doc.get("manifest_sha256_by_level") or {}
+        if recorded_manifest_sha256_by_level != rescan_manifest_sha256_by_level:
+            raise ValueError(
+                "shard map: excluded_completed_cells.manifest_sha256_by_level "
+                f"{recorded_manifest_sha256_by_level!r} が実行時に読んだ manifest "
+                f"{rescan_manifest_sha256_by_level!r} と不一致; 除外判定を下した時点の "
+                "manifest と実行時に消費する manifest が食い違う地図は実行しない "
+                "(fail-closed・E-95)"
+            )
+    expected_registry_cells = [c for c in registry_cells if c not in excluded_keys]
+    registry_set = set(expected_registry_cells)
+    map_set: "set" = set()
+    duplicates: "List[Tuple[str, str, str, str, int]]" = []
+    declared_shard_id: "Dict[Tuple[str, str, str, str, int], Any]" = {}
+    for record in map_doc["cells"]:
+        key = (
+            record["bed_id"],
+            record["level"],
+            record["clip_id"],
+            record["arm"],
+            _require_m2e_cell_repeat_index(record["repeat_index"]),
+        )
+        if key in map_set:
+            duplicates.append(key)
+        map_set.add(key)
+        # E-112（PR #242 第21巡 Codex 是正）: `False != 0` は Python では成り立たない
+        # （`False == 0`）——`shard_id: false`/`shard_id: 0.0` のセルは、後段の
+        # `!=` 比較だけでは `shard_id: 0` と黙って区別されない。E-108 と同じ
+        # 無強制整数検証を格納の前に敷く。
+        declared_shard_id[key] = _require_m2e_shard_map_integer_field(
+            "cells[].shard_id", record.get("shard_id")
+        )
+    if duplicates:
+        raise ValueError(f"shard map: セル鍵が重複している ({duplicates[:5]}) (fail-closed)")
+    missing = registry_set - map_set
+    extra = map_set - registry_set
+    if missing or extra:
+        raise ValueError(
+            f"shard map: 台帳と一致しない (missing={len(missing)}, extra={len(extra)}); "
+            "セル台帳は不可侵——地図は再生成すること (fail-closed)"
+        )
+
+    # E-53: 鍵集合が一致していても並び順が改変されていれば拒否する（正準順序の完全一致）。
+    declared_order = [
+        (
+            record["bed_id"],
+            record["level"],
+            record["clip_id"],
+            record["arm"],
+            _require_m2e_cell_repeat_index(record["repeat_index"]),
+        )
+        for record in map_doc["cells"]
+    ]
+    if declared_order != expected_registry_cells:
+        first_mismatch = next(
+            (
+                i
+                for i, (declared, expected) in enumerate(
+                    zip(declared_order, expected_registry_cells)
+                )
+                if declared != expected
+            ),
+            min(len(declared_order), len(expected_registry_cells)),
+        )
+        raise ValueError(
+            "shard map: cells の並び順が凍結 lexical order（§8.5 order）と一致しない "
+            f"(最初の不一致位置={first_mismatch}); 地図内でレコードを並べ替えると "
+            "`_m2e_shard_cells_for` / 動的キューが改変された順序で配布・実行してしまう "
+            "(fail-closed)"
+        )
+
+    inputs = map_doc["inputs"]
+    # E-101（PR #242 第17巡 Codex 是正）: `float(x)` は非数値スカラー（文字列・
+    # bool）を強制の前に検査せず黙って成功させてしまう——E-83/E-97 と同型の
+    # 無強制型検査を先に敷く。
+    expected_shard_ids, expected_cap, expected_n_shards = _assign_m2e_shard_ids(
+        expected_registry_cells,
+        t_direct=_require_m2e_shard_map_numeric_field("t_direct_s", inputs["t_direct_s"]),
+        t_stem=_require_m2e_shard_map_numeric_field("t_stem_s", inputs["t_stem_s"]),
+        startup_cost=_require_m2e_shard_map_numeric_field(
+            "startup_cost_s", inputs["startup_cost_s"]
+        ),
+        session_budget=_require_m2e_shard_map_numeric_field(
+            "session_budget_s", inputs["session_budget_s"]
+        ),
+    )
+    # E-75（PR #242 第7巡 Codex P2 是正）: cap_s/margin/n_cells は再計算するだけで
+    # 捨てていた（cap は `_cap` に破棄、margin/n_cells はそもそも比較していなかった）
+    # ——地図が cells/shard_id を無傷に保ったまま、これら派生メタデータだけを改変
+    # しても検出できなかった。E-49/E-69 と同枠で、再計算値との完全一致を要求する。
+    # E-116（PR #242 第22巡 Codex 是正）: `float(x)`/`int(x)` は非数値スカラー
+    # （文字列・bool）や `1.5`（切り捨て）を強制の前に検査せず黙って受理して
+    # しまう——E-83/E-97/E-101/E-102 と同型の穴。cap_s/margin/n_cells の 3 フィールド
+    # を無強制の型検査ヘルパ経由に統一し、この地図数値フィールド型検証ファミリー
+    # を終端する（同型穴の一括掃討）。
+    if _require_m2e_shard_map_numeric_field("cap_s", inputs.get("cap_s")) != expected_cap:
+        raise ValueError(
+            f"shard map: inputs.cap_s {inputs.get('cap_s')!r} が再計算値 {expected_cap!r} "
+            "と不一致 (fail-closed・E-75)"
+        )
+    if (
+        _require_m2e_shard_map_numeric_field("margin", inputs.get("margin"))
+        != _M2E_SHARD_CAP_MARGIN
+    ):
+        raise ValueError(
+            f"shard map: inputs.margin {inputs.get('margin')!r} が凍結値 "
+            f"{_M2E_SHARD_CAP_MARGIN!r} と不一致 (fail-closed・E-75・設計 §8.5)"
+        )
+    if _require_m2e_shard_map_integer_field(
+        "n_cells", map_doc.get("n_cells")
+    ) != len(expected_registry_cells):
+        raise ValueError(
+            f"shard map: n_cells {map_doc.get('n_cells')!r} が再計算値 "
+            f"{len(expected_registry_cells)!r} と不一致 (fail-closed・E-75・E-116)"
+        )
+    # E-69（PR #242 第5巡 Codex P2 是正）: 再計算した割当・n_shards が整合していても
+    # `R_max` を超えうる——記録された入力（S/T_direct/T_stem/B_session）を改変すれば、
+    # 割当・n_shards を「その改変後の入力からは正しく」再生成できてしまうため、上の
+    # 完全一致検査だけでは通ってしまう。しかし `generate_m2e_shard_map` は
+    # `n_shards > R_max` を fail-closed で拒否しており、**生成器が出し得ない成果物**
+    # のはずである。読み戻し（実行側の検証）でも同じ `R_max` 契約を再適用し、
+    # 生成器をバイパスした地図を締め出す。
+    if expected_n_shards > _M2E_R_MAX:
+        raise ValueError(
+            f"shard map: 記録された入力から再計算した n_shards={expected_n_shards} が "
+            f"R_max={_M2E_R_MAX} を超える; generate_m2e_shard_map はこの入力の組を "
+            "拒否するはずであり、生成器をバイパスした地図を実行しない (fail-closed・E-69)"
+        )
+    expected_shard_id_by_key = dict(zip(expected_registry_cells, expected_shard_ids))
+    mismatched = sorted(
+        key for key in registry_set if declared_shard_id.get(key) != expected_shard_id_by_key[key]
+    )
+    if mismatched:
+        raise ValueError(
+            f"shard map: {len(mismatched)} 件のセルの shard_id が、地図の記録した入力"
+            "（S/T_direct/T_stem/B_session）から凍結アルゴリズムで再計算した割当と "
+            f"一致しない（例: {mismatched[:3]}）; 改変された割当で実行しない (fail-closed)"
+        )
+    # E-97（PR #242 第15巡 Codex 是正）: `int(...)` は非 bool の整数以外（`1.5` は
+    # 切り捨てて偶然 expected と一致しうる・`true` は 1 になる）を黙って正常値と
+    # して受理してしまう——E-83（workers）と同型の穴。無強制の型検査を先に敷く。
+    if _require_m2e_shard_map_integer_field(
+        "n_shards", map_doc.get("n_shards")
+    ) != expected_n_shards:
+        raise ValueError(
+            f"shard map: n_shards {map_doc.get('n_shards')!r} が再計算値 "
+            f"{expected_n_shards!r} と不一致 (fail-closed)"
+        )
+    return fixtures_by_level, (bars, bars_sha256), excluded_manifest_by_level
+
+
+def _m2e_shard_cells_for(map_doc: "Dict[str, Any]", shard_id: int) -> "List[Dict[str, Any]]":
+    """地図から `shard_id` に属するセルだけを、地図に記録された順序のまま抜き出す。
+
+    地図の `cells` は §8.5 order で書かれている（`generate_m2e_shard_map` が保証）ので、
+    ここでの絞り込みは順序を破らない。各要素に `cost`（秒）を付与する。
+
+    E-116（PR #242 第22巡 Codex 是正）: `float(x)` は非数値スカラー（文字列・bool）
+    を強制の前に検査せず黙って成功させてしまう——呼び出し元
+    （`_require_m2e_shard_map_matches_registry` 経由の `execute_m2e_shard`）は既に
+    `t_direct_s`/`t_stem_s` を検証済みだが、E-101（`session_budget`）と同じく
+    execute 側でも同じ無強制ヘルパで読む一貫性を優先する。
+    """
+    inputs = map_doc["inputs"]
+    t_direct = _require_m2e_shard_map_numeric_field("t_direct_s", inputs["t_direct_s"])
+    t_stem = _require_m2e_shard_map_numeric_field("t_stem_s", inputs["t_stem_s"])
+    return [
+        dict(record, cost=_m2e_shard_cell_cost(record["arm"], t_direct=t_direct, t_stem=t_stem))
+        for record in map_doc["cells"]
+        if record["shard_id"] == shard_id
+    ]
+
+
+def _require_prior_m2e_shards_complete(
+    map_doc: "Dict[str, Any]",
+    shard_id: int,
+    *,
+    cell_store: Path,
+    campaign: "Dict[str, Dict[str, Path]]",
+    env_digest: str,
+    tolerance_cents: float,
+    est_voiced_floor: float,
+    fixtures_by_level: "Optional[Dict[str, Dict[str, Any]]]" = None,
+    manifest_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
+) -> "Dict[str, Tuple[List[Dict[str, Any]], Path]]":
+    """`shard_id` 未満の全 shard が digest 一致で完了していることを要求する（fail-closed）。
+
+    §8.6「`shard_id` の昇順で実行する。飛ばしてよいのは、その shard の全セルが digest
+    一致で完了済みの場合のみ」の実装。既存の resume 判定
+    （`_cell_store_record_path` / `_cell_record_mismatches`）をそのまま再利用する——
+    別の判定基準を作ると「シャード実行機が完了とみなした」と「1 水準まるごとの run が
+    resume する」が食い違いうる（resume 互換 AC の根拠）。
+
+    `fixtures_by_level`（E-57・PR #242 第3巡 Codex P2 是正）: 呼び出し元
+    （`execute_m2e_shard`）が `_require_m2e_shard_map_matches_registry` から受け取った
+    検証済みスナップショットを渡せば、ここで fixtures ファイルを再度開かない
+    （TOCTOU 回避）。未指定（既定 `None` — 直接呼ぶテスト等）ならこれまでどおり
+    `campaign` からその場で読む。
+
+    戻り値は本関数が読んだ manifest のスナップショット（E-72・PR #242 第6巡 Codex
+    是正）: `{level: (entries, manifest_dir)}`。呼び出し元（`execute_m2e_shard`）の
+    task 構築ループは、この shard に必要な水準のうちここで既に読んだものを再利用し、
+    同じ manifest ファイルを再度開かない（先行 shard 検証と task 構築が別々の
+    read で同一 level の manifest を消費する TOCTOU——E-57 の fixtures 引き回しと
+    同じ形）。`prior_cells` が空なら（`shard_id == 0` 等）`manifest_by_level`
+    をそのまま（無ければ空の `{}`）返す。
+
+    `manifest_by_level`（E-104・PR #242 第19巡 Codex 是正）: 呼び出し元
+    （`execute_m2e_shard`）が `_require_m2e_shard_map_matches_registry` の除外
+    真実性再スキャンから受け取った manifest スナップショットを渡せば、その
+    水準はここで再オープンしない（fixtures 側の `fixtures_by_level` と同じ
+    形の TOCTOU 回避）。未指定（既定 `None`）ならこれまでどおり必要な水準を
+    その場で読む。
+    """
+    prior_cells = [r for r in map_doc["cells"] if r["shard_id"] < shard_id]
+    manifest_cache: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = (
+        dict(manifest_by_level) if manifest_by_level else {}
+    )
+    if not prior_cells:
+        return manifest_cache
+    fixtures_cache: "Dict[str, Dict[str, Any]]" = {}
+    incomplete: "List[str]" = []
+    for record in prior_cells:
+        level = record["level"]
+        if level not in fixtures_cache:
+            if fixtures_by_level is not None and level in fixtures_by_level:
+                fixtures_cache[level] = fixtures_by_level[level]
+            else:
+                fixtures_doc, _sha = load_external_fixtures(campaign[level]["external_fixtures"])
+                fixtures_cache[level] = fixtures_doc["fixtures"]
+        if level not in manifest_cache:
+            entries, _manifest_sha256, manifest_path = _load_external_manifest(
+                campaign[level]["external_manifest"]
+            )
+            manifest_cache[level] = (entries, manifest_path.parent)
+        fixtures = fixtures_cache[level]
+        entries, manifest_dir = manifest_cache[level]
+        entry_id = record["entry_id"]
+        entry = next((e for e in entries if e["id"] == entry_id), None)
+        label = f"{entry_id}/{record['arm']}/repeat{record['repeat_index']}"
+        if entry is None:
+            incomplete.append(f"{label} (manifest に無い)")
+            continue
+        record_path = _cell_store_record_path(
+            cell_store,
+            category=record["arm"],
+            level=level,
+            entry_id=entry_id,
+            repeat_index=record["repeat_index"],
+        )
+        if not record_path.is_file():
+            incomplete.append(f"{label} (未測定)")
+            continue
+        inputs = _read_external_clip_inputs(
+            entry_id, entry, manifest_dir=manifest_dir, fixtures=fixtures
+        )
+        stored = _json_loads_no_dup_keys(
+            record_path.read_bytes(), what=f"cell record {record_path}"
+        )
+        mismatches = _cell_record_mismatches(
+            stored,
+            category=record["arm"],
+            level=level,
+            entry_id=entry_id,
+            repeat_index=record["repeat_index"],
+            audio_sha256=inputs.audio_sha256,
+            annotation_sha256=inputs.annotation_sha256,
+            env_digest=env_digest,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+            store_role=_CELL_STORE_ROLE_RUN,
+        )
+        if mismatches:
+            incomplete.append(f"{label} (digest 不一致)")
+    if incomplete:
+        raise ValueError(
+            f"shard {shard_id}: 先行 shard（shard_id < {shard_id}）に digest 一致で完了して"
+            f"いないセルがある（{incomplete[:10]}{' ほか' if len(incomplete) > 10 else ''}）; "
+            "昇順実行を要求する。飛ばせるのは全セルが完了済みの shard のみ "
+            "(fail-closed・設計 §8.6)"
+        )
+    return manifest_cache
+
+
+def _shard_measure_and_record_cell(
+    task: "Dict[str, Any]", *, runner: RouteRunner
+) -> "Dict[str, Any]":
+    """1 セルを測るか resume する（`_measure_or_resume_external_clip_row` の per-cell 呼び出し）。
+
+    テスト seam: `runner` は非 picklable でもよい——この関数を直接呼ぶ経路（fake
+    backend 統合テスト・resume 互換テストが使う「P=1 の in-process 経路」）と、
+    `_shard_worker_measure_cell` からモジュール既定 runner で呼ばれる multiprocessing
+    経路の両方から使われる。`task` 自身は picklable な primitives のみで構成する
+    （spawn context を跨ぐため）。
+
+    レコードパス・書き込み機構は `_measure_or_resume_external_clip_row` /
+    `_cell_store_record_path` / `atomic_io` をそのまま共有する——これが shard 実行機の
+    セルレコードが既存の「1 水準まるごと」run による resume と互換であることの根拠。
+    """
+    category = task["arm"]
+    level = task["level"]
+    entry_id = task["entry_id"]
+    repeat_index = task["repeat_index"]
+    entry = task["entry"]
+    fixtures = task["fixtures"]
+    manifest_dir = Path(task["manifest_dir"])
+    category_spec = _CATEGORY_SPECS[category]
+    route = _select_named_route(category_spec["input_kind"], category_spec["route_name"])
+    record_est_trajectory = _category_records_est_trajectory(category)
+
+    cells_resumed: "List[str]" = []
+    cells_measured: "List[str]" = []
+    cell_started_utc: "List[str]" = []
+    cell_written_paths: "List[str]" = []
+    cell_store_mismatches: "List[Dict[str, Any]]" = []
+
+    with tempfile.TemporaryDirectory(prefix="m2e-shard-cell-") as tmp:
+        clip_row = _measure_or_resume_external_clip_row(
+            entry_id,
+            entry,
+            manifest_dir=manifest_dir,
+            fixtures=fixtures,
+            tolerance_cents=task["tolerance_cents"],
+            est_voiced_floor=task["est_voiced_floor"],
+            route=route,
+            runner=runner,
+            tmp_dir=Path(tmp),
+            category=category,
+            level=level,
+            cell_store=Path(task["cell_store"]),
+            repeat_index=repeat_index,
+            env_digest=task["env_digest"],
+            workers=task["workers"],
+            cells_resumed=cells_resumed,
+            cells_measured=cells_measured,
+            cell_started_utc=cell_started_utc,
+            cell_written_paths=cell_written_paths,
+            cell_store_mismatches=cell_store_mismatches,
+            store_role=_CELL_STORE_ROLE_RUN,
+            record_est_trajectory=record_est_trajectory,
+        )
+    return {
+        "bed_id": task["bed_id"],
+        "level": level,
+        "clip_id": task["clip_id"],
+        "arm": category,
+        "repeat_index": repeat_index,
+        "entry_id": entry_id,
+        "resumed": entry_id in cells_resumed,
+        "measured": entry_id in cells_measured,
+        "mismatches": cell_store_mismatches,
+        "outcome": clip_row.get("outcome"),
+        # E-46（PR #242 Codex P1 是正）: outcome == "unavailable" のときの理由
+        # （`_build_external_clip_row` が刻む 1 行説明）。`execute_m2e_shard` が
+        # completed から外して未完側へ回すときに使う。
+        "detail": clip_row.get("detail"),
+        # E-61（PR #242 第4巡 Codex P2 是正）: このセルが**新規に書いた**レコードパス
+        # （resume は含まない）。`execute_m2e_shard` が post-execution の runtime pin
+        # 再検証に失敗したとき、`_quarantine_cell_records` へ渡す隔離対象を集めるため。
+        "written_paths": list(cell_written_paths),
+    }
+
+
+_M2E_CREPE_PRELOAD_CAPACITY = "full"  # crepe_adapter._DEFAULT_CAPACITY と同値（重複定義）。
+_M2E_DEMUCS_PRELOAD_MODEL = "htdemucs_ft"  # source_separator.DEFAULT_MODEL と同値。
+
+
+def _default_m2e_model_preload() -> None:
+    """CREPE / Demucs を実際に load する既定の preload 実装。
+
+    E-50（PR #242 第2巡 Codex P2 是正・**前回 D-6 の判断を撤回する**）: Design Memo
+    決定済み判断 5「ワーカーは multiprocessing + initializer でモデルロード」（§8.4 の
+    `S` = プロセスプール起動〜モデルロード完了、という定義と一致させる）から、前回の
+    実装は「スレッド固定のみ適用し、モデルロードは行わない」という形で逸脱していた
+    （その判断は誤りだったとして撤回する）。
+
+    **CREPE**: `crepe` 自身が持つ既存の遅延ロード singleton
+    （`crepe.core.build_and_load_model` — `crepe.predict()` が内部で参照するのと
+    同じ module-level キャッシュ）を、実音声なしで直接呼んで eager 化する。新しい
+    ロード機構は作らない。
+
+    **Demucs**: `demucs.api.Separator` を initializer 内で 1 回構築し、破棄する
+    （in-process 保持はしない・**既知の限界**）。`svp_rpe.io.source_separator.
+    _separate_stems_with_api` は呼び出しのたびに新しい `Separator` を構築する契約
+    になっており（既存テスト群（`tests/test_source_separator.py` 等）がその契約に
+    依存した fake で観測する）、その per-call 構築を worker 内で恒久的に回避する
+    配線は `src/svp_rpe/io/source_separator.py` の変更を要する。`src/svp_rpe/**` は
+    Design Memo の Scope OUT であり、変更すれば影響範囲が本ブリーフの検証対象
+    （`tests/test_m2_accuracy_harness.py`）を超えて既存の `source_separator` 系
+    テスト群へ及ぶため、本セッションでは行わない。
+
+    **preload の実際の効果（E-63・PR #242 第4巡 Codex 裁定「見送り」・是正済み記載）**:
+    ここで前倒しされるのは重み**ダウンロード**（初回のみ）と OS ページキャッシュ・
+    フレームワーク初期化コストという**一回性のスパイク**であり、`Separator`
+    オブジェクトの in-memory 保持ではない——per-call の `Separator` 再構築コスト
+    自体は全 stem セルに一様にかかり続ける。この一様な per-call コストは r2-0 の
+    `T_stem` 実測にも同一コードパスで含まれるため（初回スパイクだけが `S` へ
+    前倒しされていれば）、`S`/`T_*` の分離とシャード幅の正しさ（cap 計算）は
+    崩れない。E-63 では in-process 保持化への昇格を見送った（`src/svp_rpe/io/
+    source_separator.py` の per-call 構築契約を変更する必要があり Scope OUT のため）
+    ——r4 実測で per-call 再構築コストが `T_stem` の有意割合と判明すれば、別ブリーフ
+    で保持化の seam を検討する。
+    """
+    try:
+        from svp_rpe.rpe.learned.crepe_adapter import ensure_crepe_available
+
+        ensure_crepe_available()
+        import crepe.core as _crepe_core  # 未導入環境で本体 import を汚さないため関数内 import
+
+        _crepe_core.build_and_load_model(_M2E_CREPE_PRELOAD_CAPACITY)
+    except Exception:
+        pass  # crepe 未導入 / 旧版で build_and_load_model が無い等（direct のみの構成もある）
+    try:
+        from svp_rpe.io.source_separator import (
+            DEFAULT_SHIFTS,
+            _get_demucs_separator_class,
+        )
+
+        separator_cls = _get_demucs_separator_class()
+        separator_cls(model=_M2E_DEMUCS_PRELOAD_MODEL, device="cpu", shifts=DEFAULT_SHIFTS)
+    except Exception:
+        pass  # demucs 未導入 / direct のみの構成では不要
+
+
+def _shard_pool_initializer(
+    preload_fn: "Optional[Callable[[], None]]" = None,
+) -> None:
+    """multiprocessing ワーカー起動時のスレッド 3 点固定 + モデル preload（決定済み
+
+    設計判断 5・E-50 是正）。
+
+    env 2 点（OMP/MKL）は**親プロセスが pool 起動前に**検証済み（`execute_m2e_shard`）
+    ——spawn の子は親の環境変数をそのまま引き継ぐため、ここでの再検証は多重防御。
+    `torch.set_num_threads(1)` はプロセスごとに効かせる必要があるため、initializer 内
+    （＝各ワーカーで 1 回）で適用する。
+
+    `preload_fn`（テスト seam・E-50）: 省略時は `_default_m2e_model_preload`
+    （実ローダ）を呼ぶ。テストは記録用の picklable top-level fake を注入して
+    「initializer が preload を呼ぶ」ことだけを検証する（実モデルはテスト環境に
+    無いため）。
+    """
+    _apply_thread_pinning()
+    (preload_fn if preload_fn is not None else _default_m2e_model_preload)()
+
+
+def _shard_worker_measure_cell(task: "Dict[str, Any]") -> "Dict[str, Any]":
+    """multiprocessing ワーカーの既定エントリポイント（picklable・top-level）。
+
+    env_digest を再計算し、親が積んだ期待値と一致しなければこのセルを開始しない
+    （設計 §8.6・fail-closed）。例外は `apply_async().get()` で親へ伝播し shard 実行を
+    中断する——「セルレコードを書かず打ち切る」ハング経路とは別の、環境不整合による
+    即時中断。
+    """
+    expected_env_digest = task["env_digest"]
+    actual_env_digest = _env_digest()
+    if actual_env_digest != expected_env_digest:
+        raise RuntimeError(
+            f"shard worker: env_digest 不一致 (expected={expected_env_digest!r}, "
+            f"actual={actual_env_digest!r}); ワーカーの環境が親と食い違うため、この "
+            "セルを開始しない (fail-closed・設計 §8.6)"
+        )
+    return _shard_measure_and_record_cell(task, runner=observe_via_route_with_provenance)
+
+
+def _m2e_valid_cell_record(cell: "Dict[str, Any]") -> "Optional[Tuple[Path, Dict[str, Any]]]":
+    """`cell`（`execute_m2e_shard` の task dict）が指すセルレコードが `cell_store` に
+
+    digest 一致で存在するか確認する（E-54・E-82 共通の判定ロジック）。
+
+    存在し digest も一致すれば `(record_path, record)` を返す。レコードが無い・
+    壊れている・digest が食い違う場合は `None` を返す（fail-closed——「完了と
+    立証できない」場合は None）。`_reconcile_truncated_m2e_cell`（打ち切り照合）と
+    dispatch 前スナップショット（E-82）の両方から呼ばれる同一基準。
+    """
+    cell_store = Path(cell["cell_store"])
+    record_path = _cell_store_record_path(
+        cell_store,
+        category=cell["arm"],
+        level=cell["level"],
+        entry_id=cell["entry_id"],
+        repeat_index=cell["repeat_index"],
+    )
+    if not record_path.is_file():
+        return None
+    try:
+        record = _json_loads_no_dup_keys(
+            record_path.read_bytes(), what=f"cell record {record_path}"
+        )
+        inputs = _read_external_clip_inputs(
+            cell["entry_id"],
+            cell["entry"],
+            manifest_dir=Path(cell["manifest_dir"]),
+            fixtures=cell["fixtures"],
+        )
+    except (ValueError, OSError):
+        return None
+    mismatches = _cell_record_mismatches(
+        record,
+        category=cell["arm"],
+        level=cell["level"],
+        entry_id=cell["entry_id"],
+        repeat_index=cell["repeat_index"],
+        audio_sha256=inputs.audio_sha256,
+        annotation_sha256=inputs.annotation_sha256,
+        env_digest=cell["env_digest"],
+        tolerance_cents=cell["tolerance_cents"],
+        est_voiced_floor=cell["est_voiced_floor"],
+        store_role=_CELL_STORE_ROLE_RUN,
+    )
+    if mismatches:
+        return None
+    return record_path, record
+
+
+def _reconcile_truncated_m2e_cell(cell: "Dict[str, Any]") -> "Optional[Dict[str, Any]]":
+    """打ち切り時点で in-flight だった M2e セルに、実は digest 一致で完了済みの
+
+    セルレコードが無いか確認する（E-54・PR #242 第2巡 Codex P2 是正）。
+
+    `pool.terminate()` は worker の atomic `os.replace()` 成功と `AsyncResult` の
+    ready 化との間の窓で発火しうる——その場合、既存の resume 判定と同じ digest
+    一致照合（`_m2e_valid_cell_record`）で「完全に書き上がっている」と確認できた
+    セルは completed として扱う（`run_m2e_shard_queue` の `reconcile_hung_cell`
+    フック経由で呼ばれる）。
+
+    `cell` は `execute_m2e_shard` が組み立てた task dict（bed_id/level/clip_id/arm/
+    repeat_index/entry_id/entry/fixtures/manifest_dir/tolerance_cents/
+    est_voiced_floor/cell_store/env_digest に加え、E-82 が dispatch 前に埋める
+    `_pre_dispatch_had_valid_record` を持つ）。レコードが無い・壊れている・digest
+    が食い違う場合は `None` を返し（= truncated のまま）、fail-closed に倒す。
+
+    `_pre_dispatch_had_valid_record`（E-82・PR #242 第10巡 Codex 是正）: 以前は
+    ここで見つけたレコードを無条件に「この起動が書いた」として `resumed: False` /
+    `written_paths` へ計上していた——しかし dispatch 前から既に有効なレコードが
+    在ったセル（前回起動の resume 対象）が、worker 内の resume 判定に辿り着く前に
+    ハングと誤認されて打ち切られた場合も、このレコードを"この起動が書いた"と
+    誤って扱ってしまう。実行前から在ったレコードを quarantine 対象
+    （`written_paths`）に含めると、この起動と無関係な既存の有効レコードまで、
+    後続の pin 失敗時に消してしまいうる。dispatch 前スナップショットに照らして
+    resumed / written_paths を正しく区別する。
+    """
+    found = _m2e_valid_cell_record(cell)
+    if found is None:
+        return None
+    record_path, record = found
+    clip_row = record.get("clip_row") if isinstance(record, dict) else None
+    outcome = clip_row.get("outcome") if isinstance(clip_row, dict) else None
+    detail = clip_row.get("detail") if isinstance(clip_row, dict) else None
+    pre_existing = bool(cell.get("_pre_dispatch_had_valid_record"))
+    return {
+        "resumed": pre_existing,
+        # E-92（PR #242 第14巡 Codex 是正）: 通常の worker 経路（`entry_id in
+        # cells_resumed` / `entry_id in cells_measured`）は resumed/measured を
+        # 互いに排他な分類として扱う——resumed なら measured ではない。以前は
+        # ここで measured を無条件 True にしていたため、pre-existing（resumed）な
+        # セルが cells_resumed と cells_measured の両方に二重計上されていた。
+        "measured": not pre_existing,
+        "mismatches": [],
+        "outcome": outcome or "measured",
+        "detail": detail,
+        # E-61/E-82: 本起動が書いたと確定できるレコードのみ written_paths に含める
+        # （実行前から在ったレコードは quarantine 対象から除外する）。
+        "written_paths": [] if pre_existing else [str(record_path)],
+    }
+
+
+def run_m2e_shard_queue(
+    cells: "List[Dict[str, Any]]",
+    *,
+    session_budget: float,
+    hang_grace_seconds: float = _M2E_HANG_GRACE_S,
+    workers: int,
+    measure_fn: "Callable[[Dict[str, Any]], Dict[str, Any]]" = _shard_worker_measure_cell,
+    initializer: "Optional[Callable[[], None]]" = _shard_pool_initializer,
+    clock: "Callable[[], float]" = time.monotonic,
+    poll_interval: float = _M2E_SHARD_POLL_INTERVAL_S,
+    reconcile_hung_cell: "Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]]" = None,
+    on_worker_error: "Optional[Callable[[List[Dict[str, Any]]], None]]" = None,
+    start: "Optional[float]" = None,
+) -> "Dict[str, Any]":
+    """§8.6 の動的キュー + 開始許可式 + 打ち切りを実装する（1 shard 分）。
+
+    `cells` は当該 shard のセルのみ、§8.5 order で既に整列済み、各要素は `cost`
+    （秒）キーを持つこと（`_m2e_shard_cells_for` が組み立てる）。配布は 1 セルずつ
+    （静的等分ではない）。admission 判定（`elapsed + cost(cell) <= session_budget`）は
+    親側の単調クロックで行う。
+
+    テスト可能性（設計判断・Test Strategy）: `measure_fn` は picklable な top-level
+    callable を注入できる（spawn は monkeypatch を継承しないため）。**常に
+    multiprocessing（spawn context）の Pool を経由する**——`workers == 1` でも
+    プロセス境界を跨ぐ（§8.4 の `S` = プロセスプール起動〜モデルロード完了、という
+    定義と、ハング打ち切りに実プロセス `terminate()` が要ることの両方に整合させる
+    ため）。
+
+    打ち切り: shard 開始時刻からの経過が `session_budget + hang_grace_seconds`
+    （全 in-flight セル共通の絶対期限・E-65 是正）を超えたら pool を `terminate()`
+    する。以降のセル（未着手）へは進まない（「超過は異常ではなく通常状態」であり、
+    延長はしない）。
+
+    E-54（PR #242 第2巡 Codex P2 是正）: `pool.terminate()` は worker の atomic
+    `os.replace()` 成功と `AsyncResult` の ready 化との間の窓で発火しうる——その
+    場合セルレコードは既に完全に書き上がっているのに、単純な「in-flight は全部
+    打ち切り」では「未完」と誤って記録してしまう（次回実行がその実在するレコードを
+    resume するのに、実行記録は「レコードを書いていない」と主張する食い違いが
+    生じる）。よって `terminated_for_hang` になった in-flight セルは、
+    `reconcile_hung_cell`（既定 `None` = 照合しない）が非 `None` を返せば
+    **completed** として計上し、`None`（またはコールバック未指定）のときのみ
+    truncated として記録する。`run_m2e_shard_queue` 自身はセルレコードの形式を
+    知らない（テストは合成セルで機構を検証する）——実際の digest 一致照合
+    （`_cell_store_record_path` / `_cell_record_mismatches`）は
+    `execute_m2e_shard` 側の `_reconcile_truncated_m2e_cell` が担う。
+
+    `on_worker_error`（E-77・PR #242 第7巡 Codex P2 是正）: いずれかの worker が
+    例外を送出した場合、本関数は既定では `completed` を呼び出し元へ返さずに直接
+    `aborted_exception` を再送出する——`execute_m2e_shard` の post-execution pin
+    再検証（E-48/E-61）が完走済み worker の written_paths を一切見られず、完走分の
+    隔離判断もできない穴になっていた。`on_worker_error`（既定 `None` = 何もしない）
+    を渡せば、`aborted_exception` を再送出する**直前**にその時点の `completed`
+    リストを渡して呼ぶ——`reconcile_hung_cell` と同じ「機構は形式を知らない・
+    意味論は呼び出し元が注入する」設計。フックが例外を送出しても、本関数は
+    その例外ではなく常に元の `aborted_exception` を再送出する（フック内で
+    捕捉・隔離まで完結させる契約——呼び出し元が「保全済みパスを隔離してから
+    元例外を伝播」を自分で実装する）。
+
+    E-80（PR #242 第9巡 Codex 是正）: 同一ポーリングで複数の `AsyncResult` が
+    同時に ready なとき、以前は最初の例外で ready_indices の for ループを即座に
+    break していたため、その後ろに並んでいた既に ready だった成功セルの結果が
+    `completed` へ積まれずに失われていた（`on_worker_error` の隔離ネットにも
+    載らない穴）。ready バッチは最後まで drain してから中断し、`break` 時点で
+    まだ `in_flight` に残っていた（ready ではなかった）セルも
+    `reconcile_hung_cell`（E-54 と同じ digest 一致照合）で「実際に publish
+    済みか」を確認してから `completed` へ加える——`pool.terminate()` の瞬間との
+    競合で書き終えていたレコードを取りこぼさない。
+
+    `start`（E-76・PR #242 第7巡 Codex P1 是正）: 省略（既定 `None`）なら Pool 構築
+    直後にここで捕捉する（従来どおり）。呼び出し元が明示的に渡せば、その値を
+    admission 会計（`elapsed = clock() - start`）と打ち切り期限
+    （`start + session_budget + hang_grace_seconds`）の絶対基準として採用する——
+    `execute_m2e_shard` はこれを使って、本関数呼び出しより前の preflight 所要時間を
+    両方の会計へ含める。
+
+    E-93（PR #242 第14巡 Codex P1 是正）: `async_result.get()` の外——admission
+    判定・`time.sleep`・打ち切り期限チェックの `clock()` 呼び出し等——で
+    `BaseException`（`KeyboardInterrupt`/`SystemExit` 等）が逸出しても、
+    `pool.terminate()` と in_flight の drain/reconcile（E-80 と同じ経路）・
+    `on_worker_error` フック呼び出しを必ず経由してから元例外を再送出する。以前は
+    この経路だけ `aborted_exception`/`terminated_for_hang` のどちらも設定されず、
+    finally が `pool.close()`（in-flight の自然完了待ち）へ落ちてハング worker が
+    あれば無期限にブロックし、実行後検査（quarantine 経路）も迂回していた。
+    """
+    if workers < 1:
+        raise ValueError(f"run_m2e_shard_queue: workers {workers!r} は 1 以上のみ許可する")
+
+    ctx = multiprocessing.get_context("spawn")
+    pool = ctx.Pool(processes=workers, initializer=initializer)
+    # E-76（PR #242 第7巡 Codex P1 是正）: `start` 省略時（既定 `None`）はここで捕捉する
+    # （従来どおり）。呼び出し元（`execute_m2e_shard`）が渡せば、preflight（登録簿
+    # 再構築・先行セル hash・manifest 読取・pool 構築）より前の入口時刻を採用し、
+    # それらの所要時間を admission 会計・打ち切り期限の両方に含める。
+    start = clock() if start is None else start
+    completed: "List[Dict[str, Any]]" = []
+    truncated: "List[Dict[str, Any]]" = []
+    not_started: "List[Dict[str, Any]]" = []
+    # index -> (AsyncResult, セルが dispatch された壁時計, cell)
+    in_flight: "Dict[int, Tuple[Any, float, Dict[str, Any]]]" = {}
+    next_index = 0
+    aborted_exception: "Optional[BaseException]" = None
+    terminated_for_hang = False
+    # E-107（PR #242 第20巡 Codex P1 是正）: idle 退出（in_flight ゼロで抜ける）は
+    # 期限の残量に関わらず必ず terminate で畳む（下記参照）。
+    idle_exit = False
+
+    try:
+        while True:
+            # E-93（PR #242 第14巡 Codex P1 是正）: この try は `async_result.get()`
+            # 専用の内側 try（例外セルの分類）とは別に、ループ本体**全体**を囲む。
+            # `KeyboardInterrupt`/`SystemExit` 等が admission 判定・`time.sleep`・
+            # `ar.ready()` 呼び出しなど、内側の get() の**外**で逸出すると、以前は
+            # `aborted_exception`/`terminated_for_hang` のどちらも設定されないまま
+            # finally が `pool.close()` へ落ち、ハング中の worker があれば
+            # `pool.join()` が無期限にブロックしていた——さらに、この経路では
+            # in_flight の drain/reconcile も `on_worker_error` フックも一切
+            # 通らず、公開済みかもしれないレコードが実行後検査を迂回していた。
+            # 親側から逸出するあらゆる `BaseException` を abort として扱い、
+            # 必ず `pool.terminate()` → drain/reconcile → フック呼び出しの経路へ
+            # 通してから元例外を再送出する。
+            try:
+                elapsed = clock() - start
+                admitted_any = False
+                while len(in_flight) < workers and next_index < len(cells):
+                    cell = cells[next_index]
+                    if elapsed + cell["cost"] > session_budget:
+                        break
+                    async_result = pool.apply_async(measure_fn, (cell,))
+                    in_flight[next_index] = (async_result, clock(), cell)
+                    next_index += 1
+                    admitted_any = True
+                    elapsed = clock() - start
+                if not in_flight:
+                    # E-103（PR #242 第18巡 Codex 是正）: 空のまま退出する**前**に
+                    # 絶対期限（`session_budget + hang_grace_seconds`）を検査する。
+                    # 素朴に `break` するだけだと、`terminated_for_hang` が立たない
+                    # ため finally が `pool.close()`（in-flight の自然完了待ち）へ
+                    # 落ちる——`initializer` 自体がハングしている worker がいれば
+                    # （一度もタスクを dispatch していなくても）、その worker は
+                    # pool-close の合図を受け取れる状態に一度も到達できず、
+                    # `pool.join()` が無期限にブロックしうる。期限超過ならここでも
+                    # `terminated_for_hang` を立て、E-93 と同じ abort 後始末
+                    # （terminate・drain/reconcile・記録の整合）を通す
+                    # （`in_flight` が空なので reconcile 対象は無いが、経路は揃える）。
+                    if clock() - start > session_budget + hang_grace_seconds:
+                        terminated_for_hang = True
+                    # E-107（PR #242 第20巡 Codex P1 是正）: 上の期限検査（E-103・維持）
+                    # とは独立に、idle 退出は**常に** terminate で畳む——期限内でも、
+                    # 一度もタスクを dispatch していない worker の `initializer` が
+                    # ハングしていれば `pool.close()`+`join()` は無期限にブロック
+                    # しうる（in_flight が空＝reconcile 対象も無いので安全に terminate
+                    # できる）。
+                    idle_exit = True
+                    break  # 実行中が無く、これ以上許可できるセルも無い
+                ready_indices = [
+                    idx for idx, (ar, _started, _cell) in in_flight.items() if ar.ready()
+                ]
+                for idx in ready_indices:
+                    async_result, _cell_started_wall, cell = in_flight.pop(idx)
+                    try:
+                        result = async_result.get()
+                    except BaseException as exc:  # noqa: BLE001 — 親へ即座に伝播し shard を中断する
+                        # E-80（PR #242 第9巡 Codex 是正）: 同一バッチで複数の
+                        # AsyncResult が同時に ready なとき、以前はここで即座に
+                        # break しており、この exc より後ろに並んでいた**既に
+                        # ready だった**成功セルが `completed` へ積まれずに
+                        # 失われていた——`on_worker_error`（E-77）の隔離ネットにも
+                        # 載らないまま、書き上がった published レコードが会計から
+                        # 漏れる穴だった。最初の例外は保持しつつ、同じバッチの
+                        # 残りは drain し続ける（2 件目以降の例外は握り潰す——
+                        # 伝播するのは常に最初の例外 1 つ）。
+                        if aborted_exception is None:
+                            aborted_exception = exc
+                        # E-131（PR #242 第31巡 Codex 是正）: worker がセルレコード
+                        # を atomic 公開した**直後**（return 前）に例外を上げた
+                        # 場合、このセルは既に `in_flight` から pop 済みのため、
+                        # 下（E-80 の abort 照合・`in_flight.items()` を舐める
+                        # 経路）の digest 一致再照合の対象にならない——公開済み
+                        # レコードの written_path が `on_worker_error` にも渡らず、
+                        # pin ドリフト時の quarantine を逃れてしまう。E-54/E-82 と
+                        # 同じ digest 一致 resume 検査（`reconcile_hung_cell`）で
+                        # 「実際に公開済みか」をここで確認し、公開済みなら
+                        # written_paths（quarantine 対象）へ計上できるよう
+                        # `completed` へ足す（pre-existing 除外規則は
+                        # `reconcile_hung_cell`/`_reconcile_truncated_m2e_cell`
+                        # 側に既にある・E-82 のまま変更しない）。
+                        reconciled = (
+                            reconcile_hung_cell(cell) if reconcile_hung_cell is not None else None
+                        )
+                        if reconciled is not None:
+                            completed.append({"cell": cell, "result": reconciled})
+                        continue
+                    completed.append({"cell": cell, "result": result})
+                if aborted_exception is not None:
+                    break
+                # E-65（PR #242 第4巡 Codex P1 是正）: 打ち切り期限は shard 開始時刻
+                # （`start`）基準の絶対期限——全 in-flight セルに共通。以前は各セルの
+                # dispatch 時刻 (`cell_started_wall`) 基準だったため、B_session の
+                # 終盤に配布されたセルは、そこからさらに満額の
+                # B_session + hang_grace_seconds を得てしまい、§8.6「1 回の実行の
+                # 壁時計上限」を大きく超過しうる（例: 7200s 目に配布されたセルが
+                # 14400s+ まで shard を生かし続ける）。許可式
+                # （`elapsed + cost(cell) <= session_budget`）が admitted セルの
+                # 開始時刻を B_session 以内に既に制約しているので、shard 開始基準
+                # でも各セルは最低 hang_grace_seconds 分 + 自コスト分の猶予を持つ。
+                if clock() - start > session_budget + hang_grace_seconds:
+                    terminated_for_hang = True
+                    break
+                if not ready_indices and not admitted_any:
+                    time.sleep(poll_interval)
+            except BaseException as exc:  # noqa: BLE001 — E-93: 親側の逸出は必ず abort 経路へ
+                if aborted_exception is None:
+                    aborted_exception = exc
+                break
+    finally:
+        # E-107: idle_exit も terminate 経路へ含める（close()/join() のハング
+        # initializer 無期限待ちを avoid）。
+        if aborted_exception is not None or terminated_for_hang or idle_exit:
+            pool.terminate()
+        else:
+            pool.close()
+        pool.join()
+
+    if aborted_exception is not None:
+        # E-80（PR #242 第9巡 Codex 是正）: この時点で `in_flight` に残っているのは
+        # 「break した時点でまだ ready ではなかった」セルのみ（ready 済みは上の
+        # for ループで既に pop・drain 済み）。`pool.terminate()`（finally 節）が
+        # これらを未完のまま殺す前提だが、実際には terminate() の瞬間との窓で
+        # atomic replace が先に完了していることがある（E-54 と同型の競合）。
+        # `reconcile_hung_cell` による digest 一致照合で「実際に publish 済みか」を
+        # 確認してから `completed` へ足す——確認せず切り捨てると、たまたま書き
+        # 終えていたレコードが `on_worker_error` の隔離ネットからも漏れる。
+        for _idx, (_ar, _started, cell) in in_flight.items():
+            reconciled = reconcile_hung_cell(cell) if reconcile_hung_cell is not None else None
+            if reconciled is not None:
+                completed.append({"cell": cell, "result": reconciled})
+        # フックを試すが、フック自身が例外を送出しても常に元の
+        # aborted_exception を再送出する（フックの失敗で worker 例外の情報を
+        # 握り潰さない・フックは自身の例外を自前で処理しきる契約だが、念のため
+        # 二重の防御として本関数側でも捕捉する）。
+        if on_worker_error is not None:
+            try:
+                on_worker_error(completed)
+            except BaseException:  # noqa: BLE001 — 元例外を最優先で伝播する
+                pass
+        raise aborted_exception
+
+    if terminated_for_hang:
+        for _idx, (_ar, _started, cell) in in_flight.items():
+            reconciled = reconcile_hung_cell(cell) if reconcile_hung_cell is not None else None
+            if reconciled is not None:
+                completed.append({"cell": cell, "result": reconciled})
+            else:
+                truncated.append(cell)
+    not_started.extend(cells[next_index:])
+
+    return {
+        "completed": completed,
+        "truncated": truncated,
+        "not_started": not_started,
+        "elapsed_seconds": clock() - start,
+    }
+
+
+def _m2e_collect_written_paths(completed_entries: "List[Dict[str, Any]]") -> "List[str]":
+    """`run_m2e_shard_queue` の `completed` エントリ群から `written_paths` を集める。
+
+    成功経路（E-61）と worker 例外経路（E-77・`on_worker_error` フック）の双方が
+    使う共通ヘルパー——集計基準を 1 箇所に保つ。
+    """
+    paths: "List[str]" = []
+    for entry in completed_entries:
+        paths.extend(entry["result"].get("written_paths") or [])
+    return paths
+
+
+def _m2e_shard_claim_path(cell_store: Path, shard_id: int) -> Path:
+    """`shard_id` の排他 claim ファイルのパス（`cell_store` 配下）。"""
+    return Path(cell_store) / f"shard_{shard_id}.claim"
+
+
+def _acquire_m2e_shard_claim(claim_path: Path) -> None:
+    """`claim_path` を `O_EXCL` で作り、同一 shard の並行実行を排他する
+
+    （E-74・PR #242 第7巡 Codex 是正・**Memo 根拠の撤回**）。
+
+    Design Memo は「`shard_id` の昇順強制が同一 shard の並行実行を防ぐ」としていたが
+    誤りだった——`_require_prior_m2e_shards_complete` は `shard_id` **未満**の shard
+    しか検査しないため、同じ `shard_id` への 2 並行実行はどちらもこの検査を通過し、
+    同じセル鍵を同時に測定して同じチェックポイントパスへ atomic replace で衝突しうる
+    （どちらかの隔離・上書きが他方の有効なレコードを消しうる）。既存の claim があれば
+    fail-closed で拒否する（並行実行は非サポート。クラッシュ孤児で claim が残った場合は
+    claim ファイルを手動削除してから再実行する）。内容は診断用（PID + ISO8601）で
+    機構としての意味は持たない——存在自体が排他の唯一の根拠。
+
+    E-128（PR #242 第29巡 Codex 是正）: `os.fdopen`/`write` の区間は
+    `except Exception` ではなく `except BaseException` で覆う——`_acquire_m2e_
+    out_reservation`（E-124）と同型の穴。`KeyboardInterrupt`/`SystemExit`/
+    `GeneratorExit` は `Exception` のサブクラスではないため、書き込み中に
+    これらが飛ぶと claim は削除されずに残り、以後の同一 `shard_id` の全起動が
+    「claim が既に存在する」という誤った案内で永久にブロックされる。
+    """
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = f"pid={os.getpid()}\nclaimed_utc={_utc_now()}\n"
+    try:
+        fd = os.open(str(claim_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        existing = ""
+        try:
+            existing = claim_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+        raise ValueError(
+            f"execute_m2e_shard: shard claim {claim_path} が既に存在する"
+            f"（{existing!r}）; 並行実行は非サポート。クラッシュ孤児なら claim を "
+            "手動削除して再実行する (fail-closed・E-74)"
+        ) from None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+    except BaseException:
+        claim_path.unlink(missing_ok=True)
+        raise
+
+
+def _release_m2e_shard_claim(claim_path: Path) -> None:
+    """`_acquire_m2e_shard_claim` が作った claim を削除する。
+
+    正常終了・例外経路のどちらでも `execute_m2e_shard` の try/finally から確実に
+    呼ばれる（"確実に削除" が E-74 の要求）。
+    """
+    claim_path.unlink(missing_ok=True)
+
+
+def _acquire_m2e_out_reservation(out_resolved: Path, token: str) -> Path:
+    """`out_resolved` の排他予約を確保し、サイドカーのパスを返す（E-94・PR #242
+
+    第15巡 Codex 是正の共通形。E-111・PR #242 第21巡 Codex 是正で
+    `--make-shard-map --out` にも流用）。
+
+    サイドカー `<out>.claim` を `O_CREAT|O_EXCL` で作る——既に存在すれば
+    `FileExistsError` を送出する（呼び出し元が文脈に応じた案内文で fail-closed
+    する。既存の shard claim・E-74・`_acquire_m2e_shard_claim` と役割が重なる
+    場面もあるが、`--out` は `shard_id` と独立に指定できるため別物として扱う）。
+    E-109（第20巡 Codex 是正）: `os.open` の前に親ディレクトリを作る
+    （`_atomic_write_text` と同じ挙動へ整合）。
+
+    E-124（PR #242 第28巡 Codex 是正）: `os.fdopen`/`f.write` の区間は
+    `except Exception` ではなく `except BaseException` で覆う——
+    `KeyboardInterrupt`/`SystemExit`/`GeneratorExit` は `Exception` のサブ
+    クラスではないため、書き込み中にこれらが飛ぶと（Ctrl-C・呼び出し元の
+    早期 SystemExit 等）サイドカーは削除されずに残る。呼び出し元の
+    `finally: out_claim_sidecar.unlink(...)` は本関数が正常 return して
+    `out_claim_sidecar` を束縛できた場合にしか届かない（本関数内で例外に
+    なれば呼び出し元の変数はそもそも代入されない）ため、後始末は本関数
+    内で完結させる必要がある——さもないと `O_EXCL` の孤児 claim が残り、
+    以後の全起動が「他の起動が予約を保持している」という誤った案内で
+    永久にブロックされる（手動削除が必須になる）。
+    """
+    sidecar = out_resolved.with_name(f"{out_resolved.name}.claim")
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(sidecar), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(token)
+    except BaseException:
+        sidecar.unlink(missing_ok=True)
+        raise
+    return sidecar
+
+
+def _rollback_m2e_out_reservation(
+    out_resolved: Path, *, original_bytes: "Optional[bytes]"
+) -> None:
+    """`out_resolved` を予約前の状態へ原状復帰する（E-96/E-106・PR #242
+
+    第15/19巡 Codex 是正の共通形。E-111・PR #242 第21巡 Codex 是正で
+    `--make-shard-map` 側にも流用）。
+
+    `original_bytes`（予約直前に読み取った実体。無かったなら `None`）を
+    そのまま書き戻す——`--make-shard-map --out` は `--force` 付きで**非空の
+    既存レコード**を上書き対象にできる（`--shard-id` 側は常に 0 バイト予約
+    のみ）ため、「予約前は存在した」を一律 0 バイトへ truncate すると、
+    `--force` で上書きしようとした既存レコードの中身を失敗時に破壊してしまう。
+    元の bytes をそのまま復元すれば、mktemp の 0 バイト予約（`original_bytes
+    == b""`）・非空の既存レコード（`--force`）のどちらでも安全に原状復帰する。
+    未存在だったなら（`original_bytes is None`）削除する。
+
+    E-114（PR #242 第22巡 Codex 是正）: 以前は `_atomic_write_text(out_resolved,
+    original_bytes.decode("utf-8"))` を経由していた——`--force` の上書き対象が
+    非 UTF-8 な既存ファイルだった場合、この `decode("utf-8")` 自体が
+    `UnicodeDecodeError` を送出し、ロールバックを呼び出した**元の**例外
+    （生成失敗の本当の原因）を隠して別の例外にすり替えてしまう。text 変換を
+    一切経由せず `utils/atomic_io.atomic_write_bytes` へ bytes のまま渡す形へ
+    改め、この decode 失敗の経路自体を消した。
+    """
+    if original_bytes is not None:
+        _cell_store_atomic_write_bytes(out_resolved, original_bytes)
+    else:
+        out_resolved.unlink(missing_ok=True)
+
+
+def _m2e_best_effort_spill_payload(doc: "Dict[str, Any]") -> str:
+    """公開直前の直列化失敗時、spill 用に `doc` を可能な限り堅牢に文字列化する
+
+    （E-121・PR #242 第26巡 Codex 是正）。
+
+    厳格な直列化（`json.dumps(doc, indent=2, sort_keys=True)` / `yaml.safe_dump(doc,
+    ...)`、どちらも `default=` 相当の緩和なし）が失敗しても、実行記録・地図の実データ
+    （`doc`）自体はまだメモリ上に生きている——spill による保全をここで諦めない。
+    型を緩めた `json.dumps(doc, default=str)` をまず試み、それすら失敗すれば
+    （`str()` 自体が壊れた極端な型混入等）最後の手段として `repr(doc)` を返す
+    （組み込みコンテナ + プリミティブに対して `repr` は失敗しない）。呼び出し元は
+    戻り値の形式（JSON か repr か）を仮定せず、spill ファイルは「人間が手動復旧に
+    使う best-effort な記録」として扱うこと。
+    """
+    try:
+        return json.dumps(doc, indent=2, sort_keys=True, default=str)
+    except BaseException:
+        return repr(doc)
+
+
+def _m2e_manifest_referenced_paths(
+    campaign: "Dict[str, Dict[str, Path]]",
+) -> "Tuple[set[Path], Dict[str, Tuple[List[Dict[str, Any]], Path]], Dict[str, str]]":
+    """`campaign` の全水準の manifest を読み、preflight 保護用の参照パス集合と
+
+    再利用可能なスナップショットの両方を返す（E-123・PR #242 第27巡 Codex 是正
+    ／E-125・PR #242 第28巡 Codex 是正で戻り値をスナップショットまで拡張）。
+
+    地図生成（`--make-shard-map --cell-store` 指定時の除外真実性スキャン——
+    `_m2e_completed_cell_keys`）・実行（`--shard-id` の先行 shard 検査・task
+    構築）はどちらも campaign の manifest を実際に読み、参照する audio/
+    annotation の実ファイルを開く。preflight の保護パス集合（campaign/bars/
+    manifest ファイル自体・fixtures ファイル自体）はこれまで manifest の
+    **ファイルパス**しか含んでおらず、manifest が**指す**個々の audio/
+    annotation の実体パスは含んでいなかった——`--out` がそのいずれかと同じ
+    パスを指すと、地図生成/実行の書き出しが実測入力そのものを上書きしうる。
+    ここで manifest を実際に読み、参照先を展開して返す（第 1 戻り値。呼び出し元が
+    `protected` 集合へ合流させる）。
+
+    E-125: 第 2/第 3 戻り値（`manifest_by_level`/`manifest_sha256_by_level`）は
+    ここで読んだ manifest のパース済みスナップショット + sha256——E-72/E-104 と
+    同じ形（`{level: (entries, manifest_dir)}` / `{level: sha256}`）。呼び出し元
+    （`--make-shard-map` preflight）はこれを `generate_m2e_shard_map` 経由で
+    `_m2e_completed_cell_keys`（除外真実性スキャン）へ引き回せば、同じ manifest
+    ファイルを再度開かない（TOCTOU 回避。E-95 が記録する manifest digest も
+    このスナップショット由来のまま一貫する）。
+    """
+    referenced: "set[Path]" = set()
+    manifest_by_level: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
+    manifest_sha256_by_level: "Dict[str, str]" = {}
+    for level, level_paths in campaign.items():
+        entries, manifest_sha256, manifest_path = _load_external_manifest(
+            level_paths["external_manifest"]
+        )
+        manifest_dir = manifest_path.parent
+        manifest_by_level[level] = (entries, manifest_dir)
+        manifest_sha256_by_level[level] = manifest_sha256
+        for entry in entries:
+            referenced.add(
+                _resolve_external_member_path(
+                    manifest_dir, entry["audio_path"], what="audio_path"
+                )
+            )
+            referenced.add(
+                _resolve_external_member_path(
+                    manifest_dir, entry["annotation_path"], what="annotation_path"
+                )
+            )
+    return referenced, manifest_by_level, manifest_sha256_by_level
+
+
+def execute_m2e_shard(
+    *,
+    map_doc: "Dict[str, Any]",
+    map_sha256: str,
+    shard_id: int,
+    campaign: "Dict[str, Dict[str, Path]]",
+    cell_store: "str | Path",
+    bars_path: Path = BARS_PATH,
+    workers: int = 1,
+    measure_fn: "Callable[[Dict[str, Any]], Dict[str, Any]]" = _shard_worker_measure_cell,
+    initializer: "Optional[Callable[[], None]]" = _shard_pool_initializer,
+    require_thread_pinning: bool = True,
+    clock: "Callable[[], float]" = time.monotonic,
+    preflight_manifest_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = None,
+    preflight_manifest_sha256_by_level: "Optional[Dict[str, str]]" = None,
+) -> "Dict[str, Any]":
+    """1 shard 分の実行（§8.6「1回の実行の契約」の実体）。
+
+    **shard モードは run report / verdict / census のいずれも出さない。** 成果物は
+    (a) `cell_store` 配下のセルレコード、(b) 本関数が返す shard 実行記録のみ。
+
+    `start`（E-76・PR #242 第7巡 Codex P1 是正）: shard 開始時刻の捕捉を、地図検証・
+    先行 shard の digest 一致 hash・manifest 読取・pool 構築より**前**（本関数の
+    入口）へ移す。以前は `run_m2e_shard_queue` 内部が独自に `clock()` を捕捉して
+    おり、これら preflight の所要時間が admission 会計にも `B_session + 600s` の
+    打ち切り期限にも含まれていなかった——後続 shard ほど preflight（先行セル全数の
+    再 hash 等）が重くなるため、§8.6「1 回の実行の壁時計上限」を preflight 分だけ
+    超過しうる。ここで捕捉した `start` を `run_m2e_shard_queue(start=...)` へ渡し、
+    キュー側の内部捕捉を上書きする。
+
+    claim（E-74・PR #242 第7巡 Codex 是正）: `cell_store` 配下に `shard_<id>.claim`
+    を `O_EXCL` で作り、同一 `shard_id` の並行実行を排他する
+    （`_acquire_m2e_shard_claim` の docstring に Memo 根拠の撤回を記録）。正常終了・
+    例外経路のどちらでも try/finally で確実に解放する。
+
+    bars スナップショット（E-78・PR #242 第8巡 Codex 是正）: `_require_m2e_shard_map_
+    matches_registry` が返す `(bars, bars_sha256)` をそのまま tolerance_cents/
+    est_voiced_floor の導出・worker 供給まで引き回す（再オープンしない。E-57/E-72
+    と同族の TOCTOU 是正）。
+
+    除外検証の store 束縛（E-79・PR #242 第8巡 Codex 是正）: `_require_m2e_shard_map_
+    matches_registry` へ本関数が実際に書き込む `cell_store` を渡す——地図の
+    `excluded_completed_cells.cell_store_relative` が実行時 `--cell-store` と一致する
+    ことを要求し、除外真実性の digest 検証もこの実行 store に対して行う（地図が別
+    store 向けに宣言した除外を、別の store への実行に束縛して信用しない）。
+
+    `started_utc`（E-84・PR #242 第10巡 Codex 是正）: `start`（単調クロック）と
+    **同時**に本関数入口で捕捉する（以前は claim 取得・地図検証・manifest 読取後、
+    `run_m2e_shard_queue` 呼び出し直前で別途捕捉しており、`start`/`elapsed_seconds`
+    が指す起点と provenance が食い違っていた）。
+
+    `preflight_manifest_by_level`/`preflight_manifest_sha256_by_level`（E-126・
+    PR #242 第29巡 Codex 是正／E-133・PR #242 第32巡 Codex 是正で除外真実性
+    再スキャン自体にも種付けするよう完備化）: CLI の preflight（`--out` の
+    保護入力検査・E-123）が既に読んだ manifest のパース済みスナップショット
+    （`{level: (entries, manifest_dir)}`）と sha256 を渡せば、(a)
+    `_require_m2e_shard_map_matches_registry` 経由の除外真実性再スキャン
+    （E-104 の `_m2e_completed_cell_keys` 呼び出し）、(b) 先行 shard 検証の
+    `excluded_manifest_by_level`、(c) task 構築の既存 manifest 引き回し機構
+    （E-72）の全段にこれを種付けする——除外つき地図でも manifest 読取は
+    preflight の 1 回へ完全に一本化される（E-126 が導入した「E-104 の除外真実性
+    再スキャンが読んだもの」＞「preflight が読んだもの」という優先順位は、
+    E-133 により rescan 自体が同じ preflight 実体を消費するため実質的な縮退に
+    なる）。未指定（既定 `None`）なら従来どおり内部で読む（直接呼ぶテスト等の
+    後方互換経路）。
+    """
+    if shard_id < 0:
+        raise ValueError(f"execute_m2e_shard: shard_id {shard_id!r} は 0 以上のみ許可する")
+    # E-97: 無強制の型検査を先に敷く（E-83 と同型）。
+    n_shards = _require_m2e_shard_map_integer_field("n_shards", map_doc["n_shards"])
+    if shard_id >= n_shards:
+        raise ValueError(
+            f"execute_m2e_shard: shard_id {shard_id!r} が地図の n_shards={n_shards!r} 以上 "
+            "(fail-closed)"
+        )
+
+    # E-76: start は preflight（登録簿再構築・先行セル hash・manifest 読取・pool
+    # 構築）より前に捕捉する——これらの所要時間を admission 会計・打ち切り期限に含める。
+    # E-84（PR #242 第10巡 Codex 是正）: `started_utc`（実行記録の provenance）も
+    # `start`（単調クロック）と**同時**にここで捕捉する——以前は
+    # `run_m2e_shard_queue` 呼び出し直前（claim 取得・地図検証・manifest 読取後）
+    # で別途 `_utc_now()` していたため、「shard 開始時刻」を名乗る値が実際には
+    # preflight 分だけ遅れていた（`start`／`elapsed_seconds` が指す起点と食い違う
+    # 自己矛盾）。
+    start = clock()
+    started_utc = _utc_now()
+    cell_store = Path(cell_store)
+    cell_store.mkdir(parents=True, exist_ok=True)
+    # E-74: 同一 shard_id の並行実行を排他する（Memo の「昇順強制で足りる」という
+    # 根拠は誤りだった——撤回は `_acquire_m2e_shard_claim` docstring 参照）。
+    claim_path = _m2e_shard_claim_path(cell_store, shard_id)
+    _acquire_m2e_shard_claim(claim_path)
+    try:
+        # E-57: 地図検証で読取・hash 検証済みの fixtures 文書をそのまま実行段へ引き回す
+        # （再オープンしない）。E-52 と同族の TOCTOU 是正。
+        # E-79: 実際に書き込む cell_store を渡し、除外真実性検証をこの store へ束縛する。
+        # E-104: 除外真実性の再スキャンが読んだ manifest スナップショットも受け取り、
+        # 先行 shard 検査・task 構築へ引き回す（再オープンしない）。
+        # E-133: preflight（保護入力検査・E-123）が既に読んだ manifest スナップ
+        # ショットを除外真実性再スキャンへ種付けする（未指定時は None・従来
+        # どおり内部で読む）——manifest 読取を preflight の 1 回へ一本化する。
+        (
+            validated_fixtures_by_level,
+            bars_snapshot,
+            excluded_manifest_by_level,
+        ) = _require_m2e_shard_map_matches_registry(
+            map_doc,
+            campaign,
+            bars_path=bars_path,
+            cell_store=cell_store,
+            manifest_snapshot_by_level=preflight_manifest_by_level,
+            manifest_sha256_snapshot_by_level=preflight_manifest_sha256_by_level,
+        )
+
+        thread_pinning = _apply_thread_pinning() if require_thread_pinning else None
+
+        env_digest = _env_digest()
+        # E-78: 地図検証で読取・検証済みの bars をそのまま実行段へ引き回す（再オープン
+        # しない）。E-57/E-72 と同族の TOCTOU 是正——検証後に bars が差し替わっても、
+        # 実行はここで固定したスナップショットのまま tolerance_cents/est_voiced_floor
+        # を導出し、worker へ供給する。
+        bars, bars_sha256 = bars_snapshot
+        bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
+        tolerance_cents = float(bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
+        est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])
+
+        # E-72（PR #242 第6巡 Codex P2 是正）: 戻り値は先行 shard 検証が既に読んだ
+        # manifest スナップショット——task 構築ループが同じ level を再オープンしない
+        # よう引き回す（E-57 の fixtures 引き回しと同じ形の TOCTOU 是正）。
+        prior_manifest_by_level = _require_prior_m2e_shards_complete(
+            map_doc,
+            shard_id,
+            cell_store=cell_store,
+            campaign=campaign,
+            env_digest=env_digest,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+            fixtures_by_level=validated_fixtures_by_level,
+            # E-104: 除外真実性再スキャンが既に読んだ manifest を再利用する。
+            manifest_by_level=excluded_manifest_by_level,
+        )
+
+        shard_cells = _m2e_shard_cells_for(map_doc, shard_id)
+        if not shard_cells:
+            raise ValueError(
+                f"execute_m2e_shard: shard_id {shard_id!r} に該当するセルが地図に無い "
+                "(fail-closed)"
+            )
+
+        levels_needed = sorted({record["level"] for record in shard_cells})
+        # E-72: 先行 shard 検証が既に読んだ level はそのまま再利用し、未読の level だけ読む。
+        manifest_by_level: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = dict(
+            prior_manifest_by_level
+        )
+        # E-57: 地図検証時に hash 検証済みの fixtures をそのまま使う（再オープンしない）。
+        fixtures_by_level = validated_fixtures_by_level
+        for level in levels_needed:
+            if level in manifest_by_level:
+                continue
+            # E-126: 次点は CLI preflight（`--out` 保護入力検査・E-123）が既に
+            # 読んだスナップショット——E-104 の除外真実性スキャンで読まれて
+            # いない level でも、preflight が既に読んでいれば再オープンしない。
+            if preflight_manifest_by_level is not None and level in preflight_manifest_by_level:
+                manifest_by_level[level] = preflight_manifest_by_level[level]
+                continue
+            entries, _manifest_sha256, manifest_path = _load_external_manifest(
+                campaign[level]["external_manifest"]
+            )
+            manifest_by_level[level] = (entries, manifest_path.parent)
+
+        tasks: "List[Dict[str, Any]]" = []
+        for record in shard_cells:
+            level = record["level"]
+            entries, manifest_dir = manifest_by_level[level]
+            entry = next((e for e in entries if e["id"] == record["entry_id"]), None)
+            if entry is None:
+                raise ValueError(
+                    f"execute_m2e_shard: entry {record['entry_id']!r} (level {level!r}) が "
+                    "manifest に無い (fail-closed)"
+                )
+            task = {
+                "bed_id": record["bed_id"],
+                "level": level,
+                "clip_id": record["clip_id"],
+                "arm": record["arm"],
+                "repeat_index": record["repeat_index"],
+                "entry_id": record["entry_id"],
+                "entry": entry,
+                "fixtures": fixtures_by_level[level],
+                "manifest_dir": str(manifest_dir),
+                "tolerance_cents": tolerance_cents,
+                "est_voiced_floor": est_voiced_floor,
+                "cell_store": str(cell_store),
+                "env_digest": env_digest,
+                "workers": workers,
+                "cost": record["cost"],
+            }
+            # E-82（PR #242 第10巡 Codex 是正）: dispatch **前**に、このセルが既に
+            # digest 一致の有効レコードを持っているかスナップショットする——
+            # `_reconcile_truncated_m2e_cell` がハング打ち切り照合時に「この起動が
+            # 書いた」のか「実行前から在った」のかを区別するために使う（後者を
+            # 誤って前者扱いすると、pin 失敗時に無関係な既存レコードまで隔離しうる）。
+            task["_pre_dispatch_had_valid_record"] = _m2e_valid_cell_record(task) is not None
+            tasks.append(task)
+
+        def _on_worker_error(completed_so_far: "List[Dict[str, Any]]") -> None:
+            """E-77（PR #242 第7巡 Codex P2 是正）: worker 例外の再送出**前**に呼ばれる。
+
+            通常の成功経路（E-48/E-61）と同じ post-execution pin 再検証（first-party・
+            同梱ネイティブ・実装 hash）を通し、失敗すればここまでに完走した worker の
+            written_paths を隔離する。例外を握り潰さない——`run_m2e_shard_queue` 側の
+            契約により、本フックが何を投げても最終的に伝播するのは worker の元例外。
+            """
+            written_paths_so_far = _m2e_collect_written_paths(completed_so_far)
+            try:
+                _require_unchanged_since_load()
+                _require_dist_native_unchanged_since_bind()
+                _require_runtime_code_unchanged_since_bind()
+            except RuntimeError:
+                _quarantine_cell_records(written_paths_so_far)
+
+        # E-101: 無強制の型検査を経由する（`_require_m2e_shard_map_matches_registry`
+        # が既に検証済みだが、E-97 の n_shards と同じく execute 側でも同じ形で
+        # 読む一貫性を優先する）。
+        session_budget = _require_m2e_shard_map_numeric_field(
+            "session_budget_s", map_doc["inputs"]["session_budget_s"]
+        )
+        # E-84: started_utc は本関数入口で `start` と同時に捕捉済み（再捕捉しない）。
+        result = run_m2e_shard_queue(
+            tasks,
+            session_budget=session_budget,
+            hang_grace_seconds=_M2E_HANG_GRACE_S,
+            workers=workers,
+            measure_fn=measure_fn,
+            initializer=initializer,
+            clock=clock,
+            # E-76: preflight より前に捕捉した start をキューへ渡す（内部捕捉を上書き）。
+            start=start,
+            # E-54: 打ち切り時点で in-flight だったセルを、既存の digest 一致 resume 判定で
+            # 照合してから truncated へ振り分ける（書き上がっていたレコードは completed）。
+            reconcile_hung_cell=_reconcile_truncated_m2e_cell,
+            on_worker_error=_on_worker_error,
+        )
+
+        # E-61（PR #242 第4巡 Codex P2 是正）: 本 shard が新規に書いたレコードパスを
+        # 集める（resume は含まない）。runtime pin 再検証が事後に失敗した場合の隔離対象。
+        shard_written_paths = _m2e_collect_written_paths(result["completed"])
+
+        def _cell_ref(entry: "Dict[str, Any]") -> "Dict[str, Any]":
+            return {
+                "bed_id": entry["bed_id"],
+                "level": entry["level"],
+                "clip_id": entry["clip_id"],
+                "arm": entry["arm"],
+                "repeat_index": entry["repeat_index"],
+                "entry_id": entry["entry_id"],
+            }
+
+        # E-46（PR #242 Codex P1 是正）: `_measure_or_resume_external_clip_row` は
+        # `outcome == "unavailable"`（抽出器スタック未導入）のセルにチェックポイントを
+        # 書かない（§8.6「未完として記録する」と同じ精神）。しかしワーカーはこの場合も
+        # 例外なく正常に返るため、`run_m2e_shard_queue` の `completed` にはそのまま
+        # 積まれてしまう——ここで区別しないと、レコードの無いセルを「完了」と数えた
+        # shard 実行記録が、次 shard の `_require_prior_m2e_shards_complete` で初めて
+        # 矛盾として顕在化する（記録は嘘をつかないが、会計が食い違う）。
+        # **shard 全体は中断しない**——セルは独立でよく、許可式が既に壁時計を有界化して
+        # いるため、unavailable を理由に他のセルの実行機会を奪う必要が無い。
+        measured_completed = [
+            c for c in result["completed"] if c["result"]["outcome"] == "measured"
+        ]
+        unavailable_completed = [
+            c for c in result["completed"] if c["result"]["outcome"] != "measured"
+        ]
+        resumed_refs = [
+            _cell_ref(c["cell"]) for c in measured_completed if c["result"]["resumed"]
+        ]
+        measured_refs = [
+            _cell_ref(c["cell"]) for c in measured_completed if c["result"]["measured"]
+        ]
+        unavailable_refs = [
+            {**_cell_ref(c["cell"]), "reason": c["result"].get("detail") or "unavailable"}
+            for c in unavailable_completed
+        ]
+        truncated_refs = [_cell_ref(c) for c in result["truncated"]]
+        not_started_refs = [_cell_ref(c) for c in result["not_started"]]
+
+        record = {
+            "schema_version": _M2E_SHARD_RUN_SCHEMA,
+            "started_utc": started_utc,
+            "finished_utc": _utc_now(),
+            "shard_id": shard_id,
+            "n_shards": n_shards,
+            "env_digest": env_digest,
+            "workers": workers,
+            "thread_pinning": thread_pinning,
+            "shard_map_sha256": map_sha256,
+            "session_budget_s": session_budget,
+            "hang_grace_s": _M2E_HANG_GRACE_S,
+            # E-116（PR #242 第22巡 Codex 是正）: `float(x)` は非数値スカラーを
+            # 無強制で受理してしまう——ここも E-101/session_budget と同じ無強制
+            # ヘルパで読む一貫性を優先する（既に `_require_m2e_shard_map_matches_
+            # registry` で検証済みだが、execute 側の消費点でも同じ形で敷く）。
+            "t_direct_s": _require_m2e_shard_map_numeric_field(
+                "t_direct_s", map_doc["inputs"]["t_direct_s"]
+            ),
+            "t_stem_s": _require_m2e_shard_map_numeric_field(
+                "t_stem_s", map_doc["inputs"]["t_stem_s"]
+            ),
+            "elapsed_seconds": result["elapsed_seconds"],
+            "cells_total": len(shard_cells),
+            "cells_completed": len(measured_completed),
+            "cells_resumed": resumed_refs,
+            "cells_measured": measured_refs,
+            "cells_unavailable": unavailable_refs,
+            "cells_truncated": truncated_refs,
+            "cells_not_started": not_started_refs,
+        }
+        # E-48（PR #242 Codex P2 是正）: 数時間かかりうるキュー完走後、shard 実行記録を
+        # 組み立てる・書き出す**前**に、load 時に pin した first-party ソース閉包が
+        # 実行中に差し替わっていないことを確認する（既存の run/evaluate/census 経路と
+        # 同じ post-execution ガード。差し替わっていれば「pin した digest」と「次回
+        # import されるコード」が食い違い、書いたセルの由来が保証できなくなる）。
+        # E-61（PR #242 第4巡 Codex P2 是正）: E-48 は first-party ソース閉包しか見ない。
+        # 通常 run 経路（`env_digest_value is not None` 分岐）と同じく、同梱ネイティブ・
+        # 実装 hash の束縛後差し替えも検査する——shard モードは常に `env_digest` を
+        # 束縛するため、run 側のような条件分岐は要らない。
+        # E-86（PR #242 第11巡 Codex 是正）: 以前は first-party 検査（`_require_
+        # unchanged_since_load`）だけがこの try の**外**にあり、単独で失敗すると
+        # shard_written_paths が隔離されないまま通常 store に残っていた（dist
+        # native / runtime code とは非対称な扱い）。3 種すべてを同じ
+        # 「失敗時 quarantine → raise」経路へ統合する——差し替え中の実装が産んだ
+        # row を次 shard が resume しないように（run 側の失敗時パターンをそのまま
+        # 踏襲する）。
+        try:
+            _require_unchanged_since_load()
+            _require_dist_native_unchanged_since_bind()
+            _require_runtime_code_unchanged_since_bind()
+        except RuntimeError:
+            _quarantine_cell_records(shard_written_paths)
+            raise
+        return record
+    finally:
+        # E-74: 正常終了・例外経路のどちらでも claim を確実に解放する。
+        _release_m2e_shard_claim(claim_path)
+
+
 # census phase は「渡されたか」を問う必要がある——値の比較では既定値の明示指定を検出
 # できない（PR #241 Codex P2）。
 _ARGPARSE_UNSET = object()
@@ -10058,7 +12467,7 @@ def main() -> int:
     parser.add_argument(
         "--m2e-bars",
         type=Path,
-        default=M2E_BARS_PATH,
+        default=_ARGPARSE_UNSET,
         metavar="m2e_accuracy_bars.yaml",
         help="M2e 帯（V_remix_real_*）の事前登録バー。M2 のバーとは意図的に別ファイル "
         "（設計 §5.1: 追記すると commit 済み M2b/M2c verdict の pin が壊れる）。"
@@ -10108,7 +12517,9 @@ def main() -> int:
         help="設計 §8.7 のセルチェックポイント用ディレクトリ（opt-in・既定 None）。"
         "指定すると外部素材カテゴリの各 clip を 1 セルとして記録し、既存レコードが "
         "入力/環境 digest と一致すれば再測定をスキップする。未指定時は report に "
-        "新フィールドが一切増えない（挙動無変更）。指定時は --repeat-index が必須",
+        "新フィールドが一切増えない（挙動無変更）。指定時は --repeat-index が必須。"
+        "--make-shard-map と併用すると（E-66・§8.5「未完セルについてのみ再適用」）、"
+        "digest 一致で完了済みのセルをパッキングから除外し残セルのみで再地図を組む",
     )
     parser.add_argument(
         "--repeat-index",
@@ -10166,8 +12577,741 @@ def main() -> int:
         "repeat より下の粒度＝clip/シャード単位の並列化は本実装の範囲外・別ブリーフ）。"
         "verdict の evaluate_execution.effective_workers_per_category に実効値を刻む",
     )
+    parser.add_argument(
+        "--make-shard-map",
+        action="store_true",
+        help="C6（設計 §8.5）: campaign + T_direct/T_stem/S/B_session から §8.5 の凍結"
+        "アルゴリズムでシャード地図を生成する。同一入力からは完全にバイト一致の地図が "
+        "出る（生成時刻は地図に含めず stdout へ印字する・E-67）。"
+        "--evaluate/--census/--shard-id とは排他",
+    )
+    parser.add_argument(
+        "--campaign",
+        type=Path,
+        default=None,
+        metavar="m2e_campaign.yaml",
+        help="M2e campaign ファイル（水準ごとの external manifest / external fixtures の "
+        "所在のみを持つ。科学的パラメータは含まない）。--make-shard-map と --shard-id の "
+        "両方が要求する",
+    )
+    parser.add_argument(
+        "--t-direct",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="r2-0 で校正した direct アームの単位コスト T_direct（秒/セル）。"
+        "--make-shard-map 専用",
+    )
+    parser.add_argument(
+        "--t-stem",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="r2-0 で校正した stem アームの単位コスト T_stem（秒/セル）。--make-shard-map 専用",
+    )
+    parser.add_argument(
+        "--startup-cost",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="S: プロセスプール起動〜モデルロード完了までの固定コスト（秒）。"
+        "--make-shard-map 専用",
+    )
+    parser.add_argument(
+        "--session-budget",
+        type=float,
+        default=_ARGPARSE_UNSET,
+        metavar="SECONDS",
+        help=f"B_session（設計 §8.2・既定 {_M2E_DEFAULT_SESSION_BUDGET_S:.0f}s = 2.0h）。"
+        "--make-shard-map 専用（実行機は地図に記録された値をそのまま使う）",
+    )
+    parser.add_argument(
+        "--shard-map",
+        type=Path,
+        default=None,
+        metavar="m2e_r2_shard_map.yaml",
+        help="C6 実行機: `--make-shard-map` が生成した地図。--shard-id と併用必須",
+    )
+    parser.add_argument(
+        "--shard-id",
+        type=int,
+        default=None,
+        metavar="N",
+        help="C6 実行機（設計 §8.6）: この shard のセルのみを対象に実行する（1回 = "
+        "1シャード）。昇順実行を要求する（先行 shard が全セル digest 一致で完了して"
+        "いないと fail-closed）。--evaluate/--census/--make-shard-map とは排他。"
+        "run report / verdict / census のいずれも出さない——成果物は --cell-store の "
+        "セルレコードと --out の shard 実行記録のみ",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="`--make-shard-map` で `--out` が既に存在する場合の明示上書き許可"
+        "（既定は fail-closed で拒否・シャード地図の黙示上書き禁止）",
+    )
     args = parser.parse_args()
     _require_out_outside_git_metadata(args.out)
+    if args.make_shard_map and args.shard_id is not None:
+        raise SystemExit(
+            "--make-shard-map と --shard-id は排他（地図生成器と実行機は別モード）"
+        )
+    if args.make_shard_map and (args.evaluate or args.census):
+        raise SystemExit("--make-shard-map は --evaluate / --census と排他")
+    if args.shard_id is not None and (args.evaluate or args.census):
+        raise SystemExit(
+            "--shard-id は --evaluate / --census と排他（shard モードは run report / "
+            "verdict / census のいずれも出さない）"
+        )
+    # E-64（PR #242 第4巡 Codex P2 是正）・E-71（PR #242 第6巡 Codex P2 是正・完備化）:
+    # `--shard-map`/`--campaign`/`--t-direct`/`--t-stem`/`--startup-cost`/明示指定の
+    # `--session-budget`/`--force` は shard/地図生成専用のフラグ（`--make-shard-map` か
+    # `--shard-id` のどちらかと必ず組む）。どちらの shard モードも起きていないのに
+    # これらが供給されていれば、黙って無視して通常 run/evaluate/census へ入るのでは
+    # なく、dispatch 前に fail-closed で拒否する（`--shard-id`/`--make-shard-map` の
+    # 指定漏れ等で意図しない run report が出るのを防ぐ）。
+    # E-100（PR #242 第17巡 Codex 是正）: `--session-budget` は以前、既定値からの
+    # 差分を「明示指定」の代理指標として使っていた——既定値と**同値**の明示指定
+    # （`--session-budget 7200` 等）を「未指定」と取り違えて素通りしてしまう
+    # 穴があった。他のセンチネル済みフラグ（`--specs`/`--external-fixtures`/
+    # `--workers`/`--cell-store-role` 等）と同じ `_ARGPARSE_UNSET` 方式へ統一し、
+    # 値によらず「明示指定されたか」を正確に判定する。
+    if not args.make_shard_map and args.shard_id is None:
+        for flag, supplied in (
+            ("--shard-map", args.shard_map is not None),
+            ("--campaign", args.campaign is not None),
+            ("--t-direct", args.t_direct is not None),
+            ("--t-stem", args.t_stem is not None),
+            ("--startup-cost", args.startup_cost is not None),
+            ("--session-budget", args.session_budget is not _ARGPARSE_UNSET),
+            ("--force", args.force is True),
+        ):
+            if supplied:
+                raise SystemExit(
+                    f"{flag} は --make-shard-map か --shard-id のどちらかと組み合わせる "
+                    "shard/地図生成専用フラグ; どちらも指定されていないので黙って通常の "
+                    "run/evaluate/census へ入らない (fail-closed)"
+                )
+    if args.make_shard_map:
+        for flag, rejected in (
+            ("--shard-map", args.shard_map is not None),
+            ("--level", args.level is not None),
+            ("--categories", args.categories is not None),
+            ("--external-manifest", args.external_manifest is not None),
+            ("--external-fixtures", args.external_fixtures is not _ARGPARSE_UNSET),
+            ("--specs", args.specs is not _ARGPARSE_UNSET),
+            # E-66（PR #242 第5巡 Codex 是正）: --cell-store は --make-shard-map の
+            # 除外リストから外し、opt-in の任意引数として受理する（未完セルのみの
+            # 再パッキング）。--repeat-index はそれでも生成器が読まないため引き続き拒否。
+            ("--repeat-index", args.repeat_index is not None),
+            ("--eval-cell-store", args.eval_cell_store is not None),
+            ("--cell-store-role", args.cell_store_role is not _ARGPARSE_UNSET),
+            ("--pin-threads", args.pin_threads is True),
+            # E-98（PR #242 第16巡 Codex 是正）: 地図生成器は M2e 帯（--m2e-bars）を
+            # 一切読まない（tolerance_cents 等の共有スカラーは --bars 側から取る）——
+            # E-64 ゲートの列挙に元々抜けていた。センチネル化し明示指定を拒否する。
+            ("--m2e-bars", args.m2e_bars is not _ARGPARSE_UNSET),
+        ):
+            if rejected:
+                raise SystemExit(
+                    f"{flag} は --make-shard-map と併用しない（地図生成器が読むのは "
+                    "--campaign / --t-direct / --t-stem / --startup-cost / "
+                    "--session-budget / --workers / --cell-store / --out / --bars だけ; "
+                    "黙って無視して束縛されたと誤解させない (fail-closed)）"
+                )
+        if args.campaign is None:
+            raise SystemExit("--make-shard-map には --campaign が必須")
+        if args.t_direct is None or args.t_stem is None or args.startup_cost is None:
+            raise SystemExit(
+                "--make-shard-map には --t-direct / --t-stem / --startup-cost が必須"
+            )
+        # E-59（PR #242 第3巡 Codex P2 是正）: 地図に校正時の P を記録する（§8.4「production
+        # と同じ P」の契約を実行側で検証可能にするため）。--workers は E-46〜E-54 の除外
+        # リストから外し、--make-shard-map 専用の必須引数として要求する。
+        if args.workers is _ARGPARSE_UNSET:
+            raise SystemExit(
+                "--make-shard-map には --workers が必須（校正した P を地図へ記録する。"
+                "実行機は --shard-id 時にこの値を採用・照合する）"
+            )
+        if args.workers < 1:
+            raise SystemExit(f"--workers {args.workers} は 1 以上の整数のみ許可する")
+        # E-47（PR #242 Codex P2 是正）: `--bars` の指定を保護集合・生成の両方まで
+        # 貫通させる（従来は保護のみ `BARS_PATH` 固定で、生成は常にモジュール既定を
+        # 読んでいたため、カスタム --bars が「読まれる」と help に書きながら実際には
+        # 無視されていた）。
+        # E-70（PR #242 第6巡 Codex 是正）: campaign は preflight（保護パス集合の構築）で
+        # 一度だけ読み、同一スナップショット + digest を生成側へ引き渡す
+        # （`campaign_snapshot=`）——別々に読むと、この間にファイルが差し替わった場合、
+        # 保護パス検査が見た campaign と実際に registry を供給する campaign が別 bytes
+        # に由来しうる（E-52 と同族の TOCTOU）。
+        campaign_for_preflight, campaign_sha256_for_preflight = _load_m2e_campaign_with_sha256(
+            args.campaign
+        )
+        protected = {Path(args.campaign).resolve(), Path(args.bars).resolve()}
+        for level_paths in campaign_for_preflight.values():
+            protected.update(level_paths.values())
+        # E-135（PR #242 第33巡 Codex 是正）: run/evaluate/census（既存経路）が
+        # 敷いている保護と同じ規律を地図生成にも及ぼす——観測を実際に産む
+        # first-party ソース閉包（`_generator_code_paths`）は `--shard-id` 側の
+        # 実測（`execute_m2e_shard` の worker 測定）が消費する provenance 入力
+        # であり、`--out`/spill がそれと同じパスを指すとコード自体を地図/
+        # spill 出力で上書きしうる。地図生成自体は実測しないが、同じ
+        # campaign/cell_store を共有する2つの CLI モードとして保護集合の対称性を
+        # 保つため、こちら側にも予約前に加える。
+        protected.update(_generator_code_paths())
+        # E-123（PR #242 第27巡 Codex 是正）: `--cell-store` 指定時、地図生成は
+        # 除外真実性スキャン（`_m2e_completed_cell_keys`）で campaign の manifest
+        # を実際に読む——manifest が指す audio_path/annotation_path の実体は、
+        # 直上の `level_paths.values()`（manifest/fixtures の**ファイルパス**
+        # 自体）には含まれていない。`--out` がそのいずれかと同じパスを指すと、
+        # 地図の書き出しが実測入力そのものを上書きしうるため、保護集合へ展開
+        # して加える（`--cell-store` 未指定時は地図生成が manifest を一切読まない
+        # ので対象外のまま——「manifest 未生成のうちに地図を作れる」という §8.5
+        # の設計判断を壊さない）。
+        # E-125（PR #242 第28巡 Codex 是正）: ここで読んだ manifest スナップショット
+        # （`preflight_manifest_by_level`/`preflight_manifest_sha256_by_level`）は
+        # 下の `generate_m2e_shard_map(...)` 呼び出しへ引き回す——除外真実性スキャン
+        # （`_m2e_completed_cell_keys`）が同じ manifest ファイルを再度開かないように
+        # する（E-72/E-104 と同族の TOCTOU 回避）。`--cell-store` 未指定時は
+        # `None`（従来どおり `generate_m2e_shard_map` 側で読む）。
+        preflight_manifest_by_level: "Optional[Dict[str, Tuple[List[Dict[str, Any]], Path]]]" = (
+            None
+        )
+        preflight_manifest_sha256_by_level: "Optional[Dict[str, str]]" = None
+        if args.cell_store is not None:
+            referenced_paths, preflight_manifest_by_level, preflight_manifest_sha256_by_level = (
+                _m2e_manifest_referenced_paths(campaign_for_preflight)
+            )
+            protected.update(referenced_paths)
+        # E-117（PR #242 第24巡 Codex 是正）: `--out` を入口で 1 回だけ resolve し、
+        # 以降の保護パス検査・no-clobber 検査・予約取得・claim 書き込み・公開
+        # （atomic write）・token 検証・ロールバックの全段でこの単一スナップショット
+        # を使う（`args.out` は後段で経路に使わない・エラーメッセージの表示にのみ
+        # 使う）。以前は保護・予約系が `out_resolved`/`out_resolved_for_map` へ
+        # 複数回 `Path(args.out).resolve()` していた一方、公開の 2 箇所
+        # （claim トークン・最終 payload の `_atomic_write_text`）だけが未解決の
+        # `args.out` のままだった——`--out` の最終要素が symlink だと、予約系は
+        # 実体パスを見て所有権を判定するのに、`_atomic_write_text` の
+        # `os.replace(tmp, path)` は symlink 自体を置換する（symlink の指す実体
+        # ではなく symlink エントリそのものが新しい通常ファイルに置き換わる）ため、
+        # 予約が守っていたはずの実体とは別の場所（symlink の位置）に中身が書かれ、
+        # 原状復帰（`_rollback_m2e_out_reservation`）は実体側を触ってしまう——
+        # 予約・公開・ロールバックが同じファイルを指さない不整合を生んでいた。
+        out_resolved = Path(args.out).resolve()
+        if out_resolved in protected:
+            raise SystemExit(
+                f"--out {args.out} は地図生成の入力（campaign / manifest / fixtures / "
+                "bars）と同じパスを指している; 入力を地図で上書きしない (fail-closed)"
+            )
+        # E-81（PR #242 第9巡 Codex 是正）: `--make-shard-map --cell-store`（E-66）は
+        # 除外真実性検証のため `cell_store` 配下のセルレコードを読む——`--out` が
+        # その配下（root 自身または子孫）を指すと、地図の書き出しが既存セル
+        # チェックポイントを上書きしうる。`--shard-id` 側の同種保護（E-51 系）と
+        # 揃え、`--force` でも例外を許さない（--cell-store が指定された場合のみ；
+        # 未指定なら比較対象が無い）。
+        if args.cell_store is not None:
+            cell_store_root = Path(args.cell_store).resolve()
+            if out_resolved == cell_store_root or cell_store_root in out_resolved.parents:
+                raise SystemExit(
+                    f"--out {args.out} が --cell-store {args.cell_store} 配下にある; 地図の "
+                    "書き出しでセルチェックポイントを上書きしない (fail-closed・E-81)"
+                )
+        # E-55（PR #242 第3巡 Codex P1 是正）: `--out "$(mktemp ...)"` が作る 0 バイトの
+        # 予約ファイルは上書き対象として許容し、非空の既存レコードのみ fail-closed で
+        # 拒否する（--shard-id 側の E-51 no-clobber と同じ規則に揃える）。
+        if out_resolved.exists() and out_resolved.stat().st_size > 0 and not args.force:
+            raise SystemExit(
+                f"--out {args.out} が既に存在する（0 バイトではない）; 明示 --force か "
+                "別パスの --out を使う (fail-closed・シャード地図の黙示上書き禁止・"
+                "設計判断 1)"
+            )
+        # E-100（PR #242 第17巡 Codex 是正）: --session-budget をセンチネル化した
+        # （既定値との差分では「省略」と「既定値と同値の明示指定」を区別できな
+        # かった）ので、ここで既定を適用する（--make-shard-map だけが実際に消費する）。
+        session_budget = (
+            _M2E_DEFAULT_SESSION_BUDGET_S
+            if args.session_budget is _ARGPARSE_UNSET
+            else args.session_budget
+        )
+        # E-111（PR #242 第21巡 Codex 是正）: `--make-shard-map --out` にも、
+        # shard-run 側（E-94/E-96/E-106）と同じ排他予約を適用する——地図生成も
+        # 長時間かかりうるため、no-clobber 検査通過〜公開の窓で 2 起動が同じ
+        # 予約状態（0 バイト/不存在）を狙って通過しうる。ヘルパを共通化して流用する。
+        # E-111: `--force` は非空の既存レコードも上書き対象にできる（`--shard-id`
+        # 側は常に 0 バイト予約のみ）ため、原状復帰は「存在したか」の bool ではなく
+        # 元の bytes そのもの（`_rollback_m2e_out_reservation` 参照）で行う。
+        # E-119（PR #242 第25巡 Codex 是正）: `except OSError` は `PermissionError`
+        # （書込可能なディレクトリに読取不可の既存ファイルがある等）も「存在しない」と
+        # 黙って扱ってしまう——`--force` はその後 claim で既存ファイルを置換でき、
+        # 生成/公開が失敗した場合のロールバックは「原状復帰すべき中身」を知らないまま
+        # unlink してしまう（原本を失う）。`FileNotFoundError` のみを「未存在」として
+        # 受理し、他の読取エラーは claim 取得（＝原本への最初の書き込み）より前に
+        # fail-closed で中断する（`/etc/ld.so.preload` 読取の E-... と同型の作法）。
+        try:
+            out_original_bytes = out_resolved.read_bytes()
+        except FileNotFoundError:
+            out_original_bytes = None
+        except OSError as exc:
+            raise SystemExit(
+                f"--out {args.out} の既存内容を確認できない "
+                f"({type(exc).__name__}: {exc}); --force の原状復帰の基準（既存内容）を "
+                "立証できないまま予約・上書きを進めない (fail-closed・E-119)"
+            ) from exc
+        # E-122（PR #242 第27巡 Codex 是正）: `--force` が非空の既存レコードを
+        # 上書き対象にする場合、原本には一切書き込まず、最終の atomic 置換まで
+        # 温存する——以前は claim token を予約直後に原本へ書き込んでいたため、
+        # 生成中に SIGKILL・電源断等でプロセスが不意に落ちると、ロールバックの
+        # 拠り所である `out_original_bytes`（メモリ上のみ）は失われ、原本自体も
+        # token で上書きされたまま永久に失われる経路があった。所有権は
+        # サイドカー（`<out>.claim`・O_CREAT|O_EXCL）だけで検証すれば十分
+        # （E-94 で既にこれが唯一の真の排他プリミティブになっている——`--out`
+        # 本体への token 書き込みは E-85 以来の診断用の副産物に過ぎない）ので、
+        # 非空原本ケースはこれを省略する。absent/0 バイト予約ケース（`--out
+        # "$(mktemp ...)"`）は失うものが無いため、従来どおり token 書き込み・
+        # 読み戻し検証を維持する（同じコード経路を素直に流用でき、変更を
+        # 最小化できる）。
+        out_has_nonempty_original = out_original_bytes not in (None, b"")
+        shard_map_claim_token = (
+            "m2e-shard-map-reservation/1\n"
+            f"pid={os.getpid()}\n"
+            f"claimed_utc={_utc_now()}\n"
+        )
+        try:
+            out_claim_sidecar = _acquire_m2e_out_reservation(out_resolved, shard_map_claim_token)
+        except FileExistsError:
+            raise SystemExit(
+                f"--out {args.out} の予約は他の起動が保持している（サイドカー "
+                f"{out_resolved.with_name(f'{out_resolved.name}.claim')} が "
+                "既に存在する）; 並行実行は非サポート。クラッシュ孤児ならサイドカーを "
+                "手動削除して再実行する (fail-closed・E-111)"
+            ) from None
+        try:
+            if not out_has_nonempty_original:
+                _atomic_write_text(out_resolved, shard_map_claim_token)
+            try:
+                shard_map = generate_m2e_shard_map(
+                    campaign_path=args.campaign,
+                    t_direct=args.t_direct,
+                    t_stem=args.t_stem,
+                    startup_cost=args.startup_cost,
+                    session_budget=session_budget,
+                    bars_path=args.bars,
+                    workers=args.workers,
+                    cell_store=args.cell_store,
+                    campaign_snapshot=(campaign_for_preflight, campaign_sha256_for_preflight),
+                    # E-125: preflight（保護パス集合の構築・E-123）が既に読んだ
+                    # manifest スナップショットを引き回す（未指定時は None・
+                    # `generate_m2e_shard_map` 側が従来どおり読む）。
+                    manifest_snapshot_by_level=preflight_manifest_by_level,
+                    manifest_sha256_snapshot_by_level=preflight_manifest_sha256_by_level,
+                )
+            except BaseException:
+                # E-122: 非空原本ケースは原本に一切書いていないので、ロールバック
+                # （原状復帰）自体が不要——サイドカー解放（`finally`）だけで済む。
+                if not out_has_nonempty_original:
+                    _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
+                raise
+            # E-121（PR #242 第26巡 Codex 是正）: 直列化（`yaml.safe_dump`）を含む
+            # 「生成完了後〜公開完了まで」の残り全段を、直上の `generate_m2e_shard_map`
+            # と同じ BaseException ロールバック範囲に入れる——以前は直列化とその直後
+            # の token 検証がこの範囲の外にあり、直列化自体が失敗すると `--out` に
+            # 自分の claim トークンだけが残ったままロールバックされず（サイドカーは
+            # `finally` で解放されるので、次回起動は壊れた `--out` を非空の既存
+            # レコードとして掴んでしまう）。地図（`shard_map` dict）はまだメモリ上に
+            # 生きているので、`_m2e_best_effort_spill_payload` で可能な限り堅牢な
+            # 形へ落として spill してからロールバックする（spill 自体の失敗は
+            # ロールバック・再送出を妨げない）。「別起動が claim を差し替えていた」
+            # 分岐（既に spill 済み・fail-closed で案内済み）はロールバック対象外
+            # （`out_original_bytes` を書き戻すと、別起動が公開した中身を破壊する）。
+            mismatch_already_handled = False
+            try:
+                payload = yaml.safe_dump(
+                    shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
+                )
+                # E-122: 非空原本ケースは原本を読み戻さず、所有権の唯一の根拠
+                # （サイドカー自身）の内容が自分の token のままであることを確認
+                # する——`_acquire_m2e_out_reservation` の O_CREAT|O_EXCL が
+                # 唯一の書き手を保証しているため、この照合は実質的に常に成立
+                # する自己整合性チェックだが、E-85 の「公開直前に所有権を再確認
+                # する」精神は absent/0 バイトケースと同じ形で保つ。
+                if out_has_nonempty_original:
+                    try:
+                        current_token_content = out_claim_sidecar.read_text(encoding="utf-8")
+                    except OSError:
+                        current_token_content = None
+                else:
+                    try:
+                        current_token_content = out_resolved.read_text(encoding="utf-8")
+                    except OSError:
+                        current_token_content = None
+                if current_token_content != shard_map_claim_token:
+                    mismatch_already_handled = True
+                    spill_path = out_resolved.with_name(
+                        f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.yaml"
+                    )
+                    _atomic_write_text(spill_path, payload)
+                    raise SystemExit(
+                        f"--out {args.out} の claim が公開直前に別の内容へ差し替わっていた "
+                        "（予約時に書いた自分の claim トークンと不一致）; 別起動との競合の "
+                        f"疑いがある。地図は失わないよう {spill_path} へ退避した——原因を "
+                        "確認してから手動で --out へ配置すること (fail-closed・E-111)"
+                    )
+                _atomic_write_text(out_resolved, payload)
+            except BaseException:
+                if not mismatch_already_handled:
+                    try:
+                        spill_path = out_resolved.with_name(
+                            f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.recovery"
+                        )
+                        _atomic_write_text(
+                            spill_path, _m2e_best_effort_spill_payload(shard_map)
+                        )
+                    except BaseException:
+                        pass
+                    # E-129（PR #242 第30巡 Codex 是正）: E-122 は「この except に
+                    # 来た＝`_atomic_write_text(out_resolved, payload)` が失敗した
+                    # ＝`os.replace` は失敗時に元ファイルを変えないので原本は無傷」
+                    # と仮定して非空原本ケースのロールバックを省略していたが、これは
+                    # 誤り——`KeyboardInterrupt`/`SystemExit` は `os.replace` が実際
+                    # には**成功した直後**の任意のバイトコード境界でも配送されうる
+                    # ため、「この except に来た」ことは「置換が失敗した」ことを
+                    # 意味しない。その場合、非空原本ケースは新 payload が恒久的に
+                    # 居座ったまま fail-closed 終了し、**終了状態（失敗）と成果物
+                    # 状態（置換成功）が食い違う**——原本は永久に失われる。新 payload
+                    # は直上の spill で既に保全済みなので、原本を無条件で atomic
+                    # 復元しても情報は失われない（`_rollback_m2e_out_reservation` は
+                    # 「実際には書いていなければ元と同じ内容を書き戻すだけ」の
+                    # no-op 相当になるので、あらゆる分岐で安全に呼べる）。
+                    _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
+                raise
+            print(f"wrote shard map to {args.out}")
+        finally:
+            out_claim_sidecar.unlink(missing_ok=True)
+        # E-67（PR #242 第5巡 Codex P2 是正）: 生成時刻は地図 bytes から外した
+        # （同一入力 → バイト一致という Design Memo AC と矛盾しないように）ので、
+        # provenance として stdout へ印字する（HANDOFF のレシピは tee するため
+        # dated record に残る）。sha256 は書き出したのと同一の encoded bytes から
+        # 導出する（census の E-25 / shard 実行記録の E-56 と同じ流儀）。
+        print(f"  generated at {_utc_now()}")
+        print(f"  shard map sha256: {hashlib.sha256(payload.encode('utf-8')).hexdigest()}")
+        print(f"  n_shards: {shard_map['n_shards']} / n_cells: {shard_map['n_cells']}")
+        print(f"  cap_s: {shard_map['inputs']['cap_s']:.3f}")
+        return 0
+    if args.shard_id is not None:
+        for flag, rejected in (
+            ("--level", args.level is not None),
+            ("--categories", args.categories is not None),
+            ("--external-manifest", args.external_manifest is not None),
+            ("--external-fixtures", args.external_fixtures is not _ARGPARSE_UNSET),
+            ("--specs", args.specs is not _ARGPARSE_UNSET),
+            ("--repeat-index", args.repeat_index is not None),
+            ("--eval-cell-store", args.eval_cell_store is not None),
+            ("--cell-store-role", args.cell_store_role is not _ARGPARSE_UNSET),
+            ("--pin-threads", args.pin_threads is True),
+            ("--t-direct", args.t_direct is not None),
+            ("--t-stem", args.t_stem is not None),
+            ("--startup-cost", args.startup_cost is not None),
+            # E-100（PR #242 第17巡 Codex 是正）: センチネル方式へ統一（既定値と
+            # 同値の明示指定も正しく検出する）。
+            ("--session-budget", args.session_budget is not _ARGPARSE_UNSET),
+            # E-98（PR #242 第16巡 Codex 是正）: 実行機も M2e 帯（--m2e-bars）を
+            # 一切読まない（E-71 ゲートの列挙に元々抜けていた）。
+            ("--m2e-bars", args.m2e_bars is not _ARGPARSE_UNSET),
+            # E-110（PR #242 第20巡 Codex 是正）: --force は --make-shard-map 専用
+            # （地図生成の no-clobber 上書き許可）——実行機は no-clobber を無条件
+            # fail-closed で拒否するのみで、上書き許可の概念自体が無い。列挙に
+            # 抜けていた。
+            ("--force", args.force is True),
+        ):
+            if rejected:
+                raise SystemExit(
+                    f"{flag} は --shard-id と併用しない（実行機が読むのは --shard-map / "
+                    "--campaign / --cell-store / --workers / --bars / --out だけ; スレッド "
+                    "3 点固定は常に適用するため --pin-threads は無効。黙って無視して束縛 "
+                    "されたと誤解させない (fail-closed)）"
+                )
+        if args.shard_map is None:
+            raise SystemExit("--shard-id には --shard-map が必須")
+        if args.campaign is None:
+            raise SystemExit("--shard-id には --campaign が必須")
+        if args.cell_store is None:
+            raise SystemExit(
+                "--shard-id には --cell-store が必須（セル台帳への書き込み先）"
+            )
+        if args.shard_id < 0:
+            raise SystemExit(f"--shard-id {args.shard_id} は 0 以上のみ許可する")
+        map_doc, map_sha256 = _load_m2e_shard_map(args.shard_map)
+        # E-59（PR #242 第3巡 Codex P2 是正）: 地図は校正時の P を記録している
+        # （§8.4「production と同じ P」の契約）。--workers 省略時は地図の値を採用し、
+        # 明示指定時は地図の値と一致することを要求する（不一致は fail-closed。
+        # T_direct/T_stem/S は校正時の P の下で測ったものであり、異なる P で実行すると
+        # コストモデルの前提が崩れる）。
+        # E-83（PR #242 第10巡 Codex 是正）: `int(...)` は非 bool の正整数以外
+        # （`1.5` は切り捨てて 1 に、`true` は 1 に）を黙って正常値として受理して
+        # しまう——地図の workers は校正時の P（§8.4 のコスト契約の前提）なので、
+        # 形が崩れた値を静かに丸めず fail-closed で拒否する（生成器
+        # `generate_m2e_shard_map` の workers 検証と同じ形状要件）。
+        raw_map_workers = map_doc["inputs"]["workers"]
+        if (
+            isinstance(raw_map_workers, bool)
+            or not isinstance(raw_map_workers, int)
+            or raw_map_workers < 1
+        ):
+            raise SystemExit(
+                f"shard map: inputs.workers {raw_map_workers!r} は 1 以上の整数（bool 不可）"
+                "のみ許可する; §8.4 のコスト契約の前提（校正時の P）を表す値が崩れている "
+                "(fail-closed・E-83)"
+            )
+        map_workers = raw_map_workers
+        if args.workers is _ARGPARSE_UNSET:
+            workers = map_workers
+        else:
+            workers = args.workers
+            if workers != map_workers:
+                raise SystemExit(
+                    f"--workers {workers} が地図の校正時 P（{map_workers}）と不一致; "
+                    "§8.4「production と同じ P」の契約により、明示指定するなら地図と "
+                    "一致する値のみ許可する。省略すれば地図の値を採用する (fail-closed)"
+                )
+        if workers < 1:
+            raise SystemExit(f"--workers {workers} は 1 以上の整数のみ許可する")
+        # E-52: campaign_sha256 の照合と parse を単一読取から導出する（別々の
+        # read_bytes() だと、呼び出しの間にファイルが差し替わった場合に、地図と
+        # 突き合わせた digest と実際に消費する campaign の中身が別 bytes 由来に
+        # なりうる）。
+        campaign, campaign_sha256 = _load_m2e_campaign_with_sha256(args.campaign)
+        if map_doc.get("campaign_sha256") != campaign_sha256:
+            raise SystemExit(
+                f"--campaign {args.campaign} が地図の campaign_sha256 と不一致; 地図生成時 "
+                "と別の campaign を消費しない (fail-closed)"
+            )
+        # E-47: `--bars`（registry 検証・tolerance/est_voiced_floor の供給元）も保護する。
+        protected = {
+            Path(args.shard_map).resolve(),
+            Path(args.campaign).resolve(),
+            Path(args.bars).resolve(),
+        }
+        for level_paths in campaign.values():
+            protected.update(level_paths.values())
+        # E-135（PR #242 第33巡 Codex 是正）: run/evaluate/census（既存経路）と
+        # 同じ規律で、観測を実際に産む first-party ソース閉包
+        # （`_generator_code_paths`）を保護集合へ加える——`execute_m2e_shard` の
+        # worker 測定はこのコードを実際に実行して cell record（provenance）を
+        # 産む唯一の消費者であり、`--out`/`--cell-store` spill がそれと同じ
+        # パスを指すとコード自体を実行記録/spill 出力で上書きしうる
+        # （fail-closed で予約前に拒否する）。
+        protected.update(_generator_code_paths())
+        # E-123（PR #242 第27巡 Codex 是正）: 実行は常に manifest を読む（先行
+        # shard 検査・task 構築）ので、manifest が指す audio_path/annotation_path
+        # の実体も無条件で保護集合へ展開する（`--make-shard-map` 側と同型——
+        # manifest の**ファイルパス**自体は既に保護されているが、manifest が
+        # **指す**実ファイルは含まれていなかった）。
+        # E-126（PR #242 第29巡 Codex 是正）: 戻り値のスナップショット
+        # （`preflight_manifest_by_level`/`preflight_manifest_sha256_by_level`）は
+        # 破棄せず、下の `execute_m2e_shard` 呼び出しへそのまま引き渡す——
+        # `execute_m2e_shard` 内の既存 `manifest_by_level` 引き回し機構
+        # （E-72/E-104）へ種付けすることで、ここで既に読んだ manifest を先行
+        # shard 検証・task 構築で再度開かない（E-125 の `--make-shard-map` 側
+        # 対応と対になる shard 側の完備化）。E-133（PR #242 第32巡 Codex 是正）:
+        # sha256 スナップショットも保持し、除外真実性再スキャン自体（E-104）へも
+        # 種付けする——これにより除外つき地図でも manifest 読取が preflight の
+        # 1 回へ完全に一本化される。
+        referenced_paths, preflight_manifest_by_level, preflight_manifest_sha256_by_level = (
+            _m2e_manifest_referenced_paths(campaign)
+        )
+        protected.update(referenced_paths)
+        cell_store_root = Path(args.cell_store).resolve()
+        # E-90（PR #242 第12巡 Codex 是正）: E-81 の逆方向——解決済み保護入力
+        # （campaign が指す manifest/fixtures・shard-map・bars）が `--cell-store` の
+        # root と同一または配下にあると、公開されたセルチェックポイントを「入力」
+        # として消費してしまいうる（出力ツリーに入力を置かせない）。
+        for protected_path in protected:
+            if protected_path == cell_store_root or cell_store_root in protected_path.parents:
+                raise SystemExit(
+                    f"--cell-store {args.cell_store} 配下に shard 実行の入力 "
+                    f"（{protected_path}）がある; 出力ツリー（cell_store）を入力として "
+                    "消費しない (fail-closed・E-90)"
+                )
+        out_resolved = Path(args.out).resolve()
+        if out_resolved in protected:
+            raise SystemExit(
+                f"--out {args.out} は shard 実行の入力（shard-map / campaign / manifest / "
+                "fixtures / bars）と同じパスを指している; 入力を実行記録で上書きしない "
+                "(fail-closed)"
+            )
+        if out_resolved == cell_store_root or cell_store_root in out_resolved.parents:
+            raise SystemExit(
+                f"--out {args.out} が --cell-store {args.cell_store} 配下にある; 実行記録で "
+                "セルチェックポイントを上書きしない (fail-closed)"
+            )
+        # E-51（PR #242 第2巡 Codex P2 是正）: 地図生成と同じ no-clobber 規律を shard
+        # 実行記録にも課す。上書きフラグは作らない——dated record は per-run 命名が
+        # 前提であり、再試行は別パスの --out を使う。高価なキューに入る**前**に
+        # fail-closed で拒否する。
+        # E-55（PR #242 第3巡 Codex P1 是正）: `--out "$(mktemp ...)"` は 0 バイトの
+        # 予約ファイルを作る。mktemp の予約は上書き対象として許容し、非空の既存
+        # レコードのみ拒否する（HANDOFF の起動レシピが軒並み拒否されていた不具合の
+        # 是正）。
+        if out_resolved.exists() and out_resolved.stat().st_size > 0:
+            raise SystemExit(
+                f"--out {args.out} が既に存在する（0 バイトではない）; shard 実行記録の "
+                "黙示上書き禁止（dated record は per-run 命名が前提——別パスの --out を "
+                "使う。mktemp の 0 バイト予約ファイルは上書き対象として許容する）"
+                "(fail-closed)"
+            )
+        # E-85（PR #242 第10巡 Codex 是正）: no-clobber 検査の通過〜公開
+        # （`_atomic_write_text` での置換）までの窓が無防備だった——`execute_m2e_shard`
+        # は数時間かかりうるため、この窓で別起動が同じ 0 バイト予約 / 不存在 --out を
+        # 狙って同じ no-clobber 検査を通過しうる（二重実行・上書き競合）。検査の直後、
+        # `--out` へ起動固有 claim（shard_id + PID + ISO8601）を atomic write する——
+        # これでファイルは非空になり、以後の別起動は既存の no-clobber 検査（0 バイト
+        # のみ許容）で弾かれる。公開直前には現在の `--out` の内容が自分の claim の
+        # ままであることを確認してから置換する（不一致なら、誰かが割り込んで claim /
+        # 内容を差し替えたということ——実行記録を失わないよう一時パスへ退避出力し、
+        # fail-closed で案内する）。
+        # E-94（PR #242 第15巡 Codex 是正）: E-85 の claim は `--out` 本体への
+        # `os.replace`（atomic だが後勝ち上書き可能）だけが所有権の根拠だった——
+        # 2 起動がほぼ同時に到達すると、両方が no-clobber を通過した直後に互いの
+        # claim を上書きしうる（検出は公開直前のみ・事後）。真の排他プリミティブへ
+        # 切り替える: サイドカー `<out>.claim` を `O_CREAT|O_EXCL` で作る——既に
+        # 存在すれば即座に fail-closed で拒否する（他起動が予約を保持している）。
+        # `--out` 本体への token 書き込みは引き続き行う（診断用・E-85 の公開時
+        # 照合はそのまま維持）が、所有権の根拠はこのサイドカーの O_EXCL に一本化する。
+        # E-111: 原状復帰は bool ではなく元の bytes そのもので行う
+        # （`_rollback_m2e_out_reservation` 参照。--shard-id 側は E-51 の
+        # no-clobber により常に「0 バイト予約」のみが「存在した」場合に相当する）。
+        # E-119（PR #242 第25巡 Codex 是正）: 地図生成側と同型の穴——`except OSError`
+        # は `PermissionError` も「存在しない」と黙って扱う。`FileNotFoundError`
+        # のみを「未存在」として受理し、他の読取エラーは claim 取得前に fail-closed
+        # で中断する（--shard-id 側は常に 0 バイト予約のみが対象だが、その 0 バイト
+        # ファイル自体が読取不可という同型の壊れ方はありうる）。
+        try:
+            out_original_bytes = out_resolved.read_bytes()
+        except FileNotFoundError:
+            out_original_bytes = None
+        except OSError as exc:
+            raise SystemExit(
+                f"--out {args.out} の既存内容を確認できない "
+                f"({type(exc).__name__}: {exc}); 原状復帰の基準（既存内容）を立証できない "
+                "まま予約を進めない (fail-closed・E-119)"
+            ) from exc
+        shard_run_claim_token = (
+            "m2e-shard-run-reservation/1\n"
+            f"shard_id={args.shard_id}\n"
+            f"pid={os.getpid()}\n"
+            f"claimed_utc={_utc_now()}\n"
+        )
+        try:
+            out_claim_sidecar = _acquire_m2e_out_reservation(out_resolved, shard_run_claim_token)
+        except FileExistsError:
+            raise SystemExit(
+                f"--out {args.out} の予約は他の起動が保持している（サイドカー "
+                f"{out_resolved.with_name(f'{out_resolved.name}.claim')} が既に存在する）; "
+                "並行実行は非サポート。クラッシュ孤児ならサイドカーを手動削除して再実行する "
+                "(fail-closed・E-94)"
+            ) from None
+
+        # E-117（PR #242 第24巡 Codex 是正）: claim・payload の公開は入口で resolve
+        # 済みの `out_resolved` を使う（`args.out` は使わない）——予約・token 検証・
+        # ロールバックは既に `out_resolved` 基準だったが、公開の 2 箇所（claim
+        # トークン・最終 payload）だけが未解決の `args.out` のままだった。`--out`
+        # の最終要素が symlink だと `_atomic_write_text` の `os.replace` は symlink
+        # 自体を置換してしまい（symlink の指す実体へは書かない）、予約が守っていた
+        # 実体とは別の場所へ中身が書かれる経路があった（地図生成側と同型の穴）。
+        try:
+            _atomic_write_text(out_resolved, shard_run_claim_token)
+            try:
+                shard_run = execute_m2e_shard(
+                    map_doc=map_doc,
+                    map_sha256=map_sha256,
+                    shard_id=args.shard_id,
+                    campaign=campaign,
+                    cell_store=args.cell_store,
+                    bars_path=args.bars,
+                    workers=workers,
+                    # E-126/E-133: preflight（保護入力検査・E-123）が既に読んだ
+                    # manifest スナップショット + sha256 を引き渡す（未指定時は
+                    # None・従来どおり内部で読む）——除外真実性再スキャン・先行
+                    # shard 検証・task 構築のすべてがこれを消費する。
+                    preflight_manifest_by_level=preflight_manifest_by_level,
+                    preflight_manifest_sha256_by_level=preflight_manifest_sha256_by_level,
+                )
+            except BaseException:
+                # E-96: execute_m2e_shard が失敗するあらゆる経路（shard claim
+                # 衝突・pin 失敗・不正地図等）で --out を原状復帰する。
+                _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
+                raise
+            # E-121（PR #242 第26巡 Codex 是正）: 直列化（`json.dumps`）を含む
+            # 「実行完了後〜公開完了まで」の残り全段を、直上の `execute_m2e_shard`
+            # と同じ BaseException ロールバック範囲に入れる（E-106 の範囲拡張の
+            # さらなる拡張）——以前は直列化とその直後の token 検証がこの範囲の外に
+            # あり、直列化自体が失敗すると `--out` に自分の claim トークンだけが
+            # 残ったままロールバックされず（サイドカーは `finally` で解放される
+            # ので、次回起動は壊れた `--out` を非空の既存レコードとして掴んで
+            # しまう）。実行記録（`shard_run` dict）はまだメモリ上に生きているので、
+            # `_m2e_best_effort_spill_payload` で可能な限り堅牢な形へ落として spill
+            # してからロールバックする（spill 自体の失敗はロールバック・再送出を
+            # 妨げない）。「別起動が claim を差し替えていた」分岐（既に spill 済み・
+            # fail-closed で案内済み）はロールバック対象外（`out_original_bytes` を
+            # 書き戻すと、別起動が公開した中身を破壊する）。
+            mismatch_already_handled = False
+            try:
+                shard_run_payload = json.dumps(shard_run, indent=2, sort_keys=True)
+                try:
+                    current_out_content = out_resolved.read_text(encoding="utf-8")
+                except OSError:
+                    current_out_content = None
+                if current_out_content != shard_run_claim_token:
+                    mismatch_already_handled = True
+                    spill_path = out_resolved.with_name(
+                        f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.json"
+                    )
+                    _atomic_write_text(spill_path, shard_run_payload)
+                    raise SystemExit(
+                        f"--out {args.out} の claim が公開直前に別の内容へ差し替わっていた "
+                        "（予約時に書いた自分の claim トークンと不一致）; 別起動との競合の "
+                        f"疑いがある。実行記録は失わないよう {spill_path} へ退避した——原因を "
+                        "確認してから手動で --out へ配置すること (fail-closed・E-85)"
+                    )
+                _atomic_write_text(out_resolved, shard_run_payload)
+            except BaseException:
+                if not mismatch_already_handled:
+                    try:
+                        spill_path = out_resolved.with_name(
+                            f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.recovery"
+                        )
+                        _atomic_write_text(
+                            spill_path, _m2e_best_effort_spill_payload(shard_run)
+                        )
+                    except BaseException:
+                        pass
+                    _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
+                raise
+            print(f"wrote shard run record to {args.out}")
+        finally:
+            # E-94: 公開の成否によらず、サイドカーは必ず解放する（所有権の唯一の
+            # 根拠なので、残したままだと --out パスが以後の全起動から永久に拒否
+            # され続ける）。
+            out_claim_sidecar.unlink(missing_ok=True)
+        # E-56（PR #242 第3巡 Codex P2 是正）: census の E-25 と同じ流儀で、書いたのと
+        # 同一の encoded bytes から sha256 を導出して stdout へ残す（HANDOFF のレシピは
+        # stdout を tee するため dated record にこの pin が残る）。
+        shard_run_sha256 = hashlib.sha256(shard_run_payload.encode("utf-8")).hexdigest()
+        print(f"  shard record sha256: {shard_run_sha256}")
+        print(
+            f"  shard {shard_run['shard_id']}/{shard_run['n_shards']}: "
+            f"completed={shard_run['cells_completed']}/{shard_run['cells_total']} "
+            f"unavailable={len(shard_run['cells_unavailable'])} "
+            f"truncated={len(shard_run['cells_truncated'])} "
+            f"not_started={len(shard_run['cells_not_started'])}"
+        )
+        return 0
+    # E-98（PR #242 第16巡 Codex 是正）: --m2e-bars をセンチネル化した（両 shard
+    # モードは明示指定を拒否——上の 2 ブロックで検査済み）ので、それ以外の経路
+    # （census/evaluate/run）へ渡す前に、既定の M2E_BARS_PATH へ正規化する。
+    # census 分岐がこの直後で --m2e-bars を直接消費するため、この正規化は
+    # census 分岐より前に置く。
+    if args.m2e_bars is _ARGPARSE_UNSET:
+        args.m2e_bars = M2E_BARS_PATH
     if args.census and args.evaluate:
         raise SystemExit(
             "--census と --evaluate は排他（census は evaluate が出した verdict を "
