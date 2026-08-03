@@ -1531,6 +1531,56 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   （`elapsed + cost(cell) <= B_session`）が admitted セルの開始を `B_session` 以内に
   既に制約しているため、各セルは最低 `hang_grace_seconds` 分の猶予を保証される。
 
+**E-66〜E-69（PR #242 第5巡・続き）。**
+
+- **E-66**: §8.5「未完セルについてのみ再適用」の契約が未実装だった——`--make-shard-map`
+  は毎回全セルを再パッキングし、部分完了後の再地図生成が完了セルも含めて
+  N_shards/R_max/cap を評価していた。`--make-shard-map` に任意の `--cell-store` を
+  追加: 指定すると `_require_prior_m2e_shards_complete` と同じ digest 一致基準
+  （`_m2e_completed_cell_keys`）で完了セルを判定し、パッキングから除外する（cap/
+  N_shards/R_max は残セルのみで評価）。除外セルの鍵と根拠（`cell_store` の
+  repo-relative パス）を `excluded_completed_cells` へ記録する。実行側
+  （`_require_m2e_shard_map_matches_registry`）は台帳から除外集合を引いた「残台帳」
+  で従来の完全一致検証を行い、加えて除外の真実性（宣言された除外セルが実際に
+  store で完了しているか）を同じ基準で再検証する（fail-closed）。`--cell-store`
+  未指定時は除外なし（後方互換）。
+- **E-67（Memo AC 不整合の是正）**: Design Memo は「地図に生成時刻を記録する」と
+  「同一入力 → バイト一致」を両方要求していたが、壁時計から読む生成時刻を bytes に
+  含めながらバイト一致を謳うのは自己矛盾する（起草バグ）。`generated_utc` を地図
+  bytes から外し、CLI が生成完了時に `generated at <ISO8601 UTC> / shard map
+  sha256: <hex>` を stdout へ印字する形へ改める（HANDOFF のレシピは tee するため
+  dated record に残る）。決定論テストは `_utc_now` の monkeypatch なしの素の 2 回
+  呼び出しでバイト一致を検証する形へ改めた。
+- **E-68**: `--startup-cost nan` は `startup_cost < 0` を素通りし cap が NaN になる
+  ——以降の全比較が NaN 相手には常に false になり、1 セル容量ゲートも `R_max`
+  ゲートも無検査で素通りする（`session_budget` に限らない同型穴）。生成器の float
+  入力全数（t_direct/t_stem/startup_cost/session_budget）へ `math.isfinite` + 符号
+  検査を単一のバリデータ（`_require_m2e_shard_map_finite_input`）へ集約し統一的に
+  敷く。共有の `_assign_m2e_shard_ids`（実行側の再計算経路）にも同じ 4 入力の
+  isfinite 検査を及ぼした。
+- **E-69**: readback の再計算検証（E-49）は shard_id/n_shards の完全一致を見るが、
+  改変された入力から整合的に再生成された地図が `R_max` を超えていても検出しな
+  かった——`generate_m2e_shard_map` はこの入力の組を拒否するはずであり、生成器を
+  バイパスした地図のはずである。`expected_n_shards > R_max` を readback 検証へ
+  追加した。
+
+**E-70〜E-72（PR #242 第6巡）。**
+
+- **E-70**: map モードの preflight（保護パス検査）が campaign を読み、
+  `generate_m2e_shard_map` が再度読んでいた（E-52 と同族の残り TOCTOU）。CLI は
+  `_load_m2e_campaign_with_sha256` で 1 回だけ読み、同一スナップショット + digest を
+  `generate_m2e_shard_map(campaign_snapshot=...)` 経由で生成側へ引き渡す。
+- **E-71（E-64 の完備化）**: E-64 のゲートは `--shard-map`/`--campaign` しか
+  拒否しておらず、地図生成専用フラグ（`--t-direct`/`--t-stem`/`--startup-cost`/
+  明示指定の `--session-budget`/`--force`）は無関係な `run` へ黙って入りえた。
+  同じゲートへこれら 5 フラグを追加した（`--session-budget` は明示指定を検出
+  できないため既定値との差分を代理指標にする——`--shard-id` 側の排他チェックと
+  同じ流儀）。
+- **E-72**: `_require_prior_m2e_shards_complete`（先行 shard 完了検証）と
+  `execute_m2e_shard` の task 構築ループが、同一 level の manifest を別々に
+  読んでいた。前者の戻り値を manifest スナップショットとして後者へ引き渡し
+  （E-57 の fixtures 引き回しと同じ形）、未読の level だけ新規に読む。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
