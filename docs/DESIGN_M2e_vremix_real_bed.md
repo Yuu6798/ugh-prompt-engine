@@ -1458,6 +1458,34 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   計上する（`run_m2e_shard_queue` 自身は `reconcile_hung_cell` フックとして受け取り、
   セルレコードの形式を知らないままキュー機構だけを担う）。
 
+**E-55〜E-59（PR #242 Codex 第 3 巡・C6 シャード実行機のレビュー是正）。**
+
+- **E-55（P1）**: HANDOFF の起動レシピ `--out "$(mktemp ...)"` は 0 バイトの予約
+  ファイルを先に作るため、E-51 の no-clobber が非空・0 バイトを区別せず一律拒否し、
+  ドキュメント化された起動方法そのものが軒並み失敗していた。`--shard-id`・
+  `--make-shard-map` 双方の事前チェックを「非空の既存ファイルのみ拒否・0 バイトの
+  既存ファイルは mktemp の予約として上書き対象を許容」へ変更する。HANDOFF にも
+  この規約（mktemp の 0 バイト予約は上書き対象、非空の既存記録は拒否）を注記する。
+- **E-56（P2）**: census の E-25 と同じ流儀で、shard 実行記録も atomic write と同一の
+  encoded bytes から sha256 を導出し `shard record sha256: <hex>` を stdout へ印字する
+  （HANDOFF のレシピは stdout を tee するため、dated record にこの pin が残る）。
+- **E-57（P2）**: `_require_m2e_shard_map_matches_registry` は既に fixtures を読取・
+  hash 検証しているのに、`execute_m2e_shard` の task 構築ループが同じ fixtures
+  ファイルを再度開いていた（E-52 と同族の TOCTOU）。検証済みの `fixtures_by_level`
+  スナップショットを戻り値として実行段へ引き回し、再オープンを排除する。
+- **E-58（P2）**: E-53 の並び順完全一致検証は 5-tuple（bed_id/level/clip_id/arm/
+  repeat_index）が無傷であることは確認するが、`entry_id` 自体の改変は見ていなかった
+  ——`entry_id` だけを別セルの値に書き換えれば、5-tuple が正しくても別 clip の
+  manifest entry / チェックポイントを消費できてしまう。全セルについて
+  `entry_id == _m2e_entry_id(clip_id, bed_id, level)`（§6.2 の正準写像）の一致を
+  正準比較へ追加する。
+- **E-59（P2）**: 地図は `T_direct`/`T_stem` を校正したときの並列度 `P` を記録して
+  いなかったため、実行機は任意の `--workers`（既定 1）を無検査で受理でき、§8.4
+  「production と同じ `P` で回したときの単位コスト」という契約を実行時に破れた。
+  地図生成側は `--workers` を必須にして `inputs.workers` へ校正時の `P` を記録し、
+  実行側は `--workers` 省略時に地図の値を採用、明示指定時は地図の値との完全一致を
+  要求する（不一致は高価なキューへ入る前に fail-closed）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

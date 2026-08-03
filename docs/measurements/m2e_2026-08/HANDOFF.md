@@ -258,11 +258,14 @@ commit する**（§8.5「確定した `cell → shard_id` の全対応表を `m
 ```bash
 set -o pipefail  # tee が Python の非ゼロ exit（fail-closed 拒否）を隠さないようにする
 
-# 1. 地図生成（r2-0 で確定した S/T_direct/T_stem を渡す。同一入力ならバイト一致）。
+# 1. 地図生成（r2-0 で確定した S/T_direct/T_stem/P を渡す。同一入力ならバイト一致）。
+#    --workers "$P"（E-59）: T_direct/T_stem を校正したときの P を地図へ記録する
+#    （§8.4「production と同じ P」の契約）。手順 2 の実行機は省略時にこの値を採用し、
+#    明示指定時は一致を要求する。
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
     --make-shard-map \
     --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
-    --t-direct "$T_DIRECT" --t-stem "$T_STEM" --startup-cost "$S" \
+    --t-direct "$T_DIRECT" --t-stem "$T_STEM" --startup-cost "$S" --workers "$P" \
     --out docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml
 # → commit する（本測定開始前・§8.5）。N_shards > R_max(12) なら §8.8 の 3 択へ
 #   User 決裁（生成器がここで fail-closed に停止する）。
@@ -279,6 +282,12 @@ for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('do
 done
 ```
 
+- **E-55**: `mktemp` は 0 バイトの予約ファイルを先に作る——実行機はこれを上書き対象
+  として許容する（非空の既存ファイルのみ拒否・fail-closed）。上記の `--out`/tee 先
+  レシピはこの前提で書かれている。
+- `--workers "$P"`（E-59）: 省略すれば手順 1 が地図に記録した `P` を採用する。明示
+  指定するなら地図の `P` と完全一致する必要がある（不一致は fail-closed）——上記の
+  ように手順 1・2 で同じ `$P` を使えば自動的に一致する。
 - shard 実行記録（`--out`）は run report ではない——run report / verdict / census の
   いずれも出さない（成果物は `--cell-store` のセルレコードとこの実行記録のみ）。
   `build/m2e/` は非 commit の作業成果物なので、実行記録は dated として残すだけでよい
