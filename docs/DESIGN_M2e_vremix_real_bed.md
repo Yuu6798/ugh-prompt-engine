@@ -1646,6 +1646,21 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   実際に task 構築〜キュー投入〜完了まで通す統合テストを追加した（既存テストが
   この破綻を検出できなかったため）。
 
+**E-80〜E-81（PR #242 第9巡）。**
+
+- **E-80**: 同一ポーリングで複数の `AsyncResult` が同時に ready なとき、
+  以前は最初の例外で ready_indices の for ループを即座に break しており、
+  その後ろに並んでいた既に ready だった成功セルの結果が `completed` へ
+  積まれずに失われていた——`on_worker_error`（E-77）の隔離ネットにも載らない
+  まま published レコードが会計から漏れうる穴だった。ready バッチを最後まで
+  drain してから中断し、break 時点で `in_flight` に残っていた（ready では
+  なかった）セルも `reconcile_hung_cell`（E-54 と同じ digest 一致照合）で
+  publish 済みかを確認してから `completed` へ加える形へ改めた。
+- **E-81**: `--make-shard-map --out` の保護パス集合に `--cell-store` 配下
+  （root + 子孫）が入っていなかった——`--shard-id` 側には既にある同種保護
+  （E-51 系）が地図生成側には抜けていた。同じ判定を `--make-shard-map` 分岐
+  にも追加した。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

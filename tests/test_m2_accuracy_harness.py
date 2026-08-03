@@ -15015,3 +15015,75 @@ def test_execute_m2e_shard_constructs_tasks_for_a_populated_shard_using_the_vali
     assert result["cells_completed"] == len(shard0_cells)
     assert result["cells_unavailable"] == []
     assert result["cells_truncated"] == []
+
+
+def test_run_m2e_shard_queue_drains_a_simultaneous_ready_success_before_raising() -> None:
+    """E-80（PR #242 第9巡 Codex 是正）: 同一ポーリングで複数の `AsyncResult` が
+
+    同時に ready なとき、そのうち 1 件が例外を送出しても、同じバッチで既に ready
+    だった他セルの成功結果を `on_worker_error` の `completed_so_far` から取りこぼ
+    さない（以前は最初の例外で for ループを即座に break しており、後続の ready
+    済み成功結果が `completed` に積まれず隔離ネットからも漏れていた）。
+    """
+    import _shard_queue_fakes
+
+    # 同じ actual_duration_s を持つ 2 セルを workers=2 で同時 dispatch し、
+    # poll_interval をその duration より大きく取ることで、次のポーリングで
+    # 両方がほぼ確実に同時 ready になるようにする（実プロセスのタイミングに
+    # 依存するが、dispatch は同一バッチ・duration は同一のため高確率で成立する）。
+    cells = [
+        {"id": "ok_cell", "cost": 0.01, "actual_duration_s": 0.15},
+        {"id": "raises_cell", "cost": 0.01, "actual_duration_s": 0.15},
+    ]
+    captured: "List[List[Dict[str, Any]]]" = []
+
+    def _capture(completed_so_far: "List[Dict[str, Any]]") -> None:
+        captured.append(list(completed_so_far))
+
+    with pytest.raises(RuntimeError, match="fake shard worker failure"):
+        harness.run_m2e_shard_queue(
+            cells,
+            session_budget=10.0,
+            hang_grace_seconds=60.0,
+            workers=2,
+            measure_fn=_shard_queue_fakes.sleep_then_ok_or_raise,
+            initializer=None,
+            poll_interval=0.3,
+            on_worker_error=_capture,
+        )
+    assert len(captured) == 1
+    ids_seen = {entry["cell"]["id"] for entry in captured[0]}
+    assert "ok_cell" in ids_seen, (
+        "同一バッチで ready だった成功セルが completed_so_far に含まれていない (E-80)"
+    )
+
+
+def test_main_make_shard_map_rejects_an_out_nested_inside_the_cell_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-81（PR #242 第9巡 Codex 是正）: `--make-shard-map --cell-store` 指定時、
+
+    `--out` がその配下（root 自身または子孫）を指す組み合わせは拒否する
+    （`--shard-id` 側の同種保護（E-51 系）と揃える。地図の書き出しでセル
+    チェックポイントを上書きしない）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    cell_store = _m2e_root_cell_store(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--cell-store", str(cell_store),
+            "--out", str(cell_store / "shard_map.yaml"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="配下にある"):
+        harness.main()

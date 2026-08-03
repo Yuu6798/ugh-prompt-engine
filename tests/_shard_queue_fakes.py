@@ -42,6 +42,22 @@ def ok_or_raise(task: "Dict[str, Any]") -> "Dict[str, Any]":
     return {"resumed": False, "measured": True, "mismatches": [], "outcome": "measured"}
 
 
+def sleep_then_ok_or_raise(task: "Dict[str, Any]") -> "Dict[str, Any]":
+    """`task['actual_duration_s']` 秒 sleep してから `ok_or_raise` と同じ判定をする。
+
+    E-80 回帰テスト用: 2 セルへ同じ `actual_duration_s` を与えて同じ実時間に
+    dispatch すると、ほぼ同時に ready になる——「同一ポーリングで複数の
+    AsyncResult が同時に ready、うち 1 件が例外」という状況を、実プロセスの
+    タイミングに頼りつつ高確率で再現する（`ok_or_raise` は即時のため、2 セルの
+    ready タイミングが分散しやすく本シナリオを狙って再現しにくい）。
+    """
+    duration = float(task.get("actual_duration_s", task["cost"]))
+    time.sleep(duration)
+    if str(task.get("id", "")).startswith("raises"):
+        raise RuntimeError("fake shard worker failure")
+    return {"resumed": False, "measured": True, "mismatches": [], "outcome": "measured"}
+
+
 def unavailable(task: "Dict[str, Any]") -> "Dict[str, Any]":
     """`outcome == "unavailable"` を返す fake（E-46 回帰テスト用）。
 

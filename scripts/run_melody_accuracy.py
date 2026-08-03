@@ -11247,21 +11247,15 @@ def _shard_worker_measure_cell(task: "Dict[str, Any]") -> "Dict[str, Any]":
     return _shard_measure_and_record_cell(task, runner=observe_via_route_with_provenance)
 
 
-def _reconcile_truncated_m2e_cell(cell: "Dict[str, Any]") -> "Optional[Dict[str, Any]]":
-    """打ち切り時点で in-flight だった M2e セルに、実は digest 一致で完了済みの
+def _m2e_valid_cell_record(cell: "Dict[str, Any]") -> "Optional[Tuple[Path, Dict[str, Any]]]":
+    """`cell`（`execute_m2e_shard` の task dict）が指すセルレコードが `cell_store` に
 
-    セルレコードが無いか確認する（E-54・PR #242 第2巡 Codex P2 是正）。
+    digest 一致で存在するか確認する（E-54・E-82 共通の判定ロジック）。
 
-    `pool.terminate()` は worker の atomic `os.replace()` 成功と `AsyncResult` の
-    ready 化との間の窓で発火しうる——その場合、既存の resume 判定
-    （`_cell_store_record_path` / `_cell_record_mismatches`）と同じ digest 一致
-    照合で「完全に書き上がっている」と確認できたセルは completed として扱う
-    （`run_m2e_shard_queue` の `reconcile_hung_cell` フック経由で呼ばれる）。
-
-    `cell` は `execute_m2e_shard` が組み立てた task dict（bed_id/level/clip_id/arm/
-    repeat_index/entry_id/entry/fixtures/manifest_dir/tolerance_cents/
-    est_voiced_floor/cell_store/env_digest を持つ）。レコードが無い・壊れている・
-    digest が食い違う場合は `None` を返し（= truncated のまま）、fail-closed に倒す。
+    存在し digest も一致すれば `(record_path, record)` を返す。レコードが無い・
+    壊れている・digest が食い違う場合は `None` を返す（fail-closed——「完了と
+    立証できない」場合は None）。`_reconcile_truncated_m2e_cell`（打ち切り照合）と
+    dispatch 前スナップショット（E-82）の両方から呼ばれる同一基準。
     """
     cell_store = Path(cell["cell_store"])
     record_path = _cell_store_record_path(
@@ -11284,8 +11278,6 @@ def _reconcile_truncated_m2e_cell(cell: "Dict[str, Any]") -> "Optional[Dict[str,
             fixtures=cell["fixtures"],
         )
     except (ValueError, OSError):
-        # 壊れたレコード・読めない音声入力 = 「完了を立証できない」なので truncated
-        # のまま扱う（fail-closed。誤って completed と偽らない）。
         return None
     mismatches = _cell_record_mismatches(
         record,
@@ -11302,18 +11294,53 @@ def _reconcile_truncated_m2e_cell(cell: "Dict[str, Any]") -> "Optional[Dict[str,
     )
     if mismatches:
         return None
+    return record_path, record
+
+
+def _reconcile_truncated_m2e_cell(cell: "Dict[str, Any]") -> "Optional[Dict[str, Any]]":
+    """打ち切り時点で in-flight だった M2e セルに、実は digest 一致で完了済みの
+
+    セルレコードが無いか確認する（E-54・PR #242 第2巡 Codex P2 是正）。
+
+    `pool.terminate()` は worker の atomic `os.replace()` 成功と `AsyncResult` の
+    ready 化との間の窓で発火しうる——その場合、既存の resume 判定と同じ digest
+    一致照合（`_m2e_valid_cell_record`）で「完全に書き上がっている」と確認できた
+    セルは completed として扱う（`run_m2e_shard_queue` の `reconcile_hung_cell`
+    フック経由で呼ばれる）。
+
+    `cell` は `execute_m2e_shard` が組み立てた task dict（bed_id/level/clip_id/arm/
+    repeat_index/entry_id/entry/fixtures/manifest_dir/tolerance_cents/
+    est_voiced_floor/cell_store/env_digest に加え、E-82 が dispatch 前に埋める
+    `_pre_dispatch_had_valid_record` を持つ）。レコードが無い・壊れている・digest
+    が食い違う場合は `None` を返し（= truncated のまま）、fail-closed に倒す。
+
+    `_pre_dispatch_had_valid_record`（E-82・PR #242 第10巡 Codex 是正）: 以前は
+    ここで見つけたレコードを無条件に「この起動が書いた」として `resumed: False` /
+    `written_paths` へ計上していた——しかし dispatch 前から既に有効なレコードが
+    在ったセル（前回起動の resume 対象）が、worker 内の resume 判定に辿り着く前に
+    ハングと誤認されて打ち切られた場合も、このレコードを"この起動が書いた"と
+    誤って扱ってしまう。実行前から在ったレコードを quarantine 対象
+    （`written_paths`）に含めると、この起動と無関係な既存の有効レコードまで、
+    後続の pin 失敗時に消してしまいうる。dispatch 前スナップショットに照らして
+    resumed / written_paths を正しく区別する。
+    """
+    found = _m2e_valid_cell_record(cell)
+    if found is None:
+        return None
+    record_path, record = found
     clip_row = record.get("clip_row") if isinstance(record, dict) else None
     outcome = clip_row.get("outcome") if isinstance(clip_row, dict) else None
     detail = clip_row.get("detail") if isinstance(clip_row, dict) else None
+    pre_existing = bool(cell.get("_pre_dispatch_had_valid_record"))
     return {
-        "resumed": False,
+        "resumed": pre_existing,
         "measured": True,
         "mismatches": [],
         "outcome": outcome or "measured",
         "detail": detail,
-        # E-61: 照合できたレコードは本 shard の実行時間帯に書かれた実在ファイル。
-        # runtime pin 再検証が事後に失敗すれば、これも隔離対象に含める。
-        "written_paths": [str(record_path)],
+        # E-61/E-82: 本起動が書いたと確定できるレコードのみ written_paths に含める
+        # （実行前から在ったレコードは quarantine 対象から除外する）。
+        "written_paths": [] if pre_existing else [str(record_path)],
     }
 
 
@@ -11698,25 +11725,30 @@ def execute_m2e_shard(
                     f"execute_m2e_shard: entry {record['entry_id']!r} (level {level!r}) が "
                     "manifest に無い (fail-closed)"
                 )
-            tasks.append(
-                {
-                    "bed_id": record["bed_id"],
-                    "level": level,
-                    "clip_id": record["clip_id"],
-                    "arm": record["arm"],
-                    "repeat_index": record["repeat_index"],
-                    "entry_id": record["entry_id"],
-                    "entry": entry,
-                    "fixtures": fixtures_by_level[level],
-                    "manifest_dir": str(manifest_dir),
-                    "tolerance_cents": tolerance_cents,
-                    "est_voiced_floor": est_voiced_floor,
-                    "cell_store": str(cell_store),
-                    "env_digest": env_digest,
-                    "workers": workers,
-                    "cost": record["cost"],
-                }
-            )
+            task = {
+                "bed_id": record["bed_id"],
+                "level": level,
+                "clip_id": record["clip_id"],
+                "arm": record["arm"],
+                "repeat_index": record["repeat_index"],
+                "entry_id": record["entry_id"],
+                "entry": entry,
+                "fixtures": fixtures_by_level[level],
+                "manifest_dir": str(manifest_dir),
+                "tolerance_cents": tolerance_cents,
+                "est_voiced_floor": est_voiced_floor,
+                "cell_store": str(cell_store),
+                "env_digest": env_digest,
+                "workers": workers,
+                "cost": record["cost"],
+            }
+            # E-82（PR #242 第10巡 Codex 是正）: dispatch **前**に、このセルが既に
+            # digest 一致の有効レコードを持っているかスナップショットする——
+            # `_reconcile_truncated_m2e_cell` がハング打ち切り照合時に「この起動が
+            # 書いた」のか「実行前から在った」のかを区別するために使う（後者を
+            # 誤って前者扱いすると、pin 失敗時に無関係な既存レコードまで隔離しうる）。
+            task["_pre_dispatch_had_valid_record"] = _m2e_valid_cell_record(task) is not None
+            tasks.append(task)
 
         def _on_worker_error(completed_so_far: "List[Dict[str, Any]]") -> None:
             """E-77（PR #242 第7巡 Codex P2 是正）: worker 例外の再送出**前**に呼ばれる。
