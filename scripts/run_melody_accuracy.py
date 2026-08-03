@@ -11749,6 +11749,24 @@ def run_m2e_shard_queue(
                         # 伝播するのは常に最初の例外 1 つ）。
                         if aborted_exception is None:
                             aborted_exception = exc
+                        # E-131（PR #242 第31巡 Codex 是正）: worker がセルレコード
+                        # を atomic 公開した**直後**（return 前）に例外を上げた
+                        # 場合、このセルは既に `in_flight` から pop 済みのため、
+                        # 下（E-80 の abort 照合・`in_flight.items()` を舐める
+                        # 経路）の digest 一致再照合の対象にならない——公開済み
+                        # レコードの written_path が `on_worker_error` にも渡らず、
+                        # pin ドリフト時の quarantine を逃れてしまう。E-54/E-82 と
+                        # 同じ digest 一致 resume 検査（`reconcile_hung_cell`）で
+                        # 「実際に公開済みか」をここで確認し、公開済みなら
+                        # written_paths（quarantine 対象）へ計上できるよう
+                        # `completed` へ足す（pre-existing 除外規則は
+                        # `reconcile_hung_cell`/`_reconcile_truncated_m2e_cell`
+                        # 側に既にある・E-82 のまま変更しない）。
+                        reconciled = (
+                            reconcile_hung_cell(cell) if reconcile_hung_cell is not None else None
+                        )
+                        if reconciled is not None:
+                            completed.append({"cell": cell, "result": reconciled})
                         continue
                     completed.append({"cell": cell, "result": result})
                 if aborted_exception is not None:

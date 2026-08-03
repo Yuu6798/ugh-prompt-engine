@@ -12834,6 +12834,56 @@ def test_run_m2e_shard_queue_propagates_a_worker_exception_and_aborts() -> None:
         )
 
 
+def test_run_m2e_shard_queue_reconciles_a_raising_workers_written_record_into_on_worker_error() -> None:
+    """E-131（PR #242 第31巡 Codex 是正）: worker がセルレコードを atomic 公開した
+
+    直後（return 前）に例外を上げるケースでも、そのセルは `in_flight` から
+    pop 済みのため以前は completed へ回らず（下流の E-80 abort 照合対象は
+    「まだ ready でなかった」セルのみ）、written_path が `on_worker_error` の
+    隔離ネットから漏れていた——pin ドリフト時にそのレコードが quarantine
+    されずに残ってしまう穴だった。`reconcile_hung_cell`（E-54/E-82 と同じ
+    digest 一致照合の注入 seam）が「実は書き終わっていた」と判定すれば
+    completed へ回し、`on_worker_error` に written_path 込みで渡ることを
+    確認する（実際の digest 一致照合は `_reconcile_truncated_m2e_cell` が
+    担う——ここでは配線だけを軽量セルで確認する。E-54 の hang 版と同じ形）。
+    """
+    import _shard_queue_fakes
+
+    def _reconcile(cell: "Dict[str, Any]") -> "Optional[Dict[str, Any]]":
+        if cell["id"] == "writes-then-raises":
+            return {
+                "resumed": False,
+                "measured": True,
+                "mismatches": [],
+                "outcome": "measured",
+                "written_paths": ["/fake/store/writes-then-raises.json"],
+            }
+        return None
+
+    captured: "List[List[Dict[str, Any]]]" = []
+    cells = [{"id": "writes-then-raises", "cost": 0.01}]
+    with pytest.raises(RuntimeError, match="fake shard worker failure"):
+        harness.run_m2e_shard_queue(
+            cells,
+            session_budget=10.0,
+            hang_grace_seconds=10.0,
+            workers=1,
+            measure_fn=_shard_queue_fakes.raise_error,
+            initializer=None,
+            poll_interval=0.02,
+            reconcile_hung_cell=_reconcile,
+            on_worker_error=lambda completed: captured.append(list(completed)),
+        )
+    assert len(captured) == 1
+    completed_so_far = captured[0]
+    assert [c["cell"]["id"] for c in completed_so_far] == ["writes-then-raises"]
+    # `_m2e_collect_written_paths` は execute_m2e_shard の `_on_worker_error` フックが
+    # `_quarantine_cell_records` へそのまま渡す実際のヘルパ——ここでの抽出結果が
+    # そのまま pin 失敗時の隔離対象になる。
+    written_paths = harness._m2e_collect_written_paths(completed_so_far)
+    assert written_paths == ["/fake/store/writes-then-raises.json"]
+
+
 def test_run_m2e_shard_queue_runs_cells_concurrently_when_workers_allow() -> None:
     import _shard_queue_fakes
 

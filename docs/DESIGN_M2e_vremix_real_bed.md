@@ -2010,6 +2010,26 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   `:?` による空検証を追加した（セッション毎に測り直す・前セッション値の
   持ち越し禁止を注記）。
 
+**E-131〜E-132（PR #242 第31巡）。**
+
+- **E-131**: `run_m2e_shard_queue` は worker がセルレコードを atomic 公開した
+  **直後**（return 前）に例外を上げるケースを扱っていなかった——このセルは
+  `async_result.get()` の例外処理より前に `in_flight` から pop 済みのため、
+  E-80 の abort 照合（`in_flight.items()` を舐める経路）の対象外になり、
+  `on_worker_error` にも公開済みレコードの written_path が渡らない——pin
+  ドリフト時の quarantine を逃れてしまう穴だった。worker 例外の処理時に、
+  E-54/E-82 と同じ `reconcile_hung_cell`（digest 一致 resume 検査）でそのセルを
+  照合し、公開済みなら written_paths（quarantine 対象）へ計上できるよう
+  `completed` へ足してから例外処理を続ける形へ改めた（pre-existing 除外規則は
+  `reconcile_hung_cell` 側に既にあるため変更なし。回帰テスト付き）。
+- **E-132**（P1・docs のみ）: E-130 が追加した `T_DIRECT=<r4 実測>` 形式の
+  プレースホルダ代入行は、`<`/`>` が bash のリダイレクト演算子であるため、
+  レシピをそのまま bash へコピーすると構文エラーになる（実測確認済み）。
+  4 代入行を削除し、「実行前に 4 変数を export しておくこと」を要求する
+  コメント + 既存の `:?` 検証のみへ改めた。bash へのコピーで手順全体が構文
+  エラーなく走ること（`bash -n` で確認）、変数を export した場合は検証を
+  通過すること、未定義のままだと `:?` が即座に停止することを実測確認した。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
