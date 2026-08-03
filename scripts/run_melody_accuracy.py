@@ -10813,7 +10813,11 @@ def _require_m2e_shard_map_matches_registry(
             "shard map: fixtures_sha256_by_level が現在の campaign の実体と不一致; "
             "地図が生成された後に fixtures が変わった (fail-closed)"
         )
-    if int(map_doc.get("repeats_min", -1)) != repeats_min:
+    # E-102（PR #242 第18巡 Codex 是正）: `int(...)` は非 bool の整数以外
+    # （`2.5`・`"2"`）を黙って受理してしまう——E-83/E-97 と同型の穴。
+    if _require_m2e_shard_map_integer_field(
+        "repeats_min", map_doc.get("repeats_min")
+    ) != repeats_min:
         raise ValueError(
             f"shard map: repeats_min {map_doc.get('repeats_min')!r} が現在の凍結値 "
             f"{repeats_min!r} と不一致 (fail-closed)"
@@ -10990,12 +10994,19 @@ def _require_m2e_shard_map_matches_registry(
         )
 
     inputs = map_doc["inputs"]
+    # E-101（PR #242 第17巡 Codex 是正）: `float(x)` は非数値スカラー（文字列・
+    # bool）を強制の前に検査せず黙って成功させてしまう——E-83/E-97 と同型の
+    # 無強制型検査を先に敷く。
     expected_shard_ids, expected_cap, expected_n_shards = _assign_m2e_shard_ids(
         expected_registry_cells,
-        t_direct=float(inputs["t_direct_s"]),
-        t_stem=float(inputs["t_stem_s"]),
-        startup_cost=float(inputs["startup_cost_s"]),
-        session_budget=float(inputs["session_budget_s"]),
+        t_direct=_require_m2e_shard_map_numeric_field("t_direct_s", inputs["t_direct_s"]),
+        t_stem=_require_m2e_shard_map_numeric_field("t_stem_s", inputs["t_stem_s"]),
+        startup_cost=_require_m2e_shard_map_numeric_field(
+            "startup_cost_s", inputs["startup_cost_s"]
+        ),
+        session_budget=_require_m2e_shard_map_numeric_field(
+            "session_budget_s", inputs["session_budget_s"]
+        ),
     )
     # E-75（PR #242 第7巡 Codex P2 是正）: cap_s/margin/n_cells は再計算するだけで
     # 捨てていた（cap は `_cap` に破棄、margin/n_cells はそもそも比較していなかった）
@@ -11579,6 +11590,19 @@ def run_m2e_shard_queue(
                     admitted_any = True
                     elapsed = clock() - start
                 if not in_flight:
+                    # E-103（PR #242 第18巡 Codex 是正）: 空のまま退出する**前**に
+                    # 絶対期限（`session_budget + hang_grace_seconds`）を検査する。
+                    # 素朴に `break` するだけだと、`terminated_for_hang` が立たない
+                    # ため finally が `pool.close()`（in-flight の自然完了待ち）へ
+                    # 落ちる——`initializer` 自体がハングしている worker がいれば
+                    # （一度もタスクを dispatch していなくても）、その worker は
+                    # pool-close の合図を受け取れる状態に一度も到達できず、
+                    # `pool.join()` が無期限にブロックしうる。期限超過ならここでも
+                    # `terminated_for_hang` を立て、E-93 と同じ abort 後始末
+                    # （terminate・drain/reconcile・記録の整合）を通す
+                    # （`in_flight` が空なので reconcile 対象は無いが、経路は揃える）。
+                    if clock() - start > session_budget + hang_grace_seconds:
+                        terminated_for_hang = True
                     break  # 実行中が無く、これ以上許可できるセルも無い
                 ready_indices = [
                     idx for idx, (ar, _started, _cell) in in_flight.items() if ar.ready()
@@ -11915,7 +11939,12 @@ def execute_m2e_shard(
             except RuntimeError:
                 _quarantine_cell_records(written_paths_so_far)
 
-        session_budget = float(map_doc["inputs"]["session_budget_s"])
+        # E-101: 無強制の型検査を経由する（`_require_m2e_shard_map_matches_registry`
+        # が既に検証済みだが、E-97 の n_shards と同じく execute 側でも同じ形で
+        # 読む一貫性を優先する）。
+        session_budget = _require_m2e_shard_map_numeric_field(
+            "session_budget_s", map_doc["inputs"]["session_budget_s"]
+        )
         # E-84: started_utc は本関数入口で `start` と同時に捕捉済み（再捕捉しない）。
         result = run_m2e_shard_queue(
             tasks,

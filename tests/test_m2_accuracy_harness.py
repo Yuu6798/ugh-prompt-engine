@@ -15929,3 +15929,81 @@ def test_main_rejects_session_budget_equal_to_the_default_without_a_shard_mode(
     )
     with pytest.raises(SystemExit, match="--session-budget"):
         harness.main()
+
+
+@pytest.mark.parametrize("bad_repeats_min", [2.5, "2"])
+def test_require_m2e_shard_map_matches_registry_rejects_a_malformed_repeats_min(
+    bad_repeats_min: Any, tmp_path: Path
+) -> None:
+    """E-102（PR #242 第18巡 Codex 是正）: 地図の `repeats_min` が非 bool の整数で
+
+    なければ（`2.5`・`"2"`）、`int()` で黙って丸めず fail-closed で拒否する
+    （E-83/E-97 と同型）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["repeats_min"] = bad_repeats_min
+    with pytest.raises(ValueError, match="整数"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_run_m2e_shard_queue_terminates_instead_of_closing_when_idle_past_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E-103（PR #242 第18巡 Codex 是正）: admission 不成立でキューが空のまま
+
+    退出する直前にも絶対期限（`session_budget + hang_grace_seconds`）を検査
+    する——期限超過なら `pool.terminate()` 経路（`close()`/`join()` によるハング
+    `initializer` の無期限待ちを避ける）へ入る。
+    """
+    terminate_calls: "List[bool]" = []
+    close_calls: "List[bool]" = []
+
+    class _SpyPool:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def apply_async(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("no cells should be dispatched in this scenario")
+
+        def terminate(self) -> None:
+            terminate_calls.append(True)
+
+        def close(self) -> None:
+            close_calls.append(True)
+
+        def join(self) -> None:
+            pass
+
+    class _SpyContext:
+        def Pool(self, *args: Any, **kwargs: Any) -> "_SpyPool":
+            return _SpyPool()
+
+    monkeypatch.setattr(harness.multiprocessing, "get_context", lambda name: _SpyContext())
+
+    call_count = [0]
+    real_clock = time.monotonic
+
+    def _clock_past_deadline() -> float:
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return real_clock()
+        return real_clock() + 1000.0
+
+    result = harness.run_m2e_shard_queue(
+        [],  # cells が空——admission は最初から不成立、in_flight は常に空。
+        session_budget=10.0,
+        hang_grace_seconds=60.0,
+        workers=1,
+        measure_fn=lambda task: task,
+        initializer=None,
+        clock=_clock_past_deadline,
+        poll_interval=0.01,
+    )
+    assert terminate_calls == [True]
+    assert close_calls == []
+    assert result["completed"] == []
+    assert result["truncated"] == []
+    assert result["not_started"] == []

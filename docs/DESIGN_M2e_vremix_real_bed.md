@@ -1737,6 +1737,63 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   `pool.terminate()` → drain/reconcile → フック呼び出しの経路へ通してから
   元例外を再送出する形へ改めた。
 
+**E-94〜E-97（PR #242 第15巡）。**
+
+- **E-94**: E-85 の `--out` 予約は `os.replace`（atomic だが後勝ち上書き可能）
+  だけが所有権の根拠で、2 起動がほぼ同時に到達すると検出は公開直前のみ
+  （事後）だった。サイドカー `<out>.claim` を `O_CREAT|O_EXCL` で作る真の排他
+  プリミティブへ切り替え、所有権の根拠を一本化した（`--out` 本体への token
+  書き込みは診断用として維持）。
+- **E-95**: 除外真実性の検証が、生成時の除外判定が読んだ manifest と実行時の
+  再スキャンが読んだ manifest の同一性を pin していなかった（個々のセルの
+  digest 一致だけでは manifest 全体の世代差し替えを検出できない）。生成時
+  スキャンで読んだ per-level manifest sha256 を `excluded_completed_cells.
+  manifest_sha256_by_level` へ記録し、readback の再スキャンと一致することを
+  fail-closed で要求する形へ改めた。
+- **E-96**: `execute_m2e_shard` が失敗するあらゆる経路（shard claim 衝突・pin
+  失敗・不正地図等）で、`--out` に書いた claim token が残ったままになって
+  いた——以後のどの起動も no-clobber で永久に弾かれ、`--out` パスが使用不能に
+  なる。失敗時は `--out` を予約前の状態（mktemp 予約由来なら 0 バイトへ・不存在
+  由来なら削除）へ原状復帰し、E-94 のサイドカーも解放する try/finally を敷いた。
+- **E-97**: `int(map_doc["n_shards"])` は非 bool の整数以外（`1.5`・`true`）を
+  黙って受理してしまう——E-83（workers）と同型の穴。単一ヘルパ
+  （`_require_m2e_shard_map_integer_field`）へ集約し、readback・execute の
+  両方に同じ無強制型検査を敷いた。
+
+**E-98（PR #242 第16巡）。**
+
+- **E-98**: `--m2e-bars` は両 shard モードとも一切読まない（tolerance_cents 等
+  の共有スカラーは `--bars` 側から取る設計）が、E-64/E-71 ゲートの未使用引数
+  列挙から漏れていた。`_ARGPARSE_UNSET` センチネル化し、両モードで明示指定を
+  拒否する形へ改めた。
+
+**E-99〜E-101（PR #242 第17巡）。**
+
+- **E-99**: `excluded_completed_cells.cells` の 5-tuple 重複が set 構築時に
+  黙って畳まれ、検出されなかった（台帳は不可侵の原則に反する）。重複を
+  検出して fail-closed で拒否する形へ改めた。
+- **E-100**: `--session-budget` は既定値からの差分で「明示指定」を近似して
+  いたため、既定値と**同値**の明示指定（`--session-budget 7200`）を「未指定」
+  と取り違えて素通りしていた。他のセンチネル済みフラグと同じ
+  `_ARGPARSE_UNSET` 方式へ統一した。
+- **E-101**: 地図のスケジューリング入力（`t_direct_s` 等）を `float()` 強制の
+  前に型検査していなかった——文字列やbool が黙って強制変換に成功してしまう
+  （E-83/E-97 と同型の穴）。単一ヘルパ（`_require_m2e_shard_map_numeric_field`）
+  へ集約し、readback・execute の両方に無強制型検査を敷いた。
+
+**E-102〜E-103（PR #242 第18巡）。**
+
+- **E-102**: `int(map_doc["repeats_min"])` も E-83/E-97 と同型の穴があった。
+  同じ整数ヘルパへ統合した。
+- **E-103（P1）**: admission 不成立でキューが空のまま退出する分岐が、退出の
+  **前**に絶対期限（`session_budget + hang_grace_seconds`）を検査していな
+  かった——`terminated_for_hang` が立たないまま finally が `pool.close()`
+  （in-flight の自然完了待ち）へ落ち、`initializer` 自体がハングしている
+  worker（一度もタスクを dispatch していなくても）がいれば `pool.join()` が
+  無期限にブロックしうる。退出直前にも同じ絶対期限検査を敷き、超過時は
+  `terminated_for_hang` を立てて E-93 と同じ abort 後始末（terminate・
+  drain/reconcile）の経路を通す形へ改めた。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
