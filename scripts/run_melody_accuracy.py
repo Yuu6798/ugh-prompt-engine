@@ -10059,6 +10059,41 @@ _M2E_HANG_GRACE_S = 600.0
 _M2E_SHARD_POLL_INTERVAL_S = 0.05
 
 
+def _require_m2e_campaign_path_confined_to_root(
+    value: str, *, campaign_path: Path, level: str, key: str
+) -> Path:
+    """campaign が指す相対パスを ROOT 配下へ封じ込める（E-60・PR #242 第4巡 Codex 是正）。
+
+    二段検証: (1) 字句——絶対パス・`..` 成分を拒否（symlink 解決の前に意図を弾く）、
+    (2) 解決後——`(ROOT / value).resolve()` が ROOT 配下（`Path.is_relative_to`）に
+    留まることを要求する（symlink 経由で ROOT 外へ脱出する構成も (1) をすり抜けた
+    後にここで拒否される）。`_parse_m2e_campaign_bytes` からのみ呼ぶ——生成
+    （`generate_m2e_shard_map`）・実行（`execute_m2e_shard`）の双方がここを通る
+    単一の campaign loader 経路（`_load_m2e_campaign_with_sha256` / `_load_m2e_campaign`）
+    に一元実装する。エラーメッセージは campaign が宣言した相対パス文字列のみを含み、
+    解決後の絶対パスは含めない (fail-closed 流儀)。
+    """
+    candidate = Path(value)
+    if candidate.is_absolute():
+        raise ValueError(
+            f"{campaign_path}: levels[{level!r}].{key} が絶対パス {value!r} を指す; "
+            "repo root からの相対パスのみ許可する (fail-closed)"
+        )
+    if ".." in candidate.parts:
+        raise ValueError(
+            f"{campaign_path}: levels[{level!r}].{key} の {value!r} が `..` 成分を含む; "
+            "repo root 配下からの遡上を許可しない (fail-closed)"
+        )
+    resolved = (ROOT / candidate).resolve()
+    if not resolved.is_relative_to(ROOT):
+        raise ValueError(
+            f"{campaign_path}: levels[{level!r}].{key} の {value!r} が解決後に repo root "
+            "の外を指す（symlink 経由の脱出を含む）; repo root 配下のみ許可する "
+            "(fail-closed)"
+        )
+    return resolved
+
+
 def _parse_m2e_campaign_bytes(
     campaign_path: Path, data: bytes
 ) -> "Dict[str, Dict[str, Path]]":
@@ -10102,7 +10137,10 @@ def _parse_m2e_campaign_bytes(
             # root からの相対パスとして書く規約なので、それとそのまま揃える——
             # campaign 自身は `docs/measurements/m2e_2026-08/` に置く想定であり、
             # ファイル位置基準だと `../../../build/...` のような脆いパスを強いる。
-            resolved_level[key] = (ROOT / value).resolve()
+            # E-60: ROOT 配下への封じ込め（絶対パス・`..` 遡上・symlink 脱出を拒否）。
+            resolved_level[key] = _require_m2e_campaign_path_confined_to_root(
+                value, campaign_path=campaign_path, level=level, key=key
+            )
         resolved[level] = resolved_level
     return resolved
 
