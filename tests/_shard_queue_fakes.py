@@ -30,6 +30,18 @@ def raise_error(task: "Dict[str, Any]") -> "Dict[str, Any]":
     raise RuntimeError("fake shard worker failure")
 
 
+def ok_or_raise(task: "Dict[str, Any]") -> "Dict[str, Any]":
+    """`task['id']` が `"raises"` で始まれば例外、そうでなければ即座に成功する fake。
+
+    E-77 回帰テスト用: `workers=1` で「1 セル成功 → 次のセルで例外」という
+    混在シナリオを決定論的に作る（`on_worker_error` フックが直前までの
+    `completed` を正しく受け取ることの検証）。
+    """
+    if str(task.get("id", "")).startswith("raises"):
+        raise RuntimeError("fake shard worker failure")
+    return {"resumed": False, "measured": True, "mismatches": [], "outcome": "measured"}
+
+
 def unavailable(task: "Dict[str, Any]") -> "Dict[str, Any]":
     """`outcome == "unavailable"` を返す fake（E-46 回帰テスト用）。
 

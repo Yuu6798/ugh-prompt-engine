@@ -270,21 +270,44 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
 # → commit する（本測定開始前・§8.5）。N_shards > R_max(12) なら §8.8 の 3 択へ
 #   User 決裁（生成器がここで fail-closed に停止する）。
 
-# 2. shard を昇順に 1 回ずつ実行する（N は 0 から N_shards-1 まで）。
+# 2. shard を昇順に実行する（N は 0 から N_shards-1 まで）。§8.6「未完セルは次回の
+#    実行でそのまま resume される」の「次回の実行」とは**同一 shard_id の再実行**
+#    を指す——1 回の実行が B_session に収まらず unavailable/truncated/not_started
+#    のいずれかが残った場合、until ループで実行記録を検査し、当該 shard の全セルが
+#    完了する（cells_completed == cells_total）までは同じ shard_id を再実行してから
+#    次の shard_id へ進む（E-73）。素朴に for ループで N をインクリメントするだけの
+#    旧レシピでは、未完のまま次 shard へ進んで先行 shard 完了検査に必ず落ちていた。
 for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml'))['n_shards'] - 1)") ))); do
-  OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-      --shard-id "$N" \
-      --shard-map docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml \
-      --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
-      --cell-store build/m2e/store_A --workers "$P" \
-      --out "$(mktemp "build/m2e/shard_run_${N}_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.json")" \
-      | tee "$(mktemp "build/m2e/shard_run_${N}_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
+  while :; do
+    OUT="$(mktemp "build/m2e/shard_run_${N}_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.json")"
+    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+        --shard-id "$N" \
+        --shard-map docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml \
+        --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
+        --cell-store build/m2e/store_A --workers "$P" \
+        --out "$OUT" \
+        | tee "$(mktemp "build/m2e/shard_run_${N}_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
+    # 実行記録を検査する: cells_completed == cells_total（未完 3 種がすべて空）に
+    # なっていれば shard N は完了——次の shard_id へ進む。そうでなければ同一
+    # shard_id を再実行する。
+    python -c "
+import json, sys
+with open('$OUT') as f:
+    r = json.load(f)
+sys.exit(0 if r['cells_completed'] == r['cells_total'] else 1)
+" && break
+  done
 done
 ```
 
 - **E-55**: `mktemp` は 0 バイトの予約ファイルを先に作る——実行機はこれを上書き対象
   として許容する（非空の既存ファイルのみ拒否・fail-closed）。上記の `--out`/tee 先
   レシピはこの前提で書かれている。
+- **E-74（同一 shard の排他 claim）**: `--cell-store build/m2e/store_A` 配下に
+  `shard_<N>.claim` が作られ、同じ `shard_id` の並行実行を防ぐ。**クラッシュ孤児**
+  （コンテナ強制終了等で claim が残ったまま実行機が終了した場合）に遭遇したら、
+  `rm build/m2e/store_A/shard_<N>.claim` で手動削除してから再実行する（claim の中身
+  は PID + 時刻の診断情報のみで、削除しても測定済みセルレコードには影響しない）。
 - `--workers "$P"`（E-59）: 省略すれば手順 1 が地図に記録した `P` を採用する。明示
   指定するなら地図の `P` と完全一致する必要がある（不一致は fail-closed）——上記の
   ように手順 1・2 で同じ `$P` を使えば自動的に一致する。

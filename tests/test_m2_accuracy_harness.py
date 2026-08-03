@@ -32,6 +32,7 @@ import sys
 import sysconfig
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -14540,3 +14541,241 @@ def test_execute_m2e_shard_reuses_the_manifest_snapshot_from_prior_shard_validat
     )
     levels_touched = {c["level"] for c in map_doc["cells"] if c["shard_id"] in (0, 1)}
     assert len(calls) == len(levels_touched)
+
+
+# ---------------------------------------------------------------------------
+# PR #242 第7巡 Codex レビュー是正（E-74〜E-77・E-73 は docs のみで回帰テスト無し）
+# ---------------------------------------------------------------------------
+
+
+def test_execute_m2e_shard_rejects_when_a_claim_already_exists(tmp_path: Path) -> None:
+    """E-74（PR #242 第7巡 Codex 是正）: 既存の claim があれば fail-closed で拒否する
+
+    （同一 shard_id の並行実行を排他する）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    claim_path = harness._m2e_shard_claim_path(cell_store, 0)
+    claim_path.write_text("pid=999999\nclaimed_utc=fake\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="claim"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=cell_store,
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=False,
+        )
+    # 拒否されても、既存の（他者の）claim は消えない——自分が作ったものではない。
+    assert claim_path.read_text(encoding="utf-8") == "pid=999999\nclaimed_utc=fake\n"
+
+
+def test_execute_m2e_shard_releases_the_claim_after_successful_completion(
+    tmp_path: Path,
+) -> None:
+    """E-74: 正常終了後は claim ファイルが消えている。"""
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    cell_store = tmp_path / "store_A"
+    harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=cell_store,
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    assert not harness._m2e_shard_claim_path(cell_store, 0).exists()
+
+
+def test_execute_m2e_shard_releases_the_claim_after_an_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-74: 実行途中で例外が起きても claim は try/finally で確実に解放される。"""
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    cell_store = tmp_path / "store_A"
+
+    def _boom() -> "Dict[str, str]":
+        raise RuntimeError("simulated failure during shard execution")
+
+    monkeypatch.setattr(harness, "_apply_thread_pinning", _boom)
+    with pytest.raises(RuntimeError, match="simulated failure during shard execution"):
+        harness.execute_m2e_shard(
+            map_doc=map_doc,
+            map_sha256=map_sha256,
+            shard_id=0,
+            campaign=campaign,
+            cell_store=cell_store,
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok,
+            initializer=None,
+            require_thread_pinning=True,
+        )
+    assert not harness._m2e_shard_claim_path(cell_store, 0).exists()
+
+
+@pytest.mark.parametrize("field, bad_value", [("cap_s", 999999.0), ("margin", 0.5)])
+def test_require_m2e_shard_map_matches_registry_rejects_tampered_input_metadata(
+    field: str, bad_value: float, tmp_path: Path
+) -> None:
+    """E-75（PR #242 第7巡 Codex P2 是正）: cap_s / margin が再計算値・凍結値と
+
+    一致しなければ拒否する（cells/shard_id を無傷に保ったままの派生メタデータ改変）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["inputs"][field] = bad_value
+    with pytest.raises(ValueError, match=field):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_require_m2e_shard_map_matches_registry_rejects_a_tampered_n_cells(
+    tmp_path: Path,
+) -> None:
+    """E-75: n_cells が再計算値と一致しなければ拒否する。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["n_cells"] = mutated["n_cells"] + 1
+    with pytest.raises(ValueError, match="n_cells"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_run_m2e_shard_queue_honors_an_explicit_start_for_elapsed_accounting() -> None:
+    """E-76（PR #242 第7巡 Codex P1 是正）: 明示的な `start` を渡すと、
+
+    `elapsed_seconds` はその時刻基準になる（内部捕捉を上書きする）。
+    """
+    import _shard_queue_fakes
+
+    injected_start = time.monotonic() - 10.0  # 「10 秒前から始まっていた」ことにする
+    cells = [{"id": "immediate", "cost": 0.01, "actual_duration_s": 0.01}]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=20.0,
+        hang_grace_seconds=5.0,
+        workers=1,
+        measure_fn=_shard_queue_fakes.sleep,
+        initializer=None,
+        start=injected_start,
+    )
+    assert result["elapsed_seconds"] > 9.5
+
+
+def test_run_m2e_shard_queue_explicit_start_reduces_the_admission_window() -> None:
+    """E-76: 過去の `start` を渡すと、その分だけ admission の残り予算が縮む
+
+    （preflight の所要時間を admission 会計へ含める、という E-76 の意図そのもの）。
+    """
+    import _shard_queue_fakes
+
+    injected_start = time.monotonic() - 100.0  # 100 秒分の preflight を模す
+    cells = [{"id": "too_late", "cost": 0.01, "actual_duration_s": 0.01}]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=10.0,  # 100 秒経過後なので admission は必ず失敗する
+        hang_grace_seconds=0.5,
+        workers=1,
+        measure_fn=_shard_queue_fakes.sleep,
+        initializer=None,
+        start=injected_start,
+    )
+    assert result["completed"] == []
+    assert [c["id"] for c in result["not_started"]] == ["too_late"]
+
+
+def test_run_m2e_shard_queue_calls_on_worker_error_with_completed_so_far_before_raising() -> None:
+    """E-77（PR #242 第7巡 Codex P2 是正）: worker 例外の再送出前に、その時点までの
+
+    `completed`（1 セル成功 + 1 セル例外の混在状況）を渡してフックを呼ぶ。
+    """
+    import _shard_queue_fakes
+
+    captured: "List[List[str]]" = []
+
+    def _on_worker_error(completed_so_far: "List[Dict[str, Any]]") -> None:
+        captured.append([c["cell"]["id"] for c in completed_so_far])
+
+    cells = [
+        {"id": "ok_first", "cost": 0.01},
+        {"id": "raises_second", "cost": 0.01},
+    ]
+    with pytest.raises(RuntimeError, match="fake shard worker failure"):
+        harness.run_m2e_shard_queue(
+            cells,
+            session_budget=5.0,
+            hang_grace_seconds=1.0,
+            workers=1,
+            measure_fn=_shard_queue_fakes.ok_or_raise,
+            initializer=None,
+            on_worker_error=_on_worker_error,
+        )
+    assert captured == [["ok_first"]]
+
+
+def test_execute_m2e_shard_wires_a_worker_error_hook_that_quarantines_completed_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-77: `execute_m2e_shard` が `run_m2e_shard_queue` へ渡す `on_worker_error`
+
+    フックは、1 worker 成功（written_paths を持つ completed）+ 1 worker 例外の
+    状況で post-execution pin 検査が失敗すれば、完了分の written_paths を隔離する。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+
+    captured_hook: "Dict[str, Any]" = {}
+    real_queue = harness.run_m2e_shard_queue
+
+    def _capturing_queue(*args: Any, **kwargs: Any) -> "Dict[str, Any]":
+        captured_hook["on_worker_error"] = kwargs.get("on_worker_error")
+        return real_queue(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "run_m2e_shard_queue", _capturing_queue)
+    harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=tmp_path / "store_A",
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    on_worker_error = captured_hook["on_worker_error"]
+    assert on_worker_error is not None
+
+    # フックを直接呼び、「1 worker 成功（written_paths を持つ）+ 1 worker 例外」の
+    # 状況を模す。pin 検査を失敗させ、隔離が完了分の written_paths を対象に呼ばれる
+    # ことを確認する。
+    quarantined: "List[List[str]]" = []
+    monkeypatch.setattr(
+        harness, "_quarantine_cell_records", lambda paths: quarantined.append(list(paths))
+    )
+    monkeypatch.setattr(
+        harness,
+        "_require_dist_native_unchanged_since_bind",
+        lambda: (_ for _ in ()).throw(RuntimeError("simulated pin drift")),
+    )
+    fake_completed_so_far = [
+        {"cell": {"id": "ok_cell"}, "result": {"written_paths": ["/fake/store/ok_cell.json"]}}
+    ]
+    on_worker_error(fake_completed_so_far)
+    assert quarantined == [["/fake/store/ok_cell.json"]]

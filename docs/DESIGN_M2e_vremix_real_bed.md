@@ -1581,6 +1581,44 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   読んでいた。前者の戻り値を manifest スナップショットとして後者へ引き渡し
   （E-57 の fixtures 引き回しと同じ形）、未読の level だけ新規に読む。
 
+**E-73〜E-77（PR #242 第7巡）。**
+
+- **E-73（P1・docs のみ）**: HANDOFF §5 の r6 レシピは shard を単純な for ループで
+  昇順実行していたが、1 回の実行が未完（unavailable/truncated/not_started のいずれか
+  非空）で終わっても素通りして次の shard_id へ進んでいた——§8.6「未完は次回の実行で
+  resume される」の「次回」は**同一 shard_id の再実行**を指すのに、レシピはそれを
+  実装していなかった。実行記録を検査し `cells_completed == cells_total` になるまで
+  同一 shard_id を until ループで再実行してから次へ進む形へ改めた。
+- **E-74（Memo 根拠の撤回）**: Design Memo は「`shard_id` の昇順強制が同一 shard の
+  並行実行を防ぐ」としていたが誤りだった——`_require_prior_m2e_shards_complete` は
+  `shard_id` **未満**の shard しか検査しないため、同じ `shard_id` への 2 並行実行は
+  どちらもこの検査を通過し、同じセル鍵を同時に測定して同じチェックポイントパスへ
+  atomic replace で衝突しうる。`cell_store` 配下に `shard_<id>.claim` を `O_EXCL` で
+  作る最小限の排他を導入した（内容は PID + ISO8601 の診断情報のみ）。正常終了・
+  例外経路のどちらでも try/finally で確実に解放する。既存 claim があれば fail-closed
+  で拒否する（並行実行は非サポート）。クラッシュ孤児の回復手順は HANDOFF に記載。
+- **E-75**: readback の再計算検証は `cap`/`n_shards` を再計算しても `cap_s` は
+  捨て、`inputs.margin`（凍結 0.85）・`n_cells` はそもそも比較していなかった——
+  cells/shard_id を無傷に保ったままこれら派生メタデータだけを改変しても検出でき
+  なかった。E-49/E-69 と同枠で、再計算した `cap`・凍結 `margin`・
+  `len(expected_registry_cells)` との完全一致を要求する。
+- **E-76（P1）**: `start` の捕捉が `run_m2e_shard_queue` 内部（登録簿再構築・先行
+  セル全数の digest 一致 hash・manifest 読取・pool 構築の**後**）にあったため、
+  これらの preflight の所要時間が admission 会計にも `B_session + 600s` の打ち切り
+  期限にも含まれていなかった——後続 shard ほど preflight が重くなるため、§8.6
+  「1 回の実行の壁時計上限」を preflight 分だけ超過しうる。`start` の捕捉を
+  `execute_m2e_shard` の入口（claim 取得の直前）へ移し、`run_m2e_shard_queue` へ
+  明示的に渡す（省略時は従来どおり内部で捕捉・後方互換）。
+- **E-77**: worker が例外を送出すると、`run_m2e_shard_queue` は `execute_m2e_shard`
+  の post-execution pin 再検証（E-48/E-61）を経由せずに直接例外を再送出しており、
+  既に完走していた worker の written_paths も失われていた——実行後に runtime bytes
+  が差し替わっていても、その shard の完走分セルは隔離されないまま resume 対象で
+  残りうる。`run_m2e_shard_queue` に `on_worker_error` フックを追加し（
+  `reconcile_hung_cell` と同じ「機構は意味論を知らない」設計）、例外の再送出**前**に
+  その時点の `completed` を渡して呼ぶ。`execute_m2e_shard` 側のフック実装は
+  成功経路と同じ 3 種の pin 再検証を通し、失敗すれば完走分の written_paths を隔離
+  する（フック自身は例外を握り潰し、常に worker の元例外が伝播する）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
