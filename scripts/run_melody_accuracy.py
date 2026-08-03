@@ -12191,7 +12191,7 @@ def main() -> int:
     parser.add_argument(
         "--session-budget",
         type=float,
-        default=_M2E_DEFAULT_SESSION_BUDGET_S,
+        default=_ARGPARSE_UNSET,
         metavar="SECONDS",
         help=f"B_session（設計 §8.2・既定 {_M2E_DEFAULT_SESSION_BUDGET_S:.0f}s = 2.0h）。"
         "--make-shard-map 専用（実行機は地図に記録された値をそのまま使う）",
@@ -12239,9 +12239,13 @@ def main() -> int:
     # `--shard-id` のどちらかと必ず組む）。どちらの shard モードも起きていないのに
     # これらが供給されていれば、黙って無視して通常 run/evaluate/census へ入るのでは
     # なく、dispatch 前に fail-closed で拒否する（`--shard-id`/`--make-shard-map` の
-    # 指定漏れ等で意図しない run report が出るのを防ぐ）。`--session-budget` は既定値と
-    # 同じ「明示指定なし」を区別できないため、既定値からの差分を「明示指定」の代理
-    # 指標として使う（`--shard-id` 側の排他チェックと同じ流儀・E-71 で新設はしない）。
+    # 指定漏れ等で意図しない run report が出るのを防ぐ）。
+    # E-100（PR #242 第17巡 Codex 是正）: `--session-budget` は以前、既定値からの
+    # 差分を「明示指定」の代理指標として使っていた——既定値と**同値**の明示指定
+    # （`--session-budget 7200` 等）を「未指定」と取り違えて素通りしてしまう
+    # 穴があった。他のセンチネル済みフラグ（`--specs`/`--external-fixtures`/
+    # `--workers`/`--cell-store-role` 等）と同じ `_ARGPARSE_UNSET` 方式へ統一し、
+    # 値によらず「明示指定されたか」を正確に判定する。
     if not args.make_shard_map and args.shard_id is None:
         for flag, supplied in (
             ("--shard-map", args.shard_map is not None),
@@ -12249,7 +12253,7 @@ def main() -> int:
             ("--t-direct", args.t_direct is not None),
             ("--t-stem", args.t_stem is not None),
             ("--startup-cost", args.startup_cost is not None),
-            ("--session-budget", args.session_budget != _M2E_DEFAULT_SESSION_BUDGET_S),
+            ("--session-budget", args.session_budget is not _ARGPARSE_UNSET),
             ("--force", args.force is True),
         ):
             if supplied:
@@ -12344,12 +12348,20 @@ def main() -> int:
                 "別パスの --out を使う (fail-closed・シャード地図の黙示上書き禁止・"
                 "設計判断 1)"
             )
+        # E-100（PR #242 第17巡 Codex 是正）: --session-budget をセンチネル化した
+        # （既定値との差分では「省略」と「既定値と同値の明示指定」を区別できな
+        # かった）ので、ここで既定を適用する（--make-shard-map だけが実際に消費する）。
+        session_budget = (
+            _M2E_DEFAULT_SESSION_BUDGET_S
+            if args.session_budget is _ARGPARSE_UNSET
+            else args.session_budget
+        )
         shard_map = generate_m2e_shard_map(
             campaign_path=args.campaign,
             t_direct=args.t_direct,
             t_stem=args.t_stem,
             startup_cost=args.startup_cost,
-            session_budget=args.session_budget,
+            session_budget=session_budget,
             bars_path=args.bars,
             workers=args.workers,
             cell_store=args.cell_store,

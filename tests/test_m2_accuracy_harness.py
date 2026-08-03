@@ -15840,3 +15840,66 @@ def test_main_shard_id_removes_a_previously_absent_out_when_execution_raises(
         harness.main()
     assert not out_path.exists()
     assert not sidecar_path.exists()
+
+
+def test_main_make_shard_map_rejects_an_explicit_m2e_bars_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-98（PR #242 第16巡 Codex 是正）: `--make-shard-map` は `--m2e-bars` を
+
+    一切読まない（tolerance_cents 等の共有スカラーは `--bars` 側から取る）——
+    E-64 ゲートの列挙に元々抜けていた。センチネル化し明示指定を拒否する。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--m2e-bars", str(harness.M2E_BARS_PATH),
+            "--out", str(tmp_path / "shard_map.yaml"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--m2e-bars"):
+        harness.main()
+
+
+def test_main_shard_id_rejects_an_explicit_m2e_bars_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-98: 実行機（`--shard-id`）も `--m2e-bars` を一切読まない（E-71 ゲートの
+
+    列挙に元々抜けていた）。
+    """
+    import yaml as _yaml
+
+    map_doc, _map_sha256, campaign_path, _campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--m2e-bars", str(harness.M2E_BARS_PATH),
+            "--out", str(tmp_path / "shard_run.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--m2e-bars"):
+        harness.main()
