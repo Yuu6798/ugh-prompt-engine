@@ -2155,6 +2155,29 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   検出した——該当コメント中のバッククォートを全数エスケープ（`` \` ``）して
   是正した（E-138 由来の既存コメントも含む・回帰確認済み）。
 
+**E-142（PR #242 第37巡・docs のみ）。**
+
+- **E-142**: E-141 の正規化（5-tuple 化）は各スカラーの型を検査せずタプル化
+  していた——`repeat_index: false` は Python では bool が int のサブクラスで
+  あるため `0` と同値化し、本来の `repeat_index: 0` セルと黙って衝突・
+  すり替わりうる（E-108 と同型の穴）。`bed_id: []` のような unhashable な値は
+  タプル化はできても `set(all_refs)` の時点で `TypeError` を送出し、この
+  経路には try/except が無かったため Python の未捕捉例外の既定 exit（1）で
+  終了してしまい、「検証済みで truncated/not_started のみ残存」（意図的な
+  exit 1・E-127 の規約）と区別が付かず、正規化そのものが失敗した壊れた
+  record を盲目的にリトライしてしまう穴だった。identity 4 フィールド
+  （bed_id/level/clip_id/arm）は str・repeat_index は非 bool の整数である
+  ことを明示検証し、違反は fatal（exit 3）とする形へ改めた。さらに正規化〜
+  集合比較の全体を try/except（`SystemExit` は re-raise・`Exception` のみ
+  捕捉）で覆い、想定外の例外もすべて fatal（exit 3）へルーティングして
+  exit 1 への漏れを構造的に排除した。地図側セル（`expected_refs`）の正規化
+  にも同じスカラー検証を適用した（CLI 側で検証済みの地図だが、検査スクリプト
+  自身が CLI の検証結果を信用せず自己完結で検証する）。
+  `repeat_index: false`（exit 3・bool が 0 と同値化して通過しないこと）／
+  `bed_id: []`（exit 3・exit 1 に化けないこと）／正常（exit 0）に加え、
+  既存の重複検出（E-141）・truncated 残存の再実行判定（exit 1）が
+  try/except 導入後も従来どおり機能することを bash で実測確認した。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

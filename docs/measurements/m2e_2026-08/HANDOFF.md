@@ -580,6 +580,36 @@ if completed + len(unavailable) + len(truncated) + len(not_started) != total:
 # 重複しない＝相互に非交差）、(b) その合併集合が pinned 地図（スナップショット）
 # の shard $N のセル集合と完全一致することを要求する。いずれの違反も fatal
 # （exit 3）とする。
+# E-142（PR #242 第37巡 Codex 是正）: E-141 の正規化は各スカラーの型を検査
+# せずタプル化していた——\`repeat_index: false\` は Python では bool が int の
+# サブクラスであるため \`0\` と同値化し、本来の \`repeat_index: 0\` セルと
+# 黙って衝突・すり替わりうる（E-108 と同型の穴）。\`bed_id: []\` のような
+# unhashable な値は tuple 化はできても \`set(all_refs)\` の時点で
+# \`TypeError: unhashable type\` を送出し、この関数群のどこにも try/except が
+# 無かったため Python の未捕捉例外の既定 exit（1）で終了してしまう——これは
+# 「検証済みで truncated/not_started のみ残存」（意図的な exit 1・E-127 の
+# 規約）と区別が付かず、正規化そのものが失敗した壊れた record を盲目的に
+# リトライしてしまう穴だった（E-127 が JSON パース・キー欠損について塞いだのと
+# 同型の漏れが、この後で追加した E-141 の集合演算経路には及んでいなかった）。
+# identity 4 フィールド（bed_id/level/clip_id/arm）は str・repeat_index は
+# 非 bool の整数であることを明示検証し、違反は fatal（exit 3）とする。
+# さらに正規化〜集合比較の全体を try/except で覆い、想定外の例外（unhashable
+# の TypeError 等、明示検証が想定していない壊れ方）もすべて fatal（exit 3）へ
+# ルーティングする——exit 1 への漏れを構造的に排除する。地図側セル
+# （\`expected_refs\`）の正規化にも同じスカラー検証を適用する（CLI 側の
+# \`_require_m2e_cell_repeat_index\` 等で既に検証済みの地図だが、この検査
+# スクリプト自身は CLI の検証結果を信用せず自己完結で検証する——fail-closed の
+# 原則を検査コード自身にも及ぼす）。
+
+
+def require_cell_ref_scalars(entry, source_name):
+    for key in ('bed_id', 'level', 'clip_id', 'arm'):
+        value = entry.get(key)
+        if not isinstance(value, str):
+            fatal(f'{source_name} entry {key!r} is not a str: {value!r}')
+    repeat_index = entry.get('repeat_index')
+    if isinstance(repeat_index, bool) or not isinstance(repeat_index, int):
+        fatal(f'{source_name} entry repeat_index is not a non-bool int: {repeat_index!r}')
 
 
 def cell_refs(list_value, list_name):
@@ -593,48 +623,60 @@ def cell_refs(list_value, list_name):
         ]
         if missing:
             fatal(f'{list_name} entry is missing {missing!r}: {entry!r}')
+        require_cell_ref_scalars(entry, list_name)
         refs.append(
             (entry['bed_id'], entry['level'], entry['clip_id'], entry['arm'], entry['repeat_index'])
         )
     return refs
 
 
-all_refs = (
-    cell_refs(measured, 'cells_measured')
-    + cell_refs(resumed, 'cells_resumed')
-    + cell_refs(unavailable, 'cells_unavailable')
-    + cell_refs(truncated, 'cells_truncated')
-    + cell_refs(not_started, 'cells_not_started')
-)
-if len(all_refs) != len(set(all_refs)):
-    seen = set()
-    dupes = []
-    for ref in all_refs:
-        if ref in seen:
-            dupes.append(ref)
-        seen.add(ref)
-    fatal(
-        'cell references are not duplicate-free / pairwise disjoint across '
-        f'cells_measured/resumed/unavailable/truncated/not_started: {dupes[:5]!r}'
-    )
-
 try:
-    expected_refs = {
-        (c['bed_id'], c['level'], c['clip_id'], c['arm'], c['repeat_index'])
-        for c in shard_map['cells']
-        if isinstance(c, dict) and c.get('shard_id') == EXPECTED_SHARD_ID
-    }
-except KeyError as exc:
-    fatal(f'shard map snapshot cell entry is missing {exc.args[0]!r}')
-
-actual_refs = set(all_refs)
-if actual_refs != expected_refs:
-    missing_refs = list(expected_refs - actual_refs)[:5]
-    extra_refs = list(actual_refs - expected_refs)[:5]
-    fatal(
-        f'cell reference union != shard-map-derived cell set for shard '
-        f'{EXPECTED_SHARD_ID}: missing={missing_refs!r} extra={extra_refs!r}'
+    all_refs = (
+        cell_refs(measured, 'cells_measured')
+        + cell_refs(resumed, 'cells_resumed')
+        + cell_refs(unavailable, 'cells_unavailable')
+        + cell_refs(truncated, 'cells_truncated')
+        + cell_refs(not_started, 'cells_not_started')
     )
+    if len(all_refs) != len(set(all_refs)):
+        seen = set()
+        dupes = []
+        for ref in all_refs:
+            if ref in seen:
+                dupes.append(ref)
+            seen.add(ref)
+        fatal(
+            'cell references are not duplicate-free / pairwise disjoint across '
+            f'cells_measured/resumed/unavailable/truncated/not_started: {dupes[:5]!r}'
+        )
+
+    expected_refs = set()
+    for c in shard_map['cells']:
+        if not isinstance(c, dict) or c.get('shard_id') != EXPECTED_SHARD_ID:
+            continue
+        missing = [
+            key for key in ('bed_id', 'level', 'clip_id', 'arm', 'repeat_index')
+            if key not in c
+        ]
+        if missing:
+            fatal(f'shard map snapshot cell entry is missing {missing!r}: {c!r}')
+        require_cell_ref_scalars(c, 'shard map snapshot cell')
+        expected_refs.add(
+            (c['bed_id'], c['level'], c['clip_id'], c['arm'], c['repeat_index'])
+        )
+
+    actual_refs = set(all_refs)
+    if actual_refs != expected_refs:
+        missing_refs = list(expected_refs - actual_refs)[:5]
+        extra_refs = list(actual_refs - expected_refs)[:5]
+        fatal(
+            f'cell reference union != shard-map-derived cell set for shard '
+            f'{EXPECTED_SHARD_ID}: missing={missing_refs!r} extra={extra_refs!r}'
+        )
+except SystemExit:
+    raise
+except Exception as exc:
+    fatal(f'cell reference validation failed unexpectedly: {exc!r}')
 
 if unavailable:
     sys.exit(2)
@@ -650,9 +692,10 @@ sys.exit(0 if completed == total else 1)
       exit 1
     else
       echo "shard $N: 実行記録の検査自体が失敗した (CHECK_STATUS=$CHECK_STATUS)。schema_version・" >&2
-      echo "shard_id・型・会計不変条件・地図由来の期待セル数・pinned 地図 hash・セル参照集合の" >&2
-      echo "いずれかの検証に失敗した——リトライでは直らない。原因を確認してから対応すること " >&2
-      echo "(fail-closed・E-127/E-134/E-136/E-138/E-139/E-141)" >&2
+      echo "shard_id・型・会計不変条件・地図由来の期待セル数・pinned 地図 hash・セル参照集合・" >&2
+      echo "セル参照スカラー型のいずれかの検証に失敗した（想定外の例外も含む）——リトライでは" >&2
+      echo "直らない。原因を確認してから対応すること " >&2
+      echo "(fail-closed・E-127/E-134/E-136/E-138/E-139/E-141/E-142)" >&2
       exit 1
     fi
   done
