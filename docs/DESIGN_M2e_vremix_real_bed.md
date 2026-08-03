@@ -2052,6 +2052,34 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   読取一本化（E-72/E-104/E-123/E-125/E-126 の系譜）はここで終端する
   （回帰テスト付き）。
 
+**E-134〜E-135（PR #242 第33巡）。**
+
+- **E-134**（docs のみ）: HANDOFF r6 until ループの実行記録検査スニペット
+  （E-127）は 0/1 を返す前の検証が cells_unavailable/cells_completed/
+  cells_total の 3 キーの**存在**（dict 添字アクセスの KeyError 依存）に
+  留まっており、schema_version 不一致・shard_id 不一致（コピペ事故）・型崩れ・
+  会計の破綻した record を素通しして 0/1 判定を汚染された record に対して
+  下しうる穴が残っていた。0/1 を返す前に schema_version 一致・shard_id 一致・
+  cells_total/cells_completed の型（非 bool 整数）・cells_measured/
+  cells_resumed/cells_unavailable/cells_truncated/cells_not_started の型
+  （list）・会計不変条件を全数検証する形へ改めた。会計不変条件は
+  `execute_m2e_shard` の実フィールド名と E-92 が確立した measured/resumed の
+  相互排他分割に合わせ、`len(measured) + len(resumed) == completed` かつ
+  `completed + len(unavailable) + len(truncated) + len(not_started) ==
+  total` とした（`cells_resumed` は `cells_completed` の部分集合であり、
+  単純な `completed + resumed + 未完各種` の合計は二重計上になる——実装の
+  実フィールド名に忠実に導出した）。検証失敗はすべて exit 3（fatal・E-127 の
+  規約を踏襲）。正常系（完了/truncated 残存/unavailable 残存）と壊れ系
+  （schema 不一致・shard_id 不一致・型崩れ・会計破綻・JSON パース失敗・
+  bool 誤認・キー欠損）の全ケースを bash で実測確認した。
+- **E-135**: run/evaluate/census が既に敷いている保護規律を shard モードにも
+  及ぼす——観測を実際に産む first-party ソース閉包（`_generator_code_paths`）
+  を `--make-shard-map`/`--shard-id` 双方の保護パス集合に追加し、`--out` が
+  ハーネス自身のソースファイルと同じパスを指す起動を、予約（サイドカー
+  作成）より前に fail-closed で拒否するようにした。この検査は既存の
+  no-clobber 検査（`--force` 分岐）より前に無条件で走るため、`--make-shard-map
+  --force` を併用しても拒否は変わらない（回帰テスト付き）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

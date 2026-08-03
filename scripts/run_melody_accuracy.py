@@ -12749,6 +12749,15 @@ def main() -> int:
         protected = {Path(args.campaign).resolve(), Path(args.bars).resolve()}
         for level_paths in campaign_for_preflight.values():
             protected.update(level_paths.values())
+        # E-135（PR #242 第33巡 Codex 是正）: run/evaluate/census（既存経路）が
+        # 敷いている保護と同じ規律を地図生成にも及ぼす——観測を実際に産む
+        # first-party ソース閉包（`_generator_code_paths`）は `--shard-id` 側の
+        # 実測（`execute_m2e_shard` の worker 測定）が消費する provenance 入力
+        # であり、`--out`/spill がそれと同じパスを指すとコード自体を地図/
+        # spill 出力で上書きしうる。地図生成自体は実測しないが、同じ
+        # campaign/cell_store を共有する2つの CLI モードとして保護集合の対称性を
+        # 保つため、こちら側にも予約前に加える。
+        protected.update(_generator_code_paths())
         # E-123（PR #242 第27巡 Codex 是正）: `--cell-store` 指定時、地図生成は
         # 除外真実性スキャン（`_m2e_completed_cell_keys`）で campaign の manifest
         # を実際に読む——manifest が指す audio_path/annotation_path の実体は、
@@ -13083,6 +13092,14 @@ def main() -> int:
         }
         for level_paths in campaign.values():
             protected.update(level_paths.values())
+        # E-135（PR #242 第33巡 Codex 是正）: run/evaluate/census（既存経路）と
+        # 同じ規律で、観測を実際に産む first-party ソース閉包
+        # （`_generator_code_paths`）を保護集合へ加える——`execute_m2e_shard` の
+        # worker 測定はこのコードを実際に実行して cell record（provenance）を
+        # 産む唯一の消費者であり、`--out`/`--cell-store` spill がそれと同じ
+        # パスを指すとコード自体を実行記録/spill 出力で上書きしうる
+        # （fail-closed で予約前に拒否する）。
+        protected.update(_generator_code_paths())
         # E-123（PR #242 第27巡 Codex 是正）: 実行は常に manifest を読む（先行
         # shard 検査・task 構築）ので、manifest が指す audio_path/annotation_path
         # の実体も無条件で保護集合へ展開する（`--make-shard-map` 側と同型——

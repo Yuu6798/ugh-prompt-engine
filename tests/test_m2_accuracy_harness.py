@@ -16019,6 +16019,82 @@ def test_main_shard_id_rejects_an_out_matching_a_manifest_referenced_audio_path(
     assert audio_path.read_bytes() == original_audio_bytes  # 実体は無傷
 
 
+def test_main_make_shard_map_rejects_an_out_matching_a_generator_code_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-135（PR #242 第33巡 Codex 是正）: run/evaluate/census と同じ規律で、
+
+    観測を実際に産む first-party ソース閉包（`_generator_code_paths`）を地図
+    生成の保護集合へ加える——`--out` が本ハーネス自身
+    （`scripts/run_melody_accuracy.py`）と同じパスを指す起動を、予約
+    （サイドカー作成）より前に fail-closed で拒否する。この検査は no-clobber
+    検査（`--force` 分岐）より前に無条件で走るため、`--force` を併用しても
+    拒否は変わらない。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    harness_source = harness.ROOT / "scripts" / "run_melody_accuracy.py"
+    original_bytes = harness_source.read_bytes()
+    sidecar_path = harness_source.with_name(f"{harness_source.name}.claim")
+
+    base_argv = [
+        "run_melody_accuracy.py",
+        "--make-shard-map",
+        "--campaign", str(campaign_path),
+        "--t-direct", "5.0",
+        "--t-stem", "10.0",
+        "--startup-cost", "2.0",
+        "--session-budget", "50.0",
+        "--workers", "1",
+        "--out", str(harness_source),
+    ]
+    for argv, label in ((base_argv, "no --force"), (base_argv + ["--force"], "--force")):
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit, match="地図生成の入力"):
+            harness.main()
+        assert not sidecar_path.exists(), label  # 予約より前に拒否
+        assert harness_source.read_bytes() == original_bytes, label  # 実体は無傷
+
+
+def test_main_shard_id_rejects_an_out_matching_a_generator_code_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-135（PR #242 第33巡 Codex 是正）: `--shard-id` 側にも同じ保護を及ぼす
+
+    ——`execute_m2e_shard` の worker 測定が実際に実行する first-party ソース
+    閉包（`_generator_code_paths`）を、`--out` による上書きから予約前に守る。
+    """
+    _map_doc, _map_sha256, campaign_path, _campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    assert map_path.exists()
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+
+    harness_source = harness.ROOT / "scripts" / "run_melody_accuracy.py"
+    original_bytes = harness_source.read_bytes()
+    sidecar_path = harness_source.with_name(f"{harness_source.name}.claim")
+
+    def _must_not_be_called(**kwargs: Any) -> "Dict[str, Any]":
+        raise AssertionError("execute_m2e_shard must not run")
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _must_not_be_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(harness_source),
+        ],
+    )
+    with pytest.raises(SystemExit, match="shard 実行の入力"):
+        harness.main()
+    assert not sidecar_path.exists()
+    assert harness_source.read_bytes() == original_bytes
+
+
 @pytest.mark.parametrize(
     ("field", "bad_value"),
     [("t_direct_s", -1.0), ("startup_cost_s", -1.0)],

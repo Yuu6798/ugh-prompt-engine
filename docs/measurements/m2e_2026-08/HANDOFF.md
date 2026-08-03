@@ -355,20 +355,93 @@ for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('do
     # 見逃す穴）。パース・検証は明示的に try/except で捕捉し、3 という別コードへ
     # 分離する——シェル側は 0/1/2 以外（3 を含む未知のコードすべて）を fatal と
     # みなして即座に終了する。
+    # E-134（PR #242 第33巡 Codex 是正）: E-127 は「パース失敗・キー欠損」しか
+    # 検査しておらず、0/1 を返す**前**の検証が cells_unavailable/cells_completed/
+    # cells_total の 3 キーの**存在**（dict 添字アクセスが KeyError で例外化する
+    # ことに依存）に留まっていた——schema_version の不一致（別世代の実行機/別
+    # スキーマの record）・shard_id の不一致（別 shard の record を誤って渡す
+    # コピペ事故）・型崩れ（cells_total が文字列化されている等）・会計の破綻
+    # （cells_measured/cells_resumed/cells_unavailable/cells_truncated/
+    # cells_not_started の内訳が cells_total と合わない壊れた record）のいずれも
+    # 素通しし、0/1 判定（「完了」/「truncated・not_started のみ残存」）を汚染
+    # された record に対して下してしまいうる穴だった。0/1 を返す前に、
+    # schema_version 一致・shard_id 一致（期待値は `$N`）・cells_total/
+    # cells_completed が非 bool 整数・cells_measured/cells_resumed/
+    # cells_unavailable/cells_truncated/cells_not_started がいずれも list・
+    # 会計不変条件（`len(measured) + len(resumed) == completed` かつ
+    # `completed + len(unavailable) + len(truncated) + len(not_started) ==
+    # total`——`execute_m2e_shard` の実フィールド名・E-92 が確立した
+    # measured/resumed の相互排他分割に合わせる。`cells_resumed` は
+    # `cells_completed` の**部分集合**であり加算対象ではない——単純に
+    # `completed + resumed + 未完各種` を合計すると二重計上になる）を全数検証し、
+    # いずれかの失敗も exit 3（fatal・E-127 の規約を踏襲）へ落とす。
     # `|| CHECK_STATUS=$?`（E-120）: 上と同じ理由——`set -e` 下では非ゼロ sys.exit
     # を素朴に `CHECK_STATUS=$?` で捕捉する形は機能しない。
     CHECK_STATUS=0
     python -c "
 import json, sys
+
+EXPECTED_SCHEMA = 'm2e-shard-run/0.1'
+EXPECTED_SHARD_ID = $N
+
+
+def fatal(msg):
+    print(f'shard record validation failed: {msg}', file=sys.stderr)
+    sys.exit(3)
+
+
 try:
     with open('$OUT') as f:
         r = json.load(f)
-    unavailable = r['cells_unavailable']
-    completed = r['cells_completed']
-    total = r['cells_total']
 except Exception as exc:
-    print(f'shard record parse/validation failed: {exc!r}', file=sys.stderr)
-    sys.exit(3)
+    fatal(f'JSON parse failed: {exc!r}')
+
+if not isinstance(r, dict):
+    fatal(f'shard record is not a JSON object: {r!r}')
+if r.get('schema_version') != EXPECTED_SCHEMA:
+    fatal(f'schema_version {r.get(\"schema_version\")!r} != {EXPECTED_SCHEMA!r}')
+
+
+def require_int(key):
+    v = r.get(key)
+    if isinstance(v, bool) or not isinstance(v, int):
+        fatal(f'{key} is not a non-bool int: {v!r}')
+    return v
+
+
+def require_list(key):
+    v = r.get(key)
+    if not isinstance(v, list):
+        fatal(f'{key} is not a list: {v!r}')
+    return v
+
+
+shard_id = require_int('shard_id')
+if shard_id != EXPECTED_SHARD_ID:
+    fatal(f'shard_id {shard_id!r} != expected {EXPECTED_SHARD_ID!r}')
+
+total = require_int('cells_total')
+completed = require_int('cells_completed')
+measured = require_list('cells_measured')
+resumed = require_list('cells_resumed')
+unavailable = require_list('cells_unavailable')
+truncated = require_list('cells_truncated')
+not_started = require_list('cells_not_started')
+
+# E-92 の相互排他分割: 1 セルは measured か resumed のどちらか一方にのみ属す。
+if len(measured) + len(resumed) != completed:
+    fatal(
+        f'cells_measured({len(measured)}) + cells_resumed({len(resumed)}) != '
+        f'cells_completed({completed})'
+    )
+# cells_resumed は cells_completed の部分集合（加算対象ではない）。
+if completed + len(unavailable) + len(truncated) + len(not_started) != total:
+    fatal(
+        f'cells_completed({completed}) + cells_unavailable({len(unavailable)}) + '
+        f'cells_truncated({len(truncated)}) + cells_not_started({len(not_started)}) != '
+        f'cells_total({total})'
+    )
+
 if unavailable:
     sys.exit(2)
 sys.exit(0 if completed == total else 1)
@@ -382,9 +455,9 @@ sys.exit(0 if completed == total else 1)
       echo "原因を確認してから対応すること (fail-closed・E-113)" >&2
       exit 1
     else
-      echo "shard $N: 実行記録の検査自体が失敗した (CHECK_STATUS=$CHECK_STATUS)。JSON パース失敗・" >&2
-      echo "キー欠損・検証失敗のいずれか——リトライでは直らない。原因を確認してから対応すること " >&2
-      echo "(fail-closed・E-127)" >&2
+      echo "shard $N: 実行記録の検査自体が失敗した (CHECK_STATUS=$CHECK_STATUS)。schema_version・" >&2
+      echo "shard_id・型・会計不変条件のいずれかの検証に失敗した——リトライでは直らない。原因を" >&2
+      echo "確認してから対応すること (fail-closed・E-127/E-134)" >&2
       exit 1
     fi
   done
