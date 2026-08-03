@@ -16320,3 +16320,135 @@ def test_main_shard_id_rejects_an_explicit_force_flag(
     )
     with pytest.raises(SystemExit, match="--force"):
         harness.main()
+
+
+@pytest.mark.parametrize("bad_shard_id", [False, 0.0])
+def test_require_m2e_shard_map_matches_registry_rejects_a_malformed_cell_shard_id(
+    bad_shard_id: Any, tmp_path: Path
+) -> None:
+    """E-112（PR #242 第21巡 Codex 是正）: セルの shard_id が非 bool の整数で
+
+    なければ（false/0.0）、比較の前に fail-closed で拒否する
+    （E-108 の repeat_index と同型——False==0/0.0==0 の黙示的衝突を防ぐ）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["cells"][0]["shard_id"] = bad_shard_id
+    with pytest.raises(ValueError, match="shard_id"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_main_make_shard_map_rejects_when_the_out_reservation_sidecar_already_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-111（PR #242 第21巡 Codex 是正）: `--make-shard-map --out` にも
+
+    shard-run 側と同じ排他予約を適用する——予約サイドカー（`<out>.claim`）が
+    既に存在すれば、生成を試みる前に fail-closed で拒否する。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    sidecar_path = tmp_path / "shard_map.yaml.claim"
+    sidecar_path.write_text("held by another launch\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        harness,
+        "generate_m2e_shard_map",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("generate_m2e_shard_map must not run when the sidecar exists")
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="予約は他の起動が保持している"):
+        harness.main()
+    assert sidecar_path.read_text(encoding="utf-8") == "held by another launch\n"
+
+
+def test_main_make_shard_map_rolls_back_the_out_reservation_when_generation_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-111: 生成が失敗するあらゆる経路で --out を原状復帰する（E-96 と同型）。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    out_path.write_bytes(b"")  # mktemp の 0 バイト予約
+    sidecar_path = tmp_path / "shard_map.yaml.claim"
+
+    def _fake_generate_that_fails(**kwargs: Any) -> "Dict[str, Any]":
+        raise RuntimeError("simulated map generation failure")
+
+    monkeypatch.setattr(harness, "generate_m2e_shard_map", _fake_generate_that_fails)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="simulated map generation failure"):
+        harness.main()
+    assert out_path.is_file()
+    assert out_path.stat().st_size == 0
+    assert not sidecar_path.exists()
+
+
+def test_main_make_shard_map_preserves_a_forced_existing_out_when_generation_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-111: `--force` で上書き対象にした非空の既存レコードは、生成失敗時に
+
+    0 バイトへ truncate されず、元の bytes のまま原状復帰する（`--shard-id`
+    と異なり `--make-shard-map` は非空の既存ファイルも `--force` で上書き
+    対象にできるため、bool ベースの「存在したか」では元の中身を破壊してしまう）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    original_content = "pre-existing: content\n"
+    out_path.write_text(original_content, encoding="utf-8")
+
+    def _fake_generate_that_fails(**kwargs: Any) -> "Dict[str, Any]":
+        raise RuntimeError("simulated map generation failure")
+
+    monkeypatch.setattr(harness, "generate_m2e_shard_map", _fake_generate_that_fails)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--force",
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="simulated map generation failure"):
+        harness.main()
+    assert out_path.read_text(encoding="utf-8") == original_content

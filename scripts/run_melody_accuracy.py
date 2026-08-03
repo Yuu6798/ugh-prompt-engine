@@ -10987,7 +10987,13 @@ def _require_m2e_shard_map_matches_registry(
         if key in map_set:
             duplicates.append(key)
         map_set.add(key)
-        declared_shard_id[key] = record.get("shard_id")
+        # E-112（PR #242 第21巡 Codex 是正）: `False != 0` は Python では成り立たない
+        # （`False == 0`）——`shard_id: false`/`shard_id: 0.0` のセルは、後段の
+        # `!=` 比較だけでは `shard_id: 0` と黙って区別されない。E-108 と同じ
+        # 無強制整数検証を格納の前に敷く。
+        declared_shard_id[key] = _require_m2e_shard_map_integer_field(
+            "cells[].shard_id", record.get("shard_id")
+        )
     if duplicates:
         raise ValueError(f"shard map: セル鍵が重複している ({duplicates[:5]}) (fail-closed)")
     missing = registry_set - map_set
@@ -11815,6 +11821,54 @@ def _release_m2e_shard_claim(claim_path: Path) -> None:
     claim_path.unlink(missing_ok=True)
 
 
+def _acquire_m2e_out_reservation(out_resolved: Path, token: str) -> Path:
+    """`out_resolved` の排他予約を確保し、サイドカーのパスを返す（E-94・PR #242
+
+    第15巡 Codex 是正の共通形。E-111・PR #242 第21巡 Codex 是正で
+    `--make-shard-map --out` にも流用）。
+
+    サイドカー `<out>.claim` を `O_CREAT|O_EXCL` で作る——既に存在すれば
+    `FileExistsError` を送出する（呼び出し元が文脈に応じた案内文で fail-closed
+    する。既存の shard claim・E-74・`_acquire_m2e_shard_claim` と役割が重なる
+    場面もあるが、`--out` は `shard_id` と独立に指定できるため別物として扱う）。
+    E-109（第20巡 Codex 是正）: `os.open` の前に親ディレクトリを作る
+    （`_atomic_write_text` と同じ挙動へ整合）。
+    """
+    sidecar = out_resolved.with_name(f"{out_resolved.name}.claim")
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(sidecar), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(token)
+    except Exception:
+        sidecar.unlink(missing_ok=True)
+        raise
+    return sidecar
+
+
+def _rollback_m2e_out_reservation(
+    out_resolved: Path, *, original_bytes: "Optional[bytes]"
+) -> None:
+    """`out_resolved` を予約前の状態へ原状復帰する（E-96/E-106・PR #242
+
+    第15/19巡 Codex 是正の共通形。E-111・PR #242 第21巡 Codex 是正で
+    `--make-shard-map` 側にも流用）。
+
+    `original_bytes`（予約直前に読み取った実体。無かったなら `None`）を
+    そのまま書き戻す——`--make-shard-map --out` は `--force` 付きで**非空の
+    既存レコード**を上書き対象にできる（`--shard-id` 側は常に 0 バイト予約
+    のみ）ため、「予約前は存在した」を一律 0 バイトへ truncate すると、
+    `--force` で上書きしようとした既存レコードの中身を失敗時に破壊してしまう。
+    元の bytes をそのまま復元すれば、mktemp の 0 バイト予約（`original_bytes
+    == b""`）・非空の既存レコード（`--force`）のどちらでも安全に原状復帰する。
+    未存在だったなら（`original_bytes is None`）削除する。
+    """
+    if original_bytes is not None:
+        _atomic_write_text(out_resolved, original_bytes.decode("utf-8"))
+    else:
+        out_resolved.unlink(missing_ok=True)
+
+
 def execute_m2e_shard(
     *,
     map_doc: "Dict[str, Any]",
@@ -12469,22 +12523,81 @@ def main() -> int:
             if args.session_budget is _ARGPARSE_UNSET
             else args.session_budget
         )
-        shard_map = generate_m2e_shard_map(
-            campaign_path=args.campaign,
-            t_direct=args.t_direct,
-            t_stem=args.t_stem,
-            startup_cost=args.startup_cost,
-            session_budget=session_budget,
-            bars_path=args.bars,
-            workers=args.workers,
-            cell_store=args.cell_store,
-            campaign_snapshot=(campaign_for_preflight, campaign_sha256_for_preflight),
+        # E-111（PR #242 第21巡 Codex 是正）: `--make-shard-map --out` にも、
+        # shard-run 側（E-94/E-96/E-106）と同じ排他予約を適用する——地図生成も
+        # 長時間かかりうるため、no-clobber 検査通過〜公開の窓で 2 起動が同じ
+        # 予約状態（0 バイト/不存在）を狙って通過しうる。ヘルパを共通化して流用する。
+        out_resolved_for_map = Path(args.out).resolve()
+        # E-111: `--force` は非空の既存レコードも上書き対象にできる（`--shard-id`
+        # 側は常に 0 バイト予約のみ）ため、原状復帰は「存在したか」の bool ではなく
+        # 元の bytes そのもの（`_rollback_m2e_out_reservation` 参照）で行う。
+        try:
+            out_original_bytes = out_resolved_for_map.read_bytes()
+        except OSError:
+            out_original_bytes = None
+        shard_map_claim_token = (
+            "m2e-shard-map-reservation/1\n"
+            f"pid={os.getpid()}\n"
+            f"claimed_utc={_utc_now()}\n"
         )
-        payload = yaml.safe_dump(
-            shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
-        )
-        _atomic_write_text(args.out, payload)
-        print(f"wrote shard map to {args.out}")
+        try:
+            out_claim_sidecar = _acquire_m2e_out_reservation(
+                out_resolved_for_map, shard_map_claim_token
+            )
+        except FileExistsError:
+            raise SystemExit(
+                f"--out {args.out} の予約は他の起動が保持している（サイドカー "
+                f"{out_resolved_for_map.with_name(f'{out_resolved_for_map.name}.claim')} が "
+                "既に存在する）; 並行実行は非サポート。クラッシュ孤児ならサイドカーを "
+                "手動削除して再実行する (fail-closed・E-111)"
+            ) from None
+        try:
+            _atomic_write_text(args.out, shard_map_claim_token)
+            try:
+                shard_map = generate_m2e_shard_map(
+                    campaign_path=args.campaign,
+                    t_direct=args.t_direct,
+                    t_stem=args.t_stem,
+                    startup_cost=args.startup_cost,
+                    session_budget=session_budget,
+                    bars_path=args.bars,
+                    workers=args.workers,
+                    cell_store=args.cell_store,
+                    campaign_snapshot=(campaign_for_preflight, campaign_sha256_for_preflight),
+                )
+            except BaseException:
+                _rollback_m2e_out_reservation(
+                    out_resolved_for_map, original_bytes=out_original_bytes
+                )
+                raise
+            payload = yaml.safe_dump(
+                shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
+            )
+            try:
+                current_out_content = out_resolved_for_map.read_text(encoding="utf-8")
+            except OSError:
+                current_out_content = None
+            if current_out_content != shard_map_claim_token:
+                spill_path = out_resolved_for_map.with_name(
+                    f"{out_resolved_for_map.name}.spill-{uuid.uuid4().hex[:8]}.yaml"
+                )
+                _atomic_write_text(spill_path, payload)
+                raise SystemExit(
+                    f"--out {args.out} の claim が公開直前に別の内容へ差し替わっていた "
+                    "（予約時に書いた自分の claim トークンと不一致）; 別起動との競合の "
+                    f"疑いがある。地図は失わないよう {spill_path} へ退避した——原因を "
+                    "確認してから手動で --out へ配置すること (fail-closed・E-111)"
+                )
+            try:
+                _atomic_write_text(args.out, payload)
+            except BaseException:
+                _rollback_m2e_out_reservation(
+                    out_resolved_for_map, original_bytes=out_original_bytes
+                )
+                raise
+            print(f"wrote shard map to {args.out}")
+        finally:
+            out_claim_sidecar.unlink(missing_ok=True)
         # E-67（PR #242 第5巡 Codex P2 是正）: 生成時刻は地図 bytes から外した
         # （同一入力 → バイト一致という Design Memo AC と矛盾しないように）ので、
         # provenance として stdout へ印字する（HANDOFF のレシピは tee するため
@@ -12648,22 +12761,13 @@ def main() -> int:
         # 存在すれば即座に fail-closed で拒否する（他起動が予約を保持している）。
         # `--out` 本体への token 書き込みは引き続き行う（診断用・E-85 の公開時
         # 照合はそのまま維持）が、所有権の根拠はこのサイドカーの O_EXCL に一本化する。
-        out_existed_before = out_resolved.exists()
-        out_claim_sidecar = out_resolved.with_name(f"{out_resolved.name}.claim")
-        # E-109（PR #242 第20巡 Codex 是正）: `_atomic_write_text` は親ディレクトリを
-        # 自動作成するが、サイドカーの `os.open(..., O_CREAT|O_EXCL)` はしていな
-        # かった——未存在のネストディレクトリ配下の --out を指すと、ここで
-        # `FileNotFoundError` が予約検査を経ずに漏れる（`_atomic_write_text` と
-        # 挙動が食い違う）。同じ規約へ揃える。
-        out_claim_sidecar.parent.mkdir(parents=True, exist_ok=True)
+        # E-111: 原状復帰は bool ではなく元の bytes そのもので行う
+        # （`_rollback_m2e_out_reservation` 参照。--shard-id 側は E-51 の
+        # no-clobber により常に「0 バイト予約」のみが「存在した」場合に相当する）。
         try:
-            claim_fd = os.open(str(out_claim_sidecar), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            raise SystemExit(
-                f"--out {args.out} の予約は他の起動が保持している（サイドカー "
-                f"{out_claim_sidecar} が既に存在する）; 並行実行は非サポート。クラッシュ"
-                "孤児ならサイドカーを手動削除して再実行する (fail-closed・E-94)"
-            ) from None
+            out_original_bytes = out_resolved.read_bytes()
+        except OSError:
+            out_original_bytes = None
         shard_run_claim_token = (
             "m2e-shard-run-reservation/1\n"
             f"shard_id={args.shard_id}\n"
@@ -12671,23 +12775,14 @@ def main() -> int:
             f"claimed_utc={_utc_now()}\n"
         )
         try:
-            with os.fdopen(claim_fd, "w", encoding="utf-8") as f:
-                f.write(shard_run_claim_token)
-        except Exception:
-            out_claim_sidecar.unlink(missing_ok=True)
-            raise
-        def _rollback_out_reservation() -> None:
-            """`--out` を予約前の状態（mktemp 予約由来なら 0 バイトへ・元々
-
-            不存在だったなら削除）へ原状復帰する（E-96・E-106・PR #242
-            第15/19巡 Codex 是正）: 失敗した起動の claim token を `--out` に
-            残したままにすると、以後のどの起動も no-clobber で弾かれ、
-            `--out` パスが永久に使用不能になる。
-            """
-            if out_existed_before:
-                _atomic_write_text(args.out, "")
-            else:
-                out_resolved.unlink(missing_ok=True)
+            out_claim_sidecar = _acquire_m2e_out_reservation(out_resolved, shard_run_claim_token)
+        except FileExistsError:
+            raise SystemExit(
+                f"--out {args.out} の予約は他の起動が保持している（サイドカー "
+                f"{out_resolved.with_name(f'{out_resolved.name}.claim')} が既に存在する）; "
+                "並行実行は非サポート。クラッシュ孤児ならサイドカーを手動削除して再実行する "
+                "(fail-closed・E-94)"
+            ) from None
 
         try:
             _atomic_write_text(args.out, shard_run_claim_token)
@@ -12704,7 +12799,7 @@ def main() -> int:
             except BaseException:
                 # E-96: execute_m2e_shard が失敗するあらゆる経路（shard claim
                 # 衝突・pin 失敗・不正地図等）で --out を原状復帰する。
-                _rollback_out_reservation()
+                _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
             shard_run_payload = json.dumps(shard_run, indent=2, sort_keys=True)
             try:
@@ -12731,7 +12826,7 @@ def main() -> int:
             try:
                 _atomic_write_text(args.out, shard_run_payload)
             except BaseException:
-                _rollback_out_reservation()
+                _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
             print(f"wrote shard run record to {args.out}")
         finally:

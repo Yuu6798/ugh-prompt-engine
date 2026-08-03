@@ -1831,6 +1831,22 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
 - **E-110**: `--shard-id` の未使用引数拒否リストに `--force`（`--make-shard-map`
   専用の no-clobber 上書き許可フラグ）が抜けていた。追加した。
 
+**E-111〜E-112（PR #242 第21巡）。**
+
+- **E-111**: `--make-shard-map --out` は E-94/E-96/E-106 と同じ排他予約の対象
+  外だった——地図生成も長時間かかりうるため、no-clobber 検査通過〜公開の窓で
+  2 起動が同じ予約状態を狙って通過しうる。予約・原状復帰のヘルパ
+  （`_acquire_m2e_out_reservation`/`_rollback_m2e_out_reservation`）を
+  shard-run 側と共通化し、`--make-shard-map` 側にも適用した。原状復帰は
+  「存在したか」の bool ではなく元の bytes そのもので行う形に設計変更した
+  （`--force` は非空の既存レコードも上書き対象にできるため、bool ベースの
+  0 バイト truncate では `--force` が上書きしようとした既存の中身を失敗時に
+  破壊してしまう——`--shard-id` 側は常に 0 バイト予約のみが対象なので実害は
+  無いが、両ブランチで同じ関数を共有するため両方とも bytes ベースへ揃えた）。
+- **E-112**: セルの `shard_id` も E-108 の `repeat_index` と同型の穴があった
+  （`False == 0` により `shard_id: false` が `shard_id: 0` と黙って比較上
+  一致しうる）。同じ無強制整数ヘルパで格納前に検証する形へ改めた。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
