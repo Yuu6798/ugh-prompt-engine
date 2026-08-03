@@ -10205,6 +10205,7 @@ def _m2e_full_cell_registry(
     campaign: "Dict[str, Dict[str, Path]]",
     *,
     bars_path: Path = BARS_PATH,
+    bars_snapshot: "Optional[Tuple[Any, str]]" = None,
 ) -> "Tuple[List[Tuple[str, str, str, str, int]], Dict[str, str], int, str, Dict[str, Dict[str, Any]]]":
     """§8.5 のセル台帳（1280 セル）を lexical order で列挙する。
 
@@ -10228,8 +10229,15 @@ def _m2e_full_cell_registry(
     `BARS_PATH`（従来どおりの挙動）。戻り値の `bars_sha256` を地図に刻むことで、
     別世代の bars で組まれた地図を後から検出できる（`_require_m2e_shard_map_matches_
     registry` が照合する）。
+
+    `bars_snapshot`（E-78・PR #242 第8巡 Codex 是正）: 呼び出し元が既に読んだ
+    `(bars, bars_sha256)` を渡せば、ここでは bars ファイルを再度開かない（E-57/E-72
+    と同族の TOCTOU 是正）。未指定（既定 `None`）なら従来どおり `bars_path` から読む。
     """
-    bars, bars_sha256 = load_bars(bars_path)
+    if bars_snapshot is not None:
+        bars, bars_sha256 = bars_snapshot
+    else:
+        bars, bars_sha256 = load_bars(bars_path)
     bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
     repeats_min = int(bar_block["repeats_min"])
     arms = _categories_owned_by("m2e_accuracy_bars.yaml")
@@ -10368,6 +10376,7 @@ def _m2e_completed_cell_keys(
     *,
     fixtures_by_level: "Dict[str, Dict[str, Any]]",
     bars_path: Path = BARS_PATH,
+    bars_snapshot: "Optional[Tuple[Any, str]]" = None,
 ) -> "set":
     """`cells`（registry の 5-tuple 群）のうち `cell_store` に digest 一致で完了
 
@@ -10382,8 +10391,15 @@ def _m2e_completed_cell_keys(
     manifest に無い・レコードが無い・壊れている・digest 不一致のいずれも「完了と
     立証できない」として鍵集合から単に除く（fail-closed——除外の可否は保守的に
     倒す。パッキング対象に残るだけで、測定自体は妨げない）。
+
+    `bars_snapshot`（E-78・PR #242 第8巡 Codex 是正）: 呼び出し元が既に読んだ
+    `(bars, bars_sha256)` を渡せば、ここでは bars ファイルを再度開かない。未指定
+    （既定 `None`）なら従来どおり `bars_path` から読む。
     """
-    bars, bars_sha256 = load_bars(bars_path)
+    if bars_snapshot is not None:
+        bars, bars_sha256 = bars_snapshot
+    else:
+        bars, bars_sha256 = load_bars(bars_path)
     bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
     tolerance_cents = float(bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
     est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])
@@ -10665,7 +10681,8 @@ def _require_m2e_shard_map_matches_registry(
     campaign: "Dict[str, Dict[str, Path]]",
     *,
     bars_path: Path = BARS_PATH,
-) -> "Dict[str, Dict[str, Any]]":
+    cell_store: "Optional[str | Path]" = None,
+) -> "Tuple[Dict[str, Dict[str, Any]], Tuple[Any, str]]":
     """地図の `cells` が現在の campaign から再計算した台帳・割当と一致することを要求する。
 
     欠け・重複・余剰のいずれも fail-closed（§8.5「セル台帳は不可侵」の実行時側の
@@ -10673,9 +10690,18 @@ def _require_m2e_shard_map_matches_registry(
     まま古い地図を消費すると、測っていないセルを完了扱いにしたり、存在しないセルへ
     `shard_id` を割り当てたりする。
 
-    戻り値は検証済みの `fixtures_by_level`（E-57・PR #242 第3巡 Codex P2 是正）——
-    呼び出し元（`execute_m2e_shard`）はこのスナップショットを実行段でも引き回し、
-    同じ fixtures ファイルを再度開かない（TOCTOU 回避。E-52 と同族）。
+    戻り値は `(fixtures_by_level, bars_snapshot)`。`fixtures_by_level`（E-57・
+    PR #242 第3巡 Codex P2 是正）と `bars_snapshot == (bars, bars_sha256)`（E-78・
+    PR #242 第8巡 Codex 是正）はいずれも検証済みスナップショット——呼び出し元
+    （`execute_m2e_shard`）はこれらを実行段でも引き回し、同じ fixtures / bars
+    ファイルを再度開かない（TOCTOU 回避。E-52 と同族）。
+
+    `cell_store`（E-79・PR #242 第8巡 Codex 是正）: `execute_m2e_shard` が実際に
+    書き込む store を渡すと、`excluded_completed_cells` の除外真実性検証を
+    「地図が記録した store」ではなく「その実行 store」へ束縛する（地図の
+    `cell_store_relative` と実行時 `--cell-store` の一致を要求した上で、真実性
+    check 自体もこの実行 store に対して行う）。未指定（既定 `None`）なら従来どおり
+    地図の記録した store のみで検証する（直接呼ぶテスト等の後方互換経路）。
 
     E-49（PR #242 第1巡 Codex P1 是正）: セル鍵の集合一致だけでは、鍵は保ったまま
     `shard_id` の値や `n_shards` だけを書き換えた地図（例: 全セルを shard 0 に
@@ -10702,8 +10728,11 @@ def _require_m2e_shard_map_matches_registry(
     `bars_path`（E-47・PR #242 第1巡 Codex P2 是正）: `--bars` の指定を検証まで
     貫通させ、地図が刻んだ `bars_sha256` と実効 bars の実体を照合する。
     """
-    registry_cells, fixtures_sha256_by_level, repeats_min, bars_sha256, fixtures_by_level = (
-        _m2e_full_cell_registry(campaign, bars_path=bars_path)
+    # E-78: bars を本関数の入口で一度だけ読み、以降（registry 構築・除外真実性検証）は
+    # このスナップショットを引き回す（内部で複数回 load_bars を呼ばない）。
+    bars, bars_sha256 = load_bars(bars_path)
+    registry_cells, fixtures_sha256_by_level, repeats_min, _bars_sha256_unused, fixtures_by_level = (
+        _m2e_full_cell_registry(campaign, bars_path=bars_path, bars_snapshot=(bars, bars_sha256))
     )
     if map_doc.get("bars_sha256") != bars_sha256:
         raise ValueError(
@@ -10772,14 +10801,34 @@ def _require_m2e_shard_map_matches_registry(
         excluded_cell_store = _require_m2e_excluded_cell_store_relative_confined_to_root(
             cell_store_relative
         )
+        # E-79: 実行が実際に使う cell_store（execute_m2e_shard から渡された引数）が
+        # あれば、地図が記録した store と一致することを要求し、真実性検証も**実行
+        # store**へ束縛する——地図の cell_store_relative がどこか別の store 向けの
+        # 宣言であっても、実行が別の --cell-store を指せば地図の除外を信用しない
+        # （地図の記録した store だけを見て検証すると、実行時の実 store とすり替え
+        # られていても気付けない）。
+        if cell_store is not None:
+            actual_cell_store = Path(cell_store).resolve()
+            if actual_cell_store != excluded_cell_store:
+                raise ValueError(
+                    "shard map: excluded_completed_cells.cell_store_relative "
+                    f"{cell_store_relative!r}（解決後 {excluded_cell_store}）が実行時の "
+                    f"--cell-store {actual_cell_store} と一致しない; 地図が別 store 向けに "
+                    "宣言した除外を、別の store への書き込みに束縛して信用しない "
+                    "(fail-closed・E-79)"
+                )
+            verify_cell_store = actual_cell_store
+        else:
+            verify_cell_store = excluded_cell_store
         # 除外の真実性: 宣言された除外セルが実際に store で digest 一致完了して
         # いることを要求する（判定基準は生成器と同一の _m2e_completed_cell_keys）。
         actually_complete = _m2e_completed_cell_keys(
             sorted(excluded_keys),
             campaign,
-            excluded_cell_store,
+            verify_cell_store,
             fixtures_by_level=fixtures_by_level,
             bars_path=bars_path,
+            bars_snapshot=(bars, bars_sha256),
         )
         not_actually_complete = excluded_keys - actually_complete
         if not_actually_complete:
@@ -10900,7 +10949,7 @@ def _require_m2e_shard_map_matches_registry(
             f"shard map: n_shards {map_doc.get('n_shards')!r} が再計算値 "
             f"{expected_n_shards!r} と不一致 (fail-closed)"
         )
-    return fixtures_by_level
+    return fixtures_by_level, (bars, bars_sha256)
 
 
 def _m2e_shard_cells_for(map_doc: "Dict[str, Any]", shard_id: int) -> "List[Dict[str, Any]]":
