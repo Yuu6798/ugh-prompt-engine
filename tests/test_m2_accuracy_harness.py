@@ -12238,16 +12238,20 @@ def test_assign_m2e_shard_ids_rejects_cap_below_max_cost() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_generate_m2e_shard_map_is_byte_identical_for_the_same_input(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_generate_m2e_shard_map_is_byte_identical_for_the_same_input(tmp_path: Path) -> None:
+    """E-67（PR #242 第5巡 Codex P2 是正）: `generated_utc` を地図 bytes から外した
+
+    ため、`_utc_now` の monkeypatch なしの素の 2 回呼び出しでもバイト一致する
+    （Design Memo の「同一入力 → バイト一致」という AC を、生成時刻の monkeypatch
+    という迂回無しに直接検証する）。
+    """
     import yaml as _yaml
 
-    monkeypatch.setattr(harness, "_utc_now", lambda: "2026-08-02T00:00:00+00:00")
     campaign_path = _write_m2e_campaign(tmp_path)
     doc1 = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
     doc2 = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
     assert doc1 == doc2
+    assert "generated_utc" not in doc1
     b1 = _yaml.safe_dump(doc1, sort_keys=True, default_flow_style=False, allow_unicode=True)
     b2 = _yaml.safe_dump(doc2, sort_keys=True, default_flow_style=False, allow_unicode=True)
     assert b1 == b2

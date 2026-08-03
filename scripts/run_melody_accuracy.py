@@ -10290,19 +10290,30 @@ def _assign_m2e_shard_ids(
     `cells` は呼び出し元が既に lexical order で整列済みであること
     （`_m2e_full_cell_registry` が保証する）。戻り値は `(shard_ids, cap, n_shards)`。
 
-    `session_budget`（E-62・PR #242 第4巡 Codex P2 是正）: `inf`/`nan` を拒否する
-    （生成・実行の両受け口——本関数は `generate_m2e_shard_map` と
-    `_require_m2e_shard_map_matches_registry` の双方から呼ばれる共有経路）。
-    `session_budget = inf` だと cap も無限大になり、`N_shards <= R_max` の関所を
-    1 shard のまま素通りして §8.8 の実行回数上限も §8.6 のハング絶対上限も
-    無効化してしまう（`session_budget > 0` だけでは inf を弾けない）。
+    `session_budget`（E-62・PR #242 第4巡 Codex P2 是正）・全入力（E-68・PR #242
+    第5巡 Codex P2 是正）: `inf`/`nan` を拒否する（生成・実行の両受け口——本関数は
+    `generate_m2e_shard_map` と `_require_m2e_shard_map_matches_registry` の双方から
+    呼ばれる共有経路）。`session_budget = inf` だと cap も無限大になり、
+    `N_shards <= R_max` の関所を 1 shard のまま素通りして §8.8 の実行回数上限も
+    §8.6 のハング絶対上限も無効化してしまう。`startup_cost = nan` は
+    `cap = margin*B_session - NaN = NaN` を生み、以降の全比較が `False` になって
+    1 セル容量ゲートも `R_max` ゲートも無検査で素通りする——`t_direct`/`t_stem` の
+    非有限も `max(t_direct, t_stem)` を介して同じ穴になりうる。改変された地図
+    （実行側の再計算はここを経由する）がこれらを持ち込む経路も塞ぐため、4 入力
+    全数を検査する（E-68 の同型穴の列挙原則を実行側にも及ぼす）。
     """
-    if not math.isfinite(session_budget):
-        raise ValueError(
-            f"_assign_m2e_shard_ids: session_budget {session_budget!r} は有限の正数のみ "
-            "許可する（inf/nan は §8.6 のハング絶対上限・§8.8 の実行回数上限を無効化する "
-            "ため拒否する）(fail-closed)"
-        )
+    for _name, _value in (
+        ("session_budget", session_budget),
+        ("startup_cost", startup_cost),
+        ("t_direct", t_direct),
+        ("t_stem", t_stem),
+    ):
+        if not math.isfinite(_value):
+            raise ValueError(
+                f"_assign_m2e_shard_ids: {_name} {_value!r} は有限値のみ許可する（inf/nan は "
+                "§8.6 のハング絶対上限・§8.8 の実行回数上限・1 セル容量ゲートを無効化する "
+                "ため拒否する）(fail-closed・E-62/E-68)"
+            )
     cap = _M2E_SHARD_CAP_MARGIN * session_budget - startup_cost
     if cap <= 0 or cap < max(t_direct, t_stem):
         raise ValueError(
@@ -10326,6 +10337,137 @@ def _assign_m2e_shard_ids(
     return shard_ids, cap, n_shards
 
 
+def _require_m2e_shard_map_finite_input(name: str, value: float, *, allow_zero: bool = False) -> None:
+    """生成器の float 入力に共通の isfinite + 符号検査を統一的に敷く
+
+    （E-68・PR #242 第5巡 Codex P2 是正）。
+
+    `--startup-cost nan` は `startup_cost < 0` を素通りし `cap = margin * B_session -
+    NaN = NaN` を生む——以降の `cap <= 0` 等の全比較が NaN 相手には常に `False` に
+    なるため、1 セル容量ゲートも `R_max` ゲートも無検査で素通りし、1280 セルが
+    まるごと 1 shard に詰め込まれる。`t_direct > 0` のような単純な符号比較だけでは
+    `inf`（正数比較は素通りする）も `nan`（比較は常に `False` になるので符号検査
+    自体は偶然に落ちるが、根本原因は同じ「非有限値が算術に混入する」ことにある）も
+    確実には弾けない——**同型穴の列挙原則**により、生成器の float 入力
+    （`t_direct`/`t_stem`/`startup_cost`/`session_budget`）全数に `math.isfinite`
+    を統一的に要求する（単一のこの関数へ集約）。
+    """
+    ok = math.isfinite(value) and (value >= 0 if allow_zero else value > 0)
+    if not ok:
+        requirement = "0 以上" if allow_zero else "正数"
+        raise ValueError(
+            f"generate_m2e_shard_map: {name} {value!r} は有限の{requirement}のみ許可する "
+            "(fail-closed・E-68)"
+        )
+
+
+def _m2e_completed_cell_keys(
+    cells: "List[Tuple[str, str, str, str, int]]",
+    campaign: "Dict[str, Dict[str, Path]]",
+    cell_store: "str | Path",
+    *,
+    fixtures_by_level: "Dict[str, Dict[str, Any]]",
+    bars_path: Path = BARS_PATH,
+) -> "set":
+    """`cells`（registry の 5-tuple 群）のうち `cell_store` に digest 一致で完了
+
+    済みの鍵集合を返す（E-66・PR #242 第5巡 Codex 是正）。
+
+    判定基準は `_require_prior_m2e_shards_complete` と同一
+    （`_cell_store_record_path` / `_cell_record_mismatches` の resume 判定）——
+    「地図生成器が除外してよい」と「シャード実行機が完了とみなす」を同じ基準に
+    保つ（別基準を作ると両者が食い違い、除外したのに実行機が未完と扱う/その逆が
+    起こりうる）。`fixtures_by_level` は呼び出し元が registry 構築時に既に読取・
+    hash 検証済みのスナップショットで、ここでは再オープンしない（E-57 と同族）。
+    manifest に無い・レコードが無い・壊れている・digest 不一致のいずれも「完了と
+    立証できない」として鍵集合から単に除く（fail-closed——除外の可否は保守的に
+    倒す。パッキング対象に残るだけで、測定自体は妨げない）。
+    """
+    bars, bars_sha256 = load_bars(bars_path)
+    bar_block = bars.verify(bars_sha256)["m2_accuracy_bars"]
+    tolerance_cents = float(bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
+    est_voiced_floor = float(bar_block["est_voiced_confidence_floor"])
+    env_digest = _env_digest()
+    cell_store = Path(cell_store)
+
+    manifest_cache: "Dict[str, Tuple[List[Dict[str, Any]], Path]]" = {}
+    completed: "set" = set()
+    for bed_id, level, clip_id, arm, repeat_index in cells:
+        if level not in manifest_cache:
+            entries, _manifest_sha256, manifest_path = _load_external_manifest(
+                campaign[level]["external_manifest"]
+            )
+            manifest_cache[level] = (entries, manifest_path.parent)
+        entries, manifest_dir = manifest_cache[level]
+        entry_id = _m2e_entry_id(clip_id, bed_id, level)
+        entry = next((e for e in entries if e["id"] == entry_id), None)
+        if entry is None:
+            continue
+        record_path = _cell_store_record_path(
+            cell_store,
+            category=arm,
+            level=level,
+            entry_id=entry_id,
+            repeat_index=repeat_index,
+        )
+        if not record_path.is_file():
+            continue
+        try:
+            inputs = _read_external_clip_inputs(
+                entry_id, entry, manifest_dir=manifest_dir, fixtures=fixtures_by_level[level]
+            )
+            stored = _json_loads_no_dup_keys(
+                record_path.read_bytes(), what=f"cell record {record_path}"
+            )
+        except (ValueError, OSError):
+            continue
+        mismatches = _cell_record_mismatches(
+            stored,
+            category=arm,
+            level=level,
+            entry_id=entry_id,
+            repeat_index=repeat_index,
+            audio_sha256=inputs.audio_sha256,
+            annotation_sha256=inputs.annotation_sha256,
+            env_digest=env_digest,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+            store_role=_CELL_STORE_ROLE_RUN,
+        )
+        if not mismatches:
+            completed.add((bed_id, level, clip_id, arm, repeat_index))
+    return completed
+
+
+def _require_m2e_excluded_cell_store_relative_confined_to_root(value: str) -> Path:
+    """地図の `excluded_completed_cells.cell_store_relative` を ROOT 配下へ封じ込める
+
+    （E-66・PR #242 第5巡 Codex 是正）。E-60 と同じ二段検証（字句——絶対パス・`..`
+    拒否／解決後——ROOT 配下要求）を独立実装として適用する——campaign パス検証
+    （`_require_m2e_campaign_path_confined_to_root`）とは別関数のまま保ち、既に
+    確定した E-60 の挙動・回帰テストへ影響しない。
+    """
+    candidate = Path(value)
+    if candidate.is_absolute():
+        raise ValueError(
+            "shard map: excluded_completed_cells.cell_store_relative が絶対パス "
+            f"{value!r} を指す; repo root からの相対パスのみ許可する (fail-closed)"
+        )
+    if ".." in candidate.parts:
+        raise ValueError(
+            f"shard map: excluded_completed_cells.cell_store_relative の {value!r} が "
+            "`..` 成分を含む; repo root 配下からの遡上を許可しない (fail-closed)"
+        )
+    resolved = (ROOT / candidate).resolve()
+    if not resolved.is_relative_to(ROOT):
+        raise ValueError(
+            f"shard map: excluded_completed_cells.cell_store_relative の {value!r} が "
+            "解決後に repo root の外を指す（symlink 経由の脱出を含む）; repo root 配下のみ "
+            "許可する (fail-closed)"
+        )
+    return resolved
+
+
 def generate_m2e_shard_map(
     *,
     campaign_path: "str | Path",
@@ -10335,12 +10477,22 @@ def generate_m2e_shard_map(
     workers: int,
     session_budget: float = _M2E_DEFAULT_SESSION_BUDGET_S,
     bars_path: Path = BARS_PATH,
+    cell_store: "Optional[str | Path]" = None,
+    campaign_snapshot: "Optional[Tuple[Dict[str, Dict[str, Path]], str]]" = None,
 ) -> "Dict[str, Any]":
     """§8.5 のシャード地図を生成する（生成器 `--make-shard-map` の実体）。
 
     自由変数なし: 入力（`t_direct`/`t_stem`/`startup_cost`/`workers`/`session_budget`/
-    campaign/`bars_path` の中身）が同じなら出力は一意（`generated_utc` を除く——
-    テストは `_utc_now` を monkeypatch してバイト一致を固定する）。
+    campaign/`bars_path` の中身）が同じなら出力は完全にバイト一致する。
+
+    `generated_utc` を持たない（E-67・PR #242 第5巡 Codex P2 是正・Memo AC 不整合の
+    是正）: Design Memo は「地図に生成時刻を記録する」と「同一入力 → バイト一致」を
+    両方要求していたが、壁時計から読む生成時刻を bytes に含めながらバイト一致を
+    謳うのは自己矛盾する（起草バグ）。生成時刻は地図の**内容**ではなく生成
+    **イベント**の provenance なので、地図 bytes からは外し、CLI が生成完了時に
+    `generated at <ISO8601 UTC> / shard map sha256: <hex>` を stdout へ印字する形へ
+    改める（HANDOFF のレシピは stdout を tee するため dated record に残る。日付の
+    永続的な担保は commit 自体が持つ）。
 
     `bars_path`（E-47・PR #242 Codex P2 是正）: CLI `--bars` の指定を registry 構築
     （`repeats_min` の供給元）まで貫通させる。既定はモジュール既定の `BARS_PATH`。
@@ -10354,19 +10506,14 @@ def generate_m2e_shard_map(
     黙って崩れる。実行機（`--shard-id`）は `--workers` 省略時にこの値を採用し、
     明示指定時は一致を要求する（fail-closed）。
     """
-    if not (t_direct > 0):
-        raise ValueError(f"generate_m2e_shard_map: t_direct {t_direct!r} は正数のみ許可する")
-    if not (t_stem > 0):
-        raise ValueError(f"generate_m2e_shard_map: t_stem {t_stem!r} は正数のみ許可する")
-    if startup_cost < 0:
-        raise ValueError(
-            f"generate_m2e_shard_map: startup_cost {startup_cost!r} は 0 以上のみ許可する"
-        )
-    if not (math.isfinite(session_budget) and session_budget > 0):
-        raise ValueError(
-            f"generate_m2e_shard_map: session_budget {session_budget!r} は有限の正数のみ "
-            "許可する（inf/nan は拒否する・E-62）"
-        )
+    # E-68（PR #242 第5巡 Codex P2 是正）: 生成器の float 入力全数（t_direct/t_stem/
+    # startup_cost/session_budget）へ isfinite + 符号検査を統一的に敷く（単一の
+    # バリデータへ集約。E-62 で session_budget に敷いた isfinite を他の 3 入力へも
+    # 及ぼす——同型穴の列挙原則）。
+    _require_m2e_shard_map_finite_input("t_direct", t_direct)
+    _require_m2e_shard_map_finite_input("t_stem", t_stem)
+    _require_m2e_shard_map_finite_input("startup_cost", startup_cost, allow_zero=True)
+    _require_m2e_shard_map_finite_input("session_budget", session_budget)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError(
             f"generate_m2e_shard_map: workers {workers!r} は 1 以上の整数のみ許可する"
@@ -10411,7 +10558,6 @@ def generate_m2e_shard_map(
     ]
     return {
         "schema_version": _M2E_SHARD_MAP_SCHEMA,
-        "generated_utc": _utc_now(),
         "inputs": {
             "startup_cost_s": startup_cost,
             "t_direct_s": t_direct,
@@ -10593,6 +10739,19 @@ def _require_m2e_shard_map_matches_registry(
         startup_cost=float(inputs["startup_cost_s"]),
         session_budget=float(inputs["session_budget_s"]),
     )
+    # E-69（PR #242 第5巡 Codex P2 是正）: 再計算した割当・n_shards が整合していても
+    # `R_max` を超えうる——記録された入力（S/T_direct/T_stem/B_session）を改変すれば、
+    # 割当・n_shards を「その改変後の入力からは正しく」再生成できてしまうため、上の
+    # 完全一致検査だけでは通ってしまう。しかし `generate_m2e_shard_map` は
+    # `n_shards > R_max` を fail-closed で拒否しており、**生成器が出し得ない成果物**
+    # のはずである。読み戻し（実行側の検証）でも同じ `R_max` 契約を再適用し、
+    # 生成器をバイパスした地図を締め出す。
+    if expected_n_shards > _M2E_R_MAX:
+        raise ValueError(
+            f"shard map: 記録された入力から再計算した n_shards={expected_n_shards} が "
+            f"R_max={_M2E_R_MAX} を超える; generate_m2e_shard_map はこの入力の組を "
+            "拒否するはずであり、生成器をバイパスした地図を実行しない (fail-closed・E-69)"
+        )
     expected_shard_id_by_key = dict(zip(registry_cells, expected_shard_ids))
     mismatched = sorted(
         key for key in registry_set if declared_shard_id.get(key) != expected_shard_id_by_key[key]
@@ -11370,7 +11529,9 @@ def main() -> int:
         help="設計 §8.7 のセルチェックポイント用ディレクトリ（opt-in・既定 None）。"
         "指定すると外部素材カテゴリの各 clip を 1 セルとして記録し、既存レコードが "
         "入力/環境 digest と一致すれば再測定をスキップする。未指定時は report に "
-        "新フィールドが一切増えない（挙動無変更）。指定時は --repeat-index が必須",
+        "新フィールドが一切増えない（挙動無変更）。指定時は --repeat-index が必須。"
+        "--make-shard-map と併用すると（E-66・§8.5「未完セルについてのみ再適用」）、"
+        "digest 一致で完了済みのセルをパッキングから除外し残セルのみで再地図を組む",
     )
     parser.add_argument(
         "--repeat-index",
@@ -11432,8 +11593,9 @@ def main() -> int:
         "--make-shard-map",
         action="store_true",
         help="C6（設計 §8.5）: campaign + T_direct/T_stem/S/B_session から §8.5 の凍結"
-        "アルゴリズムでシャード地図を生成する。同一入力からはバイト一致の地図が出る "
-        "（generated_utc を除く）。--evaluate/--census/--shard-id とは排他",
+        "アルゴリズムでシャード地図を生成する。同一入力からは完全にバイト一致の地図が "
+        "出る（生成時刻は地図に含めず stdout へ印字する・E-67）。"
+        "--evaluate/--census/--shard-id とは排他",
     )
     parser.add_argument(
         "--campaign",
@@ -11600,6 +11762,13 @@ def main() -> int:
         )
         _atomic_write_text(args.out, payload)
         print(f"wrote shard map to {args.out}")
+        # E-67（PR #242 第5巡 Codex P2 是正）: 生成時刻は地図 bytes から外した
+        # （同一入力 → バイト一致という Design Memo AC と矛盾しないように）ので、
+        # provenance として stdout へ印字する（HANDOFF のレシピは tee するため
+        # dated record に残る）。sha256 は書き出したのと同一の encoded bytes から
+        # 導出する（census の E-25 / shard 実行記録の E-56 と同じ流儀）。
+        print(f"  generated at {_utc_now()}")
+        print(f"  shard map sha256: {hashlib.sha256(payload.encode('utf-8')).hexdigest()}")
         print(f"  n_shards: {shard_map['n_shards']} / n_cells: {shard_map['n_cells']}")
         print(f"  cap_s: {shard_map['inputs']['cap_s']:.3f}")
         return 0
