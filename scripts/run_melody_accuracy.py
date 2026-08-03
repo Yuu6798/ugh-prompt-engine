@@ -11066,20 +11066,30 @@ def _require_m2e_shard_map_matches_registry(
     # 捨てていた（cap は `_cap` に破棄、margin/n_cells はそもそも比較していなかった）
     # ——地図が cells/shard_id を無傷に保ったまま、これら派生メタデータだけを改変
     # しても検出できなかった。E-49/E-69 と同枠で、再計算値との完全一致を要求する。
-    if float(inputs.get("cap_s", float("nan"))) != expected_cap:
+    # E-116（PR #242 第22巡 Codex 是正）: `float(x)`/`int(x)` は非数値スカラー
+    # （文字列・bool）や `1.5`（切り捨て）を強制の前に検査せず黙って受理して
+    # しまう——E-83/E-97/E-101/E-102 と同型の穴。cap_s/margin/n_cells の 3 フィールド
+    # を無強制の型検査ヘルパ経由に統一し、この地図数値フィールド型検証ファミリー
+    # を終端する（同型穴の一括掃討）。
+    if _require_m2e_shard_map_numeric_field("cap_s", inputs.get("cap_s")) != expected_cap:
         raise ValueError(
             f"shard map: inputs.cap_s {inputs.get('cap_s')!r} が再計算値 {expected_cap!r} "
             "と不一致 (fail-closed・E-75)"
         )
-    if float(inputs.get("margin", float("nan"))) != _M2E_SHARD_CAP_MARGIN:
+    if (
+        _require_m2e_shard_map_numeric_field("margin", inputs.get("margin"))
+        != _M2E_SHARD_CAP_MARGIN
+    ):
         raise ValueError(
             f"shard map: inputs.margin {inputs.get('margin')!r} が凍結値 "
             f"{_M2E_SHARD_CAP_MARGIN!r} と不一致 (fail-closed・E-75・設計 §8.5)"
         )
-    if int(map_doc.get("n_cells", -1)) != len(expected_registry_cells):
+    if _require_m2e_shard_map_integer_field(
+        "n_cells", map_doc.get("n_cells")
+    ) != len(expected_registry_cells):
         raise ValueError(
             f"shard map: n_cells {map_doc.get('n_cells')!r} が再計算値 "
-            f"{len(expected_registry_cells)!r} と不一致 (fail-closed・E-75)"
+            f"{len(expected_registry_cells)!r} と不一致 (fail-closed・E-75・E-116)"
         )
     # E-69（PR #242 第5巡 Codex P2 是正）: 再計算した割当・n_shards が整合していても
     # `R_max` を超えうる——記録された入力（S/T_direct/T_stem/B_session）を改変すれば、
@@ -11122,10 +11132,16 @@ def _m2e_shard_cells_for(map_doc: "Dict[str, Any]", shard_id: int) -> "List[Dict
 
     地図の `cells` は §8.5 order で書かれている（`generate_m2e_shard_map` が保証）ので、
     ここでの絞り込みは順序を破らない。各要素に `cost`（秒）を付与する。
+
+    E-116（PR #242 第22巡 Codex 是正）: `float(x)` は非数値スカラー（文字列・bool）
+    を強制の前に検査せず黙って成功させてしまう——呼び出し元
+    （`_require_m2e_shard_map_matches_registry` 経由の `execute_m2e_shard`）は既に
+    `t_direct_s`/`t_stem_s` を検証済みだが、E-101（`session_budget`）と同じく
+    execute 側でも同じ無強制ヘルパで読む一貫性を優先する。
     """
     inputs = map_doc["inputs"]
-    t_direct = float(inputs["t_direct_s"])
-    t_stem = float(inputs["t_stem_s"])
+    t_direct = _require_m2e_shard_map_numeric_field("t_direct_s", inputs["t_direct_s"])
+    t_stem = _require_m2e_shard_map_numeric_field("t_stem_s", inputs["t_stem_s"])
     return [
         dict(record, cost=_m2e_shard_cell_cost(record["arm"], t_direct=t_direct, t_stem=t_stem))
         for record in map_doc["cells"]
@@ -12158,8 +12174,16 @@ def execute_m2e_shard(
             "shard_map_sha256": map_sha256,
             "session_budget_s": session_budget,
             "hang_grace_s": _M2E_HANG_GRACE_S,
-            "t_direct_s": float(map_doc["inputs"]["t_direct_s"]),
-            "t_stem_s": float(map_doc["inputs"]["t_stem_s"]),
+            # E-116（PR #242 第22巡 Codex 是正）: `float(x)` は非数値スカラーを
+            # 無強制で受理してしまう——ここも E-101/session_budget と同じ無強制
+            # ヘルパで読む一貫性を優先する（既に `_require_m2e_shard_map_matches_
+            # registry` で検証済みだが、execute 側の消費点でも同じ形で敷く）。
+            "t_direct_s": _require_m2e_shard_map_numeric_field(
+                "t_direct_s", map_doc["inputs"]["t_direct_s"]
+            ),
+            "t_stem_s": _require_m2e_shard_map_numeric_field(
+                "t_stem_s", map_doc["inputs"]["t_stem_s"]
+            ),
             "elapsed_seconds": result["elapsed_seconds"],
             "cells_total": len(shard_cells),
             "cells_completed": len(measured_completed),

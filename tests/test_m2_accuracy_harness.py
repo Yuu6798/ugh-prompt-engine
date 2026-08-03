@@ -12475,6 +12475,24 @@ def test_m2e_shard_cells_for_preserves_order_and_attaches_cost(tmp_path: Path) -
         assert cell["cost"] == expected_cost
 
 
+@pytest.mark.parametrize(("field", "bad_value"), [("t_direct_s", True), ("t_stem_s", "10.0")])
+def test_m2e_shard_cells_for_rejects_non_numeric_scheduling_inputs(
+    field: str, bad_value: Any, tmp_path: Path
+) -> None:
+    """E-116（PR #242 第22巡 Codex 是正）: `_m2e_shard_cells_for` 単体でも
+
+    `t_direct_s`/`t_stem_s` の `float()` 無強制受理（`true` を 1.0 に・`"10.0"` を
+    黙って変換）を拒否する——`_require_m2e_shard_map_matches_registry` 経由の検証
+    だけに頼らず、消費点自身でも同じ無強制ヘルパで読む（E-101 と同型の穴の掃討）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["inputs"][field] = bad_value
+    with pytest.raises(ValueError, match="数値"):
+        harness._m2e_shard_cells_for(mutated, 0)
+
+
 # ---------------------------------------------------------------------------
 # 昇順実行 + 「飛ばせるのは完了済み shard のみ」（`_require_prior_m2e_shards_complete`）
 # ---------------------------------------------------------------------------
@@ -14692,6 +14710,44 @@ def test_require_m2e_shard_map_matches_registry_rejects_a_tampered_n_cells(
     mutated = copy.deepcopy(doc)
     mutated["n_cells"] = mutated["n_cells"] + 1
     with pytest.raises(ValueError, match="n_cells"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+@pytest.mark.parametrize("bad_n_cells", ["1280", 1280.5])
+def test_require_m2e_shard_map_matches_registry_rejects_a_coerced_n_cells(
+    bad_n_cells: Any, tmp_path: Path
+) -> None:
+    """E-116（PR #242 第22巡 Codex 是正）: 地図の `n_cells` が非 bool の整数で
+
+    なければ（`"1280"`・`1280.5`）、`int()` で黙って丸めず fail-closed で拒否する
+    （E-83/E-97/E-102 と同型。`n_cells` は最後まで `int(...)` 強制のまま残っていた
+    穴で、本ケースが型検証ファミリーの終端）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["n_cells"] = bad_n_cells
+    with pytest.raises(ValueError, match="整数"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+@pytest.mark.parametrize(("field", "bad_value"), [("cap_s", "41.5"), ("margin", True)])
+def test_require_m2e_shard_map_matches_registry_rejects_non_numeric_derived_metadata(
+    field: str, bad_value: Any, tmp_path: Path
+) -> None:
+    """E-116（PR #242 第22巡 Codex 是正）: 地図の派生メタデータ（`cap_s`/`margin`）が
+
+    `float()` へ黙って強制変換されうる非数値（文字列・bool）だと readback で
+    fail-closed で拒否する（E-101 の `t_direct_s`/`session_budget_s` と同型の穴の
+    掃討: `n_cells` に加え `cap_s`/`margin` も無強制ヘルパへ統一した）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    mutated["inputs"][field] = bad_value
+    with pytest.raises(ValueError, match="数値"):
         harness._require_m2e_shard_map_matches_registry(mutated, campaign)
 
 

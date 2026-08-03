@@ -1868,6 +1868,13 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   なのに、意味のない空地図が commit 対象として積み上がりうる。残セル 0 件を
   fail-closed の明示エラーで拒否し、地図を生成しない形へ改めた（HANDOFF
   レシピにも分岐注記。回帰テスト付き）。
+- **E-116**: `n_cells` の readback 検証だけが `int(...)` 強制のまま残っていた
+  （`workers`/`n_shards`/`repeats_min`/`repeat_index`/`shard_id` は E-83/E-97/
+  E-101/E-102/E-108/E-112 で既に無強制ヘルパへ移行済み）。C6 セクション全体を
+  grep で掃討し、`n_cells` に加え `cap_s`/`margin`（readback の派生メタデータ
+  比較）と `t_direct_s`/`t_stem_s`（`_m2e_shard_cells_for` の消費点）に残っていた
+  同型の `int()`/`float()` 無検査強制も同じ無強制ヘルパへ統一した。地図由来の
+  数値フィールドを扱う型検証ファミリーはこれで終端する（回帰テスト付き）。
 
 ## 9. provenance と pin
 
