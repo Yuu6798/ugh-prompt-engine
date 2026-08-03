@@ -11927,6 +11927,44 @@ def _m2e_best_effort_spill_payload(doc: "Dict[str, Any]") -> str:
         return repr(doc)
 
 
+def _m2e_manifest_referenced_paths(
+    campaign: "Dict[str, Dict[str, Path]]",
+) -> "set[Path]":
+    """`campaign` の全水準の manifest が参照する `audio_path`/`annotation_path` の
+
+    解決済みパス集合を返す（E-123・PR #242 第27巡 Codex 是正）。
+
+    地図生成（`--make-shard-map --cell-store` 指定時の除外真実性スキャン——
+    `_m2e_completed_cell_keys`）・実行（`--shard-id` の先行 shard 検査・task
+    構築）はどちらも campaign の manifest を実際に読み、参照する audio/
+    annotation の実ファイルを開く。preflight の保護パス集合（campaign/bars/
+    manifest ファイル自体・fixtures ファイル自体）はこれまで manifest の
+    **ファイルパス**しか含んでおらず、manifest が**指す**個々の audio/
+    annotation の実体パスは含んでいなかった——`--out` がそのいずれかと同じ
+    パスを指すと、地図生成/実行の書き出しが実測入力そのものを上書きしうる。
+    ここで manifest を実際に読み、参照先を展開して返す。呼び出し元が
+    `protected` 集合へ合流させる。
+    """
+    referenced: "set[Path]" = set()
+    for level_paths in campaign.values():
+        entries, _manifest_sha256, manifest_path = _load_external_manifest(
+            level_paths["external_manifest"]
+        )
+        manifest_dir = manifest_path.parent
+        for entry in entries:
+            referenced.add(
+                _resolve_external_member_path(
+                    manifest_dir, entry["audio_path"], what="audio_path"
+                )
+            )
+            referenced.add(
+                _resolve_external_member_path(
+                    manifest_dir, entry["annotation_path"], what="annotation_path"
+                )
+            )
+    return referenced
+
+
 def execute_m2e_shard(
     *,
     map_doc: "Dict[str, Any]",
@@ -12553,6 +12591,17 @@ def main() -> int:
         protected = {Path(args.campaign).resolve(), Path(args.bars).resolve()}
         for level_paths in campaign_for_preflight.values():
             protected.update(level_paths.values())
+        # E-123（PR #242 第27巡 Codex 是正）: `--cell-store` 指定時、地図生成は
+        # 除外真実性スキャン（`_m2e_completed_cell_keys`）で campaign の manifest
+        # を実際に読む——manifest が指す audio_path/annotation_path の実体は、
+        # 直上の `level_paths.values()`（manifest/fixtures の**ファイルパス**
+        # 自体）には含まれていない。`--out` がそのいずれかと同じパスを指すと、
+        # 地図の書き出しが実測入力そのものを上書きしうるため、保護集合へ展開
+        # して加える（`--cell-store` 未指定時は地図生成が manifest を一切読まない
+        # ので対象外のまま——「manifest 未生成のうちに地図を作れる」という §8.5
+        # の設計判断を壊さない）。
+        if args.cell_store is not None:
+            protected.update(_m2e_manifest_referenced_paths(campaign_for_preflight))
         # E-117（PR #242 第24巡 Codex 是正）: `--out` を入口で 1 回だけ resolve し、
         # 以降の保護パス検査・no-clobber 検査・予約取得・claim 書き込み・公開
         # （atomic write）・token 検証・ロールバックの全段でこの単一スナップショット
@@ -12627,6 +12676,20 @@ def main() -> int:
                 f"({type(exc).__name__}: {exc}); --force の原状復帰の基準（既存内容）を "
                 "立証できないまま予約・上書きを進めない (fail-closed・E-119)"
             ) from exc
+        # E-122（PR #242 第27巡 Codex 是正）: `--force` が非空の既存レコードを
+        # 上書き対象にする場合、原本には一切書き込まず、最終の atomic 置換まで
+        # 温存する——以前は claim token を予約直後に原本へ書き込んでいたため、
+        # 生成中に SIGKILL・電源断等でプロセスが不意に落ちると、ロールバックの
+        # 拠り所である `out_original_bytes`（メモリ上のみ）は失われ、原本自体も
+        # token で上書きされたまま永久に失われる経路があった。所有権は
+        # サイドカー（`<out>.claim`・O_CREAT|O_EXCL）だけで検証すれば十分
+        # （E-94 で既にこれが唯一の真の排他プリミティブになっている——`--out`
+        # 本体への token 書き込みは E-85 以来の診断用の副産物に過ぎない）ので、
+        # 非空原本ケースはこれを省略する。absent/0 バイト予約ケース（`--out
+        # "$(mktemp ...)"`）は失うものが無いため、従来どおり token 書き込み・
+        # 読み戻し検証を維持する（同じコード経路を素直に流用でき、変更を
+        # 最小化できる）。
+        out_has_nonempty_original = out_original_bytes not in (None, b"")
         shard_map_claim_token = (
             "m2e-shard-map-reservation/1\n"
             f"pid={os.getpid()}\n"
@@ -12642,7 +12705,8 @@ def main() -> int:
                 "手動削除して再実行する (fail-closed・E-111)"
             ) from None
         try:
-            _atomic_write_text(out_resolved, shard_map_claim_token)
+            if not out_has_nonempty_original:
+                _atomic_write_text(out_resolved, shard_map_claim_token)
             try:
                 shard_map = generate_m2e_shard_map(
                     campaign_path=args.campaign,
@@ -12656,7 +12720,10 @@ def main() -> int:
                     campaign_snapshot=(campaign_for_preflight, campaign_sha256_for_preflight),
                 )
             except BaseException:
-                _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
+                # E-122: 非空原本ケースは原本に一切書いていないので、ロールバック
+                # （原状復帰）自体が不要——サイドカー解放（`finally`）だけで済む。
+                if not out_has_nonempty_original:
+                    _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
             # E-121（PR #242 第26巡 Codex 是正）: 直列化（`yaml.safe_dump`）を含む
             # 「生成完了後〜公開完了まで」の残り全段を、直上の `generate_m2e_shard_map`
@@ -12675,11 +12742,23 @@ def main() -> int:
                 payload = yaml.safe_dump(
                     shard_map, sort_keys=True, default_flow_style=False, allow_unicode=True
                 )
-                try:
-                    current_out_content = out_resolved.read_text(encoding="utf-8")
-                except OSError:
-                    current_out_content = None
-                if current_out_content != shard_map_claim_token:
+                # E-122: 非空原本ケースは原本を読み戻さず、所有権の唯一の根拠
+                # （サイドカー自身）の内容が自分の token のままであることを確認
+                # する——`_acquire_m2e_out_reservation` の O_CREAT|O_EXCL が
+                # 唯一の書き手を保証しているため、この照合は実質的に常に成立
+                # する自己整合性チェックだが、E-85 の「公開直前に所有権を再確認
+                # する」精神は absent/0 バイトケースと同じ形で保つ。
+                if out_has_nonempty_original:
+                    try:
+                        current_token_content = out_claim_sidecar.read_text(encoding="utf-8")
+                    except OSError:
+                        current_token_content = None
+                else:
+                    try:
+                        current_token_content = out_resolved.read_text(encoding="utf-8")
+                    except OSError:
+                        current_token_content = None
+                if current_token_content != shard_map_claim_token:
                     mismatch_already_handled = True
                     spill_path = out_resolved.with_name(
                         f"{out_resolved.name}.spill-{uuid.uuid4().hex[:8]}.yaml"
@@ -12703,7 +12782,14 @@ def main() -> int:
                         )
                     except BaseException:
                         pass
-                    _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
+                    # E-122: 非空原本ケースは `_atomic_write_text(out_resolved, payload)`
+                    # 自体が失敗した場合のみここに来うるが、その失敗は「置換を試みて
+                    # 失敗した」だけであり、原本はまだ無傷（`os.replace` は失敗時に
+                    # 元ファイルを変更しない）——ロールバック（書き戻し）は不要かつ、
+                    # 元 bytes を明示的に書き戻す操作自体が新たな失敗点を増やすだけ
+                    # なので行わない。
+                    if not out_has_nonempty_original:
+                        _rollback_m2e_out_reservation(out_resolved, original_bytes=out_original_bytes)
                 raise
             print(f"wrote shard map to {args.out}")
         finally:
@@ -12814,6 +12900,12 @@ def main() -> int:
         }
         for level_paths in campaign.values():
             protected.update(level_paths.values())
+        # E-123（PR #242 第27巡 Codex 是正）: 実行は常に manifest を読む（先行
+        # shard 検査・task 構築）ので、manifest が指す audio_path/annotation_path
+        # の実体も無条件で保護集合へ展開する（`--make-shard-map` 側と同型——
+        # manifest の**ファイルパス**自体は既に保護されているが、manifest が
+        # **指す**実ファイルは含まれていなかった）。
+        protected.update(_m2e_manifest_referenced_paths(campaign))
         cell_store_root = Path(args.cell_store).resolve()
         # E-90（PR #242 第12巡 Codex 是正）: E-81 の逆方向——解決済み保護入力
         # （campaign が指す manifest/fixtures・shard-map・bars）が `--cell-store` の

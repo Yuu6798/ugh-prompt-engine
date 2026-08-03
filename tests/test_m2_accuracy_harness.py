@@ -15269,6 +15269,51 @@ def test_main_make_shard_map_rejects_an_out_nested_inside_the_cell_store(
         harness.main()
 
 
+def test_main_make_shard_map_rejects_an_out_matching_a_manifest_referenced_audio_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-123（PR #242 第27巡 Codex 是正）: `--cell-store` 指定時、地図生成は除外
+
+    真実性スキャンで campaign の manifest を実際に読む——manifest が指す
+    `audio_path` と `--out` が同じパスを指す起動を、予約（サイドカー作成）より
+    前に fail-closed で拒否する（manifest の**ファイルパス**自体は既に保護
+    されていたが、manifest が**指す**実ファイルは対象外だった穴の是正）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    first_level = harness._M2E_LEVEL_LADDER[0]
+    entries, _sha, manifest_path = harness._load_external_manifest(
+        campaign[first_level]["external_manifest"]
+    )
+    audio_path = harness._resolve_external_member_path(
+        manifest_path.parent, entries[0]["audio_path"], what="audio_path"
+    )
+    original_audio_bytes = audio_path.read_bytes()
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    sidecar_path = audio_path.with_name(f"{audio_path.name}.claim")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--cell-store", str(cell_store),
+            "--out", str(audio_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="地図生成の入力"):
+        harness.main()
+    assert not sidecar_path.exists()  # 予約より前に拒否——サイドカーすら作らない
+    assert audio_path.read_bytes() == original_audio_bytes  # 実体は無傷
+
+
 def test_execute_m2e_shard_does_not_quarantine_a_pre_existing_record_reconciled_from_a_hang(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -15620,6 +15665,57 @@ def test_main_shard_id_rejects_when_a_protected_input_is_inside_the_cell_store(
     )
     with pytest.raises(SystemExit, match="出力ツリー"):
         harness.main()
+
+
+def test_main_shard_id_rejects_an_out_matching_a_manifest_referenced_audio_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-123（PR #242 第27巡 Codex 是正）: `--shard-id` は常に manifest を読む
+
+    （先行 shard 検査・task 構築）——manifest が指す `audio_path` と `--out` が
+    同じパスを指す起動を、予約（サイドカー作成）・`execute_m2e_shard` の
+    どちらより前に fail-closed で拒否する。
+    """
+    import yaml as _yaml
+
+    map_doc, _map_sha256, campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    first_level = harness._M2E_LEVEL_LADDER[0]
+    entries, _sha, manifest_path = harness._load_external_manifest(
+        campaign[first_level]["external_manifest"]
+    )
+    audio_path = harness._resolve_external_member_path(
+        manifest_path.parent, entries[0]["audio_path"], what="audio_path"
+    )
+    original_audio_bytes = audio_path.read_bytes()
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    sidecar_path = audio_path.with_name(f"{audio_path.name}.claim")
+
+    def _must_not_be_called(**kwargs: Any) -> "Dict[str, Any]":
+        raise AssertionError("execute_m2e_shard must not run")
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _must_not_be_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(audio_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="shard 実行の入力"):
+        harness.main()
+    assert not sidecar_path.exists()  # 予約より前に拒否——サイドカーすら作らない
+    assert audio_path.read_bytes() == original_audio_bytes  # 実体は無傷
 
 
 @pytest.mark.parametrize(
@@ -16781,6 +16877,97 @@ def test_main_make_shard_map_restores_a_non_utf8_forced_existing_out_as_raw_byte
     with pytest.raises(RuntimeError, match="simulated map generation failure"):
         harness.main()
     assert out_path.read_bytes() == original_bytes
+
+
+def test_main_make_shard_map_never_writes_to_a_forced_nonempty_out_until_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-122（PR #242 第27巡 Codex 是正）: `--force` が非空の既存レコードを上書き
+
+    対象にする場合、原本には claim token すら書き込まない——生成が失敗しても、
+    `_rollback_m2e_out_reservation` による事後の書き戻しに頼らず、原本は物理的に
+    一度も変更されないまま残る（以前は claim token を予約直後に原本へ書き込んで
+    いたため、生成中に SIGKILL・電源断等でプロセスが不意に落ちると、ロールバック
+    の拠り所である `out_original_bytes`（メモリ上のみ）が失われ、原本自体も
+    token で上書きされたまま永久に失われる経路があった）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    original_bytes = b"pre-existing: content\n"
+    out_path.write_bytes(original_bytes)
+    sidecar_path = tmp_path / "shard_map.yaml.claim"
+
+    def _fake_generate_that_fails(**kwargs: Any) -> "Dict[str, Any]":
+        raise RuntimeError("simulated map generation failure")
+
+    monkeypatch.setattr(harness, "generate_m2e_shard_map", _fake_generate_that_fails)
+
+    write_targets: "List[Path]" = []
+    real_atomic_write_text = harness._atomic_write_text
+
+    def _tracking_atomic_write_text(path: Any, text: str) -> None:
+        write_targets.append(Path(path).resolve())
+        real_atomic_write_text(path, text)
+
+    monkeypatch.setattr(harness, "_atomic_write_text", _tracking_atomic_write_text)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--force",
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="simulated map generation failure"):
+        harness.main()
+    assert out_path.read_bytes() == original_bytes
+    assert out_path.resolve() not in write_targets  # 原本には一度も書いていない
+    assert not sidecar_path.exists()
+
+
+def test_main_make_shard_map_replaces_a_forced_nonempty_out_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-122: 非空原本ケースでも、生成・公開が成功すれば --out は新しい地図の
+
+    bytes へ置換される（唯一の書き込みが最終 atomic 置換であることの成功系
+    確認——失敗系は
+    `test_main_make_shard_map_never_writes_to_a_forced_nonempty_out_until_publication`）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    out_path = tmp_path / "shard_map.yaml"
+    original_content = "pre-existing: content\n"
+    out_path.write_text(original_content, encoding="utf-8")
+    sidecar_path = tmp_path / "shard_map.yaml.claim"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--make-shard-map",
+            "--campaign", str(campaign_path),
+            "--t-direct", "5.0",
+            "--t-stem", "10.0",
+            "--startup-cost", "2.0",
+            "--session-budget", "50.0",
+            "--workers", "1",
+            "--force",
+            "--out", str(out_path),
+        ],
+    )
+    assert harness.main() == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert content != original_content
+    assert "n_shards" in content
+    assert not sidecar_path.exists()
 
 
 def test_main_make_shard_map_aborts_before_reservation_when_forced_out_is_unreadable(

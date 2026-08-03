@@ -1923,6 +1923,27 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   （「別起動が claim を差し替えていた」分岐は既存どおり spill 済み・ロールバック
   対象外のまま維持。回帰テスト付き）。
 
+**E-122〜E-123（PR #242 第27巡）。**
+
+- **E-122**: `--force` が非空の既存レコードを上書き対象にする場合でも、予約
+  直後に claim token を原本へ書き込んでいた——生成中に SIGKILL・電源断等で
+  プロセスが不意に落ちると、ロールバックの拠り所（`out_original_bytes`）は
+  メモリ上にしか無く、原本自体も token で上書きされたまま永久に失われる経路が
+  あった。所有権の唯一の真の根拠は既にサイドカー（`<out>.claim`・O_CREAT|
+  O_EXCL・E-94）なので、非空原本ケースは原本に一切書き込まず、公開直前の token
+  検証もサイドカー自身の内容確認に置き換え、最終 atomic 置換の 1 回だけを原本へ
+  の唯一の書き込みとした（absent/0 バイト予約ケースは失うものが無いため従来の
+  token 書き込み・読み戻し検証を維持。回帰テスト付き）。
+- **E-123**: `--cell-store` 指定時の地図生成（除外真実性スキャン）・shard 実行
+  （先行 shard 検査・task 構築）はどちらも campaign の manifest を実際に読み、
+  参照する audio/annotation の実ファイルを開くが、preflight の保護パス集合は
+  manifest の**ファイルパス**自体しか含んでおらず、manifest が**指す**個々の
+  実体パスは含んでいなかった——`--out` がそのいずれかと同じパスを指すと、地図/
+  実行記録の書き出しが実測入力そのものを上書きしうる。`_m2e_manifest_
+  referenced_paths` で全水準の manifest を読み、参照先を保護集合へ展開して
+  加えた（`--make-shard-map` は `--cell-store` 指定時のみ・`--shard-id` は常時。
+  回帰テスト付き）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**
