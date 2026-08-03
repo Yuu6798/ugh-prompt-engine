@@ -1661,6 +1661,34 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
   （E-51 系）が地図生成側には抜けていた。同じ判定を `--make-shard-map` 分岐
   にも追加した。
 
+**E-82〜E-85（PR #242 第10巡）。**
+
+- **E-82**: `_reconcile_truncated_m2e_cell`（E-54）が、打ち切り時点で見つけた
+  digest 一致レコードを無条件に「この起動が書いた」として `resumed: False` /
+  `written_paths` へ計上していた——dispatch **前**から既に有効だったレコード
+  （前回起動の resume 対象）も同じ扱いになり、後続の pin 失敗時にこの起動と
+  無関係な既存レコードまで隔離してしまいうる。dispatch 前にセルごとの有効
+  レコード存在をスナップショットし（`_pre_dispatch_had_valid_record`）、
+  reconcile ではこれに照らして resumed / written_paths を正しく区別する形へ
+  改めた。
+- **E-83**: `int(map_doc["inputs"]["workers"])` は非 bool の正整数以外
+  （`1.5` は切り捨てて 1 に、`true` は 1 に）を黙って正常値として受理して
+  しまっていた——地図の workers は §8.4 のコスト契約の前提（校正時の P）
+  なので、生成器 `generate_m2e_shard_map` と同じ形状検証（非 bool・正整数）を
+  読取側にも敷いた。
+- **E-84**: `started_utc`（shard 実行記録の provenance）の捕捉が、`start`
+  （単調クロック・E-76 で入口へ移した）より後（claim 取得・地図検証・
+  manifest 読取後、`run_m2e_shard_queue` 呼び出し直前）にあり、`start`/
+  `elapsed_seconds` が指す起点と自己矛盾していた。`started_utc` の捕捉も
+  `start` と同時に本関数入口へ移した。
+- **E-85**: `--shard-id --out` の no-clobber 検査（0 バイト予約は許容）通過〜
+  公開（`_atomic_write_text`）までの窓が無防備だった——`execute_m2e_shard` は
+  数時間かかりうるため、この窓で別起動が同じ 0 バイト予約 / 不存在 `--out` を
+  狙って同じ検査を通過しうる。検査直後に起動固有 claim（shard_id + PID +
+  ISO8601）を `--out` へ atomic write し（以後の別起動は既存 no-clobber で
+  弾かれる）、公開直前に現在の内容が自分の claim のままであることを確認して
+  から置換する（不一致なら実行記録を一時パスへ退避してから fail-closed）。
+
 ## 9. provenance と pin
 
 新規事前登録ファイル **`tests/fixtures/melody_bench/m2e_bed_fixtures.yaml`**

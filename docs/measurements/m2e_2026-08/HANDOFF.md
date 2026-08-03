@@ -277,6 +277,13 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
 #    完了する（cells_completed == cells_total）までは同じ shard_id を再実行してから
 #    次の shard_id へ進む（E-73）。素朴に for ループで N をインクリメントするだけの
 #    旧レシピでは、未完のまま次 shard へ進んで先行 shard 完了検査に必ず落ちていた。
+#    E-88（PR #242 第12巡 Codex 是正）: リトライは「exit 0 かつ実行記録 JSON が
+#    正常に書かれており未完セルが残っている」場合のみに限定する——**非ゼロ exit は
+#    即座にレシピ全体を終了する**（失敗の永久リトライを禁止）。claim 衝突・pin
+#    失敗・不正地図はいずれもリトライでは解決しないオペレータ判断案件であり、
+#    黙って回し続けると気付かれないまま資源を浪費する。`--out`（mktemp 予約）が
+#    exit 0 なのに 0 バイトのまま（実行記録が書き出されていない）場合も異常として
+#    即終了する。
 for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml'))['n_shards'] - 1)") ))); do
   while :; do
     OUT="$(mktemp "build/m2e/shard_run_${N}_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.json")"
@@ -287,9 +294,23 @@ for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('do
         --cell-store build/m2e/store_A --workers "$P" \
         --out "$OUT" \
         | tee "$(mktemp "build/m2e/shard_run_${N}_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
+    # `set -o pipefail`（冒頭で宣言済み）により、`$?` は tee ではなく実行機自体の
+    # exit status を指す。非ゼロは即終了（E-88・失敗の永久リトライ禁止）。
+    STATUS=$?
+    if [ "$STATUS" -ne 0 ]; then
+      echo "shard $N の実行が非ゼロ exit ($STATUS) で終了した。claim 衝突・pin 失敗・" >&2
+      echo "不正地図等の可能性がある——原因を確認してから再実行すること (fail-closed・E-88)" >&2
+      exit "$STATUS"
+    fi
+    if [ ! -s "$OUT" ]; then
+      echo "shard $N: --out $OUT が exit 0 なのに空のまま（実行記録が書かれていない）。" >&2
+      echo "異常終了の疑い——原因を確認してから再実行すること (fail-closed・E-88)" >&2
+      exit 1
+    fi
     # 実行記録を検査する: cells_completed == cells_total（未完 3 種がすべて空）に
-    # なっていれば shard N は完了——次の shard_id へ進む。そうでなければ同一
-    # shard_id を再実行する。
+    # なっていれば shard N は完了——次の shard_id へ進む。そうでなければ（exit 0 かつ
+    # 実行記録が正常に書かれた上で未完セルが残っている場合のみ）同一 shard_id を
+    # 再実行する。
     python -c "
 import json, sys
 with open('$OUT') as f:

@@ -10559,8 +10559,12 @@ def generate_m2e_shard_map(
         # E-52: campaign_sha256 と parse を単一読取から導出する。
         campaign, campaign_sha256 = _load_m2e_campaign_with_sha256(campaign_path)
 
+    # E-89（PR #242 第12巡 Codex 是正）: bars を本関数の入口で一度だけ読み、registry
+    # 構築・除外スキャン（--cell-store 指定時）の双方へ同一スナップショットを渡す
+    # （E-78 の生成側対応・TOCTOU 族の完備化——実行側では既に同じ形へ揃えている）。
+    bars, bars_sha256 = load_bars(bars_path)
     cells, fixtures_sha256_by_level, repeats_min, bars_sha256, fixtures_by_level = (
-        _m2e_full_cell_registry(campaign, bars_path=bars_path)
+        _m2e_full_cell_registry(campaign, bars_path=bars_path, bars_snapshot=(bars, bars_sha256))
     )
 
     # E-66: --cell-store 指定時は digest 一致で完了済みのセルをパッキングから除外する。
@@ -10574,6 +10578,7 @@ def generate_m2e_shard_map(
             cell_store_resolved,
             fixtures_by_level=fixtures_by_level,
             bars_path=bars_path,
+            bars_snapshot=(bars, bars_sha256),
         )
         excluded_cell_store_relative = _repo_relative_path(cell_store_resolved)
         if excluded_keys and excluded_cell_store_relative is None:
@@ -12334,6 +12339,17 @@ def main() -> int:
         for level_paths in campaign.values():
             protected.update(level_paths.values())
         cell_store_root = Path(args.cell_store).resolve()
+        # E-90（PR #242 第12巡 Codex 是正）: E-81 の逆方向——解決済み保護入力
+        # （campaign が指す manifest/fixtures・shard-map・bars）が `--cell-store` の
+        # root と同一または配下にあると、公開されたセルチェックポイントを「入力」
+        # として消費してしまいうる（出力ツリーに入力を置かせない）。
+        for protected_path in protected:
+            if protected_path == cell_store_root or cell_store_root in protected_path.parents:
+                raise SystemExit(
+                    f"--cell-store {args.cell_store} 配下に shard 実行の入力 "
+                    f"（{protected_path}）がある; 出力ツリー（cell_store）を入力として "
+                    "消費しない (fail-closed・E-90)"
+                )
         out_resolved = Path(args.out).resolve()
         if out_resolved in protected:
             raise SystemExit(

@@ -15224,16 +15224,27 @@ def test_execute_m2e_shard_captures_started_utc_at_the_shard_entry(
     import _shard_queue_fakes
 
     map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+
+    # `_utc_now()` は秒精度——実 sleep で秒境界をまたぐのはテストとして不安定
+    # なので、呼び出し順を区別できる単調増加タイムスタンプを返す fake に差し替える。
+    utc_call_count = [0]
+
+    def _fake_utc_now() -> str:
+        idx = utc_call_count[0]
+        utc_call_count[0] += 1
+        return f"2026-01-01T00:00:{idx:02d}+00:00"
+
+    monkeypatch.setattr(harness, "_utc_now", _fake_utc_now)
+
     real_validate = harness._require_m2e_shard_map_matches_registry
     preflight_finished_utc: "List[str]" = []
 
-    def _slow_validate(*args: Any, **kwargs: Any) -> Any:
-        time.sleep(0.2)
+    def _marking_validate(*args: Any, **kwargs: Any) -> Any:
         result = real_validate(*args, **kwargs)
         preflight_finished_utc.append(harness._utc_now())
         return result
 
-    monkeypatch.setattr(harness, "_require_m2e_shard_map_matches_registry", _slow_validate)
+    monkeypatch.setattr(harness, "_require_m2e_shard_map_matches_registry", _marking_validate)
     result = harness.execute_m2e_shard(
         map_doc=map_doc,
         map_sha256=map_sha256,
@@ -15246,6 +15257,141 @@ def test_execute_m2e_shard_captures_started_utc_at_the_shard_entry(
         require_thread_pinning=False,
     )
     assert preflight_finished_utc
-    # started_utc は地図検証（0.2s の遅延を模した preflight）より前に捕捉されている
+    # started_utc は地図検証（preflight）完了マーカーより前に捕捉されている
     # こと——ISO 8601 は辞書順比較が時刻順と一致する。
     assert result["started_utc"] < preflight_finished_utc[0]
+
+
+def test_main_shard_id_reserves_out_through_execution_so_a_second_launch_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-85（PR #242 第10巡 Codex 是正）: no-clobber 検査通過直後に `--out` へ
+
+    起動固有 claim を書くため、`execute_m2e_shard` 実行中（第 1 起動が claim を
+    保持している間）に同じ `--out` へ向けた第 2 起動は、既存の no-clobber 検査
+    （0 バイトのみ許容）で拒否される（以前は検査通過〜公開の窓が無防備だった）。
+    """
+    import yaml as _yaml
+
+    map_doc, map_sha256, campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    out_path = tmp_path / "shard_run.json"
+    out_path.write_bytes(b"")  # mktemp の 0 バイト予約
+
+    second_launch_error: "List[BaseException]" = []
+
+    def _fake_execute_that_races(**kwargs: Any) -> "Dict[str, Any]":
+        # 第 1 起動が claim を保持したまま「実行中」の状態を模し、同じ --out へ
+        # 向けた第 2 起動を試みる。
+        try:
+            harness.main()
+        except SystemExit as exc:
+            second_launch_error.append(exc)
+        return _fake_shard_run_record(map_doc, 0)
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _fake_execute_that_races)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(out_path),
+        ],
+    )
+    assert harness.main() == 0
+    assert len(second_launch_error) == 1
+    assert "0 バイトではない" in str(second_launch_error[0])
+
+
+def test_main_shard_id_rejects_publication_when_the_out_claim_was_replaced_mid_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-85: 公開直前に `--out` の内容が自分の claim と一致しなければ、実行記録を
+
+    失わないよう一時パスへ退避してから fail-closed で拒否する。
+    """
+    import yaml as _yaml
+
+    map_doc, map_sha256, campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+    out_path = tmp_path / "shard_run.json"
+
+    def _fake_execute_that_tampers(**kwargs: Any) -> "Dict[str, Any]":
+        # 「実行中」に別プロセスが claim を差し替えた状況を模す。
+        out_path.write_text("someone else's content", encoding="utf-8")
+        return _fake_shard_run_record(map_doc, 0)
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _fake_execute_that_tampers)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="claim"):
+        harness.main()
+    # out_path 自体は改変された内容のまま（勝手に上書きしない）。実行記録は spill
+    # ファイルへ退避されていること。
+    assert out_path.read_text(encoding="utf-8") == "someone else's content"
+    spill_files = list(tmp_path.glob("shard_run.json.spill-*.json"))
+    assert len(spill_files) == 1
+    spilled = json.loads(spill_files[0].read_text(encoding="utf-8"))
+    assert spilled["shard_id"] == 0
+
+
+def test_generate_m2e_shard_map_reuses_the_bars_snapshot_for_exclusion_scanning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-89（PR #242 第12巡 Codex 是正）: `--cell-store` 指定時の除外スキャン
+
+    （`_m2e_completed_cell_keys`）は registry 構築時に読んだ bars スナップショットを
+    再利用する——生成の途中で bars ファイルが壊れても、除外スキャンは再オープン
+    せず影響されない（E-78 の生成側対応・TOCTOU 族の完備化）。破損は `load_bars`
+    が確実に拒否する形（`m2_accuracy_bars` ブロック欠落）にする——もし除外スキャン
+    が再オープンしていれば、この破損ファイルの parse で必ず失敗する。
+    """
+    import yaml as _yaml
+
+    campaign_path = _write_m2e_campaign(tmp_path)
+    custom_bars_path = _write_custom_base_bars(tmp_path, repeats_min=2)
+    cell_store = _m2e_root_cell_store(tmp_path)
+
+    real_registry = harness._m2e_full_cell_registry
+
+    def _registry_then_corrupt(*args: Any, **kwargs: Any) -> Any:
+        result = real_registry(*args, **kwargs)
+        bars_doc = _yaml.safe_load(custom_bars_path.read_text(encoding="utf-8"))
+        del bars_doc["m2_accuracy_bars"]
+        custom_bars_path.write_text(_yaml.safe_dump(bars_doc), encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(harness, "_m2e_full_cell_registry", _registry_then_corrupt)
+    doc = harness.generate_m2e_shard_map(
+        campaign_path=campaign_path,
+        bars_path=custom_bars_path,
+        cell_store=cell_store,
+        **_C6_TEST_SHARD_KWARGS,
+    )
+    assert doc["excluded_completed_cells"] == {"cell_store_relative": None, "cells": []}
