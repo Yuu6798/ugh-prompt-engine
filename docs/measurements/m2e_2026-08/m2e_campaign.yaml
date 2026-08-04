@@ -1,0 +1,16 @@
+# M2e campaign 実ファイル（2026-08-03 生成分・vremix_out_2026-08-04 由来）。
+# テンプレート: m2e_campaign.example.yaml。パスのみを持つ（設計判断 2）。
+schema_version: "m2e-campaign/0.1"
+levels:
+  "+12dB":
+    external_manifest: build/m2e/manifest_p12.json
+    external_fixtures: tests/fixtures/melody_bench/m2e_vremix_fixtures_p12.yaml
+  "+6dB":
+    external_manifest: build/m2e/manifest_p06.json
+    external_fixtures: tests/fixtures/melody_bench/m2e_vremix_fixtures_p06.yaml
+  "0dB":
+    external_manifest: build/m2e/manifest_p00.json
+    external_fixtures: tests/fixtures/melody_bench/m2e_vremix_fixtures_p00.yaml
+  "-6dB":
+    external_manifest: build/m2e/manifest_m06.json
+    external_fixtures: tests/fixtures/melody_bench/m2e_vremix_fixtures_m06.yaml
