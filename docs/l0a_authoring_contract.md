@@ -351,16 +351,41 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
     結果を返す（既存の byte-determinism は不変）。
 13. **値×verdict 整合ファミリーの終端宣言**（PR #246 Codex P2 review 16
     （brightness）→ 17 巡目 A（key）→ 18 巡目 C（structure）→ 19 巡目
-    （型形状））: 8/9/11 は一貫して「成功側 verdict のみ値の整合を強制し、
-    失敗側 verdict は `AxisReport` の `Any` 設計のまま無制約に保つ」という
-    方針を貫く。19 巡目でこの方針を「値そのものの整合（帯域・異名同音・
-    列一致）」から「値の**型形状**」まで踏み込んで完結させた——成功側
-    verdict は型不正な値（`brightness`/`key` の非 `str`、`structure` の
+    （型形状）→ 20 巡目（bpm・数値軸の但し書き））: 8/9/11/14 は一貫して
+    「成功側 verdict のみ値の整合を強制し、失敗側 verdict は
+    `AxisReport` の `Any` 設計のまま無制約に保つ」という方針を貫く。19
+    巡目でこの方針を「値そのものの整合（帯域・異名同音・列一致）」から
+    「値の**型形状**」まで踏み込んで完結させた——成功側 verdict は型不正な
+    値（`brightness`/`key`/`bpm` の非 `str`・非数値、`structure` の
     非「全要素 `str` の `list`」）を経由して整合チェックを回避できなく
-    なった。既知3軸（`brightness`/`key`/`structure`）の成功側整合はこれで
-    型・値の両面から閉じている。将来 L0b が新しい既知軸を追加する場合は、
-    この3件と同じ「成功側は型形状+値整合の両方を強制、失敗側は `Any` の
-    まま」というテンプレートに従うこと。
+    なった。既知4軸（`bpm`/`brightness`/`key`/`structure`）の成功側整合は
+    これで型・値の両面から閉じている。**但し書き（20 巡目）**: `bpm` は
+    他3軸と異なり値そのものの等価判定をスキーマに持たない（型形状のみ
+    強制）——理由は下記項目14参照。将来 L0b が新しい既知軸を追加する
+    場合は、その軸が離散ラベル（成功側は型形状+値整合の両方を強制）か
+    連続値・計器定義の一致規則を持つ軸（成功側は型形状のみ強制）かを
+    まず判定してから、対応するテンプレートに従うこと。
+14. **bpm の既知軸化 + 成功側の型形状強制**（PR #246 Codex P2 review 20
+    巡目）: `bpm` は凍結信頼軸表（下記 (e) 節、`runtime_gate` 付き）に
+    収載済みの既知軸だが、`_AXIS_VERDICTS` に載っていなかったため 4 の
+    境界宣言（未知軸は `Verdict` 全語彙を許容）に落ち、`verdict:
+    "exact_match"`（`structure` 専用のはずの語彙）や任意型の値を伴う成功
+    が正規形として受理されてしまっていた。`_AXIS_VERDICTS["bpm"] =
+    frozenset({"preserved", "deviated"})` を追加し、`key`/`brightness`
+    と同じ物理軸の verdict 語彙に固定した。さらに `verdict` が成功側
+    （`preserved`）のとき `requirement`/`observed` は**両方「有限数値」
+    （`int` または有限 `float`、`bool` 除外、`math.isfinite`）でなければ
+    ならない**（19 巡目のテンプレート）。**数値の等価判定はこのスキーマに
+    入れない**——`bpm` の一致は許容誤差・丸め・octave/halving 帯域を含む
+    計器定義（`svp_rpe.roundtrip` の `values_match`/`runtime_gate`）に
+    属する関心事であり、離散ラベル軸（`key`/`brightness`/`structure`）と
+    異なり report スキーマが独自に等価規則を再定義すべきではないという
+    設計判断（二重管理の回避）。**失敗側 verdict（`deviated`）は型不正な
+    値でも引き続き受理する**（`Any` 設計を維持——19 巡目と同じ一貫方針）。
+    **ドリフト検出との整合**: `bpm` は `derive_trusted_axes()` の採用軸
+    （10 の `_KNOWN_EXCLUDED_AXES` には含まれない）であり、10 のドリフト
+    テスト（`test_report_known_excluded_axes_matches_roundtrip_fields_
+    minus_derived_axes`）の前提と矛盾しないことを確認済み（green のまま）。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
 `sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を構築し、

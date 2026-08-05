@@ -43,6 +43,7 @@ Verdict = Literal["preserved", "deviated", "exact_match", "mismatch"]
 # ここでの制約は「軸名が分かっているときの verdict 語彙の妥当性」のみで、
 # 軸集合そのものを固定しない）。
 _AXIS_VERDICTS: dict[str, frozenset[str]] = {
+    "bpm": frozenset({"preserved", "deviated"}),
     "key": frozenset({"preserved", "deviated"}),
     "brightness": frozenset({"preserved", "deviated"}),
     "structure": frozenset({"exact_match", "mismatch"}),
@@ -108,6 +109,22 @@ def _is_str_list(value: Any) -> bool:
     ここに合わせて複製する必要はない。"""
 
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _is_finite_numeric(value: Any) -> bool:
+    """`value` が「有限数値」（`int` または有限 `float`）かどうか
+    （PR #246 Codex P2 review 20 巡目）。`bool` は `int` のサブクラスだが
+    除外する（`True`/`False` は `bpm` の型不正——他所の `bool` 除外
+    パターン、`_validate_position_match_rate` 等と同じ理由）。`float` は
+    `math.isfinite` で `NaN`/`inf`/`-inf` を拒否する。"""
+
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return False
 
 
 def _validate_position_match_rate(value: Any) -> None:
@@ -305,6 +322,31 @@ class AuthoringDiffReport(BaseModel):
     report スキーマは軸集合そのものを固定しないという既存方針
     （docstring 上段）を維持するため。
 
+    bpm の既知軸化 + 成功側の型形状強制（PR #246 Codex P2 review 20 巡目）:
+    `bpm` は凍結信頼軸表（`config/authoring_trusted_axes_l0.yaml`）に
+    `runtime_gate` 付きで収載済みの既知軸だが、`_AXIS_VERDICTS` に載って
+    いなかったため上記の境界宣言に落ちて未知軸扱いになり、
+    `verdict: "exact_match"`（`structure` 専用のはずの語彙）や任意の型の
+    `requirement`/`observed` を伴う成功が正規形として受理されてしまって
+    いた。`_AXIS_VERDICTS["bpm"] = frozenset({"preserved", "deviated"})`
+    を追加し、`key`/`brightness` と同じ物理軸の verdict 語彙に固定した
+    （`exact_match`/`mismatch` は `structure` 専用のまま拒否される）。
+    さらに `verdict` が成功側（`preserved`）のとき、`requirement`/
+    `observed` は**両方「有限数値」（`int` または有限 `float`、`bool`
+    除外、`math.isfinite`）でなければならない**（19 巡目のテンプレート
+    ——成功側は型形状を強制、失敗側は `Any` のまま）。**数値の等価判定は
+    このスキーマに入れない**——`bpm` の一致判定は許容誤差・丸め・
+    octave/halving 帯域を含む計器定義（`svp_rpe.roundtrip` の
+    `values_match`/`runtime_gate`）に属する関心事であり、離散ラベル軸
+    （`key` の異名同音等価・`brightness` の帯域所属・`structure` の列
+    完全一致）とは性質が異なる——report スキーマ側が独自に「何 BPM 差まで
+    一致とみなすか」を再定義すべきではない、という線引き（下記の値×
+    verdict 整合ファミリー終端宣言の但し書きを参照）。**失敗側 verdict
+    （`deviated`）は型不正な値でも引き続き受理する**（`Any` 設計を維持
+    ——19 巡目と同じ一貫方針）。**ドリフト検出との整合**: `bpm` は
+    `derive_trusted_axes()` の採用軸（`_KNOWN_EXCLUDED_AXES` には含まれ
+    ない）であり、17 巡目 B のドリフトテストの前提と矛盾しない。
+
     brightness の信頼帯強制（PR #246 Codex P2 review 16 巡目 + 19 巡目、
     8 巡目 B の verdict×band 整合と同族——凍結信頼軸表
     `config/authoring_trusted_axes_l0.yaml` の `axes.brightness.
@@ -379,17 +421,32 @@ class AuthoringDiffReport(BaseModel):
 
     **値×verdict 整合ファミリーの終端宣言（PR #246 Codex P2 review 16
     （brightness）→ 17 巡目 A（key）→ 18 巡目 C（structure）→ 19 巡目
-    （型形状））**: この一連のガードは一貫して「成功側 verdict のみ値の
-    整合を強制し、失敗側 verdict は `AxisReport` の `Any` 設計のまま
-    無制約に保つ」という方針を貫く。19 巡目でこの方針を「値そのものの
-    整合（帯域・異名同音・列一致）」から「値の**型形状**」まで踏み込んで
-    完結させた——成功側 verdict は型不正な値（`requirement=1` のような
-    非 `str`、`requirement="intro,chorus"` のような非 `list`）を経由して
-    整合チェックを回避できなくなった。既知3軸（`brightness`/`key`/
-    `structure`）の成功側整合はこれで型・値の両面から閉じている。将来
-    L0b が新しい既知軸を追加する場合は、この3件と同じ「成功側は型形状+
-    値整合の両方を強制、失敗側は `Any` のまま」というテンプレートに
-    従うこと。
+    （型形状）→ 20 巡目（bpm・数値軸の但し書き））**: この一連のガードは
+    一貫して「成功側 verdict のみ値の整合を強制し、失敗側 verdict は
+    `AxisReport` の `Any` 設計のまま無制約に保つ」という方針を貫く。19
+    巡目でこの方針を「値そのものの整合（帯域・異名同音・列一致）」から
+    「値の**型形状**」まで踏み込んで完結させた——成功側 verdict は型不正な
+    値（`requirement=1` のような非 `str`、`requirement="intro,chorus"`
+    のような非 `list`）を経由して整合チェックを回避できなくなった。既知
+    4軸（`bpm`/`brightness`/`key`/`structure`）の成功側整合はこれで型・
+    値の両面から閉じている。**但し書き（20 巡目、`bpm` の非対称性）**:
+    `bpm` は他3軸と異なり**値そのものの等価判定をスキーマに持たない**
+    ——型形状（有限数値であること）のみを強制し、`requirement`/`observed`
+    の数値としての一致・不一致は判定しない。これは見落としではなく設計
+    判断: `key`（異名同音）・`brightness`（帯域所属）・`structure`（列
+    完全一致）はいずれも**離散ラベル**の等価性であり、その等価規則は
+    report スキーマがそのまま採用してよい安定した定義を持つ。一方 `bpm`
+    は連続値であり、一致判定には許容誤差・丸め・octave/halving 帯域と
+    いった**計器固有の判定規則**（`svp_rpe.roundtrip` の
+    `values_match`/`runtime_gate`）が絡む——これを report スキーマ側で
+    再定義すると、計器側の規則変更のたびにスキーマも追従させる必要が
+    生じ、二重管理になる。したがって `bpm` の数値一致は生産器
+    （`svp_rpe.roundtrip`）の責務のまま残し、report スキーマは「型として
+    有限数値か」という形式的な健全性のみを見る。将来 L0b が新しい既知軸を
+    追加する場合は、その軸が離散ラベル（この3件と同じ「成功側は型形状+
+    値整合の両方を強制」テンプレート）か連続値・計器定義の一致規則を持つ
+    軸（`bpm` と同じ「成功側は型形状のみ強制、値の等価はスキーマ外」）
+    かをまず判定してから、対応するテンプレートに従うこと。
 
     `observed_sections` の軸限定（PR #246 Codex P2 review 13 巡目 + 14 巡目、
     7 巡目 A と同族の軸不整合）: `AxisReport.observed_sections` は
@@ -460,6 +517,23 @@ class AuthoringDiffReport(BaseModel):
                 )
         if errors:
             raise ValueError("; ".join(errors))
+        return self
+
+    @model_validator(mode="after")
+    def _bpm_success_requires_finite_numeric_value(self) -> Self:
+        axis_report = self.axes.get("bpm")
+        if axis_report is None or axis_report.verdict != "preserved":
+            return self
+        requirement = axis_report.requirement
+        observed = axis_report.observed
+        if not _is_finite_numeric(requirement) or not _is_finite_numeric(observed):
+            raise ValueError(
+                f"axes['bpm'].verdict='preserved' but requirement={requirement!r} and "
+                f"observed={observed!r} must both be a finite numeric value (int or float, "
+                "bool excluded, NaN/inf rejected) — a success verdict requires a well-formed "
+                "value, not just an unchecked one (19 巡目 type-shape template). Numeric "
+                "equality itself is intentionally not enforced here — see class docstring."
+            )
         return self
 
     @model_validator(mode="after")

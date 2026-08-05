@@ -334,6 +334,91 @@ def test_authoring_diff_report_accepts_any_frozen_verdict_for_unknown_axis():
     assert report.axes["tempo_stability"].verdict == "mismatch"
 
 
+def test_authoring_diff_report_rejects_bpm_exact_match_as_vocabulary_violation():
+    """PR #246 Codex P2 review 20 巡目: `bpm` is a frozen trusted axis
+    (with a `runtime_gate`) but was missing from `_AXIS_VERDICTS`, so it
+    fell into the "unknown axis, accept any Verdict" boundary declaration
+    — letting `exact_match` (a `structure`-only token) be claimed for
+    `bpm`. `bpm` is now a known physical axis with the same
+    `preserved`/`deviated` vocabulary as `key`/`brightness`."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "bpm": AxisReport(
+                    requirement=120, observed=120, verdict="exact_match", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_rejects_bpm_preserved_with_string_value():
+    """PR #246 Codex P2 review 20 巡目: success verdicts on `bpm` must
+    enforce the 19 巡目 type-shape template — `requirement="120"` (a
+    digit string, not a number) claiming `preserved` must be rejected."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "bpm": AxisReport(
+                    requirement="120", observed=120, verdict="preserved", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_rejects_bpm_preserved_with_nan_value():
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "bpm": AxisReport(
+                    requirement=float("nan"), observed=120, verdict="preserved", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_bpm_preserved_with_unequal_finite_numbers():
+    """PR #246 Codex P2 review 20 巡目: numeric equality is deliberately
+    NOT enforced by this schema for `bpm` — a success verdict only
+    requires both values to be finite numeric, not that they agree. BPM
+    matching (tolerance/rounding/octave-halving) is the extractor's
+    concern (`svp_rpe.roundtrip`), not the report schema's — this test is
+    the explicit regression guard for that design boundary."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "bpm": AxisReport(requirement=120, observed=118.5, verdict="preserved", band="measured")
+        },
+    )
+    assert report.axes["bpm"].verdict == "preserved"
+
+
+def test_authoring_diff_report_accepts_bpm_deviated_with_any_value():
+    """Regression guard: the failure-side verdict (`deviated`) keeps the
+    `AxisReport.Any` design unconstrained even for type-malformed
+    values — 20 巡目's type-shape enforcement is success-side only."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "bpm": AxisReport(
+                requirement="not-a-number", observed=None, verdict="deviated", band="measured"
+            )
+        },
+    )
+    assert report.axes["bpm"].verdict == "deviated"
+
+
 def test_authoring_diff_report_rejects_brightness_preserved_with_bright_requirement():
     """PR #246 Codex P2 review 16 巡目: the frozen trusted-axis table
     (`config/authoring_trusted_axes_l0.yaml` axes.brightness.
