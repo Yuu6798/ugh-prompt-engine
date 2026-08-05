@@ -87,7 +87,7 @@ runner_at_measurement:
   # scripts hardened across several post-hoc review rounds), L0b's scripts
   # are being introduced fresh in this same change — there is no prior
   # version to distinguish from, so this pins the single introducing commit.
-  measured_at_commit: "0f598a1c1ec54767b3577a02012e02ea63a75bd7"
+  measured_at_commit: "0f598a107f97406f70298a3f12016a1be181dd60"
   measured_at_commit_note: >-
     The commit that introduced examples/l0b_loop/ (scripts + frozen inputs +
     this ledger's original placeholder). The git_blob_sha1 values below are
