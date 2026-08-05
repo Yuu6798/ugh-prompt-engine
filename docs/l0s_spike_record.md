@@ -121,13 +121,25 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
   自己申告 + ツール使用数の事後確認で運用した（今回 5/5 で使用 0）。L0b の
   自動閉ループでは、ツールを物理的に持たない実行形態を検討する（D2 の機械的
   強制）。
-- **公開範囲の強制はスパイク中は未実装だった**（受理 Score が契約禁止キー
-  `fixity` / `control_profile` 等を含んでいても記号検証が `pass` してしまい、
-  off-contract 記録に落ちない欠陥）。PR #245 の Codex レビューで検出し、
-  `validate_score.py` に canonical 検証の前段として公開範囲チェックを追加して
-  閉鎖した。本スパイクの 5 周回はいずれも禁止キーを含まないため、新版
-  validator で再検証しても `validation.json` は既存記録と完全一致し、
-  evidence は無傷。
+- **公開範囲の強制はスパイク中は未実装だった**（受理 Score が契約禁止キーを
+  含んでいても記号検証が `pass` してしまい、off-contract 記録に落ちない欠陥）。
+  PR #245 の Codex レビューで 2 巡にわたり検出・是正し、「公開範囲 ≠ canonical」
+  ファミリーを全数掃討して終端した:
+  - **1 巡目**（`12d4e26`）: トップレベルキーのみの突合。`fixity` /
+    `control_profile` のような契約非掲載キーの top-level 混入を拒否。
+  - **2 巡目**（同一 PR、この commit）: 突合をトップレベルから contract.md §1 の
+    公開スキーマ全階層へ拡張——各階層の許可キー集合（`semantic.lyrics_presence`
+    のような契約非掲載のネストされたキーも拒否）、リテラル型（`physical.bpm`
+    は int のみ。canonical `CompositionScore` 側は digit-string を int へ
+    正規化するため、`bpm: "96"` は canonical 単体では通ってしまうことを確認
+    済み——公開範囲チェックだけが検出できる差分）、契約が明記する 2 つの
+    列挙（`physical.brightness` / `events.chord_progression[].root`・
+    `.quality`）まで逐語で強制。
+  `validate_score.py` は両巡とも canonical 検証の前段として実装した。本スパイク
+  の 5 周回 + 陽性対照はいずれも禁止キー・型逸脱を含まないため、新版 validator
+  で再検証しても `validation.json` は既存記録と完全一致し、evidence は無傷。
+  この逐語強制を超える意味的妥当性（値の妥当域など）は本チェックのスコープ外
+  で、L0a の記号検証ゲート凍結設計に持ち越す（境界宣言）。
 
 ## 4. §5 判定と L0a への引き継ぎ
 
