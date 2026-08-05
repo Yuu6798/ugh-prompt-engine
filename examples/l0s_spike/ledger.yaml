@@ -37,7 +37,21 @@ recorded_utc: "2026-08-05T05:44:55Z"
 
 deps_lock:
   file: deps/pip_freeze.txt
-  sha256: "a9e2682576c0b0f20a16e582a797ef5b2f09dd5c5dc6fb8f26f93f019630be51"
+  sha256: "68a85653193fa0ae03926f57eb74cf69b2ad5f03960ddfe72f5308bd8ee3aeae"
+  superseded_sha256:
+    value: "a9e2682576c0b0f20a16e582a797ef5b2f09dd5c5dc6fb8f26f93f019630be51"
+    reason: >-
+      旧 pip freeze には svp_rpe 自身の editable self-install 行
+      (`-e git+https://.../ugh-prompt-engine@306add7914...#egg=svp_rpe`)
+      が含まれており、到達不能な WIP コミット 306add7914c80f1a0dd48c521100f6062c6d2846
+      （engine_state 節が是正済みの旧 engine_commit と同一値）を指していた。
+      この行を除去して是正した（Codex P2 7巡目レビュー、engine_state
+      （5巡目 B）の provenance ファミリーの取り残し）。svp_rpe エンジン実体の
+      pin は deps lock の責務ではなく engine_state（到達可能な base_commit
+      + src/tests 無変更の実測検証）と runner_at_measurement（runner
+      script/frozen fixture の blob sha256）が担う——deps_lock は
+      サードパーティ依存のみを pin する会計に整理した。サードパーティ依存の行は
+      1 バイトも変更していない（この 1 行の削除のみが diff、実測確認済み）。
 
 pinned_inputs:
   task_md:

@@ -214,6 +214,28 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
   `"H minor"`/`"waltz"`）はいずれも記号ゲートで `fail` し measure まで
   進まなくなったことを確認し、既存 5 周回 + 陽性対照は pass のまま
   validation.json が既存記録と完全一致（evidence 無傷）を確認した。
+- **ledger.yaml の provenance が到達不能な WIP コミットを指していた**
+  （旧 `engine_commit`（`306add7914...`）は origin/main から到達不能な
+  ローカル WIP コミット参照で、`git merge-base --is-ancestor` の failure
+  を実測。この pin を辿ってもエンジン実体を再構成できなかった）。PR #245
+  の Codex レビュー 5〜7 巡目で検出・是正した:
+  - **5 巡目 B**（`2745bd9`）: `engine_commit` を `engine_state` 節へ置換
+    （到達可能な `base_commit` = `git merge-base origin/main HEAD` の結果 +
+    本ブランチが `src/`/`tests/` を無変更である実測確認）し、
+    `runner_at_measurement` 節を新設して全計測時点
+    （`3eb25e1..4b98e7b`）で使われていた `validate_score.py`/
+    `measure_round.py`/`frozen/*` の blob sha256 を pin した。旧値は
+    `superseded_engine_commit` として透明に注記のまま保持。
+  - **7 巡目**（`<pending>`）: 同じ「到達不能 WIP コミット参照」が
+    `deps/pip_freeze.txt` にも残っていた——先頭の editable self-install 行
+    （`-e git+.../ugh-prompt-engine@306add7914...#egg=svp_rpe`）が旧
+    `engine_commit` と同じ到達不能コミットを指しており、5 巡目 B の
+    provenance 是正の取り残しだった。この 1 行のみを除去し（サードパーティ
+    依存の行は 1 バイトも変更していない——diff がこの 1 行の削除のみである
+    ことを実測確認）、`ledger.yaml` の `deps_lock.sha256` を更新、旧値は
+    `superseded_sha256` として理由付きで透明に保持した。svp_rpe エンジン
+    実体の pin は deps lock の責務ではなく `engine_state`/
+    `runner_at_measurement` が担う、という会計を明文化した。
 
 ## 4. §5 判定と L0a への引き継ぎ
 
