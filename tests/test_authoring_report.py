@@ -114,6 +114,56 @@ def test_authoring_diff_report_rejects_contradictory_nested_symbolic_validation(
         )
 
 
+def test_authoring_diff_report_rejects_failed_validation_with_axes():
+    """PR #246 Codex P2 review 10 巡目: a `status='fail'` symbolic
+    validation report must not carry `axes` — 正本 §3's flow only reaches
+    measurement ([3]) after the symbolic gate ([2]) passes, so a failed
+    gate result with measured-looking axes is contradictory provenance."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(
+                status="fail",
+                errors=[AuthoringErrorItem(where="physical.bpm", message="bad", kind="type")],
+            ),
+            axes={
+                "key": AxisReport(
+                    requirement="D minor", observed="D minor", verdict="preserved", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_failed_validation_with_empty_axes():
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(
+            status="fail",
+            errors=[AuthoringErrorItem(where="physical.bpm", message="bad", kind="type")],
+        ),
+        axes={},
+    )
+    assert report.axes == {}
+
+
+def test_authoring_diff_report_accepts_passed_validation_with_or_without_axes():
+    """Regression guard: `status='pass'` reports are unaffected by the
+    fail-side `axes`-must-be-empty constraint, whether or not axes are
+    present."""
+
+    AuthoringDiffReport(round=1, symbolic_validation=SymbolicValidationResult(status="pass"), axes={})
+    AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "key": AxisReport(
+                requirement="D minor", observed="D minor", verdict="preserved", band="measured"
+            )
+        },
+    )
+
+
 @pytest.mark.parametrize("path", ROUND_REPORTS, ids=lambda p: p.parent.name)
 def test_historical_report_parses_under_new_schema(path: Path):
     """L0-s's real report.json (rounds/round{1..5}/report.json) is backward

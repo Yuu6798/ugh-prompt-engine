@@ -184,6 +184,15 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    `preserved` のような「帯域外なのに成功を主張する」矛盾組は構成不能。
    失敗側 verdict（`deviated`/`mismatch`）は非 `measured` band でも許容
    したまま（「未確認だが成功も主張していない」正直な報告は制約しない）。
+6. **`symbolic_validation.status`×`axes` の provenance 整合**（PR #246
+   Codex P2 review 10 巡目、4〜5 巡目の `SymbolicValidationResult` 内
+   `status`×`errors` 整合と同族）: `status == "fail"` の報告は `axes` が
+   空でなければならない。正本 §3 のフロー（`[2] 記号検証ゲート` を通過
+   した Score だけが `[3] 実行と計測` へ進む）上、記号検証に落ちた Score
+   は決して計測されない——`axes` に測定済みらしき値が乗っている
+   `status: fail` の報告は、フローの因果関係と矛盾する provenance であり
+   構成不能にする（`AuthoringDiffReport` の `model_validator`）。
+   `status == "pass"` では `axes` の空/非空いずれも許容する。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
 `sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を構築し、

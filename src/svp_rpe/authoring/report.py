@@ -223,6 +223,17 @@ class AuthoringDiffReport(BaseModel):
     （将来 L0b が追加する軸）は `Verdict` の全語彙をそのまま許容する——この
     report スキーマは軸集合そのものを固定しないという既存方針
     （docstring 上段）を維持するため。
+
+    `symbolic_validation.status`×`axes` の provenance 整合（PR #246 Codex
+    P2 review 10 巡目、4〜5 巡目の `SymbolicValidationResult` 内
+    `status`×`errors` 整合と同族）: `status == "fail"` の報告は `axes` が
+    空でなければならない。正本 §3 のフロー（`[2] 記号検証ゲート` を通過
+    した Score だけが `[3] 実行と計測` へ進む）上、記号検証に落ちた Score
+    は決して計測されない——`axes` に測定済みらしき値が乗っている
+    `symbolic_validation.status: fail` の報告は、フローの因果関係と矛盾
+    する provenance であり構成不能にする。`status == "pass"` では `axes`
+    の空/非空いずれも許容する（合格直後でまだ軸別計測を報告していない
+    中間状態などを排除しない）。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -245,6 +256,17 @@ class AuthoringDiffReport(BaseModel):
                 )
         if errors:
             raise ValueError("; ".join(errors))
+        return self
+
+    @model_validator(mode="after")
+    def _failed_symbolic_validation_has_no_axes(self) -> Self:
+        if self.symbolic_validation.status == "fail" and self.axes:
+            raise ValueError(
+                "symbolic_validation.status='fail' must not carry axes "
+                f"(got {sorted(self.axes)!r}) — a Score that fails the symbolic gate never "
+                "reaches measurement (正本 §3: [2] gate -> [3] measure only on pass), so "
+                "measured-looking axes on a failed report is contradictory provenance"
+            )
         return self
 
 
