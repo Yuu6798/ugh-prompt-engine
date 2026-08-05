@@ -1,0 +1,39 @@
+# authoring_trusted_axes_l0.yaml — L0a 信頼軸表（凍結）。
+#
+# schema_version: authoring-trusted-axes/1.0
+#
+# 生成物ではなく凍結物: `src/svp_rpe/authoring/trusted_axes.py:derive_trusted_axes()`
+# が出典計器（R0 roundtrip diagnose / K1 grip map / AR4 observe structure
+# domain）から機械的に導出した結果をこのファイルへ書き写して凍結している。
+# `tests/test_trusted_axes.py` が「再導出 == このファイル」を enforce する
+# （ドリフト検出）。手で編集して更新してはならない——出典計器側の変更に伴い
+# 再導出結果が変わったら、このファイルも再導出結果へ機械的に同期し直すこと
+# （導出ロジック自体の docstring 変更ログが正の履歴）。
+#
+# 導出規則・境界宣言の詳細 = trusted_axes.py のモジュール docstring、および
+# docs/l0a_authoring_contract.md (e) 節。
+
+schema_version: "authoring-trusted-axes/1.0"
+
+axes:
+  bpm:
+    source_instrument: "svp_rpe.roundtrip.diagnose.ROUNDTRIP_FIELDS (R0 roundtrip diagnosis)"
+    runtime_gate: >-
+      conditionally trusted only (docs/llm_adapter_planning.md §5): the BPM
+      extractor's octave/halving misdetection is empirically confirmed
+      (roundtrip_preservation.md / R1 corpus screen) — an experiment may
+      count this axis only after confirming its pre-registered task's BPM
+      value falls within the extractor's trusted band; otherwise treat as
+      out_of_band per D5. This is a per-experiment runtime determination
+      made by L0b, not a static fact this table can freeze.
+
+  key:
+    source_instrument: "svp_rpe.roundtrip.diagnose.ROUNDTRIP_FIELDS (R0 roundtrip diagnosis)"
+
+  brightness:
+    source_instrument: "svp_rpe.roundtrip.diagnose.ROUNDTRIP_FIELDS (R0 roundtrip diagnosis)"
+    band_restriction:
+      trusted_values: [dark]
+
+  structure:
+    source_instrument: "svp_rpe.arrange.observe structure domain (AR4, svprpe observe --manifest)"

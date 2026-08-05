@@ -155,6 +155,7 @@ src/svp_rpe/
 ├── calibration/                # ジャンル/楽器語彙コーパス校正 (genre-calibrate / genre-audit)
 ├── arrange/                    # ArrangementSpec: override/resolve/compile + identity/capability/observation sidecar (AR 系列)
 ├── recast/                    # RecastProject: 既存 sidecar への参照+実行方針ワークスペース定義 (recast-project/0.1)。PR 履歴・golden path = docs/recast_workspace.md
+├── authoring/                  # L0a 著述契約: spec loader / 記号検証ゲート / 信頼軸表導出 / report 正規形 (docs/l0a_authoring_contract.md)
 ├── batch/                     # バッチ処理 (runner / discovery)
 ├── config/                    # config/*.yaml のパッケージ同梱コピー
 └── utils/                     # config loader / clamp・hashing (content pin) / atomic_io (atomic write 集約)
@@ -217,6 +218,7 @@ tests/ / docs/ / examples/     # pytest / design documents (index: docs/README.m
 | [`docs/DESIGN_M4_recast_melody_anchor.md`](docs/DESIGN_M4_recast_melody_anchor.md) | M4 設計書: M3 evidence を Recast の `experimental` anchor へ翻訳（axis_policy opt-in・G1–G3 ゲート・会計分離）。実装 = `recast/experimental.py`、golden E2E = `tests/test_recast_m4d_melody_e2e.py` |
 | [`docs/llm_adapter_planning.md`](docs/llm_adapter_planning.md) | LLM 著述トラック (L 系列) 計画: LLM が Score を直書きし決定論演奏者で検収する閉ループ。アダプター=決定論/情報の国境（宣言・pin 済み可視ペイロードのみ可視 = §3 が正・intent sidecar 隔離・帯域注釈付き差分報告）。L0-s スパイク → L0a 契約凍結 → L0b 非旋律軸 → L0c 旋律軸（M3d+M4 待ち） |
 | [`docs/l0s_spike_record.md`](docs/l0s_spike_record.md) | L0-s スパイク記録 (第 1 実測): 情報遮断 5 周回・記号検証 5/5・key/brightness 5/5 preserved・構造軸未収束 (8→6→6→4→2)。L0a への契約欠陥リスト（validate CLI/境界時刻報告/計器分解能開示/report 正規形/導出器正式化） |
+| [`docs/l0a_authoring_contract.md`](docs/l0a_authoring_contract.md) | L0a 著述契約 v1: 公開スキーマ範囲 spec (`config/authoring_contract_l0.yaml`) + `svprpe validate` エラープロトコル (kind 語彙) + `AuthoringDiffReport` 正規形 (境界時刻スキーマ・notes 白リスト) + 信頼軸表の機械導出 (`config/authoring_trusted_axes_l0.yaml`) + pin 規則 |
 
 ## ドキュメント管理ポリシー
 

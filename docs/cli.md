@@ -1107,6 +1107,33 @@ svprpe genre-audit examples/calibration/genre/manifest.yaml
 svprpe genre-audit examples/calibration/genre/manifest.yaml --format json -o audit.json
 ```
 
+### `svprpe validate <score.yaml> [--contract <spec.yaml>] [--format text|json] [-o <out.json>]`
+
+L0a symbolic validation gate (audio-free, deterministic): checks a `CompositionScore`
+YAML against an authoring contract's public-scope spec and against the canonical schema.
+See [`l0a_authoring_contract.md`](l0a_authoring_contract.md) for the contract design.
+
+- `--contract <spec.yaml>` — an `authoring-contract/1.0` spec YAML (e.g.
+  `config/authoring_contract_l0.yaml`). Enables the public-scope check: every key at every
+  depth must be published by the spec, and every published field's type/enum/literal/format
+  must match. Omit to skip this check (canonical-only mode).
+- Canonical validation (`CompositionScore.model_validate`) always runs regardless of
+  `--contract`; a public-scope failure never short-circuits it.
+- Errors are a deterministically sorted list of `{where, message, kind}`, `kind` one of
+  `public_scope` / `type` / `enum` / `literal` / `format` / `canonical`.
+- `-o/--output` writes the result as byte-deterministic JSON (`write_bytes`, sorted keys);
+  rejected if it resolves to the `score.yaml` input path itself.
+- `--format json` prints the same JSON to stdout instead of a text summary table.
+- Exit codes: `0` pass, `1` fail (including a `score.yaml` that fails to parse as YAML,
+  recorded as a `canonical`-kind error at `<file>`), `2` operational error (missing
+  `score.yaml`, an unreadable/invalid `--contract` spec, or an `-o` collision).
+
+```bash
+svprpe validate score.yaml --contract config/authoring_contract_l0.yaml
+svprpe validate score.yaml --contract config/authoring_contract_l0.yaml --format json -o validation.json
+svprpe validate score.yaml   # canonical-only, no public-scope check
+```
+
 ## Global Options
 
 | Option | Description |
