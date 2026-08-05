@@ -1,0 +1,46 @@
+# L0-s 陽性対照 Score（人手・既知正解）。スパイク evidence には数えない（task.md）。
+meta:
+  title: "L0-s Positive Control"
+  version: "0.1"
+
+semantic:
+  core: "sombre nocturnal miniature in D minor"
+  grv:
+    primary: "ambient"
+    secondary: "downtempo"
+  delta_e:
+    overall: "single swell from hush to release and back"
+  avoid:
+    - "bright festival EDM"
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: intro
+    bars: 6
+    role: "hushed entry"
+    physical: "low density, sub bass, sparse"
+  - section: chorus
+    bars: 10
+    role: "central swell"
+    physical: "full energy"
+  - section: outro
+    bars: 6
+    role: "receding"
+    physical: "release, low density, rest"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure
