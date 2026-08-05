@@ -106,6 +106,35 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
 歴史的 evidence（陽性対照 + L0-s rounds 1–5、いずれも `structure` 3 要素
 以上）は本ゲート追加後も全件 `pass` のまま。
 
+### `min_items` の適用先限定（PR #246 Codex P2 review 15 巡目）
+
+`ObjectSpec.min_items` を宣言しても、それだけでは効かない——実際に強制する
+のは `authoring/validate.py:_min_items_errors` で、この関数は
+`structure`（トップレベルのリスト）× `structure_section`（その要素
+`ObjectSpec`）という**この 1 組にしか配線されていない**。それ以外の
+`ObjectSpec`（例 `chord`）へ `min_items` を宣言しても、どこからも参照
+されない inert な値になり、spec ロードだけは通ってしまう——著者が
+「最小要素数を強制した」と誤認する壊れた計器設定の欠陥だった（6 巡目
+`fields ⊆ allowed_keys` と同族の「宣言したのに未配線で効かない」spec 内部
+整合性の穴）。
+
+`AuthoringContractSpec` へ `model_validator`（トップレベル、全
+`ObjectSpec` を見渡せる位置）を追加し、`structure_section` 以外の
+`ObjectSpec` に `min_items` が非 `None` で宣言されていたら spec ロード時に
+`ValidationError`（`--contract` 経由では exit 2）で拒否する。
+
+**設計判断（拒否 vs 汎用適用）**: `min_items` を全 `ObjectSpec` へ汎用的に
+適用できるよう `validate.py` 側を拡張する選択肢もあったが、現行契約
+（`config/authoring_contract_l0.yaml`）に `structure_section` 以外での
+要求が存在しないため、要求のない汎用化は作らない（YAGNI、12 巡目の
+非測定系 `AuthoringNoteKind` 見送りと同方針）。
+
+**境界宣言**: `min_items` の適用先はこのガードと `validate.py` の適用
+実装を 1:1 で対応させる必要がある——将来 `chord_progression` 等の
+コンテナへ `min_items` を拡張する場合は、適用実装（`_min_items_errors`
+の配線）とこのガードの許可リストを**同時に**更新すること（inert 宣言を
+構造的に作れない状態を維持する）。
+
 ## (c) エラープロトコル — kind 語彙と where 粒度
 
 `svprpe validate`（`src/svp_rpe/authoring/validate.py`）が返すエラーは

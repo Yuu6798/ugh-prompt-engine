@@ -174,6 +174,80 @@ def test_default_contract_structure_section_requires_at_least_one_item():
     assert spec.structure_section.min_items == 1
 
 
+def test_spec_rejects_min_items_declared_on_chord(tmp_path: Path):
+    """PR #246 Codex P2 review 15 巡目: `min_items` is only wired to an
+    enforcement path in `authoring/validate.py` for `structure_section`
+    (governing the top-level `structure` list). Declaring it on any other
+    `ObjectSpec` (e.g. `chord`) would be an inert, misleading value that
+    silently loads — reject at spec-load time instead."""
+
+    path = tmp_path / "spec.yaml"
+    path.write_text(
+        """
+schema_version: "authoring-contract/1.0"
+top_level: {allowed_keys: [meta]}
+meta: {allowed_keys: []}
+semantic: {allowed_keys: []}
+grv: {allowed_keys: []}
+delta_e: {allowed_keys: []}
+physical: {allowed_keys: []}
+structure_section: {allowed_keys: []}
+rendering: {allowed_keys: []}
+events: {allowed_keys: []}
+chord: {allowed_keys: [], min_items: 1}
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError):
+        load_authoring_contract(path)
+
+
+def test_authoring_contract_spec_rejects_min_items_on_non_structure_section_field():
+    """Unit-level negative: `AuthoringContractSpec` itself (not just the
+    YAML loader path) rejects a non-`structure_section` ObjectSpec that
+    declares `min_items`."""
+
+    from svp_rpe.authoring.contract import AuthoringContractSpec, TopLevelSpec
+
+    with pytest.raises(ValidationError):
+        AuthoringContractSpec(
+            schema_version="authoring-contract/1.0",
+            top_level=TopLevelSpec(allowed_keys=[]),
+            meta=ObjectSpec(allowed_keys=[]),
+            semantic=ObjectSpec(allowed_keys=[]),
+            grv=ObjectSpec(allowed_keys=[]),
+            delta_e=ObjectSpec(allowed_keys=[]),
+            physical=ObjectSpec(allowed_keys=[]),
+            structure_section=ObjectSpec(allowed_keys=[]),
+            rendering=ObjectSpec(allowed_keys=[]),
+            events=ObjectSpec(allowed_keys=[]),
+            chord=ObjectSpec(allowed_keys=[], min_items=1),
+        )
+
+
+def test_authoring_contract_spec_accepts_min_items_only_on_structure_section():
+    """Regression guard: `min_items` on `structure_section` — the one
+    ObjectSpec `validate.py` actually enforces it against — continues to
+    load without being caught by the new restriction."""
+
+    from svp_rpe.authoring.contract import AuthoringContractSpec, TopLevelSpec
+
+    spec = AuthoringContractSpec(
+        schema_version="authoring-contract/1.0",
+        top_level=TopLevelSpec(allowed_keys=[]),
+        meta=ObjectSpec(allowed_keys=[]),
+        semantic=ObjectSpec(allowed_keys=[]),
+        grv=ObjectSpec(allowed_keys=[]),
+        delta_e=ObjectSpec(allowed_keys=[]),
+        physical=ObjectSpec(allowed_keys=[]),
+        structure_section=ObjectSpec(allowed_keys=[], min_items=1),
+        rendering=ObjectSpec(allowed_keys=[]),
+        events=ObjectSpec(allowed_keys=[]),
+        chord=ObjectSpec(allowed_keys=[]),
+    )
+    assert spec.structure_section.min_items == 1
+
+
 def test_object_spec_rejects_fields_key_not_in_allowed_keys():
     """PR #246 Codex P2 review 6 巡目: a `fields` entry outside
     `allowed_keys` (typo, e.g. `bpn` for `bpm`) previously loaded silently

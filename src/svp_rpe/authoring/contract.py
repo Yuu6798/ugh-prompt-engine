@@ -135,7 +135,30 @@ class TopLevelSpec(BaseModel):
 
 
 class AuthoringContractSpec(BaseModel):
-    """L0a 著述契約の公開スキーマ spec 全体（`config/authoring_contract_l0.yaml`）。"""
+    """L0a 著述契約の公開スキーマ spec 全体（`config/authoring_contract_l0.yaml`）。
+
+    `min_items` の適用先限定（PR #246 Codex P2 review 15 巡目、6 巡目
+    `fields ⊆ allowed_keys` と同族の spec 内部整合性ガード）: `ObjectSpec.
+    min_items` は宣言してもそれだけでは効かない——実際に強制するのは
+    `authoring/validate.py` の `_min_items_errors` で、現状この関数は
+    `structure`（トップレベルのリスト）× `structure_section`
+    （その要素 `ObjectSpec`）という**この 1 組にしか配線されていない**。
+    それ以外の `ObjectSpec`（例 `chord`）へ `min_items` を宣言しても
+    どこにも参照されない inert な値になり、spec ロードだけは通ってしまう
+    ——著者が「最小要素数を強制した」と誤認する壊れた計器設定を防ぐため、
+    `structure_section` 以外の `ObjectSpec` フィールドに `min_items` が
+    非 `None` で宣言されていたら spec ロード時に `ValidationError` で
+    拒否する。**設計判断（拒否 vs 汎用適用）**: `min_items` を汎用的に
+    全 `ObjectSpec` へ適用できるよう `validate.py` 側を拡張する選択肢も
+    あったが、現行契約 (`config/authoring_contract_l0.yaml`) に
+    `structure_section` 以外での要求が存在しないため、要求のない汎用化は
+    作らない（YAGNI、12 巡目の非測定系 kind 見送りと同方針）。**境界宣言**:
+    `min_items` の適用先はこのガードと `validate.py` の適用実装を 1:1
+    で対応させる必要がある——将来 `chord_progression` 等のコンテナへ
+    `min_items` を拡張する場合は、適用実装（`_min_items_errors` の配線）
+    とこのガードの許可リストを**同時に**更新すること（inert 宣言を
+    構造的に作れない状態を維持する）。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -150,6 +173,23 @@ class AuthoringContractSpec(BaseModel):
     rendering: ObjectSpec
     events: ObjectSpec
     chord: ObjectSpec
+
+    @model_validator(mode="after")
+    def _min_items_only_supported_on_structure_section(self) -> Self:
+        errors = []
+        for field_name in ("meta", "semantic", "grv", "delta_e", "physical", "rendering", "events", "chord"):
+            object_spec: ObjectSpec = getattr(self, field_name)
+            if object_spec.min_items is not None:
+                errors.append(
+                    f"{field_name}.min_items is declared but not applied — the only "
+                    "ObjectSpec wired to a min_items enforcement path in "
+                    "authoring/validate.py is structure_section (for the top-level "
+                    "structure list); declaring min_items elsewhere would be an inert, "
+                    "misleading spec value"
+                )
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
 
 
 def load_authoring_contract(path: Optional[Path | str] = None) -> AuthoringContractSpec:

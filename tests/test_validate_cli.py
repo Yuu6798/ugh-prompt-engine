@@ -428,6 +428,24 @@ def test_fields_key_not_in_allowed_keys_contract_exits_2(tmp_path: Path):
     assert result.exit_code == 2, result.output
 
 
+def test_min_items_on_chord_contract_exits_2(tmp_path: Path):
+    """PR #246 Codex P2 review 15 巡目: `min_items` is only wired to an
+    enforcement path in `authoring/validate.py` for `structure_section`
+    (governing the top-level `structure` list) — declaring it on `chord`
+    (or any other ObjectSpec) would silently load as an inert, misleading
+    constraint. Now rejected at spec load time (exit 2), same posture as
+    the 6 巡目 `fields ⊆ allowed_keys` and 3 巡目 type×constraint guards."""
+
+    contract = dict(_MINIMAL_CONTRACT_SKELETON)
+    contract["meta"] = {"allowed_keys": []}
+    contract["chord"] = {"allowed_keys": [], "min_items": 1}
+    contract_path = tmp_path / "contract.yaml"
+    contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
+
+    result = _invoke(str(POSITIVE_CONTROL_PATH), "--contract", str(contract_path))
+    assert result.exit_code == 2, result.output
+
+
 def test_invalid_score_yaml_parse_failure_still_exits_1_not_2(tmp_path: Path):
     """Asymmetry check (Codex P2 review, PR #246): an unparseable *score* is
     the artifact under test failing — `fail`/exit `1` — while an unparseable
