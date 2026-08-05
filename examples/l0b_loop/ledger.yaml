@@ -87,9 +87,13 @@ runner_at_measurement:
   # scripts hardened across several post-hoc review rounds), L0b's scripts
   # are being introduced fresh in this same change — there is no prior
   # version to distinguish from, so this pins the single introducing commit.
-  measured_at_commit: "<uncommitted at ledger-authoring time — see git log
-    for the commit that introduces examples/l0b_loop/ if this note has not
-    been updated post-commit>"
+  measured_at_commit: "0f598a1c1ec54767b3577a02012e02ea63a75bd7"
+  measured_at_commit_note: >-
+    The commit that introduced examples/l0b_loop/ (scripts + frozen inputs +
+    this ledger's original placeholder). The git_blob_sha1 values below are
+    the blobs recorded in that commit; this note itself was filled in by the
+    immediately following ledger-only commit (the placeholder could not name
+    its own introducing commit before it existed).
   files:
     run_round_py:
       path: scripts/run_round.py
