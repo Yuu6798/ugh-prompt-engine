@@ -174,6 +174,54 @@ def test_default_contract_structure_section_requires_at_least_one_item():
     assert spec.structure_section.min_items == 1
 
 
+def test_object_spec_rejects_fields_key_not_in_allowed_keys():
+    """PR #246 Codex P2 review 6 巡目: a `fields` entry outside
+    `allowed_keys` (typo, e.g. `bpn` for `bpm`) previously loaded silently
+    and its type/enum/literal/format/min constraints were never applied by
+    `validate.py`'s `_object_errors` (which only iterates `spec.fields`,
+    never cross-checking against `allowed_keys`) — now rejected at spec
+    load time, same fail-closed posture as the `FieldSpec` type×constraint
+    guards (round 3)."""
+
+    with pytest.raises(ValidationError):
+        ObjectSpec(allowed_keys=["bpm"], fields={"bpn": FieldSpec(type="int")})
+
+
+def test_object_spec_accepts_sparse_fields_subset_of_allowed_keys():
+    """Sparse `fields` (fewer entries than `allowed_keys`) stays legitimate
+    — only fields declaring an unknown key are rejected, not fields that
+    simply omit constraints for some allowed keys."""
+
+    spec = ObjectSpec(allowed_keys=["bpm", "key"], fields={"bpm": FieldSpec(type="int")})
+    assert set(spec.fields) == {"bpm"}
+
+
+def test_object_spec_accepts_empty_fields():
+    spec = ObjectSpec(allowed_keys=["a", "b"])
+    assert spec.fields == {}
+
+
+def test_default_contract_all_object_specs_have_fields_subset_of_allowed_keys():
+    """Whole-spec sanity sweep: every ObjectSpec in the frozen default
+    contract already satisfies fields ⊆ allowed_keys (this is enforced by
+    the loader itself, but spelled out explicitly as a regression guard)."""
+
+    spec = load_authoring_contract()
+    for name in (
+        "meta",
+        "semantic",
+        "grv",
+        "delta_e",
+        "physical",
+        "structure_section",
+        "rendering",
+        "events",
+        "chord",
+    ):
+        object_spec = getattr(spec, name)
+        assert set(object_spec.fields) <= set(object_spec.allowed_keys), name
+
+
 def test_field_spec_rejects_unknown_type():
     with pytest.raises(ValidationError):
         FieldSpec(type="float")  # type: ignore[arg-type]

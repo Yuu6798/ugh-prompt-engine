@@ -100,6 +100,15 @@ class ObjectSpec(BaseModel):
     型・値とは別次元の制約であり、`min_items` として `ObjectSpec` 側に
     表現する（`fields`/`allowed_keys` は「1 要素の中身」の制約、
     `min_items` は「要素の個数」の制約、という役割分担）。
+
+    `fields ⊆ allowed_keys`（PR #246 Codex P2 review 6 巡目）: spec ロード時
+    に強制する——`fields` に `allowed_keys` 外のキー（typo、例
+    `bpn`）が紛れていると、`authoring/validate.py:_object_errors` は
+    `spec.fields.items()` を回して `_check_field` を呼ぶだけで
+    `allowed_keys` 側との整合は取らないため、意図した型/列挙/形式/下限
+    制約が**一切適用されない**まま spec のロードだけは通ってしまう
+    （`FieldSpec` 側の型×制約ガード群（3 巡目）と同じ「壊れた計器設定は
+    ロード時に fail-closed」という節に属する欠陥）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -107,6 +116,16 @@ class ObjectSpec(BaseModel):
     allowed_keys: list[str]
     fields: dict[str, FieldSpec] = {}
     min_items: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _fields_must_be_subset_of_allowed_keys(self) -> Self:
+        unknown = sorted(set(self.fields) - set(self.allowed_keys))
+        if unknown:
+            raise ValueError(
+                f"fields declares key(s) not in allowed_keys (typo?): {unknown!r} "
+                f"— allowed_keys={sorted(self.allowed_keys)!r}"
+            )
+        return self
 
 
 class TopLevelSpec(BaseModel):

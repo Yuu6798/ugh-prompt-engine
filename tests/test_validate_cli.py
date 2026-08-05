@@ -411,6 +411,23 @@ def test_format_on_int_field_contract_exits_2(tmp_path: Path):
     assert result.exit_code == 2, result.output
 
 
+def test_fields_key_not_in_allowed_keys_contract_exits_2(tmp_path: Path):
+    """PR #246 Codex P2 review 6 巡目: a `fields` entry whose key is a typo
+    of an `allowed_keys` entry (e.g. `bpn` for `bpm`) previously loaded
+    silently — the constraint was declared but never applied, since
+    `validate.py`'s `_object_errors` only iterates `spec.fields` without
+    cross-checking `allowed_keys`. Now rejected at spec load time (exit 2),
+    same posture as the type×constraint guards from round 3."""
+
+    contract = dict(_MINIMAL_CONTRACT_SKELETON)
+    contract["meta"] = {"allowed_keys": ["title"], "fields": {"titel": {"type": "str"}}}
+    contract_path = tmp_path / "contract.yaml"
+    contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
+
+    result = _invoke(str(POSITIVE_CONTROL_PATH), "--contract", str(contract_path))
+    assert result.exit_code == 2, result.output
+
+
 def test_invalid_score_yaml_parse_failure_still_exits_1_not_2(tmp_path: Path):
     """Asymmetry check (Codex P2 review, PR #246): an unparseable *score* is
     the artifact under test failing — `fail`/exit `1` — while an unparseable
