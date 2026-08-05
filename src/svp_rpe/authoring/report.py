@@ -247,16 +247,28 @@ class AuthoringDiffReport(BaseModel):
     report スキーマは軸集合そのものを固定しないという既存方針
     （docstring 上段）を維持するため。
 
-    `symbolic_validation.status`×`axes` の provenance 整合（PR #246 Codex
-    P2 review 10 巡目、4〜5 巡目の `SymbolicValidationResult` 内
-    `status`×`errors` 整合と同族）: `status == "fail"` の報告は `axes` が
-    空でなければならない。正本 §3 のフロー（`[2] 記号検証ゲート` を通過
-    した Score だけが `[3] 実行と計測` へ進む）上、記号検証に落ちた Score
-    は決して計測されない——`axes` に測定済みらしき値が乗っている
-    `symbolic_validation.status: fail` の報告は、フローの因果関係と矛盾
-    する provenance であり構成不能にする。`status == "pass"` では `axes`
-    の空/非空いずれも許容する（合格直後でまだ軸別計測を報告していない
-    中間状態などを排除しない）。
+    `symbolic_validation.status`×`axes`×`notes` の provenance 整合（PR #246
+    Codex P2 review 10 巡目 + 12 巡目、4〜5 巡目の `SymbolicValidationResult`
+    内 `status`×`errors` 整合と同族）: `status == "fail"` の報告は `axes`
+    と `notes` の両方が空でなければならない。正本 §3 のフロー（`[2] 記号
+    検証ゲート` を通過した Score だけが `[3] 実行と計測` へ進む）上、記号
+    検証に落ちた Score は決して計測されない——`axes` に測定済みらしき値が
+    乗っている、または `notes` に測定由来の参考値（現行の白リストは
+    `position_match_rate` のみで、これは構造観測器由来の実測値）が乗って
+    いる `symbolic_validation.status: fail` の報告は、いずれもフローの
+    因果関係と矛盾する provenance であり構成不能にする（12 巡目: `axes`
+    のみのガードでは `notes` 経由で同じ矛盾が抜けていた同族の残り穴）。
+    `status == "pass"` では `axes`/`notes` の空/非空いずれも許容する
+    （合格直後でまだ軸別計測を報告していない中間状態などを排除しない）。
+
+    **終端宣言**: この一律ガードは `AuthoringNoteKind` の現行白リスト
+    （`_NOTE_VALUE_VALIDATORS` 参照）が全 kind 観測器由来の測定 provenance
+    である前提に依存する。将来、著者の意図表明など**非測定系**の kind を
+    白リストへ追加する場合は、この検証を「全 notes 空必須」から「kind ごと
+    に測定系/非測定系を区別する」形へ再設計する必要がある——現時点でその
+    区別を先回りして作らないのは、まだ非測定系 kind が存在しないため
+    （YAGNI）。新規 kind を追加する開発者はこの docstring と検証本体を
+    合わせて見直すこと。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -282,13 +294,26 @@ class AuthoringDiffReport(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _failed_symbolic_validation_has_no_axes(self) -> Self:
-        if self.symbolic_validation.status == "fail" and self.axes:
-            raise ValueError(
+    def _failed_symbolic_validation_has_no_axes_or_notes(self) -> Self:
+        if self.symbolic_validation.status != "fail":
+            return self
+        errors = []
+        if self.axes:
+            errors.append(
                 "symbolic_validation.status='fail' must not carry axes "
-                f"(got {sorted(self.axes)!r}) — a Score that fails the symbolic gate never "
-                "reaches measurement (正本 §3: [2] gate -> [3] measure only on pass), so "
-                "measured-looking axes on a failed report is contradictory provenance"
+                f"(got {sorted(self.axes)!r})"
+            )
+        if self.notes:
+            errors.append(
+                "symbolic_validation.status='fail' must not carry notes "
+                f"(got {len(self.notes)} note(s)) — the current AuthoringNoteKind allowlist "
+                "is entirely observer-derived measurement provenance"
+            )
+        if errors:
+            raise ValueError(
+                "; ".join(errors) + " — a Score that fails the symbolic gate never reaches "
+                "measurement (正本 §3: [2] gate -> [3] measure only on pass), so "
+                "measured-looking axes/notes on a failed report is contradictory provenance"
             )
         return self
 

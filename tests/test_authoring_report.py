@@ -147,6 +147,48 @@ def test_authoring_diff_report_accepts_failed_validation_with_empty_axes():
     assert report.axes == {}
 
 
+def test_authoring_diff_report_rejects_failed_validation_with_notes():
+    """PR #246 Codex P2 review 12 巡目: closes the sibling hole left by
+    10 巡目's `axes`-only guard — a `status='fail'` symbolic validation
+    report must also not carry `notes`, since the current
+    `AuthoringNoteKind` allowlist (`position_match_rate`) is entirely
+    observer-derived measurement provenance, same as `axes`."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(
+                status="fail",
+                errors=[AuthoringErrorItem(where="physical.bpm", message="bad", kind="type")],
+            ),
+            notes=[AuthoringNote(kind="position_match_rate", value=0.5)],
+        )
+
+
+def test_authoring_diff_report_accepts_failed_validation_with_empty_notes():
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(
+            status="fail",
+            errors=[AuthoringErrorItem(where="physical.bpm", message="bad", kind="type")],
+        ),
+        notes=[],
+    )
+    assert report.notes == []
+
+
+def test_authoring_diff_report_accepts_passed_validation_with_notes():
+    """Regression guard: `status='pass'` reports are unaffected by the
+    fail-side `notes`-must-be-empty constraint."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        notes=[AuthoringNote(kind="position_match_rate", value=0.5)],
+    )
+    assert len(report.notes) == 1
+
+
 def test_authoring_diff_report_accepts_passed_validation_with_or_without_axes():
     """Regression guard: `status='pass'` reports are unaffected by the
     fail-side `axes`-must-be-empty constraint, whether or not axes are

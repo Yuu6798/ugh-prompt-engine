@@ -184,15 +184,25 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    `preserved` のような「帯域外なのに成功を主張する」矛盾組は構成不能。
    失敗側 verdict（`deviated`/`mismatch`）は非 `measured` band でも許容
    したまま（「未確認だが成功も主張していない」正直な報告は制約しない）。
-6. **`symbolic_validation.status`×`axes` の provenance 整合**（PR #246
-   Codex P2 review 10 巡目、4〜5 巡目の `SymbolicValidationResult` 内
-   `status`×`errors` 整合と同族）: `status == "fail"` の報告は `axes` が
-   空でなければならない。正本 §3 のフロー（`[2] 記号検証ゲート` を通過
-   した Score だけが `[3] 実行と計測` へ進む）上、記号検証に落ちた Score
-   は決して計測されない——`axes` に測定済みらしき値が乗っている
-   `status: fail` の報告は、フローの因果関係と矛盾する provenance であり
-   構成不能にする（`AuthoringDiffReport` の `model_validator`）。
-   `status == "pass"` では `axes` の空/非空いずれも許容する。
+6. **`symbolic_validation.status`×`axes`×`notes` の provenance 整合**
+   （PR #246 Codex P2 review 10 巡目 + 12 巡目、4〜5 巡目の
+   `SymbolicValidationResult` 内 `status`×`errors` 整合と同族）:
+   `status == "fail"` の報告は `axes` と `notes` の両方が空でなければ
+   ならない。正本 §3 のフロー（`[2] 記号検証ゲート` を通過した Score
+   だけが `[3] 実行と計測` へ進む）上、記号検証に落ちた Score は決して
+   計測されない——`axes` に測定済みらしき値が乗っている、または `notes`
+   に測定由来の参考値（現行の白リスト `position_match_rate` は構造観測器
+   由来の実測値）が乗っている `status: fail` の報告は、いずれもフローの
+   因果関係と矛盾する provenance であり構成不能にする（12 巡目: 10 巡目
+   の `axes` 限定ガードでは `notes` 経由で同じ矛盾がすり抜ける同族の
+   残り穴だった。`AuthoringDiffReport` の `model_validator`）。
+   `status == "pass"` では `axes`/`notes` の空/非空いずれも許容する。
+   **終端宣言**: このガードは `AuthoringNoteKind` の現行白リストが全
+   kind 観測器由来の測定 provenance である前提に依存する——将来、著者の
+   意図表明など非測定系 kind を白リストへ追加する場合は、この検証を
+   「全 notes 空必須」から「kind ごとに測定系/非測定系を区別する」形へ
+   再設計する必要がある（現時点で非測定系 kind は存在しないため、その
+   区別を先回りして作らない）。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
 `sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を構築し、
