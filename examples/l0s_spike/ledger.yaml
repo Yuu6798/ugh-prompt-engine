@@ -106,6 +106,11 @@ runner_at_measurement:
     arrangement:
       path: frozen/arrangement.yaml
       sha256: "efa0d6db0e288ad74c330a719b28e6db224c4545b852bdbbf62bc7adeda96e5a"
+  # Codex P2 9巡目レビュー: post_spike_hardening_commits の静的列挙は追記漏れ
+  # （5〜7 巡目の commit が一時的に欠落した実例）を構造的に再発させるため、
+  # 618b332 以降の post-spike 変更を検証する正はこのコマンドとする
+  # （post_spike_hardening_commits 自体は 618b332 時点で追記を終了・凍結）。
+  post_spike_hardening_verification_command: "git log --oneline 4b98e7b..HEAD -- examples/l0s_spike/scripts/"
   post_spike_hardening_commits:
     # 全計測（陽性対照 + 周回 1〜5、4b98e7b で完了）より後に
     # validate_score.py / measure_round.py へ加えられた変更。いずれも
@@ -114,6 +119,15 @@ runner_at_measurement:
     # 全 5 周回を再計測し、report.json/validation.json が上記 pin 済み値
     # （および各周回ディレクトリの記録済みファイル）と完全なバイト一致する
     # ことを都度再検証済み（PR #245 各ラウンドのレビュー返信コメント参照）。
+    #
+    # スコープ宣言（Codex P2 9巡目レビュー、列挙二重管理の終端）: 本リストは
+    # PR #245 レビュー対応期間（〜9 巡目対応時点、618b332 まで）の記録に
+    # 限定する。以降の post-spike 変更を追跡する正は本リストではなく
+    # `git log 4b98e7b..HEAD -- examples/l0s_spike/scripts/`
+    # （導出コマンド）であり、本リストへの追記はこれ以上継続しない——静的
+    # 列挙は追記漏れ（5〜7 巡目のコミットが一時的に本リストから欠落した
+    # 実例）を構造的に再発させるため、コマンドで導出可能な事実をコマンドの
+    # ままにしておく方が信頼できる。
     - commit: "12d4e26"
       change: "validate_score.py に L0-s 公開範囲チェック（トップレベルのみ）を追加"
     - commit: "00d06e4"
@@ -124,6 +138,10 @@ runner_at_measurement:
       change: "-o の予約生成物パス衝突を単一定数 (_reserved_workdir_paths) から導出するようリファクタリング"
     - commit: "5db947b"
       change: "key/brightness verdict を diagnosis 横流しから凍結要求への比較 (band==measured かつ観測値一致) へ是正"
+    - commit: "1544143"
+      change: "契約記載形式のクラッシュ族 (key/time_signature) を実測確定してゲート強制"
+    - commit: "618b332"
+      change: "validation.json のバイト決定論化 + target_backend リテラル検証"
 
 positive_control:
   # Dry-run of positive_control/score.yaml through the full observation
