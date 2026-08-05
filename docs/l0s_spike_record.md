@@ -226,7 +226,7 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
     （`3eb25e1..4b98e7b`）で使われていた `validate_score.py`/
     `measure_round.py`/`frozen/*` の blob sha256 を pin した。旧値は
     `superseded_engine_commit` として透明に注記のまま保持。
-  - **7 巡目**（`<pending>`）: 同じ「到達不能 WIP コミット参照」が
+  - **7 巡目**（`82cebd1`）: 同じ「到達不能 WIP コミット参照」が
     `deps/pip_freeze.txt` にも残っていた——先頭の editable self-install 行
     （`-e git+.../ugh-prompt-engine@306add7914...#egg=svp_rpe`）が旧
     `engine_commit` と同じ到達不能コミットを指しており、5 巡目 B の
