@@ -1,0 +1,9 @@
+intro:
+  note: "sub bass + low density で低エネルギー基調を作り、chorus との音響対比を確保する。4 bars @128bpm/4-4 = 7.5秒（陽性対照と同一実長）を狙い、過分割・吸収どちらの縮退域も避ける"
+chorus:
+  note: "full energy トークンで intro/outro 双方に対して明確なエネルギー山を作り、境界検出を助ける。同じく 4 bars = 7.5秒で可行窓の実測点に一致させる"
+outro:
+  note: "release トークンでエネルギーを落とし、chorus との対比で境界を作る。同じく 4 bars = 7.5秒とし、3セクションとも均等な実長にして境界検出の対称性を確保する"
+key_brightness:
+  note: "D minor は契約の key 形式にそのまま一致。brightness は dark を直接指定するのみで、旋律・音色語彙は追加指定しない（旋律軸は対象外のため events.chord_progression も省略しキー既定進行に委ねる）"
+tools_used: none

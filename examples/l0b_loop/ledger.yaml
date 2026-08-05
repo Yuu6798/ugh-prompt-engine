@@ -186,4 +186,64 @@ positive_control:
       sha256: "3299520c2190dfbddaf6e856aa9c5becdeea11afa823b2abeafa7837f6f81867"
       note: "Differs from L0-s's pinned observe_report sha256 — downstream of the different package_sha256 above."
 
-rounds: []
+rounds:
+  - round: 1
+    date: "2026-08-05"
+    author: >-
+      情報遮断著者（Sonnet サブエージェント）。可視情報 = 課題文 +
+      contract.md v1 全文のみ（第 1 周回のため前周ファイル・前周報告なし）。
+      ツール使用の実測 = 0 回（サブエージェント usage カウンタで確認）、
+      出力末尾の tools_used: none 宣言と一致 — off-contract イベントなし。
+    files:
+      score:
+        path: rounds/round1/score.yaml
+        sha256: "5f63d693343541e5a8ce37146c96a2dca1075afd13ff4553983c693aeba69db8"
+        git_blob_sha1: "5b33f000ffbee9f74e58b892cb2ca09dbad20525"
+      intent:
+        path: rounds/round1/intent.yaml
+        sha256: "eac8abb49f84bb471560400c29ab81f376db7c6f264487a5966f582511eab673"
+      report:
+        path: rounds/round1/report.json
+        sha256: "a3de57684d7e74b866d58874b9c2b41fdff31476e1d72eb4787fce15261f819c"
+    workdir_note: >-
+      Scratch workdir = build/l0b/round1/ (outside the protected loop tree,
+      not committed — same convention as positive_control's build/l0b/ runs).
+    symbolic_validation: pass
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: exact_match
+        band: measured
+        observed: ["intro", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 7.8483}
+          - {label: "chorus", start_seconds: 7.8483, end_seconds: 12.9335}
+          - {label: "outro", start_seconds: 12.9335, end_seconds: 22.5}
+    notes:
+      - {kind: position_match_rate, value: 1.0}
+    interpretation: >-
+      全軸 verdict 成功（preserved/preserved/exact_match、全軸
+      band=measured）— 正本 §5 の成功条件を第 1 周回で充足。著者は
+      128bpm × 4/4 × 4bars（各セクション宣言実長 7.5 秒 = 契約 v1 が開示
+      した可行窓の成立実測点）を独自に選択した（陽性対照は 96bpm — 著者は
+      陽性対照を見ておらず、値のコピーではない）。観測実長は intro 7.85s /
+      chorus 5.09s / outro 9.57s と宣言から偏差があるが 3 セクション列は
+      成立（chorus 実長は最小セクション間隔 5 秒の直上）。L0S-T1 が契約 v0
+      で 5 周回未収束（全周回 structure: mismatch）だった同一課題が契約 v1
+      で 1 周回成立したことは、L0-s の未収束を契約の情報不足に帰属した
+      事前登録仮説（task.md「L0-s との比較設計」）を直接支持する。
+
+loop_status:
+  status: success
+  terminated_at_round: 1
+  max_rounds: 5
+  termination_rule: >-
+    正本 §5 の成功条件（全軸 verdict が preserved / exact_match）を round 1
+    で充足したため、5 周回上限に達する前にループを成功終了した。
+  pareto_accounting: >-
+    改善判定の対象となる周回ペアは存在しない（第 1 周回で成功終了したため）。
+    frozen/pareto.yaml の述語は事前登録どおり凍結されたが、本実験内では
+    未適用のまま — 正直会計としてここに明記する（陽性対照 round 0 は
+    task.md の規定によりスパイク evidence に数えないため、(round0, round1)
+    ペアの改善判定も行わない）。
