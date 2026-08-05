@@ -169,6 +169,24 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
   では report.json/validation.json の sha256 が陽性対照の台帳記録値と完全
   一致し挙動不変であることを確認済み——本スパイクの 5 周回 + 陽性対照
   evidence への実害はない。
+- **key/brightness verdict が「自己一致」を「課題要求準拠」と取り違えていた**
+  （`svprpe roundtrip` の `diagnosis` は「score -> audio -> draft-score の
+  往復で著述値が保存されたか」という自己一致の二値診断であり、著述値そのもの
+  が課題の凍結要求（D minor / dark）を満たすかは判定しない——`physical.key:
+  "C major"` の Score でも往復が自己一致すれば `diagnosis: preserved` になる）。
+  measure_round.py の旧実装は `diagnosis` をそのまま verdict へ横流ししていた
+  ため、要求外の値を著述しても `verdict: preserved` と誤報告しうる欠陥が
+  あった。PR #245 の Codex レビュー 5 巡目で検出し、verdict を
+  「`band == measured` かつ観測値が凍結要求（`REQUIREMENT_KEY`/
+  `REQUIREMENT_BRIGHTNESS`、既存の単一ソース定数のまま）と一致」へ是正した
+  （key は `svp_rpe.keys.keys_enharmonically_equal` で異名同音等価判定、
+  brightness は文字列完全一致。`diagnosis` は band 決定——`sensor_blind` ->
+  `not_observed`——にのみ引き続き使う）。合成負例（key を `"C major"` にした
+  Score）で、roundtrip 上は自己一致（`diagnosis: preserved`）のまま
+  `verdict: deviated` / `observed: "C major"` になることを確認した。
+  本スパイクの 5 周回 + 陽性対照はいずれも D minor/dark を著述しているため
+  verdict は変化せず（陽性対照 + 全 5 周回の report.json を新実装で再計測し、
+  台帳記録値と完全なバイト一致を確認）、evidence は無傷。
 
 ## 4. §5 判定と L0a への引き継ぎ
 
@@ -181,6 +199,9 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
   4. report.json 正規形の凍結（JSON 統一・notes 使用規約）
   5. 観測経路導出器（measure_round.py 相当）の正式部品化（保護領域衝突の
      fail-closed 込み）
+  6. roundtrip/score-adherence は「Score の自己一致」計器であり課題要求への
+     準拠は測らない。L0a のアダプターは軸別判定を凍結課題値との比較として
+     定義する必要がある（本スパイクでは Codex 5 巡目で検出・runner 側で是正）
 - **L0b への注意**: 構造軸の「改善」順序（Pareto 述語用のラベル列距離）が未定義。
   分割数の単調減少は改善に見えたが縮退へ突き抜けた（8→6→6→4→2）。距離定義は
   「目標列との編集距離」等で事前登録する必要がある。

@@ -28,6 +28,24 @@ Concretely, per round:
    raw instrument JSON itself (D6).
 6. Record every artifact's sha256 in `<workdir>/hashes.json`.
 
+**key/brightness verdict = compare-to-requirement, not self-consistency**
+(PR #245 Codex P2 review, round 5): `svprpe roundtrip`'s `diagnosis` field
+answers "did the extracted value match the *authored* value" (self-
+consistency of one Score through score -> audio -> draft-score), not "does
+the authored value satisfy this task's frozen requirement" — a Score
+authored with `physical.key: "C major"` would still get `diagnosis:
+preserved` if the roundtrip is self-consistent, even though the task
+requires D minor. Before this fix, `key`/`brightness` verdicts were derived
+straight from `diagnosis`, so a self-consistent-but-off-requirement Score
+would have been misreported as `preserved`. Verdict is now `preserved` iff
+`band == "measured"` (still `diagnosis`-derived — `sensor_blind` still means
+`not_observed`, since an unmeasured value is never eligible for a verdict)
+*and* the observed value actually matches the frozen requirement constant
+(`REQUIREMENT_KEY`/`REQUIREMENT_BRIGHTNESS`, unchanged as the single-source
+target) — key via `svp_rpe.keys.keys_enharmonically_equal` (enharmonic
+equivalence, matching contract.md's "異名同音は等価" judge rule), brightness
+via plain string equality.
+
 **Output-collision guard** (PR #245 Codex P2 review, round 3): every check
 below runs before this script writes anything, so a rejected invocation
 leaves the filesystem untouched.
@@ -85,6 +103,7 @@ from typing import Any
 import yaml
 
 from svp_rpe.compose.loader import load_composition_score
+from svp_rpe.keys import keys_enharmonically_equal
 from svp_rpe.perform import FAITHFUL_TAKE, perform, wav_bytes
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -319,13 +338,38 @@ def _write_identity_manifest(
     return manifest_path, _sha256_bytes(manifest_bytes)
 
 
-def _axis_from_roundtrip_field(field: dict[str, Any], requirement: str) -> dict[str, Any]:
-    diagnosis = field["diagnosis"]
+def _band_from_diagnosis(diagnosis: str) -> str:
+    """`diagnosis` decides *band* only (was `roundtrip`'s job, still is):
+    `sensor_blind` means the value was never measured, so it's ineligible
+    for a verdict regardless of what it happens to equal. Every other
+    diagnosis (`preserved`/`knob_dead`/`calibration_disagreement`) means a
+    working sensor produced a real observed value — `measured` — whether or
+    not that value happens to satisfy this task's frozen requirement is a
+    separate question `_key_axis`/`_brightness_axis` answer themselves."""
+    return "not_observed" if diagnosis == "sensor_blind" else "measured"
+
+
+def _key_axis(field: dict[str, Any]) -> dict[str, Any]:
+    band = _band_from_diagnosis(field["diagnosis"])
+    observed = field["transcribed_value"]
+    matches = band == "measured" and keys_enharmonically_equal(REQUIREMENT_KEY, observed)
     return {
-        "requirement": requirement,
-        "observed": field["transcribed_value"],
-        "verdict": "preserved" if diagnosis == "preserved" else "deviated",
-        "band": "not_observed" if diagnosis == "sensor_blind" else "measured",
+        "requirement": REQUIREMENT_KEY,
+        "observed": observed,
+        "verdict": "preserved" if matches else "deviated",
+        "band": band,
+    }
+
+
+def _brightness_axis(field: dict[str, Any]) -> dict[str, Any]:
+    band = _band_from_diagnosis(field["diagnosis"])
+    observed = field["transcribed_value"]
+    matches = band == "measured" and observed == REQUIREMENT_BRIGHTNESS
+    return {
+        "requirement": REQUIREMENT_BRIGHTNESS,
+        "observed": observed,
+        "verdict": "preserved" if matches else "deviated",
+        "band": band,
     }
 
 
@@ -417,10 +461,8 @@ def measure_round(
 
     roundtrip_report = json.loads(roundtrip_path.read_text(encoding="utf-8"))
     fields_by_name = {field["field"]: field for field in roundtrip_report["fields"]}
-    key_axis = _axis_from_roundtrip_field(fields_by_name["key"], REQUIREMENT_KEY)
-    brightness_axis = _axis_from_roundtrip_field(
-        fields_by_name["brightness"], REQUIREMENT_BRIGHTNESS
-    )
+    key_axis = _key_axis(fields_by_name["key"])
+    brightness_axis = _brightness_axis(fields_by_name["brightness"])
 
     observe_report = json.loads(observe_report_path.read_text(encoding="utf-8"))
     structure_axis = _structure_axis(observe_report)
