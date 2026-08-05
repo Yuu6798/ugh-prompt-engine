@@ -1,7 +1,7 @@
 # LLM Adapter Planning — LLM 著述トラック (L 系列)
 
 **Status**: L0 計画文書（2026-08-05 起案、Fable 設計セッション）。実装未着手。
-L0-s（手動スパイク）から開始する。旋律軸の配線（L0c）は M2e 破断曲線と
+L0-s（手動スパイク）から開始する。旋律軸の配線（L0c）は M3d 校正と
 M4 の evidence 翻訳に依存するため凍結し、非旋律軸で先行する。
 
 ## 1. 目的
@@ -111,6 +111,9 @@ LLM が Repair（semantic_ci の Diff → Repair の型に整合）→ [1] へ�
 ```
 
 - 1 周 = `(score_hash, intent_hash, report_hash)` の三つ組を dated 記録。
+- 著述契約（スキーマ + 著述ガイド）と事前登録課題も content hash で pin し、
+  dated 記録に含める。周回間の変更は禁止（LLM 可視入力が変わると収束 evidence が
+  比較不能になる）。変更が必要になったら別の実験として最初から記録し直す。
 - 周回上限を事前宣言（初期値 5 周）。収束しなければ「未収束」として正直に記録する
   （B_session と同じ思想: 超過は異常ではなく織り込まれた通常状態）。
 - インターフェースはファイルベースの契約とする（sidecar-first の流儀に整合。
@@ -124,11 +127,13 @@ LLM が Repair（semantic_ci の Diff → Repair の型に整合）→ [1] へ�
 | **L0-s** | 手動スパイク: エージェントが Score 直書き→検証→演奏→計測→修正を数周回し、契約に何が必要か（スキーマのどこで詰まるか / エラーメッセージの何が不足か / 報告に何があれば直せるか）を観測記録する | なし（既存部品のみ） | 未着手・次アクション |
 | **L0a** | 著述契約の凍結: スキーマ公開範囲 + 記号検証ゲート + エラープロトコル。音声処理ゼロ | L0-s の観測 | 未着手 |
 | **L0b** | 非旋律軸の閉ループ: 決定論演奏 + 既存センサー（BPM / キー / 構造 / 密度 / 谷）で差分報告 → Repair の 1 周を成立させる | L0a | 未着手 |
-| **L0c** | 旋律軸の配線: モチーフ提示/回収の検収（M3 軸別 evidence 経由） | **M2e 破断曲線 + M4** | 凍結（依存待ち） |
+| **L0c** | 旋律軸の配線: モチーフ提示/回収の検収（M3 軸別 evidence 経由） | **M3d 校正 + M4**（決定論演奏者の出力は clear_lead 帯） | 凍結（依存待ち） |
 
-L0-s / L0a / L0b は **M2e に依存しない**。M2e 本測定（15 シャード前後の消化試合）と
-並走できるが、実行リソースは M2e 優先とする（同一 VM で回す場合、スパイクの
-演奏・抽出は本測定の隙間で行う）。
+本トラックは **M2e に依存しない**（L0c 含む: 決定論演奏者の旋律検収は clear_lead
+帯であり、待つのは M3d 校正 + M4 の翻訳型。M2e 破断曲線は実ミックス帯の校正で、
+M4 G2 を解錠しないことを自身が明記している。M2e が効くのは将来の実生成器拡張 =
+リンク 3 以降）。M2e 本測定と並走できるが、実行リソースは M2e 優先とする
+（同一 VM で回す場合、スパイクの演奏・抽出は本測定の隙間で行う）。
 
 ### 4.1 L0-s スパイク計画（最小設計）
 
@@ -141,6 +146,7 @@ L0-s / L0a / L0b は **M2e に依存しない**。M2e 本測定（15 シャー�
   2. 検証エラーの表現不足（何を言われれば直せたか）
   3. 差分報告に必要だった情報（何が無くて生データを見に行ったか）
   4. 周回ごとの三つ組 `(score_hash, intent_hash, report_hash)` と収束の推移
+  5. 著述契約・事前登録課題の content hash（スパイク開始時に pin。§3 の変更禁止則に従う）
 - **注意**: スパイク実施エージェントはエンジン実装を読まずに回すこと（D2 の
   手動遵守）。読まざるを得なかった箇所こそが契約の欠陥であり、最重要の記録対象。
 
@@ -168,6 +174,7 @@ L0-s / L0a / L0b は **M2e に依存しない**。M2e 本測定（15 シャー�
 - [`semantic_ci_product_v1.md`](semantic_ci_product_v1.md) — Diff → Repair ループの型
 - [`roundtrip_preservation.md`](roundtrip_preservation.md) — R0 決定論往復診断（L0b の計測系）
 - [`ai_performer_score_roadmap.md`](ai_performer_score_roadmap.md) — control_profile / grip（リンク 3）
-- [`DESIGN_M2e_vremix_real_bed.md`](DESIGN_M2e_vremix_real_bed.md) — L0c が待つ旋律計器の帯域校正
+- [`DESIGN_M3_melody_comparator.md`](DESIGN_M3_melody_comparator.md) — M3d 校正計画（L0c の依存）
+- [`DESIGN_M2e_vremix_real_bed.md`](DESIGN_M2e_vremix_real_bed.md) — 実ミックス帯の旋律計器校正（将来の実生成器拡張が待つ。L0c の依存ではない）
 - [`DESIGN_M4_recast_melody_anchor.md`](DESIGN_M4_recast_melody_anchor.md) — 軸別 evidence の翻訳先例（L0c の型）
 - [`learned_models_policy.md`](learned_models_policy.md) — D4 隔離原則の出典
