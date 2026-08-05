@@ -74,17 +74,37 @@ _NOTE_VALUE_VALIDATORS: dict[str, Any] = {
 
 
 def _reject_non_finite_float(value: Any, *, field_name: str) -> None:
-    """PR #246 Codex P2 review 9 巡目 B: `requirement`/`observed` は `Any`
-    型のまま（str/list/dict 等の任意の要求・実測値を運ぶ必要があるため）だが、
-    値が `float` のときだけ有限性（`math.isfinite`）を fail-fast で強制する
-    ——`bool`（`int` のサブクラスだが `float` ではない）や `int`/`str`/`list`
-    はここでの対象外、そのまま通す。構築時にここで弾いておくことで、
-    `dump_json_bytes` の `allow_nan=False` が事後的に `ValueError` として
-    間接的に検出するのではなく、生成の時点で意図が明確な `ValidationError`
-    として拒否できる。"""
+    """PR #246 Codex P2 review 9 巡目 B（直値）+ 11 巡目（ネスト、この関数の
+    再帰拡張）で非有限値ファミリーを全数被覆する: `requirement`/`observed`
+    は `Any` 型のまま（str/list/dict 等の任意の要求・実測値を運ぶ必要が
+    あるため）だが、値が `float`（直値、または JSON 様コンテナ `list`/
+    `dict` の値としてネストした位置）のときだけ有限性（`math.isfinite`）を
+    fail-fast で強制する——`bool`（`int` のサブクラスだが `float` では
+    ない）や `int`/`str`/`None` はここでの対象外、そのまま通す（文字列
+    `"NaN"` は文字列としてそのまま通る——`float` 型でなければ検査対象外）。
+    `dict` はキーではなく値のみ再帰する（JSON のキーは常に文字列であり
+    `float` になり得ないため）。再帰は素朴な深さ優先で十分——この
+    report スキーマの `requirement`/`observed` が運ぶ構造（軸のラベル列・
+    単純な入れ子）は実用上浅く、決定論的に全要素を訪問できれば足りる。
 
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError(f"{field_name} must be finite (NaN/inf rejected): {value!r}")
+    構築時にここで弾いておくことで、`dump_json_bytes` の `allow_nan=False`
+    が事後的に `ValueError` として間接的に検出するのではなく、生成の時点で
+    意図が明確な `ValidationError` として拒否できる——`allow_nan=False` は
+    この構築時ガードをすり抜けた場合（例: `model_construct` でガード自体を
+    迂回した裸のモデル）に備えた最終防衛線として残す。"""
+
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{field_name} must be finite (NaN/inf rejected): {value!r}")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_non_finite_float(item, field_name=f"{field_name}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _reject_non_finite_float(item, field_name=f"{field_name}[{key!r}]")
+        return
 
 
 class ObservedSection(BaseModel):
@@ -152,8 +172,11 @@ class AxisReport(BaseModel):
 
     `requirement`/`observed` は `Any`（str/list/dict 等の任意の要求・実測値
     を運ぶ）のままだが、`float` が来た場合のみ有限性を強制する（PR #246
-    Codex P2 review 9 巡目 B、`_reject_non_finite_float`）——文字列や
-    リスト（`structure` 軸のラベル列等）はそのまま通す。"""
+    Codex P2 review 9 巡目 B の直値検証 + 11 巡目のネスト（`list`/`dict`
+    内の `float`）再帰へ拡張、`_reject_non_finite_float`——非有限値
+    ファミリーはこれで全数被覆・`dump_json_bytes` の `allow_nan=False` は
+    最終防衛線）。文字列（`"NaN"` 含む）や整数・真偽値・`None` はそのまま
+    通す。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

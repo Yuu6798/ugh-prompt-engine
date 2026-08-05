@@ -351,6 +351,59 @@ def test_axis_report_accepts_non_float_requirement_and_observed():
     AxisReport(requirement=5, observed=5, verdict="deviated", band="out_of_band")
 
 
+def test_axis_report_rejects_nan_nested_in_observed_list():
+    """PR #246 Codex P2 review 11 巡目: closes the 9 巡目 B gap — the
+    direct-value finite check missed NaN/inf nested inside a `list`/`dict`
+    value of `requirement`/`observed`."""
+
+    with pytest.raises(ValidationError):
+        AxisReport(
+            requirement=["intro"],
+            observed=["intro", float("nan")],
+            verdict="mismatch",
+            band="not_observed",
+        )
+
+
+def test_axis_report_rejects_inf_nested_in_requirement_dict():
+    with pytest.raises(ValidationError):
+        AxisReport(
+            requirement={"x": float("inf")}, observed="y", verdict="deviated", band="out_of_band"
+        )
+
+
+def test_axis_report_rejects_deeply_nested_non_finite_value():
+    with pytest.raises(ValidationError):
+        AxisReport(
+            requirement=["a", {"nested": [1, 2, float("nan")]}],
+            observed="y",
+            verdict="deviated",
+            band="out_of_band",
+        )
+
+
+def test_axis_report_accepts_normal_nested_list_and_dict_values():
+    """Regression guard: ordinary nested list/dict values (no non-finite
+    floats) are unaffected by the recursive finite check."""
+
+    AxisReport(
+        requirement=["intro", "chorus", "outro"],
+        observed=["intro", "chorus"],
+        verdict="mismatch",
+        band="not_observed",
+    )
+    AxisReport(requirement={"a": 1, "b": "text"}, observed="y", verdict="deviated", band="out_of_band")
+
+
+def test_axis_report_accepts_string_nan_and_inf_as_plain_text():
+    """The literal strings "NaN"/"inf" are not `float` instances — the
+    finite check only inspects actual `float` values, so these pass through
+    as ordinary text (top-level and nested inside a list)."""
+
+    AxisReport(requirement="NaN", observed="y", verdict="deviated", band="out_of_band")
+    AxisReport(requirement=["NaN", "inf"], observed="y", verdict="deviated", band="out_of_band")
+
+
 def test_axis_report_accepts_observed_sections_schema():
     axis = AxisReport(
         requirement=["intro", "chorus", "outro"],
