@@ -38,6 +38,24 @@
 # prompt_max_chars/priority は型のみ強制し値は非強制（round 8 の境界宣言:
 # contract.md §1 はこの 2 フィールドを「推奨」と明記し、下流レンダラーは
 # 任意値を graceful に処理する非 crash-family）。
+#
+# 下限（L0a 独自、PR #246 Codex P2 review 2 巡目 — L0-s の逐語移植の範囲外の
+# 新規ルール。crash-family 実測: `svp_rpe.perform.performer.perform()` を
+# `FAITHFUL_TAKE` スタイルで直接実行し確認）。
+#   - physical.bpm: 0 → ZeroDivisionError（`60.0 / bpm`）。負値（-60）→
+#     `ValueError: zero-size array to reduction operation maximum`
+#     （`_chord_wave`/`peak = np.max(...)` が空配列を渡される）。→ min: 1。
+#   - structure[].bars: 0 / 負値（-4）→ 同じ `ValueError`（section_len が
+#     0/負になり `t` が空配列になる経路）。→ min: 1。
+#   - physical.time_signature: 分子 0（`"0/4"`）→ 同じ `ValueError`
+#     （`beats_per_bar=0` から `bar_sec=0` → 空配列）。→ 正規表現を
+#     `^[1-9][0-9]*/[1-9][0-9]*$` へ狭窄（分子・分母とも 0 排除）。
+#     **境界宣言**: 分母 0（`"4/0"`）は実測非クラッシュ（`perform()` は
+#     `time_signature.split("/", 1)[0]`＝分子のみを読み、分母はこのリポジトリの
+#     どこでも解析されない）。分母 0 を許す時刻記法は無意味なため防御的に
+#     同じ正規表現へ含めて排除するが、これは crash-family 認定ではなく
+#     形式の健全性強化——`bpm`/`bars` の `min: 1` や分子 0 の排除とは
+#     実測根拠の性質が異なる（詳細 = docs/l0a_authoring_contract.md (b)）。
 
 schema_version: "authoring-contract/1.0"
 
@@ -89,12 +107,13 @@ physical:
   fields:
     bpm:
       type: int
+      min: 1
     key:
       type: str
       format: '^[A-Ga-g][#b]? (major|minor)$'
     time_signature:
       type: str
-      format: '^[0-9]+/[0-9]+$'
+      format: '^[1-9][0-9]*/[1-9][0-9]*$'
     active_rate_target:
       type: str
     valley_depth_target:
@@ -112,6 +131,7 @@ structure_section:
       type: str
     bars:
       type: int
+      min: 1
     role:
       type: str
     physical:

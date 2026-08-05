@@ -49,6 +49,35 @@ L0-s 観測記録 §3.3-2「計器の分解能・有効帯域の非開示」へ�
   強制しない（構造の可行性は音響ヒューリスティックであり pydantic 型検証の
   対象外）。
 
+### 数値下限のクラッシュ族実測（PR #246 Codex P2 review 2 巡目）
+
+L0-s 6 巡目（`physical.key`/`physical.time_signature` の記法）と同型の
+「契約妥当 × 下流ハードクラッシュ」族。`svp_rpe.perform.performer.perform()`
+を `FAITHFUL_TAKE` スタイルで直接実行し、契約の型チェックは通るが
+`perform()` を未捕捉例外で落とす非正整数値を実測で確定した:
+
+| 実測対象 | 結果 | 例外 |
+|---|---|---|
+| `physical.bpm: 0` | **クラッシュ** | `ZeroDivisionError`（`60.0 / bpm`） |
+| `physical.bpm: -60` | **クラッシュ** | `ValueError: zero-size array to reduction operation maximum`（負の `bar_sec` → 空配列 → `np.max` が空配列に失敗） |
+| `structure[].bars: 0` | **クラッシュ** | 同上 `ValueError`（`section_len` が 0 になり `t` が空配列） |
+| `structure[].bars: -4` | **クラッシュ** | 同上 `ValueError` |
+| `physical.time_signature: "0/4"`（分子 0） | **クラッシュ** | 同上 `ValueError`（`beats_per_bar=0` → `bar_sec=0`） |
+| `physical.time_signature: "4/0"`（分母 0） | 非クラッシュ | — （`perform()` は `time_signature.split("/", 1)[0]` で分子のみ読み、分母はこのリポジトリのどこでも解析されない） |
+
+ゲート化: `physical.bpm`/`structure[].bars` に `FieldSpec.min: 1` を追加し、
+新規 kind `range` の違反として報告する（下記 (c) の kind 表に追加）。
+`physical.time_signature` の形式正規表現を `^[1-9][0-9]*/[1-9][0-9]*$`
+へ狭窄した——**境界宣言**: 分母 0 の排除はクラッシュ実測に基づく判断では
+なく（実測は非クラッシュ）、意味のない時刻記法を防御的に閉じる形式強化に
+すぎない。`bpm`/`bars`/分子 0 の 3 者と実測根拠の性質が異なることを
+ここに明記する（L0-s の「クラッシュ確認済みのみゲート、非クラッシュは
+境界宣言」という規律を、分母 0 についても嘘なく保つため）。
+
+歴史的 evidence（陽性対照 + L0-s rounds 1–5、いずれも `bpm`/`bars` 正整数・
+`time_signature: "4/4"`）は本ゲート追加後も全件 `pass` のまま
+（`tests/test_validate_cli.py`/手動再検証で確認）。
+
 ## (c) エラープロトコル — kind 語彙と where 粒度
 
 `svprpe validate`（`src/svp_rpe/authoring/validate.py`）が返すエラーは
@@ -61,6 +90,7 @@ L0-s 観測記録 §3.3-2「計器の分解能・有効帯域の非開示」へ�
 | `enum` | spec が宣言する列挙値のいずれでもない |
 | `literal` | spec が宣言する単一リテラル値と一致しない |
 | `format` | spec が宣言する正規表現形式に一致しない（`physical.key`/`physical.time_signature` のみ） |
+| `range` | spec が宣言する下限 (`FieldSpec.min`) を下回る（`physical.bpm`/`structure[].bars` のみ。PR #246 crash-family 実測、上記 (b) 節） |
 | `canonical` | canonical `CompositionScore` 検証（pydantic）が拒否 |
 
 `where` の粒度はセクション+フィールド（例 `physical.bpm`、

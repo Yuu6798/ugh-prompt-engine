@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from svp_rpe.utils.config_loader import load_config
 
@@ -21,11 +21,14 @@ FieldType = Literal["str", "int", "list_str"]
 
 
 class FieldSpec(BaseModel):
-    """1 フィールドの型狭窄 + 任意の列挙/リテラル/形式正規表現。
+    """1 フィールドの型狭窄 + 任意の列挙/リテラル/形式正規表現/下限。
 
-    `enum`/`literal`/`format` は `type` が先に確認された（値が実際にその型
-    である）場合のみ適用される—— 型違反と列挙/リテラル/形式違反を二重報告
-    しない、という `validate_score.py` の非重複規約をそのまま踏襲する。
+    `enum`/`literal`/`format`/`min` は `type` が先に確認された（値が実際に
+    その型である）場合のみ適用される—— 型違反とこれらの二次制約違反を
+    二重報告しない、という `validate_score.py` の非重複規約をそのまま踏襲
+    する。`min`（PR #246 Codex P2 2 巡目）は `type: int` のみに適用され、
+    その他の `type` と併用すると spec 自体が `AuthoringContractSpec` 検証で
+    拒否される（後述）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -34,6 +37,13 @@ class FieldSpec(BaseModel):
     enum: Optional[list[str]] = None
     literal: Optional[str] = None
     format: Optional[str] = None
+    min: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _min_requires_int_type(self) -> Self:
+        if self.min is not None and self.type != "int":
+            raise ValueError(f"min is only valid for type='int' fields (got type={self.type!r})")
+        return self
 
 
 class ObjectSpec(BaseModel):

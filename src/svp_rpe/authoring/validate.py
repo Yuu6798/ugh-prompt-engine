@@ -7,11 +7,24 @@ score dict に対し、(1) `AuthoringContractSpec` が宣言する公開スキ�
 した後継——同スクリプト自体は凍結済み歴史的成果物のため変更しない。
 
 エラーは `{where, message, kind}` の決定論ソート済みリストで返す
-（`kind` ∈ `public_scope`/`type`/`enum`/`literal`/`format`/`canonical`）。
-公開スキーマ範囲チェックの失敗は canonical 検証を短絡しない（両方常に走る、
-`validate_score.py` と同じ設計）—— `errors` は公開範囲エラー（`(where,
-message)` でソート済み）に続けて canonical エラー（pydantic の `loc` 順、
-そのまま）を連結する。
+（`kind` ∈ `public_scope`/`type`/`enum`/`literal`/`format`/`range`/
+`canonical`）。公開スキーマ範囲チェックの失敗は canonical 検証を短絡しない
+（両方常に走る、`validate_score.py` と同じ設計）—— `errors` は公開範囲
+エラー（`(where, message)` でソート済み）に続けて canonical エラー
+（pydantic の `loc` 順、そのまま）を連結する。
+
+`range`（PR #246 Codex P2 2 巡目、L0-s 6 巡目と同型の crash-family 実測終端）:
+`physical.bpm`/`structure[].bars` の非正整数（0 以下）と
+`physical.time_signature` の分子 0（`beats_per_bar` 相当）が
+`perform()` を未捕捉例外でクラッシュさせることを実測確認し、
+`bpm`/`bars` に `min: 1`（`FieldSpec.min`、`type` 違反と非重複の二次
+制約として `type` チェック合格後にのみ適用）、`time_signature` の形式
+正規表現を `^[1-9][0-9]*/[1-9][0-9]*$` へ狭窄した。`min` 違反は既存の
+`type`/`format` いずれとも意味が異なる（値の型・記法ではなく許容域の
+下限）ため、新規 kind `range` を割り当てる（`type`/`format` への
+無理な合流を避け一貫性を優先——docs/l0a_authoring_contract.md (c) の
+kind 語彙表も同期）。詳細な実測結果と時間分母 0（`"4/0"`）が
+crash-family でないという境界宣言は同 doc (b) 節。
 """
 from __future__ import annotations
 
@@ -23,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from svp_rpe.authoring.contract import AuthoringContractSpec, FieldSpec, ObjectSpec
 from svp_rpe.compose.models import CompositionScore
 
-ErrorKind = Literal["public_scope", "type", "enum", "literal", "format", "canonical"]
+ErrorKind = Literal["public_scope", "type", "enum", "literal", "format", "range", "canonical"]
 
 
 class AuthoringErrorItem(BaseModel):
@@ -129,6 +142,18 @@ def _check_field(where: str, container: Any, key: str, spec: FieldSpec) -> list[
                     kind="format",
                 )
             )
+    if spec.min is not None and value < spec.min:
+        errors.append(
+            AuthoringErrorItem(
+                where=where,
+                message=(
+                    f"must be >= {spec.min} per the L0a authoring contract spec — "
+                    "confirmed to crash perform()'s deterministic pipeline otherwise "
+                    "(PR #246 Codex P2 crash-family sweep)"
+                ),
+                kind="range",
+            )
+        )
     return errors
 
 

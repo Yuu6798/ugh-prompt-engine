@@ -24,6 +24,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -200,6 +201,102 @@ def test_chord_root_flat_bb_is_rejected(tmp_path: Path):
         if e["where"] == "events.chord_progression[0].root" and e["kind"] == "enum"
     ]
     assert matches, errors
+
+
+# ---------------------------------------------------------------------------
+# Crash-family negatives (D-L0a-5, PR #246 Codex P2 review round 2): non-
+# positive physical.bpm / structure[].bars / physical.time_signature values
+# empirically confirmed to crash svp_rpe.perform.performer.perform() with an
+# uncaught exception rather than fail gracefully (see
+# docs/l0a_authoring_contract.md (b) for the measured exception per case).
+# ---------------------------------------------------------------------------
+
+
+def test_bpm_zero_is_rejected(tmp_path: Path):
+    def mutate(data: dict[str, Any]) -> None:
+        data["physical"]["bpm"] = 0
+
+    errors = _fail_errors(tmp_path, mutate)
+    matches = [e for e in errors if e["where"] == "physical.bpm" and e["kind"] == "range"]
+    assert matches, errors
+
+
+def test_bpm_negative_is_rejected(tmp_path: Path):
+    def mutate(data: dict[str, Any]) -> None:
+        data["physical"]["bpm"] = -60
+
+    errors = _fail_errors(tmp_path, mutate)
+    matches = [e for e in errors if e["where"] == "physical.bpm" and e["kind"] == "range"]
+    assert matches, errors
+
+
+def test_bars_zero_is_rejected(tmp_path: Path):
+    def mutate(data: dict[str, Any]) -> None:
+        data["structure"][0]["bars"] = 0
+
+    errors = _fail_errors(tmp_path, mutate)
+    matches = [e for e in errors if e["where"] == "structure[0].bars" and e["kind"] == "range"]
+    assert matches, errors
+
+
+def test_bars_negative_is_rejected(tmp_path: Path):
+    def mutate(data: dict[str, Any]) -> None:
+        data["structure"][0]["bars"] = -4
+
+    errors = _fail_errors(tmp_path, mutate)
+    matches = [e for e in errors if e["where"] == "structure[0].bars" and e["kind"] == "range"]
+    assert matches, errors
+
+
+def test_time_signature_zero_numerator_is_rejected(tmp_path: Path):
+    def mutate(data: dict[str, Any]) -> None:
+        data["physical"]["time_signature"] = "0/4"
+
+    errors = _fail_errors(tmp_path, mutate)
+    matches = [
+        e for e in errors if e["where"] == "physical.time_signature" and e["kind"] == "format"
+    ]
+    assert matches, errors
+
+
+def test_time_signature_zero_denominator_is_rejected(tmp_path: Path):
+    """The denominator is never parsed anywhere in the deterministic
+    pipeline (perform() only reads the numerator) — this is a graceful,
+    non-crash case per the empirical sweep. It is still excluded by the
+    narrowed format regex as a defensive sanity constraint, not a
+    crash-family classification (boundary declaration, docs (b))."""
+
+    def mutate(data: dict[str, Any]) -> None:
+        data["physical"]["time_signature"] = "4/0"
+
+    errors = _fail_errors(tmp_path, mutate)
+    matches = [
+        e for e in errors if e["where"] == "physical.time_signature" and e["kind"] == "format"
+    ]
+    assert matches, errors
+
+
+def test_positive_bpm_and_bars_still_pass():
+    """Regression guard: the min=1 gate must not reject the positive control's
+    already-valid positive bpm/bars values."""
+
+    result = _invoke(str(POSITIVE_CONTROL_PATH), "--contract", str(CONTRACT_PATH), "--format", "json")
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    "round_score_path",
+    sorted(REPO_ROOT.glob("examples/l0s_spike/rounds/round*/score.yaml")),
+    ids=lambda p: p.parent.name,
+)
+def test_historical_l0s_round_scores_still_pass(round_score_path: Path):
+    """The 5 L0-s historical round scores (frozen evidence) all declare
+    positive bpm/bars and a well-formed time_signature — the new min=1/
+    narrowed-format gate must not regress them (PR #246 review round 2)."""
+
+    result = _invoke(str(round_score_path), "--contract", str(CONTRACT_PATH), "--format", "json")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {"status": "pass"}
 
 
 # ---------------------------------------------------------------------------

@@ -38,10 +38,14 @@ def test_default_contract_field_specs_match_validate_score_py_rules():
     spec = load_authoring_contract()
 
     assert spec.physical.fields["bpm"].type == "int"
+    assert spec.physical.fields["bpm"].min == 1
     assert spec.physical.fields["key"].type == "str"
     assert spec.physical.fields["key"].format == r"^[A-Ga-g][#b]? (major|minor)$"
-    assert spec.physical.fields["time_signature"].format == r"^[0-9]+/[0-9]+$"
+    assert spec.physical.fields["time_signature"].format == r"^[1-9][0-9]*/[1-9][0-9]*$"
     assert set(spec.physical.fields["brightness"].enum or []) == {"dark", "bright", "balanced"}
+
+    assert spec.structure_section.fields["bars"].type == "int"
+    assert spec.structure_section.fields["bars"].min == 1
 
     assert spec.rendering.fields["target_backend"].literal == "external"
     assert spec.rendering.fields["prompt_max_chars"].type == "int"
@@ -154,6 +158,20 @@ def test_object_spec_defaults_to_no_fields():
 def test_field_spec_rejects_unknown_type():
     with pytest.raises(ValidationError):
         FieldSpec(type="float")  # type: ignore[arg-type]
+
+
+def test_field_spec_accepts_min_on_int_type():
+    spec = FieldSpec(type="int", min=1)
+    assert spec.min == 1
+
+
+def test_field_spec_rejects_min_on_non_int_type():
+    """PR #246 Codex P2 review 2 巡目: `min` は `type: int` にのみ意味を持つ
+    （非正整数の crash-family ゲート専用）——他の型と組み合わせた spec は
+    タイプミスとして拒否する。"""
+
+    with pytest.raises(ValidationError):
+        FieldSpec(type="str", min=1)
 
 
 def test_packaged_contract_config_matches_repo_config(monkeypatch: pytest.MonkeyPatch):
