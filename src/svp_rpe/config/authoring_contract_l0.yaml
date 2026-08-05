@@ -1,0 +1,171 @@
+# authoring_contract_l0.yaml — L0a 著述契約 v1: 公開スキーマ範囲の宣言的 spec。
+#
+# schema_version: authoring-contract/1.0
+#
+# provenance（L0-s 9 巡硬化由来）: この spec は
+# `examples/l0s_spike/scripts/validate_score.py`（PR #245, Codex P2 review
+# round 1-8 で硬化した記号検証ゲート）がハードコードしていた制約の逐語データ化
+# である。同スクリプトは L0-s の硬化済み歴史的成果物として一切変更していない
+# （CLAUDE.md の凍結成果物ポリシー）——この spec が公開スキーマ範囲の新しい正本
+# （`src/svp_rpe/authoring/validate.py` が消費する）で、`validate_score.py` 側の
+# フリーズされた frozenset/正規表現/リテラルはこの spec の一次資料として残す。
+#
+# 対応関係（新設 tests/test_authoring_contract.py が個別に固定）:
+#   top_level.allowed_keys        <- validate_score.py TOP_LEVEL_KEYS
+#   meta.allowed_keys             <- META_KEYS
+#   semantic.allowed_keys         <- SEMANTIC_KEYS（lyrics_presence は非掲載=拒否のまま）
+#   grv.allowed_keys              <- GRV_KEYS
+#   delta_e.allowed_keys          <- DELTA_E_KEYS
+#   physical.allowed_keys/fields  <- PHYSICAL_KEYS + 各 _check_*_field 呼び出し
+#   structure_section.allowed_keys/fields <- STRUCTURE_SECTION_KEYS
+#   rendering.allowed_keys/fields <- RENDERING_KEYS（target_backend のみ literal）
+#   events.allowed_keys           <- EVENTS_KEYS
+#   chord.allowed_keys/fields     <- CHORD_KEYS + 2 つの列挙
+#
+# 型狭窄（round 2）: bpm/bars/prompt_max_chars は strict int（bool 除外。
+# canonical CompositionScore は digit-string を bpm へ正規化するがこの契約は
+# それより狭い）。avoid/priority は list[str]。
+# 列挙（round 2）: physical.brightness（3 値）、chord root（12 シャープ表記、
+# フラット表記不可）、chord quality（2 値）。
+# リテラル（round 8）: rendering.target_backend は "external" のみ
+# （型ではなく単一値。crash-family 実測: "musicgen" は svprpe package が
+# RuntimeError、"suno" は判定器の意味論を無言で変える）。
+# 形式正規表現（round 6）: physical.key / physical.time_signature の 2 つのみ
+# （crash-family 実測: measure_round.py の parse_key / int(time_signature) が
+# 生トレースバックで落ちることを直接確認済みのフィールドに限定。
+# active_rate_target/valley_depth_target の範囲形式は非クラッシュと確認済み
+# のため意図的に未強制——境界宣言）。
+# prompt_max_chars/priority は型のみ強制し値は非強制（round 8 の境界宣言:
+# contract.md §1 はこの 2 フィールドを「推奨」と明記し、下流レンダラーは
+# 任意値を graceful に処理する非 crash-family）。
+#
+# 下限（L0a 独自、PR #246 Codex P2 review 2 巡目 — L0-s の逐語移植の範囲外の
+# 新規ルール。crash-family 実測: `svp_rpe.perform.performer.perform()` を
+# `FAITHFUL_TAKE` スタイルで直接実行し確認）。
+#   - physical.bpm: 0 → ZeroDivisionError（`60.0 / bpm`）。負値（-60）→
+#     `ValueError: zero-size array to reduction operation maximum`
+#     （`_chord_wave`/`peak = np.max(...)` が空配列を渡される）。→ min: 1。
+#   - structure[].bars: 0 / 負値（-4）→ 同じ `ValueError`（section_len が
+#     0/負になり `t` が空配列になる経路）。→ min: 1。
+#   - physical.time_signature: 分子 0（`"0/4"`）→ 同じ `ValueError`
+#     （`beats_per_bar=0` から `bar_sec=0` → 空配列）。→ 正規表現を
+#     `^[1-9][0-9]*/[1-9][0-9]*$` へ狭窄（分子・分母とも 0 排除）。
+#     **境界宣言**: 分母 0（`"4/0"`）は実測非クラッシュ（`perform()` は
+#     `time_signature.split("/", 1)[0]`＝分子のみを読み、分母はこのリポジトリの
+#     どこでも解析されない）。分母 0 を許す時刻記法は無意味なため防御的に
+#     同じ正規表現へ含めて排除するが、これは crash-family 認定ではなく
+#     形式の健全性強化——`bpm`/`bars` の `min: 1` や分子 0 の排除とは
+#     実測根拠の性質が異なる（詳細 = docs/l0a_authoring_contract.md (b)）。
+
+schema_version: "authoring-contract/1.0"
+
+top_level:
+  allowed_keys: [meta, semantic, physical, structure, rendering, events]
+
+meta:
+  allowed_keys: [title, version]
+  fields:
+    title:
+      type: str
+    version:
+      type: str
+
+semantic:
+  # lyrics_presence は CompositionScore.semantic の正当なフィールドだが、この
+  # 契約は非掲載——canonical 側で許容されても公開範囲チェックが拒否する
+  # （validate_score.py の意図的な非対称性、逐語のまま）。
+  allowed_keys: [core, grv, delta_e, avoid]
+  fields:
+    core:
+      type: str
+    avoid:
+      type: list_str
+
+grv:
+  allowed_keys: [primary, secondary]
+  fields:
+    primary:
+      type: str
+    secondary:
+      type: str
+
+delta_e:
+  allowed_keys: [overall]
+  fields:
+    overall:
+      type: str
+
+physical:
+  allowed_keys:
+    - bpm
+    - key
+    - time_signature
+    - active_rate_target
+    - valley_depth_target
+    - brightness
+    - stereo_width
+  fields:
+    bpm:
+      type: int
+      min: 1
+    key:
+      type: str
+      format: '^[A-Ga-g][#b]? (major|minor)$'
+    time_signature:
+      type: str
+      format: '^[1-9][0-9]*/[1-9][0-9]*$'
+    active_rate_target:
+      type: str
+    valley_depth_target:
+      type: str
+    brightness:
+      type: str
+      enum: [dark, bright, balanced]
+    stereo_width:
+      type: str
+
+structure_section:
+  # min_items (PR #246 Codex P2 review 4 巡目 B): governs the `structure`
+  # list itself, not a per-section field — crash-family実測: structure: []
+  # は canonical CompositionScore / per-element チェックのいずれも拒否せず
+  # svprpe validate が偽 pass を返した後、perform() が ValueError
+  # ("perform() requires at least one structure section") でクラッシュする
+  # ことを直接実行で確認した。events.chord_progression: [] は同じ実測手順
+  # で非クラッシュ（既定進行へフォールバック）と確認済みのためゲート対象外
+  # のまま（境界宣言）。
+  min_items: 1
+  allowed_keys: [section, bars, role, physical]
+  fields:
+    section:
+      type: str
+    bars:
+      type: int
+      min: 1
+    role:
+      type: str
+    physical:
+      type: str
+
+rendering:
+  allowed_keys: [target_backend, prompt_max_chars, priority]
+  fields:
+    target_backend:
+      type: str
+      literal: external
+    prompt_max_chars:
+      type: int
+    priority:
+      type: list_str
+
+events:
+  allowed_keys: [chord_progression]
+
+chord:
+  allowed_keys: [root, quality]
+  fields:
+    root:
+      type: str
+      enum: [C, "C#", D, "D#", E, F, "F#", G, "G#", A, "A#", B]
+    quality:
+      type: str
+      enum: [major, minor]
