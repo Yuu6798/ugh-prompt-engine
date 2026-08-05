@@ -401,6 +401,41 @@ def test_authoring_diff_report_accepts_brightness_deviated_with_bright():
     assert report.axes["brightness"].verdict == "deviated"
 
 
+def test_authoring_diff_report_rejects_brightness_preserved_with_non_str_requirement():
+    """PR #246 Codex P2 review 19 巡目: the earlier "非 str なら判定
+    スキップ" behavior let a type-malformed value (e.g. a number) claim a
+    success verdict unchecked — success verdicts must now enforce the
+    value's *type shape* too, not just its band membership."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "brightness": AxisReport(
+                    requirement=3.5, observed="dark", verdict="preserved", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_brightness_deviated_with_non_str_value():
+    """Regression guard: the failure-side verdict (`deviated`) keeps the
+    `AxisReport.Any` design unconstrained even for type-malformed values —
+    19 巡目's type-shape enforcement is success-side only."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "brightness": AxisReport(
+                requirement=3.5, observed="dark", verdict="deviated", band="measured"
+            )
+        },
+    )
+    assert report.axes["brightness"].verdict == "deviated"
+
+
 def test_authoring_diff_report_rejects_key_preserved_with_mismatched_values():
     """PR #246 Codex P2 review 17 巡目 A: a `key` axis claiming
     `verdict='preserved'` with genuinely different key values
@@ -463,6 +498,34 @@ def test_authoring_diff_report_accepts_key_deviated_with_mismatched_values():
                 requirement="D minor", observed="E minor", verdict="deviated", band="measured"
             )
         },
+    )
+    assert report.axes["key"].verdict == "deviated"
+
+
+def test_authoring_diff_report_rejects_key_preserved_with_non_str_values():
+    """PR #246 Codex P2 review 19 巡目: `requirement=1`/`observed=2` (int,
+    not str) claiming `verdict='preserved'` previously slipped past the
+    "非 str なら判定スキップ" gap — success verdicts must now enforce the
+    value's type shape, not just its content."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "key": AxisReport(requirement=1, observed=2, verdict="preserved", band="measured")
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_key_deviated_with_non_str_values():
+    """Regression guard: the failure-side verdict (`deviated`) keeps the
+    `AxisReport.Any` design unconstrained even for type-malformed values."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={"key": AxisReport(requirement=1, observed=2, verdict="deviated", band="measured")},
     )
     assert report.axes["key"].verdict == "deviated"
 
@@ -536,6 +599,46 @@ def test_authoring_diff_report_accepts_structure_mismatch_with_mismatched_sequen
             "structure": AxisReport(
                 requirement=["intro", "chorus", "outro"],
                 observed=["intro", "verse", "outro"],
+                verdict="mismatch",
+                band="measured",
+            )
+        },
+    )
+    assert report.axes["structure"].verdict == "mismatch"
+
+
+def test_authoring_diff_report_rejects_structure_exact_match_with_non_list_requirement():
+    """PR #246 Codex P2 review 19 巡目: `requirement="intro,chorus"` (a
+    plain string, not a list) claiming `verdict='exact_match'` previously
+    slipped past the "list でないなら判定スキップ" gap — success verdicts
+    must now enforce the value's type shape."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "structure": AxisReport(
+                    requirement="intro,chorus",
+                    observed=["intro", "chorus"],
+                    verdict="exact_match",
+                    band="measured",
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_structure_mismatch_with_non_list_value():
+    """Regression guard: the failure-side verdict (`mismatch`) keeps the
+    `AxisReport.Any` design unconstrained even for type-malformed values."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "structure": AxisReport(
+                requirement="intro,chorus",
+                observed=["intro", "chorus"],
                 verdict="mismatch",
                 band="measured",
             )

@@ -305,27 +305,33 @@ class AuthoringDiffReport(BaseModel):
     report スキーマは軸集合そのものを固定しないという既存方針
     （docstring 上段）を維持するため。
 
-    brightness の信頼帯強制（PR #246 Codex P2 review 16 巡目、8 巡目 B の
-    verdict×band 整合と同族——凍結信頼軸表 `config/authoring_trusted_axes_l0.
-    yaml` の `axes.brightness.band_restriction`（`trusted_values: [dark]`）
-    が report スキーマ側で従来強制されておらず、`brightness` 軸で
-    `"bright"`（帯外）× `verdict: "preserved"`（成功）× `band: "measured"`
-    の組が正規形として受理されてしまっていた）: `brightness` 軸の
-    `verdict` が成功側（`preserved`——7 巡目 A の `_AXIS_VERDICTS["brightness"]`
-    により `brightness` の成功語彙は `preserved` のみ）のとき、`requirement`/
-    `observed`（`str` 型の場合のみ判定——`AxisReport` はこれらを `Any` の
-    まま運ぶ設計のため、非 `str` 値は帯域判定の対象外で従来どおり通す）が
+    brightness の信頼帯強制（PR #246 Codex P2 review 16 巡目 + 19 巡目、
+    8 巡目 B の verdict×band 整合と同族——凍結信頼軸表
+    `config/authoring_trusted_axes_l0.yaml` の `axes.brightness.
+    band_restriction`（`trusted_values: [dark]`）が report スキーマ側で
+    従来強制されておらず、`brightness` 軸で `"bright"`（帯外）×
+    `verdict: "preserved"`（成功）× `band: "measured"` の組が正規形として
+    受理されてしまっていた）: `brightness` 軸の `verdict` が成功側
+    （`preserved`——7 巡目 A の `_AXIS_VERDICTS["brightness"]` により
+    `brightness` の成功語彙は `preserved` のみ）のとき、`requirement`/
+    `observed` は**両方 `str` でなければならない**（19 巡目: 型形状自体を
+    強制——旧実装は非 `str` を「判定対象外」として素通ししていたため
+    `requirement=3.5` のような型不正な値でも成功を主張できた）、かつ
     `_TRUSTED_BRIGHTNESS_VALUES`（`{"dark"}`）に含まれることを強制する。
     成功 verdict は 8 巡目 B により既に `band == "measured"` が必須のため、
-    本ガードは実質「`measured` × `preserved` × 帯外」の遮断になる。
-    **失敗側 verdict は帯外でも受理したまま**（`deviated` で「帯外だから
-    保持されていないと正直に報告する」経路——8 巡目 B の失敗側許容方針と
-    同じ理由で塞がない）。
+    本ガードは実質「`measured` × `preserved` × （型不正または帯外）」の
+    遮断になる。**失敗側 verdict は型不正・帯外でも受理したまま**
+    （`deviated` で「帯外だから保持されていないと正直に報告する」経路
+    ——8 巡目 B の失敗側許容方針と同じ理由で塞がない。`AxisReport` の
+    `Any` 設計を失敗側では維持する）。
 
-    key の値×verdict 整合（PR #246 Codex P2 review 17 巡目 A、16 巡目の
-    brightness 帯強制と同じ「成功側 verdict のみ制約する」一貫方針）:
-    `key` 軸の `verdict` が成功側（`preserved`）で `requirement`/`observed`
-    が両方 `str` のとき、`svp_rpe.keys.keys_enharmonically_equal` による
+    key の値×verdict 整合（PR #246 Codex P2 review 17 巡目 A + 19 巡目、
+    16 巡目の brightness 帯強制と同じ「成功側 verdict のみ制約する」
+    一貫方針）: `key` 軸の `verdict` が成功側（`preserved`）のとき、
+    `requirement`/`observed` は**両方 `str` でなければならない**（19 巡目:
+    型形状自体を強制——旧実装は非 `str` を「判定対象外」として素通しして
+    いたため `requirement=1`/`observed=2` のような型不正な値でも成功を
+    主張できた）、かつ `svp_rpe.keys.keys_enharmonically_equal` による
     異名同音等価判定を要求する——従来は verdict 語彙とデータ型のみを検証し
     値そのものの整合を見ていなかったため、`requirement="D minor"` /
     `observed="E minor"` × `verdict="preserved"` のような矛盾した組が正規形
@@ -335,10 +341,9 @@ class AuthoringDiffReport(BaseModel):
     等価、パース不能値は casefold 完全一致へフォールバック——他の目的
     （grip 効果量の加重スコア）向けの `weighted_key_score` とは意味が
     異なるため混同しない、`svp_rpe/keys.py` モジュール docstring 参照）。
-    **失敗側 verdict（`deviated`）は値の不一致を制約しない**（16 巡目と
-    同じ「成功側のみ強制」方針——「一致しないと正直に報告する」経路を
-    塞がない）。非 `str` の `requirement`/`observed`（`AxisReport` の
-    `Any` 設計）は判定対象外で従来どおり通す。
+    **失敗側 verdict（`deviated`）は型不正・値の不一致いずれも制約しない**
+    （16 巡目と同じ「成功側のみ強制」方針——「一致しないと正直に報告する」
+    経路を塞がない。`AxisReport` の `Any` 設計を失敗側では維持する）。
 
     既知除外軸への成功宣言の禁止（PR #246 Codex P2 review 17 巡目 B）:
     凍結信頼軸表が採用しなかった軸（`_KNOWN_EXCLUDED_AXES` — K1 grip map
@@ -353,21 +358,38 @@ class AuthoringDiffReport(BaseModel):
     収載済み（実験ごとの動的判定の対象）のためこのリストに含めない——
     静的に「常に除外」とは言えない軸を誤って denylist しないための区別。
 
-    structure の値×verdict 整合（PR #246 Codex P2 review 18 巡目 C、17 巡目
-    A の key 整合と同じ「成功側 verdict のみ制約する」一貫方針）: `structure`
-    軸の `verdict` が成功側（`exact_match` — `structure` の成功語彙は
-    `exact_match` のみ）で `requirement`/`observed` が両方「全要素 `str` の
-    `list`」（`_is_str_list`）のとき、casefold 逐要素の列完全一致（長さの
-    不一致も拒否）を要求する——`['intro', 'chorus']` vs `['intro', 'outro']`
-    のような矛盾した組や、要素は前方一致するが長さが異なる組が
-    `verdict='exact_match'` として正規形受理されてしまっていた欠陥を閉じる。
-    **report が格納する値は観測器（`svp_rpe.arrange.observe` の structure
-    domain）の正規化済みラベル列であるという契約**に依拠する——観測器
-    自身の正規化ロジック（大小文字・空白の扱い等）はここで再実装しない。
-    **失敗側 verdict（`mismatch`）は列の不一致を制約しない**（17 巡目 A・
+    structure の値×verdict 整合（PR #246 Codex P2 review 18 巡目 C + 19 巡目、
+    17 巡目 A の key 整合と同じ「成功側 verdict のみ制約する」一貫方針）:
+    `structure` 軸の `verdict` が成功側（`exact_match` — `structure` の
+    成功語彙は `exact_match` のみ）のとき、`requirement`/`observed` は
+    **両方「全要素 `str` の `list`」でなければならない**（`_is_str_list`。
+    19 巡目: 型形状自体を強制——旧実装は非該当の型を「判定対象外」として
+    素通ししていたため `requirement="intro,chorus"`（list ではなく文字列
+    そのもの）のような型不正な値でも成功を主張できた）、かつ casefold
+    逐要素の列完全一致（長さの不一致も拒否）を要求する——
+    `['intro', 'chorus']` vs `['intro', 'outro']` のような矛盾した組や、
+    要素は前方一致するが長さが異なる組が `verdict='exact_match'` として
+    正規形受理されてしまっていた欠陥を閉じる。**report が格納する値は
+    観測器（`svp_rpe.arrange.observe` の structure domain）の正規化済み
+    ラベル列であるという契約**に依拠する——観測器自身の正規化ロジック
+    （大小文字・空白の扱い等）はここで再実装しない。**失敗側 verdict
+    （`mismatch`）は型不正・列の不一致いずれも制約しない**（17 巡目 A・
     16 巡目 brightness と同じ方針——「一致しないと正直に報告する」経路を
-    塞がない）。片方または両方が「全要素 `str` の `list`」でない場合
-    （`AxisReport` の `Any` 設計）は判定対象外で従来どおり通す。
+    塞がない。`AxisReport` の `Any` 設計を失敗側では維持する）。
+
+    **値×verdict 整合ファミリーの終端宣言（PR #246 Codex P2 review 16
+    （brightness）→ 17 巡目 A（key）→ 18 巡目 C（structure）→ 19 巡目
+    （型形状））**: この一連のガードは一貫して「成功側 verdict のみ値の
+    整合を強制し、失敗側 verdict は `AxisReport` の `Any` 設計のまま
+    無制約に保つ」という方針を貫く。19 巡目でこの方針を「値そのものの
+    整合（帯域・異名同音・列一致）」から「値の**型形状**」まで踏み込んで
+    完結させた——成功側 verdict は型不正な値（`requirement=1` のような
+    非 `str`、`requirement="intro,chorus"` のような非 `list`）を経由して
+    整合チェックを回避できなくなった。既知3軸（`brightness`/`key`/
+    `structure`）の成功側整合はこれで型・値の両面から閉じている。将来
+    L0b が新しい既知軸を追加する場合は、この3件と同じ「成功側は型形状+
+    値整合の両方を強制、失敗側は `Any` のまま」というテンプレートに
+    従うこと。
 
     `observed_sections` の軸限定（PR #246 Codex P2 review 13 巡目 + 14 巡目、
     7 巡目 A と同族の軸不整合）: `AxisReport.observed_sections` は
@@ -447,7 +469,17 @@ class AuthoringDiffReport(BaseModel):
             return self
         errors = []
         for field_name, value in (("requirement", axis_report.requirement), ("observed", axis_report.observed)):
-            if isinstance(value, str) and value not in _TRUSTED_BRIGHTNESS_VALUES:
+            if not isinstance(value, str):
+                # PR #246 Codex P2 review 19 巡目: 成功側 verdict では型形状
+                # 自体を強制する（旧実装は非 str をここで判定スキップして
+                # いたため、requirement=1/observed=2 のような型不正な値でも
+                # 「str でないので帯域判定対象外」として素通りしていた）。
+                errors.append(
+                    f"axes['brightness'].{field_name}={value!r} must be str when "
+                    "verdict is a success verdict — a success claim requires a "
+                    "well-formed value, not just an in-band one"
+                )
+            elif value not in _TRUSTED_BRIGHTNESS_VALUES:
                 errors.append(
                     f"axes['brightness'].{field_name}={value!r} is outside the trusted band "
                     f"{sorted(_TRUSTED_BRIGHTNESS_VALUES)!r} (config/authoring_trusted_axes_l0."
@@ -466,7 +498,15 @@ class AuthoringDiffReport(BaseModel):
         requirement = axis_report.requirement
         observed = axis_report.observed
         if not isinstance(requirement, str) or not isinstance(observed, str):
-            return self
+            # PR #246 Codex P2 review 19 巡目: 成功側 verdict では型形状を
+            # 強制する（旧実装は非 str をここで判定スキップしていたため、
+            # requirement=1/observed=2 のような型不正な値が「str でないので
+            # 判定対象外」として preserved のまま素通りしていた）。
+            raise ValueError(
+                f"axes['key'].verdict='preserved' but requirement={requirement!r} and "
+                f"observed={observed!r} must both be str — a success verdict requires a "
+                "well-formed value, not just an unchecked one"
+            )
         if not keys_enharmonically_equal(requirement, observed):
             raise ValueError(
                 f"axes['key'].verdict='preserved' but requirement={requirement!r} and "
@@ -499,7 +539,16 @@ class AuthoringDiffReport(BaseModel):
         requirement = axis_report.requirement
         observed = axis_report.observed
         if not _is_str_list(requirement) or not _is_str_list(observed):
-            return self
+            # PR #246 Codex P2 review 19 巡目: 成功側 verdict では型形状を
+            # 強制する（旧実装は「全要素 str の list」でない値をここで
+            # 判定スキップしていたため、`"intro,chorus"`（文字列そのもの）
+            # のような型不正な値が「list でないので判定対象外」として
+            # exact_match のまま素通りしていた）。
+            raise ValueError(
+                f"axes['structure'].verdict='exact_match' but requirement={requirement!r} and "
+                f"observed={observed!r} must both be a list of str — a success verdict "
+                "requires a well-formed label sequence, not just an unchecked value"
+            )
         if [item.casefold() for item in requirement] != [item.casefold() for item in observed]:
             raise ValueError(
                 f"axes['structure'].verdict='exact_match' but requirement={requirement!r} and "

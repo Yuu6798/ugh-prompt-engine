@@ -267,8 +267,8 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    根拠がない——将来 L0b が境界時刻を持つ新しい軸を追加する場合は、この
    ホワイトリスト（`_OBSERVED_SECTIONS_AXES`）へ軸名を明示的に追加する
    こと。
-8. **brightness の信頼帯強制**（PR #246 Codex P2 review 16 巡目、5 の
-   verdict×band 整合と同族）: 凍結信頼軸表（下記 (e) 節、
+8. **brightness の信頼帯強制**（PR #246 Codex P2 review 16 巡目 + 19 巡目、
+   5 の verdict×band 整合と同族）: 凍結信頼軸表（下記 (e) 節、
    `config/authoring_trusted_axes_l0.yaml` の
    `axes.brightness.band_restriction.trusted_values: [dark]`）が report
    スキーマ側で従来強制されておらず、`brightness` 軸で `"bright"`
@@ -276,11 +276,14 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    正規形として受理されてしまっていた。`AuthoringDiffReport` に
    `brightness` 軸専用の `model_validator` を追加し、`verdict` が成功側
    （`preserved` — 4 の `_AXIS_VERDICTS["brightness"]` により brightness
-   の成功語彙は `preserved` のみ）のとき `requirement`/`observed`（`str`
-   型の場合のみ判定）が `_TRUSTED_BRIGHTNESS_VALUES = frozenset({"dark"})`
-   に含まれることを強制する。**失敗側 verdict（`deviated`）は帯外でも
-   引き続き受理**（「帯外だから保持されていないと正直に報告する」経路を
-   塞がない、5 の失敗側許容方針と同じ理由）。**ドリフト検出**:
+   の成功語彙は `preserved` のみ）のとき `requirement`/`observed` は
+   **両方 `str` でなければならず**（19 巡目: 型形状自体を強制——旧実装は
+   非 `str` を判定スキップしていたため `requirement=3.5` のような型不正
+   でも成功を主張できた）、かつ `_TRUSTED_BRIGHTNESS_VALUES =
+   frozenset({"dark"})` に含まれることを強制する。**失敗側 verdict
+   （`deviated`）は型不正・帯外いずれでも引き続き受理**（「帯外だから
+   保持されていないと正直に報告する」経路を塞がない、5 の失敗側許容方針
+   と同じ理由）。**ドリフト検出**:
    `report.py` は `trusted_axes.py`（さらにその出典計器）への import
    循環を避けるためこの値をハードコード定数として複製する——
    `tests/test_trusted_axes.py::
@@ -289,19 +292,21 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    `band_restriction.trusted_values`」の一致を enforce し、信頼軸表側の
    変更に追従し忘れた場合に赤くなる（既存の「再導出 == 凍結ファイル」
    一致テストと同型のドリフト防止）。
-9. **key の値×verdict 整合**（PR #246 Codex P2 review 17 巡目 A、8 の
-   brightness 帯強制と同じ「成功側 verdict のみ制約する」一貫方針）:
-   `key` 軸の `verdict` が成功側（`preserved`）で `requirement`/`observed`
-   が両方 `str` のとき、`svp_rpe.keys.keys_enharmonically_equal`（この
-   リポジトリの roundtrip 診断が「往復で調が保存されたか」の二値判定に
-   使う決定論実装をそのまま再利用——`C#`/`Db` 等の異名同音は等価、パース
-   不能値は casefold 完全一致へフォールバック）による整合を要求する。
-   従来は verdict 語彙とデータ型のみを検証し値そのものの整合を見ていな
-   かったため、`requirement="D minor"` / `observed="E minor"` ×
-   `verdict="preserved"` のような矛盾した組が正規形として受理されて
-   しまっていた。**失敗側 verdict（`deviated`）は値の不一致を制約しない**
-   （8 と同じ「成功側のみ強制」方針）。非 `str` の `requirement`/
-   `observed`（`AxisReport` の `Any` 設計）は判定対象外。
+9. **key の値×verdict 整合**（PR #246 Codex P2 review 17 巡目 A + 19 巡目、
+   8 の brightness 帯強制と同じ「成功側 verdict のみ制約する」一貫方針）:
+   `key` 軸の `verdict` が成功側（`preserved`）のとき、`requirement`/
+   `observed` は**両方 `str` でなければならず**（19 巡目: 型形状自体を
+   強制——旧実装は非 `str` を判定スキップしていたため `requirement=1`/
+   `observed=2` のような型不正でも成功を主張できた）、かつ
+   `svp_rpe.keys.keys_enharmonically_equal`（この リポジトリの roundtrip
+   診断が「往復で調が保存されたか」の二値判定に使う決定論実装をそのまま
+   再利用——`C#`/`Db` 等の異名同音は等価、パース不能値は casefold 完全
+   一致へフォールバック）による整合を要求する。従来は verdict 語彙と
+   データ型のみを検証し値そのものの整合を見ていなかったため、
+   `requirement="D minor"` / `observed="E minor"` × `verdict="preserved"`
+   のような矛盾した組が正規形として受理されてしまっていた。**失敗側
+   verdict（`deviated`）は型不正・値の不一致いずれも制約しない**（8 と
+   同じ「成功側のみ強制」方針）。
 10. **既知除外軸への成功宣言の禁止**（PR #246 Codex P2 review 17 巡目 B）:
    凍結信頼軸表が採用しなかった軸（`_KNOWN_EXCLUDED_AXES` = K1 grip map で
    `dead`（演奏者のつまみが死んでいる）な `active_rate_target`/
@@ -318,16 +323,18 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    が「`_KNOWN_EXCLUDED_AXES` == `ROUNDTRIP_FIELDS` から
    `derive_trusted_axes()` の採用軸を引いた集合」の一致を enforce する
    （8 のドリフト検出と同型）。
-11. **structure の値×verdict 整合**（PR #246 Codex P2 review 18 巡目 C、
-    9 の key 整合と同じ「成功側 verdict のみ制約する」一貫方針）:
-    `structure` 軸の `verdict` が成功側（`exact_match`）で
-    `requirement`/`observed` が両方「全要素 `str` の `list`」のとき、
-    casefold 逐要素の列完全一致（長さの不一致も拒否）を要求する。
-    `report` が格納する値は観測器（`svp_rpe.arrange.observe` の structure
-    domain）の正規化済みラベル列であるという契約に依拠する（観測器自身の
-    正規化ロジックはここで再実装しない）。**失敗側 verdict（`mismatch`）は
-    列の不一致を制約しない**（9・8 と同じ方針）。片方または両方が
-    「全要素 `str` の `list`」でない場合は判定対象外。
+11. **structure の値×verdict 整合**（PR #246 Codex P2 review 18 巡目 C +
+    19 巡目、9 の key 整合と同じ「成功側 verdict のみ制約する」一貫方針）:
+    `structure` 軸の `verdict` が成功側（`exact_match`）のとき、
+    `requirement`/`observed` は**両方「全要素 `str` の `list`」でなければ
+    ならず**（19 巡目: 型形状自体を強制——旧実装は非該当の型を判定
+    スキップしていたため `requirement="intro,chorus"`（list ではなく
+    文字列そのもの）のような型不正でも成功を主張できた）、かつ casefold
+    逐要素の列完全一致（長さの不一致も拒否）を要求する。`report` が
+    格納する値は観測器（`svp_rpe.arrange.observe` の structure domain）の
+    正規化済みラベル列であるという契約に依拠する（観測器自身の正規化
+    ロジックはここで再実装しない）。**失敗側 verdict（`mismatch`）は
+    型不正・列の不一致いずれも制約しない**（9・8 と同じ方針）。
 12. **直列化境界での再検証**（PR #246 Codex P2 review 18 巡目 A、`frozen=
     True` の浅さ対策）: pydantic の `frozen=True` はフィールド**属性の
     再代入**のみを防ぎ、フィールドが保持する**可変コンテナの中身**
@@ -342,6 +349,18 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
     モデルを再構築し、全 `model_validator` を強制的に再実行してから
     payload を作る——publish 直前の最終防衛線。正常なモデルはバイト同一の
     結果を返す（既存の byte-determinism は不変）。
+13. **値×verdict 整合ファミリーの終端宣言**（PR #246 Codex P2 review 16
+    （brightness）→ 17 巡目 A（key）→ 18 巡目 C（structure）→ 19 巡目
+    （型形状））: 8/9/11 は一貫して「成功側 verdict のみ値の整合を強制し、
+    失敗側 verdict は `AxisReport` の `Any` 設計のまま無制約に保つ」という
+    方針を貫く。19 巡目でこの方針を「値そのものの整合（帯域・異名同音・
+    列一致）」から「値の**型形状**」まで踏み込んで完結させた——成功側
+    verdict は型不正な値（`brightness`/`key` の非 `str`、`structure` の
+    非「全要素 `str` の `list`」）を経由して整合チェックを回避できなく
+    なった。既知3軸（`brightness`/`key`/`structure`）の成功側整合はこれで
+    型・値の両面から閉じている。将来 L0b が新しい既知軸を追加する場合は、
+    この3件と同じ「成功側は型形状+値整合の両方を強制、失敗側は `Any` の
+    まま」というテンプレートに従うこと。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
 `sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を構築し、
