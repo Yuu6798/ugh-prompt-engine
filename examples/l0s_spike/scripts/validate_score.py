@@ -47,6 +47,18 @@ Both checks always run — a public-scope failure does not short-circuit
 canonical validation — and `status` is `fail` if either produced an error;
 `errors` concatenates public-scope errors (sorted) followed by canonical
 validation errors (in the model's own deterministic `loc` order).
+
+**Output-collision guard** (PR #245 Codex P2 review, round 3 — mirrors the
+same rules `measure_round.py` enforces for its own `-o`, since both scripts
+write into the same protected spike tree): before anything is written,
+`-o`/`--output` is rejected if it resolves to the `score` positional
+argument itself (an input this run reads), or if it resolves inside the
+protected spike tree (`examples/l0s_spike/`, this script's own grandparent
+directory) *and* already exists there — pin-recorded `validation.json`
+files under `rounds/<n>/` must never be silently overwritten. A brand-new
+file inside the protected tree is still the normal accept-a-round flow and
+stays allowed; outside the tree (e.g. `build/l0s/...`) output stays
+unrestricted, as before.
 """
 from __future__ import annotations
 
@@ -60,6 +72,9 @@ import yaml
 from pydantic import ValidationError
 
 from svp_rpe.compose.models import CompositionScore
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_SPIKE_DIR = _SCRIPTS_DIR.parent
 
 # contract.md §1: the public schema tree an L0-s author may write, verbatim —
 # key sets per level, literal types, and the two literal enumerations the
@@ -266,11 +281,48 @@ def _validate(score_path: Path) -> dict[str, Any]:
     return {"status": "pass"}
 
 
+class ProtectedPathError(RuntimeError):
+    """`-o` would clobber a pipeline input or protected L0-s spike evidence —
+    refused before anything is written (PR #245 Codex P2 review, round 3)."""
+
+
+def _reject_output_collision(output_path: Path, *, score_path: Path) -> Path:
+    resolved_output = output_path.resolve()
+    resolved_score = score_path.resolve()
+
+    if resolved_output == resolved_score:
+        raise ProtectedPathError(
+            f"-o/--output must not resolve to the score.yaml input path itself "
+            f"(got {resolved_output}) — writing the report there would clobber "
+            "the input this run reads."
+        )
+
+    inside_spike_tree = resolved_output == _SPIKE_DIR or resolved_output.is_relative_to(
+        _SPIKE_DIR
+    )
+    if inside_spike_tree and resolved_output.exists():
+        raise ProtectedPathError(
+            f"-o/--output resolves inside the protected L0-s spike tree {_SPIKE_DIR} "
+            f"and already exists ({resolved_output}) — refusing to silently "
+            "overwrite pin-recorded round evidence. A brand-new validation.json "
+            "under rounds/<n>/ is the normal accept-a-round flow; an existing one "
+            "there means this round was already validated. Delete/rename it first "
+            "if this is an intentional re-run, or write to a scratch path instead."
+        )
+    return resolved_output
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="L0-s symbolic validation gate")
     parser.add_argument("score", type=Path, help="Path to score.yaml")
     parser.add_argument("-o", "--output", type=Path, required=True, help="Output validation.json")
     args = parser.parse_args(argv)
+
+    try:
+        _reject_output_collision(args.output, score_path=args.score)
+    except ProtectedPathError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     result = _validate(args.score)
     args.output.write_text(

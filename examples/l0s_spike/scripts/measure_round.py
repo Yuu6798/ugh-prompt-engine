@@ -27,6 +27,33 @@ Concretely, per round:
    (structure) into `<workdir>/report.json` per contract.md §3 — never the
    raw instrument JSON itself (D6).
 6. Record every artifact's sha256 in `<workdir>/hashes.json`.
+
+**Output-collision guard** (PR #245 Codex P2 review, round 3): every check
+below runs before this script writes anything, so a rejected invocation
+leaves the filesystem untouched.
+
+- `--workdir` must not resolve inside the protected spike tree
+  (`examples/l0s_spike/`, this script's own grandparent directory) at all —
+  that tree holds pin-recorded round evidence
+  (`rounds/<n>/score.yaml`, `rounds/<n>/report.json`,
+  `positive_control/score.yaml`, `ledger.yaml`, ...) a scratch workdir would
+  silently clobber via its own internal writes (`score.yaml` copy,
+  `eval_score.yaml`, `identity/`, `package/`, ...).
+- `-o`/`--output` resolving *inside* that same protected tree is only
+  accepted if the target path does not already exist — a brand-new
+  `rounds/<n>/report.json` is the normal accept-a-round flow, but
+  overwriting an existing one would silently destroy pin-recorded evidence.
+  Outside the protected tree (e.g. `build/l0s/...`) it stays unrestricted,
+  as before.
+- `-o`/`--output` must not resolve to any path this run reads as an input
+  (the `score` positional argument, or any of the frozen fixtures this
+  module always reads: `frozen/section_map.json`,
+  `frozen/eval_control_profile.yaml`, `frozen/arrangement.yaml`, the Suno
+  capability profile).
+- The `score` positional argument must not resolve to the exact path this
+  script would copy it to inside `--workdir` (`<workdir>/score.yaml`) — that
+  self-collision would have the input-copy step overwrite the very file it
+  is reading.
 """
 from __future__ import annotations
 
@@ -53,6 +80,16 @@ EVAL_CONTROL_PROFILE_PATH = _FROZEN_DIR / "eval_control_profile.yaml"
 ARRANGEMENT_PATH = _FROZEN_DIR / "arrangement.yaml"
 CAPABILITY_PROFILE_PATH = _REPO_ROOT / "config" / "capability_profiles" / "suno.yaml"
 
+# Fixed-path inputs this module always reads, regardless of round — an `-o`
+# aliasing any of these would have the report-write step clobber a pipeline
+# input (guard rule (c) in the module docstring above).
+_FIXED_INPUT_PATHS = (
+    SECTION_MAP_PATH,
+    EVAL_CONTROL_PROFILE_PATH,
+    ARRANGEMENT_PATH,
+    CAPABILITY_PROFILE_PATH,
+)
+
 # Frozen judge (task.md judgement table) — deliberately not read back from
 # the submitted score.yaml itself: the requirement is the task's fixed
 # target, the "observed" side of the report is what got measured.
@@ -62,12 +99,72 @@ REQUIREMENT_BRIGHTNESS = "dark"
 _CLI_TIMEOUT_SECONDS = 300
 
 
+class ProtectedPathError(RuntimeError):
+    """A `--workdir`/`-o` path would clobber protected L0-s spike evidence or
+    a pipeline input — refused before anything is written (PR #245 Codex P2
+    review, round 3)."""
+
+
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
 def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
+
+
+def _inside_spike_tree(path: Path) -> bool:
+    return path == _SPIKE_DIR or path.is_relative_to(_SPIKE_DIR)
+
+
+def _reject_workdir_inside_spike_tree(workdir: Path) -> Path:
+    resolved = workdir.resolve()
+    if _inside_spike_tree(resolved):
+        raise ProtectedPathError(
+            f"--workdir must not resolve inside the protected L0-s spike tree "
+            f"{_SPIKE_DIR} (got {resolved}). That tree holds pin-recorded evidence "
+            "(e.g. rounds/<n>/score.yaml, rounds/<n>/report.json, "
+            "positive_control/score.yaml, ledger.yaml) that a scratch workdir's own "
+            "internal writes would silently overwrite. Use a scratch directory "
+            "outside the spike tree, e.g. build/l0s/<name>/."
+        )
+    return resolved
+
+
+def _reject_score_copy_self_collision(score_path: Path, workdir: Path) -> None:
+    resolved_score = score_path.resolve()
+    resolved_copy_dest = (workdir / "score.yaml").resolve()
+    if resolved_score == resolved_copy_dest:
+        raise ProtectedPathError(
+            f"score.yaml argument ({resolved_score}) resolves to the exact path "
+            f"measure_round.py would copy it to inside --workdir "
+            f"({resolved_copy_dest}) — refusing a self-overwriting copy. Use a "
+            "--workdir that does not already contain the input under the name "
+            "'score.yaml'."
+        )
+
+
+def _reject_output_collision(output_path: Path, *, score_path: Path) -> Path:
+    resolved_output = output_path.resolve()
+
+    protected_inputs = {score_path.resolve(), *(p.resolve() for p in _FIXED_INPUT_PATHS)}
+    if resolved_output in protected_inputs:
+        raise ProtectedPathError(
+            f"-o/--output must not resolve to a pipeline input path (got "
+            f"{resolved_output}) — writing the report there would clobber an "
+            "input this run reads."
+        )
+
+    if _inside_spike_tree(resolved_output) and resolved_output.exists():
+        raise ProtectedPathError(
+            f"-o/--output resolves inside the protected L0-s spike tree {_SPIKE_DIR} "
+            f"and already exists ({resolved_output}) — refusing to silently "
+            "overwrite pin-recorded round evidence. A brand-new report.json under "
+            "rounds/<n>/ is the normal accept-a-round flow; an existing one there "
+            "means this round was already measured. Delete/rename it first if this "
+            "is an intentional re-run, or write to a scratch path instead."
+        )
+    return resolved_output
 
 
 def _run_cli(args: list[str]) -> None:
@@ -196,6 +293,12 @@ def _structure_axis(observe_report: dict[str, Any]) -> dict[str, Any]:
 def measure_round(
     score_path: Path, workdir: Path, round_number: int, output_path: Path
 ) -> dict[str, Any]:
+    # Output-collision guard (module docstring) — runs first, before any
+    # write, so a rejected invocation leaves the filesystem untouched.
+    _reject_workdir_inside_spike_tree(workdir)
+    _reject_score_copy_self_collision(score_path, workdir)
+    _reject_output_collision(output_path, score_path=score_path)
+
     workdir.mkdir(parents=True, exist_ok=True)
 
     # Defensive re-check: this gate assumes a score that already passed
@@ -317,7 +420,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    result = measure_round(args.score, args.workdir, args.round_number, args.output)
+    try:
+        result = measure_round(args.score, args.workdir, args.round_number, args.output)
+    except ProtectedPathError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     report = result["report"]
     print(f"round={report['round']} report -> {args.output}")
     for axis_name, axis in report["axes"].items():
