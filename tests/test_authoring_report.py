@@ -167,6 +167,81 @@ def test_axis_report_rejects_unknown_band():
         AxisReport(requirement="D minor", observed="D minor", verdict="preserved", band="guessed")
 
 
+def test_axis_report_rejects_verdict_outside_frozen_vocabulary():
+    """PR #246 Codex P2 review 7 巡目 A: `verdict` accepted any `str`
+    previously — now fixed to the frozen `Verdict` vocabulary."""
+
+    with pytest.raises(ValidationError):
+        AxisReport(requirement="D minor", observed="D minor", verdict="mostly_ok", band="measured")
+
+
+def test_authoring_diff_report_rejects_key_axis_with_structure_verdict():
+    """PR #246 Codex P2 review 7 巡目 A: `key`/`brightness` axes only accept
+    `preserved`/`deviated` — `exact_match`/`mismatch` are `structure`-only
+    verdicts and must be rejected even though they're in the frozen
+    `Verdict` vocabulary overall."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "key": AxisReport(
+                    requirement="D minor", observed="D minor", verdict="exact_match", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_rejects_structure_axis_with_key_verdict():
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "structure": AxisReport(
+                    requirement=["intro"], observed=["intro"], verdict="preserved", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_valid_known_axis_verdicts():
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "key": AxisReport(
+                requirement="D minor", observed="D minor", verdict="preserved", band="measured"
+            ),
+            "brightness": AxisReport(
+                requirement="dark", observed="dark", verdict="deviated", band="measured"
+            ),
+            "structure": AxisReport(
+                requirement=["intro"], observed=["intro"], verdict="mismatch", band="measured"
+            ),
+        },
+    )
+    assert report.axes["key"].verdict == "preserved"
+
+
+def test_authoring_diff_report_accepts_any_frozen_verdict_for_unknown_axis():
+    """Boundary declaration (PR #246 review 7 巡目 A): an axis name outside
+    `_AXIS_VERDICTS` (a future L0b axis) accepts any `Verdict` — the report
+    schema does not pre-fix the axis set itself."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "tempo_stability": AxisReport(
+                requirement="x", observed="y", verdict="mismatch", band="measured"
+            )
+        },
+    )
+    assert report.axes["tempo_stability"].verdict == "mismatch"
+
+
 def test_axis_report_accepts_observed_sections_schema():
     axis = AxisReport(
         requirement=["intro", "chorus", "outro"],
@@ -185,6 +260,34 @@ def test_axis_report_accepts_observed_sections_schema():
 def test_observed_section_rejects_unknown_key():
     with pytest.raises(ValidationError):
         ObservedSection(label="intro", start_seconds=0.0, end_seconds=1.0, extra="x")
+
+
+def test_observed_section_rejects_negative_start_seconds():
+    """PR #246 Codex P2 review 7 巡目 B."""
+
+    with pytest.raises(ValidationError):
+        ObservedSection(label="intro", start_seconds=-1.0, end_seconds=5.0)
+
+
+def test_observed_section_rejects_negative_end_seconds():
+    with pytest.raises(ValidationError):
+        ObservedSection(label="intro", start_seconds=0.0, end_seconds=-1.0)
+
+
+def test_observed_section_rejects_reversed_interval():
+    with pytest.raises(ValidationError):
+        ObservedSection(label="intro", start_seconds=10.0, end_seconds=5.0)
+
+
+def test_observed_section_rejects_zero_length_interval():
+    with pytest.raises(ValidationError):
+        ObservedSection(label="intro", start_seconds=5.0, end_seconds=5.0)
+
+
+def test_observed_section_accepts_valid_interval():
+    section = ObservedSection(label="intro", start_seconds=0.0, end_seconds=7.5)
+    assert section.start_seconds == 0.0
+    assert section.end_seconds == 7.5
 
 
 def test_authoring_note_accepts_whitelisted_kind():

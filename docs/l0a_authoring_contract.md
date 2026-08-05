@@ -148,18 +148,34 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
 1. **境界時刻**（観測①）: `AxisReport.observed_sections` に
    `{label, start_seconds, end_seconds}` のリストをスキーマとして追加。
    **境界宣言**: この PR ではどの生産器も populate しない（配線は L0b）。
+   `start_seconds`/`end_seconds` は `>= 0`（PR #246 Codex P2 review 7 巡目
+   B）かつ `end_seconds > start_seconds`（ゼロ長・逆転区間を拒否）——
+   計器が返す実測境界秒が負値・逆転になるのは計器/生産器側のバグであり、
+   著者向け報告としては構成不能な壊れた区間として fail-closed に扱う。
 2. **計器の分解能・可行域**（観測②）: 上記 (b) に編入（スキーマ変更なし）。
 3. **notes 白リスト**（観測③）: `AuthoringNote.kind` を
    `Literal["position_match_rate"]` に制限する。新しい kind を追加する際は
    この `Literal` と `report.py` モジュール docstring の一覧を両方更新する
    こと。
+4. **verdict 語彙の凍結 + 軸整合**（PR #246 Codex P2 review 7 巡目 A）:
+   `AxisReport.verdict` は `Verdict = Literal["preserved", "deviated",
+   "exact_match", "mismatch"]` に固定する（従来は任意 `str` を受理して
+   いた）。さらに `AuthoringDiffReport` が既知軸名（`key`/`brightness` は
+   `preserved`/`deviated`、`structure` は `exact_match`/`mismatch`）ごとに
+   verdict の部分集合を強制する——`key` 軸に `exact_match` のような他軸の
+   verdict を書くと、`Verdict` 全体としては合法でも軸整合違反として拒否
+   される。**境界宣言**: `_AXIS_VERDICTS` に無い軸名（将来 L0b が追加する
+   軸）は `Verdict` の全語彙をそのまま許容する——この report スキーマは
+   軸集合そのものを固定しない、という上記 (e) の方針と整合させるため。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
 `sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を `write_bytes` に
 渡す、`validate_score.py`/`measure_round.py` と同じ規約。
 `exclude_none=True` で歴史的 `report.json`（`examples/l0s_spike/rounds/
 round{1..5}/report.json`）とスキーマ後方互換——`errors`/
-`observed_sections` を省略した形をそのまま parse できる）。
+`observed_sections` を省略した形をそのまま parse できる。5 本とも
+`key`/`brightness: preserved`・`structure: mismatch` で上記 4 の軸整合を
+満たすことを確認済み）。
 
 ## (e) 信頼軸表 — 凍結 YAML への参照 + 導出規則
 
