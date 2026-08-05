@@ -1,0 +1,185 @@
+# L0b loop ledger — L0B-T1. Source of truth for engine/deps pins,
+# pinned-input hashes, and the positive-control gate result
+# (task.md's "陽性対照ゲート" section). `rounds` will accumulate real L0b
+# authoring evidence (LLM round-trips against `scripts/run_round.py`'s
+# report.json) once the experiment itself is run — this ledger currently
+# only pins the experiment *infrastructure* (frozen inputs + positive
+# control dry-run), per 正本 D1's pin-on-introduction rule.
+spike_id: L0B-T1
+
+engine_state:
+  base_commit: "4b3b7b615119c43cba5442053fff43b4520b0504"
+  base_commit_note: >-
+    `git merge-base origin/main HEAD` at the time this infrastructure was
+    built — the PR #246 merge commit (L0a landed). Identical to `git
+    rev-parse HEAD` (this branch had no other commits on top yet), so
+    base_commit and the working tree are the same revision.
+  src_unchanged: true
+  src_unchanged_note: >-
+    This branch added examples/l0b_loop/ only — `git diff --stat
+    4b3b7b615119c43cba5442053fff43b4520b0504..HEAD -- src/ tests/` is empty
+    (verified before writing this ledger; re-run before trusting this note
+    if new commits have landed since).
+  verification_commands:
+    - "git fetch origin main"
+    - "git merge-base origin/main HEAD"
+    - "git diff --stat <base_commit>..HEAD -- src/ tests/"
+
+deps_lock:
+  file: deps/pip_freeze.txt
+  sha256: "e3fedcda2f268f2ebc185fac709701d0877783bbd4df2a9a546c3e3ebec01617"
+  note: >-
+    Captured via `pip freeze | grep -v '^-e '` (excludes svp_rpe's own
+    editable self-install line — same convention `examples/l0s_spike/
+    ledger.yaml`'s deps_lock settled on after its own correction; the
+    engine itself is pinned via engine_state, not this file).
+
+pinned_inputs:
+  task_md:
+    path: task.md
+    sha256: "aa64c63ff9606b86228b43f63130d9d74d75e3cb5d9f8f75ebfd694db3a85db4"
+  contract_md:
+    path: contract.md
+    sha256: "5bab21e9694cb92a247f922c9a96db015bb87ba729ef411b9146881934debaca"
+  pareto_yaml:
+    path: frozen/pareto.yaml
+    sha256: "abe60a4f0ee3c55443bbcae9ea53d4364e620737872ce3f1a9c1a75ac9264d7f"
+  section_map:
+    path: frozen/section_map.json
+    sha256: "a7d4330c06137117474f19ab3fae27204e7df9a00deac72cba9a0299296a83fd"
+    note: >-
+      Byte-identical to examples/l0s_spike/frozen/section_map.json (same
+      sha256 in that spike's ledger) — L0B-T1 reuses the same canonical
+      section-map requirement as L0S-T1 by design (task.md's comparison
+      framing), copied rather than referenced across the two protected
+      trees (each spike's frozen/ is self-contained per its own runner's
+      output-collision guard).
+  eval_control_profile:
+    path: frozen/eval_control_profile.yaml
+    sha256: "a5eb1847a54032c49b865a8a6834bde597c5d3ddcdf8784d05d3cce3b7e76c1e"
+    note: "Byte-identical copy of examples/l0s_spike/frozen/eval_control_profile.yaml."
+  arrangement:
+    path: frozen/arrangement.yaml
+    sha256: "efa0d6db0e288ad74c330a719b28e6db224c4545b852bdbbf62bc7adeda96e5a"
+    note: "Byte-identical copy of examples/l0s_spike/frozen/arrangement.yaml."
+  suno_capability_profile:
+    path: ../../config/capability_profiles/suno.yaml
+    sha256: "343f3e84bb7e2bb4f4c945195659b3823318bf14c306774278a33ee7d116592b"
+  authoring_contract_l0:
+    path: ../../config/authoring_contract_l0.yaml
+    sha256: "f34479d9683667c343179fdeef435ea02f59fb843ff62870be815511a281f8c6"
+    note: "L0a frozen public-scope spec — the symbolic gate's --contract input."
+  authoring_trusted_axes_l0:
+    path: ../../config/authoring_trusted_axes_l0.yaml
+    sha256: "b2c6cc5528bf9b77e6d64f0111e762b41f029ee25993ea99c00ccb81dca6b335"
+    note: >-
+      Not read programmatically by scripts/run_round.py (the trusted-axis
+      restriction is enforced by AuthoringDiffReport's own model_validator
+      family in src/svp_rpe/authoring/report.py), but pinned here because
+      task.md チェック 1 cites it as the source of L0B-T1's axis selection —
+      changing this frozen table would change what a "success verdict" can
+      even mean for this experiment.
+
+runner_at_measurement:
+  # Blob sha256 of the L0b runner scripts + this run's frozen/ copies, at
+  # the commit the positive-control dry-run below was measured against.
+  # Unlike L0-s's runner_at_measurement (which pins a *range* because the
+  # scripts hardened across several post-hoc review rounds), L0b's scripts
+  # are being introduced fresh in this same change — there is no prior
+  # version to distinguish from, so this pins the single introducing commit.
+  measured_at_commit: "<uncommitted at ledger-authoring time — see git log
+    for the commit that introduces examples/l0b_loop/ if this note has not
+    been updated post-commit>"
+  files:
+    run_round_py:
+      path: scripts/run_round.py
+      git_blob_sha1: "9b9a18eb69e0e476a22c6247d855774a6c9d72dd"
+    pareto_eval_py:
+      path: scripts/pareto_eval.py
+      git_blob_sha1: "7df1e4697aefdc8e346f0cbf60891a2055ef103d"
+
+positive_control:
+  # Dry-run of examples/l0s_spike/positive_control/score.yaml (read-only
+  # reuse of L0S-T1's positive control — task.md's 陽性対照ゲート節) through
+  # the full L0b observation chain (svprpe validate --contract -> run_round.py's
+  # eval/roundtrip/adherence/package/observe chain -> AuthoringDiffReport).
+  # Pinned for audit; not L0b spike evidence (task.md's 陽性対照ゲート note).
+  score:
+    path: ../../examples/l0s_spike/positive_control/score.yaml
+    sha256: "1997c103fc74975af41ae7c3c569a7e7ac064fb1fd72a1c291e91050b208bf31"
+    note: "Unmodified L0S-T1 positive control — read-only reuse, not copied."
+  determinism_check: >-
+    Ran twice into separate scratch workdirs (build/l0b/positive_control{,_run2}/);
+    both runs' report.json were byte-identical (sha256
+    bfa81bf892741807291a8ceab4ff1860ab831a2e39a344ffe3bdd28e711123a9).
+  status: pass
+  axes:
+    key: {verdict: preserved, band: measured, observed: "D minor"}
+    brightness: {verdict: preserved, band: measured, observed: "dark"}
+    structure:
+      verdict: exact_match
+      band: measured
+      observed: ["intro", "chorus", "outro"]
+      observed_sections:
+        - {label: "intro", start_seconds: 0.0, end_seconds: 5.4567}
+        - {label: "chorus", start_seconds: 5.4567, end_seconds: 10.5419}
+        - {label: "outro", start_seconds: 10.5419, end_seconds: 17.5}
+  boundary_seconds_note: >-
+    observed_sections is populated (module docstring (c) of
+    scripts/run_round.py — boundary-second live wiring, task.md's central
+    new requirement over L0-s) — confirms the wiring produces real,
+    monotonic, non-overlapping section boundaries for the positive control,
+    not just a schema-valid empty/null value.
+  artifacts:
+    report:
+      path: positive_control/report.json
+      sha256: "bfa81bf892741807291a8ceab4ff1860ab831a2e39a344ffe3bdd28e711123a9"
+    # The following intermediate artifacts were produced in the scratch
+    # workdir (build/l0b/positive_control/, outside the protected loop tree
+    # per scripts/run_round.py's output-collision guard) and are pinned here
+    # for audit, but not copied into examples/l0b_loop/ (only report.json —
+    # the AuthoringDiffReport normal form — is the pinned deliverable;
+    # ../../examples/l0s_spike/ledger.yaml sets this same precedent for its
+    # own positive_control artifacts under build/l0s/).
+    validation:
+      path: ../../build/l0b/positive_control/validation.json
+      sha256: "a1bc26ff11e0701c44696dfe0947d11506c66c7518f16249e903689646a9fa6d"
+      note: >-
+        Byte-identical to examples/l0s_spike/ledger.yaml's positive_control
+        validation.json sha256 — expected: same score, same canonical
+        CompositionScore validation, and L0a's public-scope check accepts
+        every field this score uses (contract v1 is a superset check of the
+        same underlying constraints v0 hand-coded).
+    roundtrip:
+      path: ../../build/l0b/positive_control/roundtrip.json
+      sha256: "f0cfb31e604735fc2d2721957fd34601bf2a677b2cdea89b39a10cc4b30c18dc"
+      note: "Byte-identical to L0-s's pinned roundtrip.json — same eval_score.yaml bytes."
+    adherence:
+      path: ../../build/l0b/positive_control/adherence.json
+      sha256: "d56bd17a717db2ec767770df051ddc7c16f05a94f52c1d0cb34b72bf2700c9d8"
+      note: "Byte-identical to L0-s's pinned adherence.json."
+    take_wav:
+      path: ../../build/l0b/positive_control/take.wav
+      sha256: "a5bf8a55b7cecb609bf2e8e2ade09a2f3bea2acd5284a7c1d3b3b6598c092a2e"
+      note: "Byte-identical to L0-s's pinned take.wav — same eval_score.yaml, same deterministic performer."
+    eval_score:
+      path: ../../build/l0b/positive_control/eval_score.yaml
+      sha256: "fc18ac481e73f8a0ba11e51ec3c114ea4a844150ff04a3855f1a397b36ddcf31"
+    manifest:
+      path: ../../build/l0b/positive_control/identity_manifest.yaml
+      sha256: "b28213c7eaf727d25c6d25ab923eed91baa77c7e3d8e7834d05740cd9c7c9293"
+      note: >-
+        Differs from L0-s's pinned manifest sha256 by design — this
+        manifest's meta.work_id is "l0b-loop" (scripts/run_round.py's
+        _write_identity_manifest), not "l0s-spike"; every other field is
+        the same content.
+    package:
+      path: ../../build/l0b/positive_control/package/performance_package.json
+      sha256: "d44d4b38e140239ff876567991ee1e22005de69681b1956d147872b77e7fe7bf"
+      note: "Differs from L0-s's pinned package sha256 — downstream of the different manifest source note/work_id above."
+    observe_report:
+      path: ../../build/l0b/positive_control/observe_report.json
+      sha256: "3299520c2190dfbddaf6e856aa9c5becdeea11afa823b2abeafa7837f6f81867"
+      note: "Differs from L0-s's pinned observe_report sha256 — downstream of the different package_sha256 above."
+
+rounds: []
