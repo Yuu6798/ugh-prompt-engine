@@ -127,7 +127,7 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
   ファミリーを全数掃討して終端した:
   - **1 巡目**（`12d4e26`）: トップレベルキーのみの突合。`fixity` /
     `control_profile` のような契約非掲載キーの top-level 混入を拒否。
-  - **2 巡目**（同一 PR、この commit）: 突合をトップレベルから contract.md §1 の
+  - **2 巡目**（`00d06e4`）: 突合をトップレベルから contract.md §1 の
     公開スキーマ全階層へ拡張——各階層の許可キー集合（`semantic.lyrics_presence`
     のような契約非掲載のネストされたキーも拒否）、リテラル型（`physical.bpm`
     は int のみ。canonical `CompositionScore` 側は digit-string を int へ
