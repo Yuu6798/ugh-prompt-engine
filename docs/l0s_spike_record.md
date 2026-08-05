@@ -142,18 +142,33 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
   で、L0a の記号検証ゲート凍結設計に持ち越す（境界宣言）。
 - **出力衝突ガードもスパイク中は未実装だった**（`measure_round.py --workdir` を
   受理済み round ディレクトリへ、あるいは `-o`/`validate_score.py -o` を既存の
-  pin 済み `report.json`/`validation.json` へ向けると無言で上書きし、台帳
-  evidence を破壊しうる欠陥）。PR #245 の Codex レビュー 3 巡目で検出し、
-  書き込み開始前の衝突ガードを両スクリプトに追加して閉鎖: (a) `--workdir` が
-  保護済みスパイク木（`examples/l0s_spike/`）配下に解決される場合は即エラー、
-  (b) `-o` が保護木配下かつ既存ファイルの場合は拒否（新規作成は正規フローの
-  ため許可）、(c) `-o` が入力パス（score.yaml・凍結 fixture 群）そのものと
-  衝突する場合、および workdir への score コピーで src == dest になる場合は
-  拒否。負例 3 種（受理済み round への `--workdir`／既存 `report.json` への
-  `-o`／既存 `validation.json` への `-o`）がいずれも一切の書き込み前に拒否
-  されることを確認し、正常系（`build/l0s/` 配下workdir + 新規 `-o`）では
-  report.json の sha256 が陽性対照の台帳記録値と完全一致し挙動不変であることを
-  確認済み——本スパイクの 5 周回 + 陽性対照 evidence への実害はない。
+  pin 済み `report.json`/`validation.json` や workdir 内の生成物パスへ向けると
+  無言で上書きし、台帳 evidence を破壊しうる欠陥）。PR #245 の Codex レビュー
+  3〜4 巡目で検出・是正し、保護木 + 入力 + 予約生成物の 3 層被覆で衝突
+  ファミリーを全数掃討して終端した:
+  - **3 巡目**（`3523cc8`）: (a) `--workdir` が保護済みスパイク木
+    （`examples/l0s_spike/`）配下に解決される場合は即エラー、(b) `-o` が
+    保護木配下かつ既存ファイルの場合は拒否（新規作成は正規フローのため許可）、
+    (c) `-o` が入力パス（score.yaml・凍結 fixture 群）そのものと衝突する場合、
+    および workdir への score コピーで src == dest になる場合も拒否。
+  - **4 巡目**（`<pending>`）: 3 巡目の (b)(c) だけでは workdir 内で
+    `measure_round.py` 自身が読み書きする生成物パス（`roundtrip.json` /
+    `eval_score.yaml` / `hashes.json` 等）への `-o` 衝突を素通りさせていた
+    （入力でも既存ファイルでもないため）——report 書き込みが当該生成物を
+    上書きし、`hashes.json` が report のバイトをその生成物の hash として
+    記録してしまう audit trail 破壊。予約生成物パス全件を
+    `_reserved_workdir_paths` という**単一のモジュール定数関数**へ集約し、
+    実行時の読み書き（`_prepare_scores`/`_write_identity_manifest`/
+    `measure_round` 本体）と preflight ガードの両方がそこから導出する構造へ
+    リファクタリングした——列挙が実装の実際の書き込み先と乖離できない
+    （ドリフト不能）。
+  負例（受理済み round への `--workdir`／既存 `report.json`・
+  `validation.json` への `-o`／workdir 内の `roundtrip.json`・`hashes.json`
+  への `-o`）がいずれも一切の書き込み前に拒否されることを確認し、正常系
+  （`build/l0s/` 配下 workdir + 新規 `-o`、workdir 内の `report.json` を含む）
+  では report.json/validation.json の sha256 が陽性対照の台帳記録値と完全
+  一致し挙動不変であることを確認済み——本スパイクの 5 周回 + 陽性対照
+  evidence への実害はない。
 
 ## 4. §5 判定と L0a への引き継ぎ
 

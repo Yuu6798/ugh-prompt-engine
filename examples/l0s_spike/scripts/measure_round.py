@@ -54,6 +54,22 @@ leaves the filesystem untouched.
   script would copy it to inside `--workdir` (`<workdir>/score.yaml`) — that
   self-collision would have the input-copy step overwrite the very file it
   is reading.
+- (round 4) `-o`/`--output` must not resolve to any *reserved workdir
+  artifact path* either — every path this run writes to or reads back from
+  inside `--workdir` (the `score.yaml`/`eval_score.yaml` copies,
+  `roundtrip.json`, `adherence.json`, `take.wav`, `identity/` and its
+  `section_map.json`, `identity_manifest.yaml`, `package/` and its
+  `performance_package.json`/`compilation_report.json`,
+  `observe_report.json`, `hashes.json`). Without this, `-o
+  <workdir>/roundtrip.json` would sail through the input/existing-file
+  checks above (it isn't a pipeline *input*, and it doesn't exist yet when
+  the guard runs), only for the later report-write step to silently
+  overwrite the very `roundtrip.json` the report itself was folded from —
+  and `hashes.json` would then record the *report's* bytes under the
+  `"roundtrip"` key, corrupting the audit trail. `_reserved_workdir_paths`
+  is the single source of truth both this guard and the actual
+  read/write steps in `measure_round()` derive from, so the enumeration
+  here and what the pipeline actually writes cannot drift apart.
 """
 from __future__ import annotations
 
@@ -62,6 +78,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +134,36 @@ def _inside_spike_tree(path: Path) -> bool:
     return path == _SPIKE_DIR or path.is_relative_to(_SPIKE_DIR)
 
 
+def _reserved_workdir_paths(workdir: Path) -> dict[str, Path]:
+    """Single source of truth for every path this run writes to (or reads
+    back from) inside `workdir` (PR #245 Codex P2 review, round 4). Both the
+    preflight collision guard (`_reject_output_collision`) and the actual
+    read/write steps in `measure_round()` derive their workdir-relative
+    paths from this same mapping — an enumeration in the guard drifting out
+    of sync with what the pipeline actually writes is therefore structurally
+    impossible, not just a matter of remembering to update both places.
+    Excludes the report `-o` target itself: that's the one workdir-relative
+    artifact this run is meant to create fresh, not a reserved one.
+    """
+    identity_dir = workdir / "identity"
+    package_dir = workdir / "package"
+    return {
+        "score_copy": workdir / "score.yaml",
+        "eval_score": workdir / "eval_score.yaml",
+        "roundtrip": workdir / "roundtrip.json",
+        "adherence": workdir / "adherence.json",
+        "take_wav": workdir / "take.wav",
+        "identity_dir": identity_dir,
+        "identity_section_map": identity_dir / "section_map.json",
+        "identity_manifest": workdir / "identity_manifest.yaml",
+        "package_dir": package_dir,
+        "package_json": package_dir / "performance_package.json",
+        "package_compilation_report": package_dir / "compilation_report.json",
+        "observe_report": workdir / "observe_report.json",
+        "hashes": workdir / "hashes.json",
+    }
+
+
 def _reject_workdir_inside_spike_tree(workdir: Path) -> Path:
     resolved = workdir.resolve()
     if _inside_spike_tree(resolved):
@@ -131,9 +178,9 @@ def _reject_workdir_inside_spike_tree(workdir: Path) -> Path:
     return resolved
 
 
-def _reject_score_copy_self_collision(score_path: Path, workdir: Path) -> None:
+def _reject_score_copy_self_collision(score_path: Path, reserved_paths: dict[str, Path]) -> None:
     resolved_score = score_path.resolve()
-    resolved_copy_dest = (workdir / "score.yaml").resolve()
+    resolved_copy_dest = reserved_paths["score_copy"].resolve()
     if resolved_score == resolved_copy_dest:
         raise ProtectedPathError(
             f"score.yaml argument ({resolved_score}) resolves to the exact path "
@@ -144,15 +191,19 @@ def _reject_score_copy_self_collision(score_path: Path, workdir: Path) -> None:
         )
 
 
-def _reject_output_collision(output_path: Path, *, score_path: Path) -> Path:
+def _reject_output_collision(
+    output_path: Path, *, score_path: Path, reserved_paths: Iterable[Path]
+) -> Path:
     resolved_output = output_path.resolve()
 
-    protected_inputs = {score_path.resolve(), *(p.resolve() for p in _FIXED_INPUT_PATHS)}
-    if resolved_output in protected_inputs:
+    protected = {score_path.resolve(), *(p.resolve() for p in _FIXED_INPUT_PATHS)}
+    protected |= {p.resolve() for p in reserved_paths}
+    if resolved_output in protected:
         raise ProtectedPathError(
-            f"-o/--output must not resolve to a pipeline input path (got "
-            f"{resolved_output}) — writing the report there would clobber an "
-            "input this run reads."
+            f"-o/--output must not resolve to a pipeline input path or a reserved "
+            f"workdir artifact path (got {resolved_output}) — writing the report "
+            "there would clobber an input this run reads, or a generated artifact "
+            "this run writes and later hashes into hashes.json."
         )
 
     if _inside_spike_tree(resolved_output) and resolved_output.exists():
@@ -181,8 +232,10 @@ def _run_cli(args: list[str]) -> None:
         )
 
 
-def _prepare_scores(score_path: Path, workdir: Path) -> tuple[Path, Path, str, str]:
-    """Write the original score copy + the eval copy into `workdir`.
+def _prepare_scores(score_path: Path, paths: dict[str, Path]) -> tuple[Path, Path, str, str]:
+    """Write the original score copy + the eval copy into `workdir`
+    (via `paths`, the same reserved-path mapping the preflight guard checks
+    `-o` against).
 
     Returns `(original_copy_path, eval_score_path, score_sha256, eval_score_sha256)`.
     `score_sha256` is the hash of the *submitted* `score.yaml` bytes (pinned
@@ -192,7 +245,7 @@ def _prepare_scores(score_path: Path, workdir: Path) -> tuple[Path, Path, str, s
     score_bytes = score_path.read_bytes()
     score_sha256 = _sha256_bytes(score_bytes)
 
-    original_copy = workdir / "score.yaml"
+    original_copy = paths["score_copy"]
     original_copy.write_bytes(score_bytes)
 
     data = yaml.safe_load(score_bytes)
@@ -202,7 +255,7 @@ def _prepare_scores(score_path: Path, workdir: Path) -> tuple[Path, Path, str, s
     data["control_profile"] = control_profile
 
     eval_bytes = yaml.safe_dump(data, sort_keys=False, allow_unicode=True).encode("utf-8")
-    eval_score_path = workdir / "eval_score.yaml"
+    eval_score_path = paths["eval_score"]
     eval_score_path.write_bytes(eval_bytes)
     eval_score_sha256 = _sha256_bytes(eval_bytes)
 
@@ -210,20 +263,22 @@ def _prepare_scores(score_path: Path, workdir: Path) -> tuple[Path, Path, str, s
 
 
 def _write_identity_manifest(
-    workdir: Path, *, score_sha256: str, round_number: int
+    paths: dict[str, Path], *, score_sha256: str, round_number: int
 ) -> tuple[Path, str]:
-    """Deterministically generate `<workdir>/identity_manifest.yaml`.
+    """Deterministically generate `<workdir>/identity_manifest.yaml` (via
+    `paths`, the same reserved-path mapping the preflight guard checks `-o`
+    against).
 
     Returns `(manifest_path, manifest_sha256)`. Copies `frozen/section_map.json`
     into `<workdir>/identity/` — `IdentityManifest` artifact locators must
     resolve inside the manifest's own directory (path confinement), so the
     frozen fixture can't be referenced in place.
     """
-    identity_dir = workdir / "identity"
+    identity_dir = paths["identity_dir"]
     identity_dir.mkdir(exist_ok=True)
     section_map_bytes = SECTION_MAP_PATH.read_bytes()
     section_map_sha256 = _sha256_bytes(section_map_bytes)
-    (identity_dir / "section_map.json").write_bytes(section_map_bytes)
+    paths["identity_section_map"].write_bytes(section_map_bytes)
 
     manifest_data: dict[str, Any] = {
         "schema_version": "identity-manifest/0.1",
@@ -259,7 +314,7 @@ def _write_identity_manifest(
     manifest_bytes = yaml.safe_dump(
         manifest_data, sort_keys=False, allow_unicode=True
     ).encode("utf-8")
-    manifest_path = workdir / "identity_manifest.yaml"
+    manifest_path = paths["identity_manifest"]
     manifest_path.write_bytes(manifest_bytes)
     return manifest_path, _sha256_bytes(manifest_bytes)
 
@@ -293,11 +348,16 @@ def _structure_axis(observe_report: dict[str, Any]) -> dict[str, Any]:
 def measure_round(
     score_path: Path, workdir: Path, round_number: int, output_path: Path
 ) -> dict[str, Any]:
+    # `paths` is the single source of truth every workdir-relative read/write
+    # below derives from — the same mapping the preflight guard checks `-o`
+    # against, so the two cannot drift apart (module docstring, round 4).
+    paths = _reserved_workdir_paths(workdir)
+
     # Output-collision guard (module docstring) — runs first, before any
     # write, so a rejected invocation leaves the filesystem untouched.
     _reject_workdir_inside_spike_tree(workdir)
-    _reject_score_copy_self_collision(score_path, workdir)
-    _reject_output_collision(output_path, score_path=score_path)
+    _reject_score_copy_self_collision(score_path, paths)
+    _reject_output_collision(output_path, score_path=score_path, reserved_paths=paths.values())
 
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -307,26 +367,26 @@ def measure_round(
     load_composition_score(score_path)
 
     _original_copy, eval_score_path, score_sha256, eval_score_sha256 = _prepare_scores(
-        score_path, workdir
+        score_path, paths
     )
 
-    roundtrip_path = workdir / "roundtrip.json"
+    roundtrip_path = paths["roundtrip"]
     _run_cli(["roundtrip", str(eval_score_path), "--format", "json", "-o", str(roundtrip_path)])
 
-    adherence_path = workdir / "adherence.json"
+    adherence_path = paths["adherence"]
     _run_cli(
         ["score-adherence", str(eval_score_path), "--format", "json", "-o", str(adherence_path)]
     )
 
     score = load_composition_score(eval_score_path)
-    take_wav_path = workdir / "take.wav"
+    take_wav_path = paths["take_wav"]
     take_wav_path.write_bytes(wav_bytes(perform(score, FAITHFUL_TAKE)))
 
     manifest_path, manifest_sha256 = _write_identity_manifest(
-        workdir, score_sha256=score_sha256, round_number=round_number
+        paths, score_sha256=score_sha256, round_number=round_number
     )
 
-    package_dir = workdir / "package"
+    package_dir = paths["package_dir"]
     package_dir.mkdir(exist_ok=True)
     _run_cli(
         [
@@ -340,9 +400,9 @@ def measure_round(
             str(package_dir),
         ]
     )
-    package_json_path = package_dir / "performance_package.json"
+    package_json_path = paths["package_json"]
 
-    observe_report_path = workdir / "observe_report.json"
+    observe_report_path = paths["observe_report"]
     _run_cli(
         [
             "observe",
@@ -397,7 +457,7 @@ def measure_round(
         "observe_report": _sha256_file(observe_report_path),
         "report": report_sha256,
     }
-    (workdir / "hashes.json").write_text(
+    paths["hashes"].write_text(
         json.dumps(hashes, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
