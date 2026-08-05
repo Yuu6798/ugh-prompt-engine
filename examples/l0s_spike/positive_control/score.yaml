@@ -24,15 +24,15 @@ physical:
 
 structure:
   - section: intro
-    bars: 6
+    bars: 2
     role: "hushed entry"
     physical: "low density, sub bass, sparse"
   - section: chorus
-    bars: 10
+    bars: 3
     role: "central swell"
     physical: "full energy"
   - section: outro
-    bars: 6
+    bars: 2
     role: "receding"
     physical: "release, low density, rest"
 

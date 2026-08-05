@@ -1,0 +1,19 @@
+# L0-s ArrangementSpec — minimal passthrough (no overrides, no preservation
+# policy). `svprpe package` requires an ArrangementSpec argument; the L0-s
+# pipeline needs it only to route a base CompositionScore + IdentityManifest
+# through `compile_performance_package`, not to arrange/transform anything.
+# `target: {}` overrides nothing (every ArrangementTarget field is optional);
+# `preservation.score_fields: {}` declares no field-level preservation policy
+# (empty dict is valid — `PreservationSpec.score_fields` has no non-empty
+# constraint). The manifest's sole anchor (`structure`, see
+# examples/l0s_spike/scripts/measure_round.py) is `required: false`, so it
+# needs no `identity_anchors` policy entry either
+# (`arrange/contract.py`'s "required anchor(s) have no preservation policy"
+# check only fires for `required: true` anchors).
+meta:
+  id: "l0s-spike-passthrough"
+  version: "0.1"
+  description: "L0-s: minimal passthrough ArrangementSpec (no overrides, no preservation policy)."
+target: {}
+preservation:
+  score_fields: {}

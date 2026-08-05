@@ -1,0 +1,119 @@
+# L0-s spike ledger — L0S-T1. Source of truth for engine/deps pins,
+# pinned-input hashes, and the positive-control gate result (contract.md's
+# "陽性対照ゲート" section: `ledger.yaml` の `positive_control` 節が正).
+# `rounds` accumulates real spike evidence (author round-trips against
+# `scripts/measure_round.py`'s `report.json`), separate from the positive
+# control (which is dry-run only and never counted as spike evidence).
+spike_id: L0S-T1
+engine_commit: "306add7914c80f1a0dd48c521100f6062c6d2846"
+recorded_utc: "2026-08-05T05:44:55Z"
+
+deps_lock:
+  file: env/pip_freeze.txt
+  sha256: "a9e2682576c0b0f20a16e582a797ef5b2f09dd5c5dc6fb8f26f93f019630be51"
+
+pinned_inputs:
+  task_md:
+    path: task.md
+    sha256: "4a56ddfaff6029dc12cec9b0359a7cd0c475ae94c09e3231ca224d69d6b3b169"
+  contract_md:
+    path: contract.md
+    sha256: "feda992fcfd4b74e9835dc75c8c09d9d5acb2e38b04a7285bacfee4bf36845d8"
+  section_map:
+    path: frozen/section_map.json
+    sha256: "a7d4330c06137117474f19ab3fae27204e7df9a00deac72cba9a0299296a83fd"
+  eval_control_profile:
+    path: frozen/eval_control_profile.yaml
+    sha256: "a5eb1847a54032c49b865a8a6834bde597c5d3ddcdf8784d05d3cce3b7e76c1e"
+  arrangement:
+    path: frozen/arrangement.yaml
+    sha256: "efa0d6db0e288ad74c330a719b28e6db224c4545b852bdbbf62bc7adeda96e5a"
+  suno_capability_profile:
+    path: ../../config/capability_profiles/suno.yaml
+    sha256: "343f3e84bb7e2bb4f4c945195659b3823318bf14c306774278a33ee7d116592b"
+
+positive_control:
+  # Dry-run of positive_control/score.yaml through the full observation
+  # chain (validate -> measure_round). Pinned for audit; not spike evidence
+  # (task.md §"陽性対照ゲート").
+  attempts: 2
+  trials:
+    - attempt: 1
+      change: >-
+        Initial draft (intro 6 bars / chorus 10 bars / outro 6 bars,
+        bpm 96). key/brightness passed on the first try (roundtrip
+        diagnosis preserved for both). structure failed: the AR4
+        structure sensor auto-segmented the ~55s track into 6 raw
+        sections (Intro/Chorus/Verse/Chorus/Bridge/Outro,
+        position_match_rate=0.3333) instead of 3 — the acoustic
+        novelty detector (RMS/onset local-minima, min_section_sec=5.0)
+        found extra boundaries inside the 10-bar chorus section
+        unrelated to the declared 3-way structure.
+      result:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "verse", "chorus", "bridge", "outro"]
+    - attempt: 2
+      change: >-
+        Shortened every section (intro 6->2 bars, chorus 10->3 bars,
+        outro 6->2 bars; bpm/key/brightness/chord_progression/section
+        labels unchanged) so the whole track (~17.5s at bpm 96) sits
+        below the acoustic segmenter's 5s-boundary-spacing threshold in
+        aggregate, leaving no room for a spurious mid-section boundary
+        while the two genuine intro/chorus and chorus/outro energy
+        transitions (sparse -> full energy -> release) remained sharp
+        enough to still be detected.
+      result:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: exact_match
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+  status: pass
+  axes:
+    key: {verdict: preserved, band: measured, observed: "D minor"}
+    brightness: {verdict: preserved, band: measured, observed: "dark"}
+    structure:
+      verdict: exact_match
+      band: measured
+      observed: ["intro", "chorus", "outro"]
+  artifacts:
+    score:
+      path: positive_control/score.yaml
+      sha256: "1997c103fc74975af41ae7c3c569a7e7ac064fb1fd72a1c291e91050b208bf31"
+    validation:
+      path: ../../build/l0s/positive_control/validation.json
+      sha256: "a1bc26ff11e0701c44696dfe0947d11506c66c7518f16249e903689646a9fa6d"
+    roundtrip:
+      path: ../../build/l0s/positive_control/roundtrip.json
+      sha256: "f0cfb31e604735fc2d2721957fd34601bf2a677b2cdea89b39a10cc4b30c18dc"
+    adherence:
+      path: ../../build/l0s/positive_control/adherence.json
+      sha256: "d56bd17a717db2ec767770df051ddc7c16f05a94f52c1d0cb34b72bf2700c9d8"
+    observe_report:
+      path: ../../build/l0s/positive_control/observe_report.json
+      sha256: "6e9799701c8392d6f16eb21c8a09fd2a967aaf6611fa2f0bb4eeccc7a201b626"
+    report:
+      path: ../../build/l0s/positive_control/report.json
+      sha256: "18d0fec1dac63e4189ecba490db76eb2d6ba4735c6857337ce8584239720352d"
+    take_wav:
+      path: ../../build/l0s/positive_control/take.wav
+      sha256: "a5bf8a55b7cecb609bf2e8e2ade09a2f3bea2acd5284a7c1d3b3b6598c092a2e"
+    manifest:
+      path: ../../build/l0s/positive_control/identity_manifest.yaml
+      sha256: "b2fe1148aa30301631036da37f3d7af1cd5eca900c64fc915f472f55d04a6c1b"
+    package:
+      path: ../../build/l0s/positive_control/package/performance_package.json
+      sha256: "bc340e0ca53ba16edc3d735ca2ba1e4b736bde0cc15c91330d76260506bf1866"
+  # `eval_score` isn't in the fixed 9-artifact list task.md names, but is
+  # recorded anyway since it's the actual measured artifact (score.yaml
+  # with control_profile injected per frozen/eval_control_profile.yaml).
+  eval_score:
+    path: ../../build/l0s/positive_control/eval_score.yaml
+    sha256: "fc18ac481e73f8a0ba11e51ec3c114ea4a844150ff04a3855f1a397b36ddcf31"
+
+rounds: []
