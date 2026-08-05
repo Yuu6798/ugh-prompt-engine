@@ -34,6 +34,7 @@ CLAUDE.md「設計ドキュメント索引」（日本語詳細要約）を参�
 - [control_profile](control_profile.md) — PR1/PR1.5: `CompositionScore.control_profile` schema (per-generator grip_class self-description), sparse-allowed validation (vs fixity's full coverage), field→backend channel mapping, K2-derived Suno initial data; PR2 = `score-adherence` check
 - [Score-centric Planning](score_centric_planning.md) — Score-first reorganization: bidirectional reproducibility principle, transcription track (T-series, T0–T2, implemented), Q-series redefined as instrument calibration, semantic-layer sensors as future scope
 - [LLM Adapter Planning](llm_adapter_planning.md) — L-series (LLM authoring track) plan: LLM writes CompositionScore directly behind a thin determinism/information boundary (declared-pinned-payload-only visibility per §3, intent sidecar isolated, band-annotated structured diff reports), verified against the deterministic performer first; phases L0-s (manual spike) → L0a (contract freeze) → L0b (non-melody closed loop) → L0c (melody axis, frozen on M3d+M4)
+- [L0-s Spike Record](l0s_spike_record.md) — First L-series measurement (2026-08-05): 5 pinned author rounds under the info-isolated contract. Symbolic gate 5/5 pass, key/brightness 5/5 preserved, structure never exact_match (8→6→6→4→2 overshoot); contract-defect list distilled for L0a (validate CLI, boundary-time reporting, instrument resolution disclosure, report normal form, derivation-tool promotion)
 
 ## Roundtrip & Calibration
 
