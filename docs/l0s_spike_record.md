@@ -236,7 +236,7 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
     `superseded_sha256` として理由付きで透明に保持した。svp_rpe エンジン
     実体の pin は deps lock の責務ではなく `engine_state`/
     `runner_at_measurement` が担う、という会計を明文化した。
-- **8 巡目 2 件**（`<pending>`、いずれも `validate_score.py`）:
+- **8 巡目 2 件**（`618b332`、いずれも `validate_score.py`）:
   - **A: `validation.json` の書き出しがバイト決定論でなかった**
     （`write_text` はプラットフォーム依存の改行変換を挟みうるため、pin
     済み sha256 の再現が壊れるリスクがあった）。`measure_round.py` の
