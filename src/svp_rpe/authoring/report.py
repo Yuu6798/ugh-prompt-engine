@@ -47,6 +47,12 @@ _AXIS_VERDICTS: dict[str, frozenset[str]] = {
     "structure": frozenset({"exact_match", "mismatch"}),
 }
 
+# `observed_sections` を持てる軸名のホワイトリスト（PR #246 Codex P2 review
+# 13 巡目）。verdict 語彙（`_AXIS_VERDICTS`）と異なり未知軸を先回りして
+# 許容しない——このフィールド自体が structure 軸の境界時刻としてスキーマ
+# 設計されているため、将来軸が同フィールドを名乗るには明示的な追加が必要。
+_OBSERVED_SECTIONS_AXES: frozenset[str] = frozenset({"structure"})
+
 # 白リスト（観測③）。新規 kind を追加する際はこの Literal とモジュール
 # docstring の一覧を両方更新すること。
 AuthoringNoteKind = Literal["position_match_rate"]
@@ -247,6 +253,22 @@ class AuthoringDiffReport(BaseModel):
     report スキーマは軸集合そのものを固定しないという既存方針
     （docstring 上段）を維持するため。
 
+    `observed_sections` の軸限定（PR #246 Codex P2 review 13 巡目、7 巡目 A
+    と同族の軸不整合）: `AxisReport.observed_sections` は「structure 軸の
+    境界時刻」として文書化・設計されたフィールド（`ObservedSection`
+    docstring 参照）だが、`AxisReport` 単体は軸名を知らないため、
+    `axes["key"].observed_sections` のような軸不整合な組み合わせを構成
+    できてしまう。`AuthoringDiffReport` 側で軸名が `"structure"` の場合の
+    みこのフィールドの非 None/非空値を許容し、`"structure"` 以外（`key`/
+    `brightness`、および 7 巡目の verdict 語彙とは異なり**未知軸も含む**）
+    では拒否する。**7 巡目との線引き**: `_AXIS_VERDICTS` の未知軸許容は
+    「verdict という汎用語彙は将来軸でも意味を持ちうる」という判断だが、
+    `observed_sections` は verdict のような汎用語彙ではなく `structure`
+    軸の境界時刻という**スキーマ自体が構造軸固有**のフィールドであり、
+    未知軸がこれを名乗る根拠がない——将来 L0b が境界時刻を持つ新しい軸を
+    追加する場合は、このホワイトリスト（`_OBSERVED_SECTIONS_AXES`）へ
+    軸名を明示的に追加すること。
+
     `symbolic_validation.status`×`axes`×`notes` の provenance 整合（PR #246
     Codex P2 review 10 巡目 + 12 巡目、4〜5 巡目の `SymbolicValidationResult`
     内 `status`×`errors` 整合と同族）: `status == "fail"` の報告は `axes`
@@ -288,6 +310,20 @@ class AuthoringDiffReport(BaseModel):
                 errors.append(
                     f"axes[{axis_name!r}].verdict={axis_report.verdict!r} is not valid for "
                     f"axis {axis_name!r} (allowed: {sorted(allowed)!r})"
+                )
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
+
+    @model_validator(mode="after")
+    def _observed_sections_are_structure_only(self) -> Self:
+        errors = []
+        for axis_name, axis_report in self.axes.items():
+            if axis_report.observed_sections and axis_name not in _OBSERVED_SECTIONS_AXES:
+                errors.append(
+                    f"axes[{axis_name!r}].observed_sections is not valid for axis "
+                    f"{axis_name!r} — observed_sections is structure-only "
+                    f"(allowed axes: {sorted(_OBSERVED_SECTIONS_AXES)!r})"
                 )
         if errors:
             raise ValueError("; ".join(errors))

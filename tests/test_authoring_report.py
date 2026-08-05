@@ -334,6 +334,94 @@ def test_authoring_diff_report_accepts_any_frozen_verdict_for_unknown_axis():
     assert report.axes["tempo_stability"].verdict == "mismatch"
 
 
+def test_authoring_diff_report_rejects_observed_sections_on_key_axis():
+    """PR #246 Codex P2 review 13 巡目: `observed_sections` is documented
+    and schema-designed as structure-axis-only boundary evidence — a
+    `key` axis carrying it is an axis mismatch, same family as 7 巡目 A's
+    axis×verdict constraint."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "key": AxisReport(
+                    requirement="D minor",
+                    observed="D minor",
+                    verdict="preserved",
+                    band="measured",
+                    observed_sections=[
+                        ObservedSection(label="intro", start_seconds=0.0, end_seconds=7.5)
+                    ],
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_rejects_observed_sections_on_unknown_axis():
+    """Unlike 7 巡目 A's verdict vocabulary (which allows unknown axes the
+    full `Verdict` set), `observed_sections` is a structure-specific
+    field by schema design, so unknown axes are rejected too — not
+    granted the same forward-compatible allowance as verdict."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "tempo_stability": AxisReport(
+                    requirement="x",
+                    observed="y",
+                    verdict="mismatch",
+                    band="measured",
+                    observed_sections=[
+                        ObservedSection(label="intro", start_seconds=0.0, end_seconds=7.5)
+                    ],
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_observed_sections_on_structure_axis():
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "structure": AxisReport(
+                requirement=["intro"],
+                observed=["intro"],
+                verdict="mismatch",
+                band="measured",
+                observed_sections=[
+                    ObservedSection(label="intro", start_seconds=0.0, end_seconds=7.5)
+                ],
+            )
+        },
+    )
+    assert report.axes["structure"].observed_sections is not None
+
+
+def test_authoring_diff_report_accepts_axes_without_observed_sections():
+    """Regression guard: axes with `observed_sections` absent/None (the
+    common case — L0b hasn't wired the producer yet) are unaffected by
+    the structure-only restriction, for any axis name."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "key": AxisReport(
+                requirement="D minor", observed="D minor", verdict="preserved", band="measured"
+            ),
+            "structure": AxisReport(
+                requirement=["intro"], observed=["intro"], verdict="mismatch", band="measured"
+            ),
+        },
+    )
+    assert report.axes["key"].observed_sections is None
+    assert report.axes["structure"].observed_sections is None
+
+
 def test_axis_report_rejects_preserved_verdict_outside_measured_band():
     """PR #246 Codex P2 review 8 巡目 B: a success verdict (`preserved`/
     `exact_match`) must not smuggle past D5's band-annotation discipline by
