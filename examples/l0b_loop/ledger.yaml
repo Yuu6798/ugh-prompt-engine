@@ -250,7 +250,50 @@ t2:
       report:
         path: positive_control_t2/report.json
         sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
-  rounds: []
+  rounds:
+    - round: 1
+      date: "2026-08-05"
+      author: >-
+        情報遮断著者（Sonnet サブエージェント、T1 とは別個体）。可視情報 =
+        T2 課題文 + contract.md v1 全文のみ。ツール使用の実測 = 0 回、
+        tools_used: none 宣言と一致 — off-contract イベントなし。
+      files:
+        score:
+          path: rounds_t2/round1/score.yaml
+          sha256: "0d2f3fa8b68522625b8121d02a7d8960b57a33714c44632cbf8271388d0f5362"
+          git_blob_sha1: "c3876fcfe9241f6b521a4351b4e284cb590188d8"
+        intent:
+          path: rounds_t2/round1/intent.yaml
+          sha256: "a155c6f0c161c135f8d28e1947d25377448d12ed54be6dc3d14110c0aa758ba9"
+        report:
+          path: rounds_t2/round1/report.json
+          sha256: "21630b652f1f594e512efb6691850a1bdb7c4818067e8ca17498da21d3607a92"
+      workdir_note: "Scratch workdir = build/l0b/t2_round1/ (not committed)."
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+          observed_sections:
+            - {label: "intro", start_seconds: 0.0, end_seconds: 14.9304}
+            - {label: "chorus", start_seconds: 14.9304, end_seconds: 19.9459}
+            - {label: "outro", start_seconds: 19.9459, end_seconds: 30.0}
+      notes:
+        - {kind: position_match_rate, value: 0.5}
+      interpretation: >-
+        著者は 96bpm × 3bars（各宣言実長 7.5s、総尺 30s）の 4 セクション
+        を書き、中間 2 連の分離を chorus1 "full energy, sub bass" vs
+        chorus2 "full energy" の音色差に賭けた（intent の risk 欄で併合
+        リスクを自己言及）。観測は 3 セクション（Levenshtein 距離 1、
+        position_match_rate 0.5）。ただし併合箇所は著者予想（chorus1+
+        chorus2）と異なり、観測 intro が 0–14.93s と宣言 intro+chorus1
+        の 2 区間ぶんに融合した（強対比のはずの intro/chorus1 境界が
+        未検出）。観測 chorus 5.02s ≈ 宣言 chorus2、観測 outro 10.05s。
+        boundary-second live 配線が「どこが融合したか」を著者に開示する
+        初の実測点であり、第 2 周回の修理材料になる。
 
 rounds:
   - round: 1
