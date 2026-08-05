@@ -217,10 +217,67 @@ def test_missing_contract_file_exits_2(tmp_path: Path):
     assert result.exit_code == 2, result.output
 
 
+def test_empty_yaml_contract_exits_2(tmp_path: Path):
+    """`--contract` pointing at an empty YAML document (parses to `None`, not
+    a mapping) must be an operational error, not an uncaught `ValueError`
+    escaping `contract.py`'s `_load_yaml_mapping` (Codex P2 review, PR #246)."""
+
+    empty_contract = tmp_path / "empty-contract.yaml"
+    empty_contract.write_text("", encoding="utf-8")
+    result = _invoke(str(POSITIVE_CONTROL_PATH), "--contract", str(empty_contract))
+    assert result.exit_code == 2, result.output
+
+
+def test_scalar_yaml_contract_exits_2(tmp_path: Path):
+    scalar_contract = tmp_path / "scalar-contract.yaml"
+    scalar_contract.write_text("just a string\n", encoding="utf-8")
+    result = _invoke(str(POSITIVE_CONTROL_PATH), "--contract", str(scalar_contract))
+    assert result.exit_code == 2, result.output
+
+
+def test_list_yaml_contract_exits_2(tmp_path: Path):
+    list_contract = tmp_path / "list-contract.yaml"
+    list_contract.write_text("- 1\n- 2\n", encoding="utf-8")
+    result = _invoke(str(POSITIVE_CONTROL_PATH), "--contract", str(list_contract))
+    assert result.exit_code == 2, result.output
+
+
+def test_invalid_score_yaml_parse_failure_still_exits_1_not_2(tmp_path: Path):
+    """Asymmetry check (Codex P2 review, PR #246): an unparseable *score* is
+    the artifact under test failing — `fail`/exit `1` — while an unparseable
+    *contract* (above) is the instrument's own configuration being broken —
+    an operational error, exit `2`. Confirms the score side keeps its
+    existing exit-1 classification unchanged by this fix."""
+
+    bad_path = tmp_path / "broken-score.yaml"
+    bad_path.write_text("not: [valid yaml", encoding="utf-8")
+    result = _invoke(str(bad_path), "--contract", str(CONTRACT_PATH), "--format", "json")
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+
+
 def test_output_collision_with_score_input_exits_2(tmp_path: Path):
     score_path = _write_score(tmp_path, _base_score())
     result = _invoke(str(score_path), "-o", str(score_path))
     assert result.exit_code == 2, result.output
+
+
+def test_output_collision_with_contract_input_exits_2(tmp_path: Path):
+    """`-o` resolving to the `--contract` spec path must be rejected too —
+    the collision guard covers every input path this command reads, not
+    only `score.yaml` (Codex P2 review, PR #246, same collision-family
+    reasoning as PR #245)."""
+
+    score_path = _write_score(tmp_path, _base_score())
+    contract_copy = tmp_path / "contract.yaml"
+    contract_copy.write_bytes(CONTRACT_PATH.read_bytes())
+    before_bytes = contract_copy.read_bytes()
+
+    result = _invoke(str(score_path), "--contract", str(contract_copy), "-o", str(contract_copy))
+    assert result.exit_code == 2, result.output
+    # nothing was written — the spec file this run read must be untouched.
+    assert contract_copy.read_bytes() == before_bytes
 
 
 def test_yaml_parse_failure_is_fail_not_operational_error(tmp_path: Path):

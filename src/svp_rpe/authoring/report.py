@@ -84,7 +84,7 @@ class AuthoringDiffReport(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: str = SCHEMA_VERSION
+    schema_version: Literal["authoring-diff-report/1.0"] = SCHEMA_VERSION
     round: int
     symbolic_validation: SymbolicValidationResult
     axes: dict[str, AxisReport] = Field(default_factory=dict)

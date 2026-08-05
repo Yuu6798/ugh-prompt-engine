@@ -32,11 +32,40 @@ def test_historical_report_parses_under_new_schema(path: Path):
     notes-item-shape/schema_version are all additive-optional."""
 
     data = json.loads(path.read_text(encoding="utf-8"))
+    assert "schema_version" not in data  # historical reports never wrote this field
     report = AuthoringDiffReport.model_validate(data)
     assert report.round in (1, 2, 3, 4, 5)
     assert report.symbolic_validation.status == "pass"
     assert set(report.axes) == {"key", "brightness", "structure"}
     assert report.notes == []
+    # missing schema_version defaults to the current literal (backward compat).
+    assert report.schema_version == "authoring-diff-report/1.0"
+
+
+def test_schema_version_rejects_unknown_version_string():
+    """Codex P2 review (PR #246): `schema_version` was a bare `str` — any
+    string round-tripped, silently accepting a stale/foreign version tag.
+    Now strict-typed to the current literal; the default is unaffected."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport.model_validate(
+            {
+                "schema_version": "authoring-diff-report/0.9",
+                "round": 1,
+                "symbolic_validation": {"status": "pass"},
+            }
+        )
+
+
+def test_schema_version_accepts_current_literal_explicitly():
+    report = AuthoringDiffReport.model_validate(
+        {
+            "schema_version": "authoring-diff-report/1.0",
+            "round": 1,
+            "symbolic_validation": {"status": "pass"},
+        }
+    )
+    assert report.schema_version == "authoring-diff-report/1.0"
 
 
 def test_axis_report_requires_all_fields():

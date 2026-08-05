@@ -19,24 +19,34 @@ FORMAT_CHOICE = click.Choice(["text", "json"])
 
 
 class ProtectedPathError(RuntimeError):
-    """`-o` が入力の `score.yaml` パスそのものと衝突する（書き込み前に拒否）。
+    """`-o` が入力パス（`score.yaml` または `--contract` spec）そのものと
+    衝突する（書き込み前に拒否）。
 
     `examples/l0s_spike/scripts/validate_score.py` の出力衝突ガード規則 (c)
-    （入力パスとの衝突拒否）のみを踏襲する——同スクリプトの規則 (a)/(b)
-    （保護済みスパイク木への衝突）はスパイク成果物専用の懸念で、汎用 CLI で
-    ある本コマンドの対象外。
+    （入力パスとの衝突拒否）を踏襲し、この CLI が受け取る**全入力パス**
+    （`score.yaml` に加え、与えられていれば `--contract`）へ拡張する
+    （PR #245/#246 の衝突ファミリー掃討と同じ規則: 保護すべき入力が増えたら
+    保護集合も機械的に追随させる）——同スクリプトの規則 (a)/(b)（保護済み
+    スパイク木への衝突）はスパイク成果物専用の懸念で、汎用 CLI である本
+    コマンドの対象外のまま。
     """
 
 
-def _reject_output_collision(output_path: Path, *, score_path: Path) -> None:
+def _reject_output_collision(
+    output_path: Path, *, score_path: Path, contract_path: Optional[Path] = None
+) -> None:
     resolved_output = output_path.resolve()
-    resolved_score = score_path.resolve()
-    if resolved_output == resolved_score:
-        raise ProtectedPathError(
-            f"-o/--output must not resolve to the score.yaml input path itself "
-            f"(got {resolved_output}) — writing the result there would clobber "
-            "the input this run reads."
-        )
+    protected: list[tuple[str, Path]] = [("score.yaml", score_path.resolve())]
+    if contract_path is not None:
+        protected.append(("--contract", contract_path.resolve()))
+
+    for label, resolved_protected in protected:
+        if resolved_output == resolved_protected:
+            raise ProtectedPathError(
+                f"-o/--output must not resolve to the {label} input path itself "
+                f"(got {resolved_output}) — writing the result there would clobber "
+                "the input this run reads."
+            )
 
 
 def _render_text(result: "SymbolicValidationResult", *, score_path: Path) -> None:
@@ -101,8 +111,18 @@ def validate_cmd(
     Exit codes: `0` = pass, `1` = fail (including a `score.yaml` that fails to
     parse as YAML — recorded as a `canonical`-kind error at `<file>`, not an
     operational error, matching `validate_score.py`'s precedent), `2` =
-    operational error (missing `score.yaml`, an unreadable/invalid
-    `--contract` spec, or an `-o` path colliding with the `score.yaml` input).
+    operational error (missing `score.yaml`; an unreadable, malformed, or
+    non-mapping-YAML `--contract` spec — a YAML parse failure (`YAMLError`),
+    a document that parses but isn't a mapping (empty/scalar/list YAML,
+    `ValueError` from `contract.py`'s loader), or one that fails the spec's
+    own schema (`ValidationError`) are all classified alike; or an `-o` path
+    colliding with the `score.yaml` or `--contract` input). This is a
+    deliberate asymmetry with `score.yaml`'s own YAML-parse-failure handling
+    above: an invalid *score* is the artifact under test failing (`fail`,
+    exit `1`), while an invalid *contract* is the measuring instrument itself
+    being broken (an operational error, exit `2`) — the contract is the
+    validator's own configuration, not the thing being validated (Codex P2
+    review, PR #246).
     """
     from svp_rpe.authoring.contract import load_authoring_contract
     from svp_rpe.authoring.report import dump_json_bytes
@@ -119,10 +139,12 @@ def validate_cmd(
         raise typer.Exit(code=2) from exc
 
     spec = None
+    contract_path: Optional[Path] = None
     if contract is not None:
+        contract_path = Path(contract)
         try:
-            spec = load_authoring_contract(Path(contract))
-        except (OSError, yaml.YAMLError, ValidationError) as exc:
+            spec = load_authoring_contract(contract_path)
+        except (OSError, yaml.YAMLError, ValueError, ValidationError) as exc:
             typer.echo(f"Error: failed to load authoring contract spec: {exc}", err=True)
             raise typer.Exit(code=2) from exc
 
@@ -130,7 +152,9 @@ def validate_cmd(
     if output is not None:
         output_path = Path(output)
         try:
-            _reject_output_collision(output_path, score_path=score_path)
+            _reject_output_collision(
+                output_path, score_path=score_path, contract_path=contract_path
+            )
         except ProtectedPathError as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=2) from exc
