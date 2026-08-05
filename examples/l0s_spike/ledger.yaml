@@ -116,4 +116,33 @@ positive_control:
     path: ../../build/l0s/positive_control/eval_score.yaml
     sha256: "fc18ac481e73f8a0ba11e51ec3c114ea4a844150ff04a3855f1a397b36ddcf31"
 
-rounds: []
+rounds:
+  - round: 1
+    accepted_pin:
+      # Acceptance-time pin, taken before the gate ran (score.yaml/intent.yaml
+      # as submitted to examples/l0s_spike/rounds/round1/).
+      score_sha256: "3a2f5ffc205de1865d72f8ebcf400ac765e4c8e532ef1c3326d95d8050587434"
+      intent_sha256: "cc99e7dc05eeeda6e70893a9f20db3f8d7da02fff5bc83fec734ab8cdb7d6d91"
+      recorded_utc: "2026-08-05T06:23:59Z"
+    symbolic_validation: pass
+    verdict_artifact:
+      # symbolic_validation=pass -> measure_round.py ran -> report.json is
+      # the round's verdict record (validation.json's sha256 is still
+      # copied alongside it in rounds/round1/, but report.json is the
+      # canonical verdict pin for a validation-passing round).
+      kind: report
+      path: rounds/round1/report.json
+      sha256: "705c2a46b4dac1d2022a0c5d8e8671261ea8bd72c92bb7273b6b666fc5cd4cb8"
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: mismatch
+        band: measured
+        observed: ["intro", "verse", "verse", "verse", "chorus", "bridge", "chorus", "outro"]
+    llm_run_id:
+      author_model: "claude-sonnet-5"
+      harness: "claude-code Agent tool"
+      settings: "fresh-agent-per-round, contract-payload-only"
+    off_contract_events: []
+    recorded_utc: "2026-08-05T06:26:25Z"
