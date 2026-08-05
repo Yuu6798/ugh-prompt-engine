@@ -10052,8 +10052,10 @@ _M2E_SHARD_RUN_SCHEMA = "m2e-shard-run/0.1"
 _M2E_SHARD_CAP_MARGIN = 0.85
 # §8.2 の既定 B_session（秒）。CLI `--session-budget` の既定値と同じ。
 _M2E_DEFAULT_SESSION_BUDGET_S = 7200.0
-# §8.8: 実行回数の上限（凍結）。
-_M2E_R_MAX = 12
+# §8.8: 実行回数の上限（凍結）。12 → 18 へ改訂（2026-08-05 User 決裁・
+# docs/measurements/m2e_2026-08/r_max_decision_2026-08-05.md。§8.8 の 3 択で
+# 「R_max を引き上げる」を採用。規模は不変・回数だけ増える）。
+_M2E_R_MAX = 21
 # §8.6: ハングの絶対上限は B_session + 600s（凍結）。
 _M2E_HANG_GRACE_S = 600.0
 # 動的キューのポーリング間隔（実装の都合値。時間予算そのものには影響しない）。

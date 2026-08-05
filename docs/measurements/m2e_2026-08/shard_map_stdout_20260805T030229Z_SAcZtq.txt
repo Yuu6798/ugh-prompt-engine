@@ -1,0 +1,5 @@
+wrote shard map to docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml
+  generated at 2026-08-05T03:03:30+00:00
+  shard map sha256: 3e57c1c1c19fda6716920655ea3b7bec8313de7bd06aaf42349714aee2379226
+  n_shards: 19 / n_cells: 1280
+  cap_s: 5782.600

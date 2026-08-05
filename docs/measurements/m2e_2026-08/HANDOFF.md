@@ -302,7 +302,7 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
     --cell-store build/m2e/store_A \
     --out docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml \
     | tee "$(mktemp "docs/measurements/m2e_2026-08/shard_map_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
-# → commit する（本測定開始前・§8.5）。N_shards > R_max(12) なら §8.8 の 3 択へ
+# → commit する（本測定開始前・§8.5）。N_shards > R_max(21・rev.8) なら §8.8 の 3 択へ
 #   User 決裁（生成器がここで fail-closed に停止する）。
 # E-118（PR #242 第24巡 Codex 是正）: 地図は生成時刻を bytes に含めない（E-67）ため
 # `generated at` / `shard map sha256` は stdout にしか出ない——census/shard 実行記録と
@@ -336,10 +336,12 @@ SHARD_MAP_PATH="docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml"
 # ——r6 完走を偽装する穴。ループ範囲を構築する**前**に地図を読み、n_shards が
 # 非 bool の正整数であることを明示検証する。
 # E-140（PR #242 第36巡 Codex 是正）: 「非 bool の正整数」だけでは、生成器が
-# 出し得ない値（改変・破損）——例えば `n_shards: 13`——も通してしまう。§8.8 で
-# 凍結した `R_max = 12`（`generate_m2e_shard_map`/`_require_m2e_shard_map_
-# matches_registry` 共有の `_M2E_R_MAX`）を上限として明示し、`1 <= n_shards
-# <= 12` の範囲外は fail-closed で拒否する——`seq` がこの範囲外の巨大な N まで
+# 出し得ない値（改変・破損）——例えば `n_shards: 19`——も通してしまう。§8.8 の
+# `R_max`（`generate_m2e_shard_map`/`_require_m2e_shard_map_
+# matches_registry` 共有の `_M2E_R_MAX`。rev.7 2026-08-05 の User 決裁で 12→18、
+# r_max_decision_2026-08-05.md。rev.8 同日の条件付き User 決裁で 18→21、
+# r_max_decision2_2026-08-05.md）を上限として明示し、`1 <= n_shards
+# <= 21` の範囲外は fail-closed で拒否する——`seq` がこの範囲外の巨大な N まで
 # 実体化する前に preflight で止める。
 # E-139（PR #242 第36巡 Codex 是正）: E-138 は per-shard 検査のたびに地図
 # ファイルを個別に再読取・再ハッシュしていた——検証対象は「preflight が見た
@@ -378,9 +380,9 @@ if not isinstance(doc, dict):
     sys.exit(3)
 
 n_shards = doc.get('n_shards')
-if isinstance(n_shards, bool) or not isinstance(n_shards, int) or not (1 <= n_shards <= 12):
+if isinstance(n_shards, bool) or not isinstance(n_shards, int) or not (1 <= n_shards <= 21):
     print(
-        f'shard map n_shards is not a non-bool int in [1, 12] (frozen R_max, '
+        f'shard map n_shards is not a non-bool int in [1, 21] (R_max rev.8 2026-08-05, '
         f'design section 8.8): {n_shards!r}',
         file=sys.stderr,
     )
@@ -866,3 +868,4 @@ demucs の vocals stem の `stem_sha256` が run 間で変わる（`residual_db`
 
 報告規律（§11）: **1280 セルが揃うまで帯の判定を出さない。** 部分集合での平均 RPA・
 途中の破断曲線・見通しの表明は禁止。出せるのは census のみ。
+出せるのは census のみ。
