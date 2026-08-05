@@ -215,6 +215,7 @@ tests/ / docs/ / examples/     # pytest / design documents (index: docs/README.m
 | [`docs/DESIGN_M3_melody_comparator.md`](docs/DESIGN_M3_melody_comparator.md) | M3 旋律比較器設計書: 正規化・NW 対応付け・多軸類似（contour/interval/rhythm）・M3d 校正計画 |
 | [`docs/melody_comparator.md`](docs/melody_comparator.md) | M3 実装: `MelodySequences`・NW 整列・`MelodyComparisonReport`。総合スコアは恒久禁止、軸別 evidence のみ |
 | [`docs/DESIGN_M4_recast_melody_anchor.md`](docs/DESIGN_M4_recast_melody_anchor.md) | M4 設計書: M3 evidence を Recast の `experimental` anchor へ翻訳（axis_policy opt-in・G1–G3 ゲート・会計分離）。実装 = `recast/experimental.py`、golden E2E = `tests/test_recast_m4d_melody_e2e.py` |
+| [`docs/llm_adapter_planning.md`](docs/llm_adapter_planning.md) | LLM 著述トラック (L 系列) 計画: LLM が Score を直書きし決定論演奏者で検収する閉ループ。アダプター=決定論/情報の国境（契約のみ可視・intent sidecar 隔離・帯域注釈付き差分報告）。L0-s スパイク → L0a 契約凍結 → L0b 非旋律軸 → L0c 旋律軸（M2e+M4 待ち） |
 
 ## ドキュメント管理ポリシー
 
