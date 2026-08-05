@@ -1,0 +1,22 @@
+round: 5
+final_round: true
+diagnosis:
+  - "round4 observed = [intro, chorus, chorus, outro]（4分割）。key/brightness は preserved 継続、structure のみ mismatch。"
+  - "round4 の観測列は round1(8分割)→round2(6分割)→round3(6分割)→round4(4分割) という chorus.bars 短縮(16→8→8→4)に伴う単調減少トレンドの延長線上にあり、境界検出は依然 chorus 内で 1 回余分に発生している状態。"
+applied_branch_rule:
+  condition_matched: "observed が 4 分割程度まで収束したが完全一致(3分割)に届かない"
+  action: "option_a を適用: chorus.bars をさらに短縮（4→2）"
+  rejected_branch: "option_b（'full energy' ヒント除去）は分割数が変化し続けている（8→6→6→4）ため不採用。分割数が全く変化しない場合の分岐条件に該当しないと判断。"
+change_summary:
+  - field: "structure[1].bars (chorus)"
+    before: 4
+    after: 2
+    rationale: "chorus 内部の対比区間が短くなるほど二重境界検出（chorus, chorus への分裂）が起きにくくなるという round1-4 の単調トレンドに基づく単一変数の継続外挿。他のフィールド（key, brightness, chord_progression, 他 section の bars/physical）は preserved 済み軸を壊さないよう据え置き。"
+unchanged_and_why:
+  - "physical.key / physical.brightness: 既に preserved のため変更しない（回帰リスク回避）。"
+  - "events.chord_progression: round3 で単一和音仮説は構造分割への寄与なしと判定済み（round4 comparison 参照）。今回も duration 仮説の単独検証を優先するため変更せず据え置き。"
+  - "intro / outro の bars, physical ヒント: 既に境界が正しく検出されている側であり、変更すると新たな交絡変数が入るため据え置き。"
+risk_declaration:
+  - "chorus=2 bars は round4(4 bars)からの追加半減であり、密度対比が保たれる一方で持続時間が短すぎて outro 側に吸収され 3 分割未満（intro+その他 の 2 分割等）に縮退するリスクがある。"
+  - "本ラウンドは最終周回のため、縮退が観測された場合でも本スパイクでは追加の修正周回は行わない。縮退した場合は『duration 単変量操作のみでは境界検出パラメータの分解能限界に達した』と結論し、今後は physical ヒント語彙の追加（例: chorus 側に対比を強める語を足す）や bars 以外の変数（例 valley_depth_target 相当の物理差）を要検討事項として引き継ぐ。"
+tools_used: none
