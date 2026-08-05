@@ -9,7 +9,7 @@ engine_commit: "306add7914c80f1a0dd48c521100f6062c6d2846"
 recorded_utc: "2026-08-05T05:44:55Z"
 
 deps_lock:
-  file: env/pip_freeze.txt
+  file: deps/pip_freeze.txt
   sha256: "a9e2682576c0b0f20a16e582a797ef5b2f09dd5c5dc6fb8f26f93f019630be51"
 
 pinned_inputs:
