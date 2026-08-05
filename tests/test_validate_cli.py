@@ -535,6 +535,20 @@ def test_output_write_is_atomic_and_leaves_no_stray_tempfile(tmp_path: Path):
     assert remaining == {score_path.name, out_path.name}, remaining
 
 
+def test_output_path_is_existing_directory_exits_2(tmp_path: Path):
+    """PR #246 Codex P2 review 9 巡目 C: `atomic_write_bytes` raising
+    `OSError` (e.g. `-o` resolving to an existing directory) previously
+    escaped as an uncaught exception rather than the documented exit-2
+    operational error — now caught and reported cleanly."""
+
+    score_path = _write_score(tmp_path, _base_score())
+    directory_target = tmp_path / "existing-dir"
+    directory_target.mkdir()
+
+    result = _invoke(str(score_path), "-o", str(directory_target))
+    assert result.exit_code == 2, result.output
+
+
 def test_output_json_matches_stdout_json(tmp_path: Path):
     score_path = _write_score(tmp_path, _base_score())
     out_path = tmp_path / "out.json"

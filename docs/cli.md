@@ -1120,13 +1120,16 @@ See [`l0a_authoring_contract.md`](l0a_authoring_contract.md) for the contract de
 - Canonical validation (`CompositionScore.model_validate`) always runs regardless of
   `--contract`; a public-scope failure never short-circuits it.
 - Errors are a deterministically sorted list of `{where, message, kind}`, `kind` one of
-  `public_scope` / `type` / `enum` / `literal` / `format` / `canonical`.
-- `-o/--output` writes the result as byte-deterministic JSON (`write_bytes`, sorted keys);
-  rejected if it resolves to the `score.yaml` input path itself.
+  `public_scope` / `type` / `enum` / `literal` / `format` / `range` / `canonical`.
+- `-o/--output` writes the result as byte-deterministic JSON (sorted keys, published via
+  `svp_rpe.utils.atomic_io.atomic_write_bytes`); rejected if it resolves to the `score.yaml`
+  or `--contract` input path itself.
 - `--format json` prints the same JSON to stdout instead of a text summary table.
 - Exit codes: `0` pass, `1` fail (including a `score.yaml` that fails to parse as YAML,
   recorded as a `canonical`-kind error at `<file>`), `2` operational error (missing
-  `score.yaml`, an unreadable/invalid `--contract` spec, or an `-o` collision).
+  `score.yaml`, an unreadable/invalid `--contract` spec, an `-o` collision with the
+  `score.yaml`/`--contract` input, or an `-o` write failure such as the path resolving to a
+  directory).
 
 ```bash
 svprpe validate score.yaml --contract config/authoring_contract_l0.yaml

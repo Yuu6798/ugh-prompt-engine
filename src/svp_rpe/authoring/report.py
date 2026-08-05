@@ -73,6 +73,20 @@ _NOTE_VALUE_VALIDATORS: dict[str, Any] = {
 }
 
 
+def _reject_non_finite_float(value: Any, *, field_name: str) -> None:
+    """PR #246 Codex P2 review 9 巡目 B: `requirement`/`observed` は `Any`
+    型のまま（str/list/dict 等の任意の要求・実測値を運ぶ必要があるため）だが、
+    値が `float` のときだけ有限性（`math.isfinite`）を fail-fast で強制する
+    ——`bool`（`int` のサブクラスだが `float` ではない）や `int`/`str`/`list`
+    はここでの対象外、そのまま通す。構築時にここで弾いておくことで、
+    `dump_json_bytes` の `allow_nan=False` が事後的に `ValueError` として
+    間接的に検出するのではなく、生成の時点で意図が明確な `ValidationError`
+    として拒否できる。"""
+
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{field_name} must be finite (NaN/inf rejected): {value!r}")
+
+
 class ObservedSection(BaseModel):
     """structure 軸の 1 観測セクションの境界秒（観測①）。
 
@@ -84,7 +98,9 @@ class ObservedSection(BaseModel):
     B）: 両方 `>= 0`（`Field(ge=0)`）、かつ `end_seconds > start_seconds`
     （ゼロ長・逆転区間を拒否）。境界秒は観測器が返す実測値であり、負値や
     逆転区間は計器・生産器側のバグを表す——著者に見せる報告として意味を
-    なさない壊れた区間を、スキーマの時点で構成不能にする。"""
+    なさない壊れた区間を、スキーマの時点で構成不能にする。`inf` は
+    `Field(ge=0)` を素通りしてしまう（`inf >= 0` は真）ため、9 巡目 B で
+    別途有限性チェックを追加した。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -100,6 +116,12 @@ class ObservedSection(BaseModel):
                 f"start_seconds ({self.start_seconds}) — zero-length and reversed "
                 "intervals are rejected"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _boundaries_are_finite(self) -> Self:
+        _reject_non_finite_float(self.start_seconds, field_name="start_seconds")
+        _reject_non_finite_float(self.end_seconds, field_name="end_seconds")
         return self
 
 
@@ -126,7 +148,12 @@ class AxisReport(BaseModel):
     失敗」を防ぐのが目的で、「非 measured band では常に fail」を強制する
     ものではない——`not_observed`/`out_of_band` な `deviated`/`mismatch`
     は「確認できていないが preserved を主張していない」という正直な
-    報告のまま許容する）。"""
+    報告のまま許容する）。
+
+    `requirement`/`observed` は `Any`（str/list/dict 等の任意の要求・実測値
+    を運ぶ）のままだが、`float` が来た場合のみ有限性を強制する（PR #246
+    Codex P2 review 9 巡目 B、`_reject_non_finite_float`）——文字列や
+    リスト（`structure` 軸のラベル列等）はそのまま通す。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -145,6 +172,12 @@ class AxisReport(BaseModel):
                 "band would smuggle an untrusted number/label past D5's band-annotation "
                 "discipline"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _requirement_and_observed_floats_are_finite(self) -> Self:
+        _reject_non_finite_float(self.requirement, field_name="requirement")
+        _reject_non_finite_float(self.observed, field_name="observed")
         return self
 
 
@@ -224,9 +257,17 @@ def dump_json_bytes(model: BaseModel) -> bytes:
     依存改行変換を避ける）。`exclude_none=True` で歴史的 `report.json`
     （`symbolic_validation.errors`/`AxisReport.observed_sections` を省略した
     形）とバイト互換の欠落キー省略を保つ。
+
+    `allow_nan=False`（PR #246 Codex P2 review 9 巡目 B）: 既定の
+    `json.dumps` は `NaN`/`Infinity`/`-Infinity` を（RFC 8259 準拠でない）
+    非標準リテラルとして書き出してしまう——`AxisReport`/`ObservedSection`
+    の構築時 fail-fast（`_reject_non_finite_float`）で通常はここまで
+    到達しないが、直列化そのものにも防御として `allow_nan=False` を掛け、
+    万一非有限値を積んだモデルが構築できてしまった場合でも不正 JSON を
+    出力する前に `ValueError` で fail-closed にする（二重の安全網）。
     """
 
     payload = model.model_dump(mode="json", exclude_none=True)
-    return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
-        "utf-8"
-    )
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    ).encode("utf-8")

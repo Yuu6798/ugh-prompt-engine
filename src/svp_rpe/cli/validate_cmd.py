@@ -185,7 +185,16 @@ def validate_cmd(
         # バイト列をそのまま渡すため、バイト決定論（同一入力 2 回で
         # 出力バイト一致）は不変。衝突ガード（`_reject_output_collision`）
         # → atomic 書き込み、という順序も維持する。
-        atomic_write_bytes(output_path, content_bytes)
+        #
+        # 9 巡目 C: `atomic_write_bytes` 自体が送出しうる `OSError`
+        # （`-o` が既存ディレクトリを指す等）が未捕捉のまま生トレースバック
+        # で漏れていたのを、他の書き込み失敗経路と同じ
+        # `Error: ... / exit 2` へ統一する。
+        try:
+            atomic_write_bytes(output_path, content_bytes)
+        except OSError as exc:
+            typer.echo(f"Error: failed to write -o/--output: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
 
     if output_format == "json":
         typer.echo(content_bytes.decode("utf-8"), nl=False)

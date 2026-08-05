@@ -277,6 +277,30 @@ def test_axis_report_accepts_mismatch_verdict_outside_measured_band():
     assert axis.band == "not_observed"
 
 
+def test_axis_report_rejects_nan_observed():
+    """PR #246 Codex P2 review 9 巡目 B: `observed`/`requirement` are `Any`
+    (must carry str/list/dict etc.), but a `float` value must be finite —
+    fail-fast at construction rather than relying on `dump_json_bytes`'s
+    `allow_nan=False` to catch it after the fact."""
+
+    with pytest.raises(ValidationError):
+        AxisReport(requirement="x", observed=float("nan"), verdict="deviated", band="out_of_band")
+
+
+def test_axis_report_rejects_infinite_requirement():
+    with pytest.raises(ValidationError):
+        AxisReport(requirement=float("inf"), observed="x", verdict="deviated", band="out_of_band")
+
+
+def test_axis_report_accepts_non_float_requirement_and_observed():
+    """Regression guard: str/list/int requirement/observed values are
+    untouched by the float-only finite check."""
+
+    AxisReport(requirement=["a", "b"], observed=["a", "b"], verdict="mismatch", band="not_observed")
+    AxisReport(requirement="D minor", observed="D minor", verdict="preserved", band="measured")
+    AxisReport(requirement=5, observed=5, verdict="deviated", band="out_of_band")
+
+
 def test_axis_report_accepts_observed_sections_schema():
     axis = AxisReport(
         requirement=["intro", "chorus", "outro"],
@@ -317,6 +341,14 @@ def test_observed_section_rejects_reversed_interval():
 def test_observed_section_rejects_zero_length_interval():
     with pytest.raises(ValidationError):
         ObservedSection(label="intro", start_seconds=5.0, end_seconds=5.0)
+
+
+def test_observed_section_rejects_infinite_end_seconds():
+    """PR #246 Codex P2 review 9 巡目 B: `Field(ge=0)` alone lets `inf`
+    through (`inf >= 0` is true) — a dedicated finite check is required."""
+
+    with pytest.raises(ValidationError):
+        ObservedSection(label="intro", start_seconds=0.0, end_seconds=float("inf"))
 
 
 def test_observed_section_accepts_valid_interval():
@@ -373,6 +405,24 @@ def test_authoring_diff_report_rejects_unknown_top_level_key():
                 "unexpected": True,
             }
         )
+
+
+def test_dump_json_bytes_rejects_non_finite_floats_as_defense_in_depth():
+    """PR #246 Codex P2 review 9 巡目 B: `dump_json_bytes` itself uses
+    `allow_nan=False` as a second safety net, independent of the
+    construction-time guards on `AxisReport`/`ObservedSection` (which
+    already make a NaN/inf-carrying instance of those models impossible to
+    construct — this test exercises `dump_json_bytes` directly against a
+    bare `BaseModel` that bypasses those guards, to confirm the
+    serialization-layer defense holds on its own)."""
+
+    from pydantic import BaseModel as _BaseModel
+
+    class _BareFloatModel(_BaseModel):
+        value: float
+
+    with pytest.raises(ValueError):
+        dump_json_bytes(_BareFloatModel.model_construct(value=float("nan")))
 
 
 def test_dump_json_bytes_is_deterministic():
