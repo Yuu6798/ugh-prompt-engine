@@ -187,6 +187,33 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
   本スパイクの 5 周回 + 陽性対照はいずれも D minor/dark を著述しているため
   verdict は変化せず（陽性対照 + 全 5 周回の report.json を新実装で再計測し、
   台帳記録値と完全なバイト一致を確認）、evidence は無傷。
+- **契約記載形式のゲート非強制が非構造化クラッシュ族だった**（contract.md §1
+  は `physical.key`（`"<A-G>[#|b] <major|minor>"`）と `physical.time_signature`
+  （`"<N>/<M>"`）の形式を明記するが、記号ゲートは型（str）のみを検証していた
+  ため `"D dorian"`/`"H minor"`/`"waltz"` のような形式違反 Score も `pass` し、
+  measure_round.py の `svprpe roundtrip` 呼び出し中に構造化エラーではなく
+  生トレースバックでクラッシュしていた——`svp_rpe.perform.performer.parse_key`
+  が非 major/minor キーで `ValueError`、`perform()` の
+  `int(time_signature.split("/", 1)[0])` が `"N/M"` 以外で `ValueError`）。
+  PR #245 の Codex レビュー 6 巡目で検出し、「契約記載形式 × 下流ハードパース」
+  クラッシュ族を実測で確定してから閉鎖した:
+  - **クラッシュ族と実測確認**（`measure_round.py` を実行し、exit 1 + 生
+    トレースバックで落ちることを直接観測）: `physical.key`
+    （`"D dorian"`/`"H minor"` いずれも `parse_key` で `ValueError`）、
+    `physical.time_signature`（`"waltz"` で `int()` `ValueError`）。
+  - **非クラッシュと実測確認**（同様に `measure_round.py` を実行し、
+    exit 0 で完走することを直接観測）: `active_rate_target`/
+    `valley_depth_target` の範囲形式逸脱（例 `"high-ish"`）——`perform()`
+    では未使用、`roundtrip` の `values_match`/`parse_numeric_range` は不正
+    形式を「数値範囲でない」として文字列比較へ優雅にフォールバックする。
+    これらは境界宣言のまま L0a の `svprpe validate` 凍結要件へ送る。
+  `validate_score.py` にクラッシュ族 2 フィールドの正規表現形式検証
+  （`physical.key`: `^[A-Ga-g][#b]? (major|minor)$` 相当、
+  `physical.time_signature`: `^[0-9]+/[0-9]+$`）を追加し、既存の
+  {where, message} 形式・決定論ソート出力へ統合した。負例（`"D dorian"`/
+  `"H minor"`/`"waltz"`）はいずれも記号ゲートで `fail` し measure まで
+  進まなくなったことを確認し、既存 5 周回 + 陽性対照は pass のまま
+  validation.json が既存記録と完全一致（evidence 無傷）を確認した。
 
 ## 4. §5 判定と L0a への引き継ぎ
 

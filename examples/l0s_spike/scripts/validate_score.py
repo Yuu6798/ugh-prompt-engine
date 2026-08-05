@@ -28,14 +28,46 @@ could be opened as YAML.
      spells out (`physical.brightness`, `events.chord_progression[].root`/
      `.quality`) — verbatim.
 
+   - **Round 6** (this version): key/time_signature format, added after an
+     empirical crash-family sweep (PR #245 Codex P2 review round 6). Round 2
+     confirmed every *type*, but `contract.md` §1 also spells out a literal
+     *format* for `physical.key` (`"<A-G>[#|b] <major|minor>"`, e.g.
+     `"D minor"`) and `physical.time_signature` (`"4/4"`-style) that a
+     type-only check (`str`) doesn't enforce — any str value passed through.
+     A score authored with a format contract.md never sanctions (`"D
+     dorian"`, `"H minor"`, `"waltz"`) still passed this gate, and
+     `measure_round.py`'s later pipeline crashed with an *unstructured*
+     traceback instead of a `{where, message}` gate error:
+     `svp_rpe.perform.performer.parse_key` raises `ValueError` for a
+     non-`major`/`minor` key, and `perform()` raises `ValueError` from
+     `int(score.physical.time_signature.split("/", 1)[0])` for a
+     non-`"N/M"` time signature (both confirmed by direct measurement — a
+     `"D dorian"`/`"H minor"`/`"waltz"` Score reaches `measure_round.py`'s
+     `svprpe roundtrip` subprocess call and crashes it with exit 1 and a raw
+     traceback, never producing a report). This round adds format
+     validation for exactly those two fields, empirically confirmed to
+     crash — `active_rate_target`/`valley_depth_target` were also swept as
+     crash-family candidates and confirmed *not* to crash (unused by
+     `perform()`; `roundtrip`'s `values_match`/`parse_numeric_range` treats
+     a malformed range string as "no numeric range" and falls back to a
+     graceful string-equality comparison), so their format is deliberately
+     left unvalidated here — see **Scope boundary** below.
+
    **Scope boundary**: this check enforces the L0-s v0 authoring contract's
    *public schema* exactly as `contract.md` §1 writes it — key sets, types,
-   and the two literal enumerations it names. It is not a semantic linter:
-   value plausibility beyond those enumerations (e.g. whether
-   `physical.bpm` is a *musically sensible* tempo, or whether
-   `structure[].bars` is positive) is out of scope here and belongs to a
-   future L0a symbolic-validation-gate freeze design, not this spike-era
-   runner script.
+   the two literal enumerations it names, and (round 6, narrowly) the two
+   field *formats* empirically confirmed to crash `measure_round.py`'s
+   pipeline downstream rather than fail gracefully
+   (`physical.key`/`physical.time_signature`). It is not a general semantic
+   linter: value plausibility beyond those — including
+   `active_rate_target`/`valley_depth_target`'s contract-declared
+   `"<lower>-<upper>"` range format (confirmed non-crashing, see round 6
+   note above), whether `physical.bpm` is a *musically sensible* tempo, or
+   whether `structure[].bars` is positive — is out of scope here. The
+   crash/non-crash line is not principled from first read of the contract
+   alone; it was determined empirically per field and belongs to a future
+   `svprpe validate` / L0a symbolic-validation-gate freeze design to make
+   exhaustive, not this spike-era runner script.
 
    Every violation found anywhere in the tree is reported (not just the
    first), as a single deterministic, sorted list, whether or not canonical
@@ -64,6 +96,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -112,6 +145,14 @@ CHORD_ROOT_ENUM = frozenset(
 )
 CHORD_QUALITY_ENUM = frozenset({"major", "minor"})
 
+# Round 6 (PR #245 Codex P2 review): contract.md §1's literal format for the
+# two fields empirically confirmed to crash measure_round.py's downstream
+# pipeline (svp_rpe.perform.performer.parse_key / the int(time_signature
+# split) call) rather than fail gracefully — see the module docstring's
+# round-6 note for the crash-family sweep this is scoped to.
+KEY_FORMAT_PATTERN = re.compile(r"^[A-Ga-g][#b]? (major|minor)$")
+TIME_SIGNATURE_FORMAT_PATTERN = re.compile(r"^[0-9]+/[0-9]+$")
+
 OFF_CONTRACT_KEY_MESSAGE = (
     "contract-forbidden key (L0-s public schema; recorded as off-contract self-edit)"
 )
@@ -121,6 +162,16 @@ INT_TYPE_MESSAGE = (
     "TODO sentinels are rejected even though canonical CompositionScore coerces them"
 )
 LIST_STR_TYPE_MESSAGE = "must be a list of str per L0-s public schema (contract.md §1)"
+KEY_FORMAT_MESSAGE = (
+    'must match the contract key format "<A-G>[#|b] <major|minor>" '
+    '(e.g. "D minor", "F# major") per L0-s public schema (contract.md §1) — '
+    "confirmed to crash measure_round.py's pipeline (parse_key) otherwise"
+)
+TIME_SIGNATURE_FORMAT_MESSAGE = (
+    'must match the contract time signature format "<N>/<M>" (e.g. "4/4") per '
+    "L0-s public schema (contract.md §1) — confirmed to crash "
+    "measure_round.py's pipeline (int() on the beats-per-bar component) otherwise"
+)
 
 
 def _join(prefix: str, key: str) -> str:
@@ -178,6 +229,22 @@ def _check_enum_field(
     return [{"where": where, "message": message}]
 
 
+def _check_format_field(
+    where: str, container: Any, key: str, pattern: re.Pattern[str], message: str
+) -> list[dict[str, str]]:
+    """Only fires once the field is already confirmed `str` (same
+    non-duplication rule as `_check_enum_field`). Round 6: the crash-family
+    fields (`physical.key`/`physical.time_signature`) empirically confirmed
+    to reach an unstructured downstream crash under a merely str-typed but
+    off-format value — see module docstring."""
+    if not isinstance(container, dict) or key not in container:
+        return []
+    value = container[key]
+    if not isinstance(value, str) or pattern.fullmatch(value) is not None:
+        return []
+    return [{"where": where, "message": message}]
+
+
 def _public_scope_errors(raw: dict[str, Any]) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     errors += _extra_key_errors("", raw, TOP_LEVEL_KEYS)
@@ -213,6 +280,16 @@ def _public_scope_errors(raw: dict[str, Any]) -> list[dict[str, str]]:
         errors += _check_str_field(f"physical.{field}", physical, field)
     errors += _check_str_field("physical.brightness", physical, "brightness")
     errors += _check_enum_field("physical.brightness", physical, "brightness", BRIGHTNESS_ENUM)
+    errors += _check_format_field(
+        "physical.key", physical, "key", KEY_FORMAT_PATTERN, KEY_FORMAT_MESSAGE
+    )
+    errors += _check_format_field(
+        "physical.time_signature",
+        physical,
+        "time_signature",
+        TIME_SIGNATURE_FORMAT_PATTERN,
+        TIME_SIGNATURE_FORMAT_MESSAGE,
+    )
 
     structure = raw.get("structure")
     if isinstance(structure, list):
