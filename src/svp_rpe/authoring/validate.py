@@ -76,7 +76,15 @@ class SymbolicValidationResult(BaseModel):
     fail-closed で強制する（PR #246 Codex P2 review 4 巡目 A: `status:
     "pass"` に `errors` が付随する矛盾組、`status: "fail"` なのに `errors`
     が空/欠落の矛盾組を、このスキーマだけでは受理できてしまっていた —
-    どちらも `ValidationError` で拒否する）。"""
+    どちらも `ValidationError` で拒否する）。
+
+    5 巡目（穴埋め）: 4 巡目 A の pass 側チェックは `self.errors`（truthy
+    判定）だったため、明示的な空リスト `errors: []` は falsy で素通り
+    していた——`status: "pass"` は `errors` キーが**存在しないか `None`**
+    のときのみ受理する（`is not None` の厳密比較。`errors: []` も矛盾組と
+    して拒否）。fail 側は従来どおり `not self.errors`（`None`/空リスト
+    いずれも拒否）のまま——fail に「空でも `[]` というキー自体は許す」
+    余地は元から無い。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -85,7 +93,7 @@ class SymbolicValidationResult(BaseModel):
 
     @model_validator(mode="after")
     def _errors_consistent_with_status(self) -> Self:
-        if self.status == "pass" and self.errors:
+        if self.status == "pass" and self.errors is not None:
             raise ValueError("status='pass' must not carry errors (contradictory result)")
         if self.status == "fail" and not self.errors:
             raise ValueError("status='fail' requires at least one error (contradictory result)")

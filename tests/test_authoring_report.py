@@ -49,6 +49,15 @@ def test_symbolic_validation_result_accepts_consistent_pass():
     assert result.errors is None
 
 
+def test_symbolic_validation_result_accepts_pass_with_errors_omitted_or_none():
+    """PR #246 Codex P2 review 5 巡目: `status='pass'` accepts `errors`
+    only when the key is absent or explicitly `None` — both must construct
+    (this is the regression guard for the fix, not a negative case)."""
+
+    assert SymbolicValidationResult(status="pass").errors is None
+    assert SymbolicValidationResult(status="pass", errors=None).errors is None
+
+
 def test_symbolic_validation_result_accepts_consistent_fail():
     result = SymbolicValidationResult(
         status="fail",
@@ -68,12 +77,26 @@ def test_symbolic_validation_result_rejects_pass_with_errors():
         )
 
 
+def test_symbolic_validation_result_rejects_pass_with_explicit_empty_errors_list():
+    """PR #246 Codex P2 review 5 巡目: closes the 4 巡目 A truthy-check gap
+    — `errors: []` (an explicit empty list, not absent/None) is falsy and
+    previously slipped past `if self.status == "pass" and self.errors:`.
+    Must now be rejected identically to a non-empty `errors` list."""
+
+    with pytest.raises(ValidationError):
+        SymbolicValidationResult(status="pass", errors=[])
+
+
 def test_symbolic_validation_result_rejects_fail_with_no_errors():
     with pytest.raises(ValidationError):
         SymbolicValidationResult(status="fail", errors=None)
 
 
 def test_symbolic_validation_result_rejects_fail_with_empty_errors():
+    """Regression guard (PR #246 review 5 巡目): the fail-side constraint
+    (`not self.errors` — None or empty list both rejected) is unchanged by
+    the pass-side fix above."""
+
     with pytest.raises(ValidationError):
         SymbolicValidationResult(status="fail", errors=[])
 
