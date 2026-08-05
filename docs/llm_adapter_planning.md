@@ -120,10 +120,20 @@ LLM（差し替え可能）
   ▼
 [3] 実行と計測（既存部品中心）
   │  perform（決定論演奏）→ extract → score-adherence / R0 比較 / （L0c で M3）
-  │  構造軸のみ追加配線: 提出 score.yaml から section_map sidecar を決定論導出して
-  │  pin し、`svprpe observe`（AR4 structure domain）で判定する（R0 診断と
-  │  score-adherence は構造フィールドを扱わないため。導出器の実体は L0-s で確認し
-  │  L0a で契約に凍結する。導出物も D1 の pin 既定則の対象）
+  │  構造軸のみ追加配線: 提出 score.yaml から `svprpe observe`（AR4 structure
+  │  domain）の**実入力一式**（performance_package.json / manifest / section_map
+  │  anchor artifact）を決定論導出して全数 pin し、observe の hash 検証を通して
+  │  判定する（observe CLI は bare な section_map を受けず、manifest hash と
+  │  anchor hash を検証してから測るため。R0 診断と score-adherence は構造
+  │  フィールドを扱わない。導出器の実体確認 = L0-s、契約凍結 = L0a。同等入力の
+  │  下位 API 経路を使う場合も入力集合と pin は同一。導出物はすべて D1 の
+  │  pin 既定則の対象）
+  │  判定軸の選択は LLM 著述に依存させない: `score_adherence()` は score 側の
+  │  control_profile から検査を選ぶ実装のため、アダプターが L0a で凍結した軸表を
+  │  注入した評価用コピー（注入は決定論・pin 対象）で実行し、提出 Score 本体の
+  │  control_profile は判定選択に使わない（被測定者が対象軸を省略・編集して検収
+  │  から軸を消せる = D7 違反経路の遮断。省略・自己編集の検出は off-contract
+  │  イベントとして記録）
   ▼
 [4] 差分報告生成
   │  軸別・セクション別 evidence + 帯域注釈 + intent 参照（生データは含めない: D6）
