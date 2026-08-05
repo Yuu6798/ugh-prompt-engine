@@ -29,6 +29,7 @@ from typing import Any, Literal, Optional, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from svp_rpe.authoring.validate import SymbolicValidationResult
+from svp_rpe.keys import keys_enharmonically_equal
 
 SCHEMA_VERSION = "authoring-diff-report/1.0"
 
@@ -69,6 +70,29 @@ _OBSERVED_SECTIONS_AXES: frozenset[str] = frozenset({"structure"})
 # 側（`trusted_axes.py`/凍結 YAML）を変更したら、この定数も同期して
 # 更新すること——同期を怠るとこのドリフトテストが赤くなる。
 _TRUSTED_BRIGHTNESS_VALUES: frozenset[str] = frozenset({"dark"})
+
+# 凍結信頼軸表が採用しなかった既知除外軸（PR #246 Codex P2 review 17 巡目
+# B）。出典 = `svp_rpe.roundtrip.diagnose.ROUNDTRIP_FIELDS`（R0 往復診断が
+# 扱う 7 フィールド）から `derive_trusted_axes()` が採用した軸集合
+# （`bpm`/`key`/`brightness`）を引いた残り: K1 grip map で
+# `classification == "dead"`（演奏者のつまみが死んでいる）な
+# `active_rate_target`/`valley_depth_target`、恒常 `sensor_blind`
+# （`stereo_width`/`time_signature`）——`trusted_axes.py` モジュール
+# docstring 参照。これらは出典計器の構造上「成功 evidence への算入資格が
+# ない」と判断され信頼軸表から除外された軸であり、report がこれらの軸で
+# 成功側 verdict（`preserved`/`exact_match`）を主張することは band を問わず
+# 拒否する（凍結表が除外した軸に対し report 側だけが独自に成功を主張できて
+# しまう抜け道を塞ぐ）。失敗側 verdict（`deviated`/`mismatch`）や
+# `not_observed` band での正直な報告は引き続き許容する。`bpm` は
+# `runtime_gate` 付きで信頼表に**収載済み**（実験ごとの動的判定の対象で
+# あり、静的な除外軸ではない）ためこのリストに含めない。**ドリフト検出**:
+# `tests/test_trusted_axes.py::
+# test_report_known_excluded_axes_matches_roundtrip_fields_minus_derived_axes`
+# が「この定数 == `ROUNDTRIP_FIELDS` から `derive_trusted_axes()` の採用軸
+# を引いた集合」の一致を enforce する（16 巡目のドリフト検出と同型）。
+_KNOWN_EXCLUDED_AXES: frozenset[str] = frozenset(
+    {"active_rate_target", "valley_depth_target", "stereo_width", "time_signature"}
+)
 
 # 白リスト（観測③）。新規 kind を追加する際はこの Literal とモジュール
 # docstring の一覧を両方更新すること。
@@ -287,6 +311,37 @@ class AuthoringDiffReport(BaseModel):
     保持されていないと正直に報告する」経路——8 巡目 B の失敗側許容方針と
     同じ理由で塞がない）。
 
+    key の値×verdict 整合（PR #246 Codex P2 review 17 巡目 A、16 巡目の
+    brightness 帯強制と同じ「成功側 verdict のみ制約する」一貫方針）:
+    `key` 軸の `verdict` が成功側（`preserved`）で `requirement`/`observed`
+    が両方 `str` のとき、`svp_rpe.keys.keys_enharmonically_equal` による
+    異名同音等価判定を要求する——従来は verdict 語彙とデータ型のみを検証し
+    値そのものの整合を見ていなかったため、`requirement="D minor"` /
+    `observed="E minor"` × `verdict="preserved"` のような矛盾した組が正規形
+    として受理されてしまっていた。`keys_enharmonically_equal` はこの
+    リポジトリの roundtrip 診断が「往復で調が保存されたか」の二値判定に
+    使う決定論実装をそのまま再利用する（`C#`/`Db` のような異名同音は
+    等価、パース不能値は casefold 完全一致へフォールバック——他の目的
+    （grip 効果量の加重スコア）向けの `weighted_key_score` とは意味が
+    異なるため混同しない、`svp_rpe/keys.py` モジュール docstring 参照）。
+    **失敗側 verdict（`deviated`）は値の不一致を制約しない**（16 巡目と
+    同じ「成功側のみ強制」方針——「一致しないと正直に報告する」経路を
+    塞がない）。非 `str` の `requirement`/`observed`（`AxisReport` の
+    `Any` 設計）は判定対象外で従来どおり通す。
+
+    既知除外軸への成功宣言の禁止（PR #246 Codex P2 review 17 巡目 B）:
+    凍結信頼軸表が採用しなかった軸（`_KNOWN_EXCLUDED_AXES` — K1 grip map
+    で `dead` な `active_rate_target`/`valley_depth_target`、恒常
+    `sensor_blind` な `stereo_width`/`time_signature`。詳細は同定数の
+    コメント参照）で成功側 verdict（`preserved`/`exact_match`）を主張する
+    報告は、`band` の値を問わず一律拒否する——出典計器の構造上これらの軸は
+    そもそも成功 evidence への算入資格がないため、`band: "measured"` を
+    自称してもその主張自体が凍結表と矛盾する。失敗側 verdict や
+    `not_observed` band での正直な報告（「この軸は計測しなかった/観測でき
+    なかった」）は引き続き許容する。`bpm` は `runtime_gate` 付きで信頼表に
+    収載済み（実験ごとの動的判定の対象）のためこのリストに含めない——
+    静的に「常に除外」とは言えない軸を誤って denylist しないための区別。
+
     `observed_sections` の軸限定（PR #246 Codex P2 review 13 巡目 + 14 巡目、
     7 巡目 A と同族の軸不整合）: `AxisReport.observed_sections` は
     「structure 軸の境界時刻」として文書化・設計されたフィールド
@@ -371,6 +426,39 @@ class AuthoringDiffReport(BaseModel):
                     f"{sorted(_TRUSTED_BRIGHTNESS_VALUES)!r} (config/authoring_trusted_axes_l0."
                     "yaml axes.brightness.band_restriction) — a success verdict cannot be "
                     "claimed for an untrusted value per D5's band-annotation discipline"
+                )
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
+
+    @model_validator(mode="after")
+    def _key_success_requires_enharmonic_match(self) -> Self:
+        axis_report = self.axes.get("key")
+        if axis_report is None or axis_report.verdict != "preserved":
+            return self
+        requirement = axis_report.requirement
+        observed = axis_report.observed
+        if not isinstance(requirement, str) or not isinstance(observed, str):
+            return self
+        if not keys_enharmonically_equal(requirement, observed):
+            raise ValueError(
+                f"axes['key'].verdict='preserved' but requirement={requirement!r} and "
+                f"observed={observed!r} are not enharmonically equal per "
+                "svp_rpe.keys.keys_enharmonically_equal — a success verdict cannot be "
+                "claimed for mismatched key values"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _known_excluded_axes_reject_success_verdicts(self) -> Self:
+        errors = []
+        for axis_name, axis_report in self.axes.items():
+            if axis_name in _KNOWN_EXCLUDED_AXES and axis_report.verdict in _SUCCESS_VERDICTS:
+                errors.append(
+                    f"axes[{axis_name!r}].verdict={axis_report.verdict!r} is a success verdict "
+                    f"but {axis_name!r} is excluded from the frozen trusted-axis table "
+                    "(config/authoring_trusted_axes_l0.yaml) — this axis has no source "
+                    "instrument backing a success claim regardless of band"
                 )
         if errors:
             raise ValueError("; ".join(errors))

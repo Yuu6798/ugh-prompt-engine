@@ -401,6 +401,126 @@ def test_authoring_diff_report_accepts_brightness_deviated_with_bright():
     assert report.axes["brightness"].verdict == "deviated"
 
 
+def test_authoring_diff_report_rejects_key_preserved_with_mismatched_values():
+    """PR #246 Codex P2 review 17 巡目 A: a `key` axis claiming
+    `verdict='preserved'` with genuinely different key values
+    ('D minor' vs 'E minor') must be rejected — the verdict vocabulary and
+    band checks alone didn't validate the values themselves."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "key": AxisReport(
+                    requirement="D minor", observed="E minor", verdict="preserved", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_key_preserved_with_identical_values():
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "key": AxisReport(
+                requirement="D minor", observed="D minor", verdict="preserved", band="measured"
+            )
+        },
+    )
+    assert report.axes["key"].verdict == "preserved"
+
+
+def test_authoring_diff_report_accepts_key_preserved_with_enharmonic_equivalents():
+    """`C# minor` and `Db minor` are enharmonically identical — the same
+    equivalence `svp_rpe.roundtrip` diagnosis uses for its own key
+    preservation verdict."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "key": AxisReport(
+                requirement="C# minor", observed="Db minor", verdict="preserved", band="measured"
+            )
+        },
+    )
+    assert report.axes["key"].verdict == "preserved"
+
+
+def test_authoring_diff_report_accepts_key_deviated_with_mismatched_values():
+    """Regression guard: the failure-side verdict (`deviated`) is not
+    blocked by the value-consistency check — an honest "did not match"
+    report must still be constructible (17 巡目 A follows 16 巡目's
+    "only success claims are gated" posture)."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "key": AxisReport(
+                requirement="D minor", observed="E minor", verdict="deviated", band="measured"
+            )
+        },
+    )
+    assert report.axes["key"].verdict == "deviated"
+
+
+def test_authoring_diff_report_rejects_success_verdict_on_known_excluded_axis():
+    """PR #246 Codex P2 review 17 巡目 B: an axis the frozen trusted-axis
+    table deliberately excluded (K1 grip map `dead` knob) must not carry a
+    success verdict, regardless of band — the axis has no source
+    instrument backing a success claim in the first place."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "active_rate_target": AxisReport(
+                    requirement="x", observed="x", verdict="preserved", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_rejects_exact_match_verdict_on_stereo_width_axis():
+    """Same family, exact_match on a constant-sensor-blind axis
+    (`stereo_width`), independent verdict token from the `preserved` case
+    above."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "stereo_width": AxisReport(
+                    requirement="x", observed="x", verdict="exact_match", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_honest_reports_on_known_excluded_axis():
+    """Regression guard: failure-side verdicts and `not_observed` band
+    reporting on a known-excluded axis remain constructible — the axis
+    can still be honestly reported as unmeasured/deviated, only success
+    claims are denied."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "active_rate_target": AxisReport(
+                requirement="x", observed="y", verdict="deviated", band="not_observed"
+            )
+        },
+    )
+    assert report.axes["active_rate_target"].verdict == "deviated"
+    assert report.axes["active_rate_target"].band == "not_observed"
+
+
 def test_authoring_diff_report_rejects_observed_sections_on_key_axis():
     """PR #246 Codex P2 review 13 巡目: `observed_sections` is documented
     and schema-designed as structure-axis-only boundary evidence — a

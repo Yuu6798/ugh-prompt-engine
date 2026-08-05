@@ -11,7 +11,7 @@ from pathlib import Path
 import yaml
 
 from svp_rpe.authoring.trusted_axes import derive_trusted_axes
-from svp_rpe.roundtrip.diagnose import load_grip_map
+from svp_rpe.roundtrip.diagnose import ROUNDTRIP_FIELDS, load_grip_map
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -123,3 +123,20 @@ def test_report_trusted_brightness_values_matches_derived_trusted_axes():
 
     axes = derive_trusted_axes()["axes"]
     assert _TRUSTED_BRIGHTNESS_VALUES == frozenset(axes["brightness"]["band_restriction"]["trusted_values"])
+
+
+def test_report_known_excluded_axes_matches_roundtrip_fields_minus_derived_axes():
+    """PR #246 Codex P2 review 17 巡目 B: `report.py`'s
+    `_KNOWN_EXCLUDED_AXES` (axes that must never carry a success verdict,
+    band notwithstanding) is a hardcoded copy of "ROUNDTRIP_FIELDS minus
+    the axes derive_trusted_axes() actually adopted" — same "structural
+    sync with the derivation side" drift guard shape as the brightness
+    band test above. `structure` is excluded from this comparison since
+    it is not a ROUNDTRIP_FIELDS member (added separately by
+    derive_trusted_axes() from the AR4 observe instrument)."""
+
+    from svp_rpe.authoring.report import _KNOWN_EXCLUDED_AXES
+
+    adopted_physical_axes = frozenset(derive_trusted_axes()["axes"]) - {"structure"}
+    expected_excluded = frozenset(ROUNDTRIP_FIELDS) - adopted_physical_axes
+    assert _KNOWN_EXCLUDED_AXES == expected_excluded

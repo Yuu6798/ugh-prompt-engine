@@ -274,6 +274,35 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    `band_restriction.trusted_values`」の一致を enforce し、信頼軸表側の
    変更に追従し忘れた場合に赤くなる（既存の「再導出 == 凍結ファイル」
    一致テストと同型のドリフト防止）。
+9. **key の値×verdict 整合**（PR #246 Codex P2 review 17 巡目 A、8 の
+   brightness 帯強制と同じ「成功側 verdict のみ制約する」一貫方針）:
+   `key` 軸の `verdict` が成功側（`preserved`）で `requirement`/`observed`
+   が両方 `str` のとき、`svp_rpe.keys.keys_enharmonically_equal`（この
+   リポジトリの roundtrip 診断が「往復で調が保存されたか」の二値判定に
+   使う決定論実装をそのまま再利用——`C#`/`Db` 等の異名同音は等価、パース
+   不能値は casefold 完全一致へフォールバック）による整合を要求する。
+   従来は verdict 語彙とデータ型のみを検証し値そのものの整合を見ていな
+   かったため、`requirement="D minor"` / `observed="E minor"` ×
+   `verdict="preserved"` のような矛盾した組が正規形として受理されて
+   しまっていた。**失敗側 verdict（`deviated`）は値の不一致を制約しない**
+   （8 と同じ「成功側のみ強制」方針）。非 `str` の `requirement`/
+   `observed`（`AxisReport` の `Any` 設計）は判定対象外。
+10. **既知除外軸への成功宣言の禁止**（PR #246 Codex P2 review 17 巡目 B）:
+   凍結信頼軸表が採用しなかった軸（`_KNOWN_EXCLUDED_AXES` = K1 grip map で
+   `dead`（演奏者のつまみが死んでいる）な `active_rate_target`/
+   `valley_depth_target`、恒常 `sensor_blind` な `stereo_width`/
+   `time_signature`——`trusted_axes.py` モジュール docstring 参照）で
+   成功側 verdict（`preserved`/`exact_match`）を主張する報告は、`band`
+   の値を問わず一律拒否する——出典計器の構造上これらの軸はそもそも成功
+   evidence への算入資格がないため、`band: "measured"` を自称してもその
+   主張自体が凍結表と矛盾する。失敗側 verdict や `not_observed` band
+   での正直な報告は引き続き許容する。`bpm` は `runtime_gate` 付きで
+   信頼表に収載済み（実験ごとの動的判定の対象）のためこのリストに
+   含めない。**ドリフト検出**: `tests/test_trusted_axes.py::
+   test_report_known_excluded_axes_matches_roundtrip_fields_minus_derived_axes`
+   が「`_KNOWN_EXCLUDED_AXES` == `ROUNDTRIP_FIELDS` から
+   `derive_trusted_axes()` の採用軸を引いた集合」の一致を enforce する
+   （8 のドリフト検出と同型）。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
 `sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を構築し、
