@@ -18,11 +18,77 @@ from svp_rpe.authoring.validate import AuthoringErrorItem, SymbolicValidationRes
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROUND_REPORTS = sorted((REPO_ROOT / "examples" / "l0s_spike" / "rounds").glob("round*/report.json"))
+ROUND_VALIDATIONS = sorted(
+    (REPO_ROOT / "examples" / "l0s_spike" / "rounds").glob("round*/validation.json")
+)
 
 
 def test_l0s_spike_has_five_round_reports():
     """Sanity check the fixture set this backward-compat test relies on."""
     assert len(ROUND_REPORTS) == 5
+
+
+def test_l0s_spike_has_five_round_validations():
+    assert len(ROUND_VALIDATIONS) == 5
+
+
+@pytest.mark.parametrize("path", ROUND_VALIDATIONS, ids=lambda p: p.parent.name)
+def test_historical_validation_json_parses_under_symbolic_validation_result(path: Path):
+    """L0-s's real validation.json (rounds/round{1..5}/validation.json, all
+    `{"status": "pass"}` with no `errors` key) must still parse under the
+    status/errors consistency guard added in PR #246 review round 4 A."""
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    result = SymbolicValidationResult.model_validate(data)
+    assert result.status == "pass"
+    assert result.errors is None
+
+
+def test_symbolic_validation_result_accepts_consistent_pass():
+    result = SymbolicValidationResult(status="pass")
+    assert result.errors is None
+
+
+def test_symbolic_validation_result_accepts_consistent_fail():
+    result = SymbolicValidationResult(
+        status="fail",
+        errors=[AuthoringErrorItem(where="physical.bpm", message="bad", kind="type")],
+    )
+    assert result.errors is not None and len(result.errors) == 1
+
+
+def test_symbolic_validation_result_rejects_pass_with_errors():
+    """PR #246 Codex P2 review 4 巡目 A: `status='pass'` carrying `errors`
+    is a contradictory result and must fail closed."""
+
+    with pytest.raises(ValidationError):
+        SymbolicValidationResult(
+            status="pass",
+            errors=[AuthoringErrorItem(where="physical.bpm", message="bad", kind="type")],
+        )
+
+
+def test_symbolic_validation_result_rejects_fail_with_no_errors():
+    with pytest.raises(ValidationError):
+        SymbolicValidationResult(status="fail", errors=None)
+
+
+def test_symbolic_validation_result_rejects_fail_with_empty_errors():
+    with pytest.raises(ValidationError):
+        SymbolicValidationResult(status="fail", errors=[])
+
+
+def test_authoring_diff_report_rejects_contradictory_nested_symbolic_validation():
+    """The guard on `SymbolicValidationResult` propagates through nested nested
+    construction inside `AuthoringDiffReport` (pydantic validates submodels)."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport.model_validate(
+            {
+                "round": 1,
+                "symbolic_validation": {"status": "fail", "errors": []},
+            }
+        )
 
 
 @pytest.mark.parametrize("path", ROUND_REPORTS, ids=lambda p: p.parent.name)

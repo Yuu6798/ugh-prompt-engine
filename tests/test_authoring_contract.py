@@ -155,6 +155,25 @@ def test_object_spec_defaults_to_no_fields():
     assert spec.fields == {}
 
 
+def test_object_spec_defaults_to_no_min_items():
+    spec = ObjectSpec(allowed_keys=["a"])
+    assert spec.min_items is None
+
+
+def test_object_spec_accepts_min_items():
+    spec = ObjectSpec(allowed_keys=["a"], min_items=1)
+    assert spec.min_items == 1
+
+
+def test_default_contract_structure_section_requires_at_least_one_item():
+    """PR #246 Codex P2 review 4 巡目 B: `structure: []` is a crash-family
+    member (confirmed via direct `perform()` execution) — the frozen spec
+    must declare `min_items: 1` on `structure_section`."""
+
+    spec = load_authoring_contract()
+    assert spec.structure_section.min_items == 1
+
+
 def test_field_spec_rejects_unknown_type():
     with pytest.raises(ValidationError):
         FieldSpec(type="float")  # type: ignore[arg-type]

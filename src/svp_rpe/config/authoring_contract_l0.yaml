@@ -125,6 +125,15 @@ physical:
       type: str
 
 structure_section:
+  # min_items (PR #246 Codex P2 review 4 巡目 B): governs the `structure`
+  # list itself, not a per-section field — crash-family実測: structure: []
+  # は canonical CompositionScore / per-element チェックのいずれも拒否せず
+  # svprpe validate が偽 pass を返した後、perform() が ValueError
+  # ("perform() requires at least one structure section") でクラッシュする
+  # ことを直接実行で確認した。events.chord_progression: [] は同じ実測手順
+  # で非クラッシュ（既定進行へフォールバック）と確認済みのためゲート対象外
+  # のまま（境界宣言）。
+  min_items: 1
   allowed_keys: [section, bars, role, physical]
   fields:
     section:

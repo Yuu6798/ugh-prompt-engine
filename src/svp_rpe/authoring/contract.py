@@ -90,12 +90,23 @@ class ObjectSpec(BaseModel):
     `fields` に列挙されないキー（例: `structure`（トップレベル）や
     `events.chord_progression`）は「キーの存在だけを許可し、値の型は下の
     階層 spec が別途検査する」コンテナ扱い。
+
+    `min_items`（PR #246 Codex P2 review 4 巡目 B）: この `ObjectSpec` が
+    リストの各要素を記述する場合（現状唯一の実例 = `structure_section`、
+    トップレベル `structure` リストの各セクションを記述する）、リスト自体の
+    最小要素数を宣言する。空リストは各要素チェック（`fields`）を素通り
+    してしまう（0 回ループ）ため、`fields` だけでは「空リストを許さない」
+    制約を表現できない——リストという**コンテナのサイズ**は個々の要素の
+    型・値とは別次元の制約であり、`min_items` として `ObjectSpec` 側に
+    表現する（`fields`/`allowed_keys` は「1 要素の中身」の制約、
+    `min_items` は「要素の個数」の制約、という役割分担）。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     allowed_keys: list[str]
     fields: dict[str, FieldSpec] = {}
+    min_items: Optional[int] = None
 
 
 class TopLevelSpec(BaseModel):

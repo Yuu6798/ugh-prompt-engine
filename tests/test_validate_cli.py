@@ -276,6 +276,36 @@ def test_time_signature_zero_denominator_is_rejected(tmp_path: Path):
     assert matches, errors
 
 
+def test_empty_structure_is_rejected(tmp_path: Path):
+    """PR #246 Codex P2 review 4 巡目 B: `structure: []` previously passed
+    both the public-scope check (per-element loop runs 0 times) and
+    canonical `CompositionScore` (no min-length constraint there), then
+    crashed `perform()` with `ValueError('perform() requires at least one
+    structure section')` — confirmed via direct execution. Now gated as a
+    container-size (`range`) violation at `structure` itself."""
+
+    def mutate(data: dict[str, Any]) -> None:
+        data["structure"] = []
+
+    errors = _fail_errors(tmp_path, mutate)
+    matches = [e for e in errors if e["where"] == "structure" and e["kind"] == "range"]
+    assert matches, errors
+
+
+def test_empty_chord_progression_still_passes(tmp_path: Path):
+    """Boundary declaration (PR #246 review round 4 B): `events.
+    chord_progression: []` is confirmed non-crashing (perform() falls back
+    to the key-derived default progression, the same path an omitted
+    `events` block takes) — deliberately left ungated, unlike `structure: []`."""
+
+    data = _base_score()
+    data["events"] = {"chord_progression": []}
+    score_path = _write_score(tmp_path, data)
+    result = _invoke(str(score_path), "--contract", str(CONTRACT_PATH), "--format", "json")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {"status": "pass"}
+
+
 def test_positive_bpm_and_bars_still_pass():
     """Regression guard: the min=1 gate must not reject the positive control's
     already-valid positive bpm/bars values."""

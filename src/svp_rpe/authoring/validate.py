@@ -25,13 +25,29 @@ score dict に対し、(1) `AuthoringContractSpec` が宣言する公開スキ�
 無理な合流を避け一貫性を優先——docs/l0a_authoring_contract.md (c) の
 kind 語彙表も同期）。詳細な実測結果と時間分母 0（`"4/0"`）が
 crash-family でないという境界宣言は同 doc (b) 節。
+
+`range`（続き、PR #246 4 巡目 B）: `structure: []`（空リスト）は
+`_object_errors` の per-element ループが 0 回で素通りし、canonical
+`CompositionScore` 側にも `structure` の最小要素数制約が無いため
+`svprpe validate` が偽 `pass` を返した後 `perform()` が
+`ValueError("perform() requires at least one structure section")` で
+クラッシュすることを実測確認した。`ObjectSpec.min_items` を
+`structure_section` へ付与し（`structure` リストの各要素を記述する
+`ObjectSpec` は `structure_section` のみのため、そこへ表現する）、
+リストの要素数不足も同じ `range` kind で報告する（コンテナサイズ制約は
+値域下限 `FieldSpec.min` と同種の「許容域を下回る」違反という判断——
+`_min_items_errors`）。**境界宣言**: `events.chord_progression: []` は
+同じ実測手順（`perform()` 直接実行）で非クラッシュと確認済み
+（contract.md §1 の「省略時はキーに応じた既定進行が演奏される」が空
+リストにも及ぶ——省略と空リストが同じフォールバック経路を通る）ため
+ゲート対象外のまま。詳細 = docs/l0a_authoring_contract.md (b) 節。
 """
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Self
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from svp_rpe.authoring.contract import AuthoringContractSpec, FieldSpec, ObjectSpec
 from svp_rpe.compose.models import CompositionScore
@@ -54,12 +70,26 @@ class SymbolicValidationResult(BaseModel):
     に埋め込む記号検証の結果。`errors` は fail のときのみ意味を持つ
     （pass 時は `None` のまま——歴史的 `validation.json`/`report.json` の
     `symbolic_validation` が pass 時に `errors` キー自体を持たない後方互換の
-    ため、JSON 直列化は `exclude_none` する）。"""
+    ため、JSON 直列化は `exclude_none` する）。
+
+    `status`×`errors` の整合は spec ロード時（`model_validator`）に
+    fail-closed で強制する（PR #246 Codex P2 review 4 巡目 A: `status:
+    "pass"` に `errors` が付随する矛盾組、`status: "fail"` なのに `errors`
+    が空/欠落の矛盾組を、このスキーマだけでは受理できてしまっていた —
+    どちらも `ValidationError` で拒否する）。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: Literal["pass", "fail"]
     errors: Optional[list[AuthoringErrorItem]] = None
+
+    @model_validator(mode="after")
+    def _errors_consistent_with_status(self) -> Self:
+        if self.status == "pass" and self.errors:
+            raise ValueError("status='pass' must not carry errors (contradictory result)")
+        if self.status == "fail" and not self.errors:
+            raise ValueError("status='fail' requires at least one error (contradictory result)")
+        return self
 
 
 OFF_CONTRACT_KEY_MESSAGE = (
@@ -164,6 +194,29 @@ def _object_errors(prefix: str, container: Any, spec: ObjectSpec) -> list[Author
     return errors
 
 
+def _min_items_errors(where: str, items: list[Any], spec: ObjectSpec) -> list[AuthoringErrorItem]:
+    """Container-size check (PR #246 Codex P2 review 4 巡目 B): a list whose
+    element count is below `spec.min_items` — most notably an *empty* list —
+    passes the per-element `_object_errors` loop trivially (0 iterations),
+    so element-shape checks alone can never reject "too few elements". This
+    is a separate concern from `_object_errors`, checked once per list
+    rather than per element."""
+
+    if spec.min_items is None or len(items) >= spec.min_items:
+        return []
+    return [
+        AuthoringErrorItem(
+            where=where,
+            message=(
+                f"must contain at least {spec.min_items} item(s) per the L0a authoring "
+                "contract spec — confirmed to crash perform()'s deterministic pipeline "
+                "otherwise (PR #246 Codex P2 crash-family sweep)"
+            ),
+            kind="range",
+        )
+    ]
+
+
 def _public_scope_errors(raw: dict[str, Any], spec: AuthoringContractSpec) -> list[AuthoringErrorItem]:
     errors: list[AuthoringErrorItem] = []
     errors += _extra_key_errors("", raw, spec.top_level.allowed_keys)
@@ -183,6 +236,7 @@ def _public_scope_errors(raw: dict[str, Any], spec: AuthoringContractSpec) -> li
 
     structure = raw.get("structure")
     if isinstance(structure, list):
+        errors += _min_items_errors("structure", structure, spec.structure_section)
         for index, section in enumerate(structure):
             errors += _object_errors(f"structure[{index}]", section, spec.structure_section)
 

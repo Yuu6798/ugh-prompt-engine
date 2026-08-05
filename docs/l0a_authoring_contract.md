@@ -78,6 +78,34 @@ L0-s 6 巡目（`physical.key`/`physical.time_signature` の記法）と同型�
 `time_signature: "4/4"`）は本ゲート追加後も全件 `pass` のまま
 （`tests/test_validate_cli.py`/手動再検証で確認）。
 
+### 空リストのクラッシュ族実測（PR #246 Codex P2 review 4 巡目 B）
+
+`structure: []`（空リスト）を同じ手順（`perform()` を `FAITHFUL_TAKE` で
+直接実行）で実測した:
+
+| 実測対象 | 結果 | 例外 |
+|---|---|---|
+| `structure: []` | **クラッシュ** | `ValueError: perform() requires at least one structure section`（`perform()` 冒頭の明示的ガード節） |
+| `events.chord_progression: []` | 非クラッシュ | — （`perform()` はキーに応じた既定進行へフォールバックする。省略時と同じ経路） |
+
+`structure: []` は `_public_scope_errors` の per-element ループが 0 回で
+素通りし、canonical `CompositionScore` 側にも `structure` の最小要素数
+制約が無いため、`svprpe validate` が偽 `pass` を返した後に `perform()` が
+クラッシュしていた（`svprpe validate` 単体では検出不能だった欠陥）。
+
+ゲート化: `ObjectSpec.min_items` を新設し `structure_section`（`structure`
+リストの各要素を記述する唯一の `ObjectSpec`）へ `min_items: 1` を付与、
+`range` kind の違反として報告する（コンテナのサイズ制約は
+`FieldSpec.min` の値域下限と同種の「許容域を下回る」違反という判断——
+kind を新設せず既存 `range` を再利用し語彙を増やさない）。
+**境界宣言**: `events.chord_progression: []` は非クラッシュと確認済み
+のため引き続きゲート対象外——`structure` とは異なり、こちらは省略時と
+同じフォールバック経路を通る契約 v0/v1 の既定挙動どおりであり、クラッシュ
+族には属さない。
+
+歴史的 evidence（陽性対照 + L0-s rounds 1–5、いずれも `structure` 3 要素
+以上）は本ゲート追加後も全件 `pass` のまま。
+
 ## (c) エラープロトコル — kind 語彙と where 粒度
 
 `svprpe validate`（`src/svp_rpe/authoring/validate.py`）が返すエラーは
@@ -90,14 +118,27 @@ L0-s 6 巡目（`physical.key`/`physical.time_signature` の記法）と同型�
 | `enum` | spec が宣言する列挙値のいずれでもない |
 | `literal` | spec が宣言する単一リテラル値と一致しない |
 | `format` | spec が宣言する正規表現形式に一致しない（`physical.key`/`physical.time_signature` のみ） |
-| `range` | spec が宣言する下限 (`FieldSpec.min`) を下回る（`physical.bpm`/`structure[].bars` のみ。PR #246 crash-family 実測、上記 (b) 節） |
+| `range` | spec が宣言する値域下限 (`FieldSpec.min` — `physical.bpm`/`structure[].bars`) またはコンテナの最小要素数 (`ObjectSpec.min_items` — `structure`) を下回る。PR #246 crash-family 実測、上記 (b) 節 |
 | `canonical` | canonical `CompositionScore` 検証（pydantic）が拒否 |
 
 `where` の粒度はセクション+フィールド（例 `physical.bpm`、
-`structure[0].bars`、`events.chord_progression[0].root`）。公開範囲チェック
+`structure[0].bars`、`events.chord_progression[0].root`）。コンテナ全体の
+制約（`structure` の `min_items`）は要素インデックスを持たないため
+`where: "structure"`（インデックス無し）で報告する。公開範囲チェック
 失敗は canonical 検証を短絡しない——両方常に走り、`errors` は公開範囲
 エラー（`(where, message)` でソート済み）に続けて canonical エラー
 （pydantic の `loc` 順）を連結する。
+
+**`status`×`errors` の整合（PR #246 Codex P2 review 4 巡目 A）**:
+`SymbolicValidationResult`（`svprpe validate` の結果、および
+`AuthoringDiffReport.symbolic_validation` に埋め込まれる同型）は
+`status="pass"` に `errors` が付随する組、`status="fail"` なのに `errors`
+が空/欠落の組——どちらの矛盾組も spec ロード時（`model_validator`）に
+`ValidationError` で fail-closed に拒否する。これにより、このスキーマを
+消費するあらゆるコード（将来の L0b 閉ループも含む）が「`status` だけ見て
+`errors` を信頼しない」経路を作れない。歴史的 `validation.json`/
+`report.json`（いずれも `status: "pass"` かつ `errors` キー自体を持たない）
+はこの制約下でも問題なく parse できることを確認済み。
 
 ## (d) report 正規形 — JSON 統一・境界秒・notes 白リスト
 
