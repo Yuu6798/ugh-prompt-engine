@@ -186,6 +186,72 @@ positive_control:
       sha256: "3299520c2190dfbddaf6e856aa9c5becdeea11afa823b2abeafa7837f6f81867"
       note: "Differs from L0-s's pinned observe_report sha256 — downstream of the different package_sha256 above."
 
+# ---------------------------------------------------------------------------
+# L0B-T2 (task_t2.md — 操舵証拠の実測). T1 evidence above is untouched; T2 has
+# its own pinned inputs, runner pin, and positive-control gate record here.
+t2:
+  registered: "2026-08-05"
+  pinned_inputs:
+    task_t2_md:
+      path: task_t2.md
+      sha256: "7f8a1e99231030e1b892cd7c3c524a994c1b3d6fa3e186a42c673da63703c93f"
+    section_map_t2:
+      path: frozen/section_map_t2.json
+      sha256: "7add33ba142174c5e2ee002d39af9abb2ebdc65858aed2b05564f9e8ce00d830"
+      note: >-
+        Canonical requirement ["intro", "chorus", "chorus", "outro"] — the
+        unique 4-section output of assign_labels (task_t2.md チェック 2).
+        The ONLY judge-side difference from T1; contract.md / pareto.yaml /
+        eval_control_profile.yaml / arrangement.yaml are shared unchanged
+        (their T1 pins above remain authoritative).
+  runner_at_measurement:
+    # run_round.py gained --section-map for T2 (default preserves T1 —
+    # T1's rounds above were measured at the pre-change blob pinned in
+    # runner_at_measurement; this is the L0-s-style honest re-pin for
+    # measurements from this point on).
+    files:
+      run_round_py:
+        path: scripts/run_round.py
+        git_blob_sha1: "15bccd39a502255a13d93b6f6be2c5e03dd070a1"
+      pareto_eval_py:
+        path: scripts/pareto_eval.py
+        git_blob_sha1: "7df1e4697aefdc8e346f0cbf60891a2055ef103d"
+        note: "Unchanged from T1."
+  positive_control:
+    # Gate passed on candidate 1 of the allowed 8 (task_t2.md 陽性対照ゲート).
+    # Probe log = build/l0b/t2_probe/log.md (scratch, not committed).
+    score:
+      path: positive_control_t2/score.yaml
+      sha256: "2523793dc9ae87b81aca49e726d22db9eaf7b94a9c4b04c2e428035df3484412"
+      git_blob_sha1: "005d27f43b5e9ef80fb4073c0a14365a7bb26c22"
+      design_note: >-
+        128bpm 4/4 D minor dark, 4 sections × 4 bars (declared ~7.5s each,
+        total 30s), alternating energy contrast: intro "low density, sub
+        bass, sparse" / chorus "full energy" / chorus "no kick, sparse" /
+        outro "release".
+    determinism_check: >-
+      3 independent runs (2 scratch workdirs + the final save into
+      positive_control_t2/) produced byte-identical report.json (sha256
+      below).
+    status: pass
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: exact_match
+        band: measured
+        observed: ["intro", "chorus", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 7.7555}
+          - {label: "chorus", start_seconds: 7.7555, end_seconds: 12.8406}
+          - {label: "chorus", start_seconds: 12.8406, end_seconds: 23.4986}
+          - {label: "outro", start_seconds: 23.4986, end_seconds: 30.0}
+    artifacts:
+      report:
+        path: positive_control_t2/report.json
+        sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
+  rounds: []
+
 rounds:
   - round: 1
     date: "2026-08-05"

@@ -6,6 +6,16 @@ the full L0b pipeline for one candidate `score.yaml` and writes an
 `AuthoringDiffReport` (`src/svp_rpe/authoring/report.py`) — L0a's frozen
 report normal form — to `-o`.
 
+**T2 (`examples/l0b_loop/task_t2.md`)**: the canonical section map is the
+only judge-side difference between L0B-T1 and L0B-T2 (task_t2.md's 判定器
+節). `--section-map` selects it (default = T1's `frozen/section_map.json`,
+so T1's behavior — CLI invocations, `run_round()`/`main()` callers that don't
+pass the new parameter, and the identity manifest's structure anchor — is
+byte-for-byte unchanged). Passing `frozen/section_map_t2.json` swaps the
+canonical requirement `_structure_axis` reads and the fixture copied into
+`identity/section_map.json`, and adds the selected map to the output-collision
+guard's protected set alongside the other fixed inputs.
+
 Pipeline (task.md's 判定器 table):
 
 (a) **Symbolic gate**: `svprpe validate <score> --contract
@@ -95,7 +105,10 @@ CONTRACT_PATH = _REPO_ROOT / "config" / "authoring_contract_l0.yaml"
 
 # Fixed-path inputs this module always reads, regardless of round — an `-o`
 # aliasing any of these would have a write step clobber a pipeline input
-# (mirrors measure_round.py's `_FIXED_INPUT_PATHS`).
+# (mirrors measure_round.py's `_FIXED_INPUT_PATHS`). `SECTION_MAP_PATH` is the
+# default (T1); `_fixed_input_paths()` substitutes the selected
+# `--section-map` in its place so the guard always protects the map actually
+# in use for a given run, not just the default.
 _FIXED_INPUT_PATHS = (
     SECTION_MAP_PATH,
     EVAL_CONTROL_PROFILE_PATH,
@@ -103,6 +116,16 @@ _FIXED_INPUT_PATHS = (
     CAPABILITY_PROFILE_PATH,
     CONTRACT_PATH,
 )
+
+
+def _fixed_input_paths(section_map_path: Path) -> tuple[Path, ...]:
+    return (
+        section_map_path,
+        EVAL_CONTROL_PROFILE_PATH,
+        ARRANGEMENT_PATH,
+        CAPABILITY_PROFILE_PATH,
+        CONTRACT_PATH,
+    )
 
 # Frozen judge (task.md judgement table) — deliberately not read back from the
 # submitted score.yaml itself: the requirement is the task's fixed target,
@@ -185,11 +208,15 @@ def _reject_score_copy_self_collision(score_path: Path, reserved_paths: dict[str
 
 
 def _reject_output_collision(
-    output_path: Path, *, score_path: Path, reserved_paths: Iterable[Path]
+    output_path: Path,
+    *,
+    score_path: Path,
+    reserved_paths: Iterable[Path],
+    fixed_input_paths: Iterable[Path] = _FIXED_INPUT_PATHS,
 ) -> Path:
     resolved_output = output_path.resolve()
 
-    protected = {score_path.resolve(), *(p.resolve() for p in _FIXED_INPUT_PATHS)}
+    protected = {score_path.resolve(), *(p.resolve() for p in fixed_input_paths)}
     protected |= {p.resolve() for p in reserved_paths}
     if resolved_output in protected:
         raise ProtectedPathError(
@@ -272,16 +299,21 @@ def _prepare_scores(score_path: Path, paths: dict[str, Path]) -> tuple[Path, str
 
 
 def _write_identity_manifest(
-    paths: dict[str, Path], *, score_sha256: str, round_number: int
+    paths: dict[str, Path],
+    *,
+    score_sha256: str,
+    round_number: int,
+    section_map_path: Path,
 ) -> tuple[Path, str]:
     """Deterministically generates `<workdir>/identity_manifest.yaml`.
-    Copies `frozen/section_map.json` into `<workdir>/identity/` —
+    Copies `section_map_path` (T1: `frozen/section_map.json`, T2:
+    `frozen/section_map_t2.json`) into `<workdir>/identity/` —
     `IdentityManifest` artifact locators must resolve inside the manifest's
     own directory (path confinement), so the frozen fixture can't be
     referenced in place."""
     identity_dir = paths["identity_dir"]
     identity_dir.mkdir(exist_ok=True)
-    section_map_bytes = SECTION_MAP_PATH.read_bytes()
+    section_map_bytes = section_map_path.read_bytes()
     section_map_sha256 = _sha256_bytes(section_map_bytes)
     paths["identity_section_map"].write_bytes(section_map_bytes)
 
@@ -361,7 +393,7 @@ def _brightness_axis(field: dict[str, Any]) -> AxisReport:
 
 
 def _structure_axis(
-    observe_report: dict[str, Any], take_wav_path: Path
+    observe_report: dict[str, Any], take_wav_path: Path, *, section_map_path: Path
 ) -> tuple[AxisReport, Optional[float]]:
     """Builds the `structure` axis, including the boundary-second live wire
     (module docstring (c)): `svprpe observe`'s structure anchor
@@ -372,10 +404,13 @@ def _structure_axis(
     the label list by index — both derive from the same deterministic
     extraction over the same audio bytes, so they line up 1:1.
 
+    `section_map_path` selects the canonical requirement (T1: `["intro",
+    "chorus", "outro"]`, T2: `["intro", "chorus", "chorus", "outro"]`).
+
     Returns `(axis_report, position_match_rate)` — the latter feeds the
     report's `notes` (the only whitelisted `AuthoringNote.kind`).
     """
-    canonical_sections = json.loads(SECTION_MAP_PATH.read_text(encoding="utf-8"))["sections"]
+    canonical_sections = json.loads(section_map_path.read_text(encoding="utf-8"))["sections"]
     structure_anchor = next(
         anchor for anchor in observe_report["anchors"] if anchor["anchor_id"] == "structure"
     )
@@ -428,7 +463,12 @@ def _build_failed_gate_report(
 
 
 def run_round(
-    score_path: Path, workdir: Path, round_number: int, output_path: Path
+    score_path: Path,
+    workdir: Path,
+    round_number: int,
+    output_path: Path,
+    *,
+    section_map_path: Path = SECTION_MAP_PATH,
 ) -> dict[str, Any]:
     # `paths` is the single source of truth every workdir-relative read/write
     # below derives from — the same mapping the preflight guard checks `-o`
@@ -436,10 +476,17 @@ def run_round(
     paths = _reserved_workdir_paths(workdir)
 
     # Output-collision guard — runs first, before any write, so a rejected
-    # invocation leaves the filesystem untouched.
+    # invocation leaves the filesystem untouched. `fixed_input_paths` swaps in
+    # the selected `section_map_path` so the guard protects the map actually
+    # read by this run (T1's default or T2's), not just T1's.
     _reject_workdir_inside_loop_tree(workdir)
     _reject_score_copy_self_collision(score_path, paths)
-    _reject_output_collision(output_path, score_path=score_path, reserved_paths=paths.values())
+    _reject_output_collision(
+        output_path,
+        score_path=score_path,
+        reserved_paths=paths.values(),
+        fixed_input_paths=_fixed_input_paths(section_map_path),
+    )
 
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -490,7 +537,10 @@ def run_round(
     hashes["take_wav"] = _sha256_file(take_wav_path)
 
     manifest_path, manifest_sha256 = _write_identity_manifest(
-        paths, score_sha256=score_sha256, round_number=round_number
+        paths,
+        score_sha256=score_sha256,
+        round_number=round_number,
+        section_map_path=section_map_path,
     )
     hashes["manifest"] = manifest_sha256
 
@@ -531,7 +581,9 @@ def run_round(
     brightness_axis = _brightness_axis(fields_by_name["brightness"])
 
     observe_report = json.loads(observe_report_path.read_text(encoding="utf-8"))
-    structure_axis, position_match_rate = _structure_axis(observe_report, take_wav_path)
+    structure_axis, position_match_rate = _structure_axis(
+        observe_report, take_wav_path, section_map_path=section_map_path
+    )
 
     notes: list[AuthoringNote] = []
     if position_match_rate is not None:
@@ -568,10 +620,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Round number recorded in report.json (default 0: dry-run / positive control, "
         "not counted as L0b evidence).",
     )
+    parser.add_argument(
+        "--section-map",
+        type=Path,
+        default=SECTION_MAP_PATH,
+        dest="section_map_path",
+        help="Canonical section-map JSON (section-map/0.1) the structure axis is judged "
+        "against (default: frozen/section_map.json, T1's 3-section map). Pass "
+        "frozen/section_map_t2.json for T2's 4-section map.",
+    )
     args = parser.parse_args(argv)
 
     try:
-        result = run_round(args.score, args.workdir, args.round_number, args.output)
+        result = run_round(
+            args.score,
+            args.workdir,
+            args.round_number,
+            args.output,
+            section_map_path=args.section_map_path,
+        )
     except ProtectedPathError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

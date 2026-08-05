@@ -32,6 +32,11 @@ POSITIVE_CONTROL_SCORE_PATH = (
     REPO_ROOT / "examples" / "l0s_spike" / "positive_control" / "score.yaml"
 )
 
+# T2 (`examples/l0b_loop/task_t2.md`) — 4-section canonical map + positive control.
+SECTION_MAP_T2_PATH = LOOP_DIR / "frozen" / "section_map_t2.json"
+POSITIVE_CONTROL_T2_SCORE_PATH = LOOP_DIR / "positive_control_t2" / "score.yaml"
+POSITIVE_CONTROL_T2_REPORT_PATH = LOOP_DIR / "positive_control_t2" / "report.json"
+
 
 def _load_module(name: str, path: Path) -> ModuleType:
     """Loads a standalone script (not a package) as an importable module —
@@ -366,4 +371,103 @@ def test_positive_control_round_trip_reproduces_pinned_report(tmp_path: Path):
     assert report.axes["structure"].verdict == "exact_match"
 
     pinned_bytes = POSITIVE_CONTROL_REPORT_PATH.read_bytes()
+    assert output_path.read_bytes() == pinned_bytes
+
+
+# --- T2 (`examples/l0b_loop/task_t2.md`) --------------------------------------
+
+
+def test_section_map_default_is_t1_frozen_map(monkeypatch, tmp_path: Path):
+    """`--section-map`'s default must be T1's frozen map — checked at the
+    argparse/`main()` dispatch level only (no pipeline run), so T1 callers
+    that never pass the new flag keep byte-identical behavior."""
+    captured: dict[str, Path] = {}
+
+    def fake_run_round(score_path, workdir, round_number, output_path, *, section_map_path):
+        captured["section_map_path"] = section_map_path
+        return {
+            "report": AuthoringDiffReport(
+                round=round_number,
+                symbolic_validation=run_round.SymbolicValidationResult(status="pass"),
+                axes={},
+                notes=[],
+            )
+        }
+
+    monkeypatch.setattr(run_round, "run_round", fake_run_round)
+    exit_code = run_round.main(
+        [
+            str(POSITIVE_CONTROL_SCORE_PATH),
+            "--workdir",
+            str(tmp_path / "wd"),
+            "-o",
+            str(tmp_path / "report.json"),
+        ]
+    )
+    assert exit_code == 0
+    assert captured["section_map_path"] == run_round.SECTION_MAP_PATH
+
+
+def test_section_map_t2_json_content_is_frozen():
+    data = json.loads(SECTION_MAP_T2_PATH.read_text(encoding="utf-8"))
+    assert data == {
+        "schema_version": "section-map/0.1",
+        "sections": ["intro", "chorus", "chorus", "outro"],
+    }
+
+
+def test_structure_axis_requirement_is_read_from_selected_section_map():
+    """Cheap unit test (no extraction/audio): `sensor.available: False` keeps
+    `_structure_axis` from calling `extract_rpe_from_file`, but
+    `requirement` is still read from whichever `section_map_path` is passed
+    in — this is the T1/T2 dispatch `run_round.py` gained for --section-map."""
+    observe_report = {
+        "anchors": [
+            {
+                "anchor_id": "structure",
+                "measurements": {"observed_sections": []},
+                "adherence_status": "mismatch",
+                "sensor": {"available": False},
+            }
+        ]
+    }
+    axis_report, position_match_rate = run_round._structure_axis(
+        observe_report, Path("unused-take.wav"), section_map_path=run_round.SECTION_MAP_PATH
+    )
+    assert axis_report.requirement == ["intro", "chorus", "outro"]
+    assert axis_report.band == "not_observed"
+    assert position_match_rate is None
+
+    axis_report_t2, _ = run_round._structure_axis(
+        observe_report, Path("unused-take.wav"), section_map_path=SECTION_MAP_T2_PATH
+    )
+    assert axis_report_t2.requirement == ["intro", "chorus", "chorus", "outro"]
+
+
+@pytest.mark.slow
+def test_positive_control_t2_round_trip_reproduces_pinned_report(tmp_path: Path):
+    """T2 counterpart of test_positive_control_round_trip_reproduces_pinned_report
+    above — re-renders the T2 positive control (`build/l0b/t2_probe`'s passing
+    hand-authored 4-section candidate, saved to
+    `examples/l0b_loop/positive_control_t2/score.yaml`) through the T2 path
+    (`--section-map frozen/section_map_t2.json`) and checks the result is
+    byte-identical to the pinned `examples/l0b_loop/positive_control_t2/
+    report.json` — a determinism regression guard for the T2 chain."""
+    workdir = tmp_path / "positive_control_t2"
+    output_path = tmp_path / "report.json"
+    result = run_round.run_round(
+        POSITIVE_CONTROL_T2_SCORE_PATH,
+        workdir,
+        0,
+        output_path,
+        section_map_path=SECTION_MAP_T2_PATH,
+    )
+    report = result["report"]
+    assert report.symbolic_validation.status == "pass"
+    assert report.axes["key"].verdict == "preserved"
+    assert report.axes["brightness"].verdict == "preserved"
+    assert report.axes["structure"].verdict == "exact_match"
+    assert report.axes["structure"].observed == ["intro", "chorus", "chorus", "outro"]
+
+    pinned_bytes = POSITIVE_CONTROL_T2_REPORT_PATH.read_bytes()
     assert output_path.read_bytes() == pinned_bytes
