@@ -1,0 +1,55 @@
+meta:
+  title: "Dim Triptych"
+  version: "0.4"
+
+semantic:
+  core: "静かな暗闇から力強い高まりへ、そして余韻へと消えていく短い器楽曲。"
+  grv:
+    primary: "cinematic minimalism"
+    secondary: "dark ambient"
+  delta_e:
+    overall: "抑制された静けさから緊張の高まりを経て、力強い頂点に達し、最後は静かな余韻へと解放される。"
+  avoid: ["frequent harmonic changes", "chord modulation within sections"]
+
+physical:
+  bpm: 78
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.60-0.70"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: intro
+    bars: 8
+    role: "静かな導入部。曲の雰囲気を低い密度で提示する。"
+    physical: "sparse, low density, sub bass, no kick"
+  - section: chorus
+    bars: 4
+    role: "楽曲の中心。密度とエネルギーを最大化して展開する。"
+    physical: "full energy"
+  - section: outro
+    bars: 8
+    role: "終結部。エネルギーを解放し、静かに余韻へ消えていく。"
+    physical: "release, sparse, low density"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure
+
+events:
+  chord_progression:
+    - root: "D"
+      quality: "minor"
+    - root: "D"
+      quality: "minor"
+    - root: "D"
+      quality: "minor"
+    - root: "D"
+      quality: "minor"

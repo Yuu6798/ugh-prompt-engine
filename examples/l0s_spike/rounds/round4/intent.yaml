@@ -1,0 +1,53 @@
+round: 4
+carried_over_passes:
+  - axis: key
+    value: "D minor"
+    note: "round3 preserved. 変更しない（変数固定）。"
+  - axis: brightness
+    value: "dark"
+    note: "round3 preserved。physical 側は全項目 round3 から不変。"
+
+diagnosis:
+  observation: >
+    round2 (multi-chord, 8/8/8 bars) と round3 (single D minor chord repeated, 8/8/8 bars) は
+    total bars・declared structure が同一なのに観測セグメント列が両方とも 6 分割
+    ([intro, verse, bridge, chorus, chorus, outro] / [intro, verse, chorus, chorus, bridge, outro])
+    で、labelの順序が入れ替わっただけで分割数は不変だった。
+  conclusion: >
+    「和声変化が過分割の主因」仮説は round3 で反証された。
+    intro と outro は round2/round3 とも 8 bars で常に単一セグメントとして安定観測されており、
+    過分割は一貫して宣言上の chorus (8 bars, "full energy") が
+    [verse, bridge, chorus, chorus] 相当の4断片に割れることに起因している。
+    intro/outro は既に正しく振る舞っているため触らない。
+
+this_round_change:
+  variable: "chorus.bars のみ 8 → 4（単一変数変更。intro/outro/chord/active_rate_target/brightness/keyは全て前周から不変固定）"
+  hypothesis: >
+    chorus セクションの内部尺が長いほど、"full energy" ヒントに基づく演奏内でエネルギーの
+    立ち上がり/ピーク/減衰的な内部コントラストが完成してしまい、観測器がそれを複数セクション
+    境界として誤検出している（duration仮説）。8→4 bars（bpm78・4/4 で約24.6s→約12.3s）に
+    短縮することで、内部の多相構造が完成する前に区間が終わり、単一の "chorus" 相当ラベルとして
+    観測されることを期待する。intro/outro は既に単一セグメントとして安定しているため 8 bars を
+    維持し、変数を chorus 側のみに絞った。
+
+fallback_if_this_round_fails:
+  - option_a: "chorus.bars をさらに短縮する（例: 4 → 2）。duration仮説をさらに強く押す。"
+  - option_b: >
+      chorus.physical から "full energy" ヒントを外し、認識語なし（既定の中庸な演奏）に置換する。
+      "full energy" という語自体が演奏者に対して時間発展的なビルドアップ（エネルギー漸増）を
+      誘発しており、それが内部の多相構造＝過分割の直接原因である可能性が residual に残るため。
+      intro/outro が低密度系ヒントのみで単一セグメント化している事実と対比した仮説。
+  - decision_rule: >
+      round4 の差分報告で structure が依然 mismatch かつ観測数 >= 4 のままなら option_a を先に試す
+      （まだ duration 変数を使い切っていないため）。observed が3分割に近づいた
+      （4分割程度まで収束）が完全一致に届かない場合は option_a、
+      分割数が全く変化しない場合は option_b（token自体の性質を疑う）に切り替える。
+
+risk_note: >
+  chorus を 4 bars に縮めることで intro/outro との対比が弱まりすぎ、chorus 自体が
+  単一ラベルとして検出されなくなる（intro または outro に吸収される）リスクは理論上あるが、
+  4 bars ≈ 12.3s は「数秒規模での縮退」域には該当しないと判断し許容した。
+  もしこのリスクが顕在化した場合（observed が2分割以下に縮退した場合）は
+  bars 短縮方向を逆転し、6-7 bars 程度への微調整を次周で検討する。
+
+tools_used: none
