@@ -1,0 +1,29 @@
+round: 2
+design_notes:
+  overall: >
+    R2(key)/R3(brightness)は round1 で preserved 済みのため physical.key /
+    physical.brightness / stereo_width / bpm 等の値は一切変更しない。
+    R1(structure)の mismatch のみを対象に structure セクションだけを修正する。
+  diagnosis: >
+    round1 の observed 列 [intro, verse, verse, verse, chorus, bridge, chorus, outro]
+    を分析すると、境界検出自体は intro(8 bars) と outro(8 bars) では正しく機能し、
+    単一セクションとして観測されている。フラグメントが起きているのは
+    chorus(16 bars, "full energy" のみ) の内部だけであり、8 bars の他の2セクション
+    では発生していない。この対比から、フラグメントの原因は認識語の弱さではなく
+    セクション長そのもの（16 bars という intro/outro の2倍の長さ）にあると推測した。
+    長い持続区間ではエンジン側に内部的なダイナミクス変化が生じ、観測器がそれを
+    複数の疑似セクション境界として検出し、verse/chorus/bridge に分裂させたと考えられる。
+  fix: >
+    chorus の bars を 16 → 8 に短縮し、intro/outro と同じ長さクラスに揃えた。
+    これにより観測が壊れなかった条件（8 bars 一律）に合わせ、フラグメントの
+    再発を避ける狙い。physical ヒント文言("full energy")・隣接セクションとの
+    対比(sparse ↔ full energy ↔ release)はそのまま維持し、境界検出のしやすさは
+    落とさない。
+  risk: >
+    duration 仮説が外れていた場合（本当の原因が他要因）、この修正だけでは
+    再度フラグメントする可能性がある。その場合は次周で
+    events.chord_progression を単一コード反復にする等、和声変化を抑える方向で
+    追加対処する。
+  key: 変更なし。physical.key = "D minor" を維持（round1 で exact_match）。
+  brightness: 変更なし。physical.brightness = "dark" + sub bass ヒントを維持（round1 で preserved）。
+tools_used: none
