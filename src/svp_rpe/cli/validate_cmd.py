@@ -104,9 +104,13 @@ def validate_cmd(
 
     Output JSON (`{"status": "pass"|"fail", "errors": [...]}` when `-o` is
     given, or when `--format json`) is byte-deterministic: the JSON bytes are
-    built once and shared between the hash-relevant content and the write —
-    `write_bytes`, not `write_text`, to avoid platform-dependent newline
-    translation (same convention `validate_score.py`/`measure_round.py` use).
+    built once and shared between the hash-relevant content and the write.
+    `-o` writes via `svp_rpe.utils.atomic_io.atomic_write_bytes` (tempfile +
+    `os.replace`, PR #246 Codex P2 review 8 巡目 C) rather than a direct
+    `write_bytes` — a partial write must never be observable as a complete
+    report — while still avoiding `write_text`'s platform-dependent newline
+    translation (same byte-determinism convention `validate_score.py`/
+    `measure_round.py` use).
 
     Exit codes: `0` = pass, `1` = fail (including a `score.yaml` that fails to
     parse as YAML — recorded as a `canonical`-kind error at `<file>`, not an
@@ -171,7 +175,17 @@ def validate_cmd(
 
     content_bytes = dump_json_bytes(result)
     if output_path is not None:
-        output_path.write_bytes(content_bytes)
+        from svp_rpe.utils.atomic_io import atomic_write_bytes
+
+        # PR #246 Codex P2 review 8 巡目 C: `-o` を直接 `write_bytes` して
+        # いた（部分書き込みが観測されうる非原子な書き出し）のを、
+        # `arrange`/`recast` 等が使う共通の atomic writer へ揃えた
+        # （tempfile へ書いて `os.replace` — 同ディレクトリ内 rename は
+        # POSIX で atomic）。`content_bytes` は既に一度だけ構築済みの
+        # バイト列をそのまま渡すため、バイト決定論（同一入力 2 回で
+        # 出力バイト一致）は不変。衝突ガード（`_reject_output_collision`）
+        # → atomic 書き込み、という順序も維持する。
+        atomic_write_bytes(output_path, content_bytes)
 
     if output_format == "json":
         typer.echo(content_bytes.decode("utf-8"), nl=False)

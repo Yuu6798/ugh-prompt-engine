@@ -509,6 +509,32 @@ def test_output_file_is_written_and_byte_deterministic_across_runs(tmp_path: Pat
     assert out1.read_bytes().endswith(b"\n")
 
 
+def test_output_write_is_atomic_and_leaves_no_stray_tempfile(tmp_path: Path):
+    """PR #246 Codex P2 review 8 巡目 C: `-o` now writes via
+    `svp_rpe.utils.atomic_io.atomic_write_bytes` (tempfile + `os.replace`)
+    instead of a direct `write_bytes` — confirms the output directory only
+    ever contains the final report (no leaked `.tmp` staging file) and that
+    the bytes match `dump_json_bytes`'s own byte-deterministic output
+    exactly (the atomic writer must not alter content, only the write
+    mechanism)."""
+
+    from svp_rpe.authoring.contract import load_authoring_contract
+    from svp_rpe.authoring.report import dump_json_bytes
+    from svp_rpe.authoring.validate import validate_score
+
+    score_path = _write_score(tmp_path, _base_score())
+    out_path = tmp_path / "out.json"
+
+    result = _invoke(str(score_path), "--contract", str(CONTRACT_PATH), "-o", str(out_path))
+    assert result.exit_code == 0, result.output
+
+    expected = dump_json_bytes(validate_score(_base_score(), load_authoring_contract(CONTRACT_PATH)))
+    assert out_path.read_bytes() == expected
+
+    remaining = {p.name for p in tmp_path.iterdir()}
+    assert remaining == {score_path.name, out_path.name}, remaining
+
+
 def test_output_json_matches_stdout_json(tmp_path: Path):
     score_path = _write_score(tmp_path, _base_score())
     out_path = tmp_path / "out.json"

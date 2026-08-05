@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Literal, Optional, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -49,6 +50,27 @@ _AXIS_VERDICTS: dict[str, frozenset[str]] = {
 # 白リスト（観測③）。新規 kind を追加する際はこの Literal とモジュール
 # docstring の一覧を両方更新すること。
 AuthoringNoteKind = Literal["position_match_rate"]
+
+
+def _validate_position_match_rate(value: Any) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"position_match_rate value must be a number (bool excluded), got {value!r}"
+        )
+    if not math.isfinite(value):
+        raise ValueError(f"position_match_rate value must be finite (NaN/inf rejected): {value!r}")
+    if not (0.0 <= value <= 1.0):
+        raise ValueError(f"position_match_rate value must be within [0.0, 1.0], got {value!r}")
+
+
+# kind ごとの値検証（PR #246 Codex P2 review 8 巡目 A）。`AuthoringNoteKind`
+# へ新規 kind を追加する際は、この辞書へも対応する検証関数を**同時に**追加
+# すること——欠けている kind は `AuthoringNote` 構築時に `ValueError`
+# （spec/report ロードの `ValidationError`）で fail-closed になる
+# （白リストに kind だけ追加して値検証を忘れる、という片手落ちを防ぐ）。
+_NOTE_VALUE_VALIDATORS: dict[str, Any] = {
+    "position_match_rate": _validate_position_match_rate,
+}
 
 
 class ObservedSection(BaseModel):
@@ -81,6 +103,9 @@ class ObservedSection(BaseModel):
         return self
 
 
+_SUCCESS_VERDICTS = frozenset({"preserved", "exact_match"})
+
+
 class AxisReport(BaseModel):
     """1 軸（key/brightness/structure 等）の差分報告。
 
@@ -89,7 +114,19 @@ class AxisReport(BaseModel):
     の対応（`key`/`brightness` は `preserved`/`deviated`、`structure` は
     `exact_match`/`mismatch`）は `AuthoringDiffReport` 側の
     `model_validator` が強制する（`AxisReport` 単体は軸名を知らないため
-    ここでは語彙全体のみを検証する）。"""
+    ここでは語彙全体のみを検証する）。
+
+    `verdict`×`band` の整合（PR #246 Codex P2 review 8 巡目 B、D5 の
+    成功会計除外規則のスキーマ側強制）: 成功側 verdict（`preserved`/
+    `exact_match`）は `band == "measured"` のときのみ許容する——
+    `out_of_band`/`not_observed` の数値・ラベルは修正の根拠に使っては
+    ならないという D5 の規則（正本 §5 の帯域注釈規律）を、成功宣言にも
+    適用する。失敗側 verdict（`deviated`/`mismatch`）は非 `measured`
+    band でも許容する（帯域外・未観測を理由に「preserved と偽装した
+    失敗」を防ぐのが目的で、「非 measured band では常に fail」を強制する
+    ものではない——`not_observed`/`out_of_band` な `deviated`/`mismatch`
+    は「確認できていないが preserved を主張していない」という正直な
+    報告のまま許容する）。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -99,14 +136,42 @@ class AxisReport(BaseModel):
     band: Band
     observed_sections: Optional[list[ObservedSection]] = None
 
+    @model_validator(mode="after")
+    def _success_verdict_requires_measured_band(self) -> Self:
+        if self.verdict in _SUCCESS_VERDICTS and self.band != "measured":
+            raise ValueError(
+                f"verdict={self.verdict!r} requires band='measured' "
+                f"(got band={self.band!r}) — a success verdict outside the measured "
+                "band would smuggle an untrusted number/label past D5's band-annotation "
+                "discipline"
+            )
+        return self
+
 
 class AuthoringNote(BaseModel):
-    """構造化された参考値 1 件（観測③。自由文の notes は禁止）。"""
+    """構造化された参考値 1 件（観測③。自由文の notes は禁止）。
+
+    `value` は `kind` に応じて `_NOTE_VALUE_VALIDATORS` で検証する
+    （PR #246 Codex P2 review 8 巡目 A——従来 `value: Any` で無検証だった）。
+    `position_match_rate` は有限数（`bool` 除外、`NaN`/`inf` 拒否）かつ
+    `0.0 <= value <= 1.0`（`svp_rpe.arrange.observe` の
+    `position_match_rate` が正規化ラベル列の一致率という比率のため）。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: AuthoringNoteKind
     value: Any
+
+    @model_validator(mode="after")
+    def _value_matches_kind(self) -> Self:
+        validator = _NOTE_VALUE_VALIDATORS.get(self.kind)
+        if validator is None:  # pragma: no cover - guarded by AuthoringNoteKind Literal
+            raise ValueError(
+                f"no value validator registered for AuthoringNoteKind {self.kind!r} — "
+                "add one to _NOTE_VALUE_VALIDATORS alongside the Literal entry"
+            )
+        validator(self.value)
+        return self
 
 
 class AuthoringDiffReport(BaseModel):

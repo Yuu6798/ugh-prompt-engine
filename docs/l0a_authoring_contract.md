@@ -156,7 +156,15 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
 3. **notes 白リスト**（観測③）: `AuthoringNote.kind` を
    `Literal["position_match_rate"]` に制限する。新しい kind を追加する際は
    この `Literal` と `report.py` モジュール docstring の一覧を両方更新する
-   こと。
+   こと。`value` は `kind` ごとの値検証（`_NOTE_VALUE_VALIDATORS`、PR #246
+   Codex P2 review 8 巡目 A）で検証する——従来 `value: Any` で無検証
+   だった。`position_match_rate` は有限数（`bool` 除外、`math.isfinite`）
+   かつ `0.0 <= value <= 1.0`（`svp_rpe.arrange.observe` の
+   `measurements["position_match_rate"]` と同じ「比率」という値域）。
+   新規 kind を白リストへ追加する際は `_NOTE_VALUE_VALIDATORS` へ対応する
+   検証関数を**同時に**登録すること（欠けている kind は構築時に
+   `ValidationError` で fail-closed になる——白リストに kind だけ足して
+   値検証を忘れる片手落ちを防ぐ）。
 4. **verdict 語彙の凍結 + 軸整合**（PR #246 Codex P2 review 7 巡目 A）:
    `AxisReport.verdict` は `Verdict = Literal["preserved", "deviated",
    "exact_match", "mismatch"]` に固定する（従来は任意 `str` を受理して
@@ -167,15 +175,29 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    される。**境界宣言**: `_AXIS_VERDICTS` に無い軸名（将来 L0b が追加する
    軸）は `Verdict` の全語彙をそのまま許容する——この report スキーマは
    軸集合そのものを固定しない、という上記 (e) の方針と整合させるため。
+5. **verdict×band の整合（D5 の成功会計除外規則）**（PR #246 Codex P2
+   review 8 巡目 B）: 成功側 verdict（`preserved`/`exact_match`）は
+   `band == "measured"` のときのみ許容する（`AxisReport` 単体の
+   `model_validator`）。`out_of_band`/`not_observed` な数値・ラベルは
+   修正の根拠に使ってはならないという D5（正本 §5 の帯域注釈規律）を、
+   report スキーマ自身が成功宣言に対して強制する——`out_of_band` の
+   `preserved` のような「帯域外なのに成功を主張する」矛盾組は構成不能。
+   失敗側 verdict（`deviated`/`mismatch`）は非 `measured` band でも許容
+   したまま（「未確認だが成功も主張していない」正直な報告は制約しない）。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
-`sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を `write_bytes` に
-渡す、`validate_score.py`/`measure_round.py` と同じ規約。
-`exclude_none=True` で歴史的 `report.json`（`examples/l0s_spike/rounds/
-round{1..5}/report.json`）とスキーマ後方互換——`errors`/
+`sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を構築し、
+`svprpe validate -o` はその同一バイト列を
+`svp_rpe.utils.atomic_io.atomic_write_bytes`（tempfile + `os.replace`、
+PR #246 Codex P2 review 8 巡目 C）経由で publish する——部分書き込みが
+完全な報告として観測されることを防ぐ。`write_text` のプラットフォーム
+依存改行変換を避ける規約自体は `validate_score.py`/`measure_round.py`
+と同じ。`exclude_none=True` で歴史的 `report.json`（`examples/l0s_spike/
+rounds/round{1..5}/report.json`）とスキーマ後方互換——`errors`/
 `observed_sections` を省略した形をそのまま parse できる。5 本とも
-`key`/`brightness: preserved`・`structure: mismatch` で上記 4 の軸整合を
-満たすことを確認済み）。
+`key`/`brightness: preserved`・`structure: mismatch`（いずれも
+`band: measured`）で上記 4/5 の軸整合・verdict×band 整合を満たすことを
+確認済み）。
 
 ## (e) 信頼軸表 — 凍結 YAML への参照 + 導出規則
 

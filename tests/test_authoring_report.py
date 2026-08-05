@@ -242,6 +242,41 @@ def test_authoring_diff_report_accepts_any_frozen_verdict_for_unknown_axis():
     assert report.axes["tempo_stability"].verdict == "mismatch"
 
 
+def test_axis_report_rejects_preserved_verdict_outside_measured_band():
+    """PR #246 Codex P2 review 8 巡目 B: a success verdict (`preserved`/
+    `exact_match`) must not smuggle past D5's band-annotation discipline by
+    appearing outside `band='measured'`."""
+
+    with pytest.raises(ValidationError):
+        AxisReport(requirement="D minor", observed="D minor", verdict="preserved", band="out_of_band")
+
+
+def test_axis_report_rejects_exact_match_verdict_outside_measured_band():
+    with pytest.raises(ValidationError):
+        AxisReport(
+            requirement=["intro"], observed=["intro"], verdict="exact_match", band="not_observed"
+        )
+
+
+def test_axis_report_accepts_preserved_verdict_with_measured_band():
+    axis = AxisReport(requirement="D minor", observed="D minor", verdict="preserved", band="measured")
+    assert axis.band == "measured"
+
+
+def test_axis_report_accepts_deviated_verdict_outside_measured_band():
+    """Regression guard: only success-side verdicts require `measured` —
+    a failure-side verdict (`deviated`/`mismatch`) outside `measured` is a
+    legitimate honest report ("not confirmed, and not claiming success")."""
+
+    axis = AxisReport(requirement="D minor", observed="C major", verdict="deviated", band="out_of_band")
+    assert axis.band == "out_of_band"
+
+
+def test_axis_report_accepts_mismatch_verdict_outside_measured_band():
+    axis = AxisReport(requirement=["intro"], observed=[], verdict="mismatch", band="not_observed")
+    assert axis.band == "not_observed"
+
+
 def test_axis_report_accepts_observed_sections_schema():
     axis = AxisReport(
         requirement=["intro", "chorus", "outro"],
@@ -298,6 +333,26 @@ def test_authoring_note_accepts_whitelisted_kind():
 def test_authoring_note_rejects_unknown_kind():
     with pytest.raises(ValidationError):
         AuthoringNote(kind="free_text_comment", value="not allowed")
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    ["high", 2.0, -0.1, float("nan"), float("inf"), float("-inf"), True, False],
+    ids=["string", "above_one", "below_zero", "nan", "inf", "neg_inf", "true", "false"],
+)
+def test_authoring_note_rejects_invalid_position_match_rate_values(bad_value):
+    """PR #246 Codex P2 review 8 巡目 A: `position_match_rate` must be a
+    finite number in [0.0, 1.0] (bool excluded even though bool is an int
+    subclass in Python)."""
+
+    with pytest.raises(ValidationError):
+        AuthoringNote(kind="position_match_rate", value=bad_value)
+
+
+@pytest.mark.parametrize("good_value", [0.0, 0.5, 1.0])
+def test_authoring_note_accepts_valid_position_match_rate_values(good_value):
+    note = AuthoringNote(kind="position_match_rate", value=good_value)
+    assert note.value == good_value
 
 
 def test_authoring_diff_report_is_frozen():
