@@ -113,12 +113,15 @@ def validate_cmd(
     `measure_round.py` use).
 
     Exit codes: `0` = pass, `1` = fail (including a `score.yaml` that fails to
-    parse as YAML — recorded as a `canonical`-kind error at `<file>`, not an
-    operational error, matching `validate_score.py`'s precedent), `2` =
-    operational error (missing `score.yaml`; an unreadable, malformed, or
-    non-mapping-YAML `--contract` spec — a YAML parse failure (`YAMLError`),
-    a document that parses but isn't a mapping (empty/scalar/list YAML,
-    `ValueError` from `contract.py`'s loader), or one that fails the spec's
+    parse as YAML, or one that parses but has a duplicate mapping key at any
+    depth (PR #246 Codex P2 review 18 巡目 B — a plain YAML loader silently
+    keeps the last value, masking the earlier one) — both are recorded as a
+    `canonical`-kind error at `<file>`, not an operational error, matching
+    `validate_score.py`'s precedent), `2` = operational error (missing
+    `score.yaml`; an unreadable, malformed, non-mapping-YAML, or
+    duplicate-key `--contract` spec — a YAML parse failure (`YAMLError`), a
+    duplicate mapping key or a document that parses but isn't a mapping
+    (`ValueError` from `contract.py`'s loader), or one that fails the spec's
     own schema (`ValidationError`) are all classified alike; or an `-o` path
     colliding with the `score.yaml` or `--contract` input). This is a
     deliberate asymmetry with `score.yaml`'s own YAML-parse-failure handling
@@ -131,6 +134,7 @@ def validate_cmd(
     from svp_rpe.authoring.contract import load_authoring_contract
     from svp_rpe.authoring.report import dump_json_bytes
     from svp_rpe.authoring.validate import AuthoringErrorItem, SymbolicValidationResult, validate_score
+    from svp_rpe.melody.representation import _NoDupSafeLoader
 
     if output_format not in ("text", "json"):
         raise typer.BadParameter("--format must be 'text' or 'json'", param_hint="--format")
@@ -164,8 +168,19 @@ def validate_cmd(
             raise typer.Exit(code=2) from exc
 
     try:
-        raw = yaml.safe_load(score_text)
-    except yaml.YAMLError as exc:
+        raw = yaml.load(score_text, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
+    except (yaml.YAMLError, ValueError) as exc:
+        # PR #246 Codex P2 review 18 巡目 B: 素の `yaml.safe_load` は
+        # `score.yaml` の重複 mapping キーを「最後の値が勝つ」形で黙って
+        # 受理していた（例: `physical: {bpm: 0}` の直後に `physical: {bpm:
+        # 120}` を書くと後者だけが読まれる）——被検証物である score 自体の
+        # 不正なので、YAML parse 失敗と同じ `fail`/exit 1 経路（`canonical`
+        # kind、`where="<file>"`）で報告する。`melody.representation.
+        # _NoDupSafeLoader`（import のみ・重複実装禁止——`recast/
+        # experimental.py:_load_m1_registry` と同じ再利用パターン）は
+        # 重複キー検出時に `ValueError` を送出するため、既存の
+        # `yaml.YAMLError` 捕捉に `ValueError` を追加するだけで両方が
+        # 同じ fail 経路に乗る。
         result = SymbolicValidationResult(
             status="fail",
             errors=[AuthoringErrorItem(where="<file>", message=str(exc), kind="canonical")],

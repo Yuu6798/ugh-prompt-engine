@@ -1125,9 +1125,11 @@ See [`l0a_authoring_contract.md`](l0a_authoring_contract.md) for the contract de
   `svp_rpe.utils.atomic_io.atomic_write_bytes`); rejected if it resolves to the `score.yaml`
   or `--contract` input path itself.
 - `--format json` prints the same JSON to stdout instead of a text summary table.
-- Exit codes: `0` pass, `1` fail (including a `score.yaml` that fails to parse as YAML,
-  recorded as a `canonical`-kind error at `<file>`), `2` operational error (missing
-  `score.yaml`, an unreadable/invalid `--contract` spec, an `-o` collision with the
+- Exit codes: `0` pass, `1` fail (including a `score.yaml` that fails to parse as YAML, or one
+  with a duplicate mapping key at any depth — a plain YAML loader silently keeps the last
+  value, masking the earlier one (PR #246 Codex P2 review 18 巡目 B) — both recorded as a
+  `canonical`-kind error at `<file>`), `2` operational error (missing `score.yaml`, an
+  unreadable/invalid or duplicate-key `--contract` spec, an `-o` collision with the
   `score.yaml`/`--contract` input, or an `-o` write failure such as the path resolving to a
   directory).
 

@@ -467,6 +467,83 @@ def test_authoring_diff_report_accepts_key_deviated_with_mismatched_values():
     assert report.axes["key"].verdict == "deviated"
 
 
+def test_authoring_diff_report_rejects_structure_exact_match_with_mismatched_sequence():
+    """PR #246 Codex P2 review 18 巡目 C: a `structure` axis claiming
+    `verdict='exact_match'` with genuinely different label sequences
+    must be rejected."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "structure": AxisReport(
+                    requirement=["intro", "chorus", "outro"],
+                    observed=["intro", "verse", "outro"],
+                    verdict="exact_match",
+                    band="measured",
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_rejects_structure_exact_match_with_length_mismatch():
+    """Same family: a shorter/longer observed sequence must be rejected
+    even if every present element matches the corresponding prefix —
+    length is part of the equality check, not just element-wise
+    comparison up to the shorter length."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "structure": AxisReport(
+                    requirement=["intro", "chorus", "outro"],
+                    observed=["intro", "chorus"],
+                    verdict="exact_match",
+                    band="measured",
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_structure_exact_match_with_matching_sequence():
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "structure": AxisReport(
+                requirement=["intro", "chorus", "outro"],
+                observed=["INTRO", "Chorus", "outro"],
+                verdict="exact_match",
+                band="measured",
+            )
+        },
+    )
+    assert report.axes["structure"].verdict == "exact_match"
+
+
+def test_authoring_diff_report_accepts_structure_mismatch_with_mismatched_sequence():
+    """Regression guard: the failure-side verdict (`mismatch`) is not
+    blocked by the sequence-consistency check — same posture as 17 巡目
+    A/16 巡目's "only success claims are gated" rule."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "structure": AxisReport(
+                requirement=["intro", "chorus", "outro"],
+                observed=["intro", "verse", "outro"],
+                verdict="mismatch",
+                band="measured",
+            )
+        },
+    )
+    assert report.axes["structure"].verdict == "mismatch"
+
+
 def test_authoring_diff_report_rejects_success_verdict_on_known_excluded_axis():
     """PR #246 Codex P2 review 17 巡目 B: an axis the frozen trusted-axis
     table deliberately excluded (K1 grip map `dead` knob) must not carry a
@@ -889,6 +966,62 @@ def test_dump_json_bytes_rejects_non_finite_floats_as_defense_in_depth():
 
     with pytest.raises(ValueError):
         dump_json_bytes(_BareFloatModel.model_construct(value=float("nan")))
+
+
+def test_dump_json_bytes_rejects_post_construction_mutation_of_axes_dict():
+    """PR #246 Codex P2 review 18 巡目 A: `frozen=True` only blocks
+    reassigning the `axes` *attribute* (`report.axes = {...}`) — it does
+    not block mutating the *dict object* the attribute already holds
+    in-place (`report.axes["brightness"] = ...`), since `dict.__setitem__`
+    never goes through pydantic's `__setattr__` override. A value injected
+    this way bypasses every `model_validator` that only ran once at
+    construction time (e.g. the 16 巡目 brightness trusted-band check),
+    so a publish call that skipped re-validation could serialize polluted
+    provenance. `dump_json_bytes` must re-validate at the serialization
+    boundary and reject this."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "brightness": AxisReport(
+                requirement="dark", observed="dark", verdict="preserved", band="measured"
+            )
+        },
+    )
+    # in-place dict mutation — bypasses AuthoringDiffReport's frozen=True entirely
+    report.axes["brightness"] = AxisReport(
+        requirement="bright", observed="bright", verdict="preserved", band="measured"
+    )
+    with pytest.raises(ValidationError):
+        dump_json_bytes(report)
+
+
+def test_dump_json_bytes_revalidation_preserves_byte_determinism():
+    """Regression guard: the re-validation round-trip added in 18 巡目 A
+    (`model_validate(model.model_dump(mode="python"))` before dumping)
+    must not change the output bytes for an untampered, valid report —
+    confirmed by comparing against the same report's bytes as produced
+    before this change would have applied (i.e. dumping the same
+    construction twice still agrees byte-for-byte, and matches a
+    freshly-reconstructed equivalent model)."""
+
+    report = AuthoringDiffReport(
+        round=3,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "key": AxisReport(requirement="D minor", observed="D minor", verdict="preserved", band="measured"),
+            "brightness": AxisReport(
+                requirement="dark", observed="dark", verdict="preserved", band="measured"
+            ),
+        },
+        notes=[AuthoringNote(kind="position_match_rate", value=0.5)],
+    )
+    direct = dump_json_bytes(report)
+    reconstructed = dump_json_bytes(
+        AuthoringDiffReport.model_validate(report.model_dump(mode="python"))
+    )
+    assert direct == reconstructed
 
 
 def test_dump_json_bytes_is_deterministic():

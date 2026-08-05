@@ -158,6 +158,21 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
 エラー（`(where, message)` でソート済み）に続けて canonical エラー
 （pydantic の `loc` 順）を連結する。
 
+**重複 YAML mapping キーの拒否（PR #246 Codex P2 review 18 巡目 B）**:
+素の `yaml.safe_load` は `score.yaml`/`--contract` spec の重複 mapping
+キー（例 `physical:` セクションが 2 回書かれ、後者だけが読まれる）を
+「最後の値が勝つ」形で静かに受理してしまう——著者の意図（前の値）が黙って
+上書きされる欠陥。CLI の両読み込み（score/`--contract`）を
+`melody.representation._NoDupSafeLoader`（import のみ再利用——重複実装
+禁止。`recast/experimental.py:_load_m1_registry` と同じ再利用パターン）
+へ差し替えた。重複キー検出時は `ValueError` を送出する:
+- **score 側**: 被検証物自体の不正のため、YAML parse 失敗と同じ扱い
+  （`fail`/exit 1、`kind: "canonical"`、`where: "<file>"` — 新規 kind は
+  設けず、パース失敗ファミリーの既存語彙をそのまま使う）。
+- **`--contract` 側**: 計器設定の不正のため exit 2（`load_authoring_contract`
+  の既存 `except (OSError, yaml.YAMLError, ValueError, ValidationError)`
+  にそのまま乗る——`validate_cmd.py` 側の変更は不要）。
+
 **`status`×`errors` の整合（PR #246 Codex P2 review 4 巡目 A）**:
 `SymbolicValidationResult`（`svprpe validate` の結果、および
 `AuthoringDiffReport.symbolic_validation` に埋め込まれる同型）は
@@ -303,6 +318,30 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    が「`_KNOWN_EXCLUDED_AXES` == `ROUNDTRIP_FIELDS` から
    `derive_trusted_axes()` の採用軸を引いた集合」の一致を enforce する
    （8 のドリフト検出と同型）。
+11. **structure の値×verdict 整合**（PR #246 Codex P2 review 18 巡目 C、
+    9 の key 整合と同じ「成功側 verdict のみ制約する」一貫方針）:
+    `structure` 軸の `verdict` が成功側（`exact_match`）で
+    `requirement`/`observed` が両方「全要素 `str` の `list`」のとき、
+    casefold 逐要素の列完全一致（長さの不一致も拒否）を要求する。
+    `report` が格納する値は観測器（`svp_rpe.arrange.observe` の structure
+    domain）の正規化済みラベル列であるという契約に依拠する（観測器自身の
+    正規化ロジックはここで再実装しない）。**失敗側 verdict（`mismatch`）は
+    列の不一致を制約しない**（9・8 と同じ方針）。片方または両方が
+    「全要素 `str` の `list`」でない場合は判定対象外。
+12. **直列化境界での再検証**（PR #246 Codex P2 review 18 巡目 A、`frozen=
+    True` の浅さ対策）: pydantic の `frozen=True` はフィールド**属性の
+    再代入**のみを防ぎ、フィールドが保持する**可変コンテナの中身**
+    （`dict[str, AxisReport]` である `axes` への
+    `report.axes["brightness"] = 別の AxisReport インスタンス` 等）を
+    構築後に書き換える経路は素通しする——`dict.__setitem__` は pydantic
+    の `__setattr__` オーバーライドを経由しないため。この経路で書き換え
+    られた値は構築時に一度だけ走った `model_validator` 群（8/9/10/11 の
+    軸別整合を含む）を一切通っておらず、汚染された report が publish
+    されうる。`dump_json_bytes` は直列化前に
+    `type(model).model_validate(model.model_dump(mode="python"))` で
+    モデルを再構築し、全 `model_validator` を強制的に再実行してから
+    payload を作る——publish 直前の最終防衛線。正常なモデルはバイト同一の
+    結果を返す（既存の byte-determinism は不変）。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
 `sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を構築し、

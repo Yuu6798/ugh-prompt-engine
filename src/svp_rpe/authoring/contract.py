@@ -14,6 +14,7 @@ from typing import Literal, Optional, Self
 import yaml
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from svp_rpe.melody.representation import _NoDupSafeLoader
 from svp_rpe.utils.config_loader import load_config
 
 SCHEMA_VERSION = "authoring-contract/1.0"
@@ -210,8 +211,24 @@ def load_authoring_contract(path: Optional[Path | str] = None) -> AuthoringContr
 
 
 def _load_yaml_mapping(path: Path) -> dict:
+    """`--contract` の代替 spec YAML を読む。
+
+    重複キー拒否（PR #246 Codex P2 review 18 巡目 B）: 素の `yaml.safe_load`
+    は重複 mapping キーを「最後の値が勝つ」形で静かに受理してしまう——
+    計器設定（契約 spec）自体がこの穴を持つと、意図しない `allowed_keys`/
+    `fields`/`min`/`min_items` が黙って上書きされうる。`melody.representation.
+    _NoDupSafeLoader`（import のみ・重複実装禁止——`recast/experimental.py:
+    _load_m1_registry` と同じ再利用パターン）へ差し替える。重複キー検出時は
+    `ValueError` を送出するため、既に `not isinstance(data, dict)` と同じ
+    `ValueError` 経路——呼び出し側 `load_authoring_contract` の
+    `except (OSError, yaml.YAMLError, ValueError, ValidationError)`
+    （`svp_rpe.cli.validate_cmd.validate_cmd`）にそのまま乗り、exit 2
+    （計器設定の不正）として分類される（`validate_cmd.py` 側の変更は
+    不要）。
+    """
+
     with path.open(encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
+        data = yaml.load(handle, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
     if not isinstance(data, dict):
         raise ValueError(f"authoring contract spec must be a mapping: {path}")
     return data

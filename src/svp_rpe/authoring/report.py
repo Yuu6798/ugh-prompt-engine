@@ -99,6 +99,17 @@ _KNOWN_EXCLUDED_AXES: frozenset[str] = frozenset(
 AuthoringNoteKind = Literal["position_match_rate"]
 
 
+def _is_str_list(value: Any) -> bool:
+    """`value` が「全要素 `str` の `list`」かどうか（PR #246 Codex P2
+    review 18 巡目 C）。`bool` は除外しない仕様——`structure` 軸の
+    `requirement`/`observed` はラベル列（`["intro", "chorus", ...]`）
+    であり `bool` 要素はそもそも意味を持たないため、他所の
+    `bool` 除外パターン（`_validate_position_match_rate` 等の数値系）を
+    ここに合わせて複製する必要はない。"""
+
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
 def _validate_position_match_rate(value: Any) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(
@@ -342,6 +353,22 @@ class AuthoringDiffReport(BaseModel):
     収載済み（実験ごとの動的判定の対象）のためこのリストに含めない——
     静的に「常に除外」とは言えない軸を誤って denylist しないための区別。
 
+    structure の値×verdict 整合（PR #246 Codex P2 review 18 巡目 C、17 巡目
+    A の key 整合と同じ「成功側 verdict のみ制約する」一貫方針）: `structure`
+    軸の `verdict` が成功側（`exact_match` — `structure` の成功語彙は
+    `exact_match` のみ）で `requirement`/`observed` が両方「全要素 `str` の
+    `list`」（`_is_str_list`）のとき、casefold 逐要素の列完全一致（長さの
+    不一致も拒否）を要求する——`['intro', 'chorus']` vs `['intro', 'outro']`
+    のような矛盾した組や、要素は前方一致するが長さが異なる組が
+    `verdict='exact_match'` として正規形受理されてしまっていた欠陥を閉じる。
+    **report が格納する値は観測器（`svp_rpe.arrange.observe` の structure
+    domain）の正規化済みラベル列であるという契約**に依拠する——観測器
+    自身の正規化ロジック（大小文字・空白の扱い等）はここで再実装しない。
+    **失敗側 verdict（`mismatch`）は列の不一致を制約しない**（17 巡目 A・
+    16 巡目 brightness と同じ方針——「一致しないと正直に報告する」経路を
+    塞がない）。片方または両方が「全要素 `str` の `list`」でない場合
+    （`AxisReport` の `Any` 設計）は判定対象外で従来どおり通す。
+
     `observed_sections` の軸限定（PR #246 Codex P2 review 13 巡目 + 14 巡目、
     7 巡目 A と同族の軸不整合）: `AxisReport.observed_sections` は
     「structure 軸の境界時刻」として文書化・設計されたフィールド
@@ -465,6 +492,24 @@ class AuthoringDiffReport(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _structure_success_requires_matching_sequence(self) -> Self:
+        axis_report = self.axes.get("structure")
+        if axis_report is None or axis_report.verdict != "exact_match":
+            return self
+        requirement = axis_report.requirement
+        observed = axis_report.observed
+        if not _is_str_list(requirement) or not _is_str_list(observed):
+            return self
+        if [item.casefold() for item in requirement] != [item.casefold() for item in observed]:
+            raise ValueError(
+                f"axes['structure'].verdict='exact_match' but requirement={requirement!r} and "
+                f"observed={observed!r} are not a matching label sequence (casefold "
+                "element-wise, length included) — a success verdict cannot be claimed for "
+                "mismatched structure sequences"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _observed_sections_are_structure_only(self) -> Self:
         errors = []
         for axis_name, axis_report in self.axes.items():
@@ -513,16 +558,39 @@ def dump_json_bytes(model: BaseModel) -> bytes:
     （`symbolic_validation.errors`/`AxisReport.observed_sections` を省略した
     形）とバイト互換の欠落キー省略を保つ。
 
+    直列化境界での再検証（PR #246 Codex P2 review 18 巡目 A、`frozen=True`
+    の浅さ対策）: pydantic の `frozen=True` はフィールド**属性の再代入**
+    （`model.axes = {...}`）のみを防ぎ、フィールドが保持する**可変
+    コンテナの中身**（例: `dict[str, AxisReport]` である `axes` への
+    `report.axes["brightness"] = 別の AxisReport インスタンス`、あるいは
+    `AxisReport.requirement` が保持する `list` への `append`）を構築後に
+    書き換える経路は素通しする——`dict.__setitem__`/`list.append` は
+    pydantic の `__setattr__` オーバーライドを経由しないため。この経路で
+    書き換えられた値は構築時に一度だけ走った `model_validator` 群
+    （brightness 帯・key 整合・既知除外軸 denylist 等）を一切通っておらず、
+    汚染された report が publish されうる。**対策**: 直列化前に
+    `type(model).model_validate(model.model_dump(mode="python"))` で
+    モデルを再構築し、全 `model_validator` を強制的に再実行してから
+    payload を作る——publish 直前の最終防衛線として、構築後 mutation で
+    不変条件をすり抜けたモデルを fail-closed に拒否する
+    （`ValidationError`）。正常なモデルはバイト同一の結果を返す
+    （`model_dump(mode="python")` → 再構築 → `model_dump(mode="json")` は
+    決定論的な往復であり、既存の byte-determinism を変えない）。
+
     `allow_nan=False`（PR #246 Codex P2 review 9 巡目 B）: 既定の
     `json.dumps` は `NaN`/`Infinity`/`-Infinity` を（RFC 8259 準拠でない）
     非標準リテラルとして書き出してしまう——`AxisReport`/`ObservedSection`
     の構築時 fail-fast（`_reject_non_finite_float`）で通常はここまで
     到達しないが、直列化そのものにも防御として `allow_nan=False` を掛け、
     万一非有限値を積んだモデルが構築できてしまった場合でも不正 JSON を
-    出力する前に `ValueError` で fail-closed にする（二重の安全網）。
+    出力する前に `ValueError` で fail-closed にする（二重の安全網。上記の
+    再検証と役割は重複しない——再検証は「mutation ですり抜けた不変条件」、
+    `allow_nan=False` は「それでも尚すり抜けた場合の直列化そのものの
+    防御」という別レイヤー）。
     """
 
-    payload = model.model_dump(mode="json", exclude_none=True)
+    revalidated = type(model).model_validate(model.model_dump(mode="python"))
+    payload = revalidated.model_dump(mode="json", exclude_none=True)
     return (
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
     ).encode("utf-8")

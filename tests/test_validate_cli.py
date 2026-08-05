@@ -461,6 +461,59 @@ def test_invalid_score_yaml_parse_failure_still_exits_1_not_2(tmp_path: Path):
     assert payload["status"] == "fail"
 
 
+def test_duplicate_key_score_fails_with_explicit_where_and_message(tmp_path: Path):
+    """PR #246 Codex P2 review 18 巡目 B: a plain `yaml.safe_load` silently
+    keeps the *last* value for a duplicate mapping key (`physical: {bpm:
+    0}` followed by a second `physical: {bpm: 120}` — the first is masked
+    without any signal). The score is reloaded through
+    `melody.representation._NoDupSafeLoader` (import-only reuse, same
+    pattern as `recast/experimental.py:_load_m1_registry`), which raises on
+    duplicate keys — treated as an invalid *score* (`fail`/exit 1, same
+    posture as an unparseable score), not an operational error."""
+
+    duplicate_key_yaml = """
+physical:
+  bpm: 0
+physical:
+  bpm: 120
+"""
+    bad_path = tmp_path / "duplicate-key-score.yaml"
+    bad_path.write_text(duplicate_key_yaml, encoding="utf-8")
+    result = _invoke(str(bad_path), "--contract", str(CONTRACT_PATH), "--format", "json")
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["errors"][0]["where"] == "<file>"
+    assert "physical" in payload["errors"][0]["message"]
+
+
+def test_duplicate_key_contract_exits_2(tmp_path: Path):
+    """Same family as above, but on the `--contract` side: a duplicate
+    mapping key in a custom contract spec is the measuring instrument's
+    own configuration being broken (operational error, exit 2 — same
+    asymmetry as an unparseable/non-mapping `--contract` spec)."""
+
+    duplicate_key_contract_yaml = """
+schema_version: "authoring-contract/1.0"
+top_level: {allowed_keys: [meta]}
+meta: {allowed_keys: []}
+meta: {allowed_keys: [title]}
+semantic: {allowed_keys: []}
+grv: {allowed_keys: []}
+delta_e: {allowed_keys: []}
+physical: {allowed_keys: []}
+structure_section: {allowed_keys: []}
+rendering: {allowed_keys: []}
+events: {allowed_keys: []}
+chord: {allowed_keys: []}
+"""
+    contract_path = tmp_path / "duplicate-key-contract.yaml"
+    contract_path.write_text(duplicate_key_contract_yaml, encoding="utf-8")
+
+    result = _invoke(str(POSITIVE_CONTROL_PATH), "--contract", str(contract_path))
+    assert result.exit_code == 2, result.output
+
+
 def test_output_collision_with_score_input_exits_2(tmp_path: Path):
     score_path = _write_score(tmp_path, _base_score())
     result = _invoke(str(score_path), "-o", str(score_path))
