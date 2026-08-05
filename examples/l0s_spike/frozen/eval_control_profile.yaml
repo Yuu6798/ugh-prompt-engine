@@ -1,0 +1,10 @@
+# L0-s 凍結軸表（正本 §3: score_adherence の判定軸を提出 Score の control_profile に
+# 依存させないための注入用評価軸。task.md の判定器節が正）。
+# backend 解決: rendering.target_backend "external" -> profile key "suno"。
+suno:
+  key:
+    grip_class: "tight"
+    evidence: "L0S-T1 凍結軸表 (examples/l0s_spike/task.md)"
+  brightness:
+    grip_class: "tight"
+    evidence: "L0S-T1 凍結軸表 (examples/l0s_spike/task.md)"

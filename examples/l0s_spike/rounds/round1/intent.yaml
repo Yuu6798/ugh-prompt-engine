@@ -1,0 +1,34 @@
+round: 1
+design_notes:
+  overall: >
+    R1/R2/R3 の 3 要求のみに焦点を絞り、旋律・コード進行は指定せず
+    エンジンの既定進行に委ねた（events を省略）。
+  structure:
+    intent: >
+      intro→chorus→outro の 3 区分が観測されるよう、隣接セクション間の
+      対比を最大化する設計にした。intro と outro は "sparse, low density"
+      で共通しつつ、intro は "sub bass, no kick"（立ち上がりを抑制した
+      導入）、outro は "release"（開放・減衰の性格）で書き分け、
+      chorus の "full energy" とは密度・音量で明確に対比する。
+      chorus の bars を intro/outro の 2 倍（16 vs 8）にして中心セクション
+      としての存在感を持たせ、境界検出の手掛かりを増やした。
+    risk: >
+      観測器はヒューリスティックなラベル付けのため、chorus が "full" に、
+      あるいは outro が verse/bridge 系に誤認される可能性は残る。
+      その場合は次周で対比の強度（密度キーワードの追加）を調整する。
+  key:
+    intent: >
+      physical.key に "D minor" を直接指定。契約上キーは実測値であり
+      宣言の転記ではないとされるが、他に調性を操作する手段が
+      公開範囲内に存在しないため、素直に宣言した。
+  brightness:
+    intent: >
+      physical.brightness を "dark" に指定。契約 §2 により音色に
+      直結すると明記されているため、これも直接指定で足りると判断した。
+      sub bass 系のキーワードも intro に含め、暗い音色傾向を補強した。
+  chord_progression:
+    intent: >
+      events を省略し、キー既定の進行に任せた。本課題は構造/キー/明度の
+      3 軸のみが判定対象であり、コード進行を明示する必要性がないため
+      複雑性を増やさない選択をした。
+tools_used: none

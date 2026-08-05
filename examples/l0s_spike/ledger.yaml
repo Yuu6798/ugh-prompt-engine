@@ -1,0 +1,359 @@
+# L0-s spike ledger — L0S-T1. Source of truth for engine/deps pins,
+# pinned-input hashes, and the positive-control gate result (contract.md's
+# "陽性対照ゲート" section: `ledger.yaml` の `positive_control` 節が正).
+# `rounds` accumulates real spike evidence (author round-trips against
+# `scripts/measure_round.py`'s `report.json`), separate from the positive
+# control (which is dry-run only and never counted as spike evidence).
+spike_id: L0S-T1
+# engine_state (是正 2026-08-05, Codex P2 5巡目 B レビュー): provenance を
+# content-hash 主体へ是正した。旧 engine_commit の値
+# (306add7914c80f1a0dd48c521100f6062c6d2846) は WIP ローカルコミット参照で
+# あり origin/main から到達不能だった（`git merge-base --is-ancestor
+# 306add7914c80f1a0dd48c521100f6062c6d2846 origin/main` は failure を実測）。
+# 透明性のため削除せず `superseded_engine_commit` として注記のまま残す。
+engine_state:
+  base_commit: "2334b0ba3572b0f519060d88ef0aca1eb83a4e07"
+  base_commit_note: >-
+    `git merge-base origin/main HEAD` で決定論的に確認した、origin/main
+    から実際に到達可能なコミット（main の PR #244 マージ + 直後の
+    memory wrap-up commit。件名に "(PR #244)" を含む）。
+  src_unchanged: true
+  src_unchanged_note: >-
+    本ブランチは src/ および tests/ を一切変更していない
+    （`git diff --stat 2334b0ba3572b0f519060d88ef0aca1eb83a4e07..HEAD --
+    src/ tests/` が空であることを実測確認）。
+  verification_commands:
+    - "git fetch origin main"
+    - "git merge-base origin/main HEAD"
+    - "git merge-base --is-ancestor <candidate_sha> origin/main"
+    - "git diff --stat <base_commit>..HEAD -- src/ tests/"
+  superseded_engine_commit:
+    value: "306add7914c80f1a0dd48c521100f6062c6d2846"
+    reason: >-
+      旧 engine_commit フィールドの値。WIP ローカルコミット参照であり
+      origin/main から到達不能だったため、到達可能な base_commit pin へ
+      是正した（Codex P2 5巡目 B レビュー）。
+recorded_utc: "2026-08-05T05:44:55Z"
+
+deps_lock:
+  file: deps/pip_freeze.txt
+  sha256: "68a85653193fa0ae03926f57eb74cf69b2ad5f03960ddfe72f5308bd8ee3aeae"
+  superseded_sha256:
+    value: "a9e2682576c0b0f20a16e582a797ef5b2f09dd5c5dc6fb8f26f93f019630be51"
+    reason: >-
+      旧 pip freeze には svp_rpe 自身の editable self-install 行
+      (`-e git+https://.../ugh-prompt-engine@306add7914...#egg=svp_rpe`)
+      が含まれており、到達不能な WIP コミット 306add7914c80f1a0dd48c521100f6062c6d2846
+      （engine_state 節が是正済みの旧 engine_commit と同一値）を指していた。
+      この行を除去して是正した（Codex P2 7巡目レビュー、engine_state
+      （5巡目 B）の provenance ファミリーの取り残し）。svp_rpe エンジン実体の
+      pin は deps lock の責務ではなく engine_state（到達可能な base_commit
+      + src/tests 無変更の実測検証）と runner_at_measurement（runner
+      script/frozen fixture の blob sha256）が担う——deps_lock は
+      サードパーティ依存のみを pin する会計に整理した。サードパーティ依存の行は
+      1 バイトも変更していない（この 1 行の削除のみが diff、実測確認済み）。
+
+pinned_inputs:
+  task_md:
+    path: task.md
+    sha256: "4a56ddfaff6029dc12cec9b0359a7cd0c475ae94c09e3231ca224d69d6b3b169"
+  contract_md:
+    path: contract.md
+    sha256: "feda992fcfd4b74e9835dc75c8c09d9d5acb2e38b04a7285bacfee4bf36845d8"
+  section_map:
+    path: frozen/section_map.json
+    sha256: "a7d4330c06137117474f19ab3fae27204e7df9a00deac72cba9a0299296a83fd"
+  eval_control_profile:
+    path: frozen/eval_control_profile.yaml
+    sha256: "a5eb1847a54032c49b865a8a6834bde597c5d3ddcdf8784d05d3cce3b7e76c1e"
+  arrangement:
+    path: frozen/arrangement.yaml
+    sha256: "efa0d6db0e288ad74c330a719b28e6db224c4545b852bdbbf62bc7adeda96e5a"
+  suno_capability_profile:
+    path: ../../config/capability_profiles/suno.yaml
+    sha256: "343f3e84bb7e2bb4f4c945195659b3823318bf14c306774278a33ee7d116592b"
+
+runner_at_measurement:
+  # 陽性対照 + 周回 1〜5 の全計測時点で使われていた runner script /
+  # frozen fixture の blob sha256 (Codex P2 5巡目 B レビューで新設)。
+  # スクリプトは計測期間中不変のはず、という前提を裏取りするため、まず
+  # `git log --oneline <range> -- <path>` が空であること（該当パスへの
+  # 変更コミットが計測期間内に存在しない）を実測確認してから、期間内の
+  # 1 コミットの blob を `git show <commit>:<path> | sha256sum` で pin する
+  # （変更が無いと確認済みのため、期間内のどのコミットで採っても同じ blob）。
+  measurement_commit_range: "3eb25e1..4b98e7b"
+  measurement_commit_range_note: >-
+    3eb25e1 = validate_score.py / measure_round.py /
+    frozen/arrangement.yaml が最初に導入されたコミット（frozen/section_map.json
+    と frozen/eval_control_profile.yaml はさらに前の 306add7 で導入済みで、
+    以降も無変更）。4b98e7b = 周回 5（最終）計測コミット。
+    `git log --oneline 3eb25e1..4b98e7b -- <path>` はいずれの対象パスでも
+    空（この範囲でこれらのパスへの変更コミットが無い）ことを実測確認済み。
+  blob_sha256_pinned_at_commit: "4b98e7b"
+  files:
+    validate_score_py:
+      path: scripts/validate_score.py
+      sha256: "268b596974e7cbef7d8f78efbd4f042cf1f95a7407dbe5557ac3a85a6e33202d"
+    measure_round_py:
+      path: scripts/measure_round.py
+      sha256: "3e6f0d8f4f6269c16f446e1f591a0327ca509b1188771b06b142b20b225fdbbd"
+    section_map:
+      path: frozen/section_map.json
+      sha256: "a7d4330c06137117474f19ab3fae27204e7df9a00deac72cba9a0299296a83fd"
+    eval_control_profile:
+      path: frozen/eval_control_profile.yaml
+      sha256: "a5eb1847a54032c49b865a8a6834bde597c5d3ddcdf8784d05d3cce3b7e76c1e"
+    arrangement:
+      path: frozen/arrangement.yaml
+      sha256: "efa0d6db0e288ad74c330a719b28e6db224c4545b852bdbbf62bc7adeda96e5a"
+  # Codex P2 9巡目レビュー: post_spike_hardening_commits の静的列挙は追記漏れ
+  # （5〜7 巡目の commit が一時的に欠落した実例）を構造的に再発させるため、
+  # 618b332 以降の post-spike 変更を検証する正はこのコマンドとする
+  # （post_spike_hardening_commits 自体は 618b332 時点で追記を終了・凍結）。
+  post_spike_hardening_verification_command: "git log --oneline 4b98e7b..HEAD -- examples/l0s_spike/scripts/"
+  post_spike_hardening_commits:
+    # 全計測（陽性対照 + 周回 1〜5、4b98e7b で完了）より後に
+    # validate_score.py / measure_round.py へ加えられた変更。いずれも
+    # PR #245 の Codex P2 レビュー対応で、計測時点の runner には存在しない。
+    # 遡及的な計測結果の書き換えではない — 硬化後スクリプトで陽性対照 +
+    # 全 5 周回を再計測し、report.json/validation.json が上記 pin 済み値
+    # （および各周回ディレクトリの記録済みファイル）と完全なバイト一致する
+    # ことを都度再検証済み（PR #245 各ラウンドのレビュー返信コメント参照）。
+    #
+    # スコープ宣言（Codex P2 9巡目レビュー、列挙二重管理の終端）: 本リストは
+    # PR #245 レビュー対応期間（〜9 巡目対応時点、618b332 まで）の記録に
+    # 限定する。以降の post-spike 変更を追跡する正は本リストではなく
+    # `git log 4b98e7b..HEAD -- examples/l0s_spike/scripts/`
+    # （導出コマンド）であり、本リストへの追記はこれ以上継続しない——静的
+    # 列挙は追記漏れ（5〜7 巡目のコミットが一時的に本リストから欠落した
+    # 実例）を構造的に再発させるため、コマンドで導出可能な事実をコマンドの
+    # ままにしておく方が信頼できる。
+    - commit: "12d4e26"
+      change: "validate_score.py に L0-s 公開範囲チェック（トップレベルのみ）を追加"
+    - commit: "00d06e4"
+      change: "公開範囲チェックを contract.md §1 の全階層・型・列挙へ拡張"
+    - commit: "3523cc8"
+      change: "measure_round.py / validate_score.py に書き込み前の出力衝突ガードを追加"
+    - commit: "02d8b3a"
+      change: "-o の予約生成物パス衝突を単一定数 (_reserved_workdir_paths) から導出するようリファクタリング"
+    - commit: "5db947b"
+      change: "key/brightness verdict を diagnosis 横流しから凍結要求への比較 (band==measured かつ観測値一致) へ是正"
+    - commit: "1544143"
+      change: "契約記載形式のクラッシュ族 (key/time_signature) を実測確定してゲート強制"
+    - commit: "618b332"
+      change: "validation.json のバイト決定論化 + target_backend リテラル検証"
+
+positive_control:
+  # Dry-run of positive_control/score.yaml through the full observation
+  # chain (validate -> measure_round). Pinned for audit; not spike evidence
+  # (task.md §"陽性対照ゲート").
+  attempts: 2
+  trials:
+    - attempt: 1
+      change: >-
+        Initial draft (intro 6 bars / chorus 10 bars / outro 6 bars,
+        bpm 96). key/brightness passed on the first try (roundtrip
+        diagnosis preserved for both). structure failed: the AR4
+        structure sensor auto-segmented the ~55s track into 6 raw
+        sections (Intro/Chorus/Verse/Chorus/Bridge/Outro,
+        position_match_rate=0.3333) instead of 3 — the acoustic
+        novelty detector (RMS/onset local-minima, min_section_sec=5.0)
+        found extra boundaries inside the 10-bar chorus section
+        unrelated to the declared 3-way structure.
+      result:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "verse", "chorus", "bridge", "outro"]
+    - attempt: 2
+      change: >-
+        Shortened every section (intro 6->2 bars, chorus 10->3 bars,
+        outro 6->2 bars; bpm/key/brightness/chord_progression/section
+        labels unchanged) so the whole track (~17.5s at bpm 96) sits
+        below the acoustic segmenter's 5s-boundary-spacing threshold in
+        aggregate, leaving no room for a spurious mid-section boundary
+        while the two genuine intro/chorus and chorus/outro energy
+        transitions (sparse -> full energy -> release) remained sharp
+        enough to still be detected.
+      result:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: exact_match
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+  status: pass
+  axes:
+    key: {verdict: preserved, band: measured, observed: "D minor"}
+    brightness: {verdict: preserved, band: measured, observed: "dark"}
+    structure:
+      verdict: exact_match
+      band: measured
+      observed: ["intro", "chorus", "outro"]
+  artifacts:
+    score:
+      path: positive_control/score.yaml
+      sha256: "1997c103fc74975af41ae7c3c569a7e7ac064fb1fd72a1c291e91050b208bf31"
+    validation:
+      path: ../../build/l0s/positive_control/validation.json
+      sha256: "a1bc26ff11e0701c44696dfe0947d11506c66c7518f16249e903689646a9fa6d"
+    roundtrip:
+      path: ../../build/l0s/positive_control/roundtrip.json
+      sha256: "f0cfb31e604735fc2d2721957fd34601bf2a677b2cdea89b39a10cc4b30c18dc"
+    adherence:
+      path: ../../build/l0s/positive_control/adherence.json
+      sha256: "d56bd17a717db2ec767770df051ddc7c16f05a94f52c1d0cb34b72bf2700c9d8"
+    observe_report:
+      path: ../../build/l0s/positive_control/observe_report.json
+      sha256: "6e9799701c8392d6f16eb21c8a09fd2a967aaf6611fa2f0bb4eeccc7a201b626"
+    report:
+      path: ../../build/l0s/positive_control/report.json
+      sha256: "18d0fec1dac63e4189ecba490db76eb2d6ba4735c6857337ce8584239720352d"
+    take_wav:
+      path: ../../build/l0s/positive_control/take.wav
+      sha256: "a5bf8a55b7cecb609bf2e8e2ade09a2f3bea2acd5284a7c1d3b3b6598c092a2e"
+    manifest:
+      path: ../../build/l0s/positive_control/identity_manifest.yaml
+      sha256: "b2fe1148aa30301631036da37f3d7af1cd5eca900c64fc915f472f55d04a6c1b"
+    package:
+      path: ../../build/l0s/positive_control/package/performance_package.json
+      sha256: "bc340e0ca53ba16edc3d735ca2ba1e4b736bde0cc15c91330d76260506bf1866"
+  # `eval_score` isn't in the fixed 9-artifact list task.md names, but is
+  # recorded anyway since it's the actual measured artifact (score.yaml
+  # with control_profile injected per frozen/eval_control_profile.yaml).
+  eval_score:
+    path: ../../build/l0s/positive_control/eval_score.yaml
+    sha256: "fc18ac481e73f8a0ba11e51ec3c114ea4a844150ff04a3855f1a397b36ddcf31"
+
+rounds:
+  - round: 1
+    accepted_pin:
+      # Acceptance-time pin, taken before the gate ran (score.yaml/intent.yaml
+      # as submitted to examples/l0s_spike/rounds/round1/).
+      score_sha256: "3a2f5ffc205de1865d72f8ebcf400ac765e4c8e532ef1c3326d95d8050587434"
+      intent_sha256: "cc99e7dc05eeeda6e70893a9f20db3f8d7da02fff5bc83fec734ab8cdb7d6d91"
+      recorded_utc: "2026-08-05T06:23:59Z"
+    symbolic_validation: pass
+    verdict_artifact:
+      # symbolic_validation=pass -> measure_round.py ran -> report.json is
+      # the round's verdict record (validation.json's sha256 is still
+      # copied alongside it in rounds/round1/, but report.json is the
+      # canonical verdict pin for a validation-passing round).
+      kind: report
+      path: rounds/round1/report.json
+      sha256: "705c2a46b4dac1d2022a0c5d8e8671261ea8bd72c92bb7273b6b666fc5cd4cb8"
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: mismatch
+        band: measured
+        observed: ["intro", "verse", "verse", "verse", "chorus", "bridge", "chorus", "outro"]
+    llm_run_id:
+      author_model: "claude-sonnet-5"
+      harness: "claude-code Agent tool"
+      settings: "fresh-agent-per-round, contract-payload-only"
+    off_contract_events: []
+    recorded_utc: "2026-08-05T06:26:25Z"
+  - round: 2
+    accepted_pin:
+      # Acceptance-time pin, taken before the gate ran (score.yaml/intent.yaml
+      # as submitted to examples/l0s_spike/rounds/round2/).
+      score_sha256: "2a78ff3226143c18b5338c6f441cfdf16d2dfa681c16db4ab11620b72c5d0b59"
+      intent_sha256: "39a92dc78e21f7ef194bddf68b2aef69e5b0657b5d69fc2e594ca5ebe0f2c117"
+      recorded_utc: "2026-08-05T06:29:49Z"
+    symbolic_validation: pass
+    verdict_artifact:
+      kind: report
+      path: rounds/round2/report.json
+      sha256: "6d31ebe7764b4a5b3ca43b2c45985b0981b603f64059d3aa47c6e64c56be84f5"
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: mismatch
+        band: measured
+        observed: ["intro", "verse", "bridge", "chorus", "chorus", "outro"]
+    llm_run_id:
+      author_model: "claude-sonnet-5"
+      harness: "claude-code Agent tool"
+      settings: "fresh-agent-per-round, contract-payload-only"
+    off_contract_events: []
+    recorded_utc: "2026-08-05T06:31:06Z"
+  - round: 3
+    accepted_pin:
+      # Acceptance-time pin, taken before the gate ran (score.yaml/intent.yaml
+      # as submitted to examples/l0s_spike/rounds/round3/).
+      score_sha256: "b92d69821b4ad7afb936c85c57409d08b9ed3146fcda37b8bbc3fc421b33b6cc"
+      intent_sha256: "fbe6dd2a4bc57b68668e2c7f662b1500d1ea1cd1c8482babb5bda66fa80a4ab8"
+      recorded_utc: "2026-08-05T06:34:25Z"
+    symbolic_validation: pass
+    verdict_artifact:
+      kind: report
+      path: rounds/round3/report.json
+      sha256: "8c3355b7ea26a88c5fa19bbcec3014460e3f139be05bbb4c9f116662aedb331a"
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: mismatch
+        band: measured
+        observed: ["intro", "verse", "chorus", "chorus", "bridge", "outro"]
+    llm_run_id:
+      author_model: "claude-sonnet-5"
+      harness: "claude-code Agent tool"
+      settings: "fresh-agent-per-round, contract-payload-only"
+    off_contract_events: []
+    recorded_utc: "2026-08-05T06:35:43Z"
+  - round: 4
+    accepted_pin:
+      # Acceptance-time pin, taken before the gate ran (score.yaml/intent.yaml
+      # as submitted to examples/l0s_spike/rounds/round4/).
+      score_sha256: "fbcc977a01de163aa20e8360c097504fa355a76cae0e5760a83e56a7867a0a36"
+      intent_sha256: "d80a673e3c9e41ce86a6cdea65b6cac54e6193dfa58dd0236020abbeb6d0cb63"
+      recorded_utc: "2026-08-05T06:40:13Z"
+    symbolic_validation: pass
+    verdict_artifact:
+      kind: report
+      path: rounds/round4/report.json
+      sha256: "a9a4435ff88c70b4a406df37647b06a6661f9f5f186f48f92e40712053c08c12"
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: mismatch
+        band: measured
+        observed: ["intro", "chorus", "chorus", "outro"]
+    llm_run_id:
+      author_model: "claude-sonnet-5"
+      harness: "claude-code Agent tool"
+      settings: "fresh-agent-per-round, contract-payload-only"
+    off_contract_events: []
+    recorded_utc: "2026-08-05T06:41:21Z"
+  - round: 5
+    accepted_pin:
+      # Acceptance-time pin, taken before the gate ran (score.yaml/intent.yaml
+      # as submitted to examples/l0s_spike/rounds/round5/). Final spike round.
+      score_sha256: "86d711f2d7d21676ce4e9660fd42afe5d8cc10fba5a70c1b7cea9d3e5db7ab0c"
+      intent_sha256: "60a24043bc9a457ae84a4bc678430b64929db50053108c76f390dbe13ecf417a"
+      recorded_utc: "2026-08-05T06:44:05Z"
+    symbolic_validation: pass
+    verdict_artifact:
+      kind: report
+      path: rounds/round5/report.json
+      sha256: "879a5846f76aa16d733c298bc2dd3d9e9d64b58fb938aee87f13fc13821eae08"
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: mismatch
+        band: measured
+        observed: ["intro", "outro"]
+    llm_run_id:
+      author_model: "claude-sonnet-5"
+      harness: "claude-code Agent tool"
+      settings: "fresh-agent-per-round, contract-payload-only"
+    off_contract_events: []
+    recorded_utc: "2026-08-05T06:45:17Z"

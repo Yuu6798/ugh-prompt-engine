@@ -1,0 +1,36 @@
+{
+  "round": 4,
+  "symbolic_validation": {
+    "status": "pass"
+  },
+  "axes": {
+    "key": {
+      "requirement": "D minor",
+      "observed": "D minor",
+      "verdict": "preserved",
+      "band": "measured"
+    },
+    "brightness": {
+      "requirement": "dark",
+      "observed": "dark",
+      "verdict": "preserved",
+      "band": "measured"
+    },
+    "structure": {
+      "requirement": [
+        "intro",
+        "chorus",
+        "outro"
+      ],
+      "observed": [
+        "intro",
+        "chorus",
+        "chorus",
+        "outro"
+      ],
+      "verdict": "mismatch",
+      "band": "measured"
+    }
+  },
+  "notes": []
+}
