@@ -151,7 +151,7 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
     保護木配下かつ既存ファイルの場合は拒否（新規作成は正規フローのため許可）、
     (c) `-o` が入力パス（score.yaml・凍結 fixture 群）そのものと衝突する場合、
     および workdir への score コピーで src == dest になる場合も拒否。
-  - **4 巡目**（`<pending>`）: 3 巡目の (b)(c) だけでは workdir 内で
+  - **4 巡目**（`02d8b3a`）: 3 巡目の (b)(c) だけでは workdir 内で
     `measure_round.py` 自身が読み書きする生成物パス（`roundtrip.json` /
     `eval_score.yaml` / `hashes.json` 等）への `-o` 衝突を素通りさせていた
     （入力でも既存ファイルでもないため）——report 書き込みが当該生成物を
