@@ -53,20 +53,48 @@ could be opened as YAML.
      graceful string-equality comparison), so their format is deliberately
      left unvalidated here — see **Scope boundary** below.
 
+   - **Round 8** (this version): `rendering.target_backend` is a *literal*
+     contract.md §1 spells out (`target_backend: "external"`, shown as a
+     fixed value, not a type placeholder like the other `rendering` fields).
+     Round 2's type-only check let any `str` through. Empirically confirmed
+     both failure modes this closes: `"musicgen"` makes `svprpe package`
+     raise (`capability profile generator mismatch` — `measure_round.py`
+     always compiles against the frozen Suno capability profile, per
+     `contract.md`'s frozen judge, regardless of what `target_backend` an
+     author writes), which `measure_round.py` never catches and surfaces as
+     an uncaught `RuntimeError`/traceback, not a `{where, message}` gate
+     error; `"suno"` does *not* crash (`resolve_backend_descriptor` maps
+     both `"external"` and `"suno"` to `profile_key="suno"`, so the same
+     capability profile still matches) but silently resolves through a
+     different `BackendDescriptor` (`omit_body_negative`/
+     `omit_structure_prose`/`emit_section_tags` all differ from
+     `"external"`'s), changing the judge's rendering path underneath the
+     author without any visible signal. Both are gated as a literal-value
+     violation now.
+
    **Scope boundary**: this check enforces the L0-s v0 authoring contract's
    *public schema* exactly as `contract.md` §1 writes it — key sets, types,
-   the two literal enumerations it names, and (round 6, narrowly) the two
-   field *formats* empirically confirmed to crash `measure_round.py`'s
-   pipeline downstream rather than fail gracefully
+   the two literal enumerations it names, the one literal value it names
+   (`rendering.target_backend`), and (round 6, narrowly) the two field
+   *formats* empirically confirmed to crash `measure_round.py`'s pipeline
+   downstream rather than fail gracefully
    (`physical.key`/`physical.time_signature`). It is not a general semantic
    linter: value plausibility beyond those — including
    `active_rate_target`/`valley_depth_target`'s contract-declared
    `"<lower>-<upper>"` range format (confirmed non-crashing, see round 6
    note above), whether `physical.bpm` is a *musically sensible* tempo, or
-   whether `structure[].bars` is positive — is out of scope here. The
-   crash/non-crash line is not principled from first read of the contract
-   alone; it was determined empirically per field and belongs to a future
-   `svprpe validate` / L0a symbolic-validation-gate freeze design to make
+   whether `structure[].bars` is positive — is out of scope here.
+   `rendering.prompt_max_chars`/`rendering.priority` are deliberately left
+   unenforced too (round 8): unlike `target_backend`, `contract.md` §1 only
+   *recommends* its shown `prompt_max_chars`/`priority` values ("本課題では
+   固定値を推奨" / "そのまま流用してよい" — explicitly non-mandatory
+   language, unlike `target_backend`'s bare literal), and the downstream
+   prompt renderer (`compose/prompt_renderer.py`) handles an arbitrary
+   `int`/unknown priority token gracefully rather than crashing — not a
+   crash-family member by this contract's own wording. The crash/non-crash
+   line is not principled from first read of the contract alone; it was
+   determined empirically per field and belongs to a future `svprpe
+   validate` / L0a symbolic-validation-gate freeze design to make
    exhaustive, not this spike-era runner script.
 
    Every violation found anywhere in the tree is reported (not just the
@@ -91,6 +119,14 @@ files under `rounds/<n>/` must never be silently overwritten. A brand-new
 file inside the protected tree is still the normal accept-a-round flow and
 stays allowed; outside the tree (e.g. `build/l0s/...`) output stays
 unrestricted, as before.
+
+**Byte-exact output** (PR #245 Codex P2 review, round 8): `validation.json`
+is written via `write_bytes` on an explicitly UTF-8-encoded byte string, the
+same pattern `measure_round.py` uses for `report.json`/`hashes.json` —
+`write_text` would leave newline translation to Python's platform-dependent
+text-mode default, which the pin (`ledger.yaml`'s recorded sha256, computed
+over bytes) does not tolerate; hashing and writing must share the exact same
+byte string, not merely "the same string" reinterpreted twice.
 """
 from __future__ import annotations
 
@@ -153,6 +189,15 @@ CHORD_QUALITY_ENUM = frozenset({"major", "minor"})
 KEY_FORMAT_PATTERN = re.compile(r"^[A-Ga-g][#b]? (major|minor)$")
 TIME_SIGNATURE_FORMAT_PATTERN = re.compile(r"^[0-9]+/[0-9]+$")
 
+# Round 8 (PR #245 Codex P2 review): contract.md §1 shows target_backend as
+# a bare literal ("external"), not a type placeholder — empirically
+# confirmed both a crash-family value ("musicgen": svprpe package raises an
+# uncaught RuntimeError from measure_round.py's perspective) and a
+# silent-semantics-change value ("suno": doesn't crash, but resolves through
+# a different BackendDescriptor than "external" does) fall out of this gate
+# without an exact-literal check. See module docstring's round-8 note.
+TARGET_BACKEND_LITERAL = "external"
+
 OFF_CONTRACT_KEY_MESSAGE = (
     "contract-forbidden key (L0-s public schema; recorded as off-contract self-edit)"
 )
@@ -171,6 +216,13 @@ TIME_SIGNATURE_FORMAT_MESSAGE = (
     'must match the contract time signature format "<N>/<M>" (e.g. "4/4") per '
     "L0-s public schema (contract.md §1) — confirmed to crash "
     "measure_round.py's pipeline (int() on the beats-per-bar component) otherwise"
+)
+TARGET_BACKEND_MESSAGE = (
+    f'must be {TARGET_BACKEND_LITERAL!r} per L0-s public schema (contract.md §1, '
+    "literal) — the frozen judge (frozen/eval_control_profile.yaml's suno profile "
+    '+ the Suno capability profile) is wired only to the "external" route: '
+    '"musicgen" crashes svprpe package with an uncaught error, "suno" silently '
+    "changes judge/rendering semantics"
 )
 
 
@@ -245,6 +297,22 @@ def _check_format_field(
     return [{"where": where, "message": message}]
 
 
+def _check_literal_field(
+    where: str, container: Any, key: str, literal: str, message: str
+) -> list[dict[str, str]]:
+    """Only fires once the field is already confirmed `str` (same
+    non-duplication rule as `_check_enum_field`/`_check_format_field`).
+    Round 8: `rendering.target_backend`, the one field contract.md §1 shows
+    as a bare literal rather than a type placeholder — see module
+    docstring."""
+    if not isinstance(container, dict) or key not in container:
+        return []
+    value = container[key]
+    if not isinstance(value, str) or value == literal:
+        return []
+    return [{"where": where, "message": message}]
+
+
 def _public_scope_errors(raw: dict[str, Any]) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     errors += _extra_key_errors("", raw, TOP_LEVEL_KEYS)
@@ -304,6 +372,17 @@ def _public_scope_errors(raw: dict[str, Any]) -> list[dict[str, str]]:
     rendering = raw.get("rendering")
     errors += _extra_key_errors("rendering", rendering, RENDERING_KEYS)
     errors += _check_str_field("rendering.target_backend", rendering, "target_backend")
+    errors += _check_literal_field(
+        "rendering.target_backend",
+        rendering,
+        "target_backend",
+        TARGET_BACKEND_LITERAL,
+        TARGET_BACKEND_MESSAGE,
+    )
+    # prompt_max_chars/priority: deliberately NOT enforced beyond round 2's
+    # type checks — contract.md §1 only recommends its shown values for
+    # these two, and the downstream renderer handles arbitrary values
+    # gracefully. See module docstring's round-8 Scope boundary note.
     errors += _check_int_field("rendering.prompt_max_chars", rendering, "prompt_max_chars")
     errors += _check_list_str_field("rendering.priority", rendering, "priority")
 
@@ -402,10 +481,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     result = _validate(args.score)
-    args.output.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    content_bytes = (
+        json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    args.output.write_bytes(content_bytes)
     print(f"status={result['status']} -> {args.output}")
     return 0
 

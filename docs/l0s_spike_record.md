@@ -236,6 +236,38 @@ off-contract の生データ参照は 0 件だったが、構造軸の 5 周回�
     `superseded_sha256` として理由付きで透明に保持した。svp_rpe エンジン
     実体の pin は deps lock の責務ではなく `engine_state`/
     `runner_at_measurement` が担う、という会計を明文化した。
+- **8 巡目 2 件**（`<pending>`、いずれも `validate_score.py`）:
+  - **A: `validation.json` の書き出しがバイト決定論でなかった**
+    （`write_text` はプラットフォーム依存の改行変換を挟みうるため、pin
+    済み sha256 の再現が壊れるリスクがあった）。`measure_round.py` の
+    `report.json`/`hashes.json` と同じ方式——JSON バイト列を一度構築し、
+    hash 計算と書き出しが同一バイト列を共有する `write_bytes`——へ統一した。
+    Linux では改行変換が発生しないため既存 5 周回 + 陽性対照の
+    `validation.json` はバイト単位で不変（`cmp` で確認）。
+  - **B: `rendering.target_backend` が任意文字列で通っていた**
+    （contract.md §1 は `target_backend: "external"` を型ではなくリテラル
+    値として掲載するが、記号ゲートは round 2 の型チェックのみだった）。
+    実測で両方の失敗モードを確認: `"musicgen"` は `svprpe package` が
+    `capability profile generator mismatch` で失敗し、`measure_round.py`
+    側では非構造化な未捕捉 `RuntimeError` となる（`measure_round.py` を
+    実行し exit 1 + トレースバックを直接観測）。`"suno"` はクラッシュしない
+    が（`resolve_backend_descriptor` が `"external"`/`"suno"` とも
+    `profile_key="suno"` へ解決するため capability profile は一致する）、
+    `BackendDescriptor` の `omit_body_negative`/`omit_structure_prose`/
+    `emit_section_tags` が `"external"` と異なる値へ黙って切り替わり、
+    判定器の意味論を著者に見えない形で変える（`measure_round.py` を実行し
+    exit 0 で完走することを直接観測）。両方をリテラル値違反としてゲートで
+    構造化 fail にした。
+    - **境界宣言**: `rendering.prompt_max_chars`/`rendering.priority` は
+      強制しない——contract.md §1 の rendering 節はこの 2 フィールドを
+      「固定値を推奨」「そのまま流用してよい」と明記し（`target_backend`
+      の裸のリテラルとは異なり非強制の文言）、下流のプロンプト renderer は
+      任意の int・未知の優先トークンを graceful に処理する（クラッシュ族
+      でない）。
+  負例（`"musicgen"`/`"suno"`）はいずれも記号ゲートで `fail` し
+  `where: rendering.target_backend` を報告することを確認した。既存 5 周回
+  + 陽性対照は `"external"` を著述しているため pass のまま、
+  `validation.json` が既存記録とバイト一致（`cmp` で確認、evidence 無傷）。
 
 ## 4. §5 判定と L0a への引き継ぎ
 
