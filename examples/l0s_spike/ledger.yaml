@@ -221,3 +221,28 @@ rounds:
       settings: "fresh-agent-per-round, contract-payload-only"
     off_contract_events: []
     recorded_utc: "2026-08-05T06:41:21Z"
+  - round: 5
+    accepted_pin:
+      # Acceptance-time pin, taken before the gate ran (score.yaml/intent.yaml
+      # as submitted to examples/l0s_spike/rounds/round5/). Final spike round.
+      score_sha256: "86d711f2d7d21676ce4e9660fd42afe5d8cc10fba5a70c1b7cea9d3e5db7ab0c"
+      intent_sha256: "60a24043bc9a457ae84a4bc678430b64929db50053108c76f390dbe13ecf417a"
+      recorded_utc: "2026-08-05T06:44:05Z"
+    symbolic_validation: pass
+    verdict_artifact:
+      kind: report
+      path: rounds/round5/report.json
+      sha256: "879a5846f76aa16d733c298bc2dd3d9e9d64b58fb938aee87f13fc13821eae08"
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: mismatch
+        band: measured
+        observed: ["intro", "outro"]
+    llm_run_id:
+      author_model: "claude-sonnet-5"
+      harness: "claude-code Agent tool"
+      settings: "fresh-agent-per-round, contract-payload-only"
+    off_contract_events: []
+    recorded_utc: "2026-08-05T06:45:17Z"
