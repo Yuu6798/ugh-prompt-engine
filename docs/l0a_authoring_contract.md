@@ -252,6 +252,28 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    根拠がない——将来 L0b が境界時刻を持つ新しい軸を追加する場合は、この
    ホワイトリスト（`_OBSERVED_SECTIONS_AXES`）へ軸名を明示的に追加する
    こと。
+8. **brightness の信頼帯強制**（PR #246 Codex P2 review 16 巡目、5 の
+   verdict×band 整合と同族）: 凍結信頼軸表（下記 (e) 節、
+   `config/authoring_trusted_axes_l0.yaml` の
+   `axes.brightness.band_restriction.trusted_values: [dark]`）が report
+   スキーマ側で従来強制されておらず、`brightness` 軸で `"bright"`
+   （帯外）× `verdict: "preserved"`（成功）× `band: "measured"` の組が
+   正規形として受理されてしまっていた。`AuthoringDiffReport` に
+   `brightness` 軸専用の `model_validator` を追加し、`verdict` が成功側
+   （`preserved` — 4 の `_AXIS_VERDICTS["brightness"]` により brightness
+   の成功語彙は `preserved` のみ）のとき `requirement`/`observed`（`str`
+   型の場合のみ判定）が `_TRUSTED_BRIGHTNESS_VALUES = frozenset({"dark"})`
+   に含まれることを強制する。**失敗側 verdict（`deviated`）は帯外でも
+   引き続き受理**（「帯外だから保持されていないと正直に報告する」経路を
+   塞がない、5 の失敗側許容方針と同じ理由）。**ドリフト検出**:
+   `report.py` は `trusted_axes.py`（さらにその出典計器）への import
+   循環を避けるためこの値をハードコード定数として複製する——
+   `tests/test_trusted_axes.py::
+   test_report_trusted_brightness_values_matches_derived_trusted_axes` が
+   「`report.py` の定数 == `derive_trusted_axes()` の brightness
+   `band_restriction.trusted_values`」の一致を enforce し、信頼軸表側の
+   変更に追従し忘れた場合に赤くなる（既存の「再導出 == 凍結ファイル」
+   一致テストと同型のドリフト防止）。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
 `sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を構築し、

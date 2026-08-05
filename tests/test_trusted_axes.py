@@ -108,3 +108,18 @@ def test_structure_source_instrument_references_ar4_observe():
 
 def test_derive_is_pure_and_repeatable():
     assert derive_trusted_axes() == derive_trusted_axes()
+
+
+def test_report_trusted_brightness_values_matches_derived_trusted_axes():
+    """PR #246 Codex P2 review 16 巡目: `report.py`'s
+    `_TRUSTED_BRIGHTNESS_VALUES` is a hardcoded copy of this table's
+    `axes.brightness.band_restriction.trusted_values` (avoiding an
+    authoring/-internal import cycle from report.py back into
+    trusted_axes.py). Drift guard, same "re-derive == frozen copy" shape
+    as the tests above — if the trusted band ever changes here, this test
+    fails until report.py's constant is updated to match."""
+
+    from svp_rpe.authoring.report import _TRUSTED_BRIGHTNESS_VALUES
+
+    axes = derive_trusted_axes()["axes"]
+    assert _TRUSTED_BRIGHTNESS_VALUES == frozenset(axes["brightness"]["band_restriction"]["trusted_values"])

@@ -53,6 +53,23 @@ _AXIS_VERDICTS: dict[str, frozenset[str]] = {
 # 設計されているため、将来軸が同フィールドを名乗るには明示的な追加が必要。
 _OBSERVED_SECTIONS_AXES: frozenset[str] = frozenset({"structure"})
 
+# brightness の信頼帯（PR #246 Codex P2 review 16 巡目）。出典 =
+# `config/authoring_trusted_axes_l0.yaml` の `axes.brightness.
+# band_restriction.trusted_values`（凍結信頼軸表。導出元は
+# `src/svp_rpe/authoring/trusted_axes.py:_BAND_RESTRICTIONS["brightness"]`）
+# ——bright 帯は演奏者の押し込み不足が正本 §5 で実測済みのため、dark 帯
+# のみを信頼する。**ハードコード定数にする理由**: `report.py` が
+# `trusted_axes.py`（さらにその出典計器）を import すると
+# `authoring/` パッケージ内に望まない依存循環が生まれるため、値をここへ
+# 複製する。**ドリフト検出**: `tests/test_trusted_axes.py::
+# test_report_trusted_brightness_values_matches_derived_trusted_axes` が
+# 「この定数 == `derive_trusted_axes()` の brightness `band_restriction.
+# trusted_values`」の一致を enforce する（`test_trusted_axes.py` 既存の
+# 「再導出 == 凍結ファイル」一致テストと同型のドリフト防止）。信頼軸表
+# 側（`trusted_axes.py`/凍結 YAML）を変更したら、この定数も同期して
+# 更新すること——同期を怠るとこのドリフトテストが赤くなる。
+_TRUSTED_BRIGHTNESS_VALUES: frozenset[str] = frozenset({"dark"})
+
 # 白リスト（観測③）。新規 kind を追加する際はこの Literal とモジュール
 # docstring の一覧を両方更新すること。
 AuthoringNoteKind = Literal["position_match_rate"]
@@ -253,6 +270,23 @@ class AuthoringDiffReport(BaseModel):
     report スキーマは軸集合そのものを固定しないという既存方針
     （docstring 上段）を維持するため。
 
+    brightness の信頼帯強制（PR #246 Codex P2 review 16 巡目、8 巡目 B の
+    verdict×band 整合と同族——凍結信頼軸表 `config/authoring_trusted_axes_l0.
+    yaml` の `axes.brightness.band_restriction`（`trusted_values: [dark]`）
+    が report スキーマ側で従来強制されておらず、`brightness` 軸で
+    `"bright"`（帯外）× `verdict: "preserved"`（成功）× `band: "measured"`
+    の組が正規形として受理されてしまっていた）: `brightness` 軸の
+    `verdict` が成功側（`preserved`——7 巡目 A の `_AXIS_VERDICTS["brightness"]`
+    により `brightness` の成功語彙は `preserved` のみ）のとき、`requirement`/
+    `observed`（`str` 型の場合のみ判定——`AxisReport` はこれらを `Any` の
+    まま運ぶ設計のため、非 `str` 値は帯域判定の対象外で従来どおり通す）が
+    `_TRUSTED_BRIGHTNESS_VALUES`（`{"dark"}`）に含まれることを強制する。
+    成功 verdict は 8 巡目 B により既に `band == "measured"` が必須のため、
+    本ガードは実質「`measured` × `preserved` × 帯外」の遮断になる。
+    **失敗側 verdict は帯外でも受理したまま**（`deviated` で「帯外だから
+    保持されていないと正直に報告する」経路——8 巡目 B の失敗側許容方針と
+    同じ理由で塞がない）。
+
     `observed_sections` の軸限定（PR #246 Codex P2 review 13 巡目 + 14 巡目、
     7 巡目 A と同族の軸不整合）: `AxisReport.observed_sections` は
     「structure 軸の境界時刻」として文書化・設計されたフィールド
@@ -319,6 +353,24 @@ class AuthoringDiffReport(BaseModel):
                 errors.append(
                     f"axes[{axis_name!r}].verdict={axis_report.verdict!r} is not valid for "
                     f"axis {axis_name!r} (allowed: {sorted(allowed)!r})"
+                )
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
+
+    @model_validator(mode="after")
+    def _brightness_success_requires_trusted_band(self) -> Self:
+        axis_report = self.axes.get("brightness")
+        if axis_report is None or axis_report.verdict not in _SUCCESS_VERDICTS:
+            return self
+        errors = []
+        for field_name, value in (("requirement", axis_report.requirement), ("observed", axis_report.observed)):
+            if isinstance(value, str) and value not in _TRUSTED_BRIGHTNESS_VALUES:
+                errors.append(
+                    f"axes['brightness'].{field_name}={value!r} is outside the trusted band "
+                    f"{sorted(_TRUSTED_BRIGHTNESS_VALUES)!r} (config/authoring_trusted_axes_l0."
+                    "yaml axes.brightness.band_restriction) — a success verdict cannot be "
+                    "claimed for an untrusted value per D5's band-annotation discipline"
                 )
         if errors:
             raise ValueError("; ".join(errors))

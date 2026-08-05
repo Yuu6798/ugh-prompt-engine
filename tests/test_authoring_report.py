@@ -334,6 +334,73 @@ def test_authoring_diff_report_accepts_any_frozen_verdict_for_unknown_axis():
     assert report.axes["tempo_stability"].verdict == "mismatch"
 
 
+def test_authoring_diff_report_rejects_brightness_preserved_with_bright_requirement():
+    """PR #246 Codex P2 review 16 巡目: the frozen trusted-axis table
+    (`config/authoring_trusted_axes_l0.yaml` axes.brightness.
+    band_restriction) trusts only the `dark` band — a `brightness` axis
+    claiming `verdict='preserved'` (success) with an out-of-band
+    `requirement` value ('bright') must be rejected, even though `band`
+    itself says 'measured'."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "brightness": AxisReport(
+                    requirement="bright", observed="dark", verdict="preserved", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_rejects_brightness_preserved_with_bright_observed():
+    """Same family, but the out-of-band value is on `observed` instead of
+    `requirement` — both fields are checked independently."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "brightness": AxisReport(
+                    requirement="dark", observed="bright", verdict="preserved", band="measured"
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_brightness_preserved_with_dark():
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "brightness": AxisReport(
+                requirement="dark", observed="dark", verdict="preserved", band="measured"
+            )
+        },
+    )
+    assert report.axes["brightness"].verdict == "preserved"
+
+
+def test_authoring_diff_report_accepts_brightness_deviated_with_bright():
+    """Regression guard: the failure-side verdict (`deviated`) is not
+    blocked by the trusted-band restriction — an honest "off-band, not
+    preserved" report must still be constructible (same posture as 8 巡目
+    B's verdict×band rule: only success claims are gated)."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "brightness": AxisReport(
+                requirement="dark", observed="bright", verdict="deviated", band="measured"
+            )
+        },
+    )
+    assert report.axes["brightness"].verdict == "deviated"
+
+
 def test_authoring_diff_report_rejects_observed_sections_on_key_axis():
     """PR #246 Codex P2 review 13 巡目: `observed_sections` is documented
     and schema-designed as structure-axis-only boundary evidence — a
