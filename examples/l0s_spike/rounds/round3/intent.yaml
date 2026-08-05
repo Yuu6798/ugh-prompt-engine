@@ -1,0 +1,14 @@
+round: 3
+diagnosis:
+  prior_hypothesis: "round2 は「chorus 16→8 bars への短縮」で 8 分割→6 分割に改善したが、依然 3 分割に未達"
+  observed_pattern: "round2 の観測列 [intro, verse, bridge, chorus, chorus, outro] のうち先頭 intro と末尾 outro は宣言どおり単一ラベルに収束済み。断片化は宣言 chorus 区間（8 bars, physical: full energy のみ）に集中し、そこだけ 4 ラベルに分裂している"
+  reinterpretation: "intro/outro は認識語 (sparse/low density/sub bass/no kick, release) により低エネルギー・低音色複雑度で推移し、境界検出器が内部変化を拾いにくい。一方 chorus は full energy かつ和声指定なし（既定進行）のため、区間内で複数回のコード変化が生じ、それぞれが音色/エネルギーの変化点として誤って新セクション境界と判定されていると推測する（intent v2 で立てたリスク仮説が的中したとみる）"
+  root_cause_shift: "duration（長さ）ではなく harmony（和声変化の頻度）が断片化の主因、という仮説に切り替える"
+this_round_change:
+  action: "events.chord_progression を D minor 固定 1 和音の反復（4 エントリすべて同一）に指定し、曲全体で和声変化を除去する"
+  rationale: "セクション単位の和声指定は契約上サポートされないため、曲全体を単一和音にすることで chorus 区間の内部和声変化イベントを消し、intro/outro で機能した「認識語による低複雑度化」を chorus にも和声面から適用する"
+  kept_unchanged: "bars は 8/8/8 のまま据え置き（duration 要因を切り分けて検証するため、和声変化のみを単一変数として変更）。intro/outro の physical 認識語、bpm/key/brightness/stereo_width は preserved 済みのため変更しない"
+risk:
+  - "単一和音化により chorus の full energy 感が薄れ、intro との対比が弱まり逆に境界検出が甘くなる（intro/outro/chorus の 3 分割自体が成立しなくなる）リスクがある"
+  - "外れた場合の次周方針: bars をさらに短縮する（duration 仮説の再検証）か、または全曲を通じて active_rate_target レンジを圧縮し密度変化を抑える方向を検討する"
+tools_used: none
