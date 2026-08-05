@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal, Optional, Self
 
@@ -26,9 +27,27 @@ class FieldSpec(BaseModel):
     `enum`/`literal`/`format`/`min` は `type` が先に確認された（値が実際に
     その型である）場合のみ適用される—— 型違反とこれらの二次制約違反を
     二重報告しない、という `validate_score.py` の非重複規約をそのまま踏襲
-    する。`min`（PR #246 Codex P2 2 巡目）は `type: int` のみに適用され、
-    その他の `type` と併用すると spec 自体が `AuthoringContractSpec` 検証で
-    拒否される（後述）。
+    する。
+
+    型 × 制約の対応は spec ロード時（`model_validator`）に強制する
+    （PR #246 Codex P2 review 3 巡目: 未検証だと `authoring/validate.py`
+    側の `_check_field` が誤った型へ `re.fullmatch`/列挙比較を適用し、
+    非構造化クラッシュや常に false になる無意味な制約を生みうる）:
+
+    - `min`（2 巡目）は `type: int` のみに適用可（他 `type` との併用は拒否）。
+    - `enum`/`literal`/`format`（3 巡目、`min` と同型のガードへ拡張）は
+      `type: str` のみに適用可——`enum`/`literal` は `int`/`list_str` へ
+      付与しても実行時クラッシュはしない（型不一致の比較が常に false に
+      なるだけ）が、`format` は `type: int` の実値（int）へ
+      `re.fullmatch(pattern, value)` を呼ぶと `TypeError` で
+      非構造化クラッシュする——3 者とも「str 専用」という同じ意味論の
+      制約なので一貫性のため揃って `type: str` 限定にする。
+    - `format` 自体の正規表現も spec ロード時に `re.compile` して検証する
+      （不正な正規表現、例 `format: '['`、は `re.error` ではなく
+      `ValidationError` として exit 2 の運用エラーに落ちる——コンパイル
+      結果はキャッシュしない: この spec は起動時に 1 度だけ読まれ、
+      `validate.py` 側の `re.fullmatch` 呼び出し頻度もフィールド単位で
+      小さいため、決定論と実装の単純さを優先しキャッシュは省略する）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -43,6 +62,25 @@ class FieldSpec(BaseModel):
     def _min_requires_int_type(self) -> Self:
         if self.min is not None and self.type != "int":
             raise ValueError(f"min is only valid for type='int' fields (got type={self.type!r})")
+        return self
+
+    @model_validator(mode="after")
+    def _enum_literal_format_require_str_type(self) -> Self:
+        if self.type != "str":
+            for name, value in (("enum", self.enum), ("literal", self.literal), ("format", self.format)):
+                if value is not None:
+                    raise ValueError(
+                        f"{name} is only valid for type='str' fields (got type={self.type!r})"
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def _format_must_be_a_valid_regex(self) -> Self:
+        if self.format is not None:
+            try:
+                re.compile(self.format)
+            except re.error as exc:
+                raise ValueError(f"format is not a valid regular expression: {exc}") from exc
         return self
 
 

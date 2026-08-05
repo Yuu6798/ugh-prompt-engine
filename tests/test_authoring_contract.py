@@ -174,6 +174,50 @@ def test_field_spec_rejects_min_on_non_int_type():
         FieldSpec(type="str", min=1)
 
 
+def test_field_spec_rejects_invalid_regex_format():
+    """PR #246 Codex P2 review 3 巡目: `format` は spec ロード時に
+    `re.compile` で検証する——不正な正規表現（例 `'['`）は spec ロード時に
+    `ValidationError` として拒否され、後段 `validate.py` の
+    `re.fullmatch` が `re.error` で非構造化クラッシュするのを防ぐ。"""
+
+    with pytest.raises(ValidationError):
+        FieldSpec(type="str", format="[")
+
+
+def test_field_spec_accepts_valid_regex_format():
+    spec = FieldSpec(type="str", format="^[0-9]+$")
+    assert spec.format == "^[0-9]+$"
+
+
+def test_field_spec_rejects_format_on_non_str_type():
+    """PR #246 Codex P2 review 3 巡目: `format` を `type: int` へ付与すると、
+    実値（int）へ `re.fullmatch(pattern, value)` が呼ばれ `TypeError` で
+    非構造化クラッシュしうる——`min` と同型のガードを `type: str` 限定へ
+    拡張する。"""
+
+    with pytest.raises(ValidationError):
+        FieldSpec(type="int", format="^[0-9]+$")
+
+    with pytest.raises(ValidationError):
+        FieldSpec(type="list_str", format="^[0-9]+$")
+
+
+def test_field_spec_rejects_enum_on_non_str_type():
+    with pytest.raises(ValidationError):
+        FieldSpec(type="int", enum=["a", "b"])
+
+
+def test_field_spec_rejects_literal_on_non_str_type():
+    with pytest.raises(ValidationError):
+        FieldSpec(type="list_str", literal="x")
+
+
+def test_field_spec_accepts_enum_literal_format_on_str_type():
+    assert FieldSpec(type="str", enum=["a", "b"]).enum == ["a", "b"]
+    assert FieldSpec(type="str", literal="external").literal == "external"
+    assert FieldSpec(type="str", format="^[0-9]+$").format == "^[0-9]+$"
+
+
 def test_packaged_contract_config_matches_repo_config(monkeypatch: pytest.MonkeyPatch):
     """`config/` <-> `src/svp_rpe/config/` sync (enforced generally by
     tests/test_config.py's dynamic glob comparison; this is a targeted

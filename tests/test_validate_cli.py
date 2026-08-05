@@ -339,6 +339,48 @@ def test_list_yaml_contract_exits_2(tmp_path: Path):
     assert result.exit_code == 2, result.output
 
 
+_MINIMAL_CONTRACT_SKELETON: dict[str, Any] = {
+    "schema_version": "authoring-contract/1.0",
+    "top_level": {"allowed_keys": ["meta"]},
+    "semantic": {"allowed_keys": []},
+    "grv": {"allowed_keys": []},
+    "delta_e": {"allowed_keys": []},
+    "physical": {"allowed_keys": []},
+    "structure_section": {"allowed_keys": []},
+    "rendering": {"allowed_keys": []},
+    "events": {"allowed_keys": []},
+    "chord": {"allowed_keys": []},
+}
+
+
+def _write_contract(tmp_path: Path, meta_title_field: dict[str, Any]) -> Path:
+    contract = dict(_MINIMAL_CONTRACT_SKELETON)
+    contract["meta"] = {"allowed_keys": ["title"], "fields": {"title": meta_title_field}}
+    path = tmp_path / "contract.yaml"
+    path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_invalid_regex_format_contract_exits_2(tmp_path: Path):
+    """PR #246 Codex P2 review 3 巡目: `format: '['`（不正な正規表現）を
+    含む `--contract` spec は、後段 `re.fullmatch` の `re.error` ではなく
+    spec ロード時の `ValidationError` → exit 2 として拒否される。"""
+
+    contract_path = _write_contract(tmp_path, {"type": "str", "format": "["})
+    result = _invoke(str(POSITIVE_CONTROL_PATH), "--contract", str(contract_path))
+    assert result.exit_code == 2, result.output
+
+
+def test_format_on_int_field_contract_exits_2(tmp_path: Path):
+    """PR #246 Codex P2 review 3 巡目: `format` を `type: int` フィールドへ
+    付与した spec は、実値へ `re.fullmatch` を呼んで `TypeError` になる前に
+    spec ロード時の `ValidationError` → exit 2 として拒否される。"""
+
+    contract_path = _write_contract(tmp_path, {"type": "int", "format": "^[0-9]+$"})
+    result = _invoke(str(POSITIVE_CONTROL_PATH), "--contract", str(contract_path))
+    assert result.exit_code == 2, result.output
+
+
 def test_invalid_score_yaml_parse_failure_still_exits_1_not_2(tmp_path: Path):
     """Asymmetry check (Codex P2 review, PR #246): an unparseable *score* is
     the artifact under test failing — `fail`/exit `1` — while an unparseable
