@@ -353,6 +353,63 @@ t2:
         ペイロード内で導出可能（round 2 intent が round 1 の境界秒を引用
         しており、round 2 報告と数値照合できる）ため契約外情報の注入では
         ないが、コーディネーターによる要約注記であることをここに開示する。
+    - round: 3
+      date: "2026-08-05"
+      author: >-
+        情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
+        T2 課題文 + contract.md v1 + round 2 の自作 score/intent + round 2
+        差分報告 + coordinator 注記（round 1/2 境界同一というペイロード内
+        導出可能事実の要約）。ツール使用の実測 = 0 回 — off-contract
+        イベントなし。
+      files:
+        score:
+          path: rounds_t2/round3/score.yaml
+          sha256: "2284dcc099b5f5a8702b40325d35baa38539be35d568baf1697be7d55b1e2435"
+          git_blob_sha1: "bcb4b1b71bed4a4032e7136034c7e798dd409a86"
+        intent:
+          path: rounds_t2/round3/intent.yaml
+          sha256: "06a585686befc52ac6c3b79ccd338d0e5474e0cd8b63eaecd8a8ad435c3b1d03"
+        report:
+          path: rounds_t2/round3/report.json
+          sha256: "7bbdbaa4aeec74c6f7c0b20f115d5faa56e93c8842c9e133ca9f1a16c0f0dbd5"
+        pareto_vs_round2:
+          path: rounds_t2/round3/pareto_vs_round2.json
+          sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+          note: >-
+            Byte-identical to round 2's pareto_vs_round1.json — expected:
+            both round pairs have identical per-axis distances (0/0/1 ->
+            0/0/1), and the evaluator's JSON output contains only those
+            numbers, so the tie verdict serializes to the same bytes.
+      workdir_note: "Scratch workdir = build/l0b/t2_round3/ (not committed)."
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+          observed_sections:
+            - {label: "intro", start_seconds: 0.0, end_seconds: 19.7137}
+            - {label: "chorus", start_seconds: 19.7137, end_seconds: 24.7989}
+            - {label: "outro", start_seconds: 24.7989, end_seconds: 40.0}
+      notes:
+        - {kind: position_match_rate, value: 0.5}
+      pareto_vs_prev:
+        improved: false
+        band_excluded: false
+        per_axis_summary: "key 0->0 / brightness 0->0 / structure 1->1 — tie（2 連続）。"
+      interpretation: >-
+        著者はレバーをトークンから長さへ転換（intro/outro を 5 bars =
+        12.5s に延長、総尺 40s）。結果、絶対境界秒は移動したが相対
+        パターンは round 1/2 と同型のまま: 検出境界は 2 つのみで、
+        chorus1/chorus2 境界（sub bass 消失点、宣言 20.0s → 観測
+        19.7137s）と chorus2 末尾 2.70s 手前（宣言 27.5s → 観測
+        24.7989s）。intro/chorus1 境界（宣言 12.5s）は対比強化（round 2）
+        でも長さ延長（round 3）でも一度も検出されず。長さ仮説は反証され、
+        「検出器が有効応答する対比はスペクトル差（sub bass 有無）のみ」
+        という著者仮説が残存 — round 4 は周波数領域コントラストへの転換を
+        著者自身が予告している。
 
 rounds:
   - round: 1

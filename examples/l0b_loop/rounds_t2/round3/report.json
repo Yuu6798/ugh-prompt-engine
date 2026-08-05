@@ -1,0 +1,59 @@
+{
+  "axes": {
+    "brightness": {
+      "band": "measured",
+      "observed": "dark",
+      "requirement": "dark",
+      "verdict": "preserved"
+    },
+    "key": {
+      "band": "measured",
+      "observed": "D minor",
+      "requirement": "D minor",
+      "verdict": "preserved"
+    },
+    "structure": {
+      "band": "measured",
+      "observed": [
+        "intro",
+        "chorus",
+        "outro"
+      ],
+      "observed_sections": [
+        {
+          "end_seconds": 19.7137,
+          "label": "intro",
+          "start_seconds": 0.0
+        },
+        {
+          "end_seconds": 24.7989,
+          "label": "chorus",
+          "start_seconds": 19.7137
+        },
+        {
+          "end_seconds": 40.0,
+          "label": "outro",
+          "start_seconds": 24.7989
+        }
+      ],
+      "requirement": [
+        "intro",
+        "chorus",
+        "chorus",
+        "outro"
+      ],
+      "verdict": "mismatch"
+    }
+  },
+  "notes": [
+    {
+      "kind": "position_match_rate",
+      "value": 0.5
+    }
+  ],
+  "round": 3,
+  "schema_version": "authoring-diff-report/1.0",
+  "symbolic_validation": {
+    "status": "pass"
+  }
+}
