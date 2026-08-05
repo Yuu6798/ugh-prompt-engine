@@ -118,8 +118,12 @@ LLM（差し替え可能）
   │  エラーは機械可読の構造化リストで LLM へ返す（行き先粒度: セクション+フィールド）
   │  不合格の場合も validation.json を hash し失敗周回として dated 記録
   ▼
-[3] 実行と計測（既存部品、新規実装なし）
+[3] 実行と計測（既存部品中心）
   │  perform（決定論演奏）→ extract → score-adherence / R0 比較 / （L0c で M3）
+  │  構造軸のみ追加配線: 提出 score.yaml から section_map sidecar を決定論導出して
+  │  pin し、`svprpe observe`（AR4 structure domain）で判定する（R0 診断と
+  │  score-adherence は構造フィールドを扱わないため。導出器の実体は L0-s で確認し
+  │  L0a で契約に凍結する。導出物も D1 の pin 既定則の対象）
   ▼
 [4] 差分報告生成
   │  軸別・セクション別 evidence + 帯域注釈 + intent 参照（生データは含めない: D6）
