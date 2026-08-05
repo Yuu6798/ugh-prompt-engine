@@ -422,6 +422,52 @@ def test_authoring_diff_report_accepts_axes_without_observed_sections():
     assert report.axes["structure"].observed_sections is None
 
 
+def test_authoring_diff_report_rejects_explicit_empty_observed_sections_on_key_axis():
+    """PR #246 Codex P2 review 14 巡目: closes the truthy-check gap in 13
+    巡目's guard — same pattern as 5 巡目's `errors: []` slip-through. An
+    explicit empty list `observed_sections: []` is falsy but not `None`,
+    and the original `if axis_report.observed_sections` check let it pass
+    on non-structure axes. Must now be rejected identically to a
+    non-empty list."""
+
+    with pytest.raises(ValidationError):
+        AuthoringDiffReport(
+            round=1,
+            symbolic_validation=SymbolicValidationResult(status="pass"),
+            axes={
+                "key": AxisReport(
+                    requirement="D minor",
+                    observed="D minor",
+                    verdict="preserved",
+                    band="measured",
+                    observed_sections=[],
+                )
+            },
+        )
+
+
+def test_authoring_diff_report_accepts_explicit_empty_observed_sections_on_structure_axis():
+    """Regression guard: 14 巡目's fix only tightens non-structure axes —
+    the `structure` axis's own behavior (accepting `None`/`[]`/non-empty)
+    is intentionally unchanged (13 巡目 behavior preserved), so as not to
+    over-constrain before L0b wires a real producer."""
+
+    report = AuthoringDiffReport(
+        round=1,
+        symbolic_validation=SymbolicValidationResult(status="pass"),
+        axes={
+            "structure": AxisReport(
+                requirement=["intro"],
+                observed=["intro"],
+                verdict="mismatch",
+                band="measured",
+                observed_sections=[],
+            )
+        },
+    )
+    assert report.axes["structure"].observed_sections == []
+
+
 def test_axis_report_rejects_preserved_verdict_outside_measured_band():
     """PR #246 Codex P2 review 8 巡目 B: a success verdict (`preserved`/
     `exact_match`) must not smuggle past D5's band-annotation discipline by

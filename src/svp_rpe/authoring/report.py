@@ -253,20 +253,29 @@ class AuthoringDiffReport(BaseModel):
     report スキーマは軸集合そのものを固定しないという既存方針
     （docstring 上段）を維持するため。
 
-    `observed_sections` の軸限定（PR #246 Codex P2 review 13 巡目、7 巡目 A
-    と同族の軸不整合）: `AxisReport.observed_sections` は「structure 軸の
-    境界時刻」として文書化・設計されたフィールド（`ObservedSection`
-    docstring 参照）だが、`AxisReport` 単体は軸名を知らないため、
-    `axes["key"].observed_sections` のような軸不整合な組み合わせを構成
-    できてしまう。`AuthoringDiffReport` 側で軸名が `"structure"` の場合の
-    みこのフィールドの非 None/非空値を許容し、`"structure"` 以外（`key`/
-    `brightness`、および 7 巡目の verdict 語彙とは異なり**未知軸も含む**）
-    では拒否する。**7 巡目との線引き**: `_AXIS_VERDICTS` の未知軸許容は
-    「verdict という汎用語彙は将来軸でも意味を持ちうる」という判断だが、
-    `observed_sections` は verdict のような汎用語彙ではなく `structure`
-    軸の境界時刻という**スキーマ自体が構造軸固有**のフィールドであり、
-    未知軸がこれを名乗る根拠がない——将来 L0b が境界時刻を持つ新しい軸を
-    追加する場合は、このホワイトリスト（`_OBSERVED_SECTIONS_AXES`）へ
+    `observed_sections` の軸限定（PR #246 Codex P2 review 13 巡目 + 14 巡目、
+    7 巡目 A と同族の軸不整合）: `AxisReport.observed_sections` は
+    「structure 軸の境界時刻」として文書化・設計されたフィールド
+    （`ObservedSection` docstring 参照）だが、`AxisReport` 単体は軸名を
+    知らないため、`axes["key"].observed_sections` のような軸不整合な
+    組み合わせを構成できてしまう。`AuthoringDiffReport` 側で軸名が
+    `"structure"` の場合のみこのフィールドの非 `None` 値を許容し、
+    `"structure"` 以外（`key`/`brightness`、および 7 巡目の verdict 語彙
+    とは異なり**未知軸も含む**）では拒否する。判定は `is not None` の
+    厳密比較（14 巡目で truthy 判定 `if axis_report.observed_sections` から
+    修正——5 巡目の `SymbolicValidationResult` の `errors: []` 素通り
+    バグと同型のパターン: 明示的な空リスト `observed_sections: []` は
+    falsy だが `None` ではなく、truthy 判定では構造軸以外でも素通り・
+    `exclude_none` の再 dump でそのまま出力されてしまう。「正規形ガードは
+    truthy 判定でなく `is None`/`is not None` の厳密比較を使う」という
+    教訓は本モジュール内で複数回踏んでおり、今後このパターンで新規ガードを
+    追加する際は truthy 判定を避けること）。**7 巡目との線引き**:
+    `_AXIS_VERDICTS` の未知軸許容は「verdict という汎用語彙は将来軸でも
+    意味を持ちうる」という判断だが、`observed_sections` は verdict のような
+    汎用語彙ではなく `structure` 軸の境界時刻という**スキーマ自体が構造軸
+    固有**のフィールドであり、未知軸がこれを名乗る根拠がない——将来 L0b が
+    境界時刻を持つ新しい軸を追加する場合は、このホワイトリスト
+    （`_OBSERVED_SECTIONS_AXES`）へ
     軸名を明示的に追加すること。
 
     `symbolic_validation.status`×`axes`×`notes` の provenance 整合（PR #246
@@ -319,7 +328,7 @@ class AuthoringDiffReport(BaseModel):
     def _observed_sections_are_structure_only(self) -> Self:
         errors = []
         for axis_name, axis_report in self.axes.items():
-            if axis_report.observed_sections and axis_name not in _OBSERVED_SECTIONS_AXES:
+            if axis_report.observed_sections is not None and axis_name not in _OBSERVED_SECTIONS_AXES:
                 errors.append(
                     f"axes[{axis_name!r}].observed_sections is not valid for axis "
                     f"{axis_name!r} — observed_sections is structure-only "

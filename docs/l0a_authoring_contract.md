@@ -203,18 +203,26 @@ kind を新設せず既存 `range` を再利用し語彙を増やさない）。
    「全 notes 空必須」から「kind ごとに測定系/非測定系を区別する」形へ
    再設計する必要がある（現時点で非測定系 kind は存在しないため、その
    区別を先回りして作らない）。
-7. **`observed_sections` の軸限定**（PR #246 Codex P2 review 13 巡目、
-   4 の verdict×軸整合と同族の軸不整合）: `AxisReport.observed_sections`
-   は structure 軸の境界時刻としてスキーマ設計されたフィールド（上記
-   (d) 冒頭 1 参照）だが、`AxisReport` 単体は軸名を知らないため軸不整合
-   な組み合わせ（例 `axes.key.observed_sections`）を構成できてしまう。
-   `AuthoringDiffReport` が軸名 `"structure"` のときのみこのフィールドの
-   非 None/非空値を許容し、それ以外（`key`/`brightness`、および未知軸）
-   では拒否する。**4 との線引き**: 4 の verdict 語彙は未知軸を許容する
-   （汎用語彙は将来軸でも意味を持ちうるため）が、`observed_sections` は
-   構造軸固有のスキーマであり未知軸がこれを名乗る根拠がない——将来 L0b
-   が境界時刻を持つ新しい軸を追加する場合は、このホワイトリスト
-   （`_OBSERVED_SECTIONS_AXES`）へ軸名を明示的に追加すること。
+7. **`observed_sections` の軸限定**（PR #246 Codex P2 review 13 巡目 +
+   14 巡目、4 の verdict×軸整合と同族の軸不整合）: `AxisReport.
+   observed_sections` は structure 軸の境界時刻としてスキーマ設計された
+   フィールド（上記 (d) 冒頭 1 参照）だが、`AxisReport` 単体は軸名を
+   知らないため軸不整合な組み合わせ（例 `axes.key.observed_sections`）を
+   構成できてしまう。`AuthoringDiffReport` が軸名 `"structure"` のときの
+   み このフィールドの非 `None` 値を許容し、それ以外（`key`/`brightness`、
+   および未知軸）では拒否する。判定は `is not None` の厳密比較（14 巡目で
+   truthy 判定 `if axis_report.observed_sections` から修正——4〜5 の
+   `errors: []` 素通りバグと同型のパターン: 明示的な空リスト
+   `observed_sections: []` は falsy だが `None` ではなく、truthy 判定では
+   構造軸以外でも素通りしてしまう）。**structure 軸自体の挙動は不変**:
+   14 巡目の修正は非 structure 軸のみを対象とし、`structure` 軸は引き続き
+   `None`/`[]`/非空いずれも許容する（L0b が実生産器を配線する前に過剰
+   束縛しないための設計判断）。**4 との線引き**: 4 の verdict 語彙は未知軸
+   を許容する（汎用語彙は将来軸でも意味を持ちうるため）が、
+   `observed_sections` は構造軸固有のスキーマであり未知軸がこれを名乗る
+   根拠がない——将来 L0b が境界時刻を持つ新しい軸を追加する場合は、この
+   ホワイトリスト（`_OBSERVED_SECTIONS_AXES`）へ軸名を明示的に追加する
+   こと。
 
 JSON 直列化はバイト決定論（`report.py:dump_json_bytes` —
 `sort_keys=True` + 末尾改行 + UTF-8 encode 済みバイト列を構築し、
