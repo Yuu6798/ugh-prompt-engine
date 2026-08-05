@@ -5,7 +5,34 @@
 # `scripts/measure_round.py`'s `report.json`), separate from the positive
 # control (which is dry-run only and never counted as spike evidence).
 spike_id: L0S-T1
-engine_commit: "306add7914c80f1a0dd48c521100f6062c6d2846"
+# engine_state (是正 2026-08-05, Codex P2 5巡目 B レビュー): provenance を
+# content-hash 主体へ是正した。旧 engine_commit の値
+# (306add7914c80f1a0dd48c521100f6062c6d2846) は WIP ローカルコミット参照で
+# あり origin/main から到達不能だった（`git merge-base --is-ancestor
+# 306add7914c80f1a0dd48c521100f6062c6d2846 origin/main` は failure を実測）。
+# 透明性のため削除せず `superseded_engine_commit` として注記のまま残す。
+engine_state:
+  base_commit: "2334b0ba3572b0f519060d88ef0aca1eb83a4e07"
+  base_commit_note: >-
+    `git merge-base origin/main HEAD` で決定論的に確認した、origin/main
+    から実際に到達可能なコミット（main の PR #244 マージ + 直後の
+    memory wrap-up commit。件名に "(PR #244)" を含む）。
+  src_unchanged: true
+  src_unchanged_note: >-
+    本ブランチは src/ および tests/ を一切変更していない
+    （`git diff --stat 2334b0ba3572b0f519060d88ef0aca1eb83a4e07..HEAD --
+    src/ tests/` が空であることを実測確認）。
+  verification_commands:
+    - "git fetch origin main"
+    - "git merge-base origin/main HEAD"
+    - "git merge-base --is-ancestor <candidate_sha> origin/main"
+    - "git diff --stat <base_commit>..HEAD -- src/ tests/"
+  superseded_engine_commit:
+    value: "306add7914c80f1a0dd48c521100f6062c6d2846"
+    reason: >-
+      旧 engine_commit フィールドの値。WIP ローカルコミット参照であり
+      origin/main から到達不能だったため、到達可能な base_commit pin へ
+      是正した（Codex P2 5巡目 B レビュー）。
 recorded_utc: "2026-08-05T05:44:55Z"
 
 deps_lock:
@@ -31,6 +58,58 @@ pinned_inputs:
   suno_capability_profile:
     path: ../../config/capability_profiles/suno.yaml
     sha256: "343f3e84bb7e2bb4f4c945195659b3823318bf14c306774278a33ee7d116592b"
+
+runner_at_measurement:
+  # 陽性対照 + 周回 1〜5 の全計測時点で使われていた runner script /
+  # frozen fixture の blob sha256 (Codex P2 5巡目 B レビューで新設)。
+  # スクリプトは計測期間中不変のはず、という前提を裏取りするため、まず
+  # `git log --oneline <range> -- <path>` が空であること（該当パスへの
+  # 変更コミットが計測期間内に存在しない）を実測確認してから、期間内の
+  # 1 コミットの blob を `git show <commit>:<path> | sha256sum` で pin する
+  # （変更が無いと確認済みのため、期間内のどのコミットで採っても同じ blob）。
+  measurement_commit_range: "3eb25e1..4b98e7b"
+  measurement_commit_range_note: >-
+    3eb25e1 = validate_score.py / measure_round.py /
+    frozen/arrangement.yaml が最初に導入されたコミット（frozen/section_map.json
+    と frozen/eval_control_profile.yaml はさらに前の 306add7 で導入済みで、
+    以降も無変更）。4b98e7b = 周回 5（最終）計測コミット。
+    `git log --oneline 3eb25e1..4b98e7b -- <path>` はいずれの対象パスでも
+    空（この範囲でこれらのパスへの変更コミットが無い）ことを実測確認済み。
+  blob_sha256_pinned_at_commit: "4b98e7b"
+  files:
+    validate_score_py:
+      path: scripts/validate_score.py
+      sha256: "268b596974e7cbef7d8f78efbd4f042cf1f95a7407dbe5557ac3a85a6e33202d"
+    measure_round_py:
+      path: scripts/measure_round.py
+      sha256: "3e6f0d8f4f6269c16f446e1f591a0327ca509b1188771b06b142b20b225fdbbd"
+    section_map:
+      path: frozen/section_map.json
+      sha256: "a7d4330c06137117474f19ab3fae27204e7df9a00deac72cba9a0299296a83fd"
+    eval_control_profile:
+      path: frozen/eval_control_profile.yaml
+      sha256: "a5eb1847a54032c49b865a8a6834bde597c5d3ddcdf8784d05d3cce3b7e76c1e"
+    arrangement:
+      path: frozen/arrangement.yaml
+      sha256: "efa0d6db0e288ad74c330a719b28e6db224c4545b852bdbbf62bc7adeda96e5a"
+  post_spike_hardening_commits:
+    # 全計測（陽性対照 + 周回 1〜5、4b98e7b で完了）より後に
+    # validate_score.py / measure_round.py へ加えられた変更。いずれも
+    # PR #245 の Codex P2 レビュー対応で、計測時点の runner には存在しない。
+    # 遡及的な計測結果の書き換えではない — 硬化後スクリプトで陽性対照 +
+    # 全 5 周回を再計測し、report.json/validation.json が上記 pin 済み値
+    # （および各周回ディレクトリの記録済みファイル）と完全なバイト一致する
+    # ことを都度再検証済み（PR #245 各ラウンドのレビュー返信コメント参照）。
+    - commit: "12d4e26"
+      change: "validate_score.py に L0-s 公開範囲チェック（トップレベルのみ）を追加"
+    - commit: "00d06e4"
+      change: "公開範囲チェックを contract.md §1 の全階層・型・列挙へ拡張"
+    - commit: "3523cc8"
+      change: "measure_round.py / validate_score.py に書き込み前の出力衝突ガードを追加"
+    - commit: "02d8b3a"
+      change: "-o の予約生成物パス衝突を単一定数 (_reserved_workdir_paths) から導出するようリファクタリング"
+    - commit: "5db947b"
+      change: "key/brightness verdict を diagnosis 横流しから凍結要求への比較 (band==measured かつ観測値一致) へ是正"
 
 positive_control:
   # Dry-run of positive_control/score.yaml through the full observation
