@@ -4,8 +4,9 @@
 # の 2 段 commit で事前登録性を git 履歴で証明する。Design Memo = L0b-R
 # （User 方針決裁 2026-08-06: 単一 LLM 切り分け先行・複数モデル比較後回し）。
 # 正本 = docs/llm_adapter_planning.md §5（成功条件）+ 本台帳。
-# 注意: 値が "TODO_PIN" のフィールドは登録手続き中の未充填を意味する。
-# 事前登録 commit 時点で TODO_PIN が残っていてはならない（形状テストが enforce）。
+# 事前登録 commit（2026-08-06）: pin 未充填センチネルは全て実測 sha256 へ置換
+# 済み（形状テストが「本ファイル全体にセンチネル文字列が存在しないこと」を
+# enforce する）。
 
 schema_version: "l0br-ledger/0.1"
 experiment: "L0b-R"
@@ -27,7 +28,7 @@ contract_freeze:
     sha256: "b2c6cc5528bf9b77e6d64f0111e762b41f029ee25993ea99c00ccb81dca6b335"
   contract_md:
     path: ../contract.md
-    sha256: "TODO_PIN"
+    sha256: "5bab21e9694cb92a247f922c9a96db015bb87ba729ef411b9146881934debaca"
   # 実行後追記: src/ + config/ 無変更の git 検証（base..HEAD の diff --stat 空）
   src_config_diff_attestation: null
 
@@ -36,10 +37,10 @@ judge:
   # section map の sha256 は run_round.py の _FIXED_INPUT_SHA256 と同値）
   run_round:
     path: ../scripts/run_round.py
-    sha256: "TODO_PIN"
+    sha256: "dd9ca8a3975c97bfb9892a09d0108ccb3b7ccfe40680e4d4f8776b258be7b7b0"
   pareto_eval:
     path: ../scripts/pareto_eval.py
-    sha256: "TODO_PIN"
+    sha256: "4f90be5f23cce8a488974db808d1b4edff05636aeb158cfab79794b161d24faa"
   section_map:
     path: ../frozen/section_map.json
     sha256: "a7d4330c06137117474f19ab3fae27204e7df9a00deac72cba9a0299296a83fd"
@@ -61,7 +62,7 @@ author_identity:
     （実測値を周回ごとに記録）。
   wrapper:
     path: author_wrapper.md
-    sha256: "TODO_PIN"
+    sha256: "4eda8e1a2b1a2022c7a4aea090ec608d551b82d9fecd410ac3fea8f09684e6a0"
   provenance_limitations: >-
     L0b と同一: Agent ツールはモデルスナップショット文字列・サンプリング
     設定・呼び出し単位 run id を露出しないため不記録（推定補完しない）。
@@ -69,7 +70,7 @@ author_identity:
 payload_composition:
   composer:
     path: ../scripts/compose_payload.py
-    sha256: "TODO_PIN"
+    sha256: "a1bd613a646c331c866b6480cd8d827d58410acc70c8dba9005a6c1629a12dfa"
   policy: >-
     全周回の著者可視ペイロードは compose_payload.py の出力のみ
     （AGENTS.md §8「情報遮断実験のペイロード組成は機械化する」2026-08-06
@@ -79,7 +80,7 @@ payload_composition:
 
 constraint_checker:
   path: ../scripts/check_token_ban.py
-  sha256: "TODO_PIN"
+  sha256: "6f4bd8da4c47e4e82c206d2af0565151df3f8b09a40ab4854c7edc8785391971"
   banned_tokens: ["silence", "no kick", "low density", "sub bass"]
   scope: >-
     提出 score.yaml の生テキスト全文（UTF-8 デコード後・小文字化）に対する
@@ -121,7 +122,7 @@ tasks:
     registration: "task_br_d1.md"
     statement:
       path: "statement_br_d1.md"
-      sha256: "TODO_PIN"
+      sha256: "17feb99e0015c476aae3fb980ecee380b4cbd7eb7130c06e787f4cbafb4113e1"
     section_map: "../frozen/section_map_t2.json"
     token_ban: false
     positive_control:
@@ -129,38 +130,38 @@ tasks:
       note: >-
         要求が L0B-T2 と同一のため pin 済み陽性対照（../positive_control_t2/）
         を再現確認して流用。新規探索なし。
-      confirmed_utc: "TODO_PIN"
-      report_sha256: "TODO_PIN"
+      confirmed_utc: "2026-08-06"
+      report_sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
   - id: "br_d2"
     difficulty: "multi_lever_novel"
     registration: "task_br_d2.md"
     statement:
       path: "statement_br_d2.md"
-      sha256: "TODO_PIN"
+      sha256: "0e442111b3ecf1bacc0921f2fed40da31decb15ff74eb7ca8a12e024698f35a4"
     section_map: "../frozen/section_map.json"
     token_ban: true
     positive_control:
       mode: "new_search"
       dir: "positive_control_br_d2"
       max_candidates: 8
-      confirmed_utc: "TODO_PIN"
-      score_sha256: "TODO_PIN"
-      report_sha256: "TODO_PIN"
+      confirmed_utc: "2026-08-06"
+      score_sha256: "8574da0dbf6922fde21412c839c7e746cec72cc4f78afc4bcf8dceada1da27d1"
+      report_sha256: "fc4982c8f2ae977b953fdde8b2239244c2a3b515cf5ca8e0e55816776e444f51"
   - id: "br_d3"
     difficulty: "compound_interaction"
     registration: "task_br_d3.md"
     statement:
       path: "statement_br_d3.md"
-      sha256: "TODO_PIN"
+      sha256: "201823451d6f9526090347895362e93323642e254a1daf4ca50f1bc06e5ad8a3"
     section_map: "../frozen/section_map_t2.json"
     token_ban: true
     positive_control:
       mode: "new_search"
       dir: "positive_control_br_d3"
       max_candidates: 8
-      confirmed_utc: "TODO_PIN"
-      score_sha256: "TODO_PIN"
-      report_sha256: "TODO_PIN"
+      confirmed_utc: "2026-08-06"
+      score_sha256: "16ad12ba9180ace606b2a620d7c52328c8f51d7aafa8a6888d8c868c3683e1d3"
+      report_sha256: "9e4d4e340f62edd0d4ee0dd18f7b3502e1fc5441633375eb6d9cfce62e86ec75"
 
 # 実行 evidence（実行後追記。空リストは「未実行」を意味する登録時の正規状態）
 series_runs: []

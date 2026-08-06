@@ -18,6 +18,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -25,6 +26,7 @@ from types import ModuleType
 import pytest
 
 from svp_rpe.authoring.report import AuthoringDiffReport
+from svp_rpe.melody.representation import _NoDupSafeLoader
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOOP_DIR = REPO_ROOT / "examples" / "l0b_loop"
@@ -55,6 +57,10 @@ def _load_module(name: str, path: Path) -> ModuleType:
 pareto_eval = _load_module("l0b_pareto_eval", SCRIPTS_DIR / "pareto_eval.py")
 run_round = _load_module("l0b_run_round", SCRIPTS_DIR / "run_round.py")
 compose_payload = _load_module("l0b_compose_payload", SCRIPTS_DIR / "compose_payload.py")
+check_token_ban = _load_module("l0b_check_token_ban", SCRIPTS_DIR / "check_token_ban.py")
+
+BATTERY_DIR = LOOP_DIR / "battery"
+LEDGER_L0BR_PATH = BATTERY_DIR / "ledger_l0br.yaml"
 
 
 def _axis(*, verdict: str, band: str = "measured", requirement=None, observed=None) -> dict:
@@ -3006,3 +3012,325 @@ def test_compose_payload_cli_main_nonzero_exit_on_manifest_error(tmp_path: Path,
     assert exit_code == 1
     captured = capsys.readouterr()
     assert "Error:" in captured.err
+
+
+# --- check_token_ban.py (L0b-R R4 語句制約の機械判定. 正本 =
+# battery/task_br_d2.md「R4 語句制約の機械判定」節 / battery/ledger_l0br.yaml
+# constraint_checker 節) ------------------------------------------------------
+
+
+def test_check_token_ban_pass_case(tmp_path: Path):
+    score_path = tmp_path / "score.yaml"
+    content = "intro: sparse pad\nchorus: full energy strings\noutro: release into rest\n"
+    score_path.write_text(content, encoding="utf-8")
+
+    result = check_token_ban.check_token_ban(score_path)
+
+    assert result["schema_version"] == check_token_ban.SCHEMA_VERSION
+    assert result["status"] == "pass"
+    assert result["score_sha256"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
+    assert result["banned_tokens"] == list(check_token_ban.BANNED_TOKENS)
+    assert result["hits"] == {
+        "silence": 0,
+        "no kick": 0,
+        "low density": 0,
+        "sub bass": 0,
+    }
+
+    exit_code = check_token_ban.main(["--score", str(score_path)])
+    assert exit_code == 0
+
+
+def test_check_token_ban_detects_each_banned_token_case_insensitively_and_mid_word(
+    tmp_path: Path,
+):
+    """4 禁止語すべての検出を 1 課題に集約する: 大文字混じり `"SUB BASS"` /
+    `"No Kick"` が小文字化を経て検出されること、`"silenced"`（"silence" を
+    含む語）・`"low densityx"`（"low density" を含む語）が語中部分文字列と
+    して検出されることの両方を実証する。"""
+
+    score_path = tmp_path / "score.yaml"
+    content = (
+        "Verse one: gentle synths.\n"
+        "SUB BASS drone under the pad.\n"
+        "the room falls to silence, then silenced completely.\n"
+        "no kick on beat one; No Kick on beat three.\n"
+        "low density strings, extra low densityx padding.\n"
+    )
+    score_path.write_text(content, encoding="utf-8")
+
+    result = check_token_ban.check_token_ban(score_path)
+
+    assert result["status"] == "fail"
+    assert result["hits"] == {
+        "silence": 2,
+        "no kick": 2,
+        "low density": 2,
+        "sub bass": 1,
+    }
+
+    exit_code = check_token_ban.main(["--score", str(score_path)])
+    assert exit_code == 1
+
+
+def test_check_token_ban_non_utf8_score_exits_2(tmp_path: Path, capsys):
+    score_path = tmp_path / "score.yaml"
+    score_path.write_bytes(b"\xff\xfe\x00binary garbage, not utf-8")
+
+    with pytest.raises(check_token_ban.TokenBanCheckError, match="UTF-8"):
+        check_token_ban.check_token_ban(score_path)
+
+    exit_code = check_token_ban.main(["--score", str(score_path)])
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+
+def test_check_token_ban_output_is_byte_deterministic_across_runs(tmp_path: Path):
+    score_path = tmp_path / "score.yaml"
+    score_path.write_text("intro: sparse pad\nchorus: full energy\n", encoding="utf-8")
+    out_path_1 = tmp_path / "result1.json"
+    out_path_2 = tmp_path / "result2.json"
+
+    exit_code_1 = check_token_ban.main(["--score", str(score_path), "-o", str(out_path_1)])
+    exit_code_2 = check_token_ban.main(["--score", str(score_path), "-o", str(out_path_2)])
+
+    assert exit_code_1 == 0
+    assert exit_code_2 == 0
+    assert out_path_1.read_bytes() == out_path_2.read_bytes()
+
+    payload = json.loads(out_path_1.read_text(encoding="utf-8"))
+    assert payload == {
+        "schema_version": check_token_ban.SCHEMA_VERSION,
+        "status": "pass",
+        "score_sha256": hashlib.sha256(score_path.read_bytes()).hexdigest(),
+        "banned_tokens": list(check_token_ban.BANNED_TOKENS),
+        "hits": {"silence": 0, "no kick": 0, "low density": 0, "sub bass": 0},
+    }
+    assert out_path_1.read_text(encoding="utf-8").endswith("\n")
+
+
+def test_check_token_ban_refuses_to_overwrite_existing_output(tmp_path: Path, capsys):
+    score_path = tmp_path / "score.yaml"
+    score_path.write_text("intro: sparse pad\n", encoding="utf-8")
+    out_path = tmp_path / "result.json"
+
+    exit_code_1 = check_token_ban.main(["--score", str(score_path), "-o", str(out_path)])
+    assert exit_code_1 == 0
+    stale_bytes = out_path.read_bytes()
+
+    exit_code_2 = check_token_ban.main(["--score", str(score_path), "-o", str(out_path)])
+    assert exit_code_2 == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    # Refused overwrite must leave the existing file untouched.
+    assert out_path.read_bytes() == stale_bytes
+
+
+def test_check_token_ban_cli_has_only_score_and_o_options():
+    """argparse オプションが `--score`/`-o`（+ `-h`/`--help`）のみであること
+    を parser 自体から検査する（`compose_payload.py` の
+    `test_compose_payload_cli_has_no_freeform_injection_options` と同型の
+    安全特性検査）。"""
+
+    parser = check_token_ban._build_arg_parser()
+    option_strings: set[str] = set()
+    for action in parser._actions:
+        option_strings.update(action.option_strings)
+    assert option_strings == {"-h", "--help", "--score", "-o"}
+
+
+# --- ledger_l0br.yaml shape enforcement (AGENTS.md §8「parse 可能 ≠ 形状正しい」)
+
+
+_LEDGER_TASK_IDS = ("br_d1", "br_d2", "br_d3")
+_LEDGER_FAILURE_MODE_VOCAB = ("unconverged", "missteered", "contract_defect", "instrument_band")
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _load_ledger_l0br_text() -> str:
+    return LEDGER_L0BR_PATH.read_text(encoding="utf-8")
+
+
+def _load_ledger_l0br() -> dict:
+    with LEDGER_L0BR_PATH.open(encoding="utf-8") as handle:
+        return yaml.load(handle, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
+
+
+def test_ledger_l0br_todo_pin_sentinel_absent_everywhere():
+    """凍結 enforce: 事前登録 commit 時点で `"TODO_PIN"` が本ファイルの
+    どこにも（値・コメント含め）残っていてはならない。"""
+
+    assert "TODO_PIN" not in _load_ledger_l0br_text()
+
+
+def test_ledger_l0br_top_level_keys_present():
+    ledger = _load_ledger_l0br()
+    required = (
+        "schema_version",
+        "experiment",
+        "registered_utc",
+        "route",
+        "contract_freeze",
+        "judge",
+        "author_identity",
+        "payload_composition",
+        "constraint_checker",
+        "protocol",
+        "tasks",
+        "series_runs",
+        "off_contract_events",
+    )
+    for key in required:
+        assert key in ledger, key
+    assert ledger["schema_version"] == "l0br-ledger/0.1"
+
+
+def test_ledger_l0br_protocol_shape():
+    protocol = _load_ledger_l0br()["protocol"]
+    assert protocol["round_limit"] == 5
+    assert protocol["series_per_task"] == 2
+    assert protocol["failure_mode_vocab"] == list(_LEDGER_FAILURE_MODE_VOCAB)
+
+
+def test_ledger_l0br_tasks_shape():
+    tasks = _load_ledger_l0br()["tasks"]
+    assert len(tasks) == 3
+    assert [task["id"] for task in tasks] == list(_LEDGER_TASK_IDS)
+
+    by_id = {task["id"]: task for task in tasks}
+    assert by_id["br_d1"]["difficulty"] == "single_lever_proven"
+    assert by_id["br_d2"]["difficulty"] == "multi_lever_novel"
+    assert by_id["br_d3"]["difficulty"] == "compound_interaction"
+
+    assert by_id["br_d1"]["token_ban"] is False
+    assert by_id["br_d2"]["token_ban"] is True
+    assert by_id["br_d3"]["token_ban"] is True
+
+
+def _resolve_battery_relative(relative_path: str) -> Path:
+    return (BATTERY_DIR / relative_path).resolve()
+
+
+def test_ledger_l0br_pins_match_actual_file_sha256():
+    """`ledger_l0br.yaml` に記載された sha256 pin が、対応する実ファイルの
+    実測 sha256 と一致することを assert する（捏造・貼り間違い・pin 忘れの
+    実体照合。パスは ledger 内の相対パス表記を battery/ 基準で解決する）。"""
+
+    ledger = _load_ledger_l0br()
+
+    checks: list[tuple[str, Path, str]] = []
+
+    contract_freeze = ledger["contract_freeze"]
+    for label in ("authoring_contract_l0", "authoring_trusted_axes_l0", "contract_md"):
+        entry = contract_freeze[label]
+        checks.append((f"contract_freeze.{label}", _resolve_battery_relative(entry["path"]), entry["sha256"]))
+
+    judge = ledger["judge"]
+    for label in ("run_round", "pareto_eval", "section_map", "section_map_t2"):
+        entry = judge[label]
+        checks.append((f"judge.{label}", _resolve_battery_relative(entry["path"]), entry["sha256"]))
+
+    wrapper = ledger["author_identity"]["wrapper"]
+    checks.append(
+        ("author_identity.wrapper", _resolve_battery_relative(wrapper["path"]), wrapper["sha256"])
+    )
+
+    composer = ledger["payload_composition"]["composer"]
+    checks.append(
+        (
+            "payload_composition.composer",
+            _resolve_battery_relative(composer["path"]),
+            composer["sha256"],
+        )
+    )
+
+    constraint_checker = ledger["constraint_checker"]
+    checks.append(
+        (
+            "constraint_checker",
+            _resolve_battery_relative(constraint_checker["path"]),
+            constraint_checker["sha256"],
+        )
+    )
+
+    for task in ledger["tasks"]:
+        statement = task["statement"]
+        checks.append(
+            (
+                f"tasks[{task['id']}].statement",
+                _resolve_battery_relative(statement["path"]),
+                statement["sha256"],
+            )
+        )
+
+    for task_id in ("br_d2", "br_d3"):
+        task = next(t for t in ledger["tasks"] if t["id"] == task_id)
+        pc = task["positive_control"]
+        pc_dir = BATTERY_DIR / pc["dir"]
+        checks.append(
+            (f"tasks[{task_id}].positive_control.score", pc_dir / "score.yaml", pc["score_sha256"])
+        )
+        checks.append(
+            (f"tasks[{task_id}].positive_control.report", pc_dir / "report.json", pc["report_sha256"])
+        )
+
+    assert checks, "no pin entries collected — test would vacuously pass"
+    for label, path, expected_sha256 in checks:
+        assert path.is_file(), f"{label}: pinned path does not exist: {path}"
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert actual_sha256 == expected_sha256, f"{label}: sha256 mismatch for {path}"
+
+
+def _assert_round_entry_shape(round_entry: dict) -> None:
+    assert isinstance(round_entry.get("round"), int) and round_entry["round"] >= 1
+    for field in (
+        "payload_manifest_sha256",
+        "payload_sha256",
+        "score_sha256",
+        "intent_sha256",
+        "report_sha256",
+    ):
+        value = round_entry[field]
+        assert isinstance(value, str) and _SHA256_HEX_RE.fullmatch(value), field
+    token_ban = round_entry["token_ban"]
+    assert token_ban is None or token_ban in ("pass", "fail")
+    assert isinstance(round_entry.get("author_tool_use"), int) and round_entry["author_tool_use"] >= 0
+    assert isinstance(round_entry.get("verdicts"), dict)
+
+
+def _assert_series_entry_shape(series_entry: dict) -> None:
+    assert series_entry["task"] in _LEDGER_TASK_IDS
+    assert isinstance(series_entry["series"], str)
+    rounds = series_entry["rounds"]
+    assert isinstance(rounds, list) and rounds
+    for round_entry in rounds:
+        _assert_round_entry_shape(round_entry)
+
+    assert series_entry["outcome"] in ("reached", "unreached")
+    rounds_to_success = series_entry["rounds_to_success"]
+    assert rounds_to_success is None or (
+        isinstance(rounds_to_success, int) and rounds_to_success >= 1
+    )
+    failure_mode = series_entry["failure_mode"]
+    assert failure_mode is None or failure_mode in _LEDGER_FAILURE_MODE_VOCAB
+
+
+def test_ledger_l0br_series_runs_and_off_contract_events_are_lists():
+    """`series_runs`/`off_contract_events` はいずれも list であること
+    （不在チェックではなく型チェック）。事前登録時点は両方とも空 list が
+    正規状態であり、それ自体が合格条件（AGENTS.md §8「truthy 判定を正規形
+    ガードに使わない」則: 空 list を「未検査」として skip するのではなく、
+    ここで明示的に「空 list は合格」と判定してから、非空の場合の形状を別途
+    enforce する)。"""
+
+    ledger = _load_ledger_l0br()
+
+    series_runs = ledger["series_runs"]
+    assert isinstance(series_runs, list)
+    off_contract_events = ledger["off_contract_events"]
+    assert isinstance(off_contract_events, list)
+
+    # 現在の事前登録状態は「未実行」— 空であること自体は失敗ではない。
+    for series_entry in series_runs:
+        _assert_series_entry_shape(series_entry)
