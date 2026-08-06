@@ -1,0 +1,59 @@
+meta:
+  title: "Dark Study in D Minor, Round Three"
+  version: "0.3"
+
+semantic:
+  core: "a brooding instrumental built on a single dark minor-key hook, stated twice, then let go"
+  grv:
+    primary: "minimal"
+    secondary: "cinematic"
+  delta_e:
+    overall: "a near-empty opening gives way sharply to a full hook stated twice, then eases back to a quiet close"
+  avoid: []
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: intro
+    bars: 3
+    role: "a near-empty opening that sets the dark minor tonal center before the hook enters"
+    physical: "rest"
+  - section: chorus
+    bars: 3
+    role: "first full statement of the main hook at full energy"
+    physical: "full energy"
+  - section: chorus
+    bars: 3
+    role: "second statement of the same hook at full energy"
+    physical: "full energy"
+  - section: outro
+    bars: 3
+    role: "closing statement that lets the hook go"
+    physical: "release"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure
+
+events:
+  chord_progression:
+    - root: "D"
+      quality: "minor"
+    - root: "G"
+      quality: "minor"
+    - root: "A"
+      quality: "major"
+    - root: "D"
+      quality: "minor"
