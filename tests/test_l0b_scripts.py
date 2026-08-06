@@ -1378,6 +1378,240 @@ def test_run_round_rejects_judge_input_copy_drift_before_publish_on_symbolic_fai
     assert not (workdir / "hashes.json").exists()
 
 
+# --- PR #247 Codex review round 25, P1: M1 pre-publish recorded-artifact ---
+# --- re-verification (family terminus) --------------------------------------
+
+
+def _staged_recorded_artifacts(paths: dict) -> dict[str, str]:
+    """Writes deterministic stub bytes to every workdir path
+    `_RECORDED_ARTIFACT_PATH_KEYS` names (mirrors `_staged_verified_inputs`'s
+    role for the L1 tests above) and returns the `hashes`-shaped dict that
+    matches those bytes — the tests below can hand this straight to
+    `_reject_recorded_artifact_drift` without running the real pipeline."""
+    paths["package_dir"].mkdir(parents=True, exist_ok=True)
+    hashes: dict[str, str] = {}
+    for hash_key, path_key in run_round._RECORDED_ARTIFACT_PATH_KEYS.items():
+        artifact_path = paths[path_key]
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        content = f"{hash_key}-stub-bytes\n".encode("utf-8")
+        artifact_path.write_bytes(content)
+        hashes[hash_key] = run_round._sha256_bytes(content)
+    return hashes
+
+
+def test_recorded_artifact_drift_error_is_a_judge_input_drift_error():
+    """`RecordedArtifactDriftError` must subclass `JudgeInputDriftError` (in
+    turn a `ProtectedPathError`) — module docstring's "M1" section — so
+    `main()`'s existing `except ProtectedPathError` handling catches it
+    unchanged, same as every other preflight/pre-publish guard's error."""
+    assert issubclass(run_round.RecordedArtifactDriftError, run_round.JudgeInputDriftError)
+    assert issubclass(run_round.RecordedArtifactDriftError, run_round.ProtectedPathError)
+
+
+def test_recorded_artifact_path_keys_cover_every_hashes_key_run_round_sets(tmp_path: Path):
+    """Regression guard for the key -> path table's exhaustiveness: every key
+    `run_round()` is documented to set into `hashes` (module docstring's "M1"
+    section) must be covered by exactly one of `_RECORDED_ARTIFACT_PATH_KEYS`
+    (has a real workdir artifact to re-verify) or
+    `_RECORDED_ARTIFACT_EXCLUDED_KEYS` (deliberately exempt, each for its own
+    documented reason) — and the two tables must not overlap. A future
+    artifact key added to `hashes` without updating one of these tables is
+    also caught at *runtime* by `_reject_recorded_artifact_drift`'s
+    fail-closed unknown-key branch (see
+    `test_reject_recorded_artifact_drift_rejects_unknown_key` below); this
+    test instead pins the *current*, complete key set statically, so a silent
+    divergence between run_round()'s actual hashes keys and these tables
+    shows up here first, without needing a full pipeline run to trigger it."""
+    known_hashes_keys = {
+        "score",
+        "validation",
+        "report",
+        "eval_score",
+        "roundtrip",
+        "adherence",
+        "take_wav",
+        "manifest",
+        "package",
+        "package_compilation_report",
+        "observe_report",
+    }
+    path_keys = set(run_round._RECORDED_ARTIFACT_PATH_KEYS)
+    excluded_keys = run_round._RECORDED_ARTIFACT_EXCLUDED_KEYS
+    assert path_keys.isdisjoint(excluded_keys)
+    assert path_keys | excluded_keys == known_hashes_keys
+
+    # Every path-table value must resolve to a real `_reserved_workdir_paths`
+    # entry, so `_reject_recorded_artifact_drift`'s `paths[path_key]` lookup
+    # can never itself KeyError on a typo'd target.
+    reserved_keys = set(run_round._reserved_workdir_paths(tmp_path / "wd"))
+    path_key_targets = set(run_round._RECORDED_ARTIFACT_PATH_KEYS.values())
+    assert path_key_targets <= reserved_keys
+
+
+def test_reject_recorded_artifact_drift_accepts_untampered_artifacts(tmp_path: Path):
+    """Positive case, cheap helper-level check: artifacts staged straight
+    from the bytes `hashes` was computed from, and never touched afterward,
+    must not raise."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    hashes = _staged_recorded_artifacts(paths)
+
+    run_round._reject_recorded_artifact_drift(paths, hashes)  # must not raise
+
+
+def test_reject_recorded_artifact_drift_skips_excluded_keys(tmp_path: Path):
+    """`score`/`report` must be skipped even though this test never wrote a
+    workdir artifact under either key (`score` has no independently
+    generated workdir artifact of its own — `score_copy` is a passthrough of
+    the same snapshot bytes; `report` isn't written to disk until after this
+    guard passes) — their presence in `hashes` must not be treated as
+    something to re-verify, and their absence from `paths`/disk under those
+    keys must not raise either."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    hashes = _staged_recorded_artifacts(paths)
+    hashes["score"] = "deadbeef"
+    hashes["report"] = "deadbeef"
+
+    run_round._reject_recorded_artifact_drift(paths, hashes)  # must not raise
+
+
+def test_reject_recorded_artifact_drift_rejects_mutated_take_wav(tmp_path: Path):
+    """M1 negative case (the take.wav scenario the task brief calls out
+    directly): `take.wav` rewritten after `hashes["take_wav"]` was recorded
+    from it (the "another process mutates a consumed artifact mid-run"
+    scenario the module docstring's "M1" section describes) must be refused
+    with `RecordedArtifactDriftError` naming the drifted key, before any
+    publish happens."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    hashes = _staged_recorded_artifacts(paths)
+
+    # Simulate a second process rewriting take.wav after this run's own
+    # subprocess chain already consumed it (svprpe observe, then
+    # _structure_axis's own extract_rpe_from_file call) and hashed it.
+    paths["take_wav"].write_bytes(b"RIFF-tampered-not-the-recorded-audio")
+
+    with pytest.raises(run_round.RecordedArtifactDriftError, match="take_wav"):
+        run_round._reject_recorded_artifact_drift(paths, hashes)
+
+
+def test_reject_recorded_artifact_drift_rejects_missing_artifact(tmp_path: Path):
+    """M1 negative case: a recorded artifact *deleted* mid-run (not just
+    rewritten) must also be refused, not silently skipped."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    hashes = _staged_recorded_artifacts(paths)
+
+    paths["observe_report"].unlink()
+
+    with pytest.raises(run_round.RecordedArtifactDriftError, match="observe_report"):
+        run_round._reject_recorded_artifact_drift(paths, hashes)
+
+
+def test_reject_recorded_artifact_drift_rejects_unknown_key(tmp_path: Path):
+    """Fail-closed coverage guard: a `hashes` key present in neither
+    `_RECORDED_ARTIFACT_PATH_KEYS` nor `_RECORDED_ARTIFACT_EXCLUDED_KEYS`
+    must itself be refused, naming the unrecognized key — a future artifact
+    added to `hashes` without a matching table entry must not silently skip
+    re-verification (module docstring's "M1" section)."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    hashes = _staged_recorded_artifacts(paths)
+    hashes["mystery_future_artifact"] = "deadbeef"
+
+    with pytest.raises(run_round.RecordedArtifactDriftError, match="mystery_future_artifact"):
+        run_round._reject_recorded_artifact_drift(paths, hashes)
+
+
+def test_run_round_rejects_recorded_artifact_drift_before_publish_on_symbolic_fail_path(
+    tmp_path: Path, monkeypatch
+):
+    """M1 wiring proof, exercised through the real `run_round()` symbolic-fail
+    branch (cheap — an invalid `score.yaml` never reaches the audio pipeline,
+    same fixture the L1 wiring test above uses): `validation.json` mutated
+    *mid-run* — here, immediately after L1's own guard has already run,
+    simulating a second process rewriting it in the narrow window between L1
+    and M1 — must make `run_round()` raise `RecordedArtifactDriftError` and
+    must leave no report/hashes published (the pre-publish check runs and
+    fires before `_publish_report_bundle` is ever called, module docstring's
+    "M1" section)."""
+    bad_score_path = tmp_path / "bad_score.yaml"
+    bad_score_path.write_text("not: a valid composition score\n", encoding="utf-8")
+    workdir = tmp_path / "wd"
+    output_path = tmp_path / "report.json"
+
+    real_reject_judge_input_copy_drift = run_round._reject_judge_input_copy_drift
+
+    def _reject_judge_input_copy_drift_then_tamper(paths, verified_inputs):
+        real_reject_judge_input_copy_drift(paths, verified_inputs)
+        # Simulated mid-run tamper of validation.json, after
+        # hashes["validation"] was already recorded from it and after L1's
+        # own guard ran clean, but before M1's guard gets a chance to catch
+        # it.
+        paths["validation"].write_bytes(
+            paths["validation"].read_bytes() + b"\ntampered mid-run\n"
+        )
+
+    monkeypatch.setattr(
+        run_round, "_reject_judge_input_copy_drift", _reject_judge_input_copy_drift_then_tamper
+    )
+
+    with pytest.raises(run_round.RecordedArtifactDriftError, match="validation"):
+        run_round.run_round(bad_score_path, workdir, 0, output_path)
+
+    assert not output_path.exists()
+    assert not (workdir / "hashes.json").exists()
+
+
+@pytest.mark.slow
+def test_run_round_rejects_recorded_artifact_drift_before_publish_on_success_path(
+    tmp_path: Path, monkeypatch
+):
+    """M1 E2E proof through the real full-pipeline success branch, using the
+    positive control fixture (same fixture the slow smoke test at the bottom
+    of this file re-renders): `take.wav` rewritten *after* every consumer
+    that reads it (`svprpe observe`, then `_structure_axis`'s own
+    `extract_rpe_from_file` call — module docstring (c)) has already
+    finished with it, but before this run's report bundle is published, must
+    make `run_round()` raise `RecordedArtifactDriftError` naming `take_wav`,
+    and must leave no report/hashes published. Wraps the real
+    `_structure_axis` (the last consumer of `take_wav_path` in the pipeline)
+    rather than faking it, so `structure_axis`'s own result is still
+    genuinely produced by the real extraction — only the tampering trigger
+    (writing extra bytes right after that call returns) is injected, mirrors
+    the L1 slow-path wiring style above."""
+    workdir = tmp_path / "wd"
+    output_path = tmp_path / "report.json"
+
+    real_structure_axis = run_round._structure_axis
+
+    def _structure_axis_then_tamper(observe_report, take_wav_path, *, section_map_path, section_map_bytes=None):
+        result = real_structure_axis(
+            observe_report,
+            take_wav_path,
+            section_map_path=section_map_path,
+            section_map_bytes=section_map_bytes,
+        )
+        # Simulated mid-run tamper of take.wav, after every real consumer in
+        # this pipeline has already finished reading it.
+        take_wav_path.write_bytes(b"RIFF-tampered-after-every-consumer-finished")
+        return result
+
+    monkeypatch.setattr(run_round, "_structure_axis", _structure_axis_then_tamper)
+
+    with pytest.raises(run_round.RecordedArtifactDriftError, match="take_wav"):
+        run_round.run_round(POSITIVE_CONTROL_SCORE_PATH, workdir, 0, output_path)
+
+    assert not output_path.exists()
+    assert not (workdir / "hashes.json").exists()
+
+
 def test_reject_escaping_reserved_paths_rejects_symlinked_judge_contract(tmp_path: Path):
     """The reserved-path symlink-escape guard covers the new G2 copies the
     same way it covers every other reserved name — a symlinked

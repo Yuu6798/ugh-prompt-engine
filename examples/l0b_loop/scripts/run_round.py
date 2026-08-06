@@ -322,6 +322,51 @@ immutable-by-construction protection — see `JudgeInputCopyDriftError`'s
 docstring for the boundary this leaves open (a window between G2's write
 and this check still exists; it is merely much shorter than "for the rest
 of the run").
+
+**M1 — pre-publish recorded-artifact re-verification** (`_reject_recorded_
+artifact_drift`, PR #247 Codex review round 25, P1, family terminus): L1
+above closed drift for the three `judge_inputs/*` *input* copies. It left
+every *generated* artifact this run itself hashes into `hashes.json` open to
+the identical hazard: `take.wav`, `eval_score.yaml`, `validation.json`,
+`roundtrip.json`, `adherence.json`, the identity manifest, the package pair,
+and `observe_report.json` are all recorded (hashed into `hashes.json`) at
+generation time and then consumed by a *later* step (a subsequent
+subprocess, or nothing further at all) — nothing makes any of them
+read-only afterward, so a second process with write access to `--workdir`
+could rewrite one after this run hashed it (round 23's `judge_inputs/`
+finding, applied to this run's own outputs instead of its snapshotted
+inputs). A report published afterward would then vouch for artifact bytes
+that no longer match what is actually on disk, with no record that the
+consuming step (or a human reading `hashes.json` post hoc) ever saw the
+tampered version. `_reject_recorded_artifact_drift(paths, hashes)` is a
+single unified gate (not one bespoke check per artifact): it walks every key
+`hashes` actually holds at call time, resolves each to its reserved workdir
+path via the explicit `_RECORDED_ARTIFACT_PATH_KEYS` table, re-reads and
+re-hashes that path, and compares against the digest already recorded in
+`hashes`. `score` and `report` are the only two keys deliberately excluded
+(`_RECORDED_ARTIFACT_EXCLUDED_KEYS`, each for a distinct reason — see that
+constant's own comment) — every other key `hashes` can hold today has a
+path-table entry. A key present in neither table is *not* silently skipped:
+it raises `RecordedArtifactDriftError` naming the unrecognized key, so a
+future artifact added to `hashes` without a matching table entry fails
+closed instead of quietly slipping past this guard. Called immediately
+alongside `_reject_judge_input_copy_drift`, at both of `run_round()`'s
+`_publish_report_bundle` call sites (the symbolic-fail branch, where
+`hashes` holds only `score`/`validation`/`report`, and the full-pipeline
+success branch, where it holds all of the above) — a generic
+"verify every key that's actually present" implementation naturally covers
+both call sites with the same function, no branch-specific variant needed.
+With L1 (judge-side inputs) and this guard (this run's own generated
+artifacts) both in place immediately before publish, every byte this run
+consumed or produced and later attests to via `hashes.json` — other than
+`score` (an external input already byte-snapshotted at the top of the run)
+and `report` (not yet written to disk at the point this guard runs, since
+`_publish_report_bundle` writes it together with `hashes.json` right after
+this check passes) — is re-verified against its recorded digest at the
+publish boundary. This closes the family of "hash it, consume it, but never
+look at it again before vouching for it" gaps 23 and 25 both surfaced;
+re-verification (not immutable-by-construction protection, the same
+boundary L1 already documents) is the terminus for this family.
 """
 from __future__ import annotations
 
@@ -570,6 +615,25 @@ class JudgeInputCopyDriftError(JudgeInputDriftError):
     existing `except ProtectedPathError` handling catches it unchanged."""
 
 
+class RecordedArtifactDriftError(JudgeInputDriftError):
+    """M1 pre-publish guard (PR #247 Codex review round 25, P1, family
+    terminus): a generated artifact this run already hashed into `hashes`
+    (`take.wav`, `eval_score.yaml`, `validation.json`, `roundtrip.json`,
+    `adherence.json`, the identity manifest, the package pair, or
+    `observe_report.json`) no longer matches the sha256 recorded for it —
+    either the on-disk bytes changed after this run hashed and consumed them
+    (a second process with write access to `--workdir` rewrote it), or the
+    file is missing outright. Also raised when `hashes` carries a key this
+    guard has no path-table entry for (neither `_RECORDED_ARTIFACT_PATH_KEYS`
+    nor `_RECORDED_ARTIFACT_EXCLUDED_KEYS`) — an unrecognized key fails
+    closed rather than being silently skipped, so a future artifact added to
+    `hashes` without updating this guard's tables is itself caught, not
+    quietly left unverified. Module docstring's "M1" section has the full
+    rationale. A `JudgeInputDriftError`/`ProtectedPathError` subclass so
+    `main()`'s existing `except ProtectedPathError` handling catches it
+    unchanged."""
+
+
 class EngineCheckoutContainmentError(ProtectedPathError):
     """`import svp_rpe` resolved to a module outside this checkout's `src/`
     tree (K1, module docstring's "K1" section) — a different checkout's
@@ -675,6 +739,111 @@ def _reject_judge_input_copy_drift(
                 f" is {actual_sha256}, expected {expected_sha256} (the bytes staged into "
                 "this copy at run start from preflight-verified input) — something "
                 "rewrote it before this run's report bundle was published."
+            )
+
+
+# M1 (PR #247 Codex review round 25, P1): `hashes` key -> `_reserved_
+# workdir_paths` key, for every generated artifact this run hashes into
+# `hashes.json` and later attests to via a published report. Explicit table
+# (not a naming convention/heuristic) so a mismatch between a `hashes` key
+# and its on-disk path is a deliberate declaration, not an inferred guess —
+# mirrors `_JUDGE_INPUT_COPY_LABELS`'s existing style. Every `hashes` key
+# `run_round()` currently sets is covered here or in
+# `_RECORDED_ARTIFACT_EXCLUDED_KEYS` below; `test_l0b_scripts.py` asserts
+# that coverage stays exhaustive as a regression guard.
+_RECORDED_ARTIFACT_PATH_KEYS: dict[str, str] = {
+    "validation": "validation",
+    "eval_score": "eval_score",
+    "roundtrip": "roundtrip",
+    "adherence": "adherence",
+    "take_wav": "take_wav",
+    "manifest": "identity_manifest",
+    "package": "package_json",
+    "package_compilation_report": "package_compilation_report",
+    "observe_report": "observe_report",
+}
+
+# `hashes` keys deliberately excluded from `_reject_recorded_artifact_drift`
+# re-verification — each for a distinct, concrete reason (not a blanket
+# bypass):
+_RECORDED_ARTIFACT_EXCLUDED_KEYS: frozenset[str] = frozenset(
+    {
+        # External input: `hashes["score"]` is the sha256 of `score_bytes`,
+        # the single snapshot read of the submitted score.yaml at the top of
+        # `run_round()` (see that read's own comment). `score_copy` (the
+        # on-disk `<workdir>/score.yaml`) is a passthrough copy of those same
+        # bytes, not an independently generated artifact this guard needs to
+        # re-derive-and-compare — re-hashing it would only re-verify the same
+        # snapshot `score_bytes` already is, already covered by every
+        # downstream step reading `score_bytes` in-memory rather than
+        # re-reading the copy.
+        "score",
+        # Not yet on disk at the point this guard runs: `hashes["report"]` is
+        # computed from `report_bytes` in memory, but `_publish_report_bundle`
+        # writes `report_bytes` to `-o` and `hashes` (as `hashes.json`)
+        # together, immediately *after* this guard passes — there is nothing
+        # at `output_path` yet to re-read and re-hash.
+        "report",
+    }
+)
+
+
+def _reject_recorded_artifact_drift(paths: dict[str, Path], hashes: dict[str, str]) -> None:
+    """M1 pre-publish guard (PR #247 Codex review round 25, P1, family
+    terminus) — see `RecordedArtifactDriftError`'s docstring and the module
+    docstring's "M1" section for the full rationale. Called immediately
+    alongside `_reject_judge_input_copy_drift`, right before each of
+    `run_round()`'s two `_publish_report_bundle` call sites.
+
+    Walks every key actually present in `hashes` (not a fixed list) so both
+    call sites — the symbolic-fail branch's small `hashes`
+    (`score`/`validation`/`report`) and the full-pipeline success branch's
+    full `hashes` — are covered by the same implementation. For each key:
+
+    - a key in `_RECORDED_ARTIFACT_EXCLUDED_KEYS` is skipped (declared, not
+      inferred — see that constant's comment for why each one is safe to
+      skip);
+    - a key in `_RECORDED_ARTIFACT_PATH_KEYS` is resolved to its reserved
+      workdir path, re-read, re-hashed, and compared against the digest
+      already recorded in `hashes`; a mismatch or a missing file raises
+      `RecordedArtifactDriftError` naming the key, its path, and (for a
+      mismatch) both digests;
+    - a key in *neither* table raises `RecordedArtifactDriftError` naming the
+      unrecognized key — fail-closed, so a future artifact added to `hashes`
+      without a matching table entry is caught here rather than silently
+      skipped."""
+    for key, recorded_sha256 in hashes.items():
+        if key in _RECORDED_ARTIFACT_EXCLUDED_KEYS:
+            continue
+        try:
+            path_key = _RECORDED_ARTIFACT_PATH_KEYS[key]
+        except KeyError:
+            raise RecordedArtifactDriftError(
+                f"hashes.json key {key!r} is not in _RECORDED_ARTIFACT_PATH_KEYS or "
+                "_RECORDED_ARTIFACT_EXCLUDED_KEYS — refusing to publish rather than "
+                "silently skip pre-publish re-verification for a recorded artifact "
+                "this guard doesn't know how to check. Add it to one of those two "
+                "tables in run_round.py."
+            ) from None
+        artifact_path = paths[path_key]
+        try:
+            actual_bytes = artifact_path.read_bytes()
+        except FileNotFoundError:
+            raise RecordedArtifactDriftError(
+                "recorded artifact drift — refusing to publish a report attributed "
+                f"to bytes that no longer exist: the {key} artifact ({artifact_path}) "
+                f"is missing (expected sha256 {recorded_sha256}, recorded in "
+                "hashes.json when this run generated and hashed it)."
+            ) from None
+        actual_sha256 = _sha256_bytes(actual_bytes)
+        if actual_sha256 != recorded_sha256:
+            raise RecordedArtifactDriftError(
+                "recorded artifact drift — refusing to publish a report attributed "
+                f"to stale bytes: the {key} artifact ({artifact_path}) sha256 is now "
+                f"{actual_sha256}, expected {recorded_sha256} (recorded in "
+                "hashes.json when this run generated and hashed it) — something "
+                "rewrote it after it was hashed and consumed, before this run's "
+                "report bundle was published."
             )
 
 
@@ -1553,6 +1722,12 @@ def run_round(
         # window `_reject_judge_input_copy_drift` closes — see
         # `JudgeInputCopyDriftError`'s docstring.
         _reject_judge_input_copy_drift(paths, verified_inputs)
+        # M1 pre-publish guard (PR #247 Codex review round 25, P1, family
+        # terminus): re-verifies every generated artifact this branch's
+        # (small) `hashes` already recorded — here, just `validation.json` —
+        # still matches what it was hashed as. See `RecordedArtifactDriftError`'s
+        # docstring / module docstring's "M1" section.
+        _reject_recorded_artifact_drift(paths, hashes)
         _publish_report_bundle(
             output_path=output_path,
             report_bytes=report_bytes,
@@ -1715,6 +1890,15 @@ def run_round(
     # exists to catch just before the report attributing to those bytes
     # becomes visible.
     _reject_judge_input_copy_drift(paths, verified_inputs)
+    # M1 pre-publish guard (PR #247 Codex review round 25, P1, family
+    # terminus): re-verifies every generated artifact this run hashed —
+    # take.wav, eval_score.yaml, validation.json, roundtrip.json,
+    # adherence.json, the identity manifest, the package pair, and
+    # observe_report.json — against the digest recorded in `hashes` at
+    # generation time, immediately before this run's report is published.
+    # See `RecordedArtifactDriftError`'s docstring / module docstring's "M1"
+    # section.
+    _reject_recorded_artifact_drift(paths, hashes)
     _publish_report_bundle(
         output_path=output_path,
         report_bytes=report_bytes,
