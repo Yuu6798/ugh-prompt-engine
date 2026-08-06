@@ -948,69 +948,87 @@ def test_write_identity_manifest_uses_given_section_map_bytes(tmp_path: Path):
 # no trace at all, restoring pre-existing bytes (or absence) on both paths.
 
 
+# NOTE (PR #247 round 4 P2): `_publish_report_bundle` moved from "hashes
+# written atomically, then report written atomically" to a two-phase staged
+# design — both members are fully staged (write+flush+fsync to a tempfile)
+# *before* either destination is touched, then published via two consecutive
+# `os.replace` calls, report first. The three tests below are rewritten
+# (not just touched up) because their failure-injection seam
+# (`monkeypatch.setattr(run_round, "atomic_write_bytes", ...)`) no longer
+# intercepts anything on the initial-publish path — `atomic_write_bytes` is
+# now only called during rollback's restore of the report. Each test's
+# *intent* (rollback restores pre-existing bytes / removes never-existed
+# paths / rollback failure chains) is preserved; only the injection point
+# and, where the publish-order flip changes which member rollback restores,
+# the specific bytes under test change. See each docstring for detail.
+
+
 def test_run_round_report_bundle_rolls_back_pre_existing_bytes_on_symbolic_fail(
     tmp_path: Path, monkeypatch
 ):
     """On the symbolic-fail early-return path, injecting a failure into the
-    report's (`-o`) atomic write must roll the *whole bundle* back: (a)
-    `-o`'s pre-existing bytes are restored (not left as whatever the failed
-    attempt produced), and (b) `hashes.json`'s pre-existing bytes are
-    restored too — even though the hashes write itself succeeded before the
-    report write failed."""
+    *second* publish `os.replace` (`hashes.json`) — after the report's
+    `os.replace` has already made the new report visible — must roll the
+    report back to its pre-call bytes. `hashes.json`'s `os.replace` never
+    completes, so its pre-existing bytes survive untouched (not via
+    rollback, since rollback only ever restores the report under the new
+    "report first" publish order — see `_publish_report_bundle`'s
+    docstring)."""
     bad_score_path = tmp_path / "bad_score.yaml"
     bad_score_path.write_text("not: a valid composition score\n", encoding="utf-8")
     workdir = tmp_path / "wd"
     workdir.mkdir()
     output_path = tmp_path / "report.json"
+    hashes_path = workdir / "hashes.json"
 
     # Pre-existing bytes at both bundle targets (simulating this round's
     # workdir already carrying a prior report/hashes pair) must survive a
     # failed re-publish attempt byte-for-byte.
     old_hashes_bytes = b'{"round": "old-hashes"}'
     old_report_bytes = b'{"round": "old-report"}'
-    (workdir / "hashes.json").write_bytes(old_hashes_bytes)
+    hashes_path.write_bytes(old_hashes_bytes)
     output_path.write_bytes(old_report_bytes)
 
-    real_atomic_write_bytes = run_round.atomic_write_bytes
-    # Fails only the *first* write attempt to `output_path` (the original
-    # publish of the new report) — the rollback's subsequent write of
-    # `old_report_bytes` back to `output_path` must succeed, so this proves
-    # a genuine restore, not merely "the file was never touched".
-    output_writes = {"count": 0}
+    real_os_replace = run_round.os.replace
 
-    def _fail_first_report_write(path: Path, data: bytes) -> None:
-        if path == output_path:
-            output_writes["count"] += 1
-            if output_writes["count"] == 1:
-                raise RuntimeError("boom: simulated failure writing the report")
-        real_atomic_write_bytes(path, data)
+    def _fail_hashes_replace(src: str, dst: str) -> None:
+        if Path(dst) == hashes_path:
+            raise RuntimeError("boom: simulated failure publishing hashes.json")
+        real_os_replace(src, dst)
 
-    monkeypatch.setattr(run_round, "atomic_write_bytes", _fail_first_report_write)
+    monkeypatch.setattr(run_round.os, "replace", _fail_hashes_replace)
 
     with pytest.raises(RuntimeError, match="boom"):
         run_round.run_round(bad_score_path, workdir, 0, output_path)
 
-    assert (workdir / "hashes.json").read_bytes() == old_hashes_bytes
+    # The report was published (new bytes made visible) and then rolled
+    # back — this assertion is only satisfiable via a genuine restore, since
+    # the intervening publish provably overwrote it with new report bytes.
     assert output_path.read_bytes() == old_report_bytes
-    assert output_writes["count"] == 2  # 1 failed original write + 1 successful rollback restore
+    assert hashes_path.read_bytes() == old_hashes_bytes
 
 
-def test_publish_report_bundle_removes_paths_that_did_not_exist_before(tmp_path: Path):
+def test_publish_report_bundle_removes_paths_that_did_not_exist_before(
+    tmp_path: Path, monkeypatch
+):
     """Unit-level counterpart to the fail-gate test above, exercising
-    `_publish_report_bundle` directly: when neither bundle path existed
-    before the call, a failed report write must roll back to "does not
-    exist" (delete), not leave a half-published hashes.json behind."""
+    `_publish_report_bundle` directly: forcing the *report's* `os.replace`
+    (the first publish step) to fail means `output_path` is never touched
+    (POSIX rename is all-or-nothing) and the hashes `os.replace` never even
+    runs — neither bundle path should exist afterward, and no rollback
+    restore is attempted (there is nothing to roll back)."""
     hashes_path = tmp_path / "hashes.json"
     output_path = tmp_path / "report.json"
-    real_atomic_write_bytes = run_round.atomic_write_bytes
 
-    def _fail_on_report(path: Path, data: bytes) -> None:
-        if path == output_path:
-            raise RuntimeError("boom: simulated failure writing the report")
-        real_atomic_write_bytes(path, data)
+    real_os_replace = run_round.os.replace
+
+    def _fail_report_replace(src: str, dst: str) -> None:
+        if Path(dst) == output_path:
+            raise RuntimeError("boom: simulated failure publishing the report")
+        real_os_replace(src, dst)
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(run_round, "atomic_write_bytes", _fail_on_report)
+        mp.setattr(run_round.os, "replace", _fail_report_replace)
         with pytest.raises(RuntimeError, match="boom"):
             run_round._publish_report_bundle(
                 output_path=output_path,
@@ -1023,29 +1041,42 @@ def test_publish_report_bundle_removes_paths_that_did_not_exist_before(tmp_path:
     assert not output_path.exists()
 
 
-def test_publish_report_bundle_rollback_failure_chains_original_exception(tmp_path: Path):
+def test_publish_report_bundle_rollback_failure_chains_original_exception(
+    tmp_path: Path, monkeypatch
+):
     """If the rollback itself also fails, the original publish exception
     must not be silently swallowed: `_publish_report_bundle` raises
     `ReportBundleRollbackError` chained (`__cause__`) from the rollback
     failure, and the original exception's message survives in the new
-    exception's own message."""
+    exception's own message.
+
+    Under the new "report first" publish order, rollback only ever restores
+    the report, so triggering rollback requires the *hashes* `os.replace` to
+    fail (after the report's succeeded), and making the rollback itself fail
+    requires the report's `atomic_write_bytes` restore to fail."""
     hashes_path = tmp_path / "hashes.json"
     output_path = tmp_path / "report.json"
     hashes_path.write_bytes(b"old-hashes")
     output_path.write_bytes(b"old-report")
 
+    real_os_replace = run_round.os.replace
+
+    def _fail_hashes_replace(src: str, dst: str) -> None:
+        if Path(dst) == hashes_path:
+            raise RuntimeError("boom: simulated failure publishing hashes.json")
+        real_os_replace(src, dst)
+
     real_atomic_write_bytes = run_round.atomic_write_bytes
 
-    def _flaky(path: Path, data: bytes) -> None:
-        if path == output_path and data == b'{"new": "report"}':
-            raise RuntimeError("boom: simulated failure writing the report")
-        if path == hashes_path and data == b"old-hashes":
-            # Simulated failure during rollback's restore of hashes_path.
-            raise OSError("rollback-boom: simulated failure restoring hashes.json")
+    def _fail_report_restore(path: Path, data: bytes) -> None:
+        if path == output_path and data == b"old-report":
+            # Simulated failure during rollback's restore of output_path.
+            raise OSError("rollback-boom: simulated failure restoring report.json")
         real_atomic_write_bytes(path, data)
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(run_round, "atomic_write_bytes", _flaky)
+        mp.setattr(run_round.os, "replace", _fail_hashes_replace)
+        mp.setattr(run_round, "atomic_write_bytes", _fail_report_restore)
         with pytest.raises(run_round.ReportBundleRollbackError) as exc_info:
             run_round._publish_report_bundle(
                 output_path=output_path,
@@ -1054,5 +1085,82 @@ def test_publish_report_bundle_rollback_failure_chains_original_exception(tmp_pa
                 hashes_bytes=b'{"new": "hashes"}',
             )
 
-    assert "boom: simulated failure writing the report" in str(exc_info.value)
+    assert "boom: simulated failure publishing hashes.json" in str(exc_info.value)
     assert isinstance(exc_info.value.__cause__, OSError)
+
+
+def test_publish_report_bundle_staging_failure_leaves_existing_bundle_untouched(
+    tmp_path: Path, monkeypatch
+):
+    """A failure during the *staging* phase (writing the hashes tempfile,
+    after the report tempfile staged fine) must never touch either
+    published path — not even to enter the rollback/snapshot machinery,
+    since neither `os.replace` has run yet. Checks (a) existing bundle
+    bytes survive byte-for-byte and (b) `os.replace` is never called at all
+    for this invocation — proving the snapshot-restore branch was never
+    *entered*, not merely that it happened to restore correctly."""
+    hashes_path = tmp_path / "hashes.json"
+    output_path = tmp_path / "report.json"
+    old_hashes_bytes = b"old-hashes"
+    old_report_bytes = b"old-report"
+    hashes_path.write_bytes(old_hashes_bytes)
+    output_path.write_bytes(old_report_bytes)
+
+    real_stage_bytes = run_round._stage_bytes
+
+    def _fail_hashes_stage(directory: Path, dest_name: str, data: bytes) -> Path:
+        if dest_name == hashes_path.name:
+            raise RuntimeError("boom: simulated failure staging hashes.json")
+        return real_stage_bytes(directory, dest_name, data)
+
+    replace_calls: list[tuple[str, str]] = []
+    real_os_replace = run_round.os.replace
+
+    def _recording_replace(src: str, dst: str) -> None:
+        replace_calls.append((str(src), str(dst)))
+        real_os_replace(src, dst)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(run_round, "_stage_bytes", _fail_hashes_stage)
+        mp.setattr(run_round.os, "replace", _recording_replace)
+        with pytest.raises(RuntimeError, match="boom: simulated failure staging"):
+            run_round._publish_report_bundle(
+                output_path=output_path,
+                report_bytes=b'{"new": "report"}',
+                hashes_path=hashes_path,
+                hashes_bytes=b'{"new": "hashes"}',
+            )
+
+    assert hashes_path.read_bytes() == old_hashes_bytes
+    assert output_path.read_bytes() == old_report_bytes
+    assert replace_calls == []
+    # No leftover tempfiles either — the report's tempfile, staged
+    # successfully before the hashes staging failure, is cleaned up too.
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_publish_report_bundle_publishes_report_before_hashes(tmp_path: Path, monkeypatch):
+    """Publish order matters (see `_publish_report_bundle`'s docstring): the
+    report must become visible via `os.replace` before `hashes.json` does,
+    so a crash between the two syscalls leaves the machine-detectable "new
+    report + old hashes.json" state rather than the reverse."""
+    hashes_path = tmp_path / "hashes.json"
+    output_path = tmp_path / "report.json"
+
+    replace_order: list[str] = []
+    real_os_replace = run_round.os.replace
+
+    def _recording_replace(src: str, dst: str) -> None:
+        replace_order.append(Path(dst).name)
+        real_os_replace(src, dst)
+
+    monkeypatch.setattr(run_round.os, "replace", _recording_replace)
+
+    run_round._publish_report_bundle(
+        output_path=output_path,
+        report_bytes=b'{"new": "report"}',
+        hashes_path=hashes_path,
+        hashes_bytes=b'{"new": "hashes"}',
+    )
+
+    assert replace_order == [output_path.name, hashes_path.name]

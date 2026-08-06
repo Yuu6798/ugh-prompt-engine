@@ -570,10 +570,13 @@ loop_status_t2:
     （rounds_t2/round5/pareto_vs_round4.json、improved: true、structure
     1->0 厳密改善・全軸非退行・band 除外なし）で充足した。改善は著者が
     差分報告（observed_sections 境界秒）のみを根拠に仮説を絞り込み、
-    契約公開範囲内のレバー（events.chord_progression）へ到達した結果で
-    あり、閉ループが操舵として機能した実測点である。操舵証拠は結果
-    （報告→修正→改善）の実測であり、round 5 の成立機構の帰属訂正
-    （rounds[round 5].interpretation_correction）とは独立に有効。
+    契約公開範囲内の編集（events.chord_progression の追加 — **著者の意図
+    したレバー**）を行った周回で実測された。ただしその**実効機構は意図と
+    異なり未確定**である: 進行は全セクション drone_only のため不鳴で、
+    実音響変化は role 散文への認識語一致（"sub bass"）による chorus2 の
+    drone 化だった（正 = rounds[round 5].interpretation_correction。
+    和声対比への因果帰属は撤回済み）。操舵証拠は「報告→修正→Pareto 改善」
+    という結果の実測であり、この機構帰属の不確定性と独立に有効。
   honest_accounting: >-
     rounds 2-4 は 3 連続 tie（改善実績 0）であり、5 周回中改善周回は
     round 5 の 1 件のみ。T1（1 周回で全軸成功、改善ペアなし）と合わせ、

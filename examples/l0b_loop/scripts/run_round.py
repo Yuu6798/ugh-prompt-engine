@@ -71,8 +71,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Optional
@@ -487,59 +489,139 @@ class ReportBundleRollbackError(RuntimeError):
     (neither the old nor the new bundle)."""
 
 
+def _stage_bytes(directory: Path, dest_name: str, data: bytes) -> Path:
+    """Staging-phase primitive for `_publish_report_bundle`: writes `data`
+    into a tempfile inside `directory` (the eventual destination's own
+    parent directory, so the later `os.replace` stays on one filesystem —
+    same placement convention as `svp_rpe.utils.atomic_io.atomic_write_bytes`)
+    and durably flushes it (`write` + `flush` + `os.fsync`) *without*
+    reading or touching `dest_name`'s actual destination path at all. Returns
+    the tempfile path; the caller decides whether to `os.replace` it into
+    place or delete it — this function's own failure handling only covers
+    the tempfile it itself just created (best-effort cleanup) and re-raises
+    unchanged, so a staging failure never has a chance to touch a published
+    path."""
+    directory.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=directory, prefix=f"{dest_name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        _best_effort_unlink(tmp_path)
+        raise
+    return tmp_path
+
+
+def _best_effort_unlink(path: Optional[Path]) -> None:
+    """Deletes `path` if given, swallowing any `OSError` (mirrors
+    `atomic_write_bytes`'s own best-effort tempfile cleanup on its failure
+    path — a secondary cleanup error must never mask the primary exception
+    already in flight)."""
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
 def _publish_report_bundle(
     *, output_path: Path, report_bytes: bytes, hashes_path: Path, hashes_bytes: bytes
 ) -> None:
-    """Publishes `hashes.json` and the report (`-o`) as a single bundle with
-    snapshot + rollback, closing the provenance-mismatch window the prior
-    "hashes first, report atomic second" ordering left open: that ordering
-    only protected against a crash leaving *no* report (a legibly
+    """Publishes the report (`-o`) and `hashes.json` as a single visible
+    unit, in two phases, closing the provenance-mismatch window a plain
+    "write each file atomically, one after the other" ordering leaves open:
+    that only protects against a crash leaving *no* report (a legibly
     incomplete run) — but when `-o` names an existing path *outside* the
     protected loop tree (the output-collision guard only refuses an
-    existing path *inside* `_LOOP_DIR`), a failure partway through the
-    report write could leave the old report bytes at `-o` untouched while
-    `hashes.json` already names the *new* report's hash — an old report +
-    hashes pointing at a different (new) report, an inconsistent pair.
+    existing path *inside* `_LOOP_DIR`), a failure *while writing* one of
+    the two files could leave a half-written or stale file at its
+    destination while the other file already names/matches the *new*
+    content — an inconsistent pair with no crash-only explanation.
 
-    Steps: (1) snapshot the existing bytes of both `hashes_path` and
-    `output_path` before writing anything (`None` if a path does not exist
-    yet — "does not exist" is itself part of the snapshot); (2) write
-    `hashes_path` then `output_path`, in that order, each via
-    `atomic_write_bytes` (same order as before — a crash *between* the two
-    writes still leaves "hashes present, report absent", the legible
-    incomplete-run signal, not the reverse); (3) if either write raises,
-    roll every path in the bundle back to its pre-call snapshot (restore
-    the snapshotted bytes, or delete the path if it did not exist before)
-    and re-raise the *original* exception unchanged — the bundle leaves no
-    trace of the failed attempt. A failure during rollback itself does not
-    swallow the original exception: it is re-raised wrapped in
-    `ReportBundleRollbackError`, chained via `raise ... from rollback_exc`
-    so both the publish failure and the rollback failure are visible.
+    **Staging phase**: both `report_bytes` and `hashes_bytes` are written
+    completely (`_stage_bytes`: write + flush + fsync) to tempfiles beside
+    their own destinations *before either destination is touched at all* —
+    neither `output_path` nor `hashes_path` is read or written during
+    staging. Any failure here (staging the report, or staging hashes after
+    the report staged fine) cleans up only the tempfile(s) already created
+    and re-raises the original exception unchanged; the publish/rollback
+    machinery below never runs, so the previously published bundle (if any)
+    is provably untouched.
+
+    **Publish phase**: once both members are fully staged,
+    `os.replace(report_tmp, output_path)` then
+    `os.replace(hashes_tmp, hashes_path)`, in that order — evidence body
+    (the report) becomes visible before its provenance record
+    (`hashes.json`). This ordering choice matters only for *which*
+    inconsistency a crash between the two syscalls produces: "new report +
+    old hashes.json" is machine-detectable (hashes.json's recorded `report`
+    sha256 will not match the now-visible new report's actual sha256, so a
+    reader can tell the pair is stale); the reverse ordering would instead
+    risk "new hashes.json (naming a report hash) + old report" with no
+    equivalent tell from hashes.json's contents alone.
+
+    **Rollback**: if the report's `os.replace` itself fails, `output_path`
+    was never touched (POSIX rename is all-or-nothing) — both tempfiles are
+    discarded and the original exception re-raises with no rollback needed.
+    If the report's `os.replace` *succeeds* but the hashes `os.replace`
+    subsequently fails, `output_path` now holds the *new* report while
+    `hashes_path` is untouched (the failed replace changed nothing) — the
+    report alone is rolled back to its pre-call snapshot (restore the
+    snapshotted bytes via `atomic_write_bytes`, or delete `output_path` if
+    it did not exist before this call) and the original exception re-raises.
+    A failure during that rollback restore does not swallow the original
+    exception: it is re-raised wrapped in `ReportBundleRollbackError`,
+    chained via `raise ... from rollback_exc`, so both the publish failure
+    and the rollback failure stay visible.
+
+    **Boundary declaration**: full atomicity across this two-file layout is
+    not achievable with POSIX `rename` alone — `os.replace` is atomic only
+    per file, not across a pair. Staging both members fully before either
+    `os.replace` removes the partial-write hazard entirely; what remains is
+    the residual crash window *between* the two `os.replace` syscalls
+    themselves, which cannot be closed further with this file layout. The
+    one inconsistency that window can still produce ("new report + old
+    hashes.json") is machine-detectable by recomputing the report's sha256
+    and comparing it against `hashes.json`'s recorded `report` field.
     """
-    snapshot_paths = (hashes_path, output_path)
-    snapshots: dict[Path, Optional[bytes]] = {
-        path: (path.read_bytes() if path.exists() else None) for path in snapshot_paths
-    }
+    report_tmp = _stage_bytes(output_path.parent, output_path.name, report_bytes)
+    try:
+        hashes_tmp = _stage_bytes(hashes_path.parent, hashes_path.name, hashes_bytes)
+    except BaseException:
+        _best_effort_unlink(report_tmp)
+        raise
 
-    def _rollback() -> None:
-        for path, previous in snapshots.items():
-            if previous is None:
-                path.unlink(missing_ok=True)
-            else:
-                atomic_write_bytes(path, previous)
+    # Snapshot the report's pre-call bytes (`None` if it did not exist yet)
+    # before the first `os.replace` — the only bundle member rollback can
+    # ever need to restore, since the report is published first.
+    previous_report = output_path.read_bytes() if output_path.exists() else None
 
     try:
-        atomic_write_bytes(hashes_path, hashes_bytes)
-        atomic_write_bytes(output_path, report_bytes)
+        os.replace(report_tmp, output_path)
+    except BaseException:
+        _best_effort_unlink(report_tmp)
+        _best_effort_unlink(hashes_tmp)
+        raise
+
+    try:
+        os.replace(hashes_tmp, hashes_path)
     except BaseException as exc:
         try:
-            _rollback()
+            if previous_report is None:
+                output_path.unlink(missing_ok=True)
+            else:
+                atomic_write_bytes(output_path, previous_report)
         except BaseException as rollback_exc:
             raise ReportBundleRollbackError(
                 f"report bundle publish to {output_path} failed ({exc!r}) and the "
                 f"rollback that followed also failed ({rollback_exc!r}) — filesystem "
                 f"state for {hashes_path} and {output_path} may be inconsistent"
             ) from rollback_exc
+        _best_effort_unlink(hashes_tmp)
         raise
 
 
