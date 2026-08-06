@@ -1,0 +1,17 @@
+{
+  "banned_tokens": [
+    "silence",
+    "no kick",
+    "low density",
+    "sub bass"
+  ],
+  "hits": {
+    "low density": 0,
+    "no kick": 0,
+    "silence": 0,
+    "sub bass": 0
+  },
+  "schema_version": "l0br-token-ban/0.1",
+  "score_sha256": "b3dab5476ca33e58797db440ac8c6b87ed52214c0c8305c914d58e048b568a37",
+  "status": "pass"
+}
