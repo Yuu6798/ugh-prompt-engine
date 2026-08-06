@@ -8,6 +8,12 @@
 # でのみ checkout 再現可能。squash マージや履歴を持たない export の文脈
 # では git 系譜は attestation（当時の測定者による証言）へ格下げされ、
 # git 非依存の一次再現アンカーは本台帳の content pin（sha256）になる。
+# 会計拡張（PR #249 Codex レビュー第 7 巡, P2）: 各周回の judge 成果物
+# （token_ban.json / pareto_vs_round*.json、存在する周回のみ）の sha256 を
+# per-round エントリへ追加 pin した（`token_ban_report_sha256` /
+# `pareto_report_sha256`）。既存の測定値・解釈済み boolean（token_ban /
+# pareto_vs_prev 等）は無変更——一次再現アンカーの網羅範囲を広げる会計上の
+# 追加であり、再測定や値の書き換えではない。
 # Design Memo = L0b-R
 # （User 方針決裁 2026-08-06: 単一 LLM 切り分け先行・複数モデル比較後回し）。
 # 正本 = docs/llm_adapter_planning.md §5（成功条件）+ 本台帳。
@@ -200,6 +206,7 @@ series_runs:
       intent_sha256: aa68ecc32669ddc9c294cce1ee04ac18fb679a272f33a1bd29182a84dd540284
       report_sha256: 8a54136a19ce31741b50dbdc52c052944b39aea8b7d8daf0477a2336929f6352
       token_ban: null
+      token_ban_report_sha256: null
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -207,6 +214,7 @@ series_runs:
         structure: mismatch
         symbolic_validation_status: pass
       pareto_vs_prev: null
+      pareto_report_sha256: null
     - round: 2
       payload_manifest_sha256: d54ea57c7f893ea9d5f32fb72d31eba90db4680ae98356a8b88a7c385f92a1e1
       payload_sha256: 6269b499cacc24802d77dc209c609777cf835e0b09471b0a33fa97987cbb7776
@@ -214,6 +222,7 @@ series_runs:
       intent_sha256: 09baa4e648bfc6370726d5278cb4c70fac60a9db1bbef83ce3a0381442ac0b9d
       report_sha256: f6db3a56fb1967e189c8f1501a72def958067de5d926b9e91d5889624f154298
       token_ban: null
+      token_ban_report_sha256: null
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -221,6 +230,7 @@ series_runs:
         structure: mismatch
         symbolic_validation_status: pass
       pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
     - round: 3
       payload_manifest_sha256: 9457193e0ee6de39e317d107cd0829f063aba4e67a8f9b365c56beff8ce23351
       payload_sha256: 6723b8e2bf332a5013987eb09434396a0ca0b03f810daa6377ccd5e427473519
@@ -228,6 +238,7 @@ series_runs:
       intent_sha256: 4d11cc8289b6a14db2900eb697fec94521fb373db8330efbef145e6ef471a578
       report_sha256: 9f31c3ac0e09ee90da45a783ec52903c1b3af8b9bf1e80fd7667f13dfe051da5
       token_ban: null
+      token_ban_report_sha256: null
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -235,6 +246,7 @@ series_runs:
         structure: mismatch
         symbolic_validation_status: pass
       pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
     - round: 4
       payload_manifest_sha256: fbd2b2f6081575ca8a3c36a47c1a75d49bdce366fc1f9beebbbd6a623802e801
       payload_sha256: d9354199c923df566daa502b5c4d5d627d95ca17908f662dacb81990fe8977b5
@@ -242,6 +254,7 @@ series_runs:
       intent_sha256: 3d1a88d95dfc237b88ca2eef34ccd285c6784f248b45bb9a438ec31a334480c6
       report_sha256: c44b13653cfded797f434b7bbd83d8e1c4f00901b78af113b1e048af4cf86321
       token_ban: null
+      token_ban_report_sha256: null
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -249,6 +262,7 @@ series_runs:
         structure: mismatch
         symbolic_validation_status: pass
       pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
     - round: 5
       payload_manifest_sha256: 5b82001d97de17a76fba46d94f7cf91b38abe4093edc240ddf8d2d7ca7138dd9
       payload_sha256: 22a04b13ce1ff5e6db3b7b78bb171c6eff1d4ecc138fa9a6f3d24b1769a32785
@@ -256,6 +270,7 @@ series_runs:
       intent_sha256: a17642b869901f767e70a1da6c2e911b88f834f9ee2b770b4cd52ec5ee348a2c
       report_sha256: 7b1d6a21eb4ef8dc6b2e40132961cbdb6eb51c287aa3d7681dd8d1915c5a4179
       token_ban: null
+      token_ban_report_sha256: null
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -263,6 +278,7 @@ series_runs:
         structure: mismatch
         symbolic_validation_status: pass
       pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
     outcome: unreached
     rounds_to_success: null
     failure_mode: contract_defect
@@ -279,6 +295,7 @@ series_runs:
       intent_sha256: a849b4d3ddbc33634c6a954082cb56d5dc5cae26c47453bcc2cb4a76f2282577
       report_sha256: 381d51a74602c80bfc3635758ea1d4e48cc7cbffda5237b1cb680dccaa629078
       token_ban: null
+      token_ban_report_sha256: null
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -286,6 +303,7 @@ series_runs:
         structure: exact_match
         symbolic_validation_status: pass
       pareto_vs_prev: null
+      pareto_report_sha256: null
     outcome: reached
     rounds_to_success: 1
     failure_mode: null
@@ -302,6 +320,7 @@ series_runs:
       intent_sha256: 14293e1cd801c379503d120c2681867de6797a64f26af1d7e51e391764d3f3c5
       report_sha256: 2efb4eae4e9849c28263d0b8fd1145a63c949ae797881f35bccd895769167c82
       token_ban: pass
+      token_ban_report_sha256: "52bc24db50893c0a29b0844d7257607f44726fb0929f76e6e0bf816d5f61c942"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -309,6 +328,7 @@ series_runs:
         structure: exact_match
         symbolic_validation_status: pass
       pareto_vs_prev: null
+      pareto_report_sha256: null
     - round: 2
       payload_manifest_sha256: 9fa31d19b917cdc5d356cfa2ae2ca046e139d9d93097d821c3d01afb289da234
       payload_sha256: 0957429cd8f2e2f1bade0095e71e678dec258dd30d57969219cd716f238c1326
@@ -316,6 +336,7 @@ series_runs:
       intent_sha256: 6edd7527abcbe1231e246c40ea048f2ddc1084b1ca03a4032c4093985157dc7b
       report_sha256: 14e80d6d0778022e5efa4da5b646129d6c3121e7019fc602ae64ab60d0f6114a
       token_ban: pass
+      token_ban_report_sha256: "ed4e6b5b70c21801cdbdd218b97e2a0174971746c1f1c265cbd5d5bc569408dd"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -323,6 +344,7 @@ series_runs:
         structure: exact_match
         symbolic_validation_status: pass
       pareto_vs_prev: true
+      pareto_report_sha256: "e4ad50bf8d93ff7f646b70652a0ad92d35a5b3018338cea880fc6fa75fc196ce"
     outcome: reached
     rounds_to_success: 2
     failure_mode: null
@@ -339,6 +361,7 @@ series_runs:
       intent_sha256: 630d3101f4db49eaa922b93f820606acc61f7b39c370cf26f02f6a630af4df4f
       report_sha256: 0f8487ce05adea2804d4c28e42f6ed2af416b71d0f2e555c6c462d8785240fe8
       token_ban: pass
+      token_ban_report_sha256: "b0e80ec73ece9453207d91d3d523fc564bed266325c1edd7cc5b13b0dc54cb90"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -346,6 +369,7 @@ series_runs:
         structure: exact_match
         symbolic_validation_status: pass
       pareto_vs_prev: null
+      pareto_report_sha256: null
     - round: 2
       payload_manifest_sha256: 01be841d212b6cd4ca33d18272c2973d65c6e7917cb99790c1484944afaa47c3
       payload_sha256: b35aba4c1e2c08d49934d9691f8ad86194c74a3e3edf0bc7521e814d674cef00
@@ -353,6 +377,7 @@ series_runs:
       intent_sha256: cc195ec9d17112cc184b0f09d19ca5c7f22bb459bd309e851a48833dd14ab903
       report_sha256: 233aa0a7f168a6836f0cd637dfb8ba4da7f5852c24065fa5370438f1c50fa286
       token_ban: pass
+      token_ban_report_sha256: "17970de2e66a8fc447454adca47d0fbc3c731d126ea69c63145f98d33c37cd98"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -360,6 +385,7 @@ series_runs:
         structure: exact_match
         symbolic_validation_status: pass
       pareto_vs_prev: true
+      pareto_report_sha256: "e4ad50bf8d93ff7f646b70652a0ad92d35a5b3018338cea880fc6fa75fc196ce"
     outcome: reached
     rounds_to_success: 2
     failure_mode: null
@@ -376,6 +402,7 @@ series_runs:
       intent_sha256: 88775bd299edd52fd6aedd73caf4b405af80bea1ea2fb7dc4693dffb6875775a
       report_sha256: 08a495f290ca86db054f7a59cc71278510fc8b3af54a763364b8dab0d0d72983
       token_ban: pass
+      token_ban_report_sha256: "c4f4f1fd0edbb6b23ba8de0b17f92a0c7c0b426a4b5c3eb7285e964265ca11bf"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -383,6 +410,7 @@ series_runs:
         structure: mismatch
         symbolic_validation_status: pass
       pareto_vs_prev: null
+      pareto_report_sha256: null
     - round: 2
       payload_manifest_sha256: 82462577a831b96f428a37070affb8ffaf969a376e599af4334b0c6fdfb6b309
       payload_sha256: 8e9471a94850e28ef3ac61547a77ddaf992d98455baf234cdd0672ecc169fbe6
@@ -390,6 +418,7 @@ series_runs:
       intent_sha256: c17fa4e801913e727ba4b2c9950930d41f7d878a2bcff7a66c67a0bc779aa49f
       report_sha256: b47bbd9669ed19034b64a6c3dd8eb465c87c08da7644d4351ad7ff565f091b95
       token_ban: pass
+      token_ban_report_sha256: "c4ac19530dc2cca0a5c15cd322f286feb7c628ff54a1f6e892eb20f1f47d5912"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -397,6 +426,7 @@ series_runs:
         structure: exact_match
         symbolic_validation_status: pass
       pareto_vs_prev: true
+      pareto_report_sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
     outcome: reached
     rounds_to_success: 2
     failure_mode: null
@@ -413,6 +443,7 @@ series_runs:
       intent_sha256: 1cef25878be23fba7ca65b05bdc6689533683cc69b68e7e229dea0b092d3e9de
       report_sha256: 72e917640c65294ba851a7e57ccc86c142c8656f3db7bf5274b1e674322c6f38
       token_ban: pass
+      token_ban_report_sha256: "0e93e105965159a3bef47da4eb2cecbc321d32e2708ea6ed27d6383fdff8b841"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -420,6 +451,7 @@ series_runs:
         structure: mismatch
         symbolic_validation_status: pass
       pareto_vs_prev: null
+      pareto_report_sha256: null
     - round: 2
       payload_manifest_sha256: c12d083e0fcea20aeb6247c1bf8c9a5fb1a832d1f5d91049d0d4a316de911750
       payload_sha256: a3e1a4e28f2bc2d104c21a228055b08907d75431c5081a0b98a01d80b06fc224
@@ -427,6 +459,7 @@ series_runs:
       intent_sha256: 32d21e2d4d6bdbdcc609c026691d960fa0c26337d6a7ffa7e77c7dd5c8ae6b27
       report_sha256: 151761d30fc9cea7994fb2012ba0c95c018eaa13d2b5c3f7ba4745e18ff5b85b
       token_ban: pass
+      token_ban_report_sha256: "528c224f78fbafaa7bd29323b8baf9b5dacd3031eea202085322d50bfce5cd35"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -434,6 +467,7 @@ series_runs:
         structure: mismatch
         symbolic_validation_status: pass
       pareto_vs_prev: true
+      pareto_report_sha256: "65bf8840b3d65955de512e7360acdad8dd088d23ec0491a87cee046f6bb35efc"
     - round: 3
       payload_manifest_sha256: 12ec81359924a75205685a5a4e906001123939faf7c2d15e3cda0a51dc737b27
       payload_sha256: 0b8a3a575722fc5317b94ec92dc1f68715405aa6bc37138bc3fc47a3b1928533
@@ -441,6 +475,7 @@ series_runs:
       intent_sha256: b780d436db51589cd1fb09f41d9de1d4cb73fb43b64bf9f354d6d7d4e56c0be6
       report_sha256: b1aabecd67df1bbd575c8c13f86a6dce4778799804e30319d5e32d54e03e643a
       token_ban: pass
+      token_ban_report_sha256: "c3fb86d1e299afb031adc4406c393713281c996984ce4106eb07a9045b519ba9"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -448,6 +483,7 @@ series_runs:
         structure: mismatch
         symbolic_validation_status: pass
       pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
     - round: 4
       payload_manifest_sha256: a09af7eb2638ab37b34efded0bea87ed2bc424a9ec43fb360116b41a667eb1f0
       payload_sha256: 4c7424b47caad790520f16dedae81c4029d7dddd55fb8397bc9751ca8feac67a
@@ -455,6 +491,7 @@ series_runs:
       intent_sha256: 2fafd2c7932af9756133f4e3a9daeefeb98a29b3e23715f920fcbe245e5d9555
       report_sha256: 8a871a0e15d02345676d990be34c6d335acc3eaf30f159d28a4351649f13a9c0
       token_ban: pass
+      token_ban_report_sha256: "dfe5c2257c72bdd9d0acb3c044b1c9283125ee3e8adbd03421a422faf792ae73"
       author_tool_use: 0
       verdicts:
         brightness: preserved
@@ -462,6 +499,7 @@ series_runs:
         structure: exact_match
         symbolic_validation_status: pass
       pareto_vs_prev: true
+      pareto_report_sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
     outcome: reached
     rounds_to_success: 4
     failure_mode: null

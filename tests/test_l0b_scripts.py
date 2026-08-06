@@ -3512,11 +3512,62 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
             (f"tasks[{task_id}].positive_control.report", pc_dir / "report.json", pc["report_sha256"])
         )
 
+    # per-round judge 成果物の実体照合（PR #249 Codex レビュー第 7 巡, P2）:
+    # `series_runs` を traverse し、周回をハードコード列挙せず台帳に記載
+    # された全周回を機械的にカバーする（将来の周回追加が自動でカバーされる）。
+    # 対象は score.yaml / intent.yaml / report.json / payload.manifest.json
+    # + 判定成果物（token_ban.json / pareto_vs_round*.json、存在する周回の
+    # み——`payload_sha256` は `payload.md` 自体を on-disk に保持しない設計
+    # （author-visible な一時成果物、`payload.manifest.json` 内部の
+    # `payload_sha256` フィールドとしてのみ保持）のためファイル実体照合の
+    # 対象外のまま据え置く）。
+    null_consistency_checks: list[tuple[str, Path, bool]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            prefix = f"series_runs[{series_entry['task']}/{series_entry['series']}].rounds[{round_num}]"
+
+            for field, filename in (
+                ("payload_manifest_sha256", "payload.manifest.json"),
+                ("score_sha256", "score.yaml"),
+                ("intent_sha256", "intent.yaml"),
+                ("report_sha256", "report.json"),
+            ):
+                checks.append((f"{prefix}.{field}", round_dir / filename, round_entry[field]))
+
+            token_ban_sha = round_entry["token_ban_report_sha256"]
+            token_ban_path = round_dir / "token_ban.json"
+            if token_ban_sha is not None:
+                checks.append((f"{prefix}.token_ban_report_sha256", token_ban_path, token_ban_sha))
+            null_consistency_checks.append(
+                (f"{prefix}.token_ban_report_sha256", token_ban_path, token_ban_sha is not None)
+            )
+
+            pareto_sha = round_entry["pareto_report_sha256"]
+            pareto_path = round_dir / f"pareto_vs_round{round_num - 1}.json"
+            if pareto_sha is not None:
+                checks.append((f"{prefix}.pareto_report_sha256", pareto_path, pareto_sha))
+            null_consistency_checks.append(
+                (f"{prefix}.pareto_report_sha256", pareto_path, pareto_sha is not None)
+            )
+
     assert checks, "no pin entries collected — test would vacuously pass"
     for label, path, expected_sha256 in checks:
         assert path.is_file(), f"{label}: pinned path does not exist: {path}"
         actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         assert actual_sha256 == expected_sha256, f"{label}: sha256 mismatch for {path}"
+
+    # null/非 null と実ファイル有無の一貫性: pin が null なのに実ファイルが
+    # 存在する（pin 忘れ）、または pin があるのに実ファイルが存在しない
+    # （上の checks ループで既に path.is_file() が拾うが、ここでは逆方向 —
+    # 「pin が null」側の一貫性を明示的に確認する）。
+    for label, path, expect_exists in null_consistency_checks:
+        if not expect_exists:
+            assert not path.exists(), (
+                f"{label}: pin is null but file exists on disk (pin omission): {path}"
+            )
 
 
 def _assert_round_entry_shape(round_entry: dict) -> None:
@@ -3532,6 +3583,14 @@ def _assert_round_entry_shape(round_entry: dict) -> None:
         assert isinstance(value, str) and _SHA256_HEX_RE.fullmatch(value), field
     token_ban = round_entry["token_ban"]
     assert token_ban is None or token_ban in ("pass", "fail")
+    # 判定成果物の content pin（PR #249 Codex レビュー第 7 巡, P2）:
+    # null 許容だが非 null なら 64-hex（`token_ban`/`pareto_vs_prev` という
+    # 姉妹フィールドの null/非 null と一致するかは
+    # `test_ledger_l0br_pins_match_actual_file_sha256` 側の実体照合が検査
+    # する——ここは値の形状のみ enforce する）。
+    for field in ("token_ban_report_sha256", "pareto_report_sha256"):
+        value = round_entry[field]
+        assert value is None or (isinstance(value, str) and _SHA256_HEX_RE.fullmatch(value)), field
     assert isinstance(round_entry.get("author_tool_use"), int) and round_entry["author_tool_use"] >= 0
     assert isinstance(round_entry.get("verdicts"), dict)
 
