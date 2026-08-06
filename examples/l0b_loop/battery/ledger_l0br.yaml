@@ -1,7 +1,14 @@
 # L0b-R バッテリー台帳 — 単一著者頑健性（課題難易度 × 到達率の地図）
 #
 # 一次資料。事前登録（tasks / 判定規約 / pin）→ 実行 evidence（series_runs 追記）
-# の 2 段 commit で事前登録性を git 履歴で証明する。Design Memo = L0b-R
+# の 2 段 commit で事前登録性を git 履歴で証明する。
+# 境界宣言（examples/l0b_loop/ledger.yaml の runner_at_measurement 節ヘッダ
+# コメントと同型。PR #249 Codex レビュー、耐久性指摘を受けて明文化）:
+# この git 証明は本リポジトリのマージ慣行（マージコミット）を保持する文脈
+# でのみ checkout 再現可能。squash マージや履歴を持たない export の文脈
+# では git 系譜は attestation（当時の測定者による証言）へ格下げされ、
+# git 非依存の一次再現アンカーは本台帳の content pin（sha256）になる。
+# Design Memo = L0b-R
 # （User 方針決裁 2026-08-06: 単一 LLM 切り分け先行・複数モデル比較後回し）。
 # 正本 = docs/llm_adapter_planning.md §5（成功条件）+ 本台帳。
 # 事前登録 commit（2026-08-06）: pin 未充填センチネルは全て実測 sha256 へ置換
@@ -74,7 +81,7 @@ author_identity:
 payload_composition:
   composer:
     path: ../scripts/compose_payload.py
-    sha256: "a1bd613a646c331c866b6480cd8d827d58410acc70c8dba9005a6c1629a12dfa"
+    sha256: "2c3111b9bef153c8e8be3d935716af9db00b806408bf3a7096ad17a993b7943c"
   policy: >-
     全周回の著者可視ペイロードは compose_payload.py の出力のみ
     （AGENTS.md §8「情報遮断実験のペイロード組成は機械化する」2026-08-06

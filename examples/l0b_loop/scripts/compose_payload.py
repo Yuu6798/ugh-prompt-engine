@@ -62,6 +62,24 @@ content が改行で終わらない part のみ改行を 1 つ補い `newline_ap
 既存なら書き込み前に `ProtectedPathError`（上書き禁止）。タイムスタンプ・
 乱数・環境依存値は一切含めない——同一 manifest + 同一入力ファイル群は常に
 バイト同一の `payload.md`/`payload.manifest.json` を生成する。
+
+`payload.md` の publish 成功後に `payload.manifest.json` の publish が失敗
+すると、pin manifest を欠いた `payload.md` だけが「完全なペイロード」に見
+えて残留し、かつ再実行は上書き禁止チェックに拒否される（Codex review P2
+指摘）。これを防ぐため、`compose_payload` は 2 本目の publish を
+try/except で包み、失敗時は 1 本目（`payload.md`）を unlink してから元の
+例外を再送出する——publish は「両方揃う」か「どちらも残らない」かの 2 状
+態に限定する（rollback）。unlink 自体が失敗した場合は隠さず、元の例外へ
+unlink 失敗の文脈を付けて送出する。
+
+**境界宣言**: この rollback がカバーするのは「2 本目の書き込み失敗」のみ。
+`os.replace` による 2 回の rename（`atomic_write_bytes` 内部、1 本目・2 本
+目それぞれ）の**間**でプロセスが強制終了するウィンドウは、この rollback
+の対象外のまま残る——構造的な 2 ファイル原子性（ディレクトリ単位の
+swap 等）は本計器のスコープ外の再設計を要する。運用上、そのウィンドウで
+の残留を検出した場合（`payload.md` のみ存在し `payload.manifest.json` が
+無い）は「payload.md 単独残留 = 不完全公開」として手動で `payload.md` を
+削除してから再実行する。
 """
 from __future__ import annotations
 
@@ -390,7 +408,25 @@ def compose_payload(manifest_path: Path, out_dir: Path) -> dict[str, Any]:
     ).encode("utf-8")
 
     atomic_write_bytes(payload_path, payload_bytes)
-    atomic_write_bytes(manifest_out_path, manifest_bytes)
+    try:
+        atomic_write_bytes(manifest_out_path, manifest_bytes)
+    except BaseException as exc:
+        # Rollback publish: 2 本目の書き込みが失敗した場合、1 本目
+        # （`payload_path`）だけが残留すると pin manifest なしの「不完全な
+        # ペイロード」が完全な公開物に見えてしまう上、再実行は上書き禁止
+        # チェック（`ProtectedPathError`、本関数冒頭）で拒否される。
+        # publish は「両方揃う」か「どちらも残らない」かの 2 状態に限定する。
+        try:
+            payload_path.unlink()
+        except OSError as unlink_exc:
+            raise OSError(
+                f"payload manifest publish failed ({exc!r}) and rollback of the "
+                f"already-published payload file {payload_path} also failed "
+                f"({unlink_exc!r}) — payload.md may remain orphaned without a "
+                "matching payload.manifest.json; manual cleanup required before "
+                "re-running"
+            ) from exc
+        raise
 
     return {
         "payload_path": payload_path,

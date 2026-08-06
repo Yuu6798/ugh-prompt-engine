@@ -33,6 +33,17 @@ off-contract 会計）。正本 = [`llm_adapter_planning.md`](llm_adapter_planni
 
 事前登録の正本は台帳（凍結 commit 2b26238）。要点のみ:
 
+**境界宣言**（`examples/l0b_loop/ledger.yaml` の `runner_at_measurement` 節
+ヘッダコメントと同型。PR #249 Codex レビュー、耐久性指摘を受けて明文化）:
+凍結 commit への `git checkout` による事前登録性の証明は、**本リポジトリの
+マージ慣行（マージコミット。PR #245/#246 前例）を保持する文脈でのみ**
+再現可能である。squash マージや履歴を持たない export の文脈では、この
+git 系譜は再現可能な audit evidence ではなく attestation（当時の測定者
+による証言）へ格下げされる。git 非依存の一次再現アンカーは台帳の
+content pin（各成果物の sha256）であり、こちらは文脈に依存しない。系譜の
+実測: `git merge-base --is-ancestor 2b26238 62f6ead` = 成立（2026-08-06
+確認）。
+
 | 課題 | 難易度軸 | 構造標的 | R4 禁止語 | 陽性対照 |
 |---|---|---|---|---|
 | BR-D1 | single_lever_proven | 4 要素列（T2 map） | なし | pin 済み T2 対照の再現バイト一致 |

@@ -2864,6 +2864,55 @@ def test_compose_payload_refuses_to_overwrite_existing_output(tmp_path: Path):
         compose_payload.compose_payload(manifest_path, out_dir)
 
 
+# --- Codex review (PR #249), P2: 2 本目の publish 失敗時の rollback --------
+
+
+def test_compose_payload_rolls_back_payload_on_second_publish_failure(tmp_path: Path, monkeypatch):
+    """`payload.md` の publish 後に `payload.manifest.json` の publish が失敗
+    したら、rollback で `payload.md` も unlink され、`out_dir` にどちらも
+    残らない（不完全公開の防止）。その後 monkeypatch を外して同じ `out_dir`
+    へ再実行すると、上書き禁止チェックに引っかからず両ファイルが正常に
+    生成される（rollback により再実行可能）。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    real_atomic_write_bytes = compose_payload.atomic_write_bytes
+    call_count = {"n": 0}
+
+    def _fail_on_second_call(path, data):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated failure writing payload.manifest.json")
+        return real_atomic_write_bytes(path, data)
+
+    monkeypatch.setattr(compose_payload, "atomic_write_bytes", _fail_on_second_call)
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert not (out_dir / "payload.md").exists()
+    assert not (out_dir / "payload.manifest.json").exists()
+
+    monkeypatch.undo()
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert (out_dir / "payload.md").exists()
+    assert (out_dir / "payload.manifest.json").exists()
+    assert result["payload_sha256"]
+
+
 def test_compose_payload_records_newline_appended_when_content_has_no_trailing_newline(
     tmp_path: Path,
 ):
