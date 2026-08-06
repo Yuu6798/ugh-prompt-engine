@@ -267,6 +267,43 @@ series_runs:
     rationale: 第 1 周回で全軸成功（key/brightness preserved・structure exact_match・境界 8.4521/13.4676/19.11s）。s1 と対照的に、著者は chorus 2 連を音色語彙で差異化せず同一 'full energy' 反復とする戦略（融合リスクを intent で自覚的に受容）を選び、drone 化罠を回避した。同一課題での到達分散（s1=unreached/5 周 vs s2=reached/1 周）は著者戦略選択に帰属
     files_dir: series/br_d1_s2/
     started_utc: '2026-08-06T17:58:50Z'
+  - task: br_d2
+    series: s1
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 4f073744f8ebd568483700d969fab861ba5a2f14d49971e58221b432fef20176
+      payload_sha256: 189bec8747c06172ba3e9ca70d884648ba39dff8bd8107f5f050c834cecea711
+      score_sha256: b3dab5476ca33e58797db440ac8c6b87ed52214c0c8305c914d58e048b568a37
+      intent_sha256: 14293e1cd801c379503d120c2681867de6797a64f26af1d7e51e391764d3f3c5
+      report_sha256: 2efb4eae4e9849c28263d0b8fd1145a63c949ae797881f35bccd895769167c82
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: deviated
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+    - round: 2
+      payload_manifest_sha256: 9fa31d19b917cdc5d356cfa2ae2ca046e139d9d93097d821c3d01afb289da234
+      payload_sha256: 0957429cd8f2e2f1bade0095e71e678dec258dd30d57969219cd716f238c1326
+      score_sha256: 06f3e20467c5e874405985feadb8c961f9ca28837a5b8325aece67fdb5479427
+      intent_sha256: 6edd7527abcbe1231e246c40ea048f2ddc1084b1ca03a4032c4093985157dc7b
+      report_sha256: 14e80d6d0778022e5efa4da5b646129d6c3121e7019fc602ae64ab60d0f6114a
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+    outcome: reached
+    rounds_to_success: 2
+    failure_mode: null
+    rationale: round1 = structure exact_match / brightness preserved / R4 pass だが、著者の保険的ダイアトニック進行 (i-VI-III-VII) が key を平行長調 F major へ倒し deviated。round2 = 著者は報告の観測値のみから平行調の音組成同一性を診断し、C#（D harmonic minor の導音）を含む A major を導入する i-V-iv-i へ差し替え、key preserved で全軸成功。pareto improved=true（key 1→0・他軸非退行）= 報告のみによる操舵の改善ペアがバッテリー内で成立
+    files_dir: series/br_d2_s1/
+    started_utc: '2026-08-06T18:03:12Z'
 off_contract_events:
   - date: "2026-08-06"
     task: "br_d1"
