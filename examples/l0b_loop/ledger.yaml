@@ -410,6 +410,66 @@ t2:
         「検出器が有効応答する対比はスペクトル差（sub bass 有無）のみ」
         という著者仮説が残存 — round 4 は周波数領域コントラストへの転換を
         著者自身が予告している。
+    - round: 4
+      date: "2026-08-06"
+      author: >-
+        情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
+        T2 課題文 + contract.md v1 + round 3 の自作 score/intent + round 3
+        差分報告 + coordinator 注記（相対パターン不変というペイロード内
+        導出可能事実の要約）。ツール使用の実測 = 0 回 — off-contract
+        イベントなし。
+      files:
+        score:
+          path: rounds_t2/round4/score.yaml
+          sha256: "9e913434cbdf2054fb2b21af6034595d689b41a8400b5e7a001c5eeca1cb39a2"
+          git_blob_sha1: "a1f75c58076e2a894dfd79dad8e8f183932935e4"
+        intent:
+          path: rounds_t2/round4/intent.yaml
+          sha256: "2853bc0ba1a971c6b5d9a6f646b7279832d76e971b880e2b28b8f9f79bbb4c7f"
+        report:
+          path: rounds_t2/round4/report.json
+          sha256: "f6075cfe4925899a2ff8dcc837da79598a6e179ca25bc3659a6460de727e9010"
+        pareto_vs_round3:
+          path: rounds_t2/round4/pareto_vs_round3.json
+          sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+          note: "Byte-identical to prior tie outputs (same 0/0/1 -> 0/0/1 distances)."
+      workdir_note: "Scratch workdir = build/l0b/t2_round4/ (not committed)."
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+          observed_sections:
+            - {label: "intro", start_seconds: 0.0, end_seconds: 19.7137}
+            - {label: "chorus", start_seconds: 19.7137, end_seconds: 24.7989}
+            - {label: "outro", start_seconds: 24.7989, end_seconds: 40.0}
+      notes:
+        - {kind: position_match_rate, value: 0.5}
+      pareto_vs_prev:
+        improved: false
+        band_excluded: false
+        per_axis_summary: "key 0->0 / brightness 0->0 / structure 1->1 — tie（3 連続）。"
+      interpretation: >-
+        著者は軸数仮説の直接検証として intro を "full energy, no kick" に
+        揃え、chorus1 との差分を 2 軸へ縮小した。観測境界は round 3 と
+        小数 4 桁まで完全同一。コーディネーター側の追加実測が決定的事実を
+        確定: build/l0b/t2_round3/take.wav と t2_round4/take.wav は
+        **バイト完全同一**（eval_score.yaml は相違）。すなわち intro の
+        演奏ヒントを「silence, sparse, low density, no kick」から
+        「full energy, no kick」へ変えても決定論演奏者は同一音響を出力
+        した — トークン効果は加算的でなく、この組合せでは "no kick" が
+        他トークンを支配する（round 1→2 の take.wav 相違は outro 側の
+        変更に帰属する可能性が高い）。契約 v1 §2 の「これらはセクション
+        の音量・密度・持続音の性格を変える」という開示は演奏者の実際の
+        ヒント解決規則（優先順位・非加算）を伝えておらず、著者が音響的に
+        無効な編集を繰り返す原因になった。さらに報告正規形には「編集が
+        音響を変えたか」を著者へ返す語彙（例: take fingerprint note）が
+        ないため、著者はこの無効性を報告からは検知できない — いずれも
+        L0a 契約 v2 への一級の欠陥材料（D2 により著者へは未開示、報告
+        正規形の範囲内で周回続行）。
 
 rounds:
   - round: 1
