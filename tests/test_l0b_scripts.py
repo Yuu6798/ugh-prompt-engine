@@ -216,9 +216,13 @@ def test_levenshtein_matches_expected_distances():
 def test_pareto_eval_cli_writes_deterministic_output(tmp_path: Path):
     prev_path = tmp_path / "prev.json"
     curr_path = tmp_path / "curr.json"
+    # key/brightness carry real requirement/observed values: since the B1
+    # gate (PR #247 Codex P1) validates inputs as AuthoringDiffReport, a
+    # success verdict with requirement=None is now (correctly) rejected —
+    # real run_round.py output always populates these.
     prev_path.write_text(json.dumps(_report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
         structure=_axis(
             verdict="mismatch",
             requirement=["intro", "chorus", "outro"],
@@ -226,8 +230,8 @@ def test_pareto_eval_cli_writes_deterministic_output(tmp_path: Path):
         ),
     )))
     curr_path.write_text(json.dumps(_report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
         structure=_axis(
             verdict="exact_match",
             requirement=["intro", "chorus", "outro"],
@@ -471,3 +475,246 @@ def test_positive_control_t2_round_trip_reproduces_pinned_report(tmp_path: Path)
 
     pinned_bytes = POSITIVE_CONTROL_T2_REPORT_PATH.read_bytes()
     assert output_path.read_bytes() == pinned_bytes
+
+
+# --- B1/B2 (Codex review PR #247 #5): pareto_eval.py input validation + -o guard ---
+
+
+def _schema_valid_report(**axes: dict) -> dict:
+    """Like `_report()` above, but every axis carries a well-formed value
+    for its verdict (as `AuthoringDiffReport` requires for a *success*
+    verdict) — used for the new B1/B2 tests below, which exercise
+    `pareto_eval.main()`'s new `AuthoringDiffReport.model_validate` gate and
+    therefore need schema-valid fixtures (unlike `_report()`/`_axis()`
+    above, whose `requirement=None`/`observed=None` defaults are fine for
+    the pre-existing `evaluate()`-only tests but are not valid
+    `AuthoringDiffReport` input)."""
+    return _report(**axes)
+
+
+def _valid_key_axis(*, verdict: str = "preserved") -> dict:
+    return _axis(verdict=verdict, requirement="D minor", observed="D minor")
+
+
+def _valid_brightness_axis(*, verdict: str = "preserved") -> dict:
+    return _axis(verdict=verdict, requirement="dark", observed="dark")
+
+
+def _valid_structure_axis(*, verdict: str = "exact_match") -> dict:
+    return _axis(
+        verdict=verdict,
+        requirement=["intro", "chorus", "outro"],
+        observed=["intro", "chorus", "outro"],
+    )
+
+
+def test_main_rejects_contradictory_report_with_nonzero_exit(tmp_path: Path):
+    """B1 negative case: a report whose `key` axis claims a success verdict
+    (`preserved`) outside the `measured` band is internally contradictory
+    per `AuthoringDiffReport`'s own `_success_verdict_requires_measured_band`
+    validator. `main()`'s new validation gate must reject it before
+    `evaluate()` ever runs, with a non-zero exit — not silently compute a
+    Pareto result over untrustworthy input."""
+    good = _schema_valid_report(
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
+        structure=_valid_structure_axis(),
+    )
+    contradictory = json.loads(json.dumps(good))
+    contradictory["axes"]["key"]["band"] = "not_observed"  # preserved x not measured
+
+    prev_path = tmp_path / "prev.json"
+    curr_path = tmp_path / "curr.json"
+    out_path = tmp_path / "result.json"
+    prev_path.write_text(json.dumps(contradictory))
+    curr_path.write_text(json.dumps(good))
+
+    exit_code = pareto_eval.main(
+        [str(prev_path), str(curr_path), "--pareto", str(PARETO_SPEC_PATH), "-o", str(out_path)]
+    )
+    assert exit_code != 0
+    assert not out_path.exists()
+
+
+def test_main_accepts_schema_valid_reports(tmp_path: Path):
+    """Positive counterpart: schema-valid reports still pass the new gate
+    and produce the same deterministic output as before (evaluate()'s
+    output is untouched by validation — B1's docstring's byte-compat
+    claim)."""
+    good = _schema_valid_report(
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "verse", "chorus", "outro"],
+        ),
+    )
+    improved = _schema_valid_report(
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
+        structure=_valid_structure_axis(),
+    )
+    prev_path = tmp_path / "prev.json"
+    curr_path = tmp_path / "curr.json"
+    out_path = tmp_path / "result.json"
+    prev_path.write_text(json.dumps(good))
+    curr_path.write_text(json.dumps(improved))
+
+    exit_code = pareto_eval.main(
+        [str(prev_path), str(curr_path), "--pareto", str(PARETO_SPEC_PATH), "-o", str(out_path)]
+    )
+    assert exit_code == 0
+    assert json.loads(out_path.read_text())["improved"] is True
+
+
+def test_pareto_eval_reject_output_collision_with_prev_report():
+    with pytest.raises(pareto_eval.ProtectedPathError):
+        pareto_eval._reject_output_collision(
+            Path("prev.json"),
+            prev_report_path=Path("prev.json"),
+            curr_report_path=Path("curr.json"),
+            pareto_path=PARETO_SPEC_PATH,
+        )
+
+
+def test_pareto_eval_reject_output_collision_with_pareto_spec():
+    with pytest.raises(pareto_eval.ProtectedPathError):
+        pareto_eval._reject_output_collision(
+            PARETO_SPEC_PATH,
+            prev_report_path=Path("prev.json"),
+            curr_report_path=Path("curr.json"),
+            pareto_path=PARETO_SPEC_PATH,
+        )
+
+
+def test_pareto_eval_output_collision_accepts_fresh_path(tmp_path: Path):
+    # Must not raise.
+    pareto_eval._reject_output_collision(
+        tmp_path / "result.json",
+        prev_report_path=Path("prev.json"),
+        curr_report_path=Path("curr.json"),
+        pareto_path=PARETO_SPEC_PATH,
+    )
+
+
+def test_main_rejects_output_collision_with_curr_report(tmp_path: Path):
+    """B2 negative case, at the `main()` CLI level: `-o` aliasing
+    `curr_report` is refused before anything is written (and before the
+    reports are even parsed/validated — the guard runs first)."""
+    good = _schema_valid_report(
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
+        structure=_valid_structure_axis(),
+    )
+    prev_path = tmp_path / "prev.json"
+    curr_path = tmp_path / "curr.json"
+    prev_path.write_text(json.dumps(good))
+    curr_path.write_text(json.dumps(good))
+
+    exit_code = pareto_eval.main(
+        [str(prev_path), str(curr_path), "--pareto", str(PARETO_SPEC_PATH), "-o", str(curr_path)]
+    )
+    assert exit_code != 0
+    # The guard must have fired before curr.json was touched/overwritten.
+    assert json.loads(curr_path.read_text()) == good
+
+
+# --- B3 (Codex review PR #247 #5): run_round.py single input-snapshot reads ---
+
+
+def test_prepare_scores_does_not_reread_score_path(tmp_path: Path):
+    """`_prepare_scores` must derive everything from the `score_bytes`
+    argument, not re-read `score_path` off disk — passing a `score_path`
+    that does not exist proves this (a re-read would raise
+    `FileNotFoundError`)."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    score_bytes = POSITIVE_CONTROL_SCORE_PATH.read_bytes()
+    nonexistent_score_path = tmp_path / "does-not-exist.yaml"
+
+    eval_score_path, eval_score_sha256 = run_round._prepare_scores(
+        nonexistent_score_path, score_bytes, paths
+    )
+    assert eval_score_path == paths["eval_score"]
+    assert eval_score_path.exists()
+    assert eval_score_sha256 == run_round._sha256_bytes(eval_score_path.read_bytes())
+    # The eval copy carries the injected control_profile on top of the
+    # source score's own content.
+    eval_data = yaml.safe_load(eval_score_path.read_text(encoding="utf-8"))
+    assert "control_profile" in eval_data
+
+
+def test_structure_axis_does_not_reread_section_map_path_when_bytes_given(tmp_path: Path):
+    """`_structure_axis`'s `section_map_bytes` parameter, when given, is
+    used instead of reading `section_map_path` — passing a nonexistent
+    `section_map_path` alongside real bytes proves the path is not
+    re-read."""
+    observe_report = {
+        "anchors": [
+            {
+                "anchor_id": "structure",
+                "measurements": {"observed_sections": []},
+                "adherence_status": "mismatch",
+                "sensor": {"available": False},
+            }
+        ]
+    }
+    nonexistent_section_map_path = tmp_path / "does-not-exist.json"
+    section_map_bytes = run_round.SECTION_MAP_PATH.read_bytes()
+
+    axis_report, _ = run_round._structure_axis(
+        observe_report,
+        Path("unused-take.wav"),
+        section_map_path=nonexistent_section_map_path,
+        section_map_bytes=section_map_bytes,
+    )
+    assert axis_report.requirement == ["intro", "chorus", "outro"]
+
+
+def test_write_identity_manifest_uses_given_section_map_bytes(tmp_path: Path):
+    """`_write_identity_manifest` writes exactly the `section_map_bytes` it
+    is given (no independent re-read of a section-map path) into
+    `identity/section_map.json`."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    section_map_bytes = run_round.SECTION_MAP_PATH.read_bytes()
+
+    manifest_path, manifest_sha256 = run_round._write_identity_manifest(
+        paths,
+        score_sha256="deadbeef",
+        round_number=0,
+        section_map_bytes=section_map_bytes,
+    )
+    assert manifest_path.exists()
+    assert manifest_sha256 == run_round._sha256_bytes(manifest_path.read_bytes())
+    assert paths["identity_section_map"].read_bytes() == section_map_bytes
+
+
+# --- B4 (Codex review PR #247 #5): run_round.py publish order (hashes before report) ---
+
+
+def test_run_round_writes_hashes_before_report_on_symbolic_fail(tmp_path: Path, monkeypatch):
+    """On the symbolic-fail early-return path, `hashes.json` must be
+    written before the report (`-o`) is published. Verified by making the
+    report's atomic write raise and checking `hashes.json` still exists
+    afterward (proves it was written first, not after) while the report
+    (`-o`) was never created."""
+
+    def _boom(path: Path, data: bytes) -> None:
+        raise RuntimeError("boom: simulated failure writing the report")
+
+    monkeypatch.setattr(run_round, "atomic_write_bytes", _boom)
+
+    bad_score_path = tmp_path / "bad_score.yaml"
+    bad_score_path.write_text("not: a valid composition score\n", encoding="utf-8")
+    workdir = tmp_path / "wd"
+    output_path = tmp_path / "report.json"
+
+    with pytest.raises(RuntimeError, match="boom"):
+        run_round.run_round(bad_score_path, workdir, 0, output_path)
+
+    assert (workdir / "hashes.json").exists()
+    assert not output_path.exists()

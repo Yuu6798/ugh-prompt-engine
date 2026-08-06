@@ -29,6 +29,25 @@ distance computation and the *whole round pair* is reported as
 distance is not trustworthy evidence in either direction, so a round pair
 with any such axis is never counted as improvement evidence (never silently
 downgraded to a "tie").
+
+Input validation (`main()` only — Codex review #5, P1): `prev_report`/
+`curr_report` are validated against `AuthoringDiffReport`
+(`src/svp_rpe/authoring/report.py`) before `evaluate()` runs, so a
+malformed or internally-inconsistent report.json (wrong `Verdict`/`Band`
+vocabulary, a `preserved` verdict paired with a non-`measured` band, etc.)
+fails fast with a clear message and non-zero exit instead of `evaluate()`
+silently computing a distance over untrustworthy input. `evaluate()` itself
+stays a pure function of plain dicts — the validated model is discarded
+after the check (`_load_report()` returns the original parsed dict
+unchanged), so this gate cannot perturb the deterministic JSON `evaluate()`
+already produced (a pin'd `pareto` result JSON stays byte-identical to
+before this gate existed).
+
+Output-collision guard (`main()` only — Codex review #5, P2): `-o`'s
+resolved path is refused, before anything is written, if it matches
+`prev_report`/`curr_report`/`--pareto` (mirrors `run_round.py`'s
+`ProtectedPathError`/`_reject_output_collision` style — a rejected
+invocation must leave the filesystem untouched).
 """
 from __future__ import annotations
 
@@ -39,6 +58,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+from pydantic import ValidationError
+
+from svp_rpe.authoring.report import AuthoringDiffReport
 
 _AXES = ("key", "brightness", "structure")
 
@@ -155,6 +177,46 @@ def evaluate(
     }
 
 
+class ProtectedPathError(RuntimeError):
+    """`-o/--output` would clobber one of this run's own inputs
+    (`prev_report`/`curr_report`/`--pareto`) — refused before anything is
+    written (style mirrors `run_round.py`'s `ProtectedPathError`)."""
+
+
+def _load_report(path: Path) -> dict[str, Any]:
+    """Parses `path` as JSON and validates it against `AuthoringDiffReport`
+    (fail-fast on a malformed/internally-inconsistent report) — the
+    validated model is discarded after the check; the *original* parsed
+    dict is returned unchanged, so `evaluate()`'s deterministic output does
+    not depend on anything pydantic's model construction/serialization
+    might normalize differently (byte-for-byte compatible with the pre-gate
+    behavior for any report that passes validation)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        AuthoringDiffReport.model_validate(data)
+    except ValidationError as exc:
+        raise ValueError(f"{path}: not a valid AuthoringDiffReport: {exc}") from exc
+    return data
+
+
+def _reject_output_collision(
+    output_path: Path, *, prev_report_path: Path, curr_report_path: Path, pareto_path: Path
+) -> Path:
+    resolved_output = output_path.resolve()
+    protected = {
+        prev_report_path.resolve(),
+        curr_report_path.resolve(),
+        pareto_path.resolve(),
+    }
+    if resolved_output in protected:
+        raise ProtectedPathError(
+            f"-o/--output must not resolve to prev_report/curr_report/--pareto "
+            f"(got {resolved_output}) — writing the result there would clobber "
+            "an input this run reads."
+        )
+    return resolved_output
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="L0b Pareto improvement evaluator")
     parser.add_argument("prev_report", type=Path, help="Path to the previous round's report.json")
@@ -165,8 +227,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    prev_report = json.loads(args.prev_report.read_text(encoding="utf-8"))
-    curr_report = json.loads(args.curr_report.read_text(encoding="utf-8"))
+    try:
+        if args.output is not None:
+            _reject_output_collision(
+                args.output,
+                prev_report_path=args.prev_report,
+                curr_report_path=args.curr_report,
+                pareto_path=args.pareto,
+            )
+        prev_report = _load_report(args.prev_report)
+        curr_report = _load_report(args.curr_report)
+    except (ProtectedPathError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
     pareto_spec = yaml.safe_load(args.pareto.read_text(encoding="utf-8"))
 
     result = evaluate(prev_report, curr_report, pareto_spec)

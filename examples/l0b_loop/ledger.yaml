@@ -532,6 +532,32 @@ t2:
         対して実質不感である一方、和声対比（コードのルート/クオリティ）は
         検出器が確実に応答する対比軸であることが 5 周回の消去法で実証
         された。
+      interpretation_correction: >-
+        (2026-08-06 追記、PR #247 Codex レビュー #5 起点の実装検証。原文の
+        interpretation は撤回部分を含むが履歴として残す) performer の
+        _section_profile は physical + role の連結にトークン照合し、round 5
+        は chorus2 の role 説明文中の「sub bass」漏れ込みを含めて全 4
+        セクションが drone_only だった。chord_progression [F,D,D,D] は
+        一度も鳴っておらず、「和声対比への検出器応答」という帰属は撤回。
+        round 4→5 の実音響変化は「唯一の非 drone だった chorus2 (0.85・
+        進行演奏) の drone 化 (0.25) による音場平坦化」であり、4 境界検出の
+        機構は未確定（相対 novelty 閾値仮説）。操舵証拠（報告→修正→Pareto
+        改善という結果の実測）は本訂正の影響を受けない。詳細 =
+        docs/l0b_closed_loop_record.md §3.1・§4.2・§4.3。
+
+post_loop_hardening:
+  # PR #247 レビュー対応（計測完了後のスクリプト硬化。T1/T2 の全計測は
+  # runner_at_measurement / t2.runner_at_measurement の pin 時点の blob で
+  # 実施済みであり、以下は evidence 生成には使われていない）。対象コミットの
+  # 正確な列挙は git log が正:
+  #   git log --oneline --follow -- examples/l0b_loop/scripts/
+  # pin 済み report.json とのバイト互換は T1/T2 slow smoke（決定論回帰
+  # ガード）のパスで検証した。
+  items:
+    - "pareto_eval.py: 入力 report の AuthoringDiffReport.model_validate ゲート (Codex P1)"
+    - "pareto_eval.py: -o と入力 3 パスの衝突ガード (Codex P2)"
+    - "run_round.py: score/section map の単一スナップショット読み (Codex P2)"
+    - "run_round.py: hashes.json 先行書き込み + report の atomic 公開 (Codex P2 軽量版)"
 
 loop_status_t2:
   status: success
@@ -545,7 +571,9 @@ loop_status_t2:
     1->0 厳密改善・全軸非退行・band 除外なし）で充足した。改善は著者が
     差分報告（observed_sections 境界秒）のみを根拠に仮説を絞り込み、
     契約公開範囲内のレバー（events.chord_progression）へ到達した結果で
-    あり、閉ループが操舵として機能した実測点である。
+    あり、閉ループが操舵として機能した実測点である。操舵証拠は結果
+    （報告→修正→改善）の実測であり、round 5 の成立機構の帰属訂正
+    （rounds[round 5].interpretation_correction）とは独立に有効。
   honest_accounting: >-
     rounds 2-4 は 3 連続 tie（改善実績 0）であり、5 周回中改善周回は
     round 5 の 1 件のみ。T1（1 周回で全軸成功、改善ペアなし）と合わせ、

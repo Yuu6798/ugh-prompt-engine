@@ -91,6 +91,7 @@ from svp_rpe.compose.loader import load_composition_score
 from svp_rpe.keys import keys_enharmonically_equal
 from svp_rpe.perform import FAITHFUL_TAKE, perform, wav_bytes
 from svp_rpe.rpe.extractor import extract_rpe_from_file
+from svp_rpe.utils.atomic_io import atomic_write_bytes
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 _LOOP_DIR = _SCRIPTS_DIR.parent
@@ -272,18 +273,19 @@ def _run_validate_cli(score_path: Path, output_path: Path) -> None:
         )
 
 
-def _prepare_scores(score_path: Path, paths: dict[str, Path]) -> tuple[Path, str, str]:
+def _prepare_scores(
+    score_path: Path, score_bytes: bytes, paths: dict[str, Path]
+) -> tuple[Path, str]:
     """Writes the eval copy (`control_profile` injected from the frozen axis
-    table) into `workdir`. Returns `(eval_score_path, score_sha256,
-    eval_score_sha256)` — `score_sha256` hashes the *submitted* `score.yaml`
-    bytes (pinned as the identity manifest's `source`), distinct from
-    `eval_score_sha256` (the copy everything downstream measures)."""
-    score_bytes = score_path.read_bytes()
-    score_sha256 = _sha256_bytes(score_bytes)
-
-    original_copy = paths["score_copy"]
-    original_copy.write_bytes(score_bytes)
-
+    table) into `workdir`, from the already-read `score_bytes` snapshot —
+    the caller (`run_round()`) reads `score.yaml` exactly once per run and
+    passes those same bytes here (and into the `score_copy` write, the
+    symbolic gate, and `hashes["score"]`); this function does not re-read
+    `score_path` from disk itself (`score_path` is kept only to name the
+    file in the `ValueError` message below). Returns `(eval_score_path,
+    eval_score_sha256)` — the submitted score's own hash
+    (`hashes["score"]`/the identity manifest's `source.sha256`) is derived
+    by the caller from the same `score_bytes`, not re-derived here."""
     data = yaml.safe_load(score_bytes)
     if not isinstance(data, dict):
         raise ValueError(f"score.yaml must be a mapping: {score_path}")
@@ -295,7 +297,7 @@ def _prepare_scores(score_path: Path, paths: dict[str, Path]) -> tuple[Path, str
     eval_score_path.write_bytes(eval_bytes)
     eval_score_sha256 = _sha256_bytes(eval_bytes)
 
-    return eval_score_path, score_sha256, eval_score_sha256
+    return eval_score_path, eval_score_sha256
 
 
 def _write_identity_manifest(
@@ -303,17 +305,18 @@ def _write_identity_manifest(
     *,
     score_sha256: str,
     round_number: int,
-    section_map_path: Path,
+    section_map_bytes: bytes,
 ) -> tuple[Path, str]:
     """Deterministically generates `<workdir>/identity_manifest.yaml`.
-    Copies `section_map_path` (T1: `frozen/section_map.json`, T2:
-    `frozen/section_map_t2.json`) into `<workdir>/identity/` —
+    Copies `section_map_bytes` (T1: `frozen/section_map.json`'s bytes, T2:
+    `frozen/section_map_t2.json`'s bytes — read exactly once by
+    `run_round()` and shared with `_structure_axis`'s requirement
+    resolution, not re-read here) into `<workdir>/identity/` —
     `IdentityManifest` artifact locators must resolve inside the manifest's
     own directory (path confinement), so the frozen fixture can't be
     referenced in place."""
     identity_dir = paths["identity_dir"]
     identity_dir.mkdir(exist_ok=True)
-    section_map_bytes = section_map_path.read_bytes()
     section_map_sha256 = _sha256_bytes(section_map_bytes)
     paths["identity_section_map"].write_bytes(section_map_bytes)
 
@@ -393,7 +396,11 @@ def _brightness_axis(field: dict[str, Any]) -> AxisReport:
 
 
 def _structure_axis(
-    observe_report: dict[str, Any], take_wav_path: Path, *, section_map_path: Path
+    observe_report: dict[str, Any],
+    take_wav_path: Path,
+    *,
+    section_map_path: Path,
+    section_map_bytes: Optional[bytes] = None,
 ) -> tuple[AxisReport, Optional[float]]:
     """Builds the `structure` axis, including the boundary-second live wire
     (module docstring (c)): `svprpe observe`'s structure anchor
@@ -406,11 +413,21 @@ def _structure_axis(
 
     `section_map_path` selects the canonical requirement (T1: `["intro",
     "chorus", "outro"]`, T2: `["intro", "chorus", "chorus", "outro"]`).
+    `section_map_bytes`, when given, is the already-read bytes of
+    `section_map_path` — `run_round()` reads the section map exactly once
+    per run and passes those bytes here (shared with
+    `_write_identity_manifest`) instead of this function re-reading the
+    file itself. Callers that omit it (e.g. unit tests that only care about
+    the requirement resolution) keep the previous read-from-`section_map_path`
+    behavior unchanged.
 
     Returns `(axis_report, position_match_rate)` — the latter feeds the
     report's `notes` (the only whitelisted `AuthoringNote.kind`).
     """
-    canonical_sections = json.loads(section_map_path.read_text(encoding="utf-8"))["sections"]
+    raw_section_map = (
+        section_map_bytes if section_map_bytes is not None else section_map_path.read_bytes()
+    )
+    canonical_sections = json.loads(raw_section_map)["sections"]
     structure_anchor = next(
         anchor for anchor in observe_report["anchors"] if anchor["anchor_id"] == "structure"
     )
@@ -490,35 +507,57 @@ def run_round(
 
     workdir.mkdir(parents=True, exist_ok=True)
 
-    # (a) Symbolic gate.
+    # Single input snapshot: `score.yaml` is read from disk exactly once per
+    # run, right here — the resulting `score_bytes` (not a second read of
+    # `score_path`) drives every downstream step that needs the submitted
+    # score's content: the `score_copy` write below, the symbolic gate (run
+    # against that copy, not `score_path`, so validation and everything
+    # else agree on identical bytes), `hashes["score"]`,
+    # `load_composition_score`, and `_prepare_scores`. This closes a TOCTOU
+    # window where `score_path` could change between the old code's several
+    # independent reads of it.
+    score_bytes = score_path.read_bytes()
+    score_sha256 = _sha256_bytes(score_bytes)
+    score_copy_path = paths["score_copy"]
+    score_copy_path.write_bytes(score_bytes)
+
+    # (a) Symbolic gate — validated against the just-written copy (the same
+    # bytes snapshot), not `score_path` itself.
     validation_path = paths["validation"]
-    _run_validate_cli(score_path, validation_path)
+    _run_validate_cli(score_copy_path, validation_path)
     validation_data = json.loads(validation_path.read_text(encoding="utf-8"))
     symbolic_validation = SymbolicValidationResult.model_validate(validation_data)
 
     hashes: dict[str, str] = {
-        "score": _sha256_file(score_path),
+        "score": score_sha256,
         "validation": _sha256_file(validation_path),
     }
 
     if symbolic_validation.status == "fail":
         report = _build_failed_gate_report(round_number, symbolic_validation)
         report_bytes = dump_json_bytes(report)
-        output_path.write_bytes(report_bytes)
         hashes["report"] = _sha256_bytes(report_bytes)
+        # Publish order: hashes.json first, then the report (`-o`) last via
+        # an atomic write — a crash between the two writes then leaves at
+        # worst "hashes present, report absent" (a legibly incomplete run),
+        # never "report present, hashes absent" (which would silently block
+        # a re-run into thinking this round was already fully measured).
         paths["hashes"].write_text(
             json.dumps(hashes, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        atomic_write_bytes(output_path, report_bytes)
         return {"report": report, "hashes": hashes}
 
-    # Defensive re-check: the gate above already ran canonical validation,
-    # so this should never fail — fail fast with a clear message rather than
-    # a confusing downstream CLI error if that assumption is ever violated.
-    load_composition_score(score_path)
+    # Defensive re-check: the gate above already ran canonical validation
+    # against `score_copy_path`, so this should never fail — fail fast with
+    # a clear message rather than a confusing downstream CLI error if that
+    # assumption is ever violated. Reads the same copy/bytes snapshot the
+    # gate validated, not a fresh read of `score_path`.
+    load_composition_score(score_copy_path)
 
     # (b) Full observation chain (measure_round.py's pipeline, transcribed).
-    eval_score_path, score_sha256, eval_score_sha256 = _prepare_scores(score_path, paths)
+    eval_score_path, eval_score_sha256 = _prepare_scores(score_path, score_bytes, paths)
     hashes["eval_score"] = eval_score_sha256
 
     roundtrip_path = paths["roundtrip"]
@@ -536,11 +575,18 @@ def run_round(
     take_wav_path.write_bytes(wav_bytes(perform(score, FAITHFUL_TAKE)))
     hashes["take_wav"] = _sha256_file(take_wav_path)
 
+    # Single section-map snapshot: read once and shared with both the
+    # identity manifest's `identity/section_map.json` copy and
+    # `_structure_axis`'s requirement resolution below (instead of each of
+    # those two call sites independently reading `section_map_path` off
+    # disk).
+    section_map_bytes = section_map_path.read_bytes()
+
     manifest_path, manifest_sha256 = _write_identity_manifest(
         paths,
         score_sha256=score_sha256,
         round_number=round_number,
-        section_map_path=section_map_path,
+        section_map_bytes=section_map_bytes,
     )
     hashes["manifest"] = manifest_sha256
 
@@ -582,7 +628,10 @@ def run_round(
 
     observe_report = json.loads(observe_report_path.read_text(encoding="utf-8"))
     structure_axis, position_match_rate = _structure_axis(
-        observe_report, take_wav_path, section_map_path=section_map_path
+        observe_report,
+        take_wav_path,
+        section_map_path=section_map_path,
+        section_map_bytes=section_map_bytes,
     )
 
     notes: list[AuthoringNote] = []
@@ -596,13 +645,18 @@ def run_round(
         notes=notes,
     )
     report_bytes = dump_json_bytes(report)
-    output_path.write_bytes(report_bytes)
     hashes["report"] = _sha256_bytes(report_bytes)
 
+    # Publish order (same rationale as the failed-gate branch above):
+    # hashes.json first, the report (`-o`) last via an atomic write, so a
+    # failure between the two writes never leaves "report present, hashes
+    # absent" — a state that would block a re-run into believing this round
+    # was already fully measured.
     paths["hashes"].write_text(
         json.dumps(hashes, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    atomic_write_bytes(output_path, report_bytes)
 
     return {"report": report, "hashes": hashes}
 
