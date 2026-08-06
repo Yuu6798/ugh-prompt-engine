@@ -1,0 +1,14 @@
+meta_note: "round2の診断: observed_sectionsはround1と数値まで完全一致（intro終端14.9304秒、outro開始19.9459秒）だったため、round2で行った語彙追加（intro に silence、outro に no kick）は境界検出に一切影響しなかったと判定した。round2は2箇所同時変更で原因切り分けができなかった反省を踏まえ、round3は intro の bars のみを唯一の変更変数とする単一変数実験に切り替えた。"
+diagnosis: "observed=[intro(0-14.9304), chorus(14.9304-19.9459), chorus(0-14.9459... )outro(19.9459-30)]は実質2境界（~15.0秒付近、~19.95秒付近）のみが検出されている。宣言境界は3つ（7.5/15.0/22.5秒）。15.0秒付近の境界はchorus1(full energy+sub bass)とchorus2(full energyのみ)のsub bass有無という局所音色差で正確に機能しており(誤差0.07秒)、19.95秒付近もoutroラベルを生成できている。欠落しているのはintro/chorus1境界(7.5秒)のみで、これが埋まれば observed は [intro, chorus, chorus, outro] の4区間になり要求列と一致するはずと推測した。この読みでは position_match_rate（正確な秒数一致）はR1判定に不要で、ラベル列长が4になることが本質。"
+section_intro:
+  reason: "語彙(silence/sparse/low density/no kick)はround1→round2で1語追加しても数値が寸分変わらなかった＝この語彙軸はすでに飽和/床に達していると判断し、今回は据え置いた。代わりに未着手だった bars を 3→5 (7.5秒→12.5秒) に伸長した。contract §2 の較正実測(中間セクション12.3秒は過分割・6.2秒は吸収・7.5秒は3分割成立)から、7.5秒という現状のintro長は境界検出の閾値付近にあり、より長く保持することで chorus1 との対比の『証拠』を積み増し、境界検出器に区間として認識させることを狙う。intro内部は一貫して静寂想定のため内部ダイナミクス変化がなく、過分割リスク（長い持続区間の内部変化による分割）は該当しないと判断した。"
+section_chorus_1:
+  reason: "full energy + sub bass は変更しない。round1・round2ともにchorus1/chorus2境界(15.0秒宣言)を14.9304秒という高精度で検出させ続けている唯一確実に機能している箇所であり、intro側の実験と交絡させないため完全に固定する。"
+section_chorus_2:
+  reason: "full energy のみ(sub bassなし)も変更しない。同じ理由でchorus1/chorus2境界の成立に寄与しており、単一変数実験の原則からintro以外は一切触らない。"
+section_outro:
+  reason: "release, low density, no kick のまま変更しない。round2でno kick追加による境界位置の変化はゼロだったが、そもそもR1判定はラベル列の一致であり秒数の厳密一致は要求されないため、outroラベル自体は既にobserved_sectionsに出現している。今回はintro/chorus1境界の欠落という『4区間化できていない』唯一の欠陥に絞り込み、既に機能している(=outroというラベルを生成できている)箇所には触れないことでリスクを最小化した。"
+key_choice: "physical.key は D minor のまま変更なし。round1・round2ともverdict preservedのため、非退行を最優先しfixityとして継続保持する。"
+brightness_choice: "physical.brightness は dark のまま。bpm/time_signature/stereo_widthも含め物理層はintro.barsの1点以外すべて固定し、key/brightness双方のpreserved verdictを損なうリスクを排除した。"
+risk: "(1) intro を12.5秒まで伸ばしても、静寂→full energyという最大級の対比が依然として境界化されない場合、語彙・bars以外の要因（例えば境界検出器が30秒級クリップで最大2境界という固定予算を持つ可能性）を round4 で検討する必要がある。(2) intro伸長により全体尺が30→35秒に伸び、chorus1/chorus2境界・chorus2/outro境界の絶対時刻はスライドするが、局所音色差駆動と仮定しているため相対的な検出精度は維持されると予想している。round3のobserved_sectionsで最優先確認するのは (a) 4区間に増えたか、(b) 増えた場合その最初の境界がintro/chorus1間に来ているか、の2点。"
+tools_used: none
