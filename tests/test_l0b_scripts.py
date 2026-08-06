@@ -3464,11 +3464,14 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
     # `payload_composition.composer` は実行時/現行の 2 系統 pin を持つ
     # （PR #249 Codex レビュー、P1 採用: composer ファイルが測定後にレビュー
     # 対応で変わったため、単一 sha256 だと「実行されていないコードを台帳が
-    # 認証する」状態になる）。`sha256_current` のみ実体照合する（形状テストが
-    # 検査する対象は「今この台帳が指す composer ファイル」であり、
-    # `sha256_at_measurement` は測定当時のファイルへの歴史的 attestation —
-    # 当該コミットの checkout なしにこのテスト実行時点では実体照合できない
-    # ため、64-hex 形式のみ検証する）。
+    # 認証する」状態になる）。`sha256_current` は現行ファイルと実体照合する。
+    # `sha256_at_measurement` はかつて「git 履歴が実体を保持する歴史的
+    # attestation」として 64-hex 形式のみ検証していたが、squash マージや
+    # 履歴を持たない export では参照 commit の blob が到達不能になり実体が
+    # 消えうる（PR #249 Codex レビュー第 10 巡, P1 指摘）。`frozen_copy`
+    # （`composer_at_measurement/compose_payload.py`、git 系譜に依存しない
+    # 凍結コピー）を導入したので、`sha256_at_measurement` もこの凍結コピー
+    # との実体照合へ昇格する。
     composer = ledger["payload_composition"]["composer"]
     checks.append(
         (
@@ -3477,9 +3480,12 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
             composer["sha256_current"],
         )
     )
-    assert _SHA256_HEX_RE.fullmatch(composer["sha256_at_measurement"]), (
-        "payload_composition.composer.sha256_at_measurement must be a 64-hex sha256 "
-        f"(historical attestation, not entity-checked here): {composer['sha256_at_measurement']!r}"
+    checks.append(
+        (
+            "payload_composition.composer (sha256_at_measurement, frozen_copy)",
+            _resolve_battery_relative(composer["frozen_copy"]),
+            composer["sha256_at_measurement"],
+        )
     )
 
     constraint_checker = ledger["constraint_checker"]

@@ -93,9 +93,14 @@ payload_composition:
     path: ../scripts/compose_payload.py
     sha256_at_measurement: "a1bd613a646c331c866b6480cd8d827d58410acc70c8dba9005a6c1629a12dfa"
     sha256_current: "363aa9fabdefdee603b0bd065e128d015e4b8e8d83d0e4d31609d82dd3033549"
+    frozen_copy: composer_at_measurement/compose_payload.py
     note: >-
       sha256_at_measurement = 全 16 測定周回を実行した実装（事前登録 commit
-      2b26238 と PR head 62f6ead の両方でこの sha。git 履歴が実体を保持）。
+      2b26238 と PR head 62f6ead の両方でこの sha）。凍結コピー =
+      composer_at_measurement/compose_payload.py（形状テストが実体照合する
+      対象。squash マージや履歴を持たない export で git 系譜が切れても
+      sha256_at_measurement の実体照合を可能にする保全措置——PR #249 Codex
+      レビュー第 10 巡, P1 指摘）。
       sha256_current = PR #249 レビュー対応を累積した現行ファイル（形状
       テストが実体照合する対象・詳細な変更系譜は git 履歴が保持するため
       個別 commit は列挙しない）。累積修正はいずれも検証強化（不正
