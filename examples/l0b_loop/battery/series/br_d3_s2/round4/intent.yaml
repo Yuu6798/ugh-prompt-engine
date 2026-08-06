@@ -1,0 +1,81 @@
+round: 4
+
+overall_strategy: >
+  round3 の diff_report は key/brightness preserved を維持したまま structure が
+  依然 mismatch (observed: intro, bridge, chorus, chorus, outro / requirement:
+  intro, chorus, chorus, outro)。Pareto改善の定義に従い physical.key /
+  physical.brightness / chord_progression には触れず、structure 軸のみを
+  対象に intro の bars を変更する（round3 own_intent の
+  open_risks_for_next_round で予告していた「cue語ではなく bars の再設計」の
+  実行）。
+
+diagnosis_from_round3_observed_sections: >
+  round3 の observed_sections を秒単位で見ると: intro 0.0-5.0852
+  (5.0852s), bridge 5.0852-10.3329 (5.2477s), chorus1 10.3329-15.3484
+  (5.0155s)。intro は declared 7.5s (3 bars) だったにもかかわらず実際に
+  "intro" と観測されたのは先頭 5.0852s のみで、残り約2.41s
+  (5.0852-7.5) の "rest" 音声は intro側ではなく bridge 側に取り込まれて
+  いる。さらに chorus1 declared window (7.5-15.0) の先頭約2.83s
+  (7.5-10.3329) も bridge 側に取り込まれている。この2つの断片
+  (declared-intro残余 約2.41s + declared-chorus1立ち上がり 約2.83s、
+  合計約5.25s ≈ 観測bridge長 5.2477s とほぼ一致) が境界検出器に
+  よって1つの過渡区間として融合され "bridge" ラベルを得たと推定する。
+
+hypothesis_for_round4: >
+  round3 で先頭 5.0852s が単独で安定して "intro" と観測された実績
+  (吸収されずに独立区間として検出された) を踏まえ、intro の bars を
+  3→2 (7.5s→5.0s) に短縮し、round3で実際に intro として認識された
+  区間長にほぼ一致させる。これにより「rest cue のまま declared-intro
+  残余として bridge に混入していた約2.41s」を消去する
+  (5.0-7.5s の音声は今回 chorus1 の declared 範囲に入るため full energy
+  cue で生成され、round3 の rest 音声とは別物になる)。残る chorus1
+  立ち上がりの過渡 (~2.83s と推定) は round3のように rest残余と
+  融合されないため単独の過渡区間となり、これは契約 §2 が示唆する
+  最小セクション間隔 (概ね5秒。6.2s ですら吸収された実測点あり) を
+  下回るため、独立ラベルとして検出されず前後 (最有力は直後の
+  full energy 本体) に吸収されると予測する。これが的中すれば
+  observed 列は intro, chorus, chorus, outro の4要素に収束する。
+
+bars_redistribution: >
+  intro から減じた1 bar は outro に加算した (3→4 bars, 7.5s→10.0s)。
+  全体を12 bars=30.0s に保つための調整であり、outro は "release" cue
+  で穏やかに減衰する性格上、"full energy" のchorusを延長するより
+  内部での急激な音響変化 (ひいては契約が警告する12.3s超の過分割) を
+  誘発しにくいと判断し、chorus 側ではなく outro 側を延長した。
+  chorus1/chorus2 は round3 で境界追跡が良好だった (declared 7.5-15.0
+  vs observed 10.3329-15.3484、declared 15.0-22.5 vs observed
+  15.3484-21.5946 と大きくは外れていない) ため bars=3 のまま温存した。
+
+key_and_brightness: >
+  round3 で key=D minor (preserved)、brightness=dark (preserved) が
+  確認済みのため、chord_progression (i-iv-V-i: Dm-Gm-A-Dm) と
+  physical.brightness="dark" を含む物理層設定は round3 から一切変更
+  していない。intro/chorus/outro の physical cue 語 (rest / full energy
+  / release) も round3 から変更していない（今回変更したのは bars の
+  みで、これは既に preserved の2軸に影響しないと考える —
+  bars は構造セクションの時間配分であり、brightness/key の抽出対象は
+  トラック全体の音色/和声であるため）。
+
+r4_self_check: >
+  score.yaml 全文 (title/semantic/role/physical を含む) を再確認し、
+  silence / no kick / low density / sub bass のいずれの部分文字列も
+  含まないことを確認した (使用した cue語は rest / full energy /
+  release のみで、いずれも禁止語と重複しない)。
+
+open_risks_for_next_round: >
+  - 本仮説 (5.0s intro → chorus1立ち上がりの過渡が吸収される) が外れた
+    場合、次の一手は (a) intro をさらに1 bar 短縮する、または
+    (b) 過渡そのものを縮めるのではなく chorus1 側に "full energy" 以外の
+    追加コンテキストを与える方向を検討する必要がある。
+  - intro を2 bars (5.0s) にしたことで、round3で観測された「6.2sより
+    短いセクションは吸収されうる」という契約の一般的傾向に intro自体が
+    抵触し、intro が独立ラベルとして検出されず chorus1 に吸収される
+    リスクは残る。ただし round3実測で 5.0852s の rest音声が単独で
+    "intro" と観測された直接証拠があるため、このリスクは契約の一般論
+    よりも小さいと判断した。
+  - outro を4 bars (10.0s) に延長したことで outro 自体が内部で過分割
+    される可能性はゼロではない (契約の12.3s分割実測点にはまだ余裕が
+    あるが、7.5s成立点からは離れている)。次周回の observed_sections で
+    outro が単一区間のままか要確認。
+
+tools_used_note: "no tools were used to produce this round; reasoning is derived solely from the PAYLOAD contents (contract.md, task.md, own_score.yaml, own_intent.yaml, diff_report.json)."

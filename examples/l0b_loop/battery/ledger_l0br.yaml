@@ -30,7 +30,11 @@ contract_freeze:
     path: ../contract.md
     sha256: "5bab21e9694cb92a247f922c9a96db015bb87ba729ef411b9146881934debaca"
   # 実行後追記: src/ + config/ 無変更の git 検証（base..HEAD の diff --stat 空）
-  src_config_diff_attestation: null
+  src_config_diff_attestation:
+    verified_utc: "2026-08-06"
+    base_commit: "41a56f1"
+    command: "git diff --stat 41a56f1..HEAD -- src/ config/"
+    result: "empty (無変更 — 契約 v1 凍結を全 R-2 実行期間で維持)"
 
 judge:
   # L0b と同一判定器・無改変（判定器の同一性維持が実験条件。
@@ -378,6 +382,71 @@ series_runs:
     rationale: round1 = 5 要素列 [intro, bridge, chorus, chorus, outro] への過分割（融合と逆方向の失敗形状・Lev 1・key/brightness preserved・R4 pass）。round2 = 著者は境界算術から『低→高エネルギーの立ち上がり側のみ曖昧帯が生じる』非対称仮説を立て、intro bars 3→4（10s）の単一変数介入で曖昧帯を intro 宣言区間内へ吸収させ全軸成功。pareto improved=true。R4 制約下（drone 語彙なし）でも sparse/full/release 段差 + 継ぎ目で 4 要素列が到達可能なことの実証
     files_dir: series/br_d3_s1/
     started_utc: '2026-08-06T18:21:03Z'
+  - task: br_d3
+    series: s2
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 6b70a4b7ba5c331b8e1622eeb92edfe63cc9e48efea05e8cff2e0c226f61290e
+      payload_sha256: b06b312e5306f50a689a084f4b0ca4434e8ab4c1e9b0755e27bcf2ecfcbf9670
+      score_sha256: 56efeb16e9380f9c0236e7fb47f909141b7bac626cb4528e503ecc7aa484b26c
+      intent_sha256: 1cef25878be23fba7ca65b05bdc6689533683cc69b68e7e229dea0b092d3e9de
+      report_sha256: 72e917640c65294ba851a7e57ccc86c142c8656f3db7bf5274b1e674322c6f38
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: deviated
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+    - round: 2
+      payload_manifest_sha256: c12d083e0fcea20aeb6247c1bf8c9a5fb1a832d1f5d91049d0d4a316de911750
+      payload_sha256: a3e1a4e28f2bc2d104c21a228055b08907d75431c5081a0b98a01d80b06fc224
+      score_sha256: ff3d1cf0bb065105fa3c19b897967760b6c2f3d1b345efbb0bf70f288843950d
+      intent_sha256: 32d21e2d4d6bdbdcc609c026691d960fa0c26337d6a7ffa7e77c7dd5c8ae6b27
+      report_sha256: 151761d30fc9cea7994fb2012ba0c95c018eaa13d2b5c3f7ba4745e18ff5b85b
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+    - round: 3
+      payload_manifest_sha256: 12ec81359924a75205685a5a4e906001123939faf7c2d15e3cda0a51dc737b27
+      payload_sha256: 0b8a3a575722fc5317b94ec92dc1f68715405aa6bc37138bc3fc47a3b1928533
+      score_sha256: fefe8d2d36cd27bdb8c4eb0123d42dc7d8f94f109031dfe5ec5d8a968da4fd1d
+      intent_sha256: b780d436db51589cd1fb09f41d9de1d4cb73fb43b64bf9f354d6d7d4e56c0be6
+      report_sha256: b1aabecd67df1bbd575c8c13f86a6dce4778799804e30319d5e32d54e03e643a
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+    - round: 4
+      payload_manifest_sha256: a09af7eb2638ab37b34efded0bea87ed2bc424a9ec43fb360116b41a667eb1f0
+      payload_sha256: 4c7424b47caad790520f16dedae81c4029d7dddd55fb8397bc9751ca8feac67a
+      score_sha256: efef94a87ec6ed351226ac2d04e6b032b7799ada2ed91225abeae79166095b1e
+      intent_sha256: 2fafd2c7932af9756133f4e3a9daeefeb98a29b3e23715f920fcbe245e5d9555
+      report_sha256: 8a871a0e15d02345676d990be34c6d335acc3eaf30f159d28a4351649f13a9c0
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+    outcome: reached
+    rounds_to_success: 4
+    failure_mode: null
+    rationale: r1 = key deviated (F major・カスタム進行) + structure mismatch (bridge 過分割)。r2 = C# 導音 i-iv-V-i で key 修理 (Pareto improved・br_d2_s1 の成功解へ独立到達)。r3 = intro を 'rest' へ語彙変更するも bridge 継続 (tie)。r4 = 断片算術 (bridge 実長 5.25s = intro 残余 2.41s + chorus1 立ち上がり 2.83s) から intro を観測実長 5.0s へ短縮・outro へ 1 bar 再配分し全軸成功 (Pareto improved 2 件目)。報告の境界秒だけを根拠に 2 軸を順次修理した最長の操舵実証系列
+    files_dir: series/br_d3_s2/
+    started_utc: '2026-08-06T18:32:26Z'
 off_contract_events:
   - date: "2026-08-06"
     task: "br_d1"

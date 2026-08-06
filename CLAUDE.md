@@ -220,6 +220,7 @@ tests/ / docs/ / examples/     # pytest / design documents (index: docs/README.m
 | [`docs/l0s_spike_record.md`](docs/l0s_spike_record.md) | L0-s スパイク記録 (第 1 実測): 情報遮断 5 周回・記号検証 5/5・key/brightness 5/5 preserved・構造軸未収束 (8→6→6→4→2)。L0a への契約欠陥リスト（validate CLI/境界時刻報告/計器分解能開示/report 正規形/導出器正式化） |
 | [`docs/l0a_authoring_contract.md`](docs/l0a_authoring_contract.md) | L0a 著述契約 v1: 公開スキーマ範囲 spec (`config/authoring_contract_l0.yaml`) + `svprpe validate` エラープロトコル (kind 語彙) + `AuthoringDiffReport` 正規形 (境界時刻スキーマ・notes 白リスト) + 信頼軸表の機械導出 (`config/authoring_trusted_axes_l0.yaml`) + pin 規則 |
 | [`docs/l0b_closed_loop_record.md`](docs/l0b_closed_loop_record.md) | L0b 閉ループ記録 (T1/T2): L0S 同一課題が T1 で 1 周回成功 (契約 v1 仮説と整合・交絡あり = §2)、T2 は注記なしクリーン系列 round4c→5c の Pareto 改善で §5 操舵証拠を充足 (§3.3。原系列の改善は off-contract 除外 = §3.2)。副産物 = ヒントトークン非加算・role 文照合リーク×2・drone 区間の進行無音化 (L0a v2 材料) |
+| [`docs/l0br_robustness_record.md`](docs/l0br_robustness_record.md) | L0b-R 単一著者頑健性: 課題難易度×到達率の第 1 バッテリー（3 課題×2 系列・到達 5/6・Pareto 改善 5 件・全周回ツール使用 0）。到達を分けたのは課題難度でなく著者戦略、唯一の未到達は contract_defect（ヒント非加算）。新規 v2 材料 = 自作進行の調転倒（3 系列再現）・立ち上がり非対称の過渡帯 |
 
 ## ドキュメント管理ポリシー
 
