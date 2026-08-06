@@ -1522,12 +1522,17 @@ def run_round(
     _run_validate_cli(
         score_copy_path, paths["subproc_staging_validation"], validation_path, paths["judge_contract"]
     )
-    validation_data = json.loads(validation_path.read_text(encoding="utf-8"))
+    # Single-snapshot read: hash and parse the SAME bytes (PR #247 Codex
+    # review round 24 — a split read lets a concurrent writer change the
+    # parsed values after hashing, publishing verdicts hashes.json does not
+    # certify). Same rule applied to roundtrip.json / observe_report.json.
+    validation_bytes = validation_path.read_bytes()
+    validation_data = json.loads(validation_bytes)
     symbolic_validation = SymbolicValidationResult.model_validate(validation_data)
 
     hashes: dict[str, str] = {
         "score": score_sha256,
-        "validation": _sha256_file(validation_path),
+        "validation": _sha256_bytes(validation_bytes),
     }
 
     if symbolic_validation.status == "fail":
@@ -1580,7 +1585,8 @@ def run_round(
         roundtrip_staging_path,
         roundtrip_path,
     )
-    hashes["roundtrip"] = _sha256_file(roundtrip_path)
+    roundtrip_bytes = roundtrip_path.read_bytes()
+    hashes["roundtrip"] = _sha256_bytes(roundtrip_bytes)
 
     adherence_path = paths["adherence"]
     adherence_staging_path = paths["subproc_staging_adherence"]
@@ -1668,14 +1674,15 @@ def run_round(
         observe_report_staging_path,
         observe_report_path,
     )
-    hashes["observe_report"] = _sha256_file(observe_report_path)
+    observe_report_bytes = observe_report_path.read_bytes()
+    hashes["observe_report"] = _sha256_bytes(observe_report_bytes)
 
-    roundtrip_report = json.loads(roundtrip_path.read_text(encoding="utf-8"))
+    roundtrip_report = json.loads(roundtrip_bytes)
     fields_by_name = {field["field"]: field for field in roundtrip_report["fields"]}
     key_axis = _key_axis(fields_by_name["key"])
     brightness_axis = _brightness_axis(fields_by_name["brightness"])
 
-    observe_report = json.loads(observe_report_path.read_text(encoding="utf-8"))
+    observe_report = json.loads(observe_report_bytes)
     structure_axis, position_match_rate = _structure_axis(
         observe_report,
         take_wav_path,
