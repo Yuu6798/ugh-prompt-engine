@@ -343,14 +343,15 @@ single unified gate (not one bespoke check per artifact): it walks every key
 `hashes` actually holds at call time, resolves each to its reserved workdir
 path via the explicit `_RECORDED_ARTIFACT_PATH_KEYS` table, re-reads and
 re-hashes that path, and compares against the digest already recorded in
-`hashes`. `score` and `report` are the only two keys deliberately excluded
-(`_RECORDED_ARTIFACT_EXCLUDED_KEYS`, each for a distinct reason — see that
-constant's own comment) — every other key `hashes` can hold today has a
-path-table entry. A key present in neither table is *not* silently skipped:
-it raises `RecordedArtifactDriftError` naming the unrecognized key, so a
-future artifact added to `hashes` without a matching table entry fails
-closed instead of quietly slipping past this guard. Called immediately
-alongside `_reject_judge_input_copy_drift`, at both of `run_round()`'s
+`hashes`. `report` is the only key deliberately excluded
+(`_RECORDED_ARTIFACT_EXCLUDED_KEYS`, not yet on disk at the point this guard
+runs — see that constant's own comment) — every other key `hashes` can hold
+today, including `score` (round 26 correction below), has a path-table
+entry. A key present in neither table is *not* silently skipped: it raises
+`RecordedArtifactDriftError` naming the unrecognized key, so a future
+artifact added to `hashes` without a matching table entry fails closed
+instead of quietly slipping past this guard. Called immediately alongside
+`_reject_judge_input_copy_drift`, at both of `run_round()`'s
 `_publish_report_bundle` call sites (the symbolic-fail branch, where
 `hashes` holds only `score`/`validation`/`report`, and the full-pipeline
 success branch, where it holds all of the above) — a generic
@@ -359,14 +360,35 @@ both call sites with the same function, no branch-specific variant needed.
 With L1 (judge-side inputs) and this guard (this run's own generated
 artifacts) both in place immediately before publish, every byte this run
 consumed or produced and later attests to via `hashes.json` — other than
-`score` (an external input already byte-snapshotted at the top of the run)
-and `report` (not yet written to disk at the point this guard runs, since
+`report` (not yet written to disk at the point this guard runs, since
 `_publish_report_bundle` writes it together with `hashes.json` right after
 this check passes) — is re-verified against its recorded digest at the
 publish boundary. This closes the family of "hash it, consume it, but never
 look at it again before vouching for it" gaps 23 and 25 both surfaced;
 re-verification (not immutable-by-construction protection, the same
 boundary L1 already documents) is the terminus for this family.
+
+**Round 26 correction** (PR #247 Codex review round 26, P1): round 25's
+original cut treated `score` as an *excluded* key on the theory that
+`hashes["score"]`, the sha256 of `score_bytes` (the single in-memory
+snapshot read at the top of `run_round()`), was already "covered" because
+every downstream step reads `score_bytes` in-memory rather than re-reading
+`score_copy_path` (`<workdir>/score.yaml`). That reasoning missed that the
+symbolic gate itself — `svprpe validate`, run as a *subprocess* — does not
+share this process's memory: it reads `score_copy_path` off disk, not
+`score_bytes`. Excluding `score` from this guard therefore left the one
+artifact the actual pass/fail verdict is computed from outside
+re-verification: a second process with write access to `--workdir` could
+swap `score_copy_path` out after the write, let the (already-run) gate's
+verdict stand unexamined, and swap it back before this guard ran, and
+`_reject_recorded_artifact_drift` would not have noticed. `score` now has a
+`_RECORDED_ARTIFACT_PATH_KEYS` entry (`"score_copy"`) instead of an
+`_RECORDED_ARTIFACT_EXCLUDED_KEYS` entry — see that table's own comment for
+why re-hashing `score_copy_path` and comparing against `hashes["score"]` is
+sound (`score_copy_path` is written from `score_bytes`, so the two are the
+same snapshot by construction at write time). This is a correction within
+the same M1 gate, not a new gap in a fresh family: the "terminus" claim
+above still stands.
 """
 from __future__ import annotations
 
@@ -617,8 +639,10 @@ class JudgeInputCopyDriftError(JudgeInputDriftError):
 
 class RecordedArtifactDriftError(JudgeInputDriftError):
     """M1 pre-publish guard (PR #247 Codex review round 25, P1, family
-    terminus): a generated artifact this run already hashed into `hashes`
-    (`take.wav`, `eval_score.yaml`, `validation.json`, `roundtrip.json`,
+    terminus; round 26 correction added `score`/`score.yaml`, see module
+    docstring's "Round 26 correction" section): a recorded artifact this run
+    already hashed into `hashes` (`score.yaml`, `take.wav`,
+    `eval_score.yaml`, `validation.json`, `roundtrip.json`,
     `adherence.json`, the identity manifest, the package pair, or
     `observe_report.json`) no longer matches the sha256 recorded for it —
     either the on-disk bytes changed after this run hashed and consumed them
@@ -752,6 +776,21 @@ def _reject_judge_input_copy_drift(
 # `_RECORDED_ARTIFACT_EXCLUDED_KEYS` below; `test_l0b_scripts.py` asserts
 # that coverage stays exhaustive as a regression guard.
 _RECORDED_ARTIFACT_PATH_KEYS: dict[str, str] = {
+    # PR #247 Codex review round 26, P1: `hashes["score"]` is the sha256 of
+    # `score_bytes`, the single snapshot read of the submitted score.yaml at
+    # the top of `run_round()` — but what `svprpe validate` (the symbolic
+    # gate) actually consumed is `score_copy_path` (`<workdir>/score.yaml`,
+    # a *mutable* on-disk file), not `score_bytes` itself. Between that
+    # write and this guard's call, nothing stops a second process with
+    # write access to `--workdir` from swapping `score_copy_path` out for
+    # different bytes and back again, so `hashes["score"]` alone does not
+    # prove the gate saw the bytes it's attributed to. `score_copy` is
+    # written from `score_bytes` immediately before the gate runs (see that
+    # write's own comment), so re-reading and re-hashing it here, right
+    # before publish, and comparing against `hashes["score"]` closes that
+    # window: a match proves the on-disk bytes the gate consumed are still
+    # exactly the submitted bytes this run snapshotted and attests to.
+    "score": "score_copy",
     "validation": "validation",
     "eval_score": "eval_score",
     "roundtrip": "roundtrip",
@@ -768,16 +807,6 @@ _RECORDED_ARTIFACT_PATH_KEYS: dict[str, str] = {
 # bypass):
 _RECORDED_ARTIFACT_EXCLUDED_KEYS: frozenset[str] = frozenset(
     {
-        # External input: `hashes["score"]` is the sha256 of `score_bytes`,
-        # the single snapshot read of the submitted score.yaml at the top of
-        # `run_round()` (see that read's own comment). `score_copy` (the
-        # on-disk `<workdir>/score.yaml`) is a passthrough copy of those same
-        # bytes, not an independently generated artifact this guard needs to
-        # re-derive-and-compare — re-hashing it would only re-verify the same
-        # snapshot `score_bytes` already is, already covered by every
-        # downstream step reading `score_bytes` in-memory rather than
-        # re-reading the copy.
-        "score",
         # Not yet on disk at the point this guard runs: `hashes["report"]` is
         # computed from `report_bytes` in memory, but `_publish_report_bundle`
         # writes `report_bytes` to `-o` and `hashes` (as `hashes.json`)

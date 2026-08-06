@@ -1460,19 +1460,22 @@ def test_reject_recorded_artifact_drift_accepts_untampered_artifacts(tmp_path: P
     run_round._reject_recorded_artifact_drift(paths, hashes)  # must not raise
 
 
-def test_reject_recorded_artifact_drift_skips_excluded_keys(tmp_path: Path):
-    """`score`/`report` must be skipped even though this test never wrote a
-    workdir artifact under either key (`score` has no independently
-    generated workdir artifact of its own — `score_copy` is a passthrough of
-    the same snapshot bytes; `report` isn't written to disk until after this
-    guard passes) — their presence in `hashes` must not be treated as
-    something to re-verify, and their absence from `paths`/disk under those
-    keys must not raise either."""
+def test_reject_recorded_artifact_drift_skips_excluded_report_key(tmp_path: Path):
+    """`report` (the only remaining `_RECORDED_ARTIFACT_EXCLUDED_KEYS` entry
+    as of round 26 — `score` was removed from this table and now has a
+    `_RECORDED_ARTIFACT_PATH_KEYS` entry instead, see module docstring's
+    "Round 26 correction" section) must be skipped even though this test
+    never wrote a workdir artifact under that key (`report` isn't written to
+    disk until after this guard passes) — its presence in `hashes` must not
+    be treated as something to re-verify, and its absence from `paths`/disk
+    under that key must not raise either. `score` is *not* exempted here:
+    `_staged_recorded_artifacts` already wrote and hashed `score_copy` for
+    it via `_RECORDED_ARTIFACT_PATH_KEYS`, so leaving `hashes["score"]`
+    untouched below re-verifies it like every other recorded artifact."""
     workdir = tmp_path / "wd"
     workdir.mkdir()
     paths = run_round._reserved_workdir_paths(workdir)
     hashes = _staged_recorded_artifacts(paths)
-    hashes["score"] = "deadbeef"
     hashes["report"] = "deadbeef"
 
     run_round._reject_recorded_artifact_drift(paths, hashes)  # must not raise
@@ -1496,6 +1499,29 @@ def test_reject_recorded_artifact_drift_rejects_mutated_take_wav(tmp_path: Path)
     paths["take_wav"].write_bytes(b"RIFF-tampered-not-the-recorded-audio")
 
     with pytest.raises(run_round.RecordedArtifactDriftError, match="take_wav"):
+        run_round._reject_recorded_artifact_drift(paths, hashes)
+
+
+def test_reject_recorded_artifact_drift_rejects_mutated_score_copy(tmp_path: Path):
+    """M1 negative case, round 26 correction (PR #247 Codex review round 26,
+    P1): `score.yaml`'s on-disk workdir copy (`score_copy_path`) rewritten
+    after `hashes["score"]` was recorded from the submitted bytes — the
+    scenario round 25's original `score`-excluded cut left unre-verified,
+    since the symbolic gate (`svprpe validate`, a subprocess) reads
+    `score_copy_path` off disk rather than sharing this process's in-memory
+    `score_bytes` — must now be refused with `RecordedArtifactDriftError`
+    naming `score`, before any publish happens."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    hashes = _staged_recorded_artifacts(paths)
+
+    # Simulate a second process rewriting the score_copy workdir file after
+    # hashes["score"] was already recorded from (and svprpe validate already
+    # consumed) the original snapshot bytes.
+    paths["score_copy"].write_bytes(b"schema_version: composition-score/0.1\ntampered: true\n")
+
+    with pytest.raises(run_round.RecordedArtifactDriftError, match="score"):
         run_round._reject_recorded_artifact_drift(paths, hashes)
 
 
