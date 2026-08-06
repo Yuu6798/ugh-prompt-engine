@@ -1524,6 +1524,11 @@ def run_round(
     _publish_staged_directory(package_staging_dir, package_dir)
     package_json_path = paths["package_json"]
     hashes["package"] = _sha256_file(package_json_path)
+    # `svprpe package` always emits compilation_report.json alongside the
+    # package — record it too so the run's hash manifest covers the whole
+    # emitted pair (PR #247 Codex review round 20: an unhashed sibling could
+    # carry provenance claims outside the attestation surface).
+    hashes["package_compilation_report"] = _sha256_file(paths["package_compilation_report"])
 
     # `-o` is staged (H1) before being republished to the reserved
     # `observe_report_path` (module docstring's "H1" section).
