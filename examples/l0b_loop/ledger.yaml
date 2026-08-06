@@ -510,8 +510,12 @@ t2:
           sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
       workdir_note: >-
         Scratch workdir = build/l0b/t2_round5/ (not committed)。take.wav
-        sha256 は round 4 と相違（86b0f954... vs a0164842...）— コード
-        進行の導入は音響を実際に変えた。
+        sha256 は round 4 と相違（86b0f954... vs a0164842...）。
+        （2026-08-06 訂正: 原文はこのバイト相違を「コード進行の導入が
+        音響を変えた」と帰属していたが誤り — 進行は全区間 drone_only で
+        不鳴であり、実変化は role 散文への認識語一致による chorus2 の
+        drone 化。機構の正 = interpretation_correction。ここではバイト
+        相違の事実のみを記録する）。
       symbolic_validation: pass
       axes:
         key: {verdict: preserved, band: measured, observed: "D minor"}
