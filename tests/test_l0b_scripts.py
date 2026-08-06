@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import ModuleType
 
@@ -81,8 +82,8 @@ def test_pareto_axes_match_spec():
 
 def test_evaluate_reports_improvement_on_strict_structure_decrease_no_regression():
     prev = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="mismatch",
             requirement=["intro", "chorus", "outro"],
@@ -90,8 +91,8 @@ def test_evaluate_reports_improvement_on_strict_structure_decrease_no_regression
         ),
     )
     curr = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="exact_match",
             requirement=["intro", "chorus", "outro"],
@@ -110,8 +111,8 @@ def test_evaluate_reports_improvement_on_strict_structure_decrease_no_regression
 
 def test_evaluate_tie_is_not_an_improvement():
     prev = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="exact_match",
             requirement=["intro", "chorus", "outro"],
@@ -130,8 +131,8 @@ def test_evaluate_any_regression_blocks_improvement_even_with_another_strict_gai
     """D6: cross-axis aggregation is forbidden — a structure gain must not
     offset a key regression."""
     prev = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="mismatch",
             requirement=["intro", "chorus", "outro"],
@@ -139,8 +140,12 @@ def test_evaluate_any_regression_blocks_improvement_even_with_another_strict_gai
         ),
     )
     curr = _report(
-        key=_axis(verdict="deviated"),  # regressed: preserved -> deviated
-        brightness=_axis(verdict="preserved"),
+        # regressed: preserved -> deviated. requirement matches prev's (F1
+        # requires the pair to share a requirement); observed genuinely
+        # differs (non-str-safe, non-contradictory: F2/the consistency gate
+        # both accept a genuinely-deviated str pair).
+        key=_axis(verdict="deviated", requirement="D minor", observed="C major"),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="exact_match",
             requirement=["intro", "chorus", "outro"],
@@ -155,8 +160,8 @@ def test_evaluate_any_regression_blocks_improvement_even_with_another_strict_gai
 
 def test_evaluate_band_not_measured_excludes_round_pair():
     prev = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="mismatch",
             band="not_observed",
@@ -165,8 +170,8 @@ def test_evaluate_band_not_measured_excludes_round_pair():
         ),
     )
     curr = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="exact_match",
             requirement=["intro", "chorus", "outro"],
@@ -184,8 +189,8 @@ def test_evaluate_missing_axis_is_band_excluded_not_a_crash():
     pair against such a report must be band-excluded, not raise."""
     prev = _report()  # axes={} (gate-failure shape)
     curr = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="exact_match",
             requirement=["intro", "chorus", "outro"],
@@ -196,6 +201,55 @@ def test_evaluate_missing_axis_is_band_excluded_not_a_crash():
     assert result["band_excluded"] is True
     assert set(result["excluded_axes"]) == {"key", "brightness", "structure"}
     assert result["improved"] is False
+
+
+# --- Codex review round 6, P1: pair-internal requirement identity gate (F1) --
+
+
+def test_evaluate_rejects_differing_structure_requirement_between_pair():
+    """F1 negative case: prev/curr judged against two different structure
+    requirements (e.g. a `--section-map` swap between rounds) — the pair's
+    distance is not comparable, regardless of what the two raw distances
+    happen to be, so this must raise before any distance is computed."""
+    prev = _report(
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    curr = _report(
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
+        structure=_axis(
+            verdict="exact_match",
+            # T2's 4-section canonical map — differs from prev's T1 3-section map.
+            requirement=["intro", "chorus", "chorus", "outro"],
+            observed=["intro", "chorus", "chorus", "outro"],
+        ),
+    )
+    with pytest.raises(ValueError, match="requirement differs"):
+        pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+
+
+def test_evaluate_rejects_differing_key_requirement_between_pair():
+    """F1 negative case on a binary axis: prev/curr's `key` requirement
+    (a string, not a list) also has to agree for the pair to be
+    comparable."""
+    prev = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_valid_brightness_axis(),
+        structure=_valid_structure_axis(),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved", requirement="C minor", observed="C minor"),
+        brightness=_valid_brightness_axis(),
+        structure=_valid_structure_axis(),
+    )
+    with pytest.raises(ValueError, match="requirement differs"):
+        pareto_eval.evaluate(prev, curr, PARETO_SPEC)
 
 
 # --- Codex review round 5, P1: deviated-verdict/value consistency gate -----
@@ -310,6 +364,49 @@ def test_evaluate_accepts_genuinely_deviated_key_axis_at_distance_one():
     assert result["improved"] is True
 
 
+# --- Codex review round 6, P1: measured-binary-axis str gate (F2) ----------
+
+
+def test_evaluate_rejects_null_requirement_observed_on_deviated_measured_axis():
+    """F2 negative case (Codex's own example): a `band == 'measured'`,
+    `verdict == 'deviated'` `key` axis with `requirement=None`/
+    `observed=None` (`_axis()`'s own test-helper default) used to slip
+    straight past `_reject_contradictory_deviated_verdict`'s old "both str"
+    early return, unexamined — `_require_str_measured_binary_axis_values`
+    now rejects it outright, before the consistency gate even runs."""
+    prev = _report(
+        key=_axis(verdict="deviated"),  # band="measured" default, requirement/observed=None
+        brightness=_valid_brightness_axis(),
+        structure=_valid_structure_axis(),
+    )
+    curr = _report(
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
+        structure=_valid_structure_axis(),
+    )
+    with pytest.raises(ValueError, match="must be a str"):
+        pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+
+
+def test_evaluate_rejects_numeric_value_on_measured_binary_axis():
+    """F2 negative case: a `band == 'measured'` `brightness` axis with a
+    numeric (non-str) `observed` value must be rejected regardless of
+    `verdict` — this one is a success verdict (`preserved`), which the old
+    gate never even looked at."""
+    prev = _report(
+        key=_valid_key_axis(),
+        brightness=_axis(verdict="preserved", requirement="dark", observed=1),
+        structure=_valid_structure_axis(),
+    )
+    curr = _report(
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
+        structure=_valid_structure_axis(),
+    )
+    with pytest.raises(ValueError, match="must be a str"):
+        pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+
+
 def test_main_exits_nonzero_on_contradictory_deviated_verdict(tmp_path: Path):
     """`main()`-level negative case: the same contradiction, caught via the
     CLI's existing `ValueError` handling (stderr + exit 1, nothing written)."""
@@ -354,9 +451,13 @@ def test_evaluate_rejects_pareto_spec_with_wrong_axis_set():
 
 
 def test_evaluate_rejects_int_token_in_structure_requirement():
+    # curr's structure requirement deliberately matches prev's (F1's
+    # pair-internal requirement-identity gate would otherwise fire first,
+    # before the str-token check this test targets ever runs) — only
+    # `observed` differs between the two sides.
     prev = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="mismatch",  # failure side: AuthoringDiffReport allows Any here
             requirement=["intro", 2, "outro"],
@@ -364,11 +465,11 @@ def test_evaluate_rejects_int_token_in_structure_requirement():
         ),
     )
     curr = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="exact_match",
-            requirement=["intro", "chorus", "outro"],
+            requirement=["intro", 2, "outro"],
             observed=["intro", "chorus", "outro"],
         ),
     )
@@ -378,8 +479,8 @@ def test_evaluate_rejects_int_token_in_structure_requirement():
 
 def test_evaluate_rejects_none_token_in_structure_observed():
     prev = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="mismatch",
             requirement=["intro", "chorus", "outro"],
@@ -387,8 +488,8 @@ def test_evaluate_rejects_none_token_in_structure_observed():
         ),
     )
     curr = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="exact_match",
             requirement=["intro", "chorus", "outro"],
@@ -405,8 +506,8 @@ def test_evaluate_accepts_all_str_structure_tokens_unchanged():
     happy path — only non-str tokens now fail loudly instead of being
     silently str()-coerced)."""
     prev = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="mismatch",
             requirement=["intro", "chorus", "outro"],
@@ -414,8 +515,8 @@ def test_evaluate_accepts_all_str_structure_tokens_unchanged():
         ),
     )
     curr = _report(
-        key=_axis(verdict="preserved"),
-        brightness=_axis(verdict="preserved"),
+        key=_valid_key_axis(),
+        brightness=_valid_brightness_axis(),
         structure=_axis(
             verdict="exact_match",
             requirement=["intro", "chorus", "outro"],
@@ -432,7 +533,9 @@ def test_main_exits_nonzero_on_int_token_in_structure_axis(tmp_path: Path):
     with a non-str token passes `AuthoringDiffReport` validation (failure
     side keeps the `Any` design — see `src/svp_rpe/authoring/report.py`)
     but must still fail via `evaluate()`'s `_axis_distance`, caught by
-    `main()` the same way other `ValueError`s are (stderr + exit 1)."""
+    `main()` the same way other `ValueError`s are (stderr + exit 1). curr's
+    structure `requirement` deliberately matches prev's malformed one (F1's
+    pair-internal requirement-identity gate would otherwise fire first)."""
     prev = _report(
         key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
         brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
@@ -447,7 +550,7 @@ def test_main_exits_nonzero_on_int_token_in_structure_axis(tmp_path: Path):
         brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
         structure=_axis(
             verdict="exact_match",
-            requirement=["intro", "chorus", "outro"],
+            requirement=["intro", 2, "outro"],
             observed=["intro", "chorus", "outro"],
         ),
     )
@@ -523,6 +626,22 @@ def test_validate_pareto_spec_contract_rejects_reworded_tie_rule():
 def test_validate_pareto_spec_contract_rejects_reworded_band_rule():
     bad_spec = {**PARETO_SPEC, "band_rule": PARETO_SPEC["band_rule"][:-1]}
     with pytest.raises(ValueError, match="band_rule"):
+        pareto_eval._validate_pareto_spec_contract(bad_spec)
+
+
+# --- Codex review round 6, P2: axes[*].distance_definition pinned (F3) -----
+
+
+def test_validate_pareto_spec_contract_rejects_reworded_distance_definition():
+    bad_axes = {
+        **PARETO_SPEC["axes"],
+        "structure": {
+            **PARETO_SPEC["axes"]["structure"],
+            "distance_definition": PARETO_SPEC["axes"]["structure"]["distance_definition"] + " ",
+        },
+    }
+    bad_spec = {**PARETO_SPEC, "axes": bad_axes}
+    with pytest.raises(ValueError, match="distance_definition"):
         pareto_eval._validate_pareto_spec_contract(bad_spec)
 
 
@@ -722,6 +841,82 @@ def test_reject_escaping_reserved_paths_accepts_fresh_workdir(tmp_path: Path):
 
     # Must not raise.
     run_round._reject_escaping_reserved_paths(workdir, paths)
+
+
+# --- Codex review round 6, P1: reserved-path writes are atomic (hardlink-safe, F4) --
+
+
+def test_atomic_write_bytes_hardlink_does_not_corrupt_shared_inode(tmp_path: Path):
+    """F4 positive case: a reserved workdir write target (e.g. `score.yaml`)
+    that is a *hard* link to some other pin-recorded file (sharing its inode
+    — indistinguishable from an ordinary file to `Path.is_symlink()`, so the
+    symlink-escape guard above cannot catch this case) must not have that
+    other file's content corrupted when this run writes fresh bytes through
+    the reserved name. `run_round.py`'s reserved-path writes all go through
+    `atomic_write_bytes` (tempfile + `os.replace`), which unlinks the
+    reserved name from whatever inode it previously shared and rebinds it to
+    a brand-new inode — the old inode, and whatever other path still points
+    at it, is left untouched."""
+    original = tmp_path / "original_evidence.yaml"
+    original.write_text("precious pinned evidence\n", encoding="utf-8")
+    reserved = tmp_path / "score.yaml"
+    os.link(original, reserved)
+    # Sanity: the two paths really do share one inode before the write.
+    assert reserved.read_text() == original.read_text()
+
+    run_round.atomic_write_bytes(reserved, b"freshly staged round content\n")
+
+    assert reserved.read_bytes() == b"freshly staged round content\n"
+    assert original.read_text() == "precious pinned evidence\n"
+
+
+# --- Codex review round 6, P1: preflight judge-input drift check (F5) ------
+
+
+def test_fixed_input_sha256_matches_actual_files():
+    """F5 drift-of-drift meta-test: `_FIXED_INPUT_SHA256`'s pinned digests
+    must match the actual current bytes of every file it names — this would
+    fail if either the pin table or the underlying frozen/config file
+    drifted from the other without updating the table (the same drift
+    `_reject_judge_input_drift` itself exists to catch at run time,
+    mirrored here as a static check)."""
+    for label, (path, expected_sha256) in run_round._FIXED_INPUT_SHA256.items():
+        assert run_round._sha256_file(path) == expected_sha256, label
+
+
+def test_fixed_input_sha256_key_set_is_fixed():
+    assert set(run_round._FIXED_INPUT_SHA256) == {
+        "section_map",
+        "section_map_t2",
+        "eval_control_profile",
+        "arrangement",
+        "suno_capability_profile",
+        "authoring_contract_l0",
+    }
+
+
+def test_reject_judge_input_drift_accepts_pinned_files_for_t1_and_t2():
+    # Must not raise, for either --section-map selection.
+    run_round._reject_judge_input_drift(run_round.SECTION_MAP_PATH)
+    run_round._reject_judge_input_drift(run_round.SECTION_MAP_T2_PATH)
+
+
+def test_reject_judge_input_drift_rejects_modified_fixed_input(tmp_path: Path, monkeypatch):
+    """F5 negative case: a fixed input whose on-disk bytes no longer match
+    its pin must be refused with `JudgeInputDriftError` — exercised via a
+    monkeypatched `_FIXED_INPUT_SHA256` entry pointed at a tampered tmp copy
+    (cheaper than mutating a real frozen/config file in place)."""
+    tampered = tmp_path / "eval_control_profile.yaml"
+    tampered.write_text("tampered: true\n", encoding="utf-8")
+    patched = dict(run_round._FIXED_INPUT_SHA256)
+    patched["eval_control_profile"] = (
+        tampered,
+        run_round._FIXED_INPUT_SHA256["eval_control_profile"][1],  # stale pin, on purpose
+    )
+    monkeypatch.setattr(run_round, "_FIXED_INPUT_SHA256", patched)
+
+    with pytest.raises(run_round.JudgeInputDriftError, match="eval_control_profile"):
+        run_round._reject_judge_input_drift(run_round.SECTION_MAP_PATH)
 
 
 def test_reject_output_collision_with_existing_protected_tree_file():

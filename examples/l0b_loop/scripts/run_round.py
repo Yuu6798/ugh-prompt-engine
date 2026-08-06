@@ -85,6 +85,49 @@ ordinary reuse of leftover real files/dirs from a prior round also passes
 unchanged — nothing about a normal `run_round()` invocation ever creates a
 symlink under a reserved name, so this guard only ever fires against a
 tampered/adversarial workdir.
+
+**Atomic reserved-path writes** (Codex review round 6, P1): every reserved
+workdir path this script itself writes directly (`score.yaml`,
+`eval_score.yaml`, `take.wav`, `identity/section_map.json`,
+`identity_manifest.yaml` — everything `_publish_report_bundle` does not
+already cover) now goes through `svp_rpe.utils.atomic_io.atomic_write_bytes`
+(tempfile in the same directory + `os.replace`) instead of a plain
+`Path.write_bytes`. This closes a hazard the symlink-escape guard above
+cannot: a reused `--workdir` whose reserved name is a *hard* link (not a
+symlink) to some other pin-recorded file shares that file's inode, so a
+plain in-place `write_bytes` would truncate and overwrite the *other* file's
+content too, in-place, through the shared inode — `Path.is_symlink()` never
+sees a hard link (it is, by construction, indistinguishable from an
+ordinary file at the filesystem level), so no lexical guard can catch this
+case. `os.replace` sidesteps the whole problem structurally rather than
+detecting it: it unlinks the reserved name from whatever inode it
+previously pointed at (shared or not) and rebinds the name to a brand-new
+inode holding this run's freshly staged bytes, so the old inode — and
+whatever *other* path still points at it — is left completely untouched.
+Normal-path output bytes are unchanged by this switch (same content, same
+final path) — the T1/T2 slow smoke tests below (`test_positive_control_
+round_trip_reproduces_pinned_report` / `..._t2_...`) are the byte-for-byte
+proof.
+
+**Preflight judge-input drift check** (`_reject_judge_input_drift`, F5,
+Codex review round 6, P1): the guards above all police *where* this run
+writes; this one polices whether the fixed inputs this run *reads* are
+still the ones L0b's evidence is pinned against. `_FIXED_INPUT_SHA256` pins
+the sha256 of every fixed judge-side input `run_round()` reads (the four
+inputs read on every invocation, plus whichever `--section-map` this
+invocation selected), machine-derived from the same files
+`examples/l0b_loop/ledger.yaml`'s `pinned_inputs`/`t2.pinned_inputs` already
+pin (same values, same source files — this table exists only so
+`run_round.py` itself can check byte fidelity at run time, not to introduce
+a second, independent source of truth). Runs after every other preflight
+guard and before `workdir.mkdir()` — a mismatch means the judge itself has
+drifted (accidental edit, wrong checkout, a stale copy), so the run is
+refused before writing anything rather than silently producing an
+evidence-shaped report measured against a different judge than the one this
+experiment's evidence assumes. If an engine change legitimately updates one
+of these files, `_FIXED_INPUT_SHA256` must be updated to match in the same
+change — this table's whole purpose is to *detect* drift, not to freeze the
+files in place forever.
 """
 from __future__ import annotations
 
@@ -121,6 +164,7 @@ _REPO_ROOT = _LOOP_DIR.parents[1]
 _FROZEN_DIR = _LOOP_DIR / "frozen"
 
 SECTION_MAP_PATH = _FROZEN_DIR / "section_map.json"
+SECTION_MAP_T2_PATH = _FROZEN_DIR / "section_map_t2.json"
 EVAL_CONTROL_PROFILE_PATH = _FROZEN_DIR / "eval_control_profile.yaml"
 ARRANGEMENT_PATH = _FROZEN_DIR / "arrangement.yaml"
 CAPABILITY_PROFILE_PATH = _REPO_ROOT / "config" / "capability_profiles" / "suno.yaml"
@@ -150,6 +194,94 @@ def _fixed_input_paths(section_map_path: Path) -> tuple[Path, ...]:
         CONTRACT_PATH,
     )
 
+
+# F5 (Codex review round 6, P1): frozen judge-side input byte-fidelity pins
+# — see module docstring's "Preflight judge-input drift check" section for
+# the full rationale. Machine-derived (sha256 of each file's current bytes,
+# not hand-transcribed) and identical in value to
+# `examples/l0b_loop/ledger.yaml`'s `pinned_inputs`/`t2.pinned_inputs`
+# entries for the same six files (same source files, same digest — this
+# table exists only so `run_round.py` itself can check byte fidelity at run
+# time, not to introduce a second, independent source of truth). If an
+# engine change legitimately updates one of these files, this table must be
+# synced to match in the same change — drift detection is the entire point,
+# not a hard freeze enforced by this code.
+_FIXED_INPUT_SHA256: dict[str, tuple[Path, str]] = {
+    "section_map": (
+        SECTION_MAP_PATH,
+        "a7d4330c06137117474f19ab3fae27204e7df9a00deac72cba9a0299296a83fd",
+    ),
+    "section_map_t2": (
+        SECTION_MAP_T2_PATH,
+        "7add33ba142174c5e2ee002d39af9abb2ebdc65858aed2b05564f9e8ce00d830",
+    ),
+    "eval_control_profile": (
+        EVAL_CONTROL_PROFILE_PATH,
+        "a5eb1847a54032c49b865a8a6834bde597c5d3ddcdf8784d05d3cce3b7e76c1e",
+    ),
+    "arrangement": (
+        ARRANGEMENT_PATH,
+        "efa0d6db0e288ad74c330a719b28e6db224c4545b852bdbbf62bc7adeda96e5a",
+    ),
+    "suno_capability_profile": (
+        CAPABILITY_PROFILE_PATH,
+        "343f3e84bb7e2bb4f4c945195659b3823318bf14c306774278a33ee7d116592b",
+    ),
+    "authoring_contract_l0": (
+        CONTRACT_PATH,
+        "f34479d9683667c343179fdeef435ea02f59fb843ff62870be815511a281f8c6",
+    ),
+}
+
+_SECTION_MAP_LABELS = ("section_map", "section_map_t2")
+
+
+def _selected_fixed_inputs(section_map_path: Path) -> dict[str, Path]:
+    """The fixed judge-side inputs a `run_round()` invocation actually
+    reads, keyed the same way as `_FIXED_INPUT_SHA256`: always the four
+    non-section-map entries, plus whichever of `_FIXED_INPUT_SHA256`'s two
+    section-map entries `section_map_path` resolves to (T1's default or a
+    `--section-map` override) — the other section-map slot is never read
+    this run and is therefore excluded. A `section_map_path` that resolves
+    to neither pinned section map (a path outside this table's two frozen
+    entries) is likewise excluded — this table only pins the two frozen
+    maps this experiment currently knows about."""
+    selected: dict[str, Path] = {
+        label: path
+        for label, (path, _sha256) in _FIXED_INPUT_SHA256.items()
+        if label not in _SECTION_MAP_LABELS
+    }
+    resolved_section_map_path = section_map_path.resolve()
+    for label in _SECTION_MAP_LABELS:
+        pinned_path, _sha256 = _FIXED_INPUT_SHA256[label]
+        if pinned_path.resolve() == resolved_section_map_path:
+            selected[label] = pinned_path
+            break
+    return selected
+
+
+def _reject_judge_input_drift(section_map_path: Path) -> None:
+    """Preflight byte-fidelity check (F5) — see module docstring's
+    "Preflight judge-input drift check" section for the full rationale.
+    Raises `JudgeInputDriftError` (a `ProtectedPathError` — refused before
+    any write, same family as this module's other preflight guards) naming
+    the drifted input, its actual sha256, and the pinned one it no longer
+    matches."""
+    for label, path in _selected_fixed_inputs(section_map_path).items():
+        expected_sha256 = _FIXED_INPUT_SHA256[label][1]
+        actual_sha256 = _sha256_file(path)
+        if actual_sha256 != expected_sha256:
+            raise JudgeInputDriftError(
+                f"judge input drift: {label} ({path}) sha256 {actual_sha256} != "
+                f"pinned {expected_sha256} — this fixed judge-side input no longer "
+                "matches the frozen judge L0b's evidence is pinned against "
+                "(_FIXED_INPUT_SHA256 in run_round.py); refusing to run rather than "
+                "silently measuring a round against a different judge than the one "
+                "this experiment's evidence assumes. If this input was legitimately "
+                "updated, _FIXED_INPUT_SHA256 must be synced to match."
+            )
+
+
 # Frozen judge (task.md judgement table) — deliberately not read back from the
 # submitted score.yaml itself: the requirement is the task's fixed target,
 # the "observed" side of the report is what got measured.
@@ -162,6 +294,14 @@ _CLI_TIMEOUT_SECONDS = 300
 class ProtectedPathError(RuntimeError):
     """A `--workdir`/`-o` path would clobber protected L0b evidence or a
     pipeline input — refused before anything is written."""
+
+
+class JudgeInputDriftError(ProtectedPathError):
+    """A fixed judge-side input's on-disk bytes no longer match its pinned
+    sha256 (`_FIXED_INPUT_SHA256`) — refused before `workdir.mkdir()` or any
+    other write (F5, module docstring's "Preflight judge-input drift check"
+    section). A `ProtectedPathError` subclass so `main()`'s existing
+    `except ProtectedPathError` handling catches it unchanged."""
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -371,7 +511,7 @@ def _prepare_scores(
 
     eval_bytes = yaml.safe_dump(data, sort_keys=False, allow_unicode=True).encode("utf-8")
     eval_score_path = paths["eval_score"]
-    eval_score_path.write_bytes(eval_bytes)
+    atomic_write_bytes(eval_score_path, eval_bytes)
     eval_score_sha256 = _sha256_bytes(eval_bytes)
 
     return eval_score_path, eval_score_sha256
@@ -395,7 +535,7 @@ def _write_identity_manifest(
     identity_dir = paths["identity_dir"]
     identity_dir.mkdir(exist_ok=True)
     section_map_sha256 = _sha256_bytes(section_map_bytes)
-    paths["identity_section_map"].write_bytes(section_map_bytes)
+    atomic_write_bytes(paths["identity_section_map"], section_map_bytes)
 
     manifest_data: dict[str, Any] = {
         "schema_version": "identity-manifest/0.1",
@@ -432,7 +572,7 @@ def _write_identity_manifest(
         manifest_data, sort_keys=False, allow_unicode=True
     ).encode("utf-8")
     manifest_path = paths["identity_manifest"]
-    manifest_path.write_bytes(manifest_bytes)
+    atomic_write_bytes(manifest_path, manifest_bytes)
     return manifest_path, _sha256_bytes(manifest_bytes)
 
 
@@ -726,6 +866,11 @@ def run_round(
         reserved_paths=paths.values(),
         fixed_input_paths=_fixed_input_paths(section_map_path),
     )
+    # F5 preflight: the fixed judge-side inputs this run is about to read
+    # must still match the judge L0b's evidence is pinned against (module
+    # docstring's "Preflight judge-input drift check" section) — after every
+    # other preflight guard, before workdir.mkdir() or any write.
+    _reject_judge_input_drift(section_map_path)
 
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -741,7 +886,7 @@ def run_round(
     score_bytes = score_path.read_bytes()
     score_sha256 = _sha256_bytes(score_bytes)
     score_copy_path = paths["score_copy"]
-    score_copy_path.write_bytes(score_bytes)
+    atomic_write_bytes(score_copy_path, score_bytes)
 
     # (a) Symbolic gate — validated against the just-written copy (the same
     # bytes snapshot), not `score_path` itself.
@@ -797,7 +942,7 @@ def run_round(
 
     score = load_composition_score(eval_score_path)
     take_wav_path = paths["take_wav"]
-    take_wav_path.write_bytes(wav_bytes(perform(score, FAITHFUL_TAKE)))
+    atomic_write_bytes(take_wav_path, wav_bytes(perform(score, FAITHFUL_TAKE)))
     hashes["take_wav"] = _sha256_file(take_wav_path)
 
     # Single section-map snapshot: read once and shared with both the

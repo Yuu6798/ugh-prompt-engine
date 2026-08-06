@@ -105,6 +105,64 @@ sole source of truth for what those rules actually mean — the pin only
 detects wording drift, it does not derive behavior from the prose. `main()`
 catches this `ValueError` the same way it already catches `_load_report()`'s
 validation errors (stderr + exit 1).
+
+Per-axis `distance_definition` pin (`_validate_pareto_spec_contract()`,
+Codex review round 6, P2): the same drift-detection style as
+`_PROSE_RULE_SHA256` above, extended to each axis's own
+`axes[<name>].distance_definition` prose (`_DISTANCE_DEFINITION_SHA256` /
+`_require_canonical_distance_definition`) — the three rule fields being
+pinned did not previously cover a *per-axis* definition drifting on its
+own (e.g. someone editing `axes.structure.distance_definition`'s wording
+without touching `distance`/`order` or the three rule fields, none of which
+would have caught it). Same boundary as the rule-field pin: this only
+detects wording drift against the current `frozen/pareto.yaml`, it never
+parses or reinterprets the prose — `_axis_distance()`'s control flow remains
+the sole source of truth for what each axis's distance actually computes.
+
+Pair-internal requirement identity gate (`evaluate()`, Codex review round 6,
+P1): for every axis where both `prev_report`/`curr_report` are
+`band == "measured"` (i.e. an axis this call actually computes a distance
+for), `_require_same_requirement()` enforces that the two reports' `axes[
+<name>].requirement` are identical (`structure`'s list-of-labels compared as
+a list, `key`/`brightness`'s string compared as a string) before any
+distance is computed — a `prev`/`curr` pair judged against two different
+requirements (e.g. a `--section-map` swap between rounds, or a hand-edited
+report.json) has no comparable distance in the first place, regardless of
+what the two raw distance numbers happen to be. Boundary (deliberately not
+enforced here): binding a frozen task's requirement to the correct frozen
+judge input (e.g. which `--section-map` a round was actually run against) is
+`run_round.py`'s responsibility, not this evaluator's — `run_round.py` fills
+`requirement` from the frozen section map it was invoked against (see that
+module's own preflight judge-input-drift check), so this evaluator only
+ever needs to enforce requirement identity *within* a given pair, never that
+either side's requirement is itself the task's canonical one.
+
+Measured-binary-axis str gate (`_require_str_measured_binary_axis_values()`,
+Codex review round 6, P1): a `band == "measured"` `key`/`brightness` axis's
+`requirement`/`observed` must both be `str`, *regardless of whether
+`verdict` is a success (`preserved`) or failure (`deviated`)* —
+`AuthoringDiffReport`'s `Any`-typed fields (`src/svp_rpe/authoring/
+report.py`) do not enforce this themselves, and a non-`str` value on a
+`measured`-band axis previously slipped straight past
+`_reject_contradictory_deviated_verdict`'s own "both str" early return
+(that check only ever ran for `verdict == 'deviated'`, so a non-str
+`preserved` axis was never examined at all, and a non-str `deviated` axis
+was silently skipped rather than rejected) — silently trusting `verdict` for
+a requirement/observed pair this evaluator never actually confirmed
+comparable. This runs unconditionally per axis per report (mirroring
+`_reject_contradictory_deviated_verdict`'s own per-side, per-axis scope,
+*before* it runs), not only when both sides of a pair are measured — a lone
+`measured`-band axis with a non-str value is malformed on its own, whether
+or not its counterpart in the pair happens to be usable. With this gate in
+place, `_reject_contradictory_deviated_verdict`'s own former "both str"
+isinstance check ahead of its comparator call is unreachable by the time it
+runs (its `band == "measured"` guard already implies str-typed values) and
+has been removed rather than kept as dead defensive code; the net behavior
+change is that a `band == "measured"` axis with a non-str `requirement`/
+`observed` is now always rejected, not just when `verdict == "deviated"`.
+`structure` is excluded from this gate entirely — its axis never treats
+`requirement`/`observed` as scalar `str` values (see the "Verdict/value
+consistency gate" section above).
 """
 from __future__ import annotations
 
@@ -193,10 +251,64 @@ def _axis_band(axis: Optional[dict[str, Any]]) -> Optional[str]:
     return axis.get("band")
 
 
+def _require_same_requirement(
+    axis_name: str, prev_axis: dict[str, Any], curr_axis: dict[str, Any]
+) -> None:
+    """Pair-internal requirement-identity gate — see module docstring's
+    "Pair-internal requirement identity gate" section for the full
+    rationale/scope. Only called for an axis this call is about to compute a
+    distance for (both sides `band == "measured"`); `structure`'s
+    `requirement` (a label list) and `key`/`brightness`'s (a string, by the
+    time this runs — `_require_str_measured_binary_axis_values` already
+    enforced that) are both compared via plain `!=`, which is exactly list
+    equality / string equality respectively. Boundary (deliberately not
+    enforced): binding a frozen task's requirement to the correct frozen
+    judge input is `run_round.py`'s responsibility (it fills `requirement`
+    from the frozen section map it was invoked against) — this evaluator
+    only ever enforces requirement identity within this one pair."""
+    prev_requirement = prev_axis.get("requirement")
+    curr_requirement = curr_axis.get("requirement")
+    if prev_requirement != curr_requirement:
+        raise ValueError(
+            f"axes[{axis_name!r}] requirement differs between prev_report and "
+            f"curr_report (prev={prev_requirement!r}, curr={curr_requirement!r}) — "
+            "a round pair's distance is not comparable when the two reports were "
+            "judged against different requirements."
+        )
+
+
 _CONTRADICTION_COMPARATORS = {
     "key": keys_enharmonically_equal,
     "brightness": lambda requirement, observed: requirement == observed,
 }
+
+
+_MEASURED_BINARY_SIDES = ("requirement", "observed")
+
+
+def _require_str_measured_binary_axis_values(
+    report_label: str, axis_name: str, axis: Optional[dict[str, Any]]
+) -> None:
+    """Measured-binary-axis str gate — see module docstring's
+    "Measured-binary-axis str gate" section for the full rationale/scope.
+    Only `key`/`brightness` axes (`_BINARY_AXES`) with `band == "measured"`
+    are checked, regardless of `verdict`; `structure` and any non-`measured`
+    band are silently skipped (not an error in themselves — this gate only
+    polices the shape of values this evaluator is actually about to treat as
+    comparable strings)."""
+    if axis is None or axis_name not in _BINARY_AXES or axis.get("band") != "measured":
+        return
+    for side in _MEASURED_BINARY_SIDES:
+        value = axis.get(side)
+        if not isinstance(value, str):
+            raise ValueError(
+                f"{report_label}.axes[{axis_name!r}].{side} must be a str when "
+                f"band == 'measured', got {value!r} ({type(value).__name__}) — a "
+                "measured binary axis's requirement/observed must be directly "
+                "comparable regardless of its verdict; a non-str value here would "
+                "otherwise slip past the deviated-verdict consistency gate "
+                "unexamined (pareto_eval.py's Codex review round 6, P1 fix)."
+            )
 
 
 def _reject_contradictory_deviated_verdict(
@@ -206,10 +318,16 @@ def _reject_contradictory_deviated_verdict(
     gate" section for the full rationale/scope. Only `key`/`brightness` are
     checked (`_CONTRADICTION_COMPARATORS`); `structure` never reaches this
     function (its distance never reads `verdict`, see module docstring).
-    Only fires for `band == "measured"` + `verdict == "deviated"` axes whose
-    `requirement`/`observed` are both `str` — anything else (missing axis,
-    other band, other verdict, non-str values) is silently skipped, not an
-    error in itself."""
+    Only fires for `band == "measured"` + `verdict == "deviated"` axes —
+    anything else (missing axis, other band, other verdict) is silently
+    skipped, not an error in itself. `requirement`/`observed` are not
+    re-checked for `str`-ness here: `_require_str_measured_binary_axis_values`
+    already ran for this exact `(report_label, axis_name, axis)` before this
+    function is ever called (`evaluate()`'s loop calls it first) and would
+    have raised already if either were non-`str` for a `band == "measured"`
+    axis — the isinstance check this function used to make itself (Codex
+    review round 5, P1's original gate) is unreachable given that ordering
+    and has been removed rather than kept as dead defensive code."""
     if axis is None:
         return
     comparator = _CONTRADICTION_COMPARATORS.get(axis_name)
@@ -219,8 +337,6 @@ def _reject_contradictory_deviated_verdict(
         return
     requirement = axis.get("requirement")
     observed = axis.get("observed")
-    if not (isinstance(requirement, str) and isinstance(observed, str)):
-        return
     if comparator(requirement, observed):
         raise ValueError(
             f"{report_label}.axes[{axis_name!r}] is a contradictory report: "
@@ -287,6 +403,41 @@ def _require_canonical_prose_rule(spec: dict[str, Any], key: str) -> None:
         )
 
 
+# F3 (Codex review round 6, P2): per-axis `distance_definition` prose pin —
+# same drift-detection style/rationale as `_PROSE_RULE_SHA256` above, applied
+# to each axis's own `axes[<name>].distance_definition` text instead of the
+# three top-level rule fields (see module docstring's per-axis
+# `distance_definition` pin section). Computed the same way: loading the
+# current frozen/pareto.yaml with `yaml.safe_load` and hashing the three
+# resulting strings directly (not hand-transcribed).
+_DISTANCE_DEFINITION_SHA256: dict[str, str] = {
+    "key": "d5e7ef6a562912d41699257148e3e6d017ba6cb208bff1dca69fb961fcf154bd",
+    "brightness": "acf0ca61bfc716a3142cc2ab379e26c641dd8ad0a1bcb6cd69457fe117a910df",
+    "structure": "5e88812fbd4c0b122670126e7ad39b868b161c493e2feb289decced172a896e9",
+}
+
+
+def _require_canonical_distance_definition(spec_axes: dict[str, Any], axis_name: str) -> None:
+    axis_spec = spec_axes.get(axis_name)
+    value = axis_spec.get("distance_definition") if isinstance(axis_spec, dict) else None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"frozen/pareto.yaml's axes[{axis_name!r}].distance_definition must be a "
+            f"string, got {value!r}"
+        )
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    expected = _DISTANCE_DEFINITION_SHA256[axis_name]
+    if digest != expected:
+        raise ValueError(
+            f"frozen/pareto.yaml's axes[{axis_name!r}].distance_definition text "
+            f"drifted from the implemented contract (sha256 {digest} != pinned "
+            f"{expected}) — frozen/pareto.yaml is the single source of truth for "
+            "this prose; pareto_eval.py pins the exact wording only to detect "
+            "drift (same style as _PROSE_RULE_SHA256/_require_canonical_prose_rule), "
+            "never to reinterpret its meaning."
+        )
+
+
 def _validate_axis_contract(spec_axes: dict[str, Any], axis_name: str, *, distance: str) -> None:
     axis_spec = spec_axes.get(axis_name)
     if not isinstance(axis_spec, dict):
@@ -332,6 +483,9 @@ def _validate_pareto_spec_contract(pareto_spec: dict[str, Any]) -> dict[str, Any
         _validate_axis_contract(spec_axes, axis_name, distance=_BINARY_DISTANCE)
     _validate_axis_contract(spec_axes, "structure", distance=_STRUCTURE_DISTANCE)
 
+    for axis_name in _AXES:
+        _require_canonical_distance_definition(spec_axes, axis_name)
+
     for rule_key in _PROSE_RULE_KEYS:
         _require_canonical_prose_rule(pareto_spec, rule_key)
 
@@ -360,6 +514,12 @@ def evaluate(
     for axis_name in _AXES:
         prev_axis = prev_axes.get(axis_name)
         curr_axis = curr_axes.get(axis_name)
+        # Measured-binary-axis str gate — before the consistency gate (module
+        # docstring's "Measured-binary-axis str gate" section): a non-str
+        # requirement/observed on a band=="measured" key/brightness axis must
+        # never reach the comparator below, regardless of verdict.
+        _require_str_measured_binary_axis_values("prev_report", axis_name, prev_axis)
+        _require_str_measured_binary_axis_values("curr_report", axis_name, curr_axis)
         # Consistency gate — before any distance is computed (module
         # docstring's "Verdict/value consistency gate" section).
         _reject_contradictory_deviated_verdict("prev_report", axis_name, prev_axis)
@@ -379,6 +539,10 @@ def evaluate(
             "measured": axis_measured,
         }
         if axis_measured:
+            # Pair-internal requirement identity gate — before distance is
+            # computed (module docstring's "Pair-internal requirement
+            # identity gate" section).
+            _require_same_requirement(axis_name, prev_axis, curr_axis)
             prev_distance = _axis_distance(axis_name, prev_axis)
             curr_distance = _axis_distance(axis_name, curr_axis)
             entry["prev_distance"] = prev_distance
