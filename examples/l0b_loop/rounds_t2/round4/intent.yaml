@@ -1,0 +1,9 @@
+meta_note: "round3までの3周回で一貫した結果: intro(静寂/sparse/low density/no kick)→chorus1(full energy, sub bass)という4トークン同時変化の境界は、intro長を3→5barsに変えても(intro/chorus1の絶対位置が動いても)一度も検出されなかった。一方chorus1→chorus2(full energyは両者共通、sub_bassのみon→off)という単一軸の変化は3周回とも高精度(誤差0.07〜0.29秒)で検出された。round2でのintro側トークン追加(silence/no kick)も境界を一切動かさずround1と完全一致しており、'長さ'仮説も'silenceトークンの有無'仮説もどちらも棄却された。残る説明は『多軸同時変化は検出されにくく、単一軸(特にsub_bass)の変化だけが確実に検出される』という軸数仮説。round4ではこれを直接検証するため、introをchorus1と同じfull energyに揃え、chorus1との差分をsub_bass(+no kick)の2軸のみに縮小した。"
+section_intro:
+  reason: "chorus1/chorus2で実証済みの『他条件を揃えsub_bassのみ変える』パターンをintro/chorus1境界にも移植。ただしintroをchorus1と完全同一(full energyのみ)にするとchorus2(こちらもfull energyのみ)とトークン的に区別がつかずintro自体がchorusと誤ラベルされるリスクがあるため、'no kick'を追加してintroに固有の識別特徴(ドラム抜きの立ち上がり=典型的なintroモチーフ)を持たせつつ、chorus1との差分軸をsub_bass+kickの2軸(4軸から半減)に絞った。"
+section_chorus:
+  reason: "chorus1(full energy, sub bass)/chorus2(full energy)は3周回連続で機能している唯一実証済みメカニズムのため一切変更しない。"
+section_outro:
+  reason: "chorus2/outro境界は宣言より2.70秒早く検出されるがラベル順序(chorus→outro)自体は毎回正しく、R1は完全な位置一致でなくラベル列の一致のみを要求するため、この周回では変更を見送り実験変数をintro側の1箇所に限定した。"
+risk: "『full energyに揃えるとintroがchorusと誤ラベルされる』リスクが最大の懸念。もしintro/chorus1境界が検出されてもラベル列がchorus,chorus,chorus,outroのようになった場合、編集距離は現状(intro,chorus,outroに1挿入=距離1)と同等になり得るため、round5では『区別可能な単一軸トークンをintroに残しつつsub_bass以外の軸(例: no kick単独)で境界を作る』方向へ切り替える必要がある。また境界が今回も検出されなければ、軸数仮説自体が誤りであり、sub_bass以外の全く別種の対比手段(例えばevents.chord_progressionでintro区間のコードをchorus1と大きく変える等、契約で許可されている範囲)をround5で試す。"
+tools_used: none

@@ -1,0 +1,9 @@
+meta_note: "round1-3: intro(sparse/silence系, 複数軸同時変化)でintro/chorus1境界は一度も検出されず、長さ変更(3→5bars)も無効だった。一方chorus1(full energy, sub bass)/chorus2(full energy)というsub bass単軸対比は3周回連続で高精度検出(誤差0.07-0.29秒)。round4はこの単軸仮説を検証すべくintroをfull energyに揃え差分をsub bass+no kickの2軸に縮小したが、それでも境界は検出されず、観測は intro(0-19.71)/chorus(19.71-24.80)/outro(24.80-40.0)の3セクションに退化した。第一検出境界19.71秒は宣言chorus1/chorus2境界20.0秒とほぼ一致(誤差0.29秒、過去の同軸検出精度と整合)しており、intro/chorus1境界(宣言12.5秒)だけが一貫して観測から消えている。これは軸数の問題ではなく『最初の境界は原理的に検出されにくい』位置バイアス、または『sub bass単軸のON方向(無→有)はOFF方向(有→無)ほど鋭く検出されない』方向性バイアスの可能性を示唆する。round4のintent risk欄で予告した通り、round5(最終周回)ではsub bass以外の全く別種の対比手段としてevents.chord_progressionを導入した。"
+section_intro:
+  reason: "round4のfull energy, no kick構成を維持しつつ(この構成単独が悪いという確証はなく、単に情報量が足りなかった可能性があるため)、契約で許可されたコード進行(F major、D minorの関係調=III)を追加。chorus1(D minor, トニック)とは長三度質(major/minor)+ルート音の両方が異なるため、既存のkick/sub bass軸に加えて音響的に独立な第三の対比軸を上乗せする。F/A音はD minorコード(D/F/A)と2音共有するため、キー検出への悪影響は最小限に抑えた設計。"
+section_chorus:
+  reason: "chorus1(full energy, sub bass)/chorus2(full energy)は4周回中3周回で実証済みの唯一確実なメカニズムのため物理指定・コード(ともにD minor)とも一切変更しない。ここを弄って現在動いている境界を壊すリスクを取らない。"
+section_outro:
+  reason: "chorus2/outro境界はラベル順序(chorus→outro)は常に正しく、宣言より2.70秒早く検出される程度の誤差のみで実害が小さいため、この最終周回でも物理指定を変更しない。コードはD minor(トニック回帰)とし、キー検出を補強する形で終止感を出す。"
+risk: "最終周回のため次の観測フィードバックは得られない。最大のリスクは(1)コード進行イベントがセクション単位ではなく小節単位/曲全体に均等展開される等、想定と異なるマッピングをされ意図通りの対比が生まれない可能性、(2)F majorの導入によりキー検出がD minorから逸脱する可能性（ただし共有音2/3・総尺の75%がD minorであることから低リスクと判断）、(3)position bias仮説が正しい場合、コード対比を追加しても『最初の境界は検出されない』という構造的制約自体は解消されない可能性。後者が的中した場合、今回の設計変更でもR1は達成できない。"
+tools_used: none

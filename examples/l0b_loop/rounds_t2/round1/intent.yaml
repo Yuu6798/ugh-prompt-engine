@@ -1,0 +1,14 @@
+meta_note: "R1-R3 の 3 軸を同時に満たす最小構成。旋律軸は対象外のため events は省略し既定進行に委ねた。"
+bpm_choice: "bpm=96, time_signature=4/4 で 1 小節=2.5秒。各セクション3小節=7.5秒。契約 §2 の陽性対照実測値 7.5秒（3分割ちょうどで成立）に合わせた狙い撃ち。"
+section_intro:
+  reason: "sparse/low density/no kick の認識語で静かな導入を作り、次のコーラスとのエネルギー対比を最大化して境界検出を助ける。"
+section_chorus_1:
+  reason: "full energy + sub bass で高エネルギー・低域中心の音色にし、intro との強い対比で境界を作る。sub bass は dark 帯の補強も兼ねる。"
+section_chorus_2:
+  reason: "full energy は維持し同じ chorus ラベルを狙うが、sub bass を外して chorus_1 との間にわずかな音色差を作り、中間の境界検出を試みる（同一ラベル判定を保ちつつ2セクションとして分離させる賭け）。"
+section_outro:
+  reason: "release + low density でフェード感を出し、chorus_2 との対比で終端の境界を作る。"
+key_choice: "physical.key を D minor に直接指定。異名同音等価の要求どおり素直に D minor と宣言。"
+brightness_choice: "physical.brightness を dark に直接指定し、chorus セクションに sub bass を足して整合性を取った。"
+risk: "chorus_1/chorus_2 の音響差が小さすぎると2区間が1つの chorus に併合される恐れがある。次周の diff report の observed_sections で各区間の実長を確認し、必要なら音色対比をさらに強める。"
+tools_used: none

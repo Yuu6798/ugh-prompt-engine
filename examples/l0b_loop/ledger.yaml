@@ -1,0 +1,951 @@
+# L0b loop ledger — L0B-T1 / L0B-T2. Source of truth for engine/deps pins,
+# pinned-input hashes, positive-control gates, and **completed** experiment
+# evidence: 10 author rounds (T1×1 / T2 原系列×5 / 5_clean / clean_branch
+# 3c–5c), off-contract 会計, and the clean_success verdict
+# (loop_status_t2)。(2026-08-06 ヘッダ更新: 旧文面の「rounds は実験実行後に
+# 追記予定・現状はインフラ pin のみ」は実験完了により陳腐化したため差し替え。)
+spike_id: L0B-T1
+
+engine_state:
+  base_commit: "4b3b7b615119c43cba5442053fff43b4520b0504"
+  base_commit_note: >-
+    `git merge-base origin/main HEAD` at the time this infrastructure was
+    built — the PR #246 merge commit (L0a landed). Identical to `git
+    rev-parse HEAD` (this branch had no other commits on top yet), so
+    base_commit and the working tree are the same revision.
+  src_unchanged: true
+  src_unchanged_note: >-
+    The engine package `src/` is unchanged on this branch — `git diff --stat
+    4b3b7b615119c43cba5442053fff43b4520b0504..HEAD -- src/` is empty.
+    (2026-08-06 訂正: 原文は「examples/l0b_loop/ のみ追加・`-- src/ tests/`
+    の diff が空」と主張していたが、PR #247 のレビュー対応過程で
+    tests/test_l0b_scripts.py の新設と docs/・CLAUDE.md の文書変更が
+    同ブランチに載ったため陳腐化していた。engine の同一性主張は src/ に
+    スコープし、tests/docs の変更はここに正確に記録する: 追加 =
+    tests/test_l0b_scripts.py（L0b スクリプトのテスト。engine の挙動は
+    変更しない）、変更 = docs/*.md・CLAUDE.md（記録・索引）。）
+  verification_commands:
+    - "git fetch origin main"
+    - "git merge-base origin/main HEAD"
+    - "git diff --stat <base_commit>..HEAD -- src/"
+
+author_identity:
+  # 正本 docs/llm_adapter_planning.md「著者側の同一性（provider / model /
+  # version・呼び出し設定・llm_run_id）」の記録（2026-08-06 追記、PR #247
+  # レビュー 23 巡目 P1。実験実行時に未記録だった項目の事後補完 — 直接
+  # 証拠の範囲のみ記録し、露出されない項目は推定せず制約として明記する）。
+  llm_run_id: "l0b-20260805-claude-code-agent-sonnet"
+  llm_run_id_note: >-
+    実験レベル識別子。実行時に採番していなかったため 2026-08-06 に遡及
+    採番（dated）。適用範囲 = 本 ledger の全 10 著者周回。
+  provider: "Anthropic"
+  model: >-
+    Claude Code の Agent ツールで model="sonnet"（エイリアス）を明示して
+    spawn。本セッションのハーネス構成における sonnet の解決先ファミリーは
+    claude-sonnet-5。
+  invocation: >-
+    毎周回、履歴を持たない新規サブエージェント（fresh instance）として
+    spawn。可視入力 = 各周回の宣言ペイロード（プロンプトに封入）。
+    ツール使用実測 = 全 10 周回で 0 回（サブエージェント usage カウンタ）。
+  provenance_limitations: >-
+    Agent ツールは正確なモデルスナップショット/バージョン文字列・
+    サンプリング設定（temperature 等）・呼び出し単位の run id を呼び出し
+    側へ露出しないため、これらは**不記録**（推定による補完はしない）。
+    この制約は将来の LLM 間比較・モデルドリフト弁別（正本 §6 の拡張）の
+    確度を下げるが、本実験の verdict（clean_success = 閉ループの操舵
+    性質の実測）は特定モデルの同一性に依存する主張ではないため
+    格下げしない。後続実験では spawn 時点での実 ID 記録を運用要件に含める。
+
+deps_lock:
+  file: deps/pip_freeze.txt
+  sha256: "e3fedcda2f268f2ebc185fac709701d0877783bbd4df2a9a546c3e3ebec01617"
+  note: >-
+    Captured via `pip freeze | grep -v '^-e '` (excludes svp_rpe's own
+    editable self-install line — same convention `examples/l0s_spike/
+    ledger.yaml`'s deps_lock settled on after its own correction; the
+    engine itself is pinned via engine_state, not this file).
+
+pinned_inputs:
+  task_md:
+    path: task.md
+    sha256: "aa64c63ff9606b86228b43f63130d9d74d75e3cb5d9f8f75ebfd694db3a85db4"
+  contract_md:
+    path: contract.md
+    sha256: "5bab21e9694cb92a247f922c9a96db015bb87ba729ef411b9146881934debaca"
+  pareto_yaml:
+    path: frozen/pareto.yaml
+    sha256: "abe60a4f0ee3c55443bbcae9ea53d4364e620737872ce3f1a9c1a75ac9264d7f"
+  section_map:
+    path: frozen/section_map.json
+    sha256: "a7d4330c06137117474f19ab3fae27204e7df9a00deac72cba9a0299296a83fd"
+    note: >-
+      Byte-identical to examples/l0s_spike/frozen/section_map.json (same
+      sha256 in that spike's ledger) — L0B-T1 reuses the same canonical
+      section-map requirement as L0S-T1 by design (task.md's comparison
+      framing), copied rather than referenced across the two protected
+      trees (each spike's frozen/ is self-contained per its own runner's
+      output-collision guard).
+  eval_control_profile:
+    path: frozen/eval_control_profile.yaml
+    sha256: "a5eb1847a54032c49b865a8a6834bde597c5d3ddcdf8784d05d3cce3b7e76c1e"
+    note: "Byte-identical copy of examples/l0s_spike/frozen/eval_control_profile.yaml."
+  arrangement:
+    path: frozen/arrangement.yaml
+    sha256: "efa0d6db0e288ad74c330a719b28e6db224c4545b852bdbbf62bc7adeda96e5a"
+    note: "Byte-identical copy of examples/l0s_spike/frozen/arrangement.yaml."
+  suno_capability_profile:
+    path: ../../config/capability_profiles/suno.yaml
+    sha256: "343f3e84bb7e2bb4f4c945195659b3823318bf14c306774278a33ee7d116592b"
+  authoring_contract_l0:
+    path: ../../config/authoring_contract_l0.yaml
+    sha256: "f34479d9683667c343179fdeef435ea02f59fb843ff62870be815511a281f8c6"
+    note: "L0a frozen public-scope spec — the symbolic gate's --contract input."
+  authoring_trusted_axes_l0:
+    path: ../../config/authoring_trusted_axes_l0.yaml
+    sha256: "b2c6cc5528bf9b77e6d64f0111e762b41f029ee25993ea99c00ccb81dca6b335"
+    note: >-
+      Not read programmatically by scripts/run_round.py (the trusted-axis
+      restriction is enforced by AuthoringDiffReport's own model_validator
+      family in src/svp_rpe/authoring/report.py), but pinned here because
+      task.md チェック 1 cites it as the source of L0B-T1's axis selection —
+      changing this frozen table would change what a "success verdict" can
+      even mean for this experiment.
+
+runner_at_measurement:
+  # Reproducibility scope (PR #247 レビュー 7 巡目で明示化): measured_at_commit
+  # と git_blob_sha1 の pin は「ブランチ履歴を保持する文脈」(本リポジトリの
+  # マージ慣行 = マージコミット。PR #245/#246 前例) でのみ checkout 再現可能。
+  # squash マージや履歴を持たない export の文脈ではこれらは再現可能な audit
+  # evidence ではなく attestation (当時の測定者による証言) へ格下げされる。
+  # git 非依存の一次再現アンカーは各成果物の sha256 (pinned_inputs /
+  # positive_control / rounds の content pin) であり、こちらは文脈に依存しない。
+  # Blob sha256 of the L0b runner scripts + this run's frozen/ copies, at
+  # the commit the positive-control dry-run below was measured against.
+  # Unlike L0-s's runner_at_measurement (which pins a *range* because the
+  # scripts hardened across several post-hoc review rounds), L0b's scripts
+  # are being introduced fresh in this same change — there is no prior
+  # version to distinguish from, so this pins the single introducing commit.
+  measured_at_commit: "0f598a107f97406f70298a3f12016a1be181dd60"
+  measured_at_commit_note: >-
+    The commit that introduced examples/l0b_loop/ (scripts + frozen inputs +
+    this ledger's original placeholder). The git_blob_sha1 values below are
+    the blobs recorded in that commit; this note itself was filled in by the
+    immediately following ledger-only commit (the placeholder could not name
+    its own introducing commit before it existed).
+  files:
+    run_round_py:
+      path: scripts/run_round.py
+      git_blob_sha1: "9b9a18eb69e0e476a22c6247d855774a6c9d72dd"
+    pareto_eval_py:
+      path: scripts/pareto_eval.py
+      git_blob_sha1: "7df1e4697aefdc8e346f0cbf60891a2055ef103d"
+
+positive_control:
+  # Dry-run of examples/l0s_spike/positive_control/score.yaml (read-only
+  # reuse of L0S-T1's positive control — task.md's 陽性対照ゲート節) through
+  # the full L0b observation chain (svprpe validate --contract -> run_round.py's
+  # eval/roundtrip/adherence/package/observe chain -> AuthoringDiffReport).
+  # Pinned for audit; not L0b spike evidence (task.md's 陽性対照ゲート note).
+  score:
+    path: ../../examples/l0s_spike/positive_control/score.yaml
+    sha256: "1997c103fc74975af41ae7c3c569a7e7ac064fb1fd72a1c291e91050b208bf31"
+    note: "Unmodified L0S-T1 positive control — read-only reuse, not copied."
+  determinism_check: >-
+    Ran twice into separate scratch workdirs (build/l0b/positive_control{,_run2}/);
+    both runs' report.json were byte-identical (sha256
+    bfa81bf892741807291a8ceab4ff1860ab831a2e39a344ffe3bdd28e711123a9).
+  status: pass
+  axes:
+    key: {verdict: preserved, band: measured, observed: "D minor"}
+    brightness: {verdict: preserved, band: measured, observed: "dark"}
+    structure:
+      verdict: exact_match
+      band: measured
+      observed: ["intro", "chorus", "outro"]
+      observed_sections:
+        - {label: "intro", start_seconds: 0.0, end_seconds: 5.4567}
+        - {label: "chorus", start_seconds: 5.4567, end_seconds: 10.5419}
+        - {label: "outro", start_seconds: 10.5419, end_seconds: 17.5}
+  boundary_seconds_note: >-
+    observed_sections is populated (module docstring (c) of
+    scripts/run_round.py — boundary-second live wiring, task.md's central
+    new requirement over L0-s) — confirms the wiring produces real,
+    monotonic, non-overlapping section boundaries for the positive control,
+    not just a schema-valid empty/null value.
+  artifacts:
+    report:
+      path: positive_control/report.json
+      sha256: "bfa81bf892741807291a8ceab4ff1860ab831a2e39a344ffe3bdd28e711123a9"
+    # The following intermediate artifacts were produced in the scratch
+    # workdir (build/l0b/positive_control/, outside the protected loop tree
+    # per scripts/run_round.py's output-collision guard) and are pinned here
+    # for audit, but not copied into examples/l0b_loop/ (only report.json —
+    # the AuthoringDiffReport normal form — is the pinned deliverable;
+    # ../../examples/l0s_spike/ledger.yaml sets this same precedent for its
+    # own positive_control artifacts under build/l0s/).
+    validation:
+      path: ../../build/l0b/positive_control/validation.json
+      sha256: "a1bc26ff11e0701c44696dfe0947d11506c66c7518f16249e903689646a9fa6d"
+      note: >-
+        Byte-identical to examples/l0s_spike/ledger.yaml's positive_control
+        validation.json sha256 — expected: same score, same canonical
+        CompositionScore validation, and L0a's public-scope check accepts
+        every field this score uses (contract v1 is a superset check of the
+        same underlying constraints v0 hand-coded).
+    roundtrip:
+      path: ../../build/l0b/positive_control/roundtrip.json
+      sha256: "f0cfb31e604735fc2d2721957fd34601bf2a677b2cdea89b39a10cc4b30c18dc"
+      note: "Byte-identical to L0-s's pinned roundtrip.json — same eval_score.yaml bytes."
+    adherence:
+      path: ../../build/l0b/positive_control/adherence.json
+      sha256: "d56bd17a717db2ec767770df051ddc7c16f05a94f52c1d0cb34b72bf2700c9d8"
+      note: "Byte-identical to L0-s's pinned adherence.json."
+    take_wav:
+      path: ../../build/l0b/positive_control/take.wav
+      sha256: "a5bf8a55b7cecb609bf2e8e2ade09a2f3bea2acd5284a7c1d3b3b6598c092a2e"
+      note: "Byte-identical to L0-s's pinned take.wav — same eval_score.yaml, same deterministic performer."
+    eval_score:
+      path: ../../build/l0b/positive_control/eval_score.yaml
+      sha256: "fc18ac481e73f8a0ba11e51ec3c114ea4a844150ff04a3855f1a397b36ddcf31"
+    manifest:
+      path: ../../build/l0b/positive_control/identity_manifest.yaml
+      sha256: "b28213c7eaf727d25c6d25ab923eed91baa77c7e3d8e7834d05740cd9c7c9293"
+      note: >-
+        Differs from L0-s's pinned manifest sha256 by design — this
+        manifest's meta.work_id is "l0b-loop" (scripts/run_round.py's
+        _write_identity_manifest), not "l0s-spike"; every other field is
+        the same content.
+    package:
+      path: ../../build/l0b/positive_control/package/performance_package.json
+      sha256: "d44d4b38e140239ff876567991ee1e22005de69681b1956d147872b77e7fe7bf"
+      note: "Differs from L0-s's pinned package sha256 — downstream of the different manifest source note/work_id above."
+    observe_report:
+      path: ../../build/l0b/positive_control/observe_report.json
+      sha256: "3299520c2190dfbddaf6e856aa9c5becdeea11afa823b2abeafa7837f6f81867"
+      note: "Differs from L0-s's pinned observe_report sha256 — downstream of the different package_sha256 above."
+
+# ---------------------------------------------------------------------------
+# L0B-T2 (task_t2.md — 操舵証拠の実測). T1 evidence above is untouched; T2 has
+# its own pinned inputs, runner pin, and positive-control gate record here.
+t2:
+  registered: "2026-08-05"
+  pinned_inputs:
+    task_t2_md:
+      path: task_t2.md
+      sha256: "7f8a1e99231030e1b892cd7c3c524a994c1b3d6fa3e186a42c673da63703c93f"
+    section_map_t2:
+      path: frozen/section_map_t2.json
+      sha256: "7add33ba142174c5e2ee002d39af9abb2ebdc65858aed2b05564f9e8ce00d830"
+      note: >-
+        Canonical requirement ["intro", "chorus", "chorus", "outro"] — the
+        unique 4-section output of assign_labels (task_t2.md チェック 2).
+        The ONLY judge-side difference from T1; contract.md / pareto.yaml /
+        eval_control_profile.yaml / arrangement.yaml are shared unchanged
+        (their T1 pins above remain authoritative).
+  runner_at_measurement:
+    # run_round.py gained --section-map for T2 (default preserves T1 —
+    # T1's rounds above were measured at the pre-change blob pinned in
+    # runner_at_measurement; this is the L0-s-style honest re-pin for
+    # measurements from this point on).
+    files:
+      run_round_py:
+        path: scripts/run_round.py
+        git_blob_sha1: "15bccd39a502255a13d93b6f6be2c5e03dd070a1"
+      pareto_eval_py:
+        path: scripts/pareto_eval.py
+        git_blob_sha1: "7df1e4697aefdc8e346f0cbf60891a2055ef103d"
+        note: "Unchanged from T1."
+  positive_control:
+    # Gate passed on candidate 1 of the allowed 8 (task_t2.md 陽性対照ゲート).
+    # Probe log = build/l0b/t2_probe/log.md (scratch, not committed).
+    score:
+      path: positive_control_t2/score.yaml
+      sha256: "2523793dc9ae87b81aca49e726d22db9eaf7b94a9c4b04c2e428035df3484412"
+      git_blob_sha1: "005d27f43b5e9ef80fb4073c0a14365a7bb26c22"
+      design_note: >-
+        128bpm 4/4 D minor dark, 4 sections × 4 bars (declared ~7.5s each,
+        total 30s), alternating energy contrast: intro "low density, sub
+        bass, sparse" / chorus "full energy" / chorus "no kick, sparse" /
+        outro "release".
+    determinism_check: >-
+      3 independent runs (2 scratch workdirs + the final save into
+      positive_control_t2/) produced byte-identical report.json (sha256
+      below).
+    status: pass
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: exact_match
+        band: measured
+        observed: ["intro", "chorus", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 7.7555}
+          - {label: "chorus", start_seconds: 7.7555, end_seconds: 12.8406}
+          - {label: "chorus", start_seconds: 12.8406, end_seconds: 23.4986}
+          - {label: "outro", start_seconds: 23.4986, end_seconds: 30.0}
+    artifacts:
+      report:
+        path: positive_control_t2/report.json
+        sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
+  rounds:
+    - round: 1
+      date: "2026-08-05"
+      author: >-
+        情報遮断著者（Sonnet サブエージェント、T1 とは別個体）。可視情報 =
+        T2 課題文 + contract.md v1 全文のみ。ツール使用の実測 = 0 回、
+        tools_used: none 宣言と一致 — off-contract イベントなし。
+      files:
+        score:
+          path: rounds_t2/round1/score.yaml
+          sha256: "0d2f3fa8b68522625b8121d02a7d8960b57a33714c44632cbf8271388d0f5362"
+          git_blob_sha1: "c3876fcfe9241f6b521a4351b4e284cb590188d8"
+        intent:
+          path: rounds_t2/round1/intent.yaml
+          sha256: "a155c6f0c161c135f8d28e1947d25377448d12ed54be6dc3d14110c0aa758ba9"
+        report:
+          path: rounds_t2/round1/report.json
+          sha256: "21630b652f1f594e512efb6691850a1bdb7c4818067e8ca17498da21d3607a92"
+      workdir_note: "Scratch workdir = build/l0b/t2_round1/ (not committed)."
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+          observed_sections:
+            - {label: "intro", start_seconds: 0.0, end_seconds: 14.9304}
+            - {label: "chorus", start_seconds: 14.9304, end_seconds: 19.9459}
+            - {label: "outro", start_seconds: 19.9459, end_seconds: 30.0}
+      notes:
+        - {kind: position_match_rate, value: 0.5}
+      interpretation: >-
+        著者は 96bpm × 3bars（各宣言実長 7.5s、総尺 30s）の 4 セクション
+        を書き、中間 2 連の分離を chorus1 "full energy, sub bass" vs
+        chorus2 "full energy" の音色差に賭けた（intent の risk 欄で併合
+        リスクを自己言及）。観測は 3 セクション（Levenshtein 距離 1、
+        position_match_rate 0.5）。ただし併合箇所は著者予想（chorus1+
+        chorus2）と異なり、観測 intro が 0–14.93s と宣言 intro+chorus1
+        の 2 区間ぶんに融合した（強対比のはずの intro/chorus1 境界が
+        未検出）。観測 chorus 5.02s ≈ 宣言 chorus2、観測 outro 10.05s。
+        boundary-second live 配線が「どこが融合したか」を著者に開示する
+        初の実測点であり、第 2 周回の修理材料になる。
+    - round: 2
+      date: "2026-08-05"
+      author: >-
+        情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
+        T2 課題文 + contract.md v1 + 前周（round 1）の自作 score/intent +
+        round 1 差分報告。ツール使用の実測 = 0 回 — off-contract イベント
+        なし。
+      files:
+        score:
+          path: rounds_t2/round2/score.yaml
+          sha256: "cae1a02e742117b0828f9a3207f0506d5bec330a2a6ebac57c7ba8eea9e646ac"
+          git_blob_sha1: "e70cadf8a401be15e084a6056dae817023b1951f"
+        intent:
+          path: rounds_t2/round2/intent.yaml
+          sha256: "144396ce8cb56c882ca2b2d823883267d664a681e4df6d4f5e8a5a7c1e8068b9"
+        report:
+          path: rounds_t2/round2/report.json
+          sha256: "50abf01b879237edd72b554065ff6611394eae4ff718991b19be543e89aef496"
+        pareto_vs_round1:
+          path: rounds_t2/round2/pareto_vs_round1.json
+          sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+      workdir_note: "Scratch workdir = build/l0b/t2_round2/ (not committed)."
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+          observed_sections:
+            - {label: "intro", start_seconds: 0.0, end_seconds: 14.9304}
+            - {label: "chorus", start_seconds: 14.9304, end_seconds: 19.9459}
+            - {label: "outro", start_seconds: 19.9459, end_seconds: 30.0}
+      notes:
+        - {kind: position_match_rate, value: 0.5}
+      pareto_vs_prev:
+        improved: false
+        band_excluded: false
+        per_axis_summary: >-
+          key 0->0 / brightness 0->0 / structure 1->1 — 全軸非退行だが
+          厳密改善なし（tie_rule により改善に数えない）。
+      interpretation: >-
+        著者は境界秒を根拠に狙い撃ち修理（intro へ silence 追加・outro へ
+        no kick 追加、機能していた chorus1/chorus2 構成は凍結）を行ったが、
+        観測境界列は round 1 と小数 4 桁まで完全同一（0 / 14.9304 /
+        19.9459 / 30.0）。コーディネーター側の追加実測: take.wav バイトは
+        round 1 と相違（silence / no kick は音響に反映されている）、
+        roundtrip.json は同一 — つまり音響は変化したのに境界検出器の
+        出力が不変であり、当該トークン変更は境界検出器の感度帯に
+        届いていない（計器分解能の新しい実測点。契約 v1 の「音響対比で
+        境界が動く」という開示だけでは、どのトークンが検出器有効な対比を
+        作るかまでは著者に伝わらないことを示す）。
+      coordinator_annotation_note: >-
+        Round 3 の著者ペイロードには、round 2 報告に「観測境界列が round 1
+        と完全同一」という参考事実注記を 1 行添えた。この事実は round 2
+        ペイロード内で導出可能（round 2 intent が round 1 の境界秒を引用
+        しており、round 2 報告と数値照合できる）ため契約外情報の注入では
+        ないが、コーディネーターによる要約注記であることをここに開示する。
+    - round: 3
+      date: "2026-08-05"
+      author: >-
+        情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
+        T2 課題文 + contract.md v1 + round 2 の自作 score/intent + round 2
+        差分報告 + coordinator 注記（round 1/2 境界同一というペイロード内
+        導出可能事実の要約）。ツール使用の実測 = 0 回。
+        **（2026-08-06 訂正）** 当時この欄は「off-contract イベントなし」と
+        分類していたが誤り — coordinator 注記自体が off-contract イベント
+        である（正 = t2.off_contract_events の再分類。本周回の成果は契約
+        遵守の収束実績・操舵証拠に算入しない）。
+      files:
+        score:
+          path: rounds_t2/round3/score.yaml
+          sha256: "2284dcc099b5f5a8702b40325d35baa38539be35d568baf1697be7d55b1e2435"
+          git_blob_sha1: "bcb4b1b71bed4a4032e7136034c7e798dd409a86"
+        intent:
+          path: rounds_t2/round3/intent.yaml
+          sha256: "06a585686befc52ac6c3b79ccd338d0e5474e0cd8b63eaecd8a8ad435c3b1d03"
+        report:
+          path: rounds_t2/round3/report.json
+          sha256: "7bbdbaa4aeec74c6f7c0b20f115d5faa56e93c8842c9e133ca9f1a16c0f0dbd5"
+        pareto_vs_round2:
+          path: rounds_t2/round3/pareto_vs_round2.json
+          sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+          note: >-
+            Byte-identical to round 2's pareto_vs_round1.json — expected:
+            both round pairs have identical per-axis distances (0/0/1 ->
+            0/0/1), and the evaluator's JSON output contains only those
+            numbers, so the tie verdict serializes to the same bytes.
+      workdir_note: "Scratch workdir = build/l0b/t2_round3/ (not committed)."
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+          observed_sections:
+            - {label: "intro", start_seconds: 0.0, end_seconds: 19.7137}
+            - {label: "chorus", start_seconds: 19.7137, end_seconds: 24.7989}
+            - {label: "outro", start_seconds: 24.7989, end_seconds: 40.0}
+      notes:
+        - {kind: position_match_rate, value: 0.5}
+      pareto_vs_prev:
+        improved: false
+        band_excluded: false
+        per_axis_summary: "key 0->0 / brightness 0->0 / structure 1->1 — tie（2 連続）。"
+      interpretation: >-
+        著者はレバーをトークンから長さへ転換（intro/outro を 5 bars =
+        12.5s に延長、総尺 40s）。結果、絶対境界秒は移動したが相対
+        パターンは round 1/2 と同型のまま: 検出境界は 2 つのみで、
+        chorus1/chorus2 境界（sub bass 消失点、宣言 20.0s → 観測
+        19.7137s）と chorus2 末尾 2.70s 手前（宣言 27.5s → 観測
+        24.7989s）。intro/chorus1 境界（宣言 12.5s）は対比強化（round 2）
+        でも長さ延長（round 3）でも一度も検出されず。長さ仮説は反証され、
+        「検出器が有効応答する対比はスペクトル差（sub bass 有無）のみ」
+        という著者仮説が残存 — round 4 は周波数領域コントラストへの転換を
+        著者自身が予告している。
+    - round: 4
+      date: "2026-08-06"
+      author: >-
+        情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
+        T2 課題文 + contract.md v1 + round 3 の自作 score/intent + round 3
+        差分報告 + coordinator 注記（相対パターン不変というペイロード内
+        導出可能事実の要約）。ツール使用の実測 = 0 回。
+        **（2026-08-06 訂正）** 当時この欄は「off-contract イベントなし」と
+        分類していたが誤り — coordinator 注記自体が off-contract イベント
+        である（正 = t2.off_contract_events の再分類。本周回の成果は契約
+        遵守の収束実績・操舵証拠に算入しない）。
+      files:
+        score:
+          path: rounds_t2/round4/score.yaml
+          sha256: "9e913434cbdf2054fb2b21af6034595d689b41a8400b5e7a001c5eeca1cb39a2"
+          git_blob_sha1: "a1f75c58076e2a894dfd79dad8e8f183932935e4"
+        intent:
+          path: rounds_t2/round4/intent.yaml
+          sha256: "2853bc0ba1a971c6b5d9a6f646b7279832d76e971b880e2b28b8f9f79bbb4c7f"
+        report:
+          path: rounds_t2/round4/report.json
+          sha256: "f6075cfe4925899a2ff8dcc837da79598a6e179ca25bc3659a6460de727e9010"
+        pareto_vs_round3:
+          path: rounds_t2/round4/pareto_vs_round3.json
+          sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+          note: "Byte-identical to prior tie outputs (same 0/0/1 -> 0/0/1 distances)."
+      workdir_note: "Scratch workdir = build/l0b/t2_round4/ (not committed)."
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+          observed_sections:
+            - {label: "intro", start_seconds: 0.0, end_seconds: 19.7137}
+            - {label: "chorus", start_seconds: 19.7137, end_seconds: 24.7989}
+            - {label: "outro", start_seconds: 24.7989, end_seconds: 40.0}
+      notes:
+        - {kind: position_match_rate, value: 0.5}
+      pareto_vs_prev:
+        improved: false
+        band_excluded: false
+        per_axis_summary: "key 0->0 / brightness 0->0 / structure 1->1 — tie（3 連続）。"
+      interpretation: >-
+        著者は軸数仮説の直接検証として intro を "full energy, no kick" に
+        揃え、chorus1 との差分を 2 軸へ縮小した。観測境界は round 3 と
+        小数 4 桁まで完全同一。コーディネーター側の追加実測が決定的事実を
+        確定: build/l0b/t2_round3/take.wav と t2_round4/take.wav は
+        **バイト完全同一**（eval_score.yaml は相違）。すなわち intro の
+        演奏ヒントを「silence, sparse, low density, no kick」から
+        「full energy, no kick」へ変えても決定論演奏者は同一音響を出力
+        した — トークン効果は加算的でなく、この組合せでは "no kick" が
+        他トークンを支配する（round 1→2 の take.wav 相違は outro 側の
+        変更に帰属する可能性が高い）。契約 v1 §2 の「これらはセクション
+        の音量・密度・持続音の性格を変える」という開示は演奏者の実際の
+        ヒント解決規則（優先順位・非加算）を伝えておらず、著者が音響的に
+        無効な編集を繰り返す原因になった。さらに報告正規形には「編集が
+        音響を変えたか」を著者へ返す語彙（例: take fingerprint note）が
+        ないため、著者はこの無効性を報告からは検知できない — いずれも
+        L0a 契約 v2 への一級の欠陥材料（D2 により著者へは未開示、報告
+        正規形の範囲内で周回続行）。
+    - round: 5
+      date: "2026-08-06"
+      author: >-
+        情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
+        T2 課題文 + contract.md v1 + round 4 の自作 score/intent + round 4
+        差分報告 + coordinator 注記（軸数仮説の反証というペイロード内
+        導出可能事実の要約）。ツール使用の実測 = 0 回。
+        **（2026-08-06 訂正）** 当時この欄は「off-contract イベントなし」と
+        分類していたが誤り — coordinator 注記自体が off-contract イベント
+        である（正 = t2.off_contract_events の再分類。本周回の成果は契約
+        遵守の収束実績・操舵証拠に算入しない）。
+      files:
+        score:
+          path: rounds_t2/round5/score.yaml
+          sha256: "1042acc6373b67a5c2f2eca8d3a1f659cd74ebabe8175215a49bafb48081e1bb"
+          git_blob_sha1: "9dcb568a9efbfc971fba88c40949abe86869de3d"
+        intent:
+          path: rounds_t2/round5/intent.yaml
+          sha256: "3dd0d30102ed789ab51f99bef419a89dcb6fe90ee6af05ef40f3ec559d948222"
+        report:
+          path: rounds_t2/round5/report.json
+          sha256: "35c4e3e97841b75d38ce168f6a59498858c59eeb14ae1631317078ab91f582cf"
+        pareto_vs_round4:
+          path: rounds_t2/round5/pareto_vs_round4.json
+          sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+      workdir_note: >-
+        Scratch workdir = build/l0b/t2_round5/ (not committed)。take.wav
+        sha256 は round 4 と相違（86b0f954... vs a0164842...）。
+        （2026-08-06 訂正: 原文はこのバイト相違を「コード進行の導入が
+        音響を変えた」と帰属していたが誤り — 進行は全区間 drone_only で
+        不鳴であり、実変化は role 散文への認識語一致による chorus2 の
+        drone 化。機構の正 = interpretation_correction。ここではバイト
+        相違の事実のみを記録する）。
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: exact_match
+          band: measured
+          observed: ["intro", "chorus", "chorus", "outro"]
+          observed_sections:
+            - {label: "intro", start_seconds: 0.0, end_seconds: 11.6332}
+            - {label: "chorus", start_seconds: 11.6332, end_seconds: 19.0636}
+            - {label: "chorus", start_seconds: 19.0636, end_seconds: 26.5404}
+            - {label: "outro", start_seconds: 26.5404, end_seconds: 40.0}
+      notes:
+        - {kind: position_match_rate, value: 1.0}
+      pareto_vs_prev:
+        improved: true
+        band_excluded: false
+        per_axis_summary: >-
+          key 0->0 / brightness 0->0 / structure 1->0 —
+          structure が厳密改善・全軸非退行・band 除外なし =
+          正本 §5 の Pareto 改善が初めて成立した周回。
+      evidence_status: >-
+        excluded（2026-08-06 再分類）: 本周回のペイロードには coordinator
+        注記が含まれており off-contract（off_contract_events 参照）。
+        この改善は操舵証拠・契約遵守の収束実績に算入しない。採用可能な
+        クリーン系列 = t2.clean_branch（3c→4c→5c、4c→5c で改善成立）。
+        rounds[5_clean] は系譜汚染ありの再周回（off_contract_events）で
+        こちらも evidence 不算入（tie・改善非再現）。
+      interpretation: >-
+        著者は 4 周回の消去法（トークン強化→長さ→軸数縮小がすべて無効）
+        を経て、最終周回で和声レバー（events.chord_progression:
+        F major → D minor ×3、intro のみ関係調 III）へ転換した。結果、
+        4 周回一度も検出されなかった intro/chorus1 境界が出現（宣言
+        12.5s → 観測 11.6332s、誤差 0.87s）し、4 セクション列
+        intro→chorus→chorus→outro が成立、position_match_rate 1.0。
+        F major 導入でも key は D minor に保たれ（著者の共有音設計
+        どおり）、brightness も dark を維持 — 非退行と両立した厳密改善で
+        あり、これが「差分報告 → 修正 → Pareto 改善」の初の観測だった
+        （2026-08-06 訂正: 原文はこれを「操舵証拠 1 件目」と記していたが、
+        off-contract 除外により証拠には算入されない — evidence_status /
+        t2.off_contract_events が正。生の Pareto 観測としてのみ実在）。
+        演奏ヒント（振幅系トークン）が境界検出器に
+        対して実質不感である一方、和声対比（コードのルート/クオリティ）は
+        検出器が確実に応答する対比軸であることが 5 周回の消去法で実証
+        された。
+      interpretation_correction: >-
+        (2026-08-06 追記、PR #247 Codex レビュー #5 起点の実装検証。原文の
+        interpretation は撤回部分を含むが履歴として残す) performer の
+        _section_profile は physical + role の連結にトークン照合し、round 5
+        は chorus2 の role 説明文中の「sub bass」漏れ込みを含めて全 4
+        セクションが drone_only だった。chord_progression [F,D,D,D] は
+        一度も鳴っておらず、「和声対比への検出器応答」という帰属は撤回。
+        round 4→5 の実音響変化は「唯一の非 drone だった chorus2 (0.85・
+        進行演奏) の drone 化 (0.25) による音場平坦化」であり、4 境界検出の
+        機構は未確定（相対 novelty 閾値仮説）。生の Pareto 観測（報告→
+        修正→改善という結果）自体は本訂正の影響を受けないが、off-contract
+        除外により操舵証拠には算入されない（evidence_status）。詳細 =
+        docs/l0b_closed_loop_record.md §3.1・§4.2・§4.3。
+    - round: "5_clean"
+      date: "2026-08-06"
+      note: >-
+        PR #247 レビュー 7 巡目 P1（coordinator 注記 = off-contract イベント）
+        を受けたクリーン再周回。可視ペイロード = T2 課題文 + contract.md v1 +
+        round 4 の自作 score/intent + round 4 差分報告のみ（coordinator 注記
+        なし = 正本の宣言ペイロード定義に厳密準拠）。著者は別個体 Sonnet、
+        ツール使用実測 0 回。計測は 7 巡目硬化済みランナー
+        （--section-map pin 制限 + judge input snapshot-feed 実装後）で実施。
+        **（2026-08-06 再分類・PR #247 レビュー 12 巡目）** 本周回の
+        ペイロードは round 4（off-contract 周回）の score/intent/report を
+        継承しており、round 4 の状態自体が注記の影響を受けている可能性を
+        排除できないため、本周回も**系譜汚染あり（off-contract 継承）**に
+        分類する — 「クリーン再周回」の名称は撤回。真のクリーン系列は
+        最後の未汚染周回 round 2 から分岐した clean_branch
+        （rounds_t2_clean/）が正。
+      files:
+        score:
+          path: rounds_t2/round5_clean/score.yaml
+          sha256: "7ead42421776e296ce8673cdb7486e22f8ee2341a3cb4af7a8c842216ef85646"
+          git_blob_sha1: "f3eb3326a8361bb400250c0a751d7c39300a8fe0"
+        intent:
+          path: rounds_t2/round5_clean/intent.yaml
+          sha256: "2a8e9bc5f4b95ac50e34872d56ed8db8b83a9e0ed5bf49c5332f6ef7d14e0e81"
+        report:
+          path: rounds_t2/round5_clean/report.json
+          sha256: "fe991f0f50d9f089e6a5ce640c5776f1d3cf536e7833f7fc2fec89062e849c7f"
+        pareto_vs_round4:
+          path: rounds_t2/round5_clean/pareto_vs_round4.json
+          sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+          note: "Tie（key 0->0 / brightness 0->0 / structure 1->1）。"
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+      interpretation: >-
+        注記なしの著者は round 4 ペイロードのみから境界照合を自力で行い、
+        原 round 5（和声レバー）とは別の一手 — sub bass 単一軸トグルへの
+        統一（intro の physical から no kick を撤去）— を選択した。しかし
+        build/l0b/t2_round5_clean/take.wav は round 4 と**バイト完全同一**
+        （sha256 a0164842...）: 撤去を説明する role 文「no kick等の追加
+        トークンを全廃し」自体が連結ヒント照合で "no kick" にヒットし、
+        intro は round 4 と同一の drone_only 0.10 に落ちた（role 文リーク
+        欠陥の 2 例目 — トークンについて語る散文がトークンを発動させる）。
+        結果は structure mismatch の tie で、原 round 5 の改善は
+        再現されなかった。2 つの含意: (1) coordinator 注記が原 round 5 の
+        著者をレバー選択（和声）へ操舵していた可能性がクリーン分岐の実在で
+        裏づけられた、(2) 契約 v1 のままでは宣言ペイロードのみで著者が
+        音響有効な修理へ到達することを本課題では実証できなかった —
+        発見済みの計器欠陥（role 文リーク・トークン非加算・drone 進行
+        無音化）の v2 開示が、クリーン操舵の再実測の前提条件になる。
+        **（2026-08-06 訂正）** 含意 (2) は本周回時点の暫定結論であり、
+        その後の t2.clean_branch（round 2 分岐・契約 v1 のまま）が 5c で
+        音響有効な修理と Pareto 改善に到達したため**撤回** — v2 開示は
+        クリーン操舵の前提条件ではなかった（v2 反映は独立の残件として
+        維持。本実験は v2 待ちでブロックされていない）。含意 (1) は不変。
+
+  off_contract_events:
+    # PR #247 レビュー 7 巡目 P1 での再分類（2026-08-06）。正本
+    # docs/llm_adapter_planning.md の可視ペイロード定義（契約・課題文・
+    # 前周自作ファイル・構造化差分報告）は網羅列挙であり、コーディネーター
+    # が rounds 3/4/5 のペイロードへ添えた「ペイロード内導出可能な事実の
+    # 要約注記」は、導出可能性にかかわらず追加の散文入力 = off-contract
+    # イベントに当たる。各注記の存在は当時から各 round の author 欄に開示
+    # 済み（隠蔽はない）が、分類が誤っていた——off-contract 周回の成果は
+    # 契約遵守の収束実績・操舵証拠に算入できない。
+    - round: 3
+      kind: coordinator_annotation
+      content_summary: "round1/2 の観測境界が完全同一という要約注記"
+    - round: 4
+      kind: coordinator_annotation
+      content_summary: "相対パターン不変・長さ仮説の検証結果という要約注記"
+    - round: 5
+      kind: coordinator_annotation
+      content_summary: >-
+        軸数仮説の反証 + 「別種の対比手段の検討が残る選択肢」という要約注記
+        （原 round 5 の唯一の改善はこの注記付きペイロード下で発生）
+    - round: "5_clean"
+      kind: inherited_lineage
+      content_summary: >-
+        (2026-08-06 追加、PR #247 レビュー 12 巡目) 本周回自体は注記なし
+        だが、off-contract 周回 round 4 の score/intent/report を継承して
+        いるため系譜汚染ありに分類（rounds[5_clean] の再分類注記参照）。
+
+  clean_branch:
+    # PR #247 レビュー 12 巡目 P1 を受けた真のクリーン系列（2026-08-06）。
+    # 最後の未汚染周回 round 2 から分岐し、以降の全周回で coordinator 注記
+    # なし（可視ペイロード = 課題文 + contract v1 + 前周自作ファイル +
+    # 前周差分報告のみ = 正本の宣言ペイロード定義に厳密準拠）。著者は毎周
+    # 別個体 Sonnet・ツール使用実測 0 回。計測はレビュー硬化済みランナー
+    # （git log --follow -- examples/l0b_loop/scripts/ が正確な系譜）で実施。
+    branched_from: 2
+    runner_at_measurement:
+      # クリーン系列 3 周回（3c/4c/5c）の計測時点の実 blob（PR #247
+      # レビュー 18 巡目 P2）。3 計測はいずれもレビュー硬化の途中版
+      # ランナーで実施されており、t2.runner_at_measurement（原系列の pin）
+      # とも現 HEAD とも異なる。各 evidence コミット（942fb4a / eecdc8b /
+      # b66d0ca）の tree で blob 一致を実測確認済み — 3 周回とも同一バイト。
+      files:
+        run_round_py:
+          path: scripts/run_round.py
+          git_blob_sha1: "5179a822e703194d1adf49bd5120089b49f3b3f6"
+        pareto_eval_py:
+          path: scripts/pareto_eval.py
+          git_blob_sha1: "04452158ef8dd048cb040a661da0032a93a0b60c"
+    rounds:
+      - round: "3c"
+        date: "2026-08-06"
+        files:
+          score:
+            path: rounds_t2_clean/round3/score.yaml
+            sha256: "810cb718858ae8a09c2be6b49426f1e4ff03c5563f69aeac49d7b52c63552ca1"
+            git_blob_sha1: "ac5272876ff669458a2f0c42f13bd8e916b77579"
+          intent:
+            path: rounds_t2_clean/round3/intent.yaml
+            sha256: "cb0e7a3275151e9e8058fa69d2435cdf7f355cab8d4d70947241cd95f20d0101"
+          report:
+            path: rounds_t2_clean/round3/report.json
+            sha256: "6b710a4de025e0e82804b74baae1f67a53ffa4599c020b595ff5c26d9e170b7d"
+          pareto_vs_round2:
+            path: rounds_t2_clean/round3/pareto_vs_round2.json
+            sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+        symbolic_validation: pass
+        axes_summary: "key preserved / brightness preserved / structure mismatch"
+        observed: ["intro", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 19.8763}
+          - {label: "chorus", start_seconds: 19.8763, end_seconds: 25.2865}
+          - {label: "outro", start_seconds: 25.2865, end_seconds: 35.0}
+        pareto_vs_prev: {improved: false, note: "tie（structure 1->1）"}
+        interpretation: >-
+          単一変数実験（intro bars 3->5 のみ変更、総尺 35s）。相対パターン
+          同型のまま tie — 長さ仮説はクリーン系列でも不成立。
+      - round: "4c"
+        date: "2026-08-06"
+        files:
+          score:
+            path: rounds_t2_clean/round4/score.yaml
+            sha256: "664a22fdc8f8779bd591e96fb59502f2c7198ea868f98bafe1af323c9b32ad8d"
+            git_blob_sha1: "30463156b2e317df5626773d821cb1abdf846248"
+          intent:
+            path: rounds_t2_clean/round4/intent.yaml
+            sha256: "daea8f6e848f918323ecc4165c4e12b16ed492ee190858b0745d79a869204a29"
+          report:
+            path: rounds_t2_clean/round4/report.json
+            sha256: "3f45747312cea7cbf18ce87a0435eb1aaada16135acaa22d87f4220dcd46be43"
+          pareto_vs_round3:
+            path: rounds_t2_clean/round4/pareto_vs_round3.json
+            sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+        symbolic_validation: pass
+        axes_summary: "key preserved / brightness preserved / structure mismatch"
+        observed: ["intro", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 14.9304}
+          - {label: "chorus", start_seconds: 14.9304, end_seconds: 19.9459}
+          - {label: "outro", start_seconds: 19.9459, end_seconds: 30.0}
+        pareto_vs_prev: {improved: false, note: "tie（structure 1->1）"}
+        interpretation: >-
+          単一変数実験（silence 除去・bars 3 へ復帰）。tie。コーディネーター
+          実測: build/l0b/t2c_round4/take.wav は原 round 2 の take.wav と
+          バイト同一（c559ad21...）— silence の有無も音響に無効（ヒント
+          非加算・"no kick" 支配の追加実測点。著者の silence 仮説は次周の
+          ペイロード内で反証可能な形で棄却された）。
+      - round: "5c"
+        date: "2026-08-06"
+        files:
+          score:
+            path: rounds_t2_clean/round5/score.yaml
+            sha256: "525b517538c7348105bc4a0371e69b4f7671dbd3bfe9257282c33d01019c7b2f"
+            git_blob_sha1: "ea01e670d05999af97ab3214a063a2c8956edeb9"
+          intent:
+            path: rounds_t2_clean/round5/intent.yaml
+            sha256: "40bc77da12c5a23abfe8143038c1529f89aea5ce6bcfa3540c143cbd88ed5595"
+          report:
+            path: rounds_t2_clean/round5/report.json
+            sha256: "d1250c20f6671a796ff729013d942bf39c01989104c3d0c18a0b67a45f676a1b"
+          pareto_vs_round4:
+            path: rounds_t2_clean/round5/pareto_vs_round4.json
+            sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+        symbolic_validation: pass
+        axes_summary: "key preserved / brightness preserved / structure exact_match"
+        observed: ["intro", "chorus", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 5.0155}
+          - {label: "chorus", start_seconds: 5.0155, end_seconds: 15.9521}
+          - {label: "chorus", start_seconds: 15.9521, end_seconds: 20.9676}
+          - {label: "outro", start_seconds: 20.9676, end_seconds: 30.0}
+        notes:
+          - {kind: position_match_rate, value: 1.0}
+        pareto_vs_prev:
+          improved: true
+          band_excluded: false
+          per_axis_summary: >-
+            key 0->0 / brightness 0->0 / structure 1->0 — 厳密改善・
+            全軸非退行・band 除外なし。**クリーン系譜下で初の Pareto 改善**。
+        interpretation: >-
+          著者は 4 周回分のクリーンな消去法（トークン同義語・長さ・silence
+          有無の各仮説をペイロード内証拠で棄却）から「唯一実証済みの機構 =
+          full energy 共通土台上の sub bass 単一トグル」を全 3 境界に統一
+          適用する設計に到達し、全軸成功（4 セクション exact_match・
+          position_match_rate 1.0）。round 4c → 5c の Pareto 改善は、
+          coordinator 注記を含まない宣言ペイロードのみの系譜で実測された
+          初の改善であり、正本 §5 の L0b 成功条件「非旋律軸の差分が周回で
+          改善するケースが 1 つ以上実測される」を**クリーン会計で充足**する
+          操舵証拠である。
+
+
+
+post_loop_hardening:
+  # PR #247 レビュー対応のスクリプト硬化。（2026-08-06 訂正: 原文は
+  # 「T1/T2 の全計測は pin 時点の blob で実施」と主張していたが、クリーン
+  # 系列 3c/4c/5c の計測は硬化途中版ランナーで実施されたため不正確 —
+  # 正しい帰属は runner_at_measurement（T1）/ t2.runner_at_measurement
+  # （T2 原系列）/ t2.clean_branch.runner_at_measurement（クリーン系列）
+  # の 3 つの pin が各系列ごとに正。）対象コミットの正確な列挙は git log が正:
+  #   git log --oneline --follow -- examples/l0b_loop/scripts/
+  # pin 済み report.json とのバイト互換は T1/T2 slow smoke（決定論回帰
+  # ガード）のパスで検証した。
+  items:
+    - "pareto_eval.py: 入力 report の AuthoringDiffReport.model_validate ゲート (Codex P1)"
+    - "pareto_eval.py: -o と入力 3 パスの衝突ガード (Codex P2)"
+    - "run_round.py: score/section map の単一スナップショット読み (Codex P2)"
+    - "run_round.py: hashes.json 先行書き込み + report の atomic 公開 (Codex P2 軽量版)"
+loop_status_t2:
+  status: clean_success
+  status_history: >-
+    success（〜7 巡目）→ task_achieved_off_contract_only（7 巡目の
+    off-contract 再分類）→ **clean_success**（12 巡目のクリーン系列
+    clean_branch 完走・2026-08-06 確定）。
+  terminated_at_round: 5
+  # 旧フィールド名 clean_rerun_round は「5_clean = クリーン」を示唆して
+  # しまうため改名（PR #247 レビュー 16 巡目 P1）。5_clean は系譜汚染あり
+  # （off_contract_events）で evidence 不算入。
+  lineage_contaminated_rerun: "5_clean"
+  clean_branch_terminated_at: "5c"
+  max_rounds: 5
+  task_achieved: >-
+    **クリーン系譜で達成**（clean_branch round 5c: 全軸成功・4 セクション
+    exact_match・position_match_rate 1.0。系譜 = rounds 1→2→3c→4c→5c、
+    全周回 coordinator 注記なし）。原 round 5 の達成は off-contract
+    （注記付き）、5_clean は系譜汚染ありのため、いずれも契約遵守下の
+    達成としては主張しない。
+  steering_evidence: >-
+    **クリーン会計で充足**（2026-08-06 確定）: clean_branch round 4c → 5c
+    の Pareto 改善（rounds_t2_clean/round5/pareto_vs_round4.json、
+    improved: true、structure 1->0 厳密改善・全軸非退行・band 除外なし）。
+    系譜 rounds 1→2→3c→4c→5c は全周回 coordinator 注記なしの宣言
+    ペイロードのみで進行しており、正本 §5 の L0b 成功条件「非旋律軸の
+    差分が周回で改善するケースが 1 つ以上実測される（= 閉ループが操舵
+    として機能する証拠）」を満たす。なお off-contract 系譜の改善
+    （round 4 → 原 round 5）は引き続き evidence 不算入
+    （evidence_status: excluded）。
+  honest_accounting: >-
+    クリーン系譜の集計: rounds 1, 2, 3c, 4c は structure mismatch
+    （距離 1・tie 3 連続）、5c で全軸成功 + Pareto 改善 1 件 — 改善実測は
+    5 クリーン周回中 1 件。off-contract 系譜（rounds 3/4/5 + 5_clean）の
+    成果は evidence 不算入。著者周回の総数は 10（T1×1 + T2 本系列×5 +
+    5_clean×1 + clean_branch×3）。本記録は「クリーン操舵の成立実証」で
+    あり頑健性実証ではない（改善 1 件は §5 要求の最小限）。契約 v1 の
+    計器欠陥 3 件（トークン非加算・role 文照合リーク・drone 区間の進行
+    無音化）の v2 反映は独立の残件として維持する。
+
+rounds:
+  - round: 1
+    date: "2026-08-05"
+    author: >-
+      情報遮断著者（Sonnet サブエージェント）。可視情報 = 課題文 +
+      contract.md v1 全文のみ（第 1 周回のため前周ファイル・前周報告なし）。
+      ツール使用の実測 = 0 回（サブエージェント usage カウンタで確認）、
+      出力末尾の tools_used: none 宣言と一致 — off-contract イベントなし。
+    files:
+      score:
+        path: rounds/round1/score.yaml
+        sha256: "5f63d693343541e5a8ce37146c96a2dca1075afd13ff4553983c693aeba69db8"
+        git_blob_sha1: "5b33f000ffbee9f74e58b892cb2ca09dbad20525"
+      intent:
+        path: rounds/round1/intent.yaml
+        sha256: "eac8abb49f84bb471560400c29ab81f376db7c6f264487a5966f582511eab673"
+      report:
+        path: rounds/round1/report.json
+        sha256: "a3de57684d7e74b866d58874b9c2b41fdff31476e1d72eb4787fce15261f819c"
+    workdir_note: >-
+      Scratch workdir = build/l0b/round1/ (outside the protected loop tree,
+      not committed — same convention as positive_control's build/l0b/ runs).
+    symbolic_validation: pass
+    axes:
+      key: {verdict: preserved, band: measured, observed: "D minor"}
+      brightness: {verdict: preserved, band: measured, observed: "dark"}
+      structure:
+        verdict: exact_match
+        band: measured
+        observed: ["intro", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 7.8483}
+          - {label: "chorus", start_seconds: 7.8483, end_seconds: 12.9335}
+          - {label: "outro", start_seconds: 12.9335, end_seconds: 22.5}
+    notes:
+      - {kind: position_match_rate, value: 1.0}
+    interpretation: >-
+      全軸 verdict 成功（preserved/preserved/exact_match、全軸
+      band=measured）— **事前登録課題の達成条件**（全軸 verdict 成功 =
+      task.md の課題達成）を第 1 周回で充足。（2026-08-06 訂正: 原文は
+      これを「正本 §5 の成功条件の充足」と表記していたが誤り — §5 の
+      L0b 成功条件は「周回間の Pareto 改善 1 件以上」であり、T1 は改善
+      ペア不存在のため §5 の判定対象にならない = pareto_accounting）。
+      著者は 128bpm × 4/4 × 4bars（各セクション宣言実長 7.5 秒 = 契約 v1
+      が開示した可行窓の成立実測点）を独自に選択した（陽性対照は 96bpm —
+      著者は陽性対照を見ておらず、値のコピーではない）。観測実長は intro
+      7.85s / chorus 5.09s / outro 9.57s と宣言から偏差があるが 3
+      セクション列は成立（chorus 実長は最小セクション間隔 5 秒の直上）。
+      L0S-T1 が契約 v0 で 5 周回未収束だった同一課題が契約 v1 で 1 周回
+      成立したことは、L0-s の未収束を契約の情報不足に帰属した事前登録
+      仮説と**整合する**（2026-08-06 訂正: 原文の「直接支持する」は交絡
+      — comparison_caveat — により過剰主張のため撤回）。
+
+loop_status:
+  status: task_achieved
+  terminated_at_round: 1
+  max_rounds: 5
+  termination_rule: >-
+    事前登録課題の達成条件（全軸 verdict が preserved / exact_match =
+    task.md の課題達成）を round 1 で充足したため、5 周回上限に達する前に
+    ループを終了した。（2026-08-06 訂正: 原文の status: success /
+    「正本 §5 の成功条件」表記は課題達成条件と §5 の L0b 成功条件
+    （周回間 Pareto 改善）の混同のため是正。§5 条件の T1 での判定 =
+    pareto_accounting のとおり対象外）。
+  comparison_caveat: >-
+    (2026-08-06 追記、PR #247 レビュー 2 巡目) L0S-T1 との 5 周回 vs 1 周回
+    対照は、著者サンプリング（各条件 n=1・別個体 fresh エージェント）と
+    判定器実装の変更（L0-s 専用スクリプト → L0a 凍結部品）の 2 点で交絡
+    しており、契約 v1 単独の効果として分離測定されたものではない（帰属
+    仮説と「整合する」までが主張可能な範囲。docs/l0b_closed_loop_record.md
+    §2 の交絡開示が正）。
+  pareto_accounting: >-
+    改善判定の対象となる周回ペアは存在しない（第 1 周回で成功終了したため）。
+    frozen/pareto.yaml の述語は事前登録どおり凍結されたが、本実験内では
+    未適用のまま — 正直会計としてここに明記する（陽性対照 round 0 は
+    task.md の規定によりスパイク evidence に数えないため、(round0, round1)
+    ペアの改善判定も行わない）。

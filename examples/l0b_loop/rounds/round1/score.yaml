@@ -1,0 +1,44 @@
+meta:
+  title: "Dim Chorus"
+  version: "0.1"
+
+semantic:
+  core: "静けさから短い高揚を経て静かに退く、暗い器楽の三幕構成"
+  grv:
+    primary: "ambient"
+    secondary: "minimal"
+  delta_e:
+    overall: "低いエネルギーから一度だけ明確に持ち上がり、再び静まる"
+  avoid: []
+
+physical:
+  bpm: 128
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: intro
+    bars: 4
+    role: "低域中心の静かな導入。次セクションとの明確なエネルギー対比を作る"
+    physical: "sub bass, low density"
+  - section: chorus
+    bars: 4
+    role: "曲の中心。密度とエネルギーを最大化し境界を際立たせる"
+    physical: "full energy"
+  - section: outro
+    bars: 4
+    role: "収束。エネルギーを落として終える"
+    physical: "release"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure

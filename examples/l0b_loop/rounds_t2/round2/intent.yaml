@@ -1,0 +1,13 @@
+meta_note: "round1のdiffが示す3つの欠陥のうち、境界タイミングの誤差が小さい chorus1/chorus2 境界（14.9304 vs 宣言15.0、誤差0.07秒）はそのまま維持し、誤差の大きい2箇所（intro/chorus1境界の完全消失、chorus2/outro境界の2.55秒早期ドリフト）だけを狙い撃ちで修正した。bars/bpm/time_signatureは変更せず、round1で機能した唯一の正確な境界（chorus境界）の再現性を崩さないことを優先。"
+section_intro:
+  reason: "round1のobserved_sectionsでは intro が 0-14.9304秒 (14.93秒) と、宣言した3小節=7.5秒の約2倍に及んでおり、intro/chorus1境界(宣言7.5秒)が全く検出されなかったことを示す。sparse/low density/no kickだけでは chorus1 の full energy/sub bass との対比が音響的に不十分だったと推測し、認識語彙中で最も強い静寂トークンである silence を追加して対比を最大化した。"
+section_chorus_1:
+  reason: "full energy + sub bass は変更しない。round1でこの構成が chorus1/chorus2 境界を宣言位置(15.0秒)からわずか0.07秒差の14.9304秒で検出させており、round1中で最も正確に機能した箇所だった。"
+section_chorus_2:
+  reason: "full energy のみ(sub bass を落とす)という差分も変更しない。同じ理由で chorus1/chorus2 境界を正しい位置近くで成立させた張本人であり、ここを弄ると同一ラベルの2区間への分割自体が失われるリスクの方が大きいと判断した。round1で observed の 'outro' が19.9459-30.0 (10.05秒 = chorus2後半2.55秒 + 真のoutro 7.5秒) と過大だった問題は、chorus2内部で契約§2の「長い持続区間は内部ダイナミクスの変化で過分割されうる」現象が起きた結果と仮説を立て、chorus2自体でなく隣接するoutro側の対比強化で対処する方針にした。"
+section_outro:
+  reason: "release, low density に no kick を追加した。round1でchorus2/outro境界が宣言位置22.5秒より2.55秒早い19.9459秒に検出されており、chorus2末尾の内部変動がoutro側の弱い立ち上がりに紛れて誤検出された可能性を疑っている。no kick追加でoutro先頭の対比をより明確にし、真の境界(22.5秒)を最も強い変化点として優先検出させることを狙った。"
+key_choice: "physical.key は D minor のまま変更なし。round1でverdict preservedのため、非退行を最優先しfixityとして保持した。"
+brightness_choice: "physical.brightness は dark のまま、sub bass も chorus1 に1箇所残したままとした。round1でverdict preservedだったため、brightnessに影響しうる要素（brightness宣言値・sub bassの有無）は一切変更していない。"
+risk: "silence追加によりintroが静寂すぎて逆に無境界の『間』として吸収される可能性、および no kick 追加によるoutro側の修正がchorus2内部ドリフトの真因を外している可能性(境界検出器がそもそも最大2境界しか出さない仕様である場合は今回の変更では4区間化しない)。次周のobserved_sectionsで、(1) 7.5秒付近に新規境界が出現したか、(2) chorus2/outro境界が22.5秒付近に近づいたか、の2点を最優先で確認する。"
+tools_used: none

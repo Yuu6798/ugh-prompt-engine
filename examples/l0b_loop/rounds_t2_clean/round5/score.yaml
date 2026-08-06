@@ -1,0 +1,48 @@
+meta:
+  title: "Fourfold Dark"
+  version: "0.5"
+
+semantic:
+  core: "低域(サブベース)の有無だけが交互に切り替わる4部構成の暗い器楽曲。エネルギー感は全編で満ちたままにし、サブベースの在/不在という単一の変数だけで場面が切り替わる"
+  grv:
+    primary: "dark ambient"
+    secondary: "minimal"
+  delta_e:
+    overall: "サブベース不在 -> 在 -> 不在 -> 在、を繰り返す抑制された起伏"
+  avoid: []
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: intro
+    bars: 3
+    role: "曲を開く導入部（サブベースなし）"
+    physical: "full energy"
+  - section: chorus
+    bars: 3
+    role: "主題を提示するコーラス（サブベース追加）"
+    physical: "full energy, sub bass"
+  - section: chorus
+    bars: 3
+    role: "コーラスの反復（サブベース除去）"
+    physical: "full energy"
+  - section: outro
+    bars: 3
+    role: "終結部（サブベース再追加）"
+    physical: "full energy, sub bass"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure

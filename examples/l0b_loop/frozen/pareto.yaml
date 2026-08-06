@@ -1,0 +1,65 @@
+# pareto.yaml — L0B-T1 Pareto 改善述語（事前登録・凍結）。
+#
+# schema_version: l0b-pareto/1.0
+#
+# 正本 = docs/llm_adapter_planning.md §5「軸別の事前登録順序による Pareto 改善」。
+# task.md の 3 判定軸（key/brightness/structure）それぞれに距離関数と順序
+# （小さいほど良い、で統一）を凍結する。実装 = scripts/pareto_eval.py。
+#
+# 変更禁止: L0B-T1 開始後に本ファイルを変更してはならない（正本 §3 の pin
+# 変更禁止則と同型 — 周回間で述語が変わると収束 evidence が比較不能になる）。
+# 述語の変更が必要になったら別の実験として最初から記録し直す。
+
+schema_version: "l0b-pareto/1.0"
+
+axes:
+  key:
+    # requirement/observed のペアは AuthoringDiffReport.axes.key の verdict
+    # から二値化する（verdict 自体が svp_rpe.keys.keys_enharmonically_equal
+    # による異名同音等価判定の結果を既に反映しているため、report.py の判定を
+    # ここで再実装しない）。
+    distance: "binary_from_verdict"
+    distance_definition: >-
+      0 if axes.key.verdict == "preserved" else 1.
+    order: "lower_is_better"
+  brightness:
+    distance: "binary_from_verdict"
+    distance_definition: >-
+      0 if axes.brightness.verdict == "preserved" else 1.
+    order: "lower_is_better"
+  structure:
+    distance: "levenshtein_casefold"
+    distance_definition: >-
+      Token-level Levenshtein edit distance (insertion/deletion/substitution,
+      unit cost) between axes.structure.requirement and
+      axes.structure.observed, treating each element as a single token and
+      comparing tokens by str.casefold() equality (matches the normalization
+      svp_rpe.arrange.observe already applies to structure labels — no
+      additional normalization is introduced here).
+    order: "lower_is_better"
+
+improvement_rule: >-
+  Round R is a Pareto improvement over round R-1 iff: (1) both rounds report
+  band == "measured" on all 3 axes (key, brightness, structure) — see
+  band_rule below for the conservative exclusion when this does not hold;
+  and (2) restricted to those 3 axes, every axis's distance in round R is
+  <= its distance in round R-1 (no regression on any axis), AND at least one
+  axis's distance in round R is strictly < its distance in round R-1.
+  Cross-axis aggregation (e.g. summing distances into one score) is
+  forbidden (正本 D6 — a regression on one axis may never be offset by an
+  improvement on another).
+
+tie_rule: >-
+  Equal distance on every axis (no axis strictly decreases) is NOT an
+  improvement, even if no axis regresses either — "improved" requires
+  >= 1 strict decrease per the improvement_rule above.
+
+band_rule: >-
+  If either round in the pair reports band != "measured" on ANY of the 3
+  axes, the round pair is excluded from improvement accounting entirely
+  (conservative/D5: an out-of-band axis's distance is not trustworthy
+  evidence either way). scripts/pareto_eval.py reports this as
+  improved=false with a band_excluded=true flag and the offending axis
+  names — it is never silently treated as a non-improvement tie, since a
+  band-excluded round is not evidence of anything (neither improvement nor
+  regression), and must not be counted as improvement evidence per 正本 §5.
