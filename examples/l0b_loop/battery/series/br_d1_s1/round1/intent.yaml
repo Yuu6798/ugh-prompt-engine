@@ -1,0 +1,34 @@
+design_rationale:
+  overall: >
+    課題 BR-D1 の R1/R2/R3 を満たすことのみを目的に設計した。旋律指定は行っていない。
+  section_length:
+    choice: "全 4 セクションを bpm=96・4/4・3 bars = 7.5 秒に統一"
+    reason: >
+      契約 §2 で開示された実測点（中間セクション 12.3 秒=過分割 / 6.2 秒=吸収 /
+      7.5 秒=成立）のうち唯一成立した 7.5 秒にできるだけ正確に一致させた。
+      bpm=96 なら 1 bar=2.5 秒となり 3 bars=7.5 秒を整数 bars で達成できるため
+      端数を避けられる。intro/outro も含め全区間を同じ長さにしたのは、
+      「中間セクション」という契約上の注記が実質どの区間にも当てはまりうる
+      （吸収・過分割は位置を問わない現象と読んだ）という保守的な解釈による。
+  boundary_contrast:
+    intro_to_chorus1: "sparse/no kick/low density → full energy の強いエネルギー対比で境界を作る"
+    chorus1_to_chorus2: >
+      両方とも observed label が "chorus" になることを狙うため energy 帯は
+      full energy で揃えたまま、sub bass を追加して音色のみを変え、
+      境界検出に必要な対比（エネルギーまたは音色のいずれかの明確な差）を
+      音色側で確保した。ラベル自体は観測器のヒューリスティック判定に委ねる
+      ため、ここでは「高エネルギーの区間が2つ連続する」という条件を満たす
+      ことに専念した。
+    chorus2_to_outro: "full energy/sub bass → release/low density の対比で終端境界を作る"
+  key_and_brightness:
+    key: "physical.key を D minor に直接指定。events.chord_progression は意図的に省略し、鍵に応じた既定進行に任せてリスクを増やさない選択をした"
+    brightness: "physical.brightness を dark に直接指定。個別セクションの physical ヒントで brightness を上書きする語彙は契約に無いため、トラック全体設定のみに依存する"
+  omitted_events:
+    reason: >
+      契約は events.chord_progression 省略時に鍵から既定進行が演奏されると
+      明記している。手書きの進行が D minor から意図せず逸脱するリスクを避け、
+      鍵の判定を最優先で守るためあえて省略した。
+  open_risks:
+    - "chorus と chorus の境界が sub_bass 差だけで検出器に十分な対比として認識されるかは実測未確認（次周回の観測が必要）"
+    - "全4区間を等長 7.5 秒にしたことで、7.5 秒が本当に intro/outro にも適用可能かは未確認（開示は中間セクションの実測のみ）"
+tools_used: none
