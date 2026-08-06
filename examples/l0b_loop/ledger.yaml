@@ -792,7 +792,10 @@ loop_status_t2:
     off-contract 再分類）→ **clean_success**（12 巡目のクリーン系列
     clean_branch 完走・2026-08-06 確定）。
   terminated_at_round: 5
-  clean_rerun_round: "5_clean"
+  # 旧フィールド名 clean_rerun_round は「5_clean = クリーン」を示唆して
+  # しまうため改名（PR #247 レビュー 16 巡目 P1）。5_clean は系譜汚染あり
+  # （off_contract_events）で evidence 不算入。
+  lineage_contaminated_rerun: "5_clean"
   clean_branch_terminated_at: "5c"
   max_rounds: 5
   task_achieved: >-

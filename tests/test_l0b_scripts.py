@@ -1969,7 +1969,10 @@ def test_ledger_t2_rounds_shape_includes_clean_rerun():
     assert round5c["observed"] == ["intro", "chorus", "chorus", "outro"]
 
     assert ledger["loop_status_t2"]["status"] == "clean_success"
-    assert ledger["loop_status_t2"]["clean_rerun_round"] == "5_clean"
+    # 旧名 clean_rerun_round は「5_clean = クリーン」を示唆するため改名済み
+    # （16 巡目 P1）。旧キーの復活も形状違反として検出する。
+    assert "clean_rerun_round" not in ledger["loop_status_t2"]
+    assert ledger["loop_status_t2"]["lineage_contaminated_rerun"] == "5_clean"
     assert ledger["loop_status_t2"]["clean_branch_terminated_at"] == "5c"
 
     hardening_items = ledger["post_loop_hardening"]["items"]
