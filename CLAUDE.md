@@ -219,7 +219,7 @@ tests/ / docs/ / examples/     # pytest / design documents (index: docs/README.m
 | [`docs/llm_adapter_planning.md`](docs/llm_adapter_planning.md) | LLM 著述トラック (L 系列) 計画: LLM が Score を直書きし決定論演奏者で検収する閉ループ。アダプター=決定論/情報の国境（宣言・pin 済み可視ペイロードのみ可視 = §3 が正・intent sidecar 隔離・帯域注釈付き差分報告）。L0-s スパイク → L0a 契約凍結 → L0b 非旋律軸 → L0c 旋律軸（M3d+M4 待ち） |
 | [`docs/l0s_spike_record.md`](docs/l0s_spike_record.md) | L0-s スパイク記録 (第 1 実測): 情報遮断 5 周回・記号検証 5/5・key/brightness 5/5 preserved・構造軸未収束 (8→6→6→4→2)。L0a への契約欠陥リスト（validate CLI/境界時刻報告/計器分解能開示/report 正規形/導出器正式化） |
 | [`docs/l0a_authoring_contract.md`](docs/l0a_authoring_contract.md) | L0a 著述契約 v1: 公開スキーマ範囲 spec (`config/authoring_contract_l0.yaml`) + `svprpe validate` エラープロトコル (kind 語彙) + `AuthoringDiffReport` 正規形 (境界時刻スキーマ・notes 白リスト) + 信頼軸表の機械導出 (`config/authoring_trusted_axes_l0.yaml`) + pin 規則 |
-| [`docs/l0b_closed_loop_record.md`](docs/l0b_closed_loop_record.md) | L0b 閉ループ記録 (T1/T2): L0S 同一課題が T1 で 1 周回成功 (契約 v1 仮説と整合・ただし交絡あり = §2)、T2 round4→5 の Pareto 改善で操舵証拠を実測。副産物 = ヒントトークン非加算・role 文照合リーク・drone 区間の進行無音化 (L0a v2 材料。和声応答帰属は §3.1 で撤回) |
+| [`docs/l0b_closed_loop_record.md`](docs/l0b_closed_loop_record.md) | L0b 閉ループ記録 (T1/T2): L0S 同一課題が T1 で 1 周回成功 (契約 v1 仮説と整合・交絡あり = §2)。T2 の唯一の Pareto 改善は off-contract 除外・クリーン再周回は tie で §5 操舵証拠は未充足 (契約 v2 後に再実測 = §3.2)。副産物 = ヒントトークン非加算・role 文照合リーク×2・drone 区間の進行無音化 |
 
 ## ドキュメント管理ポリシー
 

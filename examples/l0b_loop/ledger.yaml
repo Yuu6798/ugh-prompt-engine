@@ -81,6 +81,13 @@ pinned_inputs:
       even mean for this experiment.
 
 runner_at_measurement:
+  # Reproducibility scope (PR #247 レビュー 7 巡目で明示化): measured_at_commit
+  # と git_blob_sha1 の pin は「ブランチ履歴を保持する文脈」(本リポジトリの
+  # マージ慣行 = マージコミット。PR #245/#246 前例) でのみ checkout 再現可能。
+  # squash マージや履歴を持たない export の文脈ではこれらは再現可能な audit
+  # evidence ではなく attestation (当時の測定者による証言) へ格下げされる。
+  # git 非依存の一次再現アンカーは各成果物の sha256 (pinned_inputs /
+  # positive_control / rounds の content pin) であり、こちらは文脈に依存しない。
   # Blob sha256 of the L0b runner scripts + this run's frozen/ copies, at
   # the commit the positive-control dry-run below was measured against.
   # Unlike L0-s's runner_at_measurement (which pins a *range* because the
@@ -518,6 +525,11 @@ t2:
           key 0->0 / brightness 0->0 / structure 1->0 —
           structure が厳密改善・全軸非退行・band 除外なし =
           正本 §5 の Pareto 改善が初めて成立した周回。
+      evidence_status: >-
+        excluded（2026-08-06 再分類）: 本周回のペイロードには coordinator
+        注記が含まれており off-contract（off_contract_events 参照）。
+        この改善は操舵証拠・契約遵守の収束実績に算入しない。クリーン
+        再周回 = rounds[5_clean]（tie・改善非再現）。
       interpretation: >-
         著者は 4 周回の消去法（トークン強化→長さ→軸数縮小がすべて無効）
         を経て、最終周回で和声レバー（events.chord_progression:
@@ -559,29 +571,104 @@ post_loop_hardening:
     - "run_round.py: score/section map の単一スナップショット読み (Codex P2)"
     - "run_round.py: hashes.json 先行書き込み + report の atomic 公開 (Codex P2 軽量版)"
 
+    - round: "5_clean"
+      date: "2026-08-06"
+      note: >-
+        PR #247 レビュー 7 巡目 P1（coordinator 注記 = off-contract イベント）
+        を受けたクリーン再周回。可視ペイロード = T2 課題文 + contract.md v1 +
+        round 4 の自作 score/intent + round 4 差分報告のみ（coordinator 注記
+        なし = 正本の宣言ペイロード定義に厳密準拠）。著者は別個体 Sonnet、
+        ツール使用実測 0 回。計測は 7 巡目硬化済みランナー
+        （--section-map pin 制限 + judge input snapshot-feed 実装後）で実施。
+      files:
+        score:
+          path: rounds_t2/round5_clean/score.yaml
+          sha256: "7ead42421776e296ce8673cdb7486e22f8ee2341a3cb4af7a8c842216ef85646"
+          git_blob_sha1: "f3eb3326a8361bb400250c0a751d7c39300a8fe0"
+        intent:
+          path: rounds_t2/round5_clean/intent.yaml
+          sha256: "2a8e9bc5f4b95ac50e34872d56ed8db8b83a9e0ed5bf49c5332f6ef7d14e0e81"
+        report:
+          path: rounds_t2/round5_clean/report.json
+          sha256: "fe991f0f50d9f089e6a5ce640c5776f1d3cf536e7833f7fc2fec89062e849c7f"
+        pareto_vs_round4:
+          path: rounds_t2/round5_clean/pareto_vs_round4.json
+          sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+          note: "Tie（key 0->0 / brightness 0->0 / structure 1->1）。"
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: mismatch
+          band: measured
+          observed: ["intro", "chorus", "outro"]
+      interpretation: >-
+        注記なしの著者は round 4 ペイロードのみから境界照合を自力で行い、
+        原 round 5（和声レバー）とは別の一手 — sub bass 単一軸トグルへの
+        統一（intro の physical から no kick を撤去）— を選択した。しかし
+        build/l0b/t2_round5_clean/take.wav は round 4 と**バイト完全同一**
+        （sha256 a0164842...）: 撤去を説明する role 文「no kick等の追加
+        トークンを全廃し」自体が連結ヒント照合で "no kick" にヒットし、
+        intro は round 4 と同一の drone_only 0.10 に落ちた（role 文リーク
+        欠陥の 2 例目 — トークンについて語る散文がトークンを発動させる）。
+        結果は structure mismatch の tie で、原 round 5 の改善は
+        再現されなかった。2 つの含意: (1) coordinator 注記が原 round 5 の
+        著者をレバー選択（和声）へ操舵していた可能性がクリーン分岐の実在で
+        裏づけられた、(2) 契約 v1 のままでは宣言ペイロードのみで著者が
+        音響有効な修理へ到達することを本課題では実証できなかった —
+        発見済みの計器欠陥（role 文リーク・トークン非加算・drone 進行
+        無音化）の v2 開示が、クリーン操舵の再実測の前提条件になる。
+
+  off_contract_events:
+    # PR #247 レビュー 7 巡目 P1 での再分類（2026-08-06）。正本
+    # docs/llm_adapter_planning.md の可視ペイロード定義（契約・課題文・
+    # 前周自作ファイル・構造化差分報告）は網羅列挙であり、コーディネーター
+    # が rounds 3/4/5 のペイロードへ添えた「ペイロード内導出可能な事実の
+    # 要約注記」は、導出可能性にかかわらず追加の散文入力 = off-contract
+    # イベントに当たる。各注記の存在は当時から各 round の author 欄に開示
+    # 済み（隠蔽はない）が、分類が誤っていた——off-contract 周回の成果は
+    # 契約遵守の収束実績・操舵証拠に算入できない。
+    - round: 3
+      kind: coordinator_annotation
+      content_summary: "round1/2 の観測境界が完全同一という要約注記"
+    - round: 4
+      kind: coordinator_annotation
+      content_summary: "相対パターン不変・長さ仮説の検証結果という要約注記"
+    - round: 5
+      kind: coordinator_annotation
+      content_summary: >-
+        軸数仮説の反証 + 「別種の対比手段の検討が残る選択肢」という要約注記
+        （原 round 5 の唯一の改善はこの注記付きペイロード下で発生）
+
 loop_status_t2:
-  status: success
+  status: task_achieved_off_contract_only
   terminated_at_round: 5
+  clean_rerun_round: "5_clean"
   max_rounds: 5
-  task_achieved: true
+  task_achieved: >-
+    原 round 5 で全軸成功したが、当該周回は coordinator 注記付き
+    （off_contract_events）のため契約遵守下の達成としては主張しない。
+    クリーン再周回（round 5_clean）は structure mismatch で課題未達。
   steering_evidence: >-
-    正本 §5 の L0b 成功条件「非旋律軸の差分が周回で改善するケースが
-    1 つ以上実測される」を round 4 → round 5 の Pareto 改善
-    （rounds_t2/round5/pareto_vs_round4.json、improved: true、structure
-    1->0 厳密改善・全軸非退行・band 除外なし）で充足した。改善は著者が
-    差分報告（observed_sections 境界秒）のみを根拠に仮説を絞り込み、
-    契約公開範囲内の編集（events.chord_progression の追加 — **著者の意図
-    したレバー**）を行った周回で実測された。ただしその**実効機構は意図と
-    異なり未確定**である: 進行は全セクション drone_only のため不鳴で、
-    実音響変化は role 散文への認識語一致（"sub bass"）による chorus2 の
-    drone 化だった（正 = rounds[round 5].interpretation_correction。
-    和声対比への因果帰属は撤回済み）。操舵証拠は「報告→修正→Pareto 改善」
-    という結果の実測であり、この機構帰属の不確定性と独立に有効。
+    **クリーン会計では未充足**（2026-08-06 の再分類・クリーン再周回後の
+    確定）。記録上の唯一の Pareto 改善（round 4 → 原 round 5、structure
+    1->0）は coordinator 注記付きペイロード = off-contract 周回で発生した
+    ため操舵証拠に算入できず、宣言ペイロードのみのクリーン再周回
+    （round 5_clean）は tie で改善を再現しなかった。したがって正本 §5 の
+    L0b 成功条件「非旋律軸の差分が周回で改善するケースが 1 つ以上実測
+    される」は本実験では**未充足**である。なお原 round 5 の改善自体の
+    実効機構も意図（和声対比）と異なり未確定だった
+    （rounds[round 5].interpretation_correction）。
   honest_accounting: >-
-    rounds 2-4 は 3 連続 tie（改善実績 0）であり、5 周回中改善周回は
-    round 5 の 1 件のみ。T1（1 周回で全軸成功、改善ペアなし）と合わせ、
-    L0b 全体の Pareto 改善実測は 1 件である（凍結述語の要求「1 つ以上」
-    を満たす最小限）。
+    クリーン周回のみの集計: T2 は rounds 1-4 + 5_clean の全てで structure
+    mismatch（距離 1 不変・tie 4 連続）、改善実測 0 件。T1 は第 1 周回
+    成功（注記なし・クリーン）だが改善ペア不存在。L0b 全体でクリーンな
+    Pareto 改善実測は **0 件**。off-contract 周回（原 round 5）を含めれば
+    1 件だが evidence には数えない。クリーン操舵の再実測は、本実験で
+    発見した契約 v1 未開示の計器欠陥 3 件（トークン非加算・role 文照合
+    リーク・drone 区間の進行無音化）を L0a 契約 v2 へ反映した後の
+    後続実験（正本 §5 の成功条件はそちらで再挑戦）に引き継ぐ。
 
 rounds:
   - round: 1

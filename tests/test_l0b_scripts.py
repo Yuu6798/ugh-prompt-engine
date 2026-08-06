@@ -919,6 +919,184 @@ def test_reject_judge_input_drift_rejects_modified_fixed_input(tmp_path: Path, m
         run_round._reject_judge_input_drift(run_round.SECTION_MAP_PATH)
 
 
+# --- Codex review round 7, P1: G1 unpinned --section-map rejection ---------
+
+
+def test_reject_unpinned_section_map_accepts_pinned_paths():
+    # Must not raise, for either pinned path — positive counterpart to the
+    # negative case below. Full-pipeline positive coverage (a real run
+    # reaching completion with each pinned map) is already provided by
+    # `test_positive_control_round_trip_reproduces_pinned_report` (T1,
+    # default `--section-map`) and
+    # `test_positive_control_t2_round_trip_reproduces_pinned_report` (T2,
+    # `--section-map frozen/section_map_t2.json`) below.
+    run_round._reject_unpinned_section_map(run_round.SECTION_MAP_PATH)
+    run_round._reject_unpinned_section_map(run_round.SECTION_MAP_T2_PATH)
+
+
+def test_reject_unpinned_section_map_rejects_byte_identical_copy_at_unpinned_path(
+    tmp_path: Path,
+):
+    """G1 negative case: a `--section-map` that is a byte-identical *copy*
+    of the pinned T1 map, but sitting at a different (unpinned) path, must
+    still be refused — pin membership is a path-identity check, not a
+    content check (F5's hash table only ever pins the two canonical paths;
+    without G1, this exact case used to fall out of
+    `_selected_fixed_inputs`'s selection and skip drift protection
+    entirely, per the module docstring's "G1" section)."""
+    unpinned_copy = tmp_path / "section_map.json"
+    unpinned_copy.write_bytes(run_round.SECTION_MAP_PATH.read_bytes())
+
+    with pytest.raises(
+        run_round.JudgeInputDriftError, match="not one of the pinned section maps"
+    ):
+        run_round._reject_unpinned_section_map(unpinned_copy)
+
+
+def test_run_round_rejects_unpinned_section_map_before_any_write(tmp_path: Path):
+    """G1 negative case at the `run_round()` entry point: an unpinned
+    `--section-map` is refused before `workdir.mkdir()` or any other write
+    — cheap to assert because the guard fires immediately, before the
+    (expensive) audio/subprocess pipeline ever starts, so this test never
+    pays for it."""
+    unpinned_copy = tmp_path / "section_map_copy.json"
+    unpinned_copy.write_bytes(run_round.SECTION_MAP_PATH.read_bytes())
+    workdir = tmp_path / "wd"
+    output_path = tmp_path / "report.json"
+
+    with pytest.raises(run_round.JudgeInputDriftError):
+        run_round.run_round(
+            POSITIVE_CONTROL_SCORE_PATH,
+            workdir,
+            0,
+            output_path,
+            section_map_path=unpinned_copy,
+        )
+    assert not workdir.exists()
+    assert not output_path.exists()
+
+
+# --- Codex review round 7, P1: G2 judge-input snapshot-feed ----------------
+
+
+def test_reject_judge_input_drift_returns_verified_bytes():
+    """`_reject_judge_input_drift` now returns the exact bytes it read and
+    hashed for each fixed input (G2), not just `None` — this is the
+    snapshot `run_round()` threads to every downstream consumer instead of
+    a fresh re-read."""
+    verified = run_round._reject_judge_input_drift(run_round.SECTION_MAP_PATH)
+    assert verified["authoring_contract_l0"] == run_round.CONTRACT_PATH.read_bytes()
+    assert verified["arrangement"] == run_round.ARRANGEMENT_PATH.read_bytes()
+    assert (
+        verified["suno_capability_profile"] == run_round.CAPABILITY_PROFILE_PATH.read_bytes()
+    )
+    assert (
+        verified["eval_control_profile"] == run_round.EVAL_CONTROL_PROFILE_PATH.read_bytes()
+    )
+    assert verified["section_map"] == run_round.SECTION_MAP_PATH.read_bytes()
+    assert "section_map_t2" not in verified
+
+
+def test_verified_judge_input_bytes_survive_source_mutation_after_preflight(
+    tmp_path: Path, monkeypatch
+):
+    """G2 snapshot-feed unit check (cheap — no full pipeline run): once
+    `_reject_judge_input_drift` has read+verified a fixed input's bytes,
+    mutating the *source* path afterward must not affect a workdir
+    `judge_inputs/` copy staged from that already-verified snapshot — this
+    exercises the same `atomic_write_bytes(paths["judge_contract"], ...)`
+    staging step `run_round()` itself performs, without paying for the full
+    subprocess pipeline. Before G2, the consumer of this input (the
+    `svprpe validate --contract` subprocess) re-read the source path itself,
+    arbitrarily long after preflight verified it — a verify-then-reread
+    TOCTOU window this test proves is now closed."""
+    tampered_source = tmp_path / "authoring_contract_l0.yaml"
+    original_bytes = b"schema_version: contract/0\nkind: original\n"
+    tampered_source.write_bytes(original_bytes)
+    patched = dict(run_round._FIXED_INPUT_SHA256)
+    patched["authoring_contract_l0"] = (
+        tampered_source,
+        run_round._sha256_bytes(original_bytes),
+    )
+    monkeypatch.setattr(run_round, "_FIXED_INPUT_SHA256", patched)
+
+    verified = run_round._reject_judge_input_drift(run_round.SECTION_MAP_PATH)
+    assert verified["authoring_contract_l0"] == original_bytes
+
+    # Mirrors run_round()'s own staging write: the reserved judge_inputs/
+    # copy is written from the verified bytes, not from a fresh read of
+    # tampered_source.
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    run_round.atomic_write_bytes(paths["judge_contract"], verified["authoring_contract_l0"])
+
+    # Mutate the source *after* verification+staging — a TOCTOU re-read
+    # would now observe this; the already-staged copy must not.
+    tampered_source.write_bytes(b"schema_version: contract/0\nkind: TAMPERED\n")
+
+    assert paths["judge_contract"].read_bytes() == original_bytes
+    assert paths["judge_contract"].read_bytes() != tampered_source.read_bytes()
+
+
+def test_prepare_scores_does_not_reread_eval_control_profile_path(
+    tmp_path: Path, monkeypatch
+):
+    """G2: `_prepare_scores` must derive `control_profile` from the
+    `eval_control_profile_bytes` argument, not re-read
+    `EVAL_CONTROL_PROFILE_PATH` off disk — monkeypatching that module
+    global to a nonexistent path proves it (a re-read would raise
+    `FileNotFoundError`)."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    score_bytes = POSITIVE_CONTROL_SCORE_PATH.read_bytes()
+    eval_control_profile_bytes = run_round.EVAL_CONTROL_PROFILE_PATH.read_bytes()
+    monkeypatch.setattr(
+        run_round, "EVAL_CONTROL_PROFILE_PATH", tmp_path / "does-not-exist.yaml"
+    )
+
+    eval_score_path, _ = run_round._prepare_scores(
+        POSITIVE_CONTROL_SCORE_PATH, score_bytes, paths, eval_control_profile_bytes
+    )
+    eval_data = yaml.safe_load(eval_score_path.read_text(encoding="utf-8"))
+    assert "control_profile" in eval_data
+
+
+def test_reserved_workdir_paths_includes_judge_inputs_copies(tmp_path: Path):
+    """The three new G2 staging copies are ordinary entries in
+    `_reserved_workdir_paths`, so the existing output-collision guard and
+    reserved-path symlink-escape guard protect them automatically (module
+    docstring's "G2" section) — this pins their presence and location."""
+    workdir = tmp_path / "wd"
+    paths = run_round._reserved_workdir_paths(workdir)
+    assert paths["judge_inputs_dir"] == workdir / "judge_inputs"
+    assert paths["judge_contract"] == workdir / "judge_inputs" / "authoring_contract_l0.yaml"
+    assert paths["judge_arrangement"] == workdir / "judge_inputs" / "arrangement.yaml"
+    assert (
+        paths["judge_capability_profile"]
+        == workdir / "judge_inputs" / "capability_profile.yaml"
+    )
+
+
+def test_reject_escaping_reserved_paths_rejects_symlinked_judge_contract(tmp_path: Path):
+    """The reserved-path symlink-escape guard covers the new G2 copies the
+    same way it covers every other reserved name — a symlinked
+    `judge_inputs/authoring_contract_l0.yaml` pointing outside `--workdir`
+    must be refused before anything is written."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    outside_target = tmp_path / "outside_contract.yaml"
+    outside_target.write_text("precious pinned contract\n")
+    paths = run_round._reserved_workdir_paths(workdir)
+    paths["judge_inputs_dir"].mkdir()
+    paths["judge_contract"].symlink_to(outside_target)
+
+    with pytest.raises(run_round.ProtectedPathError, match="symlink"):
+        run_round._reject_escaping_reserved_paths(workdir, paths)
+    assert outside_target.read_text() == "precious pinned contract\n"
+
+
 def test_reject_output_collision_with_existing_protected_tree_file():
     with pytest.raises(run_round.ProtectedPathError):
         run_round._reject_output_collision(
@@ -1278,8 +1456,9 @@ def test_prepare_scores_does_not_reread_score_path(tmp_path: Path):
     score_bytes = POSITIVE_CONTROL_SCORE_PATH.read_bytes()
     nonexistent_score_path = tmp_path / "does-not-exist.yaml"
 
+    eval_control_profile_bytes = run_round.EVAL_CONTROL_PROFILE_PATH.read_bytes()
     eval_score_path, eval_score_sha256 = run_round._prepare_scores(
-        nonexistent_score_path, score_bytes, paths
+        nonexistent_score_path, score_bytes, paths, eval_control_profile_bytes
     )
     assert eval_score_path == paths["eval_score"]
     assert eval_score_path.exists()

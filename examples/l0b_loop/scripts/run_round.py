@@ -128,6 +128,48 @@ experiment's evidence assumes. If an engine change legitimately updates one
 of these files, `_FIXED_INPUT_SHA256` must be updated to match in the same
 change — this table's whole purpose is to *detect* drift, not to freeze the
 files in place forever.
+
+**G1 — unpinned `--section-map` rejection** (`_reject_unpinned_section_map`,
+Codex review round 7, P1): before F5's hash check even runs,
+`--section-map` must resolve to one of exactly the two pinned section maps
+(`SECTION_MAP_PATH` T1 / `SECTION_MAP_T2_PATH` T2). Without this guard, a
+`--section-map` pointing anywhere else fell outside
+`_selected_fixed_inputs`'s two-entry selection and F5's hash-fidelity loop
+silently skipped it entirely — the structure axis would then be judged
+against an arbitrary, unverified section map with no drift protection at
+all (a run against a pin-external judge input is itself an unpinned judge).
+Runs immediately before `_reject_judge_input_drift`, so two-path membership
+is enforced unconditionally, independent of and prior to the hash check.
+
+**G2 — judge-input snapshot-feed** (Codex review round 7, P1): closes a
+verify-then-reread TOCTOU F5's hash check left open — F5 verified each
+fixed input's bytes *at preflight time*, but every downstream consumer
+(the `svprpe validate --contract` subprocess, `svprpe package`'s
+`arrangement`/`--capability-profile` subprocess arguments, `_prepare_scores`'s
+`control_profile` injection, `_write_identity_manifest`/`_structure_axis`'s
+section-map requirement) used to re-read the same source paths later in the
+run, arbitrarily long after the preflight check passed. `_reject_judge_input_drift`
+now returns the exact bytes it read and hashed for each fixed input
+(`dict[label, bytes]`); `run_round()` threads those same verified bytes to
+every consumer instead of letting any of them re-open the source path.
+Consumers that are themselves subprocess CLI invocations (`validate`'s
+`--contract`, `package`'s positional arrangement arg and
+`--capability-profile`) cannot take bytes directly — for those,
+`run_round()` stages the verified bytes into reserved workdir copies under
+`<workdir>/judge_inputs/` (`atomic_write_bytes`, so publish is atomic same
+as every other reserved-path write) and points the subprocess at the copy
+instead of the original config/frozen path. `eval_control_profile` and the
+section map are consumed in-process (not via a subprocess file argument) and
+are fed the verified bytes directly, no physical copy needed. The three new
+`judge_inputs/*` copy paths are ordinary entries in `_reserved_workdir_paths`,
+so the existing output-collision guard and reserved-path symlink-escape
+guard protect them the same way they protect every other reserved workdir
+artifact, with no separate guard logic required. Normal-path final artifacts
+(`report.json`/`take.wav`/`eval_score.yaml`/`hashes.json`) are unchanged
+byte-for-byte by this change — the T1/T2 slow smoke tests below prove it —
+since the verified bytes are, by F5's own hash check, identical to what a
+fresh re-read would have produced on an undrifted judge; only the *read
+path* changes, not the content.
 """
 from __future__ import annotations
 
@@ -260,16 +302,54 @@ def _selected_fixed_inputs(section_map_path: Path) -> dict[str, Path]:
     return selected
 
 
-def _reject_judge_input_drift(section_map_path: Path) -> None:
+_PINNED_SECTION_MAP_PATHS: tuple[Path, ...] = (SECTION_MAP_PATH, SECTION_MAP_T2_PATH)
+
+
+def _reject_unpinned_section_map(section_map_path: Path) -> None:
+    """G1 preflight guard (Codex review round 7, P1) — see module
+    docstring's "G1 — unpinned `--section-map` rejection" section for the
+    full rationale. `--section-map` must resolve to exactly one of the two
+    pinned section maps (`SECTION_MAP_PATH` T1 / `SECTION_MAP_T2_PATH` T2);
+    anything else is refused with `JudgeInputDriftError` (a
+    `ProtectedPathError` — same family `main()`'s existing
+    `except ProtectedPathError` already catches) before F5's hash check
+    below ever runs, so a `--section-map` outside the two pinned paths can
+    never silently fall through `_selected_fixed_inputs`'s selection and
+    skip drift protection entirely."""
+    resolved = section_map_path.resolve()
+    pinned_resolved = {path.resolve() for path in _PINNED_SECTION_MAP_PATHS}
+    if resolved not in pinned_resolved:
+        raise JudgeInputDriftError(
+            f"--section-map ({resolved}) is not one of the pinned section maps L0b's "
+            f"judge is defined against ({SECTION_MAP_PATH} for T1, {SECTION_MAP_T2_PATH} "
+            "for T2) — refusing to run the structure axis against an unpinned section "
+            "map: running against a pin-external judge input is itself an unpinned "
+            "judge, with no drift protection at all. Pass "
+            "--section-map frozen/section_map.json (T1, the default) or "
+            "frozen/section_map_t2.json (T2)."
+        )
+
+
+def _reject_judge_input_drift(section_map_path: Path) -> dict[str, bytes]:
     """Preflight byte-fidelity check (F5) — see module docstring's
     "Preflight judge-input drift check" section for the full rationale.
     Raises `JudgeInputDriftError` (a `ProtectedPathError` — refused before
     any write, same family as this module's other preflight guards) naming
     the drifted input, its actual sha256, and the pinned one it no longer
-    matches."""
+    matches.
+
+    Returns the exact bytes read (and verified) for each fixed input, keyed
+    the same way as `_selected_fixed_inputs` (G2 snapshot-feed, Codex
+    review round 7, P1 — see module docstring's "G2 — judge-input
+    snapshot-feed" section). `run_round()` threads these bytes to every
+    downstream consumer instead of letting any of them re-read the source
+    path later, closing the verify-then-reread TOCTOU a fresh re-read would
+    otherwise leave open."""
+    verified: dict[str, bytes] = {}
     for label, path in _selected_fixed_inputs(section_map_path).items():
+        data = path.read_bytes()
+        actual_sha256 = _sha256_bytes(data)
         expected_sha256 = _FIXED_INPUT_SHA256[label][1]
-        actual_sha256 = _sha256_file(path)
         if actual_sha256 != expected_sha256:
             raise JudgeInputDriftError(
                 f"judge input drift: {label} ({path}) sha256 {actual_sha256} != "
@@ -280,6 +360,8 @@ def _reject_judge_input_drift(section_map_path: Path) -> None:
                 "this experiment's evidence assumes. If this input was legitimately "
                 "updated, _FIXED_INPUT_SHA256 must be synced to match."
             )
+        verified[label] = data
+    return verified
 
 
 # Frozen judge (task.md judgement table) — deliberately not read back from the
@@ -327,6 +409,7 @@ def _reserved_workdir_paths(workdir: Path) -> dict[str, Path]:
     """
     identity_dir = workdir / "identity"
     package_dir = workdir / "package"
+    judge_inputs_dir = workdir / "judge_inputs"
     return {
         "score_copy": workdir / "score.yaml",
         "validation": workdir / "validation.json",
@@ -342,6 +425,18 @@ def _reserved_workdir_paths(workdir: Path) -> dict[str, Path]:
         "package_compilation_report": package_dir / "compilation_report.json",
         "observe_report": workdir / "observe_report.json",
         "hashes": workdir / "hashes.json",
+        # G2 snapshot-feed (Codex review round 7, P1): reserved workdir
+        # copies of the fixed judge-side inputs a subprocess CLI reads by
+        # path — staged from `_reject_judge_input_drift`'s already-verified
+        # bytes so the subprocess reads exactly what preflight checked,
+        # never a fresh (and therefore TOCTOU-able) re-read of the original
+        # config/frozen path. Ordinary entries in this mapping, so the
+        # output-collision guard and the reserved-path symlink-escape guard
+        # protect them automatically.
+        "judge_inputs_dir": judge_inputs_dir,
+        "judge_contract": judge_inputs_dir / "authoring_contract_l0.yaml",
+        "judge_arrangement": judge_inputs_dir / "arrangement.yaml",
+        "judge_capability_profile": judge_inputs_dir / "capability_profile.yaml",
     }
 
 
@@ -470,28 +565,36 @@ def _run_cli(args: list[str]) -> None:
         )
 
 
-def _run_validate_cli(score_path: Path, output_path: Path) -> None:
+def _run_validate_cli(score_path: Path, output_path: Path, contract_path: Path) -> None:
     """Runs the L0a symbolic gate. Exit `0` (pass) and `1` (fail record) are
     both normal outcomes — `svprpe validate` always writes `output_path` in
     either case (`src/svp_rpe/cli/validate_cmd.py`'s docstring: exit codes
     `0`/`1` bracket the *result*, `2` is reserved for an operational error
-    that never reaches the point of computing/writing a result at all)."""
+    that never reaches the point of computing/writing a result at all).
+
+    `contract_path` is the reserved workdir copy (`paths["judge_contract"]`)
+    of `CONTRACT_PATH`'s already-verified bytes (G2 snapshot-feed), not
+    `CONTRACT_PATH` itself — `run_round()` passes the copy so this
+    subprocess reads exactly the bytes preflight verified."""
     result = subprocess.run(
-        ["svprpe", "validate", str(score_path), "--contract", str(CONTRACT_PATH), "-o", str(output_path)],
+        ["svprpe", "validate", str(score_path), "--contract", str(contract_path), "-o", str(output_path)],
         capture_output=True,
         text=True,
         timeout=_CLI_TIMEOUT_SECONDS,
     )
     if result.returncode not in (0, 1):
         raise RuntimeError(
-            f"svprpe validate {score_path} --contract {CONTRACT_PATH} failed with an "
+            f"svprpe validate {score_path} --contract {contract_path} failed with an "
             f"operational error (exit {result.returncode}), not a pass/fail result\n"
             f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
         )
 
 
 def _prepare_scores(
-    score_path: Path, score_bytes: bytes, paths: dict[str, Path]
+    score_path: Path,
+    score_bytes: bytes,
+    paths: dict[str, Path],
+    eval_control_profile_bytes: bytes,
 ) -> tuple[Path, str]:
     """Writes the eval copy (`control_profile` injected from the frozen axis
     table) into `workdir`, from the already-read `score_bytes` snapshot —
@@ -499,14 +602,17 @@ def _prepare_scores(
     passes those same bytes here (and into the `score_copy` write, the
     symbolic gate, and `hashes["score"]`); this function does not re-read
     `score_path` from disk itself (`score_path` is kept only to name the
-    file in the `ValueError` message below). Returns `(eval_score_path,
+    file in the `ValueError` message below). `eval_control_profile_bytes` is
+    likewise `_reject_judge_input_drift`'s already-verified snapshot of
+    `EVAL_CONTROL_PROFILE_PATH` (G2 snapshot-feed) — this function does not
+    re-read that path itself either. Returns `(eval_score_path,
     eval_score_sha256)` — the submitted score's own hash
     (`hashes["score"]`/the identity manifest's `source.sha256`) is derived
     by the caller from the same `score_bytes`, not re-derived here."""
     data = yaml.safe_load(score_bytes)
     if not isinstance(data, dict):
         raise ValueError(f"score.yaml must be a mapping: {score_path}")
-    control_profile = yaml.safe_load(EVAL_CONTROL_PROFILE_PATH.read_text(encoding="utf-8"))
+    control_profile = yaml.safe_load(eval_control_profile_bytes.decode("utf-8"))
     data["control_profile"] = control_profile
 
     eval_bytes = yaml.safe_dump(data, sort_keys=False, allow_unicode=True).encode("utf-8")
@@ -866,13 +972,36 @@ def run_round(
         reserved_paths=paths.values(),
         fixed_input_paths=_fixed_input_paths(section_map_path),
     )
+    # G1 preflight (Codex review round 7, P1): --section-map must be one of
+    # the two pinned maps, unconditionally, before F5's hash check below
+    # even considers it (module docstring's "G1 — unpinned --section-map
+    # rejection" section).
+    _reject_unpinned_section_map(section_map_path)
     # F5 preflight: the fixed judge-side inputs this run is about to read
     # must still match the judge L0b's evidence is pinned against (module
     # docstring's "Preflight judge-input drift check" section) — after every
-    # other preflight guard, before workdir.mkdir() or any write.
-    _reject_judge_input_drift(section_map_path)
+    # other preflight guard, before workdir.mkdir() or any write. Also
+    # captures the verified bytes themselves (G2 snapshot-feed, module
+    # docstring's "G2 — judge-input snapshot-feed" section) so every
+    # downstream consumer below reads from this same in-memory snapshot
+    # instead of re-reading the source paths later.
+    verified_inputs = _reject_judge_input_drift(section_map_path)
 
     workdir.mkdir(parents=True, exist_ok=True)
+
+    # G2 snapshot-feed: stage the verified bytes of every fixed judge-side
+    # input a subprocess CLI reads as its own file argument into reserved
+    # workdir copies, so those subprocesses read exactly the bytes this
+    # preflight check verified rather than re-reading the original
+    # config/frozen path later in the run. `eval_control_profile` and the
+    # section map are consumed in-process (not via a subprocess file
+    # argument) and are fed directly from `verified_inputs` below, with no
+    # physical copy needed.
+    atomic_write_bytes(paths["judge_contract"], verified_inputs["authoring_contract_l0"])
+    atomic_write_bytes(paths["judge_arrangement"], verified_inputs["arrangement"])
+    atomic_write_bytes(
+        paths["judge_capability_profile"], verified_inputs["suno_capability_profile"]
+    )
 
     # Single input snapshot: `score.yaml` is read from disk exactly once per
     # run, right here — the resulting `score_bytes` (not a second read of
@@ -891,7 +1020,7 @@ def run_round(
     # (a) Symbolic gate — validated against the just-written copy (the same
     # bytes snapshot), not `score_path` itself.
     validation_path = paths["validation"]
-    _run_validate_cli(score_copy_path, validation_path)
+    _run_validate_cli(score_copy_path, validation_path, paths["judge_contract"])
     validation_data = json.loads(validation_path.read_text(encoding="utf-8"))
     symbolic_validation = SymbolicValidationResult.model_validate(validation_data)
 
@@ -927,7 +1056,9 @@ def run_round(
     load_composition_score(score_copy_path)
 
     # (b) Full observation chain (measure_round.py's pipeline, transcribed).
-    eval_score_path, eval_score_sha256 = _prepare_scores(score_path, score_bytes, paths)
+    eval_score_path, eval_score_sha256 = _prepare_scores(
+        score_path, score_bytes, paths, verified_inputs["eval_control_profile"]
+    )
     hashes["eval_score"] = eval_score_sha256
 
     roundtrip_path = paths["roundtrip"]
@@ -945,12 +1076,15 @@ def run_round(
     atomic_write_bytes(take_wav_path, wav_bytes(perform(score, FAITHFUL_TAKE)))
     hashes["take_wav"] = _sha256_file(take_wav_path)
 
-    # Single section-map snapshot: read once and shared with both the
-    # identity manifest's `identity/section_map.json` copy and
-    # `_structure_axis`'s requirement resolution below (instead of each of
-    # those two call sites independently reading `section_map_path` off
-    # disk).
-    section_map_bytes = section_map_path.read_bytes()
+    # Single section-map snapshot: G1 guarantees `section_map_path` resolves
+    # to exactly one of the two pinned maps, so `verified_inputs` carries it
+    # under exactly one of these two labels — reuse those already-verified
+    # bytes (G2 snapshot-feed) rather than re-reading `section_map_path`
+    # here, shared with both the identity manifest's
+    # `identity/section_map.json` copy and `_structure_axis`'s requirement
+    # resolution below.
+    section_map_label = "section_map" if "section_map" in verified_inputs else "section_map_t2"
+    section_map_bytes = verified_inputs[section_map_label]
 
     manifest_path, manifest_sha256 = _write_identity_manifest(
         paths,
@@ -967,9 +1101,12 @@ def run_round(
             "package",
             str(eval_score_path),
             str(manifest_path),
-            str(ARRANGEMENT_PATH),
+            # G2 snapshot-feed: the reserved workdir copies of
+            # `ARRANGEMENT_PATH`/`CAPABILITY_PROFILE_PATH`'s already-verified
+            # bytes, not the original config/frozen paths themselves.
+            str(paths["judge_arrangement"]),
             "--capability-profile",
-            str(CAPABILITY_PROFILE_PATH),
+            str(paths["judge_capability_profile"]),
             "--output-dir",
             str(package_dir),
         ]
