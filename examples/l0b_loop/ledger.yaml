@@ -582,6 +582,13 @@ t2:
         なし = 正本の宣言ペイロード定義に厳密準拠）。著者は別個体 Sonnet、
         ツール使用実測 0 回。計測は 7 巡目硬化済みランナー
         （--section-map pin 制限 + judge input snapshot-feed 実装後）で実施。
+        **（2026-08-06 再分類・PR #247 レビュー 12 巡目）** 本周回の
+        ペイロードは round 4（off-contract 周回）の score/intent/report を
+        継承しており、round 4 の状態自体が注記の影響を受けている可能性を
+        排除できないため、本周回も**系譜汚染あり（off-contract 継承）**に
+        分類する — 「クリーン再周回」の名称は撤回。真のクリーン系列は
+        最後の未汚染周回 round 2 から分岐した clean_branch
+        （rounds_t2_clean/）が正。
       files:
         score:
           path: rounds_t2/round5_clean/score.yaml
