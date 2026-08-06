@@ -470,6 +470,87 @@ t2:
         ないため、著者はこの無効性を報告からは検知できない — いずれも
         L0a 契約 v2 への一級の欠陥材料（D2 により著者へは未開示、報告
         正規形の範囲内で周回続行）。
+    - round: 5
+      date: "2026-08-06"
+      author: >-
+        情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
+        T2 課題文 + contract.md v1 + round 4 の自作 score/intent + round 4
+        差分報告 + coordinator 注記（軸数仮説の反証というペイロード内
+        導出可能事実の要約）。ツール使用の実測 = 0 回 — off-contract
+        イベントなし。
+      files:
+        score:
+          path: rounds_t2/round5/score.yaml
+          sha256: "1042acc6373b67a5c2f2eca8d3a1f659cd74ebabe8175215a49bafb48081e1bb"
+          git_blob_sha1: "9dcb568a9efbfc971fba88c40949abe86869de3d"
+        intent:
+          path: rounds_t2/round5/intent.yaml
+          sha256: "3dd0d30102ed789ab51f99bef419a89dcb6fe90ee6af05ef40f3ec559d948222"
+        report:
+          path: rounds_t2/round5/report.json
+          sha256: "35c4e3e97841b75d38ce168f6a59498858c59eeb14ae1631317078ab91f582cf"
+        pareto_vs_round4:
+          path: rounds_t2/round5/pareto_vs_round4.json
+          sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+      workdir_note: >-
+        Scratch workdir = build/l0b/t2_round5/ (not committed)。take.wav
+        sha256 は round 4 と相違（86b0f954... vs a0164842...）— コード
+        進行の導入は音響を実際に変えた。
+      symbolic_validation: pass
+      axes:
+        key: {verdict: preserved, band: measured, observed: "D minor"}
+        brightness: {verdict: preserved, band: measured, observed: "dark"}
+        structure:
+          verdict: exact_match
+          band: measured
+          observed: ["intro", "chorus", "chorus", "outro"]
+          observed_sections:
+            - {label: "intro", start_seconds: 0.0, end_seconds: 11.6332}
+            - {label: "chorus", start_seconds: 11.6332, end_seconds: 19.0636}
+            - {label: "chorus", start_seconds: 19.0636, end_seconds: 26.5404}
+            - {label: "outro", start_seconds: 26.5404, end_seconds: 40.0}
+      notes:
+        - {kind: position_match_rate, value: 1.0}
+      pareto_vs_prev:
+        improved: true
+        band_excluded: false
+        per_axis_summary: >-
+          key 0->0 / brightness 0->0 / structure 1->0 —
+          structure が厳密改善・全軸非退行・band 除外なし =
+          正本 §5 の Pareto 改善が初めて成立した周回。
+      interpretation: >-
+        著者は 4 周回の消去法（トークン強化→長さ→軸数縮小がすべて無効）
+        を経て、最終周回で和声レバー（events.chord_progression:
+        F major → D minor ×3、intro のみ関係調 III）へ転換した。結果、
+        4 周回一度も検出されなかった intro/chorus1 境界が出現（宣言
+        12.5s → 観測 11.6332s、誤差 0.87s）し、4 セクション列
+        intro→chorus→chorus→outro が成立、position_match_rate 1.0。
+        F major 導入でも key は D minor に保たれ（著者の共有音設計
+        どおり）、brightness も dark を維持 — 非退行と両立した厳密改善で
+        あり、これが L0b の求める「差分報告 → 修正 → Pareto 改善」の
+        操舵証拠 1 件目である。演奏ヒント（振幅系トークン）が境界検出器に
+        対して実質不感である一方、和声対比（コードのルート/クオリティ）は
+        検出器が確実に応答する対比軸であることが 5 周回の消去法で実証
+        された。
+
+loop_status_t2:
+  status: success
+  terminated_at_round: 5
+  max_rounds: 5
+  task_achieved: true
+  steering_evidence: >-
+    正本 §5 の L0b 成功条件「非旋律軸の差分が周回で改善するケースが
+    1 つ以上実測される」を round 4 → round 5 の Pareto 改善
+    （rounds_t2/round5/pareto_vs_round4.json、improved: true、structure
+    1->0 厳密改善・全軸非退行・band 除外なし）で充足した。改善は著者が
+    差分報告（observed_sections 境界秒）のみを根拠に仮説を絞り込み、
+    契約公開範囲内のレバー（events.chord_progression）へ到達した結果で
+    あり、閉ループが操舵として機能した実測点である。
+  honest_accounting: >-
+    rounds 2-4 は 3 連続 tie（改善実績 0）であり、5 周回中改善周回は
+    round 5 の 1 件のみ。T1（1 周回で全軸成功、改善ペアなし）と合わせ、
+    L0b 全体の Pareto 改善実測は 1 件である（凍結述語の要求「1 つ以上」
+    を満たす最小限）。
 
 rounds:
   - round: 1
