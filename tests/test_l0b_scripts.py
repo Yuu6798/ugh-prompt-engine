@@ -870,6 +870,65 @@ def test_atomic_write_bytes_hardlink_does_not_corrupt_shared_inode(tmp_path: Pat
     assert original.read_text() == "precious pinned evidence\n"
 
 
+# --- Codex review round 9, P1: subprocess-output staged atomic publish (H1) --
+
+
+def test_run_round_validation_staged_publish_hardlink_safe(tmp_path: Path):
+    """H1 positive case (module docstring's "H1" section): reserved
+    `validation.json` is a *hard* link to some other pin-recorded file when
+    a reused `--workdir` carries it over from a prior round — reached
+    cheaply via the symbolic-fail early-return path (an invalid
+    `score.yaml` never reaches the audio pipeline, same fixture
+    `test_run_round_report_bundle_rolls_back_pre_existing_bytes_on_symbolic_fail`
+    above uses). `svprpe validate`'s own `-o` write now lands on a staging
+    path under `<workdir>/subproc_staging/`, and only the staged bytes —
+    read back after the subprocess exits — are republished to the reserved
+    `validation.json` name via `atomic_write_bytes`, so the shared inode's
+    other owner must survive completely untouched, the same guarantee F4's
+    `test_atomic_write_bytes_hardlink_does_not_corrupt_shared_inode` already
+    gives this module's own direct writes."""
+    bad_score_path = tmp_path / "bad_score.yaml"
+    bad_score_path.write_text("not: a valid composition score\n", encoding="utf-8")
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    output_path = tmp_path / "report.json"
+
+    original = tmp_path / "original_evidence.json"
+    original.write_text('{"pinned": "evidence"}', encoding="utf-8")
+    reserved_validation = workdir / "validation.json"
+    os.link(original, reserved_validation)
+    # Sanity: the two paths really do share one inode before the run.
+    assert reserved_validation.read_text() == original.read_text()
+
+    result = run_round.run_round(bad_score_path, workdir, 0, output_path)
+
+    assert result["report"].symbolic_validation.status == "fail"
+    # The reserved name now holds this run's freshly staged validation
+    # result...
+    assert reserved_validation.read_text() != '{"pinned": "evidence"}'
+    # ...and the other owner of the formerly shared inode is untouched.
+    assert original.read_text() == '{"pinned": "evidence"}'
+
+
+def test_reserved_workdir_paths_includes_subproc_staging_paths(tmp_path: Path):
+    """The H1 staging paths every subprocess CLI output is redirected to
+    before being republished to its real reserved path (module docstring's
+    "H1" section) are ordinary entries in `_reserved_workdir_paths`, so the
+    existing output-collision guard and reserved-path symlink-escape guard
+    protect them automatically — the same pattern
+    `test_reserved_workdir_paths_includes_judge_inputs_copies` below already
+    pins for the G2 copies."""
+    workdir = tmp_path / "wd"
+    paths = run_round._reserved_workdir_paths(workdir)
+    staging_dir = workdir / "subproc_staging"
+    assert paths["subproc_staging_dir"] == staging_dir
+    assert paths["subproc_staging_validation"] == staging_dir / "validation.json"
+    assert paths["subproc_staging_roundtrip"] == staging_dir / "roundtrip.json"
+    assert paths["subproc_staging_adherence"] == staging_dir / "adherence.json"
+    assert paths["subproc_staging_observe_report"] == staging_dir / "observe_report.json"
+    assert paths["subproc_staging_package_dir"] == staging_dir / "package"
+
+
 # --- Codex review round 6, P1: preflight judge-input drift check (F5) ------
 
 

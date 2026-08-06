@@ -366,8 +366,11 @@ t2:
         情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
         T2 課題文 + contract.md v1 + round 2 の自作 score/intent + round 2
         差分報告 + coordinator 注記（round 1/2 境界同一というペイロード内
-        導出可能事実の要約）。ツール使用の実測 = 0 回 — off-contract
-        イベントなし。
+        導出可能事実の要約）。ツール使用の実測 = 0 回。
+        **（2026-08-06 訂正）** 当時この欄は「off-contract イベントなし」と
+        分類していたが誤り — coordinator 注記自体が off-contract イベント
+        である（正 = t2.off_contract_events の再分類。本周回の成果は契約
+        遵守の収束実績・操舵証拠に算入しない）。
       files:
         score:
           path: rounds_t2/round3/score.yaml
@@ -423,8 +426,11 @@ t2:
         情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
         T2 課題文 + contract.md v1 + round 3 の自作 score/intent + round 3
         差分報告 + coordinator 注記（相対パターン不変というペイロード内
-        導出可能事実の要約）。ツール使用の実測 = 0 回 — off-contract
-        イベントなし。
+        導出可能事実の要約）。ツール使用の実測 = 0 回。
+        **（2026-08-06 訂正）** 当時この欄は「off-contract イベントなし」と
+        分類していたが誤り — coordinator 注記自体が off-contract イベント
+        である（正 = t2.off_contract_events の再分類。本周回の成果は契約
+        遵守の収束実績・操舵証拠に算入しない）。
       files:
         score:
           path: rounds_t2/round4/score.yaml
@@ -483,8 +489,11 @@ t2:
         情報遮断著者（Sonnet サブエージェント、周回ごとに別個体）。可視情報 =
         T2 課題文 + contract.md v1 + round 4 の自作 score/intent + round 4
         差分報告 + coordinator 注記（軸数仮説の反証というペイロード内
-        導出可能事実の要約）。ツール使用の実測 = 0 回 — off-contract
-        イベントなし。
+        導出可能事実の要約）。ツール使用の実測 = 0 回。
+        **（2026-08-06 訂正）** 当時この欄は「off-contract イベントなし」と
+        分類していたが誤り — coordinator 注記自体が off-contract イベント
+        である（正 = t2.off_contract_events の再分類。本周回の成果は契約
+        遵守の収束実績・操舵証拠に算入しない）。
       files:
         score:
           path: rounds_t2/round5/score.yaml
@@ -708,23 +717,32 @@ rounds:
       - {kind: position_match_rate, value: 1.0}
     interpretation: >-
       全軸 verdict 成功（preserved/preserved/exact_match、全軸
-      band=measured）— 正本 §5 の成功条件を第 1 周回で充足。著者は
-      128bpm × 4/4 × 4bars（各セクション宣言実長 7.5 秒 = 契約 v1 が開示
-      した可行窓の成立実測点）を独自に選択した（陽性対照は 96bpm — 著者は
-      陽性対照を見ておらず、値のコピーではない）。観測実長は intro 7.85s /
-      chorus 5.09s / outro 9.57s と宣言から偏差があるが 3 セクション列は
-      成立（chorus 実長は最小セクション間隔 5 秒の直上）。L0S-T1 が契約 v0
-      で 5 周回未収束（全周回 structure: mismatch）だった同一課題が契約 v1
-      で 1 周回成立したことは、L0-s の未収束を契約の情報不足に帰属した
-      事前登録仮説（task.md「L0-s との比較設計」）を直接支持する。
+      band=measured）— **事前登録課題の達成条件**（全軸 verdict 成功 =
+      task.md の課題達成）を第 1 周回で充足。（2026-08-06 訂正: 原文は
+      これを「正本 §5 の成功条件の充足」と表記していたが誤り — §5 の
+      L0b 成功条件は「周回間の Pareto 改善 1 件以上」であり、T1 は改善
+      ペア不存在のため §5 の判定対象にならない = pareto_accounting）。
+      著者は 128bpm × 4/4 × 4bars（各セクション宣言実長 7.5 秒 = 契約 v1
+      が開示した可行窓の成立実測点）を独自に選択した（陽性対照は 96bpm —
+      著者は陽性対照を見ておらず、値のコピーではない）。観測実長は intro
+      7.85s / chorus 5.09s / outro 9.57s と宣言から偏差があるが 3
+      セクション列は成立（chorus 実長は最小セクション間隔 5 秒の直上）。
+      L0S-T1 が契約 v0 で 5 周回未収束だった同一課題が契約 v1 で 1 周回
+      成立したことは、L0-s の未収束を契約の情報不足に帰属した事前登録
+      仮説と**整合する**（2026-08-06 訂正: 原文の「直接支持する」は交絡
+      — comparison_caveat — により過剰主張のため撤回）。
 
 loop_status:
-  status: success
+  status: task_achieved
   terminated_at_round: 1
   max_rounds: 5
   termination_rule: >-
-    正本 §5 の成功条件（全軸 verdict が preserved / exact_match）を round 1
-    で充足したため、5 周回上限に達する前にループを成功終了した。
+    事前登録課題の達成条件（全軸 verdict が preserved / exact_match =
+    task.md の課題達成）を round 1 で充足したため、5 周回上限に達する前に
+    ループを終了した。（2026-08-06 訂正: 原文の status: success /
+    「正本 §5 の成功条件」表記は課題達成条件と §5 の L0b 成功条件
+    （周回間 Pareto 改善）の混同のため是正。§5 条件の T1 での判定 =
+    pareto_accounting のとおり対象外）。
   comparison_caveat: >-
     (2026-08-06 追記、PR #247 レビュー 2 巡目) L0S-T1 との 5 周回 vs 1 周回
     対照は、著者サンプリング（各条件 n=1・別個体 fresh エージェント）と

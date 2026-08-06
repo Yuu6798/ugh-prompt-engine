@@ -107,7 +107,56 @@ whatever *other* path still points at it — is left completely untouched.
 Normal-path output bytes are unchanged by this switch (same content, same
 final path) — the T1/T2 slow smoke tests below (`test_positive_control_
 round_trip_reproduces_pinned_report` / `..._t2_...`) are the byte-for-byte
-proof.
+proof. (This closed the hazard for every reserved-path write *this module*
+makes directly; the subprocess CLI outputs `-o`-write into other reserved
+names of their own — see "H1" below, which closes that remaining gap the
+same way.)
+
+**Subprocess-output staged atomic publish (H1)** (Codex review round 9,
+P1): the guarantee above covers only the paths this module writes to
+*directly* (its own `atomic_write_bytes` calls). The single-file CLI
+subprocess outputs this module also collects at a reserved workdir path via
+`-o` (`validation.json`, `roundtrip.json`, `adherence.json`,
+`observe_report.json`) and `svprpe package`'s `--output-dir` directory
+output were still exposed to exactly the hard-link hazard the section above
+closes for this module's own writes: at least one of those CLI
+implementations (`src/svp_rpe/cli/roundtrip_cmd.py`'s `roundtrip`/
+`score-adherence` commands) writes its `-o` target in place
+(`Path(output).write_text(...)`), so on a reused `--workdir` whose reserved
+name under that path is a *hard* link to some other pin-recorded file, that
+in-place write truncates and overwrites the other file's content too,
+through the shared inode — the same hazard class, just reached through a
+subprocess instead of this module's own `write_bytes`/`write_text` call.
+`src/`'s CLI implementations are out of scope for this fix (this module's
+own task brief), so the fix lives entirely on this module's side of the
+subprocess boundary: every one of these five outputs is redirected to a
+dedicated staging path under `<workdir>/subproc_staging/` (a fresh,
+reserved sub-tree this module clears and recreates at the top of every
+`run_round()` call, so a stale staged file from a prior invocation of a
+reused `--workdir` can never leak into this run's publish step) instead of
+the real reserved path, and only *after* the subprocess exits does this
+module read the staged bytes back and publish them to the real reserved
+path via `atomic_write_bytes` (`_run_cli_staged`, `_run_validate_cli`,
+`_publish_staged_directory`) — the same `os.replace` convention as every
+other reserved-path write in this module, applied one extra hop downstream
+of the subprocess. `svprpe package --output-dir` publishes into
+`<workdir>/subproc_staging/package/`, and every file found there afterward
+(`performance_package.json`/`compilation_report.json` today, and any other
+file a future package output might add) is published individually the same
+way into `paths["package_dir"]`. The staging paths themselves are ordinary
+entries in `_reserved_workdir_paths`, so the existing output-collision
+guard and reserved-path symlink-escape guard protect them the same way they
+protect every other reserved workdir artifact. Hash computation and every
+downstream read (`_key_axis`/`_brightness_axis`/`_structure_axis`,
+`hashes.json`) still happen against the real reserved paths exactly as
+before — only the write path changed, not what gets hashed or read back —
+so normal-path final artifacts are unchanged byte-for-byte by this change
+(the T1/T2 slow smoke tests below prove it). With this in place, every
+subprocess output this module collects goes through the same
+staged-then-published pattern this module's own direct writes already
+use — 平文 write 経路の全数終端 (the plain-write path is now closed for
+every reserved-path writer in this pipeline, not just this module's own
+direct writes).
 
 **Preflight judge-input drift check** (`_reject_judge_input_drift`, F5,
 Codex review round 6, P1): the guards above all police *where* this run
@@ -177,6 +226,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -410,6 +460,15 @@ def _reserved_workdir_paths(workdir: Path) -> dict[str, Path]:
     identity_dir = workdir / "identity"
     package_dir = workdir / "package"
     judge_inputs_dir = workdir / "judge_inputs"
+    # H1 (Codex review round 9, P1): staging paths every subprocess CLI
+    # output is redirected to (via `-o`/`--output-dir`) before this module
+    # republishes it to the real reserved path below via
+    # `atomic_write_bytes` — see module docstring's "H1" section. Ordinary
+    # entries in this mapping, so the output-collision guard and the
+    # reserved-path symlink-escape guard protect them automatically, the
+    # same way they already protect the G2 `judge_inputs/*` copies.
+    subproc_staging_dir = workdir / "subproc_staging"
+    subproc_staging_package_dir = subproc_staging_dir / "package"
     return {
         "score_copy": workdir / "score.yaml",
         "validation": workdir / "validation.json",
@@ -437,6 +496,15 @@ def _reserved_workdir_paths(workdir: Path) -> dict[str, Path]:
         "judge_contract": judge_inputs_dir / "authoring_contract_l0.yaml",
         "judge_arrangement": judge_inputs_dir / "arrangement.yaml",
         "judge_capability_profile": judge_inputs_dir / "capability_profile.yaml",
+        # H1 staging paths (see comment above) — one per subprocess `-o`
+        # single-file output, plus a directory for `svprpe package
+        # --output-dir`'s multi-file output.
+        "subproc_staging_dir": subproc_staging_dir,
+        "subproc_staging_validation": subproc_staging_dir / "validation.json",
+        "subproc_staging_roundtrip": subproc_staging_dir / "roundtrip.json",
+        "subproc_staging_adherence": subproc_staging_dir / "adherence.json",
+        "subproc_staging_observe_report": subproc_staging_dir / "observe_report.json",
+        "subproc_staging_package_dir": subproc_staging_package_dir,
     }
 
 
@@ -565,9 +633,11 @@ def _run_cli(args: list[str]) -> None:
         )
 
 
-def _run_validate_cli(score_path: Path, output_path: Path, contract_path: Path) -> None:
+def _run_validate_cli(
+    score_path: Path, staging_path: Path, dest_path: Path, contract_path: Path
+) -> None:
     """Runs the L0a symbolic gate. Exit `0` (pass) and `1` (fail record) are
-    both normal outcomes — `svprpe validate` always writes `output_path` in
+    both normal outcomes — `svprpe validate` always writes `staging_path` in
     either case (`src/svp_rpe/cli/validate_cmd.py`'s docstring: exit codes
     `0`/`1` bracket the *result*, `2` is reserved for an operational error
     that never reaches the point of computing/writing a result at all).
@@ -575,9 +645,25 @@ def _run_validate_cli(score_path: Path, output_path: Path, contract_path: Path) 
     `contract_path` is the reserved workdir copy (`paths["judge_contract"]`)
     of `CONTRACT_PATH`'s already-verified bytes (G2 snapshot-feed), not
     `CONTRACT_PATH` itself — `run_round()` passes the copy so this
-    subprocess reads exactly the bytes preflight verified."""
+    subprocess reads exactly the bytes preflight verified.
+
+    `-o` is pointed at `staging_path` (a path under
+    `<workdir>/subproc_staging/`), not `dest_path` (the real reserved
+    `validation.json`) directly — H1 (module docstring's "H1" section): once
+    the subprocess exits with a normal pass/fail exit code, the staged bytes
+    are read back and republished to `dest_path` via `atomic_write_bytes`,
+    so a reused `--workdir` whose `validation.json` slot is a hard link into
+    other pin-recorded evidence is never written to in place."""
     result = subprocess.run(
-        ["svprpe", "validate", str(score_path), "--contract", str(contract_path), "-o", str(output_path)],
+        [
+            "svprpe",
+            "validate",
+            str(score_path),
+            "--contract",
+            str(contract_path),
+            "-o",
+            str(staging_path),
+        ],
         capture_output=True,
         text=True,
         timeout=_CLI_TIMEOUT_SECONDS,
@@ -588,6 +674,37 @@ def _run_validate_cli(score_path: Path, output_path: Path, contract_path: Path) 
             f"operational error (exit {result.returncode}), not a pass/fail result\n"
             f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
         )
+    atomic_write_bytes(dest_path, staging_path.read_bytes())
+
+
+def _run_cli_staged(args: list[str], staging_path: Path, dest_path: Path) -> None:
+    """Runs `svprpe <args>` (whose trailing `-o <staging_path>` the caller
+    has already included, pointed at a path under
+    `<workdir>/subproc_staging/`) via `_run_cli`, then republishes the
+    staged bytes to `dest_path` via `atomic_write_bytes` — H1 (module
+    docstring's "H1" section): closes the same hard-link-shared-inode hazard
+    for a subprocess's own `-o` write that `atomic_write_bytes` already
+    closes for this module's direct reserved-path writes (Codex review round
+    6, P1)."""
+    _run_cli(args)
+    atomic_write_bytes(dest_path, staging_path.read_bytes())
+
+
+def _publish_staged_directory(staging_dir: Path, dest_dir: Path) -> None:
+    """Publishes every file `svprpe package --output-dir staging_dir`
+    produced into `dest_dir`, individually via `atomic_write_bytes` — the
+    directory-output counterpart of `_run_cli_staged` above (H1, module
+    docstring's "H1" section). Walks `staging_dir` recursively (not just the
+    two files currently known — `performance_package.json`/
+    `compilation_report.json`) so any file a future `package` output adds is
+    published too, preserving its path relative to `staging_dir` under
+    `dest_dir`. `atomic_write_bytes` creates any needed parent directories
+    itself, so nested output is handled without extra bookkeeping here."""
+    for path in sorted(staging_dir.rglob("*")):
+        if path.is_dir():
+            continue
+        relative = path.relative_to(staging_dir)
+        atomic_write_bytes(dest_dir / relative, path.read_bytes())
 
 
 def _prepare_scores(
@@ -989,6 +1106,25 @@ def run_round(
 
     workdir.mkdir(parents=True, exist_ok=True)
 
+    # H1 (Codex review round 9, P1): fresh staging scratch space for every
+    # subprocess CLI output this run collects via `-o`/`--output-dir`
+    # (module docstring's "H1" section) — cleared and recreated at the top
+    # of *every* run, not just a workdir's first, so a reused `--workdir`
+    # never lets a stale staged file from a previous invocation leak into
+    # this run's publish step. Safe to `rmtree` unconditionally: the
+    # symlink-escape guard above already confirmed neither
+    # `subproc_staging_dir` nor `subproc_staging_package_dir` is itself a
+    # symlink and both resolve inside `workdir` before this point (and
+    # `shutil.rmtree` never follows a symlink it finds *inside* the tree
+    # either — it unlinks the link entry itself rather than recursing
+    # through it, so a symlink planted deeper inside by a prior run cannot
+    # make this delete anything outside the staging tree).
+    staging_dir = paths["subproc_staging_dir"]
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True)
+    paths["subproc_staging_package_dir"].mkdir(parents=True)
+
     # G2 snapshot-feed: stage the verified bytes of every fixed judge-side
     # input a subprocess CLI reads as its own file argument into reserved
     # workdir copies, so those subprocesses read exactly the bytes this
@@ -1018,9 +1154,12 @@ def run_round(
     atomic_write_bytes(score_copy_path, score_bytes)
 
     # (a) Symbolic gate — validated against the just-written copy (the same
-    # bytes snapshot), not `score_path` itself.
+    # bytes snapshot), not `score_path` itself. `-o` is staged (H1) before
+    # being republished to the reserved `validation_path`.
     validation_path = paths["validation"]
-    _run_validate_cli(score_copy_path, validation_path, paths["judge_contract"])
+    _run_validate_cli(
+        score_copy_path, paths["subproc_staging_validation"], validation_path, paths["judge_contract"]
+    )
     validation_data = json.loads(validation_path.read_text(encoding="utf-8"))
     symbolic_validation = SymbolicValidationResult.model_validate(validation_data)
 
@@ -1061,13 +1200,32 @@ def run_round(
     )
     hashes["eval_score"] = eval_score_sha256
 
+    # `-o` for both of these is staged (H1) before being republished to the
+    # reserved `roundtrip_path`/`adherence_path` — `roundtrip_cmd.py` writes
+    # its `-o` target in place (`Path(output).write_text(...)`), the exact
+    # hazard H1 closes (module docstring's "H1" section).
     roundtrip_path = paths["roundtrip"]
-    _run_cli(["roundtrip", str(eval_score_path), "--format", "json", "-o", str(roundtrip_path)])
+    roundtrip_staging_path = paths["subproc_staging_roundtrip"]
+    _run_cli_staged(
+        ["roundtrip", str(eval_score_path), "--format", "json", "-o", str(roundtrip_staging_path)],
+        roundtrip_staging_path,
+        roundtrip_path,
+    )
     hashes["roundtrip"] = _sha256_file(roundtrip_path)
 
     adherence_path = paths["adherence"]
-    _run_cli(
-        ["score-adherence", str(eval_score_path), "--format", "json", "-o", str(adherence_path)]
+    adherence_staging_path = paths["subproc_staging_adherence"]
+    _run_cli_staged(
+        [
+            "score-adherence",
+            str(eval_score_path),
+            "--format",
+            "json",
+            "-o",
+            str(adherence_staging_path),
+        ],
+        adherence_staging_path,
+        adherence_path,
     )
     hashes["adherence"] = _sha256_file(adherence_path)
 
@@ -1094,8 +1252,12 @@ def run_round(
     )
     hashes["manifest"] = manifest_sha256
 
+    # `--output-dir` is staged (H1) into `subproc_staging_package_dir`, then
+    # every file it produced is individually republished into the reserved
+    # `package_dir` (module docstring's "H1" section).
     package_dir = paths["package_dir"]
     package_dir.mkdir(exist_ok=True)
+    package_staging_dir = paths["subproc_staging_package_dir"]
     _run_cli(
         [
             "package",
@@ -1108,14 +1270,18 @@ def run_round(
             "--capability-profile",
             str(paths["judge_capability_profile"]),
             "--output-dir",
-            str(package_dir),
+            str(package_staging_dir),
         ]
     )
+    _publish_staged_directory(package_staging_dir, package_dir)
     package_json_path = paths["package_json"]
     hashes["package"] = _sha256_file(package_json_path)
 
+    # `-o` is staged (H1) before being republished to the reserved
+    # `observe_report_path` (module docstring's "H1" section).
     observe_report_path = paths["observe_report"]
-    _run_cli(
+    observe_report_staging_path = paths["subproc_staging_observe_report"]
+    _run_cli_staged(
         [
             "observe",
             str(package_json_path),
@@ -1123,8 +1289,10 @@ def run_round(
             "--manifest",
             str(manifest_path),
             "-o",
-            str(observe_report_path),
-        ]
+            str(observe_report_staging_path),
+        ],
+        observe_report_staging_path,
+        observe_report_path,
     )
     hashes["observe_report"] = _sha256_file(observe_report_path)
 
