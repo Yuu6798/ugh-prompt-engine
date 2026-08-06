@@ -635,6 +635,13 @@ loop_status:
   termination_rule: >-
     正本 §5 の成功条件（全軸 verdict が preserved / exact_match）を round 1
     で充足したため、5 周回上限に達する前にループを成功終了した。
+  comparison_caveat: >-
+    (2026-08-06 追記、PR #247 レビュー 2 巡目) L0S-T1 との 5 周回 vs 1 周回
+    対照は、著者サンプリング（各条件 n=1・別個体 fresh エージェント）と
+    判定器実装の変更（L0-s 専用スクリプト → L0a 凍結部品）の 2 点で交絡
+    しており、契約 v1 単独の効果として分離測定されたものではない（帰属
+    仮説と「整合する」までが主張可能な範囲。docs/l0b_closed_loop_record.md
+    §2 の交絡開示が正）。
   pareto_accounting: >-
     改善判定の対象となる周回ペアは存在しない（第 1 周回で成功終了したため）。
     frozen/pareto.yaml の述語は事前登録どおり凍結されたが、本実験内では

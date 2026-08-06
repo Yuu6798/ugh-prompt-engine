@@ -48,6 +48,23 @@ resolved path is refused, before anything is written, if it matches
 `prev_report`/`curr_report`/`--pareto` (mirrors `run_round.py`'s
 `ProtectedPathError`/`_reject_output_collision` style — a rejected
 invocation must leave the filesystem untouched).
+
+Spec/implementation contract check (`evaluate()`, Codex review round 2, P2):
+`evaluate()` previously only checked the *axis key set* of `pareto_spec`
+against `_AXES` — it never checked that the spec's declared `schema_version`,
+per-axis `distance`/`order`, or the presence of the three prose rule fields
+actually match what this module hardcodes (`_binary_from_verdict`/
+`_levenshtein`, "lower distance wins", `improvement_rule`/`tie_rule`/
+`band_rule`). `_validate_pareto_spec_contract()` now enforces that
+agreement up front, before any distance is computed, so a spec that has
+drifted from the implementation fails fast with a clear `ValueError`
+instead of `evaluate()` silently computing a result under a stale label.
+Boundary (deliberately not enforced): `improvement_rule`/`tie_rule`/
+`band_rule` are checked only for *presence* (non-empty string) — their
+prose semantics are not parsed or reinterpreted here; `evaluate()`'s own
+control flow below remains the sole source of truth for what those rules
+actually mean. `main()` catches this `ValueError` the same way it already
+catches `_load_report()`'s validation errors (stderr + exit 1).
 """
 from __future__ import annotations
 
@@ -110,19 +127,87 @@ def _axis_band(axis: Optional[dict[str, Any]]) -> Optional[str]:
     return axis.get("band")
 
 
+_REQUIRED_SCHEMA_VERSION = "l0b-pareto/1.0"
+_BINARY_AXES = ("key", "brightness")
+_STRUCTURE_DISTANCE = "levenshtein_casefold"
+_BINARY_DISTANCE = "binary_from_verdict"
+_REQUIRED_ORDER = "lower_is_better"
+_PROSE_RULE_KEYS = ("improvement_rule", "tie_rule", "band_rule")
+
+
+def _require_nonempty_str(spec: dict[str, Any], key: str) -> None:
+    value = spec.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"frozen/pareto.yaml's {key!r} must be a non-empty string, got {value!r} — "
+            "pareto_eval.py enforces only that a prose rule is present here; the "
+            "meaning of what it says is the implementation's responsibility, not "
+            "parsed or reinterpreted by this check."
+        )
+
+
+def _validate_axis_contract(spec_axes: dict[str, Any], axis_name: str, *, distance: str) -> None:
+    axis_spec = spec_axes.get(axis_name)
+    if not isinstance(axis_spec, dict):
+        raise ValueError(
+            f"frozen/pareto.yaml's axes[{axis_name!r}] must be a mapping, got {axis_spec!r}"
+        )
+    if axis_spec.get("distance") != distance:
+        raise ValueError(
+            f"frozen/pareto.yaml's axes[{axis_name!r}].distance must be {distance!r}, got "
+            f"{axis_spec.get('distance')!r} — pareto_eval.py's distance implementation and "
+            "the frozen spec have drifted apart"
+        )
+    if axis_spec.get("order") != _REQUIRED_ORDER:
+        raise ValueError(
+            f"frozen/pareto.yaml's axes[{axis_name!r}].order must be {_REQUIRED_ORDER!r}, "
+            f"got {axis_spec.get('order')!r} — pareto_eval.py's distance comparisons "
+            "(lower distance always wins, hardcoded) and the frozen spec have drifted apart"
+        )
+
+
+def _validate_pareto_spec_contract(pareto_spec: dict[str, Any]) -> dict[str, Any]:
+    """Enforces that `pareto_spec` (parsed `frozen/pareto.yaml`) matches what
+    this module actually implements — see module docstring's "Spec/
+    implementation contract check" section for what is and is not checked.
+    Returns the validated `axes` mapping (a plain `dict`) for the caller's
+    convenience; raises `ValueError` on any mismatch."""
+    schema_version = pareto_spec.get("schema_version")
+    if schema_version != _REQUIRED_SCHEMA_VERSION:
+        raise ValueError(
+            f"frozen/pareto.yaml's schema_version must be {_REQUIRED_SCHEMA_VERSION!r}, "
+            f"got {schema_version!r}"
+        )
+
+    spec_axes = pareto_spec.get("axes")
+    if not isinstance(spec_axes, dict) or set(spec_axes) != set(_AXES):
+        got = sorted(spec_axes) if isinstance(spec_axes, dict) else spec_axes
+        raise ValueError(
+            f"frozen/pareto.yaml declares axes {got!r}, expected "
+            f"{sorted(_AXES)!r} — pareto_eval.py and the frozen spec have drifted apart"
+        )
+
+    for axis_name in _BINARY_AXES:
+        _validate_axis_contract(spec_axes, axis_name, distance=_BINARY_DISTANCE)
+    _validate_axis_contract(spec_axes, "structure", distance=_STRUCTURE_DISTANCE)
+
+    for rule_key in _PROSE_RULE_KEYS:
+        _require_nonempty_str(pareto_spec, rule_key)
+
+    return spec_axes
+
+
 def evaluate(
     prev_report: dict[str, Any], curr_report: dict[str, Any], pareto_spec: dict[str, Any]
 ) -> dict[str, Any]:
     """Pure function: `prev_report`/`curr_report` are parsed
     `AuthoringDiffReport` JSON (dicts), `pareto_spec` is parsed
-    `frozen/pareto.yaml`. Returns a deterministic result dict — see module
-    docstring for the band-exclusion/improvement semantics."""
-    spec_axes = set(pareto_spec["axes"])
-    if spec_axes != set(_AXES):
-        raise ValueError(
-            f"frozen/pareto.yaml declares axes {sorted(spec_axes)!r}, expected "
-            f"{sorted(_AXES)!r} — pareto_eval.py and the frozen spec have drifted apart"
-        )
+    `frozen/pareto.yaml`. Validates `pareto_spec` against the implementation
+    contract this module hardcodes (`_validate_pareto_spec_contract` — axis
+    key set, per-axis distance/order, prose rule presence) before computing
+    anything. Returns a deterministic result dict — see module docstring
+    for the band-exclusion/improvement semantics."""
+    _validate_pareto_spec_contract(pareto_spec)
 
     prev_axes = prev_report.get("axes") or {}
     curr_axes = curr_report.get("axes") or {}
@@ -237,13 +322,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
         prev_report = _load_report(args.prev_report)
         curr_report = _load_report(args.curr_report)
+        pareto_spec = yaml.safe_load(args.pareto.read_text(encoding="utf-8"))
+        # `evaluate()`'s own `_validate_pareto_spec_contract` call raises
+        # `ValueError` on a spec/implementation drift (C2) — caught here the
+        # same way `_load_report()`'s validation errors already are, before
+        # anything is written.
+        result = evaluate(prev_report, curr_report, pareto_spec)
     except (ProtectedPathError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    pareto_spec = yaml.safe_load(args.pareto.read_text(encoding="utf-8"))
-
-    result = evaluate(prev_report, curr_report, pareto_spec)
     content = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
         args.output.write_bytes(content.encode("utf-8"))

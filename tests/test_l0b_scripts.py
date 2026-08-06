@@ -204,6 +204,76 @@ def test_evaluate_rejects_pareto_spec_with_wrong_axis_set():
         pareto_eval.evaluate(_report(), _report(), bad_spec)
 
 
+# --- C2 (PR #247 Codex review round 2, P2): pareto_eval.py spec/implementation contract ---
+
+
+def test_validate_pareto_spec_contract_accepts_canonical_spec():
+    # Must not raise, and must return the axes mapping.
+    axes = pareto_eval._validate_pareto_spec_contract(PARETO_SPEC)
+    assert set(axes) == {"key", "brightness", "structure"}
+
+
+def test_validate_pareto_spec_contract_rejects_wrong_schema_version():
+    bad_spec = {**PARETO_SPEC, "schema_version": "l0b-pareto/2.0"}
+    with pytest.raises(ValueError, match="schema_version"):
+        pareto_eval._validate_pareto_spec_contract(bad_spec)
+
+
+def test_validate_pareto_spec_contract_rejects_higher_is_better_order():
+    bad_axes = {
+        **PARETO_SPEC["axes"],
+        "key": {**PARETO_SPEC["axes"]["key"], "order": "higher_is_better"},
+    }
+    bad_spec = {**PARETO_SPEC, "axes": bad_axes}
+    with pytest.raises(ValueError, match="order"):
+        pareto_eval._validate_pareto_spec_contract(bad_spec)
+
+
+def test_validate_pareto_spec_contract_rejects_changed_structure_distance():
+    bad_axes = {
+        **PARETO_SPEC["axes"],
+        "structure": {**PARETO_SPEC["axes"]["structure"], "distance": "hamming"},
+    }
+    bad_spec = {**PARETO_SPEC, "axes": bad_axes}
+    with pytest.raises(ValueError, match="distance"):
+        pareto_eval._validate_pareto_spec_contract(bad_spec)
+
+
+def test_validate_pareto_spec_contract_rejects_missing_prose_rule():
+    bad_spec = {**PARETO_SPEC, "tie_rule": ""}
+    with pytest.raises(ValueError, match="tie_rule"):
+        pareto_eval._validate_pareto_spec_contract(bad_spec)
+
+
+def test_evaluate_rejects_via_main_with_nonzero_exit(tmp_path: Path):
+    """`main()` catches the spec/implementation contract `ValueError` from
+    `evaluate()` the same way it already catches `_load_report()`'s
+    validation errors: stderr + exit 1, nothing written to `-o`."""
+    good = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    prev_path = tmp_path / "prev.json"
+    curr_path = tmp_path / "curr.json"
+    bad_pareto_path = tmp_path / "bad_pareto.yaml"
+    out_path = tmp_path / "result.json"
+    prev_path.write_text(json.dumps(good))
+    curr_path.write_text(json.dumps(good))
+    bad_spec = {**PARETO_SPEC, "improvement_rule": "   "}
+    bad_pareto_path.write_text(yaml.safe_dump(bad_spec))
+
+    exit_code = pareto_eval.main(
+        [str(prev_path), str(curr_path), "--pareto", str(bad_pareto_path), "-o", str(out_path)]
+    )
+    assert exit_code != 0
+    assert not out_path.exists()
+
+
 def test_levenshtein_matches_expected_distances():
     assert pareto_eval._levenshtein(["a", "b", "c"], ["a", "b", "c"]) == 0
     assert pareto_eval._levenshtein(["a", "b", "c"], ["a", "x", "c"]) == 1
@@ -693,28 +763,123 @@ def test_write_identity_manifest_uses_given_section_map_bytes(tmp_path: Path):
     assert paths["identity_section_map"].read_bytes() == section_map_bytes
 
 
-# --- B4 (Codex review PR #247 #5): run_round.py publish order (hashes before report) ---
+# --- C1 (PR #247 Codex review round 2, P2): run_round.py report/hashes bundle rollback ---
+#
+# Supersedes the old "hashes written before report" ordering-only test: that
+# ordering alone left a provenance-mismatch window when `-o` names an
+# existing path *outside* the protected loop tree (the output-collision
+# guard only refuses an existing path *inside* the loop tree) — a failure
+# partway through the report write could leave an *old* report at `-o`
+# while `hashes.json` already names the *new* report's hash. C1 bundles
+# both writes with snapshot + rollback so a failed publish attempt leaves
+# no trace at all, restoring pre-existing bytes (or absence) on both paths.
 
 
-def test_run_round_writes_hashes_before_report_on_symbolic_fail(tmp_path: Path, monkeypatch):
-    """On the symbolic-fail early-return path, `hashes.json` must be
-    written before the report (`-o`) is published. Verified by making the
-    report's atomic write raise and checking `hashes.json` still exists
-    afterward (proves it was written first, not after) while the report
-    (`-o`) was never created."""
-
-    def _boom(path: Path, data: bytes) -> None:
-        raise RuntimeError("boom: simulated failure writing the report")
-
-    monkeypatch.setattr(run_round, "atomic_write_bytes", _boom)
-
+def test_run_round_report_bundle_rolls_back_pre_existing_bytes_on_symbolic_fail(
+    tmp_path: Path, monkeypatch
+):
+    """On the symbolic-fail early-return path, injecting a failure into the
+    report's (`-o`) atomic write must roll the *whole bundle* back: (a)
+    `-o`'s pre-existing bytes are restored (not left as whatever the failed
+    attempt produced), and (b) `hashes.json`'s pre-existing bytes are
+    restored too — even though the hashes write itself succeeded before the
+    report write failed."""
     bad_score_path = tmp_path / "bad_score.yaml"
     bad_score_path.write_text("not: a valid composition score\n", encoding="utf-8")
     workdir = tmp_path / "wd"
+    workdir.mkdir()
     output_path = tmp_path / "report.json"
+
+    # Pre-existing bytes at both bundle targets (simulating this round's
+    # workdir already carrying a prior report/hashes pair) must survive a
+    # failed re-publish attempt byte-for-byte.
+    old_hashes_bytes = b'{"round": "old-hashes"}'
+    old_report_bytes = b'{"round": "old-report"}'
+    (workdir / "hashes.json").write_bytes(old_hashes_bytes)
+    output_path.write_bytes(old_report_bytes)
+
+    real_atomic_write_bytes = run_round.atomic_write_bytes
+    # Fails only the *first* write attempt to `output_path` (the original
+    # publish of the new report) — the rollback's subsequent write of
+    # `old_report_bytes` back to `output_path` must succeed, so this proves
+    # a genuine restore, not merely "the file was never touched".
+    output_writes = {"count": 0}
+
+    def _fail_first_report_write(path: Path, data: bytes) -> None:
+        if path == output_path:
+            output_writes["count"] += 1
+            if output_writes["count"] == 1:
+                raise RuntimeError("boom: simulated failure writing the report")
+        real_atomic_write_bytes(path, data)
+
+    monkeypatch.setattr(run_round, "atomic_write_bytes", _fail_first_report_write)
 
     with pytest.raises(RuntimeError, match="boom"):
         run_round.run_round(bad_score_path, workdir, 0, output_path)
 
-    assert (workdir / "hashes.json").exists()
+    assert (workdir / "hashes.json").read_bytes() == old_hashes_bytes
+    assert output_path.read_bytes() == old_report_bytes
+    assert output_writes["count"] == 2  # 1 failed original write + 1 successful rollback restore
+
+
+def test_publish_report_bundle_removes_paths_that_did_not_exist_before(tmp_path: Path):
+    """Unit-level counterpart to the fail-gate test above, exercising
+    `_publish_report_bundle` directly: when neither bundle path existed
+    before the call, a failed report write must roll back to "does not
+    exist" (delete), not leave a half-published hashes.json behind."""
+    hashes_path = tmp_path / "hashes.json"
+    output_path = tmp_path / "report.json"
+    real_atomic_write_bytes = run_round.atomic_write_bytes
+
+    def _fail_on_report(path: Path, data: bytes) -> None:
+        if path == output_path:
+            raise RuntimeError("boom: simulated failure writing the report")
+        real_atomic_write_bytes(path, data)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(run_round, "atomic_write_bytes", _fail_on_report)
+        with pytest.raises(RuntimeError, match="boom"):
+            run_round._publish_report_bundle(
+                output_path=output_path,
+                report_bytes=b'{"new": "report"}',
+                hashes_path=hashes_path,
+                hashes_bytes=b'{"new": "hashes"}',
+            )
+
+    assert not hashes_path.exists()
     assert not output_path.exists()
+
+
+def test_publish_report_bundle_rollback_failure_chains_original_exception(tmp_path: Path):
+    """If the rollback itself also fails, the original publish exception
+    must not be silently swallowed: `_publish_report_bundle` raises
+    `ReportBundleRollbackError` chained (`__cause__`) from the rollback
+    failure, and the original exception's message survives in the new
+    exception's own message."""
+    hashes_path = tmp_path / "hashes.json"
+    output_path = tmp_path / "report.json"
+    hashes_path.write_bytes(b"old-hashes")
+    output_path.write_bytes(b"old-report")
+
+    real_atomic_write_bytes = run_round.atomic_write_bytes
+
+    def _flaky(path: Path, data: bytes) -> None:
+        if path == output_path and data == b'{"new": "report"}':
+            raise RuntimeError("boom: simulated failure writing the report")
+        if path == hashes_path and data == b"old-hashes":
+            # Simulated failure during rollback's restore of hashes_path.
+            raise OSError("rollback-boom: simulated failure restoring hashes.json")
+        real_atomic_write_bytes(path, data)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(run_round, "atomic_write_bytes", _flaky)
+        with pytest.raises(run_round.ReportBundleRollbackError) as exc_info:
+            run_round._publish_report_bundle(
+                output_path=output_path,
+                report_bytes=b'{"new": "report"}',
+                hashes_path=hashes_path,
+                hashes_bytes=b'{"new": "hashes"}',
+            )
+
+    assert "boom: simulated failure writing the report" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, OSError)

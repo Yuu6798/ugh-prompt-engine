@@ -479,6 +479,70 @@ def _build_failed_gate_report(
     )
 
 
+class ReportBundleRollbackError(RuntimeError):
+    """The report/hashes bundle publish (`_publish_report_bundle`) failed
+    *and* the rollback that followed it also failed — the original publish
+    exception is chained via `__cause__` so it is never silently lost, but
+    the filesystem state for `hashes.json`/`-o` may now be inconsistent
+    (neither the old nor the new bundle)."""
+
+
+def _publish_report_bundle(
+    *, output_path: Path, report_bytes: bytes, hashes_path: Path, hashes_bytes: bytes
+) -> None:
+    """Publishes `hashes.json` and the report (`-o`) as a single bundle with
+    snapshot + rollback, closing the provenance-mismatch window the prior
+    "hashes first, report atomic second" ordering left open: that ordering
+    only protected against a crash leaving *no* report (a legibly
+    incomplete run) — but when `-o` names an existing path *outside* the
+    protected loop tree (the output-collision guard only refuses an
+    existing path *inside* `_LOOP_DIR`), a failure partway through the
+    report write could leave the old report bytes at `-o` untouched while
+    `hashes.json` already names the *new* report's hash — an old report +
+    hashes pointing at a different (new) report, an inconsistent pair.
+
+    Steps: (1) snapshot the existing bytes of both `hashes_path` and
+    `output_path` before writing anything (`None` if a path does not exist
+    yet — "does not exist" is itself part of the snapshot); (2) write
+    `hashes_path` then `output_path`, in that order, each via
+    `atomic_write_bytes` (same order as before — a crash *between* the two
+    writes still leaves "hashes present, report absent", the legible
+    incomplete-run signal, not the reverse); (3) if either write raises,
+    roll every path in the bundle back to its pre-call snapshot (restore
+    the snapshotted bytes, or delete the path if it did not exist before)
+    and re-raise the *original* exception unchanged — the bundle leaves no
+    trace of the failed attempt. A failure during rollback itself does not
+    swallow the original exception: it is re-raised wrapped in
+    `ReportBundleRollbackError`, chained via `raise ... from rollback_exc`
+    so both the publish failure and the rollback failure are visible.
+    """
+    snapshot_paths = (hashes_path, output_path)
+    snapshots: dict[Path, Optional[bytes]] = {
+        path: (path.read_bytes() if path.exists() else None) for path in snapshot_paths
+    }
+
+    def _rollback() -> None:
+        for path, previous in snapshots.items():
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_write_bytes(path, previous)
+
+    try:
+        atomic_write_bytes(hashes_path, hashes_bytes)
+        atomic_write_bytes(output_path, report_bytes)
+    except BaseException as exc:
+        try:
+            _rollback()
+        except BaseException as rollback_exc:
+            raise ReportBundleRollbackError(
+                f"report bundle publish to {output_path} failed ({exc!r}) and the "
+                f"rollback that followed also failed ({rollback_exc!r}) — filesystem "
+                f"state for {hashes_path} and {output_path} may be inconsistent"
+            ) from rollback_exc
+        raise
+
+
 def run_round(
     score_path: Path,
     workdir: Path,
@@ -537,16 +601,19 @@ def run_round(
         report = _build_failed_gate_report(round_number, symbolic_validation)
         report_bytes = dump_json_bytes(report)
         hashes["report"] = _sha256_bytes(report_bytes)
-        # Publish order: hashes.json first, then the report (`-o`) last via
-        # an atomic write — a crash between the two writes then leaves at
-        # worst "hashes present, report absent" (a legibly incomplete run),
-        # never "report present, hashes absent" (which would silently block
-        # a re-run into thinking this round was already fully measured).
-        paths["hashes"].write_text(
-            json.dumps(hashes, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        # Bundle publish (hashes.json + report, in that order, snapshot +
+        # rollback on failure) — see `_publish_report_bundle`'s docstring
+        # for the provenance-mismatch window this closes over the prior
+        # "hashes first, report atomic second" ordering alone.
+        hashes_bytes = (
+            json.dumps(hashes, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        _publish_report_bundle(
+            output_path=output_path,
+            report_bytes=report_bytes,
+            hashes_path=paths["hashes"],
+            hashes_bytes=hashes_bytes,
         )
-        atomic_write_bytes(output_path, report_bytes)
         return {"report": report, "hashes": hashes}
 
     # Defensive re-check: the gate above already ran canonical validation
@@ -647,16 +714,16 @@ def run_round(
     report_bytes = dump_json_bytes(report)
     hashes["report"] = _sha256_bytes(report_bytes)
 
-    # Publish order (same rationale as the failed-gate branch above):
-    # hashes.json first, the report (`-o`) last via an atomic write, so a
-    # failure between the two writes never leaves "report present, hashes
-    # absent" — a state that would block a re-run into believing this round
-    # was already fully measured.
-    paths["hashes"].write_text(
-        json.dumps(hashes, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    # Bundle publish (same helper/rationale as the failed-gate branch above).
+    hashes_bytes = (
+        json.dumps(hashes, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    _publish_report_bundle(
+        output_path=output_path,
+        report_bytes=report_bytes,
+        hashes_path=paths["hashes"],
+        hashes_bytes=hashes_bytes,
     )
-    atomic_write_bytes(output_path, report_bytes)
 
     return {"report": report, "hashes": hashes}
 
