@@ -23,16 +23,20 @@ Manifest schema (`l0b-payload-manifest/0.1`):
     round_label: <slug, 同上>
     parts:
       - role: contract | task | own_score | own_intent | diff_report | validation_errors
-        path: <manifest ファイルの親ディレクトリ基準の相対パス。`\n`/`\r` 禁止>
+        path: <manifest ファイルの親ディレクトリ基準の相対パス。あらゆる
+          行境界文字禁止（判定は str.splitlines と同一集合）>
         sha256: <64 桁 hex — 事前 pin 必須>
 
 `path` は `_PART_HEADER_TEMPLATE`（ヘッダ 1 行）へ逐語転写されるため、
-`\n`/`\r` を含む path は偽の `=== PART`/`=== END` 行を含む任意行をペイロード
-文書へ注入できてしまう（content 側の区切り衝突チェックは content のみを
-検査し path は検査しないため迂回経路になる）——`_validate_part_raw` が
-`PayloadManifestError` で拒否する。`experiment_id`/`round_label` は既に
-`_SLUG_PATTERN` fullmatch（改行を含み得ない）で安全なため同種チェックは
-不要。
+行境界文字（`\n`/`\r` に限らず、Python の `str.splitlines` が行境界と認識
+する文字集合全体——`\v`/`\f`/`\x1c`-`\x1e`/`\x85`（NEL）/U+2028（LS）/
+U+2029（PS）を含む）を含む path は偽の `=== PART`/`=== END` 行を含む任意
+行をペイロード文書へ注入できてしまう（content 側の区切り衝突チェックは
+content のみを検査し path は検査しないため迂回経路になる）——
+`_validate_part_raw` が `PayloadManifestError` で拒否する（判定は個別文字
+の手書き列挙ではなく `str.splitlines` への委譲——Python の行境界集合との
+ドリフトを防ぐ）。`experiment_id`/`round_label` は既に `_SLUG_PATTERN`
+fullmatch（行境界文字を含み得ない）で安全なため同種チェックは不要。
 
 多重度規則（`_validate_multiplicity`）: 各 role は高々 1 回。`contract`/
 `task` は必須。`own_score`/`own_intent` は同時に存在するか同時に不在。
@@ -238,18 +242,28 @@ def _validate_part_raw(index: int, raw: Any) -> dict[str, str]:
             f"manifest.parts[{index}].path must be a non-empty string, got {path!r}"
         )
     # `path` is transcribed verbatim into `_PART_HEADER_TEMPLATE` (a single
-    # header line). A `\n`/`\r` in `path` would let a declared path inject
-    # arbitrary extra lines into the payload document — including forged
-    # `=== PART`/`=== END` delimiter lines — bypassing the content-side
-    # delimiter-collision check in `_process_part` (which only inspects
-    # `content`, not `path`). Reject at validation time, before any output is
-    # emitted (`experiment_id`/`round_label` need no equivalent check: both
-    # are already constrained to `_SLUG_PATTERN`, which cannot match a string
-    # containing `\n`/`\r`).
-    if "\n" in path or "\r" in path:
+    # header line). Any line-boundary character in `path` would let a
+    # declared path inject arbitrary extra lines into the payload document —
+    # including forged `=== PART`/`=== END` delimiter lines — bypassing the
+    # content-side delimiter-collision check in `_process_part` (which only
+    # inspects `content`, not `path`). Reject at validation time, before any
+    # output is emitted (`experiment_id`/`round_label` need no equivalent
+    # check: both are already constrained to `_SLUG_PATTERN`, which cannot
+    # match a string containing any line-boundary character).
+    #
+    # `path` is single-line iff it contains no line-boundary character — we
+    # delegate that judgement to `str.splitlines` itself rather than
+    # hand-maintaining an enumeration (`\n`/`\r`/`\v`/`\f`/`\x1c`-`\x1e`/
+    # `\x85`/U+2028/U+2029), which can drift from whatever line-boundary
+    # set Python actually recognizes. The sentinel characters front and back
+    # close the edge where `splitlines` would otherwise drop a leading/
+    # trailing empty element for a boundary at the very start/end of `path`.
+    if len(f"x{path}x".splitlines()) != 1:
         raise PayloadManifestError(
-            f"manifest.parts[{index}].path must not contain newline characters "
-            f"(would inject extra lines into the payload header): {path!r}"
+            f"manifest.parts[{index}].path must not contain any line-boundary "
+            "character (e.g. \\n, \\r, U+2028 LINE SEPARATOR — same set as "
+            "str.splitlines) — would inject extra lines into the payload "
+            f"header: {path!r}"
         )
     sha256 = raw["sha256"]
     if not isinstance(sha256, str) or _SHA256_PATTERN.fullmatch(sha256) is None:

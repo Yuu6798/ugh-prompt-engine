@@ -2811,16 +2811,31 @@ def test_compose_payload_rejects_delimiter_collision_line(tmp_path: Path):
         compose_payload.compose_payload(manifest_path, tmp_path / "out")
 
 
-# --- Codex review (PR #249) 第 3 巡, P2: 宣言 path への改行注入拒否 --------
+# --- Codex review (PR #249) 第 3/4 巡, P2: 宣言 path への行注入拒否 --------
 
 
-@pytest.mark.parametrize("bad_char", ["\n", "\r"])
-def test_compose_payload_rejects_newline_in_declared_path(tmp_path: Path, bad_char: str):
+@pytest.mark.parametrize(
+    "bad_char",
+    [
+        "\n",  # LF
+        "\r",  # CR
+        "\v",  # VT (U+000B)
+        "\f",  # FF (U+000C)
+        "\x1c",  # FS
+        "\x1d",  # GS
+        "\x1e",  # RS
+        "\x85",  # NEL
+        "\u2028",  # LINE SEPARATOR
+        "\u2029",  # PARAGRAPH SEPARATOR
+    ],
+)
+def test_compose_payload_rejects_line_boundary_char_in_declared_path(tmp_path: Path, bad_char: str):
     """`path` は `_PART_HEADER_TEMPLATE`（ヘッダ 1 行）へ逐語転写されるため、
-    `\\n`/`\\r` を含む path は偽ヘッダ/フッタ行をペイロード文書へ注入できて
-    しまう（content 側の区切り衝突チェックは content のみを検査し path は
-    検査しないため迂回経路になる）。`_validate_part_raw` が拒否し、出力は
-    一切生成されないことを確認する。"""
+    `str.splitlines` が行境界と認識するあらゆる文字（`\\n`/`\\r` に限らず
+    `\\v`/`\\f`/`\\x1c`-`\\x1e`/NEL/U+2028/U+2029 を含む）を含む path は偽
+    ヘッダ/フッタ行をペイロード文書へ注入できてしまう（content 側の区切り
+    衝突チェックは content のみを検査し path は検査しないため迂回経路になる）。
+    `_validate_part_raw` が拒否し、出力は一切生成されないことを確認する。"""
 
     manifest_dir = tmp_path / "manifest_dir"
     manifest_dir.mkdir()
@@ -2834,7 +2849,7 @@ def test_compose_payload_rejects_newline_in_declared_path(tmp_path: Path, bad_ch
     manifest_path = _write_manifest(manifest_dir, manifest)
     out_dir = tmp_path / "out"
 
-    with pytest.raises(compose_payload.PayloadManifestError, match="newline"):
+    with pytest.raises(compose_payload.PayloadManifestError, match="line-boundary"):
         compose_payload.compose_payload(manifest_path, out_dir)
 
     assert not out_dir.exists()
@@ -2842,8 +2857,8 @@ def test_compose_payload_rejects_newline_in_declared_path(tmp_path: Path, bad_ch
 
 def test_compose_payload_rejects_forged_delimiter_line_via_declared_path(tmp_path: Path):
     """区切り衝突チェック（content 側）を path 側から迂回しようとする具体例:
-    `path` 自体に偽の `=== PART ... ===` 行を仕込んでも、改行を含む path が
-    ヘッダ検証段階で拒否されるため到達しない。"""
+    `path` 自体に偽の `=== PART ... ===` 行を仕込んでも、行境界文字を含む
+    path がヘッダ検証段階で拒否されるため到達しない。"""
 
     manifest_dir = tmp_path / "manifest_dir"
     manifest_dir.mkdir()
@@ -2858,7 +2873,7 @@ def test_compose_payload_rejects_forged_delimiter_line_via_declared_path(tmp_pat
     manifest_path = _write_manifest(manifest_dir, manifest)
     out_dir = tmp_path / "out"
 
-    with pytest.raises(compose_payload.PayloadManifestError, match="newline"):
+    with pytest.raises(compose_payload.PayloadManifestError, match="line-boundary"):
         compose_payload.compose_payload(manifest_path, out_dir)
 
     assert not out_dir.exists()
