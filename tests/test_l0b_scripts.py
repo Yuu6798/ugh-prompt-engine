@@ -958,6 +958,76 @@ def test_run_cli_and_run_validate_cli_invoke_svprpe_cmd(monkeypatch, tmp_path: P
         assert "svprpe" not in cmd
 
 
+# --- Codex review round 19, P1: import engine checkout containment (K1) ----
+
+
+def test_reject_engine_outside_checkout_accepts_current_checkout():
+    """Positive case: this test environment's `svp_rpe` is an editable
+    install of *this* checkout (`svp_rpe.__file__` resolves under
+    `<repo_root>/src/svp_rpe/...`), so the real, unpatched containment check
+    must not raise."""
+    # Must not raise.
+    run_round._reject_engine_outside_checkout()
+    # Sanity: the real environment's svp_rpe really is this checkout's own
+    # src/ tree, not some other install — otherwise this test would be
+    # vacuously passing.
+    assert Path(run_round.svp_rpe.__file__).resolve().is_relative_to(
+        run_round._SRC_ROOT.resolve()
+    )
+
+
+def test_reject_engine_outside_checkout_rejects_out_of_tree_engine_file(tmp_path: Path):
+    """Negative case: a `svp_rpe.__file__` resolving outside this checkout's
+    `src/` (e.g. a different checkout's editable install, a stale wheel, or
+    a site-packages copy) must be refused. `engine_file` is the check
+    function's own parameterization (module docstring's "K1" section) —
+    substitutes for monkeypatching the real `svp_rpe.__file__` module
+    attribute, which would leak into every other test sharing the same
+    imported module object."""
+    fake_engine_dir = tmp_path / "other_checkout" / "src" / "svp_rpe"
+    fake_engine_dir.mkdir(parents=True)
+    fake_engine_file = fake_engine_dir / "__init__.py"
+    fake_engine_file.write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        run_round.EngineCheckoutContainmentError,
+        match="imported engine is not this checkout's pinned source",
+    ):
+        run_round._reject_engine_outside_checkout(str(fake_engine_file))
+
+
+def test_reject_engine_outside_checkout_is_a_protected_path_error(tmp_path: Path):
+    """`EngineCheckoutContainmentError` must subclass `ProtectedPathError` —
+    `main()`'s existing `except ProtectedPathError` handling must catch it
+    unchanged, same as every other preflight guard's error."""
+    assert issubclass(run_round.EngineCheckoutContainmentError, run_round.ProtectedPathError)
+
+
+def test_run_round_rejects_engine_outside_checkout_before_any_write(
+    monkeypatch, tmp_path: Path
+):
+    """K1 runs first in `run_round()`'s preflight chain, before
+    `workdir.mkdir()` or any other write — monkeypatches
+    `_reject_engine_outside_checkout` to simulate an out-of-tree engine and
+    asserts the rejection happens before `--workdir` is ever created."""
+
+    def _fake_reject() -> None:
+        raise run_round.EngineCheckoutContainmentError("simulated engine containment failure")
+
+    monkeypatch.setattr(run_round, "_reject_engine_outside_checkout", _fake_reject)
+
+    workdir = tmp_path / "wd"
+    output_path = tmp_path / "report.json"
+    score_path = tmp_path / "score.yaml"
+    score_path.write_text("schema_version: composition-score/0.1\n", encoding="utf-8")
+
+    with pytest.raises(run_round.EngineCheckoutContainmentError):
+        run_round.run_round(score_path, workdir, 0, output_path)
+
+    assert not workdir.exists()
+    assert not output_path.exists()
+
+
 def test_reserved_workdir_paths_includes_subproc_staging_paths(tmp_path: Path):
     """The H1 staging paths every subprocess CLI output is redirected to
     before being republished to its real reserved path (module docstring's

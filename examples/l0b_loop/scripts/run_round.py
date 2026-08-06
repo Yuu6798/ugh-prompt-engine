@@ -263,6 +263,36 @@ helper. Output is unchanged byte-for-byte by this switch — same engine, same
 arguments, same bytes out — the T1/T2 slow smoke tests below
 (`test_positive_control_round_trip_reproduces_pinned_report` /
 `..._t2_...`) are the byte-for-byte proof.
+
+**K1 — import engine checkout containment** (`_reject_engine_outside_checkout`,
+Codex review round 19, P1): J1 above bound the *subprocess* CLI path to this
+interpreter's own engine; this guard closes the matching gap on the
+*in-process* import path. `import svp_rpe` (this module's own top-level
+import, resolved via `sys.path` at interpreter start rather than at
+subprocess-launch time) could resolve to a different checkout's editable
+install, a stale wheel, or a site-packages copy shadowing this repo's own
+package — every in-process call this script makes (`load_composition_score`,
+`extract_rpe_from_file`, `perform`, ...) would then run different engine
+bytes than the ones this checkout's evidence is pinned against, while still
+writing a `-o` report that looks like an ordinary canonical result: the
+imported engine is not this checkout's pinned source, so reports would be
+attributed to wrong engine bytes. `_reject_engine_outside_checkout` resolves
+`svp_rpe.__file__` and verifies it falls inside `_SRC_ROOT`
+(`_REPO_ROOT / "src"`, reusing this module's existing repo-root derivation);
+a mismatch raises `EngineCheckoutContainmentError` naming the actual
+resolved `svp_rpe.__file__` and the expected `src/` prefix. Runs first in
+`run_round()`, before every other preflight guard and before any write —
+a wrong-engine import would already make every subsequent guard's own
+attribution suspect, so this check gates the guard chain itself rather than
+sitting alongside it.
+
+**Boundary declaration**: containment binds the engine's *attribution* to
+"this checkout's `src/`" only. Individual source-byte identity is
+`engine_state`'s job (git attestation: `git diff --stat <base>..HEAD --
+src/` empty) — this guard deliberately does not hash-verify the engine's
+full source tree (that would duplicate git's own role). This guard's scope
+is narrower and purely structural: it blocks an import-resolution
+mix-up (wrong checkout entirely), not an edit within the right one.
 """
 from __future__ import annotations
 
@@ -280,6 +310,7 @@ from typing import Any, Optional
 
 import yaml
 
+import svp_rpe
 from svp_rpe.authoring.report import (
     AuthoringDiffReport,
     AuthoringNote,
@@ -298,6 +329,12 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 _LOOP_DIR = _SCRIPTS_DIR.parent
 _REPO_ROOT = _LOOP_DIR.parents[1]
 _FROZEN_DIR = _LOOP_DIR / "frozen"
+# K1 (Codex review round 19, P1): this checkout's own `src/` tree — the
+# containment boundary `_reject_engine_outside_checkout` binds `import
+# svp_rpe`'s resolved `svp_rpe.__file__` against. Reuses the same
+# `_REPO_ROOT` derivation every other path constant in this module already
+# relies on.
+_SRC_ROOT = _REPO_ROOT / "src"
 
 SECTION_MAP_PATH = _FROZEN_DIR / "section_map.json"
 SECTION_MAP_T2_PATH = _FROZEN_DIR / "section_map_t2.json"
@@ -478,6 +515,45 @@ class JudgeInputDriftError(ProtectedPathError):
     other write (F5, module docstring's "Preflight judge-input drift check"
     section). A `ProtectedPathError` subclass so `main()`'s existing
     `except ProtectedPathError` handling catches it unchanged."""
+
+
+class EngineCheckoutContainmentError(ProtectedPathError):
+    """`import svp_rpe` resolved to a module outside this checkout's `src/`
+    tree (K1, module docstring's "K1" section) — a different checkout's
+    editable install, a stale wheel, or a site-packages copy is shadowing
+    this repo's own `svp_rpe` package on `sys.path`. Refused before any
+    write; a `ProtectedPathError` subclass so `main()`'s existing `except
+    ProtectedPathError` handling catches it unchanged."""
+
+
+def _reject_engine_outside_checkout(engine_file: Optional[str] = None) -> None:
+    """K1 preflight guard — see module docstring's "K1 — import engine
+    checkout containment" section for the full rationale. Verifies the
+    imported `svp_rpe` package's `__file__` resolves inside `_SRC_ROOT`
+    (`_REPO_ROOT / "src"`, this checkout's own source tree). `engine_file`
+    defaults to the real `svp_rpe.__file__`; parameterized (rather than
+    reading the module attribute unconditionally) so tests can substitute an
+    out-of-tree path without needing a second real install.
+
+    Deliberately does not hash-verify the engine's source bytes — that is
+    `engine_state`'s job (git attestation), not this guard's; see the module
+    docstring's boundary declaration. This check only rejects an
+    import-resolution mix-up: `svp_rpe` resolving to the wrong checkout
+    entirely, not an edit within the right one."""
+    resolved = Path(engine_file if engine_file is not None else svp_rpe.__file__).resolve()
+    expected_root = _SRC_ROOT.resolve()
+    if not resolved.is_relative_to(expected_root):
+        raise EngineCheckoutContainmentError(
+            "imported engine is not this checkout's pinned source — reports would be "
+            f"attributed to wrong engine bytes. svp_rpe.__file__ resolved to {resolved}, "
+            f"expected to be inside {expected_root} (this checkout's src/ tree). This "
+            "means a different checkout's editable install, a stale wheel, or a "
+            "site-packages copy of svp_rpe is shadowing this repo's own package on "
+            "sys.path — refusing to run rather than silently producing a report "
+            "attributed to the wrong engine. Reinstall this checkout editable "
+            "(`pip install -e .`) or fix sys.path/PYTHONPATH so `import svp_rpe` "
+            "resolves inside this checkout's src/ tree."
+        )
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -1228,6 +1304,14 @@ def run_round(
     *,
     section_map_path: Path = SECTION_MAP_PATH,
 ) -> dict[str, Any]:
+    # K1 preflight (Codex review round 19, P1): import engine checkout
+    # containment — runs before every other guard below and before any
+    # write (module docstring's "K1" section). A wrong-engine `import
+    # svp_rpe` would already make every subsequent guard's own attribution
+    # suspect, so this gates the guard chain itself rather than sitting
+    # alongside it.
+    _reject_engine_outside_checkout()
+
     # `paths` is the single source of truth every workdir-relative read/write
     # below derives from — the same mapping the preflight guard checks `-o`
     # against, so the two cannot drift apart.
