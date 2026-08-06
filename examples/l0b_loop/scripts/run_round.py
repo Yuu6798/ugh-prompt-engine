@@ -241,6 +241,28 @@ check. Containment is intentionally *not* checked against `--workdir`
 itself — an `-o`/score living directly under `--workdir` but outside every
 reserved subtree (the ordinary `<workdir>/report.json` shape) remains
 accepted, exactly as before.
+
+**J1 — subprocess bound to this interpreter's own engine** (`_svprpe_cmd`,
+Codex review round 17, P1): every `subprocess.run` invocation in this module
+used to shell out to `["svprpe", *args]` — a bare console-script name
+resolved via `PATH` at subprocess-launch time, not necessarily the same
+`svp_rpe` install this script itself (`sys.executable`) imports in-process
+elsewhere (`load_composition_score`, `extract_rpe_from_file`, `perform`,
+...). If `PATH` resolves to a *different* environment's stale `svprpe`
+console script, that subprocess runs different engine code than the one this
+run is pinned against, while still writing a `-o` output that looks like an
+ordinary canonical report — an unpinned-engine result masquerading as a
+pinned one. `_svprpe_cmd(args)` returns `[sys.executable, "-m",
+"svp_rpe.cli", *args]` instead: `python -m svp_rpe.cli` runs this repo's
+`[project.scripts]` `svprpe = "svp_rpe.cli:app"` entry point's own `app`
+(via `src/svp_rpe/cli/__main__.py`) against exactly the interpreter running
+this script, closing the PATH-resolution gap structurally rather than
+trusting `PATH` to agree. `_run_cli`/`_run_validate_cli` (and therefore
+`_run_cli_staged`, which calls `_run_cli`) all route through this one
+helper. Output is unchanged byte-for-byte by this switch — same engine, same
+arguments, same bytes out — the T1/T2 slow smoke tests below
+(`test_positive_control_round_trip_reproduces_pinned_report` /
+`..._t2_...`) are the byte-for-byte proof.
 """
 from __future__ import annotations
 
@@ -731,9 +753,27 @@ def _reject_output_collision(
     return resolved_output
 
 
+# Codex review round 17, P1: `svprpe` (a bare console-script name resolved
+# via `PATH`) can pick up a stale script installed for a *different*
+# interpreter/environment than `sys.executable`, silently running a
+# different `svp_rpe` engine than the one this run is pinned against while
+# still producing a canonical-looking `-o` report. `_svprpe_cmd` binds every
+# subprocess CLI invocation in this module to *this* interpreter's own
+# installed package instead (`svp_rpe.cli:app`, this repo's
+# `[project.scripts]` entry point — `python -m svp_rpe.cli` runs the same
+# `app` via `src/svp_rpe/cli/__main__.py`), so the subprocess always runs the
+# exact engine this script itself imports in-process elsewhere in this
+# module, never an unpinned PATH lookup.
+_SVPRPE_MODULE = "svp_rpe.cli"
+
+
+def _svprpe_cmd(args: list[str]) -> list[str]:
+    return [sys.executable, "-m", _SVPRPE_MODULE, *args]
+
+
 def _run_cli(args: list[str]) -> None:
     result = subprocess.run(
-        ["svprpe", *args],
+        _svprpe_cmd(args),
         capture_output=True,
         text=True,
         timeout=_CLI_TIMEOUT_SECONDS,
@@ -765,17 +805,22 @@ def _run_validate_cli(
     the subprocess exits with a normal pass/fail exit code, the staged bytes
     are read back and republished to `dest_path` via `atomic_write_bytes`,
     so a reused `--workdir` whose `validation.json` slot is a hard link into
-    other pin-recorded evidence is never written to in place."""
+    other pin-recorded evidence is never written to in place.
+
+    Invoked via `_svprpe_cmd` (Codex review round 17, P1) — bound to this
+    interpreter's own `svp_rpe.cli` rather than a `PATH`-resolved `svprpe`
+    console script (see `_svprpe_cmd`'s docstring comment above)."""
     result = subprocess.run(
-        [
-            "svprpe",
-            "validate",
-            str(score_path),
-            "--contract",
-            str(contract_path),
-            "-o",
-            str(staging_path),
-        ],
+        _svprpe_cmd(
+            [
+                "validate",
+                str(score_path),
+                "--contract",
+                str(contract_path),
+                "-o",
+                str(staging_path),
+            ]
+        ),
         capture_output=True,
         text=True,
         timeout=_CLI_TIMEOUT_SECONDS,

@@ -85,6 +85,22 @@ resolved path is refused, before anything is written, if it matches
 `ProtectedPathError`/`_reject_output_collision` style — a rejected
 invocation must leave the filesystem untouched).
 
+**Protected-tree preflight for `-o`** (Codex review round 17, P1): the
+three-path check above only guards this evaluator's own inputs — it never
+considered the rest of `examples/l0b_loop/` (`_LOOP_DIR`, derived from this
+script's own location, same convention as `run_round.py`'s `_LOOP_DIR`). An
+`-o` pointed at some *other* pin-recorded evidence under that tree (e.g.
+`rounds/round1/score.yaml`, `ledger.yaml`) fell outside the original
+three-path set entirely and `atomic_write_bytes` would silently replace it.
+`_reject_output_collision` now also refuses any resolved `-o` that lands
+inside `_LOOP_DIR` and already exists — the same rule `run_round.py` applies
+to its own `-o` (`_reject_output_collision`'s "protected loop tree" check
+there). A brand-new path under the tree is unaffected: this evaluator's
+normal output flow writes fresh `pareto_vs_*.json` files under
+`rounds_t2_clean/roundN/` (and similar `rounds*/roundN/` locations) that do
+not exist yet at write time, so that flow keeps working unchanged; only
+overwriting something already there is refused.
+
 Spec/implementation contract check (`evaluate()`, Codex review round 2, P2):
 `evaluate()` previously only checked the *axis key set* of `pareto_spec`
 against `_AXES` — it never checked that the spec's declared `schema_version`,
@@ -180,7 +196,23 @@ from svp_rpe.authoring.report import AuthoringDiffReport
 from svp_rpe.keys import keys_enharmonically_equal
 from svp_rpe.utils.atomic_io import atomic_write_bytes
 
+# Protected-tree preflight (Codex review round 17, P1) — derived from this
+# script's own location, same convention as `run_round.py`'s `_LOOP_DIR`
+# (`Path(__file__).resolve().parent.parent`), so the two scripts agree on
+# what "the protected L0b loop tree" means without importing from each other
+# (each is loaded standalone in tests via `importlib.util`, not as a package
+# — see `tests/test_l0b_scripts.py`'s `_load_module`).
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_LOOP_DIR = _SCRIPTS_DIR.parent
+
 _AXES = ("key", "brightness", "structure")
+
+
+def _inside_loop_tree(path: Path) -> bool:
+    """`path` is `_LOOP_DIR` itself or resolves somewhere under it (mirrors
+    `run_round.py`'s own `_inside_loop_tree` — see module docstring's
+    "Protected-tree preflight for `-o`" section)."""
+    return path == _LOOP_DIR or path.is_relative_to(_LOOP_DIR)
 
 
 def _levenshtein(a: list[str], b: list[str]) -> int:
@@ -608,6 +640,24 @@ def _reject_output_collision(
             f"-o/--output must not resolve to prev_report/curr_report/--pareto "
             f"(got {resolved_output}) — writing the result there would clobber "
             "an input this run reads."
+        )
+
+    # Protected-tree preflight (Codex review round 17, P1, ported from
+    # `run_round.py`'s own `-o` protected-tree check — see module docstring's
+    # "Protected-tree preflight for `-o`" section): the exact-path check
+    # above only guards this evaluator's own three inputs, not the rest of
+    # `examples/l0b_loop/`'s pin-recorded evidence (e.g. rounds/round1/
+    # score.yaml, ledger.yaml). A brand-new path under the tree (the normal
+    # `rounds_t2_clean/roundN/pareto_vs_*.json` creation flow) is unaffected
+    # — only an `-o` that already exists there is refused.
+    if _inside_loop_tree(resolved_output) and resolved_output.exists():
+        raise ProtectedPathError(
+            f"-o/--output resolves inside the protected L0b loop tree {_LOOP_DIR} "
+            f"and already exists ({resolved_output}) — refusing to silently "
+            "overwrite pin-recorded evidence. A brand-new pareto result file is the "
+            "normal round-evaluation flow; an existing file at that path means it "
+            "already holds recorded evidence. Delete/rename it first if this is an "
+            "intentional re-run, or write to a scratch path instead."
         )
     return resolved_output
 

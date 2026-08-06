@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -910,6 +911,53 @@ def test_run_round_validation_staged_publish_hardlink_safe(tmp_path: Path):
     assert original.read_text() == '{"pinned": "evidence"}'
 
 
+# --- Codex review round 17, P1: subprocess bound to this interpreter (J1) --
+
+
+def test_svprpe_cmd_binds_to_current_interpreter_not_bare_path_lookup():
+    """`_svprpe_cmd` must build `[sys.executable, "-m", "svp_rpe.cli", ...]`
+    — never a bare `"svprpe"` console-script name resolved via `PATH`, which
+    could pick up a stale script installed for a different
+    interpreter/environment (module docstring's "J1" section)."""
+    cmd = run_round._svprpe_cmd(["validate", "score.yaml", "--contract", "contract.yaml"])
+    assert cmd == [sys.executable, "-m", "svp_rpe.cli", "validate", "score.yaml", "--contract", "contract.yaml"]
+    assert "svprpe" not in cmd
+
+
+def test_run_cli_and_run_validate_cli_invoke_svprpe_cmd(monkeypatch, tmp_path: Path):
+    """`_run_cli`/`_run_validate_cli` must themselves route through
+    `_svprpe_cmd` rather than constructing their own `["svprpe", ...]`
+    command list — captures the exact `args` passed to `subprocess.run` and
+    asserts its first element is `sys.executable`, not the bare string
+    `"svprpe"`."""
+    captured: list[list[str]] = []
+
+    class _FakeCompletedProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = ""
+            self.stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(run_round.subprocess, "run", _fake_run)
+
+    run_round._run_cli(["package", "score.yaml"])
+    staging_path = tmp_path / "staged_validation.json"
+    staging_path.write_text('{"status": "pass"}', encoding="utf-8")
+    dest_path = tmp_path / "validation.json"
+    run_round._run_validate_cli(Path("score.yaml"), staging_path, dest_path, Path("contract.yaml"))
+
+    assert len(captured) == 2
+    for cmd in captured:
+        assert cmd[0] == sys.executable
+        assert cmd[1] == "-m"
+        assert cmd[2] == "svp_rpe.cli"
+        assert "svprpe" not in cmd
+
+
 def test_reserved_workdir_paths_includes_subproc_staging_paths(tmp_path: Path):
     """The H1 staging paths every subprocess CLI output is redirected to
     before being republished to its real reserved path (module docstring's
@@ -1604,6 +1652,57 @@ def test_pareto_eval_output_collision_accepts_fresh_path(tmp_path: Path):
         curr_report_path=Path("curr.json"),
         pareto_path=PARETO_SPEC_PATH,
     )
+
+
+# --- Codex review round 17, P1: protected-tree preflight for -o (J2) -------
+
+
+def test_reject_output_collision_rejects_existing_evidence_under_loop_tree(
+    tmp_path: Path, monkeypatch
+):
+    """J2 negative case: an `-o` that resolves inside the protected L0b loop
+    tree *and already exists* is refused, even though it is none of
+    `prev_report`/`curr_report`/`--pareto` — mirrors `run_round.py`'s pinned
+    evidence e.g. `rounds/round1/score.yaml`, `ledger.yaml`. Uses a
+    monkeypatched `_LOOP_DIR` pointed at `tmp_path` (not the real repo tree)
+    so this test never touches actual pin-recorded evidence."""
+    monkeypatch.setattr(pareto_eval, "_LOOP_DIR", tmp_path)
+    existing_evidence = tmp_path / "rounds" / "round1" / "score.yaml"
+    existing_evidence.parent.mkdir(parents=True)
+    existing_evidence.write_text("pinned: evidence\n", encoding="utf-8")
+
+    prev_path = tmp_path / "prev.json"
+    curr_path = tmp_path / "curr.json"
+    pareto_path = tmp_path / "pareto.yaml"
+
+    with pytest.raises(pareto_eval.ProtectedPathError, match="protected L0b loop tree"):
+        pareto_eval._reject_output_collision(
+            existing_evidence,
+            prev_report_path=prev_path,
+            curr_report_path=curr_path,
+            pareto_path=pareto_path,
+        )
+
+
+def test_reject_output_collision_accepts_new_path_under_loop_tree(tmp_path: Path, monkeypatch):
+    """J2 positive case: a brand-new path under the protected loop tree (the
+    ordinary `rounds_t2_clean/roundN/pareto_vs_*.json` creation flow) is
+    still accepted — only an *existing* path there is refused."""
+    monkeypatch.setattr(pareto_eval, "_LOOP_DIR", tmp_path)
+    new_output = tmp_path / "rounds_t2_clean" / "round6" / "pareto_vs_round5.json"
+    new_output.parent.mkdir(parents=True)
+
+    prev_path = tmp_path / "prev.json"
+    curr_path = tmp_path / "curr.json"
+    pareto_path = tmp_path / "pareto.yaml"
+
+    result = pareto_eval._reject_output_collision(
+        new_output,
+        prev_report_path=prev_path,
+        curr_report_path=curr_path,
+        pareto_path=pareto_path,
+    )
+    assert result == new_output.resolve()
 
 
 def test_main_rejects_output_collision_with_curr_report(tmp_path: Path):
