@@ -313,7 +313,7 @@ series_runs:
     outcome: reached
     rounds_to_success: 1
     failure_mode: null
-    rationale: 第 1 周回で全軸成功（key/brightness preserved・structure exact_match・境界 8.4521/13.4676/19.11s）。s1 と対照的に、著者は chorus 2 連を音色語彙で差異化せず同一 'full energy' 反復とする戦略（融合リスクを intent で自覚的に受容）を選び、drone 化罠を回避した。同一課題での到達分散（s1=unreached/5 周 vs s2=reached/1 周）は著者戦略選択に帰属
+    rationale: 第 1 周回で全軸成功（key/brightness preserved・structure exact_match・境界 8.4521/13.4676/19.11s）。s1 と対照的に、著者は chorus 2 連を音色語彙で差異化せず同一 'full energy' 反復とする戦略（融合リスクを intent で自覚的に受容）を選び、drone 化罠を回避した。同一課題での到達分散（s1=unreached/5 周 vs s2=reached/1 周）は著者戦略選択に帰す仮説（2 系列/課題の n では著者サンプリング揺らぎと分離できていない = docs/l0br_robustness_record.md §6）
     files_dir: series/br_d1_s2/
     started_utc: '2026-08-06T17:58:50Z'
   - task: br_d2
