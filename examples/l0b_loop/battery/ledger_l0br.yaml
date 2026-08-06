@@ -164,5 +164,84 @@ tasks:
       report_sha256: "9e4d4e340f62edd0d4ee0dd18f7b3502e1fc5441633375eb6d9cfce62e86ec75"
 
 # 実行 evidence（実行後追記。空リストは「未実行」を意味する登録時の正規状態）
-series_runs: []
+series_runs:
+  - task: br_d1
+    series: s1
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 8a6d154c092ee585095e92525df3859f5ed2dc4c95fa65dafd03f18e4fc34d3a
+      payload_sha256: 34bdfab5c44e3d20666cb4286cc47abf82fbfafc6b5fedc6c556d02f1d029264
+      score_sha256: 31672f23401861f49aefbefee33855dafbead3903fff68cbeb537f202969519f
+      intent_sha256: aa68ecc32669ddc9c294cce1ee04ac18fb679a272f33a1bd29182a84dd540284
+      report_sha256: 8a54136a19ce31741b50dbdc52c052944b39aea8b7d8daf0477a2336929f6352
+      token_ban: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+    - round: 2
+      payload_manifest_sha256: d54ea57c7f893ea9d5f32fb72d31eba90db4680ae98356a8b88a7c385f92a1e1
+      payload_sha256: 6269b499cacc24802d77dc209c609777cf835e0b09471b0a33fa97987cbb7776
+      score_sha256: f7b62e8189233bc205039141bd11543aa9c813a9308dfb8724ef71a3fc3ec19f
+      intent_sha256: 09baa4e648bfc6370726d5278cb4c70fac60a9db1bbef83ce3a0381442ac0b9d
+      report_sha256: f6db3a56fb1967e189c8f1501a72def958067de5d926b9e91d5889624f154298
+      token_ban: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+    - round: 3
+      payload_manifest_sha256: 9457193e0ee6de39e317d107cd0829f063aba4e67a8f9b365c56beff8ce23351
+      payload_sha256: 6723b8e2bf332a5013987eb09434396a0ca0b03f810daa6377ccd5e427473519
+      score_sha256: 0655ccac4819df751ee5cd71230a17c1b65e4a37b39a8bf9cceb29a468227051
+      intent_sha256: 4d11cc8289b6a14db2900eb697fec94521fb373db8330efbef145e6ef471a578
+      report_sha256: 9f31c3ac0e09ee90da45a783ec52903c1b3af8b9bf1e80fd7667f13dfe051da5
+      token_ban: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+    - round: 4
+      payload_manifest_sha256: fbd2b2f6081575ca8a3c36a47c1a75d49bdce366fc1f9beebbbd6a623802e801
+      payload_sha256: d9354199c923df566daa502b5c4d5d627d95ca17908f662dacb81990fe8977b5
+      score_sha256: f2f3152762569b7685fdaf94d001dc4c0a199046f532530572744dbe8176d4e8
+      intent_sha256: 3d1a88d95dfc237b88ca2eef34ccd285c6784f248b45bb9a438ec31a334480c6
+      report_sha256: c44b13653cfded797f434b7bbd83d8e1c4f00901b78af113b1e048af4cf86321
+      token_ban: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+    - round: 5
+      payload_manifest_sha256: 5b82001d97de17a76fba46d94f7cf91b38abe4093edc240ddf8d2d7ca7138dd9
+      payload_sha256: 22a04b13ce1ff5e6db3b7b78bb171c6eff1d4ecc138fa9a6f3d24b1769a32785
+      score_sha256: b831e144b63d80f7b5865c82866829cab687fc59d903a339650d97dc63bfa3d0
+      intent_sha256: a17642b869901f767e70a1da6c2e911b88f834f9ee2b770b4cd52ec5ee348a2c
+      report_sha256: 7b1d6a21eb4ef8dc6b2e40132961cbdb6eb51c287aa3d7681dd8d1915c5a4179
+      token_ban: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+    outcome: unreached
+    rounds_to_success: null
+    failure_mode: contract_defect
+    rationale: '著者は 5 周回で一貫して合理的な単一変数実験を重ねた（語彙置換 r2/r4・bars 非対称化 r3・対称復帰 r5）が、契約 v1 未開示のヒント解決規則（非加算・優先順位制: no kick/sub bass/low density が full energy を支配し chorus2 が全周回 drone 化）により、全編集が音響的に無効またはレベルのみの変化に終わった。evidence: 観測境界が r1=r2（8.4753/13.5372/30.0）・r3=r4（7.5/12.5852/32.5）と語彙変更を跨いで完全同値、r5 は bars 対称復帰で r1/r2 値へ回帰。author 5 個体とも tool 使用 0。l0b record §4.1（ヒント非加算）と同型 = L0a v2 反映後の再測対象'
+    files_dir: series/br_d1_s1/
+    started_utc: '2026-08-06T17:19:46Z'
 off_contract_events: []

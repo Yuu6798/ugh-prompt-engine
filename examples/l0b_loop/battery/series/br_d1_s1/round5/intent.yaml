@@ -1,0 +1,93 @@
+design_rationale:
+  overall: >
+    round4 diff report は round3 own_intent の仮説(「chorus2の low density 語彙が
+    outroの低密度語彙群と近接し吸着された」)を反証した: chorus2の文言を
+    low density系から sub bass emphasis / no kick (round1と同一)へ戻しても、
+    bars非対称(3/4)を維持したままでは同じ outro 吸着パターンが再現した
+    (observed=[intro, chorus, outro]、chorus区間実長5.0852s、outro区間実長
+    19.9148s)。round1/round2 own_intent(未取得だが own_score/own_intent の
+    round3_diagnosis 節に転記された履歴)によれば、bars対称(3,3)かつ同一文言
+    (full energy hook, no kick, sub bass emphasis)の条件では chorus1/chorus2
+    は融合はするが outro には吸着されず、"chorus"ラベルのまま残った。
+    4周分のデータを変数ごとに整理すると:
+      - bars対称 + no-kick系文言(round1,round2) => 吸着なし
+      - bars非対称 + low-density系文言(round3)   => 吸着あり
+      - bars非対称 + no-kick系文言(round4)       => 吸着あり
+    文言を変えても bars非対称条件下では結果が変わらなかった一方、bars対称
+    条件下では(未変更ながら)吸着が起きていない。4周の中で吸着の有無と
+    完全に相関するのは bars対称性のみであり、文言差ではない。
+    round5はこの相関を検証する単一変数実験として、round4の文言
+    (sub bass emphasis, no kick)は据え置いたまま、bars を chorus1=3 /
+    chorus2=4 から chorus1=3 / chorus2=3 (対称)へ復帰する一点変更のみを行う。
+    副次的に、chorus2の実長が 4bars=10.0s から 3bars=7.5s に短縮され、
+    intro(3bars=7.5s、ラウンド4で境界完全一致)および契約開示の陽性対照
+    (中間セクション実長7.5sで3分割成立)と同じ「実測で成功実績のある長さ」
+    に揃う副次効果も見込む。
+  round4_diagnosis:
+    observed_vs_required: >
+      要求[intro, chorus, chorus, outro]に対し観測[intro, chorus, outro]
+      (3要素、ラベル単位Levenshitein距離=1、structure verdict mismatch)。
+      key/brightnessは4周連続preserved、変更なし。
+    boundary_detail: >
+      intro境界は0.0-7.5sで設計値7.5sと完全一致(round3から2周連続の
+      exact match)。chorus1/chorus2の設計上の境界(絶対時刻15.0s)では
+      境界が検出されず、代わりに絶対時刻12.5852s(chorus区間開始から
+      5.0852s)に境界が生成された——これはchorus1(設計7.5s)にもchorus1+
+      chorus2合計(設計17.5s)にも一致しない中間的な値であり、境界検出が
+      設計上の意図した位置とは無関係な内部要因(chorus2内のno kick/sub
+      bass導入点付近の音響変化)に反応している可能性を示す。
+    absorption_detail: >
+      12.5852s以降32.5sまでの19.9148sが単一"outro"ラベルとして観測された。
+      これはchorus2の後半(設計上は12.5852s以降で本来chorus2の残りが約
+      2.4148s、その後25.0sからoutro本体7.5sが続く設計)を丸ごとoutro側へ
+      取り込んだことを意味する。wording変更(low density除去)にも関わらず
+      同型の吸着が再現したため、round3 own_intentが立てたwording仮説は
+      round4の実測により反証されたと判断する。
+  changes_this_round:
+    chorus2_bars: "4 → 3 (chorus1と対称化。round1/round2以来の条件へ復帰)"
+    chorus2_wording: "無変更 (round4のsub bass emphasis, no kickを維持。単一変数実験のため)"
+    intro_and_outro: "無変更"
+    physical_top_level: "無変更 (key/brightnessは4周連続preservedのため)"
+  hypothesis_for_round5:
+    primary: >
+      bars対称化により、round1/round2型の「outro吸着なし」の挙動が回帰すると
+      予測する。すなわちobservedは[intro, chorus, outro]のまま(chorus1/
+      chorus2はやはり融合)だが、outroラベルの開始時刻が設計値(絶対25.0s、
+      実長7.5s)に近づき、position_match_rateが改善すると見込む。ただし
+      ラベル単位Levenshtein距離は要求4要素に対し観測3要素のままなら1で
+      不変であり、structure verdictの"exact_match"化(=構造軸の真の
+      Pareto改善)には届かない可能性が高いことを事前に認識しておく。
+    secondary_uncertain: >
+      chorus1/chorus2境界そのものが今回生成されるかは依然不確実。round1が
+      本ラウンドと全く同一の条件(bars対称・同一wording)で境界を生成
+      できなかった実績があるため、round5でも同様に境界が生成されない
+      公算が高い。もし今回も融合したままなら、「no kick / sub bass の
+      音色差語彙だけでは境界を生成できず、chorus2にも何らかの形でエネルギー
+      水準そのものを動かす語彙が必要」という、round4 own_intentが既に
+      示した secondary 仮説へ進む根拠が一段と強まる。ただし利用可能な
+      認識語彙(silence/no kick/low density/sub bass/sparse/full energy/
+      release/rest)のうち高エネルギー方向を明示するのは"full energy"の
+      みで、他はすべて静音/低密度寄りでありoutroの語彙(silence, rest,
+      sparse, no kick, low density)と重複するため、chorus2をchorus性を
+      保ったままエネルギー方向で差別化する手段が語彙上ほぼ存在しない
+      という構造的制約がある。次周回以降で吸着なし・分割ありを狙うなら、
+      この制約下での代替戦略(例: bars配分ではなくセクション数構成自体の
+      見直し)を検討する必要がある。
+  open_risks:
+    - "bars対称化はoutro吸着を止める可能性が高いが、chorus1/chorus2分割
+      そのものを生む保証はない(round1が同一条件での反証事例)。その場合
+      Levenshtein距離は1のままでPareto改善不成立(悪化はしないため
+      regressionでもない=中立)。"
+    - "認識語彙のうちenergy方向を明示できるのはfull energyのみで、他は
+      outro語彙と重複しやすい。chorus2をchorus色のまま差別化する語彙的
+      手段が乏しいという構造的制約が、今後の周回でも障害になり続ける
+      可能性がある。"
+    - "intro境界のexact match(round3から2周連続)がround5でも維持される
+      保証はない(chorus2側の変更が全体レンダリングに波及した過去の
+      前例があるため)。"
+  pareto_note: >
+    key/brightnessは5周連続preserved見込みのためphysicalトップレベル値は
+    一切変更しない。本ラウンドの変更はstructure軸のchorus2 barsのみの
+    単一変数変更(4→3)とし、wording/intro/outroは全てround4から据え置く
+    ことで、次回diff_reportの変化をbars対称化の効果に一意に帰属できる
+    ようにする。
