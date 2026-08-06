@@ -86,7 +86,7 @@ payload_composition:
   composer:
     path: ../scripts/compose_payload.py
     sha256_at_measurement: "a1bd613a646c331c866b6480cd8d827d58410acc70c8dba9005a6c1629a12dfa"
-    sha256_current: "ecf0fda96cd6244e04703c7ff43d6b8d1043c7ce4ddcf1804832837400c5730d"
+    sha256_current: "d6ce8da970312af73fcac25d52dd0c66f3588604afb3661055dd35821a16f2b9"
     note: >-
       sha256_at_measurement = 全 16 測定周回を実行した実装（事前登録 commit
       2b26238 と PR head 62f6ead の両方でこの sha。git 履歴が実体を保持）。

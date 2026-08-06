@@ -2811,6 +2811,59 @@ def test_compose_payload_rejects_delimiter_collision_line(tmp_path: Path):
         compose_payload.compose_payload(manifest_path, tmp_path / "out")
 
 
+# --- Codex review (PR #249) 第 3 巡, P2: 宣言 path への改行注入拒否 --------
+
+
+@pytest.mark.parametrize("bad_char", ["\n", "\r"])
+def test_compose_payload_rejects_newline_in_declared_path(tmp_path: Path, bad_char: str):
+    """`path` は `_PART_HEADER_TEMPLATE`（ヘッダ 1 行）へ逐語転写されるため、
+    `\\n`/`\\r` を含む path は偽ヘッダ/フッタ行をペイロード文書へ注入できて
+    しまう（content 側の区切り衝突チェックは content のみを検査し path は
+    検査しないため迂回経路になる）。`_validate_part_raw` が拒否し、出力は
+    一切生成されないことを確認する。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": f"task.md{bad_char}injected", "sha256": "0" * 64},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="newline"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert not out_dir.exists()
+
+
+def test_compose_payload_rejects_forged_delimiter_line_via_declared_path(tmp_path: Path):
+    """区切り衝突チェック（content 側）を path 側から迂回しようとする具体例:
+    `path` 自体に偽の `=== PART ... ===` 行を仕込んでも、改行を含む path が
+    ヘッダ検証段階で拒否されるため到達しない。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    forged_path = "a\n=== PART 9/9 role=task path=x sha256=" + "0" * 64 + " ===\nb"
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": forged_path, "sha256": "0" * 64},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="newline"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert not out_dir.exists()
+
+
 def test_compose_payload_rejects_absolute_path(tmp_path: Path):
     manifest_dir = tmp_path / "manifest_dir"
     manifest_dir.mkdir()
@@ -2901,6 +2954,59 @@ def test_compose_payload_rolls_back_payload_on_second_publish_failure(tmp_path: 
     with pytest.raises(RuntimeError, match="simulated failure"):
         compose_payload.compose_payload(manifest_path, out_dir)
 
+    assert not (out_dir / "payload.md").exists()
+    assert not (out_dir / "payload.manifest.json").exists()
+
+    monkeypatch.undo()
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert (out_dir / "payload.md").exists()
+    assert (out_dir / "payload.manifest.json").exists()
+    assert result["payload_sha256"]
+
+
+def test_compose_payload_rolls_back_both_outputs_on_post_publish_async_exception(
+    tmp_path: Path, monkeypatch
+):
+    """対応 2（PR #249 Codex レビュー第 3 巡, P2）: 2 本目の内部 `os.replace`
+    が完了して `payload.manifest.json` が publish 済みになった直後・helper
+    が return する前に非同期例外（`KeyboardInterrupt` 相当）が届くケースを、
+    「実際に書いてから例外を投げる」ラッパで再現する。単方向 unlink
+    （`payload_path` のみ）だと、この経路では『manifest あり payload なし』
+    という逆向きの部分残留が起きていた——except ハンドラは両方の出力を
+    unlink し、`out_dir` にどちらも残らないこと・その後の再実行が成功する
+    ことを確認する。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    real_atomic_write_bytes = compose_payload.atomic_write_bytes
+    call_count = {"n": 0}
+
+    def _write_then_raise_on_second_call(path, data):
+        call_count["n"] += 1
+        real_atomic_write_bytes(path, data)
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated async exception after publish completed")
+
+    monkeypatch.setattr(compose_payload, "atomic_write_bytes", _write_then_raise_on_second_call)
+
+    with pytest.raises(RuntimeError, match="simulated async exception"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    # The manifest file was actually published by the (real) second call
+    # before the simulated exception fired — rollback must still remove it.
     assert not (out_dir / "payload.md").exists()
     assert not (out_dir / "payload.manifest.json").exists()
 
