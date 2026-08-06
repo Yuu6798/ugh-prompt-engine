@@ -546,8 +546,10 @@ t2:
       evidence_status: >-
         excluded（2026-08-06 再分類）: 本周回のペイロードには coordinator
         注記が含まれており off-contract（off_contract_events 参照）。
-        この改善は操舵証拠・契約遵守の収束実績に算入しない。クリーン
-        再周回 = rounds[5_clean]（tie・改善非再現）。
+        この改善は操舵証拠・契約遵守の収束実績に算入しない。採用可能な
+        クリーン系列 = t2.clean_branch（3c→4c→5c、4c→5c で改善成立）。
+        rounds[5_clean] は系譜汚染ありの再周回（off_contract_events）で
+        こちらも evidence 不算入（tie・改善非再現）。
       interpretation: >-
         著者は 4 周回の消去法（トークン強化→長さ→軸数縮小がすべて無効）
         を経て、最終周回で和声レバー（events.chord_progression:
