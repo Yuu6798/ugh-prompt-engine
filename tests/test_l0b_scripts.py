@@ -1199,6 +1199,133 @@ def test_output_collision_accepts_fresh_path_outside_loop_tree(tmp_path: Path):
     )
 
 
+# --- Codex review round 11, P1: reserved-directory containment (I1) --------
+
+
+def test_reserved_directory_paths_includes_all_directory_entries(tmp_path: Path):
+    """`_reserved_directory_paths` selects exactly the directory-type
+    entries `_RESERVED_DIRECTORY_KEYS` names — the containment roots the
+    score/`-o` guards below check against."""
+    workdir = tmp_path / "wd"
+    paths = run_round._reserved_workdir_paths(workdir)
+    directories = dict(run_round._reserved_directory_paths(paths))
+    assert set(directories) == {
+        "identity_dir",
+        "package_dir",
+        "judge_inputs_dir",
+        "subproc_staging_dir",
+        "subproc_staging_package_dir",
+    }
+    assert directories["subproc_staging_dir"] == paths["subproc_staging_dir"]
+    assert directories["subproc_staging_package_dir"] == paths["subproc_staging_package_dir"]
+
+
+def test_reject_score_copy_self_collision_rejects_score_under_subproc_staging(
+    tmp_path: Path,
+):
+    """I1 unit case: a score.yaml living *inside* a reserved directory
+    (subproc_staging/, which run_round() clears via `shutil.rmtree` before
+    ever reading score.yaml) must be refused by containment, not just by
+    exact equality with a single reserved path."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    staging_dir = paths["subproc_staging_dir"]
+    staging_dir.mkdir(parents=True)
+    score_path = staging_dir / "candidate.yaml"
+    score_path.write_text("schema_version: composition-score/0.1\n")
+
+    with pytest.raises(run_round.ProtectedPathError, match="subproc_staging_dir"):
+        run_round._reject_score_copy_self_collision(score_path, paths)
+
+
+def test_reject_output_collision_rejects_output_under_subproc_staging(tmp_path: Path):
+    """I1 unit case: an -o target living inside subproc_staging/ must be
+    refused by containment even though it doesn't equal any single reserved
+    path exactly (e.g. an arbitrary filename, not one of the known staged
+    CLI output names)."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+
+    with pytest.raises(run_round.ProtectedPathError, match="subproc_staging_dir"):
+        run_round._reject_output_collision(
+            paths["subproc_staging_dir"] / "report.json",
+            score_path=POSITIVE_CONTROL_SCORE_PATH,
+            reserved_paths=paths.values(),
+            reserved_directory_paths=run_round._reserved_directory_paths(paths),
+        )
+
+
+def test_reject_output_collision_accepts_fresh_path_under_workdir_non_reserved_name(
+    tmp_path: Path,
+):
+    """I1 boundary case: containment is checked against reserved directory
+    entries only, not against --workdir itself — an -o landing directly
+    under --workdir with a name that isn't any reserved artifact (the
+    ordinary <workdir>/report.json shape, the ordinary accept-a-round flow)
+    must remain accepted."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+
+    # Must not raise.
+    run_round._reject_output_collision(
+        workdir / "my_report.json",
+        score_path=POSITIVE_CONTROL_SCORE_PATH,
+        reserved_paths=paths.values(),
+        reserved_directory_paths=run_round._reserved_directory_paths(paths),
+    )
+
+
+def test_run_round_rejects_score_under_subproc_staging_before_read(tmp_path: Path):
+    """I1 full-pipeline negative case: a --workdir reused from a prior round
+    that already has a subproc_staging/ tree, with score.yaml pointed at a
+    file living inside it, must be refused before run_round()'s staging
+    clear (`shutil.rmtree(subproc_staging_dir)`) would delete the very input
+    this run is about to read — without this guard, the read would fail with
+    a confusing FileNotFoundError mid-run instead of a clean preflight
+    refusal."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    staging_dir = workdir / "subproc_staging"
+    staging_dir.mkdir()
+    score_path = staging_dir / "candidate.yaml"
+    score_bytes = POSITIVE_CONTROL_SCORE_PATH.read_bytes()
+    score_path.write_bytes(score_bytes)
+    output_path = tmp_path / "report.json"
+
+    with pytest.raises(run_round.ProtectedPathError):
+        run_round.run_round(score_path, workdir, 0, output_path)
+
+    # Refused before any write: the score file under subproc_staging/ must
+    # survive untouched — the staging clear that would otherwise delete it
+    # never got to run.
+    assert score_path.read_bytes() == score_bytes
+    assert not output_path.exists()
+
+
+def test_run_round_rejects_output_under_subproc_staging_before_clear(tmp_path: Path):
+    """I1 full-pipeline negative case: an -o target left over inside
+    subproc_staging/ from a prior invocation of a reused --workdir must be
+    refused before run_round()'s staging clear deletes it — otherwise a
+    later failure partway through this run would lose the old report with
+    no new report published in its place."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    staging_dir = workdir / "subproc_staging"
+    staging_dir.mkdir()
+    output_path = staging_dir / "report.json"
+    stale_report = b'{"stale": "report from a previous invocation"}'
+    output_path.write_bytes(stale_report)
+
+    with pytest.raises(run_round.ProtectedPathError):
+        run_round.run_round(POSITIVE_CONTROL_SCORE_PATH, workdir, 0, output_path)
+
+    # Refused before any write: the stale report must survive untouched.
+    assert output_path.read_bytes() == stale_report
+
+
 # --- positive-control report.json schema conformance ------------------------
 
 

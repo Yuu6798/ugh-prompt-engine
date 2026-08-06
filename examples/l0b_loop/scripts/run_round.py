@@ -219,6 +219,28 @@ byte-for-byte by this change — the T1/T2 slow smoke tests below prove it —
 since the verified bytes are, by F5's own hash check, identical to what a
 fresh re-read would have produced on an undrifted judge; only the *read
 path* changes, not the content.
+
+**I1 — reserved-directory containment for score/`-o`** (Codex review round
+11, P1): the guards above (`_reject_score_copy_self_collision`,
+`_reject_output_collision`) originally checked `score_path`/`-o` against the
+reserved paths by *exact equality* only. That leaves a gap H1's
+`subproc_staging/` clear opens: a `score_path` (or a pre-existing `-o`
+target) living *inside* a reserved directory — e.g. `<workdir>/
+subproc_staging/candidate.yaml` — is not equal to any single reserved path,
+so the old checks let it through, and `run_round()`'s `shutil.rmtree` of
+`subproc_staging/` (which runs after preflight, before `score_path` is ever
+read) deletes it before this run reads it — for `score_path`, that turns a
+clean preflight refusal into a confusing `FileNotFoundError` mid-run; for a
+pre-existing `-o` under the same tree, the old report is deleted with
+nothing published in its place if this run then fails downstream. Both
+guards now also check *containment*: `score_path`/`-o` must not resolve to
+a path inside any of `_RESERVED_DIRECTORY_KEYS`' directory trees
+(`identity/`, `package/`, `judge_inputs/`, `subproc_staging/`,
+`subproc_staging/package/`), in addition to the existing exact-equality
+check. Containment is intentionally *not* checked against `--workdir`
+itself — an `-o`/score living directly under `--workdir` but outside every
+reserved subtree (the ordinary `<workdir>/report.json` shape) remains
+accepted, exactly as before.
 """
 from __future__ import annotations
 
@@ -508,6 +530,39 @@ def _reserved_workdir_paths(workdir: Path) -> dict[str, Path]:
     }
 
 
+# I1 (Codex review round 11, P1): the subset of `_reserved_workdir_paths`'
+# entries that are reserved as *directories* — their entire subtree is
+# reserved, not just the literal path. `score`/`-o` containment guards below
+# use this (not the full mapping) because only these entries' descendants
+# are dangerous: `run_round()` clears and recreates `subproc_staging/` (and
+# `subproc_staging/package/`) via `shutil.rmtree` before ever reading
+# `score_path`, and `identity/`/`package/`/`judge_inputs/` are likewise
+# written-into wholesale rather than as single files. A file-type reserved
+# entry (e.g. `score.yaml`, `validation.json`) has no meaningful
+# "descendant" — colliding with one of those is already an exact-equality
+# case the existing checks catch directly.
+_RESERVED_DIRECTORY_KEYS: tuple[str, ...] = (
+    "identity_dir",
+    "package_dir",
+    "judge_inputs_dir",
+    "subproc_staging_dir",
+    "subproc_staging_package_dir",
+)
+
+
+def _reserved_directory_paths(
+    reserved_paths: dict[str, Path],
+) -> tuple[tuple[str, Path], ...]:
+    """`(label, path)` pairs for `_RESERVED_DIRECTORY_KEYS`' entries present
+    in `reserved_paths` — the containment roots the score/`-o` guards below
+    check against. Keeping the label alongside the path lets a rejection
+    message name exactly which reserved directory the offending path falls
+    under."""
+    return tuple(
+        (label, reserved_paths[label]) for label in _RESERVED_DIRECTORY_KEYS if label in reserved_paths
+    )
+
+
 def _reject_workdir_inside_loop_tree(workdir: Path) -> Path:
     resolved = workdir.resolve()
     if _inside_loop_tree(resolved):
@@ -522,15 +577,43 @@ def _reject_workdir_inside_loop_tree(workdir: Path) -> Path:
 
 
 def _reject_score_copy_self_collision(score_path: Path, reserved_paths: dict[str, Path]) -> None:
+    """Rejects a `score_path` that either resolves to the exact path of any
+    reserved workdir artifact (originally just `score_copy` — generalized to
+    every entry in `reserved_paths`, e.g. a `score.yaml` argument that
+    happens to alias `paths["roundtrip"]`) or lives *inside* one of the
+    reserved directory trees (`identity/`, `package/`, `subproc_staging/`,
+    etc. — I1, Codex review round 11, P1).
+
+    The containment case matters because `run_round()` clears and recreates
+    `subproc_staging/` (`shutil.rmtree`) before ever reading `score_path` —
+    a `score.yaml` living at e.g. `<workdir>/subproc_staging/candidate.yaml`
+    would be deleted by that clear before this run reads it at all, turning
+    what should be a clean preflight refusal into a confusing
+    `FileNotFoundError` mid-run. This guard fires before `workdir.mkdir()`
+    or any write, same as the exact-equality case."""
     resolved_score = score_path.resolve()
-    resolved_copy_dest = reserved_paths["score_copy"].resolve()
-    if resolved_score == resolved_copy_dest:
-        raise ProtectedPathError(
-            f"score.yaml argument ({resolved_score}) resolves to the exact path "
-            f"run_round.py would copy it to inside --workdir ({resolved_copy_dest}) — "
-            "refusing a self-overwriting copy. Use a --workdir that does not already "
-            "contain the input under the name 'score.yaml'."
-        )
+    for label, reserved_path in reserved_paths.items():
+        resolved_reserved = reserved_path.resolve()
+        if resolved_score == resolved_reserved:
+            raise ProtectedPathError(
+                f"score.yaml argument ({resolved_score}) resolves to the exact path of "
+                f"reserved workdir artifact {label!r} ({resolved_reserved}) — refusing: "
+                "this run's own writes to that reserved path (e.g. copying score.yaml "
+                "into --workdir, or a later pipeline step writing that artifact) would "
+                "clobber the input or produce a self-overwriting copy. Use a --workdir/"
+                "score combination that does not alias a reserved artifact."
+            )
+    for label, reserved_dir in _reserved_directory_paths(reserved_paths):
+        resolved_dir = reserved_dir.resolve()
+        if resolved_score.is_relative_to(resolved_dir):
+            raise ProtectedPathError(
+                f"score.yaml argument ({resolved_score}) is inside reserved workdir "
+                f"directory {label!r} ({resolved_dir}) — refusing: run_round() clears "
+                "and recreates that directory before this run ever reads score.yaml, "
+                "which would delete the input out from under this run before it's read. "
+                "Use a --workdir/score combination where the score does not live under "
+                "a reserved directory."
+            )
 
 
 def _reject_escaping_reserved_paths(workdir: Path, reserved_paths: dict[str, Path]) -> None:
@@ -594,7 +677,23 @@ def _reject_output_collision(
     score_path: Path,
     reserved_paths: Iterable[Path],
     fixed_input_paths: Iterable[Path] = _FIXED_INPUT_PATHS,
+    reserved_directory_paths: Iterable[tuple[str, Path]] = (),
 ) -> Path:
+    """`reserved_directory_paths` (I1, Codex review round 11, P1 — labeled
+    `(label, path)` pairs, typically `_reserved_directory_paths(paths)`)
+    extends the original exact-equality check with *containment*: an `-o`
+    landing anywhere inside a reserved directory tree (`identity/`,
+    `package/`, `subproc_staging/`, etc.) is refused too, not just an `-o`
+    equal to one of those directories' own path. This matters because
+    `run_round()` clears and recreates `subproc_staging/` at the top of
+    every run — an `-o` an earlier round left there would be deleted by that
+    clear before this run's own publish step, silently losing whatever
+    report was at that path if this run then fails partway through.
+    Defaults to `()` (no containment check) so existing callers that only
+    care about the original exact-equality behavior are unaffected.
+    Containment against `--workdir` itself is deliberately not checked here
+    — an `-o` inside `--workdir` but outside every reserved subtree (e.g.
+    `<workdir>/report.json`) is the ordinary, legitimate case."""
     resolved_output = output_path.resolve()
 
     protected = {score_path.resolve(), *(p.resolve() for p in fixed_input_paths)}
@@ -606,6 +705,19 @@ def _reject_output_collision(
             "there would clobber an input this run reads, or a generated artifact "
             "this run writes and later hashes into hashes.json."
         )
+
+    for label, reserved_dir in reserved_directory_paths:
+        resolved_dir = reserved_dir.resolve()
+        if resolved_output.is_relative_to(resolved_dir):
+            raise ProtectedPathError(
+                f"-o/--output ({resolved_output}) is inside reserved workdir directory "
+                f"{label!r} ({resolved_dir}) — refusing: run_round() clears and "
+                "recreates that directory at the top of every run, which would delete "
+                "an existing -o target there before this run's own publish step — a "
+                "prior report at that path would be lost, with no new report written in "
+                "its place, if this run then fails. Use a --workdir/-o combination where "
+                "the output path does not live under a reserved directory."
+            )
 
     if _inside_loop_tree(resolved_output) and resolved_output.exists():
         raise ProtectedPathError(
@@ -1080,6 +1192,12 @@ def run_round(
     # invocation leaves the filesystem untouched. `fixed_input_paths` swaps in
     # the selected `section_map_path` so the guard protects the map actually
     # read by this run (T1's default or T2's), not just T1's.
+    # `reserved_directory_paths` (I1, Codex review round 11, P1) extends both
+    # the score and `-o` checks below from exact-equality to containment: a
+    # score.yaml/-o living *inside* a reserved directory (e.g.
+    # `subproc_staging/`, cleared via `rmtree` further down before score.yaml
+    # is ever read) is refused the same as one aliasing a reserved path
+    # exactly.
     _reject_workdir_inside_loop_tree(workdir)
     _reject_score_copy_self_collision(score_path, paths)
     _reject_escaping_reserved_paths(workdir, paths)
@@ -1088,6 +1206,7 @@ def run_round(
         score_path=score_path,
         reserved_paths=paths.values(),
         fixed_input_paths=_fixed_input_paths(section_map_path),
+        reserved_directory_paths=_reserved_directory_paths(paths),
     )
     # G1 preflight (Codex review round 7, P1): --section-map must be one of
     # the two pinned maps, unconditionally, before F5's hash check below
