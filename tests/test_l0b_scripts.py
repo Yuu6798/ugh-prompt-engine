@@ -1744,3 +1744,31 @@ def test_publish_report_bundle_publishes_report_before_hashes(tmp_path: Path, mo
     )
 
     assert replace_order == [output_path.name, hashes_path.name]
+
+
+# --- ledger shape validation (PR #247 Codex review round 8) -------------------
+
+
+def test_ledger_t2_rounds_shape_includes_clean_rerun():
+    """PR #247 レビュー 8 巡目 P1: round `5_clean` が誤って
+    `post_loop_hardening.items` 配下へネストされる退行が実発生した。台帳の
+    正直会計は消費者が `t2.rounds` を列挙して読む前提なので、クリーン再周回
+    と off-contract 分類が正しい位置に存在することを形状として enforce する
+    （YAML が парース可能なだけでは形状退行を検出できない）。"""
+
+    ledger = yaml.safe_load((LOOP_DIR / "ledger.yaml").read_text(encoding="utf-8"))
+
+    round_ids = [entry.get("round") for entry in ledger["t2"]["rounds"]]
+    assert round_ids == [1, 2, 3, 4, 5, "5_clean"]
+
+    off_contract_rounds = {e["round"] for e in ledger["t2"]["off_contract_events"]}
+    assert off_contract_rounds == {3, 4, 5}
+
+    round5 = next(e for e in ledger["t2"]["rounds"] if e.get("round") == 5)
+    assert "excluded" in round5["evidence_status"]
+
+    assert ledger["loop_status_t2"]["status"] == "task_achieved_off_contract_only"
+    assert ledger["loop_status_t2"]["clean_rerun_round"] == "5_clean"
+
+    hardening_items = ledger["post_loop_hardening"]["items"]
+    assert all(isinstance(item, str) for item in hardening_items)

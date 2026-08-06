@@ -1,6 +1,7 @@
 # L0b 閉ループ記録 — 非旋律軸の閉ループ成立（T1/T2 実測）
 
-**Status**: 完了（2026-08-05〜06 実測）。正本 =
+**Status**: 部分達成・未完了（2026-08-05〜06 実測。閉ループ機構と T1 は成立、
+§5 の操舵証拠はクリーン会計で未充足 — 契約 v2 反映後の後続実験が残件 = §6）。正本 =
 [`llm_adapter_planning.md`](llm_adapter_planning.md) §4「L0b」・§5 成功条件。
 台帳（pin・周回全記録・正直会計）= `examples/l0b_loop/ledger.yaml` が一次資料。
 事前登録 = `examples/l0b_loop/task.md`（L0B-T1）/ `task_t2.md`（L0B-T2）。

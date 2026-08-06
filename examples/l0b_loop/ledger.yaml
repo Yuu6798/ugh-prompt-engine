@@ -556,21 +556,6 @@ t2:
         機構は未確定（相対 novelty 閾値仮説）。操舵証拠（報告→修正→Pareto
         改善という結果の実測）は本訂正の影響を受けない。詳細 =
         docs/l0b_closed_loop_record.md §3.1・§4.2・§4.3。
-
-post_loop_hardening:
-  # PR #247 レビュー対応（計測完了後のスクリプト硬化。T1/T2 の全計測は
-  # runner_at_measurement / t2.runner_at_measurement の pin 時点の blob で
-  # 実施済みであり、以下は evidence 生成には使われていない）。対象コミットの
-  # 正確な列挙は git log が正:
-  #   git log --oneline --follow -- examples/l0b_loop/scripts/
-  # pin 済み report.json とのバイト互換は T1/T2 slow smoke（決定論回帰
-  # ガード）のパスで検証した。
-  items:
-    - "pareto_eval.py: 入力 report の AuthoringDiffReport.model_validate ゲート (Codex P1)"
-    - "pareto_eval.py: -o と入力 3 パスの衝突ガード (Codex P2)"
-    - "run_round.py: score/section map の単一スナップショット読み (Codex P2)"
-    - "run_round.py: hashes.json 先行書き込み + report の atomic 公開 (Codex P2 軽量版)"
-
     - round: "5_clean"
       date: "2026-08-06"
       note: >-
@@ -641,6 +626,21 @@ post_loop_hardening:
         軸数仮説の反証 + 「別種の対比手段の検討が残る選択肢」という要約注記
         （原 round 5 の唯一の改善はこの注記付きペイロード下で発生）
 
+
+
+post_loop_hardening:
+  # PR #247 レビュー対応（計測完了後のスクリプト硬化。T1/T2 の全計測は
+  # runner_at_measurement / t2.runner_at_measurement の pin 時点の blob で
+  # 実施済みであり、以下は evidence 生成には使われていない）。対象コミットの
+  # 正確な列挙は git log が正:
+  #   git log --oneline --follow -- examples/l0b_loop/scripts/
+  # pin 済み report.json とのバイト互換は T1/T2 slow smoke（決定論回帰
+  # ガード）のパスで検証した。
+  items:
+    - "pareto_eval.py: 入力 report の AuthoringDiffReport.model_validate ゲート (Codex P1)"
+    - "pareto_eval.py: -o と入力 3 パスの衝突ガード (Codex P2)"
+    - "run_round.py: score/section map の単一スナップショット読み (Codex P2)"
+    - "run_round.py: hashes.json 先行書き込み + report の atomic 公開 (Codex P2 軽量版)"
 loop_status_t2:
   status: task_achieved_off_contract_only
   terminated_at_round: 5
