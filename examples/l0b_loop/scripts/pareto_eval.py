@@ -30,6 +30,42 @@ distance is not trustworthy evidence in either direction, so a round pair
 with any such axis is never counted as improvement evidence (never silently
 downgraded to a "tie").
 
+Verdict/value consistency gate (`evaluate()`, Codex review round 5, P1):
+`AuthoringDiffReport` (`src/svp_rpe/authoring/report.py`) *deliberately*
+leaves a failure-side verdict's (`deviated`/`mismatch`) `requirement`/
+`observed` unconstrained — L0a's design lets a failing axis report its
+actual observed value honestly, without the schema forcing it to also
+prove non-equality (see that module's own docstring, "成功側のみ強制・
+失敗側は正直な報告の自由"). This module, however, treats `verdict` as the
+distance's ground truth (`_binary_from_verdict`: `preserved` -> 0, anything
+else -> 1) rather than re-deriving the comparison from `requirement`/
+`observed` itself — so a `key`/`brightness` axis report that says
+`verdict="deviated"` while its own `requirement`/`observed` actually agree
+is internally contradictory, and silently trusting its `verdict` over its
+own values would let such a report manufacture a false `deviated ->
+preserved` "improvement" (`prev` distance 1, `curr` distance 0) purely from
+an unenforced verdict/value mismatch, with no real change in what was
+measured. `_reject_contradictory_deviated_verdict()` re-derives the same
+comparison `AuthoringDiffReport`'s `preserved` validator already trusts
+(`keys_enharmonically_equal` for `key`, plain string equality for
+`brightness`) and raises `ValueError` when a `band == "measured"`,
+`verdict == "deviated"` axis's `requirement`/`observed` are both `str` and
+equal under that comparison — this is a local consistency check on this
+evaluator's own inputs, not a re-implementation of `AuthoringDiffReport`'s
+comparison logic in general (it only ever runs the comparison in the one
+direction needed to catch this specific contradiction). It runs for both
+`prev_report` and `curr_report`, for every axis of theirs, before any
+distance is computed. Non-`str` `requirement`/`observed` (e.g. `None`, the
+`_axis()` test-helper default) are skipped — nothing to compare — as are
+axes with `band != "measured"`: those axes are never used in the distance
+computation in the first place (`_axis_distance` is only called when both
+sides' `band == "measured"`), so a non-`measured`-band axis's verdict/value
+relationship cannot manufacture false distance evidence and is out of this
+gate's scope. `structure` is excluded from this gate entirely — its
+distance (`_levenshtein`) is computed directly from `requirement`/
+`observed`, never from `verdict`, so `verdict` cannot desync from the
+values used for its distance the way it can for `key`/`brightness`.
+
 Input validation (`main()` only — Codex review #5, P1): `prev_report`/
 `curr_report` are validated against `AuthoringDiffReport`
 (`src/svp_rpe/authoring/report.py`) before `evaluate()` runs, so a
@@ -83,6 +119,7 @@ import yaml
 from pydantic import ValidationError
 
 from svp_rpe.authoring.report import AuthoringDiffReport
+from svp_rpe.keys import keys_enharmonically_equal
 from svp_rpe.utils.atomic_io import atomic_write_bytes
 
 _AXES = ("key", "brightness", "structure")
@@ -154,6 +191,49 @@ def _axis_band(axis: Optional[dict[str, Any]]) -> Optional[str]:
     if axis is None:
         return None
     return axis.get("band")
+
+
+_CONTRADICTION_COMPARATORS = {
+    "key": keys_enharmonically_equal,
+    "brightness": lambda requirement, observed: requirement == observed,
+}
+
+
+def _reject_contradictory_deviated_verdict(
+    report_label: str, axis_name: str, axis: Optional[dict[str, Any]]
+) -> None:
+    """Consistency gate — see module docstring's "Verdict/value consistency
+    gate" section for the full rationale/scope. Only `key`/`brightness` are
+    checked (`_CONTRADICTION_COMPARATORS`); `structure` never reaches this
+    function (its distance never reads `verdict`, see module docstring).
+    Only fires for `band == "measured"` + `verdict == "deviated"` axes whose
+    `requirement`/`observed` are both `str` — anything else (missing axis,
+    other band, other verdict, non-str values) is silently skipped, not an
+    error in itself."""
+    if axis is None:
+        return
+    comparator = _CONTRADICTION_COMPARATORS.get(axis_name)
+    if comparator is None:
+        return
+    if axis.get("band") != "measured" or axis.get("verdict") != "deviated":
+        return
+    requirement = axis.get("requirement")
+    observed = axis.get("observed")
+    if not (isinstance(requirement, str) and isinstance(observed, str)):
+        return
+    if comparator(requirement, observed):
+        raise ValueError(
+            f"{report_label}.axes[{axis_name!r}] is a contradictory report: "
+            f"verdict='deviated' with band='measured', but requirement={requirement!r} "
+            f"and observed={observed!r} actually match "
+            f"({'enharmonically ' if axis_name == 'key' else ''}equal) — "
+            "AuthoringDiffReport deliberately leaves a deviated axis's requirement/"
+            "observed unconstrained (L0a's failure-side honesty design), so this "
+            "evaluator-local check rejects a report whose own values contradict its "
+            "verdict instead of silently trusting 'deviated' as the distance's ground "
+            "truth (which would otherwise manufacture a false deviated->preserved "
+            "improvement)."
+        )
 
 
 _REQUIRED_SCHEMA_VERSION = "l0b-pareto/1.0"
@@ -280,6 +360,10 @@ def evaluate(
     for axis_name in _AXES:
         prev_axis = prev_axes.get(axis_name)
         curr_axis = curr_axes.get(axis_name)
+        # Consistency gate — before any distance is computed (module
+        # docstring's "Verdict/value consistency gate" section).
+        _reject_contradictory_deviated_verdict("prev_report", axis_name, prev_axis)
+        _reject_contradictory_deviated_verdict("curr_report", axis_name, curr_axis)
         prev_band = _axis_band(prev_axis)
         curr_band = _axis_band(curr_axis)
         axis_measured = (

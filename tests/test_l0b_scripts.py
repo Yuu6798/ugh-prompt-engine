@@ -198,6 +198,152 @@ def test_evaluate_missing_axis_is_band_excluded_not_a_crash():
     assert result["improved"] is False
 
 
+# --- Codex review round 5, P1: deviated-verdict/value consistency gate -----
+
+
+def test_evaluate_rejects_contradictory_deviated_key_axis():
+    """A `key` axis claiming `verdict='deviated'` while `requirement` and
+    `observed` are actually the same string is an internally-contradictory
+    report — `evaluate()` must refuse to trust the verdict over the values."""
+    prev = _report(
+        key=_axis(verdict="deviated", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "verse", "chorus", "outro"],
+        ),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    with pytest.raises(ValueError, match="contradictory report"):
+        pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+
+
+def test_evaluate_rejects_contradictory_deviated_key_axis_enharmonic():
+    """Same contradiction, but `requirement`/`observed` are only equal under
+    enharmonic equivalence (`C# minor` == `Db minor`), not plain string
+    equality — the gate must still catch it (it uses
+    `keys_enharmonically_equal`, the same comparator `AuthoringDiffReport`'s
+    own `preserved` validator trusts)."""
+    prev = _report(
+        key=_axis(verdict="deviated", requirement="C# minor", observed="Db minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "verse", "chorus", "outro"],
+        ),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    with pytest.raises(ValueError, match="contradictory report"):
+        pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+
+
+def test_evaluate_rejects_contradictory_deviated_brightness_axis():
+    """Same contradiction on the `brightness` axis (plain string equality,
+    no enharmonic concept applies)."""
+    prev = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="deviated", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "verse", "chorus", "outro"],
+        ),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    with pytest.raises(ValueError, match="contradictory report"):
+        pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+
+
+def test_evaluate_accepts_genuinely_deviated_key_axis_at_distance_one():
+    """Positive counterpart: a `deviated` `key` axis whose `requirement`/
+    `observed` are genuinely different passes the consistency gate unchanged
+    and still contributes distance 1 (no behavior change on the honest-
+    failure happy path)."""
+    prev = _report(
+        key=_axis(verdict="deviated", requirement="D minor", observed="C major"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "verse", "chorus", "outro"],
+        ),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    result = pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+    assert result["per_axis"]["key"]["prev_distance"] == 1
+    assert result["per_axis"]["key"]["curr_distance"] == 0
+    assert result["per_axis"]["key"]["strictly_improved"] is True
+    assert result["improved"] is True
+
+
+def test_main_exits_nonzero_on_contradictory_deviated_verdict(tmp_path: Path):
+    """`main()`-level negative case: the same contradiction, caught via the
+    CLI's existing `ValueError` handling (stderr + exit 1, nothing written)."""
+    prev = _report(
+        key=_axis(verdict="deviated", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "verse", "chorus", "outro"],
+        ),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    prev_path = tmp_path / "prev.json"
+    curr_path = tmp_path / "curr.json"
+    out_path = tmp_path / "result.json"
+    prev_path.write_text(json.dumps(prev))
+    curr_path.write_text(json.dumps(curr))
+
+    exit_code = pareto_eval.main(
+        [str(prev_path), str(curr_path), "--pareto", str(PARETO_SPEC_PATH), "-o", str(out_path)]
+    )
+    assert exit_code != 0
+    assert not out_path.exists()
+
+
 def test_evaluate_rejects_pareto_spec_with_wrong_axis_set():
     bad_spec = {"axes": {"key": {}, "brightness": {}}}  # missing structure
     with pytest.raises(ValueError):
@@ -516,6 +662,66 @@ def test_reject_score_copy_self_collision(tmp_path: Path):
     score_path = paths["score_copy"]  # deliberately the exact collision path
     with pytest.raises(run_round.ProtectedPathError):
         run_round._reject_score_copy_self_collision(score_path, paths)
+
+
+# --- Codex review round 5, P1: reserved-path symlink-escape guard ----------
+
+
+def test_reject_escaping_reserved_paths_rejects_symlinked_score_copy(tmp_path: Path):
+    """`score.yaml`'s reserved slot is a symlink pointing at a real file
+    outside --workdir — writing through it would truncate/overwrite that
+    outside file. Must be refused before anything is written."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    outside_target = tmp_path / "outside_evidence.yaml"
+    outside_target.write_text("precious pinned evidence\n")
+    paths = run_round._reserved_workdir_paths(workdir)
+    paths["score_copy"].symlink_to(outside_target)
+
+    with pytest.raises(run_round.ProtectedPathError, match="symlink"):
+        run_round._reject_escaping_reserved_paths(workdir, paths)
+    # The outside file must be untouched by the (refused) check itself.
+    assert outside_target.read_text() == "precious pinned evidence\n"
+
+
+def test_reject_escaping_reserved_paths_rejects_symlinked_identity_dir(tmp_path: Path):
+    """`identity/` (a reserved *directory*, not just a file) is a symlink
+    pointing outside --workdir — must be refused the same way a symlinked
+    file entry is."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    paths["identity_dir"].symlink_to(outside_dir, target_is_directory=True)
+
+    with pytest.raises(run_round.ProtectedPathError, match="symlink"):
+        run_round._reject_escaping_reserved_paths(workdir, paths)
+
+
+def test_reject_escaping_reserved_paths_accepts_ordinary_reuse(tmp_path: Path):
+    """Ordinary reused --workdir: real leftover files/dirs from a prior
+    round, no symlinks anywhere — must not raise."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    paths["score_copy"].write_text("schema_version: composition-score/0.1\n")
+    paths["identity_dir"].mkdir()
+    paths["identity_section_map"].write_text('{"sections": []}\n')
+
+    # Must not raise.
+    run_round._reject_escaping_reserved_paths(workdir, paths)
+
+
+def test_reject_escaping_reserved_paths_accepts_fresh_workdir(tmp_path: Path):
+    """First-run shape: --workdir exists but none of the reserved paths do
+    yet — nothing to escape through, must not raise."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+
+    # Must not raise.
+    run_round._reject_escaping_reserved_paths(workdir, paths)
 
 
 def test_reject_output_collision_with_existing_protected_tree_file():

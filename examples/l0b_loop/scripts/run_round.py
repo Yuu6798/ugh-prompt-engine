@@ -65,6 +65,26 @@ Pipeline (task.md's 判定器 table):
 scoped to `examples/l0b_loop/` as the protected tree instead of
 `examples/l0s_spike/`. `_reserved_workdir_paths` is the single source of
 truth both the preflight guard and the actual read/write steps derive from.
+
+**Reserved-path symlink-escape guard** (Codex review round 5, P1): a reused
+scratch `--workdir` is the normal path (task.md's iterate-on-rounds flow) —
+but if one of `_reserved_workdir_paths`' reserved names (`score.yaml`,
+`identity/`, etc.) has been replaced with a *symlink*, this run's own writes
+would follow it and could truncate/overwrite whatever it points at, up to
+and including pin-recorded evidence outside `--workdir` entirely (e.g.
+`examples/l0b_loop/`'s own `frozen/`). `_reject_escaping_reserved_paths()`
+checks every reserved path (and each existing intermediate path component
+between `--workdir` and it) for exactly this before any write happens: a
+symlink anywhere in that chain is refused outright, and — as a second,
+independent check — any existing component whose `resolve()` lands outside
+the resolved `--workdir` is refused too, even if nothing in the chain is
+literally a symlink (e.g. a component only reachable via a symlinked
+ancestor of `--workdir` itself). Nonexistent components pass (the ordinary
+first-run shape, where `run_round()` creates every reserved path fresh); an
+ordinary reuse of leftover real files/dirs from a prior round also passes
+unchanged — nothing about a normal `run_round()` invocation ever creates a
+symlink under a reserved name, so this guard only ever fires against a
+tampered/adversarial workdir.
 """
 from __future__ import annotations
 
@@ -208,6 +228,61 @@ def _reject_score_copy_self_collision(score_path: Path, reserved_paths: dict[str
             "refusing a self-overwriting copy. Use a --workdir that does not already "
             "contain the input under the name 'score.yaml'."
         )
+
+
+def _reject_escaping_reserved_paths(workdir: Path, reserved_paths: dict[str, Path]) -> None:
+    """Rejects a `--workdir` whose reserved path names (`_reserved_workdir_paths`'
+    values — `score.yaml`, `identity/`, etc.) have been replaced with a symlink,
+    or otherwise resolve outside `workdir` — see module docstring's "Reserved-path
+    symlink-escape guard" section for the full rationale. For every reserved
+    path, walks the chain of path components from `workdir` down to it
+    (inclusive) and, for each component that already exists on disk:
+
+    (a) refuses if the component itself is a symlink (`Path.is_symlink()` —
+        true even for a *broken* symlink, which `Path.exists()` alone would
+        miss, since a broken symlink's target does not exist but the link
+        itself does); and
+    (b) refuses if the component's `resolve()`d location is not `workdir`
+        itself or a path under it — a second, independent check for the case
+        where nothing in this specific chain is itself a symlink but an
+        ancestor of `workdir` is (so `workdir.resolve()` already differs from
+        `workdir`, and every "ordinary" descendant would silently resolve
+        outside the workdir the caller thinks it is writing into).
+
+    A component that does not exist yet is skipped (nothing to escape
+    through) — this is the ordinary first-run shape, where `run_round()`
+    itself creates every reserved path fresh, and the ordinary reused-workdir
+    shape (leftover real files/dirs from a prior round) passes unchanged."""
+    resolved_workdir = workdir.resolve()
+    for label, reserved_path in reserved_paths.items():
+        try:
+            relative = reserved_path.relative_to(workdir)
+        except ValueError:
+            # Every entry `_reserved_workdir_paths` produces is built as
+            # `workdir / ...`, so this should be unreachable — skip rather
+            # than raise on a path this guard was never meant to police.
+            continue
+        cumulative = workdir
+        for part in relative.parts:
+            cumulative = cumulative / part
+            if cumulative.is_symlink():
+                raise ProtectedPathError(
+                    f"reserved workdir path {label!r} ({reserved_path}) has a symlink "
+                    f"at {cumulative} — refusing to read/write through a reserved name "
+                    "that has been replaced with a symlink (it could redirect this "
+                    "run's writes outside --workdir, including onto pin-recorded "
+                    "evidence)."
+                )
+            if cumulative.exists():
+                resolved_cumulative = cumulative.resolve()
+                if resolved_cumulative != resolved_workdir and not resolved_cumulative.is_relative_to(
+                    resolved_workdir
+                ):
+                    raise ProtectedPathError(
+                        f"reserved workdir path {label!r} ({reserved_path}) resolves to "
+                        f"{resolved_cumulative}, outside --workdir ({resolved_workdir}) — "
+                        "refusing a read/write that would escape the workdir."
+                    )
 
 
 def _reject_output_collision(
@@ -644,6 +719,7 @@ def run_round(
     # read by this run (T1's default or T2's), not just T1's.
     _reject_workdir_inside_loop_tree(workdir)
     _reject_score_copy_self_collision(score_path, paths)
+    _reject_escaping_reserved_paths(workdir, paths)
     _reject_output_collision(
         output_path,
         score_path=score_path,
