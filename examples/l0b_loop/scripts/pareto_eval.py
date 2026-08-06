@@ -60,15 +60,20 @@ agreement up front, before any distance is computed, so a spec that has
 drifted from the implementation fails fast with a clear `ValueError`
 instead of `evaluate()` silently computing a result under a stale label.
 Boundary (deliberately not enforced): `improvement_rule`/`tie_rule`/
-`band_rule` are checked only for *presence* (non-empty string) — their
-prose semantics are not parsed or reinterpreted here; `evaluate()`'s own
-control flow below remains the sole source of truth for what those rules
-actually mean. `main()` catches this `ValueError` the same way it already
-catches `_load_report()`'s validation errors (stderr + exit 1).
+`band_rule` are checked for byte-for-byte agreement against
+frozen/pareto.yaml's current canonical wording via a pinned sha256 digest
+per field (`_PROSE_RULE_SHA256` / `_require_canonical_prose_rule` — D2,
+Codex review round 3, P2), but their prose semantics are still never parsed
+or reinterpreted here; `evaluate()`'s own control flow below remains the
+sole source of truth for what those rules actually mean — the pin only
+detects wording drift, it does not derive behavior from the prose. `main()`
+catches this `ValueError` the same way it already catches `_load_report()`'s
+validation errors (stderr + exit 1).
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -78,6 +83,7 @@ import yaml
 from pydantic import ValidationError
 
 from svp_rpe.authoring.report import AuthoringDiffReport
+from svp_rpe.utils.atomic_io import atomic_write_bytes
 
 _AXES = ("key", "brightness", "structure")
 
@@ -107,6 +113,27 @@ def _binary_from_verdict(verdict: Optional[str]) -> int:
     return 0 if verdict == "preserved" else 1
 
 
+def _require_str_tokens(axis_name: str, side: str, tokens: list[Any]) -> None:
+    """D1 (PR #247 Codex review round 3, P2): `_axis_distance` used to coerce
+    every element via `str(item)` before comparing — silently accepting
+    `requirement=[1, 2]` or `observed=[None]` and comparing their `str()`
+    forms instead of failing loudly on a malformed structure axis. This
+    enforces that every element of `tokens` (`axes[axis_name][side]`) is
+    already a `str` (`AuthoringDiffReport`'s own `requirement`/`observed`
+    fields are typed `Any` — see `src/svp_rpe/authoring/report.py` — so
+    `pareto_eval.py` cannot assume element type without checking itself),
+    raising a `ValueError` that names the axis, the side (`requirement` vs
+    `observed`), the offending index, and the violating value/type."""
+    for index, item in enumerate(tokens):
+        if not isinstance(item, str):
+            raise ValueError(
+                f"axes[{axis_name!r}].{side}[{index}] must be a str token, got "
+                f"{item!r} ({type(item).__name__}) — pareto_eval.py no longer "
+                "coerces non-str tokens via str(); a structure axis's "
+                "requirement/observed must be a list of string labels."
+            )
+
+
 def _axis_distance(axis_name: str, axis: dict[str, Any]) -> int:
     if axis_name == "structure":
         requirement = axis.get("requirement")
@@ -117,7 +144,9 @@ def _axis_distance(axis_name: str, axis: dict[str, Any]) -> int:
                 f"the Levenshtein distance, got requirement={requirement!r} "
                 f"observed={observed!r}"
             )
-        return _levenshtein([str(item) for item in requirement], [str(item) for item in observed])
+        _require_str_tokens(axis_name, "requirement", requirement)
+        _require_str_tokens(axis_name, "observed", observed)
+        return _levenshtein(requirement, observed)
     return _binary_from_verdict(axis.get("verdict"))
 
 
@@ -135,14 +164,46 @@ _REQUIRED_ORDER = "lower_is_better"
 _PROSE_RULE_KEYS = ("improvement_rule", "tie_rule", "band_rule")
 
 
-def _require_nonempty_str(spec: dict[str, Any], key: str) -> None:
+# D2 (PR #247 Codex review round 3, P2): the three prose rule fields used to
+# be checked only for *presence* (non-empty string) — a spec whose prose had
+# silently drifted from frozen/pareto.yaml's frozen wording (e.g. a copy/
+# paste error, or a manually-edited `--pareto` file) still passed. These
+# sha256 hex digests pin the *exact* current canonical wording of
+# frozen/pareto.yaml's improvement_rule/tie_rule/band_rule, so that any given
+# spec's rule text is checked for byte-for-byte agreement, not just
+# non-emptiness. frozen/pareto.yaml remains the single source of truth for
+# what the prose says (per the module docstring's "Boundary" note below,
+# this module's control flow — not the prose — is what `evaluate()` actually
+# executes); this pin exists only to *detect* drift between the two, the
+# same drift-detection style as L0a's trusted_axes table pin/drift-test
+# (`docs/l0a_authoring_contract.md`). Computed by loading the current
+# frozen/pareto.yaml with `yaml.safe_load` and hashing the three resulting
+# strings directly — not hand-transcribed, since YAML `>-` folded block
+# scalars normalize internal line breaks to single spaces and strip the
+# trailing newline in a way that is easy to get wrong by hand.
+_PROSE_RULE_SHA256: dict[str, str] = {
+    "improvement_rule": "527fa17af1d1f3aba1e63465bc7323a5ef2e2e3848f26c589b475411d77d005a",
+    "tie_rule": "866ff29f1d396b7475a85651acba129cbf74d5c528adf6878263b726960c29aa",
+    "band_rule": "88fd578e232a7435eca9083e3bf8a7a65beec21197594439060fc0c6b970e38e",
+}
+
+
+def _require_canonical_prose_rule(spec: dict[str, Any], key: str) -> None:
     value = spec.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
         raise ValueError(
-            f"frozen/pareto.yaml's {key!r} must be a non-empty string, got {value!r} — "
-            "pareto_eval.py enforces only that a prose rule is present here; the "
-            "meaning of what it says is the implementation's responsibility, not "
-            "parsed or reinterpreted by this check."
+            f"frozen/pareto.yaml's {key!r} must be a string, got {value!r}"
+        )
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    expected = _PROSE_RULE_SHA256[key]
+    if digest != expected:
+        raise ValueError(
+            f"frozen/pareto.yaml's {key!r} rule text drifted from the implemented "
+            f"contract (sha256 {digest} != pinned {expected}) — frozen/pareto.yaml "
+            "is the single source of truth for this prose (its own header forbids "
+            "changing it after L0B-T1 started); pareto_eval.py pins the exact "
+            "wording only to detect drift (same style as L0a trusted_axes' "
+            "drift-test), never to reinterpret its meaning."
         )
 
 
@@ -192,7 +253,7 @@ def _validate_pareto_spec_contract(pareto_spec: dict[str, Any]) -> dict[str, Any
     _validate_axis_contract(spec_axes, "structure", distance=_STRUCTURE_DISTANCE)
 
     for rule_key in _PROSE_RULE_KEYS:
-        _require_nonempty_str(pareto_spec, rule_key)
+        _require_canonical_prose_rule(pareto_spec, rule_key)
 
     return spec_axes
 
@@ -204,7 +265,8 @@ def evaluate(
     `AuthoringDiffReport` JSON (dicts), `pareto_spec` is parsed
     `frozen/pareto.yaml`. Validates `pareto_spec` against the implementation
     contract this module hardcodes (`_validate_pareto_spec_contract` — axis
-    key set, per-axis distance/order, prose rule presence) before computing
+    key set, per-axis distance/order, prose rule text pinned by sha256)
+    before computing
     anything. Returns a deterministic result dict — see module docstring
     for the band-exclusion/improvement semantics."""
     _validate_pareto_spec_contract(pareto_spec)
@@ -334,7 +396,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     content = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
-        args.output.write_bytes(content.encode("utf-8"))
+        # D3 (PR #247 Codex review round 3, P2): publish via the same
+        # atomic_write_bytes `run_round.py` uses (tempfile in the same
+        # directory + os.replace) instead of a plain `write_bytes` — a crash
+        # partway through the write can no longer leave a truncated/partial
+        # result at `-o`. stdout output is unaffected (no partial-write
+        # hazard there).
+        atomic_write_bytes(args.output, content.encode("utf-8"))
     else:
         sys.stdout.write(content)
     return 0

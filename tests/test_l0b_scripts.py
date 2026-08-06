@@ -204,6 +204,120 @@ def test_evaluate_rejects_pareto_spec_with_wrong_axis_set():
         pareto_eval.evaluate(_report(), _report(), bad_spec)
 
 
+# --- D1 (PR #247 Codex review round 3, P2): structure tokens must be str, no str() coercion ---
+
+
+def test_evaluate_rejects_int_token_in_structure_requirement():
+    prev = _report(
+        key=_axis(verdict="preserved"),
+        brightness=_axis(verdict="preserved"),
+        structure=_axis(
+            verdict="mismatch",  # failure side: AuthoringDiffReport allows Any here
+            requirement=["intro", 2, "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved"),
+        brightness=_axis(verdict="preserved"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    with pytest.raises(ValueError, match="must be a str token"):
+        pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+
+
+def test_evaluate_rejects_none_token_in_structure_observed():
+    prev = _report(
+        key=_axis(verdict="preserved"),
+        brightness=_axis(verdict="preserved"),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", None, "outro"],
+        ),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved"),
+        brightness=_axis(verdict="preserved"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    with pytest.raises(ValueError, match="must be a str token"):
+        pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+
+
+def test_evaluate_accepts_all_str_structure_tokens_unchanged():
+    """Normal-path regression guard: all-str requirement/observed still
+    compute the same distances as before D1 (no behavior change on the
+    happy path — only non-str tokens now fail loudly instead of being
+    silently str()-coerced)."""
+    prev = _report(
+        key=_axis(verdict="preserved"),
+        brightness=_axis(verdict="preserved"),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "verse", "chorus", "outro"],
+        ),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved"),
+        brightness=_axis(verdict="preserved"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    result = pareto_eval.evaluate(prev, curr, PARETO_SPEC)
+    assert result["per_axis"]["structure"]["prev_distance"] == 1
+    assert result["per_axis"]["structure"]["curr_distance"] == 0
+
+
+def test_main_exits_nonzero_on_int_token_in_structure_axis(tmp_path: Path):
+    """`main()`-level negative case: a `mismatch`-verdict structure axis
+    with a non-str token passes `AuthoringDiffReport` validation (failure
+    side keeps the `Any` design — see `src/svp_rpe/authoring/report.py`)
+    but must still fail via `evaluate()`'s `_axis_distance`, caught by
+    `main()` the same way other `ValueError`s are (stderr + exit 1)."""
+    prev = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", 2, "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    curr = _report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )
+    prev_path = tmp_path / "prev.json"
+    curr_path = tmp_path / "curr.json"
+    out_path = tmp_path / "result.json"
+    prev_path.write_text(json.dumps(prev))
+    curr_path.write_text(json.dumps(curr))
+
+    exit_code = pareto_eval.main(
+        [str(prev_path), str(curr_path), "--pareto", str(PARETO_SPEC_PATH), "-o", str(out_path)]
+    )
+    assert exit_code != 0
+    assert not out_path.exists()
+
+
 # --- C2 (PR #247 Codex review round 2, P2): pareto_eval.py spec/implementation contract ---
 
 
@@ -242,6 +356,27 @@ def test_validate_pareto_spec_contract_rejects_changed_structure_distance():
 def test_validate_pareto_spec_contract_rejects_missing_prose_rule():
     bad_spec = {**PARETO_SPEC, "tie_rule": ""}
     with pytest.raises(ValueError, match="tie_rule"):
+        pareto_eval._validate_pareto_spec_contract(bad_spec)
+
+
+# --- D2 (PR #247 Codex review round 3, P2): prose rules pinned to frozen/pareto.yaml's exact wording ---
+
+
+def test_validate_pareto_spec_contract_rejects_reworded_improvement_rule():
+    bad_spec = {**PARETO_SPEC, "improvement_rule": PARETO_SPEC["improvement_rule"] + " "}
+    with pytest.raises(ValueError, match="improvement_rule"):
+        pareto_eval._validate_pareto_spec_contract(bad_spec)
+
+
+def test_validate_pareto_spec_contract_rejects_reworded_tie_rule():
+    bad_spec = {**PARETO_SPEC, "tie_rule": PARETO_SPEC["tie_rule"].replace("NOT", "not")}
+    with pytest.raises(ValueError, match="tie_rule"):
+        pareto_eval._validate_pareto_spec_contract(bad_spec)
+
+
+def test_validate_pareto_spec_contract_rejects_reworded_band_rule():
+    bad_spec = {**PARETO_SPEC, "band_rule": PARETO_SPEC["band_rule"][:-1]}
+    with pytest.raises(ValueError, match="band_rule"):
         pareto_eval._validate_pareto_spec_contract(bad_spec)
 
 
@@ -313,6 +448,44 @@ def test_pareto_eval_cli_writes_deterministic_output(tmp_path: Path):
         [str(prev_path), str(curr_path), "--pareto", str(PARETO_SPEC_PATH), "-o", str(out_path)]
     )
     assert exit_code == 0
+    result = json.loads(out_path.read_text())
+    assert result["improved"] is True
+
+
+# --- D3 (PR #247 Codex review round 3, P2): `-o` publish goes through atomic_write_bytes ---
+
+
+def test_pareto_eval_cli_atomic_write_replaces_existing_output_file(tmp_path: Path):
+    prev_path = tmp_path / "prev.json"
+    curr_path = tmp_path / "curr.json"
+    prev_path.write_text(json.dumps(_report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="mismatch",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "verse", "chorus", "outro"],
+        ),
+    )))
+    curr_path.write_text(json.dumps(_report(
+        key=_axis(verdict="preserved", requirement="D minor", observed="D minor"),
+        brightness=_axis(verdict="preserved", requirement="dark", observed="dark"),
+        structure=_axis(
+            verdict="exact_match",
+            requirement=["intro", "chorus", "outro"],
+            observed=["intro", "chorus", "outro"],
+        ),
+    )))
+    out_path = tmp_path / "result.json"
+    out_path.write_text("stale placeholder content that must be entirely replaced, not appended")
+    exit_code = pareto_eval.main(
+        [str(prev_path), str(curr_path), "--pareto", str(PARETO_SPEC_PATH), "-o", str(out_path)]
+    )
+    assert exit_code == 0
+    # A plain `write_bytes` onto a pre-existing, longer file would already
+    # fully overwrite it too — the behavior this asserts is specific to
+    # publish going through `atomic_write_bytes` (tempfile + os.replace):
+    # the result parses as clean JSON with no leftover stale bytes.
     result = json.loads(out_path.read_text())
     assert result["improved"] is True
 
