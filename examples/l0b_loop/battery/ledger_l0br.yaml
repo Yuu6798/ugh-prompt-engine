@@ -341,6 +341,43 @@ series_runs:
     rationale: round1 = structure exact_match / brightness preserved / R4 pass・key deviated (C major — 進行 Dm-C-A#-C の C 支配。s1 r1 の F major と同族 = カスタム進行が key を倒す失敗の再現 2 例目)。round2 = 著者は s1 と異なる修理戦略（自作進行の差し替えでなく events 省略 = 契約明記の既定進行へ回帰）を選択し key preserved で全軸成功。pareto improved=true。同一失敗に対する修理経路の分散（C# 導音 vs 既定回帰）を実測
     files_dir: series/br_d2_s2/
     started_utc: '2026-08-06T18:11:57Z'
+  - task: br_d3
+    series: s1
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 660fd7af898a723804226643601a6821570d49e85a10747ebd2c4028f2948af1
+      payload_sha256: 0dd2d7034ff1421b134f7dacb81194efde6208a7fd10ba0183ec94e7989825f3
+      score_sha256: acbc51200560c598f58fe68386a7be27a40ff5925f25c32811910b2bad50ea63
+      intent_sha256: 88775bd299edd52fd6aedd73caf4b405af80bea1ea2fb7dc4693dffb6875775a
+      report_sha256: 08a495f290ca86db054f7a59cc71278510fc8b3af54a763364b8dab0d0d72983
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+    - round: 2
+      payload_manifest_sha256: 82462577a831b96f428a37070affb8ffaf969a376e599af4334b0c6fdfb6b309
+      payload_sha256: 8e9471a94850e28ef3ac61547a77ddaf992d98455baf234cdd0672ecc169fbe6
+      score_sha256: 48b5555b96d9e7a99531b9c225990a80f879082fa970ba783c178e01d351859c
+      intent_sha256: c17fa4e801913e727ba4b2c9950930d41f7d878a2bcff7a66c67a0bc779aa49f
+      report_sha256: b47bbd9669ed19034b64a6c3dd8eb465c87c08da7644d4351ad7ff565f091b95
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+    outcome: reached
+    rounds_to_success: 2
+    failure_mode: null
+    rationale: round1 = 5 要素列 [intro, bridge, chorus, chorus, outro] への過分割（融合と逆方向の失敗形状・Lev 1・key/brightness preserved・R4 pass）。round2 = 著者は境界算術から『低→高エネルギーの立ち上がり側のみ曖昧帯が生じる』非対称仮説を立て、intro bars 3→4（10s）の単一変数介入で曖昧帯を intro 宣言区間内へ吸収させ全軸成功。pareto improved=true。R4 制約下（drone 語彙なし）でも sparse/full/release 段差 + 継ぎ目で 4 要素列が到達可能なことの実証
+    files_dir: series/br_d3_s1/
+    started_utc: '2026-08-06T18:21:03Z'
 off_contract_events:
   - date: "2026-08-06"
     task: "br_d1"

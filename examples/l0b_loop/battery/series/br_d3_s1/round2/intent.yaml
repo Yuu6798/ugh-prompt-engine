@@ -1,0 +1,64 @@
+round2_diagnosis:
+  what_round1_actually_showed: >
+    観測列は intro / bridge / chorus / chorus / outro（5要素）で、要求の
+    intro / chorus / chorus / outro（4要素）に対し中間に "bridge" が
+    1要素混入した。事前登録していたリスク（chorus,chorus が統合されて
+    3要素に縮退する）は発生せず、むしろ逆方向（intro-chorus1 境界付近で
+    1つ余分に分割される）だった。よって前回の risk mitigation 方針
+    （2つの chorus を書き分ける）は今回の実測とは無関係と判断し、適用しない。
+  boundary_arithmetic: >
+    宣言境界（intro/chorus1=7.5s, chorus1/chorus2=15.0s, chorus2/outro=22.5s,
+    末尾=30.0s）と観測境界（intro end=6.5945, bridge end=12.2137,
+    chorus/chorus end=17.8329, outro end=30.0）を比較すると、
+    chorus2/outro 境界（観測22.8484 vs 宣言22.5、差0.35s）と
+    chorus1/chorus2 境界の観測（17.8329、宣言15.0との差2.83s）はまだしも
+    近いのに対し、intro 直後（宣言7.5s）付近だけ 6.59s→12.21s という
+    幅5.62sの中間帯（bridge）が新規に生じている。
+  asymmetry_hypothesis: >
+    低エネルギー(sparse)→高エネルギー(full energy) の立ち上がり側だけに
+    曖昧な中間帯が生じ、高エネルギー(full energy)→低エネルギー(release)
+    の下降側（chorus2→outro）はほぼ宣言どおり検出された（差0.35s）。
+    これは非対称であり、"full energy" への攻撃（アタック）が瞬時ではなく
+    数秒がかりで確立し、その途中経過がどちらの認識語にも強く合致しない
+    ため "bridge" というフォールバックラベルを得た、という仮説を支持する
+    （観測データからの推論であり、エンジン内部実装の知識には基づかない）。
+
+round2_change:
+  single_variable_isolation: >
+    前回 chorus1/chorus2 の書き分けは崩さず（正しく2つの chorus として
+    分離できていたため）、変更は intro の bars のみに限定した
+    （3→4、7.5s→10.0s）。狙いは、立ち上がりの曖昧帯（観測で約5.6秒相当）
+    をできるだけ intro 自身の宣言区間内に吸収させ、chorus1 の宣言区間が
+    "full energy" が確立した後の区間のみを占めるようにすること。
+  why_not_more: >
+    契約 §2 開示の「12.3秒は過分割された」実測点に接近しすぎないよう、
+    10.0秒（4小節）に留めた（12.3秒との差 2.3秒をマージンとして残す）。
+    5小節(12.5秒)は過分割リスクが高いと判断し採らなかった。
+  why_other_sections_unchanged: >
+    chorus1/chorus2/outro は round1 で概ね意図通りに観測されており
+    （chorus,chorus の分離成功、chorus2→outro 境界差0.35s）、複数変数を
+    同時に動かすと今回の bridge 混入原因の特定が難しくなるため、
+    介入は intro の延長のみに絞った。
+
+known_risks_for_next_round:
+  intro_may_still_split: >
+    intro を10秒に延ばしたことで、intro 自体が過分割され
+    intro/何か/chorus のように別ラベルへ分裂する可能性はゼロではない
+    （12.3秒未満だが実測境界ではない）。observed_sections で intro に
+    相当する行が2つ以上に分かれていないか要確認。
+  ramp_may_persist: >
+    立ち上がり非対称仮説が誤りで、bridge 混入が実は総尺や他の要因に
+    起因していた場合、intro 延長だけでは解消しない。その場合は次周回で
+    chorus1 側（宣言 bars）を調整する変数に切り替える。
+  total_length_increased: >
+    総尺が30.0秒→32.5秒に伸びた。契約に総尺上限の明記は無いが、
+    もし何らかの暗黙の上限がある場合はここが次の疑陽性源になりうる。
+
+banned_terms_check: >
+  score.yaml 全テキストフィールド（meta/semantic/structure の role・physical
+  含む）を目視走査し、"silence" "no kick" "low density" "sub bass" の
+  部分文字列（大小文字問わず）が一切含まれないことを確認した。
+
+key_and_brightness_note: >
+  key（D minor）と brightness（dark）は round1 で preserved 済みのため、
+  physical ブロックはこの2軸に関して変更していない。
