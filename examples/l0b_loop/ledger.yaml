@@ -654,6 +654,121 @@ t2:
       content_summary: >-
         軸数仮説の反証 + 「別種の対比手段の検討が残る選択肢」という要約注記
         （原 round 5 の唯一の改善はこの注記付きペイロード下で発生）
+    - round: "5_clean"
+      kind: inherited_lineage
+      content_summary: >-
+        (2026-08-06 追加、PR #247 レビュー 12 巡目) 本周回自体は注記なし
+        だが、off-contract 周回 round 4 の score/intent/report を継承して
+        いるため系譜汚染ありに分類（rounds[5_clean] の再分類注記参照）。
+
+  clean_branch:
+    # PR #247 レビュー 12 巡目 P1 を受けた真のクリーン系列（2026-08-06）。
+    # 最後の未汚染周回 round 2 から分岐し、以降の全周回で coordinator 注記
+    # なし（可視ペイロード = 課題文 + contract v1 + 前周自作ファイル +
+    # 前周差分報告のみ = 正本の宣言ペイロード定義に厳密準拠）。著者は毎周
+    # 別個体 Sonnet・ツール使用実測 0 回。計測はレビュー硬化済みランナー
+    # （git log --follow -- examples/l0b_loop/scripts/ が正確な系譜）で実施。
+    branched_from: 2
+    rounds:
+      - round: "3c"
+        date: "2026-08-06"
+        files:
+          score:
+            path: rounds_t2_clean/round3/score.yaml
+            sha256: "810cb718858ae8a09c2be6b49426f1e4ff03c5563f69aeac49d7b52c63552ca1"
+            git_blob_sha1: "ac5272876ff669458a2f0c42f13bd8e916b77579"
+          intent:
+            path: rounds_t2_clean/round3/intent.yaml
+            sha256: "cb0e7a3275151e9e8058fa69d2435cdf7f355cab8d4d70947241cd95f20d0101"
+          report:
+            path: rounds_t2_clean/round3/report.json
+            sha256: "6b710a4de025e0e82804b74baae1f67a53ffa4599c020b595ff5c26d9e170b7d"
+          pareto_vs_round2:
+            path: rounds_t2_clean/round3/pareto_vs_round2.json
+            sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+        symbolic_validation: pass
+        axes_summary: "key preserved / brightness preserved / structure mismatch"
+        observed: ["intro", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 19.8763}
+          - {label: "chorus", start_seconds: 19.8763, end_seconds: 25.2865}
+          - {label: "outro", start_seconds: 25.2865, end_seconds: 35.0}
+        pareto_vs_prev: {improved: false, note: "tie（structure 1->1）"}
+        interpretation: >-
+          単一変数実験（intro bars 3->5 のみ変更、総尺 35s）。相対パターン
+          同型のまま tie — 長さ仮説はクリーン系列でも不成立。
+      - round: "4c"
+        date: "2026-08-06"
+        files:
+          score:
+            path: rounds_t2_clean/round4/score.yaml
+            sha256: "664a22fdc8f8779bd591e96fb59502f2c7198ea868f98bafe1af323c9b32ad8d"
+            git_blob_sha1: "30463156b2e317df5626773d821cb1abdf846248"
+          intent:
+            path: rounds_t2_clean/round4/intent.yaml
+            sha256: "daea8f6e848f918323ecc4165c4e12b16ed492ee190858b0745d79a869204a29"
+          report:
+            path: rounds_t2_clean/round4/report.json
+            sha256: "3f45747312cea7cbf18ce87a0435eb1aaada16135acaa22d87f4220dcd46be43"
+          pareto_vs_round3:
+            path: rounds_t2_clean/round4/pareto_vs_round3.json
+            sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+        symbolic_validation: pass
+        axes_summary: "key preserved / brightness preserved / structure mismatch"
+        observed: ["intro", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 14.9304}
+          - {label: "chorus", start_seconds: 14.9304, end_seconds: 19.9459}
+          - {label: "outro", start_seconds: 19.9459, end_seconds: 30.0}
+        pareto_vs_prev: {improved: false, note: "tie（structure 1->1）"}
+        interpretation: >-
+          単一変数実験（silence 除去・bars 3 へ復帰）。tie。コーディネーター
+          実測: build/l0b/t2c_round4/take.wav は原 round 2 の take.wav と
+          バイト同一（c559ad21...）— silence の有無も音響に無効（ヒント
+          非加算・"no kick" 支配の追加実測点。著者の silence 仮説は次周の
+          ペイロード内で反証可能な形で棄却された）。
+      - round: "5c"
+        date: "2026-08-06"
+        files:
+          score:
+            path: rounds_t2_clean/round5/score.yaml
+            sha256: "525b517538c7348105bc4a0371e69b4f7671dbd3bfe9257282c33d01019c7b2f"
+            git_blob_sha1: "ea01e670d05999af97ab3214a063a2c8956edeb9"
+          intent:
+            path: rounds_t2_clean/round5/intent.yaml
+            sha256: "40bc77da12c5a23abfe8143038c1529f89aea5ce6bcfa3540c143cbd88ed5595"
+          report:
+            path: rounds_t2_clean/round5/report.json
+            sha256: "d1250c20f6671a796ff729013d942bf39c01989104c3d0c18a0b67a45f676a1b"
+          pareto_vs_round4:
+            path: rounds_t2_clean/round5/pareto_vs_round4.json
+            sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+        symbolic_validation: pass
+        axes_summary: "key preserved / brightness preserved / structure exact_match"
+        observed: ["intro", "chorus", "chorus", "outro"]
+        observed_sections:
+          - {label: "intro", start_seconds: 0.0, end_seconds: 5.0155}
+          - {label: "chorus", start_seconds: 5.0155, end_seconds: 15.9521}
+          - {label: "chorus", start_seconds: 15.9521, end_seconds: 20.9676}
+          - {label: "outro", start_seconds: 20.9676, end_seconds: 30.0}
+        notes:
+          - {kind: position_match_rate, value: 1.0}
+        pareto_vs_prev:
+          improved: true
+          band_excluded: false
+          per_axis_summary: >-
+            key 0->0 / brightness 0->0 / structure 1->0 — 厳密改善・
+            全軸非退行・band 除外なし。**クリーン系譜下で初の Pareto 改善**。
+        interpretation: >-
+          著者は 4 周回分のクリーンな消去法（トークン同義語・長さ・silence
+          有無の各仮説をペイロード内証拠で棄却）から「唯一実証済みの機構 =
+          full energy 共通土台上の sub bass 単一トグル」を全 3 境界に統一
+          適用する設計に到達し、全軸成功（4 セクション exact_match・
+          position_match_rate 1.0）。round 4c → 5c の Pareto 改善は、
+          coordinator 注記を含まない宣言ペイロードのみの系譜で実測された
+          初の改善であり、正本 §5 の L0b 成功条件「非旋律軸の差分が周回で
+          改善するケースが 1 つ以上実測される」を**クリーン会計で充足**する
+          操舵証拠である。
 
 
 
@@ -671,33 +786,40 @@ post_loop_hardening:
     - "run_round.py: score/section map の単一スナップショット読み (Codex P2)"
     - "run_round.py: hashes.json 先行書き込み + report の atomic 公開 (Codex P2 軽量版)"
 loop_status_t2:
-  status: task_achieved_off_contract_only
+  status: clean_success
+  status_history: >-
+    success（〜7 巡目）→ task_achieved_off_contract_only（7 巡目の
+    off-contract 再分類）→ **clean_success**（12 巡目のクリーン系列
+    clean_branch 完走・2026-08-06 確定）。
   terminated_at_round: 5
   clean_rerun_round: "5_clean"
+  clean_branch_terminated_at: "5c"
   max_rounds: 5
   task_achieved: >-
-    原 round 5 で全軸成功したが、当該周回は coordinator 注記付き
-    （off_contract_events）のため契約遵守下の達成としては主張しない。
-    クリーン再周回（round 5_clean）は structure mismatch で課題未達。
+    **クリーン系譜で達成**（clean_branch round 5c: 全軸成功・4 セクション
+    exact_match・position_match_rate 1.0。系譜 = rounds 1→2→3c→4c→5c、
+    全周回 coordinator 注記なし）。原 round 5 の達成は off-contract
+    （注記付き）、5_clean は系譜汚染ありのため、いずれも契約遵守下の
+    達成としては主張しない。
   steering_evidence: >-
-    **クリーン会計では未充足**（2026-08-06 の再分類・クリーン再周回後の
-    確定）。記録上の唯一の Pareto 改善（round 4 → 原 round 5、structure
-    1->0）は coordinator 注記付きペイロード = off-contract 周回で発生した
-    ため操舵証拠に算入できず、宣言ペイロードのみのクリーン再周回
-    （round 5_clean）は tie で改善を再現しなかった。したがって正本 §5 の
-    L0b 成功条件「非旋律軸の差分が周回で改善するケースが 1 つ以上実測
-    される」は本実験では**未充足**である。なお原 round 5 の改善自体の
-    実効機構も意図（和声対比）と異なり未確定だった
-    （rounds[round 5].interpretation_correction）。
+    **クリーン会計で充足**（2026-08-06 確定）: clean_branch round 4c → 5c
+    の Pareto 改善（rounds_t2_clean/round5/pareto_vs_round4.json、
+    improved: true、structure 1->0 厳密改善・全軸非退行・band 除外なし）。
+    系譜 rounds 1→2→3c→4c→5c は全周回 coordinator 注記なしの宣言
+    ペイロードのみで進行しており、正本 §5 の L0b 成功条件「非旋律軸の
+    差分が周回で改善するケースが 1 つ以上実測される（= 閉ループが操舵
+    として機能する証拠）」を満たす。なお off-contract 系譜の改善
+    （round 4 → 原 round 5）は引き続き evidence 不算入
+    （evidence_status: excluded）。
   honest_accounting: >-
-    クリーン周回のみの集計: T2 は rounds 1-4 + 5_clean の全てで structure
-    mismatch（距離 1 不変・tie 4 連続）、改善実測 0 件。T1 は第 1 周回
-    成功（注記なし・クリーン）だが改善ペア不存在。L0b 全体でクリーンな
-    Pareto 改善実測は **0 件**。off-contract 周回（原 round 5）を含めれば
-    1 件だが evidence には数えない。クリーン操舵の再実測は、本実験で
-    発見した契約 v1 未開示の計器欠陥 3 件（トークン非加算・role 文照合
-    リーク・drone 区間の進行無音化）を L0a 契約 v2 へ反映した後の
-    後続実験（正本 §5 の成功条件はそちらで再挑戦）に引き継ぐ。
+    クリーン系譜の集計: rounds 1, 2, 3c, 4c は structure mismatch
+    （距離 1・tie 3 連続）、5c で全軸成功 + Pareto 改善 1 件 — 改善実測は
+    5 クリーン周回中 1 件。off-contract 系譜（rounds 3/4/5 + 5_clean）の
+    成果は evidence 不算入。著者周回の総数は 10（T1×1 + T2 本系列×5 +
+    5_clean×1 + clean_branch×3）。本記録は「クリーン操舵の成立実証」で
+    あり頑健性実証ではない（改善 1 件は §5 要求の最小限）。契約 v1 の
+    計器欠陥 3 件（トークン非加算・role 文照合リーク・drone 区間の進行
+    無音化）の v2 反映は独立の残件として維持する。
 
 rounds:
   - round: 1

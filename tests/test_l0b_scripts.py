@@ -1947,14 +1947,30 @@ def test_ledger_t2_rounds_shape_includes_clean_rerun():
     round_ids = [entry.get("round") for entry in ledger["t2"]["rounds"]]
     assert round_ids == [1, 2, 3, 4, 5, "5_clean"]
 
+    # off-contract 分類: rounds 3/4/5 = coordinator 注記、5_clean = 系譜汚染
+    # （PR #247 レビュー 12 巡目で追加）。
     off_contract_rounds = {e["round"] for e in ledger["t2"]["off_contract_events"]}
-    assert off_contract_rounds == {3, 4, 5}
+    assert off_contract_rounds == {3, 4, 5, "5_clean"}
 
     round5 = next(e for e in ledger["t2"]["rounds"] if e.get("round") == 5)
     assert "excluded" in round5["evidence_status"]
 
-    assert ledger["loop_status_t2"]["status"] == "task_achieved_off_contract_only"
+    # クリーン系列（round 2 から分岐）: 3c/4c/5c が dated + pin 付きで記録
+    # され、5c が改善周回であること（クリーン操舵証拠の形状 enforce）。
+    clean_branch = ledger["t2"]["clean_branch"]
+    assert clean_branch["branched_from"] == 2
+    clean_ids = [entry["round"] for entry in clean_branch["rounds"]]
+    assert clean_ids == ["3c", "4c", "5c"]
+    for entry in clean_branch["rounds"]:
+        assert entry["files"]["score"]["sha256"]
+        assert entry["files"]["report"]["sha256"]
+    round5c = clean_branch["rounds"][-1]
+    assert round5c["pareto_vs_prev"]["improved"] is True
+    assert round5c["observed"] == ["intro", "chorus", "chorus", "outro"]
+
+    assert ledger["loop_status_t2"]["status"] == "clean_success"
     assert ledger["loop_status_t2"]["clean_rerun_round"] == "5_clean"
+    assert ledger["loop_status_t2"]["clean_branch_terminated_at"] == "5c"
 
     hardening_items = ledger["post_loop_hardening"]["items"]
     assert all(isinstance(item, str) for item in hardening_items)
