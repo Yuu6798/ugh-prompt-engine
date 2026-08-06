@@ -246,8 +246,11 @@ ledger round 4 interpretation）。すなわち決定論演奏者のヒント解
 - **D5（帯域注釈）**: 全周回・全軸 band=measured。band 除外周回なし。
 - **D6（総合スコア禁止）**: Pareto 述語は軸別距離のみ（`frozen/pareto.yaml`
   凍結、T2 でも不変更）。
-- **D1（pin 既定則）**: 全周回の score/intent/report/pareto を sha256 +
-  git blob で ledger に pin。凍結入力・runner の再 pin も同様。
+- **D1（pin 既定則）**: 全周回の score/intent/report/pareto を **sha256 で**
+  ledger に pin。git blob sha1 の併記は **score のみ**（intent/report/
+  pareto は sha256 のみ — content pin として十分で、git 側の同一性は
+  evidence コミット自体が担う）。凍結入力・runner（blob 併記）の系列別
+  pin も ledger に記録。
 
 ## 6. 残課題（L0c / v2 への引き継ぎ）
 
