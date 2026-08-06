@@ -669,6 +669,19 @@ t2:
     # 別個体 Sonnet・ツール使用実測 0 回。計測はレビュー硬化済みランナー
     # （git log --follow -- examples/l0b_loop/scripts/ が正確な系譜）で実施。
     branched_from: 2
+    runner_at_measurement:
+      # クリーン系列 3 周回（3c/4c/5c）の計測時点の実 blob（PR #247
+      # レビュー 18 巡目 P2）。3 計測はいずれもレビュー硬化の途中版
+      # ランナーで実施されており、t2.runner_at_measurement（原系列の pin）
+      # とも現 HEAD とも異なる。各 evidence コミット（942fb4a / eecdc8b /
+      # b66d0ca）の tree で blob 一致を実測確認済み — 3 周回とも同一バイト。
+      files:
+        run_round_py:
+          path: scripts/run_round.py
+          git_blob_sha1: "5179a822e703194d1adf49bd5120089b49f3b3f6"
+        pareto_eval_py:
+          path: scripts/pareto_eval.py
+          git_blob_sha1: "04452158ef8dd048cb040a661da0032a93a0b60c"
     rounds:
       - round: "3c"
         date: "2026-08-06"
@@ -773,10 +786,12 @@ t2:
 
 
 post_loop_hardening:
-  # PR #247 レビュー対応（計測完了後のスクリプト硬化。T1/T2 の全計測は
-  # runner_at_measurement / t2.runner_at_measurement の pin 時点の blob で
-  # 実施済みであり、以下は evidence 生成には使われていない）。対象コミットの
-  # 正確な列挙は git log が正:
+  # PR #247 レビュー対応のスクリプト硬化。（2026-08-06 訂正: 原文は
+  # 「T1/T2 の全計測は pin 時点の blob で実施」と主張していたが、クリーン
+  # 系列 3c/4c/5c の計測は硬化途中版ランナーで実施されたため不正確 —
+  # 正しい帰属は runner_at_measurement（T1）/ t2.runner_at_measurement
+  # （T2 原系列）/ t2.clean_branch.runner_at_measurement（クリーン系列）
+  # の 3 つの pin が各系列ごとに正。）対象コミットの正確な列挙は git log が正:
   #   git log --oneline --follow -- examples/l0b_loop/scripts/
   # pin 済み report.json とのバイト互換は T1/T2 slow smoke（決定論回帰
   # ガード）のパスで検証した。
