@@ -1,10 +1,9 @@
-# L0b loop ledger — L0B-T1. Source of truth for engine/deps pins,
-# pinned-input hashes, and the positive-control gate result
-# (task.md's "陽性対照ゲート" section). `rounds` will accumulate real L0b
-# authoring evidence (LLM round-trips against `scripts/run_round.py`'s
-# report.json) once the experiment itself is run — this ledger currently
-# only pins the experiment *infrastructure* (frozen inputs + positive
-# control dry-run), per 正本 D1's pin-on-introduction rule.
+# L0b loop ledger — L0B-T1 / L0B-T2. Source of truth for engine/deps pins,
+# pinned-input hashes, positive-control gates, and **completed** experiment
+# evidence: 10 author rounds (T1×1 / T2 原系列×5 / 5_clean / clean_branch
+# 3c–5c), off-contract 会計, and the clean_success verdict
+# (loop_status_t2)。(2026-08-06 ヘッダ更新: 旧文面の「rounds は実験実行後に
+# 追記予定・現状はインフラ pin のみ」は実験完了により陳腐化したため差し替え。)
 spike_id: L0B-T1
 
 engine_state:
@@ -29,6 +28,33 @@ engine_state:
     - "git fetch origin main"
     - "git merge-base origin/main HEAD"
     - "git diff --stat <base_commit>..HEAD -- src/"
+
+author_identity:
+  # 正本 docs/llm_adapter_planning.md「著者側の同一性（provider / model /
+  # version・呼び出し設定・llm_run_id）」の記録（2026-08-06 追記、PR #247
+  # レビュー 23 巡目 P1。実験実行時に未記録だった項目の事後補完 — 直接
+  # 証拠の範囲のみ記録し、露出されない項目は推定せず制約として明記する）。
+  llm_run_id: "l0b-20260805-claude-code-agent-sonnet"
+  llm_run_id_note: >-
+    実験レベル識別子。実行時に採番していなかったため 2026-08-06 に遡及
+    採番（dated）。適用範囲 = 本 ledger の全 10 著者周回。
+  provider: "Anthropic"
+  model: >-
+    Claude Code の Agent ツールで model="sonnet"（エイリアス）を明示して
+    spawn。本セッションのハーネス構成における sonnet の解決先ファミリーは
+    claude-sonnet-5。
+  invocation: >-
+    毎周回、履歴を持たない新規サブエージェント（fresh instance）として
+    spawn。可視入力 = 各周回の宣言ペイロード（プロンプトに封入）。
+    ツール使用実測 = 全 10 周回で 0 回（サブエージェント usage カウンタ）。
+  provenance_limitations: >-
+    Agent ツールは正確なモデルスナップショット/バージョン文字列・
+    サンプリング設定（temperature 等）・呼び出し単位の run id を呼び出し
+    側へ露出しないため、これらは**不記録**（推定による補完はしない）。
+    この制約は将来の LLM 間比較・モデルドリフト弁別（正本 §6 の拡張）の
+    確度を下げるが、本実験の verdict（clean_success = 閉ループの操舵
+    性質の実測）は特定モデルの同一性に依存する主張ではないため
+    格下げしない。後続実験では spawn 時点での実 ID 記録を運用要件に含める。
 
 deps_lock:
   file: deps/pip_freeze.txt

@@ -1256,6 +1256,128 @@ def test_reserved_workdir_paths_includes_judge_inputs_copies(tmp_path: Path):
     )
 
 
+# --- PR #247 Codex review round 23, P1: L1 pre-publish judge-input copy ---
+# --- re-verification -------------------------------------------------------
+
+
+def _staged_verified_inputs(paths: dict) -> dict:
+    """Stages `judge_contract`/`judge_arrangement`/`judge_capability_profile`
+    from the real pinned fixed inputs' current bytes (mirrors `run_round()`'s
+    own G2 staging step) and returns a `verified_inputs`-shaped dict the
+    tests below can hand to `_reject_judge_input_copy_drift` directly,
+    without paying for a full `_reject_judge_input_drift()` preflight call."""
+    verified_inputs = {
+        "authoring_contract_l0": run_round.CONTRACT_PATH.read_bytes(),
+        "arrangement": run_round.ARRANGEMENT_PATH.read_bytes(),
+        "suno_capability_profile": run_round.CAPABILITY_PROFILE_PATH.read_bytes(),
+    }
+    run_round.atomic_write_bytes(paths["judge_contract"], verified_inputs["authoring_contract_l0"])
+    run_round.atomic_write_bytes(paths["judge_arrangement"], verified_inputs["arrangement"])
+    run_round.atomic_write_bytes(
+        paths["judge_capability_profile"], verified_inputs["suno_capability_profile"]
+    )
+    return verified_inputs
+
+
+def test_judge_input_copy_drift_error_is_a_judge_input_drift_error():
+    """`JudgeInputCopyDriftError` must subclass `JudgeInputDriftError` (in
+    turn a `ProtectedPathError`) — module docstring's "L1" section — so
+    `main()`'s existing `except ProtectedPathError` handling catches it
+    unchanged, same as every other preflight/pre-publish guard's error."""
+    assert issubclass(run_round.JudgeInputCopyDriftError, run_round.JudgeInputDriftError)
+    assert issubclass(run_round.JudgeInputCopyDriftError, run_round.ProtectedPathError)
+
+
+def test_reject_judge_input_copy_drift_accepts_untampered_copies(tmp_path: Path):
+    """Positive case, cheap helper-level check: copies staged straight from
+    `verified_inputs` and never touched afterward must not raise."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    verified_inputs = _staged_verified_inputs(paths)
+
+    run_round._reject_judge_input_copy_drift(paths, verified_inputs)  # must not raise
+
+
+def test_reject_judge_input_copy_drift_rejects_mutated_copy(tmp_path: Path):
+    """L1 negative case: a `judge_inputs/*` copy rewritten after staging (the
+    "another process mutates the copy mid-run" scenario the module docstring's
+    "L1" section describes) must be refused with `JudgeInputCopyDriftError`
+    naming the drifted copy's label, before any publish happens."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    verified_inputs = _staged_verified_inputs(paths)
+
+    # Simulate a second process rewriting the staged arrangement copy after
+    # G2 staged it (but before this run's report bundle is published).
+    paths["judge_arrangement"].write_bytes(b"schema_version: arrangement/0.1\nkind: tampered\n")
+
+    with pytest.raises(run_round.JudgeInputCopyDriftError, match="arrangement"):
+        run_round._reject_judge_input_copy_drift(paths, verified_inputs)
+
+
+def test_reject_judge_input_copy_drift_rejects_missing_copy(tmp_path: Path):
+    """L1 negative case: a `judge_inputs/*` copy *deleted* mid-run (not just
+    rewritten) must also be refused, not silently skipped."""
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    paths = run_round._reserved_workdir_paths(workdir)
+    verified_inputs = _staged_verified_inputs(paths)
+
+    paths["judge_capability_profile"].unlink()
+
+    with pytest.raises(run_round.JudgeInputCopyDriftError, match="suno_capability_profile"):
+        run_round._reject_judge_input_copy_drift(paths, verified_inputs)
+
+
+def test_run_round_rejects_judge_input_copy_drift_before_publish_on_symbolic_fail_path(
+    tmp_path: Path, monkeypatch
+):
+    """L1 wiring proof, exercised through the real `run_round()` symbolic-fail
+    branch (cheap — an invalid `score.yaml` never reaches the audio pipeline,
+    same fixture the H1 hard-link test above uses): a `judge_inputs/*` copy
+    mutated *mid-run* — here, immediately after `svprpe validate` has already
+    consumed it, simulating a second process rewriting it before this run's
+    report bundle is published — must make `run_round()` raise
+    `JudgeInputCopyDriftError` and must leave no report/hashes published (the
+    pre-publish check runs and fires before `_publish_report_bundle` is ever
+    called, module docstring's "L1" section). This is a real end-to-end
+    `run_round()` call, not a monkeypatched stand-in for the guard itself —
+    only the tampering trigger (writing extra bytes right after the real
+    `_run_validate_cli` call that would otherwise run unmodified) is
+    injected, via a thin wrapper around the real function rather than a fake
+    replacement, so this run's `symbolic_validation` result is still
+    genuinely produced by the real subprocess.
+
+    G2 stages all three `judge_inputs/*` copies unconditionally before the
+    symbolic gate is even reached, so — contrary to a "the symbolic-fail
+    branch returns before judge_inputs is written, and is therefore exempt"
+    assumption — this branch is not exempt from the drift window L1 closes;
+    this test's fixture reaches the guard by construction (module docstring's
+    "L1" section, "Applied at *both* publish sites unconditionally" clause)."""
+    bad_score_path = tmp_path / "bad_score.yaml"
+    bad_score_path.write_text("not: a valid composition score\n", encoding="utf-8")
+    workdir = tmp_path / "wd"
+    output_path = tmp_path / "report.json"
+
+    real_run_validate_cli = run_round._run_validate_cli
+
+    def _run_validate_cli_then_tamper(score_copy_path, staging_path, dest_path, contract_path):
+        real_run_validate_cli(score_copy_path, staging_path, dest_path, contract_path)
+        # Simulated mid-run tamper of the staged judge_inputs/ copy, after
+        # this run's own `svprpe validate` subprocess already consumed it.
+        contract_path.write_bytes(contract_path.read_bytes() + b"\ntampered: true\n")
+
+    monkeypatch.setattr(run_round, "_run_validate_cli", _run_validate_cli_then_tamper)
+
+    with pytest.raises(run_round.JudgeInputCopyDriftError, match="authoring_contract_l0"):
+        run_round.run_round(bad_score_path, workdir, 0, output_path)
+
+    assert not output_path.exists()
+    assert not (workdir / "hashes.json").exists()
+
+
 def test_reject_escaping_reserved_paths_rejects_symlinked_judge_contract(tmp_path: Path):
     """The reserved-path symlink-escape guard covers the new G2 copies the
     same way it covers every other reserved name — a symlinked

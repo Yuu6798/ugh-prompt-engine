@@ -293,6 +293,35 @@ src/` empty) — this guard deliberately does not hash-verify the engine's
 full source tree (that would duplicate git's own role). This guard's scope
 is narrower and purely structural: it blocks an import-resolution
 mix-up (wrong checkout entirely), not an edit within the right one.
+
+**L1 — pre-publish judge-input copy re-verification**
+(`_reject_judge_input_copy_drift`, Codex review round 23, P1): G2 above
+closed the *source*-side TOCTOU (a downstream consumer re-reading
+`config`/`frozen` after preflight verified it) by staging preflight-verified
+bytes into `<workdir>/judge_inputs/*` copies once, up front. It left the
+*copy*-side open: `judge_inputs/*` is an ordinary mutable workdir file for
+the rest of the run, ordinarily protected by the output-collision guard only
+against *this run's own* writes, not against a second process with write
+access to `--workdir` overwriting a copy after G2 stages it — if that
+happens, the CLI subprocesses that already consumed the original copy are
+unaffected, but a report published afterward is effectively vouching for
+judge bytes that no longer match what is actually on disk under
+`judge_inputs/`. `_reject_judge_input_copy_drift(paths, verified_inputs)`
+re-reads every `judge_inputs/*` copy `_JUDGE_INPUT_COPY_LABELS` names and
+re-hashes it against the `verified_inputs` bytes G2 staged it from,
+immediately before each of `run_round()`'s two `_publish_report_bundle`
+call sites; any mismatch or missing copy raises `JudgeInputCopyDriftError`
+(a `JudgeInputDriftError`/`ProtectedPathError` subclass) naming the drifted
+copy, and the publish that would have attributed a report to it never
+happens. Applied at *both* publish sites unconditionally: G2 stages all
+three copies before the symbolic-fail branch's own early-return check
+(`if symbolic_validation.status == "fail"`) is reached, so that branch is
+not exempt from the drift window this guard closes, even though it is the
+cheaper of the two branches to run. This is re-verification, not
+immutable-by-construction protection — see `JudgeInputCopyDriftError`'s
+docstring for the boundary this leaves open (a window between G2's write
+and this check still exists; it is merely much shorter than "for the rest
+of the run").
 """
 from __future__ import annotations
 
@@ -517,6 +546,30 @@ class JudgeInputDriftError(ProtectedPathError):
     `except ProtectedPathError` handling catches it unchanged."""
 
 
+class JudgeInputCopyDriftError(JudgeInputDriftError):
+    """L1 pre-publish guard (PR #247 Codex review round 23, P1): a staged
+    `judge_inputs/*` copy (G2 snapshot-feed, module docstring's "G2" section)
+    no longer matches the bytes `_reject_judge_input_drift` verified and
+    `run_round()` staged it from. G2 closed the verify-then-*re-read*
+    TOCTOU (a downstream consumer re-opening the original config/frozen
+    path), but every `judge_inputs/*` copy is itself an ordinary mutable
+    workdir file for the rest of the run — nothing makes it read-only — so a
+    second process with write access to `--workdir` could still overwrite a
+    copy between G2's staging write and this run's eventual report publish,
+    and the report would then be attributed to pinned judge bytes that no
+    longer match what is actually sitting in `judge_inputs/`.
+    `_reject_judge_input_copy_drift` re-reads and re-hashes every staged
+    copy immediately before `_publish_report_bundle` publishes a report, and
+    raises this error (fail-closed — the publish is refused, not
+    best-effort-warned) on any mismatch or missing copy. This is
+    re-verification, not immutable-by-construction protection: it shrinks
+    the unnoticed-drift window to "immediately before publish" rather than
+    closing it structurally (an OS-level read-only bind mount or permission
+    change on `judge_inputs/` would be the structural fix; out of scope for
+    this lightweight guard). A `JudgeInputDriftError` subclass so `main()`'s
+    existing `except ProtectedPathError` handling catches it unchanged."""
+
+
 class EngineCheckoutContainmentError(ProtectedPathError):
     """`import svp_rpe` resolved to a module outside this checkout's `src/`
     tree (K1, module docstring's "K1" section) — a different checkout's
@@ -562,6 +615,67 @@ def _sha256_bytes(data: bytes) -> str:
 
 def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
+
+
+# L1 (PR #247 Codex review round 23, P1): the `_reserved_workdir_paths` key
+# for each `judge_inputs/*` copy G2 stages unconditionally in `run_round()`
+# (before either the symbolic-fail early-return branch or the full-pipeline
+# success branch is reached — see `JudgeInputCopyDriftError`'s docstring),
+# mapped to the `verified_inputs` label (`_reject_judge_input_drift`'s
+# return value) it was staged from. `eval_control_profile` and the section
+# map are consumed in-process from `verified_inputs` directly (module
+# docstring's "G2" section) with no physical `judge_inputs/` copy, so they
+# have no entry here — there is no on-disk copy for
+# `_reject_judge_input_copy_drift` to re-check for those two.
+_JUDGE_INPUT_COPY_LABELS: dict[str, str] = {
+    "judge_contract": "authoring_contract_l0",
+    "judge_arrangement": "arrangement",
+    "judge_capability_profile": "suno_capability_profile",
+}
+
+
+def _reject_judge_input_copy_drift(
+    paths: dict[str, Path], verified_inputs: dict[str, bytes]
+) -> None:
+    """L1 pre-publish guard (PR #247 Codex review round 23, P1) — see
+    `JudgeInputCopyDriftError`'s docstring for the full rationale. Called
+    immediately before every `_publish_report_bundle` invocation in
+    `run_round()`. Re-reads each `judge_inputs/*` copy named in
+    `_JUDGE_INPUT_COPY_LABELS` and compares its current on-disk sha256
+    against the sha256 of the `verified_inputs` bytes it was staged from at
+    the top of this run; a mismatch (rewritten) or a `FileNotFoundError`
+    (deleted) both raise `JudgeInputCopyDriftError` naming the copy, its
+    path, and — for a mismatch — both digests, fail-closed before the report
+    bundle is published.
+
+    Applied unconditionally to both `run_round()` publish sites (the
+    symbolic-fail early-return branch and the full-pipeline success branch):
+    G2 stages all three copies before the symbolic gate ever runs, so the
+    fail branch's report is reached only *after* the copies already exist on
+    disk — it is not, in this module's current control flow, exempt from
+    the drift window this guard closes."""
+    for path_key, label in _JUDGE_INPUT_COPY_LABELS.items():
+        copy_path = paths[path_key]
+        expected_bytes = verified_inputs[label]
+        expected_sha256 = _sha256_bytes(expected_bytes)
+        try:
+            actual_bytes = copy_path.read_bytes()
+        except FileNotFoundError:
+            raise JudgeInputCopyDriftError(
+                "judge input copy was mutated mid-run — refusing to publish a report "
+                f"attributed to pinned judge bytes: the {label} copy ({copy_path}) is "
+                f"missing (expected sha256 {expected_sha256}, staged at run start from "
+                "preflight-verified bytes)."
+            ) from None
+        actual_sha256 = _sha256_bytes(actual_bytes)
+        if actual_sha256 != expected_sha256:
+            raise JudgeInputCopyDriftError(
+                "judge input copy was mutated mid-run — refusing to publish a report "
+                f"attributed to pinned judge bytes: the {label} copy ({copy_path}) sha256"
+                f" is {actual_sha256}, expected {expected_sha256} (the bytes staged into "
+                "this copy at run start from preflight-verified input) — something "
+                "rewrote it before this run's report bundle was published."
+            )
 
 
 def _inside_loop_tree(path: Path) -> bool:
@@ -1427,6 +1541,13 @@ def run_round(
         hashes_bytes = (
             json.dumps(hashes, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8")
+        # L1 pre-publish guard (PR #247 Codex review round 23, P1): the G2
+        # snapshot-feed writes above already staged all three
+        # `judge_inputs/*` copies unconditionally before this branch is
+        # reached, so this branch is not exempt from the mid-run drift
+        # window `_reject_judge_input_copy_drift` closes — see
+        # `JudgeInputCopyDriftError`'s docstring.
+        _reject_judge_input_copy_drift(paths, verified_inputs)
         _publish_report_bundle(
             output_path=output_path,
             report_bytes=report_bytes,
@@ -1579,6 +1700,14 @@ def run_round(
     hashes_bytes = (
         json.dumps(hashes, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
+    # L1 pre-publish guard (PR #247 Codex review round 23, P1) — see
+    # `JudgeInputCopyDriftError`'s docstring. `judge_arrangement`/
+    # `judge_capability_profile` were last read by the `package` subprocess
+    # call above, arbitrarily long before this point in wall-clock time —
+    # the longest of this run's drift windows, and exactly what this guard
+    # exists to catch just before the report attributing to those bytes
+    # becomes visible.
+    _reject_judge_input_copy_drift(paths, verified_inputs)
     _publish_report_bundle(
         output_path=output_path,
         report_bytes=report_bytes,

@@ -1,8 +1,11 @@
 # LLM Adapter Planning — LLM 著述トラック (L 系列)
 
-**Status**: L0 計画文書（2026-08-05 起案、Fable 設計セッション）。実装未着手。
-L0-s（手動スパイク）から開始する。旋律軸の配線（L0c）は M3d 校正と
-M4 の evidence 翻訳に依存するため凍結し、非旋律軸で先行する。
+**Status**: L 系列 計画文書（2026-08-05 起案、Fable 設計セッション）。
+L0-s / L0a / L0b は**実施済み**（フェーズ表と各記録 doc が正 —
+[`l0s_spike_record.md`](l0s_spike_record.md) /
+[`l0a_authoring_contract.md`](l0a_authoring_contract.md) /
+[`l0b_closed_loop_record.md`](l0b_closed_loop_record.md)）。旋律軸の配線
+（L0c）は M3d 校正と M4 の evidence 翻訳に依存するため凍結のまま。
 
 ## 1. 目的
 
