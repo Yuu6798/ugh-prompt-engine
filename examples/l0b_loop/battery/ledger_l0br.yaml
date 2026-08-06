@@ -96,12 +96,18 @@ payload_composition:
     note: >-
       sha256_at_measurement = 全 16 測定周回を実行した実装（事前登録 commit
       2b26238 と PR head 62f6ead の両方でこの sha。git 履歴が実体を保持）。
-      sha256_current = PR #249 Codex レビュー対応（45a7a46・publish 失敗時
-      rollback）後の現行ファイル（形状テストが実体照合する対象）。修正は
-      「2 本目の publish が失敗した場合」の失敗経路と docstring のみで、
-      成功経路の組成出力はバイト不変 — series_runs の per-round
-      payload_sha256 / payload_manifest_sha256 pin はこの修正の影響を
-      受けない（実測: 全周回の pin は測定時のまま一致）。
+      sha256_current = PR #249 レビュー対応を累積した現行ファイル（形状
+      テストが実体照合する対象・詳細な変更系譜は git 履歴が保持するため
+      個別 commit は列挙しない）。累積修正はいずれも検証強化（不正
+      manifest の拒否範囲拡大）と失敗経路（publish rollback）に限られ、
+      妥当な manifest に対する成功経路の組成出力（`document`/
+      `payload_bytes`/`manifest_bytes` の構築ロジック）はバイト不変 —
+      両 blob を diff すると変更行は validation の追加分岐・rollback の
+      try/except 化のみで、出力構築部分に差分はない（実測: 2026-08-06
+      確認）。series_runs の per-round payload_sha256 / payload_manifest_
+      sha256 pin はこの不変量ゆえに影響を受けず、測定時のまま有効
+      （`test_compose_payload_golden_round1_minimal` が固定 payload.md
+      期待値で pass し続けていることも同一不変量の回帰防止として機能）。
   policy: >-
     全周回の著者可視ペイロードは compose_payload.py の出力のみ
     （AGENTS.md §8「情報遮断実験のペイロード組成は機械化する」2026-08-06

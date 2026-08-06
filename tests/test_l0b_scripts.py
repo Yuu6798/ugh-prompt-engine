@@ -3522,6 +3522,14 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
     # `payload_sha256` フィールドとしてのみ保持）のためファイル実体照合の
     # 対象外のまま据え置く）。
     null_consistency_checks: list[tuple[str, Path, bool]] = []
+    # 判定成果物の内容と台帳 解釈済み boolean の突合（PR #249 Codex レビュー
+    # 第 8 巡, P2）: sha256 pin の一致だけでは「pin は正しいがその隣の
+    # 解釈済み boolean（`token_ban`/`pareto_vs_prev`）が独立に手書き改変
+    # されている」（例: pareto の `improved: false`（tie）を台帳側だけ
+    # `pareto_vs_prev: true` に書き換えて改善件数を水増しする）を検出
+    # できない。ここでは pin 済みファイルを実際に parse し、その内容
+    # フィールドを台帳フィールドと突合する。
+    content_cross_checks: list[tuple[str, Path, str, object]] = []
     for series_entry in ledger["series_runs"]:
         round_dir_base = BATTERY_DIR / series_entry["files_dir"]
         for round_entry in series_entry["rounds"]:
@@ -3541,6 +3549,9 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
             token_ban_path = round_dir / "token_ban.json"
             if token_ban_sha is not None:
                 checks.append((f"{prefix}.token_ban_report_sha256", token_ban_path, token_ban_sha))
+                content_cross_checks.append(
+                    (f"{prefix}.token_ban", token_ban_path, "status", round_entry["token_ban"])
+                )
             null_consistency_checks.append(
                 (f"{prefix}.token_ban_report_sha256", token_ban_path, token_ban_sha is not None)
             )
@@ -3549,6 +3560,9 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
             pareto_path = round_dir / f"pareto_vs_round{round_num - 1}.json"
             if pareto_sha is not None:
                 checks.append((f"{prefix}.pareto_report_sha256", pareto_path, pareto_sha))
+                content_cross_checks.append(
+                    (f"{prefix}.pareto_vs_prev", pareto_path, "improved", round_entry["pareto_vs_prev"])
+                )
             null_consistency_checks.append(
                 (f"{prefix}.pareto_report_sha256", pareto_path, pareto_sha is not None)
             )
@@ -3558,6 +3572,16 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
         assert path.is_file(), f"{label}: pinned path does not exist: {path}"
         actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         assert actual_sha256 == expected_sha256, f"{label}: sha256 mismatch for {path}"
+
+    assert content_cross_checks, "no content cross-checks collected — test would vacuously pass"
+    for label, path, json_key, expected_value in content_cross_checks:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        actual_value = payload[json_key]
+        assert actual_value == expected_value, (
+            f"{label}: {path.name}.{json_key}={actual_value!r} does not match ledger "
+            f"value {expected_value!r} (interpreted boolean may have been hand-edited "
+            "independently of the pinned judge output)"
+        )
 
     # null/非 null と実ファイル有無の一貫性: pin が null なのに実ファイルが
     # 存在する（pin 忘れ）、または pin があるのに実ファイルが存在しない
