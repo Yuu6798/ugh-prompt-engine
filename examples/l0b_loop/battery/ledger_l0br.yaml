@@ -244,6 +244,29 @@ series_runs:
     rationale: '著者は 5 周回で一貫して合理的な単一変数実験を重ねた（語彙置換 r2/r4・bars 非対称化 r3・対称復帰 r5）が、契約 v1 未開示のヒント解決規則（非加算・優先順位制: no kick/sub bass/low density が full energy を支配し chorus2 が全周回 drone 化）により、全編集が音響的に無効またはレベルのみの変化に終わった。evidence: 観測境界が r1=r2（8.4753/13.5372/30.0）・r3=r4（7.5/12.5852/32.5）と語彙変更を跨いで完全同値、r5 は bars 対称復帰で r1/r2 値へ回帰。author 5 個体とも tool 使用 0。l0b record §4.1（ヒント非加算）と同型 = L0a v2 反映後の再測対象'
     files_dir: series/br_d1_s1/
     started_utc: '2026-08-06T17:19:46Z'
+  - task: br_d1
+    series: s2
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 66df3aedfbb1e1587b53e41f859e2c1cd2d9c0bd0adc526989669a84a647bd7d
+      payload_sha256: 7499aadaca4c5cf873f0b6bc2300f86fbf2c7581d5194d82441669e4fdea25f9
+      score_sha256: 4acea3334b37ff1ee0cc5a92a12a806622328bafdc1e0aba883fd6380eba2ac5
+      intent_sha256: a849b4d3ddbc33634c6a954082cb56d5dc5cae26c47453bcc2cb4a76f2282577
+      report_sha256: 381d51a74602c80bfc3635758ea1d4e48cc7cbffda5237b1cb680dccaa629078
+      token_ban: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+    outcome: reached
+    rounds_to_success: 1
+    failure_mode: null
+    rationale: 第 1 周回で全軸成功（key/brightness preserved・structure exact_match・境界 8.4521/13.4676/19.11s）。s1 と対照的に、著者は chorus 2 連を音色語彙で差異化せず同一 'full energy' 反復とする戦略（融合リスクを intent で自覚的に受容）を選び、drone 化罠を回避した。同一課題での到達分散（s1=unreached/5 周 vs s2=reached/1 周）は著者戦略選択に帰属
+    files_dir: series/br_d1_s2/
+    started_utc: '2026-08-06T17:58:50Z'
 off_contract_events:
   - date: "2026-08-06"
     task: "br_d1"

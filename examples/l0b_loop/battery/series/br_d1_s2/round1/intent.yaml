@@ -1,0 +1,28 @@
+overall:
+  goal: "BR-D1 の R1/R2/R3 を同時充足する 4 節構成の最小構成を狙う"
+structure_design:
+  section_count: "契約 §2 開示の可行窓（実測 7.5 秒付近が唯一の陽性対照）に
+    全セクションを揃える。12.3 秒は過分割・6.2 秒は吸収の実測があるため、
+    中間セクションに限らず全 4 節を同一の 7.5 秒に統一し、リスクを最小化した"
+  bars_bpm_choice: "bpm=96, 4/4, 3 bars => 3*4*60/96 = 7.5 秒。陽性対照の
+    実測値に厳密一致させるための逆算"
+  chorus_repeat: "R1 は中間 2 節がどちらも chorus と観測されることを要求する
+    ため、同一キャラクタの full energy セクションを 2 回宣言。境界検出が
+    宣言順の区切りに追従することを期待し、あえて音響対比は作らず反復とした
+    （契約に反復セクション間の境界検出保証の記載はないため、これはリスクを
+    負った仮説）"
+  contrast_design: "intro=sparse/low density → chorus=full energy → outro=
+    release/low density という認識語彙の並びで、隣接セクション間のエネルギー
+    対比を意図的に作り、境界検出を助ける"
+key_design:
+  choice: "D minor を明示し、events.chord_progression で i-VI-VII-i
+    (Dm-A#-C-Dm) の定番マイナー進行を与えてキー推定を後押しした。
+    Bb は契約の許可語彙にないため A# 表記を用いた"
+brightness_design:
+  choice: "physical.brightness=dark を直接宣言。契約 §2 により dark は
+    低域中心・倍音少なめの音色に直結するとされるため、他の認識語彙
+    （sub bass 等）は今回は使わず素直に dark 指定のみとした"
+open_risks:
+  - "chorus 2 節が 1 節に融合して観測される可能性（音響対比を作らなかったため）"
+  - "intro/outro の 7.5 秒指定が中間セクション向けの実測知見の外挿である点"
+tools_used: none
