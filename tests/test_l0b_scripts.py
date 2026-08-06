@@ -14,6 +14,7 @@ Covers:
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -53,6 +54,7 @@ def _load_module(name: str, path: Path) -> ModuleType:
 
 pareto_eval = _load_module("l0b_pareto_eval", SCRIPTS_DIR / "pareto_eval.py")
 run_round = _load_module("l0b_run_round", SCRIPTS_DIR / "run_round.py")
+compose_payload = _load_module("l0b_compose_payload", SCRIPTS_DIR / "compose_payload.py")
 
 
 def _axis(*, verdict: str, band: str = "measured", requirement=None, observed=None) -> dict:
@@ -2528,3 +2530,479 @@ def test_ledger_t2_rounds_shape_includes_clean_rerun():
 
     hardening_items = ledger["post_loop_hardening"]["items"]
     assert all(isinstance(item, str) for item in hardening_items)
+
+
+# --- compose_payload.py (AGENTS.md §8「情報遮断実験のペイロード組成は機械化する」，
+# 2026-08-06 制定・PR #248; 事故実測 = PR #247 §3.2) --------------------------
+
+
+def _write_text_file(dir_path: Path, name: str, content: str) -> tuple[Path, str]:
+    """`dir_path/name` へ `content` を UTF-8 で書き、`(path, sha256_hex)` を返す。"""
+
+    path = dir_path / name
+    path.write_text(content, encoding="utf-8")
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _minimal_manifest_dict(*, experiment_id="round1", round_label="round1", parts=None) -> dict:
+    return {
+        "schema_version": compose_payload.SCHEMA_VERSION,
+        "experiment_id": experiment_id,
+        "round_label": round_label,
+        "parts": parts if parts is not None else [],
+    }
+
+
+def _write_manifest(manifest_dir: Path, manifest: dict, *, name: str = "manifest.yaml") -> Path:
+    path = manifest_dir / name
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_compose_payload_golden_round1_minimal(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT TEXT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK TEXT\n")
+
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    payload_text = (out_dir / "payload.md").read_text(encoding="utf-8")
+    expected = (
+        "=== PAYLOAD l0b-payload/0.1 experiment=round1 round=round1 parts=2 ===\n"
+        f"=== PART 1/2 role=contract path=contract.md sha256={contract_sha} ===\n"
+        "CONTRACT TEXT\n"
+        "=== END PART 1/2 ===\n"
+        f"=== PART 2/2 role=task path=task.md sha256={task_sha} ===\n"
+        "TASK TEXT\n"
+        "=== END PART 2/2 ===\n"
+        "=== END PAYLOAD ===\n"
+    )
+    assert payload_text == expected
+    assert result["payload_sha256"] == hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+
+    manifest_json = json.loads((out_dir / "payload.manifest.json").read_text(encoding="utf-8"))
+    assert manifest_json["payload_sha256"] == result["payload_sha256"]
+    assert [p["role"] for p in manifest_json["parts"]] == ["contract", "task"]
+    assert all(p["newline_appended"] is False for p in manifest_json["parts"])
+
+
+def test_compose_payload_is_byte_deterministic_across_runs(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    out_dir_1 = tmp_path / "out1"
+    out_dir_2 = tmp_path / "out2"
+    compose_payload.compose_payload(manifest_path, out_dir_1)
+    compose_payload.compose_payload(manifest_path, out_dir_2)
+
+    assert (out_dir_1 / "payload.md").read_bytes() == (out_dir_2 / "payload.md").read_bytes()
+    assert (out_dir_1 / "payload.manifest.json").read_bytes() == (
+        out_dir_2 / "payload.manifest.json"
+    ).read_bytes()
+
+
+def test_compose_payload_canonical_order_ignores_manifest_declaration_order(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    _, score_sha = _write_text_file(manifest_dir, "score.yaml", "SCORE\n")
+    _, intent_sha = _write_text_file(manifest_dir, "intent.yaml", "INTENT\n")
+
+    # Declared out of canonical order on purpose.
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "own_intent", "path": "intent.yaml", "sha256": intent_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+            {"role": "own_score", "path": "score.yaml", "sha256": score_sha},
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert [p["role"] for p in result["parts"]] == ["contract", "task", "own_score", "own_intent"]
+    payload_text = (out_dir / "payload.md").read_text(encoding="utf-8")
+    assert (
+        payload_text.index("role=contract")
+        < payload_text.index("role=task")
+        < payload_text.index("role=own_score")
+        < payload_text.index("role=own_intent")
+    )
+
+
+def test_compose_payload_sha256_mismatch_rejects_and_emits_nothing(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _write_text_file(manifest_dir, "task.md", "TASK\n")
+    wrong_sha = "0" * 64
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": wrong_sha},
+            {"role": "task", "path": "task.md", "sha256": wrong_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="sha256 mismatch"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert not (out_dir / "payload.md").exists()
+    assert not (out_dir / "payload.manifest.json").exists()
+
+
+def test_compose_payload_rejects_missing_contract_role(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(parts=[{"role": "task", "path": "task.md", "sha256": task_sha}])
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="role='contract'"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_duplicated_role(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, contract_sha_2 = _write_text_file(manifest_dir, "contract2.md", "CONTRACT2\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "contract", "path": "contract2.md", "sha256": contract_sha_2},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="declared more than once"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_own_intent_without_own_score(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    _, intent_sha = _write_text_file(manifest_dir, "intent.yaml", "INTENT\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+            {"role": "own_intent", "path": "intent.yaml", "sha256": intent_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="own_score"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_diff_report_and_validation_errors_together(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    _, score_sha = _write_text_file(manifest_dir, "score.yaml", "SCORE\n")
+    _, intent_sha = _write_text_file(manifest_dir, "intent.yaml", "INTENT\n")
+    _, diff_sha = _write_text_file(manifest_dir, "diff.json", "DIFF\n")
+    _, val_sha = _write_text_file(manifest_dir, "validation.json", "VALIDATION\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+            {"role": "own_score", "path": "score.yaml", "sha256": score_sha},
+            {"role": "own_intent", "path": "intent.yaml", "sha256": intent_sha},
+            {"role": "diff_report", "path": "diff.json", "sha256": diff_sha},
+            {"role": "validation_errors", "path": "validation.json", "sha256": val_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="mutually exclusive"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_diff_report_without_own_score(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    _, diff_sha = _write_text_file(manifest_dir, "diff.json", "DIFF\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+            {"role": "diff_report", "path": "diff.json", "sha256": diff_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="own_score"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_non_utf8_part(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    task_path = manifest_dir / "task.md"
+    task_path.write_bytes(b"\xff\xfe\x00binary garbage")
+    task_sha = hashlib.sha256(task_path.read_bytes()).hexdigest()
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="UTF-8"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_delimiter_collision_line(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(
+        manifest_dir, "task.md", "normal line\n=== PART fake forgery ===\nmore text\n"
+    )
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="delimiter"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_absolute_path(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    outside_path, outside_sha = _write_text_file(tmp_path, "outside.md", "OUTSIDE\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": str(outside_path.resolve()), "sha256": outside_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="containment"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_parent_traversal_escape(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, outside_sha = _write_text_file(tmp_path, "outside.md", "OUTSIDE\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "../outside.md", "sha256": outside_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="containment"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_refuses_to_overwrite_existing_output(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    compose_payload.compose_payload(manifest_path, out_dir)
+    with pytest.raises(compose_payload.ProtectedPathError):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+
+def test_compose_payload_records_newline_appended_when_content_has_no_trailing_newline(
+    tmp_path: Path,
+):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK NO NEWLINE")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    parts_by_role = {p["role"]: p for p in result["parts"]}
+    assert parts_by_role["contract"]["newline_appended"] is False
+    assert parts_by_role["task"]["newline_appended"] is True
+    payload_text = (out_dir / "payload.md").read_text(encoding="utf-8")
+    assert "TASK NO NEWLINE\n=== END PART 2/2 ===" in payload_text
+
+
+def test_compose_payload_rejects_duplicate_yaml_mapping_key(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    manifest_path = manifest_dir / "manifest.yaml"
+    manifest_path.write_text(
+        "schema_version: l0b-payload-manifest/0.1\n"
+        "schema_version: l0b-payload-manifest/0.1\n"
+        "experiment_id: round1\n"
+        "round_label: round1\n"
+        "parts: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_unknown_top_level_key(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    manifest = _minimal_manifest_dict(parts=[])
+    manifest["coordinator_note"] = "this must not be accepted"
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="unknown key"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_unknown_part_key(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {
+                "role": "task",
+                "path": "task.md",
+                "sha256": task_sha,
+                "note": "coordinator commentary",
+            },
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="unknown key"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_missing_parts_key_and_empty_parts_list_are_distinct_errors(
+    tmp_path: Path,
+):
+    """AGENTS.md §8「truthy 判定を正規形ガードに使わない」則の機械検証:
+    `parts` キー自体の不在（トップレベル必須キー欠落）と `parts: []`（構造
+    的には妥当な空リスト、多重度規則の `contract`/`task` 必須で拒否）は別の
+    エラーでなければならない——`if not data.get("parts")` のような truthy
+    判定で書くと両者が同一エラーに潰れる。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+
+    missing_manifest = _minimal_manifest_dict(parts=[])
+    del missing_manifest["parts"]
+    missing_path = _write_manifest(manifest_dir, missing_manifest, name="missing.yaml")
+    with pytest.raises(compose_payload.PayloadManifestError, match="missing required key") as missing_exc:
+        compose_payload.compose_payload(missing_path, tmp_path / "out_missing")
+
+    empty_manifest = _minimal_manifest_dict(parts=[])
+    empty_path = _write_manifest(manifest_dir, empty_manifest, name="empty.yaml")
+    with pytest.raises(compose_payload.PayloadManifestError, match="role='contract'") as empty_exc:
+        compose_payload.compose_payload(empty_path, tmp_path / "out_empty")
+
+    assert str(missing_exc.value) != str(empty_exc.value)
+
+
+def test_compose_payload_cli_has_no_freeform_injection_options(tmp_path: Path):
+    """自由記述の注入口（`--note`/`--comment`/`--extra` 類）を一切定義しない
+    ことを argparse parser 自体から検査する（AGENTS.md §8 則の中心的な安全
+    特性）。"""
+
+    parser = compose_payload._build_arg_parser()
+    option_strings: set[str] = set()
+    for action in parser._actions:
+        option_strings.update(action.option_strings)
+    assert option_strings == {"-h", "--help", "--manifest", "--out-dir"}
+
+
+def test_compose_payload_cli_main_writes_files_and_reports_success(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    exit_code = compose_payload.main(
+        ["--manifest", str(manifest_path), "--out-dir", str(out_dir)]
+    )
+    assert exit_code == 0
+    assert (out_dir / "payload.md").exists()
+    assert (out_dir / "payload.manifest.json").exists()
+
+
+def test_compose_payload_cli_main_nonzero_exit_on_manifest_error(tmp_path: Path, capsys):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(parts=[{"role": "task", "path": "task.md", "sha256": task_sha}])
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    exit_code = compose_payload.main(
+        ["--manifest", str(manifest_path), "--out-dir", str(tmp_path / "out")]
+    )
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
