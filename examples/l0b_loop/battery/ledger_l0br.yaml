@@ -304,6 +304,43 @@ series_runs:
     rationale: round1 = structure exact_match / brightness preserved / R4 pass だが、著者の保険的ダイアトニック進行 (i-VI-III-VII) が key を平行長調 F major へ倒し deviated。round2 = 著者は報告の観測値のみから平行調の音組成同一性を診断し、C#（D harmonic minor の導音）を含む A major を導入する i-V-iv-i へ差し替え、key preserved で全軸成功。pareto improved=true（key 1→0・他軸非退行）= 報告のみによる操舵の改善ペアがバッテリー内で成立
     files_dir: series/br_d2_s1/
     started_utc: '2026-08-06T18:03:12Z'
+  - task: br_d2
+    series: s2
+    rounds:
+    - round: 1
+      payload_manifest_sha256: ef324f5ed50d2e76d4f788e064e4bd57bee8d37aa5b142ec420ba456e75b3591
+      payload_sha256: 818edb3d1d206145a79ace8b9480cd8a97d0c6573f7591d81838639a3e1071b6
+      score_sha256: 25a51f8e188dc5c0925369f0040f134116549d3e55f7a4ec259e4c2098b2fe71
+      intent_sha256: 630d3101f4db49eaa922b93f820606acc61f7b39c370cf26f02f6a630af4df4f
+      report_sha256: 0f8487ce05adea2804d4c28e42f6ed2af416b71d0f2e555c6c462d8785240fe8
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: deviated
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+    - round: 2
+      payload_manifest_sha256: 01be841d212b6cd4ca33d18272c2973d65c6e7917cb99790c1484944afaa47c3
+      payload_sha256: b35aba4c1e2c08d49934d9691f8ad86194c74a3e3edf0bc7521e814d674cef00
+      score_sha256: 87b2af3bc172344d0391cc35dac84c6010ce8fdda8599ebdbd8d541d1f92a734
+      intent_sha256: cc195ec9d17112cc184b0f09d19ca5c7f22bb459bd309e851a48833dd14ab903
+      report_sha256: 233aa0a7f168a6836f0cd637dfb8ba4da7f5852c24065fa5370438f1c50fa286
+      token_ban: pass
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+    outcome: reached
+    rounds_to_success: 2
+    failure_mode: null
+    rationale: round1 = structure exact_match / brightness preserved / R4 pass・key deviated (C major — 進行 Dm-C-A#-C の C 支配。s1 r1 の F major と同族 = カスタム進行が key を倒す失敗の再現 2 例目)。round2 = 著者は s1 と異なる修理戦略（自作進行の差し替えでなく events 省略 = 契約明記の既定進行へ回帰）を選択し key preserved で全軸成功。pareto improved=true。同一失敗に対する修理経路の分散（C# 導音 vs 既定回帰）を実測
+    files_dir: series/br_d2_s2/
+    started_utc: '2026-08-06T18:11:57Z'
 off_contract_events:
   - date: "2026-08-06"
     task: "br_d1"
