@@ -244,4 +244,22 @@ series_runs:
     rationale: '著者は 5 周回で一貫して合理的な単一変数実験を重ねた（語彙置換 r2/r4・bars 非対称化 r3・対称復帰 r5）が、契約 v1 未開示のヒント解決規則（非加算・優先順位制: no kick/sub bass/low density が full energy を支配し chorus2 が全周回 drone 化）により、全編集が音響的に無効またはレベルのみの変化に終わった。evidence: 観測境界が r1=r2（8.4753/13.5372/30.0）・r3=r4（7.5/12.5852/32.5）と語彙変更を跨いで完全同値、r5 は bars 対称復帰で r1/r2 値へ回帰。author 5 個体とも tool 使用 0。l0b record §4.1（ヒント非加算）と同型 = L0a v2 反映後の再測対象'
     files_dir: series/br_d1_s1/
     started_utc: '2026-08-06T17:19:46Z'
-off_contract_events: []
+off_contract_events:
+  - date: "2026-08-06"
+    task: "br_d1"
+    series: "s2"
+    round: 1
+    kind: "payload_transcription_corruption"
+    description: >-
+      coordinator が round1 著者プロンプトを composer 出力の再読なしに文脈内
+      転写で組成した際、契約 §0 の 1 箇所が化けた（「なぜこの設計か」→
+      「なぜ27の設計か」）。ペイロード ≠ composer 出力のため off-contract。
+      coordinator が送信直後に自己検出し、著者を応答生成前に停止・破棄した
+      （汚染応答は存在しない）。当該試行はどの周回にも算入しない。
+    disposition: >-
+      同一 round1 を正規ペイロード（composer 出力の同一ターン内読取→転写）で
+      再実行。以降の全周回はプロンプト組成を「同一ターン内でファイル読取→
+      直写」に固定する。なお s1 の 5 周回は全て同一ターン内読取→直写で組成
+      しており本事故と同型の経路は通っていないが、送信バイト列の事後検証
+      手段はハーネス上存在しないため、この転写忠実性の限界は記録 doc に
+      開示する。
