@@ -16,14 +16,19 @@ engine_state:
     base_commit and the working tree are the same revision.
   src_unchanged: true
   src_unchanged_note: >-
-    This branch added examples/l0b_loop/ only — `git diff --stat
-    4b3b7b615119c43cba5442053fff43b4520b0504..HEAD -- src/ tests/` is empty
-    (verified before writing this ledger; re-run before trusting this note
-    if new commits have landed since).
+    The engine package `src/` is unchanged on this branch — `git diff --stat
+    4b3b7b615119c43cba5442053fff43b4520b0504..HEAD -- src/` is empty.
+    (2026-08-06 訂正: 原文は「examples/l0b_loop/ のみ追加・`-- src/ tests/`
+    の diff が空」と主張していたが、PR #247 のレビュー対応過程で
+    tests/test_l0b_scripts.py の新設と docs/・CLAUDE.md の文書変更が
+    同ブランチに載ったため陳腐化していた。engine の同一性主張は src/ に
+    スコープし、tests/docs の変更はここに正確に記録する: 追加 =
+    tests/test_l0b_scripts.py（L0b スクリプトのテスト。engine の挙動は
+    変更しない）、変更 = docs/*.md・CLAUDE.md（記録・索引）。）
   verification_commands:
     - "git fetch origin main"
     - "git merge-base origin/main HEAD"
-    - "git diff --stat <base_commit>..HEAD -- src/ tests/"
+    - "git diff --stat <base_commit>..HEAD -- src/"
 
 deps_lock:
   file: deps/pip_freeze.txt
