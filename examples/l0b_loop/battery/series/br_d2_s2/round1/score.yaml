@@ -1,0 +1,57 @@
+meta:
+  title: "Dm Triptych"
+  version: "0.1"
+
+semantic:
+  core: "静かな入場から高密度な中心部を経て静かな退場へ向かう、モノクロームな三部構成の器楽曲"
+  grv:
+    primary: "chamber minimal"
+    secondary: "dark ambient"
+  delta_e:
+    overall: "抑制から高揚へ、そして再び沈静へ向かう三段の情動曲線"
+  avoid:
+    - "clutter"
+    - "excess brightness"
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: intro
+    bars: 3
+    role: "静かな導入。輪郭のみを提示する"
+    physical: "sparse"
+  - section: chorus
+    bars: 3
+    role: "中心部。密度とエネルギーを最大化する"
+    physical: "full energy"
+  - section: outro
+    bars: 3
+    role: "退場。緊張を解いて収束する"
+    physical: "release"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure
+
+events:
+  chord_progression:
+    - root: "D"
+      quality: "minor"
+    - root: "C"
+      quality: "major"
+    - root: "A#"
+      quality: "major"
+    - root: "C"
+      quality: "major"
