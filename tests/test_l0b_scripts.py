@@ -3276,7 +3276,7 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
         checks.append((f"contract_freeze.{label}", _resolve_battery_relative(entry["path"]), entry["sha256"]))
 
     judge = ledger["judge"]
-    for label in ("run_round", "pareto_eval", "section_map", "section_map_t2"):
+    for label in ("run_round", "pareto_eval", "section_map", "section_map_t2", "pareto_spec"):
         entry = judge[label]
         checks.append((f"judge.{label}", _resolve_battery_relative(entry["path"]), entry["sha256"]))
 
@@ -3285,13 +3285,25 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
         ("author_identity.wrapper", _resolve_battery_relative(wrapper["path"]), wrapper["sha256"])
     )
 
+    # `payload_composition.composer` は実行時/現行の 2 系統 pin を持つ
+    # （PR #249 Codex レビュー、P1 採用: composer ファイルが測定後にレビュー
+    # 対応で変わったため、単一 sha256 だと「実行されていないコードを台帳が
+    # 認証する」状態になる）。`sha256_current` のみ実体照合する（形状テストが
+    # 検査する対象は「今この台帳が指す composer ファイル」であり、
+    # `sha256_at_measurement` は測定当時のファイルへの歴史的 attestation —
+    # 当該コミットの checkout なしにこのテスト実行時点では実体照合できない
+    # ため、64-hex 形式のみ検証する）。
     composer = ledger["payload_composition"]["composer"]
     checks.append(
         (
-            "payload_composition.composer",
+            "payload_composition.composer (sha256_current)",
             _resolve_battery_relative(composer["path"]),
-            composer["sha256"],
+            composer["sha256_current"],
         )
+    )
+    assert _SHA256_HEX_RE.fullmatch(composer["sha256_at_measurement"]), (
+        "payload_composition.composer.sha256_at_measurement must be a 64-hex sha256 "
+        f"(historical attestation, not entity-checked here): {composer['sha256_at_measurement']!r}"
     )
 
     constraint_checker = ledger["constraint_checker"]

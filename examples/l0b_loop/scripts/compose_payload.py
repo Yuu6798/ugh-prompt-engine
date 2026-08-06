@@ -79,7 +79,12 @@ unlink 失敗の文脈を付けて送出する。
 swap 等）は本計器のスコープ外の再設計を要する。運用上、そのウィンドウで
 の残留を検出した場合（`payload.md` のみ存在し `payload.manifest.json` が
 無い）は「payload.md 単独残留 = 不完全公開」として手動で `payload.md` を
-削除してから再実行する。
+削除してから再実行する。また、本計器は**単一 writer（coordinator の逐次
+実行）を運用前提とする**——同一 out_dir への並行起動は登録プロトコル（1
+系列ずつ同期・台帳 route 節）の外であり、並行 writer 間の対の交差や他
+writer の payload を rollback が unlink する競合は本計器のスコープ外
+（排他ロック/バンドルトランザクションは並行運用を導入する時点での再設計
+事項）。
 """
 from __future__ import annotations
 

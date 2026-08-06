@@ -58,6 +58,10 @@ judge:
   section_map_t2:
     path: ../frozen/section_map_t2.json
     sha256: "7add33ba142174c5e2ee002d39af9abb2ebdc65858aed2b05564f9e8ce00d830"
+  pareto_spec:
+    path: ../frozen/pareto.yaml
+    sha256: "abe60a4f0ee3c55443bbcae9ea53d4364e620737872ce3f1a9c1a75ac9264d7f"
+    note: "改善判定 (pareto_eval.py --pareto) の凍結述語。L0b から無変更"
 
 author_identity:
   llm_run_id: "l0br-20260806-claude-code-agent-sonnet"
@@ -81,7 +85,17 @@ author_identity:
 payload_composition:
   composer:
     path: ../scripts/compose_payload.py
-    sha256: "2c3111b9bef153c8e8be3d935716af9db00b806408bf3a7096ad17a993b7943c"
+    sha256_at_measurement: "a1bd613a646c331c866b6480cd8d827d58410acc70c8dba9005a6c1629a12dfa"
+    sha256_current: "ecf0fda96cd6244e04703c7ff43d6b8d1043c7ce4ddcf1804832837400c5730d"
+    note: >-
+      sha256_at_measurement = 全 16 測定周回を実行した実装（事前登録 commit
+      2b26238 と PR head 62f6ead の両方でこの sha。git 履歴が実体を保持）。
+      sha256_current = PR #249 Codex レビュー対応（45a7a46・publish 失敗時
+      rollback）後の現行ファイル（形状テストが実体照合する対象）。修正は
+      「2 本目の publish が失敗した場合」の失敗経路と docstring のみで、
+      成功経路の組成出力はバイト不変 — series_runs の per-round
+      payload_sha256 / payload_manifest_sha256 pin はこの修正の影響を
+      受けない（実測: 全周回の pin は測定時のまま一致）。
   policy: >-
     全周回の著者可視ペイロードは compose_payload.py の出力のみ
     （AGENTS.md §8「情報遮断実験のペイロード組成は機械化する」2026-08-06
