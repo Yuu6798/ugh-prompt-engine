@@ -78,33 +78,37 @@ content が改行で終わらない part のみ改行を 1 つ補い `newline_ap
 `payload.md` の publish 成功後に `payload.manifest.json` の publish が失敗
 すると、pin manifest を欠いた `payload.md` だけが「完全なペイロード」に見
 えて残留し、かつ再実行は上書き禁止チェックに拒否される（Codex review P2
-指摘）。これを防ぐため、`compose_payload` は 2 本目の publish を
-try/except で包み、except ハンドラへ例外が届いたら**両方の出力**
-（`payload.md`・`payload.manifest.json`、`missing_ok=True` で「実際には
-publish されていない側」も安全に扱う）を unlink してから元の例外を再送出
-する——publish は「両方揃う」か「どちらも残らない」かの 2 状態に限定する
-（rollback）。2 本目の内部書き込みそのものが失敗した場合だけでなく、内部
-の `os.replace` が完了して `payload.manifest.json` が publish 済みになった
-直後・helper が return する前に非同期例外（`KeyboardInterrupt` 等）が届い
-た場合も同じハンドラでカバーする（後者を payload 側のみの unlink で扱うと
-「manifest あり payload なし」という逆向きの部分残留になっていた——2 本を
-独立に unlink し、片方が失敗してももう片方は試行する）。unlink 自体が失敗
-した場合は隠さず、元の例外へ失敗した unlink の文脈を付けて送出する。
+指摘）。これを防ぐため、`compose_payload` は**両方の publish**（1 本目の
+`payload.md` の呼び出しから 2 本目の `payload.manifest.json` の完了まで）
+を単一の try/except で包み、except ハンドラへ例外が届いたら**両方の出力**
+（`missing_ok=True` で「実際には publish されていない側」も安全に扱う）を
+unlink してから元の例外を再送出する——publish は「両方揃う」か「どちらも
+残らない」かの 2 状態に限定する（rollback）。どちらかの呼び出し内部の書き
+込みそのものが失敗した場合だけでなく、内部の `os.replace` が完了して該当
+ファイルが publish 済みになった直後・呼び出しが return する前に非同期例外
+（`KeyboardInterrupt` 等）が届いた場合（1 本目・2 本目のどちらの publish
+直後でも）も同じハンドラでカバーする（片方の出力のみの unlink で扱うと、
+もう一方の経路で逆向きの部分残留——例:「manifest あり payload なし」——が
+起きる——2 本を独立に unlink し、片方が失敗してももう片方は試行する）。
+unlink 自体が失敗した場合は隠さず、元の例外へ失敗した unlink の文脈を付け
+て送出する。トレードオフとして、**両方の publish が成功した後・try ブロッ
+クを脱出する前**に非同期例外が届いた場合も同じハンドラが走り、成功済みの
+バンドルが unlink される——「両方揃う」か「どちらも残らない」かの 2 状態
+契約には整合する（再実行すれば同一バイト列で再度両方揃う）ため許容する。
 
-**境界宣言**: この rollback がカバーするのは「例外が上記 except ハンドラ
-へ届く全ケース」（2 本目の書き込み失敗・書き込み後の非同期例外の両方）。
-`os.replace` による 2 回の rename（`atomic_write_bytes` 内部、1 本目・2 本
-目それぞれ）の**間**でプロセスが例外を経由せず即死するウィンドウ（シグナル
-による強制終了等、Python の例外機構を経由しない終了）は、この rollback
-の対象外のまま残る——構造的な 2 ファイル原子性（ディレクトリ単位の
-swap 等）は本計器のスコープ外の再設計を要する。運用上、そのウィンドウで
-の残留を検出した場合（`payload.md` のみ存在し `payload.manifest.json` が
-無い、またはその逆）は「不完全公開」として手動で残留ファイルを削除してから
-再実行する。また、本計器は**単一 writer（coordinator の逐次実行）を運用
-前提とする**——同一 out_dir への並行起動は登録プロトコル（1 系列ずつ同期・
-台帳 route 節）の外であり、並行 writer 間の対の交差や他 writer の payload
-を rollback が unlink する競合は本計器のスコープ外（排他ロック/バンドル
-トランザクションは並行運用を導入する時点での再設計事項）。
+**境界宣言**: この rollback がカバーするのは「1 本目の publish 開始から
+2 本目の publish 完了後 try ブロックを脱出するまでの間に、例外が上記
+except ハンドラへ届く全ケース」。残る窓は **Python の例外機構を経由しない
+プロセス即死のみ**（シグナルによる強制終了等）——構造的な 2 ファイル原子性
+（ディレクトリ単位の swap 等）は本計器のスコープ外の再設計を要する。運用
+上、そのウィンドウでの残留を検出した場合（`payload.md`/`payload.manifest.
+json` のどちらか一方のみ存在）は「不完全公開」として手動で残留ファイルを
+削除してから再実行する。また、本計器は**単一 writer（coordinator の逐次
+実行）を運用前提とする**——同一 out_dir への並行起動は登録プロトコル（1
+系列ずつ同期・台帳 route 節）の外であり、並行 writer 間の対の交差や他
+writer の payload を rollback が unlink する競合は本計器のスコープ外
+（排他ロック/バンドルトランザクションは並行運用を導入する時点での再設計
+事項）。
 """
 from __future__ import annotations
 
@@ -456,25 +460,26 @@ def compose_payload(manifest_path: Path, out_dir: Path) -> dict[str, Any]:
         json.dumps(pin_manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
 
-    atomic_write_bytes(payload_path, payload_bytes)
     try:
+        atomic_write_bytes(payload_path, payload_bytes)
         atomic_write_bytes(manifest_out_path, manifest_bytes)
     except BaseException as exc:
-        # Rollback publish: 2 本目の `atomic_write_bytes` が例外をこの
-        # except ハンドラへ届けるどの経路でも（呼び出し内部で書き込み自体が
-        # 失敗した場合はもちろん、内部の `os.replace` が完了して
-        # `manifest_out_path` が publish 済みになった直後・helper が return
-        # する前に非同期例外（`KeyboardInterrupt` 等）が届いた場合も含む）、
+        # Rollback publish: either `atomic_write_bytes` call inside this try
+        # block can hand an exception to this handler — the 1 本目
+        # （`payload_path`）の書き込み自体が失敗した場合、2 本目
+        # （`manifest_out_path`）の書き込み自体が失敗した場合、さらに内部の
+        # `os.replace` が完了して該当ファイルが publish 済みになった直後・
+        # 呼び出しが return する前に非同期例外（`KeyboardInterrupt` 等）が
+        # 届いた場合（1 本目・2 本目のどちらの publish 直後でも）を含む。
         # 両出力を unlink して「両方揃う」か「どちらも残らない」かの 2 状態
-        # へ戻す。前者だけを想定して `payload_path` のみ unlink すると、
-        # 後者（manifest だけ publish 済み・payload 側に例外が乗って残留）
-        # では「manifest あり payload なし」という逆向きの部分残留になり、
-        # 再実行は manifest 側の上書き禁止チェック（`ProtectedPathError`、
-        # 本関数冒頭）で拒否される。`missing_ok=True` はどちらのケースでも
-        # （unlink 対象が実際には publish されていない側でも）安全に動作
-        # させるため。2 unlink は独立に試み、どちらかが失敗しても残りは
-        # 試行する（1 つ目の失敗で 2 つ目を諦めると、除去できたはずの
-        # ファイルまで残留させてしまう）。
+        # へ戻す。`payload_path` のみ／`manifest_out_path` のみを想定した
+        # 片側 unlink だと、もう一方の経路で逆向きの部分残留（例:
+        # 「manifest あり payload なし」）が起き、再実行は残った側の上書き
+        # 禁止チェック（`ProtectedPathError`、本関数冒頭）で拒否される。
+        # `missing_ok=True` はどの経路でも（unlink 対象が実際には publish
+        # されていない側でも）安全に動作させるため。2 unlink は独立に試み、
+        # どちらかが失敗しても残りは試行する（1 つ目の失敗で 2 つ目を諦める
+        # と、除去できたはずのファイルまで残留させてしまう）。
         rollback_errors: list[OSError] = []
         for candidate in (manifest_out_path, payload_path):
             try:
@@ -483,7 +488,7 @@ def compose_payload(manifest_path: Path, out_dir: Path) -> dict[str, Any]:
                 rollback_errors.append(unlink_exc)
         if rollback_errors:
             raise OSError(
-                f"payload manifest publish failed ({exc!r}) and rollback unlink failed "
+                f"payload publish failed ({exc!r}) and rollback unlink failed "
                 f"for {len(rollback_errors)} output path(s) ({rollback_errors!r}) — "
                 f"{payload_path} and/or {manifest_out_path} may remain orphaned; manual "
                 "cleanup required before re-running"

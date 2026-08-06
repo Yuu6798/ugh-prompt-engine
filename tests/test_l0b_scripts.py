@@ -3034,6 +3034,61 @@ def test_compose_payload_rolls_back_both_outputs_on_post_publish_async_exception
     assert result["payload_sha256"]
 
 
+def test_compose_payload_rolls_back_payload_on_post_first_publish_async_exception(
+    tmp_path: Path, monkeypatch
+):
+    """対応（PR #249 Codex レビュー第 6 巡, P2）: 従来は 1 本目
+    （`payload.md`）の publish が try ブロックの外にあり、内部 `os.replace`
+    が完了した直後・呼び出しが return する前に非同期例外（
+    `KeyboardInterrupt` 相当）が届くと rollback ハンドラを迂回し、
+    `payload.md` のみが残留していた（再実行は上書き禁止チェックに拒否され
+    る）。try ブロックが 1 本目の publish 呼び出しから 2 本目の完了までを
+    包むよう拡張したので、この経路でも rollback が両出力を unlink し、
+    `out_dir` にどちらも残らないこと・その後の再実行が成功することを
+    確認する。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    real_atomic_write_bytes = compose_payload.atomic_write_bytes
+    call_count = {"n": 0}
+
+    def _write_then_raise_on_first_call(path, data):
+        call_count["n"] += 1
+        real_atomic_write_bytes(path, data)
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated async exception after first publish completed")
+
+    monkeypatch.setattr(compose_payload, "atomic_write_bytes", _write_then_raise_on_first_call)
+
+    with pytest.raises(RuntimeError, match="simulated async exception"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    # `payload.md` was actually published by the (real) first call before
+    # the simulated exception fired, and `payload.manifest.json` was never
+    # attempted — rollback must remove the payload file that did land.
+    assert not (out_dir / "payload.md").exists()
+    assert not (out_dir / "payload.manifest.json").exists()
+
+    monkeypatch.undo()
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert (out_dir / "payload.md").exists()
+    assert (out_dir / "payload.manifest.json").exists()
+    assert result["payload_sha256"]
+
+
 def test_compose_payload_records_newline_appended_when_content_has_no_trailing_newline(
     tmp_path: Path,
 ):
