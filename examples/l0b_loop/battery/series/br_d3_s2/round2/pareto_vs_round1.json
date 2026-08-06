@@ -1,0 +1,37 @@
+{
+  "band_excluded": false,
+  "excluded_axes": [],
+  "improved": true,
+  "per_axis": {
+    "brightness": {
+      "curr_band": "measured",
+      "curr_distance": 0,
+      "delta": 0,
+      "measured": true,
+      "prev_band": "measured",
+      "prev_distance": 0,
+      "regressed": false,
+      "strictly_improved": false
+    },
+    "key": {
+      "curr_band": "measured",
+      "curr_distance": 0,
+      "delta": -1,
+      "measured": true,
+      "prev_band": "measured",
+      "prev_distance": 1,
+      "regressed": false,
+      "strictly_improved": true
+    },
+    "structure": {
+      "curr_band": "measured",
+      "curr_distance": 1,
+      "delta": 0,
+      "measured": true,
+      "prev_band": "measured",
+      "prev_distance": 1,
+      "regressed": false,
+      "strictly_improved": false
+    }
+  }
+}
