@@ -14,8 +14,15 @@
 # 漏れ込み照合、drone 化セクションでの `chord_progression` 無音化）——が、
 # **開示のみを追加した契約改訂（`../contract_v2.md`）** によって実際に
 # 解消するかどうかを、判定器・演奏者・report 正規形を一切変更せずに測定
-# する。v1 バッテリーとの差分は契約文書（`contract.md` → `contract_v2.md`）
-# のみに限定し、著者能力・判定基準の変化と交絡しないようにする。
+# する。v1 バッテリーとの差分のうち**統制下にある変数**は契約文書
+# （`contract.md` → `contract_v2.md`）のみに限定する。ただし著者は
+# 「同一ポリシー（同一モデル系・fresh instance・情報遮断）の確率的
+# 抽出」であり個体サンプルはバッチ間・周回間で異なる——モデルスナップ
+# ショット・サンプリング設定は不記録（`author_identity.provenance_
+# limitations`）のため、著者サンプリング揺らぎとの交絡は排除ではなく
+# `preregistered_hypothesis` の n=2 正直宣言で扱う（v1 実測自体が
+# 1/2 の著者間分散を示している。判定基準側は判定器 pin + attestation
+# の二層で不変を束縛）。
 #
 # 境界宣言（`../battery/ledger_l0br.yaml` ヘッダコメントと同型。PR #249
 # Codex レビュー、耐久性指摘を受けた明文化を継承）: この git 証明は本
@@ -87,8 +94,11 @@ contract_freeze:
 src_config_diff_attestation:
   verified_utc: "2026-08-07"
   base_commit: "5699566"  # PR #249 マージ後 main = 本ブランチの merge-base
-  command: "git diff --stat 5699566..HEAD -- src/ config/"
-  result: "empty (無変更 — 登録 commit 187c57e から実測完了まで src/ と config/ に一切手を触れていない)"
+  command: "git diff --stat 5699566..1f52f70 -- src/ config/"
+  # 上端 1f52f70 = 実測完了 commit（s2 round3 evidence）。可動 ref (HEAD)
+  # ではなく固定 commit を両端に取ることで、以後 src/config に正当な変更が
+  # 入っても本レシピの再実行結果（empty）は checkout 非依存に再現する
+  result: "empty (無変更 — 登録 commit 187c57e から実測完了 commit 1f52f70 まで src/ と config/ に一切手を触れていない)"
 
 judge:
   # L0b-R（v1）と同一判定器・無改変（判定器の同一性維持が実験条件。
@@ -280,11 +290,18 @@ preregistered_hypothesis:
     judgement: supports
     judgement_note: >-
       実測 2/2（v1 = 1/2）は上記事前登録の「v2 で 2/2 なら開示追加が v1 の
-      contract_defect を解消したことの支持」分岐に該当する。v1 契約欠陥
-      （ヒント解決の非加算・優先順位制、drone 化セクションでの
-      chord_progression 無音化等）は v2 開示により両系列・全周回で初回
-      （round1）から回避された（key/brightness は round1 から一貫して
-      preserved）——開示の効果はこの点で直接観測されている。
+      contract_defect を解消したことの支持」分岐に該当する。`supports` は
+      事前登録された観測分岐のラベルであり、因果の証明ではない——本比較は
+      バッチ間で著者個体サンプルが異なる非対応比較で、モデルスナップ
+      ショット・サンプリング設定は不記録（`author_identity.provenance_
+      limitations`）、v1 実測自体が 1/2 の著者間分散を示しているため、
+      到達率差の因果帰属は著者サンプリング揺らぎと交絡している（confounded。
+      対応付き/同バッチ対照は未実施）。この交絡の下でなお開示チャネルの
+      実在を支える機構的証拠は v2 バッチ内にある: v1 契約欠陥（ヒント解決の
+      非加算・優先順位制、drone 化セクションでの chord_progression 無音化
+      等）は v2 開示により両系列・全周回で初回（round1）から回避され、
+      著者 intent が §2 開示への明示参照とともに当該回避を選択している
+      （key/brightness は round1 から一貫して preserved）。
     honesty_notes:
       - >-
         n=2 であり、著者サンプリング揺らぎとの完全な分離はできない（v1 の
