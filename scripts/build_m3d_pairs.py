@@ -1,0 +1,702 @@
+"""build_m3d_pairs.py — M3d 校正実測: pairs manifest builder（決定論・乱数不使用）。
+
+`docs/DESIGN_M3_melody_comparator.md` §6（正本）と M3d 実行設計メモ §1〜§2 に従い、
+`scripts/run_melody_comparison.py`（M3d ハーネス）が読む pairs manifest
+（`m3-comparison-pairs/0.1`）を機械生成する。
+
+生成物:
+
+1. vocadito（実声・40 clip 中の選定 18 clip）の pitch/time 変形 WAV
+   （`make_melody_pairs.make_variants` を流用。librosa 決定論）
+2. 合成旋律（`m3d_synth_specs.yaml` + `build_melody_bench.build_signal`）の
+   positive 変形 WAV + 狙い撃ち negative（rhythm/interval）WAV
+3. 上記を束ねる pairs manifest（`tests/fixtures/melody_bench/m3d_pairs_manifest.yaml`）
+4. 生成 WAV 全件の sha256 pin サイドカー（`build/external_m3d/m3d_pairs_pins.json`）
+   — pairs manifest スキーマ（`run_melody_comparison._REQUIRED_PAIR_KEYS`）は
+   pair あたり厳密に 6 キー（pair_id/kind/split/audio_a/audio_b/expected）のみを
+   許可し未知キーを fail-closed で拒否するため、sha256 pin と material 区分
+   （vocadito=real_voice / synthetic）は manifest の pair dict へ埋め込まず、
+   本サイドカーへ分離する（pair_id の `_real_`/`_synth_` 接頭辞でも material は
+   判別できる — 設計メモ §2）。
+
+vocadito pin 照合は **全数** 実施し、1 件でも不一致/欠落があれば生成を一切開始
+せず fail-closed で終了する（exit 非 0・部分出力なし）— manifest / WAV / pin
+サイドカーのいずれも書き込まれない。
+
+clip 選定・変形パラメータ・pair 構成比率は全て事前登録済み（設計メモ §1.1〜§1.3）
+であり、本スクリプトは新しいチューナブル値を発明しない。
+
+使い方::
+
+    python scripts/build_m3d_pairs.py
+    python scripts/build_m3d_pairs.py --vocadito-dir /path/to/vocadito --out-dir /tmp/m3d_pairs
+    python scripts/build_m3d_pairs.py --check-only
+    python scripts/build_m3d_pairs.py --summary-out manifest_summary.json
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+import tempfile
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import librosa
+import numpy as np
+import soundfile as sf
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+import build_melody_bench as bmb  # noqa: E402
+import run_melody_comparison as harness  # noqa: E402
+from make_melody_pairs import make_variants  # noqa: E402
+from svp_rpe.utils.hashing import file_sha256  # noqa: E402
+
+# --------------------------------------------------------------------------- #
+# 既定パス
+# --------------------------------------------------------------------------- #
+DEFAULT_VOCADITO_DIR = ROOT / "build" / "external_m3d" / "vocadito"
+DEFAULT_OUT_DIR = ROOT / "build" / "external_m3d" / "m3d_pairs"
+DEFAULT_MANIFEST_OUT = ROOT / "tests" / "fixtures" / "melody_bench" / "m3d_pairs_manifest.yaml"
+DEFAULT_PINS_OUT = ROOT / "build" / "external_m3d" / "m3d_pairs_pins.json"
+M2C_FIXTURES_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2c_external_fixtures.yaml"
+M3D_SYNTH_SPECS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3d_synth_specs.yaml"
+
+# --------------------------------------------------------------------------- #
+# 事前登録パラメータ（M3d 実行設計メモ §1、新値を発明しない）
+# --------------------------------------------------------------------------- #
+TUNING_COUNT = 12
+HOLDOUT_COUNT = 6
+
+# vocadito positive_transform の変形: pitch +3st / -5st・time rate 0.87 / 1.12
+# （設計メモ §1.1）。`make_variants` の返す key（`pitch_{n:+g}st` /
+# `time_x{rate:g}`）→ ファイル名・pair_id に使う短縮ラベルの対応を固定する。
+VOCADITO_SEMITONES: Tuple[float, ...] = (3.0, -5.0)
+VOCADITO_TIME_RATES: Tuple[float, ...] = (0.87, 1.12)
+VOCADITO_VARIANT_LABELS: Dict[str, str] = {
+    "pitch_+3st": "pitch_p3",
+    "pitch_-5st": "pitch_m5",
+    "time_x0.87": "rate_087",
+    "time_x1.12": "rate_112",
+}
+# 生成順（manifest の決定論的な行順のため、dict 順ではなく明示リストを使う）
+VOCADITO_VARIANT_ORDER: Tuple[str, ...] = (
+    "pitch_+3st",
+    "pitch_-5st",
+    "time_x0.87",
+    "time_x1.12",
+)
+
+# 合成 positive の変形: 移調 +3 / 変速 0.9（設計メモ §1.3）
+SYNTH_POS_SEMITONES: Tuple[float, ...] = (3.0,)
+SYNTH_POS_TIME_RATES: Tuple[float, ...] = (0.9,)
+SYNTH_POS_VARIANT_LABELS: Dict[str, str] = {
+    "pitch_+3st": "pitch_p3",
+    "time_x0.9": "rate_090",
+}
+SYNTH_POS_VARIANT_ORDER: Tuple[str, ...] = ("pitch_+3st", "time_x0.9")
+
+SYNTH_TUNING_POS_ID = "m3d_synth_tuning_pos"
+SYNTH_HOLDOUT_POS_ID = "m3d_synth_holdout_pos"
+
+# 狙い撃ち negative（合成・tuning のみ、設計メモ §1.3）: (kind, pair 内 idx, a, b)
+SYNTH_NEGATIVE_RHYTHM_PAIRS: Tuple[Tuple[str, str], ...] = (
+    ("m3d_synth_rhythm_neg1_a", "m3d_synth_rhythm_neg1_b"),
+    ("m3d_synth_rhythm_neg2_a", "m3d_synth_rhythm_neg2_b"),
+)
+SYNTH_NEGATIVE_INTERVAL_PAIRS: Tuple[Tuple[str, str], ...] = (
+    ("m3d_synth_interval_neg1_a", "m3d_synth_interval_neg1_b"),
+    ("m3d_synth_interval_neg2_a", "m3d_synth_interval_neg2_b"),
+)
+
+_MANIFEST_SCHEMA = harness._EXPECTED_MANIFEST_SCHEMA  # "m3-comparison-pairs/0.1"（凍結スキーマそのものを参照。値の複製をしない）
+_PINS_SCHEMA = "m3d-pairs-pins/0.1"
+
+
+class BuildM3dPairsError(RuntimeError):
+    """builder 固有の fail-closed エラー（vocadito pin 不一致・check-only 不整合など）。"""
+
+
+# --------------------------------------------------------------------------- #
+# 小道具
+# --------------------------------------------------------------------------- #
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """`data` を `path` へ atomic に書く（`run_melody_comparison._atomic_write_text` と同型）。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _atomic_write_wav(path: Path, y: np.ndarray, sample_rate: int) -> None:
+    """WAV を atomic に書く（staging ファイル → os.replace。build_melody_bench と同流儀）。
+
+    subtype は意図的に **`PCM_24`**（`build_melody_bench.py` / `make_melody_pairs.py`
+    が使う `FLOAT` ではない）: libsndfile は `FLOAT`/`DOUBLE` subtype の WAV に
+    `PEAK` チャンク（壁時計 Unix タイムスタンプを埋め込む）を自動付加するため、
+    サンプル値が完全に同一でも書き出し時刻が秒境界をまたぐと **ファイルの bytes
+    が変わる**（実測で確認 — libsndfile 由来の非決定性であり、librosa の pitch_shift/
+    time_stretch 自体は決定論のまま）。本 builder は「同一入力→同一 manifest
+    （バイト一致）」を要求される（実行設計・本タスクの test 要件 (e)）ため、
+    PEAK チャンクを持たない整数 PCM へ切り替える。24bit は音声の実用上ほぼ
+    無損失（crepe 等の下流抽出に有意な影響を与えない解像度）。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp.wav", dir=str(path.parent))
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        sf.write(tmp_path, y, sample_rate, subtype="PCM_24")
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _repo_rel(path: "str | Path") -> str:
+    """`path` をリポジトリルート相対の POSIX スタイル文字列に正規化する。"""
+    resolved = Path(path).resolve()
+    return Path(os.path.relpath(resolved, ROOT)).as_posix()
+
+
+class _NoDupSafeLoader(yaml.SafeLoader):
+    """重複 mapping キーを拒否する SafeLoader（`run_melody_comparison.py` と同型）。"""
+
+
+def _no_dup_construct_mapping(loader: "yaml.SafeLoader", node: Any, deep: bool = False) -> Dict[Any, Any]:
+    mapping: Dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise BuildM3dPairsError(f"duplicate YAML mapping key {key!r} (fail-closed)")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_NoDupSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
+)
+
+
+def _yaml_load_no_dup_keys(data: bytes) -> Any:
+    return yaml.load(data, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
+
+
+def _pair(
+    pair_id: str, kind: str, split: str, audio_a: str, audio_b: str, expected: str
+) -> Dict[str, str]:
+    """manifest pair dict を組む。フィールド集合はハーネスの `_REQUIRED_PAIR_KEYS`
+    と厳密一致させる（多くも少なくもしない — 未知キーは fail-closed で拒否される）。
+    """
+    pair = {
+        "pair_id": pair_id,
+        "kind": kind,
+        "split": split,
+        "audio_a": audio_a,
+        "audio_b": audio_b,
+        "expected": expected,
+    }
+    assert set(pair) == harness._REQUIRED_PAIR_KEYS, "pair dict がハーネス必須キー集合と不一致"
+    return pair
+
+
+# --------------------------------------------------------------------------- #
+# vocadito pin 照合（全数・fail-closed）
+# --------------------------------------------------------------------------- #
+def load_m2c_fixtures(path: Path = M2C_FIXTURES_PATH) -> Dict[str, str]:
+    """`m2c_external_fixtures.yaml` を読み {clip_id: expected_audio_sha256} を返す。"""
+    data = Path(path).read_bytes()
+    doc = _yaml_load_no_dup_keys(data)
+    if not isinstance(doc, dict) or doc.get("schema_version") != "m2c-external-fixtures/0.1":
+        raise BuildM3dPairsError(
+            f"{path}: schema_version が m2c-external-fixtures/0.1 でない (fail-closed)"
+        )
+    fixtures = doc.get("fixtures")
+    if not isinstance(fixtures, dict) or not fixtures:
+        raise BuildM3dPairsError(f"{path}: 'fixtures' が非空 mapping でない (fail-closed)")
+    result: Dict[str, str] = {}
+    for clip_id, entry in fixtures.items():
+        if not isinstance(entry, dict) or "expected_audio_sha256" not in entry:
+            raise BuildM3dPairsError(
+                f"{path}: fixtures[{clip_id!r}] に expected_audio_sha256 がない (fail-closed)"
+            )
+        result[str(clip_id)] = str(entry["expected_audio_sha256"])
+    return result
+
+
+def vocadito_audio_path(vocadito_dir: Path, clip_id: str) -> Path:
+    """vocadito 配布物のレイアウト（`Audio/<clip_id>.wav`）に従い音声パスを返す。
+
+    レイアウトは `docs/m2e_provisioning_runbook.md` §3 の実配布物確認と同一。
+    """
+    return Path(vocadito_dir) / "Audio" / f"{clip_id}.wav"
+
+
+def verify_vocadito_pins(vocadito_dir: Path, fixtures: Dict[str, str]) -> Dict[str, Path]:
+    """`fixtures` の全 clip の音声 sha256 を照合する。1 件でも不一致/欠落なら
+    fail-closed（`BuildM3dPairsError`）で例外を送出する（部分出力を防ぐため、
+    呼び出し側はこの関数が例外なく戻るまで一切の出力を書いてはならない）。
+    """
+    mismatches: List[str] = []
+    resolved: Dict[str, Path] = {}
+    for clip_id in sorted(fixtures):
+        expected_sha256 = fixtures[clip_id]
+        audio_path = vocadito_audio_path(vocadito_dir, clip_id)
+        if not audio_path.exists():
+            mismatches.append(f"{clip_id}: MISSING ({audio_path})")
+            continue
+        actual_sha256 = file_sha256(audio_path)
+        if actual_sha256 != expected_sha256:
+            mismatches.append(
+                f"{clip_id}: sha256 mismatch (actual={actual_sha256} expected={expected_sha256})"
+            )
+            continue
+        resolved[clip_id] = audio_path
+    if mismatches:
+        raise BuildM3dPairsError(
+            "vocadito pin 照合に失敗 (fail-closed; 部分出力なし): " + "; ".join(mismatches)
+        )
+    return resolved
+
+
+# --------------------------------------------------------------------------- #
+# clip 選定（決定論。設計メモ §1.1）
+# --------------------------------------------------------------------------- #
+def select_clips(fixtures: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """40 clip（以上）から tuning 12 / holdout 6 を決定論選定する。
+
+    規則（設計メモ §1.1・実行設計 §1.1）: clip id 昇順に並べた列を、
+    sha256(clip_id)（clip_id 文字列そのものの UTF-8 バイト列）の hex 表現昇順で
+    並べ替え、先頭 12 を tuning・次の 6 を holdout とする。sha256 の衝突は実務上
+    起きないため、事前の id 昇順整列は安定ソートの tie-break 用（意味を持つ余地は
+    実質ない）。
+    """
+    if len(fixtures) < TUNING_COUNT + HOLDOUT_COUNT:
+        raise BuildM3dPairsError(
+            f"fixtures に登録された clip 数 {len(fixtures)} が tuning+holdout "
+            f"({TUNING_COUNT + HOLDOUT_COUNT}) 未満 (fail-closed)"
+        )
+    id_ascending = sorted(fixtures)
+    ranked = sorted(
+        id_ascending, key=lambda clip_id: hashlib.sha256(clip_id.encode("utf-8")).hexdigest()
+    )
+    tuning = ranked[:TUNING_COUNT]
+    holdout = ranked[TUNING_COUNT : TUNING_COUNT + HOLDOUT_COUNT]
+    return tuning, holdout
+
+
+def circular_pairs(clip_ids: List[str]) -> List[Tuple[str, str]]:
+    """`clip_ids` を id 昇順に並べ、環状に隣接ペア (i, i+1) を作る（設計メモ §1.2）。"""
+    ordered = sorted(clip_ids)
+    n = len(ordered)
+    if n < 2:
+        return []
+    return [(ordered[i], ordered[(i + 1) % n]) for i in range(n)]
+
+
+# --------------------------------------------------------------------------- #
+# 生成: vocadito 変形
+# --------------------------------------------------------------------------- #
+def generate_vocadito_variants(
+    clip_ids: List[str], resolved_audio: Dict[str, Path], out_dir: Path
+) -> Dict[str, Dict[str, Path]]:
+    """選定 clip（id 昇順）ごとに 4 変形 WAV を書き出す。戻り値:
+    {clip_id: {variant_key(make_variants の key): 出力 Path}}（base は含まない）。
+    """
+    result: Dict[str, Dict[str, Path]] = {}
+    for clip_id in sorted(clip_ids):
+        audio_path = resolved_audio[clip_id]
+        y, sr = librosa.load(audio_path, sr=None, mono=True)
+        variants = make_variants(
+            y, sr, semitones=list(VOCADITO_SEMITONES), time_rates=list(VOCADITO_TIME_RATES)
+        )
+        clip_variants: Dict[str, Path] = {}
+        for variant_key in VOCADITO_VARIANT_ORDER:
+            label = VOCADITO_VARIANT_LABELS[variant_key]
+            out_path = out_dir / f"{clip_id}__{label}.wav"
+            _atomic_write_wav(out_path, variants[variant_key], sr)
+            clip_variants[variant_key] = out_path
+        result[clip_id] = clip_variants
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# 生成: 合成素材
+# --------------------------------------------------------------------------- #
+def generate_synth_positive(
+    specs: Dict[str, Any], out_dir: Path
+) -> Dict[str, Tuple[Path, Dict[str, Path]]]:
+    """合成 positive base（tuning/holdout）+ その変形版を書き出す。戻り値:
+    {base_id: (base_path, {variant_key: variant_path})}。
+    """
+    result: Dict[str, Tuple[Path, Dict[str, Path]]] = {}
+    for base_id in (SYNTH_TUNING_POS_ID, SYNTH_HOLDOUT_POS_ID):
+        y, sr = bmb.build_signal(base_id, specs)
+        base_path = out_dir / f"{base_id}.wav"
+        _atomic_write_wav(base_path, y, sr)
+        variants = make_variants(
+            y, sr, semitones=list(SYNTH_POS_SEMITONES), time_rates=list(SYNTH_POS_TIME_RATES)
+        )
+        variant_paths: Dict[str, Path] = {}
+        for variant_key in SYNTH_POS_VARIANT_ORDER:
+            label = SYNTH_POS_VARIANT_LABELS[variant_key]
+            out_path = out_dir / f"{base_id}__{label}.wav"
+            _atomic_write_wav(out_path, variants[variant_key], sr)
+            variant_paths[variant_key] = out_path
+        result[base_id] = (base_path, variant_paths)
+    return result
+
+
+def generate_synth_negatives(specs: Dict[str, Any], out_dir: Path) -> Dict[str, Path]:
+    """狙い撃ち negative（rhythm/interval）の合成 fixture を書き出す。"""
+    fixture_ids: List[str] = []
+    for a, b in SYNTH_NEGATIVE_RHYTHM_PAIRS + SYNTH_NEGATIVE_INTERVAL_PAIRS:
+        fixture_ids.extend([a, b])
+    result: Dict[str, Path] = {}
+    for fixture_id in fixture_ids:
+        y, sr = bmb.build_signal(fixture_id, specs)
+        out_path = out_dir / f"{fixture_id}.wav"
+        _atomic_write_wav(out_path, y, sr)
+        result[fixture_id] = out_path
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# manifest 組み立て
+# --------------------------------------------------------------------------- #
+def build_pairs(
+    *,
+    tuning_ids: List[str],
+    holdout_ids: List[str],
+    resolved_audio: Dict[str, Path],
+    vocadito_variants: Dict[str, Dict[str, Path]],
+    synth_positive: Dict[str, Tuple[Path, Dict[str, Path]]],
+    synth_negative: Dict[str, Path],
+) -> List[Dict[str, str]]:
+    pairs: List[Dict[str, str]] = []
+
+    # positive_transform（vocadito・real_voice）: split ごとに clip id 昇順 ×
+    # 変形順（VOCADITO_VARIANT_ORDER）で決定論的に列挙する。
+    for split, clip_ids in (("tuning", tuning_ids), ("holdout", holdout_ids)):
+        for clip_id in sorted(clip_ids):
+            base_path = resolved_audio[clip_id]
+            for variant_key in VOCADITO_VARIANT_ORDER:
+                label = VOCADITO_VARIANT_LABELS[variant_key]
+                variant_path = vocadito_variants[clip_id][variant_key]
+                pairs.append(
+                    _pair(
+                        pair_id=f"pt_real_{split}_{clip_id}_{label}",
+                        kind="positive_transform",
+                        split=split,
+                        audio_a=_repo_rel(base_path),
+                        audio_b=_repo_rel(variant_path),
+                        expected="same",
+                    )
+                )
+
+    # negative_cross（vocadito・real_voice）: tuning 12 対 / holdout 6 対
+    for split, clip_ids in (("tuning", tuning_ids), ("holdout", holdout_ids)):
+        for idx, (a, b) in enumerate(circular_pairs(clip_ids)):
+            pairs.append(
+                _pair(
+                    pair_id=f"nc_real_{split}_{idx:02d}_{a}_{b}",
+                    kind="negative_cross",
+                    split=split,
+                    audio_a=_repo_rel(resolved_audio[a]),
+                    audio_b=_repo_rel(resolved_audio[b]),
+                    expected="different",
+                )
+            )
+
+    # positive_transform（合成・synthetic）: tuning 2 対 + holdout 2 対
+    for split, base_id in (("tuning", SYNTH_TUNING_POS_ID), ("holdout", SYNTH_HOLDOUT_POS_ID)):
+        base_path, variant_paths = synth_positive[base_id]
+        for variant_key in SYNTH_POS_VARIANT_ORDER:
+            label = SYNTH_POS_VARIANT_LABELS[variant_key]
+            pairs.append(
+                _pair(
+                    pair_id=f"pt_synth_{split}_{base_id}_{label}",
+                    kind="positive_transform",
+                    split=split,
+                    audio_a=_repo_rel(base_path),
+                    audio_b=_repo_rel(variant_paths[variant_key]),
+                    expected="same",
+                )
+            )
+
+    # negative_rhythm（合成・tuning のみ・2 対）
+    for idx, (a, b) in enumerate(SYNTH_NEGATIVE_RHYTHM_PAIRS):
+        pairs.append(
+            _pair(
+                pair_id=f"nr_synth_tuning_{idx:02d}_{a}_{b}",
+                kind="negative_rhythm",
+                split="tuning",
+                audio_a=_repo_rel(synth_negative[a]),
+                audio_b=_repo_rel(synth_negative[b]),
+                expected="different",
+            )
+        )
+
+    # negative_interval（合成・tuning のみ・2 対）
+    for idx, (a, b) in enumerate(SYNTH_NEGATIVE_INTERVAL_PAIRS):
+        pairs.append(
+            _pair(
+                pair_id=f"ni_synth_tuning_{idx:02d}_{a}_{b}",
+                kind="negative_interval",
+                split="tuning",
+                audio_a=_repo_rel(synth_negative[a]),
+                audio_b=_repo_rel(synth_negative[b]),
+                expected="different",
+            )
+        )
+
+    return pairs
+
+
+def _material_of(pair_id: str) -> str:
+    if "_real_" in pair_id:
+        return "real_voice"
+    if "_synth_" in pair_id:
+        return "synthetic"
+    raise BuildM3dPairsError(f"pair_id {pair_id!r} から material 区分を判別できない")
+
+
+def crosstab(pairs: List[Dict[str, str]]) -> Dict[str, Dict[str, int]]:
+    """kind × split の対数集計（`material` 内訳つき）を返す。"""
+    counts: "Counter[Tuple[str, str]]" = Counter()
+    material_counts: "Counter[Tuple[str, str]]" = Counter()
+    for pair in pairs:
+        counts[(pair["kind"], pair["split"])] += 1
+        material_counts[(pair["kind"], _material_of(pair["pair_id"]))] += 1
+    table: Dict[str, Dict[str, int]] = {}
+    for (kind, split), n in sorted(counts.items()):
+        table.setdefault(kind, {})[split] = n
+    material_table: Dict[str, Dict[str, int]] = {}
+    for (kind, material), n in sorted(material_counts.items()):
+        material_table.setdefault(kind, {})[material] = n
+    return {"by_kind_split": table, "by_kind_material": material_table, "total": len(pairs)}
+
+
+def all_audio_paths(pairs: List[Dict[str, str]]) -> List[str]:
+    paths: List[str] = []
+    seen: set = set()
+    for pair in pairs:
+        for key in ("audio_a", "audio_b"):
+            rel = pair[key]
+            if rel not in seen:
+                seen.add(rel)
+                paths.append(rel)
+    return sorted(paths)
+
+
+# --------------------------------------------------------------------------- #
+# check-only
+# --------------------------------------------------------------------------- #
+def check_existing(
+    *,
+    manifest_out: Path,
+    pins_out: Path,
+    vocadito_dir: Path,
+    fixtures_path: Path,
+) -> Dict[str, Any]:
+    """既存の manifest + pins サイドカーが現在のファイル内容と整合するかだけを
+    再照合する（生成は一切行わない）。1 件でも不整合なら `BuildM3dPairsError`。
+    """
+    fixtures = load_m2c_fixtures(fixtures_path)
+    verify_vocadito_pins(vocadito_dir, fixtures)  # vocadito 側の drift も再確認
+
+    if not manifest_out.exists():
+        raise BuildM3dPairsError(f"{manifest_out}: manifest が存在しない (fail-closed; --check-only)")
+    if not pins_out.exists():
+        raise BuildM3dPairsError(f"{pins_out}: pins サイドカーが存在しない (fail-closed; --check-only)")
+
+    manifest_doc = _yaml_load_no_dup_keys(manifest_out.read_bytes())
+    pairs = harness._validate_manifest(manifest_doc)
+    pins_doc = json.loads(pins_out.read_text(encoding="utf-8"))
+    audio_sha256 = pins_doc.get("audio_sha256", {})
+
+    problems: List[str] = []
+    for rel_path in all_audio_paths(pairs):
+        abs_path = ROOT / rel_path
+        expected = audio_sha256.get(rel_path)
+        if expected is None:
+            problems.append(f"{rel_path}: pins サイドカーに未登録")
+            continue
+        if not abs_path.exists():
+            problems.append(f"{rel_path}: ファイルが存在しない")
+            continue
+        actual = file_sha256(abs_path, use_cache=False)
+        if actual != expected:
+            problems.append(f"{rel_path}: sha256 mismatch (actual={actual} expected={expected})")
+    if problems:
+        raise BuildM3dPairsError(
+            "--check-only 整合性チェック失敗 (fail-closed): " + "; ".join(problems)
+        )
+    return crosstab(pairs)
+
+
+# --------------------------------------------------------------------------- #
+# main
+# --------------------------------------------------------------------------- #
+def run_build(
+    *,
+    vocadito_dir: Path,
+    out_dir: Path,
+    manifest_out: Path,
+    pins_out: Path,
+    fixtures_path: Path,
+    synth_specs_path: Path,
+) -> List[Dict[str, str]]:
+    """pin 照合 → 選定 → 生成 → manifest 組み立てまでを行う（書き込みは manifest/
+    pins サイドカーのみ、呼び出し側が atomic に書く）。
+    """
+    fixtures = load_m2c_fixtures(fixtures_path)
+    resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
+
+    tuning_ids, holdout_ids = select_clips(fixtures)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    vocadito_variants = generate_vocadito_variants(
+        tuning_ids + holdout_ids, resolved_audio, out_dir
+    )
+
+    specs = bmb.load_specs(synth_specs_path)
+    synth_positive = generate_synth_positive(specs, out_dir)
+    synth_negative = generate_synth_negatives(specs, out_dir)
+
+    pairs = build_pairs(
+        tuning_ids=tuning_ids,
+        holdout_ids=holdout_ids,
+        resolved_audio=resolved_audio,
+        vocadito_variants=vocadito_variants,
+        synth_positive=synth_positive,
+        synth_negative=synth_negative,
+    )
+
+    # 生成物が実際にハーネスのスキーマ検証を通ることを自前でも確認する（防御的
+    # 二重チェック——スキーマの権威は常にハーネス側のコード）。
+    manifest_doc = {"schema": _MANIFEST_SCHEMA, "pairs": pairs}
+    harness._validate_manifest(manifest_doc)
+    return pairs
+
+
+def write_outputs(
+    pairs: List[Dict[str, str]],
+    *,
+    manifest_out: Path,
+    pins_out: Path,
+    fixtures_path: Path,
+) -> None:
+    manifest_doc = {"schema": _MANIFEST_SCHEMA, "pairs": pairs}
+    manifest_yaml = yaml.safe_dump(manifest_doc, sort_keys=False, allow_unicode=True)
+    _atomic_write_bytes(manifest_out, manifest_yaml.encode("utf-8"))
+
+    audio_sha256: Dict[str, str] = {}
+    material: Dict[str, str] = {}
+    for pair in pairs:
+        for key in ("audio_a", "audio_b"):
+            rel = pair[key]
+            if rel not in audio_sha256:
+                audio_sha256[rel] = file_sha256(ROOT / rel, use_cache=False)
+                material[rel] = _material_of(pair["pair_id"])
+    pins_doc = {
+        "schema": _PINS_SCHEMA,
+        "generated_utc": _utc_now(),
+        "m2c_external_fixtures_sha256": file_sha256(fixtures_path, use_cache=False),
+        "manifest_sha256": hashlib.sha256(manifest_yaml.encode("utf-8")).hexdigest(),
+        "audio_sha256": dict(sorted(audio_sha256.items())),
+        "material": dict(sorted(material.items())),
+    }
+    _atomic_write_bytes(
+        pins_out, json.dumps(pins_doc, indent=2, sort_keys=True).encode("utf-8")
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--vocadito-dir", type=Path, default=DEFAULT_VOCADITO_DIR)
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument("--manifest-out", type=Path, default=DEFAULT_MANIFEST_OUT)
+    parser.add_argument("--pins-out", type=Path, default=DEFAULT_PINS_OUT)
+    parser.add_argument("--fixtures", type=Path, default=M2C_FIXTURES_PATH)
+    parser.add_argument("--synth-specs", type=Path, default=M3D_SYNTH_SPECS_PATH)
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="生成済み manifest/WAV/pins サイドカーの整合性のみ再照合する（生成しない）",
+    )
+    parser.add_argument(
+        "--summary-out",
+        type=Path,
+        default=None,
+        help="kind×split（+material 内訳）の対数集計 JSON を書き出す（任意）",
+    )
+    args = parser.parse_args()
+
+    try:
+        if args.check_only:
+            summary = check_existing(
+                manifest_out=args.manifest_out,
+                pins_out=args.pins_out,
+                vocadito_dir=args.vocadito_dir,
+                fixtures_path=args.fixtures,
+            )
+            print(f"--check-only: OK ({summary['total']} pairs, sha256 全一致)")
+        else:
+            pairs = run_build(
+                vocadito_dir=args.vocadito_dir,
+                out_dir=args.out_dir,
+                manifest_out=args.manifest_out,
+                pins_out=args.pins_out,
+                fixtures_path=args.fixtures,
+                synth_specs_path=args.synth_specs,
+            )
+            write_outputs(
+                pairs,
+                manifest_out=args.manifest_out,
+                pins_out=args.pins_out,
+                fixtures_path=args.fixtures,
+            )
+            summary = crosstab(pairs)
+            print(f"wrote {summary['total']} pairs to {args.manifest_out}")
+            print(f"wrote pins sidecar to {args.pins_out}")
+    except BuildM3dPairsError as exc:
+        print(f"FAIL-CLOSED: {exc}", file=sys.stderr)
+        return 1
+
+    if args.summary_out is not None:
+        _atomic_write_bytes(
+            args.summary_out, json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
+        )
+        print(f"wrote crosstab summary to {args.summary_out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
