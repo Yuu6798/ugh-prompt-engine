@@ -460,7 +460,7 @@ series_runs:
       pass）。chorus×2 を意図的に完全同一ヒント（full energy）にした設計の
       リスクが的中。round2: 著者は「tier 順の音量ギャップ」仮説
       （full energy(tier4) の直下は既定(tier5) であり sparse(tier3) では
-      ない）に基づき outro の physical のみ sparse(tier3)→認識語なし自由文
+      ない）に基づき outro の physical を sparse(tier3)→認識語なし自由文
       (既定 tier5) に変更したが、observed_sections は round1 と byte 同一
       （境界検出が無反応、pareto improved=false・3 軸とも delta=0）。
       round3: 著者は境界秒の等間隔性から「パルス有無」という質的な軸へ
@@ -471,6 +471,13 @@ series_runs:
       予告した chorus1/chorus2 併合退行（3 要素への縮退）リスクは顕在化
       せず、4 要素列のまま到達した。s1 とは異なる修理レバー（outro tier
       変更 vs chorus2 bars 延伸）で同型の bridge 症状を解消した。
+      事後監査（PR #250 Codex レビュー第 12 巡指摘）: s2 の両遷移
+      （round1→2・round2→3）は outro physical に加えて `meta.version` も
+      0.1→0.2→0.3 と編集している。meta.version は演奏ヒント照合・演奏
+      入力のいずれにも関与せず音響的に不活性だが、pin 済み score の
+      literal な差分としては「単一フィールド編集」ではなく「意図した
+      1 変数 + 不活性な版数編集」である（s1 は全周回 version 0.1 で不変。
+      s1 round2 の role 併記編集と同じ会計方針で記録）。
     files_dir: series/br_d1_s2/
     started_utc: '2026-08-07T03:35:06Z'
 off_contract_events: []
