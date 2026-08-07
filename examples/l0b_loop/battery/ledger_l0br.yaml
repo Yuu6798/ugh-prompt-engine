@@ -124,7 +124,21 @@ payload_composition:
 
 constraint_checker:
   path: ../scripts/check_token_ban.py
-  sha256: "6f4bd8da4c47e4e82c206d2af0565151df3f8b09a40ab4854c7edc8785391971"
+  sha256_at_measurement: "6f4bd8da4c47e4e82c206d2af0565151df3f8b09a40ab4854c7edc8785391971"
+  sha256_current: "98f13bc0af4c0a8c5bf9297c0397ab756bcc3acded2c91ca3ff9ca4565e53ee8"
+  frozen_copy: checker_at_measurement/check_token_ban.py
+  note: >-
+    composer（`payload_composition.composer`）と同型の 2 系統 pin
+    （PR #249 Codex レビュー第 19 巡, P2）。sha256_at_measurement = 全 16
+    測定周回の R4 判定を実行した実装。凍結コピー =
+    checker_at_measurement/check_token_ban.py（形状テストが実体照合する
+    対象・squash マージで git 系譜が切れても実体照合を可能にする保全措置）。
+    sha256_current = PR #249 レビュー対応後の現行ファイル。累積修正は
+    `-o` 出力の dangling symlink 上書き禁止ガードのみで、判定ロジック
+    （`check_token_ban()` 関数本体）は無変更——妥当な score.yaml に対する
+    判定出力（`status`/`hits`/`score_sha256` 等）はバイト不変（実測: 2 系統
+    のバイト列を diff し、差分が docstring とガード節のみであることを確認
+    済み）。
   banned_tokens: ["silence", "no kick", "low density", "sub bass"]
   scope: >-
     提出 score.yaml の生テキスト全文（UTF-8 デコード後・小文字化）に対する
@@ -557,7 +571,13 @@ off_contract_events:
       よって br_d1/s2 系列を到達率会計から除外しない。ただし「送信直後の
       自己検出 → 応答生成前中止 → 正規再実行」という手順自体は事前登録
       されていない事後解釈であり、この事実を正直会計として明示する。
-      感度開示: 厳格読解（試行を周回とみなし当該系列を除外）を採る場合、
-      到達率は 5/6 → 4/5 へ変化するが、定性結論（到達の分岐が課題難度でなく
-      著者の戦略選択に帰す仮説、br_d1 内の系列間分散 s1=unreached/
-      s2=reached）は不変。
+      感度開示（2026-08-07 訂正——PR #249 Codex レビュー第 19 巡, P2:
+      第 17 巡追記の「定性結論は不変」は過大主張だったため訂正する）:
+      厳格読解（試行を周回とみなし当該系列を除外）を採る場合、到達率は
+      5/6 → 4/5 へ変化する。この分岐では br_d1/s2 が counted evidence から
+      外れるため、br_d1 内の系列間対比（s1=unreached/s2=reached）は会計内
+      の根拠を失い、到達の分岐が著者の戦略選択に帰す仮説は off-contract
+      注釈付き観測のみに依拠することになる（会計内の根拠では成立しない）。
+      本裁定（系列除外はしない・5/6 を維持）は User 方針決裁 2026-08-07 で
+      確定済みであり、この訂正は感度開示の記述精度のみを正すもので、上記
+      裁定そのもの・測定値・解釈を変更しない。

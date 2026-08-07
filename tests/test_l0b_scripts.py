@@ -71,6 +71,16 @@ composer_at_measurement = _load_module(
     "l0b_composer_at_measurement", BATTERY_DIR / "composer_at_measurement" / "compose_payload.py"
 )
 
+# 測定時 R4 判定器の凍結コピー（PR #249 Codex レビュー第 19 巡, P2 の保全措置
+# = `battery/checker_at_measurement/README.md`）。composer_at_measurement と
+# 同じ理由で現行 `check_token_ban`（上の `l0b_check_token_ban`）とは別
+# モジュール名でロードする——測定時に実際に判定を行った実装を再現するのが
+# 目的で、レビュー対応（`-o` dangling symlink ガード等）が累積した現行実装
+# を再現するのが目的ではない。
+checker_at_measurement = _load_module(
+    "l0b_checker_at_measurement", BATTERY_DIR / "checker_at_measurement" / "check_token_ban.py"
+)
+
 
 def _axis(*, verdict: str, band: str = "measured", requirement=None, observed=None) -> dict:
     return {"requirement": requirement, "observed": observed, "verdict": verdict, "band": band}
@@ -3425,6 +3435,30 @@ def test_check_token_ban_refuses_to_overwrite_existing_output(tmp_path: Path, ca
     assert out_path.read_bytes() == stale_bytes
 
 
+def test_check_token_ban_refuses_to_overwrite_dangling_symlink(tmp_path: Path, capsys):
+    """`compose_payload.py` と同型の指摘（PR #249 Codex review 第 19 巡,
+    P2）: `Path.exists()` はシンボリックリンクをターゲットまで辿るため、
+    リンク先が存在しない dangling symlink には `False` を返す——`-o` の
+    出力先が dangling symlink の場合、`ProtectedPathError`（運用エラー、
+    exit 2）で拒否され、symlink 自体が置換されず残ることを確認する。"""
+
+    score_path = tmp_path / "score.yaml"
+    score_path.write_text("intro: sparse pad\n", encoding="utf-8")
+    out_path = tmp_path / "result.json"
+    dangling_target = tmp_path / "does-not-exist-anywhere.txt"
+    out_path.symlink_to(dangling_target)
+    assert out_path.is_symlink()
+    assert not out_path.exists()  # dangling: exists() follows the link, target is missing
+
+    exit_code = check_token_ban.main(["--score", str(score_path), "-o", str(out_path)])
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+    assert out_path.is_symlink()
+    assert os.readlink(out_path) == str(dangling_target)
+
+
 def test_check_token_ban_cli_has_only_score_and_o_options():
     """argparse オプションが `--score`/`-o`（+ `-h`/`--help`）のみであること
     を parser 自体から検査する（`compose_payload.py` の
@@ -3561,12 +3595,24 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
         )
     )
 
+    # `constraint_checker` も composer と同型の実行時/現行 2 系統 pin へ
+    # 移行した（PR #249 Codex レビュー第 19 巡, P2）: `sha256_current` は
+    # 現行ファイルと実体照合、`sha256_at_measurement` は `frozen_copy`
+    # （`checker_at_measurement/check_token_ban.py`）との実体照合へ昇格する
+    # （composer の第 10 巡採用と同じ理由——squash マージ耐久性）。
     constraint_checker = ledger["constraint_checker"]
     checks.append(
         (
-            "constraint_checker",
+            "constraint_checker (sha256_current)",
             _resolve_battery_relative(constraint_checker["path"]),
-            constraint_checker["sha256"],
+            constraint_checker["sha256_current"],
+        )
+    )
+    checks.append(
+        (
+            "constraint_checker (sha256_at_measurement, frozen_copy)",
+            _resolve_battery_relative(constraint_checker["frozen_copy"]),
+            constraint_checker["sha256_at_measurement"],
         )
     )
 
@@ -4314,17 +4360,24 @@ def test_ledger_l0br_series_identity_bound_to_files_dir_and_payload_manifest_lab
 
 def test_ledger_l0br_token_ban_reports_reproduce_frozen_judge_reevaluation():
     """`token_ban.json`（第 12 巡で `score_sha256` の入力束縛まで実体照合
-    済み）が実際に凍結判定器（`constraint_checker` として pin 済み・現行
-    `check_token_ban.py` は測定時から無変更が entity-check 済み——第 8 巡
-    以降の composer/run_round と異なり、この判定器自体は本 PR のレビュー
-    サイクルで一度も改変されていない）から生成されたことを、pareto/report
-    再評価（第 12/13 巡）と同型の手法で検証する（PR #249 Codex レビュー
-    第 17 巡, P2）: pin 非 null の全 10 周回について pin 済み `score.yaml`
-    を `check_token_ban.check_token_ban()` へ入力し、`check_token_ban.py`
-    自身の `-o` publish と同一の直列化（`json.dumps(result,
-    ensure_ascii=False, indent=2, sort_keys=True) + "\n"`）で出力を組み立て、
-    pin 済み `token_ban.json` と**バイト等値**であることを assert する。
-    純テキスト処理で高速なため `slow` マーカーは不要。"""
+    済み）が実際に凍結判定器（`constraint_checker` として pin 済み）から
+    生成されたことを、pareto/report 再評価（第 12/13 巡）と同型の手法で
+    検証する（PR #249 Codex レビュー第 17 巡, P2 / 第 19 巡, P2 で凍結
+    コピー側へ切替）。**現状**: `check_token_ban.py` は第 19 巡で `-o`
+    出力の dangling symlink 上書き禁止ガードを獲得した（judge ロジック
+    自体は無変更——`constraint_checker.note` が不変量を実測確認済み）。
+    測定時判定の再現が目的のため、再評価は現行実装ではなく**凍結コピー
+    側の判定器**（`checker_at_measurement.check_token_ban`、
+    `sha256_at_measurement` で pin 済み）で行う——composer 系列の
+    `composer_at_measurement` と同じ理由・同じ切替（第 13 巡の
+    `run_round`/`pareto_eval` は本 PR のレビューサイクルで一度も改変され
+    ていないため現行実装のままでよい）。pin 非 null の全 10 周回について
+    pin 済み `score.yaml` を `checker_at_measurement.check_token_ban()` へ
+    入力し、`check_token_ban.py` 自身の `-o` publish と同一の直列化
+    （`json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) +
+    "\n"`）で出力を組み立て、pin 済み `token_ban.json` と**バイト等値**
+    であることを assert する。純テキスト処理で高速なため `slow` マーカー
+    は不要。"""
 
     ledger = _load_ledger_l0br()
 
@@ -4339,7 +4392,7 @@ def test_ledger_l0br_token_ban_reports_reproduce_frozen_judge_reevaluation():
             score_path = round_dir / "score.yaml"
             pinned_path = round_dir / "token_ban.json"
 
-            result = check_token_ban.check_token_ban(score_path)
+            result = checker_at_measurement.check_token_ban(score_path)
             reevaluated_content = (
                 json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
             ).encode("utf-8")
@@ -4357,4 +4410,95 @@ def test_ledger_l0br_token_ban_reports_reproduce_frozen_judge_reevaluation():
             f"{label}: re-running the pinned score.yaml through the frozen judge "
             "(check_token_ban.check_token_ban) does not byte-reproduce the pinned "
             "token_ban.json — the pin may not have been produced from this score"
+        )
+
+
+# --- Codex review (PR #249) 第 19 巡, P2: 陽性対照ゲートの再評価 ---------
+
+
+def test_ledger_l0br_new_search_positive_controls_pass_frozen_token_ban_gate():
+    """陽性対照は R4 課題（token_ban: true の br_d2/br_d3）の実行可能性
+    ゲートであり、banned token が不在であることが定義上の前提——凍結
+    R4 判定器（`checker_at_measurement`、`constraint_checker` として pin
+    済み）で br_d2/br_d3 の陽性対照 `score.yaml`（`mode: "new_search"`）を
+    再評価し、`status == "pass"` であることを assert する（PR #249 Codex
+    レビュー第 19 巡, P2）。**境界宣言**: br_d1 は `mode: "reuse_pinned_t2"`
+    （新規探索なし・L0B-T2 の pin 済み陽性対照を再現確認して流用）のため
+    ここには含めない——br_d1 の positive_control.report_sha256
+    （`0a21c09a72e8...`）は `examples/l0b_loop/positive_control_t2/
+    report.json` の実測 sha256 と一致することを確認済みで、その score/
+    report は既存の `test_positive_control_t2_round_trip_reproduces_
+    pinned_report`（slow）が凍結 `run_round` 経由で既にカバーしている
+    （token_ban ゲートは br_d1 が token_ban: false のため対象外）。純テキ
+    スト処理で高速なため `slow` マーカーは不要。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+
+    checks: list[tuple[str, str]] = []
+    for task_id in ("br_d2", "br_d3"):
+        task = tasks_by_id[task_id]
+        pc = task["positive_control"]
+        assert pc["mode"] == "new_search", (
+            f"tasks[{task_id}].positive_control.mode changed from 'new_search' — this "
+            "test's role table needs updating"
+        )
+        score_path = BATTERY_DIR / pc["dir"] / "score.yaml"
+        result = checker_at_measurement.check_token_ban(score_path)
+        checks.append((task_id, result["status"]))
+
+    assert checks, "no positive-control token_ban checks collected — test would vacuously pass"
+    assert len(checks) == 2, f"expected exactly 2 new_search positive controls, got {len(checks)}"
+    for task_id, status in checks:
+        assert status == "pass", (
+            f"tasks[{task_id}].positive_control score.yaml fails the frozen R4 token_ban "
+            f"gate (status={status!r}) — a positive control must be banned-token-free by "
+            "definition"
+        )
+
+
+@pytest.mark.slow
+def test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation(
+    tmp_path: Path,
+):
+    """陽性対照（`mode: "new_search"` の br_d2/br_d3）の pin 済み
+    `report.json` が、pin 済み `score.yaml` を凍結 `run_round.py`（judge
+    節 pin 済み・現行実装は本 PR のレビューサイクルで一度も改変されて
+    いない）へ通した再導出とバイト等値であることを assert する（PR #249
+    Codex レビュー第 19 巡, P2。§`test_ledger_l0br_reports_reproduce_
+    frozen_judge_reevaluation`（第 13 巡）の counted 周回版と同型——陽性
+    対照は `--round 0`（`run_round.run_round` の既定値・「dry-run/陽性
+    対照、L0b evidence に算入しない」の意味）で確立された）。br_d1 の
+    境界宣言は fast 側テスト（
+    `test_ledger_l0br_new_search_positive_controls_pass_frozen_token_ban_gate`）
+    の docstring を参照——既存の T2 側 slow テストでカバー済みのため
+    ここには含めない。出力は `tmp_path` のみへ書き、リポジトリ内ファイル
+    は一切変更しない。`@pytest.mark.slow`: 2 件の合成 + 抽出を伴う
+    （実測: 1 件あたり約 58〜59 秒、2 件で約 2 分）。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+
+    reeval_checks: list[tuple[str, bytes, bytes]] = []
+    for task_id in ("br_d2", "br_d3"):
+        task = tasks_by_id[task_id]
+        pc = task["positive_control"]
+        assert pc["mode"] == "new_search"
+        section_map_path = _resolve_battery_relative(task["section_map"])
+        pc_dir = BATTERY_DIR / pc["dir"]
+        score_path = pc_dir / "score.yaml"
+        pinned_report_path = pc_dir / "report.json"
+
+        workdir = tmp_path / f"{task_id}_positive_control_wd"
+        output_path = tmp_path / f"{task_id}_positive_control_report.json"
+        run_round.run_round(score_path, workdir, 0, output_path, section_map_path=section_map_path)
+        reeval_checks.append((task_id, output_path.read_bytes(), pinned_report_path.read_bytes()))
+
+    assert reeval_checks, "no positive-control re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 2, f"expected exactly 2 new_search positive controls, got {len(reeval_checks)}"
+    for task_id, reevaluated_bytes, pinned_bytes in reeval_checks:
+        assert reevaluated_bytes == pinned_bytes, (
+            f"tasks[{task_id}].positive_control: re-running the pinned score.yaml through "
+            "the frozen judge (run_round.run_round, round=0) does not byte-reproduce the "
+            "pinned report.json — the pin may not have been produced from this score"
         )

@@ -26,9 +26,7 @@ JSON として `-o` へ publish する（`sort_keys=True`・`indent=2`・
 `ensure_ascii=False`・末尾改行。`hits` は 4 語全部のカウントを 0 も含めて
 明記する——「該当なしはキー省略」ではなく「該当なしは値 0」で正直に会計する）。
 `-o` の既存ファイルは上書き禁止（`compose_payload.py` と同じ
-`atomic_write_bytes` 経由の fail-fast publish。既存判定は `os.path.lexists`
-を使い、リンク先が存在しない dangling symlink も「既存」として拒否する
-——symlink エントリの静黙置換を防ぐ）。
+`atomic_write_bytes` 経由の fail-fast publish）。
 
 exit code: `pass` = 0 / `fail` = 1 / 運用エラー（`-o` 上書き拒否・非 UTF-8
 デコード失敗等）= 2。stdout には判定結果の 1 行サマリのみ、エラーは stderr。
@@ -38,7 +36,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -94,14 +91,7 @@ def check_token_ban(score_path: Path) -> dict[str, object]:
 
 def _publish_result(result: dict[str, object], out_path: Path) -> None:
     out_path = Path(out_path)
-    # `Path.exists()` はシンボリックリンクをターゲットまで辿って判定する
-    # ため、リンク先が存在しない dangling symlink には `False` を返す——
-    # それを「既存ファイルなし」と誤判定すると `atomic_write_bytes` 内部の
-    # `os.replace` が symlink エントリ自体を静黙に実ファイルへ置換して
-    # しまう（compose_payload.py と同型の指摘、PR #249 Codex review 第 19
-    # 巡, P2）。`os.path.lexists`（symlink 自体の存在を判定し、辿らない）
-    # で判定する。
-    if os.path.lexists(out_path):
+    if out_path.exists():
         raise TokenBanCheckError(f"refusing to overwrite existing output file: {out_path}")
     payload = (
         json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
