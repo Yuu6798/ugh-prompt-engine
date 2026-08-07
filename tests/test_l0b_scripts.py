@@ -3515,6 +3515,18 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
                 statement["sha256"],
             )
         )
+        # 事前登録 doc 本体の content pin（PR #249 Codex レビュー第 16 巡,
+        # P2）: 元は bare 文字列（ファイル名のみ）だった `registration` を
+        # `statement` と同型の `{path, sha256}` へ dict 化し、実体照合の
+        # 対象に加えた。
+        registration = task["registration"]
+        checks.append(
+            (
+                f"tasks[{task['id']}].registration",
+                _resolve_battery_relative(registration["path"]),
+                registration["sha256"],
+            )
+        )
 
     for task_id in ("br_d2", "br_d3"):
         task = next(t for t in ledger["tasks"] if t["id"] == task_id)
@@ -3765,6 +3777,38 @@ def test_ledger_l0br_series_runs_and_off_contract_events_are_lists():
         f"series_runs inventory mismatch: got {sorted(actual_inventory)!r}, "
         f"expected {sorted(_LEDGER_EXPECTED_SERIES_INVENTORY)!r}"
     )
+
+
+def test_ledger_l0br_off_contract_events_inventory_is_fixed():
+    """`off_contract_events` を既知の 1 件（`payload_transcription_corruption`
+    ・br_d1/s2 round1 の事故）へ固定する（PR #249 Codex レビュー第 16 巡,
+    P2）。record doc（`docs/l0br_robustness_record.md` §5）の報告と台帳の
+    会計が矛盾しないための固定であり、将来イベントが増える場合はこの
+    assert 自体を更新する。"""
+
+    ledger = _load_ledger_l0br()
+    events = ledger["off_contract_events"]
+
+    assert len(events) == 1, f"expected exactly 1 off_contract_events entry, got {len(events)}"
+    event = events[0]
+
+    for field in ("date", "task", "series", "round", "kind", "description", "disposition"):
+        assert field in event, f"off_contract_events[0] missing required field {field!r}"
+    assert isinstance(event["date"], str) and event["date"]
+    assert isinstance(event["task"], str) and event["task"] in _LEDGER_TASK_IDS
+    assert isinstance(event["series"], str) and event["series"]
+    assert isinstance(event["round"], int) and event["round"] >= 1
+    assert isinstance(event["kind"], str) and event["kind"]
+    assert isinstance(event["description"], str) and event["description"]
+    assert isinstance(event["disposition"], str) and event["disposition"]
+
+    # 既知の 1 件そのものの識別フィールドを固定する（record doc §5 の該当
+    # 事故記述と対応）。
+    assert event["date"] == "2026-08-06"
+    assert event["task"] == "br_d1"
+    assert event["series"] == "s2"
+    assert event["round"] == 1
+    assert event["kind"] == "payload_transcription_corruption"
 
 
 def _round_success(verdicts: dict, *, token_ban_required: bool, token_ban_status) -> bool:

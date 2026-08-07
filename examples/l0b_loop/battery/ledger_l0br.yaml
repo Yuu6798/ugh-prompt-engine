@@ -13,7 +13,9 @@
 # per-round エントリへ追加 pin した（`token_ban_report_sha256` /
 # `pareto_report_sha256`）。既存の測定値・解釈済み boolean（token_ban /
 # pareto_vs_prev 等）は無変更——一次再現アンカーの網羅範囲を広げる会計上の
-# 追加であり、再測定や値の書き換えではない。
+# 追加であり、再測定や値の書き換えではない。第 16 巡でも同旨で
+# `tasks[*].registration`（事前登録 doc 本体）を bare 文字列から
+# `{path, sha256}` へ dict 化して sha256 pin を追加した。
 # Design Memo = L0b-R
 # （User 方針決裁 2026-08-06: 単一 LLM 切り分け先行・複数モデル比較後回し）。
 # 正本 = docs/llm_adapter_planning.md §5（成功条件）+ 本台帳。
@@ -161,7 +163,9 @@ protocol:
 tasks:
   - id: "br_d1"
     difficulty: "single_lever_proven"
-    registration: "task_br_d1.md"
+    registration:
+      path: "task_br_d1.md"
+      sha256: "06ac3b42ff5f7f5aef8e333524e8599411298383fc9b0e752c2c7d393b689f66"
     statement:
       path: "statement_br_d1.md"
       sha256: "17feb99e0015c476aae3fb980ecee380b4cbd7eb7130c06e787f4cbafb4113e1"
@@ -176,7 +180,9 @@ tasks:
       report_sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
   - id: "br_d2"
     difficulty: "multi_lever_novel"
-    registration: "task_br_d2.md"
+    registration:
+      path: "task_br_d2.md"
+      sha256: "3da5ed04ae137ec74e9a9c5a08a0a226a93b08d2c5da96926e14950645ec2b8c"
     statement:
       path: "statement_br_d2.md"
       sha256: "0e442111b3ecf1bacc0921f2fed40da31decb15ff74eb7ca8a12e024698f35a4"
@@ -191,7 +197,9 @@ tasks:
       report_sha256: "fc4982c8f2ae977b953fdde8b2239244c2a3b515cf5ca8e0e55816776e444f51"
   - id: "br_d3"
     difficulty: "compound_interaction"
-    registration: "task_br_d3.md"
+    registration:
+      path: "task_br_d3.md"
+      sha256: "04aab93fad6c2f959a3435908da886f89e2f064a46548b3835d777f410b3de77"
     statement:
       path: "statement_br_d3.md"
       sha256: "201823451d6f9526090347895362e93323642e254a1daf4ca50f1bc06e5ad8a3"
