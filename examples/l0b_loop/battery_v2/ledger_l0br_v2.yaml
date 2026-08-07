@@ -308,8 +308,10 @@ preregistered_hypothesis:
         s1=unreached/s2=reached という到達分散も著者戦略選択に帰す仮説と
         未分離だった = `docs/l0br_robustness_record.md` §6 と同一の限界）。
       - >-
-        rounds_to_success は両系列とも 3 で、v1 s2 の 1 より遅い。「開示は
-        到達可否を改善したが、構造軸の収束速度は改善していない」——理由は
+        rounds_to_success は両系列とも 3 で、v1 s2 の 1 より遅い。観測上、
+        到達可否は 1/2→2/2 に転じたが構造軸の収束速度は改善していない
+        （この到達率差の因果帰属は上記 judgement_note のとおり著者揺らぎと
+        交絡したまま——孤立効果と読まないこと）。収束が遅かった理由は
         両系列とも v2 未開示（v3 開示候補）の高→低エネルギー遷移側の
         bridge 過剰検出（chorus→outro 境界）に round1/round2 で嵌ったため。
         v2 §2 は低→高遷移側の過渡帯のみを開示しており、高→低遷移側の

@@ -4635,8 +4635,12 @@ def test_ledger_l0br_v2_series_runs_measured_state_is_fixed():
     という、本テスト群のヘッダコメントが予告していた更新）。br_d1_s1 /
     br_d1_s2 の 2 系列が過不足なく揃い、各 3 周回・両系列とも
     outcome=reached / rounds_to_success=3 / failure_mode=null であること、
-    `off_contract_events` が空（転写事故なし・逐語性は spawn 直後の JSONL
-    機械照合で確認済み）であることを assert する。"""
+    `off_contract_events` が空であることを assert する。空 = 「転写事故が
+    皆無」ではない: 転写破損 2 件（s1 round3 / s2 round3 の各初回 spawn）が
+    発生したが、いずれも spawn 直後の JSONL 機械照合で検出され著者応答の
+    生成前に kill されたため、off-contract（応答が汚染入力を消費した事象）
+    には該当せず計上されない（`docs/l0a_v2_remeasure_record.md` §5 が正）。
+    消費された全周回の逐語性は同じ機械照合で確認済み。"""
 
     ledger = _load_ledger_l0br_v2()
 
