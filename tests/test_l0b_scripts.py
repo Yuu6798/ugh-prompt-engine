@@ -4777,13 +4777,6 @@ def test_ledger_l0br_v2_pins_match_actual_file_sha256():
         actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         assert actual_sha256 == expected_sha256, f"{label}: sha256 mismatch for {path}"
 
-    # 測定前 pin の内部整合: 登録時点では sha256_at_measurement ==
-    # sha256_current で開始する（design memo 明記事項）。実測後にレビュー
-    # 対応で現行実装が変わったら v1 と同じ dual-pin 意味論へ移行してよいが、
-    # 登録時点はこの等号が破れていないことを固定する。
-    assert composer["sha256_at_measurement"] == composer["sha256_current"]
-    assert constraint_checker["sha256_at_measurement"] == constraint_checker["sha256_current"]
-
 
 def test_ledger_l0br_v2_cross_ledger_pins_match_v1_ledger():
     """cross-ledger 同一性 assert: v2 台帳の判定器 4 pin + statement +

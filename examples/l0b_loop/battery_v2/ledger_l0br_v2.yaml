@@ -2,10 +2,11 @@
 #
 # 一次資料。事前登録（tasks / 判定規約 / pin）→ 実行 evidence（series_runs
 # 追記）の 2 段 commit で事前登録性を git 履歴で証明する（v1 台帳
-# `../battery/ledger_l0br.yaml` と同じ運用規約）。本ファイルは登録 commit
-# の内容のみを保持し、`series_runs` / `off_contract_events` は登録時の
-# 正規状態（空 list）のまま commit する。実測は別 commit で
-# `series_runs` を追記して行う。
+# `../battery/ledger_l0br.yaml` と同じ運用規約）。登録 commit 187c57e で
+# `series_runs` / `off_contract_events` を登録時の正規状態（空 list）の
+# まま commit し、実測 commit で `series_runs` を追記済み——この 2 段
+# commit の履歴自体が事前登録性の証明であり、登録時点の状態は git 履歴
+# （187c57e）で参照できる。
 #
 # 目的: v1 バッテリー（`../battery/ledger_l0br.yaml`）の br_d1/s1 が
 # `failure_mode: contract_defect` と判定された原因——契約 v1 が未開示
@@ -29,7 +30,8 @@
 
 schema_version: "l0br-v2-remeasure/0.1"
 experiment: "L0b-R-v2 (BR-D1 remeasure under contract v2)"
-registered_utc: "2026-08-07T00:00:00Z"
+# 登録 commit 187c57e の git タイムスタンプと一致（丸めなし）
+registered_utc: "2026-08-07T03:30:15Z"
 route: >-
   Claude 完結（コーディネーター = セッション本体 / 著者 = 情報遮断 Sonnet
   サブエージェント・毎周回別個体）。v1 台帳と同一ルート。
@@ -415,7 +417,7 @@ series_runs:
       （境界検出が無反応、pareto improved=false・3 軸とも delta=0）。
       round3: 著者は境界秒の等間隔性から「パルス有無」という質的な軸へ
       仮説を転換し、outro の physical を tier5→tier2（low density を含む
-      自由文・パルスのみでメロディなしのドローン化、曲総長不変）に変更、
+      自由文・パルスもメロディも鳴らさないドローンのみ化、曲総長不変）に変更、
       bridge が消失して structure exact_match（pmr=1.0）。pareto
       improved=true（structure axis delta=-1・他軸非退行）。著者が事前
       予告した chorus1/chorus2 併合退行（3 要素への縮退）リスクは顕在化
