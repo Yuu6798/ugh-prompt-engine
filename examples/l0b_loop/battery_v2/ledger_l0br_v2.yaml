@@ -1,0 +1,254 @@
+# L0b-R BR-D1 v2 再測台帳 — 契約 v2（開示のみの改訂）による分離測定
+#
+# 一次資料。事前登録（tasks / 判定規約 / pin）→ 実行 evidence（series_runs
+# 追記）の 2 段 commit で事前登録性を git 履歴で証明する（v1 台帳
+# `../battery/ledger_l0br.yaml` と同じ運用規約）。本ファイルは登録 commit
+# の内容のみを保持し、`series_runs` / `off_contract_events` は登録時の
+# 正規状態（空 list）のまま commit する。実測は別 commit で
+# `series_runs` を追記して行う。
+#
+# 目的: v1 バッテリー（`../battery/ledger_l0br.yaml`）の br_d1/s1 が
+# `failure_mode: contract_defect` と判定された原因——契約 v1 が未開示
+# だった計器特性（ヒント解決の非加算・優先順位制、`role` へのヒント語
+# 漏れ込み照合、drone 化セクションでの `chord_progression` 無音化）——が、
+# **開示のみを追加した契約改訂（`../contract_v2.md`）** によって実際に
+# 解消するかどうかを、判定器・演奏者・report 正規形を一切変更せずに測定
+# する。v1 バッテリーとの差分は契約文書（`contract.md` → `contract_v2.md`）
+# のみに限定し、著者能力・判定基準の変化と交絡しないようにする。
+#
+# 境界宣言（`../battery/ledger_l0br.yaml` ヘッダコメントと同型。PR #249
+# Codex レビュー、耐久性指摘を受けた明文化を継承）: この git 証明は本
+# リポジトリのマージ慣行（マージコミット）を保持する文脈でのみ checkout
+# 再現可能。squash マージや履歴を持たない export の文脈では git 系譜は
+# attestation（当時の測定者による証言）へ格下げされ、git 非依存の一次
+# 再現アンカーは本台帳の content pin（sha256）になる。
+#
+# Design Memo = L0a v2 + BR-D1 再測（Fable 設計・2026-08-07）。
+# 正本 = docs/llm_adapter_planning.md §5（成功条件）+ `../battery/
+# ledger_l0br.yaml`（v1 台帳・比較対象）+ 本台帳。
+
+schema_version: "l0br-v2-remeasure/0.1"
+experiment: "L0b-R-v2 (BR-D1 remeasure under contract v2)"
+registered_utc: "2026-08-07T00:00:00Z"
+route: >-
+  Claude 完結（コーディネーター = セッション本体 / 著者 = 情報遮断 Sonnet
+  サブエージェント・毎周回別個体）。v1 台帳と同一ルート。
+
+contract_freeze:
+  policy: >-
+    v1 台帳の br_d1/s1 が `failure_mode: contract_defect` と判定された
+    ため、v1 台帳の失敗モード規約どおり「L0a v2 反映後に同一データで
+    再測」する対象として本台帳を起こす。判定器・演奏者・report 正規形は
+    不変（下記 `judge` 節の sha が v1 台帳と同一であることが機械証明）
+    ——差し替えるのは契約文書のみ。
+  contract_v2:
+    path: ../contract_v2.md
+    sha256: "f224d360b64c57424ed4b9b6c91035fbb1e8cd9d39100e04cc8e95d68eff8054"
+    note: >-
+      v1 契約（`contract.md`）に対する開示追加のみの改訂（開示 6 項目、
+      `docs/l0b_closed_loop_record.md` §4 / `docs/l0br_robustness_record.md`
+      §4 実測の逐語反映）。スキーマ節（§1）・判定器・演奏者・
+      `AuthoringDiffReport` 正規形（§3）は v1 から無変更（`contract_v2.md`
+      冒頭「変更点（v1 → v2）」節を参照）。
+  contract_v1_reference:
+    path: ../contract.md
+    sha256: "5bab21e9694cb92a247f922c9a96db015bb87ba729ef411b9146881934debaca"
+    note: >-
+      比較対象の明示。本 sha は `../battery/ledger_l0br.yaml`
+      `contract_freeze.contract_md.sha256` と同一（機械確認済み——
+      cross-ledger 同一性 assert が enforce する）。v1 は凍結・変更禁止の
+      まま本台帳からは参照専用として扱う。
+  authoring_contract_l0:
+    path: ../../../config/authoring_contract_l0.yaml
+    sha256: "f34479d9683667c343179fdeef435ea02f59fb843ff62870be815511a281f8c6"
+    note: >-
+      v1 台帳と同一 sha（機械確認済み）——公開スキーマ範囲 spec は v2 で
+      不変であることの証明。
+  authoring_trusted_axes_l0:
+    path: ../../../config/authoring_trusted_axes_l0.yaml
+    sha256: "b2c6cc5528bf9b77e6d64f0111e762b41f029ee25993ea99c00ccb81dca6b335"
+    note: >-
+      v1 台帳と同一 sha（機械確認済み）——信頼軸表は v2 で不変であることの
+      証明。
+
+judge:
+  # L0b-R（v1）と同一判定器・無改変（判定器の同一性維持が実験条件。
+  # 下記 4 pin は `../battery/ledger_l0br.yaml` `judge` 節と同一 sha
+  # ——cross-ledger 同一性 assert が enforce する）。br_d1 は
+  # `section_map_t2.json` のみを使う課題のため、run_round.py の
+  # `_FIXED_INPUT_SHA256` 整合上必要な pin は section_map_t2 のみで足り、
+  # 非 t2 の `section_map.json` は本台帳では pin しない（v1 台帳は
+  # br_d2/br_d3 も収録するため両方 pin していたが、本台帳は br_d1 単独の
+  # ため縮約する）。
+  run_round:
+    path: ../scripts/run_round.py
+    sha256: "dd9ca8a3975c97bfb9892a09d0108ccb3b7ccfe40680e4d4f8776b258be7b7b0"
+  pareto_eval:
+    path: ../scripts/pareto_eval.py
+    sha256: "4f90be5f23cce8a488974db808d1b4edff05636aeb158cfab79794b161d24faa"
+  section_map_t2:
+    path: ../frozen/section_map_t2.json
+    sha256: "7add33ba142174c5e2ee002d39af9abb2ebdc65858aed2b05564f9e8ce00d830"
+  pareto_spec:
+    path: ../frozen/pareto.yaml
+    sha256: "abe60a4f0ee3c55443bbcae9ea53d4364e620737872ce3f1a9c1a75ac9264d7f"
+    note: "改善判定 (pareto_eval.py --pareto) の凍結述語。v1 から無変更"
+
+author_identity:
+  llm_run_id: "l0br-v2-20260807-claude-code-agent-sonnet"
+  provider: "Anthropic"
+  model: >-
+    Claude Code の Agent ツールで model="sonnet"（エイリアス）を明示して
+    spawn（v1 台帳と同一指定）。本セッションのハーネス構成における解決先
+    ファミリーは claude-sonnet-5。
+  invocation: >-
+    毎周回、履歴を持たない新規サブエージェント（fresh instance）として
+    spawn。プロンプト = author_wrapper.md ラッパ本文 + compose_payload.py
+    組成の payload.md 全文の機械連結のみ（payload の contract part は
+    `contract_v2.md` に差し替わる以外は v1 と同一組成）。ツール使用要求 =
+    0 回（実測値を周回ごとに記録）。
+  wrapper:
+    path: ../battery/author_wrapper.md
+    sha256: "4eda8e1a2b1a2022c7a4aea090ec608d551b82d9fecd410ac3fea8f09684e6a0"
+    note: >-
+      v1 台帳と同一ファイル・同一 sha（新規作成しない・battery/ の既存
+      ファイルを相対参照——機械確認済み。cross-ledger 同一性 assert が
+      enforce する）。
+  provenance_limitations: >-
+    v1 と同一: Agent ツールはモデルスナップショット文字列・サンプリング
+    設定・呼び出し単位 run id を露出しないため不記録（推定補完しない）。
+
+payload_composition:
+  composer:
+    path: ../scripts/compose_payload.py
+    sha256_at_measurement: "b5be530096f076da18e765bbce52ea369331cf1a127a2b29c7c6df4c15c8b233"
+    sha256_current: "b5be530096f076da18e765bbce52ea369331cf1a127a2b29c7c6df4c15c8b233"
+    frozen_copy: composer_at_measurement/compose_payload.py
+    note: >-
+      本再測の測定時実装 = 現行 sha である旨をここに明記する。v1 台帳の
+      dual-pin（`sha256_at_measurement` != `sha256_current`）は、v1 の
+      全 16 測定周回実行後に PR #249 レビュー対応で composer が変わった
+      ことに由来する事後的な乖離だった。本台帳は**測定前に pin する**
+      ため、登録時点では `sha256_at_measurement` と `sha256_current` が
+      一致した状態で開始する（`frozen_copy` も現行ファイルの単純コピー
+      ——composer_at_measurement/README.md 参照）。実測後にレビュー対応で
+      現行実装がさらに変わった場合は、v1 と同じ dual-pin の意味論
+      （`sha256_at_measurement`/`frozen_copy` は測定時点に凍結・
+      `sha256_current` のみ更新）に従う。
+  policy: >-
+    全周回の著者可視ペイロードは compose_payload.py の出力のみ
+    （AGENTS.md §8「情報遮断実験のペイロード組成は機械化する」制定則。
+    v1 と同一方針）。手組み・注記追加・要約添付は off-contract イベント
+    として記録し、当該系列は到達率会計から除外する。周回ごとに payload
+    manifest と payload.md の sha256 を series_runs に pin する。
+
+constraint_checker:
+  path: ../scripts/check_token_ban.py
+  sha256_at_measurement: "98f13bc0af4c0a8c5bf9297c0397ab756bcc3acded2c91ca3ff9ca4565e53ee8"
+  sha256_current: "98f13bc0af4c0a8c5bf9297c0397ab756bcc3acded2c91ca3ff9ca4565e53ee8"
+  frozen_copy: checker_at_measurement/check_token_ban.py
+  note: >-
+    composer と同型の 2 系統 pin。br_d1 は `token_ban: false` のため本
+    再測では実行対象外だが、v1 台帳との構造対称性のため転記する
+    （測定前 pin につき at_measurement == current。composer と同じ理由
+    ——checker_at_measurement/README.md 参照）。
+  banned_tokens: ["silence", "no kick", "low density", "sub bass"]
+  scope: >-
+    提出 score.yaml の生テキスト全文（UTF-8 デコード後・小文字化）に対する
+    部分文字列一致。br_d1 は token_ban: false のため本再測では未適用
+    （v1 と同一課題定義）。
+
+protocol:
+  round_limit: 5
+  series_per_task: 2
+  success_predicate: >-
+    周回成功 = report.json が symbolic pass かつ key=preserved かつ
+    brightness=preserved かつ structure=exact_match、かつ token_ban 課題では
+    check_token_ban.py が pass（br_d1 は token_ban: false のため本項は
+    非適用）。系列到達（reached）= round_limit 内に周回成功 1 回以上。
+    成功周回で系列は終了する（rounds_to_success = 最初の成功周回）。
+    v1 台帳と同文。
+  improvement_accounting: >-
+    連続周回間の pareto_eval.py 出力（improved/tie/regressed）を全ペア記録。
+    Pareto 述語は frozen/pareto.yaml を無変更適用（総合スコア禁止 = D6）。
+    v1 台帳と同文。
+  failure_mode_vocab: ["unconverged", "missteered", "contract_defect", "instrument_band"]
+  failure_mode_rubric: >-
+    未到達系列の分類（系列単位・根拠を rationale に明記）。優先順位 =
+    contract_defect > instrument_band > missteered > unconverged。
+    contract_defect: 著者の編集が契約 v2 の記述下では合理的なのに、未開示の
+    計器特性（v2 §2 で開示済みの 6 項目以外の、新規発見の未開示特性）に
+    より無効・逆効果になったことが evidence（バイト同一 take・境界不応答
+    等）で示せる場合。instrument_band: 著者が陽性対照級の対比設計に到達
+    したのに境界検出が分離しなかった場合（計器帯域）。missteered: 著者が
+    ペイロード内 evidence と矛盾するレバー選択を続けた、または可視制約
+    （R4）への違反を繰り返した場合。unconverged: 周回上限到達でいずれの
+    機構も特定できない残余。v1 台帳と同文。
+  failure_mode_rubric_v2_correction: >-
+    本再測の判定を締める中心規約（v1 台帳には無い v2 固有の補正）:
+    `contract_v2.md` §2 で**開示済み**の 6 特性——(1) 演奏ヒント解決の
+    非加算・優先順位制（"no kick" 系統の支配・"release"="full energy" の
+    等価性）、(2) ヒント照合対象が `physical` と `role` の連結文字列で
+    あること、(3) drone 扱いセクションでは `chord_progression` が鳴らない
+    こと、(4) 自作 `chord_progression` が `physical.key` 宣言より優勢に
+    調推定を決めうること（+ 2 種の修理経路）、(5) 低→高エネルギー遷移
+    直後の約 5 秒の過渡帯が `bridge` として観測されうること、(6) 終盤
+    境界の約 2.6–2.7 秒の系統的早期検出——のいずれかに著者が嵌った場合、
+    その系列は **contract_defect に分類してはならない**（開示済み特性は
+    定義上「未開示」の要件を満たさないため）。該当する場合は
+    missteered（開示を読んだ上でなお evidence と矛盾する選択をした）
+    または unconverged（開示を踏まえてもなお収束しなかった残余）側で
+    分類する。contract_defect が許されるのは、上記 6 項目のいずれにも
+    該当しない**新規発見の未開示特性**に嵌ったことが evidence で示せる
+    場合に限る。
+  off_contract_rule: >-
+    ペイロードが composer 出力と一致しない周回・著者ツール使用が 0 でない
+    周回は off-contract。当該周回以降の系列成果は到達率会計から除外し、
+    off_contract_events に記録する。v1 台帳と同文。
+  metrics: ["reach_rate", "rounds_to_success", "pareto_improvements", "failure_modes"]
+
+tasks:
+  - id: "br_d1"
+    difficulty: "single_lever_proven"
+    registration:
+      path: ../battery/task_br_d1.md
+      sha256: "06ac3b42ff5f7f5aef8e333524e8599411298383fc9b0e752c2c7d393b689f66"
+    statement:
+      path: ../battery/statement_br_d1.md
+      sha256: "17feb99e0015c476aae3fb980ecee380b4cbd7eb7130c06e787f4cbafb4113e1"
+    section_map: "../frozen/section_map_t2.json"
+    token_ban: false
+    positive_control:
+      mode: "reuse_pinned_t2"
+      dir: "../positive_control_t2"
+      note: >-
+        v1 台帳と同一 pin 済み陽性対照（`../positive_control_t2/`）を
+        再利用する。要求が変わっていない（契約差し替えのみ）ため新規
+        探索なし。
+      confirmed_utc: "2026-08-06"
+      score_sha256: "2523793dc9ae87b81aca49e726d22db9eaf7b94a9c4b04c2e428035df3484412"
+      report_sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
+
+preregistered_hypothesis: >-
+  v1 台帳 br_d1 の到達率は 1/2（s1=unreached/failure_mode=contract_defect・
+  s2=reached/rounds_to_success=1）。s1 の contract_defect 判定根拠は
+  「ヒント解決の非加算・優先順位制」という v1 未開示の計器特性に著者が
+  嵌ったこと（l0b record §4.1 と同型）だった——この特性は `contract_v2.md`
+  §2「演奏ヒントの解決規則」で明示的に開示済み。
+
+  本再測（同一課題 br_d1・同一判定器・同一 section_map_t2・契約文書のみ
+  v1→v2 に差し替え）で:
+  - v2 で 2/2（両系列とも reached）なら、開示追加が v1 の
+    contract_defect を解消したことの支持。
+  - v2 で 1/2 以下（v1 と同じか悪化）なら、開示だけでは不十分——または
+    到達分岐がそもそも著者サンプリング揺らぎ由来で、契約改訂と未分離
+    （`docs/l0br_robustness_record.md` §6 が同一示唆をしている）——のいずれ
+    かであり、本再測単独（n=2）では両仮説を分離できないことを事前に
+    正直宣言する。
+  比較の妥当性は、判定器・演奏者・report 正規形・課題文・section_map が
+  v1 と同一であることに依存する（本台帳の `judge` 4 pin と `tasks[0].
+  statement` pin が v1 台帳と同一 sha であることの cross-ledger assert が
+  この前提を機械的に保証する）。
+
+series_runs: []
+off_contract_events: []

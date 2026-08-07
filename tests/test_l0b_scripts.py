@@ -4518,3 +4518,247 @@ def test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevalu
             "the frozen judge (run_round.run_round, round=0) does not byte-reproduce the "
             "pinned report.json — the pin may not have been produced from this score"
         )
+
+
+# --- ledger_l0br_v2.yaml shape enforcement (BR-D1 v2 remeasure registration —
+# Design Memo: L0a v2 + BR-D1 再測。AGENTS.md §8「parse 可能 ≠ 形状正しい」を
+# `ledger_l0br.yaml` (v1) と同じ流儀で `battery_v2/ledger_l0br_v2.yaml` に
+# も適用する。本ファイルは**登録 commit**時点の状態のみを対象とする——
+# `series_runs`/`off_contract_events` が空 list であることが合格条件（v1
+# 台帳の登録時テストと同じ「空は正規状態」設計）。実測後は v1 と同様に
+# `series_runs` を追記するインベントリ固定テストへ更新する予定。
+
+
+BATTERY_V2_DIR = LOOP_DIR / "battery_v2"
+LEDGER_L0BR_V2_PATH = BATTERY_V2_DIR / "ledger_l0br_v2.yaml"
+_LEDGER_V2_TASK_IDS = ("br_d1",)
+
+
+def _load_ledger_l0br_v2_text() -> str:
+    return LEDGER_L0BR_V2_PATH.read_text(encoding="utf-8")
+
+
+def _load_ledger_l0br_v2() -> dict:
+    with LEDGER_L0BR_V2_PATH.open(encoding="utf-8") as handle:
+        return yaml.load(handle, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
+
+
+def _resolve_battery_v2_relative(relative_path: str) -> Path:
+    return (BATTERY_V2_DIR / relative_path).resolve()
+
+
+def test_ledger_l0br_v2_todo_pin_sentinel_absent_everywhere():
+    """凍結 enforce: 事前登録 commit 時点で `"TODO_PIN"` が本ファイルの
+    どこにも（値・コメント含め）残っていてはならない（v1 台帳の同名
+    テストと同じ規約）。"""
+
+    assert "TODO_PIN" not in _load_ledger_l0br_v2_text()
+
+
+def test_ledger_l0br_v2_top_level_keys_present():
+    ledger = _load_ledger_l0br_v2()
+    required = (
+        "schema_version",
+        "experiment",
+        "registered_utc",
+        "route",
+        "contract_freeze",
+        "judge",
+        "author_identity",
+        "payload_composition",
+        "constraint_checker",
+        "protocol",
+        "tasks",
+        "preregistered_hypothesis",
+        "series_runs",
+        "off_contract_events",
+    )
+    for key in required:
+        assert key in ledger, key
+    assert ledger["schema_version"] == "l0br-v2-remeasure/0.1"
+
+
+def test_ledger_l0br_v2_tasks_shape():
+    """br_d1 のみに縮約されていること（v1 台帳は br_d1/br_d2/br_d3 の 3 課題
+    ・本台帳は br_d1 のみ）。"""
+
+    tasks = _load_ledger_l0br_v2()["tasks"]
+    assert len(tasks) == 1
+    assert [task["id"] for task in tasks] == list(_LEDGER_V2_TASK_IDS)
+
+    task = tasks[0]
+    assert task["difficulty"] == "single_lever_proven"
+    assert task["token_ban"] is False
+    assert task["positive_control"]["mode"] == "reuse_pinned_t2"
+
+
+def test_ledger_l0br_v2_protocol_shape():
+    protocol = _load_ledger_l0br_v2()["protocol"]
+    assert protocol["round_limit"] == 5
+    assert protocol["series_per_task"] == 2
+    assert protocol["failure_mode_vocab"] == list(_LEDGER_FAILURE_MODE_VOCAB)
+    # v2 固有の中心規約: 開示済み特性に嵌った系列は contract_defect に
+    # できない（missteered/unconverged 側で分類する）。
+    rubric_correction = protocol["failure_mode_rubric_v2_correction"]
+    assert isinstance(rubric_correction, str) and rubric_correction
+    assert "contract_defect" in rubric_correction
+    assert "missteered" in rubric_correction
+    assert "unconverged" in rubric_correction
+
+
+def test_ledger_l0br_v2_registration_state_is_empty():
+    """事前登録 commit 時点の正規状態: `series_runs`/`off_contract_events`
+    はいずれも空 list であること（実測前——v1 台帳の登録時テストと同じ
+    「空は正規状態」設計。本テストは v2 が完結すると
+    `test_ledger_l0br_series_runs_and_off_contract_events_are_lists` と
+    同型のインベントリ固定テストへ更新される想定で、それまでの間は本
+    テストが「まだ実測されていない」ことを機械的に enforce する）。"""
+
+    ledger = _load_ledger_l0br_v2()
+    assert ledger["series_runs"] == []
+    assert ledger["off_contract_events"] == []
+
+
+def test_ledger_l0br_v2_pins_match_actual_file_sha256():
+    """`ledger_l0br_v2.yaml` に記載された sha256 pin が、対応する実ファイル
+    の実測 sha256 と一致することを assert する（`test_ledger_l0br_pins_
+    match_actual_file_sha256` と同じ実体照合の流儀。パスは ledger 内の
+    相対パス表記を battery_v2/ 基準で解決する）。"""
+
+    ledger = _load_ledger_l0br_v2()
+    checks: list[tuple[str, Path, str]] = []
+
+    contract_freeze = ledger["contract_freeze"]
+    for label in (
+        "contract_v2",
+        "contract_v1_reference",
+        "authoring_contract_l0",
+        "authoring_trusted_axes_l0",
+    ):
+        entry = contract_freeze[label]
+        checks.append(
+            (f"contract_freeze.{label}", _resolve_battery_v2_relative(entry["path"]), entry["sha256"])
+        )
+
+    judge = ledger["judge"]
+    for label in ("run_round", "pareto_eval", "section_map_t2", "pareto_spec"):
+        entry = judge[label]
+        checks.append((f"judge.{label}", _resolve_battery_v2_relative(entry["path"]), entry["sha256"]))
+
+    wrapper = ledger["author_identity"]["wrapper"]
+    checks.append(
+        ("author_identity.wrapper", _resolve_battery_v2_relative(wrapper["path"]), wrapper["sha256"])
+    )
+
+    composer = ledger["payload_composition"]["composer"]
+    checks.append(
+        (
+            "payload_composition.composer (sha256_current)",
+            _resolve_battery_v2_relative(composer["path"]),
+            composer["sha256_current"],
+        )
+    )
+    checks.append(
+        (
+            "payload_composition.composer (sha256_at_measurement, frozen_copy)",
+            _resolve_battery_v2_relative(composer["frozen_copy"]),
+            composer["sha256_at_measurement"],
+        )
+    )
+
+    constraint_checker = ledger["constraint_checker"]
+    checks.append(
+        (
+            "constraint_checker (sha256_current)",
+            _resolve_battery_v2_relative(constraint_checker["path"]),
+            constraint_checker["sha256_current"],
+        )
+    )
+    checks.append(
+        (
+            "constraint_checker (sha256_at_measurement, frozen_copy)",
+            _resolve_battery_v2_relative(constraint_checker["frozen_copy"]),
+            constraint_checker["sha256_at_measurement"],
+        )
+    )
+
+    for task in ledger["tasks"]:
+        statement = task["statement"]
+        checks.append(
+            (f"tasks[{task['id']}].statement", _resolve_battery_v2_relative(statement["path"]), statement["sha256"])
+        )
+        registration = task["registration"]
+        checks.append(
+            (
+                f"tasks[{task['id']}].registration",
+                _resolve_battery_v2_relative(registration["path"]),
+                registration["sha256"],
+            )
+        )
+        pc = task["positive_control"]
+        assert pc["mode"] == "reuse_pinned_t2", (
+            f"tasks[{task['id']}].positive_control.mode={pc['mode']!r} is not the known mode this "
+            "test's dir-resolution handles — update the test before trusting this pin (fail-closed)"
+        )
+        pc_dir = _resolve_battery_v2_relative(pc["dir"])
+        checks.append((f"tasks[{task['id']}].positive_control.score", pc_dir / "score.yaml", pc["score_sha256"]))
+        checks.append((f"tasks[{task['id']}].positive_control.report", pc_dir / "report.json", pc["report_sha256"]))
+
+    assert checks, "no pin entries collected — test would vacuously pass"
+    for label, path, expected_sha256 in checks:
+        assert path.is_file(), f"{label}: pinned path does not exist: {path}"
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert actual_sha256 == expected_sha256, f"{label}: sha256 mismatch for {path}"
+
+    # 測定前 pin の内部整合: 登録時点では sha256_at_measurement ==
+    # sha256_current で開始する（design memo 明記事項）。実測後にレビュー
+    # 対応で現行実装が変わったら v1 と同じ dual-pin 意味論へ移行してよいが、
+    # 登録時点はこの等号が破れていないことを固定する。
+    assert composer["sha256_at_measurement"] == composer["sha256_current"]
+    assert constraint_checker["sha256_at_measurement"] == constraint_checker["sha256_current"]
+
+
+def test_ledger_l0br_v2_cross_ledger_pins_match_v1_ledger():
+    """cross-ledger 同一性 assert: v2 台帳の判定器 4 pin + statement +
+    wrapper + spec 2 本の sha256 が、v1 台帳（`ledger_l0br.yaml`）の対応値と
+    一致すること——「同一判定器・同一課題・スキーマ不変」の機械証明
+    （design memo テスト観点 §2 の中心要件）。"""
+
+    v1 = _load_ledger_l0br()
+    v2 = _load_ledger_l0br_v2()
+
+    v1_judge = v1["judge"]
+    v2_judge = v2["judge"]
+    for label in ("run_round", "pareto_eval", "section_map_t2", "pareto_spec"):
+        assert v2_judge[label]["sha256"] == v1_judge[label]["sha256"], f"judge.{label} sha256 diverged from v1"
+
+    v1_br_d1 = next(task for task in v1["tasks"] if task["id"] == "br_d1")
+    v2_br_d1 = next(task for task in v2["tasks"] if task["id"] == "br_d1")
+    assert v2_br_d1["statement"]["sha256"] == v1_br_d1["statement"]["sha256"], "tasks[br_d1].statement diverged from v1"
+    assert (
+        v2_br_d1["registration"]["sha256"] == v1_br_d1["registration"]["sha256"]
+    ), "tasks[br_d1].registration diverged from v1"
+    assert (
+        v2_br_d1["positive_control"]["score_sha256"] == v1_br_d1["positive_control"]["score_sha256"]
+    ), "tasks[br_d1].positive_control.score_sha256 diverged from v1"
+    assert (
+        v2_br_d1["positive_control"]["report_sha256"] == v1_br_d1["positive_control"]["report_sha256"]
+    ), "tasks[br_d1].positive_control.report_sha256 diverged from v1"
+
+    assert (
+        v2["author_identity"]["wrapper"]["sha256"] == v1["author_identity"]["wrapper"]["sha256"]
+    ), "author_identity.wrapper diverged from v1"
+
+    v1_freeze = v1["contract_freeze"]
+    v2_freeze = v2["contract_freeze"]
+    for label in ("authoring_contract_l0", "authoring_trusted_axes_l0"):
+        assert (
+            v2_freeze[label]["sha256"] == v1_freeze[label]["sha256"]
+        ), f"contract_freeze.{label} diverged from v1 (schema spec must be unchanged)"
+
+    # 契約文書そのものは v1/v2 で意図的に異なる（本再測の唯一の差分変数）
+    # ——「不変であるべきもの」だけを同一性 assert の対象にし、契約文書の
+    # sha256 は同一性を主張しない。ただし v2 の v1-参照 pin は v1 台帳の
+    # contract_md と同一であるべき（比較対象が本物の v1 であることの保証）。
+    assert v2_freeze["contract_v1_reference"]["sha256"] == v1_freeze["contract_md"]["sha256"]
+    assert v2_freeze["contract_v2"]["sha256"] != v1_freeze["contract_md"]["sha256"]
