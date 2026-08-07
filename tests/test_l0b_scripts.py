@@ -3638,10 +3638,26 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
             )
         )
 
-    for task_id in ("br_d2", "br_d3"):
-        task = next(t for t in ledger["tasks"] if t["id"] == task_id)
+    # 全 3 課題の positive_control pin を突合する（PR #249 Codex レビュー
+    # 第 21 巡, P2 — 従来 br_d2/br_d3（`mode: "new_search"`）のみで、
+    # br_d1（`mode: "reuse_pinned_t2"`——L0B-T2 の pin 済み陽性対照を再現
+    # 確認して流用、新規探索なし）は score 側が未 pin のまま実体照合対象外
+    # だった）。`dir` は両 mode とも `BATTERY_DIR` 基準の相対パスとして
+    # 統一的に解決できる（br_d1 は `../positive_control_t2`、br_d2/br_d3
+    # は battery 直下）——ただし mode を allowlist で明示検査し、未知の
+    # mode は「この解決表が対応していない新方式」として fail-closed で
+    # 拒否する（黙って `dir` を信用しない）。
+    for task in ledger["tasks"]:
+        task_id = task["id"]
         pc = task["positive_control"]
-        pc_dir = BATTERY_DIR / pc["dir"]
+        mode = pc["mode"]
+        if mode not in ("reuse_pinned_t2", "new_search"):
+            raise AssertionError(
+                f"tasks[{task_id}].positive_control.mode={mode!r} is not one of the "
+                "known modes this test's dir-resolution table handles — update the "
+                "table before trusting this pin (fail-closed)"
+            )
+        pc_dir = _resolve_battery_relative(pc["dir"])
         checks.append(
             (f"tasks[{task_id}].positive_control.score", pc_dir / "score.yaml", pc["score_sha256"])
         )

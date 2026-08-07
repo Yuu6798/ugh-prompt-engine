@@ -187,10 +187,12 @@ tasks:
     token_ban: false
     positive_control:
       mode: "reuse_pinned_t2"
+      dir: "../positive_control_t2"
       note: >-
         要求が L0B-T2 と同一のため pin 済み陽性対照（../positive_control_t2/）
         を再現確認して流用。新規探索なし。
       confirmed_utc: "2026-08-06"
+      score_sha256: "2523793dc9ae87b81aca49e726d22db9eaf7b94a9c4b04c2e428035df3484412"
       report_sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
   - id: "br_d2"
     difficulty: "multi_lever_novel"
