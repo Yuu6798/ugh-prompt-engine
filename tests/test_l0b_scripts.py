@@ -62,6 +62,15 @@ check_token_ban = _load_module("l0b_check_token_ban", SCRIPTS_DIR / "check_token
 BATTERY_DIR = LOOP_DIR / "battery"
 LEDGER_L0BR_PATH = BATTERY_DIR / "ledger_l0br.yaml"
 
+# 測定時 composer の凍結コピー（PR #249 Codex レビュー第 10 巡, P1 の保全措置
+# = `battery/composer_at_measurement/README.md`）。現行 `compose_payload`
+# （上の `l0b_compose_payload`）とは別モジュール名でロードする——測定時
+# 実装（`sha256_at_measurement`）で実際に組成された payload を再現するのが
+# 目的で、レビュー対応が累積した現行実装で再現するのが目的ではない。
+composer_at_measurement = _load_module(
+    "l0b_composer_at_measurement", BATTERY_DIR / "composer_at_measurement" / "compose_payload.py"
+)
+
 
 def _axis(*, verdict: str, band: str = "measured", requirement=None, observed=None) -> dict:
     return {"requirement": requirement, "observed": observed, "verdict": verdict, "band": band}
@@ -3949,3 +3958,164 @@ def test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation(tmp_path: Path)
             "byte-reproduce the pinned report.json — the pin may not have been produced "
             "from this score"
         )
+
+
+# --- Codex review (PR #249) 第 14 巡, P2: payload 再組成 + 周回番号の一意・連続性 --
+
+
+_ROLE_TO_PREVIOUS_ROUND_FIELD = {
+    "own_score": "score.yaml",
+    "own_intent": "intent.yaml",
+    "diff_report": "report.json",
+}
+
+
+def test_ledger_l0br_payloads_recompose_via_frozen_measurement_composer(tmp_path: Path):
+    """`payload.manifest.json`（pin 済み出力）は本来「宣言 manifest →
+    composer → 出力」という一方向の変換の**結果**でしかなく、この結果が
+    実際にその変換から生まれたことは今まで検証されていなかった（第 8 巡の
+    突合は出力内部のフィールド同士の整合、第 11 巡の突合は出力と台帳の
+    整合であって、いずれも「入力から composer を実際に走らせて再現できる
+    か」は見ていない）。ここでは pin 済み `payload.manifest.json` の
+    `parts[*].{role,path,sha256}` から宣言 manifest（compose_payload の入力
+    形式）を機械的に再構築し、role→保持済み成果物の対応（`contract` →
+    contract_freeze.contract_md、`task` → 当該 task の statement、
+    `own_score`/`own_intent`/`diff_report` → 同一系列の直前周回の
+    score.yaml/intent.yaml/report.json——第 11 巡で実体照合済みの対応表と
+    同一）で `tmp_path` に part 実体を配置し、**測定時 composer の凍結
+    コピー**（`composer_at_measurement/compose_payload.py`、
+    `sha256_at_measurement` で pin 済み）で再組成する。出力
+    `payload.manifest.json` が pin 済みのものとバイト等値であることを
+    assert する（内部の `payload_sha256` フィールドも含めて再現されるため、
+    台帳の `payload_sha256` pin も推移的に検証される）。`validation_errors`
+    role は現行データに一件も存在しない（他テストで確認済み）——出現したら
+    対応未定義のため明示的に fail する。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+    contract_md_path = _resolve_battery_relative(ledger["contract_freeze"]["contract_md"]["path"])
+
+    recompose_checks: list[tuple[str, bytes, bytes]] = []
+    for series_entry in ledger["series_runs"]:
+        task_entry = tasks_by_id[series_entry["task"]]
+        statement_path = _resolve_battery_relative(task_entry["statement"]["path"])
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            prev_round_dir = round_dir_base / f"round{round_num - 1}" if round_num > 1 else None
+            pinned_manifest_path = round_dir / "payload.manifest.json"
+            pinned_manifest = json.loads(pinned_manifest_path.read_text(encoding="utf-8"))
+
+            work_dir = tmp_path / f"{series_entry['task']}_{series_entry['series']}_round{round_num}"
+            work_dir.mkdir()
+            declared_parts = []
+            for part in pinned_manifest["parts"]:
+                role = part["role"]
+                declared_path = part["path"]
+                declared_sha256 = part["sha256"]
+                if role == "contract":
+                    source_path = contract_md_path
+                elif role == "task":
+                    source_path = statement_path
+                elif role in _ROLE_TO_PREVIOUS_ROUND_FIELD:
+                    assert prev_round_dir is not None, (
+                        f"round {round_num} has a {role!r} part but no previous round to "
+                        "bind it to"
+                    )
+                    source_path = prev_round_dir / _ROLE_TO_PREVIOUS_ROUND_FIELD[role]
+                else:
+                    raise AssertionError(
+                        f"unmapped payload manifest part role {role!r} — no known binding "
+                        "(this test's role table needs updating before it can trust the "
+                        "recomposition)"
+                    )
+                source_bytes = source_path.read_bytes()
+                actual_sha256 = hashlib.sha256(source_bytes).hexdigest()
+                assert actual_sha256 == declared_sha256, (
+                    f"round{round_num} part role={role!r}: {source_path} sha256 "
+                    f"{actual_sha256} does not match pin manifest's declared sha256 "
+                    f"{declared_sha256}"
+                )
+                dest_path = work_dir / declared_path
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                dest_path.write_bytes(source_bytes)
+                declared_parts.append({"role": role, "path": declared_path, "sha256": declared_sha256})
+
+            declared_manifest = {
+                "schema_version": composer_at_measurement.SCHEMA_VERSION,
+                "experiment_id": pinned_manifest["experiment_id"],
+                "round_label": pinned_manifest["round_label"],
+                "parts": declared_parts,
+            }
+            manifest_yaml_path = work_dir / "manifest.yaml"
+            manifest_yaml_path.write_text(
+                yaml.safe_dump(declared_manifest, sort_keys=False), encoding="utf-8"
+            )
+
+            out_dir = work_dir / "out"
+            composer_at_measurement.compose_payload(manifest_yaml_path, out_dir)
+            reproduced_bytes = (out_dir / "payload.manifest.json").read_bytes()
+            label = f"{series_entry['task']}/{series_entry['series']}.rounds[{round_num}]"
+            recompose_checks.append((label, reproduced_bytes, pinned_manifest_path.read_bytes()))
+
+    assert recompose_checks, "no payload recomposition checks collected — test would vacuously pass"
+    assert len(recompose_checks) == 16, (
+        f"expected exactly 16 rounds across the completed battery, got {len(recompose_checks)}"
+    )
+    for label, reproduced_bytes, pinned_bytes in recompose_checks:
+        assert reproduced_bytes == pinned_bytes, (
+            f"{label}: recomposing from the pin manifest's declared parts through the "
+            "frozen measurement-time composer does not byte-reproduce the pinned "
+            "payload.manifest.json — the pin may not have been produced from these inputs"
+        )
+
+
+def test_ledger_l0br_round_numbering_is_unique_contiguous_and_bounded():
+    """`series_runs[*].rounds[*].round` の会計整合性（PR #249 Codex レビュー
+    第 14 巡, P2）: series ごとに (a) 番号が一意、(b) 1 起点で欠落のない
+    連続列（1..N）、(c) N ≤ `protocol.round_limit`、(d) `reached` 系列は
+    最終周回 = `rounds_to_success`（成功後に周回が存在しない——到達で系列が
+    終了するという `protocol.success_predicate` の記述と整合）、
+    (e) `unreached` 系列は N == `round_limit`（周回上限まで使い切っている）
+    ことを assert する。"""
+
+    ledger = _load_ledger_l0br()
+    round_limit = ledger["protocol"]["round_limit"]
+    assert isinstance(round_limit, int) and round_limit >= 1
+
+    checked = 0
+    for series_entry in ledger["series_runs"]:
+        label = f"{series_entry['task']}/{series_entry['series']}"
+        round_numbers = sorted(r["round"] for r in series_entry["rounds"])
+        n = len(round_numbers)
+        checked += 1
+
+        assert len(set(round_numbers)) == n, f"{label}: duplicate round number(s) in {round_numbers!r}"
+        assert round_numbers == list(range(1, n + 1)), (
+            f"{label}: round numbers must be a gap-free 1..N sequence, got {round_numbers!r}"
+        )
+        assert n <= round_limit, f"{label}: {n} rounds exceeds protocol.round_limit={round_limit}"
+
+        outcome = series_entry["outcome"]
+        rounds_to_success = series_entry["rounds_to_success"]
+        if outcome == "reached":
+            assert round_numbers[-1] == rounds_to_success, (
+                f"{label}: outcome=reached but final round {round_numbers[-1]} != "
+                f"rounds_to_success={rounds_to_success} (a round after the successful one "
+                "would mean the series did not actually terminate on success)"
+            )
+        else:
+            assert outcome == "unreached", f"{label}: unexpected outcome {outcome!r}"
+            assert rounds_to_success is None, (
+                f"{label}: outcome=unreached but rounds_to_success={rounds_to_success!r} "
+                "is not null"
+            )
+            assert n == round_limit, (
+                f"{label}: outcome=unreached but only {n} round(s) recorded, expected "
+                f"exactly round_limit={round_limit} (series must exhaust the round budget "
+                "before being recorded as unreached)"
+            )
+
+    assert checked == 6, f"expected exactly 6 series_runs entries, got {checked}"
