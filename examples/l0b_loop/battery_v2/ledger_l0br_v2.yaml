@@ -41,8 +41,13 @@ contract_freeze:
     v1 台帳の br_d1/s1 が `failure_mode: contract_defect` と判定された
     ため、v1 台帳の失敗モード規約どおり「L0a v2 反映後に同一データで
     再測」する対象として本台帳を起こす。判定器・演奏者・report 正規形は
-    不変（下記 `judge` 節の sha が v1 台帳と同一であることが機械証明）
-    ——差し替えるのは契約文書のみ。
+    不変——差し替えるのは契約文書のみ。この同一性の束縛は二層:
+    判定器スクリプト・section_map は下記 `judge` 節の sha が v1 台帳と
+    同一であることの cross-ledger assert が機械証明し、判定器が import
+    する演奏者・抽出器・report 正規形実装（src/svp_rpe と config/ の
+    ソース閉包）は `src_config_diff_attestation` の git 系譜 attestation
+    が束縛する（squash / export 文脈では後者は証言へ格下げ——ヘッダの
+    境界宣言と同じ規約）。
   contract_v2:
     path: ../contract_v2.md
     sha256: "f224d360b64c57424ed4b9b6c91035fbb1e8cd9d39100e04cc8e95d68eff8054"
@@ -261,9 +266,14 @@ preregistered_hypothesis:
       かであり、本再測単独（n=2）では両仮説を分離できないことを事前に
       正直宣言する。
     比較の妥当性は、判定器・演奏者・report 正規形・課題文・section_map が
-    v1 と同一であることに依存する（本台帳の `judge` 4 pin と `tasks[0].
-    statement` pin が v1 台帳と同一 sha であることの cross-ledger assert が
-    この前提を機械的に保証する）。
+    v1 と同一であることに依存する。この前提の保証は二層に分かれる:
+    判定器スクリプト・section_map・課題文は本台帳の `judge` 4 pin と
+    `tasks[0].statement` pin が v1 台帳と同一 sha であることの
+    cross-ledger assert が機械的に保証し、判定器が import する演奏者・
+    report 正規形実装（src/svp_rpe / config/ のソース閉包）は
+    `src_config_diff_attestation` の git 系譜 attestation が束縛する。
+    後者は squash / export 文脈で証言へ格下げされるため、その文脈の
+    読者は本 `supports` 判定の分離性を「全面機械証明」と読まないこと。
   result:
     observed: "2/2 reached（br_d1_s1・br_d1_s2 とも round3 で reached）"
     rounds_to_success: {s1: 3, s2: 3}
