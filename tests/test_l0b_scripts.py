@@ -3884,3 +3884,68 @@ def test_ledger_l0br_pareto_reports_reproduce_frozen_judge_reevaluation():
             "byte-reproduce the pinned pareto_vs_round*.json — the pin may not have been "
             "produced from this input pair"
         )
+
+
+# --- Codex review (PR #249) 第 13 巡, P2: report.json を「評価した score」へ束縛 --
+
+
+@pytest.mark.slow
+def test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation(tmp_path: Path):
+    """`report.json` は評価対象の score への束縛を内部に持たない
+    （`score_sha256` フィールドが無く、`hashes.json` も round dir に温存
+    されていない——測定時に残さなかった成果物を今から生成して置くのは
+    捏造になるため不可）。ここでは代わりに**凍結判定器（`run_round.py`、
+    `judge.run_round` として pin 済み）による再導出**で束縛する: 全 16
+    周回について、pin 済み `score.yaml` + 当該課題の section map（台帳
+    `tasks[*].section_map` と整合——br_d1/br_d3 = `frozen/section_map_t2.
+    json`・br_d2 = `frozen/section_map.json`）を `run_round.run_round()`
+    （`test_positive_control_round_trip_reproduces_pinned_report`/
+    `test_positive_control_t2_round_trip_reproduces_pinned_report` と同一の
+    呼び出し方）へ入力し、出力 report が pin 済み `report.json` と
+    **バイト等値**であることを assert する（バッテリー実測時に陽性対照で
+    「report 決定論 3 回一致」を確認済みのため成立するはず）。出力は
+    `tmp_path` のみへ書き、リポジトリ内ファイルは一切変更しない。
+
+    `@pytest.mark.slow`: 16 周回分の合成 + 抽出を伴うため重い
+    （実測: 1 周回あたり約 45〜75 秒、全 16 周回で約 15〜17 分）。日常の
+    高速ループ（`pytest -m "not slow"`）から除外され、CI と push 前の
+    全件実行では実行される。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+
+    reeval_checks: list[tuple[str, bytes, bytes]] = []
+    for series_entry in ledger["series_runs"]:
+        task_entry = tasks_by_id[series_entry["task"]]
+        section_map_path = _resolve_battery_relative(task_entry["section_map"])
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            score_path = round_dir / "score.yaml"
+            pinned_report_path = round_dir / "report.json"
+
+            label = f"{series_entry['task']}/{series_entry['series']}.rounds[{round_num}]"
+            workdir = tmp_path / f"{series_entry['task']}_{series_entry['series']}_round{round_num}_wd"
+            output_path = tmp_path / f"{series_entry['task']}_{series_entry['series']}_round{round_num}_report.json"
+
+            run_round.run_round(
+                score_path,
+                workdir,
+                round_num,
+                output_path,
+                section_map_path=section_map_path,
+            )
+            reeval_checks.append((label, output_path.read_bytes(), pinned_report_path.read_bytes()))
+
+    assert reeval_checks, "no report re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 16, (
+        f"expected exactly 16 rounds across the completed battery, got {len(reeval_checks)}"
+    )
+    for label, reevaluated_bytes, pinned_bytes in reeval_checks:
+        assert reevaluated_bytes == pinned_bytes, (
+            f"{label}: re-running the pinned score.yaml through the frozen judge "
+            "(run_round.run_round with the task's pinned section map) does not "
+            "byte-reproduce the pinned report.json — the pin may not have been produced "
+            "from this score"
+        )
