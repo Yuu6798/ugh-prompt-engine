@@ -3536,8 +3536,26 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
     # できない。ここでは pin 済みファイルを実際に parse し、その内容
     # フィールドを台帳フィールドと突合する。
     content_cross_checks: list[tuple[str, Path, str, object]] = []
+    # payload manifest の推移的束縛（PR #249 Codex レビュー第 11 巡, P2）:
+    # 台帳の `payload_sha256` は今まで実体照合されていなかった（payload.md
+    # 自体を保持しないため）——だが manifest 内部の `payload_sha256`
+    # フィールドとは突合できる。さらに manifest の `parts[*].sha256` は、
+    # role に応じて以下の pin 済み成果物へ推移的に束縛されているはず:
+    # `contract` → contract_freeze.contract_md、`task` → 当該 task の
+    # statement、`own_score`/`own_intent`/`diff_report` → 同一系列の
+    # **直前周回**の score_sha256/intent_sha256/report_sha256（round1 には
+    # own_*/diff_report part 自体が無いはず）。`validation_errors` role は
+    # 現行データに一件も存在しない（`grep` で事前確認済み）——出現したら
+    # 対応表が未定義のため `manifest_field_checks` 側で明示的に fail する。
+    manifest_field_checks: list[tuple[str, object, object]] = []
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+    contract_md_sha256 = ledger["contract_freeze"]["contract_md"]["sha256"]
+
     for series_entry in ledger["series_runs"]:
         round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        rounds_by_number = {r["round"]: r for r in series_entry["rounds"]}
+        task_entry = tasks_by_id[series_entry["task"]]
+        statement_sha256 = task_entry["statement"]["sha256"]
         for round_entry in series_entry["rounds"]:
             round_num = round_entry["round"]
             round_dir = round_dir_base / f"round{round_num}"
@@ -3550,6 +3568,32 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
                 ("report_sha256", "report.json"),
             ):
                 checks.append((f"{prefix}.{field}", round_dir / filename, round_entry[field]))
+
+            manifest_path = round_dir / "payload.manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_field_checks.append(
+                (f"{prefix}.payload.manifest.payload_sha256", manifest["payload_sha256"], round_entry["payload_sha256"])
+            )
+            previous_round = rounds_by_number.get(round_num - 1)
+            for part in manifest["parts"]:
+                role = part["role"]
+                if role == "contract":
+                    expected_sha256 = contract_md_sha256
+                elif role == "task":
+                    expected_sha256 = statement_sha256
+                elif role == "own_score":
+                    expected_sha256 = previous_round["score_sha256"] if previous_round else None
+                elif role == "own_intent":
+                    expected_sha256 = previous_round["intent_sha256"] if previous_round else None
+                elif role == "diff_report":
+                    expected_sha256 = previous_round["report_sha256"] if previous_round else None
+                else:
+                    # `validation_errors`（現行データに未出現）を含め、対応
+                    # 未定義の role は fail-closed で明示エラーにする。
+                    expected_sha256 = f"UNMAPPED_ROLE:{role}"
+                manifest_field_checks.append(
+                    (f"{prefix}.payload.manifest.parts[role={role}].sha256", part["sha256"], expected_sha256)
+                )
 
             token_ban_sha = round_entry["token_ban_report_sha256"]
             token_ban_path = round_dir / "token_ban.json"
@@ -3587,6 +3631,13 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
             f"{label}: {path.name}.{json_key}={actual_value!r} does not match ledger "
             f"value {expected_value!r} (interpreted boolean may have been hand-edited "
             "independently of the pinned judge output)"
+        )
+
+    assert manifest_field_checks, "no manifest binding checks collected — test would vacuously pass"
+    for label, actual_value, expected_value in manifest_field_checks:
+        assert actual_value == expected_value, (
+            f"{label}: manifest value {actual_value!r} does not match expected transitive "
+            f"binding {expected_value!r}"
         )
 
     # null/非 null と実ファイル有無の一貫性: pin が null なのに実ファイルが
@@ -3642,13 +3693,24 @@ def _assert_series_entry_shape(series_entry: dict) -> None:
     assert failure_mode is None or failure_mode in _LEDGER_FAILURE_MODE_VOCAB
 
 
+_LEDGER_EXPECTED_SERIES_INVENTORY = frozenset(
+    {
+        ("br_d1", "s1"),
+        ("br_d1", "s2"),
+        ("br_d2", "s1"),
+        ("br_d2", "s2"),
+        ("br_d3", "s1"),
+        ("br_d3", "s2"),
+    }
+)
+
+
 def test_ledger_l0br_series_runs_and_off_contract_events_are_lists():
     """`series_runs`/`off_contract_events` はいずれも list であること
-    （不在チェックではなく型チェック）。事前登録時点は両方とも空 list が
-    正規状態であり、それ自体が合格条件（AGENTS.md §8「truthy 判定を正規形
-    ガードに使わない」則: 空 list を「未検査」として skip するのではなく、
-    ここで明示的に「空 list は合格」と判定してから、非空の場合の形状を別途
-    enforce する)。"""
+    （不在チェックではなく型チェック）。`series_runs` は登録時点（実行前）は
+    空 list が正規状態だったが、第 1 バッテリーは完結済み（2026-08-06 実測、
+    `docs/l0br_robustness_record.md` 正本）のため、正本状態は 6 系列固定
+    （PR #249 Codex レビュー第 11 巡, P2）。"""
 
     ledger = _load_ledger_l0br()
 
@@ -3657,6 +3719,106 @@ def test_ledger_l0br_series_runs_and_off_contract_events_are_lists():
     off_contract_events = ledger["off_contract_events"]
     assert isinstance(off_contract_events, list)
 
-    # 現在の事前登録状態は「未実行」— 空であること自体は失敗ではない。
     for series_entry in series_runs:
         _assert_series_entry_shape(series_entry)
+
+    # 6 系列インベントリの固定（PR #249 Codex レビュー第 11 巡, P2）:
+    # (br_d1,s1)(br_d1,s2)(br_d2,s1)(br_d2,s2)(br_d3,s1)(br_d3,s2) が一意・
+    # 過不足なく揃っていること。完結済みバッテリーの正本としての固定であり、
+    # 将来 R-3 等で系列が追加される場合はこの assert 自体を更新する。
+    actual_inventory = [(entry["task"], entry["series"]) for entry in series_runs]
+    assert len(actual_inventory) == len(set(actual_inventory)), (
+        f"duplicate (task, series) pair(s) in series_runs: {actual_inventory!r}"
+    )
+    assert set(actual_inventory) == _LEDGER_EXPECTED_SERIES_INVENTORY, (
+        f"series_runs inventory mismatch: got {sorted(actual_inventory)!r}, "
+        f"expected {sorted(_LEDGER_EXPECTED_SERIES_INVENTORY)!r}"
+    )
+
+
+def _round_success(verdicts: dict, *, token_ban_required: bool, token_ban_status) -> bool:
+    """`protocol.success_predicate`（ledger 本文が正本）の再実装: symbolic
+    pass ∧ key=preserved ∧ brightness=preserved ∧ structure=exact_match、
+    token_ban 課題では追加で token_ban=pass。"""
+
+    return (
+        verdicts["symbolic_validation_status"] == "pass"
+        and verdicts["key"] == "preserved"
+        and verdicts["brightness"] == "preserved"
+        and verdicts["structure"] == "exact_match"
+        and (not token_ban_required or token_ban_status == "pass")
+    )
+
+
+def test_ledger_l0br_series_outcome_derivable_from_pinned_reports():
+    """「到達率 5/6」の見出し会計（`docs/l0br_robustness_record.md` §1/§3）が
+    pin 済み成果物（report.json）から機械的に再導出可能であることを assert
+    する（PR #249 Codex レビュー第 11 巡, P2）。台帳の `outcome`/
+    `rounds_to_success` は今まで著者が手書きした解釈値のまま実体照合されて
+    いなかった——ここでは (1) 各周回の `report.json` の verdicts が台帳
+    round エントリの `verdicts` と一致すること、(2) 登録済み成功述語
+    （`protocol.success_predicate`）を pin 済み verdicts + `token_ban` へ
+    適用して系列ごとに最初の成功周回を再計算し、`rounds_to_success`/
+    `outcome`（reached/unreached、round_limit 内成功なしなら
+    unreached/null）が台帳値と一致することを、両方 assert する。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+
+    verdict_checks: list[tuple[str, dict, dict]] = []
+    outcome_checks: list[tuple[str, str, object, object]] = []
+
+    for series_entry in ledger["series_runs"]:
+        task_id = series_entry["task"]
+        series_label = series_entry["series"]
+        token_ban_required = tasks_by_id[task_id]["token_ban"] is True
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+
+        first_success_round = None
+        for round_entry in sorted(series_entry["rounds"], key=lambda r: r["round"]):
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            report = json.loads((round_dir / "report.json").read_text(encoding="utf-8"))
+            actual_verdicts = {
+                "brightness": report["axes"]["brightness"]["verdict"],
+                "key": report["axes"]["key"]["verdict"],
+                "structure": report["axes"]["structure"]["verdict"],
+                "symbolic_validation_status": report["symbolic_validation"]["status"],
+            }
+            verdict_checks.append(
+                (f"{task_id}/{series_label}.rounds[{round_num}]", actual_verdicts, round_entry["verdicts"])
+            )
+
+            if first_success_round is None and _round_success(
+                actual_verdicts,
+                token_ban_required=token_ban_required,
+                token_ban_status=round_entry["token_ban"],
+            ):
+                first_success_round = round_num
+
+        expected_outcome = "reached" if first_success_round is not None else "unreached"
+        outcome_checks.append(
+            (f"{task_id}/{series_label}", "outcome", expected_outcome, series_entry["outcome"])
+        )
+        outcome_checks.append(
+            (
+                f"{task_id}/{series_label}",
+                "rounds_to_success",
+                first_success_round,
+                series_entry["rounds_to_success"],
+            )
+        )
+
+    assert verdict_checks, "no verdict checks collected — test would vacuously pass"
+    for label, actual_verdicts, ledger_verdicts in verdict_checks:
+        assert actual_verdicts == ledger_verdicts, (
+            f"{label}: report.json verdicts {actual_verdicts!r} do not match ledger "
+            f"verdicts {ledger_verdicts!r}"
+        )
+
+    assert outcome_checks, "no outcome checks collected — test would vacuously pass"
+    for label, field, derived_value, ledger_value in outcome_checks:
+        assert derived_value == ledger_value, (
+            f"{label}.{field}: derived from pinned reports = {derived_value!r}, ledger = "
+            f"{ledger_value!r}"
+        )
