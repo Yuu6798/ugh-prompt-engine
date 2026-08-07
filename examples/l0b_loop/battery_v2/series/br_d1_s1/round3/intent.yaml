@@ -1,0 +1,76 @@
+round: 3
+read_of_round2_report:
+  key_brightness: >
+    key(D minor)・brightness(dark) は round1・round2 と連続して preserved。
+    events.chord_progression 省略 + brightness 直宣言の方針は再現性が高いと
+    判断し、round3 でも touch しない。
+  structure_failure: >
+    observed = [intro, chorus, chorus, bridge, outro]（要求は
+    [intro, chorus, chorus, outro]）。position_match_rate 0.6（round2 と
+    同値、悪化なし）。observed_sections の秒数を宣言境界（7.5 / 15.0 / 22.5）
+    と突き合わせると、境界1 (7.5→6.5945, -0.91s) と境界3 (22.5→23.4522,
+    +0.95s) はほぼ対称なオフセットで単一境界として妥当に対応している。
+    一方、境界2 (宣言 15.0) に対応する検出境界が見当たらない — 候補は
+    11.61 (-3.39s) と 17.8329 (+2.83s) の 2 つで、どちらも遠く、かつ
+    その間の "chorus" セグメント (11.61–17.8329) はちょうど宣言 15.0 を
+    またぐ位置にある。これは round1 own_intent が懸念した
+    duplicate_chorus_merge とは異なる形の異常で、宣言境界2 の検出が
+    単一のきれいな境界に収束せず、前後 2 つの見せかけ境界にスメアして
+    いる状態と解釈するのが最も単純な説明である。
+  bridge_segment_analysis: >
+    "bridge" ラベルが付いたセグメント (17.8329–23.4522) は、区間の
+    83% (17.8329–22.5, 4.67s) が宣言上は chorus(2 個目, tier5 既定) の
+    末尾に属し、残り 17% (22.5–23.4522, 0.95s) のみが outro(tier3
+    sparse) の先頭である。§2 で新規開示された「低→高遷移直後の bridge
+    過渡帯」（本区間は tier5→tier3 の高→低遷移で該当条件外）には整合
+    しないため、契約が明示するメカニズムとは別に、chorus2 の終盤で
+    エネルギーが outro へ向けて緩やかに低下していく区間そのものが
+    "bridge" 相当のヒューリスティックに拾われた可能性を仮説として残す
+    （契約に明記のない未開示挙動の可能性があり、確証はない）。
+change_made:
+  target: chorus(2 個目)の bars のみ変更
+  from: "bars: 3（7.5s 相当）"
+  to: "bars: 4（10.0s 相当）"
+  rationale: >
+    round2 で chorus1/chorus2 のラベル付け自体（"chorus","chorus"）は
+    両方とも正しく成立しており、tier4("full energy")→tier5(既定) の
+    差別化方針自体は機能している。破綻は境界2 周辺のスメアと、chorus2
+    末尾〜outro 手前にのみ局在している。したがって chorus1 の tier
+    ・bars・role・physical はいずれも touch せず（正しく機能している
+    要素を壊さない）、chorus2 の bars のみを 7.5s→10.0s に伸ばし、
+    chorus1/chorus2 境界（宣言15.0）が位置する領域と chorus2/outro
+    境界（宣言変更後 25.0）が位置する領域を時間的に引き離すことで、
+    2 つの真の境界が 1 つのセグメントに巻き込まれてスメアする状態の
+    解消を狙う。10.0s は §2 実測点（6.2s 吸収 / 7.5s 良好 / 12.3s
+    過分割）のうち過分割閾値 12.3s 未満に収まる長さであり、7.5s より
+    長いが安全域に留まる保守的な延伸として選んだ。
+  variable_isolation: >
+    round1→round2 が「tier 差別化」という単一変数を変えて chorus/chorus
+    ラベル付け自体を修正できたのと同様、round2→round3 では「chorus2 の
+    長さ」という単一変数のみを変え、他の全要素（tier 選択・語彙・role・
+    bpm・key・brightness・time_signature 等）を固定する。次周回の
+    diff_report で改善・非改善のどちらが出ても、この 1 変数の効果として
+    解釈できるようにするため。
+  unchanged: >
+    intro（既定 tier5, bars=3, 7.5s）・chorus1（full energy, tier4,
+    bars=3, 7.5s）・outro（sparse, tier3, bars=3, 7.5s）・bpm=96・
+    key="D minor"・time_signature="4/4"・brightness="dark"・
+    stereo_width="narrow"・events 省略方針は round1/round2 から変更なし。
+residual_risks:
+  chorus2_relabel: >
+    chorus2 を 10.0s に延伸したことで、内部ダイナミクスの変化により
+    chorus2 自体が過分割される可能性（§2「長い持続区間は内部ダイナミクス
+    の変化で過分割されうる」、12.3s 未満とはいえゼロリスクではない）を
+    本契約の開示情報だけでは排除できない。次周回の diff_report で
+    chorus2 が単一の "chorus" として観測されるかを最優先で確認する。
+  boundary1_offset_unaddressed: >
+    境界1 (-0.91s) と境界3 (+0.95s) の小さなオフセットは今回補正して
+    いない。§2 開示の終盤境界系統誤差（約2.6–2.7秒早期検出）とは符号・
+    大きさとも一致しないため、安易に適用すると過補正になるリスクが
+    あると判断し、今回は見送った。
+  substring_safety_reconfirmed: >
+    変更対象は bars（整数値）のみで role/physical の文字列は無変更。
+    認識語彙（silence, no kick, low density, sub bass, sparse,
+    full energy, release, rest）とのラテン文字部分文字列一致は
+    round2 から変化なし（安全確認済み）。
+tools_used: none
