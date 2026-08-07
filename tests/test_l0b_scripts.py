@@ -3689,7 +3689,21 @@ def _assert_round_entry_shape(round_entry: dict) -> None:
     for field in ("token_ban_report_sha256", "pareto_report_sha256"):
         value = round_entry[field]
         assert value is None or (isinstance(value, str) and _SHA256_HEX_RE.fullmatch(value)), field
-    assert isinstance(round_entry.get("author_tool_use"), int) and round_entry["author_tool_use"] >= 0
+    # `author_tool_use == 0` 強制（PR #249 Codex レビュー第 15 巡, P2）:
+    # `protocol.off_contract_rule`（「著者ツール使用が 0 でない周回は
+    # off-contract」）により、`series_runs` に残存する（= 到達率会計に
+    # 算入される）周回は定義上すべて author_tool_use == 0 のはず——非ゼロが
+    # 混入した off-contract 試行は `off_contract_events` 側へ記録され
+    # series_runs には現れない契約（br_d1/s2 round1 の
+    # payload_transcription_corruption 事故はこの経路の実例: 汚染試行は
+    # `off_contract_events` に記録され、series_runs の round1 は正規再実行
+    # 分のみ）。`>= 0` のままだと非ゼロ author_tool_use が series_runs に
+    # 紛れ込んでも形状テストは無言で通してしまう。
+    author_tool_use = round_entry.get("author_tool_use")
+    assert isinstance(author_tool_use, int) and author_tool_use == 0, (
+        f"round {round_entry.get('round')!r}: author_tool_use must be exactly 0 for a "
+        f"round counted in series_runs (protocol.off_contract_rule), got {author_tool_use!r}"
+    )
     assert isinstance(round_entry.get("verdicts"), dict)
 
 
@@ -4119,3 +4133,69 @@ def test_ledger_l0br_round_numbering_is_unique_contiguous_and_bounded():
             )
 
     assert checked == 6, f"expected exactly 6 series_runs entries, got {checked}"
+
+
+# --- Codex review (PR #249) 第 15 巡, P2: 系列同一性と directory/manifest label の束縛 --
+
+
+def test_ledger_l0br_series_identity_bound_to_files_dir_and_payload_manifest_labels():
+    """系列/周回の識別子（`files_dir` と各周回の pin 済み
+    `payload.manifest.json` の `experiment_id`/`round_label`）が、台帳の
+    (task, series, round) 三つ組へ実際に束縛されていることを assert する
+    （PR #249 Codex レビュー第 15 巡, P2）。
+
+    実データの命名規約を機械確認した結果（本テスト作成時点）:
+    `files_dir` = `series/{task}_{series}/`、`payload.manifest.json` の
+    `experiment_id` = `l0br_{task}_{series}`、`round_label` = `round{N}`。
+    **境界宣言**: `experiment_id` は series まで一意に符号化しているため
+    （task 単体ではなく `{task}_{series}` の組を埋め込む）、
+    `(experiment_id, round_label)` は当初懸念された「series を含まない弱い
+    束縛」ではなく (task, series, round) 三つ組への**強い**（一意な）束縛
+    として成立している——本テストが実データで確認した事実であり、規約が
+    将来変わった場合はこの assert 自体を更新する。"""
+
+    ledger = _load_ledger_l0br()
+
+    files_dir_checks: list[tuple[str, str, str]] = []
+    label_checks: list[tuple[str, tuple[str, str], tuple[str, str]]] = []
+    for series_entry in ledger["series_runs"]:
+        task_id = series_entry["task"]
+        series_label = series_entry["series"]
+        prefix = f"{task_id}/{series_label}"
+
+        expected_files_dir = f"series/{task_id}_{series_label}/"
+        files_dir_checks.append((prefix, series_entry["files_dir"], expected_files_dir))
+
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        expected_experiment_id = f"l0br_{task_id}_{series_label}"
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            manifest = json.loads((round_dir / "payload.manifest.json").read_text(encoding="utf-8"))
+            label_checks.append(
+                (
+                    f"{prefix}.rounds[{round_num}]",
+                    (manifest["experiment_id"], manifest["round_label"]),
+                    (expected_experiment_id, f"round{round_num}"),
+                )
+            )
+
+    assert files_dir_checks, "no files_dir checks collected — test would vacuously pass"
+    assert len(files_dir_checks) == 6, f"expected exactly 6 series_runs entries, got {len(files_dir_checks)}"
+    seen_files_dirs: set[str] = set()
+    for label, actual_files_dir, expected_files_dir in files_dir_checks:
+        assert actual_files_dir == expected_files_dir, (
+            f"{label}: files_dir={actual_files_dir!r} does not match the canonical form "
+            f"{expected_files_dir!r}"
+        )
+        assert actual_files_dir not in seen_files_dirs, f"{label}: duplicate files_dir {actual_files_dir!r}"
+        seen_files_dirs.add(actual_files_dir)
+
+    assert label_checks, "no payload manifest label checks collected — test would vacuously pass"
+    assert len(label_checks) == 16, f"expected exactly 16 rounds across the completed battery, got {len(label_checks)}"
+    for label, actual_pair, expected_pair in label_checks:
+        assert actual_pair == expected_pair, (
+            f"{label}: payload.manifest.json (experiment_id, round_label)={actual_pair!r} does "
+            f"not match the canonical (task, series, round) encoding {expected_pair!r} — the "
+            "pin manifest may have been composed for a different series/round"
+        )
