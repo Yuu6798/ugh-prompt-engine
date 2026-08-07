@@ -31,6 +31,11 @@ on:
 # timeout 内に収まっており、動かす理由がないため。timeout-minutes: 30 =
 # テスト予算 ~17 分 + セットアップ許容の余裕。
 #
+# PR #250 Codex レビュー第 1 巡, 指摘 1 で `test_ledger_l0br_v2_series_runs_
+# reports_reproduce_frozen_judge_reevaluation`（v2, 6 round 規模・概算 5〜8
+# 分）を追加。v1 の同型テストと同じ「凍結判定器フル再評価」ジョブに乗せる
+# ため node id をこの job へ追加し、test-rest からは deselect する。
+#
 # ruff は lint ジョブに一本化する（Python 3.11 単一・matrix 非依存の静的解析のため
 # 各 test-* ジョブ側でマトリクス分だけ重複実行する意味がない）。
 jobs:
@@ -99,6 +104,7 @@ jobs:
           pytest -q --tb=short --durations=25
           tests/test_l0b_scripts.py::test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation
           tests/test_l0b_scripts.py::test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation
+          tests/test_l0b_scripts.py::test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation
 
   test-rest:
     runs-on: ubuntu-latest
@@ -124,3 +130,4 @@ jobs:
           pytest -q --tb=short --durations=25 --ignore=tests/test_m2_accuracy_harness.py
           --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation
           --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation
+          --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation

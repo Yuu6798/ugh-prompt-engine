@@ -4520,13 +4520,15 @@ def test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevalu
         )
 
 
-# --- ledger_l0br_v2.yaml shape enforcement (BR-D1 v2 remeasure registration —
-# Design Memo: L0a v2 + BR-D1 再測。AGENTS.md §8「parse 可能 ≠ 形状正しい」を
-# `ledger_l0br.yaml` (v1) と同じ流儀で `battery_v2/ledger_l0br_v2.yaml` に
-# も適用する。本ファイルは**登録 commit**時点の状態のみを対象とする——
-# `series_runs`/`off_contract_events` が空 list であることが合格条件（v1
-# 台帳の登録時テストと同じ「空は正規状態」設計）。実測後は v1 と同様に
-# `series_runs` を追記するインベントリ固定テストへ更新する予定。
+# --- ledger_l0br_v2.yaml shape enforcement (BR-D1 v2 remeasure — 2026-08-07
+# 実測完了。Design Memo: L0a v2 + BR-D1 再測。AGENTS.md §8「parse 可能 ≠
+# 形状正しい」を `ledger_l0br.yaml` (v1) と同じ流儀で `battery_v2/
+# ledger_l0br_v2.yaml` にも適用する。登録時点の「`series_runs`/
+# `off_contract_events` は空 list」設計は実測完了に伴い置き換え済み——
+# 本ファイルの v2 テスト群は実測完了後の状態を enforce する: 2 系列
+# （br_d1/s1・br_d1/s2）x 各 3 周回・全 pin（payload/score/intent/report/
+# pareto）の実体 sha256 照合・凍結判定器（run_round + pareto_eval）による
+# 再評価拘束を含む。以降の変更は登録時のみを見る前提を持ち込まないこと。
 
 
 BATTERY_V2_DIR = LOOP_DIR / "battery_v2"
@@ -4980,6 +4982,128 @@ def test_ledger_l0br_v2_series_outcome_derivable_from_pinned_reports():
     for label, field, derived_value, ledger_value in outcome_checks:
         assert derived_value == ledger_value, (
             f"{label}.{field}: derived from pinned reports = {derived_value!r}, ledger = {ledger_value!r}"
+        )
+
+
+# --- ledger_l0br_v2.yaml series_runs frozen-judge reevaluation binding
+# (PR #250 Codex レビュー第 1 巡, 指摘 1: v1 台帳が持つ「凍結判定器による
+# 再評価拘束」の v2 版が欠けていた——従来の v2 テスト群は committed
+# report.json / pareto_vs_round*.json の verdicts / improved を信頼して
+# 転記照合するのみで、pin 済み score.yaml/report.json のペアを実際に
+# 判定器へ通して再現できるかは見ていなかった。下記 2 テストで v1 と同型の
+# 拘束を追加する。) ---------------------------------------------------------
+
+
+def test_ledger_l0br_v2_series_runs_pareto_reports_reproduce_frozen_judge_reevaluation():
+    """`test_ledger_l0br_pareto_reports_reproduce_frozen_judge_reevaluation`
+    （v1、PR #249 第 12 巡）と同型: pin 済み前周回/当該周回の `report.json`
+    （`test_ledger_l0br_v2_series_runs_pins_match_actual_file_sha256` で
+    sha256 実体照合済み）を入力に、凍結判定器（`judge.pareto_eval`/
+    `judge.pareto_spec` として pin 済み——`test_ledger_l0br_v2_cross_ledger_
+    pins_match_v1_ledger` で v1 と同一 sha256 と確認済みであり、実体は本
+    ファイル冒頭でロード済みの `pareto_eval`/`PARETO_SPEC`（v1/v2 とも同一
+    パス `scripts/pareto_eval.py`/`frozen/pareto.yaml` を指すため使い回して
+    問題ない）で**再評価**し、出力が pin 済み `pareto_vs_round{N-1}.json`
+    とバイト等値であることを assert する（`pareto_eval.main` の `-o`
+    publish と同一の `json.dumps(result, ensure_ascii=False, indent=2,
+    sort_keys=True) + "\n"` 直列化を用いる——決定論的評価器のため byte
+    等値が成立するはず）。音声合成を伴わないため高速レーン
+    （`pytest -m "not slow"`）に残す（v1 の同型テストと同じ扱い）。"""
+
+    ledger = _load_ledger_l0br_v2()
+
+    reeval_checks: list[tuple[str, str, str]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_V2_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            if round_entry["pareto_report_sha256"] is None:
+                continue
+            round_dir = round_dir_base / f"round{round_num}"
+            prev_round_dir = round_dir_base / f"round{round_num - 1}"
+
+            prev_report = json.loads((prev_round_dir / "report.json").read_text(encoding="utf-8"))
+            curr_report = json.loads((round_dir / "report.json").read_text(encoding="utf-8"))
+            result = pareto_eval.evaluate(prev_report, curr_report, PARETO_SPEC)
+            reevaluated_content = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+            pinned_path = round_dir / f"pareto_vs_round{round_num - 1}.json"
+            pinned_content = pinned_path.read_text(encoding="utf-8")
+
+            label = f"br_d1/{series_entry['series']}.rounds[{round_num}]"
+            reeval_checks.append((label, reevaluated_content, pinned_content))
+
+    assert reeval_checks, "no pareto re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 4, (
+        f"expected exactly 4 pareto-pin'd rounds across the completed v2 battery, got "
+        f"{len(reeval_checks)}"
+    )
+    for label, reevaluated_content, pinned_content in reeval_checks:
+        assert reevaluated_content == pinned_content, (
+            f"{label}: re-evaluating the pinned prev/curr report.json pair through the "
+            "frozen judge (pareto_eval.evaluate + frozen/pareto.yaml) does not "
+            "byte-reproduce the pinned pareto_vs_round*.json — the pin may not have been "
+            "produced from this input pair"
+        )
+
+
+@pytest.mark.slow
+def test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation(tmp_path: Path):
+    """`test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation`
+    （v1、PR #249 第 13 巡）と同型: `report.json` は評価対象の score への
+    束縛を内部に持たない（v1 と同じ理由——`score_sha256` フィールドが無い）
+    ため、pin 済み `score.yaml` を凍結判定器（`run_round.py`、
+    `judge.run_round` として pin 済み——`test_ledger_l0br_v2_cross_ledger_
+    pins_match_v1_ledger` で v1 と同一 sha256 と確認済み）による**再導出**
+    で束縛する: v2 の完了バッテリー全 2 系列 x 3 周回 = 6 周回について、
+    pin 済み `score.yaml` + 当該課題の section map（台帳 `tasks[0].
+    section_map` = `frozen/section_map_t2.json`）を `run_round.run_round()`
+    へ入力し、出力 report が pin 済み `report.json` と**バイト等値**である
+    ことを assert する。出力は `tmp_path` のみへ書き、リポジトリ内ファイル
+    は一切変更しない。
+
+    `@pytest.mark.slow`: 6 周回分の合成 + 抽出を伴うため重い（v1 実測 1
+    周回あたり約 45〜75 秒からの外挿で概算 5〜8 分）。日常の高速ループ
+    （`pytest -m "not slow"`）から除外され、CI では v1 の同型テスト
+    （`test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation`）と
+    同じ `test-l0b-reeval` シャードに配置する（`.github/workflows/ci.yml`
+    参照——`test-rest` からは deselect 済み）。"""
+
+    ledger = _load_ledger_l0br_v2()
+    section_map_path = _resolve_battery_v2_relative(ledger["tasks"][0]["section_map"])
+
+    reeval_checks: list[tuple[str, bytes, bytes]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_V2_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            score_path = round_dir / "score.yaml"
+            pinned_report_path = round_dir / "report.json"
+
+            label = f"br_d1/{series_entry['series']}.rounds[{round_num}]"
+            workdir = tmp_path / f"br_d1_{series_entry['series']}_round{round_num}_wd"
+            output_path = tmp_path / f"br_d1_{series_entry['series']}_round{round_num}_report.json"
+
+            run_round.run_round(
+                score_path,
+                workdir,
+                round_num,
+                output_path,
+                section_map_path=section_map_path,
+            )
+            reeval_checks.append((label, output_path.read_bytes(), pinned_report_path.read_bytes()))
+
+    assert reeval_checks, "no report re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 6, (
+        f"expected exactly 6 rounds across the completed v2 battery, got {len(reeval_checks)}"
+    )
+    for label, reevaluated_bytes, pinned_bytes in reeval_checks:
+        assert reevaluated_bytes == pinned_bytes, (
+            f"{label}: re-running the pinned score.yaml through the frozen judge "
+            "(run_round.run_round with the task's pinned section map) does not "
+            "byte-reproduce the pinned report.json — the pin may not have been produced "
+            "from this score"
         )
 
 
