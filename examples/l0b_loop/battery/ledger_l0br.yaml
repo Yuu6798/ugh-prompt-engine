@@ -544,3 +544,20 @@ off_contract_events:
       しており本事故と同型の経路は通っていないが、送信バイト列の事後検証
       手段はハーネス上存在しないため、この転写忠実性の限界は記録 doc に
       開示する。
+      解釈裁定（PR #249 Codex レビュー第 17 巡, P1 部分採用——系列除外は
+      しない。docs/l0br_robustness_record.md §5 に同旨を記載）: 凍結
+      `protocol.off_contract_rule` の作動単位は「系列成果を持つ周回」であり、
+      本事故は著者の応答生成前に中止・破棄された試行であって周回ではない。
+      不成立の根拠 3 点——(a) 成果を一切生んでいない（汚染応答は存在しない）、
+      (b) 毎周回 fresh instance のため counted 測定への汚染経路がない、
+      (c) counted な br_d1/s2 round1 の payload は再組成テスト
+      （`test_ledger_l0br_payloads_recompose_via_frozen_measurement_composer`）
+      で composer 出力との byte 一致を機械証明済み——により、rule のトリガー
+      条件「composer 出力と一致しない周回」は counted round には不成立。
+      よって br_d1/s2 系列を到達率会計から除外しない。ただし「送信直後の
+      自己検出 → 応答生成前中止 → 正規再実行」という手順自体は事前登録
+      されていない事後解釈であり、この事実を正直会計として明示する。
+      感度開示: 厳格読解（試行を周回とみなし当該系列を除外）を採る場合、
+      到達率は 5/6 → 4/5 へ変化するが、定性結論（到達の分岐が課題難度でなく
+      著者の戦略選択に帰す仮説、br_d1 内の系列間分散 s1=unreached/
+      s2=reached）は不変。

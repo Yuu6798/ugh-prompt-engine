@@ -4243,3 +4243,54 @@ def test_ledger_l0br_series_identity_bound_to_files_dir_and_payload_manifest_lab
             f"not match the canonical (task, series, round) encoding {expected_pair!r} — the "
             "pin manifest may have been composed for a different series/round"
         )
+
+
+# --- Codex review (PR #249) 第 17 巡, P2: token_ban 報告の再評価検証 ------
+
+
+def test_ledger_l0br_token_ban_reports_reproduce_frozen_judge_reevaluation():
+    """`token_ban.json`（第 12 巡で `score_sha256` の入力束縛まで実体照合
+    済み）が実際に凍結判定器（`constraint_checker` として pin 済み・現行
+    `check_token_ban.py` は測定時から無変更が entity-check 済み——第 8 巡
+    以降の composer/run_round と異なり、この判定器自体は本 PR のレビュー
+    サイクルで一度も改変されていない）から生成されたことを、pareto/report
+    再評価（第 12/13 巡）と同型の手法で検証する（PR #249 Codex レビュー
+    第 17 巡, P2）: pin 非 null の全 10 周回について pin 済み `score.yaml`
+    を `check_token_ban.check_token_ban()` へ入力し、`check_token_ban.py`
+    自身の `-o` publish と同一の直列化（`json.dumps(result,
+    ensure_ascii=False, indent=2, sort_keys=True) + "\n"`）で出力を組み立て、
+    pin 済み `token_ban.json` と**バイト等値**であることを assert する。
+    純テキスト処理で高速なため `slow` マーカーは不要。"""
+
+    ledger = _load_ledger_l0br()
+
+    reeval_checks: list[tuple[str, bytes, bytes]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            if round_entry["token_ban_report_sha256"] is None:
+                continue
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            score_path = round_dir / "score.yaml"
+            pinned_path = round_dir / "token_ban.json"
+
+            result = check_token_ban.check_token_ban(score_path)
+            reevaluated_content = (
+                json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+
+            label = f"{series_entry['task']}/{series_entry['series']}.rounds[{round_num}]"
+            reeval_checks.append((label, reevaluated_content, pinned_path.read_bytes()))
+
+    assert reeval_checks, "no token_ban re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 10, (
+        f"expected exactly 10 token_ban-pin'd rounds across the completed battery, got "
+        f"{len(reeval_checks)}"
+    )
+    for label, reevaluated_bytes, pinned_bytes in reeval_checks:
+        assert reevaluated_bytes == pinned_bytes, (
+            f"{label}: re-running the pinned score.yaml through the frozen judge "
+            "(check_token_ban.check_token_ban) does not byte-reproduce the pinned "
+            "token_ban.json — the pin may not have been produced from this score"
+        )
