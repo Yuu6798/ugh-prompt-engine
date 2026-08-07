@@ -351,8 +351,15 @@ series_runs:
       pass）。chorus2 を 2 個目の full energy と同一ヒントにした設計が、
       境界 17.8329–23.4289s に bridge を誘発。round2: 著者は round1 own_intent
       が事前警告した duplicate_chorus_merge 仮説に基づき chorus2 の
-      physical のみ full energy(tier4)→認識語なし自由文(既定 tier5) に
-      変更したが、bridge は境界秒がわずかにシフトしただけで継続
+      physical を full energy(tier4)→認識語なし自由文(既定 tier5) に
+      変更した（著者 intent は「physical のみ変更」と申告していたが、
+      実際には chorus2 の role も「前段と同格の力強さを保つ」→「前段と
+      対比するやや控えめな力強さを保つ」に書き換わっている。ヒント照合は
+      physical+role の連結文字列に対する部分文字列マッチのためこの role
+      編集もエンジン入力の変更にあたるが、両文字列とも認識語彙のラテン
+      文字綴りを含まず、連結後のヒント解決は tier5 のまま不変——音響上は
+      不活性な編集である。PR #250 Codex レビュー第 4 巡指摘を受けた事後
+      監査で記録）。bridge は境界秒がわずかにシフトしただけで継続
       （pmr=0.6 のまま、pareto improved=false・3 軸とも delta=0）。round3:
       著者は「境界スメア仮説」（宣言境界 15.0s が observed 上で
       11.61s/17.83s の 2 候補にスメアしていたとの解釈）に基づき chorus2 の
