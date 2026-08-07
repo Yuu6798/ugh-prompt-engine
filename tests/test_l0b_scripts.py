@@ -5108,9 +5108,14 @@ def test_ledger_l0br_v2_series_runs_payloads_recompose_via_frozen_measurement_co
     statement、`own_score`/`own_intent`/`diff_report` → 同一系列の直前周回
     の score.yaml/intent.yaml/report.json）で `tmp_path` に part 実体を配置
     し、v2 台帳の測定時 composer（`payload_composition.composer.frozen_
-    copy`、v1 と同一ファイル・同一 sha256）で再組成する。出力
-    `payload.manifest.json` が pin 済みのものとバイト等値であることを
-    assert する。"""
+    copy`）で再組成する。出力 `payload.manifest.json` が pin 済みのものと
+    バイト等値であることを assert する。
+
+    注意: v2 の測定時 composer は v1 の凍結コピー（sha256 a1bd613a…）とは
+    **別物**（sha256 b5be5300…、v1 実測後の堅牢化変更を含む）。本テストの
+    再現主張は「v2 実測時に実行された composer 実体」を通すことに意味が
+    あるため、v1 モジュールへの差し替えは（良性 fixture では同一 manifest
+    を出しても）主張を偽りにする——必ず v2 台帳の frozen_copy を用いる。"""
 
     ledger = _load_ledger_l0br_v2()
     contract_v2_path = _resolve_battery_v2_relative(ledger["contract_freeze"]["contract_v2"]["path"])
