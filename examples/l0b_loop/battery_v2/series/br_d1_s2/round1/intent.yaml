@@ -1,0 +1,61 @@
+overall_strategy: >
+  R1(構造)・R2(キー)・R3(明度)の3軸すべてを一発で満たすことを狙う設計。
+  §2 の新規開示（優先順位制の非加算・role混入・chord_progressionのドローン
+  沈黙・低→高遷移の疑似bridge・境界の系統的早期検出）を踏まえ、リスクの
+  高い組み合わせを避ける方向で選択した。
+
+section_length_choice: >
+  bpm=128, 4/4, 各セクション4小節 = 7.5秒/セクションに統一。契約 §2 可行窓の
+  実測点（12.3秒=過分割、6.2秒=吸収、7.5秒=陽性対照で成立）のうち唯一の
+  成立点である7.5秒をそのまま採用した。4セクション合計30秒。
+
+energy_tier_design: >
+  intro: 認識語を一切使わず既定(tier5, パルス+メロディだが4より音量低)。
+  chorus x2: "full energy"(tier4, 最大音量)を同一文言で反復。
+  outro: "sparse"(tier3, パルスのみメロディなし)。
+  ねらいは (a) intro→chorus の遷移を「弱い演奏(silence/rest/sparse)→full」
+  ではなく「既定(tier5)→full」に留めることで、§2 で新規開示された
+  低→高遷移直後の疑似bridge検出（実測例はいずれもsparse/rest起点）の
+  誘発を避けること、(b) chorus→outro の遷移は「強→弱」方向であり、
+  この方向では疑似bridgeが観測されていないため安全に高低差をつけられる
+  こと。
+
+chorus_repetition_rationale: >
+  chorus1/chorus2 は意図的に完全同一の演奏ヒント("full energy")にした。
+  一般的な楽曲構造推定は反復区間の自己相似性でchorusを同定するため、
+  同一の音響内容を2回並べることがむしろ「chorusらしさ」の検出に資すると
+  考えた。境界そのものは、両chorus間で進行し続ける既定コード進行の
+  ループ点・小節境界のトランジェントに委ねている。ここは契約が明言して
+  いない部分の推測であり、本ラウンドの最大の賭け所として明記しておく。
+
+chord_progression_omission: >
+  events を完全に省略した。§2 新規開示により、自作 chord_progression は
+  宣言した physical.key と無関係な調へ倒れうる（実測: F/C majorへの転倒）
+  ため、「events省略が最も安全」という契約の明記に従い、既定進行に
+  physical.key への正しい追従を委ねた。
+
+drone_avoidance: >
+  優先順位1./2.段（silence/no kick/low density/sub bass）は一度も使用
+  していない。これらが1セクションでも発火すると chord_progression が
+  そのセクションで一切鳴らず、和声観測の材料を減らすリスクがあるため。
+
+role_contamination_check: >
+  各セクションの role 文字列（"曲の開始を告げる導入部、主題を控えめに
+  提示する" 等）に、認識語彙(silence/no kick/low density/sub bass/
+  sparse/full energy/release/rest)と綴りが重なる英単語が紛れ込んでいない
+  ことを目視確認済み。physical フィールドのみに意図した認識語を配置した。
+
+brightness_and_key: >
+  physical.brightness="dark" をグローバルに宣言。key="D minor" を
+  §1 の正規表現に厳密準拠する形式で記述。どちらも events を使わない
+  ことで宣言値からの転倒リスクを最小化している。
+
+known_risks: >
+  (1) chorus1/chorus2 が音響的に区別できず単一区間へ併合され、観測列が
+  3要素(intro, chorus, outro)に縮退する可能性。
+  (2) intro→chorus1 の既定→full遷移でも疑似bridgeが発火する可能性
+  （契約が明言する実測例はsparse/rest/silence起点のみで、既定tier5起点
+  の挙動は未検証）。
+  (3) 境界検出の系統的早期化（終盤で2.6-2.7秒早い）は労働範囲外(R1は
+  ラベル列の一致のみが判定対象)と理解しているが、念のため明記する。
+  本ラウンドはこれらの不確実性を許容した上での初回提出である。

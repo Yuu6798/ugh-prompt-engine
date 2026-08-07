@@ -4518,3 +4518,676 @@ def test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevalu
             "the frozen judge (run_round.run_round, round=0) does not byte-reproduce the "
             "pinned report.json — the pin may not have been produced from this score"
         )
+
+
+# --- ledger_l0br_v2.yaml shape enforcement (BR-D1 v2 remeasure — 2026-08-07
+# 実測完了。Design Memo: L0a v2 + BR-D1 再測。AGENTS.md §8「parse 可能 ≠
+# 形状正しい」を `ledger_l0br.yaml` (v1) と同じ流儀で `battery_v2/
+# ledger_l0br_v2.yaml` にも適用する。登録時点の「`series_runs`/
+# `off_contract_events` は空 list」設計は実測完了に伴い置き換え済み——
+# 本ファイルの v2 テスト群は実測完了後の状態を enforce する: 2 系列
+# （br_d1/s1・br_d1/s2）x 各 3 周回・全 pin（payload/score/intent/report/
+# pareto）の実体 sha256 照合・凍結判定器（run_round + pareto_eval）による
+# 再評価拘束を含む。以降の変更は登録時のみを見る前提を持ち込まないこと。
+
+
+BATTERY_V2_DIR = LOOP_DIR / "battery_v2"
+LEDGER_L0BR_V2_PATH = BATTERY_V2_DIR / "ledger_l0br_v2.yaml"
+_LEDGER_V2_TASK_IDS = ("br_d1",)
+
+# v2 台帳の測定時 composer 凍結コピー（`battery_v2/composer_at_measurement/
+# compose_payload.py`）——v1 の `composer_at_measurement`（上で
+# `battery/composer_at_measurement/` からロード済み、sha256_at_measurement
+# = a1bd613a...）とは別ファイル・別 sha256（v2 は b5be5300...、登録時点で
+# sha256_current と同値。台帳 `payload_composition.composer` 節参照）のため、
+# 誤って v1 側モジュールを再利用しないよう v2 専用モジュール名でロードする。
+composer_at_measurement_v2 = _load_module(
+    "l0b_composer_at_measurement_v2",
+    BATTERY_V2_DIR / "composer_at_measurement" / "compose_payload.py",
+)
+
+
+def _load_ledger_l0br_v2_text() -> str:
+    return LEDGER_L0BR_V2_PATH.read_text(encoding="utf-8")
+
+
+def _load_ledger_l0br_v2() -> dict:
+    with LEDGER_L0BR_V2_PATH.open(encoding="utf-8") as handle:
+        return yaml.load(handle, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
+
+
+def _resolve_battery_v2_relative(relative_path: str) -> Path:
+    return (BATTERY_V2_DIR / relative_path).resolve()
+
+
+def test_ledger_l0br_v2_todo_pin_sentinel_absent_everywhere():
+    """凍結 enforce: 事前登録 commit 時点で `"TODO_PIN"` が本ファイルの
+    どこにも（値・コメント含め）残っていてはならない（v1 台帳の同名
+    テストと同じ規約）。"""
+
+    assert "TODO_PIN" not in _load_ledger_l0br_v2_text()
+
+
+def test_ledger_l0br_v2_top_level_keys_present():
+    ledger = _load_ledger_l0br_v2()
+    required = (
+        "schema_version",
+        "experiment",
+        "registered_utc",
+        "route",
+        "contract_freeze",
+        "judge",
+        "author_identity",
+        "payload_composition",
+        "constraint_checker",
+        "protocol",
+        "tasks",
+        "preregistered_hypothesis",
+        "series_runs",
+        "off_contract_events",
+    )
+    for key in required:
+        assert key in ledger, key
+    assert ledger["schema_version"] == "l0br-v2-remeasure/0.1"
+
+
+def test_ledger_l0br_v2_tasks_shape():
+    """br_d1 のみに縮約されていること（v1 台帳は br_d1/br_d2/br_d3 の 3 課題
+    ・本台帳は br_d1 のみ）。"""
+
+    tasks = _load_ledger_l0br_v2()["tasks"]
+    assert len(tasks) == 1
+    assert [task["id"] for task in tasks] == list(_LEDGER_V2_TASK_IDS)
+
+    task = tasks[0]
+    assert task["difficulty"] == "single_lever_proven"
+    assert task["token_ban"] is False
+    assert task["positive_control"]["mode"] == "reuse_pinned_t2"
+
+
+def test_ledger_l0br_v2_protocol_shape():
+    protocol = _load_ledger_l0br_v2()["protocol"]
+    assert protocol["round_limit"] == 5
+    assert protocol["series_per_task"] == 2
+    assert protocol["failure_mode_vocab"] == list(_LEDGER_FAILURE_MODE_VOCAB)
+    # v2 固有の中心規約: 開示済み特性に嵌った系列は contract_defect に
+    # できない（missteered/unconverged 側で分類する）。
+    rubric_correction = protocol["failure_mode_rubric_v2_correction"]
+    assert isinstance(rubric_correction, str) and rubric_correction
+    assert "contract_defect" in rubric_correction
+    assert "missteered" in rubric_correction
+    assert "unconverged" in rubric_correction
+
+
+_LEDGER_V2_EXPECTED_SERIES_INVENTORY = frozenset(
+    {
+        ("br_d1", "s1"),
+        ("br_d1", "s2"),
+    }
+)
+
+
+def test_ledger_l0br_v2_series_runs_measured_state_is_fixed():
+    """実測完了後の正規状態（`docs/l0a_v2_remeasure_record.md` 正本・
+    2026-08-07 s2 round3 判定で系列完了）を固定する（v1 台帳の
+    `test_ledger_l0br_series_runs_and_off_contract_events_are_lists` と同型
+    ——登録時「空 list」テストを実測後のインベントリ固定テストへ置き換える
+    という、本テスト群のヘッダコメントが予告していた更新）。br_d1_s1 /
+    br_d1_s2 の 2 系列が過不足なく揃い、各 3 周回・両系列とも
+    outcome=reached / rounds_to_success=3 / failure_mode=null であること、
+    `off_contract_events` が空であることを assert する。空 = 「転写事故が
+    皆無」ではない: 転写破損 2 件（s1 round3 / s2 round3 の各初回 spawn）が
+    発生したが、いずれも spawn 直後の JSONL 機械照合で検出され著者応答の
+    生成前に kill されたため、off-contract（応答が汚染入力を消費した事象）
+    には該当せず計上されない（`docs/l0a_v2_remeasure_record.md` §5 が正）。
+    消費された全周回の逐語性は同じ機械照合で確認済み。"""
+
+    ledger = _load_ledger_l0br_v2()
+
+    series_runs = ledger["series_runs"]
+    assert isinstance(series_runs, list)
+    off_contract_events = ledger["off_contract_events"]
+    assert isinstance(off_contract_events, list)
+    assert off_contract_events == []
+
+    actual_inventory = [(entry["task"], entry["series"]) for entry in series_runs]
+    assert len(actual_inventory) == len(set(actual_inventory)), (
+        f"duplicate (task, series) pair(s) in series_runs: {actual_inventory!r}"
+    )
+    assert set(actual_inventory) == _LEDGER_V2_EXPECTED_SERIES_INVENTORY, (
+        f"series_runs inventory mismatch: got {sorted(actual_inventory)!r}, "
+        f"expected {sorted(_LEDGER_V2_EXPECTED_SERIES_INVENTORY)!r}"
+    )
+
+    for series_entry in series_runs:
+        assert series_entry["task"] == "br_d1"
+        assert series_entry["series"] in ("s1", "s2")
+        rounds = series_entry["rounds"]
+        assert isinstance(rounds, list)
+        round_numbers = sorted(r["round"] for r in rounds)
+        assert round_numbers == [1, 2, 3], (
+            f"{series_entry['series']}: expected exactly rounds 1..3, got {round_numbers!r}"
+        )
+        for round_entry in rounds:
+            author_tool_use = round_entry.get("author_tool_use")
+            assert isinstance(author_tool_use, int) and author_tool_use == 0, (
+                f"{series_entry['series']}.rounds[{round_entry.get('round')!r}]: "
+                f"author_tool_use must be exactly 0, got {author_tool_use!r}"
+            )
+        assert series_entry["outcome"] == "reached"
+        assert series_entry["rounds_to_success"] == 3
+        assert series_entry["failure_mode"] is None
+        # round_limit 内で成功後に系列が終了している（成功周回の後ろに
+        # 周回が存在しない）ことの確認 — 最終周回 == rounds_to_success。
+        assert round_numbers[-1] == series_entry["rounds_to_success"]
+
+    # preregistered_hypothesis.result（Fable 設計判定の反映）: 2/2 reached
+    # による supports 判定・正直会計 2 点（n=2 未分離 / rounds_to_success
+    # 3>1）が記録されていることを固定する。
+    result = ledger["preregistered_hypothesis"]["result"]
+    assert result["judgement"] == "supports"
+    assert result["rounds_to_success"] == {"s1": 3, "s2": 3}
+    assert isinstance(result["honesty_notes"], list) and len(result["honesty_notes"]) == 2
+
+
+def test_ledger_l0br_v2_pins_match_actual_file_sha256():
+    """`ledger_l0br_v2.yaml` に記載された sha256 pin が、対応する実ファイル
+    の実測 sha256 と一致することを assert する（`test_ledger_l0br_pins_
+    match_actual_file_sha256` と同じ実体照合の流儀。パスは ledger 内の
+    相対パス表記を battery_v2/ 基準で解決する）。"""
+
+    ledger = _load_ledger_l0br_v2()
+    checks: list[tuple[str, Path, str]] = []
+
+    contract_freeze = ledger["contract_freeze"]
+    for label in (
+        "contract_v2",
+        "contract_v1_reference",
+        "authoring_contract_l0",
+        "authoring_trusted_axes_l0",
+    ):
+        entry = contract_freeze[label]
+        checks.append(
+            (f"contract_freeze.{label}", _resolve_battery_v2_relative(entry["path"]), entry["sha256"])
+        )
+
+    judge = ledger["judge"]
+    for label in ("run_round", "pareto_eval", "section_map_t2", "pareto_spec"):
+        entry = judge[label]
+        checks.append((f"judge.{label}", _resolve_battery_v2_relative(entry["path"]), entry["sha256"]))
+
+    wrapper = ledger["author_identity"]["wrapper"]
+    checks.append(
+        ("author_identity.wrapper", _resolve_battery_v2_relative(wrapper["path"]), wrapper["sha256"])
+    )
+
+    composer = ledger["payload_composition"]["composer"]
+    checks.append(
+        (
+            "payload_composition.composer (sha256_current)",
+            _resolve_battery_v2_relative(composer["path"]),
+            composer["sha256_current"],
+        )
+    )
+    checks.append(
+        (
+            "payload_composition.composer (sha256_at_measurement, frozen_copy)",
+            _resolve_battery_v2_relative(composer["frozen_copy"]),
+            composer["sha256_at_measurement"],
+        )
+    )
+
+    constraint_checker = ledger["constraint_checker"]
+    checks.append(
+        (
+            "constraint_checker (sha256_current)",
+            _resolve_battery_v2_relative(constraint_checker["path"]),
+            constraint_checker["sha256_current"],
+        )
+    )
+    checks.append(
+        (
+            "constraint_checker (sha256_at_measurement, frozen_copy)",
+            _resolve_battery_v2_relative(constraint_checker["frozen_copy"]),
+            constraint_checker["sha256_at_measurement"],
+        )
+    )
+
+    for task in ledger["tasks"]:
+        statement = task["statement"]
+        checks.append(
+            (f"tasks[{task['id']}].statement", _resolve_battery_v2_relative(statement["path"]), statement["sha256"])
+        )
+        registration = task["registration"]
+        checks.append(
+            (
+                f"tasks[{task['id']}].registration",
+                _resolve_battery_v2_relative(registration["path"]),
+                registration["sha256"],
+            )
+        )
+        pc = task["positive_control"]
+        assert pc["mode"] == "reuse_pinned_t2", (
+            f"tasks[{task['id']}].positive_control.mode={pc['mode']!r} is not the known mode this "
+            "test's dir-resolution handles — update the test before trusting this pin (fail-closed)"
+        )
+        pc_dir = _resolve_battery_v2_relative(pc["dir"])
+        checks.append((f"tasks[{task['id']}].positive_control.score", pc_dir / "score.yaml", pc["score_sha256"]))
+        checks.append((f"tasks[{task['id']}].positive_control.report", pc_dir / "report.json", pc["report_sha256"]))
+
+    assert checks, "no pin entries collected — test would vacuously pass"
+    for label, path, expected_sha256 in checks:
+        assert path.is_file(), f"{label}: pinned path does not exist: {path}"
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert actual_sha256 == expected_sha256, f"{label}: sha256 mismatch for {path}"
+
+
+def test_ledger_l0br_v2_cross_ledger_pins_match_v1_ledger():
+    """cross-ledger 同一性 assert: v2 台帳の判定器 4 pin + statement +
+    wrapper + spec 2 本の sha256 が、v1 台帳（`ledger_l0br.yaml`）の対応値と
+    一致すること——「同一判定器・同一課題・スキーマ不変」の機械証明
+    （design memo テスト観点 §2 の中心要件）。"""
+
+    v1 = _load_ledger_l0br()
+    v2 = _load_ledger_l0br_v2()
+
+    v1_judge = v1["judge"]
+    v2_judge = v2["judge"]
+    for label in ("run_round", "pareto_eval", "section_map_t2", "pareto_spec"):
+        assert v2_judge[label]["sha256"] == v1_judge[label]["sha256"], f"judge.{label} sha256 diverged from v1"
+
+    v1_br_d1 = next(task for task in v1["tasks"] if task["id"] == "br_d1")
+    v2_br_d1 = next(task for task in v2["tasks"] if task["id"] == "br_d1")
+    assert v2_br_d1["statement"]["sha256"] == v1_br_d1["statement"]["sha256"], "tasks[br_d1].statement diverged from v1"
+    assert (
+        v2_br_d1["registration"]["sha256"] == v1_br_d1["registration"]["sha256"]
+    ), "tasks[br_d1].registration diverged from v1"
+    assert (
+        v2_br_d1["positive_control"]["score_sha256"] == v1_br_d1["positive_control"]["score_sha256"]
+    ), "tasks[br_d1].positive_control.score_sha256 diverged from v1"
+    assert (
+        v2_br_d1["positive_control"]["report_sha256"] == v1_br_d1["positive_control"]["report_sha256"]
+    ), "tasks[br_d1].positive_control.report_sha256 diverged from v1"
+
+    assert (
+        v2["author_identity"]["wrapper"]["sha256"] == v1["author_identity"]["wrapper"]["sha256"]
+    ), "author_identity.wrapper diverged from v1"
+
+    v1_freeze = v1["contract_freeze"]
+    v2_freeze = v2["contract_freeze"]
+    for label in ("authoring_contract_l0", "authoring_trusted_axes_l0"):
+        assert (
+            v2_freeze[label]["sha256"] == v1_freeze[label]["sha256"]
+        ), f"contract_freeze.{label} diverged from v1 (schema spec must be unchanged)"
+
+    # 契約文書そのものは v1/v2 で意図的に異なる（本再測の唯一の差分変数）
+    # ——「不変であるべきもの」だけを同一性 assert の対象にし、契約文書の
+    # sha256 は同一性を主張しない。ただし v2 の v1-参照 pin は v1 台帳の
+    # contract_md と同一であるべき（比較対象が本物の v1 であることの保証）。
+    assert v2_freeze["contract_v1_reference"]["sha256"] == v1_freeze["contract_md"]["sha256"]
+    assert v2_freeze["contract_v2"]["sha256"] != v1_freeze["contract_md"]["sha256"]
+
+
+# --- ledger_l0br_v2.yaml series_runs evidence pin traversal (BR-D1 v2 remeasure
+# completion — 2026-08-07 台帳最終化) --------------------------------------
+
+
+def test_ledger_l0br_v2_series_runs_pins_match_actual_file_sha256():
+    """`series_runs` に記載された全 round エントリの sha256 pin
+    （payload_manifest / score / intent / report / pareto、存在する周回の
+    み）が対応する実ファイルの実測 sha256 と一致することを assert する
+    （`test_ledger_l0br_pins_match_actual_file_sha256`（v1）の per-round
+    traverse 部分と同型のパターンを v2 の evidence 配置
+    （`series/{task}_{series}/round{N}/`）へ適用する）。あわせて (1)
+    `payload.manifest.json` 内部の `payload_sha256` フィールドが台帳の
+    `payload_sha256` pin と一致すること（payload.md 自体は on-disk に
+    保持しない設計のため、この内部フィールド経由での束縛になる——v1 と
+    同一の設計）、(2) `pareto_vs_round*.json` の `improved` boolean が台帳
+    `pareto_vs_prev` と一致すること、を content cross-check する。"""
+
+    ledger = _load_ledger_l0br_v2()
+
+    file_checks: list[tuple[str, Path, str]] = []
+    manifest_field_checks: list[tuple[str, object, object]] = []
+    pareto_content_checks: list[tuple[str, Path, bool]] = []
+
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_V2_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            prefix = f"series_runs[br_d1/{series_entry['series']}].rounds[{round_num}]"
+
+            for field, filename in (
+                ("payload_manifest_sha256", "payload.manifest.json"),
+                ("score_sha256", "score.yaml"),
+                ("intent_sha256", "intent.yaml"),
+                ("report_sha256", "report.json"),
+            ):
+                file_checks.append((f"{prefix}.{field}", round_dir / filename, round_entry[field]))
+
+            manifest = json.loads((round_dir / "payload.manifest.json").read_text(encoding="utf-8"))
+            manifest_field_checks.append(
+                (
+                    f"{prefix}.payload.manifest.payload_sha256",
+                    manifest["payload_sha256"],
+                    round_entry["payload_sha256"],
+                )
+            )
+
+            pareto_sha = round_entry["pareto_report_sha256"]
+            pareto_path = round_dir / f"pareto_vs_round{round_num - 1}.json"
+            assert round_entry["token_ban_report_sha256"] is None, (
+                f"{prefix}: br_d1 is token_ban: false — token_ban_report_sha256 must stay "
+                "null (this test's traversal does not handle a non-null pin)"
+            )
+            if pareto_sha is not None:
+                file_checks.append((f"{prefix}.pareto_report_sha256", pareto_path, pareto_sha))
+                pareto_content_checks.append((f"{prefix}.pareto_vs_prev", pareto_path, round_entry["pareto_vs_prev"]))
+            else:
+                assert not pareto_path.exists(), (
+                    f"{prefix}: pareto_report_sha256 pin is null but {pareto_path} exists on disk"
+                )
+                assert round_num == 1, f"{prefix}: pareto_report_sha256 is null for a non-round1 round"
+
+    assert file_checks, "no pin entries collected — test would vacuously pass"
+    assert len(file_checks) == 6 * 4 + 4, (
+        f"expected 6 rounds x 4 always-present pins + 4 pareto pins (round2/round3 x 2 series), "
+        f"got {len(file_checks)}"
+    )
+    for label, path, expected_sha256 in file_checks:
+        assert path.is_file(), f"{label}: pinned path does not exist: {path}"
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert actual_sha256 == expected_sha256, f"{label}: sha256 mismatch for {path}"
+
+    assert manifest_field_checks, "no manifest binding checks collected — test would vacuously pass"
+    for label, actual_value, expected_value in manifest_field_checks:
+        assert actual_value == expected_value, (
+            f"{label}: manifest value {actual_value!r} does not match ledger pin {expected_value!r}"
+        )
+
+    assert pareto_content_checks, "no pareto content cross-checks collected — test would vacuously pass"
+    assert len(pareto_content_checks) == 4, f"expected exactly 4 pareto-pinned rounds, got {len(pareto_content_checks)}"
+    for label, path, expected_improved in pareto_content_checks:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["improved"] == expected_improved, (
+            f"{label}: pareto report improved={payload['improved']!r} does not match ledger "
+            f"pareto_vs_prev={expected_improved!r}"
+        )
+
+
+def test_ledger_l0br_v2_series_outcome_derivable_from_pinned_reports():
+    """`test_ledger_l0br_series_outcome_derivable_from_pinned_reports`（v1）
+    と同型: (1) 各周回の pin 済み `report.json` の verdicts が台帳
+    round エントリの `verdicts` と一致すること、(2) 登録済み成功述語
+    （`protocol.success_predicate`、br_d1 は token_ban: false のため
+    token_ban 判定は非適用）を pin 済み verdicts へ適用して系列ごとに最初の
+    成功周回を再計算し、`rounds_to_success`/`outcome` が台帳値と一致する
+    ことを assert する。"""
+
+    ledger = _load_ledger_l0br_v2()
+
+    verdict_checks: list[tuple[str, dict, dict]] = []
+    outcome_checks: list[tuple[str, str, object, object]] = []
+
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_V2_DIR / series_entry["files_dir"]
+
+        first_success_round = None
+        for round_entry in sorted(series_entry["rounds"], key=lambda r: r["round"]):
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            report = json.loads((round_dir / "report.json").read_text(encoding="utf-8"))
+            actual_verdicts = {
+                "brightness": report["axes"]["brightness"]["verdict"],
+                "key": report["axes"]["key"]["verdict"],
+                "structure": report["axes"]["structure"]["verdict"],
+                "symbolic_validation_status": report["symbolic_validation"]["status"],
+            }
+            verdict_checks.append((f"br_d1/{series_entry['series']}.rounds[{round_num}]", actual_verdicts, round_entry["verdicts"]))
+
+            if first_success_round is None and _round_success(
+                actual_verdicts, token_ban_required=False, token_ban_status=round_entry["token_ban"]
+            ):
+                first_success_round = round_num
+
+        outcome_checks.append(
+            (
+                f"br_d1/{series_entry['series']}",
+                "outcome",
+                "reached" if first_success_round is not None else "unreached",
+                series_entry["outcome"],
+            )
+        )
+        outcome_checks.append(
+            (
+                f"br_d1/{series_entry['series']}",
+                "rounds_to_success",
+                first_success_round,
+                series_entry["rounds_to_success"],
+            )
+        )
+
+    assert verdict_checks, "no verdict checks collected — test would vacuously pass"
+    assert len(verdict_checks) == 6, f"expected exactly 6 rounds across the completed v2 battery, got {len(verdict_checks)}"
+    for label, actual_verdicts, ledger_verdicts in verdict_checks:
+        assert actual_verdicts == ledger_verdicts, (
+            f"{label}: report.json verdicts {actual_verdicts!r} do not match ledger verdicts {ledger_verdicts!r}"
+        )
+
+    assert outcome_checks, "no outcome checks collected — test would vacuously pass"
+    for label, field, derived_value, ledger_value in outcome_checks:
+        assert derived_value == ledger_value, (
+            f"{label}.{field}: derived from pinned reports = {derived_value!r}, ledger = {ledger_value!r}"
+        )
+
+
+# --- ledger_l0br_v2.yaml series_runs frozen-judge reevaluation binding
+# (PR #250 Codex レビュー第 1 巡, 指摘 1: v1 台帳が持つ「凍結判定器による
+# 再評価拘束」の v2 版が欠けていた——従来の v2 テスト群は committed
+# report.json / pareto_vs_round*.json の verdicts / improved を信頼して
+# 転記照合するのみで、pin 済み score.yaml/report.json のペアを実際に
+# 判定器へ通して再現できるかは見ていなかった。下記 2 テストで v1 と同型の
+# 拘束を追加する。) ---------------------------------------------------------
+
+
+def test_ledger_l0br_v2_series_runs_pareto_reports_reproduce_frozen_judge_reevaluation():
+    """`test_ledger_l0br_pareto_reports_reproduce_frozen_judge_reevaluation`
+    （v1、PR #249 第 12 巡）と同型: pin 済み前周回/当該周回の `report.json`
+    （`test_ledger_l0br_v2_series_runs_pins_match_actual_file_sha256` で
+    sha256 実体照合済み）を入力に、凍結判定器（`judge.pareto_eval`/
+    `judge.pareto_spec` として pin 済み——`test_ledger_l0br_v2_cross_ledger_
+    pins_match_v1_ledger` で v1 と同一 sha256 と確認済みであり、実体は本
+    ファイル冒頭でロード済みの `pareto_eval`/`PARETO_SPEC`（v1/v2 とも同一
+    パス `scripts/pareto_eval.py`/`frozen/pareto.yaml` を指すため使い回して
+    問題ない）で**再評価**し、出力が pin 済み `pareto_vs_round{N-1}.json`
+    とバイト等値であることを assert する（`pareto_eval.main` の `-o`
+    publish と同一の `json.dumps(result, ensure_ascii=False, indent=2,
+    sort_keys=True) + "\n"` 直列化を用いる——決定論的評価器のため byte
+    等値が成立するはず）。音声合成を伴わないため高速レーン
+    （`pytest -m "not slow"`）に残す（v1 の同型テストと同じ扱い）。"""
+
+    ledger = _load_ledger_l0br_v2()
+
+    reeval_checks: list[tuple[str, str, str]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_V2_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            if round_entry["pareto_report_sha256"] is None:
+                continue
+            round_dir = round_dir_base / f"round{round_num}"
+            prev_round_dir = round_dir_base / f"round{round_num - 1}"
+
+            prev_report = json.loads((prev_round_dir / "report.json").read_text(encoding="utf-8"))
+            curr_report = json.loads((round_dir / "report.json").read_text(encoding="utf-8"))
+            result = pareto_eval.evaluate(prev_report, curr_report, PARETO_SPEC)
+            reevaluated_content = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+            pinned_path = round_dir / f"pareto_vs_round{round_num - 1}.json"
+            pinned_content = pinned_path.read_text(encoding="utf-8")
+
+            label = f"br_d1/{series_entry['series']}.rounds[{round_num}]"
+            reeval_checks.append((label, reevaluated_content, pinned_content))
+
+    assert reeval_checks, "no pareto re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 4, (
+        f"expected exactly 4 pareto-pin'd rounds across the completed v2 battery, got "
+        f"{len(reeval_checks)}"
+    )
+    for label, reevaluated_content, pinned_content in reeval_checks:
+        assert reevaluated_content == pinned_content, (
+            f"{label}: re-evaluating the pinned prev/curr report.json pair through the "
+            "frozen judge (pareto_eval.evaluate + frozen/pareto.yaml) does not "
+            "byte-reproduce the pinned pareto_vs_round*.json — the pin may not have been "
+            "produced from this input pair"
+        )
+
+
+@pytest.mark.slow
+def test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation(tmp_path: Path):
+    """`test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation`
+    （v1、PR #249 第 13 巡）と同型: `report.json` は評価対象の score への
+    束縛を内部に持たない（v1 と同じ理由——`score_sha256` フィールドが無い）
+    ため、pin 済み `score.yaml` を凍結判定器（`run_round.py`、
+    `judge.run_round` として pin 済み——`test_ledger_l0br_v2_cross_ledger_
+    pins_match_v1_ledger` で v1 と同一 sha256 と確認済み）による**再導出**
+    で束縛する: v2 の完了バッテリー全 2 系列 x 3 周回 = 6 周回について、
+    pin 済み `score.yaml` + 当該課題の section map（台帳 `tasks[0].
+    section_map` = `frozen/section_map_t2.json`）を `run_round.run_round()`
+    へ入力し、出力 report が pin 済み `report.json` と**バイト等値**である
+    ことを assert する。出力は `tmp_path` のみへ書き、リポジトリ内ファイル
+    は一切変更しない。
+
+    `@pytest.mark.slow`: 6 周回分の合成 + 抽出を伴うため重い（v1 実測 1
+    周回あたり約 45〜75 秒からの外挿で概算 5〜8 分）。日常の高速ループ
+    （`pytest -m "not slow"`）から除外され、CI では v1 の同型テスト
+    （`test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation`）と
+    同じ `test-l0b-reeval` シャードに配置する（`.github/workflows/ci.yml`
+    参照——`test-rest` からは deselect 済み）。"""
+
+    ledger = _load_ledger_l0br_v2()
+    section_map_path = _resolve_battery_v2_relative(ledger["tasks"][0]["section_map"])
+
+    reeval_checks: list[tuple[str, bytes, bytes]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_V2_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            score_path = round_dir / "score.yaml"
+            pinned_report_path = round_dir / "report.json"
+
+            label = f"br_d1/{series_entry['series']}.rounds[{round_num}]"
+            workdir = tmp_path / f"br_d1_{series_entry['series']}_round{round_num}_wd"
+            output_path = tmp_path / f"br_d1_{series_entry['series']}_round{round_num}_report.json"
+
+            run_round.run_round(
+                score_path,
+                workdir,
+                round_num,
+                output_path,
+                section_map_path=section_map_path,
+            )
+            reeval_checks.append((label, output_path.read_bytes(), pinned_report_path.read_bytes()))
+
+    assert reeval_checks, "no report re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 6, (
+        f"expected exactly 6 rounds across the completed v2 battery, got {len(reeval_checks)}"
+    )
+    for label, reevaluated_bytes, pinned_bytes in reeval_checks:
+        assert reevaluated_bytes == pinned_bytes, (
+            f"{label}: re-running the pinned score.yaml through the frozen judge "
+            "(run_round.run_round with the task's pinned section map) does not "
+            "byte-reproduce the pinned report.json — the pin may not have been produced "
+            "from this score"
+        )
+
+
+def test_ledger_l0br_v2_series_runs_payloads_recompose_via_frozen_measurement_composer(tmp_path: Path):
+    """`test_ledger_l0br_payloads_recompose_via_frozen_measurement_composer`
+    （v1）と同型: pin 済み `payload.manifest.json` の `parts[*].{role,path,
+    sha256}` から宣言 manifest を再構築し、role→保持済み成果物の対応
+    （`contract` → contract_freeze.contract_v2、`task` → 当該 task の
+    statement、`own_score`/`own_intent`/`diff_report` → 同一系列の直前周回
+    の score.yaml/intent.yaml/report.json）で `tmp_path` に part 実体を配置
+    し、v2 台帳の測定時 composer（`payload_composition.composer.frozen_
+    copy`）で再組成する。出力 `payload.manifest.json` が pin 済みのものと
+    バイト等値であることを assert する。
+
+    注意: v2 の測定時 composer は v1 の凍結コピー（sha256 a1bd613a…）とは
+    **別物**（sha256 b5be5300…、v1 実測後の堅牢化変更を含む）。本テストの
+    再現主張は「v2 実測時に実行された composer 実体」を通すことに意味が
+    あるため、v1 モジュールへの差し替えは（良性 fixture では同一 manifest
+    を出しても）主張を偽りにする——必ず v2 台帳の frozen_copy を用いる。"""
+
+    ledger = _load_ledger_l0br_v2()
+    contract_v2_path = _resolve_battery_v2_relative(ledger["contract_freeze"]["contract_v2"]["path"])
+    statement_path = _resolve_battery_v2_relative(ledger["tasks"][0]["statement"]["path"])
+
+    recompose_checks: list[tuple[str, bytes, bytes]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_V2_DIR / series_entry["files_dir"]
+
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            prev_round_dir = round_dir_base / f"round{round_num - 1}" if round_num > 1 else None
+            pinned_manifest_path = round_dir / "payload.manifest.json"
+            pinned_manifest = json.loads(pinned_manifest_path.read_text(encoding="utf-8"))
+
+            work_dir = tmp_path / f"br_d1_{series_entry['series']}_round{round_num}"
+            work_dir.mkdir()
+            declared_parts = []
+            for part in pinned_manifest["parts"]:
+                role = part["role"]
+                declared_path = part["path"]
+                declared_sha256 = part["sha256"]
+                if role == "contract":
+                    source_path = contract_v2_path
+                elif role == "task":
+                    source_path = statement_path
+                elif role in _ROLE_TO_PREVIOUS_ROUND_FIELD:
+                    assert prev_round_dir is not None, (
+                        f"round {round_num} has a {role!r} part but no previous round to bind it to"
+                    )
+                    source_path = prev_round_dir / _ROLE_TO_PREVIOUS_ROUND_FIELD[role]
+                else:
+                    raise AssertionError(
+                        f"unmapped payload manifest part role {role!r} — no known binding for v2"
+                    )
+                source_bytes = source_path.read_bytes()
+                actual_sha256 = hashlib.sha256(source_bytes).hexdigest()
+                assert actual_sha256 == declared_sha256, (
+                    f"round{round_num} part role={role!r}: {source_path} sha256 {actual_sha256} "
+                    f"does not match pin manifest's declared sha256 {declared_sha256}"
+                )
+                dest_path = work_dir / declared_path
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                dest_path.write_bytes(source_bytes)
+                declared_parts.append({"role": role, "path": declared_path, "sha256": declared_sha256})
+
+            declared_manifest = {
+                "schema_version": composer_at_measurement_v2.SCHEMA_VERSION,
+                "experiment_id": pinned_manifest["experiment_id"],
+                "round_label": pinned_manifest["round_label"],
+                "parts": declared_parts,
+            }
+            manifest_yaml_path = work_dir / "manifest.yaml"
+            manifest_yaml_path.write_text(yaml.safe_dump(declared_manifest, sort_keys=False), encoding="utf-8")
+
+            out_dir = work_dir / "out"
+            composer_at_measurement_v2.compose_payload(manifest_yaml_path, out_dir)
+            reproduced_bytes = (out_dir / "payload.manifest.json").read_bytes()
+            recompose_checks.append(
+                (f"br_d1/{series_entry['series']}.rounds[{round_num}]", reproduced_bytes, pinned_manifest_path.read_bytes())
+            )
+
+    assert recompose_checks, "no payload recomposition checks collected — test would vacuously pass"
+    assert len(recompose_checks) == 6, f"expected exactly 6 rounds across the completed v2 battery, got {len(recompose_checks)}"
+    for label, reproduced_bytes, pinned_bytes in recompose_checks:
+        assert reproduced_bytes == pinned_bytes, (
+            f"{label}: recomposing from the pin manifest's declared parts through the frozen "
+            "measurement-time composer does not byte-reproduce the pinned payload.manifest.json "
+            "— the pin may not have been produced from these inputs"
+        )

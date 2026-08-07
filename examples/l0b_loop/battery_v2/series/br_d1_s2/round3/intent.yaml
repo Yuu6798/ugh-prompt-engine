@@ -1,0 +1,85 @@
+round: 3
+
+unchanged_because_preserved:
+  - "physical.key, physical.brightness, physical.bpm, physical.time_signature,
+     stereo_width, active_rate_target, valley_depth_target: round1・round2とも
+     key/brightnessはpreservedのまま2周連続で維持されており、この束を動かす
+     根拠がないため据え置く。"
+  - "intro / chorus1 / chorus2 のセクション定義(section名・bars・role・physical)は
+     round2と完全に同一のまま維持。intro(tier5既定)→chorus1(tier4 full energy)
+     の低→高境界はround1・round2とも余剰bridgeを出さず単一境界として素直に
+     検出されており(観測開始点0→intro終端まで)、この境界とchorus1/chorus2の
+     設定を変える理由はない。events は今回も省略(契約が"最も安全"と明記、
+     round1・round2でkey preserved実績あり)。"
+
+diagnosed_failure_round2:
+  observed: "[intro, chorus, chorus, bridge, outro] (要求は intro, chorus,
+    chorus, outro の4要素)。round1の失敗と bridge の位置
+    (17.8329s-23.4522s、境界秒まで完全一致)が寸分違わず同一だった。"
+  key_finding: >
+    round2でoutroのphysicalを"sparse"(tier3: パルスのみ・メロディなし)から
+    認識語を含まない自由文(tier5: 既定、パルス+メロディを維持)へ変更したが、
+    observed_sectionsの5区間すべての秒数(6.5945/5.6192/5.6192/5.6193/6.5478)
+    がround1診断時の数値と完全に一致した。tier3→tier5はメロディの有無が
+    切り替わる実質的な変更であるにもかかわらず結果が完全不変だったことから、
+    「chorus1終端(6.5945s)以降30sまでの区間は、outroのtier設定(tier3/tier5の
+    差)によらず単一の均質ブロックとして扱われ、ほぼ等間隔(~5.6s)の4分割に
+    機械的に割られている」という仮説を採用する。この等間隔分割は宣言した
+    セクション境界(15.0s / 22.5s)と一致しておらず、chorus1/chorus2間の
+    "境界"(12.2137s)もacoustic上は無意味なはず(両方とも同一のtier4設定)
+    である点が、機械的均等分割説を補強する。
+  hypothesis_update: >
+    round2のintentが立てた作業仮説("tier順の音量ギャップが大きいほど誤検出
+    が減る")はtier3→tier5の変更が無効だったことで棄却する。round2のrisks
+    節で予告した通り、「境界そのもの(強→弱遷移という方向、またはchorus
+    反復2回目という位置)が原因」という別仮説に切り替える。ただしtier3/5は
+    いずれも"パルスあり"という共通点を持つ("既定よりやや静か"程度の差しか
+    なく、契約のtier順で見てもtier1/2(ドローンのみ・パルスなし)ほどの
+    質感の断絶がない)。round1・round2で唯一未検証なのが tier1/2 という
+    最大コントラストの選択肢であるため、今回はそこを検証する。
+
+change_this_round:
+  target: "outro セクションの physical のみ(単一変数)"
+  from: "認識語なしの自由文 (tier5: 既定。パルス+メロディを維持)"
+  to: "\"low density\" を含む自由文 (tier2: ドローンのみ。パルス・メロディとも
+    鳴らさない、chorusのパルス主体の質感と最大限に断絶した状態)"
+  rationale: >
+    tier3(パルスのみ)とtier5(パルス+メロディ)という「パルスあり」同士の
+    差では境界検出結果が完全不変だった以上、次に試すべきは「パルスの
+    有無」という質的に異なる軸である。契約のtier順表でパルスが完全に
+    消えるのはtier1("silence"/"no kick")とtier2("low density"/"sub bass")
+    のみ。tier1は最静音でドローンすら聴こえにくい懸念があるため、
+    ドローンの存在は保ちながらパルスを切るtier2("low density")を選んだ
+    ("release"や"full energy"とは非等価な独立tierであることは契約の優先
+    順位表で確認済み)。物理テキストは "low density" というラテン文字の
+    綴りをそのまま含む一方、role側("曲を静かに終える終結部")には認識語
+    彙(silence/no kick/low density/sub bass/sparse/full energy/release/
+    rest)のいずれの綴りも含まないことを確認済み(round1・round2から
+    role文自体は変更していない)。
+  bars_unchanged: >
+    outroのbarsは4(7.5s宣言)のまま据え置いた。round1・round2で示唆された
+    「均質ブロックの機械的等分割」が本当にoutroのtier設定と無関係なら、
+    bars変更は次の切り分け変数として温存すべきであり、今回はtierという
+    単一変数のみを動かす。
+
+risks_and_next_steps:
+  - "chorus1/chorus2間の境界(12.2137s)がround1・round2で一貫して検出されて
+    いたのは、outro含む末尾ブロック全体を均質とみなした機械的等分割の
+    副産物である疑いが強い。outroをtier2で強く分離した結果、その等分割
+    効果自体が消え、acoustic上完全に同一のchorus1/chorus2が単一区間へ
+    併合されるリスクがある。その場合 observed は [intro, chorus, outro]
+    (3要素、chorus欠落)になりうる——bridge挿入(削除1手で一致)より悪化しうる
+    退行であり、次周回で検知した場合は tier1/2 の採用を維持しつつ
+    chorus1/chorus2間に人為的な質感差(例: 片方だけbars変更や別の認識語)
+    を導入して区別を作る方向に切り替える。"
+  - "tier2への変更でもbridgeが同じ位置(17.8329s-23.4522s、または近傍)に
+    残る場合、『パルス有無の質的差』仮説も棄却し、境界検出が
+    section内容そのものと無関係な固定的振る舞い(例: 曲長に対する
+    一定比率での均等分割)である可能性を最有力候補に格上げする。その
+    場合はtier操作ではなくbars比率の再設計(intro/chorus/chorus/outroの
+    小節数バランスを変える)を次の変数として試す。"
+  - "observed_sectionsの各区間長を今回の結果で確認し、6.5945/5.6192×3/
+    6.5478という round1・round2 と同一のパターンから変化したかどうかを
+    最優先で見る。変化があれば『tier設定は無視されない』ことの直接証拠
+    になり、変化がなければ『末尾ブロックの分割はtierと無関係』という
+    仮説がさらに補強される。"

@@ -1,0 +1,53 @@
+design_rationale:
+  length_choice: >
+    全セクション 3 bars @ bpm=96, 4/4 = 7.5 秒/セクション（bars * 4 * 60/96）。
+    §2 可行窓の陽性対照実測値（7.5 秒）に一致させ、6.2 秒吸収・12.3 秒過分割
+    の間の狭い帯を狙った。4 セクション合計 30 秒。
+  events_omission: >
+    events.chord_progression は意図的に省略。§2「自作 chord_progression と
+    調観測の関係」より、自作進行は宣言 key より優勢に調推定を倒しうる（実測で
+    F/major 系へ複数回転倒）ため、既定進行に key を追従させるのが最も安全と
+    判断した。
+  brightness: >
+    physical.brightness: dark を直接宣言。既知の攪乱要因（自作進行のような）
+    が開示されていないため、素直な宣言をそのまま採用。
+  hint_tier_choices:
+    intro: >
+      認識語を一切含まない自由文（既定=tier5, 中庸）を採用。tier3
+      (sparse)/tier1-2 系ではなく tier5 を選んだのは、§2 新規開示「弱い演奏
+      (sparse/rest等) → full energy への遷移直後に幅約5秒の bridge が
+      過剰検出されうる」の対象語彙を明示的に避け、intro→chorus の
+      低→高遷移のコントラスト幅を小さく保つため。
+    chorus_x2: >
+      "full energy" (tier4) を両方に使用。"release" と等価と開示されている
+      ため書き分けの意味はない。2 つの chorus が完全に同一ヒントである点は
+      リスクとして認識している（下記 risks 参照）。
+    outro: >
+      "sparse" (tier3) を使用。chorus→outro は高→低遷移であり、§2 開示では
+      低→高方向のみが bridge 過剰検出の対象とされているため、この向きの
+      遷移は比較的安全と判断した。tier1/2 のドローンは chord_progression を
+      無音化するため避けた。
+  substring_safety: >
+    role フィールドは全て日本語で記述し、認識語彙（silence, no kick, low
+    density, sub bass, sparse, full energy, release, rest）とのラテン文字
+    部分文字列一致を構造的に排除した。physical フィールドで意図的に使うのは
+    "full energy" と "sparse" のみ。
+risks_and_hedges:
+  duplicate_chorus_merge: >
+    2 つの chorus セクションはヒント・bars とも同一のため、演奏出力に音響的
+    な継ぎ目が生じない可能性がある。その場合 15 秒（7.5s×2）の連続区間として
+    観測され、§2「長い持続区間は内部ダイナミクスの変化で過分割されうる」
+    （12.3 秒で過分割された実測あり）に基づき、15 秒区間が自動的に分割される
+    ことを期待した設計。分割点が意図通り 7.5 秒付近（陽性対照と同じ長さ）に
+    落ちるかは未検証であり、次周回の observed_sections で境界秒を確認する
+    必要がある。
+  intro_chorus_transition: >
+    intro を tier5（silence/sparse 系より強い）にして低→高コントラストを
+    弱めたが、§2 の bridge 過剰検出条件（"弱い演奏から強い演奏への直接切替"）
+    に完全に該当しない保証はない。observed_sections に "bridge" が
+    混入した場合、intro のヒントをさらに強める方向で再調整する。
+  terminal_boundary_early_detection: >
+    §2 新規開示（終盤境界は宣言より約2.6-2.7秒早く検出される系統誤差）は
+    R1（ラベル列一致）には影響しないため今周回では補正していない。次周回で
+    observed_sections の秒数を境界調整に使う場合はこの系統誤差を差し引く。
+tools_used: none

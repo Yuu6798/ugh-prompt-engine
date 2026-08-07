@@ -221,6 +221,7 @@ tests/ / docs/ / examples/     # pytest / design documents (index: docs/README.m
 | [`docs/l0a_authoring_contract.md`](docs/l0a_authoring_contract.md) | L0a 著述契約 v1: 公開スキーマ範囲 spec (`config/authoring_contract_l0.yaml`) + `svprpe validate` エラープロトコル (kind 語彙) + `AuthoringDiffReport` 正規形 (境界時刻スキーマ・notes 白リスト) + 信頼軸表の機械導出 (`config/authoring_trusted_axes_l0.yaml`) + pin 規則 |
 | [`docs/l0b_closed_loop_record.md`](docs/l0b_closed_loop_record.md) | L0b 閉ループ記録 (T1/T2): L0S 同一課題が T1 で 1 周回成功 (契約 v1 仮説と整合・交絡あり = §2)、T2 は注記なしクリーン系列 round4c→5c の Pareto 改善で §5 操舵証拠を充足 (§3.3。原系列の改善は off-contract 除外 = §3.2)。副産物 = ヒントトークン非加算・role 文照合リーク×2・drone 区間の進行無音化 (L0a v2 材料) |
 | [`docs/l0br_robustness_record.md`](docs/l0br_robustness_record.md) | L0b-R 単一著者頑健性: 課題難易度×到達率の第 1 バッテリー（3 課題×2 系列・到達 5/6・Pareto 改善 5 件・全周回ツール使用 0）。到達の分岐は著者戦略に帰す仮説（揺らぎ未分離）、唯一の未到達は contract_defect（ヒント非加算）。新規 v2 材料 = 自作進行の調転倒（3 系列再現）・立ち上がり非対称の過渡帯 |
+| [`docs/l0a_v2_remeasure_record.md`](docs/l0a_v2_remeasure_record.md) | L0a v2 開示のみ改訂 × BR-D1 再測: v1 contract_defect が開示で解消するかの実測（2/2 到達・各 3 周回）。残存 bridge 特性 = v3 開示候補 |
 
 ## ドキュメント管理ポリシー
 

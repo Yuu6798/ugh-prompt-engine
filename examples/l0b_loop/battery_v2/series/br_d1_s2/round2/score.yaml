@@ -1,0 +1,48 @@
+meta:
+  title: "Still Point"
+  version: "0.2"
+
+semantic:
+  core: "静かな始まりから力強い主題の反復を経て、静寂へ還る短い器楽曲"
+  grv:
+    primary: "minimal electronic"
+    secondary: "chamber"
+  delta_e:
+    overall: "抑制から解放へ、そして静けさへ戻る一本道の情動曲線"
+  avoid: []
+
+physical:
+  bpm: 128
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: "intro"
+    bars: 4
+    role: "曲の開始を告げる導入部、主題を控えめに提示する"
+    physical: "落ち着いた立ち上がりで主題の輪郭だけを示す"
+  - section: "chorus"
+    bars: 4
+    role: "サビ、主題を力強く提示する"
+    physical: "full energy"
+  - section: "chorus"
+    bars: 4
+    role: "サビの再提示、同じ強度を保って反復する"
+    physical: "full energy"
+  - section: "outro"
+    bars: 4
+    role: "曲を静かに終える終結部"
+    physical: "音を絞った落ち着いた終わり方"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure

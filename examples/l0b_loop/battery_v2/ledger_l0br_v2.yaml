@@ -1,0 +1,483 @@
+# L0b-R BR-D1 v2 再測台帳 — 契約 v2（開示のみの改訂）による分離測定
+#
+# 一次資料。事前登録（tasks / 判定規約 / pin）→ 実行 evidence（series_runs
+# 追記）の 2 段 commit で事前登録性を git 履歴で証明する（v1 台帳
+# `../battery/ledger_l0br.yaml` と同じ運用規約）。登録 commit 187c57e で
+# `series_runs` / `off_contract_events` を登録時の正規状態（空 list）の
+# まま commit し、実測 commit で `series_runs` を追記済み——この 2 段
+# commit の履歴自体が事前登録性の証明であり、登録時点の状態は git 履歴
+# （187c57e）で参照できる。
+#
+# 目的: v1 バッテリー（`../battery/ledger_l0br.yaml`）の br_d1/s1 が
+# `failure_mode: contract_defect` と判定された原因——契約 v1 が未開示
+# だった計器特性（ヒント解決の非加算・優先順位制、`role` へのヒント語
+# 漏れ込み照合、drone 化セクションでの `chord_progression` 無音化）——が、
+# **開示のみを追加した契約改訂（`../contract_v2.md`）** によって実際に
+# 解消するかどうかを、判定器・演奏者・report 正規形を一切変更せずに測定
+# する。v1 バッテリーとの差分のうち**統制下にある変数**は契約文書
+# （`contract.md` → `contract_v2.md`）のみに限定する。ただし著者は
+# 「同一ポリシー（同一モデル系・fresh instance・情報遮断）の確率的
+# 抽出」であり個体サンプルはバッチ間・周回間で異なる——モデルスナップ
+# ショット・サンプリング設定は不記録（`author_identity.provenance_
+# limitations`）のため、著者サンプリング揺らぎとの交絡は排除ではなく
+# `preregistered_hypothesis` の n=2 正直宣言で扱う（v1 実測自体が
+# 1/2 の著者間分散を示している。判定基準側は判定器 pin + attestation
+# の二層で不変を束縛）。
+#
+# 境界宣言（`../battery/ledger_l0br.yaml` ヘッダコメントと同型。PR #249
+# Codex レビュー、耐久性指摘を受けた明文化を継承）: この git 証明は本
+# リポジトリのマージ慣行（マージコミット）を保持する文脈でのみ checkout
+# 再現可能。squash マージや履歴を持たない export の文脈では git 系譜は
+# attestation（当時の測定者による証言）へ格下げされ、git 非依存の一次
+# 再現アンカーは本台帳の content pin（sha256）になる。
+#
+# Design Memo = L0a v2 + BR-D1 再測（Fable 設計・2026-08-07）。
+# 正本 = docs/llm_adapter_planning.md §5（成功条件）+ `../battery/
+# ledger_l0br.yaml`（v1 台帳・比較対象）+ 本台帳。
+
+schema_version: "l0br-v2-remeasure/0.1"
+experiment: "L0b-R-v2 (BR-D1 remeasure under contract v2)"
+# 登録 commit 187c57e の git タイムスタンプと一致（丸めなし）
+registered_utc: "2026-08-07T03:30:15Z"
+route: >-
+  Claude 完結（コーディネーター = セッション本体 / 著者 = 情報遮断 Sonnet
+  サブエージェント・毎周回別個体）。v1 台帳と同一ルート。
+
+contract_freeze:
+  policy: >-
+    v1 台帳の br_d1/s1 が `failure_mode: contract_defect` と判定された
+    ため、v1 台帳の失敗モード規約どおり「L0a v2 反映後に同一データで
+    再測」する対象として本台帳を起こす。判定器・演奏者・report 正規形は
+    不変——差し替えるのは契約文書のみ。この同一性の束縛は二層:
+    判定器スクリプト・section_map は下記 `judge` 節の sha が v1 台帳と
+    同一であることの cross-ledger assert が機械証明し、判定器が import
+    する演奏者・抽出器・report 正規形実装（src/svp_rpe と config/ の
+    ソース閉包）は `src_config_diff_attestation` の git 系譜 attestation
+    が束縛する（squash / export 文脈では後者は証言へ格下げ——ヘッダの
+    境界宣言と同じ規約）。
+  contract_v2:
+    path: ../contract_v2.md
+    sha256: "f224d360b64c57424ed4b9b6c91035fbb1e8cd9d39100e04cc8e95d68eff8054"
+    note: >-
+      v1 契約（`contract.md`）に対する開示追加のみの改訂（開示 6 項目、
+      `docs/l0b_closed_loop_record.md` §4 / `docs/l0br_robustness_record.md`
+      §4 実測の逐語反映）。スキーマ節（§1）・判定器・演奏者・
+      `AuthoringDiffReport` 正規形（§3）は v1 から無変更（`contract_v2.md`
+      冒頭「変更点（v1 → v2）」節を参照）。
+  contract_v1_reference:
+    path: ../contract.md
+    sha256: "5bab21e9694cb92a247f922c9a96db015bb87ba729ef411b9146881934debaca"
+    note: >-
+      比較対象の明示。本 sha は `../battery/ledger_l0br.yaml`
+      `contract_freeze.contract_md.sha256` と同一（機械確認済み——
+      cross-ledger 同一性 assert が enforce する）。v1 は凍結・変更禁止の
+      まま本台帳からは参照専用として扱う。
+  authoring_contract_l0:
+    path: ../../../config/authoring_contract_l0.yaml
+    sha256: "f34479d9683667c343179fdeef435ea02f59fb843ff62870be815511a281f8c6"
+    note: >-
+      v1 台帳と同一 sha（機械確認済み）——公開スキーマ範囲 spec は v2 で
+      不変であることの証明。
+  authoring_trusted_axes_l0:
+    path: ../../../config/authoring_trusted_axes_l0.yaml
+    sha256: "b2c6cc5528bf9b77e6d64f0111e762b41f029ee25993ea99c00ccb81dca6b335"
+    note: >-
+      v1 台帳と同一 sha（機械確認済み）——信頼軸表は v2 で不変であることの
+      証明。
+
+# 実行エンジン閉包の attestation（v1 台帳の同名フィールドと同型。PR #250
+# Codex レビュー第 3 巡指摘 1 を受けて追記）: 下記 judge 4 pin が束縛する
+# のは判定器スクリプト・section map の同一性であり、`run_round.py` が
+# import する src/svp_rpe（演奏者・抽出器）と config/ のソース閉包は git
+# 系譜による attestation で束縛する。squash / export 文脈では本フィールド
+# は当時の測定者による証言へ格下げされる（台帳ヘッダの境界宣言と同じ規約）。
+src_config_diff_attestation:
+  verified_utc: "2026-08-07"
+  base_commit: "5699566"  # PR #249 マージ後 main = 本ブランチの merge-base
+  command: "git diff --stat 5699566..1f52f70 -- src/ config/"
+  # 上端 1f52f70 = 実測完了 commit（s2 round3 evidence）。可動 ref (HEAD)
+  # ではなく固定 commit を両端に取ることで、以後 src/config に正当な変更が
+  # 入っても本レシピの再実行結果（empty）は checkout 非依存に再現する
+  result: "empty (無変更 — 登録 commit 187c57e から実測完了 commit 1f52f70 まで src/ と config/ に一切手を触れていない)"
+
+judge:
+  # L0b-R（v1）と同一判定器・無改変（判定器の同一性維持が実験条件。
+  # 下記 4 pin は `../battery/ledger_l0br.yaml` `judge` 節と同一 sha
+  # ——cross-ledger 同一性 assert が enforce する）。br_d1 は
+  # `section_map_t2.json` のみを使う課題のため、run_round.py の
+  # `_FIXED_INPUT_SHA256` 整合上必要な pin は section_map_t2 のみで足り、
+  # 非 t2 の `section_map.json` は本台帳では pin しない（v1 台帳は
+  # br_d2/br_d3 も収録するため両方 pin していたが、本台帳は br_d1 単独の
+  # ため縮約する）。
+  run_round:
+    path: ../scripts/run_round.py
+    sha256: "dd9ca8a3975c97bfb9892a09d0108ccb3b7ccfe40680e4d4f8776b258be7b7b0"
+  pareto_eval:
+    path: ../scripts/pareto_eval.py
+    sha256: "4f90be5f23cce8a488974db808d1b4edff05636aeb158cfab79794b161d24faa"
+  section_map_t2:
+    path: ../frozen/section_map_t2.json
+    sha256: "7add33ba142174c5e2ee002d39af9abb2ebdc65858aed2b05564f9e8ce00d830"
+  pareto_spec:
+    path: ../frozen/pareto.yaml
+    sha256: "abe60a4f0ee3c55443bbcae9ea53d4364e620737872ce3f1a9c1a75ac9264d7f"
+    note: "改善判定 (pareto_eval.py --pareto) の凍結述語。v1 から無変更"
+
+author_identity:
+  llm_run_id: "l0br-v2-20260807-claude-code-agent-sonnet"
+  provider: "Anthropic"
+  model: >-
+    Claude Code の Agent ツールで model="sonnet"（エイリアス）を明示して
+    spawn（v1 台帳と同一指定）。本セッションのハーネス構成における解決先
+    ファミリーは claude-sonnet-5。
+  invocation: >-
+    毎周回、履歴を持たない新規サブエージェント（fresh instance）として
+    spawn。プロンプト = author_wrapper.md ラッパ本文 + compose_payload.py
+    組成の payload.md 全文の機械連結のみ（payload の contract part は
+    `contract_v2.md` に差し替わる以外は v1 と同一組成）。ツール使用要求 =
+    0 回（実測値を周回ごとに記録）。
+  wrapper:
+    path: ../battery/author_wrapper.md
+    sha256: "4eda8e1a2b1a2022c7a4aea090ec608d551b82d9fecd410ac3fea8f09684e6a0"
+    note: >-
+      v1 台帳と同一ファイル・同一 sha（新規作成しない・battery/ の既存
+      ファイルを相対参照——機械確認済み。cross-ledger 同一性 assert が
+      enforce する）。
+  provenance_limitations: >-
+    v1 と同一: Agent ツールはモデルスナップショット文字列・サンプリング
+    設定・呼び出し単位 run id を露出しないため不記録（推定補完しない）。
+
+payload_composition:
+  composer:
+    path: ../scripts/compose_payload.py
+    sha256_at_measurement: "b5be530096f076da18e765bbce52ea369331cf1a127a2b29c7c6df4c15c8b233"
+    sha256_current: "b5be530096f076da18e765bbce52ea369331cf1a127a2b29c7c6df4c15c8b233"
+    frozen_copy: composer_at_measurement/compose_payload.py
+    note: >-
+      本再測の測定時実装 = 現行 sha である旨をここに明記する。v1 台帳の
+      dual-pin（`sha256_at_measurement` != `sha256_current`）は、v1 の
+      全 16 測定周回実行後に PR #249 レビュー対応で composer が変わった
+      ことに由来する事後的な乖離だった。本台帳は**測定前に pin する**
+      ため、登録時点では `sha256_at_measurement` と `sha256_current` が
+      一致した状態で開始する（`frozen_copy` も現行ファイルの単純コピー
+      ——composer_at_measurement/README.md 参照）。実測後にレビュー対応で
+      現行実装がさらに変わった場合は、v1 と同じ dual-pin の意味論
+      （`sha256_at_measurement`/`frozen_copy` は測定時点に凍結・
+      `sha256_current` のみ更新）に従う。
+  policy: >-
+    全周回の著者可視ペイロードは compose_payload.py の出力のみ
+    （AGENTS.md §8「情報遮断実験のペイロード組成は機械化する」制定則。
+    v1 と同一方針）。手組み・注記追加・要約添付は off-contract イベント
+    として記録し、当該系列は到達率会計から除外する。周回ごとに payload
+    manifest と payload.md の sha256 を series_runs に pin する。
+
+constraint_checker:
+  path: ../scripts/check_token_ban.py
+  sha256_at_measurement: "98f13bc0af4c0a8c5bf9297c0397ab756bcc3acded2c91ca3ff9ca4565e53ee8"
+  sha256_current: "98f13bc0af4c0a8c5bf9297c0397ab756bcc3acded2c91ca3ff9ca4565e53ee8"
+  frozen_copy: checker_at_measurement/check_token_ban.py
+  note: >-
+    composer と同型の 2 系統 pin。br_d1 は `token_ban: false` のため本
+    再測では実行対象外だが、v1 台帳との構造対称性のため転記する
+    （測定前 pin につき at_measurement == current。composer と同じ理由
+    ——checker_at_measurement/README.md 参照）。
+  banned_tokens: ["silence", "no kick", "low density", "sub bass"]
+  scope: >-
+    提出 score.yaml の生テキスト全文（UTF-8 デコード後・小文字化）に対する
+    部分文字列一致。br_d1 は token_ban: false のため本再測では未適用
+    （v1 と同一課題定義）。
+
+protocol:
+  round_limit: 5
+  series_per_task: 2
+  success_predicate: >-
+    周回成功 = report.json が symbolic pass かつ key=preserved かつ
+    brightness=preserved かつ structure=exact_match、かつ token_ban 課題では
+    check_token_ban.py が pass（br_d1 は token_ban: false のため本項は
+    非適用）。系列到達（reached）= round_limit 内に周回成功 1 回以上。
+    成功周回で系列は終了する（rounds_to_success = 最初の成功周回）。
+    v1 台帳と同文。
+  improvement_accounting: >-
+    連続周回間の pareto_eval.py 出力（improved/tie/regressed）を全ペア記録。
+    Pareto 述語は frozen/pareto.yaml を無変更適用（総合スコア禁止 = D6）。
+    v1 台帳と同文。
+  failure_mode_vocab: ["unconverged", "missteered", "contract_defect", "instrument_band"]
+  failure_mode_rubric: >-
+    未到達系列の分類（系列単位・根拠を rationale に明記）。優先順位 =
+    contract_defect > instrument_band > missteered > unconverged。
+    contract_defect: 著者の編集が契約 v2 の記述下では合理的なのに、未開示の
+    計器特性（v2 §2 で開示済みの 6 項目以外の、新規発見の未開示特性）に
+    より無効・逆効果になったことが evidence（バイト同一 take・境界不応答
+    等）で示せる場合。instrument_band: 著者が陽性対照級の対比設計に到達
+    したのに境界検出が分離しなかった場合（計器帯域）。missteered: 著者が
+    ペイロード内 evidence と矛盾するレバー選択を続けた、または可視制約
+    （R4）への違反を繰り返した場合。unconverged: 周回上限到達でいずれの
+    機構も特定できない残余。v1 台帳と同文。
+  failure_mode_rubric_v2_correction: >-
+    本再測の判定を締める中心規約（v1 台帳には無い v2 固有の補正）:
+    `contract_v2.md` §2 で**開示済み**の 6 特性——(1) 演奏ヒント解決の
+    非加算・優先順位制（"no kick" 系統の支配・"release"="full energy" の
+    等価性）、(2) ヒント照合対象が `physical` と `role` の連結文字列で
+    あること、(3) drone 扱いセクションでは `chord_progression` が鳴らない
+    こと、(4) 自作 `chord_progression` が `physical.key` 宣言より優勢に
+    調推定を決めうること（+ 2 種の修理経路）、(5) 低→高エネルギー遷移
+    直後の約 5 秒の過渡帯が `bridge` として観測されうること、(6) 終盤
+    境界の約 2.6–2.7 秒の系統的早期検出——のいずれかに著者が嵌った場合、
+    その系列は **contract_defect に分類してはならない**（開示済み特性は
+    定義上「未開示」の要件を満たさないため）。該当する場合は
+    missteered（開示を読んだ上でなお evidence と矛盾する選択をした）
+    または unconverged（開示を踏まえてもなお収束しなかった残余）側で
+    分類する。contract_defect が許されるのは、上記 6 項目のいずれにも
+    該当しない**新規発見の未開示特性**に嵌ったことが evidence で示せる
+    場合に限る。
+  off_contract_rule: >-
+    ペイロードが composer 出力と一致しない周回・著者ツール使用が 0 でない
+    周回は off-contract。当該周回以降の系列成果は到達率会計から除外し、
+    off_contract_events に記録する。v1 台帳と同文。
+  metrics: ["reach_rate", "rounds_to_success", "pareto_improvements", "failure_modes"]
+
+tasks:
+  - id: "br_d1"
+    difficulty: "single_lever_proven"
+    registration:
+      path: ../battery/task_br_d1.md
+      sha256: "06ac3b42ff5f7f5aef8e333524e8599411298383fc9b0e752c2c7d393b689f66"
+    statement:
+      path: ../battery/statement_br_d1.md
+      sha256: "17feb99e0015c476aae3fb980ecee380b4cbd7eb7130c06e787f4cbafb4113e1"
+    section_map: "../frozen/section_map_t2.json"
+    token_ban: false
+    positive_control:
+      mode: "reuse_pinned_t2"
+      dir: "../positive_control_t2"
+      note: >-
+        v1 台帳と同一 pin 済み陽性対照（`../positive_control_t2/`）を
+        再利用する。要求が変わっていない（契約差し替えのみ）ため新規
+        探索なし。
+      confirmed_utc: "2026-08-06"
+      score_sha256: "2523793dc9ae87b81aca49e726d22db9eaf7b94a9c4b04c2e428035df3484412"
+      report_sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
+
+preregistered_hypothesis:
+  narrative: >-
+    v1 台帳 br_d1 の到達率は 1/2（s1=unreached/failure_mode=contract_defect・
+    s2=reached/rounds_to_success=1）。s1 の contract_defect 判定根拠は
+    「ヒント解決の非加算・優先順位制」という v1 未開示の計器特性に著者が
+    嵌ったこと（l0b record §4.1 と同型）だった——この特性は `contract_v2.md`
+    §2「演奏ヒントの解決規則」で明示的に開示済み。
+
+    本再測（同一課題 br_d1・同一判定器・同一 section_map_t2・契約文書のみ
+    v1→v2 に差し替え）で:
+    - v2 で 2/2（両系列とも reached）なら、開示追加が v1 の
+      contract_defect を解消したことの支持。
+    - v2 で 1/2 以下（v1 と同じか悪化）なら、開示だけでは不十分——または
+      到達分岐がそもそも著者サンプリング揺らぎ由来で、契約改訂と未分離
+      （`docs/l0br_robustness_record.md` §6 が同一示唆をしている）——のいずれ
+      かであり、本再測単独（n=2）では両仮説を分離できないことを事前に
+      正直宣言する。
+    比較の妥当性は、判定器・演奏者・report 正規形・課題文・section_map が
+    v1 と同一であることに依存する。この前提の保証は二層に分かれる:
+    判定器スクリプト・section_map・課題文は本台帳の `judge` 4 pin と
+    `tasks[0].statement` pin が v1 台帳と同一 sha であることの
+    cross-ledger assert が機械的に保証し、判定器が import する演奏者・
+    report 正規形実装（src/svp_rpe / config/ のソース閉包）は
+    `src_config_diff_attestation` の git 系譜 attestation が束縛する。
+    後者は squash / export 文脈で証言へ格下げされるため、その文脈の
+    読者は本 `supports` 判定の分離性を「全面機械証明」と読まないこと。
+  result:
+    observed: "2/2 reached（br_d1_s1・br_d1_s2 とも round3 で reached）"
+    rounds_to_success: {s1: 3, s2: 3}
+    judgement: supports
+    judgement_note: >-
+      実測 2/2（v1 = 1/2）は上記事前登録の「v2 で 2/2 なら開示追加が v1 の
+      contract_defect を解消したことの支持」分岐に該当する。`supports` は
+      事前登録された観測分岐のラベルであり、因果の証明ではない——本比較は
+      バッチ間で著者個体サンプルが異なる非対応比較で、モデルスナップ
+      ショット・サンプリング設定は不記録（`author_identity.provenance_
+      limitations`）、v1 実測自体が 1/2 の著者間分散を示しているため、
+      到達率差の因果帰属は著者サンプリング揺らぎと交絡している（confounded。
+      対応付き/同バッチ対照は未実施）。この交絡の下でなお開示チャネルの
+      実在を支える機構的証拠は v2 バッチ内にある: v1 契約欠陥（ヒント解決の
+      非加算・優先順位制、drone 化セクションでの chord_progression 無音化
+      等）は v2 開示により両系列・全周回で初回（round1）から回避され、
+      著者 intent が §2 開示への明示参照とともに当該回避を選択している
+      （key/brightness は round1 から一貫して preserved）。
+    honesty_notes:
+      - >-
+        n=2 であり、著者サンプリング揺らぎとの完全な分離はできない（v1 の
+        s1=unreached/s2=reached という到達分散も著者戦略選択に帰す仮説と
+        未分離だった = `docs/l0br_robustness_record.md` §6 と同一の限界）。
+      - >-
+        rounds_to_success は両系列とも 3 で、v1 s2 の 1 より遅い。観測上、
+        到達可否は 1/2→2/2 に転じたが構造軸の収束速度は改善していない
+        （この到達率差の因果帰属は上記 judgement_note のとおり著者揺らぎと
+        交絡したまま——孤立効果と読まないこと）。収束が遅かった理由は
+        両系列とも v2 未開示（v3 開示候補）の高→低エネルギー遷移側の
+        bridge 過剰検出（chorus→outro 境界）に round1/round2 で嵌ったため。
+        v2 §2 は低→高遷移側の過渡帯のみを開示しており、高→低遷移側の
+        bridge は本再測で独立 2 系列 4 周回にわたり再現した新規知見
+        （v2 開示済みの罠は全て回避された一方、この残存未開示特性に構造軸
+        の失敗が集中した）。
+
+series_runs:
+  - task: br_d1
+    series: s1
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 718e1bf7a257f649e5257e64a3ae52cded95860b88b579d9af06587d21b17db1
+      payload_sha256: ac336ba1bcd02605c3c2e6d308d013607910e8e97fc06c8dccd9fd971d40fbbc
+      score_sha256: 35b477cf6926d7fb7f87b551f41eed0d92356059ac6bd12e2fdd679675c582fd
+      intent_sha256: 9d682840de8941a086ed472bbdba640dd12312fd2aef5e9a4ae33117ca4ccc3e
+      report_sha256: 4299d38aa4a002d4051319828114bfe924327ee10a7c506750d5d3e60095f552
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    - round: 2
+      payload_manifest_sha256: b86a6746d9d15bf3802f0cea39f0ec51ff0124e541451e613e96f0f91a0e7ffa
+      payload_sha256: f4d4f460bdb5871700b3d0ae92dfec6ce7c75520791c3f1329041983dcfa1efa
+      score_sha256: 08ff75d1bd25aecf3616f99e06722e0155ec129035b797e80e6238a182eaba53
+      intent_sha256: 47193d18f168d4b6be658cac51ba2ce42661df1f3e82694a0b319c9e05aaef02
+      report_sha256: 3b6ae67f7719b350c47ed7582905899b8815adf1763e4075b3a621824a828a64
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+    - round: 3
+      payload_manifest_sha256: 425d2fdc7e0c136690e8580811d93b18f49c89cbadac5f9ac6b990ff466a74d7
+      payload_sha256: 1e907400cf81d84578932e02c5974c010c3e24be65bb534c1af4ea1312a39531
+      score_sha256: 0f25d15f783817ea82568755971d8e084524bbc6f65491ebcec4518194d7a173
+      intent_sha256: 9f6e49f23c9c4cc09c414bcb6f810394ebfc5c5a5db2fe8d8d9e8a9b555890d4
+      report_sha256: b3853eafcf7afb010440b7656d30b6ba39453439f169b01ec86bab217a891930
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+      pareto_report_sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+    outcome: reached
+    rounds_to_success: 3
+    failure_mode: null
+    rationale: >-
+      round1: 5 要素列 [intro, chorus, chorus, bridge, outro] へ過分割
+      （structure mismatch・pmr=0.6・key/brightness preserved・symbolic
+      pass）。chorus2 を 2 個目の full energy と同一ヒントにした設計が、
+      境界 17.8329–23.4289s に bridge を誘発。round2: 著者は round1 own_intent
+      が事前警告した duplicate_chorus_merge 仮説に基づき chorus2 の
+      physical を full energy(tier4)→認識語なし自由文(既定 tier5) に
+      変更した（著者 intent は「physical のみ変更」と申告していたが、
+      実際には chorus2 の role も「前段と同格の力強さを保つ」→「前段と
+      対比するやや控えめな力強さを保つ」に書き換わっている。ヒント照合は
+      physical+role の連結文字列に対する部分文字列マッチのためこの role
+      編集もエンジン入力の変更にあたるが、両文字列とも認識語彙のラテン
+      文字綴りを含まず、連結後のヒント解決は tier5 のまま不変——音響上は
+      不活性な編集である。PR #250 Codex レビュー第 4 巡指摘を受けた事後
+      監査で記録）。bridge は境界秒がわずかにシフトしただけで継続
+      （pmr=0.6 のまま、pareto improved=false・3 軸とも delta=0）。round3:
+      著者は「境界スメア仮説」（宣言境界 15.0s が observed 上で
+      11.61s/17.83s の 2 候補にスメアしていたとの解釈）に基づき chorus2 の
+      bars のみ 3→4 に延伸（7.5s→10.0s、曲総長 30.0s→32.5s）する単変数
+      変更を行い、bridge が消失して structure exact_match（pmr=1.0）。
+      pareto improved=true（structure axis delta=-1・他軸非退行）。契約 v2
+      §2 で開示済みの低→高遷移側 bridge とは異なる高→低遷移側（chorus→
+      outro）の bridge に嵌ったが（v2 未開示・v3 開示候補）、著者は開示を
+      「観測の下限」として扱い自己実測を優先する推論で round3 に到達した。
+    files_dir: series/br_d1_s1/
+    started_utc: '2026-08-07T03:35:06Z'
+  - task: br_d1
+    series: s2
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 0415f6012411bbe1af6d260735b34d8c1b8b1141a9d9f35d6374e1ef37bf3084
+      payload_sha256: 3390846883167018074602db76a5bb6733741a948bf159f47a510a7e22260359
+      score_sha256: 63aad1de4cddc81597bba77f98360bf05edb2f2930784d169a96f01cfd13c00f
+      intent_sha256: 96ea206d3bb5a4d0f6169e8079711c9bacd80d0f0c4de4e3b0e1bbe9ce9767ab
+      report_sha256: 33902bf08e740167666e035d7447275ecb98bd770d1b6a1f1aed13c4124a976c
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    - round: 2
+      payload_manifest_sha256: d64bdbe8a6ac6e7aa1e3725a64fe8c52f5ddb85bfd254a631a7d45f77a04c02e
+      payload_sha256: 418629011f8ac4d3fe0eca2549dd74b8b1c634dd48ddafe1152719211636ba1c
+      score_sha256: d9af44244688a6a578100a9ef7092730c55b7ded0864d555a30f8ca5934bd8db
+      intent_sha256: 8d585477eed651098ba3c7ac43cc175cf80db42ffc25d9eedfbc009a73fa6692
+      report_sha256: ad6c78b9242bd58931d5801880a92ce4f3f36e6bc3dfbb61e1461473c32cb8c4
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+    - round: 3
+      payload_manifest_sha256: fc08e4fc868982bf5c2d26054dd4ab45234036b73eb1a45a505f0b165e35b181
+      payload_sha256: c3560fb7a72f1456fae89da85eba5afd52fce504c980c31cf0c35397276e87f0
+      score_sha256: a87a8800d10685f9cfdbbf91c9f9fb8f8d3db1e21893059b1596b5a8241308de
+      intent_sha256: 7f33e7f8742d21663db18a9f51d5ce3db22bd8551205b8920ccd8c066dc2b506
+      report_sha256: f0a7fbd3650ca36685746ee2200fa98d0da1419ee28969baedd822c6afefe7df
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+      pareto_report_sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+    outcome: reached
+    rounds_to_success: 3
+    failure_mode: null
+    rationale: >-
+      round1: s1 round1 と同型の bridge 混入（5 要素列 [intro, chorus,
+      chorus, bridge, outro]・pmr=0.6・key/brightness preserved・symbolic
+      pass）。chorus×2 を意図的に完全同一ヒント（full energy）にした設計の
+      リスクが的中。round2: 著者は「tier 順の音量ギャップ」仮説
+      （full energy(tier4) の直下は既定(tier5) であり sparse(tier3) では
+      ない）に基づき outro の physical を sparse(tier3)→認識語なし自由文
+      (既定 tier5) に変更したが、observed_sections は round1 と byte 同一
+      （境界検出が無反応、pareto improved=false・3 軸とも delta=0）。
+      round3: 著者は境界秒の等間隔性から「パルス有無」という質的な軸へ
+      仮説を転換し、outro の physical を tier5→tier2（low density を含む
+      自由文・パルスもメロディも鳴らさないドローンのみ化、曲総長不変）に変更、
+      bridge が消失して structure exact_match（pmr=1.0）。pareto
+      improved=true（structure axis delta=-1・他軸非退行）。著者が事前
+      予告した chorus1/chorus2 併合退行（3 要素への縮退）リスクは顕在化
+      せず、4 要素列のまま到達した。s1 とは異なる修理レバー（outro tier
+      変更 vs chorus2 bars 延伸）で同型の bridge 症状を解消した。
+      事後監査（PR #250 Codex レビュー第 12 巡指摘）: s2 の両遷移
+      （round1→2・round2→3）は outro physical に加えて `meta.version` も
+      0.1→0.2→0.3 と編集している。meta.version は演奏ヒント照合・演奏
+      入力のいずれにも関与せず音響的に不活性だが、pin 済み score の
+      literal な差分としては「単一フィールド編集」ではなく「意図した
+      1 変数 + 不活性な版数編集」である（s1 は全周回 version 0.1 で不変。
+      s1 round2 の role 併記編集と同じ会計方針で記録）。
+    files_dir: series/br_d1_s2/
+    started_utc: '2026-08-07T03:35:06Z'
+off_contract_events: []

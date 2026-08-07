@@ -1,0 +1,74 @@
+round: 2
+
+unchanged_because_preserved:
+  - "physical.key, physical.brightness, physical.bpm, physical.time_signature,
+     stereo_width, active_rate_target, valley_depth_target: round1でkey/brightness
+     はともにpreservedだったため一切変更しない。"
+  - "intro/chorus1/chorus2 のセクション定義(section名・bars・role・physical)は
+     round1と完全に同一のまま維持。intro→chorus1(既定tier5→full energy tier4、
+     低→高遷移)は契約が懸念を明記していた組だが round1 の observed_sections
+     には intro/chorus/chorus の3区間のみが素直に検出されており(intro→chorus1
+     境界で余剰のbridgeは発生していない)、この境界は安全と判断し据え置いた。"
+  - "events は今回も完全に省略。契約 v2 が『events省略が最も安全』と明記して
+     おり、round1でもkey preservedが得られているため踏襲。"
+
+diagnosed_failure_round1:
+  observed: "[intro, chorus, chorus, bridge, outro] (要求は intro, chorus,
+    chorus, outro の4要素)"
+  location: "余剰の bridge は chorus2 と outro の境界付近(17.83s-23.45s)に
+    出現。宣言上の chorus2/outro 境界は22.5sであり、bridge区間はその前後に
+    またがっている(境界前 4.67s・境界後 0.95s)。"
+  contract_tension: >
+    契約 §2 の新規開示は「低→高遷移の直後に疑似bridgeが生じうる、逆方向
+    (強→弱)では同様の過剰検出は観測されていない」としているが、round1では
+    まさに強(chorus, full energy=tier4)→弱(outro, sparse=tier3)の境界で
+    bridge相当のラベルが出現した。契約の非対称性の記述と round1 の実測が
+    食い違っている——ただし契約は「観測されていない」と述べているだけで
+    「起こらない」と保証してはいない点に注意し、本ラウンドは契約の一般則より
+    自分の実測を優先して設計した。
+  working_hypothesis: >
+    tier順を音量で並べると 1 < 2 < 3(sparse) < 5(既定) < 4(full energy) と
+    読める(§2の記述通り: sparseは既定よりやや控えめ、既定はfull energyより
+    静か)。chorus(tier4)→outro(tier3)の遷移は、質感面でも「パルス+メロディ」
+    から「パルスのみ・メロディなし」へ切り替わる複合的な変化であり、単純な
+    音量ギャップ以上に急峻な素材変化になっていた可能性がある。これが
+    detector に「どちらのラベルにも属さない中間区間」として bridge 判定
+    させた主要因ではないか、というのが本ラウンドの作業仮説。
+
+change_this_round:
+  target: "outro セクションの physical のみ"
+  from: "\"sparse\" (tier3: パルスのみ・メロディなし・既定よりやや静か)"
+  to: "認識語を一切含まない自由文 (tier5: 既定。パルス+メロディを維持した
+    ままfull energyより静かなだけ)"
+  rationale: >
+    tier順で見ると tier4(full energy)の直下に隣接するのは tier5(既定)で
+    あり、tier3(sparse)ではない。chorus→outroの遷移をtier4→tier5にすることで
+    (a) 音量ギャップを契約に開示された tier順の中で最小化し、(b) メロディ・
+    パルスという音響的な材質(テクスチャ)をchorusから維持したまま音量だけを
+    落とすことで、質感の急変(パルスのみ化)による中間区間の誤検出を避ける
+    ことを狙った。intro も同じtier5だが、位置(曲頭 vs 曲尾)と直前文脈
+    (chorusの反復直後かどうか)で detector がintro/outroを取り違える懸念は
+    小さいと判断した。
+  text_chosen: "\"音を絞った落ち着いた終わり方\" — 日本語自由文で、認識語彙
+    (silence/no kick/low density/sub bass/sparse/full energy/release/rest)
+    のいずれの綴りも(physical・role とも)含まないことを確認済み。role側の
+    \"曲を静かに終える終結部\" も同様に確認済み(round1から変更なしだが
+    再チェック済み)。"
+  bars_unchanged: >
+    outro の bars は 4 のまま据え置いた。round1のobserved_sectionsでは
+    tierを問わずどのセクションも概ね5.6〜6.6秒の幅に収まっており、bars変更
+    による長さ調整がbridge発生の主因である証拠はまだ得られていないため、
+    今回は「tier変更」という単一の変数のみを動かし、次周回の差分報告で
+    効果を切り分けられるようにした(bars同時変更は交絡になるため避けた)。
+
+risks_and_next_steps:
+  - "もしtier5への変更でchorus2とoutroの音響差が縮小しすぎ、両者が単一区間
+    へ併合される場合、observedは[intro, chorus, chorus](3要素)に縮退しうる。
+    その場合はoutroの区別をtier以外の手段(例: bars延長で位置文脈を強める)
+    で作る方向に切り替える。"
+  - "bridgeが今回も同じ位置(chorus2/outro境界付近)に残る場合、tier順の
+    音量ギャップ仮説は棄却し、境界そのもの(強→弱遷移という方向自体、または
+    chorus反復2回目という位置)が原因という別仮説に切り替える必要がある。"
+  - "observed_sectionsの各区間長を前周(6.5945/5.6192/5.6192/5.6193/6.5478)
+    と比較し、bridgeが消えた場合でも境界秒がどちらの隣接区間に吸収された
+    かを確認し、次回以降のbars設計の参考にする。"
