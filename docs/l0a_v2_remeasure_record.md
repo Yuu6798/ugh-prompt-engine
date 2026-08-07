@@ -34,11 +34,15 @@ v2 契約（`examples/l0b_loop/contract_v2.md`）は v1（`examples/l0b_loop/con
 6. 終盤境界に約 2.6–2.7 秒の系統的早期検出があること
 
 スキーマ（§1）・判定器（`run_round.py` / `pareto_eval.py`）・演奏者・
-`AuthoringDiffReport` 正規形（§3）はいずれも v1 から変更しない。判定器 4 pin
-（run_round / pareto_eval / section_map_t2 / pareto_spec）が v1 台帳と
-同一 sha であることは機械証明の対象（cross-ledger テストで enforce）であり、
-これにより「契約の開示内容だけを変数として動かす」交絡ゼロの分離設計が
-成立する。
+`AuthoringDiffReport` 正規形（§3）はいずれも v1 から変更しない。同一性の
+束縛は二層で行う: 判定器 4 pin（run_round / pareto_eval / section_map_t2 /
+pareto_spec）が v1 台帳と同一 sha であることは機械証明の対象（cross-ledger
+テストで enforce）、`run_round.py` が import する実行エンジン閉包
+（src/svp_rpe の演奏者・抽出器と config/）は台帳の
+`src_config_diff_attestation`（base = #249 マージ後 main、実測全期間で
+diff empty）による git 系譜 attestation で束縛する（squash / export 文脈
+では証言へ格下げ——台帳ヘッダの境界宣言と同じ規約）。これにより「契約の
+開示内容だけを変数として動かす」分離設計が成立する。
 
 事前登録仮説（台帳 `preregistered_hypothesis`）: 「v1 の BR-D1 到達率は 1/2
 （s1 が contract_defect、s2 は reached・rounds_to_success=1）。v2 で 2/2 に
@@ -159,14 +163,25 @@ s1 は直前セクション（chorus2）の bars 延伸による境界の時間�
   いずれも応答生成前（assistant メッセージ 0 件）に kill しており、応答を
   一切消費していないため off-contract イベントには該当しない。修正適用後の
   全文一致で破損が当該 1 箇所のみであることを両件とも機械確認済み。
-- **intent.yaml の YAML 構文事故 2 件**: s1 round2 と s2 round3 の
-  intent.yaml は単体では有効な YAML としてパースできなかった（`yaml.safe_load`
-  がそれぞれ line 25 col 22 / line 12 col 36 で `ParserError` を送出）。
-  intent.yaml はエンジンが読まない自由形式ファイルのため、この構文事故は
-  非阻害（保存はフェンス内容そのまま行い、修正は加えていない）。両系列と
-  も `score.yaml` は全周回で単体有効な YAML だった。この観察は L0a v2 契約
-  への直接材料ではなく、intent sidecar の自由形式運用に伴う事実として
-  記録するのみである。
+- **intent.yaml の YAML 構文事故 2 件と周回計上の裁定**: s1 round2 と
+  s2 round3 の intent.yaml は単体では有効な YAML としてパースできなかった
+  （`yaml.safe_load` がそれぞれ line 25 col 22 / line 12 col 36 で
+  `ParserError` を送出）。両系列とも `score.yaml` は全周回で単体有効な
+  YAML だった（保存はフェンス内容そのまま、修正なし）。
+  **裁定（設計判定）**: この 2 周回（成功周回 s2 round3 を含む）は到達
+  会計にそのまま計上する。理由: (a) 事前登録した成功述語（symbolic pass
+  ∧ key preserved ∧ brightness preserved ∧ structure exact_match）と
+  off-contract 規約（情報境界違反 = ツール使用・ペイロード外情報）の
+  いずれにも intent sidecar の機械 parse 可能性は含まれておらず、実測後に
+  これを除外基準へ追加することこそが事後的な判定基準変更にあたる。
+  (b) 構文事故は失敗周回（s1 round2）と成功周回（s2 round3）の双方で
+  発生しており、結果を特定方向へ形成していない。(c) intent.yaml は契約
+  §0 で「自由形式 YAML・エンジン非消費・人間参照専用」と宣言されており、
+  D2 情報境界の監査目的（著者推論の可読性）は損なわれていない。
+  **L0a v3 契約材料**: 契約 §0 の「YAML 文書」という文言と自由形式運用の
+  間の緊張は v3 で解消すべき明確化課題である——intent に機械 parse 可能な
+  YAML を要求して周回受付時に検証するか、明示的に自由文へ格下げするかの
+  二択を v3 設計時に裁定する。
 - 加えて、`tools_used: none` 宣言の出現位置（フェンス内 / フェンス外 /
   両方）が周回・著者によりばらついたが、フェンス抽出・保存には影響しな
   かった（正規表現抽出が最初にマッチしたフェンスのみを対象とするため）。

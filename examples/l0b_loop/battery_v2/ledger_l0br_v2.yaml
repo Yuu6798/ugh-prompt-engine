@@ -73,6 +73,18 @@ contract_freeze:
       v1 台帳と同一 sha（機械確認済み）——信頼軸表は v2 で不変であることの
       証明。
 
+# 実行エンジン閉包の attestation（v1 台帳の同名フィールドと同型。PR #250
+# Codex レビュー第 3 巡指摘 1 を受けて追記）: 下記 judge 4 pin が束縛する
+# のは判定器スクリプト・section map の同一性であり、`run_round.py` が
+# import する src/svp_rpe（演奏者・抽出器）と config/ のソース閉包は git
+# 系譜による attestation で束縛する。squash / export 文脈では本フィールド
+# は当時の測定者による証言へ格下げされる（台帳ヘッダの境界宣言と同じ規約）。
+src_config_diff_attestation:
+  verified_utc: "2026-08-07"
+  base_commit: "5699566"  # PR #249 マージ後 main = 本ブランチの merge-base
+  command: "git diff --stat 5699566..HEAD -- src/ config/"
+  result: "empty (無変更 — 登録 commit 187c57e から実測完了まで src/ と config/ に一切手を触れていない)"
+
 judge:
   # L0b-R（v1）と同一判定器・無改変（判定器の同一性維持が実験条件。
   # 下記 4 pin は `../battery/ledger_l0br.yaml` `judge` 節と同一 sha
