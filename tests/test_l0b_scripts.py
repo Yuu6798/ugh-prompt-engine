@@ -2922,6 +2922,31 @@ def test_compose_payload_rejects_parent_traversal_escape(tmp_path: Path):
         compose_payload.compose_payload(manifest_path, tmp_path / "out")
 
 
+def test_compose_payload_rejects_lexical_traversal_that_resolves_back_inside_base(tmp_path: Path):
+    """`"../manifest_dir/task.md"`（manifest_dir 自身の名前を使って一度
+    root の外へ出てから戻る locator）は `base_dir/../manifest_dir/task.md`
+    が結局 `base_dir` 内へ resolve されるため、`resolve_confined` 単体の
+    物理チェックだけでは通ってしまう——`validate_relative_locator` が
+    `resolve_confined` より先に走り、resolve 結果に関わらず（語彙的に
+    net-upward traversal した時点で）無条件拒否することを確認する
+    （PR #249 Codex review 第 18 巡, P2）。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "../manifest_dir/task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="containment"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
 def test_compose_payload_refuses_to_overwrite_existing_output(tmp_path: Path):
     manifest_dir = tmp_path / "manifest_dir"
     manifest_dir.mkdir()
@@ -2939,6 +2964,45 @@ def test_compose_payload_refuses_to_overwrite_existing_output(tmp_path: Path):
     compose_payload.compose_payload(manifest_path, out_dir)
     with pytest.raises(compose_payload.ProtectedPathError):
         compose_payload.compose_payload(manifest_path, out_dir)
+
+
+@pytest.mark.parametrize("filename", [compose_payload.PAYLOAD_FILENAME, compose_payload.MANIFEST_FILENAME])
+def test_compose_payload_refuses_to_overwrite_dangling_symlink(tmp_path: Path, filename: str):
+    """`Path.exists()` はシンボリックリンクをターゲットまで辿るため、
+    リンク先が存在しない dangling symlink には `False` を返す——それを
+    「既存ファイルなし」と誤判定すると、`atomic_write_bytes` 内部の
+    `os.replace` が symlink エントリ自体を静黙に実ファイルへ置換して
+    しまう。`payload.md`/`payload.manifest.json` のどちらの位置でも、
+    dangling symlink が `ProtectedPathError` で拒否され、symlink 自体が
+    置換されず残ることを確認する（PR #249 Codex review 第 18 巡, P2）。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    dangling_target = out_dir / "does-not-exist-anywhere.txt"
+    dangling_symlink = out_dir / filename
+    dangling_symlink.symlink_to(dangling_target)
+    assert dangling_symlink.is_symlink()
+    assert not dangling_symlink.exists()  # dangling: exists() follows the link, target is missing
+
+    with pytest.raises(compose_payload.ProtectedPathError):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    # The symlink entry itself must remain untouched — not silently replaced
+    # by a real file.
+    assert dangling_symlink.is_symlink()
+    assert os.readlink(dangling_symlink) == str(dangling_target)
 
 
 # --- Codex review (PR #249), P2: 2 本目の publish 失敗時の rollback --------

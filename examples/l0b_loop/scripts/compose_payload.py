@@ -57,8 +57,13 @@ parse 成功だけでは形状を保証しない）。`parts` の**不在**（�
 `in`/`is not None` の厳密比較で不在を判定する。
 
 各 part の処理（`_process_part`）: `path` を manifest ファイルの親ディレク
-トリ基準へ封じ込め検証（`svp_rpe.arrange.pathsafe.resolve_confined` を
-流用——絶対パス・`../` 脱出はいずれもここで拒否）→ バイトを 1 回だけ読む
+トリ基準へ封じ込め検証（`svp_rpe.arrange.pathsafe` の `validate_relative_
+locator`（語彙的・base 非依存——`..` の net-upward traversal を resolve 結果
+に関わらず無条件拒否）→ `resolve_confined`（物理的・base 依存——絶対パス、
+および実際に `base_dir` 外へ resolve される locator を拒否。symlink 経由の
+脱出もここで捕捉）の 2 段を両方流用——重複実装しない。前者だけを省くと
+「`../` で一度 root を出て戻る」locator が、resolve 結果次第では通ってし
+まう窓が残る）→ バイトを 1 回だけ読む
 （single-read）→ sha256 を宣言値と照合（不一致は emit 前に拒否）→ UTF-8
 strict デコード（失敗はバイナリ拒否）→ 区切り衝突チェック（content の行が
 `=== PAYLOAD` / `=== PART ` / `=== END ` で始まれば fail-closed——ペイロード
@@ -71,9 +76,11 @@ content が改行で終わらない part のみ改行を 1 つ補い `newline_ap
 `ensure_ascii=False`・末尾改行の決定論直列化、`payload_sha256` と各 part の
 `{index, role, path, sha256, bytes, newline_appended}` を含む）を
 `svp_rpe.utils.atomic_io.atomic_write_bytes` で publish する。どちらかが
-既存なら書き込み前に `ProtectedPathError`（上書き禁止）。タイムスタンプ・
-乱数・環境依存値は一切含めない——同一 manifest + 同一入力ファイル群は常に
-バイト同一の `payload.md`/`payload.manifest.json` を生成する。
+既存なら書き込み前に `ProtectedPathError`（上書き禁止。この既存判定は
+`os.path.lexists` を使い、リンク先が存在しない dangling symlink も
+「既存」として拒否する——symlink エントリの静黙置換を防ぐ）。タイムスタ
+ンプ・乱数・環境依存値は一切含めない——同一 manifest + 同一入力ファイル群
+は常にバイト同一の `payload.md`/`payload.manifest.json` を生成する。
 
 `payload.md` の publish 成功後に `payload.manifest.json` の publish が失敗
 すると、pin manifest を欠いた `payload.md` だけが「完全なペイロード」に見
@@ -115,6 +122,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -122,7 +130,11 @@ from typing import Any, Optional
 
 import yaml
 
-from svp_rpe.arrange.pathsafe import PathConfinementError, resolve_confined
+from svp_rpe.arrange.pathsafe import (
+    PathConfinementError,
+    resolve_confined,
+    validate_relative_locator,
+)
 from svp_rpe.melody.representation import _NoDupSafeLoader
 from svp_rpe.utils.atomic_io import atomic_write_bytes
 
@@ -338,7 +350,19 @@ def _process_part(part: dict[str, str], *, base_dir: Path) -> dict[str, Any]:
     role = part["role"]
     declared_path = part["path"]
     declared_sha256 = part["sha256"]
+    # Lexical confinement first (base-independent, no filesystem access):
+    # rejects any locator whose literal `..` segments net-traverse above its
+    # own root, unconditionally — regardless of what `resolve_confined`'s
+    # physical check below would resolve it to. `resolve_confined` alone
+    # only rejects a locator that *actually lands outside* `base_dir` after
+    # `Path.resolve()`; a locator like `"../battery/x"` that lexically
+    # leaves `base_dir` but happens to resolve back inside it (e.g. via a
+    # symlink, or a directory layout coincidence) would pass the physical
+    # check alone. Layering `validate_relative_locator` first closes that
+    # gap defense-in-depth, independent of the target filesystem's current
+    # layout (PR #249 Codex review round 18, P2).
     try:
+        validate_relative_locator(declared_path)
         resolved = resolve_confined(declared_path, base_dir)
     except PathConfinementError as exc:
         raise PayloadManifestError(
@@ -400,9 +424,17 @@ def compose_payload(manifest_path: Path, out_dir: Path) -> dict[str, Any]:
     payload_path = out_dir / PAYLOAD_FILENAME
     manifest_out_path = out_dir / MANIFEST_FILENAME
     # 上書き禁止は他のどの処理よりも先に確認する（fail-fast）。
-    if payload_path.exists():
+    # `Path.exists()` はシンボリックリンクをターゲットまで辿って判定する
+    # ため、リンク先が存在しない dangling symlink には `False` を返す —
+    # それを「既存ファイルなし」と誤判定すると、`atomic_write_bytes` 内部
+    # の `os.replace` が dangling symlink エントリ自体を静黙に実ファイルへ
+    # 置換してしまう（symlink の存在は「既に何かが置かれている」という
+    # 上書き禁止契約の対象であるべきで、リンク先の生死は無関係。PR #249
+    # Codex review round 18, P2）。`os.path.lexists`（symlink 自体の存在を
+    # 判定し、辿らない）で判定する。
+    if os.path.lexists(payload_path):
         raise ProtectedPathError(f"refusing to overwrite existing payload file: {payload_path}")
-    if manifest_out_path.exists():
+    if os.path.lexists(manifest_out_path):
         raise ProtectedPathError(
             f"refusing to overwrite existing payload manifest file: {manifest_out_path}"
         )

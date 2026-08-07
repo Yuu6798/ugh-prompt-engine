@@ -94,7 +94,7 @@ payload_composition:
   composer:
     path: ../scripts/compose_payload.py
     sha256_at_measurement: "a1bd613a646c331c866b6480cd8d827d58410acc70c8dba9005a6c1629a12dfa"
-    sha256_current: "363aa9fabdefdee603b0bd065e128d015e4b8e8d83d0e4d31609d82dd3033549"
+    sha256_current: "b5be530096f076da18e765bbce52ea369331cf1a127a2b29c7c6df4c15c8b233"
     frozen_copy: composer_at_measurement/compose_payload.py
     note: >-
       sha256_at_measurement = 全 16 測定周回を実行した実装（事前登録 commit
