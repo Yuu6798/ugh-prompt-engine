@@ -11,6 +11,13 @@ Handoff「②周回受付時の score 全文 diff 機械検査」が背景の運
     `removed` を列挙する。**空の dict (`{}`) / 空の list (`[]`) は leaf として
     そのコンテナ自体を記録する**（中間ノードとして再帰を打ち切る）——
     `avoid: []` の追加・削除や `[]`↔`{}` の形状変化も列挙対象に入れるため。
+    `modified` 判定は値の不一致 (`!=`) **に加えて具象型の不一致**
+    (`type(prev) is not type(curr)`) でも成立する——`96` vs `96.0`
+    （int vs float）、`False` vs `0`（bool は int の subclass だが
+    `type is` 比較で区別する）のような、`==` だけでは値として等しく
+    見えてしまう型差も modified として列挙する。change エントリの
+    `prev`/`curr` は値そのものをそのまま記録する（型情報の別枠追加は
+    不要——JSON serialize で `96` と `96.0`、`false` と `0` は区別可能）。
 (b) **認識語彙の出現一覧と変化** — `structure` 各セクションについて、
     `physical` + `role` を連結した文字列（`contract_v2.md` §2「ヒント照合の
     対象フィールド」と同一の照合対象）に対し、演奏者が実際に認識する 8 語
@@ -116,7 +123,9 @@ def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
 
 def _diff_fields(prev: dict[str, Any], curr: dict[str, Any]) -> list[dict[str, Any]]:
     """平坦化した prev/curr を突き合わせ、`modified`/`added`/`removed` を
-    パス昇順で列挙する。"""
+    パス昇順で列挙する。`modified` は値の不一致だけでなく具象型の不一致
+    （`type(prev) is not type(curr)`）でも成立する——モジュール docstring
+    (a) 参照。"""
 
     prev_flat = _flatten(prev)
     curr_flat = _flatten(curr)
@@ -127,9 +136,11 @@ def _diff_fields(prev: dict[str, Any], curr: dict[str, Any]) -> list[dict[str, A
         in_prev = path in prev_flat
         in_curr = path in curr_flat
         if in_prev and in_curr:
-            if prev_flat[path] != curr_flat[path]:
+            prev_value = prev_flat[path]
+            curr_value = curr_flat[path]
+            if prev_value != curr_value or type(prev_value) is not type(curr_value):
                 changes.append(
-                    {"path": path, "change": "modified", "prev": prev_flat[path], "curr": curr_flat[path]}
+                    {"path": path, "change": "modified", "prev": prev_value, "curr": curr_value}
                 )
         elif in_prev:
             changes.append({"path": path, "change": "removed", "prev": prev_flat[path], "curr": None})

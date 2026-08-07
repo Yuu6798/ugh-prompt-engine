@@ -5293,6 +5293,93 @@ def test_compose_author_prompt_cli_writes_output_and_prints_sha(tmp_path: Path, 
     assert actual_sha256 == _GOLDEN_AUTHOR_PROMPT_SHA256
     captured = capsys.readouterr()
     assert actual_sha256 in captured.out
+    # 入力（wrapper/payload）それぞれの sha256 も常時印字される（機械可読）。
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+    assert f"wrapper sha256={wrapper_sha256}" in captured.out
+    assert f"payload sha256={payload_sha256}" in captured.out
+
+
+def test_compose_author_prompt_expect_wrapper_sha256_match_publishes(tmp_path: Path, capsys):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
+        ]
+    )
+    assert exit_code == 0
+    assert out_path.exists()
+
+
+def test_compose_author_prompt_expect_wrapper_sha256_mismatch_blocks_publish(
+    tmp_path: Path, capsys
+):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    bogus_sha256 = "0" * 64
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-wrapper-sha256", bogus_sha256,
+        ]
+    )
+    assert exit_code == 1
+    assert not out_path.exists()
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert f"expected={bogus_sha256}" in captured.err
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    assert f"actual={wrapper_sha256}" in captured.err
+
+
+def test_compose_author_prompt_expect_payload_sha256_match_publishes(tmp_path: Path, capsys):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-payload-sha256", payload_sha256,
+        ]
+    )
+    assert exit_code == 0
+    assert out_path.exists()
+
+
+def test_compose_author_prompt_expect_payload_sha256_mismatch_blocks_publish(
+    tmp_path: Path, capsys
+):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    bogus_sha256 = "1" * 64
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-payload-sha256", bogus_sha256,
+        ]
+    )
+    assert exit_code == 1
+    assert not out_path.exists()
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert f"expected={bogus_sha256}" in captured.err
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+    assert f"actual={payload_sha256}" in captured.err
 
 
 def test_compose_author_prompt_refuses_to_overwrite_existing_output(tmp_path: Path, capsys):
@@ -5322,7 +5409,10 @@ def test_compose_author_prompt_cli_has_no_freeform_injection_options():
     option_strings: set[str] = set()
     for action in parser._actions:
         option_strings.update(action.option_strings)
-    assert option_strings == {"-h", "--help", "--wrapper", "--payload", "--out"}
+    assert option_strings == {
+        "-h", "--help", "--wrapper", "--payload", "--out",
+        "--expect-wrapper-sha256", "--expect-payload-sha256",
+    }
 
 
 def test_compose_author_prompt_cli_rejects_unknown_option(tmp_path: Path):
@@ -5486,6 +5576,58 @@ def test_verify_prompt_delivery_jsonl_no_user_message_exits_2(tmp_path: Path, ca
     assert exit_code == 2
     captured = capsys.readouterr()
     assert "Error:" in captured.err
+
+
+def test_verify_prompt_delivery_jsonl_second_user_before_assistant_exits_2_fail_closed(
+    tmp_path: Path, capsys
+):
+    """user -> user -> assistant: 応答前に 2 つ目の user メッセージが配送
+    された異常系は黙って最初の user だけを採用せず、fail-closed で exit 2
+    にする（レビュー指摘の再発防止）。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text(
+        json.dumps({"message": {"role": "user", "content": "PROMPT BODY"}}) + "\n"
+        + json.dumps({"message": {"role": "user", "content": "unexpected extra"}}) + "\n"
+        + json.dumps({"message": {"role": "assistant", "content": "reply"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert "additional user message" in captured.err
+    assert "fail-closed" in captured.err
+
+
+def test_verify_prompt_delivery_jsonl_user_then_assistant_then_later_user_exits_0(
+    tmp_path: Path, capsys
+):
+    """user -> assistant -> user（後続ターン）: 最初の assistant 到達で
+    走査を打ち切るため、後続ターンの user は検証対象外——一致すれば
+    exit 0 のまま。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text(
+        json.dumps({"message": {"role": "user", "content": "PROMPT BODY"}}) + "\n"
+        + json.dumps({"message": {"role": "assistant", "content": "reply"}}) + "\n"
+        + json.dumps({"message": {"role": "user", "content": "later turn, unrelated"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "match" in captured.out
 
 
 def test_verify_prompt_delivery_jsonl_unknown_toplevel_shape_exits_2(tmp_path: Path, capsys):
@@ -5730,6 +5872,59 @@ def test_audit_round_edit_empty_to_nonempty_list_reports_removed_and_added(tmp_p
     assert changes_by_path["avoid[0]"] == {
         "path": "avoid[0]", "change": "added", "prev": None, "curr": "x",
     }
+
+
+def test_audit_round_edit_int_to_float_same_value_is_modified(tmp_path: Path):
+    """`96` (int) -> `96.0` (float) は `==` では等しいが、具象型が違うため
+    `modified` として列挙される（値だけでなく型の変化も可視化する）。"""
+
+    prev = {"physical": {"bpm": 96}}
+    curr = {"physical": {"bpm": 96.0}}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["physical.bpm"] == {
+        "path": "physical.bpm", "change": "modified", "prev": 96, "curr": 96.0,
+    }
+    assert type(changes_by_path["physical.bpm"]["prev"]) is int
+    assert type(changes_by_path["physical.bpm"]["curr"]) is float
+
+
+def test_audit_round_edit_bool_to_int_same_value_is_modified(tmp_path: Path):
+    """`False` (bool) -> `0` (int) は `==` では等しい（bool は int の
+    subclass）が、`type(...) is not type(...)` で区別され `modified` として
+    列挙される。"""
+
+    prev = {"flag": False}
+    curr = {"flag": 0}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["flag"] == {
+        "path": "flag", "change": "modified", "prev": False, "curr": 0,
+    }
+    assert type(changes_by_path["flag"]["prev"]) is bool
+    assert type(changes_by_path["flag"]["curr"]) is int
+
+
+def test_audit_round_edit_same_value_and_type_is_not_modified(tmp_path: Path):
+    """同値かつ同型（`96` (int) -> `96` (int)）は依然として列挙されない。"""
+
+    prev = {"physical": {"bpm": 96}}
+    curr = {"physical": {"bpm": 96}}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert "physical.bpm" not in changes_by_path
 
 
 def test_audit_round_edit_vocabulary_normalization_mirrors_performer_space_join_lower(

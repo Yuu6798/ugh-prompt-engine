@@ -14,20 +14,29 @@ JSONL の配送記録から最初の `role == "user"` メッセージ本文を�
 1. 各行を `json.loads` する（1 行が不正 JSON なら抽出不能）。
 2. `message.role == "user"` の最初のエントリを探す（`message` キーが
    トップレベルに無い行形式——エントリ自体が `{"role": ..., "content": ...}`
-   ——も防御的に扱う）。
+   ——も防御的に扱う）。role 判定はこの `message.role` またはトップレベル
+   `role` の防御的手順で常に行う。
 3. 見つかった最初の user エントリの `content` が `str` ならそのまま採用、
    `list` なら**全ブロックが well-formed な text ブロック**（`dict` かつ
    `type == "text"` かつ `text` が `str`）であることを要求して連結する。
    1 つでもそれ以外のブロック（画像等の非 text ブロック、不正な形の要素）
    が混じっていれば抽出不能として扱う——期待テキスト+画像が配送された
    ケースを黙って exit 0 で認証しない fail-closed。
+4. 最初の user エントリを見つけたあとも走査を続け、**最初の
+   `role == "assistant"` エントリが現れるより前に、2 つ目の `role == "user"`
+   エントリがあれば抽出不能として扱う**（応答前に追加の user メッセージが
+   配送された、という spawn 配送の異常系を黙って exit 0 で認証しない
+   fail-closed）。最初の assistant エントリが現れた時点で走査を打ち切る
+   ——それ以降に現れる user エントリは後続ターンや tool_result であり、
+   spawn 直後配送の逐語性検証の範囲外なので対象にしない。
 
 見つからない・`content` の形が上記のいずれでもない・非 text ブロックが
-混入している・JSON として parse できない、のいずれも「抽出不能」として
-exit 2（未知構造を黙って exit 0 にしない fail-closed。**判定不能を照合成立
-の側へ倒さない**——`check_token_ban.py` の非 UTF-8 拒否と同じ思想）。
-ファイル入出力エラー（`--expected`/`--delivered` が読めない等）も同様に
-exit 2 として扱う——0/1 は「比較を実行できた」上での一致/不一致にのみ使う。
+混入している・応答前に 2 つ目の user メッセージがある・JSON として parse
+できない、のいずれも「抽出不能」として exit 2（未知構造を黙って exit 0 に
+しない fail-closed。**判定不能を照合成立の側へ倒さない**——
+`check_token_ban.py` の非 UTF-8 拒否と同じ思想）。ファイル入出力エラー
+（`--expected`/`--delivered` が読めない等）も同様に exit 2 として扱う——
+0/1 は「比較を実行できた」上での一致/不一致にのみ使う。
 
 出典: #249/#250 実測（`docs/l0a_v2_remeasure_record.md` §5）— spawn 直後に
 配送記録（task JSONL）と `author_prompt.txt` を機械照合する手順が、手動転写
@@ -110,17 +119,42 @@ def _extract_user_text(entry: Any) -> Optional[str]:
     return None  # content が str でも list でもない = 未知構造
 
 
+def _entry_role(entry: Any) -> Optional[str]:
+    """1 件の JSONL エントリから role を防御的に取り出す。`message.role` を
+    優先し、`message` キーがトップレベルに無い行形式向けにエントリ自体の
+    トップレベル `role` へフォールバックする（`_extract_user_text` と同じ
+    防御的手順）。role が文字列でなければ `None`。"""
+
+    message = entry.get("message") if isinstance(entry, dict) else None
+    if not isinstance(message, dict):
+        message = entry if isinstance(entry, dict) else None
+    if not isinstance(message, dict):
+        return None
+    role = message.get("role")
+    return role if isinstance(role, str) else None
+
+
 def extract_first_user_message(jsonl_path: Path) -> str:
     """`jsonl_path` から最初の role=='user' メッセージ本文を返す。
-    抽出不能（不正 JSON 行・user エントリなし・content 形状不明）は
-    `DeliveryVerifyOperationError` を送出する（exit 2 に対応。黙って
-    空文字/exit 0 へは倒さない）。"""
+
+    最初の user エントリを見つけたあとも、最初の role=='assistant' エントリ
+    が現れるまで走査を続け、その間に**2 つ目の role=='user' エントリ**が
+    あれば抽出不能として扱う（応答前に追加の user メッセージが配送された
+    異常系を黙って認証しない fail-closed）。最初の assistant エントリに
+    到達した時点で走査を打ち切る——それより後に現れる user エントリは
+    後続ターン/tool_result であり、spawn 直後配送の逐語性検証の範囲外。
+
+    抽出不能（不正 JSON 行・user エントリなし・content 形状不明・応答前の
+    追加 user メッセージ）は `DeliveryVerifyOperationError` を送出する
+    （exit 2 に対応。黙って空文字/exit 0 へは倒さない）。"""
 
     jsonl_path = Path(jsonl_path)
     try:
         raw_text = jsonl_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise DeliveryVerifyOperationError(f"cannot read {jsonl_path}: {exc}") from exc
+
+    first_user_text: Optional[str] = None
 
     for line_number, raw_line in enumerate(raw_text.splitlines(), start=1):
         line = raw_line.strip()
@@ -133,10 +167,15 @@ def extract_first_user_message(jsonl_path: Path) -> str:
                 f"{jsonl_path}:{line_number}: invalid JSON — cannot extract (fail-closed): {exc}"
             ) from exc
 
-        message = entry.get("message") if isinstance(entry, dict) else None
-        if not isinstance(message, dict):
-            message = entry if isinstance(entry, dict) else None
-        if isinstance(message, dict) and message.get("role") == "user":
+        role = _entry_role(entry)
+
+        if role == "user":
+            if first_user_text is not None:
+                raise DeliveryVerifyOperationError(
+                    f"{jsonl_path}:{line_number}: additional user message delivered "
+                    "before the first assistant response — refusing to certify "
+                    "delivery (fail-closed)"
+                )
             try:
                 text = _extract_user_text(entry)
             except _NonTextContentBlockError:
@@ -151,7 +190,13 @@ def extract_first_user_message(jsonl_path: Path) -> str:
                     "unrecognized content shape (not str, not a list of type='text' "
                     "blocks) — refusing to extract (fail-closed)"
                 )
-            return text
+            first_user_text = text
+        elif role == "assistant":
+            # 最初の assistant エントリに到達——以降は走査対象外(docstring)。
+            break
+
+    if first_user_text is not None:
+        return first_user_text
 
     raise DeliveryVerifyOperationError(
         f"{jsonl_path}: no role='user' message found — cannot extract (fail-closed)"
