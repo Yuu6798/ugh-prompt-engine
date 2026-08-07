@@ -229,26 +229,198 @@ tasks:
       score_sha256: "2523793dc9ae87b81aca49e726d22db9eaf7b94a9c4b04c2e428035df3484412"
       report_sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
 
-preregistered_hypothesis: >-
-  v1 台帳 br_d1 の到達率は 1/2（s1=unreached/failure_mode=contract_defect・
-  s2=reached/rounds_to_success=1）。s1 の contract_defect 判定根拠は
-  「ヒント解決の非加算・優先順位制」という v1 未開示の計器特性に著者が
-  嵌ったこと（l0b record §4.1 と同型）だった——この特性は `contract_v2.md`
-  §2「演奏ヒントの解決規則」で明示的に開示済み。
+preregistered_hypothesis:
+  narrative: >-
+    v1 台帳 br_d1 の到達率は 1/2（s1=unreached/failure_mode=contract_defect・
+    s2=reached/rounds_to_success=1）。s1 の contract_defect 判定根拠は
+    「ヒント解決の非加算・優先順位制」という v1 未開示の計器特性に著者が
+    嵌ったこと（l0b record §4.1 と同型）だった——この特性は `contract_v2.md`
+    §2「演奏ヒントの解決規則」で明示的に開示済み。
 
-  本再測（同一課題 br_d1・同一判定器・同一 section_map_t2・契約文書のみ
-  v1→v2 に差し替え）で:
-  - v2 で 2/2（両系列とも reached）なら、開示追加が v1 の
-    contract_defect を解消したことの支持。
-  - v2 で 1/2 以下（v1 と同じか悪化）なら、開示だけでは不十分——または
-    到達分岐がそもそも著者サンプリング揺らぎ由来で、契約改訂と未分離
-    （`docs/l0br_robustness_record.md` §6 が同一示唆をしている）——のいずれ
-    かであり、本再測単独（n=2）では両仮説を分離できないことを事前に
-    正直宣言する。
-  比較の妥当性は、判定器・演奏者・report 正規形・課題文・section_map が
-  v1 と同一であることに依存する（本台帳の `judge` 4 pin と `tasks[0].
-  statement` pin が v1 台帳と同一 sha であることの cross-ledger assert が
-  この前提を機械的に保証する）。
+    本再測（同一課題 br_d1・同一判定器・同一 section_map_t2・契約文書のみ
+    v1→v2 に差し替え）で:
+    - v2 で 2/2（両系列とも reached）なら、開示追加が v1 の
+      contract_defect を解消したことの支持。
+    - v2 で 1/2 以下（v1 と同じか悪化）なら、開示だけでは不十分——または
+      到達分岐がそもそも著者サンプリング揺らぎ由来で、契約改訂と未分離
+      （`docs/l0br_robustness_record.md` §6 が同一示唆をしている）——のいずれ
+      かであり、本再測単独（n=2）では両仮説を分離できないことを事前に
+      正直宣言する。
+    比較の妥当性は、判定器・演奏者・report 正規形・課題文・section_map が
+    v1 と同一であることに依存する（本台帳の `judge` 4 pin と `tasks[0].
+    statement` pin が v1 台帳と同一 sha であることの cross-ledger assert が
+    この前提を機械的に保証する）。
+  result:
+    observed: "2/2 reached（br_d1_s1・br_d1_s2 とも round3 で reached）"
+    rounds_to_success: {s1: 3, s2: 3}
+    judgement: supports
+    judgement_note: >-
+      実測 2/2（v1 = 1/2）は上記事前登録の「v2 で 2/2 なら開示追加が v1 の
+      contract_defect を解消したことの支持」分岐に該当する。v1 契約欠陥
+      （ヒント解決の非加算・優先順位制、drone 化セクションでの
+      chord_progression 無音化等）は v2 開示により両系列・全周回で初回
+      （round1）から回避された（key/brightness は round1 から一貫して
+      preserved）——開示の効果はこの点で直接観測されている。
+    honesty_notes:
+      - >-
+        n=2 であり、著者サンプリング揺らぎとの完全な分離はできない（v1 の
+        s1=unreached/s2=reached という到達分散も著者戦略選択に帰す仮説と
+        未分離だった = `docs/l0br_robustness_record.md` §6 と同一の限界）。
+      - >-
+        rounds_to_success は両系列とも 3 で、v1 s2 の 1 より遅い。「開示は
+        到達可否を改善したが、構造軸の収束速度は改善していない」——理由は
+        両系列とも v2 未開示（v3 開示候補）の高→低エネルギー遷移側の
+        bridge 過剰検出（chorus→outro 境界）に round1/round2 で嵌ったため。
+        v2 §2 は低→高遷移側の過渡帯のみを開示しており、高→低遷移側の
+        bridge は本再測で独立 2 系列 4 周回にわたり再現した新規知見
+        （v2 開示済みの罠は全て回避された一方、この残存未開示特性に構造軸
+        の失敗が集中した）。
 
-series_runs: []
+series_runs:
+  - task: br_d1
+    series: s1
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 718e1bf7a257f649e5257e64a3ae52cded95860b88b579d9af06587d21b17db1
+      payload_sha256: ac336ba1bcd02605c3c2e6d308d013607910e8e97fc06c8dccd9fd971d40fbbc
+      score_sha256: 35b477cf6926d7fb7f87b551f41eed0d92356059ac6bd12e2fdd679675c582fd
+      intent_sha256: 9d682840de8941a086ed472bbdba640dd12312fd2aef5e9a4ae33117ca4ccc3e
+      report_sha256: 4299d38aa4a002d4051319828114bfe924327ee10a7c506750d5d3e60095f552
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    - round: 2
+      payload_manifest_sha256: b86a6746d9d15bf3802f0cea39f0ec51ff0124e541451e613e96f0f91a0e7ffa
+      payload_sha256: f4d4f460bdb5871700b3d0ae92dfec6ce7c75520791c3f1329041983dcfa1efa
+      score_sha256: 08ff75d1bd25aecf3616f99e06722e0155ec129035b797e80e6238a182eaba53
+      intent_sha256: 47193d18f168d4b6be658cac51ba2ce42661df1f3e82694a0b319c9e05aaef02
+      report_sha256: 3b6ae67f7719b350c47ed7582905899b8815adf1763e4075b3a621824a828a64
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+    - round: 3
+      payload_manifest_sha256: 425d2fdc7e0c136690e8580811d93b18f49c89cbadac5f9ac6b990ff466a74d7
+      payload_sha256: 1e907400cf81d84578932e02c5974c010c3e24be65bb534c1af4ea1312a39531
+      score_sha256: 0f25d15f783817ea82568755971d8e084524bbc6f65491ebcec4518194d7a173
+      intent_sha256: 9f6e49f23c9c4cc09c414bcb6f810394ebfc5c5a5db2fe8d8d9e8a9b555890d4
+      report_sha256: b3853eafcf7afb010440b7656d30b6ba39453439f169b01ec86bab217a891930
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+      pareto_report_sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+    outcome: reached
+    rounds_to_success: 3
+    failure_mode: null
+    rationale: >-
+      round1: 5 要素列 [intro, chorus, chorus, bridge, outro] へ過分割
+      （structure mismatch・pmr=0.6・key/brightness preserved・symbolic
+      pass）。chorus2 を 2 個目の full energy と同一ヒントにした設計が、
+      境界 17.8329–23.4289s に bridge を誘発。round2: 著者は round1 own_intent
+      が事前警告した duplicate_chorus_merge 仮説に基づき chorus2 の
+      physical のみ full energy(tier4)→認識語なし自由文(既定 tier5) に
+      変更したが、bridge は境界秒がわずかにシフトしただけで継続
+      （pmr=0.6 のまま、pareto improved=false・3 軸とも delta=0）。round3:
+      著者は「境界スメア仮説」（宣言境界 15.0s が observed 上で
+      11.61s/17.83s の 2 候補にスメアしていたとの解釈）に基づき chorus2 の
+      bars のみ 3→4 に延伸（7.5s→10.0s、曲総長 30.0s→32.5s）する単変数
+      変更を行い、bridge が消失して structure exact_match（pmr=1.0）。
+      pareto improved=true（structure axis delta=-1・他軸非退行）。契約 v2
+      §2 で開示済みの低→高遷移側 bridge とは異なる高→低遷移側（chorus→
+      outro）の bridge に嵌ったが（v2 未開示・v3 開示候補）、著者は開示を
+      「観測の下限」として扱い自己実測を優先する推論で round3 に到達した。
+    files_dir: series/br_d1_s1/
+    started_utc: '2026-08-07T03:35:06Z'
+  - task: br_d1
+    series: s2
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 0415f6012411bbe1af6d260735b34d8c1b8b1141a9d9f35d6374e1ef37bf3084
+      payload_sha256: 3390846883167018074602db76a5bb6733741a948bf159f47a510a7e22260359
+      score_sha256: 63aad1de4cddc81597bba77f98360bf05edb2f2930784d169a96f01cfd13c00f
+      intent_sha256: 96ea206d3bb5a4d0f6169e8079711c9bacd80d0f0c4de4e3b0e1bbe9ce9767ab
+      report_sha256: 33902bf08e740167666e035d7447275ecb98bd770d1b6a1f1aed13c4124a976c
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    - round: 2
+      payload_manifest_sha256: d64bdbe8a6ac6e7aa1e3725a64fe8c52f5ddb85bfd254a631a7d45f77a04c02e
+      payload_sha256: 418629011f8ac4d3fe0eca2549dd74b8b1c634dd48ddafe1152719211636ba1c
+      score_sha256: d9af44244688a6a578100a9ef7092730c55b7ded0864d555a30f8ca5934bd8db
+      intent_sha256: 8d585477eed651098ba3c7ac43cc175cf80db42ffc25d9eedfbc009a73fa6692
+      report_sha256: ad6c78b9242bd58931d5801880a92ce4f3f36e6bc3dfbb61e1461473c32cb8c4
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+    - round: 3
+      payload_manifest_sha256: fc08e4fc868982bf5c2d26054dd4ab45234036b73eb1a45a505f0b165e35b181
+      payload_sha256: c3560fb7a72f1456fae89da85eba5afd52fce504c980c31cf0c35397276e87f0
+      score_sha256: a87a8800d10685f9cfdbbf91c9f9fb8f8d3db1e21893059b1596b5a8241308de
+      intent_sha256: 7f33e7f8742d21663db18a9f51d5ce3db22bd8551205b8920ccd8c066dc2b506
+      report_sha256: f0a7fbd3650ca36685746ee2200fa98d0da1419ee28969baedd822c6afefe7df
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+      pareto_report_sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+    outcome: reached
+    rounds_to_success: 3
+    failure_mode: null
+    rationale: >-
+      round1: s1 round1 と同型の bridge 混入（5 要素列 [intro, chorus,
+      chorus, bridge, outro]・pmr=0.6・key/brightness preserved・symbolic
+      pass）。chorus×2 を意図的に完全同一ヒント（full energy）にした設計の
+      リスクが的中。round2: 著者は「tier 順の音量ギャップ」仮説
+      （full energy(tier4) の直下は既定(tier5) であり sparse(tier3) では
+      ない）に基づき outro の physical のみ sparse(tier3)→認識語なし自由文
+      (既定 tier5) に変更したが、observed_sections は round1 と byte 同一
+      （境界検出が無反応、pareto improved=false・3 軸とも delta=0）。
+      round3: 著者は境界秒の等間隔性から「パルス有無」という質的な軸へ
+      仮説を転換し、outro の physical を tier5→tier2（low density を含む
+      自由文・パルスのみでメロディなしのドローン化、曲総長不変）に変更、
+      bridge が消失して structure exact_match（pmr=1.0）。pareto
+      improved=true（structure axis delta=-1・他軸非退行）。著者が事前
+      予告した chorus1/chorus2 併合退行（3 要素への縮退）リスクは顕在化
+      せず、4 要素列のまま到達した。s1 とは異なる修理レバー（outro tier
+      変更 vs chorus2 bars 延伸）で同型の bridge 症状を解消した。
+    files_dir: series/br_d1_s2/
+    started_utc: '2026-08-07T03:35:06Z'
 off_contract_events: []
