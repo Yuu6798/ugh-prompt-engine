@@ -16,14 +16,18 @@ JSONL の配送記録から最初の `role == "user"` メッセージ本文を�
    トップレベルに無い行形式——エントリ自体が `{"role": ..., "content": ...}`
    ——も防御的に扱う）。
 3. 見つかった最初の user エントリの `content` が `str` ならそのまま採用、
-   `list` なら `type == "text"` のブロックを順に連結する。
+   `list` なら**全ブロックが well-formed な text ブロック**（`dict` かつ
+   `type == "text"` かつ `text` が `str`）であることを要求して連結する。
+   1 つでもそれ以外のブロック（画像等の非 text ブロック、不正な形の要素）
+   が混じっていれば抽出不能として扱う——期待テキスト+画像が配送された
+   ケースを黙って exit 0 で認証しない fail-closed。
 
-見つからない・`content` の形が上記のいずれでもない・JSON として parse でき
-ない、のいずれも「抽出不能」として exit 2（未知構造を黙って exit 0 にしない
-fail-closed。**判定不能を照合成立の側へ倒さない**——`check_token_ban.py` の
-非 UTF-8 拒否と同じ思想）。ファイル入出力エラー（`--expected`/`--delivered`
-が読めない等）も同様に exit 2 として扱う——0/1 は「比較を実行できた」上での
-一致/不一致にのみ使う。
+見つからない・`content` の形が上記のいずれでもない・非 text ブロックが
+混入している・JSON として parse できない、のいずれも「抽出不能」として
+exit 2（未知構造を黙って exit 0 にしない fail-closed。**判定不能を照合成立
+の側へ倒さない**——`check_token_ban.py` の非 UTF-8 拒否と同じ思想）。
+ファイル入出力エラー（`--expected`/`--delivered` が読めない等）も同様に
+exit 2 として扱う——0/1 は「比較を実行できた」上での一致/不一致にのみ使う。
 
 出典: #249/#250 実測（`docs/l0a_v2_remeasure_record.md` §5）— spawn 直後に
 配送記録（task JSONL）と `author_prompt.txt` を機械照合する手順が、手動転写
@@ -50,6 +54,14 @@ class DeliveryVerifyOperationError(RuntimeError):
     （照合そのものが成立しなかった、という意味で 1 とは区別する）。"""
 
 
+class _NonTextContentBlockError(Exception):
+    """`content` リスト中に non-text ブロック（画像等）または well-formed
+    でない text ブロックが 1 つでも混入していることを示す内部シグナル。
+    `_extract_user_text` が送出し、`extract_first_user_message` が捕捉して
+    行番号付きの `DeliveryVerifyOperationError`（fail-closed メッセージ）に
+    変換する。モジュール外へは伝播させない。"""
+
+
 def _read_stripped_text(path: Path) -> str:
     """`path` を UTF-8 として読み、strip 後の文字列を返す。読み取り・
     デコード失敗はそのまま呼び出し元へ伝播する（`OSError`/
@@ -61,7 +73,12 @@ def _read_stripped_text(path: Path) -> str:
 def _extract_user_text(entry: Any) -> Optional[str]:
     """1 件の JSONL エントリから role=='user' な message の本文を抽出する。
     このエントリが user メッセージでない、または content の形が未知なら
-    `None`（呼び出し元が「次の行を見る」か「抽出不能」かを判断する）。"""
+    `None`（呼び出し元が「次の行を見る」か「抽出不能」かを判断する）。
+    content が list で non-text ブロック（dict でない・`type != "text"`・
+    `text` が str でない、のいずれか）を 1 つでも含む場合は `None` を返さず
+    `_NonTextContentBlockError` を送出する（fail-closed。画像等を黙って
+    無視して部分連結を exit 0 で認証しない——全ブロックが well-formed な
+    text ブロックであることを要求する）。"""
 
     message = entry.get("message") if isinstance(entry, dict) else None
     if not isinstance(message, dict):
@@ -77,13 +94,16 @@ def _extract_user_text(entry: Any) -> Optional[str]:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        text_blocks = [
-            block["text"]
-            for block in content
-            if isinstance(block, dict)
-            and block.get("type") == "text"
-            and isinstance(block.get("text"), str)
-        ]
+        text_blocks: list[str] = []
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ):
+                text_blocks.append(block["text"])
+            else:
+                raise _NonTextContentBlockError()
         if text_blocks:
             return "".join(text_blocks)
         return None  # list content だが text ブロックが 1 つもない = 未知構造
@@ -117,7 +137,14 @@ def extract_first_user_message(jsonl_path: Path) -> str:
         if not isinstance(message, dict):
             message = entry if isinstance(entry, dict) else None
         if isinstance(message, dict) and message.get("role") == "user":
-            text = _extract_user_text(entry)
+            try:
+                text = _extract_user_text(entry)
+            except _NonTextContentBlockError:
+                raise DeliveryVerifyOperationError(
+                    f"{jsonl_path}:{line_number}: first role='user' entry's content "
+                    "list contains a non-text content block — refusing to certify "
+                    "delivery (fail-closed)"
+                ) from None
             if text is None:
                 raise DeliveryVerifyOperationError(
                     f"{jsonl_path}:{line_number}: first role='user' entry has an "

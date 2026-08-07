@@ -5404,6 +5404,32 @@ def test_verify_prompt_delivery_jsonl_str_content(tmp_path: Path):
 
 
 def test_verify_prompt_delivery_jsonl_list_content(tmp_path: Path):
+    """text ブロックのみの list content は従来どおり連結して exit 0。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY TWO PARTS", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    entry = {
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "PROMPT BODY "},
+                {"type": "text", "text": "TWO PARTS"},
+            ],
+        }
+    }
+    jsonl_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 0
+
+
+def test_verify_prompt_delivery_jsonl_non_text_block_exits_2_fail_closed(tmp_path: Path, capsys):
+    """期待テキスト+画像が配送されたケース——非 text ブロック混入は黙って
+    無視せず exit 2 で fail-closed（レビュー指摘の再発防止）。"""
+
     expected_path = tmp_path / "author_prompt.txt"
     expected_path.write_text("PROMPT BODY TWO PARTS", encoding="utf-8")
     jsonl_path = tmp_path / "task.jsonl"
@@ -5422,7 +5448,11 @@ def test_verify_prompt_delivery_jsonl_list_content(tmp_path: Path):
     exit_code = verify_prompt_delivery.main(
         ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
     )
-    assert exit_code == 0
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert "non-text content block" in captured.err
+    assert "fail-closed" in captured.err
 
 
 def test_verify_prompt_delivery_jsonl_unrecognized_content_exits_2(tmp_path: Path, capsys):
@@ -5627,6 +5657,117 @@ def test_audit_round_edit_vocabulary_diff_uses_physical_plus_role_concatenation(
     assert changed_by_index[1]["tokens"]["sparse"] == {"prev": 0, "curr": 1}
     # index 0 は無変化——列挙されない。
     assert 0 not in changed_by_index
+
+
+def test_audit_round_edit_empty_container_added_as_leaf(tmp_path: Path):
+    """`avoid: []` の新規追加が `field_changes` の `added` として列挙される
+    （空 list を leaf として記録しなければ黙って消える穴）。"""
+
+    prev = {"physical": {"bpm": 96}}
+    curr = {"physical": {"bpm": 96}, "avoid": []}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["avoid"] == {
+        "path": "avoid", "change": "added", "prev": None, "curr": [],
+    }
+
+
+def test_audit_round_edit_empty_container_removed_as_leaf(tmp_path: Path):
+    """空 dict の削除が `removed` として列挙される。"""
+
+    prev = {"physical": {"bpm": 96}, "notes": {}}
+    curr = {"physical": {"bpm": 96}}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["notes"] == {
+        "path": "notes", "change": "removed", "prev": {}, "curr": None,
+    }
+
+
+def test_audit_round_edit_empty_list_to_empty_dict_shape_change_modified(tmp_path: Path):
+    """`[]` -> `{}` の形状変化が `modified` として列挙される（`{} != []` の
+    Python 比較を素直に使う）。"""
+
+    prev = {"physical": {"bpm": 96}, "avoid": []}
+    curr = {"physical": {"bpm": 96}, "avoid": {}}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["avoid"] == {
+        "path": "avoid", "change": "modified", "prev": [], "curr": {},
+    }
+
+
+def test_audit_round_edit_empty_to_nonempty_list_reports_removed_and_added(tmp_path: Path):
+    """`[]` -> `["x"]` は、leaf `avoid`（空 list）の removed と leaf
+    `avoid[0]`（新規要素）の added という一貫した列挙になる（両者ともに
+    「平坦化結果の突き合わせ」という同一ロジックの帰結——空リストは
+    leaf として消え、非空リストは要素単位で展開されるため、path 集合が
+    完全に入れ替わる）。"""
+
+    prev = {"avoid": []}
+    curr = {"avoid": ["x"]}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["avoid"] == {
+        "path": "avoid", "change": "removed", "prev": [], "curr": None,
+    }
+    assert changes_by_path["avoid[0]"] == {
+        "path": "avoid[0]", "change": "added", "prev": None, "curr": "x",
+    }
+
+
+def test_audit_round_edit_vocabulary_normalization_mirrors_performer_space_join_lower(
+    tmp_path: Path,
+):
+    """`_section_hint_text` は performer の `f"{physical} {role}".lower()` を
+    鏡写しにする——大文字小文字違いも space 区切りをまたぐ語も拾い、無区切り
+    連結由来の偽陽性は起きない。"""
+
+    prev = {
+        "structure": [
+            {"section": "a", "physical": "Full Energy", "role": "lead"},
+            {"section": "b", "physical": "sub", "role": "bass"},
+            {"section": "c", "physical": "core", "role": "study"},
+        ]
+    }
+    curr = {
+        "structure": [
+            {"section": "a", "physical": "Full Energy", "role": "lead"},
+            {"section": "b", "physical": "sub", "role": "bass"},
+            {"section": "c", "physical": "core", "role": "study"},
+        ]
+    }
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    sections = report["vocabulary"]["curr_sections"]
+    # "Full Energy" (大文字小文字違い) が "full energy" にヒットする。
+    assert sections[0]["hits"]["full energy"] == 1
+    # physical="sub" + role="bass" は space join で "sub bass" になりヒット
+    # する（無区切り連結だと "subbass" で不一致だった旧実装の穴）。
+    assert sections[1]["hits"]["sub bass"] == 1
+    # physical="core" + role="study" は無区切り連結だと "corestudy" 経由で
+    # "rest" に誤ヒットしていた（旧実装の偽陽性）。space join では
+    # "core study" になり "rest" にはヒットしない。
+    assert sections[2]["hits"]["rest"] == 0
 
 
 def test_audit_round_edit_real_battery_v2_round1_to_round2(tmp_path: Path):

@@ -8,7 +8,9 @@ Handoff「②周回受付時の score 全文 diff 機械検査」が背景の運
 (a) **変更フィールドの全列挙** — `score.yaml` を dict/list 再帰的にドット
     表記のパスへ平坦化し（list 要素は `path[index]` 記法、例:
     `structure[2].role`）、両平坦化結果を突き合わせて `modified`/`added`/
-    `removed` を列挙する。
+    `removed` を列挙する。**空の dict (`{}`) / 空の list (`[]`) は leaf として
+    そのコンテナ自体を記録する**（中間ノードとして再帰を打ち切る）——
+    `avoid: []` の追加・削除や `[]`↔`{}` の形状変化も列挙対象に入れるため。
 (b) **認識語彙の出現一覧と変化** — `structure` 各セクションについて、
     `physical` + `role` を連結した文字列（`contract_v2.md` §2「ヒント照合の
     対象フィールド」と同一の照合対象）に対し、演奏者が実際に認識する 8 語
@@ -85,17 +87,28 @@ def _load_score_mapping(path: Path) -> dict[str, Any]:
 
 def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
     """dict/list を再帰的に平坦化し、dot-path（list は `path[index]`
-    記法）-> leaf 値の dict を返す。中間ノード（dict/list そのもの）は
-    キーとして現れない——leaf のみが `field_changes` の対象になる。"""
+    記法）-> leaf 値の dict を返す。非空の中間ノード（dict/list そのもの）
+    はキーとして現れない——leaf のみが `field_changes` の対象になる。**空の
+    dict (`{}`) / 空の list (`[]`) は再帰を打ち切り、そのコンテナ自体を
+    `prefix` の leaf として記録する**（`avoid: []` の追加・削除や
+    `[]`↔`{}` の形状変化を黙って消さないため。トップレベル全体が空の
+    ケースは leaf キー `""` になるが、トップレベルは mapping 強制済み
+    （`_load_score_mapping`）のため実質 `{}` のみが該当する）。"""
 
     flat: dict[str, Any] = {}
     if isinstance(value, dict):
-        for key, sub in value.items():
-            sub_prefix = f"{prefix}.{key}" if prefix else str(key)
-            flat.update(_flatten(sub, sub_prefix))
+        if not value:
+            flat[prefix] = value
+        else:
+            for key, sub in value.items():
+                sub_prefix = f"{prefix}.{key}" if prefix else str(key)
+                flat.update(_flatten(sub, sub_prefix))
     elif isinstance(value, list):
-        for index, sub in enumerate(value):
-            flat.update(_flatten(sub, f"{prefix}[{index}]"))
+        if not value:
+            flat[prefix] = value
+        else:
+            for index, sub in enumerate(value):
+                flat.update(_flatten(sub, f"{prefix}[{index}]"))
     else:
         flat[prefix] = value
     return flat
@@ -126,9 +139,17 @@ def _diff_fields(prev: dict[str, Any], curr: dict[str, Any]) -> list[dict[str, A
 
 
 def _section_hint_text(section: Any) -> str:
-    """`physical` + `role` を連結した、演奏者の照合対象と同一の文字列を
-    返す（`contract_v2.md` §2「ヒント照合の対象フィールド」）。値が str で
-    なければ空文字扱い（型の妥当性検証はこの計器のスコープ外）。"""
+    """`physical` + `role` を演奏者の照合対象と**バイト同一**の正規化で
+    連結した文字列を返す（`contract_v2.md` §2「ヒント照合の対象
+    フィールド」）。実消費者 `src/svp_rpe/perform/performer.py`
+    `_section_profile` は `f"{section.physical} {section.role}".lower()`
+    （space join + lowercase）で照合する——これを鏡写しにしないと、
+    大文字小文字違いの取りこぼし（例: "Full Energy"）や、無区切り連結による
+    偽陽性/偽陰性（例: "physical: sub" + "role: bass" は無区切りだと
+    "subbass" になり "sub bass" にヒットしない／"core"+"study" が無区切り
+    "corestudy" 経由で "rest" に誤ヒットする）が生じ、この計器が実消費者と
+    異なる事実を報告してしまう。値が str でなければ空文字扱い（型の妥当性
+    検証はこの計器のスコープ外）。"""
 
     if not isinstance(section, dict):
         return ""
@@ -136,7 +157,7 @@ def _section_hint_text(section: Any) -> str:
     role = section.get("role", "")
     physical_str = physical if isinstance(physical, str) else ""
     role_str = role if isinstance(role, str) else ""
-    return physical_str + role_str
+    return f"{physical_str} {role_str}".lower()
 
 
 def _vocab_hits(text: str) -> dict[str, int]:
