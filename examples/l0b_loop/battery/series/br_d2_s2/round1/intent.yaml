@@ -1,0 +1,29 @@
+section_length_rationale: >
+  bpm=96, time_signature=4/4, bars=3 の各セクションは 3 * 4 * 60/96 = 7.5 秒。
+  契約 §2 で開示された陽性対照（中間セクション実長 7.5 秒が 3 分割ちょうどで
+  成立）と厳密一致させ、intro/chorus/outro の全区間をこの実測成功点に揃えた。
+  12.3 秒（過分割）・6.2 秒（吸収）のいずれの失敗帯からも十分離れている。
+
+boundary_contrast_rationale: >
+  構造観測は完成音源のエネルギー・音色対比で境界を検出するため、隣接セクション
+  間の対比を明確化する必要がある。禁止語句（silence/no kick/low density/
+  sub bass）を避けつつ、認識語彙のうち許可されている sparse -> full energy ->
+  release の三段でエネルギー曲線に明確な山を作り、intro/chorus 間・chorus/outro
+  間の双方に音響的コントラストを与えた。
+
+key_rationale: >
+  physical.key を "D minor" と直接宣言。加えて events.chord_progression に
+  i(Dm) - VII(C) - VI(A#=Bb) - VII(C) の自然短音階内進行を与え、開始和音を
+  トニックに固定することで調性重心を D minor に強く係留した。
+
+brightness_rationale: >
+  physical.brightness を "dark" と宣言。semantic.avoid に "excess brightness"
+  を加え、意味層側でも明度方向の記述を一貫させた（演奏への直接反映は
+  physical.brightness 経由）。
+
+r4_compliance_check: >
+  score.yaml 全文字列を目視走査し、silence / no kick / low density / sub bass
+  のいずれも部分文字列として含まれないことを確認した（大文字小文字を問わず）。
+
+melody_scope: >
+  課題により旋律指定は対象外のため、events に melody 関連キーは一切含めていない。

@@ -1,0 +1,75 @@
+design_rationale:
+  overall: >
+    round2 の diff_report は round1 の own_intent に記録された観測値と秒単位
+    まで完全一致していた（intro 0-8.4753 / chorus 8.4753-13.5372 / outro
+    13.5372-30.0）。round1→round2 で chorus2 に "no kick" を追加し、outro を
+    "release, low density fade" から "silence, no kick, low density" に置換
+    したにもかかわらず観測構造が一切変化しなかったことは、決定論的演奏者を
+    前提とすれば「これらの語彙変更は構造観測に測定可能な影響を持たない」こと
+    の直接証拠と解釈した。round3 では同系統の語彙置換を繰り返すアプローチを
+    放棄し、(a) セクション長の非対称化、(b) round1/2 で未試験だった密度系
+    語彙 (low density) との組み合わせ、の2軸を新変数として導入する。
+  round2_diagnosis:
+    key_finding: >
+      round1 と round2 の observed_sections は小数点以下4桁まで完全一致
+      （8.4753 / 13.5372 / 30.0）。両 round で変わったのは chorus2 の
+      "no kick" 追加と outro の "release"→"silence" 置換のみで、bars・bpm・
+      key・time_signature・brightness・stereo_width・intro/chorus1 のテキス
+      トは無変更だった。この完全一致は偶然ではなく、当該語彙差が本実装の
+      構造観測に効かなかったことの証拠と判断した。
+    reinterpretation: >
+      round1 own_intent の hypothesis_2（"release" は緩やかな減衰を含意し
+      境界検出に不利）は round2 で "release" を除去したにも関わらず結果が
+      不変だったため反証された。hypothesis_1（"no kick" 追加で chorus1/
+      chorus2 の対比を強める）も効果ゼロだった。代替仮説として、構造観測器
+      はセクションの音量/密度の「水準」に反応するのであって、"no kick"・
+      "sub bass" のような音色寄りの語彙は水準を変えないため無効だったのでは
+      ないかと推測する。intro→chorus1 境界で実際に機能した組み合わせは
+      "sparse/low density" → "full energy" という明確な水準対比であり、
+      これのみが有効という仮説を round3 の設計原則とする。
+  changes_this_round:
+    chorus2: >
+      文言を "full energy hook, no kick, sub bass emphasis" から
+      "full energy hook, low density breakdown" へ変更し、水準系語彙
+      (full energy + low density) の組み合わせに切り替えた。同時に bars を
+      3→4 (7.5s→10.0s) に変更し chorus1 と異なる長さにすることで、デフォル
+      トコード進行/リズムパターンの位相ずれによる構造的な継ぎ目も期待する
+      （語彙のみに依存しない二重の差別化）。
+    outro: >
+      "silence, no kick, low density" から "silence, rest, sparse, no kick,
+      low density" へ、静音/低密度カテゴリの認識語彙5語すべてを重ねる形に
+      変更した。round1→round2 の単語入れ替え（release→silence）が無効
+      だったため、単一語の入れ替えではなく複数語の重ね掛けという未試験の
+      バリエーションを試す。bars は 3 のまま維持（契約 §2 の唯一の成立実測
+      点である 7.5 秒を再採用）。
+    intro_and_chorus1: >
+      無変更。round1/round2 を通じて最も安定して検出された境界
+      （intro→chorus1、設計7.5s vs 観測8.4753s、ズレ約1秒）を持つペアであり、
+      変更して退行させるリスクを避けた。
+  section_length:
+    intro_chorus1_outro: "7.5秒 (bars=3) を維持。契約開示の唯一の成立実測点に基づく。"
+    chorus2: >
+      10.0秒 (bars=4) に変更。契約開示の可行窓（7.5s成立 / 12.3s過分割 /
+      6.2s吸収）のうち過分割境界 (12.3s) より十分短く、かつ chorus1 の
+      7.5s とは異なる値を選ぶことで、語彙差に依存しない構造的な継ぎ目を
+      狙った。この長さ自体は契約に開示された実測点ではなく未検証の外挿で
+      あることに注意。
+  open_risks:
+    - "chorus2 に low density を追加したことで、エネルギー水準が chorus
+      ラベルの閾値を割り verse/bridge 等に誤判定されるリスクは未検証。
+      full energy を併記することで軽減を狙ったが保証はない。"
+    - "chorus2 の長さを 10.0s に変えたことで意図した内部境界が生まれず、
+      むしろ7.5sのときより長い連続ブロックとして over-split/absorb いずれ
+      の方向にも予期しない挙動を示す可能性がある（12.3s過分割点との距離は
+      2.3sしかなく安全マージンは小さい）。"
+    - "outro の5語重ね掛けが round1/round2 の1〜2語構成と本質的に異なる効果
+      を持つ保証はない。round2 の完全一致という結果は、語彙変更自体が本
+      実装で全く効かない設計（例: 音色語彙は無視され実装済みなのは
+      full energy と low density/sparse のみ等）である可能性も残しており、
+      その場合は outro 側の変更も無効に終わる。"
+    - "chorus2 のテキストから sub bass / no kick を削除したことで、round1
+      で意図されていた低音質感の変化という音楽的効果は失われる（構造検出
+      の実験を優先したトレードオフ）。"
+  pareto_note: >
+    key/brightness は前2周連続で preserved のため physical のトップレベル値
+    は一切変更していない。今回の変更は structure 軸のみを対象とする。

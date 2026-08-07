@@ -1,0 +1,48 @@
+meta:
+  title: "BR-D1 Round1 Sketch"
+  version: "0.1"
+
+semantic:
+  core: "静かな導入から力強いフックを二度提示し、質感を変えたのち静かに解けていく短い器楽曲。"
+  grv:
+    primary: "minimal"
+    secondary: "electronic"
+  delta_e:
+    overall: "低いエネルギーの静けさから高いエネルギーの反復フックへ跳躍し、二度目で低音の質感を変えたのち再び静けさへ減衰する。"
+  avoid: []
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: "intro"
+    bars: 3
+    role: "低エネルギーの静かな導入部。次のchorusとの対比を作る"
+    physical: "sparse, no kick, low density opening"
+  - section: "chorus"
+    bars: 3
+    role: "主題フックを高エネルギーで提示する第一の中間区間"
+    physical: "full energy driving hook"
+  - section: "chorus"
+    bars: 3
+    role: "同フックの反復。低音の質感を変えて前の区間との境界を作る"
+    physical: "full energy hook, sub bass emphasis"
+  - section: "outro"
+    bars: 3
+    role: "エネルギーを解放して静かに終息する"
+    physical: "release, low density fade"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure

@@ -1,0 +1,48 @@
+meta:
+  title: "Quiet Drive"
+  version: "0.2"
+
+semantic:
+  core: "短い器楽曲。静かな入りから力強い反復部を経て静かな終息へ向かう"
+  grv:
+    primary: "ambient"
+    secondary: "minimal"
+  delta_e:
+    overall: "抑制された開始から高まりを経て穏やかに収束する"
+  avoid: []
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: intro
+    bars: 4
+    role: "静かな導入部（遷移域を内包させるため延長）"
+    physical: "sparse texture, gentle entrance"
+  - section: chorus
+    bars: 3
+    role: "力強い反復部その1"
+    physical: "full energy, driving rhythm"
+  - section: chorus
+    bars: 3
+    role: "力強い反復部その2"
+    physical: "full energy, sustained drive"
+  - section: outro
+    bars: 3
+    role: "静かな終息部"
+    physical: "release, fading close"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure

@@ -1,0 +1,66 @@
+design_rationale:
+  overall: >
+    round1 の diff_report を根拠に structure 軸のみを狙い撃ちで修正した。
+    key/brightness は preserved 済みのため physical のトップレベル値
+    (bpm/key/time_signature/brightness/stereo_width/valley_depth_target/
+    active_rate_target) は一切変更しない（Pareto改善の定義上、既に達成した
+    軸を退行させるリスクを避けるため）。
+  round1_diagnosis:
+    observed: >
+      round1 の observed_sections は intro(0.0-8.4753) / chorus(8.4753-13.5372)
+      / outro(13.5372-30.0) の3区間のみで、要求4区間 [intro, chorus, chorus,
+      outro] に対し中間の chorus-chorus 境界と chorus2-outro 境界の少なくとも
+      片方が検出されなかった（実際には両方に異常があると解釈した。理由は下記）。
+    hypothesis_1_weak_internal_boundary: >
+      chorus1("full energy driving hook")と chorus2("full energy hook, sub
+      bass emphasis")の差は認識語ベースで見ると "sub bass" 追加のみであり、
+      観測された "chorus" ラベル区間が 5.0619 秒しかない（設計上の 7.5 秒より
+      大幅に短い）ことから、境界は検出されはしたが弱く、位置もずれたと解釈した。
+    hypothesis_2_gradual_vs_abrupt_cue: >
+      intro→chorus1 の境界（sparse/no kick/low density → full energy、共に
+      "瞬間的な水準" を表す語彙のみで構成）はおおむね機能した（8.4753s、設計値
+      7.5s との差は約1秒のみ）のに対し、chorus2→outro の境界（full energy+sub
+      bass → release+low density fade）は全く検出されず outro ラベルが
+      13.5372〜30.0 の16.46秒に拡大していた。intro側は「瞬間的な水準変化」語彙
+      のみで構成されているのに対し、outro側は "release"（緩やかな減衰を含意
+      すると解釈）を含んでいた。この非対称性から、"release" のような語彙は
+      区間内で緩やかに変化する特性を持ち、区間開始時点では前区間との急な
+      断絶を作らないため境界検出に不利、という仮説を立てた。
+  changes_this_round:
+    chorus2: >
+      "no kick" を追加し full energy + no kick + sub bass の3語彙同時使用に
+      強化した。chorus1 との対比を "sub bass" 単独より強める狙い。副作用
+      リスクとして "no kick" は intro でも密度低下語彙として使われており、
+      chorus2 のエネルギー水準が "chorus" ラベルの閾値を割って別ラベル
+      （例: verse/bridge）に誤判定される可能性は残る。これは契約に明示された
+      閾値情報が無いため未検証のまま許容したリスクである。
+    outro: >
+      "release, low density fade" を "silence, no kick, low density" に
+      置き換えた。hypothesis_2 に基づき、緩やかな減衰語彙を排し、intro で
+      機能実績のある「瞬間的な水準低下」語彙の組み合わせに統一することで
+      chorus2→outro の急な断絶を狙う。
+    intro_and_chorus1: >
+      round1 で概ね機能した（境界検出はされ、ズレは約1秒のみ）ため意図的に
+      無変更とした。未検証の変更を加えて退行させるリスクを避けるため。
+  section_length:
+    choice: "全区間を bars=3 (bpm=96, 4/4 → 7.5秒) のまま維持"
+    reason: >
+      契約 §2 で開示された唯一の成立実測点 7.5 秒（3分割構成の中間区間）を
+      根拠にしており、round1 でも大枠のセクション長設計自体は否定されて
+      いない（観測区間の合計は 30 秒で設計どおり）。長さを変えるとどの語彙
+      変更が効いたのか切り分けられなくなるため、この周回では語彙のみを
+      変数として固定した。
+  open_risks:
+    - "no kick を chorus2 に追加したことで chorus ラベルの判定から外れる（例
+      verse/bridge に誤判定される）リスクは未検証"
+    - "outro を silence 主体にしたことで、release による緩やかなフェード
+      という当初の音楽的意図（力強いフックから解放される感覚）が失われる
+      トレードオフがある。ただしR1(構造)を優先しR3(brightness)への影響は
+      軽微と見立てた"
+    - "intro→chorus1 境界の約1秒のズレ（8.4753s vs 設計7.5s）は検出器の
+      構造的な遅延/平滑化である可能性があり、著述側の語彙変更では解消
+      できない可能性がある（この周回では対応せず据え置いた）"
+    - "2つの chorus 区間がどちらも同じ 7.5 秒×連続配置という round1 未検証の
+      構成のままであり、7.5秒の成立実績は『3分割構成の中間区間1つ』であって
+      『連続する2つの中間区間』には未確認"
+tools_used: none

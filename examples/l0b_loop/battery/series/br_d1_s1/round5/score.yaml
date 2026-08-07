@@ -1,0 +1,48 @@
+meta:
+  title: "BR-D1 Round5: Revert Bars Symmetry, Hold Chorus2 Wording Constant"
+  version: "0.5"
+
+semantic:
+  core: "静かな導入から力強いフックを提示し、二度目のフックは同じ高エネルギーを保ったままサブベース強調という音色軸のみで対比を作り、最後は複数の静音語彙を重ねて断ち切るように静寂へ落ちる短い器楽曲。"
+  grv:
+    primary: "minimal"
+    secondary: "electronic"
+  delta_e:
+    overall: "低いエネルギーの静けさから高いエネルギーの反復フックへ跳躍し、二度目のフックはエネルギー水準を落とさずサブベースの音色差だけで内部対比を作り、最後は静音語彙を重ねて急な断絶で静寂に落ちる。"
+  avoid: []
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: "intro"
+    bars: 3
+    role: "低エネルギーの静かな導入部。次のchorusとの対比を作る"
+    physical: "sparse, no kick, low density opening"
+  - section: "chorus"
+    bars: 3
+    role: "主題フックを高エネルギーで提示する第一の中間区間"
+    physical: "full energy driving hook"
+  - section: "chorus"
+    bars: 3
+    role: "同フックをエネルギー水準は維持したまま音色軸(サブベース)で対比を作る第二の中間区間。round4からbarsをchorus1と同一の3へ復帰(対称化)し、文言はround4から不変"
+    physical: "full energy hook, sub bass emphasis, no kick"
+  - section: "outro"
+    bars: 3
+    role: "静音語彙を重ねて断ち切るように静寂へ落ちて終息する"
+    physical: "silence, rest, sparse, no kick, low density"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure

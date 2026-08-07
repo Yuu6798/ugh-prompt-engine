@@ -1,0 +1,50 @@
+round: 2
+overall_strategy: >
+  round1 の diff_report を根拠に、key 軸と structure 軸それぞれ独立に原因を
+  推定し修正した。brightness は preserved だったため physical.brightness と
+  グローバル構成はそのまま維持し、変更対象を key と structure のみに絞った
+  （Pareto 改善の定義上、他軸を悪化させない保守方針）。
+key_fix_rationale: >
+  round1 の observed key は "F major"。D minor と F major は同一調号（Bb 1つ）
+  の平行調であり、round1 の進行 Dm-A#(Bb)maj-Fmaj-Cmaj は D 自然短音階の
+  音のみで構成され F major 音階と完全に重複していたため、平行調との
+  曖昧性を全く解消できていなかったと判断した。対策として V の和音を
+  A major に差し替えた（i-iv-V-i: Dm-Gm-A-Dm）。A major は導音 C# を含み、
+  この音は F major 音階に存在しないため、F major との重複を断ち切り
+  D minor 側に倒す和声的手掛かりになるはずだという設計。
+structure_fix_rationale: >
+  round1 の observed_sections を見ると、宣言した4区間（各7.5秒想定）に対し
+  観測は5区間（intro, bridge, chorus, chorus, outro）だった。intro の
+  physical 文 "sparse, building toward full energy" が sparse と full energy
+  の2つの認識語を同一区間内に混在させ、契約 §2 が警告する「長い持続区間の
+  内部ダイナミクス変化による過分割」を intro/chorus1 境界付近で引き起こし、
+  遷移的な区間が "bridge" として余分に検出されたと推定した（round1 の
+  chorus2 "full energy with a brief release before restating" は同様の
+  複合語だったが分割されなかったため確証は無いが、同種リスクの排除を優先）。
+  対策として全区間の physical 文を認識語1つのみに単純化した
+  （intro=sparse, chorus×2=full energy, outro=release）。narrative な
+  "building toward" "settling toward" 等の遷移語を除去し、区間内の
+  ダイナミクスを平坦化することで境界の鋭さを取り戻す狙い。
+  bars=7.5秒（3小節・96bpm・4/4）は契約 §2 の陽性対照実測点をそのまま維持。
+chorus_chorus_identical_text_choice: >
+  round1 は2つの chorus 区間を意図的に異なる physical 文にしていたが、
+  R1 の要求は「両方とも chorus と観測されること」のみで音響的差異は
+  不要と判断し、round2 では2区間を完全に同一の physical="full energy"
+  に統一した。同一入力は同一出力という決定論演奏者の性質上、音響的に
+  等価な2区間であれば構造観測器の分類も安定するはずという仮定に基づく
+  （contract 外の実装詳細は未知だが、この仮定は保守的でリスクを増やさない）。
+r4_self_check: >
+  score.yaml 全文（title/role/physical を含む）を目視で再確認し、
+  silence / no kick / low density / sub bass のいずれの部分文字列も
+  含まないことを確認した（"density" "bass" "kick" "silen" いずれの
+  断片も一切使用していない）。
+open_risks_for_next_round: >
+  - key 修正が実際に F major との混同を解消するかは round2 の
+    axes.key.observed を見るまで未確証。もし依然 F major なら、
+    A major 単独では不十分という可能性が高く、次周回は Dm を
+    より頻繁に踏む（i の滞在時間を増やす）方向で再設計する。
+  - structure 修正で intro 起因の過分割が消えても、chorus1/chorus2 間の
+    境界（同一テキストゆえ理論上は境界が弱い）が逆に吸収され3区間化する
+    リスクが新たに生じた可能性がある。observed_sections の区間数と
+    各区間長を必ず確認すること。
+tools_used_note: "no tools were used to produce this round; reasoning is derived solely from the PAYLOAD contents"

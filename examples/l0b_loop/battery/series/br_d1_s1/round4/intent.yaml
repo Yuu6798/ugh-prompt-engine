@@ -1,0 +1,83 @@
+design_rationale:
+  overall: >
+    round3 diff report が示す唯一の解釈可能な失敗パターン: 要求4区間
+    (intro/chorus/chorus/outro) に対し観測は3区間 (intro/chorus/outro) で、
+    intro単体は初めて設計値7.5sぴったりに一致した一方、chorus1+chorus2は
+    単一の "chorus" ラベル (7.5s-12.5852s, 実長5.0852s) に融合され、
+    残り (12.5852s-32.5s, 実長19.9148s) がまとめて "outro" と観測された。
+    round4は round3 own_intent が立てた仮説「chorus2 に混ぜた low density
+    語彙が隣接する outro の低密度語彙群と音響的に近接し、chorus2 の
+    後半が outro 側に吸着された」を単独で検証するため、chorus2 のテキストから
+    low density 系語彙を除去し、round1 で使用実績のある sub bass / no kick
+    (エネルギー水準を落とさない音色系語彙) に差し替える一点変更のみを行う。
+    bars 非対称 (chorus1=3 / chorus2=4) は round3 から維持し変更しない
+    (この変数を同時に動かすと round3 と同様に二重交絡になるため)。
+  round3_diagnosis:
+    observed_vs_required: >
+      要求 [intro, chorus, chorus, outro] に対し観測 [intro, chorus, outro]。
+      position_match_rate 0.5, structure verdict mismatch。key/brightness は
+      3周連続 preserved で今回も不変。
+    intro_boundary_shift: >
+      round1/round2 では intro の観測境界が 8.4753s (設計7.5sから約1s乖離)
+      で安定していたが、round3 (chorus2 bars 3→4 + low density 追加) では
+      intro境界が設計どおり厳密に7.5sへ一致した。intro自体のテキスト/bars
+      は round1〜3 で無変更のため、この変化は intro単体の設計ではなく
+      後続区間 (chorus2 以降) の音響内容の変化が全体のレンダリングに波及した
+      結果と解釈する。intro境界のこの改善は意図した変更ではなく副産物だが、
+      悪化ではないため round4 でも維持する対象として扱う (bars非対称を
+      崩さない理由の一つ)。
+    chorus_merge_persistence: >
+      round1 (bars対称、chorus2="full energy hook, no kick, sub bass
+      emphasis")・round2 (同bars対称、chorus2に変更なし)・round3 (bars非対称、
+      chorus2="full energy hook, low density breakdown") のいずれでも
+      chorus1/chorus2 間に境界が検出されず、3周とも単一 "chorus" ラベルへ
+      融合した。round1/round2 の融合は "chorus" ラベルのまま (outroには
+      吸着されなかった) のに対し、round3 の融合は後半が "outro" ラベル側へ
+      吸着される形に変質した。この差分から、chorus1/chorus2 間の非分離は
+      3周とも共通の未解決課題である一方、round3固有の新規劣化 (outroへの
+      吸着) は low density 語彙の追加が原因と推定する。
+    absorption_threshold_note: >
+      契約開示の吸収閾値 (中間セクション実長 6.2秒で吸収) に対し、round3の
+      融合chorusブロック実長は5.0852秒でこれを下回っていたが、観測ラベルは
+      "chorus" として残存し intro/outro のどちらにも吸収されなかった。
+      これは吸収閾値が単純な絶対長ではなく、隣接ラベルとの音響的類似度に
+      依存する可能性を示唆する (今回は保留、将来の検証課題としてのみ記録)。
+  changes_this_round:
+    chorus2_wording: >
+      "full energy hook, low density breakdown" を "full energy hook, sub
+      bass emphasis, no kick" に差し替えた。round1で実績のある語彙の組み
+      合わせへの復帰であり、エネルギー水準を維持したまま音色軸のみで
+      chorus1との対比を作ることを狙う。low density 系語彙 (低密度・静音
+      ファミリー) を chorus2 から完全に除去し、outro との音響的近接を
+      断つことが主目的。
+    chorus2_bars: "4のまま維持 (round3から変更なし。二重交絡を避けるため)。"
+    intro_and_outro: "無変更 (intro/outroとも各軸で問題を示していないため)。"
+    physical_top_level: "無変更 (key/brightnessは3周連続preservedのため)。"
+  hypothesis_for_round4:
+    primary: >
+      chorus2 から low density 語彙を除去すれば、少なくとも round3で新規
+      発生した「chorus2後半のoutroへの吸着」は解消され、観測構造は round1/
+      round2型の「[intro, chorus(融合), outro]」(3区間、境界位置は intro=
+      7.5s前後、chorus融合ブロックはより長い) に近づくと予測する。
+    secondary_uncertain: >
+      chorus1/chorus2間の境界そのものが今回検出されるかは不確実。round1は
+      本ラウンドと同じ語彙 (sub bass + no kick) を使いながら bars対称
+      条件下で融合したため、round4のbars非対称条件との組み合わせで初めて
+      境界が生まれるかどうかは未検証の外挿である。もし今回も融合したままなら、
+      「chorus1/chorus2の音色差語彙だけでは境界を生成できず、より大きな
+      音響コントラスト (例: エネルギー水準そのものの変化) が必要」という
+      より強い仮説へ進む根拠になる。
+  open_risks:
+    - "sub bass + no kick の組み合わせは round1 で bars対称条件下では境界
+      生成に失敗した実績があり、bars非対称のみでこれを覆せる保証はない。"
+    - "low density除去によりchorus2がoutroから完全に切り離された場合でも、
+      chorus1との境界がなお検出されなければ要求4区間には届かず、
+      structure verdictはmismatchのまま (ただしposition_match_rateの改善
+      は期待できる)。"
+    - "intro境界が7.5s厳密一致した副産物的改善が、chorus2の語彙変更後も
+      維持される保証はない (round3固有の組み合わせに依存していた可能性)。"
+  pareto_note: >
+    key/brightnessは4周連続preserved見込みのためphysicalトップレベル値は
+    一切変更しない。本ラウンドの変更はstructure軸のchorus2テキストのみの
+    単一変数変更とし、bars配分・intro・outroは全てround3から据え置くことで、
+    次回diff_reportの変化をchorus2語彙変更の効果に一意に帰属できるようにする。

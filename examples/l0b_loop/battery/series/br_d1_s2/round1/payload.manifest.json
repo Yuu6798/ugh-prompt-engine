@@ -1,0 +1,25 @@
+{
+  "experiment_id": "l0br_br_d1_s2",
+  "parts": [
+    {
+      "bytes": 12863,
+      "index": 1,
+      "newline_appended": false,
+      "path": "contract.md",
+      "role": "contract",
+      "sha256": "5bab21e9694cb92a247f922c9a96db015bb87ba729ef411b9146881934debaca"
+    },
+    {
+      "bytes": 656,
+      "index": 2,
+      "newline_appended": false,
+      "path": "task.md",
+      "role": "task",
+      "sha256": "17feb99e0015c476aae3fb980ecee380b4cbd7eb7130c06e787f4cbafb4113e1"
+    }
+  ],
+  "payload_file": "payload.md",
+  "payload_sha256": "7499aadaca4c5cf873f0b6bc2300f86fbf2c7581d5194d82441669e4fdea25f9",
+  "round_label": "round1",
+  "schema_version": "l0b-payload-pin/0.1"
+}

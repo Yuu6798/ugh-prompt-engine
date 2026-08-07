@@ -1,0 +1,38 @@
+round: 1
+overall_strategy: >
+  第一周回。可行窓開示（7.5秒ちょうどが3分割成立の実測点）をそのまま
+  4セクション全てに適用した。bpm=96, 4/4 なら 1小節=2.5秒、3小節=7.5秒と
+  割り切れるため、この bpm/拍子/小節数の組を採用した。
+section_length_rationale: >
+  intro/chorus/chorus/outro の全区間を 3小節=7.5秒に統一。契約 §2 の
+  実測点（12.3秒は分割された・6.2秒は吸収された・7.5秒は3分割成立）の
+  唯一の成立点をそのまま踏襲する保守的選択。4区間版での成立は未検証の
+  ため、次周回の差分報告（observed_sections の start/end）で必ず検算する。
+chorus_chorus_boundary_risk: >
+  中間2区間はどちらも "chorus" ラベルを狙うが、観測器は音響駆動の境界検出
+  ヒューリスティックであり、宣言したセクション名がそのまま転記される保証は
+  ない。同一ラベルの2区間を分離検出させるため、2つ目の chorus にのみ
+  "full energy with a brief release before restating" という認識語混在の
+  ヒントを与え、音色/音量の微差を作って境界検出を狙った。これが逆に
+  ラベル自体を chorus から逸らす（bridge 等に振れる）リスクは残る。
+intro_outro_contrast_rationale: >
+  intro は "sparse, building toward full energy"、outro は "release
+  settling toward a sparse close" とし、隣接する chorus 区間との
+  エネルギー対比を明確化した。認識語は §2 の許可語彙のみを使用
+  （sparse / full energy / release）。禁止語句（silence / no kick /
+  low density / sub bass）はいずれの自由文にも含めていない
+  （score.yaml 全文を目視で再確認済み）。
+key_rationale: >
+  physical.key を "D minor" と宣言するだけでなく、events.chord_progression
+  に D minor の典型進行 (i-VI-III-VII: Dm-A#(=Bb)maj-Fmaj-Cmaj) を明示し、
+  和声面からもキー観測を後押しする設計とした。
+brightness_rationale: >
+  physical.brightness を "dark" に設定。セクション個別の physical 自由文は
+  音量・密度への影響のみで音色（明度）には直結しないため、dark の実現は
+  この一箇所のグローバル宣言に依存する設計であることを明記しておく。
+open_risks_for_next_round: >
+  - 4区間×7.5秒均等割りは実測未確認のパターン。observed_sections の
+    実長がどこまで7.5秒に近いか、また "chorus" ラベルが2区間とも
+    正しく付与されるかが最大の不確実要素。
+  - avoid リストを空にしたことで semantic 層の設計意図がやや薄いが、
+    R4 の禁止語句誤含有リスクを避けるための保守的判断。

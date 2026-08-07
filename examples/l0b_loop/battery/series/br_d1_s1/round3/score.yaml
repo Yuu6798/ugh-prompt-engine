@@ -1,0 +1,48 @@
+meta:
+  title: "BR-D1 Round3: Level-Based Contrast + Duration Asymmetry"
+  version: "0.3"
+
+semantic:
+  core: "静かな導入から力強いフックを提示し、二度目のフックは密度を変えて内部に継ぎ目を作り、最後は複数の静音語彙を重ねて断ち切るように静寂へ落ちる短い器楽曲。"
+  grv:
+    primary: "minimal"
+    secondary: "electronic"
+  delta_e:
+    overall: "低いエネルギーの静けさから高いエネルギーの反復フックへ跳躍し、二度目のフックは密度を落として内部境界を作り、最後は静音語彙を重ねて急な断絶で静寂に落ちる。"
+  avoid: []
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: "intro"
+    bars: 3
+    role: "低エネルギーの静かな導入部。次のchorusとの対比を作る"
+    physical: "sparse, no kick, low density opening"
+  - section: "chorus"
+    bars: 3
+    role: "主題フックを高エネルギーで提示する第一の中間区間"
+    physical: "full energy driving hook"
+  - section: "chorus"
+    bars: 4
+    role: "同フックを異なる密度水準で提示し、フック1との内部境界を作る第二の中間区間"
+    physical: "full energy hook, low density breakdown"
+  - section: "outro"
+    bars: 3
+    role: "静音語彙を重ねて断ち切るように静寂へ落ちて終息する"
+    physical: "silence, rest, sparse, no kick, low density"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure

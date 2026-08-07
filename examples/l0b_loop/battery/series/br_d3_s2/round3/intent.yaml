@@ -1,0 +1,55 @@
+round: 3
+overall_strategy: >
+  round2 の diff_report は key/brightness ともに preserved、structure のみ
+  mismatch (observed: intro, bridge, chorus, chorus, outro / requirement:
+  intro, chorus, chorus, outro)。Pareto改善の定義に従い、key と brightness
+  を変更するリスクを避け、structure 軸のみを対象に intro セクションの
+  physical 手掛かり語を1語のみ変更する保守的な修正を行う。
+
+structure_fix_rationale: >
+  round2の observed_sections を見ると、余分な "bridge" は必ず intro と
+  chorus1 の間に挿入されており (intro: 0.0-6.5945s, bridge: 6.5945-
+  12.2137s)、chorus2 と outro の間には同様の余分区間が生じていない
+  (chorus2: 17.8329-22.8484s, outro: 22.8484-30.0s, 綺麗に2区間)。両方とも
+  隣接区間間でエネルギーが変化する遷移点であるにもかかわらず、
+  sparse→full energy 方向の遷移でのみ余分な区間が生じ、full energy→
+  release 方向の遷移では生じていない。この非対称性から、"sparse" の
+  音響内容が "full energy" の立ち上がり部分と紛らわしい (契約の
+  「隣接セクションの音響対比が明確なほど境界は宣言通り検出される」
+  という記述の裏を返せば、対比が不明瞭だと誤検出が起きる) と推定した。
+  intro と bridge の合計区間長 (6.5945+5.6192=12.2137秒) が契約 §2 に
+  開示された「12.3秒は分割された」という実測点にほぼ一致することも、
+  intro側の音響内容が実際には chorus1 冒頭まで連続的に「同質」とみなされ、
+  結果として1つの長い(~12.3秒)区間として観測された上で過分割規則により
+  intro/bridgeの2つに割られた、という仮説を補強する。
+  対策として、intro の手掛かり語を "sparse"（緩やかな密度で、full energy
+  への立ち上がりと音響的に紛れやすい可能性がある語）から "rest"
+  （より対比の強い、ほぼ無音に近い性格を持つと想定される語）へ
+  1語のみ変更する。他のセクション (chorus×2, outro) は round2 で
+  正しくラベル付けされていたため変更しない (chorus, chorus, outro の
+  3区間は round2 で要求どおり observed に含まれていた)。
+
+key_and_brightness: >
+  round2 で key=D minor (preserved)、brightness=dark (preserved) が
+  確認済みのため、chord_progression (i-iv-V-i: Dm-Gm-A-Dm) と
+  physical.brightness="dark" を含む物理層設定は一切変更しない。
+
+r4_self_check: >
+  score.yaml 全文 (title/semantic/role/physical を含む) を再確認し、
+  silence / no kick / low density / sub bass のいずれの部分文字列も
+  含まないことを確認した。"rest" は "silence" とは異なる独立した語で
+  あり、禁止語のいずれの断片とも重複しない。
+
+open_risks_for_next_round: >
+  - "rest" が実際に sparse/full energy の混同を解消するかは round3 の
+    axes.structure.observed_sections を見るまで未確証。もし依然として
+    bridge が挿入されるなら、原因は cue語の選択ではなく sparse↔full
+    energy という極端な音量差そのもの (どの静音系cueを使っても
+    同じ問題が起きる) の可能性が高く、次周回では intro の bars を
+    増減して結合区間の長さそのものを可行窓の外へ動かす方向を検討する。
+  - "rest" は未検証の cue語であり、brightness/key など他軸への
+    予期しない副作用がないかも observed axes 全体で確認すること。
+  - 今回は intro のみを変更し chorus/outro 側は温存したが、もし
+    次周回でも bridge が消えない場合、intro 側だけを変える方針の限界に
+    踏み込んでいる可能性があり、bars の再設計を検討する必要がある。
+tools_used_note: "no tools were used to produce this round; reasoning is derived solely from the PAYLOAD contents (contract.md, task.md, own_score.yaml, own_intent.yaml, diff_report.json)."

@@ -1,0 +1,49 @@
+meta:
+  title: "BR-D3 Candidate 1"
+  version: "0.1"
+
+semantic:
+  core: "four-section nocturnal miniature in D minor"
+  grv:
+    primary: "ambient"
+    secondary: "downtempo"
+  delta_e:
+    overall: "hush, surge, undertow, surge again"
+  avoid:
+    - "bright festival EDM"
+
+physical:
+  bpm: 128
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: intro
+    bars: 4
+    role: "hushed opening"
+    physical: "sparse"
+  - section: chorus
+    bars: 4
+    role: "first surge"
+    physical: "full energy"
+  - section: chorus
+    bars: 4
+    role: "undertow"
+    physical: "sparse"
+  - section: outro
+    bars: 4
+    role: "closing surge"
+    physical: "full energy"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure

@@ -1,0 +1,585 @@
+# L0b-R バッテリー台帳 — 単一著者頑健性（課題難易度 × 到達率の地図）
+#
+# 一次資料。事前登録（tasks / 判定規約 / pin）→ 実行 evidence（series_runs 追記）
+# の 2 段 commit で事前登録性を git 履歴で証明する。
+# 境界宣言（examples/l0b_loop/ledger.yaml の runner_at_measurement 節ヘッダ
+# コメントと同型。PR #249 Codex レビュー、耐久性指摘を受けて明文化）:
+# この git 証明は本リポジトリのマージ慣行（マージコミット）を保持する文脈
+# でのみ checkout 再現可能。squash マージや履歴を持たない export の文脈
+# では git 系譜は attestation（当時の測定者による証言）へ格下げされ、
+# git 非依存の一次再現アンカーは本台帳の content pin（sha256）になる。
+# 会計拡張（PR #249 Codex レビュー第 7 巡, P2）: 各周回の judge 成果物
+# （token_ban.json / pareto_vs_round*.json、存在する周回のみ）の sha256 を
+# per-round エントリへ追加 pin した（`token_ban_report_sha256` /
+# `pareto_report_sha256`）。既存の測定値・解釈済み boolean（token_ban /
+# pareto_vs_prev 等）は無変更——一次再現アンカーの網羅範囲を広げる会計上の
+# 追加であり、再測定や値の書き換えではない。第 16 巡でも同旨で
+# `tasks[*].registration`（事前登録 doc 本体）を bare 文字列から
+# `{path, sha256}` へ dict 化して sha256 pin を追加した。
+# Design Memo = L0b-R
+# （User 方針決裁 2026-08-06: 単一 LLM 切り分け先行・複数モデル比較後回し）。
+# 正本 = docs/llm_adapter_planning.md §5（成功条件）+ 本台帳。
+# 事前登録 commit（2026-08-06）: pin 未充填センチネルは全て実測 sha256 へ置換
+# 済み（形状テストが「本ファイル全体にセンチネル文字列が存在しないこと」を
+# enforce する）。
+
+schema_version: "l0br-ledger/0.1"
+experiment: "L0b-R"
+registered_utc: "2026-08-06T15:32:54Z"
+route: >-
+  Claude 完結（コーディネーター = セッション本体 / 著者 = 情報遮断 Sonnet
+  サブエージェント・毎周回別個体）。
+
+contract_freeze:
+  policy: >-
+    契約は v1 凍結のまま測る（User 方針決裁 2026-08-06。v2 を先行させると
+    著者能力と契約改善効果が交絡するため。失敗モード分類で contract_defect と
+    出た課題のみ、v2 反映後に同一データで再測する）。
+  authoring_contract_l0:
+    path: ../../../config/authoring_contract_l0.yaml
+    sha256: "f34479d9683667c343179fdeef435ea02f59fb843ff62870be815511a281f8c6"
+  authoring_trusted_axes_l0:
+    path: ../../../config/authoring_trusted_axes_l0.yaml
+    sha256: "b2c6cc5528bf9b77e6d64f0111e762b41f029ee25993ea99c00ccb81dca6b335"
+  contract_md:
+    path: ../contract.md
+    sha256: "5bab21e9694cb92a247f922c9a96db015bb87ba729ef411b9146881934debaca"
+  # 実行後追記: src/ + config/ 無変更の git 検証（base..HEAD の diff --stat 空）
+  src_config_diff_attestation:
+    verified_utc: "2026-08-06"
+    base_commit: "41a56f1"
+    command: "git diff --stat 41a56f1..HEAD -- src/ config/"
+    result: "empty (無変更 — 契約 v1 凍結を全 R-2 実行期間で維持)"
+
+judge:
+  # L0b と同一判定器・無改変（判定器の同一性維持が実験条件。
+  # section map の sha256 は run_round.py の _FIXED_INPUT_SHA256 と同値）
+  run_round:
+    path: ../scripts/run_round.py
+    sha256: "dd9ca8a3975c97bfb9892a09d0108ccb3b7ccfe40680e4d4f8776b258be7b7b0"
+  pareto_eval:
+    path: ../scripts/pareto_eval.py
+    sha256: "4f90be5f23cce8a488974db808d1b4edff05636aeb158cfab79794b161d24faa"
+  section_map:
+    path: ../frozen/section_map.json
+    sha256: "a7d4330c06137117474f19ab3fae27204e7df9a00deac72cba9a0299296a83fd"
+  section_map_t2:
+    path: ../frozen/section_map_t2.json
+    sha256: "7add33ba142174c5e2ee002d39af9abb2ebdc65858aed2b05564f9e8ce00d830"
+  pareto_spec:
+    path: ../frozen/pareto.yaml
+    sha256: "abe60a4f0ee3c55443bbcae9ea53d4364e620737872ce3f1a9c1a75ac9264d7f"
+    note: "改善判定 (pareto_eval.py --pareto) の凍結述語。L0b から無変更"
+
+author_identity:
+  llm_run_id: "l0br-20260806-claude-code-agent-sonnet"
+  provider: "Anthropic"
+  model: >-
+    Claude Code の Agent ツールで model="sonnet"（エイリアス）を明示して
+    spawn（L0b と同一指定）。本セッションのハーネス構成における解決先
+    ファミリーは claude-sonnet-5。
+  invocation: >-
+    毎周回、履歴を持たない新規サブエージェント（fresh instance）として
+    spawn。プロンプト = author_wrapper.md ラッパ本文 + compose_payload.py
+    組成の payload.md 全文の機械連結のみ。ツール使用要求 = 0 回
+    （実測値を周回ごとに記録）。
+  wrapper:
+    path: author_wrapper.md
+    sha256: "4eda8e1a2b1a2022c7a4aea090ec608d551b82d9fecd410ac3fea8f09684e6a0"
+  provenance_limitations: >-
+    L0b と同一: Agent ツールはモデルスナップショット文字列・サンプリング
+    設定・呼び出し単位 run id を露出しないため不記録（推定補完しない）。
+
+payload_composition:
+  composer:
+    path: ../scripts/compose_payload.py
+    sha256_at_measurement: "a1bd613a646c331c866b6480cd8d827d58410acc70c8dba9005a6c1629a12dfa"
+    sha256_current: "b5be530096f076da18e765bbce52ea369331cf1a127a2b29c7c6df4c15c8b233"
+    frozen_copy: composer_at_measurement/compose_payload.py
+    note: >-
+      sha256_at_measurement = 全 16 測定周回を実行した実装（事前登録 commit
+      2b26238 と PR head 62f6ead の両方でこの sha）。凍結コピー =
+      composer_at_measurement/compose_payload.py（形状テストが実体照合する
+      対象。squash マージや履歴を持たない export で git 系譜が切れても
+      sha256_at_measurement の実体照合を可能にする保全措置——PR #249 Codex
+      レビュー第 10 巡, P1 指摘）。
+      sha256_current = PR #249 レビュー対応を累積した現行ファイル（形状
+      テストが実体照合する対象・詳細な変更系譜は git 履歴が保持するため
+      個別 commit は列挙しない）。累積修正はいずれも検証強化（不正
+      manifest の拒否範囲拡大）と失敗経路（publish rollback）に限られ、
+      妥当な manifest に対する成功経路の組成出力（`document`/
+      `payload_bytes`/`manifest_bytes` の構築ロジック）はバイト不変 —
+      両 blob を diff すると変更行は validation の追加分岐・rollback の
+      try/except 化のみで、出力構築部分に差分はない（実測: 2026-08-06
+      確認）。series_runs の per-round payload_sha256 / payload_manifest_
+      sha256 pin はこの不変量ゆえに影響を受けず、測定時のまま有効
+      （`test_compose_payload_golden_round1_minimal` が固定 payload.md
+      期待値で pass し続けていることも同一不変量の回帰防止として機能）。
+  policy: >-
+    全周回の著者可視ペイロードは compose_payload.py の出力のみ
+    （AGENTS.md §8「情報遮断実験のペイロード組成は機械化する」2026-08-06
+    制定則）。手組み・注記追加・要約添付は off-contract イベントとして記録し、
+    当該系列は到達率会計から除外する。周回ごとに payload manifest と
+    payload.md の sha256 を series_runs に pin する。
+
+constraint_checker:
+  path: ../scripts/check_token_ban.py
+  sha256_at_measurement: "6f4bd8da4c47e4e82c206d2af0565151df3f8b09a40ab4854c7edc8785391971"
+  sha256_current: "98f13bc0af4c0a8c5bf9297c0397ab756bcc3acded2c91ca3ff9ca4565e53ee8"
+  frozen_copy: checker_at_measurement/check_token_ban.py
+  note: >-
+    composer（`payload_composition.composer`）と同型の 2 系統 pin
+    （PR #249 Codex レビュー第 19 巡, P2）。sha256_at_measurement = 全 16
+    測定周回の R4 判定を実行した実装。凍結コピー =
+    checker_at_measurement/check_token_ban.py（形状テストが実体照合する
+    対象・squash マージで git 系譜が切れても実体照合を可能にする保全措置）。
+    sha256_current = PR #249 レビュー対応後の現行ファイル。累積修正は
+    `-o` 出力の dangling symlink 上書き禁止ガードのみで、判定ロジック
+    （`check_token_ban()` 関数本体）は無変更——妥当な score.yaml に対する
+    判定出力（`status`/`hits`/`score_sha256` 等）はバイト不変（実測: 2 系統
+    のバイト列を diff し、差分が docstring とガード節のみであることを確認
+    済み）。
+  banned_tokens: ["silence", "no kick", "low density", "sub bass"]
+  scope: >-
+    提出 score.yaml の生テキスト全文（UTF-8 デコード後・小文字化）に対する
+    部分文字列一致。適用課題 = token_ban: true の課題のみ（br_d2 / br_d3）。
+    判定結果は著者へ送らない（可視情報は課題文の R4 宣言のみ）。
+
+protocol:
+  round_limit: 5
+  series_per_task: 2
+  success_predicate: >-
+    周回成功 = report.json が symbolic pass かつ key=preserved かつ
+    brightness=preserved かつ structure=exact_match、かつ token_ban 課題では
+    check_token_ban.py が pass。系列到達（reached）= round_limit 内に周回成功
+    1 回以上。成功周回で系列は終了する（rounds_to_success = 最初の成功周回）。
+  improvement_accounting: >-
+    連続周回間の pareto_eval.py 出力（improved/tie/regressed）を全ペア記録。
+    Pareto 述語は frozen/pareto.yaml を無変更適用（総合スコア禁止 = D6）。
+  failure_mode_vocab: ["unconverged", "missteered", "contract_defect", "instrument_band"]
+  failure_mode_rubric: >-
+    未到達系列の分類（系列単位・根拠を rationale に明記）。優先順位 =
+    contract_defect > instrument_band > missteered > unconverged。
+    contract_defect: 著者の編集が契約 v1 の記述下では合理的なのに、未開示の
+    計器特性（ヒント非加算 / role 照合 / drone 進行無音化 = l0b record §4、
+    または新規発見の未開示特性）により無効・逆効果になったことが evidence
+    （バイト同一 take・境界不応答等）で示せる場合。該当課題は「L0a v2 反映後に
+    再測」対象。instrument_band: 著者が陽性対照級の対比設計に到達したのに
+    境界検出が分離しなかった場合（計器帯域）。missteered: 著者がペイロード内
+    evidence と矛盾するレバー選択を続けた、または可視制約（R4）への違反を
+    繰り返した場合。unconverged: 周回上限到達でいずれの機構も特定できない残余。
+  off_contract_rule: >-
+    ペイロードが composer 出力と一致しない周回・著者ツール使用が 0 でない
+    周回は off-contract。当該周回以降の系列成果は到達率会計から除外し、
+    off_contract_events に記録する。
+  metrics: ["reach_rate", "rounds_to_success", "pareto_improvements", "failure_modes"]
+
+tasks:
+  - id: "br_d1"
+    difficulty: "single_lever_proven"
+    registration:
+      path: "task_br_d1.md"
+      sha256: "06ac3b42ff5f7f5aef8e333524e8599411298383fc9b0e752c2c7d393b689f66"
+    statement:
+      path: "statement_br_d1.md"
+      sha256: "17feb99e0015c476aae3fb980ecee380b4cbd7eb7130c06e787f4cbafb4113e1"
+    section_map: "../frozen/section_map_t2.json"
+    token_ban: false
+    positive_control:
+      mode: "reuse_pinned_t2"
+      dir: "../positive_control_t2"
+      note: >-
+        要求が L0B-T2 と同一のため pin 済み陽性対照（../positive_control_t2/）
+        を再現確認して流用。新規探索なし。
+      confirmed_utc: "2026-08-06"
+      score_sha256: "2523793dc9ae87b81aca49e726d22db9eaf7b94a9c4b04c2e428035df3484412"
+      report_sha256: "0a21c09a72e819e48c851d86ecfa071b48f7a38857037d0b12e273ba74459248"
+  - id: "br_d2"
+    difficulty: "multi_lever_novel"
+    registration:
+      path: "task_br_d2.md"
+      sha256: "3da5ed04ae137ec74e9a9c5a08a0a226a93b08d2c5da96926e14950645ec2b8c"
+    statement:
+      path: "statement_br_d2.md"
+      sha256: "0e442111b3ecf1bacc0921f2fed40da31decb15ff74eb7ca8a12e024698f35a4"
+    section_map: "../frozen/section_map.json"
+    token_ban: true
+    positive_control:
+      mode: "new_search"
+      dir: "positive_control_br_d2"
+      max_candidates: 8
+      confirmed_utc: "2026-08-06"
+      score_sha256: "8574da0dbf6922fde21412c839c7e746cec72cc4f78afc4bcf8dceada1da27d1"
+      report_sha256: "fc4982c8f2ae977b953fdde8b2239244c2a3b515cf5ca8e0e55816776e444f51"
+  - id: "br_d3"
+    difficulty: "compound_interaction"
+    registration:
+      path: "task_br_d3.md"
+      sha256: "04aab93fad6c2f959a3435908da886f89e2f064a46548b3835d777f410b3de77"
+    statement:
+      path: "statement_br_d3.md"
+      sha256: "201823451d6f9526090347895362e93323642e254a1daf4ca50f1bc06e5ad8a3"
+    section_map: "../frozen/section_map_t2.json"
+    token_ban: true
+    positive_control:
+      mode: "new_search"
+      dir: "positive_control_br_d3"
+      max_candidates: 8
+      confirmed_utc: "2026-08-06"
+      score_sha256: "16ad12ba9180ace606b2a620d7c52328c8f51d7aafa8a6888d8c868c3683e1d3"
+      report_sha256: "9e4d4e340f62edd0d4ee0dd18f7b3502e1fc5441633375eb6d9cfce62e86ec75"
+
+# 実行 evidence（実行後追記。空リストは「未実行」を意味する登録時の正規状態）
+series_runs:
+  - task: br_d1
+    series: s1
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 8a6d154c092ee585095e92525df3859f5ed2dc4c95fa65dafd03f18e4fc34d3a
+      payload_sha256: 34bdfab5c44e3d20666cb4286cc47abf82fbfafc6b5fedc6c556d02f1d029264
+      score_sha256: 31672f23401861f49aefbefee33855dafbead3903fff68cbeb537f202969519f
+      intent_sha256: aa68ecc32669ddc9c294cce1ee04ac18fb679a272f33a1bd29182a84dd540284
+      report_sha256: 8a54136a19ce31741b50dbdc52c052944b39aea8b7d8daf0477a2336929f6352
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    - round: 2
+      payload_manifest_sha256: d54ea57c7f893ea9d5f32fb72d31eba90db4680ae98356a8b88a7c385f92a1e1
+      payload_sha256: 6269b499cacc24802d77dc209c609777cf835e0b09471b0a33fa97987cbb7776
+      score_sha256: f7b62e8189233bc205039141bd11543aa9c813a9308dfb8724ef71a3fc3ec19f
+      intent_sha256: 09baa4e648bfc6370726d5278cb4c70fac60a9db1bbef83ce3a0381442ac0b9d
+      report_sha256: f6db3a56fb1967e189c8f1501a72def958067de5d926b9e91d5889624f154298
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+    - round: 3
+      payload_manifest_sha256: 9457193e0ee6de39e317d107cd0829f063aba4e67a8f9b365c56beff8ce23351
+      payload_sha256: 6723b8e2bf332a5013987eb09434396a0ca0b03f810daa6377ccd5e427473519
+      score_sha256: 0655ccac4819df751ee5cd71230a17c1b65e4a37b39a8bf9cceb29a468227051
+      intent_sha256: 4d11cc8289b6a14db2900eb697fec94521fb373db8330efbef145e6ef471a578
+      report_sha256: 9f31c3ac0e09ee90da45a783ec52903c1b3af8b9bf1e80fd7667f13dfe051da5
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+    - round: 4
+      payload_manifest_sha256: fbd2b2f6081575ca8a3c36a47c1a75d49bdce366fc1f9beebbbd6a623802e801
+      payload_sha256: d9354199c923df566daa502b5c4d5d627d95ca17908f662dacb81990fe8977b5
+      score_sha256: f2f3152762569b7685fdaf94d001dc4c0a199046f532530572744dbe8176d4e8
+      intent_sha256: 3d1a88d95dfc237b88ca2eef34ccd285c6784f248b45bb9a438ec31a334480c6
+      report_sha256: c44b13653cfded797f434b7bbd83d8e1c4f00901b78af113b1e048af4cf86321
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+    - round: 5
+      payload_manifest_sha256: 5b82001d97de17a76fba46d94f7cf91b38abe4093edc240ddf8d2d7ca7138dd9
+      payload_sha256: 22a04b13ce1ff5e6db3b7b78bb171c6eff1d4ecc138fa9a6f3d24b1769a32785
+      score_sha256: b831e144b63d80f7b5865c82866829cab687fc59d903a339650d97dc63bfa3d0
+      intent_sha256: a17642b869901f767e70a1da6c2e911b88f834f9ee2b770b4cd52ec5ee348a2c
+      report_sha256: 7b1d6a21eb4ef8dc6b2e40132961cbdb6eb51c287aa3d7681dd8d1915c5a4179
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+    outcome: unreached
+    rounds_to_success: null
+    failure_mode: contract_defect
+    rationale: '著者は 5 周回で一貫して合理的な単一変数実験を重ねた（語彙置換 r2/r4・bars 非対称化 r3・対称復帰 r5）が、契約 v1 未開示のヒント解決規則（非加算・優先順位制: no kick/sub bass/low density が full energy を支配し chorus2 が全周回 drone 化）により、全編集が音響的に無効またはレベルのみの変化に終わった。evidence: 観測境界が r1=r2（8.4753/13.5372/30.0）・r3=r4（7.5/12.5852/32.5）と語彙変更を跨いで完全同値、r5 は bars 対称復帰で r1/r2 値へ回帰。author 5 個体とも tool 使用 0。l0b record §4.1（ヒント非加算）と同型 = L0a v2 反映後の再測対象'
+    files_dir: series/br_d1_s1/
+    started_utc: '2026-08-06T17:19:46Z'
+  - task: br_d1
+    series: s2
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 66df3aedfbb1e1587b53e41f859e2c1cd2d9c0bd0adc526989669a84a647bd7d
+      payload_sha256: 7499aadaca4c5cf873f0b6bc2300f86fbf2c7581d5194d82441669e4fdea25f9
+      score_sha256: 4acea3334b37ff1ee0cc5a92a12a806622328bafdc1e0aba883fd6380eba2ac5
+      intent_sha256: a849b4d3ddbc33634c6a954082cb56d5dc5cae26c47453bcc2cb4a76f2282577
+      report_sha256: 381d51a74602c80bfc3635758ea1d4e48cc7cbffda5237b1cb680dccaa629078
+      token_ban: null
+      token_ban_report_sha256: null
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    outcome: reached
+    rounds_to_success: 1
+    failure_mode: null
+    rationale: 第 1 周回で全軸成功（key/brightness preserved・structure exact_match・境界 8.4521/13.4676/19.11s）。s1 と対照的に、著者は chorus 2 連を音色語彙で差異化せず同一 'full energy' 反復とする戦略（融合リスクを intent で自覚的に受容）を選び、drone 化罠を回避した。同一課題での到達分散（s1=unreached/5 周 vs s2=reached/1 周）は著者戦略選択に帰す仮説（2 系列/課題の n では著者サンプリング揺らぎと分離できていない = docs/l0br_robustness_record.md §6）
+    files_dir: series/br_d1_s2/
+    started_utc: '2026-08-06T17:58:50Z'
+  - task: br_d2
+    series: s1
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 4f073744f8ebd568483700d969fab861ba5a2f14d49971e58221b432fef20176
+      payload_sha256: 189bec8747c06172ba3e9ca70d884648ba39dff8bd8107f5f050c834cecea711
+      score_sha256: b3dab5476ca33e58797db440ac8c6b87ed52214c0c8305c914d58e048b568a37
+      intent_sha256: 14293e1cd801c379503d120c2681867de6797a64f26af1d7e51e391764d3f3c5
+      report_sha256: 2efb4eae4e9849c28263d0b8fd1145a63c949ae797881f35bccd895769167c82
+      token_ban: pass
+      token_ban_report_sha256: "52bc24db50893c0a29b0844d7257607f44726fb0929f76e6e0bf816d5f61c942"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: deviated
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    - round: 2
+      payload_manifest_sha256: 9fa31d19b917cdc5d356cfa2ae2ca046e139d9d93097d821c3d01afb289da234
+      payload_sha256: 0957429cd8f2e2f1bade0095e71e678dec258dd30d57969219cd716f238c1326
+      score_sha256: 06f3e20467c5e874405985feadb8c961f9ca28837a5b8325aece67fdb5479427
+      intent_sha256: 6edd7527abcbe1231e246c40ea048f2ddc1084b1ca03a4032c4093985157dc7b
+      report_sha256: 14e80d6d0778022e5efa4da5b646129d6c3121e7019fc602ae64ab60d0f6114a
+      token_ban: pass
+      token_ban_report_sha256: "ed4e6b5b70c21801cdbdd218b97e2a0174971746c1f1c265cbd5d5bc569408dd"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+      pareto_report_sha256: "e4ad50bf8d93ff7f646b70652a0ad92d35a5b3018338cea880fc6fa75fc196ce"
+    outcome: reached
+    rounds_to_success: 2
+    failure_mode: null
+    rationale: round1 = structure exact_match / brightness preserved / R4 pass だが、著者の保険的ダイアトニック進行 (i-VI-III-VII) が key を平行長調 F major へ倒し deviated。round2 = 著者は報告の観測値のみから平行調の音組成同一性を診断し、C#（D harmonic minor の導音）を含む A major を導入する i-V-iv-i へ差し替え、key preserved で全軸成功。pareto improved=true（key 1→0・他軸非退行）= 報告のみによる操舵の改善ペアがバッテリー内で成立
+    files_dir: series/br_d2_s1/
+    started_utc: '2026-08-06T18:03:12Z'
+  - task: br_d2
+    series: s2
+    rounds:
+    - round: 1
+      payload_manifest_sha256: ef324f5ed50d2e76d4f788e064e4bd57bee8d37aa5b142ec420ba456e75b3591
+      payload_sha256: 818edb3d1d206145a79ace8b9480cd8a97d0c6573f7591d81838639a3e1071b6
+      score_sha256: 25a51f8e188dc5c0925369f0040f134116549d3e55f7a4ec259e4c2098b2fe71
+      intent_sha256: 630d3101f4db49eaa922b93f820606acc61f7b39c370cf26f02f6a630af4df4f
+      report_sha256: 0f8487ce05adea2804d4c28e42f6ed2af416b71d0f2e555c6c462d8785240fe8
+      token_ban: pass
+      token_ban_report_sha256: "b0e80ec73ece9453207d91d3d523fc564bed266325c1edd7cc5b13b0dc54cb90"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: deviated
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    - round: 2
+      payload_manifest_sha256: 01be841d212b6cd4ca33d18272c2973d65c6e7917cb99790c1484944afaa47c3
+      payload_sha256: b35aba4c1e2c08d49934d9691f8ad86194c74a3e3edf0bc7521e814d674cef00
+      score_sha256: 87b2af3bc172344d0391cc35dac84c6010ce8fdda8599ebdbd8d541d1f92a734
+      intent_sha256: cc195ec9d17112cc184b0f09d19ca5c7f22bb459bd309e851a48833dd14ab903
+      report_sha256: 233aa0a7f168a6836f0cd637dfb8ba4da7f5852c24065fa5370438f1c50fa286
+      token_ban: pass
+      token_ban_report_sha256: "17970de2e66a8fc447454adca47d0fbc3c731d126ea69c63145f98d33c37cd98"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+      pareto_report_sha256: "e4ad50bf8d93ff7f646b70652a0ad92d35a5b3018338cea880fc6fa75fc196ce"
+    outcome: reached
+    rounds_to_success: 2
+    failure_mode: null
+    rationale: round1 = structure exact_match / brightness preserved / R4 pass・key deviated (C major — 進行 Dm-C-A#-C の C 支配。s1 r1 の F major と同族 = カスタム進行が key を倒す失敗の再現 2 例目)。round2 = 著者は s1 と異なる修理戦略（自作進行の差し替えでなく events 省略 = 契約明記の既定進行へ回帰）を選択し key preserved で全軸成功。pareto improved=true。同一失敗に対する修理経路の分散（C# 導音 vs 既定回帰）を実測
+    files_dir: series/br_d2_s2/
+    started_utc: '2026-08-06T18:11:57Z'
+  - task: br_d3
+    series: s1
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 660fd7af898a723804226643601a6821570d49e85a10747ebd2c4028f2948af1
+      payload_sha256: 0dd2d7034ff1421b134f7dacb81194efde6208a7fd10ba0183ec94e7989825f3
+      score_sha256: acbc51200560c598f58fe68386a7be27a40ff5925f25c32811910b2bad50ea63
+      intent_sha256: 88775bd299edd52fd6aedd73caf4b405af80bea1ea2fb7dc4693dffb6875775a
+      report_sha256: 08a495f290ca86db054f7a59cc71278510fc8b3af54a763364b8dab0d0d72983
+      token_ban: pass
+      token_ban_report_sha256: "c4f4f1fd0edbb6b23ba8de0b17f92a0c7c0b426a4b5c3eb7285e964265ca11bf"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    - round: 2
+      payload_manifest_sha256: 82462577a831b96f428a37070affb8ffaf969a376e599af4334b0c6fdfb6b309
+      payload_sha256: 8e9471a94850e28ef3ac61547a77ddaf992d98455baf234cdd0672ecc169fbe6
+      score_sha256: 48b5555b96d9e7a99531b9c225990a80f879082fa970ba783c178e01d351859c
+      intent_sha256: c17fa4e801913e727ba4b2c9950930d41f7d878a2bcff7a66c67a0bc779aa49f
+      report_sha256: b47bbd9669ed19034b64a6c3dd8eb465c87c08da7644d4351ad7ff565f091b95
+      token_ban: pass
+      token_ban_report_sha256: "c4ac19530dc2cca0a5c15cd322f286feb7c628ff54a1f6e892eb20f1f47d5912"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+      pareto_report_sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+    outcome: reached
+    rounds_to_success: 2
+    failure_mode: null
+    rationale: round1 = 5 要素列 [intro, bridge, chorus, chorus, outro] への過分割（融合と逆方向の失敗形状・Lev 1・key/brightness preserved・R4 pass）。round2 = 著者は境界算術から『低→高エネルギーの立ち上がり側のみ曖昧帯が生じる』非対称仮説を立て、intro bars 3→4（10s）の単一変数介入で曖昧帯を intro 宣言区間内へ吸収させ全軸成功。pareto improved=true。R4 制約下（drone 語彙なし）でも sparse/full/release 段差 + 継ぎ目で 4 要素列が到達可能なことの実証
+    files_dir: series/br_d3_s1/
+    started_utc: '2026-08-06T18:21:03Z'
+  - task: br_d3
+    series: s2
+    rounds:
+    - round: 1
+      payload_manifest_sha256: 6b70a4b7ba5c331b8e1622eeb92edfe63cc9e48efea05e8cff2e0c226f61290e
+      payload_sha256: b06b312e5306f50a689a084f4b0ca4434e8ab4c1e9b0755e27bcf2ecfcbf9670
+      score_sha256: 56efeb16e9380f9c0236e7fb47f909141b7bac626cb4528e503ecc7aa484b26c
+      intent_sha256: 1cef25878be23fba7ca65b05bdc6689533683cc69b68e7e229dea0b092d3e9de
+      report_sha256: 72e917640c65294ba851a7e57ccc86c142c8656f3db7bf5274b1e674322c6f38
+      token_ban: pass
+      token_ban_report_sha256: "0e93e105965159a3bef47da4eb2cecbc321d32e2708ea6ed27d6383fdff8b841"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: deviated
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: null
+      pareto_report_sha256: null
+    - round: 2
+      payload_manifest_sha256: c12d083e0fcea20aeb6247c1bf8c9a5fb1a832d1f5d91049d0d4a316de911750
+      payload_sha256: a3e1a4e28f2bc2d104c21a228055b08907d75431c5081a0b98a01d80b06fc224
+      score_sha256: ff3d1cf0bb065105fa3c19b897967760b6c2f3d1b345efbb0bf70f288843950d
+      intent_sha256: 32d21e2d4d6bdbdcc609c026691d960fa0c26337d6a7ffa7e77c7dd5c8ae6b27
+      report_sha256: 151761d30fc9cea7994fb2012ba0c95c018eaa13d2b5c3f7ba4745e18ff5b85b
+      token_ban: pass
+      token_ban_report_sha256: "528c224f78fbafaa7bd29323b8baf9b5dacd3031eea202085322d50bfce5cd35"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+      pareto_report_sha256: "65bf8840b3d65955de512e7360acdad8dd088d23ec0491a87cee046f6bb35efc"
+    - round: 3
+      payload_manifest_sha256: 12ec81359924a75205685a5a4e906001123939faf7c2d15e3cda0a51dc737b27
+      payload_sha256: 0b8a3a575722fc5317b94ec92dc1f68715405aa6bc37138bc3fc47a3b1928533
+      score_sha256: fefe8d2d36cd27bdb8c4eb0123d42dc7d8f94f109031dfe5ec5d8a968da4fd1d
+      intent_sha256: b780d436db51589cd1fb09f41d9de1d4cb73fb43b64bf9f354d6d7d4e56c0be6
+      report_sha256: b1aabecd67df1bbd575c8c13f86a6dce4778799804e30319d5e32d54e03e643a
+      token_ban: pass
+      token_ban_report_sha256: "c3fb86d1e299afb031adc4406c393713281c996984ce4106eb07a9045b519ba9"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: mismatch
+        symbolic_validation_status: pass
+      pareto_vs_prev: false
+      pareto_report_sha256: "d632e34436246d03ec45add26bbf2298c97d601689e695ffd842d19455b3b1ed"
+    - round: 4
+      payload_manifest_sha256: a09af7eb2638ab37b34efded0bea87ed2bc424a9ec43fb360116b41a667eb1f0
+      payload_sha256: 4c7424b47caad790520f16dedae81c4029d7dddd55fb8397bc9751ca8feac67a
+      score_sha256: efef94a87ec6ed351226ac2d04e6b032b7799ada2ed91225abeae79166095b1e
+      intent_sha256: 2fafd2c7932af9756133f4e3a9daeefeb98a29b3e23715f920fcbe245e5d9555
+      report_sha256: 8a871a0e15d02345676d990be34c6d335acc3eaf30f159d28a4351649f13a9c0
+      token_ban: pass
+      token_ban_report_sha256: "dfe5c2257c72bdd9d0acb3c044b1c9283125ee3e8adbd03421a422faf792ae73"
+      author_tool_use: 0
+      verdicts:
+        brightness: preserved
+        key: preserved
+        structure: exact_match
+        symbolic_validation_status: pass
+      pareto_vs_prev: true
+      pareto_report_sha256: "8a4ba6c43f9d6063fa062fd0db23636060f6dd5c405bab580f25264566ea279f"
+    outcome: reached
+    rounds_to_success: 4
+    failure_mode: null
+    rationale: r1 = key deviated (F major・カスタム進行) + structure mismatch (bridge 過分割)。r2 = C# 導音 i-iv-V-i で key 修理 (Pareto improved・br_d2_s1 の成功解へ独立到達)。r3 = intro を 'rest' へ語彙変更するも bridge 継続 (tie)。r4 = 断片算術 (bridge 実長 5.25s = intro 残余 2.41s + chorus1 立ち上がり 2.83s) から intro を観測実長 5.0s へ短縮・outro へ 1 bar 再配分し全軸成功 (Pareto improved 2 件目)。報告の境界秒だけを根拠に 2 軸を順次修理した最長の操舵実証系列
+    files_dir: series/br_d3_s2/
+    started_utc: '2026-08-06T18:32:26Z'
+off_contract_events:
+  - date: "2026-08-06"
+    task: "br_d1"
+    series: "s2"
+    round: 1
+    kind: "payload_transcription_corruption"
+    description: >-
+      coordinator が round1 著者プロンプトを composer 出力の再読なしに文脈内
+      転写で組成した際、契約 §0 の 1 箇所が化けた（「なぜこの設計か」→
+      「なぜ27の設計か」）。ペイロード ≠ composer 出力のため off-contract。
+      coordinator が送信直後に自己検出し、著者を応答生成前に停止・破棄した
+      （汚染応答は存在しない）。当該試行はどの周回にも算入しない。
+    disposition: >-
+      同一 round1 を正規ペイロード（composer 出力の同一ターン内読取→転写）で
+      再実行。以降の全周回はプロンプト組成を「同一ターン内でファイル読取→
+      直写」に固定する。なお s1 の 5 周回は全て同一ターン内読取→直写で組成
+      しており本事故と同型の経路は通っていないが、送信バイト列の事後検証
+      手段はハーネス上存在しないため、この転写忠実性の限界は記録 doc に
+      開示する。
+      解釈裁定（PR #249 Codex レビュー第 17 巡, P1 部分採用——系列除外は
+      しない。docs/l0br_robustness_record.md §5 に同旨を記載）: 凍結
+      `protocol.off_contract_rule` の作動単位は「系列成果を持つ周回」であり、
+      本事故は著者の応答生成前に中止・破棄された試行であって周回ではない。
+      不成立の根拠 3 点——(a) 成果を一切生んでいない（汚染応答は存在しない）、
+      (b) 毎周回 fresh instance のため counted 測定への汚染経路がない、
+      (c) counted な br_d1/s2 round1 の payload は再組成テスト
+      （`test_ledger_l0br_payloads_recompose_via_frozen_measurement_composer`）
+      で composer 出力との byte 一致を機械証明済み——により、rule のトリガー
+      条件「composer 出力と一致しない周回」は counted round には不成立。
+      よって br_d1/s2 系列を到達率会計から除外しない。ただし「送信直後の
+      自己検出 → 応答生成前中止 → 正規再実行」という手順自体は事前登録
+      されていない事後解釈であり、この事実を正直会計として明示する。
+      感度開示（2026-08-07 訂正——PR #249 Codex レビュー第 19 巡, P2:
+      第 17 巡追記の「定性結論は不変」は過大主張だったため訂正する）:
+      厳格読解（試行を周回とみなし当該系列を除外）を採る場合、到達率は
+      5/6 → 4/5 へ変化する。この分岐では br_d1/s2 が counted evidence から
+      外れるため、br_d1 内の系列間対比（s1=unreached/s2=reached）は会計内
+      の根拠を失い、到達の分岐が著者の戦略選択に帰す仮説は off-contract
+      注釈付き観測のみに依拠することになる（会計内の根拠では成立しない）。
+      本裁定（系列除外はしない・5/6 を維持）は User 方針決裁 2026-08-07 で
+      確定済みであり、この訂正は感度開示の記述精度のみを正すもので、上記
+      裁定そのもの・測定値・解釈を変更しない。

@@ -14,9 +14,11 @@ Covers:
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -24,6 +26,7 @@ from types import ModuleType
 import pytest
 
 from svp_rpe.authoring.report import AuthoringDiffReport
+from svp_rpe.melody.representation import _NoDupSafeLoader
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOOP_DIR = REPO_ROOT / "examples" / "l0b_loop"
@@ -53,6 +56,30 @@ def _load_module(name: str, path: Path) -> ModuleType:
 
 pareto_eval = _load_module("l0b_pareto_eval", SCRIPTS_DIR / "pareto_eval.py")
 run_round = _load_module("l0b_run_round", SCRIPTS_DIR / "run_round.py")
+compose_payload = _load_module("l0b_compose_payload", SCRIPTS_DIR / "compose_payload.py")
+check_token_ban = _load_module("l0b_check_token_ban", SCRIPTS_DIR / "check_token_ban.py")
+
+BATTERY_DIR = LOOP_DIR / "battery"
+LEDGER_L0BR_PATH = BATTERY_DIR / "ledger_l0br.yaml"
+
+# 測定時 composer の凍結コピー（PR #249 Codex レビュー第 10 巡, P1 の保全措置
+# = `battery/composer_at_measurement/README.md`）。現行 `compose_payload`
+# （上の `l0b_compose_payload`）とは別モジュール名でロードする——測定時
+# 実装（`sha256_at_measurement`）で実際に組成された payload を再現するのが
+# 目的で、レビュー対応が累積した現行実装で再現するのが目的ではない。
+composer_at_measurement = _load_module(
+    "l0b_composer_at_measurement", BATTERY_DIR / "composer_at_measurement" / "compose_payload.py"
+)
+
+# 測定時 R4 判定器の凍結コピー（PR #249 Codex レビュー第 19 巡, P2 の保全措置
+# = `battery/checker_at_measurement/README.md`）。composer_at_measurement と
+# 同じ理由で現行 `check_token_ban`（上の `l0b_check_token_ban`）とは別
+# モジュール名でロードする——測定時に実際に判定を行った実装を再現するのが
+# 目的で、レビュー対応（`-o` dangling symlink ガード等）が累積した現行実装
+# を再現するのが目的ではない。
+checker_at_measurement = _load_module(
+    "l0b_checker_at_measurement", BATTERY_DIR / "checker_at_measurement" / "check_token_ban.py"
+)
 
 
 def _axis(*, verdict: str, band: str = "measured", requirement=None, observed=None) -> dict:
@@ -2528,3 +2555,1966 @@ def test_ledger_t2_rounds_shape_includes_clean_rerun():
 
     hardening_items = ledger["post_loop_hardening"]["items"]
     assert all(isinstance(item, str) for item in hardening_items)
+
+
+# --- compose_payload.py (AGENTS.md §8「情報遮断実験のペイロード組成は機械化する」，
+# 2026-08-06 制定・PR #248; 事故実測 = PR #247 §3.2) --------------------------
+
+
+def _write_text_file(dir_path: Path, name: str, content: str) -> tuple[Path, str]:
+    """`dir_path/name` へ `content` を UTF-8 で書き、`(path, sha256_hex)` を返す。"""
+
+    path = dir_path / name
+    path.write_text(content, encoding="utf-8")
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _minimal_manifest_dict(*, experiment_id="round1", round_label="round1", parts=None) -> dict:
+    return {
+        "schema_version": compose_payload.SCHEMA_VERSION,
+        "experiment_id": experiment_id,
+        "round_label": round_label,
+        "parts": parts if parts is not None else [],
+    }
+
+
+def _write_manifest(manifest_dir: Path, manifest: dict, *, name: str = "manifest.yaml") -> Path:
+    path = manifest_dir / name
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_compose_payload_golden_round1_minimal(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT TEXT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK TEXT\n")
+
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    payload_text = (out_dir / "payload.md").read_text(encoding="utf-8")
+    expected = (
+        "=== PAYLOAD l0b-payload/0.1 experiment=round1 round=round1 parts=2 ===\n"
+        f"=== PART 1/2 role=contract path=contract.md sha256={contract_sha} ===\n"
+        "CONTRACT TEXT\n"
+        "=== END PART 1/2 ===\n"
+        f"=== PART 2/2 role=task path=task.md sha256={task_sha} ===\n"
+        "TASK TEXT\n"
+        "=== END PART 2/2 ===\n"
+        "=== END PAYLOAD ===\n"
+    )
+    assert payload_text == expected
+    assert result["payload_sha256"] == hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+
+    manifest_json = json.loads((out_dir / "payload.manifest.json").read_text(encoding="utf-8"))
+    assert manifest_json["payload_sha256"] == result["payload_sha256"]
+    assert [p["role"] for p in manifest_json["parts"]] == ["contract", "task"]
+    assert all(p["newline_appended"] is False for p in manifest_json["parts"])
+
+
+def test_compose_payload_is_byte_deterministic_across_runs(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    out_dir_1 = tmp_path / "out1"
+    out_dir_2 = tmp_path / "out2"
+    compose_payload.compose_payload(manifest_path, out_dir_1)
+    compose_payload.compose_payload(manifest_path, out_dir_2)
+
+    assert (out_dir_1 / "payload.md").read_bytes() == (out_dir_2 / "payload.md").read_bytes()
+    assert (out_dir_1 / "payload.manifest.json").read_bytes() == (
+        out_dir_2 / "payload.manifest.json"
+    ).read_bytes()
+
+
+def test_compose_payload_canonical_order_ignores_manifest_declaration_order(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    _, score_sha = _write_text_file(manifest_dir, "score.yaml", "SCORE\n")
+    _, intent_sha = _write_text_file(manifest_dir, "intent.yaml", "INTENT\n")
+
+    # Declared out of canonical order on purpose.
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "own_intent", "path": "intent.yaml", "sha256": intent_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+            {"role": "own_score", "path": "score.yaml", "sha256": score_sha},
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert [p["role"] for p in result["parts"]] == ["contract", "task", "own_score", "own_intent"]
+    payload_text = (out_dir / "payload.md").read_text(encoding="utf-8")
+    assert (
+        payload_text.index("role=contract")
+        < payload_text.index("role=task")
+        < payload_text.index("role=own_score")
+        < payload_text.index("role=own_intent")
+    )
+
+
+def test_compose_payload_sha256_mismatch_rejects_and_emits_nothing(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _write_text_file(manifest_dir, "task.md", "TASK\n")
+    wrong_sha = "0" * 64
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": wrong_sha},
+            {"role": "task", "path": "task.md", "sha256": wrong_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="sha256 mismatch"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert not (out_dir / "payload.md").exists()
+    assert not (out_dir / "payload.manifest.json").exists()
+
+
+def test_compose_payload_rejects_missing_contract_role(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(parts=[{"role": "task", "path": "task.md", "sha256": task_sha}])
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="role='contract'"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_duplicated_role(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, contract_sha_2 = _write_text_file(manifest_dir, "contract2.md", "CONTRACT2\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "contract", "path": "contract2.md", "sha256": contract_sha_2},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="declared more than once"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_own_intent_without_own_score(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    _, intent_sha = _write_text_file(manifest_dir, "intent.yaml", "INTENT\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+            {"role": "own_intent", "path": "intent.yaml", "sha256": intent_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="own_score"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_diff_report_and_validation_errors_together(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    _, score_sha = _write_text_file(manifest_dir, "score.yaml", "SCORE\n")
+    _, intent_sha = _write_text_file(manifest_dir, "intent.yaml", "INTENT\n")
+    _, diff_sha = _write_text_file(manifest_dir, "diff.json", "DIFF\n")
+    _, val_sha = _write_text_file(manifest_dir, "validation.json", "VALIDATION\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+            {"role": "own_score", "path": "score.yaml", "sha256": score_sha},
+            {"role": "own_intent", "path": "intent.yaml", "sha256": intent_sha},
+            {"role": "diff_report", "path": "diff.json", "sha256": diff_sha},
+            {"role": "validation_errors", "path": "validation.json", "sha256": val_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="mutually exclusive"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_diff_report_without_own_score(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    _, diff_sha = _write_text_file(manifest_dir, "diff.json", "DIFF\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+            {"role": "diff_report", "path": "diff.json", "sha256": diff_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="own_score"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_non_utf8_part(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    task_path = manifest_dir / "task.md"
+    task_path.write_bytes(b"\xff\xfe\x00binary garbage")
+    task_sha = hashlib.sha256(task_path.read_bytes()).hexdigest()
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="UTF-8"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_delimiter_collision_line(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(
+        manifest_dir, "task.md", "normal line\n=== PART fake forgery ===\nmore text\n"
+    )
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="delimiter"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+# --- Codex review (PR #249) 第 3/4 巡, P2: 宣言 path への行注入拒否 --------
+
+
+@pytest.mark.parametrize(
+    "bad_char",
+    [
+        "\n",  # LF
+        "\r",  # CR
+        "\v",  # VT (U+000B)
+        "\f",  # FF (U+000C)
+        "\x1c",  # FS
+        "\x1d",  # GS
+        "\x1e",  # RS
+        "\x85",  # NEL
+        "\u2028",  # LINE SEPARATOR
+        "\u2029",  # PARAGRAPH SEPARATOR
+    ],
+)
+def test_compose_payload_rejects_line_boundary_char_in_declared_path(tmp_path: Path, bad_char: str):
+    """`path` は `_PART_HEADER_TEMPLATE`（ヘッダ 1 行）へ逐語転写されるため、
+    `str.splitlines` が行境界と認識するあらゆる文字（`\\n`/`\\r` に限らず
+    `\\v`/`\\f`/`\\x1c`-`\\x1e`/NEL/U+2028/U+2029 を含む）を含む path は偽
+    ヘッダ/フッタ行をペイロード文書へ注入できてしまう（content 側の区切り
+    衝突チェックは content のみを検査し path は検査しないため迂回経路になる）。
+    `_validate_part_raw` が拒否し、出力は一切生成されないことを確認する。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": f"task.md{bad_char}injected", "sha256": "0" * 64},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="line-boundary"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert not out_dir.exists()
+
+
+def test_compose_payload_rejects_forged_delimiter_line_via_declared_path(tmp_path: Path):
+    """区切り衝突チェック（content 側）を path 側から迂回しようとする具体例:
+    `path` 自体に偽の `=== PART ... ===` 行を仕込んでも、行境界文字を含む
+    path がヘッダ検証段階で拒否されるため到達しない。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    forged_path = "a\n=== PART 9/9 role=task path=x sha256=" + "0" * 64 + " ===\nb"
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": forged_path, "sha256": "0" * 64},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="line-boundary"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert not out_dir.exists()
+
+
+def test_compose_payload_rejects_absolute_path(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    outside_path, outside_sha = _write_text_file(tmp_path, "outside.md", "OUTSIDE\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": str(outside_path.resolve()), "sha256": outside_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="containment"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_parent_traversal_escape(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, outside_sha = _write_text_file(tmp_path, "outside.md", "OUTSIDE\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "../outside.md", "sha256": outside_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="containment"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_lexical_traversal_that_resolves_back_inside_base(tmp_path: Path):
+    """`"../manifest_dir/task.md"`（manifest_dir 自身の名前を使って一度
+    root の外へ出てから戻る locator）は `base_dir/../manifest_dir/task.md`
+    が結局 `base_dir` 内へ resolve されるため、`resolve_confined` 単体の
+    物理チェックだけでは通ってしまう——`validate_relative_locator` が
+    `resolve_confined` より先に走り、resolve 結果に関わらず（語彙的に
+    net-upward traversal した時点で）無条件拒否することを確認する
+    （PR #249 Codex review 第 18 巡, P2）。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "../manifest_dir/task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="containment"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_refuses_to_overwrite_existing_output(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    compose_payload.compose_payload(manifest_path, out_dir)
+    with pytest.raises(compose_payload.ProtectedPathError):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+
+@pytest.mark.parametrize("filename", [compose_payload.PAYLOAD_FILENAME, compose_payload.MANIFEST_FILENAME])
+def test_compose_payload_refuses_to_overwrite_dangling_symlink(tmp_path: Path, filename: str):
+    """`Path.exists()` はシンボリックリンクをターゲットまで辿るため、
+    リンク先が存在しない dangling symlink には `False` を返す——それを
+    「既存ファイルなし」と誤判定すると、`atomic_write_bytes` 内部の
+    `os.replace` が symlink エントリ自体を静黙に実ファイルへ置換して
+    しまう。`payload.md`/`payload.manifest.json` のどちらの位置でも、
+    dangling symlink が `ProtectedPathError` で拒否され、symlink 自体が
+    置換されず残ることを確認する（PR #249 Codex review 第 18 巡, P2）。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    dangling_target = out_dir / "does-not-exist-anywhere.txt"
+    dangling_symlink = out_dir / filename
+    dangling_symlink.symlink_to(dangling_target)
+    assert dangling_symlink.is_symlink()
+    assert not dangling_symlink.exists()  # dangling: exists() follows the link, target is missing
+
+    with pytest.raises(compose_payload.ProtectedPathError):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    # The symlink entry itself must remain untouched — not silently replaced
+    # by a real file.
+    assert dangling_symlink.is_symlink()
+    assert os.readlink(dangling_symlink) == str(dangling_target)
+
+
+# --- Codex review (PR #249), P2: 2 本目の publish 失敗時の rollback --------
+
+
+def test_compose_payload_rolls_back_payload_on_second_publish_failure(tmp_path: Path, monkeypatch):
+    """`payload.md` の publish 後に `payload.manifest.json` の publish が失敗
+    したら、rollback で `payload.md` も unlink され、`out_dir` にどちらも
+    残らない（不完全公開の防止）。その後 monkeypatch を外して同じ `out_dir`
+    へ再実行すると、上書き禁止チェックに引っかからず両ファイルが正常に
+    生成される（rollback により再実行可能）。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    real_atomic_write_bytes = compose_payload.atomic_write_bytes
+    call_count = {"n": 0}
+
+    def _fail_on_second_call(path, data):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated failure writing payload.manifest.json")
+        return real_atomic_write_bytes(path, data)
+
+    monkeypatch.setattr(compose_payload, "atomic_write_bytes", _fail_on_second_call)
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert not (out_dir / "payload.md").exists()
+    assert not (out_dir / "payload.manifest.json").exists()
+
+    monkeypatch.undo()
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert (out_dir / "payload.md").exists()
+    assert (out_dir / "payload.manifest.json").exists()
+    assert result["payload_sha256"]
+
+
+def test_compose_payload_rolls_back_both_outputs_on_post_publish_async_exception(
+    tmp_path: Path, monkeypatch
+):
+    """対応 2（PR #249 Codex レビュー第 3 巡, P2）: 2 本目の内部 `os.replace`
+    が完了して `payload.manifest.json` が publish 済みになった直後・helper
+    が return する前に非同期例外（`KeyboardInterrupt` 相当）が届くケースを、
+    「実際に書いてから例外を投げる」ラッパで再現する。単方向 unlink
+    （`payload_path` のみ）だと、この経路では『manifest あり payload なし』
+    という逆向きの部分残留が起きていた——except ハンドラは両方の出力を
+    unlink し、`out_dir` にどちらも残らないこと・その後の再実行が成功する
+    ことを確認する。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    real_atomic_write_bytes = compose_payload.atomic_write_bytes
+    call_count = {"n": 0}
+
+    def _write_then_raise_on_second_call(path, data):
+        call_count["n"] += 1
+        real_atomic_write_bytes(path, data)
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated async exception after publish completed")
+
+    monkeypatch.setattr(compose_payload, "atomic_write_bytes", _write_then_raise_on_second_call)
+
+    with pytest.raises(RuntimeError, match="simulated async exception"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    # The manifest file was actually published by the (real) second call
+    # before the simulated exception fired — rollback must still remove it.
+    assert not (out_dir / "payload.md").exists()
+    assert not (out_dir / "payload.manifest.json").exists()
+
+    monkeypatch.undo()
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert (out_dir / "payload.md").exists()
+    assert (out_dir / "payload.manifest.json").exists()
+    assert result["payload_sha256"]
+
+
+def test_compose_payload_rolls_back_payload_on_post_first_publish_async_exception(
+    tmp_path: Path, monkeypatch
+):
+    """対応（PR #249 Codex レビュー第 6 巡, P2）: 従来は 1 本目
+    （`payload.md`）の publish が try ブロックの外にあり、内部 `os.replace`
+    が完了した直後・呼び出しが return する前に非同期例外（
+    `KeyboardInterrupt` 相当）が届くと rollback ハンドラを迂回し、
+    `payload.md` のみが残留していた（再実行は上書き禁止チェックに拒否され
+    る）。try ブロックが 1 本目の publish 呼び出しから 2 本目の完了までを
+    包むよう拡張したので、この経路でも rollback が両出力を unlink し、
+    `out_dir` にどちらも残らないこと・その後の再実行が成功することを
+    確認する。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    real_atomic_write_bytes = compose_payload.atomic_write_bytes
+    call_count = {"n": 0}
+
+    def _write_then_raise_on_first_call(path, data):
+        call_count["n"] += 1
+        real_atomic_write_bytes(path, data)
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated async exception after first publish completed")
+
+    monkeypatch.setattr(compose_payload, "atomic_write_bytes", _write_then_raise_on_first_call)
+
+    with pytest.raises(RuntimeError, match="simulated async exception"):
+        compose_payload.compose_payload(manifest_path, out_dir)
+
+    # `payload.md` was actually published by the (real) first call before
+    # the simulated exception fired, and `payload.manifest.json` was never
+    # attempted — rollback must remove the payload file that did land.
+    assert not (out_dir / "payload.md").exists()
+    assert not (out_dir / "payload.manifest.json").exists()
+
+    monkeypatch.undo()
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    assert (out_dir / "payload.md").exists()
+    assert (out_dir / "payload.manifest.json").exists()
+    assert result["payload_sha256"]
+
+
+def test_compose_payload_records_newline_appended_when_content_has_no_trailing_newline(
+    tmp_path: Path,
+):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK NO NEWLINE")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+
+    parts_by_role = {p["role"]: p for p in result["parts"]}
+    assert parts_by_role["contract"]["newline_appended"] is False
+    assert parts_by_role["task"]["newline_appended"] is True
+    payload_text = (out_dir / "payload.md").read_text(encoding="utf-8")
+    assert "TASK NO NEWLINE\n=== END PART 2/2 ===" in payload_text
+
+
+def test_compose_payload_rejects_duplicate_yaml_mapping_key(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    manifest_path = manifest_dir / "manifest.yaml"
+    manifest_path.write_text(
+        "schema_version: l0b-payload-manifest/0.1\n"
+        "schema_version: l0b-payload-manifest/0.1\n"
+        "experiment_id: round1\n"
+        "round_label: round1\n"
+        "parts: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_unknown_top_level_key(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    manifest = _minimal_manifest_dict(parts=[])
+    manifest["coordinator_note"] = "this must not be accepted"
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="unknown key"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_rejects_unknown_part_key(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {
+                "role": "task",
+                "path": "task.md",
+                "sha256": task_sha,
+                "note": "coordinator commentary",
+            },
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    with pytest.raises(compose_payload.PayloadManifestError, match="unknown key"):
+        compose_payload.compose_payload(manifest_path, tmp_path / "out")
+
+
+def test_compose_payload_missing_parts_key_and_empty_parts_list_are_distinct_errors(
+    tmp_path: Path,
+):
+    """AGENTS.md §8「truthy 判定を正規形ガードに使わない」則の機械検証:
+    `parts` キー自体の不在（トップレベル必須キー欠落）と `parts: []`（構造
+    的には妥当な空リスト、多重度規則の `contract`/`task` 必須で拒否）は別の
+    エラーでなければならない——`if not data.get("parts")` のような truthy
+    判定で書くと両者が同一エラーに潰れる。"""
+
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+
+    missing_manifest = _minimal_manifest_dict(parts=[])
+    del missing_manifest["parts"]
+    missing_path = _write_manifest(manifest_dir, missing_manifest, name="missing.yaml")
+    with pytest.raises(compose_payload.PayloadManifestError, match="missing required key") as missing_exc:
+        compose_payload.compose_payload(missing_path, tmp_path / "out_missing")
+
+    empty_manifest = _minimal_manifest_dict(parts=[])
+    empty_path = _write_manifest(manifest_dir, empty_manifest, name="empty.yaml")
+    with pytest.raises(compose_payload.PayloadManifestError, match="role='contract'") as empty_exc:
+        compose_payload.compose_payload(empty_path, tmp_path / "out_empty")
+
+    assert str(missing_exc.value) != str(empty_exc.value)
+
+
+def test_compose_payload_cli_has_no_freeform_injection_options(tmp_path: Path):
+    """自由記述の注入口（`--note`/`--comment`/`--extra` 類）を一切定義しない
+    ことを argparse parser 自体から検査する（AGENTS.md §8 則の中心的な安全
+    特性）。"""
+
+    parser = compose_payload._build_arg_parser()
+    option_strings: set[str] = set()
+    for action in parser._actions:
+        option_strings.update(action.option_strings)
+    assert option_strings == {"-h", "--help", "--manifest", "--out-dir"}
+
+
+def test_compose_payload_cli_main_writes_files_and_reports_success(tmp_path: Path):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, contract_sha = _write_text_file(manifest_dir, "contract.md", "CONTRACT\n")
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(
+        parts=[
+            {"role": "contract", "path": "contract.md", "sha256": contract_sha},
+            {"role": "task", "path": "task.md", "sha256": task_sha},
+        ]
+    )
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "out"
+
+    exit_code = compose_payload.main(
+        ["--manifest", str(manifest_path), "--out-dir", str(out_dir)]
+    )
+    assert exit_code == 0
+    assert (out_dir / "payload.md").exists()
+    assert (out_dir / "payload.manifest.json").exists()
+
+
+def test_compose_payload_cli_main_nonzero_exit_on_manifest_error(tmp_path: Path, capsys):
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    _, task_sha = _write_text_file(manifest_dir, "task.md", "TASK\n")
+    manifest = _minimal_manifest_dict(parts=[{"role": "task", "path": "task.md", "sha256": task_sha}])
+    manifest_path = _write_manifest(manifest_dir, manifest)
+
+    exit_code = compose_payload.main(
+        ["--manifest", str(manifest_path), "--out-dir", str(tmp_path / "out")]
+    )
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+
+# --- check_token_ban.py (L0b-R R4 語句制約の機械判定. 正本 =
+# battery/task_br_d2.md「R4 語句制約の機械判定」節 / battery/ledger_l0br.yaml
+# constraint_checker 節) ------------------------------------------------------
+
+
+def test_check_token_ban_pass_case(tmp_path: Path):
+    score_path = tmp_path / "score.yaml"
+    content = "intro: sparse pad\nchorus: full energy strings\noutro: release into rest\n"
+    score_path.write_text(content, encoding="utf-8")
+
+    result = check_token_ban.check_token_ban(score_path)
+
+    assert result["schema_version"] == check_token_ban.SCHEMA_VERSION
+    assert result["status"] == "pass"
+    assert result["score_sha256"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
+    assert result["banned_tokens"] == list(check_token_ban.BANNED_TOKENS)
+    assert result["hits"] == {
+        "silence": 0,
+        "no kick": 0,
+        "low density": 0,
+        "sub bass": 0,
+    }
+
+    exit_code = check_token_ban.main(["--score", str(score_path)])
+    assert exit_code == 0
+
+
+def test_check_token_ban_detects_each_banned_token_case_insensitively_and_mid_word(
+    tmp_path: Path,
+):
+    """4 禁止語すべての検出を 1 課題に集約する: 大文字混じり `"SUB BASS"` /
+    `"No Kick"` が小文字化を経て検出されること、`"silenced"`（"silence" を
+    含む語）・`"low densityx"`（"low density" を含む語）が語中部分文字列と
+    して検出されることの両方を実証する。"""
+
+    score_path = tmp_path / "score.yaml"
+    content = (
+        "Verse one: gentle synths.\n"
+        "SUB BASS drone under the pad.\n"
+        "the room falls to silence, then silenced completely.\n"
+        "no kick on beat one; No Kick on beat three.\n"
+        "low density strings, extra low densityx padding.\n"
+    )
+    score_path.write_text(content, encoding="utf-8")
+
+    result = check_token_ban.check_token_ban(score_path)
+
+    assert result["status"] == "fail"
+    assert result["hits"] == {
+        "silence": 2,
+        "no kick": 2,
+        "low density": 2,
+        "sub bass": 1,
+    }
+
+    exit_code = check_token_ban.main(["--score", str(score_path)])
+    assert exit_code == 1
+
+
+def test_check_token_ban_non_utf8_score_exits_2(tmp_path: Path, capsys):
+    score_path = tmp_path / "score.yaml"
+    score_path.write_bytes(b"\xff\xfe\x00binary garbage, not utf-8")
+
+    with pytest.raises(check_token_ban.TokenBanCheckError, match="UTF-8"):
+        check_token_ban.check_token_ban(score_path)
+
+    exit_code = check_token_ban.main(["--score", str(score_path)])
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+
+def test_check_token_ban_output_is_byte_deterministic_across_runs(tmp_path: Path):
+    score_path = tmp_path / "score.yaml"
+    score_path.write_text("intro: sparse pad\nchorus: full energy\n", encoding="utf-8")
+    out_path_1 = tmp_path / "result1.json"
+    out_path_2 = tmp_path / "result2.json"
+
+    exit_code_1 = check_token_ban.main(["--score", str(score_path), "-o", str(out_path_1)])
+    exit_code_2 = check_token_ban.main(["--score", str(score_path), "-o", str(out_path_2)])
+
+    assert exit_code_1 == 0
+    assert exit_code_2 == 0
+    assert out_path_1.read_bytes() == out_path_2.read_bytes()
+
+    payload = json.loads(out_path_1.read_text(encoding="utf-8"))
+    assert payload == {
+        "schema_version": check_token_ban.SCHEMA_VERSION,
+        "status": "pass",
+        "score_sha256": hashlib.sha256(score_path.read_bytes()).hexdigest(),
+        "banned_tokens": list(check_token_ban.BANNED_TOKENS),
+        "hits": {"silence": 0, "no kick": 0, "low density": 0, "sub bass": 0},
+    }
+    assert out_path_1.read_text(encoding="utf-8").endswith("\n")
+
+
+def test_check_token_ban_refuses_to_overwrite_existing_output(tmp_path: Path, capsys):
+    score_path = tmp_path / "score.yaml"
+    score_path.write_text("intro: sparse pad\n", encoding="utf-8")
+    out_path = tmp_path / "result.json"
+
+    exit_code_1 = check_token_ban.main(["--score", str(score_path), "-o", str(out_path)])
+    assert exit_code_1 == 0
+    stale_bytes = out_path.read_bytes()
+
+    exit_code_2 = check_token_ban.main(["--score", str(score_path), "-o", str(out_path)])
+    assert exit_code_2 == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    # Refused overwrite must leave the existing file untouched.
+    assert out_path.read_bytes() == stale_bytes
+
+
+def test_check_token_ban_refuses_to_overwrite_dangling_symlink(tmp_path: Path, capsys):
+    """`compose_payload.py` と同型の指摘（PR #249 Codex review 第 19 巡,
+    P2）: `Path.exists()` はシンボリックリンクをターゲットまで辿るため、
+    リンク先が存在しない dangling symlink には `False` を返す——`-o` の
+    出力先が dangling symlink の場合、`ProtectedPathError`（運用エラー、
+    exit 2）で拒否され、symlink 自体が置換されず残ることを確認する。"""
+
+    score_path = tmp_path / "score.yaml"
+    score_path.write_text("intro: sparse pad\n", encoding="utf-8")
+    out_path = tmp_path / "result.json"
+    dangling_target = tmp_path / "does-not-exist-anywhere.txt"
+    out_path.symlink_to(dangling_target)
+    assert out_path.is_symlink()
+    assert not out_path.exists()  # dangling: exists() follows the link, target is missing
+
+    exit_code = check_token_ban.main(["--score", str(score_path), "-o", str(out_path)])
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+    assert out_path.is_symlink()
+    assert os.readlink(out_path) == str(dangling_target)
+
+
+def test_check_token_ban_cli_has_only_score_and_o_options():
+    """argparse オプションが `--score`/`-o`（+ `-h`/`--help`）のみであること
+    を parser 自体から検査する（`compose_payload.py` の
+    `test_compose_payload_cli_has_no_freeform_injection_options` と同型の
+    安全特性検査）。"""
+
+    parser = check_token_ban._build_arg_parser()
+    option_strings: set[str] = set()
+    for action in parser._actions:
+        option_strings.update(action.option_strings)
+    assert option_strings == {"-h", "--help", "--score", "-o"}
+
+
+# --- ledger_l0br.yaml shape enforcement (AGENTS.md §8「parse 可能 ≠ 形状正しい」)
+
+
+_LEDGER_TASK_IDS = ("br_d1", "br_d2", "br_d3")
+_LEDGER_FAILURE_MODE_VOCAB = ("unconverged", "missteered", "contract_defect", "instrument_band")
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _load_ledger_l0br_text() -> str:
+    return LEDGER_L0BR_PATH.read_text(encoding="utf-8")
+
+
+def _load_ledger_l0br() -> dict:
+    with LEDGER_L0BR_PATH.open(encoding="utf-8") as handle:
+        return yaml.load(handle, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
+
+
+def test_ledger_l0br_todo_pin_sentinel_absent_everywhere():
+    """凍結 enforce: 事前登録 commit 時点で `"TODO_PIN"` が本ファイルの
+    どこにも（値・コメント含め）残っていてはならない。"""
+
+    assert "TODO_PIN" not in _load_ledger_l0br_text()
+
+
+def test_ledger_l0br_top_level_keys_present():
+    ledger = _load_ledger_l0br()
+    required = (
+        "schema_version",
+        "experiment",
+        "registered_utc",
+        "route",
+        "contract_freeze",
+        "judge",
+        "author_identity",
+        "payload_composition",
+        "constraint_checker",
+        "protocol",
+        "tasks",
+        "series_runs",
+        "off_contract_events",
+    )
+    for key in required:
+        assert key in ledger, key
+    assert ledger["schema_version"] == "l0br-ledger/0.1"
+
+
+def test_ledger_l0br_protocol_shape():
+    protocol = _load_ledger_l0br()["protocol"]
+    assert protocol["round_limit"] == 5
+    assert protocol["series_per_task"] == 2
+    assert protocol["failure_mode_vocab"] == list(_LEDGER_FAILURE_MODE_VOCAB)
+
+
+def test_ledger_l0br_tasks_shape():
+    tasks = _load_ledger_l0br()["tasks"]
+    assert len(tasks) == 3
+    assert [task["id"] for task in tasks] == list(_LEDGER_TASK_IDS)
+
+    by_id = {task["id"]: task for task in tasks}
+    assert by_id["br_d1"]["difficulty"] == "single_lever_proven"
+    assert by_id["br_d2"]["difficulty"] == "multi_lever_novel"
+    assert by_id["br_d3"]["difficulty"] == "compound_interaction"
+
+    assert by_id["br_d1"]["token_ban"] is False
+    assert by_id["br_d2"]["token_ban"] is True
+    assert by_id["br_d3"]["token_ban"] is True
+
+
+def _resolve_battery_relative(relative_path: str) -> Path:
+    return (BATTERY_DIR / relative_path).resolve()
+
+
+def test_ledger_l0br_pins_match_actual_file_sha256():
+    """`ledger_l0br.yaml` に記載された sha256 pin が、対応する実ファイルの
+    実測 sha256 と一致することを assert する（捏造・貼り間違い・pin 忘れの
+    実体照合。パスは ledger 内の相対パス表記を battery/ 基準で解決する）。"""
+
+    ledger = _load_ledger_l0br()
+
+    checks: list[tuple[str, Path, str]] = []
+
+    contract_freeze = ledger["contract_freeze"]
+    for label in ("authoring_contract_l0", "authoring_trusted_axes_l0", "contract_md"):
+        entry = contract_freeze[label]
+        checks.append((f"contract_freeze.{label}", _resolve_battery_relative(entry["path"]), entry["sha256"]))
+
+    judge = ledger["judge"]
+    for label in ("run_round", "pareto_eval", "section_map", "section_map_t2", "pareto_spec"):
+        entry = judge[label]
+        checks.append((f"judge.{label}", _resolve_battery_relative(entry["path"]), entry["sha256"]))
+
+    wrapper = ledger["author_identity"]["wrapper"]
+    checks.append(
+        ("author_identity.wrapper", _resolve_battery_relative(wrapper["path"]), wrapper["sha256"])
+    )
+
+    # `payload_composition.composer` は実行時/現行の 2 系統 pin を持つ
+    # （PR #249 Codex レビュー、P1 採用: composer ファイルが測定後にレビュー
+    # 対応で変わったため、単一 sha256 だと「実行されていないコードを台帳が
+    # 認証する」状態になる）。`sha256_current` は現行ファイルと実体照合する。
+    # `sha256_at_measurement` はかつて「git 履歴が実体を保持する歴史的
+    # attestation」として 64-hex 形式のみ検証していたが、squash マージや
+    # 履歴を持たない export では参照 commit の blob が到達不能になり実体が
+    # 消えうる（PR #249 Codex レビュー第 10 巡, P1 指摘）。`frozen_copy`
+    # （`composer_at_measurement/compose_payload.py`、git 系譜に依存しない
+    # 凍結コピー）を導入したので、`sha256_at_measurement` もこの凍結コピー
+    # との実体照合へ昇格する。
+    composer = ledger["payload_composition"]["composer"]
+    checks.append(
+        (
+            "payload_composition.composer (sha256_current)",
+            _resolve_battery_relative(composer["path"]),
+            composer["sha256_current"],
+        )
+    )
+    checks.append(
+        (
+            "payload_composition.composer (sha256_at_measurement, frozen_copy)",
+            _resolve_battery_relative(composer["frozen_copy"]),
+            composer["sha256_at_measurement"],
+        )
+    )
+
+    # `constraint_checker` も composer と同型の実行時/現行 2 系統 pin へ
+    # 移行した（PR #249 Codex レビュー第 19 巡, P2）: `sha256_current` は
+    # 現行ファイルと実体照合、`sha256_at_measurement` は `frozen_copy`
+    # （`checker_at_measurement/check_token_ban.py`）との実体照合へ昇格する
+    # （composer の第 10 巡採用と同じ理由——squash マージ耐久性）。
+    constraint_checker = ledger["constraint_checker"]
+    checks.append(
+        (
+            "constraint_checker (sha256_current)",
+            _resolve_battery_relative(constraint_checker["path"]),
+            constraint_checker["sha256_current"],
+        )
+    )
+    checks.append(
+        (
+            "constraint_checker (sha256_at_measurement, frozen_copy)",
+            _resolve_battery_relative(constraint_checker["frozen_copy"]),
+            constraint_checker["sha256_at_measurement"],
+        )
+    )
+
+    for task in ledger["tasks"]:
+        statement = task["statement"]
+        checks.append(
+            (
+                f"tasks[{task['id']}].statement",
+                _resolve_battery_relative(statement["path"]),
+                statement["sha256"],
+            )
+        )
+        # 事前登録 doc 本体の content pin（PR #249 Codex レビュー第 16 巡,
+        # P2）: 元は bare 文字列（ファイル名のみ）だった `registration` を
+        # `statement` と同型の `{path, sha256}` へ dict 化し、実体照合の
+        # 対象に加えた。
+        registration = task["registration"]
+        checks.append(
+            (
+                f"tasks[{task['id']}].registration",
+                _resolve_battery_relative(registration["path"]),
+                registration["sha256"],
+            )
+        )
+
+    # 全 3 課題の positive_control pin を突合する（PR #249 Codex レビュー
+    # 第 21 巡, P2 — 従来 br_d2/br_d3（`mode: "new_search"`）のみで、
+    # br_d1（`mode: "reuse_pinned_t2"`——L0B-T2 の pin 済み陽性対照を再現
+    # 確認して流用、新規探索なし）は score 側が未 pin のまま実体照合対象外
+    # だった）。`dir` は両 mode とも `BATTERY_DIR` 基準の相対パスとして
+    # 統一的に解決できる（br_d1 は `../positive_control_t2`、br_d2/br_d3
+    # は battery 直下）——ただし mode を allowlist で明示検査し、未知の
+    # mode は「この解決表が対応していない新方式」として fail-closed で
+    # 拒否する（黙って `dir` を信用しない）。
+    for task in ledger["tasks"]:
+        task_id = task["id"]
+        pc = task["positive_control"]
+        mode = pc["mode"]
+        if mode not in ("reuse_pinned_t2", "new_search"):
+            raise AssertionError(
+                f"tasks[{task_id}].positive_control.mode={mode!r} is not one of the "
+                "known modes this test's dir-resolution table handles — update the "
+                "table before trusting this pin (fail-closed)"
+            )
+        pc_dir = _resolve_battery_relative(pc["dir"])
+        checks.append(
+            (f"tasks[{task_id}].positive_control.score", pc_dir / "score.yaml", pc["score_sha256"])
+        )
+        checks.append(
+            (f"tasks[{task_id}].positive_control.report", pc_dir / "report.json", pc["report_sha256"])
+        )
+
+    # per-round judge 成果物の実体照合（PR #249 Codex レビュー第 7 巡, P2）:
+    # `series_runs` を traverse し、周回をハードコード列挙せず台帳に記載
+    # された全周回を機械的にカバーする（将来の周回追加が自動でカバーされる）。
+    # 対象は score.yaml / intent.yaml / report.json / payload.manifest.json
+    # + 判定成果物（token_ban.json / pareto_vs_round*.json、存在する周回の
+    # み——`payload_sha256` は `payload.md` 自体を on-disk に保持しない設計
+    # （author-visible な一時成果物、`payload.manifest.json` 内部の
+    # `payload_sha256` フィールドとしてのみ保持）のためファイル実体照合の
+    # 対象外のまま据え置く）。
+    null_consistency_checks: list[tuple[str, Path, bool]] = []
+    # 判定成果物の内容と台帳 解釈済み boolean の突合（PR #249 Codex レビュー
+    # 第 8 巡, P2）: sha256 pin の一致だけでは「pin は正しいがその隣の
+    # 解釈済み boolean（`token_ban`/`pareto_vs_prev`）が独立に手書き改変
+    # されている」（例: pareto の `improved: false`（tie）を台帳側だけ
+    # `pareto_vs_prev: true` に書き換えて改善件数を水増しする）を検出
+    # できない。ここでは pin 済みファイルを実際に parse し、その内容
+    # フィールドを台帳フィールドと突合する。
+    content_cross_checks: list[tuple[str, Path, str, object]] = []
+    # payload manifest の推移的束縛（PR #249 Codex レビュー第 11 巡, P2）:
+    # 台帳の `payload_sha256` は今まで実体照合されていなかった（payload.md
+    # 自体を保持しないため）——だが manifest 内部の `payload_sha256`
+    # フィールドとは突合できる。さらに manifest の `parts[*].sha256` は、
+    # role に応じて以下の pin 済み成果物へ推移的に束縛されているはず:
+    # `contract` → contract_freeze.contract_md、`task` → 当該 task の
+    # statement、`own_score`/`own_intent`/`diff_report` → 同一系列の
+    # **直前周回**の score_sha256/intent_sha256/report_sha256（round1 には
+    # own_*/diff_report part 自体が無いはず）。`validation_errors` role は
+    # 現行データに一件も存在しない（`grep` で事前確認済み）——出現したら
+    # 対応表が未定義のため `manifest_field_checks` 側で明示的に fail する。
+    manifest_field_checks: list[tuple[str, object, object]] = []
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+    contract_md_sha256 = ledger["contract_freeze"]["contract_md"]["sha256"]
+
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        rounds_by_number = {r["round"]: r for r in series_entry["rounds"]}
+        task_entry = tasks_by_id[series_entry["task"]]
+        statement_sha256 = task_entry["statement"]["sha256"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            prefix = f"series_runs[{series_entry['task']}/{series_entry['series']}].rounds[{round_num}]"
+
+            for field, filename in (
+                ("payload_manifest_sha256", "payload.manifest.json"),
+                ("score_sha256", "score.yaml"),
+                ("intent_sha256", "intent.yaml"),
+                ("report_sha256", "report.json"),
+            ):
+                checks.append((f"{prefix}.{field}", round_dir / filename, round_entry[field]))
+
+            manifest_path = round_dir / "payload.manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_field_checks.append(
+                (f"{prefix}.payload.manifest.payload_sha256", manifest["payload_sha256"], round_entry["payload_sha256"])
+            )
+            previous_round = rounds_by_number.get(round_num - 1)
+            for part in manifest["parts"]:
+                role = part["role"]
+                if role == "contract":
+                    expected_sha256 = contract_md_sha256
+                elif role == "task":
+                    expected_sha256 = statement_sha256
+                elif role == "own_score":
+                    expected_sha256 = previous_round["score_sha256"] if previous_round else None
+                elif role == "own_intent":
+                    expected_sha256 = previous_round["intent_sha256"] if previous_round else None
+                elif role == "diff_report":
+                    expected_sha256 = previous_round["report_sha256"] if previous_round else None
+                else:
+                    # `validation_errors`（現行データに未出現）を含め、対応
+                    # 未定義の role は fail-closed で明示エラーにする。
+                    expected_sha256 = f"UNMAPPED_ROLE:{role}"
+                manifest_field_checks.append(
+                    (f"{prefix}.payload.manifest.parts[role={role}].sha256", part["sha256"], expected_sha256)
+                )
+
+            token_ban_sha = round_entry["token_ban_report_sha256"]
+            token_ban_path = round_dir / "token_ban.json"
+            if token_ban_sha is not None:
+                checks.append((f"{prefix}.token_ban_report_sha256", token_ban_path, token_ban_sha))
+                content_cross_checks.append(
+                    (f"{prefix}.token_ban", token_ban_path, "status", round_entry["token_ban"])
+                )
+                # token_ban の入力束縛（PR #249 Codex レビュー第 12 巡, P2）:
+                # `status` の pin 一致だけでは「別 score に対する pass 判定が
+                # 使い回された」stale/コピー混入を検出できない —
+                # `token_ban.json` 内部の `score_sha256` が同一周回の
+                # `score_sha256` pin と一致することも突合する。
+                content_cross_checks.append(
+                    (f"{prefix}.token_ban(score binding)", token_ban_path, "score_sha256", round_entry["score_sha256"])
+                )
+            null_consistency_checks.append(
+                (f"{prefix}.token_ban_report_sha256", token_ban_path, token_ban_sha is not None)
+            )
+
+            pareto_sha = round_entry["pareto_report_sha256"]
+            pareto_path = round_dir / f"pareto_vs_round{round_num - 1}.json"
+            if pareto_sha is not None:
+                checks.append((f"{prefix}.pareto_report_sha256", pareto_path, pareto_sha))
+                content_cross_checks.append(
+                    (f"{prefix}.pareto_vs_prev", pareto_path, "improved", round_entry["pareto_vs_prev"])
+                )
+            null_consistency_checks.append(
+                (f"{prefix}.pareto_report_sha256", pareto_path, pareto_sha is not None)
+            )
+
+    assert checks, "no pin entries collected — test would vacuously pass"
+    for label, path, expected_sha256 in checks:
+        assert path.is_file(), f"{label}: pinned path does not exist: {path}"
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert actual_sha256 == expected_sha256, f"{label}: sha256 mismatch for {path}"
+
+    assert content_cross_checks, "no content cross-checks collected — test would vacuously pass"
+    for label, path, json_key, expected_value in content_cross_checks:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        actual_value = payload[json_key]
+        assert actual_value == expected_value, (
+            f"{label}: {path.name}.{json_key}={actual_value!r} does not match ledger "
+            f"value {expected_value!r} (interpreted boolean may have been hand-edited "
+            "independently of the pinned judge output)"
+        )
+
+    assert manifest_field_checks, "no manifest binding checks collected — test would vacuously pass"
+    for label, actual_value, expected_value in manifest_field_checks:
+        assert actual_value == expected_value, (
+            f"{label}: manifest value {actual_value!r} does not match expected transitive "
+            f"binding {expected_value!r}"
+        )
+
+    # null/非 null と実ファイル有無の一貫性: pin が null なのに実ファイルが
+    # 存在する（pin 忘れ）、または pin があるのに実ファイルが存在しない
+    # （上の checks ループで既に path.is_file() が拾うが、ここでは逆方向 —
+    # 「pin が null」側の一貫性を明示的に確認する）。
+    for label, path, expect_exists in null_consistency_checks:
+        if not expect_exists:
+            assert not path.exists(), (
+                f"{label}: pin is null but file exists on disk (pin omission): {path}"
+            )
+
+
+def _assert_round_entry_shape(round_entry: dict) -> None:
+    assert isinstance(round_entry.get("round"), int) and round_entry["round"] >= 1
+    for field in (
+        "payload_manifest_sha256",
+        "payload_sha256",
+        "score_sha256",
+        "intent_sha256",
+        "report_sha256",
+    ):
+        value = round_entry[field]
+        assert isinstance(value, str) and _SHA256_HEX_RE.fullmatch(value), field
+    token_ban = round_entry["token_ban"]
+    assert token_ban is None or token_ban in ("pass", "fail")
+    # 判定成果物の content pin（PR #249 Codex レビュー第 7 巡, P2）:
+    # null 許容だが非 null なら 64-hex（`token_ban`/`pareto_vs_prev` という
+    # 姉妹フィールドの null/非 null と一致するかは
+    # `test_ledger_l0br_pins_match_actual_file_sha256` 側の実体照合が検査
+    # する——ここは値の形状のみ enforce する）。
+    for field in ("token_ban_report_sha256", "pareto_report_sha256"):
+        value = round_entry[field]
+        assert value is None or (isinstance(value, str) and _SHA256_HEX_RE.fullmatch(value)), field
+    # `author_tool_use == 0` 強制（PR #249 Codex レビュー第 15 巡, P2）:
+    # `protocol.off_contract_rule`（「著者ツール使用が 0 でない周回は
+    # off-contract」）により、`series_runs` に残存する（= 到達率会計に
+    # 算入される）周回は定義上すべて author_tool_use == 0 のはず——非ゼロが
+    # 混入した off-contract 試行は `off_contract_events` 側へ記録され
+    # series_runs には現れない契約（br_d1/s2 round1 の
+    # payload_transcription_corruption 事故はこの経路の実例: 汚染試行は
+    # `off_contract_events` に記録され、series_runs の round1 は正規再実行
+    # 分のみ）。`>= 0` のままだと非ゼロ author_tool_use が series_runs に
+    # 紛れ込んでも形状テストは無言で通してしまう。
+    author_tool_use = round_entry.get("author_tool_use")
+    assert isinstance(author_tool_use, int) and author_tool_use == 0, (
+        f"round {round_entry.get('round')!r}: author_tool_use must be exactly 0 for a "
+        f"round counted in series_runs (protocol.off_contract_rule), got {author_tool_use!r}"
+    )
+    assert isinstance(round_entry.get("verdicts"), dict)
+
+
+def _assert_series_entry_shape(series_entry: dict) -> None:
+    assert series_entry["task"] in _LEDGER_TASK_IDS
+    assert isinstance(series_entry["series"], str)
+    rounds = series_entry["rounds"]
+    assert isinstance(rounds, list) and rounds
+    for round_entry in rounds:
+        _assert_round_entry_shape(round_entry)
+
+    assert series_entry["outcome"] in ("reached", "unreached")
+    rounds_to_success = series_entry["rounds_to_success"]
+    assert rounds_to_success is None or (
+        isinstance(rounds_to_success, int) and rounds_to_success >= 1
+    )
+    failure_mode = series_entry["failure_mode"]
+    assert failure_mode is None or failure_mode in _LEDGER_FAILURE_MODE_VOCAB
+
+
+_LEDGER_EXPECTED_SERIES_INVENTORY = frozenset(
+    {
+        ("br_d1", "s1"),
+        ("br_d1", "s2"),
+        ("br_d2", "s1"),
+        ("br_d2", "s2"),
+        ("br_d3", "s1"),
+        ("br_d3", "s2"),
+    }
+)
+
+
+def test_ledger_l0br_series_runs_and_off_contract_events_are_lists():
+    """`series_runs`/`off_contract_events` はいずれも list であること
+    （不在チェックではなく型チェック）。`series_runs` は登録時点（実行前）は
+    空 list が正規状態だったが、第 1 バッテリーは完結済み（2026-08-06 実測、
+    `docs/l0br_robustness_record.md` 正本）のため、正本状態は 6 系列固定
+    （PR #249 Codex レビュー第 11 巡, P2）。"""
+
+    ledger = _load_ledger_l0br()
+
+    series_runs = ledger["series_runs"]
+    assert isinstance(series_runs, list)
+    off_contract_events = ledger["off_contract_events"]
+    assert isinstance(off_contract_events, list)
+
+    for series_entry in series_runs:
+        _assert_series_entry_shape(series_entry)
+
+    # 6 系列インベントリの固定（PR #249 Codex レビュー第 11 巡, P2）:
+    # (br_d1,s1)(br_d1,s2)(br_d2,s1)(br_d2,s2)(br_d3,s1)(br_d3,s2) が一意・
+    # 過不足なく揃っていること。完結済みバッテリーの正本としての固定であり、
+    # 将来 R-3 等で系列が追加される場合はこの assert 自体を更新する。
+    actual_inventory = [(entry["task"], entry["series"]) for entry in series_runs]
+    assert len(actual_inventory) == len(set(actual_inventory)), (
+        f"duplicate (task, series) pair(s) in series_runs: {actual_inventory!r}"
+    )
+    assert set(actual_inventory) == _LEDGER_EXPECTED_SERIES_INVENTORY, (
+        f"series_runs inventory mismatch: got {sorted(actual_inventory)!r}, "
+        f"expected {sorted(_LEDGER_EXPECTED_SERIES_INVENTORY)!r}"
+    )
+
+
+def test_ledger_l0br_off_contract_events_inventory_is_fixed():
+    """`off_contract_events` を既知の 1 件（`payload_transcription_corruption`
+    ・br_d1/s2 round1 の事故）へ固定する（PR #249 Codex レビュー第 16 巡,
+    P2）。record doc（`docs/l0br_robustness_record.md` §5）の報告と台帳の
+    会計が矛盾しないための固定であり、将来イベントが増える場合はこの
+    assert 自体を更新する。"""
+
+    ledger = _load_ledger_l0br()
+    events = ledger["off_contract_events"]
+
+    assert len(events) == 1, f"expected exactly 1 off_contract_events entry, got {len(events)}"
+    event = events[0]
+
+    for field in ("date", "task", "series", "round", "kind", "description", "disposition"):
+        assert field in event, f"off_contract_events[0] missing required field {field!r}"
+    assert isinstance(event["date"], str) and event["date"]
+    assert isinstance(event["task"], str) and event["task"] in _LEDGER_TASK_IDS
+    assert isinstance(event["series"], str) and event["series"]
+    assert isinstance(event["round"], int) and event["round"] >= 1
+    assert isinstance(event["kind"], str) and event["kind"]
+    assert isinstance(event["description"], str) and event["description"]
+    assert isinstance(event["disposition"], str) and event["disposition"]
+
+    # 既知の 1 件そのものの識別フィールドを固定する（record doc §5 の該当
+    # 事故記述と対応）。
+    assert event["date"] == "2026-08-06"
+    assert event["task"] == "br_d1"
+    assert event["series"] == "s2"
+    assert event["round"] == 1
+    assert event["kind"] == "payload_transcription_corruption"
+
+
+def _round_success(verdicts: dict, *, token_ban_required: bool, token_ban_status) -> bool:
+    """`protocol.success_predicate`（ledger 本文が正本）の再実装: symbolic
+    pass ∧ key=preserved ∧ brightness=preserved ∧ structure=exact_match、
+    token_ban 課題では追加で token_ban=pass。"""
+
+    return (
+        verdicts["symbolic_validation_status"] == "pass"
+        and verdicts["key"] == "preserved"
+        and verdicts["brightness"] == "preserved"
+        and verdicts["structure"] == "exact_match"
+        and (not token_ban_required or token_ban_status == "pass")
+    )
+
+
+def test_ledger_l0br_series_outcome_derivable_from_pinned_reports():
+    """「到達率 5/6」の見出し会計（`docs/l0br_robustness_record.md` §1/§3）が
+    pin 済み成果物（report.json）から機械的に再導出可能であることを assert
+    する（PR #249 Codex レビュー第 11 巡, P2）。台帳の `outcome`/
+    `rounds_to_success` は今まで著者が手書きした解釈値のまま実体照合されて
+    いなかった——ここでは (1) 各周回の `report.json` の verdicts が台帳
+    round エントリの `verdicts` と一致すること、(2) 登録済み成功述語
+    （`protocol.success_predicate`）を pin 済み verdicts + `token_ban` へ
+    適用して系列ごとに最初の成功周回を再計算し、`rounds_to_success`/
+    `outcome`（reached/unreached、round_limit 内成功なしなら
+    unreached/null）が台帳値と一致することを、両方 assert する。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+
+    verdict_checks: list[tuple[str, dict, dict]] = []
+    outcome_checks: list[tuple[str, str, object, object]] = []
+
+    for series_entry in ledger["series_runs"]:
+        task_id = series_entry["task"]
+        series_label = series_entry["series"]
+        token_ban_required = tasks_by_id[task_id]["token_ban"] is True
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+
+        first_success_round = None
+        for round_entry in sorted(series_entry["rounds"], key=lambda r: r["round"]):
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            report = json.loads((round_dir / "report.json").read_text(encoding="utf-8"))
+            actual_verdicts = {
+                "brightness": report["axes"]["brightness"]["verdict"],
+                "key": report["axes"]["key"]["verdict"],
+                "structure": report["axes"]["structure"]["verdict"],
+                "symbolic_validation_status": report["symbolic_validation"]["status"],
+            }
+            verdict_checks.append(
+                (f"{task_id}/{series_label}.rounds[{round_num}]", actual_verdicts, round_entry["verdicts"])
+            )
+
+            if first_success_round is None and _round_success(
+                actual_verdicts,
+                token_ban_required=token_ban_required,
+                token_ban_status=round_entry["token_ban"],
+            ):
+                first_success_round = round_num
+
+        expected_outcome = "reached" if first_success_round is not None else "unreached"
+        outcome_checks.append(
+            (f"{task_id}/{series_label}", "outcome", expected_outcome, series_entry["outcome"])
+        )
+        outcome_checks.append(
+            (
+                f"{task_id}/{series_label}",
+                "rounds_to_success",
+                first_success_round,
+                series_entry["rounds_to_success"],
+            )
+        )
+
+    assert verdict_checks, "no verdict checks collected — test would vacuously pass"
+    for label, actual_verdicts, ledger_verdicts in verdict_checks:
+        assert actual_verdicts == ledger_verdicts, (
+            f"{label}: report.json verdicts {actual_verdicts!r} do not match ledger "
+            f"verdicts {ledger_verdicts!r}"
+        )
+
+    assert outcome_checks, "no outcome checks collected — test would vacuously pass"
+    for label, field, derived_value, ledger_value in outcome_checks:
+        assert derived_value == ledger_value, (
+            f"{label}.{field}: derived from pinned reports = {derived_value!r}, ledger = "
+            f"{ledger_value!r}"
+        )
+
+
+# --- Codex review (PR #249) 第 12 巡, P2: 判定成果物を「評価した入力」へ束縛 --
+
+
+def test_ledger_l0br_pareto_reports_reproduce_frozen_judge_reevaluation():
+    """`pareto_vs_round*.json` は sha256 pin と `improved` boolean の内容
+    突合（第 8 巡）までは実施済みだが、pin されたファイル自体には入力
+    （どの 2 つの report.json を比較したか）の hash が記録されていない
+    ため、それらの突合だけでは「別の周回ペアを評価した出力を pin する」
+    差し替えを検出できない。ここでは pin 済みの前周回/当該周回の
+    `report.json`（既に §1 の sha256 pin で実体照合済み）を入力に、凍結
+    判定器（`judge.pareto_eval`/`judge.pareto_spec` として pin 済みの
+    `pareto_eval.py`/`frozen/pareto.yaml`）で**再評価**し、出力が pin 済み
+    `pareto_vs_round{N-1}.json` とバイト等値であることを assert する
+    （`pareto_eval.main` の `-o` publish と同一の
+    `json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"`
+    直列化を用いる——決定論的評価器のため byte 等値が成立するはず）。"""
+
+    ledger = _load_ledger_l0br()
+
+    reeval_checks: list[tuple[str, str, str]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            if round_entry["pareto_report_sha256"] is None:
+                continue
+            round_dir = round_dir_base / f"round{round_num}"
+            prev_round_dir = round_dir_base / f"round{round_num - 1}"
+
+            prev_report = json.loads((prev_round_dir / "report.json").read_text(encoding="utf-8"))
+            curr_report = json.loads((round_dir / "report.json").read_text(encoding="utf-8"))
+            result = pareto_eval.evaluate(prev_report, curr_report, PARETO_SPEC)
+            reevaluated_content = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+            pinned_path = round_dir / f"pareto_vs_round{round_num - 1}.json"
+            pinned_content = pinned_path.read_text(encoding="utf-8")
+
+            label = f"{series_entry['task']}/{series_entry['series']}.rounds[{round_num}]"
+            reeval_checks.append((label, reevaluated_content, pinned_content))
+
+    assert reeval_checks, "no pareto re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 10, (
+        f"expected exactly 10 pareto-pin'd rounds across the completed battery, got "
+        f"{len(reeval_checks)}"
+    )
+    for label, reevaluated_content, pinned_content in reeval_checks:
+        assert reevaluated_content == pinned_content, (
+            f"{label}: re-evaluating the pinned prev/curr report.json pair through the "
+            "frozen judge (pareto_eval.evaluate + frozen/pareto.yaml) does not "
+            "byte-reproduce the pinned pareto_vs_round*.json — the pin may not have been "
+            "produced from this input pair"
+        )
+
+
+# --- Codex review (PR #249) 第 13 巡, P2: report.json を「評価した score」へ束縛 --
+
+
+@pytest.mark.slow
+def test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation(tmp_path: Path):
+    """`report.json` は評価対象の score への束縛を内部に持たない
+    （`score_sha256` フィールドが無く、`hashes.json` も round dir に温存
+    されていない——測定時に残さなかった成果物を今から生成して置くのは
+    捏造になるため不可）。ここでは代わりに**凍結判定器（`run_round.py`、
+    `judge.run_round` として pin 済み）による再導出**で束縛する: 全 16
+    周回について、pin 済み `score.yaml` + 当該課題の section map（台帳
+    `tasks[*].section_map` と整合——br_d1/br_d3 = `frozen/section_map_t2.
+    json`・br_d2 = `frozen/section_map.json`）を `run_round.run_round()`
+    （`test_positive_control_round_trip_reproduces_pinned_report`/
+    `test_positive_control_t2_round_trip_reproduces_pinned_report` と同一の
+    呼び出し方）へ入力し、出力 report が pin 済み `report.json` と
+    **バイト等値**であることを assert する（バッテリー実測時に陽性対照で
+    「report 決定論 3 回一致」を確認済みのため成立するはず）。出力は
+    `tmp_path` のみへ書き、リポジトリ内ファイルは一切変更しない。
+
+    `@pytest.mark.slow`: 16 周回分の合成 + 抽出を伴うため重い
+    （実測: 1 周回あたり約 45〜75 秒、全 16 周回で約 15〜17 分）。日常の
+    高速ループ（`pytest -m "not slow"`）から除外され、CI と push 前の
+    全件実行では実行される。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+
+    reeval_checks: list[tuple[str, bytes, bytes]] = []
+    for series_entry in ledger["series_runs"]:
+        task_entry = tasks_by_id[series_entry["task"]]
+        section_map_path = _resolve_battery_relative(task_entry["section_map"])
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            score_path = round_dir / "score.yaml"
+            pinned_report_path = round_dir / "report.json"
+
+            label = f"{series_entry['task']}/{series_entry['series']}.rounds[{round_num}]"
+            workdir = tmp_path / f"{series_entry['task']}_{series_entry['series']}_round{round_num}_wd"
+            output_path = tmp_path / f"{series_entry['task']}_{series_entry['series']}_round{round_num}_report.json"
+
+            run_round.run_round(
+                score_path,
+                workdir,
+                round_num,
+                output_path,
+                section_map_path=section_map_path,
+            )
+            reeval_checks.append((label, output_path.read_bytes(), pinned_report_path.read_bytes()))
+
+    assert reeval_checks, "no report re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 16, (
+        f"expected exactly 16 rounds across the completed battery, got {len(reeval_checks)}"
+    )
+    for label, reevaluated_bytes, pinned_bytes in reeval_checks:
+        assert reevaluated_bytes == pinned_bytes, (
+            f"{label}: re-running the pinned score.yaml through the frozen judge "
+            "(run_round.run_round with the task's pinned section map) does not "
+            "byte-reproduce the pinned report.json — the pin may not have been produced "
+            "from this score"
+        )
+
+
+# --- Codex review (PR #249) 第 14 巡, P2: payload 再組成 + 周回番号の一意・連続性 --
+
+
+_ROLE_TO_PREVIOUS_ROUND_FIELD = {
+    "own_score": "score.yaml",
+    "own_intent": "intent.yaml",
+    "diff_report": "report.json",
+}
+
+
+def test_ledger_l0br_payloads_recompose_via_frozen_measurement_composer(tmp_path: Path):
+    """`payload.manifest.json`（pin 済み出力）は本来「宣言 manifest →
+    composer → 出力」という一方向の変換の**結果**でしかなく、この結果が
+    実際にその変換から生まれたことは今まで検証されていなかった（第 8 巡の
+    突合は出力内部のフィールド同士の整合、第 11 巡の突合は出力と台帳の
+    整合であって、いずれも「入力から composer を実際に走らせて再現できる
+    か」は見ていない）。ここでは pin 済み `payload.manifest.json` の
+    `parts[*].{role,path,sha256}` から宣言 manifest（compose_payload の入力
+    形式）を機械的に再構築し、role→保持済み成果物の対応（`contract` →
+    contract_freeze.contract_md、`task` → 当該 task の statement、
+    `own_score`/`own_intent`/`diff_report` → 同一系列の直前周回の
+    score.yaml/intent.yaml/report.json——第 11 巡で実体照合済みの対応表と
+    同一）で `tmp_path` に part 実体を配置し、**測定時 composer の凍結
+    コピー**（`composer_at_measurement/compose_payload.py`、
+    `sha256_at_measurement` で pin 済み）で再組成する。出力
+    `payload.manifest.json` が pin 済みのものとバイト等値であることを
+    assert する（内部の `payload_sha256` フィールドも含めて再現されるため、
+    台帳の `payload_sha256` pin も推移的に検証される）。`validation_errors`
+    role は現行データに一件も存在しない（他テストで確認済み）——出現したら
+    対応未定義のため明示的に fail する。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+    contract_md_path = _resolve_battery_relative(ledger["contract_freeze"]["contract_md"]["path"])
+
+    recompose_checks: list[tuple[str, bytes, bytes]] = []
+    for series_entry in ledger["series_runs"]:
+        task_entry = tasks_by_id[series_entry["task"]]
+        statement_path = _resolve_battery_relative(task_entry["statement"]["path"])
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            prev_round_dir = round_dir_base / f"round{round_num - 1}" if round_num > 1 else None
+            pinned_manifest_path = round_dir / "payload.manifest.json"
+            pinned_manifest = json.loads(pinned_manifest_path.read_text(encoding="utf-8"))
+
+            work_dir = tmp_path / f"{series_entry['task']}_{series_entry['series']}_round{round_num}"
+            work_dir.mkdir()
+            declared_parts = []
+            for part in pinned_manifest["parts"]:
+                role = part["role"]
+                declared_path = part["path"]
+                declared_sha256 = part["sha256"]
+                if role == "contract":
+                    source_path = contract_md_path
+                elif role == "task":
+                    source_path = statement_path
+                elif role in _ROLE_TO_PREVIOUS_ROUND_FIELD:
+                    assert prev_round_dir is not None, (
+                        f"round {round_num} has a {role!r} part but no previous round to "
+                        "bind it to"
+                    )
+                    source_path = prev_round_dir / _ROLE_TO_PREVIOUS_ROUND_FIELD[role]
+                else:
+                    raise AssertionError(
+                        f"unmapped payload manifest part role {role!r} — no known binding "
+                        "(this test's role table needs updating before it can trust the "
+                        "recomposition)"
+                    )
+                source_bytes = source_path.read_bytes()
+                actual_sha256 = hashlib.sha256(source_bytes).hexdigest()
+                assert actual_sha256 == declared_sha256, (
+                    f"round{round_num} part role={role!r}: {source_path} sha256 "
+                    f"{actual_sha256} does not match pin manifest's declared sha256 "
+                    f"{declared_sha256}"
+                )
+                dest_path = work_dir / declared_path
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                dest_path.write_bytes(source_bytes)
+                declared_parts.append({"role": role, "path": declared_path, "sha256": declared_sha256})
+
+            declared_manifest = {
+                "schema_version": composer_at_measurement.SCHEMA_VERSION,
+                "experiment_id": pinned_manifest["experiment_id"],
+                "round_label": pinned_manifest["round_label"],
+                "parts": declared_parts,
+            }
+            manifest_yaml_path = work_dir / "manifest.yaml"
+            manifest_yaml_path.write_text(
+                yaml.safe_dump(declared_manifest, sort_keys=False), encoding="utf-8"
+            )
+
+            out_dir = work_dir / "out"
+            composer_at_measurement.compose_payload(manifest_yaml_path, out_dir)
+            reproduced_bytes = (out_dir / "payload.manifest.json").read_bytes()
+            label = f"{series_entry['task']}/{series_entry['series']}.rounds[{round_num}]"
+            recompose_checks.append((label, reproduced_bytes, pinned_manifest_path.read_bytes()))
+
+    assert recompose_checks, "no payload recomposition checks collected — test would vacuously pass"
+    assert len(recompose_checks) == 16, (
+        f"expected exactly 16 rounds across the completed battery, got {len(recompose_checks)}"
+    )
+    for label, reproduced_bytes, pinned_bytes in recompose_checks:
+        assert reproduced_bytes == pinned_bytes, (
+            f"{label}: recomposing from the pin manifest's declared parts through the "
+            "frozen measurement-time composer does not byte-reproduce the pinned "
+            "payload.manifest.json — the pin may not have been produced from these inputs"
+        )
+
+
+def test_ledger_l0br_round_numbering_is_unique_contiguous_and_bounded():
+    """`series_runs[*].rounds[*].round` の会計整合性（PR #249 Codex レビュー
+    第 14 巡, P2）: series ごとに (a) 番号が一意、(b) 1 起点で欠落のない
+    連続列（1..N）、(c) N ≤ `protocol.round_limit`、(d) `reached` 系列は
+    最終周回 = `rounds_to_success`（成功後に周回が存在しない——到達で系列が
+    終了するという `protocol.success_predicate` の記述と整合）、
+    (e) `unreached` 系列は N == `round_limit`（周回上限まで使い切っている）
+    ことを assert する。"""
+
+    ledger = _load_ledger_l0br()
+    round_limit = ledger["protocol"]["round_limit"]
+    assert isinstance(round_limit, int) and round_limit >= 1
+
+    checked = 0
+    for series_entry in ledger["series_runs"]:
+        label = f"{series_entry['task']}/{series_entry['series']}"
+        round_numbers = sorted(r["round"] for r in series_entry["rounds"])
+        n = len(round_numbers)
+        checked += 1
+
+        assert len(set(round_numbers)) == n, f"{label}: duplicate round number(s) in {round_numbers!r}"
+        assert round_numbers == list(range(1, n + 1)), (
+            f"{label}: round numbers must be a gap-free 1..N sequence, got {round_numbers!r}"
+        )
+        assert n <= round_limit, f"{label}: {n} rounds exceeds protocol.round_limit={round_limit}"
+
+        outcome = series_entry["outcome"]
+        rounds_to_success = series_entry["rounds_to_success"]
+        if outcome == "reached":
+            assert round_numbers[-1] == rounds_to_success, (
+                f"{label}: outcome=reached but final round {round_numbers[-1]} != "
+                f"rounds_to_success={rounds_to_success} (a round after the successful one "
+                "would mean the series did not actually terminate on success)"
+            )
+        else:
+            assert outcome == "unreached", f"{label}: unexpected outcome {outcome!r}"
+            assert rounds_to_success is None, (
+                f"{label}: outcome=unreached but rounds_to_success={rounds_to_success!r} "
+                "is not null"
+            )
+            assert n == round_limit, (
+                f"{label}: outcome=unreached but only {n} round(s) recorded, expected "
+                f"exactly round_limit={round_limit} (series must exhaust the round budget "
+                "before being recorded as unreached)"
+            )
+
+    assert checked == 6, f"expected exactly 6 series_runs entries, got {checked}"
+
+
+# --- Codex review (PR #249) 第 15 巡, P2: 系列同一性と directory/manifest label の束縛 --
+
+
+def test_ledger_l0br_series_identity_bound_to_files_dir_and_payload_manifest_labels():
+    """系列/周回の識別子（`files_dir` と各周回の pin 済み
+    `payload.manifest.json` の `experiment_id`/`round_label`）が、台帳の
+    (task, series, round) 三つ組へ実際に束縛されていることを assert する
+    （PR #249 Codex レビュー第 15 巡, P2）。
+
+    実データの命名規約を機械確認した結果（本テスト作成時点）:
+    `files_dir` = `series/{task}_{series}/`、`payload.manifest.json` の
+    `experiment_id` = `l0br_{task}_{series}`、`round_label` = `round{N}`。
+    **境界宣言**: `experiment_id` は series まで一意に符号化しているため
+    （task 単体ではなく `{task}_{series}` の組を埋め込む）、
+    `(experiment_id, round_label)` は当初懸念された「series を含まない弱い
+    束縛」ではなく (task, series, round) 三つ組への**強い**（一意な）束縛
+    として成立している——本テストが実データで確認した事実であり、規約が
+    将来変わった場合はこの assert 自体を更新する。"""
+
+    ledger = _load_ledger_l0br()
+
+    files_dir_checks: list[tuple[str, str, str]] = []
+    label_checks: list[tuple[str, tuple[str, str], tuple[str, str]]] = []
+    for series_entry in ledger["series_runs"]:
+        task_id = series_entry["task"]
+        series_label = series_entry["series"]
+        prefix = f"{task_id}/{series_label}"
+
+        expected_files_dir = f"series/{task_id}_{series_label}/"
+        files_dir_checks.append((prefix, series_entry["files_dir"], expected_files_dir))
+
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        expected_experiment_id = f"l0br_{task_id}_{series_label}"
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            manifest = json.loads((round_dir / "payload.manifest.json").read_text(encoding="utf-8"))
+            label_checks.append(
+                (
+                    f"{prefix}.rounds[{round_num}]",
+                    (manifest["experiment_id"], manifest["round_label"]),
+                    (expected_experiment_id, f"round{round_num}"),
+                )
+            )
+
+    assert files_dir_checks, "no files_dir checks collected — test would vacuously pass"
+    assert len(files_dir_checks) == 6, f"expected exactly 6 series_runs entries, got {len(files_dir_checks)}"
+    seen_files_dirs: set[str] = set()
+    for label, actual_files_dir, expected_files_dir in files_dir_checks:
+        assert actual_files_dir == expected_files_dir, (
+            f"{label}: files_dir={actual_files_dir!r} does not match the canonical form "
+            f"{expected_files_dir!r}"
+        )
+        assert actual_files_dir not in seen_files_dirs, f"{label}: duplicate files_dir {actual_files_dir!r}"
+        seen_files_dirs.add(actual_files_dir)
+
+    assert label_checks, "no payload manifest label checks collected — test would vacuously pass"
+    assert len(label_checks) == 16, f"expected exactly 16 rounds across the completed battery, got {len(label_checks)}"
+    for label, actual_pair, expected_pair in label_checks:
+        assert actual_pair == expected_pair, (
+            f"{label}: payload.manifest.json (experiment_id, round_label)={actual_pair!r} does "
+            f"not match the canonical (task, series, round) encoding {expected_pair!r} — the "
+            "pin manifest may have been composed for a different series/round"
+        )
+
+
+# --- Codex review (PR #249) 第 17 巡, P2: token_ban 報告の再評価検証 ------
+
+
+def test_ledger_l0br_token_ban_reports_reproduce_frozen_judge_reevaluation():
+    """`token_ban.json`（第 12 巡で `score_sha256` の入力束縛まで実体照合
+    済み）が実際に凍結判定器（`constraint_checker` として pin 済み）から
+    生成されたことを、pareto/report 再評価（第 12/13 巡）と同型の手法で
+    検証する（PR #249 Codex レビュー第 17 巡, P2 / 第 19 巡, P2 で凍結
+    コピー側へ切替）。**現状**: `check_token_ban.py` は第 19 巡で `-o`
+    出力の dangling symlink 上書き禁止ガードを獲得した（judge ロジック
+    自体は無変更——`constraint_checker.note` が不変量を実測確認済み）。
+    測定時判定の再現が目的のため、再評価は現行実装ではなく**凍結コピー
+    側の判定器**（`checker_at_measurement.check_token_ban`、
+    `sha256_at_measurement` で pin 済み）で行う——composer 系列の
+    `composer_at_measurement` と同じ理由・同じ切替（第 13 巡の
+    `run_round`/`pareto_eval` は本 PR のレビューサイクルで一度も改変され
+    ていないため現行実装のままでよい）。pin 非 null の全 10 周回について
+    pin 済み `score.yaml` を `checker_at_measurement.check_token_ban()` へ
+    入力し、`check_token_ban.py` 自身の `-o` publish と同一の直列化
+    （`json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) +
+    "\n"`）で出力を組み立て、pin 済み `token_ban.json` と**バイト等値**
+    であることを assert する。純テキスト処理で高速なため `slow` マーカー
+    は不要。"""
+
+    ledger = _load_ledger_l0br()
+
+    reeval_checks: list[tuple[str, bytes, bytes]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            if round_entry["token_ban_report_sha256"] is None:
+                continue
+            round_num = round_entry["round"]
+            round_dir = round_dir_base / f"round{round_num}"
+            score_path = round_dir / "score.yaml"
+            pinned_path = round_dir / "token_ban.json"
+
+            result = checker_at_measurement.check_token_ban(score_path)
+            reevaluated_content = (
+                json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+
+            label = f"{series_entry['task']}/{series_entry['series']}.rounds[{round_num}]"
+            reeval_checks.append((label, reevaluated_content, pinned_path.read_bytes()))
+
+    assert reeval_checks, "no token_ban re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 10, (
+        f"expected exactly 10 token_ban-pin'd rounds across the completed battery, got "
+        f"{len(reeval_checks)}"
+    )
+    for label, reevaluated_bytes, pinned_bytes in reeval_checks:
+        assert reevaluated_bytes == pinned_bytes, (
+            f"{label}: re-running the pinned score.yaml through the frozen judge "
+            "(check_token_ban.check_token_ban) does not byte-reproduce the pinned "
+            "token_ban.json — the pin may not have been produced from this score"
+        )
+
+
+# --- Codex review (PR #249) 第 19 巡, P2: 陽性対照ゲートの再評価 ---------
+
+
+def test_ledger_l0br_new_search_positive_controls_pass_frozen_token_ban_gate():
+    """陽性対照は R4 課題（token_ban: true の br_d2/br_d3）の実行可能性
+    ゲートであり、banned token が不在であることが定義上の前提——凍結
+    R4 判定器（`checker_at_measurement`、`constraint_checker` として pin
+    済み）で br_d2/br_d3 の陽性対照 `score.yaml`（`mode: "new_search"`）を
+    再評価し、`status == "pass"` であることを assert する（PR #249 Codex
+    レビュー第 19 巡, P2）。**境界宣言**: br_d1 は `mode: "reuse_pinned_t2"`
+    （新規探索なし・L0B-T2 の pin 済み陽性対照を再現確認して流用）のため
+    ここには含めない——br_d1 の positive_control.report_sha256
+    （`0a21c09a72e8...`）は `examples/l0b_loop/positive_control_t2/
+    report.json` の実測 sha256 と一致することを確認済みで、その score/
+    report は既存の `test_positive_control_t2_round_trip_reproduces_
+    pinned_report`（slow）が凍結 `run_round` 経由で既にカバーしている
+    （token_ban ゲートは br_d1 が token_ban: false のため対象外）。純テキ
+    スト処理で高速なため `slow` マーカーは不要。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+
+    checks: list[tuple[str, str]] = []
+    for task_id in ("br_d2", "br_d3"):
+        task = tasks_by_id[task_id]
+        pc = task["positive_control"]
+        assert pc["mode"] == "new_search", (
+            f"tasks[{task_id}].positive_control.mode changed from 'new_search' — this "
+            "test's role table needs updating"
+        )
+        score_path = BATTERY_DIR / pc["dir"] / "score.yaml"
+        result = checker_at_measurement.check_token_ban(score_path)
+        checks.append((task_id, result["status"]))
+
+    assert checks, "no positive-control token_ban checks collected — test would vacuously pass"
+    assert len(checks) == 2, f"expected exactly 2 new_search positive controls, got {len(checks)}"
+    for task_id, status in checks:
+        assert status == "pass", (
+            f"tasks[{task_id}].positive_control score.yaml fails the frozen R4 token_ban "
+            f"gate (status={status!r}) — a positive control must be banned-token-free by "
+            "definition"
+        )
+
+
+@pytest.mark.slow
+def test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation(
+    tmp_path: Path,
+):
+    """陽性対照（`mode: "new_search"` の br_d2/br_d3）の pin 済み
+    `report.json` が、pin 済み `score.yaml` を凍結 `run_round.py`（judge
+    節 pin 済み・現行実装は本 PR のレビューサイクルで一度も改変されて
+    いない）へ通した再導出とバイト等値であることを assert する（PR #249
+    Codex レビュー第 19 巡, P2。§`test_ledger_l0br_reports_reproduce_
+    frozen_judge_reevaluation`（第 13 巡）の counted 周回版と同型——陽性
+    対照は `--round 0`（`run_round.run_round` の既定値・「dry-run/陽性
+    対照、L0b evidence に算入しない」の意味）で確立された）。br_d1 の
+    境界宣言は fast 側テスト（
+    `test_ledger_l0br_new_search_positive_controls_pass_frozen_token_ban_gate`）
+    の docstring を参照——既存の T2 側 slow テストでカバー済みのため
+    ここには含めない。出力は `tmp_path` のみへ書き、リポジトリ内ファイル
+    は一切変更しない。`@pytest.mark.slow`: 2 件の合成 + 抽出を伴う
+    （実測: 1 件あたり約 58〜59 秒、2 件で約 2 分）。"""
+
+    ledger = _load_ledger_l0br()
+    tasks_by_id = {task["id"]: task for task in ledger["tasks"]}
+
+    reeval_checks: list[tuple[str, bytes, bytes]] = []
+    for task_id in ("br_d2", "br_d3"):
+        task = tasks_by_id[task_id]
+        pc = task["positive_control"]
+        assert pc["mode"] == "new_search"
+        section_map_path = _resolve_battery_relative(task["section_map"])
+        pc_dir = BATTERY_DIR / pc["dir"]
+        score_path = pc_dir / "score.yaml"
+        pinned_report_path = pc_dir / "report.json"
+
+        workdir = tmp_path / f"{task_id}_positive_control_wd"
+        output_path = tmp_path / f"{task_id}_positive_control_report.json"
+        run_round.run_round(score_path, workdir, 0, output_path, section_map_path=section_map_path)
+        reeval_checks.append((task_id, output_path.read_bytes(), pinned_report_path.read_bytes()))
+
+    assert reeval_checks, "no positive-control re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 2, f"expected exactly 2 new_search positive controls, got {len(reeval_checks)}"
+    for task_id, reevaluated_bytes, pinned_bytes in reeval_checks:
+        assert reevaluated_bytes == pinned_bytes, (
+            f"tasks[{task_id}].positive_control: re-running the pinned score.yaml through "
+            "the frozen judge (run_round.run_round, round=0) does not byte-reproduce the "
+            "pinned report.json — the pin may not have been produced from this score"
+        )

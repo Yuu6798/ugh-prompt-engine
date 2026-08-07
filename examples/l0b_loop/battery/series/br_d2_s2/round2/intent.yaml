@@ -1,0 +1,40 @@
+round1_diagnosis: >
+  round1 の diff_report: structure は exact_match (position_match_rate 1.0)、
+  brightness は preserved (dark) で 2 軸は既に成立済み。deviated は key のみ
+  (requirement D minor / observed C major)。symbolic_validation は pass。
+  round1 の events.chord_progression は Dm(i) - C(VII) - A#=Bb(VI) - C(VII) で、
+  開始こそ Dm だが末尾を C major (VII) で終えていた。
+
+key_fix_rationale: >
+  round1 の自作進行を別の自作進行に差し替えるのではなく、events 全体
+  (chord_progression) を宣言から省いた。契約 §1 に「省略時はキーに応じた
+  既定進行が演奏される」と明記されており、これは宣言 physical.key = "D minor"
+  と演奏内容の整合を engine 側が保証する経路である。round1 の手作り進行が
+  key 軸を deviate させた実測がある以上、同じ手法（別の自作進行）を重ねるより、
+  契約が保証する既定経路に委ねる方が再発リスクが低いと判断した。
+
+preserved_axes_untouched_rationale: >
+  Pareto 改善の定義（契約 §3）は「3 軸とも前周から悪化させず、少なくとも
+  1 軸を厳密に改善」。structure (exact_match) と brightness (preserved) は
+  round1 で既に成立しているため、physical.brightness / semantic.avoid /
+  structure の宣言（section 名・bars・physical 認識語）は round1 から一切
+  変更していない。特に structure は §2 開示の可行窓（中間セクション実長 7.5 秒
+  で 3 分割成立）に厳密一致させた設計を round1 で採用し、round1 の
+  observed_sections でも 3 セクション全てが exact_match しているため、
+  bars=3 (7.5 秒/セクション) の設計をそのまま維持した。
+
+r4_compliance_check: >
+  score.yaml 全文字列を目視走査し、silence / no kick / low density / sub bass
+  のいずれも部分文字列として（大文字小文字を問わず）含まれないことを確認した。
+  round1 から文言を変更していないため、round1 で既に確認済みの安全性がそのまま
+  引き継がれている。
+
+melody_scope: >
+  課題により旋律指定は対象外のため、events に melody 関連キーは含めていない
+  （round2 では events 自体を省略）。
+
+structural_note_on_events_omission: >
+  events はスキーマ上任意（トップレベル必須キーは meta/semantic/physical/
+  structure/rendering の 5 つのみ）であり、省略しても未知キー拒否や必須キー
+  欠落には該当しない。fixity / control_profile は契約 §1 に「公開範囲外・
+  書いてはならない」と明記されているため、今回も一切含めていない。

@@ -1,0 +1,49 @@
+{
+  "experiment_id": "l0br_br_d1_s1",
+  "parts": [
+    {
+      "bytes": 12863,
+      "index": 1,
+      "newline_appended": false,
+      "path": "contract.md",
+      "role": "contract",
+      "sha256": "5bab21e9694cb92a247f922c9a96db015bb87ba729ef411b9146881934debaca"
+    },
+    {
+      "bytes": 656,
+      "index": 2,
+      "newline_appended": false,
+      "path": "task.md",
+      "role": "task",
+      "sha256": "17feb99e0015c476aae3fb980ecee380b4cbd7eb7130c06e787f4cbafb4113e1"
+    },
+    {
+      "bytes": 1732,
+      "index": 3,
+      "newline_appended": false,
+      "path": "own_score.yaml",
+      "role": "own_score",
+      "sha256": "0655ccac4819df751ee5cd71230a17c1b65e4a37b39a8bf9cceb29a468227051"
+    },
+    {
+      "bytes": 5814,
+      "index": 4,
+      "newline_appended": false,
+      "path": "own_intent.yaml",
+      "role": "own_intent",
+      "sha256": "4d11cc8289b6a14db2900eb697fec94521fb373db8330efbef145e6ef471a578"
+    },
+    {
+      "bytes": 1132,
+      "index": 5,
+      "newline_appended": false,
+      "path": "diff_report.json",
+      "role": "diff_report",
+      "sha256": "9f31c3ac0e09ee90da45a783ec52903c1b3af8b9bf1e80fd7667f13dfe051da5"
+    }
+  ],
+  "payload_file": "payload.md",
+  "payload_sha256": "d9354199c923df566daa502b5c4d5d627d95ca17908f662dacb81990fe8977b5",
+  "round_label": "round4",
+  "schema_version": "l0b-payload-pin/0.1"
+}

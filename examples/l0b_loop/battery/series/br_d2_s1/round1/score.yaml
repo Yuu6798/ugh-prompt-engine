@@ -1,0 +1,55 @@
+meta:
+  title: "Threefold Vigil"
+  version: "0.1"
+
+semantic:
+  core: "静かな覚悟から力強い高まりへ、そして静かな余韻へ向かう三部の器楽曲"
+  grv:
+    primary: "chamber"
+    secondary: "minimalist"
+  delta_e:
+    overall: "抑制から解放へ、そして静穏な着地へと感情が推移する"
+  avoid: []
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.85-0.92"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: intro
+    bars: 3
+    role: "静かな導入。核となる旋律的動機を予告する"
+    physical: "sparse texture, restrained dynamics building tension"
+  - section: chorus
+    bars: 3
+    role: "曲の中心。エネルギーと密度が最大化する"
+    physical: "full energy, dense layered arrangement at peak intensity"
+  - section: outro
+    bars: 3
+    role: "解放と収束。緊張を解いて締めくくる"
+    physical: "release into a settled, resolved close"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure
+
+events:
+  chord_progression:
+    - root: "D"
+      quality: "minor"
+    - root: "A#"
+      quality: "major"
+    - root: "F"
+      quality: "major"
+    - root: "C"
+      quality: "major"

@@ -1,0 +1,59 @@
+meta:
+  title: "BR-D1: Dm Instrumental Sketch"
+  version: "0.1"
+
+semantic:
+  core: "静寂から力強い高揚へ、そして再び静けさへ戻る短い器楽曲"
+  grv:
+    primary: "cinematic minimal"
+    secondary: "dark ambient"
+  delta_e:
+    overall: "静寂 -> 高揚 -> 静寂への一往復"
+  avoid: []
+
+physical:
+  bpm: 96
+  key: "D minor"
+  time_signature: "4/4"
+  active_rate_target: "0.55-0.70"
+  valley_depth_target: "0.20-0.30"
+  brightness: "dark"
+  stereo_width: "narrow"
+
+structure:
+  - section: "intro"
+    bars: 3
+    role: "静かな導入。低密度で場を提示する"
+    physical: "sparse, low density"
+  - section: "chorus"
+    bars: 3
+    role: "主要主題の提示。フルエネルギーで押し出す"
+    physical: "full energy"
+  - section: "chorus"
+    bars: 3
+    role: "主題の反復。フルエネルギーを維持する"
+    physical: "full energy"
+  - section: "outro"
+    bars: 3
+    role: "終息。解放して静まる"
+    physical: "release, low density"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - physical.key
+    - physical.bpm
+    - structure
+
+events:
+  chord_progression:
+    - root: "D"
+      quality: "minor"
+    - root: "A#"
+      quality: "major"
+    - root: "C"
+      quality: "major"
+    - root: "D"
+      quality: "minor"

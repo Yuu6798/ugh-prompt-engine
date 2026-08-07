@@ -1,0 +1,67 @@
+design_rationale:
+  overall: >
+    round1 は構造 (exact_match) と brightness (preserved) を既に達成した。
+    未達は key のみ (要求 D minor / 観測 F major) のため、round2 では
+    structure と brightness に関わるフィールド（structure の bars・
+    physical 自由文、physical.brightness）を一切変更せず、key 偏差の
+    修正を events.chord_progression の変更のみに限定する
+    （達成済み軸を壊すリスクを避けるための最小差分方針）。
+
+  key:
+    observation: >
+      round1 の diff_report は key.verdict=deviated, observed=F major を
+      返した。round1 own_intent の設計時点の知識として、F major は
+      D minor の平行調（relative major）であり、D 自然短音階と F 長音階は
+      同一の 7 音（D E F G A Bb C）を共有する。round1 の
+      chord_progression（D minor – A#(Bb) major – F major – C major /
+      i–VI–III–VII）はこの共有 7 音の範囲に完全に収まる進行であり、
+      D を主音とする根拠を旋律外に持たなかった。
+    fix: >
+      round2 では A major（D minor の V、構成音 A-C#-E）を進行に含めた。
+      C# は D 自然短音階にも F 長音階にも存在しない音（D harmonic minor
+      の導音）であり、round1 進行中のどの和音にも C# は含まれていなかった。
+      さらに進行を i–V–iv–i（D minor – A major – G minor – D minor）とし、
+      D minor を進行の先頭と末尾の両方に置いて主音としての比重を高めた。
+      round1 で使われていた F major・C major・A#(Bb) major は F 長調文脈
+      とも整合してしまう和音であるため round2 では意図的に外した。
+    caveat: >
+      これは round1 の観測結果と一般的な楽理知識（平行調の音組成が
+      一致すること）のみに基づく仮説であり、キー判定計器の実装詳細を
+      ペイロード外から推測したものではない。C# を含めることが実際に
+      判定へどう効くかは round2 の diff_report でのみ検証できる。
+
+  structure_and_brightness:
+    reasoning: >
+      structure は round1 で exact_match（position_match_rate 1.0）、
+      brightness は preserved 済みのため、対応する全フィールド
+      （structure の section/bars/role/physical、physical.brightness、
+      physical.stereo_width 等）を round1 から不変とした。chord_progression
+      の変更が音響的な音量・密度コントラストに影響しないと期待しており、
+      構造境界検出（音響駆動）への副作用は小さいと想定しているが、
+      これも契約に開示された事実ではなく仮説である。
+
+  wordlist_compliance:
+    reasoning: >
+      score.yaml 全文を禁止語句 4 種 (silence, no kick, low density,
+      sub bass) と照合し、round1 から変更のない自由文（sparse texture /
+      full energy / release）および新規追加した chord_progression の
+      root/quality 値（D, A, G, minor, major）のいずれにも該当文字列を
+      含まないことを確認した。
+
+  risks_and_unknowns:
+    - "intro/outro の境界が round1 で 7.5 秒均等ではなく 5.04s/9.43s/8.03s
+       という非均等な実測になった理由は不明（bars=3 均等指定にもかかわらず
+       非均等）。exact_match は達成済みのため round2 では触れないが、
+       今後 structure を再設計する際は割線比率の非対称性を考慮する必要が
+       ある。"
+    - "chord_progression の変更が brightness の実測（音色）に間接的な
+       副作用を与える可能性はゼロではない（和音構成音が変われば倍音構成も
+       変わりうる）。round2 の diff_report で brightness が preserved の
+       ままか要確認。"
+    - "key 修正の仮説（C# 導入による平行調との差別化）が外れた場合、
+       次周回では和音の持続時間比重や D minor 和音の出現回数をさらに
+       増やす方向で調整する。"
+
+round: round2
+experiment: l0br_br_d2_s1
+based_on_diff_report_round: 1

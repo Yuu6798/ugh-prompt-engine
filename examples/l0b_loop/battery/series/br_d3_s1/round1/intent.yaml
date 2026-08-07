@@ -1,0 +1,48 @@
+design_rationale:
+  bpm_and_bars: >
+    bpm=96, time_signature=4/4 とした。1拍=60/96=0.625秒、1小節=4拍=2.5秒。
+    契約 §2 の実測点（12.3秒は分割、6.2秒は吸収、7.5秒は3分割ちょうどで成立）
+    に基づき、可行窓が7.5秒近辺と示唆されているため、各セクションを
+    bars=3（=2.5秒×3=7.5秒）に統一し、4セクション全てをこの帯に載せた。
+  section_ordering: >
+    intro / chorus / chorus / outro の4区間を宣言順に配置。位置ベース
+    （先頭=低エネルギー→intro、末尾=低エネルギー→outro、中間2区間=
+    高エネルギー→chorus）というヒューリスティックな割当てを想定し、
+    中間2区間を意図的に高エネルギー系の認識語で統一した。
+  keyword_choice: >
+    認識語彙のうち R4 で禁止された "silence"/"no kick"/"low density"/
+    "sub bass" を避け、intro には "sparse"、中間2区間には "full energy"、
+    outro には "release" を採用。全てのテキストフィールド（meta/semantic/
+    structure）を目視で禁止語句スキャンし、部分文字列としても含まれない
+    ことを確認した。
+  key_and_brightness: >
+    physical.key="D minor" を直接宣言。brightness="dark" を直接宣言。
+    どちらも実測は完成音源からの転記ではなく実測値である旨は契約に
+    明記されているため、これらは仮説というよりベースラインの素直な
+    宣言（他に手掛かりがないため宣言どおりに実現されることを期待する
+    以外の設計余地がない）。
+  events_omission: >
+    旋律指定は課題対象外のため events は省略し、鍵に応じた既定進行に
+    委ねた。省略が構造・key・brightness いずれの軸にも悪影響を与えない
+    と判断（契約 §1 に「省略時はキーに応じた既定進行が演奏される」と
+    明記）。
+
+known_risks_for_next_round:
+  chorus_merge_risk: >
+    中間2区間（chorus, chorus）を同一の認識語 "full energy" で統一した
+    ため、隣接区間の音響コントラストが弱く、境界検出器が2区間を1区間に
+    併合して観測する可能性がある（契約 §2 に「対比が明確なほど宣言どおり
+    検出されやすい」とあり、逆に対比が弱いと境界が立たないリスクを含意
+    すると解釈した）。もし診断で3要素列（intro/chorus/outro）に縮退して
+    観測された場合、次周回では2つ目の chorus に別の認識語（例:
+    第1を "full energy"、第2はキーワードなしの中庸文）を与えて内部
+    コントラストを作る方針とする。
+  boundary_absorption_risk: >
+    各区間7.5秒は契約開示の「7.5秒で3分割ちょうど成立」の実測点に
+    厳密に一致させたが、これは別課題（3分割ケース）での成立例であり、
+    本課題（4分割）でも同じ帯が有効かは未検証。もし短すぎ側（吸収）
+    または長すぎ側（過分割）の兆候が axes.structure.observed_sections
+    に出た場合、bars を1刻みで増減し実測 end_seconds - start_seconds を
+    見ながら帯を再探索する。
+
+tools_used: none
