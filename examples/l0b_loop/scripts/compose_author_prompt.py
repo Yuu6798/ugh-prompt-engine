@@ -15,7 +15,9 @@ spawn 配送は逐語性を機械照合する」2026-08-07 制定の前段——
 注入口を一切定義しない」原則を踏襲し、`--note`/`--comment` 等の自由文
 オプションは存在しない（引数は `--wrapper`/`--payload`/`--out`/
 `--expect-wrapper-sha256`/`--expect-payload-sha256` の 5 つのみ + argparse
-既定の `-h`/`--help`。後者 2 つは自由文ではなく宣言的な入力 pin 検証）。
+既定の `-h`/`--help`。後者 2 つは自由文ではなく宣言的な入力 pin 検証で、
+両方とも **必須**——省略時に検証をスキップする fail-open 経路は存在しない。
+未指定は argparse エラーで exit 2 になる）。
 
 出典: #249/#250 実測でコーディネーターが著者呼び出しプロンプトを手動転写した
 際に 1 文字破損が 2 件発生した（`docs/l0a_v2_remeasure_record.md` §5:
@@ -32,14 +34,19 @@ spawn 配送は逐語性を機械照合する」2026-08-07 制定の前段——
 入力バイト列の sha256 を常時 1 行ずつ印字したうえで、publish 先パスと
 バイト数・出力バイト列の sha256 を 1 行で印字する（機械可読な計 3 行）。
 
-任意で `--expect-wrapper-sha256 <hex>` / `--expect-payload-sha256 <hex>`
-を指定できる（宣言的検証のみ・自由文オプションではない）。指定時は
-読み込んだ `--wrapper`/`--payload` の実 sha256 と照合し、不一致なら
-`--out` へ一切 publish せず、stderr に expected/actual 両 hex を併記した
-エラーを出して exit 1 で終える。台帳（`ledger_l0br_v2.yaml` 等）が
-wrapper/payload の来歴をそれぞれ別々の sha256 として pin しているため、
-組成時にこれらの pin を `--expect-*-sha256` として宣言すれば、stale な
-ファイルや取り違えたファイルからの組成を publish 前に機械的に遮断できる。
+`--expect-wrapper-sha256 <hex>` / `--expect-payload-sha256 <hex>` は
+**両方とも必須**（宣言的検証のみ・自由文オプションではない）。省略時に
+検証をスキップする fail-open な既定値は存在せず、いずれか一方でも
+未指定なら argparse がエラーを出して exit 2 で終える（`--wrapper`/
+`--payload`/`--out` と同格の必須引数）。指定された pin は読み込んだ
+`--wrapper`/`--payload` の実 sha256 と照合し、不一致なら `--out` へ
+一切 publish せず、stderr に expected/actual 両 hex を併記したエラーを
+出して exit 1 で終える。manifest/ledger からの pin 値の自動解決は実装
+しない（manifest 形式への結合はドリフト源になるため。宣言入力のみを
+受け取る原則を維持する）——呼び出し側が pin 値を明示的に渡す必要がある:
+`wrapper` の pin は台帳（`ledger_l0br_v2.yaml` 等）やリポジトリ pin から、
+`payload` の pin は `compose_payload.py` の stdout（`sha256=<hex>` 行）
+または `payload.manifest.json` の `payload_sha256` フィールドから取得する。
 """
 from __future__ import annotations
 
@@ -109,15 +116,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--expect-wrapper-sha256",
         dest="expect_wrapper_sha256",
         type=str,
-        default=None,
-        help="Optional pinned sha256 of --wrapper; mismatch aborts before publish (exit 1)",
+        required=True,
+        help="Required pinned sha256 of --wrapper; mismatch aborts before publish (exit 1)",
     )
     parser.add_argument(
         "--expect-payload-sha256",
         dest="expect_payload_sha256",
         type=str,
-        default=None,
-        help="Optional pinned sha256 of --payload; mismatch aborts before publish (exit 1)",
+        required=True,
+        help="Required pinned sha256 of --payload; mismatch aborts before publish (exit 1)",
     )
     return parser
 
@@ -136,14 +143,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     wrapper_sha256 = hashlib.sha256(wrapper_bytes).hexdigest()
     payload_sha256 = hashlib.sha256(payload_bytes).hexdigest()
 
-    if args.expect_wrapper_sha256 is not None and args.expect_wrapper_sha256 != wrapper_sha256:
+    if args.expect_wrapper_sha256 != wrapper_sha256:
         print(
             "Error: --expect-wrapper-sha256 mismatch: "
             f"expected={args.expect_wrapper_sha256} actual={wrapper_sha256}",
             file=sys.stderr,
         )
         return 1
-    if args.expect_payload_sha256 is not None and args.expect_payload_sha256 != payload_sha256:
+    if args.expect_payload_sha256 != payload_sha256:
         print(
             "Error: --expect-payload-sha256 mismatch: "
             f"expected={args.expect_payload_sha256} actual={payload_sha256}",

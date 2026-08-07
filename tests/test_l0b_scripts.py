@@ -5279,12 +5279,16 @@ def test_compose_author_prompt_golden_sha256(tmp_path: Path):
 def test_compose_author_prompt_cli_writes_output_and_prints_sha(tmp_path: Path, capsys):
     payload_path = _compose_round1_payload_md(tmp_path)
     out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
 
     exit_code = compose_author_prompt.main(
         [
             "--wrapper", str(AUTHOR_WRAPPER_PATH),
             "--payload", str(payload_path),
             "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
+            "--expect-payload-sha256", payload_sha256,
         ]
     )
     assert exit_code == 0
@@ -5304,6 +5308,7 @@ def test_compose_author_prompt_expect_wrapper_sha256_match_publishes(tmp_path: P
     payload_path = _compose_round1_payload_md(tmp_path)
     out_path = tmp_path / "author_prompt.txt"
     wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
 
     exit_code = compose_author_prompt.main(
         [
@@ -5311,6 +5316,7 @@ def test_compose_author_prompt_expect_wrapper_sha256_match_publishes(tmp_path: P
             "--payload", str(payload_path),
             "--out", str(out_path),
             "--expect-wrapper-sha256", wrapper_sha256,
+            "--expect-payload-sha256", payload_sha256,
         ]
     )
     assert exit_code == 0
@@ -5323,6 +5329,7 @@ def test_compose_author_prompt_expect_wrapper_sha256_mismatch_blocks_publish(
     payload_path = _compose_round1_payload_md(tmp_path)
     out_path = tmp_path / "author_prompt.txt"
     bogus_sha256 = "0" * 64
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
 
     exit_code = compose_author_prompt.main(
         [
@@ -5330,6 +5337,7 @@ def test_compose_author_prompt_expect_wrapper_sha256_mismatch_blocks_publish(
             "--payload", str(payload_path),
             "--out", str(out_path),
             "--expect-wrapper-sha256", bogus_sha256,
+            "--expect-payload-sha256", payload_sha256,
         ]
     )
     assert exit_code == 1
@@ -5344,6 +5352,7 @@ def test_compose_author_prompt_expect_wrapper_sha256_mismatch_blocks_publish(
 def test_compose_author_prompt_expect_payload_sha256_match_publishes(tmp_path: Path, capsys):
     payload_path = _compose_round1_payload_md(tmp_path)
     out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
     payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
 
     exit_code = compose_author_prompt.main(
@@ -5351,6 +5360,7 @@ def test_compose_author_prompt_expect_payload_sha256_match_publishes(tmp_path: P
             "--wrapper", str(AUTHOR_WRAPPER_PATH),
             "--payload", str(payload_path),
             "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
             "--expect-payload-sha256", payload_sha256,
         ]
     )
@@ -5363,6 +5373,7 @@ def test_compose_author_prompt_expect_payload_sha256_mismatch_blocks_publish(
 ):
     payload_path = _compose_round1_payload_md(tmp_path)
     out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
     bogus_sha256 = "1" * 64
 
     exit_code = compose_author_prompt.main(
@@ -5370,6 +5381,7 @@ def test_compose_author_prompt_expect_payload_sha256_mismatch_blocks_publish(
             "--wrapper", str(AUTHOR_WRAPPER_PATH),
             "--payload", str(payload_path),
             "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
             "--expect-payload-sha256", bogus_sha256,
         ]
     )
@@ -5386,18 +5398,72 @@ def test_compose_author_prompt_refuses_to_overwrite_existing_output(tmp_path: Pa
     payload_path = _compose_round1_payload_md(tmp_path)
     out_path = tmp_path / "author_prompt.txt"
     out_path.write_text("stale\n", encoding="utf-8")
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
 
     exit_code = compose_author_prompt.main(
         [
             "--wrapper", str(AUTHOR_WRAPPER_PATH),
             "--payload", str(payload_path),
             "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
+            "--expect-payload-sha256", payload_sha256,
         ]
     )
     assert exit_code == 1
     captured = capsys.readouterr()
     assert "Error:" in captured.err
     assert out_path.read_text(encoding="utf-8") == "stale\n"
+
+
+def test_compose_author_prompt_cli_requires_both_expect_sha256_pins(tmp_path: Path, capsys):
+    """`--expect-wrapper-sha256`/`--expect-payload-sha256` は両方とも必須
+    ——fail-open な既定値は存在しない。片方のみ、または両方省略した場合は
+    argparse がエラーを出して exit 2 で終える（`--wrapper`/`--payload`/
+    `--out` と同格の必須引数として扱われることの検査）。"""
+
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+
+    base_args = [
+        "--wrapper", str(AUTHOR_WRAPPER_PATH),
+        "--payload", str(payload_path),
+        "--out", str(out_path),
+    ]
+
+    # 両方省略。
+    with pytest.raises(SystemExit) as exc_info:
+        compose_author_prompt.main(list(base_args))
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "--expect-wrapper-sha256" in captured.err
+    assert "--expect-payload-sha256" in captured.err
+    assert "required" in captured.err
+    assert not out_path.exists()
+
+    # wrapper 側のみ指定（payload 側省略）。
+    with pytest.raises(SystemExit) as exc_info:
+        compose_author_prompt.main(
+            [*base_args, "--expect-wrapper-sha256", wrapper_sha256]
+        )
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "--expect-payload-sha256" in captured.err
+    assert "required" in captured.err
+    assert not out_path.exists()
+
+    # payload 側のみ指定（wrapper 側省略）。
+    with pytest.raises(SystemExit) as exc_info:
+        compose_author_prompt.main(
+            [*base_args, "--expect-payload-sha256", payload_sha256]
+        )
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "--expect-wrapper-sha256" in captured.err
+    assert "required" in captured.err
+    assert not out_path.exists()
 
 
 def test_compose_author_prompt_cli_has_no_freeform_injection_options():
@@ -5424,6 +5490,8 @@ def test_compose_author_prompt_cli_rejects_unknown_option(tmp_path: Path):
     wrapper_path = tmp_path / "wrapper.md"
     wrapper_path.write_text("WRAPPER\n", encoding="utf-8")
     out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(wrapper_path.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
 
     with pytest.raises(SystemExit) as exc_info:
         compose_author_prompt.main(
@@ -5431,6 +5499,8 @@ def test_compose_author_prompt_cli_rejects_unknown_option(tmp_path: Path):
                 "--wrapper", str(wrapper_path),
                 "--payload", str(payload_path),
                 "--out", str(out_path),
+                "--expect-wrapper-sha256", wrapper_sha256,
+                "--expect-payload-sha256", payload_sha256,
                 "--note", "should not exist",
             ]
         )
