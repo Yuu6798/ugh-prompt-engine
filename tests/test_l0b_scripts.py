@@ -3602,6 +3602,14 @@ def test_ledger_l0br_pins_match_actual_file_sha256():
                 content_cross_checks.append(
                     (f"{prefix}.token_ban", token_ban_path, "status", round_entry["token_ban"])
                 )
+                # token_ban の入力束縛（PR #249 Codex レビュー第 12 巡, P2）:
+                # `status` の pin 一致だけでは「別 score に対する pass 判定が
+                # 使い回された」stale/コピー混入を検出できない —
+                # `token_ban.json` 内部の `score_sha256` が同一周回の
+                # `score_sha256` pin と一致することも突合する。
+                content_cross_checks.append(
+                    (f"{prefix}.token_ban(score binding)", token_ban_path, "score_sha256", round_entry["score_sha256"])
+                )
             null_consistency_checks.append(
                 (f"{prefix}.token_ban_report_sha256", token_ban_path, token_ban_sha is not None)
             )
@@ -3821,4 +3829,58 @@ def test_ledger_l0br_series_outcome_derivable_from_pinned_reports():
         assert derived_value == ledger_value, (
             f"{label}.{field}: derived from pinned reports = {derived_value!r}, ledger = "
             f"{ledger_value!r}"
+        )
+
+
+# --- Codex review (PR #249) 第 12 巡, P2: 判定成果物を「評価した入力」へ束縛 --
+
+
+def test_ledger_l0br_pareto_reports_reproduce_frozen_judge_reevaluation():
+    """`pareto_vs_round*.json` は sha256 pin と `improved` boolean の内容
+    突合（第 8 巡）までは実施済みだが、pin されたファイル自体には入力
+    （どの 2 つの report.json を比較したか）の hash が記録されていない
+    ため、それらの突合だけでは「別の周回ペアを評価した出力を pin する」
+    差し替えを検出できない。ここでは pin 済みの前周回/当該周回の
+    `report.json`（既に §1 の sha256 pin で実体照合済み）を入力に、凍結
+    判定器（`judge.pareto_eval`/`judge.pareto_spec` として pin 済みの
+    `pareto_eval.py`/`frozen/pareto.yaml`）で**再評価**し、出力が pin 済み
+    `pareto_vs_round{N-1}.json` とバイト等値であることを assert する
+    （`pareto_eval.main` の `-o` publish と同一の
+    `json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"`
+    直列化を用いる——決定論的評価器のため byte 等値が成立するはず）。"""
+
+    ledger = _load_ledger_l0br()
+
+    reeval_checks: list[tuple[str, str, str]] = []
+    for series_entry in ledger["series_runs"]:
+        round_dir_base = BATTERY_DIR / series_entry["files_dir"]
+        for round_entry in series_entry["rounds"]:
+            round_num = round_entry["round"]
+            if round_entry["pareto_report_sha256"] is None:
+                continue
+            round_dir = round_dir_base / f"round{round_num}"
+            prev_round_dir = round_dir_base / f"round{round_num - 1}"
+
+            prev_report = json.loads((prev_round_dir / "report.json").read_text(encoding="utf-8"))
+            curr_report = json.loads((round_dir / "report.json").read_text(encoding="utf-8"))
+            result = pareto_eval.evaluate(prev_report, curr_report, PARETO_SPEC)
+            reevaluated_content = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+            pinned_path = round_dir / f"pareto_vs_round{round_num - 1}.json"
+            pinned_content = pinned_path.read_text(encoding="utf-8")
+
+            label = f"{series_entry['task']}/{series_entry['series']}.rounds[{round_num}]"
+            reeval_checks.append((label, reevaluated_content, pinned_content))
+
+    assert reeval_checks, "no pareto re-evaluation checks collected — test would vacuously pass"
+    assert len(reeval_checks) == 10, (
+        f"expected exactly 10 pareto-pin'd rounds across the completed battery, got "
+        f"{len(reeval_checks)}"
+    )
+    for label, reevaluated_content, pinned_content in reeval_checks:
+        assert reevaluated_content == pinned_content, (
+            f"{label}: re-evaluating the pinned prev/curr report.json pair through the "
+            "frozen judge (pareto_eval.evaluate + frozen/pareto.yaml) does not "
+            "byte-reproduce the pinned pareto_vs_round*.json — the pin may not have been "
+            "produced from this input pair"
         )
