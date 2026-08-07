@@ -1,0 +1,54 @@
+round: 2
+read_of_round1_report:
+  key_brightness: >
+    key(D minor)・brightness(dark) はともに preserved。events.chord_progression
+    省略と brightness 直宣言の方針は成功しているため round2 では touch しない。
+  structure_failure: >
+    observed = [intro, chorus, chorus, bridge, outro]（要求は
+    [intro, chorus, chorus, outro]）。position_match_rate 0.6。
+    observed_sections の長さは intro=6.5945s, chorus=5.6192s, chorus=5.6192s,
+    bridge=5.5960s, outro=6.5711s（合計 30.0s、宣言 4×7.5s から再配分）。
+    round1 own_intent が事前に懸念していた risks_and_hedges.duplicate_chorus_merge
+    （2 つの chorus が同一ヒント "full energy" のため音響的継ぎ目なしの連続
+    15 秒ブロックになり得る）が的中したとみなす。§2「長い持続区間は内部
+    ダイナミクスの変化で過分割されうる」（12.3s 過分割の実測あり）に照らすと、
+    連続 15s ブロックはそれよりさらに長く、2 分割ではなく 3 分割（chorus,
+    chorus, bridge）に過剰分割されたと解釈するのが最も単純な説明。
+  alternative_hypothesis_considered: >
+    intro(tier5, 既定=tier4より静か) → chorus1(tier4, full energy) の
+    低→高遷移が §2 新規開示の bridge 過渡帯条件に該当する可能性も検討したが、
+    observed の bridge は intro 直後ではなく chorus2 と outro の間に位置して
+    おり、chorus2(full energy)→outro(sparse) は高→低遷移で該当条件外のため、
+    intro 側の遷移を主因とする根拠は薄いと判断し、今回は不問とした。
+change_made:
+  target: chorus(2 個目)の physical ヒントのみ変更
+  from: "full energy"（tier4, chorus1 と byte-identical 音響）
+  to: 認識語を含まない自由文（既定 tier5, パルス+メロディは鳴るが tier4 より
+    音量低）
+  rationale: >
+    2 つの chorus 間に音量差という音響的な継ぎ目を作り、連続同一音響ブロックの
+    形成を防ぐ。tier5 は §2 により「パルス・メロディとも tier4 と同様に鳴る」
+    ため、依然として intro/outro の静音ブロックよりは明確にエネルギーが高く、
+    「chorus らしさ」を保ったまま chorus1 との判別可能な差を作れると判断した。
+  unchanged: >
+    intro（既定 tier5 の自由文）・outro（sparse, tier3）・bpm・key・
+    time_signature・brightness・stereo_width・events 省略方針・bars 配分
+    (3 bars/section, 7.5s 相当) は round1 から変更なし。intro/outro の遷移
+    方向はいずれも key/brightness preserved の周回と同一設計であり、変更の
+    必要性を示す根拠がないため据え置いた。
+residual_risks:
+  chorus2_mislabel: >
+    chorus2 を tier5（chorus1 より静か）にしたことで、観測器が "chorus" では
+    なく "verse" 等の別ラベルを付与する可能性は本契約の開示情報だけでは排除
+    できない。次周回の diff_report で chorus2 のラベルが変化した場合、
+    tier4/tier5 の二択以外の手段（bars 配分の変更等）を検討する。
+  boundary_seconds_not_corrected: >
+    §2 新規開示の終盤境界系統誤差（約2.6-2.7秒早期検出）は R1（ラベル列一致）
+    の判定には影響しないため今回も補正していない。次周回で
+    observed_sections の秒数を使って bars を微調整する場合はこの系統誤差を
+    差し引くこと。
+  substring_safety_reconfirmed: >
+    追加・変更した role/physical はいずれも日本語のみで、認識語彙
+    （silence, no kick, low density, sub bass, sparse, full energy, release,
+    rest）とのラテン文字部分文字列一致がないことを確認した。
+tools_used: none
