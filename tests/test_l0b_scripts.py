@@ -58,6 +58,13 @@ pareto_eval = _load_module("l0b_pareto_eval", SCRIPTS_DIR / "pareto_eval.py")
 run_round = _load_module("l0b_run_round", SCRIPTS_DIR / "run_round.py")
 compose_payload = _load_module("l0b_compose_payload", SCRIPTS_DIR / "compose_payload.py")
 check_token_ban = _load_module("l0b_check_token_ban", SCRIPTS_DIR / "check_token_ban.py")
+compose_author_prompt = _load_module(
+    "l0b_compose_author_prompt", SCRIPTS_DIR / "compose_author_prompt.py"
+)
+verify_prompt_delivery = _load_module(
+    "l0b_verify_prompt_delivery", SCRIPTS_DIR / "verify_prompt_delivery.py"
+)
+audit_round_edit = _load_module("l0b_audit_round_edit", SCRIPTS_DIR / "audit_round_edit.py")
 
 BATTERY_DIR = LOOP_DIR / "battery"
 LEDGER_L0BR_PATH = BATTERY_DIR / "ledger_l0br.yaml"
@@ -5190,4 +5197,939 @@ def test_ledger_l0br_v2_series_runs_payloads_recompose_via_frozen_measurement_co
             f"{label}: recomposing from the pin manifest's declared parts through the frozen "
             "measurement-time composer does not byte-reproduce the pinned payload.manifest.json "
             "— the pin may not have been produced from these inputs"
+        )
+
+
+# --- compose_author_prompt.py (AGENTS.md §8「情報遮断被験者への spawn 配送は
+# 逐語性を機械照合する」2026-08-07 制定の前段: 著者プロンプト組成の機械化)
+# ---------------------------------------------------------------------------
+
+AUTHOR_WRAPPER_PATH = BATTERY_DIR / "author_wrapper.md"
+
+# ゴールデン sha256 の導出元（実在の pin 済みファイルのみ）:
+#   - wrapper: examples/l0b_loop/battery/author_wrapper.md（全文、AUTHOR_WRAPPER_PATH）
+#   - payload: examples/l0b_loop/contract_v2.md（role=contract）+
+#     examples/l0b_loop/battery/statement_br_d1.md（role=task）から
+#     experiment_id=l0br_v2_br_d1_s1 / round_label=round1 で現行
+#     compose_payload.py（`l0b_compose_payload`）を用いて再組成した
+#     payload.md（`_compose_round1_payload_md` が実際に再組成し、その
+#     payload_sha256 が実 pin — examples/l0b_loop/battery_v2/series/
+#     br_d1_s1/round1/payload.manifest.json の `payload_sha256` — と
+#     一致することを assert 済み。ハードコードされた定数だけに依存しない）。
+# 連結規則: wrapper の全バイト + b"\n"（空行 1 つ）+ payload の全バイトの
+# sha256。
+_GOLDEN_AUTHOR_PROMPT_SHA256 = (
+    "ed7502f67581b1acca83aafec4219f659e3f27511d86bb45c68d59410df6f4ca"
+)
+_PINNED_ROUND1_PAYLOAD_SHA256 = (
+    "ac336ba1bcd02605c3c2e6d308d013607910e8e97fc06c8dccd9fd971d40fbbc"
+)
+
+
+def _compose_round1_payload_md(tmp_path: Path) -> Path:
+    """現行 `compose_payload.py`（`l0b_compose_payload`、上でロード済み）で
+    br_d1_s1/round1 の payload.md を実ファイル（contract_v2.md /
+    statement_br_d1.md）から再組成し、実 pin
+    （`payload.manifest.json` の `payload_sha256`）と一致することを assert
+    した上でそのパスを返す（ゴールデンテストの入力を実ファイルへ束縛する）。"""
+
+    ledger = _load_ledger_l0br_v2()
+    contract_v2_path = _resolve_battery_v2_relative(ledger["contract_freeze"]["contract_v2"]["path"])
+    statement_path = _resolve_battery_v2_relative(ledger["tasks"][0]["statement"]["path"])
+    pinned_manifest = json.loads(
+        (BATTERY_V2_DIR / "series" / "br_d1_s1" / "round1" / "payload.manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert pinned_manifest["payload_sha256"] == _PINNED_ROUND1_PAYLOAD_SHA256
+
+    manifest_dir = tmp_path / "recompose_manifest_dir"
+    manifest_dir.mkdir()
+    (manifest_dir / "contract.md").write_bytes(contract_v2_path.read_bytes())
+    (manifest_dir / "task.md").write_bytes(statement_path.read_bytes())
+    manifest = {
+        "schema_version": compose_payload.SCHEMA_VERSION,
+        "experiment_id": pinned_manifest["experiment_id"],
+        "round_label": pinned_manifest["round_label"],
+        "parts": [
+            {"role": "contract", "path": "contract.md", "sha256": pinned_manifest["parts"][0]["sha256"]},
+            {"role": "task", "path": "task.md", "sha256": pinned_manifest["parts"][1]["sha256"]},
+        ],
+    }
+    manifest_path = _write_manifest(manifest_dir, manifest)
+    out_dir = tmp_path / "recompose_out"
+    result = compose_payload.compose_payload(manifest_path, out_dir)
+    assert result["payload_sha256"] == _PINNED_ROUND1_PAYLOAD_SHA256
+    return result["payload_path"]
+
+
+def test_compose_author_prompt_golden_sha256(tmp_path: Path):
+    """ゴールデンテスト: 実在の pin 済み wrapper（`battery/author_wrapper.md`）
+    + 実ファイルから再組成した round1 payload.md（`_compose_round1_payload_md`
+    — 実 pin `payload_sha256` と一致することを内部で assert 済み）を機械連結
+    した結果が、事前に計算し固定した `_GOLDEN_AUTHOR_PROMPT_SHA256` と
+    バイト単位で一致することを assert する。1 バイトでもズレると壊れる
+    設計が意図（連結形式の変更検出面）。"""
+
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_bytes = compose_author_prompt.compose_author_prompt(AUTHOR_WRAPPER_PATH, payload_path)
+    assert hashlib.sha256(out_bytes).hexdigest() == _GOLDEN_AUTHOR_PROMPT_SHA256
+
+
+def test_compose_author_prompt_cli_writes_output_and_prints_sha(tmp_path: Path, capsys):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
+            "--expect-payload-sha256", payload_sha256,
+        ]
+    )
+    assert exit_code == 0
+    assert out_path.exists()
+    actual_sha256 = hashlib.sha256(out_path.read_bytes()).hexdigest()
+    assert actual_sha256 == _GOLDEN_AUTHOR_PROMPT_SHA256
+    captured = capsys.readouterr()
+    assert actual_sha256 in captured.out
+    # 入力（wrapper/payload）それぞれの sha256 も常時印字される（機械可読）。
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+    assert f"wrapper sha256={wrapper_sha256}" in captured.out
+    assert f"payload sha256={payload_sha256}" in captured.out
+
+
+def test_compose_author_prompt_expect_wrapper_sha256_match_publishes(tmp_path: Path, capsys):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
+            "--expect-payload-sha256", payload_sha256,
+        ]
+    )
+    assert exit_code == 0
+    assert out_path.exists()
+
+
+def test_compose_author_prompt_expect_wrapper_sha256_mismatch_blocks_publish(
+    tmp_path: Path, capsys
+):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    bogus_sha256 = "0" * 64
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-wrapper-sha256", bogus_sha256,
+            "--expect-payload-sha256", payload_sha256,
+        ]
+    )
+    assert exit_code == 1
+    assert not out_path.exists()
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert f"expected={bogus_sha256}" in captured.err
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    assert f"actual={wrapper_sha256}" in captured.err
+
+
+def test_compose_author_prompt_expect_payload_sha256_match_publishes(tmp_path: Path, capsys):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
+            "--expect-payload-sha256", payload_sha256,
+        ]
+    )
+    assert exit_code == 0
+    assert out_path.exists()
+
+
+def test_compose_author_prompt_expect_payload_sha256_mismatch_blocks_publish(
+    tmp_path: Path, capsys
+):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    bogus_sha256 = "1" * 64
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
+            "--expect-payload-sha256", bogus_sha256,
+        ]
+    )
+    assert exit_code == 1
+    assert not out_path.exists()
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert f"expected={bogus_sha256}" in captured.err
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+    assert f"actual={payload_sha256}" in captured.err
+
+
+def test_compose_author_prompt_refuses_to_overwrite_existing_output(tmp_path: Path, capsys):
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    out_path.write_text("stale\n", encoding="utf-8")
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+
+    exit_code = compose_author_prompt.main(
+        [
+            "--wrapper", str(AUTHOR_WRAPPER_PATH),
+            "--payload", str(payload_path),
+            "--out", str(out_path),
+            "--expect-wrapper-sha256", wrapper_sha256,
+            "--expect-payload-sha256", payload_sha256,
+        ]
+    )
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert out_path.read_text(encoding="utf-8") == "stale\n"
+
+
+def test_compose_author_prompt_cli_requires_both_expect_sha256_pins(tmp_path: Path, capsys):
+    """`--expect-wrapper-sha256`/`--expect-payload-sha256` は両方とも必須
+    ——fail-open な既定値は存在しない。片方のみ、または両方省略した場合は
+    argparse がエラーを出して exit 2 で終える（`--wrapper`/`--payload`/
+    `--out` と同格の必須引数として扱われることの検査）。"""
+
+    payload_path = _compose_round1_payload_md(tmp_path)
+    out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+
+    base_args = [
+        "--wrapper", str(AUTHOR_WRAPPER_PATH),
+        "--payload", str(payload_path),
+        "--out", str(out_path),
+    ]
+
+    # 両方省略。
+    with pytest.raises(SystemExit) as exc_info:
+        compose_author_prompt.main(list(base_args))
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "--expect-wrapper-sha256" in captured.err
+    assert "--expect-payload-sha256" in captured.err
+    assert "required" in captured.err
+    assert not out_path.exists()
+
+    # wrapper 側のみ指定（payload 側省略）。
+    with pytest.raises(SystemExit) as exc_info:
+        compose_author_prompt.main(
+            [*base_args, "--expect-wrapper-sha256", wrapper_sha256]
+        )
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "--expect-payload-sha256" in captured.err
+    assert "required" in captured.err
+    assert not out_path.exists()
+
+    # payload 側のみ指定（wrapper 側省略）。
+    with pytest.raises(SystemExit) as exc_info:
+        compose_author_prompt.main(
+            [*base_args, "--expect-payload-sha256", payload_sha256]
+        )
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "--expect-wrapper-sha256" in captured.err
+    assert "required" in captured.err
+    assert not out_path.exists()
+
+
+def test_compose_author_prompt_cli_has_no_freeform_injection_options():
+    """自由記述の注入口（`--note`/`--comment`/`--extra` 類）を一切定義しない
+    ことを argparse parser 自体から検査する（`compose_payload.py` と同型の
+    安全特性検査）。"""
+
+    parser = compose_author_prompt._build_arg_parser()
+    option_strings: set[str] = set()
+    for action in parser._actions:
+        option_strings.update(action.option_strings)
+    assert option_strings == {
+        "-h", "--help", "--wrapper", "--payload", "--out",
+        "--expect-wrapper-sha256", "--expect-payload-sha256",
+    }
+
+
+def test_compose_author_prompt_cli_rejects_unknown_option(tmp_path: Path):
+    """未知オプション（例: `--note`）は argparse 標準のエラー（非ゼロ exit
+    の `SystemExit`）になる——自由文を注入する経路自体が存在しない。"""
+
+    payload_path = tmp_path / "payload.md"
+    payload_path.write_text("=== PAYLOAD ===\n", encoding="utf-8")
+    wrapper_path = tmp_path / "wrapper.md"
+    wrapper_path.write_text("WRAPPER\n", encoding="utf-8")
+    out_path = tmp_path / "author_prompt.txt"
+    wrapper_sha256 = hashlib.sha256(wrapper_path.read_bytes()).hexdigest()
+    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+
+    with pytest.raises(SystemExit) as exc_info:
+        compose_author_prompt.main(
+            [
+                "--wrapper", str(wrapper_path),
+                "--payload", str(payload_path),
+                "--out", str(out_path),
+                "--expect-wrapper-sha256", wrapper_sha256,
+                "--expect-payload-sha256", payload_sha256,
+                "--note", "should not exist",
+            ]
+        )
+    assert exc_info.value.code != 0
+
+
+# --- verify_prompt_delivery.py (AGENTS.md §8「情報遮断被験者への spawn 配送は
+# 逐語性を機械照合する」2026-08-07 制定の実装本体) --------------------------
+
+
+def test_verify_prompt_delivery_match_exit0_with_strip_normalization(tmp_path: Path, capsys):
+    expected_path = tmp_path / "author_prompt.txt"
+    delivered_path = tmp_path / "delivered.txt"
+    expected_path.write_text("HELLO WORLD\n", encoding="utf-8")
+    # 末尾に改行 1 つ余分——strip 後は一致する。
+    delivered_path.write_text("HELLO WORLD\n\n", encoding="utf-8")
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered", str(delivered_path)]
+    )
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "match" in captured.out
+
+
+def test_verify_prompt_delivery_mismatch_exit1_reports_position_and_context(tmp_path: Path, capsys):
+    """事故実測 = #249/#250 の転写破損型（`docs/l0a_v2_remeasure_record.md`
+    §5「が」→「April」）を模した最小ケース。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    delivered_path = tmp_path / "delivered.txt"
+    prefix = "x" * 100
+    expected_path.write_text(f"{prefix}が固定され{prefix}\n", encoding="utf-8")
+    delivered_path.write_text(f"{prefix}April固定され{prefix}\n", encoding="utf-8")
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered", str(delivered_path)]
+    )
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert "offset 100" in captured.err
+    assert "expected  context" in captured.err
+    assert "delivered context" in captured.err
+
+
+def test_verify_prompt_delivery_jsonl_str_content(tmp_path: Path):
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text(
+        json.dumps({"message": {"role": "user", "content": "PROMPT BODY"}}) + "\n"
+        + json.dumps({"message": {"role": "assistant", "content": "reply"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 0
+
+
+def test_verify_prompt_delivery_jsonl_list_content(tmp_path: Path):
+    """text ブロックのみの list content は従来どおり連結して exit 0。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY TWO PARTS", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    entry = {
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "PROMPT BODY "},
+                {"type": "text", "text": "TWO PARTS"},
+            ],
+        }
+    }
+    jsonl_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 0
+
+
+def test_verify_prompt_delivery_jsonl_non_text_block_exits_2_fail_closed(tmp_path: Path, capsys):
+    """期待テキスト+画像が配送されたケース——非 text ブロック混入は黙って
+    無視せず exit 2 で fail-closed（レビュー指摘の再発防止）。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY TWO PARTS", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    entry = {
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "PROMPT BODY "},
+                {"type": "image", "source": "ignored"},
+                {"type": "text", "text": "TWO PARTS"},
+            ],
+        }
+    }
+    jsonl_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert "non-text content block" in captured.err
+    assert "fail-closed" in captured.err
+
+
+def test_verify_prompt_delivery_jsonl_unrecognized_content_exits_2(tmp_path: Path, capsys):
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text(
+        json.dumps({"message": {"role": "user", "content": 12345}}) + "\n", encoding="utf-8"
+    )
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+
+def test_verify_prompt_delivery_jsonl_no_user_message_exits_2(tmp_path: Path, capsys):
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text(
+        json.dumps({"message": {"role": "assistant", "content": "reply only"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+
+def test_verify_prompt_delivery_jsonl_second_user_before_assistant_exits_2_fail_closed(
+    tmp_path: Path, capsys
+):
+    """user -> user -> assistant: 応答前に 2 つ目の user メッセージが配送
+    された異常系は黙って最初の user だけを採用せず、fail-closed で exit 2
+    にする（レビュー指摘の再発防止）。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text(
+        json.dumps({"message": {"role": "user", "content": "PROMPT BODY"}}) + "\n"
+        + json.dumps({"message": {"role": "user", "content": "unexpected extra"}}) + "\n"
+        + json.dumps({"message": {"role": "assistant", "content": "reply"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+    assert "additional user message" in captured.err
+    assert "fail-closed" in captured.err
+
+
+def test_verify_prompt_delivery_jsonl_user_then_assistant_then_later_user_exits_0(
+    tmp_path: Path, capsys
+):
+    """user -> assistant -> user（後続ターン）: 最初の assistant 到達で
+    走査を打ち切るため、後続ターンの user は検証対象外——一致すれば
+    exit 0 のまま。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text(
+        json.dumps({"message": {"role": "user", "content": "PROMPT BODY"}}) + "\n"
+        + json.dumps({"message": {"role": "assistant", "content": "reply"}}) + "\n"
+        + json.dumps({"message": {"role": "user", "content": "later turn, unrelated"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "match" in captured.out
+
+
+def test_verify_prompt_delivery_jsonl_unknown_toplevel_shape_exits_2(tmp_path: Path, capsys):
+    """`message` キーがトップレベルに無い行形式（防御的に扱う対象）でも、
+    role='user' が見つからなければ抽出不能 = exit 2（黙って exit 0 にしない
+    fail-closed）。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text(json.dumps({"unexpected": "shape"}) + "\n", encoding="utf-8")
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+
+def test_verify_prompt_delivery_jsonl_toplevel_role_without_message_wrapper(tmp_path: Path):
+    """`message` ラッパが無く、エントリ自体が `{"role": ..., "content": ...}`
+    形式の防御的ハンドリング。"""
+
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text(
+        json.dumps({"role": "user", "content": "PROMPT BODY"}) + "\n", encoding="utf-8"
+    )
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 0
+
+
+def test_verify_prompt_delivery_jsonl_invalid_json_line_exits_2(tmp_path: Path, capsys):
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+    jsonl_path = tmp_path / "task.jsonl"
+    jsonl_path.write_text("{not valid json\n", encoding="utf-8")
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered-jsonl", str(jsonl_path)]
+    )
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+
+def test_verify_prompt_delivery_missing_delivered_file_exits_2(tmp_path: Path, capsys):
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+
+    exit_code = verify_prompt_delivery.main(
+        ["--expected", str(expected_path), "--delivered", str(tmp_path / "does-not-exist.txt")]
+    )
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+
+def test_verify_prompt_delivery_cli_has_no_freeform_injection_options():
+    parser = verify_prompt_delivery._build_arg_parser()
+    option_strings: set[str] = set()
+    for action in parser._actions:
+        option_strings.update(action.option_strings)
+    assert option_strings == {"-h", "--help", "--expected", "--delivered", "--delivered-jsonl"}
+
+
+def test_verify_prompt_delivery_requires_exactly_one_of_delivered_or_jsonl(tmp_path: Path):
+    expected_path = tmp_path / "author_prompt.txt"
+    expected_path.write_text("PROMPT BODY\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc_info:
+        verify_prompt_delivery.main(["--expected", str(expected_path)])
+    assert exc_info.value.code != 0
+
+
+# --- audit_round_edit.py (`.claude/memory/2026-08-07.md` Handoff item #2:
+# 周回受付時の score 全文 diff 機械検査) -------------------------------------
+
+
+def _write_yaml(path: Path, data: dict) -> Path:
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return path
+
+
+def test_audit_round_edit_field_changes_nested_list_add_remove(tmp_path: Path):
+    prev = {
+        "meta": {"title": "T", "version": "0.1"},
+        "physical": {"bpm": 96, "key": "D minor"},
+        "structure": [
+            {"section": "intro", "bars": 3, "role": "r1", "physical": "p1"},
+            {"section": "chorus", "bars": 3, "role": "r2", "physical": "full energy"},
+        ],
+        "to_remove": "gone-next-round",
+    }
+    curr = {
+        "meta": {"title": "T", "version": "0.1"},
+        "physical": {"bpm": 100, "key": "D minor"},
+        "structure": [
+            {"section": "intro", "bars": 3, "role": "r1", "physical": "p1"},
+            {"section": "chorus", "bars": 3, "role": "r2-edited", "physical": "sparse"},
+        ],
+        "added_field": "new-this-round",
+    }
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["physical.bpm"] == {
+        "path": "physical.bpm", "change": "modified", "prev": 96, "curr": 100,
+    }
+    assert changes_by_path["structure[1].role"]["change"] == "modified"
+    assert changes_by_path["structure[1].role"]["prev"] == "r2"
+    assert changes_by_path["structure[1].role"]["curr"] == "r2-edited"
+    assert changes_by_path["structure[1].physical"]["prev"] == "full energy"
+    assert changes_by_path["structure[1].physical"]["curr"] == "sparse"
+    assert changes_by_path["to_remove"] == {
+        "path": "to_remove", "change": "removed", "prev": "gone-next-round", "curr": None,
+    }
+    assert changes_by_path["added_field"] == {
+        "path": "added_field", "change": "added", "prev": None, "curr": "new-this-round",
+    }
+    # meta.title/meta.version/structure[0].* は不変——列挙されない。
+    assert "meta.title" not in changes_by_path
+    assert "meta.version" not in changes_by_path
+    assert "structure[0].role" not in changes_by_path
+    assert "structure[0].physical" not in changes_by_path
+
+
+def test_audit_round_edit_vocabulary_diff_uses_physical_plus_role_concatenation(tmp_path: Path):
+    prev = {
+        "structure": [
+            {"section": "intro", "role": "静かな導入", "physical": "抑えた音量"},
+            {"section": "chorus", "role": "第一の主題", "physical": "full energy"},
+        ]
+    }
+    curr = {
+        "structure": [
+            {"section": "intro", "role": "静かな導入", "physical": "抑えた音量"},
+            # full energy -> 素の散文（認識語なし）へ変更。role へ意図せず
+            # "sparse" という綴りが混入しても照合対象になることを確認する
+            # （contract_v2.md §2「ヒント照合の対象フィールド」）。
+            {"section": "chorus", "role": "対比 sparse 気味の描写", "physical": "控えめに"},
+        ]
+    }
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    assert report["vocabulary"]["recognized_tokens"] == list(
+        audit_round_edit.RECOGNIZED_HINT_TOKENS
+    )
+    prev_hits_1 = report["vocabulary"]["prev_sections"][1]["hits"]
+    curr_hits_1 = report["vocabulary"]["curr_sections"][1]["hits"]
+    assert prev_hits_1["full energy"] == 1
+    assert curr_hits_1["full energy"] == 0
+    assert curr_hits_1["sparse"] == 1
+
+    changed_by_index = {entry["index"]: entry for entry in report["vocabulary"]["changed"]}
+    assert changed_by_index[1]["change"] == "hits_changed"
+    assert changed_by_index[1]["tokens"]["full energy"] == {"prev": 1, "curr": 0}
+    assert changed_by_index[1]["tokens"]["sparse"] == {"prev": 0, "curr": 1}
+    # index 0 は無変化——列挙されない。
+    assert 0 not in changed_by_index
+
+
+def test_audit_round_edit_empty_container_added_as_leaf(tmp_path: Path):
+    """`avoid: []` の新規追加が `field_changes` の `added` として列挙される
+    （空 list を leaf として記録しなければ黙って消える穴）。"""
+
+    prev = {"physical": {"bpm": 96}}
+    curr = {"physical": {"bpm": 96}, "avoid": []}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["avoid"] == {
+        "path": "avoid", "change": "added", "prev": None, "curr": [],
+    }
+
+
+def test_audit_round_edit_empty_container_removed_as_leaf(tmp_path: Path):
+    """空 dict の削除が `removed` として列挙される。"""
+
+    prev = {"physical": {"bpm": 96}, "notes": {}}
+    curr = {"physical": {"bpm": 96}}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["notes"] == {
+        "path": "notes", "change": "removed", "prev": {}, "curr": None,
+    }
+
+
+def test_audit_round_edit_empty_list_to_empty_dict_shape_change_modified(tmp_path: Path):
+    """`[]` -> `{}` の形状変化が `modified` として列挙される（`{} != []` の
+    Python 比較を素直に使う）。"""
+
+    prev = {"physical": {"bpm": 96}, "avoid": []}
+    curr = {"physical": {"bpm": 96}, "avoid": {}}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["avoid"] == {
+        "path": "avoid", "change": "modified", "prev": [], "curr": {},
+    }
+
+
+def test_audit_round_edit_empty_to_nonempty_list_reports_removed_and_added(tmp_path: Path):
+    """`[]` -> `["x"]` は、leaf `avoid`（空 list）の removed と leaf
+    `avoid[0]`（新規要素）の added という一貫した列挙になる（両者ともに
+    「平坦化結果の突き合わせ」という同一ロジックの帰結——空リストは
+    leaf として消え、非空リストは要素単位で展開されるため、path 集合が
+    完全に入れ替わる）。"""
+
+    prev = {"avoid": []}
+    curr = {"avoid": ["x"]}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["avoid"] == {
+        "path": "avoid", "change": "removed", "prev": [], "curr": None,
+    }
+    assert changes_by_path["avoid[0]"] == {
+        "path": "avoid[0]", "change": "added", "prev": None, "curr": "x",
+    }
+
+
+def test_audit_round_edit_int_to_float_same_value_is_modified(tmp_path: Path):
+    """`96` (int) -> `96.0` (float) は `==` では等しいが、具象型が違うため
+    `modified` として列挙される（値だけでなく型の変化も可視化する）。"""
+
+    prev = {"physical": {"bpm": 96}}
+    curr = {"physical": {"bpm": 96.0}}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["physical.bpm"] == {
+        "path": "physical.bpm", "change": "modified", "prev": 96, "curr": 96.0,
+    }
+    assert type(changes_by_path["physical.bpm"]["prev"]) is int
+    assert type(changes_by_path["physical.bpm"]["curr"]) is float
+
+
+def test_audit_round_edit_bool_to_int_same_value_is_modified(tmp_path: Path):
+    """`False` (bool) -> `0` (int) は `==` では等しい（bool は int の
+    subclass）が、`type(...) is not type(...)` で区別され `modified` として
+    列挙される。"""
+
+    prev = {"flag": False}
+    curr = {"flag": 0}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert changes_by_path["flag"] == {
+        "path": "flag", "change": "modified", "prev": False, "curr": 0,
+    }
+    assert type(changes_by_path["flag"]["prev"]) is bool
+    assert type(changes_by_path["flag"]["curr"]) is int
+
+
+def test_audit_round_edit_same_value_and_type_is_not_modified(tmp_path: Path):
+    """同値かつ同型（`96` (int) -> `96` (int)）は依然として列挙されない。"""
+
+    prev = {"physical": {"bpm": 96}}
+    curr = {"physical": {"bpm": 96}}
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert "physical.bpm" not in changes_by_path
+
+
+def test_audit_round_edit_vocabulary_normalization_mirrors_performer_space_join_lower(
+    tmp_path: Path,
+):
+    """`_section_hint_text` は performer の `f"{physical} {role}".lower()` を
+    鏡写しにする——大文字小文字違いも space 区切りをまたぐ語も拾い、無区切り
+    連結由来の偽陽性は起きない。"""
+
+    prev = {
+        "structure": [
+            {"section": "a", "physical": "Full Energy", "role": "lead"},
+            {"section": "b", "physical": "sub", "role": "bass"},
+            {"section": "c", "physical": "core", "role": "study"},
+        ]
+    }
+    curr = {
+        "structure": [
+            {"section": "a", "physical": "Full Energy", "role": "lead"},
+            {"section": "b", "physical": "sub", "role": "bass"},
+            {"section": "c", "physical": "core", "role": "study"},
+        ]
+    }
+    prev_path = _write_yaml(tmp_path / "prev.yaml", prev)
+    curr_path = _write_yaml(tmp_path / "curr.yaml", curr)
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    sections = report["vocabulary"]["curr_sections"]
+    # "Full Energy" (大文字小文字違い) が "full energy" にヒットする。
+    assert sections[0]["hits"]["full energy"] == 1
+    # physical="sub" + role="bass" は space join で "sub bass" になりヒット
+    # する（無区切り連結だと "subbass" で不一致だった旧実装の穴）。
+    assert sections[1]["hits"]["sub bass"] == 1
+    # physical="core" + role="study" は無区切り連結だと "corestudy" 経由で
+    # "rest" に誤ヒットしていた（旧実装の偽陽性）。space join では
+    # "core study" になり "rest" にはヒットしない。
+    assert sections[2]["hits"]["rest"] == 0
+
+
+def test_audit_round_edit_real_battery_v2_round1_to_round2(tmp_path: Path):
+    """実バッテリー round1→round2（`structure[2].role`/`physical` 編集の
+    実例）を通した回帰確認 (`examples/l0b_loop/battery_v2/series/br_d1_s1/`)。"""
+
+    round1_dir = BATTERY_V2_DIR / "series" / "br_d1_s1" / "round1"
+    round2_dir = BATTERY_V2_DIR / "series" / "br_d1_s1" / "round2"
+
+    report = audit_round_edit.audit_round_edit(
+        round1_dir / "score.yaml", round2_dir / "score.yaml"
+    )
+    changes_by_path = {entry["path"]: entry for entry in report["field_changes"]}
+    assert "structure[2].role" in changes_by_path
+    assert "structure[2].physical" in changes_by_path
+    assert changes_by_path["structure[2].physical"]["prev"] == "full energy"
+
+    changed_by_index = {entry["index"]: entry for entry in report["vocabulary"]["changed"]}
+    assert changed_by_index[2]["tokens"]["full energy"] == {"prev": 1, "curr": 0}
+
+
+def test_audit_round_edit_intent_parseable_true(tmp_path: Path):
+    prev_path = _write_yaml(tmp_path / "prev.yaml", {"physical": {"bpm": 96}})
+    curr_path = _write_yaml(tmp_path / "curr.yaml", {"physical": {"bpm": 100}})
+    intent_path = tmp_path / "intent.yaml"
+    intent_path.write_text("design_rationale:\n  note: fine\n", encoding="utf-8")
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path, intent_path)
+
+    assert report["intent"] == {"intent_parseable": True}
+
+
+def test_audit_round_edit_intent_parseable_false_records_error(tmp_path: Path):
+    prev_path = _write_yaml(tmp_path / "prev.yaml", {"physical": {"bpm": 96}})
+    curr_path = _write_yaml(tmp_path / "curr.yaml", {"physical": {"bpm": 100}})
+    intent_path = tmp_path / "intent.yaml"
+    # タブ文字混入によるインデント不正 -> YAML 構文エラー（yaml.YAMLError）。
+    intent_path.write_text("design_rationale:\n\tbad: tab-indent\n", encoding="utf-8")
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path, intent_path)
+
+    assert report["intent"]["intent_parseable"] is False
+    assert report["intent"]["error"]
+
+
+def test_audit_round_edit_no_intent_option_omits_intent_key(tmp_path: Path):
+    prev_path = _write_yaml(tmp_path / "prev.yaml", {"physical": {"bpm": 96}})
+    curr_path = _write_yaml(tmp_path / "curr.yaml", {"physical": {"bpm": 100}})
+
+    report = audit_round_edit.audit_round_edit(prev_path, curr_path)
+
+    assert "intent" not in report
+
+
+def test_audit_round_edit_cli_writes_json_to_stdout(tmp_path: Path, capsys):
+    prev_path = _write_yaml(tmp_path / "prev.yaml", {"physical": {"bpm": 96}})
+    curr_path = _write_yaml(tmp_path / "curr.yaml", {"physical": {"bpm": 100}})
+
+    exit_code = audit_round_edit.main(["--prev", str(prev_path), "--curr", str(curr_path)])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert report["schema_version"] == audit_round_edit.SCHEMA_VERSION
+
+
+def test_audit_round_edit_cli_nonzero_exit_on_non_mapping_score(tmp_path: Path, capsys):
+    prev_path = tmp_path / "prev.yaml"
+    prev_path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+    curr_path = _write_yaml(tmp_path / "curr.yaml", {"physical": {"bpm": 100}})
+
+    exit_code = audit_round_edit.main(["--prev", str(prev_path), "--curr", str(curr_path)])
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Error:" in captured.err
+
+
+def test_audit_round_edit_cli_has_no_freeform_injection_options():
+    parser = audit_round_edit._build_arg_parser()
+    option_strings: set[str] = set()
+    for action in parser._actions:
+        option_strings.update(action.option_strings)
+    assert option_strings == {"-h", "--help", "--prev", "--curr", "--intent"}
+
+
+# --- Acceptance criterion 4: 認識語彙リストと performer.py ソースの束縛 -----
+
+
+def test_recognized_hint_tokens_match_performer_source():
+    """`audit_round_edit.RECOGNIZED_HINT_TOKENS`（contract v2 §2 の 8 語）の
+    それぞれが `src/svp_rpe/perform/performer.py` のソーステキストに
+    literal として存在することを assert する——乖離したら赤くなるドリフト
+    検知（Design Memo Acceptance Criterion 4）。"""
+
+    performer_path = REPO_ROOT / "src" / "svp_rpe" / "perform" / "performer.py"
+    source_text = performer_path.read_text(encoding="utf-8")
+    for token in audit_round_edit.RECOGNIZED_HINT_TOKENS:
+        assert f'"{token}"' in source_text, (
+            f"recognized hint token {token!r} not found as a literal in {performer_path} "
+            "— audit_round_edit.py's vocabulary has drifted from the performer"
         )
