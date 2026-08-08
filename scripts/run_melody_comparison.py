@@ -1810,6 +1810,75 @@ def _validate_evidence_values_and_axes_consistency(pairs: Dict[str, Dict[str, An
             )
 
 
+# --------------------------------------------------------------------------- #
+# material 別会計（R2 対応・Codex レビュー: 全 positive 単一バケット問題への対処）
+# --------------------------------------------------------------------------- #
+_MATERIAL_REAL_VOICE = "real_voice"
+_MATERIAL_SYNTHETIC = "synthetic"
+
+
+def _material_of_pair_id(pair_id: str) -> str:
+    """pair_id の命名規則（`_real_`/`_synth_` マーカー）から material を判別する。
+
+    `scripts/build_m3d_pairs.py` の `_material_of` と同一規則（builder 側の
+    pair_id 命名が唯一の権威——`_real_`/`_synth_` 接頭辞つき pair_id を emit
+    するのは builder のみで、本ハーネスはその契約を読者側で確認するだけ。
+    builder はハーネスをインポートしない設計のため、判別ロジック自体は独立に
+    複製する）。未知マーカー（どちらの接頭辞も含まない pair_id）は material
+    別会計が成立しないため fail-closed（`ValueError`）で拒否する。
+    """
+    if "_real_" in pair_id:
+        return _MATERIAL_REAL_VOICE
+    if "_synth_" in pair_id:
+        return _MATERIAL_SYNTHETIC
+    raise ValueError(
+        f"pair_id {pair_id!r} に material 判別用マーカー（_real_/_synth_）が"
+        "含まれていない (fail-closed)"
+    )
+
+
+def _validate_pair_id_material_markers(reports: List[Dict[str, Any]]) -> None:
+    """各 report の全 pair_id が material 判別可能であることを検証する（fail-closed）。
+
+    他の pair 単位構造検査（`_validate_pin_formats` 等）と同型に、reference
+    report だけでなく **全 report** の pair_id を対象にする（defense-in-depth
+    ——`_check_repeats_consistency` が pair_id 集合の report 間一致を保証するのは
+    この検証より後段のため、ここでは independently に全件確認する）。
+    """
+    for idx, report in enumerate(reports):
+        for pair_id in report["pairs"]:
+            try:
+                _material_of_pair_id(pair_id)
+            except ValueError as exc:
+                raise ValueError(
+                    f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} の material を"
+                    f" 判別できない (fail-closed): {exc}"
+                ) from exc
+
+
+def _partition_pairs_by_material(
+    pairs: Dict[str, Dict[str, Any]]
+) -> "Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]":
+    """`pairs`（pair_id → pair dict）を real_voice / synthetic の 2 dict へ分割する。
+
+    事前登録メモ（`docs/measurements/m3d_2026-08/preregistration.md` §1.3
+    「別会計」）の機械強制: real_voice が校正（凍結提案・holdout 判定）の
+    唯一の入力、synthetic は診断専用（not_comparable は not_measured として
+    正直会計するのみで凍結可否に影響させない）。呼び出し側は
+    `_validate_pair_id_material_markers` を先に通している前提だが、本関数
+    単体で呼んでも同じ判別規則（`_material_of_pair_id`）で fail-closed する
+    ため安全（冪等）。
+    """
+    real_pairs: Dict[str, Dict[str, Any]] = {}
+    synth_pairs: Dict[str, Dict[str, Any]] = {}
+    for pair_id, pair in pairs.items():
+        if _material_of_pair_id(pair_id) == _MATERIAL_REAL_VOICE:
+            real_pairs[pair_id] = pair
+        else:
+            synth_pairs[pair_id] = pair
+    return real_pairs, synth_pairs
+
+
 def _margin_table(
     pairs: Dict[str, Dict[str, Any]], *, split: Optional[str], min_margin: float
 ) -> Dict[str, Any]:
@@ -2408,6 +2477,21 @@ def evaluate_comparison(
         `calibration_not_confirmed_on_holdout` に倒す（floor 未満なのに
         favorable な axes を持つ行は、run 時の coverage floor gate が本来
         `not_comparable` へ倒すはずの内部不整合であるため）
+
+    R2 対応（Codex レビュー・material 別会計、上記ステップ 5〜14 に横断的に
+    適用）: 事前登録メモ（`docs/measurements/m3d_2026-08/preregistration.md`
+    §1.3「別会計」）を機械強制する。pair_id の `_real_`/`_synth_` マーカー
+    （`_material_of_pair_id`。未知マーカーは fail-closed）で `reference_pairs`
+    を real_voice / synthetic の 2 バケットへ分割し（`_partition_pairs_by_
+    material`）、以後のステップ 11〜14（マージン表・not_comparable による
+    freeze proposal 拒否・coverage floor 候補・holdout 判定のいずれも）は
+    **real_voice バケットのみ**を入力とする。synthetic バケットは
+    `material_accounting.synthetic` セクションへ診断専用のマージン表として
+    正直会計する（not_comparable は not_measured 相当として記録するのみで、
+    校正 verdict の可否判定には一切寄与しない）。従来（分割前）は両 material
+    の positive/negative が単一バケットへ混入していた（Codex 指摘: 全 positive
+    単一バケット問題・synthetic の tuning positive not_comparable が real_voice
+    由来の凍結提案まで巻き込んで全拒否していた問題）——本対応はこれを是正する。
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -2423,6 +2507,10 @@ def evaluate_comparison(
     _validate_route_for_evaluate(reports)
     _require_pair_pins_present_for_publishable_reports(reports)
     _validate_pin_formats(reports)
+    # R2 対応（Codex レビュー・material 別会計の前提）: 全 pair_id が material
+    # 判別可能（`_real_`/`_synth_` マーカーを持つ）ことを margin/holdout 集計に
+    # 進む前に確認する。
+    _validate_pair_id_material_markers(reports)
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
     m1_mapping, m1_registry_sha256 = _load_m1_registry(m1_registry_path)
@@ -2482,7 +2570,6 @@ def evaluate_comparison(
 
     holdout_locked = not _holdout_unlocked(config)
     verdict["holdout_locked_until_frozen"] = holdout_locked
-    verdict["holdout_pair_ids_skipped"] = _holdout_pair_ids(reference_pairs) if holdout_locked else []
 
     # レビュー対応 2026-07-30(第 14 ラウンド): margin/holdout 集計(`_margin_table` /
     # 後段の `_holdout_validation_table`)が axes 値をそのまま消費する前に、値の
@@ -2496,8 +2583,18 @@ def evaluate_comparison(
     # 同じ reference-report-only の前提(repeats 間一致は既に保証済み)で足りる。
     _validate_evidence_values_and_axes_consistency(reference_pairs)
 
+    # R2 対応（Codex レビュー・material 別会計）: 事前登録メモ §1.3「別会計」の
+    # 機械強制。real_voice（vocadito 実声）のみを校正（凍結提案・
+    # tuning positive not_comparable による拒否・holdout 判定）の入力にし、
+    # synthetic（合成）は診断専用セクションへ正直会計する（not_comparable も
+    # not_measured として記録するのみで凍結可否/holdout 判定に一切影響しない）。
+    real_pairs, synth_pairs = _partition_pairs_by_material(reference_pairs)
+    verdict["holdout_pair_ids_skipped"] = (
+        _holdout_pair_ids(real_pairs) if holdout_locked else []
+    )
+
     margin = _margin_table(
-        reference_pairs,
+        real_pairs,
         split="tuning",
         min_margin=config.separation_margin.min_same_minus_cross_margin,
     )
@@ -2506,6 +2603,41 @@ def evaluate_comparison(
     verdict["skipped_pairs"] = margin["skipped_pairs"]
     verdict["not_comparable_positive_count"] = margin["not_comparable_positive_count"]
     verdict["not_comparable_negative_count"] = margin["not_comparable_negative_count"]
+
+    # synthetic は診断専用（事前登録 §1.3 フォールバック意味論）: マージン表・
+    # not_comparable 内訳は正直に報告するが、`calibrated_axes`/`freeze_proposal`/
+    # `holdout_validation` のいずれにも一切影響させない（`margin_synth` の値は
+    # 下の `material_accounting.synthetic` にのみ書き込む）。
+    margin_synth = _margin_table(
+        synth_pairs,
+        split="tuning",
+        min_margin=config.separation_margin.min_same_minus_cross_margin,
+    )
+    verdict["material_accounting"] = {
+        _MATERIAL_REAL_VOICE: {
+            "role": "calibration",
+            "tuning_pair_count": sum(1 for p in real_pairs.values() if p["split"] == "tuning"),
+            "holdout_pair_count": sum(1 for p in real_pairs.values() if p["split"] == "holdout"),
+            "margin_table": margin["axes"],
+            "calibrated_axes": margin["calibrated_axes"],
+            "not_comparable_positive_count": margin["not_comparable_positive_count"],
+            "not_comparable_negative_count": margin["not_comparable_negative_count"],
+        },
+        _MATERIAL_SYNTHETIC: {
+            "role": "diagnostic",
+            "tuning_pair_count": sum(1 for p in synth_pairs.values() if p["split"] == "tuning"),
+            "holdout_pair_count": sum(1 for p in synth_pairs.values() if p["split"] == "holdout"),
+            "margin_table": margin_synth["axes"],
+            "calibrated_axes_diagnostic_only": margin_synth["calibrated_axes"],
+            "not_comparable_positive_count": margin_synth["not_comparable_positive_count"],
+            "not_comparable_negative_count": margin_synth["not_comparable_negative_count"],
+            "note": (
+                "診断専用（事前登録 §1.3 フォールバック意味論の機械強制）。"
+                "not_comparable は not_measured として正直会計するのみで、"
+                "凍結提案・holdout 判定を含む calibration verdict には一切影響しない。"
+            ),
+        },
+    }
 
     if margin["not_comparable_positive_count"] > 0:
         # tuning split の positive pair（expected="same"）が 1 件でも
@@ -2516,14 +2648,16 @@ def evaluate_comparison(
         # 扱う。
         verdict["freeze_proposal"] = {}
         verdict["freeze_proposal_rejected_reason"] = "rejected_positive_not_comparable"
-        verdict["coverage_floor_candidate"] = _coverage_floor_candidate(reference_pairs)
+        verdict["coverage_floor_candidate"] = _coverage_floor_candidate(real_pairs)
     else:
         # レビュー対応 2026-07-30（第 15 ラウンド）: 上の not_comparable 会計とは
         # 独立に、比較可能な tuning pair 全ての `comparison.coverage` 4 フィールド
         # の完全性を freeze proposal 発行前に検証する。1 件でも違反があれば
         # freeze proposal と coverage floor 候補の**双方**を emit しない
-        # （margin_table 自体は出す — 発行判断のみを止める）。
-        coverage_violations = _validate_tuning_coverage_completeness(reference_pairs)
+        # （margin_table 自体は出す — 発行判断のみを止める）。R2 対応: real_voice
+        # バケットのみを対象にする（synthetic の coverage 不備は診断専用であり
+        # 凍結可否に影響させない）。
+        coverage_violations = _validate_tuning_coverage_completeness(real_pairs)
         if coverage_violations:
             verdict["freeze_proposal"] = {}
             verdict["freeze_proposal_rejected_reason"] = (
@@ -2537,7 +2671,7 @@ def evaluate_comparison(
                 }
                 for axis in margin["calibrated_axes"]
             }
-            verdict["coverage_floor_candidate"] = _coverage_floor_candidate(reference_pairs)
+            verdict["coverage_floor_candidate"] = _coverage_floor_candidate(real_pairs)
 
     if not holdout_locked:
         # レビュー対応 2026-07-30（第 10 ラウンド）: registry が完全凍結
@@ -2551,13 +2685,15 @@ def evaluate_comparison(
         # unlocked 評価（この `if not holdout_locked:` 節）からのみ行われる
         # ため `unlocked=True` を渡す——`holdout_locked_until_frozen` を申告
         # する行があっても免除せず、comparison 欠落を一律 missing 扱いにする
-        # （unlocked 評価での locked 偽装行の拒否）。
+        # （unlocked 評価での locked 偽装行の拒否）。R2 対応: holdout 判定は
+        # real_voice バケットのみを入力とする（synthetic の holdout 行は診断
+        # 専用であり判定に一切影響させない——事前登録 §1.3）。
         missing_comparison_pair_ids = _holdout_missing_comparison_pair_ids(
-            reference_pairs, unlocked=True
+            real_pairs, unlocked=True
         )
         holdout_has_comparison = any(
             pair["split"] == "holdout" and "comparison" in pair
-            for pair in reference_pairs.values()
+            for pair in real_pairs.values()
         )
         if holdout_has_comparison or missing_comparison_pair_ids:
             frozen_axes = config.evidence_thresholds.axes or {}
@@ -2570,7 +2706,7 @@ def evaluate_comparison(
             freeze_consistency_reasons = _validate_frozen_thresholds_derived_from_tuning(
                 margin["axes"], frozen_axes
             )
-            holdout_result = _holdout_validation_table(reference_pairs, frozen_axes=frozen_axes)
+            holdout_result = _holdout_validation_table(real_pairs, frozen_axes=frozen_axes)
             verdict["holdout_table"] = holdout_result["axes"]
             verdict["holdout_validation"] = {
                 axis: entry["verdict"] for axis, entry in holdout_result["axes"].items()
@@ -2589,7 +2725,7 @@ def evaluate_comparison(
             # あれば、run 時の coverage floor gate が本来 not_comparable へ
             # 倒すはずの内部不整合として fail-closed 側に倒す。
             coverage_invalid_pair_ids, below_floor_pair_ids = (
-                _validate_holdout_coverage_and_floor(reference_pairs, floor=config.coverage.floor)
+                _validate_holdout_coverage_and_floor(real_pairs, floor=config.coverage.floor)
             )
             reasons: List[str] = (
                 freeze_consistency_reasons

@@ -10,8 +10,10 @@
    （`make_melody_pairs.make_variants` を流用。librosa 決定論）
 2. 合成旋律（`m3d_synth_specs.yaml` + `build_melody_bench.build_signal`）の
    positive 変形 WAV + 狙い撃ち negative（rhythm/interval）WAV
-3. 上記を束ねる pairs manifest（`tests/fixtures/melody_bench/m3d_pairs_manifest.yaml`）
-4. 生成 WAV 全件の sha256 pin サイドカー（`build/external_m3d/m3d_pairs_pins.json`）
+3. 上記を束ねる pairs manifest（単一ファイル。
+   `tests/fixtures/melody_bench/m3d_pairs_manifest.yaml`）
+4. 生成 WAV 全件 + manifest の sha256 pin サイドカー
+   （`build/external_m3d/m3d_pairs_pins.json`）
    — pairs manifest スキーマ（`run_melody_comparison._REQUIRED_PAIR_KEYS`）は
    pair あたり厳密に 6 キー（pair_id/kind/split/audio_a/audio_b/expected）のみを
    許可し未知キーを fail-closed で拒否するため、sha256 pin と material 区分
@@ -23,8 +25,35 @@ vocadito pin 照合は **全数** 実施し、1 件でも不一致/欠落があ�
 せず fail-closed で終了する（exit 非 0・部分出力なし）— manifest / WAV / pin
 サイドカーのいずれも書き込まれない。
 
-clip 選定・変形パラメータ・pair 構成比率は全て事前登録済み（設計メモ §1.1〜§1.3）
-であり、本スクリプトは新しいチューナブル値を発明しない。
+**manifest は単一ファイルのまま維持する（Codex レビュー R2 対応の設計判定）**:
+当初は real_voice/synthetic への 2 ファイル分割を検討したが、
+`run_melody_comparison._validate_manifest_composition`（tuning に狙い撃ち
+negative 必須・holdout に negative 必須、等）は単一 98 対 manifest を前提にした
+素材構成契約であり、分割後の real-only/synth-only manifest はいずれも単体では
+このローダを通らないことが実装検証で判明した（real-only は狙い撃ち negative
+が synth 専用のため tuning 狙い撃ち negative 0 件、synth-only は
+negative_cross を持たないため holdout negative 0 件）。ハーネスの構成契約を
+変えずに R2（Codex 指摘: 全 positive 単一バケット・synth の not_comparable が
+real 由来の凍結提案まで巻き込む問題）へ対応するため、**素材別会計は
+`run_melody_comparison.py` の evaluate phase 側**（`_partition_pairs_by_
+material` / `material_accounting`）で行う——manifest 自体は単一のまま、
+pair_id の `_real_`/`_synth_` マーカーで evaluator が読み分ける。
+
+**アトミック公開（Codex レビュー R3 対応）**: 生成物一式（変形 WAV・manifest・
+pins サイドカー）は out_dir と同一ファイルシステム上の staging ディレクトリへ
+全生成 → 全検証成功後に `_publish_staged_bundle`（snapshot + rollback 付き、
+`svp_rpe.utils.atomic_io.atomic_publish_bundle` と同じ流儀）で一括公開する。
+途中失敗時は publish 済み分を削除し退避済みの既存ファイルを元位置へ復元する
+ため、既存の公開済みセットは「初回ビルド」だけでなく「再ビルド」時にも無傷で
+残る。
+
+**--check-only の digest 照合（Codex レビュー R1 対応）**: 従来は WAV pin のみを
+再照合し、manifest 自体のバイト内容は pins サイドカーへ記録するだけで再照合
+していなかった。ここで (a) sidecar のスキーマ検証 (b) sidecar 記録の
+manifest sha256 と現物 manifest ファイルのバイト sha256 の一致検証 (c) 全 WAV
+pin の一致検証を fail-closed で行う。限界の明記: sidecar は非コミットのビルド
+生成物であり、順序証明の最終根拠は git 履歴 + ハーネスの holdout ロックの
+まま。本照合は事故的ドリフトを fail-closed 化する計器である。
 
 使い方::
 
@@ -39,6 +68,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 import tempfile
 from collections import Counter
@@ -122,7 +152,19 @@ SYNTH_NEGATIVE_INTERVAL_PAIRS: Tuple[Tuple[str, str], ...] = (
 )
 
 _MANIFEST_SCHEMA = harness._EXPECTED_MANIFEST_SCHEMA  # "m3-comparison-pairs/0.1"（凍結スキーマそのものを参照。値の複製をしない）
-_PINS_SCHEMA = "m3d-pairs-pins/0.1"
+# R1 対応（Codex レビュー・--check-only digest 照合 fail-closed 化）: フィールド
+# 集合自体は従来の 0.1 と同型（`manifest_sha256` は元々存在した）だが、
+# `check_existing` がこの値を実際に検証するようになった契約変更を示すため
+# スキーマ版を上げる。
+_PINS_SCHEMA = "m3d-pairs-pins/0.2"
+_REQUIRED_PINS_KEYS = {
+    "schema",
+    "generated_utc",
+    "m2c_external_fixtures_sha256",
+    "manifest_sha256",
+    "audio_sha256",
+    "material",
+}
 
 
 class BuildM3dPairsError(RuntimeError):
@@ -324,10 +366,19 @@ def circular_pairs(clip_ids: List[str]) -> List[Tuple[str, str]]:
 # 生成: vocadito 変形
 # --------------------------------------------------------------------------- #
 def generate_vocadito_variants(
-    clip_ids: List[str], resolved_audio: Dict[str, Path], out_dir: Path
+    clip_ids: List[str], resolved_audio: Dict[str, Path], out_dir: Path, write_dir: Path
 ) -> Dict[str, Dict[str, Path]]:
-    """選定 clip（id 昇順）ごとに 4 変形 WAV を書き出す。戻り値:
-    {clip_id: {variant_key(make_variants の key): 出力 Path}}（base は含まない）。
+    """選定 clip（id 昇順）ごとに 4 変形 WAV を書き出す。
+
+    R3 対応（アトミック公開）: 物理書き込み先は `write_dir`（out_dir と同一
+    ファイルシステム上の staging ディレクトリ）。戻り値の Path は **`out_dir`
+    基準**（manifest の pair dict へ記録される最終公開先の参照パス。
+    `_repo_rel` が `out_dir` 側の Path から相対パス文字列を作る）——staging
+    と最終公開先を意図的に分離する（呼び出し側 `_publish_staged_bundle` が
+    全検証成功後に一括で `write_dir/<name>` → `out_dir/<name>` へ publish する）。
+
+    戻り値: {clip_id: {variant_key(make_variants の key): out_dir 基準 Path}}
+    （base は含まない）。
     """
     result: Dict[str, Dict[str, Path]] = {}
     for clip_id in sorted(clip_ids):
@@ -339,9 +390,9 @@ def generate_vocadito_variants(
         clip_variants: Dict[str, Path] = {}
         for variant_key in VOCADITO_VARIANT_ORDER:
             label = VOCADITO_VARIANT_LABELS[variant_key]
-            out_path = out_dir / f"{clip_id}__{label}.wav"
-            _atomic_write_wav(out_path, variants[variant_key], sr)
-            clip_variants[variant_key] = out_path
+            filename = f"{clip_id}__{label}.wav"
+            _atomic_write_wav(write_dir / filename, variants[variant_key], sr)
+            clip_variants[variant_key] = out_dir / filename
         result[clip_id] = clip_variants
     return result
 
@@ -350,40 +401,43 @@ def generate_vocadito_variants(
 # 生成: 合成素材
 # --------------------------------------------------------------------------- #
 def generate_synth_positive(
-    specs: Dict[str, Any], out_dir: Path
+    specs: Dict[str, Any], out_dir: Path, write_dir: Path
 ) -> Dict[str, Tuple[Path, Dict[str, Path]]]:
-    """合成 positive base（tuning/holdout）+ その変形版を書き出す。戻り値:
-    {base_id: (base_path, {variant_key: variant_path})}。
+    """合成 positive base（tuning/holdout）+ その変形版を書き出す（R3: staging は
+    `write_dir`、戻り値の Path は `out_dir` 基準 — `generate_vocadito_variants`
+    と同じ分離）。戻り値: {base_id: (base_path, {variant_key: variant_path})}。
     """
     result: Dict[str, Tuple[Path, Dict[str, Path]]] = {}
     for base_id in (SYNTH_TUNING_POS_ID, SYNTH_HOLDOUT_POS_ID):
         y, sr = bmb.build_signal(base_id, specs)
-        base_path = out_dir / f"{base_id}.wav"
-        _atomic_write_wav(base_path, y, sr)
+        base_filename = f"{base_id}.wav"
+        _atomic_write_wav(write_dir / base_filename, y, sr)
+        base_path = out_dir / base_filename
         variants = make_variants(
             y, sr, semitones=list(SYNTH_POS_SEMITONES), time_rates=list(SYNTH_POS_TIME_RATES)
         )
         variant_paths: Dict[str, Path] = {}
         for variant_key in SYNTH_POS_VARIANT_ORDER:
             label = SYNTH_POS_VARIANT_LABELS[variant_key]
-            out_path = out_dir / f"{base_id}__{label}.wav"
-            _atomic_write_wav(out_path, variants[variant_key], sr)
-            variant_paths[variant_key] = out_path
+            filename = f"{base_id}__{label}.wav"
+            _atomic_write_wav(write_dir / filename, variants[variant_key], sr)
+            variant_paths[variant_key] = out_dir / filename
         result[base_id] = (base_path, variant_paths)
     return result
 
 
-def generate_synth_negatives(specs: Dict[str, Any], out_dir: Path) -> Dict[str, Path]:
-    """狙い撃ち negative（rhythm/interval）の合成 fixture を書き出す。"""
+def generate_synth_negatives(specs: Dict[str, Any], out_dir: Path, write_dir: Path) -> Dict[str, Path]:
+    """狙い撃ち negative（rhythm/interval）の合成 fixture を書き出す（R3: staging
+    は `write_dir`、戻り値の Path は `out_dir` 基準）。"""
     fixture_ids: List[str] = []
     for a, b in SYNTH_NEGATIVE_RHYTHM_PAIRS + SYNTH_NEGATIVE_INTERVAL_PAIRS:
         fixture_ids.extend([a, b])
     result: Dict[str, Path] = {}
     for fixture_id in fixture_ids:
         y, sr = bmb.build_signal(fixture_id, specs)
-        out_path = out_dir / f"{fixture_id}.wav"
-        _atomic_write_wav(out_path, y, sr)
-        result[fixture_id] = out_path
+        filename = f"{fixture_id}.wav"
+        _atomic_write_wav(write_dir / filename, y, sr)
+        result[fixture_id] = out_dir / filename
     return result
 
 
@@ -516,6 +570,103 @@ def all_audio_paths(pairs: List[Dict[str, str]]) -> List[str]:
 
 
 # --------------------------------------------------------------------------- #
+# R3: staging → atomic bundle publish
+# --------------------------------------------------------------------------- #
+def _publish_staged_bundle(entries: "List[Tuple[Path, Path]]") -> None:
+    """staging 済みファイル一式を最終位置へ atomic に一括公開する（snapshot +
+    rollback 付き）。`entries` は (staged_path, final_path) の列。
+
+    `svp_rpe.utils.atomic_io.atomic_publish_bundle` と同じ流儀（全部揃って初めて
+    意味を持つ 1 組として snapshot → publish → 失敗時ロールバック、各 replace の
+    **前**に snapshot/published を登録する非同期シグナル安全策も同型）を踏襲
+    するが、同関数は単一 `output_dir` 直下のフラットなファイル名のみを契約とする
+    のに対し、本 builder の生成物（変形 WAV は `out_dir`、manifest は
+    `tests/fixtures/melody_bench/`、pins サイドカーは `build/external_m3d/` と、
+    互いに異なるディレクトリへ publish する必要があるため、任意の
+    (staged_path, final_path) ペア列を受ける本関数を用意する（既存関数の
+    無改造のまま再利用できないための意図的な複製 — ロールバック挙動は同型）。
+
+    途中で例外が飛べば、既に publish 済みの分を削除し、退避済みの既存ファイルを
+    元位置へ復元してから re-raise する——既存の公開済みセットは初回ビルドだけで
+    なく **再ビルド時にも** 無傷で残る（R3 対応）。
+    """
+    snapshots: Dict[Path, Path] = {}
+    published: List[Path] = []
+    try:
+        for staged_path, final_path in entries:
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            if final_path.exists():
+                fd, snap_name = tempfile.mkstemp(
+                    prefix=f".{final_path.name}.", suffix=".prev", dir=str(final_path.parent)
+                )
+                os.close(fd)
+                snapshot_path = Path(snap_name)
+                # 登録は replace の**前**（Codex P2 review 由来の流儀。非同期
+                # シグナルが replace 完了直後〜登録実行前に割り込んでも追跡漏れ
+                # が生じない）。
+                snapshots[final_path] = snapshot_path
+                os.replace(final_path, snapshot_path)
+            published.append(final_path)
+            os.replace(staged_path, final_path)
+    except BaseException:
+        for final_path in published:
+            try:
+                os.unlink(final_path)
+            except OSError:
+                pass
+        for final_path, snapshot_path in snapshots.items():
+            try:
+                os.replace(snapshot_path, final_path)
+            except OSError:
+                pass
+        raise
+
+
+# --------------------------------------------------------------------------- #
+# pins サイドカーの読み込み + 検証（R1: --check-only digest 照合 fail-closed 化）
+# --------------------------------------------------------------------------- #
+def _load_and_validate_pins(path: Path) -> Dict[str, Any]:
+    """pins サイドカーを読み、スキーマ・構造を検証する（fail-closed）。
+
+    限界の明記: 本サイドカー（`build/external_m3d/m3d_pairs_pins.json`）は
+    **非コミットのビルド生成物**であり、順序証明の最終根拠は git 履歴 +
+    ハーネスの holdout ロックのままである。本照合（`--check-only`）は
+    「manifest/WAV がビルド後に事故的に改変されていないか」を fail-closed で
+    検出する計器であって、順序証明そのものの代替ではない。
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BuildM3dPairsError(
+            f"{path}: pins サイドカーの読み込みに失敗 (fail-closed): {exc}"
+        ) from exc
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise BuildM3dPairsError(
+            f"{path}: pins サイドカーの JSON parse に失敗 (fail-closed): {exc}"
+        ) from exc
+    if not isinstance(doc, dict) or doc.get("schema") != _PINS_SCHEMA:
+        raise BuildM3dPairsError(
+            f"{path}: schema が {_PINS_SCHEMA!r} でない (fail-closed): "
+            f"{doc.get('schema') if isinstance(doc, dict) else doc!r}"
+        )
+    missing = _REQUIRED_PINS_KEYS - set(doc)
+    if missing:
+        raise BuildM3dPairsError(f"{path}: 必須キー欠落 (fail-closed): {sorted(missing)}")
+    manifest_sha = doc["manifest_sha256"]
+    if not isinstance(manifest_sha, str) or len(manifest_sha) != 64:
+        raise BuildM3dPairsError(
+            f"{path}: manifest_sha256 が不正な形式 (fail-closed): {manifest_sha!r}"
+        )
+    if not isinstance(doc.get("audio_sha256"), dict):
+        raise BuildM3dPairsError(f"{path}: 'audio_sha256' が mapping でない (fail-closed)")
+    if not isinstance(doc.get("material"), dict):
+        raise BuildM3dPairsError(f"{path}: 'material' が mapping でない (fail-closed)")
+    return doc
+
+
+# --------------------------------------------------------------------------- #
 # check-only
 # --------------------------------------------------------------------------- #
 def check_existing(
@@ -527,6 +678,13 @@ def check_existing(
 ) -> Dict[str, Any]:
     """既存の manifest + pins サイドカーが現在のファイル内容と整合するかだけを
     再照合する（生成は一切行わない）。1 件でも不整合なら `BuildM3dPairsError`。
+
+    R1 対応（Codex レビュー・digest 照合 fail-closed 化）:
+    (a) sidecar のスキーマ検証（`_load_and_validate_pins`）
+    (b) sidecar 記録の manifest sha256 と現物 manifest ファイルのバイト sha256
+        の一致検証（従来は記録するのみで再照合していなかった）
+    (c) 全 WAV pin の一致検証（従来どおり）
+    のいずれか 1 件でも不一致/欠落で fail-closed。
     """
     fixtures = load_m2c_fixtures(fixtures_path)
     verify_vocadito_pins(vocadito_dir, fixtures)  # vocadito 側の drift も再確認
@@ -536,12 +694,22 @@ def check_existing(
     if not pins_out.exists():
         raise BuildM3dPairsError(f"{pins_out}: pins サイドカーが存在しない (fail-closed; --check-only)")
 
-    manifest_doc = _yaml_load_no_dup_keys(manifest_out.read_bytes())
-    pairs = harness._validate_manifest(manifest_doc)
-    pins_doc = json.loads(pins_out.read_text(encoding="utf-8"))
-    audio_sha256 = pins_doc.get("audio_sha256", {})
+    pins_doc = _load_and_validate_pins(pins_out)
+
+    manifest_bytes = manifest_out.read_bytes()
+    actual_manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    expected_manifest_sha = pins_doc["manifest_sha256"]
 
     problems: List[str] = []
+    if actual_manifest_sha != expected_manifest_sha:
+        problems.append(
+            f"{manifest_out}: manifest sha256 mismatch "
+            f"(actual={actual_manifest_sha} expected={expected_manifest_sha})"
+        )
+
+    manifest_doc = _yaml_load_no_dup_keys(manifest_bytes)
+    pairs = harness._validate_manifest(manifest_doc)
+    audio_sha256 = pins_doc.get("audio_sha256", {})
     for rel_path in all_audio_paths(pairs):
         abs_path = ROOT / rel_path
         expected = audio_sha256.get(rel_path)
@@ -568,27 +736,33 @@ def run_build(
     *,
     vocadito_dir: Path,
     out_dir: Path,
-    manifest_out: Path,
-    pins_out: Path,
+    staging_wav_dir: Path,
     fixtures_path: Path,
     synth_specs_path: Path,
-) -> List[Dict[str, str]]:
-    """pin 照合 → 選定 → 生成 → manifest 組み立てまでを行う（書き込みは manifest/
-    pins サイドカーのみ、呼び出し側が atomic に書く）。
+) -> Tuple[List[Dict[str, str]], Dict[str, Path]]:
+    """pin 照合 → 選定 → 生成（`staging_wav_dir` への物理書き込み）→ manifest
+    組み立てまでを行う。書き込みは `staging_wav_dir` 配下のみ（`out_dir` 自体へは
+    一切書き込まない — R3 対応: 最終公開は呼び出し側の `_publish_staged_bundle`
+    が全検証成功後に一括で行う）。
+
+    戻り値: `(pairs, audio_source_lookup)`。`audio_source_lookup` は
+    manifest に記録される repo-relative パス文字列 → 実バイトを読める絶対 Path
+    （生成物は staging 側、vocadito 原音は既存の入力そのもの）の対応表——pins
+    サイドカーの sha256 計算がまだ publish 前の staging から読めるようにする。
     """
     fixtures = load_m2c_fixtures(fixtures_path)
     resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
 
     tuning_ids, holdout_ids = select_clips(fixtures)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    staging_wav_dir.mkdir(parents=True, exist_ok=True)
     vocadito_variants = generate_vocadito_variants(
-        tuning_ids + holdout_ids, resolved_audio, out_dir
+        tuning_ids + holdout_ids, resolved_audio, out_dir, staging_wav_dir
     )
 
     specs = bmb.load_specs(synth_specs_path)
-    synth_positive = generate_synth_positive(specs, out_dir)
-    synth_negative = generate_synth_negatives(specs, out_dir)
+    synth_positive = generate_synth_positive(specs, out_dir, staging_wav_dir)
+    synth_negative = generate_synth_negatives(specs, out_dir, staging_wav_dir)
 
     pairs = build_pairs(
         tuning_ids=tuning_ids,
@@ -603,39 +777,96 @@ def run_build(
     # 二重チェック——スキーマの権威は常にハーネス側のコード）。
     manifest_doc = {"schema": _MANIFEST_SCHEMA, "pairs": pairs}
     harness._validate_manifest(manifest_doc)
-    return pairs
+
+    audio_source_lookup: Dict[str, Path] = {}
+    for clip_id, path in resolved_audio.items():
+        audio_source_lookup[_repo_rel(path)] = path
+    for clip_id, variants in vocadito_variants.items():
+        for variant_key, final_path in variants.items():
+            audio_source_lookup[_repo_rel(final_path)] = staging_wav_dir / final_path.name
+    for base_id, (base_path, variant_paths) in synth_positive.items():
+        audio_source_lookup[_repo_rel(base_path)] = staging_wav_dir / base_path.name
+        for variant_key, variant_path in variant_paths.items():
+            audio_source_lookup[_repo_rel(variant_path)] = staging_wav_dir / variant_path.name
+    for fixture_id, path in synth_negative.items():
+        audio_source_lookup[_repo_rel(path)] = staging_wav_dir / path.name
+
+    return pairs, audio_source_lookup
 
 
-def write_outputs(
-    pairs: List[Dict[str, str]],
+def run_and_publish(
     *,
+    vocadito_dir: Path,
+    out_dir: Path,
     manifest_out: Path,
     pins_out: Path,
     fixtures_path: Path,
-) -> None:
-    manifest_doc = {"schema": _MANIFEST_SCHEMA, "pairs": pairs}
-    manifest_yaml = yaml.safe_dump(manifest_doc, sort_keys=False, allow_unicode=True)
-    _atomic_write_bytes(manifest_out, manifest_yaml.encode("utf-8"))
+    synth_specs_path: Path,
+) -> Dict[str, Any]:
+    """`run_build` を staging ディレクトリ（`out_dir` と同一ファイルシステム上）
+    で走らせ、manifest + pins サイドカーを組み立てて全検証成功後に
+    `_publish_staged_bundle` で一括公開する（R3 対応）。
 
-    audio_sha256: Dict[str, str] = {}
-    material: Dict[str, str] = {}
-    for pair in pairs:
-        for key in ("audio_a", "audio_b"):
-            rel = pair[key]
-            if rel not in audio_sha256:
-                audio_sha256[rel] = file_sha256(ROOT / rel, use_cache=False)
-                material[rel] = _material_of(pair["pair_id"])
-    pins_doc = {
-        "schema": _PINS_SCHEMA,
-        "generated_utc": _utc_now(),
-        "m2c_external_fixtures_sha256": file_sha256(fixtures_path, use_cache=False),
-        "manifest_sha256": hashlib.sha256(manifest_yaml.encode("utf-8")).hexdigest(),
-        "audio_sha256": dict(sorted(audio_sha256.items())),
-        "material": dict(sorted(material.items())),
-    }
-    _atomic_write_bytes(
-        pins_out, json.dumps(pins_doc, indent=2, sort_keys=True).encode("utf-8")
+    途中で例外が飛んだ場合、staging ディレクトリを破棄するのみで既存の
+    公開済みセット（`out_dir` の WAV 一式・`manifest_out`・`pins_out`）には
+    一切触れない——初回ビルドだけでなく **再ビルド時** にも「部分出力なし」の
+    保証を拡張する。
+    """
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(
+        tempfile.mkdtemp(prefix=f".{out_dir.name}.staging_", dir=str(out_dir.parent))
     )
+    try:
+        staging_wav_dir = staging_root / "wav"
+        pairs, audio_source_lookup = run_build(
+            vocadito_dir=vocadito_dir,
+            out_dir=out_dir,
+            staging_wav_dir=staging_wav_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=synth_specs_path,
+        )
+
+        manifest_doc = {"schema": _MANIFEST_SCHEMA, "pairs": pairs}
+        manifest_yaml = yaml.safe_dump(manifest_doc, sort_keys=False, allow_unicode=True).encode(
+            "utf-8"
+        )
+        staged_manifest = staging_root / "manifest.yaml"
+        _atomic_write_bytes(staged_manifest, manifest_yaml)
+
+        audio_sha256: Dict[str, str] = {}
+        material: Dict[str, str] = {}
+        for pair in pairs:
+            for key in ("audio_a", "audio_b"):
+                rel = pair[key]
+                if rel not in audio_sha256:
+                    src = audio_source_lookup[rel]
+                    audio_sha256[rel] = file_sha256(src, use_cache=False)
+                    material[rel] = _material_of(pair["pair_id"])
+
+        pins_doc = {
+            "schema": _PINS_SCHEMA,
+            "generated_utc": _utc_now(),
+            "m2c_external_fixtures_sha256": file_sha256(fixtures_path, use_cache=False),
+            "manifest_sha256": hashlib.sha256(manifest_yaml).hexdigest(),
+            "audio_sha256": dict(sorted(audio_sha256.items())),
+            "material": dict(sorted(material.items())),
+        }
+        staged_pins = staging_root / "pins.json"
+        _atomic_write_bytes(
+            staged_pins, json.dumps(pins_doc, indent=2, sort_keys=True).encode("utf-8")
+        )
+
+        entries: List[Tuple[Path, Path]] = [
+            (wav_path, out_dir / wav_path.name)
+            for wav_path in sorted(staging_wav_dir.glob("*.wav"))
+        ]
+        entries.append((staged_manifest, manifest_out))
+        entries.append((staged_pins, pins_out))
+
+        _publish_staged_bundle(entries)
+        return crosstab(pairs)
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
 
 
 def main() -> int:
@@ -669,7 +900,7 @@ def main() -> int:
             )
             print(f"--check-only: OK ({summary['total']} pairs, sha256 全一致)")
         else:
-            pairs = run_build(
+            summary = run_and_publish(
                 vocadito_dir=args.vocadito_dir,
                 out_dir=args.out_dir,
                 manifest_out=args.manifest_out,
@@ -677,13 +908,6 @@ def main() -> int:
                 fixtures_path=args.fixtures,
                 synth_specs_path=args.synth_specs,
             )
-            write_outputs(
-                pairs,
-                manifest_out=args.manifest_out,
-                pins_out=args.pins_out,
-                fixtures_path=args.fixtures,
-            )
-            summary = crosstab(pairs)
             print(f"wrote {summary['total']} pairs to {args.manifest_out}")
             print(f"wrote pins sidecar to {args.pins_out}")
     except BuildM3dPairsError as exc:

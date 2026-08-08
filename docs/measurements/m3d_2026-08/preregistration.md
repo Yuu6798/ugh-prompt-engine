@@ -3,9 +3,10 @@
 **日付:** 2026-08-07
 **正本:** docs/DESIGN_M3_melody_comparator.md §6（本書は §6 の実行パラメータ具体化のみ。§6 と矛盾したら §6 が勝つ）
 **状態:** ハーネス/レジストリ/テストは #233 でマージ済み。残 = 実測のみ。
-**順序証明:** 本書 + `tests/fixtures/melody_bench/m3d_pairs_manifest.yaml`（98 対）の commit が
-実測開始前の事前登録点。tuning run → evaluate → 凍結 commit → holdout run の順序は
-git 履歴とハーネスの holdout ロック（凍結前は holdout 行をスタブ化し音声を読まない）で証明する。
+**順序証明:** 本書 + `tests/fixtures/melody_bench/m3d_pairs_manifest.yaml`（98 対、
+単一 manifest）の commit が実測開始前の事前登録点。tuning run → evaluate → 凍結
+commit → holdout run の順序は git 履歴とハーネスの holdout ロック（凍結前は
+holdout 行をスタブ化し音声を読まない）で証明する。
 
 **実装時に確定した事項（実測開始前・本 commit 時点）:**
 - 規模は §1.1 のフル規模（4 変形/clip）を採用。縮約規則は不使用（変形範囲 ±2..5 半音 /
@@ -16,6 +17,31 @@ git 履歴とハーネスの holdout ロック（凍結前は holdout 行をス�
 - 変形 WAV の書き出しは PCM_24 subtype（FLOAT subtype は libsndfile が PEAK chunk に
   壁時計を埋めるためバイト決定論が壊れる — 実測で発見。librosa 変形自体は bit 決定論）
 - 狙い撃ち negative（rhythm/interval）は spec 直記述の fixture 対（`m3d_synth_specs.yaml`）
+- **manifest は単一ファイルのまま維持する**（Codex レビュー R2 対応・設計判定）:
+  当初は real_voice/synthetic への 2 ファイル分割を検討したが、
+  `run_melody_comparison._validate_manifest_composition`（tuning に狙い撃ち
+  negative 必須・holdout に negative 必須、等）は単一 98 対 manifest を前提にした
+  素材構成契約であり、分割後の real-only/synth-only manifest はいずれも単体では
+  このローダを通らないことが実装検証で判明した（real-only は狙い撃ち negative が
+  synth 専用のため tuning 狙い撃ち negative 0 件、synth-only は negative_cross を
+  持たないため holdout negative 0 件）。ハーネスの構成契約を変えずに R2（Codex
+  指摘: 全 positive 単一バケット・synth の not_comparable が real 由来の凍結提案
+  まで巻き込む問題）へ対応するため、**素材別会計は `run_melody_comparison.py` の
+  evaluate phase 側**（`_partition_pairs_by_material` / `material_accounting`）
+  で行う——manifest は単一のまま、pair_id の `_real_`/`_synth_` マーカーで
+  evaluator が real_voice（校正の唯一の入力）/ synthetic（診断専用。
+  not_comparable は not_measured として正直会計するのみで凍結可否/holdout 判定に
+  一切影響しない）を読み分ける。§1.3/§2 の別会計はこの機構で機械強制される
+- sidecar（`build/external_m3d/m3d_pairs_pins.json`、非コミット）に manifest の
+  sha256 を記録し、`--check-only` がスキーマ検証 + digest 照合（manifest 1 件 +
+  全 WAV pin）を fail-closed で行う（Codex レビュー R1 対応。従来は sha256 を
+  記録するのみで再照合していなかった）。限界の明記: 本 sidecar はビルド生成物で
+  あり、順序証明の最終根拠は git 履歴 + ハーネスの holdout ロックのまま——本照合は
+  事故的ドリフトを fail-closed 化する計器である
+- 生成物一式（変形 WAV・manifest・pins sidecar）は staging ディレクトリ（out_dir
+  と同一ファイルシステム上）へ全生成 → 全検証成功後に一括 atomic publish する
+  （Codex レビュー R3 対応）。途中失敗時は既存の公開済みセットを無傷で残す保証を
+  「再ビルド時」にも拡張した
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 
