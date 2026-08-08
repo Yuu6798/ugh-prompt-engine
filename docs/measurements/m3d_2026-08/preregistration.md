@@ -237,6 +237,31 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   を用意する設計）は、`_publish_staged_bundle` の単一 staging 前提を複雑化
   させるだけで事前登録の実運用（固定パス構成）には見合わないため不採用とし、
   生成開始前の早期 fail-closed 拒否のみを採用した。
+- **（Codex レビュー第 11 ラウンド追補・M1）** J2（第 8 ラウンド）の
+  `--pins` 保護は run 経路のみで、`--evaluate` 分岐は report 記録の
+  `pins_path`（と evaluate 時併用の明示 `--pins`）を保護集合に入れておらず、
+  `--evaluate --out <記録済み pins_path>` が検証成功後に sidecar を verdict
+  で上書きし、`--check-only` と後続 holdout run を破壊しうる穴があった。
+  evaluate 分岐で reports を衝突 preflight より**先に**ロードし、全 report
+  の記録 `pins_path`（resolve() 済み）+ 明示 `--pins`（指定時）を `--out` の
+  保護集合へ編入するよう訂正した。
+- **（Codex レビュー第 11 ラウンド追補・M2）** `_material_of`/
+  `_material_of_pair_id`（builder/harness 両複製）は、`_real_`/`_synth_`
+  **両方**のマーカーを含む pair_id（例: `pt_real_synth_x`）を、従来は
+  `_real_` を先に判定するため real_voice へ誤分類していた——synthetic 診断
+  対が real の margin/凍結計算へ混入し material 分割の趣旨を再汚染しうる
+  穴があった。「ちょうど 1 個」のマーカーを要求するよう両実装を訂正し
+  （両方含む id はゼロ個と同様 fail-closed）、commit 済み 98 対 manifest の
+  全 pair_id が単一マーカーであることの回帰テストも追加した。
+- **（Codex レビュー第 11 ラウンド追補・M3）** pins sidecar の JSON parse
+  （harness の pins preflight・builder の `--check-only` 双方）は素の
+  `json.loads` を使っており、重複した `manifest_sha256`/`audio_sha256`/
+  `material` キーが last-wins で無警告に通っていた——矛盾した provenance が
+  両方の検証を通過しうる穴があった。`object_pairs_hook` による重複キー拒否
+  （G1 の YAML 側 `_yaml_load_no_dup_keys` と同思想。全ネスト層に再帰適用）
+  を両ローダへ適用した。harness 側は既存の `_json_loads_no_dup_keys`
+  （`_load_report` が使用済み）をそのまま流用し、builder 側は同型のローダを
+  独立に複製した（builder はハーネスを import しない設計のため）。
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 

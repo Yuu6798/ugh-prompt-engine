@@ -462,6 +462,15 @@ def _load_pins_sidecar_for_preflight(path: Path) -> "Tuple[Dict[str, Any], str]"
     したのに、report には第 2 の文書の digest を記録する」というすり替えが
     起こり得た。単一読みに統合することで、検証と記録が常に同一バイト列に
     基づくことを構造的に保証する。
+
+    レビュー対応 第 11 ラウンド（M3・重複キー拒否）: JSON parse には素の
+    `json.loads` ではなく、本モジュールが `_load_report`（run report）で既に
+    使っている `_json_loads_no_dup_keys`（`object_pairs_hook` で全ネスト層の
+    重複 object key を fail-closed 拒否）を流用する——素の `json.loads` は
+    重複キーで最後の値を黙って採用するため、`manifest_sha256`/`audio_sha256`/
+    `material` が重複記録されると矛盾した provenance が preflight を無警告で
+    通過しうる穴があった（builder 側 `_load_and_validate_pins` の同種修正と
+    対）。
     """
     try:
         raw_bytes = Path(path).read_bytes()
@@ -469,7 +478,7 @@ def _load_pins_sidecar_for_preflight(path: Path) -> "Tuple[Dict[str, Any], str]"
         raise ValueError(f"{path}: pins サイドカーの読み込みに失敗 (fail-closed): {exc}") from exc
     digest = hashlib.sha256(raw_bytes).hexdigest()
     try:
-        doc = json.loads(raw_bytes.decode("utf-8"))
+        doc = _json_loads_no_dup_keys(raw_bytes, what=f"{path}: pins サイドカー")
     except UnicodeDecodeError as exc:
         raise ValueError(f"{path}: pins サイドカーが UTF-8 でない (fail-closed): {exc}") from exc
     except json.JSONDecodeError as exc:
@@ -2191,12 +2200,25 @@ def _material_of_pair_id(pair_id: str) -> str:
     pair_id 命名が唯一の権威——`_real_`/`_synth_` 接頭辞つき pair_id を emit
     するのは builder のみで、本ハーネスはその契約を読者側で確認するだけ。
     builder はハーネスをインポートしない設計のため、判別ロジック自体は独立に
-    複製する）。未知マーカー（どちらの接頭辞も含まない pair_id）は material
-    別会計が成立しないため fail-closed（`ValueError`）で拒否する。
+    複製する）。「ちょうど 1 個」のマーカーを要求する——マーカーが 0 個
+    （未知マーカー）だけでなく、レビュー対応 第 11 ラウンド（M2）で
+    **両方**を含む pair_id（例: `pt_real_synth_x`）も fail-closed で拒否する
+    ようにした。従来はどちらか一方が含まれれば（`in` 判定・`_real_` を先に
+    判定）判別成立としており、両マーカー含有 id は順序判定で real_voice に
+    分類されてしまっていた——synthetic 診断対が real の margin/凍結計算へ
+    混入し、material 分割の趣旨（診断専用の synthetic を校正判定から隔離
+    する）を再汚染する穴があった。
     """
-    if "_real_" in pair_id:
+    has_real = "_real_" in pair_id
+    has_synth = "_synth_" in pair_id
+    if has_real and has_synth:
+        raise ValueError(
+            f"pair_id {pair_id!r} が _real_/_synth_ 両方のマーカーを含んでいる "
+            "(fail-closed; material 判別が一意に定まらない)"
+        )
+    if has_real:
         return _MATERIAL_REAL_VOICE
-    if "_synth_" in pair_id:
+    if has_synth:
         return _MATERIAL_SYNTHETIC
     raise ValueError(
         f"pair_id {pair_id!r} に material 判別用マーカー（_real_/_synth_）が"
@@ -3264,6 +3286,16 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.evaluate:
+        # レビュー対応 第 11 ラウンド（M1）: 衝突 preflight より先に reports を
+        # ロードする——各 report が記録する `pins_path`（run phase の pins
+        # preflight 強制化・第 7 ラウンド）を protected-path 集合へ編入する
+        # には、report の中身を読まなければ分からない。従来は reports の
+        # ロードが `--out` の衝突判定より**後**に置かれていたため、report
+        # 記録の pins_path（や evaluate 時併用の `--pins`）が保護対象から
+        # 漏れていた——`--evaluate --out <記録済み pins_path>` が検証成功後
+        # に sidecar を verdict で上書きし、`--check-only` と後続 holdout run
+        # を壊しうる穴があった。
+        reports = [_load_report(p) for p in args.evaluate]
         protected = {Path(p).resolve() for p in args.evaluate}
         protected.add(Path(args.registry).resolve())
         protected.add(Path(args.m1_registry).resolve())
@@ -3275,12 +3307,22 @@ def main() -> int:
         # にも含める（run phase の manifest と同様に上書きを禁止する）。
         if args.pairs:
             protected.add(Path(args.pairs).resolve())
+        # M1: 各 report が記録する `pins_path`（存在すれば）を保護対象に編入する。
+        for report in reports:
+            recorded_pins_path = report.get("pins_path")
+            if isinstance(recorded_pins_path, str) and recorded_pins_path:
+                protected.add(Path(recorded_pins_path).resolve())
+        # M1: evaluate 時に明示併用された `--pins` も同様に保護する（`--pins`
+        # は本来 run phase 用の引数だが、CLI 上は evaluate 分岐でも parse
+        # されるため、値が与えられていれば同じ規律で保護する）。
+        if args.pins is not None:
+            protected.add(Path(args.pins).resolve())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
-                f"--out {args.out} は評価入力（report / registry / --pairs manifest）と "
-                "同じパスを指している; 入力を verdict で上書きしない (fail-closed)"
+                f"--out {args.out} は評価入力（report / registry / --pairs manifest / "
+                "report 記録の pins sidecar / --pins）と同じパスを指している; 入力を "
+                "verdict で上書きしない (fail-closed)"
             )
-        reports = [_load_report(p) for p in args.evaluate]
         verdict = evaluate_comparison(
             reports,
             registry_path=args.registry,

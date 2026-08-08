@@ -465,6 +465,24 @@ def test_material_is_recoverable_from_pair_id(tmp_path: Path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# レビュー対応 第 11 ラウンド（M2）: 両マーカー含有 pair_id の拒否
+# --------------------------------------------------------------------------- #
+def test_material_of_rejects_pair_id_with_both_markers():
+    """`_material_of` は `_real_`/`_synth_` 両方のマーカーを含む pair_id を
+    fail-closed で拒否する（M2 対応）。従来はどちらか一方が含まれれば
+    （`_real_` を先に判定）判別成立としており、`pt_real_synth_x` のような id
+    が real_voice に分類されてしまっていた——synthetic 診断対が real の
+    margin/凍結計算へ混入する穴があった。
+    """
+    assert bm._material_of("pt_real_tuning_x") == "real_voice"
+    assert bm._material_of("pt_synth_tuning_x") == "synthetic"
+    with pytest.raises(bm.BuildM3dPairsError, match="両方のマーカーを含んでいる"):
+        bm._material_of("pt_real_synth_x")
+    with pytest.raises(bm.BuildM3dPairsError, match="判別できない"):
+        bm._material_of("pt_unknown_x")
+
+
+# --------------------------------------------------------------------------- #
 # R3: アトミック公開（staging → 一括 publish、失敗時ロールバック）
 # --------------------------------------------------------------------------- #
 def test_publish_staged_bundle_publishes_all_entries(tmp_path: Path):
@@ -1785,6 +1803,76 @@ def test_load_and_validate_pins_accepts_pins_without_summary_fields(tmp_path: Pa
     )
     doc = bm._load_and_validate_pins(pins_path)
     assert "summary_path" not in doc
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 11 ラウンド（M3）: pins sidecar の重複キー拒否
+# --------------------------------------------------------------------------- #
+def _valid_pins_doc_json_prefix() -> str:
+    return (
+        '{"schema": "' + bm._PINS_SCHEMA + '", '
+        '"generated_utc": "2026-01-01T00:00:00+00:00", '
+        '"m2c_external_fixtures_sha256": "' + "0" * 64 + '", '
+        '"m3d_synth_specs_sha256": "' + "0" * 64 + '", '
+    )
+
+
+def test_load_and_validate_pins_rejects_duplicate_top_level_key(tmp_path: Path):
+    """pins sidecar の JSON に重複したトップレベルキー（`manifest_sha256` を
+    2 回書く）があれば fail-closed で拒否する（M3 対応の主眼: 素の
+    `json.loads` は last-wins で通してしまう）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        _valid_pins_doc_json_prefix()
+        + '"manifest_sha256": "' + "1" * 64 + '", '
+        + '"manifest_sha256": "' + "2" * 64 + '", '
+        + '"audio_sha256": {}, "material": {}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(bm.BuildM3dPairsError, match="duplicate JSON object key"):
+        bm._load_and_validate_pins(pins_path)
+
+
+def test_load_and_validate_pins_rejects_duplicate_nested_key(tmp_path: Path):
+    """`material`（ネストした object）内の重複キーも同様に拒否する
+    （`object_pairs_hook` が全ネスト層に再帰適用されることの確認）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        _valid_pins_doc_json_prefix()
+        + '"manifest_sha256": "' + "1" * 64 + '", "audio_sha256": {}, '
+        + '"material": {"a.wav": "real_voice", "a.wav": "synthetic"}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(bm.BuildM3dPairsError, match="duplicate JSON object key"):
+        bm._load_and_validate_pins(pins_path)
+
+
+def test_load_and_validate_pins_accepts_clean_json_without_dup_keys(tmp_path: Path):
+    """重複キーの無い正常な pins sidecar は従来どおり読める（偽陽性を出さない
+    ことの確認）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        json.dumps(
+            {
+                "schema": bm._PINS_SCHEMA,
+                "generated_utc": "2026-01-01T00:00:00+00:00",
+                "m2c_external_fixtures_sha256": "0" * 64,
+                "m3d_synth_specs_sha256": "0" * 64,
+                "manifest_sha256": "1" * 64,
+                "audio_sha256": {"a.wav": "2" * 64},
+                "material": {"a.wav": "real_voice"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    doc = bm._load_and_validate_pins(pins_path)
+    assert doc["material"] == {"a.wav": "real_voice"}
 
 
 # --------------------------------------------------------------------------- #

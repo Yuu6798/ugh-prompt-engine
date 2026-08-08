@@ -370,6 +370,32 @@ def _yaml_load_no_dup_keys(data: bytes) -> Any:
     return yaml.load(data, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
 
 
+def _json_reject_dup_keys_pairs_hook(pairs: "List[Tuple[Any, Any]]") -> Dict[Any, Any]:
+    """`json.loads(..., object_pairs_hook=...)` 用: 重複 object key を
+    fail-closed で拒否する（G1 の YAML 側 `_yaml_load_no_dup_keys` と同思想。
+    レビュー対応 第 11 ラウンド・M3）。
+    """
+    result: Dict[Any, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise BuildM3dPairsError(f"duplicate JSON object key {key!r} (fail-closed)")
+        result[key] = value
+    return result
+
+
+def _json_loads_no_dup_keys(data: "str | bytes") -> Any:
+    """pins サイドカー（JSON）を重複 object key 拒否付きでパースする。
+
+    `scripts/run_melody_comparison.py` の `_json_loads_no_dup_keys`
+    （`_load_report` が使う、既存の重複キー拒否 JSON ローダ）と同一方式
+    （`object_pairs_hook`。全ネスト層の object に再帰適用される）——builder
+    はハーネスを import しない設計のため、読み取りロジック自体を本モジュール
+    内で独立に複製する（`_material_of`/`_material_of_pair_id` と同じパターン。
+    ハーネス側は harness 自身の `_json_loads_no_dup_keys` を流用済み）。
+    """
+    return json.loads(data, object_pairs_hook=_json_reject_dup_keys_pairs_hook)
+
+
 def _pair(
     pair_id: str, kind: str, split: str, audio_a: str, audio_b: str, expected: str
 ) -> Dict[str, str]:
@@ -930,9 +956,29 @@ def build_pairs(
 
 
 def _material_of(pair_id: str) -> str:
-    if "_real_" in pair_id:
+    """pair_id の命名規則（`_real_`/`_synth_` マーカー）から material を判別する。
+
+    レビュー対応 第 11 ラウンド（M2）: 「ちょうど 1 個」のマーカーを要求する
+    ——従来はどちらか一方が含まれれば（`in` 判定・先勝ち）判別成立としており、
+    `pt_real_synth_x` のような**両方**のマーカーを含む pair_id が
+    real_voice（`_real_` を先に判定するため）に分類されてしまっていた。両
+    マーカーを持つ pair_id は synthetic 診断対が real の会計へ混入する
+    （material 分割の趣旨を再汚染する）ため、ゼロ個と同様に fail-closed で
+    拒否する。builder 側が pair_id 命名の唯一の権威であり、この関数自体は
+    builder 内で完結する（`scripts/run_melody_comparison.py` の
+    `_material_of_pair_id` は本関数と同一規則を読者側で独立に複製している
+    ——builder はハーネスを import しない設計のため）。
+    """
+    has_real = "_real_" in pair_id
+    has_synth = "_synth_" in pair_id
+    if has_real and has_synth:
+        raise BuildM3dPairsError(
+            f"pair_id {pair_id!r} が _real_/_synth_ 両方のマーカーを含んでいる "
+            "(fail-closed; material 判別が一意に定まらない)"
+        )
+    if has_real:
         return "real_voice"
-    if "_synth_" in pair_id:
+    if has_synth:
         return "synthetic"
     raise BuildM3dPairsError(f"pair_id {pair_id!r} から material 区分を判別できない")
 
@@ -1093,15 +1139,22 @@ def _load_and_validate_pins(path: Path) -> Dict[str, Any]:
     ハーネスの holdout ロックのままである。本照合（`--check-only`）は
     「manifest/WAV がビルド後に事故的に改変されていないか」を fail-closed で
     検出する計器であって、順序証明そのものの代替ではない。
+
+    レビュー対応 第 11 ラウンド（M3・重複キー拒否）: JSON parse には素の
+    `json.loads` ではなく `_json_loads_no_dup_keys`（`object_pairs_hook` で
+    全ネスト層の重複 object key を fail-closed 拒否）を使う——素の
+    `json.loads` は重複キーで最後の値を黙って採用するため、`manifest_
+    sha256`/`audio_sha256`/`material` 等が重複記録されると矛盾した
+    provenance が `--check-only` を無警告で通過しうる穴があった。
     """
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
     except OSError as exc:
         raise BuildM3dPairsError(
             f"{path}: pins サイドカーの読み込みに失敗 (fail-closed): {exc}"
         ) from exc
     try:
-        doc = json.loads(raw)
+        doc = _json_loads_no_dup_keys(raw)
     except json.JSONDecodeError as exc:
         raise BuildM3dPairsError(
             f"{path}: pins サイドカーの JSON parse に失敗 (fail-closed): {exc}"

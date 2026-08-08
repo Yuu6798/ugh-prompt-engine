@@ -1515,6 +1515,119 @@ def test_out_cannot_overwrite_evaluate_input(tmp_path: Path, monkeypatch, audio_
 
 
 # --------------------------------------------------------------------------- #
+# レビュー対応 第 11 ラウンド（M1）: evaluate 経路での pins 保護
+# --------------------------------------------------------------------------- #
+def test_evaluate_out_cannot_overwrite_reported_pins_path(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--evaluate --out <report 記録の pins_path>` は、reports をロードして
+    記録 `pins_path` を保護集合へ編入することで、書込前に fail-closed で
+    拒否する（M1 対応の主眼）。従来は `--out` の保護集合が evaluate 入力
+    （report/registry/--pairs）のみで、report 記録の pins_path が漏れていた
+    ——検証成功後に sidecar が verdict で上書き破壊され、`--check-only` と
+    後続 holdout run を壊しうる穴があった。拒否時は reports・sidecar とも
+    無傷であることを確認する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+    )
+    assert report["pins_path"] == str(pins_path.resolve())
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    pins_before = pins_path.read_bytes()
+    report_before = report_path.read_bytes()
+
+    argv = [
+        "run_melody_comparison.py",
+        "--evaluate",
+        str(report_path),
+        "--out",
+        str(pins_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+    assert pins_path.read_bytes() == pins_before
+    assert report_path.read_bytes() == report_before
+
+
+def test_evaluate_out_cannot_overwrite_explicit_pins_argument(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--evaluate` 時に明示併用された `--pins` も同様に保護対象へ編入する
+    （report 自体が pins_path を記録していないケース。M1 対応）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    assert "pins_path" not in report
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text("{}", encoding="utf-8")
+    pins_before = pins_path.read_bytes()
+
+    argv = [
+        "run_melody_comparison.py",
+        "--evaluate",
+        str(report_path),
+        "--pins",
+        str(pins_path),
+        "--out",
+        str(pins_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+    assert pins_path.read_bytes() == pins_before
+
+
+def test_evaluate_out_may_differ_from_pins_path(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--out` が報告済み pins_path と異なるパスであれば、evaluate は従来
+    どおり完走する（偽陽性を出さないことの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+        reports.append(report)
+    report_paths = []
+    for idx, report in enumerate(reports):
+        p = tmp_path / f"report{idx}.json"
+        p.write_text(json.dumps(report), encoding="utf-8")
+        report_paths.append(p)
+    out_path = tmp_path / "verdict.json"
+
+    argv = [
+        "run_melody_comparison.py",
+        "--evaluate",
+        *[str(p) for p in report_paths],
+        "--out",
+        str(out_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert harness.main() == 0
+    assert out_path.exists()
+
+
+# --------------------------------------------------------------------------- #
 # manifest 検証（fail-closed）
 # --------------------------------------------------------------------------- #
 def test_manifest_rejects_unknown_schema(tmp_path: Path, audio_paths: Dict[str, str]):
@@ -4093,15 +4206,78 @@ def test_validate_pair_id_material_markers_rejects_unmarked_pair_id_directly():
         harness._validate_pair_id_material_markers(reports)
 
 
+def test_validate_pair_id_material_markers_rejects_both_markers_directly():
+    """`_validate_pair_id_material_markers` は両マーカー含有 pair_id も
+    fail-closed で拒否する（レビュー対応 第 11 ラウンド・M2）。
+    """
+    reports = [{"pairs": {"pt_real_synth_x": {"split": "tuning"}}}]
+
+    with pytest.raises(ValueError, match="両方のマーカーを含んでいる"):
+        harness._validate_pair_id_material_markers(reports)
+
+
+def test_run_comparison_rejects_pair_id_with_both_material_markers_before_route_runner_call(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """pair_id が `_real_`/`_synth_` **両方**のマーカーを含む manifest は、
+    run phase（`run_comparison` → `_validate_manifest`）で fail-closed 拒否
+    する——高価な抽出処理（route_runner 呼び出し）に一切到達しない（M2 対応。
+    従来はどちらか一方が含まれれば判別成立としており（`_real_` を先に判定）、
+    `pt_real_synth_x` のような両マーカー含有 id が real_voice に分類されて
+    しまっていた——synthetic 診断対が real の margin/凍結計算へ混入する穴が
+    あった）。
+    """
+    pairs = _default_pairs(audio_paths)
+    pairs[0] = dict(pairs[0], pair_id="pt_real_synth_x")
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, pairs)
+
+    call_count = {"n": 0}
+    real_runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    def _counting_runner(audio_path: str) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+        call_count["n"] += 1
+        return real_runner(audio_path)
+
+    with pytest.raises(ValueError, match="両方のマーカーを含んでいる"):
+        harness.run_comparison(manifest_path=manifest_path, route_runner=_counting_runner)
+
+    assert call_count["n"] == 0
+
+
+def test_committed_m3d_pairs_manifest_all_pair_ids_have_exactly_one_material_marker():
+    """実測用に commit 済みの `m3d_pairs_manifest.yaml`（98 対）の全 pair_id が
+    `_real_`/`_synth_` のちょうど 1 個のマーカーを持つことを確認する
+    （M2 対応: 将来 builder の命名規則が変わって両マーカー含有 id を emit
+    するようになった場合の防波堤。builder 自身は本ハーネスを import しない
+    ため、生成物である commit 済み manifest 側から独立に検証する）。
+    """
+    manifest_path = ROOT / "tests" / "fixtures" / "melody_bench" / "m3d_pairs_manifest.yaml"
+    manifest_doc = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    pair_ids = [pair["pair_id"] for pair in manifest_doc["pairs"]]
+    assert len(pair_ids) == 98
+
+    both_markers = [pid for pid in pair_ids if "_real_" in pid and "_synth_" in pid]
+    assert both_markers == []
+    neither_marker = [pid for pid in pair_ids if "_real_" not in pid and "_synth_" not in pid]
+    assert neither_marker == []
+    # 全件が判別可能であることも直接確認する（fail-closed で例外が飛ばない）。
+    for pair_id in pair_ids:
+        harness._material_of_pair_id(pair_id)
+
+
 def test_material_of_pair_id_and_partition_are_fail_closed_and_consistent():
     """`_material_of_pair_id`/`_partition_pairs_by_material` の単体契約: 既知
-    マーカーの判別・未知マーカーの fail-closed・分割の完全性（元 dict の
-    キー集合 = real ∪ synth、重複なし）を確認する。
+    マーカーの判別・未知マーカーの fail-closed・両マーカー含有の fail-closed
+    （M2 対応）・分割の完全性（元 dict のキー集合 = real ∪ synth、重複なし）
+    を確認する。
     """
     assert harness._material_of_pair_id("pt_real_tuning_x") == "real_voice"
     assert harness._material_of_pair_id("pt_synth_tuning_x") == "synthetic"
     with pytest.raises(ValueError, match="material"):
         harness._material_of_pair_id("pt_unknown_tuning_x")
+    with pytest.raises(ValueError, match="両方のマーカーを含んでいる"):
+        harness._material_of_pair_id("pt_real_synth_x")
 
     pairs = {
         "a_real_1": {"split": "tuning"},
@@ -4585,6 +4761,61 @@ def test_load_pins_sidecar_for_preflight_reads_file_exactly_once(
     assert call_count["n"] == 1
     assert digest == expected_digest
     assert doc["schema"] == "m3d-pairs-pins/0.3"
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 11 ラウンド（M3）: pins sidecar の重複キー拒否
+# --------------------------------------------------------------------------- #
+def test_load_pins_sidecar_for_preflight_rejects_duplicate_top_level_key(tmp_path: Path):
+    """pins sidecar の JSON に重複したトップレベルキー（`manifest_sha256` を
+    2 回書く）があれば fail-closed で拒否する（M3 対応の主眼: 素の
+    `json.loads` は last-wins で通してしまう）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        '{"schema": "m3d-pairs-pins/0.3", "manifest_sha256": "' + "0" * 64 + '", '
+        '"manifest_sha256": "' + "1" * 64 + '", "audio_sha256": {}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness._load_pins_sidecar_for_preflight(pins_path)
+
+
+def test_load_pins_sidecar_for_preflight_rejects_duplicate_nested_key(tmp_path: Path):
+    """`audio_sha256`（ネストした object）内の重複キーも同様に拒否する
+    （`object_pairs_hook` が全ネスト層に再帰適用されることの確認）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        '{"schema": "m3d-pairs-pins/0.3", "manifest_sha256": "' + "0" * 64 + '", '
+        '"audio_sha256": {"a.wav": "' + "0" * 64 + '", "a.wav": "' + "1" * 64 + '"}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness._load_pins_sidecar_for_preflight(pins_path)
+
+
+def test_load_pins_sidecar_for_preflight_accepts_clean_json_without_dup_keys(tmp_path: Path):
+    """重複キーの無い正常な pins sidecar は従来どおり読める（偽陽性を出さない
+    ことの確認）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        json.dumps(
+            {
+                "schema": "m3d-pairs-pins/0.3",
+                "manifest_sha256": "0" * 64,
+                "audio_sha256": {"a.wav": "1" * 64},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    doc, digest = harness._load_pins_sidecar_for_preflight(pins_path)
+    assert doc["audio_sha256"] == {"a.wav": "1" * 64}
+    assert digest == hashlib.sha256(pins_path.read_bytes()).hexdigest()
 
 
 def test_run_pins_preflight_pins_sha256_reflects_single_read_not_replaced_copy(
