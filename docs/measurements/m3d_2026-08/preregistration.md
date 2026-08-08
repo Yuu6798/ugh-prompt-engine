@@ -59,6 +59,28 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   per-row 診断テーブルを追加した。holdout ロック中（凍結前）は evidence に一切
   触れず `locked_skipped` として列挙するのみで、既存の holdout ロック規律を
   厳守する。calibration verdict への影響はゼロ（診断専用）
+- **（Codex レビュー第 3 ラウンド追補）** vocadito 音声読込経路（`librosa.load`）
+  は無改造のまま、staging が完成し公開を開始する直前に全 vocadito 入力 WAV を
+  再度 `verify_vocadito_pins` で pin 照合する（T2 対応）。**境界宣言の撤回**:
+  第 2 ラウンド時点では「pin 照合〜`librosa.load` 読込の窓でファイルが差し
+  替えられた場合、未承認バイト由来の変形 WAV が公開されうる」ことを対応範囲外
+  の残存懸念として記録していたが、本工程により実質解消した——読込経路自体は
+  変わらないため生成は起こり得るが、1 件でも不一致なら公開自体を fail-closed
+  で中止する（既公開セットは無傷）
+- fixtures（`m2c_external_fixtures.yaml`）ロード直後に全 clip_id を、
+  `m3d_synth_specs.yaml` ロード直後に全 fixture id を、それぞれ許可文字集合
+  （英数字・アンダースコア・ハイフンのみ）で字句検証する（T3 対応）。パス
+  区切り・`..`・絶対パスはこの集合の外にあるため機械的に拒否される。SYNTH_*
+  module 定数にもインポート時に同じ検証を適用し、加えて生成先ファイルパスを
+  実際に構築する箇所でも resolve() 後のパスが staging dir/out_dir 配下に
+  内包されることを確認する多層防御を追加した
+- `run_melody_comparison.py` の manifest ロード検証（`_validate_manifest`。
+  run phase）に、material 判別マーカー（`_real_`/`_synth_`）を持たない
+  pair_id の manifest を拒否する検査を前倒しした（T1 対応）——従来は
+  evaluate phase でのみ検査しており、マーカー無し manifest でも高価な抽出
+  run が最後まで走ってしまっていた。後方互換でマーカー無しを許容する道は
+  採らない（別会計の fail-closed 規律を崩すため）。evaluate phase 側の検査は
+  defense-in-depth として残す
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 

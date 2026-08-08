@@ -4024,29 +4024,50 @@ def test_evaluate_material_accounting_reports_synthetic_diagnostic_section(
     assert "診断" in accounting["synthetic"]["note"]
 
 
-def test_evaluate_rejects_pair_id_without_material_marker(
+def test_run_comparison_rejects_pair_id_without_material_marker_before_route_runner_call(
     tmp_path: Path, audio_paths: Dict[str, str]
 ):
     """pair_id に `_real_`/`_synth_` のいずれのマーカーも含まれない manifest は、
-    margin/holdout 集計へ進む前に fail-closed で拒否する（R2 対応・material
-    別会計の前提）。manifest 自体にマーカーなし pair_id を使う——report だけを
-    書き換えると manifest 束縛検証（pair_id 完全集合の一致）が先に fail する
-    ため、材料判別チェックそのものを踏ませるには manifest から一貫させる必要が
-    ある。
+    run phase（`run_comparison` → `_validate_manifest`）で fail-closed 拒否
+    する——高価な抽出処理（route_runner 呼び出し）に一切到達しない（R2R T1
+    対応・Codex レビュー第 3 ラウンド。前段の R2 では evaluate phase でのみ
+    拒否していたが、run phase 前倒しにより「不正な manifest で無駄な run を
+    回してから evaluate で初めて気付く」を防ぐ。後方互換でマーカー無しを
+    許容する道は採らない設計判定）。
     """
     pairs = _default_pairs(audio_paths)
     pairs[0] = dict(pairs[0], pair_id="p_pos_tuning_no_marker")
     manifest_path = tmp_path / "pairs.yaml"
     _write_manifest(manifest_path, pairs)
-    runner = _fake_route_runner(_notes_by_path(audio_paths))
-    reports: List[Dict[str, Any]] = []
-    for _ in range(2):
-        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
-        reports.append(report)
+
+    call_count = {"n": 0}
+    real_runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    def _counting_runner(audio_path: str) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+        call_count["n"] += 1
+        return real_runner(audio_path)
 
     with pytest.raises(ValueError, match="material"):
-        harness.evaluate_comparison(reports)
+        harness.run_comparison(manifest_path=manifest_path, route_runner=_counting_runner)
+
+    # route_runner（音声処理・crepe 呼び出しに相当する経路）に一切到達して
+    # いないことを確認する——run phase の manifest 検証段階で拒否されたことの
+    # 直接証拠。
+    assert call_count["n"] == 0
+
+
+def test_validate_pair_id_material_markers_rejects_unmarked_pair_id_directly():
+    """`_validate_pair_id_material_markers`（evaluate phase の
+    defense-in-depth）単体の契約: report の pairs dict に material マーカー
+    無し pair_id があれば fail-closed で拒否する。R2R T1 対応で run phase
+    （`_validate_manifest`）に前倒しした後も、evaluate phase 側のこの関数は
+    独立した防御として引き続き機能する（manifest 経由を迂回して report を
+    直接構築しても拒否できることを確認する）。
+    """
+    reports = [{"pairs": {"p_no_marker": {"split": "tuning"}}}]
+
+    with pytest.raises(ValueError, match="material"):
+        harness._validate_pair_id_material_markers(reports)
 
 
 def test_material_of_pair_id_and_partition_are_fail_closed_and_consistent():

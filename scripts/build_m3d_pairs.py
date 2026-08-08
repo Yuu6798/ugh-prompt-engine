@@ -72,6 +72,30 @@ pin の一致検証を fail-closed で行う。限界の明記: sidecar は非�
   ループが例外なく完走したら、退避しておいた `.prev` snapshot を全て削除する
   （rollback 経路の挙動は不変更）。
 
+**Codex レビュー第 3 ラウンド対応**:
+
+- **T2（vocadito バイトの公開直前再照合・境界宣言の更新）**: 音声読込経路
+  （`librosa.load`）は無改造のまま、staging が完成し（＝以後 librosa 等の
+  読込を一切行わない状態）公開を開始する直前に、全 vocadito 入力 WAV を
+  `verify_vocadito_pins` で再度 pin と照合する（`run_and_publish`）。
+  第 2 ラウンド時点では「pin 照合〜`librosa.load` 読込の窓でファイルが
+  差し替えられた場合、未承認バイト由来の変形 WAV が公開されうる」ことを
+  対応範囲外の残存懸念として記録していたが、本対応でその境界宣言を撤回
+  する——読込経路自体は変えないため生成は起こり得るが、**公開はされない**
+  （1 件でも不一致なら fail-closed で公開を中止し、staging を破棄・既公開
+  セットを無傷のまま残す）。
+- **T3（clip ID / fixture ID の path traversal 拒否）**: fixtures
+  （`m2c_external_fixtures.yaml`）ロード直後に全 clip_id を、
+  `m3d_synth_specs.yaml` ロード直後に全 fixture id を、それぞれ字句検証する
+  （`_validate_id_lexical`。許可文字集合: 英数字・アンダースコア・ハイフンの
+  み——実在の vocadito clip_id 全 40 件で確認済み）。パス区切り・`..`・絶対
+  パスはこの許可文字集合の外にあるため機械的に拒否される。SYNTH_* 定数
+  （Python 側ハードコード id）にもモジュールインポート時に同じ検証を適用する。
+  加えて多層防御として、生成先ファイルパスを実際に構築する箇所
+  （`_write_wav_in_dir`/`_resolve_within`）でも resolve() 後のパスが
+  staging dir / out_dir 配下に内包されることを確認し、内包外は fail-closed
+  で拒否する。
+
 使い方::
 
     python scripts/build_m3d_pairs.py
@@ -85,6 +109,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -189,6 +214,81 @@ _REQUIRED_PINS_KEYS = {
 
 class BuildM3dPairsError(RuntimeError):
     """builder 固有の fail-closed エラー（vocadito pin 不一致・check-only 不整合など）。"""
+
+
+# --------------------------------------------------------------------------- #
+# T3（Codex レビュー第 3 ラウンド・path traversal 拒否）: id 字句検証 +
+# 生成先パスの内包検証（多層防御）
+# --------------------------------------------------------------------------- #
+# 許可文字集合: 英数字・アンダースコア・ハイフンのみ。実在の vocadito
+# clip_id 全 40 件（`vocadito_1`〜`vocadito_40`）と、m3d_synth_specs.yaml の
+# 全 fixture id（`m3d_synth_tuning_pos` 等）はいずれもこの集合に収まることを
+# 確認済み。パス区切り（`/`・`\\`）・`..`・絶対パス（先頭 `/` 等）・NUL は
+# いずれもこの許可文字集合の外にあるため、字句検証だけで機械的に拒否される。
+_ID_LEXICAL_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _validate_id_lexical(value: str, *, source: str) -> None:
+    """clip_id/fixture_id の字句検証（fail-closed。T3 対応）。
+
+    `out_dir`/staging ディレクトリ配下へファイル名の一部として直接埋め込む
+    前提の id（vocadito clip_id・synth fixture_id）に対する境界防御の第一層。
+    第二層は生成先ファイルパスを実際に構築する箇所での内包検証
+    （`_resolve_within`）——字句検証をすり抜けた場合の多層防御として独立に効く。
+    """
+    if not _ID_LEXICAL_PATTERN.fullmatch(value):
+        raise BuildM3dPairsError(
+            f"{source}: id {value!r} が許可文字集合（英数字・アンダースコア・"
+            "ハイフンのみ）に違反している (fail-closed; path traversal 疑い)"
+        )
+
+
+def _resolve_within(path: Path, *, container: Path, label: str) -> Path:
+    """`path` を resolve() し、`container` の resolve() 済みパス配下に内包
+    されていることを確認して返す（fail-closed。T3 対応・多層防御の第二層）。
+
+    clip_id/fixture_id の字句検証（`_validate_id_lexical`）は正当な id が
+    `container / filename` の形で決して `container` の外を指さないことを
+    構造的に保証するが、本関数は生成先ファイルパスを実際に構築する箇所でも
+    独立に内包を確認する——字句検証の穴（将来の実装変更・別経路からの id 混入
+    等）があってもここで検出できるようにする最後の砦。
+    """
+    resolved = path.resolve()
+    container_resolved = container.resolve()
+    try:
+        resolved.relative_to(container_resolved)
+    except ValueError:
+        raise BuildM3dPairsError(
+            f"{label}: 生成先パス {resolved} が想定ディレクトリ "
+            f"{container_resolved} の外を指している (fail-closed; path traversal 疑い)"
+        ) from None
+    return resolved
+
+
+def _write_wav_in_dir(container: Path, filename: str, y: np.ndarray, sample_rate: int) -> None:
+    """`container / filename` の内包を確認してから `_atomic_write_wav` で書く
+    （T3 対応。`_resolve_within` 参照）。
+    """
+    path = _resolve_within(container / filename, container=container, label=f"WAV 書き込み先 {filename!r}")
+    _atomic_write_wav(path, y, sample_rate)
+
+
+# SYNTH_* 定数（Python 側でハードコードされた id）にも m3d_synth_specs.yaml
+# 由来 id と同じ字句検証を適用する（T3 対応・モジュールインポート時に一度だけ
+# 検証。将来の定数編集で誤って traversal 可能な値が入っても import 時点で
+# 即座に検出できる）。
+_SYNTH_ID_CONSTANTS: Tuple[str, ...] = (
+    SYNTH_TUNING_POS_ID,
+    SYNTH_HOLDOUT_POS_ID,
+    *[
+        fixture_id
+        for pair in (SYNTH_NEGATIVE_RHYTHM_PAIRS + SYNTH_NEGATIVE_INTERVAL_PAIRS)
+        for fixture_id in pair
+    ],
+)
+for _synth_id in _SYNTH_ID_CONSTANTS:
+    _validate_id_lexical(_synth_id, source="SYNTH_* module constants")
+del _synth_id
 
 
 # --------------------------------------------------------------------------- #
@@ -307,6 +407,12 @@ def _read_bytes_and_sha256(path: "str | Path") -> Tuple[bytes, str]:
 def _parse_m2c_fixtures(data: bytes, *, source: "str | Path") -> Dict[str, str]:
     """`m2c_external_fixtures.yaml` の生バイト列をパースする（読み取り自体は
     呼び出し側が 1 回だけ行う——`_read_bytes_and_sha256` 参照）。
+
+    T3 対応（Codex レビュー第 3 ラウンド・path traversal 拒否）: 全 clip_id を
+    fixtures ロード直後に字句検証する（`_validate_id_lexical`）——この時点で
+    validated した clip_id が以降の `select_clips`/`verify_vocadito_pins`/
+    `generate_vocadito_variants`/`build_pairs` 全てで再利用される唯一の
+    authoritative な値のため、ロード時 1 箇所の検証で下流全てを守れる。
     """
     doc = _yaml_load_no_dup_keys(data)
     if not isinstance(doc, dict) or doc.get("schema_version") != "m2c-external-fixtures/0.1":
@@ -318,11 +424,13 @@ def _parse_m2c_fixtures(data: bytes, *, source: "str | Path") -> Dict[str, str]:
         raise BuildM3dPairsError(f"{source}: 'fixtures' が非空 mapping でない (fail-closed)")
     result: Dict[str, str] = {}
     for clip_id, entry in fixtures.items():
+        clip_id = str(clip_id)
+        _validate_id_lexical(clip_id, source=f"{source} fixtures key")
         if not isinstance(entry, dict) or "expected_audio_sha256" not in entry:
             raise BuildM3dPairsError(
                 f"{source}: fixtures[{clip_id!r}] に expected_audio_sha256 がない (fail-closed)"
             )
-        result[str(clip_id)] = str(entry["expected_audio_sha256"])
+        result[clip_id] = str(entry["expected_audio_sha256"])
     return result
 
 
@@ -344,9 +452,20 @@ def _load_synth_specs(path: Path) -> Tuple[Dict[str, Any], str]:
     あった）。同関数のパース処理自体は `yaml.safe_load` を素通しするだけで
     意味的な差異がないため、ここで同一バイト列に対して pin + `yaml.safe_load`
     を行うことで代替する（`build_melody_bench.py` 自体は無改造）。
+
+    T3 対応（Codex レビュー第 3 ラウンド・path traversal 拒否）: `specs
+    ["fixtures"]` の全キー（m3d_synth_specs.yaml 由来の fixture id）も同じ
+    字句検証を通す（`_validate_id_lexical`）。`SYNTH_TUNING_POS_ID` 等の
+    Python 定数側は本モジュールのインポート時に別途検証済み（下記
+    `_SYNTH_ID_CONSTANTS` 参照）——両方の id ソースを独立に検証する。
     """
     data, digest = _read_bytes_and_sha256(path)
-    return yaml.safe_load(data), digest
+    specs = yaml.safe_load(data)
+    fixtures = specs.get("fixtures") if isinstance(specs, dict) else None
+    if isinstance(fixtures, dict):
+        for fixture_id in fixtures:
+            _validate_id_lexical(str(fixture_id), source=f"{path} fixtures key")
+    return specs, digest
 
 
 def vocadito_audio_path(vocadito_dir: Path, clip_id: str) -> Path:
@@ -550,7 +669,8 @@ def generate_vocadito_variants(
         clip_variants: Dict[str, Path] = {}
         for variant_key in VOCADITO_VARIANT_ORDER:
             filename = _vocadito_variant_filename(clip_id, variant_key)
-            _atomic_write_wav(write_dir / filename, variants[variant_key], sr)
+            _write_wav_in_dir(write_dir, filename, variants[variant_key], sr)
+            _resolve_within(out_dir / filename, container=out_dir, label=f"out_dir 参照先 {filename!r}")
             clip_variants[variant_key] = out_dir / filename
         result[clip_id] = clip_variants
     return result
@@ -570,7 +690,10 @@ def generate_synth_positive(
     for base_id in (SYNTH_TUNING_POS_ID, SYNTH_HOLDOUT_POS_ID):
         y, sr = bmb.build_signal(base_id, specs)
         base_filename = _synth_positive_base_filename(base_id)
-        _atomic_write_wav(write_dir / base_filename, y, sr)
+        _write_wav_in_dir(write_dir, base_filename, y, sr)
+        _resolve_within(
+            out_dir / base_filename, container=out_dir, label=f"out_dir 参照先 {base_filename!r}"
+        )
         base_path = out_dir / base_filename
         variants = make_variants(
             y, sr, semitones=list(SYNTH_POS_SEMITONES), time_rates=list(SYNTH_POS_TIME_RATES)
@@ -578,7 +701,8 @@ def generate_synth_positive(
         variant_paths: Dict[str, Path] = {}
         for variant_key in SYNTH_POS_VARIANT_ORDER:
             filename = _synth_positive_variant_filename(base_id, variant_key)
-            _atomic_write_wav(write_dir / filename, variants[variant_key], sr)
+            _write_wav_in_dir(write_dir, filename, variants[variant_key], sr)
+            _resolve_within(out_dir / filename, container=out_dir, label=f"out_dir 参照先 {filename!r}")
             variant_paths[variant_key] = out_dir / filename
         result[base_id] = (base_path, variant_paths)
     return result
@@ -594,7 +718,8 @@ def generate_synth_negatives(specs: Dict[str, Any], out_dir: Path, write_dir: Pa
     for fixture_id in fixture_ids:
         y, sr = bmb.build_signal(fixture_id, specs)
         filename = _synth_negative_filename(fixture_id)
-        _atomic_write_wav(write_dir / filename, y, sr)
+        _write_wav_in_dir(write_dir, filename, y, sr)
+        _resolve_within(out_dir / filename, container=out_dir, label=f"out_dir 参照先 {filename!r}")
         result[fixture_id] = out_dir / filename
     return result
 
@@ -937,19 +1062,23 @@ def run_build(
     staging_wav_dir: Path,
     fixtures_path: Path,
     synth_specs_path: Path,
-) -> Tuple[List[Dict[str, str]], Dict[str, Path], Dict[str, str]]:
+) -> Tuple[List[Dict[str, str]], Dict[str, Path], Dict[str, str], Dict[str, str]]:
     """公開先衝突検査 → pin 照合 → 選定 → 生成（`staging_wav_dir` への物理
     書き込み）→ manifest 組み立てまでを行う。書き込みは `staging_wav_dir` 配下
     のみ（`out_dir` 自体へは一切書き込まない — R3 対応: 最終公開は呼び出し側の
     `_publish_staged_bundle` が全検証成功後に一括で行う）。
 
-    戻り値: `(pairs, audio_source_lookup, build_input_sha256)`。
+    戻り値: `(pairs, audio_source_lookup, build_input_sha256, fixtures)`。
     `audio_source_lookup` は manifest に記録される repo-relative パス文字列 →
     実バイトを読める絶対 Path（生成物は staging 側、vocadito 原音は既存の
     入力そのもの）の対応表——pins サイドカーの sha256 計算がまだ publish 前の
     staging から読めるようにする。`build_input_sha256` は
     `{"m2c_external_fixtures_sha256": ..., "m3d_synth_specs_sha256": ...}`
     （R2R N1・TOCTOU 解消: いずれもパースに使ったのと同一バイト列から計算済み）。
+    `fixtures` は {clip_id: expected_audio_sha256}——呼び出し側が T2 対応
+    （publish 直前の vocadito バイト再照合）で `verify_vocadito_pins` に
+    再度渡すために返す（fixtures_path を再読み込みしない——ロード済みの
+    同一 dict を再利用する）。
     """
     fixtures, fixtures_sha256 = load_m2c_fixtures(fixtures_path)
     resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
@@ -1010,7 +1139,7 @@ def run_build(
         "m2c_external_fixtures_sha256": fixtures_sha256,
         "m3d_synth_specs_sha256": synth_specs_sha256,
     }
-    return pairs, audio_source_lookup, build_input_sha256
+    return pairs, audio_source_lookup, build_input_sha256, fixtures
 
 
 def run_and_publish(
@@ -1030,6 +1159,16 @@ def run_and_publish(
     公開済みセット（`out_dir` の WAV 一式・`manifest_out`・`pins_out`）には
     一切触れない——初回ビルドだけでなく **再ビルド時** にも「部分出力なし」の
     保証を拡張する。
+
+    T2 対応（Codex レビュー第 3 ラウンド・publish 直前の vocadito バイト
+    再照合）: 音声読込経路（`librosa.load`。`generate_vocadito_variants` 内）は
+    無改造のまま、staging が完成し公開を開始する直前に全 vocadito 入力 WAV を
+    再度 `verify_vocadito_pins` で照合する。境界宣言の更新（前ラウンドの
+    残存懸念の解消）: 「pin 照合〜`librosa.load` 読込の間の窓でファイルが
+    差し替えられた場合、未承認バイト由来の変形 WAV が生成されうる」経路自体は
+    引き続き存在するが（読込経路は変えない設計判定）、**公開はされない**——
+    本工程が生成後・公開前に同じ pin で全数を再照合し、1 件でも不一致なら
+    fail-closed で公開自体を中止する（staging は破棄・既公開セットは無傷）。
     """
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     staging_root = Path(
@@ -1037,7 +1176,7 @@ def run_and_publish(
     )
     try:
         staging_wav_dir = staging_root / "wav"
-        pairs, audio_source_lookup, build_input_sha256 = run_build(
+        pairs, audio_source_lookup, build_input_sha256, fixtures = run_build(
             vocadito_dir=vocadito_dir,
             out_dir=out_dir,
             manifest_out=manifest_out,
@@ -1083,6 +1222,12 @@ def run_and_publish(
         ]
         entries.append((staged_manifest, manifest_out))
         entries.append((staged_pins, pins_out))
+
+        # T2 対応（Codex レビュー第 3 ラウンド）: staging が完成した = これ以降
+        # 生成処理（librosa.load 等）は一切行わない時点で、全 vocadito 入力 WAV
+        # を pin と再照合する。ここで 1 件でも不一致なら公開せず fail-closed
+        # （staging は finally で破棄・既公開セットは無傷のまま）。
+        verify_vocadito_pins(vocadito_dir, fixtures)
 
         _publish_staged_bundle(entries)
         return crosstab(pairs)

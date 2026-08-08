@@ -234,7 +234,18 @@ def _load_report(path: Path) -> Dict[str, Any]:
 # manifest 検証
 # --------------------------------------------------------------------------- #
 def _validate_manifest(manifest: Any) -> List[Dict[str, Any]]:
-    """pairs manifest（YAML）を検証し、pair dict のリストを返す（未知/欠落キー fail-closed）。"""
+    """pairs manifest（YAML）を検証し、pair dict のリストを返す（未知/欠落キー fail-closed）。
+
+    命名契約（宣言）: 各 pair の `pair_id` は material 判別マーカー（`_real_`
+    または `_synth_`。`_material_of_pair_id` 参照）を含まなければならない。
+    evaluate phase（`material_accounting`。R2 対応）がこのマーカーで
+    real_voice/synthetic の別会計を行う設計のため、マーカー無し pair_id の
+    manifest は run phase（本関数。高価な抽出処理が始まる前）で fail-closed
+    拒否する（R2R T1 対応・Codex レビュー第 3 ラウンド）。後方互換で
+    マーカー無しを許容する道は採らない（別会計の fail-closed 規律を崩すため
+    ——設計判定）。evaluate phase 側の `_validate_pair_id_material_markers` は
+    同じ検証を defense-in-depth として引き続き独立に行う。
+    """
     if not isinstance(manifest, dict):
         raise ValueError("pairs manifest must be a mapping with 'schema' and 'pairs' keys")
     schema = manifest.get("schema")
@@ -262,6 +273,22 @@ def _validate_manifest(manifest: Any) -> List[Dict[str, Any]]:
         if pair_id in seen_ids:
             raise ValueError(f"duplicate pair_id {pair_id!r} in pairs manifest (fail-closed)")
         seen_ids.add(pair_id)
+        # R2R T1 対応（Codex レビュー第 3 ラウンド・marker 検証の run phase 前倒し）:
+        # material 判別マーカー（`_real_`/`_synth_`）を持たない pair_id は、
+        # 高価な抽出 run が始まる前にここで fail-closed 拒否する（本関数
+        # docstring の命名契約参照。`_material_of_pair_id` は本モジュール内で
+        # 後で定義されるが、Python の遅延名前解決により本関数が実際に呼ばれる
+        # 時点では既に import 完了済みで問題なく参照できる）。
+        if not isinstance(pair_id, str):
+            raise ValueError(
+                f"pairs[{idx}] の pair_id={pair_id!r} が文字列でない (fail-closed)"
+            )
+        try:
+            _material_of_pair_id(pair_id)
+        except ValueError as exc:
+            raise ValueError(
+                f"pairs[{idx}] ({pair_id!r}): material を判別できない (fail-closed): {exc}"
+            ) from exc
         if pair["kind"] not in _VALID_KINDS:
             raise ValueError(
                 f"pairs[{idx}] ({pair_id!r}) has invalid kind {pair['kind']!r}; "
@@ -1844,6 +1871,13 @@ def _validate_pair_id_material_markers(reports: List[Dict[str, Any]]) -> None:
     report だけでなく **全 report** の pair_id を対象にする（defense-in-depth
     ——`_check_repeats_consistency` が pair_id 集合の report 間一致を保証するのは
     この検証より後段のため、ここでは independently に全件確認する）。
+
+    R2R T1 対応（Codex レビュー第 3 ラウンド）: 同じ検証は run phase
+    （`_validate_manifest`）でも manifest ロード直後に行うよう前倒しされた
+    ——マーカー無し pair_id の manifest は高価な抽出 run が始まる前に拒否
+    される。本関数（evaluate phase 側）は、report が manifest 経由を迂回して
+    直接構築・改変された場合に備えた defense-in-depth として引き続き独立に
+    機能する（run phase の検証だけに依存しない）。
     """
     for idx, report in enumerate(reports):
         for pair_id in report["pairs"]:
