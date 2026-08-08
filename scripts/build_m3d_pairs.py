@@ -784,7 +784,11 @@ def _reject_cross_device_publish_targets(
 # 生成: vocadito 変形
 # --------------------------------------------------------------------------- #
 def generate_vocadito_variants(
-    clip_ids: List[str], resolved_audio: Dict[str, Path], out_dir: Path, write_dir: Path
+    clip_ids: List[str],
+    resolved_audio: Dict[str, Path],
+    out_dir: Path,
+    write_dir: Path,
+    fixtures: Dict[str, str],
 ) -> Dict[str, Dict[str, Path]]:
     """選定 clip（id 昇順）ごとに 4 変形 WAV を書き出す。
 
@@ -795,13 +799,68 @@ def generate_vocadito_variants(
     と最終公開先を意図的に分離する（呼び出し側 `_publish_staged_bundle` が
     全検証成功後に一括で `write_dir/<name>` → `out_dir/<name>` へ publish する）。
 
+    レビュー対応 第 12 ラウンド（スナップショット束縛・消費バイト = 照合
+    バイトの構造保証）: 従来は `verify_vocadito_pins`（生成開始前の一括
+    pin 照合）が済んだ**原本パス**を `librosa.load` へそのまま渡していた
+    ——照合と decode の間に窓が空いており、「decode 中だけ WAV を一時置換し
+    公開直前再照合（T2/F1）の前に pin 一致の原本へ戻す」updater 相当の攻撃
+    に対しては、公開直前再照合が原本と一致してしまい「未承認バイト由来の
+    変形が承認済み provenance を掲げて公開される」穴があった（`librosa.load`
+    が実際に消費したバイトへ digest を束縛していなかったため）。
+
+    ここで `librosa.load` へ渡す**直前**に、対象 vocadito WAV を
+    `write_dir` 配下のスナップショット（`_write_dir/_vocadito_snapshot/
+    <clip_id>.wav`。glob("*.wav") の対象外——`_publish_staged_bundle` の
+    entries 列挙は `write_dir` 直下の `*.wav` のみを見るため、サブ
+    ディレクトリのスナップショットは誤って公開対象へ混入しない）へコピー
+    し、**スナップショットのバイト**を（`file_sha256(..., use_cache=False)`
+    で非キャッシュ計算——コピー元ではなくコピー先を hash する）`fixtures`
+    （m2c pin）と照合する。不一致は生成を一切進めず fail-closed。以後の
+    `librosa.load` は**この同じスナップショットパス**からデコードする——
+    decode API・変形チェーン（`make_variants`）自体は無改造のまま、「decode
+    が実際に読むファイル」と「pin 照合したファイル」を同一パスへ構造的に
+    束縛する（`harness._freeze_audio_copy` と同型の設計。一度書いたバイトを
+    読み直すだけで、途中で誰かが原本を差し替えても本関数の消費バイトには
+    一切影響しない）。
+
+    二層防御の役割分担（本ラウンドでの再定義）: 本関数のスナップショット
+    照合が「decode が消費したバイト = 承認済みバイト」の**構造的な正**
+    ——decode 経路が pin 照合と異なるバイト列を読む余地が存在しない。既存の
+    `run_and_publish` の公開直前再照合（T2/F1）は**多層防御として残置**する
+    ——スナップショット方式で provenance 束縛自体は完結しているが、原本が
+    ビルド実行中に置換されるのは vocadito の provisioning がビルドと競合
+    している異常事態であり、公開前に大声で（fail-closed で）失敗させる
+    ことに単独の価値がある。役割はこう分かれる: スナップショット照合 =
+    「今回 decode したバイトは承認済みか」（消費バイト束縛の正）、公開直前
+    再照合 = 「ビルド全体を通じて原本が静穏だったか」（ビルド環境静穏性の
+    検査。decode バイト自体の束縛には関与しない）。
+
     戻り値: {clip_id: {variant_key(make_variants の key): out_dir 基準 Path}}
     （base は含まない）。
     """
+    snapshot_dir = write_dir / "_vocadito_snapshot"
     result: Dict[str, Dict[str, Path]] = {}
     for clip_id in sorted(clip_ids):
         audio_path = resolved_audio[clip_id]
-        y, sr = librosa.load(audio_path, sr=None, mono=True)
+        expected_sha256 = fixtures[clip_id]
+        raw_bytes = Path(audio_path).read_bytes()
+        snapshot_path = _resolve_within(
+            snapshot_dir / f"{clip_id}.wav",
+            container=snapshot_dir,
+            label=f"vocadito スナップショット {clip_id!r}",
+        )
+        _atomic_write_bytes(snapshot_path, raw_bytes)
+        # コピー完了後のスナップショットに対して非キャッシュで hash する
+        # （コピー元 `audio_path` ではなく、decode が実際に読むコピー先を
+        # hash する——ここが「消費バイト = 照合バイト」の束縛点）。
+        actual_sha256 = file_sha256(snapshot_path, use_cache=False)
+        if actual_sha256 != expected_sha256:
+            raise BuildM3dPairsError(
+                f"{clip_id}: vocadito スナップショットの sha256 が pin と不一致 "
+                f"(fail-closed; スナップショット={snapshot_path}; "
+                f"actual={actual_sha256} expected={expected_sha256})"
+            )
+        y, sr = librosa.load(snapshot_path, sr=None, mono=True)
         variants = make_variants(
             y, sr, semitones=list(VOCADITO_SEMITONES), time_rates=list(VOCADITO_TIME_RATES)
         )
@@ -1456,7 +1515,7 @@ def run_build(
 
     staging_wav_dir.mkdir(parents=True, exist_ok=True)
     vocadito_variants = generate_vocadito_variants(
-        tuning_ids + holdout_ids, resolved_audio, out_dir, staging_wav_dir
+        tuning_ids + holdout_ids, resolved_audio, out_dir, staging_wav_dir, fixtures
     )
 
     synth_positive = generate_synth_positive(specs, out_dir, staging_wav_dir)

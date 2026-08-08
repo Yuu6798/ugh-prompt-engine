@@ -14,8 +14,9 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
+import librosa
 import numpy as np
 import pytest
 import soundfile as sf
@@ -2012,3 +2013,144 @@ def test_run_and_publish_rejects_cross_device_before_generation(tmp_path: Path, 
     assert not outputs["manifest_out"].exists()
     leftover_staging = [p for p in tmp_path.iterdir() if p.name.startswith(".external_m3d")]
     assert leftover_staging == []
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 12 ラウンド: vocadito スナップショット束縛
+# （消費バイト = 照合バイトの構造保証）
+# --------------------------------------------------------------------------- #
+def test_generate_vocadito_variants_immune_to_original_swap_during_decode(
+    tmp_path: Path, monkeypatch
+):
+    """decode（`librosa.load`）呼び出しのタイミングで「原本」だけを一時的に
+    差し替える攻撃（公開直前再照合の前に元へ戻す updater 相当）を模す。
+
+    スナップショット方式（第 12 ラウンド対応）なら、`librosa.load` は原本
+    ではなく `write_dir/_vocadito_snapshot/<clip_id>.wav`（decode 開始前に
+    既にコピー・pin 照合済み）から読むため、decode 呼び出し時点で原本を
+    差し替えても生成結果には一切影響しない——「decode が実際に消費した
+    バイト」は常に承認済み（pin 一致確認済み）のスナップショットのバイトで
+    あることを、`make_variants` へ渡された `y` 配列を直接捕捉して確認する
+    （WAV 書き出しの量子化を経由しない厳密比較）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path, n_clips=1)
+    fixtures, _ = bm.load_m2c_fixtures(fixtures_path)
+    resolved_audio = bm.verify_vocadito_pins(vocadito_dir, fixtures)
+    clip_id = next(iter(fixtures))
+    original_path = resolved_audio[clip_id]
+    original_bytes = original_path.read_bytes()
+
+    # クリーンな経路で先に「あるべき」decode 結果を計算しておく（比較対象）。
+    y_clean, sr_clean = librosa.load(original_path, sr=None, mono=True)
+
+    real_load = librosa.load
+    triggered = {"done": False}
+
+    def _load_with_original_swap(path, *args, **kwargs):
+        if not triggered["done"]:
+            triggered["done"] = True
+            # 「decode 呼び出しのこの瞬間だけ」原本を破壊する——公開直前
+            # 再照合の前に元へ戻す想定の攻撃タイミングを模す。
+            original_path.write_bytes(b"malicious-tampered-bytes-not-approved")
+        return real_load(path, *args, **kwargs)
+
+    monkeypatch.setattr(bm.librosa, "load", _load_with_original_swap)
+
+    captured: Dict[str, Any] = {}
+    real_make_variants = bm.make_variants
+
+    def _capturing_make_variants(y, sr, **kwargs):
+        captured["y"] = y
+        captured["sr"] = sr
+        return real_make_variants(y, sr, **kwargs)
+
+    monkeypatch.setattr(bm, "make_variants", _capturing_make_variants)
+
+    out_dir = tmp_path / "out"
+    write_dir = tmp_path / "staging_wav"
+    write_dir.mkdir(parents=True)
+
+    result = bm.generate_vocadito_variants([clip_id], resolved_audio, out_dir, write_dir, fixtures)
+
+    assert triggered["done"] is True
+    # sanity: 原本は実際に破壊されている（攻撃が発火したことの確認）。
+    assert original_path.read_bytes() != original_bytes
+
+    # スナップショットは改変前（承認済み）のバイトのまま——decode が実際に
+    # 消費したのはこちら。
+    snapshot_path = write_dir / "_vocadito_snapshot" / f"{clip_id}.wav"
+    assert snapshot_path.read_bytes() == original_bytes
+
+    # make_variants へ渡された y はクリーンな decode 結果と厳密一致
+    # （改変後の原本の影響を一切受けていない）。
+    np.testing.assert_array_equal(captured["y"], y_clean)
+    assert captured["sr"] == sr_clean
+    assert set(result[clip_id]) == set(bm.VOCADITO_VARIANT_ORDER)
+
+
+def test_generate_vocadito_variants_snapshot_rejects_original_tampered_before_snapshot(
+    tmp_path: Path, monkeypatch
+):
+    """snapshot コピーの**前**（decode 開始前）に原本が改変されていた場合、
+    スナップショット自身の pin 再照合が fail-closed で検出する——生成開始前
+    の一括照合（`verify_vocadito_pins`）と decode 実行の間に窓があっても、
+    本関数独自の照合がその窓を閉じることの確認。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path, n_clips=1)
+    fixtures, _ = bm.load_m2c_fixtures(fixtures_path)
+    resolved_audio = bm.verify_vocadito_pins(vocadito_dir, fixtures)
+    clip_id = next(iter(fixtures))
+    original_path = resolved_audio[clip_id]
+
+    # 一括照合の後・generate_vocadito_variants 呼び出しの前に原本を改変する。
+    original_path.write_bytes(b"tampered-before-snapshot-copy")
+
+    out_dir = tmp_path / "out"
+    write_dir = tmp_path / "staging_wav"
+    write_dir.mkdir(parents=True)
+
+    with pytest.raises(
+        bm.BuildM3dPairsError, match="スナップショットの sha256 が pin と不一致"
+    ):
+        bm.generate_vocadito_variants([clip_id], resolved_audio, out_dir, write_dir, fixtures)
+
+    # 生成が一切進んでいない（write_dir に WAV が書かれていない）。
+    assert list(write_dir.glob("*.wav")) == []
+
+
+def test_generate_vocadito_variants_snapshot_matches_direct_decode_on_clean_input(
+    tmp_path: Path, monkeypatch
+):
+    """クリーン（無改変）な入力では、スナップショット経由の decode 結果が
+    原本を直接 decode した場合と厳密一致する（バイト同一性回帰: 第 12
+    ラウンドの変更が通常経路の出力を一切変えないことの確認）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path, n_clips=2)
+    fixtures, _ = bm.load_m2c_fixtures(fixtures_path)
+    resolved_audio = bm.verify_vocadito_pins(vocadito_dir, fixtures)
+    clip_ids = sorted(fixtures)
+
+    expected_variants_by_clip = {}
+    for clip_id in clip_ids:
+        y, sr = librosa.load(resolved_audio[clip_id], sr=None, mono=True)
+        expected_variants_by_clip[clip_id] = bm.make_variants(
+            y, sr, semitones=list(bm.VOCADITO_SEMITONES), time_rates=list(bm.VOCADITO_TIME_RATES)
+        )
+
+    out_dir = tmp_path / "out"
+    write_dir = tmp_path / "staging_wav"
+    write_dir.mkdir(parents=True)
+    bm.generate_vocadito_variants(clip_ids, resolved_audio, out_dir, write_dir, fixtures)
+
+    for clip_id in clip_ids:
+        for variant_key in bm.VOCADITO_VARIANT_ORDER:
+            filename = bm._vocadito_variant_filename(clip_id, variant_key)
+            produced, sr_produced = sf.read(str(write_dir / filename))
+            # PCM_24 書き出しの量子化誤差の範囲内で一致することを確認する
+            # （`_atomic_write_wav` の docstring 参照 — 意図的に整数 PCM を
+            # 使うため float 完全一致ではなく高分解能量子化誤差を許容する）。
+            expected = expected_variants_by_clip[clip_id][variant_key]
+            np.testing.assert_allclose(produced, expected, atol=2.0 / (2**23))
