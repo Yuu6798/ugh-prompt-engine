@@ -55,6 +55,23 @@ pin の一致検証を fail-closed で行う。限界の明記: sidecar は非�
 生成物であり、順序証明の最終根拠は git 履歴 + ハーネスの holdout ロックの
 まま。本照合は事故的ドリフトを fail-closed 化する計器である。
 
+**Codex レビュー第 2 ラウンド対応**:
+
+- **N1（build 入力 pin の完全化）**: 各 build 入力（`m2c_external_fixtures.yaml`
+  / `m3d_synth_specs.yaml`）は `_read_bytes_and_sha256` でバイト列を一度だけ
+  読み、その同一バイトから hash 計算とパースの両方を行う（TOCTOU 解消）。
+  sidecar に両入力の sha256 を記録する（スキーマ `m3d-pairs-pins/0.3`）。
+  `--check-only` は記録済みの全 build 入力 digest を現物と再照合し、
+  不一致/欠落は fail-closed とする。
+- **N3（公開先衝突の拒否）**: 生成（librosa/build_signal 呼び出し）を開始する
+  前に、公開予定の全出力先（`out_dir` 配下の生成 WAV・manifest-out・
+  pins-out）を resolve() し、(a) 出力同士の重複 (b) 出力と入力（fixtures
+  yaml・synth specs yaml・vocadito WAV 全件）の衝突、のいずれかがあれば
+  fail-closed で拒否する（`_reject_output_input_collisions`）。
+- **N2（成功時 .prev 残置の解消）**: `_publish_staged_bundle` の publish
+  ループが例外なく完走したら、退避しておいた `.prev` snapshot を全て削除する
+  （rollback 経路の挙動は不変更）。
+
 使い方::
 
     python scripts/build_m3d_pairs.py
@@ -152,15 +169,18 @@ SYNTH_NEGATIVE_INTERVAL_PAIRS: Tuple[Tuple[str, str], ...] = (
 )
 
 _MANIFEST_SCHEMA = harness._EXPECTED_MANIFEST_SCHEMA  # "m3-comparison-pairs/0.1"（凍結スキーマそのものを参照。値の複製をしない）
-# R1 対応（Codex レビュー・--check-only digest 照合 fail-closed 化）: フィールド
-# 集合自体は従来の 0.1 と同型（`manifest_sha256` は元々存在した）だが、
-# `check_existing` がこの値を実際に検証するようになった契約変更を示すため
+# R2R 対応 N1（Codex レビュー第 2 ラウンド・build 入力 pin の完全化）: 従来
+# （0.2）は `m2c_external_fixtures_sha256` のみを記録し `m3d_synth_specs.yaml`
+# は無 pin だった。ここで両 build 入力（fixtures yaml / synth specs yaml）の
+# sha256 を必須フィールド化し、かつ双方とも hash 計算とパースを同一バイト列
+# から行う（TOCTOU 解消・`_read_bytes_and_sha256` 参照）契約を示すため
 # スキーマ版を上げる。
-_PINS_SCHEMA = "m3d-pairs-pins/0.2"
+_PINS_SCHEMA = "m3d-pairs-pins/0.3"
 _REQUIRED_PINS_KEYS = {
     "schema",
     "generated_utc",
     "m2c_external_fixtures_sha256",
+    "m3d_synth_specs_sha256",
     "manifest_sha256",
     "audio_sha256",
     "material",
@@ -271,25 +291,62 @@ def _pair(
 # --------------------------------------------------------------------------- #
 # vocadito pin 照合（全数・fail-closed）
 # --------------------------------------------------------------------------- #
-def load_m2c_fixtures(path: Path = M2C_FIXTURES_PATH) -> Dict[str, str]:
-    """`m2c_external_fixtures.yaml` を読み {clip_id: expected_audio_sha256} を返す。"""
+def _read_bytes_and_sha256(path: "str | Path") -> Tuple[bytes, str]:
+    """`path` を一度だけ読み、(bytes, sha256 hex) を返す。
+
+    R2R 対応 N1（Codex レビュー第 2 ラウンド・build 入力 pin の TOCTOU 解消）:
+    呼び出し側はこの関数が返す `data` をそのままパーサへ渡し、path を再度
+    読み直してはならない——hash 計算とパースが別々の読み取りに基づくと、
+    その間にファイルが差し替えられても検出できない（pin した bytes と実際に
+    消費した bytes が一致する保証がなくなる）。
+    """
     data = Path(path).read_bytes()
+    return data, hashlib.sha256(data).hexdigest()
+
+
+def _parse_m2c_fixtures(data: bytes, *, source: "str | Path") -> Dict[str, str]:
+    """`m2c_external_fixtures.yaml` の生バイト列をパースする（読み取り自体は
+    呼び出し側が 1 回だけ行う——`_read_bytes_and_sha256` 参照）。
+    """
     doc = _yaml_load_no_dup_keys(data)
     if not isinstance(doc, dict) or doc.get("schema_version") != "m2c-external-fixtures/0.1":
         raise BuildM3dPairsError(
-            f"{path}: schema_version が m2c-external-fixtures/0.1 でない (fail-closed)"
+            f"{source}: schema_version が m2c-external-fixtures/0.1 でない (fail-closed)"
         )
     fixtures = doc.get("fixtures")
     if not isinstance(fixtures, dict) or not fixtures:
-        raise BuildM3dPairsError(f"{path}: 'fixtures' が非空 mapping でない (fail-closed)")
+        raise BuildM3dPairsError(f"{source}: 'fixtures' が非空 mapping でない (fail-closed)")
     result: Dict[str, str] = {}
     for clip_id, entry in fixtures.items():
         if not isinstance(entry, dict) or "expected_audio_sha256" not in entry:
             raise BuildM3dPairsError(
-                f"{path}: fixtures[{clip_id!r}] に expected_audio_sha256 がない (fail-closed)"
+                f"{source}: fixtures[{clip_id!r}] に expected_audio_sha256 がない (fail-closed)"
             )
         result[str(clip_id)] = str(entry["expected_audio_sha256"])
     return result
+
+
+def load_m2c_fixtures(path: Path = M2C_FIXTURES_PATH) -> Tuple[Dict[str, str], str]:
+    """`m2c_external_fixtures.yaml` を一度だけ読み、{clip_id: expected_audio_sha256}
+    と入力ファイル自体の sha256 を返す（R2R N1・TOCTOU 解消: hash 計算とパースを
+    同一バイト列から行う）。
+    """
+    data, digest = _read_bytes_and_sha256(path)
+    return _parse_m2c_fixtures(data, source=path), digest
+
+
+def _load_synth_specs(path: Path) -> Tuple[Dict[str, Any], str]:
+    """`m3d_synth_specs.yaml` を一度だけ読み、specs dict と sha256 を返す。
+
+    R2R N1（Codex レビュー第 2 ラウンド）: `build_melody_bench.load_specs` は
+    内部で独自に `open(path)` するため、そのまま呼ぶと本 builder が計算する
+    sha256 pin と実際にパースへ渡ったバイト列が別読みになり得る（未 pin でも
+    あった）。同関数のパース処理自体は `yaml.safe_load` を素通しするだけで
+    意味的な差異がないため、ここで同一バイト列に対して pin + `yaml.safe_load`
+    を行うことで代替する（`build_melody_bench.py` 自体は無改造）。
+    """
+    data, digest = _read_bytes_and_sha256(path)
+    return yaml.safe_load(data), digest
 
 
 def vocadito_audio_path(vocadito_dir: Path, clip_id: str) -> Path:
@@ -363,6 +420,109 @@ def circular_pairs(clip_ids: List[str]) -> List[Tuple[str, str]]:
 
 
 # --------------------------------------------------------------------------- #
+# 出力 WAV ファイル名の命名規則（単一の真実源）
+# --------------------------------------------------------------------------- #
+# R2R 対応 N3（Codex レビュー第 2 ラウンド・公開先衝突の拒否）: 「これから
+# 生成する WAV が最終的にどのファイル名で `out_dir` へ publish されるか」を
+# 実際の音声処理（librosa/build_signal）を一切行わずに算出できる必要がある
+# ——衝突検査は生成開始前に終える設計のため。以下 4 つの命名ヘルパーを、
+# 生成本体（`generate_*`）と衝突検査（`_expected_output_wav_filenames`）の
+# **両方**が参照する単一の真実源にする（ファイル名の組み立て規則を 2 箇所に
+# 複製しない）。
+def _vocadito_variant_filename(clip_id: str, variant_key: str) -> str:
+    return f"{clip_id}__{VOCADITO_VARIANT_LABELS[variant_key]}.wav"
+
+
+def _synth_positive_base_filename(base_id: str) -> str:
+    return f"{base_id}.wav"
+
+
+def _synth_positive_variant_filename(base_id: str, variant_key: str) -> str:
+    return f"{base_id}__{SYNTH_POS_VARIANT_LABELS[variant_key]}.wav"
+
+
+def _synth_negative_filename(fixture_id: str) -> str:
+    return f"{fixture_id}.wav"
+
+
+def _expected_output_wav_filenames(tuning_ids: List[str], holdout_ids: List[str]) -> List[str]:
+    """`generate_vocadito_variants`/`generate_synth_positive`/
+    `generate_synth_negatives` が最終的に `out_dir` へ publish する WAV
+    ファイル名の完全集合を、実際の音声処理を一切行わずに（命名規則のみから）
+    算出する（N3 対応）。`tuning_ids`/`holdout_ids` は `select_clips` の戻り値
+    （音声 I/O 不要・決定論）だけで足りる。
+    """
+    filenames: List[str] = []
+    for clip_id in tuning_ids + holdout_ids:
+        for variant_key in VOCADITO_VARIANT_ORDER:
+            filenames.append(_vocadito_variant_filename(clip_id, variant_key))
+    for base_id in (SYNTH_TUNING_POS_ID, SYNTH_HOLDOUT_POS_ID):
+        filenames.append(_synth_positive_base_filename(base_id))
+        for variant_key in SYNTH_POS_VARIANT_ORDER:
+            filenames.append(_synth_positive_variant_filename(base_id, variant_key))
+    for a, b in SYNTH_NEGATIVE_RHYTHM_PAIRS + SYNTH_NEGATIVE_INTERVAL_PAIRS:
+        filenames.append(_synth_negative_filename(a))
+        filenames.append(_synth_negative_filename(b))
+    return filenames
+
+
+# --------------------------------------------------------------------------- #
+# N3: 公開先衝突の拒否（生成開始前・fail-closed）
+# --------------------------------------------------------------------------- #
+def _reject_output_input_collisions(
+    *,
+    out_dir: Path,
+    manifest_out: Path,
+    pins_out: Path,
+    expected_wav_filenames: List[str],
+    fixtures_path: Path,
+    synth_specs_path: Path,
+    vocadito_audio_paths: "List[Path]",
+) -> None:
+    """公開予定の全出力先（`out_dir` 配下の生成 WAV・`manifest_out`・
+    `pins_out`）の resolve() 済み絶対パス集合と、全 build 入力（fixtures yaml・
+    synth specs yaml・vocadito WAV 全件）の resolve() 済み絶対パス集合を
+    突き合わせ、(a) 出力同士の重複 (b) 出力と入力の衝突、のいずれかがあれば
+    fail-closed で拒否する（R2R N3）。
+
+    生成（`staging_wav_dir` への物理書き込み・librosa/build_signal 呼び出し）を
+    一切開始する前に呼ぶ——公開後に入力を破壊しうる誤設定（例: `--out-dir` を
+    誤って vocadito 配布物のディレクトリに向ける・`--manifest-out` と
+    `--pins-out` を同じパスに向ける）を、コストのかかる生成処理より前に断つ。
+    """
+    outputs: Dict[Path, str] = {}
+
+    def _register_output(path: Path, label: str) -> None:
+        resolved = path.resolve()
+        if resolved in outputs:
+            raise BuildM3dPairsError(
+                f"公開先が重複している (fail-closed): {label!r} と "
+                f"{outputs[resolved]!r} が同じ解決済みパスを指す: {resolved}"
+            )
+        outputs[resolved] = label
+
+    _register_output(manifest_out, "manifest_out")
+    _register_output(pins_out, "pins_out")
+    for filename in expected_wav_filenames:
+        _register_output(out_dir / filename, f"out_dir 配下の生成 WAV ({filename!r})")
+
+    inputs: Dict[Path, str] = {
+        fixtures_path.resolve(): f"fixtures_path ({fixtures_path})",
+        synth_specs_path.resolve(): f"synth_specs_path ({synth_specs_path})",
+    }
+    for audio_path in vocadito_audio_paths:
+        inputs.setdefault(Path(audio_path).resolve(), f"vocadito WAV ({audio_path})")
+
+    collisions = sorted(set(outputs) & set(inputs), key=str)
+    if collisions:
+        details = "; ".join(
+            f"{resolved}: 出力={outputs[resolved]!r} 入力={inputs[resolved]!r}"
+            for resolved in collisions
+        )
+        raise BuildM3dPairsError(f"公開先が入力と衝突している (fail-closed): {details}")
+
+
+# --------------------------------------------------------------------------- #
 # 生成: vocadito 変形
 # --------------------------------------------------------------------------- #
 def generate_vocadito_variants(
@@ -389,8 +549,7 @@ def generate_vocadito_variants(
         )
         clip_variants: Dict[str, Path] = {}
         for variant_key in VOCADITO_VARIANT_ORDER:
-            label = VOCADITO_VARIANT_LABELS[variant_key]
-            filename = f"{clip_id}__{label}.wav"
+            filename = _vocadito_variant_filename(clip_id, variant_key)
             _atomic_write_wav(write_dir / filename, variants[variant_key], sr)
             clip_variants[variant_key] = out_dir / filename
         result[clip_id] = clip_variants
@@ -410,7 +569,7 @@ def generate_synth_positive(
     result: Dict[str, Tuple[Path, Dict[str, Path]]] = {}
     for base_id in (SYNTH_TUNING_POS_ID, SYNTH_HOLDOUT_POS_ID):
         y, sr = bmb.build_signal(base_id, specs)
-        base_filename = f"{base_id}.wav"
+        base_filename = _synth_positive_base_filename(base_id)
         _atomic_write_wav(write_dir / base_filename, y, sr)
         base_path = out_dir / base_filename
         variants = make_variants(
@@ -418,8 +577,7 @@ def generate_synth_positive(
         )
         variant_paths: Dict[str, Path] = {}
         for variant_key in SYNTH_POS_VARIANT_ORDER:
-            label = SYNTH_POS_VARIANT_LABELS[variant_key]
-            filename = f"{base_id}__{label}.wav"
+            filename = _synth_positive_variant_filename(base_id, variant_key)
             _atomic_write_wav(write_dir / filename, variants[variant_key], sr)
             variant_paths[variant_key] = out_dir / filename
         result[base_id] = (base_path, variant_paths)
@@ -435,7 +593,7 @@ def generate_synth_negatives(specs: Dict[str, Any], out_dir: Path, write_dir: Pa
     result: Dict[str, Path] = {}
     for fixture_id in fixture_ids:
         y, sr = bmb.build_signal(fixture_id, specs)
-        filename = f"{fixture_id}.wav"
+        filename = _synth_negative_filename(fixture_id)
         _atomic_write_wav(write_dir / filename, y, sr)
         result[fixture_id] = out_dir / filename
     return result
@@ -589,6 +747,12 @@ def _publish_staged_bundle(entries: "List[Tuple[Path, Path]]") -> None:
     途中で例外が飛べば、既に publish 済みの分を削除し、退避済みの既存ファイルを
     元位置へ復元してから re-raise する——既存の公開済みセットは初回ビルドだけで
     なく **再ビルド時にも** 無傷で残る（R3 対応）。
+
+    R2R 対応 N2（Codex レビュー第 2 ラウンド・成功時 .prev 残置）: publish
+    ループが例外なく完走した場合、退避しておいた `.prev` snapshot はもう不要
+    ——削除せずに残すと出力ディレクトリにビルドのたびゴミが蓄積する。全件の
+    publish が成功した後（rollback 経路には影響しない — 例外時は従来どおり
+    snapshot を使って復元する）、ベストエフォートで削除する。
     """
     snapshots: Dict[Path, Path] = {}
     published: List[Path] = []
@@ -620,6 +784,14 @@ def _publish_staged_bundle(entries: "List[Tuple[Path, Path]]") -> None:
             except OSError:
                 pass
         raise
+    else:
+        # N2: publish 全体が成功した——退避済み snapshot はもう不要（削除失敗は
+        # publish 自体の成功を無効化しない・ベストエフォート）。
+        for snapshot_path in snapshots.values():
+            try:
+                snapshot_path.unlink()
+            except OSError:
+                pass
 
 
 # --------------------------------------------------------------------------- #
@@ -654,11 +826,16 @@ def _load_and_validate_pins(path: Path) -> Dict[str, Any]:
     missing = _REQUIRED_PINS_KEYS - set(doc)
     if missing:
         raise BuildM3dPairsError(f"{path}: 必須キー欠落 (fail-closed): {sorted(missing)}")
-    manifest_sha = doc["manifest_sha256"]
-    if not isinstance(manifest_sha, str) or len(manifest_sha) != 64:
-        raise BuildM3dPairsError(
-            f"{path}: manifest_sha256 が不正な形式 (fail-closed): {manifest_sha!r}"
-        )
+    for sha_field in (
+        "manifest_sha256",
+        "m2c_external_fixtures_sha256",
+        "m3d_synth_specs_sha256",
+    ):
+        sha_value = doc[sha_field]
+        if not isinstance(sha_value, str) or len(sha_value) != 64:
+            raise BuildM3dPairsError(
+                f"{path}: {sha_field} が不正な形式 (fail-closed): {sha_value!r}"
+            )
     if not isinstance(doc.get("audio_sha256"), dict):
         raise BuildM3dPairsError(f"{path}: 'audio_sha256' が mapping でない (fail-closed)")
     if not isinstance(doc.get("material"), dict):
@@ -675,6 +852,7 @@ def check_existing(
     pins_out: Path,
     vocadito_dir: Path,
     fixtures_path: Path,
+    synth_specs_path: Path,
 ) -> Dict[str, Any]:
     """既存の manifest + pins サイドカーが現在のファイル内容と整合するかだけを
     再照合する（生成は一切行わない）。1 件でも不整合なら `BuildM3dPairsError`。
@@ -685,9 +863,15 @@ def check_existing(
         の一致検証（従来は記録するのみで再照合していなかった）
     (c) 全 WAV pin の一致検証（従来どおり）
     のいずれか 1 件でも不一致/欠落で fail-closed。
+
+    R2R 対応 N1（Codex レビュー第 2 ラウンド・build 入力 pin の完全化）:
+    (d) sidecar 記録の m2c_external_fixtures.yaml / m3d_synth_specs.yaml の
+        sha256 と現物ファイルのバイト sha256 の一致検証も同様に fail-closed で
+        行う（従来は fixtures 側のみ記録し、synth specs は無 pin だった）。
     """
-    fixtures = load_m2c_fixtures(fixtures_path)
+    fixtures, actual_fixtures_sha = load_m2c_fixtures(fixtures_path)
     verify_vocadito_pins(vocadito_dir, fixtures)  # vocadito 側の drift も再確認
+    _, actual_synth_specs_sha = _read_bytes_and_sha256(synth_specs_path)
 
     if not manifest_out.exists():
         raise BuildM3dPairsError(f"{manifest_out}: manifest が存在しない (fail-closed; --check-only)")
@@ -705,6 +889,18 @@ def check_existing(
         problems.append(
             f"{manifest_out}: manifest sha256 mismatch "
             f"(actual={actual_manifest_sha} expected={expected_manifest_sha})"
+        )
+    expected_fixtures_sha = pins_doc["m2c_external_fixtures_sha256"]
+    if actual_fixtures_sha != expected_fixtures_sha:
+        problems.append(
+            f"{fixtures_path}: m2c_external_fixtures sha256 mismatch "
+            f"(actual={actual_fixtures_sha} expected={expected_fixtures_sha})"
+        )
+    expected_synth_specs_sha = pins_doc["m3d_synth_specs_sha256"]
+    if actual_synth_specs_sha != expected_synth_specs_sha:
+        problems.append(
+            f"{synth_specs_path}: m3d_synth_specs sha256 mismatch "
+            f"(actual={actual_synth_specs_sha} expected={expected_synth_specs_sha})"
         )
 
     manifest_doc = _yaml_load_no_dup_keys(manifest_bytes)
@@ -736,31 +932,50 @@ def run_build(
     *,
     vocadito_dir: Path,
     out_dir: Path,
+    manifest_out: Path,
+    pins_out: Path,
     staging_wav_dir: Path,
     fixtures_path: Path,
     synth_specs_path: Path,
-) -> Tuple[List[Dict[str, str]], Dict[str, Path]]:
-    """pin 照合 → 選定 → 生成（`staging_wav_dir` への物理書き込み）→ manifest
-    組み立てまでを行う。書き込みは `staging_wav_dir` 配下のみ（`out_dir` 自体へは
-    一切書き込まない — R3 対応: 最終公開は呼び出し側の `_publish_staged_bundle`
-    が全検証成功後に一括で行う）。
+) -> Tuple[List[Dict[str, str]], Dict[str, Path], Dict[str, str]]:
+    """公開先衝突検査 → pin 照合 → 選定 → 生成（`staging_wav_dir` への物理
+    書き込み）→ manifest 組み立てまでを行う。書き込みは `staging_wav_dir` 配下
+    のみ（`out_dir` 自体へは一切書き込まない — R3 対応: 最終公開は呼び出し側の
+    `_publish_staged_bundle` が全検証成功後に一括で行う）。
 
-    戻り値: `(pairs, audio_source_lookup)`。`audio_source_lookup` は
-    manifest に記録される repo-relative パス文字列 → 実バイトを読める絶対 Path
-    （生成物は staging 側、vocadito 原音は既存の入力そのもの）の対応表——pins
-    サイドカーの sha256 計算がまだ publish 前の staging から読めるようにする。
+    戻り値: `(pairs, audio_source_lookup, build_input_sha256)`。
+    `audio_source_lookup` は manifest に記録される repo-relative パス文字列 →
+    実バイトを読める絶対 Path（生成物は staging 側、vocadito 原音は既存の
+    入力そのもの）の対応表——pins サイドカーの sha256 計算がまだ publish 前の
+    staging から読めるようにする。`build_input_sha256` は
+    `{"m2c_external_fixtures_sha256": ..., "m3d_synth_specs_sha256": ...}`
+    （R2R N1・TOCTOU 解消: いずれもパースに使ったのと同一バイト列から計算済み）。
     """
-    fixtures = load_m2c_fixtures(fixtures_path)
+    fixtures, fixtures_sha256 = load_m2c_fixtures(fixtures_path)
     resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
 
     tuning_ids, holdout_ids = select_clips(fixtures)
+
+    # R2R 対応 N3（Codex レビュー第 2 ラウンド・公開先衝突の拒否）: 生成
+    # （staging への物理書き込み・librosa/build_signal 呼び出し）を開始する前に、
+    # 公開予定の全出力先が入力および互いと衝突しないことを確認する。
+    _reject_output_input_collisions(
+        out_dir=out_dir,
+        manifest_out=manifest_out,
+        pins_out=pins_out,
+        expected_wav_filenames=_expected_output_wav_filenames(tuning_ids, holdout_ids),
+        fixtures_path=fixtures_path,
+        synth_specs_path=synth_specs_path,
+        vocadito_audio_paths=list(resolved_audio.values()),
+    )
+
+    specs, synth_specs_sha256 = _load_synth_specs(synth_specs_path)
 
     staging_wav_dir.mkdir(parents=True, exist_ok=True)
     vocadito_variants = generate_vocadito_variants(
         tuning_ids + holdout_ids, resolved_audio, out_dir, staging_wav_dir
     )
 
-    specs = bmb.load_specs(synth_specs_path)
     synth_positive = generate_synth_positive(specs, out_dir, staging_wav_dir)
     synth_negative = generate_synth_negatives(specs, out_dir, staging_wav_dir)
 
@@ -791,7 +1006,11 @@ def run_build(
     for fixture_id, path in synth_negative.items():
         audio_source_lookup[_repo_rel(path)] = staging_wav_dir / path.name
 
-    return pairs, audio_source_lookup
+    build_input_sha256 = {
+        "m2c_external_fixtures_sha256": fixtures_sha256,
+        "m3d_synth_specs_sha256": synth_specs_sha256,
+    }
+    return pairs, audio_source_lookup, build_input_sha256
 
 
 def run_and_publish(
@@ -818,9 +1037,11 @@ def run_and_publish(
     )
     try:
         staging_wav_dir = staging_root / "wav"
-        pairs, audio_source_lookup = run_build(
+        pairs, audio_source_lookup, build_input_sha256 = run_build(
             vocadito_dir=vocadito_dir,
             out_dir=out_dir,
+            manifest_out=manifest_out,
+            pins_out=pins_out,
             staging_wav_dir=staging_wav_dir,
             fixtures_path=fixtures_path,
             synth_specs_path=synth_specs_path,
@@ -846,7 +1067,7 @@ def run_and_publish(
         pins_doc = {
             "schema": _PINS_SCHEMA,
             "generated_utc": _utc_now(),
-            "m2c_external_fixtures_sha256": file_sha256(fixtures_path, use_cache=False),
+            **build_input_sha256,
             "manifest_sha256": hashlib.sha256(manifest_yaml).hexdigest(),
             "audio_sha256": dict(sorted(audio_sha256.items())),
             "material": dict(sorted(material.items())),
@@ -897,6 +1118,7 @@ def main() -> int:
                 pins_out=args.pins_out,
                 vocadito_dir=args.vocadito_dir,
                 fixtures_path=args.fixtures,
+                synth_specs_path=args.synth_specs,
             )
             print(f"--check-only: OK ({summary['total']} pairs, sha256 全一致)")
         else:

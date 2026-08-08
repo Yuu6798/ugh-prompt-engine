@@ -4069,3 +4069,113 @@ def test_material_of_pair_id_and_partition_are_fail_closed_and_consistent():
     assert set(synth) == {"b_synth_1"}
     assert set(real) | set(synth) == set(pairs)
     assert set(real) & set(synth) == set()
+
+
+# --------------------------------------------------------------------------- #
+# R2R N4（Codex レビュー第 2 ラウンド）: synthetic holdout の per-row 会計
+# --------------------------------------------------------------------------- #
+def _pairs_with_extra_synth_holdout_positive(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
+    """`_default_pairs`（real_voice のみ）に、holdout split の合成
+    positive_transform pair（pair_id に `_synth_` マーカー）を 1 件追加する。
+    """
+    return _default_pairs(audio_paths) + [
+        {
+            "pair_id": "pt_synth_holdout_extra",
+            "kind": "positive_transform",
+            "split": "holdout",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_a_transposed"],
+            "expected": "same",
+        },
+    ]
+
+
+def test_material_accounting_synthetic_holdout_rows_locked_skipped_without_reading_evidence(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """holdout ロック中（凍結前）は synth holdout pair の evidence に一切触れず、
+    `locked_skipped` として pair_id を列挙するのみ（R2R N4 対応・既存の
+    holdout ロック規律の厳守）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _pairs_with_extra_synth_holdout_positive(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports: List[Dict[str, Any]] = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        report["route_runner_injected"] = False
+        reports.append(report)
+
+    # holdout ロック中は run 時点で該当 pair の comparison 自体が存在しない
+    # （スタブ化・既存契約）ことを前提として確認しておく——本テストが検証したい
+    # のは「evidence を読まない」ことなので、report 自体に evidence が無いこと
+    # がその前提になる。
+    for report in reports:
+        assert report["pairs"]["pt_synth_holdout_extra"] == {
+            "split": "holdout",
+            "status": "holdout_locked_until_frozen",
+        }
+
+    verdict = harness.evaluate_comparison(reports)
+
+    assert verdict["holdout_locked_until_frozen"] is True
+    holdout_rows = verdict["material_accounting"]["synthetic"]["holdout_rows"]
+    assert holdout_rows == {"pt_synth_holdout_extra": {"status": "locked_skipped"}}
+
+
+def test_material_accounting_synthetic_holdout_rows_measured_when_unlocked(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """unlocked 評価時のみ synth holdout pair の evidence/axes が pair_id 単位で
+    記録される（R2R N4 対応）。calibration verdict（holdout_validation）は
+    real バケットのみで判定され、synth holdout の内容には影響されない
+    （診断専用であることの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _pairs_with_extra_synth_holdout_positive(audio_paths))
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports: List[Dict[str, Any]] = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+        )
+        report["route_runner_injected"] = False
+        _override_tuning_axes_to_match_fully_frozen_registry(report)
+        # real の holdout pair を `_reports_for_holdout_validation` と同じ値へ
+        # 揃え、real バケット単独で holdout_validation_status=confirmed になる
+        # 状態を作る（synth holdout の内容が real 側の判定に影響しないことの
+        # 対照実験として使う）。
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["axes"] = {
+            "contour": 0.95,
+            "interval": 1.0,
+            "rhythm": 0.9,
+        }
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["axes"] = {
+            "contour": 0.1,
+            "interval": 0.05,
+            "rhythm": 0.2,
+        }
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["coverage"] = dict(
+            _HOLDOUT_TEST_COVERAGE
+        )
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_locked_until_frozen"] is False
+    holdout_rows = verdict["material_accounting"]["synthetic"]["holdout_rows"]
+    assert set(holdout_rows) == {"pt_synth_holdout_extra"}
+    row = holdout_rows["pt_synth_holdout_extra"]
+    assert row["status"] in {"measured", "not_comparable"}
+    if row["status"] == "measured":
+        assert "evidence" in row
+        assert "axes" in row
+    # 診断専用: real バケットだけで holdout_validation_status が確定しており、
+    # synth holdout pair の内容（上で一切上書きしていない自然な計測結果）が
+    # 判定に影響を与えていない。
+    assert verdict["holdout_validation_status"] == "confirmed"

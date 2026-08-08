@@ -42,6 +42,23 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   と同一ファイルシステム上）へ全生成 → 全検証成功後に一括 atomic publish する
   （Codex レビュー R3 対応）。途中失敗時は既存の公開済みセットを無傷で残す保証を
   「再ビルド時」にも拡張した
+- **（Codex レビュー第 2 ラウンド追補）** sidecar のスキーマを `m3d-pairs-pins/0.3`
+  へ改版し、build 入力（`m2c_external_fixtures.yaml` / `m3d_synth_specs.yaml`）
+  双方の sha256 を記録・`--check-only` で再照合する（従来は fixtures 側のみ・
+  synth specs は無 pin だった）。両入力とも hash 計算とパースを同一バイト列から
+  行う構造（TOCTOU 解消）へ変更した
+- 生成（librosa/build_signal 呼び出し）を開始する前に、公開予定の全出力先
+  （out_dir 配下の生成 WAV・manifest-out・pins-out）を resolve() し、出力同士の
+  重複・出力と入力（fixtures yaml・synth specs yaml・vocadito WAV 全件）の衝突を
+  fail-closed で拒否する
+- アトミック公開の publish ループが成功した場合、退避しておいた `.prev`
+  snapshot を全て削除する（失敗時のロールバック経路の挙動は不変更）
+- `run_melody_comparison.py` の evaluate phase 側 `material_accounting.synthetic`
+  に holdout split の synth pair 全件を pair_id → 行単位の状態
+  （`locked_skipped`/`not_comparable`/`measured`+evidence/axes）で列挙する
+  per-row 診断テーブルを追加した。holdout ロック中（凍結前）は evidence に一切
+  触れず `locked_skipped` として列挙するのみで、既存の holdout ロック規律を
+  厳守する。calibration verdict への影響はゼロ（診断専用）
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 

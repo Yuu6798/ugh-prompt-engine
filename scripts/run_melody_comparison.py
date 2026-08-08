@@ -1879,6 +1879,57 @@ def _partition_pairs_by_material(
     return real_pairs, synth_pairs
 
 
+def _synthetic_holdout_diagnostic_rows(
+    synth_pairs: Dict[str, Dict[str, Any]], *, holdout_locked: bool
+) -> Dict[str, Any]:
+    """synthetic バケットの holdout split pair について、pair_id → 行単位の
+    診断状態を返す（R2R N4 対応・Codex レビュー第 2 ラウンド）。
+
+    従来の `material_accounting.synthetic` は tuning のマージン表と holdout の
+    件数（`holdout_pair_count`）しか出しておらず、凍結後の run に含まれる
+    synth holdout positive（2 対）の evidence/not_comparable が行単位では
+    どこにも記録されない穴があった（「正直会計」の看板と矛盾）。ここで
+    holdout split の synth pair 全件を pair_id → 状態で列挙する。
+
+    **既存の holdout ロック規律を厳守する**: `holdout_locked` が True（凍結前）
+    の場合、report の holdout 行自体が `comparison` を持たない（`run_comparison`
+    がロック中は音声を読まずスタブ化する既存契約——`results["pairs"][pair_id]
+    = {"split": ..., "status": "holdout_locked_until_frozen"}`）ため、ここでも
+    evidence には一切触れず `locked_skipped` として pair_id を列挙するだけに
+    留める。`holdout_locked` が False（unlocked 評価）の場合のみ、
+    `comparison.evidence`/`axes` を読んで正直に記録する。
+
+    戻り値はあくまで診断専用であり、`evaluate_comparison` の calibration
+    verdict（凍結提案・holdout_validation）へは一切接続しない（呼び出し側で
+    `material_accounting.synthetic` にのみ書き込む）。
+    """
+    rows: Dict[str, Any] = {}
+    for pair_id, pair in synth_pairs.items():
+        if pair["split"] != "holdout":
+            continue
+        if holdout_locked:
+            rows[pair_id] = {"status": "locked_skipped"}
+            continue
+        comparison = pair.get("comparison")
+        if comparison is None:
+            # unlocked 評価下で comparison を欠く行（report 改ざん・run 側不具合
+            # の疑い）。real バケットの同種欠落は `_holdout_missing_comparison_
+            # pair_ids` が calibration verdict 側で fail 材料にするが、synthetic
+            # は診断専用のためここでは状態を正直に記録するに留める。
+            rows[pair_id] = {"status": "missing_comparison"}
+            continue
+        evidence = comparison.get("evidence")
+        if evidence == "not_comparable":
+            rows[pair_id] = {"status": "not_comparable"}
+            continue
+        rows[pair_id] = {
+            "status": "measured",
+            "evidence": evidence,
+            "axes": comparison.get("axes", {}),
+        }
+    return rows
+
+
 def _margin_table(
     pairs: Dict[str, Dict[str, Any]], *, split: Optional[str], min_margin: float
 ) -> Dict[str, Any]:
@@ -2492,6 +2543,17 @@ def evaluate_comparison(
     の positive/negative が単一バケットへ混入していた（Codex 指摘: 全 positive
     単一バケット問題・synthetic の tuning positive not_comparable が real_voice
     由来の凍結提案まで巻き込んで全拒否していた問題）——本対応はこれを是正する。
+
+    R2R 対応 N4（Codex レビュー第 2 ラウンド・synthetic holdout の per-row
+    会計）: 上記の `material_accounting.synthetic` は従来 tuning のマージン表
+    と holdout の件数のみを出しており、凍結後の run に含まれる synth holdout
+    positive（tuning/holdout 各 1 本 × 変形 2 種 = 2 対）の evidence/
+    not_comparable が行単位でどこにも記録されず「正直会計」の看板と矛盾して
+    いた。`_synthetic_holdout_diagnostic_rows` が
+    `material_accounting.synthetic.holdout_rows`（pair_id → 状態）を追加する
+    ——既存の holdout ロック規律は厳守し、ロック中は evidence に触れず
+    `locked_skipped` の列挙のみ、unlocked 評価時のみ実際の evidence/axes を
+    記録する。calibration verdict への影響はゼロ（診断専用のまま）。
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -2631,6 +2693,14 @@ def evaluate_comparison(
             "calibrated_axes_diagnostic_only": margin_synth["calibrated_axes"],
             "not_comparable_positive_count": margin_synth["not_comparable_positive_count"],
             "not_comparable_negative_count": margin_synth["not_comparable_negative_count"],
+            # R2R N4 対応（Codex レビュー第 2 ラウンド）: holdout split の synth
+            # pair 全件を pair_id → 行単位の状態（`_synthetic_holdout_diagnostic_
+            # rows` 参照）で正直会計する。ロック中（凍結前）は evidence に一切
+            # 触れず `locked_skipped` のみ、unlocked 評価時のみ実際の
+            # evidence/axes を記録する——既存の holdout ロック規律を厳守。
+            "holdout_rows": _synthetic_holdout_diagnostic_rows(
+                synth_pairs, holdout_locked=holdout_locked
+            ),
             "note": (
                 "診断専用（事前登録 §1.3 フォールバック意味論の機械強制）。"
                 "not_comparable は not_measured として正直会計するのみで、"

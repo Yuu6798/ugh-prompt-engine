@@ -165,13 +165,16 @@ def test_generated_manifest_loads_via_harness_validator(tmp_path: Path, monkeypa
     out_dir = tmp_path / "external_m3d" / "m3d_pairs"
     staging_wav_dir = tmp_path / "staging_wav"
 
-    pairs, audio_source_lookup = bm.run_build(
+    pairs, audio_source_lookup, build_input_sha256 = bm.run_build(
         vocadito_dir=vocadito_dir,
         out_dir=out_dir,
+        manifest_out=tmp_path / "manifest.yaml",
+        pins_out=tmp_path / "pins.json",
         staging_wav_dir=staging_wav_dir,
         fixtures_path=fixtures_path,
         synth_specs_path=REAL_SYNTH_SPECS_PATH,
     )
+    assert set(build_input_sha256) == {"m2c_external_fixtures_sha256", "m3d_synth_specs_sha256"}
     manifest_doc = {"schema": bm._MANIFEST_SCHEMA, "pairs": pairs}
 
     # ハーネス自身のスキーマ検証（`_validate_manifest`）を独立に通す — pairs manifest
@@ -230,8 +233,9 @@ def test_pin_missing_file_is_fail_closed(tmp_path: Path, monkeypatch):
     vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
     (vocadito_dir / "Audio" / "vocadito_7.wav").unlink()
 
+    fixtures, _ = bm.load_m2c_fixtures(fixtures_path)
     with pytest.raises(bm.BuildM3dPairsError, match="MISSING"):
-        bm.verify_vocadito_pins(vocadito_dir, bm.load_m2c_fixtures(fixtures_path))
+        bm.verify_vocadito_pins(vocadito_dir, fixtures)
 
 
 def test_main_cli_fails_closed_on_pin_mismatch(tmp_path: Path, monkeypatch):
@@ -303,6 +307,8 @@ def test_same_input_produces_byte_identical_manifest(tmp_path: Path, monkeypatch
     assert pins_1["audio_sha256"] == pins_2["audio_sha256"]
     assert pins_1["material"] == pins_2["material"]
     assert pins_1["manifest_sha256"] == pins_2["manifest_sha256"]
+    assert pins_1["m2c_external_fixtures_sha256"] == pins_2["m2c_external_fixtures_sha256"]
+    assert pins_1["m3d_synth_specs_sha256"] == pins_2["m3d_synth_specs_sha256"]
 
 
 # --------------------------------------------------------------------------- #
@@ -320,6 +326,7 @@ def test_check_only_passes_after_successful_build(tmp_path: Path, monkeypatch):
         pins_out=build["pins_out"],
         vocadito_dir=vocadito_dir,
         fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
     )
     assert summary["total"] == 98
 
@@ -340,6 +347,7 @@ def test_check_only_detects_tampered_wav(tmp_path: Path, monkeypatch):
             pins_out=build["pins_out"],
             vocadito_dir=vocadito_dir,
             fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
         )
 
 
@@ -365,6 +373,7 @@ def test_check_only_detects_manifest_sha256_drift(tmp_path: Path, monkeypatch):
             pins_out=build["pins_out"],
             vocadito_dir=vocadito_dir,
             fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
         )
 
 
@@ -385,6 +394,7 @@ def test_check_only_detects_pins_schema_drift(tmp_path: Path, monkeypatch):
             pins_out=build["pins_out"],
             vocadito_dir=vocadito_dir,
             fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
         )
 
 
@@ -402,6 +412,7 @@ def test_check_only_detects_missing_manifest(tmp_path: Path, monkeypatch):
             pins_out=build["pins_out"],
             vocadito_dir=vocadito_dir,
             fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
         )
 
 
@@ -413,6 +424,7 @@ def test_load_and_validate_pins_rejects_missing_required_key(tmp_path: Path):
                 "schema": bm._PINS_SCHEMA,
                 "generated_utc": "2026-01-01T00:00:00+00:00",
                 "m2c_external_fixtures_sha256": "0" * 64,
+                "m3d_synth_specs_sha256": "0" * 64,
                 "audio_sha256": {},
                 "material": {},
                 # "manifest_sha256" キーを欠落させる
@@ -434,9 +446,11 @@ def test_material_is_recoverable_from_pair_id(tmp_path: Path, monkeypatch):
     out_dir = tmp_path / "external_m3d" / "m3d_pairs"
     staging_wav_dir = tmp_path / "staging_wav"
 
-    pairs, _ = bm.run_build(
+    pairs, _, _ = bm.run_build(
         vocadito_dir=vocadito_dir,
         out_dir=out_dir,
+        manifest_out=tmp_path / "manifest.yaml",
+        pins_out=tmp_path / "pins.json",
         staging_wav_dir=staging_wav_dir,
         fixtures_path=fixtures_path,
         synth_specs_path=REAL_SYNTH_SPECS_PATH,
@@ -560,3 +574,240 @@ def test_run_and_publish_leaves_previous_build_intact_when_rebuild_fails(
     assert wav_after == wav_before
     assert build1["manifest_out"].read_bytes() == manifest_before
     assert build1["pins_out"].read_bytes() == pins_before
+
+
+# --------------------------------------------------------------------------- #
+# R2R N1: build 入力 pin の完全化（TOCTOU 解消・m3d_synth_specs.yaml の pin 追加）
+# --------------------------------------------------------------------------- #
+def test_read_bytes_and_sha256_matches_manual_hash(tmp_path: Path):
+    path = tmp_path / "sample.yaml"
+    path.write_text("a: 1\nb: 2\n", encoding="utf-8")
+
+    data, digest = bm._read_bytes_and_sha256(path)
+
+    assert data == path.read_bytes()
+    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_load_m2c_fixtures_hash_is_computed_from_same_bytes_as_parse(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    _, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    fixtures, digest = bm.load_m2c_fixtures(fixtures_path)
+
+    assert isinstance(fixtures, dict) and fixtures
+    assert digest == hashlib.sha256(fixtures_path.read_bytes()).hexdigest()
+
+
+def test_load_synth_specs_hash_is_computed_from_same_bytes_as_parse():
+    specs, digest = bm._load_synth_specs(REAL_SYNTH_SPECS_PATH)
+
+    assert isinstance(specs, dict) and specs
+    assert digest == hashlib.sha256(REAL_SYNTH_SPECS_PATH.read_bytes()).hexdigest()
+
+
+def test_check_only_detects_fixtures_sha256_drift(tmp_path: Path, monkeypatch):
+    """m2c_external_fixtures.yaml がビルド後（pins サイドカーとは無関係に）改変
+    された場合、--check-only が m2c_external_fixtures sha256 mismatch で
+    fail-closed になる（R2R N1 対応）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)
+
+    with fixtures_path.open("a", encoding="utf-8") as handle:
+        handle.write("# tampered\n")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="m2c_external_fixtures sha256 mismatch"):
+        bm.check_existing(
+            manifest_out=build["manifest_out"],
+            pins_out=build["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+
+def test_check_only_detects_synth_specs_sha256_drift(tmp_path: Path, monkeypatch):
+    """m3d_synth_specs.yaml がビルド後に改変された場合、--check-only が
+    m3d_synth_specs sha256 mismatch で fail-closed になる（R2R N1 対応・従来は
+    そもそも無 pin だった）。共有の実 fixture ファイルを汚さないよう、
+    `tmp_path` 内のコピーを使う。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    synth_specs_path = tmp_path / "synth_specs.yaml"
+    synth_specs_path.write_bytes(REAL_SYNTH_SPECS_PATH.read_bytes())
+
+    outputs = _default_outputs(tmp_path)
+    bm.run_and_publish(
+        vocadito_dir=vocadito_dir,
+        out_dir=outputs["out_dir"],
+        manifest_out=outputs["manifest_out"],
+        pins_out=outputs["pins_out"],
+        fixtures_path=fixtures_path,
+        synth_specs_path=synth_specs_path,
+    )
+
+    with synth_specs_path.open("a", encoding="utf-8") as handle:
+        handle.write("# tampered\n")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="m3d_synth_specs sha256 mismatch"):
+        bm.check_existing(
+            manifest_out=outputs["manifest_out"],
+            pins_out=outputs["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=synth_specs_path,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# R2R N3: 公開先衝突の拒否（生成開始前・fail-closed）
+# --------------------------------------------------------------------------- #
+def test_reject_output_input_collisions_detects_output_output_duplicate(tmp_path: Path):
+    manifest_out = tmp_path / "manifest.yaml"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が重複している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=manifest_out,
+            pins_out=manifest_out,  # manifest_out と同一パス
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+        )
+
+
+def test_reject_output_input_collisions_detects_manifest_out_vs_fixtures_input(
+    tmp_path: Path,
+):
+    fixtures_path = tmp_path / "fixtures.yaml"
+    fixtures_path.write_text("dummy", encoding="utf-8")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=fixtures_path,  # manifest_out が入力 fixtures と同じパス
+            pins_out=tmp_path / "pins.json",
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=fixtures_path,
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+        )
+
+
+def test_reject_output_input_collisions_detects_wav_vs_vocadito_input(tmp_path: Path):
+    vocadito_wav = tmp_path / "vocadito" / "Audio" / "clip.wav"
+    vocadito_wav.parent.mkdir(parents=True)
+    vocadito_wav.write_bytes(b"x")
+    out_dir = vocadito_wav.parent  # out_dir を誤って入力ディレクトリに向ける
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm._reject_output_input_collisions(
+            out_dir=out_dir,
+            manifest_out=tmp_path / "manifest.yaml",
+            pins_out=tmp_path / "pins.json",
+            expected_wav_filenames=["clip.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[vocadito_wav],
+        )
+
+
+def test_reject_output_input_collisions_passes_for_disjoint_paths(tmp_path: Path):
+    bm._reject_output_input_collisions(
+        out_dir=tmp_path / "out",
+        manifest_out=tmp_path / "manifest.yaml",
+        pins_out=tmp_path / "pins.json",
+        expected_wav_filenames=["a.wav", "b.wav"],
+        fixtures_path=tmp_path / "fixtures.yaml",
+        synth_specs_path=tmp_path / "specs.yaml",
+        vocadito_audio_paths=[tmp_path / "vocadito" / "Audio" / "clip.wav"],
+    )  # 例外が飛ばなければ OK
+
+
+def test_run_and_publish_rejects_collision_before_generation(tmp_path: Path, monkeypatch):
+    """`--manifest-out`/`--pins-out` を誤って同一パスに向けた場合、生成
+    （staging への物理書き込み）を一切開始せず fail-closed で拒否する
+    （R2R N3 対応）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+    outputs = _default_outputs(tmp_path)
+    outputs["pins_out"] = outputs["manifest_out"]  # 意図的に衝突させる
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が重複している"):
+        bm.run_and_publish(
+            vocadito_dir=vocadito_dir,
+            out_dir=outputs["out_dir"],
+            manifest_out=outputs["manifest_out"],
+            pins_out=outputs["pins_out"],
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+    # 生成が一切開始していない（out_dir 自体が作られていない = WAV 未生成）。
+    assert not outputs["out_dir"].exists()
+    assert not outputs["manifest_out"].exists()
+    # staging も残らない。
+    leftover_staging = [p for p in tmp_path.iterdir() if p.name.startswith(".external_m3d")]
+    assert leftover_staging == []
+
+
+# --------------------------------------------------------------------------- #
+# R2R N2: アトミック公開成功時の .prev snapshot 掃除
+# --------------------------------------------------------------------------- #
+def test_publish_staged_bundle_removes_prev_snapshots_after_success(tmp_path: Path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    out_a = out_dir / "file_a.txt"
+    out_a.write_bytes(b"old-a")
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    staged_a = staging / "file_a.txt"
+    staged_a.write_bytes(b"new-a")
+
+    bm._publish_staged_bundle([(staged_a, out_a)])
+
+    assert out_a.read_bytes() == b"new-a"
+    # snapshot（`.prev`）は publish 成功後に残らない。
+    assert list(out_dir.glob(".*.prev")) == []
+
+
+def test_run_and_publish_leaves_no_prev_snapshots_after_successful_rebuild(
+    tmp_path: Path, monkeypatch
+):
+    """再ビルド（既存の公開済みセットを上書きする経路）が成功した場合も、
+    `_publish_staged_bundle` が作る snapshot（`.prev`）が最終的に一切残らない
+    （R2R N2 対応）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build1 = _build(tmp_path, fixtures_path, vocadito_dir)
+    # 同一の出力先へ再ビルド（各出力ファイルが必ず「既存」を経由し snapshot が
+    # 作られる状況を作る）。
+    bm.run_and_publish(
+        vocadito_dir=vocadito_dir,
+        out_dir=build1["out_dir"],
+        manifest_out=build1["manifest_out"],
+        pins_out=build1["pins_out"],
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+    )
+
+    leftover = list(build1["out_dir"].glob(".*.prev"))
+    leftover += list(build1["manifest_out"].parent.glob(".*.prev"))
+    leftover += list(build1["pins_out"].parent.glob(".*.prev"))
+    assert leftover == []
