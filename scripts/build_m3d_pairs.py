@@ -856,6 +856,28 @@ def _material_of(pair_id: str) -> str:
     raise BuildM3dPairsError(f"pair_id {pair_id!r} から material 区分を判別できない")
 
 
+def _expected_material_map(pairs: List[Dict[str, str]]) -> Dict[str, str]:
+    """`pairs`（ハーネス検証済み manifest）から audio path → material の期待値を
+    決定論的に再計算する（R2R 対応 H1・Codex レビュー第 6 ラウンド）。
+
+    manifest の pair_id 命名規則（`_real_`/`_synth_`）が material 区分の唯一の
+    authoritative な源であり、pins サイドカーの `material` フィールドはこの値の
+    単なるキャッシュに過ぎない——`check_existing` は sidecar 側の記録値を無条件に
+    信頼せず、本関数で manifest から独立に再計算した期待値と突き合わせる。同一
+    audio path が複数 pair から参照される場合（例: circular pairs の隣接共有・
+    positive_transform の base 共有）は先勝ちで採用する（`run_and_publish` の
+    従来ループと同じ規約——正当なデータでは同一 path が real/synth 混在で参照
+    されることはない）。
+    """
+    material: Dict[str, str] = {}
+    for pair in pairs:
+        pair_material = _material_of(pair["pair_id"])
+        for key in ("audio_a", "audio_b"):
+            rel = pair[key]
+            material.setdefault(rel, pair_material)
+    return material
+
+
 def crosstab(pairs: List[Dict[str, str]]) -> Dict[str, Dict[str, int]]:
     """kind × split の対数集計（`material` 内訳つき）を返す。"""
     counts: "Counter[Tuple[str, str]]" = Counter()
@@ -1025,6 +1047,33 @@ def _load_and_validate_pins(path: Path) -> Dict[str, Any]:
         raise BuildM3dPairsError(f"{path}: 'audio_sha256' が mapping でない (fail-closed)")
     if not isinstance(doc.get("material"), dict):
         raise BuildM3dPairsError(f"{path}: 'material' が mapping でない (fail-closed)")
+
+    # R2R 対応 H2（Codex レビュー第 6 ラウンド・summary の pin 化）: `summary_path`/
+    # `summary_sha256` は `--summary-out` 使用時のみ書かれる **optional** な
+    # フィールドペアである（`_REQUIRED_PINS_KEYS` には含めない——summary 非使用
+    # ビルドの既存 pins サイドカーが引き続き 0.3 のまま有効であるべきため、
+    # スキーマ version は bump しない。必須フィールド集合・既存フィールドの
+    # 意味論はいずれも変わらない純粋な追加的緩和のため、0.3 の後方互換規約
+    # （必須キー変更時のみ bump）に合致する）。ただし存在する場合は両方揃って
+    # いなければならない（片方のみの記録は sidecar 自体の破損を意味する）。
+    has_summary_path = "summary_path" in doc
+    has_summary_sha = "summary_sha256" in doc
+    if has_summary_path != has_summary_sha:
+        raise BuildM3dPairsError(
+            f"{path}: 'summary_path' と 'summary_sha256' は両方存在するか両方欠落かの "
+            "いずれかでなければならない (fail-closed; 片方のみの記録は sidecar 破損)"
+        )
+    if has_summary_sha:
+        summary_sha_value = doc["summary_sha256"]
+        if not isinstance(summary_sha_value, str) or len(summary_sha_value) != 64:
+            raise BuildM3dPairsError(
+                f"{path}: 'summary_sha256' が不正な形式 (fail-closed): {summary_sha_value!r}"
+            )
+        summary_path_value = doc["summary_path"]
+        if not isinstance(summary_path_value, str) or not summary_path_value:
+            raise BuildM3dPairsError(
+                f"{path}: 'summary_path' が不正な形式 (fail-closed): {summary_path_value!r}"
+            )
     return doc
 
 
@@ -1064,6 +1113,24 @@ def check_existing(
     ような atomic bundle には乗せず、`main()` が本関数の戻り値を使って単独の
     `_atomic_write_bytes` で書く（読み取り専用経路に新たに publish 状態を
     持ち込まない設計判定 — 実装詳細は `main()` docstring 相当のコメント参照）。
+
+    R2R 対応 H1（Codex レビュー第 6 ラウンド・material map の内容検証）:
+    (e) sidecar 記録の `material` マップ（audio path → real_voice/synthetic）を
+        検証済み manifest から独立に再計算した期待値（`_expected_material_map`）
+        と**完全一致**（キー集合・値とも）で照合する——従来は `material` が
+        mapping であることしか見ておらず、real_voice→synthetic への書換・
+        エントリ削除・stale エントリ追加のいずれも `--check-only: OK` で
+        素通りしていた。
+
+    R2R 対応 H2（Codex レビュー第 6 ラウンド・summary の pin 化）:
+    (f) sidecar に summary の記録（`summary_path`/`summary_sha256`）がある
+        場合、記録された path の現物とバイト sha256 を fail-closed で照合する
+        （記録があるのに現物欠落も fail）。記録が無い場合（summary 非使用
+        ビルド）は検証をスキップする。この検証は今回の呼び出しに渡された
+        `summary_out` 引数の有無とは独立——sidecar が過去に記録した summary の
+        整合性そのものを守るための照合であり、今回の書込み対象とは別の話。
+        --check-only は pins.json を一切書き換えない（read-only 原則を維持
+        ——summary pin の記録は `run_and_publish` 経路でのみ行う）。
     """
     fixtures, actual_fixtures_sha = load_m2c_fixtures(fixtures_path)
     # F1 対応: --check-only は改変検出そのものが目的の照合のため、キャッシュを
@@ -1101,6 +1168,31 @@ def check_existing(
             f"(actual={actual_synth_specs_sha} expected={expected_synth_specs_sha})"
         )
 
+    # R2R 対応 H2（Codex レビュー第 6 ラウンド・summary の pin 化）: sidecar に
+    # summary の記録がある場合（＝過去に `--summary-out` 付きでビルドされた場合）、
+    # 記録された path（repo-relative）の現物とバイト sha256 を fail-closed で
+    # 照合する。記録があるのに現物が存在しない場合も fail（H2 要件どおり）。
+    # 記録が無い場合（summary 非使用ビルド）は検証をスキップする——本チェックは
+    # 常に実行し、今回の呼び出しに渡された `summary_out` 引数の有無には依存
+    # させない（sidecar が記録している過去の summary の整合性そのものを守る
+    # ため、今回そのファイルを書くかどうかとは独立した話）。
+    if "summary_sha256" in pins_doc:
+        recorded_summary_path = pins_doc.get("summary_path")
+        expected_summary_sha = pins_doc["summary_sha256"]
+        abs_summary_path = ROOT / recorded_summary_path if recorded_summary_path else None
+        if abs_summary_path is None or not abs_summary_path.exists():
+            problems.append(
+                f"{recorded_summary_path}: pins サイドカーに記録された summary "
+                "ファイルが存在しない (fail-closed)"
+            )
+        else:
+            actual_summary_sha = file_sha256(abs_summary_path, use_cache=False)
+            if actual_summary_sha != expected_summary_sha:
+                problems.append(
+                    f"{recorded_summary_path}: summary sha256 mismatch "
+                    f"(actual={actual_summary_sha} expected={expected_summary_sha})"
+                )
+
     manifest_doc = _yaml_load_no_dup_keys(manifest_bytes)
     pairs = harness._validate_manifest(manifest_doc)
     audio_sha256 = pins_doc.get("audio_sha256", {})
@@ -1116,6 +1208,35 @@ def check_existing(
         actual = file_sha256(abs_path, use_cache=False)
         if actual != expected:
             problems.append(f"{rel_path}: sha256 mismatch (actual={actual} expected={expected})")
+
+    # R2R 対応 H1（Codex レビュー第 6 ラウンド・material map の内容検証）:
+    # 従来 `_load_and_validate_pins` は `material` が mapping であることしか
+    # 見ておらず、`check_existing` は中身（キー/値）を一切突合していなかった
+    # ——real_voice→synthetic への書換・エントリ削除・stale エントリ追加が
+    # すべて `--check-only: OK` で素通りする穴があった。検証済み manifest
+    # （`pairs`）から `_expected_material_map` で期待値を再計算し、sidecar
+    # 記録との**完全一致**（キー集合・値とも）を要求する。
+    expected_material = _expected_material_map(pairs)
+    recorded_material = pins_doc.get("material", {})
+    missing_material = sorted(set(expected_material) - set(recorded_material))
+    if missing_material:
+        problems.append(f"material マップに欠落エントリ (fail-closed): {missing_material}")
+    extra_material = sorted(set(recorded_material) - set(expected_material))
+    if extra_material:
+        problems.append(f"material マップに余剰エントリ (fail-closed; stale): {extra_material}")
+    mismatched_material = sorted(
+        rel
+        for rel in set(expected_material) & set(recorded_material)
+        if expected_material[rel] != recorded_material[rel]
+    )
+    if mismatched_material:
+        detail = "; ".join(
+            f"{rel}: expected(manifest 由来)={expected_material[rel]!r} "
+            f"recorded(sidecar)={recorded_material[rel]!r}"
+            for rel in mismatched_material
+        )
+        problems.append(f"material マップ不一致 (fail-closed): {detail}")
+
     if problems:
         raise BuildM3dPairsError(
             "--check-only 整合性チェック失敗 (fail-closed): " + "; ".join(problems)
@@ -1277,6 +1398,15 @@ def run_and_publish(
     1 組」を staging → 一括公開する構造を持つため、summary もここへ 1 エント
     リ追加するのが最も自然（単独の別 atomic write を追加すると、manifest/pins
     は公開済みだが summary だけ失敗する部分成功状態を新たに作ってしまう）。
+
+    R2R 対応 H2（Codex レビュー第 6 ラウンド・summary の pin 化）: `summary_out`
+    指定時は pins_doc へ `summary_path`（repo-relative）/`summary_sha256` を
+    optional フィールドとして記録する——従来は summary がアトミックバンドルの
+    一員として公開されるだけで pin されておらず、公開後の事後編集が
+    `--check-only` に不可視だった。記録は必須フィールドの追加ではなく既存
+    フィールドの意味論変更も伴わない純粋な追加的緩和のため、スキーマ version
+    は `m3d-pairs-pins/0.3` のまま bump しない（summary 非使用ビルドの既存
+    sidecar は引き続き有効）。
     """
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     staging_root = Path(
@@ -1303,14 +1433,37 @@ def run_and_publish(
         _atomic_write_bytes(staged_manifest, manifest_yaml)
 
         audio_sha256: Dict[str, str] = {}
-        material: Dict[str, str] = {}
         for pair in pairs:
             for key in ("audio_a", "audio_b"):
                 rel = pair[key]
                 if rel not in audio_sha256:
                     src = audio_source_lookup[rel]
                     audio_sha256[rel] = file_sha256(src, use_cache=False)
-                    material[rel] = _material_of(pair["pair_id"])
+        # R2R 対応 H1（Codex レビュー第 6 ラウンド）: material map は
+        # `_expected_material_map`（`check_existing` の再計算と同じ関数）から
+        # 導出する——ビルド時点の記録経路とチェック時点の再計算経路が同じ
+        # 単一の真実源を通ることを保証する（2 箇所に規約を複製しない）。
+        material = _expected_material_map(pairs)
+
+        # R2R 対応 G2（Codex レビュー第 5 ラウンド）: summary を manifest/pins
+        # と同じ atomic bundle へ 1 エントリとして編入する（`run_and_publish`
+        # docstring 参照 — 独立の別 atomic write にすると部分成功状態を新たに
+        # 作ってしまうため）。summary の中身は既に組み立て済みの `pairs` から
+        # 決定論的に導出できるため、公開前のこの時点で計算して staging へ書く。
+        # R2R 対応 H2（Codex レビュー第 6 ラウンド・summary の pin 化）: summary
+        # バイト列は pins_doc 組み立てより前に確定させる必要がある——pins_doc
+        # へ summary の path/digest を optional フィールドとして記録するため。
+        summary = crosstab(pairs)
+        staged_summary: Optional[Path] = None
+        summary_pin_fields: Dict[str, str] = {}
+        if summary_out is not None:
+            summary_bytes = json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
+            staged_summary = staging_root / "summary.json"
+            _atomic_write_bytes(staged_summary, summary_bytes)
+            summary_pin_fields = {
+                "summary_path": _repo_rel(summary_out),
+                "summary_sha256": hashlib.sha256(summary_bytes).hexdigest(),
+            }
 
         pins_doc = {
             "schema": _PINS_SCHEMA,
@@ -1319,6 +1472,7 @@ def run_and_publish(
             "manifest_sha256": hashlib.sha256(manifest_yaml).hexdigest(),
             "audio_sha256": dict(sorted(audio_sha256.items())),
             "material": dict(sorted(material.items())),
+            **summary_pin_fields,
         }
         staged_pins = staging_root / "pins.json"
         _atomic_write_bytes(
@@ -1331,18 +1485,7 @@ def run_and_publish(
         ]
         entries.append((staged_manifest, manifest_out))
         entries.append((staged_pins, pins_out))
-
-        # R2R 対応 G2（Codex レビュー第 5 ラウンド）: summary を manifest/pins
-        # と同じ atomic bundle へ 1 エントリとして編入する（`run_and_publish`
-        # docstring 参照 — 独立の別 atomic write にすると部分成功状態を新たに
-        # 作ってしまうため）。summary の中身は既に組み立て済みの `pairs` から
-        # 決定論的に導出できるため、公開前のこの時点で計算して staging へ書く。
-        summary = crosstab(pairs)
-        if summary_out is not None:
-            staged_summary = staging_root / "summary.json"
-            _atomic_write_bytes(
-                staged_summary, json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
-            )
+        if staged_summary is not None:
             entries.append((staged_summary, summary_out))
 
         # T2 対応（Codex レビュー第 3 ラウンド）: staging が完成した = これ以降
@@ -1391,6 +1534,21 @@ def main() -> int:
     # 経路は生成を行わない読み取り専用経路のため、`check_existing` が
     # 衝突検査のみ行い、実際の書き込みは（従来どおり）ここで単独の
     # `_atomic_write_bytes` として行う。
+    #
+    # R2R 対応 H2（Codex レビュー第 6 ラウンド・順序整理）: `--check-only` は
+    # `pins_out` を一切書き換えない（read-only 原則を維持——summary pin の
+    # 記録は `run_and_publish` 経路でのみ行う）。`check_existing` は summary
+    # の pin 記録（もしあれば）を必ず先に検証し（H2 の (f)。記録が無ければ
+    # skip）、続けて衝突検査を行ってから正常に return する——例外なく戻った
+    # 場合にのみ、ここで初めて `--summary-out` への書き込みが起こる。つまり
+    # 「検証（sidecar 記録の整合性 + 衝突）→ 書込」の順序は `check_existing`
+    # と `main()` の呼び出し順そのものから構造的に保証されており、追加の
+    # 明示的な順序制御コードは不要（この書込みは pins.json を更新しないため、
+    # 「pins 更新」ステップ自体が本経路には存在しない——read-only 原則を崩さず
+    # 「--check-only は summary 照合のみ・pins への書込みは run 経路のみ」へ
+    # 寄せる整理を採用した。summary_out 自体への書込みは既存 G2 契約を維持
+    # する: 生成物ではなく利便のための副次出力であり、pins.json という
+    # 信頼アンカーには一切触れないため）。
     try:
         if args.check_only:
             summary = check_existing(

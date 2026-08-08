@@ -124,6 +124,36 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   atomic bundle インフラを使わないため、衝突検査のみ `check_existing` 内で
   行い、実際の単独書き込みは従来どおり `main()` 側の `_atomic_write_bytes`
   で行う（読み取り専用経路に新たな publish 状態を持ち込まない設計判定）
+- **（Codex レビュー第 6 ラウンド追補・H1）** pins サイドカーの `material`
+  マップは従来 mapping であることしか検証しておらず、`--check-only` は中身
+  （キー/値）を manifest と一切突合していなかった——real_voice→synthetic
+  への書換・エントリ削除・stale エントリ追加のいずれも `OK` で素通りする穴
+  があった。検証済み manifest（pair_id の `_real_`/`_synth_` マーカー）から
+  `_expected_material_map` で期待値を独立に再計算し、sidecar 記録との
+  **完全一致**（キー集合・値とも）を要求するよう `check_existing` を拡張した。
+  `run_and_publish` 側の記録経路も同じ関数を通すよう統一（単一の真実源）。
+  `audio_sha256` 側の同種の「余剰キー」完全性は独立検証を追加していない
+  ——stale な余剰 `audio_sha256` エントリが単独で発生するのは manifest.yaml
+  自体の改変を伴う場合のみで、その場合は `manifest_sha256` 不一致が既に
+  fail-closed で捕捉する（`material` は manifest.yaml に一切現れないため
+  この保護が構造的に効かず、H1 は distinct な穴だった）
+- **（Codex レビュー第 6 ラウンド追補・H2）** summary はアトミックバンドルの
+  一員として公開されるようになった（G2）が、pins_doc に path/digest が記録
+  されておらず、公開後の事後編集が `--check-only` に不可視だった。
+  `--summary-out` 指定時は pins_doc へ `summary_path`（repo-relative）/
+  `summary_sha256` を **optional** フィールドとして記録する（スキーマ
+  version は `m3d-pairs-pins/0.3` のまま bump しない——必須フィールド追加や
+  既存フィールドの意味論変更を伴わない純粋な追加的緩和であり、summary 非
+  使用ビルドの既存 sidecar はそのまま有効という 0.3 の後方互換規約に合致
+  するため）。`check_existing` は記録がある場合のみ現物とのバイト sha256 を
+  fail-closed 検証（記録があるのに現物欠落も fail）し、記録が無ければ
+  スキップする。この検証は今回の呼び出しに渡す `summary_out` 引数の有無とは
+  独立——sidecar が過去に記録した summary の整合性そのものを守るための照合
+  である。`--check-only` は pins.json を一切書き換えない（read-only 原則を
+  維持——summary pin の記録は `run_and_publish` 経路でのみ行う）契約へ整理
+  し、「検証（sidecar 記録の整合性 + G2 の衝突検査）→ 書込」の順序は
+  `check_existing`/`main()` の呼び出し順そのものから構造的に保証されるため、
+  追加の順序制御コードは不要とした
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 

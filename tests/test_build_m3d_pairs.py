@@ -1464,3 +1464,324 @@ def test_parse_m2c_fixtures_rejects_duplicate_clip_id(tmp_path: Path):
 
     with pytest.raises(bm.BuildM3dPairsError, match="duplicate YAML mapping key"):
         bm._parse_m2c_fixtures(data, source="dummy.yaml")
+
+
+# --------------------------------------------------------------------------- #
+# R2R H1（Codex レビュー第 6 ラウンド）: material map の内容検証
+# --------------------------------------------------------------------------- #
+def test_expected_material_map_matches_material_of_for_all_pairs(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+    out_dir = tmp_path / "external_m3d" / "m3d_pairs"
+    staging_wav_dir = tmp_path / "staging_wav"
+
+    pairs, _, _, _ = bm.run_build(
+        vocadito_dir=vocadito_dir,
+        out_dir=out_dir,
+        manifest_out=tmp_path / "manifest.yaml",
+        pins_out=tmp_path / "pins.json",
+        staging_wav_dir=staging_wav_dir,
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+    )
+
+    expected = bm._expected_material_map(pairs)
+    # 全 audio path が漏れなく含まれ、各値が pair_id から独立に判別した
+    # material と一致する。
+    assert set(expected) == set(bm.all_audio_paths(pairs))
+    for pair in pairs:
+        pair_material = bm._material_of(pair["pair_id"])
+        assert expected[pair["audio_a"]] == pair_material
+        assert expected[pair["audio_b"]] == pair_material
+
+
+def test_check_only_detects_material_value_rewritten(tmp_path: Path, monkeypatch):
+    """sidecar の `material` マップの値だけが real_voice→synthetic 等へ書き換え
+    られた場合（manifest 自体は無改変）、`--check-only` が fail-closed で検出
+    する（H1 対応の主眼: 従来は `material` の中身を一切見ていなかった）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)
+
+    pins_doc = json.loads(build["pins_out"].read_text(encoding="utf-8"))
+    real_key = next(k for k, v in pins_doc["material"].items() if v == "real_voice")
+    pins_doc["material"][real_key] = "synthetic"  # 書換
+    build["pins_out"].write_text(json.dumps(pins_doc), encoding="utf-8")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="material マップ不一致"):
+        bm.check_existing(
+            manifest_out=build["manifest_out"],
+            pins_out=build["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+
+def test_check_only_detects_material_entry_deleted(tmp_path: Path, monkeypatch):
+    """sidecar の `material` マップからエントリが削除された場合（manifest は
+    無改変）、`--check-only` が欠落として fail-closed で検出する（H1 対応）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)
+
+    pins_doc = json.loads(build["pins_out"].read_text(encoding="utf-8"))
+    deleted_key = next(iter(pins_doc["material"]))
+    del pins_doc["material"][deleted_key]
+    build["pins_out"].write_text(json.dumps(pins_doc), encoding="utf-8")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="material マップに欠落エントリ"):
+        bm.check_existing(
+            manifest_out=build["manifest_out"],
+            pins_out=build["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+
+def test_check_only_detects_material_stale_entry_added(tmp_path: Path, monkeypatch):
+    """sidecar の `material` マップへ manifest に無い余剰（stale）エントリが
+    追加された場合、`--check-only` が fail-closed で検出する（H1 対応）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)
+
+    pins_doc = json.loads(build["pins_out"].read_text(encoding="utf-8"))
+    pins_doc["material"]["nonexistent/stale/path.wav"] = "real_voice"
+    build["pins_out"].write_text(json.dumps(pins_doc), encoding="utf-8")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="material マップに余剰エントリ"):
+        bm.check_existing(
+            manifest_out=build["manifest_out"],
+            pins_out=build["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+
+def test_check_only_passes_with_untouched_material_map(tmp_path: Path, monkeypatch):
+    """正常パス: material マップが無改変であれば `--check-only` は引き続き
+    通る（H1 の検査が偽陽性を出さないことの確認）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)
+
+    summary = bm.check_existing(
+        manifest_out=build["manifest_out"],
+        pins_out=build["pins_out"],
+        vocadito_dir=vocadito_dir,
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+    )
+    assert summary["total"] == 98
+
+
+# --------------------------------------------------------------------------- #
+# R2R H2（Codex レビュー第 6 ラウンド）: summary の pin 化
+# --------------------------------------------------------------------------- #
+def test_run_and_publish_records_summary_pin_in_pins_doc(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+    outputs = _default_outputs(tmp_path)
+    summary_out = tmp_path / "summary.json"
+
+    bm.run_and_publish(
+        vocadito_dir=vocadito_dir,
+        out_dir=outputs["out_dir"],
+        manifest_out=outputs["manifest_out"],
+        pins_out=outputs["pins_out"],
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        summary_out=summary_out,
+    )
+
+    pins_doc = json.loads(outputs["pins_out"].read_text(encoding="utf-8"))
+    assert pins_doc["schema"] == bm._PINS_SCHEMA  # H2 はスキーマ version を bump しない
+    assert pins_doc["summary_path"] == bm._repo_rel(summary_out)
+    assert pins_doc["summary_sha256"] == hashlib.sha256(summary_out.read_bytes()).hexdigest()
+
+
+def test_run_and_publish_omits_summary_pin_when_summary_out_not_given(
+    tmp_path: Path, monkeypatch
+):
+    """summary 非使用ビルド（従来どおり）は summary_path/summary_sha256 の
+    いずれも記録しない——既存 0.3 sidecar との後方互換性の確認。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)  # summary_out 未指定
+
+    pins_doc = json.loads(build["pins_out"].read_text(encoding="utf-8"))
+    assert "summary_path" not in pins_doc
+    assert "summary_sha256" not in pins_doc
+    # 既存 sidecar は --check-only を通る（後方互換）。
+    summary = bm.check_existing(
+        manifest_out=build["manifest_out"],
+        pins_out=build["pins_out"],
+        vocadito_dir=vocadito_dir,
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+    )
+    assert summary["total"] == 98
+
+
+def test_check_only_detects_summary_tampered_after_publish(tmp_path: Path, monkeypatch):
+    """公開済み summary ファイルが事後改変された場合、`--check-only` が
+    summary sha256 mismatch で fail-closed になる（H2 対応の主眼）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+    outputs = _default_outputs(tmp_path)
+    summary_out = tmp_path / "summary.json"
+
+    bm.run_and_publish(
+        vocadito_dir=vocadito_dir,
+        out_dir=outputs["out_dir"],
+        manifest_out=outputs["manifest_out"],
+        pins_out=outputs["pins_out"],
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        summary_out=summary_out,
+    )
+
+    with summary_out.open("a", encoding="utf-8") as handle:
+        handle.write("\n// tampered\n")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="summary sha256 mismatch"):
+        bm.check_existing(
+            manifest_out=outputs["manifest_out"],
+            pins_out=outputs["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+
+def test_check_only_detects_summary_missing_when_pinned(tmp_path: Path, monkeypatch):
+    """pins に summary の記録があるのに現物が削除された場合も fail-closed
+    （H2 要件: 「記録があるのに現物欠落も fail」）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+    outputs = _default_outputs(tmp_path)
+    summary_out = tmp_path / "summary.json"
+
+    bm.run_and_publish(
+        vocadito_dir=vocadito_dir,
+        out_dir=outputs["out_dir"],
+        manifest_out=outputs["manifest_out"],
+        pins_out=outputs["pins_out"],
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        summary_out=summary_out,
+    )
+    summary_out.unlink()
+
+    with pytest.raises(bm.BuildM3dPairsError, match="summary ファイルが存在しない"):
+        bm.check_existing(
+            manifest_out=outputs["manifest_out"],
+            pins_out=outputs["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+
+def test_check_only_verifies_summary_pin_independent_of_this_calls_summary_out_arg(
+    tmp_path: Path, monkeypatch
+):
+    """summary pin の照合は sidecar に記録された path 基準で行われ、今回の
+    呼び出しに `summary_out` を渡すかどうかとは独立している（H2 docstring の
+    設計判定どおり）——今回 `summary_out=None` で呼んでも、過去に記録された
+    summary の tamper は検出される。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+    outputs = _default_outputs(tmp_path)
+    summary_out = tmp_path / "summary.json"
+
+    bm.run_and_publish(
+        vocadito_dir=vocadito_dir,
+        out_dir=outputs["out_dir"],
+        manifest_out=outputs["manifest_out"],
+        pins_out=outputs["pins_out"],
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        summary_out=summary_out,
+    )
+    summary_out.write_bytes(b"{}")  # tamper
+
+    with pytest.raises(bm.BuildM3dPairsError, match="summary sha256 mismatch"):
+        bm.check_existing(
+            manifest_out=outputs["manifest_out"],
+            pins_out=outputs["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+            summary_out=None,  # 今回の呼び出しでは --summary-out 未指定
+        )
+
+
+def test_load_and_validate_pins_rejects_summary_path_without_sha(tmp_path: Path):
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        json.dumps(
+            {
+                "schema": bm._PINS_SCHEMA,
+                "generated_utc": "2026-01-01T00:00:00+00:00",
+                "m2c_external_fixtures_sha256": "0" * 64,
+                "m3d_synth_specs_sha256": "0" * 64,
+                "manifest_sha256": "0" * 64,
+                "audio_sha256": {},
+                "material": {},
+                "summary_path": "summary.json",  # summary_sha256 を欠落させる
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(bm.BuildM3dPairsError, match="両方存在するか両方欠落"):
+        bm._load_and_validate_pins(pins_path)
+
+
+def test_load_and_validate_pins_accepts_pins_without_summary_fields(tmp_path: Path):
+    """H2 追加前の既存 0.3 sidecar（summary フィールド無し）は引き続き有効
+    （後方互換の確認）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        json.dumps(
+            {
+                "schema": bm._PINS_SCHEMA,
+                "generated_utc": "2026-01-01T00:00:00+00:00",
+                "m2c_external_fixtures_sha256": "0" * 64,
+                "m3d_synth_specs_sha256": "0" * 64,
+                "manifest_sha256": "0" * 64,
+                "audio_sha256": {},
+                "material": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    doc = bm._load_and_validate_pins(pins_path)
+    assert "summary_path" not in doc
