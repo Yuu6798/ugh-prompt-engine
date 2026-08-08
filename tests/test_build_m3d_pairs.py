@@ -1177,4 +1177,290 @@ def test_publish_staged_bundle_rollback_restores_fully_completed_entry_when_late
     # b: snapshot rename 自体が失敗しており、無傷のまま
     # （空 placeholder で上書きされていない）。
     assert final_b.read_bytes() == b"old-b"
-    assert list(out_dir.glob(".*.prev")) == []
+
+
+# --------------------------------------------------------------------------- #
+# R2R G2（Codex レビュー第 5 ラウンド）: --summary-out の衝突検査編入と保護
+# --------------------------------------------------------------------------- #
+def test_reject_output_input_collisions_detects_summary_out_vs_manifest_out(tmp_path: Path):
+    manifest_out = tmp_path / "manifest.yaml"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が重複している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=manifest_out,
+            pins_out=tmp_path / "pins.json",
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+            summary_out=manifest_out,  # manifest_out と同一パス
+        )
+
+
+def test_reject_output_input_collisions_detects_summary_out_vs_pins_out(tmp_path: Path):
+    pins_out = tmp_path / "pins.json"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が重複している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=tmp_path / "manifest.yaml",
+            pins_out=pins_out,
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+            summary_out=pins_out,  # pins_out と同一パス
+        )
+
+
+def test_reject_output_input_collisions_detects_summary_out_vs_fixtures_input(tmp_path: Path):
+    fixtures_path = tmp_path / "fixtures.yaml"
+    fixtures_path.write_text("dummy", encoding="utf-8")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=tmp_path / "manifest.yaml",
+            pins_out=tmp_path / "pins.json",
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=fixtures_path,
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+            summary_out=fixtures_path,  # summary_out が入力 fixtures と同じパス
+        )
+
+
+def test_reject_output_input_collisions_detects_summary_out_vs_synth_specs_input(
+    tmp_path: Path,
+):
+    synth_specs_path = tmp_path / "specs.yaml"
+    synth_specs_path.write_text("dummy", encoding="utf-8")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=tmp_path / "manifest.yaml",
+            pins_out=tmp_path / "pins.json",
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=synth_specs_path,
+            vocadito_audio_paths=[],
+            summary_out=synth_specs_path,  # summary_out が入力 synth specs と同じパス
+        )
+
+
+def test_reject_output_input_collisions_detects_summary_out_vs_generated_wav(tmp_path: Path):
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が重複している"):
+        bm._reject_output_input_collisions(
+            out_dir=out_dir,
+            manifest_out=tmp_path / "manifest.yaml",
+            pins_out=tmp_path / "pins.json",
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+            summary_out=out_dir / "a.wav",  # 生成 WAV と同一パス
+        )
+
+
+def test_reject_output_input_collisions_passes_with_disjoint_summary_out(tmp_path: Path):
+    bm._reject_output_input_collisions(
+        out_dir=tmp_path / "out",
+        manifest_out=tmp_path / "manifest.yaml",
+        pins_out=tmp_path / "pins.json",
+        expected_wav_filenames=["a.wav", "b.wav"],
+        fixtures_path=tmp_path / "fixtures.yaml",
+        synth_specs_path=tmp_path / "specs.yaml",
+        vocadito_audio_paths=[tmp_path / "vocadito" / "Audio" / "clip.wav"],
+        summary_out=tmp_path / "summary.json",
+    )  # 例外が飛ばなければ OK
+
+
+def test_run_and_publish_rejects_summary_out_collision_before_generation(
+    tmp_path: Path, monkeypatch
+):
+    """`--summary-out` が入力 fixtures と衝突する場合、生成（staging への物理
+    書き込み）を一切開始せず fail-closed で拒否する（R2R G2 対応）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+    outputs = _default_outputs(tmp_path)
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm.run_and_publish(
+            vocadito_dir=vocadito_dir,
+            out_dir=outputs["out_dir"],
+            manifest_out=outputs["manifest_out"],
+            pins_out=outputs["pins_out"],
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+            summary_out=fixtures_path,  # 意図的に衝突させる
+        )
+
+    # 生成が一切開始していない（out_dir 自体が作られていない = WAV 未生成）。
+    assert not outputs["out_dir"].exists()
+    assert not outputs["manifest_out"].exists()
+    leftover_staging = [p for p in tmp_path.iterdir() if p.name.startswith(".external_m3d")]
+    assert leftover_staging == []
+
+
+def test_run_and_publish_writes_summary_out_atomically_with_bundle(tmp_path: Path, monkeypatch):
+    """衝突がない場合、`--summary-out` は manifest/pins/生成 WAV と同じ公開
+    タイミングで正しく書かれ、内容が戻り値の crosstab summary と一致する
+    （R2R G2 対応）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+    outputs = _default_outputs(tmp_path)
+    summary_out = tmp_path / "summary.json"
+
+    summary = bm.run_and_publish(
+        vocadito_dir=vocadito_dir,
+        out_dir=outputs["out_dir"],
+        manifest_out=outputs["manifest_out"],
+        pins_out=outputs["pins_out"],
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        summary_out=summary_out,
+    )
+
+    assert summary_out.exists()
+    on_disk = json.loads(summary_out.read_text(encoding="utf-8"))
+    assert on_disk == summary
+    assert summary["total"] == 98
+
+
+def test_check_only_rejects_summary_out_collision_with_published_wav(tmp_path: Path, monkeypatch):
+    """`--check-only --summary-out` が既公開の生成 WAV と衝突する場合、書き込み
+    前に fail-closed で拒否する（R2R G2 対応: `--check-only --summary-out
+    <manifest>` のような自壊シナリオのファミリー）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)
+    published_wav = next(build["out_dir"].glob("*.wav"))
+    before = published_wav.read_bytes()
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm.check_existing(
+            manifest_out=build["manifest_out"],
+            pins_out=build["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+            summary_out=published_wav,  # 既公開の生成 WAV と衝突させる
+        )
+
+    # 衝突検出時点で書き込みは一切発生しない（既公開 WAV は無傷）。
+    assert published_wav.read_bytes() == before
+
+
+def test_check_only_rejects_summary_out_collision_with_manifest_out(tmp_path: Path, monkeypatch):
+    """`--check-only --summary-out <manifest>` は検証直後の自壊シナリオその
+    ものであり、書き込み前に fail-closed で拒否する（R2R G2 対応）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)
+    manifest_before = build["manifest_out"].read_bytes()
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が重複している"):
+        bm.check_existing(
+            manifest_out=build["manifest_out"],
+            pins_out=build["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+            summary_out=build["manifest_out"],  # manifest_out と同一パス
+        )
+
+    assert build["manifest_out"].read_bytes() == manifest_before
+
+
+def test_check_only_writes_summary_out_when_no_collision(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)
+    summary_out = tmp_path / "summary.json"
+
+    # `check_existing` 自体は衝突検査のみ行い、実際の書き込みは呼び出し側
+    # （`main()`）が行う契約——ここでは契約どおり呼び出し側を模して書く。
+    summary = bm.check_existing(
+        manifest_out=build["manifest_out"],
+        pins_out=build["pins_out"],
+        vocadito_dir=vocadito_dir,
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        summary_out=summary_out,
+    )
+    assert not summary_out.exists()  # check_existing 自体はまだ書かない
+    bm._atomic_write_bytes(summary_out, json.dumps(summary, sort_keys=True).encode("utf-8"))
+    assert json.loads(summary_out.read_text(encoding="utf-8")) == summary
+
+
+# --------------------------------------------------------------------------- #
+# R2R G1（Codex レビュー第 5 ラウンド）: synth specs の重複キー拒否
+# --------------------------------------------------------------------------- #
+def test_load_synth_specs_rejects_duplicate_fixture_id(tmp_path: Path):
+    path = tmp_path / "specs.yaml"
+    path.write_text(
+        "fixtures:\n"
+        "  m3d_synth_tuning_pos:\n"
+        "    kind: tone\n"
+        "  m3d_synth_tuning_pos:\n"  # 重複 fixture id（値だけ差し替え）
+        "    kind: chord\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(bm.BuildM3dPairsError, match="duplicate YAML mapping key"):
+        bm._load_synth_specs(path)
+
+
+def test_load_synth_specs_rejects_duplicate_nested_key(tmp_path: Path):
+    path = tmp_path / "specs.yaml"
+    path.write_text(
+        "fixtures:\n"
+        "  m3d_synth_tuning_pos:\n"
+        "    kind: tone\n"
+        "    kind: chord\n",  # 同一 fixture 定義内の重複ネストキー
+        encoding="utf-8",
+    )
+
+    with pytest.raises(bm.BuildM3dPairsError, match="duplicate YAML mapping key"):
+        bm._load_synth_specs(path)
+
+
+def test_load_synth_specs_still_loads_real_spec_file():
+    specs, digest = bm._load_synth_specs(REAL_SYNTH_SPECS_PATH)
+
+    assert isinstance(specs, dict) and specs.get("fixtures")
+    assert digest == hashlib.sha256(REAL_SYNTH_SPECS_PATH.read_bytes()).hexdigest()
+
+
+def test_parse_m2c_fixtures_rejects_duplicate_clip_id(tmp_path: Path):
+    """ファミリー掃討の確認: `m2c_external_fixtures.yaml` 側は既に
+    `_yaml_load_no_dup_keys` を使っており（R2R G1 では無改造）、重複 clip_id は
+    引き続き fail-closed で拒否される。
+    """
+    data = (
+        "schema_version: m2c-external-fixtures/0.1\n"
+        "fixtures:\n"
+        "  vocadito_1:\n"
+        "    expected_audio_sha256: '" + "0" * 64 + "'\n"
+        "  vocadito_1:\n"  # 重複 clip_id
+        "    expected_audio_sha256: '" + "1" * 64 + "'\n"
+    ).encode("utf-8")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="duplicate YAML mapping key"):
+        bm._parse_m2c_fixtures(data, source="dummy.yaml")

@@ -116,7 +116,7 @@ import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import librosa
 import numpy as np
@@ -450,17 +450,27 @@ def _load_synth_specs(path: Path) -> Tuple[Dict[str, Any], str]:
     内部で独自に `open(path)` するため、そのまま呼ぶと本 builder が計算する
     sha256 pin と実際にパースへ渡ったバイト列が別読みになり得る（未 pin でも
     あった）。同関数のパース処理自体は `yaml.safe_load` を素通しするだけで
-    意味的な差異がないため、ここで同一バイト列に対して pin + `yaml.safe_load`
-    を行うことで代替する（`build_melody_bench.py` 自体は無改造）。
+    意味的な差異がないため、ここで同一バイト列に対して pin + パースを行う
+    ことで代替する（`build_melody_bench.py` 自体は無改造）。
 
     T3 対応（Codex レビュー第 3 ラウンド・path traversal 拒否）: `specs
     ["fixtures"]` の全キー（m3d_synth_specs.yaml 由来の fixture id）も同じ
     字句検証を通す（`_validate_id_lexical`）。`SYNTH_TUNING_POS_ID` 等の
     Python 定数側は本モジュールのインポート時に別途検証済み（下記
     `_SYNTH_ID_CONSTANTS` 参照）——両方の id ソースを独立に検証する。
+
+    R2R 対応 G1（Codex レビュー第 5 ラウンド・重複キー拒否）: パースには
+    `yaml.safe_load` ではなく `_yaml_load_no_dup_keys`（`_parse_m2c_fixtures`
+    と同じ `_NoDupSafeLoader`）を使う——素の `yaml.safe_load` は重複 mapping
+    キーで最後の値を黙って採用するため、事前登録済み刺激（狙い撃ち
+    negative の rhythm/interval spec 等）が無警告で置換されうる穴があった。
+    `_NoDupSafeLoader` は DEFAULT_MAPPING_TAG に対して登録されているため、
+    トップレベルの `fixtures` キー重複だけでなく、個々の fixture spec 内の
+    ネストしたキー重複（例: 1 つの fixture 定義内で `kind` を 2 回書く）も
+    再帰的に拒否する。
     """
     data, digest = _read_bytes_and_sha256(path)
-    specs = yaml.safe_load(data)
+    specs = _yaml_load_no_dup_keys(data)
     fixtures = specs.get("fixtures") if isinstance(specs, dict) else None
     if isinstance(fixtures, dict):
         for fixture_id in fixtures:
@@ -610,17 +620,24 @@ def _reject_output_input_collisions(
     fixtures_path: Path,
     synth_specs_path: Path,
     vocadito_audio_paths: "List[Path]",
+    summary_out: Optional[Path] = None,
 ) -> None:
     """公開予定の全出力先（`out_dir` 配下の生成 WAV・`manifest_out`・
-    `pins_out`）の resolve() 済み絶対パス集合と、全 build 入力（fixtures yaml・
-    synth specs yaml・vocadito WAV 全件）の resolve() 済み絶対パス集合を
-    突き合わせ、(a) 出力同士の重複 (b) 出力と入力の衝突、のいずれかがあれば
-    fail-closed で拒否する（R2R N3）。
+    `pins_out`・（指定時）`summary_out`）の resolve() 済み絶対パス集合と、全
+    build 入力（fixtures yaml・synth specs yaml・vocadito WAV 全件）の
+    resolve() 済み絶対パス集合を突き合わせ、(a) 出力同士の重複 (b) 出力と
+    入力の衝突、のいずれかがあれば fail-closed で拒否する（R2R N3）。
 
     生成（`staging_wav_dir` への物理書き込み・librosa/build_signal 呼び出し）を
     一切開始する前に呼ぶ——公開後に入力を破壊しうる誤設定（例: `--out-dir` を
     誤って vocadito 配布物のディレクトリに向ける・`--manifest-out` と
     `--pins-out` を同じパスに向ける）を、コストのかかる生成処理より前に断つ。
+
+    R2R 対応 G2（Codex レビュー第 5 ラウンド・`--summary-out` の衝突検査
+    編入）: 従来 `--summary-out` はこの preflight の対象外で、公開完了後に
+    無検査で書かれていた——manifest/pins/生成 WAV/入力ファイルを指すと
+    成功終了のまま上書き破壊しうる穴があった。`summary_out` を渡した場合は
+    他の出力（manifest_out/pins_out/生成 WAV）と同じ扱いで衝突検査へ編入する。
     """
     outputs: Dict[Path, str] = {}
 
@@ -635,6 +652,8 @@ def _reject_output_input_collisions(
 
     _register_output(manifest_out, "manifest_out")
     _register_output(pins_out, "pins_out")
+    if summary_out is not None:
+        _register_output(summary_out, "summary_out")
     for filename in expected_wav_filenames:
         _register_output(out_dir / filename, f"out_dir 配下の生成 WAV ({filename!r})")
 
@@ -1019,6 +1038,7 @@ def check_existing(
     vocadito_dir: Path,
     fixtures_path: Path,
     synth_specs_path: Path,
+    summary_out: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """既存の manifest + pins サイドカーが現在のファイル内容と整合するかだけを
     再照合する（生成は一切行わない）。1 件でも不整合なら `BuildM3dPairsError`。
@@ -1034,6 +1054,16 @@ def check_existing(
     (d) sidecar 記録の m2c_external_fixtures.yaml / m3d_synth_specs.yaml の
         sha256 と現物ファイルのバイト sha256 の一致検証も同様に fail-closed で
         行う（従来は fixtures 側のみ記録し、synth specs は無 pin だった）。
+
+    `summary_out`（R2R G2・Codex レビュー第 5 ラウンド）: 指定時は manifest の
+    整合性検証が終わった後（＝ `pairs` が読み取り確定した後）、`--summary-out`
+    が manifest/pins/build 入力/vocadito 原音・既公開 WAV のいずれとも衝突
+    しないことを `_reject_output_input_collisions` で確認してから呼び出し側
+    （`main()`）へ返す——`run_and_publish` 経路と異なり `check_existing` は
+    生成を一切行わない読み取り専用経路のため、`_publish_staged_bundle` の
+    ような atomic bundle には乗せず、`main()` が本関数の戻り値を使って単独の
+    `_atomic_write_bytes` で書く（読み取り専用経路に新たに publish 状態を
+    持ち込まない設計判定 — 実装詳細は `main()` docstring 相当のコメント参照）。
     """
     fixtures, actual_fixtures_sha = load_m2c_fixtures(fixtures_path)
     # F1 対応: --check-only は改変検出そのものが目的の照合のため、キャッシュを
@@ -1090,6 +1120,25 @@ def check_existing(
         raise BuildM3dPairsError(
             "--check-only 整合性チェック失敗 (fail-closed): " + "; ".join(problems)
         )
+
+    if summary_out is not None:
+        # G2: --check-only 経路でも --summary-out が manifest/pins/build 入力/
+        # vocadito 原音・既公開 WAV のいずれとも衝突しないことを、実際に書く前
+        # に確認する（`out_dir` は本経路では新規生成しないため空集合、既公開
+        # WAV は `all_audio_paths(pairs)` から repo-relative パスを解決して
+        # `vocadito_audio_paths` 相当の保護対象へ折り込む）。
+        published_audio_paths = [ROOT / rel_path for rel_path in all_audio_paths(pairs)]
+        _reject_output_input_collisions(
+            out_dir=manifest_out.parent,
+            manifest_out=manifest_out,
+            pins_out=pins_out,
+            expected_wav_filenames=[],
+            fixtures_path=fixtures_path,
+            synth_specs_path=synth_specs_path,
+            vocadito_audio_paths=published_audio_paths,
+            summary_out=summary_out,
+        )
+
     return crosstab(pairs)
 
 
@@ -1105,6 +1154,7 @@ def run_build(
     staging_wav_dir: Path,
     fixtures_path: Path,
     synth_specs_path: Path,
+    summary_out: Optional[Path] = None,
 ) -> Tuple[List[Dict[str, str]], Dict[str, Path], Dict[str, str], Dict[str, str]]:
     """公開先衝突検査 → pin 照合 → 選定 → 生成（`staging_wav_dir` への物理
     書き込み）→ manifest 組み立てまでを行う。書き込みは `staging_wav_dir` 配下
@@ -1122,6 +1172,11 @@ def run_build(
     （publish 直前の vocadito バイト再照合）で `verify_vocadito_pins` に
     再度渡すために返す（fixtures_path を再読み込みしない——ロード済みの
     同一 dict を再利用する）。
+
+    `summary_out`（R2R G2・Codex レビュー第 5 ラウンド）: 指定時は他の公開先
+    （manifest_out/pins_out/生成 WAV）と同じ扱いで `_reject_output_input_
+    collisions` の衝突検査に編入する——`--summary-out` が manifest/pins/生成
+    WAV/入力ファイルを指す誤設定を、生成開始前に fail-closed で拒否する。
     """
     fixtures, fixtures_sha256 = load_m2c_fixtures(fixtures_path)
     resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
@@ -1139,6 +1194,7 @@ def run_build(
         fixtures_path=fixtures_path,
         synth_specs_path=synth_specs_path,
         vocadito_audio_paths=list(resolved_audio.values()),
+        summary_out=summary_out,
     )
 
     specs, synth_specs_sha256 = _load_synth_specs(synth_specs_path)
@@ -1193,6 +1249,7 @@ def run_and_publish(
     pins_out: Path,
     fixtures_path: Path,
     synth_specs_path: Path,
+    summary_out: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`run_build` を staging ディレクトリ（`out_dir` と同一ファイルシステム上）
     で走らせ、manifest + pins サイドカーを組み立てて全検証成功後に
@@ -1212,6 +1269,14 @@ def run_and_publish(
     引き続き存在するが（読込経路は変えない設計判定）、**公開はされない**——
     本工程が生成後・公開前に同じ pin で全数を再照合し、1 件でも不一致なら
     fail-closed で公開自体を中止する（staging は破棄・既公開セットは無傷）。
+
+    `summary_out`（R2R G2・Codex レビュー第 5 ラウンド）: 指定時は
+    `run_build` の衝突検査へ編入した上で、crosstab summary の JSON を
+    manifest/pins/生成 WAV と**同じ atomic bundle**（`_publish_staged_bundle`）
+    で公開する——`_publish_staged_bundle` は既に「全部揃って初めて意味を持つ
+    1 組」を staging → 一括公開する構造を持つため、summary もここへ 1 エント
+    リ追加するのが最も自然（単独の別 atomic write を追加すると、manifest/pins
+    は公開済みだが summary だけ失敗する部分成功状態を新たに作ってしまう）。
     """
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     staging_root = Path(
@@ -1227,6 +1292,7 @@ def run_and_publish(
             staging_wav_dir=staging_wav_dir,
             fixtures_path=fixtures_path,
             synth_specs_path=synth_specs_path,
+            summary_out=summary_out,
         )
 
         manifest_doc = {"schema": _MANIFEST_SCHEMA, "pairs": pairs}
@@ -1266,6 +1332,19 @@ def run_and_publish(
         entries.append((staged_manifest, manifest_out))
         entries.append((staged_pins, pins_out))
 
+        # R2R 対応 G2（Codex レビュー第 5 ラウンド）: summary を manifest/pins
+        # と同じ atomic bundle へ 1 エントリとして編入する（`run_and_publish`
+        # docstring 参照 — 独立の別 atomic write にすると部分成功状態を新たに
+        # 作ってしまうため）。summary の中身は既に組み立て済みの `pairs` から
+        # 決定論的に導出できるため、公開前のこの時点で計算して staging へ書く。
+        summary = crosstab(pairs)
+        if summary_out is not None:
+            staged_summary = staging_root / "summary.json"
+            _atomic_write_bytes(
+                staged_summary, json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
+            )
+            entries.append((staged_summary, summary_out))
+
         # T2 対応（Codex レビュー第 3 ラウンド）: staging が完成した = これ以降
         # 生成処理（librosa.load 等）は一切行わない時点で、全 vocadito 入力 WAV
         # を pin と再照合する。ここで 1 件でも不一致なら公開せず fail-closed
@@ -1279,7 +1358,7 @@ def run_and_publish(
         verify_vocadito_pins(vocadito_dir, fixtures, use_cache=False)
 
         _publish_staged_bundle(entries)
-        return crosstab(pairs)
+        return summary
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
 
@@ -1305,6 +1384,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # R2R 対応 G2（Codex レビュー第 5 ラウンド）: `--summary-out` の書き込み
+    # 経路は分岐で異なる——`run_and_publish` 経路は summary を manifest/pins/
+    # 生成 WAV と同じ atomic bundle 内で公開済み（`run_and_publish` 内で
+    # 完結。ここでの追加書き込みは不要かつ二重書きになる）。`--check-only`
+    # 経路は生成を行わない読み取り専用経路のため、`check_existing` が
+    # 衝突検査のみ行い、実際の書き込みは（従来どおり）ここで単独の
+    # `_atomic_write_bytes` として行う。
     try:
         if args.check_only:
             summary = check_existing(
@@ -1313,8 +1399,15 @@ def main() -> int:
                 vocadito_dir=args.vocadito_dir,
                 fixtures_path=args.fixtures,
                 synth_specs_path=args.synth_specs,
+                summary_out=args.summary_out,
             )
             print(f"--check-only: OK ({summary['total']} pairs, sha256 全一致)")
+            if args.summary_out is not None:
+                _atomic_write_bytes(
+                    args.summary_out,
+                    json.dumps(summary, indent=2, sort_keys=True).encode("utf-8"),
+                )
+                print(f"wrote crosstab summary to {args.summary_out}")
         else:
             summary = run_and_publish(
                 vocadito_dir=args.vocadito_dir,
@@ -1323,18 +1416,16 @@ def main() -> int:
                 pins_out=args.pins_out,
                 fixtures_path=args.fixtures,
                 synth_specs_path=args.synth_specs,
+                summary_out=args.summary_out,
             )
             print(f"wrote {summary['total']} pairs to {args.manifest_out}")
             print(f"wrote pins sidecar to {args.pins_out}")
+            if args.summary_out is not None:
+                print(f"wrote crosstab summary to {args.summary_out}")
     except BuildM3dPairsError as exc:
         print(f"FAIL-CLOSED: {exc}", file=sys.stderr)
         return 1
 
-    if args.summary_out is not None:
-        _atomic_write_bytes(
-            args.summary_out, json.dumps(summary, indent=2, sort_keys=True).encode("utf-8")
-        )
-        print(f"wrote crosstab summary to {args.summary_out}")
     return 0
 
 

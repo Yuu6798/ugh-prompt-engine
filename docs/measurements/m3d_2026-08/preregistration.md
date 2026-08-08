@@ -99,6 +99,31 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   完了したか」を判定できる——存在するなら退避は未完了（destination は無傷の
   まま）で placeholder のみ削除し、存在しないなら snapshot からの復元が正当。
   成功時の `.prev` 掃除（N2）・従来の rollback（R3）の既存挙動は変更しない
+- **（Codex レビュー第 5 ラウンド追補・G1）** `m3d_synth_specs.yaml` の
+  パースを素の `yaml.safe_load` から、`m2c_external_fixtures.yaml` で既に
+  使っていた重複 mapping キー拒否ローダ（`_NoDupSafeLoader` /
+  `_yaml_load_no_dup_keys`）へ切り替えた。素の `safe_load` は重複キーで
+  最後の値を黙って採用するため、事前登録済み刺激（狙い撃ち negative の
+  rhythm/interval spec 等）が無警告で置換されうる穴があった。同ローダは
+  `yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG` に対して登録されている
+  ため、トップレベルの `fixtures` キー重複だけでなく個々の fixture spec 内の
+  ネストしたキー重複も再帰的に拒否する。`m2c_external_fixtures.yaml` 側は
+  既に同ローダを使用済みのため無改造（ファミリー掃討の確認のみ）
+- **（Codex レビュー第 5 ラウンド追補・G2）** `--summary-out` を preflight の
+  保護対象に編入した（`_reject_output_input_collisions` の出力同士の重複
+  検査・出力と入力の衝突検査の両方、`run_build`/`check_existing` 双方の
+  経路）——従来は無検査で公開完了後に書かれており、`--check-only
+  --summary-out <manifest>` のような指定は検証直後に manifest を自壊させる
+  穴があった。書き込み自体も atomic 規律に統合する: `run_and_publish` 経路
+  は summary を manifest/pins/生成 WAV と**同じ** `_publish_staged_bundle`
+  atomic bundle へ 1 エントリとして編入する（同関数は既に「全部揃って初めて
+  意味を持つ 1 組」を一括公開する構造を持つため、summary もそこへ乗せるのが
+  自然——独立の別 atomic write を追加すると manifest/pins は公開済みだが
+  summary だけ失敗する新たな部分成功状態を作ってしまう）。一方
+  `--check-only`（`check_existing`）は生成を行わない読み取り専用経路であり
+  atomic bundle インフラを使わないため、衝突検査のみ `check_existing` 内で
+  行い、実際の単独書き込みは従来どおり `main()` 側の `_atomic_write_bytes`
+  で行う（読み取り専用経路に新たな publish 状態を持ち込まない設計判定）
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 
