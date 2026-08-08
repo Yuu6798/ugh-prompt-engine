@@ -674,6 +674,87 @@ def _reject_output_input_collisions(
 
 
 # --------------------------------------------------------------------------- #
+# L3（Codex レビュー第 10 ラウンド）: cross-device 構成の事前拒否
+# --------------------------------------------------------------------------- #
+def _nearest_existing_ancestor(path: Path) -> Path:
+    """`path`（resolve 済みでなくてよい）を resolve() した上で、実在する
+    最も近い祖先ディレクトリを返す（`st_dev` 判定用。副作用なし——ディレクトリを
+    作成しない）。resolve() 後の絶対パスは必ずルート `/` を祖先に持つため、
+    POSIX では必ず終端する。
+    """
+    resolved = Path(path).resolve()
+    for candidate in (resolved, *resolved.parents):
+        if candidate.exists():
+            return candidate
+    return resolved  # pragma: no cover - resolve() 済み絶対パスなら到達しない
+
+
+def _reject_cross_device_publish_targets(
+    *,
+    staging_parent: Path,
+    out_dir: Path,
+    manifest_out: Path,
+    pins_out: Path,
+    summary_out: Optional[Path] = None,
+) -> None:
+    """staging（`staging_parent` 上に作られる）と公開予定の全出力先が同一
+    ファイルシステム上にあることを、生成を一切開始する前に検証する
+    （fail-closed。レビュー対応 第 10 ラウンド・L3）。
+
+    `_publish_staged_bundle` は `os.replace(staged_path, final_path)`
+    （atomic rename）で公開する——rename は同一ファイルシステム上でしか
+    atomic に行えず、staging と `final_path` が別ファイルシステムなら
+    `OSError`（errno EXDEV）で失敗する。この失敗は高価な生成（librosa
+    変形・`build_signal` 合成）が**完全に終わった後**、公開直前に初めて
+    起こる——ここで先回りして拒否し、その無駄を防ぐ。
+
+    判定は `os.stat().st_dev`（デバイス番号）の比較で行う。各パスはまだ
+    存在しない場合があるため（`out_dir`/`manifest_out`/`pins_out` はいずれも
+    初回ビルドでは未作成があり得る）、`_nearest_existing_ancestor` で実在
+    する最も近い祖先を求めてから stat する——mkdir 等の副作用は起こさない
+    （最終的にどのディレクトリへ作られようと、実在する祖先と同じファイル
+    システム上に作られる以外の道はない）。symlink は resolve() 後の実体
+    パスで判定する（symlink 先の実ファイルシステムが真の判定対象）。
+
+    設計判断（per-destination staging への再設計は不採用）: 「公開先ごとに
+    個別の staging ディレクトリを用意し、公開先に近い場所へ個別に staging
+    する」設計も考えられるが、`_publish_staged_bundle` の「全部揃って初めて
+    意味を持つ 1 組を snapshot+rollback 付きで一括公開する」という単純な
+    契約（単一 staging ディレクトリ前提）を複数 staging 対応へ拡張する複雑化
+    に見合わない——事前登録の運用（`--manifest-out`/`--pins-out`/`--out-dir`
+    は同一チェックアウト内の固定パス）では cross-device 構成は通常発生しない
+    事故的な設定ミスであり、生成開始前の早期 fail-closed 拒否の方が単純かつ
+    安全側である。
+    """
+    staging_dev = os.stat(_nearest_existing_ancestor(staging_parent)).st_dev
+
+    targets: Dict[str, Path] = {
+        "out_dir": out_dir,
+        "manifest_out.parent": manifest_out.parent,
+        "pins_out.parent": pins_out.parent,
+    }
+    if summary_out is not None:
+        targets["summary_out.parent"] = summary_out.parent
+
+    mismatches: List[str] = []
+    for label, target in targets.items():
+        ancestor = _nearest_existing_ancestor(target)
+        target_dev = os.stat(ancestor).st_dev
+        if target_dev != staging_dev:
+            mismatches.append(
+                f"{label} ({Path(target).resolve()}; 実在する祖先 {ancestor} の "
+                f"st_dev={target_dev})"
+            )
+    if mismatches:
+        raise BuildM3dPairsError(
+            "公開先が staging と異なるファイルシステム上にある (fail-closed; "
+            "os.replace による atomic rename は同一ファイルシステム上でしか "
+            f"できない — staging 側: {_nearest_existing_ancestor(staging_parent)} "
+            f"(st_dev={staging_dev}): " + "; ".join(mismatches)
+        )
+
+
+# --------------------------------------------------------------------------- #
 # 生成: vocadito 変形
 # --------------------------------------------------------------------------- #
 def generate_vocadito_variants(
@@ -1407,8 +1488,27 @@ def run_and_publish(
     フィールドの意味論変更も伴わない純粋な追加的緩和のため、スキーマ version
     は `m3d-pairs-pins/0.3` のまま bump しない（summary 非使用ビルドの既存
     sidecar は引き続き有効）。
+
+    レビュー対応 第 10 ラウンド（L3・cross-device 構成の事前拒否）: staging は
+    `out_dir.parent` 上に作られるが、`--manifest-out`/`--pins-out`（や symlink
+    先の `--out-dir`）が別ファイルシステムだと、公開時の `os.replace` が
+    EXDEV で失敗する——高価なビルドが完全に終わった後に。生成を開始する前に
+    `_reject_cross_device_publish_targets` で全公開先の `st_dev` を staging
+    側と比較し、不一致があれば fail-closed で拒否する（詳細・設計判断は
+    同関数の docstring 参照）。
     """
     out_dir.parent.mkdir(parents=True, exist_ok=True)
+    # レビュー対応 第 10 ラウンド（L3）: staging（`out_dir.parent` 上に作る）と
+    # 公開予定の全出力先が同一ファイルシステム上にあることを、生成
+    # （staging_root の作成そのもの）より前に確認する——高価な生成が完全に
+    # 終わった後に `os.replace` が EXDEV で失敗する事故を先回りして防ぐ。
+    _reject_cross_device_publish_targets(
+        staging_parent=out_dir.parent,
+        out_dir=out_dir,
+        manifest_out=manifest_out,
+        pins_out=pins_out,
+        summary_out=summary_out,
+    )
     staging_root = Path(
         tempfile.mkdtemp(prefix=f".{out_dir.name}.staging_", dir=str(out_dir.parent))
     )

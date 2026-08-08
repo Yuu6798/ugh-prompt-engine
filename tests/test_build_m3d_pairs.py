@@ -1785,3 +1785,142 @@ def test_load_and_validate_pins_accepts_pins_without_summary_fields(tmp_path: Pa
     )
     doc = bm._load_and_validate_pins(pins_path)
     assert "summary_path" not in doc
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 10 ラウンド（L3）: cross-device 構成の事前拒否
+# --------------------------------------------------------------------------- #
+class _FakeStatResult:
+    def __init__(self, st_dev: int) -> None:
+        self.st_dev = st_dev
+
+
+def test_reject_cross_device_publish_targets_passes_for_same_device(tmp_path: Path):
+    """全公開先が staging と同一ファイルシステム上（テストでは自明に
+    `tmp_path` 配下）であれば例外は飛ばない（偽陽性を出さないことの確認）。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    manifest_out = tmp_path / "manifest.yaml"
+    pins_out = tmp_path / "pins.json"
+    summary_out = tmp_path / "summary.json"
+
+    bm._reject_cross_device_publish_targets(
+        staging_parent=tmp_path,
+        out_dir=out_dir,
+        manifest_out=manifest_out,
+        pins_out=pins_out,
+        summary_out=summary_out,
+    )  # 例外が飛ばなければ OK
+
+
+def test_reject_cross_device_publish_targets_detects_pins_out_mismatch(
+    tmp_path: Path, monkeypatch
+):
+    """`--pins-out` の親ディレクトリが staging と異なる `st_dev` を返す場合、
+    fail-closed で拒否する（monkeypatch で st_dev 不一致を模す。L3 対応の
+    主眼）。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    manifest_out = tmp_path / "manifest.yaml"
+    pins_dir = tmp_path / "pins_fs"
+    pins_dir.mkdir()
+    pins_out = pins_dir / "pins.json"
+
+    real_stat = os.stat
+    mismatched = pins_dir.resolve()
+
+    def _fake_stat(path, *args, **kwargs):
+        # 注意: ここで `.resolve()`/`.exists()` 等の再 stat を伴う操作をしては
+        # ならない——`os.stat` はグローバルに monkeypatch 済みのため、それ自体が
+        # 本関数を再帰的に呼び出し無限再帰になる。呼び出し元
+        # （`_nearest_existing_ancestor`）は既に resolve 済みの絶対パスを渡す
+        # ため、単純な等価比較で十分。
+        if isinstance(path, (str, Path)) and Path(path) == mismatched:
+            return _FakeStatResult(st_dev=999999)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(bm.os, "stat", _fake_stat)
+
+    with pytest.raises(bm.BuildM3dPairsError, match="staging と異なるファイルシステム"):
+        bm._reject_cross_device_publish_targets(
+            staging_parent=tmp_path,
+            out_dir=out_dir,
+            manifest_out=manifest_out,
+            pins_out=pins_out,
+        )
+
+
+def test_reject_cross_device_publish_targets_detects_out_dir_mismatch(
+    tmp_path: Path, monkeypatch
+):
+    out_dir = tmp_path / "out_fs"
+    out_dir.mkdir()
+    manifest_out = tmp_path / "manifest.yaml"
+    pins_out = tmp_path / "pins.json"
+
+    real_stat = os.stat
+    mismatched = out_dir.resolve()
+
+    def _fake_stat(path, *args, **kwargs):
+        # 注意: ここで `.resolve()`/`.exists()` 等の再 stat を伴う操作をしては
+        # ならない——`os.stat` はグローバルに monkeypatch 済みのため、それ自体が
+        # 本関数を再帰的に呼び出し無限再帰になる。呼び出し元
+        # （`_nearest_existing_ancestor`）は既に resolve 済みの絶対パスを渡す
+        # ため、単純な等価比較で十分。
+        if isinstance(path, (str, Path)) and Path(path) == mismatched:
+            return _FakeStatResult(st_dev=999999)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(bm.os, "stat", _fake_stat)
+
+    with pytest.raises(bm.BuildM3dPairsError, match="staging と異なるファイルシステム"):
+        bm._reject_cross_device_publish_targets(
+            staging_parent=tmp_path,
+            out_dir=out_dir,
+            manifest_out=manifest_out,
+            pins_out=pins_out,
+        )
+
+
+def test_run_and_publish_rejects_cross_device_before_generation(tmp_path: Path, monkeypatch):
+    """`run_and_publish` は cross-device 不一致を生成開始前に検出し、staging
+    すら作らずに fail-closed で拒否する（既公開セット同様「部分出力なし」）。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+    outputs = _default_outputs(tmp_path)
+    outputs["pins_out"].parent.mkdir(parents=True, exist_ok=True)
+    mismatched = outputs["pins_out"].parent.resolve()
+
+    real_stat = os.stat
+
+    def _fake_stat(path, *args, **kwargs):
+        # 注意: ここで `.resolve()`/`.exists()` 等の再 stat を伴う操作をしては
+        # ならない——`os.stat` はグローバルに monkeypatch 済みのため、それ自体が
+        # 本関数を再帰的に呼び出し無限再帰になる。呼び出し元
+        # （`_nearest_existing_ancestor`）は既に resolve 済みの絶対パスを渡す
+        # ため、単純な等価比較で十分。
+        if isinstance(path, (str, Path)) and Path(path) == mismatched:
+            return _FakeStatResult(st_dev=999999)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(bm.os, "stat", _fake_stat)
+
+    with pytest.raises(bm.BuildM3dPairsError, match="staging と異なるファイルシステム"):
+        bm.run_and_publish(
+            vocadito_dir=vocadito_dir,
+            out_dir=outputs["out_dir"],
+            manifest_out=outputs["manifest_out"],
+            pins_out=outputs["pins_out"],
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+    # 生成が一切開始していない（out_dir 自体が作られていない = WAV 未生成）。
+    assert not outputs["out_dir"].exists()
+    assert not outputs["manifest_out"].exists()
+    leftover_staging = [p for p in tmp_path.iterdir() if p.name.startswith(".external_m3d")]
+    assert leftover_staging == []

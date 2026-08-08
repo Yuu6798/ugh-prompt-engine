@@ -1479,6 +1479,71 @@ def _require_pair_pins_present_for_publishable_reports(reports: List[Dict[str, A
                 )
 
 
+def _require_pins_preflight_evidence_for_publishable_reports(
+    reports: List[Dict[str, Any]],
+) -> None:
+    """publishable（`route_runner_injected` でない）report が run phase の
+    pins preflight（レビュー対応 第 7 ラウンド・`_run_pins_preflight`）を
+    実際に通過した証跡を残しているか検証する（レビュー対応 第 10 ラウンド・
+    L1）。
+
+    強制ゲート導入（第 7 ラウンド）より前に作られた report、または証跡
+    フィールドを事後に編集で除去された report は、
+    `_require_pair_pins_present_for_publishable_reports`（本関数の直前の
+    チェック）が要求する pair 単位 pin（`audio_sha256_a/b` 等——runner が
+    消費した bytes の自己申告 digest に過ぎず、sidecar と照合された証拠では
+    ない）だけで凍結提案まで到達できてしまう——本関数はその抜け道を閉じる。
+
+    publishable report（injected report は現行の扱いを維持し対象外）に対し、
+    以下を fail-closed で要求する:
+    (a) `pins_preflight_verified` が bool の `True` であること
+    (b) `pins_path`/`pins_sha256` が存在し、`pins_sha256` が形式的に妥当な
+        sha256 hex であること（`_run_pins_preflight` が (a) と対で必ず記録
+        する契約——`run_comparison` 参照。整形そのものの厳密検証は
+        `_validate_pin_formats` 側の `_REPORT_LEVEL_SHA256_FIELDS` にも
+        `pins_sha256` を編入して重複適用する——本関数は存在検証に留める）
+    (c) 全 publishable report 間で `pins_sha256` が完全一致すること——repeats
+        が異なる pins sidecar を指していれば「同一の校正材料に対する複数回
+        実行」という repeats の前提が崩れる（`_check_repeats_consistency` の
+        `_REPORT_LEVEL_REPEAT_PINS` と同型の規律を、pins に対しても課す）
+    """
+    pins_sha256_by_idx: Dict[int, str] = {}
+    for idx, report in enumerate(reports):
+        if report.get("route_runner_injected"):
+            continue
+        verified = report.get("pins_preflight_verified")
+        if verified is not True:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] は publishable だが "
+                f"pins_preflight_verified が True でない (fail-closed; 実際の値: "
+                f"{verified!r}): run phase の pins preflight（第 7 ラウンド強制化）を "
+                "通過した証跡がない report は凍結提案・holdout 判定に使えない"
+            )
+        pins_path = report.get("pins_path")
+        if not isinstance(pins_path, str) or not pins_path:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] は pins_preflight_verified=True "
+                f"だが pins_path が欠落/不正 (fail-closed): {pins_path!r}"
+            )
+        pins_sha256 = report.get("pins_sha256")
+        if not _is_sha256_hex(pins_sha256):
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] は pins_preflight_verified=True "
+                f"だが pins_sha256 が欠落/不正な形式 (fail-closed): {pins_sha256!r}"
+            )
+        pins_sha256_by_idx[idx] = pins_sha256
+
+    distinct = set(pins_sha256_by_idx.values())
+    if len(distinct) > 1:
+        detail = "; ".join(
+            f"reports[{idx}]={sha!r}" for idx, sha in sorted(pins_sha256_by_idx.items())
+        )
+        raise ValueError(
+            "evaluate_comparison: publishable report 間で pins_sha256 が不一致 "
+            f"(fail-closed; 同一の pins sidecar に対する実行でなければならない): {detail}"
+        )
+
+
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -1493,6 +1558,12 @@ _REPORT_LEVEL_SHA256_FIELDS: Tuple[str, ...] = (
     "m1_registry_sha256",
     # レビュー対応 2026-07-30（第 12 ラウンド）: 第一者 M3 実装コードの content pin。
     "m3_code_sha256",
+    # レビュー対応 第 10 ラウンド（L1）: 存在する場合の整形検証はここへ編入する
+    # （injected/publishable を問わない——`value is not None` ガードにより
+    # 未指定 report では単に skip される）。**存在の必須化**（publishable
+    # report は必須）は `_require_pins_preflight_evidence_for_publishable_
+    # reports` が別途 fail-closed で課す（直交する規律——本タプルは形式のみ）。
+    "pins_sha256",
 )
 # route_provenance_a/b の crepe 経路固有必須 pin（`extractors.py
 # observe_via_route_with_provenance` が実測 crepe 観測に対して必ず記録するキー。
@@ -2748,6 +2819,15 @@ def evaluate_comparison(
        publishable report は全 pair（holdout ロック pair を除く）で必須
        （レビュー対応 2026-07-30 第 6 ラウンド: 全欠落は repeats 整合性チェック
        だけでは検出できないバイパスを閉じる）
+    5.5. run phase の pins preflight（第 7 ラウンド強制化）を実際に通過した
+       証跡の検証（`_require_pins_preflight_evidence_for_publishable_reports`。
+       レビュー対応 第 10 ラウンド・L1）: publishable report は
+       `pins_preflight_verified=True`・`pins_path`/`pins_sha256` の存在・
+       全 publishable report 間での `pins_sha256` 完全一致を要求する——上の
+       手順 5（pair 単位 pin の存在）だけでは、report が自己申告する
+       audio hash が sidecar と照合された証拠までは確認できない（強制ゲート
+       導入前に作られた report・証跡フィールドを事後編集で除去された report
+       が凍結提案まで到達できてしまう抜け道を閉じる）
     6. pin 値そのものの整形検証（レビュー対応 2026-07-30 第 8/9 ラウンド）: sha256
        系 pin（`manifest_sha256` / `m3_registry_sha256` / `m1_registry_sha256` /
        `m3_code_sha256` / `audio_sha256_a/b`）が 64 桁小文字 hex であること、
@@ -2871,6 +2951,12 @@ def evaluate_comparison(
     _validate_route_runner_injected_field(reports)
     _validate_route_for_evaluate(reports)
     _require_pair_pins_present_for_publishable_reports(reports)
+    # レビュー対応 第 10 ラウンド（L1）: pair 単位 pin の存在検証（直前の関数）
+    # だけでは、run phase の pins preflight（第 7 ラウンド強制化）を実際に
+    # 通過した証跡までは確認できない——強制ゲート導入前に作られた report や
+    # 証跡フィールドを事後編集で除去された report が、自己記録の audio hash
+    # だけで凍結提案まで到達できてしまう抜け道を閉じる。
+    _require_pins_preflight_evidence_for_publishable_reports(reports)
     _validate_pin_formats(reports)
     # R2 対応（Codex レビュー・material 別会計の前提）: 全 pair_id が material
     # 判別可能（`_real_`/`_synth_` マーカーを持つ）ことを margin/holdout 集計に

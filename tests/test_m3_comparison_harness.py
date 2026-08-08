@@ -143,6 +143,28 @@ def _write_manifest(path: Path, pairs: List[Dict[str, Any]]) -> None:
     path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
 
+# レビュー対応 第 10 ラウンド（L1）: `route_runner_injected` を False へ上書き
+# して「実測（publishable）相当」に偽装する既存パターンは、L1 導入後は
+# それだけでは publishable report の要求（`pins_preflight_verified`/
+# `pins_path`/`pins_sha256`）を満たせない——`_mark_publishable` へ統一し、
+# この 3 フィールドも併せて満たす。既定値は module 定数の固定 sha256 を
+# 使うため、同一テスト内で複数 report（repeats）を作っても自動的に
+# `pins_sha256` が揃う（L1 の repeats 一致要求を満たす）。
+_FAKE_PINS_PATH = "/fake/m3d_pairs_pins.json"
+_FAKE_PINS_SHA256 = "f" * 64
+
+
+def _mark_publishable(report: Dict[str, Any], *, pins_sha256: str = _FAKE_PINS_SHA256) -> None:
+    """`report` を publishable（`route_runner_injected=False`）へ偽装し、L1 が
+    要求する pins preflight 証跡も併せて満たす（`evaluate_comparison` の
+    `_require_pins_preflight_evidence_for_publishable_reports` 参照）。
+    """
+    report["route_runner_injected"] = False
+    report["pins_preflight_verified"] = True
+    report["pins_path"] = _FAKE_PINS_PATH
+    report["pins_sha256"] = pins_sha256
+
+
 def _registry_mapping() -> Dict[str, Any]:
     return yaml.safe_load(M3_REGISTRY_PATH.read_text(encoding="utf-8"))
 
@@ -1224,7 +1246,7 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
     reports = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # p_neg_tuning は実データでは observation/coverage の都合で既に
         # not_comparable になる(本レビュー対象外の既存挙動)——ここでは margin
         # 計算に real な負例信号を与えるため、テスト用に軸値を上書きする(テスト
@@ -1351,7 +1373,7 @@ def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected
     reports_for_verdict = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         reports_for_verdict.append(report)
 
     verdict = harness.evaluate_comparison(reports_for_verdict)
@@ -1375,7 +1397,7 @@ def test_evaluate_rejects_single_report_for_calibration_verdict(tmp_path: Path, 
     _write_manifest(manifest_path, _default_pairs(audio_paths))
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-    report["route_runner_injected"] = False  # 「実測」相当だが repeats が 1 本しかない。
+    _mark_publishable(report)  # 「実測」相当だが repeats が 1 本しかない。
 
     verdict = harness.evaluate_comparison([report])
 
@@ -2504,7 +2526,7 @@ def _reports_for_holdout_validation(
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         _override_tuning_axes_to_match_fully_frozen_registry(report)
         report["pairs"]["_real_p_pos_holdout"]["comparison"]["evidence"] = "strong"
         report["pairs"]["_real_p_pos_holdout"]["comparison"]["axes"] = dict(positive_axes_override)
@@ -2605,7 +2627,7 @@ def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_compara
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # レビュー対応 2026-07-30（第 20 ラウンド）: 凍結値=tuning 提案の等値
         # 検証が追加されたため、tuning pair も凍結値と一致する値へ揃える——
         # この上書きが無いと本テストの主眼（holdout 側の not_comparable pair
@@ -2679,7 +2701,7 @@ def test_evaluate_holdout_validation_not_confirmed_when_comparison_missing_and_n
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # p_neg_holdout の comparison だけを削除する——「split」等の他フィールド
         # は残るため、locked pair の既存構造（"status" キーのみ）とは異なる。
         del report["pairs"]["_real_p_neg_holdout"]["comparison"]
@@ -2719,7 +2741,7 @@ def test_evaluate_holdout_validation_rejects_locked_status_disguise_when_unlocke
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # p_neg_holdout の行を「holdout ロック中にのみ現れる」構造（"split" と
         # "status" のみ）へ書き換える——manifest 束縛検証は row に存在する
         # フィールドのみ照合するため、"split" を残せば pass する。
@@ -2752,7 +2774,7 @@ def test_evaluate_holdout_validation_absent_while_holdout_locked(
     reports = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         reports.append(report)
 
     verdict = harness.evaluate_comparison(reports)
@@ -2809,7 +2831,7 @@ def test_evaluate_holdout_validation_not_confirmed_when_frozen_threshold_mismatc
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # tuning 側は「真の」凍結値（0.8/0.8/0.7 と 0.2/0.2/0.3）と一致させる
         # ——registry の contour だけが 0.9 に差し替えられているため、tuning
         # 提案（0.8）との不一致がここで初めて生じる。
@@ -2871,7 +2893,7 @@ def test_evaluate_holdout_validation_not_confirmed_when_frozen_axis_has_no_tunin
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # tuning pair は一切上書きしない — song_a×song_b の tuning negative は
         # 実測どおり not_comparable のまま残し、`_margin_table` が全軸で
         # `reason: "negative_empty"`（tuning 提案が導出できない）を返す状態を
@@ -3155,7 +3177,7 @@ def test_evaluate_rejects_reports_with_all_pair_pins_missing(tmp_path: Path, aud
     reports = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False  # 「実測」相当（publishable）にする。
+        _mark_publishable(report)  # 「実測」相当（publishable）にする。
         for pair in report["pairs"].values():
             if "comparison" not in pair:
                 continue
@@ -3180,7 +3202,7 @@ def test_evaluate_rejects_reports_with_partial_pair_pin_missing(tmp_path: Path, 
     _write_manifest(manifest_path, _default_pairs(audio_paths))
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-    report["route_runner_injected"] = False
+    _mark_publishable(report)
     del report["pairs"]["_real_p_pos_tuning"]["audio_sha256_a"]
 
     with pytest.raises(ValueError, match="pair 単位 pin"):
@@ -3527,7 +3549,7 @@ def test_evaluate_rejects_publishable_report_with_non_crepe_route(
         manifest_path=manifest_path, route_name="pyin_direct", route_runner=runner
     )
     assert report["route"] == "pyin_direct"
-    report["route_runner_injected"] = False  # 「実測」相当（publishable）へ偽装。
+    _mark_publishable(report)  # 「実測」相当（publishable）へ偽装。
 
     with pytest.raises(ValueError, match="crepe 系経路"):
         harness.evaluate_comparison([report])
@@ -3804,7 +3826,7 @@ def _two_reports_for_calibration_verdict(
     reports: List[Dict[str, Any]] = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         reports.append(report)
     return reports
 
@@ -3925,7 +3947,7 @@ def _two_reports_with_extra_synth_tuning_positive(
     reports: List[Dict[str, Any]] = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         reports.append(report)
     return reports
 
@@ -4125,7 +4147,7 @@ def test_material_accounting_synthetic_holdout_rows_locked_skipped_without_readi
     reports: List[Dict[str, Any]] = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         reports.append(report)
 
     # holdout ロック中は run 時点で該当 pair の comparison 自体が存在しない
@@ -4164,7 +4186,7 @@ def test_material_accounting_synthetic_holdout_rows_measured_when_unlocked(
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         _override_tuning_axes_to_match_fully_frozen_registry(report)
         # real の holdout pair を `_reports_for_holdout_validation` と同じ値へ
         # 揃え、real バケット単独で holdout_validation_status=confirmed になる
@@ -4610,3 +4632,117 @@ def test_run_pins_preflight_pins_sha256_reflects_single_read_not_replaced_copy(
     # それでも記録された digest はパース時点のバイト列のままであることの確認。
     assert hashlib.sha256(pins_path.read_bytes()).hexdigest() != original_digest
     assert result["pins_sha256"] != hashlib.sha256(pins_path.read_bytes()).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 10 ラウンド（L1）: evaluate での pins preflight 証跡要求
+# --------------------------------------------------------------------------- #
+def test_evaluate_rejects_publishable_report_without_pins_preflight_evidence(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`route_runner_injected=False`（publishable）だが `pins_preflight_
+    verified`/`pins_path`/`pins_sha256` を一切持たない report（第 7 ラウンドの
+    強制ゲート導入前に作られた report を模す）は fail-closed で拒否する
+    （L1 対応の主眼）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        # `_mark_publishable` を使わず、意図的に pins 証跡フィールドを一切
+        # 付けない（第 7 ラウンド以前の report・または証跡を事後編集で
+        # 除去された report を模す）。
+        report["route_runner_injected"] = False
+        reports.append(report)
+
+    with pytest.raises(ValueError, match="pins_preflight_verified が True でない"):
+        harness.evaluate_comparison(reports)
+
+
+def test_evaluate_rejects_publishable_report_with_pins_preflight_verified_false(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`pins_preflight_verified` が明示的に `False`（または非 bool）の
+    publishable report も同様に拒否する（L1 対応）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        _mark_publishable(report)
+        report["pins_preflight_verified"] = False
+        reports.append(report)
+
+    with pytest.raises(ValueError, match="pins_preflight_verified が True でない"):
+        harness.evaluate_comparison(reports)
+
+
+def test_evaluate_rejects_pins_sha256_mismatch_across_repeats(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """publishable report 間で `pins_sha256` が食い違う場合、fail-closed で
+    拒否する（L1 対応: repeats が異なる pins sidecar を指していれば「同一の
+    校正材料に対する複数回実行」という前提が崩れる）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    _mark_publishable(report1, pins_sha256="a" * 64)
+    report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    _mark_publishable(report2, pins_sha256="b" * 64)
+
+    with pytest.raises(ValueError, match="pins_sha256 が不一致"):
+        harness.evaluate_comparison([report1, report2])
+
+
+def test_evaluate_accepts_clean_publishable_reports_with_pins_preflight_evidence(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """pins preflight 証跡（`pins_preflight_verified=True`・`pins_path`・
+    一致した `pins_sha256`）を正しく備えた publishable report は L1 の検査を
+    通過し、evaluate が最後まで完走する（偽陽性を出さないことの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        _mark_publishable(report)
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports)
+    assert verdict["repeats_verified"] is True
+
+
+def test_evaluate_allows_injected_report_without_pins_preflight_evidence(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`route_runner_injected` が自然な `True`（テスト用フェイク抽出器）の
+    report は L1 の対象外——pins preflight 証跡を一切持たなくても、L1 由来の
+    ValueError では拒否されない（既存分類に従う。従来どおり calibration
+    verdict 自体は injected のため別途拒否されるが、それは L1 とは独立の
+    既存規律——本テストは L1 が誤って injected report を拒否しないことだけを
+    確認する）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    assert report["route_runner_injected"] is True
+    assert "pins_preflight_verified" in report and report["pins_preflight_verified"] is False
+    assert "pins_path" not in report and "pins_sha256" not in report
+
+    # L1 由来のメッセージ（"pins_preflight_verified"/"pins_sha256"）で拒否
+    # されないことを確認する——他の理由（injected のため calibration verdict
+    # 自体は発行されない等）で失敗する可能性はあるが、ここでは例外が飛ばない
+    # （n=1 は verdict 発行を拒否するのみで ValueError は投げない）ことまで
+    # 確認する。
+    verdict = harness.evaluate_comparison([report])
+    assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"

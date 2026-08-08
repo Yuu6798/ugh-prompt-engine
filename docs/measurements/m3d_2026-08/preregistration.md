@@ -204,6 +204,39 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   `--pins` を run×2 で 2 回使う）の **2 回目 repeat** を見落としていた:
   1 回目の `--out`=`--pins` 実行で sidecar 自体が破壊されれば、2 回目の run
   はもはや正しい pins sidecar を読めない
+- **（Codex レビュー第 10 ラウンド追補・L1）** `evaluate_comparison` は
+  `pins_preflight_verified`/`pins_path`/`pins_sha256`（run phase の強制
+  preflight・第 7 ラウンド）を一切見ておらず、強制ゲート導入前に作られた
+  report（または証跡フィールドを事後編集で除去された report）が、自己記録の
+  audio hash（`_require_pair_pins_present_for_publishable_reports` が存在は
+  確認済みだが、runner が消費した bytes の自己申告 digest に過ぎず sidecar と
+  照合された証拠ではない）だけで凍結提案・holdout 判定まで到達できてしまう
+  穴があった。`_require_pins_preflight_evidence_for_publishable_reports` を
+  margin/holdout 集計より前（pair 単位 pin 存在検証の直後）に追加し、
+  publishable report（`route_runner_injected` でない report。既存分類のまま
+  ——injected report は対象外）に (a) `pins_preflight_verified=True` (b)
+  `pins_path`/`pins_sha256` の存在 (c) 全 publishable report 間での
+  `pins_sha256` 完全一致、を fail-closed で要求する。`pins_sha256` の整形
+  検証（存在する場合のみ）は `_REPORT_LEVEL_SHA256_FIELDS` へ編入し
+  injected/publishable を問わず適用する（既存の `_validate_pin_formats` と
+  同型・直交する規律）。report スキーマ自体は改版しない（検証の追加のみ
+  ——run 側は第 7 ラウンドで既に記録済みのフィールドを読むだけ）。
+- **（Codex レビュー第 10 ラウンド追補・L3）** `run_and_publish` の staging
+  は `out_dir.parent` 上に作られるが、`--manifest-out`/`--pins-out`（や
+  symlink 先の `--out-dir`）が別ファイルシステムだと、`_publish_staged_
+  bundle` の `os.replace`（atomic rename は同一ファイルシステム上でしか
+  できない）が公開直前に errno EXDEV で失敗する——高価な生成（librosa 変形・
+  `build_signal` 合成）が完全に終わった後に。`_reject_cross_device_publish_
+  targets` を新設し、生成を一切開始する前（staging ディレクトリの作成
+  そのものより前）に staging の親と各公開先（`out_dir`・`manifest_out`/
+  `pins_out`/（指定時）`summary_out` それぞれの親ディレクトリ）の
+  `os.stat().st_dev` を比較する。各パスは未作成の場合があるため、実在する
+  最も近い祖先ディレクトリ（`_nearest_existing_ancestor`）を副作用なし
+  （mkdir しない）で求めてから stat する。symlink は resolve() 後の実体で
+  判定する。per-destination staging（公開先ごとに個別の staging ディレクトリ
+  を用意する設計）は、`_publish_staged_bundle` の単一 staging 前提を複雑化
+  させるだけで事前登録の実運用（固定パス構成）には見合わないため不採用とし、
+  生成開始前の早期 fail-closed 拒否のみを採用した。
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 
@@ -227,7 +260,15 @@ holdout 行をスタブ化し音声を読まない）で証明する。
 ### 1.2 negative_cross（実声・異曲対）
 - tuning: tuning clip の original 同士を id 昇順で環状ペア（i, i+1）= 12 対
 - holdout: 同規則 6 対
-- 追加抽出コストゼロ（original を再利用）
+- **（Codex レビュー第 10 ラウンド追補・L2・訂正）** 当初「追加抽出コスト
+  ゼロ（original を再利用）」と記していたが、これは**ファイル数基準**で見た
+  場合の話（original ファイル自体を新規生成しない、の意）に過ぎず、
+  **起動数基準では正しくない**——ハーネスは observation を音声ファイル単位で
+  キャッシュせず pair ごとに `route_runner` を 2 回呼ぶため、negative_cross も
+  他の kind と同様に pair 数 × 2 回の起動を要する（tuning phase run 1 回で
+  12 対 × 2 = 24 起動。§1.4 の pair 基準会計が正）。旧記述は §1.4 の会計と
+  同居すると「追加ゼロ」と「24 起動/run」が矛盾して見えるため、ここで
+  「ファイル数基準では追加ゼロ・起動数基準は §1.4 が正」の形に訂正する。
 
 ### 1.3 合成素材（synthetic。M2 の S-direct=fail 実測を踏まえ**別会計**）
 - 生成: `build_melody_bench.build_signal` を library 利用、M3d 専用 spec
@@ -366,5 +407,8 @@ observation キャッシュを追加すれば起動数は削減できる（例: 
 
 - crepe/TF がこの環境に入らない or vocadito 不達 → その時点で machine-dependent 部分を
   User/Codex へ切り出す報告（ハーネス手順は STATUS 記載の通り実行者非依存）
-- crepe CPU 実行時間が過大 → §1.1 の縮約案（事前登録済みの半減規則のみ許可）
+- crepe CPU 実行時間が過大 → §1.4 の半減 fallback（事前登録済みの半減規則のみ許可。
+  variant を pitch+3st/rate x0.87 の 2 種へ縮約——起動数会計込みの数値は §1.4 参照。
+  **（Codex レビュー第 10 ラウンド追補・L2）** 参照先を §1.1 から §1.4 へ訂正
+  ——半減時の起動数会計は K3 対応で §1.4 に集約した）
 - 合成素材の抽出不能 → §1.3 フォールバック意味論で吸収（校正は vocadito 系で成立可能）
