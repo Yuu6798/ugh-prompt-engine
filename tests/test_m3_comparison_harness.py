@@ -8,6 +8,7 @@ holdout ロック、route_runner_injected による calibration verdict 発行�
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -140,6 +141,28 @@ def _fake_route_runner(notes_by_path: Dict[str, List[MelodyNote]]) -> "harness.R
 def _write_manifest(path: Path, pairs: List[Dict[str, Any]]) -> None:
     manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
     path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+
+# レビュー対応 第 10 ラウンド（L1）: `route_runner_injected` を False へ上書き
+# して「実測（publishable）相当」に偽装する既存パターンは、L1 導入後は
+# それだけでは publishable report の要求（`pins_preflight_verified`/
+# `pins_path`/`pins_sha256`）を満たせない——`_mark_publishable` へ統一し、
+# この 3 フィールドも併せて満たす。既定値は module 定数の固定 sha256 を
+# 使うため、同一テスト内で複数 report（repeats）を作っても自動的に
+# `pins_sha256` が揃う（L1 の repeats 一致要求を満たす）。
+_FAKE_PINS_PATH = "/fake/m3d_pairs_pins.json"
+_FAKE_PINS_SHA256 = "f" * 64
+
+
+def _mark_publishable(report: Dict[str, Any], *, pins_sha256: str = _FAKE_PINS_SHA256) -> None:
+    """`report` を publishable（`route_runner_injected=False`）へ偽装し、L1 が
+    要求する pins preflight 証跡も併せて満たす（`evaluate_comparison` の
+    `_require_pins_preflight_evidence_for_publishable_reports` 参照）。
+    """
+    report["route_runner_injected"] = False
+    report["pins_preflight_verified"] = True
+    report["pins_path"] = _FAKE_PINS_PATH
+    report["pins_sha256"] = pins_sha256
 
 
 def _registry_mapping() -> Dict[str, Any]:
@@ -282,7 +305,7 @@ def _default_pairs(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
     """
     return [
         {
-            "pair_id": "p_pos_tuning",
+            "pair_id": "_real_p_pos_tuning",
             "kind": "positive_transform",
             "split": "tuning",
             "audio_a": audio_paths["song_a"],
@@ -290,7 +313,7 @@ def _default_pairs(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
             "expected": "same",
         },
         {
-            "pair_id": "p_neg_tuning",
+            "pair_id": "_real_p_neg_tuning",
             "kind": "negative_cross",
             "split": "tuning",
             "audio_a": audio_paths["song_a"],
@@ -298,7 +321,7 @@ def _default_pairs(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
             "expected": "different",
         },
         {
-            "pair_id": "p_pos_holdout",
+            "pair_id": "_real_p_pos_holdout",
             "kind": "positive_transform",
             "split": "holdout",
             "audio_a": audio_paths["song_a"],
@@ -306,7 +329,7 @@ def _default_pairs(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
             "expected": "same",
         },
         {
-            "pair_id": "p_neg_rhythm_tuning",
+            "pair_id": "_real_p_neg_rhythm_tuning",
             "kind": "negative_rhythm",
             "split": "tuning",
             "audio_a": audio_paths["song_a"],
@@ -314,7 +337,7 @@ def _default_pairs(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
             "expected": "different",
         },
         {
-            "pair_id": "p_neg_interval_tuning",
+            "pair_id": "_real_p_neg_interval_tuning",
             "kind": "negative_interval",
             "split": "tuning",
             "audio_a": audio_paths["song_a"],
@@ -322,7 +345,7 @@ def _default_pairs(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
             "expected": "different",
         },
         {
-            "pair_id": "p_neg_holdout",
+            "pair_id": "_real_p_neg_holdout",
             "kind": "negative_cross",
             "split": "holdout",
             "audio_a": audio_paths["song_a"],
@@ -345,15 +368,15 @@ def test_run_then_evaluate_mechanism(tmp_path: Path, audio_paths: Dict[str, str]
     assert report["schema_version"] == harness._EXPECTED_RUN_SCHEMA
     assert report["route_runner_injected"] is True
     assert set(report["pairs"]) == {
-        "p_pos_tuning",
-        "p_neg_tuning",
-        "p_pos_holdout",
-        "p_neg_rhythm_tuning",
-        "p_neg_interval_tuning",
-        "p_neg_holdout",
+        "_real_p_pos_tuning",
+        "_real_p_neg_tuning",
+        "_real_p_pos_holdout",
+        "_real_p_neg_rhythm_tuning",
+        "_real_p_neg_interval_tuning",
+        "_real_p_neg_holdout",
     }
-    assert report["pairs"]["p_pos_tuning"]["comparison"]["axes"]["interval"] == pytest.approx(1.0)
-    assert report["pairs"]["p_neg_tuning"]["comparison"]["evidence"] == "not_comparable"
+    assert report["pairs"]["_real_p_pos_tuning"]["comparison"]["axes"]["interval"] == pytest.approx(1.0)
+    assert report["pairs"]["_real_p_neg_tuning"]["comparison"]["evidence"] == "not_comparable"
 
     verdict = harness.evaluate_comparison([report])
     assert verdict["repeats_count"] == 1
@@ -392,7 +415,7 @@ def test_repeats_hash_pin_rejects_tampered_report(tmp_path: Path, audio_paths: D
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
     # 故意に sequence_sha256 を改変する(反復間の軌跡レベル決定論を壊す)。
-    report2["pairs"]["p_pos_tuning"]["comparison"]["provenance"]["sequence_sha256_a"] = "tampered"
+    report2["pairs"]["_real_p_pos_tuning"]["comparison"]["provenance"]["sequence_sha256_a"] = "tampered"
 
     with pytest.raises(ValueError, match="sequence_sha256/axes"):
         harness.evaluate_comparison([report1, report2])
@@ -438,8 +461,8 @@ def test_repeats_rejects_route_provenance_pin_mismatch(tmp_path: Path, audio_pat
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
-    assert "route_provenance_a" in report2["pairs"]["p_pos_tuning"]
-    report2["pairs"]["p_pos_tuning"]["route_provenance_a"] = {"fake_provenance": "tampered"}
+    assert "route_provenance_a" in report2["pairs"]["_real_p_pos_tuning"]
+    report2["pairs"]["_real_p_pos_tuning"]["route_provenance_a"] = {"fake_provenance": "tampered"}
 
     with pytest.raises(ValueError, match="route_provenance_a"):
         harness._check_repeats_consistency([report1, report2])
@@ -457,7 +480,7 @@ def test_repeats_rejects_audio_content_pin_mismatch_same_path(
     runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-    assert "audio_sha256_a" in report1["pairs"]["p_pos_tuning"]
+    assert "audio_sha256_a" in report1["pairs"]["_real_p_pos_tuning"]
 
     # 同じパスのまま bytes だけ差し替える(サイズも変えてキャッシュ key の衝突を回避)。
     song_a_path = Path(audio_paths["song_a"])
@@ -466,8 +489,8 @@ def test_repeats_rejects_audio_content_pin_mismatch_same_path(
     report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
     assert (
-        report1["pairs"]["p_pos_tuning"]["audio_sha256_a"]
-        != report2["pairs"]["p_pos_tuning"]["audio_sha256_a"]
+        report1["pairs"]["_real_p_pos_tuning"]["audio_sha256_a"]
+        != report2["pairs"]["_real_p_pos_tuning"]["audio_sha256_a"]
     )
     with pytest.raises(ValueError, match="audio_sha256_a"):
         harness.evaluate_comparison([report1, report2])
@@ -487,9 +510,9 @@ def test_repeats_rejects_evidence_only_tamper(tmp_path: Path, audio_paths: Dict[
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
-    original_evidence = report2["pairs"]["p_pos_tuning"]["comparison"]["evidence"]
+    original_evidence = report2["pairs"]["_real_p_pos_tuning"]["comparison"]["evidence"]
     tampered_evidence = "weak" if original_evidence != "weak" else "strong"
-    report2["pairs"]["p_pos_tuning"]["comparison"]["evidence"] = tampered_evidence
+    report2["pairs"]["_real_p_pos_tuning"]["comparison"]["evidence"] = tampered_evidence
 
     with pytest.raises(ValueError, match="comparison"):
         harness._check_repeats_consistency([report1, report2])
@@ -505,7 +528,7 @@ def test_repeats_rejects_coverage_only_tamper(tmp_path: Path, audio_paths: Dict[
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
-    coverage = report2["pairs"]["p_pos_tuning"]["comparison"]["coverage"]
+    coverage = report2["pairs"]["_real_p_pos_tuning"]["comparison"]["coverage"]
     assert "aligned_note_fraction_a" in coverage
     coverage["aligned_note_fraction_a"] = -1.0
 
@@ -529,8 +552,8 @@ def test_run_comparison_records_observation_sha256_for_each_side(
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
-    row1 = report1["pairs"]["p_pos_tuning"]
-    row2 = report2["pairs"]["p_pos_tuning"]
+    row1 = report1["pairs"]["_real_p_pos_tuning"]
+    row2 = report2["pairs"]["_real_p_pos_tuning"]
     assert harness._is_sha256_hex(row1["observation_sha256_a"])
     assert harness._is_sha256_hex(row1["observation_sha256_b"])
     # song_a と song_a_transposed は notes が異なる(移調)ため両側の hash も異なる。
@@ -540,7 +563,7 @@ def test_run_comparison_records_observation_sha256_for_each_side(
     assert row1["observation_sha256_b"] == row2["observation_sha256_b"]
 
     # holdout ロック pair には記録されない(音声未読・比較未実行)。
-    holdout_row = report1["pairs"]["p_pos_holdout"]
+    holdout_row = report1["pairs"]["_real_p_pos_holdout"]
     assert "observation_sha256_a" not in holdout_row
     assert "observation_sha256_b" not in holdout_row
 
@@ -558,7 +581,7 @@ def test_repeats_rejects_observation_sha256_pin_mismatch(
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
-    report2["pairs"]["p_pos_tuning"]["observation_sha256_a"] = "0" * 64
+    report2["pairs"]["_real_p_pos_tuning"]["observation_sha256_a"] = "0" * 64
 
     with pytest.raises(ValueError, match="observation_sha256_a"):
         harness._check_repeats_consistency([report1, report2])
@@ -579,7 +602,7 @@ def test_repeats_rejects_observation_sha256_missing_in_one_repeat(
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
-    del report2["pairs"]["p_pos_tuning"]["observation_sha256_b"]
+    del report2["pairs"]["_real_p_pos_tuning"]["observation_sha256_b"]
 
     with pytest.raises(ValueError, match="observation_sha256_b"):
         harness._check_repeats_consistency([report1, report2])
@@ -828,7 +851,7 @@ def test_holdout_validation_table_negative_kind_axis_scope_hand_calc():
         "rhythm": {"strong_min": 0.7, "none_max": 0.3},
     }
     pairs: Dict[str, Dict[str, Any]] = {
-        "h_pos": {
+        "_real_h_pos": {
             "split": "holdout",
             "expected": "same",
             "kind": "positive_transform",
@@ -887,7 +910,7 @@ def test_holdout_validation_table_negative_empty_axis_reports_negative_empty_rea
         "rhythm": {"strong_min": 0.7, "none_max": 0.3},
     }
     pairs: Dict[str, Dict[str, Any]] = {
-        "h_pos": {
+        "_real_h_pos": {
             "split": "holdout",
             "expected": "same",
             "kind": "positive_transform",
@@ -1128,7 +1151,7 @@ def test_evaluate_holdout_validation_not_confirmed_when_coverage_invalid(
         negative_axes_override={"contour": 0.1, "interval": 0.05, "rhythm": 0.2},
     )
     for report in reports:
-        del report["pairs"]["p_pos_holdout"]["comparison"]["coverage"]["phrase_coverage_b"]
+        del report["pairs"]["_real_p_pos_holdout"]["comparison"]["coverage"]["phrase_coverage_b"]
 
     verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
 
@@ -1138,7 +1161,10 @@ def test_evaluate_holdout_validation_not_confirmed_when_coverage_invalid(
         "rhythm": "confirmed",
     }
     assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
-    assert "holdout_pair_coverage_invalid(p_pos_holdout)" in verdict["holdout_validation_reasons"]
+    assert (
+        "holdout_pair_coverage_invalid(_real_p_pos_holdout)"
+        in verdict["holdout_validation_reasons"]
+    )
 
 
 def test_evaluate_holdout_validation_not_confirmed_when_below_coverage_floor(
@@ -1160,7 +1186,7 @@ def test_evaluate_holdout_validation_not_confirmed_when_below_coverage_floor(
     config, _ = harness.load_m3_registry(frozen_registry)
     floor = config.coverage.floor
     for report in reports:
-        coverage = report["pairs"]["p_pos_holdout"]["comparison"]["coverage"]
+        coverage = report["pairs"]["_real_p_pos_holdout"]["comparison"]["coverage"]
         coverage["aligned_note_fraction_a"] = max(0.0, floor - 0.05)
 
     verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
@@ -1171,7 +1197,9 @@ def test_evaluate_holdout_validation_not_confirmed_when_below_coverage_floor(
         "rhythm": "confirmed",
     }
     assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
-    assert "holdout_pair_below_floor(p_pos_holdout)" in verdict["holdout_validation_reasons"]
+    assert (
+        "holdout_pair_below_floor(_real_p_pos_holdout)" in verdict["holdout_validation_reasons"]
+    )
 
 
 def test_evaluate_holdout_validation_confirmed_stays_confirmed_with_valid_coverage(
@@ -1203,7 +1231,7 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
     """
     pairs = _default_pairs(audio_paths) + [
         {
-            "pair_id": "p_pos_tuning2",
+            "pair_id": "_real_p_pos_tuning2",
             "kind": "positive_transform",
             "split": "tuning",
             "audio_a": audio_paths["song_a"],
@@ -1218,7 +1246,7 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
     reports = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # p_neg_tuning は実データでは observation/coverage の都合で既に
         # not_comparable になる(本レビュー対象外の既存挙動)——ここでは margin
         # 計算に real な負例信号を与えるため、テスト用に軸値を上書きする(テスト
@@ -1229,7 +1257,7 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
         # 狙い撃ち negative）で、同じ理由でデフォルトでは not_comparable になる
         # ——not_comparable_negative_count を 0 に保つため p_neg_tuning と同様に
         # 上書きする（この 3 pair の生成過程はテスト対象ではない）。
-        for neg_pair_id in ("p_neg_tuning", "p_neg_rhythm_tuning", "p_neg_interval_tuning"):
+        for neg_pair_id in ("_real_p_neg_tuning", "_real_p_neg_rhythm_tuning", "_real_p_neg_interval_tuning"):
             report["pairs"][neg_pair_id]["comparison"]["evidence"] = "none"
             report["pairs"][neg_pair_id]["comparison"]["axes"] = {
                 "contour": 0.1,
@@ -1239,8 +1267,8 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
         # p_pos_tuning を not_comparable へ上書き(p_pos_tuning2 は実データのまま
         # 高い一致率を保つ——tuning positive pair が他にも存在する状況で、1 件の
         # not_comparable だけで freeze proposal 全体が止まることを確認する)。
-        report["pairs"]["p_pos_tuning"]["comparison"]["evidence"] = "not_comparable"
-        report["pairs"]["p_pos_tuning"]["comparison"]["axes"] = {
+        report["pairs"]["_real_p_pos_tuning"]["comparison"]["evidence"] = "not_comparable"
+        report["pairs"]["_real_p_pos_tuning"]["comparison"]["axes"] = {
             "contour": None,
             "interval": None,
             "rhythm": None,
@@ -1269,13 +1297,13 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_coverage_field_missing(
     """
     reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
     for report in reports:
-        del report["pairs"]["p_pos_tuning"]["comparison"]["coverage"]["phrase_coverage_b"]
+        del report["pairs"]["_real_p_pos_tuning"]["comparison"]["coverage"]["phrase_coverage_b"]
 
     verdict = harness.evaluate_comparison(reports)
 
     assert "margin_table" in verdict
     assert verdict["freeze_proposal"] == {}
-    assert verdict["freeze_proposal_rejected_reason"] == "coverage_incomplete(p_pos_tuning)"
+    assert verdict["freeze_proposal_rejected_reason"] == "coverage_incomplete(_real_p_pos_tuning)"
     assert "coverage_floor_candidate" not in verdict
 
 
@@ -1292,7 +1320,7 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_coverage_value_invalid(
     """
     reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
     for report in reports:
-        report["pairs"]["p_pos_tuning"]["comparison"]["coverage"][
+        report["pairs"]["_real_p_pos_tuning"]["comparison"]["coverage"][
             "aligned_note_fraction_a"
         ] = bad_value
 
@@ -1300,7 +1328,7 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_coverage_value_invalid(
 
     assert "margin_table" in verdict
     assert verdict["freeze_proposal"] == {}
-    assert verdict["freeze_proposal_rejected_reason"] == "coverage_incomplete(p_pos_tuning)"
+    assert verdict["freeze_proposal_rejected_reason"] == "coverage_incomplete(_real_p_pos_tuning)"
     assert "coverage_floor_candidate" not in verdict
 
 
@@ -1319,15 +1347,15 @@ def test_holdout_locked_until_frozen(tmp_path: Path, audio_paths: Dict[str, str]
     # `_default_pairs` は holdout split に positive (p_pos_holdout) と negative
     # (p_neg_holdout) を各 1 件以上持つ(manifest 構成要件・レビュー対応
     # 2026-07-30 第 10 ラウンド)。`_holdout_pair_ids` はソート済みで返す。
-    assert holdout_ids == ["p_neg_holdout", "p_pos_holdout"]
+    assert holdout_ids == ["_real_p_neg_holdout", "_real_p_pos_holdout"]
 
     mapping = yaml.safe_load(M3_REGISTRY_PATH.read_text(encoding="utf-8"))
     assert mapping["evidence_thresholds"]["status"] == "uncalibrated"
 
     # uncalibrated の間は margin 計算からも holdout pair を除外する(tuning のみ)。
     margin = harness._margin_table(report["pairs"], split="tuning", min_margin=0.15)
-    assert "p_pos_holdout" not in str(margin)  # tuning フィルタで holdout 行が混入していない
-    assert "p_neg_holdout" not in str(margin)
+    assert "_real_p_pos_holdout" not in str(margin)  # tuning フィルタで holdout 行が混入していない
+    assert "_real_p_neg_holdout" not in str(margin)
 
 
 def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected(tmp_path: Path, audio_paths: Dict[str, str]):
@@ -1345,14 +1373,14 @@ def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected
     reports_for_verdict = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         reports_for_verdict.append(report)
 
     verdict = harness.evaluate_comparison(reports_for_verdict)
     assert verdict["repeats_verified"] is True
     assert verdict["repeats_consistent"] is True
     assert verdict["holdout_locked_until_frozen"] is True
-    assert verdict["holdout_pair_ids_skipped"] == ["p_neg_holdout", "p_pos_holdout"]
+    assert verdict["holdout_pair_ids_skipped"] == ["_real_p_neg_holdout", "_real_p_pos_holdout"]
     assert "calibration_verdict_status" not in verdict
     assert "margin_table" in verdict
     assert "coverage_floor_candidate" in verdict
@@ -1369,7 +1397,7 @@ def test_evaluate_rejects_single_report_for_calibration_verdict(tmp_path: Path, 
     _write_manifest(manifest_path, _default_pairs(audio_paths))
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-    report["route_runner_injected"] = False  # 「実測」相当だが repeats が 1 本しかない。
+    _mark_publishable(report)  # 「実測」相当だが repeats が 1 本しかない。
 
     verdict = harness.evaluate_comparison([report])
 
@@ -1487,6 +1515,119 @@ def test_out_cannot_overwrite_evaluate_input(tmp_path: Path, monkeypatch, audio_
 
 
 # --------------------------------------------------------------------------- #
+# レビュー対応 第 11 ラウンド（M1）: evaluate 経路での pins 保護
+# --------------------------------------------------------------------------- #
+def test_evaluate_out_cannot_overwrite_reported_pins_path(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--evaluate --out <report 記録の pins_path>` は、reports をロードして
+    記録 `pins_path` を保護集合へ編入することで、書込前に fail-closed で
+    拒否する（M1 対応の主眼）。従来は `--out` の保護集合が evaluate 入力
+    （report/registry/--pairs）のみで、report 記録の pins_path が漏れていた
+    ——検証成功後に sidecar が verdict で上書き破壊され、`--check-only` と
+    後続 holdout run を壊しうる穴があった。拒否時は reports・sidecar とも
+    無傷であることを確認する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+    )
+    assert report["pins_path"] == str(pins_path.resolve())
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    pins_before = pins_path.read_bytes()
+    report_before = report_path.read_bytes()
+
+    argv = [
+        "run_melody_comparison.py",
+        "--evaluate",
+        str(report_path),
+        "--out",
+        str(pins_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+    assert pins_path.read_bytes() == pins_before
+    assert report_path.read_bytes() == report_before
+
+
+def test_evaluate_out_cannot_overwrite_explicit_pins_argument(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--evaluate` 時に明示併用された `--pins` も同様に保護対象へ編入する
+    （report 自体が pins_path を記録していないケース。M1 対応）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    assert "pins_path" not in report
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text("{}", encoding="utf-8")
+    pins_before = pins_path.read_bytes()
+
+    argv = [
+        "run_melody_comparison.py",
+        "--evaluate",
+        str(report_path),
+        "--pins",
+        str(pins_path),
+        "--out",
+        str(pins_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+    assert pins_path.read_bytes() == pins_before
+
+
+def test_evaluate_out_may_differ_from_pins_path(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--out` が報告済み pins_path と異なるパスであれば、evaluate は従来
+    どおり完走する（偽陽性を出さないことの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+        reports.append(report)
+    report_paths = []
+    for idx, report in enumerate(reports):
+        p = tmp_path / f"report{idx}.json"
+        p.write_text(json.dumps(report), encoding="utf-8")
+        report_paths.append(p)
+    out_path = tmp_path / "verdict.json"
+
+    argv = [
+        "run_melody_comparison.py",
+        "--evaluate",
+        *[str(p) for p in report_paths],
+        "--out",
+        str(out_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert harness.main() == 0
+    assert out_path.exists()
+
+
+# --------------------------------------------------------------------------- #
 # manifest 検証（fail-closed）
 # --------------------------------------------------------------------------- #
 def test_manifest_rejects_unknown_schema(tmp_path: Path, audio_paths: Dict[str, str]):
@@ -1514,7 +1655,7 @@ def test_manifest_rejects_invalid_kind():
         "schema": "m3-comparison-pairs/0.1",
         "pairs": [
             {
-                "pair_id": "p1",
+                "pair_id": "_real_p1",
                 "kind": "bogus_kind",
                 "split": "tuning",
                 "audio_a": "a",
@@ -1533,7 +1674,7 @@ def test_manifest_rejects_positive_transform_with_expected_different():
         "schema": "m3-comparison-pairs/0.1",
         "pairs": [
             {
-                "pair_id": "p_bad",
+                "pair_id": "_real_p_bad",
                 "kind": "positive_transform",
                 "split": "tuning",
                 "audio_a": "a",
@@ -1552,7 +1693,7 @@ def test_manifest_rejects_negative_kind_with_expected_same():
         "schema": "m3-comparison-pairs/0.1",
         "pairs": [
             {
-                "pair_id": "p_bad",
+                "pair_id": "_real_p_bad",
                 "kind": "negative_cross",
                 "split": "tuning",
                 "audio_a": "a",
@@ -1574,7 +1715,7 @@ def _composition_compliant_manifest_pairs() -> List[Dict[str, Any]]:
     """
     return [
         {
-            "pair_id": "t_pos",
+            "pair_id": "_real_t_pos",
             "kind": "positive_transform",
             "split": "tuning",
             "audio_a": "a",
@@ -1582,7 +1723,7 @@ def _composition_compliant_manifest_pairs() -> List[Dict[str, Any]]:
             "expected": "same",
         },
         {
-            "pair_id": "t_neg",
+            "pair_id": "_real_t_neg",
             "kind": "negative_cross",
             "split": "tuning",
             "audio_a": "a",
@@ -1590,7 +1731,7 @@ def _composition_compliant_manifest_pairs() -> List[Dict[str, Any]]:
             "expected": "different",
         },
         {
-            "pair_id": "t_neg_rhythm",
+            "pair_id": "_real_t_neg_rhythm",
             "kind": "negative_rhythm",
             "split": "tuning",
             "audio_a": "a",
@@ -1598,7 +1739,7 @@ def _composition_compliant_manifest_pairs() -> List[Dict[str, Any]]:
             "expected": "different",
         },
         {
-            "pair_id": "t_neg_interval",
+            "pair_id": "_real_t_neg_interval",
             "kind": "negative_interval",
             "split": "tuning",
             "audio_a": "a",
@@ -1606,7 +1747,7 @@ def _composition_compliant_manifest_pairs() -> List[Dict[str, Any]]:
             "expected": "different",
         },
         {
-            "pair_id": "h_pos",
+            "pair_id": "_real_h_pos",
             "kind": "positive_transform",
             "split": "holdout",
             "audio_a": "a",
@@ -1614,7 +1755,7 @@ def _composition_compliant_manifest_pairs() -> List[Dict[str, Any]]:
             "expected": "same",
         },
         {
-            "pair_id": "h_neg",
+            "pair_id": "_real_h_neg",
             "kind": "negative_cross",
             "split": "holdout",
             "audio_a": "a",
@@ -1706,7 +1847,7 @@ def test_manifest_composition_rejects_targeted_negative_rhythm_only_in_holdout()
     pairs = [p for p in _composition_compliant_manifest_pairs() if p["kind"] != "negative_rhythm"]
     pairs.append(
         {
-            "pair_id": "h_neg_rhythm_only",
+            "pair_id": "_real_h_neg_rhythm_only",
             "kind": "negative_rhythm",
             "split": "holdout",
             "audio_a": "a",
@@ -1728,7 +1869,7 @@ def test_manifest_composition_rejects_targeted_negative_interval_only_in_holdout
     ]
     pairs.append(
         {
-            "pair_id": "h_neg_interval_only",
+            "pair_id": "_real_h_neg_interval_only",
             "kind": "negative_interval",
             "split": "holdout",
             "audio_a": "a",
@@ -1747,7 +1888,7 @@ def test_manifest_composition_accepts_targeted_negative_in_both_tuning_and_holdo
     """
     pairs = _composition_compliant_manifest_pairs() + [
         {
-            "pair_id": "h_neg_rhythm_extra",
+            "pair_id": "_real_h_neg_rhythm_extra",
             "kind": "negative_rhythm",
             "split": "holdout",
             "audio_a": "a",
@@ -1772,7 +1913,7 @@ def _manifest_composition_compliant_pairs(audio_a: Path, audio_b: Path) -> List[
     """
     return [
         {
-            "pair_id": "p1",
+            "pair_id": "_real_p1",
             "kind": "positive_transform",
             "split": "tuning",
             "audio_a": str(audio_a),
@@ -1780,7 +1921,7 @@ def _manifest_composition_compliant_pairs(audio_a: Path, audio_b: Path) -> List[
             "expected": "same",
         },
         {
-            "pair_id": "p2_neg_tuning",
+            "pair_id": "_real_p2_neg_tuning",
             "kind": "negative_cross",
             "split": "tuning",
             "audio_a": str(audio_a),
@@ -1788,7 +1929,7 @@ def _manifest_composition_compliant_pairs(audio_a: Path, audio_b: Path) -> List[
             "expected": "different",
         },
         {
-            "pair_id": "p3_neg_rhythm",
+            "pair_id": "_real_p3_neg_rhythm",
             "kind": "negative_rhythm",
             "split": "tuning",
             "audio_a": str(audio_a),
@@ -1796,7 +1937,7 @@ def _manifest_composition_compliant_pairs(audio_a: Path, audio_b: Path) -> List[
             "expected": "different",
         },
         {
-            "pair_id": "p4_neg_interval",
+            "pair_id": "_real_p4_neg_interval",
             "kind": "negative_interval",
             "split": "tuning",
             "audio_a": str(audio_a),
@@ -1804,7 +1945,7 @@ def _manifest_composition_compliant_pairs(audio_a: Path, audio_b: Path) -> List[
             "expected": "different",
         },
         {
-            "pair_id": "p5_pos_holdout",
+            "pair_id": "_real_p5_pos_holdout",
             "kind": "positive_transform",
             "split": "holdout",
             "audio_a": str(audio_a),
@@ -1812,7 +1953,7 @@ def _manifest_composition_compliant_pairs(audio_a: Path, audio_b: Path) -> List[
             "expected": "same",
         },
         {
-            "pair_id": "p6_neg_holdout",
+            "pair_id": "_real_p6_neg_holdout",
             "kind": "negative_cross",
             "split": "holdout",
             "audio_a": str(audio_a),
@@ -1901,7 +2042,7 @@ def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path, a
         Path(audio_paths["song_b"]).read_bytes(),
     ]
 
-    for holdout_pair_id in ("p_pos_holdout", "p_neg_holdout"):
+    for holdout_pair_id in ("_real_p_pos_holdout", "_real_p_neg_holdout"):
         holdout_row = report["pairs"][holdout_pair_id]
         assert holdout_row == {"split": "holdout", "status": "holdout_locked_until_frozen"}
         assert "comparison" not in holdout_row
@@ -1909,7 +2050,7 @@ def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path, a
         assert "audio_b" not in holdout_row
 
     # tuning pair は通常通り比較済み。
-    assert "comparison" in report["pairs"]["p_pos_tuning"]
+    assert "comparison" in report["pairs"]["_real_p_pos_tuning"]
 
 
 def test_holdout_pair_compared_when_registry_frozen(tmp_path: Path, audio_paths: Dict[str, str]):
@@ -1926,7 +2067,7 @@ def test_holdout_pair_compared_when_registry_frozen(tmp_path: Path, audio_paths:
         manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
     )
 
-    holdout_row = report["pairs"]["p_pos_holdout"]
+    holdout_row = report["pairs"]["_real_p_pos_holdout"]
     assert holdout_row["split"] == "holdout"
     assert "comparison" in holdout_row
     assert holdout_row["comparison"]["axes"]["interval"] == pytest.approx(1.0)
@@ -1960,7 +2101,7 @@ def test_holdout_pair_not_opened_when_partially_frozen(tmp_path: Path, audio_pat
         manifest_path=manifest_path, route_runner=runner, registry_path=partial_registry
     )
 
-    holdout_row = report["pairs"]["p_pos_holdout"]
+    holdout_row = report["pairs"]["_real_p_pos_holdout"]
     assert holdout_row == {"split": "holdout", "status": "holdout_locked_until_frozen"}
     assert "comparison" not in holdout_row
 
@@ -2308,7 +2449,7 @@ def test_holdout_opens_with_only_two_axes_frozen(tmp_path: Path, audio_paths: Di
         manifest_path=manifest_path, route_runner=runner, registry_path=two_axes_registry
     )
 
-    holdout_row = report["pairs"]["p_pos_holdout"]
+    holdout_row = report["pairs"]["_real_p_pos_holdout"]
     assert holdout_row["split"] == "holdout"
     assert "comparison" in holdout_row
     axis_evidence = holdout_row["comparison"]["axis_evidence"]
@@ -2355,7 +2496,7 @@ def test_holdout_partial_freeze_redacts_unfrozen_axes(tmp_path: Path, audio_path
         manifest_path=manifest_path, route_runner=runner, registry_path=one_axis_registry
     )
 
-    holdout_row = report["pairs"]["p_pos_holdout"]
+    holdout_row = report["pairs"]["_real_p_pos_holdout"]
     assert holdout_row["split"] == "holdout"
     assert "comparison" in holdout_row
 
@@ -2372,7 +2513,7 @@ def test_holdout_partial_freeze_redacts_unfrozen_axes(tmp_path: Path, audio_path
 
     # tuning pair は redaction 対象外 — 全軸がそのまま残り、
     # `unfrozen_axes_redacted` キー自体が付与されない。
-    tuning_row = report["pairs"]["p_pos_tuning"]
+    tuning_row = report["pairs"]["_real_p_pos_tuning"]
     assert set(tuning_row["comparison"]["axes"]) == {"contour", "interval", "rhythm"}
     assert "unfrozen_axes_redacted" not in tuning_row
 
@@ -2392,7 +2533,7 @@ def test_holdout_full_freeze_records_empty_redacted_list(tmp_path: Path, audio_p
         manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
     )
 
-    holdout_row = report["pairs"]["p_pos_holdout"]
+    holdout_row = report["pairs"]["_real_p_pos_holdout"]
     assert holdout_row["unfrozen_axes_redacted"] == []
     assert set(holdout_row["comparison"]["axes"]) == {"contour", "interval", "rhythm"}
 
@@ -2453,9 +2594,9 @@ def _override_tuning_axes_to_match_fully_frozen_registry(
     `kind` に応じてスコープ外の軸値を読み飛ばすため（例: `negative_rhythm` は
     `rhythm` 以外の値を無視する）。
     """
-    report["pairs"]["p_pos_tuning"]["comparison"]["evidence"] = "strong"
-    report["pairs"]["p_pos_tuning"]["comparison"]["axes"] = dict(positive_axes)
-    for pair_id in ("p_neg_tuning", "p_neg_rhythm_tuning", "p_neg_interval_tuning"):
+    report["pairs"]["_real_p_pos_tuning"]["comparison"]["evidence"] = "strong"
+    report["pairs"]["_real_p_pos_tuning"]["comparison"]["axes"] = dict(positive_axes)
+    for pair_id in ("_real_p_neg_tuning", "_real_p_neg_rhythm_tuning", "_real_p_neg_interval_tuning"):
         report["pairs"][pair_id]["comparison"]["evidence"] = "none"
         report["pairs"][pair_id]["comparison"]["axes"] = dict(negative_axes)
         report["pairs"][pair_id]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
@@ -2498,13 +2639,13 @@ def _reports_for_holdout_validation(
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         _override_tuning_axes_to_match_fully_frozen_registry(report)
-        report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
-        report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = dict(positive_axes_override)
-        report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
-        report["pairs"]["p_neg_holdout"]["comparison"]["axes"] = dict(negative_axes_override)
-        report["pairs"]["p_neg_holdout"]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["axes"] = dict(positive_axes_override)
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["axes"] = dict(negative_axes_override)
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
         reports.append(report)
     return reports, frozen_registry
 
@@ -2581,7 +2722,7 @@ def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_compara
     manifest_path = tmp_path / "pairs.yaml"
     pairs = _default_pairs(audio_paths) + [
         {
-            "pair_id": "p_extra_holdout_nc",
+            "pair_id": "_real_p_extra_holdout_nc",
             "kind": "negative_cross",
             "split": "holdout",
             "audio_a": audio_paths["song_a"],
@@ -2599,21 +2740,21 @@ def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_compara
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # レビュー対応 2026-07-30（第 20 ラウンド）: 凍結値=tuning 提案の等値
         # 検証が追加されたため、tuning pair も凍結値と一致する値へ揃える——
         # この上書きが無いと本テストの主眼（holdout 側の not_comparable pair
         # 検出）とは独立の `frozen_thresholds_not_derived_from_tuning` 理由が
         # 混入し、下の厳密な reasons リスト比較が崩れる。
         _override_tuning_axes_to_match_fully_frozen_registry(report)
-        report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
-        report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = {
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["axes"] = {
             "contour": 0.95,
             "interval": 1.0,
             "rhythm": 0.9,
         }
-        report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
-        report["pairs"]["p_neg_holdout"]["comparison"]["axes"] = {
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["axes"] = {
             "contour": 0.1,
             "interval": 0.05,
             "rhythm": 0.2,
@@ -2622,7 +2763,7 @@ def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_compara
         # は被覆下限ゲートで 0.0（floor=0.5 未満）——evidence/axes を
         # not_comparable でない値へ上書きする以上、coverage も一貫した floor
         # 以上の値へ揃える（`_reports_for_holdout_validation` と同じ理由）。
-        report["pairs"]["p_neg_holdout"]["comparison"]["coverage"] = dict(
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["coverage"] = dict(
             _HOLDOUT_TEST_COVERAGE
         )
         reports.append(report)
@@ -2631,7 +2772,7 @@ def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_compara
     # なる既存挙動（`test_run_then_evaluate_mechanism` の p_neg_tuning と同型）
     # ——本テストはこの not_comparable pair の存在が holdout_validation_status を
     # 倒すことが対象であって、not_comparable になる過程自体は対象外。
-    assert reports[0]["pairs"]["p_extra_holdout_nc"]["comparison"]["evidence"] == "not_comparable"
+    assert reports[0]["pairs"]["_real_p_extra_holdout_nc"]["comparison"]["evidence"] == "not_comparable"
 
     verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
 
@@ -2646,9 +2787,9 @@ def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_compara
     # 全体 status を「未確認」に倒す。
     assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
     assert verdict["holdout_validation_reasons"] == [
-        "holdout_pair_not_measurable(p_extra_holdout_nc)"
+        "holdout_pair_not_measurable(_real_p_extra_holdout_nc)"
     ]
-    assert "p_extra_holdout_nc:not_comparable" in verdict["holdout_skipped_pairs"]
+    assert "_real_p_extra_holdout_nc:not_comparable" in verdict["holdout_skipped_pairs"]
 
 
 def test_evaluate_holdout_validation_not_confirmed_when_comparison_missing_and_not_locked(
@@ -2673,17 +2814,20 @@ def test_evaluate_holdout_validation_not_confirmed_when_comparison_missing_and_n
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # p_neg_holdout の comparison だけを削除する——「split」等の他フィールド
         # は残るため、locked pair の既存構造（"status" キーのみ）とは異なる。
-        del report["pairs"]["p_neg_holdout"]["comparison"]
+        del report["pairs"]["_real_p_neg_holdout"]["comparison"]
         reports.append(report)
 
     verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
 
     assert verdict["holdout_locked_until_frozen"] is False
     assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
-    assert "holdout_pair_missing_comparison(p_neg_holdout)" in verdict["holdout_validation_reasons"]
+    assert (
+        "holdout_pair_missing_comparison(_real_p_neg_holdout)"
+        in verdict["holdout_validation_reasons"]
+    )
 
 
 def test_evaluate_holdout_validation_rejects_locked_status_disguise_when_unlocked(
@@ -2710,11 +2854,11 @@ def test_evaluate_holdout_validation_rejects_locked_status_disguise_when_unlocke
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # p_neg_holdout の行を「holdout ロック中にのみ現れる」構造（"split" と
         # "status" のみ）へ書き換える——manifest 束縛検証は row に存在する
         # フィールドのみ照合するため、"split" を残せば pass する。
-        report["pairs"]["p_neg_holdout"] = {
+        report["pairs"]["_real_p_neg_holdout"] = {
             "split": "holdout",
             "status": "holdout_locked_until_frozen",
         }
@@ -2724,7 +2868,10 @@ def test_evaluate_holdout_validation_rejects_locked_status_disguise_when_unlocke
 
     assert verdict["holdout_locked_until_frozen"] is False
     assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
-    assert "holdout_pair_missing_comparison(p_neg_holdout)" in verdict["holdout_validation_reasons"]
+    assert (
+        "holdout_pair_missing_comparison(_real_p_neg_holdout)"
+        in verdict["holdout_validation_reasons"]
+    )
 
 
 def test_evaluate_holdout_validation_absent_while_holdout_locked(
@@ -2740,7 +2887,7 @@ def test_evaluate_holdout_validation_absent_while_holdout_locked(
     reports = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         reports.append(report)
 
     verdict = harness.evaluate_comparison(reports)
@@ -2797,26 +2944,26 @@ def test_evaluate_holdout_validation_not_confirmed_when_frozen_threshold_mismatc
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # tuning 側は「真の」凍結値（0.8/0.8/0.7 と 0.2/0.2/0.3）と一致させる
         # ——registry の contour だけが 0.9 に差し替えられているため、tuning
         # 提案（0.8）との不一致がここで初めて生じる。
         _override_tuning_axes_to_match_fully_frozen_registry(report)
         # holdout 側は差し替え後の contour strong_min（0.9）も満たす値にして、
         # 軸別 verdict は confirmed のまま不一致だけを単離する。
-        report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
-        report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = {
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["axes"] = {
             "contour": 0.95,
             "interval": 1.0,
             "rhythm": 0.9,
         }
-        report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
-        report["pairs"]["p_neg_holdout"]["comparison"]["axes"] = {
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["axes"] = {
             "contour": 0.1,
             "interval": 0.05,
             "rhythm": 0.2,
         }
-        report["pairs"]["p_neg_holdout"]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
         reports.append(report)
 
     verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
@@ -2859,25 +3006,25 @@ def test_evaluate_holdout_validation_not_confirmed_when_frozen_axis_has_no_tunin
         report = harness.run_comparison(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         # tuning pair は一切上書きしない — song_a×song_b の tuning negative は
         # 実測どおり not_comparable のまま残し、`_margin_table` が全軸で
         # `reason: "negative_empty"`（tuning 提案が導出できない）を返す状態を
         # 保つ。
-        assert report["pairs"]["p_neg_tuning"]["comparison"]["evidence"] == "not_comparable"
-        report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
-        report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = {
+        assert report["pairs"]["_real_p_neg_tuning"]["comparison"]["evidence"] == "not_comparable"
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["axes"] = {
             "contour": 0.95,
             "interval": 1.0,
             "rhythm": 0.9,
         }
-        report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
-        report["pairs"]["p_neg_holdout"]["comparison"]["axes"] = {
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["axes"] = {
             "contour": 0.1,
             "interval": 0.05,
             "rhythm": 0.2,
         }
-        report["pairs"]["p_neg_holdout"]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
         reports.append(report)
 
     verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
@@ -3055,7 +3202,7 @@ def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
         manifest_path,
         [
             {
-                "pair_id": "p_octave_holdout",
+                "pair_id": "_real_p_octave_holdout",
                 "kind": "positive_transform",
                 "split": "holdout",
                 "audio_a": str(audio_c),
@@ -3067,7 +3214,7 @@ def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
             # を使い回す（このテストの主眼は holdout redaction であって、これらの
             # 埋め合わせ pair の比較結果は検証対象ではない）。
             {
-                "pair_id": "p_fill_pos_tuning",
+                "pair_id": "_real_p_fill_pos_tuning",
                 "kind": "positive_transform",
                 "split": "tuning",
                 "audio_a": str(audio_c),
@@ -3075,7 +3222,7 @@ def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
                 "expected": "same",
             },
             {
-                "pair_id": "p_fill_neg_tuning",
+                "pair_id": "_real_p_fill_neg_tuning",
                 "kind": "negative_cross",
                 "split": "tuning",
                 "audio_a": str(audio_c),
@@ -3083,7 +3230,7 @@ def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
                 "expected": "different",
             },
             {
-                "pair_id": "p_fill_neg_rhythm",
+                "pair_id": "_real_p_fill_neg_rhythm",
                 "kind": "negative_rhythm",
                 "split": "tuning",
                 "audio_a": str(audio_c),
@@ -3091,7 +3238,7 @@ def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
                 "expected": "different",
             },
             {
-                "pair_id": "p_fill_neg_interval",
+                "pair_id": "_real_p_fill_neg_interval",
                 "kind": "negative_interval",
                 "split": "tuning",
                 "audio_a": str(audio_c),
@@ -3099,7 +3246,7 @@ def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
                 "expected": "different",
             },
             {
-                "pair_id": "p_fill_neg_holdout",
+                "pair_id": "_real_p_fill_neg_holdout",
                 "kind": "negative_cross",
                 "split": "holdout",
                 "audio_a": str(audio_c),
@@ -3115,7 +3262,7 @@ def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
         manifest_path=manifest_path, route_runner=_runner, registry_path=one_axis_registry
     )
 
-    holdout_row = report["pairs"]["p_octave_holdout"]
+    holdout_row = report["pairs"]["_real_p_octave_holdout"]
     assert holdout_row["split"] == "holdout"
     comparison = holdout_row["comparison"]
 
@@ -3143,7 +3290,7 @@ def test_evaluate_rejects_reports_with_all_pair_pins_missing(tmp_path: Path, aud
     reports = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False  # 「実測」相当（publishable）にする。
+        _mark_publishable(report)  # 「実測」相当（publishable）にする。
         for pair in report["pairs"].values():
             if "comparison" not in pair:
                 continue
@@ -3168,8 +3315,8 @@ def test_evaluate_rejects_reports_with_partial_pair_pin_missing(tmp_path: Path, 
     _write_manifest(manifest_path, _default_pairs(audio_paths))
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-    report["route_runner_injected"] = False
-    del report["pairs"]["p_pos_tuning"]["audio_sha256_a"]
+    _mark_publishable(report)
+    del report["pairs"]["_real_p_pos_tuning"]["audio_sha256_a"]
 
     with pytest.raises(ValueError, match="pair 単位 pin"):
         harness.evaluate_comparison([report])
@@ -3185,7 +3332,7 @@ def test_evaluate_allows_injected_reports_with_missing_pair_pins(tmp_path: Path,
     _write_manifest(manifest_path, _default_pairs(audio_paths))
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-    del report["pairs"]["p_pos_tuning"]["audio_sha256_a"]
+    del report["pairs"]["_real_p_pos_tuning"]["audio_sha256_a"]
     assert report["route_runner_injected"] is True
 
     verdict = harness.evaluate_comparison([report])
@@ -3515,7 +3662,7 @@ def test_evaluate_rejects_publishable_report_with_non_crepe_route(
         manifest_path=manifest_path, route_name="pyin_direct", route_runner=runner
     )
     assert report["route"] == "pyin_direct"
-    report["route_runner_injected"] = False  # 「実測」相当（publishable）へ偽装。
+    _mark_publishable(report)  # 「実測」相当（publishable）へ偽装。
 
     with pytest.raises(ValueError, match="crepe 系経路"):
         harness.evaluate_comparison([report])
@@ -3558,8 +3705,8 @@ def test_evaluate_rejects_tampered_split_holdout_to_tuning(tmp_path: Path, audio
     report = harness.run_comparison(
         manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
     )
-    assert report["pairs"]["p_pos_holdout"]["split"] == "holdout"
-    report["pairs"]["p_pos_holdout"]["split"] = "tuning"
+    assert report["pairs"]["_real_p_pos_holdout"]["split"] == "holdout"
+    report["pairs"]["_real_p_pos_holdout"]["split"] = "tuning"
 
     with pytest.raises(ValueError, match="split"):
         harness.evaluate_comparison([report])
@@ -3574,8 +3721,8 @@ def test_evaluate_rejects_tampered_expected_field(tmp_path: Path, audio_paths: D
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
-    assert report["pairs"]["p_neg_tuning"]["expected"] == "different"
-    report["pairs"]["p_neg_tuning"]["expected"] = "same"
+    assert report["pairs"]["_real_p_neg_tuning"]["expected"] == "different"
+    report["pairs"]["_real_p_neg_tuning"]["expected"] = "same"
 
     with pytest.raises(ValueError, match="expected"):
         harness.evaluate_comparison([report])
@@ -3611,12 +3758,12 @@ def test_evaluate_rejects_report_missing_manifest_pair(tmp_path: Path, audio_pat
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
-    del report["pairs"]["p_neg_tuning"]
+    del report["pairs"]["_real_p_neg_tuning"]
 
     with pytest.raises(ValueError) as excinfo:
         harness.evaluate_comparison([report])
     assert "欠落 pair_id" in str(excinfo.value)
-    assert "p_neg_tuning" in str(excinfo.value)
+    assert "_real_p_neg_tuning" in str(excinfo.value)
 
 
 def test_evaluate_rejects_report_with_excess_pair_not_in_manifest(
@@ -3631,7 +3778,7 @@ def test_evaluate_rejects_report_with_excess_pair_not_in_manifest(
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
-    report["pairs"]["p_extra_not_in_manifest"] = copy.deepcopy(report["pairs"]["p_neg_tuning"])
+    report["pairs"]["p_extra_not_in_manifest"] = copy.deepcopy(report["pairs"]["_real_p_neg_tuning"])
 
     with pytest.raises(ValueError) as excinfo:
         harness.evaluate_comparison([report])
@@ -3658,7 +3805,7 @@ def test_evaluate_rejects_malformed_audio_sha256(
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
-    report["pairs"]["p_pos_tuning"]["audio_sha256_a"] = bad_value
+    report["pairs"]["_real_p_pos_tuning"]["audio_sha256_a"] = bad_value
 
     with pytest.raises(ValueError, match="audio_sha256_a"):
         harness.evaluate_comparison([report])
@@ -3676,8 +3823,8 @@ def test_evaluate_rejects_malformed_observation_sha256(tmp_path: Path, audio_pat
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
-    assert harness._is_sha256_hex(report["pairs"]["p_pos_tuning"]["observation_sha256_a"])
-    report["pairs"]["p_pos_tuning"]["observation_sha256_a"] = "x"
+    assert harness._is_sha256_hex(report["pairs"]["_real_p_pos_tuning"]["observation_sha256_a"])
+    report["pairs"]["_real_p_pos_tuning"]["observation_sha256_a"] = "x"
 
     with pytest.raises(ValueError, match="observation_sha256_a"):
         harness.evaluate_comparison([report])
@@ -3690,7 +3837,7 @@ def test_evaluate_rejects_non_mapping_route_provenance(tmp_path: Path, audio_pat
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
-    report["pairs"]["p_pos_tuning"]["route_provenance_a"] = "not-a-mapping"
+    report["pairs"]["_real_p_pos_tuning"]["route_provenance_a"] = "not-a-mapping"
 
     with pytest.raises(ValueError, match="mapping"):
         harness.evaluate_comparison([report])
@@ -3709,7 +3856,7 @@ def test_evaluate_rejects_empty_crepe_required_pin_in_route_provenance(
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
     assert report["route"] == "crepe_direct"
-    report["pairs"]["p_pos_tuning"]["route_provenance_a"]["extractor_weights_sha256"] = ""
+    report["pairs"]["_real_p_pos_tuning"]["route_provenance_a"]["extractor_weights_sha256"] = ""
 
     with pytest.raises(ValueError, match="extractor_weights_sha256"):
         harness.evaluate_comparison([report])
@@ -3726,7 +3873,7 @@ def test_evaluate_rejects_null_crepe_required_pin_in_route_provenance(
     runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
-    report["pairs"]["p_pos_tuning"]["route_provenance_b"]["extractor_code_sha256"] = None
+    report["pairs"]["_real_p_pos_tuning"]["route_provenance_b"]["extractor_code_sha256"] = None
 
     with pytest.raises(ValueError, match="extractor_code_sha256"):
         harness.evaluate_comparison([report])
@@ -3746,7 +3893,7 @@ def test_evaluate_rejects_non_hex_crepe_required_pin_in_route_provenance(
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
     assert report["route"] == "crepe_direct"
-    report["pairs"]["p_pos_tuning"]["route_provenance_a"]["extractor_weights_sha256"] = "x"
+    report["pairs"]["_real_p_pos_tuning"]["route_provenance_a"]["extractor_weights_sha256"] = "x"
 
     with pytest.raises(ValueError, match="extractor_weights_sha256"):
         harness.evaluate_comparison([report])
@@ -3766,8 +3913,8 @@ def test_evaluate_allows_non_crepe_route_without_crepe_required_pins(
         manifest_path=manifest_path, route_name="pyin_direct", route_runner=runner
     )
     # pyin には重み/コード pin が無い運用を模してテスト側で明示的に外す。
-    del report["pairs"]["p_pos_tuning"]["route_provenance_a"]["extractor_weights_sha256"]
-    del report["pairs"]["p_pos_tuning"]["route_provenance_a"]["extractor_code_sha256"]
+    del report["pairs"]["_real_p_pos_tuning"]["route_provenance_a"]["extractor_weights_sha256"]
+    del report["pairs"]["_real_p_pos_tuning"]["route_provenance_a"]["extractor_code_sha256"]
 
     verdict = harness.evaluate_comparison([report])
     assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"
@@ -3792,7 +3939,7 @@ def _two_reports_for_calibration_verdict(
     reports: List[Dict[str, Any]] = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-        report["route_runner_injected"] = False
+        _mark_publishable(report)
         reports.append(report)
     return reports
 
@@ -3812,7 +3959,7 @@ def test_evaluate_rejects_invalid_axes_value(
     """
     reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
     for report in reports:
-        report["pairs"]["p_pos_tuning"]["comparison"]["axes"]["contour"] = bad_value
+        report["pairs"]["_real_p_pos_tuning"]["comparison"]["axes"]["contour"] = bad_value
 
     with pytest.raises(ValueError, match="contour"):
         harness.evaluate_comparison(reports)
@@ -3824,7 +3971,7 @@ def test_evaluate_rejects_unknown_axis_name(tmp_path: Path, audio_paths: Dict[st
     """
     reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
     for report in reports:
-        report["pairs"]["p_pos_tuning"]["comparison"]["axes"]["bogus_axis"] = 0.5
+        report["pairs"]["_real_p_pos_tuning"]["comparison"]["axes"]["bogus_axis"] = 0.5
 
     with pytest.raises(ValueError, match="bogus_axis"):
         harness.evaluate_comparison(reports)
@@ -3834,7 +3981,7 @@ def test_evaluate_accepts_none_axes_value(tmp_path: Path, audio_paths: Dict[str,
     """axes 値の `None`（計測不能の既存の意味論）は axes 値検証を通過する。"""
     reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
     for report in reports:
-        report["pairs"]["p_pos_tuning"]["comparison"]["axes"]["contour"] = None
+        report["pairs"]["_real_p_pos_tuning"]["comparison"]["axes"]["contour"] = None
 
     verdict = harness.evaluate_comparison(reports)
     assert "calibration_verdict_status" not in verdict
@@ -3850,7 +3997,7 @@ def test_evaluate_rejects_unknown_evidence_value(tmp_path: Path, audio_paths: Di
     """
     reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
     for report in reports:
-        report["pairs"]["p_pos_tuning"]["comparison"]["evidence"] = "maybe"
+        report["pairs"]["_real_p_pos_tuning"]["comparison"]["evidence"] = "maybe"
 
     with pytest.raises(ValueError, match="evidence"):
         harness.evaluate_comparison(reports)
@@ -3868,10 +4015,965 @@ def test_evaluate_rejects_not_comparable_relabeled_to_none_with_axes_all_none(
     """
     reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
     for report in reports:
-        comparison = report["pairs"]["p_neg_tuning"]["comparison"]
+        comparison = report["pairs"]["_real_p_neg_tuning"]["comparison"]
         assert comparison["evidence"] == "not_comparable"
         assert all(value is None for value in comparison["axes"].values())
         comparison["evidence"] = "none"
 
     with pytest.raises(ValueError, match="全て None"):
         harness.evaluate_comparison(reports)
+
+
+# --------------------------------------------------------------------------- #
+# R2 対応（Codex レビュー・material 別会計）: 事前登録メモ §1.3「別会計」の
+# 機械強制。real_voice のみが校正（凍結提案・not_comparable による拒否・
+# holdout 判定）の入力であり、synthetic は診断専用（not_comparable も
+# 凍結可否に一切影響しない）ことを検証する。
+# --------------------------------------------------------------------------- #
+def _pairs_with_extra_synth_tuning_positive(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
+    """`_default_pairs`（real_voice のみ）に、tuning split の合成 positive_transform
+    pair（pair_id に `_synth_` マーカー）を 1 件追加する。manifest 構成要件
+    （`_validate_manifest_composition`）は `_default_pairs` の時点で既に満たして
+    いるため、追加は composition を壊さない。
+    """
+    return _default_pairs(audio_paths) + [
+        {
+            "pair_id": "pt_synth_tuning_extra",
+            "kind": "positive_transform",
+            "split": "tuning",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_a_transposed"],
+            "expected": "same",
+        },
+    ]
+
+
+def _two_reports_with_extra_synth_tuning_positive(
+    tmp_path: Path, audio_paths: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """`_two_reports_for_calibration_verdict` と同型だが、追加の合成 tuning
+    positive pair（`pt_synth_tuning_extra`）を含む manifest を使う。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _pairs_with_extra_synth_tuning_positive(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports: List[Dict[str, Any]] = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        _mark_publishable(report)
+        reports.append(report)
+    return reports
+
+
+def test_evaluate_freeze_proposal_survives_synth_tuning_positive_not_comparable(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """synthetic の tuning positive pair が `not_comparable` でも、real_voice 由来の
+    freeze proposal は影響を受けない（R2 対応の主眼——旧実装は全 positive が
+    単一バケットに混入していたため、synthetic 側の 1 件の not_comparable だけで
+    real_voice 由来の凍結提案まで巻き込んで全拒否されていた）。
+    """
+    reports = _two_reports_with_extra_synth_tuning_positive(tmp_path, audio_paths)
+    for report in reports:
+        # 狙い撃ち negative / negative_cross は既定では観測ゲート不通過などで
+        # not_comparable になりがち（`test_evaluate_rejects_freeze_proposal_
+        # when_tuning_positive_not_comparable` と同じ理由）——real_voice の
+        # margin が確保できる状況を作るため軸値を上書きする。
+        for neg_pair_id in (
+            "_real_p_neg_tuning",
+            "_real_p_neg_rhythm_tuning",
+            "_real_p_neg_interval_tuning",
+        ):
+            report["pairs"][neg_pair_id]["comparison"]["evidence"] = "none"
+            report["pairs"][neg_pair_id]["comparison"]["axes"] = {
+                "contour": 0.1,
+                "interval": 0.05,
+                "rhythm": 0.2,
+            }
+        # synthetic の tuning positive pair だけを not_comparable にする
+        # （real_voice の tuning positive `_real_p_pos_tuning` はそのまま
+        # 実データに基づく高い一致率を保つ）。
+        report["pairs"]["pt_synth_tuning_extra"]["comparison"]["evidence"] = "not_comparable"
+        report["pairs"]["pt_synth_tuning_extra"]["comparison"]["axes"] = {
+            "contour": None,
+            "interval": None,
+            "rhythm": None,
+        }
+
+    verdict = harness.evaluate_comparison(reports)
+
+    # real_voice バケットの tuning positive は誰も not_comparable になっていない
+    # ため、トップレベル（= real_voice 由来）の freeze proposal は発行される。
+    assert verdict["not_comparable_positive_count"] == 0
+    assert verdict["calibrated_axes"]
+    assert verdict["freeze_proposal"] != {}
+    assert "freeze_proposal_rejected_reason" not in verdict
+
+    # synthetic バケットの not_comparable は診断セクションへ正直会計されるのみ。
+    accounting = verdict["material_accounting"]
+    assert accounting["real_voice"]["role"] == "calibration"
+    assert accounting["real_voice"]["not_comparable_positive_count"] == 0
+    assert accounting["synthetic"]["role"] == "diagnostic"
+    assert accounting["synthetic"]["not_comparable_positive_count"] == 1
+
+
+def test_evaluate_material_accounting_reports_synthetic_diagnostic_section(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`material_accounting` に real_voice（校正）/ synthetic（診断）の両セクションが
+    分離して報告され、トップレベルの `margin_table`/`calibrated_axes` は
+    real_voice バケットの値と一致することを確認する（R2 対応・マージン表の
+    material 別分割）。
+    """
+    reports = _two_reports_with_extra_synth_tuning_positive(tmp_path, audio_paths)
+    for report in reports:
+        for neg_pair_id in (
+            "_real_p_neg_tuning",
+            "_real_p_neg_rhythm_tuning",
+            "_real_p_neg_interval_tuning",
+        ):
+            report["pairs"][neg_pair_id]["comparison"]["evidence"] = "none"
+            report["pairs"][neg_pair_id]["comparison"]["axes"] = {
+                "contour": 0.1,
+                "interval": 0.05,
+                "rhythm": 0.2,
+            }
+
+    verdict = harness.evaluate_comparison(reports)
+
+    accounting = verdict["material_accounting"]
+    assert set(accounting) == {"real_voice", "synthetic"}
+    # トップレベルキー（後方互換）は real_voice バケットの値そのもの。
+    assert verdict["margin_table"] == accounting["real_voice"]["margin_table"]
+    assert verdict["calibrated_axes"] == accounting["real_voice"]["calibrated_axes"]
+    # tuning pair count: real_voice は _default_pairs 由来の 1 件（p_pos_tuning）
+    # + negative 系（positive のみを数える設計ではないため tuning split の全数を
+    # 数えている点に注意——ここでは positive/negative 合算の tuning 総数）。
+    assert accounting["real_voice"]["tuning_pair_count"] == sum(
+        1
+        for pid, pair in reports[0]["pairs"].items()
+        if pair["split"] == "tuning" and "_real_" in pid
+    )
+    assert accounting["synthetic"]["tuning_pair_count"] == 1
+    assert accounting["synthetic"]["holdout_pair_count"] == 0
+    assert "note" in accounting["synthetic"]
+    assert "診断" in accounting["synthetic"]["note"]
+
+
+def test_run_comparison_rejects_pair_id_without_material_marker_before_route_runner_call(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """pair_id に `_real_`/`_synth_` のいずれのマーカーも含まれない manifest は、
+    run phase（`run_comparison` → `_validate_manifest`）で fail-closed 拒否
+    する——高価な抽出処理（route_runner 呼び出し）に一切到達しない（R2R T1
+    対応・Codex レビュー第 3 ラウンド。前段の R2 では evaluate phase でのみ
+    拒否していたが、run phase 前倒しにより「不正な manifest で無駄な run を
+    回してから evaluate で初めて気付く」を防ぐ。後方互換でマーカー無しを
+    許容する道は採らない設計判定）。
+    """
+    pairs = _default_pairs(audio_paths)
+    pairs[0] = dict(pairs[0], pair_id="p_pos_tuning_no_marker")
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, pairs)
+
+    call_count = {"n": 0}
+    real_runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    def _counting_runner(audio_path: str) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+        call_count["n"] += 1
+        return real_runner(audio_path)
+
+    with pytest.raises(ValueError, match="material"):
+        harness.run_comparison(manifest_path=manifest_path, route_runner=_counting_runner)
+
+    # route_runner（音声処理・crepe 呼び出しに相当する経路）に一切到達して
+    # いないことを確認する——run phase の manifest 検証段階で拒否されたことの
+    # 直接証拠。
+    assert call_count["n"] == 0
+
+
+def test_validate_pair_id_material_markers_rejects_unmarked_pair_id_directly():
+    """`_validate_pair_id_material_markers`（evaluate phase の
+    defense-in-depth）単体の契約: report の pairs dict に material マーカー
+    無し pair_id があれば fail-closed で拒否する。R2R T1 対応で run phase
+    （`_validate_manifest`）に前倒しした後も、evaluate phase 側のこの関数は
+    独立した防御として引き続き機能する（manifest 経由を迂回して report を
+    直接構築しても拒否できることを確認する）。
+    """
+    reports = [{"pairs": {"p_no_marker": {"split": "tuning"}}}]
+
+    with pytest.raises(ValueError, match="material"):
+        harness._validate_pair_id_material_markers(reports)
+
+
+def test_validate_pair_id_material_markers_rejects_both_markers_directly():
+    """`_validate_pair_id_material_markers` は両マーカー含有 pair_id も
+    fail-closed で拒否する（レビュー対応 第 11 ラウンド・M2）。
+    """
+    reports = [{"pairs": {"pt_real_synth_x": {"split": "tuning"}}}]
+
+    with pytest.raises(ValueError, match="両方のマーカーを含んでいる"):
+        harness._validate_pair_id_material_markers(reports)
+
+
+def test_run_comparison_rejects_pair_id_with_both_material_markers_before_route_runner_call(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """pair_id が `_real_`/`_synth_` **両方**のマーカーを含む manifest は、
+    run phase（`run_comparison` → `_validate_manifest`）で fail-closed 拒否
+    する——高価な抽出処理（route_runner 呼び出し）に一切到達しない（M2 対応。
+    従来はどちらか一方が含まれれば判別成立としており（`_real_` を先に判定）、
+    `pt_real_synth_x` のような両マーカー含有 id が real_voice に分類されて
+    しまっていた——synthetic 診断対が real の margin/凍結計算へ混入する穴が
+    あった）。
+    """
+    pairs = _default_pairs(audio_paths)
+    pairs[0] = dict(pairs[0], pair_id="pt_real_synth_x")
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, pairs)
+
+    call_count = {"n": 0}
+    real_runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    def _counting_runner(audio_path: str) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+        call_count["n"] += 1
+        return real_runner(audio_path)
+
+    with pytest.raises(ValueError, match="両方のマーカーを含んでいる"):
+        harness.run_comparison(manifest_path=manifest_path, route_runner=_counting_runner)
+
+    assert call_count["n"] == 0
+
+
+def test_committed_m3d_pairs_manifest_all_pair_ids_have_exactly_one_material_marker():
+    """実測用に commit 済みの `m3d_pairs_manifest.yaml`（98 対）の全 pair_id が
+    `_real_`/`_synth_` のちょうど 1 個のマーカーを持つことを確認する
+    （M2 対応: 将来 builder の命名規則が変わって両マーカー含有 id を emit
+    するようになった場合の防波堤。builder 自身は本ハーネスを import しない
+    ため、生成物である commit 済み manifest 側から独立に検証する）。
+    """
+    manifest_path = ROOT / "tests" / "fixtures" / "melody_bench" / "m3d_pairs_manifest.yaml"
+    manifest_doc = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    pair_ids = [pair["pair_id"] for pair in manifest_doc["pairs"]]
+    assert len(pair_ids) == 98
+
+    both_markers = [pid for pid in pair_ids if "_real_" in pid and "_synth_" in pid]
+    assert both_markers == []
+    neither_marker = [pid for pid in pair_ids if "_real_" not in pid and "_synth_" not in pid]
+    assert neither_marker == []
+    # 全件が判別可能であることも直接確認する（fail-closed で例外が飛ばない）。
+    for pair_id in pair_ids:
+        harness._material_of_pair_id(pair_id)
+
+
+def test_material_of_pair_id_and_partition_are_fail_closed_and_consistent():
+    """`_material_of_pair_id`/`_partition_pairs_by_material` の単体契約: 既知
+    マーカーの判別・未知マーカーの fail-closed・両マーカー含有の fail-closed
+    （M2 対応）・分割の完全性（元 dict のキー集合 = real ∪ synth、重複なし）
+    を確認する。
+    """
+    assert harness._material_of_pair_id("pt_real_tuning_x") == "real_voice"
+    assert harness._material_of_pair_id("pt_synth_tuning_x") == "synthetic"
+    with pytest.raises(ValueError, match="material"):
+        harness._material_of_pair_id("pt_unknown_tuning_x")
+    with pytest.raises(ValueError, match="両方のマーカーを含んでいる"):
+        harness._material_of_pair_id("pt_real_synth_x")
+
+    pairs = {
+        "a_real_1": {"split": "tuning"},
+        "b_synth_1": {"split": "tuning"},
+        "c_real_2": {"split": "holdout"},
+    }
+    real, synth = harness._partition_pairs_by_material(pairs)
+    assert set(real) == {"a_real_1", "c_real_2"}
+    assert set(synth) == {"b_synth_1"}
+    assert set(real) | set(synth) == set(pairs)
+    assert set(real) & set(synth) == set()
+
+
+# --------------------------------------------------------------------------- #
+# R2R N4（Codex レビュー第 2 ラウンド）: synthetic holdout の per-row 会計
+# --------------------------------------------------------------------------- #
+def _pairs_with_extra_synth_holdout_positive(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
+    """`_default_pairs`（real_voice のみ）に、holdout split の合成
+    positive_transform pair（pair_id に `_synth_` マーカー）を 1 件追加する。
+    """
+    return _default_pairs(audio_paths) + [
+        {
+            "pair_id": "pt_synth_holdout_extra",
+            "kind": "positive_transform",
+            "split": "holdout",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_a_transposed"],
+            "expected": "same",
+        },
+    ]
+
+
+def test_material_accounting_synthetic_holdout_rows_locked_skipped_without_reading_evidence(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """holdout ロック中（凍結前）は synth holdout pair の evidence に一切触れず、
+    `locked_skipped` として pair_id を列挙するのみ（R2R N4 対応・既存の
+    holdout ロック規律の厳守）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _pairs_with_extra_synth_holdout_positive(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports: List[Dict[str, Any]] = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        _mark_publishable(report)
+        reports.append(report)
+
+    # holdout ロック中は run 時点で該当 pair の comparison 自体が存在しない
+    # （スタブ化・既存契約）ことを前提として確認しておく——本テストが検証したい
+    # のは「evidence を読まない」ことなので、report 自体に evidence が無いこと
+    # がその前提になる。
+    for report in reports:
+        assert report["pairs"]["pt_synth_holdout_extra"] == {
+            "split": "holdout",
+            "status": "holdout_locked_until_frozen",
+        }
+
+    verdict = harness.evaluate_comparison(reports)
+
+    assert verdict["holdout_locked_until_frozen"] is True
+    holdout_rows = verdict["material_accounting"]["synthetic"]["holdout_rows"]
+    assert holdout_rows == {"pt_synth_holdout_extra": {"status": "locked_skipped"}}
+
+
+def test_material_accounting_synthetic_holdout_rows_measured_when_unlocked(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """unlocked 評価時のみ synth holdout pair の evidence/axes が pair_id 単位で
+    記録される（R2R N4 対応）。calibration verdict（holdout_validation）は
+    real バケットのみで判定され、synth holdout の内容には影響されない
+    （診断専用であることの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _pairs_with_extra_synth_holdout_positive(audio_paths))
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports: List[Dict[str, Any]] = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+        )
+        _mark_publishable(report)
+        _override_tuning_axes_to_match_fully_frozen_registry(report)
+        # real の holdout pair を `_reports_for_holdout_validation` と同じ値へ
+        # 揃え、real バケット単独で holdout_validation_status=confirmed になる
+        # 状態を作る（synth holdout の内容が real 側の判定に影響しないことの
+        # 対照実験として使う）。
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["_real_p_pos_holdout"]["comparison"]["axes"] = {
+            "contour": 0.95,
+            "interval": 1.0,
+            "rhythm": 0.9,
+        }
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["axes"] = {
+            "contour": 0.1,
+            "interval": 0.05,
+            "rhythm": 0.2,
+        }
+        report["pairs"]["_real_p_neg_holdout"]["comparison"]["coverage"] = dict(
+            _HOLDOUT_TEST_COVERAGE
+        )
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_locked_until_frozen"] is False
+    holdout_rows = verdict["material_accounting"]["synthetic"]["holdout_rows"]
+    assert set(holdout_rows) == {"pt_synth_holdout_extra"}
+    row = holdout_rows["pt_synth_holdout_extra"]
+    assert row["status"] in {"measured", "not_comparable"}
+    if row["status"] == "measured":
+        assert "evidence" in row
+        assert "axes" in row
+    # 診断専用: real バケットだけで holdout_validation_status が確定しており、
+    # synth holdout pair の内容（上で一切上書きしていない自然な計測結果）が
+    # 判定に影響を与えていない。
+    assert verdict["holdout_validation_status"] == "confirmed"
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 7 ラウンド（P1）: pins sidecar 強制 preflight
+# --------------------------------------------------------------------------- #
+def _pins_audio_sha256(audio_paths: Dict[str, str]) -> Dict[str, str]:
+    return {
+        audio_paths[label]: hashlib.sha256(Path(audio_paths[label]).read_bytes()).hexdigest()
+        for label in ("song_a", "song_a_transposed", "song_b")
+    }
+
+
+def _write_matching_pins_sidecar(
+    pins_path: Path, manifest_path: Path, audio_paths: Dict[str, str]
+) -> None:
+    """`manifest_path`/`audio_paths` の現物と一致する pins sidecar を書く
+    （harness の `_load_pins_sidecar_for_preflight` が読む最小スキーマ:
+    schema/manifest_sha256/audio_sha256 の 3 フィールドのみ）。
+    """
+    pins_path.write_text(
+        json.dumps(
+            {
+                "schema": "m3d-pairs-pins/0.3",
+                "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                "audio_sha256": _pins_audio_sha256(audio_paths),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _counting_route_runner(inner: "harness.RouteRunner") -> "Tuple[harness.RouteRunner, Dict[str, int]]":
+    """`inner` を呼び出し回数カウンタで包む——「抽出開始前に fail-closed」を
+    「route_runner が一度も呼ばれていない」という直接観測可能な事実で確認する。
+    """
+    counter = {"n": 0}
+
+    def _runner(audio_path: str) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+        counter["n"] += 1
+        return inner(audio_path)
+
+    return _runner, counter
+
+
+def test_run_comparison_publishable_run_requires_pins(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """route_runner 非注入（publishable）の run は `--pins`（`pins_path`）が
+    必須——未指定は抽出を一切開始せず fail-closed（P1 対応の主眼）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+
+    with pytest.raises(ValueError, match="--pins が必須"):
+        harness.run_comparison(manifest_path=manifest_path)
+
+
+def test_run_comparison_pins_preflight_rejects_tampered_wav_before_extraction(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """公開後に WAV が改変された場合、preflight が digest mismatch を検出し、
+    route_runner を一度も呼ばずに run 全体を fail-closed で中止する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+
+    # pins 記録後に song_b の中身を改変する（manifest 自体は無改変）。
+    Path(audio_paths["song_b"]).write_bytes(b"tampered-audio-bytes")
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    with pytest.raises(ValueError, match="pins preflight 失敗"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+    assert counter["n"] == 0
+
+
+def test_run_comparison_pins_preflight_rejects_tampered_manifest_before_extraction(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """公開後に manifest が改変された場合（音声は無改変）、preflight が
+    manifest sha256 mismatch を検出し、route_runner を一度も呼ばずに run 全体を
+    fail-closed で中止する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+
+    # pins 記録後に manifest を改変する（YAML として引き続きパースできる
+    # コメント追記——`_validate_manifest` の構造検査自体は通る）。
+    with manifest_path.open("ab") as handle:
+        handle.write(b"# tampered\n")
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    with pytest.raises(ValueError, match="manifest sha256 mismatch"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+    assert counter["n"] == 0
+
+
+def test_run_comparison_pins_preflight_rejects_missing_sidecar(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "does_not_exist_pins.json"
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    with pytest.raises(ValueError, match="pins サイドカーの読み込みに失敗"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+    assert counter["n"] == 0
+
+
+def test_run_comparison_pins_preflight_passes_and_run_proceeds(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """改変が一切ない正常系: preflight を通過し、run が実行され（route_runner
+    が実際に呼ばれ）、report に検証実施の事実（`pins_preflight_verified` /
+    `pins_path` / `pins_sha256`）が記録される。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+    )
+
+    assert counter["n"] > 0  # 抽出が実際に実行された
+    assert report["pins_preflight_verified"] is True
+    assert report["pins_path"] == str(pins_path.resolve())
+    assert report["pins_sha256"] == hashlib.sha256(pins_path.read_bytes()).hexdigest()
+    # holdout ロック中は holdout pair の comparison が書かれないため、
+    # tuning pair で run が正常完走したことを確認する。
+    assert "comparison" in report["pairs"]["_real_p_pos_tuning"]
+
+
+def test_run_comparison_injected_run_without_pins_skips_preflight(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """route_runner 注入（テスト run）は `pins_path` 省略が従来どおり許される
+    ——preflight 自体を skip し、report にも pins 関連フィールドを記録しない
+    （後方互換の確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert report["pins_preflight_verified"] is False
+    assert "pins_path" not in report
+    assert "pins_sha256" not in report
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 8 ラウンド（J1）: 凍結コピーの sidecar 再照合（二段構え）
+# --------------------------------------------------------------------------- #
+def test_run_comparison_freeze_time_verification_rejects_wav_replaced_after_preflight(
+    tmp_path: Path, audio_paths: Dict[str, str], monkeypatch
+):
+    """preflight（一括事前検証）は通過したが、その直後・最初の凍結
+    （`_freeze_audio_copy`）の直前に WAV が置換された場合、凍結コピー digest の
+    sidecar 再照合（J1）が検出し、route_runner を一度も呼ばずに run 全体を
+    fail-closed で中止する（J1 対応の主眼）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    real_freeze = harness._freeze_audio_copy
+    triggered = {"done": False}
+
+    def _freeze_with_late_tamper(audio_path, staging_dir):
+        # 「preflight は通ったが、最初の凍結の直前に WAV が置換された」窓を
+        # 模す（一度だけ発火——それ以降の pair 処理まで巻き込まない）。
+        if not triggered["done"]:
+            triggered["done"] = True
+            Path(audio_path).write_bytes(b"replaced-after-preflight")
+        return real_freeze(audio_path, staging_dir)
+
+    monkeypatch.setattr(harness, "_freeze_audio_copy", _freeze_with_late_tamper)
+
+    with pytest.raises(ValueError, match="凍結コピーの pins 照合失敗"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+    assert triggered["done"] is True
+    # preflight 通過直後・最初の凍結で即座に拒否されるため、route_runner は
+    # 一度も呼ばれない。
+    assert counter["n"] == 0
+
+
+def test_run_comparison_freeze_time_verification_skipped_for_injected_run_without_pins(
+    tmp_path: Path, audio_paths: Dict[str, str], monkeypatch
+):
+    """注入（テスト）run で `pins_path` 未指定の場合、凍結コピーの sidecar
+    再照合（J1）は従来どおり対象外——WAV を凍結直前に置換しても run は正常に
+    完走する（`pins_preflight_verified: False` の経路には J1 の検査が乗らない
+    ことの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    real_freeze = harness._freeze_audio_copy
+    triggered = {"done": False}
+
+    def _freeze_with_late_tamper(audio_path, staging_dir):
+        if not triggered["done"]:
+            triggered["done"] = True
+            Path(audio_path).write_bytes(b"replaced-without-pins")
+        return real_freeze(audio_path, staging_dir)
+
+    monkeypatch.setattr(harness, "_freeze_audio_copy", _freeze_with_late_tamper)
+
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert triggered["done"] is True
+    assert report["pins_preflight_verified"] is False
+
+
+def test_run_comparison_freeze_time_verification_passes_for_clean_run(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """クリーン run（preflight 後に何も改変されない）は J1 の追加検査が
+    介在しても従来どおり正常完走する（偽陽性を出さないことの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+    )
+
+    assert report["pins_preflight_verified"] is True
+    assert counter["n"] > 0
+    assert "comparison" in report["pairs"]["_real_p_pos_tuning"]
+    assert "comparison" in report["pairs"]["_real_p_neg_tuning"]
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 8 ラウンド（J2）: --out から pins sidecar を保護
+# --------------------------------------------------------------------------- #
+def test_out_cannot_overwrite_pins_sidecar(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--out` が `--pins` と同じパスを指す場合、run 開始前に fail-closed で
+    拒否し、pins sidecar 自体は無傷のまま残す（J2 対応の主眼: 前ラウンドの
+    「実害なし」スコープノートは事前登録の run×2 の 2 回目 repeat が sidecar
+    自体を上書きされた後に読めなくなる点を見落としており、本ラウンドで訂正
+    する）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    pins_before = pins_path.read_bytes()
+
+    argv = [
+        "run_melody_comparison.py",
+        "--pairs",
+        str(manifest_path),
+        "--pins",
+        str(pins_path),
+        "--out",
+        str(pins_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+    assert pins_path.read_bytes() == pins_before
+
+
+def test_out_can_differ_from_pins_sidecar(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--out` が `--pins` と異なるパスであれば、protected-path 検査自体は
+    通る（偽陽性を出さないことの確認。CLI 経路は publishable なため実 crepe
+    抽出を要求してしまう——本テストは `run_comparison` を直接 monkeypatch で
+    差し替え、protected-path 判定のみを分離して検証する）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    out_path = tmp_path / "run1.json"
+
+    calls: List[Dict[str, Any]] = []
+
+    def _fake_run_comparison(**kwargs):
+        calls.append(kwargs)
+        return {"schema_version": harness._EXPECTED_RUN_SCHEMA, "pairs": {}}
+
+    monkeypatch.setattr(harness, "run_comparison", _fake_run_comparison)
+
+    argv = [
+        "run_melody_comparison.py",
+        "--pairs",
+        str(manifest_path),
+        "--pins",
+        str(pins_path),
+        "--out",
+        str(out_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert harness.main() == 0
+    assert len(calls) == 1
+    assert calls[0]["pins_path"] == pins_path
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 9 ラウンド（K1）: sidecar の同一バイトからの hash 導出
+# --------------------------------------------------------------------------- #
+def test_load_pins_sidecar_for_preflight_reads_file_exactly_once(
+    tmp_path: Path, monkeypatch
+):
+    """`_load_pins_sidecar_for_preflight` は pins ファイルを 1 回だけ読み、
+    パースと digest の両方をその単一読みから導出する（K1 対応の主眼）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        json.dumps({"schema": "m3d-pairs-pins/0.3", "manifest_sha256": "0" * 64, "audio_sha256": {}}),
+        encoding="utf-8",
+    )
+    expected_bytes = pins_path.read_bytes()
+    expected_digest = hashlib.sha256(expected_bytes).hexdigest()
+
+    real_read_bytes = Path.read_bytes
+    call_count = {"n": 0}
+
+    def _counting_read_bytes(self):
+        if self == pins_path:
+            call_count["n"] += 1
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    doc, digest = harness._load_pins_sidecar_for_preflight(pins_path)
+
+    assert call_count["n"] == 1
+    assert digest == expected_digest
+    assert doc["schema"] == "m3d-pairs-pins/0.3"
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 11 ラウンド（M3）: pins sidecar の重複キー拒否
+# --------------------------------------------------------------------------- #
+def test_load_pins_sidecar_for_preflight_rejects_duplicate_top_level_key(tmp_path: Path):
+    """pins sidecar の JSON に重複したトップレベルキー（`manifest_sha256` を
+    2 回書く）があれば fail-closed で拒否する（M3 対応の主眼: 素の
+    `json.loads` は last-wins で通してしまう）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        '{"schema": "m3d-pairs-pins/0.3", "manifest_sha256": "' + "0" * 64 + '", '
+        '"manifest_sha256": "' + "1" * 64 + '", "audio_sha256": {}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness._load_pins_sidecar_for_preflight(pins_path)
+
+
+def test_load_pins_sidecar_for_preflight_rejects_duplicate_nested_key(tmp_path: Path):
+    """`audio_sha256`（ネストした object）内の重複キーも同様に拒否する
+    （`object_pairs_hook` が全ネスト層に再帰適用されることの確認）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        '{"schema": "m3d-pairs-pins/0.3", "manifest_sha256": "' + "0" * 64 + '", '
+        '"audio_sha256": {"a.wav": "' + "0" * 64 + '", "a.wav": "' + "1" * 64 + '"}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness._load_pins_sidecar_for_preflight(pins_path)
+
+
+def test_load_pins_sidecar_for_preflight_accepts_clean_json_without_dup_keys(tmp_path: Path):
+    """重複キーの無い正常な pins sidecar は従来どおり読める（偽陽性を出さない
+    ことの確認）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        json.dumps(
+            {
+                "schema": "m3d-pairs-pins/0.3",
+                "manifest_sha256": "0" * 64,
+                "audio_sha256": {"a.wav": "1" * 64},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    doc, digest = harness._load_pins_sidecar_for_preflight(pins_path)
+    assert doc["audio_sha256"] == {"a.wav": "1" * 64}
+    assert digest == hashlib.sha256(pins_path.read_bytes()).hexdigest()
+
+
+def test_run_pins_preflight_pins_sha256_reflects_single_read_not_replaced_copy(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """sidecar の読み取り直後（パース済みの内容が確定した後）にファイルが
+    置換されても、report に記録される `pins_sha256` は**パースに使ったのと
+    同じバイト列**の digest のまま——別読みで置換後の内容を拾わない（K1
+    対応の主眼: 従来はここが別読みだったため、この窓で「第 1 の文書で検証・
+    第 2 の文書の digest を記録」というすり替えが起こり得た）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    original_digest = hashlib.sha256(pins_path.read_bytes()).hexdigest()
+
+    manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    pairs_spec = harness._validate_manifest(
+        yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    )
+
+    real_read_bytes = Path.read_bytes
+    triggered = {"done": False}
+
+    def _read_then_replace(self):
+        data = real_read_bytes(self)
+        if not triggered["done"] and self == pins_path:
+            triggered["done"] = True
+            # パース用の読み取りが完了した直後にファイルを置換する——旧実装
+            # のように `pins_sha256` 用の別読みが残っていれば、この置換後の
+            # 内容を拾ってしまう。
+            pins_path.write_bytes(data + b"\n// replaced-immediately-after-read")
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", _read_then_replace)
+
+    result = harness._run_pins_preflight(
+        pins_path=pins_path, manifest_sha256=manifest_sha256, pairs_spec=pairs_spec
+    )
+
+    assert triggered["done"] is True
+    assert result["pins_sha256"] == original_digest
+    # sanity: ファイルは実際に置換されており（現物の digest は元と異なる）、
+    # それでも記録された digest はパース時点のバイト列のままであることの確認。
+    assert hashlib.sha256(pins_path.read_bytes()).hexdigest() != original_digest
+    assert result["pins_sha256"] != hashlib.sha256(pins_path.read_bytes()).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 10 ラウンド（L1）: evaluate での pins preflight 証跡要求
+# --------------------------------------------------------------------------- #
+def test_evaluate_rejects_publishable_report_without_pins_preflight_evidence(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`route_runner_injected=False`（publishable）だが `pins_preflight_
+    verified`/`pins_path`/`pins_sha256` を一切持たない report（第 7 ラウンドの
+    強制ゲート導入前に作られた report を模す）は fail-closed で拒否する
+    （L1 対応の主眼）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        # `_mark_publishable` を使わず、意図的に pins 証跡フィールドを一切
+        # 付けない（第 7 ラウンド以前の report・または証跡を事後編集で
+        # 除去された report を模す）。
+        report["route_runner_injected"] = False
+        reports.append(report)
+
+    with pytest.raises(ValueError, match="pins_preflight_verified が True でない"):
+        harness.evaluate_comparison(reports)
+
+
+def test_evaluate_rejects_publishable_report_with_pins_preflight_verified_false(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`pins_preflight_verified` が明示的に `False`（または非 bool）の
+    publishable report も同様に拒否する（L1 対応）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        _mark_publishable(report)
+        report["pins_preflight_verified"] = False
+        reports.append(report)
+
+    with pytest.raises(ValueError, match="pins_preflight_verified が True でない"):
+        harness.evaluate_comparison(reports)
+
+
+def test_evaluate_rejects_pins_sha256_mismatch_across_repeats(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """publishable report 間で `pins_sha256` が食い違う場合、fail-closed で
+    拒否する（L1 対応: repeats が異なる pins sidecar を指していれば「同一の
+    校正材料に対する複数回実行」という前提が崩れる）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    _mark_publishable(report1, pins_sha256="a" * 64)
+    report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    _mark_publishable(report2, pins_sha256="b" * 64)
+
+    with pytest.raises(ValueError, match="pins_sha256 が不一致"):
+        harness.evaluate_comparison([report1, report2])
+
+
+def test_evaluate_accepts_clean_publishable_reports_with_pins_preflight_evidence(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """pins preflight 証跡（`pins_preflight_verified=True`・`pins_path`・
+    一致した `pins_sha256`）を正しく備えた publishable report は L1 の検査を
+    通過し、evaluate が最後まで完走する（偽陽性を出さないことの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        _mark_publishable(report)
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports)
+    assert verdict["repeats_verified"] is True
+
+
+def test_evaluate_allows_injected_report_without_pins_preflight_evidence(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`route_runner_injected` が自然な `True`（テスト用フェイク抽出器）の
+    report は L1 の対象外——pins preflight 証跡を一切持たなくても、L1 由来の
+    ValueError では拒否されない（既存分類に従う。従来どおり calibration
+    verdict 自体は injected のため別途拒否されるが、それは L1 とは独立の
+    既存規律——本テストは L1 が誤って injected report を拒否しないことだけを
+    確認する）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    assert report["route_runner_injected"] is True
+    assert "pins_preflight_verified" in report and report["pins_preflight_verified"] is False
+    assert "pins_path" not in report and "pins_sha256" not in report
+
+    # L1 由来のメッセージ（"pins_preflight_verified"/"pins_sha256"）で拒否
+    # されないことを確認する——他の理由（injected のため calibration verdict
+    # 自体は発行されない等）で失敗する可能性はあるが、ここでは例外が飛ばない
+    # （n=1 は verdict 発行を拒否するのみで ValueError は投げない）ことまで
+    # 確認する。
+    verdict = harness.evaluate_comparison([report])
+    assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"

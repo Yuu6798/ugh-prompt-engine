@@ -20,7 +20,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -48,14 +48,60 @@ def _rest(dur_sec: float, sample_rate: int) -> np.ndarray:
 
 
 def _build_monophonic(spec: Dict[str, Any], sample_rate: int, amplitude: float) -> np.ndarray:
-    note_dur = float(spec["note_dur_sec"])
+    """monophonic fixture を合成する。
+
+    レビュー対応 第 9 ラウンド（K2）: 任意フィールド `note_durs_sec`（`phrases`
+    と同じ入れ子構造——フレーズごとのノート数分の秒数リスト）を追加した。
+    指定時はフレーズ内でノートごとに `note_dur_sec` を上書きできる——従来の
+    スカラー `note_dur_sec`（全音符一様）だけでは「同音程・別リズム」の
+    負例が作れない: M3（`svp_rpe.melody.representation.build_sequences`）の
+    IOI/duration 表現はテンポ不変（連続比の log2 のみを見る）ため、フレーズ
+    内が一様なら一様スケールのテンポ差（従来の negative_rhythm b 側の設計）は
+    両側とも全ゼロの log 比列に潰れ、rhythm 軸が構造的に区別不能になる
+    （`docs/measurements/m3d_2026-08/preregistration.md`「実測前の事前登録
+    修正」参照）。`note_durs_sec` はフレーズ内で非一様なタイミングパターン
+    （例: 長短交互）を作るための唯一の手段——`phrase_gap_sec`（フレーズ間の
+    無音）は比較器がフレーズ分割後に切り捨てるため変えても不可視。
+
+    未指定時は従来どおりスカラー `note_dur_sec` を全音符へ一様適用する
+    （完全後方互換——`synthesis_specs.yaml`（M0）や他の m3d_synth_specs.yaml
+    fixture は本フィールドを使わないため無影響）。`note_dur_sec` はスカラー
+    経路でのみ必須（`note_durs_sec` 指定時は省略可）。
+    """
+    phrases: List[List[float]] = spec["phrases"]
     note_gap = float(spec.get("note_gap_sec", 0.0))
     phrase_gap = float(spec.get("phrase_gap_sec", 0.0))
+
+    note_durs_override: Optional[List[List[float]]] = spec.get("note_durs_sec")
+    uniform_dur: Optional[float] = None
+    if note_durs_override is None:
+        if "note_dur_sec" not in spec:
+            raise ValueError(
+                "monophonic fixture には 'note_dur_sec'（スカラー）か "
+                "'note_durs_sec'（フレーズ内非一様）のいずれかが必要"
+            )
+        uniform_dur = float(spec["note_dur_sec"])
+    else:
+        if len(note_durs_override) != len(phrases):
+            raise ValueError(
+                "note_durs_sec のフレーズ数が phrases と不一致 "
+                f"({len(note_durs_override)} != {len(phrases)})"
+            )
+        for phrase, durs in zip(phrases, note_durs_override):
+            if len(durs) != len(phrase):
+                raise ValueError(
+                    "note_durs_sec の音符数が対応する phrase と不一致 "
+                    f"(phrase={phrase!r} durs={durs!r})"
+                )
+
     segments: List[np.ndarray] = []
-    phrases: List[List[float]] = spec["phrases"]
-    for phrase in phrases:
-        for midi in phrase:
-            segments.append(_tone(midi_to_hz(float(midi)), note_dur, sample_rate, amplitude))
+    for phrase_idx, phrase in enumerate(phrases):
+        durs_for_phrase = (
+            note_durs_override[phrase_idx] if note_durs_override is not None else None
+        )
+        for note_idx, midi in enumerate(phrase):
+            dur = float(durs_for_phrase[note_idx]) if durs_for_phrase is not None else uniform_dur
+            segments.append(_tone(midi_to_hz(float(midi)), dur, sample_rate, amplitude))
             if note_gap > 0.0:
                 segments.append(_rest(note_gap, sample_rate))
         if phrase_gap > 0.0:

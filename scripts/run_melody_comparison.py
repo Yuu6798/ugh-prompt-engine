@@ -16,6 +16,24 @@ standalone script（`svprpe` サブコマンド化しない・sys.path 注入は
    記録し、evaluate は calibration verdict の発行を拒否する — M2 と同じ流儀）
 4. protected-path（`--out` が manifest / registry / report / manifest が指す音声入力を
    上書きしない）
+5. pins sidecar 強制 preflight（レビュー対応 第 7 ラウンド）: publishable な run
+   （route_runner 非注入・実抽出経路）は `scripts/build_m3d_pairs.py` が公開する
+   pins sidecar（`--pins`）の指定を必須とし、抽出を一切開始する前に manifest の
+   バイト sha256・manifest が参照する全 audio path の digest を sidecar 記録と
+   照合する（`_run_pins_preflight` 参照）。従来は `--check-only` という独立の
+   standalone 点検があるだけで、run phase そのものは pin を一切読まなかった
+   ——公開後に WAV/manifest が改変されても run が改変バイトを新たな digest として
+   記録してしまい、fail-closed 信号なしで改変刺激が校正に混入し得た。
+   `--check-only` は builder 側の独立した点検計器として引き続き残す（本
+   preflight と役割は重複するが、本 preflight は「必要最小限」のみを検証し
+   build 入力 pin・material マップ・summary pin 等 builder 固有の完全性検査は
+   代替しない）。**二段構え**（レビュー対応 第 8 ラウンド）: 上記の一括
+   preflight は抽出開始前の一度きりの早期失敗に過ぎず、preflight と実際の
+   抽出消費（pair ごとの `_freeze_audio_copy`）の間には時間の窓が空く——
+   長時間 run 中に WAV が置換されれば一括 preflight だけでは検出できない。
+   pair ごとに凍結コピー（=抽出器が実消費する bytes）の digest を sidecar
+   期待値と再照合する（`_verify_frozen_copy_against_pins`）ことで、この窓を
+   閉じる。
 
 適用帯域: 本ハーネスの既定 route は **clear_lead 経路限定**（User 決裁 2026-07-30・
 単離済み clean lead 帯）。実音声・実 crepe による slow-lane 実測は本セッションでは
@@ -34,9 +52,13 @@ publishable report が crepe 系経路であること・melodia 系経路が inj
 
 使い方::
 
-    python scripts/run_melody_comparison.py --pairs pairs.yaml --out run1.json
-    python scripts/run_melody_comparison.py --pairs pairs.yaml --out run2.json
+    python scripts/run_melody_comparison.py --pairs pairs.yaml --pins pins.json --out run1.json
+    python scripts/run_melody_comparison.py --pairs pairs.yaml --pins pins.json --out run2.json
     python scripts/run_melody_comparison.py --evaluate run1.json run2.json --out verdict.json
+
+    # `--pins` は run phase（route_runner 非注入 = publishable）で必須。
+    # `scripts/build_m3d_pairs.py` が公開する m3d_pairs_pins.json を渡す
+    # （レビュー対応 第 7 ラウンド）。
 
     # 別チェックアウト（run 時と evaluate 時で manifest の絶対パスが変わる環境）
     # では、report 記録の manifest_path が存在しない場合に --pairs を併用する
@@ -98,7 +120,7 @@ from svp_rpe.melody.observability import (  # noqa: E402
 )
 from svp_rpe.melody.representation import load_m3_registry  # noqa: E402
 from svp_rpe.melody.routing import select_routes  # noqa: E402
-from svp_rpe.utils.hashing import sha256_of_files  # noqa: E402
+from svp_rpe.utils.hashing import file_sha256, sha256_of_files  # noqa: E402
 
 M3_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3_comparison_registry.yaml"
 M1_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
@@ -234,7 +256,18 @@ def _load_report(path: Path) -> Dict[str, Any]:
 # manifest 検証
 # --------------------------------------------------------------------------- #
 def _validate_manifest(manifest: Any) -> List[Dict[str, Any]]:
-    """pairs manifest（YAML）を検証し、pair dict のリストを返す（未知/欠落キー fail-closed）。"""
+    """pairs manifest（YAML）を検証し、pair dict のリストを返す（未知/欠落キー fail-closed）。
+
+    命名契約（宣言）: 各 pair の `pair_id` は material 判別マーカー（`_real_`
+    または `_synth_`。`_material_of_pair_id` 参照）を含まなければならない。
+    evaluate phase（`material_accounting`。R2 対応）がこのマーカーで
+    real_voice/synthetic の別会計を行う設計のため、マーカー無し pair_id の
+    manifest は run phase（本関数。高価な抽出処理が始まる前）で fail-closed
+    拒否する（R2R T1 対応・Codex レビュー第 3 ラウンド）。後方互換で
+    マーカー無しを許容する道は採らない（別会計の fail-closed 規律を崩すため
+    ——設計判定）。evaluate phase 側の `_validate_pair_id_material_markers` は
+    同じ検証を defense-in-depth として引き続き独立に行う。
+    """
     if not isinstance(manifest, dict):
         raise ValueError("pairs manifest must be a mapping with 'schema' and 'pairs' keys")
     schema = manifest.get("schema")
@@ -262,6 +295,22 @@ def _validate_manifest(manifest: Any) -> List[Dict[str, Any]]:
         if pair_id in seen_ids:
             raise ValueError(f"duplicate pair_id {pair_id!r} in pairs manifest (fail-closed)")
         seen_ids.add(pair_id)
+        # R2R T1 対応（Codex レビュー第 3 ラウンド・marker 検証の run phase 前倒し）:
+        # material 判別マーカー（`_real_`/`_synth_`）を持たない pair_id は、
+        # 高価な抽出 run が始まる前にここで fail-closed 拒否する（本関数
+        # docstring の命名契約参照。`_material_of_pair_id` は本モジュール内で
+        # 後で定義されるが、Python の遅延名前解決により本関数が実際に呼ばれる
+        # 時点では既に import 完了済みで問題なく参照できる）。
+        if not isinstance(pair_id, str):
+            raise ValueError(
+                f"pairs[{idx}] の pair_id={pair_id!r} が文字列でない (fail-closed)"
+            )
+        try:
+            _material_of_pair_id(pair_id)
+        except ValueError as exc:
+            raise ValueError(
+                f"pairs[{idx}] ({pair_id!r}): material を判別できない (fail-closed): {exc}"
+            ) from exc
         if pair["kind"] not in _VALID_KINDS:
             raise ValueError(
                 f"pairs[{idx}] ({pair_id!r}) has invalid kind {pair['kind']!r}; "
@@ -380,6 +429,203 @@ def _manifest_audio_paths(manifest_path: Path) -> "set[Path]":
         paths.add(Path(pair["audio_a"]).resolve())
         paths.add(Path(pair["audio_b"]).resolve())
     return paths
+
+
+# --------------------------------------------------------------------------- #
+# pins sidecar 強制 preflight（レビュー対応 第 7 ラウンド・P1）
+# --------------------------------------------------------------------------- #
+# `scripts/build_m3d_pairs.py` の pins sidecar（`m3d_pairs_pins.json`）が
+# 唯一の権威スキーマ定義元（`_PINS_SCHEMA` / `_load_and_validate_pins`）。
+# builder はハーネスをインポートしない設計のため（`_material_of_pair_id` と
+# 同じ理由）、本 preflight が実際に必要とする最小限のフィールド
+# （`schema`/`manifest_sha256`/`audio_sha256`）だけを読者側で独立に複製する
+# ——builder 側の完全なスキーマ検証（build 入力 pin・material マップ・summary
+# pin 等）はここでは複製しない（それらは `--check-only` という独立の点検
+# 計器の責務のまま残す）。
+_PINS_SIDECAR_SCHEMA_EXPECTED = "m3d-pairs-pins/0.3"
+_PINS_SIDECAR_MINIMAL_REQUIRED_KEYS = {"schema", "manifest_sha256", "audio_sha256"}
+
+
+def _load_pins_sidecar_for_preflight(path: Path) -> "Tuple[Dict[str, Any], str]":
+    """pins sidecar を run phase preflight 用に必要最小限だけ読み検証する。
+
+    `_PINS_SIDECAR_MINIMAL_REQUIRED_KEYS` を参照。schema 不一致・必須キー欠落・
+    型不正のいずれも fail-closed（`ValueError`）で拒否する。
+
+    レビュー対応 第 9 ラウンド（K1・TOCTOU 解消）: バイト列を**一度だけ**読み、
+    そのバイト列から JSON parse と sha256 digest の両方を導出して
+    `(doc, digest)` を返す——`scripts/build_m3d_pairs.py` の
+    `_read_bytes_and_sha256` と同型。従来は本関数がパース用に一度読み、
+    呼び出し側（`_run_pins_preflight`）が `pins_sha256`（report に記録される
+    値）用に**別途**もう一度 `Path(pins_path).read_bytes()` していたため、
+    2 回の読み取りの間で sidecar が置換されると「第 1 の文書の内容で検証
+    したのに、report には第 2 の文書の digest を記録する」というすり替えが
+    起こり得た。単一読みに統合することで、検証と記録が常に同一バイト列に
+    基づくことを構造的に保証する。
+
+    レビュー対応 第 11 ラウンド（M3・重複キー拒否）: JSON parse には素の
+    `json.loads` ではなく、本モジュールが `_load_report`（run report）で既に
+    使っている `_json_loads_no_dup_keys`（`object_pairs_hook` で全ネスト層の
+    重複 object key を fail-closed 拒否）を流用する——素の `json.loads` は
+    重複キーで最後の値を黙って採用するため、`manifest_sha256`/`audio_sha256`/
+    `material` が重複記録されると矛盾した provenance が preflight を無警告で
+    通過しうる穴があった（builder 側 `_load_and_validate_pins` の同種修正と
+    対）。
+    """
+    try:
+        raw_bytes = Path(path).read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{path}: pins サイドカーの読み込みに失敗 (fail-closed): {exc}") from exc
+    digest = hashlib.sha256(raw_bytes).hexdigest()
+    try:
+        doc = _json_loads_no_dup_keys(raw_bytes, what=f"{path}: pins サイドカー")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{path}: pins サイドカーが UTF-8 でない (fail-closed): {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: pins サイドカーの JSON parse に失敗 (fail-closed): {exc}") from exc
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path}: pins サイドカーが mapping でない (fail-closed)")
+    if doc.get("schema") != _PINS_SIDECAR_SCHEMA_EXPECTED:
+        raise ValueError(
+            f"{path}: schema が {_PINS_SIDECAR_SCHEMA_EXPECTED!r} でない (fail-closed): "
+            f"{doc.get('schema')!r}"
+        )
+    missing = _PINS_SIDECAR_MINIMAL_REQUIRED_KEYS - set(doc)
+    if missing:
+        raise ValueError(f"{path}: 必須キー欠落 (fail-closed): {sorted(missing)}")
+    manifest_sha = doc["manifest_sha256"]
+    if not isinstance(manifest_sha, str) or len(manifest_sha) != 64:
+        raise ValueError(f"{path}: manifest_sha256 が不正な形式 (fail-closed): {manifest_sha!r}")
+    if not isinstance(doc["audio_sha256"], dict):
+        raise ValueError(f"{path}: audio_sha256 が mapping でない (fail-closed)")
+    return doc, digest
+
+
+def _run_pins_preflight(
+    *,
+    pins_path: Path,
+    manifest_sha256: str,
+    pairs_spec: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """抽出を一切開始する前に pins sidecar を強制検証する（fail-closed）。
+
+    1. sidecar のスキーマ/必須フィールド検証（`_load_pins_sidecar_for_preflight`）
+    2. manifest 現物のバイト sha256 と sidecar 記録 `manifest_sha256` の一致
+    3. manifest が参照する全 audio path について sidecar `audio_sha256` の記録
+       存在 + 現物との digest 一致（`file_sha256(..., use_cache=False)` —
+       キャッシュを踏むと同一プロセス内の別 (path, size, mtime) 一致による
+       TOCTOU 検出漏れが起こり得るため、必ず実バイトを読み直す）
+    のいずれか 1 件でも不一致・欠落があれば、抽出（`runner()` 呼び出し）を
+    一切開始せず fail-closed で拒否する——公開後に WAV/manifest が改変されて
+    いても、この preflight を通らない限り run 自体が始まらない。
+
+    holdout ロック規律との整合性（レビュー対応 第 7 ラウンド・設計判断の明記）:
+    ロック中の holdout pair は「音声をセンサーに掛けず・比較を計算しない」
+    契約（`run_comparison` 本体の for ループが `holdout_locked` 時に holdout
+    pair を skip するのと同じ規律）を持つが、本 preflight の digest 照合は
+    **音声をセンサーに掛けるのではなく生バイトの sha256 を取るだけ**であり、
+    axes の値を一切導出・参照しない——事前登録の順序証明（未凍結軸の値を
+    覗き見させない）を壊さない。判断に迷う場合は安全側を取る方針に従い、
+    **holdout ロック中であっても holdout pair の WAV を含め全 pair を digest
+    照合する**（改変検出はロックの趣旨そのものと整合し、対立しない）。この
+    ため `pairs_spec` 全件を対象にし、`holdout_locked` を引数に取らない
+    ——呼び出し側で holdout を除外するフィルタを通す必要はない。
+
+    レビュー対応 第 8 ラウンド（J1）: 二段構えの検証であることを明記する。
+    本関数（一括事前検証）は抽出開始**前**の一度きりの早期失敗の利便
+    ——sidecar が既に壊れている場合、1 件も抽出せずに即座に run 全体を止める。
+    しかし本関数の検証と実際の抽出消費（`_freeze_audio_copy` が読む bytes）の
+    間には時間の窓が空く（pair ごとの抽出処理・特に長時間 run では顕著）——
+    その窓で WAV が置換されても本関数だけでは検出できない。真に拘束力を持つ
+    検証は `run_comparison` 本体が pair ループ内で `_freeze_audio_copy` の
+    返す digest を本関数が返す `audio_sha256`（sidecar 記録の期待値）と都度
+    突き合わせる方（凍結コピー照合。呼び出し側参照）——本関数はその期待値
+    テーブルを一度読み込んで返す役目も兼ねる（sidecar を pair ごとに再読み
+    しない）。戻り値に `audio_sha256` を含めるのはこのため。
+    """
+    pins_doc, pins_sha256 = _load_pins_sidecar_for_preflight(pins_path)
+
+    problems: List[str] = []
+    expected_manifest_sha = pins_doc["manifest_sha256"]
+    if manifest_sha256 != expected_manifest_sha:
+        problems.append(
+            f"manifest sha256 mismatch (actual={manifest_sha256} expected={expected_manifest_sha})"
+        )
+
+    audio_sha256 = pins_doc["audio_sha256"]
+    audio_paths: "set[str]" = set()
+    for pair in pairs_spec:
+        audio_paths.add(pair["audio_a"])
+        audio_paths.add(pair["audio_b"])
+    for rel_path in sorted(audio_paths):
+        expected = audio_sha256.get(rel_path)
+        if expected is None:
+            problems.append(f"{rel_path}: pins サイドカーに未登録 (fail-closed)")
+            continue
+        abs_path = Path(rel_path)
+        if not abs_path.exists():
+            problems.append(f"{rel_path}: ファイルが存在しない (fail-closed)")
+            continue
+        actual = file_sha256(abs_path, use_cache=False)
+        if actual != expected:
+            problems.append(f"{rel_path}: sha256 mismatch (actual={actual} expected={expected})")
+
+    if problems:
+        raise ValueError(
+            "pins preflight 失敗 (fail-closed; 抽出を開始せず run 全体を中止): "
+            + "; ".join(problems)
+        )
+
+    return {
+        "pins_path": str(Path(pins_path).resolve()),
+        # K1: `_load_pins_sidecar_for_preflight` が返す digest は検証に使った
+        # のと**同一のバイト列**から計算済み——ここで改めてファイルを読み直す
+        # と、検証（パース時点の内容）と記録（この 2 回目の読み取り時点の
+        # 内容）が別読みになり、その間の置換をすり替えとして見逃す穴が戻って
+        # しまう。必ずこの digest を再利用する。
+        "pins_sha256": pins_sha256,
+        "audio_sha256": dict(audio_sha256),
+    }
+
+
+def _verify_frozen_copy_against_pins(
+    *,
+    pair: Dict[str, Any],
+    audio_sha256_a: str,
+    audio_sha256_b: str,
+    pins_audio_sha256: Dict[str, str],
+) -> None:
+    """`_freeze_audio_copy` が実際に抽出器へ渡す bytes の digest を、pins
+    preflight が読み込んだ sidecar 期待値と pair ごとに突き合わせる
+    （レビュー対応 第 8 ラウンド・J1）。
+
+    `_run_pins_preflight` の一括事前検証は抽出開始前の一度きりであり、そこと
+    実際の消費（本関数の呼び出し元 `run_comparison` が pair ごとに
+    `_freeze_audio_copy` した直後）の間には時間の窓が空く——長時間 run 中に
+    WAV が置換されれば、事前検証だけでは検出できない（`pins_preflight_
+    verified: true` を掲げたまま置換バイトが記録・評価されてしまう）。
+    `audio_sha256_a`/`audio_sha256_b` は `_freeze_audio_copy` が**既に計算
+    済み**の digest（凍結コピー = 抽出器が実消費する bytes そのものの sha256。
+    キャッシュを踏まない実バイト読みから得られている）をそのまま再利用する
+    ——ここで新たにファイルを読み直しはしない。sidecar 記録（`pins_audio_
+    sha256`。`_run_pins_preflight` が返した期待値テーブル）との不一致・欠落は
+    fail-closed で run 全体を中止する（呼び出し元は本関数を `runner()`
+    呼び出しより前に置くため、抽出は一切行われない）。
+    """
+    problems: List[str] = []
+    for key, actual in (("audio_a", audio_sha256_a), ("audio_b", audio_sha256_b)):
+        rel_path = pair[key]
+        expected = pins_audio_sha256.get(rel_path)
+        if expected is None:
+            problems.append(f"{rel_path}: pins サイドカーに未登録 (fail-closed)")
+            continue
+        if actual != expected:
+            problems.append(f"{rel_path}: sha256 mismatch (actual={actual} expected={expected})")
+    if problems:
+        raise ValueError(
+            f"凍結コピーの pins 照合失敗 (fail-closed; pair_id={pair['pair_id']!r} の抽出を "
+            "中止し run 全体を中止): " + "; ".join(problems)
+        )
 
 
 def _validate_frozen_axes(
@@ -829,6 +1075,7 @@ def run_comparison(
     route_runner: Optional[RouteRunner] = None,
     registry_path: Path = M3_REGISTRY_PATH,
     m1_registry_path: Path = M1_REGISTRY_PATH,
+    pins_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """pairs manifest の全ペアを `compare_melodies` へ通し run report dict を返す。
 
@@ -838,10 +1085,33 @@ def run_comparison(
     メカニズムだけを検証する。注入した事実は report 自身に
     ``route_runner_injected: true`` として刻み、evaluate はそれを calibration
     verdict 発行の拒否条件にする（M2 `run_melody_accuracy.py` と同じ規律）。
+
+    `pins_path`（レビュー対応 第 7 ラウンド・P1）: `scripts/build_m3d_pairs.py`
+    が公開する pins sidecar（`m3d_pairs_pins.json`）。**publishable な run
+    （`route_runner` 非注入 = 実抽出経路）は本引数を必須とする**——既存の
+    「publishable report は pin 記録必須・crepe 系経路限定」規律（evaluate
+    phase の `_require_pair_pins_present_for_publishable_reports` /
+    `_validate_route_for_run` の publishable 分岐）と同じ規律の run phase 側
+    への延長であり、未指定は抽出を一切開始せず fail-closed で拒否する
+    （`_run_pins_preflight` 参照）。注入（テスト）run は従来どおり省略可——
+    省略時は preflight 自体を skip する。指定した場合は注入 run でも preflight
+    を実施する（一律の検証コードパスにする方が単純で、テスト側が意図的に
+    preflight の挙動そのものを検証したい場合の妨げにならない）。
     """
     runner_injected = route_runner is not None
+    # route 制限（crepe 系限定/melodia 常時禁止）を pins 必須化より先に検証する
+    # ——両方とも「抽出開始前の fail-closed 拒否」だが、route 制限は route 名
+    # だけから即座に判定できる最も基礎的な構造チェックであり、既存の route
+    # 制限テスト（pins 未提供のまま route 名だけで拒否を確認する）の挙動を
+    # 変えないためにも先に評価する。
     route = _resolve_route(route_name)
     _validate_route_for_run(route_name, route, runner_injected=runner_injected)
+    if not runner_injected and pins_path is None:
+        raise ValueError(
+            "publishable な run（route_runner 非注入・実抽出経路）は --pins が必須 "
+            "(fail-closed): pins sidecar なしでは抽出開始前に manifest/audio の "
+            "digest を検証できない (レビュー対応 第 7 ラウンド)"
+        )
     runner: RouteRunner = route_runner or _default_route_runner(route_name)
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
@@ -856,6 +1126,19 @@ def run_comparison(
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     manifest = _yaml_load_no_dup_keys(manifest_bytes, what="pairs manifest")
     pairs_spec = _validate_manifest(manifest)
+
+    # レビュー対応 第 7 ラウンド（P1）: 抽出（runner 呼び出し）を一切開始する前に
+    # pins sidecar を強制検証する。`pins_path` 未指定はここまでに publishable
+    # run では既に拒否済み（上の早期 fail-closed）——ここへ到達するのは
+    # (a) pins_path 指定あり（publishable/injected 問わず）、または
+    # (b) injected run で pins_path 未指定、のいずれか。
+    pins_preflight: Optional[Dict[str, Any]] = None
+    if pins_path is not None:
+        pins_preflight = _run_pins_preflight(
+            pins_path=pins_path,
+            manifest_sha256=manifest_sha256,
+            pairs_spec=pairs_spec,
+        )
 
     # holdout は `_holdout_unlocked` の全条件（status=frozen + axes 揃い +
     # coverage.floor_status=frozen + coverage.floor 値が有効）を満たすまで run
@@ -883,8 +1166,15 @@ def run_comparison(
         # sha256 一致でのみ manifest を受理する。
         "manifest_filename": Path(manifest_path).name,
         "manifest_sha256": manifest_sha256,
+        # レビュー対応 第 7 ラウンド（P1）: pins preflight を実施した事実（と
+        # pins sidecar 自体の sha256）を report に記録する。evaluate 側での
+        # 追加検証は今回スコープ外（記録のみ）。
+        "pins_preflight_verified": pins_preflight is not None,
         "pairs": {},
     }
+    if pins_preflight is not None:
+        results["pins_path"] = pins_preflight["pins_path"]
+        results["pins_sha256"] = pins_preflight["pins_sha256"]
     with tempfile.TemporaryDirectory(prefix="m3_comparison_freeze_") as staging_dir:
         for pair in pairs_spec:
             if pair["split"] == "holdout" and holdout_locked:
@@ -906,6 +1196,21 @@ def run_comparison(
             # 到達する pair は必ず音声を読む（開封回避の設計は崩さない）。
             audio_sha256_a, frozen_a = _freeze_audio_copy(pair["audio_a"], staging_dir)
             audio_sha256_b, frozen_b = _freeze_audio_copy(pair["audio_b"], staging_dir)
+            # レビュー対応 第 8 ラウンド（J1）: 凍結コピー（=抽出器が実際に消費
+            # する bytes）の digest を、preflight が読んだ sidecar 期待値と
+            # pair ごとに再照合する——`_run_pins_preflight` の一括事前検証と
+            # ここでの実消費バイト照合は二段構え（docstring 参照）。preflight
+            # 済み run（`pins_preflight is not None`）でのみ実施し、注入
+            # （テスト）run で `pins_path` 未指定の場合は従来どおり対象外。
+            # 不一致・欠落があれば `runner()` を一切呼ばず fail-closed で
+            # run 全体を中止する。
+            if pins_preflight is not None:
+                _verify_frozen_copy_against_pins(
+                    pair=pair,
+                    audio_sha256_a=audio_sha256_a,
+                    audio_sha256_b=audio_sha256_b,
+                    pins_audio_sha256=pins_preflight["audio_sha256"],
+                )
             try:
                 obs_a, prov_a = runner(frozen_a)
                 obs_b, prov_b = runner(frozen_b)
@@ -1183,6 +1488,71 @@ def _require_pair_pins_present_for_publishable_reports(reports: List[Dict[str, A
                 )
 
 
+def _require_pins_preflight_evidence_for_publishable_reports(
+    reports: List[Dict[str, Any]],
+) -> None:
+    """publishable（`route_runner_injected` でない）report が run phase の
+    pins preflight（レビュー対応 第 7 ラウンド・`_run_pins_preflight`）を
+    実際に通過した証跡を残しているか検証する（レビュー対応 第 10 ラウンド・
+    L1）。
+
+    強制ゲート導入（第 7 ラウンド）より前に作られた report、または証跡
+    フィールドを事後に編集で除去された report は、
+    `_require_pair_pins_present_for_publishable_reports`（本関数の直前の
+    チェック）が要求する pair 単位 pin（`audio_sha256_a/b` 等——runner が
+    消費した bytes の自己申告 digest に過ぎず、sidecar と照合された証拠では
+    ない）だけで凍結提案まで到達できてしまう——本関数はその抜け道を閉じる。
+
+    publishable report（injected report は現行の扱いを維持し対象外）に対し、
+    以下を fail-closed で要求する:
+    (a) `pins_preflight_verified` が bool の `True` であること
+    (b) `pins_path`/`pins_sha256` が存在し、`pins_sha256` が形式的に妥当な
+        sha256 hex であること（`_run_pins_preflight` が (a) と対で必ず記録
+        する契約——`run_comparison` 参照。整形そのものの厳密検証は
+        `_validate_pin_formats` 側の `_REPORT_LEVEL_SHA256_FIELDS` にも
+        `pins_sha256` を編入して重複適用する——本関数は存在検証に留める）
+    (c) 全 publishable report 間で `pins_sha256` が完全一致すること——repeats
+        が異なる pins sidecar を指していれば「同一の校正材料に対する複数回
+        実行」という repeats の前提が崩れる（`_check_repeats_consistency` の
+        `_REPORT_LEVEL_REPEAT_PINS` と同型の規律を、pins に対しても課す）
+    """
+    pins_sha256_by_idx: Dict[int, str] = {}
+    for idx, report in enumerate(reports):
+        if report.get("route_runner_injected"):
+            continue
+        verified = report.get("pins_preflight_verified")
+        if verified is not True:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] は publishable だが "
+                f"pins_preflight_verified が True でない (fail-closed; 実際の値: "
+                f"{verified!r}): run phase の pins preflight（第 7 ラウンド強制化）を "
+                "通過した証跡がない report は凍結提案・holdout 判定に使えない"
+            )
+        pins_path = report.get("pins_path")
+        if not isinstance(pins_path, str) or not pins_path:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] は pins_preflight_verified=True "
+                f"だが pins_path が欠落/不正 (fail-closed): {pins_path!r}"
+            )
+        pins_sha256 = report.get("pins_sha256")
+        if not _is_sha256_hex(pins_sha256):
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] は pins_preflight_verified=True "
+                f"だが pins_sha256 が欠落/不正な形式 (fail-closed): {pins_sha256!r}"
+            )
+        pins_sha256_by_idx[idx] = pins_sha256
+
+    distinct = set(pins_sha256_by_idx.values())
+    if len(distinct) > 1:
+        detail = "; ".join(
+            f"reports[{idx}]={sha!r}" for idx, sha in sorted(pins_sha256_by_idx.items())
+        )
+        raise ValueError(
+            "evaluate_comparison: publishable report 間で pins_sha256 が不一致 "
+            f"(fail-closed; 同一の pins sidecar に対する実行でなければならない): {detail}"
+        )
+
+
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -1197,6 +1567,12 @@ _REPORT_LEVEL_SHA256_FIELDS: Tuple[str, ...] = (
     "m1_registry_sha256",
     # レビュー対応 2026-07-30（第 12 ラウンド）: 第一者 M3 実装コードの content pin。
     "m3_code_sha256",
+    # レビュー対応 第 10 ラウンド（L1）: 存在する場合の整形検証はここへ編入する
+    # （injected/publishable を問わない——`value is not None` ガードにより
+    # 未指定 report では単に skip される）。**存在の必須化**（publishable
+    # report は必須）は `_require_pins_preflight_evidence_for_publishable_
+    # reports` が別途 fail-closed で課す（直交する規律——本タプルは形式のみ）。
+    "pins_sha256",
 )
 # route_provenance_a/b の crepe 経路固有必須 pin（`extractors.py
 # observe_via_route_with_provenance` が実測 crepe 観測に対して必ず記録するキー。
@@ -1810,6 +2186,146 @@ def _validate_evidence_values_and_axes_consistency(pairs: Dict[str, Dict[str, An
             )
 
 
+# --------------------------------------------------------------------------- #
+# material 別会計（R2 対応・Codex レビュー: 全 positive 単一バケット問題への対処）
+# --------------------------------------------------------------------------- #
+_MATERIAL_REAL_VOICE = "real_voice"
+_MATERIAL_SYNTHETIC = "synthetic"
+
+
+def _material_of_pair_id(pair_id: str) -> str:
+    """pair_id の命名規則（`_real_`/`_synth_` マーカー）から material を判別する。
+
+    `scripts/build_m3d_pairs.py` の `_material_of` と同一規則（builder 側の
+    pair_id 命名が唯一の権威——`_real_`/`_synth_` 接頭辞つき pair_id を emit
+    するのは builder のみで、本ハーネスはその契約を読者側で確認するだけ。
+    builder はハーネスをインポートしない設計のため、判別ロジック自体は独立に
+    複製する）。「ちょうど 1 個」のマーカーを要求する——マーカーが 0 個
+    （未知マーカー）だけでなく、レビュー対応 第 11 ラウンド（M2）で
+    **両方**を含む pair_id（例: `pt_real_synth_x`）も fail-closed で拒否する
+    ようにした。従来はどちらか一方が含まれれば（`in` 判定・`_real_` を先に
+    判定）判別成立としており、両マーカー含有 id は順序判定で real_voice に
+    分類されてしまっていた——synthetic 診断対が real の margin/凍結計算へ
+    混入し、material 分割の趣旨（診断専用の synthetic を校正判定から隔離
+    する）を再汚染する穴があった。
+    """
+    has_real = "_real_" in pair_id
+    has_synth = "_synth_" in pair_id
+    if has_real and has_synth:
+        raise ValueError(
+            f"pair_id {pair_id!r} が _real_/_synth_ 両方のマーカーを含んでいる "
+            "(fail-closed; material 判別が一意に定まらない)"
+        )
+    if has_real:
+        return _MATERIAL_REAL_VOICE
+    if has_synth:
+        return _MATERIAL_SYNTHETIC
+    raise ValueError(
+        f"pair_id {pair_id!r} に material 判別用マーカー（_real_/_synth_）が"
+        "含まれていない (fail-closed)"
+    )
+
+
+def _validate_pair_id_material_markers(reports: List[Dict[str, Any]]) -> None:
+    """各 report の全 pair_id が material 判別可能であることを検証する（fail-closed）。
+
+    他の pair 単位構造検査（`_validate_pin_formats` 等）と同型に、reference
+    report だけでなく **全 report** の pair_id を対象にする（defense-in-depth
+    ——`_check_repeats_consistency` が pair_id 集合の report 間一致を保証するのは
+    この検証より後段のため、ここでは independently に全件確認する）。
+
+    R2R T1 対応（Codex レビュー第 3 ラウンド）: 同じ検証は run phase
+    （`_validate_manifest`）でも manifest ロード直後に行うよう前倒しされた
+    ——マーカー無し pair_id の manifest は高価な抽出 run が始まる前に拒否
+    される。本関数（evaluate phase 側）は、report が manifest 経由を迂回して
+    直接構築・改変された場合に備えた defense-in-depth として引き続き独立に
+    機能する（run phase の検証だけに依存しない）。
+    """
+    for idx, report in enumerate(reports):
+        for pair_id in report["pairs"]:
+            try:
+                _material_of_pair_id(pair_id)
+            except ValueError as exc:
+                raise ValueError(
+                    f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} の material を"
+                    f" 判別できない (fail-closed): {exc}"
+                ) from exc
+
+
+def _partition_pairs_by_material(
+    pairs: Dict[str, Dict[str, Any]]
+) -> "Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]":
+    """`pairs`（pair_id → pair dict）を real_voice / synthetic の 2 dict へ分割する。
+
+    事前登録メモ（`docs/measurements/m3d_2026-08/preregistration.md` §1.3
+    「別会計」）の機械強制: real_voice が校正（凍結提案・holdout 判定）の
+    唯一の入力、synthetic は診断専用（not_comparable は not_measured として
+    正直会計するのみで凍結可否に影響させない）。呼び出し側は
+    `_validate_pair_id_material_markers` を先に通している前提だが、本関数
+    単体で呼んでも同じ判別規則（`_material_of_pair_id`）で fail-closed する
+    ため安全（冪等）。
+    """
+    real_pairs: Dict[str, Dict[str, Any]] = {}
+    synth_pairs: Dict[str, Dict[str, Any]] = {}
+    for pair_id, pair in pairs.items():
+        if _material_of_pair_id(pair_id) == _MATERIAL_REAL_VOICE:
+            real_pairs[pair_id] = pair
+        else:
+            synth_pairs[pair_id] = pair
+    return real_pairs, synth_pairs
+
+
+def _synthetic_holdout_diagnostic_rows(
+    synth_pairs: Dict[str, Dict[str, Any]], *, holdout_locked: bool
+) -> Dict[str, Any]:
+    """synthetic バケットの holdout split pair について、pair_id → 行単位の
+    診断状態を返す（R2R N4 対応・Codex レビュー第 2 ラウンド）。
+
+    従来の `material_accounting.synthetic` は tuning のマージン表と holdout の
+    件数（`holdout_pair_count`）しか出しておらず、凍結後の run に含まれる
+    synth holdout positive（2 対）の evidence/not_comparable が行単位では
+    どこにも記録されない穴があった（「正直会計」の看板と矛盾）。ここで
+    holdout split の synth pair 全件を pair_id → 状態で列挙する。
+
+    **既存の holdout ロック規律を厳守する**: `holdout_locked` が True（凍結前）
+    の場合、report の holdout 行自体が `comparison` を持たない（`run_comparison`
+    がロック中は音声を読まずスタブ化する既存契約——`results["pairs"][pair_id]
+    = {"split": ..., "status": "holdout_locked_until_frozen"}`）ため、ここでも
+    evidence には一切触れず `locked_skipped` として pair_id を列挙するだけに
+    留める。`holdout_locked` が False（unlocked 評価）の場合のみ、
+    `comparison.evidence`/`axes` を読んで正直に記録する。
+
+    戻り値はあくまで診断専用であり、`evaluate_comparison` の calibration
+    verdict（凍結提案・holdout_validation）へは一切接続しない（呼び出し側で
+    `material_accounting.synthetic` にのみ書き込む）。
+    """
+    rows: Dict[str, Any] = {}
+    for pair_id, pair in synth_pairs.items():
+        if pair["split"] != "holdout":
+            continue
+        if holdout_locked:
+            rows[pair_id] = {"status": "locked_skipped"}
+            continue
+        comparison = pair.get("comparison")
+        if comparison is None:
+            # unlocked 評価下で comparison を欠く行（report 改ざん・run 側不具合
+            # の疑い）。real バケットの同種欠落は `_holdout_missing_comparison_
+            # pair_ids` が calibration verdict 側で fail 材料にするが、synthetic
+            # は診断専用のためここでは状態を正直に記録するに留める。
+            rows[pair_id] = {"status": "missing_comparison"}
+            continue
+        evidence = comparison.get("evidence")
+        if evidence == "not_comparable":
+            rows[pair_id] = {"status": "not_comparable"}
+            continue
+        rows[pair_id] = {
+            "status": "measured",
+            "evidence": evidence,
+            "axes": comparison.get("axes", {}),
+        }
+    return rows
+
+
 def _margin_table(
     pairs: Dict[str, Dict[str, Any]], *, split: Optional[str], min_margin: float
 ) -> Dict[str, Any]:
@@ -2325,6 +2841,15 @@ def evaluate_comparison(
        publishable report は全 pair（holdout ロック pair を除く）で必須
        （レビュー対応 2026-07-30 第 6 ラウンド: 全欠落は repeats 整合性チェック
        だけでは検出できないバイパスを閉じる）
+    5.5. run phase の pins preflight（第 7 ラウンド強制化）を実際に通過した
+       証跡の検証（`_require_pins_preflight_evidence_for_publishable_reports`。
+       レビュー対応 第 10 ラウンド・L1）: publishable report は
+       `pins_preflight_verified=True`・`pins_path`/`pins_sha256` の存在・
+       全 publishable report 間での `pins_sha256` 完全一致を要求する——上の
+       手順 5（pair 単位 pin の存在）だけでは、report が自己申告する
+       audio hash が sidecar と照合された証拠までは確認できない（強制ゲート
+       導入前に作られた report・証跡フィールドを事後編集で除去された report
+       が凍結提案まで到達できてしまう抜け道を閉じる）
     6. pin 値そのものの整形検証（レビュー対応 2026-07-30 第 8/9 ラウンド）: sha256
        系 pin（`manifest_sha256` / `m3_registry_sha256` / `m1_registry_sha256` /
        `m3_code_sha256` / `audio_sha256_a/b`）が 64 桁小文字 hex であること、
@@ -2408,6 +2933,32 @@ def evaluate_comparison(
         `calibration_not_confirmed_on_holdout` に倒す（floor 未満なのに
         favorable な axes を持つ行は、run 時の coverage floor gate が本来
         `not_comparable` へ倒すはずの内部不整合であるため）
+
+    R2 対応（Codex レビュー・material 別会計、上記ステップ 5〜14 に横断的に
+    適用）: 事前登録メモ（`docs/measurements/m3d_2026-08/preregistration.md`
+    §1.3「別会計」）を機械強制する。pair_id の `_real_`/`_synth_` マーカー
+    （`_material_of_pair_id`。未知マーカーは fail-closed）で `reference_pairs`
+    を real_voice / synthetic の 2 バケットへ分割し（`_partition_pairs_by_
+    material`）、以後のステップ 11〜14（マージン表・not_comparable による
+    freeze proposal 拒否・coverage floor 候補・holdout 判定のいずれも）は
+    **real_voice バケットのみ**を入力とする。synthetic バケットは
+    `material_accounting.synthetic` セクションへ診断専用のマージン表として
+    正直会計する（not_comparable は not_measured 相当として記録するのみで、
+    校正 verdict の可否判定には一切寄与しない）。従来（分割前）は両 material
+    の positive/negative が単一バケットへ混入していた（Codex 指摘: 全 positive
+    単一バケット問題・synthetic の tuning positive not_comparable が real_voice
+    由来の凍結提案まで巻き込んで全拒否していた問題）——本対応はこれを是正する。
+
+    R2R 対応 N4（Codex レビュー第 2 ラウンド・synthetic holdout の per-row
+    会計）: 上記の `material_accounting.synthetic` は従来 tuning のマージン表
+    と holdout の件数のみを出しており、凍結後の run に含まれる synth holdout
+    positive（tuning/holdout 各 1 本 × 変形 2 種 = 2 対）の evidence/
+    not_comparable が行単位でどこにも記録されず「正直会計」の看板と矛盾して
+    いた。`_synthetic_holdout_diagnostic_rows` が
+    `material_accounting.synthetic.holdout_rows`（pair_id → 状態）を追加する
+    ——既存の holdout ロック規律は厳守し、ロック中は evidence に触れず
+    `locked_skipped` の列挙のみ、unlocked 評価時のみ実際の evidence/axes を
+    記録する。calibration verdict への影響はゼロ（診断専用のまま）。
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -2422,7 +2973,17 @@ def evaluate_comparison(
     _validate_route_runner_injected_field(reports)
     _validate_route_for_evaluate(reports)
     _require_pair_pins_present_for_publishable_reports(reports)
+    # レビュー対応 第 10 ラウンド（L1）: pair 単位 pin の存在検証（直前の関数）
+    # だけでは、run phase の pins preflight（第 7 ラウンド強制化）を実際に
+    # 通過した証跡までは確認できない——強制ゲート導入前に作られた report や
+    # 証跡フィールドを事後編集で除去された report が、自己記録の audio hash
+    # だけで凍結提案まで到達できてしまう抜け道を閉じる。
+    _require_pins_preflight_evidence_for_publishable_reports(reports)
     _validate_pin_formats(reports)
+    # R2 対応（Codex レビュー・material 別会計の前提）: 全 pair_id が material
+    # 判別可能（`_real_`/`_synth_` マーカーを持つ）ことを margin/holdout 集計に
+    # 進む前に確認する。
+    _validate_pair_id_material_markers(reports)
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
     m1_mapping, m1_registry_sha256 = _load_m1_registry(m1_registry_path)
@@ -2482,7 +3043,6 @@ def evaluate_comparison(
 
     holdout_locked = not _holdout_unlocked(config)
     verdict["holdout_locked_until_frozen"] = holdout_locked
-    verdict["holdout_pair_ids_skipped"] = _holdout_pair_ids(reference_pairs) if holdout_locked else []
 
     # レビュー対応 2026-07-30(第 14 ラウンド): margin/holdout 集計(`_margin_table` /
     # 後段の `_holdout_validation_table`)が axes 値をそのまま消費する前に、値の
@@ -2496,8 +3056,18 @@ def evaluate_comparison(
     # 同じ reference-report-only の前提(repeats 間一致は既に保証済み)で足りる。
     _validate_evidence_values_and_axes_consistency(reference_pairs)
 
+    # R2 対応（Codex レビュー・material 別会計）: 事前登録メモ §1.3「別会計」の
+    # 機械強制。real_voice（vocadito 実声）のみを校正（凍結提案・
+    # tuning positive not_comparable による拒否・holdout 判定）の入力にし、
+    # synthetic（合成）は診断専用セクションへ正直会計する（not_comparable も
+    # not_measured として記録するのみで凍結可否/holdout 判定に一切影響しない）。
+    real_pairs, synth_pairs = _partition_pairs_by_material(reference_pairs)
+    verdict["holdout_pair_ids_skipped"] = (
+        _holdout_pair_ids(real_pairs) if holdout_locked else []
+    )
+
     margin = _margin_table(
-        reference_pairs,
+        real_pairs,
         split="tuning",
         min_margin=config.separation_margin.min_same_minus_cross_margin,
     )
@@ -2506,6 +3076,49 @@ def evaluate_comparison(
     verdict["skipped_pairs"] = margin["skipped_pairs"]
     verdict["not_comparable_positive_count"] = margin["not_comparable_positive_count"]
     verdict["not_comparable_negative_count"] = margin["not_comparable_negative_count"]
+
+    # synthetic は診断専用（事前登録 §1.3 フォールバック意味論）: マージン表・
+    # not_comparable 内訳は正直に報告するが、`calibrated_axes`/`freeze_proposal`/
+    # `holdout_validation` のいずれにも一切影響させない（`margin_synth` の値は
+    # 下の `material_accounting.synthetic` にのみ書き込む）。
+    margin_synth = _margin_table(
+        synth_pairs,
+        split="tuning",
+        min_margin=config.separation_margin.min_same_minus_cross_margin,
+    )
+    verdict["material_accounting"] = {
+        _MATERIAL_REAL_VOICE: {
+            "role": "calibration",
+            "tuning_pair_count": sum(1 for p in real_pairs.values() if p["split"] == "tuning"),
+            "holdout_pair_count": sum(1 for p in real_pairs.values() if p["split"] == "holdout"),
+            "margin_table": margin["axes"],
+            "calibrated_axes": margin["calibrated_axes"],
+            "not_comparable_positive_count": margin["not_comparable_positive_count"],
+            "not_comparable_negative_count": margin["not_comparable_negative_count"],
+        },
+        _MATERIAL_SYNTHETIC: {
+            "role": "diagnostic",
+            "tuning_pair_count": sum(1 for p in synth_pairs.values() if p["split"] == "tuning"),
+            "holdout_pair_count": sum(1 for p in synth_pairs.values() if p["split"] == "holdout"),
+            "margin_table": margin_synth["axes"],
+            "calibrated_axes_diagnostic_only": margin_synth["calibrated_axes"],
+            "not_comparable_positive_count": margin_synth["not_comparable_positive_count"],
+            "not_comparable_negative_count": margin_synth["not_comparable_negative_count"],
+            # R2R N4 対応（Codex レビュー第 2 ラウンド）: holdout split の synth
+            # pair 全件を pair_id → 行単位の状態（`_synthetic_holdout_diagnostic_
+            # rows` 参照）で正直会計する。ロック中（凍結前）は evidence に一切
+            # 触れず `locked_skipped` のみ、unlocked 評価時のみ実際の
+            # evidence/axes を記録する——既存の holdout ロック規律を厳守。
+            "holdout_rows": _synthetic_holdout_diagnostic_rows(
+                synth_pairs, holdout_locked=holdout_locked
+            ),
+            "note": (
+                "診断専用（事前登録 §1.3 フォールバック意味論の機械強制）。"
+                "not_comparable は not_measured として正直会計するのみで、"
+                "凍結提案・holdout 判定を含む calibration verdict には一切影響しない。"
+            ),
+        },
+    }
 
     if margin["not_comparable_positive_count"] > 0:
         # tuning split の positive pair（expected="same"）が 1 件でも
@@ -2516,14 +3129,16 @@ def evaluate_comparison(
         # 扱う。
         verdict["freeze_proposal"] = {}
         verdict["freeze_proposal_rejected_reason"] = "rejected_positive_not_comparable"
-        verdict["coverage_floor_candidate"] = _coverage_floor_candidate(reference_pairs)
+        verdict["coverage_floor_candidate"] = _coverage_floor_candidate(real_pairs)
     else:
         # レビュー対応 2026-07-30（第 15 ラウンド）: 上の not_comparable 会計とは
         # 独立に、比較可能な tuning pair 全ての `comparison.coverage` 4 フィールド
         # の完全性を freeze proposal 発行前に検証する。1 件でも違反があれば
         # freeze proposal と coverage floor 候補の**双方**を emit しない
-        # （margin_table 自体は出す — 発行判断のみを止める）。
-        coverage_violations = _validate_tuning_coverage_completeness(reference_pairs)
+        # （margin_table 自体は出す — 発行判断のみを止める）。R2 対応: real_voice
+        # バケットのみを対象にする（synthetic の coverage 不備は診断専用であり
+        # 凍結可否に影響させない）。
+        coverage_violations = _validate_tuning_coverage_completeness(real_pairs)
         if coverage_violations:
             verdict["freeze_proposal"] = {}
             verdict["freeze_proposal_rejected_reason"] = (
@@ -2537,7 +3152,7 @@ def evaluate_comparison(
                 }
                 for axis in margin["calibrated_axes"]
             }
-            verdict["coverage_floor_candidate"] = _coverage_floor_candidate(reference_pairs)
+            verdict["coverage_floor_candidate"] = _coverage_floor_candidate(real_pairs)
 
     if not holdout_locked:
         # レビュー対応 2026-07-30（第 10 ラウンド）: registry が完全凍結
@@ -2551,13 +3166,15 @@ def evaluate_comparison(
         # unlocked 評価（この `if not holdout_locked:` 節）からのみ行われる
         # ため `unlocked=True` を渡す——`holdout_locked_until_frozen` を申告
         # する行があっても免除せず、comparison 欠落を一律 missing 扱いにする
-        # （unlocked 評価での locked 偽装行の拒否）。
+        # （unlocked 評価での locked 偽装行の拒否）。R2 対応: holdout 判定は
+        # real_voice バケットのみを入力とする（synthetic の holdout 行は診断
+        # 専用であり判定に一切影響させない——事前登録 §1.3）。
         missing_comparison_pair_ids = _holdout_missing_comparison_pair_ids(
-            reference_pairs, unlocked=True
+            real_pairs, unlocked=True
         )
         holdout_has_comparison = any(
             pair["split"] == "holdout" and "comparison" in pair
-            for pair in reference_pairs.values()
+            for pair in real_pairs.values()
         )
         if holdout_has_comparison or missing_comparison_pair_ids:
             frozen_axes = config.evidence_thresholds.axes or {}
@@ -2570,7 +3187,7 @@ def evaluate_comparison(
             freeze_consistency_reasons = _validate_frozen_thresholds_derived_from_tuning(
                 margin["axes"], frozen_axes
             )
-            holdout_result = _holdout_validation_table(reference_pairs, frozen_axes=frozen_axes)
+            holdout_result = _holdout_validation_table(real_pairs, frozen_axes=frozen_axes)
             verdict["holdout_table"] = holdout_result["axes"]
             verdict["holdout_validation"] = {
                 axis: entry["verdict"] for axis, entry in holdout_result["axes"].items()
@@ -2589,7 +3206,7 @@ def evaluate_comparison(
             # あれば、run 時の coverage floor gate が本来 not_comparable へ
             # 倒すはずの内部不整合として fail-closed 側に倒す。
             coverage_invalid_pair_ids, below_floor_pair_ids = (
-                _validate_holdout_coverage_and_floor(reference_pairs, floor=config.coverage.floor)
+                _validate_holdout_coverage_and_floor(real_pairs, floor=config.coverage.floor)
             )
             reasons: List[str] = (
                 freeze_consistency_reasons
@@ -2648,6 +3265,18 @@ def main() -> int:
     parser.add_argument("--registry", type=Path, default=M3_REGISTRY_PATH)
     parser.add_argument("--m1-registry", type=Path, default=M1_REGISTRY_PATH)
     parser.add_argument(
+        "--pins",
+        type=Path,
+        default=None,
+        help=(
+            "run phase 用 pins sidecar（`scripts/build_m3d_pairs.py` が公開する "
+            "m3d_pairs_pins.json）。CLI からの run（route_runner 常に非注入 = "
+            "publishable）は本引数が必須——未指定は抽出開始前に fail-closed で "
+            "拒否する（レビュー対応 第 7 ラウンド。`run_comparison` の "
+            "`pins_path` 引数を参照）"
+        ),
+    )
+    parser.add_argument(
         "--evaluate",
         nargs="+",
         type=Path,
@@ -2657,6 +3286,16 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.evaluate:
+        # レビュー対応 第 11 ラウンド（M1）: 衝突 preflight より先に reports を
+        # ロードする——各 report が記録する `pins_path`（run phase の pins
+        # preflight 強制化・第 7 ラウンド）を protected-path 集合へ編入する
+        # には、report の中身を読まなければ分からない。従来は reports の
+        # ロードが `--out` の衝突判定より**後**に置かれていたため、report
+        # 記録の pins_path（や evaluate 時併用の `--pins`）が保護対象から
+        # 漏れていた——`--evaluate --out <記録済み pins_path>` が検証成功後
+        # に sidecar を verdict で上書きし、`--check-only` と後続 holdout run
+        # を壊しうる穴があった。
+        reports = [_load_report(p) for p in args.evaluate]
         protected = {Path(p).resolve() for p in args.evaluate}
         protected.add(Path(args.registry).resolve())
         protected.add(Path(args.m1_registry).resolve())
@@ -2668,12 +3307,22 @@ def main() -> int:
         # にも含める（run phase の manifest と同様に上書きを禁止する）。
         if args.pairs:
             protected.add(Path(args.pairs).resolve())
+        # M1: 各 report が記録する `pins_path`（存在すれば）を保護対象に編入する。
+        for report in reports:
+            recorded_pins_path = report.get("pins_path")
+            if isinstance(recorded_pins_path, str) and recorded_pins_path:
+                protected.add(Path(recorded_pins_path).resolve())
+        # M1: evaluate 時に明示併用された `--pins` も同様に保護する（`--pins`
+        # は本来 run phase 用の引数だが、CLI 上は evaluate 分岐でも parse
+        # されるため、値が与えられていれば同じ規律で保護する）。
+        if args.pins is not None:
+            protected.add(Path(args.pins).resolve())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
-                f"--out {args.out} は評価入力（report / registry / --pairs manifest）と "
-                "同じパスを指している; 入力を verdict で上書きしない (fail-closed)"
+                f"--out {args.out} は評価入力（report / registry / --pairs manifest / "
+                "report 記録の pins sidecar / --pins）と同じパスを指している; 入力を "
+                "verdict で上書きしない (fail-closed)"
             )
-        reports = [_load_report(p) for p in args.evaluate]
         verdict = evaluate_comparison(
             reports,
             registry_path=args.registry,
@@ -2696,16 +3345,30 @@ def main() -> int:
     # manifest が指す音声入力（audio_a/audio_b）も protected-path に含める——
     # --out がそのいずれかと一致したら書き込み前に fail する。
     protected |= _manifest_audio_paths(args.pairs)
+    # レビュー対応 第 8 ラウンド（J2）: `--pins` も protected-path に含める
+    # ——`--out` が pins sidecar と同じパスを指すと、preflight での検証成功後
+    # （sidecar はまだ読み取り専用のまま）に `_atomic_write_text(args.out, ...)`
+    # が sidecar を run report で上書き破壊してしまい、成功終了したように見える。
+    # 前ラウンド（第 7 ラウンド final report）で「pins は preflight 完了後に
+    # 書き込みが起こるだけだから実害なし」と記した判断は、事前登録の run×2
+    # （同一 `--pins` を 2 回使う運用）の **2 回目 repeat** を見落としていた
+    # ——1 回目の `--out`=`--pins` 実行が sidecar 自体を report で上書きして
+    # しまえば、2 回目の run はもはや正しい pins sidecar を読めない（訂正:
+    # 前ラウンドのスコープノートを本ラウンドで撤回する）。
+    if args.pins is not None:
+        protected.add(Path(args.pins).resolve())
     if Path(args.out).resolve() in protected:
         raise SystemExit(
-            f"--out {args.out} は入力（pairs manifest / registry / manifest の音声入力）と "
-            "同じパスを指している; これらを run report で上書きしない (fail-closed)"
+            f"--out {args.out} は入力（pairs manifest / registry / manifest の音声入力 / "
+            "pins sidecar）と同じパスを指している; これらを run report で上書きしない "
+            "(fail-closed)"
         )
     result = run_comparison(
         manifest_path=args.pairs,
         route_name=args.route,
         registry_path=args.registry,
         m1_registry_path=args.m1_registry,
+        pins_path=args.pins,
     )
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
     print(f"wrote run report to {args.out} ({len(result['pairs'])} pairs)")
