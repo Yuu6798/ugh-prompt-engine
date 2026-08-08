@@ -837,14 +837,14 @@ def test_run_and_publish_rejects_publish_when_vocadito_input_tampered_after_stag
     call_count = {"n": 0}
     tampered_path = vocadito_dir / "Audio" / "vocadito_5.wav"
 
-    def _verify_then_tamper_on_second_call(vocadito_dir_arg, fixtures_arg):
+    def _verify_then_tamper_on_second_call(vocadito_dir_arg, fixtures_arg, *, use_cache=True):
         call_count["n"] += 1
         if call_count["n"] == 2:
             # T2 の公開直前再照合（2 回目の呼び出し）の直前に入力を改変する
             # ——staging（生成）は 1 回目の呼び出し（run_build 内の pin 照合）
             # 通過後、既に完了している状態を模す。
             tampered_path.write_bytes(b"tampered-bytes-after-staging-complete")
-        return real_verify(vocadito_dir_arg, fixtures_arg)
+        return real_verify(vocadito_dir_arg, fixtures_arg, use_cache=use_cache)
 
     monkeypatch.setattr(bm, "verify_vocadito_pins", _verify_then_tamper_on_second_call)
 
@@ -967,3 +967,214 @@ def test_resolve_within_accepts_path_inside_container(tmp_path: Path):
     resolved = bm._resolve_within(inside, container=container, label="test")
 
     assert resolved == inside.resolve()
+
+
+# --------------------------------------------------------------------------- #
+# R2R F1（Codex レビュー第 4 ラウンド）: 公開直前再照合のキャッシュバイパス
+# --------------------------------------------------------------------------- #
+def _mtime_preserving_tamper(path: Path) -> None:
+    """`path` の内容だけを（先頭 1 byte 反転で）差し替え、size・mtime は
+    元の値のまま保つ（`os.utime` で mtime を復元）。`file_sha256` の
+    (path, size, mtime_ns) キャッシュキーが変化しない改ざんを再現する。
+    """
+    original_stat = path.stat()
+    original_bytes = path.read_bytes()
+    tampered_bytes = bytes([original_bytes[0] ^ 0xFF]) + original_bytes[1:]
+    assert len(tampered_bytes) == len(original_bytes)  # size 不変であることの前提確認
+    path.write_bytes(tampered_bytes)
+    os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    assert path.stat().st_size == original_stat.st_size
+    assert path.stat().st_mtime_ns == original_stat.st_mtime_ns
+
+
+def test_verify_vocadito_pins_cached_call_misses_mtime_preserving_tamper(tmp_path: Path):
+    """`file_sha256` の (path, size, mtime_ns) キャッシュの性質そのものを固定
+    する negative control: 同一 size・同一 mtime のまま内容だけ差し替えた
+    改ざんは、`use_cache=True`（既定）だと検出できない（stale digest が
+    キャッシュから返る）。これが F1 で「窓を閉じる目的の検証」に
+    `use_cache=False` を必須化した理由そのもの。`use_cache=False` なら
+    同じ改ざんを正しく検出することも併せて確認する。
+    """
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path, n_clips=1)
+    fixtures, _ = bm.load_m2c_fixtures(fixtures_path)
+    target = vocadito_dir / "Audio" / "vocadito_1.wav"
+
+    # 1 回目（既定 use_cache=True）でキャッシュへ (path, size, mtime) → digest
+    # を記録させる——`run_build` 内の初回照合を模す。
+    bm.verify_vocadito_pins(vocadito_dir, fixtures)  # 例外なし
+
+    _mtime_preserving_tamper(target)
+
+    # use_cache=True（既定）だと (path, size, mtime) キーが一致するため、
+    # stale digest が返り改ざんを見逃す（脆弱性クラスの実証）。
+    bm.verify_vocadito_pins(vocadito_dir, fixtures)  # 例外が飛ばない = 見逃し
+
+    # use_cache=False（F1 対応後の「窓を閉じる目的の検証」）は実バイトを
+    # 読み直すため、同じ改ざんを正しく検出する。
+    with pytest.raises(bm.BuildM3dPairsError, match="sha256 mismatch"):
+        bm.verify_vocadito_pins(vocadito_dir, fixtures, use_cache=False)
+
+
+def test_run_and_publish_detects_mtime_preserving_tamper_at_publish_gate(
+    tmp_path: Path, monkeypatch
+):
+    """T2 の公開直前再照合（F1 対応後）は `use_cache=False` で実バイトを読み
+    直すため、size/mtime を保存したまま内容だけ差し替えた改ざん（`os.utime`
+    で mtime を復元）も正しく検出し、公開を拒否する（fail-closed）。既公開
+    セットは無傷のまま残る。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build1 = _build(tmp_path, fixtures_path, vocadito_dir)
+    wav_before = {p.name: p.read_bytes() for p in build1["out_dir"].glob("*.wav")}
+    manifest_before = build1["manifest_out"].read_bytes()
+    pins_before = build1["pins_out"].read_bytes()
+
+    target = vocadito_dir / "Audio" / "vocadito_4.wav"
+    real_verify = bm.verify_vocadito_pins
+    call_count = {"n": 0}
+
+    def _verify_then_tamper_preserving_stat(vocadito_dir_arg, fixtures_arg, *, use_cache=True):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            # T2 の公開直前再照合（2 回目の呼び出し）の直前に、size/mtime を
+            # 保った改ざんを注入する——staging（生成）は既に完了している。
+            _mtime_preserving_tamper(target)
+        return real_verify(vocadito_dir_arg, fixtures_arg, use_cache=use_cache)
+
+    monkeypatch.setattr(bm, "verify_vocadito_pins", _verify_then_tamper_preserving_stat)
+
+    with pytest.raises(bm.BuildM3dPairsError, match="vocadito_4"):
+        bm.run_and_publish(
+            vocadito_dir=vocadito_dir,
+            out_dir=build1["out_dir"],
+            manifest_out=build1["manifest_out"],
+            pins_out=build1["pins_out"],
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+    assert call_count["n"] == 2
+    wav_after = {p.name: p.read_bytes() for p in build1["out_dir"].glob("*.wav")}
+    assert wav_after == wav_before
+    assert build1["manifest_out"].read_bytes() == manifest_before
+    assert build1["pins_out"].read_bytes() == pins_before
+
+
+def test_check_only_uses_cache_bypass_for_vocadito_pin_reverification(tmp_path: Path, monkeypatch):
+    """`--check-only`（`check_existing`）の vocadito pin 再照合も
+    `use_cache=False` で実バイトを読み直す（F1 のファミリー掃討対象）。
+    size/mtime を保った改ざんを正しく検出することを確認する。
+    """
+    monkeypatch.setattr(bm, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
+
+    build = _build(tmp_path, fixtures_path, vocadito_dir)
+
+    # 事前にキャッシュへ (path, size, mtime) → digest を記録させておく
+    # （build 内の初回照合が既定 use_cache=True で行っているため、この時点で
+    # 既にキャッシュ済みのはず——念のため明示的にも一度呼んでおく）。
+    fixtures, _ = bm.load_m2c_fixtures(fixtures_path)
+    bm.verify_vocadito_pins(vocadito_dir, fixtures)
+
+    target = vocadito_dir / "Audio" / "vocadito_2.wav"
+    _mtime_preserving_tamper(target)
+
+    with pytest.raises(bm.BuildM3dPairsError, match="vocadito_2"):
+        bm.check_existing(
+            manifest_out=build["manifest_out"],
+            pins_out=build["pins_out"],
+            vocadito_dir=vocadito_dir,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_PATH,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# R2R F2（Codex レビュー第 4 ラウンド）: rollback の未初期化 snapshot 復元防止
+# --------------------------------------------------------------------------- #
+def test_publish_staged_bundle_leaves_destination_intact_when_snapshot_rename_fails(
+    tmp_path: Path, monkeypatch
+):
+    """F2 対応: snapshot 作成の rename（`final_path` → `snapshot_path`）自体が
+    失敗/中断した場合、destination（`final_path`）は無傷のまま残る——rollback
+    が mkstemp の空 placeholder を有効な退避物として誤って復元し、無傷の
+    destination を空ファイルで上書き（切り詰め）する経路がないことを確認する。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    final_path = out_dir / "file.txt"
+    final_path.write_bytes(b"original-content")
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    staged_path = staging / "file.txt"
+    staged_path.write_bytes(b"new-content")
+
+    real_replace = os.replace
+
+    def _flaky_replace(src, dst):
+        if Path(src) == final_path:
+            # snapshot 作成の rename（final_path → snapshot_path）自体を失敗
+            # させる——mkstemp による空 placeholder は既に存在するが、rename
+            # は一度も成功していない状態を模す（KeyboardInterrupt 等の中断と
+            # 同じ効果）。
+            raise RuntimeError("simulated crash during snapshot rename")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(bm.os, "replace", _flaky_replace)
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        bm._publish_staged_bundle([(staged_path, final_path)])
+
+    # destination は無傷のまま（空 placeholder で上書きされていない）。
+    assert final_path.read_bytes() == b"original-content"
+    # mkstemp が作った空 placeholder も残らない（掃除されている）。
+    assert list(out_dir.glob(".*.prev")) == []
+
+
+def test_publish_staged_bundle_rollback_restores_fully_completed_entry_when_later_entry_fails(
+    tmp_path: Path, monkeypatch
+):
+    """F2 対応・部分完了時の復元: 複数エントリのうち先行するものが snapshot+
+    publish まで完全に完了した後、後続のエントリの snapshot rename 自体が
+    失敗した場合——先行エントリは正しく元の内容へロールバックされ、後続
+    エントリの destination は（snapshot rename 未完了のため）無傷のまま残る。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    final_a = out_dir / "a.txt"
+    final_a.write_bytes(b"old-a")
+    final_b = out_dir / "b.txt"
+    final_b.write_bytes(b"old-b")
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    staged_a = staging / "a.txt"
+    staged_a.write_bytes(b"new-a")
+    staged_b = staging / "b.txt"
+    staged_b.write_bytes(b"new-b")
+
+    real_replace = os.replace
+
+    def _flaky_replace(src, dst):
+        if Path(src) == final_b:
+            # b の snapshot rename 自体を失敗させる（a は先に完全成功させる）。
+            raise RuntimeError("simulated crash during snapshot rename for b")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(bm.os, "replace", _flaky_replace)
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        bm._publish_staged_bundle([(staged_a, final_a), (staged_b, final_b)])
+
+    # a: 完全成功後にロールバックされ、元の内容へ復元されている
+    # （新内容 "new-a" ではなく "old-a" のまま）。
+    assert final_a.read_bytes() == b"old-a"
+    # b: snapshot rename 自体が失敗しており、無傷のまま
+    # （空 placeholder で上書きされていない）。
+    assert final_b.read_bytes() == b"old-b"
+    assert list(out_dir.glob(".*.prev")) == []

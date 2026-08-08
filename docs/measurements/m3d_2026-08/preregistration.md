@@ -66,7 +66,16 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   替えられた場合、未承認バイト由来の変形 WAV が公開されうる」ことを対応範囲外
   の残存懸念として記録していたが、本工程により実質解消した——読込経路自体は
   変わらないため生成は起こり得るが、1 件でも不一致なら公開自体を fail-closed
-  で中止する（既公開セットは無傷）
+  で中止する（既公開セットは無傷）。**（第 4 ラウンド追補・F1）** この
+  publish 直前再照合は `svp_rpe.utils.hashing.file_sha256` を
+  `use_cache=False` で呼ぶよう明示した——同関数は既定で (path, size,
+  mtime_ns) をキーに digest をプロセス内キャッシュするため、既定のままだと
+  size/mtime を保った内容差し替え（`os.utime` で mtime を復元する改ざん）を
+  見逃し、この再照合工程自体が無効化される穴があった。`--check-only`
+  （`check_existing`）の vocadito pin 再照合も同じ観点でキャッシュバイパスへ
+  統一した（manifest/build 入力の digest 照合はもともと `file_sha256` を
+  経由せず毎回生バイトを読む実装だったため対象外）。初回照合（`run_build`
+  内・生成開始前）はキャッシュ有効のまま維持する（正当な高速化）
 - fixtures（`m2c_external_fixtures.yaml`）ロード直後に全 clip_id を、
   `m3d_synth_specs.yaml` ロード直後に全 fixture id を、それぞれ許可文字集合
   （英数字・アンダースコア・ハイフンのみ）で字句検証する（T3 対応）。パス
@@ -81,6 +90,15 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   run が最後まで走ってしまっていた。後方互換でマーカー無しを許容する道は
   採らない（別会計の fail-closed 規律を崩すため）。evaluate phase 側の検査は
   defense-in-depth として残す
+- **（Codex レビュー第 4 ラウンド追補・F2）** アトミック公開
+  （`_publish_staged_bundle`）の rollback が、退避 rename
+  （`final_path` → `snapshot_path`）自体が失敗/中断した場合に mkstemp の
+  空 placeholder を有効な退避物として誤って復元し、無傷の destination を
+  空ファイルで上書き（切り詰め）てしまう穴を修正した。rename は atomic な
+  ため、rollback 実行時点の `final_path` の存在有無で「退避 rename が実際に
+  完了したか」を判定できる——存在するなら退避は未完了（destination は無傷の
+  まま）で placeholder のみ削除し、存在しないなら snapshot からの復元が正当。
+  成功時の `.prev` 掃除（N2）・従来の rollback（R3）の既存挙動は変更しない
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 

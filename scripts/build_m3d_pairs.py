@@ -476,10 +476,23 @@ def vocadito_audio_path(vocadito_dir: Path, clip_id: str) -> Path:
     return Path(vocadito_dir) / "Audio" / f"{clip_id}.wav"
 
 
-def verify_vocadito_pins(vocadito_dir: Path, fixtures: Dict[str, str]) -> Dict[str, Path]:
+def verify_vocadito_pins(
+    vocadito_dir: Path, fixtures: Dict[str, str], *, use_cache: bool = True
+) -> Dict[str, Path]:
     """`fixtures` の全 clip の音声 sha256 を照合する。1 件でも不一致/欠落なら
     fail-closed（`BuildM3dPairsError`）で例外を送出する（部分出力を防ぐため、
     呼び出し側はこの関数が例外なく戻るまで一切の出力を書いてはならない）。
+
+    R2R 対応 F1（Codex レビュー第 4 ラウンド・キャッシュバイパス）: `use_cache`
+    は `svp_rpe.utils.hashing.file_sha256` へそのまま渡す。既定
+    （`use_cache=True`）は生成開始前の初回照合向け——同一プロセス内で同じ
+    vocadito 音声を複数回読む場面（実測本番の複数 route 実行等）でのキャッシュの
+    恩恵は正当。一方「窓を閉じる目的の検証」（改変検出そのものが目的の再照合
+    ——`check_existing`/publish 直前の再照合）は `use_cache=False` で必ず実
+    バイトを読み直さなければならない: `file_sha256` は (path, size, mtime_ns)
+    でキャッシュするため、既定のままだと size/mtime を保存した置換（例:
+    `shutil.copystat` 相当で元の mtime を復元しつつ内容だけ差し替える改ざん）を
+    見逃す——古い digest がキャッシュから返り、再照合が無効化されてしまう。
     """
     mismatches: List[str] = []
     resolved: Dict[str, Path] = {}
@@ -489,7 +502,7 @@ def verify_vocadito_pins(vocadito_dir: Path, fixtures: Dict[str, str]) -> Dict[s
         if not audio_path.exists():
             mismatches.append(f"{clip_id}: MISSING ({audio_path})")
             continue
-        actual_sha256 = file_sha256(audio_path)
+        actual_sha256 = file_sha256(audio_path, use_cache=use_cache)
         if actual_sha256 != expected_sha256:
             mismatches.append(
                 f"{clip_id}: sha256 mismatch (actual={actual_sha256} expected={expected_sha256})"
@@ -878,6 +891,24 @@ def _publish_staged_bundle(entries: "List[Tuple[Path, Path]]") -> None:
     ——削除せずに残すと出力ディレクトリにビルドのたびゴミが蓄積する。全件の
     publish が成功した後（rollback 経路には影響しない — 例外時は従来どおり
     snapshot を使って復元する）、ベストエフォートで削除する。
+
+    R2R 対応 F2（Codex レビュー第 4 ラウンド・未初期化 snapshot での上書き
+    防止）: `tempfile.mkstemp` は呼んだ瞬間に空ファイルを作る——`snapshots`
+    への登録は（非同期シグナル安全のため）その直後・実際の退避 rename
+    （`os.replace(final_path, snapshot_path)`）の**前**に行われる。この
+    rename 自体が失敗/中断（`KeyboardInterrupt` 含む）した場合、`final_path`
+    は退避されておらず元の内容のまま存在し続けるが、`snapshots` にはこの
+    「中身が空の mkstemp placeholder」がまだ登録されている。rollback が
+    これを無条件に「有効な退避物」として `final_path` へ復元すると、無傷の
+    destination を空ファイルで上書き（切り詰め）してしまう。rename は
+    atomic（同一ファイルシステム上の単一 rename syscall）であるため、
+    「rename が実際に完了したか」は Python 側のフラグではなく **rollback
+    実行時点の `final_path` の存在有無**で判定できる（後述）: 先行する
+    `published` の unlink ループが完了した後、`final_path` が依然として
+    存在するなら退避 rename は一度も成功していない（destination は無傷）
+    ——placeholder を削除するだけに留め、復元は行わない。`final_path` が
+    存在しない（unlink で消えた、または退避 rename 自体が成功していた）なら
+    snapshot からの復元が正当。
     """
     snapshots: Dict[Path, Path] = {}
     published: List[Path] = []
@@ -892,7 +923,8 @@ def _publish_staged_bundle(entries: "List[Tuple[Path, Path]]") -> None:
                 snapshot_path = Path(snap_name)
                 # 登録は replace の**前**（Codex P2 review 由来の流儀。非同期
                 # シグナルが replace 完了直後〜登録実行前に割り込んでも追跡漏れ
-                # が生じない）。
+                # が生じない）。rename が実際に完了したかどうかは rollback 側で
+                # `final_path.exists()` を見て判定する（F2 参照・上記 docstring）。
                 snapshots[final_path] = snapshot_path
                 os.replace(final_path, snapshot_path)
             published.append(final_path)
@@ -904,6 +936,15 @@ def _publish_staged_bundle(entries: "List[Tuple[Path, Path]]") -> None:
             except OSError:
                 pass
         for final_path, snapshot_path in snapshots.items():
+            if final_path.exists():
+                # F2: 退避 rename が完了していない（destination は無傷のまま
+                # 残っている）——mkstemp が作った空 placeholder を復元対象として
+                # 使ってはならない。placeholder のみ掃除する。
+                try:
+                    snapshot_path.unlink()
+                except OSError:
+                    pass
+                continue
             try:
                 os.replace(snapshot_path, final_path)
             except OSError:
@@ -995,7 +1036,9 @@ def check_existing(
         行う（従来は fixtures 側のみ記録し、synth specs は無 pin だった）。
     """
     fixtures, actual_fixtures_sha = load_m2c_fixtures(fixtures_path)
-    verify_vocadito_pins(vocadito_dir, fixtures)  # vocadito 側の drift も再確認
+    # F1 対応: --check-only は改変検出そのものが目的の照合のため、キャッシュを
+    # バイパスして実バイトを読み直す（vocadito 側の drift も再確認）。
+    verify_vocadito_pins(vocadito_dir, fixtures, use_cache=False)
     _, actual_synth_specs_sha = _read_bytes_and_sha256(synth_specs_path)
 
     if not manifest_out.exists():
@@ -1227,7 +1270,13 @@ def run_and_publish(
         # 生成処理（librosa.load 等）は一切行わない時点で、全 vocadito 入力 WAV
         # を pin と再照合する。ここで 1 件でも不一致なら公開せず fail-closed
         # （staging は finally で破棄・既公開セットは無傷のまま）。
-        verify_vocadito_pins(vocadito_dir, fixtures)
+        # F1 対応（Codex レビュー第 4 ラウンド）: 「窓を閉じる目的の検証」その
+        # ものであるため `use_cache=False` で必ず実バイトを読み直す——既定の
+        # キャッシュ有効のままでは、生成開始前の初回照合（`run_build` 内。
+        # size/mtime をキーに記録済み）と size/mtime が偶然一致する置換
+        # （元の mtime を復元しつつ内容だけ差し替える改ざん）を見逃し、この
+        # 再照合工程自体が無効化されてしまう。
+        verify_vocadito_pins(vocadito_dir, fixtures, use_cache=False)
 
         _publish_staged_bundle(entries)
         return crosstab(pairs)
