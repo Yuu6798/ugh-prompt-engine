@@ -181,6 +181,29 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   pin・material マップ・summary pin 等 builder 固有の完全性検査までは代替
   しない）。手順を「生成 → **pins preflight 付き** run×2 → evaluate → …」
   へ改訂（下記 §0 参照）
+- **（同追補・第 8 ラウンド継続対応・J1・二段構え）** 第 7 ラウンドの一括
+  preflight は抽出開始**前**の一度きりの検証であり、preflight と実際の
+  抽出消費（`_freeze_audio_copy` が pair ごとに読む bytes）の間には時間の
+  窓が空く——長時間 run 中に WAV が置換されると、`pins_preflight_verified:
+  true` を掲げたまま置換バイトがそのまま記録・評価されてしまう（両 repeat
+  で持続すれば未承認刺激が校正へ混入し得る）。`_freeze_audio_copy` が既に
+  計算している凍結コピー（=抽出器が実消費する bytes）の digest を、pair
+  ごとに sidecar の期待値（`_run_pins_preflight` が読み込み済みの
+  `audio_sha256` テーブルを再利用——ファイルの再読みはしない）と再照合する
+  工程を追加した（`_verify_frozen_copy_against_pins`。`runner()` 呼び出しの
+  直前に置き、不一致は fail-closed で run 全体を中止）。preflight（一括
+  事前検証・早期失敗の利便）と本工程（pair ごとの実消費バイト拘束・真の
+  保証）は**二段構え**であり、片方だけでは TOCTOU の窓を閉じきれない
+- **（同追補・第 8 ラウンド継続対応・J2・pins の出力衝突保護 + スコープ
+  ノート訂正）** run CLI の `--out` protected-path 集合に `--pins`（resolve
+  済み）を編入した——未編入のままだと `--out` = `--pins` の場合、preflight
+  検証成功後に report の `_atomic_write_text` が sidecar 自体を run report で
+  上書き破壊し、成功終了したように見えてしまう。**第 7 ラウンドの final
+  report で「pins は preflight 完了後に書き込みが起こるだけだから実害なし」
+  と記した判断を本ラウンドで撤回する**——その判断は事前登録の運用（同一
+  `--pins` を run×2 で 2 回使う）の **2 回目 repeat** を見落としていた:
+  1 回目の `--out`=`--pins` 実行で sidecar 自体が破壊されれば、2 回目の run
+  はもはや正しい pins sidecar を読めない
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 

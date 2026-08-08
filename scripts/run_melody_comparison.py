@@ -27,7 +27,13 @@ standalone script（`svprpe` サブコマンド化しない・sys.path 注入は
    `--check-only` は builder 側の独立した点検計器として引き続き残す（本
    preflight と役割は重複するが、本 preflight は「必要最小限」のみを検証し
    build 入力 pin・material マップ・summary pin 等 builder 固有の完全性検査は
-   代替しない）。
+   代替しない）。**二段構え**（レビュー対応 第 8 ラウンド）: 上記の一括
+   preflight は抽出開始前の一度きりの早期失敗に過ぎず、preflight と実際の
+   抽出消費（pair ごとの `_freeze_audio_copy`）の間には時間の窓が空く——
+   長時間 run 中に WAV が置換されれば一括 preflight だけでは検出できない。
+   pair ごとに凍結コピー（=抽出器が実消費する bytes）の digest を sidecar
+   期待値と再照合する（`_verify_frozen_copy_against_pins`）ことで、この窓を
+   閉じる。
 
 適用帯域: 本ハーネスの既定 route は **clear_lead 経路限定**（User 決裁 2026-07-30・
 単離済み clean lead 帯）。実音声・実 crepe による slow-lane 実測は本セッションでは
@@ -477,7 +483,7 @@ def _run_pins_preflight(
     pins_path: Path,
     manifest_sha256: str,
     pairs_spec: List[Dict[str, Any]],
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """抽出を一切開始する前に pins sidecar を強制検証する（fail-closed）。
 
     1. sidecar のスキーマ/必須フィールド検証（`_load_pins_sidecar_for_preflight`）
@@ -501,6 +507,18 @@ def _run_pins_preflight(
     照合する**（改変検出はロックの趣旨そのものと整合し、対立しない）。この
     ため `pairs_spec` 全件を対象にし、`holdout_locked` を引数に取らない
     ——呼び出し側で holdout を除外するフィルタを通す必要はない。
+
+    レビュー対応 第 8 ラウンド（J1）: 二段構えの検証であることを明記する。
+    本関数（一括事前検証）は抽出開始**前**の一度きりの早期失敗の利便
+    ——sidecar が既に壊れている場合、1 件も抽出せずに即座に run 全体を止める。
+    しかし本関数の検証と実際の抽出消費（`_freeze_audio_copy` が読む bytes）の
+    間には時間の窓が空く（pair ごとの抽出処理・特に長時間 run では顕著）——
+    その窓で WAV が置換されても本関数だけでは検出できない。真に拘束力を持つ
+    検証は `run_comparison` 本体が pair ループ内で `_freeze_audio_copy` の
+    返す digest を本関数が返す `audio_sha256`（sidecar 記録の期待値）と都度
+    突き合わせる方（凍結コピー照合。呼び出し側参照）——本関数はその期待値
+    テーブルを一度読み込んで返す役目も兼ねる（sidecar を pair ごとに再読み
+    しない）。戻り値に `audio_sha256` を含めるのはこのため。
     """
     pins_doc = _load_pins_sidecar_for_preflight(pins_path)
 
@@ -538,7 +556,48 @@ def _run_pins_preflight(
     return {
         "pins_path": str(Path(pins_path).resolve()),
         "pins_sha256": hashlib.sha256(Path(pins_path).read_bytes()).hexdigest(),
+        "audio_sha256": dict(audio_sha256),
     }
+
+
+def _verify_frozen_copy_against_pins(
+    *,
+    pair: Dict[str, Any],
+    audio_sha256_a: str,
+    audio_sha256_b: str,
+    pins_audio_sha256: Dict[str, str],
+) -> None:
+    """`_freeze_audio_copy` が実際に抽出器へ渡す bytes の digest を、pins
+    preflight が読み込んだ sidecar 期待値と pair ごとに突き合わせる
+    （レビュー対応 第 8 ラウンド・J1）。
+
+    `_run_pins_preflight` の一括事前検証は抽出開始前の一度きりであり、そこと
+    実際の消費（本関数の呼び出し元 `run_comparison` が pair ごとに
+    `_freeze_audio_copy` した直後）の間には時間の窓が空く——長時間 run 中に
+    WAV が置換されれば、事前検証だけでは検出できない（`pins_preflight_
+    verified: true` を掲げたまま置換バイトが記録・評価されてしまう）。
+    `audio_sha256_a`/`audio_sha256_b` は `_freeze_audio_copy` が**既に計算
+    済み**の digest（凍結コピー = 抽出器が実消費する bytes そのものの sha256。
+    キャッシュを踏まない実バイト読みから得られている）をそのまま再利用する
+    ——ここで新たにファイルを読み直しはしない。sidecar 記録（`pins_audio_
+    sha256`。`_run_pins_preflight` が返した期待値テーブル）との不一致・欠落は
+    fail-closed で run 全体を中止する（呼び出し元は本関数を `runner()`
+    呼び出しより前に置くため、抽出は一切行われない）。
+    """
+    problems: List[str] = []
+    for key, actual in (("audio_a", audio_sha256_a), ("audio_b", audio_sha256_b)):
+        rel_path = pair[key]
+        expected = pins_audio_sha256.get(rel_path)
+        if expected is None:
+            problems.append(f"{rel_path}: pins サイドカーに未登録 (fail-closed)")
+            continue
+        if actual != expected:
+            problems.append(f"{rel_path}: sha256 mismatch (actual={actual} expected={expected})")
+    if problems:
+        raise ValueError(
+            f"凍結コピーの pins 照合失敗 (fail-closed; pair_id={pair['pair_id']!r} の抽出を "
+            "中止し run 全体を中止): " + "; ".join(problems)
+        )
 
 
 def _validate_frozen_axes(
@@ -1045,7 +1104,7 @@ def run_comparison(
     # run では既に拒否済み（上の早期 fail-closed）——ここへ到達するのは
     # (a) pins_path 指定あり（publishable/injected 問わず）、または
     # (b) injected run で pins_path 未指定、のいずれか。
-    pins_preflight: Optional[Dict[str, str]] = None
+    pins_preflight: Optional[Dict[str, Any]] = None
     if pins_path is not None:
         pins_preflight = _run_pins_preflight(
             pins_path=pins_path,
@@ -1109,6 +1168,21 @@ def run_comparison(
             # 到達する pair は必ず音声を読む（開封回避の設計は崩さない）。
             audio_sha256_a, frozen_a = _freeze_audio_copy(pair["audio_a"], staging_dir)
             audio_sha256_b, frozen_b = _freeze_audio_copy(pair["audio_b"], staging_dir)
+            # レビュー対応 第 8 ラウンド（J1）: 凍結コピー（=抽出器が実際に消費
+            # する bytes）の digest を、preflight が読んだ sidecar 期待値と
+            # pair ごとに再照合する——`_run_pins_preflight` の一括事前検証と
+            # ここでの実消費バイト照合は二段構え（docstring 参照）。preflight
+            # 済み run（`pins_preflight is not None`）でのみ実施し、注入
+            # （テスト）run で `pins_path` 未指定の場合は従来どおり対象外。
+            # 不一致・欠落があれば `runner()` を一切呼ばず fail-closed で
+            # run 全体を中止する。
+            if pins_preflight is not None:
+                _verify_frozen_copy_against_pins(
+                    pair=pair,
+                    audio_sha256_a=audio_sha256_a,
+                    audio_sha256_b=audio_sha256_b,
+                    pins_audio_sha256=pins_preflight["audio_sha256"],
+                )
             try:
                 obs_a, prov_a = runner(frozen_a)
                 obs_b, prov_b = runner(frozen_b)
@@ -3124,10 +3198,23 @@ def main() -> int:
     # manifest が指す音声入力（audio_a/audio_b）も protected-path に含める——
     # --out がそのいずれかと一致したら書き込み前に fail する。
     protected |= _manifest_audio_paths(args.pairs)
+    # レビュー対応 第 8 ラウンド（J2）: `--pins` も protected-path に含める
+    # ——`--out` が pins sidecar と同じパスを指すと、preflight での検証成功後
+    # （sidecar はまだ読み取り専用のまま）に `_atomic_write_text(args.out, ...)`
+    # が sidecar を run report で上書き破壊してしまい、成功終了したように見える。
+    # 前ラウンド（第 7 ラウンド final report）で「pins は preflight 完了後に
+    # 書き込みが起こるだけだから実害なし」と記した判断は、事前登録の run×2
+    # （同一 `--pins` を 2 回使う運用）の **2 回目 repeat** を見落としていた
+    # ——1 回目の `--out`=`--pins` 実行が sidecar 自体を report で上書きして
+    # しまえば、2 回目の run はもはや正しい pins sidecar を読めない（訂正:
+    # 前ラウンドのスコープノートを本ラウンドで撤回する）。
+    if args.pins is not None:
+        protected.add(Path(args.pins).resolve())
     if Path(args.out).resolve() in protected:
         raise SystemExit(
-            f"--out {args.out} は入力（pairs manifest / registry / manifest の音声入力）と "
-            "同じパスを指している; これらを run report で上書きしない (fail-closed)"
+            f"--out {args.out} は入力（pairs manifest / registry / manifest の音声入力 / "
+            "pins sidecar）と同じパスを指している; これらを run report で上書きしない "
+            "(fail-closed)"
         )
     result = run_comparison(
         manifest_path=args.pairs,

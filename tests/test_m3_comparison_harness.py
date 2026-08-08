@@ -4366,3 +4366,166 @@ def test_run_comparison_injected_run_without_pins_skips_preflight(
     assert report["pins_preflight_verified"] is False
     assert "pins_path" not in report
     assert "pins_sha256" not in report
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 8 ラウンド（J1）: 凍結コピーの sidecar 再照合（二段構え）
+# --------------------------------------------------------------------------- #
+def test_run_comparison_freeze_time_verification_rejects_wav_replaced_after_preflight(
+    tmp_path: Path, audio_paths: Dict[str, str], monkeypatch
+):
+    """preflight（一括事前検証）は通過したが、その直後・最初の凍結
+    （`_freeze_audio_copy`）の直前に WAV が置換された場合、凍結コピー digest の
+    sidecar 再照合（J1）が検出し、route_runner を一度も呼ばずに run 全体を
+    fail-closed で中止する（J1 対応の主眼）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    real_freeze = harness._freeze_audio_copy
+    triggered = {"done": False}
+
+    def _freeze_with_late_tamper(audio_path, staging_dir):
+        # 「preflight は通ったが、最初の凍結の直前に WAV が置換された」窓を
+        # 模す（一度だけ発火——それ以降の pair 処理まで巻き込まない）。
+        if not triggered["done"]:
+            triggered["done"] = True
+            Path(audio_path).write_bytes(b"replaced-after-preflight")
+        return real_freeze(audio_path, staging_dir)
+
+    monkeypatch.setattr(harness, "_freeze_audio_copy", _freeze_with_late_tamper)
+
+    with pytest.raises(ValueError, match="凍結コピーの pins 照合失敗"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+    assert triggered["done"] is True
+    # preflight 通過直後・最初の凍結で即座に拒否されるため、route_runner は
+    # 一度も呼ばれない。
+    assert counter["n"] == 0
+
+
+def test_run_comparison_freeze_time_verification_skipped_for_injected_run_without_pins(
+    tmp_path: Path, audio_paths: Dict[str, str], monkeypatch
+):
+    """注入（テスト）run で `pins_path` 未指定の場合、凍結コピーの sidecar
+    再照合（J1）は従来どおり対象外——WAV を凍結直前に置換しても run は正常に
+    完走する（`pins_preflight_verified: False` の経路には J1 の検査が乗らない
+    ことの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    real_freeze = harness._freeze_audio_copy
+    triggered = {"done": False}
+
+    def _freeze_with_late_tamper(audio_path, staging_dir):
+        if not triggered["done"]:
+            triggered["done"] = True
+            Path(audio_path).write_bytes(b"replaced-without-pins")
+        return real_freeze(audio_path, staging_dir)
+
+    monkeypatch.setattr(harness, "_freeze_audio_copy", _freeze_with_late_tamper)
+
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert triggered["done"] is True
+    assert report["pins_preflight_verified"] is False
+
+
+def test_run_comparison_freeze_time_verification_passes_for_clean_run(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """クリーン run（preflight 後に何も改変されない）は J1 の追加検査が
+    介在しても従来どおり正常完走する（偽陽性を出さないことの確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+    )
+
+    assert report["pins_preflight_verified"] is True
+    assert counter["n"] > 0
+    assert "comparison" in report["pairs"]["_real_p_pos_tuning"]
+    assert "comparison" in report["pairs"]["_real_p_neg_tuning"]
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 8 ラウンド（J2）: --out から pins sidecar を保護
+# --------------------------------------------------------------------------- #
+def test_out_cannot_overwrite_pins_sidecar(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--out` が `--pins` と同じパスを指す場合、run 開始前に fail-closed で
+    拒否し、pins sidecar 自体は無傷のまま残す（J2 対応の主眼: 前ラウンドの
+    「実害なし」スコープノートは事前登録の run×2 の 2 回目 repeat が sidecar
+    自体を上書きされた後に読めなくなる点を見落としており、本ラウンドで訂正
+    する）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    pins_before = pins_path.read_bytes()
+
+    argv = [
+        "run_melody_comparison.py",
+        "--pairs",
+        str(manifest_path),
+        "--pins",
+        str(pins_path),
+        "--out",
+        str(pins_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+    assert pins_path.read_bytes() == pins_before
+
+
+def test_out_can_differ_from_pins_sidecar(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """`--out` が `--pins` と異なるパスであれば、protected-path 検査自体は
+    通る（偽陽性を出さないことの確認。CLI 経路は publishable なため実 crepe
+    抽出を要求してしまう——本テストは `run_comparison` を直接 monkeypatch で
+    差し替え、protected-path 判定のみを分離して検証する）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    out_path = tmp_path / "run1.json"
+
+    calls: List[Dict[str, Any]] = []
+
+    def _fake_run_comparison(**kwargs):
+        calls.append(kwargs)
+        return {"schema_version": harness._EXPECTED_RUN_SCHEMA, "pairs": {}}
+
+    monkeypatch.setattr(harness, "run_comparison", _fake_run_comparison)
+
+    argv = [
+        "run_melody_comparison.py",
+        "--pairs",
+        str(manifest_path),
+        "--pins",
+        str(pins_path),
+        "--out",
+        str(out_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert harness.main() == 0
+    assert len(calls) == 1
+    assert calls[0]["pins_path"] == pins_path
