@@ -22,6 +22,7 @@ from svp_rpe.melody.observability import (
 from svp_rpe.melody.representation import (
     EvidenceThresholdsConfig,
     M3ComparisonConfig,
+    build_sequences,
     load_m3_registry,
 )
 
@@ -436,3 +437,133 @@ def test_report_is_frozen_dataclass():
     )
     with pytest.raises(Exception):
         report.evidence = "strong"  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 9 ラウンド（K2）: M3d negative_rhythm fixture の
+# 構造的診断可能性（`tests/fixtures/melody_bench/m3d_synth_specs.yaml` の
+# `m3d_synth_rhythm_neg{1,2}_{a,b}` に対応する設計値をここで手計算・
+# 独立検証する——「同音程・別リズムの診断が構造的に成立しうる fixture である」
+# ことをテストが保証する。`build_sequences`（M3a 表現層）はテンポ不変
+# （連続比の log2 のみを見る）ため、フレーズ内が一様なら一様スケールの
+# テンポ差は両側とも全ゼロの log 比列に潰れ、rhythm 軸が構造的に区別不能に
+# なる——この構造的欠陥が実際に解消されていることを、実音声/実 crepe に
+# 依存せず（`build_sequences` を直接呼ぶだけで）確認する。
+# --------------------------------------------------------------------------- #
+def _notes_for_phrase(
+    midis: List[float], durs: List[float], *, gap: float, start_sec: float = 0.0
+) -> List[MelodyNote]:
+    """`scripts/build_melody_bench.py` の `_build_monophonic` と同じタイミング
+    規約（note_dur の後に note_gap の無音）でノート列を構築する（音声合成・
+    crepe 抽出を経由しない直接構築。K2 対応）。
+    """
+    notes: List[MelodyNote] = []
+    t = start_sec
+    for midi, dur in zip(midis, durs):
+        notes.append(MelodyNote(start_sec=t, end_sec=t + dur, pitch_midi=float(midi), confidence=0.9))
+        t += dur + gap
+    return notes
+
+
+def _assert_same_pitch_and_interval_structure(seqs_a, seqs_b) -> None:
+    """「同音程」——音程列（半音値・raw/folded interval）が両側で完全一致する
+    ことを確認する（K2 の (a)）。
+    """
+    assert seqs_a.pitch_semitones == seqs_b.pitch_semitones
+    assert seqs_a.intervals_raw == seqs_b.intervals_raw
+    assert seqs_a.intervals_folded == seqs_b.intervals_folded
+    assert seqs_a.contour == seqs_b.contour
+
+
+def _assert_rhythm_structurally_separable(seqs_a, seqs_b) -> None:
+    """「別リズム」——rhythm 軸（duration/IOI の log2 比列）が両側で実質的に
+    相違することを確認する（K2 の (b)）。旧設計の欠陥（フレーズ内一様な
+    テンポ差は両側とも全ゼロに潰れ区別不能）が再発していないことを、
+    「a 側は全ゼロ」「b 側は非ゼロを含む」の両方を明示的にアサートして防ぐ
+    （単に `!=` だけだと、将来どちらか一方だけが変わる回帰を見逃しかねない）。
+    """
+    assert seqs_a.duration_log2_ratios != seqs_b.duration_log2_ratios
+    assert seqs_a.ioi_log2_ratios != seqs_b.ioi_log2_ratios
+    # a 側（フレーズ内一様=均等割）は全ゼロ（None を除く）のはず。
+    assert all(v == 0.0 for v in seqs_a.duration_log2_ratios if v is not None)
+    assert all(v == 0.0 for v in seqs_a.ioi_log2_ratios if v is not None)
+    # b 側（フレーズ内非一様=長短交互）は非ゼロを含むはず。
+    assert any(v is not None and v != 0.0 for v in seqs_b.duration_log2_ratios)
+    assert any(v is not None and v != 0.0 for v in seqs_b.ioi_log2_ratios)
+
+
+def test_m3d_negative_rhythm_pair1_is_structurally_diagnosable():
+    """`m3d_synth_rhythm_neg1_a`/`_b`（tests/fixtures/melody_bench/
+    m3d_synth_specs.yaml）に対応する設計値: 音程列 [60,62,64,65,67] 共通、
+    a 側は note_dur_sec=0.3 一様、b 側は note_durs_sec=[0.5,0.15,0.5,0.15,0.5]
+    （長短交互）・note_gap_sec=0.05 共通。
+    """
+    config = _default_config()
+    midis = [60, 62, 64, 65, 67]
+    notes_a = _notes_for_phrase(midis, [0.3] * 5, gap=0.05)
+    notes_b = _notes_for_phrase(midis, [0.5, 0.15, 0.5, 0.15, 0.5], gap=0.05)
+
+    seqs_a = build_sequences(notes_a, config)
+    seqs_b = build_sequences(notes_b, config)
+
+    _assert_same_pitch_and_interval_structure(seqs_a, seqs_b)
+    _assert_rhythm_structurally_separable(seqs_a, seqs_b)
+
+
+def test_m3d_negative_rhythm_pair2_is_structurally_diagnosable():
+    """`m3d_synth_rhythm_neg2_a`/`_b`: 2 フレーズ（[67,65,64,62,60] / [60,64,67]）
+    共通、a 側は note_dur_sec=0.25 一様、b 側は各フレーズとも長短交互
+    （note_durs_sec）・note_gap_sec=0.05 共通。両フレーズをそれぞれ独立に
+    `build_sequences` へ通す（`melody.comparison.compare_melodies` がフレーズ
+    ごとに軸を計算する実際の呼び出し方と同じ単位——`docs/DESIGN_M3_
+    melody_comparator.md` §6 のフレーズ内表現規約）。
+    """
+    config = _default_config()
+    phrase1_midis = [67, 65, 64, 62, 60]
+    phrase2_midis = [60, 64, 67]
+
+    notes_a_p1 = _notes_for_phrase(phrase1_midis, [0.25] * 5, gap=0.05)
+    notes_b_p1 = _notes_for_phrase(phrase1_midis, [0.45, 0.15, 0.45, 0.15, 0.45], gap=0.05)
+    seqs_a_p1 = build_sequences(notes_a_p1, config)
+    seqs_b_p1 = build_sequences(notes_b_p1, config)
+    _assert_same_pitch_and_interval_structure(seqs_a_p1, seqs_b_p1)
+    _assert_rhythm_structurally_separable(seqs_a_p1, seqs_b_p1)
+
+    notes_a_p2 = _notes_for_phrase(phrase2_midis, [0.25] * 3, gap=0.05)
+    notes_b_p2 = _notes_for_phrase(phrase2_midis, [0.45, 0.15, 0.45], gap=0.05)
+    seqs_a_p2 = build_sequences(notes_a_p2, config)
+    seqs_b_p2 = build_sequences(notes_b_p2, config)
+    _assert_same_pitch_and_interval_structure(seqs_a_p2, seqs_b_p2)
+    _assert_rhythm_structurally_separable(seqs_a_p2, seqs_b_p2)
+
+
+def test_m3d_negative_rhythm_fixtures_match_committed_spec_yaml():
+    """上記 2 テストが手計算で使う値（音程列・note_dur(s)_sec・note_gap_sec）が、
+    実際に commit された `m3d_synth_specs.yaml` の内容と一致していることを
+    確認する——手計算値と fixture ファイルが将来ズレて「テストは通るが実
+    fixture は直っていない」という乖離を防ぐ。
+    """
+    specs_path = (
+        ROOT / "tests" / "fixtures" / "melody_bench" / "m3d_synth_specs.yaml"
+    )
+    specs = yaml.safe_load(specs_path.read_text(encoding="utf-8"))
+    fixtures = specs["fixtures"]
+
+    neg1_a = fixtures["m3d_synth_rhythm_neg1_a"]
+    neg1_b = fixtures["m3d_synth_rhythm_neg1_b"]
+    assert neg1_a["phrases"] == neg1_b["phrases"] == [[60, 62, 64, 65, 67]]
+    assert neg1_a["note_dur_sec"] == 0.3
+    assert "note_durs_sec" not in neg1_a
+    assert neg1_b["note_durs_sec"] == [[0.5, 0.15, 0.5, 0.15, 0.5]]
+    assert neg1_a["note_gap_sec"] == neg1_b["note_gap_sec"] == 0.05
+
+    neg2_a = fixtures["m3d_synth_rhythm_neg2_a"]
+    neg2_b = fixtures["m3d_synth_rhythm_neg2_b"]
+    assert neg2_a["phrases"] == neg2_b["phrases"] == [[67, 65, 64, 62, 60], [60, 64, 67]]
+    assert neg2_a["note_dur_sec"] == 0.25
+    assert "note_durs_sec" not in neg2_a
+    assert neg2_b["note_durs_sec"] == [[0.45, 0.15, 0.45, 0.15, 0.45], [0.45, 0.15, 0.45]]
+    assert neg2_a["note_gap_sec"] == neg2_b["note_gap_sec"] == 0.05
+    # フレーズ間 gap は分割後に不可視なので a/b で変える意味がない
+    # （変えていないことの確認——K2 の設計判断）。
+    assert neg2_a["phrase_gap_sec"] == neg2_b["phrase_gap_sec"] == 0.6

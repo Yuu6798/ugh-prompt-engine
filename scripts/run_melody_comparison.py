@@ -446,18 +446,32 @@ _PINS_SIDECAR_SCHEMA_EXPECTED = "m3d-pairs-pins/0.3"
 _PINS_SIDECAR_MINIMAL_REQUIRED_KEYS = {"schema", "manifest_sha256", "audio_sha256"}
 
 
-def _load_pins_sidecar_for_preflight(path: Path) -> Dict[str, Any]:
+def _load_pins_sidecar_for_preflight(path: Path) -> "Tuple[Dict[str, Any], str]":
     """pins sidecar を run phase preflight 用に必要最小限だけ読み検証する。
 
     `_PINS_SIDECAR_MINIMAL_REQUIRED_KEYS` を参照。schema 不一致・必須キー欠落・
     型不正のいずれも fail-closed（`ValueError`）で拒否する。
+
+    レビュー対応 第 9 ラウンド（K1・TOCTOU 解消）: バイト列を**一度だけ**読み、
+    そのバイト列から JSON parse と sha256 digest の両方を導出して
+    `(doc, digest)` を返す——`scripts/build_m3d_pairs.py` の
+    `_read_bytes_and_sha256` と同型。従来は本関数がパース用に一度読み、
+    呼び出し側（`_run_pins_preflight`）が `pins_sha256`（report に記録される
+    値）用に**別途**もう一度 `Path(pins_path).read_bytes()` していたため、
+    2 回の読み取りの間で sidecar が置換されると「第 1 の文書の内容で検証
+    したのに、report には第 2 の文書の digest を記録する」というすり替えが
+    起こり得た。単一読みに統合することで、検証と記録が常に同一バイト列に
+    基づくことを構造的に保証する。
     """
     try:
-        raw = Path(path).read_text(encoding="utf-8")
+        raw_bytes = Path(path).read_bytes()
     except OSError as exc:
         raise ValueError(f"{path}: pins サイドカーの読み込みに失敗 (fail-closed): {exc}") from exc
+    digest = hashlib.sha256(raw_bytes).hexdigest()
     try:
-        doc = json.loads(raw)
+        doc = json.loads(raw_bytes.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{path}: pins サイドカーが UTF-8 でない (fail-closed): {exc}") from exc
     except json.JSONDecodeError as exc:
         raise ValueError(f"{path}: pins サイドカーの JSON parse に失敗 (fail-closed): {exc}") from exc
     if not isinstance(doc, dict):
@@ -475,7 +489,7 @@ def _load_pins_sidecar_for_preflight(path: Path) -> Dict[str, Any]:
         raise ValueError(f"{path}: manifest_sha256 が不正な形式 (fail-closed): {manifest_sha!r}")
     if not isinstance(doc["audio_sha256"], dict):
         raise ValueError(f"{path}: audio_sha256 が mapping でない (fail-closed)")
-    return doc
+    return doc, digest
 
 
 def _run_pins_preflight(
@@ -520,7 +534,7 @@ def _run_pins_preflight(
     テーブルを一度読み込んで返す役目も兼ねる（sidecar を pair ごとに再読み
     しない）。戻り値に `audio_sha256` を含めるのはこのため。
     """
-    pins_doc = _load_pins_sidecar_for_preflight(pins_path)
+    pins_doc, pins_sha256 = _load_pins_sidecar_for_preflight(pins_path)
 
     problems: List[str] = []
     expected_manifest_sha = pins_doc["manifest_sha256"]
@@ -555,7 +569,12 @@ def _run_pins_preflight(
 
     return {
         "pins_path": str(Path(pins_path).resolve()),
-        "pins_sha256": hashlib.sha256(Path(pins_path).read_bytes()).hexdigest(),
+        # K1: `_load_pins_sidecar_for_preflight` が返す digest は検証に使った
+        # のと**同一のバイト列**から計算済み——ここで改めてファイルを読み直す
+        # と、検証（パース時点の内容）と記録（この 2 回目の読み取り時点の
+        # 内容）が別読みになり、その間の置換をすり替えとして見逃す穴が戻って
+        # しまう。必ずこの digest を再利用する。
+        "pins_sha256": pins_sha256,
         "audio_sha256": dict(audio_sha256),
     }
 

@@ -4529,3 +4529,84 @@ def test_out_can_differ_from_pins_sidecar(
     assert harness.main() == 0
     assert len(calls) == 1
     assert calls[0]["pins_path"] == pins_path
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 9 ラウンド（K1）: sidecar の同一バイトからの hash 導出
+# --------------------------------------------------------------------------- #
+def test_load_pins_sidecar_for_preflight_reads_file_exactly_once(
+    tmp_path: Path, monkeypatch
+):
+    """`_load_pins_sidecar_for_preflight` は pins ファイルを 1 回だけ読み、
+    パースと digest の両方をその単一読みから導出する（K1 対応の主眼）。
+    """
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        json.dumps({"schema": "m3d-pairs-pins/0.3", "manifest_sha256": "0" * 64, "audio_sha256": {}}),
+        encoding="utf-8",
+    )
+    expected_bytes = pins_path.read_bytes()
+    expected_digest = hashlib.sha256(expected_bytes).hexdigest()
+
+    real_read_bytes = Path.read_bytes
+    call_count = {"n": 0}
+
+    def _counting_read_bytes(self):
+        if self == pins_path:
+            call_count["n"] += 1
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    doc, digest = harness._load_pins_sidecar_for_preflight(pins_path)
+
+    assert call_count["n"] == 1
+    assert digest == expected_digest
+    assert doc["schema"] == "m3d-pairs-pins/0.3"
+
+
+def test_run_pins_preflight_pins_sha256_reflects_single_read_not_replaced_copy(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """sidecar の読み取り直後（パース済みの内容が確定した後）にファイルが
+    置換されても、report に記録される `pins_sha256` は**パースに使ったのと
+    同じバイト列**の digest のまま——別読みで置換後の内容を拾わない（K1
+    対応の主眼: 従来はここが別読みだったため、この窓で「第 1 の文書で検証・
+    第 2 の文書の digest を記録」というすり替えが起こり得た）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+    original_digest = hashlib.sha256(pins_path.read_bytes()).hexdigest()
+
+    manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    pairs_spec = harness._validate_manifest(
+        yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    )
+
+    real_read_bytes = Path.read_bytes
+    triggered = {"done": False}
+
+    def _read_then_replace(self):
+        data = real_read_bytes(self)
+        if not triggered["done"] and self == pins_path:
+            triggered["done"] = True
+            # パース用の読み取りが完了した直後にファイルを置換する——旧実装
+            # のように `pins_sha256` 用の別読みが残っていれば、この置換後の
+            # 内容を拾ってしまう。
+            pins_path.write_bytes(data + b"\n// replaced-immediately-after-read")
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", _read_then_replace)
+
+    result = harness._run_pins_preflight(
+        pins_path=pins_path, manifest_sha256=manifest_sha256, pairs_spec=pairs_spec
+    )
+
+    assert triggered["done"] is True
+    assert result["pins_sha256"] == original_digest
+    # sanity: ファイルは実際に置換されており（現物の digest は元と異なる）、
+    # それでも記録された digest はパース時点のバイト列のままであることの確認。
+    assert hashlib.sha256(pins_path.read_bytes()).hexdigest() != original_digest
+    assert result["pins_sha256"] != hashlib.sha256(pins_path.read_bytes()).hexdigest()

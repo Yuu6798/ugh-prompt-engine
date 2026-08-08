@@ -223,8 +223,6 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   - pitch: **+3 半音、−5 半音**（±2..5 の範囲内・両方向・非対称）
   - stretch: **rate 0.87、1.12**（±8..15% の範囲内・両方向）
   - → 4 positive 対 / clip（original vs variant）。tuning 48 対・holdout 24 対
-- 抽出ファイル数: 18 original + 72 variant = 90 file × run2 = 180 crepe 起動（timing 実測で規模調整可。
-  調整する場合は variant を pitch+3 / rate 0.87 の 2 種へ半減 = 90 起動。**調整判断は実測前に確定**）
 
 ### 1.2 negative_cross（実声・異曲対）
 - tuning: tuning clip の original 同士を id 昇順で環状ペア（i, i+1）= 12 対
@@ -236,13 +234,98 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   `tests/fixtures/melody_bench/m3d_synth_specs.yaml`（新規。凍結済み synthesis_specs.yaml は不変更）
 - positive: 合成旋律 2 本（tuning 1 / holdout 1）× 移調 +3 / 変速 0.9 = 4 対
 - **狙い撃ち negative**（軸単独弁別の診断）:
-  - negative_rhythm: 同音程列・別 IOI（note_dur/gap を変えた spec 対）tuning 2 対
+  - negative_rhythm: 同音程列・別リズム（フレーズ内 note タイミングを変えた spec 対）tuning 2 対。
+    **（Codex レビュー第 9 ラウンド追補・K2・実測前の事前登録修正）**
+    当初案は「フレーズ内一様なテンポ差」（note_dur_sec/note_gap_sec を一様スケール）
+    で b 側を作る設計だったが、M3 の IOI/duration 表現（`build_sequences`）は
+    連続比の log2 のみを見る**テンポ不変**設計のため、一様スケールされたテンポ差は
+    両側とも全ゼロの log 比列に潰れ、rhythm 軸の類似度が構造的に 1.0 になり
+    「同音程・別リズム」の診断が成立しない欠陥があった（保証された非分離を比較器の
+    欠陥と誤帰属しうる）。加えて対 2 の当初案はフレーズ間 gap の差にも依拠していたが、
+    比較器はフレーズ分割後に軸を計算するためフレーズ間 gap の差は比較対象に現れない
+    （不可視）。実測開始前（本実測データ収集前）に是正: b 側をフレーズ内非一様
+    （長短交互パターン。`scripts/build_melody_bench.py` に `note_durs_sec`——フレーズ内
+    ノート単位で note_dur_sec を上書きできる任意フィールド——を新設）に設計変更した。
+    「診断が構造的に成立しうる fixture である」ことは `tests/test_melody_comparison.py`
+    の `test_m3d_negative_rhythm_pair{1,2}_is_structurally_diagnosable` が
+    `build_sequences` を直接通した機械アサートで保証する（同音程列を保った上で
+    duration/IOI の log2 比列が両側とも全ゼロにはならず実質的に相違することを確認）。
+    manifest の pair 構成（pair_id・パス）は builder（`scripts/build_m3d_pairs.py`）の
+    静的な命名規則にのみ依存し spec の note タイミング値には依存しないため、本修正で
+    不変のまま（構造上自明——確認済み）。
   - negative_interval: 同リズム・別音程列（phrases の音程だけ差し替え）tuning 2 対
 - **フォールバック意味論（事前登録）**: 合成素材が M1 観測ゲートまたは crepe 抽出で
   not_comparable に落ちた場合、当該対は「not_measured」として正直会計し、
   **軸校正の成否判定は vocadito 系（1.1+1.2）のみで行う**。合成の狙い撃ち検証は
   診断情報（成立すれば軸弁別の傍証、落ちれば S-direct 帯の既知欠測）であり、
   校正成立のゲートには入れない。
+
+### 1.4 crepe 起動数会計（pair 基準。Codex レビュー第 9 ラウンド追補・K3）
+
+**訂正の経緯**: 従来の §1.1 は「18 original + 72 variant = 90 file × run2 = 180 crepe 起動」
+というファイル基準の誤算だった——ハーネス（`run_melody_comparison.run_comparison`）は
+観測を音声ファイル単位でキャッシュせず、**pair ごとに `route_runner` を 2 回呼ぶ**
+（`audio_a`/`audio_b` それぞれ 1 回。同一ファイルが複数 pair から参照されても
+pair の数だけ呼ばれる——例えば negative_cross は original ファイルの再利用でも
+「追加抽出コストゼロ」ではなく pair 数 × 2 回の起動が発生する）。holdout ロック中
+（凍結前）の holdout pair は音声を一切読まずスタブ化される（`status:
+holdout_locked_until_frozen`）ため 0 起動。以下は manifest 実物（98 対。
+`build_m3d_pairs.crosstab` で確認済み）から数えた正確な内訳。
+
+**pair 内訳**（tuning / holdout）:
+
+| kind | tuning | holdout | 計 |
+|---|---|---|---|
+| positive_transform（vocadito） | 48 | 24 | 72 |
+| negative_cross（vocadito） | 12 | 6 | 18 |
+| positive_transform（synth） | 2 | 2 | 4 |
+| negative_rhythm（synth） | 2 | 0 | 2 |
+| negative_interval（synth） | 2 | 0 | 2 |
+| **計** | **66** | **32** | **98** |
+
+**起動数（full 規模。§0 の 5 手順に対応）**:
+
+| フェーズ | 対象 pair | 1 run あたり起動数（pair×2） | 回数 | 小計 |
+|---|---|---|---|---|
+| tuning phase run（手順 2。holdout ロック中） | tuning 66 対 | 132 | ×2（repeats） | 264 |
+| holdout 検証 run（手順 5。holdout unlock 後・全 98 対処理） | 98 対（tuning 66 + holdout 32） | 196 | ×1（一度検証） | 196 |
+| **総計** | | | | **460** |
+
+（holdout 検証 run は「holdout pair だけ」を選んで走らせる仕組みをハーネスは持たず、
+manifest 全体を毎回処理する——unlock 後は tuning 66 対も再度起動される。tuning phase
+run の内訳は negative_cross のみ切り出すと 12 対 × 2 = 24 起動/run、のように pair 種別
+ごとに機械的に算出できる。）
+
+**半減 fallback 適用時**（variant を pitch+3st / rate x0.87 の 2 種へ縮約。timing 実測で
+規模調整が必要な場合のみ・調整判断は実測前に確定): positive_transform（vocadito）が
+tuning 24・holdout 12（計 36）へ半減し、他 kind は不変。
+
+| kind | tuning | holdout | 計 |
+|---|---|---|---|
+| positive_transform（vocadito・半減） | 24 | 12 | 36 |
+| negative_cross（vocadito） | 12 | 6 | 18 |
+| positive_transform（synth） | 2 | 2 | 4 |
+| negative_rhythm（synth） | 2 | 0 | 2 |
+| negative_interval（synth） | 2 | 0 | 2 |
+| **計** | **42** | **20** | **62** |
+
+| フェーズ | 1 run あたり起動数 | 回数 | 小計 |
+|---|---|---|---|
+| tuning phase run | 84 | ×2 | 168 |
+| holdout 検証 run（全 62 対） | 124 | ×1 | 124 |
+| **総計** | | | **292** |
+
+**観測再利用（キャッシュ）は実装しない**（判断・K3）: ハーネスへ音声ファイル単位の
+observation キャッシュを追加すれば起動数は削減できる（例: negative_cross の original
+再利用や、同一 clip が複数 positive 対の base として参照される場合）が、本ラウンドでは
+**採用しない**。理由: (a) 凍結済みハーネス（第 7/8/9 ラウンドの pins preflight・凍結
+コピー照合を含む TOCTOU 対策一式）へキャッシュ層を追加する変更は、正しさへのリスク
+（キャッシュキーの取り違え・pin 検証済みバイトとキャッシュ内容の不一致等の新規攻撃面）
+が計算節約の利得を上回る。(b) 起動数会計そのものの単純さ（pair × 2 固定・ファイル単位の
+重複を考慮しない）自体が検証可能性に資する——「pair 数を数えれば起動数が機械的に
+算出できる」という性質を、キャッシュ層は壊す（ヒット/ミスの実行時依存性が入り、
+事前登録時点で起動数を確定できなくなる）。full 規模採用の判断自体は維持し（既存の
+事前登録パラメータ・変形範囲は不変更）、算術のみを本ラウンドで訂正した。
 
 ## 2. 事前登録パラメータ（設計書 §6.2 の再確認 + 本実測の追加分）
 
