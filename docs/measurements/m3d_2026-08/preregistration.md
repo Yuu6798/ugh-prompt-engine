@@ -154,11 +154,38 @@ holdout 行をスタブ化し音声を読まない）で証明する。
   し、「検証（sidecar 記録の整合性 + G2 の衝突検査）→ 書込」の順序は
   `check_existing`/`main()` の呼び出し順そのものから構造的に保証されるため、
   追加の順序制御コードは不要とした
+- **（Codex レビュー第 7 ラウンド追補・P1）** 事前登録の実行手順（本節）は
+  生成 → `run_melody_comparison.py` へ直行するが、従来ハーネスは
+  `m3d_pairs_pins.json` を一切読まなかった——公開後に WAV/manifest が改変
+  されても run×2 が改変バイトをそのまま新 digest として記録し、evaluate も
+  その manifest に束縛されるため、fail-closed 信号なしで改変刺激が校正に
+  混入し得た。pin 検証を任意の standalone（`--check-only`）から、ハーネスの
+  **強制 preflight** へ昇格した: `run_comparison` に `pins_path` 引数（CLI
+  `--pins`）を追加し、publishable な run（`route_runner` 非注入 = 実抽出
+  経路）はこれを必須化（未指定は抽出開始前に fail-closed）。抽出
+  （`runner()` 呼び出し）を一切開始する前に (a) sidecar のスキーマ/必須
+  フィールド検証 (b) manifest 現物のバイト sha256 と sidecar 記録の一致
+  (c) manifest が参照する全 audio path の sidecar 記録存在 + 現物 digest
+  一致（キャッシュを踏まない実バイト読み）を検証し、1 件でも不一致・欠落
+  なら run 全体を中止する。読み取りロジックは builder（
+  `scripts/build_m3d_pairs.py`）の権威スキーマを、ハーネス側で必要最小限
+  （schema/manifest_sha256/audio_sha256 の 3 フィールドのみ）に独立複製する
+  （builder はハーネスを import しない設計のため——`_material_of_pair_id`
+  と同じパターン）。holdout ロック規律との整合: preflight の digest 照合は
+  「音声をセンサーに掛ける」のではなくバイト検証のため事前登録の順序証明を
+  壊さない——安全側の判断として、ロック中でも holdout pair の WAV を含め
+  **全 pair** を照合する。run report には `pins_preflight_verified`（bool）・
+  `pins_path`・`pins_sha256` を記録する（evaluate 側での追加検証は今回
+  スコープ外・記録のみ）。`--check-only` は builder 側の独立した点検計器
+  として引き続き残置する（本 preflight は必要最小限の検証のみで build 入力
+  pin・material マップ・summary pin 等 builder 固有の完全性検査までは代替
+  しない）。手順を「生成 → **pins preflight 付き** run×2 → evaluate → …」
+  へ改訂（下記 §0 参照）
 
 ## 0. 完走の定義（STATUS.md P2 キューの 5 手順）
 
 1. pairs manifest 作成（vocadito positive 変形対 + negative_cross/rhythm/interval、tuning/holdout split）→ **実測前に commit（事前登録）**
-2. `run_melody_comparison.py` run ×2（repeats、crepe_direct 経路）
+2. `run_melody_comparison.py` **pins preflight 付き** run ×2（repeats、crepe_direct 経路・`--pins` に builder が公開した `m3d_pairs_pins.json` を指定——未指定・pin 不一致は抽出開始前に fail-closed。Codex レビュー第 7 ラウンド対応）
 3. evaluate → マージン表 + 凍結提案 + floor 候補
 4. registry 凍結 commit（tuning 由来等値は evaluate が検証）
 5. holdout 一度検証 → 軸別判定 doc + PR

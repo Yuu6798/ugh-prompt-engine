@@ -8,6 +8,7 @@ holdout ロック、route_runner_injected による calibration verdict 発行�
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -4200,3 +4201,168 @@ def test_material_accounting_synthetic_holdout_rows_measured_when_unlocked(
     # synth holdout pair の内容（上で一切上書きしていない自然な計測結果）が
     # 判定に影響を与えていない。
     assert verdict["holdout_validation_status"] == "confirmed"
+
+
+# --------------------------------------------------------------------------- #
+# レビュー対応 第 7 ラウンド（P1）: pins sidecar 強制 preflight
+# --------------------------------------------------------------------------- #
+def _pins_audio_sha256(audio_paths: Dict[str, str]) -> Dict[str, str]:
+    return {
+        audio_paths[label]: hashlib.sha256(Path(audio_paths[label]).read_bytes()).hexdigest()
+        for label in ("song_a", "song_a_transposed", "song_b")
+    }
+
+
+def _write_matching_pins_sidecar(
+    pins_path: Path, manifest_path: Path, audio_paths: Dict[str, str]
+) -> None:
+    """`manifest_path`/`audio_paths` の現物と一致する pins sidecar を書く
+    （harness の `_load_pins_sidecar_for_preflight` が読む最小スキーマ:
+    schema/manifest_sha256/audio_sha256 の 3 フィールドのみ）。
+    """
+    pins_path.write_text(
+        json.dumps(
+            {
+                "schema": "m3d-pairs-pins/0.3",
+                "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                "audio_sha256": _pins_audio_sha256(audio_paths),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _counting_route_runner(inner: "harness.RouteRunner") -> "Tuple[harness.RouteRunner, Dict[str, int]]":
+    """`inner` を呼び出し回数カウンタで包む——「抽出開始前に fail-closed」を
+    「route_runner が一度も呼ばれていない」という直接観測可能な事実で確認する。
+    """
+    counter = {"n": 0}
+
+    def _runner(audio_path: str) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+        counter["n"] += 1
+        return inner(audio_path)
+
+    return _runner, counter
+
+
+def test_run_comparison_publishable_run_requires_pins(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """route_runner 非注入（publishable）の run は `--pins`（`pins_path`）が
+    必須——未指定は抽出を一切開始せず fail-closed（P1 対応の主眼）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+
+    with pytest.raises(ValueError, match="--pins が必須"):
+        harness.run_comparison(manifest_path=manifest_path)
+
+
+def test_run_comparison_pins_preflight_rejects_tampered_wav_before_extraction(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """公開後に WAV が改変された場合、preflight が digest mismatch を検出し、
+    route_runner を一度も呼ばずに run 全体を fail-closed で中止する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+
+    # pins 記録後に song_b の中身を改変する（manifest 自体は無改変）。
+    Path(audio_paths["song_b"]).write_bytes(b"tampered-audio-bytes")
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    with pytest.raises(ValueError, match="pins preflight 失敗"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+    assert counter["n"] == 0
+
+
+def test_run_comparison_pins_preflight_rejects_tampered_manifest_before_extraction(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """公開後に manifest が改変された場合（音声は無改変）、preflight が
+    manifest sha256 mismatch を検出し、route_runner を一度も呼ばずに run 全体を
+    fail-closed で中止する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+
+    # pins 記録後に manifest を改変する（YAML として引き続きパースできる
+    # コメント追記——`_validate_manifest` の構造検査自体は通る）。
+    with manifest_path.open("ab") as handle:
+        handle.write(b"# tampered\n")
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    with pytest.raises(ValueError, match="manifest sha256 mismatch"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+    assert counter["n"] == 0
+
+
+def test_run_comparison_pins_preflight_rejects_missing_sidecar(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "does_not_exist_pins.json"
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    with pytest.raises(ValueError, match="pins サイドカーの読み込みに失敗"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+        )
+    assert counter["n"] == 0
+
+
+def test_run_comparison_pins_preflight_passes_and_run_proceeds(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """改変が一切ない正常系: preflight を通過し、run が実行され（route_runner
+    が実際に呼ばれ）、report に検証実施の事実（`pins_preflight_verified` /
+    `pins_path` / `pins_sha256`）が記録される。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    pins_path = tmp_path / "pins.json"
+    _write_matching_pins_sidecar(pins_path, manifest_path, audio_paths)
+
+    runner, counter = _counting_route_runner(_fake_route_runner(_notes_by_path(audio_paths)))
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, pins_path=pins_path
+    )
+
+    assert counter["n"] > 0  # 抽出が実際に実行された
+    assert report["pins_preflight_verified"] is True
+    assert report["pins_path"] == str(pins_path.resolve())
+    assert report["pins_sha256"] == hashlib.sha256(pins_path.read_bytes()).hexdigest()
+    # holdout ロック中は holdout pair の comparison が書かれないため、
+    # tuning pair で run が正常完走したことを確認する。
+    assert "comparison" in report["pairs"]["_real_p_pos_tuning"]
+
+
+def test_run_comparison_injected_run_without_pins_skips_preflight(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """route_runner 注入（テスト run）は `pins_path` 省略が従来どおり許される
+    ——preflight 自体を skip し、report にも pins 関連フィールドを記録しない
+    （後方互換の確認）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert report["pins_preflight_verified"] is False
+    assert "pins_path" not in report
+    assert "pins_sha256" not in report

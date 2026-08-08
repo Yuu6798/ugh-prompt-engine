@@ -16,6 +16,18 @@ standalone script（`svprpe` サブコマンド化しない・sys.path 注入は
    記録し、evaluate は calibration verdict の発行を拒否する — M2 と同じ流儀）
 4. protected-path（`--out` が manifest / registry / report / manifest が指す音声入力を
    上書きしない）
+5. pins sidecar 強制 preflight（レビュー対応 第 7 ラウンド）: publishable な run
+   （route_runner 非注入・実抽出経路）は `scripts/build_m3d_pairs.py` が公開する
+   pins sidecar（`--pins`）の指定を必須とし、抽出を一切開始する前に manifest の
+   バイト sha256・manifest が参照する全 audio path の digest を sidecar 記録と
+   照合する（`_run_pins_preflight` 参照）。従来は `--check-only` という独立の
+   standalone 点検があるだけで、run phase そのものは pin を一切読まなかった
+   ——公開後に WAV/manifest が改変されても run が改変バイトを新たな digest として
+   記録してしまい、fail-closed 信号なしで改変刺激が校正に混入し得た。
+   `--check-only` は builder 側の独立した点検計器として引き続き残す（本
+   preflight と役割は重複するが、本 preflight は「必要最小限」のみを検証し
+   build 入力 pin・material マップ・summary pin 等 builder 固有の完全性検査は
+   代替しない）。
 
 適用帯域: 本ハーネスの既定 route は **clear_lead 経路限定**（User 決裁 2026-07-30・
 単離済み clean lead 帯）。実音声・実 crepe による slow-lane 実測は本セッションでは
@@ -34,9 +46,13 @@ publishable report が crepe 系経路であること・melodia 系経路が inj
 
 使い方::
 
-    python scripts/run_melody_comparison.py --pairs pairs.yaml --out run1.json
-    python scripts/run_melody_comparison.py --pairs pairs.yaml --out run2.json
+    python scripts/run_melody_comparison.py --pairs pairs.yaml --pins pins.json --out run1.json
+    python scripts/run_melody_comparison.py --pairs pairs.yaml --pins pins.json --out run2.json
     python scripts/run_melody_comparison.py --evaluate run1.json run2.json --out verdict.json
+
+    # `--pins` は run phase（route_runner 非注入 = publishable）で必須。
+    # `scripts/build_m3d_pairs.py` が公開する m3d_pairs_pins.json を渡す
+    # （レビュー対応 第 7 ラウンド）。
 
     # 別チェックアウト（run 時と evaluate 時で manifest の絶対パスが変わる環境）
     # では、report 記録の manifest_path が存在しない場合に --pairs を併用する
@@ -98,7 +114,7 @@ from svp_rpe.melody.observability import (  # noqa: E402
 )
 from svp_rpe.melody.representation import load_m3_registry  # noqa: E402
 from svp_rpe.melody.routing import select_routes  # noqa: E402
-from svp_rpe.utils.hashing import sha256_of_files  # noqa: E402
+from svp_rpe.utils.hashing import file_sha256, sha256_of_files  # noqa: E402
 
 M3_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3_comparison_registry.yaml"
 M1_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
@@ -407,6 +423,122 @@ def _manifest_audio_paths(manifest_path: Path) -> "set[Path]":
         paths.add(Path(pair["audio_a"]).resolve())
         paths.add(Path(pair["audio_b"]).resolve())
     return paths
+
+
+# --------------------------------------------------------------------------- #
+# pins sidecar 強制 preflight（レビュー対応 第 7 ラウンド・P1）
+# --------------------------------------------------------------------------- #
+# `scripts/build_m3d_pairs.py` の pins sidecar（`m3d_pairs_pins.json`）が
+# 唯一の権威スキーマ定義元（`_PINS_SCHEMA` / `_load_and_validate_pins`）。
+# builder はハーネスをインポートしない設計のため（`_material_of_pair_id` と
+# 同じ理由）、本 preflight が実際に必要とする最小限のフィールド
+# （`schema`/`manifest_sha256`/`audio_sha256`）だけを読者側で独立に複製する
+# ——builder 側の完全なスキーマ検証（build 入力 pin・material マップ・summary
+# pin 等）はここでは複製しない（それらは `--check-only` という独立の点検
+# 計器の責務のまま残す）。
+_PINS_SIDECAR_SCHEMA_EXPECTED = "m3d-pairs-pins/0.3"
+_PINS_SIDECAR_MINIMAL_REQUIRED_KEYS = {"schema", "manifest_sha256", "audio_sha256"}
+
+
+def _load_pins_sidecar_for_preflight(path: Path) -> Dict[str, Any]:
+    """pins sidecar を run phase preflight 用に必要最小限だけ読み検証する。
+
+    `_PINS_SIDECAR_MINIMAL_REQUIRED_KEYS` を参照。schema 不一致・必須キー欠落・
+    型不正のいずれも fail-closed（`ValueError`）で拒否する。
+    """
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"{path}: pins サイドカーの読み込みに失敗 (fail-closed): {exc}") from exc
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: pins サイドカーの JSON parse に失敗 (fail-closed): {exc}") from exc
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path}: pins サイドカーが mapping でない (fail-closed)")
+    if doc.get("schema") != _PINS_SIDECAR_SCHEMA_EXPECTED:
+        raise ValueError(
+            f"{path}: schema が {_PINS_SIDECAR_SCHEMA_EXPECTED!r} でない (fail-closed): "
+            f"{doc.get('schema')!r}"
+        )
+    missing = _PINS_SIDECAR_MINIMAL_REQUIRED_KEYS - set(doc)
+    if missing:
+        raise ValueError(f"{path}: 必須キー欠落 (fail-closed): {sorted(missing)}")
+    manifest_sha = doc["manifest_sha256"]
+    if not isinstance(manifest_sha, str) or len(manifest_sha) != 64:
+        raise ValueError(f"{path}: manifest_sha256 が不正な形式 (fail-closed): {manifest_sha!r}")
+    if not isinstance(doc["audio_sha256"], dict):
+        raise ValueError(f"{path}: audio_sha256 が mapping でない (fail-closed)")
+    return doc
+
+
+def _run_pins_preflight(
+    *,
+    pins_path: Path,
+    manifest_sha256: str,
+    pairs_spec: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """抽出を一切開始する前に pins sidecar を強制検証する（fail-closed）。
+
+    1. sidecar のスキーマ/必須フィールド検証（`_load_pins_sidecar_for_preflight`）
+    2. manifest 現物のバイト sha256 と sidecar 記録 `manifest_sha256` の一致
+    3. manifest が参照する全 audio path について sidecar `audio_sha256` の記録
+       存在 + 現物との digest 一致（`file_sha256(..., use_cache=False)` —
+       キャッシュを踏むと同一プロセス内の別 (path, size, mtime) 一致による
+       TOCTOU 検出漏れが起こり得るため、必ず実バイトを読み直す）
+    のいずれか 1 件でも不一致・欠落があれば、抽出（`runner()` 呼び出し）を
+    一切開始せず fail-closed で拒否する——公開後に WAV/manifest が改変されて
+    いても、この preflight を通らない限り run 自体が始まらない。
+
+    holdout ロック規律との整合性（レビュー対応 第 7 ラウンド・設計判断の明記）:
+    ロック中の holdout pair は「音声をセンサーに掛けず・比較を計算しない」
+    契約（`run_comparison` 本体の for ループが `holdout_locked` 時に holdout
+    pair を skip するのと同じ規律）を持つが、本 preflight の digest 照合は
+    **音声をセンサーに掛けるのではなく生バイトの sha256 を取るだけ**であり、
+    axes の値を一切導出・参照しない——事前登録の順序証明（未凍結軸の値を
+    覗き見させない）を壊さない。判断に迷う場合は安全側を取る方針に従い、
+    **holdout ロック中であっても holdout pair の WAV を含め全 pair を digest
+    照合する**（改変検出はロックの趣旨そのものと整合し、対立しない）。この
+    ため `pairs_spec` 全件を対象にし、`holdout_locked` を引数に取らない
+    ——呼び出し側で holdout を除外するフィルタを通す必要はない。
+    """
+    pins_doc = _load_pins_sidecar_for_preflight(pins_path)
+
+    problems: List[str] = []
+    expected_manifest_sha = pins_doc["manifest_sha256"]
+    if manifest_sha256 != expected_manifest_sha:
+        problems.append(
+            f"manifest sha256 mismatch (actual={manifest_sha256} expected={expected_manifest_sha})"
+        )
+
+    audio_sha256 = pins_doc["audio_sha256"]
+    audio_paths: "set[str]" = set()
+    for pair in pairs_spec:
+        audio_paths.add(pair["audio_a"])
+        audio_paths.add(pair["audio_b"])
+    for rel_path in sorted(audio_paths):
+        expected = audio_sha256.get(rel_path)
+        if expected is None:
+            problems.append(f"{rel_path}: pins サイドカーに未登録 (fail-closed)")
+            continue
+        abs_path = Path(rel_path)
+        if not abs_path.exists():
+            problems.append(f"{rel_path}: ファイルが存在しない (fail-closed)")
+            continue
+        actual = file_sha256(abs_path, use_cache=False)
+        if actual != expected:
+            problems.append(f"{rel_path}: sha256 mismatch (actual={actual} expected={expected})")
+
+    if problems:
+        raise ValueError(
+            "pins preflight 失敗 (fail-closed; 抽出を開始せず run 全体を中止): "
+            + "; ".join(problems)
+        )
+
+    return {
+        "pins_path": str(Path(pins_path).resolve()),
+        "pins_sha256": hashlib.sha256(Path(pins_path).read_bytes()).hexdigest(),
+    }
 
 
 def _validate_frozen_axes(
@@ -856,6 +988,7 @@ def run_comparison(
     route_runner: Optional[RouteRunner] = None,
     registry_path: Path = M3_REGISTRY_PATH,
     m1_registry_path: Path = M1_REGISTRY_PATH,
+    pins_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """pairs manifest の全ペアを `compare_melodies` へ通し run report dict を返す。
 
@@ -865,10 +998,33 @@ def run_comparison(
     メカニズムだけを検証する。注入した事実は report 自身に
     ``route_runner_injected: true`` として刻み、evaluate はそれを calibration
     verdict 発行の拒否条件にする（M2 `run_melody_accuracy.py` と同じ規律）。
+
+    `pins_path`（レビュー対応 第 7 ラウンド・P1）: `scripts/build_m3d_pairs.py`
+    が公開する pins sidecar（`m3d_pairs_pins.json`）。**publishable な run
+    （`route_runner` 非注入 = 実抽出経路）は本引数を必須とする**——既存の
+    「publishable report は pin 記録必須・crepe 系経路限定」規律（evaluate
+    phase の `_require_pair_pins_present_for_publishable_reports` /
+    `_validate_route_for_run` の publishable 分岐）と同じ規律の run phase 側
+    への延長であり、未指定は抽出を一切開始せず fail-closed で拒否する
+    （`_run_pins_preflight` 参照）。注入（テスト）run は従来どおり省略可——
+    省略時は preflight 自体を skip する。指定した場合は注入 run でも preflight
+    を実施する（一律の検証コードパスにする方が単純で、テスト側が意図的に
+    preflight の挙動そのものを検証したい場合の妨げにならない）。
     """
     runner_injected = route_runner is not None
+    # route 制限（crepe 系限定/melodia 常時禁止）を pins 必須化より先に検証する
+    # ——両方とも「抽出開始前の fail-closed 拒否」だが、route 制限は route 名
+    # だけから即座に判定できる最も基礎的な構造チェックであり、既存の route
+    # 制限テスト（pins 未提供のまま route 名だけで拒否を確認する）の挙動を
+    # 変えないためにも先に評価する。
     route = _resolve_route(route_name)
     _validate_route_for_run(route_name, route, runner_injected=runner_injected)
+    if not runner_injected and pins_path is None:
+        raise ValueError(
+            "publishable な run（route_runner 非注入・実抽出経路）は --pins が必須 "
+            "(fail-closed): pins sidecar なしでは抽出開始前に manifest/audio の "
+            "digest を検証できない (レビュー対応 第 7 ラウンド)"
+        )
     runner: RouteRunner = route_runner or _default_route_runner(route_name)
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
@@ -883,6 +1039,19 @@ def run_comparison(
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     manifest = _yaml_load_no_dup_keys(manifest_bytes, what="pairs manifest")
     pairs_spec = _validate_manifest(manifest)
+
+    # レビュー対応 第 7 ラウンド（P1）: 抽出（runner 呼び出し）を一切開始する前に
+    # pins sidecar を強制検証する。`pins_path` 未指定はここまでに publishable
+    # run では既に拒否済み（上の早期 fail-closed）——ここへ到達するのは
+    # (a) pins_path 指定あり（publishable/injected 問わず）、または
+    # (b) injected run で pins_path 未指定、のいずれか。
+    pins_preflight: Optional[Dict[str, str]] = None
+    if pins_path is not None:
+        pins_preflight = _run_pins_preflight(
+            pins_path=pins_path,
+            manifest_sha256=manifest_sha256,
+            pairs_spec=pairs_spec,
+        )
 
     # holdout は `_holdout_unlocked` の全条件（status=frozen + axes 揃い +
     # coverage.floor_status=frozen + coverage.floor 値が有効）を満たすまで run
@@ -910,8 +1079,15 @@ def run_comparison(
         # sha256 一致でのみ manifest を受理する。
         "manifest_filename": Path(manifest_path).name,
         "manifest_sha256": manifest_sha256,
+        # レビュー対応 第 7 ラウンド（P1）: pins preflight を実施した事実（と
+        # pins sidecar 自体の sha256）を report に記録する。evaluate 側での
+        # 追加検証は今回スコープ外（記録のみ）。
+        "pins_preflight_verified": pins_preflight is not None,
         "pairs": {},
     }
+    if pins_preflight is not None:
+        results["pins_path"] = pins_preflight["pins_path"]
+        results["pins_sha256"] = pins_preflight["pins_sha256"]
     with tempfile.TemporaryDirectory(prefix="m3_comparison_freeze_") as staging_dir:
         for pair in pairs_spec:
             if pair["split"] == "holdout" and holdout_locked:
@@ -2888,6 +3064,18 @@ def main() -> int:
     parser.add_argument("--registry", type=Path, default=M3_REGISTRY_PATH)
     parser.add_argument("--m1-registry", type=Path, default=M1_REGISTRY_PATH)
     parser.add_argument(
+        "--pins",
+        type=Path,
+        default=None,
+        help=(
+            "run phase 用 pins sidecar（`scripts/build_m3d_pairs.py` が公開する "
+            "m3d_pairs_pins.json）。CLI からの run（route_runner 常に非注入 = "
+            "publishable）は本引数が必須——未指定は抽出開始前に fail-closed で "
+            "拒否する（レビュー対応 第 7 ラウンド。`run_comparison` の "
+            "`pins_path` 引数を参照）"
+        ),
+    )
+    parser.add_argument(
         "--evaluate",
         nargs="+",
         type=Path,
@@ -2946,6 +3134,7 @@ def main() -> int:
         route_name=args.route,
         registry_path=args.registry,
         m1_registry_path=args.m1_registry,
+        pins_path=args.pins,
     )
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
     print(f"wrote run report to {args.out} ({len(result['pairs'])} pairs)")
