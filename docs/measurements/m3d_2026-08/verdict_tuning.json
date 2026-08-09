@@ -1,0 +1,210 @@
+{
+  "calibrated_axes": [
+    "contour",
+    "interval"
+  ],
+  "coverage_floor_candidate": {
+    "candidate": 0.0,
+    "max": 0.7819548872180451,
+    "mean": 0.4744089348334661,
+    "min": 0.0,
+    "sample_count": 6
+  },
+  "evidence_thresholds_status": "uncalibrated",
+  "freeze_proposal": {},
+  "freeze_proposal_rejected_reason": "rejected_positive_not_comparable",
+  "holdout_locked_until_frozen": true,
+  "holdout_pair_ids_skipped": [
+    "nc_real_holdout_00_vocadito_20_vocadito_28",
+    "nc_real_holdout_01_vocadito_28_vocadito_34",
+    "nc_real_holdout_02_vocadito_34_vocadito_6",
+    "nc_real_holdout_03_vocadito_6_vocadito_7",
+    "nc_real_holdout_04_vocadito_7_vocadito_8",
+    "nc_real_holdout_05_vocadito_8_vocadito_20",
+    "pt_real_holdout_vocadito_20_pitch_m5",
+    "pt_real_holdout_vocadito_20_pitch_p3",
+    "pt_real_holdout_vocadito_20_rate_087",
+    "pt_real_holdout_vocadito_20_rate_112",
+    "pt_real_holdout_vocadito_28_pitch_m5",
+    "pt_real_holdout_vocadito_28_pitch_p3",
+    "pt_real_holdout_vocadito_28_rate_087",
+    "pt_real_holdout_vocadito_28_rate_112",
+    "pt_real_holdout_vocadito_34_pitch_m5",
+    "pt_real_holdout_vocadito_34_pitch_p3",
+    "pt_real_holdout_vocadito_34_rate_087",
+    "pt_real_holdout_vocadito_34_rate_112",
+    "pt_real_holdout_vocadito_6_pitch_m5",
+    "pt_real_holdout_vocadito_6_pitch_p3",
+    "pt_real_holdout_vocadito_6_rate_087",
+    "pt_real_holdout_vocadito_6_rate_112",
+    "pt_real_holdout_vocadito_7_pitch_m5",
+    "pt_real_holdout_vocadito_7_pitch_p3",
+    "pt_real_holdout_vocadito_7_rate_087",
+    "pt_real_holdout_vocadito_7_rate_112",
+    "pt_real_holdout_vocadito_8_pitch_m5",
+    "pt_real_holdout_vocadito_8_pitch_p3",
+    "pt_real_holdout_vocadito_8_rate_087",
+    "pt_real_holdout_vocadito_8_rate_112"
+  ],
+  "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+  "margin_table": {
+    "contour": {
+      "calibrated_candidate": true,
+      "margin": 0.21249109958295187,
+      "negative_max": 0.672566371681416,
+      "positive_min": 0.8850574712643678
+    },
+    "interval": {
+      "calibrated_candidate": true,
+      "margin": 0.17271895025938355,
+      "negative_max": 0.6548672566371682,
+      "positive_min": 0.8275862068965517
+    },
+    "rhythm": {
+      "calibrated_candidate": false,
+      "margin": 0.10784790135455263,
+      "negative_max": 0.01485148514851485,
+      "positive_min": 0.12269938650306748
+    }
+  },
+  "material_accounting": {
+    "real_voice": {
+      "calibrated_axes": [
+        "contour",
+        "interval"
+      ],
+      "holdout_pair_count": 30,
+      "margin_table": {
+        "contour": {
+          "calibrated_candidate": true,
+          "margin": 0.21249109958295187,
+          "negative_max": 0.672566371681416,
+          "positive_min": 0.8850574712643678
+        },
+        "interval": {
+          "calibrated_candidate": true,
+          "margin": 0.17271895025938355,
+          "negative_max": 0.6548672566371682,
+          "positive_min": 0.8275862068965517
+        },
+        "rhythm": {
+          "calibrated_candidate": false,
+          "margin": 0.10784790135455263,
+          "negative_max": 0.01485148514851485,
+          "positive_min": 0.12269938650306748
+        }
+      },
+      "not_comparable_negative_count": 11,
+      "not_comparable_positive_count": 46,
+      "role": "calibration",
+      "tuning_pair_count": 60
+    },
+    "synthetic": {
+      "calibrated_axes_diagnostic_only": [],
+      "holdout_pair_count": 2,
+      "holdout_rows": {
+        "pt_synth_holdout_m3d_synth_holdout_pos_pitch_p3": {
+          "status": "locked_skipped"
+        },
+        "pt_synth_holdout_m3d_synth_holdout_pos_rate_090": {
+          "status": "locked_skipped"
+        }
+      },
+      "margin_table": {
+        "contour": {
+          "calibrated_candidate": false,
+          "margin": null,
+          "negative_max": null,
+          "positive_min": null,
+          "reason": "negative_empty"
+        },
+        "interval": {
+          "calibrated_candidate": false,
+          "margin": null,
+          "negative_max": null,
+          "positive_min": null,
+          "reason": "negative_empty"
+        },
+        "rhythm": {
+          "calibrated_candidate": false,
+          "margin": null,
+          "negative_max": null,
+          "positive_min": null,
+          "reason": "insufficient_positive_or_negative_samples"
+        }
+      },
+      "not_comparable_negative_count": 3,
+      "not_comparable_positive_count": 2,
+      "note": "\u8a3a\u65ad\u5c02\u7528\uff08\u4e8b\u524d\u767b\u9332 \u00a71.3 \u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af\u610f\u5473\u8ad6\u306e\u6a5f\u68b0\u5f37\u5236\uff09\u3002not_comparable \u306f not_measured \u3068\u3057\u3066\u6b63\u76f4\u4f1a\u8a08\u3059\u308b\u306e\u307f\u3067\u3001\u51cd\u7d50\u63d0\u6848\u30fbholdout \u5224\u5b9a\u3092\u542b\u3080 calibration verdict \u306b\u306f\u4e00\u5207\u5f71\u97ff\u3057\u306a\u3044\u3002",
+      "role": "diagnostic",
+      "tuning_pair_count": 6
+    }
+  },
+  "not_comparable_negative_count": 11,
+  "not_comparable_positive_count": 46,
+  "recorded_utc": "2026-08-09T06:41:40+00:00",
+  "repeats_consistent": true,
+  "repeats_count": 2,
+  "repeats_verified": true,
+  "route_runner_injected": false,
+  "schema_version": "m3-comparison-verdict/0.1",
+  "skipped_pairs": [
+    "nc_real_tuning_00_vocadito_10_vocadito_11:not_comparable",
+    "nc_real_tuning_01_vocadito_11_vocadito_15:not_comparable",
+    "nc_real_tuning_02_vocadito_15_vocadito_16:not_comparable",
+    "nc_real_tuning_03_vocadito_16_vocadito_17:not_comparable",
+    "nc_real_tuning_05_vocadito_22_vocadito_24:not_comparable",
+    "nc_real_tuning_06_vocadito_24_vocadito_3:not_comparable",
+    "nc_real_tuning_07_vocadito_3_vocadito_30:not_comparable",
+    "nc_real_tuning_08_vocadito_30_vocadito_32:not_comparable",
+    "nc_real_tuning_09_vocadito_32_vocadito_40:not_comparable",
+    "nc_real_tuning_10_vocadito_40_vocadito_5:not_comparable",
+    "nc_real_tuning_11_vocadito_5_vocadito_10:not_comparable",
+    "pt_real_tuning_vocadito_10_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_10_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_10_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_10_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_11_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_11_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_11_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_11_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_15_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_15_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_15_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_15_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_16_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_16_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_16_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_16_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_17_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_17_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_17_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_22_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_22_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_22_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_24_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_24_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_24_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_24_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_30_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_30_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_30_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_30_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_32_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_32_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_32_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_32_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_3_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_3_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_3_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_3_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_40_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_40_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_40_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_40_rate_112:not_comparable",
+    "pt_real_tuning_vocadito_5_pitch_m5:not_comparable",
+    "pt_real_tuning_vocadito_5_pitch_p3:not_comparable",
+    "pt_real_tuning_vocadito_5_rate_087:not_comparable",
+    "pt_real_tuning_vocadito_5_rate_112:not_comparable"
+  ]
+}

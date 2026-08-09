@@ -1,0 +1,5073 @@
+{
+  "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+  "m3_code_sha256": "c2b6fb520aea0b8b86e67835663304431e16ac5ac8fa0d8b37ed1e308b913c0f",
+  "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+  "manifest_filename": "m3d_pairs_manifest.yaml",
+  "manifest_path": "/home/user/ugh-prompt-engine/tests/fixtures/melody_bench/m3d_pairs_manifest.yaml",
+  "manifest_sha256": "99537c8ae8c06d04516f77b102f4b5585012a732445238b63ce8184b04ff6aa2",
+  "mode": "run",
+  "pairs": {
+    "nc_real_holdout_00_vocadito_20_vocadito_28": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "nc_real_holdout_01_vocadito_28_vocadito_34": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "nc_real_holdout_02_vocadito_34_vocadito_6": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "nc_real_holdout_03_vocadito_6_vocadito_7": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "nc_real_holdout_04_vocadito_7_vocadito_8": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "nc_real_holdout_05_vocadito_8_vocadito_20": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "nc_real_tuning_00_vocadito_10_vocadito_11": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_10.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_11.wav",
+      "audio_sha256_a": "0978bde1c130ae26a9cfcd90012f12fdaf9877bbe45cf21c5237ba7ac9b8703b",
+      "audio_sha256_b": "c4d669eca7e25c5037b191805b54b2c990d5e31bc77c9c77188b140100297197",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "67b07f185686c253975e94760754735ef9445e3a9cc2ab79f49a4fcba7adc947",
+      "observation_sha256_b": "3270ec4a9d134f40b37c120a03b46d7a03722b1f2e413096eb7e14d7a5bd9d21",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_01_vocadito_11_vocadito_15": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_11.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_15.wav",
+      "audio_sha256_a": "c4d669eca7e25c5037b191805b54b2c990d5e31bc77c9c77188b140100297197",
+      "audio_sha256_b": "0bc39b00e14881b20756f48530a4688e1bb7aa1c24ee09d4351a327e3acce28d",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "3270ec4a9d134f40b37c120a03b46d7a03722b1f2e413096eb7e14d7a5bd9d21",
+      "observation_sha256_b": "3b55779030ef6c3e8ecc15ed89a7e904f7d3fded5facb6903e7ce32ec2988795",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_02_vocadito_15_vocadito_16": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_15.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_16.wav",
+      "audio_sha256_a": "0bc39b00e14881b20756f48530a4688e1bb7aa1c24ee09d4351a327e3acce28d",
+      "audio_sha256_b": "595e80b5382812702e64d5b6a8f453d9744391166d47c7020cc1d6e71e310e25",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "3b55779030ef6c3e8ecc15ed89a7e904f7d3fded5facb6903e7ce32ec2988795",
+      "observation_sha256_b": "b4fbb870759f4f1da7525b29ef944c434ce25e91fadf795ed6291b706ff18e88",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_03_vocadito_16_vocadito_17": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_16.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_17.wav",
+      "audio_sha256_a": "595e80b5382812702e64d5b6a8f453d9744391166d47c7020cc1d6e71e310e25",
+      "audio_sha256_b": "4b144cdbbcdb318f19c0aa5ac1e2675dbe8d6cb8941286d251959f25e4c96998",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "b4fbb870759f4f1da7525b29ef944c434ce25e91fadf795ed6291b706ff18e88",
+      "observation_sha256_b": "55929663c55620e41bb155cd6907af94368bd76c3ab512f77de5c29570f55400",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_04_vocadito_17_vocadito_22": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_17.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_22.wav",
+      "audio_sha256_a": "4b144cdbbcdb318f19c0aa5ac1e2675dbe8d6cb8941286d251959f25e4c96998",
+      "audio_sha256_b": "6629d0ecd7acddd1ce2877d00bc7ef80dc01fdd20f3225b9c2ed907da12f989e",
+      "comparison": {
+        "axes": {
+          "contour": 0.672566371681416,
+          "interval": 0.6548672566371682,
+          "rhythm": 0.01485148514851485
+        },
+        "axis_evidence": {
+          "contour": "uncalibrated",
+          "interval": "uncalibrated",
+          "rhythm": "uncalibrated"
+        },
+        "coverage": {
+          "aligned_note_fraction_a": 0.8698630136986302,
+          "aligned_note_fraction_b": 0.9473684210526315,
+          "phrase_coverage_a": 1.0,
+          "phrase_coverage_b": 1.0
+        },
+        "evidence": "none",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "aligned_pair_count": 113,
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "phrase_correspondence_count": 2,
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct",
+          "sequence_sha256_a": "2a115e8cf6ded9d7da8c6916e48268f477116117bc22f6304b764e6b7c21dbad",
+          "sequence_sha256_b": "b6c57f065cc0f61247e5b0573b1a44b9a1ce715af635ec8acf341e0b89c2c679",
+          "unmatched_phrase_count_a": 0,
+          "unmatched_phrase_count_b": 0
+        },
+        "reasons": [
+          "evidence_thresholds_uncalibrated"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "55929663c55620e41bb155cd6907af94368bd76c3ab512f77de5c29570f55400",
+      "observation_sha256_b": "98124897b95d4856c531f7ea99b4b99423d3187288feb4698771d5e46036a3b5",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_05_vocadito_22_vocadito_24": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_22.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_24.wav",
+      "audio_sha256_a": "6629d0ecd7acddd1ce2877d00bc7ef80dc01fdd20f3225b9c2ed907da12f989e",
+      "audio_sha256_b": "22fb2df57dc7b68987cda67b30171c626a7818b9ab7db02185e8ea0a0a6db7ee",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "98124897b95d4856c531f7ea99b4b99423d3187288feb4698771d5e46036a3b5",
+      "observation_sha256_b": "e8bc60e7782b9aa8528c8fec3aff1a613f3ceb400bbde05653c0863ca72227bf",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_06_vocadito_24_vocadito_3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_24.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_3.wav",
+      "audio_sha256_a": "22fb2df57dc7b68987cda67b30171c626a7818b9ab7db02185e8ea0a0a6db7ee",
+      "audio_sha256_b": "73b6fe13bc3435ae9173ee1bdec247e2943526c70cd9b69ab2b35002fa4cb04d",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "e8bc60e7782b9aa8528c8fec3aff1a613f3ceb400bbde05653c0863ca72227bf",
+      "observation_sha256_b": "aff3da54427b72f216b337912d0b975ebf92b4f1f4d68be7a3177eb1fd28f33a",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_07_vocadito_3_vocadito_30": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_3.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_30.wav",
+      "audio_sha256_a": "73b6fe13bc3435ae9173ee1bdec247e2943526c70cd9b69ab2b35002fa4cb04d",
+      "audio_sha256_b": "ce2128d9bfcd434a9c1507d1f2fcd504677e0b1e0fb5fe8bbe07406158df144f",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "aff3da54427b72f216b337912d0b975ebf92b4f1f4d68be7a3177eb1fd28f33a",
+      "observation_sha256_b": "90142c8132755194dd1c4e05851635bd527bb01e1d9d57b7065cd2671894f7b1",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_08_vocadito_30_vocadito_32": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_30.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_32.wav",
+      "audio_sha256_a": "ce2128d9bfcd434a9c1507d1f2fcd504677e0b1e0fb5fe8bbe07406158df144f",
+      "audio_sha256_b": "1776573e0a80e0618258501c1fa877a75c36c3368ab24014aaebb522f92768b7",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "90142c8132755194dd1c4e05851635bd527bb01e1d9d57b7065cd2671894f7b1",
+      "observation_sha256_b": "492327b8b21010ae844cdf56902c4f849f3ea16fd7ab1efffa540695d6a6613f",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_09_vocadito_32_vocadito_40": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_32.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_40.wav",
+      "audio_sha256_a": "1776573e0a80e0618258501c1fa877a75c36c3368ab24014aaebb522f92768b7",
+      "audio_sha256_b": "add1fc90659541163158bf025eeb0c09b7f738bdfcc812a835654ca1e8544b04",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "492327b8b21010ae844cdf56902c4f849f3ea16fd7ab1efffa540695d6a6613f",
+      "observation_sha256_b": "5a3bc5556d6e667c83de2d51d5cb66813a0e5103b446768f95c41f28ce6217a3",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_10_vocadito_40_vocadito_5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_40.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_5.wav",
+      "audio_sha256_a": "add1fc90659541163158bf025eeb0c09b7f738bdfcc812a835654ca1e8544b04",
+      "audio_sha256_b": "7cecfd126a9437f88db0a297cdab3075bb38faeef10f1a98f22ba22a2a939220",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "5a3bc5556d6e667c83de2d51d5cb66813a0e5103b446768f95c41f28ce6217a3",
+      "observation_sha256_b": "6d62554b63c45c44aa0b19aab30cb208237ece24820fa1c9c13dfc100d07d92d",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nc_real_tuning_11_vocadito_5_vocadito_10": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_5.wav",
+      "audio_b": "build/external_m3d/vocadito/Audio/vocadito_10.wav",
+      "audio_sha256_a": "7cecfd126a9437f88db0a297cdab3075bb38faeef10f1a98f22ba22a2a939220",
+      "audio_sha256_b": "0978bde1c130ae26a9cfcd90012f12fdaf9877bbe45cf21c5237ba7ac9b8703b",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_cross",
+      "observation_sha256_a": "6d62554b63c45c44aa0b19aab30cb208237ece24820fa1c9c13dfc100d07d92d",
+      "observation_sha256_b": "67b07f185686c253975e94760754735ef9445e3a9cc2ab79f49a4fcba7adc947",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "ni_synth_tuning_00_m3d_synth_interval_neg1_a_m3d_synth_interval_neg1_b": {
+      "audio_a": "build/external_m3d/m3d_pairs/m3d_synth_interval_neg1_a.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/m3d_synth_interval_neg1_b.wav",
+      "audio_sha256_a": "ba32298629c2770df7d579a6f77860bca38831bd498be96b0bc6ef4f6bc865b5",
+      "audio_sha256_b": "d45292479b66e8ecc72c8b85e41fa94cb4be31cdb340dcf1e33d267bbf806f28",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: note_count 5 < min 8; phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: note_count 5 < min 8; phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_interval",
+      "observation_sha256_a": "3a657630669dedcbab6906b6fd66891280504ef4474b5cde6b09c9685dc8a086",
+      "observation_sha256_b": "8e91378481ee755b3a044f40208407de59512aacab1afe065bcd762dc19a2a49",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "ni_synth_tuning_01_m3d_synth_interval_neg2_a_m3d_synth_interval_neg2_b": {
+      "audio_a": "build/external_m3d/m3d_pairs/m3d_synth_interval_neg2_a.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/m3d_synth_interval_neg2_b.wav",
+      "audio_sha256_a": "91adedd8e8007a6fb65241391aa94ae6434049985e6c408ee327c2526fe3af49",
+      "audio_sha256_b": "8a7c18913838c44807511ae1aafcf7ced41b5ecfb1e1fbe934e86446c0f57d56",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {
+          "aligned_note_fraction_a": 0.0,
+          "aligned_note_fraction_b": 0.0,
+          "phrase_coverage_a": 0.0,
+          "phrase_coverage_b": 0.0
+        },
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "insufficient_overlap(min_fraction=0.0000, floor=0.5000)"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_interval",
+      "observation_sha256_a": "693a2548c726e3c54bfd00ced5e9f1f4517fa53a6b3dd1beeefe24b3c46ff69e",
+      "observation_sha256_b": "23fc6ee268e04135ac06898dc5e6eec6bf1423b3aa6ed7583b1a3fe26b29ca88",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nr_synth_tuning_00_m3d_synth_rhythm_neg1_a_m3d_synth_rhythm_neg1_b": {
+      "audio_a": "build/external_m3d/m3d_pairs/m3d_synth_rhythm_neg1_a.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/m3d_synth_rhythm_neg1_b.wav",
+      "audio_sha256_a": "c75a40a86727964e8f37c497be7065abf3ba1f5a5da393bcab45e75b3d0da729",
+      "audio_sha256_b": "7c4a3b3275af1686cfb612970f68289ab12610fba325209bfae408120799d2ce",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: note_count 5 < min 8; phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: note_count 5 < min 8; phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_rhythm",
+      "observation_sha256_a": "ddfa1c1b349e1f876f309f415af3e5420c964861d5d56141e52f400ff92b2c80",
+      "observation_sha256_b": "cda050353d505c104114409382c6b70e6770ad5a63d657b19aa35bed30aea799",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "nr_synth_tuning_01_m3d_synth_rhythm_neg2_a_m3d_synth_rhythm_neg2_b": {
+      "audio_a": "build/external_m3d/m3d_pairs/m3d_synth_rhythm_neg2_a.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/m3d_synth_rhythm_neg2_b.wav",
+      "audio_sha256_a": "863f34d4e8871a2d9d20cd10093e30315b9751a743309cf2954aa23e1571fce5",
+      "audio_sha256_b": "f063b86371a66b1cf8a1aab0118f92d740eac1dcec7dcc77ce106f9bd3fbeccc",
+      "comparison": {
+        "axes": {
+          "contour": 1.0,
+          "interval": 1.0,
+          "rhythm": 0.0
+        },
+        "axis_evidence": {
+          "contour": "uncalibrated",
+          "interval": "uncalibrated",
+          "rhythm": "uncalibrated"
+        },
+        "coverage": {
+          "aligned_note_fraction_a": 1.0,
+          "aligned_note_fraction_b": 1.0,
+          "phrase_coverage_a": 1.0,
+          "phrase_coverage_b": 1.0
+        },
+        "evidence": "none",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "aligned_pair_count": 6,
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "phrase_correspondence_count": 2,
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct",
+          "sequence_sha256_a": "63eed7396b3c639c64f4ddd15cd56250cbae4877c7e799483aff677953233a20",
+          "sequence_sha256_b": "a859aa5c85de7fd1830f836bec920b3ed75ec48c3096b44f3d1118761e746a7f",
+          "unmatched_phrase_count_a": 0,
+          "unmatched_phrase_count_b": 0
+        },
+        "reasons": [
+          "evidence_thresholds_uncalibrated"
+        ]
+      },
+      "expected": "different",
+      "kind": "negative_rhythm",
+      "observation_sha256_a": "dbc2aba11587d63a9b7a916645a237950dac9493e7f4f8c8ea993a99f1d58280",
+      "observation_sha256_b": "b14a80104c7bb004bf5a77857774494292094702233b09fa1a2a37bfddf27025",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_holdout_vocadito_20_pitch_m5": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_20_pitch_p3": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_20_rate_087": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_20_rate_112": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_28_pitch_m5": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_28_pitch_p3": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_28_rate_087": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_28_rate_112": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_34_pitch_m5": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_34_pitch_p3": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_34_rate_087": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_34_rate_112": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_6_pitch_m5": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_6_pitch_p3": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_6_rate_087": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_6_rate_112": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_7_pitch_m5": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_7_pitch_p3": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_7_rate_087": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_7_rate_112": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_8_pitch_m5": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_8_pitch_p3": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_8_rate_087": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_holdout_vocadito_8_rate_112": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_real_tuning_vocadito_10_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_10.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_10__pitch_m5.wav",
+      "audio_sha256_a": "0978bde1c130ae26a9cfcd90012f12fdaf9877bbe45cf21c5237ba7ac9b8703b",
+      "audio_sha256_b": "931df11d1afd48e15ed866ea6458d5aad7d4561b5a846b360f267d770fe9400c",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "67b07f185686c253975e94760754735ef9445e3a9cc2ab79f49a4fcba7adc947",
+      "observation_sha256_b": "ef6c172d2e468eef8aad0ed86a96b7c7b74b2dc759c04d5d8094921f83fdd2d9",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_10_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_10.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_10__pitch_p3.wav",
+      "audio_sha256_a": "0978bde1c130ae26a9cfcd90012f12fdaf9877bbe45cf21c5237ba7ac9b8703b",
+      "audio_sha256_b": "452782fd8e481b2a5eb149c702651afb18db88ac1054e88023de1ad480d9bbdf",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "67b07f185686c253975e94760754735ef9445e3a9cc2ab79f49a4fcba7adc947",
+      "observation_sha256_b": "978ff9b8875ed7a39ea55dd6dcf14511927e3dccd95b203461a5441cc91fc4df",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_10_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_10.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_10__rate_087.wav",
+      "audio_sha256_a": "0978bde1c130ae26a9cfcd90012f12fdaf9877bbe45cf21c5237ba7ac9b8703b",
+      "audio_sha256_b": "d91308aee8d0b02d6ba64de37740d067648e901a653e346cc535795e35684139",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "67b07f185686c253975e94760754735ef9445e3a9cc2ab79f49a4fcba7adc947",
+      "observation_sha256_b": "d4a467bfc4f30cd8e59a6675db0441d57f7072d9b2593141baca98bf50f62eda",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_10_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_10.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_10__rate_112.wav",
+      "audio_sha256_a": "0978bde1c130ae26a9cfcd90012f12fdaf9877bbe45cf21c5237ba7ac9b8703b",
+      "audio_sha256_b": "b65ada9b55458b6de402a56b06a728e1d86856fa8643416951a76f0789428241",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "67b07f185686c253975e94760754735ef9445e3a9cc2ab79f49a4fcba7adc947",
+      "observation_sha256_b": "9ccc3faa381fcd5c11ea3c251ddf6b7a1d30d6b75b98d2c6a3e292e495a5336b",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_11_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_11.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_11__pitch_m5.wav",
+      "audio_sha256_a": "c4d669eca7e25c5037b191805b54b2c990d5e31bc77c9c77188b140100297197",
+      "audio_sha256_b": "b0548f106e6136814ca6c804222c7f35c73b162874c4cf08225bce76413f6e80",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "3270ec4a9d134f40b37c120a03b46d7a03722b1f2e413096eb7e14d7a5bd9d21",
+      "observation_sha256_b": "eb7d0a4e5781f740185c96768be197082d583364ccb610ffbb1f9e12a83a2eac",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_11_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_11.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_11__pitch_p3.wav",
+      "audio_sha256_a": "c4d669eca7e25c5037b191805b54b2c990d5e31bc77c9c77188b140100297197",
+      "audio_sha256_b": "d351988d5122fa36648f778aee4939f4568fbf8dc2a37b6bfc7e25cbd81ebd4b",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "3270ec4a9d134f40b37c120a03b46d7a03722b1f2e413096eb7e14d7a5bd9d21",
+      "observation_sha256_b": "86a9a8c999ae36899827c92a950651936c48688fea8eae32d23f103fce693863",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_11_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_11.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_11__rate_087.wav",
+      "audio_sha256_a": "c4d669eca7e25c5037b191805b54b2c990d5e31bc77c9c77188b140100297197",
+      "audio_sha256_b": "2367081a9246fe96e89d604527670a5804150de40df080822309e8bee562edd7",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "3270ec4a9d134f40b37c120a03b46d7a03722b1f2e413096eb7e14d7a5bd9d21",
+      "observation_sha256_b": "6187d5592f2df2c1cf434aef0c287a3face3abad08f8e92c5e005b64012467d6",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_11_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_11.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_11__rate_112.wav",
+      "audio_sha256_a": "c4d669eca7e25c5037b191805b54b2c990d5e31bc77c9c77188b140100297197",
+      "audio_sha256_b": "d65d0989ec5d27e9f815d4676a648c98e01e0036b5e8db26bc0a0202ecd26ac0",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "3270ec4a9d134f40b37c120a03b46d7a03722b1f2e413096eb7e14d7a5bd9d21",
+      "observation_sha256_b": "2d09751d3b96fa083568db52eeb6d83cf724f7823fbc7c9d6be0c00e8e72c290",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_15_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_15.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_15__pitch_m5.wav",
+      "audio_sha256_a": "0bc39b00e14881b20756f48530a4688e1bb7aa1c24ee09d4351a327e3acce28d",
+      "audio_sha256_b": "872606a472a116ae4f6cdd2c98d018970e15f8463830c1c8dc50ca4259332aac",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "3b55779030ef6c3e8ecc15ed89a7e904f7d3fded5facb6903e7ce32ec2988795",
+      "observation_sha256_b": "0738ce0a8ccc8bc3859279a6bce77efaada3953f2daa2acfe4ad863093e92e93",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_15_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_15.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_15__pitch_p3.wav",
+      "audio_sha256_a": "0bc39b00e14881b20756f48530a4688e1bb7aa1c24ee09d4351a327e3acce28d",
+      "audio_sha256_b": "c0087dd2a922d98239be7740aa4df18720452028115fc8c0634cf997798922df",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "3b55779030ef6c3e8ecc15ed89a7e904f7d3fded5facb6903e7ce32ec2988795",
+      "observation_sha256_b": "17272d825b0e5937ccd85766c3f6dcfc4244a35ca9b5530ab5562fb2b633a41a",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_15_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_15.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_15__rate_087.wav",
+      "audio_sha256_a": "0bc39b00e14881b20756f48530a4688e1bb7aa1c24ee09d4351a327e3acce28d",
+      "audio_sha256_b": "6f8fddc08d45ad05a845488d1cb8a3e1b8f244b53716494222d4327962114037",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "3b55779030ef6c3e8ecc15ed89a7e904f7d3fded5facb6903e7ce32ec2988795",
+      "observation_sha256_b": "880c41d8e23b26f2fc710dbef94b8caeea488911e8ba0e013099d232af7d626c",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_15_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_15.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_15__rate_112.wav",
+      "audio_sha256_a": "0bc39b00e14881b20756f48530a4688e1bb7aa1c24ee09d4351a327e3acce28d",
+      "audio_sha256_b": "205638d59cb8d87d3e002d875198fd47228cdf107067e9e54f727f8ab89be889",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "3b55779030ef6c3e8ecc15ed89a7e904f7d3fded5facb6903e7ce32ec2988795",
+      "observation_sha256_b": "3c36fde1abd72f3a76eafe2a0f4e262f9dd3261d05d0cefa574eeab752b9738a",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_16_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_16.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_16__pitch_m5.wav",
+      "audio_sha256_a": "595e80b5382812702e64d5b6a8f453d9744391166d47c7020cc1d6e71e310e25",
+      "audio_sha256_b": "53f460e10f51eec7f60f17530e6dfad43162b6089ab429acfec30dddc19b8ae1",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "b4fbb870759f4f1da7525b29ef944c434ce25e91fadf795ed6291b706ff18e88",
+      "observation_sha256_b": "4ed251cf10f1b625fb95f6f3301cc7b495952f3fe1b6cb8e7c39c8b4aeef4e95",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_16_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_16.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_16__pitch_p3.wav",
+      "audio_sha256_a": "595e80b5382812702e64d5b6a8f453d9744391166d47c7020cc1d6e71e310e25",
+      "audio_sha256_b": "737f2099e8ff08cdbb9d5a30b492227b4e5b9d71f4af0e081ca10b280ab7b473",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "b4fbb870759f4f1da7525b29ef944c434ce25e91fadf795ed6291b706ff18e88",
+      "observation_sha256_b": "3146d79cc0d55809a9f714c9a28264cd2889b3ab1127d3b8aabcbb749ee4fb54",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_16_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_16.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_16__rate_087.wav",
+      "audio_sha256_a": "595e80b5382812702e64d5b6a8f453d9744391166d47c7020cc1d6e71e310e25",
+      "audio_sha256_b": "181a0066d0482fad1759b68497ca2a1fba2ed71ecbe03d2767dcad950486485b",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "b4fbb870759f4f1da7525b29ef944c434ce25e91fadf795ed6291b706ff18e88",
+      "observation_sha256_b": "f462b4511c6874eed4e3c5cd66baa1ee6ece38cc7e63f4b39ab1bc2c80c0cb2e",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_16_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_16.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_16__rate_112.wav",
+      "audio_sha256_a": "595e80b5382812702e64d5b6a8f453d9744391166d47c7020cc1d6e71e310e25",
+      "audio_sha256_b": "34c6dfbb71d9dd9def735f3f856e7ff44b554846aafb27df7ad5d7b39f223b02",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "b4fbb870759f4f1da7525b29ef944c434ce25e91fadf795ed6291b706ff18e88",
+      "observation_sha256_b": "86954bb4c9486d805cf5989b790eb0e90959e582a1b4f2b675ef4a7a465a2bd8",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_17_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_17.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_17__pitch_m5.wav",
+      "audio_sha256_a": "4b144cdbbcdb318f19c0aa5ac1e2675dbe8d6cb8941286d251959f25e4c96998",
+      "audio_sha256_b": "9937b3f990fe80b2e413d49ef3b5cb2788110359665f4db870048c90c1336395",
+      "comparison": {
+        "axes": {
+          "contour": 0.8850574712643678,
+          "interval": 0.8275862068965517,
+          "rhythm": 0.12269938650306748
+        },
+        "axis_evidence": {
+          "contour": "uncalibrated",
+          "interval": "uncalibrated",
+          "rhythm": "uncalibrated"
+        },
+        "coverage": {
+          "aligned_note_fraction_a": 0.6712328767123288,
+          "aligned_note_fraction_b": 0.703125,
+          "phrase_coverage_a": 1.0,
+          "phrase_coverage_b": 0.6666666666666666
+        },
+        "evidence": "none",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "aligned_pair_count": 87,
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "phrase_correspondence_count": 2,
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct",
+          "sequence_sha256_a": "2a115e8cf6ded9d7da8c6916e48268f477116117bc22f6304b764e6b7c21dbad",
+          "sequence_sha256_b": "8044ab58368402f00a9243dc004ef1409df83a68d3dfd73dcd474679a55ece70",
+          "unmatched_phrase_count_a": 0,
+          "unmatched_phrase_count_b": 1
+        },
+        "reasons": [
+          "evidence_thresholds_uncalibrated"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "55929663c55620e41bb155cd6907af94368bd76c3ab512f77de5c29570f55400",
+      "observation_sha256_b": "6c5412c1e781218c28238dca3ca7a843e0eb052f061d2e5a68e08266d762a0ea",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_17_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_17.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_17__pitch_p3.wav",
+      "audio_sha256_a": "4b144cdbbcdb318f19c0aa5ac1e2675dbe8d6cb8941286d251959f25e4c96998",
+      "audio_sha256_b": "0a8f41f4d6be2df261f2b8686f44e74cb54c374c3dd3b65b5efd8d267a0d6cd8",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {
+          "aligned_note_fraction_a": 0.0,
+          "aligned_note_fraction_b": 0.0,
+          "phrase_coverage_a": 0.0,
+          "phrase_coverage_b": 0.0
+        },
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "insufficient_overlap(min_fraction=0.0000, floor=0.5000)"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "55929663c55620e41bb155cd6907af94368bd76c3ab512f77de5c29570f55400",
+      "observation_sha256_b": "565426ea033d02c6749a3ce663008293fb042d9147471c8440b82eaa5d25eb7e",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_17_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_17.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_17__rate_087.wav",
+      "audio_sha256_a": "4b144cdbbcdb318f19c0aa5ac1e2675dbe8d6cb8941286d251959f25e4c96998",
+      "audio_sha256_b": "6c31e888b916aa7be9e7e267bb147ebd6fa8e9f3bab2b0fa2616a635aa214962",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "55929663c55620e41bb155cd6907af94368bd76c3ab512f77de5c29570f55400",
+      "observation_sha256_b": "86dcd07c6c424c7f1e264f17982c0f523145ec6f6cb3bf8cbf0606789941925c",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_17_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_17.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_17__rate_112.wav",
+      "audio_sha256_a": "4b144cdbbcdb318f19c0aa5ac1e2675dbe8d6cb8941286d251959f25e4c96998",
+      "audio_sha256_b": "80e98200573c477c1500e08be718d2cc28f908f976c8afb86c1239454343ccb6",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "55929663c55620e41bb155cd6907af94368bd76c3ab512f77de5c29570f55400",
+      "observation_sha256_b": "b7a0a1723a6dc4148d5bb63f31fcd3458704f9b6a7086ba69473f5b91a7b9c18",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_22_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_22.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_22__pitch_m5.wav",
+      "audio_sha256_a": "6629d0ecd7acddd1ce2877d00bc7ef80dc01fdd20f3225b9c2ed907da12f989e",
+      "audio_sha256_b": "553de67a00f737786743f2e5f6603f9f5d19052f33793945ecba239cbb7768b8",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "98124897b95d4856c531f7ea99b4b99423d3187288feb4698771d5e46036a3b5",
+      "observation_sha256_b": "ade917c3f2cd628c8ece2cce87ece887ae35c16e68e00bb912acfc75370d4c63",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_22_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_22.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_22__pitch_p3.wav",
+      "audio_sha256_a": "6629d0ecd7acddd1ce2877d00bc7ef80dc01fdd20f3225b9c2ed907da12f989e",
+      "audio_sha256_b": "54567b3d515f822a312a90f32d37aa389df3625b5935cda73d2f0d22b273a63d",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "98124897b95d4856c531f7ea99b4b99423d3187288feb4698771d5e46036a3b5",
+      "observation_sha256_b": "10bbd8e781150e6c9adb8ff89049ffe648021325531eae885788bdd79127ee53",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_22_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_22.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_22__rate_087.wav",
+      "audio_sha256_a": "6629d0ecd7acddd1ce2877d00bc7ef80dc01fdd20f3225b9c2ed907da12f989e",
+      "audio_sha256_b": "904a02329eafb5715b34c9c2226eaab0e63d7a355160abbb6ea9ce7f28f23d9d",
+      "comparison": {
+        "axes": {
+          "contour": 0.9130434782608695,
+          "interval": 0.8586956521739131,
+          "rhythm": 0.16167664670658682
+        },
+        "axis_evidence": {
+          "contour": "uncalibrated",
+          "interval": "uncalibrated",
+          "rhythm": "uncalibrated"
+        },
+        "coverage": {
+          "aligned_note_fraction_a": 0.7819548872180451,
+          "aligned_note_fraction_b": 0.6901408450704225,
+          "phrase_coverage_a": 0.5,
+          "phrase_coverage_b": 0.5
+        },
+        "evidence": "none",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "aligned_pair_count": 92,
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "phrase_correspondence_count": 1,
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct",
+          "sequence_sha256_a": "b6c57f065cc0f61247e5b0573b1a44b9a1ce715af635ec8acf341e0b89c2c679",
+          "sequence_sha256_b": "5dd9e59c07c8605643aef5a22808caacd2a054299096764b528dccda9b67e4b7",
+          "unmatched_phrase_count_a": 1,
+          "unmatched_phrase_count_b": 1
+        },
+        "reasons": [
+          "evidence_thresholds_uncalibrated"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "98124897b95d4856c531f7ea99b4b99423d3187288feb4698771d5e46036a3b5",
+      "observation_sha256_b": "d85cdf17764f8c15aafa5fdd290ea67e1cc605a5956ec6f24c10e921a67d6af5",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_22_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_22.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_22__rate_112.wav",
+      "audio_sha256_a": "6629d0ecd7acddd1ce2877d00bc7ef80dc01fdd20f3225b9c2ed907da12f989e",
+      "audio_sha256_b": "c95183f08fa7eed155f9416707ec6f58bdd9c462ddb6c3db98e5abffde6d59d5",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "98124897b95d4856c531f7ea99b4b99423d3187288feb4698771d5e46036a3b5",
+      "observation_sha256_b": "1d768106c925f56ce4628123e9ad905c4538f7f49615d06920a85ee750fd8ac0",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_24_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_24.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_24__pitch_m5.wav",
+      "audio_sha256_a": "22fb2df57dc7b68987cda67b30171c626a7818b9ab7db02185e8ea0a0a6db7ee",
+      "audio_sha256_b": "2f7a9c3ffb65478b3b565c298e32f495fd3e3bcf20f3f617197dd5994559613c",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "e8bc60e7782b9aa8528c8fec3aff1a613f3ceb400bbde05653c0863ca72227bf",
+      "observation_sha256_b": "3d1b4ad8bfe82a3bea8a54d48227249552dcaa87243c1b3ee19583c628bc9a9b",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_24_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_24.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_24__pitch_p3.wav",
+      "audio_sha256_a": "22fb2df57dc7b68987cda67b30171c626a7818b9ab7db02185e8ea0a0a6db7ee",
+      "audio_sha256_b": "c3e83ab4d1fd78952688860de974062bb582a793aa9015ddce384eb0b7dd7341",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "e8bc60e7782b9aa8528c8fec3aff1a613f3ceb400bbde05653c0863ca72227bf",
+      "observation_sha256_b": "6a6a984966a3e0b4fda7c5c688bf07d7ade515844c2c50c8b0671ea730fde1ee",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_24_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_24.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_24__rate_087.wav",
+      "audio_sha256_a": "22fb2df57dc7b68987cda67b30171c626a7818b9ab7db02185e8ea0a0a6db7ee",
+      "audio_sha256_b": "835b55ef98ce63db39817f3918d203f111a7b0ba308b1d39f8cc2a3de7b8908d",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "e8bc60e7782b9aa8528c8fec3aff1a613f3ceb400bbde05653c0863ca72227bf",
+      "observation_sha256_b": "cf71f0ed198619710bdf68bb164ecba6e5bdc4c5af68ff0de779f8fd369a7acd",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_24_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_24.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_24__rate_112.wav",
+      "audio_sha256_a": "22fb2df57dc7b68987cda67b30171c626a7818b9ab7db02185e8ea0a0a6db7ee",
+      "audio_sha256_b": "8e4c0d7daa6102c5ffdec6170ae5fdc55a2bdec84897c79230588fae3d17b982",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "e8bc60e7782b9aa8528c8fec3aff1a613f3ceb400bbde05653c0863ca72227bf",
+      "observation_sha256_b": "61fd15e6ff31fa828e180fc8f2be111893f900bb19e5d857d7fd0fec2bc5904a",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_30_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_30.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_30__pitch_m5.wav",
+      "audio_sha256_a": "ce2128d9bfcd434a9c1507d1f2fcd504677e0b1e0fb5fe8bbe07406158df144f",
+      "audio_sha256_b": "5c82a367d0875ed44fe807b21a99e18efd2a23ecb2ca1f697aab6084663f99fe",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "90142c8132755194dd1c4e05851635bd527bb01e1d9d57b7065cd2671894f7b1",
+      "observation_sha256_b": "3aa7c2381c8be9ec542ab0916deb40d14f22b925e25a958e5e22680d5c1ed6a5",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_30_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_30.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_30__pitch_p3.wav",
+      "audio_sha256_a": "ce2128d9bfcd434a9c1507d1f2fcd504677e0b1e0fb5fe8bbe07406158df144f",
+      "audio_sha256_b": "7a93edae0cbed29c6edadffb9146dd9a1ffd06c50e1772fdacf8f4a9ef519eef",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "90142c8132755194dd1c4e05851635bd527bb01e1d9d57b7065cd2671894f7b1",
+      "observation_sha256_b": "de7a43f84dbe62732488057538918cf5bca4af4c9c18417ed2c79b4b0da8461a",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_30_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_30.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_30__rate_087.wav",
+      "audio_sha256_a": "ce2128d9bfcd434a9c1507d1f2fcd504677e0b1e0fb5fe8bbe07406158df144f",
+      "audio_sha256_b": "c2643efcbfd08a7adc22fbd26c66e08972dd531736daf4dd6fd89eb6b87f4987",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "90142c8132755194dd1c4e05851635bd527bb01e1d9d57b7065cd2671894f7b1",
+      "observation_sha256_b": "9023396e9645ab7efbc589f2087faf8731838e31e83f8496909d7b14d7164fc7",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_30_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_30.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_30__rate_112.wav",
+      "audio_sha256_a": "ce2128d9bfcd434a9c1507d1f2fcd504677e0b1e0fb5fe8bbe07406158df144f",
+      "audio_sha256_b": "fc62ca17a85143650cc081120b9504efe74ca9a55e8f4bd6dd9b4e1813c2c19f",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "90142c8132755194dd1c4e05851635bd527bb01e1d9d57b7065cd2671894f7b1",
+      "observation_sha256_b": "e8992b284ad5a2ed18791f8a1665446f63d69de5f8e73bd20fc24b5d4b899711",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_32_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_32.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_32__pitch_m5.wav",
+      "audio_sha256_a": "1776573e0a80e0618258501c1fa877a75c36c3368ab24014aaebb522f92768b7",
+      "audio_sha256_b": "7f59057526bf578d46924a51dc3da50499c1e58eca45af0d6b17c622e79e9f7e",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "492327b8b21010ae844cdf56902c4f849f3ea16fd7ab1efffa540695d6a6613f",
+      "observation_sha256_b": "c8062f2a2469fa758f5f70b94e2684793b9f605aa2e58a66eb78adf4a7f04454",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_32_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_32.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_32__pitch_p3.wav",
+      "audio_sha256_a": "1776573e0a80e0618258501c1fa877a75c36c3368ab24014aaebb522f92768b7",
+      "audio_sha256_b": "519d97e5c61441410ab33ec139add20ffc9ba85e97981342dade8dc4ce5e5df9",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "492327b8b21010ae844cdf56902c4f849f3ea16fd7ab1efffa540695d6a6613f",
+      "observation_sha256_b": "4db5e41d066e4f8612ad1c98c1e6da9548e7289c3bee23df4ac88a67e6db6c33",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_32_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_32.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_32__rate_087.wav",
+      "audio_sha256_a": "1776573e0a80e0618258501c1fa877a75c36c3368ab24014aaebb522f92768b7",
+      "audio_sha256_b": "8e506c7a4de32539a8990e753f1f5136c1bae8eb6923b090ef00cd6f4a76663b",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "492327b8b21010ae844cdf56902c4f849f3ea16fd7ab1efffa540695d6a6613f",
+      "observation_sha256_b": "170188ecfe4c37ed5fe4a7ec0faa7f1fbe53f19f4479d43338129d3047fe38a3",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_32_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_32.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_32__rate_112.wav",
+      "audio_sha256_a": "1776573e0a80e0618258501c1fa877a75c36c3368ab24014aaebb522f92768b7",
+      "audio_sha256_b": "5ea88e4b4bf87ef8064968081f1ad958282d01b028af5f8a713a39645bc89bf6",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "492327b8b21010ae844cdf56902c4f849f3ea16fd7ab1efffa540695d6a6613f",
+      "observation_sha256_b": "3c5046acfc81b319fcf12d0381d9d48621f278f63e176f3208950d6d7ef4372a",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_3_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_3.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_3__pitch_m5.wav",
+      "audio_sha256_a": "73b6fe13bc3435ae9173ee1bdec247e2943526c70cd9b69ab2b35002fa4cb04d",
+      "audio_sha256_b": "b47bd52c0f1679e42ce7a7a3d99c7c1e9fe5f15ffc13c59e59046a5b59ac9ef9",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "aff3da54427b72f216b337912d0b975ebf92b4f1f4d68be7a3177eb1fd28f33a",
+      "observation_sha256_b": "90e46007a331142ae2855434422ff75b90d56aa10a52407f622ef910fab0e121",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_3_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_3.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_3__pitch_p3.wav",
+      "audio_sha256_a": "73b6fe13bc3435ae9173ee1bdec247e2943526c70cd9b69ab2b35002fa4cb04d",
+      "audio_sha256_b": "50077c56144e67dba0067430fb0b876a9752b81e75557a80215afe6d7e6d6a75",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "aff3da54427b72f216b337912d0b975ebf92b4f1f4d68be7a3177eb1fd28f33a",
+      "observation_sha256_b": "6d007f43e1f7714dc3c73932719a96c856d244aac9d86f00cc9ab9eeb227cb2e",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_3_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_3.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_3__rate_087.wav",
+      "audio_sha256_a": "73b6fe13bc3435ae9173ee1bdec247e2943526c70cd9b69ab2b35002fa4cb04d",
+      "audio_sha256_b": "ff698395e34ceb2d88e3239c49dd32be5030a6c6de7c658fe6b8ff68838827fb",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "aff3da54427b72f216b337912d0b975ebf92b4f1f4d68be7a3177eb1fd28f33a",
+      "observation_sha256_b": "eb6934fe4d3898f7d5160faa078b29a1c70bbd0a2578a1b67c40a22cc43440f6",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_3_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_3.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_3__rate_112.wav",
+      "audio_sha256_a": "73b6fe13bc3435ae9173ee1bdec247e2943526c70cd9b69ab2b35002fa4cb04d",
+      "audio_sha256_b": "fc4d996bc1861bb8c9e65ffe08a3622bd8e1a063fe65a62a5f0b157df3403877",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "aff3da54427b72f216b337912d0b975ebf92b4f1f4d68be7a3177eb1fd28f33a",
+      "observation_sha256_b": "d8375ded4a719d697b4735d9de99895a8c329f19a43b110366f3937ee88c1866",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_40_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_40.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_40__pitch_m5.wav",
+      "audio_sha256_a": "add1fc90659541163158bf025eeb0c09b7f738bdfcc812a835654ca1e8544b04",
+      "audio_sha256_b": "4937f9fd61bead3d12f6944e7e94dba87e8ef0d70a91f9541579b5b2f2feb185",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "5a3bc5556d6e667c83de2d51d5cb66813a0e5103b446768f95c41f28ce6217a3",
+      "observation_sha256_b": "37bf5493cc7c9b7e92813c69617ff016466e252391fb136dc5b9f8de927a893c",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_40_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_40.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_40__pitch_p3.wav",
+      "audio_sha256_a": "add1fc90659541163158bf025eeb0c09b7f738bdfcc812a835654ca1e8544b04",
+      "audio_sha256_b": "350f33fa4d54cabdaae6c13e58e282cfce969d81b97bff658ccfc2485324ae86",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "5a3bc5556d6e667c83de2d51d5cb66813a0e5103b446768f95c41f28ce6217a3",
+      "observation_sha256_b": "83d4f313aae99c26cc89cfc3d2b7a11f2101e6504f205b4e079cb65e68de7f96",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_40_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_40.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_40__rate_087.wav",
+      "audio_sha256_a": "add1fc90659541163158bf025eeb0c09b7f738bdfcc812a835654ca1e8544b04",
+      "audio_sha256_b": "3c6666487c494575cebdb7edae005c9af9455d7362151b8b1784cfcf84a4ce3c",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "5a3bc5556d6e667c83de2d51d5cb66813a0e5103b446768f95c41f28ce6217a3",
+      "observation_sha256_b": "f55c0cf7ec81de5899e58f6b657a708d8c7ebacf7cd1faa5b626f2ced9db2f9b",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_40_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_40.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_40__rate_112.wav",
+      "audio_sha256_a": "add1fc90659541163158bf025eeb0c09b7f738bdfcc812a835654ca1e8544b04",
+      "audio_sha256_b": "d6d86b4fd402dd404f9e1487ef5ebeea88883bc4e18ba3ac2646abf6fd49dd7f",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "5a3bc5556d6e667c83de2d51d5cb66813a0e5103b446768f95c41f28ce6217a3",
+      "observation_sha256_b": "201266b41f8b38406bedab05ef5141eaf8538af20eb422476a07b6e08f19d81d",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_5_pitch_m5": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_5.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_5__pitch_m5.wav",
+      "audio_sha256_a": "7cecfd126a9437f88db0a297cdab3075bb38faeef10f1a98f22ba22a2a939220",
+      "audio_sha256_b": "391041b5d17d455db3b9a4ad69f444c1a2f84014ab836b27bf08b22fa0a7bd69",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "6d62554b63c45c44aa0b19aab30cb208237ece24820fa1c9c13dfc100d07d92d",
+      "observation_sha256_b": "cf6c2de06b39a0087aadc9200381fa9b50bc8839e891b47c7e886d8c33291fb2",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_5_pitch_p3": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_5.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_5__pitch_p3.wav",
+      "audio_sha256_a": "7cecfd126a9437f88db0a297cdab3075bb38faeef10f1a98f22ba22a2a939220",
+      "audio_sha256_b": "32420ec96e5b5e0489d5c689460bfbd0f14f7ebbf9187b8d13809fc220dd6834",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "6d62554b63c45c44aa0b19aab30cb208237ece24820fa1c9c13dfc100d07d92d",
+      "observation_sha256_b": "2b1297b29a6faa2b1e42b3308bd7919e5e8d55851040c459d324d021fbdae01e",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_5_rate_087": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_5.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_5__rate_087.wav",
+      "audio_sha256_a": "7cecfd126a9437f88db0a297cdab3075bb38faeef10f1a98f22ba22a2a939220",
+      "audio_sha256_b": "94c2a082a0e9d24f5034e4bb26b4bf83996f3a808dc41a7f1095a609468dc91f",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "6d62554b63c45c44aa0b19aab30cb208237ece24820fa1c9c13dfc100d07d92d",
+      "observation_sha256_b": "4f54849d70653f859dc8616f54a842faded222511150cad279c2429d0e152680",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_real_tuning_vocadito_5_rate_112": {
+      "audio_a": "build/external_m3d/vocadito/Audio/vocadito_5.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/vocadito_5__rate_112.wav",
+      "audio_sha256_a": "7cecfd126a9437f88db0a297cdab3075bb38faeef10f1a98f22ba22a2a939220",
+      "audio_sha256_b": "076601f7011a936b48f0a93d03cb3d57bd384f9abe28b2be4ab616a458cb7039",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_a: phrase_count 1 < min 2",
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "6d62554b63c45c44aa0b19aab30cb208237ece24820fa1c9c13dfc100d07d92d",
+      "observation_sha256_b": "8b14729c841386558b87f3bf23249e32e9c75d858fc5c3c490c605cc100899d9",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_synth_holdout_m3d_synth_holdout_pos_pitch_p3": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_synth_holdout_m3d_synth_holdout_pos_rate_090": {
+      "split": "holdout",
+      "status": "holdout_locked_until_frozen"
+    },
+    "pt_synth_tuning_m3d_synth_tuning_pos_pitch_p3": {
+      "audio_a": "build/external_m3d/m3d_pairs/m3d_synth_tuning_pos.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/m3d_synth_tuning_pos__pitch_p3.wav",
+      "audio_sha256_a": "313ba78d989abc851dd5ad078475f524ff127176e34cf531fe6807b8b81ba642",
+      "audio_sha256_b": "9c1b7ad2711df9bbeb9b0073745e8246d268c94b2e6e8efc33516d9428adddd5",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "370824e93358b5aceeb36ca0b488ff6921021bceb3086f7ee4cfa1d6b8a30983",
+      "observation_sha256_b": "28f9a719859f81477f6883a92fdabbcc7a5710ce20eb9221f1753a0c203f037a",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    },
+    "pt_synth_tuning_m3d_synth_tuning_pos_rate_090": {
+      "audio_a": "build/external_m3d/m3d_pairs/m3d_synth_tuning_pos.wav",
+      "audio_b": "build/external_m3d/m3d_pairs/m3d_synth_tuning_pos__rate_090.wav",
+      "audio_sha256_a": "313ba78d989abc851dd5ad078475f524ff127176e34cf531fe6807b8b81ba642",
+      "audio_sha256_b": "983e54060580c9d04b665b611bc37e4a7272eda20c32c72feebfe28b6d3ffc56",
+      "comparison": {
+        "axes": {
+          "contour": null,
+          "interval": null,
+          "rhythm": null
+        },
+        "axis_evidence": {},
+        "coverage": {},
+        "evidence": "not_comparable",
+        "octave_artifact_suspected": false,
+        "provenance": {
+          "m1_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+          "m3_registry_sha256": "643db39bb6ee899657a0c7adfa141b662bb1f3c76d5e0b3c51066c59783b5e3a",
+          "route_a": "crepe_direct",
+          "route_b": "crepe_direct"
+        },
+        "reasons": [
+          "observation_gate_insufficient_b: phrase_count 1 < min 2"
+        ]
+      },
+      "expected": "same",
+      "kind": "positive_transform",
+      "observation_sha256_a": "370824e93358b5aceeb36ca0b488ff6921021bceb3086f7ee4cfa1d6b8a30983",
+      "observation_sha256_b": "f9a07b3ea964db3cad858563d16912a56d045c1848b716e82b1810801bdee5b1",
+      "route_provenance_a": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "route_provenance_b": {
+        "extractor_code_packages": [
+          "crepe",
+          "tensorflow",
+          "keras",
+          "hmmlearn",
+          "librosa",
+          "resampy",
+          "soundfile",
+          "numpy",
+          "soxr",
+          "numba",
+          "llvmlite"
+        ],
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_files": [
+          "model-full.h5"
+        ],
+        "extractor_weights_kind": "model_weights",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55"
+      },
+      "split": "tuning"
+    }
+  },
+  "pins_path": "/home/user/ugh-prompt-engine/build/external_m3d/m3d_pairs_pins.json",
+  "pins_preflight_verified": true,
+  "pins_sha256": "8ea07fd8447d571e5ddeffa421f4780b87d68b9d7d1d52f02022970909c06c99",
+  "recorded_utc": "2026-08-09T06:39:39+00:00",
+  "route": "crepe_direct",
+  "route_runner_injected": false,
+  "run_id": "e9de45a61e52481a8cbd7ab95ff6135f",
+  "schema_version": "m3-comparison-harness/0.1",
+  "started_utc": "2026-08-09T05:23:35+00:00"
+}

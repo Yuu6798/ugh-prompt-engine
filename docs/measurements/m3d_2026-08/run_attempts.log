@@ -1,0 +1,12 @@
+run1 attempt1 start=2026-08-09T00:58:51Z end_status=killed end_cause=unknown (no traceback, no EXIT_CODE line, process gone by 2026-08-09T02:08:59Z check; no dmesg OOM evidence found)
+run1 attempt2 start=2026-08-09T02:09:00Z end_status=killed end_cause=container_restart (per coordinator 02:xx report; env residuals survived, process count 0 post-restart)
+run1 attempt3 start=2026-08-09T02:56:50Z note=post-container-restart, build_m3d_pairs.py --check-only OK (98 pairs, sha256 all match) confirmed immediately before launch
+run1 attempt3 end_status=killed end_cause=unknown (NOT container restart this time -- system uptime continuous since 2026-08-09T02:54:47Z boot through at least 2026-08-09T04:07:43Z with no further reboot; log froze at 2026-08-09T02:58:22Z, ~92s after process start; no dmesg OOM/core-dump evidence; no EXIT_CODE line written; no atomic-write tmp file left) STOPPING per no-infinite-retry rule, awaiting design-side direction
+DETACHED_PID=14270
+2026-08-09T04:10:15Z
+run1 attempt4 start=2026-08-09T04:10:15Z method=setsid_detached note=coordinator TTL diagnosis applied (harness background-task TTL ~4200s). bash $! captured wrapper pid=14270; actual worker process (verified via pstree) pid=14274, ppid=14270 at launch, session leader via setsid -- expected to survive wrapper teardown via reparent-to-init since setsid detaches controlling terminal/session
+run1 attempt4 end_status=success method=setsid_detached worker_pid=14274 log_end="wrote run report to build/external_m3d/m3d_run1.json (98 pairs)" json_size=184416 json_mtime=2026-08-09T05:22:33Z report_started_utc=2026-08-09T04:10:18Z report_recorded_utc=2026-08-09T05:22:33Z pins_preflight_verified=true holdout_rows=32(all holdout_locked_until_frozen) tuning_rows=66(measured)
+DETACHED_PID=24189
+2026-08-09T05:23:32Z
+run2 attempt1 start=2026-08-09T05:23:XX (see wrapper log above) method=setsid_detached worker_pid=24194 (wrapper pid 24189)
+run2 attempt1 end_status=success method=setsid_detached worker_pid=24194 log_end="wrote run report to build/external_m3d/m3d_run2.json (98 pairs)" json_size=184416 json_mtime=2026-08-09T06:39:39Z report_started_utc=2026-08-09T05:23:35Z report_recorded_utc=2026-08-09T06:39:39Z pins_preflight_verified=true holdout_rows=32(all holdout_locked_until_frozen) tuning_rows=66(measured)

@@ -1,0 +1,70 @@
+{
+  "schema": "m3d-provisioning-record/0.1",
+  "generated_utc": "2026-08-09T00:56:27Z",
+  "step_a_crepe_tf": {
+    "package_versions": {
+      "crepe": "0.0.16",
+      "tensorflow": "2.21.0",
+      "librosa": "0.11.0",
+      "soundfile": "0.14.0",
+      "numpy": "2.4.6"
+    },
+    "setuptools_note": "環境の setuptools は既に 68.1.2 (<81) だったため `pip install \"setuptools<81\"` は no-op（pkg_resources 欠落は本環境では未発生）。",
+    "pip_install_crepe_failure": {
+      "attempted_command": "pip install crepe",
+      "result": "FAILED (差異のある新規失敗モード。pkg_resources 欠落ではない)",
+      "root_cause": "crepe==0.0.16 の setup.py が重みダウンロードに使う base_url='https://github.com/marl/crepe/raw/models/' が、本環境のプロキシ越しに 403 Forbidden を返す（github.com の /raw/ リダイレクトエンドポイント）。一方タスク指定の 'https://raw.githubusercontent.com/marl/crepe/models/...' は 200 で到達可能——プロキシは raw.githubusercontent.com を許可し github.com/.../raw/ を拒否している非対称。",
+      "workaround": "raw.githubusercontent.com から model-{tiny,small,medium,large,full}.h5.bz2 の5種を直接 curl 取得・展開し、crepe-0.0.16.tar.gz (PyPI sdist) の ソース展開先 crepe/ 配下へ配置済み .h5 として先置きしてから `pip install . --no-build-isolation`（SETUPTOOLS_USE_DISTUTILS=stdlib 併用。Debian 版 distutils の bdist_wheel が投げる `AttributeError: install_layout` を回避するため）でローカルビルド。setup.py は weight_path（crepe/model-<cap>.h5）が既に存在する場合は ダウンロードをスキップする実装のため、この先置きで正規の urlretrieve 呼び出し自体を回避できる。",
+      "additional_error_encountered": "AttributeError: install_layout (Did you mean: 'install_platlib') — Debian パッチ済み distutils と pip build-isolation の setuptools/wheel の不整合。`SETUPTOOLS_USE_DISTUTILS=stdlib pip install . --no-build-isolation` で解消。"
+    },
+    "crepe_weights": {
+      "download_url": "https://raw.githubusercontent.com/marl/crepe/models/model-full.h5.bz2",
+      "note": "crepe 配布は model-full.h5 を bz2 圧縮で配布。取得後 bzip2 -d で展開。",
+      "decompressed_sha256": "b6fd2758b03a8625a16fe86cd474ff0d8f30ad9a05e4bee2244e13e98664f860",
+      "decompressed_size_bytes": 89038936,
+      "expected_sha256": "b6fd2758b03a8625a16fe86cd474ff0d8f30ad9a05e4bee2244e13e98664f860",
+      "expected_size_bytes": 89038936,
+      "match": true,
+      "installed_path": "/usr/local/lib/python3.11/dist-packages/crepe/model-full.h5"
+    },
+    "other_capacities_fetched_for_setup_py": {
+      "reason": "crepe==0.0.16 の setup.py は capacity 5種 (tiny/small/medium/large/full) 全てを無条件にダウンロード/展開しようとするため、pip install を成立させる 副次的必要物として同じ手法で取得した（本タスクが要求する pin 対象は model-full.h5 のみ）。",
+      "urls": [
+        "https://raw.githubusercontent.com/marl/crepe/models/model-tiny.h5.bz2",
+        "https://raw.githubusercontent.com/marl/crepe/models/model-small.h5.bz2",
+        "https://raw.githubusercontent.com/marl/crepe/models/model-medium.h5.bz2",
+        "https://raw.githubusercontent.com/marl/crepe/models/model-large.h5.bz2"
+      ]
+    },
+    "import_check": "python -c \"import crepe; print('ok')\" -> ok"
+  },
+  "step_b_vocadito": {
+    "download_url": "https://zenodo.org/records/5578807/files/vocadito.zip",
+    "sha256": "e0d6b99d3f9c594afe5ae5c4d7bdacebe569e53b809e90b89d1c771c4f9990e3",
+    "expected_sha256": "e0d6b99d3f9c594afe5ae5c4d7bdacebe569e53b809e90b89d1c771c4f9990e3",
+    "match": true,
+    "size_bytes": 58492257,
+    "layout": "zip 内が Audio/<clip_id>.wav・Annotations/F0/<clip_id>_f0.csv のまま（__MACOSX/ 混入分は無視）——展開後そのまま build/external_m3d/vocadito/ 配下へ配置",
+    "placement_path": "build/external_m3d/vocadito/{Audio,Annotations}",
+    "m2c_pin_verification": {
+      "against": "tests/fixtures/melody_bench/m2c_external_fixtures.yaml",
+      "clips_checked": 40,
+      "mismatches": 0
+    },
+    "builder_run": {
+      "command": "python scripts/build_m3d_pairs.py",
+      "result": "wrote 98 pairs to tests/fixtures/melody_bench/m3d_pairs_manifest.yaml; wrote pins sidecar to build/external_m3d/m3d_pairs_pins.json"
+    },
+    "manifest_diff_check": {
+      "command": "git status --short / git diff -- tests/fixtures/melody_bench/m3d_pairs_manifest.yaml",
+      "result": "無変更（バイト完全一致。事前登録 manifest と builder 出力が一致）"
+    },
+    "check_only_run": {
+      "command": "python scripts/build_m3d_pairs.py --check-only",
+      "result": "--check-only: OK (98 pairs, sha256 全一致)"
+    }
+  },
+  "step_c_mini_cost_calibration": {
+    "result_path": "build/external_m3d/mini_cost_calibration.json"
+  }
+}
