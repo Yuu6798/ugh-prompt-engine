@@ -5064,7 +5064,7 @@ def _measure_or_resume_external_clip_row(
         record = _json_loads_no_dup_keys(
             record_path.read_bytes(), what=f"cell record {record_path}"
         )
-        mismatches = _cell_record_mismatches(
+        mismatches, accepted_predecessor = _cell_record_mismatches(
             record,
             category=category,
             level=level,
@@ -5076,7 +5076,6 @@ def _measure_or_resume_external_clip_row(
             tolerance_cents=tolerance_cents,
             est_voiced_floor=est_voiced_floor,
             store_role=store_role,
-            accepted_generator_code_predecessors=generator_code_predecessors,
         )
         if not mismatches:
             # 取得時刻を**セルと一緒に旅させる**。resume だけを見ている限り、run の
@@ -5100,6 +5099,12 @@ def _measure_or_resume_external_clip_row(
             else:
                 cells_resumed.append(clip_id)
                 cell_started_utc.append(str(record["measurement_started_utc"]))
+                # Codex P2（PR #254 line 6092 是正）: 等価表経由の受理は**ここ
+                # ——resume が実際に確定した分岐**でのみ血統へ記録する。timestamp
+                # 検証で resume が不成立になった場合（上の except 節）は記録しない
+                # （受理台帳の意味論: 「実際に resume したセルの前任 hash」のみ）。
+                if accepted_predecessor is not None:
+                    generator_code_predecessors.append(accepted_predecessor)
                 # 呼び出し元がこの dict を（`row.pop` 等で）変異させても、他セルの
                 # record 内容へ波及しないよう deep copy を返す。
                 return copy.deepcopy(record["clip_row"])
@@ -6027,10 +6032,10 @@ def _cell_record_mismatches(
     tolerance_cents: float,
     est_voiced_floor: float,
     store_role: str,
-    accepted_generator_code_predecessors: "Optional[List[str]]" = None,
-) -> "List[Dict[str, Any]]":
+) -> "Tuple[List[Dict[str, Any]], Optional[str]]":
     """既存セルレコードと現在の入力/環境の不一致を列挙する（設計 §8.7 再開規則）。
 
+    戻り値は `(mismatches, accepted_generator_code_predecessor)`。`mismatches` が
     空リストなら resume 可（=スキップ）。1 件でもあれば **スキップしない** ——
     再測定したうえで不一致の事実だけを report の `cell_store_mismatches` へ記録する
     （バーを緩めず「見なかったことにしない」という本リポジトリ全体の fail-closed
@@ -6045,9 +6050,16 @@ def _cell_record_mismatches(
     `generator_code_sha256` フィールドに限り、`_LOADED_GENERATOR_CODE_SHA256` との
     直接一致に加えて `GENERATOR_CODE_EQUIVALENT_SHA256S`（設計裁定済みの前任 hash
     等価表）内の値も resume 可として受理する（PR #254 P1 対応）。等価表経由で受理
-    した場合は不一致に数えない代わりに、`accepted_generator_code_predecessors` が
-    渡されていればそこへ受理した前任 hash を追記する——黙って通さず、呼び出し元が
-    report へ `generator_code_predecessors` として刻めるようにする（正直会計）。
+    した場合は不一致に数えないが、**受理した前任 hash をこの関数の中で即座に記録
+    しない**（Codex P2・PR #254 line 6092 是正）: 他フィールド（tolerance_cents /
+    env_digest / store_role 等）が不一致で結局 `mismatches` が非空になれば、この
+    レコードは resume されず再測定される——そのケースで「使っていない前任 hash」を
+    呼び出し元の血統（`generator_code_predecessors`）へ載せると、受理台帳の意味論
+    （「実際に resume したセルの前任 hash だけを記録する」）に反する。したがって
+    受理した前任 hash は戻り値の 2 番目の要素として返すだけに留め、**それを
+    `generator_code_predecessors` へ記録するかどうかは呼び出し元が「セルが実際に
+    resume 確定した時点」（`mismatches == []` かつ measurement_started_utc 等の
+    resume 前提検証も通過した後）で判断する**。
     """
     if not isinstance(record, dict):
         raise ValueError(f"cell record が JSON object でない (fail-closed): {record!r}")
@@ -6082,19 +6094,22 @@ def _cell_record_mismatches(
         "store_role": store_role,
     }
     mismatches: "List[Dict[str, Any]]" = []
+    accepted_predecessor: "Optional[str]" = None
     for field, expected in current.items():
         actual = record.get(field)
         if actual != expected:
             if field == "generator_code_sha256" and isinstance(actual, str):
                 accepted = _generator_code_equivalence_accepts(actual)
                 if accepted is not None:
-                    if accepted_generator_code_predecessors is not None:
-                        accepted_generator_code_predecessors.append(accepted)
+                    accepted_predecessor = accepted
                     continue
             mismatches.append(
                 {"entry_id": entry_id, "field": field, "expected": expected, "actual": actual}
             )
-    return mismatches
+    if mismatches:
+        # 再測定分岐に落ちる——受理は成立させない（意味論違反の回避。上記 docstring）。
+        accepted_predecessor = None
+    return mismatches, accepted_predecessor
 
 
 # ---------------------------------------------------------------------------
@@ -8469,6 +8484,61 @@ def _require_frozen_tolerance(reports: List[Dict[str, Any]], bar_block: Dict[str
     return frozen
 
 
+def _collect_declared_generator_code_predecessors(
+    documents: "List[Dict[str, Any]]", *, where: str
+) -> "set[str]":
+    """`documents`（report または verdict）が主張する `generator_code_predecessors` を
+
+    検証つきで収集する（Codex 新 P1・PR #254 line 8514 是正）。
+
+    resume 側（`_measure_or_resume_external_clip_row`）で等価表経由の受理が起きた
+    セルは、run report の `generator_code_predecessors` にその前任 hash を記録する
+    （L6270 付近）。しかし report の**トップレベル** `generator_code_sha256` は常に
+    `_LOADED_GENERATOR_CODE_SHA256`（= 現行）のまま——`_require_matching_generator_
+    code` がトップ hash だけを見て verdict の `generator_code_predecessors` を
+    決めていると、resume 由来の前任 hash が evaluate の verdict（さらに census）へ
+    伝わらず、「正典成果物が全部現行コードの測定に見える」誤りが生じる。本関数は
+    その伝搬経路を担う。
+
+    各 document の `generator_code_predecessors` は欠落または空リストなら正常
+    （predecessors なし）。存在する場合は fail-closed で以下を要求する:
+
+    1. list であること
+    2. 各要素が sha256 形式（64-hex）の str であること
+    3. 各要素が **現時点で** `_generator_code_equivalence_accepts()` により受理
+       可能であること（= 等価表のキーであり、かつ attested_successor_sha256 が
+       現在の loaded hash と一致する）
+
+    1 つでも満たさなければ raise する——report/verdict が自己申告する前任 hash を
+    無検証のまま正典（verdict/census）へ転記しない。report ごとに predecessors の
+    有無・内容が異なる（片方 resume・片方 fresh 測定）のは正当なので、要素間の
+    一致は要求せず単純に union する。
+    """
+    collected: "set[str]" = set()
+    for idx, document in enumerate(documents):
+        raw = document.get("generator_code_predecessors")
+        if raw is None or raw == []:
+            continue
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"{where}[{idx}] の generator_code_predecessors {raw!r} が list でない "
+                "(fail-closed)"
+            )
+        for item in raw:
+            if not isinstance(item, str) or not _is_sha256(item):
+                raise ValueError(
+                    f"{where}[{idx}] の generator_code_predecessors に非 sha256 形式の "
+                    f"要素 {item!r} が含まれる (fail-closed)"
+                )
+            if _generator_code_equivalence_accepts(item) is None:
+                raise ValueError(
+                    f"{where}[{idx}] が主張する前任 hash {item!r} が等価表/後継束縛で "
+                    "受理できない — 再裁定するか dated 再実測すること (fail-closed)"
+                )
+            collected.add(item)
+    return collected
+
+
 def _require_matching_generator_code(
     reports: List[Dict[str, Any]]
 ) -> "Tuple[str, List[str]]":
@@ -8509,12 +8579,20 @@ def _require_matching_generator_code(
             f"{sorted(set(digests))}; 別 checkout の generator コードで測った run を "
             "1 つの repeats 束として扱えない (fail-closed)"
         )
+    # Codex 新 P1（PR #254 line 8514 是正）: トップ hash 自体が現行コードのままでも、
+    # resume したセルが個別に持つ前任 hash（report 自身の
+    # `generator_code_predecessors`）を union する——さもないと resume 由来の前任
+    # hash が verdict へ伝わらない。
+    declared_predecessors = _collect_declared_generator_code_predecessors(
+        reports, where="evaluate_m2_bars: reports"
+    )
     current = _generator_code_sha256()
     if digests[0] == current:
-        return digests[0], []
+        return digests[0], sorted(declared_predecessors)
     accepted = _generator_code_equivalence_accepts(digests[0])
     if accepted is not None:
-        return digests[0], [accepted]
+        declared_predecessors.add(accepted)
+        return digests[0], sorted(declared_predecessors)
     raise ValueError(
         f"evaluate_m2_bars: reports の generator_code_sha256 {digests[0]!r} が現 "
         f"checkout の {current!r} とも等価表 {sorted(GENERATOR_CODE_EQUIVALENT_SHA256S)} "
@@ -9662,6 +9740,7 @@ def _require_homogeneous_census_inputs(
     # `generator_code_sha256` に前任 hash を保持したまま渡ってくるため、ここで
     # 現在値のみを要求すると受理が下流の census で再び拒否される（PR #254 P1 対応）。
     current_generator = _generator_code_sha256()
+    top_hash_predecessors: "set[str]" = set()
     if common["generator_code_sha256"] != current_generator:
         accepted = _generator_code_equivalence_accepts(common["generator_code_sha256"])
         if accepted is None:
@@ -9673,9 +9752,19 @@ def _require_homogeneous_census_inputs(
                 "attested_successor_sha256 束縛込みで)不一致; 別世代のコードが産んだ "
                 "判定を現行コードの帯として publish しない (fail-closed)"
             )
-        # 等価表経由で受理。黙って通さず、census 成果物へ受理した前任 hash を刻む
-        # ための材料を `common` へ積む（正直会計）。
-        common["generator_code_predecessors"] = [accepted]
+        top_hash_predecessors.add(accepted)
+    # Codex 新 P1（PR #254 line 8514 是正、census 側）: verdict のトップ hash 自体が
+    # 現行のままでも、個々の verdict が resume 由来で持つ `generator_code_predecessors`
+    # を union する——さもないと evaluate 側で伝搬した前任 hash が census で再び
+    # 消える。`generator_code_predecessors` はここでは `fields` の均質性検査対象に
+    # 含めない（verdict ごとに異なりうるのが正当なため。union が正しい合成）。
+    declared_predecessors = _collect_declared_generator_code_predecessors(
+        verdicts, where="aggregate_m2e_census: verdicts"
+    )
+    all_generator_code_predecessors = top_hash_predecessors | declared_predecessors
+    if all_generator_code_predecessors:
+        # 黙って通さず、census 成果物へ受理した前任 hash を刻む（正直会計）。
+        common["generator_code_predecessors"] = sorted(all_generator_code_predecessors)
     current_evaluator = _evaluator_code_sha256()
     if common["evaluator_code_sha256"] != current_evaluator:
         raise ValueError(
@@ -10793,7 +10882,7 @@ def _m2e_completed_cell_keys(
             )
         except (ValueError, OSError):
             continue
-        mismatches = _cell_record_mismatches(
+        mismatches, _accepted_predecessor = _cell_record_mismatches(
             stored,
             category=arm,
             level=level,
@@ -11565,7 +11654,7 @@ def _require_prior_m2e_shards_complete(
         stored = _json_loads_no_dup_keys(
             record_path.read_bytes(), what=f"cell record {record_path}"
         )
-        mismatches = _cell_record_mismatches(
+        mismatches, _accepted_predecessor = _cell_record_mismatches(
             stored,
             category=record["arm"],
             level=level,
@@ -11808,7 +11897,7 @@ def _m2e_valid_cell_record(cell: "Dict[str, Any]") -> "Optional[Tuple[Path, Dict
         )
     except (ValueError, OSError):
         return None
-    mismatches = _cell_record_mismatches(
+    mismatches, _accepted_predecessor = _cell_record_mismatches(
         record,
         category=cell["arm"],
         level=cell["level"],

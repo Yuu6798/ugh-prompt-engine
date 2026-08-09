@@ -41,15 +41,19 @@ GENERATOR_CODE_EQUIVALENT_SHA256S: Dict[str, str] = {
    一致する**
 
 ```
-attested_successor_sha256: 774b8cdc8721ee4af33119df78ea22582df5c3ee8ec4711583a79dcd5eafd201
+attested_successor_sha256: 4827dbbc59598a92b738675841c5499aa2b4608f92751e77519ab9c34c12f0d9
 ```
 
 この値は「本裁定を含む一連のコミット（`1dbf966` + `42378bb` + 本 PR の等価表導入
-コミット群）のコード変更が全て確定した時点」の `_generator_code_sha256()` 閉包
-hash である（§5.1 と同じ手法で worktree 実行の代わりに、本コミット確定後の
+コミット群——後継束縛機構本体・resume 由来 predecessors の evaluate/census への
+伝搬修正（Codex 新 P1・line 8514）・受理タイミングの遅延修正（Codex P2・
+line 6092）を含む）のコード変更が全て確定した時点」の `_generator_code_sha256()`
+閉包 hash である（§5.1 と同じ手法で worktree 実行の代わりに、本コミット確定後の
 checkout 上で `_generator_code_sha256()` を直接呼び出して計算した実測値。**本文書
 自体は 69 ファイル閉包の外**にあるため、この行を書き加えても閉包 hash 自体は
-変わらない——自己参照は生じない）。
+変わらない——自己参照は生じない）。コードが変わるたびにこの値は動くため、
+`scripts/run_melody_accuracy.py` を編集した最終コミット確定後に本行を実測し直す
+運用とする（§7 運用規則）。
 
 判定は 2 のいずれか一つでも欠ければ **無効**（受理せず従来どおり mismatch/
 fail-closed）として扱う: 文書が読めない・該当行が無い・値が 64-hex sha256 形式で
