@@ -110,7 +110,8 @@ not_comparable_negative 11 = 3、内訳 positive 2 / negative 1）由来であ�
 凍結提案が `rejected_positive_not_comparable` で拒否されたため、手順 4
 （閾値凍結）は機械的に実行不可能であり、手順 5（holdout 一度きり検証）も
 未実施。`holdout_locked_until_frozen: true` によりロックは維持されている
-（一度きり検証権は未消費）。判定・後続方針は User 決裁待ち。
+（一度きり検証権は未消費）。2026-08-09 User 決裁で melody トラック closeout
+確定（判定・再入条件 = [`../../m3d_calibration_record.md`](../../m3d_calibration_record.md)）。
 
 ## v2 スクリーニング（2026-08-09）
 
@@ -134,4 +135,5 @@ tuning=2・holdout=1 が機械的に決まるが、prereg_v2 §3 の停止条件
 （部分出力なし）。
 
 **未達事項**: manifest v2 は未生成、run×2（tuning 実測 + holdout 一度きり検証）
-は未実施、v1 の holdout 一度きり検証権も未消費のまま。判定は User 決裁待ち。
+は未実施、v1 の holdout 一度きり検証権も未消費のまま。2026-08-09 User 決裁で
+melody トラック closeout 確定（判定・再入条件 = [`../../m3d_calibration_record.md`](../../m3d_calibration_record.md)）。

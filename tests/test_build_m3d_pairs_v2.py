@@ -79,18 +79,41 @@ def _real_m1_registry_sha256() -> str:
     return hashlib.sha256(harness.M1_REGISTRY_PATH.read_bytes()).hexdigest()
 
 
-def _gate_result(status: str, *, audio_sha256: str = "0" * 64) -> Dict[str, object]:
+# V1（Codex レビュー第 5 巡）対応後、`route_provenance` は必須 sha256 pin
+# （`extractor_code_sha256`/`extractor_weights_sha256`。64 桁小文字 hex）を
+# 備えた mapping であり、record 内の全エントリで相互に完全同一でなければ
+# ならない（`bm._verify_screening_route_binding`）。全ての `_gate_result`
+# 呼び出しが既定でこの同一 dict 値を使うことで、他の（V1 と無関係な）v2
+# テストは自動的に (b)(c) の要件を満たしたまま素通りする。
+_VALID_ROUTE_PROVENANCE: Dict[str, object] = {
+    "route": "crepe_direct",
+    "extractor_code_sha256": hashlib.sha256(b"test-extractor-code").hexdigest(),
+    "extractor_weights_sha256": hashlib.sha256(b"test-extractor-weights").hexdigest(),
+}
+
+
+def _gate_result(
+    status: str,
+    *,
+    audio_sha256: str = "0" * 64,
+    route_provenance: "Optional[Dict[str, object]]" = None,
+) -> Dict[str, object]:
     """`scripts/screen_m3d_clips.py::_gate_one` が実際に emit する 1 ゲート
     結果の完備な形状（T3・Codex レビュー第 3 巡部分対応: `bm._REQUIRED_GATE_
     RESULT_KEYS` 全キー）を持つダミー entry を作る。`audio_sha256`（U2・
     Codex レビュー第 4 巡）: variant entry では既定のダミー値ではなく実際に
     generate される変形バイトの sha256 を渡す必要がある場合に上書きする
-    （`_real_variant_audio_sha256_map` 参照）。"""
+    （`_real_variant_audio_sha256_map` 参照）。`route_provenance`（V1・Codex
+    レビュー第 5 巡）: 既定は `_VALID_ROUTE_PROVENANCE`（record 全体で相互に
+    完全同一な有効値）。route 束縛の改変/欠落を試すテストのみ明示的に上書き
+    する。"""
     return {
         "status": status,
         "reasons": [] if status == "sufficient" else ["s1_dummy"],
         "audio_sha256": audio_sha256,
-        "route_provenance": {"route": "crepe_direct"},
+        "route_provenance": (
+            route_provenance if route_provenance is not None else _VALID_ROUTE_PROVENANCE
+        ),
         "gate_metrics": {"status": status},
     }
 
@@ -845,6 +868,149 @@ def test_verify_screening_transform_parameters_rejects_missing_subfield():
     doc = {"transform_parameters": {"semitones": list(bm.VOCADITO_SEMITONES)}}
     with pytest.raises(bm.BuildM3dPairsError, match="time_rates"):
         bm._verify_screening_transform_parameters(doc, source="test")
+
+
+# --------------------------------------------------------------------------- #
+# V1（Codex レビュー第 5 巡・採用）: screening record の観測経路
+# （top-level route + 全エントリの route_provenance）を prereg_v2 §2 の
+# 事前登録値（crepe_direct）へ選定前に束縛する
+# --------------------------------------------------------------------------- #
+def test_verify_screening_route_binding_accepts_matching_record():
+    doc = {
+        "route": "crepe_direct",
+        "clips": {
+            "vocadito_1": _sufficient_clip_entry(),
+            "vocadito_2": _sufficient_clip_entry(),
+        },
+    }
+    bm._verify_screening_route_binding(doc, source="test")  # raises なし
+
+
+def test_verify_screening_route_binding_skips_absent_variant_entries_for_insufficient_clip():
+    """S1 insufficient な clip（`original` のみで変形結果を持たない非対称性
+    — `_recompute_survivor_ids_from_clips` と同じ契約）でも、存在する entry
+    （`original`）だけで route 束縛検証が完走する。"""
+    doc = {
+        "route": "crepe_direct",
+        "clips": {
+            "vocadito_1": _sufficient_clip_entry(),
+            "vocadito_2": _insufficient_clip_entry(),
+        },
+    }
+    bm._verify_screening_route_binding(doc, source="test")  # raises なし
+
+
+def test_verify_screening_route_binding_rejects_altered_route():
+    doc = {
+        "route": "clap_direct",  # 事前登録値 crepe_direct から改変
+        "clips": {"vocadito_1": _sufficient_clip_entry()},
+    }
+    with pytest.raises(bm.BuildM3dPairsError, match="route"):
+        bm._verify_screening_route_binding(doc, source="test")
+
+
+def test_verify_screening_route_binding_rejects_missing_route_field():
+    doc = {"clips": {"vocadito_1": _sufficient_clip_entry()}}
+    with pytest.raises(bm.BuildM3dPairsError, match="route"):
+        bm._verify_screening_route_binding(doc, source="test")
+
+
+def test_verify_screening_route_binding_rejects_provenance_mismatch_across_entries():
+    """1 clip の `original` entry だけ別の `route_provenance`（= 別環境/別
+    抽出器 pin の観測）を持つ record は、record 内の相互一致要件で拒否される
+    ——CREPE weights/code drift や複数環境のマージによる混在 census を検出する。
+    """
+    tampered_provenance = dict(_VALID_ROUTE_PROVENANCE)
+    tampered_provenance["extractor_weights_sha256"] = hashlib.sha256(
+        b"different-weights"
+    ).hexdigest()
+    tampered_entry = _sufficient_clip_entry()
+    tampered_entry["original"] = _gate_result("sufficient", route_provenance=tampered_provenance)
+    doc = {
+        "route": "crepe_direct",
+        "clips": {
+            "vocadito_1": _sufficient_clip_entry(),
+            "vocadito_2": tampered_entry,
+        },
+    }
+    with pytest.raises(bm.BuildM3dPairsError, match="混在"):
+        bm._verify_screening_route_binding(doc, source="test")
+
+
+def test_verify_screening_route_binding_rejects_missing_weights_sha256():
+    incomplete_provenance = {"route": "crepe_direct", "extractor_code_sha256": "a" * 64}
+    entry = _sufficient_clip_entry()
+    entry["original"] = _gate_result("sufficient", route_provenance=incomplete_provenance)
+    doc = {"route": "crepe_direct", "clips": {"vocadito_1": entry}}
+    with pytest.raises(bm.BuildM3dPairsError, match="extractor_weights_sha256"):
+        bm._verify_screening_route_binding(doc, source="test")
+
+
+def test_verify_screening_route_binding_rejects_non_hex_code_sha256():
+    bad_provenance = {
+        "route": "crepe_direct",
+        "extractor_code_sha256": "x" * 64,  # 非 hex
+        "extractor_weights_sha256": "b" * 64,
+    }
+    entry = _sufficient_clip_entry()
+    entry["original"] = _gate_result("sufficient", route_provenance=bad_provenance)
+    doc = {"route": "crepe_direct", "clips": {"vocadito_1": entry}}
+    with pytest.raises(bm.BuildM3dPairsError, match="extractor_code_sha256"):
+        bm._verify_screening_route_binding(doc, source="test")
+
+
+def test_verify_screening_route_binding_rejects_non_mapping_route_provenance():
+    entry = _sufficient_clip_entry()
+    entry["original"] = {**_gate_result("sufficient"), "route_provenance": "not-a-mapping"}
+    doc = {"route": "crepe_direct", "clips": {"vocadito_1": entry}}
+    with pytest.raises(bm.BuildM3dPairsError, match="mapping"):
+        bm._verify_screening_route_binding(doc, source="test")
+
+
+def test_run_and_publish_v2_rejects_when_screening_route_mismatches_preregistered_value(
+    tmp_path: Path,
+):
+    """end-to-end（配線確認）: record の top-level `route` が事前登録値
+    （crepe_direct）と異なる場合、`run_and_publish` は生成を一切始めず
+    fail-closed で拒否する（V1 の核心主張）。"""
+    n_clips = 20
+    vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
+    _fixtures, fixtures_sha256 = bm.load_m2c_fixtures(fixtures_path)
+    survivors = [f"vocadito_{i}" for i in range(1, n_clips + 1)]
+    screening_path = tmp_path / "screening_v2.json"
+    _write_screening_record(
+        screening_path,
+        survivor_clip_ids=survivors,
+        m2c_external_fixtures_sha256=fixtures_sha256,
+    )
+    doc = json.loads(screening_path.read_text(encoding="utf-8"))
+    doc["route"] = "clap_direct"  # crepe_direct から改変
+    screening_path.write_text(json.dumps(doc, indent=2, sort_keys=True), encoding="utf-8")
+    out_dir = tmp_path / "external_m3d" / "m3d_pairs_v2"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="route"):
+        bm.run_and_publish(
+            vocadito_dir=vocadito_dir,
+            out_dir=out_dir,
+            manifest_out=tmp_path / "manifest_v2.yaml",
+            pins_out=tmp_path / "pins_v2.json",
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+            screening_record_path=screening_path,
+        )
+    assert not out_dir.exists()
+
+
+def test_committed_screening_v2_record_passes_route_binding_verification():
+    """committed `docs/measurements/m3d_2026-08/screening_v2.json`（実測記録
+    そのもの）が V1 検証チェーン（top-level route の事前登録値との逐語一致・
+    record 内 route_provenance の相互一致・必須 sha256 pin の書式）を満たす
+    ことを確認する（crepe/tensorflow 非依存の実物 fixture テスト・恒久回帰
+    ガード。要求どおり、満たさなければここで停止し record 自体は書き換え
+    ない）。"""
+    path = ROOT / "docs" / "measurements" / "m3d_2026-08" / "screening_v2.json"
+    doc, _digest = bm._load_screening_record(path)
+    bm._verify_screening_route_binding(doc, source=str(path))  # raises なし
 
 
 def test_run_and_publish_v2_rejects_survivor_list_tampered_beyond_gate_results(tmp_path: Path):

@@ -846,6 +846,101 @@ def _verify_screening_transform_parameters(
             )
 
 
+# prereg_v2 §2 が要求する固定 route（screen_m3d_clips.py::_ROUTE_NAME と同値。
+# 定数として二重管理を避けたいが、builder は screener を import しない設計
+# （screener が builder を import する片方向依存）のため値の複製で束縛する）。
+_PREREGISTERED_ROUTE_NAME = "crepe_direct"
+
+# route_provenance の必須 sha256 pin（`run_melody_comparison.
+# _CREPE_ROUTE_PROVENANCE_REQUIRED_PINS` と同じ 2 キー・同じ書式規約——crepe
+# 系経路が run phase 側で既に課している規律と一致させる）。
+_REQUIRED_ROUTE_PROVENANCE_SHA256_KEYS: Tuple[str, ...] = (
+    "extractor_code_sha256",
+    "extractor_weights_sha256",
+)
+
+
+def _verify_screening_route_binding(screening_doc: Dict[str, Any], *, source: str) -> None:
+    """record の観測経路が prereg_v2 §2 の事前登録値に束縛されていることを
+    検証する（Codex レビュー第 5 巡 V1 対応）。
+
+    (a) top-level `route` が事前登録値 `_PREREGISTERED_ROUTE_NAME`
+        （"crepe_direct"）と逐語一致すること。
+    (b) `clips` の全エントリ（原音+全変形。S1 insufficient な clip は変形
+        ゲート結果自体を持たない非対称性——`screen()`/`_recompute_survivor_
+        ids_from_clips` と同じ契約——ため、record に実在するエントリのみを
+        走査対象とする）の `route_provenance` が**相互に完全同一**であること。
+        CREPE weights/code の drift や複数環境のマージにより record 内で
+        観測経路が混在する（= 複数環境 census）ことを fail-closed で拒否する。
+    (c) 各エントリの `route_provenance` が必須 sha256 pin
+        （`extractor_code_sha256` / `extractor_weights_sha256`）を備え、
+        64 桁小文字 hex の書式であること（`harness._is_sha256_hex` を再利用
+        — run phase 側の crepe 必須 pin 書式検証と同じ規約に揃える）。
+
+    設計判定（特定ハッシュ定数への等値要求をしない理由）: `extractor_weights_
+    sha256` は machine-dependent な記録（重み配布物のローカル pin）であり、
+    ビルダーのソースコードへ特定ハッシュ値を定数として埋め込むことは環境
+    依存性を誤って普遍化してしまう。ここでの束縛は「route 名の事前登録値
+    との逐語一致」+「record 内で単一の観測経路のみが使われたことの相互一致
+    検証」+「sha256 形式検証」の三層で成立させる設計とした——record 内で
+    観測経路が分裂していないこと（単一環境・単一 run の census であること）
+    を機械保証すれば、prereg_v2 §2 の「同一抽出器 pin」要求を満たせる。
+
+    本関数は `clips` の key 集合が fixtures 全数と一致することの検証は行わ
+    ない（`_verify_screening_survivors` が N4 対応で既に強制済みであり、
+    `run_build` では必ずその後に呼ばれる——二重化を避ける）。
+    """
+    recorded_route = screening_doc.get("route")
+    if recorded_route != _PREREGISTERED_ROUTE_NAME:
+        raise BuildM3dPairsError(
+            f"{source}: 'route' が事前登録値と不一致 (fail-closed; "
+            f"期待={_PREREGISTERED_ROUTE_NAME!r} record={recorded_route!r}; "
+            "preregistration_v2.md §2 の crepe_direct 固定要求)"
+        )
+
+    clips = screening_doc.get("clips")
+    if not isinstance(clips, dict):
+        raise BuildM3dPairsError(f"{source}: 'clips' が mapping でない (fail-closed)")
+
+    reference_provenance: Optional[Dict[str, Any]] = None
+    reference_label: Optional[str] = None
+    for clip_id in sorted(clips):
+        entry = clips[clip_id]
+        if not isinstance(entry, dict):
+            raise BuildM3dPairsError(f"{source}: clips[{clip_id!r}] が mapping でない (fail-closed)")
+        for side_key in ("original", *VOCADITO_VARIANT_ORDER):
+            side_entry = entry.get(side_key)
+            if side_entry is None:
+                # S1 insufficient な clip は変形ゲート結果を持たない契約
+                # （`_recompute_survivor_ids_from_clips` と同じ非対称性）。
+                continue
+            if not isinstance(side_entry, dict):
+                raise BuildM3dPairsError(
+                    f"{source}: clips[{clip_id!r}].{side_key} が mapping でない (fail-closed)"
+                )
+            label = f"clips[{clip_id!r}].{side_key}.route_provenance"
+            provenance = side_entry.get("route_provenance")
+            if not isinstance(provenance, dict):
+                raise BuildM3dPairsError(f"{source}: {label} が mapping でない (fail-closed)")
+            for key in _REQUIRED_ROUTE_PROVENANCE_SHA256_KEYS:
+                value = provenance.get(key)
+                if not harness._is_sha256_hex(value):
+                    raise BuildM3dPairsError(
+                        f"{source}: {label}.{key}={value!r} は 64 桁小文字 hex "
+                        "（sha256 digest）の書式でない (fail-closed)"
+                    )
+            if reference_provenance is None:
+                reference_provenance = provenance
+                reference_label = label
+            elif provenance != reference_provenance:
+                raise BuildM3dPairsError(
+                    f"{source}: {label} が {reference_label} と不一致 "
+                    "(fail-closed; record 内で観測経路（route_provenance）が混在 "
+                    "= 複数環境 census の疑い; "
+                    f"reference={reference_provenance!r} actual={provenance!r})"
+                )
+
+
 def _verify_generated_variant_audio_hashes(
     screening_doc: Dict[str, Any],
     *,
@@ -1946,6 +2041,12 @@ def run_build(
     variant の `audio_sha256` と選定後・publish 前に照合する
     （`_verify_generated_variant_audio_hashes`）。不一致は fail-closed
     ——「審査されたバイト = 公開されるバイト」の機械保証。
+
+    V1（Codex レビュー第 5 巡）: v2 経路では選定（`select_clips_v2` 適用）の
+    直前に `_verify_screening_route_binding` を呼び、record の top-level
+    `route` が prereg_v2 §2 の事前登録値（`crepe_direct`）と逐語一致し、かつ
+    `clips` の全エントリの `route_provenance` が相互に完全同一（+ 必須 sha256
+    pin が書式検証済み）であることを検証する。不一致・混在は fail-closed。
     """
     fixtures, fixtures_sha256 = load_m2c_fixtures(fixtures_path)
     resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
@@ -1969,6 +2070,10 @@ def run_build(
         _verify_screening_transform_parameters(
             screening_doc, source=str(screening_record_path)
         )
+        # V1（Codex レビュー第 5 巡）: record の観測経路（top-level route +
+        # 全エントリの route_provenance）が prereg_v2 §2 の事前登録値
+        # （crepe_direct）に束縛されていることを選定前に検証する。
+        _verify_screening_route_binding(screening_doc, source=str(screening_record_path))
         survivor_clip_ids = screening_doc["survivor_clip_ids"]
         unknown_survivors = sorted(set(survivor_clip_ids) - set(fixtures))
         if unknown_survivors:
