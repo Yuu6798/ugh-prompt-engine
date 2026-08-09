@@ -9466,6 +9466,137 @@ def test_cell_record_mismatches_still_rejects_an_unknown_generator_code(tmp_path
     assert accepted == []
 
 
+def _install_fake_generator_code_equivalence_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, doc_text: "Optional[str]", suffix: str
+) -> str:
+    """テスト専用の等価表エントリを 1 件だけ差し込み、fake candidate hash を返す。
+
+    `doc_text` が `None` なら attestation 文書自体を作らない（「読めない」ケース）。
+    候補 hash はテストごとに一意な `suffix` から作るため、モジュールキャッシュ
+    （`_ATTESTED_SUCCESSOR_SHA256_CACHE`）がテスト間で衝突しない。念のため使用前後で
+    明示的にリセットする。
+    """
+    candidate = hashlib.sha256(f"fake-generator-code-{suffix}".encode("utf-8")).hexdigest()
+    doc_path = tmp_path / f"fake_attestation_{suffix}.md"
+    if doc_text is not None:
+        doc_path.write_text(doc_text, encoding="utf-8")
+    patched = dict(harness.GENERATOR_CODE_EQUIVALENT_SHA256S)
+    patched[candidate] = str(doc_path)
+    monkeypatch.setattr(harness, "GENERATOR_CODE_EQUIVALENT_SHA256S", patched)
+    harness._reset_attested_successor_cache()
+    return candidate
+
+
+def test_generator_code_equivalence_accepts_a_matching_attested_successor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(9) attestation 文書の `attested_successor_sha256` が loaded と一致すれば受理される
+
+    （Codex 新 P1・PR #254 line 343 是正: 後継 digest 束縛）。
+    """
+    candidate = _install_fake_generator_code_equivalence_entry(
+        monkeypatch,
+        tmp_path,
+        doc_text=(
+            "# fake attestation\n\n"
+            f"attested_successor_sha256: {harness._LOADED_GENERATOR_CODE_SHA256}\n"
+        ),
+        suffix="matching-successor",
+    )
+    assert harness._generator_code_equivalence_accepts(candidate) == candidate
+    harness._reset_attested_successor_cache()
+
+
+def test_generator_code_equivalence_rejects_a_mismatched_attested_successor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(10) successor が現行 loaded と別値の文書 → エントリ無効（resume 拒否に戻る）。
+
+    閉包 hash が動いた（測定経路に触れる変更が入った）のに等価表エントリの削除を
+    忘れた場合の機械的失効を検証する。
+    """
+    other_successor = "9" * 64
+    assert other_successor != harness._LOADED_GENERATOR_CODE_SHA256
+    candidate = _install_fake_generator_code_equivalence_entry(
+        monkeypatch,
+        tmp_path,
+        doc_text=f"attested_successor_sha256: {other_successor}\n",
+        suffix="mismatched-successor",
+    )
+    assert harness._generator_code_equivalence_accepts(candidate) is None
+    harness._reset_attested_successor_cache()
+
+    # `_cell_record_mismatches` 経由でも resume 拒否（mismatch）に戻ることを確認する。
+    record = {
+        "schema_version": harness._EXPECTED_CELL_RECORD_SCHEMA,
+        "category": "V_remix_real_direct",
+        "level": "+12dB",
+        "entry_id": "clip001",
+        "repeat_index": 0,
+        "audio_sha256": "a" * 64,
+        "annotation_sha256": "b" * 64,
+        "env_digest": "c" * 64,
+        "generator_code_sha256": candidate,
+        "tolerance_cents": 50.0,
+        "est_voiced_floor": 0.5,
+        "store_role": harness._CELL_STORE_ROLE_RUN,
+    }
+    mismatches = harness._cell_record_mismatches(
+        record,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id="clip001",
+        repeat_index=0,
+        audio_sha256="a" * 64,
+        annotation_sha256="b" * 64,
+        env_digest="c" * 64,
+        tolerance_cents=50.0,
+        est_voiced_floor=0.5,
+        store_role=harness._CELL_STORE_ROLE_RUN,
+    )
+    assert [m["field"] for m in mismatches] == ["generator_code_sha256"]
+    harness._reset_attested_successor_cache()
+
+
+def test_generator_code_equivalence_rejects_a_missing_successor_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(11) `attested_successor_sha256` 行が無い文書 → エントリ無効。"""
+    candidate = _install_fake_generator_code_equivalence_entry(
+        monkeypatch,
+        tmp_path,
+        doc_text="# fake attestation\n\nこの文書には successor 行が無い。\n",
+        suffix="missing-successor-line",
+    )
+    assert harness._generator_code_equivalence_accepts(candidate) is None
+    harness._reset_attested_successor_cache()
+
+
+def test_generator_code_equivalence_rejects_an_unreadable_attestation_document(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(11) attestation 文書自体が存在しない（読めない）→ エントリ無効。"""
+    candidate = _install_fake_generator_code_equivalence_entry(
+        monkeypatch, tmp_path, doc_text=None, suffix="unreadable-doc"
+    )
+    assert harness._generator_code_equivalence_accepts(candidate) is None
+    harness._reset_attested_successor_cache()
+
+
+def test_real_attestation_document_binds_the_current_loaded_generator_code() -> None:
+    """(9) 実運用の等価表エントリ（前任 5cc0d5f9…）が指す本物の attestation 文書は、
+
+    現行 checkout の `_LOADED_GENERATOR_CODE_SHA256` と一致する
+    `attested_successor_sha256` を宣言している（後継束縛の実測回帰）。
+    """
+    harness._reset_attested_successor_cache()
+    for predecessor, doc_relative in harness.GENERATOR_CODE_EQUIVALENT_SHA256S.items():
+        successor = harness._parse_attested_successor_sha256(harness.ROOT / doc_relative)
+        assert successor == harness._LOADED_GENERATOR_CODE_SHA256, predecessor
+        assert harness._generator_code_equivalence_accepts(predecessor) == predecessor
+    harness._reset_attested_successor_cache()
+
+
 def test_cell_store_round_trip_resumes_via_generator_code_equivalence_predecessor(
     tmp_path: Path,
 ) -> None:

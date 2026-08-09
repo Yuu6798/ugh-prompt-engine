@@ -331,9 +331,16 @@ def _preloaded_seed_modules() -> List[str]:
 # エントリの意味: 「この hash のコードで測られたセルレコード/report/verdict を、現行
 # コードで resume・照合・集計してよい」という設計裁定。等価の根拠は per-cell 測定経路に
 # 触れない変更(カテゴリ集約・検証レイヤのみ)であることの attestation 文書(値に記載)。
-# **警告: 測定経路に触れる変更を入れるコミットでは、必ず全エントリを削除して
-# 再裁定すること。** 等価表は「コード変更の免罪符」ではなく、diff スコープを
-# 文書で裁定した個別の例外である。
+# **後継束縛により閉包が変わればエントリは機械的に失効する**(Codex 新 P1・PR #254
+# line 343 是正): 受理は「candidate が本表のキーであること」だけでなく、値が指す
+# attestation 文書が宣言する `attested_successor_sha256` が現在の
+# `_LOADED_GENERATOR_CODE_SHA256` と一致することも要求する（`_generator_code_
+# equivalence_accepts` が二重化)。文書が読めない/行が無い/値が sha256 形式でない/
+# successor が現行と不一致、のいずれでもエントリは無効(受理せず従来どおり
+# mismatch/fail-closed)になる——測定経路に触れる変更を入れて閉包 hash が動けば、
+# 「消し忘れ」があってもこの照合で自動的に失効し、警告コメントの人間規律だけに
+# 依存しない。新しい変更で等価を維持したい場合は新しい attestation 文書を作成し、
+# その文書の `attested_successor_sha256` を新しい閉包 hash へ更新すること。
 GENERATOR_CODE_EQUIVALENT_SHA256S: Dict[str, str] = {
     # = commit 32288aa8（M2e r4/r5 shard map 凍結コミット）時点の閉包 hash。r6 帯の
     # 1280 セルはこの checkout で測定された（attestation 文書 §検証方法で worktree
@@ -351,6 +358,77 @@ GENERATOR_CODE_EQUIVALENT_SHA256S: Dict[str, str] = {
 # ため、下の import 群が済んだ後で確定させる——判定基準の `_SYS_MODULES_AT_LOAD` は
 # 既に凍結済みなので、評価位置が後になっても値は変わらない。
 _LOADED_GENERATOR_CODE_SHA256 = _generator_code_sha256()
+
+
+# attestation 文書パース結果のキャッシュ（candidate hash → 読み取った
+# `attested_successor_sha256`、または無効なら None）。文書は 1 run 中に変わらない
+# 前提でよい（`GENERATOR_CODE_EQUIVALENT_SHA256S` 自体がコード内の凍結値であり、
+# 実行中に等価表のエントリが増減することは無い）。テストはパスを monkeypatch した
+# 後に `_reset_attested_successor_cache()` で明示的に破棄する。
+_ATTESTED_SUCCESSOR_SHA256_CACHE: "Dict[str, Optional[str]]" = {}
+
+
+def _reset_attested_successor_cache() -> None:
+    """テスト専用フック: attestation 文書パースのキャッシュを破棄する。
+
+    `GENERATOR_CODE_EQUIVALENT_SHA256S` のエントリ値（文書パス）を monkeypatch した
+    テストは、キャッシュが古いパスの結果を持ち越さないようこれを呼ぶこと。
+    """
+    _ATTESTED_SUCCESSOR_SHA256_CACHE.clear()
+
+
+def _parse_attested_successor_sha256(doc_path: Path) -> "Optional[str]":
+    """attestation 文書から `attested_successor_sha256:` 行を読み、値を返す。
+
+    文書が読めない・該当行が無い・値が 64-hex sha256 でない、のいずれでも `None`
+    を返す（呼び出し元はこれを「無効」として扱う——読み取り不能を受理として
+    解釈しない fail-closed）。行の書式は
+    `attested_successor_sha256: <hex>`（前後の空白・バッククォート囲みは許容）。
+    複数行あれば最初に見つかった有効行のみを見る。
+    """
+    try:
+        text = doc_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("attested_successor_sha256:"):
+            continue
+        value = stripped.split(":", 1)[1].strip().strip("`").strip()
+        if _is_sha256(value):
+            return value
+        return None
+    return None
+
+
+def _generator_code_equivalence_accepts(candidate: str) -> "Optional[str]":
+    """`candidate`（記録された旧 generator_code_sha256）を等価表経由で受理してよいか。
+
+    二重条件（Codex 新 P1・PR #254 line 343 是正）:
+
+    1. `candidate` が `GENERATOR_CODE_EQUIVALENT_SHA256S` のキーである
+    2. そのエントリが指す attestation 文書が宣言する `attested_successor_sha256` が
+       現在の `_LOADED_GENERATOR_CODE_SHA256` と一致する
+
+    2 を欠くと、測定経路に触れる変更で閉包 hash が動いたのにエントリの削除を
+    忘れた場合、前任 hash が resume され続けてしまう（警告コメントという人間規律
+    だけに依存する脆弱性）。2 を満たさなければエントリは無効——受理せず `None` を
+    返し、呼び出し元は従来どおり mismatch/fail-closed のまま扱う。
+
+    受理可なら `candidate` をそのまま返す（呼び出し元が `generator_code_predecessors`
+    として記録する値）。
+    """
+    doc_relative = GENERATOR_CODE_EQUIVALENT_SHA256S.get(candidate)
+    if doc_relative is None:
+        return None
+    if candidate not in _ATTESTED_SUCCESSOR_SHA256_CACHE:
+        _ATTESTED_SUCCESSOR_SHA256_CACHE[candidate] = _parse_attested_successor_sha256(
+            ROOT / doc_relative
+        )
+    successor = _ATTESTED_SUCCESSOR_SHA256_CACHE[candidate]
+    if successor is None or successor != _LOADED_GENERATOR_CODE_SHA256:
+        return None
+    return candidate
 
 
 _ALLOWED_SCORER_LOADER_QUALNAME = "_frozen_importlib_external.SourceFileLoader"
@@ -6007,14 +6085,12 @@ def _cell_record_mismatches(
     for field, expected in current.items():
         actual = record.get(field)
         if actual != expected:
-            if (
-                field == "generator_code_sha256"
-                and isinstance(actual, str)
-                and actual in GENERATOR_CODE_EQUIVALENT_SHA256S
-            ):
-                if accepted_generator_code_predecessors is not None:
-                    accepted_generator_code_predecessors.append(actual)
-                continue
+            if field == "generator_code_sha256" and isinstance(actual, str):
+                accepted = _generator_code_equivalence_accepts(actual)
+                if accepted is not None:
+                    if accepted_generator_code_predecessors is not None:
+                        accepted_generator_code_predecessors.append(accepted)
+                    continue
             mismatches.append(
                 {"entry_id": entry_id, "field": field, "expected": expected, "actual": actual}
             )
@@ -8436,14 +8512,15 @@ def _require_matching_generator_code(
     current = _generator_code_sha256()
     if digests[0] == current:
         return digests[0], []
-    if digests[0] in GENERATOR_CODE_EQUIVALENT_SHA256S:
-        return digests[0], [digests[0]]
+    accepted = _generator_code_equivalence_accepts(digests[0])
+    if accepted is not None:
+        return digests[0], [accepted]
     raise ValueError(
         f"evaluate_m2_bars: reports の generator_code_sha256 {digests[0]!r} が現 "
         f"checkout の {current!r} とも等価表 {sorted(GENERATOR_CODE_EQUIVALENT_SHA256S)} "
-        "とも不一致; 指標算出・route 選択・ミックス式が変わった後の stale report に "
-        "バーを適用しない — dated 再実測するか設計裁定で等価表へ追加すること "
-        "(fail-closed)"
+        "とも(有効な attested_successor_sha256 束縛込みで)不一致; 指標算出・route "
+        "選択・ミックス式が変わった後の stale report にバーを適用しない — dated "
+        "再実測するか設計裁定で新しい等価表エントリを作成すること (fail-closed)"
     )
 
 
@@ -9586,17 +9663,19 @@ def _require_homogeneous_census_inputs(
     # 現在値のみを要求すると受理が下流の census で再び拒否される（PR #254 P1 対応）。
     current_generator = _generator_code_sha256()
     if common["generator_code_sha256"] != current_generator:
-        if common["generator_code_sha256"] not in GENERATOR_CODE_EQUIVALENT_SHA256S:
+        accepted = _generator_code_equivalence_accepts(common["generator_code_sha256"])
+        if accepted is None:
             raise ValueError(
                 f"aggregate_m2e_census: verdict の generator_code_sha256 "
                 f"{common['generator_code_sha256']!r} が現 checkout の "
                 f"{current_generator!r} とも等価表 "
-                f"{sorted(GENERATOR_CODE_EQUIVALENT_SHA256S)} とも不一致; 別世代の "
-                "コードが産んだ判定を現行コードの帯として publish しない (fail-closed)"
+                f"{sorted(GENERATOR_CODE_EQUIVALENT_SHA256S)} とも(有効な "
+                "attested_successor_sha256 束縛込みで)不一致; 別世代のコードが産んだ "
+                "判定を現行コードの帯として publish しない (fail-closed)"
             )
         # 等価表経由で受理。黙って通さず、census 成果物へ受理した前任 hash を刻む
         # ための材料を `common` へ積む（正直会計）。
-        common["generator_code_predecessors"] = [common["generator_code_sha256"]]
+        common["generator_code_predecessors"] = [accepted]
     current_evaluator = _evaluator_code_sha256()
     if common["evaluator_code_sha256"] != current_evaluator:
         raise ValueError(
