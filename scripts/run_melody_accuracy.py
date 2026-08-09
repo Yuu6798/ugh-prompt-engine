@@ -327,6 +327,22 @@ def _preloaded_seed_modules() -> List[str]:
     return sorted(name for name in watched if name in _SYS_MODULES_AT_LOAD)
 
 
+# 前任 generator code hash の等価表(設計裁定 = PR #254 P1 対応)。
+# エントリの意味: 「この hash のコードで測られたセルレコード/report/verdict を、現行
+# コードで resume・照合・集計してよい」という設計裁定。等価の根拠は per-cell 測定経路に
+# 触れない変更(カテゴリ集約・検証レイヤのみ)であることの attestation 文書(値に記載)。
+# **警告: 測定経路に触れる変更を入れるコミットでは、必ず全エントリを削除して
+# 再裁定すること。** 等価表は「コード変更の免罪符」ではなく、diff スコープを
+# 文書で裁定した個別の例外である。
+GENERATOR_CODE_EQUIVALENT_SHA256S: Dict[str, str] = {
+    # = commit 32288aa8（M2e r4/r5 shard map 凍結コミット）時点の閉包 hash。r6 帯の
+    # 1280 セルはこの checkout で測定された（attestation 文書 §検証方法で worktree
+    # 実行により再確認済み）。
+    "5cc0d5f9bba92ce8aa679eeebc32845e7702b6ac8e2bb1f561ba37c37ab965a4": (
+        "docs/measurements/m2e_2026-08/generator_code_equivalence_2026-08-09.md"
+    ),
+}
+
 # 閉包 digest を **あらゆる first-party import より前に** 確定させる。
 # `_generator_code_paths` は find_spec を使わずパス写像だけなので import を起こさない
 # （`provenance.package_code_state` と同じ #217 の規律）。以降 `run_accuracy` はこの値を
@@ -4931,6 +4947,7 @@ def _measure_or_resume_external_clip_row(
     cell_started_utc: List[str],
     cell_written_paths: List[str],
     cell_store_mismatches: "List[Dict[str, Any]]",
+    generator_code_predecessors: "List[str]",
     store_role: str = _CELL_STORE_ROLE_RUN,
     record_est_trajectory: bool = False,
 ) -> Dict[str, Any]:
@@ -4981,6 +4998,7 @@ def _measure_or_resume_external_clip_row(
             tolerance_cents=tolerance_cents,
             est_voiced_floor=est_voiced_floor,
             store_role=store_role,
+            accepted_generator_code_predecessors=generator_code_predecessors,
         )
         if not mismatches:
             # 取得時刻を**セルと一緒に旅させる**。resume だけを見ている限り、run の
@@ -5090,10 +5108,11 @@ def _run_external_category(
 
     `cell_store` が与えられれば設計 §8.7 のセルチェックポイントを使う。row には
     内部専用キー `_cell_store_resumed` / `_cell_store_measured` /
-    `_cell_store_mismatches` を積んで返す —— 呼び出し元 `run_accuracy` がこれを
-    pop して run 全体の bookkeeping へ畳み込む（複数 external カテゴリを 1 run で
-    測る場合の集約点はカテゴリ単位でなく run 単位のため）。`cell_store` が `None`
-    ならこれらのキーは一切現れない（挙動無変更の契約）。
+    `_cell_store_mismatches` / `_cell_store_generator_code_predecessors` を積んで
+    返す —— 呼び出し元 `run_accuracy` がこれを pop して run 全体の bookkeeping へ
+    畳み込む（複数 external カテゴリを 1 run で測る場合の集約点はカテゴリ単位でなく
+    run 単位のため）。`cell_store` が `None` ならこれらのキーは一切現れない
+    （挙動無変更の契約）。
     """
     fixtures_doc, fixtures_sha256 = load_external_fixtures(external_fixtures_path)
     _require_external_fixtures_schema_for_category(
@@ -5132,6 +5151,7 @@ def _run_external_category(
     cell_started_utc: List[str] = []
     cell_written_paths: List[str] = []
     cell_store_mismatches: "List[Dict[str, Any]]" = []
+    generator_code_predecessors: "List[str]" = []
     # D-1(b): 軌跡 digest は M2e カテゴリの row にだけ刻む（既存 M2b/M2c 記録は
     # バイト不変）。
     record_est_trajectory = _category_records_est_trajectory(category)
@@ -5164,6 +5184,7 @@ def _run_external_category(
             cell_started_utc=cell_started_utc,
             cell_written_paths=cell_written_paths,
             cell_store_mismatches=cell_store_mismatches,
+            generator_code_predecessors=generator_code_predecessors,
             store_role=store_role,
             record_est_trajectory=record_est_trajectory,
         )
@@ -5183,6 +5204,7 @@ def _run_external_category(
         row["_cell_store_started_utc"] = cell_started_utc
         row["_cell_store_written_paths"] = cell_written_paths
         row["_cell_store_mismatches"] = cell_store_mismatches
+        row["_cell_store_generator_code_predecessors"] = generator_code_predecessors
 
     unavailable = [c for c in clip_rows if c.get("outcome") == "unavailable"]
     if unavailable:
@@ -5927,6 +5949,7 @@ def _cell_record_mismatches(
     tolerance_cents: float,
     est_voiced_floor: float,
     store_role: str,
+    accepted_generator_code_predecessors: "Optional[List[str]]" = None,
 ) -> "List[Dict[str, Any]]":
     """既存セルレコードと現在の入力/環境の不一致を列挙する（設計 §8.7 再開規則）。
 
@@ -5940,6 +5963,13 @@ def _cell_record_mismatches(
     ファイルを読んだ後なので鍵は一致しているはずだが、レコードが手で書き換え/破損
     したケースを黙って resume しないための多重防御（§8.7「複数環境のセルを1つの
     帯として合算することは禁止」と同じ精神）。
+
+    `generator_code_sha256` フィールドに限り、`_LOADED_GENERATOR_CODE_SHA256` との
+    直接一致に加えて `GENERATOR_CODE_EQUIVALENT_SHA256S`（設計裁定済みの前任 hash
+    等価表）内の値も resume 可として受理する（PR #254 P1 対応）。等価表経由で受理
+    した場合は不一致に数えない代わりに、`accepted_generator_code_predecessors` が
+    渡されていればそこへ受理した前任 hash を追記する——黙って通さず、呼び出し元が
+    report へ `generator_code_predecessors` として刻めるようにする（正直会計）。
     """
     if not isinstance(record, dict):
         raise ValueError(f"cell record が JSON object でない (fail-closed): {record!r}")
@@ -5977,6 +6007,14 @@ def _cell_record_mismatches(
     for field, expected in current.items():
         actual = record.get(field)
         if actual != expected:
+            if (
+                field == "generator_code_sha256"
+                and isinstance(actual, str)
+                and actual in GENERATOR_CODE_EQUIVALENT_SHA256S
+            ):
+                if accepted_generator_code_predecessors is not None:
+                    accepted_generator_code_predecessors.append(actual)
+                continue
             mismatches.append(
                 {"entry_id": entry_id, "field": field, "expected": expected, "actual": actual}
             )
@@ -6232,6 +6270,7 @@ def run_accuracy(
     run_cell_started_utc: List[str] = []
     run_cell_written_paths: List[str] = []
     run_cell_store_mismatches: "List[Dict[str, Any]]" = []
+    run_generator_code_predecessors: List[str] = []
 
     with tempfile.TemporaryDirectory(prefix="melody-accuracy-") as tmp:
         for category in categories:
@@ -6272,6 +6311,9 @@ def run_accuracy(
                     run_cell_started_utc.extend(row.pop("_cell_store_started_utc"))
                     run_cell_written_paths.extend(row.pop("_cell_store_written_paths"))
                     run_cell_store_mismatches.extend(row.pop("_cell_store_mismatches"))
+                    run_generator_code_predecessors.extend(
+                        row.pop("_cell_store_generator_code_predecessors")
+                    )
                 _annotate_row_bars_pin(
                     row,
                     category,
@@ -6494,6 +6536,10 @@ def run_accuracy(
         results["cells_resumed"] = run_cells_resumed
         results["cells_measured"] = run_cells_measured
         results["cell_store_mismatches"] = run_cell_store_mismatches
+        # PR #254 P1: 等価表経由で受理したセルの前任 hash を黙って通さず記録する
+        # （正直会計）。equivalence を使わなかった run では常に空リストで、既存
+        # report の形（フィールド自体は増える）に対する追加は最小限にする。
+        results["generator_code_predecessors"] = sorted(set(run_generator_code_predecessors))
         # この report の数値を産んだセルの**最も古い測定開始時刻**。resume したセルは
         # 今回の `started_utc` より前に測り始められているので、事前登録の順序検査は
         # こちらを見なければ「登録前の測定」を後の run で洗浄できてしまう。
@@ -8347,18 +8393,29 @@ def _require_frozen_tolerance(reports: List[Dict[str, Any]], bar_block: Dict[str
     return frozen
 
 
-def _require_matching_generator_code(reports: List[Dict[str, Any]]) -> str:
+def _require_matching_generator_code(
+    reports: List[Dict[str, Any]]
+) -> "Tuple[str, List[str]]":
     """report の `generator_code_sha256` を 3 段で照合する（fail-closed）。
 
     `run_melody_observability.evaluate_m1_real_go_bar` と同じ規律:
 
     1. 各 report が非空 str の `generator_code_sha256` を持つ（provenance 欠落を拒否）
     2. repeats 間で一致する（別 checkout で測った run を 1 つの repeats 束に混ぜない）
-    3. 現 checkout の `_generator_code_sha256()` と一致する（指標算出・route 選択・
-       ミックス式が変わった後の stale report を、新しいバー適用の証拠として通さない）
+    3. 現 checkout の `_generator_code_sha256()` と一致する、**または**
+       `GENERATOR_CODE_EQUIVALENT_SHA256S`（設計裁定済みの前任 hash 等価表）に
+       含まれる（指標算出・route 選択・ミックス式が変わった後の stale report を、
+       新しいバー適用の証拠として通さない。ただし per-cell 測定経路に触れない
+       と裁定済みの前任コードで測った report は、等価表に載っていれば通す。
+       PR #254 P1 対応）
 
     3 を欠くと、手組み report や旧コード由来の row をそのまま「バーを満たした
     実測」として公開できてしまう（M1-real PR #220 で確定した規律）。
+
+    戻り値は `(generator_code_sha256, accepted_predecessors)`。等価表経由で受理
+    した場合のみ `accepted_predecessors` に受理した前任 hash（= `digests[0]`）が
+    入る——呼び出し元はこれを verdict の `generator_code_predecessors` として刻み、
+    黙って通さない（正直会計）。
     """
     digests: List[str] = []
     for idx, report in enumerate(reports):
@@ -8377,14 +8434,17 @@ def _require_matching_generator_code(reports: List[Dict[str, Any]]) -> str:
             "1 つの repeats 束として扱えない (fail-closed)"
         )
     current = _generator_code_sha256()
-    if digests[0] != current:
-        raise ValueError(
-            f"evaluate_m2_bars: reports の generator_code_sha256 {digests[0]!r} が現 "
-            f"checkout の {current!r} と不一致; 指標算出・route 選択・ミックス式が "
-            "変わった後の stale report にバーを適用しない — dated 再実測すること "
-            "(fail-closed)"
-        )
-    return digests[0]
+    if digests[0] == current:
+        return digests[0], []
+    if digests[0] in GENERATOR_CODE_EQUIVALENT_SHA256S:
+        return digests[0], [digests[0]]
+    raise ValueError(
+        f"evaluate_m2_bars: reports の generator_code_sha256 {digests[0]!r} が現 "
+        f"checkout の {current!r} とも等価表 {sorted(GENERATOR_CODE_EQUIVALENT_SHA256S)} "
+        "とも不一致; 指標算出・route 選択・ミックス式が変わった後の stale report に "
+        "バーを適用しない — dated 再実測するか設計裁定で等価表へ追加すること "
+        "(fail-closed)"
+    )
 
 
 def _require_eval_cell_store_disjoint_from_run_stores(
@@ -8822,7 +8882,9 @@ def evaluate_m2_bars(
         external_fixtures_registration_attestation = _require_attested_external_fixtures_registration(
             external_fixtures_path, external_fixtures_raw, external_category_started_by_index
         )
-    generator_code_sha256 = _require_matching_generator_code(reports)
+    generator_code_sha256, generator_code_predecessors = _require_matching_generator_code(
+        reports
+    )
     tolerance_cents = _require_frozen_tolerance(reports, bar_block)
     est_voiced_floor = _require_frozen_est_voicing_floor(reports, bar_block)
     scorer_pins = _require_homogeneous_scorer(reports)
@@ -8847,6 +8909,11 @@ def evaluate_m2_bars(
         "categories": {},
     }
     verdict["report_pins"] = report_pins
+    # PR #254 P1: 等価表経由で受理した前任 hash を黙って通さず verdict へ刻む
+    # （正直会計）。equivalence を使わなかった evaluate では現れない
+    # （既存 verdict の形に対する追加は最小限）。
+    if generator_code_predecessors:
+        verdict["generator_code_predecessors"] = generator_code_predecessors
     # M2e（§5.2 / §6.2）: 使った bars ファイルの相対パスと sha256、および run の水準
     # 次元を verdict へ刻む。M2e カテゴリを含まない evaluate では None のまま残る。
     verdict["m2e_bars_sha256"] = None
@@ -9512,15 +9579,24 @@ def _require_homogeneous_census_inputs(
         )
     # 集計器自身のコードと、判定を出したコードの一致（`evaluate_m2_bars` の 3 段照合と
     # 同型）。集計は判定を**新たに publish する**行為なので、その根拠が現 checkout で
-    # 再現可能であることを要求する。
+    # 再現可能であることを要求する。現 checkout との不一致は
+    # `GENERATOR_CODE_EQUIVALENT_SHA256S`（設計裁定済みの前任 hash 等価表）でも救済
+    # する——`evaluate_m2_bars` が等価表経由で受理した verdict は
+    # `generator_code_sha256` に前任 hash を保持したまま渡ってくるため、ここで
+    # 現在値のみを要求すると受理が下流の census で再び拒否される（PR #254 P1 対応）。
     current_generator = _generator_code_sha256()
     if common["generator_code_sha256"] != current_generator:
-        raise ValueError(
-            f"aggregate_m2e_census: verdict の generator_code_sha256 "
-            f"{common['generator_code_sha256']!r} が現 checkout の {current_generator!r} と "
-            "不一致; 別世代のコードが産んだ判定を現行コードの帯として publish しない "
-            "(fail-closed)"
-        )
+        if common["generator_code_sha256"] not in GENERATOR_CODE_EQUIVALENT_SHA256S:
+            raise ValueError(
+                f"aggregate_m2e_census: verdict の generator_code_sha256 "
+                f"{common['generator_code_sha256']!r} が現 checkout の "
+                f"{current_generator!r} とも等価表 "
+                f"{sorted(GENERATOR_CODE_EQUIVALENT_SHA256S)} とも不一致; 別世代の "
+                "コードが産んだ判定を現行コードの帯として publish しない (fail-closed)"
+            )
+        # 等価表経由で受理。黙って通さず、census 成果物へ受理した前任 hash を刻む
+        # ための材料を `common` へ積む（正直会計）。
+        common["generator_code_predecessors"] = [common["generator_code_sha256"]]
     current_evaluator = _evaluator_code_sha256()
     if common["evaluator_code_sha256"] != current_evaluator:
         raise ValueError(
@@ -9999,6 +10075,10 @@ def aggregate_m2e_census(
             "水準も割れる」という下方伝播を主張しない（§5.4）。",
         ],
     }
+    # PR #254 P1: `_require_homogeneous_census_inputs` が等価表経由で受理した場合に
+    # 限り、受理した前任 hash を census 成果物へも黙って通さず刻む（正直会計）。
+    if "generator_code_predecessors" in common:
+        census["generator_code_predecessors"] = common["generator_code_predecessors"]
 
     if not complete:
         # §11: 揃わないまま出せるのは**センサスのみ**。平均 RPA・破断曲線・
@@ -11462,6 +11542,11 @@ def _shard_measure_and_record_cell(
     cell_started_utc: "List[str]" = []
     cell_written_paths: "List[str]" = []
     cell_store_mismatches: "List[Dict[str, Any]]" = []
+    # shard モードは run report を出さない（docstring 参照）ので、ここで受理した
+    # 前任 hash を bubble up する報告先が無い——per-cell 完了判定だけが目的の
+    # throwaway。実際の report 提出は `run_accuracy`（`_run_external_category`
+    # 経由）の resume パスが `generator_code_predecessors` として記録する。
+    generator_code_predecessors: "List[str]" = []
 
     with tempfile.TemporaryDirectory(prefix="m2e-shard-cell-") as tmp:
         clip_row = _measure_or_resume_external_clip_row(
@@ -11485,6 +11570,7 @@ def _shard_measure_and_record_cell(
             cell_started_utc=cell_started_utc,
             cell_written_paths=cell_written_paths,
             cell_store_mismatches=cell_store_mismatches,
+            generator_code_predecessors=generator_code_predecessors,
             store_role=_CELL_STORE_ROLE_RUN,
             record_est_trajectory=record_est_trajectory,
         )

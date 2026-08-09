@@ -1071,6 +1071,7 @@ def test_evaluate_m2_bars_rejects_stale_generator_code_sha256() -> None:
         _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
     )
     stale = "1" * 64
+    assert stale not in harness.GENERATOR_CODE_EQUIVALENT_SHA256S
     report1["generator_code_sha256"] = stale
     report2["generator_code_sha256"] = stale
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
@@ -1080,6 +1081,27 @@ def test_evaluate_m2_bars_rejects_stale_generator_code_sha256() -> None:
             bars,
             bars_sha256=bars_sha256,
         )
+
+
+def test_evaluate_m2_bars_accepts_a_generator_code_equivalence_table_predecessor() -> None:
+    """(8) 等価表内の前任 hash は評価を通り、verdict に受理痕跡が残る（PR #254 P1 対応）。"""
+    predecessor = next(iter(harness.GENERATOR_CODE_EQUIVALENT_SHA256S))
+    report1 = dict(
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+    )
+    report2 = dict(
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+    )
+    report1["generator_code_sha256"] = predecessor
+    report2["generator_code_sha256"] = predecessor
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(report1), _as_report_artifact(report2)],
+        bars,
+        bars_sha256=bars_sha256,
+    )
+    assert verdict["generator_code_sha256"] == predecessor
+    assert verdict["generator_code_predecessors"] == [predecessor]
 
 
 def test_evaluate_m2_bars_rejects_tolerance_override_against_frozen_bar() -> None:
@@ -9355,6 +9377,121 @@ def test_cell_store_generator_code_mismatch_forces_remeasurement(tmp_path: Path)
     assert "generator_code_sha256" in mismatch_fields
 
 
+def test_cell_record_mismatches_accepts_an_equivalence_table_predecessor() -> None:
+    """(6) 等価表内の前任 hash は resume 可（mismatch 扱いにならない）+ 受理痕跡が残る。
+
+    PR #254 P1: `_generator_code_sha256()` はファイル bytes 全体を hash するため、
+    per-cell 測定経路に触れない変更でも digest は動く。設計裁定済みの前任 hash
+    （`GENERATOR_CODE_EQUIVALENT_SHA256S`）は resume を受理するが、黙って通さず
+    `accepted_generator_code_predecessors` へ痕跡を残す。
+    """
+    predecessor = next(iter(harness.GENERATOR_CODE_EQUIVALENT_SHA256S))
+    record = {
+        "schema_version": harness._EXPECTED_CELL_RECORD_SCHEMA,
+        "category": "V_remix_real_direct",
+        "level": "+12dB",
+        "entry_id": "clip001",
+        "repeat_index": 0,
+        "audio_sha256": "a" * 64,
+        "annotation_sha256": "b" * 64,
+        "env_digest": "c" * 64,
+        "generator_code_sha256": predecessor,
+        "tolerance_cents": 50.0,
+        "est_voiced_floor": 0.5,
+        "store_role": harness._CELL_STORE_ROLE_RUN,
+    }
+    common = dict(
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id="clip001",
+        repeat_index=0,
+        audio_sha256="a" * 64,
+        annotation_sha256="b" * 64,
+        env_digest="c" * 64,
+        tolerance_cents=50.0,
+        est_voiced_floor=0.5,
+    )
+    accepted: "List[str]" = []
+    mismatches = harness._cell_record_mismatches(
+        record,
+        store_role=harness._CELL_STORE_ROLE_RUN,
+        accepted_generator_code_predecessors=accepted,
+        **common,
+    )
+    assert mismatches == []
+    assert accepted == [predecessor]
+
+    # 受理痕跡を渡さない呼び出し（既存の 3 call site 相当）でも resume 自体は成立する。
+    assert (
+        harness._cell_record_mismatches(
+            record, store_role=harness._CELL_STORE_ROLE_RUN, **common
+        )
+        == []
+    )
+
+
+def test_cell_record_mismatches_still_rejects_an_unknown_generator_code(tmp_path: Path) -> None:
+    """(7) 等価表にも loaded にも無い hash は従来どおり mismatch のまま（fail-closed 維持）。"""
+    record = {
+        "schema_version": harness._EXPECTED_CELL_RECORD_SCHEMA,
+        "category": "V_remix_real_direct",
+        "level": "+12dB",
+        "entry_id": "clip001",
+        "repeat_index": 0,
+        "audio_sha256": "a" * 64,
+        "annotation_sha256": "b" * 64,
+        "env_digest": "c" * 64,
+        "generator_code_sha256": "e" * 64,
+        "tolerance_cents": 50.0,
+        "est_voiced_floor": 0.5,
+        "store_role": harness._CELL_STORE_ROLE_RUN,
+    }
+    assert "e" * 64 not in harness.GENERATOR_CODE_EQUIVALENT_SHA256S
+    accepted: "List[str]" = []
+    mismatches = harness._cell_record_mismatches(
+        record,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id="clip001",
+        repeat_index=0,
+        audio_sha256="a" * 64,
+        annotation_sha256="b" * 64,
+        env_digest="c" * 64,
+        tolerance_cents=50.0,
+        est_voiced_floor=0.5,
+        store_role=harness._CELL_STORE_ROLE_RUN,
+        accepted_generator_code_predecessors=accepted,
+    )
+    assert [m["field"] for m in mismatches] == ["generator_code_sha256"]
+    assert accepted == []
+
+
+def test_cell_store_round_trip_resumes_via_generator_code_equivalence_predecessor(
+    tmp_path: Path,
+) -> None:
+    """(6) 統合経路: store_A のセルが前任 hash を記録していても run report は resume し、
+
+    report に `generator_code_predecessors` を刻む（PR #254 P1 対応・r6 帯の 84.5h
+    実測を破棄しない）。
+    """
+    predecessor = next(iter(harness.GENERATOR_CODE_EQUIVALENT_SHA256S))
+    cell_store = tmp_path / "cell_store"
+    report1 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert report1["generator_code_predecessors"] == []
+
+    # store_A 全セルを前任 hash（等価表内）で記録されたことにする（r6 相当の状況を再現）。
+    for record_path in cell_store.glob("cell_*.json"):
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["generator_code_sha256"] = predecessor
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert report2["cells_measured"] == []
+    assert sorted(report2["cells_resumed"]) == sorted(_VREMIX_CLIPS)
+    assert report2["cell_store_mismatches"] == []
+    assert report2["generator_code_predecessors"] == [predecessor]
+
+
 def test_cell_store_record_without_the_expected_schema_is_not_resumed(tmp_path: Path) -> None:
     """P2: レコード形式そのものに版を要求する（同一性フィールドが揃っていても）。
 
@@ -11166,6 +11303,35 @@ def test_census_rejects_a_foreign_bars_generation(tmp_path: Path) -> None:
     for verdict in verdicts:
         verdict["m2e_bars_sha256"] = "a" * 64
     with pytest.raises(ValueError, match="別世代のバーの下で出た判定"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_accepts_a_generator_code_equivalence_table_predecessor(tmp_path: Path) -> None:
+    """等価表内の前任 hash を刻む verdict 群は census を通り、受理痕跡が残る
+
+    （PR #254 P1 対応・§3 適用範囲 3 箇所目）。
+    """
+    predecessor = next(iter(harness.GENERATOR_CODE_EQUIVALENT_SHA256S))
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["generator_code_sha256"] = predecessor
+    census = _census(tmp_path, verdicts)
+    assert census["generator_code_sha256"] == predecessor
+    assert census["generator_code_predecessors"] == [predecessor]
+    assert census["status"] == "census_complete"
+
+
+def test_census_rejects_an_unknown_generator_code(tmp_path: Path) -> None:
+    """等価表にも現 checkout にも無い generator_code_sha256 は従来どおり拒否する
+
+    （fail-closed 維持）。
+    """
+    unknown = "9" * 64
+    assert unknown not in harness.GENERATOR_CODE_EQUIVALENT_SHA256S
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        verdict["generator_code_sha256"] = unknown
+    with pytest.raises(ValueError, match="等価表"):
         _census(tmp_path, verdicts)
 
 
