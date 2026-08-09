@@ -202,6 +202,10 @@ runner の再開規則により 1 シャードが複数 run に分かれる（B_
 
 Q0（実行形態）・Q2（sha256 照合）に停止案件は検出されなかった。
 
+**設計側裁定（2026-08-09 受領）**: 逸脱 3（セッション境界再校正の記録なし）は **§8.4 非該当** —— 単一連続プロセスでセッション境界が存在しないため再校正義務は発生しない。
+
+**単位コストドリフトの観測（追記 2026-08-09）**: shard 0–4 は約 91 s/cell（P=2 校正の想定 (T_direct+T_stem)/2 ≈ 83.5 s/cell と整合）だったが、shard 5 以降は定常 約 292 s/cell（shard 5–18 平均、最大 337 s/cell）へ **約 ×3.2 にドリフト**した（swap-out は全期間 0 のためスワップ起因ではない。shard 別の s/cell 表は `audit_outputs_r6s1_2026-08-09/audit_q1_shard_table.txt` から導出可能）。r7 の予算策定はこのドリフトを織り込む。
+
 ---
 
 ## Next Steps（差し替え）
@@ -230,4 +234,4 @@ Q0（実行形態）・Q2（sha256 照合）に停止案件は検出されなか
 | 環境ロック | `docs/measurements/m2e_2026-08/m2e_env_lock_2026-08-05.txt` |
 | 冒頭校正 | `build/m2e/calib/shard0_calib_p2.json`, `build/m2e/calib/calib_p2.log`, `build/m2e/store_calib_p2/` |
 | スワップ監視 | `build/m2e/swap_watch_r6s1.log` |
-| 監査集計出力 | `build/m2e/audit_q0_workers.txt`, `audit_q1_shard_table.txt`, `audit_q3_env_digest.txt`, `audit_q5_q6_output.txt`, `audit_q5_digest_output.txt`, `audit_q6_output.txt` |
+| 監査集計出力 | `docs/measurements/m2e_2026-08/audit_outputs_r6s1_2026-08-09/audit_q{0,1,3,5,6}*.txt`（committed dated 記録。`build/m2e/` 側の同名ファイルはオリジナル） |

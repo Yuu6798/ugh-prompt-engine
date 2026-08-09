@@ -1,0 +1,12 @@
+Q6 total combos: 1280
+Q6 level counts: {'+6dB': 320, '0dB': 320, '-6dB': 320, '+12dB': 320}
+Q6 arm counts: {'V_remix_real_direct': 640, 'V_remix_real_stem': 640}
+Q6 repeat counts: {0: 640, 1: 640}
+Q6 shard-map distinct clips: 40
+Q6 shard-map distinct beds: 2 {'Angels-In-Amplifiers-I-m-Alright': 640, 'Arise-Run-Run-Run': 640}
+Q6 shard-map levels: {'+12dB': 320, '+6dB': 320, '-6dB': 320, '0dB': 320}
+Q6 shard-map arms: {'V_remix_real_direct': 640, 'V_remix_real_stem': 640}
+Q6 shard-map repeats: {0: 640, 1: 640}
+Q6 full tuple count (should be 1280): 1280
+Q6 product check: clips(40) x beds(2) x levels(4) x arms(2) x repeats(2) = 1280
+Q6 cells-per-clip distribution: {32: 40}

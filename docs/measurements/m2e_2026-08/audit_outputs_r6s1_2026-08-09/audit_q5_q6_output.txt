@@ -1,0 +1,5 @@
+Q5 ledger cells: 1280
+Q5 store_A records: 1280
+Q5 missing (in ledger, not in store): 0 []
+Q5 extra (in store, not in ledger): 0 []
+Q5 manifest top-level type: list keys: len=80

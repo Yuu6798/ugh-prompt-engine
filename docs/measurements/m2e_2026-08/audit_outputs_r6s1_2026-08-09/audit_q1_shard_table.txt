@@ -1,0 +1,67 @@
+shard | runs | first_start_utc | last_finish_utc | sum_wall_s | completed | unavail | trunc | per_run<=B+grace(7800s)
+0 | 1 | 2026-08-05T03:21:41+00:00 | 2026-08-05T05:06:31+00:00 | 6290 | 70/70 | 0 | 0 | True
+    build/m2e/shard_run_0_20260805T032049Z_zOHb0H.json elapsed=6289.7s completed=70/70 budget=7200.0 grace=600.0
+1 | 1 | 2026-08-05T05:08:06+00:00 | 2026-08-05T06:54:49+00:00 | 6403 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_1_20260805T050713Z_ctRqdT.json elapsed=6402.5s completed=68/68 budget=7200.0 grace=600.0
+2 | 1 | 2026-08-05T06:56:21+00:00 | 2026-08-05T08:40:39+00:00 | 6258 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_2_20260805T065529Z_JF7tSs.json elapsed=6257.8s completed=68/68 budget=7200.0 grace=600.0
+3 | 1 | 2026-08-05T08:42:12+00:00 | 2026-08-05T10:18:57+00:00 | 5805 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_3_20260805T084120Z_uZFH7A.json elapsed=5804.6s completed=68/68 budget=7200.0 grace=600.0
+4 | 1 | 2026-08-05T10:20:32+00:00 | 2026-08-05T12:08:05+00:00 | 6454 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_4_20260805T101938Z_UQaEBv.json elapsed=6453.8s completed=68/68 budget=7200.0 grace=600.0
+5 | 2 | 2026-08-05T12:09:38+00:00 | 2026-08-05T15:58:43+00:00 | 13637 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_5_20260805T120846Z_zRMRKH.json elapsed=7315.8s completed=40/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_5_20260805T141221Z_Pwq3O5.json elapsed=6321.2s completed=68/68 budget=7200.0 grace=600.0
+6 | 3 | 2026-08-05T16:00:27+00:00 | 2026-08-05T22:08:29+00:00 | 21876 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_6_20260805T155928Z_yVZjNs.json elapsed=7306.2s completed=24/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_6_20260805T180259Z_0kvJ5S.json elapsed=7271.1s completed=42/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_6_20260805T200553Z_P5KCM7.json elapsed=7298.9s completed=68/68 budget=7200.0 grace=600.0
+7 | 3 | 2026-08-05T22:10:12+00:00 | 2026-08-06T04:01:54+00:00 | 20894 | 68/68 | 0 | 0 | False
+    build/m2e/shard_run_7_20260805T220914Z_8q037A.json elapsed=7300.9s completed=28/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_7_20260806T001238Z_wj54XW.json elapsed=7800.3s completed=48/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_7_20260806T022422Z_oYBRja.json elapsed=5793.1s completed=68/68 budget=7200.0 grace=600.0
+8 | 3 | 2026-08-06T04:03:41+00:00 | 2026-08-06T09:46:47+00:00 | 20376 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_8_20260806T040241Z_kDmesT.json elapsed=7211.7s completed=32/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_8_20260806T060440Z_edKa2P.json elapsed=7379.5s completed=54/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_8_20260806T080924Z_lPYp3V.json elapsed=5784.5s completed=68/68 budget=7200.0 grace=600.0
+9 | 3 | 2026-08-06T09:48:34+00:00 | 2026-08-06T15:17:10+00:00 | 19507 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_9_20260806T094733Z_XfsrzG.json elapsed=7784.8s completed=26/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_9_20260806T115904Z_7aCTnt.json elapsed=7267.8s completed=54/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_9_20260806T140156Z_vrLgAM.json elapsed=4454.8s completed=68/68 budget=7200.0 grace=600.0
+10 | 3 | 2026-08-06T15:18:54+00:00 | 2026-08-06T20:32:10+00:00 | 18589 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_10_20260806T151756Z_1GeNc8.json elapsed=7356.9s completed=24/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_10_20260806T172216Z_xYu3q6.json elapsed=7323.3s completed=57/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_10_20260806T192604Z_BuBn86.json elapsed=3908.6s completed=68/68 budget=7200.0 grace=600.0
+11 | 3 | 2026-08-06T20:33:53+00:00 | 2026-08-07T02:27:17+00:00 | 20996 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_11_20260806T203256Z_OYt2Nj.json elapsed=7647.5s completed=21/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_11_20260806T224206Z_IT5Jov.json elapsed=7633.0s completed=46/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_11_20260807T005104Z_XE9GjC.json elapsed=5715.2s completed=68/68 budget=7200.0 grace=600.0
+12 | 3 | 2026-08-07T02:29:05+00:00 | 2026-08-07T07:48:52+00:00 | 18970 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_12_20260807T022805Z_7f570Z.json elapsed=7207.4s completed=24/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_12_20260807T043000Z_9JMxyW.json elapsed=7442.6s completed=47/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_12_20260807T063551Z_rIw6uP.json elapsed=4320.4s completed=68/68 budget=7200.0 grace=600.0
+13 | 4 | 2026-08-07T07:50:43+00:00 | 2026-08-07T14:03:49+00:00 | 22076 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_13_20260807T074941Z_IaiO7S.json elapsed=7087.5s completed=24/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_13_20260807T094937Z_S5Phrh.json elapsed=7347.6s completed=44/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_13_20260807T115348Z_wj5njG.json elapsed=7313.7s completed=67/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_13_20260807T135725Z_spltC8.json elapsed=326.9s completed=68/68 budget=7200.0 grace=600.0
+14 | 3 | 2026-08-07T14:05:33+00:00 | 2026-08-07T19:40:05+00:00 | 19864 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_14_20260807T140436Z_s5BnGh.json elapsed=7335.8s completed=28/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_14_20260807T160834Z_c4Kx4l.json elapsed=7575.3s completed=51/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_14_20260807T181632Z_9xQzQM.json elapsed=4953.4s completed=68/68 budget=7200.0 grace=600.0
+15 | 3 | 2026-08-07T19:41:48+00:00 | 2026-08-08T01:15:13+00:00 | 19796 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_15_20260807T194050Z_qqJTvM.json elapsed=7353.8s completed=32/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_15_20260807T214508Z_sUjUTX.json elapsed=7339.6s completed=56/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_15_20260807T234912Z_A1X6a6.json elapsed=5102.3s completed=68/68 budget=7200.0 grace=600.0
+16 | 3 | 2026-08-08T01:16:57+00:00 | 2026-08-08T06:45:14+00:00 | 19500 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_16_20260808T011559Z_dWHATA.json elapsed=7440.6s completed=23/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_16_20260808T032142Z_olZhwd.json elapsed=7307.3s completed=50/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_16_20260808T052508Z_oyTHbb.json elapsed=4752.1s completed=68/68 budget=7200.0 grace=600.0
+17 | 3 | 2026-08-08T06:46:57+00:00 | 2026-08-08T12:03:26+00:00 | 18783 | 68/68 | 0 | 0 | True
+    build/m2e/shard_run_17_20260808T064559Z_nbZrlv.json elapsed=7732.0s completed=22/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_17_20260808T085634Z_J9kZoN.json elapsed=7352.6s completed=54/68 budget=7200.0 grace=600.0
+    build/m2e/shard_run_17_20260808T110050Z_ocqMfu.json elapsed=3698.1s completed=68/68 budget=7200.0 grace=600.0
+18 | 3 | 2026-08-08T12:05:09+00:00 | 2026-08-08T17:12:05+00:00 | 18209 | 54/54 | 0 | 0 | True
+    build/m2e/shard_run_18_20260808T120412Z_7RNO0A.json elapsed=7219.7s completed=20/54 budget=7200.0 grace=600.0
+    build/m2e/shard_run_18_20260808T140614Z_tPIuJ2.json elapsed=7704.1s completed=42/54 budget=7200.0 grace=600.0
+    build/m2e/shard_run_18_20260808T161622Z_23Huso.json elapsed=3284.9s completed=54/54 budget=7200.0 grace=600.0

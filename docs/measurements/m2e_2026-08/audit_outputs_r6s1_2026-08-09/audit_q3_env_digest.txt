@@ -1,0 +1,4 @@
+cell records env_digest distinct count: 1
+  3a2a9445ac13791a73bb763ed59595e945b71af1db873a925a55eed1e30fca7d -> 1280 records
+shard run records env_digest distinct count: 1
+  3a2a9445ac13791a73bb763ed59595e945b71af1db873a925a55eed1e30fca7d -> 47 records

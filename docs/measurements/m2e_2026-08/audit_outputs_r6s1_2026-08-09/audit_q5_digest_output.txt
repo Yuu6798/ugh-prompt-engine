@@ -1,0 +1,6 @@
+Q5 records checked: 1280
+Q5 audio_sha256 mismatches: 0 []
+Q5 annotation_sha256 mismatches: 0 []
+Q5 weights sha256 distinct: 1 {'fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55': 1280}
+Q5 generator_code_sha256 distinct: 1 {'5cc0d5f9bba92ce8aa679eeebc32845e7702b6ac8e2bb1f561ba37c37ab965a4': 1280}
+Q5 files hashed: 360
