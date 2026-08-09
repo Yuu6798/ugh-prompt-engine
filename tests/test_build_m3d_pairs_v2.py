@@ -90,6 +90,18 @@ def _sufficient_clip_entry() -> Dict[str, object]:
     return entry
 
 
+def _insufficient_clip_entry() -> Dict[str, object]:
+    """S1 で insufficient と判定された clip entry（`screen()` が S1 不十分で
+    continue する形 — 変形ゲート結果を持たない非対称性も再現する）。N4 の
+    full-coverage テストで「survivor ではないが record には載っている」
+    非 survivor clip を表現するのに使う。"""
+    return {
+        "original": {"status": "insufficient", "reasons": ["s1_dummy"]},
+        "s1_sufficient": False,
+        "survivor": False,
+    }
+
+
 def _write_screening_record(
     path: Path,
     *,
@@ -352,20 +364,33 @@ def test_run_and_publish_v2_path_builds_manifest_from_screening_record(tmp_path:
 
 
 def test_run_and_publish_v2_path_rejects_unknown_survivor_clip_id(tmp_path: Path):
-    vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=20)
+    """fixtures に未登録の clip id を `survivor_clip_ids` に紛れ込ませた record
+    は拒否される。N4（Codex レビュー第 2 巡）対応後は、`clips` の key 集合が
+    fixtures 全数と完全一致することを要求するため、未登録 id を `clips` 側へ
+    紛れ込ませること自体がまず不可能になった——本テストはその一段前の経路
+    （`clips` は登録済み 20 件で fixtures と完全一致させたまま、未登録 id を
+    `survivor_clip_ids` 側にだけ追加する改ざん）を踏ませ、`_verify_screening_
+    survivors` の独立再計算との不一致（recorded 側の余剰）として、より早い
+    段階で fail-closed 拒否されることを確認する（run_build 末尾に残る
+    fixtures 非登録チェックは、N4 後は record 構造上到達不能な防御的コード
+    として残置している）。
+    """
+    n_clips = 20
+    vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
     _fixtures, fixtures_sha256 = bm.load_m2c_fixtures(fixtures_path)
+    all_ids = [f"vocadito_{i}" for i in range(1, n_clips + 1)]
+    # clips は登録済み 20 件のみで fixtures と完全一致させる（N4 の coverage
+    # チェックを通すため）— 未登録 id は clips に一切登場させない。
+    clips = {cid: _sufficient_clip_entry() for cid in all_ids}
     screening_path = tmp_path / "screening_v2.json"
-    survivors = ["vocadito_1", "vocadito_not_registered"]
-    # R1 の独立再計算/digest 束縛は満たしたまま（= このテストが検証したい
-    # 「fixtures 非登録の survivor は拒否」のパスだけを踏ませる）、per-clip
-    # gate entry は両方とも sufficient にしておく。
     _write_screening_record(
         screening_path,
-        survivor_clip_ids=survivors,
+        survivor_clip_ids=all_ids + ["vocadito_not_registered"],
         m2c_external_fixtures_sha256=fixtures_sha256,
+        clips=clips,
     )
 
-    with pytest.raises(bm.BuildM3dPairsError, match="非登録"):
+    with pytest.raises(bm.BuildM3dPairsError, match="survivor_clip_ids"):
         bm.run_and_publish(
             vocadito_dir=vocadito_dir,
             out_dir=tmp_path / "external_m3d" / "m3d_pairs_v2",
@@ -382,20 +407,67 @@ def test_run_and_publish_v2_path_stop_condition_propagates_before_any_generation
 ):
     """survivor が停止条件に抵触する場合、生成（staging 書き込み）を一切始めず
     fail-closed で拒否する——`out_dir` が作られないことまで確認する。"""
-    vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=20)
+    n_clips = 20
+    vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
     _fixtures, fixtures_sha256 = bm.load_m2c_fixtures(fixtures_path)
     screening_path = tmp_path / "screening_v2.json"
-    # N=8 survivor のみ登録 → holdout=2<3 で停止条件に抵触。R1 の独立再計算/
-    # digest 束縛は満たしたまま、このテストが検証したい停止条件の伝播だけを
-    # 踏ませる。
+    # N=8 survivor のみ → holdout=2<3 で停止条件に抵触。ただし N4（Codex レビュー
+    # 第 2 巡）対応後は `clips` が fixtures 全数（20 件）を網羅している必要が
+    # あるため、残り 12 件は insufficient な非 survivor entry として明示的に
+    # 埋める（R1 の独立再計算/digest 束縛は満たしたまま、このテストが検証
+    # したい停止条件の伝播だけを踏ませる）。
+    all_ids = [f"vocadito_{i}" for i in range(1, n_clips + 1)]
+    survivors = all_ids[:8]
+    clips = {
+        cid: (_sufficient_clip_entry() if cid in survivors else _insufficient_clip_entry())
+        for cid in all_ids
+    }
     _write_screening_record(
         screening_path,
-        survivor_clip_ids=[f"vocadito_{i}" for i in range(1, 9)],
+        survivor_clip_ids=survivors,
         m2c_external_fixtures_sha256=fixtures_sha256,
+        clips=clips,
     )
     out_dir = tmp_path / "external_m3d" / "m3d_pairs_v2"
 
     with pytest.raises(bm.BuildM3dPairsError, match="停止条件"):
+        bm.run_and_publish(
+            vocadito_dir=vocadito_dir,
+            out_dir=out_dir,
+            manifest_out=tmp_path / "manifest_v2.yaml",
+            pins_out=tmp_path / "pins_v2.json",
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+            screening_record_path=screening_path,
+        )
+    assert not out_dir.exists()
+
+
+def test_run_and_publish_v2_rejects_truncated_census_that_would_otherwise_pass_split(
+    tmp_path: Path,
+):
+    """N4（Codex レビュー第 2 巡）end-to-end 回帰ガード: fixtures 登録 20 件の
+    うち 9 件だけを `clips` に載せ、その 9 件は全て matching sufficient/
+    survivor として矛盾なく記録されている（9 >= 6+3 の最小分割閾値を満たし、
+    `select_clips_v2` まで到達し得る規模）record を `run_and_publish` へ渡すと、
+    生成（`out_dir` への書き込み）を一切始めず fail-closed で拒否されることを
+    確認する——切り詰め census が「full census から選定された」と偽装した
+    manifest を公開してしまう穴が塞がれていることの配線確認。"""
+    n_clips = 20
+    vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
+    _fixtures, fixtures_sha256 = bm.load_m2c_fixtures(fixtures_path)
+    present_ids = [f"vocadito_{i}" for i in range(1, 10)]  # 9 件のみ（fixtures は 20 件）
+    clips = {cid: _sufficient_clip_entry() for cid in present_ids}
+    screening_path = tmp_path / "screening_v2.json"
+    _write_screening_record(
+        screening_path,
+        survivor_clip_ids=present_ids,
+        m2c_external_fixtures_sha256=fixtures_sha256,
+        clips=clips,
+    )
+    out_dir = tmp_path / "external_m3d" / "m3d_pairs_v2"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="欠落"):
         bm.run_and_publish(
             vocadito_dir=vocadito_dir,
             out_dir=out_dir,
@@ -451,7 +523,9 @@ def test_recompute_survivor_ids_from_clips_matches_hand_built_gate_results():
             },
         }
     }
-    assert bm._recompute_survivor_ids_from_clips(doc, source="test") == ["vocadito_1"]
+    assert bm._recompute_survivor_ids_from_clips(
+        doc, source="test", fixture_clip_ids=["vocadito_1", "vocadito_2"]
+    ) == ["vocadito_1"]
 
 
 def test_recompute_survivor_ids_requires_all_variants_sufficient():
@@ -459,7 +533,43 @@ def test_recompute_survivor_ids_requires_all_variants_sufficient():
     # 1 変形だけ insufficient に落とす — 原音 sufficient でも survivor から外れる。
     entry[bm.VOCADITO_VARIANT_ORDER[0]] = {"status": "insufficient"}
     doc = {"clips": {"vocadito_1": entry}}
-    assert bm._recompute_survivor_ids_from_clips(doc, source="test") == []
+    assert (
+        bm._recompute_survivor_ids_from_clips(doc, source="test", fixture_clip_ids=["vocadito_1"])
+        == []
+    )
+
+
+# --------------------------------------------------------------------------- #
+# N4 対応（Codex レビュー第 2 巡）: `clips` の key 集合が fixtures 全数と
+# 完全一致することを要求する（切り詰め census の受理を封じる）
+# --------------------------------------------------------------------------- #
+def test_recompute_survivor_ids_from_clips_rejects_truncated_census_missing_ids():
+    """`clips` が fixtures 登録済みの一部（ここでは 9/20）しか載せていない
+    切り詰め record は、その 9 件全てが矛盾なく sufficient/survivor であっても
+    fail-closed で拒否する——reviewer 指摘の「9 件 sufficient・残り 11 件
+    省略」シナリオそのものの回帰ガード。"""
+    present_ids = [f"vocadito_{i}" for i in range(1, 10)]  # 9 件のみ
+    full_fixture_ids = [f"vocadito_{i}" for i in range(1, 21)]  # 本来は 20 件
+    doc = {"clips": {cid: _sufficient_clip_entry() for cid in present_ids}}
+    with pytest.raises(bm.BuildM3dPairsError, match="欠落"):
+        bm._recompute_survivor_ids_from_clips(
+            doc, source="test", fixture_clip_ids=full_fixture_ids
+        )
+
+
+def test_recompute_survivor_ids_from_clips_rejects_extra_unregistered_ids():
+    """`clips` に fixtures 非登録の余剰 clip id が紛れ込んでいる record も
+    fail-closed で拒否する（欠落だけでなく余剰も対象）。"""
+    doc = {
+        "clips": {
+            "vocadito_1": _sufficient_clip_entry(),
+            "vocadito_not_registered": _sufficient_clip_entry(),
+        }
+    }
+    with pytest.raises(bm.BuildM3dPairsError, match="余剰"):
+        bm._recompute_survivor_ids_from_clips(
+            doc, source="test", fixture_clip_ids=["vocadito_1"]
+        )
 
 
 def test_verify_screening_survivors_accepts_matching_record():
@@ -468,7 +578,9 @@ def test_verify_screening_survivors_accepts_matching_record():
         "clips": {cid: _sufficient_clip_entry() for cid in survivors},
         "survivor_clip_ids": survivors,
     }
-    bm._verify_screening_survivors(doc, source="test")  # raises なし
+    bm._verify_screening_survivors(
+        doc, source="test", fixture_clip_ids=survivors
+    )  # raises なし
 
 
 def test_verify_screening_survivors_rejects_tampered_survivor_list():
@@ -488,7 +600,9 @@ def test_verify_screening_survivors_rejects_tampered_survivor_list():
         "survivor_clip_ids": ["vocadito_1", "vocadito_2"],
     }
     with pytest.raises(bm.BuildM3dPairsError, match="survivor_clip_ids"):
-        bm._verify_screening_survivors(doc, source="test")
+        bm._verify_screening_survivors(
+            doc, source="test", fixture_clip_ids=["vocadito_1", "vocadito_2"]
+        )
 
 
 def test_verify_screening_survivors_rejects_record_missing_true_survivor():
@@ -499,7 +613,26 @@ def test_verify_screening_survivors_rejects_record_missing_true_survivor():
         "survivor_clip_ids": ["vocadito_1"],
     }
     with pytest.raises(bm.BuildM3dPairsError, match="survivor_clip_ids"):
-        bm._verify_screening_survivors(doc, source="test")
+        bm._verify_screening_survivors(
+            doc, source="test", fixture_clip_ids=["vocadito_1", "vocadito_2"]
+        )
+
+
+def test_verify_screening_survivors_rejects_truncated_census_even_when_internally_consistent():
+    """reviewer 指摘そのもの: fixtures 登録 20 件のうち 9 件だけを `clips` に
+    載せ、その 9 件は全て sufficient/survivor として矛盾なく記録されている
+    （6/3 の最小分割閾値も満たしうる規模）record が、`_verify_screening_
+    survivors` 単体でも fail-closed で拒否されることを確認する。"""
+    present_ids = [f"vocadito_{i}" for i in range(1, 10)]  # 9 件
+    full_fixture_ids = [f"vocadito_{i}" for i in range(1, 21)]  # fixtures は 20 件
+    doc = {
+        "clips": {cid: _sufficient_clip_entry() for cid in present_ids},
+        "survivor_clip_ids": present_ids,
+    }
+    with pytest.raises(bm.BuildM3dPairsError, match="欠落"):
+        bm._verify_screening_survivors(
+            doc, source="test", fixture_clip_ids=full_fixture_ids
+        )
 
 
 def test_verify_screening_input_digests_accepts_matching_record():

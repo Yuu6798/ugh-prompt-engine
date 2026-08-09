@@ -128,7 +128,7 @@ import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import librosa
 import numpy as np
@@ -636,7 +636,9 @@ def _load_screening_record(path: Path) -> Tuple[Dict[str, Any], str]:
     return doc, digest
 
 
-def _recompute_survivor_ids_from_clips(screening_doc: Dict[str, Any], *, source: str) -> List[str]:
+def _recompute_survivor_ids_from_clips(
+    screening_doc: Dict[str, Any], *, source: str, fixture_clip_ids: "Iterable[str]"
+) -> List[str]:
     """`clips`（各 clip の原音+4 変形ゲート結果）から survivor 集合を独立に
     再計算する（Codex レビュー R1 対応 (a)）。
 
@@ -649,10 +651,30 @@ def _recompute_survivor_ids_from_clips(screening_doc: Dict[str, Any], *, source:
     S1 で continue するため）——正当な record ではこの非対称性自体が契約
     なので、原音 sufficient なのに変形ゲート結果が欠落している場合は
     改ざんとみなし fail-closed とする（緩和しない）。
+
+    `fixture_clip_ids`（Codex レビュー第 2 巡 N4 対応）: `clips` の key 集合が
+    `fixture_clip_ids`（digest 束縛済み fixtures yaml 全数の clip id 集合）と
+    **完全一致**することを要求する（欠落・余剰とも fail-closed）。R1 時点の
+    再計算は `clips` に実際に載っている clip だけを走査していたため、
+    「fixtures 登録 20 件のうち sufficient な 9 件だけを載せ、残り 11 件を丸ごと
+    省略した」切り詰め record でも、その 9 件が矛盾なく survivor と一致してい
+    れば独立再計算自体は素通りしてしまう穴があった（6/3 の最小分割閾値さえ
+    満たせば `select_clips_v2` まで到達しうる）。本チェックにより、full census
+    （fixtures 全 clip）に対する screening が実際に行われたことを、record の
+    構造そのものから強制する。
     """
     clips = screening_doc.get("clips")
     if not isinstance(clips, dict):
         raise BuildM3dPairsError(f"{source}: 'clips' が mapping でない (fail-closed)")
+    expected_ids = set(fixture_clip_ids)
+    actual_ids = set(clips)
+    if actual_ids != expected_ids:
+        missing = sorted(expected_ids - actual_ids)
+        extra = sorted(actual_ids - expected_ids)
+        raise BuildM3dPairsError(
+            f"{source}: 'clips' の key 集合が fixtures 全 clip id 集合と不一致 "
+            f"(fail-closed; 欠落={missing} 余剰={extra})"
+        )
     survivors: List[str] = []
     for clip_id, entry in clips.items():
         if not isinstance(entry, dict):
@@ -681,13 +703,20 @@ def _recompute_survivor_ids_from_clips(screening_doc: Dict[str, Any], *, source:
     return sorted(survivors)
 
 
-def _verify_screening_survivors(screening_doc: Dict[str, Any], *, source: str) -> None:
+def _verify_screening_survivors(
+    screening_doc: Dict[str, Any], *, source: str, fixture_clip_ids: "Iterable[str]"
+) -> None:
     """record の `survivor_clip_ids` が per-clip ゲート結果からの独立再計算と
     **完全一致**することを要求する（Codex レビュー R1 対応 (a)）。不一致は
     fail-closed（record 内の集計値だけを信用した黙認をしない）。
+
+    `fixture_clip_ids`（N4 対応）はそのまま `_recompute_survivor_ids_from_clips`
+    へ渡し、`clips` が fixtures 全数を網羅していることも合わせて強制する。
     """
     recorded = screening_doc.get("survivor_clip_ids")
-    recomputed = _recompute_survivor_ids_from_clips(screening_doc, source=source)
+    recomputed = _recompute_survivor_ids_from_clips(
+        screening_doc, source=source, fixture_clip_ids=fixture_clip_ids
+    )
     if sorted(recorded) != recomputed:
         missing = sorted(set(recomputed) - set(recorded))
         extra = sorted(set(recorded) - set(recomputed))
@@ -1766,7 +1795,9 @@ def run_build(
         # および record が保持する入力 digest（m2c fixtures/m1 registry）が
         # 現在の build 入力の実バイトと一致するかを、選定規則の適用前に
         # fail-closed で検証する。
-        _verify_screening_survivors(screening_doc, source=str(screening_record_path))
+        _verify_screening_survivors(
+            screening_doc, source=str(screening_record_path), fixture_clip_ids=fixtures
+        )
         _verify_screening_input_digests(
             screening_doc, source=str(screening_record_path), fixtures_sha256=fixtures_sha256
         )

@@ -120,6 +120,50 @@ def _gate_one(audio_path: Path, thresholds: ObservabilityThresholds, route: Any)
     }
 
 
+def _reject_output_input_collisions(
+    *,
+    out_path: Path,
+    fixtures_path: Path,
+    m1_registry_path: Path,
+    vocadito_audio_paths: "list[Path]",
+) -> None:
+    """resolve() 済みの `--out` を全保護入力（fixtures yaml・m1 registry・
+    vocadito 全 WAV）と突き合わせ、衝突があれば screening 開始前に
+    fail-closed で拒否する（`build_m3d_pairs._reject_output_input_collisions`
+    と同型・Codex レビュー第 2 巡 N1 対応）。
+
+    `--out` は誤設定（例: `--fixtures`/`--m1-registry`/vocadito 音声そのものを
+    誤って指定）で入力を指した場合、S1/S2 のスキャン自体は成功裏に読み終えて
+    しまい、その**後**の `_atomic_write_bytes` が入力をスクリーニング JSON で
+    上書き破壊する——生成コスト（crepe/tensorflow モデルロード込みの全 40
+    clip×5 本のゲート適用）を払った後に気付く事故を防ぐため、スキャン開始前
+    （関数冒頭）に検査する。resolve() 済み絶対パスの完全一致で判定するため、
+    同一ファイルを指す別表記（相対パス・symlink 越し等）も検出する。
+
+    S2 変形の一時 WAV（`_write_variant_wav` が書く）は本 preflight の対象と
+    しない: `tempfile.TemporaryDirectory(prefix="m3d_screen_")` が呼び出し
+    ごとに OS 側でランダムに採番するディレクトリで、`--out` から独立に決まり、
+    screening 開始前に存在する決定論的な resolve() 済みパスを持たない
+    （事前に衝突判定できる固定パスがない）。実際に `--out` と一致する確率は
+    実務上ゼロであり、仮に一致しても一時ディレクトリは `with` ブロック終了時
+    に破棄される診断専用の生成物であって、上書き破壊されたら実測系列が
+    壊れる build 入力（fixtures/m1-registry/vocadito 原音）とは性質が異なる。
+    """
+    resolved_out = Path(out_path).resolve()
+    inputs: Dict[Path, str] = {
+        Path(fixtures_path).resolve(): f"fixtures_path ({fixtures_path})",
+        Path(m1_registry_path).resolve(): f"m1_registry_path ({m1_registry_path})",
+    }
+    for audio_path in vocadito_audio_paths:
+        inputs.setdefault(Path(audio_path).resolve(), f"vocadito WAV ({audio_path})")
+
+    if resolved_out in inputs:
+        raise ScreenM3dClipsError(
+            f"--out が build 入力と衝突している (fail-closed): "
+            f"{resolved_out} は {inputs[resolved_out]!r} と同じ解決済みパスを指す"
+        )
+
+
 def screen(
     *,
     vocadito_dir: Path,
@@ -238,6 +282,22 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        # N1（Codex レビュー第 2 巡）: 高価な S1/S2 スキャンを始める前に、`--out`
+        # が全保護入力（fixtures yaml・m1 registry・vocadito 全 WAV）のいずれとも
+        # 衝突しないことを確認する。fixtures はここで一度読み、preflight の
+        # vocadito WAV パス解決に使う（`screen()` 側は従来どおり独立に読み直す
+        # ——読み取りのみで破壊的操作ではないため TOCTOU 上の追加リスクはない）。
+        fixtures, _ = bp.load_m2c_fixtures(args.fixtures)
+        vocadito_audio_paths = [
+            bp.vocadito_audio_path(args.vocadito_dir, clip_id) for clip_id in fixtures
+        ]
+        _reject_output_input_collisions(
+            out_path=args.out,
+            fixtures_path=args.fixtures,
+            m1_registry_path=args.m1_registry,
+            vocadito_audio_paths=vocadito_audio_paths,
+        )
+
         doc = screen(
             vocadito_dir=args.vocadito_dir,
             fixtures_path=args.fixtures,

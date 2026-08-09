@@ -50,8 +50,13 @@ run を 2 回実行した（`--pins` 指定・`pins_preflight_verified=true`、
   （`holdout_locked_until_frozen`、比較未実施）
 - run1: report `started_utc=2026-08-09T04:10:18Z` / `recorded_utc=2026-08-09T05:22:33Z`
 - run2: report `started_utc=2026-08-09T05:23:35Z` / `recorded_utc=2026-08-09T06:39:39Z`
-- bit 一致: `run_bit_identity.json` により 98/98 pair が `identical: true`
-  （`pair_key_set_mismatch` は run1/run2 とも空集合）
+- bit 一致: `run_bit_identity.json` により、実行された比較チェーン（crepe 抽出→
+  表現→整列→軸類似）の bit 一致は **tuning 66/66**。holdout 32 行は
+  `holdout_locked_until_frozen` ロックマーカー（`{split, status}` の 2 キーのみ、
+  抽出・比較チェーン未実行）の同一性であり、こちらも 32/32 で `identical: true`
+  だが tuning の実行結果とは性質が異なる（`pair_key_set_mismatch` は run1/run2
+  とも空集合。是正: Codex レビュー #255 第 2 巡 N3 — 調整前は両者を合算した
+  「98/98」とのみ記載していた）
 
 運用注記: 実行基盤のバックグラウンドタスク打ち切り（≈4200 s TTL）により
 run1 は attempt1〜3 が失敗（詳細は `run_attempts.log`: attempt1 は原因不明の

@@ -26,7 +26,9 @@ README.md / 各 JSON)。設計 = `docs/DESIGN_M3_melody_comparator.md` §6。
 ## 2. 根拠となる実測(2 回の事前登録試行がいずれも fail-closed ガードで終端)
 
 ### v1(盲選定 98 対・#252 事前登録)
-- run×2 完走(pins preflight 済み・repeats **bit 一致 98/98**)→ evaluate が凍結提案を
+- run×2 完走(pins preflight 済み・repeats **bit 一致 tuning 66/66**(holdout 32 行は
+  `holdout_locked_until_frozen` ロックマーカーの同一性であり抽出は実行されていない。
+  詳細 = `docs/measurements/m3d_2026-08/run_bit_identity.json`))→ evaluate が凍結提案を
   **`rejected_positive_not_comparable` で拒否**。real tuning positive 46/48・negative 11/12 が
   M1 観測ゲート `phrase_count 1 < min 2` で not_comparable(margin 表は measured 3 対のみ由来)
 - 診断(`notcomparable_diagnosis.json`・アノテーション突合): 素材特性(真の 1 フレーズ)
@@ -58,9 +60,13 @@ README.md / 各 JSON)。設計 = `docs/DESIGN_M3_melody_comparator.md` §6。
   一次データ = v1 の material 別会計 + M2 の S-direct fail / V-direct pass 分裂)
 - **M1-real Go バー(Suno stem 経路): moot 化**(melody トラック終端のため。素材も未回収の
   まま)。v2 S1 census が実素材への観測ゲート大規模適用の初 dated 記録として残る
-- 副産物(閉じた事実): repeats bit 一致 98/98 × 2 round は M3 比較器チェーン
+- 副産物(閉じた事実): repeats bit 一致 **tuning 66/66** × 2 round は M3 比較器チェーン
   (crepe 抽出 → 表現 → NW 整列 → 軸類似)の**軌跡レベル決定論**を実確立した
-  (M2d 残課題の消化)。校正とは独立に有効な計器性質
+  (M2d 残課題の消化)。holdout 32 行は `holdout_locked_until_frozen` ロックマーカー
+  ({split, status} の 2 キーのみ)の bit 一致(32/32)であり、抽出・比較チェーンは
+  実行されていない — 調整前の「98/98」表記はロックマーカー行を含む pair 単位比較の
+  数で、実行チェーンの決定論としては tuning 66/66 が正確(是正: Codex レビュー #255
+  第 2 巡 N3)。校正とは独立に有効な計器性質
 
 ## 4. 再入条件(これ以外での再開はしない)
 

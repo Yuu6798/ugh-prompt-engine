@@ -1,9 +1,13 @@
 {
   "compared_files": {
-    "run1": "build/external_m3d/m3d_run1.json",
-    "run2": "build/external_m3d/m3d_run2.json"
+    "run1": "docs/measurements/m3d_2026-08/run1.json",
+    "run2": "docs/measurements/m3d_2026-08/run2.json"
   },
-  "excluded_fields_note": "Top-level run_id/started_utc/recorded_utc excluded as per-run identifiers/timestamps, not pair-level fields. No timestamp fields exist within individual pair dicts (verified by schema inspection).",
+  "excluded_fields_note": "Top-level run_id/started_utc/recorded_utc excluded as per-run identifiers/timestamps, not pair-level fields. No timestamp fields exist within individual pair dicts (verified by schema inspection). Comparison is per-pair dict equality (report['pairs'][pair_id]) over the intersection of pair id keys present in both reports; pair id keys unique to one report are reported separately under pair_key_set_mismatch and are not counted in verdict.compared_pairs. 'identical: true' is bit-for-bit dict equality of the recorded pair entry as-is: for tuning pairs this covers the full executed comparison chain (crepe extraction -> representation -> NW alignment -> axis similarity fields), while for holdout pairs (status: holdout_locked_until_frozen) the entry is only the 2-key lock marker {split, status} and no extraction/comparison was executed for those pairs in this run. See docs/m3d_calibration_record.md and docs/measurements/m3d_2026-08/README.md for the tuning 66 / holdout 32 accounting.",
+  "input_sha256": {
+    "run1": "45e2fdca0190ba36a263bf81f75fce7a6442cff3c5894b30d34e270120ffd803",
+    "run2": "872a363951113c6eb691a93ed15302af9907490ec5edb0985b195df685953740"
+  },
   "pair_key_set_mismatch": {
     "only_in_run1": [],
     "only_in_run2": []
