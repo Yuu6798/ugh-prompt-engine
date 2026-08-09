@@ -2065,7 +2065,20 @@ def check_existing(
                 "ファイルが存在しない (fail-closed)"
             )
         else:
-            actual_screening_sha = file_sha256(abs_screening_path, use_cache=False)
+            # Y2 対応（Codex レビュー第 8 巡・hash/parse の単一バイト原則）:
+            # digest 計算とその後の JSON parse を独立した 2 回の read に
+            # 分けない——`_read_bytes_and_sha256` で 1 回だけ読み、hash も
+            # 後段の parse も同じ in-memory バッファから行う（builder 内の
+            # 既存の単一読みパターン: `_read_bytes_and_sha256` 呼び出し全般、
+            # `manifest_bytes`/`_load_and_validate_pins` と同型）。以前は
+            # `file_sha256`（chunk 読み・破棄）と `abs_screening_path.
+            # read_bytes()`（下の JSON parse 用）が別々の read だったため、
+            # 「hash したバイト列」と「実際に parse で消費したバイト列」が
+            # 同一である保証が構造的に存在しなかった（両 read の間隔でファイル
+            # が差し替えられても検出不可能な TOCTOU window）。
+            screening_record_bytes, actual_screening_sha = _read_bytes_and_sha256(
+                abs_screening_path
+            )
             if actual_screening_sha != expected_screening_sha:
                 problems.append(
                     f"{recorded_screening_path}: screening record sha256 mismatch "
@@ -2083,10 +2096,12 @@ def check_existing(
                 # 抽出器 provenance の記述だけ改変した」ような偽装は前段の
                 # sha256 一致検証では検出できない——本チェックはその穴を
                 # 閉じる（prereg_v2 §2「同一抽出器 pin」の check_existing
-                # スコープでの機械保証）。
+                # スコープでの機械保証）。hash 済みバッファ（`screening_
+                # record_bytes`）をそのまま parse へ渡す——ここでの再 read は
+                # 行わない（Y2 対応）。
                 try:
                     screening_doc_for_extractor = _json_loads_no_dup_keys(
-                        abs_screening_path.read_bytes()
+                        screening_record_bytes
                     )
                 except json.JSONDecodeError as exc:
                     problems.append(
