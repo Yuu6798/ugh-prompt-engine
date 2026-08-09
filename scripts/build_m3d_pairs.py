@@ -670,6 +670,13 @@ _REQUIRED_GATE_RESULT_KEYS: Tuple[str, ...] = (
     "gate_metrics",
 )
 
+# 第 6 巡 W1 対応: `status` の閉集合。producer 側の唯一の書き手
+# `svp_rpe.melody.observability.assess_observability`（single source of
+# truth）は `status = "sufficient" if not reasons else "insufficient"` で
+# しかこのフィールドを生成しない（同モジュール `ObservabilityReport.status`
+# docstring: `status: str  # "sufficient" | "insufficient"`）。
+_ALLOWED_GATE_RESULT_STATUS_VALUES: frozenset = frozenset({"sufficient", "insufficient"})
+
 
 def _validate_gate_result_shape(entry: Any, *, source: str, label: str) -> None:
     """record の 1 ゲート結果 entry が `_REQUIRED_GATE_RESULT_KEYS` を全て
@@ -687,6 +694,25 @@ def _validate_gate_result_shape(entry: Any, *, source: str, label: str) -> None:
         )
     if not isinstance(entry.get("status"), str):
         raise BuildM3dPairsError(f"{source}: {label}.status が文字列でない (fail-closed)")
+    # 第 6 巡 W1 対応: producer（`scripts/screen_m3d_clips.py::_gate_one` →
+    # `svp_rpe.melody.observability.assess_observability`）は
+    # `status = "sufficient" if not reasons else "insufficient"` の 2 値
+    # closed enumeration しか emit しない（single source of truth:
+    # `src/svp_rpe/melody/observability.py` の `assess_observability`）。
+    # 従来は「文字列でありさえすれば受理」だったため、typo（例
+    # `"sufficent"`）や将来の新規 status 値が record に紛れ込んだ場合、
+    # `_recompute_survivor_ids_from_clips` はそれを非 "sufficient" として
+    # 素通しして insufficient 扱いする——`screen()` 本体の集計
+    # （`survivor_clip_ids`）と同じ厳密比較のため record 内部としては整合
+    # したまま、正当な survivor が無音で失われ、偽の最小分割閾値割れ
+    # （事前登録 stop 条件）を誘発しうる。producer 契約が閉集合である以上、
+    # ここでも閉集合検証を機械強制する。
+    status_value = entry["status"]
+    if status_value not in _ALLOWED_GATE_RESULT_STATUS_VALUES:
+        raise BuildM3dPairsError(
+            f"{source}: {label}.status={status_value!r} が既知の値でない (fail-closed; "
+            f"許可値={sorted(_ALLOWED_GATE_RESULT_STATUS_VALUES)})"
+        )
 
 
 def _recompute_survivor_ids_from_clips(
@@ -860,7 +886,9 @@ _REQUIRED_ROUTE_PROVENANCE_SHA256_KEYS: Tuple[str, ...] = (
 )
 
 
-def _verify_screening_route_binding(screening_doc: Dict[str, Any], *, source: str) -> None:
+def _verify_screening_route_binding(
+    screening_doc: Dict[str, Any], *, source: str
+) -> Dict[str, str]:
     """record の観測経路が prereg_v2 §2 の事前登録値に束縛されていることを
     検証する（Codex レビュー第 5 巡 V1 対応）。
 
@@ -889,6 +917,16 @@ def _verify_screening_route_binding(screening_doc: Dict[str, Any], *, source: st
     本関数は `clips` の key 集合が fixtures 全数と一致することの検証は行わ
     ない（`_verify_screening_survivors` が N4 対応で既に強制済みであり、
     `run_build` では必ずその後に呼ばれる——二重化を避ける）。
+
+    戻り値（第 6 巡 W2 対応・部分採用 (b)）: record 内で相互に完全一致する
+    ことを (b) で検証済みの単一 `route_provenance` から
+    `{"extractor_code_sha256": ..., "extractor_weights_sha256": ...}` を返す
+    ——呼び出し側 `run_build` がこれを pins サイドカーの
+    `screening_extractor_code_sha256`/`screening_extractor_weights_sha256`
+    として記録し、`check_existing` が record 現物との一致を再照合できるよう
+    にするため。走査対象が 0 件（= record 内に `route_provenance` を持つ
+    エントリが 1 つも無い）の場合は返す値そのものが定義できないため
+    fail-closed とする。
     """
     recorded_route = screening_doc.get("route")
     if recorded_route != _PREREGISTERED_ROUTE_NAME:
@@ -939,6 +977,59 @@ def _verify_screening_route_binding(screening_doc: Dict[str, Any], *, source: st
                     "= 複数環境 census の疑い; "
                     f"reference={reference_provenance!r} actual={provenance!r})"
                 )
+
+    if reference_provenance is None:
+        raise BuildM3dPairsError(
+            f"{source}: 'clips' に route_provenance を持つエントリが 1 件も無い "
+            "(fail-closed; 観測経路の pin を導出できない)"
+        )
+    return {
+        "extractor_code_sha256": reference_provenance["extractor_code_sha256"],
+        "extractor_weights_sha256": reference_provenance["extractor_weights_sha256"],
+    }
+
+
+def _find_screening_record_extractor_provenance(
+    screening_doc: Dict[str, Any],
+) -> Optional[Dict[str, str]]:
+    """`check_existing`（第 6 巡 W2 対応・部分採用 (b)）専用の軽量抽出:
+
+    screening record の `clips` を走査し、最初に見つかった書式検証済み
+    （`harness._is_sha256_hex`）`route_provenance` から
+    `{"extractor_code_sha256": ..., "extractor_weights_sha256": ...}` を
+    返す。見つからなければ `None`。
+
+    `_verify_screening_route_binding` と異なり、record 内で全エントリの
+    `route_provenance` が相互に完全一致することの再検証は**行わない**——
+    本関数を呼ぶ `check_existing` の呼び出し元は、この時点で record の
+    バイト列そのものが pins サイドカーに記録された
+    `screening_record_sha256` と一致することを既に確認済みであり
+    （バイト一致 = build 時点で `_verify_screening_route_binding` により
+    相互一致が検証された内容そのもの、という前提に立つ）、ここでは単に
+    その中の 1 エントリから比較対象の値を読み出すだけで足りる。
+    """
+    clips = screening_doc.get("clips")
+    if not isinstance(clips, dict):
+        return None
+    for clip_id in sorted(clips):
+        entry = clips.get(clip_id)
+        if not isinstance(entry, dict):
+            continue
+        for side_key in ("original", *VOCADITO_VARIANT_ORDER):
+            side_entry = entry.get(side_key)
+            if not isinstance(side_entry, dict):
+                continue
+            provenance = side_entry.get("route_provenance")
+            if not isinstance(provenance, dict):
+                continue
+            code_sha = provenance.get("extractor_code_sha256")
+            weights_sha = provenance.get("extractor_weights_sha256")
+            if harness._is_sha256_hex(code_sha) and harness._is_sha256_hex(weights_sha):
+                return {
+                    "extractor_code_sha256": code_sha,
+                    "extractor_weights_sha256": weights_sha,
+                }
+    return None
 
 
 def _verify_generated_variant_audio_hashes(
@@ -1771,6 +1862,35 @@ def _load_and_validate_pins(path: Path) -> Dict[str, Any]:
                 f"{path}: 'screening_record_path' が不正な形式 (fail-closed): "
                 f"{screening_path_value!r}"
             )
+
+    # 第 6 巡 W2 対応（部分採用 (b)）: `screening_extractor_code_sha256`/
+    # `screening_extractor_weights_sha256` は `screening_record_path`/
+    # `screening_record_sha256` と同じ後方互換規約の optional フィールド
+    # ペア（`_REQUIRED_PINS_KEYS` に含めず `_PINS_SCHEMA` も bump しない）。
+    # screening record 自体の pin が存在しない sidecar（v1 経路・screening
+    # 未使用ビルド）に、この抽出器 pin だけが単独で存在するのは sidecar
+    # 破損（記録元が無いのに派生値だけがある）とみなし fail-closed とする。
+    has_extractor_code = "screening_extractor_code_sha256" in doc
+    has_extractor_weights = "screening_extractor_weights_sha256" in doc
+    if has_extractor_code != has_extractor_weights:
+        raise BuildM3dPairsError(
+            f"{path}: 'screening_extractor_code_sha256' と "
+            "'screening_extractor_weights_sha256' は両方存在するか両方欠落かの "
+            "いずれかでなければならない (fail-closed; 片方のみの記録は sidecar 破損)"
+        )
+    if has_extractor_code and not has_screening_sha:
+        raise BuildM3dPairsError(
+            f"{path}: 'screening_extractor_code_sha256'/'screening_extractor_weights_sha256' が "
+            "'screening_record_sha256' 無しに単独で存在する (fail-closed; 記録元 screening "
+            "record pin の無い派生 pin は sidecar 破損)"
+        )
+    if has_extractor_code:
+        for field in ("screening_extractor_code_sha256", "screening_extractor_weights_sha256"):
+            extractor_sha_value = doc[field]
+            if not isinstance(extractor_sha_value, str) or len(extractor_sha_value) != 64:
+                raise BuildM3dPairsError(
+                    f"{path}: '{field}' が不正な形式 (fail-closed): {extractor_sha_value!r}"
+                )
     return doc
 
 
@@ -1920,6 +2040,54 @@ def check_existing(
                     f"{recorded_screening_path}: screening record sha256 mismatch "
                     f"(actual={actual_screening_sha} expected={expected_screening_sha})"
                 )
+            elif (
+                "screening_extractor_code_sha256" in pins_doc
+                or "screening_extractor_weights_sha256" in pins_doc
+            ):
+                # 第 6 巡 W2 対応（部分採用 (b)）: screening record のバイト
+                # 列自体は上で一致確認済み——その現物から抽出器 pin
+                # （extractor_code_sha256/extractor_weights_sha256）を読み
+                # 直し、pins サイドカーに記録された値と fail-closed で
+                # 再照合する。sidecar 記録後に record を「バイトは同じだが
+                # 抽出器 provenance の記述だけ改変した」ような偽装は前段の
+                # sha256 一致検証では検出できない——本チェックはその穴を
+                # 閉じる（prereg_v2 §2「同一抽出器 pin」の check_existing
+                # スコープでの機械保証）。
+                try:
+                    screening_doc_for_extractor = _json_loads_no_dup_keys(
+                        abs_screening_path.read_bytes()
+                    )
+                except json.JSONDecodeError as exc:
+                    problems.append(
+                        f"{recorded_screening_path}: screening record の JSON parse に失敗 "
+                        f"(fail-closed): {exc}"
+                    )
+                    screening_doc_for_extractor = None
+                if isinstance(screening_doc_for_extractor, dict):
+                    actual_extractor_provenance = _find_screening_record_extractor_provenance(
+                        screening_doc_for_extractor
+                    )
+                    if actual_extractor_provenance is None:
+                        problems.append(
+                            f"{recorded_screening_path}: route_provenance を持つ clip エントリが "
+                            "見つからない (fail-closed; screening_extractor_*_sha256 の再照合不可)"
+                        )
+                    else:
+                        for field, key in (
+                            ("screening_extractor_code_sha256", "extractor_code_sha256"),
+                            ("screening_extractor_weights_sha256", "extractor_weights_sha256"),
+                        ):
+                            expected_value = pins_doc.get(field)
+                            actual_value = actual_extractor_provenance[key]
+                            if actual_value != expected_value:
+                                problems.append(
+                                    f"{recorded_screening_path}: {field} mismatch "
+                                    f"(actual={actual_value!r} expected={expected_value!r})"
+                                )
+                elif screening_doc_for_extractor is not None:
+                    problems.append(
+                        f"{recorded_screening_path}: screening record が mapping でない (fail-closed)"
+                    )
 
     manifest_doc = _yaml_load_no_dup_keys(manifest_bytes)
     pairs = harness._validate_manifest(manifest_doc)
@@ -2052,6 +2220,7 @@ def run_build(
     resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
 
     screening_record_sha256: Optional[str] = None
+    screening_extractor_provenance: Optional[Dict[str, str]] = None
     if screening_record_path is not None:
         screening_doc, screening_record_sha256 = _load_screening_record(screening_record_path)
         # R1 対応 (a)(b): record の集計値（survivor_clip_ids）を信用せず
@@ -2072,8 +2241,14 @@ def run_build(
         )
         # V1（Codex レビュー第 5 巡）: record の観測経路（top-level route +
         # 全エントリの route_provenance）が prereg_v2 §2 の事前登録値
-        # （crepe_direct）に束縛されていることを選定前に検証する。
-        _verify_screening_route_binding(screening_doc, source=str(screening_record_path))
+        # （crepe_direct）に束縛されていることを選定前に検証する。W2（第 6
+        # 巡・部分採用 (b)）: record 内で相互一致確認済みの単一
+        # route_provenance から抽出器 pin（code/weights sha256）を受け取り、
+        # 後段で pins サイドカーへ記録する（`check_existing` が record 現物
+        # との一致を再照合できるようにするため）。
+        screening_extractor_provenance = _verify_screening_route_binding(
+            screening_doc, source=str(screening_record_path)
+        )
         survivor_clip_ids = screening_doc["survivor_clip_ids"]
         unknown_survivors = sorted(set(survivor_clip_ids) - set(fixtures))
         if unknown_survivors:
@@ -2162,6 +2337,17 @@ def run_build(
         # 特定できないため（`screening_record_path` を repo-relative で記録）。
         build_input_sha256["screening_record_sha256"] = screening_record_sha256
         build_input_sha256["screening_record_path"] = _repo_rel(screening_record_path)
+        # W2（第 6 巡・部分採用 (b)）: `_verify_screening_route_binding` が
+        # record 内相互一致検証済みで返した単一 extractor pin
+        # （code/weights sha256）も pins サイドカーへ記録する。同じ後方互換
+        # 規約（`_REQUIRED_PINS_KEYS` に含めず `_PINS_SCHEMA` も bump しない）。
+        assert screening_extractor_provenance is not None  # screening_record_path 分岐で必ず設定済み
+        build_input_sha256["screening_extractor_code_sha256"] = screening_extractor_provenance[
+            "extractor_code_sha256"
+        ]
+        build_input_sha256["screening_extractor_weights_sha256"] = screening_extractor_provenance[
+            "extractor_weights_sha256"
+        ]
     return pairs, audio_source_lookup, build_input_sha256, fixtures
 
 

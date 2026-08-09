@@ -446,6 +446,15 @@ def test_run_and_publish_v2_path_builds_manifest_from_screening_record(tmp_path:
     assert "screening_record_sha256" in pins_doc
     # R2 対応: path も併記される（check_existing が現物を再照合できるように）。
     assert pins_doc["screening_record_path"] == bm._repo_rel(screening_path)
+    # 第 6 巡 W2 対応（部分採用 (b)）: 抽出器 pin（route_provenance 由来）も
+    # 併記される——record 内で全エントリが `_VALID_ROUTE_PROVENANCE` に相互
+    # 一致しているため、その値と一致する。
+    assert pins_doc["screening_extractor_code_sha256"] == _VALID_ROUTE_PROVENANCE[
+        "extractor_code_sha256"
+    ]
+    assert pins_doc["screening_extractor_weights_sha256"] == _VALID_ROUTE_PROVENANCE[
+        "extractor_weights_sha256"
+    ]
     for key in bm._REQUIRED_PINS_KEYS:
         assert key in pins_doc
 
@@ -681,6 +690,79 @@ def test_recompute_survivor_ids_from_clips_rejects_status_only_variant_entry():
 
 
 # --------------------------------------------------------------------------- #
+# 第 6 巡 W1（採用）: `status` の閉集合検証（"sufficient"/"insufficient" 以外は
+# fail-closed）。producer（`svp_rpe.melody.observability.assess_observability`）
+# は 2 値 closed enumeration しか emit しない——typo/新規値は record 改ざんの
+# 疑いとして拒否する。
+# --------------------------------------------------------------------------- #
+def test_validate_gate_result_shape_accepts_sufficient_and_insufficient():
+    """producer 契約の 2 値はいずれも受理される（正常系の回帰ガード）。"""
+    for status in ("sufficient", "insufficient"):
+        bm._validate_gate_result_shape(
+            _gate_result(status), source="test", label="entry"
+        )  # raises なし
+
+
+def test_validate_gate_result_shape_rejects_typo_status_value():
+    """`"sufficent"`（typo）は文字列としては valid だが、producer の閉集合
+    契約に無い値として拒否される——`_recompute_survivor_ids_from_clips` に
+    非 "sufficient" として素通しさせず、明示的に fail-closed とする。"""
+    entry = _gate_result("sufficient")
+    entry["status"] = "sufficent"
+    with pytest.raises(bm.BuildM3dPairsError, match="既知の値でない"):
+        bm._validate_gate_result_shape(entry, source="test", label="entry")
+
+
+def test_validate_gate_result_shape_rejects_unknown_status_value():
+    """既知の 2 値のどちらでもない新規/未知の値（typo に限らない）も同様に
+    拒否される。"""
+    entry = _gate_result("sufficient")
+    entry["status"] = "maybe"
+    with pytest.raises(bm.BuildM3dPairsError, match="既知の値でない"):
+        bm._validate_gate_result_shape(entry, source="test", label="entry")
+
+
+def test_recompute_survivor_ids_from_clips_rejects_typo_status_in_original_entry():
+    """`_recompute_survivor_ids_from_clips` 経由でも同じ typo status が
+    fail-closed で拒否されることを end-to-end に確認する（本来 survivor に
+    数えられるはずの entry が、typo を "insufficient" 扱いで無音に取りこぼす
+    穴を閉じたことの直接証拠）。"""
+    entry = _sufficient_clip_entry()
+    original = dict(entry["original"])
+    original["status"] = "sufficent"
+    entry["original"] = original
+    doc = {"clips": {"vocadito_1": entry}}
+    with pytest.raises(bm.BuildM3dPairsError, match="既知の値でない"):
+        bm._recompute_survivor_ids_from_clips(doc, source="test", fixture_clip_ids=["vocadito_1"])
+
+
+def test_recompute_survivor_ids_from_clips_rejects_typo_status_in_variant_entry():
+    entry = _sufficient_clip_entry()
+    entry[bm.VOCADITO_VARIANT_ORDER[0]] = _gate_result("sufficent")  # type: ignore[arg-type]
+    doc = {"clips": {"vocadito_1": entry}}
+    with pytest.raises(bm.BuildM3dPairsError, match="既知の値でない"):
+        bm._recompute_survivor_ids_from_clips(doc, source="test", fixture_clip_ids=["vocadito_1"])
+
+
+def test_screen_m3d_clips_producer_status_contract_is_closed_two_value_enumeration():
+    """`scripts/screen_m3d_clips.py::_gate_one` が実際に emit する `status` は
+    `svp_rpe.melody.observability.assess_observability`（single source of
+    truth）が返す値をそのまま転記しているだけであり、その関数自体が
+    `"sufficient"`/`"insufficient"` の 2 値以外を返し得ないことをソースから
+    機械確認する（W1 の前提「producer 契約は既に閉じた 2 値 enumeration」の
+    実在検証・回帰ガード）。"""
+    import inspect
+
+    from svp_rpe.melody import observability as obs_module
+
+    source = inspect.getsource(obs_module.assess_observability)
+    assert 'status = "sufficient" if not reasons else "insufficient"' in source
+
+    gate_one_source = inspect.getsource(sm._gate_one)
+    assert '"status": report.status,' in gate_one_source
+
+
+# --------------------------------------------------------------------------- #
 # N4 対応（Codex レビュー第 2 巡）: `clips` の key 集合が fixtures 全数と
 # 完全一致することを要求する（切り詰め census の受理を封じる）
 # --------------------------------------------------------------------------- #
@@ -883,7 +965,24 @@ def test_verify_screening_route_binding_accepts_matching_record():
             "vocadito_2": _sufficient_clip_entry(),
         },
     }
-    bm._verify_screening_route_binding(doc, source="test")  # raises なし
+    # 第 6 巡 W2 対応（部分採用 (b)）: 戻り値は record 内で相互一致確認済みの
+    # 単一 route_provenance から取り出した抽出器 pin（呼び出し側 `run_build`
+    # が pins サイドカーへ記録するために使う）。
+    result = bm._verify_screening_route_binding(doc, source="test")
+    assert result == {
+        "extractor_code_sha256": _VALID_ROUTE_PROVENANCE["extractor_code_sha256"],
+        "extractor_weights_sha256": _VALID_ROUTE_PROVENANCE["extractor_weights_sha256"],
+    }
+
+
+def test_verify_screening_route_binding_rejects_when_no_route_provenance_entries_found():
+    """`clips` はあるが `route_provenance` を持つエントリが 1 件も無い record
+    （= 全 clip が S1 insufficient で `original` すら route_provenance を
+    持たない、または clips 自体が空）は、抽出器 pin を導出できないため
+    fail-closed（第 6 巡 W2 対応・部分採用 (b) の前提）。"""
+    doc = {"route": "crepe_direct", "clips": {}}
+    with pytest.raises(bm.BuildM3dPairsError, match="route_provenance を持つエントリ"):
+        bm._verify_screening_route_binding(doc, source="test")
 
 
 def test_verify_screening_route_binding_skips_absent_variant_entries_for_insufficient_clip():
@@ -1010,7 +1109,15 @@ def test_committed_screening_v2_record_passes_route_binding_verification():
     ない）。"""
     path = ROOT / "docs" / "measurements" / "m3d_2026-08" / "screening_v2.json"
     doc, _digest = bm._load_screening_record(path)
-    bm._verify_screening_route_binding(doc, source=str(path))  # raises なし
+    result = bm._verify_screening_route_binding(doc, source=str(path))
+    # 第 6 巡 W2 対応（部分採用 (a) の実在検証・恒久回帰ガード）: committed
+    # record が実際に単一の抽出器 pin へ束縛されていることを、返り値の
+    # 具体的な digest 値で確認する（`tests/test_m3d_bit_identity_record.py`
+    # の run1/run2 照合テストが期待するのと同じ値）。
+    assert result == {
+        "extractor_code_sha256": "bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd",
+        "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+    }
 
 
 def test_run_and_publish_v2_rejects_survivor_list_tampered_beyond_gate_results(tmp_path: Path):
@@ -1159,6 +1266,165 @@ def test_check_existing_passes_when_screening_record_untouched(tmp_path: Path):
         synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
     )
     assert summary["total"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# 第 6 巡 W2（部分採用 (b)）: pins サイドカーへ記録した抽出器 pin
+# （screening_extractor_code_sha256/screening_extractor_weights_sha256）を
+# `check_existing` が record 現物と fail-closed で再照合する
+# --------------------------------------------------------------------------- #
+def test_build_v2_bundle_pins_sidecar_contains_extractor_pins(tmp_path: Path):
+    """`_build_v2_bundle`（＝ `run_and_publish` v2 経路）が書く pins サイド
+    カーに、record 内の単一 route_provenance から導出した抽出器 pin が
+    記録されていることの回帰ガード。"""
+    bundle = _build_v2_bundle(tmp_path)
+    pins_doc = json.loads(bundle["pins_out"].read_text(encoding="utf-8"))
+    assert pins_doc["screening_extractor_code_sha256"] == _VALID_ROUTE_PROVENANCE[
+        "extractor_code_sha256"
+    ]
+    assert pins_doc["screening_extractor_weights_sha256"] == _VALID_ROUTE_PROVENANCE[
+        "extractor_weights_sha256"
+    ]
+
+
+def test_check_existing_detects_screening_extractor_code_pin_tampered_in_sidecar(
+    tmp_path: Path,
+):
+    """screening record 自体は無傷のまま、pins サイドカー側の
+    `screening_extractor_code_sha256` だけを直接書き換えた場合——
+    `screening_record_sha256` によるバイト一致検証は素通りする（record の
+    バイト列は変わっていないため）——`check_existing` は record 現物から
+    再導出した値との不一致で fail-closed 検出する（本対応がクローズする
+    新規の攻撃面: 既存の record バイト pin は pins.json 内の派生フィールド
+    自体の改ざんを検出しない）。"""
+    bundle = _build_v2_bundle(tmp_path)
+    pins_doc = json.loads(bundle["pins_out"].read_text(encoding="utf-8"))
+    pins_doc["screening_extractor_code_sha256"] = "f" * 64
+    bundle["pins_out"].write_text(json.dumps(pins_doc, indent=2, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="screening_extractor_code_sha256 mismatch"):
+        bm.check_existing(
+            manifest_out=bundle["manifest_out"],
+            pins_out=bundle["pins_out"],
+            vocadito_dir=bundle["vocadito_dir"],
+            fixtures_path=bundle["fixtures_path"],
+            synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+        )
+
+
+def test_check_existing_detects_screening_extractor_weights_pin_tampered_in_sidecar(
+    tmp_path: Path,
+):
+    bundle = _build_v2_bundle(tmp_path)
+    pins_doc = json.loads(bundle["pins_out"].read_text(encoding="utf-8"))
+    pins_doc["screening_extractor_weights_sha256"] = "f" * 64
+    bundle["pins_out"].write_text(json.dumps(pins_doc, indent=2, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(bm.BuildM3dPairsError, match="screening_extractor_weights_sha256 mismatch"):
+        bm.check_existing(
+            manifest_out=bundle["manifest_out"],
+            pins_out=bundle["pins_out"],
+            vocadito_dir=bundle["vocadito_dir"],
+            fixtures_path=bundle["fixtures_path"],
+            synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+        )
+
+
+def test_find_screening_record_extractor_provenance_returns_matching_pin():
+    doc = {
+        "clips": {
+            "vocadito_1": _sufficient_clip_entry(),
+        }
+    }
+    result = bm._find_screening_record_extractor_provenance(doc)
+    assert result == {
+        "extractor_code_sha256": _VALID_ROUTE_PROVENANCE["extractor_code_sha256"],
+        "extractor_weights_sha256": _VALID_ROUTE_PROVENANCE["extractor_weights_sha256"],
+    }
+
+
+def test_find_screening_record_extractor_provenance_returns_none_when_absent():
+    assert bm._find_screening_record_extractor_provenance({"clips": {}}) is None
+    assert bm._find_screening_record_extractor_provenance({}) is None
+    doc_missing_provenance = {
+        "clips": {"vocadito_1": {"original": {"status": "sufficient"}}}
+    }
+    assert bm._find_screening_record_extractor_provenance(doc_missing_provenance) is None
+
+
+# --------------------------------------------------------------------------- #
+# 第 6 巡 W2（部分採用 (b)）: `_load_and_validate_pins` の
+# screening_extractor_*_sha256 pair 整合・書式検証
+# --------------------------------------------------------------------------- #
+def _base_pins_doc_with_screening_record() -> Dict[str, object]:
+    return {
+        "schema": bm._PINS_SCHEMA,
+        "generated_utc": "2026-08-09T00:00:00+00:00",
+        "m2c_external_fixtures_sha256": "a" * 64,
+        "m3d_synth_specs_sha256": "b" * 64,
+        "manifest_sha256": "c" * 64,
+        "audio_sha256": {},
+        "material": {},
+        "screening_record_path": "build/external_m3d/m3d_screening_v2.json",
+        "screening_record_sha256": "d" * 64,
+    }
+
+
+def test_load_and_validate_pins_accepts_paired_extractor_fields(tmp_path: Path):
+    doc = _base_pins_doc_with_screening_record()
+    doc["screening_extractor_code_sha256"] = "e" * 64
+    doc["screening_extractor_weights_sha256"] = "f" * 64
+    path = tmp_path / "pins.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    loaded = bm._load_and_validate_pins(path)  # raises なし
+    assert loaded["screening_extractor_code_sha256"] == "e" * 64
+
+
+def test_load_and_validate_pins_rejects_extractor_code_without_weights(tmp_path: Path):
+    doc = _base_pins_doc_with_screening_record()
+    doc["screening_extractor_code_sha256"] = "e" * 64
+    # screening_extractor_weights_sha256 を欠落させる。
+    path = tmp_path / "pins.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(
+        bm.BuildM3dPairsError,
+        match="screening_extractor_code_sha256.*screening_extractor_weights_sha256",
+    ):
+        bm._load_and_validate_pins(path)
+
+
+def test_load_and_validate_pins_rejects_malformed_extractor_sha256(tmp_path: Path):
+    doc = _base_pins_doc_with_screening_record()
+    doc["screening_extractor_code_sha256"] = "not-a-sha256"
+    doc["screening_extractor_weights_sha256"] = "f" * 64
+    path = tmp_path / "pins.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(bm.BuildM3dPairsError, match="screening_extractor_code_sha256"):
+        bm._load_and_validate_pins(path)
+
+
+def test_load_and_validate_pins_rejects_extractor_pins_without_screening_record_pin(
+    tmp_path: Path,
+):
+    """`screening_record_sha256`（記録元の record 自体の pin）が無いのに
+    `screening_extractor_*_sha256`（その派生値）だけが単独で存在するのは
+    sidecar 破損とみなし fail-closed とする。"""
+    doc = {
+        "schema": bm._PINS_SCHEMA,
+        "generated_utc": "2026-08-09T00:00:00+00:00",
+        "m2c_external_fixtures_sha256": "a" * 64,
+        "m3d_synth_specs_sha256": "b" * 64,
+        "manifest_sha256": "c" * 64,
+        "audio_sha256": {},
+        "material": {},
+        # screening_record_path/screening_record_sha256 は両方欠落（v1 経路）。
+        "screening_extractor_code_sha256": "e" * 64,
+        "screening_extractor_weights_sha256": "f" * 64,
+    }
+    path = tmp_path / "pins.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(bm.BuildM3dPairsError, match="screening_record_sha256"):
+        bm._load_and_validate_pins(path)
 
 
 def test_load_and_validate_pins_rejects_screening_path_without_sha(tmp_path: Path):

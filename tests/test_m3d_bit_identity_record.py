@@ -1,8 +1,9 @@
 """tests/test_m3d_bit_identity_record.py — `docs/measurements/m3d_2026-08/
 run_bit_identity.json` の恒久検証（N2・Codex レビュー #255 第 2 巡）。
 
-committed 3 ファイル（`run1.json` / `run2.json` / `run_bit_identity.json`）だけを
-読む fixture テスト（実 crepe/tensorflow・音声抽出は一切走らせない・高速）。
+committed 4 ファイル（`run1.json` / `run2.json` / `run_bit_identity.json` /
+`screening_v2.json`）だけを読む fixture テスト（実 crepe/tensorflow・音声抽出は
+一切走らせない・高速）。
 
 検証する契約:
 1. `run_bit_identity.json["input_sha256"]` が `run1.json`/`run2.json` の現物
@@ -19,6 +20,12 @@ committed 3 ファイル（`run1.json` / `run2.json` / `run_bit_identity.json`�
    同じ数）を、`run1.json`/`run2.json` の生データから直接検証する——「98/98」
    ではなく「tuning 66/66 + holdout ロックマーカー 32/32」が正しい内訳である
    ことの回帰ガード。
+5.（第 6 巡 W2 対応・部分採用 (a)）committed `screening_v2.json` の単一
+   extractor provenance（`extractor_code_sha256`/`extractor_weights_sha256`）
+   が、committed `run1.json`/`run2.json` の全 measured 行の
+   `route_provenance_a`/`route_provenance_b` の対応フィールドと**完全一致**
+   することを検証する——prereg_v2 §2「screening と比較は同一抽出器 pin」の、
+   実施済み実験についての恒久機械証明。
 
 比較結果 `all_identical` の値自体（= True）はこのテストでは不変更・不変前提
 とする——変わった場合はテストが失敗し、実測記録の改変が検出される。
@@ -27,14 +34,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import build_m3d_pairs as bm  # noqa: E402
+
 MEAS_DIR = ROOT / "docs" / "measurements" / "m3d_2026-08"
 RUN1_PATH = MEAS_DIR / "run1.json"
 RUN2_PATH = MEAS_DIR / "run2.json"
 BIT_IDENTITY_PATH = MEAS_DIR / "run_bit_identity.json"
+SCREENING_V2_PATH = MEAS_DIR / "screening_v2.json"
 
 _LOCK_STATUS = "holdout_locked_until_frozen"
 _EXPECTED_TUNING_EXECUTED_COUNT = 66
@@ -151,3 +166,84 @@ def test_tuning_executed_vs_holdout_lock_marker_accounting_is_66_and_32() -> Non
     for pair_id, entry in executed_pairs.items():
         assert "comparison" in entry, (pair_id, entry)
         assert entry["split"] == "tuning"
+
+
+# --------------------------------------------------------------------------- #
+# 第 6 巡 W2 対応（部分採用 (a)）: committed screening_v2.json の単一
+# extractor provenance が committed run1.json/run2.json の全 measured 行の
+# route_provenance_a/b と完全一致することの恒久機械証明（prereg_v2 §2）。
+# --------------------------------------------------------------------------- #
+def test_screening_v2_json_exists_and_is_committed() -> None:
+    assert SCREENING_V2_PATH.exists(), f"missing committed screening_v2.json: {SCREENING_V2_PATH}"
+
+
+def _screening_v2_single_extractor_provenance() -> Dict[str, str]:
+    """committed `screening_v2.json` から `bm._verify_screening_route_binding`
+    （record 内で全エントリの `route_provenance` が相互に完全一致することを
+    独立に再検証した上で、その単一値から抽出器 pin を返す production コード
+    そのもの）を通して単一の extractor provenance を取得する。record の
+    集計値やコメントを一切信用せず、`clips` の生データから独立に導出させる
+    ——`build_m3d_pairs.py` 側の検証ロジックと同じ保証をテスト側でも再利用
+    する。"""
+    doc, _digest = bm._load_screening_record(SCREENING_V2_PATH)
+    return bm._verify_screening_route_binding(doc, source=str(SCREENING_V2_PATH))
+
+
+def test_screening_v2_json_route_provenance_is_internally_consistent() -> None:
+    """committed record 内で `route_provenance` が単一値に相互一致すること
+    （`_verify_screening_route_binding` が raise しないこと）自体を明示的に
+    確認する回帰ガード（以降のテストが前提とする不変条件）。"""
+    provenance = _screening_v2_single_extractor_provenance()
+    assert set(provenance) == {"extractor_code_sha256", "extractor_weights_sha256"}
+    for key, value in provenance.items():
+        assert isinstance(value, str) and len(value) == 64, (key, value)
+
+
+def test_screening_v2_extractor_provenance_matches_run1_run2_measured_route_provenance() -> None:
+    """committed `screening_v2.json` の単一 extractor provenance
+    （`extractor_code_sha256`/`extractor_weights_sha256`）が、committed
+    `run1.json`/`run2.json` の全 measured 行（`comparison` フィールドを持つ
+    tuning 行。holdout ロックマーカー行は `route_provenance_a/b` 自体を
+    持たないため対象外）の `route_provenance_a`/`route_provenance_b` の
+    対応フィールドと**完全一致**することを機械検証する——prereg_v2 §2
+    「screening と比較実行は同一抽出器 pin を使う」という要求の、既に
+    実施済みの実験についての恒久証明（コミット後に screening/run のどちらか
+    が別環境の抽出器で再生成されても、本テストが不一致で検出する）。
+
+    実測結果（本テスト作成時点。逐語）:
+      extractor_code_sha256    = bc9987ac6245b47f67d4ff7fd71be723e790b2feae23f3adb6ada6fa35882fcd
+      extractor_weights_sha256 = fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55
+    """
+    expected = _screening_v2_single_extractor_provenance()
+
+    checked = 0
+    mismatched: list = []
+    for run_path in (RUN1_PATH, RUN2_PATH):
+        run_doc = json.loads(run_path.read_bytes())
+        pairs: Dict[str, Any] = run_doc["pairs"]
+        for pair_id, entry in pairs.items():
+            if not isinstance(entry, dict):
+                continue
+            for side in ("a", "b"):
+                provenance = entry.get(f"route_provenance_{side}")
+                if not isinstance(provenance, dict):
+                    # holdout ロックマーカー行（{split, status} のみ）は
+                    # route_provenance を持たない——対象外（会計は N3 是正
+                    # 済みの `test_tuning_executed_vs_holdout_lock_marker_
+                    # accounting_is_66_and_32` が別途検証済み）。
+                    continue
+                checked += 1
+                actual_code = provenance.get("extractor_code_sha256")
+                actual_weights = provenance.get("extractor_weights_sha256")
+                if (
+                    actual_code != expected["extractor_code_sha256"]
+                    or actual_weights != expected["extractor_weights_sha256"]
+                ):
+                    mismatched.append(
+                        (run_path.name, pair_id, side, actual_code, actual_weights)
+                    )
+
+    # 66 measured tuning pairs × 2 runs × 2 sides(a/b) = 264。measured 行が
+    # 0 件のまま「何も比較していないのに green」になる偽陰性を防ぐ下限確認。
+    assert checked == 264, checked
+    assert mismatched == []
