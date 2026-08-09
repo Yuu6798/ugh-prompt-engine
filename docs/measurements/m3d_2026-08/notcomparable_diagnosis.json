@@ -1,11 +1,37 @@
 {
-  "generated_by": "build_diagnosis.py (ad-hoc, scratchpad-only script; not committed to repo)",
+  "generated_by": "scripts/diagnose_m3d_notcomparable.py (committed, deterministic; Codex review #255 round 9)",
   "inputs": {
-    "run_report": "build/external_m3d/m3d_run1.json",
-    "manifest_for_kind_split_material_and_holdout_audio_names": "tests/fixtures/melody_bench/m3d_pairs_manifest.yaml",
-    "vocadito_annotations_dir": "build/external_m3d/vocadito/Annotations/F0",
+    "run1_path": "docs/measurements/m3d_2026-08/run1.json",
+    "run1_sha256": "45e2fdca0190ba36a263bf81f75fce7a6442cff3c5894b30d34e270120ffd803",
+    "manifest_path": "tests/fixtures/melody_bench/m3d_pairs_manifest.yaml",
+    "manifest_sha256": "99537c8ae8c06d04516f77b102f4b5585012a732445238b63ce8184b04ff6aa2",
+    "m2c_external_fixtures_path": "tests/fixtures/melody_bench/m2c_external_fixtures.yaml",
+    "m2c_external_fixtures_sha256": "91b08852dabe3584de289c5ad5d9aafd7a40c8d3c2e14b2dbd8f599acc03b92f",
     "gate_definition_module": "src/svp_rpe/melody/observability.py",
-    "gate_registry": "tests/fixtures/melody_bench/registry.yaml"
+    "gate_registry_path": "tests/fixtures/melody_bench/registry.yaml",
+    "gate_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+    "gate_registry_bound_to_run1_via": "verified equal to pairs[*].comparison.provenance.m1_registry_sha256 for all 66 executed (non-holdout-lock) pairs",
+    "vocadito_annotations_dir": "build/external_m3d/vocadito",
+    "vocadito_annotation_sha256": {
+      "vocadito_3": "18f48fc77df7dd43c1e4bc588a79482b1d330768d63b76b90e82998573582b6a",
+      "vocadito_5": "561eb6ac03530a3219cf1a8eab9f0c14b1c4571185f0e059b61643325e4642ca",
+      "vocadito_6": "443e7f37172ef683f687fba39ab87710f22af2227e8fdb9031b2faa3002eb002",
+      "vocadito_7": "9dfd339c44bd32a8891288ea3625fcda703932fe76c4ce8f073c005874f63393",
+      "vocadito_8": "d4865ca325062a0985f8c8cf099844d9430ad445668bbd8d6bc3f786a346b457",
+      "vocadito_10": "b62573c234fe091acdc7f7ac75259df12d5a8b2bd89f5b803bfc0f433c085e96",
+      "vocadito_11": "3649b1c134df2c7630e37f614adf05b67b186f3f494a8cc6551a12b3d8a593d1",
+      "vocadito_15": "740a77c865d6dcdae2af05328230d88c97cc2d95a54a4ef44d1cde49a53afafa",
+      "vocadito_16": "fb06556c007943d6d2793af5dd6ba0ac43a1ab5e1180777bfc795564028ea8cf",
+      "vocadito_17": "d865f0cd526a030f19ba674ebf6c8956fdd8d8b4a0732a539fdb5a35ee86dc29",
+      "vocadito_20": "e09cff1461c2d3ebedcd46093297c44bb00bc705d630d11a6b6e0b8323a047d9",
+      "vocadito_22": "f6fbca9e262fe338f3ca8f99be5d08d8a4080a5b09337f4ba7f8366b0b159464",
+      "vocadito_24": "e0b877b9679fcf7ee5eae7e41c8b1fd44328f681d2c9f2e2008f76559e0f54d4",
+      "vocadito_28": "9bc2f3a1ececf51f4cde93010cfa75d2362ce971b27e91c2ca04d9161abbe346",
+      "vocadito_30": "6f584e8d0aaf514efbb7986a049c01b0887491bf40bc43ec03a566c3a24f0924",
+      "vocadito_32": "63ea4ef4788a54dc3ec9e3abb3a1b68bd5f47392d2d3359f36e5b131dc42f2fe",
+      "vocadito_34": "74e80a72860ff758162a015a213026939723ec4190635b17c9261d6b079d2740",
+      "vocadito_40": "4ba1a1c1a8e8b068cee17affee35df893270900964b4974b8457fefc4ce93e8e"
+    }
   },
   "note": "purely mechanical aggregation; no interpretation/verdict language included by design",
   "1_reason_histogram": {
