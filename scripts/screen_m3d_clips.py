@@ -25,6 +25,22 @@
 `docs/measurements/m3d_2026-08/screening_v2.json` へコピーして commit する
 （builder v2 が読む sidecar は `build/` 配下のこのファイルそのもの）。
 
+**Codex レビュー第 4 巡対応（U1・スナップショット束縛）**: 従来 `screen()` は
+各 vocadito 原音 `audio_path` を (a) `observe_via_route_with_provenance`
+（S1 観測） (b) `file_sha256`（sha256 記録） (c) `librosa.load`（S2 の 4 変形
+生成の親波形取得）でそれぞれ**独立に**開いていた——長時間スクリーニング run
+中にファイルが差し替えられれば、この 3 つの読み取りが異なるバイト列を見る
+余地があり、記録された sha256・観測結果・4 変形の親バイトが相互に一致する
+保証がなかった（`scripts/build_m3d_pairs.py::generate_vocadito_variants` の
+スナップショット束縛と同型の穴）。ここで `_freeze_and_verify_vocadito_
+snapshot` を新設し、各 clip の原音バイトを screening 開始時（clip 処理の
+先頭）に 1 回だけ `staging`（tempfile ディレクトリ）へコピーし、コピー先を
+非キャッシュで pin（`m2c_external_fixtures.yaml`）と照合してから、以後の
+(a)(b)(c) 全てをこの**同一スナップショットバイト**から行う——一度書いた
+バイトを読み直すだけなので、以後原本が差し替わってもスナップショットの
+内容には一切影響しない（`generate_vocadito_variants` の decode 直前コピー・
+非キャッシュ pin 照合と同型の設計）。
+
 使い方::
 
     python scripts/screen_m3d_clips.py --out build/external_m3d/m3d_screening_v2.json
@@ -100,6 +116,45 @@ def _write_variant_wav(path: Path, y: Any, sample_rate: int) -> None:
     sf.write(path, y, sample_rate, subtype="PCM_24")
 
 
+def _freeze_and_verify_vocadito_snapshot(
+    clip_id: str,
+    audio_path: Path,
+    expected_sha256: str,
+    snapshot_dir: Path,
+) -> Path:
+    """`audio_path`（vocadito 原音）のバイトを一度だけ読み、
+    `snapshot_dir/<clip_id>.wav` へ atomic に書いてから、**コピー先**
+    （コピー元ではない）を非キャッシュで pin（`expected_sha256`）と照合し、
+    そのスナップショット path を返す（fail-closed。Codex レビュー第 4 巡 U1
+    対応）。
+
+    役割: 「今回このスナップショットへ書いたバイトは承認済みか」という
+    消費バイト束縛の構造的な正を作ること。呼び出し側 `screen()` は本関数が
+    返す**同じ path** のみを (a) `observe_via_route_with_provenance`（S1 観測
+    入力） (b) `file_sha256`（sha256 記録） (c) `librosa.load`（S2 4 変形生成
+    の親波形取得）の全てへ渡す——3 用途が同一バイト列を読むことがこれで構造的
+    に保証される（`scripts/build_m3d_pairs.py::generate_vocadito_variants` の
+    スナップショット束縛と同型）。
+
+    冒頭の `bp.verify_vocadito_pins(..., use_cache=False)`（`screen()` の
+    生成開始前の一括照合）とは役割が異なる: あちらは「run 開始時点で原本が
+    pin と一致していたか」の一括ゲート、本関数は「今回 decode/観測に実際に
+    使うバイトが pin と一致しているか」を clip ごとに使用直前で束縛する
+    多層防御（T2 と同じ設計判断）。
+    """
+    raw_bytes = Path(audio_path).read_bytes()
+    snapshot_path = snapshot_dir / f"{clip_id}.wav"
+    _atomic_write_bytes(snapshot_path, raw_bytes)
+    actual_sha256 = file_sha256(snapshot_path, use_cache=False)
+    if actual_sha256 != expected_sha256:
+        raise ScreenM3dClipsError(
+            f"{clip_id}: vocadito スナップショットの sha256 が pin と不一致 "
+            f"(fail-closed; スナップショット={snapshot_path}; "
+            f"actual={actual_sha256} expected={expected_sha256})"
+        )
+    return snapshot_path
+
+
 def _gate_one(audio_path: Path, thresholds: ObservabilityThresholds, route: Any) -> Dict[str, Any]:
     """1 音声ファイルへ観測ゲートを適用して結果 dict を返す。
 
@@ -107,6 +162,11 @@ def _gate_one(audio_path: Path, thresholds: ObservabilityThresholds, route: Any)
     （run phase の既定 route_runner と同一関数）で観測し、`assess_observability`
     （M1 のゲート判定 single source of truth）で sufficient/insufficient を判定する
     だけである。
+
+    `audio_path`（U1 対応）: 呼び出し側は原本ではなく `_freeze_and_verify_
+    vocadito_snapshot` が返したスナップショット path を渡す——ここで計算する
+    `audio_sha256` が観測入力と同一バイトであることの構造的保証はこの引数の
+    選び方に依存する（本関数自体は path の由来を区別しない）。
     """
     observation, provenance = observe_via_route_with_provenance(str(audio_path), route)
     report = assess_observability(observation, thresholds)
@@ -140,14 +200,15 @@ def _reject_output_input_collisions(
     （関数冒頭）に検査する。resolve() 済み絶対パスの完全一致で判定するため、
     同一ファイルを指す別表記（相対パス・symlink 越し等）も検出する。
 
-    S2 変形の一時 WAV（`_write_variant_wav` が書く）は本 preflight の対象と
-    しない: `tempfile.TemporaryDirectory(prefix="m3d_screen_")` が呼び出し
-    ごとに OS 側でランダムに採番するディレクトリで、`--out` から独立に決まり、
-    screening 開始前に存在する決定論的な resolve() 済みパスを持たない
-    （事前に衝突判定できる固定パスがない）。実際に `--out` と一致する確率は
-    実務上ゼロであり、仮に一致しても一時ディレクトリは `with` ブロック終了時
-    に破棄される診断専用の生成物であって、上書き破壊されたら実測系列が
-    壊れる build 入力（fixtures/m1-registry/vocadito 原音）とは性質が異なる。
+    S2 変形の一時 WAV（`_write_variant_wav` が書く）と U1 の原音スナップショット
+    （`_freeze_and_verify_vocadito_snapshot` が書く）はいずれも本 preflight の
+    対象としない: `tempfile.TemporaryDirectory` が呼び出しごとに OS 側で
+    ランダムに採番するディレクトリで、`--out` から独立に決まり、screening
+    開始前に存在する決定論的な resolve() 済みパスを持たない（事前に衝突判定
+    できる固定パスがない）。実際に `--out` と一致する確率は実務上ゼロであり、
+    仮に一致しても一時ディレクトリは `with` ブロック終了時に破棄される診断
+    専用の生成物であって、上書き破壊されたら実測系列が壊れる build 入力
+    （fixtures/m1-registry/vocadito 原音）とは性質が異なる。
     """
     resolved_out = Path(out_path).resolve()
     inputs: Dict[Path, str] = {
@@ -175,7 +236,9 @@ def screen(
 
     fixtures, fixtures_sha256 = bp.load_m2c_fixtures(fixtures_path)
     # 全数 pin 照合（fail-closed）。`use_cache=False`: 事前登録前の最終照合と
-    # 同じ「改変検出そのものが目的」の再照合のため実バイトを読み直す。
+    # 同じ「改変検出そのものが目的」の再照合のため実バイトを読み直す。この
+    # 一括照合は run 開始時点のゲート——clip ごとの使用直前束縛は下の
+    # `_freeze_and_verify_vocadito_snapshot`（U1）が別途行う（多層防御）。
     resolved_audio = bp.verify_vocadito_pins(vocadito_dir, fixtures, use_cache=False)
 
     m1_mapping, m1_registry_sha256 = harness._load_m1_registry(m1_registry_path)
@@ -186,43 +249,59 @@ def screen(
     s1_reason_histogram: Dict[str, int] = {}
     s2_variant_dropout: Dict[str, int] = {}
 
-    for clip_id in sorted(fixtures):
-        audio_path = resolved_audio[clip_id]
-        original_result = _gate_one(audio_path, thresholds, route)
-        clip_entry: Dict[str, Any] = {"original": original_result}
+    # U1（Codex レビュー第 4 巡）: 全 clip の原音スナップショットを束ねる単一の
+    # staging ディレクトリ。run 全体で 1 つ（clip ごとに使い捨てにしない ——
+    # `build_m3d_pairs.generate_vocadito_variants` の `_vocadito_snapshot` と
+    # 同じ寿命規約）。`with` を抜けると全スナップショットが破棄される。
+    with tempfile.TemporaryDirectory(prefix="m3d_screen_snapshot_") as snapshot_root:
+        snapshot_dir = Path(snapshot_root)
+        for clip_id in sorted(fixtures):
+            audio_path = resolved_audio[clip_id]
+            # U1: 原音バイトを 1 回だけスナップショットへコピーし、コピー先を
+            # pin と照合してから、以後の (a) 観測 (b) sha256 記録 (c) 変形生成
+            # の全てをこの同一スナップショット path から行う。
+            snapshot_path = _freeze_and_verify_vocadito_snapshot(
+                clip_id, audio_path, fixtures[clip_id], snapshot_dir
+            )
+            original_result = _gate_one(snapshot_path, thresholds, route)
+            clip_entry: Dict[str, Any] = {"original": original_result}
 
-        s1_sufficient = original_result["status"] == "sufficient"
-        clip_entry["s1_sufficient"] = s1_sufficient
-        if not s1_sufficient:
-            for reason in original_result["reasons"]:
-                key = reason.split(" ", 1)[0]
-                s1_reason_histogram[key] = s1_reason_histogram.get(key, 0) + 1
-            clip_entry["survivor"] = False
+            s1_sufficient = original_result["status"] == "sufficient"
+            clip_entry["s1_sufficient"] = s1_sufficient
+            if not s1_sufficient:
+                for reason in original_result["reasons"]:
+                    key = reason.split(" ", 1)[0]
+                    s1_reason_histogram[key] = s1_reason_histogram.get(key, 0) + 1
+                clip_entry["survivor"] = False
+                clips[clip_id] = clip_entry
+                continue
+
+            # S2: S1 sufficient の clip のみ 4 変形を生成しゲートを適用する
+            # （builder と同一の決定論変形パラメータ・関数を再利用 — 新値を
+            # 発明しない）。U1: 親波形は原本ではなく同じスナップショットから
+            # decode する — 観測が読んだのと同一バイトが 4 変形の親になる。
+            y, sr = librosa.load(str(snapshot_path), sr=None, mono=True)
+            variants = bp.make_variants(
+                y, sr, semitones=list(bp.VOCADITO_SEMITONES), time_rates=list(bp.VOCADITO_TIME_RATES)
+            )
+            all_sufficient = True
+            with tempfile.TemporaryDirectory(prefix="m3d_screen_") as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                for variant_key in bp.VOCADITO_VARIANT_ORDER:
+                    variant_wav = tmp_path / (
+                        f"{clip_id}__{bp.VOCADITO_VARIANT_LABELS[variant_key]}.wav"
+                    )
+                    _write_variant_wav(variant_wav, variants[variant_key], sr)
+                    variant_result = _gate_one(variant_wav, thresholds, route)
+                    clip_entry[variant_key] = variant_result
+                    if variant_result["status"] != "sufficient":
+                        all_sufficient = False
+                        s2_variant_dropout[variant_key] = (
+                            s2_variant_dropout.get(variant_key, 0) + 1
+                        )
+
+            clip_entry["survivor"] = all_sufficient
             clips[clip_id] = clip_entry
-            continue
-
-        # S2: S1 sufficient の clip のみ 4 変形を生成しゲートを適用する
-        # （builder と同一の決定論変形パラメータ・関数を再利用 — 新値を発明しない）。
-        y, sr = librosa.load(str(audio_path), sr=None, mono=True)
-        variants = bp.make_variants(
-            y, sr, semitones=list(bp.VOCADITO_SEMITONES), time_rates=list(bp.VOCADITO_TIME_RATES)
-        )
-        all_sufficient = True
-        with tempfile.TemporaryDirectory(prefix="m3d_screen_") as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            for variant_key in bp.VOCADITO_VARIANT_ORDER:
-                variant_wav = tmp_path / (
-                    f"{clip_id}__{bp.VOCADITO_VARIANT_LABELS[variant_key]}.wav"
-                )
-                _write_variant_wav(variant_wav, variants[variant_key], sr)
-                variant_result = _gate_one(variant_wav, thresholds, route)
-                clip_entry[variant_key] = variant_result
-                if variant_result["status"] != "sufficient":
-                    all_sufficient = False
-                    s2_variant_dropout[variant_key] = s2_variant_dropout.get(variant_key, 0) + 1
-
-        clip_entry["survivor"] = all_sufficient
-        clips[clip_id] = clip_entry
 
     survivor_clip_ids = sorted(cid for cid, entry in clips.items() if entry["survivor"])
     survivor_clip_ids_sha256_sorted = sorted(

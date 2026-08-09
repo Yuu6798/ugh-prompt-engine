@@ -14,9 +14,11 @@ import hashlib
 import json
 import math
 import sys
+import tempfile
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
+import librosa
 import numpy as np
 import pytest
 import soundfile as sf
@@ -29,6 +31,7 @@ if str(SCRIPTS) not in sys.path:
 
 import build_m3d_pairs as bm  # noqa: E402
 import run_melody_comparison as harness  # noqa: E402
+import screen_m3d_clips as sm  # noqa: E402
 
 REAL_SYNTH_SPECS_V2_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3d_synth_specs_v2.yaml"
 
@@ -76,31 +79,67 @@ def _real_m1_registry_sha256() -> str:
     return hashlib.sha256(harness.M1_REGISTRY_PATH.read_bytes()).hexdigest()
 
 
-def _gate_result(status: str) -> Dict[str, object]:
+def _gate_result(status: str, *, audio_sha256: str = "0" * 64) -> Dict[str, object]:
     """`scripts/screen_m3d_clips.py::_gate_one` が実際に emit する 1 ゲート
     結果の完備な形状（T3・Codex レビュー第 3 巡部分対応: `bm._REQUIRED_GATE_
-    RESULT_KEYS` 全キー）を持つダミー entry を作る。"""
+    RESULT_KEYS` 全キー）を持つダミー entry を作る。`audio_sha256`（U2・
+    Codex レビュー第 4 巡）: variant entry では既定のダミー値ではなく実際に
+    generate される変形バイトの sha256 を渡す必要がある場合に上書きする
+    （`_real_variant_audio_sha256_map` 参照）。"""
     return {
         "status": status,
         "reasons": [] if status == "sufficient" else ["s1_dummy"],
-        "audio_sha256": "0" * 64,
+        "audio_sha256": audio_sha256,
         "route_provenance": {"route": "crepe_direct"},
         "gate_metrics": {"status": status},
     }
 
 
-def _sufficient_clip_entry() -> Dict[str, object]:
+def _sufficient_clip_entry(
+    variant_audio_sha256: "Optional[Dict[str, str]]" = None,
+) -> Dict[str, object]:
     """原音+全変形が sufficient な clip entry（`screen_m3d_clips.screen` が
     書く survivor clip の形。R1 の独立再計算（`_verify_screening_survivors`）と
-    T3 の row 完全形状検証の両方を通す。"""
+    T3 の row 完全形状検証の両方を通す。
+
+    `variant_audio_sha256`（U2・Codex レビュー第 4 巡）: `{variant_key:
+    sha256}` を渡すと、各変形 entry の `audio_sha256` をその値で埋める
+    （`_verify_generated_variant_audio_hashes` を実際に通す record を作る
+    場合に使う——省略時はダミー値 `"0"*64` のまま、選定前で止まるテストや
+    v1 経路など照合まで到達しないテストに使う）。
+    """
     entry: Dict[str, object] = {
         "original": _gate_result("sufficient"),
         "s1_sufficient": True,
         "survivor": True,
     }
     for variant_key in bm.VOCADITO_VARIANT_ORDER:
-        entry[variant_key] = _gate_result("sufficient")
+        audio_sha256 = (variant_audio_sha256 or {}).get(variant_key, "0" * 64)
+        entry[variant_key] = _gate_result("sufficient", audio_sha256=audio_sha256)
     return entry
+
+
+def _real_variant_audio_sha256_map(audio_path: Path) -> Dict[str, str]:
+    """`audio_path` から `generate_vocadito_variants` と同一の変形
+    （`bm.make_variants`・同一半音/タイムレート・同一 PCM_24 WAV シリアライズ）
+    を再現し、各変形バイトの sha256 を返す（U2・Codex レビュー第 4 巡テスト
+    用整合ヘルパー）。builder が staging へ実際に書くバイトと同じ手順
+    （decode パラメータ・書き出し subtype）で screening record 側の期待値を
+    独立に作る——builder 本体のコードパスを再利用せず、テストが「builder が
+    生成するはずのバイト」を自前で再現することで、`_verify_generated_
+    variant_audio_hashes` が本当に正しいバイトを比較していることを検証する。
+    """
+    y, sr = librosa.load(str(audio_path), sr=None, mono=True)
+    variants = bm.make_variants(
+        y, sr, semitones=list(bm.VOCADITO_SEMITONES), time_rates=list(bm.VOCADITO_TIME_RATES)
+    )
+    result: Dict[str, str] = {}
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        for variant_key, wave in variants.items():
+            tmp_wav = Path(tmp_dir) / f"{variant_key}.wav"
+            sf.write(tmp_wav, wave, sr, subtype="PCM_24")
+            result[variant_key] = hashlib.sha256(tmp_wav.read_bytes()).hexdigest()
+    return result
 
 
 def _insufficient_clip_entry() -> Dict[str, object]:
@@ -122,6 +161,7 @@ def _write_screening_record(
     m1_registry_sha256: str = None,
     m2c_external_fixtures_sha256: str = "1" * 64,
     clips: Dict[str, object] = None,
+    variant_audio_sha256_by_clip: "Optional[Dict[str, Dict[str, str]]]" = None,
 ) -> str:
     """screening record（schema: m3d-screening/0.1）を書く。
 
@@ -132,11 +172,23 @@ def _write_screening_record(
     （R1 の入力 digest 束縛検証をデフォルトで通すため）。改ざん/不一致を
     意図的に作るテストは `clips`/`m1_registry_sha256`/
     `m2c_external_fixtures_sha256` を明示的に上書きする。
+
+    `variant_audio_sha256_by_clip`（U2・Codex レビュー第 4 巡）:
+    `{clip_id: {variant_key: sha256}}` を渡すと、自動生成される各 clip の
+    変形 entry の `audio_sha256` をその値で埋める——`run_and_publish` の
+    v2 経路を実際に成功させる（`_verify_generated_variant_audio_hashes` を
+    通す）record を作る場合に必須。省略時はダミー値のままで、選定前に
+    fail-closed で止まる想定のテスト（照合まで到達しない）に使う。
     """
     if m1_registry_sha256 is None:
         m1_registry_sha256 = _real_m1_registry_sha256()
     if clips is None:
-        clips = {cid: _sufficient_clip_entry() for cid in survivor_clip_ids}
+        clips = {
+            cid: _sufficient_clip_entry(
+                (variant_audio_sha256_by_clip or {}).get(cid)
+            )
+            for cid in survivor_clip_ids
+        }
     doc = {
         "schema": "m3d-screening/0.1",
         "started_utc": "2026-08-09T00:00:00+00:00",
@@ -293,11 +345,20 @@ def test_run_and_publish_v2_path_builds_manifest_from_screening_record(tmp_path:
     vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
     _fixtures, fixtures_sha256 = bm.load_m2c_fixtures(fixtures_path)
     survivors = [f"vocadito_{i}" for i in range(1, n_clips + 1)]
+    # U2（Codex レビュー第 4 巡）: record の variant audio_sha256 を、builder が
+    # 実際に生成するバイトと一致させる（`_verify_generated_variant_audio_
+    # hashes` を通すため）——`_real_variant_audio_sha256_map` で builder と
+    # 同一手順の期待値を独立に再現する。
+    variant_audio_sha256_by_clip = {
+        cid: _real_variant_audio_sha256_map(bm.vocadito_audio_path(vocadito_dir, cid))
+        for cid in survivors
+    }
     screening_path = tmp_path / "screening_v2.json"
     _write_screening_record(
         screening_path,
         survivor_clip_ids=survivors,
         m2c_external_fixtures_sha256=fixtures_sha256,
+        variant_audio_sha256_by_clip=variant_audio_sha256_by_clip,
     )
 
     manifest_out = tmp_path / "manifest_v2.yaml"
@@ -852,11 +913,18 @@ def _build_v2_bundle(tmp_path: Path) -> Dict[str, Path]:
     vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
     _fixtures, fixtures_sha256 = bm.load_m2c_fixtures(fixtures_path)
     survivors = [f"vocadito_{i}" for i in range(1, n_clips + 1)]
+    # U2（Codex レビュー第 4 巡）: 実際に公開まで到達させるため builder と
+    # 同一手順の変形バイト sha256 を record へ埋める。
+    variant_audio_sha256_by_clip = {
+        cid: _real_variant_audio_sha256_map(bm.vocadito_audio_path(vocadito_dir, cid))
+        for cid in survivors
+    }
     screening_path = tmp_path / "screening_v2.json"
     _write_screening_record(
         screening_path,
         survivor_clip_ids=survivors,
         m2c_external_fixtures_sha256=fixtures_sha256,
+        variant_audio_sha256_by_clip=variant_audio_sha256_by_clip,
     )
     manifest_out = tmp_path / "manifest_v2.yaml"
     pins_out = tmp_path / "pins_v2.json"
@@ -945,3 +1013,225 @@ def test_load_and_validate_pins_rejects_screening_path_without_sha(tmp_path: Pat
     path.write_text(json.dumps(doc), encoding="utf-8")
     with pytest.raises(bm.BuildM3dPairsError, match="screening_record_path.*screening_record_sha256"):
         bm._load_and_validate_pins(path)
+
+
+# --------------------------------------------------------------------------- #
+# U1（Codex レビュー第 4 巡・採用）: screen_m3d_clips.py のスナップショット
+# 束縛（同一 snapshot バイトから観測・sha256 記録・4 変形生成を全て行う）
+# --------------------------------------------------------------------------- #
+class _FakeObservabilityReport:
+    """`assess_observability` の戻り値スタブ（crepe/tensorflow 非依存）。"""
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+        self.reasons: list = []
+
+    def to_dict(self) -> Dict[str, object]:
+        return {"status": self.status}
+
+
+def test_freeze_and_verify_vocadito_snapshot_returns_matching_snapshot(tmp_path: Path):
+    audio_path = tmp_path / "orig.wav"
+    audio_path.write_bytes(b"vocadito-bytes")
+    expected_sha256 = hashlib.sha256(b"vocadito-bytes").hexdigest()
+    snapshot_dir = tmp_path / "snap"
+    snapshot_dir.mkdir()
+
+    snapshot_path = sm._freeze_and_verify_vocadito_snapshot(
+        "vocadito_1", audio_path, expected_sha256, snapshot_dir
+    )
+    assert snapshot_path == snapshot_dir / "vocadito_1.wav"
+    assert snapshot_path.read_bytes() == b"vocadito-bytes"
+
+
+def test_freeze_and_verify_vocadito_snapshot_rejects_pin_mismatch(tmp_path: Path):
+    audio_path = tmp_path / "orig.wav"
+    audio_path.write_bytes(b"vocadito-bytes")
+    snapshot_dir = tmp_path / "snap"
+    snapshot_dir.mkdir()
+
+    with pytest.raises(sm.ScreenM3dClipsError, match="sha256 が pin と不一致"):
+        sm._freeze_and_verify_vocadito_snapshot("vocadito_1", audio_path, "f" * 64, snapshot_dir)
+
+
+def test_screen_uses_single_snapshot_for_observation_and_variant_decode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`screen()` end-to-end（fake route runner・crepe 非依存）: (a) 観測入力
+    (c) 4 変形生成の decode 入力が同一のスナップショット path（原本ではない）
+    であること、および (b) 記録される `audio_sha256` がそのスナップショット
+    バイト（= pin）から計算されていることを直接確認する（U1 の核心主張の
+    構造的検証）。"""
+    n_clips = 1
+    vocadito_dir, fixtures_path, expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
+    clip_id = "vocadito_1"
+
+    observed_paths: list = []
+
+    def fake_observe(audio_path, route):  # noqa: ANN001, ANN201 (test stub)
+        observed_paths.append(audio_path)
+        return None, {"fake_provenance": True}
+
+    def fake_assess(observation, thresholds):  # noqa: ANN001, ANN201 (test stub)
+        return _FakeObservabilityReport("sufficient")
+
+    monkeypatch.setattr(sm, "observe_via_route_with_provenance", fake_observe)
+    monkeypatch.setattr(sm, "assess_observability", fake_assess)
+
+    decode_paths: list = []
+    real_load = sm.librosa.load
+
+    def spy_load(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN201
+        decode_paths.append(path)
+        return real_load(path, *args, **kwargs)
+
+    monkeypatch.setattr(sm.librosa, "load", spy_load)
+
+    doc = sm.screen(
+        vocadito_dir=vocadito_dir,
+        fixtures_path=fixtures_path,
+        m1_registry_path=harness.M1_REGISTRY_PATH,
+    )
+
+    original_resolved_path = bm.vocadito_audio_path(vocadito_dir, clip_id).resolve()
+    assert observed_paths, "observe_via_route_with_provenance が呼ばれていない"
+    # U1: 観測入力は原本ではなくスナップショット path（原本とはバイト内容が
+    # 同一でも path 自体は異なる——原本が差し替わっても影響を受けない構造）。
+    assert Path(observed_paths[0]).resolve() != original_resolved_path
+    assert decode_paths, "librosa.load（S2 の 4 変形生成 decode）が呼ばれていない"
+    # U1 の核心: 観測が読んだ path と変形生成が decode した path が完全に同一
+    # ——同一スナップショットバイトから (a) と (c) の両方を行っていることの
+    # 直接証拠。
+    assert str(Path(decode_paths[0]).resolve()) == str(Path(observed_paths[0]).resolve())
+    # U1: 記録される audio_sha256 はスナップショットバイト（= pin と一致する
+    # バイト）から計算されている。
+    assert doc["clips"][clip_id]["original"]["audio_sha256"] == expected[clip_id]
+    assert doc["survivor_clip_ids"] == [clip_id]
+
+
+# --------------------------------------------------------------------------- #
+# U2（Codex レビュー第 4 巡・採用）: 生成変形 WAV のバイトを screening record
+# の audio_sha256 と publish 前に照合する（不一致は fail-closed・公開しない）
+# --------------------------------------------------------------------------- #
+def test_verify_generated_variant_audio_hashes_accepts_matching_bytes(tmp_path: Path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    variant_bytes = b"fake-variant-bytes"
+    (staging / "vocadito_1__pitch_p3.wav").write_bytes(variant_bytes)
+    expected_sha256 = hashlib.sha256(variant_bytes).hexdigest()
+    screening_doc = {
+        "clips": {"vocadito_1": {"pitch_+3st": {"audio_sha256": expected_sha256}}}
+    }
+    vocadito_variants = {
+        "vocadito_1": {"pitch_+3st": Path("out_dir") / "vocadito_1__pitch_p3.wav"}
+    }
+    bm._verify_generated_variant_audio_hashes(
+        screening_doc,
+        source="test",
+        vocadito_variants=vocadito_variants,
+        staging_wav_dir=staging,
+    )  # raises なし
+
+
+def test_verify_generated_variant_audio_hashes_rejects_tampered_bytes(tmp_path: Path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "vocadito_1__pitch_p3.wav").write_bytes(b"actually-generated-bytes")
+    screening_doc = {
+        # record は別のバイト列を screening 時に見ていたと主張している。
+        "clips": {"vocadito_1": {"pitch_+3st": {"audio_sha256": "0" * 64}}}
+    }
+    vocadito_variants = {
+        "vocadito_1": {"pitch_+3st": Path("out_dir") / "vocadito_1__pitch_p3.wav"}
+    }
+    with pytest.raises(bm.BuildM3dPairsError, match="sha256 mismatch"):
+        bm._verify_generated_variant_audio_hashes(
+            screening_doc,
+            source="test",
+            vocadito_variants=vocadito_variants,
+            staging_wav_dir=staging,
+        )
+
+
+def test_verify_generated_variant_audio_hashes_rejects_missing_clip_entry(tmp_path: Path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "vocadito_1__pitch_p3.wav").write_bytes(b"x")
+    screening_doc = {"clips": {}}
+    vocadito_variants = {
+        "vocadito_1": {"pitch_+3st": Path("out_dir") / "vocadito_1__pitch_p3.wav"}
+    }
+    with pytest.raises(bm.BuildM3dPairsError, match="欠落"):
+        bm._verify_generated_variant_audio_hashes(
+            screening_doc,
+            source="test",
+            vocadito_variants=vocadito_variants,
+            staging_wav_dir=staging,
+        )
+
+
+def test_verify_generated_variant_audio_hashes_rejects_missing_audio_sha256_field(
+    tmp_path: Path,
+):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "vocadito_1__pitch_p3.wav").write_bytes(b"x")
+    screening_doc = {"clips": {"vocadito_1": {"pitch_+3st": {}}}}
+    vocadito_variants = {
+        "vocadito_1": {"pitch_+3st": Path("out_dir") / "vocadito_1__pitch_p3.wav"}
+    }
+    with pytest.raises(bm.BuildM3dPairsError, match="audio_sha256"):
+        bm._verify_generated_variant_audio_hashes(
+            screening_doc,
+            source="test",
+            vocadito_variants=vocadito_variants,
+            staging_wav_dir=staging,
+        )
+
+
+def test_run_and_publish_v2_rejects_when_screening_variant_hash_mismatches_generated_bytes(
+    tmp_path: Path,
+):
+    """end-to-end（配線確認）: screening record の 1 variant の `audio_sha256`
+    だけが実際に生成されるバイトと不一致な場合、`run_and_publish` は生成を
+    完了させても公開せず fail-closed で拒否する（U2 の核心主張）。"""
+    n_clips = 20
+    vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
+    _fixtures, fixtures_sha256 = bm.load_m2c_fixtures(fixtures_path)
+    survivors = [f"vocadito_{i}" for i in range(1, n_clips + 1)]
+    variant_audio_sha256_by_clip = {
+        cid: _real_variant_audio_sha256_map(bm.vocadito_audio_path(vocadito_dir, cid))
+        for cid in survivors
+    }
+    # 実際に選定される（tuning/holdout に入る）clip を狙い撃ちして改ざんする
+    # ——選定されない 2 件（N=20 のうち 18 件のみ使用）を改ざんしても
+    # `_verify_generated_variant_audio_hashes` は素通りしてしまうため。
+    tuning_ids, _holdout_ids = bm.select_clips_v2(survivors)
+    tampered_clip = tuning_ids[0]
+    tampered_variant = bm.VOCADITO_VARIANT_ORDER[0]
+    variant_audio_sha256_by_clip[tampered_clip][tampered_variant] = "f" * 64
+
+    screening_path = tmp_path / "screening_v2.json"
+    _write_screening_record(
+        screening_path,
+        survivor_clip_ids=survivors,
+        m2c_external_fixtures_sha256=fixtures_sha256,
+        variant_audio_sha256_by_clip=variant_audio_sha256_by_clip,
+    )
+    out_dir = tmp_path / "external_m3d" / "m3d_pairs_v2"
+    manifest_out = tmp_path / "manifest_v2.yaml"
+    pins_out = tmp_path / "pins_v2.json"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="audio_sha256"):
+        bm.run_and_publish(
+            vocadito_dir=vocadito_dir,
+            out_dir=out_dir,
+            manifest_out=manifest_out,
+            pins_out=pins_out,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+            screening_record_path=screening_path,
+        )
+    assert not out_dir.exists()
+    assert not manifest_out.exists()
+    assert not pins_out.exists()

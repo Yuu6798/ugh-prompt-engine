@@ -96,6 +96,24 @@ pin の一致検証を fail-closed で行う。限界の明記: sidecar は非�
   staging dir / out_dir 配下に内包されることを確認し、内包外は fail-closed
   で拒否する。
 
+**Codex レビュー第 4 巡対応（U2・変形バイトの screening record 照合）**:
+`_verify_screening_transform_parameters` は変形パラメータ（半音幅・タイム
+レート）の**数値**一致のみを見ており、`make_variants`/librosa/WAV シリアラ
+イズの実装自体が変わった場合（パラメータは同じまま出力バイトだけが変わる
+ケース）を検出できなかった——record は「screening 実行時点の実装で生成した
+変形」をゲート済みだが、builder は「build 実行時点の実装で生成した変形」を
+公開するため、両者のバイトが乖離しても気付けない穴があった。ここで
+`_verify_generated_variant_audio_hashes` を新設し、`generate_vocadito_
+variants` が staging へ実際に書いた各変形 WAV のバイト sha256 を、screening
+record の当該 clip/variant が保持する `audio_sha256`（`screen_m3d_clips.py::
+_gate_one` が S2 で実際に観測ゲートへ通したバイトの digest）と publish 前に
+照合する。1 件でも不一致なら fail-closed（`run_build` が例外を送出し、
+呼び出し側 `run_and_publish` は staging を破棄するのみで `_publish_staged_
+bundle` に到達しない——公開しない）。vocadito 原音自体は既存の pin 照合
+（生成前の一括照合 + `generate_vocadito_variants` のスナップショット束縛 +
+公開直前の T2 再照合）で既に閉じているため、本チェックは変形のみを対象と
+する——「審査されたバイト = 公開されるバイト」の機械保証。
+
 使い方::
 
     python scripts/build_m3d_pairs.py
@@ -826,6 +844,74 @@ def _verify_screening_transform_parameters(
                 f"{source}: 'transform_parameters.{key}' が builder 定数と不一致/欠落 "
                 f"(fail-closed; 期待={expected_values} record={recorded_values!r})"
             )
+
+
+def _verify_generated_variant_audio_hashes(
+    screening_doc: Dict[str, Any],
+    *,
+    source: str,
+    vocadito_variants: "Dict[str, Dict[str, Path]]",
+    staging_wav_dir: Path,
+) -> None:
+    """`generate_vocadito_variants` が `staging_wav_dir` へ実際に書いた各変形
+    WAV のバイト sha256 を、screening record が保持する当該 clip/variant の
+    `audio_sha256` と publish 前に照合する（Codex レビュー第 4 巡 U2 対応）。
+
+    `_verify_screening_transform_parameters` は変形パラメータ（半音幅・タイム
+    レート）の数値一致のみを見ており、`make_variants`/librosa/WAV シリアラ
+    イズの実装自体が変わった場合（パラメータは同じまま出力バイトだけが変わる
+    ケース）を検出できない——record は「screening 実行時点の実装で生成した
+    変形」をゲート済みだが、builder は「build 実行時点の実装で生成した変形」
+    を公開してしまい、登録済み survivor が実は未スクリーニングのバイトで
+    公開される事態が全ての pin と整合したまま起こりうる。
+
+    `screening_doc["clips"][clip_id][variant_key]["audio_sha256"]` は
+    `scripts/screen_m3d_clips.py::_gate_one` が S2 で実際に観測ゲートへ通した
+    変形バイトの digest（U1 のスナップショット束縛により、この digest は
+    観測入力バイトそのものと一致することが構造的に保証されている）。ここで
+    staging 済みの実バイトを非キャッシュで hash し、1 件でも不一致なら
+    fail-closed（呼び出し側 `run_build` が例外を送出し、`run_and_publish` は
+    staging を破棄するのみで `_publish_staged_bundle` に到達しない——公開
+    しない）とする。
+
+    vocadito 原音自体は既存の pin 照合（生成前の一括照合 +
+    `generate_vocadito_variants` のスナップショット束縛 + 公開直前の T2
+    再照合）で既に閉じているため、本チェックは変形のみを対象とする。
+    """
+    clips = screening_doc.get("clips")
+    if not isinstance(clips, dict):
+        raise BuildM3dPairsError(f"{source}: 'clips' が mapping でない (fail-closed)")
+    mismatches: List[str] = []
+    for clip_id, variants in vocadito_variants.items():
+        clip_entry = clips.get(clip_id)
+        if not isinstance(clip_entry, dict):
+            raise BuildM3dPairsError(
+                f"{source}: clips[{clip_id!r}] が欠落/不正 (fail-closed; "
+                "生成対象 clip の screening record エントリが見つからない)"
+            )
+        for variant_key, final_path in variants.items():
+            variant_entry = clip_entry.get(variant_key)
+            expected_sha256 = (
+                variant_entry.get("audio_sha256") if isinstance(variant_entry, dict) else None
+            )
+            if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
+                raise BuildM3dPairsError(
+                    f"{source}: clips[{clip_id!r}].{variant_key}.audio_sha256 が欠落/不正 "
+                    "(fail-closed)"
+                )
+            staged_path = staging_wav_dir / final_path.name
+            actual_sha256 = file_sha256(staged_path, use_cache=False)
+            if actual_sha256 != expected_sha256:
+                mismatches.append(
+                    f"{clip_id}/{variant_key}: sha256 mismatch "
+                    f"(staged={staged_path} actual={actual_sha256} "
+                    f"screening record audio_sha256={expected_sha256})"
+                )
+    if mismatches:
+        raise BuildM3dPairsError(
+            f"{source}: 生成変形 WAV のバイトが screening record の audio_sha256 と"
+            " 不一致 (fail-closed; 公開しない): " + "; ".join(mismatches)
+        )
 
 
 def select_clips_v2(survivor_clip_ids: "List[str]") -> Tuple[List[str], List[str]]:
@@ -1854,6 +1940,12 @@ def run_build(
     `select_clips_v2` の決定論分割規則を適用して tuning/holdout を決める
     （`select_clips` の固定 12/6 選定は使わない）。未指定時（既定）は
     v1 の挙動（`select_clips(fixtures)`）を完全不変のまま実行する。
+
+    U2（Codex レビュー第 4 巡）: v2 経路では `generate_vocadito_variants` が
+    staging へ生成した各変形 WAV のバイトを、record が保持する当該 clip/
+    variant の `audio_sha256` と選定後・publish 前に照合する
+    （`_verify_generated_variant_audio_hashes`）。不一致は fail-closed
+    ——「審査されたバイト = 公開されるバイト」の機械保証。
     """
     fixtures, fixtures_sha256 = load_m2c_fixtures(fixtures_path)
     resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
@@ -1910,6 +2002,17 @@ def run_build(
     vocadito_variants = generate_vocadito_variants(
         tuning_ids + holdout_ids, resolved_audio, out_dir, staging_wav_dir, fixtures
     )
+    if screening_record_path is not None:
+        # U2（Codex レビュー第 4 巡）: staging に生成した各変形 WAV のバイトを、
+        # screening record が保持する当該 clip/variant の audio_sha256 と
+        # publish 前に照合する。不一致は fail-closed（このまま例外が
+        # `run_and_publish` まで伝播し、staging を破棄するのみで公開しない）。
+        _verify_generated_variant_audio_hashes(
+            screening_doc,
+            source=str(screening_record_path),
+            vocadito_variants=vocadito_variants,
+            staging_wav_dir=staging_wav_dir,
+        )
 
     synth_positive = generate_synth_positive(specs, out_dir, staging_wav_dir)
     synth_negative = generate_synth_negatives(specs, out_dir, staging_wav_dir)
