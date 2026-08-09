@@ -636,6 +636,98 @@ def _load_screening_record(path: Path) -> Tuple[Dict[str, Any], str]:
     return doc, digest
 
 
+def _recompute_survivor_ids_from_clips(screening_doc: Dict[str, Any], *, source: str) -> List[str]:
+    """`clips`（各 clip の原音+4 変形ゲート結果）から survivor 集合を独立に
+    再計算する（Codex レビュー R1 対応 (a)）。
+
+    `screen_m3d_clips.py` が書いた集計値（`clips[cid]["survivor"]` /
+    `survivor_clip_ids`）を一切信用せず、素の `status` フィールドのみから
+    再導出する——record が改ざん・手編集されていても検出できるようにする
+    ため。`screen()` の集計規則そのまま: 原音 `status == "sufficient"` かつ
+    `VOCADITO_VARIANT_ORDER` の全変形が `status == "sufficient"` の clip のみ
+    survivor。s1 不十分な clip は変形ゲート結果を持たない（`screen()` が
+    S1 で continue するため）——正当な record ではこの非対称性自体が契約
+    なので、原音 sufficient なのに変形ゲート結果が欠落している場合は
+    改ざんとみなし fail-closed とする（緩和しない）。
+    """
+    clips = screening_doc.get("clips")
+    if not isinstance(clips, dict):
+        raise BuildM3dPairsError(f"{source}: 'clips' が mapping でない (fail-closed)")
+    survivors: List[str] = []
+    for clip_id, entry in clips.items():
+        if not isinstance(entry, dict):
+            raise BuildM3dPairsError(f"{source}: clips[{clip_id!r}] が mapping でない (fail-closed)")
+        original = entry.get("original")
+        if not isinstance(original, dict) or not isinstance(original.get("status"), str):
+            raise BuildM3dPairsError(
+                f"{source}: clips[{clip_id!r}].original.status が欠落/不正 (fail-closed)"
+            )
+        if original["status"] != "sufficient":
+            continue
+        all_variants_sufficient = True
+        for variant_key in VOCADITO_VARIANT_ORDER:
+            variant_entry = entry.get(variant_key)
+            if not isinstance(variant_entry, dict) or not isinstance(
+                variant_entry.get("status"), str
+            ):
+                raise BuildM3dPairsError(
+                    f"{source}: clips[{clip_id!r}].{variant_key}.status が欠落/不正 "
+                    "(fail-closed; original sufficient なのに変形ゲート結果が無い)"
+                )
+            if variant_entry["status"] != "sufficient":
+                all_variants_sufficient = False
+        if all_variants_sufficient:
+            survivors.append(clip_id)
+    return sorted(survivors)
+
+
+def _verify_screening_survivors(screening_doc: Dict[str, Any], *, source: str) -> None:
+    """record の `survivor_clip_ids` が per-clip ゲート結果からの独立再計算と
+    **完全一致**することを要求する（Codex レビュー R1 対応 (a)）。不一致は
+    fail-closed（record 内の集計値だけを信用した黙認をしない）。
+    """
+    recorded = screening_doc.get("survivor_clip_ids")
+    recomputed = _recompute_survivor_ids_from_clips(screening_doc, source=source)
+    if sorted(recorded) != recomputed:
+        missing = sorted(set(recomputed) - set(recorded))
+        extra = sorted(set(recorded) - set(recomputed))
+        raise BuildM3dPairsError(
+            f"{source}: 'survivor_clip_ids' が per-clip ゲート結果からの独立再計算と不一致 "
+            f"(fail-closed; recomputed に不足={missing} recorded の余剰={extra})"
+        )
+
+
+def _verify_screening_input_digests(
+    screening_doc: Dict[str, Any], *, source: str, fixtures_sha256: str
+) -> None:
+    """record が保持する入力 digest（m2c fixtures / m1 registry）を、現在の
+    build 入力ファイルの実バイト sha256 と照合する（Codex レビュー R1 対応
+    (b)）。record にフィールド自体が無い場合もスキーマ上の欠落として
+    fail-closed とする（黙認しない）。
+    """
+    recorded_fixtures_sha = screening_doc.get("m2c_external_fixtures_sha256")
+    if not isinstance(recorded_fixtures_sha, str) or len(recorded_fixtures_sha) != 64:
+        raise BuildM3dPairsError(
+            f"{source}: 'm2c_external_fixtures_sha256' が欠落/不正 (fail-closed)"
+        )
+    if recorded_fixtures_sha != fixtures_sha256:
+        raise BuildM3dPairsError(
+            f"{source}: m2c_external_fixtures sha256 mismatch (fail-closed; "
+            f"screening record={recorded_fixtures_sha} 現在の build 入力={fixtures_sha256})"
+        )
+
+    recorded_registry_sha = screening_doc.get("m1_registry_sha256")
+    if not isinstance(recorded_registry_sha, str) or len(recorded_registry_sha) != 64:
+        raise BuildM3dPairsError(f"{source}: 'm1_registry_sha256' が欠落/不正 (fail-closed)")
+    _, actual_registry_sha = _read_bytes_and_sha256(harness.M1_REGISTRY_PATH)
+    if recorded_registry_sha != actual_registry_sha:
+        raise BuildM3dPairsError(
+            f"{source}: m1 registry sha256 mismatch (fail-closed; "
+            f"screening record={recorded_registry_sha} 現物={actual_registry_sha}; "
+            f"path={harness.M1_REGISTRY_PATH})"
+        )
+
+
 def select_clips_v2(survivor_clip_ids: "List[str]") -> Tuple[List[str], List[str]]:
     """v2 選定・分割規則（決定論・prereg_v2 §3）: survivor を
     `sha256(clip_id)` の hex 表現昇順に整列し、
@@ -1372,6 +1464,32 @@ def _load_and_validate_pins(path: Path) -> Dict[str, Any]:
             raise BuildM3dPairsError(
                 f"{path}: 'summary_path' が不正な形式 (fail-closed): {summary_path_value!r}"
             )
+
+    # R2 対応（Codex レビュー・screening pin の check_existing 接続）:
+    # `screening_record_path`/`screening_record_sha256` は `--screening-record`
+    # 使用時（v2 経路）のみ書かれる **optional** なフィールドペア（summary と
+    # 同じ後方互換規約 — `_REQUIRED_PINS_KEYS` に含めず `_PINS_SCHEMA` も
+    # bump しない）。存在する場合は両方揃っていなければならない。
+    has_screening_path = "screening_record_path" in doc
+    has_screening_sha = "screening_record_sha256" in doc
+    if has_screening_path != has_screening_sha:
+        raise BuildM3dPairsError(
+            f"{path}: 'screening_record_path' と 'screening_record_sha256' は両方存在するか "
+            "両方欠落かのいずれかでなければならない (fail-closed; 片方のみの記録は sidecar 破損)"
+        )
+    if has_screening_sha:
+        screening_sha_value = doc["screening_record_sha256"]
+        if not isinstance(screening_sha_value, str) or len(screening_sha_value) != 64:
+            raise BuildM3dPairsError(
+                f"{path}: 'screening_record_sha256' が不正な形式 (fail-closed): "
+                f"{screening_sha_value!r}"
+            )
+        screening_path_value = doc["screening_record_path"]
+        if not isinstance(screening_path_value, str) or not screening_path_value:
+            raise BuildM3dPairsError(
+                f"{path}: 'screening_record_path' が不正な形式 (fail-closed): "
+                f"{screening_path_value!r}"
+            )
     return doc
 
 
@@ -1489,6 +1607,37 @@ def check_existing(
                 problems.append(
                     f"{recorded_summary_path}: summary sha256 mismatch "
                     f"(actual={actual_summary_sha} expected={expected_summary_sha})"
+                )
+
+    # R2 対応（Codex レビュー・screening pin の check_existing 接続。--check-only
+    # スコープ）: sidecar に screening record の記録がある場合（＝過去に
+    # `--screening-record` 付きでビルドされた v2 経路）、記録された path
+    # （repo-relative）の現物とバイト sha256 を fail-closed で照合する。記録が
+    # あるのに現物が存在しない場合も fail。記録が無い場合（v1 経路ビルド）は
+    # 検証をスキップする——H2 の summary pin 検証と同じ規約（今回の呼び出しに
+    # 渡された引数の有無に依存させず、sidecar が記録している過去の screening
+    # record の整合性そのものを守る）。**run preflight（run_melody_comparison
+    # 側）は本対応の対象外** — manifest+audio の最小独立複製という v1 事前
+    # 登録第 7 ラウンドの凍結設計を維持し、screening record は build 入力 pin
+    # ファミリー（m2c fixtures/synth specs と同格 = --check-only スコープ）
+    # として扱う。
+    if "screening_record_sha256" in pins_doc:
+        recorded_screening_path = pins_doc.get("screening_record_path")
+        expected_screening_sha = pins_doc["screening_record_sha256"]
+        abs_screening_path = (
+            ROOT / recorded_screening_path if recorded_screening_path else None
+        )
+        if abs_screening_path is None or not abs_screening_path.exists():
+            problems.append(
+                f"{recorded_screening_path}: pins サイドカーに記録された screening record "
+                "ファイルが存在しない (fail-closed)"
+            )
+        else:
+            actual_screening_sha = file_sha256(abs_screening_path, use_cache=False)
+            if actual_screening_sha != expected_screening_sha:
+                problems.append(
+                    f"{recorded_screening_path}: screening record sha256 mismatch "
+                    f"(actual={actual_screening_sha} expected={expected_screening_sha})"
                 )
 
     manifest_doc = _yaml_load_no_dup_keys(manifest_bytes)
@@ -1612,6 +1761,15 @@ def run_build(
     screening_record_sha256: Optional[str] = None
     if screening_record_path is not None:
         screening_doc, screening_record_sha256 = _load_screening_record(screening_record_path)
+        # R1 対応 (a)(b): record の集計値（survivor_clip_ids）を信用せず
+        # per-clip ゲート結果から独立再計算した集合と完全一致するか、
+        # および record が保持する入力 digest（m2c fixtures/m1 registry）が
+        # 現在の build 入力の実バイトと一致するかを、選定規則の適用前に
+        # fail-closed で検証する。
+        _verify_screening_survivors(screening_doc, source=str(screening_record_path))
+        _verify_screening_input_digests(
+            screening_doc, source=str(screening_record_path), fixtures_sha256=fixtures_sha256
+        )
         survivor_clip_ids = screening_doc["survivor_clip_ids"]
         unknown_survivors = sorted(set(survivor_clip_ids) - set(fixtures))
         if unknown_survivors:
@@ -1681,11 +1839,14 @@ def run_build(
         "m3d_synth_specs_sha256": synth_specs_sha256,
     }
     if screening_record_sha256 is not None:
-        # v2 経路のみ追加する optional フィールド（H2 の summary_path/
+        # v2 経路のみ追加する optional フィールドペア（H2 の summary_path/
         # summary_sha256 と同じ後方互換規約 — 既存 `_REQUIRED_PINS_KEYS`
         # には含めず、`_PINS_SCHEMA` も bump しない。v1 pins サイドカーは
-        # 本フィールドを持たないまま引き続き有効）。
+        # 本フィールドを持たないまま引き続き有効）。R2 対応: path も併記する
+        # ——sha256 のみでは `check_existing` が再照合すべき現物の場所を
+        # 特定できないため（`screening_record_path` を repo-relative で記録）。
         build_input_sha256["screening_record_sha256"] = screening_record_sha256
+        build_input_sha256["screening_record_path"] = _repo_rel(screening_record_path)
     return pairs, audio_source_lookup, build_input_sha256, fixtures
 
 
