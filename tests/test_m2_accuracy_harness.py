@@ -8998,6 +8998,59 @@ def test_run_external_category_rejects_divergent_unknown_preprocessing_key(tmp_p
         _vremix_stem_run(tmp_path, route_runner=runner, level=level)
 
 
+def _stack_row_with_preprocessing(**preprocessing_overrides: Any) -> Dict[str, Any]:
+    """`_row_model_stack_signature` 用の最小 row(分離 route・不変量は共通既定)。"""
+    preprocessing: Dict[str, Any] = {
+        "preprocessing": "demucs_vocals",
+        "separation_model": "fake-htdemucs",
+        "separation_version": "0.0-fake",
+        "separation_weights_sha256": FAKE_SEP_WEIGHTS_SHA256,
+        "separation_code_sha256": FAKE_SEP_CODE_SHA256,
+        "stem_sha256": hashlib.sha256(b"stem-bytes-run1").hexdigest(),
+    }
+    preprocessing.update(preprocessing_overrides)
+    return {
+        "source_model": "fake:deterministic",
+        "provenance_extractor_version": "0.0-fake",
+        "provenance_extractor_weights_sha256": FAKE_WEIGHTS_SHA256,
+        "provenance_extractor_code_sha256": FAKE_CODE_SHA256,
+        "provenance_preprocessing": preprocessing,
+    }
+
+
+def test_model_stack_signature_detects_stem_divergence_across_runs() -> None:
+    """(4) run 間比較(repeats / submitted vs 検証)では stem_sha256 の相異が
+    「別 stack」として署名に現れる(Codex #254 是正の回帰テスト)。
+
+    run 内の複数 clip 集約(`_run_external_category`)が stem を不変量要求から
+    除外するのとは文脈が異なる——同じ clip を同じ分離器で分離し直した stem
+    bytes は決定論で一致すべき決定論証拠であり、metrics の量子化一致だけでは
+    偽の決定論 success を publish しうる。
+    """
+    base = _stack_row_with_preprocessing()
+    same = _stack_row_with_preprocessing()
+    diverged = _stack_row_with_preprocessing(
+        stem_sha256=hashlib.sha256(b"stem-bytes-run2-nondeterministic").hexdigest()
+    )
+    assert harness._row_model_stack_signature(base) == harness._row_model_stack_signature(same)
+    assert harness._row_model_stack_signature(base) != harness._row_model_stack_signature(diverged)
+
+
+def test_model_stack_signature_detects_bundle_divergence_across_runs() -> None:
+    """(5) 集約カテゴリ行の run 間比較では `stem_sha256_bundle` の相異が署名に現れる
+    (全 clip の stem 束 digest = 旧実装の clip 0 単独比較より強い決定論証拠)。"""
+    base = _stack_row_with_preprocessing(stem_sha256=None)
+    same = _stack_row_with_preprocessing(stem_sha256=None)
+    for row in (base, same):
+        del row["provenance_preprocessing"]["stem_sha256"]
+    diverged = copy.deepcopy(same)
+    base["stem_sha256_bundle"] = hashlib.sha256(b"bundle-run1").hexdigest()
+    same["stem_sha256_bundle"] = hashlib.sha256(b"bundle-run1").hexdigest()
+    diverged["stem_sha256_bundle"] = hashlib.sha256(b"bundle-run2").hexdigest()
+    assert harness._row_model_stack_signature(base) == harness._row_model_stack_signature(same)
+    assert harness._row_model_stack_signature(base) != harness._row_model_stack_signature(diverged)
+
+
 def test_run_accuracy_requires_a_level_for_level_bearing_categories(tmp_path: Path) -> None:
     manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
     with pytest.raises(ValueError, match="水準軸を持つため level"):

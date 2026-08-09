@@ -5529,13 +5529,12 @@ def _apply_thread_pinning() -> Dict[str, Any]:
     """スレッド 3 点固定（`OMP_NUM_THREADS` / `MKL_NUM_THREADS` / `torch.set_num_threads`）。
 
     HANDOFF §3.1 の実測: 前 2 点だけでは足りない。3 点目を欠くと demucs の vocals
-    stem の `stem_sha256` が run 間で変わる（`residual_db` は 1e-6 dB で安定するのに
-    bytes は変わる）。r7 blocker 修正（f06bbaa3）以前は `_row_model_stack_signature`
-    が `stem_sha256` を署名に含めていたため、この非決定性が「別 model stack」として
-    fail-closed に顕在化していた——D-1/D-4 で `stem_sha256` を per-clip 量として
-    署名から分離した現在、この経路は同じ非決定性を検出しない（`metrics` の bit 一致
-    検査は粗すぎて拾わないおそれがある・既知のギャップ、follow-up 要）。3 点固定
-    そのものの必要性は変わらないので、本関数の適用は維持する。
+    stem の `stem_sha256` が run 間で変わり（`residual_db` は 1e-6 dB で安定するのに
+    bytes は変わる）、`_row_model_stack_signature` が per-row の `stem_sha256` /
+    `stem_sha256_bundle` を run 間決定論の証拠として署名に含めるため（r7 blocker
+    修正 f06bbaa3 + Codex #254 是正）、この非決定性は「別 model stack」として
+    fail-closed に顕在化する。run 内の複数 clip 集約だけが stem を不変量要求から
+    除外する（`_run_external_category`）。
 
     設計判断 D-3: **固定は run と evaluate で同一でなければならない。** 検証の子だけを
     固定すると、固定していない run が産んだ row と bit 一致しなくなる——publish 条件は
@@ -6538,21 +6537,29 @@ def _row_model_stack_signature(row: Dict[str, Any]) -> Tuple[Any, ...]:
     別 bundled/local weights や patch 済みコードなら、別 stack の run であって
     repeats ではない（#59/#217 と同じ規律）。
     """
-    # D-4 (r7 blocker f06bbaa3): 署名の対象は `split_preprocessing_invariants` の
-    # 不変量側のみ——per-clip 固有の `stem_sha256` は「別 stack で測られたか」の
-    # 証拠にならない（分離器自体の重み/コード/version/model が不変量）。
+    # D-4 (r7 blocker f06bbaa3) + Codex #254 指摘の是正: ここで比較される rows は
+    # 「同一測定の run 間比較（submitted vs 検証 run / repeats）」であり、1 つの
+    # run 内の複数 clip 集約（`_run_external_category`。そこでは stem 除外が正しい）
+    # とは文脈が異なる。同じ clip / 同じ clip 束を同じ分離器で分離し直した stem
+    # bytes は決定論で一致すべきなので、per-row の `stem_sha256`（S_fullstack 等の
+    # 1 row = 1 clip 行）と `stem_sha256_bundle`（集約行。全 clip の stem 束 digest）
+    # は run 間決定論の証拠として署名に含める——metrics の一致だけでは stem bytes の
+    # 非決定性（`_apply_thread_pinning` が実測した型）が量子化で消えて偽の決定論
+    # success を publish しうるため。
     preprocessing = row.get("provenance_preprocessing")
     if isinstance(preprocessing, dict):
-        invariants, _ = split_preprocessing_invariants(preprocessing)
+        invariants, per_clip = split_preprocessing_invariants(preprocessing)
         separation: Tuple[Any, ...] = (
             invariants.get("preprocessing"),
             invariants.get("separation_model"),
             invariants.get("separation_version"),
             invariants.get("separation_weights_sha256"),
             invariants.get("separation_code_sha256"),
+            per_clip.get("stem_sha256"),
+            row.get("stem_sha256_bundle"),
         )
     else:
-        separation = (preprocessing, None, None, None, None)
+        separation = (preprocessing, None, None, None, None, None, row.get("stem_sha256_bundle"))
     return (
         row.get("source_model"),
         row.get("provenance_extractor_version"),
