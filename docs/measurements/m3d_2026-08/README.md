@@ -103,3 +103,27 @@ not_comparable_negative 11 = 3、内訳 positive 2 / negative 1）由来であ�
 （閾値凍結）は機械的に実行不可能であり、手順 5（holdout 一度きり検証）も
 未実施。`holdout_locked_until_frozen: true` によりロックは維持されている
 （一度きり検証権は未消費）。判定・後続方針は User 決裁待ち。
+
+## v2 スクリーニング（2026-08-09）
+
+規則 commit `aac2bd9`（v2 再事前登録: 観測ゲート由来の素材スクリーニング規則）
+に基づき、S1/S2 スクリーニングを実測した（記録 = `screening_v2.json`）。
+
+**S1（観測ゲート）**: 40 clip を実測し `sufficient` 13・`insufficient` 27。
+`insufficient` 27 件は全件 `phrase_count` 単独理由（`insufficient_reason_histogram:
+{"phrase_count": 27}`）。
+
+**S2（変形別脱落）**: 4 変形それぞれの脱落数は `pitch_+3st` 7・`pitch_-5st` 6・
+`time_x0.87` 6・`time_x1.12` 7。
+
+**survivor**: 全変形込みで通過したのは N=3（`vocadito_1` / `vocadito_8` /
+`vocadito_18`）のみ。
+
+**分割式・停止条件**: `select_clips_v2`（N<18 規則）により survivor N=3 から
+tuning=2・holdout=1 が機械的に決まるが、prereg_v2 §3 の停止条件
+（tuning>=6 かつ holdout>=3）に tuning・holdout の双方が抵触し、
+`scripts/build_m3d_pairs.py` が fail-closed で例外を送出することを実確認した
+（部分出力なし）。
+
+**未達事項**: manifest v2 は未生成、run×2（tuning 実測 + holdout 一度きり検証）
+は未実施、v1 の holdout 一度きり検証権も未消費のまま。判定は User 決裁待ち。

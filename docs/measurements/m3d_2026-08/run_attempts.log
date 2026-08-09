@@ -10,3 +10,6 @@ DETACHED_PID=24189
 2026-08-09T05:23:32Z
 run2 attempt1 start=2026-08-09T05:23:XX (see wrapper log above) method=setsid_detached worker_pid=24194 (wrapper pid 24189)
 run2 attempt1 end_status=success method=setsid_detached worker_pid=24194 log_end="wrote run report to build/external_m3d/m3d_run2.json (98 pairs)" json_size=184416 json_mtime=2026-08-09T06:39:39Z report_started_utc=2026-08-09T05:23:35Z report_recorded_utc=2026-08-09T06:39:39Z pins_preflight_verified=true holdout_rows=32(all holdout_locked_until_frozen) tuning_rows=66(measured)
+2026-08-09T14:13:49Z attempt1 setsid start PID=5665
+2026-08-09T14:14:07Z attempt1 note=setsid wrapper pid=5665 exited immediately (expected), actual worker pid=5667 confirmed alive via ps
+2026-08-09T15:10:44Z attempt1 end_status=success method=setsid_detached worker_pid=5667 (elapsed ~57min)

@@ -102,12 +102,24 @@ pin の一致検証を fail-closed で行う。限界の明記: sidecar は非�
     python scripts/build_m3d_pairs.py --vocadito-dir /path/to/vocadito --out-dir /tmp/m3d_pairs
     python scripts/build_m3d_pairs.py --check-only
     python scripts/build_m3d_pairs.py --summary-out manifest_summary.json
+
+    # v2 経路（docs/measurements/m3d_2026-08/preregistration_v2.md §2〜§3）:
+    # scripts/screen_m3d_clips.py の出力（m3d-screening/0.1）から survivor を
+    # 決定論分割して manifest v2 を作る。既定の v1 経路（--screening-record
+    # 未指定）とは完全に独立で、v1 の挙動は本フラグの追加によって一切変わらない。
+    python scripts/build_m3d_pairs.py \\
+        --screening-record build/external_m3d/m3d_screening_v2.json \\
+        --manifest-out tests/fixtures/melody_bench/m3d_pairs_manifest_v2.yaml \\
+        --pins-out build/external_m3d/m3d_pairs_pins_v2.json \\
+        --out-dir build/external_m3d/m3d_pairs_v2 \\
+        --synth-specs tests/fixtures/melody_bench/m3d_synth_specs_v2.yaml
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -578,6 +590,87 @@ def select_clips(fixtures: Dict[str, str]) -> Tuple[List[str], List[str]]:
     return tuning, holdout
 
 
+# --------------------------------------------------------------------------- #
+# v2: スクリーニング記録読み込み + 選定・分割規則（決定論。prereg_v2 §2〜§3）
+# --------------------------------------------------------------------------- #
+# `docs/measurements/m3d_2026-08/preregistration_v2.md` §2 の選択肢(b) — v1 の
+# 盲選定（sha256(clip_id) 昇順で固定 12/6 を機械的に採る）に代え、`scripts/
+# screen_m3d_clips.py` が M1 観測ゲートで事前スクリーニングした survivor 集合
+# から §3 の決定論分割規則を適用する。v1 の `select_clips`/`TUNING_COUNT`/
+# `HOLDOUT_COUNT` は本節から一切参照せず不変更のまま残す（v1 経路は本節の
+# 追加と完全に独立に動作する）。
+_SCREENING_SCHEMA = "m3d-screening/0.1"
+# prereg_v2 §3: N>=18 は v1 と同規模（先頭 12=tuning/次 6=holdout）。N<18 は
+# ceil(2N/3)=tuning / floor(N/3)=holdout。いずれの場合も tuning<6 または
+# holdout<3 なら実測に進まず fail-closed（バー緩和・ゲート緩和による救済はしない）。
+_V2_LARGE_N_THRESHOLD = 18
+_V2_LARGE_N_TUNING = 12
+_V2_LARGE_N_HOLDOUT = 6
+_V2_MIN_TUNING = 6
+_V2_MIN_HOLDOUT = 3
+
+
+def _load_screening_record(path: Path) -> Tuple[Dict[str, Any], str]:
+    """`scripts/screen_m3d_clips.py` が出力するスクリーニング記録
+    （schema: m3d-screening/0.1）を一度だけ読み、(doc, sha256) を返す。
+
+    R2R N1 と同型（TOCTOU 解消）: 呼び出し側は本関数が返す `data` の再読みを
+    行わない — hash 計算とパースを同一バイト列から行う。schema 不一致・
+    `survivor_clip_ids` の型不正（文字列リストでない）・各 clip_id の字句
+    違反（T3 と同じ許可文字集合）はいずれも fail-closed。
+    """
+    data, digest = _read_bytes_and_sha256(path)
+    doc = _json_loads_no_dup_keys(data)
+    if not isinstance(doc, dict) or doc.get("schema") != _SCREENING_SCHEMA:
+        raise BuildM3dPairsError(
+            f"{path}: schema が {_SCREENING_SCHEMA!r} でない (fail-closed): "
+            f"{doc.get('schema') if isinstance(doc, dict) else doc!r}"
+        )
+    survivors = doc.get("survivor_clip_ids")
+    if not isinstance(survivors, list) or not all(isinstance(c, str) for c in survivors):
+        raise BuildM3dPairsError(
+            f"{path}: 'survivor_clip_ids' が文字列リストでない (fail-closed): {survivors!r}"
+        )
+    for clip_id in survivors:
+        _validate_id_lexical(clip_id, source=f"{path} survivor_clip_ids")
+    return doc, digest
+
+
+def select_clips_v2(survivor_clip_ids: "List[str]") -> Tuple[List[str], List[str]]:
+    """v2 選定・分割規則（決定論・prereg_v2 §3）: survivor を
+    `sha256(clip_id)` の hex 表現昇順に整列し、
+
+    - N >= 18: 先頭 12 = tuning / 次の 6 = holdout（v1 と同規模）
+    - N < 18: 先頭 ceil(2N/3) = tuning / 次の floor(N/3) = holdout
+
+    のいずれかで tuning/holdout を機械的に決める。tuning < 6 または
+    holdout < 3 になる場合は実測に進まず `BuildM3dPairsError`（fail-closed;
+    バー緩和・ゲート緩和による救済はしない — prereg_v2 §3「停止条件」）。
+
+    重複 survivor_clip_ids は（正当な入力では発生しないはずだが）防御的に
+    去重してから並べ替える。
+    """
+    ranked = sorted(
+        sorted(set(survivor_clip_ids)),
+        key=lambda cid: hashlib.sha256(cid.encode("utf-8")).hexdigest(),
+    )
+    n = len(ranked)
+    if n >= _V2_LARGE_N_THRESHOLD:
+        tuning_n, holdout_n = _V2_LARGE_N_TUNING, _V2_LARGE_N_HOLDOUT
+    else:
+        tuning_n = math.ceil(2 * n / 3)
+        holdout_n = n // 3
+    if tuning_n < _V2_MIN_TUNING or holdout_n < _V2_MIN_HOLDOUT:
+        raise BuildM3dPairsError(
+            f"survivor 不足により停止条件に抵触 (fail-closed; prereg_v2 §3): "
+            f"survivor N={n} から tuning={tuning_n}/holdout={holdout_n} "
+            f"(必要: tuning>={_V2_MIN_TUNING} かつ holdout>={_V2_MIN_HOLDOUT})"
+        )
+    tuning = ranked[:tuning_n]
+    holdout = ranked[tuning_n : tuning_n + holdout_n]
+    return tuning, holdout
+
+
 def circular_pairs(clip_ids: List[str]) -> List[Tuple[str, str]]:
     """`clip_ids` を id 昇順に並べ、環状に隣接ペア (i, i+1) を作る（設計メモ §1.2）。"""
     ordered = sorted(clip_ids)
@@ -647,12 +740,14 @@ def _reject_output_input_collisions(
     synth_specs_path: Path,
     vocadito_audio_paths: "List[Path]",
     summary_out: Optional[Path] = None,
+    screening_record_path: Optional[Path] = None,
 ) -> None:
     """公開予定の全出力先（`out_dir` 配下の生成 WAV・`manifest_out`・
     `pins_out`・（指定時）`summary_out`）の resolve() 済み絶対パス集合と、全
-    build 入力（fixtures yaml・synth specs yaml・vocadito WAV 全件）の
-    resolve() 済み絶対パス集合を突き合わせ、(a) 出力同士の重複 (b) 出力と
-    入力の衝突、のいずれかがあれば fail-closed で拒否する（R2R N3）。
+    build 入力（fixtures yaml・synth specs yaml・vocadito WAV 全件・（指定時）
+    screening record）の resolve() 済み絶対パス集合を突き合わせ、(a) 出力
+    同士の重複 (b) 出力と入力の衝突、のいずれかがあれば fail-closed で拒否
+    する（R2R N3）。
 
     生成（`staging_wav_dir` への物理書き込み・librosa/build_signal 呼び出し）を
     一切開始する前に呼ぶ——公開後に入力を破壊しうる誤設定（例: `--out-dir` を
@@ -664,6 +759,11 @@ def _reject_output_input_collisions(
     無検査で書かれていた——manifest/pins/生成 WAV/入力ファイルを指すと
     成功終了のまま上書き破壊しうる穴があった。`summary_out` を渡した場合は
     他の出力（manifest_out/pins_out/生成 WAV）と同じ扱いで衝突検査へ編入する。
+
+    `screening_record_path`（v2 経路）: 指定時は他の build 入力
+    （fixtures_path/synth_specs_path/vocadito WAV）と同じ扱いで入力集合へ
+    編入する——`--out-dir`/`--manifest-out`/`--pins-out` の誤設定でスクリー
+    ニング記録自体を上書き破壊する事故を、生成開始前に断つ。
     """
     outputs: Dict[Path, str] = {}
 
@@ -687,6 +787,11 @@ def _reject_output_input_collisions(
         fixtures_path.resolve(): f"fixtures_path ({fixtures_path})",
         synth_specs_path.resolve(): f"synth_specs_path ({synth_specs_path})",
     }
+    if screening_record_path is not None:
+        inputs.setdefault(
+            Path(screening_record_path).resolve(),
+            f"screening_record_path ({screening_record_path})",
+        )
     for audio_path in vocadito_audio_paths:
         inputs.setdefault(Path(audio_path).resolve(), f"vocadito WAV ({audio_path})")
 
@@ -1469,6 +1574,7 @@ def run_build(
     fixtures_path: Path,
     synth_specs_path: Path,
     summary_out: Optional[Path] = None,
+    screening_record_path: Optional[Path] = None,
 ) -> Tuple[List[Dict[str, str]], Dict[str, Path], Dict[str, str], Dict[str, str]]:
     """公開先衝突検査 → pin 照合 → 選定 → 生成（`staging_wav_dir` への物理
     書き込み）→ manifest 組み立てまでを行う。書き込みは `staging_wav_dir` 配下
@@ -1481,7 +1587,8 @@ def run_build(
     入力そのもの）の対応表——pins サイドカーの sha256 計算がまだ publish 前の
     staging から読めるようにする。`build_input_sha256` は
     `{"m2c_external_fixtures_sha256": ..., "m3d_synth_specs_sha256": ...}`
-    （R2R N1・TOCTOU 解消: いずれもパースに使ったのと同一バイト列から計算済み）。
+    （`screening_record_path` 指定時は `"screening_record_sha256"` も追加。
+    R2R N1・TOCTOU 解消: いずれもパースに使ったのと同一バイト列から計算済み）。
     `fixtures` は {clip_id: expected_audio_sha256}——呼び出し側が T2 対応
     （publish 直前の vocadito バイト再照合）で `verify_vocadito_pins` に
     再度渡すために返す（fixtures_path を再読み込みしない——ロード済みの
@@ -1491,11 +1598,31 @@ def run_build(
     （manifest_out/pins_out/生成 WAV）と同じ扱いで `_reject_output_input_
     collisions` の衝突検査に編入する——`--summary-out` が manifest/pins/生成
     WAV/入力ファイルを指す誤設定を、生成開始前に fail-closed で拒否する。
+
+    `screening_record_path`（v2 経路。prereg_v2 §2〜§3）: 指定時は
+    `scripts/screen_m3d_clips.py` が出力したスクリーニング記録
+    （schema: m3d-screening/0.1）を読み、その `survivor_clip_ids` へ
+    `select_clips_v2` の決定論分割規則を適用して tuning/holdout を決める
+    （`select_clips` の固定 12/6 選定は使わない）。未指定時（既定）は
+    v1 の挙動（`select_clips(fixtures)`）を完全不変のまま実行する。
     """
     fixtures, fixtures_sha256 = load_m2c_fixtures(fixtures_path)
     resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
 
-    tuning_ids, holdout_ids = select_clips(fixtures)
+    screening_record_sha256: Optional[str] = None
+    if screening_record_path is not None:
+        screening_doc, screening_record_sha256 = _load_screening_record(screening_record_path)
+        survivor_clip_ids = screening_doc["survivor_clip_ids"]
+        unknown_survivors = sorted(set(survivor_clip_ids) - set(fixtures))
+        if unknown_survivors:
+            raise BuildM3dPairsError(
+                f"{screening_record_path}: survivor_clip_ids に "
+                f"{fixtures_path} 非登録の clip_id が含まれる (fail-closed): "
+                f"{unknown_survivors}"
+            )
+        tuning_ids, holdout_ids = select_clips_v2(survivor_clip_ids)
+    else:
+        tuning_ids, holdout_ids = select_clips(fixtures)
 
     # R2R 対応 N3（Codex レビュー第 2 ラウンド・公開先衝突の拒否）: 生成
     # （staging への物理書き込み・librosa/build_signal 呼び出し）を開始する前に、
@@ -1509,6 +1636,7 @@ def run_build(
         synth_specs_path=synth_specs_path,
         vocadito_audio_paths=list(resolved_audio.values()),
         summary_out=summary_out,
+        screening_record_path=screening_record_path,
     )
 
     specs, synth_specs_sha256 = _load_synth_specs(synth_specs_path)
@@ -1552,6 +1680,12 @@ def run_build(
         "m2c_external_fixtures_sha256": fixtures_sha256,
         "m3d_synth_specs_sha256": synth_specs_sha256,
     }
+    if screening_record_sha256 is not None:
+        # v2 経路のみ追加する optional フィールド（H2 の summary_path/
+        # summary_sha256 と同じ後方互換規約 — 既存 `_REQUIRED_PINS_KEYS`
+        # には含めず、`_PINS_SCHEMA` も bump しない。v1 pins サイドカーは
+        # 本フィールドを持たないまま引き続き有効）。
+        build_input_sha256["screening_record_sha256"] = screening_record_sha256
     return pairs, audio_source_lookup, build_input_sha256, fixtures
 
 
@@ -1564,10 +1698,14 @@ def run_and_publish(
     fixtures_path: Path,
     synth_specs_path: Path,
     summary_out: Optional[Path] = None,
+    screening_record_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`run_build` を staging ディレクトリ（`out_dir` と同一ファイルシステム上）
     で走らせ、manifest + pins サイドカーを組み立てて全検証成功後に
     `_publish_staged_bundle` で一括公開する（R3 対応）。
+
+    `screening_record_path`（v2 経路）: `run_build` へそのまま渡す。未指定時
+    （既定）は v1 の挙動を完全不変のまま実行する。
 
     途中で例外が飛んだ場合、staging ディレクトリを破棄するのみで既存の
     公開済みセット（`out_dir` の WAV 一式・`manifest_out`・`pins_out`）には
@@ -1635,6 +1773,7 @@ def run_and_publish(
             fixtures_path=fixtures_path,
             synth_specs_path=synth_specs_path,
             summary_out=summary_out,
+            screening_record_path=screening_record_path,
         )
 
         manifest_doc = {"schema": _MANIFEST_SCHEMA, "pairs": pairs}
@@ -1737,6 +1876,20 @@ def main() -> int:
         default=None,
         help="kind×split（+material 内訳）の対数集計 JSON を書き出す（任意）",
     )
+    parser.add_argument(
+        "--screening-record",
+        type=Path,
+        default=None,
+        help=(
+            "v2 経路（prereg_v2 §2〜§3）: scripts/screen_m3d_clips.py が出力する "
+            "スクリーニング記録（schema: m3d-screening/0.1）。指定時は survivor_clip_ids "
+            "へ select_clips_v2 の決定論分割規則（N>=18 は 12/6、N<18 は "
+            "ceil(2N/3)/floor(N/3)、tuning<6 or holdout<3 は fail-closed）を適用して "
+            "tuning/holdout を決める。未指定時（既定）は v1 の固定 12/6 選定を使う "
+            "（--check-only には無関係 — check_existing は既存 manifest/pins の再照合の "
+            "みで選定規則を再実行しない）。"
+        ),
+    )
     args = parser.parse_args()
 
     # R2R 対応 G2（Codex レビュー第 5 ラウンド）: `--summary-out` の書き込み
@@ -1787,6 +1940,7 @@ def main() -> int:
                 fixtures_path=args.fixtures,
                 synth_specs_path=args.synth_specs,
                 summary_out=args.summary_out,
+                screening_record_path=args.screening_record,
             )
             print(f"wrote {summary['total']} pairs to {args.manifest_out}")
             print(f"wrote pins sidecar to {args.pins_out}")

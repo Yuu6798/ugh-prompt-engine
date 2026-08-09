@@ -1,0 +1,163 @@
+# melody_bench/m3d_synth_specs_v2.yaml — M3d 校正実測 v2（合成素材）の決定論合成仕様。
+#
+# `docs/measurements/m3d_2026-08/preregistration_v2.md` §4 に対応する fixture 定義。
+# v1 `m3d_synth_specs.yaml` は不変更のまま残す — 本ファイルは v2 専用の**別ファイル**
+# として新規追加する（`scripts/build_m3d_pairs.py` の `--screening-record` 付き v2
+# 経路が `--synth-specs` として読む）。
+#
+# v1 との違い（構造のみ。役割・診断専用の性質・会計は不変）: v1 の synth fixture は
+# 全数が観測ゲート不通過（note_count 5 < min 8 等）で診断が構造的に成立しなかった
+# （prereg_v2 §1「v1 不通過の原因」参照）。本ファイルは M1 観測ゲート（registry.yaml
+# `observation_gate`: min_phrase_count=2 / min_note_count=8 / min_voiced_coverage=0.30 /
+# phrase_gap_sec=0.6）を通り得る構造へ再設計する——prereg_v2 §4 の要求（2 フレーズ
+# 以上・フレーズ間ギャップ ≥1.2s・総 note 数 ≥10・voiced coverage ≥0.30 を spec 構造上
+# 満たす）を全 10 fixture（positive base 2 + negative_rhythm 側 4 + negative_interval
+# 側 4）に適用する。「診断が構造的に成立しうる fixture であること」は
+# `tests/test_m3d_synth_specs_v2.py` が spec 直読み（gate 通過可能構造の機械アサート）
+# と `build_sequences` 直通し（rhythm/interval 負例の弁別可能性。v1
+# `test_m3d_negative_rhythm_pair{1,2}_is_structurally_diagnosable` と同型）の両方で
+# 実測前に保証する。
+#
+# fixture id は v1 と**同一の文字列**を使う（別ファイルのため名前空間は衝突しない —
+# `scripts/build_m3d_pairs.py` の `SYNTH_TUNING_POS_ID` 等の Python 定数はファイル非
+# 依存の id 文字列であり、`--synth-specs` に本ファイルを渡すだけでそのまま v2 の
+# 内容を読む）。
+#
+# 形式は `synthesis_specs.yaml` / v1 `m3d_synth_specs.yaml` と同一（`build_melody_bench.
+# load_specs` / `build_signal` でそのまま読める）。乱数は用いない。役割は v1 と同一:
+# **診断専用**であり、not_comparable は not_measured として正直会計、凍結可否・
+# holdout 判定に不影響（prereg_v2 §4）。
+
+sample_rate: 22050
+amplitude: 0.3
+
+fixtures:
+  # -------------------------------------------------------------------- #
+  # positive_transform 用の合成旋律ベース（builder が make_variants で pitch+3st /
+  # rate x0.9 の変形版を追加生成し、base vs 変形版で positive pair を組む。v1 と
+  # 同じ変形パラメータ——変わるのは base 自体の構造のみ）。
+  # 2 フレーズ×6 note = 12 note、phrase_gap_sec=1.2（>=1.2）。
+  # -------------------------------------------------------------------- #
+
+  # positive base（tuning）
+  m3d_synth_tuning_pos:
+    kind: monophonic
+    note_dur_sec: 0.3
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [57, 60, 64, 67, 64, 60]
+      - [64, 60, 57, 53, 50, 53]
+
+  # positive base（holdout。tuning 側とは別の音程列）
+  m3d_synth_holdout_pos:
+    kind: monophonic
+    note_dur_sec: 0.3
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [62, 65, 69, 72, 69, 65]
+      - [69, 65, 62, 58, 55, 58]
+
+  # -------------------------------------------------------------------- #
+  # negative_rhythm 用（tuning のみ・2 対 = 4 fixture）: v1 と同じ原理（対の両側
+  # とも音程列は完全同一、フレーズ内 note タイミングのみを変える——a 側は
+  # フレーズ内一様=均等割、b 側は `note_durs_sec` で長短交互）。構造のみ v2 の
+  # 下限（2 フレーズ×5 note = 10 note/側、phrase_gap_sec=1.2）へ拡張した。
+  # -------------------------------------------------------------------- #
+
+  # negative_rhythm 対 1・側 a（2 フレーズ・フレーズ内一様=均等割）
+  m3d_synth_rhythm_neg1_a:
+    kind: monophonic
+    note_dur_sec: 0.3
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [60, 62, 64, 65, 67]
+      - [67, 65, 64, 62, 60]
+
+  # negative_rhythm 対 1・側 b（音程列は側 a と同一、フレーズ内タイミングを
+  # 長短交互パターンへ変更）
+  m3d_synth_rhythm_neg1_b:
+    kind: monophonic
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [60, 62, 64, 65, 67]
+      - [67, 65, 64, 62, 60]
+    note_durs_sec:
+      - [0.5, 0.15, 0.5, 0.15, 0.5]
+      - [0.5, 0.15, 0.5, 0.15, 0.5]
+
+  # negative_rhythm 対 2・側 a（2 フレーズ・フレーズ内一様=均等割。対 1 とは
+  # 別の音程列）
+  m3d_synth_rhythm_neg2_a:
+    kind: monophonic
+    note_dur_sec: 0.25
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [67, 65, 64, 62, 60]
+      - [60, 64, 67, 64, 60]
+
+  # negative_rhythm 対 2・側 b（音程列は側 a と同一、フレーズ内タイミングを
+  # 長短交互パターンへ変更）
+  m3d_synth_rhythm_neg2_b:
+    kind: monophonic
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [67, 65, 64, 62, 60]
+      - [60, 64, 67, 64, 60]
+    note_durs_sec:
+      - [0.45, 0.15, 0.45, 0.15, 0.45]
+      - [0.45, 0.15, 0.45, 0.15, 0.45]
+
+  # -------------------------------------------------------------------- #
+  # negative_interval 用（tuning のみ・2 対 = 4 fixture）: v1 と同じ原理（対の
+  # 両側とも note_dur_sec/note_gap_sec/phrase_gap_sec（IOI）とフレーズ構造
+  # （フレーズ数・各フレーズのノート数）は完全同一、phrases の MIDI 値（音程列
+  # そのもの・形状）だけを変える）。構造のみ v2 の下限（2 フレーズ×5 note =
+  # 10 note/側、phrase_gap_sec=1.2）へ拡張した。
+  # -------------------------------------------------------------------- #
+
+  # negative_interval 対 1・側 a（上行 4 度圏の跳躍中心 → 折返し）
+  m3d_synth_interval_neg1_a:
+    kind: monophonic
+    note_dur_sec: 0.3
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [60, 64, 67, 69, 71]
+      - [71, 69, 67, 64, 60]
+
+  # negative_interval 対 1・側 b（音程列の形状が側 a と異なる、IOI は側 a と同一）
+  m3d_synth_interval_neg1_b:
+    kind: monophonic
+    note_dur_sec: 0.3
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [55, 53, 58, 54, 60]
+      - [60, 54, 58, 53, 55]
+
+  # negative_interval 対 2・側 a（2 フレーズ・上行→下行の折返し。対 1 とは
+  # 別の音程列）
+  m3d_synth_interval_neg2_a:
+    kind: monophonic
+    note_dur_sec: 0.25
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [65, 67, 69, 71, 72]
+      - [72, 71, 69, 67, 65]
+
+  # negative_interval 対 2・側 b（音程列の形状が側 a と異なる、IOI は側 a と同一）
+  m3d_synth_interval_neg2_b:
+    kind: monophonic
+    note_dur_sec: 0.25
+    note_gap_sec: 0.05
+    phrase_gap_sec: 1.2
+    phrases:
+      - [50, 53, 50, 55, 52]
+      - [52, 55, 50, 53, 50]
