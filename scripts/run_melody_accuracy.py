@@ -7235,7 +7235,7 @@ def _reverify_category_measurement(
     eval_cell_store: Optional[Path] = None,
     workers: int = 1,
     thread_pinning: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> "List[Dict[str, Any]]":
     """`category` の kind に応じて S（specs 由来合成）/ V（外部素材、M2c）の測り直しへ振り分ける。
 
     S カテゴリの挙動・シグネチャは変更しない。M2c で追加した外部素材カテゴリは
@@ -7247,6 +7247,11 @@ def _reverify_category_measurement(
     専用**である。S カテゴリの測り直しは合成 fixture の再生成なので 10 h 級の
     コストを持たず、分離 store も並列化も要らない（触らない = 既存の挙動を 1 バイトも
     変えない）。
+
+    戻り値（Codex P2・PR #254 line 8588 是正）: 検証子が持つ
+    `generator_code_predecessors` の未検証「document」列挙（S カテゴリ側は構造的に
+    常に空——上記の理由）。呼び出し元 `evaluate_m2_bars` が全カテゴリ分を集約し、
+    提出 reports 由来の分と合わせて一括検証する。
     """
     category_spec = _CATEGORY_SPECS[category]
     if category_spec["kind"] == "external":
@@ -7261,7 +7266,7 @@ def _reverify_category_measurement(
                 "が m2e_bars_raw が渡されていない; 測り直し子へ帯登録を凍結転写できない "
                 "(fail-closed)"
             )
-        _reverify_external_category_measurement(
+        return _reverify_external_category_measurement(
             category,
             rows,
             bars=bars,
@@ -7277,8 +7282,7 @@ def _reverify_category_measurement(
             workers=workers,
             thread_pinning=thread_pinning,
         )
-        return
-    _reverify_direct_or_fullstack_category_measurement(
+    return _reverify_direct_or_fullstack_category_measurement(
         category, rows, bars=bars, specs_raw=specs_raw, repeats=repeats,
         verification_runner=verification_runner,
     )
@@ -7292,7 +7296,7 @@ def _reverify_direct_or_fullstack_category_measurement(
     specs_raw: bytes,
     repeats: int,
     verification_runner: Optional[RouteRunner] = None,
-) -> None:
+) -> "List[Dict[str, Any]]":
     """評価器自身が同じ凍結 fixture を **`repeats` 回独立に測り直し**、bit 一致を要求する。
 
     fixture の同一性も凍結する（Codex P2 第 34 巡）: 子に `--specs` の実パスを渡すと
@@ -7331,6 +7335,13 @@ def _reverify_direct_or_fullstack_category_measurement(
     決定論を実証しない（Codex P2 第 24 巡）。注入ランナー（monkeypatch 経由の
     テスト seam）はプロセス境界を越えられないため in-process のまま——その seam
     自体が境界外であることは第 22 巡の整理のとおり。
+
+    戻り値は常に空リスト（Codex P2・PR #254 line 8588 是正の調査結果）: S カテゴリ
+    （direct/fullstack）の測り直しは `--cell-store`/`cell_store=` のいずれも子へ
+    渡さない（本関数・`_run_verification_in_fresh_process` のどちらにもその配線が
+    無い）。cell-store resume が構造的に起こり得ないため、子 report が
+    `generator_code_predecessors` を持つことはない——`_reverify_external_category_
+    measurement`（V/M2c カテゴリ）とシグネチャを揃えるためだけに空リストを返す。
     """
     if repeats < 2:
         raise ValueError(
@@ -7423,6 +7434,7 @@ def _reverify_direct_or_fullstack_category_measurement(
                 "評価器自身の測り直しと bit 一致しない; 決定論パイプライン（shifts=0）の "
                 "下で再現しない row を publish しない (fail-closed)"
             )
+    return []
 
 
 def _run_external_verification_in_fresh_process(
@@ -7439,7 +7451,7 @@ def _run_external_verification_in_fresh_process(
     level: Optional[str] = None,
     eval_cell_store: Optional[Path] = None,
     thread_pinning: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+) -> "Tuple[Dict[str, Any], Any]":
     """外部素材カテゴリ（M2c）の測り直し 1 回分を新規プロセス（素の CLI run）で実行する。
 
     `_run_verification_in_fresh_process`（S カテゴリ）と同型・対称（M2c PR-M2c-1
@@ -7453,6 +7465,16 @@ def _run_external_verification_in_fresh_process(
     実パスをそのまま子へ渡す——manifest が指す音声/注釈は登録済み sha256 と run 側が
     fail-closed で照合するため、TOCTOU（子の実行前に差し替え）は測定失敗
     （sha256 mismatch）として顕在化し、偽の pass を静かに通さない。
+
+    戻り値は `(row, generator_code_predecessors)`（Codex P2・PR #254 line 8588 是正）。
+    `eval_cell_store`（`store_B`・evaluate 役割）に前任コード時代の evaluate-role
+    レコードがあれば、この子プロセス自身が cell-store resume を行い、子 report の
+    トップレベル `generator_code_predecessors` に受理した前任 hash を刻む。従来は
+    `row`（category 単位の測定結果）しか親へ返していなかったため、この血統情報が
+    **子プロセスの終了と共に失われていた**——親の verdict が「全部現行コードの
+    測定」を名乗ってしまう。呼び出し元が検証つきで正典（verdict）へ合流させる
+    （2 番目の要素は未検証の生値・型/形式/受理可能性の検証は呼び出し元が
+    `_collect_declared_generator_code_predecessors` で一括して行う）。
     """
     report_path = tmp_dir / f"verification_ext_{index}.json"
     command = [
@@ -7544,7 +7566,7 @@ def _run_external_verification_in_fresh_process(
             f"evaluate_m2_bars: 測り直しプロセスの report に category {category!r} の "
             "row が無い; 評価環境で再実行できないため publish しない (fail-closed)"
         )
-    return row
+    return row, verification.get("generator_code_predecessors")
 
 
 def _reverify_external_category_measurement(
@@ -7563,7 +7585,7 @@ def _reverify_external_category_measurement(
     eval_cell_store: Optional[Path] = None,
     workers: int = 1,
     thread_pinning: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> "List[Dict[str, Any]]":
     """外部素材カテゴリ（M2c）を評価器自身が `repeats` 回独立に測り直す。
 
     `_reverify_direct_or_fullstack_category_measurement` と同じ「評価器自身の測り
@@ -7580,6 +7602,12 @@ def _reverify_external_category_measurement(
     M2c-1 時点では `m2c_external_fixtures.yaml` の `fixtures` が空のため、V_direct を
     含む run は `_run_external_category` の fail-closed（登録済み clip なし）で本関数
     に到達する前に落ちる——実データは M2c-2 で登録する。
+
+    戻り値（Codex P2・PR #254 line 8588 是正）: 検証子（`eval_cell_store` を渡した
+    fresh-process/in-process 検証）が個々に持つ `generator_code_predecessors` を
+    `{"generator_code_predecessors": ...}` の「document」形で列挙したリスト。
+    未検証の生値のみを運ぶ——呼び出し元 `evaluate_m2_bars` が提出 reports 由来の
+    分と合わせて `_collect_declared_generator_code_predecessors` で一括検証する。
     """
     if repeats < 2:
         raise ValueError(
@@ -7608,6 +7636,9 @@ def _reverify_external_category_measurement(
     # が、原因を「別 manifest を測った」と即座に特定できるよう明示的に照合する。
     expected_manifest_sha256 = rows[0].get("external_manifest_sha256") if rows else None
     verification_rows: List[Dict[str, Any]] = []
+    # Codex P2（PR #254 line 8588 是正）: 検証子（`eval_cell_store` 経由の resume）が
+    # 個々に持つ `generator_code_predecessors` を集める（検証は呼び出し元に委ねる）。
+    verification_declared_documents: List[Dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="m2c-reverify-") as tmp:
         bars_path = Path(tmp) / "m2_accuracy_bars.yaml"
         bars_path.write_bytes(bars.raw)
@@ -7633,7 +7664,7 @@ def _reverify_external_category_measurement(
         # なって検証が空虚になる——それを防ぐのは store の分離であって、再開不能性
         # ではない（fresh process 経路の同じ規律は
         # `_run_external_verification_in_fresh_process` docstring 参照）。
-        def _verify_once(index: int) -> Dict[str, Any]:
+        def _verify_once(index: int) -> "Tuple[Dict[str, Any], Any]":
             if verification_runner is not None:
                 run_kwargs = dict(extra_run_kwargs)
                 if eval_cell_store is not None:
@@ -7652,8 +7683,12 @@ def _reverify_external_category_measurement(
                     **run_kwargs,
                 )
                 vrow = verification["categories"][category]
+                # Codex P2（PR #254 line 8588 是正）: in-process テスト seam でも
+                # fresh-process 経路と同じ血統喪失が起こりうる（`run_accuracy` の
+                # 戻り値は report 全体だが、下では category row しか使っていない）。
+                verification_predecessors = verification.get("generator_code_predecessors")
             else:
-                vrow = _run_external_verification_in_fresh_process(
+                vrow, verification_predecessors = _run_external_verification_in_fresh_process(
                     category,
                     index,
                     tmp_dir=Path(tmp),
@@ -7680,7 +7715,7 @@ def _reverify_external_category_measurement(
                     f"提出 report の {expected_manifest_sha256!r} と不一致; 別 manifest を "
                     "測った検証 run を同じ測定の再現と数えない (fail-closed)"
                 )
-            return vrow
+            return vrow, verification_predecessors
 
         # C3（rev.6 §8.9.2-(2)）: 検証の子を**最大 `workers` 本まで同時に起こす**。
         # publish が要求するのは「fresh process であること」と「run の結果を読まない
@@ -7694,7 +7729,7 @@ def _reverify_external_category_measurement(
         #
         # 結果は `index` 順の固定席へ書き戻す（完了順に append すると `P` によって
         # 順序が変わり、下の bit 一致比較・エラー選択が `P` 依存になる）。
-        slots: "List[Optional[Dict[str, Any]]]" = [None] * repeats
+        slots: "List[Optional[Tuple[Dict[str, Any], Any]]]" = [None] * repeats
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(_verify_once, index) for index in range(repeats)]
             failures: "List[BaseException]" = []
@@ -7708,7 +7743,15 @@ def _reverify_external_category_measurement(
                     failures.append(exc)
             if failures:
                 raise failures[0]
-        verification_rows.extend(row for row in slots if row is not None)
+        verification_rows.extend(slot[0] for slot in slots if slot is not None)
+        # Codex P2（PR #254 line 8588 是正）: 検証子が個々に持つ
+        # `generator_code_predecessors`（`store_B` の evaluate-role resume 由来）を
+        # 「document」形（`_collect_declared_generator_code_predecessors` が読める
+        # 形）で持ち帰る。検証はここでは行わない——呼び出し元が提出 reports 由来の
+        # 分と合わせて一括で検証する。
+        verification_declared_documents.extend(
+            {"generator_code_predecessors": slot[1]} for slot in slots if slot is not None
+        )
     _require_homogeneous_model_stack(category, rows + verification_rows)
     verification_clip_lists = [vrow["clips"] for vrow in verification_rows]
     if len({json.dumps(c, sort_keys=True) for c in verification_clip_lists}) > 1:
@@ -7725,6 +7768,7 @@ def _reverify_external_category_measurement(
                 "評価器自身の測り直しと bit 一致しない; 決定論パイプラインの下で再現しない "
                 "row を publish しない (fail-closed)"
             )
+    return verification_declared_documents
 
 
 def _require_registered_row_identity(
@@ -9206,6 +9250,13 @@ def evaluate_m2_bars(
         # 判定と混同されるため、効果は別途 `P` を振った実測比で示す）。
         verdict["evaluate_execution"] = evaluate_execution
 
+    # Codex P2（PR #254 line 8588 是正）: 検証子（`_reverify_category_measurement`）が
+    # 個々に持つ `generator_code_predecessors`（`eval_cell_store` の evaluate-role
+    # resume 由来）を全カテゴリ分集める。提出 reports 由来の分は既に
+    # `_require_matching_generator_code` が集めているが、検証子側は別プロセス/別
+    # 呼び出しの成果物であり、その血統がここまで運ばれてこないと verdict へ伝わらない
+    # （fresh-process 子は category row しか親へ返していなかった）。
+    verification_declared_documents: List[Dict[str, Any]] = []
     for category in all_categories:
         rows = [report["categories"][category] for report in reports if category in report["categories"]]
         outcomes = {row["outcome"] for row in rows}
@@ -9283,20 +9334,22 @@ def evaluate_m2_bars(
         # ランナーの注入口は公開 API に置かない（Codex P1 第 22 巡）——常に実抽出器。
         # M2c: 外部素材カテゴリは `_reverify_category_measurement` 内部で
         # `--external-manifest` の要求（未指定 fail-closed）を含めて振り分ける。
-        _reverify_category_measurement(
-            category,
-            rows,
-            bars=bars,
-            specs_raw=specs_raw,
-            repeats=repeats_min,
-            external_manifest_path=external_manifest_path,
-            external_fixtures_path=external_fixtures_path,
-            external_fixtures_raw=external_fixtures_raw,
-            m2e_bars_raw=m2e_bars.raw if is_m2e and m2e_bars is not None else None,
-            level=m2e_level if is_m2e else None,
-            eval_cell_store=eval_cell_store,
-            workers=workers,
-            thread_pinning=thread_pinning,
+        verification_declared_documents.extend(
+            _reverify_category_measurement(
+                category,
+                rows,
+                bars=bars,
+                specs_raw=specs_raw,
+                repeats=repeats_min,
+                external_manifest_path=external_manifest_path,
+                external_fixtures_path=external_fixtures_path,
+                external_fixtures_raw=external_fixtures_raw,
+                m2e_bars_raw=m2e_bars.raw if is_m2e and m2e_bars is not None else None,
+                level=m2e_level if is_m2e else None,
+                eval_cell_store=eval_cell_store,
+                workers=workers,
+                thread_pinning=thread_pinning,
+            )
         )
 
         # 判定規律（設計 §6.2・fail-closed）: **`level != gate_level` の run に
@@ -9428,6 +9481,19 @@ def evaluate_m2_bars(
         else:
             cat_result["status"] = "pass" if not failures else "fail"
         verdict["categories"][category] = cat_result
+
+    # Codex P2（PR #254 line 8588 是正）: 検証子由来の predecessors 宣言を、提出
+    # reports 由来の分（`generator_code_predecessors`、上で `_require_matching_
+    # generator_code` から取得済み）と同じ検証（形式 + 受理可能性）つきで合流する。
+    # 受理不能な宣言が 1 つでもあれば fail-closed（無検証で正典 verdict へ転記しない）。
+    verification_generator_code_predecessors = _collect_declared_generator_code_predecessors(
+        verification_declared_documents, where="evaluate_m2_bars: verification reports"
+    )
+    if verification_generator_code_predecessors:
+        combined_generator_code_predecessors = sorted(
+            set(generator_code_predecessors) | verification_generator_code_predecessors
+        )
+        verdict["generator_code_predecessors"] = combined_generator_code_predecessors
 
     # verdict を返す（= publish する）直前に、load 時に pin したコードが
     # 実行中に差し替わっていないことを確認する。`_require_matching_generator_code`

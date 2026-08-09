@@ -139,7 +139,7 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
     # テストが評価段へ到達できるようここでは no-op にする。実検証の合否は
     # `_ORIG_REVERIFY` を戻す専用テスト群が固定する。
     monkeypatch.setattr(
-        harness, "_reverify_category_measurement", lambda *args, **kwargs: None
+        harness, "_reverify_category_measurement", lambda *args, **kwargs: []
     )
     # 事前登録の git 立証も正規化する。機構テストは tmp の bars（履歴に無い blob）を
     # 多用するため、素のままだと全 evaluate テストが立証不能拒否になる（正しい挙動・
@@ -6186,8 +6186,11 @@ def _reverify_via(runner: Any) -> Any:
     出力がこうだった環境」を模す。
     """
 
-    def _patched(category: str, rows: Any, **kwargs: Any) -> None:
-        _ORIG_REVERIFY(category, rows, verification_runner=runner, **kwargs)
+    def _patched(category: str, rows: Any, **kwargs: Any) -> Any:
+        # Codex P2（PR #254 line 8588 是正）: `_reverify_category_measurement` は
+        # いまや検証子由来の predecessors document 列を返す契約——ここで握り潰すと
+        # `evaluate_m2_bars` 側の union が空という誤った状態を作る。
+        return _ORIG_REVERIFY(category, rows, verification_runner=runner, **kwargs)
 
     return _patched
 
@@ -11615,6 +11618,76 @@ def test_census_rejects_a_declared_predecessor_that_cannot_be_accepted(tmp_path:
     verdicts[0]["generator_code_predecessors"] = [unknown]
     with pytest.raises(ValueError, match="受理できない"):
         _census(tmp_path, verdicts)
+
+
+def test_evaluate_propagates_verification_side_predecessors_from_eval_cell_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(17) `--eval-cell-store`（store_B）の evaluate-role レコードが前任 hash を
+
+    持つ状態で evaluate すると、検証子（fresh-process/in-process 経路）が resume
+    して受理した前任 hash が verdict の `generator_code_predecessors` へ伝搬する
+    （検証側経路。Codex P2・PR #254 line 8588 是正: 従来は検証子が category row
+    しか親へ返さず、この血統情報が子プロセスの終了と共に失われていた）。
+    """
+    predecessor = next(iter(harness.GENERATOR_CODE_EQUIVALENT_SHA256S))
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    monkeypatch.setattr(
+        harness, "_reverify_category_measurement", _reverify_via(_m2e_fake_runner())
+    )
+    eval_store = tmp_path / "store_B"
+
+    verdict1 = _m2e_evaluate_with(tmp_path, reports, eval_cell_store=eval_store)
+    assert "generator_code_predecessors" not in verdict1
+    assert eval_store.is_dir()
+
+    # store_B の evaluate-role レコードを前任コード時代のものとして書き換える
+    # （r6 相当の状況を再現: 前任コード時代の evaluate が書いたレコードへ、コード
+    # 変更後の evaluate が resume でぶつかる）。
+    record_paths = list(eval_store.glob("cell_*.json"))
+    assert record_paths, "store_B にセルレコードが書かれていること前提のテスト"
+    for record_path in record_paths:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        assert record["store_role"] == harness._CELL_STORE_ROLE_EVALUATE
+        record["generator_code_sha256"] = predecessor
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    verdict2 = _m2e_evaluate_with(tmp_path, reports, eval_cell_store=eval_store)
+    # 提出 reports 側のトップ hash は現行のまま（predecessors は検証側だけの事情）。
+    assert verdict2["generator_code_sha256"] == harness._LOADED_GENERATOR_CODE_SHA256
+    assert verdict2["generator_code_predecessors"] == [predecessor]
+
+
+def test_evaluate_rejects_an_unaccepted_verification_side_predecessor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(18) 検証子 report が主張する predecessors に受理不能な hash があれば
+
+    fail-closed（無検証で正典 verdict へ転記しない）。
+
+    本物の resume 機構（`_generator_code_equivalence_accepts`）は等価表で不受理な
+    hash をそもそも `generator_code_predecessors` へ載せない——この異常事態
+    （壊れた/手組みの検証子 report）を、実測結果を書き換える spy で直接偽装する
+    （report レベルの test (14) と同型、検証子側で再現）。
+    """
+    unknown = "6" * 64
+    assert unknown not in harness.GENERATOR_CODE_EQUIVALENT_SHA256S
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+
+    real_run_accuracy = harness.run_accuracy
+
+    def _forging_run_accuracy(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        result = real_run_accuracy(*args, **kwargs)
+        result["generator_code_predecessors"] = [unknown]
+        return result
+
+    monkeypatch.setattr(harness, "run_accuracy", _forging_run_accuracy)
+    monkeypatch.setattr(
+        harness, "_reverify_category_measurement", _reverify_via(_m2e_fake_runner())
+    )
+
+    with pytest.raises(ValueError, match="受理できない"):
+        _m2e_evaluate_with(tmp_path, reports)
 
 
 def test_census_rejects_arms_that_measured_different_mixes(tmp_path: Path) -> None:
