@@ -327,6 +327,29 @@ def _preloaded_seed_modules() -> List[str]:
     return sorted(name for name in watched if name in _SYS_MODULES_AT_LOAD)
 
 
+# 前任 generator code hash の等価表(設計裁定 = PR #254 P1 対応)。
+# エントリの意味: 「この hash のコードで測られたセルレコード/report/verdict を、現行
+# コードで resume・照合・集計してよい」という設計裁定。等価の根拠は per-cell 測定経路に
+# 触れない変更(カテゴリ集約・検証レイヤのみ)であることの attestation 文書(値に記載)。
+# **後継束縛により閉包が変わればエントリは機械的に失効する**(Codex 新 P1・PR #254
+# line 343 是正): 受理は「candidate が本表のキーであること」だけでなく、値が指す
+# attestation 文書が宣言する `attested_successor_sha256` が現在の
+# `_LOADED_GENERATOR_CODE_SHA256` と一致することも要求する（`_generator_code_
+# equivalence_accepts` が二重化)。文書が読めない/行が無い/値が sha256 形式でない/
+# successor が現行と不一致、のいずれでもエントリは無効(受理せず従来どおり
+# mismatch/fail-closed)になる——測定経路に触れる変更を入れて閉包 hash が動けば、
+# 「消し忘れ」があってもこの照合で自動的に失効し、警告コメントの人間規律だけに
+# 依存しない。新しい変更で等価を維持したい場合は新しい attestation 文書を作成し、
+# その文書の `attested_successor_sha256` を新しい閉包 hash へ更新すること。
+GENERATOR_CODE_EQUIVALENT_SHA256S: Dict[str, str] = {
+    # = commit 32288aa8（M2e r4/r5 shard map 凍結コミット）時点の閉包 hash。r6 帯の
+    # 1280 セルはこの checkout で測定された（attestation 文書 §検証方法で worktree
+    # 実行により再確認済み）。
+    "5cc0d5f9bba92ce8aa679eeebc32845e7702b6ac8e2bb1f561ba37c37ab965a4": (
+        "docs/measurements/m2e_2026-08/generator_code_equivalence_2026-08-09.md"
+    ),
+}
+
 # 閉包 digest を **あらゆる first-party import より前に** 確定させる。
 # `_generator_code_paths` は find_spec を使わずパス写像だけなので import を起こさない
 # （`provenance.package_code_state` と同じ #217 の規律）。以降 `run_accuracy` はこの値を
@@ -335,6 +358,77 @@ def _preloaded_seed_modules() -> List[str]:
 # ため、下の import 群が済んだ後で確定させる——判定基準の `_SYS_MODULES_AT_LOAD` は
 # 既に凍結済みなので、評価位置が後になっても値は変わらない。
 _LOADED_GENERATOR_CODE_SHA256 = _generator_code_sha256()
+
+
+# attestation 文書パース結果のキャッシュ（candidate hash → 読み取った
+# `attested_successor_sha256`、または無効なら None）。文書は 1 run 中に変わらない
+# 前提でよい（`GENERATOR_CODE_EQUIVALENT_SHA256S` 自体がコード内の凍結値であり、
+# 実行中に等価表のエントリが増減することは無い）。テストはパスを monkeypatch した
+# 後に `_reset_attested_successor_cache()` で明示的に破棄する。
+_ATTESTED_SUCCESSOR_SHA256_CACHE: "Dict[str, Optional[str]]" = {}
+
+
+def _reset_attested_successor_cache() -> None:
+    """テスト専用フック: attestation 文書パースのキャッシュを破棄する。
+
+    `GENERATOR_CODE_EQUIVALENT_SHA256S` のエントリ値（文書パス）を monkeypatch した
+    テストは、キャッシュが古いパスの結果を持ち越さないようこれを呼ぶこと。
+    """
+    _ATTESTED_SUCCESSOR_SHA256_CACHE.clear()
+
+
+def _parse_attested_successor_sha256(doc_path: Path) -> "Optional[str]":
+    """attestation 文書から `attested_successor_sha256:` 行を読み、値を返す。
+
+    文書が読めない・該当行が無い・値が 64-hex sha256 でない、のいずれでも `None`
+    を返す（呼び出し元はこれを「無効」として扱う——読み取り不能を受理として
+    解釈しない fail-closed）。行の書式は
+    `attested_successor_sha256: <hex>`（前後の空白・バッククォート囲みは許容）。
+    複数行あれば最初に見つかった有効行のみを見る。
+    """
+    try:
+        text = doc_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("attested_successor_sha256:"):
+            continue
+        value = stripped.split(":", 1)[1].strip().strip("`").strip()
+        if _is_sha256(value):
+            return value
+        return None
+    return None
+
+
+def _generator_code_equivalence_accepts(candidate: str) -> "Optional[str]":
+    """`candidate`（記録された旧 generator_code_sha256）を等価表経由で受理してよいか。
+
+    二重条件（Codex 新 P1・PR #254 line 343 是正）:
+
+    1. `candidate` が `GENERATOR_CODE_EQUIVALENT_SHA256S` のキーである
+    2. そのエントリが指す attestation 文書が宣言する `attested_successor_sha256` が
+       現在の `_LOADED_GENERATOR_CODE_SHA256` と一致する
+
+    2 を欠くと、測定経路に触れる変更で閉包 hash が動いたのにエントリの削除を
+    忘れた場合、前任 hash が resume され続けてしまう（警告コメントという人間規律
+    だけに依存する脆弱性）。2 を満たさなければエントリは無効——受理せず `None` を
+    返し、呼び出し元は従来どおり mismatch/fail-closed のまま扱う。
+
+    受理可なら `candidate` をそのまま返す（呼び出し元が `generator_code_predecessors`
+    として記録する値）。
+    """
+    doc_relative = GENERATOR_CODE_EQUIVALENT_SHA256S.get(candidate)
+    if doc_relative is None:
+        return None
+    if candidate not in _ATTESTED_SUCCESSOR_SHA256_CACHE:
+        _ATTESTED_SUCCESSOR_SHA256_CACHE[candidate] = _parse_attested_successor_sha256(
+            ROOT / doc_relative
+        )
+    successor = _ATTESTED_SUCCESSOR_SHA256_CACHE[candidate]
+    if successor is None or successor != _LOADED_GENERATOR_CODE_SHA256:
+        return None
+    return candidate
 
 
 _ALLOWED_SCORER_LOADER_QUALNAME = "_frozen_importlib_external.SourceFileLoader"
@@ -4836,6 +4930,38 @@ def _build_external_clip_row(
     return row
 
 
+# r7 blocker (f06bbaa3): `provenance_preprocessing` の中で per-clip 固有に変わって
+# よいキーの allowlist。`stem_sha256` は分離器が生成した stem バイト列の指紋であり
+# clip ごとの音声内容に依存するため、同一カテゴリの複数 clip 間で一致する理由が
+# ない（separation の重み/コード/version/model は clip に依らないカテゴリ不変量）。
+# ここに載らないキー（将来追加される未知キーを含む）は全て不変量として扱い、
+# clip 間で 1 文字でも割れれば fail-closed とする——allowlist 方式（許可を明示
+# 列挙し、未知は安全側＝不変量要求に倒す）。
+PER_CLIP_PREPROCESSING_KEYS = frozenset({"stem_sha256"})
+
+
+def split_preprocessing_invariants(
+    preprocessing: "Dict[str, Any] | None",
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """`provenance_preprocessing` を (カテゴリ不変量, per-clip 量) に分割する。
+
+    per-clip 量 = `PER_CLIP_PREPROCESSING_KEYS` に載るキーのみ。それ以外の全キー
+    （未知キー含む）は不変量側に残す。`preprocessing` が dict でない（分離不要
+    route の row は `provenance_preprocessing` キー自体を持たず `None` になる）場合は
+    空の 2 dict を返す——呼び出し側で `isinstance` チェックを重複させない。
+    """
+    if not isinstance(preprocessing, dict):
+        return {}, {}
+    invariants: Dict[str, Any] = {}
+    per_clip: Dict[str, Any] = {}
+    for key, value in preprocessing.items():
+        if key in PER_CLIP_PREPROCESSING_KEYS:
+            per_clip[key] = value
+        else:
+            invariants[key] = value
+    return invariants, per_clip
+
+
 def _average_external_clip_metrics(clip_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """measured clip 群の per-metric 算術平均（設計 Memo M2c: カテゴリ metrics）。
 
@@ -4899,6 +5025,7 @@ def _measure_or_resume_external_clip_row(
     cell_started_utc: List[str],
     cell_written_paths: List[str],
     cell_store_mismatches: "List[Dict[str, Any]]",
+    generator_code_predecessors: "List[str]",
     store_role: str = _CELL_STORE_ROLE_RUN,
     record_est_trajectory: bool = False,
 ) -> Dict[str, Any]:
@@ -4937,7 +5064,7 @@ def _measure_or_resume_external_clip_row(
         record = _json_loads_no_dup_keys(
             record_path.read_bytes(), what=f"cell record {record_path}"
         )
-        mismatches = _cell_record_mismatches(
+        mismatches, accepted_predecessor = _cell_record_mismatches(
             record,
             category=category,
             level=level,
@@ -4972,6 +5099,12 @@ def _measure_or_resume_external_clip_row(
             else:
                 cells_resumed.append(clip_id)
                 cell_started_utc.append(str(record["measurement_started_utc"]))
+                # Codex P2（PR #254 line 6092 是正）: 等価表経由の受理は**ここ
+                # ——resume が実際に確定した分岐**でのみ血統へ記録する。timestamp
+                # 検証で resume が不成立になった場合（上の except 節）は記録しない
+                # （受理台帳の意味論: 「実際に resume したセルの前任 hash」のみ）。
+                if accepted_predecessor is not None:
+                    generator_code_predecessors.append(accepted_predecessor)
                 # 呼び出し元がこの dict を（`row.pop` 等で）変異させても、他セルの
                 # record 内容へ波及しないよう deep copy を返す。
                 return copy.deepcopy(record["clip_row"])
@@ -5058,10 +5191,11 @@ def _run_external_category(
 
     `cell_store` が与えられれば設計 §8.7 のセルチェックポイントを使う。row には
     内部専用キー `_cell_store_resumed` / `_cell_store_measured` /
-    `_cell_store_mismatches` を積んで返す —— 呼び出し元 `run_accuracy` がこれを
-    pop して run 全体の bookkeeping へ畳み込む（複数 external カテゴリを 1 run で
-    測る場合の集約点はカテゴリ単位でなく run 単位のため）。`cell_store` が `None`
-    ならこれらのキーは一切現れない（挙動無変更の契約）。
+    `_cell_store_mismatches` / `_cell_store_generator_code_predecessors` を積んで
+    返す —— 呼び出し元 `run_accuracy` がこれを pop して run 全体の bookkeeping へ
+    畳み込む（複数 external カテゴリを 1 run で測る場合の集約点はカテゴリ単位でなく
+    run 単位のため）。`cell_store` が `None` ならこれらのキーは一切現れない
+    （挙動無変更の契約）。
     """
     fixtures_doc, fixtures_sha256 = load_external_fixtures(external_fixtures_path)
     _require_external_fixtures_schema_for_category(
@@ -5100,6 +5234,7 @@ def _run_external_category(
     cell_started_utc: List[str] = []
     cell_written_paths: List[str] = []
     cell_store_mismatches: "List[Dict[str, Any]]" = []
+    generator_code_predecessors: "List[str]" = []
     # D-1(b): 軌跡 digest は M2e カテゴリの row にだけ刻む（既存 M2b/M2c 記録は
     # バイト不変）。
     record_est_trajectory = _category_records_est_trajectory(category)
@@ -5132,6 +5267,7 @@ def _run_external_category(
             cell_started_utc=cell_started_utc,
             cell_written_paths=cell_written_paths,
             cell_store_mismatches=cell_store_mismatches,
+            generator_code_predecessors=generator_code_predecessors,
             store_role=store_role,
             record_est_trajectory=record_est_trajectory,
         )
@@ -5151,6 +5287,7 @@ def _run_external_category(
         row["_cell_store_started_utc"] = cell_started_utc
         row["_cell_store_written_paths"] = cell_written_paths
         row["_cell_store_mismatches"] = cell_store_mismatches
+        row["_cell_store_generator_code_predecessors"] = generator_code_predecessors
 
     unavailable = [c for c in clip_rows if c.get("outcome") == "unavailable"]
     if unavailable:
@@ -5178,14 +5315,51 @@ def _run_external_category(
                 "重み/コードが変わった (fail-closed)"
             )
         row[key] = clip_rows[0].get(key)
-    preprocessing_values = {json.dumps(c.get("provenance_preprocessing"), sort_keys=True) for c in clip_rows}
-    if len(preprocessing_values) > 1:
+    # D-1/D-2 (r7 blocker f06bbaa3): カテゴリ内の複数 clip が同じ分離器
+    # スタック（重み/コード/version/model）で測られたことは要求するが、
+    # per-clip 固有の `stem_sha256`（分離出力そのものの指紋。clip ごとの音声
+    # 内容に依存し一致する理由がない）は allowlist で除外し、不変量側だけを
+    # 完全同一要求の対象にする（`split_preprocessing_invariants`）。
+    preprocessing_list = [c.get("provenance_preprocessing") for c in clip_rows]
+    invariants_list = [split_preprocessing_invariants(p)[0] for p in preprocessing_list]
+    # `provenance_preprocessing` 自体の有無（分離要否）の混在は従来どおり不一致として
+    # 検出する——invariants は preprocessing が None でも {} に潰れて区別が付かなく
+    # なるため、有無フラグを比較対象へ明示的に含める。
+    signatures = {
+        json.dumps({"has_preprocessing": p is not None, "invariants": inv}, sort_keys=True)
+        for p, inv in zip(preprocessing_list, invariants_list)
+    }
+    if len(signatures) > 1:
+        all_keys = sorted({key for inv in invariants_list for key in inv})
+        broken_keys = [
+            key
+            for key in all_keys
+            if len({json.dumps(inv.get(key), sort_keys=True) for inv in invariants_list}) > 1
+        ]
+        if len({p is not None for p in preprocessing_list}) > 1:
+            broken_keys = ["<provenance_preprocessing の有無>"] + broken_keys
         raise RuntimeError(
-            f"run_accuracy: category {category!r} の clips が provenance_preprocessing で "
-            "不一致 (fail-closed)"
+            f"run_accuracy: category {category!r} の clips が provenance_preprocessing の "
+            f"カテゴリ不変量で不一致 (割れたキー: {broken_keys}) (fail-closed)"
         )
-    if "provenance_preprocessing" in clip_rows[0]:
-        row["provenance_preprocessing"] = clip_rows[0]["provenance_preprocessing"]
+    if preprocessing_list[0] is not None:
+        row["provenance_preprocessing"] = invariants_list[0]
+        # per-clip 量（stem_sha256）は不変量から外した代わりに、(clip 識別子,
+        # stem_sha256) の束を clip 識別子で sort して digest 化し、カテゴリ行に
+        # 残す——「どの stem を分離出力として測ったか」を捨てない（D-2）。
+        # stem_sha256 を持つ clip が 1 件もなければ bundle は出さない
+        # （V_direct 等の preprocessing なし経路の report 形を変えない）。
+        stem_pairs: List[Tuple[str, str]] = []
+        for c in clip_rows:
+            _, per_clip = split_preprocessing_invariants(c.get("provenance_preprocessing"))
+            stem = per_clip.get("stem_sha256")
+            if stem is not None:
+                stem_pairs.append((c["clip_id"], stem))
+        if stem_pairs:
+            stem_pairs.sort(key=lambda pair: pair[0])
+            row["stem_sha256_bundle"] = hashlib.sha256(
+                json.dumps(stem_pairs, sort_keys=True).encode("utf-8")
+            ).hexdigest()
     return row
 
 
@@ -5461,8 +5635,11 @@ def _apply_thread_pinning() -> Dict[str, Any]:
 
     HANDOFF §3.1 の実測: 前 2 点だけでは足りない。3 点目を欠くと demucs の vocals
     stem の `stem_sha256` が run 間で変わり（`residual_db` は 1e-6 dB で安定するのに
-    bytes は変わる）、ハーネスは `stem_sha256` を model stack 署名に含めるため
-    **stem アームの repeats が「別 model stack」として fail-closed になる**。
+    bytes は変わる）、`_row_model_stack_signature` が per-row の `stem_sha256` /
+    `stem_sha256_bundle` を run 間決定論の証拠として署名に含めるため（r7 blocker
+    修正 f06bbaa3 + Codex #254 是正）、この非決定性は「別 model stack」として
+    fail-closed に顕在化する。run 内の複数 clip 集約だけが stem を不変量要求から
+    除外する（`_run_external_category`）。
 
     設計判断 D-3: **固定は run と evaluate で同一でなければならない。** 検証の子だけを
     固定すると、固定していない run が産んだ row と bit 一致しなくなる——publish 条件は
@@ -5855,9 +6032,10 @@ def _cell_record_mismatches(
     tolerance_cents: float,
     est_voiced_floor: float,
     store_role: str,
-) -> "List[Dict[str, Any]]":
+) -> "Tuple[List[Dict[str, Any]], Optional[str]]":
     """既存セルレコードと現在の入力/環境の不一致を列挙する（設計 §8.7 再開規則）。
 
+    戻り値は `(mismatches, accepted_generator_code_predecessor)`。`mismatches` が
     空リストなら resume 可（=スキップ）。1 件でもあれば **スキップしない** ——
     再測定したうえで不一致の事実だけを report の `cell_store_mismatches` へ記録する
     （バーを緩めず「見なかったことにしない」という本リポジトリ全体の fail-closed
@@ -5868,6 +6046,20 @@ def _cell_record_mismatches(
     ファイルを読んだ後なので鍵は一致しているはずだが、レコードが手で書き換え/破損
     したケースを黙って resume しないための多重防御（§8.7「複数環境のセルを1つの
     帯として合算することは禁止」と同じ精神）。
+
+    `generator_code_sha256` フィールドに限り、`_LOADED_GENERATOR_CODE_SHA256` との
+    直接一致に加えて `GENERATOR_CODE_EQUIVALENT_SHA256S`（設計裁定済みの前任 hash
+    等価表）内の値も resume 可として受理する（PR #254 P1 対応）。等価表経由で受理
+    した場合は不一致に数えないが、**受理した前任 hash をこの関数の中で即座に記録
+    しない**（Codex P2・PR #254 line 6092 是正）: 他フィールド（tolerance_cents /
+    env_digest / store_role 等）が不一致で結局 `mismatches` が非空になれば、この
+    レコードは resume されず再測定される——そのケースで「使っていない前任 hash」を
+    呼び出し元の血統（`generator_code_predecessors`）へ載せると、受理台帳の意味論
+    （「実際に resume したセルの前任 hash だけを記録する」）に反する。したがって
+    受理した前任 hash は戻り値の 2 番目の要素として返すだけに留め、**それを
+    `generator_code_predecessors` へ記録するかどうかは呼び出し元が「セルが実際に
+    resume 確定した時点」（`mismatches == []` かつ measurement_started_utc 等の
+    resume 前提検証も通過した後）で判断する**。
     """
     if not isinstance(record, dict):
         raise ValueError(f"cell record が JSON object でない (fail-closed): {record!r}")
@@ -5902,13 +6094,22 @@ def _cell_record_mismatches(
         "store_role": store_role,
     }
     mismatches: "List[Dict[str, Any]]" = []
+    accepted_predecessor: "Optional[str]" = None
     for field, expected in current.items():
         actual = record.get(field)
         if actual != expected:
+            if field == "generator_code_sha256" and isinstance(actual, str):
+                accepted = _generator_code_equivalence_accepts(actual)
+                if accepted is not None:
+                    accepted_predecessor = accepted
+                    continue
             mismatches.append(
                 {"entry_id": entry_id, "field": field, "expected": expected, "actual": actual}
             )
-    return mismatches
+    if mismatches:
+        # 再測定分岐に落ちる——受理は成立させない（意味論違反の回避。上記 docstring）。
+        accepted_predecessor = None
+    return mismatches, accepted_predecessor
 
 
 # ---------------------------------------------------------------------------
@@ -6160,6 +6361,7 @@ def run_accuracy(
     run_cell_started_utc: List[str] = []
     run_cell_written_paths: List[str] = []
     run_cell_store_mismatches: "List[Dict[str, Any]]" = []
+    run_generator_code_predecessors: List[str] = []
 
     with tempfile.TemporaryDirectory(prefix="melody-accuracy-") as tmp:
         for category in categories:
@@ -6200,6 +6402,9 @@ def run_accuracy(
                     run_cell_started_utc.extend(row.pop("_cell_store_started_utc"))
                     run_cell_written_paths.extend(row.pop("_cell_store_written_paths"))
                     run_cell_store_mismatches.extend(row.pop("_cell_store_mismatches"))
+                    run_generator_code_predecessors.extend(
+                        row.pop("_cell_store_generator_code_predecessors")
+                    )
                 _annotate_row_bars_pin(
                     row,
                     category,
@@ -6422,6 +6627,10 @@ def run_accuracy(
         results["cells_resumed"] = run_cells_resumed
         results["cells_measured"] = run_cells_measured
         results["cell_store_mismatches"] = run_cell_store_mismatches
+        # PR #254 P1: 等価表経由で受理したセルの前任 hash を黙って通さず記録する
+        # （正直会計）。equivalence を使わなかった run では常に空リストで、既存
+        # report の形（フィールド自体は増える）に対する追加は最小限にする。
+        results["generator_code_predecessors"] = sorted(set(run_generator_code_predecessors))
         # この report の数値を産んだセルの**最も古い測定開始時刻**。resume したセルは
         # 今回の `started_utc` より前に測り始められているので、事前登録の順序検査は
         # こちらを見なければ「登録前の測定」を後の run で洗浄できてしまう。
@@ -6465,18 +6674,29 @@ def _row_model_stack_signature(row: Dict[str, Any]) -> Tuple[Any, ...]:
     別 bundled/local weights や patch 済みコードなら、別 stack の run であって
     repeats ではない（#59/#217 と同じ規律）。
     """
+    # D-4 (r7 blocker f06bbaa3) + Codex #254 指摘の是正: ここで比較される rows は
+    # 「同一測定の run 間比較（submitted vs 検証 run / repeats）」であり、1 つの
+    # run 内の複数 clip 集約（`_run_external_category`。そこでは stem 除外が正しい）
+    # とは文脈が異なる。同じ clip / 同じ clip 束を同じ分離器で分離し直した stem
+    # bytes は決定論で一致すべきなので、per-row の `stem_sha256`（S_fullstack 等の
+    # 1 row = 1 clip 行）と `stem_sha256_bundle`（集約行。全 clip の stem 束 digest）
+    # は run 間決定論の証拠として署名に含める——metrics の一致だけでは stem bytes の
+    # 非決定性（`_apply_thread_pinning` が実測した型）が量子化で消えて偽の決定論
+    # success を publish しうるため。
     preprocessing = row.get("provenance_preprocessing")
     if isinstance(preprocessing, dict):
+        invariants, per_clip = split_preprocessing_invariants(preprocessing)
         separation: Tuple[Any, ...] = (
-            preprocessing.get("preprocessing"),
-            preprocessing.get("separation_model"),
-            preprocessing.get("separation_version"),
-            preprocessing.get("separation_weights_sha256"),
-            preprocessing.get("stem_sha256"),
-            preprocessing.get("separation_code_sha256"),
+            invariants.get("preprocessing"),
+            invariants.get("separation_model"),
+            invariants.get("separation_version"),
+            invariants.get("separation_weights_sha256"),
+            invariants.get("separation_code_sha256"),
+            per_clip.get("stem_sha256"),
+            row.get("stem_sha256_bundle"),
         )
     else:
-        separation = (preprocessing, None, None, None, None, None)
+        separation = (preprocessing, None, None, None, None, None, row.get("stem_sha256_bundle"))
     return (
         row.get("source_model"),
         row.get("provenance_extractor_version"),
@@ -6519,17 +6739,24 @@ def _require_homogeneous_model_stack(category: str, rows: List[Dict[str, Any]]) 
                     "provenance_preprocessing を欠く; 分離の実行を pin できない row を "
                     "証拠にしない (fail-closed)"
                 )
-            for key in (
-                "separation_weights_sha256",
-                "separation_code_sha256",
-                "stem_sha256",
-            ):
-                if not _is_sha256(preprocessing.get(key)):
+            # D-4: 不変量側（分離器の重み/コード）と per-clip 側（stem_sha256。
+            # S_fullstack は 1 row = 1 clip なので `provenance_preprocessing` 直下に
+            # 残る）を `split_preprocessing_invariants` で明示的に分けて検査する。
+            invariants, per_clip = split_preprocessing_invariants(preprocessing)
+            for key in ("separation_weights_sha256", "separation_code_sha256"):
+                if not _is_sha256(invariants.get(key)):
                     raise ValueError(
                         f"evaluate_m2_bars: category {category!r} rows[{idx}] の "
-                        f"preprocessing.{key} {preprocessing.get(key)!r} が真の sha256 でない; "
+                        f"preprocessing.{key} {invariants.get(key)!r} が真の sha256 でない; "
                         "分離器・分離出力が未 pin の row を証拠にしない (fail-closed)"
                     )
+            if not _is_sha256(per_clip.get("stem_sha256")):
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} rows[{idx}] の "
+                    f"preprocessing.stem_sha256 {per_clip.get('stem_sha256')!r} が真の "
+                    "sha256 でない; 分離器・分離出力が未 pin の row を証拠にしない "
+                    "(fail-closed)"
+                )
 
     signatures = [_row_model_stack_signature(row) for row in rows]
     if len({json.dumps(sig, sort_keys=True, default=str) for sig in signatures}) > 1:
@@ -6601,13 +6828,15 @@ def _require_execution_evidence(
             ("extractor_weights_sha256", row.get("provenance_extractor_weights_sha256")),
         ]
         if route.requires_separation:
-            preprocessing = row.get("provenance_preprocessing") or {}
+            # D-4: 実行証拠との突合は不変量側だけで行う（stem_sha256 は per-clip 量で
+            # あり、この評価環境が「同じ分離器スタックで動いているか」の証拠にならない）。
+            invariants, _ = split_preprocessing_invariants(row.get("provenance_preprocessing"))
             actual_pairs.extend(
                 [
-                    ("separation_code_sha256", preprocessing.get("separation_code_sha256")),
+                    ("separation_code_sha256", invariants.get("separation_code_sha256")),
                     (
                         "separation_weights_sha256",
-                        preprocessing.get("separation_weights_sha256"),
+                        invariants.get("separation_weights_sha256"),
                     ),
                 ]
             )
@@ -7006,7 +7235,7 @@ def _reverify_category_measurement(
     eval_cell_store: Optional[Path] = None,
     workers: int = 1,
     thread_pinning: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> "List[Dict[str, Any]]":
     """`category` の kind に応じて S（specs 由来合成）/ V（外部素材、M2c）の測り直しへ振り分ける。
 
     S カテゴリの挙動・シグネチャは変更しない。M2c で追加した外部素材カテゴリは
@@ -7018,6 +7247,11 @@ def _reverify_category_measurement(
     専用**である。S カテゴリの測り直しは合成 fixture の再生成なので 10 h 級の
     コストを持たず、分離 store も並列化も要らない（触らない = 既存の挙動を 1 バイトも
     変えない）。
+
+    戻り値（Codex P2・PR #254 line 8588 是正）: 検証子が持つ
+    `generator_code_predecessors` の未検証「document」列挙（S カテゴリ側は構造的に
+    常に空——上記の理由）。呼び出し元 `evaluate_m2_bars` が全カテゴリ分を集約し、
+    提出 reports 由来の分と合わせて一括検証する。
     """
     category_spec = _CATEGORY_SPECS[category]
     if category_spec["kind"] == "external":
@@ -7032,7 +7266,7 @@ def _reverify_category_measurement(
                 "が m2e_bars_raw が渡されていない; 測り直し子へ帯登録を凍結転写できない "
                 "(fail-closed)"
             )
-        _reverify_external_category_measurement(
+        return _reverify_external_category_measurement(
             category,
             rows,
             bars=bars,
@@ -7048,8 +7282,7 @@ def _reverify_category_measurement(
             workers=workers,
             thread_pinning=thread_pinning,
         )
-        return
-    _reverify_direct_or_fullstack_category_measurement(
+    return _reverify_direct_or_fullstack_category_measurement(
         category, rows, bars=bars, specs_raw=specs_raw, repeats=repeats,
         verification_runner=verification_runner,
     )
@@ -7063,7 +7296,7 @@ def _reverify_direct_or_fullstack_category_measurement(
     specs_raw: bytes,
     repeats: int,
     verification_runner: Optional[RouteRunner] = None,
-) -> None:
+) -> "List[Dict[str, Any]]":
     """評価器自身が同じ凍結 fixture を **`repeats` 回独立に測り直し**、bit 一致を要求する。
 
     fixture の同一性も凍結する（Codex P2 第 34 巡）: 子に `--specs` の実パスを渡すと
@@ -7102,6 +7335,13 @@ def _reverify_direct_or_fullstack_category_measurement(
     決定論を実証しない（Codex P2 第 24 巡）。注入ランナー（monkeypatch 経由の
     テスト seam）はプロセス境界を越えられないため in-process のまま——その seam
     自体が境界外であることは第 22 巡の整理のとおり。
+
+    戻り値は常に空リスト（Codex P2・PR #254 line 8588 是正の調査結果）: S カテゴリ
+    （direct/fullstack）の測り直しは `--cell-store`/`cell_store=` のいずれも子へ
+    渡さない（本関数・`_run_verification_in_fresh_process` のどちらにもその配線が
+    無い）。cell-store resume が構造的に起こり得ないため、子 report が
+    `generator_code_predecessors` を持つことはない——`_reverify_external_category_
+    measurement`（V/M2c カテゴリ）とシグネチャを揃えるためだけに空リストを返す。
     """
     if repeats < 2:
         raise ValueError(
@@ -7194,6 +7434,7 @@ def _reverify_direct_or_fullstack_category_measurement(
                 "評価器自身の測り直しと bit 一致しない; 決定論パイプライン（shifts=0）の "
                 "下で再現しない row を publish しない (fail-closed)"
             )
+    return []
 
 
 def _run_external_verification_in_fresh_process(
@@ -7210,7 +7451,7 @@ def _run_external_verification_in_fresh_process(
     level: Optional[str] = None,
     eval_cell_store: Optional[Path] = None,
     thread_pinning: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+) -> "Tuple[Dict[str, Any], Dict[str, Any]]":
     """外部素材カテゴリ（M2c）の測り直し 1 回分を新規プロセス（素の CLI run）で実行する。
 
     `_run_verification_in_fresh_process`（S カテゴリ）と同型・対称（M2c PR-M2c-1
@@ -7224,6 +7465,19 @@ def _run_external_verification_in_fresh_process(
     実パスをそのまま子へ渡す——manifest が指す音声/注釈は登録済み sha256 と run 側が
     fail-closed で照合するため、TOCTOU（子の実行前に差し替え）は測定失敗
     （sha256 mismatch）として顕在化し、偽の pass を静かに通さない。
+
+    戻り値は `(row, document)`（Codex P2・PR #254 line 8588 是正）。`document` は
+    `{"generator_code_predecessors": ..., "cells_resumed": ...}`——`eval_cell_store`
+    （`store_B`・evaluate 役割）に前任コード時代の evaluate-role レコードがあれば、
+    この子プロセス自身が cell-store resume を行い、子 report のトップレベル
+    `generator_code_predecessors` に受理した前任 hash を刻む。従来は `row`
+    （category 単位の測定結果）しか親へ返していなかったため、この血統情報が
+    **子プロセスの終了と共に失われていた**——親の verdict が「全部現行コードの
+    測定」を名乗ってしまう。`cells_resumed` も併せて運ぶのは、Codex 第6波 P2
+    （PR #254 line 8577）是正の「predecessors 宣言には resume 証拠が伴うこと」を
+    呼び出し元 `_collect_declared_generator_code_predecessors` が検査するため——
+    未検証の生値のみを運び、型/形式/受理可能性/resume 証拠の整合検査は呼び出し元が
+    一括して行う。
     """
     report_path = tmp_dir / f"verification_ext_{index}.json"
     command = [
@@ -7315,7 +7569,10 @@ def _run_external_verification_in_fresh_process(
             f"evaluate_m2_bars: 測り直しプロセスの report に category {category!r} の "
             "row が無い; 評価環境で再実行できないため publish しない (fail-closed)"
         )
-    return row
+    return row, {
+        "generator_code_predecessors": verification.get("generator_code_predecessors"),
+        "cells_resumed": verification.get("cells_resumed"),
+    }
 
 
 def _reverify_external_category_measurement(
@@ -7334,7 +7591,7 @@ def _reverify_external_category_measurement(
     eval_cell_store: Optional[Path] = None,
     workers: int = 1,
     thread_pinning: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> "List[Dict[str, Any]]":
     """外部素材カテゴリ（M2c）を評価器自身が `repeats` 回独立に測り直す。
 
     `_reverify_direct_or_fullstack_category_measurement` と同じ「評価器自身の測り
@@ -7351,6 +7608,12 @@ def _reverify_external_category_measurement(
     M2c-1 時点では `m2c_external_fixtures.yaml` の `fixtures` が空のため、V_direct を
     含む run は `_run_external_category` の fail-closed（登録済み clip なし）で本関数
     に到達する前に落ちる——実データは M2c-2 で登録する。
+
+    戻り値（Codex P2・PR #254 line 8588 是正）: 検証子（`eval_cell_store` を渡した
+    fresh-process/in-process 検証）が個々に持つ `generator_code_predecessors` を
+    `{"generator_code_predecessors": ...}` の「document」形で列挙したリスト。
+    未検証の生値のみを運ぶ——呼び出し元 `evaluate_m2_bars` が提出 reports 由来の
+    分と合わせて `_collect_declared_generator_code_predecessors` で一括検証する。
     """
     if repeats < 2:
         raise ValueError(
@@ -7379,6 +7642,9 @@ def _reverify_external_category_measurement(
     # が、原因を「別 manifest を測った」と即座に特定できるよう明示的に照合する。
     expected_manifest_sha256 = rows[0].get("external_manifest_sha256") if rows else None
     verification_rows: List[Dict[str, Any]] = []
+    # Codex P2（PR #254 line 8588 是正）: 検証子（`eval_cell_store` 経由の resume）が
+    # 個々に持つ `generator_code_predecessors` を集める（検証は呼び出し元に委ねる）。
+    verification_declared_documents: List[Dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="m2c-reverify-") as tmp:
         bars_path = Path(tmp) / "m2_accuracy_bars.yaml"
         bars_path.write_bytes(bars.raw)
@@ -7404,7 +7670,7 @@ def _reverify_external_category_measurement(
         # なって検証が空虚になる——それを防ぐのは store の分離であって、再開不能性
         # ではない（fresh process 経路の同じ規律は
         # `_run_external_verification_in_fresh_process` docstring 参照）。
-        def _verify_once(index: int) -> Dict[str, Any]:
+        def _verify_once(index: int) -> "Tuple[Dict[str, Any], Dict[str, Any]]":
             if verification_runner is not None:
                 run_kwargs = dict(extra_run_kwargs)
                 if eval_cell_store is not None:
@@ -7423,8 +7689,19 @@ def _reverify_external_category_measurement(
                     **run_kwargs,
                 )
                 vrow = verification["categories"][category]
+                # Codex P2（PR #254 line 8588 是正）: in-process テスト seam でも
+                # fresh-process 経路と同じ血統喪失が起こりうる（`run_accuracy` の
+                # 戻り値は report 全体だが、下では category row しか使っていない）。
+                # `cells_resumed` も併せて運ぶ（Codex 第6波 P2・line 8577: 宣言と
+                # resume 証拠の整合検査を呼び出し元が行うため）。
+                verification_document = {
+                    "generator_code_predecessors": verification.get(
+                        "generator_code_predecessors"
+                    ),
+                    "cells_resumed": verification.get("cells_resumed"),
+                }
             else:
-                vrow = _run_external_verification_in_fresh_process(
+                vrow, verification_document = _run_external_verification_in_fresh_process(
                     category,
                     index,
                     tmp_dir=Path(tmp),
@@ -7451,7 +7728,7 @@ def _reverify_external_category_measurement(
                     f"提出 report の {expected_manifest_sha256!r} と不一致; 別 manifest を "
                     "測った検証 run を同じ測定の再現と数えない (fail-closed)"
                 )
-            return vrow
+            return vrow, verification_document
 
         # C3（rev.6 §8.9.2-(2)）: 検証の子を**最大 `workers` 本まで同時に起こす**。
         # publish が要求するのは「fresh process であること」と「run の結果を読まない
@@ -7465,7 +7742,7 @@ def _reverify_external_category_measurement(
         #
         # 結果は `index` 順の固定席へ書き戻す（完了順に append すると `P` によって
         # 順序が変わり、下の bit 一致比較・エラー選択が `P` 依存になる）。
-        slots: "List[Optional[Dict[str, Any]]]" = [None] * repeats
+        slots: "List[Optional[Tuple[Dict[str, Any], Dict[str, Any]]]]" = [None] * repeats
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(_verify_once, index) for index in range(repeats)]
             failures: "List[BaseException]" = []
@@ -7479,7 +7756,16 @@ def _reverify_external_category_measurement(
                     failures.append(exc)
             if failures:
                 raise failures[0]
-        verification_rows.extend(row for row in slots if row is not None)
+        verification_rows.extend(slot[0] for slot in slots if slot is not None)
+        # Codex P2（PR #254 line 8588 是正）: 検証子が個々に持つ
+        # `generator_code_predecessors`（`store_B` の evaluate-role resume 由来）と
+        # `cells_resumed`（Codex 第6波 P2・line 8577: 宣言と resume 証拠の整合検査に
+        # 使う）を「document」形（`_collect_declared_generator_code_predecessors` が
+        # 読める形）で持ち帰る。検証はここでは行わない——呼び出し元が提出 reports
+        # 由来の分と合わせて一括で検証する。
+        verification_declared_documents.extend(
+            slot[1] for slot in slots if slot is not None
+        )
     _require_homogeneous_model_stack(category, rows + verification_rows)
     verification_clip_lists = [vrow["clips"] for vrow in verification_rows]
     if len({json.dumps(c, sort_keys=True) for c in verification_clip_lists}) > 1:
@@ -7496,6 +7782,7 @@ def _reverify_external_category_measurement(
                 "評価器自身の測り直しと bit 一致しない; 決定論パイプラインの下で再現しない "
                 "row を publish しない (fail-closed)"
             )
+    return verification_declared_documents
 
 
 def _require_registered_row_identity(
@@ -8255,18 +8542,115 @@ def _require_frozen_tolerance(reports: List[Dict[str, Any]], bar_block: Dict[str
     return frozen
 
 
-def _require_matching_generator_code(reports: List[Dict[str, Any]]) -> str:
+def _collect_declared_generator_code_predecessors(
+    documents: "List[Dict[str, Any]]", *, where: str, require_resume_evidence: bool = True
+) -> "set[str]":
+    """`documents`（report または verdict）が主張する `generator_code_predecessors` を
+
+    検証つきで収集する（Codex 新 P1・PR #254 line 8514 是正）。
+
+    resume 側（`_measure_or_resume_external_clip_row`）で等価表経由の受理が起きた
+    セルは、run report の `generator_code_predecessors` にその前任 hash を記録する
+    （L6270 付近）。しかし report の**トップレベル** `generator_code_sha256` は常に
+    `_LOADED_GENERATOR_CODE_SHA256`（= 現行）のまま——`_require_matching_generator_
+    code` がトップ hash だけを見て verdict の `generator_code_predecessors` を
+    決めていると、resume 由来の前任 hash が evaluate の verdict（さらに census）へ
+    伝わらず、「正典成果物が全部現行コードの測定に見える」誤りが生じる。本関数は
+    その伝搬経路を担う。
+
+    各 document の `generator_code_predecessors` は欠落または空リストなら正常
+    （predecessors なし）。存在する場合は fail-closed で以下を要求する:
+
+    1. list であること
+    2. 各要素が sha256 形式（64-hex）の str であること
+    3. 各要素が **現時点で** `_generator_code_equivalence_accepts()` により受理
+       可能であること（= 等価表のキーであり、かつ attested_successor_sha256 が
+       現在の loaded hash と一致する）
+    4. `require_resume_evidence=True`（既定）の場合、同じ document の
+       `cells_resumed` が非空であること（Codex 第6波 P2・PR #254 line 8577 是正:
+       宣言と resume 証拠の整合制約）——predecessors を非空で宣言しながら
+       resume したセルが 1 つも無い document は、「現行測定のみなのに前任系譜を
+       主張する」矛盾した状態であり、report/検証子 document のどちらも
+       `cells_resumed` を実際に持つため、この整合性は要求できる。
+
+    1 つでも満たさなければ raise する——report/verdict が自己申告する前任 hash を
+    無検証のまま正典（verdict/census）へ転記しない。report ごとに predecessors の
+    有無・内容が異なる（片方 resume・片方 fresh 測定）のは正当なので、要素間の
+    一致は要求せず単純に union する。
+
+    `require_resume_evidence=False` は census 側専用: verdict は run report の
+    `cells_resumed` を転記しないため（そもそも verdict にその相当フィールドが
+    存在しない）、4 の検査は実施不可能。census が集計する verdict の
+    predecessors は、対応する evaluate 呼び出しが本関数を `require_resume_
+    evidence=True` で既に通した結果であり、census 側での再検査は不要
+    （二重化する意味が無い）。
+
+    **見送った検査（設計裁定・PR #254 line 8577）**: 宣言 hash と `store_A` の
+    セルレコードの per-cell 完全突合（「本当にそのセルが前任 hash で書かれていたか」
+    をディスク上のレコードまで遡って再検証する）はここでは行わない。それを行うには
+    evaluate の入力面へ `store_A` そのものを渡す拡張が要る——evaluate は現状
+    `store_A` を受け取らない設計（`_require_eval_cell_store_disjoint_from_run_stores`
+    が `store_B` と `store_A` の分離をむしろ要求する）ため、この拡張は入力面を
+    構造的に広げる。`store_A` の完全性は (a) r6 監査（1:1 突合・digest 検証）と
+    (b) §8.7 の resume 時照合（`_cell_record_mismatches` が鍵・入力・環境・
+    generator digest を毎回照合）で独立に担保されており、evaluate 時点でのその
+    再突合は入力面拡大に見合わないと判断した。本関数が行うのは「宣言の形式・
+    現時点での受理可能性・resume 証拠との整合」までである。
+    """
+    collected: "set[str]" = set()
+    for idx, document in enumerate(documents):
+        raw = document.get("generator_code_predecessors")
+        if raw is None or raw == []:
+            continue
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"{where}[{idx}] の generator_code_predecessors {raw!r} が list でない "
+                "(fail-closed)"
+            )
+        for item in raw:
+            if not isinstance(item, str) or not _is_sha256(item):
+                raise ValueError(
+                    f"{where}[{idx}] の generator_code_predecessors に非 sha256 形式の "
+                    f"要素 {item!r} が含まれる (fail-closed)"
+                )
+            if _generator_code_equivalence_accepts(item) is None:
+                raise ValueError(
+                    f"{where}[{idx}] が主張する前任 hash {item!r} が等価表/後継束縛で "
+                    "受理できない — 再裁定するか dated 再実測すること (fail-closed)"
+                )
+            collected.add(item)
+        if require_resume_evidence and not document.get("cells_resumed"):
+            raise ValueError(
+                f"{where}[{idx}]: 前任系譜の宣言（generator_code_predecessors="
+                f"{raw!r}）に resume 証拠（cells_resumed）が伴わない — 現行測定のみの "
+                "report は系譜を主張できない (fail-closed)"
+            )
+    return collected
+
+
+def _require_matching_generator_code(
+    reports: List[Dict[str, Any]]
+) -> "Tuple[str, List[str]]":
     """report の `generator_code_sha256` を 3 段で照合する（fail-closed）。
 
     `run_melody_observability.evaluate_m1_real_go_bar` と同じ規律:
 
     1. 各 report が非空 str の `generator_code_sha256` を持つ（provenance 欠落を拒否）
     2. repeats 間で一致する（別 checkout で測った run を 1 つの repeats 束に混ぜない）
-    3. 現 checkout の `_generator_code_sha256()` と一致する（指標算出・route 選択・
-       ミックス式が変わった後の stale report を、新しいバー適用の証拠として通さない）
+    3. 現 checkout の `_generator_code_sha256()` と一致する、**または**
+       `GENERATOR_CODE_EQUIVALENT_SHA256S`（設計裁定済みの前任 hash 等価表）に
+       含まれる（指標算出・route 選択・ミックス式が変わった後の stale report を、
+       新しいバー適用の証拠として通さない。ただし per-cell 測定経路に触れない
+       と裁定済みの前任コードで測った report は、等価表に載っていれば通す。
+       PR #254 P1 対応）
 
     3 を欠くと、手組み report や旧コード由来の row をそのまま「バーを満たした
     実測」として公開できてしまう（M1-real PR #220 で確定した規律）。
+
+    戻り値は `(generator_code_sha256, accepted_predecessors)`。等価表経由で受理
+    した場合のみ `accepted_predecessors` に受理した前任 hash（= `digests[0]`）が
+    入る——呼び出し元はこれを verdict の `generator_code_predecessors` として刻み、
+    黙って通さない（正直会計）。
     """
     digests: List[str] = []
     for idx, report in enumerate(reports):
@@ -8284,15 +8668,27 @@ def _require_matching_generator_code(reports: List[Dict[str, Any]]) -> str:
             f"{sorted(set(digests))}; 別 checkout の generator コードで測った run を "
             "1 つの repeats 束として扱えない (fail-closed)"
         )
+    # Codex 新 P1（PR #254 line 8514 是正）: トップ hash 自体が現行コードのままでも、
+    # resume したセルが個別に持つ前任 hash（report 自身の
+    # `generator_code_predecessors`）を union する——さもないと resume 由来の前任
+    # hash が verdict へ伝わらない。
+    declared_predecessors = _collect_declared_generator_code_predecessors(
+        reports, where="evaluate_m2_bars: reports"
+    )
     current = _generator_code_sha256()
-    if digests[0] != current:
-        raise ValueError(
-            f"evaluate_m2_bars: reports の generator_code_sha256 {digests[0]!r} が現 "
-            f"checkout の {current!r} と不一致; 指標算出・route 選択・ミックス式が "
-            "変わった後の stale report にバーを適用しない — dated 再実測すること "
-            "(fail-closed)"
-        )
-    return digests[0]
+    if digests[0] == current:
+        return digests[0], sorted(declared_predecessors)
+    accepted = _generator_code_equivalence_accepts(digests[0])
+    if accepted is not None:
+        declared_predecessors.add(accepted)
+        return digests[0], sorted(declared_predecessors)
+    raise ValueError(
+        f"evaluate_m2_bars: reports の generator_code_sha256 {digests[0]!r} が現 "
+        f"checkout の {current!r} とも等価表 {sorted(GENERATOR_CODE_EQUIVALENT_SHA256S)} "
+        "とも(有効な attested_successor_sha256 束縛込みで)不一致; 指標算出・route "
+        "選択・ミックス式が変わった後の stale report にバーを適用しない — dated "
+        "再実測するか設計裁定で新しい等価表エントリを作成すること (fail-closed)"
+    )
 
 
 def _require_eval_cell_store_disjoint_from_run_stores(
@@ -8730,7 +9126,9 @@ def evaluate_m2_bars(
         external_fixtures_registration_attestation = _require_attested_external_fixtures_registration(
             external_fixtures_path, external_fixtures_raw, external_category_started_by_index
         )
-    generator_code_sha256 = _require_matching_generator_code(reports)
+    generator_code_sha256, generator_code_predecessors = _require_matching_generator_code(
+        reports
+    )
     tolerance_cents = _require_frozen_tolerance(reports, bar_block)
     est_voiced_floor = _require_frozen_est_voicing_floor(reports, bar_block)
     scorer_pins = _require_homogeneous_scorer(reports)
@@ -8755,6 +9153,11 @@ def evaluate_m2_bars(
         "categories": {},
     }
     verdict["report_pins"] = report_pins
+    # PR #254 P1: 等価表経由で受理した前任 hash を黙って通さず verdict へ刻む
+    # （正直会計）。equivalence を使わなかった evaluate では現れない
+    # （既存 verdict の形に対する追加は最小限）。
+    if generator_code_predecessors:
+        verdict["generator_code_predecessors"] = generator_code_predecessors
     # M2e（§5.2 / §6.2）: 使った bars ファイルの相対パスと sha256、および run の水準
     # 次元を verdict へ刻む。M2e カテゴリを含まない evaluate では None のまま残る。
     verdict["m2e_bars_sha256"] = None
@@ -8892,6 +9295,13 @@ def evaluate_m2_bars(
         # 判定と混同されるため、効果は別途 `P` を振った実測比で示す）。
         verdict["evaluate_execution"] = evaluate_execution
 
+    # Codex P2（PR #254 line 8588 是正）: 検証子（`_reverify_category_measurement`）が
+    # 個々に持つ `generator_code_predecessors`（`eval_cell_store` の evaluate-role
+    # resume 由来）を全カテゴリ分集める。提出 reports 由来の分は既に
+    # `_require_matching_generator_code` が集めているが、検証子側は別プロセス/別
+    # 呼び出しの成果物であり、その血統がここまで運ばれてこないと verdict へ伝わらない
+    # （fresh-process 子は category row しか親へ返していなかった）。
+    verification_declared_documents: List[Dict[str, Any]] = []
     for category in all_categories:
         rows = [report["categories"][category] for report in reports if category in report["categories"]]
         outcomes = {row["outcome"] for row in rows}
@@ -8969,20 +9379,22 @@ def evaluate_m2_bars(
         # ランナーの注入口は公開 API に置かない（Codex P1 第 22 巡）——常に実抽出器。
         # M2c: 外部素材カテゴリは `_reverify_category_measurement` 内部で
         # `--external-manifest` の要求（未指定 fail-closed）を含めて振り分ける。
-        _reverify_category_measurement(
-            category,
-            rows,
-            bars=bars,
-            specs_raw=specs_raw,
-            repeats=repeats_min,
-            external_manifest_path=external_manifest_path,
-            external_fixtures_path=external_fixtures_path,
-            external_fixtures_raw=external_fixtures_raw,
-            m2e_bars_raw=m2e_bars.raw if is_m2e and m2e_bars is not None else None,
-            level=m2e_level if is_m2e else None,
-            eval_cell_store=eval_cell_store,
-            workers=workers,
-            thread_pinning=thread_pinning,
+        verification_declared_documents.extend(
+            _reverify_category_measurement(
+                category,
+                rows,
+                bars=bars,
+                specs_raw=specs_raw,
+                repeats=repeats_min,
+                external_manifest_path=external_manifest_path,
+                external_fixtures_path=external_fixtures_path,
+                external_fixtures_raw=external_fixtures_raw,
+                m2e_bars_raw=m2e_bars.raw if is_m2e and m2e_bars is not None else None,
+                level=m2e_level if is_m2e else None,
+                eval_cell_store=eval_cell_store,
+                workers=workers,
+                thread_pinning=thread_pinning,
+            )
         )
 
         # 判定規律（設計 §6.2・fail-closed）: **`level != gate_level` の run に
@@ -9114,6 +9526,19 @@ def evaluate_m2_bars(
         else:
             cat_result["status"] = "pass" if not failures else "fail"
         verdict["categories"][category] = cat_result
+
+    # Codex P2（PR #254 line 8588 是正）: 検証子由来の predecessors 宣言を、提出
+    # reports 由来の分（`generator_code_predecessors`、上で `_require_matching_
+    # generator_code` から取得済み）と同じ検証（形式 + 受理可能性）つきで合流する。
+    # 受理不能な宣言が 1 つでもあれば fail-closed（無検証で正典 verdict へ転記しない）。
+    verification_generator_code_predecessors = _collect_declared_generator_code_predecessors(
+        verification_declared_documents, where="evaluate_m2_bars: verification reports"
+    )
+    if verification_generator_code_predecessors:
+        combined_generator_code_predecessors = sorted(
+            set(generator_code_predecessors) | verification_generator_code_predecessors
+        )
+        verdict["generator_code_predecessors"] = combined_generator_code_predecessors
 
     # verdict を返す（= publish する）直前に、load 時に pin したコードが
     # 実行中に差し替わっていないことを確認する。`_require_matching_generator_code`
@@ -9420,15 +9845,47 @@ def _require_homogeneous_census_inputs(
         )
     # 集計器自身のコードと、判定を出したコードの一致（`evaluate_m2_bars` の 3 段照合と
     # 同型）。集計は判定を**新たに publish する**行為なので、その根拠が現 checkout で
-    # 再現可能であることを要求する。
+    # 再現可能であることを要求する。現 checkout との不一致は
+    # `GENERATOR_CODE_EQUIVALENT_SHA256S`（設計裁定済みの前任 hash 等価表）でも救済
+    # する——`evaluate_m2_bars` が等価表経由で受理した verdict は
+    # `generator_code_sha256` に前任 hash を保持したまま渡ってくるため、ここで
+    # 現在値のみを要求すると受理が下流の census で再び拒否される（PR #254 P1 対応）。
     current_generator = _generator_code_sha256()
+    top_hash_predecessors: "set[str]" = set()
     if common["generator_code_sha256"] != current_generator:
-        raise ValueError(
-            f"aggregate_m2e_census: verdict の generator_code_sha256 "
-            f"{common['generator_code_sha256']!r} が現 checkout の {current_generator!r} と "
-            "不一致; 別世代のコードが産んだ判定を現行コードの帯として publish しない "
-            "(fail-closed)"
-        )
+        accepted = _generator_code_equivalence_accepts(common["generator_code_sha256"])
+        if accepted is None:
+            raise ValueError(
+                f"aggregate_m2e_census: verdict の generator_code_sha256 "
+                f"{common['generator_code_sha256']!r} が現 checkout の "
+                f"{current_generator!r} とも等価表 "
+                f"{sorted(GENERATOR_CODE_EQUIVALENT_SHA256S)} とも(有効な "
+                "attested_successor_sha256 束縛込みで)不一致; 別世代のコードが産んだ "
+                "判定を現行コードの帯として publish しない (fail-closed)"
+            )
+        top_hash_predecessors.add(accepted)
+    # Codex 新 P1（PR #254 line 8514 是正、census 側）: verdict のトップ hash 自体が
+    # 現行のままでも、個々の verdict が resume 由来で持つ `generator_code_predecessors`
+    # を union する——さもないと evaluate 側で伝搬した前任 hash が census で再び
+    # 消える。`generator_code_predecessors` はここでは `fields` の均質性検査対象に
+    # 含めない（verdict ごとに異なりうるのが正当なため。union が正しい合成）。
+    #
+    # `require_resume_evidence=False`（Codex 第6波 P2・PR #254 line 8577 是正の
+    # 適用範囲外）: 「宣言と resume 証拠（cells_resumed）の整合」検査は evaluate 側
+    # （`_require_matching_generator_code` / verification document 側）が
+    # `require_resume_evidence=True` で既に通した後にのみ verdict へ
+    # `generator_code_predecessors` が載る。verdict 自体は run report の
+    # `cells_resumed` を転記しない成果物（そもそもそのフィールドが存在しない）ため、
+    # ここで同型検査をやり直すことは**構造的に不可能**——検査対象が無い。二重化の
+    # 意味も無い（evaluate が既に通した結果を再検査するだけになる）ため、census 側は
+    # 受理可能性検査（1–3）のみ維持し、4 の resume 証拠検査は明示的にスキップする。
+    declared_predecessors = _collect_declared_generator_code_predecessors(
+        verdicts, where="aggregate_m2e_census: verdicts", require_resume_evidence=False
+    )
+    all_generator_code_predecessors = top_hash_predecessors | declared_predecessors
+    if all_generator_code_predecessors:
+        # 黙って通さず、census 成果物へ受理した前任 hash を刻む（正直会計）。
+        common["generator_code_predecessors"] = sorted(all_generator_code_predecessors)
     current_evaluator = _evaluator_code_sha256()
     if common["evaluator_code_sha256"] != current_evaluator:
         raise ValueError(
@@ -9907,6 +10364,10 @@ def aggregate_m2e_census(
             "水準も割れる」という下方伝播を主張しない（§5.4）。",
         ],
     }
+    # PR #254 P1: `_require_homogeneous_census_inputs` が等価表経由で受理した場合に
+    # 限り、受理した前任 hash を census 成果物へも黙って通さず刻む（正直会計）。
+    if "generator_code_predecessors" in common:
+        census["generator_code_predecessors"] = common["generator_code_predecessors"]
 
     if not complete:
         # §11: 揃わないまま出せるのは**センサスのみ**。平均 RPA・破断曲線・
@@ -10542,7 +11003,7 @@ def _m2e_completed_cell_keys(
             )
         except (ValueError, OSError):
             continue
-        mismatches = _cell_record_mismatches(
+        mismatches, _accepted_predecessor = _cell_record_mismatches(
             stored,
             category=arm,
             level=level,
@@ -11314,7 +11775,7 @@ def _require_prior_m2e_shards_complete(
         stored = _json_loads_no_dup_keys(
             record_path.read_bytes(), what=f"cell record {record_path}"
         )
-        mismatches = _cell_record_mismatches(
+        mismatches, _accepted_predecessor = _cell_record_mismatches(
             stored,
             category=record["arm"],
             level=level,
@@ -11370,6 +11831,11 @@ def _shard_measure_and_record_cell(
     cell_started_utc: "List[str]" = []
     cell_written_paths: "List[str]" = []
     cell_store_mismatches: "List[Dict[str, Any]]" = []
+    # shard モードは run report を出さない（docstring 参照）ので、ここで受理した
+    # 前任 hash を bubble up する報告先が無い——per-cell 完了判定だけが目的の
+    # throwaway。実際の report 提出は `run_accuracy`（`_run_external_category`
+    # 経由）の resume パスが `generator_code_predecessors` として記録する。
+    generator_code_predecessors: "List[str]" = []
 
     with tempfile.TemporaryDirectory(prefix="m2e-shard-cell-") as tmp:
         clip_row = _measure_or_resume_external_clip_row(
@@ -11393,6 +11859,7 @@ def _shard_measure_and_record_cell(
             cell_started_utc=cell_started_utc,
             cell_written_paths=cell_written_paths,
             cell_store_mismatches=cell_store_mismatches,
+            generator_code_predecessors=generator_code_predecessors,
             store_role=_CELL_STORE_ROLE_RUN,
             record_est_trajectory=record_est_trajectory,
         )
@@ -11551,7 +12018,7 @@ def _m2e_valid_cell_record(cell: "Dict[str, Any]") -> "Optional[Tuple[Path, Dict
         )
     except (ValueError, OSError):
         return None
-    mismatches = _cell_record_mismatches(
+    mismatches, _accepted_predecessor = _cell_record_mismatches(
         record,
         category=cell["arm"],
         level=cell["level"],
