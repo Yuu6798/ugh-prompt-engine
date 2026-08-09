@@ -41,17 +41,18 @@ GENERATOR_CODE_EQUIVALENT_SHA256S: Dict[str, str] = {
    一致する**
 
 ```
-attested_successor_sha256: 23de074b70d6a6c4ba7d5f765244916c5c953d8ccb4fd4e0d2a7908af01a5a57
+attested_successor_sha256: 2b234e2be2fcc590daed82038c691643c8c995954934204d8a8562cd31835088
 ```
 
 この値は「本裁定を含む一連のコミット（`1dbf966` + `42378bb` + 本 PR の等価表導入
 コミット群——後継束縛機構本体・resume 由来 predecessors の evaluate/census への
 伝搬修正（Codex 新 P1・line 8514）・受理タイミングの遅延修正（Codex P2・
-line 6092）・fresh-process 検証子の系譜損失修正（Codex 第5波 P2・line 8588）を
-含む）のコード変更が全て確定した時点」の `_generator_code_sha256()` 閉包 hash
-である（§5.1 と同じ手法で worktree 実行の代わりに、本コミット確定後の checkout
-上で `_generator_code_sha256()` を直接呼び出して計算した実測値。**本文書自体は
-69 ファイル閉包の外**にあるため、この行を書き加えても閉包 hash 自体は変わらない
+line 6092）・fresh-process 検証子の系譜損失修正（Codex 第5波 P2・line 8588）・
+宣言と resume 証拠の整合制約（Codex 第6波 P2・line 8577）を含む）のコード変更が
+全て確定した時点」の `_generator_code_sha256()` 閉包 hash である（§5.1 と同じ
+手法で worktree 実行の代わりに、本コミット確定後の checkout 上で
+`_generator_code_sha256()` を直接呼び出して計算した実測値。**本文書自体は 69
+ファイル閉包の外**にあるため、この行を書き加えても閉包 hash 自体は変わらない
 ——自己参照は生じない）。コードが変わるたびにこの値は動くため、
 `scripts/run_melody_accuracy.py` を編集した最終コミット確定後に本行を実測し直す
 運用とする（§7 運用規則）。

@@ -1118,8 +1118,14 @@ def test_evaluate_m2_bars_propagates_resume_declared_predecessors_to_verdict() -
     report2 = dict(
         _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
     )
+    # Codex 第6波 P2（PR #254 line 8577）: predecessors 宣言には resume 証拠
+    # （cells_resumed 非空）が伴う必要がある——ここでは resume されたセルがあった
+    # ことにする（S_direct は実際には cell store を使わないが、report レベルの
+    # フィールド整合を単体で検証するための forge）。
     report1["generator_code_predecessors"] = [predecessor]
+    report1["cells_resumed"] = ["fake_clip_0"]
     report2["generator_code_predecessors"] = [predecessor]
+    report2["cells_resumed"] = ["fake_clip_0"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     verdict = harness.evaluate_m2_bars(
         [_as_report_artifact(report1), _as_report_artifact(report2)],
@@ -1144,7 +1150,10 @@ def test_evaluate_m2_bars_unions_predecessors_across_reports_with_mixed_resume()
     report2 = dict(
         _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
     )
+    # Codex 第6波 P2（PR #254 line 8577）: predecessors 宣言には resume 証拠が伴う
+    # 必要があるため、forge する report1 には cells_resumed も添える。
     report1["generator_code_predecessors"] = [predecessor]
+    report1["cells_resumed"] = ["fake_clip_0"]
     # report2 は predecessors 無し（fresh 測定のみ）のまま。
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     verdict = harness.evaluate_m2_bars(
@@ -1189,6 +1198,75 @@ def test_evaluate_m2_bars_rejects_a_non_list_declared_predecessors_field() -> No
     report1["generator_code_predecessors"] = "not-a-list"
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="list でない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
+
+
+def test_collect_declared_generator_code_predecessors_requires_resume_evidence() -> None:
+    """(19) predecessors 宣言あり + cells_resumed 空/欠落 → fail-closed
+
+    （Codex 第6波 P2・PR #254 line 8577 是正: 宣言と resume 証拠の整合制約。
+    「現行測定のみの report は系譜を主張できない」）。
+    """
+    predecessor = next(iter(harness.GENERATOR_CODE_EQUIVALENT_SHA256S))
+
+    # cells_resumed が空リスト。
+    with pytest.raises(ValueError, match="resume 証拠"):
+        harness._collect_declared_generator_code_predecessors(
+            [{"generator_code_predecessors": [predecessor], "cells_resumed": []}],
+            where="test",
+        )
+
+    # cells_resumed キー自体が欠落。
+    with pytest.raises(ValueError, match="resume 証拠"):
+        harness._collect_declared_generator_code_predecessors(
+            [{"generator_code_predecessors": [predecessor]}],
+            where="test",
+        )
+
+
+def test_collect_declared_generator_code_predecessors_accepts_valid_resume_evidence() -> None:
+    """(20) cells_resumed が非空なら従来どおり通る（正当な resume report）。"""
+    predecessor = next(iter(harness.GENERATOR_CODE_EQUIVALENT_SHA256S))
+    collected = harness._collect_declared_generator_code_predecessors(
+        [{"generator_code_predecessors": [predecessor], "cells_resumed": ["clip001"]}],
+        where="test",
+    )
+    assert collected == {predecessor}
+
+
+def test_collect_declared_generator_code_predecessors_census_skips_resume_evidence_check() -> None:
+    """census 側（`require_resume_evidence=False`）は cells_resumed 相当が無くても通る
+
+    （verdict には `cells_resumed` フィールド自体が存在しないため、この検査は
+    構造的に実施不可能——Codex 第6波 P2 の見送り部分に対応するコメントの実測）。
+    """
+    predecessor = next(iter(harness.GENERATOR_CODE_EQUIVALENT_SHA256S))
+    collected = harness._collect_declared_generator_code_predecessors(
+        [{"generator_code_predecessors": [predecessor]}],
+        where="test",
+        require_resume_evidence=False,
+    )
+    assert collected == {predecessor}
+
+
+def test_evaluate_m2_bars_rejects_a_predecessor_declaration_without_resume_evidence() -> None:
+    """(19) 統合経路: `evaluate_m2_bars` が report レベルでも同じ整合制約を課す。"""
+    predecessor = next(iter(harness.GENERATOR_CODE_EQUIVALENT_SHA256S))
+    report1 = dict(
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+    )
+    report2 = dict(
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+    )
+    # predecessors を宣言するが、resume されたセルが 1 つも無い（矛盾した申告）。
+    report1["generator_code_predecessors"] = [predecessor]
+    assert "cells_resumed" not in report1
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="resume 証拠"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(report1), _as_report_artifact(report2)],
             bars,

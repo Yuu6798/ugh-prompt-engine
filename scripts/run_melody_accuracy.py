@@ -7451,7 +7451,7 @@ def _run_external_verification_in_fresh_process(
     level: Optional[str] = None,
     eval_cell_store: Optional[Path] = None,
     thread_pinning: Optional[Dict[str, Any]] = None,
-) -> "Tuple[Dict[str, Any], Any]":
+) -> "Tuple[Dict[str, Any], Dict[str, Any]]":
     """外部素材カテゴリ（M2c）の測り直し 1 回分を新規プロセス（素の CLI run）で実行する。
 
     `_run_verification_in_fresh_process`（S カテゴリ）と同型・対称（M2c PR-M2c-1
@@ -7466,15 +7466,18 @@ def _run_external_verification_in_fresh_process(
     fail-closed で照合するため、TOCTOU（子の実行前に差し替え）は測定失敗
     （sha256 mismatch）として顕在化し、偽の pass を静かに通さない。
 
-    戻り値は `(row, generator_code_predecessors)`（Codex P2・PR #254 line 8588 是正）。
-    `eval_cell_store`（`store_B`・evaluate 役割）に前任コード時代の evaluate-role
-    レコードがあれば、この子プロセス自身が cell-store resume を行い、子 report の
-    トップレベル `generator_code_predecessors` に受理した前任 hash を刻む。従来は
-    `row`（category 単位の測定結果）しか親へ返していなかったため、この血統情報が
+    戻り値は `(row, document)`（Codex P2・PR #254 line 8588 是正）。`document` は
+    `{"generator_code_predecessors": ..., "cells_resumed": ...}`——`eval_cell_store`
+    （`store_B`・evaluate 役割）に前任コード時代の evaluate-role レコードがあれば、
+    この子プロセス自身が cell-store resume を行い、子 report のトップレベル
+    `generator_code_predecessors` に受理した前任 hash を刻む。従来は `row`
+    （category 単位の測定結果）しか親へ返していなかったため、この血統情報が
     **子プロセスの終了と共に失われていた**——親の verdict が「全部現行コードの
-    測定」を名乗ってしまう。呼び出し元が検証つきで正典（verdict）へ合流させる
-    （2 番目の要素は未検証の生値・型/形式/受理可能性の検証は呼び出し元が
-    `_collect_declared_generator_code_predecessors` で一括して行う）。
+    測定」を名乗ってしまう。`cells_resumed` も併せて運ぶのは、Codex 第6波 P2
+    （PR #254 line 8577）是正の「predecessors 宣言には resume 証拠が伴うこと」を
+    呼び出し元 `_collect_declared_generator_code_predecessors` が検査するため——
+    未検証の生値のみを運び、型/形式/受理可能性/resume 証拠の整合検査は呼び出し元が
+    一括して行う。
     """
     report_path = tmp_dir / f"verification_ext_{index}.json"
     command = [
@@ -7566,7 +7569,10 @@ def _run_external_verification_in_fresh_process(
             f"evaluate_m2_bars: 測り直しプロセスの report に category {category!r} の "
             "row が無い; 評価環境で再実行できないため publish しない (fail-closed)"
         )
-    return row, verification.get("generator_code_predecessors")
+    return row, {
+        "generator_code_predecessors": verification.get("generator_code_predecessors"),
+        "cells_resumed": verification.get("cells_resumed"),
+    }
 
 
 def _reverify_external_category_measurement(
@@ -7664,7 +7670,7 @@ def _reverify_external_category_measurement(
         # なって検証が空虚になる——それを防ぐのは store の分離であって、再開不能性
         # ではない（fresh process 経路の同じ規律は
         # `_run_external_verification_in_fresh_process` docstring 参照）。
-        def _verify_once(index: int) -> "Tuple[Dict[str, Any], Any]":
+        def _verify_once(index: int) -> "Tuple[Dict[str, Any], Dict[str, Any]]":
             if verification_runner is not None:
                 run_kwargs = dict(extra_run_kwargs)
                 if eval_cell_store is not None:
@@ -7686,9 +7692,16 @@ def _reverify_external_category_measurement(
                 # Codex P2（PR #254 line 8588 是正）: in-process テスト seam でも
                 # fresh-process 経路と同じ血統喪失が起こりうる（`run_accuracy` の
                 # 戻り値は report 全体だが、下では category row しか使っていない）。
-                verification_predecessors = verification.get("generator_code_predecessors")
+                # `cells_resumed` も併せて運ぶ（Codex 第6波 P2・line 8577: 宣言と
+                # resume 証拠の整合検査を呼び出し元が行うため）。
+                verification_document = {
+                    "generator_code_predecessors": verification.get(
+                        "generator_code_predecessors"
+                    ),
+                    "cells_resumed": verification.get("cells_resumed"),
+                }
             else:
-                vrow, verification_predecessors = _run_external_verification_in_fresh_process(
+                vrow, verification_document = _run_external_verification_in_fresh_process(
                     category,
                     index,
                     tmp_dir=Path(tmp),
@@ -7715,7 +7728,7 @@ def _reverify_external_category_measurement(
                     f"提出 report の {expected_manifest_sha256!r} と不一致; 別 manifest を "
                     "測った検証 run を同じ測定の再現と数えない (fail-closed)"
                 )
-            return vrow, verification_predecessors
+            return vrow, verification_document
 
         # C3（rev.6 §8.9.2-(2)）: 検証の子を**最大 `workers` 本まで同時に起こす**。
         # publish が要求するのは「fresh process であること」と「run の結果を読まない
@@ -7729,7 +7742,7 @@ def _reverify_external_category_measurement(
         #
         # 結果は `index` 順の固定席へ書き戻す（完了順に append すると `P` によって
         # 順序が変わり、下の bit 一致比較・エラー選択が `P` 依存になる）。
-        slots: "List[Optional[Tuple[Dict[str, Any], Any]]]" = [None] * repeats
+        slots: "List[Optional[Tuple[Dict[str, Any], Dict[str, Any]]]]" = [None] * repeats
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(_verify_once, index) for index in range(repeats)]
             failures: "List[BaseException]" = []
@@ -7745,12 +7758,13 @@ def _reverify_external_category_measurement(
                 raise failures[0]
         verification_rows.extend(slot[0] for slot in slots if slot is not None)
         # Codex P2（PR #254 line 8588 是正）: 検証子が個々に持つ
-        # `generator_code_predecessors`（`store_B` の evaluate-role resume 由来）を
-        # 「document」形（`_collect_declared_generator_code_predecessors` が読める
-        # 形）で持ち帰る。検証はここでは行わない——呼び出し元が提出 reports 由来の
-        # 分と合わせて一括で検証する。
+        # `generator_code_predecessors`（`store_B` の evaluate-role resume 由来）と
+        # `cells_resumed`（Codex 第6波 P2・line 8577: 宣言と resume 証拠の整合検査に
+        # 使う）を「document」形（`_collect_declared_generator_code_predecessors` が
+        # 読める形）で持ち帰る。検証はここでは行わない——呼び出し元が提出 reports
+        # 由来の分と合わせて一括で検証する。
         verification_declared_documents.extend(
-            {"generator_code_predecessors": slot[1]} for slot in slots if slot is not None
+            slot[1] for slot in slots if slot is not None
         )
     _require_homogeneous_model_stack(category, rows + verification_rows)
     verification_clip_lists = [vrow["clips"] for vrow in verification_rows]
@@ -8529,7 +8543,7 @@ def _require_frozen_tolerance(reports: List[Dict[str, Any]], bar_block: Dict[str
 
 
 def _collect_declared_generator_code_predecessors(
-    documents: "List[Dict[str, Any]]", *, where: str
+    documents: "List[Dict[str, Any]]", *, where: str, require_resume_evidence: bool = True
 ) -> "set[str]":
     """`documents`（report または verdict）が主張する `generator_code_predecessors` を
 
@@ -8552,11 +8566,36 @@ def _collect_declared_generator_code_predecessors(
     3. 各要素が **現時点で** `_generator_code_equivalence_accepts()` により受理
        可能であること（= 等価表のキーであり、かつ attested_successor_sha256 が
        現在の loaded hash と一致する）
+    4. `require_resume_evidence=True`（既定）の場合、同じ document の
+       `cells_resumed` が非空であること（Codex 第6波 P2・PR #254 line 8577 是正:
+       宣言と resume 証拠の整合制約）——predecessors を非空で宣言しながら
+       resume したセルが 1 つも無い document は、「現行測定のみなのに前任系譜を
+       主張する」矛盾した状態であり、report/検証子 document のどちらも
+       `cells_resumed` を実際に持つため、この整合性は要求できる。
 
     1 つでも満たさなければ raise する——report/verdict が自己申告する前任 hash を
     無検証のまま正典（verdict/census）へ転記しない。report ごとに predecessors の
     有無・内容が異なる（片方 resume・片方 fresh 測定）のは正当なので、要素間の
     一致は要求せず単純に union する。
+
+    `require_resume_evidence=False` は census 側専用: verdict は run report の
+    `cells_resumed` を転記しないため（そもそも verdict にその相当フィールドが
+    存在しない）、4 の検査は実施不可能。census が集計する verdict の
+    predecessors は、対応する evaluate 呼び出しが本関数を `require_resume_
+    evidence=True` で既に通した結果であり、census 側での再検査は不要
+    （二重化する意味が無い）。
+
+    **見送った検査（設計裁定・PR #254 line 8577）**: 宣言 hash と `store_A` の
+    セルレコードの per-cell 完全突合（「本当にそのセルが前任 hash で書かれていたか」
+    をディスク上のレコードまで遡って再検証する）はここでは行わない。それを行うには
+    evaluate の入力面へ `store_A` そのものを渡す拡張が要る——evaluate は現状
+    `store_A` を受け取らない設計（`_require_eval_cell_store_disjoint_from_run_stores`
+    が `store_B` と `store_A` の分離をむしろ要求する）ため、この拡張は入力面を
+    構造的に広げる。`store_A` の完全性は (a) r6 監査（1:1 突合・digest 検証）と
+    (b) §8.7 の resume 時照合（`_cell_record_mismatches` が鍵・入力・環境・
+    generator digest を毎回照合）で独立に担保されており、evaluate 時点でのその
+    再突合は入力面拡大に見合わないと判断した。本関数が行うのは「宣言の形式・
+    現時点での受理可能性・resume 証拠との整合」までである。
     """
     collected: "set[str]" = set()
     for idx, document in enumerate(documents):
@@ -8580,6 +8619,12 @@ def _collect_declared_generator_code_predecessors(
                     "受理できない — 再裁定するか dated 再実測すること (fail-closed)"
                 )
             collected.add(item)
+        if require_resume_evidence and not document.get("cells_resumed"):
+            raise ValueError(
+                f"{where}[{idx}]: 前任系譜の宣言（generator_code_predecessors="
+                f"{raw!r}）に resume 証拠（cells_resumed）が伴わない — 現行測定のみの "
+                "report は系譜を主張できない (fail-closed)"
+            )
     return collected
 
 
@@ -9824,8 +9869,18 @@ def _require_homogeneous_census_inputs(
     # を union する——さもないと evaluate 側で伝搬した前任 hash が census で再び
     # 消える。`generator_code_predecessors` はここでは `fields` の均質性検査対象に
     # 含めない（verdict ごとに異なりうるのが正当なため。union が正しい合成）。
+    #
+    # `require_resume_evidence=False`（Codex 第6波 P2・PR #254 line 8577 是正の
+    # 適用範囲外）: 「宣言と resume 証拠（cells_resumed）の整合」検査は evaluate 側
+    # （`_require_matching_generator_code` / verification document 側）が
+    # `require_resume_evidence=True` で既に通した後にのみ verdict へ
+    # `generator_code_predecessors` が載る。verdict 自体は run report の
+    # `cells_resumed` を転記しない成果物（そもそもそのフィールドが存在しない）ため、
+    # ここで同型検査をやり直すことは**構造的に不可能**——検査対象が無い。二重化の
+    # 意味も無い（evaluate が既に通した結果を再検査するだけになる）ため、census 側は
+    # 受理可能性検査（1–3）のみ維持し、4 の resume 証拠検査は明示的にスキップする。
     declared_predecessors = _collect_declared_generator_code_predecessors(
-        verdicts, where="aggregate_m2e_census: verdicts"
+        verdicts, where="aggregate_m2e_census: verdicts", require_resume_evidence=False
     )
     all_generator_code_predecessors = top_hash_predecessors | declared_predecessors
     if all_generator_code_predecessors:
