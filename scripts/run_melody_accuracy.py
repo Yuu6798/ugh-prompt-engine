@@ -4836,6 +4836,38 @@ def _build_external_clip_row(
     return row
 
 
+# r7 blocker (f06bbaa3): `provenance_preprocessing` の中で per-clip 固有に変わって
+# よいキーの allowlist。`stem_sha256` は分離器が生成した stem バイト列の指紋であり
+# clip ごとの音声内容に依存するため、同一カテゴリの複数 clip 間で一致する理由が
+# ない（separation の重み/コード/version/model は clip に依らないカテゴリ不変量）。
+# ここに載らないキー（将来追加される未知キーを含む）は全て不変量として扱い、
+# clip 間で 1 文字でも割れれば fail-closed とする——allowlist 方式（許可を明示
+# 列挙し、未知は安全側＝不変量要求に倒す）。
+PER_CLIP_PREPROCESSING_KEYS = frozenset({"stem_sha256"})
+
+
+def split_preprocessing_invariants(
+    preprocessing: "Dict[str, Any] | None",
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """`provenance_preprocessing` を (カテゴリ不変量, per-clip 量) に分割する。
+
+    per-clip 量 = `PER_CLIP_PREPROCESSING_KEYS` に載るキーのみ。それ以外の全キー
+    （未知キー含む）は不変量側に残す。`preprocessing` が dict でない（分離不要
+    route の row は `provenance_preprocessing` キー自体を持たず `None` になる）場合は
+    空の 2 dict を返す——呼び出し側で `isinstance` チェックを重複させない。
+    """
+    if not isinstance(preprocessing, dict):
+        return {}, {}
+    invariants: Dict[str, Any] = {}
+    per_clip: Dict[str, Any] = {}
+    for key, value in preprocessing.items():
+        if key in PER_CLIP_PREPROCESSING_KEYS:
+            per_clip[key] = value
+        else:
+            invariants[key] = value
+    return invariants, per_clip
+
+
 def _average_external_clip_metrics(clip_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """measured clip 群の per-metric 算術平均（設計 Memo M2c: カテゴリ metrics）。
 
@@ -5178,14 +5210,51 @@ def _run_external_category(
                 "重み/コードが変わった (fail-closed)"
             )
         row[key] = clip_rows[0].get(key)
-    preprocessing_values = {json.dumps(c.get("provenance_preprocessing"), sort_keys=True) for c in clip_rows}
-    if len(preprocessing_values) > 1:
+    # D-1/D-2 (r7 blocker f06bbaa3): カテゴリ内の複数 clip が同じ分離器
+    # スタック（重み/コード/version/model）で測られたことは要求するが、
+    # per-clip 固有の `stem_sha256`（分離出力そのものの指紋。clip ごとの音声
+    # 内容に依存し一致する理由がない）は allowlist で除外し、不変量側だけを
+    # 完全同一要求の対象にする（`split_preprocessing_invariants`）。
+    preprocessing_list = [c.get("provenance_preprocessing") for c in clip_rows]
+    invariants_list = [split_preprocessing_invariants(p)[0] for p in preprocessing_list]
+    # `provenance_preprocessing` 自体の有無（分離要否）の混在は従来どおり不一致として
+    # 検出する——invariants は preprocessing が None でも {} に潰れて区別が付かなく
+    # なるため、有無フラグを比較対象へ明示的に含める。
+    signatures = {
+        json.dumps({"has_preprocessing": p is not None, "invariants": inv}, sort_keys=True)
+        for p, inv in zip(preprocessing_list, invariants_list)
+    }
+    if len(signatures) > 1:
+        all_keys = sorted({key for inv in invariants_list for key in inv})
+        broken_keys = [
+            key
+            for key in all_keys
+            if len({json.dumps(inv.get(key), sort_keys=True) for inv in invariants_list}) > 1
+        ]
+        if len({p is not None for p in preprocessing_list}) > 1:
+            broken_keys = ["<provenance_preprocessing の有無>"] + broken_keys
         raise RuntimeError(
-            f"run_accuracy: category {category!r} の clips が provenance_preprocessing で "
-            "不一致 (fail-closed)"
+            f"run_accuracy: category {category!r} の clips が provenance_preprocessing の "
+            f"カテゴリ不変量で不一致 (割れたキー: {broken_keys}) (fail-closed)"
         )
-    if "provenance_preprocessing" in clip_rows[0]:
-        row["provenance_preprocessing"] = clip_rows[0]["provenance_preprocessing"]
+    if preprocessing_list[0] is not None:
+        row["provenance_preprocessing"] = invariants_list[0]
+        # per-clip 量（stem_sha256）は不変量から外した代わりに、(clip 識別子,
+        # stem_sha256) の束を clip 識別子で sort して digest 化し、カテゴリ行に
+        # 残す——「どの stem を分離出力として測ったか」を捨てない（D-2）。
+        # stem_sha256 を持つ clip が 1 件もなければ bundle は出さない
+        # （V_direct 等の preprocessing なし経路の report 形を変えない）。
+        stem_pairs: List[Tuple[str, str]] = []
+        for c in clip_rows:
+            _, per_clip = split_preprocessing_invariants(c.get("provenance_preprocessing"))
+            stem = per_clip.get("stem_sha256")
+            if stem is not None:
+                stem_pairs.append((c["clip_id"], stem))
+        if stem_pairs:
+            stem_pairs.sort(key=lambda pair: pair[0])
+            row["stem_sha256_bundle"] = hashlib.sha256(
+                json.dumps(stem_pairs, sort_keys=True).encode("utf-8")
+            ).hexdigest()
     return row
 
 
@@ -5460,9 +5529,13 @@ def _apply_thread_pinning() -> Dict[str, Any]:
     """スレッド 3 点固定（`OMP_NUM_THREADS` / `MKL_NUM_THREADS` / `torch.set_num_threads`）。
 
     HANDOFF §3.1 の実測: 前 2 点だけでは足りない。3 点目を欠くと demucs の vocals
-    stem の `stem_sha256` が run 間で変わり（`residual_db` は 1e-6 dB で安定するのに
-    bytes は変わる）、ハーネスは `stem_sha256` を model stack 署名に含めるため
-    **stem アームの repeats が「別 model stack」として fail-closed になる**。
+    stem の `stem_sha256` が run 間で変わる（`residual_db` は 1e-6 dB で安定するのに
+    bytes は変わる）。r7 blocker 修正（f06bbaa3）以前は `_row_model_stack_signature`
+    が `stem_sha256` を署名に含めていたため、この非決定性が「別 model stack」として
+    fail-closed に顕在化していた——D-1/D-4 で `stem_sha256` を per-clip 量として
+    署名から分離した現在、この経路は同じ非決定性を検出しない（`metrics` の bit 一致
+    検査は粗すぎて拾わないおそれがある・既知のギャップ、follow-up 要）。3 点固定
+    そのものの必要性は変わらないので、本関数の適用は維持する。
 
     設計判断 D-3: **固定は run と evaluate で同一でなければならない。** 検証の子だけを
     固定すると、固定していない run が産んだ row と bit 一致しなくなる——publish 条件は
@@ -6465,18 +6538,21 @@ def _row_model_stack_signature(row: Dict[str, Any]) -> Tuple[Any, ...]:
     別 bundled/local weights や patch 済みコードなら、別 stack の run であって
     repeats ではない（#59/#217 と同じ規律）。
     """
+    # D-4 (r7 blocker f06bbaa3): 署名の対象は `split_preprocessing_invariants` の
+    # 不変量側のみ——per-clip 固有の `stem_sha256` は「別 stack で測られたか」の
+    # 証拠にならない（分離器自体の重み/コード/version/model が不変量）。
     preprocessing = row.get("provenance_preprocessing")
     if isinstance(preprocessing, dict):
+        invariants, _ = split_preprocessing_invariants(preprocessing)
         separation: Tuple[Any, ...] = (
-            preprocessing.get("preprocessing"),
-            preprocessing.get("separation_model"),
-            preprocessing.get("separation_version"),
-            preprocessing.get("separation_weights_sha256"),
-            preprocessing.get("stem_sha256"),
-            preprocessing.get("separation_code_sha256"),
+            invariants.get("preprocessing"),
+            invariants.get("separation_model"),
+            invariants.get("separation_version"),
+            invariants.get("separation_weights_sha256"),
+            invariants.get("separation_code_sha256"),
         )
     else:
-        separation = (preprocessing, None, None, None, None, None)
+        separation = (preprocessing, None, None, None, None)
     return (
         row.get("source_model"),
         row.get("provenance_extractor_version"),
@@ -6519,17 +6595,24 @@ def _require_homogeneous_model_stack(category: str, rows: List[Dict[str, Any]]) 
                     "provenance_preprocessing を欠く; 分離の実行を pin できない row を "
                     "証拠にしない (fail-closed)"
                 )
-            for key in (
-                "separation_weights_sha256",
-                "separation_code_sha256",
-                "stem_sha256",
-            ):
-                if not _is_sha256(preprocessing.get(key)):
+            # D-4: 不変量側（分離器の重み/コード）と per-clip 側（stem_sha256。
+            # S_fullstack は 1 row = 1 clip なので `provenance_preprocessing` 直下に
+            # 残る）を `split_preprocessing_invariants` で明示的に分けて検査する。
+            invariants, per_clip = split_preprocessing_invariants(preprocessing)
+            for key in ("separation_weights_sha256", "separation_code_sha256"):
+                if not _is_sha256(invariants.get(key)):
                     raise ValueError(
                         f"evaluate_m2_bars: category {category!r} rows[{idx}] の "
-                        f"preprocessing.{key} {preprocessing.get(key)!r} が真の sha256 でない; "
+                        f"preprocessing.{key} {invariants.get(key)!r} が真の sha256 でない; "
                         "分離器・分離出力が未 pin の row を証拠にしない (fail-closed)"
                     )
+            if not _is_sha256(per_clip.get("stem_sha256")):
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} rows[{idx}] の "
+                    f"preprocessing.stem_sha256 {per_clip.get('stem_sha256')!r} が真の "
+                    "sha256 でない; 分離器・分離出力が未 pin の row を証拠にしない "
+                    "(fail-closed)"
+                )
 
     signatures = [_row_model_stack_signature(row) for row in rows]
     if len({json.dumps(sig, sort_keys=True, default=str) for sig in signatures}) > 1:
@@ -6601,13 +6684,15 @@ def _require_execution_evidence(
             ("extractor_weights_sha256", row.get("provenance_extractor_weights_sha256")),
         ]
         if route.requires_separation:
-            preprocessing = row.get("provenance_preprocessing") or {}
+            # D-4: 実行証拠との突合は不変量側だけで行う（stem_sha256 は per-clip 量で
+            # あり、この評価環境が「同じ分離器スタックで動いているか」の証拠にならない）。
+            invariants, _ = split_preprocessing_invariants(row.get("provenance_preprocessing"))
             actual_pairs.extend(
                 [
-                    ("separation_code_sha256", preprocessing.get("separation_code_sha256")),
+                    ("separation_code_sha256", invariants.get("separation_code_sha256")),
                     (
                         "separation_weights_sha256",
-                        preprocessing.get("separation_weights_sha256"),
+                        invariants.get("separation_weights_sha256"),
                     ),
                 ]
             )

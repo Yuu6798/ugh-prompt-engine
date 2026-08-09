@@ -8845,6 +8845,159 @@ def _m2e_run(tmp_path: Path, *, level: str, shift_cents: float = 0.0, **kwargs) 
     )
 
 
+# ---------------------------------------------------------------------------
+# r7 blocker (f06bbaa3) 回帰テスト: `provenance_preprocessing` のカテゴリ集約は
+# per-clip 固有の `stem_sha256` を allowlist で除外し、それ以外の不変量（未知キー
+# 含む）だけを完全同一要求の対象にする（D-1/D-2/D-4）。
+# ---------------------------------------------------------------------------
+
+
+def _vremix_refs_for_all_levels() -> "Dict[str, Tuple[Tuple[float, ...], Tuple[float, ...]]]":
+    """`_VREMIX_CLIPS` を全 `_M2E_LEVEL_TAGS` 分の entry id へ展開した参照表。
+
+    `_m2e_fake_runner` 内の同名ロジックと同型（level ごとに clip_id の末尾タグが
+    変わるため、runner は水準を問わず引けるようにしておく）。
+    """
+    refs: "Dict[str, Tuple[Tuple[float, ...], Tuple[float, ...]]]" = {}
+    for clip_id, (times, freqs) in _VREMIX_CLIPS.items():
+        stem = clip_id.rsplit("_", 1)[0]
+        for tag in harness._M2E_LEVEL_TAGS.values():
+            refs[f"{stem}_{tag}"] = (tuple(times), tuple(freqs))
+    return refs
+
+
+def _make_fake_external_runner_with_separation(
+    clip_refs: "Dict[str, Tuple[Tuple[float, ...], Tuple[float, ...]]]",
+    *,
+    stem_sha256_by_clip: "Optional[Dict[str, str]]" = None,
+    preprocessing_overrides_by_clip: "Optional[Dict[str, Dict[str, Any]]]" = None,
+    shift_cents: float = 0.0,
+):
+    """分離必須 route（`demucs_vocals_then_crepe`）向けフェイク抽出器。
+
+    `_make_fake_external_runner` と異なり、`route.preprocessing` があるとき
+    `provenance["preprocessing"]` を発行する（`_make_fake_runner` の分離ブロックと
+    同型）。`stem_sha256` は既定で clip ごとに異なる値（分離出力は clip の音声
+    内容に依存するため、これが自然な既定）。`preprocessing_overrides_by_clip` で
+    任意キーを clip 単位に上書きし、不変量が割れるケースを作れる。
+    """
+    stem_sha256_by_clip = stem_sha256_by_clip or {}
+    preprocessing_overrides_by_clip = preprocessing_overrides_by_clip or {}
+
+    def _runner(audio_path: str, route) -> Tuple[MelodyObservation, Dict[str, Any]]:
+        clip_id = Path(audio_path).stem
+        times, freqs = clip_refs[clip_id]
+        shifted = tuple(
+            (0.0 if hz == 0.0 else hz * (2.0 ** (shift_cents / 1200.0))) for hz in freqs
+        )
+        observation = MelodyObservation(
+            route=route.name,
+            source_model="fake:deterministic",
+            frame_times=times,
+            frame_hz=shifted,
+            frame_confidence=tuple(1.0 if hz > 0.0 else 0.0 for hz in shifted),
+            total_duration_sec=times[-1] if times else 0.0,
+        )
+        provenance: Dict[str, Any] = {
+            "extractor_weights_sha256": FAKE_WEIGHTS_SHA256,
+            "extractor_code_sha256": FAKE_CODE_SHA256,
+        }
+        if route.preprocessing:
+            preprocessing: Dict[str, Any] = {
+                "preprocessing": route.preprocessing,
+                "separation_model": "fake-htdemucs",
+                "separation_version": "0.0-fake",
+                "separation_weights_sha256": FAKE_SEP_WEIGHTS_SHA256,
+                "separation_code_sha256": FAKE_SEP_CODE_SHA256,
+                "stem_sha256": stem_sha256_by_clip.get(
+                    clip_id, hashlib.sha256(f"fake-stem-{clip_id}".encode("utf-8")).hexdigest()
+                ),
+            }
+            preprocessing.update(preprocessing_overrides_by_clip.get(clip_id, {}))
+            provenance["preprocessing"] = preprocessing
+        return observation, provenance
+
+    return _runner
+
+
+def _vremix_stem_run(tmp_path: Path, *, route_runner, level: str = "+12dB", **kwargs: Any) -> Dict[str, Any]:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS, level=level)
+    return _fake_run(
+        categories=("V_remix_real_stem",),
+        route_runner=route_runner,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        level=level,
+        **kwargs,
+    )
+
+
+def test_run_external_category_allows_per_clip_stem_sha256_divergence(tmp_path: Path) -> None:
+    """(1) stem_sha256 だけが clip 間で異なっても集約は成功する（D-1/D-2）。
+
+    カテゴリ行の `provenance_preprocessing` には不変量のみが残り（`stem_sha256` を
+    含まない）、`stem_sha256_bundle` に (clip 識別子, stem_sha256) の束 digest が
+    載る。per-clip の `clips[].provenance_preprocessing.stem_sha256` は従来どおり
+    保持される。
+    """
+    level = "+12dB"
+    ids = _vremix_ids(level)
+    assert len(ids) >= 2
+    stem_map = {
+        clip_id: hashlib.sha256(f"stem-bytes-{clip_id}".encode("utf-8")).hexdigest()
+        for clip_id in ids
+    }
+    runner = _make_fake_external_runner_with_separation(
+        _vremix_refs_for_all_levels(), stem_sha256_by_clip=stem_map
+    )
+    report = _vremix_stem_run(tmp_path, route_runner=runner, level=level)
+    row = report["categories"]["V_remix_real_stem"]
+    assert row["outcome"] == "measured"
+
+    preprocessing = row["provenance_preprocessing"]
+    assert "stem_sha256" not in preprocessing
+    assert preprocessing["separation_weights_sha256"] == FAKE_SEP_WEIGHTS_SHA256
+    assert preprocessing["separation_code_sha256"] == FAKE_SEP_CODE_SHA256
+    assert preprocessing["separation_model"] == "fake-htdemucs"
+
+    expected_bundle = hashlib.sha256(
+        json.dumps(sorted(stem_map.items()), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    assert row["stem_sha256_bundle"] == expected_bundle
+
+    for clip in row["clips"]:
+        assert clip["provenance_preprocessing"]["stem_sha256"] == stem_map[clip["clip_id"]]
+
+
+def test_run_external_category_rejects_divergent_separation_weights(tmp_path: Path) -> None:
+    """(2) `separation_weights_sha256` が 1 clip だけ異なれば fail-closed（不変量）。"""
+    level = "+12dB"
+    ids = _vremix_ids(level)
+    overrides = {
+        ids[0]: {"separation_weights_sha256": hashlib.sha256(b"other-separation-weights").hexdigest()}
+    }
+    runner = _make_fake_external_runner_with_separation(
+        _vremix_refs_for_all_levels(), preprocessing_overrides_by_clip=overrides
+    )
+    # 既存の姉妹検査（extractor weights/code の clip 間一致）と同じ RuntimeError
+    # ファミリー（このカテゴリ集約ブロック全体の既存の例外送出規約）。
+    with pytest.raises(RuntimeError, match="separation_weights_sha256"):
+        _vremix_stem_run(tmp_path, route_runner=runner, level=level)
+
+
+def test_run_external_category_rejects_divergent_unknown_preprocessing_key(tmp_path: Path) -> None:
+    """(3) allowlist にない未知キーが 1 clip だけ異なれば fail-closed（allowlist の検証）。"""
+    level = "+12dB"
+    ids = _vremix_ids(level)
+    overrides = {ids[0]: {"future_key": "only-on-first-clip"}}
+    runner = _make_fake_external_runner_with_separation(
+        _vremix_refs_for_all_levels(), preprocessing_overrides_by_clip=overrides
+    )
+    with pytest.raises(RuntimeError, match="future_key"):
+        _vremix_stem_run(tmp_path, route_runner=runner, level=level)
+
+
 def test_run_accuracy_requires_a_level_for_level_bearing_categories(tmp_path: Path) -> None:
     manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
     with pytest.raises(ValueError, match="水準軸を持つため level"):
