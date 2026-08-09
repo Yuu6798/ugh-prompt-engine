@@ -636,6 +636,41 @@ def _load_screening_record(path: Path) -> Tuple[Dict[str, Any], str]:
     return doc, digest
 
 
+# `scripts/screen_m3d_clips.py::_gate_one` が実際に emit する 1 ゲート結果
+# entry の必須キー集合（Codex レビュー第 3 巡 T3 部分対応）。「parse 可能 ≠
+# 形状正しい」を機械強制する — status のみを埋めた手編集/偽造 entry を
+# per-clip ゲート結果として受理しない。gate_metrics の**中身**からゲート
+# 判定を再導出する検証はスコープ外（設計判定 = PR #255 レビュースレッド T3
+# 返信参照: 一貫した偽造 record は metrics ごと偽造可能であり、再導出は
+# fabricated status の検出という保証を提供しないため）。本チェックは
+# キー集合の存在のみを機械強制する。
+_REQUIRED_GATE_RESULT_KEYS: Tuple[str, ...] = (
+    "status",
+    "reasons",
+    "audio_sha256",
+    "route_provenance",
+    "gate_metrics",
+)
+
+
+def _validate_gate_result_shape(entry: Any, *, source: str, label: str) -> None:
+    """record の 1 ゲート結果 entry が `_REQUIRED_GATE_RESULT_KEYS` を全て
+    備えているかを検証する（Codex レビュー第 3 巡 T3 部分対応）。欠落キーは
+    fail-closed（`status` 単体・`gate_metrics` 欠落等、部分的に正しい形の
+    entry も拒否する）。
+    """
+    if not isinstance(entry, dict):
+        raise BuildM3dPairsError(f"{source}: {label} が mapping でない (fail-closed)")
+    missing = sorted(set(_REQUIRED_GATE_RESULT_KEYS) - set(entry))
+    if missing:
+        raise BuildM3dPairsError(
+            f"{source}: {label} に screener 出力必須キーが欠落 (fail-closed): "
+            f"欠落={missing} (必須キー集合: {sorted(_REQUIRED_GATE_RESULT_KEYS)})"
+        )
+    if not isinstance(entry.get("status"), str):
+        raise BuildM3dPairsError(f"{source}: {label}.status が文字列でない (fail-closed)")
+
+
 def _recompute_survivor_ids_from_clips(
     screening_doc: Dict[str, Any], *, source: str, fixture_clip_ids: "Iterable[str]"
 ) -> List[str]:
@@ -680,22 +715,22 @@ def _recompute_survivor_ids_from_clips(
         if not isinstance(entry, dict):
             raise BuildM3dPairsError(f"{source}: clips[{clip_id!r}] が mapping でない (fail-closed)")
         original = entry.get("original")
-        if not isinstance(original, dict) or not isinstance(original.get("status"), str):
-            raise BuildM3dPairsError(
-                f"{source}: clips[{clip_id!r}].original.status が欠落/不正 (fail-closed)"
-            )
+        if original is None:
+            raise BuildM3dPairsError(f"{source}: clips[{clip_id!r}].original が欠落 (fail-closed)")
+        _validate_gate_result_shape(original, source=source, label=f"clips[{clip_id!r}].original")
         if original["status"] != "sufficient":
             continue
         all_variants_sufficient = True
         for variant_key in VOCADITO_VARIANT_ORDER:
             variant_entry = entry.get(variant_key)
-            if not isinstance(variant_entry, dict) or not isinstance(
-                variant_entry.get("status"), str
-            ):
+            if variant_entry is None:
                 raise BuildM3dPairsError(
-                    f"{source}: clips[{clip_id!r}].{variant_key}.status が欠落/不正 "
+                    f"{source}: clips[{clip_id!r}].{variant_key} が欠落 "
                     "(fail-closed; original sufficient なのに変形ゲート結果が無い)"
                 )
+            _validate_gate_result_shape(
+                variant_entry, source=source, label=f"clips[{clip_id!r}].{variant_key}"
+            )
             if variant_entry["status"] != "sufficient":
                 all_variants_sufficient = False
         if all_variants_sufficient:
@@ -755,6 +790,42 @@ def _verify_screening_input_digests(
             f"screening record={recorded_registry_sha} 現物={actual_registry_sha}; "
             f"path={harness.M1_REGISTRY_PATH})"
         )
+
+
+def _verify_screening_transform_parameters(
+    screening_doc: Dict[str, Any], *, source: str
+) -> None:
+    """record が保持する変形パラメータ（`transform_parameters.semitones` /
+    `transform_parameters.time_rates`）を、builder の現行定数
+    （`VOCADITO_SEMITONES` / `VOCADITO_TIME_RATES`）と照合する（Codex レビュー
+    第 3 巡 T1 対応）。
+
+    `screen_m3d_clips.py` は S2 の変形ゲートに builder と同一の定数を再利用
+    する設計だが、record の `transform_parameters` フィールド自体はこれまで
+    builder 側で一切照合していなかった——record が異なるパラメータ（別の
+    半音幅・タイムレート）で変形ゲートを回していた場合、record の survivor
+    判定は builder が実際に生成する変形と対応しなくなる。フィールド欠落・
+    型不正・値不一致のいずれも fail-closed とする（緩和・黙認しない）。
+    """
+    transform_parameters = screening_doc.get("transform_parameters")
+    if not isinstance(transform_parameters, dict):
+        raise BuildM3dPairsError(
+            f"{source}: 'transform_parameters' が欠落/不正 (fail-closed): {transform_parameters!r}"
+        )
+    expected: Dict[str, List[float]] = {
+        "semitones": list(VOCADITO_SEMITONES),
+        "time_rates": list(VOCADITO_TIME_RATES),
+    }
+    for key, expected_values in expected.items():
+        recorded_values = transform_parameters.get(key)
+        is_valid_numeric_list = isinstance(recorded_values, list) and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in recorded_values
+        )
+        if not is_valid_numeric_list or [float(v) for v in recorded_values] != expected_values:
+            raise BuildM3dPairsError(
+                f"{source}: 'transform_parameters.{key}' が builder 定数と不一致/欠落 "
+                f"(fail-closed; 期待={expected_values} record={recorded_values!r})"
+            )
 
 
 def select_clips_v2(survivor_clip_ids: "List[str]") -> Tuple[List[str], List[str]]:
@@ -1800,6 +1871,11 @@ def run_build(
         )
         _verify_screening_input_digests(
             screening_doc, source=str(screening_record_path), fixtures_sha256=fixtures_sha256
+        )
+        # T1（Codex レビュー第 3 巡）: record が保持する変形パラメータ
+        # （半音/タイムレート）を builder 定数と選定前に照合する。
+        _verify_screening_transform_parameters(
+            screening_doc, source=str(screening_record_path)
         )
         survivor_clip_ids = screening_doc["survivor_clip_ids"]
         unknown_survivors = sorted(set(survivor_clip_ids) - set(fixtures))

@@ -38,7 +38,10 @@ wall_sec / duration_sec 平均を測定し、フル規模採用可否を判断�
 - 初回呼び出し（モデルロード込み）のオーバーヘッド推定: 12.8389 s
   （`first_call_model_load_overhead_sec`）
 
-この測定に基づき、フル規模（98 pair × 2 repeats + holdout run）の実行に進んだ。
+この測定に基づき、フル規模（98 pair × 2 repeats）の実行に進んだ。98 pair のうち
+holdout 32 件は `holdout_locked_until_frozen` ロックのまま比較チェーンへ投入せず、
+holdout 検証 run 自体は実行していない（検証権未消費。ロックマーカーの bit 一致
+（手順 2 参照）を「holdout run 実行」と混同しないこと）。
 
 ## 手順 2: run × 2
 

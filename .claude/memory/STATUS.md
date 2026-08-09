@@ -2,7 +2,7 @@
 
 ## Phase
 
-2026-08-09、**M2e r6 本測定が完走・監査合格（1280/1280 セル）、r7 evaluate 実行中**: r6 は 19 シャード 47 run・84.5h・欠落/余剰/digest 不一致ゼロ・env_digest 単一で監査版 dated 記録を commit（06030070）。逸脱 3 件は全て裁定済み（7800.30s=計測ジッタ実害なし / 19 workers=誤記訂正 / セッション毎再校正=§8.4 非該当）。新観測=**単位コストの時間内ドリフト ×3.2**（91→292 s/cell・swap 起因でない）。r7 は計画 commit（dada954d・単価 335 s/cell・上限 119h・run 上限 72・単価>500 で停止・帯判定は census のみ）を承認し実行側が開始——**完了後に破断曲線の判読（設計側）が M2e の最終工程**。**M3d 校正は 2026-08-09 に melody トラック closeout で終端**（User 決裁）: v1 実測 = run×2 bit 一致 98/98 まで健全だが evaluate が凍結拒否（real positive 46/48 が観測ゲート `phrase_count<2`）、v2 = ゲートスクリーニング再事前登録も 40 clip census で survivor 3/40 → 自らの停止条件で fail-closed 終端。判定・再入条件 = docs/m3d_calibration_record.md（M4 不点灯恒久・L0c 非解禁 = **L 系列は #245–#250 の非旋律軸で完結**・G2 語彙是正と M1-real Go バーは moot 化）。**次の主戦線 = M2e r7 完走 → census verdict → 破断曲線の判読（設計側）**。
+2026-08-09、**M2e r6 本測定が完走・監査合格（1280/1280 セル）、r7 evaluate 実行中**: r6 は 19 シャード 47 run・84.5h・欠落/余剰/digest 不一致ゼロ・env_digest 単一で監査版 dated 記録を commit（06030070）。逸脱 3 件は全て裁定済み（7800.30s=計測ジッタ実害なし / 19 workers=誤記訂正 / セッション毎再校正=§8.4 非該当）。新観測=**単位コストの時間内ドリフト ×3.2**（91→292 s/cell・swap 起因でない）。r7 は計画 commit（dada954d・単価 335 s/cell・上限 119h・run 上限 72・単価>500 で停止・帯判定は census のみ）を承認し実行側が開始——**完了後に破断曲線の判読（設計側）が M2e の最終工程**。**M3d 校正は 2026-08-09 に melody トラック closeout で終端**（User 決裁）: v1 実測 = run×2 bit 一致 tuning 66/66（holdout 32 行はロックマーカー同一性・抽出未実行）まで健全だが evaluate が凍結拒否（real positive 46/48 が観測ゲート `phrase_count<2`）、v2 = ゲートスクリーニング再事前登録も 40 clip census で survivor 3/40 → 自らの停止条件で fail-closed 終端。判定・再入条件 = docs/m3d_calibration_record.md（M4 不点灯恒久・L0c 非解禁 = **L 系列は #245–#250 の非旋律軸で完結**・G2 語彙是正と M1-real Go バーは moot 化）。**次の主戦線 = M2e r7 完走 → census verdict → 破断曲線の判読（設計側）**。
 
 ## Next-Issue Queue
 

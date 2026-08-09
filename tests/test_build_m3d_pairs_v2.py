@@ -76,17 +76,30 @@ def _real_m1_registry_sha256() -> str:
     return hashlib.sha256(harness.M1_REGISTRY_PATH.read_bytes()).hexdigest()
 
 
+def _gate_result(status: str) -> Dict[str, object]:
+    """`scripts/screen_m3d_clips.py::_gate_one` が実際に emit する 1 ゲート
+    結果の完備な形状（T3・Codex レビュー第 3 巡部分対応: `bm._REQUIRED_GATE_
+    RESULT_KEYS` 全キー）を持つダミー entry を作る。"""
+    return {
+        "status": status,
+        "reasons": [] if status == "sufficient" else ["s1_dummy"],
+        "audio_sha256": "0" * 64,
+        "route_provenance": {"route": "crepe_direct"},
+        "gate_metrics": {"status": status},
+    }
+
+
 def _sufficient_clip_entry() -> Dict[str, object]:
     """原音+全変形が sufficient な clip entry（`screen_m3d_clips.screen` が
-    書く survivor clip の形。R1 の独立再計算（`_verify_screening_survivors`）を
-    通す最小限のダミー gate_metrics 付き。"""
+    書く survivor clip の形。R1 の独立再計算（`_verify_screening_survivors`）と
+    T3 の row 完全形状検証の両方を通す。"""
     entry: Dict[str, object] = {
-        "original": {"status": "sufficient", "reasons": []},
+        "original": _gate_result("sufficient"),
         "s1_sufficient": True,
         "survivor": True,
     }
     for variant_key in bm.VOCADITO_VARIANT_ORDER:
-        entry[variant_key] = {"status": "sufficient", "reasons": []}
+        entry[variant_key] = _gate_result("sufficient")
     return entry
 
 
@@ -96,7 +109,7 @@ def _insufficient_clip_entry() -> Dict[str, object]:
     full-coverage テストで「survivor ではないが record には載っている」
     非 survivor clip を表現するのに使う。"""
     return {
-        "original": {"status": "insufficient", "reasons": ["s1_dummy"]},
+        "original": _gate_result("insufficient"),
         "s1_sufficient": False,
         "survivor": False,
     }
@@ -518,7 +531,7 @@ def test_recompute_survivor_ids_from_clips_matches_hand_built_gate_results():
         "clips": {
             "vocadito_1": _sufficient_clip_entry(),
             "vocadito_2": {
-                "original": {"status": "insufficient"},
+                "original": _gate_result("insufficient"),
                 "survivor": False,
             },
         }
@@ -531,12 +544,56 @@ def test_recompute_survivor_ids_from_clips_matches_hand_built_gate_results():
 def test_recompute_survivor_ids_requires_all_variants_sufficient():
     entry = _sufficient_clip_entry()
     # 1 変形だけ insufficient に落とす — 原音 sufficient でも survivor から外れる。
-    entry[bm.VOCADITO_VARIANT_ORDER[0]] = {"status": "insufficient"}
+    entry[bm.VOCADITO_VARIANT_ORDER[0]] = _gate_result("insufficient")
     doc = {"clips": {"vocadito_1": entry}}
     assert (
         bm._recompute_survivor_ids_from_clips(doc, source="test", fixture_clip_ids=["vocadito_1"])
         == []
     )
+
+
+# --------------------------------------------------------------------------- #
+# T3（Codex レビュー第 3 巡・部分採用）: row（clips 各エントリ）の完全な
+# screener 出力形状を要求する（status のみ・gate_metrics 欠落は fail-closed）
+# --------------------------------------------------------------------------- #
+def test_recompute_survivor_ids_from_clips_accepts_full_shape_entries():
+    """完全形状（status/reasons/audio_sha256/route_provenance/gate_metrics
+    の全キー）の entry は受理される（正常系の回帰ガード）。"""
+    doc = {"clips": {"vocadito_1": _sufficient_clip_entry()}}
+    assert bm._recompute_survivor_ids_from_clips(
+        doc, source="test", fixture_clip_ids=["vocadito_1"]
+    ) == ["vocadito_1"]
+
+
+def test_recompute_survivor_ids_from_clips_rejects_status_only_original_entry():
+    """`original` が `status` のみ（`gate_metrics`/`reasons`/`audio_sha256`/
+    `route_provenance` 欠落）の row は、内部的には矛盾なく見えても機械的に
+    拒否する——「parse 可能 ≠ 形状正しい」の強制。"""
+    doc = {"clips": {"vocadito_1": {"original": {"status": "sufficient"}, "survivor": True}}}
+    with pytest.raises(bm.BuildM3dPairsError, match="必須キーが欠落"):
+        bm._recompute_survivor_ids_from_clips(doc, source="test", fixture_clip_ids=["vocadito_1"])
+
+
+def test_recompute_survivor_ids_from_clips_rejects_gate_metrics_missing():
+    """`gate_metrics` 単体の欠落だけでも fail-closed（他のキーが揃っていても
+    救済しない）。"""
+    entry = _sufficient_clip_entry()
+    original = dict(entry["original"])
+    del original["gate_metrics"]
+    entry["original"] = original
+    doc = {"clips": {"vocadito_1": entry}}
+    with pytest.raises(bm.BuildM3dPairsError, match="必須キーが欠落"):
+        bm._recompute_survivor_ids_from_clips(doc, source="test", fixture_clip_ids=["vocadito_1"])
+
+
+def test_recompute_survivor_ids_from_clips_rejects_status_only_variant_entry():
+    """variant entry が `status` のみの場合も同様に拒否する（原音側だけでなく
+    変形側にも同じ形状強制がかかることの確認）。"""
+    entry = _sufficient_clip_entry()
+    entry[bm.VOCADITO_VARIANT_ORDER[0]] = {"status": "sufficient"}
+    doc = {"clips": {"vocadito_1": entry}}
+    with pytest.raises(bm.BuildM3dPairsError, match="必須キーが欠落"):
+        bm._recompute_survivor_ids_from_clips(doc, source="test", fixture_clip_ids=["vocadito_1"])
 
 
 # --------------------------------------------------------------------------- #
@@ -591,7 +648,7 @@ def test_verify_screening_survivors_rejects_tampered_survivor_list():
         "clips": {
             "vocadito_1": _sufficient_clip_entry(),
             "vocadito_2": {
-                "original": {"status": "insufficient"},
+                "original": _gate_result("insufficient"),
                 "survivor": False,
             },
         },
@@ -673,6 +730,60 @@ def test_verify_screening_input_digests_rejects_missing_m1_registry_field():
     doc = {"m2c_external_fixtures_sha256": "a" * 64}
     with pytest.raises(bm.BuildM3dPairsError, match="m1_registry_sha256"):
         bm._verify_screening_input_digests(doc, source="test", fixtures_sha256="a" * 64)
+
+
+# --------------------------------------------------------------------------- #
+# T1（Codex レビュー第 3 巡・採用）: screening record の transform_parameters
+# を builder 定数（VOCADITO_SEMITONES/VOCADITO_TIME_RATES）と選定前に照合する
+# --------------------------------------------------------------------------- #
+def _matching_transform_parameters() -> Dict[str, list]:
+    return {
+        "semitones": list(bm.VOCADITO_SEMITONES),
+        "time_rates": list(bm.VOCADITO_TIME_RATES),
+    }
+
+
+def test_verify_screening_transform_parameters_accepts_matching_record():
+    doc = {"transform_parameters": _matching_transform_parameters()}
+    bm._verify_screening_transform_parameters(doc, source="test")  # raises なし
+
+
+def test_verify_screening_transform_parameters_rejects_altered_semitones():
+    doc = {
+        "transform_parameters": {
+            "semitones": [3.0, -6.0],  # -5.0 から改変
+            "time_rates": list(bm.VOCADITO_TIME_RATES),
+        }
+    }
+    with pytest.raises(bm.BuildM3dPairsError, match="semitones"):
+        bm._verify_screening_transform_parameters(doc, source="test")
+
+
+def test_verify_screening_transform_parameters_rejects_altered_time_rates():
+    doc = {
+        "transform_parameters": {
+            "semitones": list(bm.VOCADITO_SEMITONES),
+            "time_rates": [0.87, 1.20],  # 1.12 から改変
+        }
+    }
+    with pytest.raises(bm.BuildM3dPairsError, match="time_rates"):
+        bm._verify_screening_transform_parameters(doc, source="test")
+
+
+def test_verify_screening_transform_parameters_rejects_missing_field():
+    """`transform_parameters` フィールド自体が欠落している record も
+    fail-closed（黙認しない）。"""
+    doc: Dict[str, object] = {}
+    with pytest.raises(bm.BuildM3dPairsError, match="transform_parameters"):
+        bm._verify_screening_transform_parameters(doc, source="test")
+
+
+def test_verify_screening_transform_parameters_rejects_missing_subfield():
+    """`transform_parameters` は存在するが `time_rates` サブフィールドが
+    欠落している record も fail-closed。"""
+    doc = {"transform_parameters": {"semitones": list(bm.VOCADITO_SEMITONES)}}
+    with pytest.raises(bm.BuildM3dPairsError, match="time_rates"):
+        bm._verify_screening_transform_parameters(doc, source="test")
 
 
 def test_run_and_publish_v2_rejects_survivor_list_tampered_beyond_gate_results(tmp_path: Path):
