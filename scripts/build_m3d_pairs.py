@@ -1205,13 +1205,14 @@ def _reject_output_input_collisions(
     vocadito_audio_paths: "List[Path]",
     summary_out: Optional[Path] = None,
     screening_record_path: Optional[Path] = None,
+    m1_registry_path: Optional[Path] = None,
 ) -> None:
     """公開予定の全出力先（`out_dir` 配下の生成 WAV・`manifest_out`・
     `pins_out`・（指定時）`summary_out`）の resolve() 済み絶対パス集合と、全
     build 入力（fixtures yaml・synth specs yaml・vocadito WAV 全件・（指定時）
-    screening record）の resolve() 済み絶対パス集合を突き合わせ、(a) 出力
-    同士の重複 (b) 出力と入力の衝突、のいずれかがあれば fail-closed で拒否
-    する（R2R N3）。
+    screening record・（指定時）M1 registry）の resolve() 済み絶対パス集合を
+    突き合わせ、(a) 出力同士の重複 (b) 出力と入力の衝突、のいずれかがあれば
+    fail-closed で拒否する（R2R N3）。
 
     生成（`staging_wav_dir` への物理書き込み・librosa/build_signal 呼び出し）を
     一切開始する前に呼ぶ——公開後に入力を破壊しうる誤設定（例: `--out-dir` を
@@ -1227,7 +1228,24 @@ def _reject_output_input_collisions(
     `screening_record_path`（v2 経路）: 指定時は他の build 入力
     （fixtures_path/synth_specs_path/vocadito WAV）と同じ扱いで入力集合へ
     編入する——`--out-dir`/`--manifest-out`/`--pins-out` の誤設定でスクリー
-    ニング記録自体を上書き破壊する事故を、生成開始前に断つ。
+    ニング記録自体を上書き破壊する事故を、生成開始前に断つ。呼び出し側は
+    `run_build`（v2 経路。生成前呼び出し時点の `--screening-record` 現物）と
+    `check_existing`（`--summary-out` 使用時。pins サイドカーに記録された
+    過去ビルドの screening record 現物）の**両方**でこの引数を渡す
+    （Codex レビュー第 7 巡 X1(b)。従来 `check_existing` 側は保護対象外で、
+    `--check-only --summary-out <screening_record_path>` が record 自体を
+    無検査で上書き破壊しうる穴があった）。
+
+    `m1_registry_path`（Codex レビュー第 7 巡 X1(a)）: 指定時は他の build
+    入力と同じ扱いで入力集合へ編入する。M1 registry
+    （`run_melody_comparison.M1_REGISTRY_PATH`）は v2 経路の
+    `_verify_screening_input_digests` が route binding / input digest 検証
+    のために読む——`--out-dir`/`--manifest-out`/`--pins-out`/`--summary-out`
+    の誤設定でこの registry 自体を上書き破壊する事故を、生成開始前に断つ。
+    v1 経路（`screening_record_path` 未指定）と `check_existing` は M1
+    registry を一切読まないため、呼び出し側は該当する経路でのみこの引数を
+    渡す（読まない経路への要求追加は誤検出リスクを増やすだけで実害保護に
+    ならないため見送り）。
     """
     outputs: Dict[Path, str] = {}
 
@@ -1255,6 +1273,11 @@ def _reject_output_input_collisions(
         inputs.setdefault(
             Path(screening_record_path).resolve(),
             f"screening_record_path ({screening_record_path})",
+        )
+    if m1_registry_path is not None:
+        inputs.setdefault(
+            Path(m1_registry_path).resolve(),
+            f"m1_registry_path ({m1_registry_path})",
         )
     for audio_path in vocadito_audio_paths:
         inputs.setdefault(Path(audio_path).resolve(), f"vocadito WAV ({audio_path})")
@@ -2022,12 +2045,20 @@ def check_existing(
     # 登録第 7 ラウンドの凍結設計を維持し、screening record は build 入力 pin
     # ファミリー（m2c fixtures/synth specs と同格 = --check-only スコープ）
     # として扱う。
+    # X1(b)（Codex レビュー第 7 巡）: sidecar に記録された screening record の
+    # 絶対パス（存在すれば）を、下の summary_out 衝突検査（`--summary-out`
+    # 経路）で入力として保護する対象として保持しておく。値の確定は下の分岐
+    # 内で行うが、変数自体は分岐の外側（`screening_record_sha256` が
+    # sidecar に無い = v1 経路ビルドのケース）でも参照できるよう先に None で
+    # 初期化しておく。
+    recorded_screening_abs_path: Optional[Path] = None
     if "screening_record_sha256" in pins_doc:
         recorded_screening_path = pins_doc.get("screening_record_path")
         expected_screening_sha = pins_doc["screening_record_sha256"]
         abs_screening_path = (
             ROOT / recorded_screening_path if recorded_screening_path else None
         )
+        recorded_screening_abs_path = abs_screening_path
         if abs_screening_path is None or not abs_screening_path.exists():
             problems.append(
                 f"{recorded_screening_path}: pins サイドカーに記録された screening record "
@@ -2144,6 +2175,15 @@ def check_existing(
         # に確認する（`out_dir` は本経路では新規生成しないため空集合、既公開
         # WAV は `all_audio_paths(pairs)` から repo-relative パスを解決して
         # `vocadito_audio_paths` 相当の保護対象へ折り込む）。
+        #
+        # X1(b)（Codex レビュー第 7 巡）: sidecar に記録された screening
+        # record（v2 ビルドの場合。上で現物一致を確認済みの
+        # `recorded_screening_abs_path`）も他の build 入力と同じ扱いで衝突
+        # 検査へ編入する——従来は本経路のみ screening record を保護対象から
+        # 漏らしており、`--check-only --summary-out <screening_record_path>`
+        # がその screening record 自体を無検査で上書き破壊しうる穴があった
+        # （v1 経路ビルド = `recorded_screening_abs_path` が None のままなら
+        # 従来どおり screening record 側は検査対象に加わらない）。
         published_audio_paths = [ROOT / rel_path for rel_path in all_audio_paths(pairs)]
         _reject_output_input_collisions(
             out_dir=manifest_out.parent,
@@ -2154,6 +2194,7 @@ def check_existing(
             synth_specs_path=synth_specs_path,
             vocadito_audio_paths=published_audio_paths,
             summary_out=summary_out,
+            screening_record_path=recorded_screening_abs_path,
         )
 
     return crosstab(pairs)
@@ -2264,6 +2305,12 @@ def run_build(
     # R2R 対応 N3（Codex レビュー第 2 ラウンド・公開先衝突の拒否）: 生成
     # （staging への物理書き込み・librosa/build_signal 呼び出し）を開始する前に、
     # 公開予定の全出力先が入力および互いと衝突しないことを確認する。
+    #
+    # X1(a)（Codex レビュー第 7 巡）: `m1_registry_path` は screening_record_path
+    # が指定されている（= v2 経路。上の `_verify_screening_input_digests` が
+    # 実際に `harness.M1_REGISTRY_PATH` を読む）場合にのみ渡す——v1 経路
+    # （screening_record_path が None）は M1 registry を一切読まないため、
+    # 実際に読む経路にのみ保護を対応させる。
     _reject_output_input_collisions(
         out_dir=out_dir,
         manifest_out=manifest_out,
@@ -2274,6 +2321,7 @@ def run_build(
         vocadito_audio_paths=list(resolved_audio.values()),
         summary_out=summary_out,
         screening_record_path=screening_record_path,
+        m1_registry_path=harness.M1_REGISTRY_PATH if screening_record_path is not None else None,
     )
 
     specs, synth_specs_sha256 = _load_synth_specs(synth_specs_path)

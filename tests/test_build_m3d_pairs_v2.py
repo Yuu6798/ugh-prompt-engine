@@ -1666,4 +1666,133 @@ def test_run_and_publish_v2_rejects_when_screening_variant_hash_mismatches_gener
         )
     assert not out_dir.exists()
     assert not manifest_out.exists()
-    assert not pins_out.exists()
+
+
+# --------------------------------------------------------------------------- #
+# Codex レビュー第 7 巡 X1: v2 で新たに消費する入力（screening record /
+# M1 registry）を衝突 preflight の保護入力集合へ編入（統合再現）
+# --------------------------------------------------------------------------- #
+def test_check_existing_rejects_summary_out_targeting_screening_record(tmp_path: Path):
+    """X1(b) の直接再現: `--check-only --summary-out <screening_record_path>`
+    が screening record 自体を無検査で上書き破壊しうる穴を、公開先衝突
+    preflight で fail-closed 拒否することを確認する（従来は `check_existing`
+    の衝突検査に screening record が編入されておらず、この呼び出しは
+    `--check-only: OK` のまま summary_out への書込みへ進んでいた）。"""
+    bundle = _build_v2_bundle(tmp_path)
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm.check_existing(
+            manifest_out=bundle["manifest_out"],
+            pins_out=bundle["pins_out"],
+            vocadito_dir=bundle["vocadito_dir"],
+            fixtures_path=bundle["fixtures_path"],
+            synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+            summary_out=bundle["screening_path"],  # screening record と同一パス
+        )
+    # fail-closed: screening record 自体は無傷のまま（上書きされていない）。
+    assert bundle["screening_path"].exists()
+
+
+def test_check_existing_passes_summary_out_disjoint_from_screening_record(tmp_path: Path):
+    """正常系の回帰ガード: `--summary-out` が screening record と disjoint な
+    らこれまでどおり通り、実際に書き出される。"""
+    bundle = _build_v2_bundle(tmp_path)
+    summary_out = tmp_path / "summary.json"
+
+    summary = bm.check_existing(
+        manifest_out=bundle["manifest_out"],
+        pins_out=bundle["pins_out"],
+        vocadito_dir=bundle["vocadito_dir"],
+        fixtures_path=bundle["fixtures_path"],
+        synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+        summary_out=summary_out,
+    )
+    assert summary["total"] > 0
+
+
+def test_check_existing_v1_bundle_summary_out_unaffected_by_x1b_change(tmp_path: Path):
+    """v1 経路ビルド（screening record 未使用）の pins サイドカーには
+    `screening_record_sha256` が記録されないため、`recorded_screening_abs_path`
+    は None のまま——X1(b) 変更後も `--check-only --summary-out` の挙動が
+    従来どおりであることを確認する（v1 テスト不変の要求）。"""
+    n_clips = 20
+    vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
+    manifest_out = tmp_path / "manifest_v1.yaml"
+    pins_out = tmp_path / "pins_v1.json"
+    out_dir = tmp_path / "external_m3d" / "m3d_pairs_v1"
+    bm.run_and_publish(
+        vocadito_dir=vocadito_dir,
+        out_dir=out_dir,
+        manifest_out=manifest_out,
+        pins_out=pins_out,
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+    )
+    pins_doc = json.loads(pins_out.read_text(encoding="utf-8"))
+    assert "screening_record_sha256" not in pins_doc
+
+    summary = bm.check_existing(
+        manifest_out=manifest_out,
+        pins_out=pins_out,
+        vocadito_dir=vocadito_dir,
+        fixtures_path=fixtures_path,
+        synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+        summary_out=tmp_path / "summary_v1.json",
+    )
+    assert summary["total"] > 0
+
+
+def test_run_and_publish_v2_rejects_m1_registry_collision_before_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """X1(a) の直接再現: v2 経路で `--pins-out` が（実際に
+    `_verify_screening_input_digests` が読む）M1 registry と同じパスを指す
+    場合、生成（staging への物理書き込み）を一切開始せず fail-closed で
+    拒否することを確認する。"""
+    n_clips = 20
+    vocadito_dir, fixtures_path, _expected = _make_vocadito_pool(tmp_path, n_clips=n_clips)
+    _fixtures, fixtures_sha256 = bm.load_m2c_fixtures(fixtures_path)
+    survivors = [f"vocadito_{i}" for i in range(1, n_clips + 1)]
+    variant_audio_sha256_by_clip = {
+        cid: _real_variant_audio_sha256_map(bm.vocadito_audio_path(vocadito_dir, cid))
+        for cid in survivors
+    }
+    # pins_out を実際に読まれる M1 registry パスと衝突させる
+    # （`_verify_screening_input_digests` が record 記録の m1_registry_sha256
+    # を照合するために実バイトを読む対象そのもの）。
+    fake_registry = tmp_path / "registry.yaml"
+    fake_registry.write_text("fake registry", encoding="utf-8")
+    # `bm.harness` と本テストファイルの `harness` は同一モジュールオブジェクト
+    # （`run_melody_comparison`）を指す——1 箇所を patch すれば両方に反映される。
+    monkeypatch.setattr(harness, "M1_REGISTRY_PATH", fake_registry)
+
+    screening_path = tmp_path / "screening_v2.json"
+    _write_screening_record(
+        screening_path,
+        survivor_clip_ids=survivors,
+        m2c_external_fixtures_sha256=fixtures_sha256,
+        variant_audio_sha256_by_clip=variant_audio_sha256_by_clip,
+        # `_verify_screening_input_digests`（衝突検査より前に走る）を通過させ、
+        # 衝突検査自体に到達させるため、fake registry の実バイトに合わせる。
+        m1_registry_sha256=hashlib.sha256(fake_registry.read_bytes()).hexdigest(),
+    )
+
+    out_dir = tmp_path / "external_m3d" / "m3d_pairs_v2"
+    manifest_out = tmp_path / "manifest_v2.yaml"
+    pins_out = fake_registry  # 衝突させる
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm.run_and_publish(
+            vocadito_dir=vocadito_dir,
+            out_dir=out_dir,
+            manifest_out=manifest_out,
+            pins_out=pins_out,
+            fixtures_path=fixtures_path,
+            synth_specs_path=REAL_SYNTH_SPECS_V2_PATH,
+            screening_record_path=screening_path,
+        )
+    assert not out_dir.exists()
+    assert not manifest_out.exists()
+    # fail-closed: M1 registry（= pins_out として衝突させたパス）自体は
+    # 無傷のまま（衝突検査は生成・書込み開始前に働くため上書きされない）。
+    assert fake_registry.read_text(encoding="utf-8") == "fake registry"
