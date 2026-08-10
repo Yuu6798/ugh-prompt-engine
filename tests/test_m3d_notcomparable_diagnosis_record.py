@@ -1,10 +1,10 @@
 """tests/test_m3d_notcomparable_diagnosis_record.py — `docs/measurements/
 m3d_2026-08/notcomparable_diagnosis.json` の恒久検証（Codex レビュー #255
-第 9 巡指摘 1 件対応）。
+第 9 巡指摘 1 件・第 13 巡指摘 1 件（DD2）対応）。
 
 committed ファイルのみを読む fixture テスト（外部 vocadito 素材・実 crepe/
 tensorflow 抽出は一切走らせない・高速）。`scripts/diagnose_m3d_notcomparable.py`
-が committed 入力から決定論的に導出する記録であることを、以下の 3 点で
+が committed 入力から決定論的に導出する記録であることを、以下の 4 点で
 機械検証する:
 
 (a) ``diagnosis["inputs"]["run1_sha256"]`` が committed ``run1.json`` の実
@@ -18,6 +18,10 @@ tensorflow 抽出は一切走らせない・高速）。`scripts/diagnose_m3d_no
 (c) ``diagnosis["inputs"]["vocadito_annotation_sha256"]`` の全 clip が
     ``m2c_external_fixtures.yaml`` の ``expected_annotation_sha256`` と
     完全一致する（外部素材 pin の束縛）。
+(d) ``diagnosis["inputs"]["generator_script_sha256"]`` が committed
+    ``scripts/diagnose_m3d_notcomparable.py`` の実バイトの sha256 と一致する
+    （生成器自体の pin。DD2 の帰結——本テストが stale pin を検出することで、
+    スクリプト編集はこの record の vocadito 環境での再導出を必須化する）。
 
 **境界の明記（M2c 流儀・`docs/m2e_provisioning_runbook.md` 参照）**: 本テストは
 外部 vocadito F0 CSV 本体を一切読まない・再解析しない。committed
@@ -108,6 +112,36 @@ def test_inputs_manifest_and_registry_sha256_bind_to_committed_bytes() -> None:
             entry["comparison"]["provenance"]["m1_registry_sha256"]
             == inputs["gate_registry_sha256"]
         ), pid
+
+
+# --------------------------------------------------------------------------- #
+# DD2（Codex レビュー #255 第 13 巡・P2）: 生成器スクリプト自体の pin
+# --------------------------------------------------------------------------- #
+def test_inputs_generator_script_sha256_binds_record_to_committed_script_bytes() -> None:
+    """committed ``notcomparable_diagnosis.json`` の
+    ``inputs.generator_script_sha256`` が、committed
+    ``scripts/diagnose_m3d_notcomparable.py`` の実バイトの sha256 と一致する
+    こと。
+
+    **この結合の帰結（機械依存の強制）**: この検証は commited diagnosis と
+    committed スクリプトの 2 つのファイル同士の一致を見るだけであり、外部
+    vocadito 素材には触れない（高速・machine-independent）。しかし
+    ``generator_script_sha256`` はスクリプト自身のソースバイトから計算される
+    自己参照 pin のため、``scripts/diagnose_m3d_notcomparable.py`` を編集した
+    のに ``docs/measurements/m3d_2026-08/notcomparable_diagnosis.json`` を
+    （vocadito 環境で ``python scripts/diagnose_m3d_notcomparable.py
+    --output ...`` を実行して）再導出せずに commit すると、本テストが
+    stale な pin を検出して落ちる。すなわちスクリプト編集は vocadito 環境
+    での record 再導出（machine-dependent 操作）を必須化する——stale 防止の
+    fail-closed として意図された設計である。
+    """
+    diagnosis = _load_diagnosis()
+    script_path = ROOT / "scripts" / "diagnose_m3d_notcomparable.py"
+    assert script_path.exists(), f"missing committed generator script: {script_path}"
+
+    inputs = diagnosis["inputs"]
+    assert inputs["generator_script_path"] == "scripts/diagnose_m3d_notcomparable.py"
+    assert inputs["generator_script_sha256"] == _sha256_bytes(script_path.read_bytes())
 
 
 # --------------------------------------------------------------------------- #

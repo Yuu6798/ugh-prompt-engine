@@ -1,6 +1,6 @@
 """tests/test_diagnose_m3d_notcomparable_preflight.py — `scripts/
-diagnose_m3d_notcomparable.py` の Codex レビュー #255 第 10 巡指摘 2 件
-（AA1・AA2）の直接検証。
+diagnose_m3d_notcomparable.py` の Codex レビュー #255 第 10/12/13 巡指摘
+（AA1・AA2・CC1・CC2・DD1・DD2）の直接検証。
 
 外部 vocadito F0 CSV には一切触れない（fixture は全て synth 素材=1 pair の
 最小合成データで、`_build_section3` の real clip ループを 0 件に保ち、
@@ -14,6 +14,14 @@ diagnose_m3d_notcomparable.py` の Codex レビュー #255 第 10 巡指摘 2 �
 (AA2) ``build_diagnosis`` が返す ``inputs`` 節のパスラベルが、既定値の
 ハードコード文字列ではなく実際に渡した引数由来（repo 外なら resolve 済み
 絶対パス）で記録されること。
+(CC1) manifest バイトが ``main()`` から ``build_diagnosis`` まで 1 回しか
+読まれないこと（preflight と本導出が同一パース済み文書を共有すること）。
+(CC2) ``run1.json`` の pair 集合が manifest の pair_id 集合と完全一致しない
+場合（欠落/余剰いずれも）に fail-closed で拒否すること。
+(DD1) ``_load_json``/``_load_yaml`` が重複キーを持つ入力を fail-closed で
+拒否し、重複が無ければ通常どおり受理すること。
+(DD2) ``build_diagnosis`` が返す ``inputs`` 節に、本スクリプト自身のソース
+バイトから計算した ``generator_script_sha256`` を記録すること。
 """
 from __future__ import annotations
 
@@ -447,6 +455,99 @@ def test_build_diagnosis_rejects_pair_missing_from_run1_present_in_manifest(tmp_
             vocadito_dir=tmp_path / "vocadito",
             generated_utc=None,
         )
+
+
+# --------------------------------------------------------------------------- #
+# DD1（Codex レビュー #255 第 13 巡・P2）: 重複キー拒否ローダへの切替
+# --------------------------------------------------------------------------- #
+def test_load_json_rejects_duplicate_top_level_pair_id_key(tmp_path: Path) -> None:
+    """run report（JSON）が同一 pair_id を重複 object key で持つ場合、
+    ``_load_json``（内部で ``_json_loads_no_dup_keys`` を使う）が last-wins で
+    黙って後勝ちの値を採用せず、fail-closed（ValueError）で拒否すること。"""
+    run1_path = tmp_path / "run1_dup.json"
+    run1_path.write_text(
+        '{"manifest_sha256": "x", "pairs": {'
+        '"pt_real_tuning_vocadito_3_pitch_p3": {"comparison": {"evidence": "none"}}, '
+        '"pt_real_tuning_vocadito_3_pitch_p3": {"comparison": {"evidence": "not_comparable"}}'
+        "}}",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        dm._load_json(run1_path)
+
+
+def test_load_json_accepts_run_report_without_duplicate_keys(tmp_path: Path) -> None:
+    """重複が無ければ ``_load_json`` は通常どおりパース結果を返すこと
+    （拒否ローダへの切替が非重複入力の正常受理を壊していないことの確認）。"""
+    run1_path = tmp_path / "run1_ok.json"
+    run1_path.write_text(
+        '{"manifest_sha256": "x", "pairs": {'
+        '"pt_real_tuning_vocadito_3_pitch_p3": {"comparison": {"evidence": "none"}}, '
+        '"pt_real_tuning_vocadito_5_pitch_p3": {"comparison": {"evidence": "not_comparable"}}'
+        "}}",
+        encoding="utf-8",
+    )
+    doc, data, digest = dm._load_json(run1_path)
+    assert set(doc["pairs"]) == {
+        "pt_real_tuning_vocadito_3_pitch_p3",
+        "pt_real_tuning_vocadito_5_pitch_p3",
+    }
+    assert data == run1_path.read_bytes()
+    assert digest == hashlib.sha256(run1_path.read_bytes()).hexdigest()
+
+
+def test_load_yaml_rejects_duplicate_top_level_mapping_key(tmp_path: Path) -> None:
+    """manifest/registry/m2c fixtures（YAML）が重複 mapping key を持つ場合、
+    ``_load_yaml``（内部で ``_NoDupSafeLoader`` を使う）が last-wins で黙って
+    後勝ちの値を採用せず、fail-closed（ValueError）で拒否すること。"""
+    registry_path = tmp_path / "registry_dup.yaml"
+    registry_path.write_text(
+        "observation_gate:\n  min_voiced_coverage: 0.5\nobservation_gate:\n  min_voiced_coverage: 0.9\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="duplicate YAML mapping key"):
+        dm._load_yaml(registry_path)
+
+
+def test_load_yaml_accepts_registry_without_duplicate_keys(tmp_path: Path) -> None:
+    """重複が無ければ ``_load_yaml`` は通常どおりパース結果を返すこと。"""
+    registry_path = tmp_path / "registry_ok.yaml"
+    registry_path.write_text(
+        "observation_gate:\n  min_voiced_coverage: 0.5\n",
+        encoding="utf-8",
+    )
+    doc, data, digest = dm._load_yaml(registry_path)
+    assert doc["observation_gate"]["min_voiced_coverage"] == 0.5
+    assert data == registry_path.read_bytes()
+    assert digest == hashlib.sha256(registry_path.read_bytes()).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# DD2（Codex レビュー #255 第 13 巡・P2）: 生成器スクリプト自体の pin
+# --------------------------------------------------------------------------- #
+def test_build_diagnosis_inputs_pin_generator_script_to_own_source_bytes(tmp_path: Path) -> None:
+    """``build_diagnosis`` が返す ``inputs`` 節の ``generator_script_sha256`` が、
+    本スクリプト自身の実ソースファイルの sha256 と一致すること（自己参照:
+    hash はスクリプトが自分のソースを読んで実行時に計算する）。"""
+    paths = _write_minimal_fixture_set(tmp_path)
+    vocadito_dir = tmp_path / "vocadito"
+    manifest_doc, _manifest_bytes, manifest_sha256 = dm._load_yaml(paths["manifest_path"])
+
+    diagnosis = dm.build_diagnosis(
+        run1_path=paths["run1_path"],
+        manifest_path=paths["manifest_path"],
+        manifest_doc=manifest_doc,
+        manifest_sha256=manifest_sha256,
+        registry_path=paths["registry_path"],
+        m2c_fixtures_path=paths["m2c_fixtures_path"],
+        vocadito_dir=vocadito_dir,
+        generated_utc=None,
+    )
+
+    inputs = diagnosis["inputs"]
+    script_path = Path(dm.__file__).resolve()
+    assert inputs["generator_script_sha256"] == hashlib.sha256(script_path.read_bytes()).hexdigest()
+    assert inputs["generator_script_path"] == "scripts/diagnose_m3d_notcomparable.py"
 
 
 def test_build_diagnosis_accepts_when_run1_and_manifest_pair_sets_match(tmp_path: Path) -> None:

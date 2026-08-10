@@ -122,6 +122,41 @@ histogram``〜``6_coverage_floor_candidate_provenance``）+ 新設 ``inputs``
   拒否する。committed ``run1.json``（98 pair）と
   ``tests/fixtures/melody_bench/m3d_pairs_manifest.yaml``（98 pair）は
   完全一致しているため、既定引数での出力は committed 版と変わらない。
+
+**Codex レビュー #255 第 13 巡対応（DD1・DD2）**:
+
+- **DD1（P2・重複キー拒否ローダへの切替）**: 従来 ``_load_json``/``_load_yaml``
+  は素の ``json.loads``/``yaml.safe_load`` を使っており、上書き/手編集された
+  run report（や manifest/registry/m2c fixtures）が同一キーを重複エントリで
+  持つ場合、last-wins で黙って後勝ちの値だけが見える穴があった——特に同一
+  pair_id が重複すると、CC2 の pair 集合完全一致検証は最後に勝った 1 件しか
+  見えず、曖昧な provenance から正規の診断を生成しうる。
+  ``scripts/run_melody_comparison.py`` の ``_json_loads_no_dup_keys``／
+  ``scripts/build_m3d_pairs.py`` の ``_yaml_load_no_dup_keys`` と同型の
+  重複キー拒否ローダへ切替した（builder が既存ハーネスを import しない前例に
+  ならい、本スクリプトも両ローダを独立複製する）。ファミリー掃討: 本スクリプト
+  内で素の ``json.loads``/``yaml.safe_load`` を呼ぶ箇所は ``_load_json``/
+  ``_load_yaml`` の 2 箇所のみ（他の入力読み——vocadito F0 CSV は ``csv.reader``
+  経由でパース対象が JSON/YAML でないため対象外）であることを確認済み
+  （両関数を経由しない直呼び出しは他に無い）。第 12 巡終端宣言（CC1/CC2）の
+  ファミリー掃討列挙からは漏れていた読み取り経路だが、これは同一ファミリー
+  （このスクリプトが読む committed/半信頼 provenance ファイルの重複キー
+  last-wins 穴）の標準適用であり、終端宣言を盾に不採用とはせず採用する。
+- **DD2（P2・生成器スクリプト自体の pin）**: ``diagnosis["inputs"]`` に
+  ``generator_script_path``（repo-relative）と ``generator_script_sha256``
+  （本スクリプト自身のソースバイトの sha256）を追加した。自己参照になるため、
+  hash は ``GENERATOR_SCRIPT_PATH = Path(__file__).resolve()`` を実行時に
+  読み直して計算する（committed record に書かれる値の算出時点 = その記録を
+  生成した実行のソースバイト）。**この結合の帰結**: 本スクリプトを編集した
+  ら、committed ``notcomparable_diagnosis.json`` の
+  ``generator_script_sha256`` は再導出しない限り stale になり、
+  ``tests/test_m3d_notcomparable_diagnosis_record.py`` の fixture テスト
+  （committed record の ``generator_script_sha256`` == committed スクリプト
+  ファイルの実バイト sha256）がそれを検出して落ちる。つまりスクリプト編集は
+  vocadito 環境での record 再導出（machine-dependent 操作）を必須化する
+  ——これは stale 防止の fail-closed として意図どおりであり、melody トラック
+  は closeout 済み（``docs/m3d_calibration_record.md``）でスクリプトも安定期
+  のため受容する設計判定。
 """
 from __future__ import annotations
 
@@ -152,6 +187,12 @@ DEFAULT_M2C_FIXTURES_PATH = (
 DEFAULT_VOCADITO_DIR = ROOT / "build" / "external_m3d" / "vocadito"
 DEFAULT_OUTPUT_PATH = ROOT / "docs" / "measurements" / "m3d_2026-08" / "notcomparable_diagnosis.json"
 
+# DD2（Codex レビュー #255 第 13 巡・P2）: 診断 JSON の生成器自体を pin する。
+# 自己参照になるため、hash は実行時にこのスクリプト自身のソースバイトを
+# 読んで計算する（``record`` に書く値の算出時点 = 実行時のソースバイト——
+# import 済みの ``.pyc`` やモジュールオブジェクトからは計算しない）。
+GENERATOR_SCRIPT_PATH = Path(__file__).resolve()
+
 _LOCK_STATUS = "holdout_locked_until_frozen"
 
 
@@ -174,14 +215,81 @@ def _read_bytes_and_sha256(path: Path) -> Tuple[bytes, str]:
     return data, hashlib.sha256(data).hexdigest()
 
 
+def _generator_script_sha256() -> str:
+    """DD2（Codex レビュー #255 第 13 巡・P2）: 本スクリプト自身のソースバイトの
+    sha256。``GENERATOR_SCRIPT_PATH``（``Path(__file__).resolve()``）を都度
+    読み直す——自己参照のため、記録される値は実行時点のソースバイトと一致する
+    （逆に言えば、このスクリプトを編集すれば committed diagnosis の
+    ``generator_script_sha256`` は再導出しない限り古いまま stale になる。
+    これは意図された fail-closed の帰結——検証テスト側で「record の
+    generator_script_sha256 == committed スクリプトの実バイト sha256」を
+    突き合わせるため、スクリプト編集後に再導出を怠ると committed diagnosis
+    のテストが落ちる）。"""
+    return hashlib.sha256(GENERATOR_SCRIPT_PATH.read_bytes()).hexdigest()
+
+
+class _NoDupSafeLoader(yaml.SafeLoader):
+    """重複 mapping キーを拒否する SafeLoader（``scripts/build_m3d_pairs.py`` の
+    ``_NoDupSafeLoader`` と同型）。本スクリプトは既存ハーネス（``scripts/
+    run_melody_comparison.py``）/builder（``scripts/build_m3d_pairs.py``）を
+    import しない設計（DD1・Codex レビュー #255 第 13 巡）のため、両者が
+    それぞれ独立複製している流儀にならい、本スクリプト内でも独立複製する。"""
+
+
+def _no_dup_construct_mapping(loader: "yaml.SafeLoader", node: Any, deep: bool = False) -> Dict[Any, Any]:
+    mapping: Dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ValueError(
+                f"duplicate YAML mapping key {key!r}; last-wins で入力の一部を "
+                "隠す穴を弾く (fail-closed)"
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_NoDupSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
+)
+
+
+def _json_loads_no_dup_keys(data: bytes, *, what: str) -> Any:
+    """``scripts/run_melody_comparison.py`` の ``_json_loads_no_dup_keys`` と
+    同型（``object_pairs_hook`` で全ネスト層の object に再帰適用——last-wins
+    で重複 pair_id エントリを隠す穴を弾く）。DD1・Codex レビュー #255 第 13
+    巡: 独立複製（上記 ``_NoDupSafeLoader`` と同じ理由）。"""
+
+    def _reject_dupes(pairs: "List[Tuple[str, Any]]") -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(
+                    f"{what}: duplicate JSON object key {key!r}; last-wins で "
+                    "入力の一部を隠す穴を弾く (fail-closed)"
+                )
+            result[key] = value
+        return result
+
+    return json.loads(data, object_pairs_hook=_reject_dupes)
+
+
 def _load_json(path: Path) -> Tuple[Dict[str, Any], bytes, str]:
+    """DD1（Codex レビュー #255 第 13 巡・P2）: 素の ``json.loads`` は last-wins
+    で重複キーを黙殺する——上書き/手編集された run report が同一 pair_id を
+    重複エントリで持つと、後段の pair 集合完全一致検証（CC2）は最後に勝った
+    1 件しか見えず、曖昧な provenance から正規の診断を生成しうる。重複キー
+    拒否ローダへ切替。"""
     data, digest = _read_bytes_and_sha256(path)
-    return json.loads(data), data, digest
+    return _json_loads_no_dup_keys(data, what=str(path)), data, digest
 
 
 def _load_yaml(path: Path) -> Tuple[Any, bytes, str]:
+    """DD1（Codex レビュー #255 第 13 巡・P2）: 素の ``yaml.safe_load`` も同じ
+    last-wins 穴を持つ（registry.yaml/manifest.yaml/m2c_external_fixtures.yaml
+    のいずれも重複キー編集で握りつぶされうる）。重複キー拒否ローダへ切替。"""
     data, digest = _read_bytes_and_sha256(path)
-    return yaml.safe_load(data), data, digest
+    return yaml.load(data, Loader=_NoDupSafeLoader), data, digest  # noqa: S506 (dup-key 拒否付き SafeLoader)
 
 
 # --------------------------------------------------------------------------- #
@@ -827,6 +935,8 @@ def build_diagnosis(
         ),
         "vocadito_annotations_dir": _display_path(vocadito_dir),
         "vocadito_annotation_sha256": annotation_sha256,
+        "generator_script_path": _display_path(GENERATOR_SCRIPT_PATH),
+        "generator_script_sha256": _generator_script_sha256(),
     }
 
     diagnosis = {

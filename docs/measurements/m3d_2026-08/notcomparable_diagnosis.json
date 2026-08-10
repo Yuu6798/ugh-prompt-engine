@@ -31,7 +31,9 @@
       "vocadito_32": "63ea4ef4788a54dc3ec9e3abb3a1b68bd5f47392d2d3359f36e5b131dc42f2fe",
       "vocadito_34": "74e80a72860ff758162a015a213026939723ec4190635b17c9261d6b079d2740",
       "vocadito_40": "4ba1a1c1a8e8b068cee17affee35df893270900964b4974b8457fefc4ce93e8e"
-    }
+    },
+    "generator_script_path": "scripts/diagnose_m3d_notcomparable.py",
+    "generator_script_sha256": "a4a4aeeef17ece3385f84f8452ebbcc952d022e692421ebe1d06684b7179d391"
   },
   "note": "purely mechanical aggregation; no interpretation/verdict language included by design",
   "1_reason_histogram": {
