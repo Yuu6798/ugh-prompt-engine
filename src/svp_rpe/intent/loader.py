@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
@@ -122,7 +122,7 @@ def _collect_graph_errors(graph: IntentGraph, *, graph_path: Path, repo_root: Pa
     return errors
 
 
-def _find_cycles(nodes: List[IntentNode], by_id: Dict[str, IntentNode]) -> List[str]:
+def _find_cycles(nodes: Tuple[IntentNode, ...], by_id: Dict[str, IntentNode]) -> List[str]:
     """`depends_on` の循環を DFS で検出する。
 
     未知 `depends_on`（`by_id` に存在しない参照先）は `_collect_graph_errors` が
@@ -156,7 +156,7 @@ def _find_cycles(nodes: List[IntentNode], by_id: Dict[str, IntentNode]) -> List[
 
 
 def _find_missing_evidence(
-    nodes: List[IntentNode], *, graph_path: Path, repo_root: Path
+    nodes: Tuple[IntentNode, ...], *, graph_path: Path, repo_root: Path
 ) -> List[str]:
     """`evidence` の repository-relative パスを検証する（実在 + repo 内封じ込め）。
 

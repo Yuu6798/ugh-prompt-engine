@@ -7,11 +7,20 @@
 ノード間・ファイルシステムに跨る検証（一意 id・`depends_on` 実在・非循環・
 `evidence` のリポジトリ相対パス実在）は本モジュールの責務外で `intent/loader.py`
 が担う。frontier/blocked/pending の導出は `intent/frontier.py`。
+
+PR #256 再レビュー対応（2026-08-10 第 3R）:
+- `_id_matches_pattern` を `.match()` から `.fullmatch()` へ変更（`re.match` は
+  文字列全体ではなく先頭一致のみを見るため、末尾に余分な文字（例改行
+  `"node.a\n"`）が付いた id を素通ししてしまう穴を塞ぐ）
+- `IntentNode.evidence` / `IntentNode.depends_on` / `IntentGraph.nodes` を
+  `List` から `Tuple[..., ...]`（default_factory=tuple）へ変更し、frozen モデル
+  の不変性をコレクションのミュータビリティにまで及ぼす（frozen dataclass /
+  pydantic model は値オブジェクトを不変で定義する、が本リポジトリの規約）
 """
 from __future__ import annotations
 
 import re
-from typing import List, Literal, Optional, Self
+from typing import Literal, Optional, Self, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -36,14 +45,14 @@ class IntentNode(IntentModel):
     id: str
     claim: str = Field(min_length=1)
     status: IntentStatus
-    evidence: List[str] = Field(default_factory=list)
-    depends_on: List[str] = Field(default_factory=list)
+    evidence: Tuple[str, ...] = Field(default_factory=tuple)
+    depends_on: Tuple[str, ...] = Field(default_factory=tuple)
     reentry: Optional[str] = None
     note: Optional[str] = None
 
     @model_validator(mode="after")
     def _id_matches_pattern(self) -> Self:
-        if not _NODE_ID_PATTERN.match(self.id):
+        if not _NODE_ID_PATTERN.fullmatch(self.id):
             raise ValueError(
                 f"node id {self.id!r} must match {_NODE_ID_PATTERN.pattern!r} "
                 "(lowercase dotted segments, e.g. 'physical.roundtrip_determinism')"
@@ -80,4 +89,4 @@ class IntentGraph(IntentModel):
     """`docs/intent/graph.yaml` 全体（トップレベルスキーマ）。"""
 
     schema_version: Literal[SCHEMA_VERSION]
-    nodes: List[IntentNode] = Field(default_factory=list)
+    nodes: Tuple[IntentNode, ...] = Field(default_factory=tuple)

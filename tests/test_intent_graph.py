@@ -58,6 +58,15 @@ def test_seed_graph_loads_cleanly():
     assert len(ids) == len(set(ids))  # 一意性は loader が保証済みだが、念のため二重確認
 
 
+def test_seed_graph_collections_are_tuples():
+    """`IntentGraph.nodes` / `IntentNode.evidence` / `depends_on` は不変の tuple。"""
+    graph = load_intent_graph(SEED_GRAPH_PATH)
+    assert isinstance(graph.nodes, tuple)
+    for node in graph.nodes:
+        assert isinstance(node.evidence, tuple)
+        assert isinstance(node.depends_on, tuple)
+
+
 # ---------------------------------------------------------------------------
 # 観点 2: 合成の不正グラフが各々 ValueError
 # ---------------------------------------------------------------------------
@@ -91,6 +100,22 @@ def test_unknown_depends_on_raises_value_error(tmp_path: Path):
 """
     graph_path = _write_graph(tmp_path, body)
     with pytest.raises(ValueError, match="unknown id 'node.missing'"):
+        load_intent_graph(graph_path)
+
+
+def test_node_id_with_trailing_newline_raises_value_error(tmp_path: Path):
+    """`re.match` は末尾に余分な文字（改行）があっても素通ししてしまうため
+    `re.fullmatch` へ変更した（`$` は非 MULTILINE でも末尾改行の直前にマッチ
+    する仕様のため、`match()` だと "node.a\n" が id パターンを通ってしまう）。
+    """
+    body = """\
+  - id: "node.a\\n"
+    claim: "a"
+    status: verified
+    evidence: ["PR #1"]
+"""
+    graph_path = _write_graph(tmp_path, body)
+    with pytest.raises(ValueError, match="must match"):
         load_intent_graph(graph_path)
 
 
