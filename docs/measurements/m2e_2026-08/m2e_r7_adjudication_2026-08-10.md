@@ -139,3 +139,7 @@ attestation 後継束縛（機械的失効機構）**で保全済み
 - `m2e_r7_evaluate_plan_2026-08-09.md` — 冒頭 status に承認追記
 - `.claude/memory/STATUS.md` — Phase / queue「M2e r7 → 破断曲線判読」行を現況へ
 - `docs/intent/graph.yaml` — M2e ノードの note・evidence を現況へ（PR レビュー経由）
+- `.claude/memory/_index.md` — 08-10 行へ superseded 注記（起動時必読のため。
+  PR #257 レビュー指摘で補完）
+- `.claude/memory/2026-08-10.md` — Handoff 末尾へ dated 追記（Task 1 前提の
+  supersession。本文は起草時点の記録として保持。同上）
