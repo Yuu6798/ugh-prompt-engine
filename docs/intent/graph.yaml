@@ -91,7 +91,7 @@ nodes:
     claim: "主旋律支配度の破断曲線（M2e 帯）が census 済みである"
     status: machine_dependent
     evidence: ["docs/DESIGN_M2e_vremix_real_bed.md"]
-    note: "r4–r7 実測残・判定は C5 のみ"
+    note: "r4–r6 完了（r6 本測定 1280/1280 監査合格）・r7 evaluate 実行中。残 = r7 完走 → census verdict（判定は C5 のみ）→ 破断曲線判読"
 
   # --- LLM 著述（authoring） ---
   - id: authoring.contract
