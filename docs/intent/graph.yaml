@@ -24,10 +24,10 @@ nodes:
     status: verified
     evidence: ["docs/lyrics_semantic_anchor.md", "PR #160"]
   - id: control.structure
-    claim: "structure は section_tags 経路で loose grip を持つ"
+    claim: "structure は MusicGen backend 経路（散文処方・ローカル決定論）で loose grip を持つ"
     status: partial
-    evidence: ["PR #171", "PR #192"]
-    note: "散文送出は dead(#170)・弁別は end-to-end 経路比較に限定"
+    evidence: ["PR #171", "docs/control_profile.md"]
+    note: "Suno 散文送出は dead で停止済み（PR #170）。代替 section_tags チャネルの grip は未実証（structure4 A/B は発注可能状態・Suno 人手生成律速）。弁別は end-to-end 経路比較に限定"
   - id: control.bpm
     claim: "bpm は往復の信頼再現ノブである"
     status: dead
