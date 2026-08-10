@@ -46,6 +46,28 @@ histogram``〜``6_coverage_floor_candidate_provenance``）+ 新設 ``inputs``
 呼び出しでは stdout へ新版 JSON を出力するので、呼び出し側が既存 committed
 ファイルと集計値レベルで比較してから ``--output`` で上書きする（測定値の
 無断書き換えを防ぐ二段階運用）。
+
+**Codex レビュー #255 第 10 巡対応（AA1・AA2）**:
+
+- **AA1（P1・出力/入力衝突の preflight 拒否）**: ``--output`` を指定した場合、
+  resolve() 済み絶対パスを全宣言データ入力（``--run1``/``--manifest``/
+  ``--registry``/``--m2c-fixtures``、および manifest から機械的に列挙した
+  消費対象アノテーション CSV 全件）の resolve() 済み絶対パス集合と照合し、
+  1 件でも一致すれば **導出（``build_diagnosis``）を呼ぶ前に** fail-closed で
+  拒否する（``_reject_output_input_collisions``。``build_m3d_pairs.py``/
+  ``screen_m3d_clips.py`` の同名関数と同型）。従来は衝突すると
+  ``atomic_write_bytes`` が入力ファイルを診断 JSON で上書き破壊しうる穴が
+  あった。
+- **AA2（P2・inputs 節のパスラベルを実引数由来に是正）**: ``inputs`` 節の
+  ``run1_path``/``manifest_path``/``m2c_external_fixtures_path``/
+  ``gate_registry_path`` は、従来ハードコードされた既定値の文字列リテラル
+  だったが、実際に読んだパス（＝ CLI 引数で供給されたパス、既定のまま
+  なら既定パス）を ``_display_path``（repo 配下ならリポジトリルート相対、
+  外なら resolve 済み絶対パス）で正規化して記録するよう是正した
+  （``vocadito_annotations_dir`` は元々この流儀で実装済みだった）。既定引数
+  で再導出した場合、committed diagnosis JSON はこれらのパスがそもそも
+  既定パスと一致する文字列だったため、本是正後も既定引数での出力は
+  committed 版と変わらない。
 """
 from __future__ import annotations
 
@@ -688,14 +710,14 @@ def build_diagnosis(
     section6 = _build_section6(manifest_pairs, run1_pairs)
 
     inputs = {
-        "run1_path": "docs/measurements/m3d_2026-08/run1.json",
+        "run1_path": _display_path(run1_path),
         "run1_sha256": run1_sha256,
-        "manifest_path": "tests/fixtures/melody_bench/m3d_pairs_manifest.yaml",
+        "manifest_path": _display_path(manifest_path),
         "manifest_sha256": manifest_sha256,
-        "m2c_external_fixtures_path": "tests/fixtures/melody_bench/m2c_external_fixtures.yaml",
+        "m2c_external_fixtures_path": _display_path(m2c_fixtures_path),
         "m2c_external_fixtures_sha256": fixtures_sha256,
         "gate_definition_module": "src/svp_rpe/melody/observability.py",
-        "gate_registry_path": "tests/fixtures/melody_bench/registry.yaml",
+        "gate_registry_path": _display_path(registry_path),
         "gate_registry_sha256": registry_sha256,
         "gate_registry_bound_to_run1_via": (
             "verified equal to pairs[*].comparison.provenance.m1_registry_sha256 "
@@ -724,6 +746,71 @@ def build_diagnosis(
     return diagnosis
 
 
+# --------------------------------------------------------------------------- #
+# AA1（Codex レビュー #255 第 10 巡・P1）: --output の preflight 衝突拒否
+# --------------------------------------------------------------------------- #
+def _consumed_annotation_paths(
+    manifest_pairs: List[Dict[str, Any]], vocadito_dir: Path
+) -> List[Path]:
+    """manifest の real pair から、``_verify_and_load_annotation`` が実際に
+    読む vocadito F0 アノテーション CSV の全パスを、音声/CSV I/O 抜きで
+    （manifest の軽量パースのみで）列挙する。``_build_section3`` の clip
+    列挙ロジックと同じ判定基準（single source of truth は ``_material_of``/
+    ``_basename_clip_id``）を使う——判定基準が将来ずれても、この関数だけを
+    見れば preflight が実際の消費パスと一致していることが分かる。"""
+    clip_ids = set()
+    for mp in manifest_pairs:
+        if _material_of(mp["pair_id"]) != "real":
+            continue
+        for audio_key in ("audio_a", "audio_b"):
+            clip_id = _basename_clip_id(mp[audio_key])
+            if clip_id is not None:
+                clip_ids.add(clip_id)
+    return [_annotation_path(vocadito_dir, clip_id) for clip_id in sorted(clip_ids)]
+
+
+def _reject_output_input_collisions(
+    *,
+    output_path: Path,
+    run1_path: Path,
+    manifest_path: Path,
+    registry_path: Path,
+    m2c_fixtures_path: Path,
+    annotation_paths: Sequence[Path],
+) -> None:
+    """resolve() 済み ``--output`` を、全宣言データ入力（``--run1``/
+    ``--manifest``/``--registry``/``--m2c-fixtures``、および消費する全
+    アノテーション CSV）の resolve() 済み絶対パス集合と照合し、1 件でも
+    一致すれば導出（``build_diagnosis``）を呼ぶ前に fail-closed で拒否する
+    （``build_m3d_pairs.py``/``screen_m3d_clips.py`` の ``_reject_output_
+    input_collisions`` と同型。Codex レビュー #255 第 10 巡 AA1）。
+
+    是正前は ``--output`` が誤ってこれらの入力のいずれかを指した場合、
+    ``atomic_write_bytes`` が入力ファイルを診断 JSON バイト列で無警告に
+    上書き破壊しうる穴があった（例: ``--output`` に ``--run1`` と同じパスを
+    誤指定）。
+    """
+    output_resolved = Path(output_path).resolve()
+    inputs: Dict[Path, str] = {
+        Path(run1_path).resolve(): f"run1_path ({run1_path})",
+        Path(manifest_path).resolve(): f"manifest_path ({manifest_path})",
+        Path(registry_path).resolve(): f"registry_path ({registry_path})",
+        Path(m2c_fixtures_path).resolve(): f"m2c_fixtures_path ({m2c_fixtures_path})",
+    }
+    for annotation_path in annotation_paths:
+        inputs.setdefault(
+            Path(annotation_path).resolve(),
+            f"vocadito annotation CSV ({annotation_path})",
+        )
+
+    label = inputs.get(output_resolved)
+    if label is not None:
+        raise SystemExit(
+            f"fail-closed: --output が入力と衝突している: {output_resolved} は "
+            f"{label} と同じ解決済みパスを指す"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--run1", type=Path, default=DEFAULT_RUN1_PATH)
@@ -744,6 +831,27 @@ def main() -> int:
         help="指定時のみそのパスへ atomic write する。省略時は stdout へ出力する。",
     )
     args = parser.parse_args()
+
+    # AA1（Codex レビュー #255 第 10 巡・P1）: --output 指定時は、実際の
+    # derivation（build_diagnosis の各種 fail-closed 検証・atomic write）を
+    # 一切始める前に、resolve() 済み --output が全宣言データ入力（消費する
+    # 全アノテーション CSV を含む）と衝突しないか preflight で確認する。
+    # アノテーション CSV の集合は manifest の軽量パース（音声/CSV I/O なし）
+    # だけで機械的に決まるため、ここで一度 manifest を読む——build_diagnosis
+    # 内部でも改めて読み直す（そちらが hash 付き正規の読み取り）。
+    if args.output is not None:
+        manifest_doc_preflight, _bytes, _sha = _load_yaml(args.manifest)
+        annotation_paths = _consumed_annotation_paths(
+            manifest_doc_preflight["pairs"], args.vocadito_dir
+        )
+        _reject_output_input_collisions(
+            output_path=args.output,
+            run1_path=args.run1,
+            manifest_path=args.manifest,
+            registry_path=args.registry,
+            m2c_fixtures_path=args.m2c_fixtures,
+            annotation_paths=annotation_paths,
+        )
 
     diagnosis = build_diagnosis(
         run1_path=args.run1,
