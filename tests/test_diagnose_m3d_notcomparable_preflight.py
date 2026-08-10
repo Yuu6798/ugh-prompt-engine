@@ -221,9 +221,16 @@ def test_build_diagnosis_inputs_reflect_supplied_cli_paths_not_defaults(tmp_path
     paths = _write_minimal_fixture_set(tmp_path)
     vocadito_dir = tmp_path / "vocadito"  # 0 real clip なので実在不要
 
+    # CC1（第 12 巡）以降、build_diagnosis は manifest を自分で読まない
+    # ——呼び出し側（ここではテスト自身が main() の代わり）が 1 回読んで
+    # manifest_doc/manifest_sha256 を渡す。
+    manifest_doc, _manifest_bytes, manifest_sha256 = dm._load_yaml(paths["manifest_path"])
+
     diagnosis = dm.build_diagnosis(
         run1_path=paths["run1_path"],
         manifest_path=paths["manifest_path"],
+        manifest_doc=manifest_doc,
+        manifest_sha256=manifest_sha256,
         registry_path=paths["registry_path"],
         m2c_fixtures_path=paths["m2c_fixtures_path"],
         vocadito_dir=vocadito_dir,
@@ -306,3 +313,157 @@ def test_main_output_flag_writes_when_disjoint(tmp_path: Path, monkeypatch) -> N
     assert output_path.exists()
     written = json.loads(output_path.read_bytes())
     assert written["inputs"]["run1_path"] == str(paths["run1_path"].resolve())
+
+
+# --------------------------------------------------------------------------- #
+# CC1（Codex レビュー #255 第 12 巡・P1）: manifest 読みの単一化
+# --------------------------------------------------------------------------- #
+def test_build_diagnosis_does_not_reread_manifest_path(tmp_path: Path) -> None:
+    """構造テスト: build_diagnosis は ``manifest_path`` を自分で読まない
+    ——存在しないパスを渡しても、``manifest_doc``/``manifest_sha256`` さえ
+    正しく渡っていれば成功することで、内部で manifest を再読みしていない
+    ことを直接証明する（是正前の実装なら FileNotFoundError で失敗した）。"""
+    paths = _write_minimal_fixture_set(tmp_path)
+    vocadito_dir = tmp_path / "vocadito"
+    manifest_doc, _manifest_bytes, manifest_sha256 = dm._load_yaml(paths["manifest_path"])
+
+    nonexistent_manifest_path = tmp_path / "does_not_exist_manifest.yaml"
+    assert not nonexistent_manifest_path.exists()
+
+    diagnosis = dm.build_diagnosis(
+        run1_path=paths["run1_path"],
+        manifest_path=nonexistent_manifest_path,
+        manifest_doc=manifest_doc,
+        manifest_sha256=manifest_sha256,
+        registry_path=paths["registry_path"],
+        m2c_fixtures_path=paths["m2c_fixtures_path"],
+        vocadito_dir=vocadito_dir,
+        generated_utc=None,
+    )
+    assert diagnosis["inputs"]["manifest_sha256"] == manifest_sha256
+
+
+def test_main_reads_manifest_bytes_exactly_once_end_to_end(tmp_path: Path, monkeypatch) -> None:
+    """end-to-end: ``--output`` ありの ``main()`` 実行でも、manifest は
+    ``_load_yaml`` 経由でちょうど 1 回しか読まれないこと——preflight 用の
+    アノテーション CSV 列挙と本導出（``build_diagnosis``）が同一バッファ
+    （同一パース済み文書）を共有配線されていることの直接証拠。"""
+    paths = _write_minimal_fixture_set(tmp_path)
+    vocadito_dir = tmp_path / "vocadito"
+    output_path = tmp_path / "out" / "diagnosis.json"
+
+    call_counts: Dict[Path, int] = {}
+    original_load_yaml = dm._load_yaml
+
+    def _counting_load_yaml(path):
+        resolved = Path(path).resolve()
+        call_counts[resolved] = call_counts.get(resolved, 0) + 1
+        return original_load_yaml(path)
+
+    monkeypatch.setattr(dm, "_load_yaml", _counting_load_yaml)
+
+    argv = [
+        "diagnose_m3d_notcomparable.py",
+        "--run1",
+        str(paths["run1_path"]),
+        "--manifest",
+        str(paths["manifest_path"]),
+        "--registry",
+        str(paths["registry_path"]),
+        "--m2c-fixtures",
+        str(paths["m2c_fixtures_path"]),
+        "--vocadito-dir",
+        str(vocadito_dir),
+        "--output",
+        str(output_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    rc = dm.main()
+    assert rc == 0
+
+    manifest_resolved = paths["manifest_path"].resolve()
+    assert call_counts[manifest_resolved] == 1, (
+        f"manifest was read {call_counts[manifest_resolved]} time(s) via _load_yaml; "
+        "expected exactly 1 (CC1: single-read wiring)"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# CC2（Codex レビュー #255 第 12 巡・P2）: pair 集合の完全一致検証
+# --------------------------------------------------------------------------- #
+def test_build_diagnosis_rejects_extra_pair_in_run1_not_in_manifest(tmp_path: Path) -> None:
+    """余剰 pair 注入拒否: manifest_sha256 が正しくても、run1.json が
+    manifest に無い pair_id を追加で持っていれば fail-closed。"""
+    paths = _write_minimal_fixture_set(tmp_path)
+    registry_sha256 = _sha256_bytes(paths["registry_path"].read_bytes())
+    manifest_sha256 = _sha256_bytes(paths["manifest_path"].read_bytes())
+
+    run1_doc = json.loads(paths["run1_path"].read_bytes())
+    run1_doc["pairs"]["st_synth_tuning_extra_not_in_manifest"] = {
+        "comparison": {
+            "evidence": "none",
+            "reasons": ["evidence_thresholds_uncalibrated"],
+            "coverage": {},
+            "provenance": {"m1_registry_sha256": registry_sha256},
+        }
+    }
+    assert run1_doc["manifest_sha256"] == manifest_sha256  # 束縛は保ったまま
+    paths["run1_path"].write_text(json.dumps(run1_doc), encoding="utf-8")
+
+    manifest_doc, _manifest_bytes, manifest_sha256_reloaded = dm._load_yaml(paths["manifest_path"])
+    with pytest.raises(SystemExit, match="fail-closed"):
+        dm.build_diagnosis(
+            run1_path=paths["run1_path"],
+            manifest_path=paths["manifest_path"],
+            manifest_doc=manifest_doc,
+            manifest_sha256=manifest_sha256_reloaded,
+            registry_path=paths["registry_path"],
+            m2c_fixtures_path=paths["m2c_fixtures_path"],
+            vocadito_dir=tmp_path / "vocadito",
+            generated_utc=None,
+        )
+
+
+def test_build_diagnosis_rejects_pair_missing_from_run1_present_in_manifest(tmp_path: Path) -> None:
+    """欠落 pair 拒否: manifest が要求する pair_id を run1.json が持っていなければ
+    fail-closed（manifest_sha256 自体は正しいまま）。"""
+    paths = _write_minimal_fixture_set(tmp_path)
+    manifest_sha256 = _sha256_bytes(paths["manifest_path"].read_bytes())
+
+    run1_doc = json.loads(paths["run1_path"].read_bytes())
+    assert run1_doc["manifest_sha256"] == manifest_sha256
+    run1_doc["pairs"] = {}  # manifest の唯一の pair を欠落させる
+    paths["run1_path"].write_text(json.dumps(run1_doc), encoding="utf-8")
+
+    manifest_doc, _manifest_bytes, manifest_sha256_reloaded = dm._load_yaml(paths["manifest_path"])
+    with pytest.raises(SystemExit, match="fail-closed"):
+        dm.build_diagnosis(
+            run1_path=paths["run1_path"],
+            manifest_path=paths["manifest_path"],
+            manifest_doc=manifest_doc,
+            manifest_sha256=manifest_sha256_reloaded,
+            registry_path=paths["registry_path"],
+            m2c_fixtures_path=paths["m2c_fixtures_path"],
+            vocadito_dir=tmp_path / "vocadito",
+            generated_utc=None,
+        )
+
+
+def test_build_diagnosis_accepts_when_run1_and_manifest_pair_sets_match(tmp_path: Path) -> None:
+    """一致受理: run1.json の pair 集合と manifest の pair_id 集合が完全一致
+    していれば、CC2 の検証で拒否されないこと（既存の最小 fixture は既に
+    1 pair で一致している）。"""
+    paths = _write_minimal_fixture_set(tmp_path)
+    manifest_doc, _manifest_bytes, manifest_sha256 = dm._load_yaml(paths["manifest_path"])
+
+    diagnosis = dm.build_diagnosis(
+        run1_path=paths["run1_path"],
+        manifest_path=paths["manifest_path"],
+        manifest_doc=manifest_doc,
+        manifest_sha256=manifest_sha256,
+        registry_path=paths["registry_path"],
+        m2c_fixtures_path=paths["m2c_fixtures_path"],
+        vocadito_dir=tmp_path / "vocadito",
+        generated_utc=None,
+    )
+    assert diagnosis["1_reason_histogram"]["pairs_total"] == 1

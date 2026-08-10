@@ -92,6 +92,36 @@ histogram``〜``6_coverage_floor_candidate_provenance``）+ 新設 ``inputs``
   検証済みの registry 値を ``_build_section3`` へ配線し、``§2``/``§3`` を
   構造的に一致させた（``phrase_gap_sec`` が現行既定 ``0.6`` である限り、
   既定引数での出力は committed 版と変わらない）。
+
+**Codex レビュー #255 第 12 巡対応（CC1・CC2）**:
+
+- **CC1（P1・manifest 読みの単一化）**: AA1 は ``--output`` preflight のために
+  ``main()`` で manifest を 1 回読み、``build_diagnosis`` 内部でも独立に
+  もう 1 回読んでいた（2 回読み）。この間隙で manifest が別プロセスに
+  差し替えられると、preflight は旧 manifest の消費アノテーション CSV 集合を
+  衝突チェックし、``build_diagnosis`` は新 manifest の集合を消費するため、
+  ``--output`` が新 manifest 由来のアノテーション CSV と衝突していても
+  preflight が見逃し、そのファイルを読んだ直後に診断 JSON で上書きしうる
+  TOCTOU があった。是正後は ``main()`` が manifest バイトを 1 回だけ読み
+  （hash + パースを同一バッファから）、そのパース済み文書を
+  ``_consumed_annotation_paths``（preflight 用列挙）と ``build_diagnosis``
+  （本導出）の両方へ引数として渡す。``build_diagnosis`` は manifest を
+  自分では読まなくなり（``manifest_doc``/``manifest_sha256`` を必須引数として
+  受け取る）、``run1.json`` との ``manifest_sha256`` 束縛検証もこの同一
+  バッファ由来の hash を使う。preflight が守る集合と導出が消費する集合が
+  構造的に同一バッファへ帰着する。
+- **CC2（P2・pair 集合の完全一致検証）**: 従来は ``manifest_sha256`` さえ
+  一致すれば、``run1.json`` の pair 集合が manifest の pair_id 集合と完全に
+  一致するかは検証していなかった。編集済み run report が
+  ``manifest_sha256`` を正しく保持したまま余剰 pair を追加すると、
+  ``§1``（``run1_pairs`` 直読み）はその余剰 pair を集計に含める一方、
+  manifest 駆動の crosstab・``§3``/``§5``/``§6`` はそれを無視し、内部矛盾を
+  抱えた診断が「束縛済み provenance」として出力されうる穴があった。是正後は
+  集計（``_build_section*``）を呼ぶ前に ``set(run1_pairs.keys()) ==
+  {manifest pair_id}`` を検証し、欠落・余剰のどちらでも fail-closed で
+  拒否する。committed ``run1.json``（98 pair）と
+  ``tests/fixtures/melody_bench/m3d_pairs_manifest.yaml``（98 pair）は
+  完全一致しているため、既定引数での出力は committed 版と変わらない。
 """
 from __future__ import annotations
 
@@ -688,13 +718,18 @@ def build_diagnosis(
     *,
     run1_path: Path,
     manifest_path: Path,
+    manifest_doc: Any,
+    manifest_sha256: str,
     registry_path: Path,
     m2c_fixtures_path: Path,
     vocadito_dir: Path,
     generated_utc: Optional[str],
 ) -> Dict[str, Any]:
+    """``manifest_doc``/``manifest_sha256`` は呼び出し側（``main()``）が
+    manifest バイトを 1 回だけ読んで hash + パースした結果をそのまま渡す
+    （Codex レビュー #255 第 12 巡 CC1）。ここでは manifest を再読みしない
+    ——``manifest_path`` は表示用パスラベルの算出にのみ使う。"""
     run1_doc, _run1_bytes, run1_sha256 = _load_json(run1_path)
-    manifest_doc, _manifest_bytes, manifest_sha256 = _load_yaml(manifest_path)
     registry_doc, _registry_bytes, registry_sha256 = _load_yaml(registry_path)
     fixtures_doc, _fixtures_bytes, fixtures_sha256 = _load_yaml(m2c_fixtures_path)
 
@@ -739,6 +774,25 @@ def build_diagnosis(
             "fail-closed: tests/fixtures/melody_bench/m3d_pairs_manifest.yaml "
             f"sha256 ({manifest_sha256}) does not match run1.json['manifest_sha256'] "
             f"({recorded_manifest_sha256})"
+        )
+
+    # pair 集合の完全一致検証（Codex レビュー #255 第 12 巡 CC2）: 集計開始前に
+    # set(run1_pairs) == {manifest pair_id} を確認する。manifest_sha256 の
+    # 一致だけでは、編集済み run report が正しい manifest_sha256 を保持した
+    # まま余剰 pair を追加/削除するケースを検出できない——それを許すと
+    # §1（run1_pairs 直読み）と manifest 駆動の crosstab/§3/§5/§6 とで
+    # 母集団が食い違う内部矛盾した診断を出力しうる。欠落・余剰のどちらも
+    # fail-closed。
+    manifest_pair_ids = {mp["pair_id"] for mp in manifest_pairs}
+    run1_pair_ids = set(run1_pairs.keys())
+    if run1_pair_ids != manifest_pair_ids:
+        missing_from_run1 = sorted(manifest_pair_ids - run1_pair_ids)
+        extra_in_run1 = sorted(run1_pair_ids - manifest_pair_ids)
+        raise SystemExit(
+            "fail-closed: run1.json の pair 集合が manifest の pair_id 集合と "
+            "完全一致しない（本診断は set(run1_pairs) == set(manifest pair_id) を "
+            f"前提に集計する）: missing_from_run1={missing_from_run1}, "
+            f"extra_in_run1={extra_in_run1}"
         )
 
     gate_registry = registry_doc["observation_gate"]
@@ -880,17 +934,23 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # CC1（Codex レビュー #255 第 12 巡・P1）: manifest バイトはここで 1 回だけ
+    # 読み（hash + パースを同一バッファから）、そのパース済み文書を
+    # 以下 (a) preflight 用のアノテーション CSV 列挙 と (b) build_diagnosis
+    # の本導出の両方へそのまま渡す。build_diagnosis 側は manifest を自分では
+    # 読み直さない——preflight が守る集合と導出が消費する集合を、同一バッファ
+    # へ構造的に一致させる（旧実装は 2 回読んでおり、その間隙で manifest が
+    # 差し替わると preflight が旧版を、導出が新版を見る TOCTOU があった）。
+    manifest_doc, _manifest_bytes, manifest_sha256 = _load_yaml(args.manifest)
+
     # AA1（Codex レビュー #255 第 10 巡・P1）: --output 指定時は、実際の
     # derivation（build_diagnosis の各種 fail-closed 検証・atomic write）を
     # 一切始める前に、resolve() 済み --output が全宣言データ入力（消費する
     # 全アノテーション CSV を含む）と衝突しないか preflight で確認する。
-    # アノテーション CSV の集合は manifest の軽量パース（音声/CSV I/O なし）
-    # だけで機械的に決まるため、ここで一度 manifest を読む——build_diagnosis
-    # 内部でも改めて読み直す（そちらが hash 付き正規の読み取り）。
+    # アノテーション CSV の集合は上で読んだ manifest_doc から機械的に決まる。
     if args.output is not None:
-        manifest_doc_preflight, _bytes, _sha = _load_yaml(args.manifest)
         annotation_paths = _consumed_annotation_paths(
-            manifest_doc_preflight["pairs"], args.vocadito_dir
+            manifest_doc["pairs"], args.vocadito_dir
         )
         _reject_output_input_collisions(
             output_path=args.output,
@@ -904,6 +964,8 @@ def main() -> int:
     diagnosis = build_diagnosis(
         run1_path=args.run1,
         manifest_path=args.manifest,
+        manifest_doc=manifest_doc,
+        manifest_sha256=manifest_sha256,
         registry_path=args.registry,
         m2c_fixtures_path=args.m2c_fixtures,
         vocadito_dir=args.vocadito_dir,
