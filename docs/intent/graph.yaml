@@ -6,9 +6,14 @@ nodes:
     status: verified
     evidence: ["docs/roundtrip_preservation.md", "PR #75"]
   - id: physical.fixity_entry
-    claim: "fixture/corpus の入場は fixity 型で pin され再実行可能である"
+    claim: "physical 欄は fixity 型ロックで、corpus 音源バイトは audio_sha256 pin で、それぞれ入場時に固定され再実行可能である"
     status: verified
-    evidence: ["PR #76", "PR #77"]
+    evidence:
+      - "docs/roundtrip_preservation.md"
+      - "docs/roundtrip_corpus_screen.md"
+      - "PR #76"
+      - "PR #77"
+    note: "fixity は CompositionScore 物理 7 欄のロック地図（PR #76）・corpus 再実行性は audio_sha256 バイト固定（PR #77）＝別機構"
 
   # --- 制御ノブ（grip） ---
   - id: control.key
