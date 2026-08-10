@@ -1139,6 +1139,24 @@ svprpe validate score.yaml --contract config/authoring_contract_l0.yaml --format
 svprpe validate score.yaml   # canonical-only, no public-scope check
 ```
 
+### `svprpe intent-status [--graph <graph.yaml>]`
+
+Load the Intent Graph v0 pointer ledger (`docs/intent/graph.yaml` by default, `intent-graph/0.1`)
+and print its derived status:
+
+```bash
+svprpe intent-status
+svprpe intent-status --graph docs/intent/graph.yaml
+```
+
+Read-only: never writes to `--graph`, never updates any node's `status` (transitions are
+manual, PR-reviewed edits only). Prints status counts, the `frontier` (untested nodes ready
+to verify), `blocked` (nodes whose dependency chain reaches a `dead` node, with the blocking
+ancestor ids), and `machine_dependent` nodes. Exit `2` if the graph fails to load or its
+consistency checks (duplicate id, unknown `depends_on`, a `depends_on` cycle, a `dead` node
+missing `reentry`, or a repository-relative `evidence` path that does not exist). See
+[`intent_graph.md`](intent_graph.md).
+
 ## Global Options
 
 | Option | Description |
