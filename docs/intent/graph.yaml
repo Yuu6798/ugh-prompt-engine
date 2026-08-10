@@ -90,8 +90,10 @@ nodes:
   - id: extraction.dominance_break_curve
     claim: "主旋律支配度の破断曲線（M2e 帯）が census 済みである"
     status: machine_dependent
-    evidence: ["docs/DESIGN_M2e_vremix_real_bed.md"]
-    note: "r4–r6 完了（r6 本測定 1280/1280 監査合格）・r7 evaluate 実行中。残 = r7 完走 → census verdict（判定は C5 のみ）→ 破断曲線判読"
+    evidence:
+      - "docs/DESIGN_M2e_vremix_real_bed.md"
+      - "docs/measurements/m2e_2026-08/m2e_r7_blocker_stem_sha256_2026-08-09.md"
+    note: "r4–r6 完了（r6 本測定 1280/1280 監査合格）。r7 は step0 で fail-closed 停止中（stem_sha256 をカテゴリ不変量として扱う集約検査と stem アームの構造的不整合・設計側裁定待ち）。残 = 裁定 → r7 再開・完走 → census verdict（判定は C5 のみ）→ 破断曲線判読"
 
   # --- LLM 著述（authoring） ---
   - id: authoring.contract
