@@ -84,5 +84,11 @@ svp-rpe` のみで `docs/intent/graph.yaml` が手元にない環境）は想定
 ## 8. 整合検証（`svp_rpe.intent.loader.load_intent_graph`、fail-fast）
 
 一意 id / `depends_on` 実在 / 非循環（DAG）/ `dead` は `reentry` 必須 /
-`evidence` パス実在 / status 語彙。違反はすべて集約し 1 回の `ValueError` に
-まとめて報告する。
+`evidence` パス実在 / status 語彙 / YAML 重複キー拒否 / `evidence` パスの
+repo 内封じ込め（絶対パス・`..` 成分・symlink 脱出を拒否）。違反はすべて集約し
+1 回の `ValueError` にまとめて報告する。
+
+`graph.yaml` は canonical 配置（`docs/intent/graph.yaml`）が前提。他配置は
+`load_intent_graph(path, repo_root=...)` で repo root を明示指定した場合のみ
+サポートする（任意配置の自動解決は v0 非目標。既定 CLI `svprpe intent-status`
+は canonical 配置のまま変更なし）。

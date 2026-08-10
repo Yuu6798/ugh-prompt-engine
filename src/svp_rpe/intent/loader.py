@@ -7,25 +7,46 @@
 
 `evidence` の「リポジトリ相対パス」判定は `/` を含むかどうかで行う（`/` を
 含まない項目、例 `"PR #171"` は参照として素通しし実在検証しない）。repo root
-は `path`（既定 `docs/intent/graph.yaml`）の位置から 2 階層上として解決する
-（`docs/intent/graph.yaml` → `docs/intent` → `docs` → repo root）。
+は既定では `path`（既定 `docs/intent/graph.yaml`）の位置から 2 階層上として
+解決する（`docs/intent/graph.yaml` → `docs/intent` → `docs` → repo root）。
+canonical でない配置から呼ぶ場合は `repo_root` を明示すること
+（`docs/intent_graph.md` §8 参照 — 任意配置の自動解決は v0 非目標）。
+
+PR #256 レビュー対応（2026-08-10）:
+- YAML 重複キーは `yaml.safe_load` だと last-key-wins で黙って通ってしまう
+  （矛盾する `status` 等が静かに片方だけ有効になる）ため拒否する。重複キー拒否
+  ローダは `melody.representation._NoDupSafeLoader` を再利用する（import
+  のみ・重複実装禁止 — `authoring/contract.py` / `cli/validate_cmd.py` /
+  `recast/experimental.py` と同じ再利用パターン）
+- `evidence` のリポジトリ相対パスは絶対パス・`..` 成分・symlink 脱出を拒否し
+  repo 配下に封じ込める（`repo_root / entry` は entry が絶対パスだと絶対パス側が
+  勝つ pathlib の挙動があるため）
+- repo root 導出が失敗する配置（`path` の親が 2 階層に満たない）では素の
+  `IndexError` を漏らさず `ValueError` に変換する（CLI の exit 2 契約を保証）
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import yaml
 
 from svp_rpe.intent.models import IntentGraph, IntentNode
+from svp_rpe.melody.representation import _NoDupSafeLoader
 
 # graph.yaml の既定配置からの repo root への相対階層数
 # (docs/intent/graph.yaml -> docs/intent -> docs -> repo root)。
 _REPO_ROOT_PARENT_DEPTH = 2
 
 
-def load_intent_graph(path: Path | str) -> IntentGraph:
-    """intent graph YAML を読み込み、スキーマ検証 + グラフ全体の整合検証を行う。"""
+def load_intent_graph(path: Path | str, *, repo_root: Optional[Path] = None) -> IntentGraph:
+    """intent graph YAML を読み込み、スキーマ検証 + グラフ全体の整合検証を行う。
+
+    `repo_root` を省略した場合は `path` の位置から 2 階層上を repo root と
+    みなす（canonical 配置 `docs/intent/graph.yaml` 前提）。この既定導出が
+    行えない配置（親ディレクトリが浅すぎる等）では `ValueError` を送出する
+    ので、canonical でない配置から呼ぶ場合は `repo_root` を明示すること。
+    """
     graph_path = Path(path)
     try:
         raw_bytes = graph_path.read_bytes()
@@ -33,8 +54,8 @@ def load_intent_graph(path: Path | str) -> IntentGraph:
         raise ValueError(f"intent graph unreadable at {graph_path}: {exc}") from exc
 
     try:
-        data = yaml.safe_load(raw_bytes)
-    except yaml.YAMLError as exc:
+        data = yaml.load(raw_bytes, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
+    except (yaml.YAMLError, ValueError) as exc:
         raise ValueError(f"intent graph {graph_path} is not valid YAML: {exc}") from exc
 
     if not isinstance(data, dict):
@@ -45,8 +66,19 @@ def load_intent_graph(path: Path | str) -> IntentGraph:
     # fail-fast する。
     graph = IntentGraph.model_validate(data)
 
-    repo_root = graph_path.resolve().parents[_REPO_ROOT_PARENT_DEPTH]
-    errors = _collect_graph_errors(graph, graph_path=graph_path, repo_root=repo_root)
+    resolved_repo_root = repo_root
+    if resolved_repo_root is None:
+        resolved_path = graph_path.resolve()
+        try:
+            resolved_repo_root = resolved_path.parents[_REPO_ROOT_PARENT_DEPTH]
+        except IndexError as exc:
+            raise ValueError(
+                f"cannot derive repo root from {graph_path} "
+                f"(resolved: {resolved_path}); pass repo_root explicitly or use "
+                "the canonical docs/intent/graph.yaml layout"
+            ) from exc
+
+    errors = _collect_graph_errors(graph, graph_path=graph_path, repo_root=resolved_repo_root)
     if errors:
         joined = "\n".join(f"  - {error}" for error in errors)
         raise ValueError(f"intent graph {graph_path} failed consistency checks:\n{joined}")
@@ -108,13 +140,45 @@ def _find_cycles(nodes: List[IntentNode], by_id: Dict[str, IntentNode]) -> List[
 def _find_missing_evidence(
     nodes: List[IntentNode], *, graph_path: Path, repo_root: Path
 ) -> List[str]:
+    """`evidence` の repository-relative パスを検証する（実在 + repo 内封じ込め）。
+
+    PR #256 レビュー対応: `repo_root / entry` は `entry` が絶対パスだと
+    `pathlib` の仕様上絶対パス側が勝ち、`repo_root` の外を指してしまう
+    （`Path("/a") / "/etc/passwd"` == `Path("/etc/passwd")`）。同様に `..`
+    成分や symlink 経由でも repo 外へ脱出しうるため、実在チェックの前に
+    3 段階で repo 内封じ込めを保証する: (1) 絶対パス拒否、(2) `..` 成分拒否、
+    (3) `.resolve()` 後に `repo_root.resolve()` 配下にあることを確認
+    （symlink がリポジトリ外を指すケースを捕捉する）。
+    """
+    resolved_repo_root = repo_root.resolve()
     errors: List[str] = []
     for node in nodes:
         for entry in node.evidence:
             if "/" not in entry:
                 # `/` を含まない項目（例 "PR #171"）は参照として素通しする。
                 continue
-            candidate = repo_root / entry
+            entry_path = Path(entry)
+            if entry_path.is_absolute():
+                errors.append(
+                    f"node {node.id!r}: evidence path {entry!r} must be "
+                    "repository-relative (absolute paths are rejected)"
+                )
+                continue
+            if ".." in entry_path.parts:
+                errors.append(
+                    f"node {node.id!r}: evidence path {entry!r} must not contain "
+                    "'..' path components (repository containment)"
+                )
+                continue
+            candidate = repo_root / entry_path
+            resolved_candidate = candidate.resolve()
+            if resolved_repo_root not in (resolved_candidate, *resolved_candidate.parents):
+                errors.append(
+                    f"node {node.id!r}: evidence path {entry!r} resolves outside "
+                    f"the repository root ({resolved_candidate} is not under "
+                    f"{resolved_repo_root}, possible symlink escape)"
+                )
+                continue
             if not candidate.is_file():
                 errors.append(
                     f"node {node.id!r}: evidence path {entry!r} does not exist "

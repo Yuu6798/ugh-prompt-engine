@@ -12,13 +12,18 @@
 """
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from svp_rpe.cli import app
 from svp_rpe.intent.frontier import derive_frontier
 from svp_rpe.intent.loader import load_intent_graph
 from svp_rpe.intent.models import IntentGraph, IntentNode
+
+runner = CliRunner()
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEED_GRAPH_PATH = REPO_ROOT / "docs" / "intent" / "graph.yaml"
@@ -113,6 +118,43 @@ def test_missing_evidence_path_raises_value_error(tmp_path: Path):
         load_intent_graph(graph_path)
 
 
+def test_duplicate_key_within_node_raises_value_error(tmp_path: Path):
+    """ノード内で `status` が重複 -> `_NoDupSafeLoader` が拒否する。"""
+    body = """\
+  - id: node.a
+    claim: "a"
+    status: verified
+    status: dead
+    evidence: ["PR #1"]
+"""
+    graph_path = _write_graph(tmp_path, body)
+    with pytest.raises(ValueError, match="duplicate"):
+        load_intent_graph(graph_path)
+
+
+def test_duplicate_top_level_nodes_key_raises_value_error(tmp_path: Path):
+    """トップレベルで `nodes` キーが重複 -> `_NoDupSafeLoader` が拒否する。"""
+    graph_dir = tmp_path / "docs" / "intent"
+    graph_dir.mkdir(parents=True)
+    graph_path = graph_dir / "graph.yaml"
+    graph_path.write_text(
+        'schema_version: "intent-graph/0.1"\n'
+        "nodes:\n"
+        "  - id: node.a\n"
+        '    claim: "a"\n'
+        "    status: verified\n"
+        '    evidence: ["PR #1"]\n'
+        "nodes:\n"
+        "  - id: node.b\n"
+        '    claim: "b"\n'
+        "    status: verified\n"
+        '    evidence: ["PR #2"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        load_intent_graph(graph_path)
+
+
 def test_duplicate_id_raises_value_error(tmp_path: Path):
     body = """\
   - id: node.a
@@ -126,6 +168,52 @@ def test_duplicate_id_raises_value_error(tmp_path: Path):
 """
     graph_path = _write_graph(tmp_path, body)
     with pytest.raises(ValueError, match="duplicate node id"):
+        load_intent_graph(graph_path)
+
+
+def test_evidence_absolute_path_raises_value_error(tmp_path: Path):
+    """絶対パスの evidence は `repo_root / entry` で絶対パス側が勝つため拒否する。"""
+    body = """\
+  - id: node.a
+    claim: "a"
+    status: verified
+    evidence: ["/etc/passwd"]
+"""
+    graph_path = _write_graph(tmp_path, body)
+    with pytest.raises(ValueError, match="must be repository-relative"):
+        load_intent_graph(graph_path)
+
+
+def test_evidence_dotdot_path_raises_value_error(tmp_path: Path):
+    """`..` を含む evidence パスは repo 外への脱出とみなし拒否する。"""
+    body = """\
+  - id: node.a
+    claim: "a"
+    status: verified
+    evidence: ["../outside.md"]
+"""
+    graph_path = _write_graph(tmp_path, body)
+    with pytest.raises(ValueError, match="must not contain '..'"):
+        load_intent_graph(graph_path)
+
+
+def test_evidence_symlink_escape_raises_value_error(tmp_path: Path):
+    """symlink 経由で repo root 外を指す evidence パスは resolve 後に拒否する。"""
+    outside_dir = tmp_path.parent / f"{tmp_path.name}_outside"
+    outside_dir.mkdir()
+    (outside_dir / "secret.md").write_text("secret", encoding="utf-8")
+
+    body = """\
+  - id: node.a
+    claim: "a"
+    status: verified
+    evidence: ["escape/secret.md"]
+"""
+    graph_path = _write_graph(tmp_path, body)
+    repo_root = tmp_path
+    (repo_root / "escape").symlink_to(outside_dir)
+
+    with pytest.raises(ValueError, match="resolves outside the repository root"):
         load_intent_graph(graph_path)
 
 
@@ -206,3 +294,58 @@ def test_seed_graph_frontier_pin():
     blocked_ids = {entry.id for entry in report.blocked}
     assert "score.melody_axis" in blocked_ids
     assert "authoring.melody_axis" in blocked_ids
+
+
+# ---------------------------------------------------------------------------
+# repo_root 明示指定 + repo root 導出失敗の exit 2 契約（PR #256 レビュー対応）
+# ---------------------------------------------------------------------------
+
+_MINIMAL_VALID_BODY = _GRAPH_HEADER + (
+    "  - id: node.a\n"
+    '    claim: "a"\n'
+    "    status: untested\n"
+)
+
+
+def test_repo_root_keyword_overrides_default_derivation(tmp_path: Path):
+    """`repo_root` を明示すると canonical 配置でない graph.yaml でも evidence 解決できる。"""
+    (tmp_path / "NOTES.md").write_text("hi", encoding="utf-8")
+    graph_path = tmp_path / "graph.yaml"
+    graph_path.write_text(
+        _GRAPH_HEADER
+        + (
+            "  - id: node.a\n"
+            '    claim: "a"\n'
+            "    status: verified\n"
+            '    evidence: ["NOTES.md"]\n'
+        ),
+        encoding="utf-8",
+    )
+    graph = load_intent_graph(graph_path, repo_root=tmp_path)
+    assert len(graph.nodes) == 1
+
+
+def test_repo_root_derivation_failure_raises_value_error():
+    """`path` の親が 2 階層に満たない配置では `IndexError` を `ValueError` に変換する。
+
+    実際の filesystem root 直下相当（`/tmp` 直下、ネストなし）に置くことで
+    `resolve().parents[2]` が確実に `IndexError` になる配置を再現する。
+    """
+    graph_path = Path("/tmp") / f"intent_graph_shallow_{uuid.uuid4().hex}.yaml"
+    try:
+        graph_path.write_text(_MINIMAL_VALID_BODY, encoding="utf-8")
+        with pytest.raises(ValueError, match="cannot derive repo root"):
+            load_intent_graph(graph_path)
+    finally:
+        graph_path.unlink(missing_ok=True)
+
+
+def test_cli_repo_root_derivation_failure_exits_2():
+    """`svprpe intent-status --graph <shallow path>` は exit code 2 になる。"""
+    graph_path = Path("/tmp") / f"intent_graph_shallow_cli_{uuid.uuid4().hex}.yaml"
+    try:
+        graph_path.write_text(_MINIMAL_VALID_BODY, encoding="utf-8")
+        result = runner.invoke(app, ["intent-status", "--graph", str(graph_path)])
+        assert result.exit_code == 2
+    finally:
+        graph_path.unlink(missing_ok=True)
