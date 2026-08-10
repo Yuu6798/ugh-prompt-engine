@@ -149,11 +149,13 @@ nodes:
     claim: "ジャンル語彙がコーパス校正され誤判定が config 化是正されている"
     status: partial
     evidence: ["docs/genre_calibration_planning.md"]
+    note: "3 ジャンル + edm/orchestral の分離線まで確立。generator bias は方向一定（mid 削り+脱トーナル化）の確認まで・指紋の一定性は否定済み"
 
   # --- ルート Intent ---
   - id: intent.ai_score
-    claim: "AI が楽譜を著述し決定論演奏者で検収し同一性検証まで一気通貫で実証されている"
+    claim: "AI が楽譜を著述し決定論演奏者で検収し Score-level identity 保存（sidecar 会計）まで一気通貫で実証されている"
     status: untested
+    note: "聴感・人間知覚の同一性は本ノードの範囲外（identity.human_proxy=dead / identity.machine_discrimination=partial として別ノードで正直会計）"
     depends_on:
       - score.schema
       - score.performer_deterministic

@@ -67,6 +67,14 @@ class IntentNode(IntentModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _partial_requires_note(self) -> Self:
+        if self.status == "partial" and not self.note:
+            raise ValueError(
+                f"node {self.id!r}: status='partial' requires a non-empty 'note' field"
+            )
+        return self
+
 
 class IntentGraph(IntentModel):
     """`docs/intent/graph.yaml` 全体（トップレベルスキーマ）。"""

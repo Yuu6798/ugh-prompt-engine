@@ -106,6 +106,17 @@ def test_dead_without_reentry_raises_value_error(tmp_path: Path):
         load_intent_graph(graph_path)
 
 
+def test_partial_without_note_raises_value_error():
+    """status='partial' で `note` が欠落 -> `models.py` の validator が拒否する。"""
+    with pytest.raises(ValueError, match="status='partial' requires a non-empty 'note'"):
+        IntentNode(
+            id="node.a",
+            claim="a",
+            status="partial",
+            evidence=["PR #1"],
+        )
+
+
 def test_missing_evidence_path_raises_value_error(tmp_path: Path):
     body = """\
   - id: node.a
@@ -214,6 +225,62 @@ def test_evidence_symlink_escape_raises_value_error(tmp_path: Path):
     (repo_root / "escape").symlink_to(outside_dir)
 
     with pytest.raises(ValueError, match="resolves outside the repository root"):
+        load_intent_graph(graph_path)
+
+
+def test_evidence_slashless_typo_path_raises_value_error(tmp_path: Path):
+    """`/` を含まない誤記パス（例 "CLADUE.md"）も新文法ではパスとして検証される。
+
+    旧「`/` の有無」ヒューリスティックでは参照として素通しされていた穴
+    （PR #256 再レビュー指摘）。
+    """
+    body = """\
+  - id: node.a
+    claim: "a"
+    status: verified
+    evidence: ["CLADUE.md"]
+"""
+    graph_path = _write_graph(tmp_path, body)
+    with pytest.raises(ValueError, match="evidence path .* does not exist"):
+        load_intent_graph(graph_path)
+
+
+def test_evidence_pr_reference_still_passes_through(tmp_path: Path):
+    """`^PR #\\d+$` に fullmatch する項目は引き続き参照として素通しする。"""
+    body = """\
+  - id: node.a
+    claim: "a"
+    status: verified
+    evidence: ["PR #123"]
+"""
+    graph_path = _write_graph(tmp_path, body)
+    graph = load_intent_graph(graph_path)
+    assert len(graph.nodes) == 1
+
+
+def test_evidence_windows_absolute_path_raises_value_error(tmp_path: Path):
+    """backslash を含む Windows 形式の絶対パスは POSIX の `is_absolute()` をすり抜けるため専用拒否する。"""
+    body = """\
+  - id: node.a
+    claim: "a"
+    status: verified
+    evidence: ["C:\\\\temp\\\\proof.md"]
+"""
+    graph_path = _write_graph(tmp_path, body)
+    with pytest.raises(ValueError, match=r"must not contain '\\'"):
+        load_intent_graph(graph_path)
+
+
+def test_evidence_windows_dotdot_path_raises_value_error(tmp_path: Path):
+    """backslash 区切りの `..` トラバーサルも同じ backslash 拒否で捕捉する。"""
+    body = """\
+  - id: node.a
+    claim: "a"
+    status: verified
+    evidence: ["..\\\\outside.md"]
+"""
+    graph_path = _write_graph(tmp_path, body)
+    with pytest.raises(ValueError, match=r"must not contain '\\'"):
         load_intent_graph(graph_path)
 
 
