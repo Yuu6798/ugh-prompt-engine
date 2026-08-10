@@ -22,6 +22,7 @@ CLAUDE.md「設計ドキュメント索引」（日本語詳細要約）を参�
 - [Goal 1 Roadmap](roadmap_goal1.md) — Quantitative observation completion plan (Q0–Q5)
 - [Goal 2 Roadmap](roadmap_goal2.md) — Reproduction-proof completion plan (R0–R5): bidirectional reproducibility decomposed (grip × calibration × transcription), round-trip preservation across the K/Q/T/C tracks
 - [Learned Models Policy](learned_models_policy.md) — Adopt/reject/hold policy for learned audio-annotation models (Q4'): isolation into LearnedAudioAnnotations, no mixing into rule evidence, OSS license constraints
+- [Intent Graph v0](intent_graph.md) — machine-readable satisfied/unsatisfied pointer ledger for the "AI writes a score" intent (`docs/intent/graph.yaml`, `svprpe intent-status`): status vocabulary, frontier/blocked derivation semantics, no auto-inference (manual PR-reviewed status edits only)
 
 ## Composition Score & Score Track
 

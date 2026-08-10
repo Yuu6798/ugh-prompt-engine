@@ -1,0 +1,164 @@
+schema_version: intent-graph/0.1
+nodes:
+  # --- physical 層 ---
+  - id: physical.roundtrip_determinism
+    claim: "Score→perform→extract→draft の決定論往復が三値診断可能である"
+    status: verified
+    evidence: ["docs/roundtrip_preservation.md", "PR #75"]
+  - id: physical.fixity_entry
+    claim: "fixture/corpus の入場は fixity 型で pin され再実行可能である"
+    status: verified
+    evidence: ["PR #76", "PR #77"]
+
+  # --- 制御ノブ（grip） ---
+  - id: control.key
+    claim: "key は送出→生成→抽出で tight に保存される"
+    status: verified
+    evidence: ["docs/controllability_poc.md", "PR #117"]
+  - id: control.brightness
+    claim: "brightness(centroid 正規センサー) は tight grip を持つ"
+    status: verified
+    evidence: ["docs/controllability_poc.md", "docs/metrics.md"]
+  - id: control.lyrics_presence
+    claim: "lyrics_presence は SEM-1 ゲートを完走した tight ノブである"
+    status: verified
+    evidence: ["docs/lyrics_semantic_anchor.md", "PR #160"]
+  - id: control.structure
+    claim: "structure は section_tags 経路で loose grip を持つ"
+    status: partial
+    evidence: ["PR #171", "PR #192"]
+    note: "散文送出は dead(#170)・弁別は end-to-end 経路比較に限定"
+  - id: control.bpm
+    claim: "bpm は往復の信頼再現ノブである"
+    status: dead
+    evidence: ["docs/roundtrip_corpus_screen.md", "PR #86"]
+    reentry: "抽出器 halving の解消（R2 closeout の再入条件）"
+  - id: control.chords_external
+    claim: "外部生成器が chord_progression チャネルを解釈する"
+    status: dead
+    evidence: ["docs/wi2_discrimination_harness.md"]
+    reentry: "chord チャネルを解釈する生成器の登場、または送出経路の再設計"
+  - id: control.time_signature
+    claim: "time_signature は制御可能なノブである"
+    status: dead
+    evidence: ["PR #173"]
+    reentry: "3/4 以上の素材帯拡充とヌルゲート再測"
+
+  # --- 楽譜（score） ---
+  - id: score.schema
+    claim: "三層 CompositionScore 正規スキーマが凍結され変換が配線済みである"
+    status: verified
+    evidence: ["docs/composition_score_product_brief.md"]
+  - id: score.performer_deterministic
+    claim: "決定論演奏者が同一 Score から bit 再現可能な音を出す"
+    status: verified
+    evidence: ["docs/composition_poc_report.md"]
+  - id: score.adherence_instrument
+    claim: "score-adherence 計器で楽譜遵守が測定できる"
+    status: verified
+    evidence: ["docs/ai_performer_score_roadmap.md", "docs/control_profile.md"]
+  - id: score.melody_axis
+    claim: "楽譜の旋律欄が観測ゲートを通過し検収可能な意味を持つ"
+    status: untested
+    depends_on: ["melody.observable_in_field"]
+
+  # --- 旋律（melody） ---
+  - id: melody.observation_gate
+    claim: "比較の前に観測可否を問うゲート機構 M0/M1 が実測確立されている"
+    status: verified
+    evidence: ["docs/melody_observability.md"]
+  - id: melody.observable_in_field
+    claim: "実利用入力帯で主旋律が観測ゲートを通過する"
+    status: dead
+    evidence: ["docs/m3d_calibration_record.md"]
+    reentry: "M0/M1 ゲート意味論の再設計登録のみ（2026-08-09 closeout）"
+  - id: melody.extraction_accuracy
+    claim: "旋律抽出精度が事前登録バーを満たす"
+    status: partial
+    evidence: ["docs/m2_error_model.md"]
+    note: "S-direct fail / V-direct pass・voicing が系統的弱点軸"
+  - id: melody.comparator_instrument
+    claim: "軸別 evidence を返す旋律比較器 M3 が実装済みである"
+    status: verified
+    evidence: ["docs/melody_comparator.md"]
+  - id: melody.comparator_calibrated
+    claim: "M3 比較器の軸閾値が実測校正されている"
+    status: dead
+    evidence: ["docs/m3d_calibration_record.md"]
+    depends_on: ["melody.observable_in_field"]
+    reentry: "校正標本が構造的に確保不能。melody.observable_in_field の再入が前提"
+  - id: extraction.dominance_break_curve
+    claim: "主旋律支配度の破断曲線（M2e 帯）が census 済みである"
+    status: machine_dependent
+    evidence: ["docs/DESIGN_M2e_vremix_real_bed.md"]
+    note: "r4–r7 実測残・判定は C5 のみ"
+
+  # --- LLM 著述（authoring） ---
+  - id: authoring.contract
+    claim: "L0a 著述契約（spec+validate+信頼軸表+report 正規形）が凍結されている"
+    status: verified
+    evidence: ["docs/l0a_authoring_contract.md", "docs/l0a_v2_remeasure_record.md"]
+  - id: authoring.closed_loop
+    claim: "LLM 著述→決定論検収の閉ループが操舵証拠つきで到達している"
+    status: verified
+    evidence: ["docs/l0b_closed_loop_record.md"]
+  - id: authoring.robustness_single_author
+    claim: "課題難易度を跨いで著述ループが頑健に到達する"
+    status: partial
+    evidence: ["docs/l0br_robustness_record.md"]
+    note: "5/6 到達・単一著者・揺らぎ未分離"
+  - id: authoring.melody_axis
+    claim: "LLM が旋律軸を著述し検収できる（L0c）"
+    status: dead
+    evidence: ["docs/m3d_calibration_record.md", "docs/llm_adapter_planning.md"]
+    depends_on: ["melody.observable_in_field"]
+    reentry: "L0c 非解禁は m3d closeout に従属。L 系列は非旋律軸で完結"
+
+  # --- 同一性（identity） ---
+  - id: identity.arrangement_sidecar
+    claim: "sidecar-first の Score-level identity preservation が配線済みである"
+    status: verified
+    evidence: ["docs/arrangement_identity_planning.md"]
+  - id: identity.machine_discrimination
+    claim: "機械弁別が複数軸で成立する"
+    status: partial
+    evidence: ["docs/wi2_discrimination_harness.md"]
+    note: "弁別成立は bpm のみ（11/12）"
+  - id: identity.human_proxy
+    claim: "人間校正で有効な identity proxy 軸が採用されている"
+    status: dead
+    evidence: ["docs/wi3_human_calibration.md"]
+    reentry: "第 2 トランシェ（実 Suno 素材の拡充律速）"
+
+  # --- 和声・意味層 ---
+  - id: harmony.event_roundtrip
+    claim: "chord_progression の事象欄往復一致率が roundtrip に統合されている"
+    status: verified
+    evidence: ["docs/event_roundtrip.md"]
+  - id: semantic.clap_axes
+    claim: "CLAP 意味層センサーが軸校正済みで配線されている"
+    status: partial
+    evidence: ["docs/semantic_sensor_clap.md"]
+    note: "vocal/energy 実証・brightness は bpm 交絡"
+  - id: semantic.lyrics_transcription
+    claim: "歌詞転写センサーが実推論で検証済みである"
+    status: partial
+    evidence: ["docs/lyrics_transcription_sensor.md"]
+    note: "Whisper ハルシネーション境界あり（PR #199）"
+  - id: semantic.genre_vocab
+    claim: "ジャンル語彙がコーパス校正され誤判定が config 化是正されている"
+    status: partial
+    evidence: ["docs/genre_calibration_planning.md"]
+
+  # --- ルート Intent ---
+  - id: intent.ai_score
+    claim: "AI が楽譜を著述し決定論演奏者で検収し同一性検証まで一気通貫で実証されている"
+    status: untested
+    depends_on:
+      - score.schema
+      - score.performer_deterministic
+      - score.adherence_instrument
+      - authoring.closed_loop
+      - identity.arrangement_sidecar
+      - control.key
+      - control.brightness
