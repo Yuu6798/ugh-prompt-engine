@@ -142,6 +142,40 @@ def test_partial_without_note_raises_value_error():
         )
 
 
+def test_partial_with_whitespace_only_note_raises_value_error():
+    """note=" "（whitespace-only）は「空実質」として note 欠落と同様に拒否する。"""
+    with pytest.raises(ValueError, match="status='partial' requires a non-empty 'note'"):
+        IntentNode(
+            id="node.a",
+            claim="a",
+            status="partial",
+            evidence=["PR #1"],
+            note=" ",
+        )
+
+
+def test_dead_with_whitespace_only_reentry_raises_value_error():
+    """reentry=" "（whitespace-only）は reentry 欠落と同様に拒否する。"""
+    with pytest.raises(ValueError, match="status='dead' requires a non-empty 'reentry'"):
+        IntentNode(
+            id="node.a",
+            claim="a",
+            status="dead",
+            evidence=["PR #1"],
+            reentry=" ",
+        )
+
+
+def test_whitespace_only_claim_raises_value_error():
+    """claim=" "（whitespace-only）は `min_length=1` をすり抜けるため専用 validator で拒否する。"""
+    with pytest.raises(ValueError, match="claim must not be blank"):
+        IntentNode(
+            id="node.a",
+            claim=" ",
+            status="untested",
+        )
+
+
 def test_missing_evidence_path_raises_value_error(tmp_path: Path):
     body = """\
   - id: node.a

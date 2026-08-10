@@ -16,6 +16,15 @@ PR #256 再レビュー対応（2026-08-10 第 3R）:
   `List` から `Tuple[..., ...]`（default_factory=tuple）へ変更し、frozen モデル
   の不変性をコレクションのミュータビリティにまで及ぼす（frozen dataclass /
   pydantic model は値オブジェクトを不変で定義する、が本リポジトリの規約）
+
+PR #256 再レビュー対応（2026-08-10 第 8R）:
+- 「空実質のメタデータ文字列」ファミリーの全数掃討: `note`（partial 必須）・
+  `reentry`（dead 必須）・`claim`（常時必須）はいずれも非空文字列チェックのみ
+  だと `" "` のような whitespace-only 値を素通ししてしまう（`not " "` は
+  `False`）。3 フィールドとも `.strip()` 後の空判定へ揃えた。`id` は fullmatch
+  パターンで空白を含む文字列がそもそもマッチしない、`evidence` は PR 参照
+  fullmatch またはパス実在検証で空白のみの値は両方とも弾かれるため、この
+  ファミリーの対象外（確認済み・変更不要）
 """
 from __future__ import annotations
 
@@ -60,6 +69,15 @@ class IntentNode(IntentModel):
         return self
 
     @model_validator(mode="after")
+    def _claim_not_blank(self) -> Self:
+        if not self.claim.strip():
+            raise ValueError(
+                f"node {self.id!r}: claim must not be blank (whitespace-only claims "
+                "are rejected)"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _evidence_required_unless_untested(self) -> Self:
         if self.status != "untested" and not self.evidence:
             raise ValueError(
@@ -70,17 +88,19 @@ class IntentNode(IntentModel):
 
     @model_validator(mode="after")
     def _dead_requires_reentry(self) -> Self:
-        if self.status == "dead" and not self.reentry:
+        if self.status == "dead" and not (self.reentry and self.reentry.strip()):
             raise ValueError(
-                f"node {self.id!r}: status='dead' requires a non-empty 'reentry' field"
+                f"node {self.id!r}: status='dead' requires a non-empty 'reentry' field "
+                "(whitespace-only values are rejected)"
             )
         return self
 
     @model_validator(mode="after")
     def _partial_requires_note(self) -> Self:
-        if self.status == "partial" and not self.note:
+        if self.status == "partial" and not (self.note and self.note.strip()):
             raise ValueError(
-                f"node {self.id!r}: status='partial' requires a non-empty 'note' field"
+                f"node {self.id!r}: status='partial' requires a non-empty 'note' field "
+                "(whitespace-only values are rejected)"
             )
         return self
 
