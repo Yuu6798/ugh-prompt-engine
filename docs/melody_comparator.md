@@ -1,9 +1,10 @@
 # 旋律比較器 M3 — 軸別類似・校正ハーネス
 
-状態: M3a/M3b/M3c 実装完了（表現・整列・比較器）。M3d は**校正ハーネス
-（run/evaluate 二相）の機構のみ**実装済みで、slow-lane 実測（実 crepe + vocadito
-コーパスによる tuning/holdout 校正）は**本セッションでは未実施**（dated で
-追記予定）。
+状態: M3a/M3b/M3c 実装完了（表現・整列・比較器）。M3d は校正ハーネス
+（run/evaluate 二相）の機構実装に加え slow-lane 実測（実 crepe + vocadito
+コーパスによる v1 tuning 実測 + v2 40 clip census）まで完走し、2026-08-09 に
+**closeout**（観測律速・校正不成立、いずれの軸も未校正のまま恒久）——判定・
+再入条件は [`m3d_calibration_record.md`](m3d_calibration_record.md) が正。
 起点: 設計書 [`DESIGN_M3_melody_comparator.md`](DESIGN_M3_melody_comparator.md)
 （発行元: Cowork）。設計拘束の根: [`m2_error_model.md`](m2_error_model.md)（M2d・
 第 1 入力）+ User 決裁 2026-07-30（`DESIGN_M3_melody_comparator.md` §0 / M3-0 で
@@ -234,18 +235,24 @@ python scripts/run_melody_comparison.py --evaluate run1.json run2.json --out ver
 [`m2_error_model.md`](m2_error_model.md) 参照）。校正ハーネスの既定 `route_runner`
 も `clear_lead` 経路のみを解決対象にする（`_resolve_route` が構造的に強制）。
 
-## 8. 校正状態
+## 8. 校正状態（2026-08-09 M3d closeout — 詳細は [`m3d_calibration_record.md`](m3d_calibration_record.md)）
 
-- **`evidence_thresholds.status = "uncalibrated"`**（本ドキュメント作成時点の
-  凍結値）。軸別閾値（`strong_min` / `none_max`）は**未導出**。
-- **M3d slow-lane 実測は未実施**（実 crepe + vocadito コーパスによる
-  tuning/holdout 校正・positive/negative pair 生成は本セッションの範囲外。
-  実施後、本節へ dated で追記する）。
+- **`evidence_thresholds.status = "uncalibrated"`** — closeout により恒久固定。
+  軸別閾値（`strong_min` / `none_max`）は**校正不成立につき未導出のまま**
+  （一方向規則: 未校正のまま凍結値を発明しない）。
+- **M3d slow-lane 実測は実施済み・closeout 済**（v1: 実 crepe + vocadito
+  コーパスで tuning 実測 run×2 完走・repeats bit 一致 tuning 66/66 → 凍結提案は
+  `rejected_positive_not_comparable` で拒否。v2: 40 clip census で全 5 変形
+  通過の survivor 3/40 → 事前登録停止条件に抵触し builder fail-closed。
+  measured 標本が構造的に確保不能で観測律速——判定の詳細は
+  [`m3d_calibration_record.md`](m3d_calibration_record.md)）。
 - `coverage.floor`（0.5）は `floor_status: provisional_until_m3d` のまま
-  ——実測後に holdout 前で凍結する。
+  ——closeout により凍結されず**恒久 provisional**（一方向規則: 未校正のまま
+  凍結値を発明しない）。
 - M3d ハーネス自体（run/evaluate 二相・hash pin・holdout ロック機構）は fake
-  route_runner によるメカニズムテストのみで検証済み。実抽出器での slow-lane
-  run は未実行。
+  route_runner によるメカニズムテストに加え、実抽出器（crepe）での
+  slow-lane run（v1 tuning 66/66・repeats bit 一致 × 2 round）でも検証済み
+  ——**軌跡レベル決定論は実証済み**。軸別閾値の校正自体は観測律速で不成立。
 
 ## 9. やってはいけないこと（`DESIGN_M3_melody_comparator.md` §8 転記）
 

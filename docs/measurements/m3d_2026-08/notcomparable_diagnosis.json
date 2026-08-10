@@ -1,0 +1,1477 @@
+{
+  "generated_by": "scripts/diagnose_m3d_notcomparable.py (committed, deterministic; Codex review #255 round 9)",
+  "inputs": {
+    "run1_path": "docs/measurements/m3d_2026-08/run1.json",
+    "run1_sha256": "45e2fdca0190ba36a263bf81f75fce7a6442cff3c5894b30d34e270120ffd803",
+    "manifest_path": "tests/fixtures/melody_bench/m3d_pairs_manifest.yaml",
+    "manifest_sha256": "99537c8ae8c06d04516f77b102f4b5585012a732445238b63ce8184b04ff6aa2",
+    "m2c_external_fixtures_path": "tests/fixtures/melody_bench/m2c_external_fixtures.yaml",
+    "m2c_external_fixtures_sha256": "91b08852dabe3584de289c5ad5d9aafd7a40c8d3c2e14b2dbd8f599acc03b92f",
+    "gate_definition_module": "src/svp_rpe/melody/observability.py",
+    "gate_registry_path": "tests/fixtures/melody_bench/registry.yaml",
+    "gate_registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+    "gate_registry_bound_to_run1_via": "verified equal to pairs[*].comparison.provenance.m1_registry_sha256 for all 66 executed (non-holdout-lock) pairs",
+    "vocadito_annotations_dir": "build/external_m3d/vocadito",
+    "vocadito_annotation_sha256": {
+      "vocadito_3": "18f48fc77df7dd43c1e4bc588a79482b1d330768d63b76b90e82998573582b6a",
+      "vocadito_5": "561eb6ac03530a3219cf1a8eab9f0c14b1c4571185f0e059b61643325e4642ca",
+      "vocadito_6": "443e7f37172ef683f687fba39ab87710f22af2227e8fdb9031b2faa3002eb002",
+      "vocadito_7": "9dfd339c44bd32a8891288ea3625fcda703932fe76c4ce8f073c005874f63393",
+      "vocadito_8": "d4865ca325062a0985f8c8cf099844d9430ad445668bbd8d6bc3f786a346b457",
+      "vocadito_10": "b62573c234fe091acdc7f7ac75259df12d5a8b2bd89f5b803bfc0f433c085e96",
+      "vocadito_11": "3649b1c134df2c7630e37f614adf05b67b186f3f494a8cc6551a12b3d8a593d1",
+      "vocadito_15": "740a77c865d6dcdae2af05328230d88c97cc2d95a54a4ef44d1cde49a53afafa",
+      "vocadito_16": "fb06556c007943d6d2793af5dd6ba0ac43a1ab5e1180777bfc795564028ea8cf",
+      "vocadito_17": "d865f0cd526a030f19ba674ebf6c8956fdd8d8b4a0732a539fdb5a35ee86dc29",
+      "vocadito_20": "e09cff1461c2d3ebedcd46093297c44bb00bc705d630d11a6b6e0b8323a047d9",
+      "vocadito_22": "f6fbca9e262fe338f3ca8f99be5d08d8a4080a5b09337f4ba7f8366b0b159464",
+      "vocadito_24": "e0b877b9679fcf7ee5eae7e41c8b1fd44328f681d2c9f2e2008f76559e0f54d4",
+      "vocadito_28": "9bc2f3a1ececf51f4cde93010cfa75d2362ce971b27e91c2ca04d9161abbe346",
+      "vocadito_30": "6f584e8d0aaf514efbb7986a049c01b0887491bf40bc43ec03a566c3a24f0924",
+      "vocadito_32": "63ea4ef4788a54dc3ec9e3abb3a1b68bd5f47392d2d3359f36e5b131dc42f2fe",
+      "vocadito_34": "74e80a72860ff758162a015a213026939723ec4190635b17c9261d6b079d2740",
+      "vocadito_40": "4ba1a1c1a8e8b068cee17affee35df893270900964b4974b8457fefc4ce93e8e"
+    },
+    "generator_script_path": "scripts/diagnose_m3d_notcomparable.py",
+    "generator_script_sha256": "a4a4aeeef17ece3385f84f8452ebbcc952d022e692421ebe1d06684b7179d391"
+  },
+  "note": "purely mechanical aggregation; no interpretation/verdict language included by design",
+  "1_reason_histogram": {
+    "universe": "all 98 pairs in docs/measurements/m3d_2026-08/run1.json['pairs'] (kind/split/material taken from tests/fixtures/melody_bench/m3d_pairs_manifest.yaml, which is unredacted for holdout too; comparison.reasons taken from the run report, which is only populated for the 66 tuning-split pairs)",
+    "pairs_total": 98,
+    "pairs_tuning": 66,
+    "pairs_holdout": 32,
+    "pairs_holdout_locked_no_comparison_field": 32,
+    "pairs_with_comparison_but_zero_reasons": 0,
+    "reason_type_side_histogram": [
+      {
+        "reason_type": "observation_gate_insufficient",
+        "side": "b",
+        "count": 50
+      },
+      {
+        "reason_type": "observation_gate_insufficient",
+        "side": "a",
+        "count": 47
+      },
+      {
+        "reason_type": "evidence_thresholds_uncalibrated",
+        "side": null,
+        "count": 4
+      },
+      {
+        "reason_type": "insufficient_overlap",
+        "side": null,
+        "count": 2
+      }
+    ],
+    "reason_type_side_detail_histogram": [
+      {
+        "reason_type": "observation_gate_insufficient",
+        "side": "b",
+        "detail": "phrase_count 1 < min 2",
+        "count": 48
+      },
+      {
+        "reason_type": "observation_gate_insufficient",
+        "side": "a",
+        "detail": "phrase_count 1 < min 2",
+        "count": 45
+      },
+      {
+        "reason_type": "evidence_thresholds_uncalibrated",
+        "side": null,
+        "detail": null,
+        "count": 4
+      },
+      {
+        "reason_type": "insufficient_overlap",
+        "side": null,
+        "detail": "min_fraction=0.0000, floor=0.5000",
+        "count": 2
+      },
+      {
+        "reason_type": "observation_gate_insufficient",
+        "side": "a",
+        "detail": "note_count 5 < min 8; phrase_count 1 < min 2",
+        "count": 2
+      },
+      {
+        "reason_type": "observation_gate_insufficient",
+        "side": "b",
+        "detail": "note_count 5 < min 8; phrase_count 1 < min 2",
+        "count": 2
+      }
+    ],
+    "crosstab_kind_split_material": [
+      {
+        "kind": "negative_cross",
+        "split": "holdout",
+        "material": "real",
+        "pair_count": 6,
+        "evidence_counts": {
+          "null": 6
+        },
+        "report_status_counts": {
+          "holdout_locked_until_frozen": 6
+        },
+        "reason_type_side_counts": {}
+      },
+      {
+        "kind": "negative_cross",
+        "split": "tuning",
+        "material": "real",
+        "pair_count": 12,
+        "evidence_counts": {
+          "not_comparable": 11,
+          "none": 1
+        },
+        "report_status_counts": {
+          "null": 12
+        },
+        "reason_type_side_counts": {
+          "observation_gate_insufficient|a": 9,
+          "observation_gate_insufficient|b": 9,
+          "evidence_thresholds_uncalibrated|None": 1
+        }
+      },
+      {
+        "kind": "negative_interval",
+        "split": "tuning",
+        "material": "synth",
+        "pair_count": 2,
+        "evidence_counts": {
+          "not_comparable": 2
+        },
+        "report_status_counts": {
+          "null": 2
+        },
+        "reason_type_side_counts": {
+          "observation_gate_insufficient|a": 1,
+          "observation_gate_insufficient|b": 1,
+          "insufficient_overlap|None": 1
+        }
+      },
+      {
+        "kind": "negative_rhythm",
+        "split": "tuning",
+        "material": "synth",
+        "pair_count": 2,
+        "evidence_counts": {
+          "not_comparable": 1,
+          "none": 1
+        },
+        "report_status_counts": {
+          "null": 2
+        },
+        "reason_type_side_counts": {
+          "observation_gate_insufficient|a": 1,
+          "observation_gate_insufficient|b": 1,
+          "evidence_thresholds_uncalibrated|None": 1
+        }
+      },
+      {
+        "kind": "positive_transform",
+        "split": "holdout",
+        "material": "real",
+        "pair_count": 24,
+        "evidence_counts": {
+          "null": 24
+        },
+        "report_status_counts": {
+          "holdout_locked_until_frozen": 24
+        },
+        "reason_type_side_counts": {}
+      },
+      {
+        "kind": "positive_transform",
+        "split": "holdout",
+        "material": "synth",
+        "pair_count": 2,
+        "evidence_counts": {
+          "null": 2
+        },
+        "report_status_counts": {
+          "holdout_locked_until_frozen": 2
+        },
+        "reason_type_side_counts": {}
+      },
+      {
+        "kind": "positive_transform",
+        "split": "tuning",
+        "material": "real",
+        "pair_count": 48,
+        "evidence_counts": {
+          "not_comparable": 46,
+          "none": 2
+        },
+        "report_status_counts": {
+          "null": 48
+        },
+        "reason_type_side_counts": {
+          "observation_gate_insufficient|a": 36,
+          "observation_gate_insufficient|b": 37,
+          "insufficient_overlap|None": 1,
+          "evidence_thresholds_uncalibrated|None": 2
+        }
+      },
+      {
+        "kind": "positive_transform",
+        "split": "tuning",
+        "material": "synth",
+        "pair_count": 2,
+        "evidence_counts": {
+          "not_comparable": 2
+        },
+        "report_status_counts": {
+          "null": 2
+        },
+        "reason_type_side_counts": {
+          "observation_gate_insufficient|b": 2
+        }
+      }
+    ]
+  },
+  "2_gate_parameters": {
+    "source_of_truth_note": "tests/fixtures/melody_bench/registry.yaml observation_gate block is loaded via ObservabilityThresholds.from_registry(); src/svp_rpe/melody/observability.py:107-158 defines the dataclass + the same defaults.",
+    "parameters": [
+      {
+        "name": "min_voiced_coverage",
+        "value": 0.3,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:24",
+          "src/svp_rpe/melody/observability.py:115 (dataclass field, no default)"
+        ]
+      },
+      {
+        "name": "min_note_count",
+        "value": 8,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:25",
+          "src/svp_rpe/melody/observability.py:116 (dataclass field, no default)"
+        ]
+      },
+      {
+        "name": "min_phrase_count",
+        "value": 2,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:26",
+          "src/svp_rpe/melody/observability.py:117 (dataclass field, no default)"
+        ]
+      },
+      {
+        "name": "min_confidence_mean",
+        "value": 0.45,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:27",
+          "src/svp_rpe/melody/observability.py:118 (dataclass field, no default)"
+        ]
+      },
+      {
+        "name": "max_low_confidence_rate",
+        "value": 0.55,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:28",
+          "src/svp_rpe/melody/observability.py:119 (dataclass field, no default)"
+        ]
+      },
+      {
+        "name": "max_octave_jump_rate",
+        "value": 0.35,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:29",
+          "src/svp_rpe/melody/observability.py:120 (dataclass field, no default)"
+        ]
+      },
+      {
+        "name": "voiced_confidence_floor",
+        "value": 0.3,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:30",
+          "src/svp_rpe/melody/observability.py:121 (dataclass field, no default)"
+        ]
+      },
+      {
+        "name": "low_confidence_floor",
+        "value": 0.5,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:31",
+          "src/svp_rpe/melody/observability.py:122 (dataclass field, no default)"
+        ]
+      },
+      {
+        "name": "min_cross_extractor_agreement",
+        "value": null,
+        "note": "null = not used as a gate condition in M1",
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:35",
+          "src/svp_rpe/melody/observability.py:123 (Optional[float] = None default)"
+        ]
+      },
+      {
+        "name": "note_min_run_frames",
+        "value": 3,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:37",
+          "src/svp_rpe/melody/observability.py:125 (default=3)"
+        ]
+      },
+      {
+        "name": "median_filter_frames",
+        "value": 5,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:38",
+          "src/svp_rpe/melody/observability.py:126 (default=5)"
+        ]
+      },
+      {
+        "name": "phrase_gap_sec",
+        "value": 0.6,
+        "note": "gap (sec) between one note's end and the next note's start above which a new phrase starts; see observability.py:316-325 _phrase_count()",
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:39",
+          "src/svp_rpe/melody/observability.py:127 (default=0.6)"
+        ]
+      },
+      {
+        "name": "octave_jump_semitones",
+        "value": 11.0,
+        "defined_at": [
+          "tests/fixtures/melody_bench/registry.yaml:40",
+          "src/svp_rpe/melody/observability.py:128 (default=11.0)"
+        ]
+      }
+    ],
+    "gate_reasons_single_source_of_truth": "src/svp_rpe/melody/observability.py:376-431 gate_reasons()",
+    "phrase_count_definition": "src/svp_rpe/melody/observability.py:316-325 _phrase_count(): notes sorted by start_sec; a new phrase starts whenever current.start_sec - prev.end_sec > phrase_gap_sec (strict >, seconds)."
+  },
+  "3_annotation_phrase_structure_table": {
+    "gap_threshold_sec_used": 0.6,
+    "method": "annotation_phrase_count = number of voiced-frame runs (f0>0) after merging consecutive voiced runs separated by an unvoiced gap <= gap_threshold_sec_used; computed directly on the annotation timeline (F0 CSV), independent of the M1 note derivation pipeline (notes_from_frames).",
+    "clip_count_real_total": 18,
+    "clip_count_tuning": 12,
+    "clip_count_holdout": 6,
+    "rows": [
+      {
+        "clip_id": "vocadito_3",
+        "total_duration_sec": 21.7339,
+        "voiced_ratio": 0.5891,
+        "annotation_phrase_count": 3,
+        "longest_unvoiced_gap_sec": 1.5383,
+        "voiced_run_count_raw": 31,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_3_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_3_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_3_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_3_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_06_vocadito_24_vocadito_3",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_07_vocadito_3_vocadito_30",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      },
+      {
+        "clip_id": "vocadito_5",
+        "total_duration_sec": 23.2316,
+        "voiced_ratio": 0.7232,
+        "annotation_phrase_count": 1,
+        "longest_unvoiced_gap_sec": 0.5457,
+        "voiced_run_count_raw": 40,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_5_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_5_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_5_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_5_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_10_vocadito_40_vocadito_5",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_11_vocadito_5_vocadito_10",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      },
+      {
+        "clip_id": "vocadito_6",
+        "total_duration_sec": 23.8295,
+        "voiced_ratio": 0.6851,
+        "annotation_phrase_count": 2,
+        "longest_unvoiced_gap_sec": 1.0449,
+        "voiced_run_count_raw": 25,
+        "split": "holdout",
+        "gate_crosscheck": "not applicable: holdout comparison is locked "
+      },
+      {
+        "clip_id": "vocadito_7",
+        "total_duration_sec": 19.4641,
+        "voiced_ratio": 0.5951,
+        "annotation_phrase_count": 1,
+        "longest_unvoiced_gap_sec": 1.3584,
+        "voiced_run_count_raw": 34,
+        "split": "holdout",
+        "gate_crosscheck": "not applicable: holdout comparison is locked "
+      },
+      {
+        "clip_id": "vocadito_8",
+        "total_duration_sec": 17.0376,
+        "voiced_ratio": 0.5262,
+        "annotation_phrase_count": 4,
+        "longest_unvoiced_gap_sec": 1.4745,
+        "voiced_run_count_raw": 28,
+        "split": "holdout",
+        "gate_crosscheck": "not applicable: holdout comparison is locked "
+      },
+      {
+        "clip_id": "vocadito_10",
+        "total_duration_sec": 9.0964,
+        "voiced_ratio": 0.7526,
+        "annotation_phrase_count": 1,
+        "longest_unvoiced_gap_sec": 0.4586,
+        "voiced_run_count_raw": 20,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_10_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_10_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_10_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_10_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_00_vocadito_10_vocadito_11",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_11_vocadito_5_vocadito_10",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      },
+      {
+        "clip_id": "vocadito_11",
+        "total_duration_sec": 12.98,
+        "voiced_ratio": 0.7631,
+        "annotation_phrase_count": 1,
+        "longest_unvoiced_gap_sec": 1.2249,
+        "voiced_run_count_raw": 17,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_11_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_11_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_11_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_11_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_00_vocadito_10_vocadito_11",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_01_vocadito_11_vocadito_15",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      },
+      {
+        "clip_id": "vocadito_15",
+        "total_duration_sec": 20.2768,
+        "voiced_ratio": 0.6623,
+        "annotation_phrase_count": 4,
+        "longest_unvoiced_gap_sec": 0.9868,
+        "voiced_run_count_raw": 24,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_15_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_15_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_15_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_15_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_01_vocadito_11_vocadito_15",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_02_vocadito_15_vocadito_16",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      },
+      {
+        "clip_id": "vocadito_16",
+        "total_duration_sec": 17.2756,
+        "voiced_ratio": 0.6305,
+        "annotation_phrase_count": 2,
+        "longest_unvoiced_gap_sec": 0.7082,
+        "voiced_run_count_raw": 29,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_16_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_16_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_16_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_16_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_02_vocadito_15_vocadito_16",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_03_vocadito_16_vocadito_17",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      },
+      {
+        "clip_id": "vocadito_17",
+        "total_duration_sec": 23.5624,
+        "voiced_ratio": 0.8135,
+        "annotation_phrase_count": 3,
+        "longest_unvoiced_gap_sec": 1.2016,
+        "voiced_run_count_raw": 7,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_17_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "insufficient_overlap(min_fraction=0.0000, floor=0.5000)"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_17_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "none",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "evidence_thresholds_uncalibrated"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_17_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_17_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_03_vocadito_16_vocadito_17",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_04_vocadito_17_vocadito_22",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "none",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "evidence_thresholds_uncalibrated"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": true
+      },
+      {
+        "clip_id": "vocadito_20",
+        "total_duration_sec": 8.7133,
+        "voiced_ratio": 0.6245,
+        "annotation_phrase_count": 1,
+        "longest_unvoiced_gap_sec": 1.0217,
+        "voiced_run_count_raw": 16,
+        "split": "holdout",
+        "gate_crosscheck": "not applicable: holdout comparison is locked "
+      },
+      {
+        "clip_id": "vocadito_22",
+        "total_duration_sec": 18.3322,
+        "voiced_ratio": 0.5698,
+        "annotation_phrase_count": 3,
+        "longest_unvoiced_gap_sec": 1.7299,
+        "voiced_run_count_raw": 30,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_22_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_22_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_22_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "none",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "evidence_thresholds_uncalibrated"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_22_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_04_vocadito_17_vocadito_22",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "none",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "evidence_thresholds_uncalibrated"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_05_vocadito_22_vocadito_24",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": false,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": true
+      },
+      {
+        "clip_id": "vocadito_24",
+        "total_duration_sec": 14.7563,
+        "voiced_ratio": 0.6457,
+        "annotation_phrase_count": 2,
+        "longest_unvoiced_gap_sec": 0.6327,
+        "voiced_run_count_raw": 31,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_24_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_24_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_24_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_24_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_05_vocadito_22_vocadito_24",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_06_vocadito_24_vocadito_3",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      },
+      {
+        "clip_id": "vocadito_28",
+        "total_duration_sec": 12.8929,
+        "voiced_ratio": 0.6814,
+        "annotation_phrase_count": 1,
+        "longest_unvoiced_gap_sec": 0.6734,
+        "voiced_run_count_raw": 19,
+        "split": "holdout",
+        "gate_crosscheck": "not applicable: holdout comparison is locked "
+      },
+      {
+        "clip_id": "vocadito_30",
+        "total_duration_sec": 13.0148,
+        "voiced_ratio": 0.5448,
+        "annotation_phrase_count": 1,
+        "longest_unvoiced_gap_sec": 0.5979,
+        "voiced_run_count_raw": 31,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_30_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_30_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_30_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_30_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_07_vocadito_3_vocadito_30",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_08_vocadito_30_vocadito_32",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      },
+      {
+        "clip_id": "vocadito_32",
+        "total_duration_sec": 25.0311,
+        "voiced_ratio": 0.6153,
+        "annotation_phrase_count": 1,
+        "longest_unvoiced_gap_sec": 2.142,
+        "voiced_run_count_raw": 37,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_32_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_32_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_32_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_32_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_08_vocadito_30_vocadito_32",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_09_vocadito_32_vocadito_40",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      },
+      {
+        "clip_id": "vocadito_34",
+        "total_duration_sec": 24.8512,
+        "voiced_ratio": 0.7328,
+        "annotation_phrase_count": 2,
+        "longest_unvoiced_gap_sec": 0.8707,
+        "voiced_run_count_raw": 55,
+        "split": "holdout",
+        "gate_crosscheck": "not applicable: holdout comparison is locked "
+      },
+      {
+        "clip_id": "vocadito_40",
+        "total_duration_sec": 18.576,
+        "voiced_ratio": 0.6379,
+        "annotation_phrase_count": 1,
+        "longest_unvoiced_gap_sec": 1.5151,
+        "voiced_run_count_raw": 26,
+        "split": "tuning",
+        "gate_crosscheck": [
+          {
+            "pair_id": "pt_real_tuning_vocadito_40_pitch_p3",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_40_pitch_m5",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_40_rate_087",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "pt_real_tuning_vocadito_40_rate_112",
+            "side": "a",
+            "kind": "positive_transform",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_09_vocadito_32_vocadito_40",
+            "side": "b",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          },
+          {
+            "pair_id": "nc_real_tuning_10_vocadito_40_vocadito_5",
+            "side": "a",
+            "kind": "negative_cross",
+            "evidence": "not_comparable",
+            "gate_insufficient_this_side": true,
+            "reasons": [
+              "observation_gate_insufficient_a: phrase_count 1 < min 2",
+              "observation_gate_insufficient_b: phrase_count 1 < min 2"
+            ]
+          }
+        ],
+        "measured_evidence_pair_present": false
+      }
+    ]
+  },
+  "4_crepe_observed_series_in_report": {
+    "report_pair_level_keys_observed": [
+      "audio_a",
+      "audio_b",
+      "audio_sha256_a",
+      "audio_sha256_b",
+      "comparison",
+      "expected",
+      "kind",
+      "observation_sha256_a",
+      "observation_sha256_b",
+      "route_provenance_a",
+      "route_provenance_b",
+      "split",
+      "status"
+    ],
+    "conclusion": "report carries only 'observation_sha256_a'/'observation_sha256_b' (content hashes) per pair, not the observed frame/note series themselves; crepe-side observed phrase_count is not recoverable from m3d_run1.json without re-running the crepe extraction, which this task does not do."
+  },
+  "5_measured_pairs": {
+    "definition": "split=='tuning' and comparison.evidence != 'not_comparable' (observed values: evidence='none' with reasons=['evidence_thresholds_uncalibrated'], meaning the observation gate + comparator both ran to completion but no verdict threshold is calibrated yet)",
+    "count_all_material": 4,
+    "count_vocadito_17_22_family": 3,
+    "pairs": [
+      {
+        "pair_id": "pt_real_tuning_vocadito_17_pitch_m5",
+        "kind": "positive_transform",
+        "material": "real",
+        "evidence": "none",
+        "reasons": [
+          "evidence_thresholds_uncalibrated"
+        ],
+        "coverage": {
+          "aligned_note_fraction_a": 0.6712328767123288,
+          "aligned_note_fraction_b": 0.703125,
+          "phrase_coverage_a": 1.0,
+          "phrase_coverage_b": 0.6666666666666666
+        },
+        "audio_a": "build/external_m3d/vocadito/Audio/vocadito_17.wav",
+        "audio_b": "build/external_m3d/m3d_pairs/vocadito_17__pitch_m5.wav"
+      },
+      {
+        "pair_id": "pt_real_tuning_vocadito_22_rate_087",
+        "kind": "positive_transform",
+        "material": "real",
+        "evidence": "none",
+        "reasons": [
+          "evidence_thresholds_uncalibrated"
+        ],
+        "coverage": {
+          "aligned_note_fraction_a": 0.7819548872180451,
+          "aligned_note_fraction_b": 0.6901408450704225,
+          "phrase_coverage_a": 0.5,
+          "phrase_coverage_b": 0.5
+        },
+        "audio_a": "build/external_m3d/vocadito/Audio/vocadito_22.wav",
+        "audio_b": "build/external_m3d/m3d_pairs/vocadito_22__rate_087.wav"
+      },
+      {
+        "pair_id": "nc_real_tuning_04_vocadito_17_vocadito_22",
+        "kind": "negative_cross",
+        "material": "real",
+        "evidence": "none",
+        "reasons": [
+          "evidence_thresholds_uncalibrated"
+        ],
+        "coverage": {
+          "aligned_note_fraction_a": 0.8698630136986302,
+          "aligned_note_fraction_b": 0.9473684210526315,
+          "phrase_coverage_a": 1.0,
+          "phrase_coverage_b": 1.0
+        },
+        "audio_a": "build/external_m3d/vocadito/Audio/vocadito_17.wav",
+        "audio_b": "build/external_m3d/vocadito/Audio/vocadito_22.wav"
+      },
+      {
+        "pair_id": "nr_synth_tuning_01_m3d_synth_rhythm_neg2_a_m3d_synth_rhythm_neg2_b",
+        "kind": "negative_rhythm",
+        "material": "synth",
+        "evidence": "none",
+        "reasons": [
+          "evidence_thresholds_uncalibrated"
+        ],
+        "coverage": {
+          "aligned_note_fraction_a": 1.0,
+          "aligned_note_fraction_b": 1.0,
+          "phrase_coverage_a": 1.0,
+          "phrase_coverage_b": 1.0
+        },
+        "audio_a": "build/external_m3d/m3d_pairs/m3d_synth_rhythm_neg2_a.wav",
+        "audio_b": "build/external_m3d/m3d_pairs/m3d_synth_rhythm_neg2_b.wav"
+      }
+    ],
+    "vocadito_17_22_family_pair_ids": [
+      "nc_real_tuning_04_vocadito_17_vocadito_22",
+      "pt_real_tuning_vocadito_17_pitch_m5",
+      "pt_real_tuning_vocadito_22_rate_087"
+    ]
+  },
+  "6_coverage_floor_candidate_provenance": {
+    "source_function": "scripts/run_melody_comparison.py:_coverage_floor_candidate (around line 2495), called from evaluate_comparison around lines 3132/3155",
+    "selection_rule": "iterates ALL tuning-split pairs with expected=='same' (positive_transform), regardless of comparison.evidence, and appends comparison.coverage['aligned_note_fraction_a'] and ['aligned_note_fraction_b'] whenever the field is not None -- this is NOT gated on evidence != 'not_comparable', so a pair whose gate marks it not_comparable can still contribute a coverage value (observed here as 0.0 from pt_real_tuning_vocadito_17_pitch_p3).",
+    "computed_from_m3d_verdict_tuning_json": {
+      "candidate": 0.0,
+      "min": 0.0,
+      "max": 0.7819548872180451,
+      "mean": 0.4744089348334661,
+      "sample_count": 6
+    },
+    "sample_count": 6,
+    "samples": [
+      {
+        "pair_id": "pt_real_tuning_vocadito_17_pitch_p3",
+        "side": "a",
+        "field": "aligned_note_fraction_a",
+        "value": 0.0,
+        "evidence": "not_comparable"
+      },
+      {
+        "pair_id": "pt_real_tuning_vocadito_17_pitch_p3",
+        "side": "b",
+        "field": "aligned_note_fraction_b",
+        "value": 0.0,
+        "evidence": "not_comparable"
+      },
+      {
+        "pair_id": "pt_real_tuning_vocadito_17_pitch_m5",
+        "side": "a",
+        "field": "aligned_note_fraction_a",
+        "value": 0.6712328767123288,
+        "evidence": "none"
+      },
+      {
+        "pair_id": "pt_real_tuning_vocadito_17_pitch_m5",
+        "side": "b",
+        "field": "aligned_note_fraction_b",
+        "value": 0.703125,
+        "evidence": "none"
+      },
+      {
+        "pair_id": "pt_real_tuning_vocadito_22_rate_087",
+        "side": "a",
+        "field": "aligned_note_fraction_a",
+        "value": 0.7819548872180451,
+        "evidence": "none"
+      },
+      {
+        "pair_id": "pt_real_tuning_vocadito_22_rate_087",
+        "side": "b",
+        "field": "aligned_note_fraction_b",
+        "value": 0.6901408450704225,
+        "evidence": "none"
+      }
+    ]
+  }
+}

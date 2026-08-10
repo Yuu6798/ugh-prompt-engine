@@ -228,9 +228,10 @@ typo 修正後に `awaiting_generation` から同じ take で ingest をやり�
 - **ゲート（機械判定・G1–G3）**: G1 校正（M3 registry が frozen）→ G2 帯域
   （校正済み集合 `{"clear_lead"}` のみ）→ G3 観測（M1 gate + M3 coverage）。
   いずれか不成立は `not_observed(reason)` へ正直に落ちる（G1 未成立を
-  エラーにしない — M3d 校正実測は未完了のため現状は常に `not_observed
-  (comparator_uncalibrated)`）。axis_policy が frozen 軸の外を指す場合のみ
-  fail-closed error（load/実行時）。
+  エラーにしない — M3d は 2026-08-09 に closeout（観測律速・校正不成立、
+  詳細 = [`m3d_calibration_record.md`](m3d_calibration_record.md)）しており
+  G1 は恒久不成立のため、現状は常に `not_observed(comparator_uncalibrated)`）。
+  axis_policy が frozen 軸の外を指す場合のみ fail-closed error（load/実行時）。
 - **写像（純関数・翻訳のみ）**: M3 の軸別 evidence（strong/weak/none/
   uncalibrated）を axis_policy（hard/elastic/free）へ照らし、D-1 語彙
   4 値（preserved/changed_within_policy/changed_outside_policy/

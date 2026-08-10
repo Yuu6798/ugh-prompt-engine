@@ -1298,6 +1298,111 @@ def test_reject_output_input_collisions_passes_with_disjoint_summary_out(tmp_pat
     )  # 例外が飛ばなければ OK
 
 
+# --------------------------------------------------------------------------- #
+# Codex レビュー第 7 巡 X1: v2 で新たに消費する入力（screening record /
+# M1 registry）を `_reject_output_input_collisions` の保護入力集合へ編入
+# --------------------------------------------------------------------------- #
+def test_reject_output_input_collisions_detects_screening_record_vs_manifest_out(
+    tmp_path: Path,
+):
+    """`screening_record_path` を渡した場合、それが `manifest_out` と同じ
+    解決済みパスを指すなら fail-closed で拒否する（従来から保護対象だった
+    ことの回帰ガード。実在検証: v2 の `run_build` 呼び出し経路では既に
+    渡されていた）。"""
+    manifest_out = tmp_path / "manifest.yaml"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=manifest_out,
+            pins_out=tmp_path / "pins.json",
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+            screening_record_path=manifest_out,  # manifest_out と同一パス
+        )
+
+
+def test_reject_output_input_collisions_detects_screening_record_vs_summary_out(
+    tmp_path: Path,
+):
+    """X1(b) の直接再現: `--summary-out` が screening record と同じパスを
+    指す場合、fail-closed で拒否する（`check_existing` 経路の統合再現は
+    `test_build_m3d_pairs_v2.py::test_check_existing_rejects_summary_out_targeting_screening_record`
+    を参照）。"""
+    screening_record_path = tmp_path / "screening_v2.json"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=tmp_path / "manifest.yaml",
+            pins_out=tmp_path / "pins.json",
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+            summary_out=screening_record_path,  # screening record と同一パス
+            screening_record_path=screening_record_path,
+        )
+
+
+def test_reject_output_input_collisions_detects_m1_registry_vs_pins_out(tmp_path: Path):
+    """X1(a): `m1_registry_path` を渡した場合、`--pins-out` の誤設定で M1
+    registry を上書きしうる衝突を fail-closed で拒否する。"""
+    pins_out = tmp_path / "pins.json"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=tmp_path / "manifest.yaml",
+            pins_out=pins_out,
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+            m1_registry_path=pins_out,  # pins_out と同一パス
+        )
+
+
+def test_reject_output_input_collisions_detects_m1_registry_vs_summary_out(tmp_path: Path):
+    """X1(a): `--summary-out` が M1 registry と同じパスを指す場合も同様に
+    fail-closed で拒否する。"""
+    m1_registry_path = tmp_path / "registry.yaml"
+
+    with pytest.raises(bm.BuildM3dPairsError, match="公開先が入力と衝突している"):
+        bm._reject_output_input_collisions(
+            out_dir=tmp_path / "out",
+            manifest_out=tmp_path / "manifest.yaml",
+            pins_out=tmp_path / "pins.json",
+            expected_wav_filenames=["a.wav"],
+            fixtures_path=tmp_path / "fixtures.yaml",
+            synth_specs_path=tmp_path / "specs.yaml",
+            vocadito_audio_paths=[],
+            summary_out=m1_registry_path,
+            m1_registry_path=m1_registry_path,
+        )
+
+
+def test_reject_output_input_collisions_passes_with_disjoint_screening_and_m1_registry(
+    tmp_path: Path,
+):
+    """`screening_record_path`/`m1_registry_path` の両方を渡しても、互いに
+    disjoint なら通る（正常系の回帰ガード）。"""
+    bm._reject_output_input_collisions(
+        out_dir=tmp_path / "out",
+        manifest_out=tmp_path / "manifest.yaml",
+        pins_out=tmp_path / "pins.json",
+        expected_wav_filenames=["a.wav"],
+        fixtures_path=tmp_path / "fixtures.yaml",
+        synth_specs_path=tmp_path / "specs.yaml",
+        vocadito_audio_paths=[],
+        summary_out=tmp_path / "summary.json",
+        screening_record_path=tmp_path / "screening_v2.json",
+        m1_registry_path=tmp_path / "registry.yaml",
+    )  # 例外が飛ばなければ OK
+
+
 def test_run_and_publish_rejects_summary_out_collision_before_generation(
     tmp_path: Path, monkeypatch
 ):

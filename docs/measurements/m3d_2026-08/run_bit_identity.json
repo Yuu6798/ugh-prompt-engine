@@ -1,0 +1,316 @@
+{
+  "compared_files": {
+    "run1": "docs/measurements/m3d_2026-08/run1.json",
+    "run2": "docs/measurements/m3d_2026-08/run2.json"
+  },
+  "excluded_fields_note": "Top-level run_id/started_utc/recorded_utc excluded as per-run identifiers/timestamps, not pair-level fields. No timestamp fields exist within individual pair dicts (verified by schema inspection). Comparison is per-pair dict equality (report['pairs'][pair_id]) over the intersection of pair id keys present in both reports; pair id keys unique to one report are reported separately under pair_key_set_mismatch and are not counted in verdict.compared_pairs. 'identical: true' is bit-for-bit dict equality of the recorded pair entry as-is, regardless of how far the M3 comparator chain (crepe extraction -> representation -> NW alignment -> axis similarity) actually ran for that pair: of the 66 tuning pairs, all 66 executed at minimum extraction + M1 observation-gate evaluation (this is what the tuning 66/66 bit-identity figure directly establishes), but only 4 of the 66 reached the full chain through axis similarity (60 stopped at the observation gate with comparison.axes all null, 2 more stopped at the coverage/alignment gate 'insufficient_overlap'); breakdown machine-derived from run1.json comparison.reasons/comparison.axes (corrected: Codex review #255 round 11 BB1 -- prior wording read as if all 66 tuning pairs ran the full chain). For holdout pairs (status: holdout_locked_until_frozen) the entry is only the 2-key lock marker {split, status} and no extraction/comparison was executed for those pairs in this run. See docs/m3d_calibration_record.md §3 and docs/measurements/m3d_2026-08/README.md for the same tuning 66 (4 full-chain / 62 not-full-chain) / holdout 32 accounting.",
+  "input_sha256": {
+    "run1": "45e2fdca0190ba36a263bf81f75fce7a6442cff3c5894b30d34e270120ffd803",
+    "run2": "872a363951113c6eb691a93ed15302af9907490ec5edb0985b195df685953740"
+  },
+  "pair_key_set_mismatch": {
+    "only_in_run1": [],
+    "only_in_run2": []
+  },
+  "per_pair": {
+    "nc_real_holdout_00_vocadito_20_vocadito_28": {
+      "identical": true
+    },
+    "nc_real_holdout_01_vocadito_28_vocadito_34": {
+      "identical": true
+    },
+    "nc_real_holdout_02_vocadito_34_vocadito_6": {
+      "identical": true
+    },
+    "nc_real_holdout_03_vocadito_6_vocadito_7": {
+      "identical": true
+    },
+    "nc_real_holdout_04_vocadito_7_vocadito_8": {
+      "identical": true
+    },
+    "nc_real_holdout_05_vocadito_8_vocadito_20": {
+      "identical": true
+    },
+    "nc_real_tuning_00_vocadito_10_vocadito_11": {
+      "identical": true
+    },
+    "nc_real_tuning_01_vocadito_11_vocadito_15": {
+      "identical": true
+    },
+    "nc_real_tuning_02_vocadito_15_vocadito_16": {
+      "identical": true
+    },
+    "nc_real_tuning_03_vocadito_16_vocadito_17": {
+      "identical": true
+    },
+    "nc_real_tuning_04_vocadito_17_vocadito_22": {
+      "identical": true
+    },
+    "nc_real_tuning_05_vocadito_22_vocadito_24": {
+      "identical": true
+    },
+    "nc_real_tuning_06_vocadito_24_vocadito_3": {
+      "identical": true
+    },
+    "nc_real_tuning_07_vocadito_3_vocadito_30": {
+      "identical": true
+    },
+    "nc_real_tuning_08_vocadito_30_vocadito_32": {
+      "identical": true
+    },
+    "nc_real_tuning_09_vocadito_32_vocadito_40": {
+      "identical": true
+    },
+    "nc_real_tuning_10_vocadito_40_vocadito_5": {
+      "identical": true
+    },
+    "nc_real_tuning_11_vocadito_5_vocadito_10": {
+      "identical": true
+    },
+    "ni_synth_tuning_00_m3d_synth_interval_neg1_a_m3d_synth_interval_neg1_b": {
+      "identical": true
+    },
+    "ni_synth_tuning_01_m3d_synth_interval_neg2_a_m3d_synth_interval_neg2_b": {
+      "identical": true
+    },
+    "nr_synth_tuning_00_m3d_synth_rhythm_neg1_a_m3d_synth_rhythm_neg1_b": {
+      "identical": true
+    },
+    "nr_synth_tuning_01_m3d_synth_rhythm_neg2_a_m3d_synth_rhythm_neg2_b": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_20_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_20_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_20_rate_087": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_20_rate_112": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_28_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_28_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_28_rate_087": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_28_rate_112": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_34_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_34_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_34_rate_087": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_34_rate_112": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_6_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_6_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_6_rate_087": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_6_rate_112": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_7_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_7_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_7_rate_087": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_7_rate_112": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_8_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_8_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_8_rate_087": {
+      "identical": true
+    },
+    "pt_real_holdout_vocadito_8_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_10_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_10_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_10_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_10_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_11_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_11_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_11_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_11_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_15_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_15_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_15_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_15_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_16_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_16_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_16_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_16_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_17_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_17_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_17_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_17_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_22_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_22_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_22_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_22_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_24_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_24_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_24_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_24_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_30_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_30_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_30_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_30_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_32_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_32_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_32_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_32_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_3_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_3_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_3_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_3_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_40_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_40_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_40_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_40_rate_112": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_5_pitch_m5": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_5_pitch_p3": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_5_rate_087": {
+      "identical": true
+    },
+    "pt_real_tuning_vocadito_5_rate_112": {
+      "identical": true
+    },
+    "pt_synth_holdout_m3d_synth_holdout_pos_pitch_p3": {
+      "identical": true
+    },
+    "pt_synth_holdout_m3d_synth_holdout_pos_rate_090": {
+      "identical": true
+    },
+    "pt_synth_tuning_m3d_synth_tuning_pos_pitch_p3": {
+      "identical": true
+    },
+    "pt_synth_tuning_m3d_synth_tuning_pos_rate_090": {
+      "identical": true
+    }
+  },
+  "verdict": {
+    "all_identical": true,
+    "compared_pairs": 98,
+    "mismatched_pairs": []
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "schema": "m3d-mini-cost-calibration/0.1",
+  "generated_utc": "2026-08-09T00:55:41Z",
+  "crepe_call_config": {
+    "model_capacity": "full",
+    "viterbi": true,
+    "step_size_ms": 10,
+    "source": "src/svp_rpe/rpe/learned/crepe_adapter.py:extract_crepe_f0 と同一設定（extractors.py の crepe_direct 経路が呼ぶ waveform 読込は librosa.load(path, sr=None, mono=True)）"
+  },
+  "measurements": [
+    {
+      "file": "build/external_m3d/vocadito/Audio/vocadito_10.wav",
+      "duration_sec": 9.0978,
+      "wall_sec": 30.3919,
+      "model_loaded_before": false,
+      "n_frames": 910
+    },
+    {
+      "file": "build/external_m3d/m3d_pairs/vocadito_10__pitch_p3.wav",
+      "duration_sec": 9.0978,
+      "wall_sec": 21.0378,
+      "model_loaded_before": true,
+      "n_frames": 910
+    },
+    {
+      "file": "build/external_m3d/m3d_pairs/vocadito_10__rate_087.wav",
+      "duration_sec": 10.4573,
+      "wall_sec": 21.0329,
+      "model_loaded_before": true,
+      "n_frames": 1046
+    },
+    {
+      "file": "build/external_m3d/m3d_pairs/vocadito_10__rate_112.wav",
+      "duration_sec": 8.1231,
+      "wall_sec": 11.3306,
+      "model_loaded_before": true,
+      "n_frames": 813
+    }
+  ],
+  "warm_state_summary": {
+    "n_warm_measurements": 3,
+    "warm_wall_sec_mean": 17.8004,
+    "warm_duration_sec_mean": 9.2261,
+    "warm_realtime_factor_mean": 1.9294,
+    "note": "wall_sec / duration_sec の平均（ロード済み state のみ、1回目除く）"
+  },
+  "first_call_model_load_overhead_sec": 12.8389,
+  "first_call_model_load_overhead_note": "1回目の wall_sec から、warm state の realtime factor を使って推定した音声処理分（duration_sec * warm_rtf_mean）を差し引いた残差。モデルロード（h5 読込 + tf グラフ構築等）の概算単価とみなす。",
+  "extrapolation": {
+    "note": "起動数会計は preregistration.md §1.4 の pair×2 会計（tuning phase run 132 起動、run×2 repeats で計264起動＝2 プロセス、holdout 検証 run 196 起動＝1 プロセス、総計 460 起動＝3 プロセス分）。モデルロードは 1 run=1 プロセス契約のもとプロセスあたり1回として按分する。",
+    "tuning_run_1x_132_launches": {
+      "n_launches": 132,
+      "n_processes": 1,
+      "steady_state_wall_sec": 2349.66,
+      "plus_load_overhead_sec": 2362.5,
+      "plus_load_overhead_min": 39.37
+    },
+    "tuning_run_x2_repeats_264_launches": {
+      "n_launches": 264,
+      "n_processes": 2,
+      "steady_state_wall_sec": 4699.31,
+      "plus_load_overhead_sec": 4724.99,
+      "plus_load_overhead_min": 78.75
+    },
+    "holdout_run_196_launches": {
+      "n_launches": 196,
+      "n_processes": 1,
+      "steady_state_wall_sec": 3488.88,
+      "plus_load_overhead_sec": 3501.72,
+      "plus_load_overhead_min": 58.36
+    },
+    "total_460_launches_3_processes": {
+      "n_launches": 460,
+      "n_processes": 3,
+      "steady_state_wall_sec": 8188.2,
+      "plus_load_overhead_sec": 8226.72,
+      "plus_load_overhead_min": 137.11
+    }
+  }
+}

@@ -96,18 +96,48 @@ pin の一致検証を fail-closed で行う。限界の明記: sidecar は非�
   staging dir / out_dir 配下に内包されることを確認し、内包外は fail-closed
   で拒否する。
 
+**Codex レビュー第 4 巡対応（U2・変形バイトの screening record 照合）**:
+`_verify_screening_transform_parameters` は変形パラメータ（半音幅・タイム
+レート）の**数値**一致のみを見ており、`make_variants`/librosa/WAV シリアラ
+イズの実装自体が変わった場合（パラメータは同じまま出力バイトだけが変わる
+ケース）を検出できなかった——record は「screening 実行時点の実装で生成した
+変形」をゲート済みだが、builder は「build 実行時点の実装で生成した変形」を
+公開するため、両者のバイトが乖離しても気付けない穴があった。ここで
+`_verify_generated_variant_audio_hashes` を新設し、`generate_vocadito_
+variants` が staging へ実際に書いた各変形 WAV のバイト sha256 を、screening
+record の当該 clip/variant が保持する `audio_sha256`（`screen_m3d_clips.py::
+_gate_one` が S2 で実際に観測ゲートへ通したバイトの digest）と publish 前に
+照合する。1 件でも不一致なら fail-closed（`run_build` が例外を送出し、
+呼び出し側 `run_and_publish` は staging を破棄するのみで `_publish_staged_
+bundle` に到達しない——公開しない）。vocadito 原音自体は既存の pin 照合
+（生成前の一括照合 + `generate_vocadito_variants` のスナップショット束縛 +
+公開直前の T2 再照合）で既に閉じているため、本チェックは変形のみを対象と
+する——「審査されたバイト = 公開されるバイト」の機械保証。
+
 使い方::
 
     python scripts/build_m3d_pairs.py
     python scripts/build_m3d_pairs.py --vocadito-dir /path/to/vocadito --out-dir /tmp/m3d_pairs
     python scripts/build_m3d_pairs.py --check-only
     python scripts/build_m3d_pairs.py --summary-out manifest_summary.json
+
+    # v2 経路（docs/measurements/m3d_2026-08/preregistration_v2.md §2〜§3）:
+    # scripts/screen_m3d_clips.py の出力（m3d-screening/0.1）から survivor を
+    # 決定論分割して manifest v2 を作る。既定の v1 経路（--screening-record
+    # 未指定）とは完全に独立で、v1 の挙動は本フラグの追加によって一切変わらない。
+    python scripts/build_m3d_pairs.py \\
+        --screening-record build/external_m3d/m3d_screening_v2.json \\
+        --manifest-out tests/fixtures/melody_bench/m3d_pairs_manifest_v2.yaml \\
+        --pins-out build/external_m3d/m3d_pairs_pins_v2.json \\
+        --out-dir build/external_m3d/m3d_pairs_v2 \\
+        --synth-specs tests/fixtures/melody_bench/m3d_synth_specs_v2.yaml
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -116,7 +146,7 @@ import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import librosa
 import numpy as np
@@ -578,6 +608,533 @@ def select_clips(fixtures: Dict[str, str]) -> Tuple[List[str], List[str]]:
     return tuning, holdout
 
 
+# --------------------------------------------------------------------------- #
+# v2: スクリーニング記録読み込み + 選定・分割規則（決定論。prereg_v2 §2〜§3）
+# --------------------------------------------------------------------------- #
+# `docs/measurements/m3d_2026-08/preregistration_v2.md` §2 の選択肢(b) — v1 の
+# 盲選定（sha256(clip_id) 昇順で固定 12/6 を機械的に採る）に代え、`scripts/
+# screen_m3d_clips.py` が M1 観測ゲートで事前スクリーニングした survivor 集合
+# から §3 の決定論分割規則を適用する。v1 の `select_clips`/`TUNING_COUNT`/
+# `HOLDOUT_COUNT` は本節から一切参照せず不変更のまま残す（v1 経路は本節の
+# 追加と完全に独立に動作する）。
+_SCREENING_SCHEMA = "m3d-screening/0.1"
+# prereg_v2 §3: N>=18 は v1 と同規模（先頭 12=tuning/次 6=holdout）。N<18 は
+# ceil(2N/3)=tuning / floor(N/3)=holdout。いずれの場合も tuning<6 または
+# holdout<3 なら実測に進まず fail-closed（バー緩和・ゲート緩和による救済はしない）。
+_V2_LARGE_N_THRESHOLD = 18
+_V2_LARGE_N_TUNING = 12
+_V2_LARGE_N_HOLDOUT = 6
+_V2_MIN_TUNING = 6
+_V2_MIN_HOLDOUT = 3
+
+
+def _load_screening_record(path: Path) -> Tuple[Dict[str, Any], str]:
+    """`scripts/screen_m3d_clips.py` が出力するスクリーニング記録
+    （schema: m3d-screening/0.1）を一度だけ読み、(doc, sha256) を返す。
+
+    R2R N1 と同型（TOCTOU 解消）: 呼び出し側は本関数が返す `data` の再読みを
+    行わない — hash 計算とパースを同一バイト列から行う。schema 不一致・
+    `survivor_clip_ids` の型不正（文字列リストでない）・各 clip_id の字句
+    違反（T3 と同じ許可文字集合）はいずれも fail-closed。
+    """
+    data, digest = _read_bytes_and_sha256(path)
+    doc = _json_loads_no_dup_keys(data)
+    if not isinstance(doc, dict) or doc.get("schema") != _SCREENING_SCHEMA:
+        raise BuildM3dPairsError(
+            f"{path}: schema が {_SCREENING_SCHEMA!r} でない (fail-closed): "
+            f"{doc.get('schema') if isinstance(doc, dict) else doc!r}"
+        )
+    survivors = doc.get("survivor_clip_ids")
+    if not isinstance(survivors, list) or not all(isinstance(c, str) for c in survivors):
+        raise BuildM3dPairsError(
+            f"{path}: 'survivor_clip_ids' が文字列リストでない (fail-closed): {survivors!r}"
+        )
+    for clip_id in survivors:
+        _validate_id_lexical(clip_id, source=f"{path} survivor_clip_ids")
+    return doc, digest
+
+
+# `scripts/screen_m3d_clips.py::_gate_one` が実際に emit する 1 ゲート結果
+# entry の必須キー集合（Codex レビュー第 3 巡 T3 部分対応）。「parse 可能 ≠
+# 形状正しい」を機械強制する — status のみを埋めた手編集/偽造 entry を
+# per-clip ゲート結果として受理しない。gate_metrics の**中身**からゲート
+# 判定を再導出する検証はスコープ外（設計判定 = PR #255 レビュースレッド T3
+# 返信参照: 一貫した偽造 record は metrics ごと偽造可能であり、再導出は
+# fabricated status の検出という保証を提供しないため）。本チェックは
+# キー集合の存在のみを機械強制する。
+_REQUIRED_GATE_RESULT_KEYS: Tuple[str, ...] = (
+    "status",
+    "reasons",
+    "audio_sha256",
+    "route_provenance",
+    "gate_metrics",
+)
+
+# 第 6 巡 W1 対応: `status` の閉集合。producer 側の唯一の書き手
+# `svp_rpe.melody.observability.assess_observability`（single source of
+# truth）は `status = "sufficient" if not reasons else "insufficient"` で
+# しかこのフィールドを生成しない（同モジュール `ObservabilityReport.status`
+# docstring: `status: str  # "sufficient" | "insufficient"`）。
+_ALLOWED_GATE_RESULT_STATUS_VALUES: frozenset = frozenset({"sufficient", "insufficient"})
+
+
+def _validate_gate_result_shape(entry: Any, *, source: str, label: str) -> None:
+    """record の 1 ゲート結果 entry が `_REQUIRED_GATE_RESULT_KEYS` を全て
+    備えているかを検証する（Codex レビュー第 3 巡 T3 部分対応）。欠落キーは
+    fail-closed（`status` 単体・`gate_metrics` 欠落等、部分的に正しい形の
+    entry も拒否する）。
+    """
+    if not isinstance(entry, dict):
+        raise BuildM3dPairsError(f"{source}: {label} が mapping でない (fail-closed)")
+    missing = sorted(set(_REQUIRED_GATE_RESULT_KEYS) - set(entry))
+    if missing:
+        raise BuildM3dPairsError(
+            f"{source}: {label} に screener 出力必須キーが欠落 (fail-closed): "
+            f"欠落={missing} (必須キー集合: {sorted(_REQUIRED_GATE_RESULT_KEYS)})"
+        )
+    if not isinstance(entry.get("status"), str):
+        raise BuildM3dPairsError(f"{source}: {label}.status が文字列でない (fail-closed)")
+    # 第 6 巡 W1 対応: producer（`scripts/screen_m3d_clips.py::_gate_one` →
+    # `svp_rpe.melody.observability.assess_observability`）は
+    # `status = "sufficient" if not reasons else "insufficient"` の 2 値
+    # closed enumeration しか emit しない（single source of truth:
+    # `src/svp_rpe/melody/observability.py` の `assess_observability`）。
+    # 従来は「文字列でありさえすれば受理」だったため、typo（例
+    # `"sufficent"`）や将来の新規 status 値が record に紛れ込んだ場合、
+    # `_recompute_survivor_ids_from_clips` はそれを非 "sufficient" として
+    # 素通しして insufficient 扱いする——`screen()` 本体の集計
+    # （`survivor_clip_ids`）と同じ厳密比較のため record 内部としては整合
+    # したまま、正当な survivor が無音で失われ、偽の最小分割閾値割れ
+    # （事前登録 stop 条件）を誘発しうる。producer 契約が閉集合である以上、
+    # ここでも閉集合検証を機械強制する。
+    status_value = entry["status"]
+    if status_value not in _ALLOWED_GATE_RESULT_STATUS_VALUES:
+        raise BuildM3dPairsError(
+            f"{source}: {label}.status={status_value!r} が既知の値でない (fail-closed; "
+            f"許可値={sorted(_ALLOWED_GATE_RESULT_STATUS_VALUES)})"
+        )
+
+
+def _recompute_survivor_ids_from_clips(
+    screening_doc: Dict[str, Any], *, source: str, fixture_clip_ids: "Iterable[str]"
+) -> List[str]:
+    """`clips`（各 clip の原音+4 変形ゲート結果）から survivor 集合を独立に
+    再計算する（Codex レビュー R1 対応 (a)）。
+
+    `screen_m3d_clips.py` が書いた集計値（`clips[cid]["survivor"]` /
+    `survivor_clip_ids`）を一切信用せず、素の `status` フィールドのみから
+    再導出する——record が改ざん・手編集されていても検出できるようにする
+    ため。`screen()` の集計規則そのまま: 原音 `status == "sufficient"` かつ
+    `VOCADITO_VARIANT_ORDER` の全変形が `status == "sufficient"` の clip のみ
+    survivor。s1 不十分な clip は変形ゲート結果を持たない（`screen()` が
+    S1 で continue するため）——正当な record ではこの非対称性自体が契約
+    なので、原音 sufficient なのに変形ゲート結果が欠落している場合は
+    改ざんとみなし fail-closed とする（緩和しない）。
+
+    `fixture_clip_ids`（Codex レビュー第 2 巡 N4 対応）: `clips` の key 集合が
+    `fixture_clip_ids`（digest 束縛済み fixtures yaml 全数の clip id 集合）と
+    **完全一致**することを要求する（欠落・余剰とも fail-closed）。R1 時点の
+    再計算は `clips` に実際に載っている clip だけを走査していたため、
+    「fixtures 登録 20 件のうち sufficient な 9 件だけを載せ、残り 11 件を丸ごと
+    省略した」切り詰め record でも、その 9 件が矛盾なく survivor と一致してい
+    れば独立再計算自体は素通りしてしまう穴があった（6/3 の最小分割閾値さえ
+    満たせば `select_clips_v2` まで到達しうる）。本チェックにより、full census
+    （fixtures 全 clip）に対する screening が実際に行われたことを、record の
+    構造そのものから強制する。
+    """
+    clips = screening_doc.get("clips")
+    if not isinstance(clips, dict):
+        raise BuildM3dPairsError(f"{source}: 'clips' が mapping でない (fail-closed)")
+    expected_ids = set(fixture_clip_ids)
+    actual_ids = set(clips)
+    if actual_ids != expected_ids:
+        missing = sorted(expected_ids - actual_ids)
+        extra = sorted(actual_ids - expected_ids)
+        raise BuildM3dPairsError(
+            f"{source}: 'clips' の key 集合が fixtures 全 clip id 集合と不一致 "
+            f"(fail-closed; 欠落={missing} 余剰={extra})"
+        )
+    survivors: List[str] = []
+    for clip_id, entry in clips.items():
+        if not isinstance(entry, dict):
+            raise BuildM3dPairsError(f"{source}: clips[{clip_id!r}] が mapping でない (fail-closed)")
+        original = entry.get("original")
+        if original is None:
+            raise BuildM3dPairsError(f"{source}: clips[{clip_id!r}].original が欠落 (fail-closed)")
+        _validate_gate_result_shape(original, source=source, label=f"clips[{clip_id!r}].original")
+        if original["status"] != "sufficient":
+            continue
+        all_variants_sufficient = True
+        for variant_key in VOCADITO_VARIANT_ORDER:
+            variant_entry = entry.get(variant_key)
+            if variant_entry is None:
+                raise BuildM3dPairsError(
+                    f"{source}: clips[{clip_id!r}].{variant_key} が欠落 "
+                    "(fail-closed; original sufficient なのに変形ゲート結果が無い)"
+                )
+            _validate_gate_result_shape(
+                variant_entry, source=source, label=f"clips[{clip_id!r}].{variant_key}"
+            )
+            if variant_entry["status"] != "sufficient":
+                all_variants_sufficient = False
+        if all_variants_sufficient:
+            survivors.append(clip_id)
+    return sorted(survivors)
+
+
+def _verify_screening_survivors(
+    screening_doc: Dict[str, Any], *, source: str, fixture_clip_ids: "Iterable[str]"
+) -> None:
+    """record の `survivor_clip_ids` が per-clip ゲート結果からの独立再計算と
+    **完全一致**することを要求する（Codex レビュー R1 対応 (a)）。不一致は
+    fail-closed（record 内の集計値だけを信用した黙認をしない）。
+
+    `fixture_clip_ids`（N4 対応）はそのまま `_recompute_survivor_ids_from_clips`
+    へ渡し、`clips` が fixtures 全数を網羅していることも合わせて強制する。
+    """
+    recorded = screening_doc.get("survivor_clip_ids")
+    recomputed = _recompute_survivor_ids_from_clips(
+        screening_doc, source=source, fixture_clip_ids=fixture_clip_ids
+    )
+    if sorted(recorded) != recomputed:
+        missing = sorted(set(recomputed) - set(recorded))
+        extra = sorted(set(recorded) - set(recomputed))
+        raise BuildM3dPairsError(
+            f"{source}: 'survivor_clip_ids' が per-clip ゲート結果からの独立再計算と不一致 "
+            f"(fail-closed; recomputed に不足={missing} recorded の余剰={extra})"
+        )
+
+
+def _verify_screening_input_digests(
+    screening_doc: Dict[str, Any], *, source: str, fixtures_sha256: str
+) -> None:
+    """record が保持する入力 digest（m2c fixtures / m1 registry）を、現在の
+    build 入力ファイルの実バイト sha256 と照合する（Codex レビュー R1 対応
+    (b)）。record にフィールド自体が無い場合もスキーマ上の欠落として
+    fail-closed とする（黙認しない）。
+    """
+    recorded_fixtures_sha = screening_doc.get("m2c_external_fixtures_sha256")
+    if not isinstance(recorded_fixtures_sha, str) or len(recorded_fixtures_sha) != 64:
+        raise BuildM3dPairsError(
+            f"{source}: 'm2c_external_fixtures_sha256' が欠落/不正 (fail-closed)"
+        )
+    if recorded_fixtures_sha != fixtures_sha256:
+        raise BuildM3dPairsError(
+            f"{source}: m2c_external_fixtures sha256 mismatch (fail-closed; "
+            f"screening record={recorded_fixtures_sha} 現在の build 入力={fixtures_sha256})"
+        )
+
+    recorded_registry_sha = screening_doc.get("m1_registry_sha256")
+    if not isinstance(recorded_registry_sha, str) or len(recorded_registry_sha) != 64:
+        raise BuildM3dPairsError(f"{source}: 'm1_registry_sha256' が欠落/不正 (fail-closed)")
+    _, actual_registry_sha = _read_bytes_and_sha256(harness.M1_REGISTRY_PATH)
+    if recorded_registry_sha != actual_registry_sha:
+        raise BuildM3dPairsError(
+            f"{source}: m1 registry sha256 mismatch (fail-closed; "
+            f"screening record={recorded_registry_sha} 現物={actual_registry_sha}; "
+            f"path={harness.M1_REGISTRY_PATH})"
+        )
+
+
+def _verify_screening_transform_parameters(
+    screening_doc: Dict[str, Any], *, source: str
+) -> None:
+    """record が保持する変形パラメータ（`transform_parameters.semitones` /
+    `transform_parameters.time_rates`）を、builder の現行定数
+    （`VOCADITO_SEMITONES` / `VOCADITO_TIME_RATES`）と照合する（Codex レビュー
+    第 3 巡 T1 対応）。
+
+    `screen_m3d_clips.py` は S2 の変形ゲートに builder と同一の定数を再利用
+    する設計だが、record の `transform_parameters` フィールド自体はこれまで
+    builder 側で一切照合していなかった——record が異なるパラメータ（別の
+    半音幅・タイムレート）で変形ゲートを回していた場合、record の survivor
+    判定は builder が実際に生成する変形と対応しなくなる。フィールド欠落・
+    型不正・値不一致のいずれも fail-closed とする（緩和・黙認しない）。
+    """
+    transform_parameters = screening_doc.get("transform_parameters")
+    if not isinstance(transform_parameters, dict):
+        raise BuildM3dPairsError(
+            f"{source}: 'transform_parameters' が欠落/不正 (fail-closed): {transform_parameters!r}"
+        )
+    expected: Dict[str, List[float]] = {
+        "semitones": list(VOCADITO_SEMITONES),
+        "time_rates": list(VOCADITO_TIME_RATES),
+    }
+    for key, expected_values in expected.items():
+        recorded_values = transform_parameters.get(key)
+        is_valid_numeric_list = isinstance(recorded_values, list) and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in recorded_values
+        )
+        if not is_valid_numeric_list or [float(v) for v in recorded_values] != expected_values:
+            raise BuildM3dPairsError(
+                f"{source}: 'transform_parameters.{key}' が builder 定数と不一致/欠落 "
+                f"(fail-closed; 期待={expected_values} record={recorded_values!r})"
+            )
+
+
+# prereg_v2 §2 が要求する固定 route（screen_m3d_clips.py::_ROUTE_NAME と同値。
+# 定数として二重管理を避けたいが、builder は screener を import しない設計
+# （screener が builder を import する片方向依存）のため値の複製で束縛する）。
+_PREREGISTERED_ROUTE_NAME = "crepe_direct"
+
+# route_provenance の必須 sha256 pin（`run_melody_comparison.
+# _CREPE_ROUTE_PROVENANCE_REQUIRED_PINS` と同じ 2 キー・同じ書式規約——crepe
+# 系経路が run phase 側で既に課している規律と一致させる）。
+_REQUIRED_ROUTE_PROVENANCE_SHA256_KEYS: Tuple[str, ...] = (
+    "extractor_code_sha256",
+    "extractor_weights_sha256",
+)
+
+
+def _verify_screening_route_binding(
+    screening_doc: Dict[str, Any], *, source: str
+) -> Dict[str, str]:
+    """record の観測経路が prereg_v2 §2 の事前登録値に束縛されていることを
+    検証する（Codex レビュー第 5 巡 V1 対応）。
+
+    (a) top-level `route` が事前登録値 `_PREREGISTERED_ROUTE_NAME`
+        （"crepe_direct"）と逐語一致すること。
+    (b) `clips` の全エントリ（原音+全変形。S1 insufficient な clip は変形
+        ゲート結果自体を持たない非対称性——`screen()`/`_recompute_survivor_
+        ids_from_clips` と同じ契約——ため、record に実在するエントリのみを
+        走査対象とする）の `route_provenance` が**相互に完全同一**であること。
+        CREPE weights/code の drift や複数環境のマージにより record 内で
+        観測経路が混在する（= 複数環境 census）ことを fail-closed で拒否する。
+    (c) 各エントリの `route_provenance` が必須 sha256 pin
+        （`extractor_code_sha256` / `extractor_weights_sha256`）を備え、
+        64 桁小文字 hex の書式であること（`harness._is_sha256_hex` を再利用
+        — run phase 側の crepe 必須 pin 書式検証と同じ規約に揃える）。
+
+    設計判定（特定ハッシュ定数への等値要求をしない理由）: `extractor_weights_
+    sha256` は machine-dependent な記録（重み配布物のローカル pin）であり、
+    ビルダーのソースコードへ特定ハッシュ値を定数として埋め込むことは環境
+    依存性を誤って普遍化してしまう。ここでの束縛は「route 名の事前登録値
+    との逐語一致」+「record 内で単一の観測経路のみが使われたことの相互一致
+    検証」+「sha256 形式検証」の三層で成立させる設計とした——record 内で
+    観測経路が分裂していないこと（単一環境・単一 run の census であること）
+    を機械保証すれば、prereg_v2 §2 の「同一抽出器 pin」要求を満たせる。
+
+    本関数は `clips` の key 集合が fixtures 全数と一致することの検証は行わ
+    ない（`_verify_screening_survivors` が N4 対応で既に強制済みであり、
+    `run_build` では必ずその後に呼ばれる——二重化を避ける）。
+
+    戻り値（第 6 巡 W2 対応・部分採用 (b)）: record 内で相互に完全一致する
+    ことを (b) で検証済みの単一 `route_provenance` から
+    `{"extractor_code_sha256": ..., "extractor_weights_sha256": ...}` を返す
+    ——呼び出し側 `run_build` がこれを pins サイドカーの
+    `screening_extractor_code_sha256`/`screening_extractor_weights_sha256`
+    として記録し、`check_existing` が record 現物との一致を再照合できるよう
+    にするため。走査対象が 0 件（= record 内に `route_provenance` を持つ
+    エントリが 1 つも無い）の場合は返す値そのものが定義できないため
+    fail-closed とする。
+    """
+    recorded_route = screening_doc.get("route")
+    if recorded_route != _PREREGISTERED_ROUTE_NAME:
+        raise BuildM3dPairsError(
+            f"{source}: 'route' が事前登録値と不一致 (fail-closed; "
+            f"期待={_PREREGISTERED_ROUTE_NAME!r} record={recorded_route!r}; "
+            "preregistration_v2.md §2 の crepe_direct 固定要求)"
+        )
+
+    clips = screening_doc.get("clips")
+    if not isinstance(clips, dict):
+        raise BuildM3dPairsError(f"{source}: 'clips' が mapping でない (fail-closed)")
+
+    reference_provenance: Optional[Dict[str, Any]] = None
+    reference_label: Optional[str] = None
+    for clip_id in sorted(clips):
+        entry = clips[clip_id]
+        if not isinstance(entry, dict):
+            raise BuildM3dPairsError(f"{source}: clips[{clip_id!r}] が mapping でない (fail-closed)")
+        for side_key in ("original", *VOCADITO_VARIANT_ORDER):
+            side_entry = entry.get(side_key)
+            if side_entry is None:
+                # S1 insufficient な clip は変形ゲート結果を持たない契約
+                # （`_recompute_survivor_ids_from_clips` と同じ非対称性）。
+                continue
+            if not isinstance(side_entry, dict):
+                raise BuildM3dPairsError(
+                    f"{source}: clips[{clip_id!r}].{side_key} が mapping でない (fail-closed)"
+                )
+            label = f"clips[{clip_id!r}].{side_key}.route_provenance"
+            provenance = side_entry.get("route_provenance")
+            if not isinstance(provenance, dict):
+                raise BuildM3dPairsError(f"{source}: {label} が mapping でない (fail-closed)")
+            for key in _REQUIRED_ROUTE_PROVENANCE_SHA256_KEYS:
+                value = provenance.get(key)
+                if not harness._is_sha256_hex(value):
+                    raise BuildM3dPairsError(
+                        f"{source}: {label}.{key}={value!r} は 64 桁小文字 hex "
+                        "（sha256 digest）の書式でない (fail-closed)"
+                    )
+            if reference_provenance is None:
+                reference_provenance = provenance
+                reference_label = label
+            elif provenance != reference_provenance:
+                raise BuildM3dPairsError(
+                    f"{source}: {label} が {reference_label} と不一致 "
+                    "(fail-closed; record 内で観測経路（route_provenance）が混在 "
+                    "= 複数環境 census の疑い; "
+                    f"reference={reference_provenance!r} actual={provenance!r})"
+                )
+
+    if reference_provenance is None:
+        raise BuildM3dPairsError(
+            f"{source}: 'clips' に route_provenance を持つエントリが 1 件も無い "
+            "(fail-closed; 観測経路の pin を導出できない)"
+        )
+    return {
+        "extractor_code_sha256": reference_provenance["extractor_code_sha256"],
+        "extractor_weights_sha256": reference_provenance["extractor_weights_sha256"],
+    }
+
+
+def _find_screening_record_extractor_provenance(
+    screening_doc: Dict[str, Any],
+) -> Optional[Dict[str, str]]:
+    """`check_existing`（第 6 巡 W2 対応・部分採用 (b)）専用の軽量抽出:
+
+    screening record の `clips` を走査し、最初に見つかった書式検証済み
+    （`harness._is_sha256_hex`）`route_provenance` から
+    `{"extractor_code_sha256": ..., "extractor_weights_sha256": ...}` を
+    返す。見つからなければ `None`。
+
+    `_verify_screening_route_binding` と異なり、record 内で全エントリの
+    `route_provenance` が相互に完全一致することの再検証は**行わない**——
+    本関数を呼ぶ `check_existing` の呼び出し元は、この時点で record の
+    バイト列そのものが pins サイドカーに記録された
+    `screening_record_sha256` と一致することを既に確認済みであり
+    （バイト一致 = build 時点で `_verify_screening_route_binding` により
+    相互一致が検証された内容そのもの、という前提に立つ）、ここでは単に
+    その中の 1 エントリから比較対象の値を読み出すだけで足りる。
+    """
+    clips = screening_doc.get("clips")
+    if not isinstance(clips, dict):
+        return None
+    for clip_id in sorted(clips):
+        entry = clips.get(clip_id)
+        if not isinstance(entry, dict):
+            continue
+        for side_key in ("original", *VOCADITO_VARIANT_ORDER):
+            side_entry = entry.get(side_key)
+            if not isinstance(side_entry, dict):
+                continue
+            provenance = side_entry.get("route_provenance")
+            if not isinstance(provenance, dict):
+                continue
+            code_sha = provenance.get("extractor_code_sha256")
+            weights_sha = provenance.get("extractor_weights_sha256")
+            if harness._is_sha256_hex(code_sha) and harness._is_sha256_hex(weights_sha):
+                return {
+                    "extractor_code_sha256": code_sha,
+                    "extractor_weights_sha256": weights_sha,
+                }
+    return None
+
+
+def _verify_generated_variant_audio_hashes(
+    screening_doc: Dict[str, Any],
+    *,
+    source: str,
+    vocadito_variants: "Dict[str, Dict[str, Path]]",
+    staging_wav_dir: Path,
+) -> None:
+    """`generate_vocadito_variants` が `staging_wav_dir` へ実際に書いた各変形
+    WAV のバイト sha256 を、screening record が保持する当該 clip/variant の
+    `audio_sha256` と publish 前に照合する（Codex レビュー第 4 巡 U2 対応）。
+
+    `_verify_screening_transform_parameters` は変形パラメータ（半音幅・タイム
+    レート）の数値一致のみを見ており、`make_variants`/librosa/WAV シリアラ
+    イズの実装自体が変わった場合（パラメータは同じまま出力バイトだけが変わる
+    ケース）を検出できない——record は「screening 実行時点の実装で生成した
+    変形」をゲート済みだが、builder は「build 実行時点の実装で生成した変形」
+    を公開してしまい、登録済み survivor が実は未スクリーニングのバイトで
+    公開される事態が全ての pin と整合したまま起こりうる。
+
+    `screening_doc["clips"][clip_id][variant_key]["audio_sha256"]` は
+    `scripts/screen_m3d_clips.py::_gate_one` が S2 で実際に観測ゲートへ通した
+    変形バイトの digest（U1 のスナップショット束縛により、この digest は
+    観測入力バイトそのものと一致することが構造的に保証されている）。ここで
+    staging 済みの実バイトを非キャッシュで hash し、1 件でも不一致なら
+    fail-closed（呼び出し側 `run_build` が例外を送出し、`run_and_publish` は
+    staging を破棄するのみで `_publish_staged_bundle` に到達しない——公開
+    しない）とする。
+
+    vocadito 原音自体は既存の pin 照合（生成前の一括照合 +
+    `generate_vocadito_variants` のスナップショット束縛 + 公開直前の T2
+    再照合）で既に閉じているため、本チェックは変形のみを対象とする。
+    """
+    clips = screening_doc.get("clips")
+    if not isinstance(clips, dict):
+        raise BuildM3dPairsError(f"{source}: 'clips' が mapping でない (fail-closed)")
+    mismatches: List[str] = []
+    for clip_id, variants in vocadito_variants.items():
+        clip_entry = clips.get(clip_id)
+        if not isinstance(clip_entry, dict):
+            raise BuildM3dPairsError(
+                f"{source}: clips[{clip_id!r}] が欠落/不正 (fail-closed; "
+                "生成対象 clip の screening record エントリが見つからない)"
+            )
+        for variant_key, final_path in variants.items():
+            variant_entry = clip_entry.get(variant_key)
+            expected_sha256 = (
+                variant_entry.get("audio_sha256") if isinstance(variant_entry, dict) else None
+            )
+            if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
+                raise BuildM3dPairsError(
+                    f"{source}: clips[{clip_id!r}].{variant_key}.audio_sha256 が欠落/不正 "
+                    "(fail-closed)"
+                )
+            staged_path = staging_wav_dir / final_path.name
+            actual_sha256 = file_sha256(staged_path, use_cache=False)
+            if actual_sha256 != expected_sha256:
+                mismatches.append(
+                    f"{clip_id}/{variant_key}: sha256 mismatch "
+                    f"(staged={staged_path} actual={actual_sha256} "
+                    f"screening record audio_sha256={expected_sha256})"
+                )
+    if mismatches:
+        raise BuildM3dPairsError(
+            f"{source}: 生成変形 WAV のバイトが screening record の audio_sha256 と"
+            " 不一致 (fail-closed; 公開しない): " + "; ".join(mismatches)
+        )
+
+
+def select_clips_v2(survivor_clip_ids: "List[str]") -> Tuple[List[str], List[str]]:
+    """v2 選定・分割規則（決定論・prereg_v2 §3）: survivor を
+    `sha256(clip_id)` の hex 表現昇順に整列し、
+
+    - N >= 18: 先頭 12 = tuning / 次の 6 = holdout（v1 と同規模）
+    - N < 18: 先頭 ceil(2N/3) = tuning / 次の floor(N/3) = holdout
+
+    のいずれかで tuning/holdout を機械的に決める。tuning < 6 または
+    holdout < 3 になる場合は実測に進まず `BuildM3dPairsError`（fail-closed;
+    バー緩和・ゲート緩和による救済はしない — prereg_v2 §3「停止条件」）。
+
+    重複 survivor_clip_ids は（正当な入力では発生しないはずだが）防御的に
+    去重してから並べ替える。
+    """
+    ranked = sorted(
+        sorted(set(survivor_clip_ids)),
+        key=lambda cid: hashlib.sha256(cid.encode("utf-8")).hexdigest(),
+    )
+    n = len(ranked)
+    if n >= _V2_LARGE_N_THRESHOLD:
+        tuning_n, holdout_n = _V2_LARGE_N_TUNING, _V2_LARGE_N_HOLDOUT
+    else:
+        tuning_n = math.ceil(2 * n / 3)
+        holdout_n = n // 3
+    if tuning_n < _V2_MIN_TUNING or holdout_n < _V2_MIN_HOLDOUT:
+        raise BuildM3dPairsError(
+            f"survivor 不足により停止条件に抵触 (fail-closed; prereg_v2 §3): "
+            f"survivor N={n} から tuning={tuning_n}/holdout={holdout_n} "
+            f"(必要: tuning>={_V2_MIN_TUNING} かつ holdout>={_V2_MIN_HOLDOUT})"
+        )
+    tuning = ranked[:tuning_n]
+    holdout = ranked[tuning_n : tuning_n + holdout_n]
+    return tuning, holdout
+
+
 def circular_pairs(clip_ids: List[str]) -> List[Tuple[str, str]]:
     """`clip_ids` を id 昇順に並べ、環状に隣接ペア (i, i+1) を作る（設計メモ §1.2）。"""
     ordered = sorted(clip_ids)
@@ -647,12 +1204,15 @@ def _reject_output_input_collisions(
     synth_specs_path: Path,
     vocadito_audio_paths: "List[Path]",
     summary_out: Optional[Path] = None,
+    screening_record_path: Optional[Path] = None,
+    m1_registry_path: Optional[Path] = None,
 ) -> None:
     """公開予定の全出力先（`out_dir` 配下の生成 WAV・`manifest_out`・
     `pins_out`・（指定時）`summary_out`）の resolve() 済み絶対パス集合と、全
-    build 入力（fixtures yaml・synth specs yaml・vocadito WAV 全件）の
-    resolve() 済み絶対パス集合を突き合わせ、(a) 出力同士の重複 (b) 出力と
-    入力の衝突、のいずれかがあれば fail-closed で拒否する（R2R N3）。
+    build 入力（fixtures yaml・synth specs yaml・vocadito WAV 全件・（指定時）
+    screening record・（指定時）M1 registry）の resolve() 済み絶対パス集合を
+    突き合わせ、(a) 出力同士の重複 (b) 出力と入力の衝突、のいずれかがあれば
+    fail-closed で拒否する（R2R N3）。
 
     生成（`staging_wav_dir` への物理書き込み・librosa/build_signal 呼び出し）を
     一切開始する前に呼ぶ——公開後に入力を破壊しうる誤設定（例: `--out-dir` を
@@ -664,6 +1224,28 @@ def _reject_output_input_collisions(
     無検査で書かれていた——manifest/pins/生成 WAV/入力ファイルを指すと
     成功終了のまま上書き破壊しうる穴があった。`summary_out` を渡した場合は
     他の出力（manifest_out/pins_out/生成 WAV）と同じ扱いで衝突検査へ編入する。
+
+    `screening_record_path`（v2 経路）: 指定時は他の build 入力
+    （fixtures_path/synth_specs_path/vocadito WAV）と同じ扱いで入力集合へ
+    編入する——`--out-dir`/`--manifest-out`/`--pins-out` の誤設定でスクリー
+    ニング記録自体を上書き破壊する事故を、生成開始前に断つ。呼び出し側は
+    `run_build`（v2 経路。生成前呼び出し時点の `--screening-record` 現物）と
+    `check_existing`（`--summary-out` 使用時。pins サイドカーに記録された
+    過去ビルドの screening record 現物）の**両方**でこの引数を渡す
+    （Codex レビュー第 7 巡 X1(b)。従来 `check_existing` 側は保護対象外で、
+    `--check-only --summary-out <screening_record_path>` が record 自体を
+    無検査で上書き破壊しうる穴があった）。
+
+    `m1_registry_path`（Codex レビュー第 7 巡 X1(a)）: 指定時は他の build
+    入力と同じ扱いで入力集合へ編入する。M1 registry
+    （`run_melody_comparison.M1_REGISTRY_PATH`）は v2 経路の
+    `_verify_screening_input_digests` が route binding / input digest 検証
+    のために読む——`--out-dir`/`--manifest-out`/`--pins-out`/`--summary-out`
+    の誤設定でこの registry 自体を上書き破壊する事故を、生成開始前に断つ。
+    v1 経路（`screening_record_path` 未指定）と `check_existing` は M1
+    registry を一切読まないため、呼び出し側は該当する経路でのみこの引数を
+    渡す（読まない経路への要求追加は誤検出リスクを増やすだけで実害保護に
+    ならないため見送り）。
     """
     outputs: Dict[Path, str] = {}
 
@@ -687,6 +1269,16 @@ def _reject_output_input_collisions(
         fixtures_path.resolve(): f"fixtures_path ({fixtures_path})",
         synth_specs_path.resolve(): f"synth_specs_path ({synth_specs_path})",
     }
+    if screening_record_path is not None:
+        inputs.setdefault(
+            Path(screening_record_path).resolve(),
+            f"screening_record_path ({screening_record_path})",
+        )
+    if m1_registry_path is not None:
+        inputs.setdefault(
+            Path(m1_registry_path).resolve(),
+            f"m1_registry_path ({m1_registry_path})",
+        )
     for audio_path in vocadito_audio_paths:
         inputs.setdefault(Path(audio_path).resolve(), f"vocadito WAV ({audio_path})")
 
@@ -1267,6 +1859,61 @@ def _load_and_validate_pins(path: Path) -> Dict[str, Any]:
             raise BuildM3dPairsError(
                 f"{path}: 'summary_path' が不正な形式 (fail-closed): {summary_path_value!r}"
             )
+
+    # R2 対応（Codex レビュー・screening pin の check_existing 接続）:
+    # `screening_record_path`/`screening_record_sha256` は `--screening-record`
+    # 使用時（v2 経路）のみ書かれる **optional** なフィールドペア（summary と
+    # 同じ後方互換規約 — `_REQUIRED_PINS_KEYS` に含めず `_PINS_SCHEMA` も
+    # bump しない）。存在する場合は両方揃っていなければならない。
+    has_screening_path = "screening_record_path" in doc
+    has_screening_sha = "screening_record_sha256" in doc
+    if has_screening_path != has_screening_sha:
+        raise BuildM3dPairsError(
+            f"{path}: 'screening_record_path' と 'screening_record_sha256' は両方存在するか "
+            "両方欠落かのいずれかでなければならない (fail-closed; 片方のみの記録は sidecar 破損)"
+        )
+    if has_screening_sha:
+        screening_sha_value = doc["screening_record_sha256"]
+        if not isinstance(screening_sha_value, str) or len(screening_sha_value) != 64:
+            raise BuildM3dPairsError(
+                f"{path}: 'screening_record_sha256' が不正な形式 (fail-closed): "
+                f"{screening_sha_value!r}"
+            )
+        screening_path_value = doc["screening_record_path"]
+        if not isinstance(screening_path_value, str) or not screening_path_value:
+            raise BuildM3dPairsError(
+                f"{path}: 'screening_record_path' が不正な形式 (fail-closed): "
+                f"{screening_path_value!r}"
+            )
+
+    # 第 6 巡 W2 対応（部分採用 (b)）: `screening_extractor_code_sha256`/
+    # `screening_extractor_weights_sha256` は `screening_record_path`/
+    # `screening_record_sha256` と同じ後方互換規約の optional フィールド
+    # ペア（`_REQUIRED_PINS_KEYS` に含めず `_PINS_SCHEMA` も bump しない）。
+    # screening record 自体の pin が存在しない sidecar（v1 経路・screening
+    # 未使用ビルド）に、この抽出器 pin だけが単独で存在するのは sidecar
+    # 破損（記録元が無いのに派生値だけがある）とみなし fail-closed とする。
+    has_extractor_code = "screening_extractor_code_sha256" in doc
+    has_extractor_weights = "screening_extractor_weights_sha256" in doc
+    if has_extractor_code != has_extractor_weights:
+        raise BuildM3dPairsError(
+            f"{path}: 'screening_extractor_code_sha256' と "
+            "'screening_extractor_weights_sha256' は両方存在するか両方欠落かの "
+            "いずれかでなければならない (fail-closed; 片方のみの記録は sidecar 破損)"
+        )
+    if has_extractor_code and not has_screening_sha:
+        raise BuildM3dPairsError(
+            f"{path}: 'screening_extractor_code_sha256'/'screening_extractor_weights_sha256' が "
+            "'screening_record_sha256' 無しに単独で存在する (fail-closed; 記録元 screening "
+            "record pin の無い派生 pin は sidecar 破損)"
+        )
+    if has_extractor_code:
+        for field in ("screening_extractor_code_sha256", "screening_extractor_weights_sha256"):
+            extractor_sha_value = doc[field]
+            if not isinstance(extractor_sha_value, str) or len(extractor_sha_value) != 64:
+                raise BuildM3dPairsError(
+                    f"{path}: '{field}' が不正な形式 (fail-closed): {extractor_sha_value!r}"
+                )
     return doc
 
 
@@ -1386,6 +2033,108 @@ def check_existing(
                     f"(actual={actual_summary_sha} expected={expected_summary_sha})"
                 )
 
+    # R2 対応（Codex レビュー・screening pin の check_existing 接続。--check-only
+    # スコープ）: sidecar に screening record の記録がある場合（＝過去に
+    # `--screening-record` 付きでビルドされた v2 経路）、記録された path
+    # （repo-relative）の現物とバイト sha256 を fail-closed で照合する。記録が
+    # あるのに現物が存在しない場合も fail。記録が無い場合（v1 経路ビルド）は
+    # 検証をスキップする——H2 の summary pin 検証と同じ規約（今回の呼び出しに
+    # 渡された引数の有無に依存させず、sidecar が記録している過去の screening
+    # record の整合性そのものを守る）。**run preflight（run_melody_comparison
+    # 側）は本対応の対象外** — manifest+audio の最小独立複製という v1 事前
+    # 登録第 7 ラウンドの凍結設計を維持し、screening record は build 入力 pin
+    # ファミリー（m2c fixtures/synth specs と同格 = --check-only スコープ）
+    # として扱う。
+    # X1(b)（Codex レビュー第 7 巡）: sidecar に記録された screening record の
+    # 絶対パス（存在すれば）を、下の summary_out 衝突検査（`--summary-out`
+    # 経路）で入力として保護する対象として保持しておく。値の確定は下の分岐
+    # 内で行うが、変数自体は分岐の外側（`screening_record_sha256` が
+    # sidecar に無い = v1 経路ビルドのケース）でも参照できるよう先に None で
+    # 初期化しておく。
+    recorded_screening_abs_path: Optional[Path] = None
+    if "screening_record_sha256" in pins_doc:
+        recorded_screening_path = pins_doc.get("screening_record_path")
+        expected_screening_sha = pins_doc["screening_record_sha256"]
+        abs_screening_path = (
+            ROOT / recorded_screening_path if recorded_screening_path else None
+        )
+        recorded_screening_abs_path = abs_screening_path
+        if abs_screening_path is None or not abs_screening_path.exists():
+            problems.append(
+                f"{recorded_screening_path}: pins サイドカーに記録された screening record "
+                "ファイルが存在しない (fail-closed)"
+            )
+        else:
+            # Y2 対応（Codex レビュー第 8 巡・hash/parse の単一バイト原則）:
+            # digest 計算とその後の JSON parse を独立した 2 回の read に
+            # 分けない——`_read_bytes_and_sha256` で 1 回だけ読み、hash も
+            # 後段の parse も同じ in-memory バッファから行う（builder 内の
+            # 既存の単一読みパターン: `_read_bytes_and_sha256` 呼び出し全般、
+            # `manifest_bytes`/`_load_and_validate_pins` と同型）。以前は
+            # `file_sha256`（chunk 読み・破棄）と `abs_screening_path.
+            # read_bytes()`（下の JSON parse 用）が別々の read だったため、
+            # 「hash したバイト列」と「実際に parse で消費したバイト列」が
+            # 同一である保証が構造的に存在しなかった（両 read の間隔でファイル
+            # が差し替えられても検出不可能な TOCTOU window）。
+            screening_record_bytes, actual_screening_sha = _read_bytes_and_sha256(
+                abs_screening_path
+            )
+            if actual_screening_sha != expected_screening_sha:
+                problems.append(
+                    f"{recorded_screening_path}: screening record sha256 mismatch "
+                    f"(actual={actual_screening_sha} expected={expected_screening_sha})"
+                )
+            elif (
+                "screening_extractor_code_sha256" in pins_doc
+                or "screening_extractor_weights_sha256" in pins_doc
+            ):
+                # 第 6 巡 W2 対応（部分採用 (b)）: screening record のバイト
+                # 列自体は上で一致確認済み——その現物から抽出器 pin
+                # （extractor_code_sha256/extractor_weights_sha256）を読み
+                # 直し、pins サイドカーに記録された値と fail-closed で
+                # 再照合する。sidecar 記録後に record を「バイトは同じだが
+                # 抽出器 provenance の記述だけ改変した」ような偽装は前段の
+                # sha256 一致検証では検出できない——本チェックはその穴を
+                # 閉じる（prereg_v2 §2「同一抽出器 pin」の check_existing
+                # スコープでの機械保証）。hash 済みバッファ（`screening_
+                # record_bytes`）をそのまま parse へ渡す——ここでの再 read は
+                # 行わない（Y2 対応）。
+                try:
+                    screening_doc_for_extractor = _json_loads_no_dup_keys(
+                        screening_record_bytes
+                    )
+                except json.JSONDecodeError as exc:
+                    problems.append(
+                        f"{recorded_screening_path}: screening record の JSON parse に失敗 "
+                        f"(fail-closed): {exc}"
+                    )
+                    screening_doc_for_extractor = None
+                if isinstance(screening_doc_for_extractor, dict):
+                    actual_extractor_provenance = _find_screening_record_extractor_provenance(
+                        screening_doc_for_extractor
+                    )
+                    if actual_extractor_provenance is None:
+                        problems.append(
+                            f"{recorded_screening_path}: route_provenance を持つ clip エントリが "
+                            "見つからない (fail-closed; screening_extractor_*_sha256 の再照合不可)"
+                        )
+                    else:
+                        for field, key in (
+                            ("screening_extractor_code_sha256", "extractor_code_sha256"),
+                            ("screening_extractor_weights_sha256", "extractor_weights_sha256"),
+                        ):
+                            expected_value = pins_doc.get(field)
+                            actual_value = actual_extractor_provenance[key]
+                            if actual_value != expected_value:
+                                problems.append(
+                                    f"{recorded_screening_path}: {field} mismatch "
+                                    f"(actual={actual_value!r} expected={expected_value!r})"
+                                )
+                elif screening_doc_for_extractor is not None:
+                    problems.append(
+                        f"{recorded_screening_path}: screening record が mapping でない (fail-closed)"
+                    )
+
     manifest_doc = _yaml_load_no_dup_keys(manifest_bytes)
     pairs = harness._validate_manifest(manifest_doc)
     audio_sha256 = pins_doc.get("audio_sha256", {})
@@ -1441,6 +2190,15 @@ def check_existing(
         # に確認する（`out_dir` は本経路では新規生成しないため空集合、既公開
         # WAV は `all_audio_paths(pairs)` から repo-relative パスを解決して
         # `vocadito_audio_paths` 相当の保護対象へ折り込む）。
+        #
+        # X1(b)（Codex レビュー第 7 巡）: sidecar に記録された screening
+        # record（v2 ビルドの場合。上で現物一致を確認済みの
+        # `recorded_screening_abs_path`）も他の build 入力と同じ扱いで衝突
+        # 検査へ編入する——従来は本経路のみ screening record を保護対象から
+        # 漏らしており、`--check-only --summary-out <screening_record_path>`
+        # がその screening record 自体を無検査で上書き破壊しうる穴があった
+        # （v1 経路ビルド = `recorded_screening_abs_path` が None のままなら
+        # 従来どおり screening record 側は検査対象に加わらない）。
         published_audio_paths = [ROOT / rel_path for rel_path in all_audio_paths(pairs)]
         _reject_output_input_collisions(
             out_dir=manifest_out.parent,
@@ -1451,6 +2209,7 @@ def check_existing(
             synth_specs_path=synth_specs_path,
             vocadito_audio_paths=published_audio_paths,
             summary_out=summary_out,
+            screening_record_path=recorded_screening_abs_path,
         )
 
     return crosstab(pairs)
@@ -1469,6 +2228,7 @@ def run_build(
     fixtures_path: Path,
     synth_specs_path: Path,
     summary_out: Optional[Path] = None,
+    screening_record_path: Optional[Path] = None,
 ) -> Tuple[List[Dict[str, str]], Dict[str, Path], Dict[str, str], Dict[str, str]]:
     """公開先衝突検査 → pin 照合 → 選定 → 生成（`staging_wav_dir` への物理
     書き込み）→ manifest 組み立てまでを行う。書き込みは `staging_wav_dir` 配下
@@ -1481,7 +2241,8 @@ def run_build(
     入力そのもの）の対応表——pins サイドカーの sha256 計算がまだ publish 前の
     staging から読めるようにする。`build_input_sha256` は
     `{"m2c_external_fixtures_sha256": ..., "m3d_synth_specs_sha256": ...}`
-    （R2R N1・TOCTOU 解消: いずれもパースに使ったのと同一バイト列から計算済み）。
+    （`screening_record_path` 指定時は `"screening_record_sha256"` も追加。
+    R2R N1・TOCTOU 解消: いずれもパースに使ったのと同一バイト列から計算済み）。
     `fixtures` は {clip_id: expected_audio_sha256}——呼び出し側が T2 対応
     （publish 直前の vocadito バイト再照合）で `verify_vocadito_pins` に
     再度渡すために返す（fixtures_path を再読み込みしない——ロード済みの
@@ -1491,15 +2252,80 @@ def run_build(
     （manifest_out/pins_out/生成 WAV）と同じ扱いで `_reject_output_input_
     collisions` の衝突検査に編入する——`--summary-out` が manifest/pins/生成
     WAV/入力ファイルを指す誤設定を、生成開始前に fail-closed で拒否する。
+
+    `screening_record_path`（v2 経路。prereg_v2 §2〜§3）: 指定時は
+    `scripts/screen_m3d_clips.py` が出力したスクリーニング記録
+    （schema: m3d-screening/0.1）を読み、その `survivor_clip_ids` へ
+    `select_clips_v2` の決定論分割規則を適用して tuning/holdout を決める
+    （`select_clips` の固定 12/6 選定は使わない）。未指定時（既定）は
+    v1 の挙動（`select_clips(fixtures)`）を完全不変のまま実行する。
+
+    U2（Codex レビュー第 4 巡）: v2 経路では `generate_vocadito_variants` が
+    staging へ生成した各変形 WAV のバイトを、record が保持する当該 clip/
+    variant の `audio_sha256` と選定後・publish 前に照合する
+    （`_verify_generated_variant_audio_hashes`）。不一致は fail-closed
+    ——「審査されたバイト = 公開されるバイト」の機械保証。
+
+    V1（Codex レビュー第 5 巡）: v2 経路では選定（`select_clips_v2` 適用）の
+    直前に `_verify_screening_route_binding` を呼び、record の top-level
+    `route` が prereg_v2 §2 の事前登録値（`crepe_direct`）と逐語一致し、かつ
+    `clips` の全エントリの `route_provenance` が相互に完全同一（+ 必須 sha256
+    pin が書式検証済み）であることを検証する。不一致・混在は fail-closed。
     """
     fixtures, fixtures_sha256 = load_m2c_fixtures(fixtures_path)
     resolved_audio = verify_vocadito_pins(vocadito_dir, fixtures)  # fail-closed gate（全数）
 
-    tuning_ids, holdout_ids = select_clips(fixtures)
+    screening_record_sha256: Optional[str] = None
+    screening_extractor_provenance: Optional[Dict[str, str]] = None
+    if screening_record_path is not None:
+        screening_doc, screening_record_sha256 = _load_screening_record(screening_record_path)
+        # R1 対応 (a)(b): record の集計値（survivor_clip_ids）を信用せず
+        # per-clip ゲート結果から独立再計算した集合と完全一致するか、
+        # および record が保持する入力 digest（m2c fixtures/m1 registry）が
+        # 現在の build 入力の実バイトと一致するかを、選定規則の適用前に
+        # fail-closed で検証する。
+        _verify_screening_survivors(
+            screening_doc, source=str(screening_record_path), fixture_clip_ids=fixtures
+        )
+        _verify_screening_input_digests(
+            screening_doc, source=str(screening_record_path), fixtures_sha256=fixtures_sha256
+        )
+        # T1（Codex レビュー第 3 巡）: record が保持する変形パラメータ
+        # （半音/タイムレート）を builder 定数と選定前に照合する。
+        _verify_screening_transform_parameters(
+            screening_doc, source=str(screening_record_path)
+        )
+        # V1（Codex レビュー第 5 巡）: record の観測経路（top-level route +
+        # 全エントリの route_provenance）が prereg_v2 §2 の事前登録値
+        # （crepe_direct）に束縛されていることを選定前に検証する。W2（第 6
+        # 巡・部分採用 (b)）: record 内で相互一致確認済みの単一
+        # route_provenance から抽出器 pin（code/weights sha256）を受け取り、
+        # 後段で pins サイドカーへ記録する（`check_existing` が record 現物
+        # との一致を再照合できるようにするため）。
+        screening_extractor_provenance = _verify_screening_route_binding(
+            screening_doc, source=str(screening_record_path)
+        )
+        survivor_clip_ids = screening_doc["survivor_clip_ids"]
+        unknown_survivors = sorted(set(survivor_clip_ids) - set(fixtures))
+        if unknown_survivors:
+            raise BuildM3dPairsError(
+                f"{screening_record_path}: survivor_clip_ids に "
+                f"{fixtures_path} 非登録の clip_id が含まれる (fail-closed): "
+                f"{unknown_survivors}"
+            )
+        tuning_ids, holdout_ids = select_clips_v2(survivor_clip_ids)
+    else:
+        tuning_ids, holdout_ids = select_clips(fixtures)
 
     # R2R 対応 N3（Codex レビュー第 2 ラウンド・公開先衝突の拒否）: 生成
     # （staging への物理書き込み・librosa/build_signal 呼び出し）を開始する前に、
     # 公開予定の全出力先が入力および互いと衝突しないことを確認する。
+    #
+    # X1(a)（Codex レビュー第 7 巡）: `m1_registry_path` は screening_record_path
+    # が指定されている（= v2 経路。上の `_verify_screening_input_digests` が
+    # 実際に `harness.M1_REGISTRY_PATH` を読む）場合にのみ渡す——v1 経路
+    # （screening_record_path が None）は M1 registry を一切読まないため、
+    # 実際に読む経路にのみ保護を対応させる。
     _reject_output_input_collisions(
         out_dir=out_dir,
         manifest_out=manifest_out,
@@ -1509,6 +2335,8 @@ def run_build(
         synth_specs_path=synth_specs_path,
         vocadito_audio_paths=list(resolved_audio.values()),
         summary_out=summary_out,
+        screening_record_path=screening_record_path,
+        m1_registry_path=harness.M1_REGISTRY_PATH if screening_record_path is not None else None,
     )
 
     specs, synth_specs_sha256 = _load_synth_specs(synth_specs_path)
@@ -1517,6 +2345,17 @@ def run_build(
     vocadito_variants = generate_vocadito_variants(
         tuning_ids + holdout_ids, resolved_audio, out_dir, staging_wav_dir, fixtures
     )
+    if screening_record_path is not None:
+        # U2（Codex レビュー第 4 巡）: staging に生成した各変形 WAV のバイトを、
+        # screening record が保持する当該 clip/variant の audio_sha256 と
+        # publish 前に照合する。不一致は fail-closed（このまま例外が
+        # `run_and_publish` まで伝播し、staging を破棄するのみで公開しない）。
+        _verify_generated_variant_audio_hashes(
+            screening_doc,
+            source=str(screening_record_path),
+            vocadito_variants=vocadito_variants,
+            staging_wav_dir=staging_wav_dir,
+        )
 
     synth_positive = generate_synth_positive(specs, out_dir, staging_wav_dir)
     synth_negative = generate_synth_negatives(specs, out_dir, staging_wav_dir)
@@ -1552,6 +2391,26 @@ def run_build(
         "m2c_external_fixtures_sha256": fixtures_sha256,
         "m3d_synth_specs_sha256": synth_specs_sha256,
     }
+    if screening_record_sha256 is not None:
+        # v2 経路のみ追加する optional フィールドペア（H2 の summary_path/
+        # summary_sha256 と同じ後方互換規約 — 既存 `_REQUIRED_PINS_KEYS`
+        # には含めず、`_PINS_SCHEMA` も bump しない。v1 pins サイドカーは
+        # 本フィールドを持たないまま引き続き有効）。R2 対応: path も併記する
+        # ——sha256 のみでは `check_existing` が再照合すべき現物の場所を
+        # 特定できないため（`screening_record_path` を repo-relative で記録）。
+        build_input_sha256["screening_record_sha256"] = screening_record_sha256
+        build_input_sha256["screening_record_path"] = _repo_rel(screening_record_path)
+        # W2（第 6 巡・部分採用 (b)）: `_verify_screening_route_binding` が
+        # record 内相互一致検証済みで返した単一 extractor pin
+        # （code/weights sha256）も pins サイドカーへ記録する。同じ後方互換
+        # 規約（`_REQUIRED_PINS_KEYS` に含めず `_PINS_SCHEMA` も bump しない）。
+        assert screening_extractor_provenance is not None  # screening_record_path 分岐で必ず設定済み
+        build_input_sha256["screening_extractor_code_sha256"] = screening_extractor_provenance[
+            "extractor_code_sha256"
+        ]
+        build_input_sha256["screening_extractor_weights_sha256"] = screening_extractor_provenance[
+            "extractor_weights_sha256"
+        ]
     return pairs, audio_source_lookup, build_input_sha256, fixtures
 
 
@@ -1564,10 +2423,14 @@ def run_and_publish(
     fixtures_path: Path,
     synth_specs_path: Path,
     summary_out: Optional[Path] = None,
+    screening_record_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`run_build` を staging ディレクトリ（`out_dir` と同一ファイルシステム上）
     で走らせ、manifest + pins サイドカーを組み立てて全検証成功後に
     `_publish_staged_bundle` で一括公開する（R3 対応）。
+
+    `screening_record_path`（v2 経路）: `run_build` へそのまま渡す。未指定時
+    （既定）は v1 の挙動を完全不変のまま実行する。
 
     途中で例外が飛んだ場合、staging ディレクトリを破棄するのみで既存の
     公開済みセット（`out_dir` の WAV 一式・`manifest_out`・`pins_out`）には
@@ -1635,6 +2498,7 @@ def run_and_publish(
             fixtures_path=fixtures_path,
             synth_specs_path=synth_specs_path,
             summary_out=summary_out,
+            screening_record_path=screening_record_path,
         )
 
         manifest_doc = {"schema": _MANIFEST_SCHEMA, "pairs": pairs}
@@ -1737,6 +2601,20 @@ def main() -> int:
         default=None,
         help="kind×split（+material 内訳）の対数集計 JSON を書き出す（任意）",
     )
+    parser.add_argument(
+        "--screening-record",
+        type=Path,
+        default=None,
+        help=(
+            "v2 経路（prereg_v2 §2〜§3）: scripts/screen_m3d_clips.py が出力する "
+            "スクリーニング記録（schema: m3d-screening/0.1）。指定時は survivor_clip_ids "
+            "へ select_clips_v2 の決定論分割規則（N>=18 は 12/6、N<18 は "
+            "ceil(2N/3)/floor(N/3)、tuning<6 or holdout<3 は fail-closed）を適用して "
+            "tuning/holdout を決める。未指定時（既定）は v1 の固定 12/6 選定を使う "
+            "（--check-only には無関係 — check_existing は既存 manifest/pins の再照合の "
+            "みで選定規則を再実行しない）。"
+        ),
+    )
     args = parser.parse_args()
 
     # R2R 対応 G2（Codex レビュー第 5 ラウンド）: `--summary-out` の書き込み
@@ -1787,6 +2665,7 @@ def main() -> int:
                 fixtures_path=args.fixtures,
                 synth_specs_path=args.synth_specs,
                 summary_out=args.summary_out,
+                screening_record_path=args.screening_record,
             )
             print(f"wrote {summary['total']} pairs to {args.manifest_out}")
             print(f"wrote pins sidecar to {args.pins_out}")
