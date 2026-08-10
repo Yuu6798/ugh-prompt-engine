@@ -30,7 +30,11 @@ README.md / 各 JSON)。設計 = `docs/DESIGN_M3_melody_comparator.md` §6。
   `holdout_locked_until_frozen` ロックマーカーの同一性であり抽出は実行されていない。
   詳細 = `docs/measurements/m3d_2026-08/run_bit_identity.json`))→ evaluate が凍結提案を
   **`rejected_positive_not_comparable` で拒否**。real tuning positive 46/48・negative 11/12 が
-  M1 観測ゲート `phrase_count 1 < min 2` で not_comparable(margin 表は measured 3 対のみ由来)
+  M1 観測ゲート `phrase_count 1 < min 2` で not_comparable(margin 表は measured 3 対のみ由来)。
+  なお、この 66/66 は「run1/run2 間で pair 単位の出力が完全一致する」ことの会計であり、
+  66 行それぞれが M3 比較器チェーンの**どこまで**実行されたかとは独立の主張である
+  (実行段階別の内訳・強度差は §3 副産物節を参照 — 段階別会計は Codex レビュー #255
+  第 11 巡 BB1 で是正)
 - 診断(`notcomparable_diagnosis.json`・アノテーション突合): 素材特性(真の 1 フレーズ)
   6 clip + **crepe voicing false-alarm によるフレーズ融合**(アノテーション 2〜4 フレーズ →
   crepe 観測 1)4 clip の複合。変形 b 側の追加劣化あり。M2d 誤差モデル
@@ -60,13 +64,26 @@ README.md / 各 JSON)。設計 = `docs/DESIGN_M3_melody_comparator.md` §6。
   一次データ = v1 の material 別会計 + M2 の S-direct fail / V-direct pass 分裂)
 - **M1-real Go バー(Suno stem 経路): moot 化**(melody トラック終端のため。素材も未回収の
   まま)。v2 S1 census が実素材への観測ゲート大規模適用の初 dated 記録として残る
-- 副産物(閉じた事実): repeats bit 一致 **tuning 66/66** × 2 round は M3 比較器チェーン
-  (crepe 抽出 → 表現 → NW 整列 → 軸類似)の**軌跡レベル決定論**を実確立した
-  (M2d 残課題の消化)。holdout 32 行は `holdout_locked_until_frozen` ロックマーカー
-  ({split, status} の 2 キーのみ)の bit 一致(32/32)であり、抽出・比較チェーンは
-  実行されていない — 調整前の「98/98」表記はロックマーカー行を含む pair 単位比較の
-  数で、実行チェーンの決定論としては tuning 66/66 が正確(是正: Codex レビュー #255
-  第 2 巡 N3)。校正とは独立に有効な計器性質
+- 副産物(閉じた事実・段階別会計に是正: Codex レビュー #255 第 11 巡 BB1): repeats
+  bit 一致 **tuning 66/66** × 2 round が実確立したのは「tuning 66 行全件が
+  crepe 抽出 → M1 観測ゲート判定までを決定論的に再現した」ことである。ただし
+  66 行のうち **M3 比較器チェーン(crepe 抽出 → 表現 → NW 整列 → 軸類似)を最後
+  まで完走したのは 4 行のみ**で、残り 62 行は途中で `not_comparable` 停止して
+  いる(内訳は `run1.json` の `comparison.reasons`/`comparison.axes` から機械
+  集計: 観測ゲート `observation_gate_insufficient_*` 止まり 60 行・被覆/整列
+  ゲート `insufficient_overlap` 止まり 2 行・全チェーン到達(軸類似まで到達し
+  `axes` に数値がある)4 行 = 60+2+4=66)。旧稿の「軌跡レベル決定論を実確立
+  した(M2d 残課題の消化)」は、この段階差を無視して 66 行すべてが全チェーン
+  を走ったかのように読める過大な主張だった。**正確な主張強度は「全チェーン
+  n=4・抽出+観測ゲート n=66 の bit 一致」の段階別会計**であり、抽出+観測
+  ゲート段の決定論は 66 サンプルで強く実証されている一方、全チェーンの決定論
+  は 4 サンプルの弱い実証にとどまる(M2d 残課題は未完全消化)。holdout 32 行は
+  `holdout_locked_until_frozen` ロックマーカー({split, status} の 2 キーのみ)
+  の bit 一致(32/32)であり、抽出・比較チェーンは実行されていない — 調整前の
+  「98/98」表記はロックマーカー行を含む pair 単位比較の数で、実行チェーンの
+  決定論としては tuning 66/66(段階別内訳: 全チェーン 4・全チェーン未到達 62)
+  が正確(是正: Codex レビュー #255 第 2 巡 N3、段階別会計は第 11 巡 BB1)。
+  校正とは独立に有効な計器性質
 
 ## 4. 再入条件(これ以外での再開はしない)
 

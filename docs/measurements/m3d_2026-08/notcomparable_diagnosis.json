@@ -35,7 +35,7 @@
   },
   "note": "purely mechanical aggregation; no interpretation/verdict language included by design",
   "1_reason_histogram": {
-    "universe": "all 98 pairs in build/external_m3d/m3d_run1.json['pairs'] (kind/split/material taken from tests/fixtures/melody_bench/m3d_pairs_manifest.yaml, which is unredacted for holdout too; comparison.reasons taken from the run report, which is only populated for the 66 tuning-split pairs)",
+    "universe": "all 98 pairs in docs/measurements/m3d_2026-08/run1.json['pairs'] (kind/split/material taken from tests/fixtures/melody_bench/m3d_pairs_manifest.yaml, which is unredacted for holdout too; comparison.reasons taken from the run report, which is only populated for the 66 tuning-split pairs)",
     "pairs_total": 98,
     "pairs_tuning": 66,
     "pairs_holdout": 32,

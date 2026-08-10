@@ -14,12 +14,21 @@ committed 4 ファイル（`run1.json` / `run2.json` / `run_bit_identity.json` /
    こと（比較ロジック: pair 単位 dict 等値・intersection of pair id keys、
    top-level run 識別子は pair dict に含まれないため除外操作は不要 — 記録済み
    `excluded_fields_note` の主張どおり）。
-4. tuning（実行された比較チェーン: crepe 抽出→表現→整列→軸類似）が 66 件、
-   holdout（`holdout_locked_until_frozen` ロックマーカー、比較未実施）が 32 件
-   という会計（`docs/m3d_calibration_record.md` / README.md の是正後の記述と
-   同じ数）を、`run1.json`/`run2.json` の生データから直接検証する——「98/98」
-   ではなく「tuning 66/66 + holdout ロックマーカー 32/32」が正しい内訳である
-   ことの回帰ガード。
+4. tuning（`comparison` フィールドを持つ行）が 66 件、holdout
+   （`holdout_locked_until_frozen` ロックマーカー、比較未実施）が 32 件という
+   会計（`docs/m3d_calibration_record.md` / README.md の是正後の記述と同じ数）
+   を、`run1.json`/`run2.json` の生データから直接検証する——「98/98」ではなく
+   「tuning 66/66 + holdout ロックマーカー 32/32」が正しい内訳であることの
+   回帰ガード。
+4b.（第 11 巡 BB1・正直会計の精密化）tuning 66 行を「M3 比較器チェーン
+   （crepe 抽出→表現→NW 整列→軸類似）のどこまで到達したか」で 3 分類し、
+   その実数を `run1.json` の `comparison.reasons`/`comparison.axes` から
+   独立に再計算する——観測ゲート `observation_gate_insufficient_*` 止まり
+   （axes 全 null）60 件・被覆/整列ゲート `insufficient_overlap` 止まり
+   （axes 全 null）2 件・全チェーン到達（axes に数値がある）4 件
+   （60+2+4=66）。tuning 66/66 という bit 一致の会計そのものは正しいが、
+   「66 行すべてが全チェーンを走った」という読みは誤りであることの回帰
+   ガード（`docs/m3d_calibration_record.md` §3 是正と同じ内訳）。
 5.（第 6 巡 W2 対応・部分採用 (a)）committed `screening_v2.json` の単一
    extractor provenance（`extractor_code_sha256`/`extractor_weights_sha256`）
    が、committed `run1.json`/`run2.json` の全 measured 行の
@@ -54,6 +63,12 @@ SCREENING_V2_PATH = MEAS_DIR / "screening_v2.json"
 _LOCK_STATUS = "holdout_locked_until_frozen"
 _EXPECTED_TUNING_EXECUTED_COUNT = 66
 _EXPECTED_HOLDOUT_LOCK_MARKER_COUNT = 32
+
+# 第 11 巡 BB1: tuning 66 行の「M3 比較器チェーンのどこまで到達したか」内訳
+# （観測ゲート止まり / 被覆・整列ゲート止まり / 全チェーン到達）。
+_EXPECTED_OBSERVATION_GATE_STOP_COUNT = 60
+_EXPECTED_OVERLAP_GATE_STOP_COUNT = 2
+_EXPECTED_FULL_CHAIN_REACHED_COUNT = 4
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -134,10 +149,12 @@ def test_per_pair_identity_and_verdict_recompute_to_the_same_claim() -> None:
 
 
 def test_tuning_executed_vs_holdout_lock_marker_accounting_is_66_and_32() -> None:
-    """N3 是正後の会計そのものの回帰ガード: 「98/98」ではなく「実行された比較
-    チェーン(crepe 抽出→表現→整列→軸類似)は tuning 66/66、holdout 32 行は
-    ロックマーカー(`holdout_locked_until_frozen`)の同一性であり抽出は実行され
-    ていない」という主張を、run1.json の生データから直接検証する。"""
+    """N3 是正後の会計そのものの回帰ガード: 「98/98」ではなく「tuning 66/66 は
+    最低限 crepe 抽出→M1 観測ゲート判定まで実行された(comparison フィールドを
+    持つ)、holdout 32 行はロックマーカー(`holdout_locked_until_frozen`)の同一性
+    であり抽出は実行されていない」という主張を、run1.json の生データから直接
+    検証する。tuning 66 行のうち比較チェーンを最後まで完走した行数の内訳は
+    `test_tuning_stage_reached_breakdown_is_60_2_4`(BB1)が別途検証する。"""
     run1 = json.loads(RUN1_PATH.read_bytes())
     pairs: Dict[str, Any] = run1["pairs"]
 
@@ -161,11 +178,83 @@ def test_tuning_executed_vs_holdout_lock_marker_accounting_is_66_and_32() -> Non
         assert set(entry.keys()) == {"split", "status"}, (pair_id, entry)
         assert entry["split"] == "holdout"
 
-    # 実行された比較チェーンの pair は "comparison" フィールド（crepe 抽出→
-    # 表現→整列→軸類似の出力）を持つ — 抽出が実際に走ったことの直接証拠。
+    # 実行された比較チェーンの pair は "comparison" フィールド（少なくとも
+    # crepe 抽出→M1 観測ゲート判定の出力）を持つ — 抽出が実際に走ったことの
+    # 直接証拠。ただしこれは「観測ゲートまで実行された」ことの証拠であって
+    # 「表現→整列→軸類似まで完走した」ことの証拠ではない（その内訳は次の
+    # テストが検証する）。
     for pair_id, entry in executed_pairs.items():
         assert "comparison" in entry, (pair_id, entry)
         assert entry["split"] == "tuning"
+
+
+def test_tuning_stage_reached_breakdown_is_60_2_4() -> None:
+    """第 11 巡 BB1: tuning 66 行を「M3 比較器チェーン(crepe 抽出→表現→NW
+    整列→軸類似)のどこまで到達したか」で 3 分類し、その実数を run1.json の
+    `comparison.reasons`/`comparison.axes` から独立に再計算する
+    ——`comparison` フィールドを持つことだけを根拠に「66 行すべてが全チェーン
+    を走った」と主張するのは誤りであることの回帰ガード。
+
+    分類規則（`comparison.axes` の 3 軸すべてが null かどうかで判定——軸類似
+    まで到達していれば必ずいずれかの軸に数値が入る）:
+      - 観測ゲート止まり: axes 全 null かつ reasons が
+        `observation_gate_insufficient_*` のみ
+      - 被覆/整列ゲート止まり: axes 全 null かつ reasons に
+        `insufficient_overlap(...)` を含む
+      - 全チェーン到達: axes のいずれかが non-null
+    """
+    run1 = json.loads(RUN1_PATH.read_bytes())
+    pairs: Dict[str, Any] = run1["pairs"]
+    executed_pairs = {
+        pid: entry for pid, entry in pairs.items() if entry.get("status") != _LOCK_STATUS
+    }
+    assert len(executed_pairs) == _EXPECTED_TUNING_EXECUTED_COUNT
+
+    observation_gate_stop: list = []
+    overlap_gate_stop: list = []
+    full_chain_reached: list = []
+    unclassified: list = []
+
+    for pair_id, entry in executed_pairs.items():
+        comparison = entry["comparison"]
+        reasons = comparison["reasons"]
+        axes = comparison["axes"]
+        axes_has_value = any(v is not None for v in axes.values())
+
+        if axes_has_value:
+            full_chain_reached.append(pair_id)
+        elif any(r.startswith("insufficient_overlap(") for r in reasons):
+            overlap_gate_stop.append(pair_id)
+        elif reasons and all(r.startswith("observation_gate_insufficient_") for r in reasons):
+            observation_gate_stop.append(pair_id)
+        else:
+            unclassified.append((pair_id, reasons, axes))
+
+    assert unclassified == [], unclassified
+    assert len(observation_gate_stop) == _EXPECTED_OBSERVATION_GATE_STOP_COUNT
+    assert len(overlap_gate_stop) == _EXPECTED_OVERLAP_GATE_STOP_COUNT
+    assert len(full_chain_reached) == _EXPECTED_FULL_CHAIN_REACHED_COUNT
+    assert (
+        len(observation_gate_stop) + len(overlap_gate_stop) + len(full_chain_reached)
+        == _EXPECTED_TUNING_EXECUTED_COUNT
+    )
+
+    # 観測ゲート/被覆ゲート止まりの行は axes が厳密に全 null（部分実行の
+    # 直接証拠）。
+    for pair_id in observation_gate_stop + overlap_gate_stop:
+        axes = pairs[pair_id]["comparison"]["axes"]
+        assert set(axes.values()) == {None}, (pair_id, axes)
+
+    # 全チェーン到達の行は evidence='none' + reasons=['evidence_thresholds_
+    # uncalibrated']（観測ゲート・比較器双方が完走し、閾値未校正で verdict
+    # 判定のみ保留されている状態）であることを確認する。
+    for pair_id in full_chain_reached:
+        comparison = pairs[pair_id]["comparison"]
+        assert comparison["evidence"] == "none", (pair_id, comparison)
+        assert comparison["reasons"] == ["evidence_thresholds_uncalibrated"], (
+            pair_id,
+            comparison,
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -53,8 +53,17 @@ run を 2 回実行した（`--pins` 指定・`pins_preflight_verified=true`、
   （`holdout_locked_until_frozen`、比較未実施）
 - run1: report `started_utc=2026-08-09T04:10:18Z` / `recorded_utc=2026-08-09T05:22:33Z`
 - run2: report `started_utc=2026-08-09T05:23:35Z` / `recorded_utc=2026-08-09T06:39:39Z`
-- bit 一致: `run_bit_identity.json` により、実行された比較チェーン（crepe 抽出→
-  表現→整列→軸類似）の bit 一致は **tuning 66/66**。holdout 32 行は
+- bit 一致: `run_bit_identity.json` により、tuning 66 行全件の run1/run2 出力が
+  pair 単位で完全一致する（bit 一致 **tuning 66/66**）。ただし 66 行のうち実際に
+  比較チェーン（crepe 抽出→表現→NW 整列→軸類似）を最後まで完走したのは **4 行**
+  のみで、残り 62 行は途中で `not_comparable` 停止している（観測ゲート
+  `observation_gate_insufficient_*` 止まり 60 行・被覆/整列ゲート
+  `insufficient_overlap` 止まり 2 行 — run1.json の `comparison.reasons`/
+  `comparison.axes` から機械集計、`docs/m3d_calibration_record.md` §3 と同じ
+  内訳）。bit 一致 66/66 が実証するのは「抽出+観測ゲート段（全 tuning 行が
+  最低限通過する経路）の決定論」であり、「全チェーンの決定論」は 4 サンプル
+  でのみ実証されている（是正: Codex レビュー #255 第 11 巡 BB1 — 旧稿はこの
+  段階差を明示せず、全チェーンの決定論と読める記述だった）。holdout 32 行は
   `holdout_locked_until_frozen` ロックマーカー（`{split, status}` の 2 キーのみ、
   抽出・比較チェーン未実行）の同一性であり、こちらも 32/32 で `identical: true`
   だが tuning の実行結果とは性質が異なる（`pair_key_set_mismatch` は run1/run2

@@ -68,6 +68,30 @@ histogram``〜``6_coverage_floor_candidate_provenance``）+ 新設 ``inputs``
   で再導出した場合、committed diagnosis JSON はこれらのパスがそもそも
   既定パスと一致する文字列だったため、本是正後も既定引数での出力は
   committed 版と変わらない。
+
+**Codex レビュー #255 第 11 巡対応（BB2・BB3・BB4）**:
+
+- **BB2（P2・§1 universe 文言のパスラベルを実引数由来に是正）**: ``inputs``
+  節は AA2 で実引数由来（``_display_path``）に是正済みだったが、
+  ``1_reason_histogram.universe`` の説明文だけは
+  ``build/external_m3d/m3d_run1.json`` というクリーンチェックアウトに
+  存在しないハードコード文字列が残っていた（既定入力は committed
+  ``docs/measurements/m3d_2026-08/run1.json``）。``_build_section1`` に
+  ``run1_display_path`` を渡し、実際に読んだパスをそのまま埋め込むよう
+  是正した。
+- **BB3（P2・fail-closed な manifest 束縛）**: 従来 ``run1.json`` に
+  ``manifest_sha256`` が無い（レガシー/編集済みレポート）場合、束縛検証を
+  無条件でスキップし、pair id が互換であれば任意の manifest を無警告に
+  受理していた。是正後は digest 欠落を fail-closed とし、束縛未確認の
+  manifest との組み合わせを拒否する。
+- **BB4（P2・§3 フレーズギャップ閾値の registry 配線）**: ``§2`` は
+  ``--registry`` の実測値（``observation_gate.phrase_gap_sec``）を記録・
+  ``run1.json`` との pin 一致検証まで行うのに、``§3`` のアノテーション
+  フレーズ構造計算はハードコードされた ``0.6`` を使っており、
+  ``--registry`` に別値を渡すと ``§2`` と ``§3`` が矛盾しうる穴があった。
+  検証済みの registry 値を ``_build_section3`` へ配線し、``§2``/``§3`` を
+  構造的に一致させた（``phrase_gap_sec`` が現行既定 ``0.6`` である限り、
+  既定引数での出力は committed 版と変わらない）。
 """
 from __future__ import annotations
 
@@ -99,7 +123,6 @@ DEFAULT_VOCADITO_DIR = ROOT / "build" / "external_m3d" / "vocadito"
 DEFAULT_OUTPUT_PATH = ROOT / "docs" / "measurements" / "m3d_2026-08" / "notcomparable_diagnosis.json"
 
 _LOCK_STATUS = "holdout_locked_until_frozen"
-_GAP_THRESHOLD_SEC = 0.6  # registry.yaml observation_gate.phrase_gap_sec と同値
 
 
 def _display_path(path: Path) -> str:
@@ -277,7 +300,10 @@ def _annotation_phrase_structure(
 # section 1: reason histogram
 # --------------------------------------------------------------------------- #
 def _build_section1(
-    run1_pairs: Dict[str, Any], manifest_pairs: List[Dict[str, Any]]
+    run1_pairs: Dict[str, Any],
+    manifest_pairs: List[Dict[str, Any]],
+    *,
+    run1_display_path: str,
 ) -> Dict[str, Any]:
     manifest_by_id = {p["pair_id"]: p for p in manifest_pairs}
     pairs_total = len(run1_pairs)
@@ -359,7 +385,7 @@ def _build_section1(
 
     return {
         "universe": (
-            f"all {pairs_total} pairs in build/external_m3d/m3d_run1.json['pairs'] "
+            f"all {pairs_total} pairs in {run1_display_path}['pairs'] "
             "(kind/split/material taken from tests/fixtures/melody_bench/"
             "m3d_pairs_manifest.yaml, which is unredacted for holdout too; "
             "comparison.reasons taken from the run report, which is only populated "
@@ -443,6 +469,8 @@ def _build_section3(
     run1_pairs: Dict[str, Any],
     vocadito_dir: Path,
     fixtures: Dict[str, Dict[str, str]],
+    *,
+    gap_threshold_sec: float,
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     # 1) real clip -> split（manifest から。holdout clip 名は run1.json の
     #    ロック行に残っていないため manifest が唯一の出所）。
@@ -480,7 +508,7 @@ def _build_section3(
     for clip_id in all_clips:
         times, freqs, digest = _verify_and_load_annotation(vocadito_dir, clip_id, fixtures)
         annotation_sha256[clip_id] = digest
-        structure = _annotation_phrase_structure(times, freqs, gap_threshold_sec=_GAP_THRESHOLD_SEC)
+        structure = _annotation_phrase_structure(times, freqs, gap_threshold_sec=gap_threshold_sec)
         split = clip_split[clip_id]
         row: Dict[str, Any] = {"clip_id": clip_id, **structure, "split": split}
         if split == "holdout":
@@ -514,7 +542,7 @@ def _build_section3(
         rows.append(row)
 
     table = {
-        "gap_threshold_sec_used": _GAP_THRESHOLD_SEC,
+        "gap_threshold_sec_used": gap_threshold_sec,
         "method": (
             "annotation_phrase_count = number of voiced-frame runs (f0>0) after "
             "merging consecutive voiced runs separated by an unvoiced gap <= "
@@ -693,18 +721,38 @@ def build_diagnosis(
     # manifest.yaml が実際に run1.json 生成に使われたものと同一であることを、
     # run report 自身が記録する top-level manifest_sha256 との一致で検証する
     # （run1.json の主張を鵜呑みにせず、独立に読んだ manifest.yaml バイトから
-    # 再計算した sha256 と突合する）。
+    # 再計算した sha256 と突合する）。欠落は fail-closed（Codex レビュー #255
+    # 第 11 巡 BB3）: レガシー/編集済みレポートで manifest_sha256 が無い場合、
+    # 束縛検証を無条件でスキップして任意の manifest を無警告に受理すると、
+    # split/kind/audio が違う無関係な manifest と組み合わさっても診断が
+    # 「束縛済み provenance」として提示されてしまう穴があった。
     recorded_manifest_sha256 = run1_doc.get("manifest_sha256")
-    if recorded_manifest_sha256 is not None and recorded_manifest_sha256 != manifest_sha256:
+    if recorded_manifest_sha256 is None:
+        raise SystemExit(
+            "fail-closed: run1.json に top-level 'manifest_sha256' が無く、"
+            f"{manifest_path} がこの run report の生成に実際に使われた manifest "
+            "であることを検証できない（束縛未確認の manifest との組み合わせを "
+            "拒否する）"
+        )
+    if recorded_manifest_sha256 != manifest_sha256:
         raise SystemExit(
             "fail-closed: tests/fixtures/melody_bench/m3d_pairs_manifest.yaml "
             f"sha256 ({manifest_sha256}) does not match run1.json['manifest_sha256'] "
             f"({recorded_manifest_sha256})"
         )
 
-    section1 = _build_section1(run1_pairs, manifest_pairs)
+    gate_registry = registry_doc["observation_gate"]
+    gap_threshold_sec = float(gate_registry["phrase_gap_sec"])
+
+    section1 = _build_section1(run1_pairs, manifest_pairs, run1_display_path=_display_path(run1_path))
     section2 = _build_section2(registry_doc)
-    section3, annotation_sha256 = _build_section3(manifest_pairs, run1_pairs, vocadito_dir, fixtures)
+    section3, annotation_sha256 = _build_section3(
+        manifest_pairs,
+        run1_pairs,
+        vocadito_dir,
+        fixtures,
+        gap_threshold_sec=gap_threshold_sec,
+    )
     section4 = _build_section4(run1_pairs)
     section5 = _build_section5(manifest_pairs, run1_pairs)
     section6 = _build_section6(manifest_pairs, run1_pairs)

@@ -188,9 +188,11 @@ def _write_minimal_fixture_set(base: Path) -> Dict[str, Path]:
         ]
     }
     manifest_path.write_text(yaml.safe_dump(manifest_doc), encoding="utf-8")
+    manifest_sha256 = _sha256_bytes(manifest_path.read_bytes())
 
     run1_path = base / "run1.json"
     run1_doc: Dict[str, Any] = {
+        "manifest_sha256": manifest_sha256,
         "pairs": {
             "st_synth_tuning_1": {
                 "comparison": {
