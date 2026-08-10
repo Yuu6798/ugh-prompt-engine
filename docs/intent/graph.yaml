@@ -2,7 +2,7 @@ schema_version: intent-graph/0.1
 nodes:
   # --- physical 層 ---
   - id: physical.roundtrip_determinism
-    claim: "Score→perform→extract→draft の決定論往復が三値診断可能である"
+    claim: "Score→perform→extract→draft の決定論往復が 4 値診断可能である（preserved/knob_dead/sensor_blind/calibration_disagreement）"
     status: verified
     evidence: ["docs/roundtrip_preservation.md", "PR #75"]
   - id: physical.fixity_entry
@@ -17,9 +17,13 @@ nodes:
 
   # --- 制御ノブ（grip） ---
   - id: control.key
-    claim: "key は送出→生成→抽出で tight に保存される"
-    status: verified
-    evidence: ["docs/controllability_poc.md", "PR #117"]
+    claim: "key は決定論演奏者経路で tight grip を持ち、実 Suno では帯限定の保存観測がある"
+    status: partial
+    evidence:
+      - "docs/controllability_poc.md"
+      - "docs/roundtrip_case_studies.md"
+      - "docs/control_profile.md"
+    note: "tight 実証は K1（決定論 synth）のみ。実 Suno K2 転移実証は bpm/brightness の 2 ノブで、key grip はチャネル対応表で未実証（loose 扱い）。roundtrip case studies の保存観測は西洋長調帯・n=4"
   - id: control.brightness
     claim: "brightness(centroid 正規センサー) は tight grip を持つ"
     status: verified
