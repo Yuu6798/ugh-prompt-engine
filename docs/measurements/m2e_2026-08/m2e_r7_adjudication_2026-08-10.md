@@ -151,24 +151,28 @@ attestation 後継束縛（機械的失効機構）**で保全済み
        # 成功チャンクが slow 判定され、未完走水準へ到達する前に誤停止する =
        # PR #257 第 7 指摘の採用）。
        if [ -e "$state_dir/level_${lvl}.complete" ]; then break; fi
-       # 会計移入ゲート（§8.5）: store_B に既存セルがあるのに run 会計が空なら、
-       # 先行キャンペーンの run 消費（§8.5 時点で 10/72）が state_dir に未移入 =
-       # 会計ゼロから再カウントして cap と累計を過少化する。実測記録（実行側の
-       # run 台帳・console ログ）から .started マーカーと chunk_log seed 行を移入し、
-       # accounting_seeded を作成するまで起動しない。
-       if [ -z "$(find "$state_dir" -name 'run_*.started' -print -quit)" ] \
-          && [ -n "$(find build/m2e/store_B -type f -name 'cell_*.json' -print -quit 2>/dev/null)" ] \
-          && [ ! -e "$state_dir/accounting_seeded" ]; then
-         echo "r7 evaluate: store_B に既存セルがあるが run 会計が空。先行 run の" \
-           ".started マーカー（水準別）と chunk_log seed 行を実測記録から移入し、" \
-           "$state_dir/accounting_seeded を作成してから再開（§8.5）" >&2
-         exit 1
+       # 会計移入ゲート（§8.5）: store_B に既存セルがある限り、run 会計が完全である
+       # ことの明示証明 accounting_seeded を常に要求する（マーカーが 1 個でもあれば
+       # 通す判定だと、部分転送された state が cap/累計を過少化したまま素通りする）。
+       # 新規キャンペーン（store_B 空）を本ループ自身が開始する場合は、その事実を
+       # もって自己証明を作成する（移入すべき先行会計が存在しない）。
+       if [ ! -e "$state_dir/accounting_seeded" ]; then
+         if [ -n "$(find build/m2e/store_B -type f -name 'cell_*.json' -print -quit 2>/dev/null)" ]; then
+           echo "r7 evaluate: store_B に既存セルがあるが会計移入の証明が無い。先行 run の" \
+             ".started マーカー（水準別・run 台帳と件数整合）と chunk_log seed 行を" \
+             "実測記録から移入・整合確認し、$state_dir/accounting_seeded を作成して" \
+             "から再開（§8.5）" >&2
+           exit 1
+         fi
+         : > "$state_dir/accounting_seeded"
        fi
-       # 二段起動ゲート（§8 (b)・08-10 測定セッション裁定）: chunk1 の**起動痕跡**
-       # （耐久 .started マーカー。chunk_log はホスト死でチャンク末尾の追記前に
-       # 消失しうるため判定に使わない）があれば、store_B 点検（§8 (c) 基準①〜⑧）に
-       # 合格しフラグが作成されるまで次のチャンクへ進まない。
-       if [ -n "$(find "$state_dir" -name 'run_*.started' -print -quit)" ] \
+       # 二段起動ゲート（§8 (b)・08-10 測定セッション裁定）: 点検地点への到達は
+       # 「完了チャンクの証拠（chunk_log 非空）or store_B が chunk1 規定の 174 セル
+       # 以上（耐久な store 証拠。ログがホスト死で失われた場合を被覆）」で判定する。
+       # 到達前に中断された chunk1 は resume で続行できる（起動痕跡だけで塞ぐと、
+       # 点検不能な部分 store に対して全起動を拒否するデッドロックになる）。
+       cells_now=$(find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | wc -l)
+       if { [ -s "$state_dir/chunk_log.txt" ] || [ "$cells_now" -ge 174 ]; } \
           && [ ! -e "$state_dir/r7_storeB_inspection_passed" ]; then
          echo "r7 evaluate: store_B 点検（§8 (c) 基準①〜⑧）未完。合格後に" \
            "$state_dir/r7_storeB_inspection_passed を作成して再開" >&2
