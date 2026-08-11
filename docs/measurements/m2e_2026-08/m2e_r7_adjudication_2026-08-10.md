@@ -134,19 +134,36 @@ attestation 後継束縛（機械的失効機構）**で保全済み
    機能しない）:
 
    ```bash
-   timeout --kill-after=600 7200 \
-     env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-       --out docs/measurements/m2e_2026-08/verdict_<lvl>.json \
-       --evaluate <run report(s) for lvl> \
-       --external-manifest build/m2e/manifest_<lvl>.json \
-       --external-fixtures tests/fixtures/melody_bench/m2e_vremix_fixtures_<lvl>.yaml \
-       --eval-cell-store build/m2e/store_B --workers 2 --pin-threads
+   # そのまま実行可能な形（HANDOFF §5 の canonical 作業成果物パスに束縛。
+   # プレースホルダ禁止 = HANDOFF E-132 と同型の是正・PR #257 第 4 指摘）。
+   # run report は step0 が HANDOFF §5 形で build/m2e/run_<水準>_r{0,1}.json へ
+   # 出力済みであることが前提（未生成なら本ループは fail-closed で止まる）。
+   for lvl in p12 p06 p00 m06; do
+     runs=0
+     until timeout --kill-after=600 7200 \
+       env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+         --out "docs/measurements/m2e_2026-08/verdict_${lvl}.json" \
+         --evaluate "build/m2e/run_${lvl}_r0.json" "build/m2e/run_${lvl}_r1.json" \
+         --external-manifest "build/m2e/manifest_${lvl}.json" \
+         --external-fixtures "tests/fixtures/melody_bench/m2e_vremix_fixtures_${lvl}.yaml" \
+         --eval-cell-store build/m2e/store_B --workers 2 --pin-threads; do
+       status=$?
+       runs=$((runs + 1))
+       # exit 124 = timeout によるチャンク打ち切りの正常系。それ以外は fail-closed 停止。
+       if [ "$status" -ne 124 ]; then
+         echo "r7 evaluate fail-closed: lvl=${lvl} exit=${status}" >&2; exit "$status"
+       fi
+       # run 上限（水準 18・全体 72 = 4 水準 × 18）。到達で停止し設計側へ報告。
+       if [ "$runs" -ge 18 ]; then
+         echo "r7 evaluate run cap reached: lvl=${lvl}" >&2; exit 1
+       fi
+     done
+   done
    ```
 
    同一 `--eval-cell-store build/m2e/store_B` の再指定で次チャンクが resume する
    （セルレコードは atomic write のため打ち切りで部分レコードは残らず、
-   verdict JSON は完走時のみ emit される＝打ち切りは安全）。exit 124（timeout）は
-   チャンク打ち切りの正常系として扱い、run 回数（上限 水準 18/全体 72）に数える。
+   verdict JSON は完走時のみ emit される＝打ち切りは安全）。
    実行側に既存の `build/m2e/run_r7_evaluate.sh` を使う場合は、**起動前にその
    bytes を dated record として commit し sha256 を初回進捗記録へ載せる**
    （untracked runner のまま run 会計・停止条件を運用しない）。
