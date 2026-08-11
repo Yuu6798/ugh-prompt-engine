@@ -167,8 +167,7 @@ attestation 後継束縛（機械的失効機構）**で保全済み
        fi
        stamp=$(date -u +%Y%m%dT%H%M%SZ)
        : > "$state_dir/run_${lvl}_${stamp}.started"
-       find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | sort \
-         > "$state_dir/cells_before.txt"
+       start_iso=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)
        start_utc=$(date -u +%s)
        status=0
        timeout --kill-after=600 7200 \
@@ -179,15 +178,44 @@ attestation 後継束縛（機械的失効機構）**で保全済み
            --external-fixtures "tests/fixtures/melody_bench/m2e_vremix_fixtures_${lvl}.yaml" \
            --eval-cell-store build/m2e/store_B --workers 2 --pin-threads || status=$?
        elapsed=$(( $(date -u +%s) - start_utc ))
-       find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | sort \
-         > "$state_dir/cells_after.txt"
-       comm -13 "$state_dir/cells_before.txt" "$state_dir/cells_after.txt" \
-         > "$state_dir/cells_new.txt"
-       cells_delta=$(wc -l < "$state_dir/cells_new.txt")
-       # chunk_log は進捗記録のみ（plan §3 の進捗記録の器）。run 実時間÷新規セル数を
-       # 停止判定に使う旧計器は §8 のとおり廃止済み。
+       # 「その run で測定されたセル」はパス集合差分でなく、セルレコードの
+       # measurement_started_utc >= run 開始時刻で選別する——resume 検証失敗により
+       # 同パスへ atomic 置換で上書き再測定されたセルはパス差分に現れず、HALT 標本
+       # から漏れる（PR #258 指摘の採用）。純 resume セルは旧時刻のまま = 標本外。
+       # HALT 判定（正規仕様 = §8.1）もここで同時に計算し、exit は完走マーカー
+       # 永続化の後に回す（第 6/7 指摘の順序を踏襲）。cells_delta は同標本の件数
+       # （chunk_log は進捗記録のみ。旧 s/cell 計器は §8 のとおり廃止済み）。
+       halt=0
+       cells_delta=$(python - build/m2e/store_B "$start_iso" <<'PYEOF'
+   import json, pathlib, statistics, sys
+   from datetime import datetime
+   store = pathlib.Path(sys.argv[1])
+   run_start = datetime.fromisoformat(sys.argv[2])
+   thresholds = {"V_remix_real_direct": 195.0, "V_remix_real_stem": 900.0}
+   by_arm = {}
+   measured = 0
+   for path in sorted(store.glob("cell_*.json")):
+       with open(path, encoding="utf-8") as handle:
+           rec = json.load(handle)
+       started = rec.get("measurement_started_utc")
+       if not isinstance(started, str) or datetime.fromisoformat(started) < run_start:
+           continue
+       measured += 1
+       arm = rec.get("category")
+       if arm in thresholds:
+           by_arm.setdefault(arm, []).append(float(rec["elapsed_seconds"]))
+   print(measured)
+   for arm, values in by_arm.items():
+       if len(values) < 3:
+           continue  # 新規測定セル 3 個未満の arm はその run では判定しない
+       med = statistics.median(values)
+       if med > thresholds[arm]:
+           print(f"HALT: {arm} median {med:.1f}s > {thresholds[arm]:.0f}s", file=sys.stderr)
+           raise SystemExit(3)
+   PYEOF
+       ) || halt=$?
        printf '%s lvl=%s exit=%s elapsed=%s cells_delta=%s\n' \
-         "$stamp" "$lvl" "$status" "$elapsed" "$cells_delta" >> "$state_dir/chunk_log.txt"
+         "$stamp" "$lvl" "$status" "$elapsed" "${cells_delta:-NA}" >> "$state_dir/chunk_log.txt"
        # exit 124 = timeout によるチャンク打ち切りの正常系。0/124 以外は fail-closed 停止。
        if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
          echo "r7 evaluate fail-closed: lvl=${lvl} exit=${status}" >&2; exit "$status"
@@ -195,30 +223,11 @@ attestation 後継束縛（機械的失効機構）**で保全済み
        # 成功時は HALT 判定より先に完走マーカーを永続化する（HALT で exit しても
        # 再起動時にこの水準を再走しない。verdict は emit 済み）。
        if [ "$status" -eq 0 ]; then : > "$state_dir/level_${lvl}.complete"; fi
-       # arm 正規化 HALT 判定（正規仕様 = §8。判定材料はセルレコード記録値
-       # elapsed_seconds であって run 実時間ではない）。成功チャンクにも適用してから
-       # break する（第 6 指摘の順序を踏襲）。
-       if ! python - "$state_dir/cells_new.txt" <<'PYEOF'
-   import json, statistics, sys
-   paths = [p for p in open(sys.argv[1], encoding="utf-8").read().splitlines() if p]
-   thresholds = {"V_remix_real_direct": 195.0, "V_remix_real_stem": 900.0}
-   by_arm = {}
-   for path in paths:
-       with open(path, encoding="utf-8") as handle:
-           rec = json.load(handle)
-       arm = rec.get("category")
-       if arm in thresholds:
-           by_arm.setdefault(arm, []).append(float(rec["elapsed_seconds"]))
-   for arm, values in by_arm.items():
-       if len(values) < 3:
-           continue  # 新規セル 3 個未満の arm はその run では判定しない
-       med = statistics.median(values)
-       if med > thresholds[arm]:
-           print(f"HALT: {arm} median {med:.1f}s > {thresholds[arm]:.0f}s", file=sys.stderr)
-           raise SystemExit(1)
-   PYEOF
-       then
-         echo "r7 evaluate: arm 正規化 HALT — 再開せず機体点検（CPU 温度・周波数実測含む）を先行" >&2
+       # arm 正規化 HALT の exit（判定計算はチャンク直後の python で済み。判定器自体の
+       # 異常終了も安全側 = HALT 扱いで停止する）。
+       if [ "$halt" -ne 0 ]; then
+         echo "r7 evaluate: arm 正規化 HALT（または判定器異常 exit=${halt}）—" \
+           "再開せず機体点検（CPU 温度・周波数実測含む）を先行" >&2
          exit 1
        fi
        if [ "$status" -eq 0 ]; then break; fi
@@ -285,7 +294,9 @@ run 音声 read+sha256 してから skip する §8.7 順序制約・完了数�
 > arm 正規化 3×median 規則に改訂（2026-08-10 Fable 裁定）。規則の意図 = 環境異常
 > 検出の保存。旧計器は arm 構成シフト+resume 走査固定費を混入していた』
 
-§6 のループはこの規則の機械形（`cells_new.txt` → arm 別 median 判定）へ改訂済み。
+§6 のループはこの規則の機械形へ改訂済み（「その run で測定したセル」の選別は
+セルレコードの `measurement_started_utc` >= run 開始時刻で行う——resume 検証失敗で
+同パスへ上書き再測定されたセルもパス差分と違って取りこぼさない）。
 
 ### 8.2 step0 の受理条件（口頭裁定 (a) の正本化）
 
