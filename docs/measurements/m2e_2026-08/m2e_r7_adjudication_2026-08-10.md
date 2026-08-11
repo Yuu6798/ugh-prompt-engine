@@ -156,7 +156,7 @@ attestation 後継束縛（機械的失効機構）**で保全済み
        fi
        stamp=$(date -u +%Y%m%dT%H%M%SZ)
        : > "$state_dir/run_${lvl}_${stamp}.started"
-       cells_before=$(find build/m2e/store_B -type f 2>/dev/null | wc -l)
+       cells_before=$(find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | wc -l)
        start_utc=$(date -u +%s)
        status=0
        timeout --kill-after=600 7200 \
@@ -167,7 +167,7 @@ attestation 後継束縛（機械的失効機構）**で保全済み
            --external-fixtures "tests/fixtures/melody_bench/m2e_vremix_fixtures_${lvl}.yaml" \
            --eval-cell-store build/m2e/store_B --workers 2 --pin-threads || status=$?
        elapsed=$(( $(date -u +%s) - start_utc ))
-       cells_delta=$(( $(find build/m2e/store_B -type f 2>/dev/null | wc -l) - cells_before ))
+       cells_delta=$(( $(find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | wc -l) - cells_before ))
        printf '%s lvl=%s exit=%s elapsed=%s cells_delta=%s\n' \
          "$stamp" "$lvl" "$status" "$elapsed" "$cells_delta" >> "$state_dir/chunk_log.txt"
        # exit 124 = timeout によるチャンク打ち切りの正常系。0/124 以外は fail-closed 停止。
