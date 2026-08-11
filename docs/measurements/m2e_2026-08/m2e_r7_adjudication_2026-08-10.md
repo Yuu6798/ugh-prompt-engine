@@ -151,10 +151,25 @@ attestation 後継束縛（機械的失効機構）**で保全済み
        # 成功チャンクが slow 判定され、未完走水準へ到達する前に誤停止する =
        # PR #257 第 7 指摘の採用）。
        if [ -e "$state_dir/level_${lvl}.complete" ]; then break; fi
-       # 二段起動ゲート（§8 (b)・08-10 測定セッション裁定）: 最初のチャンク完了後、
-       # store_B 点検（§8 (c) 基準①〜⑧）に合格しフラグが作成されるまで main 運転へ
-       # 進まない。
-       if [ -s "$state_dir/chunk_log.txt" ] && [ ! -e "$state_dir/r7_storeB_inspection_passed" ]; then
+       # 会計移入ゲート（§8.5）: store_B に既存セルがあるのに run 会計が空なら、
+       # 先行キャンペーンの run 消費（§8.5 時点で 10/72）が state_dir に未移入 =
+       # 会計ゼロから再カウントして cap と累計を過少化する。実測記録（実行側の
+       # run 台帳・console ログ）から .started マーカーと chunk_log seed 行を移入し、
+       # accounting_seeded を作成するまで起動しない。
+       if [ -z "$(find "$state_dir" -name 'run_*.started' -print -quit)" ] \
+          && [ -n "$(find build/m2e/store_B -type f -name 'cell_*.json' -print -quit 2>/dev/null)" ] \
+          && [ ! -e "$state_dir/accounting_seeded" ]; then
+         echo "r7 evaluate: store_B に既存セルがあるが run 会計が空。先行 run の" \
+           ".started マーカー（水準別）と chunk_log seed 行を実測記録から移入し、" \
+           "$state_dir/accounting_seeded を作成してから再開（§8.5）" >&2
+         exit 1
+       fi
+       # 二段起動ゲート（§8 (b)・08-10 測定セッション裁定）: chunk1 の**起動痕跡**
+       # （耐久 .started マーカー。chunk_log はホスト死でチャンク末尾の追記前に
+       # 消失しうるため判定に使わない）があれば、store_B 点検（§8 (c) 基準①〜⑧）に
+       # 合格しフラグが作成されるまで次のチャンクへ進まない。
+       if [ -n "$(find "$state_dir" -name 'run_*.started' -print -quit)" ] \
+          && [ ! -e "$state_dir/r7_storeB_inspection_passed" ]; then
          echo "r7 evaluate: store_B 点検（§8 (c) 基準①〜⑧）未完。合格後に" \
            "$state_dir/r7_storeB_inspection_passed を作成して再開" >&2
          exit 1
@@ -347,3 +362,13 @@ chunk1（+12dB 174 セル）→ store_B 点検（8.4）→ フラグファイル
 - 進捗（2026-08-11 測定セッション報告）: store_B **604/1280**（+12dB 完了 320 +
   verdict 生成済み / +6dB direct 160/160・stem 124/160）・run 消費 **10/72**・
   HALT 解除・再開 GO 伝達済み。ETA 再計算 = 残り ≈38–65h・~40/72 run で予算内。
+- **会計移入（進行中キャンペーンで §6 ループを使い始める場合の必須手順）**:
+  state（`$state_dir`）は gitignored な `build/` 配下にあり store_B と一緒に運ばれる
+  保証がない。store_B に既存セルがあるのに run 会計が空の状態で起動すると、cap が
+  ゼロから再カウントされ（実質 10+72 run を許す）`total_elapsed` も再開後分しか
+  映さない。**起動前に、実行側の run 台帳・console ログを正として先行 run の
+  `.started` マーカー（水準別・上記 10/72 と件数整合）と `chunk_log.txt` の seed 行
+  （先行分の elapsed 合計を 1 行で記録）を移入し、完了水準の `level_<水準>.complete`
+  と点検済みの `r7_storeB_inspection_passed` を作成した上で
+  `$state_dir/accounting_seeded` を置く**。ループはこの移入が済むまで起動を拒否する
+  （§6 会計移入ゲート）。
