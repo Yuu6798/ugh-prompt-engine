@@ -114,7 +114,9 @@ attestation 後継束縛（機械的失効機構）**で保全済み
 - **チャンク区切り B_session=7200s + hang 上限 600s**・同一 store_B 再開
 - **run 回数上限（plan §3 の「値は設計側裁定に従う」への裁定）: 水準あたり 18・
   全体 72 で確定**。超過時は停止・設計側へ報告
-- **単価監視: >500 s/cell が 2 チャンク連続で停止・報告**（新ドリフト検出）
+- **単価監視: ~~>500 s/cell が 2 チャンク連続で停止・報告~~（2026-08-11 訂正:
+  この旧計器は 08-10 の HALT 裁定で廃止済み——本 memo 起草時点で既に stale だった。
+  正は §8 の arm 正規化 3×median 規則）**
 - **報告規律（plan §5）を厳守**: 帯の判定・水準別数値は census(C5) のみ。
   evaluate 進行中の報告は完了セル数・逸脱・単価実測のみ
 
@@ -139,8 +141,9 @@ attestation 後継束縛（機械的失効機構）**で保全済み
    # run report は step0 が HANDOFF §5 形で build/m2e/run_<水準>_r{0,1}.json へ
    # 出力済みであることが前提（未生成なら本ループは fail-closed で止まる）。
    # run 会計・単価記録はシェル再起動を跨いで永続する（1 run = 1 marker ファイル・
-   # チャンクログ追記式 = PR #257 第 5 指摘の採用。plan §4 の「>500 s/cell 2 チャンク
-   # 連続で停止」もログに対する機械判定として内蔵）。
+   # チャンクログ追記式 = PR #257 第 5 指摘の採用）。停止規則は §8（2026-08-11 追記）の
+   # arm 正規化 3×median 規則が正——plan §4 の旧「>500 s/cell 2 チャンク連続」計器は
+   # 08-10 の HALT 裁定で廃止済み（arm 構成シフト+resume 走査固定費を混入する計器だった）。
    state_dir="build/m2e/r7_chunk_state"; mkdir -p "$state_dir"
    for lvl in p12 p06 p00 m06; do
      while :; do
@@ -148,6 +151,14 @@ attestation 後継束縛（機械的失効機構）**で保全済み
        # 成功チャンクが slow 判定され、未完走水準へ到達する前に誤停止する =
        # PR #257 第 7 指摘の採用）。
        if [ -e "$state_dir/level_${lvl}.complete" ]; then break; fi
+       # 二段起動ゲート（§8 (b)・08-10 測定セッション裁定）: 最初のチャンク完了後、
+       # store_B 点検（§8 (c) 基準①〜⑧）に合格しフラグが作成されるまで main 運転へ
+       # 進まない。
+       if [ -s "$state_dir/chunk_log.txt" ] && [ ! -e "$state_dir/r7_storeB_inspection_passed" ]; then
+         echo "r7 evaluate: store_B 点検（§8 (c) 基準①〜⑧）未完。合格後に" \
+           "$state_dir/r7_storeB_inspection_passed を作成して再開" >&2
+         exit 1
+       fi
        # run 計上は**起動前**の .started マーカーで行う（timeout 終了後の記録だと
        # ホスト死・端末切断のチャンクが過少計上され 18/72 を超えうる = 第 8 指摘）。
        runs=$(find "$state_dir" -name "run_${lvl}_*.started" | wc -l)
@@ -156,7 +167,8 @@ attestation 後継束縛（機械的失効機構）**で保全済み
        fi
        stamp=$(date -u +%Y%m%dT%H%M%SZ)
        : > "$state_dir/run_${lvl}_${stamp}.started"
-       cells_before=$(find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | wc -l)
+       find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | sort \
+         > "$state_dir/cells_before.txt"
        start_utc=$(date -u +%s)
        status=0
        timeout --kill-after=600 7200 \
@@ -167,26 +179,47 @@ attestation 後継束縛（機械的失効機構）**で保全済み
            --external-fixtures "tests/fixtures/melody_bench/m2e_vremix_fixtures_${lvl}.yaml" \
            --eval-cell-store build/m2e/store_B --workers 2 --pin-threads || status=$?
        elapsed=$(( $(date -u +%s) - start_utc ))
-       cells_delta=$(( $(find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | wc -l) - cells_before ))
+       find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | sort \
+         > "$state_dir/cells_after.txt"
+       comm -13 "$state_dir/cells_before.txt" "$state_dir/cells_after.txt" \
+         > "$state_dir/cells_new.txt"
+       cells_delta=$(wc -l < "$state_dir/cells_new.txt")
+       # chunk_log は進捗記録のみ（plan §3 の進捗記録の器）。run 実時間÷新規セル数を
+       # 停止判定に使う旧計器は §8 のとおり廃止済み。
        printf '%s lvl=%s exit=%s elapsed=%s cells_delta=%s\n' \
          "$stamp" "$lvl" "$status" "$elapsed" "$cells_delta" >> "$state_dir/chunk_log.txt"
        # exit 124 = timeout によるチャンク打ち切りの正常系。0/124 以外は fail-closed 停止。
        if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
          echo "r7 evaluate fail-closed: lvl=${lvl} exit=${status}" >&2; exit "$status"
        fi
-       # 成功時は単価判定より先に完走マーカーを永続化する（単価停止で exit しても
+       # 成功時は HALT 判定より先に完走マーカーを永続化する（HALT で exit しても
        # 再起動時にこの水準を再走しない。verdict は emit 済み）。
        if [ "$status" -eq 0 ]; then : > "$state_dir/level_${lvl}.complete"; fi
-       # 単価監視（plan §4）: 直近 2 チャンクがともに >500 s/cell（cells_delta<=0 含む）
-       # なら新ドリフトとして停止・設計側へ報告。**成功チャンク（status=0）にも
-       # 適用してから break する**——水準の最終チャンクが 2 連続超過の 2 本目である
-       # 場合、次水準へ進む前に停止・報告するのが plan §4 の趣旨（PR #257 第 6 指摘）。
-       rate=$(tail -n 2 "$state_dir/chunk_log.txt" | awk '
-         { split($4, e, "="); split($5, c, "=");
-           if (c[2] <= 0 || e[2] / c[2] > 500) n++ }
-         END { print (NR == 2 && n == 2) ? "stop" : "go" }')
-       if [ "$rate" = "stop" ]; then
-         echo "r7 evaluate: >500 s/cell が 2 チャンク連続 — 停止・設計側へ報告" >&2; exit 1
+       # arm 正規化 HALT 判定（正規仕様 = §8。判定材料はセルレコード記録値
+       # elapsed_seconds であって run 実時間ではない）。成功チャンクにも適用してから
+       # break する（第 6 指摘の順序を踏襲）。
+       if ! python - "$state_dir/cells_new.txt" <<'PYEOF'
+   import json, statistics, sys
+   paths = [p for p in open(sys.argv[1], encoding="utf-8").read().splitlines() if p]
+   thresholds = {"V_remix_real_direct": 195.0, "V_remix_real_stem": 900.0}
+   by_arm = {}
+   for path in paths:
+       with open(path, encoding="utf-8") as handle:
+           rec = json.load(handle)
+       arm = rec.get("category")
+       if arm in thresholds:
+           by_arm.setdefault(arm, []).append(float(rec["elapsed_seconds"]))
+   for arm, values in by_arm.items():
+       if len(values) < 3:
+           continue  # 新規セル 3 個未満の arm はその run では判定しない
+       med = statistics.median(values)
+       if med > thresholds[arm]:
+           print(f"HALT: {arm} median {med:.1f}s > {thresholds[arm]:.0f}s", file=sys.stderr)
+           raise SystemExit(1)
+   PYEOF
+       then
+         echo "r7 evaluate: arm 正規化 HALT — 再開せず機体点検（CPU 温度・周波数実測含む）を先行" >&2
+         exit 1
        fi
        if [ "$status" -eq 0 ]; then break; fi
      done
@@ -200,6 +233,8 @@ attestation 後継束縛（機械的失効機構）**で保全済み
    bytes を dated record として commit し sha256 を初回進捗記録へ載せる**
    （untracked runner のまま run 会計・停止条件を運用しない）。
 3. 監視・停止条件は plan §4 のとおり（swap so>0 即報告・fail-closed 即停止）。
+   ただし plan §4 の単価監視（>500 s/cell×2 連続）だけは §8 の arm 正規化
+   3×median 規則へ差し替え済み（08-10 HALT 裁定）。
 4. verdict JSON は `docs/measurements/m2e_2026-08/verdict_<lvl>.json` へ commit。
    判読は設計側（帯判定は census(C5) のみ）。
 
@@ -216,3 +251,74 @@ attestation 後継束縛（機械的失効機構）**で保全済み
   PR #257 レビュー指摘で補完）
 - `.claude/memory/2026-08-10.md` — Handoff 末尾へ dated 追記（Task 1 前提の
   supersession。本文は起草時点の記録として保持。同上）
+
+## 8. 追記（2026-08-11）: 測定セッション整合 — 停止規則の差し替え + 口頭裁定の書面正本化
+
+出典: 測定セッション（`session_01XBrHyRfRBAGgS9gGHtiKdg`・PR #254 実装元）への
+整合性照会の回答（2026-08-11・セッション間直送）。同セッションと執行者
+（測定係 Claw・別マシン）の間で **User 経由の口頭裁定のみで運用され書面正本の
+なかった裁定群**を、本節で正本化する。コンフリクト時は測定セッション仕様を正と
+する裁定（User 指示 2026-08-11）による。
+
+### 8.1 停止規則の差し替え（本 memo §5/§6 旧記載の supersession）
+
+本 memo が 08-11 に「内蔵」した単価監視（chunk_log の run 実時間÷新規セル数で
+>500 s/cell×2 連続停止）は、**起草時点で既に 08-10 の HALT 裁定により廃止済み**
+だった。経緯: r7 は 604/1280 セル時点で当該旧規則により HALT（p06 で 557→650
+s/cell）。診断の結果、旧計器は (i) direct→stem の arm 構成シフト（stem は Demucs
+込みで真コスト median ≈300s・direct ≈65s）(ii) resume 走査固定費（完了セルも毎
+run 音声 read+sha256 してから skip する §8.7 順序制約・完了数に比例）を混入して
+おり、後半 run の s/cell ≈ 7800s(B_session+grace)÷新規セル数——「新規セル数減」を
+「コスト悪化」と誤読する計器だった。環境劣化は棄却（direct median が別時間帯で
+65s/65s と完全一致・機体指標健全・elapsed は測定値に不入=妥当性非脅威）。
+裁定 = 再開 GO + arm 正規化規則へ差し替え。
+
+**正規仕様文（測定セッション回答の逐語転記）:**
+
+> 各 run 終了時、その run で新規測定したセルの elapsed_seconds（セルレコード
+> 記録値）を arm 別に median 化し、基準値の 3 倍超で HALT する:
+> V_remix_real_direct 基準 65s → 閾値 195s 超、V_remix_real_stem 基準 300s →
+> 閾値 900s 超。新規セル 3 個未満の arm はその run では判定しない。run 実時間÷
+> 新規セル数による旧計器（>500 s/cell×2 連続）は廃止。run 上限（水準 18 / 全体
+> 72）・総予算監視・その他の HALT 条件は現行のまま。再 HALT 時は再開せず機体点検
+> （CPU 温度・周波数実測含む）を先行する。逸脱記録: 『stop 規則 >500s/cell×2 を
+> arm 正規化 3×median 規則に改訂（2026-08-10 Fable 裁定）。規則の意図 = 環境異常
+> 検出の保存。旧計器は arm 構成シフト+resume 走査固定費を混入していた』
+
+§6 のループはこの規則の機械形（`cells_new.txt` → arm 別 median 判定）へ改訂済み。
+
+### 8.2 step0 の受理条件（口頭裁定 (a) の正本化）
+
+step0 = store_A resume-only の水準別 run report 8 本。受理条件: 各 report で
+`cells_resumed`=全数 かつ `cells_measured`=0 かつ `generator_code_predecessors`=
+`["5cc0d5f9bba92ce8aa679eeebc32845e7702b6ac8e2bb1f561ba37c37ab965a4"]`。
+（§6 手順 1 の「step0 を再実行」は本追記時点で充足済み——下記 8.5 スナップショット）
+
+### 8.3 二段起動（口頭裁定 (b) の正本化）
+
+chunk1（+12dB 174 セル）→ store_B 点検（8.4）→ フラグファイル
+`r7_storeB_inspection_passed` 作成 → main 起動。§6 ループには点検合格フラグ
+（置き場 = `$state_dir` 配下。原裁定は置き場未指定のため本 memo で確定）を
+ゲートとして配線済み。
+
+### 8.4 store_B 点検基準①〜⑧（口頭裁定 (c) の正本化 — store_B 監査の正本）
+
+1. 件数一致
+2. 全件 JSON parse 可
+3. ファイル名照合は「内容 digest」ではなく**鍵 identity hash** —
+   `sha256(json.dumps({"category":…,"level":…,"entry_id":…,"repeat_index":…},
+   sort_keys=True))` の再計算一致
+4. 全レコード `store_role=="evaluate"`（store_A→B コピー偽装防止・必須）
+5. 全セル `generator_code_sha256` == evaluate run report の値（前任 hash がセルに
+   現れたら不合格。前任の痕跡は report 側 `generator_code_predecessors` のみ許容）
+6. level 均一
+7. `env_digest` 全件同一かつ run report と一致
+8. セルに verdict 無し（verdict は evaluate の `verdict_<lvl>.json` と census のみ）
+
+### 8.5 argparse 逸脱の承認記録（口頭裁定 (d)）と進捗スナップショット
+
+- `--level "-6dB"` が先頭ダッシュで argparse に拒否されるため `--level="-6dB"`
+  形式へ（等価形逸脱・記録 1 行）。
+- 進捗（2026-08-11 測定セッション報告）: store_B **604/1280**（+12dB 完了 320 +
+  verdict 生成済み / +6dB direct 160/160・stem 124/160）・run 消費 **10/72**・
+  HALT 解除・再開 GO 伝達済み。ETA 再計算 = 残り ≈38–65h・~40/72 run で予算内。
