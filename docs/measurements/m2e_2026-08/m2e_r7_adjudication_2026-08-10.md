@@ -164,13 +164,14 @@ attestation 後継束縛（機械的失効機構）**で保全済み
        printf '%s lvl=%s exit=%s elapsed=%s cells_delta=%s\n' \
          "$stamp" "$lvl" "$status" "$elapsed" "$cells_delta" >> "$state_dir/chunk_log.txt"
        : > "$state_dir/run_${lvl}_${stamp}.done"
-       if [ "$status" -eq 0 ]; then break; fi
-       # exit 124 = timeout によるチャンク打ち切りの正常系。それ以外は fail-closed 停止。
-       if [ "$status" -ne 124 ]; then
+       # exit 124 = timeout によるチャンク打ち切りの正常系。0/124 以外は fail-closed 停止。
+       if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
          echo "r7 evaluate fail-closed: lvl=${lvl} exit=${status}" >&2; exit "$status"
        fi
        # 単価監視（plan §4）: 直近 2 チャンクがともに >500 s/cell（cells_delta<=0 含む）
-       # なら新ドリフトとして停止・設計側へ報告。
+       # なら新ドリフトとして停止・設計側へ報告。**成功チャンク（status=0）にも
+       # 適用してから break する**——水準の最終チャンクが 2 連続超過の 2 本目である
+       # 場合、次水準へ進む前に停止・報告するのが plan §4 の趣旨（PR #257 第 6 指摘）。
        rate=$(tail -n 2 "$state_dir/chunk_log.txt" | awk '
          { split($4, e, "="); split($5, c, "=");
            if (c[2] <= 0 || e[2] / c[2] > 500) n++ }
@@ -178,6 +179,7 @@ attestation 後継束縛（機械的失効機構）**で保全済み
        if [ "$rate" = "stop" ]; then
          echo "r7 evaluate: >500 s/cell が 2 チャンク連続 — 停止・設計側へ報告" >&2; exit 1
        fi
+       if [ "$status" -eq 0 ]; then break; fi
      done
    done
    ```
