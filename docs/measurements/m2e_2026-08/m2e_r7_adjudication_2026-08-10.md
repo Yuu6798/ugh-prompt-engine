@@ -144,10 +144,18 @@ attestation 後継束縛（機械的失効機構）**で保全済み
    state_dir="build/m2e/r7_chunk_state"; mkdir -p "$state_dir"
    for lvl in p12 p06 p00 m06; do
      while :; do
-       runs=$(find "$state_dir" -name "run_${lvl}_*.done" | wc -l)
+       # 完走済み水準は skip（再起動時に完走水準を再走すると cells_delta=0 の
+       # 成功チャンクが slow 判定され、未完走水準へ到達する前に誤停止する =
+       # PR #257 第 7 指摘の採用）。
+       if [ -e "$state_dir/level_${lvl}.complete" ]; then break; fi
+       # run 計上は**起動前**の .started マーカーで行う（timeout 終了後の記録だと
+       # ホスト死・端末切断のチャンクが過少計上され 18/72 を超えうる = 第 8 指摘）。
+       runs=$(find "$state_dir" -name "run_${lvl}_*.started" | wc -l)
        if [ "$runs" -ge 18 ]; then
          echo "r7 evaluate run cap reached: lvl=${lvl} (18/水準・全体 72)" >&2; exit 1
        fi
+       stamp=$(date -u +%Y%m%dT%H%M%SZ)
+       : > "$state_dir/run_${lvl}_${stamp}.started"
        cells_before=$(find build/m2e/store_B -type f 2>/dev/null | wc -l)
        start_utc=$(date -u +%s)
        status=0
@@ -160,14 +168,15 @@ attestation 後継束縛（機械的失効機構）**で保全済み
            --eval-cell-store build/m2e/store_B --workers 2 --pin-threads || status=$?
        elapsed=$(( $(date -u +%s) - start_utc ))
        cells_delta=$(( $(find build/m2e/store_B -type f 2>/dev/null | wc -l) - cells_before ))
-       stamp=$(date -u +%Y%m%dT%H%M%SZ)
        printf '%s lvl=%s exit=%s elapsed=%s cells_delta=%s\n' \
          "$stamp" "$lvl" "$status" "$elapsed" "$cells_delta" >> "$state_dir/chunk_log.txt"
-       : > "$state_dir/run_${lvl}_${stamp}.done"
        # exit 124 = timeout によるチャンク打ち切りの正常系。0/124 以外は fail-closed 停止。
        if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
          echo "r7 evaluate fail-closed: lvl=${lvl} exit=${status}" >&2; exit "$status"
        fi
+       # 成功時は単価判定より先に完走マーカーを永続化する（単価停止で exit しても
+       # 再起動時にこの水準を再走しない。verdict は emit 済み）。
+       if [ "$status" -eq 0 ]; then : > "$state_dir/level_${lvl}.complete"; fi
        # 単価監視（plan §4）: 直近 2 チャンクがともに >500 s/cell（cells_delta<=0 含む）
        # なら新ドリフトとして停止・設計側へ報告。**成功チャンク（status=0）にも
        # 適用してから break する**——水準の最終チャンクが 2 連続超過の 2 本目である
