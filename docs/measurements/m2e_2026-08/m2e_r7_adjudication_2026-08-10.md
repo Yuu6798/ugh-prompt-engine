@@ -126,6 +126,30 @@ attestation 後継束縛（機械的失効機構）**で保全済み
    等価表受理の正常な痕跡）。
 2. step0 の run report が 4 水準そろい次第、plan §1 の evaluate を
    **p12 → p06 → p00 → m06** の順でチャンク実行（store_B は空から・4 水準共用）。
+   **チャンクの時間区切り（plan §3 の B_session=7200s + hang 上限 600s）は、
+   checkout 非依存の逐語形として以下で実施する**（2026-08-11 追記・PR #257
+   レビュー指摘の採用。plan §1 の evaluate CLI 単体は timeout を持たず、
+   `--session-budget` は shard 実行機のみのため、素の §1 形では 1 水準
+   ≈29.8h を一括で走らせてしまい 18/72 run 会計・単価ドリフト停止条件が
+   機能しない）:
+
+   ```bash
+   timeout --kill-after=600 7200 \
+     env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+       --out docs/measurements/m2e_2026-08/verdict_<lvl>.json \
+       --evaluate <run report(s) for lvl> \
+       --external-manifest build/m2e/manifest_<lvl>.json \
+       --external-fixtures tests/fixtures/melody_bench/m2e_vremix_fixtures_<lvl>.yaml \
+       --eval-cell-store build/m2e/store_B --workers 2 --pin-threads
+   ```
+
+   同一 `--eval-cell-store build/m2e/store_B` の再指定で次チャンクが resume する
+   （セルレコードは atomic write のため打ち切りで部分レコードは残らず、
+   verdict JSON は完走時のみ emit される＝打ち切りは安全）。exit 124（timeout）は
+   チャンク打ち切りの正常系として扱い、run 回数（上限 水準 18/全体 72）に数える。
+   実行側に既存の `build/m2e/run_r7_evaluate.sh` を使う場合は、**起動前にその
+   bytes を dated record として commit し sha256 を初回進捗記録へ載せる**
+   （untracked runner のまま run 会計・停止条件を運用しない）。
 3. 監視・停止条件は plan §4 のとおり（swap so>0 即報告・fail-closed 即停止）。
 4. verdict JSON は `docs/measurements/m2e_2026-08/verdict_<lvl>.json` へ commit。
    判読は設計側（帯判定は census(C5) のみ）。
