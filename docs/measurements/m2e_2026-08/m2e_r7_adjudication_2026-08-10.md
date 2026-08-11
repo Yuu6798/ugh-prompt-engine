@@ -138,24 +138,45 @@ attestation 後継束縛（機械的失効機構）**で保全済み
    # プレースホルダ禁止 = HANDOFF E-132 と同型の是正・PR #257 第 4 指摘）。
    # run report は step0 が HANDOFF §5 形で build/m2e/run_<水準>_r{0,1}.json へ
    # 出力済みであることが前提（未生成なら本ループは fail-closed で止まる）。
+   # run 会計・単価記録はシェル再起動を跨いで永続する（1 run = 1 marker ファイル・
+   # チャンクログ追記式 = PR #257 第 5 指摘の採用。plan §4 の「>500 s/cell 2 チャンク
+   # 連続で停止」もログに対する機械判定として内蔵）。
+   state_dir="build/m2e/r7_chunk_state"; mkdir -p "$state_dir"
    for lvl in p12 p06 p00 m06; do
-     runs=0
-     until timeout --kill-after=600 7200 \
-       env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
-         --out "docs/measurements/m2e_2026-08/verdict_${lvl}.json" \
-         --evaluate "build/m2e/run_${lvl}_r0.json" "build/m2e/run_${lvl}_r1.json" \
-         --external-manifest "build/m2e/manifest_${lvl}.json" \
-         --external-fixtures "tests/fixtures/melody_bench/m2e_vremix_fixtures_${lvl}.yaml" \
-         --eval-cell-store build/m2e/store_B --workers 2 --pin-threads; do
-       status=$?
-       runs=$((runs + 1))
+     while :; do
+       runs=$(find "$state_dir" -name "run_${lvl}_*.done" | wc -l)
+       if [ "$runs" -ge 18 ]; then
+         echo "r7 evaluate run cap reached: lvl=${lvl} (18/水準・全体 72)" >&2; exit 1
+       fi
+       cells_before=$(find build/m2e/store_B -type f 2>/dev/null | wc -l)
+       start_utc=$(date -u +%s)
+       status=0
+       timeout --kill-after=600 7200 \
+         env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+           --out "docs/measurements/m2e_2026-08/verdict_${lvl}.json" \
+           --evaluate "build/m2e/run_${lvl}_r0.json" "build/m2e/run_${lvl}_r1.json" \
+           --external-manifest "build/m2e/manifest_${lvl}.json" \
+           --external-fixtures "tests/fixtures/melody_bench/m2e_vremix_fixtures_${lvl}.yaml" \
+           --eval-cell-store build/m2e/store_B --workers 2 --pin-threads || status=$?
+       elapsed=$(( $(date -u +%s) - start_utc ))
+       cells_delta=$(( $(find build/m2e/store_B -type f 2>/dev/null | wc -l) - cells_before ))
+       stamp=$(date -u +%Y%m%dT%H%M%SZ)
+       printf '%s lvl=%s exit=%s elapsed=%s cells_delta=%s\n' \
+         "$stamp" "$lvl" "$status" "$elapsed" "$cells_delta" >> "$state_dir/chunk_log.txt"
+       : > "$state_dir/run_${lvl}_${stamp}.done"
+       if [ "$status" -eq 0 ]; then break; fi
        # exit 124 = timeout によるチャンク打ち切りの正常系。それ以外は fail-closed 停止。
        if [ "$status" -ne 124 ]; then
          echo "r7 evaluate fail-closed: lvl=${lvl} exit=${status}" >&2; exit "$status"
        fi
-       # run 上限（水準 18・全体 72 = 4 水準 × 18）。到達で停止し設計側へ報告。
-       if [ "$runs" -ge 18 ]; then
-         echo "r7 evaluate run cap reached: lvl=${lvl}" >&2; exit 1
+       # 単価監視（plan §4）: 直近 2 チャンクがともに >500 s/cell（cells_delta<=0 含む）
+       # なら新ドリフトとして停止・設計側へ報告。
+       rate=$(tail -n 2 "$state_dir/chunk_log.txt" | awk '
+         { split($4, e, "="); split($5, c, "=");
+           if (c[2] <= 0 || e[2] / c[2] > 500) n++ }
+         END { print (NR == 2 && n == 2) ? "stop" : "go" }')
+       if [ "$rate" = "stop" ]; then
+         echo "r7 evaluate: >500 s/cell が 2 チャンク連続 — 停止・設計側へ報告" >&2; exit 1
        fi
      done
    done
