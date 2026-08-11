@@ -214,8 +214,14 @@ attestation 後継束縛（機械的失効機構）**で保全済み
            raise SystemExit(3)
    PYEOF
        ) || halt=$?
-       printf '%s lvl=%s exit=%s elapsed=%s cells_delta=%s\n' \
-         "$stamp" "$lvl" "$status" "$elapsed" "${cells_delta:-NA}" >> "$state_dir/chunk_log.txt"
+       # 累計実時間を毎チャンク機械記録する（総予算監視の可視化。判定閾値は持たない
+       # —— §8.1 の定義どおり、超過見込みの停止判断は実行側の運用監視）。
+       total_elapsed=$(( $(awk \
+         '{for (i = 1; i <= NF; i++) if ($i ~ /^elapsed=/) {split($i, a, "="); s += a[2]}}
+          END {print s + 0}' "$state_dir/chunk_log.txt" 2>/dev/null) + elapsed ))
+       printf '%s lvl=%s exit=%s elapsed=%s cells_delta=%s total_elapsed=%s\n' \
+         "$stamp" "$lvl" "$status" "$elapsed" "${cells_delta:-NA}" "$total_elapsed" \
+         >> "$state_dir/chunk_log.txt"
        # exit 124 = timeout によるチャンク打ち切りの正常系。0/124 以外は fail-closed 停止。
        if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
          echo "r7 evaluate fail-closed: lvl=${lvl} exit=${status}" >&2; exit "$status"
@@ -297,6 +303,14 @@ run 音声 read+sha256 してから skip する §8.7 順序制約・完了数�
 §6 のループはこの規則の機械形へ改訂済み（「その run で測定したセル」の選別は
 セルレコードの `measurement_started_utc` >= run 開始時刻で行う——resume 検証失敗で
 同パスへ上書き再測定されたセルもパス差分と違って取りこぼさない）。
+
+**「総予算監視は現行のまま」の定義（明確化）**: 総予算監視は数値 kill 閾値を持つ
+機械ガードではない——119h（335 s/cell 見積り）は**見積り**であり、機械の硬い天井は
+run 上限（最大 72 run × 7200s+grace ≈ 144h）が担う。ループは毎チャンク
+`total_elapsed`（累計実時間）を chunk_log へ機械記録し、**見積り超過の見込みが
+出た時点で停止して設計側へ報告する判断は実行側の運用監視**（plan §3 のチャンク毎
+進捗記録 + §4 の進捗 cron + §5 の報告規律）に属する。119h を kill 閾値化する裁定は
+測定セッション仕様に存在しないため、本 memo からも発明しない。
 
 ### 8.2 step0 の受理条件（口頭裁定 (a) の正本化）
 
