@@ -101,8 +101,8 @@ nodes:
     status: machine_dependent
     evidence:
       - "docs/DESIGN_M2e_vremix_real_bed.md"
-      - "docs/measurements/m2e_2026-08/m2e_r7_blocker_stem_sha256_2026-08-09.md"
-    note: "r4–r6 完了（r6 本測定 1280/1280 監査合格）。r7 は step0 で fail-closed 停止中（stem_sha256 をカテゴリ不変量として扱う集約検査と stem アームの構造的不整合・設計側裁定待ち）。残 = 裁定 → r7 再開・完走 → census verdict（判定は C5 のみ）→ 破断曲線判読"
+      - "docs/measurements/m2e_2026-08/m2e_r7_adjudication_2026-08-10.md"
+    note: "r4–r6 完了（r6 本測定 1280/1280 監査合格）。r7 step0 blocker（stem_sha256 のカテゴリ不変量扱い）は PR #254 の検証レイヤ是正で解消・裁定 4 点+予算は 2026-08-10 裁定 memo で承認済み。残 = r7 step0 再実行 → evaluate（store_B・≈119h）→ census verdict（判定は C5 のみ）→ 破断曲線判読"
 
   # --- LLM 著述（authoring） ---
   - id: authoring.contract

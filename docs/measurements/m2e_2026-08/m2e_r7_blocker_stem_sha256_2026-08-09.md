@@ -72,3 +72,11 @@ sorted list への digest）として category row に載せる形が考えら�
 - `build/m2e/run_r7_step0_reports.sh` / `build/m2e/run_r7_evaluate.sh`（チャンク実行機）は
   準備済み・未走行（evaluate は 1 セルも測っていない）。
 - 設計側の裁定（検査の改修方針 or 代替経路）を受けてから再開する。
+
+## 追記（2026-08-10）: 本 blocker は解消済み
+
+上記「現況」は 2026-08-09 22:08 JST（PR #254 マージ）以降 stale。検証レイヤの
+是正（`stem_sha256` の allowlist 分離 + 束 digest 化 = commit `1dbf966`・`42378bb`）は
+同日中に実装・レビュー・マージ済みで、設計裁定 4 点の正式記録と r7 再開指示は
+[`m2e_r7_adjudication_2026-08-10.md`](m2e_r7_adjudication_2026-08-10.md) を正とする。
+本文は停止時点の監査証跡としてそのまま保持する。
