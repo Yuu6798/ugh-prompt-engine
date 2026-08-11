@@ -167,12 +167,12 @@ attestation 後継束縛（機械的失効機構）**で保全済み
          : > "$state_dir/accounting_seeded"
        fi
        # 二段起動ゲート（§8 (b)・08-10 測定セッション裁定）: 点検地点への到達は
-       # 「完了チャンクの証拠（chunk_log 非空）or store_B が chunk1 規定の 174 セル
-       # 以上（耐久な store 証拠。ログがホスト死で失われた場合を被覆）」で判定する。
-       # 到達前に中断された chunk1 は resume で続行できる（起動痕跡だけで塞ぐと、
-       # 点検不能な部分 store に対して全起動を拒否するデッドロックになる）。
+       # **store_B ≥ 174 セル（chunk1 規定・耐久な store 証拠）単独**で判定する。
+       # chunk_log は失敗・早期打ち切りのチャンクでも追記されるため到達判定に使うと
+       # 「点検不能な部分 store への点検要求」で誤発火する。到達前に中断・失敗した
+       # chunk1 は resume で続行できる（会計は .started マーカーが保存する）。
        cells_now=$(find build/m2e/store_B -type f -name 'cell_*.json' 2>/dev/null | wc -l)
-       if { [ -s "$state_dir/chunk_log.txt" ] || [ "$cells_now" -ge 174 ]; } \
+       if [ "$cells_now" -ge 174 ] \
           && [ ! -e "$state_dir/r7_storeB_inspection_passed" ]; then
          echo "r7 evaluate: store_B 点検（§8 (c) 基準①〜⑧）未完。合格後に" \
            "$state_dir/r7_storeB_inspection_passed を作成して再開" >&2
