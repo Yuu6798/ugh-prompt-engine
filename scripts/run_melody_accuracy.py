@@ -345,8 +345,19 @@ GENERATOR_CODE_EQUIVALENT_SHA256S: Dict[str, str] = {
     # = commit 32288aa8（M2e r4/r5 shard map 凍結コミット）時点の閉包 hash。r6 帯の
     # 1280 セルはこの checkout で測定された（attestation 文書 §検証方法で worktree
     # 実行により再確認済み）。
+    # = commit 32288aa8（M2e r4/r5 shard map 凍結コミット）時点の閉包 hash。r6 帯の
+    # 1280 セル（store_A）はこの checkout で測定された。初回裁定 =
+    # generator_code_equivalence_2026-08-09.md（歴史記録として凍結維持）。後継束縛は
+    # 2026-08-12 文書へ引き継ぎ（同文書 §7 の運用規則どおり旧文書は編集しない）。
     "5cc0d5f9bba92ce8aa679eeebc32845e7702b6ac8e2bb1f561ba37c37ab965a4": (
-        "docs/measurements/m2e_2026-08/generator_code_equivalence_2026-08-09.md"
+        "docs/measurements/m2e_2026-08/generator_code_equivalence_2026-08-12.md"
+    ),
+    # = PR #254 マージ時点（main）の閉包 hash。r7 evaluate の store_B 既測 960 セル
+    # （p12/p06/p00 の 3 水準 + 各 verdict）はこの checkout で測定された。後継は
+    # m06 水準の argparse 引数パース失敗を直す等価形修正（`--level=-6dB` 連結化、
+    # per-cell 測定経路に不接触）。attestation 文書 = エントリ値。
+    "2b234e2be2fcc590daed82038c691643c8c995954934204d8a8562cd31835088": (
+        "docs/measurements/m2e_2026-08/generator_code_equivalence_2026-08-12.md"
     ),
 }
 
@@ -7501,7 +7512,13 @@ def _run_external_verification_in_fresh_process(
     if m2e_bars_path is not None:
         command += ["--m2e-bars", str(Path(m2e_bars_path).resolve())]
     if level is not None:
-        command += ["--level", level]
+        # `-6dB` のような先頭ダッシュの水準値を分離形（`--level -6dB`）で渡すと、
+        # argparse がオプションフラグと誤解釈して `expected one argument` で子が
+        # 死ぬ（m06 水準で初めて顕在化する引数パース失敗。r7 evaluate 2026-08-12）。
+        # `=` 連結形は argparse の長オプション既定動作により分離形と同一に解釈される
+        # ため、既測水準（+12dB / +6dB / 0dB）の子の挙動は 1 bit も変わらない
+        # （等価形。attestation = generator_code_equivalence_2026-08-12.md）。
+        command += [f"--level={level}"]
     # C2（store 分離・rev.6 §8.9.2-(1)）: この子プロセスへは **run が使った
     # `--cell-store`（= `store_A`）を絶対に渡さない**（本機能で最も危険な穴）。
     # ここは評価器が「report の metrics が実測結果であること」を独立に確かめるための
