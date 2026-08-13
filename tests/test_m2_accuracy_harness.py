@@ -10353,7 +10353,7 @@ def _capture_reverification_child_command(
             external_fixtures_path=fixtures_path,
             expected_specs_sha256="0" * 64,
             m2e_bars_path=m2e_bars_path,
-            level="+12dB",
+            level=kwargs.pop("level", "+12dB"),
             **kwargs,
         )
     return captured["command"], captured["env"]
@@ -10397,6 +10397,41 @@ def test_reverification_child_never_receives_the_run_cell_store(
     assert str(run_store) not in " ".join(command)
     # `--workers` は子へ渡さない（子は 1 セル系列を逐次に測る 1 プロセス）。
     assert "--workers" not in command
+
+
+def test_reverification_child_level_uses_the_joined_form_so_leading_dash_survives(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """m06（`-6dB`）回帰: 子 argv の水準は `--level=<値>` の連結形で渡ること。
+
+    分離形（`["--level", "-6dB"]`）は argparse が `-6dB` をオプションフラグと
+    誤解釈して `expected one argument` で子が即死する（r7 evaluate 2026-08-12 の
+    fail-closed 停止。`+12dB`/`+6dB`/`0dB` では顕在化せず m06 で初めて踏む）。
+    連結形は argparse の長オプション既定動作で分離形と同一に解釈されるため、
+    既測水準の挙動は不変のまま先頭ダッシュ水準が通る。
+    """
+    for level in ("-6dB", "+12dB", "0dB"):
+        command, _env = _capture_reverification_child_command(
+            monkeypatch, tmp_path, level=level
+        )
+        # 分離形の裸トークンが存在しないこと（存在すれば次要素が値として解釈される
+        # 経路が復活し、`-6dB` で再び死ぬ）。
+        assert "--level" not in command
+        assert f"--level={level}" in command
+
+
+def test_generator_code_equivalence_table_pins_both_adjudicated_predecessors() -> None:
+    """等価表の全量固定: 裁定済み前任は 5cc0d5f9…（r6 store_A）と 2b234e2b…
+    （r7 store_B 既測 960 セル + 3 verdict）の 2 件で、いずれも 2026-08-12 の
+    attestation 文書へ束縛されていること（束縛の実効性そのものは
+    `test_real_attestation_document_binds_the_current_loaded_generator_code` が
+    実文書パースで検証する）。
+    """
+    expected_doc = "docs/measurements/m2e_2026-08/generator_code_equivalence_2026-08-12.md"
+    assert harness.GENERATOR_CODE_EQUIVALENT_SHA256S == {
+        "5cc0d5f9bba92ce8aa679eeebc32845e7702b6ac8e2bb1f561ba37c37ab965a4": expected_doc,
+        "2b234e2be2fcc590daed82038c691643c8c995954934204d8a8562cd31835088": expected_doc,
+    }
 
 
 def test_reverification_child_receives_the_thread_pinning_env_and_flag(
