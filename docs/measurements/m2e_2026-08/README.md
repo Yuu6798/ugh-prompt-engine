@@ -102,7 +102,7 @@ runbook: [`docs/m2e_provisioning_runbook.md`](../../m2e_provisioning_runbook.md)
 | r7 | 破断曲線 + stem アーム 4 点の dated 記録（**昇格宣言をしない**） | **完了**（2026-08-14。census 1280/1280 = `census.json`・判読正本 = [`m2e_r7_breakdown_curve_record_2026-08-14.md`](m2e_r7_breakdown_curve_record_2026-08-14.md)。運転裁定の経緯 = [`m2e_r7_adjudication_2026-08-10.md`](m2e_r7_adjudication_2026-08-10.md) §8） |
 
 （起草時点の注記・履歴）当時 r2 以降が未実施だった理由は**実行環境の揮発**である
-（設計 §9.3・下記 §3.2）。現況は上表のとおり r7 進行中。
+（設計 §9.3・下記 §3.2）。現況は上表のとおり r0–r7 全段階完了（2026-08-14）。
 「素材が無いので着手できない」ではない——切り分けを誤ると対処も誤る。
 
 ### 3.2 状態の正しい切り分け（2026-08-01・User 指摘により是正）
