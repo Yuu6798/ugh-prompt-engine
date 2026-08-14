@@ -22,13 +22,15 @@ registry/監査レポートの created_at 記録のみ）。harness/ は読み�
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -252,6 +254,63 @@ def _save_wav_with_digest(sig: np.ndarray, staging_path: Path, sr: int) -> Dict[
     return {"sha256": digest_1, "write_determinism_check": {"stable": digest_1 == digest_2, "digest_2": digest_2}}
 
 
+def _run_suffix() -> str:
+    """staging ファイル名にのみ使う、呼び出しごとに一意なサフィックスを返す
+    （PR#261 レビュー R25）。
+
+    旧実装は staging ファイル名が固定（`_scratch_registry_run1.jsonl` 等）
+    だったため、同一 `results_final/` ディレクトリに対して `main()` を
+    2 プロセス同時に実行すると、互いの staging ファイルを上書き・削除し
+    合って両方の実行が壊れ得た（併走実行を想定した排他制御が一切なかった）。
+    `os.getpid()` だけでは短時間の PID 再利用（Linux の PID ラップアラウンド）
+    で衝突し得るため、`uuid.uuid4()` の一部も組み合わせて呼び出しごとの
+    一意性を保証する。
+
+    正本パス・`e2e_run.json` に記録する `registry_path` 文字列（R2 の
+    repo-relative 正本パス）には含めない: 決定論比較（run_1 vs run_2、
+    または独立した 2 回の `main()` 実行の比較）対象からプロセス依存の
+    ブレを排除するため。
+    """
+    return f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+
+class PublishLockError(RuntimeError):
+    """併走 publish を検出した（正本 publish 直前のロックファイルが既に存在する。
+    PR#261 レビュー R25）。"""
+
+
+@contextlib.contextmanager
+def _publish_lock(lock_path: Path) -> Iterator[None]:
+    """正本 publish 直前の単純な排他ロック（PR#261 レビュー R25）。
+
+    staging パスの per-run 一意化（`_run_suffix()`）だけでは、2 プロセスが
+    ほぼ同時に `_publish_outputs()` の `os.replace` 連鎖へ入った場合、
+    正本ファイル群への置換順序が交差し得る問題は防げない。`os.O_CREAT |
+    os.O_EXCL` によるロックファイル作成はアトミックな「無ければ作る」操作
+    のため、既に存在すれば併走 publish とみなし即座に `PublishLockError`
+    で拒否する。ブロック終了時（成功・例外いずれでも）にロックファイルを
+    削除する。
+    """
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise PublishLockError(
+            f"publish ロックファイルが既に存在する（併走 publish の可能性: {lock_path}）。"
+            "別の main() 実行が同時に正本 publish 中でないか確認すること。前回実行が"
+            "クラッシュして残置されたものであれば、内容（PID）を確認の上で手動削除して"
+            "から再実行すること。"
+        ) from exc
+    try:
+        os.write(fd, str(os.getpid()).encode("utf-8"))
+        os.close(fd)
+        yield
+    finally:
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _repo_relative_path(path: Path) -> str:
     """path を repo root からの相対パス文字列（POSIX 区切り）で返す（PR#261 レビュー R2）。
 
@@ -333,7 +392,14 @@ def main() -> None:
     print(f"[proto1_demo] reference set built in {t_gallery - t_start:.1f}s "
           f"(sha256={gallery.sha256[:12]}...)")
 
-    tmp_registry_path = RESULTS_DIR / "_scratch_registry_run1.jsonl"
+    # PR#261 レビュー R25: staging ファイル名は本実行専用の一意サフィックスを
+    # 持つ（`_run_suffix()`）。旧実装は固定名だったため、`main()` を 2 プロセス
+    # 併走させると互いの staging ファイルを踏みつけ合い得た。正本パス・
+    # `registry_path` の serialize には影響しない（下記 `final_registry_path`
+    # は不変）。
+    run_suffix = _run_suffix()
+
+    tmp_registry_path = RESULTS_DIR / f"_scratch_registry_run1.{run_suffix}.jsonl"
     final_registry_path = RESULTS_DIR / "genome_registry.jsonl"
     # run_2 の正本 registry は staging パスへ書く。正本への置換
     # （os.replace）は WAV・e2e_run.json も含めた publish フェーズ
@@ -342,7 +408,7 @@ def main() -> None:
     # さらに registry だけを他成果物より早く公開していたため、run_2 完了後
     # 〜 WAV/e2e_run.json 構築完了前のどこで例外が起きても正本一式が
     # 「registry だけ新しい・他は古い/欠落」という半端な状態になり得た）。
-    staging_registry_path = RESULTS_DIR / "_staging_registry_run2.jsonl"
+    staging_registry_path = RESULTS_DIR / f"_staging_registry_run2.{run_suffix}.jsonl"
     if tmp_registry_path.exists():
         tmp_registry_path.unlink()
     if staging_registry_path.exists():
@@ -401,7 +467,7 @@ def main() -> None:
         phrase_result = probes.render_probe(selected_genome, "phrase")
         phrase_sig = np.concatenate(phrase_result.waveforms)
         phrase_final = RESULTS_DIR / f"prototype1_phrase_{genome_id}.wav"
-        phrase_staging = RESULTS_DIR / f"_staging_prototype1_phrase_{genome_id}.wav"
+        phrase_staging = RESULTS_DIR / f"_staging_prototype1_phrase_{genome_id}.{run_suffix}.wav"
         phrase_digest = _save_wav_with_digest(phrase_sig, phrase_staging, bridge.SR)
         wav_publish.append((phrase_staging, phrase_final))
         wav_write_stable_flags.append(phrase_digest["write_determinism_check"]["stable"])
@@ -411,7 +477,7 @@ def main() -> None:
         gap = np.zeros(int(0.15 * bridge.SR), dtype=np.float64)
         cross_sig = np.concatenate([cross_result.waveforms[0], gap, cross_result.waveforms[1]])
         cross_final = RESULTS_DIR / f"prototype1_cross_range_pair_{genome_id}.wav"
-        cross_staging = RESULTS_DIR / f"_staging_prototype1_cross_range_pair_{genome_id}.wav"
+        cross_staging = RESULTS_DIR / f"_staging_prototype1_cross_range_pair_{genome_id}.{run_suffix}.wav"
         cross_digest = _save_wav_with_digest(cross_sig, cross_staging, bridge.SR)
         wav_publish.append((cross_staging, cross_final))
         wav_write_stable_flags.append(cross_digest["write_determinism_check"]["stable"])
@@ -495,8 +561,9 @@ def main() -> None:
     }
 
     out_path = RESULTS_DIR / "e2e_run.json"
-    staging_out_path = RESULTS_DIR / "_staging_e2e_run.json"
+    staging_out_path = RESULTS_DIR / f"_staging_e2e_run.{run_suffix}.json"
     diagnostics_path = RESULTS_DIR / "_failed_run_diagnostics.json"
+    lock_path = RESULTS_DIR / "_publish.lock"
 
     # --- Publish フェーズ: registry・WAV・e2e_run.json の全てが staging に
     # 揃った、ここまでの工程が例外なく完走した場合にのみ、正本へ一括公開する
@@ -508,20 +575,30 @@ def main() -> None:
     # が publish フェーズ呼び出しそのものを門番化し、正本を一切置換せず
     # 失敗診断を非正本パスへ書いて終了する（PR#261 レビュー R8: 決定論が
     # 崩れた実行結果を「一致しなかった」という記録付きで正本へ混入させない）。
+    #
+    # PR#261 レビュー R25: staging パスの per-run 一意化（`run_suffix`）は
+    # 2 プロセスが互いの staging ファイルを踏みつけ合う事故は防ぐが、正本への
+    # `os.replace` 連鎖そのものが 2 プロセス間で交差する可能性までは防げない。
+    # 正本 publish 呼び出しの直前で単純な排他ロックを取り、既にロックが
+    # 存在する（＝別プロセスが publish 中）場合は明示エラーで即終了する。
     if determinism_passed:
         print("[proto1_demo] publishing staged outputs...")
     else:
         print(f"[proto1_demo] determinism check FAILED — canonical outputs left untouched, "
               f"diagnostics will be written to {diagnostics_path}")
-    _publish_or_fail_closed(
-        determinism_passed,
-        e2e_record,
-        (staging_registry_path, final_registry_path),
-        wav_publish,
-        staging_out_path,
-        out_path,
-        diagnostics_path,
-    )
+    try:
+        with _publish_lock(lock_path):
+            _publish_or_fail_closed(
+                determinism_passed,
+                e2e_record,
+                (staging_registry_path, final_registry_path),
+                wav_publish,
+                staging_out_path,
+                out_path,
+                diagnostics_path,
+            )
+    except PublishLockError as exc:
+        raise SystemExit(str(exc)) from exc
     print(f"[proto1_demo] wrote {out_path} (total {time.time() - t_start:.1f}s)")
 
 

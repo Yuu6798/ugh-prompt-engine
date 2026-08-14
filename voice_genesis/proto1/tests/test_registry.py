@@ -149,11 +149,15 @@ def test_append_rejects_duplicate_genome_id(registry_path):
     見えてしまう）。"""
     reg = r.GenomeRegistry(registry_path)
     gen = sampler.sample(1)
-    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+    entry = reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
 
     with pytest.raises(r.DuplicateGenomeError):
         # 同一内容 genome（= 同一 genome_id）を異なる op/seed で再 append。
-        reg.append(gen, op="mutate", seed=99, now=FIXED_TIME)
+        # parents は R24 の op="mutate" 不変条件（1 個必須）を満たすためだけの
+        # 値で、genome_id 重複検出（duplicate チェック）は parent 数検証より
+        # 後に走るため、この呼び出しは重複チェックまで到達して意図どおり
+        # DuplicateGenomeError になる。
+        reg.append(gen, op="mutate", seed=99, parents=[entry.genome_id], now=FIXED_TIME)
 
     # 拒否された 2 回目は書き込まれておらず、レジストリは 1 行のまま。
     assert len(reg.load_all()) == 1
@@ -273,6 +277,96 @@ def test_entry_from_dict_accepts_each_valid_op(registry_path):
 
     loaded = reg.load_all()
     assert {e.op for e in loaded} == {"sample", "mutate", "crossover"}
+
+
+# --- PR#261 レビュー R24: op 別の parent 数不変条件 --------------------------
+
+
+def test_append_rejects_mutate_with_zero_parents(registry_path):
+    """mutate は単一親からの摂動である以上、parents=[] は矛盾する。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    with pytest.raises(r.RegistryError):
+        reg.append(g1, op="mutate", seed=1, parents=[], now=FIXED_TIME)
+
+
+def test_append_rejects_crossover_with_one_parent(registry_path):
+    """crossover は 2 親のフィールド単位継承である以上、parents が 1 個は矛盾する。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    e1 = reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+    g2 = sampler.mutate(g1, seed=2, scale=0.1)
+    with pytest.raises(r.RegistryError):
+        reg.append(g2, op="crossover", seed=2, parents=[e1.genome_id], now=FIXED_TIME)
+
+
+def test_append_rejects_sample_with_a_parent(registry_path):
+    """sample は探索の起点（親なし）である以上、parents を持つのは矛盾する。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    e1 = reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+    g2 = sampler.sample(2, name="not-really-a-child")
+    with pytest.raises(r.RegistryError):
+        reg.append(g2, op="sample", seed=2, parents=[e1.genome_id], now=FIXED_TIME)
+
+
+def test_entry_from_dict_rejects_mutate_with_zero_parents(registry_path):
+    """`append()` の parent 数チェックを迂回する手編集・インポート行（読み込み
+    経路）でも同じ不変条件を拒否する（R22 の op 検証と同型の非対称性防止）。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    e1 = reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+    g2 = sampler.mutate(g1, seed=2, scale=0.1)
+    reg.append(g2, op="mutate", seed=2, parents=[e1.genome_id], now=FIXED_TIME)
+
+    lines = registry_path.read_text(encoding="utf-8").strip().split("\n")
+    data = json.loads(lines[-1])
+    assert data["op"] == "mutate" and data["parents"] == [e1.genome_id]  # 前提確認
+    data["parents"] = []  # mutate なのに親を消す改ざん
+    lines[-1] = json.dumps(data)
+    registry_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
+def test_entry_from_dict_rejects_crossover_with_three_parents(registry_path):
+    """crossover なのに parents が期待数(2)と異なる改ざんも拒否する。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    e1 = reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+    g2 = sampler.sample(2, name="parent2")
+    e2 = reg.append(g2, op="sample", seed=2, now=FIXED_TIME)
+    g3 = sampler.crossover(g1, g2, seed=3)
+    reg.append(g3, op="crossover", seed=3, parents=[e1.genome_id, e2.genome_id], now=FIXED_TIME)
+
+    lines = registry_path.read_text(encoding="utf-8").strip().split("\n")
+    data = json.loads(lines[-1])
+    assert data["op"] == "crossover" and len(data["parents"]) == 2  # 前提確認
+    data["parents"] = [e1.genome_id, e2.genome_id, e1.genome_id]  # 3 個に改ざん
+    lines[-1] = json.dumps(data)
+    registry_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
+def test_append_accepts_correct_parent_counts_per_op_non_regression(registry_path):
+    """非退行確認: 各 op の期待される parent 数どおりの append は従来どおり
+    成功する（sample=0 / mutate=1 / crossover=2）。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    e1 = reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+    g2 = sampler.mutate(g1, seed=2, scale=0.1)
+    e2 = reg.append(g2, op="mutate", seed=2, parents=[e1.genome_id], now=FIXED_TIME)
+    g3 = sampler.sample(3, name="parent3")
+    e3 = reg.append(g3, op="sample", seed=3, now=FIXED_TIME)
+    g4 = sampler.crossover(g2, g3, seed=4)
+    e4 = reg.append(g4, op="crossover", seed=4, parents=[e2.genome_id, e3.genome_id], now=FIXED_TIME)
+
+    loaded = reg.load_all()
+    assert len(loaded) == 4
+    assert e4.parents == [e2.genome_id, e3.genome_id]
 
 
 # --- PR#261 レビュー R3: エントリ内 genome の検証 / genome_id・audit 整合 ----

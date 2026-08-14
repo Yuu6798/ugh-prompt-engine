@@ -34,6 +34,14 @@ FEATURE_SET_VERSION = "measure_v3"
 
 VALID_OPS = ("sample", "mutate", "crossover")
 
+# PR#261 レビュー R24: op ごとに parents の個数は一意に決まる不変条件
+# （sample は起点=親なし、mutate は単一親からの摂動、crossover は 2 親の
+# フィールド単位継承。sampler.py の各関数の実装そのものがこの契約）。
+# op="mutate" なのに parents=[] や parents 2 個、op="crossover" なのに
+# parents 1 個、といった不整合は「由来の主張」と「実際の系譜構造」が
+# 食い違う破損/改ざん状態であり、`lineage()` の遡上や来歴解釈を誤らせる。
+EXPECTED_PARENT_COUNT = {"sample": 0, "mutate": 1, "crossover": 2}
+
 
 class RegistryError(ValueError):
     pass
@@ -171,11 +179,23 @@ def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
     if op not in VALID_OPS:
         raise RegistryError(f"op は {VALID_OPS} のいずれかでなければならない（実際: {op!r}）")
 
+    # PR#261 レビュー R24: op 別の parent 数不変条件（EXPECTED_PARENT_COUNT
+    # コメント参照）を読み込み時にも検証する。`append()` は書き込み時に
+    # 検証するが、手編集・インポートされた JSONL 行はその経路を通らないため、
+    # 同型の非対称性（R22 の op 検証と同じ構図）を防ぐ。
+    parent_ids = list(data.get("parents", []))
+    expected_count = EXPECTED_PARENT_COUNT[op]
+    if len(parent_ids) != expected_count:
+        raise RegistryError(
+            f"op={op!r} は parents を {expected_count} 個持たなければならない"
+            f"（実際: {len(parent_ids)} 個 {parent_ids!r}）"
+        )
+
     return RegistryEntry(
         genome_id=genome_id,
         version=entry_version,
         created_at=data["created_at"],
-        parents=list(data.get("parents", [])),
+        parents=parent_ids,
         op=op,
         seed=data.get("seed"),
         # renderer_version/feature_set_version は PR#261 レビュー R12 の grep 掃討で
@@ -216,6 +236,16 @@ class GenomeRegistry:
         if op not in VALID_OPS:
             raise RegistryError(f"op は {VALID_OPS} のいずれかでなければならない（実際: {op!r}）")
 
+        # PR#261 レビュー R24: op 別の parent 数不変条件を検証する（I/O 不要な
+        # 純粋な入力検証のため、registry 参照が要る後続チェックより先に行う）。
+        parent_ids = list(parents or [])
+        expected_count = EXPECTED_PARENT_COUNT[op]
+        if len(parent_ids) != expected_count:
+            raise RegistryError(
+                f"op={op!r} は parents を {expected_count} 個持たなければならない"
+                f"（実際: {len(parent_ids)} 個 {parent_ids!r}）"
+            )
+
         genome_id = genome_content_hash(genome)
         if self.get(genome_id) is not None:
             # append-only ストアは genome_id の再出現を「来歴の書き換え」として扱う
@@ -230,7 +260,6 @@ class GenomeRegistry:
         # ことを検証する。存在しない親を指すエントリを許すと、lineage() が
         # 遡上を完走できない（親が見つからず途中で打ち切られる）来歴の欠損を
         # 作ってしまう。
-        parent_ids = list(parents or [])
         for parent_id in parent_ids:
             if self.get(parent_id) is None:
                 raise MissingParentError(

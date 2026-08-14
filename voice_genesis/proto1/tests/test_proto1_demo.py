@@ -279,3 +279,86 @@ def test_save_wav_with_digest_is_deterministic_across_independent_calls(tmp_path
     result_b = pd._save_wav_with_digest(sig, tmp_path / "b.wav", sr=44100)
 
     assert result_a["sha256"] == result_b["sha256"]
+
+
+# --- R25: staging パスの per-run 一意化 + publish 直前の排他ロック -----------
+
+
+def test_run_suffix_differs_across_calls():
+    """PR#261 レビュー R25: `main()` の staging ファイル名に埋め込む
+    サフィックスは呼び出しごとに一意でなければならない（併走 `main()` が
+    互いの staging ファイルを踏みつけ合わないようにするため）。同一プロセス
+    内で連続呼び出しても（PID が同じでも）衝突しないことを確認する。"""
+    suffixes = {pd._run_suffix() for _ in range(50)}
+    assert len(suffixes) == 50  # 50 回とも相異なる
+
+
+def test_run_suffix_contains_pid_for_process_identification():
+    """サフィックスは調査時に発行プロセスを特定できるよう pid を含む。"""
+    import os as _os
+
+    suffix = pd._run_suffix()
+    assert suffix.startswith(f"{_os.getpid()}-")
+
+
+def test_staging_paths_built_from_different_run_suffixes_are_distinct(tmp_path):
+    """非退行確認: `main()` 内の staging パス組み立て（`_scratch_registry_run1.
+    {suffix}.jsonl` 等のテンプレート）が、異なる run_suffix に対して実際に
+    異なる Path になることを確認する（`main()` 自体は重いためテンプレートの
+    組み立てロジックだけを軽量に再現する）。"""
+    suffix_1, suffix_2 = pd._run_suffix(), pd._run_suffix()
+    assert suffix_1 != suffix_2
+
+    def _staging_paths_for(run_suffix, results_dir):
+        return {
+            "scratch_registry": results_dir / f"_scratch_registry_run1.{run_suffix}.jsonl",
+            "staging_registry": results_dir / f"_staging_registry_run2.{run_suffix}.jsonl",
+            "staging_e2e_run": results_dir / f"_staging_e2e_run.{run_suffix}.json",
+        }
+
+    paths_1 = _staging_paths_for(suffix_1, tmp_path)
+    paths_2 = _staging_paths_for(suffix_2, tmp_path)
+    for key in paths_1:
+        assert paths_1[key] != paths_2[key], key
+
+
+def test_publish_lock_creates_and_removes_lock_file_on_success(tmp_path):
+    """非退行確認: ロック取得 → ブロック実行 → ブロック終了時にロックファイルが
+    削除される（正常系）。"""
+    lock_path = tmp_path / "_publish.lock"
+    assert not lock_path.exists()
+
+    with pd._publish_lock(lock_path):
+        assert lock_path.exists()  # ブロック内では取得済み
+
+    assert not lock_path.exists()  # ブロック終了後は削除されている
+
+
+def test_publish_lock_removes_lock_file_even_when_block_raises(tmp_path):
+    """ロック保持中のブロックが例外を送出しても、ロックファイルは残置されない
+    （次回実行が誤って「併走中」と誤検知しないようにする）。"""
+    lock_path = tmp_path / "_publish.lock"
+
+    with pytest.raises(RuntimeError):
+        with pd._publish_lock(lock_path):
+            assert lock_path.exists()
+            raise RuntimeError("simulated failure during publish")
+
+    assert not lock_path.exists()
+
+
+def test_publish_lock_rejects_concurrent_publish_when_lock_already_exists(tmp_path):
+    """PR#261 レビュー R25: ロックファイルが既に存在する（＝別プロセスが
+    publish 中、またはクラッシュ残置）場合、併走 publish とみなし明示エラーで
+    即座に拒否する。"""
+    lock_path = tmp_path / "_publish.lock"
+    lock_path.write_text("12345", encoding="utf-8")  # 別プロセスの PID を模したロック残置
+
+    with pytest.raises(pd.PublishLockError):
+        with pd._publish_lock(lock_path):
+            raise AssertionError("ロックが既に存在するのでブロック本体へ到達してはならない")
+
+    # 既存のロックは他プロセスの資産として扱い、拒否時に勝手に削除しない
+    # （誤って併走中の別プロセスのロックを壊さないため）。
+    assert lock_path.exists()
+    assert lock_path.read_text(encoding="utf-8") == "12345"

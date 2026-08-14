@@ -196,14 +196,16 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 ## 検証境界の終端宣言（ロード経路・公開経路の census）
 
 PR#261 のレビューは C1–C6 → R1–R7 → R8–R11 → R12–R13 → R14–R16 →
-R17–R19 → R20–R21 → R22–R23 の 9 ラウンドにわたり、「ローダー/来歴/
-公開」系および「検出ロジック」系の同型の穴（schema 未検証・schema
-キー欠落時のデフォルト補完・全セクション/リーフフィールド欠落時の
-デフォルト補完・float リーフの非有限値（NaN/inf）未検証・content hash
-未検証・エントリ内の重複表現フィールド間の不整合・列挙型フィールド
-（op）の読み込み側検証の非対称性・内容アドレス（report_id）の読み込み
+R17–R19 → R20–R21 → R22–R23 → R24–R25 の 10 ラウンドにわたり、
+「ローダー/来歴/公開」系および「検出ロジック」系の同型の穴（schema
+未検証・schema キー欠落時のデフォルト補完・全セクション/リーフフィー
+ルド欠落時のデフォルト補完・float リーフの非有限値（NaN/inf）未検証・
+content hash 未検証・エントリ内の重複表現フィールド間の不整合・列挙型
+フィールド（op）の読み込み側検証の非対称性・関係フィールド間の不変条件
+（op × parent 数）の読み込み側未検証・内容アドレス（report_id）の読み込み
 側未検証・pass/fail 宣言の未再計算・再計算前提となる実測値自体の定義域
-未検証・親の存在/順序不変条件・staging の不完全さ・書き戻し処理の非
+未検証・親の存在/順序不変条件・staging の不完全さ（固定ファイル名による
+併走実行の踏みつけ・正本 publish の排他制御欠如）・書き戻し処理の非
 アトミック性（中断時の全損リスク）・歴史的正本レポートの開示文言の
 陳腐化・**「実出力だけを走査し期待値集合と照合しない」検出力欠陥**・
 **最近傍/最良値探索ループでの NaN 距離の fail-open**・**nanmedian 等の
@@ -222,7 +224,7 @@ R17–R19 → R20–R21 → R22–R23 の 9 ラウンドにわたり、「ロー
 | ファイル::関数 | 読む対象 | 検証内容 | 状態 |
 |---|---|---|---|
 | `proto1/genome.py::from_dict()` | Genome JSON document | schema_version キーの**存在**を要求し欠落を拒否 (R12) / schema_version 一致 (C6) / 全 8 セクション（source/resonance/noise/register/microprosody/range/physio_range/audit）と各リーフフィールドのキー**存在**を要求し欠落（切り詰め payload）を拒否 (R16。デフォルト補完は `build_genome()` 等の明示的コンストラクタ経路のみに限定) / 全 float リーフ（`formant_offsets` 等リスト内要素を含む）の NaN/inf を `_as_float` で一括拒否し有限値のみ受理 (R18) / physio_range 再計算一致 (C5) / 全フィールド型検証 | **検証済み** |
-| `proto1/registry.py::_entry_from_dict()`（`GenomeRegistry.load_all()` 経由） | registry JSONL 1 行 | registry_schema キーの**存在**を要求し欠落を拒否 (R12) / registry_schema 一致 (C5/C6 掃討) / 埋め込み genome を `from_dict()` で検証 (R3a、R16・R18 強化が読み込み経路にも波及) / genome_id と content hash の一致 (R3b) / エントリ側 audit と genome.audit の一致 (R3c) / エントリ直下 version と埋め込み genome.schema_version の一致 (R14) / op を `VALID_OPS`（`append()` と同一の許容値集合）で検証 (R22。`append()` 側は元から検証していたが `_entry_from_dict()` は宣言値を無条件に信頼していた非対称性を解消) / `load_all()` 内での重複 genome_id 検出 (R5) / 親の存在・自エントリより前に出現 (R10)。renderer_version/feature_set_version は同型 grep 掃討 (R12) で発見したが、構造解釈を左右しない由来メタデータのためデフォルト補完のまま境界宣言 | **検証済み** |
+| `proto1/registry.py::_entry_from_dict()`（`GenomeRegistry.load_all()` 経由） | registry JSONL 1 行 | registry_schema キーの**存在**を要求し欠落を拒否 (R12) / registry_schema 一致 (C5/C6 掃討) / 埋め込み genome を `from_dict()` で検証 (R3a、R16・R18 強化が読み込み経路にも波及) / genome_id と content hash の一致 (R3b) / エントリ側 audit と genome.audit の一致 (R3c) / エントリ直下 version と埋め込み genome.schema_version の一致 (R14) / op を `VALID_OPS`（`append()` と同一の許容値集合）で検証 (R22。`append()` 側は元から検証していたが `_entry_from_dict()` は宣言値を無条件に信頼していた非対称性を解消) / op 別の parent 数不変条件（sample=0/mutate=1/crossover=2）を検証 (R24。同じく `append()` 側は書き込み時に検証していたが読み込み側は無検証だった非対称性を解消) / `load_all()` 内での重複 genome_id 検出 (R5) / 親の存在・自エントリより前に出現 (R10)。renderer_version/feature_set_version は同型 grep 掃討 (R12) で発見したが、構造解釈を左右しない由来メタデータのためデフォルト補完のまま境界宣言 | **検証済み** |
 | `proto1/reference_set.py::_report_from_dict()`（`LinkabilityAuditLog.load_all()` 経由） | 監査ログ JSONL 1 行 | report_id を {genome_id, reference_set_hash} から再計算し宣言値と照合、内容アドレス改ざんを拒否 (R19) / pass/fail 再計算 (R9) より先に、その入力（類似度・チャンス帯 p95）が有限かつコサイン類似度の定義域 [-1.0, 1.0] 内であることを検証し域外・非有限を拒否 (R13) / 保存済み実測値から e1_pass/e2_pass/overall_pass を再計算し宣言値と照合 (R9) | **検証済み** |
 | `harness/vt3_v5.py::restate_from_v4()` | `results_v4/grip_report_v4.json` | 検証なし（生 dict indexing） | **凍結対象外**（harness/ は凍結・無改変の歴史的検証コード。書き換えると当時の実測の一次記録性が損なわれる） |
 | `harness/vt3_v6.py::restate_from_v4()` | 同上 | 同上 | **凍結対象外**（同上） |
@@ -231,8 +233,8 @@ R17–R19 → R20–R21 → R22–R23 の 9 ラウンドにわたり、「ロー
 
 | ファイル::関数 | 書く対象 | 検証内容 | 状態 |
 |---|---|---|---|
-| `proto1/proto1_demo.py::_publish_outputs()` / `_publish_or_fail_closed()` | `genome_registry.jsonl` / WAV 2 種 / `e2e_run.json` の正本置換 | 全成果物を staging へ揃えてから一括 `os.replace` (R1) / 決定論比較（genome 全 diff + WAV ファイル書き出しの決定論性）不成立時は publish 自体を呼ばず失敗診断を非正本パスへ (R8) / WAV ファイルバイトの sha256 digest 記録 + 2 回書き比較 (R11) | **検証済み** |
-| `proto1/registry.py::GenomeRegistry.append()` | registry JSONL への 1 行追記 | op 許容値検証 / 重複 genome_id 拒否 (C3) / parents の各 ID が既に registry に存在することを検証 (R10a) | **検証済み** |
+| `proto1/proto1_demo.py::_publish_outputs()` / `_publish_or_fail_closed()` | `genome_registry.jsonl` / WAV 2 種 / `e2e_run.json` の正本置換 | 全成果物を staging へ揃えてから一括 `os.replace` (R1) / 決定論比較（genome 全 diff + WAV ファイル書き出しの決定論性）不成立時は publish 自体を呼ばず失敗診断を非正本パスへ (R8) / WAV ファイルバイトの sha256 digest 記録 + 2 回書き比較 (R11) / staging ファイル名を `_run_suffix()`（pid + uuid4 の一部）で per-run 一意化し併走 `main()` 同士の staging ファイル踏みつけを防止、加えて正本 publish 直前を `_publish_lock()`（O_EXCL 作成 + 終了時削除）で排他しロック存在時は `PublishLockError`→`SystemExit` で即拒否 (R25。registry_path の serialize は R2 の repo-relative 正本パスのまま・決定論比較対象からは元々除外済み) | **検証済み** |
+| `proto1/registry.py::GenomeRegistry.append()` | registry JSONL への 1 行追記 | op 許容値検証 / 重複 genome_id 拒否 (C3) / parents の各 ID が既に registry に存在することを検証 (R10a) / op 別の parent 数不変条件（sample=0/mutate=1/crossover=2）を検証 (R24。`_entry_from_dict()` にも同型検証を追加し読み込み経路の非対称性も防止) | **検証済み** |
 | `proto1/reference_set.py::LinkabilityAuditLog.append()` / `_rewrite()` | 監査ログ JSONL | 内容検証は不要（常に `audit_linkability()` が内部で構築した `LinkabilityAuditReport` オブジェクトのみを受理し、外部由来の未検証データを直接書き込む経路が存在しないため。読み込み時の検証は上表 R9/R13/R19 でカバー）。`_rewrite()`（`mark_stale()` が使う全件書き戻し）は旧 truncate-then-write（中断時に旧ログ全損の恐れ）から、同一ディレクトリへの staging ファイル書き込み + `os.replace()` によるアトミック置換へ変更 (R17)。置換前の中断では旧ログが無傷のまま残ることをテストで確認 | **検証済み** |
 | `proto1/reference_set.py::ReferenceSetGallery.sidecar_dict()` | `reference-set/0.2` sidecar dict（呼び出し元が JSON へ埋め込む） | — | **対象外**（書き出し専用。対応する読み込みローダーが本コードベースに存在しない。C5/C6 掃討・R9 対応時に確認済み） |
 | `proto1/results_p1/_generate_report_data.py` | `results_p1/report_data.json` 等 | — | **対象外**（一回限り実行済みの歴史的レポート生成スクリプト。再実行して正本を差し替える経路も、生成物を再ロードする経路も存在しない） |
@@ -260,9 +262,9 @@ R20–R21 で判明した第三の穴の類型: 上記 2 表はいずれも「JS
 write-only で対応する loader が存在しない経路（reference_set の
 sidecar・一回限りのレポート生成スクリプト・singer/ の JSON 書き出し）
 も明示的に対象外。**全行が「検証済み」または明示的な境界宣言に分類され
-たため、C1–C6/R1–R11/R12–R13/R14–R16/R17–R19/R20–R21/R22–R23 の 9
-ラウンドにわたる「ローダー/来歴/公開/検出ロジック」系残穴の指摘サイクル
-をここで終端とする。** 今後同種の指摘が来た場合は、本表に新しい行を
+たため、C1–C6/R1–R11/R12–R13/R14–R16/R17–R19/R20–R21/R22–R23/R24–R25
+の 10 ラウンドにわたる「ローダー/来歴/公開/検出ロジック」系残穴の指摘
+サイクルをここで終端とする。** 今後同種の指摘が来た場合は、本表に新しい行を
 追加できるかどうか（＝これまで見落としていた経路か）をまず確認すること。
 既存行の再指摘であれば、当該行の「検証内容」列に記載済みの対処で十分か、対処
 自体に不備があるかを個別に判断する。
