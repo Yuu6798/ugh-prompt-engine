@@ -1,0 +1,128 @@
+{
+  "schema": "genesis-lineage/0.1",
+  "winner_name": "genesis3",
+  "internal_name": "g2-15-mut",
+  "candidate_id": 15,
+  "generation": 2,
+  "op": "mutate",
+  "parents": [
+    "g1-10-cross"
+  ],
+  "seed": 80104,
+  "scale": 0.15,
+  "meets_floor": true,
+  "jnd_floor": 2.0,
+  "distinctiveness_composite": 2.4589579119506273,
+  "distinctiveness_vs_voice_C": 2.4589579119506273,
+  "distinctiveness_vs_voice_D": 2.9503330078561687,
+  "genome": {
+    "name": "g2-15-mut",
+    "source": {
+      "tilt": -12.659822747524501,
+      "source_mode": "modal"
+    },
+    "resonance": {
+      "formant_scale": 1.0,
+      "formant_offsets": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bandwidth_scale": 0.9343822798734415
+    },
+    "noise": {
+      "breathiness_base": 0.32833074909172566,
+      "register_gains": [
+        0.35,
+        0.3177263849973699,
+        0.03010370506149007,
+        0.35,
+        0.35
+      ]
+    },
+    "register": {
+      "boundaries_midi": [
+        52.0,
+        62.0,
+        74.0,
+        88.0
+      ],
+      "transition_width": 5.186740435831738
+    },
+    "microprosody": {
+      "vibrato_rate_hz": 4.5,
+      "vibrato_depth_cents": 15.0,
+      "jitter_amount": 0.0083708644269741,
+      "jitter_seed": 1755926562
+    },
+    "range": {
+      "lowest_midi": 36.0,
+      "highest_midi": 96.0
+    },
+    "physio_range": {
+      "out_of_physio_range": false,
+      "violated_bounds": []
+    },
+    "audit": {
+      "reference_set_hash": null,
+      "linkability_report_id": null,
+      "residual_gate_passed": null
+    },
+    "schema_version": "voice-genome/0.2"
+  },
+  "linkability": {
+    "min_dist_e1": 0.29071748330390235,
+    "min_dist_e2": 0.0035530256738719457,
+    "nearest_e1_name": "voice_D",
+    "nearest_e2_name": "voice_D",
+    "margin": 0.0015530256738719456,
+    "passed": true
+  },
+  "full_gate_v2": {
+    "pass": true,
+    "gate1_pass": true,
+    "gate2_pass": true,
+    "gate3_pass": true,
+    "gate4_pass": true,
+    "gate5_pass": true,
+    "gate6_pass": true,
+    "gate6_breathiness_grip": 3.8292,
+    "gate6_vibrato_grip": 6.3201,
+    "gate6_provenance": "measured (score-informed QC)"
+  },
+  "safe_box_v2": {
+    "tilt": [
+      -13.0,
+      -8.0
+    ],
+    "bandwidth_scale": [
+      0.8,
+      1.05
+    ],
+    "breathiness_base": [
+      0.0,
+      0.35
+    ],
+    "register_gains_each": [
+      0.0,
+      0.35
+    ],
+    "vibrato_rate_hz": [
+      4.5,
+      7.0
+    ],
+    "vibrato_depth_cents": [
+      15.0,
+      40.0
+    ],
+    "formant_scale": [
+      0.99,
+      1.01
+    ]
+  },
+  "n_generations": 4,
+  "n_candidates_per_gen": 8,
+  "reference_set_hash": "8ea973857d396d48d22d932193c262488aca742582c7b12d0a64a423c572fa94",
+  "reproducibility_verified": true
+}

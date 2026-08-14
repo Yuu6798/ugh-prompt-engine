@@ -1,0 +1,70 @@
+{
+  "schema": "singer-genesis-registry/0.1",
+  "note": "singer/ 実行用ローカル registry。proto1/results_final の正本 registry には追記しない。",
+  "individuals": [
+    {
+      "name": "genesis1",
+      "internal_name": "genesis-mut4",
+      "frozen_at": "2026-08-13",
+      "lineage_file": "results_s3/lineage_genesis1.json",
+      "genome": {
+        "name": "genesis-mut4",
+        "source": {
+          "tilt": -16.859889520628567,
+          "source_mode": "modal"
+        },
+        "resonance": {
+          "formant_scale": 1.0,
+          "formant_offsets": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "bandwidth_scale": 0.7846071485208348
+        },
+        "noise": {
+          "breathiness_base": 0.029803860055126058,
+          "register_gains": [
+            0.0,
+            0.0526330475984215,
+            0.0,
+            0.05385543727160317,
+            0.022416353210546733
+          ]
+        },
+        "register": {
+          "boundaries_midi": [
+            52.0,
+            62.0,
+            74.0,
+            88.0
+          ],
+          "transition_width": 3.0
+        },
+        "microprosody": {
+          "vibrato_rate_hz": 5.095275796053316,
+          "vibrato_depth_cents": 15.028144652554388,
+          "jitter_amount": 0.006160533462976149,
+          "jitter_seed": 11
+        },
+        "range": {
+          "lowest_midi": 36.0,
+          "highest_midi": 96.0
+        },
+        "physio_range": {
+          "out_of_physio_range": false,
+          "violated_bounds": []
+        },
+        "audit": {
+          "reference_set_hash": null,
+          "linkability_report_id": null,
+          "residual_gate_passed": null
+        },
+        "schema_version": "voice-genome/0.2"
+      },
+      "full_gate_pass": true,
+      "reference_set_hash": "8ea973857d396d48d22d932193c262488aca742582c7b12d0a64a423c572fa94"
+    }
+  ]
+}

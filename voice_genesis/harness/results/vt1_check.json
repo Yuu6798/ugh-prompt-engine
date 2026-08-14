@@ -1,0 +1,1124 @@
+{
+  "sr": 22050,
+  "note_dur_sec": 1.5,
+  "midi_range": [
+    36,
+    96
+  ],
+  "voices": [
+    {
+      "voice": "voice_A",
+      "all_ok": true,
+      "n_notes": 61,
+      "notes": [
+        {
+          "midi": 36,
+          "finite": true,
+          "peak": 0.446756,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 37,
+          "finite": true,
+          "peak": 0.439158,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 38,
+          "finite": true,
+          "peak": 0.421058,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 39,
+          "finite": true,
+          "peak": 0.412297,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 40,
+          "finite": true,
+          "peak": 0.404672,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 41,
+          "finite": true,
+          "peak": 0.388234,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 42,
+          "finite": true,
+          "peak": 0.386117,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 43,
+          "finite": true,
+          "peak": 0.366643,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 44,
+          "finite": true,
+          "peak": 0.362394,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 45,
+          "finite": true,
+          "peak": 0.351191,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 46,
+          "finite": true,
+          "peak": 0.337284,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 47,
+          "finite": true,
+          "peak": 0.338318,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 48,
+          "finite": true,
+          "peak": 0.322309,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 49,
+          "finite": true,
+          "peak": 0.324065,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 50,
+          "finite": true,
+          "peak": 0.321577,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 51,
+          "finite": true,
+          "peak": 0.304057,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 52,
+          "finite": true,
+          "peak": 0.298626,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 53,
+          "finite": true,
+          "peak": 0.307774,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 54,
+          "finite": true,
+          "peak": 0.295689,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 55,
+          "finite": true,
+          "peak": 0.284459,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 56,
+          "finite": true,
+          "peak": 0.280196,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 57,
+          "finite": true,
+          "peak": 0.286404,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 58,
+          "finite": true,
+          "peak": 0.28744,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 59,
+          "finite": true,
+          "peak": 0.283807,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 60,
+          "finite": true,
+          "peak": 0.268433,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 61,
+          "finite": true,
+          "peak": 0.275989,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 62,
+          "finite": true,
+          "peak": 0.280956,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 63,
+          "finite": true,
+          "peak": 0.270686,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 64,
+          "finite": true,
+          "peak": 0.261009,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 65,
+          "finite": true,
+          "peak": 0.260651,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 66,
+          "finite": true,
+          "peak": 0.260476,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 67,
+          "finite": true,
+          "peak": 0.257218,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 68,
+          "finite": true,
+          "peak": 0.253051,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 69,
+          "finite": true,
+          "peak": 0.260712,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 70,
+          "finite": true,
+          "peak": 0.255027,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 71,
+          "finite": true,
+          "peak": 0.26486,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 72,
+          "finite": true,
+          "peak": 0.256921,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 73,
+          "finite": true,
+          "peak": 0.263615,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 74,
+          "finite": true,
+          "peak": 0.277551,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 75,
+          "finite": true,
+          "peak": 0.266177,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 76,
+          "finite": true,
+          "peak": 0.25232,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 77,
+          "finite": true,
+          "peak": 0.259771,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 78,
+          "finite": true,
+          "peak": 0.250158,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 79,
+          "finite": true,
+          "peak": 0.262149,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 80,
+          "finite": true,
+          "peak": 0.261496,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 81,
+          "finite": true,
+          "peak": 0.300621,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 82,
+          "finite": true,
+          "peak": 0.242832,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 83,
+          "finite": true,
+          "peak": 0.283103,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 84,
+          "finite": true,
+          "peak": 0.267094,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 85,
+          "finite": true,
+          "peak": 0.325904,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 86,
+          "finite": true,
+          "peak": 0.301966,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 87,
+          "finite": true,
+          "peak": 0.27308,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 88,
+          "finite": true,
+          "peak": 0.263646,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 89,
+          "finite": true,
+          "peak": 0.2983,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 90,
+          "finite": true,
+          "peak": 0.291768,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 91,
+          "finite": true,
+          "peak": 0.305049,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 92,
+          "finite": true,
+          "peak": 0.30453,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 93,
+          "finite": true,
+          "peak": 0.300822,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 94,
+          "finite": true,
+          "peak": 0.297354,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 95,
+          "finite": true,
+          "peak": 0.308118,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 96,
+          "finite": true,
+          "peak": 0.314905,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        }
+      ]
+    },
+    {
+      "voice": "voice_B",
+      "all_ok": true,
+      "n_notes": 61,
+      "notes": [
+        {
+          "midi": 36,
+          "finite": true,
+          "peak": 0.19817,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 37,
+          "finite": true,
+          "peak": 0.193021,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 38,
+          "finite": true,
+          "peak": 0.197162,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 39,
+          "finite": true,
+          "peak": 0.196079,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 40,
+          "finite": true,
+          "peak": 0.201363,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 41,
+          "finite": true,
+          "peak": 0.199332,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 42,
+          "finite": true,
+          "peak": 0.204782,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 43,
+          "finite": true,
+          "peak": 0.205661,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 44,
+          "finite": true,
+          "peak": 0.20783,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 45,
+          "finite": true,
+          "peak": 0.210006,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 46,
+          "finite": true,
+          "peak": 0.216843,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 47,
+          "finite": true,
+          "peak": 0.216433,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 48,
+          "finite": true,
+          "peak": 0.228887,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 49,
+          "finite": true,
+          "peak": 0.24104,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 50,
+          "finite": true,
+          "peak": 0.249643,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 51,
+          "finite": true,
+          "peak": 0.257699,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 52,
+          "finite": true,
+          "peak": 0.266113,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 53,
+          "finite": true,
+          "peak": 0.276032,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 54,
+          "finite": true,
+          "peak": 0.27811,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 55,
+          "finite": true,
+          "peak": 0.29448,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 56,
+          "finite": true,
+          "peak": 0.276816,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 57,
+          "finite": true,
+          "peak": 0.29547,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 58,
+          "finite": true,
+          "peak": 0.293443,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 59,
+          "finite": true,
+          "peak": 0.303046,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 60,
+          "finite": true,
+          "peak": 0.296439,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 61,
+          "finite": true,
+          "peak": 0.301511,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 62,
+          "finite": true,
+          "peak": 0.293424,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 63,
+          "finite": true,
+          "peak": 0.325463,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 64,
+          "finite": true,
+          "peak": 0.320987,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 65,
+          "finite": true,
+          "peak": 0.31314,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 66,
+          "finite": true,
+          "peak": 0.29989,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 67,
+          "finite": true,
+          "peak": 0.336289,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 68,
+          "finite": true,
+          "peak": 0.335687,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 69,
+          "finite": true,
+          "peak": 0.352293,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 70,
+          "finite": true,
+          "peak": 0.346231,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 71,
+          "finite": true,
+          "peak": 0.339398,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 72,
+          "finite": true,
+          "peak": 0.341458,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 73,
+          "finite": true,
+          "peak": 0.343795,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 74,
+          "finite": true,
+          "peak": 0.321076,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 75,
+          "finite": true,
+          "peak": 0.322979,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 76,
+          "finite": true,
+          "peak": 0.359506,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 77,
+          "finite": true,
+          "peak": 0.348506,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 78,
+          "finite": true,
+          "peak": 0.348694,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 79,
+          "finite": true,
+          "peak": 0.32899,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 80,
+          "finite": true,
+          "peak": 0.319168,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 81,
+          "finite": true,
+          "peak": 0.333353,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 82,
+          "finite": true,
+          "peak": 0.319555,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 83,
+          "finite": true,
+          "peak": 0.331863,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 84,
+          "finite": true,
+          "peak": 0.391973,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 85,
+          "finite": true,
+          "peak": 0.355836,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 86,
+          "finite": true,
+          "peak": 0.348781,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 87,
+          "finite": true,
+          "peak": 0.360603,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 88,
+          "finite": true,
+          "peak": 0.374802,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 89,
+          "finite": true,
+          "peak": 0.363478,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 90,
+          "finite": true,
+          "peak": 0.35285,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 91,
+          "finite": true,
+          "peak": 0.339254,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 92,
+          "finite": true,
+          "peak": 0.374822,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 93,
+          "finite": true,
+          "peak": 0.369761,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 94,
+          "finite": true,
+          "peak": 0.366851,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 95,
+          "finite": true,
+          "peak": 0.346117,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        },
+        {
+          "midi": 96,
+          "finite": true,
+          "peak": 0.337472,
+          "rms": 0.1,
+          "clipped": false,
+          "silent": false,
+          "ok": true
+        }
+      ]
+    }
+  ],
+  "all_pass": true,
+  "elapsed_sec": 1.914
+}

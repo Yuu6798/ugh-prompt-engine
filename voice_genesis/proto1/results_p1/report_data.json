@@ -1,0 +1,282 @@
+{
+  "_timing_p5_gallery_only_sec": 142.08592748641968,
+  "_timing_p5_sec": 144.66073489189148,
+  "_timing_p6_sec": 4.012771368026733,
+  "_timing_total_sec": 148.67555475234985,
+  "p4_registry_sample": {
+    "entries_written": 4,
+    "genome_ids": [
+      "0de225e6148f",
+      "f4039c3df700",
+      "887531cb29d2",
+      "ca96f03fcf9e"
+    ],
+    "lineage_of_e4": [
+      {
+        "genome_id": "0de225e6148f",
+        "op": "sample",
+        "parents": []
+      },
+      {
+        "genome_id": "f4039c3df700",
+        "op": "mutate",
+        "parents": [
+          "0de225e6148f"
+        ]
+      },
+      {
+        "genome_id": "ca96f03fcf9e",
+        "op": "crossover",
+        "parents": [
+          "f4039c3df700",
+          "887531cb29d2"
+        ]
+      }
+    ]
+  },
+  "p5_audit_self_match_sample": {
+    "e1_chance_band_p95": 0.9678951881811239,
+    "e1_max_similarity": 0.9999999999998366,
+    "e1_pass": false,
+    "e2_chance_band_p95": 0.9436356408180776,
+    "e2_max_similarity": 0.9999999999999888,
+    "e2_pass": false,
+    "genome_id": "fca8f7ace965",
+    "overall_pass": false,
+    "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+    "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+    "report_id": "audit-0793a9b663d7"
+  },
+  "p5_audit_unrelated_candidate_samples": [
+    {
+      "e1_chance_band_p95": 0.9678951881811239,
+      "e1_max_similarity": 0.7692502448440237,
+      "e1_pass": true,
+      "e2_chance_band_p95": 0.9436356408180776,
+      "e2_max_similarity": 0.6519640652848432,
+      "e2_pass": true,
+      "genome_id": "2f44bbbe7997",
+      "overall_pass": true,
+      "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+      "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+      "report_id": "audit-e663d4deb936"
+    },
+    {
+      "e1_chance_band_p95": 0.9678951881811239,
+      "e1_max_similarity": 0.7369594041050793,
+      "e1_pass": true,
+      "e2_chance_band_p95": 0.9436356408180776,
+      "e2_max_similarity": 0.6667272374987946,
+      "e2_pass": true,
+      "genome_id": "654beb111b51",
+      "overall_pass": true,
+      "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+      "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+      "report_id": "audit-c851d8b34922"
+    },
+    {
+      "e1_chance_band_p95": 0.9678951881811239,
+      "e1_max_similarity": 0.5573917441240253,
+      "e1_pass": true,
+      "e2_chance_band_p95": 0.9436356408180776,
+      "e2_max_similarity": 0.8827905859114268,
+      "e2_pass": true,
+      "genome_id": "57d98d76a936",
+      "overall_pass": true,
+      "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+      "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+      "report_id": "audit-4196e5b4621d"
+    }
+  ],
+  "p5_chance_bands": {
+    "e1_chance_band_p95": 0.9678951881811239,
+    "e2_chance_band_p95": 0.9436356408180776,
+    "n_permutations": 200
+  },
+  "p5_reference_set_sidecar": {
+    "coverage_notes": "合成スタンドイン。実在歌手 embedding は machine_dependent で未実装。チャンス帯は gallery ラベルシャッフルの字義通りの実装では有限固定集合ゆえに縮退するため、gallery と無関係な合成候補 200 個の最近傍類似分布で代替した（underspec_log_p1.md [UNDERSPEC-P1-9]）。E1/E2 いずれも実在人間声で訓練された識別器ではなく、`measured (instrument-validity caveat: stand-in embeddings)` の意味での「測定値」である。",
+    "created_at": "2026-08-13T12:00:00+00:00",
+    "embedding_models": [
+      {
+        "description": "measure_v3 6 特徴 (mean_f0/formant_centroid/source_tilt/periodicity/rms/vibrato_depth) の probe 横断頻度正規化済み集約（sustain+phrase）",
+        "id": "E1-measure_v3-agg",
+        "kind": "handcrafted-acoustic-features",
+        "provenance": "measured (instrument-validity caveat: stand-in embeddings)"
+      },
+      {
+        "description": "librosa log-mel 64 帯域の probe 横断頻度正規化済み平均（sustain+phrase）",
+        "id": "E2-logmel64-agg",
+        "kind": "log-mel-band-energy",
+        "provenance": "measured (instrument-validity caveat: stand-in embeddings)"
+      }
+    ],
+    "id": "standin-gallery-v1",
+    "schema_version": "reference-set/0.1",
+    "sha256": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+    "source_datasets": [
+      "standin-synthetic-gallery-v1 (proto1 sampler.sample, no real singer audio)"
+    ],
+    "version": 1
+  },
+  "p5_stale_audit_trigger": {
+    "changed_when_marking_current_hash": 0,
+    "changed_when_marking_different_hash": 4,
+    "entries_logged": 4
+  },
+  "p6_aliasing": {
+    "A4": {
+      "band_ratio": 0.45,
+      "high_band_energy_ratio_db": -67.93528245404703,
+      "passed": true,
+      "sr": 22050
+    },
+    "C3": {
+      "band_ratio": 0.45,
+      "high_band_energy_ratio_db": -92.07295678357497,
+      "passed": true,
+      "sr": 22050
+    },
+    "C6": {
+      "band_ratio": 0.45,
+      "high_band_energy_ratio_db": -68.63209682289126,
+      "passed": true,
+      "sr": 22050
+    }
+  },
+  "p6_formant_sweep": {
+    "direction_consistency": 0.8333333333333334,
+    "formant_centroid_log2hz": [
+      10.234687102637958,
+      10.306026405192314,
+      9.586815783357688,
+      9.63515887150407,
+      9.642931344321555,
+      9.648084140628542,
+      9.6720497811393
+    ],
+    "formant_scales": [
+      0.85,
+      0.9,
+      0.95,
+      1.0,
+      1.05,
+      1.1,
+      1.15
+    ],
+    "net_direction_positive": false,
+    "passed": true,
+    "threshold": 0.6
+  },
+  "p6_register_transition": {
+    "max_db_jump": 0.5583905998531442,
+    "n_notes": 46,
+    "note_rms_db_head5": [
+      -19.26600319066933,
+      -19.357051513080577,
+      -19.03182980193964,
+      -19.288888981102307,
+      -19.200416289836035
+    ],
+    "note_rms_db_tail5": [
+      -19.02483025856136,
+      -19.398670350991377,
+      -19.193450937705833,
+      -19.334242138966133,
+      -19.25466900657418
+    ],
+    "passed": true,
+    "threshold_db": 6.0
+  },
+  "p6_sampled_seeds_0_9": [
+    {
+      "aliasing_db": -62.11959219793508,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 0.6666666666666666,
+      "formant_passed": true,
+      "register_max_db_jump": 1.21622588103169,
+      "register_passed": true,
+      "seed": 0
+    },
+    {
+      "aliasing_db": -72.20533712018396,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 0.6666666666666666,
+      "formant_passed": true,
+      "register_max_db_jump": 1.3104348635754803,
+      "register_passed": true,
+      "seed": 1
+    },
+    {
+      "aliasing_db": -83.78075365943339,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 0.5,
+      "formant_passed": false,
+      "register_max_db_jump": 0.6487156264097145,
+      "register_passed": true,
+      "seed": 2
+    },
+    {
+      "aliasing_db": -89.32213377332154,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 0.6666666666666666,
+      "formant_passed": true,
+      "register_max_db_jump": 0.9291759919693732,
+      "register_passed": true,
+      "seed": 3
+    },
+    {
+      "aliasing_db": -45.58542529078725,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 0.5,
+      "formant_passed": false,
+      "register_max_db_jump": 1.0317682900136198,
+      "register_passed": true,
+      "seed": 4
+    },
+    {
+      "aliasing_db": -53.70352834130708,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 1.0,
+      "formant_passed": true,
+      "register_max_db_jump": 0.5997400200427414,
+      "register_passed": true,
+      "seed": 5
+    },
+    {
+      "aliasing_db": -64.6182642182017,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 0.8333333333333334,
+      "formant_passed": true,
+      "register_max_db_jump": 0.6819256898704431,
+      "register_passed": true,
+      "seed": 6
+    },
+    {
+      "aliasing_db": -62.93109862165152,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 0.8333333333333334,
+      "formant_passed": true,
+      "register_max_db_jump": 1.101916823107949,
+      "register_passed": true,
+      "seed": 7
+    },
+    {
+      "aliasing_db": -79.45768987557963,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 0.6666666666666666,
+      "formant_passed": true,
+      "register_max_db_jump": 0.6556367840255817,
+      "register_passed": true,
+      "seed": 8
+    },
+    {
+      "aliasing_db": -52.36832866387581,
+      "aliasing_passed": true,
+      "formant_direction_consistency": 0.8333333333333334,
+      "formant_passed": true,
+      "register_max_db_jump": 0.2817671578509042,
+      "register_passed": true,
+      "seed": 9
+    }
+  ]
+}

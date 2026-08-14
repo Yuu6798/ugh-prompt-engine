@@ -1,0 +1,113 @@
+{
+  "schema": "genesis-lineage/0.1",
+  "winner_name": "genesis1",
+  "internal_name": "genesis-mut4",
+  "candidate_id": 4,
+  "op": "mutate",
+  "parents": [
+    "voice_C"
+  ],
+  "seed": 40105,
+  "scale": 0.08,
+  "genesis_seed_base": 40001,
+  "tract_mutate_scale": 0.025,
+  "register_gain_safety_cap": 0.5,
+  "genome": {
+    "name": "genesis-mut4",
+    "source": {
+      "tilt": -16.859889520628567,
+      "source_mode": "modal"
+    },
+    "resonance": {
+      "formant_scale": 1.0,
+      "formant_offsets": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bandwidth_scale": 0.7846071485208348
+    },
+    "noise": {
+      "breathiness_base": 0.029803860055126058,
+      "register_gains": [
+        0.0,
+        0.0526330475984215,
+        0.0,
+        0.05385543727160317,
+        0.022416353210546733
+      ]
+    },
+    "register": {
+      "boundaries_midi": [
+        52.0,
+        62.0,
+        74.0,
+        88.0
+      ],
+      "transition_width": 3.0
+    },
+    "microprosody": {
+      "vibrato_rate_hz": 5.095275796053316,
+      "vibrato_depth_cents": 15.028144652554388,
+      "jitter_amount": 0.006160533462976149,
+      "jitter_seed": 11
+    },
+    "range": {
+      "lowest_midi": 36.0,
+      "highest_midi": 96.0
+    },
+    "physio_range": {
+      "out_of_physio_range": false,
+      "violated_bounds": []
+    },
+    "audit": {
+      "reference_set_hash": null,
+      "linkability_report_id": null,
+      "residual_gate_passed": null
+    },
+    "schema_version": "voice-genome/0.2"
+  },
+  "evaluation": {
+    "plausibility_score": -5.680397236534545,
+    "combined_axis2": 0.05893846363190569,
+    "distinctiveness_from_parents": 0.2915077127397509,
+    "own_nearest_neighbor_distance": 0.005893846363190569,
+    "quick_s5": {
+      "median_cents_err": 5.680397236534545,
+      "max_cents_err": 8.288519908881845,
+      "min_periodicity_r": 0.9411017391161323,
+      "aliasing_db": -76.36739220837028,
+      "overall_pass": true
+    },
+    "linkability": {
+      "min_dist_e1": 0.029519526609516067,
+      "min_dist_e2": 0.0033148995568599293,
+      "nearest_e1_name": "voice_C",
+      "nearest_e2_name": "voice_C",
+      "margin": 0.0013148995568599293,
+      "passed": true
+    }
+  },
+  "pareto_front_candidate_ids": [
+    3,
+    4
+  ],
+  "full_gate_selection_source": "pareto_front",
+  "full_gate_attempts": [
+    {
+      "candidate_id": 3,
+      "name": "genesis-sample2",
+      "source": "pareto_front",
+      "passed": false
+    },
+    {
+      "candidate_id": 4,
+      "name": "genesis-mut4",
+      "source": "pareto_front",
+      "passed": true
+    }
+  ],
+  "reference_set_hash": "8ea973857d396d48d22d932193c262488aca742582c7b12d0a64a423c572fa94",
+  "reproducibility_verified": true
+}

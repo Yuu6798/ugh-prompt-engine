@@ -133,3 +133,14 @@ target-version = "py311"
 # change to this list rather than an accident of `pip install`.
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
+
+# voice_genesis/harness/{measure.py,vt3_v4.py} は voice_genesis 仮想検証
+# プログラム内で「凍結・無改変」と明記された過去サイクルの基盤ファイル
+# （voice_genesis/README.md 参照）。他の多数のモジュールがこれらを無改変
+# 前提で import しており、F841（未使用変数）2件のためにバイト列を変更する
+# ことは凍結原則に反する。voice_genesis 全体を lint 対象から外すのではなく、
+# この2ファイルのみ per-file-ignore で除外する（voice_genesis の他コードは
+# 通常どおり lint 対象のまま）。
+[tool.ruff.lint.per-file-ignores]
+"voice_genesis/harness/measure.py" = ["F841"]
+"voice_genesis/harness/vt3_v4.py" = ["F841"]

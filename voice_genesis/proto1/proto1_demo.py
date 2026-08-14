@@ -1,0 +1,344 @@
+"""proto1_demo.py — F1 (final_assembly_memo.md): 試作品 1 号 E2E デモ。
+
+1 コマンドで以下を決定論実行し `results_final/e2e_run.json` に全記録する:
+
+  1. 創生: sample(101), sample(202) → mutate(101系, seed=303) →
+     crossover(101系mut, 202系, seed=404) の計 4 Genome（系譜の実演）
+  2. レンダ: 各 Genome で probe suite 全 5 種（P2）をレンダし波形 hash 記録
+  3. 検査（Genome ごと）: plausibility（periodicity r_median>=0.35, vt_harness
+     VT-1 と同一床）+ linkability 監査（E1/E2, reference-set standin-gallery-v1）。
+     reference_set_hash / linkability_report_id を Genome の audit フィールドへ記録
+  4. grip の参照記録: registry エントリの eval.grip_ref に
+     vt_harness/results_v6/grip_report_v6.json への**参照**（値のコピーではない）
+     + gate 意味論バージョン "grip-v2/band-v4/frozen-v6" を記録
+  5. 登録: 4 Genome を registry へ lineage 付きで登録
+  6. 決定論検証: デモ全体を 2 回実行し、genome_id・全波形 hash・監査判定が
+     一致すること（created_at のみ差異許容）を機械照合
+  7. 成果 WAV: 監査 PASS した個体 1 つの phrase probe レンダと cross_range
+     ペアレンダを `results_final/` に保存
+
+制約: フォアグラウンド実行、決定論（seed 固定。wall-clock 使用は
+registry/監査レポートの created_at 記録のみ）。vt_harness/ は読み取りのみ。
+"""
+from __future__ import annotations
+
+import json
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import numpy as np
+import soundfile as sf
+
+import bridge
+import genome as g
+import plausibility as pl
+import probes
+import reference_set as rset
+import registry as r
+import sampler
+
+PROTO_DIR = Path(__file__).resolve().parent
+RESULTS_DIR = PROTO_DIR / "results_final"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# underspec_log_final.md 参照: final_assembly_memo.md は mutate の scale を
+# 指定していない。proto1_design_memo.md の他テスト・デモで慣例的に使われて
+# きた 0.1（「小さな変異」の代表値）を踏襲する。
+MUTATE_SCALE = 0.1
+
+GRIP_REF_PATH = "vt_harness/results_v6/grip_report_v6.json"
+GRIP_GATE_SEMANTICS_VERSION = "grip-v2/band-v4/frozen-v6"
+
+GALLERY_N_PERMUTATIONS = rset.CHANCE_N_PERMUTATIONS  # 200（memo 規定どおり）
+
+
+# ---------------------------------------------------------------------------
+# ユーティリティ
+# ---------------------------------------------------------------------------
+
+
+def _strip_created_at(obj: Any) -> Any:
+    """dict/list を再帰的に走査し、キー "created_at" を除いたコピーを返す。
+
+    決定論検証（F1-6）で「created_at のみ差異許容」を機械的に実現するための
+    正規化。report_id は audit_linkability() 側で既に created_at 非依存に
+    なっているため（underspec_log_final.md 参照）、created_at フィールド
+    そのものを取り除くだけで比較可能になる。
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_created_at(v) for k, v in obj.items() if k != "created_at"}
+    if isinstance(obj, list):
+        return [_strip_created_at(v) for v in obj]
+    return obj
+
+
+def _diff_paths(a: Any, b: Any, path: str = "$") -> List[str]:
+    """2 つの JSON 互換オブジェクトの最初の相違点を列挙する（デバッグ用）。"""
+    diffs: List[str] = []
+    if type(a) is not type(b) and not (isinstance(a, (int, float)) and isinstance(b, (int, float))):
+        diffs.append(f"{path}: type mismatch {type(a).__name__} vs {type(b).__name__}")
+        return diffs
+    if isinstance(a, dict):
+        keys = set(a.keys()) | set(b.keys())
+        for k in sorted(keys):
+            if k not in a:
+                diffs.append(f"{path}.{k}: missing in run_1")
+            elif k not in b:
+                diffs.append(f"{path}.{k}: missing in run_2")
+            else:
+                diffs.extend(_diff_paths(a[k], b[k], f"{path}.{k}"))
+    elif isinstance(a, list):
+        if len(a) != len(b):
+            diffs.append(f"{path}: length mismatch {len(a)} vs {len(b)}")
+        else:
+            for i, (x, y) in enumerate(zip(a, b)):
+                diffs.extend(_diff_paths(x, y, f"{path}[{i}]"))
+    else:
+        if a != b:
+            diffs.append(f"{path}: {a!r} != {b!r}")
+    return diffs[:50]  # 冗長になりすぎないよう先頭 50 件に制限
+
+
+# ---------------------------------------------------------------------------
+# パイプライン本体
+# ---------------------------------------------------------------------------
+
+
+def run_pipeline(gallery: rset.ReferenceSetGallery, registry_path: Path, mutate_scale: float = MUTATE_SCALE) -> Dict[str, Any]:
+    """F1-1〜F1-5 の 1 回分の実行。呼び出しごとに独立した registry_path を使う
+    （F1-6 の決定論検証で 2 回分を別ファイルへ書き分けるため）。
+    """
+    reg = r.GenomeRegistry(registry_path)
+
+    # --- F1-1: 創生 -----------------------------------------------------
+    g_a = sampler.sample(101, name="demo-a-sample101")
+    g_b = sampler.sample(202, name="demo-b-sample202")
+    g_c = sampler.mutate(g_a, seed=303, scale=mutate_scale)
+    g_d = sampler.crossover(g_c, g_b, seed=404)
+
+    genome_specs: List[Tuple[str, g.VoiceGenome, str, Optional[int], List[str]]] = [
+        ("a", g_a, "sample", 101, []),
+        ("b", g_b, "sample", 202, []),
+        ("c", g_c, "mutate", 303, ["a"]),  # 親キーは genome_specs 内の key。後で実 genome_id に解決する
+        ("d", g_d, "crossover", 404, ["c", "b"]),
+    ]
+
+    genome_records: Dict[str, Dict[str, Any]] = {}
+    registered_id_by_key: Dict[str, str] = {}
+
+    for key, raw_genome, op, seed, parent_keys in genome_specs:
+        # --- F1-2: probe suite 全 5 種レンダ + 波形 hash -----------------
+        manifest = probes.full_manifest(raw_genome)
+
+        # --- F1-3a: plausibility (periodicity r_median >= 0.35) ----------
+        plaus = pl.plausibility_report(raw_genome)
+        plaus_dict = {
+            "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+            "threshold": plaus.threshold,
+            "probe_names": list(plaus.probe_names),
+            "n_notes": plaus.n_notes,
+            "n_violations": plaus.n_violations,
+            "min_r_median": plaus.min_r_median,
+            "passed": plaus.passed,
+            "per_note": [
+                {"probe_name": n.probe_name, "midi": n.midi, "r_median": n.r_median, "passed": n.passed}
+                for n in plaus.notes
+            ],
+        }
+
+        # --- F1-3b: linkability 監査（novelty） ---------------------------
+        audit_report = rset.audit_linkability(raw_genome, gallery, now=None)
+        audit_dict = rset.audit_report_to_dict(audit_report)
+
+        # audit 結果を Genome の audit フィールドへ書き戻す
+        audited_genome = g.with_audit(
+            raw_genome,
+            g.AuditSection(
+                reference_set_hash=gallery.sha256,
+                linkability_report_id=audit_report.report_id,
+                residual_gate_passed=None,  # R3 未実装 = not_applicable（memo F2 正直会計）
+            ),
+        )
+
+        # --- F1-4/F1-5: registry 登録（grip_ref は参照のみ）--------------
+        parents = [registered_id_by_key[pk] for pk in parent_keys]
+        eval_scores = {
+            "plausibility": {
+                "passed": plaus.passed,
+                "min_r_median": plaus.min_r_median,
+                "threshold": plaus.threshold,
+            },
+            "grip_ref": {
+                "ref": GRIP_REF_PATH,
+                "gate_semantics_version": GRIP_GATE_SEMANTICS_VERSION,
+            },
+            "novelty": {
+                "linkability_report_id": audit_report.report_id,
+                "reference_set_hash": gallery.sha256,
+                "overall_pass": audit_report.overall_pass,
+            },
+        }
+        entry = reg.append(
+            audited_genome,
+            op=op,
+            seed=seed,
+            parents=parents,
+            eval_scores=eval_scores,
+            now=None,  # 実 wall-clock（F1-6 の created_at 差異許容の対象）
+        )
+        registered_id_by_key[key] = entry.genome_id
+
+        genome_records[key] = {
+            "op": op,
+            "seed": seed,
+            "parent_keys": parent_keys,
+            "parent_genome_ids": parents,
+            "pre_audit_genome_id": r.genome_content_hash(raw_genome),
+            "registered_genome_id": entry.genome_id,
+            "genome": g.to_dict(audited_genome),
+            "probe_manifest": manifest,
+            "plausibility": plaus_dict,
+            "linkability_audit": audit_dict,
+            "registry_entry": r.entry_to_dict(entry),
+        }
+
+    lineage_of_d = reg.lineage(registered_id_by_key["d"])
+    lineage_dict = [
+        {"genome_id": e.genome_id, "op": e.op, "seed": e.seed, "parents": e.parents} for e in lineage_of_d
+    ]
+
+    return {
+        "genomes": genome_records,
+        "lineage_of_d": lineage_dict,
+        "registry_path": str(registry_path),
+    }
+
+
+def _save_wav(sig: np.ndarray, path: Path, sr: int) -> None:
+    sf.write(str(path), sig.astype(np.float32), sr)
+
+
+def main() -> None:
+    t_start = time.time()
+    print("[proto1_demo] building reference set (n_permutations="
+          f"{GALLERY_N_PERMUTATIONS}, matches P5 memo spec)...")
+    gallery = rset.build_reference_set(n_permutations=GALLERY_N_PERMUTATIONS)
+    t_gallery = time.time()
+    print(f"[proto1_demo] reference set built in {t_gallery - t_start:.1f}s "
+          f"(sha256={gallery.sha256[:12]}...)")
+
+    tmp_registry_path = RESULTS_DIR / "_scratch_registry_run1.jsonl"
+    final_registry_path = RESULTS_DIR / "genome_registry.jsonl"
+    if tmp_registry_path.exists():
+        tmp_registry_path.unlink()
+    if final_registry_path.exists():
+        final_registry_path.unlink()
+
+    print("[proto1_demo] running pipeline (run 1/2, scratch registry)...")
+    run_1 = run_pipeline(gallery, tmp_registry_path)
+    t_run1 = time.time()
+    print(f"[proto1_demo] run 1 done in {t_run1 - t_gallery:.1f}s")
+
+    print("[proto1_demo] running pipeline (run 2/2, final registry)...")
+    run_2 = run_pipeline(gallery, final_registry_path)
+    t_run2 = time.time()
+    print(f"[proto1_demo] run 2 done in {t_run2 - t_run1:.1f}s")
+
+    # --- F1-6: 決定論検証（created_at のみ差異許容） -------------------------
+    comparable_1 = _strip_created_at(run_1)
+    comparable_2 = _strip_created_at(run_2)
+    # registry_path 自体は run ごとに異なる文字列なので比較対象から除く
+    comparable_1.pop("registry_path", None)
+    comparable_2.pop("registry_path", None)
+    determinism_passed = comparable_1 == comparable_2
+    differing_paths = [] if determinism_passed else _diff_paths(comparable_1, comparable_2)
+
+    print(f"[proto1_demo] determinism check: {'PASS' if determinism_passed else 'FAIL'}")
+    if not determinism_passed:
+        print(f"[proto1_demo] differing paths (first {len(differing_paths)}): {differing_paths}")
+
+    tmp_registry_path.unlink()  # スクラッチ用の 1 回目 registry は破棄（正本は run_2 側）
+
+    # --- F1-7: 成果 WAV（監査 PASS 個体を 1 つ選ぶ） -------------------------
+    selected_key = None
+    for key in ("a", "b", "c", "d"):
+        if run_2["genomes"][key]["linkability_audit"]["overall_pass"]:
+            selected_key = key
+            break
+
+    wav_paths: Dict[str, str] = {}
+    if selected_key is not None:
+        selected_genome_dict = run_2["genomes"][selected_key]["genome"]
+        selected_genome = g.from_dict(selected_genome_dict)
+        genome_id = run_2["genomes"][selected_key]["registered_genome_id"]
+
+        phrase_result = probes.render_probe(selected_genome, "phrase")
+        phrase_sig = np.concatenate(phrase_result.waveforms)
+        phrase_path = RESULTS_DIR / f"prototype1_phrase_{genome_id}.wav"
+        _save_wav(phrase_sig, phrase_path, bridge.SR)
+        wav_paths["phrase"] = str(phrase_path.relative_to(PROTO_DIR))
+
+        cross_result = probes.render_probe(selected_genome, "cross_range")
+        gap = np.zeros(int(0.15 * bridge.SR), dtype=np.float64)
+        cross_sig = np.concatenate([cross_result.waveforms[0], gap, cross_result.waveforms[1]])
+        cross_path = RESULTS_DIR / f"prototype1_cross_range_pair_{genome_id}.wav"
+        _save_wav(cross_sig, cross_path, bridge.SR)
+        wav_paths["cross_range_pair"] = str(cross_path.relative_to(PROTO_DIR))
+
+        print(f"[proto1_demo] selected genome '{selected_key}' ({genome_id}) for WAV export "
+              f"(linkability overall_pass=True)")
+    else:
+        print("[proto1_demo] WARNING: no genome passed linkability audit in run_2; no WAV exported")
+
+    # --- e2e_run.json 書き出し ---------------------------------------------
+    report_generated_at = datetime.now(timezone.utc).isoformat()
+    e2e_record = {
+        "schema": "proto1-e2e-demo/1",
+        "report_generated_at": report_generated_at,
+        "mutate_scale": MUTATE_SCALE,
+        "reference_set": {
+            "sidecar": gallery.sidecar_dict(),
+            "e1_chance_band_p95": gallery.e1_chance_band_p95,
+            "e2_chance_band_p95": gallery.e2_chance_band_p95,
+            "n_permutations": gallery.chance_n_permutations,
+        },
+        "grip_reference": {
+            "ref": GRIP_REF_PATH,
+            "gate_semantics_version": GRIP_GATE_SEMANTICS_VERSION,
+            "note": "値のコピーではなく参照。実測値は vt_harness/results_v6/ を直接参照すること（読み取りのみ）。",
+        },
+        "run_1": run_1,
+        "run_2": run_2,
+        "determinism_check": {
+            "compared": "run_1 vs run_2, all fields except created_at",
+            "passed": determinism_passed,
+            "differing_paths": differing_paths,
+        },
+        "selected_pass_genome_for_wav": {
+            "genome_key": selected_key,
+            "genome_id": run_2["genomes"][selected_key]["registered_genome_id"] if selected_key else None,
+            "wav_paths": wav_paths,
+        },
+        "timing_sec": {
+            "reference_set_build": t_gallery - t_start,
+            "run_1": t_run1 - t_gallery,
+            "run_2": t_run2 - t_run1,
+            "total": time.time() - t_start,
+        },
+    }
+
+    out_path = RESULTS_DIR / "e2e_run.json"
+    out_path.write_text(json.dumps(e2e_record, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8")
+    print(f"[proto1_demo] wrote {out_path} (total {time.time() - t_start:.1f}s)")
+
+    if not determinism_passed:
+        raise SystemExit("determinism check FAILED — see e2e_run.json.determinism_check.differing_paths")
+
+
+if __name__ == "__main__":
+    main()

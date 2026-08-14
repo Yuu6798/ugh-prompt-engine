@@ -1,0 +1,181 @@
+{
+  "schema": "genesis-lineage/0.1",
+  "winner_name": "genesis2",
+  "internal_name": "g4-31-mut",
+  "candidate_id": 31,
+  "generation": 4,
+  "op": "mutate",
+  "parents": [
+    "g3-25-cross"
+  ],
+  "seed": 100104,
+  "scale": 0.15,
+  "meets_floor": false,
+  "jnd_floor": 2.0,
+  "distinctiveness_composite": 0.8953657778418688,
+  "distinctiveness_vs_voice_C": 0.8953657778418688,
+  "distinctiveness_vs_voice_D": 1.9415911577915241,
+  "global_best_in_run": {
+    "candidate_id": 26,
+    "name": "g3-26-cross",
+    "distinctiveness_composite": 1.7229829128084517,
+    "note": "この個体はフル S5 gate 不合格のため当選者にはなれなかった（fail-closed）。"
+  },
+  "genome": {
+    "name": "g4-31-mut",
+    "source": {
+      "tilt": -17.0,
+      "source_mode": "modal"
+    },
+    "resonance": {
+      "formant_scale": 1.0,
+      "formant_offsets": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bandwidth_scale": 0.8021665311380285
+    },
+    "noise": {
+      "breathiness_base": 0.06164702852893078,
+      "register_gains": [
+        0.2233082063783077,
+        0.0,
+        0.017380811840946437,
+        0.0317907063123862,
+        0.0
+      ]
+    },
+    "register": {
+      "boundaries_midi": [
+        52.0,
+        62.0,
+        74.0,
+        88.0
+      ],
+      "transition_width": 3.0
+    },
+    "microprosody": {
+      "vibrato_rate_hz": 6.1202727707500015,
+      "vibrato_depth_cents": 55.253643237379,
+      "jitter_amount": 0.007151199346474815,
+      "jitter_seed": 11
+    },
+    "range": {
+      "lowest_midi": 36.0,
+      "highest_midi": 96.0
+    },
+    "physio_range": {
+      "out_of_physio_range": false,
+      "violated_bounds": []
+    },
+    "audit": {
+      "reference_set_hash": null,
+      "linkability_report_id": null,
+      "residual_gate_passed": null
+    },
+    "schema_version": "voice-genome/0.2"
+  },
+  "linkability": {
+    "min_dist_e1": 0.01891996902890003,
+    "min_dist_e2": 0.01208772514401768,
+    "nearest_e1_name": "voice_C",
+    "nearest_e2_name": "voice_A",
+    "margin": 0.00891996902890003,
+    "passed": true
+  },
+  "full_gate_attempts": [
+    {
+      "candidate_id": 26,
+      "name": "g3-26-cross",
+      "source": "distinctiveness_rank",
+      "passed": false
+    },
+    {
+      "candidate_id": 29,
+      "name": "g4-29-mut",
+      "source": "distinctiveness_rank",
+      "passed": false
+    },
+    {
+      "candidate_id": 32,
+      "name": "g4-32-cross",
+      "source": "distinctiveness_rank",
+      "passed": false
+    },
+    {
+      "candidate_id": 34,
+      "name": "g4-34-cross",
+      "source": "distinctiveness_rank",
+      "passed": false
+    },
+    {
+      "candidate_id": 20,
+      "name": "g3-20-mut",
+      "source": "distinctiveness_rank",
+      "passed": false
+    },
+    {
+      "candidate_id": 28,
+      "name": "g4-28-mut",
+      "source": "distinctiveness_rank",
+      "passed": false
+    },
+    {
+      "candidate_id": 18,
+      "name": "g2-18-mut2",
+      "source": "distinctiveness_rank",
+      "passed": false
+    },
+    {
+      "candidate_id": 35,
+      "name": "g4-35-cross",
+      "source": "distinctiveness_rank",
+      "passed": false
+    },
+    {
+      "candidate_id": 21,
+      "name": "g3-21-mut",
+      "source": "distinctiveness_rank",
+      "passed": false
+    },
+    {
+      "candidate_id": 31,
+      "name": "g4-31-mut",
+      "source": "distinctiveness_rank",
+      "passed": true
+    }
+  ],
+  "safe_box": {
+    "tilt": [
+      -17.0,
+      -7.0
+    ],
+    "bandwidth_scale": [
+      0.8,
+      1.3
+    ],
+    "breathiness_base": [
+      0.0,
+      0.4
+    ],
+    "register_gains_each": [
+      0.0,
+      0.5
+    ],
+    "vibrato_rate_hz": [
+      4.5,
+      7.0
+    ],
+    "vibrato_depth_cents": [
+      20.0,
+      60.0
+    ]
+  },
+  "n_generations": 4,
+  "n_candidates_per_gen": 8,
+  "s3b_seed_base": 60001,
+  "reference_set_hash": "8ea973857d396d48d22d932193c262488aca742582c7b12d0a64a423c572fa94",
+  "reproducibility_verified": true
+}
