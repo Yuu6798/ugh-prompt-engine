@@ -46,6 +46,8 @@ import sampler
 PROTO_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = PROTO_DIR / "results_final"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+# voice_genesis/proto1 -> voice_genesis -> リポジトリルート。
+REPO_ROOT = PROTO_DIR.parent.parent
 
 # underspec_log_final.md 参照: final_assembly_memo.md は mutate の scale を
 # 指定していない。proto1_design_memo.md の他テスト・デモで慣例的に使われて
@@ -216,12 +218,46 @@ def run_pipeline(gallery: rset.ReferenceSetGallery, registry_path: Path, mutate_
     return {
         "genomes": genome_records,
         "lineage_of_d": lineage_dict,
-        "registry_path": str(registry_path),
+        "registry_path": _repo_relative_path(registry_path),
     }
 
 
 def _save_wav(sig: np.ndarray, path: Path, sr: int) -> None:
     sf.write(str(path), sig.astype(np.float32), sr)
+
+
+def _repo_relative_path(path: Path) -> str:
+    """path を repo root からの相対パス文字列（POSIX 区切り）で返す（PR#261 レビュー R2）。
+
+    e2e_run.json はリポジトリへコミットされる成果物である。実行環境依存の
+    絶対パス（CI/scratchpad 上の一時ディレクトリ等）をそのまま記録すると、
+    別環境で読んだ第三者には意味を持たない・再現性検証の妨げになる。
+    registry_path は常にこのヘルパーを通し `voice_genesis/proto1/results_final/...`
+    形式の repo-relative 文字列として記録する。
+    """
+    return path.resolve().relative_to(REPO_ROOT).as_posix()
+
+
+def _publish_outputs(replacements: List[Tuple[Path, Path]]) -> None:
+    """staging パスから正本パスへ、順に `os.replace` で一括公開する（publish フェーズ）。
+
+    呼び出し側の契約（PR#261 レビュー R1）: 本関数を呼ぶ時点で、registry 構築・
+    linkability 監査・WAV レンダ・e2e_record 組み立てが**全て** staging パスへ
+    完了していること。実行時間の大半を占めるこれらの工程のどこで例外が起きても
+    本関数自体は一度も呼ばれないため、正本一式（registry / WAV / e2e_run.json）は
+    完全に旧状態のまま残る。
+
+    本関数の内部（`os.replace` の連続呼び出し自体）は、個々の呼び出しは
+    ファイル単位で atomic だが、複数ファイルをまたぐトランザクションではない。
+    途中の 1 件で例外が起きた場合、それより前の項目は既に新しい内容へ置換済み、
+    それ以降の項目は正本が旧内容のまま残る（「新しいが不完全な正本一式」ではなく
+    「一部だけ新しい、個々には完結した正本」に倒れる設計。真の全ファイル
+    トランザクションには results_final/ ディレクトリ全体の atomic swap が必要だが、
+    同ディレクトリには本デモ以外が書く既存の committed 記録も同居するため、
+    本 PR の範囲では見送る）。
+    """
+    for staging_path, final_path in replacements:
+        os.replace(staging_path, final_path)
 
 
 def main() -> None:
@@ -235,10 +271,13 @@ def main() -> None:
 
     tmp_registry_path = RESULTS_DIR / "_scratch_registry_run1.jsonl"
     final_registry_path = RESULTS_DIR / "genome_registry.jsonl"
-    # run_2 の正本 registry は staging パスへ書き、pipeline が最後まで成功した
-    # 場合にのみ os.replace で一括置換する（PR#261 レビュー C2: 旧実装は
-    # final_registry_path を run_2 開始前に unlink していたため、run_1/run_2
-    # のどこで例外・中断が起きても既存の正本 registry が失われた状態で残った）。
+    # run_2 の正本 registry は staging パスへ書く。正本への置換
+    # （os.replace）は WAV・e2e_run.json も含めた publish フェーズ
+    # （下記 _publish_outputs 呼び出し）でまとめて行う（PR#261 レビュー
+    # C2/R1: 旧実装は final_registry_path を run_2 開始前に unlink し、
+    # さらに registry だけを他成果物より早く公開していたため、run_2 完了後
+    # 〜 WAV/e2e_run.json 構築完了前のどこで例外が起きても正本一式が
+    # 「registry だけ新しい・他は古い/欠落」という半端な状態になり得た）。
     staging_registry_path = RESULTS_DIR / "_staging_registry_run2.jsonl"
     if tmp_registry_path.exists():
         tmp_registry_path.unlink()
@@ -255,16 +294,18 @@ def main() -> None:
     t_run2 = time.time()
     print(f"[proto1_demo] run 2 done in {t_run2 - t_run1:.1f}s")
 
-    # run_2 の pipeline がここまで例外なく完走した場合にのみ、正本 registry を
-    # atomic に置換する。差し替え後は run_2 の記録内容（e2e_run.json に埋め込む
-    # registry_path）も正本パスへ揃え直す（挙動・出力内容は不変のまま）。
-    os.replace(staging_registry_path, final_registry_path)
-    run_2["registry_path"] = str(final_registry_path)
+    # run_2 の registry は公開（os.replace）せず、まだ staging に置いたまま
+    # 進める（PR#261 レビュー R1）。e2e_run.json に埋め込む registry_path
+    # 文字列だけは公開後に実際に置かれる正本パスへ先に揃えておく（ファイルの
+    # 公開自体は WAV レンダ・e2e_record 組み立てが全て成功した後の publish
+    # フェーズへ遅延させる）。
+    run_2["registry_path"] = _repo_relative_path(final_registry_path)
 
     # --- F1-6: 決定論検証（created_at のみ差異許容） -------------------------
     comparable_1 = _strip_created_at(run_1)
     comparable_2 = _strip_created_at(run_2)
-    # registry_path 自体は run ごとに異なる文字列なので比較対象から除く
+    # registry_path は run_1(scratch)/run_2(正本) で異なるファイル名を指す
+    # 設計であり repo-relative 化しても値は一致しないため比較対象から除く
     comparable_1.pop("registry_path", None)
     comparable_2.pop("registry_path", None)
     determinism_passed = comparable_1 == comparable_2
@@ -274,9 +315,9 @@ def main() -> None:
     if not determinism_passed:
         print(f"[proto1_demo] differing paths (first {len(differing_paths)}): {differing_paths}")
 
-    tmp_registry_path.unlink()  # スクラッチ用の 1 回目 registry は破棄（正本は run_2 側）
+    tmp_registry_path.unlink()  # スクラッチ用の 1 回目 registry は正本ではないため即時破棄してよい
 
-    # --- F1-7: 成果 WAV（監査 PASS 個体を 1 つ選ぶ） -------------------------
+    # --- F1-7: 成果 WAV（監査 PASS 個体を 1 つ選ぶ。staging へレンダ）--------
     selected_key = None
     for key in ("a", "b", "c", "d"):
         if run_2["genomes"][key]["linkability_audit"]["overall_pass"]:
@@ -284,6 +325,9 @@ def main() -> None:
             break
 
     wav_paths: Dict[str, str] = {}
+    # (staging_path, final_path) の公開待ちリスト。publish フェーズでまとめて
+    # os.replace する（PR#261 レビュー R1）。
+    wav_publish: List[Tuple[Path, Path]] = []
     if selected_key is not None:
         selected_genome_dict = run_2["genomes"][selected_key]["genome"]
         selected_genome = g.from_dict(selected_genome_dict)
@@ -291,23 +335,27 @@ def main() -> None:
 
         phrase_result = probes.render_probe(selected_genome, "phrase")
         phrase_sig = np.concatenate(phrase_result.waveforms)
-        phrase_path = RESULTS_DIR / f"prototype1_phrase_{genome_id}.wav"
-        _save_wav(phrase_sig, phrase_path, bridge.SR)
-        wav_paths["phrase"] = str(phrase_path.relative_to(PROTO_DIR))
+        phrase_final = RESULTS_DIR / f"prototype1_phrase_{genome_id}.wav"
+        phrase_staging = RESULTS_DIR / f"_staging_prototype1_phrase_{genome_id}.wav"
+        _save_wav(phrase_sig, phrase_staging, bridge.SR)
+        wav_publish.append((phrase_staging, phrase_final))
+        wav_paths["phrase"] = str(phrase_final.relative_to(PROTO_DIR))
 
         cross_result = probes.render_probe(selected_genome, "cross_range")
         gap = np.zeros(int(0.15 * bridge.SR), dtype=np.float64)
         cross_sig = np.concatenate([cross_result.waveforms[0], gap, cross_result.waveforms[1]])
-        cross_path = RESULTS_DIR / f"prototype1_cross_range_pair_{genome_id}.wav"
-        _save_wav(cross_sig, cross_path, bridge.SR)
-        wav_paths["cross_range_pair"] = str(cross_path.relative_to(PROTO_DIR))
+        cross_final = RESULTS_DIR / f"prototype1_cross_range_pair_{genome_id}.wav"
+        cross_staging = RESULTS_DIR / f"_staging_prototype1_cross_range_pair_{genome_id}.wav"
+        _save_wav(cross_sig, cross_staging, bridge.SR)
+        wav_publish.append((cross_staging, cross_final))
+        wav_paths["cross_range_pair"] = str(cross_final.relative_to(PROTO_DIR))
 
         print(f"[proto1_demo] selected genome '{selected_key}' ({genome_id}) for WAV export "
               f"(linkability overall_pass=True)")
     else:
         print("[proto1_demo] WARNING: no genome passed linkability audit in run_2; no WAV exported")
 
-    # --- e2e_run.json 書き出し ---------------------------------------------
+    # --- e2e_run.json 組み立て（staging へ書く。公開はまだしない） -----------
     report_generated_at = datetime.now(timezone.utc).isoformat()
     e2e_record = {
         "schema": "proto1-e2e-demo/1",
@@ -334,9 +382,12 @@ def main() -> None:
                     "設計上必然（§CLAUDE.md: wall-clock 依存は created_at 記録のみ許可）。"
                 ),
                 "registry_path": (
-                    "run ごとに異なる一時/正本ファイルパスの文字列。実行環境依存で"
-                    "内容非依存のため比較対象から除外（underspec_log_final.md "
-                    "[UNDERSPEC-F-8] 既記載）。"
+                    "PR#261 R2 で repo-relative 化した後も run_1(scratch)/run_2(正本) は"
+                    "異なるファイル名（_scratch_registry_run1.jsonl / genome_registry.jsonl）"
+                    "を指す設計であり、値そのものが run 間で一致しない。実行環境依存の"
+                    "絶対パス漏えい問題は repo-relative 化で解消したが、この意図的な"
+                    "ファイル名差異自体は撤廃できないため比較対象から除外を継続する"
+                    "（underspec_log_final.md [UNDERSPEC-F-8]）。"
                 ),
             },
             "passed": determinism_passed,
@@ -355,12 +406,23 @@ def main() -> None:
         },
     }
 
-    # e2e_run.json も同じ atomic 置換方針: 一時ファイルへ全出力 → 成功後に
-    # os.replace で正本へ一括置換する（PR#261 レビュー C2）。
     out_path = RESULTS_DIR / "e2e_run.json"
-    tmp_out_path = RESULTS_DIR / "e2e_run.json.tmp"
-    tmp_out_path.write_text(json.dumps(e2e_record, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp_out_path, out_path)
+    staging_out_path = RESULTS_DIR / "_staging_e2e_run.json"
+    staging_out_path.write_text(
+        json.dumps(e2e_record, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8"
+    )
+
+    # --- Publish フェーズ: registry・WAV・e2e_run.json の全てが staging に
+    # 揃った、ここまでの工程が例外なく完走した場合にのみ、正本へ一括公開する
+    # （PR#261 レビュー R1）。それより前段（run_2/監査/WAV レンダ/e2e_record
+    # 組み立て）のどこかで例外が起きた場合、_publish_outputs は一度も呼ばれず
+    # 正本一式（registry / WAV / e2e_run.json）は完全に旧状態のまま残る。
+    print("[proto1_demo] publishing staged outputs...")
+    _publish_outputs(
+        [(staging_registry_path, final_registry_path)]
+        + wav_publish
+        + [(staging_out_path, out_path)]
+    )
     print(f"[proto1_demo] wrote {out_path} (total {time.time() - t_start:.1f}s)")
 
     if not determinism_passed:

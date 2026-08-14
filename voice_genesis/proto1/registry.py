@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from genome import VoiceGenome, from_dict, to_dict
+from genome import GenomeValidationError, VoiceGenome, from_dict, to_dict
 from hashing import sha256_of_canonical_json
 
 REGISTRY_SCHEMA = "genome-registry/0.1"
@@ -103,8 +103,44 @@ def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
         raise RegistryError(
             f"registry_schema は {REGISTRY_SCHEMA!r} でなければならない（実際: {registry_schema!r}）"
         )
+
+    # PR#261 レビュー R3(a): 埋め込み genome を genome.from_dict() で検証する
+    # （schema_version 不一致・physio_range 改ざんの検査が read 時にも効くようにする）。
+    raw_genome = data["genome"]
+    try:
+        parsed_genome = from_dict(raw_genome)
+    except GenomeValidationError as exc:
+        raise RegistryError(f"エントリの genome が不正: {exc}") from exc
+
+    # R3(b): genome_id が埋め込み genome の content hash と一致するか再検証する
+    # （genome_id はエントリの一次キーであり、genome 本体との不整合は
+    # 「別物を指すエントリ」を許してしまう改ざん経路になる）。
+    genome_id = data["genome_id"]
+    recomputed_id = genome_content_hash(parsed_genome)
+    if recomputed_id != genome_id:
+        raise RegistryError(
+            "genome_id が埋め込み genome の content hash と不一致（宣言値: "
+            f"{genome_id!r} / 再計算値: {recomputed_id!r}）"
+        )
+
+    # R3(c): エントリ直下の audit（append() が genome.audit を写した重複表現。
+    # モジュール docstring 冒頭のフィールド一覧を参照）が genome 側の audit
+    # セクションと一致するか検証する。2 箇所に同じ情報を持つ設計である以上、
+    # 食い違いを許すと「監査結果の異なる 2 通りの主張」が同一エントリに同居する。
+    entry_audit = dict(data.get("audit", {}))
+    expected_audit = {
+        "reference_set_hash": parsed_genome.audit.reference_set_hash,
+        "linkability_report_id": parsed_genome.audit.linkability_report_id,
+        "residual_gate_passed": parsed_genome.audit.residual_gate_passed,
+    }
+    if entry_audit != expected_audit:
+        raise RegistryError(
+            f"エントリの audit が genome.audit と不一致（エントリ側: {entry_audit!r} / "
+            f"genome 側: {expected_audit!r}）"
+        )
+
     return RegistryEntry(
-        genome_id=data["genome_id"],
+        genome_id=genome_id,
         version=data["version"],
         created_at=data["created_at"],
         parents=list(data.get("parents", [])),
@@ -113,8 +149,8 @@ def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
         renderer_version=data.get("renderer_version", RENDERER_VERSION),
         feature_set_version=data.get("feature_set_version", FEATURE_SET_VERSION),
         eval=dict(data.get("eval", {})),
-        audit=dict(data.get("audit", {})),
-        genome=data["genome"],
+        audit=entry_audit,
+        genome=raw_genome,
         registry_schema=registry_schema,
     )
 

@@ -7,6 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import json
+
 import pytest
 
 import registry as r
@@ -177,3 +179,89 @@ def test_entry_from_dict_rejects_unknown_registry_schema(registry_path):
 
     with pytest.raises(r.RegistryError):
         reg.load_all()
+
+
+# --- PR#261 レビュー R3: エントリ内 genome の検証 / genome_id・audit 整合 ----
+
+
+def _load_single_entry_dict(registry_path):
+    line = registry_path.read_text(encoding="utf-8").strip()
+    return json.loads(line)
+
+
+def _write_single_entry_dict(registry_path, data):
+    registry_path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_entry_from_dict_rejects_embedded_genome_with_invalid_schema_version(registry_path):
+    """R3(a): エントリ内 genome を genome.from_dict() で検証するため、
+    genome 側の schema_version 不正がロード時に検出される。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    data = _load_single_entry_dict(registry_path)
+    data["genome"]["schema_version"] = "voice-genome/9.9"
+    _write_single_entry_dict(registry_path, data)
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
+def test_entry_from_dict_rejects_embedded_genome_with_tampered_physio_range(registry_path):
+    """R3(a): genome.from_dict() 経由の physio_range 再計算検証（PR#261 C5）が
+    registry の読み込み経路でも効くことを確認する。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    data = _load_single_entry_dict(registry_path)
+    # 実パラメータとは無関係な偽の out_of_physio_range=True を宣言する。
+    data["genome"]["physio_range"]["out_of_physio_range"] = True
+    data["genome"]["physio_range"]["violated_bounds"] = ["bogus.field"]
+    _write_single_entry_dict(registry_path, data)
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
+def test_entry_from_dict_rejects_genome_id_mismatch_with_content_hash(registry_path):
+    """R3(b): genome_id が埋め込み genome の content hash と一致しないエントリを拒否する。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    entry = reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    data = _load_single_entry_dict(registry_path)
+    assert data["genome_id"] == entry.genome_id
+    data["genome_id"] = "deadbeef0000"  # 実 content hash とは異なる 12 桁 hex
+    _write_single_entry_dict(registry_path, data)
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
+def test_entry_from_dict_rejects_audit_mismatch_with_genome_audit(registry_path):
+    """R3(c): エントリ直下の audit（append() が genome.audit を写した重複表現）が
+    genome 側の audit セクションと食い違う場合を拒否する。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    data = _load_single_entry_dict(registry_path)
+    # genome.audit は sampler.sample() の既定で全 None。エントリ側だけ改ざんする。
+    data["audit"]["residual_gate_passed"] = True
+    _write_single_entry_dict(registry_path, data)
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
+def test_committed_final_genome_registry_passes_r3_validation():
+    """コミット済み results_final/genome_registry.jsonl が R3 の新検証
+    （genome 埋め込み検証・genome_id/content-hash 一致・audit 一致）を通ることの
+    回帰ガード。通らなくなった場合は成果物側ではなくコード側の不具合を疑うこと
+    （PR#261 レビュー R3 指示）。"""
+    committed_path = Path(__file__).resolve().parent.parent / "results_final" / "genome_registry.jsonl"
+    reg = r.GenomeRegistry(committed_path)
+    entries = reg.load_all()
+    assert len(entries) == 4

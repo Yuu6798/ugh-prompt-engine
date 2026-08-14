@@ -2112,7 +2112,7 @@
         "seed": 404
       }
     ],
-    "registry_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/25b1c9f3-afe0-5eb2-9e04-42b5b18e7be2/scratchpad/proto1/results_final/_scratch_registry_run1.jsonl"
+    "registry_path": "voice_genesis/proto1/results_final/_scratch_registry_run1.jsonl"
   },
   "run_2": {
     "genomes": {
@@ -4185,7 +4185,7 @@
         "seed": 404
       }
     ],
-    "registry_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/25b1c9f3-afe0-5eb2-9e04-42b5b18e7be2/scratchpad/proto1/results_final/genome_registry.jsonl"
+    "registry_path": "voice_genesis/proto1/results_final/genome_registry.jsonl"
   },
   "schema": "proto1-e2e-demo/1",
   "selected_pass_genome_for_wav": {
