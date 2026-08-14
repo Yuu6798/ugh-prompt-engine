@@ -2,7 +2,7 @@
 
 ## Phase
 
-2026-08-14、**M2e は r0–r7 全段階完了**: r7 evaluate 完走（store_B 1280/1280・逸脱 4 件裁定済み）→ census C5 パス（`census.json` sha256 0e2cc789…・トリップワイヤ両アーム pass・repeats bit 一致）→ **破断曲線の判読 dated 記録**（`docs/measurements/m2e_2026-08/m2e_r7_breakdown_curve_record_2026-08-14.md`。direct の膝 = 0dB と −6dB の間・劣化主因 = voicing recall・stem 4 点は全て direct 超え。**昇格宣言なし・M4 G2 非解錠**）。r7 実行中の主要イベント: m06 argparse blocker → PR #259（`--level` 連結形 + 等価表 5cc0→2b23→b3bf 再束縛・既測 960 セル無損失)、B4ms クレジット枯渇スロットル（×4.7 プラトー）の特定と運転則単純化、evaluator 均質化の再 evaluate（resume 全数・再測定 0）。closeout PR = **#260（census 生データ + 判読記録・レビュー対応中）**。Intent Graph v0 は frontier = `intent.ai_score`・blocked = melody 系 3 ノード（m3d 起因）のまま、`extraction.dominance_break_curve` は verified へ遷移（#260）。**次の主戦線 = (1) #260 マージ → M2e §12 User 決裁（実運用帯素材: ①宣言素材限定 or ②MedleyDB 申請再開）、(2) Intent Graph ループ 1 周目 = intent.ai_score の E2E 受け入れ条件定義（Design Memo 起草済み・実装待ち）**。
+2026-08-14、**M2e closeout 完了（PR #260 マージ）= r0–r7 全段階終結**: census C5 パス（`census.json` sha256 0e2cc789…・1280/1280・トリップワイヤ両アーム pass・repeats bit 一致）+ **破断曲線の判読 dated 記録**（`docs/measurements/m2e_2026-08/m2e_r7_breakdown_curve_record_2026-08-14.md`。direct の膝 = 0dB と −6dB の間・劣化主因 = voicing recall・stem 4 点は全て direct 超え。**昇格宣言なし・M4 G2 非解錠**）が main 編入済み。#260 の Codex P2×3 は全採用（逸脱台帳を判読記録 §6 に正本新設 = DEVIATION 転記漏れの正直会計 / 正典 4 面同期 / 同語ファミリー掃討終端）。Intent Graph v0 は frontier = `intent.ai_score`・blocked = melody 系 3 ノード(m3d 起因)のまま、`extraction.dominance_break_curve` は **verified**（#260）。**次の主戦線 = (1) M2e §12 User 決裁（実運用帯素材: ①宣言素材限定 or ②MedleyDB 申請再開。材料 = 膝が 0dB〜−6dB 間で clear_lead 帯は膝から遠い）、(2) Intent Graph ループ 1 周目 = intent.ai_score の E2E 受け入れ条件定義（Design Memo 起草済み・実装待ち）**。
 
 ## Next-Issue Queue
 
@@ -33,8 +33,8 @@
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #260 | docs(m2e): r7 完了 — census 1280/1280 の生データ + 破断曲線の dated 記録（M2e closeout）。膝=0dB〜−6dB 間・主因=voicing recall・stem 4 点全て direct 超え・昇格宣言なし。Codex P2×3 全採用（逸脱台帳 §6 正本新設 / 正典 4 面同期 / README 現況文掃討終端）。intent graph: dominance_break_curve→verified | 2026-08-14 | M2e closeout |
+| #259 | fix(m2e): m06 argparse blocker 是正 — 測り直し子プロセスの `--level` を連結形へ（先頭ダッシュ水準の argparse 失敗）+ librosa <1.0 pin + 等価表 5cc0→2b23→b3bf 再束縛（既測 960 セル無損失） | 2026-08-14 | M2e r7 |
 | #258 | docs(m2e): r7 裁定 memo を測定セッション仕様へ整合 — 停止規則を arm 正規化 3×median（direct 65s→195s / stem 300s→900s・逐語 §8.1）へ差し替え+口頭裁定 4 件（step0 受理条件/二段起動/store_B 点検基準①〜⑧/argparse 逸脱）の書面正本化+再開ループ堅牢化（会計移入ゲート/耐久点検判定/上書きセル捕捉）+HANDOFF/README 入口 supersession。Codex P2 13 件=採用 10・部分 3（境界宣言 1 回）。m2-harness 35 分 timeout cancelled は既知事象のまま User マージ | 2026-08-11 | M2e r7 |
 | #257 | docs: AGENTS.md §8「正典台帳への起草は一次ソース照合必須」編入（+鮮度照合追記=一次ソース+後続 git 履歴の組）+ M2e r7 blocker 設計裁定 memo（PR #254 是正の事後追認 4 点+予算承認 335 s/cell・run 上限 18/72+再開レシピ）+ stale 掃討 6 ファイル。Codex P2 9 件全採用（境界宣言 1 回で階段終端） | 2026-08-11 | AGENTS.md §8 / M2e r7 |
 | #256 | feat: Intent Graph v0 — 充足/不足のポインタ台帳（docs/intent/graph.yaml・31 ノード・evidence 必須・dead⇒reentry/partial⇒note）+ frontier/blocked 導出 CLI `svprpe intent-status`。設計=Fable/実装=Sonnet の Claude 完結ルートで Codex 9R P2 15 件（採用 14・部分 1）を同日処理・マージ。第 4R 以降のデータ正確性監査 6 件全的中（**r7 blocker 停止の発見**・structure チャネル帰属・fixity/corpus 混同・key 降格）→ 一次ソース照合で全訂正。ハードニング=重複キー拒否/evidence 封じ込め/参照文法 fullmatch/Tuple 不変化/空白メタデータ拒否（ファミリー終端宣言） | 2026-08-10 | Intent Graph v0 |
-| #255 | docs(m3d): melody トラック closeout — v1/v2 校正実測記録 + 判定 doc + G2 設計判定の記録。v1 凍結拒否(観測律速: 観測ゲート phrase_count<2 が positive 46/48 支配)+ v2 census survivor 3/40 の二重 fail-closed 終端を User 決裁で closeout 化(M4 不点灯恒久・L0c 非解禁=L 系列完結)。Codex 14 巡 36 スレッド(採用 27/部分 3/不採用・見送り 6=終端宣言 5 種)。正直会計 2 段是正(98/98→66/66→段階別 60/2/4)。merge commit 方式で順序証明を main 保存 | 2026-08-10 | M3d closeout |
-| #252 | feat(m3d): 校正実測の事前登録 — pairs manifest builder + 98対 manifest + 実行設計。孤児 commit d4e2eea をトピックブランチへ載せ替え同日マージ。Codex 12R 29 指摘=採用 28（二分割案はハーネス構成契約との矛盾実測で evaluator material 別会計へ設計転換・同一バイト原則を全入力へ強制・pin 検証の run→evaluate 強制チェーン・rhythm 負例是正・起動数 180→460 訂正）。テスト 13→296 passed | 2026-08-08 | M3d 手順 1/5 |
