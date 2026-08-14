@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -101,3 +102,47 @@ def test_gate2_plausibility_passes_when_all_r_median_finite_and_above_threshold(
     assert g2["n_violations"] == 0
     assert g2["pass"] is True
     assert not math.isnan(g2["n_violations"])
+
+
+# --- PR#261 レビュー R20: gate3 の期待子音インスタンス欠落検出 --------------
+
+
+def test_gate3_consonant_existence_all_four_voices():
+    """非退行確認: 既存 4 音源(voice_a〜d)は新しい期待値照合ロジックでも
+    引き続き pass する。"""
+    for name, fn in {
+        "voice_a": rs.voice_a, "voice_b": rs.voice_b, "voice_c": rs.voice_c, "voice_d": rs.voice_d,
+    }.items():
+        result = rs.render_sakura(fn())
+        g3 = gc.gate3_consonant_existence(result)
+        assert g3["pass"], (name, g3)
+        assert g3["n_missing"] == 0
+        assert g3["n_expected"] > 0  # 前提確認: 楽譜側に検査対象の子音が実在する
+
+
+def test_gate3_consonant_existence_detects_fully_missing_onset():
+    """/k/ の子音サブセグメントが全欠落した場合を模擬し、旧実装（レンダラの
+    実出力だけを走査）では検出できなかった検出力欠陥(PR#261 R20)を塞げて
+    いることを確認する。全 /k/ インスタンスが subsegments_out から失われて
+    いても、他ノートが全て pass すれば gate3 全体が pass してしまっていた。
+    """
+    result = rs.render_sakura(rs.voice_a())
+    g3_before = gc.gate3_consonant_existence(result)
+    assert g3_before["pass"] is True  # 前提確認: 欠落注入前は pass する
+    k_expected = [n for n, o in _expected_onset_keys(result) if o == "k"]
+    assert k_expected, "この楽譜には /k/ を持つノートが少なくとも 1 つ含まれるはず"
+
+    # /k/ の burst サブセグメントだけをレンダラ出力から取り除く（他の onset は無傷）。
+    filtered_subsegs = [s for s in result.subsegments_out if not (s.onset == "k" and s.noise_type == "burst_k")]
+    assert len(filtered_subsegs) < len(result.subsegments_out)  # 前提確認: 実際に除去された
+    tampered = replace(result, subsegments_out=filtered_subsegs)
+
+    g3_after = gc.gate3_consonant_existence(tampered)
+    assert g3_after["pass"] is False
+    assert g3_after["n_missing"] >= 1
+    assert all(m["onset"] == "k" for m in g3_after["missing"])
+
+
+def _expected_onset_keys(result):
+    target_onsets = {"s", "k", "t"}
+    return [(i, seg.note.mora.onset) for i, seg in enumerate(result.segments) if seg.note.mora.onset in target_onsets]

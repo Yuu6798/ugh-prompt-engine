@@ -269,6 +269,12 @@ class LinkabilityResult:
     nearest_e2_name: str
     passed: bool
     margin: float
+    # PR#261 レビュー R21: 候補/参照ベクトルまたは算出距離が非有限で監査
+    # 自体が実行できなかった場合に False。`passed=False` と常に対で立つが、
+    # 「正しく監査して不合格」（linkability_fail）と「監査不能」
+    # （measurement_invalid）を呼び出し側 `run_genesis()` の淘汰理由で
+    # 区別するためのフラグ。既定 True（従来どおりの正常監査）。
+    measurement_valid: bool = True
 
 
 def _reference_gallery_vectors() -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
@@ -298,12 +304,41 @@ def _reference_gallery_vectors() -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
 
 
 def linkability_audit(candidate_vec: Tuple[np.ndarray, np.ndarray], reference: Dict[str, Tuple[np.ndarray, np.ndarray]]) -> LinkabilityResult:
+    """候補 embedding が standin-gallery-v1 + voice_A/B/C/D の全既知個体から
+    十分離れている（=novelty あり）かを、最近傍距離が閾値以上かで判定する。
+
+    PR#261 レビュー R21: 候補または参照ベクトルの成分に NaN/inf が混入した
+    場合、`im.cosine_distance()` は NaN を返し得る。旧実装は
+    `if d1 < best_e1:` という単純な最小値更新ループだったため、NaN との
+    比較は常に False になり、`best_e1` は初期値の `float("inf")` のまま
+    どのループでも更新されずに終わることがあった。その結果
+    `passed = best_e1 >= LINKABILITY_THRESHOLD_E1` は `inf >= 0.01` で
+    True になり、`margin = best_e1 - THRESHOLD` は inf に張り付く。これは
+    「監査不能（測定が壊れている）」を「無限マージンで最も新規性が高い
+    個体」と取り違える fail-open であり、`select_winner`/
+    `select_final_winner_with_full_gates` の `_rank_key` は margin 最大の
+    個体を当選最優先で選ぶため、測定不能な個体がそのまま当選し得た。
+
+    候補ベクトル・各参照ベクトル・算出された各距離のいずれかが非有限
+    （NaN/inf）であれば、その時点で「監査不能」と判定し即座に
+    `passed=False`（呼び出し元 `run_genesis()` はこれを "linkability_fail"
+    として淘汰するのではなく "measurement_invalid" として区別して記録する）
+    ・`margin=-inf`（margin ランキングでどの正常な候補よりも絶対に劣後する
+    番兵値）を返す。
+    """
     cand_e1, cand_e2 = candidate_vec
+    if not (np.all(np.isfinite(cand_e1)) and np.all(np.isfinite(cand_e2))):
+        return LinkabilityResult(float("nan"), float("nan"), "", "", False, float("-inf"), measurement_valid=False)
+
     best_e1, best_e1_name = float("inf"), ""
     best_e2, best_e2_name = float("inf"), ""
     for name, (ref_e1, ref_e2) in reference.items():
+        if not (np.all(np.isfinite(ref_e1)) and np.all(np.isfinite(ref_e2))):
+            return LinkabilityResult(float("nan"), float("nan"), name, name, False, float("-inf"), measurement_valid=False)
         d1 = im.cosine_distance(cand_e1, ref_e1)
         d2 = im.cosine_distance(cand_e2, ref_e2)
+        if not (np.isfinite(d1) and np.isfinite(d2)):
+            return LinkabilityResult(float(d1), float(d2), name, name, False, float("-inf"), measurement_valid=False)
         if d1 < best_e1:
             best_e1, best_e1_name = d1, name
         if d2 < best_e2:
@@ -493,6 +528,10 @@ def run_genesis(verbose: bool = True) -> GenesisRun:
         link_results[c.candidate_id] = link
         if link.passed:
             passed_link.append(c)
+        elif not link.measurement_valid:
+            # PR#261 レビュー R21: 「正しく監査して不合格」と「監査自体が
+            # 実行できなかった」を淘汰理由レベルで区別する。
+            culled.append((c, "measurement_invalid"))
         else:
             culled.append((c, "linkability_fail"))
 
@@ -509,7 +548,14 @@ def run_genesis(verbose: bool = True) -> GenesisRun:
                     continue
                 v2 = per_candidate_vec[c2.candidate_id][space]
                 dists.append(im.cosine_distance(v, v2))
-            out[c.candidate_id] = float(min(dists)) if dists else float("nan")
+            # PR#261 レビュー R21 同型掃討: Python 組込み min() は NaN を
+            # 含むリストで引数の順序依存の挙動をする（例: min([nan, 5])==nan
+            # だが min([5, nan])==5 — 2 つ目以降の NaN は無条件に無視され
+            # 得る）。survivors_candidates は本関数の呼び出し前に
+            # `linkability_audit()` の非有限拒否を通過済みのため現状は
+            # 到達しないはずだが、np.min（順序に依らず NaN を伝播する）に
+            # 揃えて多層防御する。
+            out[c.candidate_id] = float(np.min(dists)) if dists else float("nan")
         return out
 
     nn_e1 = nn_distances(0)

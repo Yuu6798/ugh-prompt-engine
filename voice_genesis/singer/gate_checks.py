@@ -137,10 +137,47 @@ def _high_energy_ratio(sig: np.ndarray, sr: int, cutoff_hz: float = 3000.0) -> f
 
 
 def gate3_consonant_existence(result: rs.RenderResult) -> Dict:
+    """gate 3: 子音の実在。
+
+    PR#261 レビュー R20: 旧実装は `result.subsegments_out`（レンダラが実際に
+    生成したサブセグメント列）だけを走査し、期待される子音インスタンスの
+    集合と一切照合していなかった。レンダラ側の不具合等で期待される子音
+    サブセグメントが 1 つも出力されなかった場合、走査対象自体が最初から
+    空になるため検出しようがなく、そのノートは黙って評価対象から外れ、
+    他のノートが全て pass すれば gate3 全体が pass してしまう検出力の
+    欠陥があった（「レンダラが出したものだけを見る」検証は「レンダラが
+    何かを出し忘れた」ケースを原理的に検出できない）。
+
+    本実装は楽譜側（`result.segments[i].note.mora.onset`。S4 score.py の
+    `build_sakura_score()` が phoneme_jp.py の `kana_to_morae()` で決めた
+    値であり、レンダラの実出力とは独立した「楽譜が何を要求しているか」の
+    情報源）から「期待子音インスタンス集合」
+    `{(note_index, onset) | onset in target_onsets}` を先に確定し、実際の
+    `subsegments_out` に対応するインスタンスが 1 つでも欠落していれば
+    無条件で FAIL とする。
+    """
     target_onsets = {"s": "fricative_high", "k": "burst_k", "t": "burst_t"}
-    rows = []
+
+    expected_keys = {
+        (i, seg.note.mora.onset)
+        for i, seg in enumerate(result.segments)
+        if seg.note.mora.onset in target_onsets
+    }
+
+    actual_by_key: Dict[tuple, object] = {}
     for sub in result.subsegments_out:
         if sub.onset not in target_onsets or sub.noise_type != target_onsets[sub.onset]:
+            continue
+        # 同一 (note_index, onset) への複数一致は現行レンダラの実装上
+        # 起こらないが、あれば先勝ちで代表させる。
+        actual_by_key.setdefault((sub.note_index, sub.onset), sub)
+
+    rows = []
+    missing = []
+    for note_index, onset in sorted(expected_keys):
+        sub = actual_by_key.get((note_index, onset))
+        if sub is None:
+            missing.append({"note_index": note_index, "onset": onset, "reason": "missing_consonant_subsegment"})
             continue
         cons_wav = result.wav[sub.start:sub.end]
         # 直後の母音区間（同ノートの残り、または次ノート開始まで）と比較
@@ -162,8 +199,11 @@ def gate3_consonant_existence(result: rs.RenderResult) -> Dict:
         )
     return {
         "threshold_ratio_of_ratios_min": CONSONANT_ENERGY_RATIO_MIN,
+        "n_expected": len(expected_keys),
         "n_checked": len(rows), "n_pass": sum(1 for r in rows if r["pass"]),
-        "details": rows, "pass": bool(rows) and all(r["pass"] for r in rows),
+        "n_missing": len(missing), "missing": missing,
+        "details": rows,
+        "pass": bool(expected_keys) and not missing and all(r["pass"] for r in rows),
     }
 
 

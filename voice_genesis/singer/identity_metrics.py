@@ -186,8 +186,12 @@ def measure_separation(voice_x_name: str, genome_x, voice_y_name: str, genome_y)
     # 分離判定: between（両フレーズ）が within（両声の中でより大きい方）を上回るか
     # [UNDERSPEC-S2-1] memo は within をどちらの voice のを使うか明記していない。
     # 両者のうち大きい方（=より厳しい基準）を採用する。
-    within_e1_max = max(within_x_e1, within_y_e1)
-    within_e2_max = max(within_x_e2, within_y_e2)
+    # PR#261 レビュー R21 同型掃討: Python 組込み max() は 2 引数のうち
+    # どちらかが NaN の場合、NaN が「後ろ」の引数だと無条件に無視される
+    # 順序依存の挙動をする（例: max(nan, 5)==nan だが max(5, nan)==5）。
+    # np.max はどちらの順序でも NaN を伝播するため、こちらに揃える。
+    within_e1_max = float(np.max([within_x_e1, within_y_e1]))
+    within_e2_max = float(np.max([within_x_e2, within_y_e2]))
 
     sep_e1_p0 = between_e1[0] > within_e1_max
     sep_e1_p1 = between_e1[1] > within_e1_max
