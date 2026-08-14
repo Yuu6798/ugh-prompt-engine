@@ -218,6 +218,25 @@ def test_entry_from_dict_rejects_missing_registry_schema_key(registry_path):
         reg.load_all()
 
 
+# --- PR#261 レビュー R14: エントリ version と genome.schema_version の整合 --
+
+
+def test_entry_from_dict_rejects_version_mismatch_with_genome_schema_version(registry_path):
+    """エントリ直下の version が埋め込み genome.schema_version と食い違う
+    改ざん/破損行を拒否する。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    data = json.loads(registry_path.read_text(encoding="utf-8").strip())
+    assert data["version"] == data["genome"]["schema_version"]  # 前提確認
+    data["version"] = "voice-genome/9.9"  # genome.schema_version とは食い違う値
+    registry_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
 # --- PR#261 レビュー R3: エントリ内 genome の検証 / genome_id・audit 整合 ----
 
 

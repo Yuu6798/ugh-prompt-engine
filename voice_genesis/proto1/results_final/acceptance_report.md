@@ -128,3 +128,13 @@ VG-008 は evaluator 機能そのものは PASS）。VG-005/VG-008 に関連す�
 not_observed につき保留」の部分的達成と判定する**。次サイクルで人間聴取
 評価（ABX 等）と実在話者ベースの identity embedding 導入（あるいはそれが
 不可能な旨の明示的な受容）が、完全成立の残りの条件になる。
+
+**2026-08-14 訂正**: 上記「2 回の独立実行で genome_id・全波形 hash・監査
+判定が完全に一致する決定論性」の記述自体（実測結果・PASS 判定）は変わら
+ないが、その決定論照合の除外フィールドは `created_at` の 1 件のみではなく
+`created_at` と `registry_path` の 2 件である。本節執筆時点では
+`results_final/e2e_run.json.determinism_check` の開示文言が前者のみを
+述べていたため、`registry_path`（run ごとに異なる一時/正本ファイルパス
+文字列。実行環境依存で内容非依存のため除外）が黙って比較対象外になって
+いる実態が本文へ反映されていなかった。詳細は `underspec_log_final.md`
+[UNDERSPEC-F-8] と PR #261 レビュー C1・R15 スレッドを参照。

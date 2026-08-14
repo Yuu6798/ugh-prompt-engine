@@ -204,6 +204,66 @@ def test_from_dict_rejects_missing_schema_version_key():
         g.from_dict(data)
 
 
+# --- PR#261 レビュー R16: 全セクション・全リーフフィールドのキー欠落拒否 ----
+
+
+@pytest.mark.parametrize(
+    "section",
+    ["name", "source", "resonance", "noise", "register", "microprosody", "range", "physio_range", "audit"],
+)
+def test_from_dict_rejects_missing_top_level_section(section):
+    """切り詰められた payload（トップレベルのセクション/name キーが欠落）を、
+    デフォルト補完せず明示的に拒否する（PR#261 レビュー R16）。"""
+    data = g.to_dict(g.build_genome("valid"))
+    del data[section]
+    assert section not in data  # 前提確認
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
+@pytest.mark.parametrize(
+    "section,leaf",
+    [
+        ("source", "tilt"),
+        ("source", "source_mode"),
+        ("resonance", "formant_scale"),
+        ("resonance", "formant_offsets"),
+        ("resonance", "bandwidth_scale"),
+        ("noise", "breathiness_base"),
+        ("noise", "register_gains"),
+        ("register", "boundaries_midi"),
+        ("register", "transition_width"),
+        ("microprosody", "vibrato_rate_hz"),
+        ("microprosody", "vibrato_depth_cents"),
+        ("microprosody", "jitter_amount"),
+        ("microprosody", "jitter_seed"),
+        ("range", "lowest_midi"),
+        ("range", "highest_midi"),
+        ("physio_range", "out_of_physio_range"),
+        ("physio_range", "violated_bounds"),
+        ("audit", "reference_set_hash"),
+        ("audit", "linkability_report_id"),
+        ("audit", "residual_gate_passed"),
+    ],
+)
+def test_from_dict_rejects_missing_leaf_field(section, leaf):
+    """切り詰められた payload（セクション内のリーフフィールドが欠落）を、
+    デフォルト補完せず明示的に拒否する（PR#261 レビュー R16）。"""
+    data = g.to_dict(g.build_genome("valid"))
+    del data[section][leaf]
+    assert leaf not in data[section]  # 前提確認
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
+def test_from_dict_accepts_full_payload_with_all_sections_and_leaves():
+    """非退行確認: 全セクション・全リーフフィールドが揃った正しい payload は
+    従来どおり受理される。"""
+    gen = g.build_genome("valid")
+    restored = g.from_dict(g.to_dict(gen))
+    assert restored == gen
+
+
 def test_from_dict_rejects_out_of_physio_range_flag_that_disagrees_with_params():
     """physio_range が実パラメータから再計算した値と一致しない文書を拒否する（C5）。
 

@@ -1,7 +1,11 @@
 {
   "determinism_check": {
-    "compared": "run_1 vs run_2, all fields except created_at",
+    "compared": "run_1 vs run_2, all fields except excluded_fields",
     "differing_paths": [],
+    "excluded_fields": {
+      "created_at": "監査/registry レポートの wall-clock 記録。実行時刻が異なるのは設計上必然（§CLAUDE.md: wall-clock 依存は created_at 記録のみ許可）。",
+      "registry_path": "PR#261 R2 で repo-relative 化した後も run_1(scratch)/run_2(正本) は異なるファイル名（_scratch_registry_run1.jsonl / genome_registry.jsonl）を指す設計であり、値そのものが run 間で一致しない。実行環境依存の絶対パス漏えい問題は repo-relative 化で解消したが、この意図的なファイル名差異自体は撤廃できないため比較対象から除外を継続する（underspec_log_final.md [UNDERSPEC-F-8]）。"
+    },
     "passed": true
   },
   "grip_reference": {

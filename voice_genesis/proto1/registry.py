@@ -121,6 +121,19 @@ def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
     except GenomeValidationError as exc:
         raise RegistryError(f"エントリの genome が不正: {exc}") from exc
 
+    # PR#261 レビュー R14: エントリ直下の version（`RegistryEntry.version`。
+    # モジュール docstring の「version / created_at(...) / ...」参照）が
+    # 埋め込み genome の schema_version と一致するか検証する。R3(c) の
+    # audit と同様、2 箇所に同じ情報（genome のスキーマ版）を持つ設計である
+    # 以上、食い違いを許すと「エントリはスキーマ版 A のつもりだが中身は
+    # 版 B」という改ざん・破損状態を検証なしで通してしまう。
+    entry_version = data["version"]
+    if entry_version != parsed_genome.schema_version:
+        raise RegistryError(
+            "エントリの version が埋め込み genome.schema_version と不一致（エントリ側: "
+            f"{entry_version!r} / genome 側: {parsed_genome.schema_version!r}）"
+        )
+
     # R3(b): genome_id が埋め込み genome の content hash と一致するか再検証する
     # （genome_id はエントリの一次キーであり、genome 本体との不整合は
     # 「別物を指すエントリ」を許してしまう改ざん経路になる）。
@@ -150,7 +163,7 @@ def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
 
     return RegistryEntry(
         genome_id=genome_id,
-        version=data["version"],
+        version=entry_version,
         created_at=data["created_at"],
         parents=list(data.get("parents", [])),
         op=data["op"],

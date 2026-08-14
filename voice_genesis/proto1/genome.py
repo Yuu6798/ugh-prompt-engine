@@ -264,6 +264,19 @@ def _require(cond: bool, msg: str) -> None:
         raise GenomeValidationError(msg)
 
 
+def _req(d: Dict[str, Any], key: str, field_name: str) -> Any:
+    """d[key] を返す。キー自体が欠落している場合は拒否する（PR#261 レビュー
+    R16: `.get(key, デフォルト値)` によるキー欠落時のデフォルト補完は、
+    「切り詰められた/古い/手編集された payload」を「全フィールドが揃った
+    正しい payload」として fail-open してしまう。デフォルト補完が許される
+    のは `build_genome()` 等の明示的コンストラクタ経路のみであり、JSON
+    からの逆直列化 (`from_dict`) では全セクション・全リーフフィールドの
+    存在を必須とする）。
+    """
+    _require(key in d, f"{field_name} キーが存在しない（欠落）")
+    return d[key]
+
+
 def _as_float(value: Any, field_name: str) -> float:
     _require(isinstance(value, (int, float)) and not isinstance(value, bool), f"{field_name} は数値でなければならない: {value!r}")
     return float(value)
@@ -301,7 +314,11 @@ def from_dict(data: Dict[str, Any]) -> VoiceGenome:
     schema_version キー自体が欠落している場合も、現行版へのデフォルト補完は
     行わず明示的に拒否する（PR#261 レビュー R12: `.get(..., SCHEMA_VERSION)`
     のフォールバックは「キー欠落」と「現行版を宣言」を区別できず、前者を
-    後者として fail-open してしまっていた）。
+    後者として fail-open してしまっていた）。同じ理由で、全セクション
+    （source/resonance/noise/register/microprosody/range/physio_range/audit）
+    と各リーフフィールドについても、キー欠落時のデフォルト補完は行わず
+    明示的に拒否する（PR#261 レビュー R16。デフォルト補完が許されるのは
+    `build_genome()` 等の明示的コンストラクタ経路のみ）。
     """
     _require(isinstance(data, dict), "genome データは dict でなければならない")
 
@@ -312,65 +329,75 @@ def from_dict(data: Dict[str, Any]) -> VoiceGenome:
         f"schema_version は {SCHEMA_VERSION!r} でなければならない（実際: {schema_version!r}）",
     )
 
-    name = _as_str(data.get("name"), "name")
+    name = _as_str(_req(data, "name", "name"), "name")
 
-    s = data.get("source", {})
+    s = _req(data, "source", "source")
     _require(isinstance(s, dict), "source は dict でなければならない")
     source = SourceSection(
-        tilt=_as_float(s.get("tilt", -10.0), "source.tilt"),
-        source_mode=_as_str(s.get("source_mode", "modal"), "source.source_mode"),
+        tilt=_as_float(_req(s, "tilt", "source.tilt"), "source.tilt"),
+        source_mode=_as_str(_req(s, "source_mode", "source.source_mode"), "source.source_mode"),
     )
 
-    r = data.get("resonance", {})
+    r = _req(data, "resonance", "resonance")
     _require(isinstance(r, dict), "resonance は dict でなければならない")
     resonance = ResonanceSection(
-        formant_scale=_as_float(r.get("formant_scale", 1.0), "resonance.formant_scale"),
+        formant_scale=_as_float(_req(r, "formant_scale", "resonance.formant_scale"), "resonance.formant_scale"),
         formant_offsets=_as_float_tuple(
-            r.get("formant_offsets", [0.0, 0.0, 0.0, 0.0]), "resonance.formant_offsets", 4
+            _req(r, "formant_offsets", "resonance.formant_offsets"), "resonance.formant_offsets", 4
         ),
-        bandwidth_scale=_as_float(r.get("bandwidth_scale", 1.0), "resonance.bandwidth_scale"),
+        bandwidth_scale=_as_float(_req(r, "bandwidth_scale", "resonance.bandwidth_scale"), "resonance.bandwidth_scale"),
     )
 
-    n = data.get("noise", {})
+    n = _req(data, "noise", "noise")
     _require(isinstance(n, dict), "noise は dict でなければならない")
     noise = NoiseSection(
-        breathiness_base=_as_float(n.get("breathiness_base", 0.05), "noise.breathiness_base"),
+        breathiness_base=_as_float(_req(n, "breathiness_base", "noise.breathiness_base"), "noise.breathiness_base"),
         register_gains=_as_float_tuple(
-            n.get("register_gains", [0.0, 0.08, 0.18, 0.32, 0.50]), "noise.register_gains", 5
+            _req(n, "register_gains", "noise.register_gains"), "noise.register_gains", 5
         ),
     )
 
-    reg = data.get("register", {})
+    reg = _req(data, "register", "register")
     _require(isinstance(reg, dict), "register は dict でなければならない")
     register = RegisterSection(
         boundaries_midi=_as_float_tuple(
-            reg.get("boundaries_midi", [52.0, 62.0, 74.0, 88.0]), "register.boundaries_midi", 4
+            _req(reg, "boundaries_midi", "register.boundaries_midi"), "register.boundaries_midi", 4
         ),
-        transition_width=_as_float(reg.get("transition_width", 3.0), "register.transition_width"),
+        transition_width=_as_float(
+            _req(reg, "transition_width", "register.transition_width"), "register.transition_width"
+        ),
     )
 
-    mp = data.get("microprosody", {})
+    mp = _req(data, "microprosody", "microprosody")
     _require(isinstance(mp, dict), "microprosody は dict でなければならない")
     microprosody = MicroprosodySection(
-        vibrato_rate_hz=_as_float(mp.get("vibrato_rate_hz", 5.5), "microprosody.vibrato_rate_hz"),
-        vibrato_depth_cents=_as_float(mp.get("vibrato_depth_cents", 45.0), "microprosody.vibrato_depth_cents"),
-        jitter_amount=_as_float(mp.get("jitter_amount", 0.006), "microprosody.jitter_amount"),
-        jitter_seed=_as_int(mp.get("jitter_seed", 0), "microprosody.jitter_seed"),
+        vibrato_rate_hz=_as_float(
+            _req(mp, "vibrato_rate_hz", "microprosody.vibrato_rate_hz"), "microprosody.vibrato_rate_hz"
+        ),
+        vibrato_depth_cents=_as_float(
+            _req(mp, "vibrato_depth_cents", "microprosody.vibrato_depth_cents"), "microprosody.vibrato_depth_cents"
+        ),
+        jitter_amount=_as_float(
+            _req(mp, "jitter_amount", "microprosody.jitter_amount"), "microprosody.jitter_amount"
+        ),
+        jitter_seed=_as_int(_req(mp, "jitter_seed", "microprosody.jitter_seed"), "microprosody.jitter_seed"),
     )
 
-    rg = data.get("range", {})
+    rg = _req(data, "range", "range")
     _require(isinstance(rg, dict), "range は dict でなければならない")
     range_ = RangeSection(
-        lowest_midi=_as_float(rg.get("lowest_midi", 36.0), "range.lowest_midi"),
-        highest_midi=_as_float(rg.get("highest_midi", 96.0), "range.highest_midi"),
+        lowest_midi=_as_float(_req(rg, "lowest_midi", "range.lowest_midi"), "range.lowest_midi"),
+        highest_midi=_as_float(_req(rg, "highest_midi", "range.highest_midi"), "range.highest_midi"),
     )
 
-    pr = data.get("physio_range", {})
+    pr = _req(data, "physio_range", "physio_range")
     _require(isinstance(pr, dict), "physio_range は dict でなければならない")
-    vb = pr.get("violated_bounds", [])
+    vb = _req(pr, "violated_bounds", "physio_range.violated_bounds")
     _require(isinstance(vb, (list, tuple)), "physio_range.violated_bounds はリストでなければならない")
     physio_range = PhysioRangeSection(
-        out_of_physio_range=_as_bool(pr.get("out_of_physio_range", False), "physio_range.out_of_physio_range"),
+        out_of_physio_range=_as_bool(
+            _req(pr, "out_of_physio_range", "physio_range.out_of_physio_range"), "physio_range.out_of_physio_range"
+        ),
         violated_bounds=tuple(_as_str(v, "physio_range.violated_bounds[]") for v in vb),
     )
     recomputed_physio_range = compute_physio_range(source, resonance, noise, register, microprosody)
@@ -383,13 +410,13 @@ def from_dict(data: Dict[str, Any]) -> VoiceGenome:
         f"violated_bounds={recomputed_physio_range.violated_bounds!r}）",
     )
 
-    au = data.get("audit", {})
+    au = _req(data, "audit", "audit")
     _require(isinstance(au, dict), "audit は dict でなければならない")
-    ref_hash = au.get("reference_set_hash")
+    ref_hash = _req(au, "reference_set_hash", "audit.reference_set_hash")
     _require(ref_hash is None or isinstance(ref_hash, str), "audit.reference_set_hash は str か null")
-    link_id = au.get("linkability_report_id")
+    link_id = _req(au, "linkability_report_id", "audit.linkability_report_id")
     _require(link_id is None or isinstance(link_id, str), "audit.linkability_report_id は str か null")
-    residual = au.get("residual_gate_passed")
+    residual = _req(au, "residual_gate_passed", "audit.residual_gate_passed")
     _require(residual is None or isinstance(residual, bool), "audit.residual_gate_passed は bool か null")
     audit = AuditSection(reference_set_hash=ref_hash, linkability_report_id=link_id, residual_gate_passed=residual)
 
