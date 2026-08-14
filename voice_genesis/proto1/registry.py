@@ -43,6 +43,10 @@ class DuplicateGenomeError(RegistryError):
     """append 時に既存 genome_id と衝突した（PR#261 レビュー C3）。"""
 
 
+class MissingParentError(RegistryError):
+    """parents が registry に存在しない genome_id を指している（PR#261 レビュー R10）。"""
+
+
 def genome_content_hash(genome: VoiceGenome) -> str:
     """内容 sha256 の先頭 12 桁（genome_id）。"""
     return sha256_of_canonical_json(to_dict(genome))[:12]
@@ -187,6 +191,18 @@ class GenomeRegistry:
             raise DuplicateGenomeError(
                 f"genome_id は既にレジストリに存在するため追記を拒否する（実際: {genome_id!r}）"
             )
+
+        # PR#261 レビュー R10(a): parents の各 ID が既に registry に存在する
+        # ことを検証する。存在しない親を指すエントリを許すと、lineage() が
+        # 遡上を完走できない（親が見つからず途中で打ち切られる）来歴の欠損を
+        # 作ってしまう。
+        parent_ids = list(parents or [])
+        for parent_id in parent_ids:
+            if self.get(parent_id) is None:
+                raise MissingParentError(
+                    f"parents に registry 未登録の genome_id が含まれる（実際: {parent_id!r}）"
+                )
+
         created_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
 
         eval_scores = eval_scores or {"plausibility": None, "grip_ref": None, "novelty": None}
@@ -200,7 +216,7 @@ class GenomeRegistry:
             genome_id=genome_id,
             version=genome.schema_version,
             created_at=created_at,
-            parents=list(parents or []),
+            parents=parent_ids,
             op=op,
             seed=seed,
             renderer_version=RENDERER_VERSION,
@@ -223,6 +239,15 @@ class GenomeRegistry:
         手動修復等）に重複が紛れ込んだ場合、`get()`/`lineage()` が末尾優先で
         暗黙に解決してしまうと来歴が黙って上書きされたように見える危険が
         append() 単体の防御では防ぎきれない。ロード時にも同じ規律を敷く。
+
+        また append-only ストアの順序不変条件「親は自エントリより前に出現
+        していること」も検証する（PR#261 レビュー R10(b)）。`append()`
+        自体は R10(a) で親の存在を書き込み時に確認するが、それは append()
+        経由の書き込みしか守らない。直接編集・結合された JSONL ファイルの
+        行順が入れ替わった場合、`lineage()` の親鎖遡上が意味を失う
+        （by_id 辞書には全件揃うため見た目は動くが、「先に生まれた親が
+        後から追記される」という append-only の意味論そのものが壊れている）
+        ため、ロード時にも同じ規律を敷く。
         """
         if not self.path.exists():
             return []
@@ -238,6 +263,12 @@ class GenomeRegistry:
                     raise DuplicateGenomeError(
                         f"registry に重複 genome_id を検出（実際: {entry.genome_id!r}）"
                     )
+                for parent_id in entry.parents:
+                    if parent_id not in seen_ids:
+                        raise MissingParentError(
+                            f"genome_id={entry.genome_id!r} の親 {parent_id!r} が自エントリより"
+                            "前に出現していない（append-only の順序不変条件違反）"
+                        )
                 seen_ids.add(entry.genome_id)
                 entries.append(entry)
         return entries

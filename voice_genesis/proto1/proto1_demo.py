@@ -42,6 +42,7 @@ import probes
 import reference_set as rset
 import registry as r
 import sampler
+from hashing import sha256_of_file
 
 PROTO_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = PROTO_DIR / "results_final"
@@ -226,6 +227,31 @@ def _save_wav(sig: np.ndarray, path: Path, sr: int) -> None:
     sf.write(str(path), sig.astype(np.float32), sr)
 
 
+def _save_wav_with_digest(sig: np.ndarray, staging_path: Path, sr: int) -> Dict[str, Any]:
+    """WAV を staging_path へ書き、`soundfile` の出力自体が決定論であることを
+    2 回書き比較で確認した上で、ファイルバイトの sha256 を返す（PR#261
+    レビュー R11）。
+
+    `probes.full_manifest()` の波形 hash（`hashing.sha256_of_waveform`）は
+    メモリ上の float32 生サンプルを対象とし、run_1/run_2 の genome 比較を
+    通じて既に決定論性が確認されている。本関数はそれとは別の主張——
+    「同一 numpy 配列を `soundfile.write()` へ渡したとき、書き出される
+    ファイルバイト列（WAV ヘッダ込み）自体も毎回同一になる」——を、同じ
+    配列を 2 回書いてファイル digest を比較することで直接検証する。
+    """
+    _save_wav(sig, staging_path, sr)
+    digest_1 = sha256_of_file(staging_path)
+
+    # soundfile はファイル拡張子から format を推定するため、拡張子は .wav の
+    # まま保つ（末尾に非 .wav サフィックスを足すと format 推定に失敗する）。
+    verify_path = staging_path.with_name(staging_path.stem + ".write_verify.wav")
+    _save_wav(sig, verify_path, sr)
+    digest_2 = sha256_of_file(verify_path)
+    verify_path.unlink()  # 比較専用の一時ファイル。成果物ではないので残さない
+
+    return {"sha256": digest_1, "write_determinism_check": {"stable": digest_1 == digest_2, "digest_2": digest_2}}
+
+
 def _repo_relative_path(path: Path) -> str:
     """path を repo root からの相対パス文字列（POSIX 区切り）で返す（PR#261 レビュー R2）。
 
@@ -259,6 +285,43 @@ def _publish_outputs(replacements: List[Tuple[Path, Path]]) -> None:
     """
     for staging_path, final_path in replacements:
         os.replace(staging_path, final_path)
+
+
+def _publish_or_fail_closed(
+    determinism_passed: bool,
+    e2e_record: Dict[str, Any],
+    registry_replacement: Tuple[Path, Path],
+    wav_publish: List[Tuple[Path, Path]],
+    staging_out_path: Path,
+    out_path: Path,
+    diagnostics_path: Path,
+) -> None:
+    """決定論比較の成否で publish フェーズ呼び出しを門番化する（PR#261 レビュー R8）。
+
+    `determinism_passed` が False の場合、`_publish_outputs()` を一度も
+    呼ばない（＝正本一式 registry/WAV/e2e_run.json は完全に旧状態のまま
+    残る）。代わりに失敗診断（`e2e_record` 全体。run_1/run_2・
+    `differing_paths` を含む）を非正本パス `diagnostics_path` へ書き、
+    `SystemExit` で終了する。
+
+    `determinism_passed` が True の場合のみ `e2e_record` を
+    `staging_out_path` へ書き、registry・WAV・e2e_run.json を
+    `_publish_outputs()` で一括公開する。
+    """
+    if not determinism_passed:
+        diagnostics_path.write_text(
+            json.dumps(e2e_record, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8"
+        )
+        raise SystemExit(
+            "determinism check FAILED — canonical results_final/ outputs were NOT modified "
+            f"(publish フェーズは呼ばれていない)。see {diagnostics_path.name}."
+            "determinism_check.differing_paths for details"
+        )
+
+    staging_out_path.write_text(
+        json.dumps(e2e_record, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8"
+    )
+    _publish_outputs([registry_replacement] + wav_publish + [(staging_out_path, out_path)])
 
 
 def main() -> None:
@@ -325,10 +388,11 @@ def main() -> None:
             selected_key = key
             break
 
-    wav_paths: Dict[str, str] = {}
+    wav_paths: Dict[str, Dict[str, Any]] = {}
     # (staging_path, final_path) の公開待ちリスト。publish フェーズでまとめて
     # os.replace する（PR#261 レビュー R1）。
     wav_publish: List[Tuple[Path, Path]] = []
+    wav_write_stable_flags: List[bool] = []
     if selected_key is not None:
         selected_genome_dict = run_2["genomes"][selected_key]["genome"]
         selected_genome = g.from_dict(selected_genome_dict)
@@ -338,23 +402,34 @@ def main() -> None:
         phrase_sig = np.concatenate(phrase_result.waveforms)
         phrase_final = RESULTS_DIR / f"prototype1_phrase_{genome_id}.wav"
         phrase_staging = RESULTS_DIR / f"_staging_prototype1_phrase_{genome_id}.wav"
-        _save_wav(phrase_sig, phrase_staging, bridge.SR)
+        phrase_digest = _save_wav_with_digest(phrase_sig, phrase_staging, bridge.SR)
         wav_publish.append((phrase_staging, phrase_final))
-        wav_paths["phrase"] = str(phrase_final.relative_to(PROTO_DIR))
+        wav_write_stable_flags.append(phrase_digest["write_determinism_check"]["stable"])
+        wav_paths["phrase"] = {"path": str(phrase_final.relative_to(PROTO_DIR)), **phrase_digest}
 
         cross_result = probes.render_probe(selected_genome, "cross_range")
         gap = np.zeros(int(0.15 * bridge.SR), dtype=np.float64)
         cross_sig = np.concatenate([cross_result.waveforms[0], gap, cross_result.waveforms[1]])
         cross_final = RESULTS_DIR / f"prototype1_cross_range_pair_{genome_id}.wav"
         cross_staging = RESULTS_DIR / f"_staging_prototype1_cross_range_pair_{genome_id}.wav"
-        _save_wav(cross_sig, cross_staging, bridge.SR)
+        cross_digest = _save_wav_with_digest(cross_sig, cross_staging, bridge.SR)
         wav_publish.append((cross_staging, cross_final))
-        wav_paths["cross_range_pair"] = str(cross_final.relative_to(PROTO_DIR))
+        wav_write_stable_flags.append(cross_digest["write_determinism_check"]["stable"])
+        wav_paths["cross_range_pair"] = {"path": str(cross_final.relative_to(PROTO_DIR)), **cross_digest}
 
         print(f"[proto1_demo] selected genome '{selected_key}' ({genome_id}) for WAV export "
               f"(linkability overall_pass=True)")
     else:
         print("[proto1_demo] WARNING: no genome passed linkability audit in run_2; no WAV exported")
+
+    # PR#261 レビュー R11: WAV ファイル自体の書き出し（soundfile シリアライズ）
+    # が決定論であることを、決定論比較（determinism_check）の確認対象に含める。
+    # 選択個体が無く WAV を 1 件も出力しなかった場合は vacuously stable = True。
+    wav_writes_stable = all(wav_write_stable_flags) if wav_write_stable_flags else True
+    determinism_passed = determinism_passed and wav_writes_stable
+    if not wav_writes_stable:
+        print("[proto1_demo] WARNING: WAV file write determinism check FAILED "
+              "(soundfile.write() produced different bytes for the same array across 2 writes)")
 
     # --- e2e_run.json 組み立て（staging へ書く。公開はまだしない） -----------
     report_generated_at = datetime.now(timezone.utc).isoformat()
@@ -376,7 +451,10 @@ def main() -> None:
         "run_1": run_1,
         "run_2": run_2,
         "determinism_check": {
-            "compared": "run_1 vs run_2, all fields except excluded_fields",
+            "compared": (
+                "(a) run_1 vs run_2, all fields except excluded_fields; "
+                "(b) WAV export write determinism (PR#261 R11, see wav_write_determinism)"
+            ),
             "excluded_fields": {
                 "created_at": (
                     "監査/registry レポートの wall-clock 記録。実行時刻が異なるのは"
@@ -393,6 +471,15 @@ def main() -> None:
             },
             "passed": determinism_passed,
             "differing_paths": differing_paths,
+            "wav_write_determinism": {
+                "note": (
+                    "各 WAV は書き出し直後にもう一度同一配列を別ファイルへ書き、"
+                    "sha256 が一致することを確認した（soundfile.write() 自体が"
+                    "決定論的にファイルへシリアライズすることの証明。PR#261 R11）。"
+                    "詳細は各 WAV エントリの write_determinism_check を参照。"
+                ),
+                "all_wav_writes_stable": wav_writes_stable,
+            },
         },
         "selected_pass_genome_for_wav": {
             "genome_key": selected_key,
@@ -409,25 +496,33 @@ def main() -> None:
 
     out_path = RESULTS_DIR / "e2e_run.json"
     staging_out_path = RESULTS_DIR / "_staging_e2e_run.json"
-    staging_out_path.write_text(
-        json.dumps(e2e_record, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8"
-    )
+    diagnostics_path = RESULTS_DIR / "_failed_run_diagnostics.json"
 
     # --- Publish フェーズ: registry・WAV・e2e_run.json の全てが staging に
     # 揃った、ここまでの工程が例外なく完走した場合にのみ、正本へ一括公開する
     # （PR#261 レビュー R1）。それより前段（run_2/監査/WAV レンダ/e2e_record
     # 組み立て）のどこかで例外が起きた場合、_publish_outputs は一度も呼ばれず
     # 正本一式（registry / WAV / e2e_run.json）は完全に旧状態のまま残る。
-    print("[proto1_demo] publishing staged outputs...")
-    _publish_outputs(
-        [(staging_registry_path, final_registry_path)]
-        + wav_publish
-        + [(staging_out_path, out_path)]
+    #
+    # さらに determinism_passed が False の場合も _publish_or_fail_closed()
+    # が publish フェーズ呼び出しそのものを門番化し、正本を一切置換せず
+    # 失敗診断を非正本パスへ書いて終了する（PR#261 レビュー R8: 決定論が
+    # 崩れた実行結果を「一致しなかった」という記録付きで正本へ混入させない）。
+    if determinism_passed:
+        print("[proto1_demo] publishing staged outputs...")
+    else:
+        print(f"[proto1_demo] determinism check FAILED — canonical outputs left untouched, "
+              f"diagnostics will be written to {diagnostics_path}")
+    _publish_or_fail_closed(
+        determinism_passed,
+        e2e_record,
+        (staging_registry_path, final_registry_path),
+        wav_publish,
+        staging_out_path,
+        out_path,
+        diagnostics_path,
     )
     print(f"[proto1_demo] wrote {out_path} (total {time.time() - t_start:.1f}s)")
-
-    if not determinism_passed:
-        raise SystemExit("determinism check FAILED — see e2e_run.json.determinism_check.differing_paths")
 
 
 if __name__ == "__main__":

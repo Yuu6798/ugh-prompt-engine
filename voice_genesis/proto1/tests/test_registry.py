@@ -285,3 +285,51 @@ def test_committed_final_genome_registry_passes_r3_validation():
     reg = r.GenomeRegistry(committed_path)
     entries = reg.load_all()
     assert len(entries) == 4
+
+
+# --- PR#261 レビュー R10: parents の存在検証 / append-only 順序不変条件 -----
+
+
+def test_append_rejects_parent_id_not_in_registry(registry_path):
+    """R10(a): parents に registry 未登録の genome_id を渡すと拒否する。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    with pytest.raises(r.MissingParentError):
+        reg.append(gen, op="mutate", seed=1, parents=["0000deadbeef"], now=FIXED_TIME)
+
+    # 拒否された append は書き込まれていない。
+    assert len(reg.load_all()) == 0
+
+
+def test_missing_parent_error_is_a_registry_error(registry_path):
+    assert issubclass(r.MissingParentError, r.RegistryError)
+
+
+def test_append_accepts_parent_id_already_in_registry(registry_path):
+    """非退行確認: 既存の genome_id を親として append する通常経路は従来どおり通る。"""
+    reg = r.GenomeRegistry(registry_path)
+    parent_gen = sampler.sample(1)
+    parent_entry = reg.append(parent_gen, op="sample", seed=1, now=FIXED_TIME)
+
+    child_gen = sampler.mutate(parent_gen, seed=2, scale=0.05)
+    child_entry = reg.append(child_gen, op="mutate", seed=2, parents=[parent_entry.genome_id], now=FIXED_TIME)
+    assert child_entry.parents == [parent_entry.genome_id]
+
+
+def test_load_all_rejects_parent_appearing_after_child_in_file_order(registry_path):
+    """R10(b): 直接編集・結合で行順が入れ替わり、親が子より後ろに出現する
+    JSONL を load_all() で拒否する（append-only の順序不変条件違反）。"""
+    reg = r.GenomeRegistry(registry_path)
+    parent_gen = sampler.sample(1)
+    parent_entry = reg.append(parent_gen, op="sample", seed=1, now=FIXED_TIME)
+
+    child_gen = sampler.mutate(parent_gen, seed=2, scale=0.05)
+    reg.append(child_gen, op="mutate", seed=2, parents=[parent_entry.genome_id], now=FIXED_TIME)
+
+    lines = registry_path.read_text(encoding="utf-8").rstrip("\n").split("\n")
+    assert len(lines) == 2
+    reordered = "\n".join([lines[1], lines[0]]) + "\n"  # 子 → 親 の順に入れ替える
+    registry_path.write_text(reordered, encoding="utf-8")
+
+    with pytest.raises(r.MissingParentError):
+        reg.load_all()

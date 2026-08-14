@@ -139,6 +139,15 @@ sf.write('/tmp/sakura_voiceA.wav', result.wav, result.sr)
 `singer/results_s9/nasal_place_report.md` 記載のパラメータ・
 `singer/render_song_v5.py` の `render_sakura_v5()` を用いる。
 
+**既知の限界（既存成果物との差分）**: `proto1/proto1_demo.py` が出力する
+`e2e_run.json` の `selected_pass_genome_for_wav.wav_paths` は、PR#261
+レビュー R11（WAV ファイルバイトの sha256 digest + 2 回書き比較による
+`soundfile.write()` 自体の決定論性確認）以降、各 WAV エントリが文字列
+（相対パス）ではなく `{"path", "sha256", "write_determinism_check"}` の
+構造化 dict になっている。コミット済み `proto1/results_final/e2e_run.json`
+は R11 より前に生成された歴史的記録であり、旧スキーマ（文字列）のまま
+書き換えていない。新スキーマは次回以降の `proto1_demo.py` 実行から反映される。
+
 ## 全ゲート成立状況（要約）
 
 | サイクル | 内容 | 判定 | 記録 |
@@ -183,6 +192,50 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 
 各 `results_s*/underspec_log_s*.md` にサイクルごとの仕様逸脱・補充判断が
 記録されている。
+
+## 検証境界の終端宣言（ロード経路・公開経路の census）
+
+PR#261 のレビューは C1–C6 → R1–R7 → R8–R11 の 4 ラウンドにわたり、
+「ローダー/来歴/公開」系の同型の穴（schema 未検証・content hash 未検証・
+pass/fail 宣言の未再計算・親の存在/順序不変条件・staging の不完全さ）を
+逐次指摘し続けた。指摘の再発を止めるため、`voice_genesis/` 内で永続化
+データを**読み込む**（デシリアライズしてオブジェクトへ復元する）経路、
+および**正本を公開する**（成果物ファイルを書き換える）経路を機械的に
+全列挙する（`grep -rln "json\.load(\|json\.loads(" voice_genesis
+--include="*.py" | grep -v "/tests/"` で確認できるロード経路が母集合）。
+
+### ロード経路（永続化データ → オブジェクトへの復元）
+
+| ファイル::関数 | 読む対象 | 検証内容 | 状態 |
+|---|---|---|---|
+| `proto1/genome.py::from_dict()` | Genome JSON document | schema_version 一致 (C6) / physio_range 再計算一致 (C5) / 全フィールド型検証 | **検証済み** |
+| `proto1/registry.py::_entry_from_dict()`（`GenomeRegistry.load_all()` 経由） | registry JSONL 1 行 | registry_schema 一致 (C5/C6 掃討) / 埋め込み genome を `from_dict()` で検証 (R3a) / genome_id と content hash の一致 (R3b) / エントリ側 audit と genome.audit の一致 (R3c) / `load_all()` 内での重複 genome_id 検出 (R5) / 親の存在・自エントリより前に出現 (R10) | **検証済み** |
+| `proto1/reference_set.py::_report_from_dict()`（`LinkabilityAuditLog.load_all()` 経由） | 監査ログ JSONL 1 行 | 保存済み実測値（類似度・チャンス帯）から e1_pass/e2_pass/overall_pass を再計算し宣言値と照合 (R9) | **検証済み** |
+| `harness/vt3_v5.py::restate_from_v4()` | `results_v4/grip_report_v4.json` | 検証なし（生 dict indexing） | **凍結対象外**（harness/ は凍結・無改変の歴史的検証コード。書き換えると当時の実測の一次記録性が損なわれる） |
+| `harness/vt3_v6.py::restate_from_v4()` | 同上 | 同上 | **凍結対象外**（同上） |
+
+### 公開経路（正本ファイルの書き換え）
+
+| ファイル::関数 | 書く対象 | 検証内容 | 状態 |
+|---|---|---|---|
+| `proto1/proto1_demo.py::_publish_outputs()` / `_publish_or_fail_closed()` | `genome_registry.jsonl` / WAV 2 種 / `e2e_run.json` の正本置換 | 全成果物を staging へ揃えてから一括 `os.replace` (R1) / 決定論比較（genome 全 diff + WAV ファイル書き出しの決定論性）不成立時は publish 自体を呼ばず失敗診断を非正本パスへ (R8) / WAV ファイルバイトの sha256 digest 記録 + 2 回書き比較 (R11) | **検証済み** |
+| `proto1/registry.py::GenomeRegistry.append()` | registry JSONL への 1 行追記 | op 許容値検証 / 重複 genome_id 拒否 (C3) / parents の各 ID が既に registry に存在することを検証 (R10a) | **検証済み** |
+| `proto1/reference_set.py::LinkabilityAuditLog.append()` / `_rewrite()` | 監査ログ JSONL | — | **対象外**（常に `audit_linkability()` が内部で構築した `LinkabilityAuditReport` オブジェクトのみを受理し、外部由来の未検証データを直接書き込む経路が存在しないため、書き込み時点での改ざん検証は不要。読み込み時の検証は上表 R9 でカバー） |
+| `proto1/reference_set.py::ReferenceSetGallery.sidecar_dict()` | `reference-set/0.2` sidecar dict（呼び出し元が JSON へ埋め込む） | — | **対象外**（書き出し専用。対応する読み込みローダーが本コードベースに存在しない。C5/C6 掃討・R9 対応時に確認済み） |
+| `proto1/results_p1/_generate_report_data.py` | `results_p1/report_data.json` 等 | — | **対象外**（一回限り実行済みの歴史的レポート生成スクリプト。再実行して正本を差し替える経路も、生成物を再ロードする経路も存在しない） |
+| `harness/*.py` の各 `main()`（`vt1_v2/v3.py`・`vt2_*.py`・`vt3_*.py` 等） | `results_v*/*.json` への一回限りの書き出し | — | **凍結対象外**（harness/ は凍結・無改変の歴史的検証コード） |
+| `singer/*.py` | — | — | **該当コードなし**（`grep -rln "json\.dump\|write_text.*json\|\.jsonl\"" voice_genesis/singer/*.py` は 0 件。`results_s*/*.json` は同様の一回限り生成の歴史的記録） |
+
+**終端宣言**: 上記 11 行のうち、生成・公開系（proto1 の 3 経路）は全て
+検証済み。harness/ の 3 経路（読み込み 2 + 書き込み複数）は凍結・無改変
+原則により明示的に対象外。write-only で対応する loader が存在しない
+経路（reference_set の sidecar・一回限りのレポート生成スクリプト・
+singer/）も明示的に対象外。**全行が「検証済み」または明示的な境界宣言に
+分類されたため、C1–C6/R1–R11 の 4 ラウンドにわたる「ローダー/来歴/公開」
+系残穴の指摘サイクルをここで終端とする。** 今後同種の指摘が来た場合は、
+本表に新しい行を追加できるかどうか（＝これまで見落としていた経路か）を
+まず確認すること。既存行の再指摘であれば、当該行の「検証内容」列に
+記載済みの対処で十分か、対処自体に不備があるかを個別に判断する。
 
 ## テストの実行
 

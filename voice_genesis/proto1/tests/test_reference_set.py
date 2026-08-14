@@ -194,3 +194,54 @@ def test_mark_stale_is_idempotent(tmp_path, small_gallery):
     second = log.mark_stale("new-hash")
     assert first == 1
     assert second == 0  # 既に stale 済みのものは二重カウントしない
+
+
+# --- PR#261 レビュー R9: load 時の pass/fail 再計算検証 ----------------------
+
+
+def test_load_all_rejects_tampered_e1_pass(tmp_path, small_gallery):
+    """e1_max_similarity > e1_chance_band_p95（本来 fail）なのに e1_pass=True
+    と偽装した改ざん行を、load 時の再計算検証で拒否する。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    # gallery 自身のメンバーを監査すると確実に e1_pass=False になる（既存テスト
+    # test_audit_gallery_member_against_itself_fails_both_systems で確認済み）。
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    assert report.e1_pass is False
+    log.append(report)
+
+    text = log.path.read_text(encoding="utf-8")
+    tampered = text.replace('"e1_pass": false', '"e1_pass": true')
+    assert tampered != text  # 前提確認: 置換が実際に発生した
+    log.path.write_text(tampered, encoding="utf-8")
+
+    with pytest.raises(rset.LinkabilityAuditValidationError):
+        log.load_all()
+
+
+def test_load_all_rejects_tampered_overall_pass(tmp_path, small_gallery):
+    """e1_pass/e2_pass の宣言値自体は正しくても、overall_pass だけ偽装した
+    行も拒否する。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    assert report.overall_pass is False
+    log.append(report)
+
+    text = log.path.read_text(encoding="utf-8")
+    tampered = text.replace('"overall_pass": false', '"overall_pass": true')
+    assert tampered != text
+    log.path.write_text(tampered, encoding="utf-8")
+
+    with pytest.raises(rset.LinkabilityAuditValidationError):
+        log.load_all()
+
+
+def test_load_all_accepts_untampered_report(tmp_path, small_gallery):
+    """非退行確認: 改ざんされていない正しい監査ログは従来どおり読み込める。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    loaded = log.load_all()
+    assert len(loaded) == 1
+    assert loaded[0].e1_pass == report.e1_pass
+    assert loaded[0].overall_pass == report.overall_pass

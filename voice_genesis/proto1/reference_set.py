@@ -444,8 +444,33 @@ def audit_report_to_dict(report: LinkabilityAuditReport) -> Dict[str, Any]:
     return _report_to_dict(report)
 
 
+class LinkabilityAuditValidationError(ValueError):
+    """監査ログの pass/fail 宣言値が実測値からの再計算と不一致（PR#261 レビュー R9）。"""
+
+
 def _report_from_dict(data: Dict[str, Any]) -> LinkabilityAuditReport:
-    return LinkabilityAuditReport(**data)
+    report = LinkabilityAuditReport(**data)
+    # PR#261 レビュー R9: 保存済みの実測値（e1/e2 の最近傍類似度・チャンス帯
+    # p95）から e1_pass/e2_pass/overall_pass を audit_linkability() と同一の
+    # 比較則（`<=`）で再計算し、宣言値と不一致なら拒否する。監査ログは append-only
+    # JSONL で手編集され得るため、pass/fail の宣言だけを実測値と無関係に
+    # 書き換えられると「不合格の候補が合格扱いになる」改ざんを検証なしで
+    # 通してしまう。
+    recomputed_e1_pass = report.e1_max_similarity <= report.e1_chance_band_p95
+    recomputed_e2_pass = report.e2_max_similarity <= report.e2_chance_band_p95
+    recomputed_overall_pass = bool(recomputed_e1_pass and recomputed_e2_pass)
+    if (
+        report.e1_pass != recomputed_e1_pass
+        or report.e2_pass != recomputed_e2_pass
+        or report.overall_pass != recomputed_overall_pass
+    ):
+        raise LinkabilityAuditValidationError(
+            "監査ログの pass/fail 判定が実測値からの再計算と不一致（宣言値: "
+            f"e1_pass={report.e1_pass}, e2_pass={report.e2_pass}, overall_pass={report.overall_pass} "
+            f"/ 再計算値: e1_pass={recomputed_e1_pass}, e2_pass={recomputed_e2_pass}, "
+            f"overall_pass={recomputed_overall_pass}）"
+        )
+    return report
 
 
 class LinkabilityAuditLog:
