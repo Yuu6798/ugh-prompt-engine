@@ -234,7 +234,21 @@ def quick_s5(genome_in: pg.VoiceGenome, full_result: "rs.RenderResult") -> Quick
     # 4 音全て（`phrase0_rows` の全件）が有限に測定できたことを明示的な
     # 前提条件とする。median_err/max_err は診断用に有限値のみで従来どおり
     # 算出するが、f0_pass 自体は全件有限でなければ無条件 False になる。
-    all_finite = bool(raw_errs) and all(np.isfinite(e) for e in raw_errs)
+    #
+    # PR#261 レビュー R36: R32 の `all_finite` は「取れた音は全部有限だったか」
+    # しか見ておらず、「そもそも 4 音取れたか」を検証していなかった。
+    # `phrase0_rows` は `rows_all` を `full_result.segments` の
+    # `phrase_index == 0` でフィルタしてから `[:QUICK_N_NOTES]` でスライスする
+    # 構成のため、phrase0 のノート数が退行で 3 音しか無い場合でも
+    # `phrase0_rows` は静かに 3 要素になるだけで例外にならない。この場合
+    # `raw_errs` も 3 要素になり、その 3 要素が全て有限かつ閾値内なら
+    # 旧実装は「4 音全て測って良好だった」と取り違えて f0_pass=True を返して
+    # いた（実際には 1 音が測定されてすらいない、R32 よりさらに手前の不完全
+    # 証拠 PASS）。`len(raw_errs) == QUICK_N_NOTES` を明示的な前提条件に加え、
+    # 音数そのものの退行も fail-closed にする。
+    all_finite = (
+        len(raw_errs) == QUICK_N_NOTES and all(np.isfinite(e) for e in raw_errs)
+    )
     f0_pass = (
         all_finite
         and median_err <= gc.F0_MEDIAN_CENTS_MAX

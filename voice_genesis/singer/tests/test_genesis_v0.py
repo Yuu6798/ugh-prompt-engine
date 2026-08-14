@@ -196,3 +196,52 @@ def test_quick_s5_f0_pass_true_when_all_four_notes_finite_and_within_threshold_n
     q = gv.quick_s5(genome_in=None, full_result=result)
 
     assert q.f0_pass is True
+
+
+# --- PR#261 レビュー R36: quick_s5() の f0_pass に音数そのものの退行チェックを追加 ---
+
+
+def test_quick_s5_f0_pass_fails_when_only_three_of_four_notes_measured(monkeypatch):
+    """phrase0 のノート数が退行で 3 音しか無い場合、`phrase0_rows`/`raw_errs`
+    は静かに 3 要素になるだけで例外にならない。R32 の `all_finite` は「取れた
+    音は全部有限か」しか見ておらず「そもそも 4 音取れたか」を見ていないため、
+    3 音全てが有限かつ閾値内なら旧実装は f0_pass=True になり得た（1 音が
+    測定すらされていない、R32 よりさらに手前の不完全証拠 PASS。PR#261 R36）。
+    """
+    _patch_quick_s5_periphery(monkeypatch)
+
+    rows = [
+        gv.gc.NoteMeasurement(
+            note_index=i, kana="あ", true_midi=60.0, true_hz=261.6, est_hz=261.6, cents_err=1.0 + i, r_median=0.9
+        )
+        for i in range(3)  # 4 音のはずが 3 音しか返らない退行
+    ]
+    monkeypatch.setattr(gv.gc, "measure_notes", lambda result: rows)
+
+    result = _FakeRenderResult(n_notes=len(rows))
+    q = gv.quick_s5(genome_in=None, full_result=result)
+
+    assert q.f0_pass is False
+    assert q.overall_pass is False
+
+
+def test_quick_s5_f0_pass_true_when_exactly_four_notes_measured_non_regression(monkeypatch):
+    """非退行確認: phrase0 に (QUICK_N_NOTES を超える) 5 音あっても
+    `[:QUICK_N_NOTES]` で先頭 4 音に切り詰められ、4 音全てが有限かつ閾値内
+    なら従来どおり f0_pass=True になる（R36 の音数チェックは
+    `len(raw_errs) == QUICK_N_NOTES` であり、スライス後の 4 音と一致する）。
+    """
+    _patch_quick_s5_periphery(monkeypatch)
+
+    rows = [
+        gv.gc.NoteMeasurement(
+            note_index=i, kana="あ", true_midi=60.0, true_hz=261.6, est_hz=261.6, cents_err=1.0 + i, r_median=0.9
+        )
+        for i in range(5)  # phrase0 に 5 音（QUICK_N_NOTES=4 より多い）
+    ]
+    monkeypatch.setattr(gv.gc, "measure_notes", lambda result: rows)
+
+    result = _FakeRenderResult(n_notes=len(rows))
+    q = gv.quick_s5(genome_in=None, full_result=result)
+
+    assert q.f0_pass is True

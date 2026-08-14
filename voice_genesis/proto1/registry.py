@@ -20,6 +20,8 @@ JSONL append-only ストア + sidecar 様式 `genome-registry/0.1`。1 行 = 1 �
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -237,6 +239,46 @@ class GenomeRegistry:
     def __init__(self, path: Union[str, Path]):
         self.path = Path(path)
 
+    def _write_all_atomic(self, entries: List[RegistryEntry]) -> None:
+        """全エントリを staging ファイルへ書き、`os.replace()` で正本へ原子的に
+        置換する（PR#261 レビュー R35: reference_set.py の `LinkabilityAuditLog.
+        _rewrite()`（R17 で導入）と同型のパターン）。
+
+        旧 `append()` は `self.path.open("a")` での write() で追記していた。
+        `a` モードの write() は OS/ファイルシステムレベルで単一システム
+        コールでの原子性を保証しない（プロセス kill・ディスク満杯等での
+        書き込み中断）ため、正本 JSONL の末尾に破損した部分行が恒久的に
+        残り得た。`load_all()` は該当行で必ず `json.loads()` 例外を投げる
+        ため、1 回の中断が registry 全体を読み込み不能にしてしまう
+        （append-only ログという設計と矛盾する破壊的失敗モード）。
+
+        同一ディレクトリに staging ファイルを作って全件書き込みを完了させて
+        から `os.replace()` で置換する: POSIX の `rename(2)` はアトミックな
+        ため、置換前に中断すれば旧ログがそのまま残り（staging ファイルのみ
+        孤立、下記の except で掃除する）、置換後に中断する余地は（rename
+        自体が単一のシステムコールであるため）存在しない。
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(self.path.parent), prefix=self.path.name + ".", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                for e in entries:
+                    fh.write(e.to_json_line())
+                    fh.write("\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_name, self.path)
+        except BaseException:
+            # staging ファイルが残っていれば掃除する（置換前に例外が起きた場合のみ
+            # 到達する。os.replace 後の例外は原理上あり得ない）。
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+
     def append(
         self,
         genome: VoiceGenome,
@@ -342,10 +384,12 @@ class GenomeRegistry:
                 f"（書読対称性違反。genome_id={genome_id!r}）: {exc}"
             ) from exc
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.write("\n")
+        # PR#261 レビュー R35: 追記の書き込みを `self.path.open("a")` での
+        # write() から `_write_all_atomic()`（staging + `os.replace()`
+        # アトミック置換）へ変更する。詳細は `_write_all_atomic()` の
+        # docstring を参照。
+        existing_entries = self.load_all()
+        self._write_all_atomic(existing_entries + [entry])
         return entry
 
     def load_all(self) -> List[RegistryEntry]:

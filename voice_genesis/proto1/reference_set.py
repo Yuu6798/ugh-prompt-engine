@@ -525,7 +525,13 @@ class LinkabilityAuditLog:
         # エントリの直列化・再解析・全意味論再検証を伴い相対的に重い）に
         # 先立ち、既存ログとの ID 重複だけを先に確認する軽量チェックとして
         # 実施する（fail fast）。
-        existing_ids = {r.report_id for r in self.load_all()}
+        #
+        # PR#261 レビュー R35: 以前はここで `self.load_all()` を呼んだ結果を
+        # 重複検出にのみ使い捨てていたが、書き込みも全件アトミック置換
+        # （下記）に切り替えたため、同じ結果を書き込みにも再利用する
+        # （二重の I/O を避ける）。
+        existing_reports = self.load_all()
+        existing_ids = {r.report_id for r in existing_reports}
         if report.report_id in existing_ids:
             raise LinkabilityAuditValidationError(
                 f"監査ログに既に存在する report_id への追記を拒否する（実際: {report.report_id!r}）"
@@ -550,10 +556,16 @@ class LinkabilityAuditLog:
                 f"（書読対称性違反。report_id={report.report_id!r}）: {exc}"
             ) from exc
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.write("\n")
+        # PR#261 レビュー R35: 追記の書き込みを `self.path.open("a")` での
+        # write() から、既存全件 + 新規レポートを `_rewrite()`（R17 で導入した
+        # staging + `os.replace()` アトミック置換）へ委譲する形へ変更する。
+        # `a` モードの write() は書き込み途中（プロセス kill・ディスク満杯等）
+        # の中断で正本 JSONL の末尾に破損した部分行が恒久的に残り得た。
+        # load_all() はそのような行で必ず `json.loads()` 例外を投げるため、
+        # 1 回の中断がログ全体を読み込み不能にしてしまう。`_rewrite()` は
+        # 既に mark_stale() 用に同じアトミック置換を実装済みのため、それを
+        # 再利用する（新規 staging ロジックの重複実装を避ける）。
+        self._rewrite(existing_reports + [report])
 
     def load_all(self) -> List[LinkabilityAuditReport]:
         if not self.path.exists():

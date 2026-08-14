@@ -1,12 +1,16 @@
 {
   "determinism_check": {
-    "compared": "run_1 vs run_2, all fields except excluded_fields",
+    "compared": "(a) run_1 vs run_2, all fields except excluded_fields; (b) WAV export write determinism (PR#261 R11, see wav_write_determinism)",
     "differing_paths": [],
     "excluded_fields": {
       "created_at": "監査/registry レポートの wall-clock 記録。実行時刻が異なるのは設計上必然（§CLAUDE.md: wall-clock 依存は created_at 記録のみ許可）。",
       "registry_path": "PR#261 R2 で repo-relative 化した後も run_1(scratch)/run_2(正本) は異なるファイル名（_scratch_registry_run1.jsonl / genome_registry.jsonl）を指す設計であり、値そのものが run 間で一致しない。実行環境依存の絶対パス漏えい問題は repo-relative 化で解消したが、この意図的なファイル名差異自体は撤廃できないため比較対象から除外を継続する（underspec_log_final.md [UNDERSPEC-F-8]）。"
     },
-    "passed": true
+    "passed": true,
+    "wav_write_determinism": {
+      "all_wav_writes_stable": true,
+      "note": "各 WAV は書き出し直後にもう一度同一配列を別ファイルへ書き、sha256 が一致することを確認した（soundfile.write() 自体が決定論的にファイルへシリアライズすることの証明。PR#261 R11）。詳細は各 WAV エントリの write_determinism_check を参照。"
+    }
   },
   "grip_reference": {
     "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
@@ -19,8 +23,13 @@
     "e2_chance_band_p95": 0.9436356408180776,
     "n_permutations": 200,
     "sidecar": {
+      "chance_band_procedure": {
+        "chance_seed_base": 90001,
+        "n_permutations": 200,
+        "percentile": 95.0
+      },
       "coverage_notes": "合成スタンドイン。実在歌手 embedding は machine_dependent で未実装。チャンス帯は gallery ラベルシャッフルの字義通りの実装では有限固定集合ゆえに縮退するため、gallery と無関係な合成候補 200 個の最近傍類似分布で代替した（underspec_log_p1.md [UNDERSPEC-P1-9]）。E1/E2 いずれも実在人間声で訓練された識別器ではなく、`measured (instrument-validity caveat: stand-in embeddings)` の意味での「測定値」である。",
-      "created_at": "2026-08-13T16:31:04.016630+00:00",
+      "created_at": "2026-08-14T17:35:32.156395+00:00",
       "embedding_models": [
         {
           "description": "measure_v3 6 特徴 (mean_f0/formant_centroid/source_tilt/periodicity/rms/vibrato_depth) の probe 横断頻度正規化済み集約（sustain+phrase）",
@@ -36,22 +45,22 @@
         }
       ],
       "id": "standin-gallery-v1",
-      "schema_version": "reference-set/0.1",
-      "sha256": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+      "schema_version": "reference-set/0.2",
+      "sha256": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
       "source_datasets": [
         "standin-synthetic-gallery-v1 (proto1 sampler.sample, no real singer audio)"
       ],
       "version": 1
     }
   },
-  "report_generated_at": "2026-08-13T16:33:29.761867+00:00",
+  "report_generated_at": "2026-08-14T17:38:14.883458+00:00",
   "run_1": {
     "genomes": {
       "a": {
         "genome": {
           "audit": {
-            "linkability_report_id": "audit-15d9487d4ab4",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-5fc4062a2a5c",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
           "microprosody": {
@@ -105,7 +114,7 @@
           }
         },
         "linkability_audit": {
-          "created_at": "2026-08-13T16:33:20.333733+00:00",
+          "created_at": "2026-08-14T17:38:03.937893+00:00",
           "e1_chance_band_p95": 0.9678951881811239,
           "e1_max_similarity": 0.6701864182466197,
           "e1_nearest_gallery_index": 6,
@@ -117,8 +126,8 @@
           "genome_id": "a1fe194c6d0c",
           "overall_pass": false,
           "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
-          "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
-          "report_id": "audit-15d9487d4ab4",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-5fc4062a2a5c",
           "stale_audit": false
         },
         "op": "sample",
@@ -463,23 +472,23 @@
             }
           }
         },
-        "registered_genome_id": "362f443334a4",
+        "registered_genome_id": "639af0f19fdb",
         "registry_entry": {
           "audit": {
-            "linkability_report_id": "audit-15d9487d4ab4",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-5fc4062a2a5c",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
-          "created_at": "2026-08-13T16:33:20.334077+00:00",
+          "created_at": "2026-08-14T17:38:03.938352+00:00",
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
               "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
-              "linkability_report_id": "audit-15d9487d4ab4",
+              "linkability_report_id": "audit-5fc4062a2a5c",
               "overall_pass": false,
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4"
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
             },
             "plausibility": {
               "min_r_median": 0.36908508335846046,
@@ -490,8 +499,8 @@
           "feature_set_version": "measure_v3",
           "genome": {
             "audit": {
-              "linkability_report_id": "audit-15d9487d4ab4",
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+              "linkability_report_id": "audit-5fc4062a2a5c",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
               "residual_gate_passed": null
             },
             "microprosody": {
@@ -544,7 +553,7 @@
               "tilt": -3.847012415841691
             }
           },
-          "genome_id": "362f443334a4",
+          "genome_id": "639af0f19fdb",
           "op": "sample",
           "parents": [],
           "registry_schema": "genome-registry/0.1",
@@ -557,8 +566,8 @@
       "b": {
         "genome": {
           "audit": {
-            "linkability_report_id": "audit-c4a1da5ceb8c",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-9f1ec3272b26",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
           "microprosody": {
@@ -612,7 +621,7 @@
           }
         },
         "linkability_audit": {
-          "created_at": "2026-08-13T16:33:21.645777+00:00",
+          "created_at": "2026-08-14T17:38:05.461905+00:00",
           "e1_chance_band_p95": 0.9678951881811239,
           "e1_max_similarity": 0.8845510993940491,
           "e1_nearest_gallery_index": 0,
@@ -624,8 +633,8 @@
           "genome_id": "f030da328400",
           "overall_pass": true,
           "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
-          "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
-          "report_id": "audit-c4a1da5ceb8c",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-9f1ec3272b26",
           "stale_audit": false
         },
         "op": "sample",
@@ -970,23 +979,23 @@
             }
           }
         },
-        "registered_genome_id": "5daa285c4dba",
+        "registered_genome_id": "951175baee90",
         "registry_entry": {
           "audit": {
-            "linkability_report_id": "audit-c4a1da5ceb8c",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-9f1ec3272b26",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
-          "created_at": "2026-08-13T16:33:21.646090+00:00",
+          "created_at": "2026-08-14T17:38:05.462794+00:00",
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
               "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
-              "linkability_report_id": "audit-c4a1da5ceb8c",
+              "linkability_report_id": "audit-9f1ec3272b26",
               "overall_pass": true,
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4"
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
             },
             "plausibility": {
               "min_r_median": 0.6005679255520303,
@@ -997,8 +1006,8 @@
           "feature_set_version": "measure_v3",
           "genome": {
             "audit": {
-              "linkability_report_id": "audit-c4a1da5ceb8c",
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+              "linkability_report_id": "audit-9f1ec3272b26",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
               "residual_gate_passed": null
             },
             "microprosody": {
@@ -1051,7 +1060,7 @@
               "tilt": -12.805687501143865
             }
           },
-          "genome_id": "5daa285c4dba",
+          "genome_id": "951175baee90",
           "op": "sample",
           "parents": [],
           "registry_schema": "genome-registry/0.1",
@@ -1064,8 +1073,8 @@
       "c": {
         "genome": {
           "audit": {
-            "linkability_report_id": "audit-a63925d11f4e",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-8b75585aed0a",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
           "microprosody": {
@@ -1119,7 +1128,7 @@
           }
         },
         "linkability_audit": {
-          "created_at": "2026-08-13T16:33:22.985112+00:00",
+          "created_at": "2026-08-14T17:38:06.993001+00:00",
           "e1_chance_band_p95": 0.9678951881811239,
           "e1_max_similarity": 0.8488221011972042,
           "e1_nearest_gallery_index": 6,
@@ -1131,13 +1140,13 @@
           "genome_id": "aee4e3357ddd",
           "overall_pass": true,
           "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
-          "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
-          "report_id": "audit-a63925d11f4e",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-8b75585aed0a",
           "stale_audit": false
         },
         "op": "mutate",
         "parent_genome_ids": [
-          "362f443334a4"
+          "639af0f19fdb"
         ],
         "parent_keys": [
           "a"
@@ -1481,23 +1490,23 @@
             }
           }
         },
-        "registered_genome_id": "78da62714c26",
+        "registered_genome_id": "8fe0c4db1378",
         "registry_entry": {
           "audit": {
-            "linkability_report_id": "audit-a63925d11f4e",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-8b75585aed0a",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
-          "created_at": "2026-08-13T16:33:22.985424+00:00",
+          "created_at": "2026-08-14T17:38:06.994446+00:00",
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
               "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
-              "linkability_report_id": "audit-a63925d11f4e",
+              "linkability_report_id": "audit-8b75585aed0a",
               "overall_pass": true,
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4"
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
             },
             "plausibility": {
               "min_r_median": 0.32839760351766856,
@@ -1508,8 +1517,8 @@
           "feature_set_version": "measure_v3",
           "genome": {
             "audit": {
-              "linkability_report_id": "audit-a63925d11f4e",
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+              "linkability_report_id": "audit-8b75585aed0a",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
               "residual_gate_passed": null
             },
             "microprosody": {
@@ -1562,10 +1571,10 @@
               "tilt": -4.999138862026906
             }
           },
-          "genome_id": "78da62714c26",
+          "genome_id": "8fe0c4db1378",
           "op": "mutate",
           "parents": [
-            "362f443334a4"
+            "639af0f19fdb"
           ],
           "registry_schema": "genome-registry/0.1",
           "renderer_version": "R0.1",
@@ -1577,8 +1586,8 @@
       "d": {
         "genome": {
           "audit": {
-            "linkability_report_id": "audit-9df6b30ca58c",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-335eb490524e",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
           "microprosody": {
@@ -1632,7 +1641,7 @@
           }
         },
         "linkability_audit": {
-          "created_at": "2026-08-13T16:33:24.337837+00:00",
+          "created_at": "2026-08-14T17:38:08.490393+00:00",
           "e1_chance_band_p95": 0.9678951881811239,
           "e1_max_similarity": 0.6530897621492879,
           "e1_nearest_gallery_index": 7,
@@ -1644,14 +1653,14 @@
           "genome_id": "6c5fa9d16d50",
           "overall_pass": true,
           "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
-          "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
-          "report_id": "audit-9df6b30ca58c",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-335eb490524e",
           "stale_audit": false
         },
         "op": "crossover",
         "parent_genome_ids": [
-          "78da62714c26",
-          "5daa285c4dba"
+          "8fe0c4db1378",
+          "951175baee90"
         ],
         "parent_keys": [
           "c",
@@ -1996,23 +2005,23 @@
             }
           }
         },
-        "registered_genome_id": "798e3c453476",
+        "registered_genome_id": "5b090455b809",
         "registry_entry": {
           "audit": {
-            "linkability_report_id": "audit-9df6b30ca58c",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-335eb490524e",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
-          "created_at": "2026-08-13T16:33:24.338139+00:00",
+          "created_at": "2026-08-14T17:38:08.492838+00:00",
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
               "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
-              "linkability_report_id": "audit-9df6b30ca58c",
+              "linkability_report_id": "audit-335eb490524e",
               "overall_pass": true,
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4"
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
             },
             "plausibility": {
               "min_r_median": 0.39170988510446464,
@@ -2023,8 +2032,8 @@
           "feature_set_version": "measure_v3",
           "genome": {
             "audit": {
-              "linkability_report_id": "audit-9df6b30ca58c",
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+              "linkability_report_id": "audit-335eb490524e",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
               "residual_gate_passed": null
             },
             "microprosody": {
@@ -2077,11 +2086,11 @@
               "tilt": -4.999138862026906
             }
           },
-          "genome_id": "798e3c453476",
+          "genome_id": "5b090455b809",
           "op": "crossover",
           "parents": [
-            "78da62714c26",
-            "5daa285c4dba"
+            "8fe0c4db1378",
+            "951175baee90"
           ],
           "registry_schema": "genome-registry/0.1",
           "renderer_version": "R0.1",
@@ -2093,38 +2102,38 @@
     },
     "lineage_of_d": [
       {
-        "genome_id": "362f443334a4",
+        "genome_id": "639af0f19fdb",
         "op": "sample",
         "parents": [],
         "seed": 101
       },
       {
-        "genome_id": "78da62714c26",
+        "genome_id": "8fe0c4db1378",
         "op": "mutate",
         "parents": [
-          "362f443334a4"
+          "639af0f19fdb"
         ],
         "seed": 303
       },
       {
-        "genome_id": "798e3c453476",
+        "genome_id": "5b090455b809",
         "op": "crossover",
         "parents": [
-          "78da62714c26",
-          "5daa285c4dba"
+          "8fe0c4db1378",
+          "951175baee90"
         ],
         "seed": 404
       }
     ],
-    "registry_path": "voice_genesis/proto1/results_final/_scratch_registry_run1.jsonl"
+    "registry_path": "voice_genesis/proto1/results_final/_scratch_registry_run1.29225-faa71558.jsonl"
   },
   "run_2": {
     "genomes": {
       "a": {
         "genome": {
           "audit": {
-            "linkability_report_id": "audit-15d9487d4ab4",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-5fc4062a2a5c",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
           "microprosody": {
@@ -2178,7 +2187,7 @@
           }
         },
         "linkability_audit": {
-          "created_at": "2026-08-13T16:33:25.678075+00:00",
+          "created_at": "2026-08-14T17:38:10.075517+00:00",
           "e1_chance_band_p95": 0.9678951881811239,
           "e1_max_similarity": 0.6701864182466197,
           "e1_nearest_gallery_index": 6,
@@ -2190,8 +2199,8 @@
           "genome_id": "a1fe194c6d0c",
           "overall_pass": false,
           "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
-          "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
-          "report_id": "audit-15d9487d4ab4",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-5fc4062a2a5c",
           "stale_audit": false
         },
         "op": "sample",
@@ -2536,23 +2545,23 @@
             }
           }
         },
-        "registered_genome_id": "362f443334a4",
+        "registered_genome_id": "639af0f19fdb",
         "registry_entry": {
           "audit": {
-            "linkability_report_id": "audit-15d9487d4ab4",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-5fc4062a2a5c",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
-          "created_at": "2026-08-13T16:33:25.678343+00:00",
+          "created_at": "2026-08-14T17:38:10.075975+00:00",
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
               "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
-              "linkability_report_id": "audit-15d9487d4ab4",
+              "linkability_report_id": "audit-5fc4062a2a5c",
               "overall_pass": false,
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4"
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
             },
             "plausibility": {
               "min_r_median": 0.36908508335846046,
@@ -2563,8 +2572,8 @@
           "feature_set_version": "measure_v3",
           "genome": {
             "audit": {
-              "linkability_report_id": "audit-15d9487d4ab4",
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+              "linkability_report_id": "audit-5fc4062a2a5c",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
               "residual_gate_passed": null
             },
             "microprosody": {
@@ -2617,7 +2626,7 @@
               "tilt": -3.847012415841691
             }
           },
-          "genome_id": "362f443334a4",
+          "genome_id": "639af0f19fdb",
           "op": "sample",
           "parents": [],
           "registry_schema": "genome-registry/0.1",
@@ -2630,8 +2639,8 @@
       "b": {
         "genome": {
           "audit": {
-            "linkability_report_id": "audit-c4a1da5ceb8c",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-9f1ec3272b26",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
           "microprosody": {
@@ -2685,7 +2694,7 @@
           }
         },
         "linkability_audit": {
-          "created_at": "2026-08-13T16:33:26.979646+00:00",
+          "created_at": "2026-08-14T17:38:11.631224+00:00",
           "e1_chance_band_p95": 0.9678951881811239,
           "e1_max_similarity": 0.8845510993940491,
           "e1_nearest_gallery_index": 0,
@@ -2697,8 +2706,8 @@
           "genome_id": "f030da328400",
           "overall_pass": true,
           "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
-          "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
-          "report_id": "audit-c4a1da5ceb8c",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-9f1ec3272b26",
           "stale_audit": false
         },
         "op": "sample",
@@ -3043,23 +3052,23 @@
             }
           }
         },
-        "registered_genome_id": "5daa285c4dba",
+        "registered_genome_id": "951175baee90",
         "registry_entry": {
           "audit": {
-            "linkability_report_id": "audit-c4a1da5ceb8c",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-9f1ec3272b26",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
-          "created_at": "2026-08-13T16:33:26.979933+00:00",
+          "created_at": "2026-08-14T17:38:11.632011+00:00",
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
               "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
-              "linkability_report_id": "audit-c4a1da5ceb8c",
+              "linkability_report_id": "audit-9f1ec3272b26",
               "overall_pass": true,
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4"
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
             },
             "plausibility": {
               "min_r_median": 0.6005679255520303,
@@ -3070,8 +3079,8 @@
           "feature_set_version": "measure_v3",
           "genome": {
             "audit": {
-              "linkability_report_id": "audit-c4a1da5ceb8c",
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+              "linkability_report_id": "audit-9f1ec3272b26",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
               "residual_gate_passed": null
             },
             "microprosody": {
@@ -3124,7 +3133,7 @@
               "tilt": -12.805687501143865
             }
           },
-          "genome_id": "5daa285c4dba",
+          "genome_id": "951175baee90",
           "op": "sample",
           "parents": [],
           "registry_schema": "genome-registry/0.1",
@@ -3137,8 +3146,8 @@
       "c": {
         "genome": {
           "audit": {
-            "linkability_report_id": "audit-a63925d11f4e",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-8b75585aed0a",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
           "microprosody": {
@@ -3192,7 +3201,7 @@
           }
         },
         "linkability_audit": {
-          "created_at": "2026-08-13T16:33:28.327212+00:00",
+          "created_at": "2026-08-14T17:38:13.206575+00:00",
           "e1_chance_band_p95": 0.9678951881811239,
           "e1_max_similarity": 0.8488221011972042,
           "e1_nearest_gallery_index": 6,
@@ -3204,13 +3213,13 @@
           "genome_id": "aee4e3357ddd",
           "overall_pass": true,
           "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
-          "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
-          "report_id": "audit-a63925d11f4e",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-8b75585aed0a",
           "stale_audit": false
         },
         "op": "mutate",
         "parent_genome_ids": [
-          "362f443334a4"
+          "639af0f19fdb"
         ],
         "parent_keys": [
           "a"
@@ -3554,23 +3563,23 @@
             }
           }
         },
-        "registered_genome_id": "78da62714c26",
+        "registered_genome_id": "8fe0c4db1378",
         "registry_entry": {
           "audit": {
-            "linkability_report_id": "audit-a63925d11f4e",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-8b75585aed0a",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
-          "created_at": "2026-08-13T16:33:28.327563+00:00",
+          "created_at": "2026-08-14T17:38:13.208114+00:00",
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
               "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
-              "linkability_report_id": "audit-a63925d11f4e",
+              "linkability_report_id": "audit-8b75585aed0a",
               "overall_pass": true,
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4"
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
             },
             "plausibility": {
               "min_r_median": 0.32839760351766856,
@@ -3581,8 +3590,8 @@
           "feature_set_version": "measure_v3",
           "genome": {
             "audit": {
-              "linkability_report_id": "audit-a63925d11f4e",
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+              "linkability_report_id": "audit-8b75585aed0a",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
               "residual_gate_passed": null
             },
             "microprosody": {
@@ -3635,10 +3644,10 @@
               "tilt": -4.999138862026906
             }
           },
-          "genome_id": "78da62714c26",
+          "genome_id": "8fe0c4db1378",
           "op": "mutate",
           "parents": [
-            "362f443334a4"
+            "639af0f19fdb"
           ],
           "registry_schema": "genome-registry/0.1",
           "renderer_version": "R0.1",
@@ -3650,8 +3659,8 @@
       "d": {
         "genome": {
           "audit": {
-            "linkability_report_id": "audit-9df6b30ca58c",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-335eb490524e",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
           "microprosody": {
@@ -3705,7 +3714,7 @@
           }
         },
         "linkability_audit": {
-          "created_at": "2026-08-13T16:33:29.667052+00:00",
+          "created_at": "2026-08-14T17:38:14.766726+00:00",
           "e1_chance_band_p95": 0.9678951881811239,
           "e1_max_similarity": 0.6530897621492879,
           "e1_nearest_gallery_index": 7,
@@ -3717,14 +3726,14 @@
           "genome_id": "6c5fa9d16d50",
           "overall_pass": true,
           "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
-          "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
-          "report_id": "audit-9df6b30ca58c",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-335eb490524e",
           "stale_audit": false
         },
         "op": "crossover",
         "parent_genome_ids": [
-          "78da62714c26",
-          "5daa285c4dba"
+          "8fe0c4db1378",
+          "951175baee90"
         ],
         "parent_keys": [
           "c",
@@ -4069,23 +4078,23 @@
             }
           }
         },
-        "registered_genome_id": "798e3c453476",
+        "registered_genome_id": "5b090455b809",
         "registry_entry": {
           "audit": {
-            "linkability_report_id": "audit-9df6b30ca58c",
-            "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+            "linkability_report_id": "audit-335eb490524e",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
             "residual_gate_passed": null
           },
-          "created_at": "2026-08-13T16:33:29.667334+00:00",
+          "created_at": "2026-08-14T17:38:14.769131+00:00",
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
               "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
-              "linkability_report_id": "audit-9df6b30ca58c",
+              "linkability_report_id": "audit-335eb490524e",
               "overall_pass": true,
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4"
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
             },
             "plausibility": {
               "min_r_median": 0.39170988510446464,
@@ -4096,8 +4105,8 @@
           "feature_set_version": "measure_v3",
           "genome": {
             "audit": {
-              "linkability_report_id": "audit-9df6b30ca58c",
-              "reference_set_hash": "fbfc0d383fa6297d064e30840f7bac5254ea62075c774300f500cdf96dd459b4",
+              "linkability_report_id": "audit-335eb490524e",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
               "residual_gate_passed": null
             },
             "microprosody": {
@@ -4150,11 +4159,11 @@
               "tilt": -4.999138862026906
             }
           },
-          "genome_id": "798e3c453476",
+          "genome_id": "5b090455b809",
           "op": "crossover",
           "parents": [
-            "78da62714c26",
-            "5daa285c4dba"
+            "8fe0c4db1378",
+            "951175baee90"
           ],
           "registry_schema": "genome-registry/0.1",
           "renderer_version": "R0.1",
@@ -4166,25 +4175,25 @@
     },
     "lineage_of_d": [
       {
-        "genome_id": "362f443334a4",
+        "genome_id": "639af0f19fdb",
         "op": "sample",
         "parents": [],
         "seed": 101
       },
       {
-        "genome_id": "78da62714c26",
+        "genome_id": "8fe0c4db1378",
         "op": "mutate",
         "parents": [
-          "362f443334a4"
+          "639af0f19fdb"
         ],
         "seed": 303
       },
       {
-        "genome_id": "798e3c453476",
+        "genome_id": "5b090455b809",
         "op": "crossover",
         "parents": [
-          "78da62714c26",
-          "5daa285c4dba"
+          "8fe0c4db1378",
+          "951175baee90"
         ],
         "seed": 404
       }
@@ -4193,17 +4202,31 @@
   },
   "schema": "proto1-e2e-demo/1",
   "selected_pass_genome_for_wav": {
-    "genome_id": "5daa285c4dba",
+    "genome_id": "951175baee90",
     "genome_key": "b",
     "wav_paths": {
-      "cross_range_pair": "results_final/prototype1_cross_range_pair_5daa285c4dba.wav",
-      "phrase": "results_final/prototype1_phrase_5daa285c4dba.wav"
+      "cross_range_pair": {
+        "path": "results_final/prototype1_cross_range_pair_951175baee90.wav",
+        "sha256": "265f55fd641587b5f8216b9af325c38e815deaa4f086a6d72acc7b35f5e34158",
+        "write_determinism_check": {
+          "digest_2": "265f55fd641587b5f8216b9af325c38e815deaa4f086a6d72acc7b35f5e34158",
+          "stable": true
+        }
+      },
+      "phrase": {
+        "path": "results_final/prototype1_phrase_951175baee90.wav",
+        "sha256": "c286ee2b53fb29543adca248da73256e46101cceed1db0caf49bcfa100ff27d7",
+        "write_determinism_check": {
+          "digest_2": "c286ee2b53fb29543adca248da73256e46101cceed1db0caf49bcfa100ff27d7",
+          "stable": true
+        }
+      }
     }
   },
   "timing_sec": {
-    "reference_set_build": 141.78966355323792,
-    "run_1": 5.35521388053894,
-    "run_2": 5.328066825866699,
-    "total": 152.56684970855713
+    "reference_set_build": 157.9064073562622,
+    "run_1": 6.110501289367676,
+    "run_2": 6.2761523723602295,
+    "total": 170.40449833869934
   }
 }

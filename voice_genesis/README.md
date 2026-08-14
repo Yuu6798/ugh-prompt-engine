@@ -106,12 +106,17 @@ scratchpad 上の検証プログラムは `vt_harness/` というディレクト
 `report.reference_set_hash != current_reference_set_hash` の全件に
 `stale_audit=true` を立てる）。したがって:
 
-- 0.1 時代に生成済みのコミット済み成果物（`proto1/results_final/genome_registry.jsonl`
+- 版が変わった直後のコミット済み成果物（`proto1/results_final/genome_registry.jsonl`
   の各エントリの `audit.reference_set_hash`、`proto1/results_final/e2e_run.json`
-  の `reference_set.sidecar`）は、0.1 の hash を持つ歴史的記録として
-  **書き換えない**。新版 gallery に対する再監査は別途 `build_reference_set()`
-  を再実行して行う（本 README 上部の WAV 再生成コマンドと同様、決定論的に
-  再現可能）
+  の `reference_set.sidecar`）は、原則としてその時点の hash を持つ歴史的
+  記録として**書き換えない**。新版 gallery に対する再監査は別途
+  `build_reference_set()` を再実行して行う（本 README 上部の WAV 再生成
+  コマンドと同様、決定論的に再現可能）。**2026-08-14（PR#261 R34）**:
+  この原則の唯一の明示的な例外として、R24–R36 の検証強化サイクル完了後
+  に `results_final/` 一式（`e2e_run.json` / `genome_registry.jsonl`）を
+  現行コードで意図的に再生成し正本を更新した（下記「WAV は非同梱」節の
+  既知の限界も合わせて解消）。現在のコミット済み成果物は
+  `reference-set/0.2` の hash を反映している
 - 「参照集合の版が変わったら過去の監査結果が古くなる」という性質は
   sidecar を版管理された成果物として扱う設計上、意図された挙動である
 
@@ -139,14 +144,17 @@ sf.write('/tmp/sakura_voiceA.wav', result.wav, result.sr)
 `singer/results_s9/nasal_place_report.md` 記載のパラメータ・
 `singer/render_song_v5.py` の `render_sakura_v5()` を用いる。
 
-**既知の限界（既存成果物との差分）**: `proto1/proto1_demo.py` が出力する
-`e2e_run.json` の `selected_pass_genome_for_wav.wav_paths` は、PR#261
-レビュー R11（WAV ファイルバイトの sha256 digest + 2 回書き比較による
-`soundfile.write()` 自体の決定論性確認）以降、各 WAV エントリが文字列
-（相対パス）ではなく `{"path", "sha256", "write_determinism_check"}` の
-構造化 dict になっている。コミット済み `proto1/results_final/e2e_run.json`
-は R11 より前に生成された歴史的記録であり、旧スキーマ（文字列）のまま
-書き換えていない。新スキーマは次回以降の `proto1_demo.py` 実行から反映される。
+`proto1/proto1_demo.py` が出力する `e2e_run.json` の
+`selected_pass_genome_for_wav.wav_paths` は、PR#261 レビュー R11（WAV
+ファイルバイトの sha256 digest + 2 回書き比較による `soundfile.write()`
+自体の決定論性確認）以降、各 WAV エントリが文字列（相対パス）ではなく
+`{"path", "sha256", "write_determinism_check"}` の構造化 dict になって
+いる。**2026-08-14（PR#261 R34）**: コミット済み `proto1/results_final/
+e2e_run.json` は R11 より前に生成された旧スキーマ（文字列）の歴史的記録
+だったが、R24–R36 の検証強化サイクル完了後のコードで正本一式を再生成し、
+新スキーマ（構造化 dict + WAV 本体の sha256 収載）へ更新した。WAV 本体
+そのものは引き続きリポジトリに同梱しない（サイズ + sha256 収載により
+バイト列レベルの検証は可能なため）。
 
 ## 全ゲート成立状況（要約）
 
@@ -197,8 +205,8 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 
 PR#261 のレビューは C1–C6 → R1–R7 → R8–R11 → R12–R13 → R14–R16 →
 R17–R19 → R20–R21 → R22–R23 → R24–R25 → R26 → R27–R28 → R29–R30 →
-R31–R33 の 14 ラウンドにわたり、「ローダー/来歴/公開」系および「検出
-ロジック」系の同型の穴（schema 未検証・schema キー欠落時のデフォルト
+R31–R33 → R34–R36 の 15 ラウンドにわたり、「ローダー/来歴/公開」系および
+「検出ロジック」系の同型の穴（schema 未検証・schema キー欠落時のデフォルト
 補完・全セクション/リーフフィールド欠落時のデフォルト補完・float リーフ
 の非有限値（NaN/inf）未検証・content hash 未検証・エントリ内の重複表現
 フィールド間の不整合・列挙型フィールド（op）の読み込み側検証の非対称性・
@@ -209,13 +217,15 @@ R31–R33 の 14 ラウンドにわたり、「ローダー/来歴/公開」系�
 再計算前提となる実測値自体の定義域未検証・親の存在/順序不変条件・
 staging の不完全さ（固定ファイル名による併走実行の踏みつけ・正本
 publish の排他制御欠如）・書き戻し処理の非アトミック性（中断時の全損
-リスク）・歴史的正本レポートの開示文言の陳腐化・**「実出力だけを走査し
-期待値集合と照合しない」検出力欠陥**・**最近傍/最良値探索ループでの
-NaN 距離の fail-open**・**nanmedian 等の暗黙除外・フィルタ後リストの
-非空判定による不完全証拠 PASS**・**必須成果物が生成できない run の
-publish 未門番化（決定論とは独立の fail-closed 条件の欠落）**・
-**書き込み経路が読み込み側専用の検証を経由しない書読非対称性**）を
-逐次指摘し続けた。指摘の再発を
+リスク）・**追記(append)経路の非アトミック性（中断時の部分行破損による
+正本 JSONL 恒久破損リスク）**・歴史的正本レポートの開示文言の陳腐化・
+**「実出力だけを走査し期待値集合と照合しない」検出力欠陥**・**最近傍/
+最良値探索ループでの NaN 距離の fail-open**・**nanmedian 等の暗黙除外・
+フィルタ後リストの非空判定による不完全証拠 PASS**・**期待件数チェック
+欠如（件数そのものの退行を見ない）による不完全証拠 PASS**・**必須成果物
+が生成できない run の publish 未門番化（決定論とは独立の fail-closed
+条件の欠落）**・**書き込み経路が読み込み側専用の検証を経由しない
+書読非対称性**）を逐次指摘し続けた。指摘の再発を
 止めるため、`voice_genesis/` 内で永続化データを**読み込む**（デシリア
 ライズしてオブジェクトへ復元する）経路、**正本を公開する**（成果物
 ファイルを書き換える）経路、および（R20–R21 で追加）レンダリング結果
@@ -240,8 +250,8 @@ publish 未門番化（決定論とは独立の fail-closed 条件の欠落）**
 | ファイル::関数 | 書く対象 | 検証内容 | 状態 |
 |---|---|---|---|
 | `proto1/proto1_demo.py::_publish_outputs()` / `_publish_or_fail_closed()` | `genome_registry.jsonl` / WAV 2 種 / `e2e_run.json` の正本置換 | 全成果物を staging へ揃えてから一括 `os.replace` (R1) / 決定論比較（genome 全 diff + WAV ファイル書き出しの決定論性）不成立時は publish 自体を呼ばず失敗診断を非正本パスへ (R8) / WAV ファイルバイトの sha256 digest 記録 + 2 回書き比較 (R11) / staging ファイル名を `_run_suffix()`（pid + uuid4 の一部）で per-run 一意化し併走 `main()` 同士の staging ファイル踏みつけを防止、加えて正本 publish 直前を `_publish_lock()`（O_EXCL 作成 + 終了時削除）で排他しロック存在時は `PublishLockError`→`SystemExit` で即拒否 (R25。registry_path の serialize は R2 の repo-relative 正本パスのまま・決定論比較対象からは元々除外済み) / `_publish_or_fail_closed()` の門番条件を `determinism_passed` から `publish_ready`（決定論一致 **かつ** F1-7 必須 WAV 成果物を生成できたこと）へ一般化し、全候補が linkability 監査不合格で `selected_key is None` のまま WAV が 1 件も生成できない run を、決定論とは独立の fail-closed 条件として publish 拒否 (R27。理由文字列は失敗要因を列挙して診断へ反映) | **検証済み** |
-| `proto1/registry.py::GenomeRegistry.append()` | registry JSONL への 1 行追記 | op 許容値検証 / 重複 genome_id 拒否 (C3) / parents の各 ID が既に registry に存在することを検証 (R10a) / op 別の parent 数不変条件（sample=0/mutate=1/crossover=2）を検証 (R24。`_entry_from_dict()` にも同型検証を追加し読み込み経路の非対称性も防止) / 書き込み前に直列化 → `_entry_from_dict()` によるラウンドトリップを試し、`load_all()` が拒否するであろうエントリ（例: 呼び出し元が frozen dataclass を直接組み立てて `source_mode="robotic"` 等の不正値を持つ genome を渡した場合）を書き込み前に拒否し書読対称性を保証 (R28。将来 append 高頻度化時の性能注記を docstring に明記) / `_entry_from_dict()` の seed フィールドを `_as_optional_int()`（None または int、bool は明示排除）で実行時型検証 (R29。`RegistryEntry.seed: Optional[int]` は型注釈のみで従来無検証だった。append() 側は R28 のラウンドトリップ検証が間接的にカバー) | **検証済み** |
-| `proto1/reference_set.py::LinkabilityAuditLog.append()` / `_rewrite()` | 監査ログ JSONL | ラウンドトリップ検証（R30、下記）に先立ち、既存ログとの report_id 重複を軽量チェックで拒否 (R33。`load_all()` 側の重複検出と対称)。`append()` は書き込み前に直列化 → `_report_from_dict()` によるラウンドトリップを試し、`load_all()`/`mark_stale()` が拒否するであろうレポート（例: 呼び出し元が `LinkabilityAuditReport(...)` を直接構築して `e1_pass` を実測値と矛盾させた場合）を書き込み前に拒否し書読対称性を保証 (R30。registry.py の R28 と同型。旧来「常に `audit_linkability()` 内製オブジェクトのみ受理する設計だから内容検証不要」としていた前提を、直接構築された不整合オブジェクトが渡り得るケースに備えて実検証へ格上げ)。`_rewrite()`（`mark_stale()` が使う全件書き戻し）は旧 truncate-then-write（中断時に旧ログ全損の恐れ）から、同一ディレクトリへの staging ファイル書き込み + `os.replace()` によるアトミック置換へ変更 (R17)。置換前の中断では旧ログが無傷のまま残ることをテストで確認。`mark_stale()` の書き戻し経路は `load_all()` で得た既存集合の `stale_audit` のみを差し替える（report_id 不変・`append()` 非経由）ため R33 の重複検出と干渉しないことをテストで確認 | **検証済み** |
+| `proto1/registry.py::GenomeRegistry.append()` / `_write_all_atomic()` | registry JSONL への 1 行追記 | op 許容値検証 / 重複 genome_id 拒否 (C3) / parents の各 ID が既に registry に存在することを検証 (R10a) / op 別の parent 数不変条件（sample=0/mutate=1/crossover=2）を検証 (R24。`_entry_from_dict()` にも同型検証を追加し読み込み経路の非対称性も防止) / 書き込み前に直列化 → `_entry_from_dict()` によるラウンドトリップを試し、`load_all()` が拒否するであろうエントリ（例: 呼び出し元が frozen dataclass を直接組み立てて `source_mode="robotic"` 等の不正値を持つ genome を渡した場合）を書き込み前に拒否し書読対称性を保証 (R28。将来 append 高頻度化時の性能注記を docstring に明記) / `_entry_from_dict()` の seed フィールドを `_as_optional_int()`（None または int、bool は明示排除）で実行時型検証 (R29。`RegistryEntry.seed: Optional[int]` は型注釈のみで従来無検証だった。append() 側は R28 のラウンドトリップ検証が間接的にカバー) / 書き込み本体を旧 `self.path.open("a")` での write() から `_write_all_atomic()`（既存全件 + 新規エントリを同一ディレクトリの staging ファイルへ書いてから `os.replace()` で置換）へ変更 (R35。`a` モードの write() は書き込み途中の中断で正本末尾に破損した部分行が恒久的に残り得た。reference_set.py の `_rewrite()`（R17）と同型パターン。置換前の中断では旧ログが無傷のまま残り staging ファイルも掃除されることをテストで確認) | **検証済み** |
+| `proto1/reference_set.py::LinkabilityAuditLog.append()` / `_rewrite()` | 監査ログ JSONL | ラウンドトリップ検証（R30、下記）に先立ち、既存ログとの report_id 重複を軽量チェックで拒否 (R33。`load_all()` 側の重複検出と対称)。`append()` は書き込み前に直列化 → `_report_from_dict()` によるラウンドトリップを試し、`load_all()`/`mark_stale()` が拒否するであろうレポート（例: 呼び出し元が `LinkabilityAuditReport(...)` を直接構築して `e1_pass` を実測値と矛盾させた場合）を書き込み前に拒否し書読対称性を保証 (R30。registry.py の R28 と同型。旧来「常に `audit_linkability()` 内製オブジェクトのみ受理する設計だから内容検証不要」としていた前提を、直接構築された不整合オブジェクトが渡り得るケースに備えて実検証へ格上げ)。`_rewrite()`（`mark_stale()` が使う全件書き戻し）は旧 truncate-then-write（中断時に旧ログ全損の恐れ）から、同一ディレクトリへの staging ファイル書き込み + `os.replace()` によるアトミック置換へ変更 (R17)。置換前の中断では旧ログが無傷のまま残ることをテストで確認。`mark_stale()` の書き戻し経路は `load_all()` で得た既存集合の `stale_audit` のみを差し替える（report_id 不変・`append()` 非経由）ため R33 の重複検出と干渉しないことをテストで確認。`append()` 自体の書き込み本体も旧 `self.path.open("a")` での write() から、既存全件 + 新規レポートを `_rewrite()` へ渡す形へ変更 (R35。registry.py の `_write_all_atomic()` と同型の動機。既存の `_rewrite()`（R17）をそのまま再利用したため新規 staging ロジックの重複実装なし)。置換前の中断では旧ログが無傷のまま残り staging ファイルも掃除されることをテストで確認 | **検証済み** |
 | `proto1/reference_set.py::ReferenceSetGallery.sidecar_dict()` | `reference-set/0.2` sidecar dict（呼び出し元が JSON へ埋め込む） | — | **対象外**（書き出し専用。対応する読み込みローダーが本コードベースに存在しない。C5/C6 掃討・R9 対応時に確認済み） |
 | `proto1/results_p1/_generate_report_data.py` | `results_p1/report_data.json` 等 | — | **対象外**（一回限り実行済みの歴史的レポート生成スクリプト。再実行して正本を差し替える経路も、生成物を再ロードする経路も存在しない） |
 | `harness/*.py` の各 `main()`（`vt1_v2/v3.py`・`vt2_*.py`・`vt3_*.py` 等） | `results_v*/*.json` への一回限りの書き出し | — | **凍結対象外**（harness/ は凍結・無改変の歴史的検証コード） |
@@ -262,7 +272,7 @@ R20–R21 で判明した第三の穴の類型: 上記 2 表はいずれも「JS
 | `singer/genesis_v0.py::linkability_audit()`（`genesis_v1.py`/`genesis_v2.py` は独自実装を持たず本関数を再利用） | 候補 embedding の最近傍距離（standin-gallery + voice_A/B/C/D） | 候補ベクトル・参照ベクトル・算出距離のいずれかが非有限なら即座に監査不能（`measurement_valid=False`、`passed=False`、`margin=-inf`）として拒否 (R21)。旧実装は `if d < best:` の単純更新のみで、NaN 距離では `best` が初期値 `inf` のまま残り「無限マージンで最も新規」という fail-open を起こしていた。`run_genesis()` の淘汰理由も "linkability_fail" と区別して "measurement_invalid" を記録するよう追加。同型掃討: `genesis_v1.py`/`genesis_v2.py` は独自実装なし（`gv.linkability_audit` を直接呼ぶ）、`identity_metrics.py::measure_separation()` の `within_e1_max = max(a, b)`（Python 組込み `max()` は NaN が第 2 引数だと無視される順序依存バグ）は `np.max()` へ変更（現状呼び出し元なしの診断専用関数だが同型のため予防的に修正）、`genesis_v0.py::nn_distances()` の `min(dists)` も `np.min()` へ変更（`linkability_audit()` 強化により到達不能になったが多層防御として維持） | **検証済み** |
 | `singer/gate_checks.py::_grip_axis()`（`gate6_grip_quick_check()` 経由）/ `singer/gate_checks_v2.py::_grip_axis_v2()`（`gate6_grip_quick_check_v2()` 経由。v1/v2 は別実装） | gate6 grip 判定の sweep×probe 特徴量グリッド | 全特徴 × 全 sweep 点 × 全 probe セルの有限性を PASS の前提条件に追加し、`non_finite_cells` に該当セルを列挙 (R23)。旧実装は `E[f] = float(np.nanmedian(E_note))` が非有限セルを黙って中央値計算から除外するため、1 probe が完全に測定不能でも他 probe が同一値なら中央値が変わらず「不完全な証拠での PASS」を検出できなかった。v1/v2 双方に同型修正を適用。既存 4 音源(voice_a〜d)の gate6 が両版とも非有限セル 0 件・従来どおりの pass/fail 判定のまま非退行することを実測確認、疑似セル注入（レンダリングを monkeypatch で置換した軽量テスト）で 1 probe 完全欠測時に FAIL することを確認 | **検証済み** |
 | `proto1/render_health.py::formant_sweep_report()` | P6 formant sweep の formant_scale 掃引セントロイド系列 | 全 formant_scale 点のセントロイドの有限性を PASS の前提条件に追加し、`non_finite_scales` に該当 scale を列挙 (R31)。旧実装は隣接差分を `1.0 if d >= 0.0 else 0.0` で二値化していたため、centroid 測定が NaN になった点を「方向が逆だった 1 ステップ」として黙って 0 加算し、残りの点が健全なら direction_consistency が閾値を超えて測定不能なまま PASS し得た（gate6 grip の R23 と同型）。既存正本の render-health 評価（`sampler.sample` 由来 genome）が非退行で pass することを実測確認、中央 1 点 NaN 注入（レンダリング/特徴抽出を monkeypatch で置換した軽量テスト）で FAIL になることを確認 | **検証済み** |
-| `singer/genesis_v0.py::quick_s5()`（`genesis_v1.py`/`genesis_v2.py` は独自実装を持たず本関数を再利用） | genesis 候補の quick-S5 F0 追従（phrase0 先頭 `QUICK_N_NOTES`=4 音） | 4 音全てが有限に測定できた上で全て閾値内であることを `f0_pass` の前提条件に追加 (R32)。旧実装は非有限を除外済みリストの非空判定 (`bool(errs)`) のみで判定していたため、4 音のうち 1 音が未測定（NaN）でもその 1 音がこっそり除外リストから抜け落ち、残り 3 音が健全なら「4 音全て測って良好だった」と取り違えて PASS し得た（render_health.py の R31・gate6 grip の R23 と同型）。1 音欠測注入（軽量モックテスト）で FAIL になること・4 音全て有限かつ閾値内なら従来どおり PASS することの両方をテストで確認 | **検証済み** |
+| `singer/genesis_v0.py::quick_s5()`（`genesis_v1.py`/`genesis_v2.py` は独自実装を持たず本関数を再利用） | genesis 候補の quick-S5 F0 追従（phrase0 先頭 `QUICK_N_NOTES`=4 音） | 4 音全てが有限に測定できた上で全て閾値内であることを `f0_pass` の前提条件に追加 (R32)。旧実装は非有限を除外済みリストの非空判定 (`bool(errs)`) のみで判定していたため、4 音のうち 1 音が未測定（NaN）でもその 1 音がこっそり除外リストから抜け落ち、残り 3 音が健全なら「4 音全て測って良好だった」と取り違えて PASS し得た（render_health.py の R31・gate6 grip の R23 と同型）。1 音欠測注入（軽量モックテスト）で FAIL になること・4 音全て有限かつ閾値内なら従来どおり PASS することの両方をテストで確認。さらに `len(raw_errs) == QUICK_N_NOTES` を `f0_pass` の前提条件に追加 (R36)。R32 の有限性チェックは「取れた音は全部有限か」しか見ておらず「そもそも 4 音取れたか」を検証していなかったため、phrase0 のノート数が退行で 3 音しか無い場合でも `phrase0_rows`/`raw_errs` が静かに 3 要素になるだけで例外にならず、その 3 音が全て有限かつ閾値内なら「4 音全て測って良好だった」と取り違えて PASS し得た（R32 よりさらに手前の、1 音が測定すらされていない不完全証拠 PASS）。3 音のみ返る退行を注入して FAIL になること・4 音（および `[:QUICK_N_NOTES]` で切り詰められる 5 音）なら従来どおり PASS することをテストで確認 | **検証済み** |
 
 **終端宣言**: 上記 17 行のうち、ロード経路（proto1 の 3 経路）・公開経路
 （proto1 の 3 経路）・検出ロジック経路（proto1/singer の 5 経路）の計 11
@@ -272,9 +282,9 @@ R20–R21 で判明した第三の穴の類型: 上記 2 表はいずれも「JS
 （reference_set の sidecar・一回限りのレポート生成スクリプト・singer/ の
 JSON 書き出し。計 3 経路）も明示的に対象外（3+3=6 経路）。**全行が「検証
 済み」または明示的な境界宣言に分類されたため、C1–C6/R1–R11/R12–R13/
-R14–R16/R17–R19/R20–R21/R22–R23/R24–R25/R26/R27–R28/R29–R30/R31–R33 の
-14 ラウンドにわたる「ローダー/来歴/公開/検出ロジック」系残穴の指摘サイ
-クルをここで終端とする。** 今後同種の指摘が来た場合は、本表に新しい行を
+R14–R16/R17–R19/R20–R21/R22–R23/R24–R25/R26/R27–R28/R29–R30/R31–R33/
+R34–R36 の 15 ラウンドにわたる「ローダー/来歴/公開/検出ロジック」系残穴の
+指摘サイクルをここで終端とする。** 今後同種の指摘が来た場合は、本表に新しい行を
 追加できるかどうか（＝これまで見落としていた経路か）をまず確認すること。
 既存行の再指摘であれば、当該行の「検証内容」列に記載済みの対処で十分か、対処
 自体に不備があるかを個別に判断する。

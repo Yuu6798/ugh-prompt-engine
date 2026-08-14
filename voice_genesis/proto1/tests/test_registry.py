@@ -601,3 +601,54 @@ def test_entry_from_dict_accepts_null_and_int_seed_non_regression(registry_path)
     loaded = reg.load_all()
     assert len(loaded) == 2
     assert {e.genome_id: e.seed for e in loaded} == {e1.genome_id: None, e2.genome_id: 42}
+
+
+# --- PR#261 レビュー R35: append() の書き込みを staging + os.replace アトミック
+# 置換にする（R17 と同型） --------------------------------------------------
+
+
+def test_append_interrupted_before_replace_leaves_old_log_intact(registry_path, monkeypatch):
+    """旧実装は `open(path, "a")` での write() だったため、書き込み途中の中断
+    （プロセス kill・ディスク満杯等）で正本 JSONL の末尾に破損した部分行が
+    残り得た。staging + `os.replace()` のアトミック置換であれば、置換
+    （rename）前に中断しても旧ログはそのまま残ることを確認する。
+    """
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+
+    original_text = registry_path.read_text(encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated interruption before atomic replace")
+
+    monkeypatch.setattr(r.os, "replace", _boom)
+
+    g2 = sampler.sample(2, name="second")
+    with pytest.raises(OSError):
+        reg.append(g2, op="sample", seed=2, now=FIXED_TIME)
+
+    # 旧ログは無傷（staging ファイルへの書き込み自体は完了していても、本ファイルを
+    # 指す os.replace が呼ばれる前に中断したため本ファイルは一切変化しない）。
+    assert registry_path.read_text(encoding="utf-8") == original_text
+    loaded = reg.load_all()
+    assert len(loaded) == 1  # g2 は反映されていない
+
+    # staging ファイルも例外ハンドラで掃除されている（残置しない）。
+    leftover = list(registry_path.parent.glob(f"{registry_path.name}.*.tmp"))
+    assert leftover == []
+
+
+def test_append_still_succeeds_without_interruption(registry_path):
+    """非退行確認: 中断がなければ staging+os.replace 化後も append は従来どおり動く。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    e1 = reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+    g2 = sampler.sample(2, name="second")
+    e2 = reg.append(g2, op="sample", seed=2, now=FIXED_TIME)
+
+    loaded = reg.load_all()
+    assert [e.genome_id for e in loaded] == [e1.genome_id, e2.genome_id]
+
+    leftover = list(registry_path.parent.glob(f"{registry_path.name}.*.tmp"))
+    assert leftover == []

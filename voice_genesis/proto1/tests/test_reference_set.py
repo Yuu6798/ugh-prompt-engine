@@ -472,3 +472,56 @@ def test_mark_stale_rewrite_path_does_not_trigger_duplicate_detection(tmp_path, 
     assert len(loaded) == 2
     assert {r.report_id for r in loaded} == {report_a.report_id, report_b.report_id}
     assert all(r.stale_audit for r in loaded)
+
+
+# --- PR#261 レビュー R35: append() の書き込みを staging + os.replace アトミック
+# 置換にする（R17 と同型。`_rewrite()` を append() から再利用する形で実装） -----
+
+
+def test_append_interrupted_before_replace_leaves_old_log_intact(tmp_path, small_gallery, monkeypatch):
+    """旧実装は `open(path, "a")` での write() だったため、書き込み途中の中断
+    （プロセス kill・ディスク満杯等）で正本 JSONL の末尾に破損した部分行が
+    残り得た。append() が `_rewrite()`（staging + `os.replace()` のアトミック
+    置換）へ委譲するようになった後も、置換（rename）前に中断すれば旧ログは
+    そのまま残ることを確認する。
+    """
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report_a = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report_a)
+
+    original_text = log.path.read_text(encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated interruption before atomic replace")
+
+    monkeypatch.setattr(rset.os, "replace", _boom)
+
+    report_b = rset.audit_linkability(small_gallery.members[1].genome, small_gallery)
+    with pytest.raises(OSError):
+        log.append(report_b)
+
+    # 旧ログは無傷（staging ファイルへの書き込み自体は完了していても、本ファイルを
+    # 指す os.replace が呼ばれる前に中断したため本ファイルは一切変化しない）。
+    assert log.path.read_text(encoding="utf-8") == original_text
+    loaded = log.load_all()
+    assert len(loaded) == 1  # report_b は反映されていない
+
+    # staging ファイルも例外ハンドラで掃除されている（残置しない）。
+    leftover = list(tmp_path.glob(f"{log.path.name}.*.tmp"))
+    assert leftover == []
+
+
+def test_append_still_succeeds_without_interruption(tmp_path, small_gallery):
+    """非退行確認: 中断がなければ append() の staging+os.replace 化後も
+    従来どおり動く。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report_a = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    report_b = rset.audit_linkability(small_gallery.members[1].genome, small_gallery)
+    log.append(report_a)
+    log.append(report_b)
+
+    loaded = log.load_all()
+    assert {r.report_id for r in loaded} == {report_a.report_id, report_b.report_id}
+
+    leftover = list(tmp_path.glob(f"{log.path.name}.*.tmp"))
+    assert leftover == []
