@@ -201,6 +201,23 @@ def test_entry_from_dict_rejects_unknown_registry_schema(registry_path):
         reg.load_all()
 
 
+def test_entry_from_dict_rejects_missing_registry_schema_key(registry_path):
+    """registry_schema キー自体が欠落している場合も、現行版へのデフォルト補完
+    をせず明示的に拒否する（PR#261 レビュー R12 の同型掃討: genome.py の
+    schema_version と同じ理由）。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    data = json.loads(registry_path.read_text(encoding="utf-8").strip())
+    del data["registry_schema"]
+    assert "registry_schema" not in data  # 前提確認
+    registry_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
 # --- PR#261 レビュー R3: エントリ内 genome の検証 / genome_id・audit 整合 ----
 
 

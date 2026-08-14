@@ -193,6 +193,17 @@ def test_from_dict_rejects_unsupported_schema_version():
         g.from_dict(data)
 
 
+def test_from_dict_rejects_missing_schema_version_key():
+    """schema_version キー自体が欠落している場合も、現行版へのデフォルト補完
+    をせず明示的に拒否する（PR#261 レビュー R12: `.get(..., SCHEMA_VERSION)`
+    は「キー欠落」を「現行版を宣言」として fail-open してしまっていた）。"""
+    data = g.to_dict(g.build_genome("valid"))
+    del data["schema_version"]
+    assert "schema_version" not in data  # 前提確認
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
 def test_from_dict_rejects_out_of_physio_range_flag_that_disagrees_with_params():
     """physio_range が実パラメータから再計算した値と一致しない文書を拒否する（C5）。
 

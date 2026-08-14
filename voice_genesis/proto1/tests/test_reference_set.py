@@ -6,6 +6,7 @@ pytest の日常反復用に `n_permutations` は小さい値（20）で回す�
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -245,3 +246,37 @@ def test_load_all_accepts_untampered_report(tmp_path, small_gallery):
     assert len(loaded) == 1
     assert loaded[0].e1_pass == report.e1_pass
     assert loaded[0].overall_pass == report.overall_pass
+
+
+# --- PR#261 レビュー R13: pass/fail 再計算前の実測値の定義域検証 ------------
+
+
+def test_load_all_rejects_similarity_above_cosine_domain(tmp_path, small_gallery):
+    """コサイン類似度は理論上 [-1.0, 1.0] に収まる。1.0 を超える宣言値は、
+    R9 の再計算式そのものを無意味にする域外注入として拒否する（R13）。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    data = json.loads(log.path.read_text(encoding="utf-8").strip())
+    data["e1_max_similarity"] = 1.5  # コサイン類似度の定義域外（R13 が R9 より先に検出するはず）
+    log.path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(rset.LinkabilityAuditValidationError):
+        log.load_all()
+
+
+def test_load_all_rejects_non_finite_similarity(tmp_path, small_gallery):
+    """e1_max_similarity が NaN の場合、`NaN <= x` は常に False になるため
+    R9 単体の再計算一致検証だけでは検出できない構成になり得る。R13 の
+    定義域検証（R9 より先に走る）で拒否する。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    data = json.loads(log.path.read_text(encoding="utf-8").strip())
+    data["e1_max_similarity"] = float("nan")
+    log.path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(rset.LinkabilityAuditValidationError):
+        log.load_all()

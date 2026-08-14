@@ -450,6 +450,22 @@ class LinkabilityAuditValidationError(ValueError):
 
 def _report_from_dict(data: Dict[str, Any]) -> LinkabilityAuditReport:
     report = LinkabilityAuditReport(**data)
+
+    # PR#261 レビュー R13: R9 の pass/fail 再計算より前に、その入力となる
+    # 実測値（e1/e2 の最近傍類似度・チャンス帯 p95）自体がコサイン類似度の
+    # 定義域（有限かつ [-1.0, 1.0]）内であることを検証する。R9 の再計算は
+    # `<=` 比較のみに依拠するため、非有限値（NaN）や定義域外の値（>1.0 等）を
+    # 混入されると、比較結果自体が無意味になったまま「宣言値と一致」して
+    # R9 を素通りし得る（例: NaN <= NaN は常に False。宣言側も False に
+    # 揃えておけば R9 の一致検証だけでは検出できない）。
+    for field_name in ("e1_max_similarity", "e1_chance_band_p95", "e2_max_similarity", "e2_chance_band_p95"):
+        value = getattr(report, field_name)
+        if not np.isfinite(value) or not (-1.0 <= value <= 1.0):
+            raise LinkabilityAuditValidationError(
+                f"監査ログの {field_name} がコサイン類似度の定義域外または非有限"
+                f"（実際: {value!r}。期待範囲: 有限かつ [-1.0, 1.0]）"
+            )
+
     # PR#261 レビュー R9: 保存済みの実測値（e1/e2 の最近傍類似度・チャンス帯
     # p95）から e1_pass/e2_pass/overall_pass を audit_linkability() と同一の
     # 比較則（`<=`）で再計算し、宣言値と不一致なら拒否する。監査ログは append-only

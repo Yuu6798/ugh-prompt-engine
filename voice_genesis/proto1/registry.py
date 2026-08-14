@@ -101,8 +101,13 @@ def entry_to_dict(entry: RegistryEntry) -> Dict[str, Any]:
 def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
     # sidecar 様式のバージョン（PR#261 レビュー C5/C6 の同型穴掃討: genome.py の
     # schema_version 検証と同じ理由で、registry_schema も宣言値を無条件に信頼
-    # せず、未知/不一致なら現行レイアウトでの誤解釈を拒否する）。
-    registry_schema = data.get("registry_schema", REGISTRY_SCHEMA)
+    # せず、未知/不一致なら現行レイアウトでの誤解釈を拒否する）。キー自体が
+    # 欠落している場合も現行版へのデフォルト補完は行わず明示的に拒否する
+    # （PR#261 レビュー R12: `.get(..., REGISTRY_SCHEMA)` は「キー欠落」を
+    # 「現行版を宣言」として fail-open してしまっていた同型の穴）。
+    if "registry_schema" not in data:
+        raise RegistryError("registry_schema キーが存在しない（欠落）")
+    registry_schema = data["registry_schema"]
     if registry_schema != REGISTRY_SCHEMA:
         raise RegistryError(
             f"registry_schema は {REGISTRY_SCHEMA!r} でなければならない（実際: {registry_schema!r}）"
@@ -150,6 +155,12 @@ def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
         parents=list(data.get("parents", [])),
         op=data["op"],
         seed=data.get("seed"),
+        # renderer_version/feature_set_version は PR#261 レビュー R12 の grep 掃討で
+        # 同じ `.get(..., 定数)` パターンとして見つかったが、schema_version/
+        # registry_schema と違い「これに従ってドキュメント全体の構造を解釈する」
+        # 契約バージョンではなく、単なる由来メタデータ（どのレンダラ/特徴量セット
+        # で作られたか）。欠落時に現行値で埋めても構造誤読は起きないため、
+        # デフォルト補完のまま維持する（境界宣言）。
         renderer_version=data.get("renderer_version", RENDERER_VERSION),
         feature_set_version=data.get("feature_set_version", FEATURE_SET_VERSION),
         eval=dict(data.get("eval", {})),

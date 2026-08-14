@@ -298,10 +298,15 @@ def from_dict(data: Dict[str, Any]) -> VoiceGenome:
     PR#261 レビュー C6）。physio_range は宣言値をそのまま信頼せず、実パラメータ
     から `compute_physio_range()` で再計算した値と一致しなければ拒否する
     （改ざん・手編集された安全性フラグの通過を防ぐ。PR#261 レビュー C5）。
+    schema_version キー自体が欠落している場合も、現行版へのデフォルト補完は
+    行わず明示的に拒否する（PR#261 レビュー R12: `.get(..., SCHEMA_VERSION)`
+    のフォールバックは「キー欠落」と「現行版を宣言」を区別できず、前者を
+    後者として fail-open してしまっていた）。
     """
     _require(isinstance(data, dict), "genome データは dict でなければならない")
 
-    schema_version = _as_str(data.get("schema_version", SCHEMA_VERSION), "schema_version")
+    _require("schema_version" in data, "schema_version キーが存在しない（欠落）")
+    schema_version = _as_str(data["schema_version"], "schema_version")
     _require(
         schema_version == SCHEMA_VERSION,
         f"schema_version は {SCHEMA_VERSION!r} でなければならない（実際: {schema_version!r}）",
