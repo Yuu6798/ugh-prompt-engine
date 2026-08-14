@@ -37,9 +37,9 @@ _VT_HARNESS_DIR = _HERE.parent / "harness"
 if str(_VT_HARNESS_DIR) not in sys.path:
     sys.path.insert(0, str(_VT_HARNESS_DIR))
 
-import measure as m  # noqa: E402  (vt_harness、無改変・import 流用のみ)
-import measure_v2 as m2  # noqa: E402  (vt_harness、無改変・import 流用のみ)
-import measure_v3 as m3  # noqa: E402  (vt_harness、無改変・import 流用のみ)
+import measure as m  # noqa: E402  (harness、無改変・import 流用のみ)
+import measure_v2 as m2  # noqa: E402  (harness、無改変・import 流用のみ)
+import measure_v3 as m3  # noqa: E402  (harness、無改変・import 流用のみ)
 
 import render_song as rs  # noqa: E402
 import gate_checks as gc  # noqa: E402  (無改変。gate1-5・閾値定数を import 流用)

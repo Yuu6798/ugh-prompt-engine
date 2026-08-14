@@ -17,7 +17,7 @@
      （scipy.signal.resample_poly、決定論・多相 FIR）。
 
 voice_A / voice_B の Genome は `proto1/genome.py` の VoiceGenome（P1 スキーマ）
-をそのまま import・流用して定義する（vt_harness/proto1 は無改変・import
+をそのまま import・流用して定義する（harness/proto1 は無改変・import
 のみ）。R0.9 独自の genome -> レンダラパラメータ写像は本ファイル内
 （`_glottal_params_from_genome` 等）に閉じる。
 """
@@ -46,7 +46,7 @@ for _p in (_VT_HARNESS_DIR, _PROTO1_DIR):
         sys.path.insert(0, str(_p))
 
 import genome as pg  # noqa: E402  (proto1、変更禁止・import 流用のみ)
-import voice_r0 as _vr0  # noqa: E402  (vt_harness、変更禁止・import 流用のみ)
+import voice_r0 as _vr0  # noqa: E402  (harness、変更禁止・import 流用のみ)
 
 SR_OUT = 22050
 OVERSAMPLE_FACTOR = 4
@@ -528,7 +528,7 @@ def render_sustained_vowel(
     performance 層のオンセット遅延・ポルタメント・フレーズ強弱は含めない
     （定常測定に特化した最小レンダラ）が、**Genome 契約であるビブラート
     （microprosody.vibrato_rate_hz / vibrato_depth_cents）はノート先頭から
-    フルにかける**（vt_harness 系の従来の sustained-tone grip 計測と同じ
+    フルにかける**（harness 系の従来の sustained-tone grip 計測と同じ
     前提。performance 層のオンセット遅延は「いつビブラートを掛けるかという
     演奏判断」であり Genome 自体のビブラート特性とは別レイヤー、§6.2）。
     """

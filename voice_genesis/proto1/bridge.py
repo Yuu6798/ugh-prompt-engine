@@ -1,8 +1,8 @@
-"""bridge.py — VoiceGenome v0.2（genome.py）↔ vt_harness の R0.1 レンダラ Genome の橋渡し。
+"""bridge.py — VoiceGenome v0.2（genome.py）↔ harness の R0.1 レンダラ Genome の橋渡し。
 
-`vt_harness/voice_r0.py`（凍結・無改変）と `vt_harness/voice_r0_1.py`（息ノイズ
+`harness/voice_r0.py`（凍結・無改変）と `harness/voice_r0_1.py`（息ノイズ
 整形順序のみ修正した R0.1、同じく無改変）を import 流用し、P1 の新スキーマから
-`render_note` を呼べる形に変換する。vt_harness/ 配下には一切書き込まない。
+`render_note` を呼べる形に変換する。harness/ 配下には一切書き込まない。
 
 変換方針は `underspec_log_p1.md` の [UNDERSPEC-P1-3]〜[UNDERSPEC-P1-5] に詳細。
 要点だけここにも記す:
@@ -39,7 +39,7 @@ _VT_HARNESS_DIR = Path(__file__).resolve().parent.parent / "harness"
 if str(_VT_HARNESS_DIR) not in sys.path:
     sys.path.insert(0, str(_VT_HARNESS_DIR))
 
-import voice_r0 as _vr0  # noqa: E402  (vt_harness、変更禁止・import 流用のみ)
+import voice_r0 as _vr0  # noqa: E402  (harness、変更禁止・import 流用のみ)
 import voice_r0_1 as _vr1  # noqa: E402  (同上)
 
 SR = _vr1.SR

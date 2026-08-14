@@ -293,10 +293,19 @@ def _as_float_tuple(value: Any, field_name: str, length: int) -> Tuple[float, ..
 def from_dict(data: Dict[str, Any]) -> VoiceGenome:
     """辞書から VoiceGenome を再構築する。型・構造不正は GenomeValidationError で拒否する。
 
-    physio_range / audit は JSON に格納された値をそのまま信頼する（再計算しない）。
-    再計算したい場合は `revalidate_physio_range()` を明示的に呼ぶこと。
+    schema_version は宣言値が `SCHEMA_VERSION` と一致しなければ拒否する（将来の
+    非互換スキーマを現行レイアウトで誤解釈して fail-open することを防ぐ。
+    PR#261 レビュー C6）。physio_range は宣言値をそのまま信頼せず、実パラメータ
+    から `compute_physio_range()` で再計算した値と一致しなければ拒否する
+    （改ざん・手編集された安全性フラグの通過を防ぐ。PR#261 レビュー C5）。
     """
     _require(isinstance(data, dict), "genome データは dict でなければならない")
+
+    schema_version = _as_str(data.get("schema_version", SCHEMA_VERSION), "schema_version")
+    _require(
+        schema_version == SCHEMA_VERSION,
+        f"schema_version は {SCHEMA_VERSION!r} でなければならない（実際: {schema_version!r}）",
+    )
 
     name = _as_str(data.get("name"), "name")
 
@@ -359,6 +368,15 @@ def from_dict(data: Dict[str, Any]) -> VoiceGenome:
         out_of_physio_range=_as_bool(pr.get("out_of_physio_range", False), "physio_range.out_of_physio_range"),
         violated_bounds=tuple(_as_str(v, "physio_range.violated_bounds[]") for v in vb),
     )
+    recomputed_physio_range = compute_physio_range(source, resonance, noise, register, microprosody)
+    _require(
+        physio_range == recomputed_physio_range,
+        "physio_range が実パラメータからの再計算値と不一致（宣言値: "
+        f"out_of_physio_range={physio_range.out_of_physio_range}, "
+        f"violated_bounds={physio_range.violated_bounds!r} / 再計算値: "
+        f"out_of_physio_range={recomputed_physio_range.out_of_physio_range}, "
+        f"violated_bounds={recomputed_physio_range.violated_bounds!r}）",
+    )
 
     au = data.get("audit", {})
     _require(isinstance(au, dict), "audit は dict でなければならない")
@@ -369,8 +387,6 @@ def from_dict(data: Dict[str, Any]) -> VoiceGenome:
     residual = au.get("residual_gate_passed")
     _require(residual is None or isinstance(residual, bool), "audit.residual_gate_passed は bool か null")
     audit = AuditSection(reference_set_hash=ref_hash, linkability_report_id=link_id, residual_gate_passed=residual)
-
-    schema_version = _as_str(data.get("schema_version", SCHEMA_VERSION), "schema_version")
 
     return VoiceGenome(
         name=name,

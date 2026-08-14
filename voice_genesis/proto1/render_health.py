@@ -21,7 +21,7 @@ import bridge
 import probes
 from genome import ResonanceSection, VoiceGenome, build_genome
 
-import measure_v3 as mv3  # vt_harness、無改変 import 流用
+import measure_v3 as mv3  # harness、無改変 import 流用
 
 SR = bridge.SR
 EPS = 1e-12
@@ -125,7 +125,7 @@ def register_transition_report(
 # ---------------------------------------------------------------------------
 
 
-# [UNDERSPEC-P1-13 追記] 既存 grip v3 実測（vt_harness/results_v3/grip_report_v3.json、
+# [UNDERSPEC-P1-13 追記] 既存 grip v3 実測（voice_genesis/harness/results_v3/grip_report_v3.json、
 # axis=formant_scale, config_b, intended_feature=formant_centroid）では
 # direction_consistency=0.75（隣接ステップの 75% のみが期待方向へ動く）であり、
 # 厳密な単調性は実測上そもそも成立しない（cepstral top-2-by-magnitude ピーク選択が

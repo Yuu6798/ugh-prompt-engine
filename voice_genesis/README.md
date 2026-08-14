@@ -63,6 +63,31 @@ voice_genesis/
 ディレクトリ名を `harness/` へ短縮した箇所のみ文字列を修正した
 （ロジック・相対パス階層は不変）。
 
+## 移行時パス対応表（旧 `vt_harness/` → 現 `harness/`）
+
+scratchpad 上の検証プログラムは `vt_harness/` というディレクトリ名で
+運用されていた。リポジトリへの統合（このディレクトリの新設）に伴い
+`harness/` へ改称している。対応関係は単純な接頭辞置換である
+（PR#261 レビュー C4 対応）:
+
+| 旧パス（scratchpad, `vt_harness/` 起点） | 現パス（リポジトリ, repo root 起点） |
+|---|---|
+| `vt_harness/<file>` | `voice_genesis/harness/<file>` |
+| 例: `vt_harness/results_v6/grip_report_v6.json` | `voice_genesis/harness/results_v6/grip_report_v6.json` |
+| 例: `vt_harness/results_v3/grip_report_v3.json` | `voice_genesis/harness/results_v3/grip_report_v3.json` |
+
+適用範囲:
+
+- **機械可読ファイル（`.py`/`.json`/`.jsonl`）**: 全て `harness/`（sibling
+  相対パス）または `voice_genesis/harness/...`（repo root からの参照パス）
+  へ修正済み。`grep -r "vt_harness" voice_genesis/ --include="*.py"
+  --include="*.json" --include="*.jsonl"` は 0 件
+- **`.md` の歴史的記録（設計メモ・`underspec_log_*.md`・ゲート判定記録等）**:
+  意図的に**書き換えていない**。これらは実行当時のディレクトリ名
+  （`vt_harness/`）をそのまま記録した歴史的記録であり、後から現在の
+  ディレクトリ構成に合わせて改変すると、当時の実測・判断の一次記録性
+  が損なわれるため。読む際は本表で `harness/` へ読み替えること
+
 ## WAV は非同梱（決定論再生成可能）
 
 `results_*/` 配下の `.wav` 音声ファイルは**同梱していない**（全 39 個、

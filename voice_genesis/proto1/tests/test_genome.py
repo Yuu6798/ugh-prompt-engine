@@ -180,3 +180,43 @@ def test_from_dict_rejects_bad_audit_types():
     data["audit"]["residual_gate_passed"] = "yes"  # bool | null を期待
     with pytest.raises(g.GenomeValidationError):
         g.from_dict(data)
+
+
+# --- PR#261 レビュー C5/C6: physio_range 再計算検証 / schema_version 検証 ----
+
+
+def test_from_dict_rejects_unsupported_schema_version():
+    """将来/未知の schema_version を現行レイアウトで誤解釈せず拒否する（C6）。"""
+    data = g.to_dict(g.build_genome("valid"))
+    data["schema_version"] = "voice-genome/0.3"
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
+def test_from_dict_rejects_out_of_physio_range_flag_that_disagrees_with_params():
+    """physio_range が実パラメータから再計算した値と一致しない文書を拒否する（C5）。
+
+    source.tilt=-100（明確に範囲外）を持ちながら out_of_physio_range=False
+    を宣言する改ざん/手編集文書が、検証なしで通過しないことを確認する。
+    """
+    data = g.to_dict(g.build_genome("valid", source=g.SourceSection(tilt=-100.0)))
+    assert data["physio_range"]["out_of_physio_range"] is True  # 前提確認
+    data["physio_range"]["out_of_physio_range"] = False
+    data["physio_range"]["violated_bounds"] = []
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
+def test_from_dict_rejects_violated_bounds_that_disagrees_with_params():
+    """out_of_physio_range は正しくても violated_bounds の中身が実態と食い違う場合も拒否する。"""
+    data = g.to_dict(g.build_genome("valid", source=g.SourceSection(tilt=-100.0)))
+    data["physio_range"]["violated_bounds"] = ["bogus.field"]
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
+def test_from_dict_accepts_physio_range_that_matches_recomputed_value():
+    """正しく再計算済みの physio_range を持つ文書は従来どおり通過する（非退行）。"""
+    gen = g.build_genome("wild", source=g.SourceSection(tilt=-100.0))
+    restored = g.from_dict(g.to_dict(gen))
+    assert restored == gen

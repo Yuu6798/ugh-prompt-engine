@@ -1,6 +1,6 @@
 """singer/gate_checks.py — S5 機械前提ゲート 6 条件の実装（凍結ゲート）。
 
-`measure_v3.py`（vt_harness、強化 F0 推定器・periodicity・vibrato_depth）を
+`measure_v3.py`（harness、強化 F0 推定器・periodicity・vibrato_depth）を
 無改変で import・再利用する。本ファイルはゲート判定ロジックのみを持ち、
 `run_machine_gates.py`（レポート生成）と `tests/test_machine_gates.py`
 （pytest 自動テスト）の両方から共有される。
@@ -20,7 +20,7 @@ _VT_HARNESS_DIR = _HERE.parent / "harness"
 if str(_VT_HARNESS_DIR) not in sys.path:
     sys.path.insert(0, str(_VT_HARNESS_DIR))
 
-import measure_v3 as m3  # noqa: E402  (vt_harness、変更禁止・import 流用のみ)
+import measure_v3 as m3  # noqa: E402  (harness、変更禁止・import 流用のみ)
 
 import render_song as rs  # noqa: E402
 

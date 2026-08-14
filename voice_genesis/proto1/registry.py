@@ -39,6 +39,10 @@ class RegistryError(ValueError):
     pass
 
 
+class DuplicateGenomeError(RegistryError):
+    """append 時に既存 genome_id と衝突した（PR#261 レビュー C3）。"""
+
+
 def genome_content_hash(genome: VoiceGenome) -> str:
     """内容 sha256 の先頭 12 桁（genome_id）。"""
     return sha256_of_canonical_json(to_dict(genome))[:12]
@@ -91,6 +95,14 @@ def entry_to_dict(entry: RegistryEntry) -> Dict[str, Any]:
 
 
 def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
+    # sidecar 様式のバージョン（PR#261 レビュー C5/C6 の同型穴掃討: genome.py の
+    # schema_version 検証と同じ理由で、registry_schema も宣言値を無条件に信頼
+    # せず、未知/不一致なら現行レイアウトでの誤解釈を拒否する）。
+    registry_schema = data.get("registry_schema", REGISTRY_SCHEMA)
+    if registry_schema != REGISTRY_SCHEMA:
+        raise RegistryError(
+            f"registry_schema は {REGISTRY_SCHEMA!r} でなければならない（実際: {registry_schema!r}）"
+        )
     return RegistryEntry(
         genome_id=data["genome_id"],
         version=data["version"],
@@ -103,7 +115,7 @@ def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
         eval=dict(data.get("eval", {})),
         audit=dict(data.get("audit", {})),
         genome=data["genome"],
-        registry_schema=data.get("registry_schema", REGISTRY_SCHEMA),
+        registry_schema=registry_schema,
     )
 
 
@@ -131,6 +143,14 @@ class GenomeRegistry:
             raise RegistryError(f"op は {VALID_OPS} のいずれかでなければならない（実際: {op!r}）")
 
         genome_id = genome_content_hash(genome)
+        if self.get(genome_id) is not None:
+            # append-only ストアは genome_id の再出現を「来歴の書き換え」として扱う
+            # （get()/lineage() は末尾優先で解決するため、同一 genome_id を異なる
+            # op/seed/parents で再 append すると既存エントリの来歴が黙って上書き
+            # されたように見えてしまう。PR#261 レビュー C3）。
+            raise DuplicateGenomeError(
+                f"genome_id は既にレジストリに存在するため追記を拒否する（実際: {genome_id!r}）"
+            )
         created_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
 
         eval_scores = eval_scores or {"plausibility": None, "grip_ref": None, "novelty": None}

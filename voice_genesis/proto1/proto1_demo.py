@@ -5,11 +5,11 @@
   1. 創生: sample(101), sample(202) → mutate(101系, seed=303) →
      crossover(101系mut, 202系, seed=404) の計 4 Genome（系譜の実演）
   2. レンダ: 各 Genome で probe suite 全 5 種（P2）をレンダし波形 hash 記録
-  3. 検査（Genome ごと）: plausibility（periodicity r_median>=0.35, vt_harness
+  3. 検査（Genome ごと）: plausibility（periodicity r_median>=0.35, harness
      VT-1 と同一床）+ linkability 監査（E1/E2, reference-set standin-gallery-v1）。
      reference_set_hash / linkability_report_id を Genome の audit フィールドへ記録
   4. grip の参照記録: registry エントリの eval.grip_ref に
-     vt_harness/results_v6/grip_report_v6.json への**参照**（値のコピーではない）
+     voice_genesis/harness/results_v6/grip_report_v6.json への**参照**（値のコピーではない）
      + gate 意味論バージョン "grip-v2/band-v4/frozen-v6" を記録
   5. 登録: 4 Genome を registry へ lineage 付きで登録
   6. 決定論検証: デモ全体を 2 回実行し、genome_id・全波形 hash・監査判定が
@@ -18,11 +18,12 @@
      ペアレンダを `results_final/` に保存
 
 制約: フォアグラウンド実行、決定論（seed 固定。wall-clock 使用は
-registry/監査レポートの created_at 記録のみ）。vt_harness/ は読み取りのみ。
+registry/監査レポートの created_at 記録のみ）。harness/ は読み取りのみ。
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -51,7 +52,7 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 # きた 0.1（「小さな変異」の代表値）を踏襲する。
 MUTATE_SCALE = 0.1
 
-GRIP_REF_PATH = "vt_harness/results_v6/grip_report_v6.json"
+GRIP_REF_PATH = "voice_genesis/harness/results_v6/grip_report_v6.json"
 GRIP_GATE_SEMANTICS_VERSION = "grip-v2/band-v4/frozen-v6"
 
 GALLERY_N_PERMUTATIONS = rset.CHANCE_N_PERMUTATIONS  # 200（memo 規定どおり）
@@ -138,7 +139,7 @@ def run_pipeline(gallery: rset.ReferenceSetGallery, registry_path: Path, mutate_
         # --- F1-3a: plausibility (periodicity r_median >= 0.35) ----------
         plaus = pl.plausibility_report(raw_genome)
         plaus_dict = {
-            "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+            "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
             "threshold": plaus.threshold,
             "probe_names": list(plaus.probe_names),
             "n_notes": plaus.n_notes,
@@ -234,20 +235,31 @@ def main() -> None:
 
     tmp_registry_path = RESULTS_DIR / "_scratch_registry_run1.jsonl"
     final_registry_path = RESULTS_DIR / "genome_registry.jsonl"
+    # run_2 の正本 registry は staging パスへ書き、pipeline が最後まで成功した
+    # 場合にのみ os.replace で一括置換する（PR#261 レビュー C2: 旧実装は
+    # final_registry_path を run_2 開始前に unlink していたため、run_1/run_2
+    # のどこで例外・中断が起きても既存の正本 registry が失われた状態で残った）。
+    staging_registry_path = RESULTS_DIR / "_staging_registry_run2.jsonl"
     if tmp_registry_path.exists():
         tmp_registry_path.unlink()
-    if final_registry_path.exists():
-        final_registry_path.unlink()
+    if staging_registry_path.exists():
+        staging_registry_path.unlink()
 
     print("[proto1_demo] running pipeline (run 1/2, scratch registry)...")
     run_1 = run_pipeline(gallery, tmp_registry_path)
     t_run1 = time.time()
     print(f"[proto1_demo] run 1 done in {t_run1 - t_gallery:.1f}s")
 
-    print("[proto1_demo] running pipeline (run 2/2, final registry)...")
-    run_2 = run_pipeline(gallery, final_registry_path)
+    print("[proto1_demo] running pipeline (run 2/2, staging registry)...")
+    run_2 = run_pipeline(gallery, staging_registry_path)
     t_run2 = time.time()
     print(f"[proto1_demo] run 2 done in {t_run2 - t_run1:.1f}s")
+
+    # run_2 の pipeline がここまで例外なく完走した場合にのみ、正本 registry を
+    # atomic に置換する。差し替え後は run_2 の記録内容（e2e_run.json に埋め込む
+    # registry_path）も正本パスへ揃え直す（挙動・出力内容は不変のまま）。
+    os.replace(staging_registry_path, final_registry_path)
+    run_2["registry_path"] = str(final_registry_path)
 
     # --- F1-6: 決定論検証（created_at のみ差異許容） -------------------------
     comparable_1 = _strip_created_at(run_1)
@@ -310,12 +322,23 @@ def main() -> None:
         "grip_reference": {
             "ref": GRIP_REF_PATH,
             "gate_semantics_version": GRIP_GATE_SEMANTICS_VERSION,
-            "note": "値のコピーではなく参照。実測値は vt_harness/results_v6/ を直接参照すること（読み取りのみ）。",
+            "note": "値のコピーではなく参照。実測値は voice_genesis/harness/results_v6/ を直接参照すること（読み取りのみ）。",
         },
         "run_1": run_1,
         "run_2": run_2,
         "determinism_check": {
-            "compared": "run_1 vs run_2, all fields except created_at",
+            "compared": "run_1 vs run_2, all fields except excluded_fields",
+            "excluded_fields": {
+                "created_at": (
+                    "監査/registry レポートの wall-clock 記録。実行時刻が異なるのは"
+                    "設計上必然（§CLAUDE.md: wall-clock 依存は created_at 記録のみ許可）。"
+                ),
+                "registry_path": (
+                    "run ごとに異なる一時/正本ファイルパスの文字列。実行環境依存で"
+                    "内容非依存のため比較対象から除外（underspec_log_final.md "
+                    "[UNDERSPEC-F-8] 既記載）。"
+                ),
+            },
             "passed": determinism_passed,
             "differing_paths": differing_paths,
         },
@@ -332,8 +355,12 @@ def main() -> None:
         },
     }
 
+    # e2e_run.json も同じ atomic 置換方針: 一時ファイルへ全出力 → 成功後に
+    # os.replace で正本へ一括置換する（PR#261 レビュー C2）。
     out_path = RESULTS_DIR / "e2e_run.json"
-    out_path.write_text(json.dumps(e2e_record, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8")
+    tmp_out_path = RESULTS_DIR / "e2e_run.json.tmp"
+    tmp_out_path.write_text(json.dumps(e2e_record, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp_out_path, out_path)
     print(f"[proto1_demo] wrote {out_path} (total {time.time() - t_start:.1f}s)")
 
     if not determinism_passed:

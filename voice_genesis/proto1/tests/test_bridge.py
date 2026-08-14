@@ -1,4 +1,4 @@
-"""test_bridge.py — genome.py ↔ vt_harness Genome の橋渡し関数の健全性。"""
+"""test_bridge.py — genome.py ↔ harness Genome の橋渡し関数の健全性。"""
 from __future__ import annotations
 
 import sys

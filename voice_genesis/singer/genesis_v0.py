@@ -1,7 +1,7 @@
 """singer/genesis_v0.py — S3 U2: Genesis Graph v0 探索本体（VG-015）。
 
 読み取り専用: `proto1/`（genome/sampler/reference_set を import 流用のみ）、
-`vt_harness/`（measure_v3 を import 流用のみ）。書き込みは singer/ 配下のみ
+`harness/`（measure_v3 を import 流用のみ）。書き込みは singer/ 配下のみ
 （新規 registry ファイルは singer/results_s3/ 側に置き、proto1/results_final
 の正本 registry には一切追記しない）。
 
@@ -36,7 +36,7 @@ for _p in (_PROTO1_DIR, _VT_HARNESS_DIR):
 import genome as pg  # noqa: E402  (proto1、無改変・import 流用のみ)
 import sampler  # noqa: E402  (proto1、無改変・import 流用のみ)
 import reference_set as refset  # noqa: E402  (proto1、無改変・import 流用のみ)
-import measure_v3 as m3  # noqa: E402  (vt_harness、無改変・import 流用のみ)
+import measure_v3 as m3  # noqa: E402  (harness、無改変・import 流用のみ)
 
 import render_song as rs  # noqa: E402
 import gate_checks as gc  # noqa: E402

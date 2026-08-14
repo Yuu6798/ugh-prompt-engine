@@ -9,7 +9,7 @@ genome.resonance.formant_scale / formant_offsets はこの目標表への
 
 時変フィルタは短時間 STFT ベースの overlap-add で実装する: 各ブロックの
 中心時刻でコアーティキュレーション補間済みのフォルマント目標を評価し、
-並列ローレンツ型共鳴の振幅ゲイン（vt_harness の formant_filter_gain と
+並列ローレンツ型共鳴の振幅ゲイン（harness の formant_filter_gain と
 同型の式、本ファイルで独立実装）を励振信号のブロック FFT に掛けて
 overlap-add で合成する。ゲインは実数（ゼロ位相）で、ブロック境界は Hann
 窓の overlap-add が滑らかに接続するためクリックは生じない。
@@ -73,7 +73,7 @@ GAIN_FLOOR_CUTOFF_HZ = 3500.0
 # [UNDERSPEC-S1-2] フォルマントゲインの下駄（floor）。ローレンツ型共鳴の
 # ゲインは基音がどのフォルマントからも遠い場合（低い f0 に対し F1 が
 # 相対的に高い母音、例えば /a/ の F1=800Hz vs f0=330Hz）に基音を
-# 2 次以上の倍音に対し 1 桁以上弱く抑圧し、measure_v3（vt_harness、無改変
+# 2 次以上の倍音に対し 1 桁以上弱く抑圧し、measure_v3（harness、無改変
 # 前提）の F0 推定器が「基音喪失」型のオクターブ誤り（2 倍音を基音と誤認）
 # を起こす実害を machine gate 実測で確認した（詳細: underspec_log_s1.md）。
 # 声道フィルタは物理的にも周波数を完全にゼロへ減衰させることはない
@@ -90,7 +90,7 @@ GAIN_FLOOR_CUTOFF_HZ = 3500.0
 
 
 def lorentz_gain(freqs: np.ndarray, formants: Sequence[float], bandwidths: Sequence[float]) -> np.ndarray:
-    """並列ローレンツ型共鳴の振幅ゲイン（vt_harness measure_v4 と同型の式）+ 低域限定の下駄。"""
+    """並列ローレンツ型共鳴の振幅ゲイン（harness measure_v4 と同型の式）+ 低域限定の下駄。"""
     total = np.zeros_like(freqs, dtype=np.float64)
     for F, B in zip(formants, bandwidths):
         gamma = B / 2.0

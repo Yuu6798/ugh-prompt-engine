@@ -1,7 +1,7 @@
 """plausibility.py — F1 (final_assembly_memo.md): naturalness/plausibility ゲート。
 
 設計書 §7.4 の plausibility（人間的発声テクスチャの保持。生物学的実現可能性
-ではない）を、vt_harness VT-1 v3 が採用した床
+ではない）を、harness VT-1 v3 が採用した床
 （`results_v3/vt1_plausibility_v3.json`, `r_threshold=0.35`、周期性
 `periodicity_track_v3.r_median` によるゲート）と同一の閾値・同一指標で
 測定する。VT-1 は 122 ノード個々（集約値ではない）に閾値を課しており、本
@@ -21,7 +21,7 @@ from genome import VoiceGenome
 
 import measure_v3 as mv3
 
-R_MEDIAN_THRESHOLD = 0.35  # vt_harness VT-1 v3 と同一床
+R_MEDIAN_THRESHOLD = 0.35  # harness VT-1 v3 と同一床
 PLAUSIBILITY_PROBES: Tuple[str, ...] = ("sustain", "phrase", "cross_range")
 
 

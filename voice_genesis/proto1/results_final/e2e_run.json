@@ -6,8 +6,8 @@
   },
   "grip_reference": {
     "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
-    "note": "値のコピーではなく参照。実測値は vt_harness/results_v6/ を直接参照すること（読み取りのみ）。",
-    "ref": "vt_harness/results_v6/grip_report_v6.json"
+    "note": "値のコピーではなく参照。実測値は voice_genesis/harness/results_v6/ を直接参照すること（読み取りのみ）。",
+    "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
   },
   "mutate_scale": 0.1,
   "reference_set": {
@@ -121,7 +121,7 @@
         "parent_genome_ids": [],
         "parent_keys": [],
         "plausibility": {
-          "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
           "min_r_median": 0.36908508335846046,
           "n_notes": 13,
           "n_violations": 0,
@@ -470,7 +470,7 @@
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
-              "ref": "vt_harness/results_v6/grip_report_v6.json"
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
               "linkability_report_id": "audit-15d9487d4ab4",
@@ -628,7 +628,7 @@
         "parent_genome_ids": [],
         "parent_keys": [],
         "plausibility": {
-          "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
           "min_r_median": 0.6005679255520303,
           "n_notes": 13,
           "n_violations": 0,
@@ -977,7 +977,7 @@
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
-              "ref": "vt_harness/results_v6/grip_report_v6.json"
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
               "linkability_report_id": "audit-c4a1da5ceb8c",
@@ -1139,7 +1139,7 @@
           "a"
         ],
         "plausibility": {
-          "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
           "min_r_median": 0.32839760351766856,
           "n_notes": 13,
           "n_violations": 1,
@@ -1488,7 +1488,7 @@
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
-              "ref": "vt_harness/results_v6/grip_report_v6.json"
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
               "linkability_report_id": "audit-a63925d11f4e",
@@ -1654,7 +1654,7 @@
           "b"
         ],
         "plausibility": {
-          "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
           "min_r_median": 0.39170988510446464,
           "n_notes": 13,
           "n_violations": 0,
@@ -2003,7 +2003,7 @@
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
-              "ref": "vt_harness/results_v6/grip_report_v6.json"
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
               "linkability_report_id": "audit-9df6b30ca58c",
@@ -2194,7 +2194,7 @@
         "parent_genome_ids": [],
         "parent_keys": [],
         "plausibility": {
-          "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
           "min_r_median": 0.36908508335846046,
           "n_notes": 13,
           "n_violations": 0,
@@ -2543,7 +2543,7 @@
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
-              "ref": "vt_harness/results_v6/grip_report_v6.json"
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
               "linkability_report_id": "audit-15d9487d4ab4",
@@ -2701,7 +2701,7 @@
         "parent_genome_ids": [],
         "parent_keys": [],
         "plausibility": {
-          "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
           "min_r_median": 0.6005679255520303,
           "n_notes": 13,
           "n_violations": 0,
@@ -3050,7 +3050,7 @@
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
-              "ref": "vt_harness/results_v6/grip_report_v6.json"
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
               "linkability_report_id": "audit-c4a1da5ceb8c",
@@ -3212,7 +3212,7 @@
           "a"
         ],
         "plausibility": {
-          "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
           "min_r_median": 0.32839760351766856,
           "n_notes": 13,
           "n_violations": 1,
@@ -3561,7 +3561,7 @@
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
-              "ref": "vt_harness/results_v6/grip_report_v6.json"
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
               "linkability_report_id": "audit-a63925d11f4e",
@@ -3727,7 +3727,7 @@
           "b"
         ],
         "plausibility": {
-          "gate": "periodicity_r_median>=threshold (vt_harness VT-1 v3 と同一床)",
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
           "min_r_median": 0.39170988510446464,
           "n_notes": 13,
           "n_violations": 0,
@@ -4076,7 +4076,7 @@
           "eval": {
             "grip_ref": {
               "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
-              "ref": "vt_harness/results_v6/grip_report_v6.json"
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
             },
             "novelty": {
               "linkability_report_id": "audit-9df6b30ca58c",

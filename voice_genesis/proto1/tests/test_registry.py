@@ -135,3 +135,45 @@ def test_append_creates_parent_directories(tmp_path):
     gen = sampler.sample(1)
     reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
     assert nested_path.exists()
+
+
+# --- PR#261 レビュー C3: 重複 genome_id の拒否 -------------------------------
+
+
+def test_append_rejects_duplicate_genome_id(registry_path):
+    """append-only ストアは同一 genome_id の再登場を来歴の書き換えとみなし拒否する
+    （PR#261 レビュー C3: get()/lineage() が末尾優先で解決するため、同一内容の
+    genome を異なる op/seed/parents で再 append すると既存来歴が黙って上書きされて
+    見えてしまう）。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    with pytest.raises(r.DuplicateGenomeError):
+        # 同一内容 genome（= 同一 genome_id）を異なる op/seed で再 append。
+        reg.append(gen, op="mutate", seed=99, now=FIXED_TIME)
+
+    # 拒否された 2 回目は書き込まれておらず、レジストリは 1 行のまま。
+    assert len(reg.load_all()) == 1
+
+
+def test_duplicate_genome_error_is_a_registry_error(registry_path):
+    """呼び出し側が汎用 RegistryError で一括捕捉しても壊れないよう、
+    DuplicateGenomeError は RegistryError のサブタイプである。"""
+    assert issubclass(r.DuplicateGenomeError, r.RegistryError)
+
+
+# --- PR#261 レビュー C5/C6 の同型穴掃討: registry_schema の検証 --------------
+
+
+def test_entry_from_dict_rejects_unknown_registry_schema(registry_path):
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    text = registry_path.read_text(encoding="utf-8")
+    tampered = text.replace('"genome-registry/0.1"', '"genome-registry/9.9"')
+    registry_path.write_text(tampered, encoding="utf-8")
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()

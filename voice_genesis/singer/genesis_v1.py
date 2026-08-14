@@ -7,7 +7,7 @@ S3（`genesis_v0.py`, `results_s3/genesis_report.md`）は 1 世代の探索で
 遠くまで歩く（貪欲坂登り）ことで、識別床（両親から JND 複合距離 >=2.0）を
 満たす個体を探す。
 
-読み取り専用: `proto1/`, `vt_harness/`。書き込みは singer/ 配下のみ。
+読み取り専用: `proto1/`, `harness/`。書き込みは singer/ 配下のみ。
 S3 の `genesis_v0.py` を import 流用する（無改変）。
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ for _p in (_PROTO1_DIR, _VT_HARNESS_DIR):
         sys.path.insert(0, str(_p))
 
 import genome as pg  # noqa: E402  (proto1、無改変・import 流用のみ)
-import measure_v3 as m3  # noqa: E402  (vt_harness、無改変・import 流用のみ)
+import measure_v3 as m3  # noqa: E402  (harness、無改変・import 流用のみ)
 
 import render_song as rs  # noqa: E402
 import gate_checks as gc  # noqa: E402

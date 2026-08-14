@@ -33,7 +33,7 @@ for _p in (_PROTO1_DIR, _VT_HARNESS_DIR):
         sys.path.insert(0, str(_p))
 
 import reference_set as refset  # noqa: E402  (proto1、無改変・import 流用のみ)
-import measure_v3 as m3  # noqa: E402  (vt_harness、無改変・import 流用のみ)
+import measure_v3 as m3  # noqa: E402  (harness、無改変・import 流用のみ)
 
 import render_song as rs  # noqa: E402
 

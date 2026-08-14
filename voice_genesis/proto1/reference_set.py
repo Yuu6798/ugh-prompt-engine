@@ -30,14 +30,14 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-import bridge  # sys.path に vt_harness を追加する副作用込み
+import bridge  # sys.path に harness を追加する副作用込み
 import probes
 import sampler
 from genome import VoiceGenome, to_dict
 from hashing import sha256_of_canonical_json
 from registry import genome_content_hash
 
-import measure_v3 as mv3  # vt_harness、無改変 import 流用
+import measure_v3 as mv3  # harness、無改変 import 流用
 import librosa
 
 SCHEMA_VERSION = "reference-set/0.1"
