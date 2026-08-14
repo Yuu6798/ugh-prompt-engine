@@ -1,0 +1,355 @@
+{
+  "arms": [
+    "V_remix_real_direct",
+    "V_remix_real_stem"
+  ],
+  "band_verdict": {
+    "V_remix_real_direct": {
+      "failures": [],
+      "gate_level": "+12dB",
+      "status": "pass"
+    },
+    "V_remix_real_stem": {
+      "failures": [],
+      "gate_level": "+12dB",
+      "status": "pass"
+    }
+  },
+  "bars_path_relative": "tests/fixtures/melody_bench/m2_accuracy_bars.yaml",
+  "bars_sha256": "50c83e6524a35c7080622c20715c0c2cc68d8d8e695d2766958d795eedec0085",
+  "cells": {
+    "+12dB": {
+      "V_remix_real_direct": {
+        "cells": 160,
+        "complete": true,
+        "problems": []
+      },
+      "V_remix_real_stem": {
+        "cells": 160,
+        "complete": true,
+        "problems": []
+      }
+    },
+    "+6dB": {
+      "V_remix_real_direct": {
+        "cells": 160,
+        "complete": true,
+        "problems": []
+      },
+      "V_remix_real_stem": {
+        "cells": 160,
+        "complete": true,
+        "problems": []
+      }
+    },
+    "-6dB": {
+      "V_remix_real_direct": {
+        "cells": 160,
+        "complete": true,
+        "problems": []
+      },
+      "V_remix_real_stem": {
+        "cells": 160,
+        "complete": true,
+        "problems": []
+      }
+    },
+    "0dB": {
+      "V_remix_real_direct": {
+        "cells": 160,
+        "complete": true,
+        "problems": []
+      },
+      "V_remix_real_stem": {
+        "cells": 160,
+        "complete": true,
+        "problems": []
+      }
+    }
+  },
+  "census_recorded_utc": "2026-08-14T06:45:17+00:00",
+  "complete": true,
+  "declared_limits": [
+    "\u6b4c\u58f0\uff08vocadito\uff09\u3068\u4f34\u594f\uff08MUSDB18-HQ\uff09\u306f\u5225\u306e\u66f2\u3067\u3042\u308a\u3001\u548c\u58f0\u7684\u306b\u4e0d\u6574\u5408\u3067\u3042\u308b\u3002\u62bd\u51fa\u304c\u6613\u3057\u304f\u306a\u308b\u304b\u96e3\u3057\u304f\u306a\u308b\u304b\u306f\u4e00\u610f\u306b\u6c7a\u307e\u3089\u306a\u3044\u305f\u3081\u3001\u672c\u5e2f\u306e\u7d50\u679c\u3092\u6839\u62e0\u306b V_fullstack \u3078\u6607\u683c\u3055\u305b\u306a\u3044\uff08\u00a77.2\uff09\u3002",
+    "\u30d9\u30c3\u30c9\u306f MUSDB18-HQ test split \u306e\u5148\u982d 2 \u66f2\u3067\u3042\u308a\u3001\u30b8\u30e3\u30f3\u30eb\u30fb\u7de8\u6210\u306e\u4ee3\u8868\u6027\u3092 \u4e3b\u5f35\u3057\u306a\u3044\uff08\u00a77.2\uff09\u3002",
+    "+12dB \u306f\u5b9f\u904b\u7528\u306e\u30df\u30c3\u30af\u30b9 balance \u3067\u306f\u306a\u304f\u30c8\u30ea\u30c3\u30d7\u30ef\u30a4\u30e4\u5c02\u7528\u306e\u4eba\u5de5\u7684\u6c34\u6e96 \u3067\u3042\u308b\uff08\u00a77.2\uff09\u3002",
+    "stem \u30a2\u30fc\u30e0\u306f\u6c34\u6e96\u8ef8\u306b\u6cbf\u3063\u305f\u5358\u8abf\u6027\u3092\u4eee\u5b9a\u3057\u306a\u3044\u305f\u3081\u3001\u300c+12dB \u3067\u5272\u308c\u305f\u3089\u4e0b\u306e \u6c34\u6e96\u3082\u5272\u308c\u308b\u300d\u3068\u3044\u3046\u4e0b\u65b9\u4f1d\u64ad\u3092\u4e3b\u5f35\u3057\u306a\u3044\uff08\u00a75.4\uff09\u3002"
+  ],
+  "env_digest": "3a2a9445ac13791a73bb763ed59595e945b71af1db873a925a55eed1e30fca7d",
+  "est_voiced_confidence_floor": 0.3,
+  "evaluator_code_sha256": "b3bf304cc21a0b2a7c426d418a7b8a078896e116e5cb00e40fa8a111fb3c1c9c",
+  "expected_cells_total": 1280,
+  "generator_code_predecessors": [
+    "2b234e2be2fcc590daed82038c691643c8c995954934204d8a8562cd31835088",
+    "5cc0d5f9bba92ce8aa679eeebc32845e7702b6ac8e2bb1f561ba37c37ab965a4"
+  ],
+  "generator_code_sha256": "2b234e2be2fcc590daed82038c691643c8c995954934204d8a8562cd31835088",
+  "level_response": {
+    "V_remix_real_direct": [
+      {
+        "ladder_index": 0,
+        "level": "+12dB",
+        "metrics": [
+          {
+            "median_cent_error": 4.0782869734187726,
+            "octave_gap": 0.007371894333276001,
+            "overall_accuracy": 0.7855474869069129,
+            "raw_chroma_accuracy": 0.9759946738040256,
+            "raw_pitch_accuracy": 0.9686227794707495,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2272.0,
+            "voicing_false_alarm": 0.5554448431112251,
+            "voicing_recall": 0.9886632514843301
+          },
+          {
+            "median_cent_error": 4.0782869734187726,
+            "octave_gap": 0.007371894333276001,
+            "overall_accuracy": 0.7855474869069129,
+            "raw_chroma_accuracy": 0.9759946738040256,
+            "raw_pitch_accuracy": 0.9686227794707495,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2272.0,
+            "voicing_false_alarm": 0.5554448431112251,
+            "voicing_recall": 0.9886632514843301
+          }
+        ]
+      },
+      {
+        "ladder_index": 1,
+        "level": "+6dB",
+        "metrics": [
+          {
+            "median_cent_error": 4.617041624675911,
+            "octave_gap": 0.010957970664838055,
+            "overall_accuracy": 0.7587227107851018,
+            "raw_chroma_accuracy": 0.9566815866195377,
+            "raw_pitch_accuracy": 0.9457236159547,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2227.9875,
+            "voicing_false_alarm": 0.5729642897572237,
+            "voicing_recall": 0.9731066656604144
+          },
+          {
+            "median_cent_error": 4.617041624675911,
+            "octave_gap": 0.010957970664838055,
+            "overall_accuracy": 0.7587227107851018,
+            "raw_chroma_accuracy": 0.9566815866195377,
+            "raw_pitch_accuracy": 0.9457236159547,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2227.9875,
+            "voicing_false_alarm": 0.5729642897572237,
+            "voicing_recall": 0.9731066656604144
+          }
+        ]
+      },
+      {
+        "ladder_index": 2,
+        "level": "0dB",
+        "metrics": [
+          {
+            "median_cent_error": 5.642769099338605,
+            "octave_gap": 0.015921702883947165,
+            "overall_accuracy": 0.7052649079723495,
+            "raw_chroma_accuracy": 0.9041630801317213,
+            "raw_pitch_accuracy": 0.8882413772477745,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2105.45,
+            "voicing_false_alarm": 0.5818367090560523,
+            "voicing_recall": 0.931585579409598
+          },
+          {
+            "median_cent_error": 5.642769099338605,
+            "octave_gap": 0.015921702883947165,
+            "overall_accuracy": 0.7052649079723495,
+            "raw_chroma_accuracy": 0.9041630801317213,
+            "raw_pitch_accuracy": 0.8882413772477745,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2105.45,
+            "voicing_false_alarm": 0.5818367090560523,
+            "voicing_recall": 0.931585579409598
+          }
+        ]
+      },
+      {
+        "ladder_index": 3,
+        "level": "-6dB",
+        "metrics": [
+          {
+            "median_cent_error": 7.242699657234889,
+            "octave_gap": 0.026184702125921833,
+            "overall_accuracy": 0.5664101412570517,
+            "raw_chroma_accuracy": 0.7441516342298955,
+            "raw_pitch_accuracy": 0.7179669321039734,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 1727.925,
+            "voicing_false_alarm": 0.588995827398478,
+            "voicing_recall": 0.8312675123501249
+          },
+          {
+            "median_cent_error": 7.242699657234889,
+            "octave_gap": 0.026184702125921833,
+            "overall_accuracy": 0.5664101412570517,
+            "raw_chroma_accuracy": 0.7441516342298955,
+            "raw_pitch_accuracy": 0.7179669321039734,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 1727.925,
+            "voicing_false_alarm": 0.588995827398478,
+            "voicing_recall": 0.8312675123501249
+          }
+        ]
+      }
+    ],
+    "V_remix_real_stem": [
+      {
+        "ladder_index": 0,
+        "level": "+12dB",
+        "metrics": [
+          {
+            "median_cent_error": 3.949367415277115,
+            "octave_gap": 0.0017178647861573165,
+            "overall_accuracy": 0.8220792013492654,
+            "raw_chroma_accuracy": 0.9880133995824716,
+            "raw_pitch_accuracy": 0.9862955347963143,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2298.225,
+            "voicing_false_alarm": 0.5049368955336128,
+            "voicing_recall": 0.9977226981337586
+          },
+          {
+            "median_cent_error": 3.949367415277115,
+            "octave_gap": 0.0017178647861573165,
+            "overall_accuracy": 0.8220792013492654,
+            "raw_chroma_accuracy": 0.9880133995824716,
+            "raw_pitch_accuracy": 0.9862955347963143,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2298.225,
+            "voicing_false_alarm": 0.5049368955336128,
+            "voicing_recall": 0.9977226981337586
+          }
+        ]
+      },
+      {
+        "ladder_index": 1,
+        "level": "+6dB",
+        "metrics": [
+          {
+            "median_cent_error": 4.07550081550036,
+            "octave_gap": 0.0021107357469363278,
+            "overall_accuracy": 0.8192072703275407,
+            "raw_chroma_accuracy": 0.985717733176559,
+            "raw_pitch_accuracy": 0.9836069974296224,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2293.875,
+            "voicing_false_alarm": 0.5077026417545548,
+            "voicing_recall": 0.99688922013211
+          },
+          {
+            "median_cent_error": 4.07550081550036,
+            "octave_gap": 0.0021107357469363278,
+            "overall_accuracy": 0.8192072703275407,
+            "raw_chroma_accuracy": 0.985717733176559,
+            "raw_pitch_accuracy": 0.9836069974296224,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2293.875,
+            "voicing_false_alarm": 0.5077026417545548,
+            "voicing_recall": 0.99688922013211
+          }
+        ]
+      },
+      {
+        "ladder_index": 2,
+        "level": "0dB",
+        "metrics": [
+          {
+            "median_cent_error": 4.288220002383139,
+            "octave_gap": 0.0034867055485069505,
+            "overall_accuracy": 0.8069168201421008,
+            "raw_chroma_accuracy": 0.9786155109612886,
+            "raw_pitch_accuracy": 0.9751288054127814,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2278.325,
+            "voicing_false_alarm": 0.5245783765299454,
+            "voicing_recall": 0.9948960404654358
+          },
+          {
+            "median_cent_error": 4.288220002383139,
+            "octave_gap": 0.0034867055485069505,
+            "overall_accuracy": 0.8069168201421008,
+            "raw_chroma_accuracy": 0.9786155109612886,
+            "raw_pitch_accuracy": 0.9751288054127814,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2278.325,
+            "voicing_false_alarm": 0.5245783765299454,
+            "voicing_recall": 0.9948960404654358
+          }
+        ]
+      },
+      {
+        "ladder_index": 3,
+        "level": "-6dB",
+        "metrics": [
+          {
+            "median_cent_error": 4.717385058916264,
+            "octave_gap": 0.007971308238731524,
+            "overall_accuracy": 0.7739080188591501,
+            "raw_chroma_accuracy": 0.9546166109466332,
+            "raw_pitch_accuracy": 0.9466453027079018,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2223.6,
+            "voicing_false_alarm": 0.5592161432902352,
+            "voicing_recall": 0.9882670761141951
+          },
+          {
+            "median_cent_error": 4.717385058916264,
+            "octave_gap": 0.007971308238731524,
+            "overall_accuracy": 0.7739080188591501,
+            "raw_chroma_accuracy": 0.9546166109466332,
+            "raw_pitch_accuracy": 0.9466453027079018,
+            "tolerance_cents": 50.0,
+            "voiced_chroma_correct_frame_count": 2223.6,
+            "voicing_false_alarm": 0.5592161432902352,
+            "voicing_recall": 0.9882670761141951
+          }
+        ]
+      }
+    ]
+  },
+  "levels": [
+    "+12dB",
+    "+6dB",
+    "0dB",
+    "-6dB"
+  ],
+  "m2e_bars_path_relative": "tests/fixtures/melody_bench/m2e_accuracy_bars.yaml",
+  "m2e_bars_sha256": "7e8c068fabc4bc8167d822beeaa8806b39f6d2929b08551da8280b4389780f39",
+  "missing": [],
+  "observed_cells_total": 1280,
+  "promotes_route": false,
+  "repeats_min": 2,
+  "schema_version": "m2e-census/0.1",
+  "status": "census_complete",
+  "tolerance_cents": 50.0,
+  "unlocks_m4_g2": false,
+  "verdict_pins": [
+    {
+      "path_name": "verdict_p12.json",
+      "path_relative": "docs/measurements/m2e_2026-08/verdict_p12.json",
+      "sha256": "454621645b88dbee976155b56df2fea51168783e0caa398610a5fe8642cf6714"
+    },
+    {
+      "path_name": "verdict_p06.json",
+      "path_relative": "docs/measurements/m2e_2026-08/verdict_p06.json",
+      "sha256": "c9ae4ea2a4098fece8151b410325012b3584dc187765a55bb10af011743a0ddf"
+    },
+    {
+      "path_name": "verdict_p00.json",
+      "path_relative": "docs/measurements/m2e_2026-08/verdict_p00.json",
+      "sha256": "0b3cff8000509a3bcf951d05b55ee5a22ab4486e252adba53fe146c204b8bc5d"
+    },
+    {
+      "path_name": "verdict_m06.json",
+      "path_relative": "docs/measurements/m2e_2026-08/verdict_m06.json",
+      "sha256": "8d3bcc6cb3c1684f0967d44f15ed87626749892fc3aa3ba9ce8ed03920a27fe6"
+    }
+  ]
+}

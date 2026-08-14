@@ -1,0 +1,1 @@
+DEVIATION 2026-08-14 p12/p06/p00 の verdict を現行 checkout (b3bf304c…) で再 evaluate（2026-08-14 Fable 裁定。census の evaluator_code_sha256 厳格一致に対し、検査緩和でなく store_B resume による証拠の揃え直しを選択。cells_measured=0 = 再測定なしを確認済み。旧 verdict は superseded_20260814/ に退避）

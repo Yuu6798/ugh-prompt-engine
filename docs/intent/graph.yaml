@@ -98,11 +98,12 @@ nodes:
     reentry: "校正標本が構造的に確保不能。melody.observable_in_field の再入が前提"
   - id: extraction.dominance_break_curve
     claim: "主旋律支配度の破断曲線（M2e 帯）が census 済みである"
-    status: machine_dependent
+    status: verified
     evidence:
       - "docs/DESIGN_M2e_vremix_real_bed.md"
-      - "docs/measurements/m2e_2026-08/m2e_r7_adjudication_2026-08-10.md"
-    note: "r4–r6 完了（r6 本測定 1280/1280 監査合格）。r7 step0 blocker は PR #254 の検証レイヤ是正で解消・裁定 4 点+予算は 2026-08-10 裁定 memo で承認、停止規則は arm 正規化 3×median へ差し替え+口頭裁定 4 件を memo §8 で正本化（2026-08-11）。r7 evaluate 進行中（store_B 604/1280・run 10/72）。残 = evaluate 完走 → census verdict（判定は C5 のみ）→ 破断曲線判読"
+      - "docs/measurements/m2e_2026-08/census.json"
+      - "docs/measurements/m2e_2026-08/m2e_r7_breakdown_curve_record_2026-08-14.md"
+    note: "M2e r0–r7 全段階完了（2026-08-14）。census 1280/1280（sha256 0e2cc789…）・トリップワイヤ両アーム pass・repeats bit 一致。判読 = direct 破断の膝は 0dB と −6dB の間（劣化主因は voicing recall）、stem は 4 点全てで direct 超え。昇格宣言なし・M4 G2 非解錠（census の宣言どおり）。実運用帯素材の扱いは §12 User 決裁待ち"
 
   # --- LLM 著述（authoring） ---
   - id: authoring.contract

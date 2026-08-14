@@ -99,10 +99,10 @@ runbook: [`docs/m2e_provisioning_runbook.md`](../../m2e_provisioning_runbook.md)
 | r4 | r2-0（`P` 決定・並列不変性ゲート・単位コスト校正・`env_digest`・lockfile） | **完了**（2026-08-05・[`r_max_decision_2026-08-05.md`](r_max_decision_2026-08-05.md)） |
 | r5 | `m2e_r2_shard_map.yaml` | **完了**（commit 32288aa8・N_shards=19） |
 | r6 | 本測定（code change 厳禁） | **完了**（1280/1280・監査合格 = [`m2e_r6_session1_audit_2026-08-09.md`](m2e_r6_session1_audit_2026-08-09.md)） |
-| r7 | 破断曲線 + stem アーム 4 点の dated 記録（**昇格宣言をしない**） | **進行中**（store_B 604/1280・現況正本 = [`m2e_r7_adjudication_2026-08-10.md`](m2e_r7_adjudication_2026-08-10.md) §8） |
+| r7 | 破断曲線 + stem アーム 4 点の dated 記録（**昇格宣言をしない**） | **完了**（2026-08-14。census 1280/1280 = `census.json`・判読正本 = [`m2e_r7_breakdown_curve_record_2026-08-14.md`](m2e_r7_breakdown_curve_record_2026-08-14.md)。運転裁定の経緯 = [`m2e_r7_adjudication_2026-08-10.md`](m2e_r7_adjudication_2026-08-10.md) §8） |
 
 （起草時点の注記・履歴）当時 r2 以降が未実施だった理由は**実行環境の揮発**である
-（設計 §9.3・下記 §3.2）。現況は上表のとおり r7 進行中。
+（設計 §9.3・下記 §3.2）。現況は上表のとおり r0–r7 全段階完了（2026-08-14）。
 「素材が無いので着手できない」ではない——切り分けを誤ると対処も誤る。
 
 ### 3.2 状態の正しい切り分け（2026-08-01・User 指摘により是正）

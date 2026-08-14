@@ -1,0 +1,5 @@
+wrote census to docs/measurements/m2e_2026-08/census.json
+  census sha256: 0e2cc789350419f00808d6f01ffd05076ab4cdc32625931b6cd03089ec6718ea
+  cells: 1280/1280 (census_complete)
+  V_remix_real_direct @ +12dB: pass
+  V_remix_real_stem @ +12dB: pass
