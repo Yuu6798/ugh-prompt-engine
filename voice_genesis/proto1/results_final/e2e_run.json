@@ -1,0 +1,4232 @@
+{
+  "determinism_check": {
+    "compared": "(a) run_1 vs run_2, all fields except excluded_fields; (b) WAV export write determinism (PR#261 R11, see wav_write_determinism)",
+    "differing_paths": [],
+    "excluded_fields": {
+      "created_at": "監査/registry レポートの wall-clock 記録。実行時刻が異なるのは設計上必然（§CLAUDE.md: wall-clock 依存は created_at 記録のみ許可）。",
+      "registry_path": "PR#261 R2 で repo-relative 化した後も run_1(scratch)/run_2(正本) は異なるファイル名（_scratch_registry_run1.jsonl / genome_registry.jsonl）を指す設計であり、値そのものが run 間で一致しない。実行環境依存の絶対パス漏えい問題は repo-relative 化で解消したが、この意図的なファイル名差異自体は撤廃できないため比較対象から除外を継続する（underspec_log_final.md [UNDERSPEC-F-8]）。"
+    },
+    "passed": true,
+    "wav_write_determinism": {
+      "all_wav_writes_stable": true,
+      "note": "各 WAV は書き出し直後にもう一度同一配列を別ファイルへ書き、sha256 が一致することを確認した（soundfile.write() 自体が決定論的にファイルへシリアライズすることの証明。PR#261 R11）。詳細は各 WAV エントリの write_determinism_check を参照。"
+    }
+  },
+  "grip_reference": {
+    "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
+    "note": "値のコピーではなく参照。実測値は voice_genesis/harness/results_v6/ を直接参照すること（読み取りのみ）。",
+    "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
+  },
+  "mutate_scale": 0.1,
+  "reference_set": {
+    "e1_chance_band_p95": 0.9678951881811239,
+    "e2_chance_band_p95": 0.9436356408180776,
+    "n_permutations": 200,
+    "sidecar": {
+      "chance_band_procedure": {
+        "chance_seed_base": 90001,
+        "n_permutations": 200,
+        "percentile": 95.0
+      },
+      "coverage_notes": "合成スタンドイン。実在歌手 embedding は machine_dependent で未実装。チャンス帯は gallery ラベルシャッフルの字義通りの実装では有限固定集合ゆえに縮退するため、gallery と無関係な合成候補 200 個の最近傍類似分布で代替した（underspec_log_p1.md [UNDERSPEC-P1-9]）。E1/E2 いずれも実在人間声で訓練された識別器ではなく、`measured (instrument-validity caveat: stand-in embeddings)` の意味での「測定値」である。",
+      "created_at": "2026-08-14T17:35:32.156395+00:00",
+      "embedding_models": [
+        {
+          "description": "measure_v3 6 特徴 (mean_f0/formant_centroid/source_tilt/periodicity/rms/vibrato_depth) の probe 横断頻度正規化済み集約（sustain+phrase）",
+          "id": "E1-measure_v3-agg",
+          "kind": "handcrafted-acoustic-features",
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)"
+        },
+        {
+          "description": "librosa log-mel 64 帯域の probe 横断頻度正規化済み平均（sustain+phrase）",
+          "id": "E2-logmel64-agg",
+          "kind": "log-mel-band-energy",
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)"
+        }
+      ],
+      "id": "standin-gallery-v1",
+      "schema_version": "reference-set/0.2",
+      "sha256": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+      "source_datasets": [
+        "standin-synthetic-gallery-v1 (proto1 sampler.sample, no real singer audio)"
+      ],
+      "version": 1
+    }
+  },
+  "report_generated_at": "2026-08-14T17:38:14.883458+00:00",
+  "run_1": {
+    "genomes": {
+      "a": {
+        "genome": {
+          "audit": {
+            "linkability_report_id": "audit-5fc4062a2a5c",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "microprosody": {
+            "jitter_amount": 0.0011040570789442028,
+            "jitter_seed": 771850791,
+            "vibrato_depth_cents": 55.64035540654666,
+            "vibrato_rate_hz": 5.776529678522095
+          },
+          "name": "demo-a-sample101",
+          "noise": {
+            "breathiness_base": 0.5839060887797364,
+            "register_gains": [
+              0.179619464588105,
+              0.6443966943424977,
+              0.5447169850246752,
+              0.37684841698056,
+              0.024644376440807747
+            ]
+          },
+          "physio_range": {
+            "out_of_physio_range": false,
+            "violated_bounds": []
+          },
+          "range": {
+            "highest_midi": 96.0,
+            "lowest_midi": 36.0
+          },
+          "register": {
+            "boundaries_midi": [
+              53.74022615733388,
+              66.54873804443982,
+              76.54218294939496,
+              85.98851729361722
+            ],
+            "transition_width": 2.7351421230633797
+          },
+          "resonance": {
+            "bandwidth_scale": 0.977448449201683,
+            "formant_offsets": [
+              0.01825563704588236,
+              -0.04113428776061437,
+              0.08454513728458288,
+              0.07386630893571389
+            ],
+            "formant_scale": 1.1531624353864898
+          },
+          "schema_version": "voice-genome/0.2",
+          "source": {
+            "source_mode": "pressed",
+            "tilt": -3.847012415841691
+          }
+        },
+        "linkability_audit": {
+          "created_at": "2026-08-14T17:38:03.937893+00:00",
+          "e1_chance_band_p95": 0.9678951881811239,
+          "e1_max_similarity": 0.6701864182466197,
+          "e1_nearest_gallery_index": 6,
+          "e1_pass": true,
+          "e2_chance_band_p95": 0.9436356408180776,
+          "e2_max_similarity": 0.9539804928127562,
+          "e2_nearest_gallery_index": 7,
+          "e2_pass": false,
+          "genome_id": "a1fe194c6d0c",
+          "overall_pass": false,
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-5fc4062a2a5c",
+          "stale_audit": false
+        },
+        "op": "sample",
+        "parent_genome_ids": [],
+        "parent_keys": [],
+        "plausibility": {
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
+          "min_r_median": 0.36908508335846046,
+          "n_notes": 13,
+          "n_violations": 0,
+          "passed": true,
+          "per_note": [
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.41886671832910827
+            },
+            {
+              "midi": 69.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.6627272807272575
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.7740379065042533
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4726498534521979
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.36908508335846046
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.461171042727642
+            },
+            {
+              "midi": 67.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3796930282542972
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.461171042727642
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.36908508335846046
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4726498534521979
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4726498534521979
+            },
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.41886671832910827
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.7740379065042533
+            }
+          ],
+          "probe_names": [
+            "sustain",
+            "phrase",
+            "cross_range"
+          ],
+          "threshold": 0.35
+        },
+        "pre_audit_genome_id": "a1fe194c6d0c",
+        "probe_manifest": {
+          "genome_name": "demo-a-sample101",
+          "probes": {
+            "cross_range": {
+              "combined_waveform_sha256": "042664fae0ba215e3350b103fe5680a6163a997f00d177c2f2386fa66d9c5237",
+              "durations_sec": [
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "96e7c84834c8829ea11d82403fa7c05177adbef054baeeb33b64b77b6238d376",
+                "bb330a218b62e65720e059fdacd69f1226aa7489eab8247c5497c6b638b4b69a"
+              ],
+              "notes_midi": [
+                48.0,
+                84.0
+              ],
+              "probe_name": "cross_range",
+              "sr": 22050
+            },
+            "phrase": {
+              "combined_waveform_sha256": "07daee9e7e0b8ae8aded2287989da534a766c3d90d2e51b5c43222decf9e3a3d",
+              "durations_sec": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "ff333071e8bc82534a643f06485fb60b36b509977c54e377530792970a969bd3",
+                "3418693cfd0ad27ae0bb1d6b5de45ddda3c61cd6d3b51fbe84c1ec412e24082c",
+                "8ff086c4b50a5038b99ece97f32303acd419404e38f2b232ed2f2cac6701ca39",
+                "20e0c81335c0bf89099e3a95628131be9a729d448d8eec4868ee79258458f652",
+                "8ff086c4b50a5038b99ece97f32303acd419404e38f2b232ed2f2cac6701ca39",
+                "3418693cfd0ad27ae0bb1d6b5de45ddda3c61cd6d3b51fbe84c1ec412e24082c",
+                "ff333071e8bc82534a643f06485fb60b36b509977c54e377530792970a969bd3",
+                "ff333071e8bc82534a643f06485fb60b36b509977c54e377530792970a969bd3"
+              ],
+              "notes_midi": [
+                60.0,
+                62.0,
+                64.0,
+                67.0,
+                64.0,
+                62.0,
+                60.0,
+                60.0
+              ],
+              "probe_name": "phrase",
+              "sr": 22050
+            },
+            "register_sweep": {
+              "combined_waveform_sha256": "b7582b8616d5947d15e0b930e85645f38116c3f02828895d810cf8885bd2de46",
+              "durations_sec": [
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "515579c435d6e6e330e1b2b5972b88874068115ab72416a26d5dc7050bee5f4e",
+                "1de96cbf0a74d4818c45b5530a846fbeeb4ee51084364ab3328b1b7d9a593244",
+                "060e7f991747ddc1202b8c7e108403ec242d5337cac14d39d316fea79b25f5bf",
+                "1e9231971b3a6875324472725e4d1656935463b73955416179faebb0dae19093",
+                "bac491734ceb3df7792ba7846a213ffe0621a471e27f73ed62e1af060650d222",
+                "042b7194f048113a0e95bfa770a14fbef62f76e90a603eb1e339475ebdeefec6",
+                "4e69154daf53777a02411d7a3b9873c05a58212f68e69854eadcb4799cd9f900",
+                "d3d9af5951481d607e6d631231b5c2e0b2435546261fd93a933706b90fdd7efd",
+                "d67270dc842b2ac30e00207611f70a19b0474b26015faf2d71d6dcd4e055cc37",
+                "18a0d4ce1ab4089ac1590a553a128e262169b2b4932ceafd1d86c57cff1eca45",
+                "9423485c23d8a9cf493d11bf295b71ec5b8f176b20651273fed1d3ad7008f822",
+                "d5ca179fe18c12c1c25447d55746a3d429d84dba62ab2d65822a6e84eb8f0269",
+                "f5db3f8bea9a52035f967fe569ac9cb286a939a0cfd3714dbb5ba7b0e54aeb06",
+                "e55513b51ecbf9f508b169568adb0a310f54c75950b4036589bcb16ea1201e33",
+                "7be12fbb9d2e11ff0fe7022aab213072153f901ae9c35e2a91919568b9b9c242",
+                "df6769d2d0ba50c9bbc95ab174a33d7a964780e3cb62255fd0aeb237f0e9549c",
+                "dc0fef7bdf258f80267a7756754773a744f0dafef719aba20ac89eedcf3d1776",
+                "7e7f81de75fc570eead4ba1da77e184be7f936c3e878916bba8a8d4b9007ba29",
+                "e9b807d6ce392512d60cde76e502740ee79ab986c06728aba3d8cdf8bb84195b",
+                "b48ac278561a69f9ad858884addb2aad6a579240132c1cc0d1bab34f055c2aa5",
+                "aec88d8f30f975376593d248d9d89704d17c16684f9064532cac71aa8a927d63",
+                "e370937b595263e0fc1d9fe64f44a4d504fd75e5026f7cb4aa56311f379118dc",
+                "35ecb7882743bb239fc9b6c802bda086166eee8de69f5b7978a08d9ae9b0c186",
+                "5d711311c1ca076f986aaaeb033203e8fa065afdc8e770c9a82bcaa74ba7e05b",
+                "00a161426948f1721ae99936c2ec30ea01f92eed4f7d037c607a81051e90bb4b",
+                "09c8da14ba43645db983532f90a2c3e8c6045573592b82178717af843c253539",
+                "04a98575ee1c3f400994c470c946bcc5ccab09cc5299fa6baa760ed362ffcd5a",
+                "87e3499dec112d3ad7844c131f86a8d76d28a9062ed8d607c4b34ae51f166d24",
+                "5f5bd4a25f19a6ec6218ac8899ff0b3995ba0447c83ede015ac1d5038d59536d",
+                "6b528bc43da0afe39fbbfa5eaf313c8af16aac3d871ecde52c2e1f082f505267",
+                "78017eea43da44f3a5f8507ac43b057d17a65d338e14b559fc5a795820a365d4",
+                "87105feaf0f20884516e17fa6f58a1d2956257e1afd49ce31d1a76fc24236306",
+                "e54d3ba9ba8940f86cf8ce002a5fcd8dcddcdd45bd7cbc47c9c1bae71fdcfed9",
+                "47f2521b81c4dc655ff442ce7bdca1316cc87baefe6c0dceda8df8b6c61bb696",
+                "2bd1b6694011bee191c817a5ed41c3d459d9946e441c474d6a16a2b1be61472e",
+                "f2f01f52969027ecd8f81b2029573ef6a76df97c990790af2478be6c76b05d9c",
+                "85986a61b8a3d239caf9eff5a623f742d3db935b362a111f5bda6eed317372ad",
+                "13e56595c80a19f1937dc28fd75230950e29d056960b54f1a339d420687271c4",
+                "2a06db9b6d6ce1ba989f954749fc63066f05a953cb7e541158c3c1d43ddbb124",
+                "e0eebd16addd9065963b0ba1aacc6cd72cbcd50cb31cfd8dbf0adc1c56e61b6a",
+                "982b79fe0d4cfa81c9d073e0fc96b4c07f2f9fee5a5cb26a6e7df7a1d9727254",
+                "80f8ed313a9c7c497bb53ad84d73107846e121ab16309a196265a66c33460b7d",
+                "063e69b5837c73bf543e3f66244fb1ca07cb4bf32e37acd17786a1bb198c9dc4",
+                "255b2d54b252a9c32c9fa8c51542600cf9c796fa534627d14780086752d23749",
+                "dd56c3a6353148bdcab4fa3850767eac5bc93d80efcc24fb25bc7e64268a3a6c",
+                "6d8413a7012e549d63ad1f3e99ecd68539a14a60f80280b92da920a9720fa72f"
+              ],
+              "notes_midi": [
+                45.0,
+                46.0,
+                47.0,
+                48.0,
+                49.0,
+                50.0,
+                51.0,
+                52.0,
+                53.0,
+                54.0,
+                55.0,
+                56.0,
+                57.0,
+                58.0,
+                59.0,
+                60.0,
+                61.0,
+                62.0,
+                63.0,
+                64.0,
+                65.0,
+                66.0,
+                67.0,
+                68.0,
+                69.0,
+                70.0,
+                71.0,
+                72.0,
+                73.0,
+                74.0,
+                75.0,
+                76.0,
+                77.0,
+                78.0,
+                79.0,
+                80.0,
+                81.0,
+                82.0,
+                83.0,
+                84.0,
+                85.0,
+                86.0,
+                87.0,
+                88.0,
+                89.0,
+                90.0
+              ],
+              "probe_name": "register_sweep",
+              "sr": 22050
+            },
+            "sustain": {
+              "combined_waveform_sha256": "8dee017932ac88eab2b0c1b9064b04840e3232fee9508df1036f76d472cea958",
+              "durations_sec": [
+                1.5,
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "96e7c84834c8829ea11d82403fa7c05177adbef054baeeb33b64b77b6238d376",
+                "2f915e2505f851938c3041605b32ec91cf2ac6b7df3b6c8d41e12d6fa36a04f4",
+                "bb330a218b62e65720e059fdacd69f1226aa7489eab8247c5497c6b638b4b69a"
+              ],
+              "notes_midi": [
+                48.0,
+                69.0,
+                84.0
+              ],
+              "probe_name": "sustain",
+              "sr": 22050
+            },
+            "vibrato": {
+              "combined_waveform_sha256": "540a0da97b6f1a598ffc01dbc156615f6a08210072631bca5cfa1fec84815b1a",
+              "durations_sec": [
+                3.0
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "540a0da97b6f1a598ffc01dbc156615f6a08210072631bca5cfa1fec84815b1a"
+              ],
+              "notes_midi": [
+                69.0
+              ],
+              "probe_name": "vibrato",
+              "sr": 22050
+            }
+          }
+        },
+        "registered_genome_id": "639af0f19fdb",
+        "registry_entry": {
+          "audit": {
+            "linkability_report_id": "audit-5fc4062a2a5c",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "created_at": "2026-08-14T17:38:03.938352+00:00",
+          "eval": {
+            "grip_ref": {
+              "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
+            },
+            "novelty": {
+              "linkability_report_id": "audit-5fc4062a2a5c",
+              "overall_pass": false,
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
+            },
+            "plausibility": {
+              "min_r_median": 0.36908508335846046,
+              "passed": true,
+              "threshold": 0.35
+            }
+          },
+          "feature_set_version": "measure_v3",
+          "genome": {
+            "audit": {
+              "linkability_report_id": "audit-5fc4062a2a5c",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+              "residual_gate_passed": null
+            },
+            "microprosody": {
+              "jitter_amount": 0.0011040570789442028,
+              "jitter_seed": 771850791,
+              "vibrato_depth_cents": 55.64035540654666,
+              "vibrato_rate_hz": 5.776529678522095
+            },
+            "name": "demo-a-sample101",
+            "noise": {
+              "breathiness_base": 0.5839060887797364,
+              "register_gains": [
+                0.179619464588105,
+                0.6443966943424977,
+                0.5447169850246752,
+                0.37684841698056,
+                0.024644376440807747
+              ]
+            },
+            "physio_range": {
+              "out_of_physio_range": false,
+              "violated_bounds": []
+            },
+            "range": {
+              "highest_midi": 96.0,
+              "lowest_midi": 36.0
+            },
+            "register": {
+              "boundaries_midi": [
+                53.74022615733388,
+                66.54873804443982,
+                76.54218294939496,
+                85.98851729361722
+              ],
+              "transition_width": 2.7351421230633797
+            },
+            "resonance": {
+              "bandwidth_scale": 0.977448449201683,
+              "formant_offsets": [
+                0.01825563704588236,
+                -0.04113428776061437,
+                0.08454513728458288,
+                0.07386630893571389
+              ],
+              "formant_scale": 1.1531624353864898
+            },
+            "schema_version": "voice-genome/0.2",
+            "source": {
+              "source_mode": "pressed",
+              "tilt": -3.847012415841691
+            }
+          },
+          "genome_id": "639af0f19fdb",
+          "op": "sample",
+          "parents": [],
+          "registry_schema": "genome-registry/0.1",
+          "renderer_version": "R0.1",
+          "seed": 101,
+          "version": "voice-genome/0.2"
+        },
+        "seed": 101
+      },
+      "b": {
+        "genome": {
+          "audit": {
+            "linkability_report_id": "audit-9f1ec3272b26",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "microprosody": {
+            "jitter_amount": 0.013987754244395037,
+            "jitter_seed": 952743807,
+            "vibrato_depth_cents": 105.21911504195432,
+            "vibrato_rate_hz": 4.419833322492188
+          },
+          "name": "demo-b-sample202",
+          "noise": {
+            "breathiness_base": 0.12743928324464682,
+            "register_gains": [
+              0.7316022159388873,
+              0.25232356262480143,
+              0.6226054475203675,
+              0.4197935567526613,
+              0.2791333703156945
+            ]
+          },
+          "physio_range": {
+            "out_of_physio_range": false,
+            "violated_bounds": []
+          },
+          "range": {
+            "highest_midi": 96.0,
+            "lowest_midi": 36.0
+          },
+          "register": {
+            "boundaries_midi": [
+              49.53779557096824,
+              61.853001293374426,
+              68.46242572290167,
+              80.12072415907494
+            ],
+            "transition_width": 4.290895394779563
+          },
+          "resonance": {
+            "bandwidth_scale": 1.1428585849831732,
+            "formant_offsets": [
+              0.03749833615669726,
+              -0.03991480175780089,
+              -0.011971652446333872,
+              0.012702163648654688
+            ],
+            "formant_scale": 1.167089810109403
+          },
+          "schema_version": "voice-genome/0.2",
+          "source": {
+            "source_mode": "breathy",
+            "tilt": -12.805687501143865
+          }
+        },
+        "linkability_audit": {
+          "created_at": "2026-08-14T17:38:05.461905+00:00",
+          "e1_chance_band_p95": 0.9678951881811239,
+          "e1_max_similarity": 0.8845510993940491,
+          "e1_nearest_gallery_index": 0,
+          "e1_pass": true,
+          "e2_chance_band_p95": 0.9436356408180776,
+          "e2_max_similarity": 0.8969943488837624,
+          "e2_nearest_gallery_index": 2,
+          "e2_pass": true,
+          "genome_id": "f030da328400",
+          "overall_pass": true,
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-9f1ec3272b26",
+          "stale_audit": false
+        },
+        "op": "sample",
+        "parent_genome_ids": [],
+        "parent_keys": [],
+        "plausibility": {
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
+          "min_r_median": 0.6005679255520303,
+          "n_notes": 13,
+          "n_violations": 0,
+          "passed": true,
+          "per_note": [
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.6005679255520303
+            },
+            {
+              "midi": 69.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.7332015196465724
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.9197318064502553
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.660501167110578
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6815302613405575
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6806603348822544
+            },
+            {
+              "midi": 67.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6714708135600098
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6806603348822544
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6815302613405575
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.660501167110578
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.660501167110578
+            },
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.6005679255520303
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.9197318064502553
+            }
+          ],
+          "probe_names": [
+            "sustain",
+            "phrase",
+            "cross_range"
+          ],
+          "threshold": 0.35
+        },
+        "pre_audit_genome_id": "f030da328400",
+        "probe_manifest": {
+          "genome_name": "demo-b-sample202",
+          "probes": {
+            "cross_range": {
+              "combined_waveform_sha256": "ca058f18e803a8e15034a3a671122b245baec66c63c610ab45ce6ba5051241bf",
+              "durations_sec": [
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "4125b4e22a0c3363ec627d7d8e3996d0c39b6e8f166c490ecf616d1f64690b36",
+                "dfa3a4979f5c6ee4b9374828229d653059fd0da240987b6e6d62b85c5051d40b"
+              ],
+              "notes_midi": [
+                48.0,
+                84.0
+              ],
+              "probe_name": "cross_range",
+              "sr": 22050
+            },
+            "phrase": {
+              "combined_waveform_sha256": "94ef1ef5315461c68209e71d1757c977bec0ea1d9556ac1298d9fbf78c12bd06",
+              "durations_sec": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "c26baf6f02708a8619c0ba6c49384749763858a3b48532aa66a6ace885b30f12",
+                "587703a5bfa35953d5c9ff535d242281a95c5ceda1f5e6aab41148dc8d71da5c",
+                "86a6a36f489b8c168e3eb9e585846ca56107f53c06201381bf7d0bdb4f9841ae",
+                "f612e46751cf776f89930f348c3a423bb3822f0b9e103c8935f2dfbcc5f716ab",
+                "86a6a36f489b8c168e3eb9e585846ca56107f53c06201381bf7d0bdb4f9841ae",
+                "587703a5bfa35953d5c9ff535d242281a95c5ceda1f5e6aab41148dc8d71da5c",
+                "c26baf6f02708a8619c0ba6c49384749763858a3b48532aa66a6ace885b30f12",
+                "c26baf6f02708a8619c0ba6c49384749763858a3b48532aa66a6ace885b30f12"
+              ],
+              "notes_midi": [
+                60.0,
+                62.0,
+                64.0,
+                67.0,
+                64.0,
+                62.0,
+                60.0,
+                60.0
+              ],
+              "probe_name": "phrase",
+              "sr": 22050
+            },
+            "register_sweep": {
+              "combined_waveform_sha256": "304ceda116687d3a34f229f914a8c686df7b885598682ec48a33aebb91e2a8cf",
+              "durations_sec": [
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "93782944360840f474833aaea59d2a3ade20516f67ef728540f5376101227270",
+                "240de19e4f7d160d83fec7670af892c16646e53e85a885ca4c7f75a7920a2e31",
+                "de81322591e96ca1b1ad7eab1bb0c419dc1766ec17fe4967a9ed594782f8a845",
+                "2cf55f9272f1fe8c39bf5b0489bea0c54725584d242261646c5a013883c23f6e",
+                "56ef8418773b38e93ab28efdbe376d4e78bcd776c5140c3a08062943360b65bd",
+                "b0ce0d803d8f8d4f85e9e96658c3fec7bd743f6160740d8150feab1e23e66dd4",
+                "937aa852f4f86fc16b02b8ca1dfe6cf2f695eae58aab12ef60dd25c35539405f",
+                "5ca2bc178d0118f7130c3f2ffa9f8162e6d7e53eee61d9314193223312a700fe",
+                "a23b853572b960f20a19a1e38705901cd22114786def8a3d6abd8ee96573e0cb",
+                "3733617f2717b873f0f7396ae9ff24518bc357016c6c883027606f0e46cf0a8b",
+                "00f5b4f9ac373f4f69c3dd32d0737e064a67de5cf359771b86dbdea7a06dda43",
+                "ff85e2cd0cc3f58cff330fa243a4dde957a1c3a577fb09297338ab25d873b87e",
+                "02dc55ac482ce16cfbac79d11e3b377ddcb3e822af90207600b775eb2c285d43",
+                "422716b35ffd1802873a42dff40b705737888842b9b80541f132f8af95bb0e07",
+                "d19211ae97651aa0febfc10c0c97010f36d468582312e816278b6df5bb40c31c",
+                "2190d47d829a3d444886a586c53c350bc487f426365855a879d5504c6c1a3200",
+                "482f94ae8512fb72c87b5519bb75f861bdd988606e07c4f33d32855541d81588",
+                "bbc3a6ebdd54879400ccfbd6025c06cca7a4f502434d808ab9a67fab81087dbc",
+                "b8ddd2f17c2ee2e9f4ac64aec72b146b3a472654fa6402a61013461e28456448",
+                "9727d8326292e20ecab4acd5c2ba80dc92df7783a97a559e9093c13dee796a2e",
+                "a66cb1a6a893769f1d84864955ec15bafeaf7f6f18b5d42a864102ba2f96ff89",
+                "a59489a2cec434a7e22e0a8d7589925b9fd0a01f26fffb8efd8fc961835c534f",
+                "25302a49d7960e22d123908f03773aca707102a37086106d1609406367b61eeb",
+                "9f6af04fb0c3265c4988d34b12f1a12a5a72959f9bdb57cccb85b72aa47961a4",
+                "53e7e09f918880c8d6cb53ecec77b8f3a67704a9e5db76488ce7bb8c860caad0",
+                "84d22d1f3141356b4f97f428c8e3af71a0ddbba303efdcb64225f0a9291f11bd",
+                "f4e99218d11a93cc5cb30295de313dc0e25f45142e602bd5a8e5cf18aaeab3a1",
+                "a2f882cba27d7e4879da962cf59c65ad6ca1d8e6c89160e4014bee6b3190ae5e",
+                "28b8ed5b434524c8ee30dd11a46ef4848a48f9ee22197455fa89e4182e638b92",
+                "36b997f7edc3a2abe4e9ccb2af0b6ae668344cff3b2876e25527ffc6cff15535",
+                "c306e71c94111fcb5c545e20448a9a37a6f18ca18843210c34877ea98e12768b",
+                "02cd7d9b031bac6ec135113d59c0def7a39d7085c45d545ce661835f6d264dd6",
+                "8fb1d7e73f04fcba524406cb07043912737c380706953460ce91aa90dfacf9d4",
+                "62477d02454fb60c8f61b8973f789d0739e50c72b01ba75edfda905ed9d62350",
+                "b7995c8f6096c676216fc5f04727806fd9208db7d4c28753378d480d4efe7e4d",
+                "10d3a858ec491b2543aecb23705e012d9f1d84bf4af1386ed5900b3b500abe53",
+                "67be440b6a2b846d77301be7f152f781f8313b966494d46094d33e2f5e530ceb",
+                "9b1af625694733feccf0615c83451f972af868596787c6ef8da5589a65c591b0",
+                "4c38f62868e69af1beab24a9a41354712c7bb8510b884029174d7a1ca87d354f",
+                "9c30228a7be84b4b4adc932f444960300c4b226a2a5822e85ff49a2e98ef9707",
+                "eb5e074870c06e7ebdf6795d4d01f49405e991ef7815d34156ef1ed248b4cd47",
+                "0c7c2496dabc1306914811efb499cd305388008dabe33d6d4440837cd1bfe36f",
+                "fdbfbd561a7ecb263017025883b7f6991e073ac92ceebca74fba76f3d437ab1c",
+                "a08ecd2e73b5349b93c2fe87027001fe869b780de5f01f864a3ebf1b5606590f",
+                "28ef0bf4f71776110511c32438ba5caab7a06c10d67e80d76e744f81678b7a4f",
+                "308b3b94d5867e378a889d80cd5359064abc8a3b3e99f1ee58b308a91f2edffb"
+              ],
+              "notes_midi": [
+                45.0,
+                46.0,
+                47.0,
+                48.0,
+                49.0,
+                50.0,
+                51.0,
+                52.0,
+                53.0,
+                54.0,
+                55.0,
+                56.0,
+                57.0,
+                58.0,
+                59.0,
+                60.0,
+                61.0,
+                62.0,
+                63.0,
+                64.0,
+                65.0,
+                66.0,
+                67.0,
+                68.0,
+                69.0,
+                70.0,
+                71.0,
+                72.0,
+                73.0,
+                74.0,
+                75.0,
+                76.0,
+                77.0,
+                78.0,
+                79.0,
+                80.0,
+                81.0,
+                82.0,
+                83.0,
+                84.0,
+                85.0,
+                86.0,
+                87.0,
+                88.0,
+                89.0,
+                90.0
+              ],
+              "probe_name": "register_sweep",
+              "sr": 22050
+            },
+            "sustain": {
+              "combined_waveform_sha256": "3ff579f7644337d3646918bd7c4374dc79df91f165d7a05eff206780c44f9645",
+              "durations_sec": [
+                1.5,
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "4125b4e22a0c3363ec627d7d8e3996d0c39b6e8f166c490ecf616d1f64690b36",
+                "5cee109a7f5291ec64aa841752c08d1bdf81cb06d2e164db670b43aeb2b29821",
+                "dfa3a4979f5c6ee4b9374828229d653059fd0da240987b6e6d62b85c5051d40b"
+              ],
+              "notes_midi": [
+                48.0,
+                69.0,
+                84.0
+              ],
+              "probe_name": "sustain",
+              "sr": 22050
+            },
+            "vibrato": {
+              "combined_waveform_sha256": "5e6f7c4c0e6a6181c54a64816b37573508d49d45a82cbd53361427773036a550",
+              "durations_sec": [
+                3.0
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "5e6f7c4c0e6a6181c54a64816b37573508d49d45a82cbd53361427773036a550"
+              ],
+              "notes_midi": [
+                69.0
+              ],
+              "probe_name": "vibrato",
+              "sr": 22050
+            }
+          }
+        },
+        "registered_genome_id": "951175baee90",
+        "registry_entry": {
+          "audit": {
+            "linkability_report_id": "audit-9f1ec3272b26",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "created_at": "2026-08-14T17:38:05.462794+00:00",
+          "eval": {
+            "grip_ref": {
+              "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
+            },
+            "novelty": {
+              "linkability_report_id": "audit-9f1ec3272b26",
+              "overall_pass": true,
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
+            },
+            "plausibility": {
+              "min_r_median": 0.6005679255520303,
+              "passed": true,
+              "threshold": 0.35
+            }
+          },
+          "feature_set_version": "measure_v3",
+          "genome": {
+            "audit": {
+              "linkability_report_id": "audit-9f1ec3272b26",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+              "residual_gate_passed": null
+            },
+            "microprosody": {
+              "jitter_amount": 0.013987754244395037,
+              "jitter_seed": 952743807,
+              "vibrato_depth_cents": 105.21911504195432,
+              "vibrato_rate_hz": 4.419833322492188
+            },
+            "name": "demo-b-sample202",
+            "noise": {
+              "breathiness_base": 0.12743928324464682,
+              "register_gains": [
+                0.7316022159388873,
+                0.25232356262480143,
+                0.6226054475203675,
+                0.4197935567526613,
+                0.2791333703156945
+              ]
+            },
+            "physio_range": {
+              "out_of_physio_range": false,
+              "violated_bounds": []
+            },
+            "range": {
+              "highest_midi": 96.0,
+              "lowest_midi": 36.0
+            },
+            "register": {
+              "boundaries_midi": [
+                49.53779557096824,
+                61.853001293374426,
+                68.46242572290167,
+                80.12072415907494
+              ],
+              "transition_width": 4.290895394779563
+            },
+            "resonance": {
+              "bandwidth_scale": 1.1428585849831732,
+              "formant_offsets": [
+                0.03749833615669726,
+                -0.03991480175780089,
+                -0.011971652446333872,
+                0.012702163648654688
+              ],
+              "formant_scale": 1.167089810109403
+            },
+            "schema_version": "voice-genome/0.2",
+            "source": {
+              "source_mode": "breathy",
+              "tilt": -12.805687501143865
+            }
+          },
+          "genome_id": "951175baee90",
+          "op": "sample",
+          "parents": [],
+          "registry_schema": "genome-registry/0.1",
+          "renderer_version": "R0.1",
+          "seed": 202,
+          "version": "voice-genome/0.2"
+        },
+        "seed": 202
+      },
+      "c": {
+        "genome": {
+          "audit": {
+            "linkability_report_id": "audit-8b75585aed0a",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "microprosody": {
+            "jitter_amount": 0.0011179288811473745,
+            "jitter_seed": 771850791,
+            "vibrato_depth_cents": 54.805119601310864,
+            "vibrato_rate_hz": 6.000012615646316
+          },
+          "name": "demo-a-sample101-mut303",
+          "noise": {
+            "breathiness_base": 0.5233092534357775,
+            "register_gains": [
+              0.07423461708300183,
+              0.6765339302198511,
+              0.45155941094150837,
+              0.4622067363012445,
+              0.0
+            ]
+          },
+          "physio_range": {
+            "out_of_physio_range": false,
+            "violated_bounds": []
+          },
+          "range": {
+            "highest_midi": 96.0,
+            "lowest_midi": 36.0
+          },
+          "register": {
+            "boundaries_midi": [
+              54.185599792405434,
+              67.70247521300173,
+              76.07455885858253,
+              84.12307279966134
+            ],
+            "transition_width": 3.055139651460678
+          },
+          "resonance": {
+            "bandwidth_scale": 0.9407508786515941,
+            "formant_offsets": [
+              0.0007665156649950093,
+              -0.03641856770762181,
+              0.07100193519525043,
+              0.10635154906738847
+            ],
+            "formant_scale": 1.1330764463537621
+          },
+          "schema_version": "voice-genome/0.2",
+          "source": {
+            "source_mode": "pressed",
+            "tilt": -4.999138862026906
+          }
+        },
+        "linkability_audit": {
+          "created_at": "2026-08-14T17:38:06.993001+00:00",
+          "e1_chance_band_p95": 0.9678951881811239,
+          "e1_max_similarity": 0.8488221011972042,
+          "e1_nearest_gallery_index": 6,
+          "e1_pass": true,
+          "e2_chance_band_p95": 0.9436356408180776,
+          "e2_max_similarity": 0.9277342035103393,
+          "e2_nearest_gallery_index": 7,
+          "e2_pass": true,
+          "genome_id": "aee4e3357ddd",
+          "overall_pass": true,
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-8b75585aed0a",
+          "stale_audit": false
+        },
+        "op": "mutate",
+        "parent_genome_ids": [
+          "639af0f19fdb"
+        ],
+        "parent_keys": [
+          "a"
+        ],
+        "plausibility": {
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
+          "min_r_median": 0.32839760351766856,
+          "n_notes": 13,
+          "n_violations": 1,
+          "passed": false,
+          "per_note": [
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.3825266076613521
+            },
+            {
+              "midi": 69.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.6874530143152899
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.8107015012085247
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3570160025806864
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.5014148394873974
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3718873194295006
+            },
+            {
+              "midi": 67.0,
+              "passed": false,
+              "probe_name": "phrase",
+              "r_median": 0.32839760351766856
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3718873194295006
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.5014148394873974
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3570160025806864
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3570160025806864
+            },
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.3825266076613521
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.8107015012085247
+            }
+          ],
+          "probe_names": [
+            "sustain",
+            "phrase",
+            "cross_range"
+          ],
+          "threshold": 0.35
+        },
+        "pre_audit_genome_id": "aee4e3357ddd",
+        "probe_manifest": {
+          "genome_name": "demo-a-sample101-mut303",
+          "probes": {
+            "cross_range": {
+              "combined_waveform_sha256": "86180ae8af05d50cabcf8b3683b08ca7ca31225173afac1a27dfb4479dd6a74e",
+              "durations_sec": [
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "017d55fca3d7e6062c8b2dc68916259d8122be5c393b718aa824c2dccbf3411b",
+                "8afec0470c5c55289397047efccbc659348c92f9c34802d5685ff96a3bf0372f"
+              ],
+              "notes_midi": [
+                48.0,
+                84.0
+              ],
+              "probe_name": "cross_range",
+              "sr": 22050
+            },
+            "phrase": {
+              "combined_waveform_sha256": "4e18dab603eac7d5b7ff2a31dee9f11894f919d34b3ceb9b6e7f3facfb819077",
+              "durations_sec": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "ccbf1543bd722d0f73a20e07d40ab91352ae5cb28a11b35945a67a6500e983ca",
+                "529ff4156bd063588265822d9c7ca343a5c34e04708c32500f566b6e30a25ca0",
+                "8a9c621f3977ce9021b8b098544e6eec7da06b5db91c4e4b2f6c3d05ebfdc4a1",
+                "e4c17b4e977e15408b9f748392bb842885e490dc9900f3c6a2a8013eee8fb313",
+                "8a9c621f3977ce9021b8b098544e6eec7da06b5db91c4e4b2f6c3d05ebfdc4a1",
+                "529ff4156bd063588265822d9c7ca343a5c34e04708c32500f566b6e30a25ca0",
+                "ccbf1543bd722d0f73a20e07d40ab91352ae5cb28a11b35945a67a6500e983ca",
+                "ccbf1543bd722d0f73a20e07d40ab91352ae5cb28a11b35945a67a6500e983ca"
+              ],
+              "notes_midi": [
+                60.0,
+                62.0,
+                64.0,
+                67.0,
+                64.0,
+                62.0,
+                60.0,
+                60.0
+              ],
+              "probe_name": "phrase",
+              "sr": 22050
+            },
+            "register_sweep": {
+              "combined_waveform_sha256": "91d2411ea121e7e29e24cbc28f9ab5ea335dd231963e00460a3a95dfdfc85d08",
+              "durations_sec": [
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "fe5fefced80a80c56463e815158b47dfd341a2a98dc4f0d4df7762ba3e4c6ebe",
+                "75966a9b06613ea64809411792769ae2de2eaeee98112cab9f49502182a6853c",
+                "28f5642b921c5eef38a552cbdb401e900c759550fcf173fafc76301f477157f0",
+                "3c1ca954c4767b7e3f24549d0e70b90656340e37b9389f0baa4c41c0e569301a",
+                "329a2c5bf29e47e26f21150fa5e8d4ebfb91d3446572a4d578d836341ca925b7",
+                "659b2397ea3021dab479c88c8e9ae9fdc0abbf8d651aa11cf431f0f699a87d1c",
+                "294380918d7428d7094e1b0642203ed240432fdf36f02f64243c040092589234",
+                "30981a40983f7c80747e1e0c43c892dd0682e386633b5c832b0247fd09160bdc",
+                "a91c40b86ec88c3386d855ee2ad67975aa64c9e0ce8a270965a3a367dd536345",
+                "49f568541939b9fb8d94bb31eff2552be332f75a5ab5882cd2304a028b920191",
+                "a988846e0d76576e7fe2cdc08afbe0404ea2f53ca00d0d9265e557c1fd464269",
+                "6d3ad1a56e3bf7e171f3c1c8c311b262bc68d6c14fa2ab769593533a7ae004cb",
+                "298465726c25569a520cb971805dcc3ddd587337c7a378494dfccdad8839e05f",
+                "6673852706715891f2fab6413d801d45a1ec4f939466d55f45e6fed2790eb419",
+                "2b4653822a6360f63c22e30618f50f790e6a5db49f20e499f044366b1edad7d0",
+                "3f521714c99ec4cc50beff7d6040f2bf5278abf9d7fc965fa1b1afbb62cb5c50",
+                "f61814cb33f68a8d5a2ac530290e12aef421819c29011f444ab6ca20efd6f633",
+                "55d59b3f985fea4b4a1aea7adce0aedf89df90ee7c55ef12f3e4476f3cdcb8ec",
+                "6b23bc09fd690fb0cfe12eed40a1b0305f30f5f1071a049fdce844524daca31b",
+                "75081ce86adc75f9f472470cc94fea6bc7b63d47cbb627909bb12cce1105ffe5",
+                "526f6a7011e9cc5fa9083cd2bd8d65075834bafbf0b61e8580b518e681913f5a",
+                "8afba763626e4db1513e919e12ade187955ca1050e26754528e3e3340135158d",
+                "c48f13d56126333fe41fecefb174b39508500518ff24b8a0272df2e226932255",
+                "d8737d8fd256632cf0d94fbad179be48fd21358df624f12e276c9519a0323de9",
+                "8b7189a5f2896f222e94a1126b7405adfd89923c35dc38208d5fb591ad18aa2d",
+                "16c9ed1a28c8979394813e25f57628e3e16615414f2692de291b1e9a8bfc2026",
+                "a260caa6301d922ebccb6d57deb6853598ef1f422aecd9dc259545e5c86fbafb",
+                "5fb87a313969b1ded1016684d5ebb35517a126922c9b73ee9c9609de8a834dbc",
+                "0397600449ec2ecfa0a1aeaece9999420f475d63c7302fc332641512bef9c585",
+                "85bb829fa4fa47f20d1c671337bbd96128f7b8a61f42c898de2e0bac9c06a1ec",
+                "155b9a2f0e7a4522ee3c9ab815c0bb6ab6a76f9ae02da03eb927cd522c7b65ce",
+                "26a6c0e42a4b46d8f6e72082dd5228a6f02ee21fc4623ab714d4776d57aa98d9",
+                "714a9a5a78546d7237fdb20ad88b84496dfa21bfdbc1a4689d055991aea8c46d",
+                "246f48b9e4d7472cf093c5214c9af748dde2e69a1ba3972d4dc9fb8866149f26",
+                "80705e5623b08cf833c14ab3370348a8e1d72b75253bada2b3eabc16c4d5a61b",
+                "aeb6c6b259f269c14ac482caab0f0e6b8c9e79a17beae8d4a091049fa34ebf5c",
+                "35947e728d2761127143dd19fcd834db2540840d3eb3438656310baafc5177ff",
+                "592a273492247520742832f6f6abb7418002b769a084904d38e9aed65ce6df8c",
+                "bd5527999715876df03b307ffcd36cfeebe5dffd0b8bb347aa14331bd7ca9e96",
+                "1220dab8e6c05a420b960a5afc98604ed41f48881b10f94524c5c11f3cb14f70",
+                "eb09524550b8ff4c0f57cb0d57ac4a4055499bc75fad2b407f016d443adf0014",
+                "f248fd7de39fc6650e2d4ac5b7ecaba740c24ed588208cbef61bb654ec611921",
+                "2654296e0c0b0970e14ec6343333acc9823062e9805fa37dd8bf66ad1c805dae",
+                "9deaca64e55f6e859aa09328fc3e2f8fe790e89a91542c10158a7a12a372ecee",
+                "a0e091a3b08e184b8308876ed30ea27f772d0db0343e56f8fb9d3169435625de",
+                "c698eb906a7e1d7d87cdcffdb70dce3aabfa8f3d9868000ae480186a4b12dfc8"
+              ],
+              "notes_midi": [
+                45.0,
+                46.0,
+                47.0,
+                48.0,
+                49.0,
+                50.0,
+                51.0,
+                52.0,
+                53.0,
+                54.0,
+                55.0,
+                56.0,
+                57.0,
+                58.0,
+                59.0,
+                60.0,
+                61.0,
+                62.0,
+                63.0,
+                64.0,
+                65.0,
+                66.0,
+                67.0,
+                68.0,
+                69.0,
+                70.0,
+                71.0,
+                72.0,
+                73.0,
+                74.0,
+                75.0,
+                76.0,
+                77.0,
+                78.0,
+                79.0,
+                80.0,
+                81.0,
+                82.0,
+                83.0,
+                84.0,
+                85.0,
+                86.0,
+                87.0,
+                88.0,
+                89.0,
+                90.0
+              ],
+              "probe_name": "register_sweep",
+              "sr": 22050
+            },
+            "sustain": {
+              "combined_waveform_sha256": "82a7144d810e829f8b4e1b00ebf00f805e8ed9bd26b02672a25fbcbd0a5aca29",
+              "durations_sec": [
+                1.5,
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "017d55fca3d7e6062c8b2dc68916259d8122be5c393b718aa824c2dccbf3411b",
+                "64516d71ae3dff986aa6d292285423f7774f288d0e1dbc70c7a7e12fcd3b7e90",
+                "8afec0470c5c55289397047efccbc659348c92f9c34802d5685ff96a3bf0372f"
+              ],
+              "notes_midi": [
+                48.0,
+                69.0,
+                84.0
+              ],
+              "probe_name": "sustain",
+              "sr": 22050
+            },
+            "vibrato": {
+              "combined_waveform_sha256": "32414408e15ec51069e21aa241352b713dd6d9836110f262b0cf481f6ebeb242",
+              "durations_sec": [
+                3.0
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "32414408e15ec51069e21aa241352b713dd6d9836110f262b0cf481f6ebeb242"
+              ],
+              "notes_midi": [
+                69.0
+              ],
+              "probe_name": "vibrato",
+              "sr": 22050
+            }
+          }
+        },
+        "registered_genome_id": "8fe0c4db1378",
+        "registry_entry": {
+          "audit": {
+            "linkability_report_id": "audit-8b75585aed0a",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "created_at": "2026-08-14T17:38:06.994446+00:00",
+          "eval": {
+            "grip_ref": {
+              "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
+            },
+            "novelty": {
+              "linkability_report_id": "audit-8b75585aed0a",
+              "overall_pass": true,
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
+            },
+            "plausibility": {
+              "min_r_median": 0.32839760351766856,
+              "passed": false,
+              "threshold": 0.35
+            }
+          },
+          "feature_set_version": "measure_v3",
+          "genome": {
+            "audit": {
+              "linkability_report_id": "audit-8b75585aed0a",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+              "residual_gate_passed": null
+            },
+            "microprosody": {
+              "jitter_amount": 0.0011179288811473745,
+              "jitter_seed": 771850791,
+              "vibrato_depth_cents": 54.805119601310864,
+              "vibrato_rate_hz": 6.000012615646316
+            },
+            "name": "demo-a-sample101-mut303",
+            "noise": {
+              "breathiness_base": 0.5233092534357775,
+              "register_gains": [
+                0.07423461708300183,
+                0.6765339302198511,
+                0.45155941094150837,
+                0.4622067363012445,
+                0.0
+              ]
+            },
+            "physio_range": {
+              "out_of_physio_range": false,
+              "violated_bounds": []
+            },
+            "range": {
+              "highest_midi": 96.0,
+              "lowest_midi": 36.0
+            },
+            "register": {
+              "boundaries_midi": [
+                54.185599792405434,
+                67.70247521300173,
+                76.07455885858253,
+                84.12307279966134
+              ],
+              "transition_width": 3.055139651460678
+            },
+            "resonance": {
+              "bandwidth_scale": 0.9407508786515941,
+              "formant_offsets": [
+                0.0007665156649950093,
+                -0.03641856770762181,
+                0.07100193519525043,
+                0.10635154906738847
+              ],
+              "formant_scale": 1.1330764463537621
+            },
+            "schema_version": "voice-genome/0.2",
+            "source": {
+              "source_mode": "pressed",
+              "tilt": -4.999138862026906
+            }
+          },
+          "genome_id": "8fe0c4db1378",
+          "op": "mutate",
+          "parents": [
+            "639af0f19fdb"
+          ],
+          "registry_schema": "genome-registry/0.1",
+          "renderer_version": "R0.1",
+          "seed": 303,
+          "version": "voice-genome/0.2"
+        },
+        "seed": 303
+      },
+      "d": {
+        "genome": {
+          "audit": {
+            "linkability_report_id": "audit-335eb490524e",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "microprosody": {
+            "jitter_amount": 0.013987754244395037,
+            "jitter_seed": 952743807,
+            "vibrato_depth_cents": 54.805119601310864,
+            "vibrato_rate_hz": 6.000012615646316
+          },
+          "name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+          "noise": {
+            "breathiness_base": 0.5233092534357775,
+            "register_gains": [
+              0.07423461708300183,
+              0.6765339302198511,
+              0.45155941094150837,
+              0.4622067363012445,
+              0.0
+            ]
+          },
+          "physio_range": {
+            "out_of_physio_range": false,
+            "violated_bounds": []
+          },
+          "range": {
+            "highest_midi": 96.0,
+            "lowest_midi": 36.0
+          },
+          "register": {
+            "boundaries_midi": [
+              54.185599792405434,
+              67.70247521300173,
+              76.07455885858253,
+              84.12307279966134
+            ],
+            "transition_width": 3.055139651460678
+          },
+          "resonance": {
+            "bandwidth_scale": 0.9407508786515941,
+            "formant_offsets": [
+              0.03749833615669726,
+              -0.03991480175780089,
+              -0.011971652446333872,
+              0.012702163648654688
+            ],
+            "formant_scale": 1.1330764463537621
+          },
+          "schema_version": "voice-genome/0.2",
+          "source": {
+            "source_mode": "pressed",
+            "tilt": -4.999138862026906
+          }
+        },
+        "linkability_audit": {
+          "created_at": "2026-08-14T17:38:08.490393+00:00",
+          "e1_chance_band_p95": 0.9678951881811239,
+          "e1_max_similarity": 0.6530897621492879,
+          "e1_nearest_gallery_index": 7,
+          "e1_pass": true,
+          "e2_chance_band_p95": 0.9436356408180776,
+          "e2_max_similarity": 0.9168105546793852,
+          "e2_nearest_gallery_index": 7,
+          "e2_pass": true,
+          "genome_id": "6c5fa9d16d50",
+          "overall_pass": true,
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-335eb490524e",
+          "stale_audit": false
+        },
+        "op": "crossover",
+        "parent_genome_ids": [
+          "8fe0c4db1378",
+          "951175baee90"
+        ],
+        "parent_keys": [
+          "c",
+          "b"
+        ],
+        "plausibility": {
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
+          "min_r_median": 0.39170988510446464,
+          "n_notes": 13,
+          "n_violations": 0,
+          "passed": true,
+          "per_note": [
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.4704884967391472
+            },
+            {
+              "midi": 69.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.631671207164718
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.8356025249922276
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.39170988510446464
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.42851272433655907
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4740690505437272
+            },
+            {
+              "midi": 67.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4038870738522004
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4740690505437272
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.42851272433655907
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.39170988510446464
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.39170988510446464
+            },
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.4704884967391472
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.8356025249922276
+            }
+          ],
+          "probe_names": [
+            "sustain",
+            "phrase",
+            "cross_range"
+          ],
+          "threshold": 0.35
+        },
+        "pre_audit_genome_id": "6c5fa9d16d50",
+        "probe_manifest": {
+          "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+          "probes": {
+            "cross_range": {
+              "combined_waveform_sha256": "0c60eff43dbbd344f17c5262f58a4fa452c97124a191f0e29f7f7338c980048f",
+              "durations_sec": [
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "08fc795d8e7ecace0cb4badc4ca49670babef8351049791db391392b2111414a",
+                "b2801584ac2200083d1de777b20a06b9efd8dcf62268a7d4d9a9935a29536f4d"
+              ],
+              "notes_midi": [
+                48.0,
+                84.0
+              ],
+              "probe_name": "cross_range",
+              "sr": 22050
+            },
+            "phrase": {
+              "combined_waveform_sha256": "c6a797eae602a5a2cd63978da2e4c54fc194a7a3bee0f41351adbd795bdcf215",
+              "durations_sec": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "1ef814c781f87b1538beb8f8c6b7fd6ede515c213a3c0e3e4eccfb9f85be4e37",
+                "dce6ecd31ecd374d189e555392021925fc54a199f0f02380ba343dee7c590cd8",
+                "a5061e5212d0f4799d5abf286f2a2499769d38846819d1b625caa0680833872f",
+                "59d4ec343bf4c757c73266b0336a237f991d9391078d1dee498f54b781b51052",
+                "a5061e5212d0f4799d5abf286f2a2499769d38846819d1b625caa0680833872f",
+                "dce6ecd31ecd374d189e555392021925fc54a199f0f02380ba343dee7c590cd8",
+                "1ef814c781f87b1538beb8f8c6b7fd6ede515c213a3c0e3e4eccfb9f85be4e37",
+                "1ef814c781f87b1538beb8f8c6b7fd6ede515c213a3c0e3e4eccfb9f85be4e37"
+              ],
+              "notes_midi": [
+                60.0,
+                62.0,
+                64.0,
+                67.0,
+                64.0,
+                62.0,
+                60.0,
+                60.0
+              ],
+              "probe_name": "phrase",
+              "sr": 22050
+            },
+            "register_sweep": {
+              "combined_waveform_sha256": "6911ed401b9fc258c40aa3bad57258e829d5eee67c04a5a8e4fb0ec450259415",
+              "durations_sec": [
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "8a772ace33a9789a866d4656c553bbb2283521ca8f75bf34dd5f8755f85c38d0",
+                "c49eb4935a3a06b6f357a173decfeeb14d491133545aea6c2dbf81c905085133",
+                "f1634728a10891f2c8e1fad52c54a2982267c9faa394fd70fd95ca4ac0c8954b",
+                "a721b7bff29358032657ed9b1e669d703d3367edba8a1dcb0a459928a83de038",
+                "d3367e2b53b75c19438c09f4a23b234b0be2ee42d2e502e9a43791acc3ffc3fd",
+                "761707b5ed9cac20ca90b7f297b486841fe9bdff8c265dfea07d42e5e20858be",
+                "3c6f629e1cd987b167277c48df75e597491f0c27775f27cd15a84bad534381dc",
+                "10deba71b9de495cfb0ac9b37bff3c62ec14ea3b54113dbf3f7650c5656d9660",
+                "fe76aafe62be154a2bcdb9a40186e6daca6c108aeb56d4e132cbf56106b64e79",
+                "83679242e2df2231b53677bb0767646e4b0860d03ea9b09f0c9be9cdd5bebccd",
+                "5ca608c9f46c0f0208ef24b2f8d141fc0587e7dfc78a061128c3dba4a45bd561",
+                "dac0362cbd208f3399a08ff1c1a310c2922b97cf25ff585e22db0f55cc73408c",
+                "0f3d88ce52559a8149b79698156f104803064b73fd8cf1c7de6d31e88d600c6e",
+                "af1bbb742744f12ecf89c1dd03440f746db76bd291cc4ef4940074cee59af3e3",
+                "ece9edc2b0f9d6a05a9f4921dd34078364a73460711f95a091f61cbbca072010",
+                "335e7062ac33a8f09e119bbc5c4e4e8413fea481aa58ee2b7ec919f23dbe6e8c",
+                "6ba56f87184b5986759bc527eb1622989028a057e0242cf3d6877992ffe1fe34",
+                "6aa4c5f44d41e01ecfcde67662cc9bb182fe73a5b1f3ce6ad9426ebf4b049eda",
+                "7b2cd8136e66a0e4987b1af0fc0bff118efb0a9ea7ff2c6b2d5ed89234015eb3",
+                "c8f965ce23869d522887deaa60b525e4f284c8ab385ec7a2145d776c3754d530",
+                "f55fb1034c571c23828b2dc23251da6b90fd37f59b067d24d6890ebb77faaeb6",
+                "be39a9fa906ee22ab4768aab94b025cd021adbbdc97d5884c9ec7ac3a1dd385d",
+                "050b59fc3c7061023cc52b070f587d9b355edcbb5fee172802356cc3b1f4a487",
+                "067da38d78b07d59b9d1a7ba0f3677aaabc486934041bd7ae62fea6135594831",
+                "b6b1843dbe8c56540db601fd35a054aaa82e1a718ee40098df427cfacb1c7b48",
+                "f9c8cdd0bc9035885be98217ce562d3c29b5600207b7d17975d1f21bb6cca520",
+                "52dc3db457da970b096c07508467960288d25a4708625ff9a2d0a4ddcf76e474",
+                "bce0d3de954b35712ddef1e5b0b5b2fac750e73e0aec220bf08bb81fb4f9c25d",
+                "870e38f6778d22a42671506812231e8580f5b8ad0fe0a5502baa041068a8f88e",
+                "8164df7e4f2f70c84199fefe6987e1a688b77bd12fb902788006397060fa5491",
+                "310c5c114ae9b8ce82fcd4aa383a836f04f265c06ffc643b8a03aaebe8b079ec",
+                "5cb017e9170cb9ef796427e0653c3a1034e0480fc066691ccebf1910c8faa990",
+                "d0a0da928c3b1304e40ac7c93367f3df408cec8648c7af267fca409d9041ee12",
+                "11739ffdb75000daa0ed8fbc9a4fc51f9274c1d67cc79c9ac393ee7d7160a6b0",
+                "9ec3f220844d0d1f738b7f2c5cc22cc26c590ceda36e303674fe6d8580df06b8",
+                "76ee2b5b839b4c31522661d87285421dd4daf43415f9343725f9a9e19a27deec",
+                "a02f4f108571f7f756f3241690813df9b5882366add24da89c4eea323694b85d",
+                "20f1fca167d972be47346391fb9324633bc43340cc70fd9cce20a1ae15e03b84",
+                "d40165c80a395d5ecd45ea253f7c43f1cb419325cc1adaa16d4cc5fee5d52d08",
+                "87884fdd0c59e8e925c754535906df45f35fb883055ab0184a13f569f52c6c10",
+                "966d2c3a2a555ae45a054e26b8124edeca99f322b8a815dc024e3857efddb254",
+                "680f6ce47b69545deffc575ef6f28b13c1b981cf681f3ac066cc18e5783363ea",
+                "2a2636a951b5f44007456b72f27801ed66aa164f7d41e9822d19971a1e218ea9",
+                "f306ae6061969f4b9febb3365199b948330a2ef5d22ef627e772d3f885784335",
+                "92275353378e94bb8761ff608bf18487708f6c8ddaf042530e49b2df5e738c38",
+                "d27f21667ceedec1e995dd9a7e9ee1bf2ff9e3a79cdad6a8923343ebff45932a"
+              ],
+              "notes_midi": [
+                45.0,
+                46.0,
+                47.0,
+                48.0,
+                49.0,
+                50.0,
+                51.0,
+                52.0,
+                53.0,
+                54.0,
+                55.0,
+                56.0,
+                57.0,
+                58.0,
+                59.0,
+                60.0,
+                61.0,
+                62.0,
+                63.0,
+                64.0,
+                65.0,
+                66.0,
+                67.0,
+                68.0,
+                69.0,
+                70.0,
+                71.0,
+                72.0,
+                73.0,
+                74.0,
+                75.0,
+                76.0,
+                77.0,
+                78.0,
+                79.0,
+                80.0,
+                81.0,
+                82.0,
+                83.0,
+                84.0,
+                85.0,
+                86.0,
+                87.0,
+                88.0,
+                89.0,
+                90.0
+              ],
+              "probe_name": "register_sweep",
+              "sr": 22050
+            },
+            "sustain": {
+              "combined_waveform_sha256": "e95271c6285db8e86111521823357d1d2ef29230b620d9529b7e8e8178053260",
+              "durations_sec": [
+                1.5,
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "08fc795d8e7ecace0cb4badc4ca49670babef8351049791db391392b2111414a",
+                "5831a4a5207b0bb645bbc0fd053273eee98ae5397acfc36b05e2998504a93380",
+                "b2801584ac2200083d1de777b20a06b9efd8dcf62268a7d4d9a9935a29536f4d"
+              ],
+              "notes_midi": [
+                48.0,
+                69.0,
+                84.0
+              ],
+              "probe_name": "sustain",
+              "sr": 22050
+            },
+            "vibrato": {
+              "combined_waveform_sha256": "d18ac4a6a27c7b8656a24b0adc2774f1c56bb0a1af6aadea0a3f5f3cb9c1ecfd",
+              "durations_sec": [
+                3.0
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "d18ac4a6a27c7b8656a24b0adc2774f1c56bb0a1af6aadea0a3f5f3cb9c1ecfd"
+              ],
+              "notes_midi": [
+                69.0
+              ],
+              "probe_name": "vibrato",
+              "sr": 22050
+            }
+          }
+        },
+        "registered_genome_id": "5b090455b809",
+        "registry_entry": {
+          "audit": {
+            "linkability_report_id": "audit-335eb490524e",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "created_at": "2026-08-14T17:38:08.492838+00:00",
+          "eval": {
+            "grip_ref": {
+              "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
+            },
+            "novelty": {
+              "linkability_report_id": "audit-335eb490524e",
+              "overall_pass": true,
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
+            },
+            "plausibility": {
+              "min_r_median": 0.39170988510446464,
+              "passed": true,
+              "threshold": 0.35
+            }
+          },
+          "feature_set_version": "measure_v3",
+          "genome": {
+            "audit": {
+              "linkability_report_id": "audit-335eb490524e",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+              "residual_gate_passed": null
+            },
+            "microprosody": {
+              "jitter_amount": 0.013987754244395037,
+              "jitter_seed": 952743807,
+              "vibrato_depth_cents": 54.805119601310864,
+              "vibrato_rate_hz": 6.000012615646316
+            },
+            "name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+            "noise": {
+              "breathiness_base": 0.5233092534357775,
+              "register_gains": [
+                0.07423461708300183,
+                0.6765339302198511,
+                0.45155941094150837,
+                0.4622067363012445,
+                0.0
+              ]
+            },
+            "physio_range": {
+              "out_of_physio_range": false,
+              "violated_bounds": []
+            },
+            "range": {
+              "highest_midi": 96.0,
+              "lowest_midi": 36.0
+            },
+            "register": {
+              "boundaries_midi": [
+                54.185599792405434,
+                67.70247521300173,
+                76.07455885858253,
+                84.12307279966134
+              ],
+              "transition_width": 3.055139651460678
+            },
+            "resonance": {
+              "bandwidth_scale": 0.9407508786515941,
+              "formant_offsets": [
+                0.03749833615669726,
+                -0.03991480175780089,
+                -0.011971652446333872,
+                0.012702163648654688
+              ],
+              "formant_scale": 1.1330764463537621
+            },
+            "schema_version": "voice-genome/0.2",
+            "source": {
+              "source_mode": "pressed",
+              "tilt": -4.999138862026906
+            }
+          },
+          "genome_id": "5b090455b809",
+          "op": "crossover",
+          "parents": [
+            "8fe0c4db1378",
+            "951175baee90"
+          ],
+          "registry_schema": "genome-registry/0.1",
+          "renderer_version": "R0.1",
+          "seed": 404,
+          "version": "voice-genome/0.2"
+        },
+        "seed": 404
+      }
+    },
+    "lineage_of_d": [
+      {
+        "genome_id": "639af0f19fdb",
+        "op": "sample",
+        "parents": [],
+        "seed": 101
+      },
+      {
+        "genome_id": "8fe0c4db1378",
+        "op": "mutate",
+        "parents": [
+          "639af0f19fdb"
+        ],
+        "seed": 303
+      },
+      {
+        "genome_id": "5b090455b809",
+        "op": "crossover",
+        "parents": [
+          "8fe0c4db1378",
+          "951175baee90"
+        ],
+        "seed": 404
+      }
+    ],
+    "registry_path": "voice_genesis/proto1/results_final/_scratch_registry_run1.29225-faa71558.jsonl"
+  },
+  "run_2": {
+    "genomes": {
+      "a": {
+        "genome": {
+          "audit": {
+            "linkability_report_id": "audit-5fc4062a2a5c",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "microprosody": {
+            "jitter_amount": 0.0011040570789442028,
+            "jitter_seed": 771850791,
+            "vibrato_depth_cents": 55.64035540654666,
+            "vibrato_rate_hz": 5.776529678522095
+          },
+          "name": "demo-a-sample101",
+          "noise": {
+            "breathiness_base": 0.5839060887797364,
+            "register_gains": [
+              0.179619464588105,
+              0.6443966943424977,
+              0.5447169850246752,
+              0.37684841698056,
+              0.024644376440807747
+            ]
+          },
+          "physio_range": {
+            "out_of_physio_range": false,
+            "violated_bounds": []
+          },
+          "range": {
+            "highest_midi": 96.0,
+            "lowest_midi": 36.0
+          },
+          "register": {
+            "boundaries_midi": [
+              53.74022615733388,
+              66.54873804443982,
+              76.54218294939496,
+              85.98851729361722
+            ],
+            "transition_width": 2.7351421230633797
+          },
+          "resonance": {
+            "bandwidth_scale": 0.977448449201683,
+            "formant_offsets": [
+              0.01825563704588236,
+              -0.04113428776061437,
+              0.08454513728458288,
+              0.07386630893571389
+            ],
+            "formant_scale": 1.1531624353864898
+          },
+          "schema_version": "voice-genome/0.2",
+          "source": {
+            "source_mode": "pressed",
+            "tilt": -3.847012415841691
+          }
+        },
+        "linkability_audit": {
+          "created_at": "2026-08-14T17:38:10.075517+00:00",
+          "e1_chance_band_p95": 0.9678951881811239,
+          "e1_max_similarity": 0.6701864182466197,
+          "e1_nearest_gallery_index": 6,
+          "e1_pass": true,
+          "e2_chance_band_p95": 0.9436356408180776,
+          "e2_max_similarity": 0.9539804928127562,
+          "e2_nearest_gallery_index": 7,
+          "e2_pass": false,
+          "genome_id": "a1fe194c6d0c",
+          "overall_pass": false,
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-5fc4062a2a5c",
+          "stale_audit": false
+        },
+        "op": "sample",
+        "parent_genome_ids": [],
+        "parent_keys": [],
+        "plausibility": {
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
+          "min_r_median": 0.36908508335846046,
+          "n_notes": 13,
+          "n_violations": 0,
+          "passed": true,
+          "per_note": [
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.41886671832910827
+            },
+            {
+              "midi": 69.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.6627272807272575
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.7740379065042533
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4726498534521979
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.36908508335846046
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.461171042727642
+            },
+            {
+              "midi": 67.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3796930282542972
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.461171042727642
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.36908508335846046
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4726498534521979
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4726498534521979
+            },
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.41886671832910827
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.7740379065042533
+            }
+          ],
+          "probe_names": [
+            "sustain",
+            "phrase",
+            "cross_range"
+          ],
+          "threshold": 0.35
+        },
+        "pre_audit_genome_id": "a1fe194c6d0c",
+        "probe_manifest": {
+          "genome_name": "demo-a-sample101",
+          "probes": {
+            "cross_range": {
+              "combined_waveform_sha256": "042664fae0ba215e3350b103fe5680a6163a997f00d177c2f2386fa66d9c5237",
+              "durations_sec": [
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "96e7c84834c8829ea11d82403fa7c05177adbef054baeeb33b64b77b6238d376",
+                "bb330a218b62e65720e059fdacd69f1226aa7489eab8247c5497c6b638b4b69a"
+              ],
+              "notes_midi": [
+                48.0,
+                84.0
+              ],
+              "probe_name": "cross_range",
+              "sr": 22050
+            },
+            "phrase": {
+              "combined_waveform_sha256": "07daee9e7e0b8ae8aded2287989da534a766c3d90d2e51b5c43222decf9e3a3d",
+              "durations_sec": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "ff333071e8bc82534a643f06485fb60b36b509977c54e377530792970a969bd3",
+                "3418693cfd0ad27ae0bb1d6b5de45ddda3c61cd6d3b51fbe84c1ec412e24082c",
+                "8ff086c4b50a5038b99ece97f32303acd419404e38f2b232ed2f2cac6701ca39",
+                "20e0c81335c0bf89099e3a95628131be9a729d448d8eec4868ee79258458f652",
+                "8ff086c4b50a5038b99ece97f32303acd419404e38f2b232ed2f2cac6701ca39",
+                "3418693cfd0ad27ae0bb1d6b5de45ddda3c61cd6d3b51fbe84c1ec412e24082c",
+                "ff333071e8bc82534a643f06485fb60b36b509977c54e377530792970a969bd3",
+                "ff333071e8bc82534a643f06485fb60b36b509977c54e377530792970a969bd3"
+              ],
+              "notes_midi": [
+                60.0,
+                62.0,
+                64.0,
+                67.0,
+                64.0,
+                62.0,
+                60.0,
+                60.0
+              ],
+              "probe_name": "phrase",
+              "sr": 22050
+            },
+            "register_sweep": {
+              "combined_waveform_sha256": "b7582b8616d5947d15e0b930e85645f38116c3f02828895d810cf8885bd2de46",
+              "durations_sec": [
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "515579c435d6e6e330e1b2b5972b88874068115ab72416a26d5dc7050bee5f4e",
+                "1de96cbf0a74d4818c45b5530a846fbeeb4ee51084364ab3328b1b7d9a593244",
+                "060e7f991747ddc1202b8c7e108403ec242d5337cac14d39d316fea79b25f5bf",
+                "1e9231971b3a6875324472725e4d1656935463b73955416179faebb0dae19093",
+                "bac491734ceb3df7792ba7846a213ffe0621a471e27f73ed62e1af060650d222",
+                "042b7194f048113a0e95bfa770a14fbef62f76e90a603eb1e339475ebdeefec6",
+                "4e69154daf53777a02411d7a3b9873c05a58212f68e69854eadcb4799cd9f900",
+                "d3d9af5951481d607e6d631231b5c2e0b2435546261fd93a933706b90fdd7efd",
+                "d67270dc842b2ac30e00207611f70a19b0474b26015faf2d71d6dcd4e055cc37",
+                "18a0d4ce1ab4089ac1590a553a128e262169b2b4932ceafd1d86c57cff1eca45",
+                "9423485c23d8a9cf493d11bf295b71ec5b8f176b20651273fed1d3ad7008f822",
+                "d5ca179fe18c12c1c25447d55746a3d429d84dba62ab2d65822a6e84eb8f0269",
+                "f5db3f8bea9a52035f967fe569ac9cb286a939a0cfd3714dbb5ba7b0e54aeb06",
+                "e55513b51ecbf9f508b169568adb0a310f54c75950b4036589bcb16ea1201e33",
+                "7be12fbb9d2e11ff0fe7022aab213072153f901ae9c35e2a91919568b9b9c242",
+                "df6769d2d0ba50c9bbc95ab174a33d7a964780e3cb62255fd0aeb237f0e9549c",
+                "dc0fef7bdf258f80267a7756754773a744f0dafef719aba20ac89eedcf3d1776",
+                "7e7f81de75fc570eead4ba1da77e184be7f936c3e878916bba8a8d4b9007ba29",
+                "e9b807d6ce392512d60cde76e502740ee79ab986c06728aba3d8cdf8bb84195b",
+                "b48ac278561a69f9ad858884addb2aad6a579240132c1cc0d1bab34f055c2aa5",
+                "aec88d8f30f975376593d248d9d89704d17c16684f9064532cac71aa8a927d63",
+                "e370937b595263e0fc1d9fe64f44a4d504fd75e5026f7cb4aa56311f379118dc",
+                "35ecb7882743bb239fc9b6c802bda086166eee8de69f5b7978a08d9ae9b0c186",
+                "5d711311c1ca076f986aaaeb033203e8fa065afdc8e770c9a82bcaa74ba7e05b",
+                "00a161426948f1721ae99936c2ec30ea01f92eed4f7d037c607a81051e90bb4b",
+                "09c8da14ba43645db983532f90a2c3e8c6045573592b82178717af843c253539",
+                "04a98575ee1c3f400994c470c946bcc5ccab09cc5299fa6baa760ed362ffcd5a",
+                "87e3499dec112d3ad7844c131f86a8d76d28a9062ed8d607c4b34ae51f166d24",
+                "5f5bd4a25f19a6ec6218ac8899ff0b3995ba0447c83ede015ac1d5038d59536d",
+                "6b528bc43da0afe39fbbfa5eaf313c8af16aac3d871ecde52c2e1f082f505267",
+                "78017eea43da44f3a5f8507ac43b057d17a65d338e14b559fc5a795820a365d4",
+                "87105feaf0f20884516e17fa6f58a1d2956257e1afd49ce31d1a76fc24236306",
+                "e54d3ba9ba8940f86cf8ce002a5fcd8dcddcdd45bd7cbc47c9c1bae71fdcfed9",
+                "47f2521b81c4dc655ff442ce7bdca1316cc87baefe6c0dceda8df8b6c61bb696",
+                "2bd1b6694011bee191c817a5ed41c3d459d9946e441c474d6a16a2b1be61472e",
+                "f2f01f52969027ecd8f81b2029573ef6a76df97c990790af2478be6c76b05d9c",
+                "85986a61b8a3d239caf9eff5a623f742d3db935b362a111f5bda6eed317372ad",
+                "13e56595c80a19f1937dc28fd75230950e29d056960b54f1a339d420687271c4",
+                "2a06db9b6d6ce1ba989f954749fc63066f05a953cb7e541158c3c1d43ddbb124",
+                "e0eebd16addd9065963b0ba1aacc6cd72cbcd50cb31cfd8dbf0adc1c56e61b6a",
+                "982b79fe0d4cfa81c9d073e0fc96b4c07f2f9fee5a5cb26a6e7df7a1d9727254",
+                "80f8ed313a9c7c497bb53ad84d73107846e121ab16309a196265a66c33460b7d",
+                "063e69b5837c73bf543e3f66244fb1ca07cb4bf32e37acd17786a1bb198c9dc4",
+                "255b2d54b252a9c32c9fa8c51542600cf9c796fa534627d14780086752d23749",
+                "dd56c3a6353148bdcab4fa3850767eac5bc93d80efcc24fb25bc7e64268a3a6c",
+                "6d8413a7012e549d63ad1f3e99ecd68539a14a60f80280b92da920a9720fa72f"
+              ],
+              "notes_midi": [
+                45.0,
+                46.0,
+                47.0,
+                48.0,
+                49.0,
+                50.0,
+                51.0,
+                52.0,
+                53.0,
+                54.0,
+                55.0,
+                56.0,
+                57.0,
+                58.0,
+                59.0,
+                60.0,
+                61.0,
+                62.0,
+                63.0,
+                64.0,
+                65.0,
+                66.0,
+                67.0,
+                68.0,
+                69.0,
+                70.0,
+                71.0,
+                72.0,
+                73.0,
+                74.0,
+                75.0,
+                76.0,
+                77.0,
+                78.0,
+                79.0,
+                80.0,
+                81.0,
+                82.0,
+                83.0,
+                84.0,
+                85.0,
+                86.0,
+                87.0,
+                88.0,
+                89.0,
+                90.0
+              ],
+              "probe_name": "register_sweep",
+              "sr": 22050
+            },
+            "sustain": {
+              "combined_waveform_sha256": "8dee017932ac88eab2b0c1b9064b04840e3232fee9508df1036f76d472cea958",
+              "durations_sec": [
+                1.5,
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "96e7c84834c8829ea11d82403fa7c05177adbef054baeeb33b64b77b6238d376",
+                "2f915e2505f851938c3041605b32ec91cf2ac6b7df3b6c8d41e12d6fa36a04f4",
+                "bb330a218b62e65720e059fdacd69f1226aa7489eab8247c5497c6b638b4b69a"
+              ],
+              "notes_midi": [
+                48.0,
+                69.0,
+                84.0
+              ],
+              "probe_name": "sustain",
+              "sr": 22050
+            },
+            "vibrato": {
+              "combined_waveform_sha256": "540a0da97b6f1a598ffc01dbc156615f6a08210072631bca5cfa1fec84815b1a",
+              "durations_sec": [
+                3.0
+              ],
+              "genome_name": "demo-a-sample101",
+              "note_waveform_sha256": [
+                "540a0da97b6f1a598ffc01dbc156615f6a08210072631bca5cfa1fec84815b1a"
+              ],
+              "notes_midi": [
+                69.0
+              ],
+              "probe_name": "vibrato",
+              "sr": 22050
+            }
+          }
+        },
+        "registered_genome_id": "639af0f19fdb",
+        "registry_entry": {
+          "audit": {
+            "linkability_report_id": "audit-5fc4062a2a5c",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "created_at": "2026-08-14T17:38:10.075975+00:00",
+          "eval": {
+            "grip_ref": {
+              "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
+            },
+            "novelty": {
+              "linkability_report_id": "audit-5fc4062a2a5c",
+              "overall_pass": false,
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
+            },
+            "plausibility": {
+              "min_r_median": 0.36908508335846046,
+              "passed": true,
+              "threshold": 0.35
+            }
+          },
+          "feature_set_version": "measure_v3",
+          "genome": {
+            "audit": {
+              "linkability_report_id": "audit-5fc4062a2a5c",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+              "residual_gate_passed": null
+            },
+            "microprosody": {
+              "jitter_amount": 0.0011040570789442028,
+              "jitter_seed": 771850791,
+              "vibrato_depth_cents": 55.64035540654666,
+              "vibrato_rate_hz": 5.776529678522095
+            },
+            "name": "demo-a-sample101",
+            "noise": {
+              "breathiness_base": 0.5839060887797364,
+              "register_gains": [
+                0.179619464588105,
+                0.6443966943424977,
+                0.5447169850246752,
+                0.37684841698056,
+                0.024644376440807747
+              ]
+            },
+            "physio_range": {
+              "out_of_physio_range": false,
+              "violated_bounds": []
+            },
+            "range": {
+              "highest_midi": 96.0,
+              "lowest_midi": 36.0
+            },
+            "register": {
+              "boundaries_midi": [
+                53.74022615733388,
+                66.54873804443982,
+                76.54218294939496,
+                85.98851729361722
+              ],
+              "transition_width": 2.7351421230633797
+            },
+            "resonance": {
+              "bandwidth_scale": 0.977448449201683,
+              "formant_offsets": [
+                0.01825563704588236,
+                -0.04113428776061437,
+                0.08454513728458288,
+                0.07386630893571389
+              ],
+              "formant_scale": 1.1531624353864898
+            },
+            "schema_version": "voice-genome/0.2",
+            "source": {
+              "source_mode": "pressed",
+              "tilt": -3.847012415841691
+            }
+          },
+          "genome_id": "639af0f19fdb",
+          "op": "sample",
+          "parents": [],
+          "registry_schema": "genome-registry/0.1",
+          "renderer_version": "R0.1",
+          "seed": 101,
+          "version": "voice-genome/0.2"
+        },
+        "seed": 101
+      },
+      "b": {
+        "genome": {
+          "audit": {
+            "linkability_report_id": "audit-9f1ec3272b26",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "microprosody": {
+            "jitter_amount": 0.013987754244395037,
+            "jitter_seed": 952743807,
+            "vibrato_depth_cents": 105.21911504195432,
+            "vibrato_rate_hz": 4.419833322492188
+          },
+          "name": "demo-b-sample202",
+          "noise": {
+            "breathiness_base": 0.12743928324464682,
+            "register_gains": [
+              0.7316022159388873,
+              0.25232356262480143,
+              0.6226054475203675,
+              0.4197935567526613,
+              0.2791333703156945
+            ]
+          },
+          "physio_range": {
+            "out_of_physio_range": false,
+            "violated_bounds": []
+          },
+          "range": {
+            "highest_midi": 96.0,
+            "lowest_midi": 36.0
+          },
+          "register": {
+            "boundaries_midi": [
+              49.53779557096824,
+              61.853001293374426,
+              68.46242572290167,
+              80.12072415907494
+            ],
+            "transition_width": 4.290895394779563
+          },
+          "resonance": {
+            "bandwidth_scale": 1.1428585849831732,
+            "formant_offsets": [
+              0.03749833615669726,
+              -0.03991480175780089,
+              -0.011971652446333872,
+              0.012702163648654688
+            ],
+            "formant_scale": 1.167089810109403
+          },
+          "schema_version": "voice-genome/0.2",
+          "source": {
+            "source_mode": "breathy",
+            "tilt": -12.805687501143865
+          }
+        },
+        "linkability_audit": {
+          "created_at": "2026-08-14T17:38:11.631224+00:00",
+          "e1_chance_band_p95": 0.9678951881811239,
+          "e1_max_similarity": 0.8845510993940491,
+          "e1_nearest_gallery_index": 0,
+          "e1_pass": true,
+          "e2_chance_band_p95": 0.9436356408180776,
+          "e2_max_similarity": 0.8969943488837624,
+          "e2_nearest_gallery_index": 2,
+          "e2_pass": true,
+          "genome_id": "f030da328400",
+          "overall_pass": true,
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-9f1ec3272b26",
+          "stale_audit": false
+        },
+        "op": "sample",
+        "parent_genome_ids": [],
+        "parent_keys": [],
+        "plausibility": {
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
+          "min_r_median": 0.6005679255520303,
+          "n_notes": 13,
+          "n_violations": 0,
+          "passed": true,
+          "per_note": [
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.6005679255520303
+            },
+            {
+              "midi": 69.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.7332015196465724
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.9197318064502553
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.660501167110578
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6815302613405575
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6806603348822544
+            },
+            {
+              "midi": 67.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6714708135600098
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6806603348822544
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.6815302613405575
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.660501167110578
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.660501167110578
+            },
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.6005679255520303
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.9197318064502553
+            }
+          ],
+          "probe_names": [
+            "sustain",
+            "phrase",
+            "cross_range"
+          ],
+          "threshold": 0.35
+        },
+        "pre_audit_genome_id": "f030da328400",
+        "probe_manifest": {
+          "genome_name": "demo-b-sample202",
+          "probes": {
+            "cross_range": {
+              "combined_waveform_sha256": "ca058f18e803a8e15034a3a671122b245baec66c63c610ab45ce6ba5051241bf",
+              "durations_sec": [
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "4125b4e22a0c3363ec627d7d8e3996d0c39b6e8f166c490ecf616d1f64690b36",
+                "dfa3a4979f5c6ee4b9374828229d653059fd0da240987b6e6d62b85c5051d40b"
+              ],
+              "notes_midi": [
+                48.0,
+                84.0
+              ],
+              "probe_name": "cross_range",
+              "sr": 22050
+            },
+            "phrase": {
+              "combined_waveform_sha256": "94ef1ef5315461c68209e71d1757c977bec0ea1d9556ac1298d9fbf78c12bd06",
+              "durations_sec": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "c26baf6f02708a8619c0ba6c49384749763858a3b48532aa66a6ace885b30f12",
+                "587703a5bfa35953d5c9ff535d242281a95c5ceda1f5e6aab41148dc8d71da5c",
+                "86a6a36f489b8c168e3eb9e585846ca56107f53c06201381bf7d0bdb4f9841ae",
+                "f612e46751cf776f89930f348c3a423bb3822f0b9e103c8935f2dfbcc5f716ab",
+                "86a6a36f489b8c168e3eb9e585846ca56107f53c06201381bf7d0bdb4f9841ae",
+                "587703a5bfa35953d5c9ff535d242281a95c5ceda1f5e6aab41148dc8d71da5c",
+                "c26baf6f02708a8619c0ba6c49384749763858a3b48532aa66a6ace885b30f12",
+                "c26baf6f02708a8619c0ba6c49384749763858a3b48532aa66a6ace885b30f12"
+              ],
+              "notes_midi": [
+                60.0,
+                62.0,
+                64.0,
+                67.0,
+                64.0,
+                62.0,
+                60.0,
+                60.0
+              ],
+              "probe_name": "phrase",
+              "sr": 22050
+            },
+            "register_sweep": {
+              "combined_waveform_sha256": "304ceda116687d3a34f229f914a8c686df7b885598682ec48a33aebb91e2a8cf",
+              "durations_sec": [
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "93782944360840f474833aaea59d2a3ade20516f67ef728540f5376101227270",
+                "240de19e4f7d160d83fec7670af892c16646e53e85a885ca4c7f75a7920a2e31",
+                "de81322591e96ca1b1ad7eab1bb0c419dc1766ec17fe4967a9ed594782f8a845",
+                "2cf55f9272f1fe8c39bf5b0489bea0c54725584d242261646c5a013883c23f6e",
+                "56ef8418773b38e93ab28efdbe376d4e78bcd776c5140c3a08062943360b65bd",
+                "b0ce0d803d8f8d4f85e9e96658c3fec7bd743f6160740d8150feab1e23e66dd4",
+                "937aa852f4f86fc16b02b8ca1dfe6cf2f695eae58aab12ef60dd25c35539405f",
+                "5ca2bc178d0118f7130c3f2ffa9f8162e6d7e53eee61d9314193223312a700fe",
+                "a23b853572b960f20a19a1e38705901cd22114786def8a3d6abd8ee96573e0cb",
+                "3733617f2717b873f0f7396ae9ff24518bc357016c6c883027606f0e46cf0a8b",
+                "00f5b4f9ac373f4f69c3dd32d0737e064a67de5cf359771b86dbdea7a06dda43",
+                "ff85e2cd0cc3f58cff330fa243a4dde957a1c3a577fb09297338ab25d873b87e",
+                "02dc55ac482ce16cfbac79d11e3b377ddcb3e822af90207600b775eb2c285d43",
+                "422716b35ffd1802873a42dff40b705737888842b9b80541f132f8af95bb0e07",
+                "d19211ae97651aa0febfc10c0c97010f36d468582312e816278b6df5bb40c31c",
+                "2190d47d829a3d444886a586c53c350bc487f426365855a879d5504c6c1a3200",
+                "482f94ae8512fb72c87b5519bb75f861bdd988606e07c4f33d32855541d81588",
+                "bbc3a6ebdd54879400ccfbd6025c06cca7a4f502434d808ab9a67fab81087dbc",
+                "b8ddd2f17c2ee2e9f4ac64aec72b146b3a472654fa6402a61013461e28456448",
+                "9727d8326292e20ecab4acd5c2ba80dc92df7783a97a559e9093c13dee796a2e",
+                "a66cb1a6a893769f1d84864955ec15bafeaf7f6f18b5d42a864102ba2f96ff89",
+                "a59489a2cec434a7e22e0a8d7589925b9fd0a01f26fffb8efd8fc961835c534f",
+                "25302a49d7960e22d123908f03773aca707102a37086106d1609406367b61eeb",
+                "9f6af04fb0c3265c4988d34b12f1a12a5a72959f9bdb57cccb85b72aa47961a4",
+                "53e7e09f918880c8d6cb53ecec77b8f3a67704a9e5db76488ce7bb8c860caad0",
+                "84d22d1f3141356b4f97f428c8e3af71a0ddbba303efdcb64225f0a9291f11bd",
+                "f4e99218d11a93cc5cb30295de313dc0e25f45142e602bd5a8e5cf18aaeab3a1",
+                "a2f882cba27d7e4879da962cf59c65ad6ca1d8e6c89160e4014bee6b3190ae5e",
+                "28b8ed5b434524c8ee30dd11a46ef4848a48f9ee22197455fa89e4182e638b92",
+                "36b997f7edc3a2abe4e9ccb2af0b6ae668344cff3b2876e25527ffc6cff15535",
+                "c306e71c94111fcb5c545e20448a9a37a6f18ca18843210c34877ea98e12768b",
+                "02cd7d9b031bac6ec135113d59c0def7a39d7085c45d545ce661835f6d264dd6",
+                "8fb1d7e73f04fcba524406cb07043912737c380706953460ce91aa90dfacf9d4",
+                "62477d02454fb60c8f61b8973f789d0739e50c72b01ba75edfda905ed9d62350",
+                "b7995c8f6096c676216fc5f04727806fd9208db7d4c28753378d480d4efe7e4d",
+                "10d3a858ec491b2543aecb23705e012d9f1d84bf4af1386ed5900b3b500abe53",
+                "67be440b6a2b846d77301be7f152f781f8313b966494d46094d33e2f5e530ceb",
+                "9b1af625694733feccf0615c83451f972af868596787c6ef8da5589a65c591b0",
+                "4c38f62868e69af1beab24a9a41354712c7bb8510b884029174d7a1ca87d354f",
+                "9c30228a7be84b4b4adc932f444960300c4b226a2a5822e85ff49a2e98ef9707",
+                "eb5e074870c06e7ebdf6795d4d01f49405e991ef7815d34156ef1ed248b4cd47",
+                "0c7c2496dabc1306914811efb499cd305388008dabe33d6d4440837cd1bfe36f",
+                "fdbfbd561a7ecb263017025883b7f6991e073ac92ceebca74fba76f3d437ab1c",
+                "a08ecd2e73b5349b93c2fe87027001fe869b780de5f01f864a3ebf1b5606590f",
+                "28ef0bf4f71776110511c32438ba5caab7a06c10d67e80d76e744f81678b7a4f",
+                "308b3b94d5867e378a889d80cd5359064abc8a3b3e99f1ee58b308a91f2edffb"
+              ],
+              "notes_midi": [
+                45.0,
+                46.0,
+                47.0,
+                48.0,
+                49.0,
+                50.0,
+                51.0,
+                52.0,
+                53.0,
+                54.0,
+                55.0,
+                56.0,
+                57.0,
+                58.0,
+                59.0,
+                60.0,
+                61.0,
+                62.0,
+                63.0,
+                64.0,
+                65.0,
+                66.0,
+                67.0,
+                68.0,
+                69.0,
+                70.0,
+                71.0,
+                72.0,
+                73.0,
+                74.0,
+                75.0,
+                76.0,
+                77.0,
+                78.0,
+                79.0,
+                80.0,
+                81.0,
+                82.0,
+                83.0,
+                84.0,
+                85.0,
+                86.0,
+                87.0,
+                88.0,
+                89.0,
+                90.0
+              ],
+              "probe_name": "register_sweep",
+              "sr": 22050
+            },
+            "sustain": {
+              "combined_waveform_sha256": "3ff579f7644337d3646918bd7c4374dc79df91f165d7a05eff206780c44f9645",
+              "durations_sec": [
+                1.5,
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "4125b4e22a0c3363ec627d7d8e3996d0c39b6e8f166c490ecf616d1f64690b36",
+                "5cee109a7f5291ec64aa841752c08d1bdf81cb06d2e164db670b43aeb2b29821",
+                "dfa3a4979f5c6ee4b9374828229d653059fd0da240987b6e6d62b85c5051d40b"
+              ],
+              "notes_midi": [
+                48.0,
+                69.0,
+                84.0
+              ],
+              "probe_name": "sustain",
+              "sr": 22050
+            },
+            "vibrato": {
+              "combined_waveform_sha256": "5e6f7c4c0e6a6181c54a64816b37573508d49d45a82cbd53361427773036a550",
+              "durations_sec": [
+                3.0
+              ],
+              "genome_name": "demo-b-sample202",
+              "note_waveform_sha256": [
+                "5e6f7c4c0e6a6181c54a64816b37573508d49d45a82cbd53361427773036a550"
+              ],
+              "notes_midi": [
+                69.0
+              ],
+              "probe_name": "vibrato",
+              "sr": 22050
+            }
+          }
+        },
+        "registered_genome_id": "951175baee90",
+        "registry_entry": {
+          "audit": {
+            "linkability_report_id": "audit-9f1ec3272b26",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "created_at": "2026-08-14T17:38:11.632011+00:00",
+          "eval": {
+            "grip_ref": {
+              "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
+            },
+            "novelty": {
+              "linkability_report_id": "audit-9f1ec3272b26",
+              "overall_pass": true,
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
+            },
+            "plausibility": {
+              "min_r_median": 0.6005679255520303,
+              "passed": true,
+              "threshold": 0.35
+            }
+          },
+          "feature_set_version": "measure_v3",
+          "genome": {
+            "audit": {
+              "linkability_report_id": "audit-9f1ec3272b26",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+              "residual_gate_passed": null
+            },
+            "microprosody": {
+              "jitter_amount": 0.013987754244395037,
+              "jitter_seed": 952743807,
+              "vibrato_depth_cents": 105.21911504195432,
+              "vibrato_rate_hz": 4.419833322492188
+            },
+            "name": "demo-b-sample202",
+            "noise": {
+              "breathiness_base": 0.12743928324464682,
+              "register_gains": [
+                0.7316022159388873,
+                0.25232356262480143,
+                0.6226054475203675,
+                0.4197935567526613,
+                0.2791333703156945
+              ]
+            },
+            "physio_range": {
+              "out_of_physio_range": false,
+              "violated_bounds": []
+            },
+            "range": {
+              "highest_midi": 96.0,
+              "lowest_midi": 36.0
+            },
+            "register": {
+              "boundaries_midi": [
+                49.53779557096824,
+                61.853001293374426,
+                68.46242572290167,
+                80.12072415907494
+              ],
+              "transition_width": 4.290895394779563
+            },
+            "resonance": {
+              "bandwidth_scale": 1.1428585849831732,
+              "formant_offsets": [
+                0.03749833615669726,
+                -0.03991480175780089,
+                -0.011971652446333872,
+                0.012702163648654688
+              ],
+              "formant_scale": 1.167089810109403
+            },
+            "schema_version": "voice-genome/0.2",
+            "source": {
+              "source_mode": "breathy",
+              "tilt": -12.805687501143865
+            }
+          },
+          "genome_id": "951175baee90",
+          "op": "sample",
+          "parents": [],
+          "registry_schema": "genome-registry/0.1",
+          "renderer_version": "R0.1",
+          "seed": 202,
+          "version": "voice-genome/0.2"
+        },
+        "seed": 202
+      },
+      "c": {
+        "genome": {
+          "audit": {
+            "linkability_report_id": "audit-8b75585aed0a",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "microprosody": {
+            "jitter_amount": 0.0011179288811473745,
+            "jitter_seed": 771850791,
+            "vibrato_depth_cents": 54.805119601310864,
+            "vibrato_rate_hz": 6.000012615646316
+          },
+          "name": "demo-a-sample101-mut303",
+          "noise": {
+            "breathiness_base": 0.5233092534357775,
+            "register_gains": [
+              0.07423461708300183,
+              0.6765339302198511,
+              0.45155941094150837,
+              0.4622067363012445,
+              0.0
+            ]
+          },
+          "physio_range": {
+            "out_of_physio_range": false,
+            "violated_bounds": []
+          },
+          "range": {
+            "highest_midi": 96.0,
+            "lowest_midi": 36.0
+          },
+          "register": {
+            "boundaries_midi": [
+              54.185599792405434,
+              67.70247521300173,
+              76.07455885858253,
+              84.12307279966134
+            ],
+            "transition_width": 3.055139651460678
+          },
+          "resonance": {
+            "bandwidth_scale": 0.9407508786515941,
+            "formant_offsets": [
+              0.0007665156649950093,
+              -0.03641856770762181,
+              0.07100193519525043,
+              0.10635154906738847
+            ],
+            "formant_scale": 1.1330764463537621
+          },
+          "schema_version": "voice-genome/0.2",
+          "source": {
+            "source_mode": "pressed",
+            "tilt": -4.999138862026906
+          }
+        },
+        "linkability_audit": {
+          "created_at": "2026-08-14T17:38:13.206575+00:00",
+          "e1_chance_band_p95": 0.9678951881811239,
+          "e1_max_similarity": 0.8488221011972042,
+          "e1_nearest_gallery_index": 6,
+          "e1_pass": true,
+          "e2_chance_band_p95": 0.9436356408180776,
+          "e2_max_similarity": 0.9277342035103393,
+          "e2_nearest_gallery_index": 7,
+          "e2_pass": true,
+          "genome_id": "aee4e3357ddd",
+          "overall_pass": true,
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-8b75585aed0a",
+          "stale_audit": false
+        },
+        "op": "mutate",
+        "parent_genome_ids": [
+          "639af0f19fdb"
+        ],
+        "parent_keys": [
+          "a"
+        ],
+        "plausibility": {
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
+          "min_r_median": 0.32839760351766856,
+          "n_notes": 13,
+          "n_violations": 1,
+          "passed": false,
+          "per_note": [
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.3825266076613521
+            },
+            {
+              "midi": 69.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.6874530143152899
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.8107015012085247
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3570160025806864
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.5014148394873974
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3718873194295006
+            },
+            {
+              "midi": 67.0,
+              "passed": false,
+              "probe_name": "phrase",
+              "r_median": 0.32839760351766856
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3718873194295006
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.5014148394873974
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3570160025806864
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.3570160025806864
+            },
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.3825266076613521
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.8107015012085247
+            }
+          ],
+          "probe_names": [
+            "sustain",
+            "phrase",
+            "cross_range"
+          ],
+          "threshold": 0.35
+        },
+        "pre_audit_genome_id": "aee4e3357ddd",
+        "probe_manifest": {
+          "genome_name": "demo-a-sample101-mut303",
+          "probes": {
+            "cross_range": {
+              "combined_waveform_sha256": "86180ae8af05d50cabcf8b3683b08ca7ca31225173afac1a27dfb4479dd6a74e",
+              "durations_sec": [
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "017d55fca3d7e6062c8b2dc68916259d8122be5c393b718aa824c2dccbf3411b",
+                "8afec0470c5c55289397047efccbc659348c92f9c34802d5685ff96a3bf0372f"
+              ],
+              "notes_midi": [
+                48.0,
+                84.0
+              ],
+              "probe_name": "cross_range",
+              "sr": 22050
+            },
+            "phrase": {
+              "combined_waveform_sha256": "4e18dab603eac7d5b7ff2a31dee9f11894f919d34b3ceb9b6e7f3facfb819077",
+              "durations_sec": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "ccbf1543bd722d0f73a20e07d40ab91352ae5cb28a11b35945a67a6500e983ca",
+                "529ff4156bd063588265822d9c7ca343a5c34e04708c32500f566b6e30a25ca0",
+                "8a9c621f3977ce9021b8b098544e6eec7da06b5db91c4e4b2f6c3d05ebfdc4a1",
+                "e4c17b4e977e15408b9f748392bb842885e490dc9900f3c6a2a8013eee8fb313",
+                "8a9c621f3977ce9021b8b098544e6eec7da06b5db91c4e4b2f6c3d05ebfdc4a1",
+                "529ff4156bd063588265822d9c7ca343a5c34e04708c32500f566b6e30a25ca0",
+                "ccbf1543bd722d0f73a20e07d40ab91352ae5cb28a11b35945a67a6500e983ca",
+                "ccbf1543bd722d0f73a20e07d40ab91352ae5cb28a11b35945a67a6500e983ca"
+              ],
+              "notes_midi": [
+                60.0,
+                62.0,
+                64.0,
+                67.0,
+                64.0,
+                62.0,
+                60.0,
+                60.0
+              ],
+              "probe_name": "phrase",
+              "sr": 22050
+            },
+            "register_sweep": {
+              "combined_waveform_sha256": "91d2411ea121e7e29e24cbc28f9ab5ea335dd231963e00460a3a95dfdfc85d08",
+              "durations_sec": [
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "fe5fefced80a80c56463e815158b47dfd341a2a98dc4f0d4df7762ba3e4c6ebe",
+                "75966a9b06613ea64809411792769ae2de2eaeee98112cab9f49502182a6853c",
+                "28f5642b921c5eef38a552cbdb401e900c759550fcf173fafc76301f477157f0",
+                "3c1ca954c4767b7e3f24549d0e70b90656340e37b9389f0baa4c41c0e569301a",
+                "329a2c5bf29e47e26f21150fa5e8d4ebfb91d3446572a4d578d836341ca925b7",
+                "659b2397ea3021dab479c88c8e9ae9fdc0abbf8d651aa11cf431f0f699a87d1c",
+                "294380918d7428d7094e1b0642203ed240432fdf36f02f64243c040092589234",
+                "30981a40983f7c80747e1e0c43c892dd0682e386633b5c832b0247fd09160bdc",
+                "a91c40b86ec88c3386d855ee2ad67975aa64c9e0ce8a270965a3a367dd536345",
+                "49f568541939b9fb8d94bb31eff2552be332f75a5ab5882cd2304a028b920191",
+                "a988846e0d76576e7fe2cdc08afbe0404ea2f53ca00d0d9265e557c1fd464269",
+                "6d3ad1a56e3bf7e171f3c1c8c311b262bc68d6c14fa2ab769593533a7ae004cb",
+                "298465726c25569a520cb971805dcc3ddd587337c7a378494dfccdad8839e05f",
+                "6673852706715891f2fab6413d801d45a1ec4f939466d55f45e6fed2790eb419",
+                "2b4653822a6360f63c22e30618f50f790e6a5db49f20e499f044366b1edad7d0",
+                "3f521714c99ec4cc50beff7d6040f2bf5278abf9d7fc965fa1b1afbb62cb5c50",
+                "f61814cb33f68a8d5a2ac530290e12aef421819c29011f444ab6ca20efd6f633",
+                "55d59b3f985fea4b4a1aea7adce0aedf89df90ee7c55ef12f3e4476f3cdcb8ec",
+                "6b23bc09fd690fb0cfe12eed40a1b0305f30f5f1071a049fdce844524daca31b",
+                "75081ce86adc75f9f472470cc94fea6bc7b63d47cbb627909bb12cce1105ffe5",
+                "526f6a7011e9cc5fa9083cd2bd8d65075834bafbf0b61e8580b518e681913f5a",
+                "8afba763626e4db1513e919e12ade187955ca1050e26754528e3e3340135158d",
+                "c48f13d56126333fe41fecefb174b39508500518ff24b8a0272df2e226932255",
+                "d8737d8fd256632cf0d94fbad179be48fd21358df624f12e276c9519a0323de9",
+                "8b7189a5f2896f222e94a1126b7405adfd89923c35dc38208d5fb591ad18aa2d",
+                "16c9ed1a28c8979394813e25f57628e3e16615414f2692de291b1e9a8bfc2026",
+                "a260caa6301d922ebccb6d57deb6853598ef1f422aecd9dc259545e5c86fbafb",
+                "5fb87a313969b1ded1016684d5ebb35517a126922c9b73ee9c9609de8a834dbc",
+                "0397600449ec2ecfa0a1aeaece9999420f475d63c7302fc332641512bef9c585",
+                "85bb829fa4fa47f20d1c671337bbd96128f7b8a61f42c898de2e0bac9c06a1ec",
+                "155b9a2f0e7a4522ee3c9ab815c0bb6ab6a76f9ae02da03eb927cd522c7b65ce",
+                "26a6c0e42a4b46d8f6e72082dd5228a6f02ee21fc4623ab714d4776d57aa98d9",
+                "714a9a5a78546d7237fdb20ad88b84496dfa21bfdbc1a4689d055991aea8c46d",
+                "246f48b9e4d7472cf093c5214c9af748dde2e69a1ba3972d4dc9fb8866149f26",
+                "80705e5623b08cf833c14ab3370348a8e1d72b75253bada2b3eabc16c4d5a61b",
+                "aeb6c6b259f269c14ac482caab0f0e6b8c9e79a17beae8d4a091049fa34ebf5c",
+                "35947e728d2761127143dd19fcd834db2540840d3eb3438656310baafc5177ff",
+                "592a273492247520742832f6f6abb7418002b769a084904d38e9aed65ce6df8c",
+                "bd5527999715876df03b307ffcd36cfeebe5dffd0b8bb347aa14331bd7ca9e96",
+                "1220dab8e6c05a420b960a5afc98604ed41f48881b10f94524c5c11f3cb14f70",
+                "eb09524550b8ff4c0f57cb0d57ac4a4055499bc75fad2b407f016d443adf0014",
+                "f248fd7de39fc6650e2d4ac5b7ecaba740c24ed588208cbef61bb654ec611921",
+                "2654296e0c0b0970e14ec6343333acc9823062e9805fa37dd8bf66ad1c805dae",
+                "9deaca64e55f6e859aa09328fc3e2f8fe790e89a91542c10158a7a12a372ecee",
+                "a0e091a3b08e184b8308876ed30ea27f772d0db0343e56f8fb9d3169435625de",
+                "c698eb906a7e1d7d87cdcffdb70dce3aabfa8f3d9868000ae480186a4b12dfc8"
+              ],
+              "notes_midi": [
+                45.0,
+                46.0,
+                47.0,
+                48.0,
+                49.0,
+                50.0,
+                51.0,
+                52.0,
+                53.0,
+                54.0,
+                55.0,
+                56.0,
+                57.0,
+                58.0,
+                59.0,
+                60.0,
+                61.0,
+                62.0,
+                63.0,
+                64.0,
+                65.0,
+                66.0,
+                67.0,
+                68.0,
+                69.0,
+                70.0,
+                71.0,
+                72.0,
+                73.0,
+                74.0,
+                75.0,
+                76.0,
+                77.0,
+                78.0,
+                79.0,
+                80.0,
+                81.0,
+                82.0,
+                83.0,
+                84.0,
+                85.0,
+                86.0,
+                87.0,
+                88.0,
+                89.0,
+                90.0
+              ],
+              "probe_name": "register_sweep",
+              "sr": 22050
+            },
+            "sustain": {
+              "combined_waveform_sha256": "82a7144d810e829f8b4e1b00ebf00f805e8ed9bd26b02672a25fbcbd0a5aca29",
+              "durations_sec": [
+                1.5,
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "017d55fca3d7e6062c8b2dc68916259d8122be5c393b718aa824c2dccbf3411b",
+                "64516d71ae3dff986aa6d292285423f7774f288d0e1dbc70c7a7e12fcd3b7e90",
+                "8afec0470c5c55289397047efccbc659348c92f9c34802d5685ff96a3bf0372f"
+              ],
+              "notes_midi": [
+                48.0,
+                69.0,
+                84.0
+              ],
+              "probe_name": "sustain",
+              "sr": 22050
+            },
+            "vibrato": {
+              "combined_waveform_sha256": "32414408e15ec51069e21aa241352b713dd6d9836110f262b0cf481f6ebeb242",
+              "durations_sec": [
+                3.0
+              ],
+              "genome_name": "demo-a-sample101-mut303",
+              "note_waveform_sha256": [
+                "32414408e15ec51069e21aa241352b713dd6d9836110f262b0cf481f6ebeb242"
+              ],
+              "notes_midi": [
+                69.0
+              ],
+              "probe_name": "vibrato",
+              "sr": 22050
+            }
+          }
+        },
+        "registered_genome_id": "8fe0c4db1378",
+        "registry_entry": {
+          "audit": {
+            "linkability_report_id": "audit-8b75585aed0a",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "created_at": "2026-08-14T17:38:13.208114+00:00",
+          "eval": {
+            "grip_ref": {
+              "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
+            },
+            "novelty": {
+              "linkability_report_id": "audit-8b75585aed0a",
+              "overall_pass": true,
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
+            },
+            "plausibility": {
+              "min_r_median": 0.32839760351766856,
+              "passed": false,
+              "threshold": 0.35
+            }
+          },
+          "feature_set_version": "measure_v3",
+          "genome": {
+            "audit": {
+              "linkability_report_id": "audit-8b75585aed0a",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+              "residual_gate_passed": null
+            },
+            "microprosody": {
+              "jitter_amount": 0.0011179288811473745,
+              "jitter_seed": 771850791,
+              "vibrato_depth_cents": 54.805119601310864,
+              "vibrato_rate_hz": 6.000012615646316
+            },
+            "name": "demo-a-sample101-mut303",
+            "noise": {
+              "breathiness_base": 0.5233092534357775,
+              "register_gains": [
+                0.07423461708300183,
+                0.6765339302198511,
+                0.45155941094150837,
+                0.4622067363012445,
+                0.0
+              ]
+            },
+            "physio_range": {
+              "out_of_physio_range": false,
+              "violated_bounds": []
+            },
+            "range": {
+              "highest_midi": 96.0,
+              "lowest_midi": 36.0
+            },
+            "register": {
+              "boundaries_midi": [
+                54.185599792405434,
+                67.70247521300173,
+                76.07455885858253,
+                84.12307279966134
+              ],
+              "transition_width": 3.055139651460678
+            },
+            "resonance": {
+              "bandwidth_scale": 0.9407508786515941,
+              "formant_offsets": [
+                0.0007665156649950093,
+                -0.03641856770762181,
+                0.07100193519525043,
+                0.10635154906738847
+              ],
+              "formant_scale": 1.1330764463537621
+            },
+            "schema_version": "voice-genome/0.2",
+            "source": {
+              "source_mode": "pressed",
+              "tilt": -4.999138862026906
+            }
+          },
+          "genome_id": "8fe0c4db1378",
+          "op": "mutate",
+          "parents": [
+            "639af0f19fdb"
+          ],
+          "registry_schema": "genome-registry/0.1",
+          "renderer_version": "R0.1",
+          "seed": 303,
+          "version": "voice-genome/0.2"
+        },
+        "seed": 303
+      },
+      "d": {
+        "genome": {
+          "audit": {
+            "linkability_report_id": "audit-335eb490524e",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "microprosody": {
+            "jitter_amount": 0.013987754244395037,
+            "jitter_seed": 952743807,
+            "vibrato_depth_cents": 54.805119601310864,
+            "vibrato_rate_hz": 6.000012615646316
+          },
+          "name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+          "noise": {
+            "breathiness_base": 0.5233092534357775,
+            "register_gains": [
+              0.07423461708300183,
+              0.6765339302198511,
+              0.45155941094150837,
+              0.4622067363012445,
+              0.0
+            ]
+          },
+          "physio_range": {
+            "out_of_physio_range": false,
+            "violated_bounds": []
+          },
+          "range": {
+            "highest_midi": 96.0,
+            "lowest_midi": 36.0
+          },
+          "register": {
+            "boundaries_midi": [
+              54.185599792405434,
+              67.70247521300173,
+              76.07455885858253,
+              84.12307279966134
+            ],
+            "transition_width": 3.055139651460678
+          },
+          "resonance": {
+            "bandwidth_scale": 0.9407508786515941,
+            "formant_offsets": [
+              0.03749833615669726,
+              -0.03991480175780089,
+              -0.011971652446333872,
+              0.012702163648654688
+            ],
+            "formant_scale": 1.1330764463537621
+          },
+          "schema_version": "voice-genome/0.2",
+          "source": {
+            "source_mode": "pressed",
+            "tilt": -4.999138862026906
+          }
+        },
+        "linkability_audit": {
+          "created_at": "2026-08-14T17:38:14.766726+00:00",
+          "e1_chance_band_p95": 0.9678951881811239,
+          "e1_max_similarity": 0.6530897621492879,
+          "e1_nearest_gallery_index": 7,
+          "e1_pass": true,
+          "e2_chance_band_p95": 0.9436356408180776,
+          "e2_max_similarity": 0.9168105546793852,
+          "e2_nearest_gallery_index": 7,
+          "e2_pass": true,
+          "genome_id": "6c5fa9d16d50",
+          "overall_pass": true,
+          "provenance": "measured (instrument-validity caveat: stand-in embeddings)",
+          "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+          "report_id": "audit-335eb490524e",
+          "stale_audit": false
+        },
+        "op": "crossover",
+        "parent_genome_ids": [
+          "8fe0c4db1378",
+          "951175baee90"
+        ],
+        "parent_keys": [
+          "c",
+          "b"
+        ],
+        "plausibility": {
+          "gate": "periodicity_r_median>=threshold (harness VT-1 v3 と同一床)",
+          "min_r_median": 0.39170988510446464,
+          "n_notes": 13,
+          "n_violations": 0,
+          "passed": true,
+          "per_note": [
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.4704884967391472
+            },
+            {
+              "midi": 69.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.631671207164718
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "sustain",
+              "r_median": 0.8356025249922276
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.39170988510446464
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.42851272433655907
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4740690505437272
+            },
+            {
+              "midi": 67.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4038870738522004
+            },
+            {
+              "midi": 64.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.4740690505437272
+            },
+            {
+              "midi": 62.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.42851272433655907
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.39170988510446464
+            },
+            {
+              "midi": 60.0,
+              "passed": true,
+              "probe_name": "phrase",
+              "r_median": 0.39170988510446464
+            },
+            {
+              "midi": 48.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.4704884967391472
+            },
+            {
+              "midi": 84.0,
+              "passed": true,
+              "probe_name": "cross_range",
+              "r_median": 0.8356025249922276
+            }
+          ],
+          "probe_names": [
+            "sustain",
+            "phrase",
+            "cross_range"
+          ],
+          "threshold": 0.35
+        },
+        "pre_audit_genome_id": "6c5fa9d16d50",
+        "probe_manifest": {
+          "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+          "probes": {
+            "cross_range": {
+              "combined_waveform_sha256": "0c60eff43dbbd344f17c5262f58a4fa452c97124a191f0e29f7f7338c980048f",
+              "durations_sec": [
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "08fc795d8e7ecace0cb4badc4ca49670babef8351049791db391392b2111414a",
+                "b2801584ac2200083d1de777b20a06b9efd8dcf62268a7d4d9a9935a29536f4d"
+              ],
+              "notes_midi": [
+                48.0,
+                84.0
+              ],
+              "probe_name": "cross_range",
+              "sr": 22050
+            },
+            "phrase": {
+              "combined_waveform_sha256": "c6a797eae602a5a2cd63978da2e4c54fc194a7a3bee0f41351adbd795bdcf215",
+              "durations_sec": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "1ef814c781f87b1538beb8f8c6b7fd6ede515c213a3c0e3e4eccfb9f85be4e37",
+                "dce6ecd31ecd374d189e555392021925fc54a199f0f02380ba343dee7c590cd8",
+                "a5061e5212d0f4799d5abf286f2a2499769d38846819d1b625caa0680833872f",
+                "59d4ec343bf4c757c73266b0336a237f991d9391078d1dee498f54b781b51052",
+                "a5061e5212d0f4799d5abf286f2a2499769d38846819d1b625caa0680833872f",
+                "dce6ecd31ecd374d189e555392021925fc54a199f0f02380ba343dee7c590cd8",
+                "1ef814c781f87b1538beb8f8c6b7fd6ede515c213a3c0e3e4eccfb9f85be4e37",
+                "1ef814c781f87b1538beb8f8c6b7fd6ede515c213a3c0e3e4eccfb9f85be4e37"
+              ],
+              "notes_midi": [
+                60.0,
+                62.0,
+                64.0,
+                67.0,
+                64.0,
+                62.0,
+                60.0,
+                60.0
+              ],
+              "probe_name": "phrase",
+              "sr": 22050
+            },
+            "register_sweep": {
+              "combined_waveform_sha256": "6911ed401b9fc258c40aa3bad57258e829d5eee67c04a5a8e4fb0ec450259415",
+              "durations_sec": [
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25,
+                0.25
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "8a772ace33a9789a866d4656c553bbb2283521ca8f75bf34dd5f8755f85c38d0",
+                "c49eb4935a3a06b6f357a173decfeeb14d491133545aea6c2dbf81c905085133",
+                "f1634728a10891f2c8e1fad52c54a2982267c9faa394fd70fd95ca4ac0c8954b",
+                "a721b7bff29358032657ed9b1e669d703d3367edba8a1dcb0a459928a83de038",
+                "d3367e2b53b75c19438c09f4a23b234b0be2ee42d2e502e9a43791acc3ffc3fd",
+                "761707b5ed9cac20ca90b7f297b486841fe9bdff8c265dfea07d42e5e20858be",
+                "3c6f629e1cd987b167277c48df75e597491f0c27775f27cd15a84bad534381dc",
+                "10deba71b9de495cfb0ac9b37bff3c62ec14ea3b54113dbf3f7650c5656d9660",
+                "fe76aafe62be154a2bcdb9a40186e6daca6c108aeb56d4e132cbf56106b64e79",
+                "83679242e2df2231b53677bb0767646e4b0860d03ea9b09f0c9be9cdd5bebccd",
+                "5ca608c9f46c0f0208ef24b2f8d141fc0587e7dfc78a061128c3dba4a45bd561",
+                "dac0362cbd208f3399a08ff1c1a310c2922b97cf25ff585e22db0f55cc73408c",
+                "0f3d88ce52559a8149b79698156f104803064b73fd8cf1c7de6d31e88d600c6e",
+                "af1bbb742744f12ecf89c1dd03440f746db76bd291cc4ef4940074cee59af3e3",
+                "ece9edc2b0f9d6a05a9f4921dd34078364a73460711f95a091f61cbbca072010",
+                "335e7062ac33a8f09e119bbc5c4e4e8413fea481aa58ee2b7ec919f23dbe6e8c",
+                "6ba56f87184b5986759bc527eb1622989028a057e0242cf3d6877992ffe1fe34",
+                "6aa4c5f44d41e01ecfcde67662cc9bb182fe73a5b1f3ce6ad9426ebf4b049eda",
+                "7b2cd8136e66a0e4987b1af0fc0bff118efb0a9ea7ff2c6b2d5ed89234015eb3",
+                "c8f965ce23869d522887deaa60b525e4f284c8ab385ec7a2145d776c3754d530",
+                "f55fb1034c571c23828b2dc23251da6b90fd37f59b067d24d6890ebb77faaeb6",
+                "be39a9fa906ee22ab4768aab94b025cd021adbbdc97d5884c9ec7ac3a1dd385d",
+                "050b59fc3c7061023cc52b070f587d9b355edcbb5fee172802356cc3b1f4a487",
+                "067da38d78b07d59b9d1a7ba0f3677aaabc486934041bd7ae62fea6135594831",
+                "b6b1843dbe8c56540db601fd35a054aaa82e1a718ee40098df427cfacb1c7b48",
+                "f9c8cdd0bc9035885be98217ce562d3c29b5600207b7d17975d1f21bb6cca520",
+                "52dc3db457da970b096c07508467960288d25a4708625ff9a2d0a4ddcf76e474",
+                "bce0d3de954b35712ddef1e5b0b5b2fac750e73e0aec220bf08bb81fb4f9c25d",
+                "870e38f6778d22a42671506812231e8580f5b8ad0fe0a5502baa041068a8f88e",
+                "8164df7e4f2f70c84199fefe6987e1a688b77bd12fb902788006397060fa5491",
+                "310c5c114ae9b8ce82fcd4aa383a836f04f265c06ffc643b8a03aaebe8b079ec",
+                "5cb017e9170cb9ef796427e0653c3a1034e0480fc066691ccebf1910c8faa990",
+                "d0a0da928c3b1304e40ac7c93367f3df408cec8648c7af267fca409d9041ee12",
+                "11739ffdb75000daa0ed8fbc9a4fc51f9274c1d67cc79c9ac393ee7d7160a6b0",
+                "9ec3f220844d0d1f738b7f2c5cc22cc26c590ceda36e303674fe6d8580df06b8",
+                "76ee2b5b839b4c31522661d87285421dd4daf43415f9343725f9a9e19a27deec",
+                "a02f4f108571f7f756f3241690813df9b5882366add24da89c4eea323694b85d",
+                "20f1fca167d972be47346391fb9324633bc43340cc70fd9cce20a1ae15e03b84",
+                "d40165c80a395d5ecd45ea253f7c43f1cb419325cc1adaa16d4cc5fee5d52d08",
+                "87884fdd0c59e8e925c754535906df45f35fb883055ab0184a13f569f52c6c10",
+                "966d2c3a2a555ae45a054e26b8124edeca99f322b8a815dc024e3857efddb254",
+                "680f6ce47b69545deffc575ef6f28b13c1b981cf681f3ac066cc18e5783363ea",
+                "2a2636a951b5f44007456b72f27801ed66aa164f7d41e9822d19971a1e218ea9",
+                "f306ae6061969f4b9febb3365199b948330a2ef5d22ef627e772d3f885784335",
+                "92275353378e94bb8761ff608bf18487708f6c8ddaf042530e49b2df5e738c38",
+                "d27f21667ceedec1e995dd9a7e9ee1bf2ff9e3a79cdad6a8923343ebff45932a"
+              ],
+              "notes_midi": [
+                45.0,
+                46.0,
+                47.0,
+                48.0,
+                49.0,
+                50.0,
+                51.0,
+                52.0,
+                53.0,
+                54.0,
+                55.0,
+                56.0,
+                57.0,
+                58.0,
+                59.0,
+                60.0,
+                61.0,
+                62.0,
+                63.0,
+                64.0,
+                65.0,
+                66.0,
+                67.0,
+                68.0,
+                69.0,
+                70.0,
+                71.0,
+                72.0,
+                73.0,
+                74.0,
+                75.0,
+                76.0,
+                77.0,
+                78.0,
+                79.0,
+                80.0,
+                81.0,
+                82.0,
+                83.0,
+                84.0,
+                85.0,
+                86.0,
+                87.0,
+                88.0,
+                89.0,
+                90.0
+              ],
+              "probe_name": "register_sweep",
+              "sr": 22050
+            },
+            "sustain": {
+              "combined_waveform_sha256": "e95271c6285db8e86111521823357d1d2ef29230b620d9529b7e8e8178053260",
+              "durations_sec": [
+                1.5,
+                1.5,
+                1.5
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "08fc795d8e7ecace0cb4badc4ca49670babef8351049791db391392b2111414a",
+                "5831a4a5207b0bb645bbc0fd053273eee98ae5397acfc36b05e2998504a93380",
+                "b2801584ac2200083d1de777b20a06b9efd8dcf62268a7d4d9a9935a29536f4d"
+              ],
+              "notes_midi": [
+                48.0,
+                69.0,
+                84.0
+              ],
+              "probe_name": "sustain",
+              "sr": 22050
+            },
+            "vibrato": {
+              "combined_waveform_sha256": "d18ac4a6a27c7b8656a24b0adc2774f1c56bb0a1af6aadea0a3f5f3cb9c1ecfd",
+              "durations_sec": [
+                3.0
+              ],
+              "genome_name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+              "note_waveform_sha256": [
+                "d18ac4a6a27c7b8656a24b0adc2774f1c56bb0a1af6aadea0a3f5f3cb9c1ecfd"
+              ],
+              "notes_midi": [
+                69.0
+              ],
+              "probe_name": "vibrato",
+              "sr": 22050
+            }
+          }
+        },
+        "registered_genome_id": "5b090455b809",
+        "registry_entry": {
+          "audit": {
+            "linkability_report_id": "audit-335eb490524e",
+            "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+            "residual_gate_passed": null
+          },
+          "created_at": "2026-08-14T17:38:14.769131+00:00",
+          "eval": {
+            "grip_ref": {
+              "gate_semantics_version": "grip-v2/band-v4/frozen-v6",
+              "ref": "voice_genesis/harness/results_v6/grip_report_v6.json"
+            },
+            "novelty": {
+              "linkability_report_id": "audit-335eb490524e",
+              "overall_pass": true,
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08"
+            },
+            "plausibility": {
+              "min_r_median": 0.39170988510446464,
+              "passed": true,
+              "threshold": 0.35
+            }
+          },
+          "feature_set_version": "measure_v3",
+          "genome": {
+            "audit": {
+              "linkability_report_id": "audit-335eb490524e",
+              "reference_set_hash": "4415f17fde54615bd52a49d73e154f4f4a5bcc1f71fda84f542f458d80550a08",
+              "residual_gate_passed": null
+            },
+            "microprosody": {
+              "jitter_amount": 0.013987754244395037,
+              "jitter_seed": 952743807,
+              "vibrato_depth_cents": 54.805119601310864,
+              "vibrato_rate_hz": 6.000012615646316
+            },
+            "name": "demo-a-sample101-mut303xdemo-b-sample202-404",
+            "noise": {
+              "breathiness_base": 0.5233092534357775,
+              "register_gains": [
+                0.07423461708300183,
+                0.6765339302198511,
+                0.45155941094150837,
+                0.4622067363012445,
+                0.0
+              ]
+            },
+            "physio_range": {
+              "out_of_physio_range": false,
+              "violated_bounds": []
+            },
+            "range": {
+              "highest_midi": 96.0,
+              "lowest_midi": 36.0
+            },
+            "register": {
+              "boundaries_midi": [
+                54.185599792405434,
+                67.70247521300173,
+                76.07455885858253,
+                84.12307279966134
+              ],
+              "transition_width": 3.055139651460678
+            },
+            "resonance": {
+              "bandwidth_scale": 0.9407508786515941,
+              "formant_offsets": [
+                0.03749833615669726,
+                -0.03991480175780089,
+                -0.011971652446333872,
+                0.012702163648654688
+              ],
+              "formant_scale": 1.1330764463537621
+            },
+            "schema_version": "voice-genome/0.2",
+            "source": {
+              "source_mode": "pressed",
+              "tilt": -4.999138862026906
+            }
+          },
+          "genome_id": "5b090455b809",
+          "op": "crossover",
+          "parents": [
+            "8fe0c4db1378",
+            "951175baee90"
+          ],
+          "registry_schema": "genome-registry/0.1",
+          "renderer_version": "R0.1",
+          "seed": 404,
+          "version": "voice-genome/0.2"
+        },
+        "seed": 404
+      }
+    },
+    "lineage_of_d": [
+      {
+        "genome_id": "639af0f19fdb",
+        "op": "sample",
+        "parents": [],
+        "seed": 101
+      },
+      {
+        "genome_id": "8fe0c4db1378",
+        "op": "mutate",
+        "parents": [
+          "639af0f19fdb"
+        ],
+        "seed": 303
+      },
+      {
+        "genome_id": "5b090455b809",
+        "op": "crossover",
+        "parents": [
+          "8fe0c4db1378",
+          "951175baee90"
+        ],
+        "seed": 404
+      }
+    ],
+    "registry_path": "voice_genesis/proto1/results_final/genome_registry.jsonl"
+  },
+  "schema": "proto1-e2e-demo/1",
+  "selected_pass_genome_for_wav": {
+    "genome_id": "951175baee90",
+    "genome_key": "b",
+    "wav_paths": {
+      "cross_range_pair": {
+        "path": "results_final/prototype1_cross_range_pair_951175baee90.wav",
+        "sha256": "265f55fd641587b5f8216b9af325c38e815deaa4f086a6d72acc7b35f5e34158",
+        "write_determinism_check": {
+          "digest_2": "265f55fd641587b5f8216b9af325c38e815deaa4f086a6d72acc7b35f5e34158",
+          "stable": true
+        }
+      },
+      "phrase": {
+        "path": "results_final/prototype1_phrase_951175baee90.wav",
+        "sha256": "c286ee2b53fb29543adca248da73256e46101cceed1db0caf49bcfa100ff27d7",
+        "write_determinism_check": {
+          "digest_2": "c286ee2b53fb29543adca248da73256e46101cceed1db0caf49bcfa100ff27d7",
+          "stable": true
+        }
+      }
+    }
+  },
+  "timing_sec": {
+    "reference_set_build": 157.9064073562622,
+    "run_1": 6.110501289367676,
+    "run_2": 6.2761523723602295,
+    "total": 170.40449833869934
+  }
+}

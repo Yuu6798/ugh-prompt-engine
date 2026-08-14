@@ -1,0 +1,1600 @@
+{
+  "band_assignment": {
+    "breathiness": {
+      "band": "standard",
+      "probes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      },
+      "rationale": "v4でPASS済み。再測不要のためv4結果をre-state。"
+    },
+    "vibrato_depth": {
+      "band": "standard",
+      "probes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      },
+      "rationale": "v4でPASS済み。再測不要のためv4結果をre-state。"
+    },
+    "formant_scale": {
+      "band": "low_register",
+      "probes": {
+        "G2": 43,
+        "C3": 48,
+        "E3": 52,
+        "G3": 55,
+        "C4": 60
+      },
+      "rationale": "中高音域(C3超)はf0がF1-F2分離幅(350Hz)と同オーダー以上になり2ピーク分解が情報量的に不可能(v4で実測確認)。低音域{G2,C3,E3,G3,C4}(f0 98-262Hz)は4kHz以下に倍音15本以上を含み2ピーク分解が情報量的に成立する帯域として宣言する。中高音域tract特徴はout_of_bandとして明示的に除外する(設計書§1.5eと同型の原理: 計器分解能外を「測って失敗」ではなく「計器適用範囲外」として扱う)。"
+    },
+    "spectral_tilt": {
+      "band": "low_register",
+      "probes": {
+        "G2": 43,
+        "C3": 48,
+        "E3": 52,
+        "G3": 55,
+        "C4": 60
+      },
+      "rationale": "formant_scaleと同一の根拠(倍音サンプリング不足による2ピーク分解不能)によりsource_tiltの品質もF1_est/joint fitの安定性に依存するため、同じ低音域bandを割り当てる。中高音域はout_of_band。"
+    }
+  },
+  "out_of_band_probes": {
+    "formant_scale": {
+      "E4": 64,
+      "A4": 69,
+      "C5": 72,
+      "C6": 84
+    },
+    "spectral_tilt": {
+      "E4": 64,
+      "A4": 69,
+      "C5": 72,
+      "C6": 84
+    }
+  },
+  "feature_names": [
+    "mean_f0",
+    "formant_centroid",
+    "source_tilt",
+    "periodicity",
+    "rms",
+    "vibrato_depth"
+  ],
+  "ref_scale": {
+    "mean_f0": 25.0,
+    "formant_centroid": 0.1,
+    "source_tilt": 1.5,
+    "periodicity": 3.0,
+    "rms": 1.0,
+    "vibrato_depth": 10.0
+  },
+  "gate_definition_no_exemption": "grip=E(intended)/max(E(all 5 sides),1.0)>=3.0 and dir>=0.90 and E(intended)>=2.0",
+  "gate_definition_v3_with_exemption": "grip_declared=E(intended)/max(E(undeclared sides),1.0)>=3.0 and declared-side sign matches expected in all probes and E(declared)<=0.5*E(intended) and dir>=0.90 and E(intended)>=2.0",
+  "results": [
+    {
+      "axis": "breathiness",
+      "intended_feature": "periodicity",
+      "E_intended": 3.1703,
+      "E_side": {
+        "mean_f0": 0.4448,
+        "formant_centroid": 0.1614,
+        "source_tilt": 0.2236,
+        "rms": 0.0556,
+        "vibrato_depth": 0.4087
+      },
+      "dominant_side_feature": "mean_f0",
+      "direction_consistency": 1.0,
+      "no_exemption": {
+        "grip_ratio": 3.1703,
+        "gate_grip_ge_3.0": true,
+        "gate_direction_ge_0.90": true,
+        "gate_effect_ge_2.0": true,
+        "overall_gate_pass": true
+      },
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "n_caveat_cells_of_25": 0,
+      "fit_mode_matrix": [
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ],
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ],
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ],
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ],
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ]
+      ],
+      "fit_residual_rms_matrix": [
+        [
+          6.0022,
+          5.4498,
+          5.5236,
+          4.5758,
+          3.9187
+        ],
+        [
+          6.0007,
+          5.3836,
+          5.5713,
+          4.7762,
+          3.9601
+        ],
+        [
+          5.9495,
+          5.2939,
+          5.6159,
+          8.6387,
+          3.9934
+        ],
+        [
+          5.922,
+          5.2566,
+          5.6164,
+          4.8369,
+          4.0376
+        ],
+        [
+          5.8956,
+          5.3377,
+          5.5577,
+          4.6282,
+          4.0809
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8435.2797,
+            10026.4338,
+            10543.4752,
+            10854.3885,
+            12046.4457
+          ],
+          [
+            8434.9225,
+            10027.1628,
+            10542.2017,
+            10864.0225,
+            12048.7728
+          ],
+          [
+            8434.5866,
+            10032.1056,
+            10540.3614,
+            9646.4001,
+            12050.1876
+          ],
+          [
+            8434.3238,
+            10030.3848,
+            10535.9589,
+            10864.991,
+            12049.5709
+          ],
+          [
+            8434.0921,
+            10037.5532,
+            10531.8263,
+            10877.4118,
+            12047.425
+          ]
+        ],
+        "formant_centroid": [
+          [
+            10.1265,
+            10.1459,
+            10.0471,
+            10.0499,
+            10.0345
+          ],
+          [
+            9.7126,
+            10.141,
+            10.0568,
+            10.0578,
+            10.037
+          ],
+          [
+            9.7132,
+            10.145,
+            10.0589,
+            9.8811,
+            10.0367
+          ],
+          [
+            9.7124,
+            10.1444,
+            10.0631,
+            10.0583,
+            10.0378
+          ],
+          [
+            9.7118,
+            10.1512,
+            10.0632,
+            10.0693,
+            10.0361
+          ]
+        ],
+        "source_tilt": [
+          [
+            -8.5396,
+            -14.3406,
+            -15.7043,
+            -16.9936,
+            -20.2659
+          ],
+          [
+            -8.3378,
+            -14.2731,
+            -15.6454,
+            -17.1372,
+            -19.7791
+          ],
+          [
+            -8.351,
+            -14.2203,
+            -15.6345,
+            -10.336,
+            -19.3899
+          ],
+          [
+            -8.3386,
+            -14.1077,
+            -15.5109,
+            -16.9782,
+            -18.9012
+          ],
+          [
+            -8.2677,
+            -14.0268,
+            -15.3689,
+            -16.2914,
+            -18.4818
+          ]
+        ],
+        "periodicity": [
+          [
+            9.5852,
+            12.9545,
+            12.9953,
+            10.9366,
+            13.5464
+          ],
+          [
+            8.975,
+            9.9202,
+            10.219,
+            8.0954,
+            11.8438
+          ],
+          [
+            7.9581,
+            7.4757,
+            7.9545,
+            6.4852,
+            10.5968
+          ],
+          [
+            6.0912,
+            4.5023,
+            5.3801,
+            2.6433,
+            9.2015
+          ],
+          [
+            4.1347,
+            1.9653,
+            3.4843,
+            0.0229,
+            8.1198
+          ]
+        ],
+        "rms": [
+          [
+            -19.9015,
+            -19.9165,
+            -19.8689,
+            -19.879,
+            -19.821
+          ],
+          [
+            -19.8834,
+            -19.939,
+            -19.8658,
+            -19.8709,
+            -19.8133
+          ],
+          [
+            -19.8672,
+            -19.9627,
+            -19.8644,
+            -19.8604,
+            -19.8096
+          ],
+          [
+            -19.8478,
+            -19.9975,
+            -19.8649,
+            -19.8423,
+            -19.8098
+          ],
+          [
+            -19.835,
+            -20.0286,
+            -19.8677,
+            -19.8234,
+            -19.815
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            42.5539,
+            43.1156,
+            43.6008,
+            39.6302,
+            44.4228
+          ],
+          [
+            42.5587,
+            42.7701,
+            44.3148,
+            39.1761,
+            43.0059
+          ],
+          [
+            41.9937,
+            40.141,
+            44.7923,
+            28.7068,
+            38.7187
+          ],
+          [
+            40.3789,
+            46.1675,
+            45.3927,
+            38.2113,
+            37.9591
+          ],
+          [
+            39.8229,
+            47.2025,
+            45.8515,
+            34.8666,
+            35.0716
+          ]
+        ]
+      },
+      "sweep_values": [
+        0.0,
+        0.1,
+        0.2,
+        0.35,
+        0.5
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      },
+      "exemption": null,
+      "final_gate_pass": true,
+      "gate_path": "no_exemption",
+      "band": "standard",
+      "band_rationale": "v4でPASS済み。再測不要のためv4結果をre-state。",
+      "restated_from": "results_v4/grip_report_v4.json (v4で既にPASS。design memo v05 §A の指示により再測せず re-state)"
+    },
+    {
+      "axis": "vibrato_depth",
+      "intended_feature": "vibrato_depth",
+      "E_intended": 9.2146,
+      "E_side": {
+        "mean_f0": 0.2379,
+        "formant_centroid": 0.0195,
+        "source_tilt": 0.7243,
+        "periodicity": 0.5205,
+        "rms": 0.0171
+      },
+      "dominant_side_feature": "source_tilt",
+      "direction_consistency": 1.0,
+      "no_exemption": {
+        "grip_ratio": 9.2146,
+        "gate_grip_ge_3.0": true,
+        "gate_direction_ge_0.90": true,
+        "gate_effect_ge_2.0": true,
+        "overall_gate_pass": true
+      },
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "n_caveat_cells_of_25": 0,
+      "fit_mode_matrix": [
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ],
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ],
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ],
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ],
+        [
+          "joint_2peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak"
+        ]
+      ],
+      "fit_residual_rms_matrix": [
+        [
+          6.6416,
+          7.0796,
+          6.4395,
+          4.8432,
+          3.8569
+        ],
+        [
+          5.5502,
+          6.2796,
+          5.7733,
+          4.9799,
+          4.2423
+        ],
+        [
+          5.6748,
+          5.9605,
+          5.4086,
+          4.8654,
+          4.0253
+        ],
+        [
+          5.3661,
+          6.4489,
+          5.1496,
+          4.0372,
+          3.9342
+        ],
+        [
+          4.9362,
+          6.4164,
+          5.6788,
+          4.1837,
+          3.66
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8437.8214,
+            10029.6772,
+            10543.8865,
+            10854.1139,
+            12044.2288
+          ],
+          [
+            8436.244,
+            10028.5071,
+            10543.4746,
+            10859.6466,
+            12046.1555
+          ],
+          [
+            8435.2506,
+            10025.9331,
+            10542.3387,
+            10862.1409,
+            12048.3914
+          ],
+          [
+            8435.1041,
+            10025.0439,
+            10542.5492,
+            10865.3512,
+            12050.1221
+          ],
+          [
+            8426.3494,
+            10023.7289,
+            10541.6441,
+            10861.873,
+            12047.4927
+          ]
+        ],
+        "formant_centroid": [
+          [
+            9.7184,
+            10.1621,
+            10.0816,
+            10.0508,
+            10.032
+          ],
+          [
+            9.7178,
+            10.148,
+            10.0852,
+            10.0541,
+            10.0339
+          ],
+          [
+            9.7132,
+            10.1369,
+            9.7989,
+            10.0555,
+            10.0345
+          ],
+          [
+            9.7121,
+            10.1497,
+            10.0377,
+            10.0577,
+            9.9645
+          ],
+          [
+            9.987,
+            10.164,
+            9.7947,
+            10.0523,
+            10.0311
+          ]
+        ],
+        "source_tilt": [
+          [
+            -8.8999,
+            -14.9477,
+            -15.5579,
+            -15.709,
+            -19.5965
+          ],
+          [
+            -8.7193,
+            -15.3966,
+            -15.8145,
+            -17.1383,
+            -20.0668
+          ],
+          [
+            -8.0666,
+            -14.4481,
+            -15.5431,
+            -17.0996,
+            -20.1283
+          ],
+          [
+            -7.8018,
+            -14.1326,
+            -14.9153,
+            -15.7024,
+            -20.5484
+          ],
+          [
+            -7.1434,
+            -13.8529,
+            -14.4716,
+            -15.6186,
+            -19.5462
+          ]
+        ],
+        "periodicity": [
+          [
+            12.4298,
+            12.0146,
+            11.6298,
+            9.6587,
+            13.351
+          ],
+          [
+            11.2523,
+            11.7114,
+            11.4282,
+            9.4101,
+            12.9196
+          ],
+          [
+            8.7633,
+            11.354,
+            11.5294,
+            9.4017,
+            12.5773
+          ],
+          [
+            6.5498,
+            10.4381,
+            10.8213,
+            9.3409,
+            12.3617
+          ],
+          [
+            4.5605,
+            9.6707,
+            10.0682,
+            9.0559,
+            12.5438
+          ]
+        ],
+        "rms": [
+          [
+            -19.8987,
+            -19.901,
+            -19.9117,
+            -19.8105,
+            -20.0048
+          ],
+          [
+            -19.8947,
+            -19.8803,
+            -19.8881,
+            -19.8339,
+            -19.9113
+          ],
+          [
+            -19.9032,
+            -19.905,
+            -19.8737,
+            -19.9011,
+            -19.8383
+          ],
+          [
+            -19.906,
+            -19.8495,
+            -19.8969,
+            -19.9176,
+            -19.9825
+          ],
+          [
+            -19.8957,
+            -19.8943,
+            -19.9288,
+            -19.8386,
+            -19.8525
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            4.8533,
+            7.6843,
+            3.996,
+            10.2277,
+            6.0265
+          ],
+          [
+            22.7685,
+            22.7212,
+            23.6998,
+            25.4283,
+            22.6016
+          ],
+          [
+            47.3413,
+            48.0186,
+            49.3433,
+            51.9434,
+            48.352
+          ],
+          [
+            74.6444,
+            72.9949,
+            74.2352,
+            76.809,
+            69.1545
+          ],
+          [
+            112.1867,
+            98.6249,
+            100.1027,
+            102.3735,
+            89.9138
+          ]
+        ]
+      },
+      "sweep_values": [
+        0.0,
+        25.0,
+        50.0,
+        75.0,
+        100.0
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      },
+      "exemption": null,
+      "final_gate_pass": true,
+      "gate_path": "no_exemption",
+      "band": "standard",
+      "band_rationale": "v4でPASS済み。再測不要のためv4結果をre-state。",
+      "restated_from": "results_v4/grip_report_v4.json (v4で既にPASS。design memo v05 §A の指示により再測せず re-state)"
+    },
+    {
+      "axis": "formant_scale",
+      "band": "low_register",
+      "band_rationale": "中高音域(C3超)はf0がF1-F2分離幅(350Hz)と同オーダー以上になり2ピーク分解が情報量的に不可能(v4で実測確認)。低音域{G2,C3,E3,G3,C4}(f0 98-262Hz)は4kHz以下に倍音15本以上を含み2ピーク分解が情報量的に成立する帯域として宣言する。中高音域tract特徴はout_of_bandとして明示的に除外する(設計書§1.5eと同型の原理: 計器分解能外を「測って失敗」ではなく「計器適用範囲外」として扱う)。",
+      "probe_notes": {
+        "G2": 43,
+        "C3": 48,
+        "E3": 52,
+        "G3": 55,
+        "C4": 60
+      },
+      "out_of_band_probes": {
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      },
+      "intended_feature": "formant_centroid",
+      "E_intended": 5.0506,
+      "E_side": {
+        "mean_f0": 0.0134,
+        "source_tilt": 1.7873,
+        "periodicity": 0.4153,
+        "rms": 0.0098,
+        "vibrato_depth": 0.0445
+      },
+      "dominant_side_feature": "source_tilt",
+      "direction_consistency": 0.7,
+      "no_exemption": {
+        "grip_ratio": 2.8258,
+        "gate_grip_ge_3.0": false,
+        "gate_direction_ge_0.90": false,
+        "gate_effect_ge_2.0": true,
+        "overall_gate_pass": false
+      },
+      "below_instrument_resolution_per_probe": {
+        "G2": false,
+        "C3": false,
+        "E3": false,
+        "G3": false,
+        "C4": false
+      },
+      "any_below_instrument_resolution": false,
+      "n_caveat_cells": 0,
+      "n_cells_total": 25,
+      "fit_mode_distribution": {
+        "joint_2peak": 6,
+        "joint_2peak_model_selected_1peak": 19
+      },
+      "n_2peak_cells": 6,
+      "n_1peak_fallback_cells": 19,
+      "fit_mode_matrix": [
+        [
+          "joint_2peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak"
+        ],
+        [
+          "joint_2peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak"
+        ],
+        [
+          "joint_2peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak"
+        ],
+        [
+          "joint_2peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak"
+        ],
+        [
+          "joint_2peak",
+          "joint_2peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak"
+        ]
+      ],
+      "fit_residual_rms_matrix": [
+        [
+          3.821,
+          6.5781,
+          7.314,
+          6.8704,
+          6.114
+        ],
+        [
+          3.3458,
+          6.1644,
+          7.2169,
+          6.697,
+          6.4458
+        ],
+        [
+          3.2399,
+          5.9997,
+          6.8466,
+          7.676,
+          6.9117
+        ],
+        [
+          3.6134,
+          5.5916,
+          7.0413,
+          7.3664,
+          6.9216
+        ],
+        [
+          3.7913,
+          4.3072,
+          6.8466,
+          7.6466,
+          6.7923
+        ]
+      ],
+      "n_harmonics_matrix": [
+        [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          30.0
+        ],
+        [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          30.0
+        ],
+        [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          30.0
+        ],
+        [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          30.0
+        ],
+        [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          30.0
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            7929.3685,
+            8435.5207,
+            8834.8841,
+            9135.0223,
+            9639.2038
+          ],
+          [
+            7929.6002,
+            8435.2421,
+            8834.7408,
+            9134.6474,
+            9638.5716
+          ],
+          [
+            7929.7764,
+            8435.1033,
+            8834.7666,
+            9134.7215,
+            9639.3175
+          ],
+          [
+            7929.7216,
+            8435.0227,
+            8834.8246,
+            9134.9394,
+            9640.0823
+          ],
+          [
+            7929.6533,
+            8434.9216,
+            8834.6121,
+            9134.6876,
+            9640.0982
+          ]
+        ],
+        "formant_centroid": [
+          [
+            9.6009,
+            9.4762,
+            9.8486,
+            9.8112,
+            9.8668
+          ],
+          [
+            9.7616,
+            9.9508,
+            10.0567,
+            9.7745,
+            9.8574
+          ],
+          [
+            9.9107,
+            9.7143,
+            10.0789,
+            10.0942,
+            9.8099
+          ],
+          [
+            9.9806,
+            9.737,
+            9.8097,
+            10.0848,
+            10.2271
+          ],
+          [
+            10.106,
+            10.1628,
+            10.2858,
+            10.3231,
+            10.2342
+          ]
+        ],
+        "source_tilt": [
+          [
+            -6.1037,
+            -9.9081,
+            -12.723,
+            -14.0973,
+            -14.5108
+          ],
+          [
+            -5.6912,
+            -9.2643,
+            -11.8914,
+            -13.4569,
+            -13.728
+          ],
+          [
+            -5.8607,
+            -8.3286,
+            -11.2769,
+            -13.0712,
+            -13.1081
+          ],
+          [
+            -5.8452,
+            -7.4673,
+            -10.3491,
+            -12.3677,
+            -12.6478
+          ],
+          [
+            -5.8241,
+            -6.6436,
+            -9.8769,
+            -11.7436,
+            -11.8299
+          ]
+        ],
+        "periodicity": [
+          [
+            7.5095,
+            10.108,
+            11.5239,
+            12.0348,
+            12.4451
+          ],
+          [
+            7.1277,
+            9.478,
+            11.1412,
+            12.1463,
+            12.8272
+          ],
+          [
+            6.9388,
+            9.3532,
+            10.8081,
+            11.9785,
+            12.9354
+          ],
+          [
+            6.5756,
+            8.9155,
+            10.7364,
+            11.3702,
+            12.1238
+          ],
+          [
+            6.2637,
+            8.7336,
+            9.9578,
+            10.9116,
+            11.5196
+          ]
+        ],
+        "rms": [
+          [
+            -19.8752,
+            -19.8918,
+            -19.8749,
+            -19.8652,
+            -19.9018
+          ],
+          [
+            -19.8787,
+            -19.8928,
+            -19.8762,
+            -19.8533,
+            -19.898
+          ],
+          [
+            -19.8857,
+            -19.8923,
+            -19.8663,
+            -19.8469,
+            -19.9091
+          ],
+          [
+            -19.8705,
+            -19.9001,
+            -19.8799,
+            -19.8673,
+            -19.8921
+          ],
+          [
+            -19.8675,
+            -19.8934,
+            -19.8846,
+            -19.8774,
+            -19.8756
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            44.3419,
+            42.11,
+            43.7677,
+            38.4737,
+            43.3386
+          ],
+          [
+            44.3404,
+            42.2606,
+            44.1199,
+            38.6659,
+            42.7463
+          ],
+          [
+            44.3051,
+            42.7363,
+            43.9554,
+            38.5929,
+            42.7233
+          ],
+          [
+            44.2772,
+            43.1094,
+            44.1316,
+            38.8786,
+            42.9563
+          ],
+          [
+            44.3643,
+            43.0657,
+            44.2132,
+            38.8945,
+            42.3951
+          ]
+        ]
+      },
+      "sweep_values": [
+        0.85,
+        0.925,
+        1.0,
+        1.075,
+        1.15
+      ],
+      "exemption": {
+        "declared_side_feature": "source_tilt",
+        "expected_sign": 1.0,
+        "sign_consistency_declared": 1.0,
+        "sign_ok_all_probes": true,
+        "E_declared": 1.7873,
+        "E_declared_le_half_E_intended": true,
+        "eligibility_evidence": "dominant_side after joint-fit remains 'source_tilt' with sign consistency 5/5; E(source_tilt)=1.7873 <= 0.5*E(formant_centroid)=2.5253: True",
+        "mechanism_1line": "formant_scale はフォルマント周波数と共に励振帯域の実効エネルギー分布も変えるため、joint fit の tilt 項（声道非依存の声源傾斜)がわずかに追従して動く（声道-声源の残存結合）。",
+        "eligible": true,
+        "grip_declared": 5.0506,
+        "gate_grip_declared_ge_3.0": true,
+        "overall_gate_pass": false
+      },
+      "final_gate_pass": false,
+      "gate_path": "fail"
+    },
+    {
+      "axis": "spectral_tilt",
+      "band": "low_register",
+      "band_rationale": "formant_scaleと同一の根拠(倍音サンプリング不足による2ピーク分解不能)によりsource_tiltの品質もF1_est/joint fitの安定性に依存するため、同じ低音域bandを割り当てる。中高音域はout_of_band。",
+      "probe_notes": {
+        "G2": 43,
+        "C3": 48,
+        "E3": 52,
+        "G3": 55,
+        "C4": 60
+      },
+      "out_of_band_probes": {
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      },
+      "intended_feature": "source_tilt",
+      "E_intended": 9.7109,
+      "E_side": {
+        "mean_f0": 0.0627,
+        "formant_centroid": 18.3815,
+        "periodicity": 2.4035,
+        "rms": 0.024,
+        "vibrato_depth": 0.1382
+      },
+      "dominant_side_feature": "formant_centroid",
+      "direction_consistency": 0.9,
+      "no_exemption": {
+        "grip_ratio": 0.5283,
+        "gate_grip_ge_3.0": false,
+        "gate_direction_ge_0.90": true,
+        "gate_effect_ge_2.0": true,
+        "overall_gate_pass": false
+      },
+      "below_instrument_resolution_per_probe": {
+        "G2": false,
+        "C3": false,
+        "E3": false,
+        "G3": false,
+        "C4": false
+      },
+      "any_below_instrument_resolution": false,
+      "n_caveat_cells": 0,
+      "n_cells_total": 25,
+      "fit_mode_distribution": {
+        "joint_2peak": 3,
+        "joint_2peak_implausible_ratio_fallback_1peak": 5,
+        "joint_2peak_model_selected_1peak": 17
+      },
+      "n_2peak_cells": 3,
+      "n_1peak_fallback_cells": 22,
+      "fit_mode_matrix": [
+        [
+          "joint_2peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak"
+        ],
+        [
+          "joint_2peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak"
+        ],
+        [
+          "joint_2peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak"
+        ],
+        [
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak"
+        ],
+        [
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_implausible_ratio_fallback_1peak",
+          "joint_2peak_model_selected_1peak",
+          "joint_2peak_model_selected_1peak"
+        ]
+      ],
+      "fit_residual_rms_matrix": [
+        [
+          3.162,
+          5.9107,
+          6.7861,
+          7.6034,
+          6.8194
+        ],
+        [
+          3.1951,
+          5.9478,
+          6.8105,
+          7.6406,
+          6.8644
+        ],
+        [
+          3.2399,
+          5.9997,
+          6.8466,
+          7.676,
+          6.9117
+        ],
+        [
+          15.384,
+          7.6044,
+          6.8999,
+          7.7182,
+          6.9614
+        ],
+        [
+          15.5807,
+          7.0591,
+          6.899,
+          7.1826,
+          6.2348
+        ]
+      ],
+      "n_harmonics_matrix": [
+        [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          30.0
+        ],
+        [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          30.0
+        ],
+        [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          30.0
+        ],
+        [
+          40.0,
+          30.0,
+          40.0,
+          40.0,
+          30.0
+        ],
+        [
+          40.0,
+          30.0,
+          40.0,
+          40.0,
+          30.0
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            7931.5911,
+            8436.3896,
+            8835.5578,
+            9135.1476,
+            9639.283
+          ],
+          [
+            7929.9989,
+            8435.2712,
+            8834.9029,
+            9134.6946,
+            9639.012
+          ],
+          [
+            7929.7764,
+            8435.1033,
+            8834.7666,
+            9134.7215,
+            9639.3175
+          ],
+          [
+            9129.5167,
+            9634.9533,
+            8834.814,
+            9134.8939,
+            9640.1829
+          ],
+          [
+            9156.6759,
+            9634.2236,
+            8835.0354,
+            9135.0048,
+            9640.8506
+          ]
+        ],
+        "formant_centroid": [
+          [
+            9.9126,
+            9.7154,
+            10.0792,
+            10.0959,
+            9.8112
+          ],
+          [
+            9.9099,
+            9.7138,
+            10.0787,
+            10.0937,
+            9.8107
+          ],
+          [
+            9.9107,
+            9.7143,
+            10.0789,
+            10.0942,
+            9.8099
+          ],
+          [
+            10.1012,
+            9.8186,
+            10.0787,
+            10.0947,
+            9.8111
+          ],
+          [
+            10.1242,
+            11.8891,
+            11.9173,
+            11.8989,
+            11.8951
+          ]
+        ],
+        "source_tilt": [
+          [
+            -13.8489,
+            -16.2334,
+            -19.1475,
+            -20.9311,
+            -20.9691
+          ],
+          [
+            -9.8584,
+            -12.2842,
+            -15.2178,
+            -17.0034,
+            -17.0406
+          ],
+          [
+            -5.8607,
+            -8.3286,
+            -11.2769,
+            -13.0712,
+            -13.1081
+          ],
+          [
+            -13.4266,
+            -8.8076,
+            -7.3524,
+            -9.1378,
+            -9.1801
+          ],
+          [
+            -9.8641,
+            -6.0819,
+            -4.3306,
+            -6.0215,
+            -6.4027
+          ]
+        ],
+        "periodicity": [
+          [
+            10.2349,
+            12.5384,
+            13.7001,
+            14.087,
+            14.1551
+          ],
+          [
+            8.6228,
+            11.0066,
+            12.2618,
+            13.1476,
+            13.5457
+          ],
+          [
+            6.9388,
+            9.3532,
+            10.8081,
+            11.9785,
+            12.9354
+          ],
+          [
+            -4.0912,
+            -5.6927,
+            9.2983,
+            10.431,
+            11.5535
+          ],
+          [
+            -5.8564,
+            -8.2172,
+            6.4894,
+            7.32,
+            8.2766
+          ]
+        ],
+        "rms": [
+          [
+            -19.8617,
+            -19.8734,
+            -19.879,
+            -19.8413,
+            -19.9159
+          ],
+          [
+            -19.874,
+            -19.888,
+            -19.869,
+            -19.8439,
+            -19.9133
+          ],
+          [
+            -19.8857,
+            -19.8923,
+            -19.8663,
+            -19.8469,
+            -19.9091
+          ],
+          [
+            -19.8867,
+            -19.8962,
+            -19.8692,
+            -19.8541,
+            -19.901
+          ],
+          [
+            -19.8857,
+            -19.9023,
+            -19.8779,
+            -19.8631,
+            -19.8869
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            43.3517,
+            41.6283,
+            43.573,
+            38.2306,
+            43.1765
+          ],
+          [
+            43.7917,
+            42.3116,
+            43.7859,
+            38.594,
+            42.8942
+          ],
+          [
+            44.3051,
+            42.7363,
+            43.9554,
+            38.5929,
+            42.7233
+          ],
+          [
+            45.8562,
+            43.9973,
+            44.3883,
+            38.6244,
+            43.1506
+          ],
+          [
+            22.4263,
+            49.1339,
+            44.6798,
+            39.613,
+            43.4591
+          ]
+        ]
+      },
+      "sweep_values": [
+        -18.0,
+        -14.0,
+        -10.0,
+        -6.0,
+        -2.0
+      ],
+      "exemption": {
+        "declared_side_feature": "formant_centroid",
+        "expected_sign": 1.0,
+        "sign_consistency_declared": 1.0,
+        "sign_ok_all_probes": true,
+        "E_declared": 18.3815,
+        "E_declared_le_half_E_intended": false,
+        "eligibility_evidence": "dominant_side after joint-fit remains 'formant_centroid' with sign consistency 5/5; E(formant_centroid)=18.3815 <= 0.5*E(source_tilt)=4.8555: False",
+        "mechanism_1line": "spectral_tilt はスペクトル全体の明るさを変えるため、ケプストラム包絡由来の初期ピーク検出や1ピークモデルへのモデル選択率が変化し、formant_centroid の代表点がわずかに移動する。",
+        "eligible": false,
+        "grip_declared": 4.0402,
+        "gate_grip_declared_ge_3.0": true,
+        "overall_gate_pass": false
+      },
+      "final_gate_pass": false,
+      "gate_path": "fail"
+    }
+  ],
+  "elapsed_sec": 9.368
+}

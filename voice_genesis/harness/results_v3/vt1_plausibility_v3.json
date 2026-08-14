@@ -1,0 +1,1777 @@
+{
+  "r_threshold": 0.35,
+  "midi_range": [
+    36,
+    96
+  ],
+  "voices": [
+    "voice_A",
+    "voice_B"
+  ],
+  "primary_gate_renderer": "R0.1",
+  "estimator": "measure_v3 (enhanced: parabolic interpolation + spectral comb octave resolution, note-level)",
+  "configs": [
+    {
+      "renderer": "R0.1/voice_A",
+      "r_threshold": 0.35,
+      "n_notes": 61,
+      "n_violations": 0,
+      "gate_pass": true,
+      "notes": [
+        {
+          "midi": 36,
+          "r_median": 0.6783,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 37,
+          "r_median": 0.7163,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 38,
+          "r_median": 0.7366,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 39,
+          "r_median": 0.7637,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 40,
+          "r_median": 0.7781,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 41,
+          "r_median": 0.7978,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 42,
+          "r_median": 0.8122,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 43,
+          "r_median": 0.8317,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 44,
+          "r_median": 0.8465,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 45,
+          "r_median": 0.8651,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 46,
+          "r_median": 0.8767,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 47,
+          "r_median": 0.8797,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 48,
+          "r_median": 0.896,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 49,
+          "r_median": 0.9004,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 50,
+          "r_median": 0.9078,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 51,
+          "r_median": 0.9214,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 52,
+          "r_median": 0.9233,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 53,
+          "r_median": 0.9269,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 54,
+          "r_median": 0.9291,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 55,
+          "r_median": 0.9404,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 56,
+          "r_median": 0.9406,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 57,
+          "r_median": 0.9402,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 58,
+          "r_median": 0.9401,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 59,
+          "r_median": 0.9477,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 60,
+          "r_median": 0.9516,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 61,
+          "r_median": 0.9475,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 62,
+          "r_median": 0.9387,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 63,
+          "r_median": 0.9341,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 64,
+          "r_median": 0.9331,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 65,
+          "r_median": 0.9401,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 66,
+          "r_median": 0.9407,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 67,
+          "r_median": 0.9498,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 68,
+          "r_median": 0.9459,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 69,
+          "r_median": 0.9344,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 70,
+          "r_median": 0.9143,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 71,
+          "r_median": 0.9024,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 72,
+          "r_median": 0.8993,
+          "n_voiced_frames": 26,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 73,
+          "r_median": 0.8886,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 74,
+          "r_median": 0.8973,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 75,
+          "r_median": 0.9131,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 76,
+          "r_median": 0.9125,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 77,
+          "r_median": 0.9223,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 78,
+          "r_median": 0.9209,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 79,
+          "r_median": 0.936,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 80,
+          "r_median": 0.9345,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 81,
+          "r_median": 0.9259,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 82,
+          "r_median": 0.9298,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 83,
+          "r_median": 0.943,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 84,
+          "r_median": 0.9479,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 85,
+          "r_median": 0.9561,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 86,
+          "r_median": 0.9561,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 87,
+          "r_median": 0.9561,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 88,
+          "r_median": 0.939,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 89,
+          "r_median": 0.8975,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 90,
+          "r_median": 0.8828,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 91,
+          "r_median": 0.8645,
+          "n_voiced_frames": 30,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 92,
+          "r_median": 0.8376,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 93,
+          "r_median": 0.7814,
+          "n_voiced_frames": 16,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 94,
+          "r_median": 0.76,
+          "n_voiced_frames": 24,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 95,
+          "r_median": 0.7549,
+          "n_voiced_frames": 18,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 96,
+          "r_median": 0.7287,
+          "n_voiced_frames": 28,
+          "n_frames": 32,
+          "violation": false
+        }
+      ]
+    },
+    {
+      "renderer": "R0.1/voice_B",
+      "r_threshold": 0.35,
+      "n_notes": 61,
+      "n_violations": 0,
+      "gate_pass": true,
+      "notes": [
+        {
+          "midi": 36,
+          "r_median": 0.808,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 37,
+          "r_median": 0.8247,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 38,
+          "r_median": 0.8362,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 39,
+          "r_median": 0.8477,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 40,
+          "r_median": 0.8619,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 41,
+          "r_median": 0.8663,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 42,
+          "r_median": 0.8765,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 43,
+          "r_median": 0.8901,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 44,
+          "r_median": 0.8941,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 45,
+          "r_median": 0.8961,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 46,
+          "r_median": 0.9039,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 47,
+          "r_median": 0.908,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 48,
+          "r_median": 0.9094,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 49,
+          "r_median": 0.9086,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 50,
+          "r_median": 0.9075,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 51,
+          "r_median": 0.903,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 52,
+          "r_median": 0.895,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 53,
+          "r_median": 0.9021,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 54,
+          "r_median": 0.8917,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 55,
+          "r_median": 0.8862,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 56,
+          "r_median": 0.8862,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 57,
+          "r_median": 0.8891,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 58,
+          "r_median": 0.8794,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 59,
+          "r_median": 0.8672,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 60,
+          "r_median": 0.8591,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 61,
+          "r_median": 0.8406,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 62,
+          "r_median": 0.8475,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 63,
+          "r_median": 0.8411,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 64,
+          "r_median": 0.8505,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 65,
+          "r_median": 0.8021,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 66,
+          "r_median": 0.7742,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 67,
+          "r_median": 0.7838,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 68,
+          "r_median": 0.7997,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 69,
+          "r_median": 0.836,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 70,
+          "r_median": 0.8324,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 71,
+          "r_median": 0.7983,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 72,
+          "r_median": 0.7193,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 73,
+          "r_median": 0.6321,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 74,
+          "r_median": 0.6426,
+          "n_voiced_frames": 23,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 75,
+          "r_median": 0.7362,
+          "n_voiced_frames": 16,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 76,
+          "r_median": 0.6811,
+          "n_voiced_frames": 27,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 77,
+          "r_median": 0.6804,
+          "n_voiced_frames": 25,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 78,
+          "r_median": 0.7333,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 79,
+          "r_median": 0.7367,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 80,
+          "r_median": 0.8278,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 81,
+          "r_median": 0.817,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 82,
+          "r_median": 0.861,
+          "n_voiced_frames": 28,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 83,
+          "r_median": 0.8428,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 84,
+          "r_median": 0.8404,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 85,
+          "r_median": 0.8309,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 86,
+          "r_median": 0.8482,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 87,
+          "r_median": 0.893,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 88,
+          "r_median": 0.9158,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 89,
+          "r_median": 0.9182,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 90,
+          "r_median": 0.8937,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 91,
+          "r_median": 0.8472,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 92,
+          "r_median": 0.7938,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 93,
+          "r_median": 0.8076,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 94,
+          "r_median": 0.7392,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 95,
+          "r_median": 0.681,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 96,
+          "r_median": 0.6146,
+          "n_voiced_frames": 22,
+          "n_frames": 32,
+          "violation": false
+        }
+      ]
+    },
+    {
+      "renderer": "R0_v0/voice_A",
+      "r_threshold": 0.35,
+      "n_notes": 61,
+      "n_violations": 0,
+      "gate_pass": true,
+      "notes": [
+        {
+          "midi": 36,
+          "r_median": 0.6805,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 37,
+          "r_median": 0.7167,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 38,
+          "r_median": 0.736,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 39,
+          "r_median": 0.7647,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 40,
+          "r_median": 0.7778,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 41,
+          "r_median": 0.7985,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 42,
+          "r_median": 0.8118,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 43,
+          "r_median": 0.8319,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 44,
+          "r_median": 0.846,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 45,
+          "r_median": 0.8649,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 46,
+          "r_median": 0.8767,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 47,
+          "r_median": 0.8808,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 48,
+          "r_median": 0.896,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 49,
+          "r_median": 0.8997,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 50,
+          "r_median": 0.9079,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 51,
+          "r_median": 0.9196,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 52,
+          "r_median": 0.9249,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 53,
+          "r_median": 0.9274,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 54,
+          "r_median": 0.9292,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 55,
+          "r_median": 0.9387,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 56,
+          "r_median": 0.9398,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 57,
+          "r_median": 0.9394,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 58,
+          "r_median": 0.9418,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 59,
+          "r_median": 0.9465,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 60,
+          "r_median": 0.9476,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 61,
+          "r_median": 0.9433,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 62,
+          "r_median": 0.9408,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 63,
+          "r_median": 0.9365,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 64,
+          "r_median": 0.9372,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 65,
+          "r_median": 0.9366,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 66,
+          "r_median": 0.9386,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 67,
+          "r_median": 0.9399,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 68,
+          "r_median": 0.9362,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 69,
+          "r_median": 0.927,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 70,
+          "r_median": 0.9202,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 71,
+          "r_median": 0.9238,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 72,
+          "r_median": 0.9043,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 73,
+          "r_median": 0.9215,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 74,
+          "r_median": 0.9089,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 75,
+          "r_median": 0.9005,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 76,
+          "r_median": 0.8901,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 77,
+          "r_median": 0.8898,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 78,
+          "r_median": 0.9009,
+          "n_voiced_frames": 29,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 79,
+          "r_median": 0.8927,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 80,
+          "r_median": 0.8677,
+          "n_voiced_frames": 24,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 81,
+          "r_median": 0.8753,
+          "n_voiced_frames": 30,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 82,
+          "r_median": 0.9098,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 83,
+          "r_median": 0.9165,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 84,
+          "r_median": 0.8944,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 85,
+          "r_median": 0.8651,
+          "n_voiced_frames": 25,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 86,
+          "r_median": 0.8675,
+          "n_voiced_frames": 27,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 87,
+          "r_median": 0.8845,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 88,
+          "r_median": 0.8966,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 89,
+          "r_median": 0.8645,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 90,
+          "r_median": 0.836,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 91,
+          "r_median": 0.8046,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 92,
+          "r_median": 0.7664,
+          "n_voiced_frames": 28,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 93,
+          "r_median": 0.7782,
+          "n_voiced_frames": 29,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 94,
+          "r_median": 0.7478,
+          "n_voiced_frames": 20,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 95,
+          "r_median": 0.7573,
+          "n_voiced_frames": 18,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 96,
+          "r_median": 0.73,
+          "n_voiced_frames": 27,
+          "n_frames": 32,
+          "violation": false
+        }
+      ]
+    },
+    {
+      "renderer": "R0_v0/voice_B",
+      "r_threshold": 0.35,
+      "n_notes": 61,
+      "n_violations": 0,
+      "gate_pass": true,
+      "notes": [
+        {
+          "midi": 36,
+          "r_median": 0.8032,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 37,
+          "r_median": 0.8175,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 38,
+          "r_median": 0.8307,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 39,
+          "r_median": 0.8438,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 40,
+          "r_median": 0.8597,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 41,
+          "r_median": 0.8632,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 42,
+          "r_median": 0.8755,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 43,
+          "r_median": 0.885,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 44,
+          "r_median": 0.8892,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 45,
+          "r_median": 0.8977,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 46,
+          "r_median": 0.9025,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 47,
+          "r_median": 0.9079,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 48,
+          "r_median": 0.9074,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 49,
+          "r_median": 0.9058,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 50,
+          "r_median": 0.9039,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 51,
+          "r_median": 0.8955,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 52,
+          "r_median": 0.8921,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 53,
+          "r_median": 0.8899,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 54,
+          "r_median": 0.8869,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 55,
+          "r_median": 0.8877,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 56,
+          "r_median": 0.8796,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 57,
+          "r_median": 0.8808,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 58,
+          "r_median": 0.8698,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 59,
+          "r_median": 0.8656,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 60,
+          "r_median": 0.8563,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 61,
+          "r_median": 0.8397,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 62,
+          "r_median": 0.829,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 63,
+          "r_median": 0.8252,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 64,
+          "r_median": 0.8328,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 65,
+          "r_median": 0.8215,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 66,
+          "r_median": 0.7981,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 67,
+          "r_median": 0.7851,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 68,
+          "r_median": 0.8036,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 69,
+          "r_median": 0.7968,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 70,
+          "r_median": 0.7801,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 71,
+          "r_median": 0.764,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 72,
+          "r_median": 0.7041,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 73,
+          "r_median": 0.72,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 74,
+          "r_median": 0.7002,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 75,
+          "r_median": 0.6501,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 76,
+          "r_median": 0.7502,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 77,
+          "r_median": 0.6955,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 78,
+          "r_median": 0.6775,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 79,
+          "r_median": 0.6655,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 80,
+          "r_median": 0.6805,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 81,
+          "r_median": 0.6798,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 82,
+          "r_median": 0.7092,
+          "n_voiced_frames": 18,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 83,
+          "r_median": 0.6326,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 84,
+          "r_median": 0.7002,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 85,
+          "r_median": 0.7546,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 86,
+          "r_median": 0.7875,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 87,
+          "r_median": 0.7491,
+          "n_voiced_frames": 29,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 88,
+          "r_median": 0.6841,
+          "n_voiced_frames": 25,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 89,
+          "r_median": 0.6784,
+          "n_voiced_frames": 31,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 90,
+          "r_median": 0.7491,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 91,
+          "r_median": 0.7561,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 92,
+          "r_median": 0.7253,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 93,
+          "r_median": 0.7195,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 94,
+          "r_median": 0.624,
+          "n_voiced_frames": 32,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 95,
+          "r_median": 0.5845,
+          "n_voiced_frames": 29,
+          "n_frames": 32,
+          "violation": false
+        },
+        {
+          "midi": 96,
+          "r_median": 0.5281,
+          "n_voiced_frames": 27,
+          "n_frames": 32,
+          "violation": false
+        }
+      ]
+    }
+  ],
+  "gate_summary": {
+    "R0.1": {
+      "n_notes": 122,
+      "n_violations": 0,
+      "gate_pass": true
+    },
+    "R0_v0_reference": {
+      "n_notes": 122,
+      "n_violations": 0,
+      "gate_pass": true
+    }
+  },
+  "non_regression_vs_v0.3": {
+    "v0.3_R0.1_n_violations": 0,
+    "v3_R0.1_n_violations": 0,
+    "regression": false
+  },
+  "elapsed_sec": 10.641
+}

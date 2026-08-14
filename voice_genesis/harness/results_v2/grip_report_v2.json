@@ -1,0 +1,2858 @@
+{
+  "probe_suite": {
+    "C3": 48,
+    "E4": 64,
+    "A4": 69,
+    "C5": 72,
+    "C6": 84
+  },
+  "feature_names": [
+    "mean_f0",
+    "spectral_centroid",
+    "spectral_tilt",
+    "periodicity",
+    "rms",
+    "vibrato_depth"
+  ],
+  "ref_scale": {
+    "mean_f0": 25.0,
+    "spectral_centroid": 0.1,
+    "spectral_tilt": 1.5,
+    "periodicity": 3.0,
+    "rms": 1.0,
+    "vibrato_depth": 10.0
+  },
+  "gate_definition": "grip_ratio>=3.0 and direction_consistency>=0.90 and E(intended)>=2.0",
+  "n_repeats_for_sigma_meas": 3,
+  "configs": [
+    "config1_v0_repaired",
+    "config2_R0.1_repaired"
+  ],
+  "results": [
+    {
+      "config": "config1_v0_repaired",
+      "axis": "breathiness",
+      "intended_feature": "periodicity",
+      "side_features": [
+        "mean_f0",
+        "spectral_centroid",
+        "spectral_tilt",
+        "rms",
+        "vibrato_depth"
+      ],
+      "E_intended": 3.092,
+      "E_side": {
+        "mean_f0": 1.0371,
+        "spectral_centroid": 3.6609,
+        "spectral_tilt": 2.2013,
+        "rms": 0.0138,
+        "vibrato_depth": 1.7517
+      },
+      "dominant_side_feature": "spectral_centroid",
+      "grip_ratio": 0.8446,
+      "direction_consistency": 1.0,
+      "gate_grip_ge_3.0": false,
+      "gate_direction_ge_0.90": true,
+      "gate_effect_ge_2.0": true,
+      "overall_gate_pass": false,
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "sigma_meas_per_probe": {
+        "C3": {
+          "mean_f0": 12.04098,
+          "spectral_centroid": 0.01925,
+          "spectral_tilt": 0.10999,
+          "periodicity": 0.0554,
+          "rms": 0.01825,
+          "vibrato_depth": 0.91261
+        },
+        "E4": {
+          "mean_f0": 13.33694,
+          "spectral_centroid": 0.01008,
+          "spectral_tilt": 0.38757,
+          "periodicity": 0.22371,
+          "rms": 0.02647,
+          "vibrato_depth": 3.8382
+        },
+        "A4": {
+          "mean_f0": 3.82413,
+          "spectral_centroid": 0.0039,
+          "spectral_tilt": 0.4391,
+          "periodicity": 0.19935,
+          "rms": 0.01191,
+          "vibrato_depth": 1.79846
+        },
+        "C5": {
+          "mean_f0": 50.52648,
+          "spectral_centroid": 0.01555,
+          "spectral_tilt": 0.07567,
+          "periodicity": 0.20789,
+          "rms": 0.00678,
+          "vibrato_depth": 5.40395
+        },
+        "C6": {
+          "mean_f0": 10.52274,
+          "spectral_centroid": 0.00418,
+          "spectral_tilt": 0.19275,
+          "periodicity": 0.15764,
+          "rms": 0.01046,
+          "vibrato_depth": 4.96008
+        }
+      },
+      "n_caveat_cells_of_25": 3,
+      "caveat_matrix": [
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          true,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8435.2766,
+            10025.0429,
+            10541.5415,
+            10857.9072,
+            12023.7734
+          ],
+          [
+            8435.0338,
+            10023.6565,
+            10538.326,
+            10861.1261,
+            12010.7702
+          ],
+          [
+            8435.2455,
+            10022.0645,
+            10528.8187,
+            10881.3952,
+            11997.2977
+          ],
+          [
+            8435.8714,
+            10020.3197,
+            10522.8644,
+            10908.2448,
+            11982.8752
+          ],
+          [
+            8437.6154,
+            10018.7638,
+            10515.6136,
+            10923.6227,
+            11970.4133
+          ]
+        ],
+        "spectral_centroid": [
+          [
+            10.4338,
+            10.8365,
+            10.9768,
+            11.0271,
+            11.2987
+          ],
+          [
+            10.638,
+            10.9876,
+            11.1093,
+            11.1422,
+            11.3523
+          ],
+          [
+            10.833,
+            11.0963,
+            11.1984,
+            11.2205,
+            11.3893
+          ],
+          [
+            11.033,
+            11.2065,
+            11.2862,
+            11.2986,
+            11.4274
+          ],
+          [
+            11.159,
+            11.2789,
+            11.3429,
+            11.3501,
+            11.4533
+          ]
+        ],
+        "spectral_tilt": [
+          [
+            -4.0296,
+            -9.3566,
+            -11.2469,
+            -11.9581,
+            -13.2721
+          ],
+          [
+            -3.9845,
+            -8.4793,
+            -10.1035,
+            -10.7983,
+            -12.7742
+          ],
+          [
+            -3.9341,
+            -7.6469,
+            -9.1889,
+            -10.191,
+            -12.1353
+          ],
+          [
+            -3.7996,
+            -6.7068,
+            -8.2259,
+            -9.5443,
+            -11.5353
+          ],
+          [
+            -3.6128,
+            -5.9919,
+            -7.3935,
+            -8.6562,
+            -11.1368
+          ]
+        ],
+        "periodicity": [
+          [
+            9.5869,
+            13.1932,
+            12.6355,
+            11.2695,
+            10.2602
+          ],
+          [
+            8.9681,
+            10.3188,
+            9.6396,
+            8.483,
+            8.4574
+          ],
+          [
+            7.8009,
+            7.9491,
+            7.6429,
+            6.3806,
+            7.1838
+          ],
+          [
+            5.8739,
+            5.2672,
+            4.9129,
+            3.8677,
+            5.7255
+          ],
+          [
+            3.9748,
+            3.2081,
+            3.1051,
+            1.9935,
+            4.5937
+          ]
+        ],
+        "rms": [
+          [
+            -19.9035,
+            -19.8987,
+            -19.8822,
+            -19.8877,
+            -19.8541
+          ],
+          [
+            -19.8956,
+            -19.905,
+            -19.8839,
+            -19.888,
+            -19.8531
+          ],
+          [
+            -19.889,
+            -19.9102,
+            -19.8858,
+            -19.8876,
+            -19.8545
+          ],
+          [
+            -19.8816,
+            -19.9156,
+            -19.8888,
+            -19.8861,
+            -19.86
+          ],
+          [
+            -19.8775,
+            -19.9184,
+            -19.8916,
+            -19.8839,
+            -19.8679
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            42.5524,
+            42.0617,
+            44.6436,
+            45.4848,
+            39.6084
+          ],
+          [
+            42.4272,
+            39.4521,
+            44.2015,
+            50.4086,
+            35.5645
+          ],
+          [
+            41.2183,
+            38.5189,
+            40.226,
+            43.0317,
+            25.5435
+          ],
+          [
+            39.5136,
+            32.1561,
+            32.4942,
+            31.9209,
+            16.2826
+          ],
+          [
+            41.2281,
+            24.5448,
+            30.0318,
+            17.979,
+            11.5793
+          ]
+        ]
+      },
+      "sweep_values": [
+        0.0,
+        0.1,
+        0.2,
+        0.35,
+        0.5
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      }
+    },
+    {
+      "config": "config1_v0_repaired",
+      "axis": "formant_scale",
+      "intended_feature": "spectral_centroid",
+      "side_features": [
+        "mean_f0",
+        "spectral_tilt",
+        "periodicity",
+        "rms",
+        "vibrato_depth"
+      ],
+      "E_intended": 2.0708,
+      "E_side": {
+        "mean_f0": 0.0935,
+        "spectral_tilt": 1.2191,
+        "periodicity": 0.3023,
+        "rms": 0.0071,
+        "vibrato_depth": 0.2701
+      },
+      "dominant_side_feature": "spectral_tilt",
+      "grip_ratio": 1.6986,
+      "direction_consistency": 1.0,
+      "gate_grip_ge_3.0": false,
+      "gate_direction_ge_0.90": true,
+      "gate_effect_ge_2.0": true,
+      "overall_gate_pass": false,
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "sigma_meas_per_probe": {
+        "C3": {
+          "mean_f0": 12.37707,
+          "spectral_centroid": 0.01922,
+          "spectral_tilt": 0.08176,
+          "periodicity": 0.02742,
+          "rms": 0.01828,
+          "vibrato_depth": 0.3544
+        },
+        "E4": {
+          "mean_f0": 16.59364,
+          "spectral_centroid": 0.01606,
+          "spectral_tilt": 0.377,
+          "periodicity": 0.22371,
+          "rms": 0.01597,
+          "vibrato_depth": 2.0256
+        },
+        "A4": {
+          "mean_f0": 1.61364,
+          "spectral_centroid": 0.00483,
+          "spectral_tilt": 0.29291,
+          "periodicity": 0.07822,
+          "rms": 0.00932,
+          "vibrato_depth": 1.25817
+        },
+        "C5": {
+          "mean_f0": 20.61912,
+          "spectral_centroid": 0.02143,
+          "spectral_tilt": 0.27784,
+          "periodicity": 0.11762,
+          "rms": 0.00501,
+          "vibrato_depth": 1.33484
+        },
+        "C6": {
+          "mean_f0": 14.67413,
+          "spectral_centroid": 0.00595,
+          "spectral_tilt": 0.18922,
+          "periodicity": 0.17402,
+          "rms": 0.01282,
+          "vibrato_depth": 5.88951
+        }
+      },
+      "n_caveat_cells_of_25": 1,
+      "caveat_matrix": [
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          true
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8435.3672,
+            10027.0295,
+            10544.1621,
+            10855.4217,
+            12072.4585
+          ],
+          [
+            8435.2789,
+            10027.6434,
+            10548.3584,
+            10853.2743,
+            12027.3964
+          ],
+          [
+            8435.1058,
+            10024.4115,
+            10540.09,
+            10862.2394,
+            12017.6997
+          ],
+          [
+            8435.0317,
+            10024.7862,
+            10545.3746,
+            10851.7613,
+            12048.1704
+          ],
+          [
+            8434.9327,
+            10025.7752,
+            10546.5,
+            10860.5994,
+            12092.1043
+          ]
+        ],
+        "spectral_centroid": [
+          [
+            10.384,
+            10.8036,
+            10.9371,
+            10.9785,
+            11.215
+          ],
+          [
+            10.4574,
+            10.8635,
+            11.0057,
+            11.0585,
+            11.2816
+          ],
+          [
+            10.526,
+            10.9181,
+            11.0499,
+            11.0905,
+            11.3281
+          ],
+          [
+            10.6005,
+            10.9516,
+            11.1117,
+            11.1765,
+            11.3917
+          ],
+          [
+            10.6371,
+            11.0082,
+            11.1349,
+            11.1856,
+            11.4312
+          ]
+        ],
+        "spectral_tilt": [
+          [
+            -6.0371,
+            -9.3099,
+            -11.9475,
+            -12.2652,
+            -14.0407
+          ],
+          [
+            -4.9743,
+            -8.91,
+            -11.3274,
+            -11.4869,
+            -12.4299
+          ],
+          [
+            -4.0069,
+            -8.9117,
+            -10.6529,
+            -11.3321,
+            -12.9656
+          ],
+          [
+            -3.2022,
+            -9.1409,
+            -9.0891,
+            -10.9115,
+            -13.3437
+          ],
+          [
+            -2.2275,
+            -9.2987,
+            -9.2257,
+            -10.4365,
+            -13.1549
+          ]
+        ],
+        "periodicity": [
+          [
+            10.0946,
+            12.6391,
+            10.8995,
+            10.4832,
+            9.5092
+          ],
+          [
+            9.5475,
+            12.1361,
+            11.2501,
+            10.9414,
+            8.1012
+          ],
+          [
+            9.3535,
+            11.7354,
+            11.0406,
+            9.7542,
+            9.277
+          ],
+          [
+            8.919,
+            11.4836,
+            11.6389,
+            10.1913,
+            10.3062
+          ],
+          [
+            8.7358,
+            11.4707,
+            11.5426,
+            9.5762,
+            8.9648
+          ]
+        ],
+        "rms": [
+          [
+            -19.8966,
+            -19.914,
+            -19.8696,
+            -19.8811,
+            -19.8152
+          ],
+          [
+            -19.8974,
+            -19.9097,
+            -19.8709,
+            -19.9009,
+            -19.8195
+          ],
+          [
+            -19.8994,
+            -19.902,
+            -19.883,
+            -19.888,
+            -19.8533
+          ],
+          [
+            -19.904,
+            -19.9083,
+            -19.8854,
+            -19.8774,
+            -19.8515
+          ],
+          [
+            -19.8993,
+            -19.9069,
+            -19.8923,
+            -19.8846,
+            -19.8529
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            42.2682,
+            42.6407,
+            49.3876,
+            43.0471,
+            38.3493
+          ],
+          [
+            41.9723,
+            40.3869,
+            40.4681,
+            35.3133,
+            66.185
+          ],
+          [
+            42.7264,
+            41.0605,
+            44.5217,
+            48.4896,
+            38.4302
+          ],
+          [
+            43.0334,
+            43.9574,
+            44.6209,
+            34.2963,
+            27.5835
+          ],
+          [
+            43.0706,
+            42.8137,
+            43.1613,
+            46.5951,
+            35.6479
+          ]
+        ]
+      },
+      "sweep_values": [
+        0.85,
+        0.925,
+        1.0,
+        1.075,
+        1.15
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      }
+    },
+    {
+      "config": "config1_v0_repaired",
+      "axis": "spectral_tilt",
+      "intended_feature": "spectral_tilt",
+      "side_features": [
+        "mean_f0",
+        "spectral_centroid",
+        "periodicity",
+        "rms",
+        "vibrato_depth"
+      ],
+      "E_intended": 3.2285,
+      "E_side": {
+        "mean_f0": 0.2557,
+        "spectral_centroid": 4.4316,
+        "periodicity": 0.8624,
+        "rms": 0.0142,
+        "vibrato_depth": 0.4887
+      },
+      "dominant_side_feature": "spectral_centroid",
+      "grip_ratio": 0.7285,
+      "direction_consistency": 0.75,
+      "gate_grip_ge_3.0": false,
+      "gate_direction_ge_0.90": false,
+      "gate_effect_ge_2.0": true,
+      "overall_gate_pass": false,
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "sigma_meas_per_probe": {
+        "C3": {
+          "mean_f0": 12.37707,
+          "spectral_centroid": 0.01922,
+          "spectral_tilt": 0.08176,
+          "periodicity": 0.02742,
+          "rms": 0.01828,
+          "vibrato_depth": 0.3544
+        },
+        "E4": {
+          "mean_f0": 16.59364,
+          "spectral_centroid": 0.01606,
+          "spectral_tilt": 0.377,
+          "periodicity": 0.22371,
+          "rms": 0.01597,
+          "vibrato_depth": 2.0256
+        },
+        "A4": {
+          "mean_f0": 1.61364,
+          "spectral_centroid": 0.00483,
+          "spectral_tilt": 0.29291,
+          "periodicity": 0.07822,
+          "rms": 0.00932,
+          "vibrato_depth": 1.25817
+        },
+        "C5": {
+          "mean_f0": 20.61912,
+          "spectral_centroid": 0.02143,
+          "spectral_tilt": 0.27784,
+          "periodicity": 0.11762,
+          "rms": 0.00501,
+          "vibrato_depth": 1.33484
+        },
+        "C6": {
+          "mean_f0": 14.67413,
+          "spectral_centroid": 0.00595,
+          "spectral_tilt": 0.18922,
+          "periodicity": 0.17402,
+          "rms": 0.01282,
+          "vibrato_depth": 5.88951
+        }
+      },
+      "n_caveat_cells_of_25": 0,
+      "caveat_matrix": [
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8436.3257,
+            10022.6171,
+            10536.3966,
+            10875.9801,
+            12017.2462
+          ],
+          [
+            8435.2812,
+            10023.5016,
+            10538.5275,
+            10869.1466,
+            12017.3205
+          ],
+          [
+            8435.1058,
+            10024.4115,
+            10540.09,
+            10862.2394,
+            12017.6997
+          ],
+          [
+            8434.9112,
+            10024.9817,
+            10541.5336,
+            10856.2145,
+            12019.4445
+          ],
+          [
+            8434.5734,
+            10025.2446,
+            10542.7881,
+            10853.1296,
+            12025.559
+          ]
+        ],
+        "spectral_centroid": [
+          [
+            10.2326,
+            10.9086,
+            11.039,
+            11.0788,
+            11.3267
+          ],
+          [
+            10.2296,
+            10.8648,
+            11.0207,
+            11.0671,
+            11.3266
+          ],
+          [
+            10.526,
+            10.9181,
+            11.0499,
+            11.0905,
+            11.3281
+          ],
+          [
+            10.9341,
+            11.1639,
+            11.2002,
+            11.216,
+            11.3401
+          ],
+          [
+            11.3298,
+            11.4892,
+            11.4822,
+            11.4739,
+            11.397
+          ]
+        ],
+        "spectral_tilt": [
+          [
+            -11.695,
+            -9.5898,
+            -10.3349,
+            -10.572,
+            -12.3839
+          ],
+          [
+            -7.9778,
+            -9.8828,
+            -10.7082,
+            -11.0607,
+            -12.6508
+          ],
+          [
+            -4.0069,
+            -8.9117,
+            -10.6529,
+            -11.3321,
+            -12.9656
+          ],
+          [
+            -0.0176,
+            -5.9443,
+            -9.0632,
+            -10.7381,
+            -13.3798
+          ],
+          [
+            3.9758,
+            -2.1061,
+            -5.4921,
+            -7.757,
+            -13.3786
+          ]
+        ],
+        "periodicity": [
+          [
+            12.4221,
+            12.5719,
+            11.3836,
+            10.1294,
+            9.2871
+          ],
+          [
+            10.9694,
+            12.315,
+            11.2052,
+            10.0171,
+            9.2852
+          ],
+          [
+            9.3535,
+            11.7354,
+            11.0406,
+            9.7542,
+            9.277
+          ],
+          [
+            7.5154,
+            9.9575,
+            10.5111,
+            9.3771,
+            9.2432
+          ],
+          [
+            4.2097,
+            7.2013,
+            8.7962,
+            8.2384,
+            9.117
+          ]
+        ],
+        "rms": [
+          [
+            -19.8866,
+            -19.8916,
+            -19.8791,
+            -19.8839,
+            -19.8523
+          ],
+          [
+            -19.895,
+            -19.8964,
+            -19.8803,
+            -19.886,
+            -19.8526
+          ],
+          [
+            -19.8994,
+            -19.902,
+            -19.883,
+            -19.888,
+            -19.8533
+          ],
+          [
+            -19.901,
+            -19.9063,
+            -19.8881,
+            -19.8884,
+            -19.8546
+          ],
+          [
+            -19.9027,
+            -19.9058,
+            -19.896,
+            -19.8857,
+            -19.8577
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            41.5344,
+            36.4109,
+            43.76,
+            55.3264,
+            38.7477
+          ],
+          [
+            42.2661,
+            38.3099,
+            44.2501,
+            52.68,
+            38.6635
+          ],
+          [
+            42.7264,
+            41.0605,
+            44.5217,
+            48.4896,
+            38.4302
+          ],
+          [
+            44.0116,
+            42.8635,
+            45.1703,
+            44.6613,
+            37.9518
+          ],
+          [
+            46.4219,
+            43.8335,
+            46.0415,
+            41.1721,
+            39.3735
+          ]
+        ]
+      },
+      "sweep_values": [
+        -18.0,
+        -14.0,
+        -10.0,
+        -6.0,
+        -2.0
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      }
+    },
+    {
+      "config": "config1_v0_repaired",
+      "axis": "vibrato_depth",
+      "intended_feature": "vibrato_depth",
+      "side_features": [
+        "mean_f0",
+        "spectral_centroid",
+        "spectral_tilt",
+        "periodicity",
+        "rms"
+      ],
+      "E_intended": 9.3503,
+      "E_side": {
+        "mean_f0": 0.1949,
+        "spectral_centroid": 2.1827,
+        "spectral_tilt": 1.3682,
+        "periodicity": 0.4274,
+        "rms": 0.0147
+      },
+      "dominant_side_feature": "spectral_centroid",
+      "grip_ratio": 4.2837,
+      "direction_consistency": 1.0,
+      "gate_grip_ge_3.0": true,
+      "gate_direction_ge_0.90": true,
+      "gate_effect_ge_2.0": true,
+      "overall_gate_pass": true,
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "sigma_meas_per_probe": {
+        "C3": {
+          "mean_f0": 12.4685,
+          "spectral_centroid": 0.01783,
+          "spectral_tilt": 0.10968,
+          "periodicity": 0.07097,
+          "rms": 0.01885,
+          "vibrato_depth": 0.32096
+        },
+        "E4": {
+          "mean_f0": 16.80627,
+          "spectral_centroid": 0.01672,
+          "spectral_tilt": 0.35764,
+          "periodicity": 0.19082,
+          "rms": 0.0097,
+          "vibrato_depth": 1.87037
+        },
+        "A4": {
+          "mean_f0": 1.39747,
+          "spectral_centroid": 0.01097,
+          "spectral_tilt": 0.13719,
+          "periodicity": 0.09753,
+          "rms": 0.01192,
+          "vibrato_depth": 1.06209
+        },
+        "C5": {
+          "mean_f0": 20.45879,
+          "spectral_centroid": 0.0153,
+          "spectral_tilt": 0.15924,
+          "periodicity": 0.1369,
+          "rms": 0.01219,
+          "vibrato_depth": 1.60083
+        },
+        "C6": {
+          "mean_f0": 14.2359,
+          "spectral_centroid": 0.0071,
+          "spectral_tilt": 0.41254,
+          "periodicity": 0.26893,
+          "rms": 0.01761,
+          "vibrato_depth": 6.71123
+        }
+      },
+      "n_caveat_cells_of_25": 2,
+      "caveat_matrix": [
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          true,
+          false,
+          false,
+          false,
+          true
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8437.9328,
+            10026.9145,
+            10542.1839,
+            10862.9821,
+            12015.4651
+          ],
+          [
+            8436.3006,
+            10026.2586,
+            10541.6663,
+            10863.0207,
+            12016.3487
+          ],
+          [
+            8435.1898,
+            10023.7313,
+            10540.2618,
+            10861.4668,
+            12017.429
+          ],
+          [
+            8435.6009,
+            10021.8237,
+            10541.258,
+            10861.6732,
+            12015.6698
+          ],
+          [
+            8499.3491,
+            10022.0421,
+            10540.7741,
+            10864.8493,
+            12002.5623
+          ]
+        ],
+        "spectral_centroid": [
+          [
+            10.6595,
+            11.0713,
+            11.1716,
+            11.2125,
+            11.3883
+          ],
+          [
+            10.6111,
+            11.0153,
+            11.0957,
+            11.1662,
+            11.3491
+          ],
+          [
+            10.5108,
+            10.8971,
+            11.0603,
+            11.0865,
+            11.3195
+          ],
+          [
+            10.4543,
+            10.8658,
+            11.0052,
+            11.0612,
+            11.2966
+          ],
+          [
+            10.4277,
+            10.8367,
+            10.9533,
+            11.022,
+            11.2654
+          ]
+        ],
+        "spectral_tilt": [
+          [
+            -3.2473,
+            -8.8767,
+            -11.8336,
+            -12.6458,
+            -14.591
+          ],
+          [
+            -4.1604,
+            -9.3592,
+            -11.1377,
+            -11.9492,
+            -13.6112
+          ],
+          [
+            -3.9571,
+            -8.5297,
+            -10.3484,
+            -11.2721,
+            -13.0814
+          ],
+          [
+            -3.4473,
+            -7.9599,
+            -9.9434,
+            -10.5965,
+            -12.8423
+          ],
+          [
+            -3.1044,
+            -7.8172,
+            -9.2609,
+            -10.2249,
+            -12.5387
+          ]
+        ],
+        "periodicity": [
+          [
+            12.4143,
+            12.5556,
+            11.3892,
+            9.7358,
+            9.2471
+          ],
+          [
+            11.1996,
+            12.1744,
+            11.1343,
+            9.8097,
+            9.2095
+          ],
+          [
+            8.7536,
+            11.5458,
+            10.9336,
+            9.7291,
+            9.1501
+          ],
+          [
+            6.5665,
+            10.4028,
+            10.3957,
+            9.6876,
+            9.0835
+          ],
+          [
+            4.5687,
+            9.6096,
+            10.1072,
+            9.4619,
+            8.8718
+          ]
+        ],
+        "rms": [
+          [
+            -19.8945,
+            -19.8955,
+            -19.8973,
+            -19.854,
+            -19.9616
+          ],
+          [
+            -19.8906,
+            -19.8805,
+            -19.893,
+            -19.8588,
+            -19.9053
+          ],
+          [
+            -19.903,
+            -19.8874,
+            -19.8797,
+            -19.9054,
+            -19.8637
+          ],
+          [
+            -19.905,
+            -19.8551,
+            -19.8923,
+            -19.9033,
+            -19.9476
+          ],
+          [
+            -19.8963,
+            -19.8784,
+            -19.9107,
+            -19.8687,
+            -19.8682
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            4.9976,
+            8.2699,
+            4.351,
+            12.9197,
+            11.5808
+          ],
+          [
+            22.6033,
+            21.6183,
+            23.0723,
+            23.5943,
+            22.8028
+          ],
+          [
+            47.5103,
+            47.4217,
+            49.4455,
+            54.3845,
+            44.1088
+          ],
+          [
+            74.3159,
+            73.008,
+            73.4849,
+            82.5814,
+            62.6187
+          ],
+          [
+            112.7496,
+            97.0929,
+            97.854,
+            109.8516,
+            73.9185
+          ]
+        ]
+      },
+      "sweep_values": [
+        0.0,
+        25.0,
+        50.0,
+        75.0,
+        100.0
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      }
+    },
+    {
+      "config": "config2_R0.1_repaired",
+      "axis": "breathiness",
+      "intended_feature": "periodicity",
+      "side_features": [
+        "mean_f0",
+        "spectral_centroid",
+        "spectral_tilt",
+        "rms",
+        "vibrato_depth"
+      ],
+      "E_intended": 2.6163,
+      "E_side": {
+        "mean_f0": 0.2732,
+        "spectral_centroid": 1.1094,
+        "spectral_tilt": 0.1634,
+        "rms": 0.0556,
+        "vibrato_depth": 0.4087
+      },
+      "dominant_side_feature": "spectral_centroid",
+      "grip_ratio": 2.3582,
+      "direction_consistency": 1.0,
+      "gate_grip_ge_3.0": false,
+      "gate_direction_ge_0.90": true,
+      "gate_effect_ge_2.0": true,
+      "overall_gate_pass": false,
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "sigma_meas_per_probe": {
+        "C3": {
+          "mean_f0": 12.0965,
+          "spectral_centroid": 0.01824,
+          "spectral_tilt": 0.19383,
+          "periodicity": 0.04377,
+          "rms": 0.0178,
+          "vibrato_depth": 0.63143
+        },
+        "E4": {
+          "mean_f0": 20.05712,
+          "spectral_centroid": 0.01204,
+          "spectral_tilt": 0.12296,
+          "periodicity": 0.50586,
+          "rms": 0.04717,
+          "vibrato_depth": 0.85109
+        },
+        "A4": {
+          "mean_f0": 2.47296,
+          "spectral_centroid": 0.00585,
+          "spectral_tilt": 0.26783,
+          "periodicity": 0.21538,
+          "rms": 0.01019,
+          "vibrato_depth": 1.63695
+        },
+        "C5": {
+          "mean_f0": 23.38013,
+          "spectral_centroid": 0.00786,
+          "spectral_tilt": 0.43332,
+          "periodicity": 0.13592,
+          "rms": 0.01679,
+          "vibrato_depth": 9.13871
+        },
+        "C6": {
+          "mean_f0": 16.10337,
+          "spectral_centroid": 0.02465,
+          "spectral_tilt": 0.25136,
+          "periodicity": 0.14521,
+          "rms": 0.02837,
+          "vibrato_depth": 5.86766
+        }
+      },
+      "n_caveat_cells_of_25": 6,
+      "caveat_matrix": [
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          true,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          true,
+          false,
+          true,
+          false
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8435.2797,
+            10026.4338,
+            10543.4752,
+            10854.3885,
+            12046.4457
+          ],
+          [
+            8434.9225,
+            10027.1628,
+            10542.2017,
+            10831.8763,
+            12048.7728
+          ],
+          [
+            8434.5866,
+            10025.1911,
+            10540.3614,
+            9706.5051,
+            12050.1876
+          ],
+          [
+            8434.3238,
+            10030.3848,
+            10535.9589,
+            10825.8847,
+            12049.5709
+          ],
+          [
+            8434.0921,
+            10033.2629,
+            10531.8263,
+            10815.2432,
+            12047.425
+          ]
+        ],
+        "spectral_centroid": [
+          [
+            10.4214,
+            10.5331,
+            10.4665,
+            10.4362,
+            10.4565
+          ],
+          [
+            10.404,
+            10.4895,
+            10.4225,
+            10.4037,
+            10.4529
+          ],
+          [
+            10.3772,
+            10.4522,
+            10.3878,
+            10.3775,
+            10.4509
+          ],
+          [
+            10.3403,
+            10.4075,
+            10.3489,
+            10.3474,
+            10.4495
+          ],
+          [
+            10.3122,
+            10.3737,
+            10.3216,
+            10.3253,
+            10.4492
+          ]
+        ],
+        "spectral_tilt": [
+          [
+            -4.0334,
+            -10.1586,
+            -13.5466,
+            -15.9853,
+            -23.1918
+          ],
+          [
+            -4.0097,
+            -10.1241,
+            -13.5585,
+            -15.8073,
+            -23.1245
+          ],
+          [
+            -3.9798,
+            -10.0861,
+            -13.573,
+            -5.4021,
+            -23.0568
+          ],
+          [
+            -3.9342,
+            -10.0293,
+            -13.5951,
+            -15.6457,
+            -22.787
+          ],
+          [
+            -3.8132,
+            -9.9135,
+            -13.602,
+            -15.2729,
+            -22.5327
+          ]
+        ],
+        "periodicity": [
+          [
+            9.5852,
+            12.9545,
+            12.9953,
+            10.9366,
+            13.5464
+          ],
+          [
+            8.975,
+            9.9202,
+            10.219,
+            8.9503,
+            11.8438
+          ],
+          [
+            7.9581,
+            7.6355,
+            7.9545,
+            7.4325,
+            10.5968
+          ],
+          [
+            6.0912,
+            4.5023,
+            5.3801,
+            4.8829,
+            9.2015
+          ],
+          [
+            4.1347,
+            2.3103,
+            3.4843,
+            3.0878,
+            8.1198
+          ]
+        ],
+        "rms": [
+          [
+            -19.9015,
+            -19.9165,
+            -19.8689,
+            -19.879,
+            -19.821
+          ],
+          [
+            -19.8834,
+            -19.939,
+            -19.8658,
+            -19.8709,
+            -19.8133
+          ],
+          [
+            -19.8672,
+            -19.9627,
+            -19.8644,
+            -19.8604,
+            -19.8096
+          ],
+          [
+            -19.8478,
+            -19.9975,
+            -19.8649,
+            -19.8423,
+            -19.8098
+          ],
+          [
+            -19.835,
+            -20.0286,
+            -19.8677,
+            -19.8234,
+            -19.815
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            42.5539,
+            43.1156,
+            43.6008,
+            39.6302,
+            44.4228
+          ],
+          [
+            42.5587,
+            42.7701,
+            44.3148,
+            39.1761,
+            43.0059
+          ],
+          [
+            41.9937,
+            40.141,
+            44.7923,
+            28.7068,
+            38.7187
+          ],
+          [
+            40.3789,
+            46.1675,
+            45.3927,
+            38.2113,
+            37.9591
+          ],
+          [
+            39.8229,
+            47.2025,
+            45.8515,
+            34.8666,
+            35.0716
+          ]
+        ]
+      },
+      "sweep_values": [
+        0.0,
+        0.1,
+        0.2,
+        0.35,
+        0.5
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      }
+    },
+    {
+      "config": "config2_R0.1_repaired",
+      "axis": "formant_scale",
+      "intended_feature": "spectral_centroid",
+      "side_features": [
+        "mean_f0",
+        "spectral_tilt",
+        "periodicity",
+        "rms",
+        "vibrato_depth"
+      ],
+      "E_intended": 2.6923,
+      "E_side": {
+        "mean_f0": 0.0298,
+        "spectral_tilt": 1.4755,
+        "periodicity": 0.5207,
+        "rms": 0.0089,
+        "vibrato_depth": 0.1826
+      },
+      "dominant_side_feature": "spectral_tilt",
+      "grip_ratio": 1.8246,
+      "direction_consistency": 0.8,
+      "gate_grip_ge_3.0": false,
+      "gate_direction_ge_0.90": false,
+      "gate_effect_ge_2.0": true,
+      "overall_gate_pass": false,
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "sigma_meas_per_probe": {
+        "C3": {
+          "mean_f0": 12.45455,
+          "spectral_centroid": 0.01985,
+          "spectral_tilt": 0.10855,
+          "periodicity": 0.02708,
+          "rms": 0.01165,
+          "vibrato_depth": 0.29629
+        },
+        "E4": {
+          "mean_f0": 17.62719,
+          "spectral_centroid": 0.01252,
+          "spectral_tilt": 0.14865,
+          "periodicity": 0.37049,
+          "rms": 0.02402,
+          "vibrato_depth": 1.0232
+        },
+        "A4": {
+          "mean_f0": 1.93765,
+          "spectral_centroid": 0.00591,
+          "spectral_tilt": 0.2456,
+          "periodicity": 0.21914,
+          "rms": 0.01272,
+          "vibrato_depth": 1.40643
+        },
+        "C5": {
+          "mean_f0": 15.44574,
+          "spectral_centroid": 0.00669,
+          "spectral_tilt": 0.02497,
+          "periodicity": 0.29728,
+          "rms": 0.00967,
+          "vibrato_depth": 2.64933
+        },
+        "C6": {
+          "mean_f0": 15.17945,
+          "spectral_centroid": 0.02948,
+          "spectral_tilt": 0.23343,
+          "periodicity": 0.07806,
+          "rms": 0.0295,
+          "vibrato_depth": 5.24075
+        }
+      },
+      "n_caveat_cells_of_25": 3,
+      "caveat_matrix": [
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8435.5207,
+            10026.2628,
+            10546.7403,
+            10855.7596,
+            12037.929
+          ],
+          [
+            8435.2421,
+            10027.5955,
+            10544.4569,
+            10853.282,
+            12042.12
+          ],
+          [
+            8435.1033,
+            10026.7562,
+            10542.9194,
+            10847.8169,
+            12048.0026
+          ],
+          [
+            8435.0227,
+            10025.2607,
+            10543.7948,
+            10849.0971,
+            12049.9447
+          ],
+          [
+            8434.9216,
+            10025.518,
+            10546.2904,
+            10849.6166,
+            12053.9057
+          ]
+        ],
+        "spectral_centroid": [
+          [
+            10.2649,
+            10.1939,
+            10.2569,
+            10.224,
+            10.4021
+          ],
+          [
+            10.3516,
+            10.4022,
+            10.4363,
+            10.3491,
+            10.3876
+          ],
+          [
+            10.4151,
+            10.5106,
+            10.4432,
+            10.4191,
+            10.4544
+          ],
+          [
+            10.5158,
+            10.5411,
+            10.3974,
+            10.6851,
+            10.6579
+          ],
+          [
+            10.5341,
+            10.5642,
+            10.4488,
+            10.5722,
+            10.5283
+          ]
+        ],
+        "spectral_tilt": [
+          [
+            -6.058,
+            -12.455,
+            -15.3101,
+            -17.8144,
+            -24.2358
+          ],
+          [
+            -4.9909,
+            -10.8617,
+            -14.1451,
+            -17.1137,
+            -24.1969
+          ],
+          [
+            -4.0218,
+            -10.1455,
+            -13.5513,
+            -15.948,
+            -23.1582
+          ],
+          [
+            -3.2124,
+            -10.7104,
+            -13.6627,
+            -14.587,
+            -23.0086
+          ],
+          [
+            -2.2378,
+            -10.651,
+            -13.0968,
+            -14.4368,
+            -22.1284
+          ]
+        ],
+        "periodicity": [
+          [
+            10.108,
+            13.3104,
+            10.6931,
+            10.7845,
+            13.314
+          ],
+          [
+            9.478,
+            12.3238,
+            10.7024,
+            9.9606,
+            13.5535
+          ],
+          [
+            9.3532,
+            11.4462,
+            11.5399,
+            9.634,
+            12.5975
+          ],
+          [
+            8.9155,
+            11.4905,
+            12.7058,
+            8.851,
+            11.5686
+          ],
+          [
+            8.7336,
+            11.7484,
+            12.6974,
+            9.7199,
+            10.8316
+          ]
+        ],
+        "rms": [
+          [
+            -19.8918,
+            -19.9341,
+            -19.8528,
+            -19.8866,
+            -19.7985
+          ],
+          [
+            -19.8928,
+            -19.9371,
+            -19.8514,
+            -19.8922,
+            -19.7856
+          ],
+          [
+            -19.8923,
+            -19.9275,
+            -19.8671,
+            -19.8753,
+            -19.8166
+          ],
+          [
+            -19.9001,
+            -19.9291,
+            -19.8753,
+            -19.8684,
+            -19.8218
+          ],
+          [
+            -19.8934,
+            -19.9294,
+            -19.8797,
+            -19.8776,
+            -19.8174
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            42.11,
+            42.949,
+            44.3899,
+            36.8082,
+            41.8753
+          ],
+          [
+            42.2606,
+            42.069,
+            44.7006,
+            41.0774,
+            41.7591
+          ],
+          [
+            42.7363,
+            42.9555,
+            43.982,
+            45.0738,
+            44.8383
+          ],
+          [
+            43.1094,
+            43.0723,
+            42.3596,
+            40.5443,
+            42.274
+          ],
+          [
+            43.0657,
+            42.8273,
+            41.614,
+            40.1007,
+            43.701
+          ]
+        ]
+      },
+      "sweep_values": [
+        0.85,
+        0.925,
+        1.0,
+        1.075,
+        1.15
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      }
+    },
+    {
+      "config": "config2_R0.1_repaired",
+      "axis": "spectral_tilt",
+      "intended_feature": "spectral_tilt",
+      "side_features": [
+        "mean_f0",
+        "spectral_centroid",
+        "periodicity",
+        "rms",
+        "vibrato_depth"
+      ],
+      "E_intended": 10.6366,
+      "E_side": {
+        "mean_f0": 0.0881,
+        "spectral_centroid": 16.668,
+        "periodicity": 1.107,
+        "rms": 0.0289,
+        "vibrato_depth": 0.1679
+      },
+      "dominant_side_feature": "spectral_centroid",
+      "grip_ratio": 0.6381,
+      "direction_consistency": 1.0,
+      "gate_grip_ge_3.0": false,
+      "gate_direction_ge_0.90": true,
+      "gate_effect_ge_2.0": true,
+      "overall_gate_pass": false,
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "sigma_meas_per_probe": {
+        "C3": {
+          "mean_f0": 12.45455,
+          "spectral_centroid": 0.01985,
+          "spectral_tilt": 0.10855,
+          "periodicity": 0.02708,
+          "rms": 0.01165,
+          "vibrato_depth": 0.29629
+        },
+        "E4": {
+          "mean_f0": 17.62719,
+          "spectral_centroid": 0.01252,
+          "spectral_tilt": 0.14865,
+          "periodicity": 0.37049,
+          "rms": 0.02402,
+          "vibrato_depth": 1.0232
+        },
+        "A4": {
+          "mean_f0": 1.93765,
+          "spectral_centroid": 0.00591,
+          "spectral_tilt": 0.2456,
+          "periodicity": 0.21914,
+          "rms": 0.01272,
+          "vibrato_depth": 1.40643
+        },
+        "C5": {
+          "mean_f0": 15.44574,
+          "spectral_centroid": 0.00669,
+          "spectral_tilt": 0.02497,
+          "periodicity": 0.29728,
+          "rms": 0.00967,
+          "vibrato_depth": 2.64933
+        },
+        "C6": {
+          "mean_f0": 15.17945,
+          "spectral_centroid": 0.02948,
+          "spectral_tilt": 0.23343,
+          "periodicity": 0.07806,
+          "rms": 0.0295,
+          "vibrato_depth": 5.24075
+        }
+      },
+      "n_caveat_cells_of_25": 4,
+      "caveat_matrix": [
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          false,
+          false
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8436.3896,
+            10027.8401,
+            10542.6976,
+            10857.9075,
+            12045.872
+          ],
+          [
+            8435.2712,
+            10027.4523,
+            10542.4942,
+            10854.4097,
+            12047.1671
+          ],
+          [
+            8435.1033,
+            10026.7562,
+            10542.9194,
+            10847.8169,
+            12048.0026
+          ],
+          [
+            8434.9533,
+            10026.1293,
+            10543.1442,
+            10846.9228,
+            12046.6274
+          ],
+          [
+            8434.6198,
+            10025.6371,
+            10543.0401,
+            10852.8313,
+            12040.9215
+          ]
+        ],
+        "spectral_centroid": [
+          [
+            9.6583,
+            9.6601,
+            9.6404,
+            9.8162,
+            10.1491
+          ],
+          [
+            9.922,
+            10.0164,
+            9.9755,
+            10.0399,
+            10.2605
+          ],
+          [
+            10.4151,
+            10.5106,
+            10.4432,
+            10.4191,
+            10.4544
+          ],
+          [
+            10.9088,
+            11.0411,
+            10.9692,
+            10.9179,
+            10.7519
+          ],
+          [
+            11.3251,
+            11.4591,
+            11.4264,
+            11.3922,
+            11.129
+          ]
+        ],
+        "spectral_tilt": [
+          [
+            -12.0185,
+            -18.1029,
+            -21.558,
+            -23.884,
+            -31.1393
+          ],
+          [
+            -8.0206,
+            -14.1275,
+            -17.5538,
+            -19.9224,
+            -27.148
+          ],
+          [
+            -4.0218,
+            -10.1455,
+            -13.5513,
+            -15.948,
+            -23.1582
+          ],
+          [
+            -0.0225,
+            -6.1528,
+            -9.5507,
+            -11.9586,
+            -19.172
+          ],
+          [
+            3.9768,
+            -2.148,
+            -5.5512,
+            -7.9604,
+            -15.195
+          ]
+        ],
+        "periodicity": [
+          [
+            12.5384,
+            12.8069,
+            12.1756,
+            10.2279,
+            13.0997
+          ],
+          [
+            11.0066,
+            12.25,
+            11.943,
+            9.9493,
+            12.9533
+          ],
+          [
+            9.3532,
+            11.4462,
+            11.5399,
+            9.634,
+            12.5975
+          ],
+          [
+            7.5181,
+            9.7873,
+            10.6903,
+            9.1515,
+            12.026
+          ],
+          [
+            4.2128,
+            7.1256,
+            8.8546,
+            8.2577,
+            10.8395
+          ]
+        ],
+        "rms": [
+          [
+            -19.8734,
+            -19.9478,
+            -19.8276,
+            -19.8729,
+            -19.81
+          ],
+          [
+            -19.888,
+            -19.936,
+            -19.8487,
+            -19.8722,
+            -19.8129
+          ],
+          [
+            -19.8923,
+            -19.9275,
+            -19.8671,
+            -19.8753,
+            -19.8166
+          ],
+          [
+            -19.8962,
+            -19.9221,
+            -19.8803,
+            -19.8811,
+            -19.8223
+          ],
+          [
+            -19.9023,
+            -19.9131,
+            -19.8915,
+            -19.8847,
+            -19.834
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            41.6283,
+            42.1988,
+            44.9528,
+            41.1647,
+            43.6182
+          ],
+          [
+            42.3116,
+            42.407,
+            44.5557,
+            42.8727,
+            44.2487
+          ],
+          [
+            42.7363,
+            42.9555,
+            43.982,
+            45.0738,
+            44.8383
+          ],
+          [
+            43.9973,
+            43.4454,
+            44.4881,
+            44.864,
+            43.8437
+          ],
+          [
+            49.1339,
+            43.8782,
+            45.9181,
+            37.9347,
+            42.2395
+          ]
+        ]
+      },
+      "sweep_values": [
+        -18.0,
+        -14.0,
+        -10.0,
+        -6.0,
+        -2.0
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      }
+    },
+    {
+      "config": "config2_R0.1_repaired",
+      "axis": "vibrato_depth",
+      "intended_feature": "vibrato_depth",
+      "side_features": [
+        "mean_f0",
+        "spectral_centroid",
+        "spectral_tilt",
+        "periodicity",
+        "rms"
+      ],
+      "E_intended": 9.2146,
+      "E_side": {
+        "mean_f0": 0.1306,
+        "spectral_centroid": 0.462,
+        "spectral_tilt": 0.1126,
+        "periodicity": 0.5205,
+        "rms": 0.0171
+      },
+      "dominant_side_feature": "periodicity",
+      "grip_ratio": 9.2146,
+      "direction_consistency": 1.0,
+      "gate_grip_ge_3.0": true,
+      "gate_direction_ge_0.90": true,
+      "gate_effect_ge_2.0": true,
+      "overall_gate_pass": true,
+      "below_instrument_resolution_per_probe": {
+        "C3": false,
+        "E4": false,
+        "A4": false,
+        "C5": false,
+        "C6": false
+      },
+      "any_below_instrument_resolution": false,
+      "sigma_meas_per_probe": {
+        "C3": {
+          "mean_f0": 12.40143,
+          "spectral_centroid": 0.01597,
+          "spectral_tilt": 0.13812,
+          "periodicity": 0.07485,
+          "rms": 0.01638,
+          "vibrato_depth": 0.4763
+        },
+        "E4": {
+          "mean_f0": 17.90769,
+          "spectral_centroid": 0.02827,
+          "spectral_tilt": 0.22823,
+          "periodicity": 0.33314,
+          "rms": 0.0114,
+          "vibrato_depth": 0.92683
+        },
+        "A4": {
+          "mean_f0": 1.8258,
+          "spectral_centroid": 0.01701,
+          "spectral_tilt": 0.18653,
+          "periodicity": 0.25815,
+          "rms": 0.01644,
+          "vibrato_depth": 1.26924
+        },
+        "C5": {
+          "mean_f0": 13.88887,
+          "spectral_centroid": 0.01324,
+          "spectral_tilt": 0.0304,
+          "periodicity": 0.24507,
+          "rms": 0.01347,
+          "vibrato_depth": 3.99512
+        },
+        "C6": {
+          "mean_f0": 15.46065,
+          "spectral_centroid": 0.02689,
+          "spectral_tilt": 0.32671,
+          "periodicity": 0.07061,
+          "rms": 0.03489,
+          "vibrato_depth": 5.50508
+        }
+      },
+      "n_caveat_cells_of_25": 6,
+      "caveat_matrix": [
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          false,
+          false,
+          false,
+          true,
+          false
+        ],
+        [
+          true,
+          false,
+          false,
+          true,
+          false
+        ]
+      ],
+      "raw_feature_matrices": {
+        "mean_f0": [
+          [
+            8437.8214,
+            10029.6772,
+            10543.8865,
+            10852.4871,
+            12044.2288
+          ],
+          [
+            8436.244,
+            10028.5071,
+            10543.4746,
+            10852.7766,
+            12046.1555
+          ],
+          [
+            8435.2506,
+            10025.9331,
+            10542.3387,
+            10847.8782,
+            12048.3914
+          ],
+          [
+            8435.1041,
+            10025.0439,
+            10542.5492,
+            10853.1287,
+            12050.1221
+          ],
+          [
+            8494.9034,
+            10023.7289,
+            10541.6441,
+            10854.6354,
+            12047.4927
+          ]
+        ],
+        "spectral_centroid": [
+          [
+            10.4437,
+            10.4618,
+            10.3879,
+            10.3725,
+            10.4964
+          ],
+          [
+            10.5212,
+            10.5072,
+            10.4346,
+            10.4149,
+            10.5086
+          ],
+          [
+            10.4084,
+            10.4981,
+            10.4607,
+            10.4299,
+            10.4515
+          ],
+          [
+            10.363,
+            10.4983,
+            10.4577,
+            10.4423,
+            10.4499
+          ],
+          [
+            10.3395,
+            10.4775,
+            10.4475,
+            10.4187,
+            10.4797
+          ]
+        ],
+        "spectral_tilt": [
+          [
+            -3.2689,
+            -8.9801,
+            -13.0485,
+            -14.705,
+            -22.763
+          ],
+          [
+            -4.1695,
+            -10.2523,
+            -13.5639,
+            -15.967,
+            -22.9932
+          ],
+          [
+            -3.9716,
+            -10.2724,
+            -13.5895,
+            -16.0951,
+            -23.1368
+          ],
+          [
+            -3.4574,
+            -9.488,
+            -12.7475,
+            -15.3237,
+            -23.1594
+          ],
+          [
+            -3.0999,
+            -9.0922,
+            -11.7536,
+            -14.5143,
+            -22.6829
+          ]
+        ],
+        "periodicity": [
+          [
+            12.4298,
+            12.0146,
+            11.6298,
+            9.9566,
+            13.351
+          ],
+          [
+            11.2523,
+            11.7114,
+            11.4282,
+            10.1496,
+            12.9196
+          ],
+          [
+            8.7633,
+            11.354,
+            11.5294,
+            9.5779,
+            12.5773
+          ],
+          [
+            6.5498,
+            10.4381,
+            10.8213,
+            9.3409,
+            12.3617
+          ],
+          [
+            4.5605,
+            9.6707,
+            10.0682,
+            9.0559,
+            12.5438
+          ]
+        ],
+        "rms": [
+          [
+            -19.8987,
+            -19.901,
+            -19.9117,
+            -19.8105,
+            -20.0048
+          ],
+          [
+            -19.8947,
+            -19.8803,
+            -19.8881,
+            -19.8339,
+            -19.9113
+          ],
+          [
+            -19.9032,
+            -19.905,
+            -19.8737,
+            -19.9011,
+            -19.8383
+          ],
+          [
+            -19.906,
+            -19.8495,
+            -19.8969,
+            -19.9176,
+            -19.9825
+          ],
+          [
+            -19.8957,
+            -19.8943,
+            -19.9288,
+            -19.8386,
+            -19.8525
+          ]
+        ],
+        "vibrato_depth": [
+          [
+            4.8533,
+            7.6843,
+            3.996,
+            10.2277,
+            6.0265
+          ],
+          [
+            22.7685,
+            22.7212,
+            23.6998,
+            25.4283,
+            22.6016
+          ],
+          [
+            47.3413,
+            48.0186,
+            49.3433,
+            51.9434,
+            48.352
+          ],
+          [
+            74.6444,
+            72.9949,
+            74.2352,
+            76.809,
+            69.1545
+          ],
+          [
+            112.1867,
+            98.6249,
+            100.1027,
+            102.3735,
+            89.9138
+          ]
+        ]
+      },
+      "sweep_values": [
+        0.0,
+        25.0,
+        50.0,
+        75.0,
+        100.0
+      ],
+      "probe_notes": {
+        "C3": 48,
+        "E4": 64,
+        "A4": 69,
+        "C5": 72,
+        "C6": 84
+      }
+    }
+  ],
+  "elapsed_sec": 24.837
+}
