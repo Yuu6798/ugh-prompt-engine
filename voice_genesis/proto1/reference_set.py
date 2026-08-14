@@ -36,6 +36,8 @@ E1/E2 の集約方法の詳細は [UNDERSPEC-P1-10]・[UNDERSPEC-P1-11] を参�
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -451,6 +453,26 @@ class LinkabilityAuditValidationError(ValueError):
 def _report_from_dict(data: Dict[str, Any]) -> LinkabilityAuditReport:
     report = LinkabilityAuditReport(**data)
 
+    # PR#261 レビュー R19: report_id は {genome_id, reference_set_hash} のみに
+    # 基づく内容アドレス（audit_linkability() の生成ロジック・上部コメント
+    # 参照。created_at は意図的に除外）である。宣言された report_id を
+    # そのまま信頼せず、保存済みの genome_id/reference_set_hash から
+    # 同一手続きで再計算し、不一致なら拒否する（[UNDERSTEC-F-2] の内容
+    # アドレス規約は書き込み側だけでなく読み込み側でも検証しないと、
+    # 「別の genome_id/reference_set_hash に手編集で差し替えつつ report_id
+    # だけ古い値を残す」改ざんを通してしまう）。
+    recomputed_report_id = (
+        "audit-"
+        + sha256_of_canonical_json(
+            {"genome_id": report.genome_id, "reference_set_hash": report.reference_set_hash}
+        )[:12]
+    )
+    if report.report_id != recomputed_report_id:
+        raise LinkabilityAuditValidationError(
+            "監査ログの report_id が genome_id/reference_set_hash からの再計算と不一致（宣言値: "
+            f"{report.report_id!r} / 再計算値: {recomputed_report_id!r}）"
+        )
+
     # PR#261 レビュー R13: R9 の pass/fail 再計算より前に、その入力となる
     # 実測値（e1/e2 の最近傍類似度・チャンス帯 p95）自体がコサイン類似度の
     # 定義域（有限かつ [-1.0, 1.0]）内であることを検証する。R9 の再計算は
@@ -514,10 +536,39 @@ class LinkabilityAuditLog:
         return reports
 
     def _rewrite(self, reports: List[LinkabilityAuditReport]) -> None:
-        with self.path.open("w", encoding="utf-8") as fh:
-            for report in reports:
-                fh.write(json.dumps(_report_to_dict(report), sort_keys=True, ensure_ascii=True))
-                fh.write("\n")
+        """全件を書き戻す（`mark_stale()` のみが使う全置換パス）。
+
+        PR#261 レビュー R17: 旧実装は `self.path.open("w", ...)` の
+        truncate-then-write だったため、書き込み中に中断（プロセス kill・
+        ディスク満杯等）すると、真ん中で切れた不完全な内容どころか
+        「truncate は完了したが 1 バイトも書けていない」状態、すなわち
+        旧ログの全損があり得た（append-only ログという設計と矛盾する
+        破壊的失敗モード）。同一ディレクトリに staging ファイルを作って
+        全件書き込みを完了させてから `os.replace()` で置換する: POSIX の
+        `rename(2)` はアトミックなため、置換前に中断すれば旧ログがそのまま
+        残り、置換後に中断する余地は（rename 自体が単一のシステムコールで
+        あるため）存在しない。
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(self.path.parent), prefix=self.path.name + ".", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                for report in reports:
+                    fh.write(json.dumps(_report_to_dict(report), sort_keys=True, ensure_ascii=True))
+                    fh.write("\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_name, self.path)
+        except BaseException:
+            # staging ファイルが残っていれば掃除する（置換前に例外が起きた場合のみ
+            # 到達する。os.replace 後の例外は原理上あり得ない）。
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
     def mark_stale(self, current_reference_set_hash: str) -> int:
         """current_reference_set_hash と異なる reference_set_hash を持つ全エントリの

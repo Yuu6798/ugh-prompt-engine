@@ -280,3 +280,81 @@ def test_load_all_rejects_non_finite_similarity(tmp_path, small_gallery):
 
     with pytest.raises(rset.LinkabilityAuditValidationError):
         log.load_all()
+
+
+# --- PR#261 レビュー R19: report_id の内容アドレス再計算検証 -----------------
+
+
+def test_load_all_rejects_tampered_report_id(tmp_path, small_gallery):
+    """report_id を genome_id/reference_set_hash からの再計算と食い違う値へ
+    改ざんした行を拒否する（[UNDERSTEC-F-2] の内容アドレス規約の読み込み側検証）。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    data = json.loads(log.path.read_text(encoding="utf-8").strip())
+    data["report_id"] = "audit-000000000000"  # genome_id/reference_set_hash とは無関係な値
+    assert data["report_id"] != report.report_id  # 前提確認
+    log.path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(rset.LinkabilityAuditValidationError):
+        log.load_all()
+
+
+def test_load_all_accepts_report_id_matching_recomputation(tmp_path, small_gallery):
+    """非退行確認: 正しく計算された report_id を持つ行は従来どおり通過する。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    loaded = log.load_all()
+    assert loaded[0].report_id == report.report_id
+
+
+# --- PR#261 レビュー R17: mark_stale() の書き戻しをアトミック置換にする -----
+
+
+def test_rewrite_interrupted_before_replace_leaves_old_log_intact(tmp_path, small_gallery, monkeypatch):
+    """旧実装は truncate-then-write だったため、書き込み中の中断（プロセス kill・
+    ディスク満杯等）で旧ログが全損し得た。staging + `os.replace()` のアトミック
+    置換であれば、置換（rename）前に中断しても旧ログはそのまま残ることを確認する。
+    """
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    original_text = log.path.read_text(encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated interruption before atomic replace")
+
+    monkeypatch.setattr(rset.os, "replace", _boom)
+
+    with pytest.raises(OSError):
+        log.mark_stale("some-different-hash-because-reference-set-was-rebuilt")
+
+    # 旧ログは無傷（staging ファイルへの書き込み自体は完了していても、本ファイルを
+    # 指す os.replace が呼ばれる前に中断したため本ファイルは一切変化しない）。
+    assert log.path.read_text(encoding="utf-8") == original_text
+    loaded = log.load_all()
+    assert len(loaded) == 1
+    assert loaded[0].stale_audit is False  # mark_stale が失敗したので反映されていない
+
+    # staging ファイルも例外ハンドラで掃除されている（残置しない）。
+    leftover = list(tmp_path.glob(f"{log.path.name}.*.tmp"))
+    assert leftover == []
+
+
+def test_mark_stale_still_succeeds_without_interruption(tmp_path, small_gallery):
+    """非退行確認: 中断がなければ staging+os.replace 化後も mark_stale は従来どおり動く。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    changed = log.mark_stale("some-different-hash")
+    assert changed == 1
+    loaded = log.load_all()
+    assert loaded[0].stale_audit is True
+
+    leftover = list(tmp_path.glob(f"{log.path.name}.*.tmp"))
+    assert leftover == []

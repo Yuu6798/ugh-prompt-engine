@@ -20,6 +20,7 @@ round-trip + 物理事前分布（凍結表）+ `out_of_physio_range` フラグ�
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -278,8 +279,17 @@ def _req(d: Dict[str, Any], key: str, field_name: str) -> Any:
 
 
 def _as_float(value: Any, field_name: str) -> float:
+    """value を float として受理する。NaN/inf は拒否する（PR#261 レビュー R18:
+    formant_offsets 等のリスト内リーフを含む全 float フィールドが `_as_float_tuple`
+    経由でも本関数を通るため、ここ 1 箇所への有限性チェック追加で単体/リスト内
+    双方の float リーフをカバーする。非有限値は後段の演算（physio_range 再計算・
+    embedding 距離計算等）へ NaN/inf 伝播を招き、`NaN <= x` が常に False になる等
+    比較ベースの検証をすり抜けて fail-open し得るため、デシリアライズ時点で拒否する）。
+    """
     _require(isinstance(value, (int, float)) and not isinstance(value, bool), f"{field_name} は数値でなければならない: {value!r}")
-    return float(value)
+    result = float(value)
+    _require(math.isfinite(result), f"{field_name} は有限な数値でなければならない（NaN/inf 不可）: {value!r}")
+    return result
 
 
 def _as_int(value: Any, field_name: str) -> int:
@@ -318,7 +328,9 @@ def from_dict(data: Dict[str, Any]) -> VoiceGenome:
     （source/resonance/noise/register/microprosody/range/physio_range/audit）
     と各リーフフィールドについても、キー欠落時のデフォルト補完は行わず
     明示的に拒否する（PR#261 レビュー R16。デフォルト補完が許されるのは
-    `build_genome()` 等の明示的コンストラクタ経路のみ）。
+    `build_genome()` 等の明示的コンストラクタ経路のみ）。同じ理由で、全 float
+    リーフ（`formant_offsets` 等のリスト内要素を含む）は NaN/inf を拒否し
+    有限値のみを受理する（PR#261 レビュー R18。`_as_float` に集約）。
     """
     _require(isinstance(data, dict), "genome データは dict でなければならない")
 

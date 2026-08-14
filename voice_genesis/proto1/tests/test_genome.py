@@ -291,3 +291,40 @@ def test_from_dict_accepts_physio_range_that_matches_recomputed_value():
     gen = g.build_genome("wild", source=g.SourceSection(tilt=-100.0))
     restored = g.from_dict(g.to_dict(gen))
     assert restored == gen
+
+
+# --- PR#261 レビュー R18: 全 float リーフ（リスト内含む）の有限性必須化 ------
+
+
+def test_from_dict_rejects_nan_in_formant_offsets():
+    """formant_offsets（リスト内の float リーフ）への NaN 注入を拒否する。
+
+    `_as_float_tuple` は各要素を `_as_float` 経由で検証するため、単体 float
+    フィールドと同じ有限性チェックがリスト内要素にも及ぶことを確認する。
+    """
+    data = g.to_dict(g.build_genome("valid"))
+    data["resonance"]["formant_offsets"] = [0.0, float("nan"), 0.0, 0.0]
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
+def test_from_dict_rejects_inf_in_formant_offsets():
+    data = g.to_dict(g.build_genome("valid"))
+    data["resonance"]["formant_offsets"] = [0.0, float("inf"), 0.0, 0.0]
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
+def test_from_dict_rejects_nan_in_scalar_float_leaf():
+    """単体 float リーフ（source.tilt）への NaN 注入も同様に拒否する。"""
+    data = g.to_dict(g.build_genome("valid"))
+    data["source"]["tilt"] = float("nan")
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
+def test_from_dict_rejects_negative_inf_in_scalar_float_leaf():
+    data = g.to_dict(g.build_genome("valid"))
+    data["microprosody"]["vibrato_rate_hz"] = float("-inf")
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
