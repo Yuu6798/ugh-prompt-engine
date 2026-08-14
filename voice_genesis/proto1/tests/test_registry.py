@@ -165,6 +165,26 @@ def test_duplicate_genome_error_is_a_registry_error(registry_path):
     assert issubclass(r.DuplicateGenomeError, r.RegistryError)
 
 
+# --- PR#261 レビュー R5: load_all() 自体での重複 genome_id 検出 -------------
+
+
+def test_load_all_rejects_duplicate_genome_id_even_when_not_written_via_append(registry_path):
+    """append() 自身の重複拒否（C3）だけでは、append() を経由せず直接編集・
+    結合された JSONL ファイルに紛れ込んだ重複 genome_id を防げない。
+    load_all() 自身にも同じ規律を敷く（R5）。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    # append() の重複ガードを迂回し、同一行をファイルへ直接複製する
+    # （過去バージョンからの引き継ぎ・手動結合を模す）。
+    line = registry_path.read_text(encoding="utf-8").rstrip("\n")
+    registry_path.write_text(line + "\n" + line + "\n", encoding="utf-8")
+
+    with pytest.raises(r.DuplicateGenomeError):
+        reg.load_all()
+
+
 # --- PR#261 レビュー C5/C6 の同型穴掃討: registry_schema の検証 --------------
 
 

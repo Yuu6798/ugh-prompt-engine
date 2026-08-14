@@ -254,7 +254,8 @@ def _publish_outputs(replacements: List[Tuple[Path, Path]]) -> None:
     「一部だけ新しい、個々には完結した正本」に倒れる設計。真の全ファイル
     トランザクションには results_final/ ディレクトリ全体の atomic swap が必要だが、
     同ディレクトリには本デモ以外が書く既存の committed 記録も同居するため、
-    本 PR の範囲では見送る）。
+    本 PR の範囲では見送る。見送り判断の根拠・再入条件は PR#261 レビュー R6 =
+    `results_final/underspec_log_final.md` [UNDERSPEC-F-11] を参照）。
     """
     for staging_path, final_path in replacements:
         os.replace(staging_path, final_path)

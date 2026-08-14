@@ -105,7 +105,12 @@ def gate1_f0_tracking(rows: List[NoteMeasurement]) -> Dict:
 
 
 def gate2_plausibility(rows: List[NoteMeasurement]) -> Dict:
-    violations = [r for r in rows if r.r_median < PERIODICITY_R_MIN]
+    # 非有限（NaN/inf）の r_median は「未測定」であり「measured 良好」ではない。
+    # `r_median < PERIODICITY_R_MIN` だけで判定すると NaN は比較が常に False に
+    # なるため violation に数えられず、測定不能ノートが黙って合格側へ漏れる
+    # （PR#261 レビュー R7）。有限性チェックを閾値比較より先に行い、非有限は
+    # 無条件で violation 側へ倒す（fail-closed）。
+    violations = [r for r in rows if not np.isfinite(r.r_median) or r.r_median < PERIODICITY_R_MIN]
     return {
         "n_notes": len(rows), "n_violations": len(violations),
         "r_threshold": PERIODICITY_R_MIN,

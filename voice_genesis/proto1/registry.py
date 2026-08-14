@@ -217,15 +217,29 @@ class GenomeRegistry:
         return entry
 
     def load_all(self) -> List[RegistryEntry]:
+        """全エントリを読み込む。同一 genome_id の複数行は拒否する（PR#261
+        レビュー R5）: `append()` 自身は重複を拒否するが、append() を経由せず
+        直接編集・結合された JSONL ファイル（過去バージョンからの引き継ぎや
+        手動修復等）に重複が紛れ込んだ場合、`get()`/`lineage()` が末尾優先で
+        暗黙に解決してしまうと来歴が黙って上書きされたように見える危険が
+        append() 単体の防御では防ぎきれない。ロード時にも同じ規律を敷く。
+        """
         if not self.path.exists():
             return []
         entries = []
+        seen_ids: set = set()
         with self.path.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
                     continue
-                entries.append(_entry_from_dict(json.loads(line)))
+                entry = _entry_from_dict(json.loads(line))
+                if entry.genome_id in seen_ids:
+                    raise DuplicateGenomeError(
+                        f"registry に重複 genome_id を検出（実際: {entry.genome_id!r}）"
+                    )
+                seen_ids.add(entry.genome_id)
+                entries.append(entry)
         return entries
 
     def get(self, genome_id: str) -> Optional[RegistryEntry]:
@@ -248,7 +262,9 @@ class GenomeRegistry:
         """
         by_id: Dict[str, RegistryEntry] = {}
         for entry in self.load_all():
-            by_id[entry.genome_id] = entry  # 同一 id が複数あれば最後の登録を採用
+            # load_all() が重複 genome_id を既に拒否する（R5）ため、ここでの
+            # 代入は常に 1 対 1 の登録になる。
+            by_id[entry.genome_id] = entry
 
         if genome_id not in by_id:
             raise RegistryError(f"genome_id が見つからない: {genome_id!r}")

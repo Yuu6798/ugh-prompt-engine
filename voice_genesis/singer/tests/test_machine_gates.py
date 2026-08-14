@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -63,3 +64,40 @@ def test_gate5_aliasing_both_voices():
 def test_gate6_grip_quick_check_voice_a():
     g6 = gc.gate6_grip_quick_check(rs.voice_a())
     assert g6["pass"], g6
+
+
+# --- PR#261 レビュー R7: r_median 非有限（NaN/inf）値の fail-closed 化 --------
+# 曲全体のレンダリングを伴わない軽量ユニットテスト（NoteMeasurement を直接構築）。
+
+
+def _note(r_median: float, note_index: int = 0) -> gc.NoteMeasurement:
+    return gc.NoteMeasurement(
+        note_index=note_index, kana="あ", true_midi=60.0, true_hz=261.63,
+        est_hz=261.63, cents_err=0.0, r_median=r_median,
+    )
+
+
+def test_gate2_plausibility_treats_nan_r_median_as_violation():
+    """r_median が NaN（未測定）のノートは `< threshold` が常に False になり
+    素通りしてしまう旧実装のバグ（PR#261 R7）を、有限性チェックで塞ぐ。"""
+    rows = [_note(0.9, 0), _note(float("nan"), 1), _note(0.95, 2)]
+    g2 = gc.gate2_plausibility(rows)
+    assert g2["n_violations"] == 1
+    assert g2["pass"] is False
+    assert 1 in [v[0] for v in g2["violating_notes"]]
+
+
+def test_gate2_plausibility_treats_inf_r_median_as_violation():
+    rows = [_note(0.9, 0), _note(float("inf"), 1)]
+    g2 = gc.gate2_plausibility(rows)
+    assert g2["n_violations"] == 1
+    assert g2["pass"] is False
+
+
+def test_gate2_plausibility_passes_when_all_r_median_finite_and_above_threshold():
+    """非退行確認: 全ノートが有限かつ閾値以上なら従来どおり pass する。"""
+    rows = [_note(0.9, 0), _note(0.5, 1), _note(gc.PERIODICITY_R_MIN, 2)]  # 境界値も含む
+    g2 = gc.gate2_plausibility(rows)
+    assert g2["n_violations"] == 0
+    assert g2["pass"] is True
+    assert not math.isnan(g2["n_violations"])
