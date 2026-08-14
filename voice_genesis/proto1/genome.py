@@ -29,6 +29,15 @@ SCHEMA_VERSION = "voice-genome/0.2"
 # 5 声区の順序（noise.register_gains / voice_r0.REGISTERS と一致させる）。
 REGISTER_ORDER: Tuple[str, str, str, str, str] = ("chest", "mix", "head", "falsetto", "whistle")
 
+# source.source_mode の許容語彙（PR#261 レビュー R26）。builder（sampler.py
+# `_SOURCE_MODES` / harness voice_r0.py `SourceParams.source_mode_tilt_gain`
+# のキー集合）が発行する値と一致させた閉じた集合。この 3 値以外は
+# `harness/voice_r0.py` の `mode_gain = src.source_mode_tilt_gain.get(src.source_mode, 1.0)`
+# のようにデフォルト値へ黙って fallback する消費者コードがあり得るため、
+# デシリアライズ時点で域外値を拒否しないと「無効な mode を指定したつもりが
+# 静かに modal 相当として扱われる」誤解を生む。
+SOURCE_MODES: Tuple[str, str, str] = ("modal", "breathy", "pressed")
+
 
 class GenomeValidationError(ValueError):
     """VoiceGenome の JSON デシリアライズ / 構築時の型・構造不正。"""
@@ -302,6 +311,14 @@ def _as_str(value: Any, field_name: str) -> str:
     return value
 
 
+def _as_enum(value: Any, field_name: str, allowed: Tuple[str, ...]) -> str:
+    """value が文字列かつ `allowed`（閉じた語彙）のいずれかであることを検証する
+    （PR#261 レビュー R26）。"""
+    s = _as_str(value, field_name)
+    _require(s in allowed, f"{field_name} は {allowed} のいずれかでなければならない（実際: {s!r}）")
+    return s
+
+
 def _as_bool(value: Any, field_name: str) -> bool:
     _require(isinstance(value, bool), f"{field_name} は真偽値でなければならない: {value!r}")
     return value
@@ -331,6 +348,12 @@ def from_dict(data: Dict[str, Any]) -> VoiceGenome:
     `build_genome()` 等の明示的コンストラクタ経路のみ）。同じ理由で、全 float
     リーフ（`formant_offsets` 等のリスト内要素を含む）は NaN/inf を拒否し
     有限値のみを受理する（PR#261 レビュー R18。`_as_float` に集約）。
+    `source.source_mode` は builder（sampler.py）が発行する閉じた語彙
+    `SOURCE_MODES` のいずれかでなければ拒否する（PR#261 レビュー R26。
+    schema 内の他フィールドを掃討したが、他に閉じた語彙を持つ文字列
+    フィールドは無い——`physio_range.violated_bounds` は文字列の集合だが
+    `compute_physio_range()` との再計算一致検証 (C5) で既に間接的に閉じた
+    語彙が保証されている）。
     """
     _require(isinstance(data, dict), "genome データは dict でなければならない")
 
@@ -347,7 +370,7 @@ def from_dict(data: Dict[str, Any]) -> VoiceGenome:
     _require(isinstance(s, dict), "source は dict でなければならない")
     source = SourceSection(
         tilt=_as_float(_req(s, "tilt", "source.tilt"), "source.tilt"),
-        source_mode=_as_str(_req(s, "source_mode", "source.source_mode"), "source.source_mode"),
+        source_mode=_as_enum(_req(s, "source_mode", "source.source_mode"), "source.source_mode", SOURCE_MODES),
     )
 
     r = _req(data, "resonance", "resonance")

@@ -328,3 +328,25 @@ def test_from_dict_rejects_negative_inf_in_scalar_float_leaf():
     data["microprosody"]["vibrato_rate_hz"] = float("-inf")
     with pytest.raises(g.GenomeValidationError):
         g.from_dict(data)
+
+
+# --- PR#261 レビュー R26: source.source_mode の閉じた語彙検証 ---------------
+
+
+def test_from_dict_rejects_source_mode_outside_closed_vocabulary():
+    """builder（sampler.py `_SOURCE_MODES`）が発行する集合 {modal, breathy,
+    pressed} の域外値（例: 手編集による typo や未定義の新モード名）を拒否する。
+    """
+    data = g.to_dict(g.build_genome("valid"))
+    assert data["source"]["source_mode"] in g.SOURCE_MODES  # 前提確認
+    data["source"]["source_mode"] = "robotic"  # 域外値
+    with pytest.raises(g.GenomeValidationError):
+        g.from_dict(data)
+
+
+@pytest.mark.parametrize("mode", list(g.SOURCE_MODES))
+def test_from_dict_accepts_each_valid_source_mode_non_regression(mode):
+    """非退行確認: SOURCE_MODES の全値は従来どおり受理される。"""
+    gen = g.build_genome("valid", source=g.SourceSection(tilt=-10.0, source_mode=mode))
+    restored = g.from_dict(g.to_dict(gen))
+    assert restored.source.source_mode == mode
