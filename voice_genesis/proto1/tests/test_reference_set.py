@@ -525,3 +525,66 @@ def test_append_still_succeeds_without_interruption(tmp_path, small_gallery):
 
     leftover = list(tmp_path.glob(f"{log.path.name}.*.tmp"))
     assert leftover == []
+
+
+# --- PR#261 レビュー R37: append()/mark_stale() の read-modify-replace 全区間を
+# ロックで直列化 ------------------------------------------------------------
+
+
+def test_append_rejects_when_lock_already_held(tmp_path, small_gallery):
+    """ロック保持中の並行 append を模擬する: `<正本>.lock` が既に存在する状態で
+    append() を呼ぶと、検証・書き込みのいずれも行わず即座に `FileLockError`
+    で拒否されることを確認する（PR#261 R37）。
+    """
+    from filelock import FileLockError
+
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    lock_path = log._lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("12345", encoding="utf-8")  # 別プロセスが保持中を模す
+
+    try:
+        report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+        with pytest.raises(FileLockError):
+            log.append(report)
+
+        # 拒否されたので何も書き込まれていない(ログファイル自体が未作成のまま)。
+        assert not log.path.exists()
+    finally:
+        lock_path.unlink()
+
+
+def test_mark_stale_rejects_when_lock_already_held(tmp_path, small_gallery):
+    """mark_stale() 側も append() と同じロックで排他されることを確認する
+    （PR#261 R37）。"""
+    from filelock import FileLockError
+
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    lock_path = log._lock_path()
+    lock_path.write_text("12345", encoding="utf-8")  # 別プロセスが保持中を模す
+
+    try:
+        with pytest.raises(FileLockError):
+            log.mark_stale("some-different-hash")
+
+        # 拒否されたので stale_audit は変化していない。
+        loaded = log.load_all()
+        assert loaded[0].stale_audit is False
+    finally:
+        lock_path.unlink()
+
+
+def test_append_and_mark_stale_still_succeed_after_lock_released_non_regression(tmp_path, small_gallery):
+    """非退行確認: ロックファイルが存在しなければ append()/mark_stale() は
+    従来どおり成功し、ロックファイルはブロック終了時に必ず削除される。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+    assert not log._lock_path().exists()
+
+    changed = log.mark_stale("some-different-hash")
+    assert changed == 1
+    assert not log._lock_path().exists()

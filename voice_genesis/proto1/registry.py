@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from filelock import file_lock
 from genome import GenomeValidationError, VoiceGenome, from_dict, to_dict
 from hashing import sha256_of_canonical_json
 
@@ -279,6 +280,11 @@ class GenomeRegistry:
                 pass
             raise
 
+    def _lock_path(self) -> Path:
+        """append() の read-modify-replace 区間を排他する `<正本>.lock`
+        （PR#261 レビュー R37。`filelock.file_lock()` の docstring参照）。"""
+        return self.path.with_name(self.path.name + ".lock")
+
     def append(
         self,
         genome: VoiceGenome,
@@ -312,85 +318,100 @@ class GenomeRegistry:
                 f"（実際: {len(parent_ids)} 個 {parent_ids!r}）"
             )
 
-        genome_id = genome_content_hash(genome)
-        if self.get(genome_id) is not None:
-            # append-only ストアは genome_id の再出現を「来歴の書き換え」として扱う
-            # （get()/lineage() は末尾優先で解決するため、同一 genome_id を異なる
-            # op/seed/parents で再 append すると既存エントリの来歴が黙って上書き
-            # されたように見えてしまう。PR#261 レビュー C3）。
-            raise DuplicateGenomeError(
-                f"genome_id は既にレジストリに存在するため追記を拒否する（実際: {genome_id!r}）"
-            )
-
-        # PR#261 レビュー R10(a): parents の各 ID が既に registry に存在する
-        # ことを検証する。存在しない親を指すエントリを許すと、lineage() が
-        # 遡上を完走できない（親が見つからず途中で打ち切られる）来歴の欠損を
-        # 作ってしまう。
-        for parent_id in parent_ids:
-            if self.get(parent_id) is None:
-                raise MissingParentError(
-                    f"parents に registry 未登録の genome_id が含まれる（実際: {parent_id!r}）"
+        # PR#261 レビュー R37: 重複/親存在の検証（`self.get()` 経由の
+        # `load_all()`）から実際の書き込み（staging 構築 → `os.replace()`）
+        # までの read-modify-replace 全区間をプロセス間ロックで直列化する。
+        # ロックなしだと、検証から書き込みまでの間に別プロセスが割り込んで
+        # 書き込みを完了させた場合、検証済みの前提（例: 検証時点では存在
+        # しなかった genome_id が、実際の書き込み直前には既に存在する）が
+        # 古くなったまま正本を置換してしまうレースが理論上あり得た
+        # （詳細は `filelock.py` の docstring 参照）。
+        #
+        # ロックファイル自体もこの正本と同じディレクトリに作るため、
+        # `os.open(O_CREAT|O_EXCL)` の前に親ディレクトリの存在を保証する
+        # 必要がある（正本ディレクトリがまだ存在しない初回 append() では
+        # `_write_all_atomic()` 側の mkdir より前にロック獲得が走るため）。
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with file_lock(self._lock_path()):
+            genome_id = genome_content_hash(genome)
+            if self.get(genome_id) is not None:
+                # append-only ストアは genome_id の再出現を「来歴の書き換え」として扱う
+                # （get()/lineage() は末尾優先で解決するため、同一 genome_id を異なる
+                # op/seed/parents で再 append すると既存エントリの来歴が黙って上書き
+                # されたように見えてしまう。PR#261 レビュー C3）。
+                raise DuplicateGenomeError(
+                    f"genome_id は既にレジストリに存在するため追記を拒否する（実際: {genome_id!r}）"
                 )
 
-        created_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+            # PR#261 レビュー R10(a): parents の各 ID が既に registry に存在する
+            # ことを検証する。存在しない親を指すエントリを許すと、lineage() が
+            # 遡上を完走できない（親が見つからず途中で打ち切られる）来歴の欠損を
+            # 作ってしまう。
+            for parent_id in parent_ids:
+                if self.get(parent_id) is None:
+                    raise MissingParentError(
+                        f"parents に registry 未登録の genome_id が含まれる（実際: {parent_id!r}）"
+                    )
 
-        eval_scores = eval_scores or {"plausibility": None, "grip_ref": None, "novelty": None}
-        audit = {
-            "reference_set_hash": genome.audit.reference_set_hash,
-            "linkability_report_id": genome.audit.linkability_report_id,
-            "residual_gate_passed": genome.audit.residual_gate_passed,
-        }
+            created_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
 
-        entry = RegistryEntry(
-            genome_id=genome_id,
-            version=genome.schema_version,
-            created_at=created_at,
-            parents=parent_ids,
-            op=op,
-            seed=seed,
-            renderer_version=RENDERER_VERSION,
-            feature_set_version=FEATURE_SET_VERSION,
-            eval=eval_scores,
-            audit=audit,
-            genome=to_dict(genome),
-        )
+            eval_scores = eval_scores or {"plausibility": None, "grip_ref": None, "novelty": None}
+            audit = {
+                "reference_set_hash": genome.audit.reference_set_hash,
+                "linkability_report_id": genome.audit.linkability_report_id,
+                "residual_gate_passed": genome.audit.residual_gate_passed,
+            }
 
-        # PR#261 レビュー R28: 書き込み前に「直列化 → _entry_from_dict() での
-        # 再読み込み」というラウンドトリップを試し、load_all() が将来拒否
-        # するであろうエントリは append() の時点で拒否する（書読対称性の
-        # 保証）。append() は呼び出し元から渡された `genome`（VoiceGenome
-        # オブジェクト）を `to_dict()` するだけで、`from_dict()` 側にしか
-        # 実装されていない意味論検証（例: R26 の source_mode 閉じた語彙、
-        # R18 の float 有限性、C5 の physio_range 再計算一致）を一切通さない。
-        # frozen dataclass は構築時に値を検証しないため、呼び出し元が
-        # `SourceSection(source_mode="robotic")` のような不正な値を直接
-        # 組み立てて渡すと、append() 自体は成功するのに後で load_all() が
-        # そのエントリを拒否する「書けるが読めない」非対称な状態を生み得た。
-        # この事前ラウンドトリップは `_entry_from_dict()` を経由するため、
-        # 埋め込み genome に対する `from_dict()` の全検証（R3/R12/R16/R18/
-        # R26 等）を含め、読み込み側の全規律を書き込み前に前倒しで適用する。
-        #
-        # 性能注記: 現状（registry 規模は数〜数十エントリ）では 1 回の JSON
-        # シリアライズ + パース + 全検証のオーバーヘッドは無視できるが、
-        # 将来 append() が高頻度・大規模 registry で使われるようになった
-        # 場合はこの検証コストが append 1 回あたりの定数オーバーヘッドとして
-        # 効いてくる点に留意すること。
-        line = entry.to_json_line()
-        try:
-            _entry_from_dict(json.loads(line))
-        except RegistryError as exc:
-            raise RegistryError(
-                "append() が構築したエントリが load_all() 側の検証を通過しない"
-                f"（書読対称性違反。genome_id={genome_id!r}）: {exc}"
-            ) from exc
+            entry = RegistryEntry(
+                genome_id=genome_id,
+                version=genome.schema_version,
+                created_at=created_at,
+                parents=parent_ids,
+                op=op,
+                seed=seed,
+                renderer_version=RENDERER_VERSION,
+                feature_set_version=FEATURE_SET_VERSION,
+                eval=eval_scores,
+                audit=audit,
+                genome=to_dict(genome),
+            )
 
-        # PR#261 レビュー R35: 追記の書き込みを `self.path.open("a")` での
-        # write() から `_write_all_atomic()`（staging + `os.replace()`
-        # アトミック置換）へ変更する。詳細は `_write_all_atomic()` の
-        # docstring を参照。
-        existing_entries = self.load_all()
-        self._write_all_atomic(existing_entries + [entry])
-        return entry
+            # PR#261 レビュー R28: 書き込み前に「直列化 → _entry_from_dict() での
+            # 再読み込み」というラウンドトリップを試し、load_all() が将来拒否
+            # するであろうエントリは append() の時点で拒否する（書読対称性の
+            # 保証）。append() は呼び出し元から渡された `genome`（VoiceGenome
+            # オブジェクト）を `to_dict()` するだけで、`from_dict()` 側にしか
+            # 実装されていない意味論検証（例: R26 の source_mode 閉じた語彙、
+            # R18 の float 有限性、C5 の physio_range 再計算一致）を一切通さない。
+            # frozen dataclass は構築時に値を検証しないため、呼び出し元が
+            # `SourceSection(source_mode="robotic")` のような不正な値を直接
+            # 組み立てて渡すと、append() 自体は成功するのに後で load_all() が
+            # そのエントリを拒否する「書けるが読めない」非対称な状態を生み得た。
+            # この事前ラウンドトリップは `_entry_from_dict()` を経由するため、
+            # 埋め込み genome に対する `from_dict()` の全検証（R3/R12/R16/R18/
+            # R26 等）を含め、読み込み側の全規律を書き込み前に前倒しで適用する。
+            #
+            # 性能注記: 現状（registry 規模は数〜数十エントリ）では 1 回の JSON
+            # シリアライズ + パース + 全検証のオーバーヘッドは無視できるが、
+            # 将来 append() が高頻度・大規模 registry で使われるようになった
+            # 場合はこの検証コストが append 1 回あたりの定数オーバーヘッドとして
+            # 効いてくる点に留意すること。
+            line = entry.to_json_line()
+            try:
+                _entry_from_dict(json.loads(line))
+            except RegistryError as exc:
+                raise RegistryError(
+                    "append() が構築したエントリが load_all() 側の検証を通過しない"
+                    f"（書読対称性違反。genome_id={genome_id!r}）: {exc}"
+                ) from exc
+
+            # PR#261 レビュー R35: 追記の書き込みを `self.path.open("a")` での
+            # write() から `_write_all_atomic()`（staging + `os.replace()`
+            # アトミック置換）へ変更する。詳細は `_write_all_atomic()` の
+            # docstring を参照。
+            existing_entries = self.load_all()
+            self._write_all_atomic(existing_entries + [entry])
+            return entry
 
     def load_all(self) -> List[RegistryEntry]:
         """全エントリを読み込む。同一 genome_id の複数行は拒否する（PR#261

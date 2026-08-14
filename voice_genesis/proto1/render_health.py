@@ -89,6 +89,11 @@ class RegisterTransitionReport:
     max_db_jump: float
     passed: bool
     threshold_db: float = REGISTER_TRANSITION_MAX_DB
+    # PR#261 レビュー R38: 実測 waveform 数（ProbeSpec 由来の期待数との照合
+    # 結果）。`expected_note_count != actual_note_count` の場合は測定不能
+    # FAIL として扱う（下記 docstring 参照）。
+    expected_note_count: int = 0
+    actual_note_count: int = 0
 
 
 def _mid_window_rms(sig: np.ndarray, frac: float = 0.5) -> float:
@@ -108,6 +113,26 @@ def register_transition_report(
     genome: VoiceGenome, probe_name: str = "register_sweep", threshold_db: float = REGISTER_TRANSITION_MAX_DB
 ) -> RegisterTransitionReport:
     result = probes.render_probe(genome, probe_name)
+    # PR#261 レビュー R38: 実測 waveform 数が ProbeSpec の期待数
+    # （`notes_midi` の長さ）と一致することを、評価（RMS/隣接差計算）の
+    # 前に厳密照合する。旧実装は `result.waveforms` をそのまま走査していた
+    # ため、レンダラが 0 本または 1 本しか返さない退行が起きても例外には
+    # ならず、`jumps`（隣接差のリスト）が空リストになるだけで
+    # `max_jump = 0.0`（`<=` 閾値内）により無条件で PASS してしまっていた
+    # （「遷移を 1 つも比較していない」のに「全遷移が連続していた」と
+    # 取り違える不完全証拠 PASS。plausibility.py の R38 zip 黙落と同型）。
+    expected_count = len(probes.PROBE_DEFINITIONS[probe_name].notes_midi)
+    actual_count = len(result.waveforms)
+    if actual_count != expected_count:
+        return RegisterTransitionReport(
+            note_rms_db=[],
+            adjacent_db_jumps=[],
+            max_db_jump=float("nan"),
+            passed=False,
+            threshold_db=threshold_db,
+            expected_note_count=expected_count,
+            actual_note_count=actual_count,
+        )
     note_rms_db = [float(20.0 * np.log10(_mid_window_rms(wave))) for wave in result.waveforms]
     jumps = [abs(note_rms_db[i + 1] - note_rms_db[i]) for i in range(len(note_rms_db) - 1)]
     max_jump = float(max(jumps)) if jumps else 0.0
@@ -117,6 +142,8 @@ def register_transition_report(
         max_db_jump=max_jump,
         passed=bool(max_jump <= threshold_db),
         threshold_db=threshold_db,
+        expected_note_count=expected_count,
+        actual_note_count=actual_count,
     )
 
 

@@ -6,9 +6,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from dataclasses import replace
+
 import numpy as np
 
 import genome as g
+import probes
 import render_health as rh
 import sampler
 
@@ -43,6 +46,9 @@ def test_register_transition_continuity_for_default_genome():
     assert len(report.adjacent_db_jumps) == 45
     assert report.passed is True
     assert report.max_db_jump <= rh.REGISTER_TRANSITION_MAX_DB
+    # PR#261 レビュー R38: 非退行確認。実測数が期待数（46）と一致すること。
+    assert report.expected_note_count == 46
+    assert report.actual_note_count == 46
 
 
 def test_register_transition_continuity_across_sampled_genomes():
@@ -53,6 +59,54 @@ def test_register_transition_continuity_across_sampled_genomes():
         if not report.passed:
             failures.append((seed, report.max_db_jump))
     assert not failures, f"register transition 不連続: {failures}"
+
+
+# --- PR#261 レビュー R38: register_transition_report() の期待数照合 --------
+
+
+def test_register_transition_report_fails_closed_when_zero_waveforms_returned(monkeypatch):
+    """probes.render_probe() が waveforms=[] を返す退行を注入する。旧実装は
+    `jumps=[]` → `max_jump=0.0`（`<=` 閾値内）で無条件 PASS してしまっていたが、
+    R38 により実測数(0) != 期待数(46) で測定不能 FAIL になることを確認する。
+    """
+    gen = g.build_genome("register-zero")
+    real_render_probe = probes.render_probe
+
+    def _fake_render_probe(genome, probe_name):
+        result = real_render_probe(genome, probe_name)
+        if probe_name == "register_sweep":
+            return replace(result, waveforms=[])
+        return result
+
+    monkeypatch.setattr(rh.probes, "render_probe", _fake_render_probe)
+
+    report = rh.register_transition_report(gen)
+    assert report.passed is False
+    assert report.expected_note_count == 46
+    assert report.actual_note_count == 0
+    assert report.note_rms_db == []
+    assert report.adjacent_db_jumps == []
+
+
+def test_register_transition_report_fails_closed_when_one_waveform_returned(monkeypatch):
+    """1 本のみ返る退行でも同様に測定不能 FAIL になることを確認する（1 本しか
+    無ければ `adjacent_db_jumps` が空になり `max_jump=0.0` の偽 PASS が起き得た）。
+    """
+    gen = g.build_genome("register-one")
+    real_render_probe = probes.render_probe
+
+    def _fake_render_probe(genome, probe_name):
+        result = real_render_probe(genome, probe_name)
+        if probe_name == "register_sweep":
+            return replace(result, waveforms=result.waveforms[:1])
+        return result
+
+    monkeypatch.setattr(rh.probes, "render_probe", _fake_render_probe)
+
+    report = rh.register_transition_report(gen)
+    assert report.passed is False
+    assert report.expected_note_count == 46
+    assert report.actual_note_count == 1
 
 
 def test_formant_sweep_direction_consistency_for_default_genome():

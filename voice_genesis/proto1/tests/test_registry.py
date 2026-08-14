@@ -652,3 +652,41 @@ def test_append_still_succeeds_without_interruption(registry_path):
 
     leftover = list(registry_path.parent.glob(f"{registry_path.name}.*.tmp"))
     assert leftover == []
+
+
+# --- PR#261 レビュー R37: append() の read-modify-replace 全区間をロックで直列化 ---
+
+
+def test_append_rejects_when_lock_already_held(registry_path):
+    """ロック保持中の並行 append を模擬する: `<正本>.lock` が既に存在する状態で
+    append() を呼ぶと、検証・書き込みのいずれも行わず即座に `FileLockError`
+    で拒否されることを確認する（PR#261 R37）。
+    """
+    reg = r.GenomeRegistry(registry_path)
+    lock_path = reg._lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("12345", encoding="utf-8")  # 別プロセスが保持中を模す
+
+    from filelock import FileLockError
+
+    try:
+        g1 = sampler.sample(1)
+        with pytest.raises(FileLockError):
+            reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+
+        # 拒否されたので何も書き込まれていない（registry ファイル自体が未作成のまま）。
+        assert not registry_path.exists()
+    finally:
+        lock_path.unlink()
+
+
+def test_append_still_succeeds_after_lock_released_non_regression(registry_path):
+    """非退行確認: ロックファイルが存在しなければ（または前回 append() 完了で
+    正しく解放されていれば）append() は従来どおり成功し、ロックファイルは
+    ブロック終了時に必ず削除される。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    entry = reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+
+    assert entry.genome_id in {e.genome_id for e in reg.load_all()}
+    assert not reg._lock_path().exists()  # ロックファイルが残置されていない

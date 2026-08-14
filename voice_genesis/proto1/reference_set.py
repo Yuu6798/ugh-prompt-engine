@@ -48,6 +48,7 @@ import numpy as np
 import bridge  # sys.path に harness を追加する副作用込み
 import probes
 import sampler
+from filelock import file_lock
 from genome import VoiceGenome, to_dict
 from hashing import sha256_of_canonical_json
 from registry import genome_content_hash
@@ -517,55 +518,77 @@ class LinkabilityAuditLog:
     def __init__(self, path: Union[str, Path]):
         self.path = Path(path)
 
+    def _lock_path(self) -> Path:
+        """append()/mark_stale() の read-modify-replace 区間を排他する
+        `<正本>.lock`（PR#261 レビュー R37。`filelock.file_lock()` の
+        docstring 参照）。"""
+        return self.path.with_name(self.path.name + ".lock")
+
     def append(self, report: LinkabilityAuditReport) -> None:
-        # PR#261 レビュー R33: report_id は内容アドレス（R19: {genome_id,
-        # reference_set_hash} から一意に決まる）である以上、同一 report_id
-        # の複数行は append-only ログとして矛盾する（load_all() 側で新設
-        # した重複検出（下記）が拒否する）。ラウンドトリップ検証（新規
-        # エントリの直列化・再解析・全意味論再検証を伴い相対的に重い）に
-        # 先立ち、既存ログとの ID 重複だけを先に確認する軽量チェックとして
-        # 実施する（fail fast）。
+        # PR#261 レビュー R37: 重複検出（load_all()）から実際の書き込み
+        # （_rewrite() の staging 構築 → os.replace()）までの
+        # read-modify-replace 全区間をプロセス間ロックで直列化する。ロック
+        # なしだと、検証から書き込みまでの間に別プロセスが割り込んで書き
+        # 込みを完了させた場合、検証済みの前提（例: 検証時点では存在しな
+        # かった report_id が、実際の書き込み直前には既に存在する）が
+        # 古くなったまま正本を置換してしまうレースが理論上あり得た
+        # （詳細は `filelock.py` の docstring 参照）。
         #
-        # PR#261 レビュー R35: 以前はここで `self.load_all()` を呼んだ結果を
-        # 重複検出にのみ使い捨てていたが、書き込みも全件アトミック置換
-        # （下記）に切り替えたため、同じ結果を書き込みにも再利用する
-        # （二重の I/O を避ける）。
-        existing_reports = self.load_all()
-        existing_ids = {r.report_id for r in existing_reports}
-        if report.report_id in existing_ids:
-            raise LinkabilityAuditValidationError(
-                f"監査ログに既に存在する report_id への追記を拒否する（実際: {report.report_id!r}）"
-            )
+        # ロックファイル自体もこの正本と同じディレクトリに作るため、
+        # `os.open(O_CREAT|O_EXCL)` の前に親ディレクトリの存在を保証する
+        # 必要がある（正本ディレクトリがまだ存在しない初回 append() では
+        # `_rewrite()` 側の mkdir より前にロック獲得が走るため。registry.py
+        # の同型修正参照）。
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with file_lock(self._lock_path()):
+            # PR#261 レビュー R33: report_id は内容アドレス（R19: {genome_id,
+            # reference_set_hash} から一意に決まる）である以上、同一 report_id
+            # の複数行は append-only ログとして矛盾する（load_all() 側で新設
+            # した重複検出（下記）が拒否する）。ラウンドトリップ検証（新規
+            # エントリの直列化・再解析・全意味論再検証を伴い相対的に重い）に
+            # 先立ち、既存ログとの ID 重複だけを先に確認する軽量チェックとして
+            # 実施する（fail fast）。
+            #
+            # PR#261 レビュー R35: 以前はここで `self.load_all()` を呼んだ結果を
+            # 重複検出にのみ使い捨てていたが、書き込みも全件アトミック置換
+            # （下記）に切り替えたため、同じ結果を書き込みにも再利用する
+            # （二重の I/O を避ける）。
+            existing_reports = self.load_all()
+            existing_ids = {r.report_id for r in existing_reports}
+            if report.report_id in existing_ids:
+                raise LinkabilityAuditValidationError(
+                    f"監査ログに既に存在する report_id への追記を拒否する（実際: {report.report_id!r}）"
+                )
 
-        # PR#261 レビュー R30: registry.py::GenomeRegistry.append() の R28 と
-        # 同型の書読対称性保証。append() はここまで常に `audit_linkability()`
-        # が内部で構築した `LinkabilityAuditReport` のみを受理する設計だが、
-        # 呼び出し元が `LinkabilityAuditReport(...)` を直接構築して e1_pass
-        # 等の宣言値を実測値と矛盾させたレポート（本来 `_report_from_dict()`
-        # の R9/R13/R19 検証が拒否するはずの内容）を渡すと、append() 自体は
-        # 無検証で成功してしまい「書けるが load_all()/mark_stale() では
-        # 読めない」非対称なログ行を作れてしまっていた。書き込み前に
-        # 直列化 → `_report_from_dict()` のラウンドトリップを試し、
-        # load_all() が将来拒否するであろう行は書き込み時点で拒否する。
-        line = json.dumps(_report_to_dict(report), sort_keys=True, ensure_ascii=True)
-        try:
-            _report_from_dict(json.loads(line))
-        except LinkabilityAuditValidationError as exc:
-            raise LinkabilityAuditValidationError(
-                "append() が構築したレポートは load_all() 側の検証を通過しない"
-                f"（書読対称性違反。report_id={report.report_id!r}）: {exc}"
-            ) from exc
+            # PR#261 レビュー R30: registry.py::GenomeRegistry.append() の R28 と
+            # 同型の書読対称性保証。append() はここまで常に `audit_linkability()`
+            # が内部で構築した `LinkabilityAuditReport` のみを受理する設計だが、
+            # 呼び出し元が `LinkabilityAuditReport(...)` を直接構築して e1_pass
+            # 等の宣言値を実測値と矛盾させたレポート（本来 `_report_from_dict()`
+            # の R9/R13/R19 検証が拒否するはずの内容）を渡すと、append() 自体は
+            # 無検証で成功してしまい「書けるが load_all()/mark_stale() では
+            # 読めない」非対称なログ行を作れてしまっていた。書き込み前に
+            # 直列化 → `_report_from_dict()` のラウンドトリップを試し、
+            # load_all() が将来拒否するであろう行は書き込み時点で拒否する。
+            line = json.dumps(_report_to_dict(report), sort_keys=True, ensure_ascii=True)
+            try:
+                _report_from_dict(json.loads(line))
+            except LinkabilityAuditValidationError as exc:
+                raise LinkabilityAuditValidationError(
+                    "append() が構築したレポートは load_all() 側の検証を通過しない"
+                    f"（書読対称性違反。report_id={report.report_id!r}）: {exc}"
+                ) from exc
 
-        # PR#261 レビュー R35: 追記の書き込みを `self.path.open("a")` での
-        # write() から、既存全件 + 新規レポートを `_rewrite()`（R17 で導入した
-        # staging + `os.replace()` アトミック置換）へ委譲する形へ変更する。
-        # `a` モードの write() は書き込み途中（プロセス kill・ディスク満杯等）
-        # の中断で正本 JSONL の末尾に破損した部分行が恒久的に残り得た。
-        # load_all() はそのような行で必ず `json.loads()` 例外を投げるため、
-        # 1 回の中断がログ全体を読み込み不能にしてしまう。`_rewrite()` は
-        # 既に mark_stale() 用に同じアトミック置換を実装済みのため、それを
-        # 再利用する（新規 staging ロジックの重複実装を避ける）。
-        self._rewrite(existing_reports + [report])
+            # PR#261 レビュー R35: 追記の書き込みを `self.path.open("a")` での
+            # write() から、既存全件 + 新規レポートを `_rewrite()`（R17 で導入した
+            # staging + `os.replace()` アトミック置換）へ委譲する形へ変更する。
+            # `a` モードの write() は書き込み途中（プロセス kill・ディスク満杯等）
+            # の中断で正本 JSONL の末尾に破損した部分行が恒久的に残り得た。
+            # load_all() はそのような行で必ず `json.loads()` 例外を投げるため、
+            # 1 回の中断がログ全体を読み込み不能にしてしまう。`_rewrite()` は
+            # 既に mark_stale() 用に同じアトミック置換を実装済みのため、それを
+            # 再利用する（新規 staging ロジックの重複実装を避ける）。
+            self._rewrite(existing_reports + [report])
 
     def load_all(self) -> List[LinkabilityAuditReport]:
         if not self.path.exists():
@@ -628,12 +651,27 @@ class LinkabilityAuditLog:
 
     def mark_stale(self, current_reference_set_hash: str) -> int:
         """current_reference_set_hash と異なる reference_set_hash を持つ全エントリの
-        stale_audit を True にして書き戻す。新たにフラグを立てた件数を返す。"""
-        reports = self.load_all()
-        changed = 0
-        for report in reports:
-            if report.reference_set_hash != current_reference_set_hash and not report.stale_audit:
-                report.stale_audit = True
-                changed += 1
-        self._rewrite(reports)
-        return changed
+        stale_audit を True にして書き戻す。新たにフラグを立てた件数を返す。
+
+        PR#261 レビュー R37: `load_all()`（読み改め）から `_rewrite()`
+        （staging 構築 → `os.replace()`）までの read-modify-replace 全区間を
+        `append()` と同じロックで排他する。ロックなしだと、この区間の途中で
+        別プロセスの `append()` が割り込んで新規行を書き込んだ場合、
+        `mark_stale()` が保持している `reports`（ロック取得前に読んだ古い
+        スナップショット）で丸ごと `_rewrite()` すると、割り込んだ
+        `append()` の新規行が正本から消え失せる（lost update）。
+
+        ロックファイル自体もこの正本と同じディレクトリに作るため、
+        `os.open(O_CREAT|O_EXCL)` の前に親ディレクトリの存在を保証する
+        （`append()` の同型修正参照）。
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with file_lock(self._lock_path()):
+            reports = self.load_all()
+            changed = 0
+            for report in reports:
+                if report.reference_set_hash != current_reference_set_hash and not report.stale_audit:
+                    report.stale_audit = True
+                    changed += 1
+            self._rewrite(reports)
+            return changed
