@@ -88,6 +88,33 @@ scratchpad 上の検証プログラムは `vt_harness/` というディレクト
   ディレクトリ構成に合わせて改変すると、当時の実測・判断の一次記録性
   が損なわれるため。読む際は本表で `harness/` へ読み替えること
 
+## reference-set の版と stale_audit
+
+`reference_set.py` の sidecar 様式は `reference-set/<version>` として
+版管理される（`ReferenceSetGallery.sha256` = 内容 sha256）。フィールドを
+追加・変更したら schema_version を bump するのが規律であり、対応して
+`reference_set_hash` も変わる（PR#261 レビュー R4 で `reference-set/0.1`
+→ `0.2` へ bump し、チャンス帯手続きパラメータ `chance_seed_base` /
+`n_permutations` / パーセンタイルを sidecar と hash 被覆の両方へ追加した。
+旧版はこれらを変えても hash が不変で、`e1_pass`/`e2_pass` を左右する
+判定手続きの違いが reference_set_hash に現れない欠陥があった）。
+
+**版が変わると、旧版の gallery に対して合格していた過去の linkability
+監査は新版に対しては自動的に stale 扱いになる。** これは不具合ではなく
+`LinkabilityAuditLog.mark_stale(current_reference_set_hash)` が意図して
+実装している再監査トリガーの挙動そのものである（
+`report.reference_set_hash != current_reference_set_hash` の全件に
+`stale_audit=true` を立てる）。したがって:
+
+- 0.1 時代に生成済みのコミット済み成果物（`proto1/results_final/genome_registry.jsonl`
+  の各エントリの `audit.reference_set_hash`、`proto1/results_final/e2e_run.json`
+  の `reference_set.sidecar`）は、0.1 の hash を持つ歴史的記録として
+  **書き換えない**。新版 gallery に対する再監査は別途 `build_reference_set()`
+  を再実行して行う（本 README 上部の WAV 再生成コマンドと同様、決定論的に
+  再現可能）
+- 「参照集合の版が変わったら過去の監査結果が古くなる」という性質は
+  sidecar を版管理された成果物として扱う設計上、意図された挙動である
+
 ## WAV は非同梱（決定論再生成可能）
 
 `results_*/` 配下の `.wav` 音声ファイルは**同梱していない**（全 39 個、

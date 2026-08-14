@@ -31,10 +31,30 @@ def test_gallery_has_expected_size(small_gallery):
 
 def test_sidecar_dict_has_required_fields(small_gallery):
     d = small_gallery.sidecar_dict()
-    for key in ("schema_version", "id", "version", "created_at", "source_datasets", "embedding_models", "coverage_notes", "sha256"):
+    for key in (
+        "schema_version",
+        "id",
+        "version",
+        "created_at",
+        "source_datasets",
+        "embedding_models",
+        "coverage_notes",
+        "chance_band_procedure",
+        "sha256",
+    ):
         assert key in d
-    assert d["schema_version"] == "reference-set/0.1"
+    assert d["schema_version"] == "reference-set/0.2"
     assert len(d["sha256"]) == 64  # sha256 hexdigest
+
+
+def test_sidecar_dict_chance_band_procedure_has_expected_fields(small_gallery):
+    """PR#261 レビュー R4: チャンス帯手続きパラメータを sidecar で可視化する。"""
+    procedure = small_gallery.sidecar_dict()["chance_band_procedure"]
+    assert procedure == {
+        "chance_seed_base": rset.CHANCE_SEED_BASE,
+        "n_permutations": _SMALL_N_PERMUTATIONS,
+        "percentile": rset.CHANCE_BAND_PERCENTILE,
+    }
 
 
 def test_coverage_notes_include_instrument_validity_caveat(small_gallery):
@@ -71,6 +91,35 @@ def test_reference_set_hash_changes_with_different_gallery_seed():
     g1 = rset.build_reference_set(n_permutations=1, gallery_seed_base=rset.GALLERY_SEED_BASE)
     g2 = rset.build_reference_set(n_permutations=1, gallery_seed_base=rset.GALLERY_SEED_BASE + 1000)
     assert g1.sha256 != g2.sha256
+
+
+# --- PR#261 レビュー R4: チャンス帯手続きパラメータの hash 被覆 --------------
+
+
+def test_reference_set_hash_changes_with_different_n_permutations():
+    """n_permutations を変えるとチャンス帯閾値（e1_pass/e2_pass を左右する）が
+    変わり得るため、reference_set_hash も変わらなければならない（R4 の主眼）。"""
+    g1 = rset.build_reference_set(n_permutations=1)
+    g2 = rset.build_reference_set(n_permutations=2)
+    assert g1.sha256 != g2.sha256
+
+
+def test_reference_set_hash_changes_with_different_chance_seed_base():
+    g1 = rset.build_reference_set(n_permutations=1, chance_seed_base=rset.CHANCE_SEED_BASE)
+    g2 = rset.build_reference_set(n_permutations=1, chance_seed_base=rset.CHANCE_SEED_BASE + 5000)
+    assert g1.sha256 != g2.sha256
+
+
+def test_reference_set_hash_stable_for_identical_chance_band_procedure_params():
+    """gallery 本体・チャンス帯手続きパラメータが全て同一なら、2 回実行しても
+    reference_set_hash は安定する（決定論の非退行確認）。"""
+    g1 = rset.build_reference_set(
+        n_permutations=3, gallery_seed_base=rset.GALLERY_SEED_BASE, chance_seed_base=rset.CHANCE_SEED_BASE
+    )
+    g2 = rset.build_reference_set(
+        n_permutations=3, gallery_seed_base=rset.GALLERY_SEED_BASE, chance_seed_base=rset.CHANCE_SEED_BASE
+    )
+    assert g1.sha256 == g2.sha256
 
 
 def test_audit_gallery_member_against_itself_fails_both_systems(small_gallery):

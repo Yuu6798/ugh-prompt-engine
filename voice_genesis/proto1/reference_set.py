@@ -1,9 +1,9 @@
-"""reference_set.py — P5 (VG-016 + VG-018 lite): reference-set/0.1 + linkability 監査。
+"""reference_set.py — P5 (VG-016 + VG-018 lite): reference-set/0.2 + linkability 監査。
 
 `proto1_design_memo.md` §P5 の縮約実装:
 
-  - sidecar `reference-set/0.1`（{id, version, created_at, source_datasets,
-    embedding_models, coverage_notes, sha256}）。
+  - sidecar `reference-set/0.2`（{id, version, created_at, source_datasets,
+    embedding_models, coverage_notes, chance_band_procedure, sha256}）。
   - スタンドイン gallery: 8 個の固定 seed Genome を sustain+phrase probe で
     レンダリングし登録（実在歌手ではない。§7.5 の要求どおり provenance に
     instrument-validity caveat を明記する）。
@@ -17,6 +17,19 @@
   - 監査は E1・E2 の両系統で最近傍類似がチャンス帯以下なら PASS。
   - reference_set_hash が変わったら過去エントリに stale_audit を立てる
     再監査トリガー（`LinkabilityAuditLog.mark_stale`）。
+
+  `reference-set/0.2`（PR#261 レビュー R4）: チャンス帯手続きパラメータ
+  （`chance_seed_base` / `n_permutations` / パーセンタイル）を sidecar へ
+  可視化し、`reference_set_hash`（sha256）の被覆にも含める。旧版
+  （0.1）はこれらのパラメータを変えても hash が変わらず、`e1_pass`/
+  `e2_pass` を直接左右する判定手続きが異なるのに同一 ID を共有し得た
+  （chance-band 手続きの版管理が抜けていた欠陥。詳細は
+  `voice_genesis/README.md` の「reference-set の版と stale_audit」節）。
+  フィールド追加は版管理された sidecar の規律に従い schema_version を
+  bump する（0.1→0.2）。0.1 時代に生成済みの registry/lineage 記録の
+  `audit.reference_set_hash` は書き換えない（歴史的記録として保存し、
+  0.2 の新規 gallery に対しては意図的に stale_audit 扱いとなる。
+  `mark_stale()` の既定の挙動どおり）。
 
 E1/E2 の集約方法の詳細は [UNDERSPEC-P1-10]・[UNDERSPEC-P1-11] を参照。
 """
@@ -40,12 +53,16 @@ from registry import genome_content_hash
 import measure_v3 as mv3  # harness、無改変 import 流用
 import librosa
 
-SCHEMA_VERSION = "reference-set/0.1"
+SCHEMA_VERSION = "reference-set/0.2"
 
 GALLERY_SIZE = 8
 GALLERY_SEED_BASE = 20001  # sample() の seed 域（CHANCE_SEED_BASE と重複させない）
 CHANCE_SEED_BASE = 90001
 CHANCE_N_PERMUTATIONS = 200
+# estimate_chance_band() の np.percentile に渡すパーセンタイル（PR#261 レビュー R4:
+# チャンス帯手続きの凍結定数として named constant 化し、sidecar/hash 双方から
+# 参照する単一の真実源にする）。
+CHANCE_BAND_PERCENTILE: float = 95.0
 
 # P5 memo: 「sustain+phrase probe」
 EMBEDDING_PROBES: Tuple[str, ...] = ("sustain", "phrase")
@@ -155,9 +172,17 @@ class ReferenceSetGallery:
     e1_chance_band_p95: float
     e2_chance_band_p95: float
     chance_n_permutations: int
+    chance_seed_base: int
 
     def sidecar_dict(self) -> Dict[str, Any]:
-        """sidecar 本体（重い embedding/gallery データを含まない、メモが規定する形）。"""
+        """sidecar 本体（重い embedding/gallery データを含まない、メモが規定する形）。
+
+        `chance_band_procedure`（PR#261 レビュー R4, schema 0.2 で追加）:
+        チャンス帯推定の再現に必要な手続きパラメータを可視化する。これらの
+        値は `sha256` の被覆にも含まれるため、`chance_seed_base` や
+        `n_permutations` を変えて別の判定手続きで作った gallery は
+        自動的に別の `reference_set_hash` になる。
+        """
         return {
             "schema_version": self.schema_version,
             "id": self.id,
@@ -166,6 +191,11 @@ class ReferenceSetGallery:
             "source_datasets": self.source_datasets,
             "embedding_models": self.embedding_models,
             "coverage_notes": self.coverage_notes,
+            "chance_band_procedure": {
+                "chance_seed_base": self.chance_seed_base,
+                "n_permutations": self.chance_n_permutations,
+                "percentile": CHANCE_BAND_PERCENTILE,
+            },
             "sha256": self.sha256,
         }
 
@@ -218,8 +248,8 @@ def estimate_chance_band(
         norm_e2 = _zscore(raw_e2, e2_mean, e2_std)
         e1_sims.append(max(_cosine_similarity(norm_e1, row) for row in e1_normalized))
         e2_sims.append(max(_cosine_similarity(norm_e2, row) for row in e2_normalized))
-    e1_band = float(np.percentile(np.array(e1_sims), 95))
-    e2_band = float(np.percentile(np.array(e2_sims), 95))
+    e1_band = float(np.percentile(np.array(e1_sims), CHANCE_BAND_PERCENTILE))
+    e2_band = float(np.percentile(np.array(e2_sims), CHANCE_BAND_PERCENTILE))
     return e1_band, e2_band
 
 
@@ -233,7 +263,7 @@ def build_reference_set(
     version: int = 1,
     now: Optional[datetime] = None,
 ) -> ReferenceSetGallery:
-    """スタンドイン gallery を作り、reference-set/0.1 sidecar 一式を組み立てる。"""
+    """スタンドイン gallery を作り、reference-set/0.2 sidecar 一式を組み立てる。"""
     seeds = [gallery_seed_base + i for i in range(n_gallery)]
     genomes = [sampler.sample(seed, name=f"standin-{i}") for i, seed in enumerate(seeds)]
 
@@ -267,6 +297,13 @@ def build_reference_set(
         "e1_std": np.round(e1_std, 8).tolist(),
         "e2_mean": np.round(e2_mean, 8).tolist(),
         "e2_std": np.round(e2_std, 8).tolist(),
+        # PR#261 レビュー R4: チャンス帯手続きパラメータを hash 被覆に含める。
+        # これが無いと chance_seed_base/n_permutations を変えて e1_pass/e2_pass
+        # を直接左右するチャンス帯閾値が変わっても reference_set_hash が同一の
+        # ままになり、異なる判定手続きが同一 ID を共有してしまう。
+        "chance_seed_base": chance_seed_base,
+        "n_permutations": n_permutations,
+        "chance_band_percentile": CHANCE_BAND_PERCENTILE,
     }
     reference_set_hash = sha256_of_canonical_json(content_for_hash)
 
@@ -300,6 +337,7 @@ def build_reference_set(
         e1_chance_band_p95=e1_band,
         e2_chance_band_p95=e2_band,
         chance_n_permutations=n_permutations,
+        chance_seed_base=chance_seed_base,
     )
 
 
