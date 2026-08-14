@@ -396,3 +396,79 @@ def test_append_accepts_valid_report_non_regression(tmp_path, small_gallery):
     loaded = log.load_all()
     assert len(loaded) == 1
     assert loaded[0].report_id == report.report_id
+
+
+# --- PR#261 レビュー R33: report_id の重複検出（load_all() / append()） ----
+
+
+def test_load_all_rejects_duplicate_report_id(tmp_path, small_gallery):
+    """report_id は内容アドレス（R19: {genome_id, reference_set_hash} から
+    一意に決まる）である以上、同一 report_id の複数行は append-only ログの
+    意味論と矛盾する（例: 片方だけ stale_audit が異なる「同じ監査を指す
+    2 通りの主張」）。手編集・インポートされた JSONL に紛れ込んだ重複を
+    load_all() で拒否する。
+    """
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    # append() 自体は重複を拒否するため、ファイルへ直接同一行を複製する
+    # （手編集・インポートされたログを模す）。
+    original_line = log.path.read_text(encoding="utf-8")
+    log.path.write_text(original_line + original_line, encoding="utf-8")
+
+    with pytest.raises(rset.LinkabilityAuditValidationError):
+        log.load_all()
+
+
+def test_append_rejects_duplicate_report_id(tmp_path, small_gallery):
+    """append() は書き込み前に既存ログとの report_id 重複を軽量チェックで
+    拒否する（ラウンドトリップ検証より先に走る fail-fast パス）。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    log.append(report)
+
+    with pytest.raises(rset.LinkabilityAuditValidationError):
+        log.append(report)  # 同一 report（= 同一 report_id）を再 append
+
+    # 拒否された 2 回目は書き込まれておらず、ログは 1 行のまま。
+    loaded = log.load_all()
+    assert len(loaded) == 1
+
+
+def test_append_accepts_distinct_report_ids_non_regression(tmp_path, small_gallery):
+    """非退行確認: 異なる候補（= 異なる report_id）の複数 append は従来どおり
+    成功する。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report_a = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    report_b = rset.audit_linkability(small_gallery.members[1].genome, small_gallery)
+    assert report_a.report_id != report_b.report_id  # 前提確認
+
+    log.append(report_a)
+    log.append(report_b)
+
+    loaded = log.load_all()
+    assert {r.report_id for r in loaded} == {report_a.report_id, report_b.report_id}
+
+
+def test_mark_stale_rewrite_path_does_not_trigger_duplicate_detection(tmp_path, small_gallery):
+    """mark_stale() の書き戻し（`_rewrite()`）は `load_all()` で読み込んだ
+    既存レポート集合の `stale_audit` フィールドだけを書き換えて丸ごと
+    再書き込みする経路であり、`append()` を経由しない（report_id は不変の
+    まま）。R33 の重複検出が誤って自己干渉しないことを確認する（複数件
+    ある状態で mark_stale() が問題なく完走し、件数・report_id 集合が
+    保たれること）。
+    """
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report_a = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    report_b = rset.audit_linkability(small_gallery.members[1].genome, small_gallery)
+    log.append(report_a)
+    log.append(report_b)
+
+    changed = log.mark_stale("some-different-hash-because-reference-set-was-rebuilt")
+    assert changed == 2
+
+    loaded = log.load_all()  # 重複検出込みで問題なく読める
+    assert len(loaded) == 2
+    assert {r.report_id for r in loaded} == {report_a.report_id, report_b.report_id}
+    assert all(r.stale_audit for r in loaded)

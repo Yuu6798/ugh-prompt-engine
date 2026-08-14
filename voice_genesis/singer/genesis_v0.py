@@ -220,10 +220,26 @@ class QuickS5Result:
 def quick_s5(genome_in: pg.VoiceGenome, full_result: "rs.RenderResult") -> QuickS5Result:
     rows_all = gc.measure_notes(full_result)
     phrase0_rows = [r for r, seg in zip(rows_all, full_result.segments) if seg.note.phrase_index == 0][:QUICK_N_NOTES]
-    errs = [abs(r.cents_err) for r in phrase0_rows if np.isfinite(r.cents_err)]
+    raw_errs = [abs(r.cents_err) for r in phrase0_rows]
+    errs = [e for e in raw_errs if np.isfinite(e)]
     median_err = float(np.median(errs)) if errs else float("nan")
     max_err = float(np.max(errs)) if errs else float("nan")
-    f0_pass = bool(errs) and median_err <= gc.F0_MEDIAN_CENTS_MAX and all(e <= gc.F0_ALL_NOTES_CENTS_MAX for e in errs)
+    # PR#261 レビュー R32: 旧実装は非有限を除外済みの `errs`（フィルタ後
+    # リスト）の非空判定 (`bool(errs)`) のみで f0_pass を決めていたため、
+    # QUICK_N_NOTES（4 音）のうち 1 音でも cents_err が非有限（未測定）だと、
+    # その 1 音がこっそり `errs` から抜け落ちるだけで残り 3 音が健全なら
+    # f0_pass=True になり得た（「一部の音だけ測って良好だった」ことを
+    # 「4 音全てを測って良好だった」と取り違える不完全証拠 PASS。
+    # gate_checks.py::_grip_axis の R23 や render_health.py の R31 と同型）。
+    # 4 音全て（`phrase0_rows` の全件）が有限に測定できたことを明示的な
+    # 前提条件とする。median_err/max_err は診断用に有限値のみで従来どおり
+    # 算出するが、f0_pass 自体は全件有限でなければ無条件 False になる。
+    all_finite = bool(raw_errs) and all(np.isfinite(e) for e in raw_errs)
+    f0_pass = (
+        all_finite
+        and median_err <= gc.F0_MEDIAN_CENTS_MAX
+        and all(e <= gc.F0_ALL_NOTES_CENTS_MAX for e in raw_errs)
+    )
 
     r_medians = []
     for midi in QUICK_SUSTAIN_MIDIS.values():

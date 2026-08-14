@@ -12,7 +12,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Tuple
 
 import numpy as np
@@ -145,6 +145,9 @@ class FormantSweepReport:
     direction_consistency: float
     net_direction_positive: bool
     passed: bool
+    # PR#261 レビュー R31: 非有限（測定不能）だった formant_scale の一覧。
+    # 空リストなら全点が有限に測定できたことを意味する。
+    non_finite_scales: List[float] = field(default_factory=list)
 
 
 def formant_sweep_report(
@@ -154,6 +157,19 @@ def formant_sweep_report(
     duration_sec: float = 1.0,
     direction_consistency_threshold: float = DIRECTION_CONSISTENCY_THRESHOLD,
 ) -> FormantSweepReport:
+    """P6 formant sweep（`FormantSweepReport` docstring参照）。
+
+    PR#261 レビュー R31: 全 formant_scale 点のセントロイド測定値の有限性を
+    PASS の前提条件に追加する。旧実装は隣接差分を
+    `1.0 if d >= 0.0 else 0.0` で評価していたため、centroid 測定自体が
+    失敗して NaN になった箇所を「方向が逆だった 1 ステップ」として黙って
+    0 加算してしまい、残りのステップが十分健全であれば
+    direction_consistency がたまたま閾値を上回って測定不能な状態のまま
+    PASS してしまう不完全証拠 PASS の穴があった（gate_checks.py の R23 と
+    同型）。全セントロイドが有限であることを PASS の前提条件とし、1 点でも
+    非有限なら測定不能 FAIL とし、`non_finite_scales` に該当 formant_scale
+    を列挙する。
+    """
     centroids: List[float] = []
     for scale in scales:
         resonance = ResonanceSection(
@@ -174,6 +190,17 @@ def formant_sweep_report(
         feat = mv3.formant_centroid_and_f1(sig, SR, mv3.estimate_f0_v3(sig, sr=SR))
         centroids.append(float(feat["formant_centroid_log2hz"]))
 
+    non_finite_scales = [scales[i] for i, c in enumerate(centroids) if not np.isfinite(c)]
+    if non_finite_scales:
+        return FormantSweepReport(
+            formant_scales=list(scales),
+            formant_centroid_log2hz=centroids,
+            direction_consistency=float("nan"),
+            net_direction_positive=False,
+            passed=False,
+            non_finite_scales=non_finite_scales,
+        )
+
     diffs = [centroids[i + 1] - centroids[i] for i in range(len(centroids) - 1)]
     direction_consistency = float(np.mean([1.0 if d >= 0.0 else 0.0 for d in diffs])) if diffs else 1.0
     # net_direction_positive は診断用の付随情報として報告するのみで pass 判定には使わない
@@ -188,4 +215,5 @@ def formant_sweep_report(
         direction_consistency=direction_consistency,
         net_direction_positive=net_direction_positive,
         passed=passed,
+        non_finite_scales=[],
     )

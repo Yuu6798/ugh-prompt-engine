@@ -518,6 +518,19 @@ class LinkabilityAuditLog:
         self.path = Path(path)
 
     def append(self, report: LinkabilityAuditReport) -> None:
+        # PR#261 レビュー R33: report_id は内容アドレス（R19: {genome_id,
+        # reference_set_hash} から一意に決まる）である以上、同一 report_id
+        # の複数行は append-only ログとして矛盾する（load_all() 側で新設
+        # した重複検出（下記）が拒否する）。ラウンドトリップ検証（新規
+        # エントリの直列化・再解析・全意味論再検証を伴い相対的に重い）に
+        # 先立ち、既存ログとの ID 重複だけを先に確認する軽量チェックとして
+        # 実施する（fail fast）。
+        existing_ids = {r.report_id for r in self.load_all()}
+        if report.report_id in existing_ids:
+            raise LinkabilityAuditValidationError(
+                f"監査ログに既に存在する report_id への追記を拒否する（実際: {report.report_id!r}）"
+            )
+
         # PR#261 レビュー R30: registry.py::GenomeRegistry.append() の R28 と
         # 同型の書読対称性保証。append() はここまで常に `audit_linkability()`
         # が内部で構築した `LinkabilityAuditReport` のみを受理する設計だが、
@@ -546,12 +559,24 @@ class LinkabilityAuditLog:
         if not self.path.exists():
             return []
         reports = []
+        seen_report_ids: set = set()
         with self.path.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
                     continue
-                reports.append(_report_from_dict(json.loads(line)))
+                report = _report_from_dict(json.loads(line))
+                # PR#261 レビュー R33: report_id は内容アドレス（R19）のため
+                # 同一 report_id の複数行は append-only ログの意味論と
+                # 矛盾する（例: 片方だけ stale_audit フラグが異なる「同じ
+                # 監査を指す 2 通りの主張」が同居し得る）。registry.py の
+                # R5（genome_id 重複検出）と同型の規律を監査ログにも敷く。
+                if report.report_id in seen_report_ids:
+                    raise LinkabilityAuditValidationError(
+                        f"監査ログに重複 report_id を検出（実際: {report.report_id!r}）"
+                    )
+                seen_report_ids.add(report.report_id)
+                reports.append(report)
         return reports
 
     def _rewrite(self, reports: List[LinkabilityAuditReport]) -> None:

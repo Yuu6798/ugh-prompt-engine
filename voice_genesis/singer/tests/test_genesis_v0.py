@@ -107,3 +107,92 @@ def test_genesis_v1_reuses_genesis_v0_linkability_audit():
 def test_genesis_v2_reuses_genesis_v0_linkability_audit():
     import genesis_v2 as gv2
     assert gv2.gv.linkability_audit is gv.linkability_audit
+
+
+# --- PR#261 レビュー R32: quick_s5() の f0_pass 不完全証拠 PASS 修正 --------
+
+
+class _FakeNote:
+    def __init__(self, phrase_index):
+        self.phrase_index = phrase_index
+
+
+class _FakeSegment:
+    def __init__(self, phrase_index):
+        self.note = _FakeNote(phrase_index)
+
+
+class _FakeRenderResult:
+    """`quick_s5()` が要求する最小属性（segments/wav/sr）だけを持つダミー。
+    実音声合成を回避し、f0_pass ロジックだけを高速に検証する。"""
+
+    def __init__(self, n_notes):
+        self.segments = [_FakeSegment(0) for _ in range(n_notes)]
+        self.wav = np.zeros(4)
+        self.sr = 44100
+
+
+def _patch_quick_s5_periphery(monkeypatch):
+    """quick_s5() の f0_pass 以外の部分（periodicity/aliasing）を軽量ダミーに
+    差し替え、実音声合成なしで f0_pass ロジックだけを検証できるようにする。"""
+    monkeypatch.setattr(
+        gv.rs, "render_sustained_vowel", lambda genome, midi, vowel="a", duration_sec=0.6: np.zeros(4)
+    )
+    monkeypatch.setattr(
+        gv.m3,
+        "periodicity_track_v3",
+        lambda wav, sr, fmin, fmax: gv.m3.PeriodicityTrackV3(
+            r_median=0.9, periodicity_db_median=0.0, n_frames=1, n_voiced_frames=1
+        ),
+    )
+    monkeypatch.setattr(gv.gc, "gate5_aliasing", lambda wav, sr: {"pass": True, "energy_ratio_db": -50.0})
+
+
+def test_quick_s5_f0_pass_fails_when_one_of_four_notes_is_non_finite(monkeypatch):
+    """QUICK_N_NOTES（4音）のうち 1 音の cents_err が非有限（未測定）でも、
+    旧実装は「非有限を除外済みリストの非空判定」のみで f0_pass を決めていた
+    ため、残り 3 音が健全であれば黙って PASS し得た（4 音全てを測ったつもり
+    が実は 3 音しか測れていない不完全証拠 PASS。PR#261 R32）。
+    """
+    _patch_quick_s5_periphery(monkeypatch)
+
+    rows = [
+        gv.gc.NoteMeasurement(
+            note_index=0, kana="あ", true_midi=60.0, true_hz=261.6, est_hz=261.6, cents_err=1.0, r_median=0.9
+        ),
+        gv.gc.NoteMeasurement(
+            note_index=1, kana="い", true_midi=60.0, true_hz=261.6, est_hz=261.6,
+            cents_err=float("nan"), r_median=0.9,
+        ),  # 1 音欠測（未測定）
+        gv.gc.NoteMeasurement(
+            note_index=2, kana="う", true_midi=60.0, true_hz=261.6, est_hz=261.6, cents_err=2.0, r_median=0.9
+        ),
+        gv.gc.NoteMeasurement(
+            note_index=3, kana="え", true_midi=60.0, true_hz=261.6, est_hz=261.6, cents_err=1.5, r_median=0.9
+        ),
+    ]
+    monkeypatch.setattr(gv.gc, "measure_notes", lambda result: rows)
+
+    result = _FakeRenderResult(n_notes=len(rows))
+    q = gv.quick_s5(genome_in=None, full_result=result)
+
+    assert q.f0_pass is False
+    assert q.overall_pass is False
+
+
+def test_quick_s5_f0_pass_true_when_all_four_notes_finite_and_within_threshold_non_regression(monkeypatch):
+    """非退行確認: 4 音全てが有限かつ閾値内なら従来どおり f0_pass=True になる。"""
+    _patch_quick_s5_periphery(monkeypatch)
+
+    rows = [
+        gv.gc.NoteMeasurement(
+            note_index=i, kana="あ", true_midi=60.0, true_hz=261.6, est_hz=261.6, cents_err=1.0 + i, r_median=0.9
+        )
+        for i in range(4)
+    ]
+    monkeypatch.setattr(gv.gc, "measure_notes", lambda result: rows)
+
+    result = _FakeRenderResult(n_notes=len(rows))
+    q = gv.quick_s5(genome_in=None, full_result=result)
+
+    assert q.f0_pass is True
