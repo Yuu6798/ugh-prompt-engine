@@ -540,3 +540,64 @@ def test_append_accepts_valid_genome_non_regression(registry_path):
     loaded = reg.load_all()
     assert len(loaded) == 1
     assert loaded[0].genome_id == entry.genome_id
+
+
+# --- PR#261 レビュー R29: seed フィールドの実行時型検証 ----------------------
+
+
+def test_entry_from_dict_rejects_string_seed(registry_path):
+    """`RegistryEntry.seed: Optional[int]` は型注釈に過ぎず、旧
+    `_entry_from_dict()` は `data.get("seed")` をそのまま代入していたため、
+    手編集・インポートされた行が `seed="303"`（文字列）を持っていても
+    無検証で通過してしまっていた。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    data = json.loads(registry_path.read_text(encoding="utf-8").strip())
+    assert isinstance(data["seed"], int)  # 前提確認
+    data["seed"] = "303"  # 文字列（型不一致）
+    registry_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
+def test_entry_from_dict_rejects_bool_seed(registry_path):
+    """Python の bool は int のサブクラスのため、素朴な isinstance チェック
+    だけでは JSON の真偽値 `seed=true` を int として誤って受理し得る。
+    `_as_optional_int()` は bool を明示的に排除する（JSONL への実注入で確認）。
+    """
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    data = json.loads(registry_path.read_text(encoding="utf-8").strip())
+    data["seed"] = True  # JSON の真偽値（bool は int のサブクラス）
+    registry_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
+def test_as_optional_int_rejects_bool_directly():
+    """`_as_optional_int()` 単体でも True/False の両方を拒否することを確認する
+    （isinstance(True, int) が True になる Python の罠に対する直接的な回帰確認）。"""
+    with pytest.raises(r.RegistryError):
+        r._as_optional_int(True, "seed")
+    with pytest.raises(r.RegistryError):
+        r._as_optional_int(False, "seed")
+
+
+def test_entry_from_dict_accepts_null_and_int_seed_non_regression(registry_path):
+    """非退行確認: seed=null（省略時）と通常の int seed はいずれも従来どおり
+    受理される。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    e1 = reg.append(g1, op="sample", seed=None, now=FIXED_TIME)  # seed=null
+    g2 = sampler.sample(2, name="parent2")
+    e2 = reg.append(g2, op="sample", seed=42, now=FIXED_TIME)  # seed=int
+
+    loaded = reg.load_all()
+    assert len(loaded) == 2
+    assert {e.genome_id: e.seed for e in loaded} == {e1.genome_id: None, e2.genome_id: 42}

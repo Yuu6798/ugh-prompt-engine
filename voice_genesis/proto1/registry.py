@@ -60,6 +60,24 @@ def genome_content_hash(genome: VoiceGenome) -> str:
     return sha256_of_canonical_json(to_dict(genome))[:12]
 
 
+def _as_optional_int(value: Any, field_name: str) -> Optional[int]:
+    """value が None または int（bool を除く）であることを検証する（PR#261
+    レビュー R29）。
+
+    `RegistryEntry.seed: Optional[int]` の型注釈は静的型チェック用の宣言に
+    過ぎず、`_entry_from_dict()`（JSONL からの逆直列化）は従来 `data.get("seed")`
+    をそのまま代入していたため、実行時には型を一切検証していなかった。
+    Python の `bool` は `int` のサブクラスのため素朴な `isinstance(v, int)`
+    だけでは `seed=true`（JSON の真偽値）を意味的に誤ったまま int として
+    受理してしまう。文字列 `"303"` 等の型不一致も同様に拒否する。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RegistryError(f"{field_name} は int または null でなければならない（実際: {value!r}）")
+    return value
+
+
 @dataclass
 class RegistryEntry:
     genome_id: str
@@ -197,7 +215,7 @@ def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
         created_at=data["created_at"],
         parents=parent_ids,
         op=op,
-        seed=data.get("seed"),
+        seed=_as_optional_int(data.get("seed"), "seed"),
         # renderer_version/feature_set_version は PR#261 レビュー R12 の grep 掃討で
         # 同じ `.get(..., 定数)` パターンとして見つかったが、schema_version/
         # registry_schema と違い「これに従ってドキュメント全体の構造を解釈する」
@@ -232,6 +250,12 @@ class GenomeRegistry:
 
         `now` はテスト用の注入ポイント（省略時は wall-clock。§CLAUDE.md の
         「wall-clock 依存は created_at 記録のみ許可」の唯一の使用箇所）。
+
+        `seed: Optional[int]` の型注釈は本メソッドの引数レベルでは実行時
+        強制されないが（PR#261 レビュー R29）、呼び出し元が型注釈に反する
+        値（例: 文字列や bool）を直接渡した場合でも、書き込み前の
+        直列化→`_entry_from_dict()` ラウンドトリップ検証（R28）が
+        `_as_optional_int()` を経由して間接的に検出・拒否する。
         """
         if op not in VALID_OPS:
             raise RegistryError(f"op は {VALID_OPS} のいずれかでなければならない（実際: {op!r}）")

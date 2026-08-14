@@ -518,9 +518,28 @@ class LinkabilityAuditLog:
         self.path = Path(path)
 
     def append(self, report: LinkabilityAuditReport) -> None:
+        # PR#261 レビュー R30: registry.py::GenomeRegistry.append() の R28 と
+        # 同型の書読対称性保証。append() はここまで常に `audit_linkability()`
+        # が内部で構築した `LinkabilityAuditReport` のみを受理する設計だが、
+        # 呼び出し元が `LinkabilityAuditReport(...)` を直接構築して e1_pass
+        # 等の宣言値を実測値と矛盾させたレポート（本来 `_report_from_dict()`
+        # の R9/R13/R19 検証が拒否するはずの内容）を渡すと、append() 自体は
+        # 無検証で成功してしまい「書けるが load_all()/mark_stale() では
+        # 読めない」非対称なログ行を作れてしまっていた。書き込み前に
+        # 直列化 → `_report_from_dict()` のラウンドトリップを試し、
+        # load_all() が将来拒否するであろう行は書き込み時点で拒否する。
+        line = json.dumps(_report_to_dict(report), sort_keys=True, ensure_ascii=True)
+        try:
+            _report_from_dict(json.loads(line))
+        except LinkabilityAuditValidationError as exc:
+            raise LinkabilityAuditValidationError(
+                "append() が構築したレポートは load_all() 側の検証を通過しない"
+                f"（書読対称性違反。report_id={report.report_id!r}）: {exc}"
+            ) from exc
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(_report_to_dict(report), sort_keys=True, ensure_ascii=True))
+            fh.write(line)
             fh.write("\n")
 
     def load_all(self) -> List[LinkabilityAuditReport]:

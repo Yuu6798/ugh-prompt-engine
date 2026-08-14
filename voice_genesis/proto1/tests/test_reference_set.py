@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -358,3 +359,40 @@ def test_mark_stale_still_succeeds_without_interruption(tmp_path, small_gallery)
 
     leftover = list(tmp_path.glob(f"{log.path.name}.*.tmp"))
     assert leftover == []
+
+
+# --- PR#261 レビュー R30: append() の書き込み前ラウンドトリップ検証 ---------
+
+
+def test_append_rejects_report_with_e1_pass_contradicting_measurement(tmp_path, small_gallery):
+    """append() は `audit_linkability()` が構築したレポートのみを受理する設計
+    だが、呼び出し元が `LinkabilityAuditReport(...)` を直接構築して
+    `e1_pass` を実測値（e1_max_similarity vs e1_chance_band_p95）と矛盾させた
+    レポートを渡すと、旧実装では append() 自体は無検証で成功してしまい
+    「書けるが load_all()/mark_stale() では読めない」非対称なログ行を
+    作れてしまっていた（registry.py の R28 と同型の穴）。書き込み前の
+    ラウンドトリップ検証（_report_from_dict() を通す）でこれを拒否する。
+    """
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+    tampered = replace(report, e1_pass=not report.e1_pass)  # 実測値と矛盾させる
+
+    with pytest.raises(rset.LinkabilityAuditValidationError):
+        log.append(tampered)
+
+    # 拒否されたレポートは一切書き込まれていない。
+    assert not log.path.exists() or log.path.read_text(encoding="utf-8") == ""
+
+
+def test_append_accepts_valid_report_non_regression(tmp_path, small_gallery):
+    """非退行確認: `audit_linkability()` が構築した正常なレポート（宣言値が
+    実測値と整合している）は書き込み前ラウンドトリップ検証を問題なく通過し、
+    従来どおり append・load_all() できる。"""
+    log = rset.LinkabilityAuditLog(tmp_path / "audit_log.jsonl")
+    report = rset.audit_linkability(small_gallery.members[0].genome, small_gallery)
+
+    log.append(report)
+
+    loaded = log.load_all()
+    assert len(loaded) == 1
+    assert loaded[0].report_id == report.report_id
