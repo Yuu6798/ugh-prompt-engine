@@ -8,9 +8,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json
+from dataclasses import replace
 
 import pytest
 
+import genome as g
 import registry as r
 import sampler
 
@@ -501,3 +503,40 @@ def test_load_all_rejects_parent_appearing_after_child_in_file_order(registry_pa
 
     with pytest.raises(r.MissingParentError):
         reg.load_all()
+
+
+# --- PR#261 レビュー R28: append() の書き込み前ラウンドトリップ検証 ---------
+
+
+def test_append_rejects_genome_with_source_mode_outside_closed_vocabulary(registry_path):
+    """append() は渡された genome を to_dict() するだけで from_dict() 側の
+    意味論検証（R26 の source_mode 閉じた語彙等）を通さないため、frozen
+    dataclass を直接組み立てて不正な source_mode を持つ genome を渡すと、
+    旧実装では append() 自体は成功してしまい「書けるが load_all() では
+    読めない」非対称なエントリを作れてしまっていた。書き込み前の
+    ラウンドトリップ検証（_entry_from_dict() を通す）でこれを拒否する。
+    """
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    assert gen.source.source_mode in g.SOURCE_MODES  # 前提確認
+    tampered = replace(gen, source=replace(gen.source, source_mode="robotic"))
+
+    with pytest.raises(r.RegistryError):
+        reg.append(tampered, op="sample", seed=1, now=FIXED_TIME)
+
+    # 拒否されたエントリは一切書き込まれていない（ファイルが作られてすら
+    # いない、または既存内容が変化していない）。
+    assert not registry_path.exists() or registry_path.read_text(encoding="utf-8") == ""
+
+
+def test_append_accepts_valid_genome_non_regression(registry_path):
+    """非退行確認: 正常な genome（builder が発行する source_mode 等、全フィールド
+    が意味論的に妥当）は書き込み前ラウンドトリップ検証を問題なく通過し、
+    従来どおり append・load_all() できる。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    entry = reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    loaded = reg.load_all()
+    assert len(loaded) == 1
+    assert loaded[0].genome_id == entry.genome_id

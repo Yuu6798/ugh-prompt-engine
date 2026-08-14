@@ -196,12 +196,12 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 ## 検証境界の終端宣言（ロード経路・公開経路の census）
 
 PR#261 のレビューは C1–C6 → R1–R7 → R8–R11 → R12–R13 → R14–R16 →
-R17–R19 → R20–R21 → R22–R23 → R24–R25 → R26 の 11 ラウンドにわたり、
-「ローダー/来歴/公開」系および「検出ロジック」系の同型の穴（schema
-未検証・schema キー欠落時のデフォルト補完・全セクション/リーフフィー
-ルド欠落時のデフォルト補完・float リーフの非有限値（NaN/inf）未検証・
-content hash 未検証・エントリ内の重複表現フィールド間の不整合・列挙型
-フィールド（op）の読み込み側検証の非対称性・閉じた語彙フィールド
+R17–R19 → R20–R21 → R22–R23 → R24–R25 → R26 → R27–R28 の 12 ラウンド
+にわたり、「ローダー/来歴/公開」系および「検出ロジック」系の同型の穴
+（schema 未検証・schema キー欠落時のデフォルト補完・全セクション/リーフ
+フィールド欠落時のデフォルト補完・float リーフの非有限値（NaN/inf）
+未検証・content hash 未検証・エントリ内の重複表現フィールド間の不整合・
+列挙型フィールド（op）の読み込み側検証の非対称性・閉じた語彙フィールド
 （source_mode）の読み込み側域外値未検証・関係フィールド間の不変条件
 （op × parent 数）の読み込み側未検証・内容アドレス（report_id）の読み込み
 側未検証・pass/fail 宣言の未再計算・再計算前提となる実測値自体の定義域
@@ -210,7 +210,10 @@ content hash 未検証・エントリ内の重複表現フィールド間の不�
 アトミック性（中断時の全損リスク）・歴史的正本レポートの開示文言の
 陳腐化・**「実出力だけを走査し期待値集合と照合しない」検出力欠陥**・
 **最近傍/最良値探索ループでの NaN 距離の fail-open**・**nanmedian 等の
-暗黙除外による不完全証拠 PASS**）を逐次指摘し続けた。指摘の再発を
+暗黙除外による不完全証拠 PASS**・**必須成果物が生成できない run の
+publish 未門番化（決定論とは独立の fail-closed 条件の欠落）**・
+**書き込み経路が読み込み側専用の検証を経由しない書読非対称性**）を
+逐次指摘し続けた。指摘の再発を
 止めるため、`voice_genesis/` 内で永続化データを**読み込む**（デシリア
 ライズしてオブジェクトへ復元する）経路、**正本を公開する**（成果物
 ファイルを書き換える）経路、および（R20–R21 で追加）レンダリング結果
@@ -234,8 +237,8 @@ content hash 未検証・エントリ内の重複表現フィールド間の不�
 
 | ファイル::関数 | 書く対象 | 検証内容 | 状態 |
 |---|---|---|---|
-| `proto1/proto1_demo.py::_publish_outputs()` / `_publish_or_fail_closed()` | `genome_registry.jsonl` / WAV 2 種 / `e2e_run.json` の正本置換 | 全成果物を staging へ揃えてから一括 `os.replace` (R1) / 決定論比較（genome 全 diff + WAV ファイル書き出しの決定論性）不成立時は publish 自体を呼ばず失敗診断を非正本パスへ (R8) / WAV ファイルバイトの sha256 digest 記録 + 2 回書き比較 (R11) / staging ファイル名を `_run_suffix()`（pid + uuid4 の一部）で per-run 一意化し併走 `main()` 同士の staging ファイル踏みつけを防止、加えて正本 publish 直前を `_publish_lock()`（O_EXCL 作成 + 終了時削除）で排他しロック存在時は `PublishLockError`→`SystemExit` で即拒否 (R25。registry_path の serialize は R2 の repo-relative 正本パスのまま・決定論比較対象からは元々除外済み) | **検証済み** |
-| `proto1/registry.py::GenomeRegistry.append()` | registry JSONL への 1 行追記 | op 許容値検証 / 重複 genome_id 拒否 (C3) / parents の各 ID が既に registry に存在することを検証 (R10a) / op 別の parent 数不変条件（sample=0/mutate=1/crossover=2）を検証 (R24。`_entry_from_dict()` にも同型検証を追加し読み込み経路の非対称性も防止) | **検証済み** |
+| `proto1/proto1_demo.py::_publish_outputs()` / `_publish_or_fail_closed()` | `genome_registry.jsonl` / WAV 2 種 / `e2e_run.json` の正本置換 | 全成果物を staging へ揃えてから一括 `os.replace` (R1) / 決定論比較（genome 全 diff + WAV ファイル書き出しの決定論性）不成立時は publish 自体を呼ばず失敗診断を非正本パスへ (R8) / WAV ファイルバイトの sha256 digest 記録 + 2 回書き比較 (R11) / staging ファイル名を `_run_suffix()`（pid + uuid4 の一部）で per-run 一意化し併走 `main()` 同士の staging ファイル踏みつけを防止、加えて正本 publish 直前を `_publish_lock()`（O_EXCL 作成 + 終了時削除）で排他しロック存在時は `PublishLockError`→`SystemExit` で即拒否 (R25。registry_path の serialize は R2 の repo-relative 正本パスのまま・決定論比較対象からは元々除外済み) / `_publish_or_fail_closed()` の門番条件を `determinism_passed` から `publish_ready`（決定論一致 **かつ** F1-7 必須 WAV 成果物を生成できたこと）へ一般化し、全候補が linkability 監査不合格で `selected_key is None` のまま WAV が 1 件も生成できない run を、決定論とは独立の fail-closed 条件として publish 拒否 (R27。理由文字列は失敗要因を列挙して診断へ反映) | **検証済み** |
+| `proto1/registry.py::GenomeRegistry.append()` | registry JSONL への 1 行追記 | op 許容値検証 / 重複 genome_id 拒否 (C3) / parents の各 ID が既に registry に存在することを検証 (R10a) / op 別の parent 数不変条件（sample=0/mutate=1/crossover=2）を検証 (R24。`_entry_from_dict()` にも同型検証を追加し読み込み経路の非対称性も防止) / 書き込み前に直列化 → `_entry_from_dict()` によるラウンドトリップを試し、`load_all()` が拒否するであろうエントリ（例: 呼び出し元が frozen dataclass を直接組み立てて `source_mode="robotic"` 等の不正値を持つ genome を渡した場合）を書き込み前に拒否し書読対称性を保証 (R28。将来 append 高頻度化時の性能注記を docstring に明記) | **検証済み** |
 | `proto1/reference_set.py::LinkabilityAuditLog.append()` / `_rewrite()` | 監査ログ JSONL | 内容検証は不要（常に `audit_linkability()` が内部で構築した `LinkabilityAuditReport` オブジェクトのみを受理し、外部由来の未検証データを直接書き込む経路が存在しないため。読み込み時の検証は上表 R9/R13/R19 でカバー）。`_rewrite()`（`mark_stale()` が使う全件書き戻し）は旧 truncate-then-write（中断時に旧ログ全損の恐れ）から、同一ディレクトリへの staging ファイル書き込み + `os.replace()` によるアトミック置換へ変更 (R17)。置換前の中断では旧ログが無傷のまま残ることをテストで確認 | **検証済み** |
 | `proto1/reference_set.py::ReferenceSetGallery.sidecar_dict()` | `reference-set/0.2` sidecar dict（呼び出し元が JSON へ埋め込む） | — | **対象外**（書き出し専用。対応する読み込みローダーが本コードベースに存在しない。C5/C6 掃討・R9 対応時に確認済み） |
 | `proto1/results_p1/_generate_report_data.py` | `results_p1/report_data.json` 等 | — | **対象外**（一回限り実行済みの歴史的レポート生成スクリプト。再実行して正本を差し替える経路も、生成物を再ロードする経路も存在しない） |
@@ -264,8 +267,8 @@ write-only で対応する loader が存在しない経路（reference_set の
 sidecar・一回限りのレポート生成スクリプト・singer/ の JSON 書き出し）
 も明示的に対象外。**全行が「検証済み」または明示的な境界宣言に分類され
 たため、C1–C6/R1–R11/R12–R13/R14–R16/R17–R19/R20–R21/R22–R23/R24–R25/
-R26 の 11 ラウンドにわたる「ローダー/来歴/公開/検出ロジック」系残穴の
-指摘サイクルをここで終端とする。** 今後同種の指摘が来た場合は、本表に新しい行を
+R26/R27–R28 の 12 ラウンドにわたる「ローダー/来歴/公開/検出ロジック」系
+残穴の指摘サイクルをここで終端とする。** 今後同種の指摘が来た場合は、本表に新しい行を
 追加できるかどうか（＝これまで見落としていた経路か）をまず確認すること。
 既存行の再指摘であれば、当該行の「検証内容」列に記載済みの対処で十分か、対処
 自体に不備があるかを個別に判断する。

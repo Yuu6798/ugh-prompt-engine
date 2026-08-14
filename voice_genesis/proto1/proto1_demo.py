@@ -347,34 +347,36 @@ def _publish_outputs(replacements: List[Tuple[Path, Path]]) -> None:
 
 
 def _publish_or_fail_closed(
-    determinism_passed: bool,
+    publish_ready: bool,
     e2e_record: Dict[str, Any],
     registry_replacement: Tuple[Path, Path],
     wav_publish: List[Tuple[Path, Path]],
     staging_out_path: Path,
     out_path: Path,
     diagnostics_path: Path,
+    failure_reason: str = "determinism check FAILED",
 ) -> None:
-    """決定論比較の成否で publish フェーズ呼び出しを門番化する（PR#261 レビュー R8）。
+    """決定論比較の成否、および必須成果物の生成可否で publish フェーズ呼び出しを
+    門番化する（PR#261 レビュー R8。R27 で `publish_ready` へ一般化）。
 
-    `determinism_passed` が False の場合、`_publish_outputs()` を一度も
-    呼ばない（＝正本一式 registry/WAV/e2e_run.json は完全に旧状態のまま
-    残る）。代わりに失敗診断（`e2e_record` 全体。run_1/run_2・
-    `differing_paths` を含む）を非正本パス `diagnostics_path` へ書き、
-    `SystemExit` で終了する。
+    `publish_ready` が False の場合、`_publish_outputs()` を一度も呼ばない
+    （＝正本一式 registry/WAV/e2e_run.json は完全に旧状態のまま残る）。代わりに
+    失敗診断（`e2e_record` 全体。run_1/run_2・`differing_paths`・
+    `selected_pass_genome_for_wav` 等を含む）を非正本パス `diagnostics_path`
+    へ書き、`SystemExit` で終了する（メッセージは `failure_reason` を使う。
+    呼び出し元は「決定論比較の不一致」「F1-7 必須 WAV 成果物の未生成」等、
+    実際に成立しなかった条件を渡す）。
 
-    `determinism_passed` が True の場合のみ `e2e_record` を
-    `staging_out_path` へ書き、registry・WAV・e2e_run.json を
-    `_publish_outputs()` で一括公開する。
+    `publish_ready` が True の場合のみ `e2e_record` を `staging_out_path` へ
+    書き、registry・WAV・e2e_run.json を `_publish_outputs()` で一括公開する。
     """
-    if not determinism_passed:
+    if not publish_ready:
         diagnostics_path.write_text(
             json.dumps(e2e_record, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8"
         )
         raise SystemExit(
-            "determinism check FAILED — canonical results_final/ outputs were NOT modified "
-            f"(publish フェーズは呼ばれていない)。see {diagnostics_path.name}."
-            "determinism_check.differing_paths for details"
+            f"{failure_reason} — canonical results_final/ outputs were NOT modified "
+            f"(publish フェーズは呼ばれていない)。see {diagnostics_path.name} for details."
         )
 
     staging_out_path.write_text(
@@ -497,6 +499,20 @@ def main() -> None:
         print("[proto1_demo] WARNING: WAV file write determinism check FAILED "
               "(soundfile.write() produced different bytes for the same array across 2 writes)")
 
+    # PR#261 レビュー R27: F1-7（成果 WAV: phrase + cross_range）は run_2 で
+    # linkability 監査に PASS した個体が最低 1 つ存在することに依存する。
+    # 全候補が不合格だった場合 `selected_key` は None のままで WAV は 1 件も
+    # 生成されない。旧実装はこのケースを WARNING ログのみで通過させていたため、
+    # run_1/run_2 が（全候補不合格という結果も含めて）偶然一致すれば
+    # `determinism_check.passed=True` のまま、F1-7 の必須成果物を欠いた
+    # まま publish され得た。決定論性とは独立の失敗条件として fail-closed
+    # とする（正本を一切変更せず失敗診断を書いて SystemExit）。
+    no_wav_selected = selected_key is None
+    if no_wav_selected:
+        print("[proto1_demo] WARNING: no genome passed linkability audit in run_2 "
+              "— F1-7 required WAV exports (phrase/cross_range) were NOT produced")
+    publish_ready = determinism_passed and not no_wav_selected
+
     # --- e2e_run.json 組み立て（staging へ書く。公開はまだしない） -----------
     report_generated_at = datetime.now(timezone.utc).isoformat()
     e2e_record = {
@@ -571,31 +587,42 @@ def main() -> None:
     # 組み立て）のどこかで例外が起きた場合、_publish_outputs は一度も呼ばれず
     # 正本一式（registry / WAV / e2e_run.json）は完全に旧状態のまま残る。
     #
-    # さらに determinism_passed が False の場合も _publish_or_fail_closed()
+    # さらに publish_ready が False の場合も _publish_or_fail_closed()
     # が publish フェーズ呼び出しそのものを門番化し、正本を一切置換せず
     # 失敗診断を非正本パスへ書いて終了する（PR#261 レビュー R8: 決定論が
-    # 崩れた実行結果を「一致しなかった」という記録付きで正本へ混入させない）。
+    # 崩れた実行結果を「一致しなかった」という記録付きで正本へ混入させない。
+    # R27: F1-7 必須 WAV 成果物が生成できなかった run も同様に扱う）。
     #
     # PR#261 レビュー R25: staging パスの per-run 一意化（`run_suffix`）は
     # 2 プロセスが互いの staging ファイルを踏みつけ合う事故は防ぐが、正本への
     # `os.replace` 連鎖そのものが 2 プロセス間で交差する可能性までは防げない。
     # 正本 publish 呼び出しの直前で単純な排他ロックを取り、既にロックが
     # 存在する（＝別プロセスが publish 中）場合は明示エラーで即終了する。
-    if determinism_passed:
+    failure_reasons = []
+    if not determinism_passed:
+        failure_reasons.append("determinism check FAILED")
+    if no_wav_selected:
+        failure_reasons.append(
+            "no genome passed linkability audit (F1-7 required WAV exports were not produced)"
+        )
+    failure_reason = " AND ".join(failure_reasons) if failure_reasons else "determinism check FAILED"
+
+    if publish_ready:
         print("[proto1_demo] publishing staged outputs...")
     else:
-        print(f"[proto1_demo] determinism check FAILED — canonical outputs left untouched, "
+        print(f"[proto1_demo] {failure_reason} — canonical outputs left untouched, "
               f"diagnostics will be written to {diagnostics_path}")
     try:
         with _publish_lock(lock_path):
             _publish_or_fail_closed(
-                determinism_passed,
+                publish_ready,
                 e2e_record,
                 (staging_registry_path, final_registry_path),
                 wav_publish,
                 staging_out_path,
                 out_path,
                 diagnostics_path,
+                failure_reason=failure_reason,
             )
     except PublishLockError as exc:
         raise SystemExit(str(exc)) from exc

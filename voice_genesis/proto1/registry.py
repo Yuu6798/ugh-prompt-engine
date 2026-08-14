@@ -289,9 +289,38 @@ class GenomeRegistry:
             genome=to_dict(genome),
         )
 
+        # PR#261 レビュー R28: 書き込み前に「直列化 → _entry_from_dict() での
+        # 再読み込み」というラウンドトリップを試し、load_all() が将来拒否
+        # するであろうエントリは append() の時点で拒否する（書読対称性の
+        # 保証）。append() は呼び出し元から渡された `genome`（VoiceGenome
+        # オブジェクト）を `to_dict()` するだけで、`from_dict()` 側にしか
+        # 実装されていない意味論検証（例: R26 の source_mode 閉じた語彙、
+        # R18 の float 有限性、C5 の physio_range 再計算一致）を一切通さない。
+        # frozen dataclass は構築時に値を検証しないため、呼び出し元が
+        # `SourceSection(source_mode="robotic")` のような不正な値を直接
+        # 組み立てて渡すと、append() 自体は成功するのに後で load_all() が
+        # そのエントリを拒否する「書けるが読めない」非対称な状態を生み得た。
+        # この事前ラウンドトリップは `_entry_from_dict()` を経由するため、
+        # 埋め込み genome に対する `from_dict()` の全検証（R3/R12/R16/R18/
+        # R26 等）を含め、読み込み側の全規律を書き込み前に前倒しで適用する。
+        #
+        # 性能注記: 現状（registry 規模は数〜数十エントリ）では 1 回の JSON
+        # シリアライズ + パース + 全検証のオーバーヘッドは無視できるが、
+        # 将来 append() が高頻度・大規模 registry で使われるようになった
+        # 場合はこの検証コストが append 1 回あたりの定数オーバーヘッドとして
+        # 効いてくる点に留意すること。
+        line = entry.to_json_line()
+        try:
+            _entry_from_dict(json.loads(line))
+        except RegistryError as exc:
+            raise RegistryError(
+                "append() が構築したエントリが load_all() 側の検証を通過しない"
+                f"（書読対称性違反。genome_id={genome_id!r}）: {exc}"
+            ) from exc
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(entry.to_json_line())
+            fh.write(line)
             fh.write("\n")
         return entry
 

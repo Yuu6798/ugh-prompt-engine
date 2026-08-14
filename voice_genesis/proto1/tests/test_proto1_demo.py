@@ -362,3 +362,124 @@ def test_publish_lock_rejects_concurrent_publish_when_lock_already_exists(tmp_pa
     # （誤って併走中の別プロセスのロックを壊さないため）。
     assert lock_path.exists()
     assert lock_path.read_text(encoding="utf-8") == "12345"
+
+
+# --- R27: 監査全滅（selected_key is None）の fail-closed 化 ------------------
+
+
+def test_publish_or_fail_closed_leaves_canonical_outputs_untouched_when_no_wav_selected(tmp_path):
+    """`publish_ready=False` を「F1-7 の必須 WAV 成果物が生成できない
+    （selected_key is None）」という決定論とは別の理由で渡した場合も、
+    決定論不一致(R8)と同様に正本を一切変更せず失敗診断を書いて SystemExit
+    することを確認する（`_publish_or_fail_closed` の一般化: PR#261 R27）。
+    """
+    final_registry = tmp_path / "genome_registry.jsonl"
+    final_registry.write_text("old-registry-bytes", encoding="utf-8")
+    staging_registry = tmp_path / "_staging_registry.jsonl"
+    staging_registry.write_text("new-registry-bytes", encoding="utf-8")
+
+    out_path = tmp_path / "e2e_run.json"
+    out_path.write_text('{"old":true}', encoding="utf-8")
+    staging_out_path = tmp_path / "_staging_e2e_run.json"
+    diagnostics_path = tmp_path / "_failed_run_diagnostics.json"
+
+    e2e_record = {
+        "determinism_check": {"passed": True, "differing_paths": []},
+        "selected_pass_genome_for_wav": {"genome_key": None, "genome_id": None, "wav_paths": {}},
+    }
+    reason = "no genome passed linkability audit (F1-7 required WAV exports were not produced)"
+
+    with pytest.raises(SystemExit) as exc_info:
+        pd._publish_or_fail_closed(
+            False,  # publish_ready = False（決定論は一致していても WAV 未生成で拒否）
+            e2e_record,
+            (staging_registry, final_registry),
+            [],
+            staging_out_path,
+            out_path,
+            diagnostics_path,
+            failure_reason=reason,
+        )
+
+    assert reason in str(exc_info.value)
+    assert final_registry.read_text(encoding="utf-8") == "old-registry-bytes"
+    assert out_path.read_text(encoding="utf-8") == '{"old":true}'
+    assert not staging_out_path.exists()
+    assert json.loads(diagnostics_path.read_text(encoding="utf-8")) == e2e_record
+
+
+class _FakeGallery:
+    """`main()` の e2e_record 組み立てが要求する最小属性だけを持つダミー gallery
+    （R27 の main() レベル注入テストで実際のギャラリー構築を回避するため）。"""
+
+    sha256 = "f" * 64
+    e1_chance_band_p95 = 0.5
+    e2_chance_band_p95 = 0.5
+    chance_n_permutations = 1
+
+    def sidecar_dict(self):
+        return {"schema_version": "reference-set/0.2", "sha256": self.sha256}
+
+
+def _fake_run_pipeline_all_audits_fail(gallery, registry_path, mutate_scale=None):
+    """`run_pipeline()` の代替: 4 候補全てが linkability 監査不合格
+    （`overall_pass=False`）という `main()` の R27 分岐を再現する最小限の
+    戻り値を返す。実際の音声合成・監査計算は一切行わない。"""
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text("", encoding="utf-8")
+    genomes = {}
+    for key in ("a", "b", "c", "d"):
+        genomes[key] = {
+            "op": "sample", "seed": 1, "parent_keys": [], "parent_genome_ids": [],
+            "pre_audit_genome_id": f"fake-{key}", "registered_genome_id": f"fake-{key}",
+            "genome": {}, "probe_manifest": {}, "plausibility": {"passed": True},
+            "linkability_audit": {"overall_pass": False},  # 全候補不合格を模擬
+            "registry_entry": {},
+        }
+    return {"genomes": genomes, "lineage_of_d": [], "registry_path": str(registry_path)}
+
+
+def test_main_fails_closed_when_all_candidates_fail_linkability_audit(tmp_path, monkeypatch):
+    """PR#261 レビュー R27 の障害注入テスト（main() レベル）: 全候補が
+    linkability 監査に不合格（`selected_key` が最後まで None のまま）の場合、
+    たとえ決定論比較（run_1 vs run_2）自体は一致していても、F1-7 の必須
+    WAV 成果物を欠いたまま publish されず、正本一式が完全に旧状態のまま
+    残り、プロセスが非零終了することを確認する。
+
+    実際の音声合成・reference gallery 構築は monkeypatch で置き換え、
+    ロジック（`selected_key is None` → fail-closed）だけを軽量に検証する。
+    """
+    monkeypatch.setattr(pd, "RESULTS_DIR", tmp_path)
+    # 実リポジトリ配下でない tmp_path では `_repo_relative_path()` の
+    # `relative_to(REPO_ROOT)` が失敗するため、本テストでは無関係な
+    # パス正規化ロジックをパススルーに置き換える。
+    monkeypatch.setattr(pd, "_repo_relative_path", lambda p: str(p))
+    monkeypatch.setattr(pd.rset, "build_reference_set", lambda **kwargs: _FakeGallery())
+    monkeypatch.setattr(pd, "run_pipeline", _fake_run_pipeline_all_audits_fail)
+
+    final_registry = tmp_path / "genome_registry.jsonl"
+    final_registry.write_text("old-registry-bytes (pre-existing canonical)", encoding="utf-8")
+    out_path = tmp_path / "e2e_run.json"
+    out_path.write_text('{"old":true}', encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        pd.main()
+
+    # 正本は完全に旧状態のまま（publish フェーズは一度も呼ばれていない）。
+    assert final_registry.read_text(encoding="utf-8") == "old-registry-bytes (pre-existing canonical)"
+    assert out_path.read_text(encoding="utf-8") == '{"old":true}'
+    # WAV も一切生成されていない（selected_key が None のまま = レンダ自体
+    # スキップされている）。
+    assert not list(tmp_path.glob("prototype1_*.wav"))
+    assert not list(tmp_path.glob("_staging_prototype1_*.wav"))
+    # e2e_run.json の staging（正本反映を待つ最終段）も、publish フェーズ自体
+    # 到達していないため作られない（R8 の既存契約と同じ: staging_registry の
+    # 残置は許容——次回実行の pre-run cleanup で上書きされる想定——だが
+    # staging_out_path・publish ロックは作られない/残らない）。
+    assert not list(tmp_path.glob("_staging_e2e_run.*.json"))
+    assert not (tmp_path / "_publish.lock").exists()
+    # 失敗診断が非正本パスへ書かれ、F1-7 の理由が記録されている。
+    diagnostics_path = tmp_path / "_failed_run_diagnostics.json"
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert diagnostics["selected_pass_genome_for_wav"]["genome_key"] is None
+    assert diagnostics["determinism_check"]["passed"] is True  # 決定論自体は一致（fail-closed の理由と独立）
