@@ -14,6 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import numpy as np
+
 import gate_checks as gc
 import render_song as rs
 
@@ -146,3 +148,68 @@ def test_gate3_consonant_existence_detects_fully_missing_onset():
 def _expected_onset_keys(result):
     target_onsets = {"s", "k", "t"}
     return [(i, seg.note.mora.onset) for i, seg in enumerate(result.segments) if seg.note.mora.onset in target_onsets]
+
+
+# --- PR#261 レビュー R23: gate6 grip 判定の sweep×probe 全セル有限性チェック ---
+
+
+def _patch_grip_axis_lightweight(monkeypatch, n_probe, nan_at):
+    """`_grip_axis` 用: render_sustained_vowel/_quick_features をダミー化する。
+
+    intended feature("periodicity")は si に比例した値を全 probe 共通で返し、
+    side features は 0 固定（grip 判定の閾値を満たすよう仕込む）。`nan_at`
+    （(sweep_index, probe_index) タプル、または None）に該当するセルだけ
+    全特徴を NaN にする。
+    """
+    monkeypatch.setattr(gc.rs, "render_sustained_vowel", lambda g, midi, vowel="a", duration_sec=1.2: np.zeros(4))
+
+    counter = {"n": 0}
+
+    def fake_quick_features(wav, sr):
+        idx = counter["n"]
+        counter["n"] += 1
+        si, pi = divmod(idx, n_probe)
+        if nan_at is not None and (si, pi) == nan_at:
+            return {"mean_f0": float("nan"), "periodicity": float("nan"), "rms": float("nan"), "vibrato_depth": float("nan")}
+        return {"mean_f0": 0.0, "periodicity": 10.0 * si, "rms": 0.0, "vibrato_depth": 0.0}
+
+    monkeypatch.setattr(gc, "_quick_features", fake_quick_features)
+
+
+def test_grip_axis_fails_when_a_probe_cell_is_non_finite(monkeypatch):
+    """`E[f] = float(np.nanmedian(E_note))` は 1 probe が完全に非有限
+    （測定不能）でも他の probe が同一値なら中央値が変わらず、旧実装は
+    「一部 probe でしか測定できていない不完全な証拠」を検出できなかった
+    （PR#261 R23）。sweep×probe グリッドの全セル有限性を PASS の前提条件
+    に追加したことで、この不完全証拠 PASS が塞がれていることを確認する。
+    """
+    probe_names = list(gc._PROBE_MIDIS.keys())
+    n_probe = len(probe_names)
+    sweep_values = [0.0, 0.1, 0.2, 0.35, 0.5]
+    n_sweep = len(sweep_values)
+    nan_at = (n_sweep - 1, 2)  # 最終 sweep 点 × 3 番目の probe
+
+    _patch_grip_axis_lightweight(monkeypatch, n_probe, nan_at)
+
+    genome_base = rs.voice_a()
+    result = gc._grip_axis(genome_base, "breathiness", sweep_values, "periodicity")
+
+    assert result["non_finite_cells"], "注入した非有限セルが検出されていない"
+    assert any(c["sweep_index"] == nan_at[0] and c["probe"] == probe_names[nan_at[1]] for c in result["non_finite_cells"])
+    assert result["pass"] is False
+
+
+def test_grip_axis_passes_for_all_finite_grid_non_regression(monkeypatch):
+    """非退行確認: 同じ合成データで NaN を注入しなければ従来どおり pass する
+    （grip_ratio/direction_consistency の閾値ロジック自体は不変）。"""
+    probe_names = list(gc._PROBE_MIDIS.keys())
+    n_probe = len(probe_names)
+    sweep_values = [0.0, 0.1, 0.2, 0.35, 0.5]
+
+    _patch_grip_axis_lightweight(monkeypatch, n_probe, None)
+
+    genome_base = rs.voice_a()
+    result = gc._grip_axis(genome_base, "breathiness", sweep_values, "periodicity")
+
+    assert result["non_finite_cells"] == []
+    assert result["pass"] is True

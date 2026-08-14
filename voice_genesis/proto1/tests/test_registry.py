@@ -237,6 +237,44 @@ def test_entry_from_dict_rejects_version_mismatch_with_genome_schema_version(reg
         reg.load_all()
 
 
+# --- PR#261 レビュー R22: エントリ読み込み時の op 検証 -----------------------
+
+
+def test_entry_from_dict_rejects_op_outside_valid_ops(registry_path):
+    """`append()` は op を `VALID_OPS` で検証するが、旧 `_entry_from_dict()`
+    （読み込み時）は宣言値をそのまま信頼していた。手編集・インポートされた
+    行が `op="delete"` のような未定義値を持っていても、読み込み経路を
+    経由すれば検証されずに通ってしまう非対称性を拒否で塞ぐ。"""
+    reg = r.GenomeRegistry(registry_path)
+    gen = sampler.sample(1)
+    reg.append(gen, op="sample", seed=1, now=FIXED_TIME)
+
+    data = json.loads(registry_path.read_text(encoding="utf-8").strip())
+    assert data["op"] in r.VALID_OPS  # 前提確認
+    data["op"] = "delete"  # VALID_OPS = ("sample", "mutate", "crossover") の域外
+    registry_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(r.RegistryError):
+        reg.load_all()
+
+
+def test_entry_from_dict_accepts_each_valid_op(registry_path):
+    """非退行確認: VALID_OPS の全値（sample/mutate/crossover）は従来どおり
+    読み込める。"""
+    reg = r.GenomeRegistry(registry_path)
+    g1 = sampler.sample(1)
+    e1 = reg.append(g1, op="sample", seed=1, now=FIXED_TIME)
+    g2 = sampler.mutate(g1, seed=2, scale=0.1)
+    e2 = reg.append(g2, op="mutate", seed=2, parents=[e1.genome_id], now=FIXED_TIME)
+    g3 = sampler.sample(3, name="parent3")
+    e3 = reg.append(g3, op="sample", seed=3, now=FIXED_TIME)
+    g4 = sampler.crossover(g2, g3, seed=4)
+    reg.append(g4, op="crossover", seed=4, parents=[e2.genome_id, e3.genome_id], now=FIXED_TIME)
+
+    loaded = reg.load_all()
+    assert {e.op for e in loaded} == {"sample", "mutate", "crossover"}
+
+
 # --- PR#261 レビュー R3: エントリ内 genome の検証 / genome_id・audit 整合 ----
 
 

@@ -259,6 +259,18 @@ def _quick_features(wav: np.ndarray, sr: int) -> Dict[str, float]:
 
 
 def _grip_axis(genome_base, axis: str, sweep_values: List[float], intended: str) -> Dict:
+    """gate 6: 1 軸（breathiness/vibrato_depth）の grip 非退行クイックチェック。
+
+    PR#261 レビュー R23: `E[f] = float(np.nanmedian(E_note))` は sweep×probe
+    グリッドの一部セルが非有限（NaN、測定失敗）でも `np.nanmedian` が黙って
+    その列を除外して中央値を返すため、実際には probe の一部でしか測定
+    できていないのに「全 probe で測定した上での PASS」であるかのように
+    報告してしまう不完全証拠 PASS の穴があった。本実装は sweep×probe グリッド
+    の全セル（`_QUICK_FEATURES` の全特徴 × 全 sweep 点 × 全 probe）が有限で
+    あることを PASS の前提条件として明示的に追加し、1 セルでも非有限なら
+    無条件で FAIL とし、`non_finite_cells` に該当セル（feature/sweep_index/
+    sweep_value/probe）を列挙して理由を可視化する。
+    """
     n_sweep, n_probe = len(sweep_values), len(_PROBE_MIDIS)
     matrices = {f: np.full((n_sweep, n_probe), np.nan) for f in _QUICK_FEATURES}
 
@@ -274,6 +286,13 @@ def _grip_axis(genome_base, axis: str, sweep_values: List[float], intended: str)
             feats = _quick_features(wav, rs.SR_OUT)
             for f in _QUICK_FEATURES:
                 matrices[f][si, pi] = feats[f]
+
+    probe_names = list(_PROBE_MIDIS.keys())
+    non_finite_cells = [
+        {"feature": f, "sweep_index": int(si), "sweep_value": sweep_values[int(si)], "probe": probe_names[int(pi)]}
+        for f in _QUICK_FEATURES
+        for si, pi in np.argwhere(~np.isfinite(matrices[f]))
+    ]
 
     side_features = [f for f in _QUICK_FEATURES if f != intended]
     E = {}
@@ -301,11 +320,15 @@ def _grip_axis(genome_base, axis: str, sweep_values: List[float], intended: str)
                 matches += 1
     direction = matches / total if total > 0 else float("nan")
 
-    gate_pass = bool(grip >= GRIP_GATE_MIN and np.isfinite(direction) and direction >= GRIP_DIRECTION_MIN and E_intended >= GRIP_EFFECT_MIN)
+    gate_pass = bool(
+        grip >= GRIP_GATE_MIN and np.isfinite(direction) and direction >= GRIP_DIRECTION_MIN
+        and E_intended >= GRIP_EFFECT_MIN and not non_finite_cells
+    )
     return {
         "axis": axis, "intended_feature": intended, "grip_ratio": round(grip, 4),
         "direction_consistency": round(direction, 4) if np.isfinite(direction) else None,
         "E_intended": round(E_intended, 4), "E_side": {f: round(E[f], 4) for f in side_features},
+        "non_finite_cells": non_finite_cells,
         "pass": gate_pass,
     }
 

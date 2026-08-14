@@ -187,6 +187,15 @@ def _quick_features_scored(genome_base, midi: float, wav: np.ndarray, sr: int) -
 
 
 def _grip_axis_v2(genome_base, axis: str, sweep_values: List[float], intended: str) -> Dict:
+    """gate6-v2: 1 軸の grip 非退行クイックチェック（score-informed 版）。
+
+    PR#261 レビュー R23: `gate_checks.py::_grip_axis` と同型の穴。
+    `E[f] = float(np.nanmedian(E_note))` は sweep×probe グリッドの一部セルが
+    非有限でも `np.nanmedian` が黙って除外するため、一部の probe でしか
+    測定できていない不完全な証拠のまま PASS してしまい得る。全セル（全特徴
+    × 全 sweep 点 × 全 probe）の有限性を PASS の前提条件に追加し、1 セルでも
+    非有限なら FAIL、`non_finite_cells` に該当セルを列挙する。
+    """
     from dataclasses import replace as _replace
     n_sweep, n_probe = len(sweep_values), len(gc._PROBE_MIDIS)
     matrices = {f: np.full((n_sweep, n_probe), np.nan) for f in _QUICK_FEATURES}
@@ -205,6 +214,13 @@ def _grip_axis_v2(genome_base, axis: str, sweep_values: List[float], intended: s
             for f in _QUICK_FEATURES:
                 matrices[f][si, pi] = feats[f]
             reject_rates[si, pi] = reject_rate
+
+    probe_names = list(gc._PROBE_MIDIS.keys())
+    non_finite_cells = [
+        {"feature": f, "sweep_index": int(si), "sweep_value": sweep_values[int(si)], "probe": probe_names[int(pi)]}
+        for f in _QUICK_FEATURES
+        for si, pi in np.argwhere(~np.isfinite(matrices[f]))
+    ]
 
     side_features = [f for f in _QUICK_FEATURES if f != intended]
     E = {}
@@ -232,13 +248,17 @@ def _grip_axis_v2(genome_base, axis: str, sweep_values: List[float], intended: s
                 matches += 1
     direction = matches / total if total > 0 else float("nan")
 
-    gate_pass = bool(grip >= gc.GRIP_GATE_MIN and np.isfinite(direction) and direction >= gc.GRIP_DIRECTION_MIN and E_intended >= gc.GRIP_EFFECT_MIN)
+    gate_pass = bool(
+        grip >= gc.GRIP_GATE_MIN and np.isfinite(direction) and direction >= gc.GRIP_DIRECTION_MIN
+        and E_intended >= gc.GRIP_EFFECT_MIN and not non_finite_cells
+    )
     return {
         "axis": axis, "intended_feature": intended, "grip_ratio": round(grip, 4),
         "direction_consistency": round(direction, 4) if np.isfinite(direction) else None,
         "E_intended": round(E_intended, 4), "E_side": {f: round(E[f], 4) for f in side_features},
         "vibrato_reject_rate_mean": float(np.nanmean(reject_rates)),
         "vibrato_reject_rate_max": float(np.nanmax(reject_rates)),
+        "non_finite_cells": non_finite_cells,
         "provenance": PROVENANCE,
         "pass": gate_pass,
     }

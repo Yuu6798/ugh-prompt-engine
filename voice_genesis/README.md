@@ -196,21 +196,23 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 ## 検証境界の終端宣言（ロード経路・公開経路の census）
 
 PR#261 のレビューは C1–C6 → R1–R7 → R8–R11 → R12–R13 → R14–R16 →
-R17–R19 → R20–R21 の 8 ラウンドにわたり、「ローダー/来歴/公開」系お
-よび「検出ロジック」系の同型の穴（schema 未検証・schema キー欠落時の
-デフォルト補完・全セクション/リーフフィールド欠落時のデフォルト補完・
-float リーフの非有限値（NaN/inf）未検証・content hash 未検証・エントリ
-内の重複表現フィールド間の不整合・内容アドレス（report_id）の読み込み
+R17–R19 → R20–R21 → R22–R23 の 9 ラウンドにわたり、「ローダー/来歴/
+公開」系および「検出ロジック」系の同型の穴（schema 未検証・schema
+キー欠落時のデフォルト補完・全セクション/リーフフィールド欠落時の
+デフォルト補完・float リーフの非有限値（NaN/inf）未検証・content hash
+未検証・エントリ内の重複表現フィールド間の不整合・列挙型フィールド
+（op）の読み込み側検証の非対称性・内容アドレス（report_id）の読み込み
 側未検証・pass/fail 宣言の未再計算・再計算前提となる実測値自体の定義域
 未検証・親の存在/順序不変条件・staging の不完全さ・書き戻し処理の非
 アトミック性（中断時の全損リスク）・歴史的正本レポートの開示文言の
 陳腐化・**「実出力だけを走査し期待値集合と照合しない」検出力欠陥**・
-**最近傍/最良値探索ループでの NaN 距離の fail-open**）を逐次指摘し
-続けた。指摘の再発を止めるため、`voice_genesis/` 内で永続化データを
-**読み込む**（デシリアライズしてオブジェクトへ復元する）経路、**正本を
-公開する**（成果物ファイルを書き換える）経路、および（R20–R21 で追加）
-レンダリング結果に対し**その場で pass/fail を判定する検出ロジック**経路
-を機械的に全列挙する（`grep -rln "json\.load(\|json\.loads(" voice_genesis
+**最近傍/最良値探索ループでの NaN 距離の fail-open**・**nanmedian 等の
+暗黙除外による不完全証拠 PASS**）を逐次指摘し続けた。指摘の再発を
+止めるため、`voice_genesis/` 内で永続化データを**読み込む**（デシリア
+ライズしてオブジェクトへ復元する）経路、**正本を公開する**（成果物
+ファイルを書き換える）経路、および（R20–R21 で追加）レンダリング結果
+に対し**その場で pass/fail を判定する検出ロジック**経路を機械的に全
+列挙する（`grep -rln "json\.load(\|json\.loads(" voice_genesis
 --include="*.py" | grep -v "/tests/"` で確認できるロード経路が母集合。
 検出ロジック経路は R20–R21 の指摘対象を機縁に追加した第三の区分であり、
 永続化 JSON の grep 母集合には含まれない）。
@@ -220,7 +222,7 @@ float リーフの非有限値（NaN/inf）未検証・content hash 未検証・
 | ファイル::関数 | 読む対象 | 検証内容 | 状態 |
 |---|---|---|---|
 | `proto1/genome.py::from_dict()` | Genome JSON document | schema_version キーの**存在**を要求し欠落を拒否 (R12) / schema_version 一致 (C6) / 全 8 セクション（source/resonance/noise/register/microprosody/range/physio_range/audit）と各リーフフィールドのキー**存在**を要求し欠落（切り詰め payload）を拒否 (R16。デフォルト補完は `build_genome()` 等の明示的コンストラクタ経路のみに限定) / 全 float リーフ（`formant_offsets` 等リスト内要素を含む）の NaN/inf を `_as_float` で一括拒否し有限値のみ受理 (R18) / physio_range 再計算一致 (C5) / 全フィールド型検証 | **検証済み** |
-| `proto1/registry.py::_entry_from_dict()`（`GenomeRegistry.load_all()` 経由） | registry JSONL 1 行 | registry_schema キーの**存在**を要求し欠落を拒否 (R12) / registry_schema 一致 (C5/C6 掃討) / 埋め込み genome を `from_dict()` で検証 (R3a、R16・R18 強化が読み込み経路にも波及) / genome_id と content hash の一致 (R3b) / エントリ側 audit と genome.audit の一致 (R3c) / エントリ直下 version と埋め込み genome.schema_version の一致 (R14) / `load_all()` 内での重複 genome_id 検出 (R5) / 親の存在・自エントリより前に出現 (R10)。renderer_version/feature_set_version は同型 grep 掃討 (R12) で発見したが、構造解釈を左右しない由来メタデータのためデフォルト補完のまま境界宣言 | **検証済み** |
+| `proto1/registry.py::_entry_from_dict()`（`GenomeRegistry.load_all()` 経由） | registry JSONL 1 行 | registry_schema キーの**存在**を要求し欠落を拒否 (R12) / registry_schema 一致 (C5/C6 掃討) / 埋め込み genome を `from_dict()` で検証 (R3a、R16・R18 強化が読み込み経路にも波及) / genome_id と content hash の一致 (R3b) / エントリ側 audit と genome.audit の一致 (R3c) / エントリ直下 version と埋め込み genome.schema_version の一致 (R14) / op を `VALID_OPS`（`append()` と同一の許容値集合）で検証 (R22。`append()` 側は元から検証していたが `_entry_from_dict()` は宣言値を無条件に信頼していた非対称性を解消) / `load_all()` 内での重複 genome_id 検出 (R5) / 親の存在・自エントリより前に出現 (R10)。renderer_version/feature_set_version は同型 grep 掃討 (R12) で発見したが、構造解釈を左右しない由来メタデータのためデフォルト補完のまま境界宣言 | **検証済み** |
 | `proto1/reference_set.py::_report_from_dict()`（`LinkabilityAuditLog.load_all()` 経由） | 監査ログ JSONL 1 行 | report_id を {genome_id, reference_set_hash} から再計算し宣言値と照合、内容アドレス改ざんを拒否 (R19) / pass/fail 再計算 (R9) より先に、その入力（類似度・チャンス帯 p95）が有限かつコサイン類似度の定義域 [-1.0, 1.0] 内であることを検証し域外・非有限を拒否 (R13) / 保存済み実測値から e1_pass/e2_pass/overall_pass を再計算し宣言値と照合 (R9) | **検証済み** |
 | `harness/vt3_v5.py::restate_from_v4()` | `results_v4/grip_report_v4.json` | 検証なし（生 dict indexing） | **凍結対象外**（harness/ は凍結・無改変の歴史的検証コード。書き換えると当時の実測の一次記録性が損なわれる） |
 | `harness/vt3_v6.py::restate_from_v4()` | 同上 | 同上 | **凍結対象外**（同上） |
@@ -250,18 +252,19 @@ R20–R21 で判明した第三の穴の類型: 上記 2 表はいずれも「JS
 |---|---|---|---|
 | `singer/gate_checks.py::gate3_consonant_existence()`（`gate_checks_v2.py::run_full_gates_v2()` 経由でも共有・独自実装なし） | レンダリング結果の子音サブセグメント | 楽譜側（`result.segments[*].note.mora.onset`、レンダラの実出力に依存しない独立した期待値源）から期待子音インスタンス集合を先に確定し、`subsegments_out` に対応インスタンスが 1 つでも欠落していれば無条件 FAIL (R20)。旧実装は実出力のみを走査していたため、期待子音が全欠落しても走査対象自体が空になり検出不能だった。既存 4 音源(voice_a〜d)が新ロジックでも pass することを確認、/k/ 全欠落注入で FAIL になることをテストで確認 | **検証済み** |
 | `singer/genesis_v0.py::linkability_audit()`（`genesis_v1.py`/`genesis_v2.py` は独自実装を持たず本関数を再利用） | 候補 embedding の最近傍距離（standin-gallery + voice_A/B/C/D） | 候補ベクトル・参照ベクトル・算出距離のいずれかが非有限なら即座に監査不能（`measurement_valid=False`、`passed=False`、`margin=-inf`）として拒否 (R21)。旧実装は `if d < best:` の単純更新のみで、NaN 距離では `best` が初期値 `inf` のまま残り「無限マージンで最も新規」という fail-open を起こしていた。`run_genesis()` の淘汰理由も "linkability_fail" と区別して "measurement_invalid" を記録するよう追加。同型掃討: `genesis_v1.py`/`genesis_v2.py` は独自実装なし（`gv.linkability_audit` を直接呼ぶ）、`identity_metrics.py::measure_separation()` の `within_e1_max = max(a, b)`（Python 組込み `max()` は NaN が第 2 引数だと無視される順序依存バグ）は `np.max()` へ変更（現状呼び出し元なしの診断専用関数だが同型のため予防的に修正）、`genesis_v0.py::nn_distances()` の `min(dists)` も `np.min()` へ変更（`linkability_audit()` 強化により到達不能になったが多層防御として維持） | **検証済み** |
+| `singer/gate_checks.py::_grip_axis()`（`gate6_grip_quick_check()` 経由）/ `singer/gate_checks_v2.py::_grip_axis_v2()`（`gate6_grip_quick_check_v2()` 経由。v1/v2 は別実装） | gate6 grip 判定の sweep×probe 特徴量グリッド | 全特徴 × 全 sweep 点 × 全 probe セルの有限性を PASS の前提条件に追加し、`non_finite_cells` に該当セルを列挙 (R23)。旧実装は `E[f] = float(np.nanmedian(E_note))` が非有限セルを黙って中央値計算から除外するため、1 probe が完全に測定不能でも他 probe が同一値なら中央値が変わらず「不完全な証拠での PASS」を検出できなかった。v1/v2 双方に同型修正を適用。既存 4 音源(voice_a〜d)の gate6 が両版とも非有限セル 0 件・従来どおりの pass/fail 判定のまま非退行することを実測確認、疑似セル注入（レンダリングを monkeypatch で置換した軽量テスト）で 1 probe 完全欠測時に FAIL することを確認 | **検証済み** |
 
-**終端宣言**: 上記 13 行のうち、生成・公開系（proto1 の 3 経路）・検出
-ロジック系（singer の 2 経路）は全て検証済み。harness/ の 3 経路
+**終端宣言**: 上記 14 行のうち、生成・公開系（proto1 の 3 経路）・検出
+ロジック系（singer の 3 経路）は全て検証済み。harness/ の 3 経路
 （読み込み 2 + 書き込み複数）は凍結・無改変原則により明示的に対象外。
 write-only で対応する loader が存在しない経路（reference_set の
 sidecar・一回限りのレポート生成スクリプト・singer/ の JSON 書き出し）
 も明示的に対象外。**全行が「検証済み」または明示的な境界宣言に分類され
-たため、C1–C6/R1–R11/R12–R13/R14–R16/R17–R19/R20–R21 の 8 ラウンドに
-わたる「ローダー/来歴/公開/検出ロジック」系残穴の指摘サイクルをここで
-終端とする。** 今後同種の指摘が来た場合は、本表に新しい行を追加できる
-かどうか（＝これまで見落としていた経路か）をまず確認すること。既存行の
-再指摘であれば、当該行の「検証内容」列に記載済みの対処で十分か、対処
+たため、C1–C6/R1–R11/R12–R13/R14–R16/R17–R19/R20–R21/R22–R23 の 9
+ラウンドにわたる「ローダー/来歴/公開/検出ロジック」系残穴の指摘サイクル
+をここで終端とする。** 今後同種の指摘が来た場合は、本表に新しい行を
+追加できるかどうか（＝これまで見落としていた経路か）をまず確認すること。
+既存行の再指摘であれば、当該行の「検証内容」列に記載済みの対処で十分か、対処
 自体に不備があるかを個別に判断する。
 
 ## テストの実行

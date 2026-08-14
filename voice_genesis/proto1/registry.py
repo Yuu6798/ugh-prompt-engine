@@ -161,12 +161,22 @@ def _entry_from_dict(data: Dict[str, Any]) -> RegistryEntry:
             f"genome 側: {expected_audit!r}）"
         )
 
+    # PR#261 レビュー R22: op フィールドは `append()`（書き込み時）では
+    # `VALID_OPS` で検証されるが、`_entry_from_dict()`（読み込み時）は
+    # 宣言値をそのまま信頼していた。手編集・インポートされた JSONL 行が
+    # `op="delete"` のような未定義値を持っていても、書き込み経路を経由
+    # しなければ検証されずに通ってしまう非対称性があった（append 側の
+    # 制約が読み込み側で骨抜きにされる）。
+    op = data["op"]
+    if op not in VALID_OPS:
+        raise RegistryError(f"op は {VALID_OPS} のいずれかでなければならない（実際: {op!r}）")
+
     return RegistryEntry(
         genome_id=genome_id,
         version=entry_version,
         created_at=data["created_at"],
         parents=list(data.get("parents", [])),
-        op=data["op"],
+        op=op,
         seed=data.get("seed"),
         # renderer_version/feature_set_version は PR#261 レビュー R12 の grep 掃討で
         # 同じ `.get(..., 定数)` パターンとして見つかったが、schema_version/
