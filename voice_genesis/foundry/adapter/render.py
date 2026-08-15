@@ -435,11 +435,40 @@ def _note_frame_track(
     return per_sample[sample_idx]
 
 
+def _phrase_head_preutterance_shifts(
+    segments: list, note_origin_shift_frames: List[int], sr: int, frame_period_ms: float,
+) -> List[Tuple[object, int, int]]:
+    """P2/P3 修正 (review #262 R14/R19) 共通の対象ノート判定。
+
+    origin-shift（`_build_vcv_placements` が計算した実効 preutterance シフト）
+    を受けるフレーズ先頭 seg を列挙し、`(seg, ext_start, ar)` を返す
+    （`ext_start` = 延長区間の開始サンプル、`ar` = `NOTE_ATTACK_RELEASE_MS`
+    由来のアタック長サンプル数・セグメント長でクランプ済み）。
+    `_extend_phrase_head_amp_for_preutterance`（振幅）と
+    `_extend_phrase_head_f0_for_preutterance`（F0・R19 で追加）が本関数を
+    共有し、分岐条件の二重管理を避ける。
+    """
+    samples_per_frame = sr * frame_period_ms / 1000.0
+    attack_release = int(sr * perf.NOTE_ATTACK_RELEASE_MS / 1000.0)
+    out: List[Tuple[object, int, int]] = []
+    for seg, shift_frames in zip(segments, note_origin_shift_frames):
+        if not seg.is_phrase_first or shift_frames <= 0:
+            continue
+        shift_samples = int(round(shift_frames * samples_per_frame))
+        ext_start = max(0, seg.start_sample - shift_samples)
+        if ext_start >= seg.start_sample:
+            continue
+        n = seg.end_sample - seg.start_sample
+        ar = min(attack_release, n // 4) if n >= 4 else 0
+        out.append((seg, ext_start, ar))
+    return out
+
+
 def _extend_phrase_head_amp_for_preutterance(
     amp_env: np.ndarray, segments: list, note_origin_shift_frames: List[int], sr: int, frame_period_ms: float,
 ) -> np.ndarray:
-    """P2 修正 (review #262 R14・`r3789636053`): origin-shift 済みフレーズ頭
-    preutterance の消音を防ぐ。
+    """P2 修正 (review #262 R14・`r3789636053`、R19 でフェード二重化を解消):
+    origin-shift 済みフレーズ頭 preutterance の消音を防ぐ。
 
     `_note_frame_track` は `origin_shift_frames`（`_build_vcv_placements` が
     計算した実効 shift）分だけサンプリング原点を `seg.start_sample` より前へ
@@ -450,40 +479,75 @@ def _extend_phrase_head_amp_for_preutterance(
     `r3789636053`）。
 
     フレーズアーチ自体（`amp[phrase_start:phrase_end]` の cosine half-arch）
-    の形は変更しない。フレーズ先頭ノートの attack 値（`NOTE_ATTACK_RELEASE_MS`
-    のフェード完了直後に落ち着く定常値 = フェード適用前のアーチ境界値）を
-    shift 分だけ前方（preutterance 区間）へ定数外挿し、attack フェードの
-    開始点もその外挿区間の先頭へ前倒しする（無音からの立ち上がりクリック
-    防止・既存の attack フェード規約と対称）。ブレスの無音区間はこの分だけ
-    短くなる（`[phrase_start - shift, phrase_start)` が可聴になる）。
+    の形は変更しない。R14 時点では拡張区間 `[ext_start, seg.start_sample)`
+    のみを埋めていたため、`build_amplitude_envelope` が書いた元の attack
+    フェード `[seg.start_sample, seg.start_sample+ar)` が手つかずのまま残り、
+    「外挿区間で立ち上がった直後に seg.start_sample でゼロ近傍へ落ち、
+    そこから再度フェードインする」ノッチが生じていた（review #262 R19
+    指摘 1）。本修正はフェードそのものを延長端へ移設し、単一の立ち上がりに
+    する: `[ext_start, ext_start+ar)` を 0→`connect_level` へフェードイン
+    （`ar` = 元のアタック時間そのまま）、続く `[ext_start+ar,
+    seg.start_sample+ar)` を `connect_level` で定数充填する（旧フェード区間
+    `[seg.start_sample, seg.start_sample+ar)` もこの充填で上書きされ、
+    二重フェードが解消する）。`connect_level` は既存 `amp_env` の
+    `seg.start_sample+ar` 時点の値（フェード完了直後の定常値）をそのまま
+    読む——`build_amplitude_envelope` のアーチ/フェード実装を再現せず、
+    マジックナンバーの二重実装を避けつつ、`seg.start_sample+ar` 以降
+    （不変）との段差をゼロにする。
     """
     amp = amp_env.copy()
     if amp.shape[0] == 0:
         return amp
-    samples_per_frame = sr * frame_period_ms / 1000.0
-    attack_release = int(sr * perf.NOTE_ATTACK_RELEASE_MS / 1000.0)
-    for seg, shift_frames in zip(segments, note_origin_shift_frames):
-        if not seg.is_phrase_first or shift_frames <= 0:
-            continue
-        shift_samples = int(round(shift_frames * samples_per_frame))
-        ext_start = max(0, seg.start_sample - shift_samples)
-        if ext_start >= seg.start_sample:
-            continue
-        n = seg.end_sample - seg.start_sample
-        ar = min(attack_release, n // 4) if n >= 4 else 0
-        # フェード完了直後（既にフェード非適用領域）の定常値をそのまま読む
-        # ——`build_amplitude_envelope` のアーチ/フェード実装を再現せず、
-        # 既に構築済みの `amp_env` から読むことでマジックナンバーの二重実装
-        # を避ける。
-        steady_idx = min(seg.start_sample + ar, amp.shape[0] - 1)
-        head_level = float(amp[steady_idx])
-        amp[ext_start:seg.start_sample] = head_level
+    for seg, ext_start, ar in _phrase_head_preutterance_shifts(
+        segments, note_origin_shift_frames, sr, frame_period_ms
+    ):
+        connect_idx = min(seg.start_sample + ar, amp.shape[0] - 1)
+        connect_level = float(amp[connect_idx])
+        fill_end = min(seg.start_sample + ar, amp.shape[0])
+        if fill_end > ext_start:
+            amp[ext_start:fill_end] = connect_level
         if ar > 0:
-            fade_end = min(ext_start + ar, seg.start_sample)
+            fade_end = min(ext_start + ar, amp.shape[0])
             fade_len = fade_end - ext_start
             if fade_len > 0:
-                amp[ext_start:fade_end] = head_level * np.linspace(0.0, 1.0, fade_len, endpoint=False)
+                amp[ext_start:fade_end] = connect_level * np.linspace(0.0, 1.0, fade_len)
     return amp
+
+
+def _extend_phrase_head_f0_for_preutterance(
+    f0_persample: np.ndarray, segments: list, note_origin_shift_frames: List[int], sr: int, frame_period_ms: float,
+) -> np.ndarray:
+    """P3 修正 (review #262 R19 指摘 3): origin-shift 済みフレーズ頭
+    preutterance の F0 無声化 (0Hz) を防ぐ、振幅側と対になる F0 後方延長。
+
+    `perf.build_f0_contour` はフレーズ先頭より前（ブレス無音区間）を常に
+    ゼロ初期化したままのため、`_note_frame_track` がシフト分だけ前へずらして
+    サンプリングすると preutterance 区間の F0 が 0 のまま拾われる
+    （`_extend_phrase_head_amp_for_preutterance` の R14 修正により当該区間は
+    もはや無音でなくなっており、F0=0 は無声ノイズとして可聴になりうる）。
+
+    対象ノート判定は `_extend_phrase_head_amp_for_preutterance` と同一
+    （`_phrase_head_preutterance_shifts` を共有）。延長区間 `[ext_start,
+    seg.start_sample)` を、ノート開始時点の F0（`seg.start_sample` の輪郭値。
+    それ自体がまだ 0 の場合は同ノート内で最初に現れる有声値）で定数外挿する。
+    ビブラート等の時間変化は延長区間には適用しない（定数で足りる・仕様上
+    preutterance は「直前のノート開始ピッチへ滑らかに繋がる」だけで十分）。
+    """
+    f0 = f0_persample.copy()
+    if f0.shape[0] == 0:
+        return f0
+    for seg, ext_start, _ar in _phrase_head_preutterance_shifts(
+        segments, note_origin_shift_frames, sr, frame_period_ms
+    ):
+        start_idx = min(seg.start_sample, f0.shape[0] - 1)
+        onset_f0 = float(f0[start_idx])
+        if onset_f0 <= 0.0:
+            tail = f0[start_idx:]
+            voiced = tail[tail > 0.0]
+            onset_f0 = float(voiced[0]) if voiced.size > 0 else 0.0
+        if onset_f0 > 0.0:
+            f0[ext_start:seg.start_sample] = onset_f0
+    return f0
 
 
 def _midi_to_hz(m: float) -> float:
@@ -771,8 +835,11 @@ def render(
     # P2 修正 (review #262 R14・`r3789636053`): origin-shift されたフレーズ頭
     # preutterance が `amp_env` のゼロ初期化ブレス区間を拾って消音される問題
     # を、amp トラック抽出専用にフレーズ頭のみ前方へ定数外挿した複製で回避
-    # する（f0 トラックは無変更 = `_extend_phrase_head_amp_for_preutterance`
-    # docstring 参照。vocadito/pjs 経路は shift 全 0 のため no-op）。
+    # する（vocadito/pjs 経路は shift 全 0 のため no-op）。
+    # P3 修正 (review #262 R19 指摘 3): 同じ理由で `base_f0_persample` も
+    # 無声区間 (F0=0) を拾ってしまうため、対になる F0 後方延長を追加する
+    # （`_extend_phrase_head_f0_for_preutterance` docstring 参照。対象ノート
+    # 判定は amp 側と共有・vocadito/pjs 経路は no-op）。
     amp_env_for_extraction = (
         _extend_phrase_head_amp_for_preutterance(
             amp_env, segments, note_origin_shift_frames, SR, FRAME_PERIOD_MS
@@ -780,9 +847,16 @@ def render(
         if is_vcv
         else amp_env
     )
+    base_f0_for_extraction = (
+        _extend_phrase_head_f0_for_preutterance(
+            base_f0_persample, segments, note_origin_shift_frames, SR, FRAME_PERIOD_MS
+        )
+        if is_vcv
+        else base_f0_persample
+    )
     note_f0_tracks = [
         _note_frame_track(
-            base_f0_persample, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS,
+            base_f0_for_extraction, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS,
             origin_shift_frames=note_origin_shift_frames[i],
         )
         for i, p in enumerate(placements)

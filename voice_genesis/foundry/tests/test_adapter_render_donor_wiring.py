@@ -452,18 +452,49 @@ def test_extend_phrase_head_amp_untouched_before_extended_region() -> None:
     assert np.all(extended[:ext_start] == 0.0)
 
 
-def test_extend_phrase_head_amp_leaves_phrase_body_unchanged() -> None:
-    """フレーズアーチ自体（`[phrase_start, phrase_end)`）の形は変更しない。"""
+def test_extend_phrase_head_amp_leaves_phrase_body_past_attack_unchanged() -> None:
+    """フレーズアーチ自体（`[start_sample+ar, phrase_end)`）の形は変更しない。
+    `[start_sample, start_sample+ar)` は R19 修正で旧 attack フェードから
+    定数充填（延長端のフェードと連続）へ置き換わるため、この区間は本来
+    `[phrase_start, phrase_end)` 全体不変の対象から除く（旧テストは R14
+    実装の副作用——二重フェード——を「不変」と誤認していた）。"""
     sr = 24000
     seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
     amp_env = _amp_env_with_phrase(10000, phrase_start=5000, phrase_end=7000, arch_level=0.9, sr=sr)
     shift_frames = 20
+    attack_release = int(sr * perf.NOTE_ATTACK_RELEASE_MS / 1000.0)
+    ar = min(attack_release, (7000 - 5000) // 4)
 
     extended = rd._extend_phrase_head_amp_for_preutterance(
         amp_env, [seg], [shift_frames], sr, frame_period_ms=5.0,
     )
 
-    assert np.array_equal(extended[5000:7000], amp_env[5000:7000])
+    assert np.array_equal(extended[5000 + ar:7000], amp_env[5000 + ar:7000])
+
+
+def test_extend_phrase_head_amp_no_double_fade_notch_and_monotonic() -> None:
+    """R19 指摘1: 旧実装は拡張区間のみ埋め、`build_amplitude_envelope` が
+    書いた元の attack フェード `[start, start+ar)` を残していたため、
+    「立ち上がり→`seg.start_sample` でゼロ落ち→再立ち上がり」のノッチが
+    生じていた。修正後はフェードを延長端 `[ext_start, ext_start+ar)` へ
+    移設した単一の立ち上がりになるため、`[ext_start, start+ar]` は
+    単調非減少（ノッチ不在）で、`start+ar` は既存エンベロープの同点の値と
+    連続に接続する。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    amp_env = _amp_env_with_phrase(10000, phrase_start=5000, phrase_end=7000, arch_level=0.9, sr=sr)
+    shift_frames = 20
+    attack_release = int(sr * perf.NOTE_ATTACK_RELEASE_MS / 1000.0)
+    ar = min(attack_release, (7000 - 5000) // 4)
+    ext_start = 5000 - shift_frames * 120  # 2600
+
+    extended = rd._extend_phrase_head_amp_for_preutterance(
+        amp_env, [seg], [shift_frames], sr, frame_period_ms=5.0,
+    )
+
+    window = extended[ext_start:5000 + ar + 1]
+    assert np.all(np.diff(window) >= -1e-12)  # 単調非減少 = ノッチ不在
+    assert extended[5000 + ar] == pytest.approx(amp_env[5000 + ar], abs=1e-9)
 
 
 def test_extend_phrase_head_amp_skips_mid_phrase_notes() -> None:
@@ -511,6 +542,119 @@ def test_extend_phrase_head_amp_clamps_at_zero_when_shift_exceeds_start() -> Non
     assert extended[0] == 0.0  # 0 側でクランプされた外挿区間の先頭 = フェード始点
     assert extended[99] > 0.0  # クランプ後の区間内は可聴（フェード進行中）
     assert extended[99] < extended[460]  # フェードは単調に増加し、アーチ水準へ向かう
+
+
+# ---------------------------------------------------------------------------
+# P3 修正 (review #262 R19 指摘 3): _extend_phrase_head_f0_for_preutterance
+# （amp 側と対になる F0 後方延長。origin-shift された preutterance の無声化を防ぐ）
+# ---------------------------------------------------------------------------
+
+
+def _f0_persample_with_note(
+    total_samples: int, note_start: int, note_end: int, f0_hz: float,
+) -> np.ndarray:
+    """`perf.build_f0_contour` の出力形状（ノート区間のみ非ゼロ・ブレスは0）を
+    模した合成 fixture。"""
+    f0 = np.zeros(total_samples, dtype=np.float64)
+    f0[note_start:note_end] = f0_hz
+    return f0
+
+
+def test_extend_phrase_head_f0_fills_preutterance_with_note_onset_pitch() -> None:
+    """延長区間 `[ext_start, seg.start_sample)` はノート開始時点の F0 で
+    定数外挿され、preutterance 区間が有声になる（R19 指摘3の再現確認）。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    f0 = _f0_persample_with_note(10000, note_start=5000, note_end=7000, f0_hz=311.13)
+    shift_frames = 20  # -> ext_start = 5000 - 2400 = 2600
+    ext_start = 5000 - shift_frames * 120
+    # 修正前: この区間はブレスのゼロ初期化のまま（無声）。
+    assert np.all(f0[ext_start:5000] == 0.0)
+
+    extended = rd._extend_phrase_head_f0_for_preutterance(
+        f0, [seg], [shift_frames], sr, frame_period_ms=5.0,
+    )
+
+    window = extended[ext_start:5000]
+    assert np.all(window > 0.0)
+    assert np.all(window == pytest.approx(311.13, abs=1e-9))
+    # ビブラート等の時間変化は付与しない（定数外挿・全フレーム同一値）。
+    assert np.all(window == window[0])
+
+
+def test_extend_phrase_head_f0_falls_back_to_first_voiced_value_when_onset_is_zero() -> None:
+    """`seg.start_sample` 自体がまだ無声（0）の場合、ノート内で最初に現れる
+    有声値へフォールバックする。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    f0 = _f0_persample_with_note(10000, note_start=5050, note_end=7000, f0_hz=233.08)  # 立ち上がり遅延
+    shift_frames = 20
+    ext_start = 5000 - shift_frames * 120
+
+    extended = rd._extend_phrase_head_f0_for_preutterance(
+        f0, [seg], [shift_frames], sr, frame_period_ms=5.0,
+    )
+
+    assert np.all(extended[ext_start:5000] == pytest.approx(233.08, abs=1e-9))
+
+
+def test_extend_phrase_head_f0_skips_mid_phrase_notes() -> None:
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=False)
+    f0 = _f0_persample_with_note(10000, note_start=5000, note_end=7000, f0_hz=311.13)
+
+    extended = rd._extend_phrase_head_f0_for_preutterance(
+        f0, [seg], [20], sr, frame_period_ms=5.0,
+    )
+
+    assert np.array_equal(extended, f0)
+
+
+def test_extend_phrase_head_f0_zero_shift_is_noop() -> None:
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    f0 = _f0_persample_with_note(10000, note_start=5000, note_end=7000, f0_hz=311.13)
+
+    extended = rd._extend_phrase_head_f0_for_preutterance(
+        f0, [seg], [0], sr, frame_period_ms=5.0,
+    )
+
+    assert np.array_equal(extended, f0)
+
+
+def test_extend_phrase_head_f0_does_not_mutate_input() -> None:
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    f0 = _f0_persample_with_note(10000, note_start=5000, note_end=7000, f0_hz=311.13)
+    before = f0.copy()
+
+    rd._extend_phrase_head_f0_for_preutterance(f0, [seg], [20], sr, frame_period_ms=5.0)
+
+    assert np.array_equal(f0, before)
+
+
+def test_extend_phrase_head_amp_and_f0_shiftless_path_is_bit_exact_noop() -> None:
+    """`donor != 'ritsu'`（vocadito/pjs）経路は全ノート shift=0 のリストで
+    呼ばれるため、R19 の修正（amp のフェード移設・f0 の後方延長追加）の
+    影響を一切受けない（bit 一致・既存出力の非破壊）。"""
+    sr = 24000
+    segs = [
+        _FakeSeg(start_sample=0, end_sample=2000, is_phrase_first=True),
+        _FakeSeg(start_sample=2000, end_sample=5000, is_phrase_first=False),
+    ]
+    amp_env = _amp_env_with_phrase(10000, phrase_start=0, phrase_end=5000, arch_level=0.85, sr=sr)
+    f0 = _f0_persample_with_note(10000, note_start=0, note_end=5000, f0_hz=220.0)
+    zero_shifts = [0, 0]
+
+    extended_amp = rd._extend_phrase_head_amp_for_preutterance(
+        amp_env, segs, zero_shifts, sr, frame_period_ms=5.0,
+    )
+    extended_f0 = rd._extend_phrase_head_f0_for_preutterance(
+        f0, segs, zero_shifts, sr, frame_period_ms=5.0,
+    )
+
+    assert extended_amp.tobytes() == amp_env.tobytes()
+    assert extended_f0.tobytes() == f0.tobytes()
 
 
 def test_extend_phrase_head_amp_does_not_mutate_input() -> None:
