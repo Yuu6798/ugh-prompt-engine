@@ -85,6 +85,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -344,7 +346,6 @@ def run_export_acoustic(diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, st
     """
     ckpt_target = diffsinger_repo / "checkpoints" / exp_name
     ckpt_target.mkdir(parents=True, exist_ok=True)
-    import shutil
     ckpt_file = ckpt_dir / f"model_ckpt_steps_{step}.ckpt"
     config_file = ckpt_dir / "config.yaml"
     if not ckpt_file.exists() or not config_file.exists():
@@ -361,19 +362,35 @@ def run_export_acoustic(diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, st
     ]
     print("| export cmd:", " ".join(cmd))
     subprocess.run(cmd, cwd=str(diffsinger_repo), check=True)
-    if not (out_path / "acoustic.onnx").exists():
-        # BUGFIX (5K gate 実測, 2026-08-15): scripts/export.py acoustic の実出力は
-        # `acoustic.onnx` 固定名ではなく `<exp_name>.onnx`（+ freeze_spk 付与時は
-        # `<exp_name>.<speaker>.onnx`）。1 個だけ *.onnx が見つかった場合に限り
-        # `acoustic.onnx` へエイリアスコピーする（複数ある場合は決め打ちできない
-        # ため何もせず後続の存在チェックで fail-closed に停止させる）。
-        onnx_candidates = sorted(out_path.glob("*.onnx"))
-        if len(onnx_candidates) == 1:
-            shutil.copy2(onnx_candidates[0], out_path / "acoustic.onnx")
-            print(f"| aliased {onnx_candidates[0].name} -> acoustic.onnx "
-                  f"(gate_synth.py naming-assumption bugfix)")
-    if not (out_path / "acoustic.onnx").exists():
-        raise RuntimeError(f"export.py did not produce {out_path}/acoustic.onnx")
+
+    # BUGFIX (5K gate 実測, 2026-08-15): scripts/export.py acoustic の実出力は
+    # `acoustic.onnx` 固定名ではなく `<exp_name>.onnx`（+ freeze_spk 付与時は
+    # `<exp_name>.<speaker>.onnx`）。1 個だけ *.onnx が見つかった場合に限り
+    # `acoustic.onnx` へエイリアスコピーする（複数ある場合は決め打ちできない
+    # ため何もせず後続の存在チェックで fail-closed に停止させる）。
+    #
+    # BUGFIX (review #263 R5 P1): 旧実装は `acoustic.onnx` が既存の場合に
+    # このブロック全体を skip していたため、同じ --out-dir へ再 export
+    # した際（例: 5K -> 10K checkpoint への差し替え）に alias コピーが
+    # 更新されず、新 ckpt から export した `<exp_name>.onnx` が存在するのに
+    # 旧 checkpoint 由来の `acoustic.onnx` のまま合成される（ckpt/config の
+    # sha256 は新しいものを記録しながら、実際に読み込む acoustic.onnx は
+    # 古いままという不整合）。alias 候補の探索自体からは alias_path 自身を
+    # 除外した上で、既存 alias の有無に関わらず毎回新しい export 出力から
+    # 置き直す（export.py が直接 `acoustic.onnx` という名前で書き出す場合は
+    # その時点で subprocess が上書き済みのため、この分岐は素通りする）。
+    alias_path = out_path / "acoustic.onnx"
+    onnx_candidates = sorted(
+        p for p in out_path.glob("*.onnx") if p.resolve() != alias_path.resolve()
+    )
+    if len(onnx_candidates) == 1:
+        if alias_path.exists() or alias_path.is_symlink():
+            alias_path.unlink()
+        shutil.copy2(onnx_candidates[0], alias_path)
+        print(f"| aliased {onnx_candidates[0].name} -> acoustic.onnx "
+              f"(gate_synth.py naming-assumption bugfix)")
+    if not alias_path.exists():
+        raise RuntimeError(f"export.py did not produce {alias_path}")
     return out_path
 
 
@@ -687,6 +704,27 @@ def synth_song(
     return record
 
 
+def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
+    """`build_dir`（全曲の wav/record + summary を完全に構築済み）を
+    `out_dir`（`step_<N>/` 等の合成成果物ディレクトリ）へ原子的に差し替える
+    （review #263 R5 P2）。
+
+    途中失敗時の新旧世代混在防止: step ディレクトリへ曲ごとに直接書き込むと、
+    複数曲合成中の 1 曲目以降で失敗した場合に部分的な wav/summary が残り、
+    「どの曲がどの checkpoint 由来か」が判別不能な gate 判定証跡になる。
+    全曲 + summary を fresh な一時ディレクトリへ完全に生成してから、成功時
+    のみ atomic に `out_dir` と swap する（`convert_pjs.py`/`convert_ritsu.py`
+    の R3 P1 と同型パターン。POSIX の `rename(2)` はディレクトリの置換を
+    アトミックに行う）。旧世代は削除せず `<out_dir>.old` へ退避する。
+    """
+    old_dir = out_dir.parent / f"{out_dir.name}.old"
+    if old_dir.exists():
+        shutil.rmtree(old_dir)
+    if out_dir.exists():
+        out_dir.rename(old_dir)
+    build_dir.rename(out_dir)
+
+
 # ============================================================================
 # 5. CLI
 # ============================================================================
@@ -770,46 +808,77 @@ def cmd_run(args):
     # 破壊される。--step 指定時は成果物を out_dir/step_<N>/ 配下に分離する
     # （--skip-export の S0 互換検証パスは step 未指定のままなので out_dir 直下 = 無変更）。
     synth_out_dir = (out_dir / f"step_{args.step}") if args.step is not None else out_dir
-    synth_out_dir.mkdir(parents=True, exist_ok=True)
 
-    songs = args.song.split(",")
-    results = {}
-    for song in songs:
-        print(f"| synthesizing: {song} (notes_limit={args.notes_limit}, speaker={args.speaker})")
-        rec = synth_song(
-            song, args.notes_limit, singer_dir,
-            canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
-            variance_phonemes, acoustic_phonemes, synth_out_dir,
-            speaker_name=args.speaker, speaker_embed_vector=speaker_embed_vector,
-        )
-        results[song] = dict(
-            wav_path=rec["wav_path"], wav_sha256=rec["wav_sha256"],
-            wav_duration_sec=rec["wav_duration_sec"], wav_rms=rec["wav_rms"],
-            wav_peak=rec["wav_peak"], n_phonemes=rec["score"]["n_phonemes"],
-            dual_encoding_diverged=rec["stage3_dual_encoding_diverged"],
-            stage3_mode=rec["stage3_mode"],
-            stage3_depth=rec.get("stage3_depth"),
-            stage3_steps=rec.get("stage3_steps"),
-            stage3_speaker=rec.get("stage3_speaker"),
-        )
-        print(f"|   sha256={rec['wav_sha256']} dur={rec['wav_duration_sec']:.3f}s "
-              f"rms={rec['wav_rms']:.4f} diverged={rec['stage3_dual_encoding_diverged']} "
-              f"mode={rec['stage3_mode']}")
+    # R5 レビュー指摘 (PR #263, gate_synth.py:779, P2): 曲ごとに synth_out_dir
+    # へ直接書き込むと、複数曲合成中の 1 曲目以降で失敗した場合に部分的な
+    # wav/summary が新旧世代で混在する。全曲 + summary を fresh な一時
+    # ディレクトリへ完全に生成してから、成功時のみ atomic に synth_out_dir
+    # と swap する（`_swap_step_dir_into_place`）。
+    build_dir = synth_out_dir.parent / f"{synth_out_dir.name}.build-{os.getpid()}"
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+    build_dir.mkdir(parents=True)
 
-    summary_path = synth_out_dir / "gate_synth_summary.json"
-    summary_path.write_text(json.dumps({
-        "step": args.step,
-        "acoustic_encoding_mode": encoding_mode,
-        "acoustic_onnx_path": str(acoustic_onnx_path),
-        "input_sha256": input_sha256,
-        "sampling_params": {
-            "seed": SEED,
-            "speaker": args.speaker,
-            "reflow_sampling_steps_constant": REFLOW_SAMPLING_STEPS,
-        },
-        "results": results,
-    }, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"| summary: {summary_path}")
+    swapped = False
+    try:
+        songs = args.song.split(",")
+        results = {}
+        for song in songs:
+            print(f"| synthesizing: {song} (notes_limit={args.notes_limit}, speaker={args.speaker})")
+            rec = synth_song(
+                song, args.notes_limit, singer_dir,
+                canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
+                variance_phonemes, acoustic_phonemes, build_dir,
+                speaker_name=args.speaker, speaker_embed_vector=speaker_embed_vector,
+            )
+            # rec["wav_path"] は build_dir 配下の一時パスのため、swap 後に
+            # 利用者が参照する最終パス（synth_out_dir 配下）へ書き換えてから
+            # summary へ記録する。
+            wav_path_final = rec["wav_path"].replace(str(build_dir), str(synth_out_dir), 1)
+            results[song] = dict(
+                wav_path=wav_path_final, wav_sha256=rec["wav_sha256"],
+                wav_duration_sec=rec["wav_duration_sec"], wav_rms=rec["wav_rms"],
+                wav_peak=rec["wav_peak"], n_phonemes=rec["score"]["n_phonemes"],
+                dual_encoding_diverged=rec["stage3_dual_encoding_diverged"],
+                stage3_mode=rec["stage3_mode"],
+                stage3_depth=rec.get("stage3_depth"),
+                stage3_steps=rec.get("stage3_steps"),
+                stage3_speaker=rec.get("stage3_speaker"),
+            )
+            print(f"|   sha256={rec['wav_sha256']} dur={rec['wav_duration_sec']:.3f}s "
+                  f"rms={rec['wav_rms']:.4f} diverged={rec['stage3_dual_encoding_diverged']} "
+                  f"mode={rec['stage3_mode']}")
+
+        summary_path = build_dir / "gate_synth_summary.json"
+        summary_path.write_text(json.dumps({
+            "step": args.step,
+            "acoustic_encoding_mode": encoding_mode,
+            "acoustic_onnx_path": str(acoustic_onnx_path),
+            "input_sha256": input_sha256,
+            "sampling_params": {
+                "seed": SEED,
+                "speaker": args.speaker,
+                "reflow_sampling_steps_constant": REFLOW_SAMPLING_STEPS,
+            },
+            "results": results,
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        _swap_step_dir_into_place(build_dir, synth_out_dir)
+        swapped = True
+    finally:
+        if not swapped:
+            shutil.rmtree(build_dir, ignore_errors=True)
+
+    # build_dir 配下に書かれた個別 *_record.json 内の wav_path は build_dir
+    # ベースの文字列のまま rename されている（rename はファイル内容までは
+    # 書き換えない）ため、swap 後の最終パスへ置換する。
+    for record_file in synth_out_dir.glob("*_record.json"):
+        text = record_file.read_text(encoding="utf-8")
+        patched = text.replace(str(build_dir), str(synth_out_dir))
+        if patched != text:
+            record_file.write_text(patched, encoding="utf-8")
+
+    print(f"| summary: {synth_out_dir / 'gate_synth_summary.json'}")
 
 
 def cmd_mapping_check(args):

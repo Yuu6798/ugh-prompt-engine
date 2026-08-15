@@ -363,7 +363,10 @@ export 成果物へ差し替える**設計であり、追加のコマンドは�
 ### 5.4 耳判定
 
 §5.2 の `gate_synth.py run`（既定 `--song sakura,umi` で両曲を合成）が
-`<出力先>/gate_sakura.wav` / `<出力先>/gate_umi.wav` を生成する（`さくら`:
+`<出力先>/step_<STEP>/gate_sakura_ritsu.wav` / `<出力先>/step_<STEP>/gate_umi_ritsu.wav`
+（`--step` 指定時は成果物を `step_<STEP>/` 配下に分離。`_ritsu` は既定
+`--speaker ritsu` のサフィックス、同ディレクトリに `gate_synth_summary.json`
+と各曲の `*_record.json` も生成される）を生成する（`さくら`:
 `voice_genesis/singer/score.py: build_sakura_score()`、`うみ`:
 `voice_genesis/singer/score_umi.py: build_umi_score()`）。この 2 曲を
 **S0 と同一の軸**で User 判定を仰ぐ:

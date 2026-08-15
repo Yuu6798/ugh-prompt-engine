@@ -25,6 +25,13 @@ symlink 群 + 変換出力（`diffsinger_db/`）は毎回 fresh な
 build では `--staging-dir` がまだ存在せず書き込みが失敗し、旧 `--staging-dir`
 が残っている場合は build 外＝旧世代側に書かれて `_swap_into_place` の
 `.old` 退避で消えてしまうため（`--staging-dir` 外を指す場合は従来通り）。
+
+review #263 R5 で 2 件追加修正: (1) `.lab`/`_song.wav` の一方が欠けた song
+ディレクトリを黙って skip せず、欠落曲名を全収集してから swap 前に
+fail-closed 拒否する（契約=PJS 全 100 曲。完全素材では挙動不変）。
+(2) `--staging-dir` が `--pjs-root`/`--converter-dir` と衝突・内包関係に
+ある場合、symlink 構築を始める前に fail-closed で拒否する
+（`build_dataset.py` R4 の `OutputCollisionError` と同型）。
 """
 from __future__ import annotations
 
@@ -35,7 +42,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence
 
 # nnsvs-db-converter 同梱の `lang.sample.json` と同一内容
 # （`s1a_conversion_record.md` §2: 日本語ラベルのモーラ分割規則としてそのまま
@@ -47,7 +54,56 @@ DEFAULT_LANG_DEF = {
 }
 
 
-def stage_song_wavs(pjs_root: Path, staging_dir: Path) -> int:
+class OutputCollisionError(ValueError):
+    """P1 修正 (review #263 R5): `--staging-dir` が `--pjs-root`/
+    `--converter-dir` と衝突する場合に送出する（fail-closed。`_swap_into_place`
+    による rename/`.old` 退避・rmtree の前に検出する。`build_dataset.py` R4 の
+    `OutputCollisionError` と同型判定（record スクリプト群の既存慣例に倣い、
+    共有モジュール新設ではなく各ファイル内へコピペ実装。`f1_4_record_2026-08-15.md`
+    §1 の Design Memo 判断を踏襲）。"""
+
+
+def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequence[Path]) -> None:
+    """`out_paths`（resolve 後）を相互および `protected_roots`（存在する
+    もののみ、resolve 後）と照合し、衝突があれば公開前に fail-closed で
+    拒否する。
+
+    `--staging-dir` が `--pjs-root`/`--converter-dir` と一致・内包関係に
+    ある場合、`_swap_into_place` の旧 `staging_dir` を `.old` へ退避する
+    処理や次回実行時の `.old` rmtree が、PJS コーパスや converter clone
+    そのものを破壊し得る（`build_dataset.py` `_reject_output_collision`
+    と同一の resolved 比較ロジック）。
+    """
+    resolved_outs = [(p, p.resolve()) for p in out_paths]
+
+    for i, (p_i, r_i) in enumerate(resolved_outs):
+        for p_j, r_j in resolved_outs[i + 1 :]:
+            if r_i == r_j:
+                raise OutputCollisionError(
+                    f"output paths collide with each other: {p_i} == {p_j}（fail-closed で拒否）"
+                )
+
+    for root in protected_roots:
+        if not root.exists():
+            continue
+        root_resolved = root.resolve()
+        for p, r in resolved_outs:
+            if r == root_resolved:
+                raise OutputCollisionError(
+                    f"output path {p} collides with protected input root {root}（fail-closed で拒否）"
+                )
+            try:
+                r.relative_to(root_resolved)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"output path {p} is inside protected input root {root}（fail-closed で拒否）"
+            )
+
+
+def stage_song_wavs(
+    pjs_root: Path, staging_dir: Path, missing_pairs: Optional[List[str]] = None
+) -> int:
     """`PJS_corpus_ver1.1/pjsNNN/` 配下の song 系のみをシンボリックリンクで
     `pjsNNN.lab` / `pjsNNN.wav` としてリネームする。冪等（既存リンクは張り
     直す）。戻り値はステージングできたペア数。
@@ -55,6 +111,12 @@ def stage_song_wavs(pjs_root: Path, staging_dir: Path) -> int:
     `pjs_root` が相対パスの場合、シンボリックリンクのターゲットは
     `staging_dir` からの相対として解釈されて壊れるため、リンク先は必ず
     `resolve()` した絶対パスで張る。
+
+    [P2 修正] (review #263 R5) `.lab` か `_song.wav` の一方が欠けた song
+    ディレクトリを黙って skip すると、契約（PJS 全 100 曲）を満たさない
+    不完全コーパスのまま成功報告してしまう。`missing_pairs` を渡した場合、
+    欠落した song 名を収集するのみに留め（例外は送出しない）、呼び出し元が
+    `_swap_into_place`（公開）の前に一括で fail-closed 判定できるようにする。
     """
     pjs_root = pjs_root.resolve()
     staging_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +127,8 @@ def stage_song_wavs(pjs_root: Path, staging_dir: Path) -> int:
         lab_src = d / f"{name}.lab"
         wav_src = d / f"{name}_song.wav"
         if not lab_src.exists() or not wav_src.exists():
+            if missing_pairs is not None:
+                missing_pairs.append(name)
             continue
         for dst, src in ((staging_dir / f"{name}.lab", lab_src), (staging_dir / f"{name}.wav", wav_src)):
             if dst.is_symlink() or dst.exists():
@@ -173,15 +237,40 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     staging_dir: Path = args.staging_dir
+
+    # [P1 修正] (review #263 R5) --staging-dir が --pjs-root/--converter-dir
+    # と重なる場合、symlink 構築や swap を始める前（公開開始前）に fail-closed
+    # で拒否する。--staging-dir は成功時に丸ごと rename/`.old` 退避/rmtree
+    # されるため、保護入力と重なっていると PJS コーパスや converter clone
+    # そのものを破壊し得る。
+    try:
+        _reject_output_collision([staging_dir], protected_roots=[args.pjs_root, args.converter_dir])
+    except OutputCollisionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     build_dir = staging_dir.parent / f"{staging_dir.name}.build-{os.getpid()}"
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)
     swapped = False
     try:
-        n_staged = stage_song_wavs(args.pjs_root, build_dir)
+        missing_pairs: List[str] = []
+        n_staged = stage_song_wavs(args.pjs_root, build_dir, missing_pairs)
         if n_staged == 0:
             print(f"error: no pjsNNN song wav found under {args.pjs_root}", file=sys.stderr)
+            return 1
+        if missing_pairs:
+            # [P2 修正] (review #263 R5) .lab/_song.wav の一方が欠けた song
+            # ディレクトリを黙って skip すると縮小コーパス（契約=100 曲未満）
+            # のまま成功報告してしまうため、swap 前に一括で fail-closed 拒否
+            # する（完全な素材では missing_pairs は常に空のため挙動不変）。
+            print(
+                f"error: {len(missing_pairs)} pjsNNN song dir(s) missing .lab or "
+                f"_song.wav under {args.pjs_root} (fail-closed, not staged/published): "
+                + ", ".join(missing_pairs),
+                file=sys.stderr,
+            )
             return 1
 
         lang_def_path = _resolve_lang_def_path(args.lang_def, staging_dir, build_dir)

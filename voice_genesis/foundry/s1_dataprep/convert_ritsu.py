@@ -26,6 +26,10 @@ scratchpad スパイク `s1b_ritsu_dataset/d2_convert.py` の清書版
 5. 先頭/末尾の無音は `SP_THRESHOLD_MS` を超えたときのみ `SP` として挿入する。
 6. AP（息継ぎ）検出は本 D2 では実施しない（UTAU oto.ini に相当情報源が無い。
    既知の制限）。
+
+review #263 R5 P1: `--out-dir` が `--voicebank-root`/`--dsdict` と衝突・
+内包関係にある場合、staging 構築を始める前に fail-closed で拒否する
+（`build_dataset.py` R4 の `OutputCollisionError` と同型）。
 """
 from __future__ import annotations
 
@@ -406,6 +410,53 @@ def _convert_into(
     return summary
 
 
+class OutputCollisionError(ValueError):
+    """P1 修正 (review #263 R5): `--out-dir` が `--voicebank-root`/`--dsdict`
+    と衝突する場合に送出する（fail-closed。`_swap_into_place` による
+    rename/`.old` 退避・rmtree の前に検出する。`build_dataset.py` R4 の
+    `OutputCollisionError` と同型判定（record スクリプト群の既存慣例に倣い、
+    共有モジュール新設ではなく各ファイル内へコピペ実装。`f1_4_record_2026-08-15.md`
+    §1 の Design Memo 判断を踏襲）。"""
+
+
+def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequence[Path]) -> None:
+    """`out_paths`（resolve 後）を相互および `protected_roots`（存在する
+    もののみ、resolve 後）と照合し、衝突があれば公開前に fail-closed で
+    拒否する。
+
+    `--out-dir` が `--voicebank-root`/`--dsdict` と一致・内包関係にある
+    場合、`_swap_into_place` の旧 `out_dir` を `.old` へ退避する処理や
+    次回実行時の `.old` rmtree が、波音リツ voicebank 本体や公式 dsdict.yaml
+    そのものを破壊し得る（`build_dataset.py` `_reject_output_collision` と
+    同一の resolved 比較ロジック）。
+    """
+    resolved_outs = [(p, p.resolve()) for p in out_paths]
+
+    for i, (p_i, r_i) in enumerate(resolved_outs):
+        for p_j, r_j in resolved_outs[i + 1 :]:
+            if r_i == r_j:
+                raise OutputCollisionError(
+                    f"output paths collide with each other: {p_i} == {p_j}（fail-closed で拒否）"
+                )
+
+    for root in protected_roots:
+        if not root.exists():
+            continue
+        root_resolved = root.resolve()
+        for p, r in resolved_outs:
+            if r == root_resolved:
+                raise OutputCollisionError(
+                    f"output path {p} collides with protected input root {root}（fail-closed で拒否）"
+                )
+            try:
+                r.relative_to(root_resolved)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"output path {p} is inside protected input root {root}（fail-closed で拒否）"
+            )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -425,6 +476,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help=f"走査する pitch dir 名 (既定: {list(DEFAULT_PITCH_DIRS)})",
     )
     args = parser.parse_args(argv)
+
+    # [P1 修正] (review #263 R5) --out-dir が --voicebank-root/--dsdict と
+    # 重なる場合、staging 構築や swap を始める前（公開開始前）に fail-closed
+    # で拒否する。--out-dir は成功時に丸ごと rename/`.old` 退避/rmtree
+    # されるため、保護入力と重なっていると voicebank 本体や dsdict.yaml
+    # そのものを破壊し得る。
+    try:
+        _reject_output_collision([args.out_dir], protected_roots=[args.voicebank_root, args.dsdict])
+    except OutputCollisionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     summary = convert(args.voicebank_root, args.dsdict, args.out_dir, args.pitch_dirs)
 
