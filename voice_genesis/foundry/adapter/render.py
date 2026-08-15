@@ -13,7 +13,9 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -31,11 +33,13 @@ import score as sc  # noqa: E402  (singer、read-only import)
 import score_umi as sc_umi  # noqa: E402  (singer、read-only import)
 import performance as perf  # noqa: E402  (singer、read-only import)
 
+import consonants as cons  # noqa: E402  (追補 F1.1-B)
 import donor_bank as db  # noqa: E402
 import joins as jn  # noqa: E402
 import perf_genes as pg  # noqa: E402
 import units as un  # noqa: E402
 import voice_spec as vs  # noqa: E402
+import vowel_class as vc  # noqa: E402  (追補 F1.1-A)
 
 SR = 24000
 FRAME_PERIOD_MS = 5.0
@@ -72,6 +76,8 @@ def render(
     w_p: float = un.DEFAULT_W_P,
     w_d: float = un.DEFAULT_W_D,
     w_c: float = un.DEFAULT_W_C,
+    w_v: float = un.DEFAULT_W_V,
+    apply_consonants: bool = True,
 ) -> dict:
     spec = vs.load_voice_spec(voice_spec_path)
     notes, tempo_bpm = build_score(score_name)
@@ -79,19 +85,29 @@ def render(
 
     bank = db.build_donor_bank(wav_path, notes_csv_path=notes_csv_path, cache_dir=cache_dir)
 
+    # 追補 F1.1-A: donor unit を母音分類し、選択コストへ母音制約を効かせる。
+    # select_units は unit.index -> ラベル文字列を期待するため、VowelClassResult
+    # から label のみ抜き出す（分布・F1/F2 の record 用には unit_vowel_results を残す）。
+    unit_vowel_results = vc.classify_donor_units(bank)
+    unit_vowel_labels = {idx: r.label for idx, r in unit_vowel_results.items()}
+
     targets = [
         un.TargetNote(
             pitch_hz=_midi_to_hz(seg.note.midi),
             duration_sec=(seg.end_sample - seg.start_sample) / SR,
             label=seg.note.mora.kana,
+            vowel_target=un.mora_to_vowel_target(seg.note.mora),
         )
         for seg in segments
     ]
-    selections, sel_stats = un.select_units(targets, bank.units, w_p=w_p, w_d=w_d, w_c=w_c)
+    selections, sel_stats = un.select_units(
+        targets, bank.units, w_p=w_p, w_d=w_d, w_c=w_c, unit_vowels=unit_vowel_labels, w_v=w_v
+    )
 
     n_bins = bank.sp.shape[1]
     placements: List[jn.NotePlacement] = []
     resolved_list: List[un.ResolvedSegment] = []
+    consonant_events: List[cons.ConsonantEvent] = []
     cursor = 0
     prev_end_sample = 0
     for note_index, (seg, sel) in enumerate(zip(segments, selections)):
@@ -100,6 +116,14 @@ def render(
         cursor += gap_frames
         note_dur_frames = max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1)
         resolved = un.resolve_unit_to_note(bank, sel.unit, note_dur_frames, note_index=note_index)
+        if apply_consonants:
+            # 追補 F1.1-B: 母音制約選択 -> 子音オンセット加工 -> (この後の) joins/perf_genes/warp。
+            proc_sp, proc_ap, event = cons.apply_consonant_onset(
+                resolved.sp, resolved.ap, seg.note.mora.onset, SR, frame_period_ms=FRAME_PERIOD_MS
+            )
+            if event is not None:
+                consonant_events.append(dataclasses.replace(event, note_index=note_index))
+            resolved = dataclasses.replace(resolved, sp=proc_sp, ap=proc_ap)
         resolved_list.append(resolved)
         start_frame = cursor
         end_frame = start_frame + resolved.n_frames
@@ -147,6 +171,9 @@ def render(
         n_stretch_extended_looped=cap_modes.count("extended_looped"),
         n_stretch_compressed_truncated=cap_modes.count("compressed_truncated"),
         n_stretch_none=cap_modes.count("none"),
+        unit_vowels=unit_vowel_results, vowel_distribution=vc.vowel_distribution(unit_vowel_results),
+        consonant_events=consonant_events,
+        consonant_class_counts=dict(Counter(e.consonant_class for e in consonant_events)),
     )
 
 
@@ -158,16 +185,22 @@ def main() -> None:
     parser.add_argument("--wav", required=True, help="donor WAV path (vocadito clip)")
     parser.add_argument("--notes-csv", default=None, help="donor notes annotation CSV（省略時 fallback）")
     parser.add_argument("--cache-dir", default=None, help="donor bank npz キャッシュディレクトリ")
+    parser.add_argument(
+        "--no-consonants", action="store_true",
+        help="子音オンセット加工を無効化する（A/B 比較用。追補 F1.1-B CLI 互換フラグ）",
+    )
     args = parser.parse_args()
 
     result = render(
         args.score, args.voice, args.wav, notes_csv_path=args.notes_csv,
-        cache_dir=args.cache_dir, out_path=args.out,
+        cache_dir=args.cache_dir, out_path=args.out, apply_consonants=not args.no_consonants,
     )
     print(f"wrote {args.out}: {len(result['y'])} samples ({len(result['y']) / result['sr']:.3f}s)")
     print(f"donor_bank_source={result['donor_bank_source']} wav_sha256={result['wav_sha256']}")
     print(f"donor_bank_stats={result['donor_bank_stats']}")
     print(f"selection_stats={result['selection_stats']}")
+    print(f"vowel_distribution={result['vowel_distribution']}")
+    print(f"consonant_class_counts={result['consonant_class_counts']}")
     print(f"join_stats={result['join_stats']}")
     print(
         f"stretch: none={result['n_stretch_none']} "
