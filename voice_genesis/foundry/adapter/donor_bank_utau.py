@@ -330,6 +330,40 @@ def _load_wav_24k_bytes(data: bytes, source: str = "<bytes>") -> Tuple[np.ndarra
     return np.ascontiguousarray(y.astype(np.float64)), SR, duration_ms
 
 
+def _reject_wav_paths_outside_root(
+    pdir: Path, pdir_name: str, wav_filenames: Sequence[str], root: Path
+) -> None:
+    """P2 修正 (review #262 R8・`r3789486145`): oto.ini の `filename=` フィールドは
+    信頼できない入力（ダウンロード配布・手編集）であり、`../` を含む相対脱出・
+    絶対パス・root 外へ抜ける symlink を素通しで `pdir / wav_filename` に結合すると、
+    voicebank 外の任意ファイルが WORLD 分析へ読み込まれてしまう。
+    `voicebank_identity_hash()` は各 pitch dir 直下の `*.wav` のみを列挙するため、
+    脱出した WAV は provenance の対象外のまま分析されるという実害がある。
+
+    ここで各候補パスを `.resolve()`（symlink 解決込み）した上で、解決済み
+    voicebank root 配下に収まっているかを fail-closed に検査する。1 件でも
+    root 外を指せば、違反エントリの相対パスを列挙した `ValueError` を送出して
+    分析を止める（脱出したファイルを黙って read しない）。
+    """
+    root_resolved = root.resolve()
+    violations: List[str] = []
+    for wav_filename in wav_filenames:
+        candidate = pdir / wav_filename
+        try:
+            resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError):
+            violations.append(f"{pdir_name}/{wav_filename}")
+            continue
+        if not resolved.is_relative_to(root_resolved):
+            violations.append(f"{pdir_name}/{wav_filename}")
+    if violations:
+        raise ValueError(
+            "oto.ini references WAV file(s) that resolve outside the voicebank "
+            f"root {root_resolved} (rejected as path traversal / symlink escape): "
+            f"{violations}"
+        )
+
+
 def _select_wav_subset(
     entries_by_wav: "OrderedDict[str, List[OtoEntry]]",
     pitch_dirs: Sequence[str],
@@ -521,6 +555,7 @@ def build_donor_bank_utau_vcv(
         selected_files, sel_stats = _select_wav_subset_for_contexts(
             entries_by_wav, pitch_dirs, required_contexts, max_wav_files
         )
+        _reject_wav_paths_outside_root(pdir, pdir_name, selected_files, root)
         wav_bytes_by_file: Dict[str, bytes] = {}
         for wav_filename in selected_files:
             wav_path = pdir / wav_filename
@@ -734,6 +769,7 @@ def build_donor_bank_utau(
         selected_files, sel_stats = _select_wav_subset(
             entries_by_wav, pitch_dirs, REQUIRED_ONSETS, min_units_per_vowel, max_wav_files
         )
+        _reject_wav_paths_outside_root(pdir, pdir_name, selected_files, root)
         wav_bytes_by_file: Dict[str, bytes] = {}
         for wav_filename in selected_files:
             wav_path = pdir / wav_filename

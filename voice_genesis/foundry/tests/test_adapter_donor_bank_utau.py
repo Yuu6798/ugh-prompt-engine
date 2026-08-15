@@ -639,3 +639,70 @@ def test_build_donor_bank_utau_vcv_required_contexts_change_cache_key(tmp_path: 
     dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5, required_contexts=[("a", "か")])
     cached = list(cache_dir.glob("utau_bank_vcv_*.pkl"))
     assert len(cached) == 2
+
+
+# --- P2 修正 (review #262 R8・`r3789486145`): oto.ini の wav 参照が voicebank 外へ脱出する 3 形態 ---
+
+
+def test_reject_wav_paths_outside_root_relative_traversal(tmp_path: Path) -> None:
+    """`../` による相対脱出は拒否され、違反エントリの相対パスがエラーに列挙される。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    outside = tmp_path / "evil.wav"
+    outside.write_bytes(b"not-a-real-wav")
+
+    with pytest.raises(ValueError, match=r"A3/\.\./\.\./evil\.wav"):
+        dbu._reject_wav_paths_outside_root(pdir, "A3", ["../../evil.wav"], root)
+
+
+def test_reject_wav_paths_outside_root_absolute_path(tmp_path: Path) -> None:
+    """絶対パスの wav 参照は voicebank root を無視して結合されてしまうため拒否する。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    outside = tmp_path / "evil.wav"
+    outside.write_bytes(b"not-a-real-wav")
+
+    with pytest.raises(ValueError, match=r"A3/.*evil\.wav"):
+        dbu._reject_wav_paths_outside_root(pdir, "A3", [str(outside)], root)
+
+
+def test_reject_wav_paths_outside_root_symlink_escape(tmp_path: Path) -> None:
+    """ファイル名自体は `../` を含まなくても、symlink が root 外の実体を指す場合は拒否する。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    outside = tmp_path / "evil.wav"
+    outside.write_bytes(b"not-a-real-wav")
+    (pdir / "linked.wav").symlink_to(outside)
+
+    with pytest.raises(ValueError, match=r"A3/linked\.wav"):
+        dbu._reject_wav_paths_outside_root(pdir, "A3", ["linked.wav"], root)
+
+
+def test_reject_wav_paths_outside_root_accepts_in_bounds_files(tmp_path: Path) -> None:
+    """root 配下に収まる通常の wav 参照は素通しする（fail-closed の過検知が無いことを確認）。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    (pdir / "_test.wav").write_bytes(b"not-a-real-wav")
+
+    dbu._reject_wav_paths_outside_root(pdir, "A3", ["_test.wav"], root)  # 例外なし
+
+
+def test_build_donor_bank_utau_rejects_oto_wav_traversal_end_to_end(tmp_path: Path) -> None:
+    """P2 修正 (review #262 R8・`r3789486145`): `../` を含む filename= を供給する
+    悪意/破損 oto.ini から `build_donor_bank_utau` を呼ぶと、WORLD 分析（外部 wav の
+    read）へ進む前に fail-closed で拒否される。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    outside = tmp_path / "evil.wav"
+    _write_sine_wav(outside, duration_s=1.0)
+    # oto.ini の filename フィールドへ相対脱出パスを直接埋め込む
+    # （A3 → voicebank → tmp_path の 2 階層上りで root 外へ脱出する）。
+    (pdir / "oto.ini").write_bytes("../../evil.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    with pytest.raises(ValueError, match="voicebank root"):
+        dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)

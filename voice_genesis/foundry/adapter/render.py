@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import os
 import sys
 import tempfile
@@ -197,7 +198,7 @@ def _reject_output_collision(
         )
 
 
-def _atomic_write_wav(y: np.ndarray, sr: int, out_path: str | Path) -> None:
+def _atomic_write_wav(y: np.ndarray, sr: int, out_path: str | Path) -> str:
     """P2 修正 (review #262 R2): staging + `os.replace` で成果物 WAV を atomic
     公開する（AGENTS.md Persistent Artifact Safety Gate 項目6「全構築後公開」
     準拠。`src/svp_rpe/utils/atomic_io.atomic_write_bytes` と同じ流儀だが、
@@ -207,6 +208,14 @@ def _atomic_write_wav(y: np.ndarray, sr: int, out_path: str | Path) -> None:
     途中で起きても、`out_path` に既存の有効な出力があればそれを破壊せず、
     staging tempfile を best-effort で削除してから re-raise する
     （`except BaseException` — `KeyboardInterrupt`/`SystemExit` も含む）。
+
+    P2 修正 (review #262 R8・`r3789486148`): `bank.wav_sha256` はドナー入力の
+    ハッシュであり、生成された成果物 WAV のバイト列を識別しない
+    （AGENTS.md「入力と出力の両ハッシュ記録」要件を満たさない）。ここで
+    `os.replace` により実際に公開される staging ファイルのバイト列そのものを
+    read して sha256 を計算し、呼び出し元へ返す（公開後の別読みだと
+    replace 後の実ファイルとの間に別の TOCTOU 窓が生じるため、公開直前の
+    staging バイト列を正本にする）。
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,6 +225,7 @@ def _atomic_write_wav(y: np.ndarray, sr: int, out_path: str | Path) -> None:
         # staging 名の拡張子は `.tmp`（拡張子から format を推測できない）ため
         # `format="WAV"` を明示する。
         sf.write(tmp_name, y, sr, subtype="PCM_16", format="WAV")
+        output_sha256 = hashlib.sha256(Path(tmp_name).read_bytes()).hexdigest()
         os.replace(tmp_name, out_path)
     except BaseException:
         try:
@@ -223,6 +233,7 @@ def _atomic_write_wav(y: np.ndarray, sr: int, out_path: str | Path) -> None:
         except OSError:
             pass
         raise
+    return output_sha256
 
 
 def _vowel_distribution_from_labels(labels: dict) -> dict:
@@ -732,6 +743,7 @@ def render(
     if peak > 0:
         y = y / peak * PEAK_NORM
 
+    output_sha256: Optional[str] = None
     if out_path is not None:
         # P1 修正 (review #262 R2): --out が保護入力（--wav/--voice/--notes-csv/
         # --voicebank-root 配下）と衝突していないか書き込み前に fail-closed で
@@ -741,7 +753,7 @@ def render(
             protected_files=[wav_path, voice_spec_path, notes_csv_path],
             protected_roots=[voicebank_root],
         )
-        _atomic_write_wav(y, SR, out_path)
+        output_sha256 = _atomic_write_wav(y, SR, out_path)
 
     cap_modes = [r.cap_mode for r in resolved_list]
     return dict(
@@ -749,6 +761,7 @@ def render(
         selections=selections, selection_stats=sel_stats, join_stats=join_stats,
         control_track_stats=control_track_stats,
         donor_bank_stats=bank.stats, donor_bank_source=bank.source, wav_sha256=bank.wav_sha256,
+        output_sha256=output_sha256,
         donor=donor, consonant_source=consonant_source, donor_extra_stats=donor_extra_stats,
         donor_provenance=donor_provenance,
         n_stretch_extended_looped=cap_modes.count("extended_looped"),
@@ -796,6 +809,7 @@ def main() -> None:
     print(f"donor={result['donor']} consonant_source={result['consonant_source']}")
     print(f"donor_provenance={result['donor_provenance']}")
     print(f"donor_bank_source={result['donor_bank_source']} wav_sha256={result['wav_sha256']}")
+    print(f"output_sha256={result['output_sha256']}")
     print(f"donor_bank_stats={result['donor_bank_stats']}")
     print(f"selection_stats={result['selection_stats']}")
     print(f"vowel_distribution={result['vowel_distribution']}")

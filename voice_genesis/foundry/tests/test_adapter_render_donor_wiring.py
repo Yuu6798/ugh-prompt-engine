@@ -736,6 +736,16 @@ def test_atomic_write_wav_writes_readable_content(tmp_path: Path) -> None:
     assert leftovers == []
 
 
+def test_atomic_write_wav_returns_digest_matching_published_bytes(tmp_path: Path) -> None:
+    """P2 修正 (review #262 R8・`r3789486148`): 戻り値の `output_sha256` が
+    実際に公開された WAV ファイルの実測 sha256 と一致すること（入力=ドナー
+    ハッシュだけでなく出力バイト列のハッシュも記録する AGENTS.md 要件）。"""
+    out_path = tmp_path / "out.wav"
+    y = np.linspace(-0.5, 0.5, 240).astype(np.float64)
+    output_sha256 = rd._atomic_write_wav(y, 24000, out_path)
+    assert output_sha256 == hashlib.sha256(out_path.read_bytes()).hexdigest()
+
+
 def test_atomic_write_wav_no_partial_file_on_failure(tmp_path: Path, monkeypatch) -> None:
     """AGENTS.md Persistent Artifact Safety Gate 項目7「公開途中失敗の注入
     テスト」: `sf.write` が失敗しても最終 out_path に部分成果物を残さない。"""
