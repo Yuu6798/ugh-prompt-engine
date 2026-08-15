@@ -615,3 +615,186 @@ def test_assemble_control_tracks_v2_deterministic_repeat() -> None:
     assert np.array_equal(f0_1, f0_2)
     assert np.array_equal(amp_1, amp_2)
     assert stats1 == stats2
+
+
+# ---------------------------------------------------------------------------
+# F1.4 R3 (review #262 R3・設計判定による内部発見): 絶対グリッド配置
+# (`assemble_absolute` / `assemble_control_tracks_absolute`) — 接合のたびに
+# 総尺が score から累積的に縮む問題（sakura で 19% 相当）の修正。
+# ---------------------------------------------------------------------------
+
+
+def test_assemble_absolute_total_frames_matches_fixed_buffer() -> None:
+    """(a) acceptance: 出力総フレーム数は常に呼び出し側が指定した
+    `n_total_frames`（score 由来の総尺）ちょうどになる（trim しないため）。
+    """
+    n_bins = 4
+    n_total = 300
+    sp_a = np.full((60, n_bins), 1.0)
+    ap_a = np.full((60, n_bins), 0.1)
+    sp_b = np.full((80, n_bins), 2.0)
+    ap_b = np.full((80, n_bins), 0.2)
+    # note A: [40,100)（先頭に無音ギャップ）/ note B: 同一フレーズ内で
+    # A の preutterance 分だけ前方へシフトして配置（[85,165)）。
+    placements = [
+        jn.NotePlacement(40, 100, sp_a, ap_a, has_join_to_prev=False),
+        jn.NotePlacement(85, 165, sp_b, ap_b, has_join_to_prev=True),
+    ]
+    sp_seq, ap_seq, stats = jn.assemble_absolute(n_total, n_bins, placements)
+    assert sp_seq.shape[0] == n_total
+    assert ap_seq.shape[0] == n_total
+    assert stats["n_total_frames"] == n_total
+
+
+def test_assemble_absolute_attack_frame_lands_at_declared_absolute_position() -> None:
+    """(b) acceptance: unit の「アタック点」（呼び出し側が preutterance オフ
+    セット分だけ前へシフトして配置した結果、`start_frame + preutterance` が
+    絶対タイムライン上の拍位置に一致する）を、frame ごとに一意な値でマーク
+    して検算する。ブレンド区間（重なり `ov` フレーム）を抜けた最初の純粋な
+    unit_b フレームが、期待した拍位置ちょうどに現れることを確認する。
+    """
+    n_bins = 2
+    n_total = 200
+    beat = 120
+    preutt = 30
+    overlap_natural = 5  # unit_b が unit_a の placed 末尾へ食い込む幅（設計上の想定値）
+    start_b = beat - preutt  # 呼び出し側（render.py）が既に確定済みの絶対座標
+    prev_len = start_b + overlap_natural  # unit_a の末尾がちょうど overlap_natural 分 unit_b の始点へ食い込む長さ
+
+    sp_a = np.full((prev_len, n_bins), 1.0)
+    ap_a = np.full((prev_len, n_bins), 0.1)
+    n_b = 60
+    # unit_b の各フレームを一意な値でマークする（frame index の検算用）。
+    sp_b = np.stack([np.full(n_bins, 100.0 + i) for i in range(n_b)], axis=0)
+    ap_b = np.full((n_b, n_bins), 0.2)
+
+    placements = [
+        jn.NotePlacement(0, prev_len, sp_a, ap_a, has_join_to_prev=False),
+        jn.NotePlacement(start_b, start_b + n_b, sp_b, ap_b, has_join_to_prev=True),
+    ]
+    sp_seq, _ap_seq, stats = jn.assemble_absolute(n_total, n_bins, placements)
+
+    # unit_b のアタック点（frame[preutt]、= 100.0+preutt でマークされている）は
+    # 絶対タイムライン上で start_b + preutt == beat に現れる。
+    assert np.allclose(sp_seq[beat], sp_b[preutt])
+    assert stats["n_joins_applied"] == 1  # unit_a の placed 末尾へ実際に重なった
+
+
+def test_assemble_absolute_overlap_region_blends_not_trims() -> None:
+    """(c) acceptance: 重なり区間はクロスフェードでブレンドされる（トリムでは
+    ないため、両ノートとも自身の宣言した frame 数ぶん出力へ寄与する = 総尺は
+    重なり分だけ短くならない。`test_assemble_v2_shrinks_timeline_by_overlap_
+    within_phrase` との対比）。
+    """
+    n_bins = 5
+    n_total = 120
+    n1, n2, ov = 50, 50, 10
+    sp_a = _wavy_sp(n1, n_bins, 1.0, seed=41)
+    sp_b = _wavy_sp(n2, n_bins, 4.0, seed=42)
+    ap_a = np.full((n1, n_bins), 0.1)
+    ap_b = np.full((n2, n_bins), 0.2)
+    placements = [
+        jn.NotePlacement(0, n1, sp_a, ap_a, has_join_to_prev=False),
+        jn.NotePlacement(n1 - ov, n1 - ov + n2, sp_b, ap_b, has_join_to_prev=True),
+    ]
+    sp_seq, _ap_seq, stats = jn.assemble_absolute(n_total, n_bins, placements)
+    assert stats["n_joins_applied"] == 1
+    assert stats["overlap_frames_applied"] == [ov]
+    # トリムしない: unit_b の末尾は宣言どおり n1-ov+n2 に達する（総尺は縮まない・
+    # 末尾の未配置区間は carry-forward で埋まる）。
+    jumps = _interior_jumps(sp_seq[: n1 - ov + n2])
+    interior_all = np.concatenate([_interior_jumps(sp_a), _interior_jumps(sp_b)])
+    entering_seam = jumps[n1 - ov - 1]
+    exiting_seam = jumps[n1 - 1]
+    assert entering_seam <= np.max(interior_all) * 1.5
+    assert exiting_seam <= np.max(interior_all) * 1.5
+
+
+def test_assemble_absolute_no_overlap_direct_placement_and_gap_carry_forward() -> None:
+    """重ならない場合（隙間ゼロまたは隙間あり）は単純配置 + carry-forward
+    （v1 `assemble` と同じ規約）。"""
+    n_bins = 3
+    n_total = 100
+    sp_a = np.full((20, n_bins), 2.0)
+    ap_a = np.full((20, n_bins), 0.2)
+    sp_b = np.full((15, n_bins), 9.0)
+    ap_b = np.full((15, n_bins), 0.4)
+    placements = [
+        jn.NotePlacement(10, 30, sp_a, ap_a, has_join_to_prev=False),
+        jn.NotePlacement(60, 75, sp_b, ap_b, has_join_to_prev=False),
+    ]
+    sp_seq, _ap_seq, stats = jn.assemble_absolute(n_total, n_bins, placements)
+    assert np.allclose(sp_seq[0:10], sp_a[0])
+    assert np.allclose(sp_seq[30:60], sp_a[-1])
+    assert np.allclose(sp_seq[75:100], sp_b[-1])
+    assert stats["n_joins_applied"] == 0
+    assert stats["n_gap_frames"] == 10 + 30 + 25
+
+
+def test_assemble_absolute_deterministic_repeat() -> None:
+    n_bins = 4
+    n_total = 150
+    sp_a = _wavy_sp(60, n_bins, 1.0, seed=51)
+    sp_b = _wavy_sp(60, n_bins, 3.0, seed=52)
+    ap_a = np.full((60, n_bins), 0.1)
+    ap_b = np.full((60, n_bins), 0.2)
+    placements = [
+        jn.NotePlacement(0, 60, sp_a, ap_a, has_join_to_prev=False),
+        jn.NotePlacement(55, 115, sp_b, ap_b, has_join_to_prev=True),
+    ]
+    sp1, ap1, stats1 = jn.assemble_absolute(n_total, n_bins, placements)
+    sp2, ap2, stats2 = jn.assemble_absolute(n_total, n_bins, placements)
+    assert np.array_equal(sp1, sp2)
+    assert np.array_equal(ap1, ap2)
+    assert stats1 == stats2
+
+
+def test_assemble_absolute_empty_placements() -> None:
+    sp_seq, ap_seq, stats = jn.assemble_absolute(50, 4, [])
+    assert sp_seq.shape == (50, 4)
+    assert ap_seq.shape == (50, 4)
+    assert stats["n_total_frames"] == 50
+    assert stats["n_gap_frames"] == 50
+
+
+def test_assemble_control_tracks_absolute_matches_sp_ap_placement() -> None:
+    """f0/振幅トラックが sp/ap（`assemble_absolute`）と同一の絶対配置
+    （同一 start_frame/end_frame/has_join_to_prev）で再構築されることを、
+    n_bins=1 の場合の厳密一致で確認する（`assemble_control_tracks_v2` の
+    同種テストの絶対グリッド版）。"""
+    n_bins = 1
+    n_total = 150
+    n1, n2 = 60, 60
+    start_b = 52  # n1 と重なる（ov=8 相当）
+    val_a, val_b = 1.0, 5.0
+    sp_a = np.full((n1, n_bins), val_a)
+    ap_a = np.full((n1, n_bins), val_a * 0.1)
+    sp_b = np.full((n2, n_bins), val_b)
+    ap_b = np.full((n2, n_bins), val_b * 0.1)
+    placements = [
+        jn.NotePlacement(0, n1, sp_a, ap_a, has_join_to_prev=False),
+        jn.NotePlacement(start_b, start_b + n2, sp_b, ap_b, has_join_to_prev=True),
+    ]
+    sp_seq, ap_seq, join_stats = jn.assemble_absolute(n_total, n_bins, placements)
+
+    note_f0_tracks = [np.full(n1, val_a), np.full(n2, val_b)]
+    note_amp_tracks = [np.full(n1, val_a * 0.1), np.full(n2, val_b * 0.1)]
+    f0_seq, amp_seq, control_stats = jn.assemble_control_tracks_absolute(
+        n_total, placements, note_f0_tracks, note_amp_tracks
+    )
+    assert control_stats["n_total_frames"] == join_stats["n_total_frames"] == n_total
+    assert f0_seq.shape[0] == sp_seq.shape[0]
+    # 配置区間内は厳密一致（同一 blend 幅・同一位置で処理しているため）。
+    assert np.allclose(f0_seq[: start_b + n2], sp_seq[: start_b + n2, 0])
+    assert np.allclose(amp_seq[: start_b + n2], ap_seq[: start_b + n2, 0])
+    # gap（末尾の未配置区間）は sp/ap と異なり 0 埋め（carry-forward しない）。
+    assert np.all(f0_seq[start_b + n2:] == 0.0)
+    assert not np.allclose(sp_seq[start_b + n2:, 0], 0.0)
+
+
+def test_assemble_control_tracks_absolute_empty_placements() -> None:
+    f0_seq, amp_seq, stats = jn.assemble_control_tracks_absolute(40, [], [], [])
+    assert f0_seq.shape == (40,)
+    assert amp_seq.shape == (40,)
+    assert np.all(f0_seq == 0.0)
+    assert stats["n_total_frames"] == 40

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from pathlib import Path
@@ -76,13 +77,22 @@ def load_donor_24k(wav_path: str | Path) -> Tuple[np.ndarray, int]:
 
     F1b/F1c と同一手順（gcd(24000,44100)=300 -> 24000/300=80, 44100/300=147）。
     """
-    x, sr = sf.read(str(wav_path))
+    return load_donor_24k_bytes(Path(wav_path).read_bytes(), source=str(wav_path))
+
+
+def load_donor_24k_bytes(data: bytes, source: str = "<bytes>") -> Tuple[np.ndarray, int]:
+    """P2 修正 (review #262 R3): `load_donor_24k` のデコード本体をバイト列
+    read から切り離す（呼び出し側が既にハッシュ計算のために読み込んだバイト
+    列から `io.BytesIO` 経由でそのままデコードでき、同一 wav への二重 read
+    （split-read）を避けるため。donor_bank_utau.py の同種修正と対称の設計）。
+    """
+    x, sr = sf.read(io.BytesIO(data))
     if x.ndim > 1:
         x = x.mean(axis=1)
     if sr != 44100:
         raise ValueError(
             f"unexpected donor sr={sr} (expected 44100). "
-            f"vocadito zip md5 should be {DONOR_ZIP_MD5} — 再取得時は照合すること。"
+            f"vocadito zip md5 should be {DONOR_ZIP_MD5} — 再取得時は照合すること。source={source}"
         )
     y = resample_poly(x, up=80, down=147)
     return np.ascontiguousarray(y.astype(np.float64)), SR
@@ -122,7 +132,15 @@ def load_notes_csv(path: str | Path) -> List[Tuple[float, float, float]]:
     vocadito README: 「column 1: note start time (s) / column 2: note pitch (Hz) /
     column 3: note duration (s)」。start_sec 昇順にソートして返す（決定論）。
     """
-    data = np.loadtxt(str(path), delimiter=",")
+    return load_notes_csv_text(Path(path).read_text(encoding="utf-8"))
+
+
+def load_notes_csv_text(text: str) -> List[Tuple[float, float, float]]:
+    """P2 修正 (review #262 R3): `load_notes_csv` の解析本体をファイル read
+    から切り離す（呼び出し側が既にハッシュ計算のために読み込んだテキストから
+    直接解析でき、同一 CSV への二重 read を避けるため）。
+    """
+    data = np.loadtxt(io.StringIO(text), delimiter=",")
     if data.ndim == 1:
         data = data.reshape(1, -1)
     rows = [(float(r[0]), float(r[1]), float(r[2])) for r in data]
@@ -451,29 +469,37 @@ def build_donor_bank(
         raise FileNotFoundError(
             f"donor wav not found: {wav_path}. vocadito zip md5={DONOR_ZIP_MD5} で再取得・照合すること。"
         )
-    wav_sha256 = sha256_of(wav_path)
+    # P2 修正 (review #262 R3): wav/notes CSV とも「1 回 read したバイト列から
+    # hash と decode/parse の両方を導出」する（旧実装は hash 用に `sha256_of`
+    # で read した後、キャッシュ miss 時に `load_donor_24k`/`load_notes_csv`
+    # がそれぞれ同じファイルをもう一度 read していた = split-read。
+    # measure_bands.py R1 修正・donor_bank_utau.py 同種修正と同じ流儀）。
+    wav_bytes = wav_path.read_bytes()
+    wav_sha256 = hashlib.sha256(wav_bytes).hexdigest()
 
     notes_csv_str = str(notes_csv_path) if notes_csv_path is not None else None
     use_notes = notes_csv_path is not None and Path(notes_csv_path).exists()
+    notes_bytes: Optional[bytes] = None
+    notes_csv_sha256: Optional[str] = None
+    if use_notes:
+        notes_bytes = Path(notes_csv_path).read_bytes()  # type: ignore[arg-type]
+        notes_csv_sha256 = hashlib.sha256(notes_bytes).hexdigest()
 
     cache_path: Optional[Path] = None
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        # P1 修正: notes CSV は内容ハッシュ（パスではない）をキー材料にする
-        # （`sha256_of` 自体は軽い read_bytes 1 回のみで WORLD 分析ほど高くない）。
-        notes_csv_sha256 = sha256_of(notes_csv_path) if use_notes else None  # type: ignore[arg-type]
         key = _cache_key(wav_sha256, notes_csv_sha256, frame_period_ms)
         cache_path = cache_dir / f"donor_bank_{key}.npz"
         if cache_path.exists():
             return _load_cache(cache_path)
 
-    x, sr = load_donor_24k(wav_path)
+    x, sr = load_donor_24k_bytes(wav_bytes, source=str(wav_path))
     donor = analyze_donor_world(x, sr, frame_period_ms)
     n_donor_frames = len(donor["f0"])
 
     if use_notes:
-        notes = load_notes_csv(notes_csv_path)  # type: ignore[arg-type]
+        notes = load_notes_csv_text(notes_bytes.decode("utf-8"))  # type: ignore[union-attr]
         boundaries, stats = units_from_notes(notes, n_donor_frames, frame_period_ms)
         source = "notes_csv"
     else:

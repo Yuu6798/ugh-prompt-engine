@@ -210,6 +210,182 @@ def overlap_add_concat(
     return sp_acc, ap_acc, stats
 
 
+# ---------------------------------------------------------------------------
+# F1.4 R3: 絶対グリッド配置（総尺の score 準拠維持）
+# ---------------------------------------------------------------------------
+#
+# 背景（設計判定による内部発見・PR #262 R3）: `assemble_v2`/
+# `assemble_control_tracks_v2`（すぐ下の節）は run 内の join のたびに直前
+# アキュムレータ末尾を実際にトリムする（overlap 分 + preutterance 消費分の
+# `extra_trim_frames`）。この「トリムして詰める」方式は run 単体では
+# 正しく機能するが、複数 run から成る render 全体では、後続 run の配置が
+# 常に naive（score 由来の圧縮前）タイムライン上のギャップ計算に基づくため、
+# 各 run の圧縮（縮み）が後続の run 全てへ伝播し、総尺が score の総尺から
+# 累積的に縮む（sakura で 19% 相当・record 参照）。
+#
+# `assemble_absolute`/`assemble_control_tracks_absolute` はこれを「トリムして
+# 詰める」のではなく「固定長の絶対タイムラインバッファへ直接配置する」方式へ
+# 転換する。`placements[i].start_frame`/`end_frame` は呼び出し側
+# （render.py `_build_vcv_placements`）が**あらかじめ**「拍位置 −
+# lead（preutterance または overlap フォールバック）」の絶対座標として
+# 計算済みである前提とする（トリムはこの関数内では一切行わない）。
+# `has_join_to_prev=True` な note が、直前までに書き込み済みの区間へ実際に
+# 食い込む場合（lead の結果として時間的に重なる場合）のみ、その重なり区間を
+# log-sp/ap クロスフェードでブレンドする（トリムではなく同一時間軸上の
+# ブレンド）。重ならない場合（lead が直前 note と釣り合っていて隙間ゼロ、
+# または一部だけ隙間が残る場合）は単純上書き/隙間放置（隙間は関数末尾で
+# 直前フレームの forward-fill により埋める・v1 `assemble` と同じ規約）。
+#
+# `donor="ritsu"`（VCV/preutterance 経路）のみがこれらの関数を使う。
+# `assemble_v2`/`assemble_control_tracks_v2`（vocadito/pjs 経路）は無変更
+# （既存テスト・既存挙動を維持。回帰リスクを avoid）。
+
+
+def _blend_log_domain(prev_block: np.ndarray, cur_block: np.ndarray, w: np.ndarray) -> np.ndarray:
+    tail_log = np.log(prev_block + EPS)
+    head_log = np.log(cur_block + EPS)
+    return np.exp(tail_log * (1.0 - w) + head_log * w)
+
+
+def _place_absolute_pair(
+    n_total_frames: int,
+    n_dims: int,
+    items: Sequence[Tuple[int, int, bool, np.ndarray, np.ndarray]],
+    gap_fill: str = "carry_forward",
+) -> Tuple[np.ndarray, np.ndarray, dict]:
+    """`assemble_absolute`/`assemble_control_tracks_absolute` の共通実装。
+
+    `items` の各要素 = `(start_frame, end_frame, has_join_to_prev, primary,
+    secondary)`（`primary`/`secondary` は `(n, n_dims)` 配列。sp/ap または
+    f0/振幅を単一のインターフェースで扱うための軽量タプル表現）。
+    primary は log domain（sp/f0 に自然）、secondary は linear domain
+    （ap/振幅に自然）でブレンドする。`gap_fill`: `"carry_forward"`（sp/ap の
+    無声区間 = 直前有効フレームで埋める）| `"zero"`（f0/振幅の無声区間 =
+    真に 0）。
+    """
+    primary_seq = np.zeros((n_total_frames, n_dims), dtype=np.float64)
+    secondary_seq = np.zeros((n_total_frames, n_dims), dtype=np.float64)
+    covered = np.zeros(n_total_frames, dtype=bool)
+
+    n_joins_applied = 0
+    n_joins_skipped_short = 0
+    overlaps_applied: List[int] = []
+    prev_end: Optional[int] = None
+
+    for start_raw, end_raw, has_join, primary, secondary in items:
+        start = max(0, min(int(start_raw), n_total_frames))
+        end = max(start, min(int(end_raw), n_total_frames))
+        n = end - start
+        if n <= 0:
+            prev_end = end if prev_end is None else max(prev_end, end)
+            continue
+        primary_unit = primary[:n]
+        secondary_unit = secondary[:n]
+
+        ov = 0
+        if has_join and prev_end is not None and start < prev_end:
+            covered_len = int(covered[start:min(prev_end, n_total_frames)].sum())
+            ov = min(prev_end - start, n, covered_len)
+
+        if ov >= 2:
+            w = np.linspace(0.0, 1.0, ov)[:, None]
+            primary_seq[start:start + ov] = _blend_log_domain(
+                primary_seq[start:start + ov], primary_unit[:ov], w
+            )
+            secondary_seq[start:start + ov] = (
+                secondary_seq[start:start + ov] * (1.0 - w) + secondary_unit[:ov] * w
+            )
+            primary_seq[start + ov:end] = primary_unit[ov:]
+            secondary_seq[start + ov:end] = secondary_unit[ov:]
+            n_joins_applied += 1
+            overlaps_applied.append(ov)
+        else:
+            if ov == 1:
+                n_joins_skipped_short += 1
+            primary_seq[start:end] = primary_unit
+            secondary_seq[start:end] = secondary_unit
+
+        covered[start:end] = True
+        prev_end = end if prev_end is None else max(prev_end, end)
+
+    if gap_fill == "carry_forward":
+        if covered.any():
+            first_idx = int(np.argmax(covered))
+            if first_idx > 0:
+                primary_seq[:first_idx] = primary_seq[first_idx]
+                secondary_seq[:first_idx] = secondary_seq[first_idx]
+            n_gap_frames = int((~covered).sum())
+            last = first_idx
+            for i in range(first_idx, n_total_frames):
+                if covered[i]:
+                    last = i
+                else:
+                    primary_seq[i] = primary_seq[last]
+                    secondary_seq[i] = secondary_seq[last]
+        else:
+            n_gap_frames = n_total_frames
+    else:  # "zero": 何もしない（初期値 0 のまま = 無声）
+        n_gap_frames = int((~covered).sum())
+
+    stats = dict(
+        n_joins_applied=n_joins_applied,
+        n_joins_skipped_short=n_joins_skipped_short,
+        overlap_frames_applied=overlaps_applied,
+        n_gap_frames=n_gap_frames,
+        n_total_frames=n_total_frames,
+    )
+    return primary_seq, secondary_seq, stats
+
+
+def assemble_absolute(
+    n_total_frames: int,
+    n_bins: int,
+    placements: Sequence[NotePlacement],
+) -> Tuple[np.ndarray, np.ndarray, dict]:
+    """F1.4 R3: 絶対グリッド配置版の sp/ap 接合（`donor="ritsu"` 専用）。
+
+    `placements[i].start_frame`/`end_frame` は render.py 側で既に
+    「拍位置 − lead」の絶対座標として確定済みである前提（このバッファは
+    `n_total_frames` 固定・trim しない）。詳細は本節冒頭のコメント参照。
+    """
+    items = [(p.start_frame, p.end_frame, p.has_join_to_prev, p.sp, p.ap) for p in placements]
+    if not items:
+        empty = np.zeros((n_total_frames, n_bins), dtype=np.float64)
+        return empty.copy(), empty.copy(), dict(
+            n_joins_applied=0, n_joins_skipped_short=0, overlap_frames_applied=[],
+            n_gap_frames=n_total_frames, n_total_frames=n_total_frames,
+        )
+    return _place_absolute_pair(n_total_frames, n_bins, items, gap_fill="carry_forward")
+
+
+def assemble_control_tracks_absolute(
+    n_total_frames: int,
+    placements: Sequence[NotePlacement],
+    note_primary_tracks: Sequence[np.ndarray],
+    note_secondary_tracks: Sequence[np.ndarray],
+) -> Tuple[np.ndarray, np.ndarray, dict]:
+    """F1.4 R3: 絶対グリッド配置版の f0/振幅接合（`assemble_absolute` と同一の
+    `start_frame`/`end_frame`/`has_join_to_prev` を使う。run 間ギャップは
+    sp/ap と異なり 0（無声）で埋める（`assemble_control_tracks_v2` と同じ
+    意味論）。
+    """
+    if not placements:
+        empty = np.zeros(n_total_frames, dtype=np.float64)
+        return empty.copy(), empty.copy(), dict(
+            n_joins_applied=0, n_joins_skipped_short=0, overlap_frames_applied=[],
+            n_gap_frames=n_total_frames, n_total_frames=n_total_frames,
+        )
+    items = [
+        (
+            placements[i].start_frame, placements[i].end_frame, placements[i].has_join_to_prev,
+            note_primary_tracks[i].reshape(-1, 1), note_secondary_tracks[i].reshape(-1, 1),
+        )
+        for i in range(len(placements))
+    ]
+    primary2d, secondary2d, stats = _place_absolute_pair(n_total_frames, 1, items, gap_fill="zero")
+    return primary2d[:, 0], secondary2d[:, 0], stats
+
+
 def _resolve_join_overlap(requested: Optional[int], default_frames: int) -> int:
     return requested if requested is not None and requested >= 0 else default_frames
 

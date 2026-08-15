@@ -183,9 +183,19 @@ def test_build_vcv_placements_clips_preutterance_within_breath_budget() -> None:
     assert stats["preutterance_shift_frames"] == [50]
 
 
-def test_build_vcv_placements_mid_phrase_note_start_unshifted() -> None:
-    """フレーズ内部（has_join_to_prev=True）のノートは start_frame を
-    シフトしない（接合は overlap_frames 由来の overlap-add に委ねる）。"""
+def test_build_vcv_placements_mid_phrase_note_start_shifted_by_preutterance() -> None:
+    """F1.4 R3（絶対グリッド配置・PR #262 R3）: フレーズ内部
+    （has_join_to_prev=True）のノートも自身の preutterance 分だけ
+    start_frame が前方へシフトされる。
+
+    R2 までは mid-phrase note の start_frame を cursor のまま据え置き、
+    `joins.assemble_v2` 側の追加トリム（`_resolve_extra_trim`）で
+    preutterance を消費していた。この方式は接合のたびに直前アキュムレータ
+    末尾を実際にトリムして総尺を縮める副作用があり、run を跨いで縮みが
+    伝播し score 総尺から累積的にずれていた（record 参照）。R3 は shift を
+    配置そのものへ織り込み、`joins.assemble_absolute` が固定長バッファへ
+    trim なしで配置する（重なりがあれば trim ではなくブレンドする）。
+    """
     sr = 24000
     segs = [_FakeSeg(0, sr, True), _FakeSeg(sr, 2 * sr, False)]
     bank = _FakeBankVCV()
@@ -194,17 +204,21 @@ def test_build_vcv_placements_mid_phrase_note_start_unshifted() -> None:
     selections = [_FakeVCVSelection(unit0), _FakeVCVSelection(unit1)]
 
     placements, resolved_list, _stats = rd._build_vcv_placements(segs, selections, bank)
-    assert placements[1].start_frame == resolved_list[0].n_frames  # cursor そのまま（シフト無し）
+    assert placements[1].start_frame == resolved_list[0].n_frames - 30
     assert placements[1].has_join_to_prev is True
     assert placements[1].overlap_frames == 4
-    # P1 修正 (review #262 R2): mid-phrase note の preutterance_frames は
-    # joins.assemble_v2 側の追加トリム（_resolve_extra_trim）で消費するために
-    # NotePlacement へそのまま渡す。
+    # R3: preutterance_frames は record/後方互換のため引き続き渡すが、
+    # assemble_absolute はこのフィールドを読まない（絶対座標の交差のみで
+    # 重なりを決めるため）。
     assert placements[1].preutterance_frames == 30
 
 
-def test_build_vcv_placements_end_frame_unaffected_by_shift() -> None:
-    """end_frame は shift 非依存（次 run のギャップ計算を狂わせないため）。"""
+def test_build_vcv_placements_end_frame_shifted_with_start_frame() -> None:
+    """F1.4 R3: end_frame は start_frame と同じ shift を受ける（R2 までの
+    「end_frame は shift 非依存」を撤廃）。絶対グリッド上では unit 自身の長さ
+    （`resolved.n_frames` = target_n_frames）は shift の影響を受けないため、
+    `end_frame = start_frame + resolved.n_frames` が常に成り立つ。
+    """
     sr = 24000
     breath_samples = int(0.25 * sr)
     segs = [
@@ -219,8 +233,9 @@ def test_build_vcv_placements_end_frame_unaffected_by_shift() -> None:
     placements, resolved_list, _stats = rd._build_vcv_placements(segs, selections, bank)
     breath_frames = 50
     naive_start = breath_frames + resolved_list[0].n_frames
-    assert placements[1].end_frame == naive_start + resolved_list[1].n_frames
-    assert placements[1].start_frame < placements[1].end_frame - resolved_list[1].n_frames + 1
+    assert placements[1].start_frame == naive_start - 15
+    assert placements[1].end_frame == placements[1].start_frame + resolved_list[1].n_frames
+    assert placements[1].end_frame == naive_start - 15 + resolved_list[1].n_frames
 
 
 # --- P1 修正 (review #262): _note_frame_track（f0/振幅トラックのノート単位抽出） ---

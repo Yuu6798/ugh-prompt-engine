@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import pickle
 import sys
 from dataclasses import dataclass
@@ -78,8 +79,17 @@ class LabPhoneme:
 
 def parse_lab(path: str | Path) -> List[LabPhoneme]:
     """HTS 形式 .lab（`start_100ns end_100ns phoneme` の空白区切り 3 列）を読む。"""
+    return parse_lab_text(Path(path).read_text(encoding="utf-8"))
+
+
+def parse_lab_text(text: str) -> List[LabPhoneme]:
+    """P2 修正 (review #262 R3): `parse_lab` の解析本体をファイル read から
+    切り離す（呼び出し側が既にハッシュ計算のために読み込んだバイト列/テキスト
+    から直接解析でき、同一 .lab への二重 read を避けるため。
+    § donor_bank_utau.parse_oto_text と対称の設計）。
+    """
     out: List[LabPhoneme] = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         parts = line.split()
         if len(parts) != 3:
             continue
@@ -196,11 +206,19 @@ def _ms_to_frame(sec: float, frame_period_ms: float) -> int:
 
 def _load_wav_24k(path: str | Path) -> Tuple[np.ndarray, int]:
     """PJS song wav（48kHz/24bit）を読み込み 24kHz へリサンプルする（up=1,down=2）。"""
-    x, sr = sf.read(str(path))
+    return _load_wav_24k_bytes(Path(path).read_bytes(), source=str(path))
+
+
+def _load_wav_24k_bytes(data: bytes, source: str = "<bytes>") -> Tuple[np.ndarray, int]:
+    """P2 修正 (review #262 R3): `_load_wav_24k` のデコード本体をバイト列
+    read から切り離す（§ donor_bank_utau._load_wav_24k_bytes と対称の設計。
+    split-read を避けるため）。
+    """
+    x, sr = sf.read(io.BytesIO(data))
     if x.ndim > 1:
         x = x.mean(axis=1)
     if sr != 48000:
-        raise ValueError(f"unexpected PJS wav sr={sr} (expected 48000): {path}")
+        raise ValueError(f"unexpected PJS wav sr={sr} (expected 48000): {source}")
     y = resample_poly(x, up=1, down=2)
     return np.ascontiguousarray(y.astype(np.float64)), SR
 
@@ -266,13 +284,25 @@ def build_donor_bank_lab(
     # v1/v2 builder と同じ是正・同じ理由: root path + options のみのキーだと
     # `--cache-dir` 再利用時のコーパス編集が検知されない）。
     selected_paths, selection_stats = _select_lab_files(lab_paths, REQUIRED_ONSETS, min_files, max_files)
+    # P2 修正 (review #262 R3): 選択された .lab / _song.wav を「1 回 read した
+    # バイト列から hash と decode/parse の両方を導出」する形に統一する
+    # （measure_bands.py R1 修正・donor_bank_utau.py 同種修正と同じ流儀）。
+    # 旧実装は hash 用に `sha256_of` で read した後、メイン loop の
+    # `parse_lab`/`_load_wav_24k`/`sha256_of`（再ハッシュ）がさらに 2 回
+    # read していた（split-read。TOCTOU 窓）。
     content_hashes: List[Tuple[str, str]] = []
+    lab_bytes_by_path: Dict[Path, bytes] = {}
+    wav_bytes_by_lab: Dict[Path, bytes] = {}
     for lab_path in selected_paths:
+        lab_bytes = lab_path.read_bytes()
+        lab_bytes_by_path[lab_path] = lab_bytes
         rel_lab = str(lab_path.relative_to(root))
-        content_hashes.append((rel_lab, sha256_of(lab_path)))
+        content_hashes.append((rel_lab, hashlib.sha256(lab_bytes).hexdigest()))
         wav_path = lab_path.parent / f"{lab_path.stem}_song.wav"
         if wav_path.exists():
-            content_hashes.append((str(wav_path.relative_to(root)), sha256_of(wav_path)))
+            wav_bytes = wav_path.read_bytes()
+            wav_bytes_by_lab[lab_path] = wav_bytes
+            content_hashes.append((str(wav_path.relative_to(root)), hashlib.sha256(wav_bytes).hexdigest()))
     # P2 修正 (review #262 R2): (相対パス, sha256) ペアで集約する
     # （§ donor_bank_utau.py と同じ理由・同じ是正）。
     content_digest = aggregate_content_hash(content_hashes)
@@ -289,7 +319,12 @@ def build_donor_bank_lab(
         cache_path = cache_dir / f"lab_bank_{key}.pkl"
         if cache_path.exists():
             with open(cache_path, "rb") as f:
-                return pickle.load(f)
+                cached_bank, cached_unit_vowels, cached_consonant_clips, cached_stats = pickle.load(f)
+            # P2 修正 (review #262 R3): pickle 復元は保存時の `stats["cache_hit"]
+            # =False` をそのまま返していた（donor_bank_utau.py の同種修正と揃える）。
+            cached_stats["cache_hit"] = True
+            cached_bank.stats["cache_hit"] = True
+            return cached_bank, cached_unit_vowels, cached_consonant_clips, cached_stats
 
     all_f0: List[np.ndarray] = []
     all_sp: List[np.ndarray] = []
@@ -305,16 +340,19 @@ def build_donor_bank_lab(
     n_dangling_onset_total = 0
 
     for lab_path in selected_paths:
-        wav_path = lab_path.parent / f"{lab_path.stem}_song.wav"
-        if not wav_path.exists():
+        # P2 修正 (review #262 R3): prepass で既に read 済みのバイト列を
+        # 再利用する（split-read を避ける。§ prepass コメント参照）。
+        wav_bytes = wav_bytes_by_lab.get(lab_path)
+        if wav_bytes is None:
             continue
-        phonemes = parse_lab(lab_path)
+        phonemes = parse_lab_text(lab_bytes_by_path[lab_path].decode("utf-8"))
         morae, mstats = group_lab_to_morae(phonemes)
         n_cl_seen_total += mstats["n_cl_seen"]
         n_dangling_onset_total += mstats["n_dangling_onset_dropped"]
 
-        x, sr = _load_wav_24k(wav_path)
-        wav_sha_parts.append(sha256_of(wav_path))
+        wav_path = lab_path.parent / f"{lab_path.stem}_song.wav"
+        x, sr = _load_wav_24k_bytes(wav_bytes, source=str(wav_path))
+        wav_sha_parts.append(hashlib.sha256(wav_bytes).hexdigest())
         donor = analyze_donor_world(x, sr, frame_period_ms)
         n_donor_frames = len(donor["f0"])
 

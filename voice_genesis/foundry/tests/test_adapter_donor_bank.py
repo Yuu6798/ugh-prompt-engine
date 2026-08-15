@@ -136,6 +136,37 @@ def test_build_donor_bank_end_to_end_with_synthetic_wav(tmp_path: Path) -> None:
     ]
 
 
+def test_build_donor_bank_reads_wav_and_notes_csv_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    """P2 修正 (review #262 R3): wav / notes CSV とも、ハッシュと decode/parse の
+    両方に同一 read 結果を使う（split-read を直接 enforce。measure_bands.py の
+    `test_analyze_wav_reads_file_bytes_exactly_once` と同じ流儀）。
+    """
+    import soundfile as sf
+
+    sr = 44100
+    dur = 1.0
+    t = np.arange(int(dur * sr)) / sr
+    x = 0.3 * np.sin(2 * np.pi * 220.0 * t)
+    wav_path = tmp_path / "mini_donor.wav"
+    sf.write(str(wav_path), x, sr, subtype="PCM_16")
+    notes_path = tmp_path / "notes.csv"
+    notes_path.write_text("0.0,220.0,1.0\n")
+
+    counts: dict = {}
+    orig_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self):
+        key = str(self.resolve())
+        counts[key] = counts.get(key, 0) + 1
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+    db.build_donor_bank(wav_path, notes_csv_path=notes_path, cache_dir=None)
+
+    assert counts.get(str(wav_path.resolve())) == 1
+    assert counts.get(str(notes_path.resolve())) == 1
+
+
 def test_build_donor_bank_missing_wav_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         db.build_donor_bank(tmp_path / "nope.wav")

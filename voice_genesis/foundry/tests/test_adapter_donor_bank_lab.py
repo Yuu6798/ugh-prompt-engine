@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
@@ -197,11 +198,43 @@ def test_build_donor_bank_lab_cache_roundtrip(tmp_path: Path) -> None:
         root, target_median_hz=260.0, cache_dir=cache_dir, min_files=1, max_files=5
     )
     assert s1["cache_hit"] is False
-    bank2, uv2, _c2, _s2 = dbl.build_donor_bank_lab(
+    assert bank1.stats["cache_hit"] is False
+    bank2, uv2, _c2, s2 = dbl.build_donor_bank_lab(
         root, target_median_hz=260.0, cache_dir=cache_dir, min_files=1, max_files=5
     )
     assert np.array_equal(bank1.sp, bank2.sp)
     assert uv1 == uv2
+    # P2 修正 (review #262 R3): pickle 復元時に cache_hit=True へ更新される
+    # ことを検証する（donor_bank_utau.py の同種修正と揃える）。
+    assert s2["cache_hit"] is True
+    assert bank2.stats["cache_hit"] is True
+
+
+def test_build_donor_bank_lab_reads_each_file_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    """P2 修正 (review #262 R3): 選択された .lab / _song.wav は、ハッシュと
+    decode/parse の両方に同一 read 結果を使う（split-read を直接 enforce。
+    § donor_bank_utau.py の同種テストと対称の設計）。"""
+    root = tmp_path / "pjs_corpus"
+    d = root / "pjs001"
+    d.mkdir(parents=True)
+    wav_path = d / "pjs001_song.wav"
+    _write_sine_wav(wav_path, duration_s=1.0)
+    lab_path = d / "pjs001.lab"
+    lab_path.write_text("0 3000000 pau\n3000000 4000000 s\n4000000 9000000 o\n")
+
+    counts: Dict[str, int] = {}
+    orig_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self):
+        key = str(self.resolve())
+        counts[key] = counts.get(key, 0) + 1
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+    dbl.build_donor_bank_lab(root, target_median_hz=260.0, min_files=1, max_files=5)
+
+    assert counts.get(str(lab_path.resolve())) == 1
+    assert counts.get(str(wav_path.resolve())) == 1
 
 
 def test_build_donor_bank_lab_cache_stale_after_lab_edit(tmp_path: Path) -> None:

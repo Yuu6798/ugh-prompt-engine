@@ -28,6 +28,7 @@ WORLD 分析すると 1 pitch あたり数百秒規模の音声を harvest/cheap
 from __future__ import annotations
 
 import hashlib
+import io
 import pickle
 import sys
 from collections import OrderedDict
@@ -152,7 +153,15 @@ def parse_oto_ini(path: str | Path) -> List[OtoEntry]:
     """oto.ini（`filename=alias,offset,consonant,blank,preutterance,overlap`
     形式・1 行 1 エイリアス）を解析する。壊れた行（フィールド数不一致）は
     スキップする（実装決定）。"""
-    text = decode_oto_bytes(Path(path).read_bytes())
+    return parse_oto_text(decode_oto_bytes(Path(path).read_bytes()))
+
+
+def parse_oto_text(text: str) -> List[OtoEntry]:
+    """P2 修正 (review #262 R3): `parse_oto_ini` の解析本体をバイト列 read から
+    切り離す（呼び出し側が既にハッシュ計算のために読み込んだバイト列から
+    そのまま decode してこの関数へ渡せるようにし、同一ファイルへの二重
+    read（split-read。TOCTOU 窓）を避けるため。§ builder の prepass 参照）。
+    """
     entries: List[OtoEntry] = []
     for line in text.splitlines():
         line = line.strip()
@@ -285,12 +294,21 @@ def _load_wav_24k(path: str | Path) -> Tuple[np.ndarray, int, float]:
     md5 照合メッセージを含まないローカル版（[実装決定]）。戻り値に元ファイルの
     実測 duration_ms も含める（oto.ini の ms 値と同じ基準で cutoff を解決するため）。
     """
-    x, sr = sf.read(str(path))
+    return _load_wav_24k_bytes(Path(path).read_bytes(), source=str(path))
+
+
+def _load_wav_24k_bytes(data: bytes, source: str = "<bytes>") -> Tuple[np.ndarray, int, float]:
+    """P2 修正 (review #262 R3): `_load_wav_24k` のデコード本体をバイト列
+    read から切り離す（呼び出し側が既にハッシュ計算のために読み込んだバイト
+    列から `io.BytesIO` 経由でそのままデコードし、同一 wav への二重 read
+    （split-read）を避けるため。measure_bands.py の R1 修正と同じ流儀）。
+    """
+    x, sr = sf.read(io.BytesIO(data))
     if x.ndim > 1:
         x = x.mean(axis=1)
     duration_ms = len(x) / sr * 1000.0
     if sr != 44100:
-        raise ValueError(f"unexpected UTAU wav sr={sr} (expected 44100): {path}")
+        raise ValueError(f"unexpected UTAU wav sr={sr} (expected 44100): {source}")
     y = resample_poly(x, up=80, down=147)
     return np.ascontiguousarray(y.astype(np.float64)), SR, duration_ms
 
@@ -461,6 +479,16 @@ def build_donor_bank_utau_vcv(
     # options のみをキー材料にしていたため、`--cache-dir` 再利用時に
     # voicebank_root 配下の WAV/oto.ini を編集しても古い pickle を返す
     # サイレントな provenance 破損があった。
+    # P2 修正 (review #262 R3): oto.ini/wav とも「1 回 read したバイト列から
+    # hash と decode/parse の両方を導出」する（measure_bands.py R1 修正と同じ
+    # 流儀）。旧実装は oto.ini を prepass の hash 用 read の後で `parse_oto_ini`
+    # がもう一度 read し、選択された各 wav も prepass の hash 用 read の後で
+    # メイン loop の `_load_wav_24k`/`sha256_of` がさらに 2 回 read していた
+    # （split-read。prepass〜メイン loop の間にファイルが書き換わると記録
+    # される sha256 と実際に解析したデータが食い違う TOCTOU 窓）。ここで
+    # prepass 時に読んだバイト列を `pitch_dir_prep` へ保持し、メイン loop
+    # ではそのバイト列から直接 decode する（wav 選択に使う量に限られるため
+    # メモリ増分は計算資源境界方針の範囲内・[実装決定・record 記録]）。
     pitch_dir_prep: Dict[str, dict] = {}
     content_hashes: List[Tuple[str, str]] = []
     for pdir_name in pitch_dirs:
@@ -469,20 +497,24 @@ def build_donor_bank_utau_vcv(
         oto_bytes = oto_path.read_bytes()
         oto_sha256 = hashlib.sha256(oto_bytes).hexdigest()
         content_hashes.append((f"{pdir_name}/oto.ini", oto_sha256))
-        entries = parse_oto_ini(oto_path)
+        entries = parse_oto_text(decode_oto_bytes(oto_bytes))
         entries_by_wav: "OrderedDict[str, List[OtoEntry]]" = OrderedDict()
         for e in entries:
             entries_by_wav.setdefault(e.wav_filename, []).append(e)
         selected_files, sel_stats = _select_wav_subset_for_contexts(
             entries_by_wav, pitch_dirs, required_contexts, max_wav_files
         )
+        wav_bytes_by_file: Dict[str, bytes] = {}
         for wav_filename in selected_files:
             wav_path = pdir / wav_filename
             if wav_path.exists():
-                content_hashes.append((f"{pdir_name}/{wav_filename}", sha256_of(wav_path)))
+                data = wav_path.read_bytes()
+                wav_bytes_by_file[wav_filename] = data
+                content_hashes.append((f"{pdir_name}/{wav_filename}", hashlib.sha256(data).hexdigest()))
         pitch_dir_prep[pdir_name] = dict(
             entries=entries, entries_by_wav=entries_by_wav,
             selected_files=selected_files, sel_stats=sel_stats,
+            wav_bytes_by_file=wav_bytes_by_file,
         )
     # P2 修正 (review #262 R2): (相対パス, sha256) ペアで集約する（パス非結合の
     # hash 集合だけでは、2 ファイルが中身を入れ替えても同一集約ダイジェストに
@@ -504,7 +536,14 @@ def build_donor_bank_utau_vcv(
         cache_path = cache_dir / f"utau_bank_vcv_{key}.pkl"
         if cache_path.exists():
             with open(cache_path, "rb") as f:
-                return pickle.load(f)
+                cached_bank, cached_unit_contexts, cached_stats = pickle.load(f)
+            # P2 修正 (review #262 R3): pickle 復元は保存時にダンプされた
+            # `stats["cache_hit"]=False` をそのまま返していた（record の
+            # cache_hit が常に False のまま = キャッシュ命中を record 上で
+            # 判別できない）。復元パスでは True へ上書きする。
+            cached_stats["cache_hit"] = True
+            cached_bank.stats["cache_hit"] = True
+            return cached_bank, cached_unit_contexts, cached_stats
 
     all_f0: List[np.ndarray] = []
     all_sp: List[np.ndarray] = []
@@ -530,14 +569,19 @@ def build_donor_bank_utau_vcv(
         entries_by_wav = prep["entries_by_wav"]
         n_entries_total += len(prep["entries"])
         selected_files, sel_stats = prep["selected_files"], prep["sel_stats"]
+        wav_bytes_by_file = prep["wav_bytes_by_file"]
         selection_stats_by_dir[pdir_name] = sel_stats
 
         for wav_filename in selected_files:
-            wav_path = pdir / wav_filename
-            if not wav_path.exists():
+            # P2 修正 (review #262 R3): prepass で既に read 済みのバイト列を
+            # 再利用する（split-read を避ける。§ prepass コメント参照）。
+            wav_bytes = wav_bytes_by_file.get(wav_filename)
+            if wav_bytes is None:
                 continue
-            x, sr, wav_duration_ms = _load_wav_24k(wav_path)
-            wav_sha_parts.append(sha256_of(wav_path))
+            wav_sha = hashlib.sha256(wav_bytes).hexdigest()
+            wav_path = pdir / wav_filename
+            x, sr, wav_duration_ms = _load_wav_24k_bytes(wav_bytes, source=str(wav_path))
+            wav_sha_parts.append(wav_sha)
             donor = analyze_donor_world(x, sr, frame_period_ms)
             n_donor_frames = len(donor["f0"])
             n_wav_files_analyzed += 1
@@ -654,6 +698,9 @@ def build_donor_bank_utau(
     # P1 修正 (review #262): build_donor_bank_utau_vcv と同じ理由で、oto.ini
     # 解析 + wav 部分集合選択をキャッシュ判定より前倒しし、選択された WAV/oto.ini
     # の内容ハッシュをキー材料へ含める。
+    # P2 修正 (review #262 R3): oto.ini/wav とも「1 回 read したバイト列から
+    # hash と decode/parse の両方を導出」する（§ build_donor_bank_utau_vcv の
+    # prepass と同じ是正・同じ理由）。
     pitch_dir_prep: Dict[str, dict] = {}
     content_hashes: List[Tuple[str, str]] = []
     for pdir_name in pitch_dirs:
@@ -661,20 +708,24 @@ def build_donor_bank_utau(
         oto_path = pdir / "oto.ini"
         oto_bytes = oto_path.read_bytes()
         content_hashes.append((f"{pdir_name}/oto.ini", hashlib.sha256(oto_bytes).hexdigest()))
-        entries = parse_oto_ini(oto_path)
+        entries = parse_oto_text(decode_oto_bytes(oto_bytes))
         entries_by_wav: "OrderedDict[str, List[OtoEntry]]" = OrderedDict()
         for e in entries:
             entries_by_wav.setdefault(e.wav_filename, []).append(e)
         selected_files, sel_stats = _select_wav_subset(
             entries_by_wav, pitch_dirs, REQUIRED_ONSETS, min_units_per_vowel, max_wav_files
         )
+        wav_bytes_by_file: Dict[str, bytes] = {}
         for wav_filename in selected_files:
             wav_path = pdir / wav_filename
             if wav_path.exists():
-                content_hashes.append((f"{pdir_name}/{wav_filename}", sha256_of(wav_path)))
+                data = wav_path.read_bytes()
+                wav_bytes_by_file[wav_filename] = data
+                content_hashes.append((f"{pdir_name}/{wav_filename}", hashlib.sha256(data).hexdigest()))
         pitch_dir_prep[pdir_name] = dict(
             entries=entries, entries_by_wav=entries_by_wav,
             selected_files=selected_files, sel_stats=sel_stats,
+            wav_bytes_by_file=wav_bytes_by_file,
         )
     # P2 修正 (review #262 R2): (相対パス, sha256) ペアで集約する（§ 上の
     # build_donor_bank_utau_vcv と同じ理由）。
@@ -697,7 +748,11 @@ def build_donor_bank_utau(
         cache_path = cache_dir / f"utau_bank_{key}.pkl"
         if cache_path.exists():
             with open(cache_path, "rb") as f:
-                return pickle.load(f)
+                cached_bank, cached_unit_vowels, cached_consonant_clips, cached_stats = pickle.load(f)
+            # P2 修正 (review #262 R3): § build_donor_bank_utau_vcv と同じ是正。
+            cached_stats["cache_hit"] = True
+            cached_bank.stats["cache_hit"] = True
+            return cached_bank, cached_unit_vowels, cached_consonant_clips, cached_stats
 
     all_f0: List[np.ndarray] = []
     all_sp: List[np.ndarray] = []
@@ -724,14 +779,19 @@ def build_donor_bank_utau(
         entries_by_wav = prep["entries_by_wav"]
         n_entries_total += len(prep["entries"])
         selected_files, sel_stats = prep["selected_files"], prep["sel_stats"]
+        wav_bytes_by_file = prep["wav_bytes_by_file"]
         selection_stats_by_dir[pdir_name] = sel_stats
 
         for wav_filename in selected_files:
-            wav_path = pdir / wav_filename
-            if not wav_path.exists():
+            # P2 修正 (review #262 R3): prepass で既に read 済みのバイト列を
+            # 再利用する（split-read を避ける）。
+            wav_bytes = wav_bytes_by_file.get(wav_filename)
+            if wav_bytes is None:
                 continue
-            x, sr, wav_duration_ms = _load_wav_24k(wav_path)
-            wav_sha_parts.append(sha256_of(wav_path))
+            wav_sha = hashlib.sha256(wav_bytes).hexdigest()
+            wav_path = pdir / wav_filename
+            x, sr, wav_duration_ms = _load_wav_24k_bytes(wav_bytes, source=str(wav_path))
+            wav_sha_parts.append(wav_sha)
             donor = analyze_donor_world(x, sr, frame_period_ms)
             n_donor_frames = len(donor["f0"])
             n_wav_files_analyzed += 1

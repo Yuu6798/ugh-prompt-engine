@@ -259,31 +259,47 @@ def prepend_recorded_consonant(
 def _build_vcv_placements(
     segments: list, selections: List["un.VCVUnitSelection"], bank: "db.DonorBank",
 ) -> Tuple[List["jn.NotePlacement"], List["un.ResolvedVCVSegment"], dict]:
-    """追補 F1.4-B（P1 修正 review #262 R2 で preutterance 消費経路を訂正）:
-    VCV unit の配置。**フレーズ先頭ノートの preutterance 消費**（item2/item3）:
-    先頭ノートの配置開始位置をノート開始（cursor）より `min(preutterance_frames,
-    直前のブレスギャップ frames)` だけ前へずらし、母音アタックが拍に近づくよう
-    補正する（フレーズ間ブレス 0.25s の範囲内でクリップ・件数記録）。
+    """追補 F1.4-B（F1.4 R3 で絶対グリッド配置へ全面改訂・PR #262 R3）: VCV unit
+    の配置。
 
-    フレーズ内部（`has_join_to_prev=True`）のノートは、ここで明示的な cursor
-    シフトを加えない点は F1.4 初版と同じだが、`NotePlacement.preutterance_frames`
-    を渡すことで `joins.assemble_v2`（`_resolve_extra_trim`）側が overlap のみ
-    でなく `preutterance_frames - 実効overlap_frames` 分の追加ハードトリムを
-    直前 note 末尾へ適用する（review #262 R2 P1 指摘: 旧実装は overlap のみを
-    消費していたため、母音アタック点が名目ビートより `preutterance_frames -
-    overlap_frames` フレーム遅延していた。修正後はブレンド幅=overlap を保った
-    まま、ブレンド開始点だけ前へ動かして母音アタック点をビートへ整列させる）。
-    `end_frame` は常に shift の影響を受けないシフト前 cursor 基準で計算する
-    （次 run のギャップ計算を狂わせないため。preutterance 消費の実体は
-    `joins.py` 側の追加トリムであり `end_frame` とは独立）。
+    R3 改訂の背景・設計判定（record 参照）: R2 までは「フレーズ先頭ノートのみ
+    cursor を preutterance 分前へずらし、mid-phrase ノートは
+    `joins.assemble_v2` 側の追加トリム（`_resolve_extra_trim`）で
+    preutterance を消費する」方式だった。この方式は run 内部の join のたびに
+    直前アキュムレータ末尾を実際にトリムする（総尺を縮める）ため、複数 run
+    から成る render 全体では各 run の縮みが後続 run へ伝播し、総尺が score
+    総尺から累積的に縮んでいた（sakura で 19% 相当の圧縮）。
+
+    R3 は全ノート（フレーズ先頭・mid-phrase 問わず）に対して統一的に
+    「拍位置（score 由来の絶対タイムライン上の cursor 位置）− lead
+    （= 選択された unit の `preutterance_frames`。真のアタック点までの
+    オフセット）」の絶対座標へ配置する（`start_frame`/`end_frame` の**両方**
+    が同じだけシフトする。R2 までの「end_frame は shift 非依存」は撤廃 ——
+    絶対グリッド上では unit 自身の長さ `resolved.n_frames`（=
+    `target_n_frames`。shift 非依存で不変）が保たれるため、
+    `end_frame = start_frame + resolved.n_frames` が自然に成り立つ）。
+
+    フレーズ先頭ノートのみ、shift をブレスギャップ長にクリップする（ブレス
+    無音区間より前へは食い込ませない・既存挙動維持）。mid-phrase ノートは
+    クリップしない（直前 note が既に配置済みの音域へ食い込むことを許す ——
+    実際に重なるか・重なり幅は `joins.assemble_absolute` が両ノートの絶対
+    座標の交差から自動的に決め、重なった区間のみ log-sp/ap クロスフェードで
+    ブレンドする。トリムはしない）。
+
+    `resolved.n_frames` は shift の影響を受けないため、shift 分だけ unit の
+    audible span 全体が前方へ動く。後続ノートで shift が埋め合わされない
+    末尾（例: フレーズ最終ノートの末尾 `lead` フレーム分）に生じる空白は、
+    `joins.assemble_absolute` の末尾 carry-forward（前方 hold）で埋める
+    （既存の無声ギャップ充填規約と同一 = 追加実装なし・[実装決定・record
+    記録]）。
     """
     placements: List[jn.NotePlacement] = []
     resolved_list: List[un.ResolvedVCVSegment] = []
     cursor = 0
     prev_end_sample = 0
-    n_preutterance_applied = 0
-    n_preutterance_clipped = 0
-    preutterance_shift_frames: List[int] = []
+    n_shift_applied = 0
+    n_shift_clipped = 0
+    shift_frames: List[int] = []
     head_clipped_note_indices: List[int] = []
 
     for note_index, (seg, sel) in enumerate(zip(segments, selections)):
@@ -298,30 +314,23 @@ def _build_vcv_placements(
             head_clipped_note_indices.append(note_index)
         resolved_list.append(resolved)
 
-        start_frame = cursor
-        if seg.is_phrase_first:
-            preutt = sel.unit.preutterance_frames or 0
-            shift = min(preutt, gap_frames)
-            if shift > 0:
-                start_frame = cursor - shift
-                n_preutterance_applied += 1
-                preutterance_shift_frames.append(shift)
-                if shift < preutt:
-                    n_preutterance_clipped += 1
-        end_frame = cursor + resolved.n_frames  # シフト非依存（次 run のギャップ計算のため）
+        preutt = sel.unit.preutterance_frames or 0
+        lead = min(preutt, gap_frames) if seg.is_phrase_first else preutt
+        shift = min(lead, cursor)  # バッファ先頭（0）より前へは配置しない
+        start_frame = cursor - shift
+        if shift > 0:
+            n_shift_applied += 1
+            shift_frames.append(shift)
+            if shift < preutt:
+                n_shift_clipped += 1
+        end_frame = start_frame + resolved.n_frames
 
         placements.append(
             jn.NotePlacement(
                 start_frame=start_frame, end_frame=end_frame, sp=resolved.sp, ap=resolved.ap,
                 has_join_to_prev=not seg.is_phrase_first, overlap_frames=sel.unit.overlap_frames,
-                # P1 修正 (review #262 R2): mid-phrase note の preutterance を
-                # run assembler（joins.assemble_v2/_resolve_extra_trim）へ渡す。
-                # フレーズ先頭ノートは既に上で cursor シフト消費済みのため
-                # ここでも preutterance_frames を渡すと二重消費になるが、
-                # phrase-first は has_join_to_prev=False で run 境界になるため
-                # assemble_v2 側の extra_trim は run 内部の join にしか適用されず
-                # 無害（run[0] の preutterance_frames は _resolve_extra_trim の
-                # 対象外）。
+                # R3: assemble_absolute はこのフィールドを読まない（絶対座標
+                # の交差だけで重なりを決める）。record/後方互換のため保持する。
                 preutterance_frames=sel.unit.preutterance_frames,
             )
         )
@@ -329,11 +338,11 @@ def _build_vcv_placements(
         prev_end_sample = seg.end_sample
 
     stats = dict(
-        n_preutterance_applied=n_preutterance_applied,
-        n_preutterance_clipped=n_preutterance_clipped,
-        preutterance_shift_frames=preutterance_shift_frames,
+        n_preutterance_applied=n_shift_applied,
+        n_preutterance_clipped=n_shift_clipped,
+        preutterance_shift_frames=shift_frames,
         preutterance_shift_frames_mean=(
-            float(np.mean(preutterance_shift_frames)) if preutterance_shift_frames else 0.0
+            float(np.mean(shift_frames)) if shift_frames else 0.0
         ),
         n_head_clipped=len(head_clipped_note_indices),
         head_clipped_note_indices=head_clipped_note_indices,
@@ -435,6 +444,10 @@ def render(
     donor_provenance = _validate_spec_donor(spec, donor, wav_path, voicebank_root)
     notes, tempo_bpm = build_score(score_name)
     segments, total_samples = perf.build_timeline(notes, sr=SR, tempo_bpm=tempo_bpm)
+    # F1.4 R3: score 由来の絶対総尺（frame 数）。donor="ritsu"（VCV/preutterance
+    # 経路）の `joins.assemble_absolute` はこの固定長バッファへ trim せずに
+    # 配置するため、総尺は常に score 準拠（±1 frame の丸め誤差のみ）になる。
+    score_total_frames = frames_for_samples(total_samples, SR)
     # P1 修正 (review #262): f0/振幅の per-sample トラックは segments/total_samples
     # だけに依存する（donor 選択より前に決められる）。旧実装はこれらを
     # assemble_v2 呼び出しの後段で構築し、圧縮後フレーム数でナイーブに再インデックス
@@ -586,10 +599,15 @@ def render(
             cursor = end_frame
             prev_end_sample = seg.end_sample
 
-    # 追補 F1.3-A: v1 の単側ブレンド（jn.assemble）ではなく true overlap-add
-    # （jn.assemble_v2）のみを使う。n_total_frames は overlap 分だけ短くなった
-    # 実際の圧縮後タイムライン長を join_stats から受け取る。
-    sp_seq, ap_seq, join_stats = jn.assemble_v2(n_bins, placements, frame_period_ms=FRAME_PERIOD_MS)
+    if is_vcv:
+        # F1.4 R3: 絶対グリッド配置（総尺は score 準拠・trim しない）。
+        sp_seq, ap_seq, join_stats = jn.assemble_absolute(score_total_frames, n_bins, placements)
+    else:
+        # 追補 F1.3-A: v1 の単側ブレンド（jn.assemble）ではなく true overlap-add
+        # （jn.assemble_v2）のみを使う。n_total_frames は overlap 分だけ短くなった
+        # 実際の圧縮後タイムライン長を join_stats から受け取る（vocadito/pjs は
+        # 無変更・回帰リスクを避けるため R3 のスコープ外）。
+        sp_seq, ap_seq, join_stats = jn.assemble_v2(n_bins, placements, frame_period_ms=FRAME_PERIOD_MS)
     n_total_frames = join_stats["n_total_frames"]
 
     sp_seq, ap_seq = vs.apply_warp(sp_seq, ap_seq, SR, spec.warp)
@@ -615,9 +633,14 @@ def render(
         )
         for i, p in enumerate(placements)
     ]
-    f0_seq, amp_seq, control_track_stats = jn.assemble_control_tracks_v2(
-        placements, note_f0_tracks, note_amp_tracks, frame_period_ms=FRAME_PERIOD_MS
-    )
+    if is_vcv:
+        f0_seq, amp_seq, control_track_stats = jn.assemble_control_tracks_absolute(
+            score_total_frames, placements, note_f0_tracks, note_amp_tracks
+        )
+    else:
+        f0_seq, amp_seq, control_track_stats = jn.assemble_control_tracks_v2(
+            placements, note_f0_tracks, note_amp_tracks, frame_period_ms=FRAME_PERIOD_MS
+        )
     assert f0_seq.shape[0] == n_total_frames, (
         f"f0_seq/sp_seq フレーム数不一致: {f0_seq.shape[0]} != {n_total_frames}"
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
@@ -274,9 +275,14 @@ def test_build_donor_bank_utau_cache_roundtrip(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     bank1, uv1, _c1, s1 = dbu.build_donor_bank_utau(root, cache_dir=cache_dir, min_units_per_vowel=1, max_wav_files=5)
     assert s1["cache_hit"] is False
+    assert bank1.stats["cache_hit"] is False
     bank2, uv2, _c2, s2 = dbu.build_donor_bank_utau(root, cache_dir=cache_dir, min_units_per_vowel=1, max_wav_files=5)
     assert np.array_equal(bank1.sp, bank2.sp)
     assert uv1 == uv2
+    # P2 修正 (review #262 R3): pickle 復元時に cache_hit=True へ更新される
+    # ことを検証する（旧実装は保存時の False を復元後もそのまま返していた）。
+    assert s2["cache_hit"] is True
+    assert bank2.stats["cache_hit"] is True
 
 
 # --- 追補 F1.3-A item1: unit スキーマ拡張（oto overlap / preutterance） ---
@@ -497,9 +503,66 @@ def test_build_donor_bank_utau_vcv_cache_roundtrip(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     bank1, ctx1, s1 = dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5)
     assert s1["cache_hit"] is False
+    assert bank1.stats["cache_hit"] is False
     bank2, ctx2, s2 = dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5)
     assert np.array_equal(bank1.sp, bank2.sp)
     assert ctx1 == ctx2
+    # P2 修正 (review #262 R3): pickle 復元時に cache_hit=True へ更新される。
+    assert s2["cache_hit"] is True
+    assert bank2.stats["cache_hit"] is True
+
+
+def _count_read_bytes_per_path(monkeypatch) -> Dict[str, int]:
+    """`Path.read_bytes` の呼び出し回数を解決パス文字列ごとに数える（P2 修正
+    review #262 R3: split-read 排除の直接検証。measure_bands.py の
+    `test_analyze_wav_reads_file_bytes_exactly_once` と同じ流儀）。"""
+    counts: Dict[str, int] = {}
+    orig_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self):
+        key = str(self.resolve())
+        counts[key] = counts.get(key, 0) + 1
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+    return counts
+
+
+def test_build_donor_bank_utau_vcv_reads_each_file_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    """P2 修正 (review #262 R3): oto.ini と選択された各 wav は、ハッシュと
+    decode/parse の両方に同一 read 結果を使う（split-read を直接 enforce）。
+    """
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    wav_path = pdir / "_test.wav"
+    _write_sine_wav(wav_path, duration_s=1.0)
+    oto_path = pdir / "oto.ini"
+    oto_path.write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    counts = _count_read_bytes_per_path(monkeypatch)
+    dbu.build_donor_bank_utau_vcv(root, max_wav_files=5)
+
+    assert counts.get(str(oto_path.resolve())) == 1
+    assert counts.get(str(wav_path.resolve())) == 1
+
+
+def test_build_donor_bank_utau_reads_each_file_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    """P2 修正 (review #262 R3): v1 builder（`build_donor_bank_utau`）も
+    同じ single-read 契約を満たす。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    wav_path = pdir / "_test.wav"
+    _write_sine_wav(wav_path, duration_s=1.0)
+    oto_path = pdir / "oto.ini"
+    oto_path.write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    counts = _count_read_bytes_per_path(monkeypatch)
+    dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
+
+    assert counts.get(str(oto_path.resolve())) == 1
+    assert counts.get(str(wav_path.resolve())) == 1
 
 
 def test_build_donor_bank_utau_vcv_required_contexts_change_cache_key(tmp_path: Path) -> None:
