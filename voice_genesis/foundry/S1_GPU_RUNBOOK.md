@@ -125,7 +125,7 @@ cd "$REPO"
 # 本 runbook を含む immutable tag を checkout する（tag は削除されたブランチの
 # コミットも保持するため、PR ブランチが消えても到達可能）。タグが未公開の間は
 # `||` 右辺の fallback commit（本ラウンド修正コミットの実 SHA）へ checkout する。
-git checkout s1-runbook-v1 || git checkout 0000000000000000000000000000000000000f
+git checkout s1-runbook-v1 || git checkout 905a21fb0f41b8918fb66c902295fd2b07d4734c
 pip install -e ".[dev]"
 pip install praat-parselmouth
 
