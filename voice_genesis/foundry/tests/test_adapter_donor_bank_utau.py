@@ -624,6 +624,35 @@ def test_build_donor_bank_utau_reads_each_file_exactly_once(tmp_path: Path, monk
     assert counts.get(str(wav_path.resolve())) == 1
 
 
+# --- review #262 R9 (`r3789495252`): 選択された wav が欠けていれば fail-closed ---
+# （PJS `_song.wav` 欠落チェック（R6・donor_bank_lab.build_donor_bank_lab）と対称）。
+
+
+def test_build_donor_bank_utau_vcv_missing_selected_wav_raises(tmp_path: Path) -> None:
+    """oto.ini はあるが対応する wav が実在しない（部分コピー相当）場合、旧実装は
+    黙って skip して sel_stats の coverage 報告と食い違う false-success 状態に
+    なっていた。新実装は選択段階で欠落を検出し fail-closed で拒否する。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+    # `_test.wav` 自体は書き込まない（選択されるが存在しない wav）。
+
+    with pytest.raises(FileNotFoundError, match=r"A3/_test\.wav"):
+        dbu.build_donor_bank_utau_vcv(root, max_wav_files=5)
+
+
+def test_build_donor_bank_utau_missing_selected_wav_raises(tmp_path: Path) -> None:
+    """v1 builder（`build_donor_bank_utau`）でも同じ fail-closed 契約を満たす。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    with pytest.raises(FileNotFoundError, match=r"A3/_test\.wav"):
+        dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
+
+
 def test_build_donor_bank_utau_vcv_required_contexts_change_cache_key(tmp_path: Path) -> None:
     """[実装決定・record] required_contexts が異なれば選択される wav 部分集合が
     変わりうるため、キャッシュキーへ含める（衝突すると別スコア向けの部分
@@ -706,3 +735,51 @@ def test_build_donor_bank_utau_rejects_oto_wav_traversal_end_to_end(tmp_path: Pa
 
     with pytest.raises(ValueError, match="voicebank root"):
         dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
+
+
+# --- review #262 R9 (`r3789495249`): 公開 `wav_sha256` を (相対パス, digest) ---
+# ペアで集約する（UTAU 音源では pitch dir 間で同名 wav ファイルが頻出するため、
+# ファイル名を保ったまま A3/F4 間で中身を入れ替えても旧実装では検知できなかった）。
+
+
+def _two_pitch_dir_root(tmp_path: Path) -> Path:
+    root = tmp_path / "voicebank"
+    for pdir_name, freq_hz in (("A3", 220.0), ("F4", 349.0)):
+        pdir = root / pdir_name
+        pdir.mkdir(parents=True)
+        _write_sine_wav(pdir / "_test.wav", duration_s=1.0, freq_hz=freq_hz)
+        (pdir / "oto.ini").write_bytes(f"_test.wav=- あ{pdir_name},0,80,900,40,10\n".encode("cp932"))
+    return root
+
+
+def test_build_donor_bank_utau_vcv_wav_sha256_changes_when_same_named_wavs_swap_content(
+    tmp_path: Path,
+) -> None:
+    root = _two_pitch_dir_root(tmp_path)
+    bank_before, _ctx1, _s1 = dbu.build_donor_bank_utau_vcv(root, max_wav_files=5)
+
+    # A3/_test.wav と F4/_test.wav の中身を入れ替える（ファイル名はどちらも
+    # 変わらない = 旧実装の bare-digest sorted-join では検知不能な swap）。
+    a3_bytes = (root / "A3" / "_test.wav").read_bytes()
+    f4_bytes = (root / "F4" / "_test.wav").read_bytes()
+    (root / "A3" / "_test.wav").write_bytes(f4_bytes)
+    (root / "F4" / "_test.wav").write_bytes(a3_bytes)
+
+    bank_after, _ctx2, _s2 = dbu.build_donor_bank_utau_vcv(root, max_wav_files=5)
+    assert bank_before.wav_sha256 != bank_after.wav_sha256
+
+
+def test_build_donor_bank_utau_wav_sha256_changes_when_same_named_wavs_swap_content(
+    tmp_path: Path,
+) -> None:
+    """v1 builder（`build_donor_bank_utau`）でも同じ対称の是正。"""
+    root = _two_pitch_dir_root(tmp_path)
+    bank_before, _uv1, _c1, _s1 = dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
+
+    a3_bytes = (root / "A3" / "_test.wav").read_bytes()
+    f4_bytes = (root / "F4" / "_test.wav").read_bytes()
+    (root / "A3" / "_test.wav").write_bytes(f4_bytes)
+    (root / "F4" / "_test.wav").write_bytes(a3_bytes)
+
+    bank_after, _uv2, _c2, _s2 = dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
+    assert bank_before.wav_sha256 != bank_after.wav_sha256

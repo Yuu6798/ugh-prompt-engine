@@ -225,6 +225,42 @@ def test_build_donor_bank_lab_missing_paired_wav_fails_closed(tmp_path: Path) ->
     assert "pjs001" not in msg  # 欠けていないファイルは列挙されない
 
 
+# --- review #262 R9 (`r3789495249`): 公開 `wav_sha256` を (相対パス, digest) ---
+# ペアで集約する（§ donor_bank_utau.py と同じ理由・同じ是正・対称）。旧実装は
+# 裸の digest だけを sorted-join していたため、2 ファイル間で中身を入れ替えても
+# （パスが違っても）digest の集合自体は不変で検知できなかった。
+
+
+def test_build_donor_bank_lab_wav_sha256_changes_when_wav_contents_swap(tmp_path: Path) -> None:
+    root = tmp_path / "pjs_corpus"
+    d1 = root / "pjs001"
+    d1.mkdir(parents=True)
+    _write_sine_wav(d1 / "pjs001_song.wav", duration_s=1.0, freq_hz=130.0)
+    (d1 / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 s\n4000000 9000000 o\n")
+
+    d2 = root / "pjs002"
+    d2.mkdir(parents=True)
+    _write_sine_wav(d2 / "pjs002_song.wav", duration_s=1.0, freq_hz=196.0)
+    (d2 / "pjs002.lab").write_text("0 3000000 pau\n3000000 4000000 k\n4000000 9000000 a\n")
+
+    bank_before, _uv1, _c1, _s1 = dbl.build_donor_bank_lab(
+        root, target_median_hz=260.0, min_files=2, max_files=5
+    )
+
+    # pjs001_song.wav と pjs002_song.wav の中身を入れ替える（.lab / パスは
+    # そのまま。旧実装の bare-digest sorted-join では検知不能な swap）。
+    w1 = d1 / "pjs001_song.wav"
+    w2 = d2 / "pjs002_song.wav"
+    b1, b2 = w1.read_bytes(), w2.read_bytes()
+    w1.write_bytes(b2)
+    w2.write_bytes(b1)
+
+    bank_after, _uv2, _c2, _s2 = dbl.build_donor_bank_lab(
+        root, target_median_hz=260.0, min_files=2, max_files=5
+    )
+    assert bank_before.wav_sha256 != bank_after.wav_sha256
+
+
 def test_build_donor_bank_lab_cache_roundtrip(tmp_path: Path) -> None:
     root = tmp_path / "pjs_corpus"
     d = root / "pjs001"

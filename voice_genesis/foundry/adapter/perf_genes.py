@@ -90,6 +90,37 @@ def _vibrato_cents_phase_reset(
     return out
 
 
+def _vibrato_cents_continuous_phase(
+    segments: Sequence["perf.TimelineSegment"], total_samples: int, sr: int,
+    rate_hz: float, depth_cents: float, onset_ms: float,
+) -> np.ndarray:
+    """曲頭 (t=0) からの絶対時間で位相を連続させるビブラート
+    （`phase_reset_per_note: false`。F1a 以前の旧挙動相当・singer/performance.py
+    `build_f0_contour` のビブラート位相計算（`t_full = np.arange(total_samples)/sr`）
+    と同じ絶対時間基準。review #262 R9・`r3789495254`）。
+
+    振幅エンベロープ（ノート先頭から onset_ms かけて 0→1 に立ち上がる線形ランプ）は
+    `phase_reset_per_note` の値と独立な仕様（vib.onset_ms）のため、ここでも
+    `_vibrato_cents_phase_reset` と同じ per-note ランプを維持する。異なるのは
+    「位相をどの原点から測るか」のみ（ノート先頭で毎回リセットする vs 曲頭一回のみ）。
+    """
+    out = np.zeros(total_samples, dtype=np.float64)
+    onset_len_full = max(int(round(sr * onset_ms / 1000.0)), 1)
+    t_full = np.arange(total_samples) / sr  # 曲頭からの絶対時間（ノート境界でリセットしない）
+    phase_full = 2.0 * np.pi * rate_hz * t_full
+    sinus_full = depth_cents * np.sin(phase_full)
+    for seg in segments:
+        note_len = seg.end_sample - seg.start_sample
+        if note_len <= 0:
+            continue
+        onset_len = min(onset_len_full, note_len)
+        env = np.ones(note_len, dtype=np.float64)
+        if onset_len > 0:
+            env[:onset_len] = np.linspace(0.0, 1.0, onset_len)
+        out[seg.start_sample:seg.end_sample] = sinus_full[seg.start_sample:seg.end_sample] * env
+    return out
+
+
 def build_perf_f0(
     segments: Sequence["perf.TimelineSegment"],
     total_samples: int,
@@ -117,7 +148,16 @@ def build_perf_f0(
     )
 
     vib = perf_spec.get("vibrato", {})
-    cents = cents + _vibrato_cents_phase_reset(
+    # review #262 R9 (`r3789495254`): phase_reset_per_note を honor する。
+    # true（既定・presets 全件）= 従来どおり `_vibrato_cents_phase_reset`
+    # （ノート毎位相リセット・bit 不変）。false = `_vibrato_cents_continuous_phase`
+    # （曲頭からの絶対時間位相・F1a 以前の旧挙動相当・新規実装）。
+    vibrato_fn = (
+        _vibrato_cents_phase_reset
+        if bool(vib.get("phase_reset_per_note", True))
+        else _vibrato_cents_continuous_phase
+    )
+    cents = cents + vibrato_fn(
         segments, total_samples, sr,
         rate_hz=float(vib.get("rate_hz", 5.2)),
         depth_cents=float(vib.get("depth_cents", 25.0)),

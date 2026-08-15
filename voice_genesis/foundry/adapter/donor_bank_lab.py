@@ -359,9 +359,12 @@ def build_donor_bank_lab(
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
+        # P2 修正 (review #262 R9・`r3789495249`): 公開 `wav_sha256` の集約方式
+        # 変更（パス非結合 -> パス結合）に伴い v2 -> v3 へマーカー更新
+        # （§ donor_bank_utau.py と同じ理由・同じ是正）。
         key_material = (
             f"{root}|{frame_period_ms}|{min_files}|{max_files}|{round(target_median_hz, 3)}"
-            f"|content={content_digest}|schema=content-hash-v2"
+            f"|content={content_digest}|schema=content-hash-v3"
         )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"lab_bank_{key}.pkl"
@@ -381,7 +384,9 @@ def build_donor_bank_lab(
     unit_vowels: Dict[int, str] = {}
     consonant_clips: Dict[str, List[ConsonantClip]] = {}
     frame_offset = 0
-    wav_sha_parts: List[str] = []
+    # P2 修正 (review #262 R9・`r3789495249`): § donor_bank_utau.py と同じ理由・
+    # 同じ是正（(相対パス, digest) ペアで集約する）。
+    wav_sha_pairs: List[Tuple[str, str]] = []
     n_dropped_short_vowel = 0
     n_mora_no_vowel_skipped = 0
     n_cl_seen_total = 0
@@ -400,7 +405,7 @@ def build_donor_bank_lab(
 
         wav_path = lab_path.parent / f"{lab_path.stem}_song.wav"
         x, sr = _load_wav_24k_bytes(wav_bytes, source=str(wav_path))
-        wav_sha_parts.append(hashlib.sha256(wav_bytes).hexdigest())
+        wav_sha_pairs.append((str(wav_path.relative_to(root)), hashlib.sha256(wav_bytes).hexdigest()))
         donor = analyze_donor_world(x, sr, frame_period_ms)
         n_donor_frames = len(donor["f0"])
 
@@ -469,7 +474,9 @@ def build_donor_bank_lab(
     bank_f0 = np.concatenate(all_f0) if all_f0 else np.zeros(0)
     bank_sp = np.concatenate(all_sp, axis=0) if all_sp else np.zeros((0, N_LOG_BANDS))
     bank_ap = np.concatenate(all_ap, axis=0) if all_ap else np.zeros((0, N_LOG_BANDS))
-    wav_sha256 = hashlib.sha256("|".join(sorted(wav_sha_parts)).encode("utf-8")).hexdigest()
+    # P2 修正 (review #262 R9・`r3789495249`): § donor_bank_utau.py と同じ
+    # 理由・同じ是正（v1/v2/PJS 対称）。
+    wav_sha256 = aggregate_content_hash(wav_sha_pairs)
 
     stats = dict(
         n_files_analyzed=len(selected_paths), n_units_kept=len(units),

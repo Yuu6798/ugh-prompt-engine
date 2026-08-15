@@ -542,6 +542,7 @@ def build_donor_bank_utau_vcv(
     # メモリ増分は計算資源境界方針の範囲内・[実装決定・record 記録]）。
     pitch_dir_prep: Dict[str, dict] = {}
     content_hashes: List[Tuple[str, str]] = []
+    missing_wav: List[str] = []
     for pdir_name in pitch_dirs:
         pdir = root / pdir_name
         oto_path = pdir / "oto.ini"
@@ -563,10 +564,25 @@ def build_donor_bank_utau_vcv(
                 data = wav_path.read_bytes()
                 wav_bytes_by_file[wav_filename] = data
                 content_hashes.append((f"{pdir_name}/{wav_filename}", hashlib.sha256(data).hexdigest()))
+            else:
+                missing_wav.append(f"{pdir_name}/{wav_filename}")
         pitch_dir_prep[pdir_name] = dict(
             entries=entries, entries_by_wav=entries_by_wav,
             selected_files=selected_files, sel_stats=sel_stats,
             wav_bytes_by_file=wav_bytes_by_file,
+        )
+    # P2 修正 (review #262 R9・`r3789495252`): 選択された文脈必須 wav が欠けて
+    # いる場合は fail-closed で拒否する（PJS `_song.wav` 欠落チェック（R6・
+    # `donor_bank_lab.build_donor_bank_lab`）と対称）。旧実装は上のループで
+    # 黙って skip（`if wav_path.exists(): ... else: pass` 相当）しつつ、
+    # `sel_stats`（`_select_wav_subset_for_contexts` の coverage 報告）は選択段の
+    # 値のまま変えないため、実際には分析されなかった wav の文脈カバレッジを
+    # 「充足済み」と偽って報告し得た。`select_vcv_units()` が near/global の
+    # 誤 mora unit へフォールバックしても record 上は気づけない（false-success）。
+    if missing_wav:
+        raise FileNotFoundError(
+            "selected UTAU VCV wav files are missing "
+            f"(partial voicebank under {root}?): {missing_wav}"
         )
     # P2 修正 (review #262 R2): (相対パス, sha256) ペアで集約する（パス非結合の
     # hash 集合だけでは、2 ファイルが中身を入れ替えても同一集約ダイジェストに
@@ -580,9 +596,13 @@ def build_donor_bank_utau_vcv(
         ctx_material = "|".join(f"{c[0] or '-'}:{c[1]}" for c in sorted(
             required_contexts or (), key=lambda c: (c[0] or "", c[1])
         ))
+        # P2 修正 (review #262 R9・`r3789495249`): 公開 `wav_sha256` の集約方式
+        # 変更（パス非結合 -> パス結合）に伴い、pickle 済み DonorBank.wav_sha256
+        # の意味が変わるため v3 -> v4 へマーカー更新（旧キャッシュとの意味不一致な
+        # 衝突を避ける）。
         key_material = (
             f"{root}|{','.join(pitch_dirs)}|{frame_period_ms}|{max_wav_files}|{ctx_material}"
-            f"|content={content_digest}|schema=f1.4-vcv-content-hash-v3"
+            f"|content={content_digest}|schema=f1.4-vcv-content-hash-v4"
         )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"utau_bank_vcv_{key}.pkl"
@@ -603,7 +623,10 @@ def build_donor_bank_utau_vcv(
     units: List[DonorUnit] = []
     unit_contexts: Dict[int, VCVContext] = {}
     frame_offset = 0
-    wav_sha_parts: List[str] = []
+    # P2 修正 (review #262 R9・`r3789495249`): 集約用の材料を「裸の digest」
+    # ではなく `(相対パス, digest)` ペアで保持する（§ 下の
+    # `aggregate_content_hash` 呼び出しコメント参照）。
+    wav_sha_pairs: List[Tuple[str, str]] = []
 
     n_dropped_short = 0
     n_unmapped_kana = 0
@@ -633,7 +656,7 @@ def build_donor_bank_utau_vcv(
             wav_sha = hashlib.sha256(wav_bytes).hexdigest()
             wav_path = pdir / wav_filename
             x, sr, wav_duration_ms = _load_wav_24k_bytes(wav_bytes, source=str(wav_path))
-            wav_sha_parts.append(wav_sha)
+            wav_sha_pairs.append((f"{pdir_name}/{wav_filename}", wav_sha))
             donor = analyze_donor_world(x, sr, frame_period_ms)
             n_donor_frames = len(donor["f0"])
             n_wav_files_analyzed += 1
@@ -694,7 +717,13 @@ def build_donor_bank_utau_vcv(
     bank_f0 = np.concatenate(all_f0) if all_f0 else np.zeros(0)
     bank_sp = np.concatenate(all_sp, axis=0) if all_sp else np.zeros((0, N_LOG_BANDS))
     bank_ap = np.concatenate(all_ap, axis=0) if all_ap else np.zeros((0, N_LOG_BANDS))
-    wav_sha256 = hashlib.sha256("|".join(sorted(wav_sha_parts)).encode("utf-8")).hexdigest()
+    # P2 修正 (review #262 R9・`r3789495249`): 公開する `wav_sha256` も
+    # cache-key 集約（R2・`aggregate_content_hash`）と同じ (相対パス, digest)
+    # ペア方式へ統一する。旧実装は裸の digest だけを sorted-join していたため、
+    # 選択された 2 ファイルがファイル名を保ったまま中身を入れ替えても
+    # 同一 wav_sha256 になり得た（render が表示する provenance が偽の一致を
+    # 報告し得る = provenance 破損）。
+    wav_sha256 = aggregate_content_hash(wav_sha_pairs)
 
     stats = dict(
         n_pitch_dirs=len(pitch_dirs), pitch_dirs=list(pitch_dirs), pitch_hz_by_dir=pitch_hz_by_dir,
@@ -757,6 +786,7 @@ def build_donor_bank_utau(
     # prepass と同じ是正・同じ理由）。
     pitch_dir_prep: Dict[str, dict] = {}
     content_hashes: List[Tuple[str, str]] = []
+    missing_wav: List[str] = []
     for pdir_name in pitch_dirs:
         pdir = root / pdir_name
         oto_path = pdir / "oto.ini"
@@ -777,10 +807,19 @@ def build_donor_bank_utau(
                 data = wav_path.read_bytes()
                 wav_bytes_by_file[wav_filename] = data
                 content_hashes.append((f"{pdir_name}/{wav_filename}", hashlib.sha256(data).hexdigest()))
+            else:
+                missing_wav.append(f"{pdir_name}/{wav_filename}")
         pitch_dir_prep[pdir_name] = dict(
             entries=entries, entries_by_wav=entries_by_wav,
             selected_files=selected_files, sel_stats=sel_stats,
             wav_bytes_by_file=wav_bytes_by_file,
+        )
+    # P2 修正 (review #262 R9・`r3789495252`): § build_donor_bank_utau_vcv と
+    # 同じ理由・同じ是正（v1/v2 対称）。
+    if missing_wav:
+        raise FileNotFoundError(
+            "selected UTAU wav files are missing "
+            f"(partial voicebank under {root}?): {missing_wav}"
         )
     # P2 修正 (review #262 R2): (相対パス, sha256) ペアで集約する（§ 上の
     # build_donor_bank_utau_vcv と同じ理由）。
@@ -795,9 +834,11 @@ def build_donor_bank_utau(
         # の DonorUnit を pickle 済み）との衝突を避ける（実装決定・record 記録）。
         # P1 修正 (review #262): 内容ハッシュ追加に伴いマーカーを v2 へ更新。
         # P2 修正 (review #262 R2): 集約方式変更（パス非結合 -> パス結合）に伴い v3 へ更新。
+        # P2 修正 (review #262 R9・`r3789495249`): 公開 `wav_sha256` の集約方式も
+        # 同じ変更を受けるため v3 -> v4 へ更新（旧キャッシュとの意味不一致な衝突回避）。
         key_material = (
             f"{root}|{','.join(pitch_dirs)}|{frame_period_ms}|{min_units_per_vowel}|{max_wav_files}"
-            f"|content={content_digest}|schema=f1.3-overlap-preutt-content-hash-v3"
+            f"|content={content_digest}|schema=f1.3-overlap-preutt-content-hash-v4"
         )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"utau_bank_{key}.pkl"
@@ -816,7 +857,9 @@ def build_donor_bank_utau(
     unit_vowels: Dict[int, str] = {}
     consonant_clips: Dict[str, List[ConsonantClip]] = {}
     frame_offset = 0
-    wav_sha_parts: List[str] = []
+    # P2 修正 (review #262 R9・`r3789495249`): § build_donor_bank_utau_vcv と
+    # 同じ理由・同じ是正（v1/v2 対称）。
+    wav_sha_pairs: List[Tuple[str, str]] = []
 
     n_dropped_short_vowel = 0
     n_unmapped_kana = 0
@@ -846,7 +889,7 @@ def build_donor_bank_utau(
             wav_sha = hashlib.sha256(wav_bytes).hexdigest()
             wav_path = pdir / wav_filename
             x, sr, wav_duration_ms = _load_wav_24k_bytes(wav_bytes, source=str(wav_path))
-            wav_sha_parts.append(wav_sha)
+            wav_sha_pairs.append((f"{pdir_name}/{wav_filename}", wav_sha))
             donor = analyze_donor_world(x, sr, frame_period_ms)
             n_donor_frames = len(donor["f0"])
             n_wav_files_analyzed += 1
@@ -922,9 +965,11 @@ def build_donor_bank_utau(
     bank_sp = np.concatenate(all_sp, axis=0) if all_sp else np.zeros((0, N_LOG_BANDS))
     bank_ap = np.concatenate(all_ap, axis=0) if all_ap else np.zeros((0, N_LOG_BANDS))
     # bank 全体を代表する「合成 sha256」= 選択された全 wav ファイルの
-    # sha256 を昇順連結してハッシュ化したもの（vocadito 版の単一ファイル
-    # sha256 と役割を揃えるための決定論合成値・[実装決定]）。
-    wav_sha256 = hashlib.sha256("|".join(sorted(wav_sha_parts)).encode("utf-8")).hexdigest()
+    # (相対パス, sha256) ペアを path 昇順で連結してハッシュ化したもの
+    # （vocadito 版の単一ファイル sha256 と役割を揃えるための決定論合成値・
+    # [実装決定]）。P2 修正 (review #262 R9・`r3789495249`): § 上の
+    # build_donor_bank_utau_vcv と同じ理由・同じ是正（v1/v2 対称）。
+    wav_sha256 = aggregate_content_hash(wav_sha_pairs)
 
     stats = dict(
         n_pitch_dirs=len(pitch_dirs), pitch_dirs=list(pitch_dirs), pitch_hz_by_dir=pitch_hz_by_dir,

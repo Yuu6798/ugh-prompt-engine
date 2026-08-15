@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
 import pickle
 import tempfile
@@ -454,12 +455,14 @@ def _cache_key(wav_sha256: str, notes_csv_sha256: Optional[str], frame_period_ms
     再利用しつつ notes CSV を in-place 編集しても古いキャッシュを返す
     サイレントな provenance 破損があった（wav 側は既に `wav_sha256` で内容
     ハッシュ済みだったが notes CSV 側だけ抜けていた）。
-    `schema=content-hash-v1` はフィールド意味変更（パス文字列 -> 内容ハッシュ）
-    に伴う旧キャッシュとの衝突回避マーカー。
+    `schema=content-hash-v2`（review #262 R9・`r3789495247` 対応で npz へ
+    `stats_json` フィールドを追加した npz レイアウト変更に伴う旧キャッシュ
+    （`content-hash-v1`。`stats_json` 欠落）との衝突回避マーカー。v1 は
+    フィールド意味変更（パス文字列 -> 内容ハッシュ）に伴うマーカーだった）。
     """
     material = (
         f"{wav_sha256}|{notes_csv_sha256 or 'fallback'}|{frame_period_ms}|{N_LOG_BANDS}|"
-        f"{MIN_UNIT_SEC}|{MAX_UNIT_SEC}|{MIN_UNIT_FRAMES_ABS}|schema=content-hash-v1"
+        f"{MIN_UNIT_SEC}|{MAX_UNIT_SEC}|{MIN_UNIT_FRAMES_ABS}|schema=content-hash-v2"
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
@@ -475,6 +478,11 @@ def _save_cache(path: Path, bank: DonorBank) -> None:
     durations = np.array([u.duration_s for u in bank.units], dtype=np.float64)
     heads = np.stack([u.head_log_bands for u in bank.units], axis=0) if bank.units else np.zeros((0, N_LOG_BANDS))
     tails = np.stack([u.tail_log_bands for u in bank.units], axis=0) if bank.units else np.zeros((0, N_LOG_BANDS))
+    # review #262 R9 修正 (`r3789495247`): `bank.stats`（n_units_kept /
+    # n_dropped_short / n_clipped_to_donor_range 等・source により
+    # スキーマが異なる JSON 互換 dict）を JSON 文字列として直列化して保存する。
+    # 旧実装は npz へ一切保存しておらず、`_load_cache` が `dict(cache_hit=True)`
+    # のみで再構築していたため cache hit 時に統計が丸ごと失われていた。
     atomic_savez(
         path, f0=bank.f0, sp=bank.sp, ap=bank.ap,
         unit_start=starts, unit_end=ends, unit_median_f0=medians, unit_duration_s=durations,
@@ -482,6 +490,7 @@ def _save_cache(path: Path, bank: DonorBank) -> None:
         sr=np.array([bank.sr]), frame_period_ms=np.array([bank.frame_period_ms]),
         wav_sha256=np.array([bank.wav_sha256]), source=np.array([bank.source]),
         notes_csv_path=np.array([bank.notes_csv_path or ""]),
+        stats_json=np.array([json.dumps(bank.stats, sort_keys=True)]),
     )
 
 
@@ -496,11 +505,15 @@ def _load_cache(path: Path) -> DonorBank:
         for i in range(len(z["unit_start"]))
     ]
     notes_csv_path = str(z["notes_csv_path"][0]) or None
+    # review #262 R9 修正 (`r3789495247`): 保存済み `stats_json` を復元し、
+    # `cache_hit` のみを True へ上書きする（他フィールドは初回ビルド時の値を維持）。
+    stats = json.loads(str(z["stats_json"][0]))
+    stats["cache_hit"] = True
     return DonorBank(
         sr=int(z["sr"][0]), frame_period_ms=float(z["frame_period_ms"][0]),
         f0=z["f0"], sp=z["sp"], ap=z["ap"], units=units,
         wav_sha256=str(z["wav_sha256"][0]), source=str(z["source"][0]),
-        notes_csv_path=notes_csv_path, stats=dict(cache_hit=True),
+        notes_csv_path=notes_csv_path, stats=stats,
     )
 
 

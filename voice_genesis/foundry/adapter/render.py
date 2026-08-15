@@ -479,6 +479,20 @@ def render(
         raise ValueError(f"unknown consonant_source: {consonant_source!r}")
     if donor not in DONOR_CHOICES:
         raise ValueError(f"unknown donor: {donor!r} (expected one of {DONOR_CHOICES})")
+    # P2 修正 (review #262 R9・`r3789495255`): donor="ritsu" は F1.4 で VCV unit
+    # 経路（子音は録音済み調音遷移として unit 内に不可分に録り込み済み・§1.8/1.3）
+    # へ全面移行済みのため、`consonant_source="none"/"synthetic"`（および
+    # `--no-consonants` の "none" 翻訳）は録音済み VCV 遷移を後から取り除く/
+    # 差し替えることができず意味を成さない。従来はここを黙って "vcv" へ上書きして
+    # いた（=指定を無視）が、重い bank 分析（WORLD 解析・oto.ini 全数走査）より
+    # 前の fail-closed な明示エラーへ変更する。donor="ritsu" で対応する唯一の値は
+    # "recorded"（既定）のみ。
+    if donor == "ritsu" and consonant_source != "recorded":
+        raise ValueError(
+            "donor='ritsu' は VCV 録音遷移が不可分のため consonant_source は "
+            "'vcv' 固定（内部的には 'recorded' 既定のみ対応）です。"
+            "'none'/'synthetic' の指定や --no-consonants は非対応です。"
+        )
 
     spec = vs.load_voice_spec(voice_spec_path)
     # P1 修正 (review #262 R2): 重い WORLD 分析より前に spec.donor の provenance
@@ -792,11 +806,18 @@ def main() -> None:
     parser.add_argument("--cache-dir", default=None, help="donor bank npz/pkl キャッシュディレクトリ")
     parser.add_argument(
         "--consonant-source", default=None, choices=list(CONSONANT_SOURCE_CHOICES),
-        help="追補 F1.2-D: 子音供給元（省略時 donor に応じた既定）",
+        help=(
+            "追補 F1.2-D: 子音供給元（省略時 donor に応じた既定）。"
+            "donor=ritsu は VCV 録音遷移が不可分のため 'recorded'（既定）のみ対応・"
+            "'none'/'synthetic' はエラー（review #262 R9）"
+        ),
     )
     parser.add_argument(
         "--no-consonants", action="store_true",
-        help="子音オンセット加工を無効化する（--consonant-source none と等価。旧 F1.1-B 互換フラグ）",
+        help=(
+            "子音オンセット加工を無効化する（--consonant-source none と等価。旧 F1.1-B 互換フラグ）。"
+            "donor=ritsu では非対応（エラー・review #262 R9）"
+        ),
     )
     args = parser.parse_args()
 

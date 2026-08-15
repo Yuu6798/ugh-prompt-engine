@@ -776,3 +776,56 @@ def test_atomic_write_wav_does_not_clobber_existing_output_on_failure(tmp_path: 
     with pytest.raises(RuntimeError):
         rd._atomic_write_wav(np.ones(10), 24000, out_path)
     assert out_path.read_bytes() == before_bytes  # 旧ファイルが無傷のまま残る
+
+
+# review #262 R9 (`r3789495255`): donor="ritsu" は VCV 録音遷移が不可分のため
+# consonant_source="none"/"synthetic"（および --no-consonants の "none" 翻訳）は
+# 重い bank 分析（WORLD 解析・oto.ini 全数走査）より前に fail-closed で拒否する。
+# 新規チェックは `spec = vs.load_voice_spec(...)` より前に位置するため、
+# voice_spec_path に実在しないダミーパスを渡しても ValueError が先に飛ぶ
+# （=「重い分析より前」であることをテスト自体が証明する）。
+
+
+def test_render_ritsu_consonant_source_none_raises_before_heavy_analysis() -> None:
+    with pytest.raises(ValueError, match="consonant_source"):
+        rd.render(
+            "sakura", "/nonexistent/voice_spec.json",
+            donor="ritsu", consonant_source="none", voicebank_root="/nonexistent/voicebank",
+        )
+
+
+def test_render_ritsu_consonant_source_synthetic_raises_before_heavy_analysis() -> None:
+    with pytest.raises(ValueError, match="consonant_source"):
+        rd.render(
+            "sakura", "/nonexistent/voice_spec.json",
+            donor="ritsu", consonant_source="synthetic", voicebank_root="/nonexistent/voicebank",
+        )
+
+
+def test_render_ritsu_no_consonants_flag_raises_before_heavy_analysis() -> None:
+    with pytest.raises(ValueError, match="consonant_source"):
+        rd.render(
+            "sakura", "/nonexistent/voice_spec.json",
+            donor="ritsu", apply_consonants=False, voicebank_root="/nonexistent/voicebank",
+        )
+
+
+def test_render_ritsu_consonant_source_recorded_does_not_raise_at_this_gate() -> None:
+    """明示的に 'recorded'（＝ VCV 既定）を指定した場合は本ゲートを通過する
+    （後続の spec ファイル読み込みで FileNotFoundError になることまでは許容・
+    本ゲートの対象外であることのみを確認する）。"""
+    with pytest.raises(FileNotFoundError):
+        rd.render(
+            "sakura", "/nonexistent/voice_spec.json",
+            donor="ritsu", consonant_source="recorded", voicebank_root="/nonexistent/voicebank",
+        )
+
+
+def test_render_ritsu_consonant_source_default_none_does_not_raise_at_this_gate() -> None:
+    """`consonant_source` 省略時は donor='ritsu' で 'recorded' へ既定解決される
+    （render.py 冒頭）ため、本ゲートには抵触しない。"""
+    with pytest.raises(FileNotFoundError):
+        rd.render(
+            "sakura", "/nonexistent/voice_spec.json",
+            donor="ritsu", voicebank_root="/nonexistent/voicebank",
+        )

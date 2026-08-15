@@ -196,6 +196,33 @@ def test_build_donor_bank_cache_roundtrip(tmp_path: Path) -> None:
     ]
 
 
+def test_build_donor_bank_cache_hit_preserves_stats(tmp_path: Path) -> None:
+    """review #262 R9 (`r3789495247`): npz キャッシュヒット時に `bank.stats` の
+    `n_units_kept`/`n_dropped_short`/`n_clipped_to_donor_range` 等が初回ビルドと
+    一致することを直接検証する（旧実装は `cache_hit=True` のみの dict へ
+    差し替えられ、他フィールドが丸ごと消えていた）。"""
+    import soundfile as sf
+
+    sr = 44100
+    t = np.arange(int(1.0 * sr)) / sr
+    x = 0.3 * np.sin(2 * np.pi * 220.0 * t)
+    wav_path = tmp_path / "mini_donor.wav"
+    sf.write(str(wav_path), x, sr, subtype="PCM_16")
+    cache_dir = tmp_path / "cache"
+
+    bank1 = db.build_donor_bank(wav_path, cache_dir=cache_dir)
+    bank2 = db.build_donor_bank(wav_path, cache_dir=cache_dir)
+
+    stats1 = dict(bank1.stats)
+    stats2 = dict(bank2.stats)
+    stats1.pop("cache_hit")
+    stats2.pop("cache_hit")
+    assert stats1 == stats2  # cache_hit 以外は完全一致
+    assert stats2  # 空 dict へ縮退していないことも確認
+    assert bank1.stats.get("cache_hit") is False
+    assert bank2.stats.get("cache_hit") is True
+
+
 # --- P2 修正 (review #262 R5・`r3789400805`): donor cache の atomic 公開 ---
 # （`atomic_pickle_dump`/`atomic_savez` は donor_bank.py に共通実装され、
 #   donor_bank_utau.py（v1/v2）・donor_bank_lab.py・本ファイルの npz cache
