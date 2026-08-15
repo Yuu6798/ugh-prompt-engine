@@ -236,11 +236,39 @@ def _load_wav_24k_bytes(data: bytes, source: str = "<bytes>") -> Tuple[np.ndarra
     return np.ascontiguousarray(y.astype(np.float64)), SR
 
 
+def _usable_onsets_and_vowels(
+    phonemes: Sequence[LabPhoneme], required: set, frame_period_ms: float
+) -> Tuple[set, set]:
+    """`group_lab_to_morae` でグルーピングした後、実際に unit/clip 化できる
+    区間（子音 >= 1 フレーム、母音核 >= `MIN_UNIT_FRAMES_ABS` フレーム）から
+    「この .lab で使用可能な onset/vowel 集合」を導く。`build_donor_bank_lab`
+    の unit/clip 化条件（子音: `c_end - c_start >= 1`、母音:
+    `v_end - v_start >= MIN_UNIT_FRAMES_ABS`）と一致させる。音声デコードは
+    不要（時刻から算出したフレーム数のみで判定する）。
+    """
+    morae, _mstats = group_lab_to_morae(phonemes)
+    usable_onsets: set = set()
+    usable_vowels: set = set()
+    for m in morae:
+        if m.onset is not None and m.onset in required and m.onset_start_s is not None:
+            c_start = _ms_to_frame(m.onset_start_s, frame_period_ms)
+            c_end = _ms_to_frame(m.onset_end_s, frame_period_ms)
+            if c_end - c_start >= 1:
+                usable_onsets.add(m.onset)
+        if m.vowel in VOWELS_5:
+            v_start = _ms_to_frame(m.vowel_start_s, frame_period_ms)
+            v_end = _ms_to_frame(m.vowel_end_s, frame_period_ms)
+            if v_end - v_start >= MIN_UNIT_FRAMES_ABS:
+                usable_vowels.add(m.vowel)
+    return usable_onsets, usable_vowels
+
+
 def _select_lab_files(
     lab_paths: Sequence[Path],
     required_onsets: Sequence[str] = REQUIRED_ONSETS,
     min_files: int = 6,
     max_files: int = 10,
+    frame_period_ms: float = FRAME_PERIOD_MS,
 ) -> Tuple[List[Path], dict, Dict[Path, bytes]]:
     """必須子音オンセット + 5 母音を貪欲被覆する .lab ファイル部分集合を選ぶ
     （決定論・ファイル名（`pjsNNN`）昇順走査・音声デコード不要）。
@@ -254,6 +282,15 @@ def _select_lab_files(
     分析段の read と分離していたため（split-read）、選択→ハッシュ→分析の間に
     .lab が変わると `selection_stats`（coverage 報告）と実際に構築される
     bank の内容が乖離しうる TOCTOU 窓があった。
+
+    P2 修正 (review #262 R10・`r3789520243`): coverage 判定を生ラベル
+    トークンの集合演算（`{p.phoneme for p in phonemes}`）から、
+    `_usable_onsets_and_vowels`（`group_lab_to_morae` でグルーピングし
+    クランプ後に実際に unit/clip 化できる区間）ベースへ変更する。dangling
+    な子音トークン（母音に接続しない、または境界で破棄される）や
+    `MIN_UNIT_FRAMES_ABS` 未満に丸まる母音区間が偽って「covered」と報告され、
+    貪欲選択が同じ音素を持つ後続ファイルの有効な収録を skip する実害を防ぐ
+    （`build_donor_bank_lab` の実際の unit/clip 化条件と一致させる）。
     """
     required = set(required_onsets)
     covered_onsets: set = set()
@@ -263,14 +300,14 @@ def _select_lab_files(
     for path in sorted(lab_paths, key=lambda p: p.stem):
         lab_bytes = path.read_bytes()
         phonemes = parse_lab_text(lab_bytes.decode("utf-8"))
-        tokens = {p.phoneme for p in phonemes}
-        new_onsets = (tokens & required) - covered_onsets
-        new_vowels = (tokens & set(VOWELS_5)) - covered_vowels
+        usable_onsets, usable_vowels = _usable_onsets_and_vowels(phonemes, required, frame_period_ms)
+        new_onsets = usable_onsets - covered_onsets
+        new_vowels = usable_vowels - covered_vowels
         if new_onsets or new_vowels or len(selected) < min_files:
             selected.append(path)
             lab_bytes_by_path[path] = lab_bytes
-            covered_onsets |= tokens & required
-            covered_vowels |= tokens & set(VOWELS_5)
+            covered_onsets |= usable_onsets
+            covered_vowels |= usable_vowels
         if len(selected) >= max_files:
             break
         if covered_onsets >= required and covered_vowels >= set(VOWELS_5) and len(selected) >= min_files:
@@ -310,7 +347,7 @@ def build_donor_bank_lab(
     # v1/v2 builder と同じ是正・同じ理由: root path + options のみのキーだと
     # `--cache-dir` 再利用時のコーパス編集が検知されない）。
     selected_paths, selection_stats, lab_bytes_by_path = _select_lab_files(
-        lab_paths, REQUIRED_ONSETS, min_files, max_files
+        lab_paths, REQUIRED_ONSETS, min_files, max_files, frame_period_ms=frame_period_ms
     )
     # P2 修正 (review #262 R6・`r3789428508`): 選択済み .lab に対応する
     # `_song.wav` が欠けている場合は fail-closed で拒否する。旧実装は後段の

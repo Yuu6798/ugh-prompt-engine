@@ -149,6 +149,48 @@ def test_select_lab_files_covers_onsets_and_vowels(tmp_path: Path) -> None:
         assert lab_bytes_by_path[p] == p.read_bytes()
 
 
+# --- R10 P2: dangling 子音トークンで coverage を偽らない (review #262 r3789520243) ---
+
+
+def _write_lab(path: Path, toks: List[str], gap_100ns: int = 1000000) -> None:
+    lines = []
+    t = 0
+    for tok in toks:
+        lines.append(f"{t} {t + gap_100ns} {tok}")
+        t += gap_100ns
+    path.write_text("\n".join(lines) + "\n")
+
+
+def test_select_lab_files_dangling_onset_does_not_mask_later_usable_onset(tmp_path: Path) -> None:
+    """pjs001 は 's' を dangling（'pau' が直後に来て母音へ接続しない）としてのみ
+    含み、他の音素で 'a' 母音を覆う。生トークン集合で coverage を取る旧実装は
+    dangling な 's' を「covered」と誤認し、後続 pjs002 が実際に使用可能な
+    's'+'a' mora を持っていても新規カバレッジなしと判定して選択しなかった
+    （貪欲選択が有効な収録を skip する実害）。グルーピング後の使用可能区間から
+    coverage を導く新実装では pjs002 が選択される。
+    """
+    root = tmp_path
+    d1 = root / "pjs001"
+    d1.mkdir()
+    # 's' は直後に 'pau' が来て母音へ接続しないため dangling（破棄）。
+    # 'k'+'a' は正規の mora として 'a' 母音を覆う。
+    _write_lab(d1 / "pjs001.lab", ["pau", "s", "pau", "k", "a", "pau"])
+
+    d2 = root / "pjs002"
+    d2.mkdir()
+    # 's' が実際に 'a' へ接続する、使用可能な mora。
+    _write_lab(d2 / "pjs002.lab", ["pau", "s", "a", "pau"])
+
+    paths = [d1 / "pjs001.lab", d2 / "pjs002.lab"]
+    selected, stats, lab_bytes_by_path = dbl._select_lab_files(
+        paths, required_onsets=dbl.REQUIRED_ONSETS, min_files=1, max_files=5
+    )
+
+    assert (d2 / "pjs002.lab") in selected
+    assert "s" in stats["covered_onsets"]
+    assert set(lab_bytes_by_path.keys()) == set(selected)
+
+
 # --- End-to-end（合成 wav + .lab、実データ非依存） ---
 
 

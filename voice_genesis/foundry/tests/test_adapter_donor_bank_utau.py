@@ -720,6 +720,41 @@ def test_reject_wav_paths_outside_root_accepts_in_bounds_files(tmp_path: Path) -
     dbu._reject_wav_paths_outside_root(pdir, "A3", ["_test.wav"], root)  # 例外なし
 
 
+# --- P2 修正 (review #262 R10・`r3789520235`): resolve 後の root 包含検査だけでは ---
+# pitch dir 間の横断（root 内に留まるが自分の pitch dir を脱出）を見逃す。resolve
+# より前の語彙的検査（`..` 成分・絶対パス）で遮断する。
+
+
+def test_reject_wav_paths_outside_root_cross_pitch_dir_traversal(tmp_path: Path) -> None:
+    """`A3/../F4/foo.wav` は resolve 後も voicebank root 配下に収まるため
+    旧実装（resolve 後の root 包含検査のみ）は素通ししていたが、A3 の
+    annotation が F4 の音声を分析してしまう pitch dir 脱出のため拒否する。"""
+    root = tmp_path / "voicebank"
+    pdir_a3 = root / "A3"
+    pdir_a3.mkdir(parents=True)
+    pdir_f4 = root / "F4"
+    pdir_f4.mkdir(parents=True)
+    (pdir_f4 / "foo.wav").write_bytes(b"not-a-real-wav")
+
+    with pytest.raises(ValueError, match=r"A3/\.\./F4/foo\.wav"):
+        dbu._reject_wav_paths_outside_root(pdir_a3, "A3", ["../F4/foo.wav"], root)
+
+
+def test_reject_wav_paths_outside_root_absolute_path_inside_root(tmp_path: Path) -> None:
+    """絶対パスが voicebank root 内の実在ファイルを指していても、resolve 後の
+    root 包含検査だけでは通過してしまうため、絶対パスは語彙的に拒否する。"""
+    root = tmp_path / "voicebank"
+    pdir_a3 = root / "A3"
+    pdir_a3.mkdir(parents=True)
+    pdir_f4 = root / "F4"
+    pdir_f4.mkdir(parents=True)
+    inside = pdir_f4 / "foo.wav"
+    inside.write_bytes(b"not-a-real-wav")
+
+    with pytest.raises(ValueError, match=r"A3/.*foo\.wav"):
+        dbu._reject_wav_paths_outside_root(pdir_a3, "A3", [str(inside)], root)
+
+
 def test_build_donor_bank_utau_rejects_oto_wav_traversal_end_to_end(tmp_path: Path) -> None:
     """P2 修正 (review #262 R8・`r3789486145`): `../` を含む filename= を供給する
     悪意/破損 oto.ini から `build_donor_bank_utau` を呼ぶと、WORLD 分析（外部 wav の

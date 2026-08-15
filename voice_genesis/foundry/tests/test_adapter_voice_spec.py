@@ -149,6 +149,26 @@ def test_perf_jitter_inf_rejected() -> None:
         vs.FoundryVoiceSpec.from_dict(d)
 
 
+# --- R10 P2: formant_scale <= 0 の拒否 (review #262 r3789520249) ---
+
+
+def test_warp_formant_scale_zero_rejected() -> None:
+    """0 は freq_warp の src_freqs = freqs/scale をゼロ除算し DC に NaN を
+    注入するため、有限数チェックだけでは通過してしまう不正値。"""
+    d = _valid_dict()
+    d["warp"]["formant_scale"] = 0.0
+    with pytest.raises(ValueError, match="formant_scale"):
+        vs.FoundryVoiceSpec.from_dict(d)
+
+
+def test_warp_formant_scale_negative_rejected() -> None:
+    """負値は freq_warp の全周波数を単一境界値へ折り畳みスペクトルを崩壊させる。"""
+    d = _valid_dict()
+    d["warp"]["formant_scale"] = -0.5
+    with pytest.raises(ValueError, match="formant_scale"):
+        vs.FoundryVoiceSpec.from_dict(d)
+
+
 def test_donor_missing_dataset_rejected() -> None:
     d = _valid_dict()
     del d["donor"]["dataset"]

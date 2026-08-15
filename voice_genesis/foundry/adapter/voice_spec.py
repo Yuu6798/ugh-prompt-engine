@@ -90,9 +90,25 @@ def _validate_donor(value: Any) -> Dict[str, Any]:
 
 
 def _validate_warp(value: Any) -> Dict[str, float]:
+    """P2 修正 (review #262 R10・`r3789520249`): `formant_scale` は 0/負値でも
+    有限数チェックだけを通過していた。`freq_warp`（本ファイル下部）は
+    `src_freqs = freqs / scale` でスケールを分母に使うため、0 は周波数格子を
+    ゼロ除算して DC に NaN を注入し、負値は全周波数を単一境界値（DC ビンの
+    値）へ折り畳んでスペクトルを崩壊させる（破損 WAV が検証を素通りして
+    公開される実害）。`formant_scale` にのみ `> 0` を要求する（他の warp/perf
+    フィールドは調査済み。tilt_db_oct・breath_lift・vibrato rate/depth 等は
+    使用箇所側で既にクランプ/早期リターン/no-op で安全に処理されており、
+    同型の実害が確認できないため対象外とした。判断根拠は
+    `results_f1_4/f1_4_record_2026-08-15.md`「R10 対応」節に記録）。
+    """
     warp = _require_dict(value, "warp")
     _reject_unknown_keys(warp, _WARP_ALLOWED_KEYS, "warp")
-    return {key: _require_finite_float(val, f"warp.{key}") for key, val in warp.items()}
+    out = {key: _require_finite_float(val, f"warp.{key}") for key, val in warp.items()}
+    if "formant_scale" in out and out["formant_scale"] <= 0.0:
+        raise ValueError(
+            f"voice spec field 'warp.formant_scale' must be > 0, got {out['formant_scale']!r}"
+        )
+    return out
 
 
 def _validate_scalar_group(value: Any, allowed: Set[str], field: str) -> Dict[str, Any]:

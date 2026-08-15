@@ -344,10 +344,23 @@ def _reject_wav_paths_outside_root(
     voicebank root 配下に収まっているかを fail-closed に検査する。1 件でも
     root 外を指せば、違反エントリの相対パスを列挙した `ValueError` を送出して
     分析を止める（脱出したファイルを黙って read しない）。
+
+    P2 修正 (review #262 R10・`r3789520235`): resolve 後の root 包含検査
+    だけでは、`A3/../F4/foo.wav` のように解決後も voicebank root 配下には
+    留まりながら**自分の pitch dir を脱出する**相対パスを見逃す（A3 の
+    annotation で F4 の音声を分析してしまう実害。root 全体を許可範囲とする
+    resolve ベース検査の死角）。絶対パスも同様に、root 配下の別ファイルを
+    指せば resolve 検査を素通りしてしまう。そのため `.resolve()` を呼ぶ前に、
+    各 wav_filename を語彙的（文字列の構成要素）に検査し、絶対パス・`..`
+    成分を含むものは symlink 解決を待たず即座に拒否する。
     """
     root_resolved = root.resolve()
     violations: List[str] = []
     for wav_filename in wav_filenames:
+        lexical = Path(wav_filename)
+        if lexical.is_absolute() or ".." in lexical.parts:
+            violations.append(f"{pdir_name}/{wav_filename}")
+            continue
         candidate = pdir / wav_filename
         try:
             resolved = candidate.resolve(strict=False)
