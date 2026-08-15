@@ -32,6 +32,14 @@ fail-closed 拒否する（契約=PJS 全 100 曲。完全素材では挙動不�
 (2) `--staging-dir` が `--pjs-root`/`--converter-dir` と衝突・内包関係に
 ある場合、symlink 構築を始める前に fail-closed で拒否する
 （`build_dataset.py` R4 の `OutputCollisionError` と同型）。
+
+review #263 R7 で 3 件追加修正: (1) 衝突ガードの包含判定を双方向化し、
+保護 root が出力配下にある場合（例: `--staging-dir=/tmp/work`,
+`--pjs-root=/tmp/work/pjs`）も拒否する。(2) `--staging-dir` 外を指す
+`--lang-def` もガード対象に含め、書き込み自体も一時ファイル→
+`os.replace()` の staged 方式にする。(3) `_swap_into_place` の 2 段
+rename を `try/except BaseException` で保護し、新世代 rename 失敗時は
+退避済み旧世代を元パスへ復元してから再送出する。
 """
 from __future__ import annotations
 
@@ -73,6 +81,14 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
     処理や次回実行時の `.old` rmtree が、PJS コーパスや converter clone
     そのものを破壊し得る（`build_dataset.py` `_reject_output_collision`
     と同一の resolved 比較ロジック）。
+
+    review #263 R7 P1: 包含判定は双方向で行う。出力が保護 root 配下にある
+    場合（従来判定）に加え、**保護 root が出力配下にある場合**（例:
+    `--staging-dir=/tmp/work`, `--pjs-root=/tmp/work/pjs`）も拒否する。
+    後者を見落とすと、公開時に保護 root ごと `.old` へ退避されてしまい
+    （`staging_dir.rename(old_dir)` は `staging_dir` 配下の `pjs_root` も
+    丸ごと退避先へ連れて行く）、以後 symlink ターゲットが指す絶対パスが
+    消失した状態でコーパスが破壊される。
     """
     resolved_outs = [(p, p.resolve()) for p in out_paths]
 
@@ -95,9 +111,18 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
             try:
                 r.relative_to(root_resolved)
             except ValueError:
+                pass
+            else:
+                raise OutputCollisionError(
+                    f"output path {p} is inside protected input root {root}（fail-closed で拒否）"
+                )
+            try:
+                root_resolved.relative_to(r)
+            except ValueError:
                 continue
             raise OutputCollisionError(
-                f"output path {p} is inside protected input root {root}（fail-closed で拒否）"
+                f"protected input root {root} is inside output path {p}"
+                f"（fail-closed で拒否。出力側の公開処理が保護 root を巻き込む）"
             )
 
 
@@ -139,7 +164,18 @@ def stage_song_wavs(
 
 
 def write_lang_def(path: Path) -> None:
-    path.write_text(json.dumps(DEFAULT_LANG_DEF, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+    """`DEFAULT_LANG_DEF` を `path` へ書く。
+
+    review #263 R7 P1: `path` が `--staging-dir` 外（保護入力の外）を指す
+    場合、この書き込みは `_swap_into_place` の atomic swap の外側で発生する
+    唯一の書き込みになる。直接 `write_text` すると変換器プロセスが書き込み
+    途中で kill された場合等に破損 JSON が残り得るため、`path` と同一
+    ディレクトリに一時ファイルを作ってから `os.replace()` で原子的に
+    差し替える（POSIX の `rename(2)` は同一ファイルシステム内で atomic）。
+    """
+    tmp_path = path.parent / f".{path.name}.tmp-{os.getpid()}"
+    tmp_path.write_text(json.dumps(DEFAULT_LANG_DEF, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 def _resolve_lang_def_path(lang_def_arg: Optional[Path], staging_dir: Path, build_dir: Path) -> Path:
@@ -200,13 +236,28 @@ def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     rename する。`build_dir` を常に空の状態から作り直すことで、
     `pjs_root` から消えた曲の symlink が再実行後も残り続ける問題も併せて
     解消する。
+
+    review #263 R7 P2（`gate_synth.py` の同型ヘルパーと同一のファミリー
+    修正）: 2 段 rename は独立した 2 操作のため、旧世代の退避
+    （`staging_dir` -> `.old`）が成功した後に新世代の rename
+    （`build_dir` -> `staging_dir`）が失敗（`KeyboardInterrupt` 含む）すると、
+    正規パス `staging_dir` が消失したまま旧世代は `.old` にしか存在しない
+    状態になる。新世代 rename を `except BaseException` で保護し、失敗時は
+    退避済みの旧世代を `staging_dir` へ復元してから再送出する。
     """
     old_dir = staging_dir.parent / f"{staging_dir.name}.old"
     if old_dir.exists():
         shutil.rmtree(old_dir)
+    evicted_old = False
     if staging_dir.exists():
         staging_dir.rename(old_dir)
-    build_dir.rename(staging_dir)
+        evicted_old = True
+    try:
+        build_dir.rename(staging_dir)
+    except BaseException:
+        if evicted_old:
+            old_dir.rename(staging_dir)
+        raise
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -243,8 +294,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # で拒否する。--staging-dir は成功時に丸ごと rename/`.old` 退避/rmtree
     # されるため、保護入力と重なっていると PJS コーパスや converter clone
     # そのものを破壊し得る。
+    #
+    # [P1 修正] (review #263 R7) --lang-def が --staging-dir 外を指す場合、
+    # `_resolve_lang_def_path` はそのパスへ直接書く（swap の外側の書き込み）。
+    # このパスが --pjs-root/--converter-dir と一致・内包関係にあると、
+    # 変換前に保護入力（例: 曲の .lab ラベル）を JSON で上書きしてしまう
+    # ため、--staging-dir 外を指す --lang-def もここで衝突ガード対象に含める
+    # （--staging-dir 配下を指す場合は build_dir 経由で swap に含まれ、
+    # 既存の --staging-dir チェックで保護済みのため対象外）。
+    guarded_outputs: List[Path] = [staging_dir]
+    if args.lang_def is not None:
+        try:
+            args.lang_def.resolve().relative_to(staging_dir.resolve())
+        except ValueError:
+            guarded_outputs.append(args.lang_def)
     try:
-        _reject_output_collision([staging_dir], protected_roots=[args.pjs_root, args.converter_dir])
+        _reject_output_collision(guarded_outputs, protected_roots=[args.pjs_root, args.converter_dir])
     except OutputCollisionError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

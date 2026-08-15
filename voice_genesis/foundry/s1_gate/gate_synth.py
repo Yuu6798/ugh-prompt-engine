@@ -729,13 +729,29 @@ def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
     のみ atomic に `out_dir` と swap する（`convert_pjs.py`/`convert_ritsu.py`
     の R3 P1 と同型パターン。POSIX の `rename(2)` はディレクトリの置換を
     アトミックに行う）。旧世代は削除せず `<out_dir>.old` へ退避する。
+
+    review #263 R7 P2: 2 段 rename は独立した 2 操作のため、旧世代の退避
+    （`out_dir` -> `.old`）が成功した後に新世代の rename（`build_dir` ->
+    `out_dir`）が失敗（`KeyboardInterrupt` 含む）すると、正規パス `out_dir`
+    が消失したまま旧世代は `.old` にしか存在しない状態になる（直前まで有効
+    だった成果物が canonical パスから見えなくなる）。新世代 rename を
+    `except BaseException` で保護し、失敗時は退避済みの旧世代を `out_dir`
+    へ復元してから再送出する。旧世代が存在しなかった場合（初回実行等）は
+    復元対象が無いためそのまま再送出する。
     """
     old_dir = out_dir.parent / f"{out_dir.name}.old"
     if old_dir.exists():
         shutil.rmtree(old_dir)
+    evicted_old = False
     if out_dir.exists():
         out_dir.rename(old_dir)
-    build_dir.rename(out_dir)
+        evicted_old = True
+    try:
+        build_dir.rename(out_dir)
+    except BaseException:
+        if evicted_old:
+            old_dir.rename(out_dir)
+        raise
 
 
 # ============================================================================

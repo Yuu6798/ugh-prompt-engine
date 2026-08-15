@@ -30,6 +30,13 @@ scratchpad スパイク `s1b_ritsu_dataset/d2_convert.py` の清書版
 review #263 R5 P1: `--out-dir` が `--voicebank-root`/`--dsdict` と衝突・
 内包関係にある場合、staging 構築を始める前に fail-closed で拒否する
 （`build_dataset.py` R4 の `OutputCollisionError` と同型）。
+
+review #263 R7 で 2 件追加修正（`convert_pjs.py` と同型のファミリー修正）:
+(1) 衝突ガードの包含判定を双方向化し、保護 root が出力配下にある場合
+（例: `--out-dir=/tmp/work`, `--voicebank-root=/tmp/work/voicebank`）も
+拒否する。(2) `_swap_into_place` の 2 段 rename を `try/except
+BaseException` で保護し、新世代 rename 失敗時は退避済み旧世代を元パスへ
+復元してから再送出する。
 """
 from __future__ import annotations
 
@@ -247,13 +254,28 @@ def _swap_into_place(staging_dir: Path, out_dir: Path) -> None:
     せず `<out_dir>.old` へ退避してから `staging_dir` を最終名へ rename する
     （POSIX の `rename(2)` はディレクトリの置換をアトミックに行う）。次回
     実行時に前回の `.old` が残っていれば先に削除してから退避する。
+
+    review #263 R7 P2（`gate_synth.py` の同型ヘルパーと同一のファミリー
+    修正）: 2 段 rename は独立した 2 操作のため、旧世代の退避
+    （`out_dir` -> `.old`）が成功した後に新世代の rename
+    （`staging_dir` -> `out_dir`）が失敗（`KeyboardInterrupt` 含む）すると、
+    正規パス `out_dir` が消失したまま旧世代は `.old` にしか存在しない状態に
+    なる。新世代 rename を `except BaseException` で保護し、失敗時は退避
+    済みの旧世代を `out_dir` へ復元してから再送出する。
     """
     old_dir = out_dir.parent / f"{out_dir.name}.old"
     if old_dir.exists():
         shutil.rmtree(old_dir)
+    evicted_old = False
     if out_dir.exists():
         out_dir.rename(old_dir)
-    staging_dir.rename(out_dir)
+        evicted_old = True
+    try:
+        staging_dir.rename(out_dir)
+    except BaseException:
+        if evicted_old:
+            old_dir.rename(out_dir)
+        raise
 
 
 def convert(
@@ -429,6 +451,13 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
     次回実行時の `.old` rmtree が、波音リツ voicebank 本体や公式 dsdict.yaml
     そのものを破壊し得る（`build_dataset.py` `_reject_output_collision` と
     同一の resolved 比較ロジック）。
+
+    review #263 R7 P1（`convert_pjs.py` の同型ガードと同一のファミリー
+    修正）: 包含判定は双方向で行う。出力が保護 root 配下にある場合
+    （従来判定）に加え、**保護 root が出力配下にある場合**（例:
+    `--out-dir=/tmp/work`, `--voicebank-root=/tmp/work/voicebank`）も拒否
+    する。後者を見落とすと、公開時に保護 root ごと `.old` へ退避されて
+    しまい voicebank 本体や dsdict.yaml が破壊される。
     """
     resolved_outs = [(p, p.resolve()) for p in out_paths]
 
@@ -451,9 +480,18 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
             try:
                 r.relative_to(root_resolved)
             except ValueError:
+                pass
+            else:
+                raise OutputCollisionError(
+                    f"output path {p} is inside protected input root {root}（fail-closed で拒否）"
+                )
+            try:
+                root_resolved.relative_to(r)
+            except ValueError:
                 continue
             raise OutputCollisionError(
-                f"output path {p} is inside protected input root {root}（fail-closed で拒否）"
+                f"protected input root {root} is inside output path {p}"
+                f"（fail-closed で拒否。出力側の公開処理が保護 root を巻き込む）"
             )
 
 
