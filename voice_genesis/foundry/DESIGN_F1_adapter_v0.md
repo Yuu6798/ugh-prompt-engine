@@ -153,10 +153,56 @@ singer/ S6–S9 の耳検証済みレシピを WORLD パラメータ領域へ移
 - /y,w/: 短い i/u 系包絡からの遷移（グライド）
 - 実装対象は sakura / umi の歌詞に現れる子音種のみ（全音素体系は非目標）
 
-### F1.1 Acceptance 追加分
+### F1.1 Acceptance 追加分（実装済み 2026-08-15・record §8）
 
 - [ ] 母音分類の 5 クラスが実ドナーで全て非空（分布を record に記録）
 - [ ] 選択結果の母音一致率 100%（フォールバック発動は件数記録）
 - [ ] 子音オンセットの単体テスト（種別ごとの形状・決定論）
 - [ ] sakura / umi の新 4 WAV + 決定論 bit 一致・v0 との差分 sha 記録
 - [ ] 耳判定素材の提出（質問 = 「日本語の発声・歌詞に聞こえるか」）
+
+---
+
+## 追補 F1.2 — 日本語ドナー導入（2026-08-15・User 承認: 波音リツ主 + PJS 副）
+
+精査 = `jp_corpus_survey_2026-08-15.md`。ライセンス上の採用判断は User 決裁済み。
+
+### F1.2-A 取得と provenance
+
+- 波音リツ（canon-voice.com 配布の UTAU 音源。多音階の連続音/単独音のうち実際の
+  配布物を調査して選定・記録）と PJS（Google Drive 配布 ver.1.1）を取得
+- 各 zip/アーカイブの sha256・取得 URL・取得日を record に記録。ライセンス/規約
+  ページの本文スナップショットを `results_f1_2/licenses/` に保存
+- attribution: リツ = 規約準拠のクレジット表記、PJS = CC BY-SA 4.0（**出力派生物への
+  SA 継承を attribution に明記**）
+
+### F1.2-B UTAU 銀行ローダー（adapter/donor_bank_utau.py）
+
+- oto.ini を解析（offset / consonant / cutoff / preutterance / overlap）し、
+  各サンプルの**母音安定区間**を unit 化、**子音区間は録音済み子音オンセット素材**
+  として別保持（合成子音 S6–S9 層より録音優先）
+- 音高: 音源フォルダ構成（多音階サフィックス）または frq から解決して unit に付与
+- WORLD 分析・bank スキーマは既存 donor_bank と互換（キャッシュは scratchpad・非コミット）
+- 音素ラベルは oto エイリアス（かな/CV/VCV）から正規化（判断は record に記録）
+
+### F1.2-C PJS 銀行ローダー（adapter/donor_bank_lab.py）
+
+- .lab 音素ラベルから音素区間 → mora 単位（子音 + 母音核）を unit 化
+- 男声につき score との音域差は移調で吸収（オクターブ単位を基本・移調量を記録）
+
+### F1.2-D 配線と出力
+
+- render に `--donor {vocadito,ritsu,pjs}` と `--consonant-source {recorded,synthetic,none}` を追加
+  （recorded が無い音素は synthetic へフォールバック・件数記録）
+- 出力: sakura / umi × ritsu / pjs（neutral）+ 従来 vocadito 版の比較保持
+
+### F1.2 Acceptance
+
+- [ ] 両ドナーの取得・sha256・ライセンススナップショット保存
+- [ ] リツ bank: 音素ラベル付き unit 数・音高被覆・かな正規化表を record に記録
+- [ ] PJS bank: mora unit 数・移調量を record に記録
+- [ ] sakura / umi × 2 ドナーの WAV + 決定論 bit 一致
+- [ ] oto/lab パーサの単体テスト（合成 fixture・実データ非依存）
+- [ ] ruff / foundry テスト / singer 38 本非破壊
+- [ ] identity 留意（リツ = 既知キャラ声 → Genome 変形最低量の適用対象）を record に明記
+- [ ] 耳判定素材提出（質問: 日本語発声ゲートを通ったか）
