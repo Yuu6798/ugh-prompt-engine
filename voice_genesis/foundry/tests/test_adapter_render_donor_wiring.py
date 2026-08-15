@@ -719,6 +719,50 @@ def test_reject_output_collision_none_paths_are_skipped(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# P2 修正 (review #262 R11・`r3789543157`): --cache-dir を衝突ガード対象へ追加
+# ---------------------------------------------------------------------------
+
+
+def test_reject_output_collision_out_inside_cache_dir_raises(tmp_path: Path) -> None:
+    """--out が --cache-dir 配下（donor_bank_*.npz/utau_bank_*.pkl/lab_bank_*.pkl
+    が生成される場所）を指す場合、cache-hit render がキャッシュを WAV バイト列で
+    atomic 置換してしまう前に fail-closed で拒否する。"""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    out_path = cache_dir / "donor_bank_vocadito_abc123.npz"
+    with pytest.raises(rd.OutputCollisionError):
+        rd._reject_output_collision(out_path, protected_files=[], protected_roots=[cache_dir])
+
+
+def test_reject_output_collision_out_equals_existing_cache_file_raises(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    cache_file = cache_dir / "utau_bank_deadbeef.pkl"
+    cache_file.write_bytes(b"cached")
+    with pytest.raises(rd.OutputCollisionError):
+        rd._reject_output_collision(cache_file, protected_files=[], protected_roots=[cache_dir])
+
+
+def test_reject_output_collision_cache_dir_none_is_skipped(tmp_path: Path) -> None:
+    """--cache-dir 省略時（None）は他の未使用 optional root と同様にスキップされ、
+    誤検知しない（`render()` の既定引数 `cache_dir=None` と同じ形）。"""
+    out_path = tmp_path / "out" / "result.wav"
+    rd._reject_output_collision(out_path, protected_files=[], protected_roots=[None])  # no raise
+
+
+def test_render_reject_output_collision_call_includes_cache_dir_root() -> None:
+    """`render()` が `_reject_output_collision` の `protected_roots` へ
+    `cache_dir` を実際に配線していることのソースレベル回帰ガード。
+    （完走 E2E は WORLD 分析込みで重く、この配線 1 行の検証には不釣り合いなため、
+    直接呼び出しテスト（上記）で衝突判定ロジック自体は検証済みという前提で、
+    呼び出し引数の配線のみをここで確認する。)"""
+    import inspect
+
+    src = inspect.getsource(rd.render)
+    assert "protected_roots=[voicebank_root, cache_dir]" in src
+
+
+# ---------------------------------------------------------------------------
 # P2 修正 (review #262 R2): WAV 出力の atomic 公開
 # ---------------------------------------------------------------------------
 

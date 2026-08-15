@@ -9,14 +9,18 @@ import して、同一 score/timeline/amplitude から f0 のみビブラート�
   f1a_control.npz と数値的に同一になるはずだが、f1c を自己完結させるため再生成する）
 
 ポルタメント 55ms（PORTAMENTO_MS デフォルト）は両方とも維持。
+
+R11 で再現可能化のためパスをパラメータ化（元の実行は record 記載の環境で実施）。
 """
 from __future__ import annotations
 
+import argparse
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/user/ugh-prompt-engine/voice_genesis/singer")
-sys.path.insert(0, "/home/user/ugh-prompt-engine/voice_genesis/proto1")
-sys.path.insert(0, "/home/user/ugh-prompt-engine/voice_genesis/harness")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "singer"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "proto1"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "harness"))
 
 import numpy as np
 
@@ -24,7 +28,6 @@ import score as sc
 import performance as perf
 
 SR = 24000
-OUT = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1c"
 
 
 def build_track(vibrato_depth_cents: float, out_path: str) -> None:
@@ -52,8 +55,13 @@ def build_track(vibrato_depth_cents: float, out_path: str) -> None:
 
 
 def main() -> None:
-    build_track(0.0, f"{OUT}/f1c_note_track.npz")
-    build_track(30.0, f"{OUT}/f1c_note_track_vib30.npz")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", required=True, help="出力ディレクトリ（f1c_note_track*.npz を書く）")
+    args = parser.parse_args()
+    out_dir = args.out
+
+    build_track(0.0, f"{out_dir}/f1c_note_track.npz")
+    build_track(30.0, f"{out_dir}/f1c_note_track_vib30.npz")
 
 
 if __name__ == "__main__":

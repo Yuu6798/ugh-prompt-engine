@@ -2,28 +2,28 @@
 Sins 型（正弦波加算）と SawSinSub 型（のこぎり波減算）を、共通 f0/amp/母音
 タイムライン（f1a_control.npz）で明示駆動する。ネットワーク (Mel2Control) は
 一切使わない。
+
+R11 で再現可能化のためパスをパラメータ化（元の実行は record 記載の環境で実施）。
 """
 from __future__ import annotations
 
+import argparse
 import sys
-
-sys.path.insert(0, "/workspace/yatingmusic/ddsp-singing-vocoders")
-sys.path.insert(0, "/home/user/ugh-prompt-engine/voice_genesis/singer")
+from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 import torch
 
-from ddsp.modules import HarmonicOscillator, WaveGeneratorOscillator
-from ddsp.core import frequency_filter
-import formant_tv as ftv
+_REPO_VOICE_GENESIS = Path(__file__).resolve().parents[2]
 
-OUT = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1a"
 SR = 24000
 N_HARM = 80
 NOISE_DB_REL = -20.0  # 倍音ピークに対する白色ノイズ振幅比
 NOISE_AMP = 10 ** (NOISE_DB_REL / 20.0)
 torch.manual_seed(42)
+
+ftv = None  # --ddsp-dir/--out 引数解析後、main() 内で import される（repo import）
 
 
 def build_formant_timeline(vowel_table, T, sr):
@@ -50,13 +50,33 @@ def lorentz_gain_grid(freqs, formants, bandwidths):
     return total + ftv.GAIN_FLOOR * rolloff
 
 
-def load_control():
-    d = np.load(f"{OUT}/f1a_control.npz", allow_pickle=True)
+def load_control(out_dir: str):
+    d = np.load(f"{out_dir}/f1a_control.npz", allow_pickle=True)
     return d["f0"], d["amp"], d["vowel_table"], int(d["sr"][0]), int(d["total_samples"][0])
 
 
 def main() -> None:
-    f0, amp, vowel_table, sr, T = load_control()
+    global ftv
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--ddsp-dir", required=True,
+        help="外部 yatingmusic/ddsp-singing-vocoders クローンのルート（本リポジトリの一部ではない）",
+    )
+    parser.add_argument("--out", required=True, help="I/O ディレクトリ（f1a_control.npz を読み、f1a_sawsingcore_*.wav を書く）")
+    args = parser.parse_args()
+    out_dir = args.out
+
+    # R11: リポジトリ import は __file__ 相対解決、外部依存（ddsp-singing-vocoders）は
+    # --ddsp-dir 引数から解決する。sys.path 決定後まで import を遅延させる。
+    sys.path.insert(0, args.ddsp_dir)
+    sys.path.insert(0, str(_REPO_VOICE_GENESIS / "singer"))
+    import formant_tv as _ftv
+    ftv = _ftv
+    from ddsp.modules import HarmonicOscillator, WaveGeneratorOscillator
+    from ddsp.core import frequency_filter
+
+    f0, amp, vowel_table, sr, T = load_control(out_dir)
     assert sr == SR
     formants_t, bandwidths_t = build_formant_timeline(vowel_table, T, sr)  # (T,4)
 
@@ -76,7 +96,7 @@ def main() -> None:
     sins_out = (sins_sig + noise) * torch.from_numpy(amp.astype(np.float32)).view(1, T)
     sins_out = sins_out.squeeze(0).detach().numpy()
     sins_out /= max(np.abs(sins_out).max(), 1e-9) / 0.9
-    sf.write(f"{OUT}/f1a_sawsingcore_sins.wav", sins_out.astype(np.float32), SR)
+    sf.write(f"{out_dir}/f1a_sawsingcore_sins.wav", sins_out.astype(np.float32), SR)
     print(f"sins: peak={np.abs(sins_out).max():.3f} len={len(sins_out)/SR:.3f}s")
 
     # --- SawSinSub（減算合成）: 固定音色の鋸波励振 + フレームレート減算フィルタ ---
@@ -99,7 +119,7 @@ def main() -> None:
     saw_out = (saw_filtered + noise2) * torch.from_numpy(amp.astype(np.float32)).view(1, T)
     saw_out = saw_out.squeeze(0).detach().numpy()
     saw_out /= max(np.abs(saw_out).max(), 1e-9) / 0.9
-    sf.write(f"{OUT}/f1a_sawsingcore_sawsinsub.wav", saw_out.astype(np.float32), SR)
+    sf.write(f"{out_dir}/f1a_sawsingcore_sawsinsub.wav", saw_out.astype(np.float32), SR)
     print(f"sawsinsub: peak={np.abs(saw_out).max():.3f} len={len(saw_out)/SR:.3f}s")
 
 

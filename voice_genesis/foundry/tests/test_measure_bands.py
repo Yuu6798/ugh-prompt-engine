@@ -250,3 +250,67 @@ def test_main_writes_out_atomically(tmp_path: Path, monkeypatch) -> None:
     mb.main()
     assert out_path.exists()
     assert list(tmp_path.glob("report.json.*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #262 R11・`r3789543163`): 無声入力の NaN を標準 JSON `null`
+# へ正規化する（`json.dumps(..., allow_nan=False)`）。
+# ---------------------------------------------------------------------------
+
+
+def test_round_floats_normalizes_nan_to_none() -> None:
+    d = {"hnr_median_db": float("nan"), "peak_dbfs": -3.0, "sr": 22050}
+    out = mb._round_floats(d)
+    assert out["hnr_median_db"] is None
+    assert out["peak_dbfs"] == pytest.approx(-3.0)
+    assert out["sr"] == 22050
+
+
+def test_round_floats_normalizes_inf_to_none() -> None:
+    d = {"tilt_db_per_decade_1k_8k": float("inf"), "crest_db": float("-inf")}
+    out = mb._round_floats(d)
+    assert out["tilt_db_per_decade_1k_8k"] is None
+    assert out["crest_db"] is None
+
+
+def test_silent_input_report_json_is_standards_compliant_and_readback_parses(tmp_path: Path) -> None:
+    """無声（全ゼロ）WAV は `hnr_median_db` が NaN になるが、CLI が出力する
+    JSON には非標準トークン `NaN` が混入せず、`json.loads` で readback できる
+    （実害の再現: strict JSON パーサは非標準トークンを拒否する）。"""
+    import json as _json
+
+    sr = 22050
+    p = _write_wav(tmp_path, "silence.wav", np.zeros(int(0.5 * sr)), sr)
+
+    r = mb.analyze_wav(p)
+    assert np.isnan(r["hnr_median_db"])  # 前提: analyze_wav 自体は raw NaN を返す
+
+    rounded = {"file": p.name, **mb._round_floats(r)}
+    text = _json.dumps([rounded], indent=2, ensure_ascii=False, allow_nan=False)
+
+    assert "NaN" not in text
+    assert "Infinity" not in text
+
+    readback = _json.loads(text)  # strict readback: NaN トークンがあれば ValueError
+    assert readback[0]["hnr_median_db"] is None
+
+
+def test_main_e2e_silent_wav_writes_readback_parseable_json_with_null_hnr(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """CLI E2E: `--out` 経由で書き出した無声入力の計測レポートが `json.loads`
+    で読み戻せ、`hnr_median_db` が `null` として保存されていることを確認する。"""
+    import json as _json
+
+    sr = 22050
+    p = _write_wav(tmp_path, "silence_e2e.wav", np.zeros(int(0.5 * sr)), sr)
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(sys, "argv", ["measure_bands.py", str(p), "--out", str(out_path)])
+
+    mb.main()
+
+    raw_text = out_path.read_text(encoding="utf-8")
+    assert "NaN" not in raw_text
+    readback = _json.loads(raw_text)  # strict readback
+    assert readback[0]["hnr_median_db"] is None
+    assert readback[0]["file"] == "silence_e2e.wav"

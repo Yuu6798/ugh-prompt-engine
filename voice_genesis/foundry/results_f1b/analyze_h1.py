@@ -5,19 +5,25 @@
 - Round 2 の NN 選択で実際に選ばれたフレーム(sel_idx_seq, 出力フレーム単位=多重度あり)の
   env_ratio 分布
 - 選択がドナークリップ内のどの秒レンジに集中したか（1秒ビン、多重度で重み付け、上位5)
+
+R11 で再現可能化のためパスをパラメータ化（元の実行は record 記載の環境で実施）。
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
+from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1b")
-from glue_template_nn import load_donor_24k, analyze_donor, select_nn_sequence, FRAME_PERIOD_MS
-
-OUT = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1b"
-CONTROL_NPZ = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1a/f1a_control.npz"
+# R11: `glue_template_nn` は本リポジトリ内の同ディレクトリモジュール（repo import）。
+# cwd 依存の暗黙 import に頼らず、__file__ 相対でこのディレクトリを明示的に
+# sys.path へ追加してから import する（元は実行時にコピーされた scratchpad 上の
+# コピーを import していたが、この repo import は本ファイルと同じディレクトリの
+# 正本 glue_template_nn.py を指す）。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from glue_template_nn import load_donor_24k, analyze_donor, select_nn_sequence, FRAME_PERIOD_MS  # noqa: E402
 
 
 def env_ratio_rows(sp: np.ndarray, freqs: np.ndarray) -> np.ndarray:
@@ -34,9 +40,16 @@ def dist_stats(arr: np.ndarray) -> dict:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", required=True, help="出力ディレクトリ（f1b_h1_diagnosis.json を書く）")
+    parser.add_argument("--donor-wav", required=True, help="ドナー WAV パス（例: .../vocadito/Audio/vocadito_2.wav）")
+    parser.add_argument("--control-npz", required=True, help="共通 f0/amp npz パス（f1a_control.npz）")
+    args = parser.parse_args()
+    out_dir = args.out
+
     log = []
-    donor_wav, sr = load_donor_24k()
-    donor = analyze_donor(donor_wav, sr)
+    donor_audio, sr = load_donor_24k(args.donor_wav)
+    donor = analyze_donor(donor_audio, sr)
     f0_d = donor["f0"]
     sp_d = donor["sp"]
     voiced_idx = donor["voiced_idx"]
@@ -57,7 +70,7 @@ def main() -> None:
     log.append(f"[260-400Hz voiced] {stats_band}")
 
     # --- NN選択再実行 (Round2と同一ロジック) ---
-    ctrl = np.load(CONTROL_NPZ)
+    ctrl = np.load(args.control_npz)
     ctrl_f0 = ctrl["f0"]
     ctrl_amp = ctrl["amp"]
     ctrl_sr = int(ctrl["sr"][0])
@@ -120,7 +133,7 @@ def main() -> None:
     for line in log:
         print(line)
 
-    with open(f"{OUT}/f1b_h1_diagnosis.json", "w") as f:
+    with open(f"{out_dir}/f1b_h1_diagnosis.json", "w") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
 
 

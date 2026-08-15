@@ -10,9 +10,12 @@ Genome 変形（formant_scale / spectral tilt / ap 底上げ）3種を合成す�
 歌詞明瞭度ではないため、これで良いという判断のもとで実装する。
 
 決定論: 乱数不使用（seed 固定も不要 — 完全決定論パイプライン）。
+
+R11 で再現可能化のためパスをパラメータ化（元の実行は record 記載の環境で実施）。
 """
 from __future__ import annotations
 
+import argparse
 import json
 import hashlib
 
@@ -21,10 +24,6 @@ import pyworld as pw
 import soundfile as sf
 from scipy.signal import resample_poly
 from scipy.ndimage import uniform_filter1d
-
-OUT = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1b"
-DONOR_WAV = f"{OUT}/vocadito/Audio/vocadito_2.wav"
-CONTROL_NPZ = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1a/f1a_control.npz"
 
 SR = 24000
 FRAME_PERIOD_MS = 5.0
@@ -40,8 +39,8 @@ def hz_to_bin(f0: np.ndarray) -> np.ndarray:
     return out
 
 
-def load_donor_24k() -> tuple[np.ndarray, int]:
-    x, sr = sf.read(DONOR_WAV)
+def load_donor_24k(donor_wav: str) -> tuple[np.ndarray, int]:
+    x, sr = sf.read(donor_wav)
     if x.ndim > 1:
         x = x.mean(axis=1)
     # 44100 -> 24000: 有理比 80/147 (gcd(24000,44100)=300 -> 24000/300=80, 44100/300=147)
@@ -181,16 +180,23 @@ def sha256_of(path: str) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", required=True, help="I/O ディレクトリ（f1b_*.wav / f1b_glue_run_log.json を書く）")
+    parser.add_argument("--donor-wav", required=True, help="ドナー WAV パス（例: .../vocadito/Audio/vocadito_2.wav）")
+    parser.add_argument("--control-npz", required=True, help="共通 f0/amp npz パス（f1a_control.npz）")
+    args = parser.parse_args()
+    out_dir = args.out
+
     log: list[str] = []
 
     # --- ドナー読込 + 24kHz resample ---
-    donor, sr = load_donor_24k()
+    donor, sr = load_donor_24k(args.donor_wav)
     log.append(f"donor loaded: {len(donor)} samples @ {sr}Hz "
                f"({len(donor)/sr:.3f}s), resampled from 44100Hz via resample_poly(80/147)")
 
     # 参照用: ドナー冒頭10秒抜粋を書き出す
     excerpt = donor[: int(10.0 * sr)]
-    sf.write(f"{OUT}/f1b_donor_excerpt.wav", excerpt, sr, subtype="PCM_16")
+    sf.write(f"{out_dir}/f1b_donor_excerpt.wav", excerpt, sr, subtype="PCM_16")
     log.append(f"wrote f1b_donor_excerpt.wav: {len(excerpt)} samples ({len(excerpt)/sr:.3f}s)")
 
     # --- テンプレートバンク構築 ---
@@ -205,7 +211,7 @@ def main() -> None:
                f"{sorted(sparse_bins)}")
 
     # --- score f0/amp 読込 ---
-    ctrl = np.load(CONTROL_NPZ)
+    ctrl = np.load(args.control_npz)
     ctrl_f0 = ctrl["f0"]
     ctrl_amp = ctrl["amp"]
     ctrl_sr = int(ctrl["sr"][0])
@@ -234,7 +240,7 @@ def main() -> None:
 
     # (a) neutral
     y_neutral = synth_and_shape(f0_seq, sp_seq_neutral_sm, ap_seq_neutral_sm, ctrl_amp, ctrl_sr)
-    sf.write(f"{OUT}/f1b_template_neutral.wav", y_neutral, ctrl_sr, subtype="PCM_16")
+    sf.write(f"{out_dir}/f1b_template_neutral.wav", y_neutral, ctrl_sr, subtype="PCM_16")
     results["neutral"] = dict(n_samples=len(y_neutral), dur_s=len(y_neutral) / ctrl_sr)
     log.append(f"wrote f1b_template_neutral.wav: {len(y_neutral)} samples "
                f"({len(y_neutral)/ctrl_sr:.3f}s), peak-normalized to 0.6")
@@ -245,7 +251,7 @@ def main() -> None:
     ap_dark = freq_warp(ap_seq_neutral_sm, scale=0.94, sr=ctrl_sr)
     ap_dark = np.clip(ap_dark, 0.0, 1.0)
     y_dark = synth_and_shape(f0_seq, sp_dark, ap_dark, ctrl_amp, ctrl_sr)
-    sf.write(f"{OUT}/f1b_template_dark.wav", y_dark, ctrl_sr, subtype="PCM_16")
+    sf.write(f"{out_dir}/f1b_template_dark.wav", y_dark, ctrl_sr, subtype="PCM_16")
     results["dark"] = dict(n_samples=len(y_dark), dur_s=len(y_dark) / ctrl_sr)
     log.append(f"wrote f1b_template_dark.wav: {len(y_dark)} samples "
                f"({len(y_dark)/ctrl_sr:.3f}s), formant_scale=0.94 + tilt=-2dB/oct, peak-norm 0.6")
@@ -255,7 +261,7 @@ def main() -> None:
     ap_bright = freq_warp(ap_seq_neutral_sm, scale=1.06, sr=ctrl_sr)
     ap_bright = np.clip(ap_bright + 0.15, 0.0, 1.0)
     y_bright = synth_and_shape(f0_seq, sp_bright, ap_bright, ctrl_amp, ctrl_sr)
-    sf.write(f"{OUT}/f1b_template_bright_breathy.wav", y_bright, ctrl_sr, subtype="PCM_16")
+    sf.write(f"{out_dir}/f1b_template_bright_breathy.wav", y_bright, ctrl_sr, subtype="PCM_16")
     results["bright_breathy"] = dict(n_samples=len(y_bright), dur_s=len(y_bright) / ctrl_sr)
     log.append(f"wrote f1b_template_bright_breathy.wav: {len(y_bright)} samples "
                f"({len(y_bright)/ctrl_sr:.3f}s), formant_scale=1.06 + ap+0.15(clip), peak-norm 0.6")
@@ -270,7 +276,7 @@ def main() -> None:
     for line in log:
         print(line)
 
-    with open(f"{OUT}/f1b_glue_run_log.json", "w") as f:
+    with open(f"{out_dir}/f1b_glue_run_log.json", "w") as f:
         json.dump(dict(log=log, results=results,
                         control_f0_median=ctrl_f0_median, donor_f0_median=donor_f0_median,
                         semitone_distance=semitone_dist), f, indent=2, ensure_ascii=False)

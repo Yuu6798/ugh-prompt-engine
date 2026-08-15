@@ -163,10 +163,18 @@ def _atomic_write_text(text: str, out_path: str | Path) -> None:
 
 
 def _round_floats(d: dict[str, Any], ndigits: int = 5) -> dict[str, Any]:
+    """float 値を丸める。
+
+    P2 修正 (review #262 R11・`r3789543163`): NaN/Inf は標準 JSON のトークン
+    ではない（`hnr_median_db` は無声入力で NaN を返す仕様 — `hnr_median_db`
+    docstring 参照）。ここで非有限値を `None`（JSON `null`）へ正規化し、
+    `main()` 側の `json.dumps(..., allow_nan=False)` と合わせて非標準
+    `NaN`/`Infinity` トークンが出力に混入しないようにする。
+    """
     out: dict[str, Any] = {}
     for k, v in d.items():
         if isinstance(v, float):
-            out[k] = v if np.isnan(v) else round(v, ndigits)
+            out[k] = None if not np.isfinite(v) else round(v, ndigits)
         else:
             out[k] = v
     return out
@@ -184,7 +192,11 @@ def main() -> None:
         r = {"file": Path(p).name, **_round_floats(r)}
         results.append(r)
 
-    text = json.dumps(results, indent=2, ensure_ascii=False)
+    # P2 修正 (review #262 R11・`r3789543163`): allow_nan=False で標準外
+    # トークン（NaN/Infinity）の混入を二重に防ぐ（`_round_floats` が事前に
+    # None へ正規化済みだが、将来 `_round_floats` を経由しない値が混入しても
+    # ここで fail-fast する防御）。
+    text = json.dumps(results, indent=2, ensure_ascii=False, allow_nan=False)
     if args.out:
         # P1 修正 (review #262 R4・`r3789341847`): 公開（書き込み）前に入力との
         # 衝突を fail-closed で拒否する。

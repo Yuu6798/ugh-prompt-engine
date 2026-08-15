@@ -762,10 +762,17 @@ def render(
         # P1 修正 (review #262 R2): --out が保護入力（--wav/--voice/--notes-csv/
         # --voicebank-root 配下）と衝突していないか書き込み前に fail-closed で
         # 拒否してから、staging + os.replace で atomic 公開する。
+        # P2 修正 (review #262 R11・`r3789543157`): --out が donor bank キャッシュ
+        # （--cache-dir 配下に生成される donor_bank_*.npz/utau_bank_*.pkl/
+        # lab_bank_*.pkl）と衝突する場合、cache-hit render はまずそのキャッシュを
+        # 読み、その後同じパスを WAV バイト列で atomic 置換してしまう
+        # （次回同一 render はそのキャッシュを読んでデコード失敗する）。
+        # cache_dir を protected_roots へ追加し、同じ resolved containment 検査で
+        # 拒否する。
         _reject_output_collision(
             out_path,
             protected_files=[wav_path, voice_spec_path, notes_csv_path],
-            protected_roots=[voicebank_root],
+            protected_roots=[voicebank_root, cache_dir],
         )
         output_sha256 = _atomic_write_wav(y, SR, out_path)
 

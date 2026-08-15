@@ -13,9 +13,12 @@ F1b 耳判定「identity は転写・発声は破綻」を受け、破綻の最�
   (iii) 参考       — 既存 f1b_nn_neutral.wav（合成不要・結果表に再掲のみ）
 
 決定論: 乱数不使用。窓選択は 0.5s 刻みの決定論的グリッドサーチ（同率は最小 offset）。
+
+R11 で再現可能化のためパスをパラメータ化（元の実行は record 記載の環境で実施）。
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 
@@ -23,11 +26,6 @@ import numpy as np
 import pyworld as pw
 import soundfile as sf
 from scipy.signal import resample_poly
-
-OUT = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1c"
-DONOR_WAV = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1b/vocadito/Audio/vocadito_2.wav"
-NOTE_TRACK_VIB0 = f"{OUT}/f1c_note_track.npz"
-NOTE_TRACK_VIB30 = f"{OUT}/f1c_note_track_vib30.npz"
 
 SR = 24000
 FRAME_PERIOD_MS = 5.0
@@ -41,8 +39,8 @@ def sha256_of(path: str) -> str:
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
 
-def load_donor_24k() -> tuple[np.ndarray, int]:
-    x, sr = sf.read(DONOR_WAV)
+def load_donor_24k(donor_wav: str) -> tuple[np.ndarray, int]:
+    x, sr = sf.read(donor_wav)
     if x.ndim > 1:
         x = x.mean(axis=1)
     assert sr == 44100, f"unexpected donor sr={sr}"
@@ -174,23 +172,34 @@ def synth_peaknorm(f0_seq: np.ndarray, sp_seq: np.ndarray, ap_seq: np.ndarray, s
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--out", required=True,
+        help="I/O ディレクトリ（f1c_note_track*.npz を読み、f1c_*.wav / f1c_glue_run_log.json を書く）",
+    )
+    parser.add_argument("--donor-wav", required=True, help="ドナー WAV パス（例: .../vocadito/Audio/vocadito_2.wav）")
+    args = parser.parse_args()
+    out_dir = args.out
+    note_track_vib0 = f"{out_dir}/f1c_note_track.npz"
+    note_track_vib30 = f"{out_dir}/f1c_note_track_vib30.npz"
+
     log: list[str] = []
 
     # --- ドナー読込 + 24kHz resample + WORLD 全体分析 ---
-    donor_wav, sr = load_donor_24k()
-    log.append(f"donor loaded: {len(donor_wav)} samples @ {sr}Hz "
-               f"({len(donor_wav)/sr:.3f}s), resampled from 44100Hz via resample_poly(80/147)")
-    log.append(f"donor wav sha256={sha256_of(DONOR_WAV)}")
+    donor_audio, sr = load_donor_24k(args.donor_wav)
+    log.append(f"donor loaded: {len(donor_audio)} samples @ {sr}Hz "
+               f"({len(donor_audio)/sr:.3f}s), resampled from 44100Hz via resample_poly(80/147)")
+    log.append(f"donor wav sha256={sha256_of(args.donor_wav)}")
 
-    donor = analyze_donor(donor_wav, sr)
+    donor = analyze_donor(donor_audio, sr)
     n_donor_frames = len(donor["f0"])
     n_donor_voiced = int(donor["voiced_mask"].sum())
     log.append(f"donor WORLD analysis: n_frames={n_donor_frames} voiced_frames={n_donor_voiced} "
                f"({n_donor_voiced/n_donor_frames:.4f}) frame_period={FRAME_PERIOD_MS}ms")
 
     # --- ノートトラック読込 ---
-    nt0 = np.load(NOTE_TRACK_VIB0)
-    nt30 = np.load(NOTE_TRACK_VIB30)
+    nt0 = np.load(note_track_vib0)
+    nt30 = np.load(note_track_vib30)
     ctrl0_f0 = nt0["f0"]
     ctrl30_f0 = nt30["f0"]
     total_samples = int(nt0["total_samples"][0])
@@ -269,7 +278,7 @@ def main() -> None:
     # === 条件 (iv) roundtrip ===
     f0_iv = f0_w.copy()
     y_iv = synth_peaknorm(f0_iv, sp_w, ap_w, ctrl_sr)
-    sf.write(f"{OUT}/f1c_roundtrip.wav", y_iv, ctrl_sr, subtype="PCM_16")
+    sf.write(f"{out_dir}/f1c_roundtrip.wav", y_iv, ctrl_sr, subtype="PCM_16")
     log.append(f"wrote f1c_roundtrip.wav: {len(y_iv)} samples ({len(y_iv)/ctrl_sr:.3f}s), "
                f"window's own f0/sp/ap, no modification, peak-norm 0.6")
 
@@ -277,7 +286,7 @@ def main() -> None:
     f0_i = np.zeros(n_target_frames, dtype=np.float64)
     f0_i[voiced_w] = note_hz_at_frame[voiced_w] * (2.0 ** (micro_cents[voiced_w] / 1200.0))
     y_i = synth_peaknorm(f0_i, sp_w, ap_w, ctrl_sr)
-    sf.write(f"{OUT}/f1c_transplant.wav", y_i, ctrl_sr, subtype="PCM_16")
+    sf.write(f"{out_dir}/f1c_transplant.wav", y_i, ctrl_sr, subtype="PCM_16")
     log.append(f"wrote f1c_transplant.wav: {len(y_i)} samples ({len(y_i)/ctrl_sr:.3f}s), "
                f"f0=note_hz(vib0,ffilled)*2^(micro_cents/1200) at donor-voiced frames, "
                f"f0=0 at donor-unvoiced frames, window's own sp/ap unmodified, peak-norm 0.6")
@@ -286,7 +295,7 @@ def main() -> None:
     f0_ii = np.zeros(n_target_frames, dtype=np.float64)
     f0_ii[voiced_w] = ctrl30_f0_at_frame[voiced_w]
     y_ii = synth_peaknorm(f0_ii, sp_w, ap_w, ctrl_sr)
-    sf.write(f"{OUT}/f1c_robotf0.wav", y_ii, ctrl_sr, subtype="PCM_16")
+    sf.write(f"{out_dir}/f1c_robotf0.wav", y_ii, ctrl_sr, subtype="PCM_16")
     log.append(f"wrote f1c_robotf0.wav: {len(y_ii)} samples ({len(y_ii)/ctrl_sr:.3f}s), "
                f"f0=note_hz(vib30, unheld) at donor-voiced frames, f0=0 at donor-unvoiced frames "
                f"(and at donor-voiced frames landing in a sakura breath, see above), "
@@ -313,7 +322,7 @@ def main() -> None:
     for line in log:
         print(line)
 
-    with open(f"{OUT}/f1c_glue_run_log.json", "w") as f:
+    with open(f"{out_dir}/f1c_glue_run_log.json", "w") as f:
         json.dump(dict(
             log=log,
             window=dict(start_frame=start_frame, start_sec=start_sec, voiced_ratio=voiced_ratio,

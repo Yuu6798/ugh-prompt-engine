@@ -1,12 +1,16 @@
 """VG-F1a 経路C: pyworld 直駆動（完全決定論の対照点）。
 共通 f0/amp/母音タイムライン（f1a_control.npz）から WORLD の f0/sp/ap を
 自前構築し `pyworld.synthesize` で合成する。学習モデル不使用・完全決定論。
+
+R11 で再現可能化のためパスをパラメータ化（元の実行は record 記載の環境で実施）。
 """
 from __future__ import annotations
 
+import argparse
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/user/ugh-prompt-engine/voice_genesis/singer")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "singer"))
 
 import numpy as np
 import pyworld as pw
@@ -14,7 +18,6 @@ import soundfile as sf
 
 import formant_tv as ftv
 
-OUT = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1a"
 SR = 24000
 FRAME_PERIOD_MS = 5.0
 FFT_SIZE = pw.get_cheaptrick_fft_size(SR)  # 1024 -> 513 bins
@@ -55,6 +58,11 @@ def build_aperiodicity(n_frames: int) -> np.ndarray:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", required=True, help="I/O ディレクトリ（f1a_control.npz を読み、f1a_pyworld_direct.wav を書く）")
+    args = parser.parse_args()
+    OUT = args.out
+
     d = np.load(f"{OUT}/f1a_control.npz", allow_pickle=True)
     f0, amp, vowel_table, sr, T = d["f0"], d["amp"], d["vowel_table"], int(d["sr"][0]), int(d["total_samples"][0])
     assert sr == SR

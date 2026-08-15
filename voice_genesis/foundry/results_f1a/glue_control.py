@@ -1,15 +1,19 @@
 """VG-F1a 共通素材生成: さくら score 由来の f0 / 振幅 / 母音タイムライン（決定論）。
 
-voice_genesis/singer/ を read-only import して OUT/f1a_control.npz を生成する。
+voice_genesis/singer/ を read-only import して --out/f1a_control.npz を生成する。
 以後の経路 A/B/C すべてがこの npz の f0/amp を共有駆動源として使う。
+
+R11 で再現可能化のためパスをパラメータ化（元の実行は record 記載の環境で実施）。
 """
 from __future__ import annotations
 
+import argparse
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/user/ugh-prompt-engine/voice_genesis/singer")
-sys.path.insert(0, "/home/user/ugh-prompt-engine/voice_genesis/proto1")
-sys.path.insert(0, "/home/user/ugh-prompt-engine/voice_genesis/harness")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "singer"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "proto1"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "harness"))
 
 import numpy as np
 
@@ -20,6 +24,10 @@ SR = 24000
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", required=True, help="出力 npz パス（例: .../f1a_control.npz）")
+    args = parser.parse_args()
+
     notes = sc.build_sakura_score()
     segments, total = perf.build_timeline(notes, sr=SR)
     f0 = perf.build_f0_contour(
@@ -53,7 +61,7 @@ def main() -> None:
         [(s, e, v, o, p) for (s, e, v, o, p) in vowel_intervals], dtype=dtype
     )
 
-    out_path = "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/foundry_f1a/f1a_control.npz"
+    out_path = args.out
     np.savez(
         out_path,
         f0=f0,
