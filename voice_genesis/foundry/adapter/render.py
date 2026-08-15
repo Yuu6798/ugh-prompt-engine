@@ -1,0 +1,1013 @@
+"""adapter/render.py — VG-F1 パイプライン: score -> f0/units/joins/warp -> WORLD -> WAV。
+
+設計書 §2 render.py に対応する。
+
+CLI:
+    python -m adapter.render --score sakura --voice presets/neutral.json \
+        --wav <vocadito_2.wav> --notes-csv <vocadito_2_notesA1.csv> --out x.wav
+
+同一 spec(JSON) + seed -> 同一バイト列（決定論契約。乱数は perf_genes 側のみで
+`np.random.default_rng(seed)` を使用し、他に非決定要素（wall-clock 等）を
+含まない）。
+"""
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import hashlib
+import os
+import sys
+import tempfile
+from collections import Counter
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pyworld as pw
+import soundfile as sf
+
+_HERE = Path(__file__).resolve().parent
+_SINGER_DIR = _HERE.parent.parent / "singer"
+for _p in (_SINGER_DIR, _HERE):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import score as sc  # noqa: E402  (singer、read-only import)
+import score_umi as sc_umi  # noqa: E402  (singer、read-only import)
+import performance as perf  # noqa: E402  (singer、read-only import)
+
+import consonants as cons  # noqa: E402  (追補 F1.1-B)
+import donor_bank as db  # noqa: E402
+import donor_bank_lab as dbl  # noqa: E402  (追補 F1.2-C)
+import donor_bank_utau as dbu  # noqa: E402  (追補 F1.2-B)
+import joins as jn  # noqa: E402
+import perf_genes as pg  # noqa: E402
+import units as un  # noqa: E402
+import voice_spec as vs  # noqa: E402
+import vowel_class as vc  # noqa: E402  (追補 F1.1-A)
+
+SR = 24000
+FRAME_PERIOD_MS = 5.0
+PEAK_NORM = 0.6
+
+DONOR_CHOICES = ("vocadito", "ritsu", "pjs")
+CONSONANT_SOURCE_CHOICES = ("recorded", "synthetic", "none")
+
+
+class DonorProvenanceError(ValueError):
+    """P1 修正 (review #262 R2): `spec.donor` の宣言が実際の描画入力
+    （--donor/--wav/--voicebank-root）と一致しない（fail-closed）。"""
+
+
+class OutputCollisionError(ValueError):
+    """P1 修正 (review #262 R2): `--out` が保護入力（--wav/--voice/--notes-csv/
+    --voicebank-root 配下）と衝突する（fail-closed。書き込み前に検出する）。"""
+
+
+def _validate_spec_donor(
+    spec: "vs.FoundryVoiceSpec",
+    donor: str,
+    wav_path: Optional[str | Path],
+    voicebank_root: Optional[str | Path],
+) -> dict:
+    """P1 修正 (review #262 R2): `spec.donor` の宣言を実際の描画入力の実体
+    ハッシュと fail-closed で照合する。
+
+    従来は `spec.donor`（dataset/sha256）が読み込まれるだけで一度も検証され
+    ず、実際のドナーは `--donor`/`--wav`/`--voicebank-root` から独立に決まる
+    ため、コミット済み neutral/warped spec の vocadito sha256 を宣言したまま
+    任意の wav や ritsu/pjs バンクを描画でき、provenance が嘘をつけた
+    （review #262 R2 P1 指摘）。
+
+    `donor` dict のスキーマ拡張（foundry-voice/0.1・破壊的変更ではなく
+    dataset 別の許容キーを追加するのみ。既存 vocadito 形は不変）:
+
+    - `dataset="vocadito"`: 既存どおり `{"dataset":"vocadito","clip":int,
+      "sha256":str}`。`sha256` は `--wav` の内容 sha256 と一致必須。
+    - `dataset="ritsu"`: `{"dataset":"ritsu","voicebank_sha256":str}`。
+      `voicebank_sha256` は `--voicebank-root` 配下の全 pitch dir oto.ini を
+      `donor_bank_utau.voicebank_identity_hash` で集約した値と一致必須
+      （oto.ini は unit セグメンテーションの権威情報 = 意味のある identity pin。
+      wav 全バイトを毎回ハッシュするより軽量で WORLD 分析より前に検証できる）。
+    - `dataset="pjs"`: `{"dataset":"pjs","corpus_sha256":str}`。同様に
+      `donor_bank_lab.corpus_identity_hash`（全 pjsNNN/pjsNNN.lab の集約）
+      と一致必須。
+
+    `dataset` が `--donor` と不一致、宣言ハッシュ欠落/型不正、または実体
+    ハッシュ不一致のいずれかで即座に `DonorProvenanceError` を送出する
+    （AGENTS.md L465-468 参照。実データ分析より前段で検証するため、無関係な
+    入力での無駄な WORLD 分析も防ぐ）。一致時は record 用の照合結果 dict を返す。
+
+    冪等（同一ファイル状態なら何度呼んでも同じ結果）なため、`render()` は本
+    関数を 2 回呼ぶ（review #262 R6 修正）: ①WORLD 分析より前の fail-fast、
+    ②bank 構築完了後・成果物公開前の post-build revalidation（この 2 回目が
+    ①と bank 構築本体の read との間の TOCTOU 窓を閉じる。`voicebank_identity_hash`/
+    `corpus_identity_hash`/`sha256_of` はいずれもキャッシュを介さず毎回
+    ディスクを直接再走査するため、bank 構築が cache hit だった場合でも
+    2 回目の呼び出しが独立した鮮度検証になる）。
+    """
+    declared = dict(spec.donor)
+    declared_dataset = declared.get("dataset")
+    if declared_dataset != donor:
+        raise DonorProvenanceError(
+            f"spec.donor.dataset={declared_dataset!r} は --donor={donor!r} と不一致です"
+            "（provenance 検証: fail-closed）"
+        )
+
+    if donor == "vocadito":
+        if wav_path is None:
+            raise DonorProvenanceError("donor='vocadito' の provenance 検証には --wav が必須です")
+        declared_sha = declared.get("sha256")
+        actual_sha = db.sha256_of(wav_path)
+        if not isinstance(declared_sha, str) or declared_sha != actual_sha:
+            raise DonorProvenanceError(
+                f"spec.donor.sha256={declared_sha!r} は --wav の実体 sha256={actual_sha!r} と"
+                "不一致です（provenance 検証: fail-closed）"
+            )
+        return dict(dataset="vocadito", declared_sha256=declared_sha, actual_sha256=actual_sha)
+
+    if donor == "ritsu":
+        if voicebank_root is None:
+            raise DonorProvenanceError("donor='ritsu' の provenance 検証には --voicebank-root が必須です")
+        declared_sha = declared.get("voicebank_sha256")
+        actual_sha, pitch_dirs = dbu.voicebank_identity_hash(voicebank_root)
+        if not isinstance(declared_sha, str) or declared_sha != actual_sha:
+            raise DonorProvenanceError(
+                f"spec.donor.voicebank_sha256={declared_sha!r} は --voicebank-root の実体ハッシュ="
+                f"{actual_sha!r}（pitch_dirs={pitch_dirs}）と不一致です（provenance 検証: fail-closed）"
+            )
+        return dict(dataset="ritsu", declared_sha256=declared_sha, actual_sha256=actual_sha)
+
+    # donor == "pjs"
+    if voicebank_root is None:
+        raise DonorProvenanceError("donor='pjs' の provenance 検証には --voicebank-root が必須です")
+    declared_sha = declared.get("corpus_sha256")
+    actual_sha = dbl.corpus_identity_hash(voicebank_root)
+    if not isinstance(declared_sha, str) or declared_sha != actual_sha:
+        raise DonorProvenanceError(
+            f"spec.donor.corpus_sha256={declared_sha!r} は --voicebank-root の実体ハッシュ="
+            f"{actual_sha!r} と不一致です（provenance 検証: fail-closed）"
+        )
+    return dict(dataset="pjs", declared_sha256=declared_sha, actual_sha256=actual_sha)
+
+
+def _reject_output_collision(
+    out_path: str | Path,
+    protected_files: "List[Optional[str | Path]]",
+    protected_roots: "List[Optional[str | Path]]",
+) -> None:
+    """P1 修正 (review #262 R2): `--out` が保護入力と衝突する場合は書き込み前に
+    fail-closed で拒否する（AGENTS.md 永続成果物の「公開サイト」設計チェック
+    リスト項目2「衝突ガードは必須引数」準拠）。
+
+    resolved containment（symlink 解決後の一致・`is_relative_to` 相当）で判定
+    する（AGENTS.md Persistent Artifact Safety Gate 項目2）。字句検証
+    （`../` 遡上判定）は本関数では行わない —— `out_path`/保護パスはいずれも
+    CLI から渡される独立した絶対/相対パスであり、path-join で組み立てる
+    値ではないため、字句検証が防ぐ「base の外への脱出」は該当しない
+    （resolved 比較のみで十分）。
+
+    `protected_files`（単一ファイルとの完全一致）と `protected_roots`
+    （ディレクトリ配下への包含）の両方を検査する。`None` 要素はスキップする
+    （donor 種別ごとに未使用の引数があるため）。
+    """
+    out_resolved = Path(out_path).resolve()
+    for f in protected_files:
+        if f is None:
+            continue
+        f_path = Path(f)
+        if not f_path.exists():
+            continue  # 未使用/未指定パス（vocadito の notes_csv 省略時等）
+        if out_resolved == f_path.resolve():
+            raise OutputCollisionError(
+                f"--out ({out_path}) が保護入力 ({f}) と衝突しています（fail-closed で拒否）"
+            )
+    for root in protected_roots:
+        if root is None:
+            continue
+        root_path = Path(root)
+        if not root_path.exists():
+            continue
+        root_resolved = root_path.resolve()
+        try:
+            out_resolved.relative_to(root_resolved)
+        except ValueError:
+            continue
+        raise OutputCollisionError(
+            f"--out ({out_path}) が保護ディレクトリ ({root}) 配下です（fail-closed で拒否）"
+        )
+
+
+def _atomic_write_wav(y: np.ndarray, sr: int, out_path: str | Path) -> str:
+    """P2 修正 (review #262 R2): staging + `os.replace` で成果物 WAV を atomic
+    公開する（AGENTS.md Persistent Artifact Safety Gate 項目6「全構築後公開」
+    準拠。`src/svp_rpe/utils/atomic_io.atomic_write_bytes` と同じ流儀だが、
+    `src/` は変更禁止のため adapter 内に独立実装する）。
+
+    `sf.write` の失敗（プロセス kill・ディスク満杯等）やインタラプトが
+    途中で起きても、`out_path` に既存の有効な出力があればそれを破壊せず、
+    staging tempfile を best-effort で削除してから re-raise する
+    （`except BaseException` — `KeyboardInterrupt`/`SystemExit` も含む）。
+
+    P2 修正 (review #262 R8・`r3789486148`): `bank.wav_sha256` はドナー入力の
+    ハッシュであり、生成された成果物 WAV のバイト列を識別しない
+    （AGENTS.md「入力と出力の両ハッシュ記録」要件を満たさない）。ここで
+    `os.replace` により実際に公開される staging ファイルのバイト列そのものを
+    read して sha256 を計算し、呼び出し元へ返す（公開後の別読みだと
+    replace 後の実ファイルとの間に別の TOCTOU 窓が生じるため、公開直前の
+    staging バイト列を正本にする）。
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=out_path.parent, prefix=f"{out_path.name}.", suffix=".tmp")
+    os.close(fd)  # sf.write はパス経由で自前ハンドルを開くため fd は即閉じる
+    try:
+        # staging 名の拡張子は `.tmp`（拡張子から format を推測できない）ため
+        # `format="WAV"` を明示する。
+        sf.write(tmp_name, y, sr, subtype="PCM_16", format="WAV")
+        output_sha256 = hashlib.sha256(Path(tmp_name).read_bytes()).hexdigest()
+        os.replace(tmp_name, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return output_sha256
+
+
+def _vowel_distribution_from_labels(labels: dict) -> dict:
+    """unit.index -> ラベル(str) の辞書から母音別件数分布を作る（3 ドナー共通）。"""
+    dist: Dict[str, int] = {}
+    for lbl in labels.values():
+        dist[lbl] = dist.get(lbl, 0) + 1
+    return dist
+
+
+def _vcv_required_contexts(segments: list) -> List[Tuple[Optional[str], str]]:
+    """追補 F1.4-A: レンダリング対象スコアが実際に必要とする VCV 文脈キーの
+    重複無し決定論順リスト（`donor_bank_utau.build_donor_bank_utau_vcv` の
+    `required_contexts` へそのまま渡す・キャッシュキー材料にも使う）。
+    """
+    seen: List[Tuple[Optional[str], str]] = []
+    seen_set = set()
+    for ctx in un.vcv_context_sequence(segments):
+        if ctx not in seen_set:
+            seen_set.add(ctx)
+            seen.append(ctx)
+    seen.sort(key=lambda c: (c[0] or "", c[1]))
+    return seen
+
+
+def prepend_recorded_consonant(
+    resolved: "un.ResolvedSegment", clip: "dbu.ConsonantClip", note_index: int
+) -> Tuple["un.ResolvedSegment", "cons.ConsonantEvent"]:
+    """追補 F1.2-D: 録音済み子音クリップ（自然長・非伸縮）を resolved 母音核
+    frame 列の先頭へ前置する。総 frame 数はクリップ分だけ増える
+    （joins.assemble の 30ms クロスフェードが後続の接続を担う。決定論・純関数）。
+    """
+    new_sp = np.concatenate([clip.sp, resolved.sp], axis=0)
+    new_ap = np.concatenate([clip.ap, resolved.ap], axis=0)
+    new_resolved = dataclasses.replace(resolved, sp=new_sp, ap=new_ap, n_frames=new_sp.shape[0])
+    event = cons.ConsonantEvent(
+        note_index=note_index, onset=clip.onset, consonant_class="recorded", n_frames_processed=clip.n_frames,
+    )
+    return new_resolved, event
+
+
+def _build_vcv_placements(
+    segments: list, selections: List["un.VCVUnitSelection"], bank: "db.DonorBank",
+) -> Tuple[List["jn.NotePlacement"], List["un.ResolvedVCVSegment"], dict]:
+    """追補 F1.4-B（F1.4 R3 で絶対グリッド配置へ全面改訂・PR #262 R3）: VCV unit
+    の配置。
+
+    R3 改訂の背景・設計判定（record 参照）: R2 までは「フレーズ先頭ノートのみ
+    cursor を preutterance 分前へずらし、mid-phrase ノートは
+    `joins.assemble_v2` 側の追加トリム（`_resolve_extra_trim`）で
+    preutterance を消費する」方式だった。この方式は run 内部の join のたびに
+    直前アキュムレータ末尾を実際にトリムする（総尺を縮める）ため、複数 run
+    から成る render 全体では各 run の縮みが後続 run へ伝播し、総尺が score
+    総尺から累積的に縮んでいた（sakura で 19% 相当の圧縮）。
+
+    R3 は全ノート（フレーズ先頭・mid-phrase 問わず）に対して統一的に
+    「拍位置（score 由来の絶対タイムライン上の cursor 位置）− lead
+    （= 選択された unit の `preutterance_frames`。真のアタック点までの
+    オフセット）」の絶対座標へ配置する（`start_frame`/`end_frame` の**両方**
+    が同じだけシフトする。R2 までの「end_frame は shift 非依存」は撤廃 ——
+    絶対グリッド上では unit 自身の長さ `resolved.n_frames`（=
+    `target_n_frames`。shift 非依存で不変）が保たれるため、
+    `end_frame = start_frame + resolved.n_frames` が自然に成り立つ）。
+
+    フレーズ先頭ノートのみ、shift をブレスギャップ長にクリップする（ブレス
+    無音区間より前へは食い込ませない・既存挙動維持）。mid-phrase ノートは
+    クリップしない（直前 note が既に配置済みの音域へ食い込むことを許す ——
+    実際に重なるか・重なり幅は `joins.assemble_absolute` が両ノートの絶対
+    座標の交差から自動的に決め、重なった区間のみ log-sp/ap クロスフェードで
+    ブレンドする。トリムはしない）。
+
+    `resolved.n_frames` は shift の影響を受けないため、shift 分だけ unit の
+    audible span 全体が前方へ動く。後続ノートで shift が埋め合わされない
+    末尾（例: フレーズ最終ノートの末尾 `lead` フレーム分）に生じる空白は、
+    `joins.assemble_absolute` の末尾 carry-forward（前方 hold）で埋める
+    （既存の無声ギャップ充填規約と同一 = 追加実装なし・[実装決定・record
+    記録]）。
+    """
+    placements: List[jn.NotePlacement] = []
+    resolved_list: List[un.ResolvedVCVSegment] = []
+    prev_end_sample = 0
+    n_shift_applied = 0
+    n_shift_clipped = 0
+    shift_frames: List[int] = []
+    shift_per_note: List[int] = []
+    head_clipped_note_indices: List[int] = []
+
+    for note_index, (seg, sel) in enumerate(zip(segments, selections)):
+        gap_samples = seg.start_sample - prev_end_sample
+        gap_frames = frames_for_samples(gap_samples, SR) if gap_samples > 0 else 0
+        # P2 修正 (review #262 R14・`r3789636058`): 名目開始フレームは「丸めた
+        # duration の累積（旧 cursor）」ではなく `seg.start_sample` から毎ノート
+        # 独立に絶対換算する。累積方式は各ノートの `frames_for_samples()` 丸め
+        # 誤差（最大 ±0.5 frame）が後続ノートへそのまま伝播し、score が非整数
+        # フレーム長のビートを含む場合（例: umi 楽曲の 1 拍 = 16,364 サンプル、
+        # 136.36... frame）に累積ドリフトを生む（record 実測: umi 終盤で
+        # −3 frame(15ms)・末尾に補償パディングが残る）。絶対換算は各ノートが
+        # 独立に score グリッドへ re-snap されるため誤差が伝播しない。
+        nominal_frame = frames_for_samples(seg.start_sample, SR)
+        note_dur_frames = max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1)
+        resolved = un.resolve_vcv_unit_to_note(
+            bank, sel.unit, note_dur_frames, note_index=note_index, frame_period_ms=FRAME_PERIOD_MS
+        )
+        if resolved.head_clipped:
+            head_clipped_note_indices.append(note_index)
+        resolved_list.append(resolved)
+
+        preutt = sel.unit.preutterance_frames or 0
+        lead = min(preutt, gap_frames) if seg.is_phrase_first else preutt
+        shift = min(lead, nominal_frame)  # バッファ先頭（0）より前へは配置しない
+        start_frame = nominal_frame - shift
+        shift_per_note.append(shift)
+        if shift > 0:
+            n_shift_applied += 1
+            shift_frames.append(shift)
+            if shift < preutt:
+                n_shift_clipped += 1
+        end_frame = start_frame + resolved.n_frames
+
+        placements.append(
+            jn.NotePlacement(
+                start_frame=start_frame, end_frame=end_frame, sp=resolved.sp, ap=resolved.ap,
+                has_join_to_prev=not seg.is_phrase_first, overlap_frames=sel.unit.overlap_frames,
+                # R3: assemble_absolute はこのフィールドを読まない（絶対座標
+                # の交差だけで重なりを決める）。record/後方互換のため保持する。
+                preutterance_frames=sel.unit.preutterance_frames,
+            )
+        )
+        prev_end_sample = seg.end_sample
+
+    stats = dict(
+        n_preutterance_applied=n_shift_applied,
+        n_preutterance_clipped=n_shift_clipped,
+        preutterance_shift_frames=shift_frames,
+        preutterance_shift_frames_mean=(
+            float(np.mean(shift_frames)) if shift_frames else 0.0
+        ),
+        n_head_clipped=len(head_clipped_note_indices),
+        head_clipped_note_indices=head_clipped_note_indices,
+        # P1 修正 (review #262 R4・`r3789341843`): note ごとの実効配置シフト
+        # （ブレスギャップ/バッファ先頭でクリップ済みの `shift`）を placements
+        # と同じ並びで公開する。`_note_frame_track` の `origin_shift_frames`
+        # へそのまま渡すことで、f0/振幅トラックのサンプリング原点を sp/ap の
+        # 絶対配置（`start_frame = cursor - shift`）と一致させる。
+        shift_per_note=shift_per_note,
+    )
+    return placements, resolved_list, stats
+
+
+def _frame_period_s() -> float:
+    return FRAME_PERIOD_MS / 1000.0
+
+
+def frames_for_samples(n_samples: int, sr: int) -> int:
+    return max(int(round(n_samples / sr / _frame_period_s())), 0)
+
+
+def _note_frame_track(
+    per_sample: np.ndarray, seg, note_dur_frames: int, n_frames: int, sr: int, frame_period_ms: float,
+    origin_shift_frames: int = 0,
+) -> np.ndarray:
+    """P1 修正 (review #262): 1 note の resolve 後フレーム列（`n_frames`）に
+    対応する perf_genes per-sample トラック（`base_f0_persample`/`amp_env`。
+    圧縮前の生スコアサンプル時間軸で構築済み）の値を、**このノート自身の
+    圧縮前・実スパン内**で決定論的に抽出する（他ノートの overlap 圧縮とは
+    無関係。圧縮後タイムラインへの整列は `joins.assemble_control_tracks_v2`
+    が sp/ap と同じ run/overlap 機構で後段に行う）。
+
+    `n_frames` は録音済み子音の前置（`prepend_recorded_consonant`）で
+    `note_dur_frames`（= seg の生スコア尺から素朴に求めたフレーム数）より
+    長くなることがある。その場合、末尾側の `note_dur_frames` フレームが
+    seg の実スパン [start_sample, end_sample) に対応するよう原点をずらす
+    （先頭の余剰フレームは子音が鳴る時間帯 = seg 開始より前へ自然に延びる。
+    0 側でクランプ）。
+
+    `origin_shift_frames`（P1 修正・review #262 R4・`r3789341843`）:
+    `donor="ritsu"`（VCV 経路）専用。`render.py` `_build_vcv_placements` は
+    unit を「拍位置 − lead（preutterance 相当・ブレスギャップでクリップ済み）」
+    の絶対座標へ配置するが、本関数は従来 `seg.start_sample`（= score 上の拍
+    位置そのもの）を原点にサンプリングしていたため、f0/振幅トラックの**内容**
+    が sp/ap の絶対配置より `lead` フレーム分だけ「早取り」されていた
+    （sp/ap 自身のフレーム数・配置位置は正しいままだったため、旧実装では
+    join を経ても致命的な破綻は生じないが、拍位置での f0/振幅の値自体が
+    ズレる——`_build_vcv_placements` が計算した実効 shift（`lead` をブレス
+    ギャップ/バッファ先頭でクリップした後の値）を渡すことで、サンプリング
+    原点を配置と同じだけ前へずらし、拍位置に着地するフレームが score 上の
+    拍位置ちょうどの値を持つよう補正する（`origin_shift_frames=0` は従来
+    どおり無補正 = vocadito/pjs 経路は完全不変）。
+    """
+    if n_frames <= 0:
+        return np.zeros(0, dtype=np.float64)
+    if per_sample.shape[0] == 0:
+        return np.zeros(n_frames, dtype=np.float64)
+    samples_per_frame = sr * frame_period_ms / 1000.0
+    extra_head = max(0, n_frames - note_dur_frames)
+    k = np.arange(n_frames) - extra_head - origin_shift_frames
+    sample_idx = np.round(seg.start_sample + k * samples_per_frame).astype(np.int64)
+    sample_idx = np.clip(sample_idx, 0, per_sample.shape[0] - 1)
+    return per_sample[sample_idx]
+
+
+def _phrase_head_preutterance_shifts(
+    segments: list, note_origin_shift_frames: List[int], sr: int, frame_period_ms: float,
+) -> List[Tuple[object, int, int]]:
+    """P2/P3 修正 (review #262 R14/R19) 共通の対象ノート判定。
+
+    origin-shift（`_build_vcv_placements` が計算した実効 preutterance シフト）
+    を受けるフレーズ先頭 seg を列挙し、`(seg, ext_start, ar)` を返す
+    （`ext_start` = 延長区間の開始サンプル、`ar` = `NOTE_ATTACK_RELEASE_MS`
+    由来のアタック長サンプル数・セグメント長でクランプ済み）。
+    `_extend_phrase_head_amp_for_preutterance`（振幅）と
+    `_extend_phrase_head_f0_for_preutterance`（F0・R19 で追加）が本関数を
+    共有し、分岐条件の二重管理を避ける。
+    """
+    samples_per_frame = sr * frame_period_ms / 1000.0
+    attack_release = int(sr * perf.NOTE_ATTACK_RELEASE_MS / 1000.0)
+    out: List[Tuple[object, int, int]] = []
+    for seg, shift_frames in zip(segments, note_origin_shift_frames):
+        if not seg.is_phrase_first or shift_frames <= 0:
+            continue
+        shift_samples = int(round(shift_frames * samples_per_frame))
+        ext_start = max(0, seg.start_sample - shift_samples)
+        if ext_start >= seg.start_sample:
+            continue
+        n = seg.end_sample - seg.start_sample
+        ar = min(attack_release, n // 4) if n >= 4 else 0
+        out.append((seg, ext_start, ar))
+    return out
+
+
+def _extend_phrase_head_amp_for_preutterance(
+    amp_env: np.ndarray, segments: list, note_origin_shift_frames: List[int], sr: int, frame_period_ms: float,
+) -> np.ndarray:
+    """P2 修正 (review #262 R14・`r3789636053`、R19 でフェード二重化を解消):
+    origin-shift 済みフレーズ頭 preutterance の消音を防ぐ。
+
+    `_note_frame_track` は `origin_shift_frames`（`_build_vcv_placements` が
+    計算した実効 shift）分だけサンプリング原点を `seg.start_sample` より前へ
+    ずらす。しかし `perf.build_amplitude_envelope` はフレーズ先頭より前
+    （ブレス無音区間）を常にゼロ初期化したままのため、ずらしたサンプリング
+    原点が拾うのはこのゼロ区間で、preutterance に置いた録音済み子音/遷移
+    （典型 100ms）がゼロ乗算で消音されていた（review #262 R13・
+    `r3789636053`）。
+
+    フレーズアーチ自体（`amp[phrase_start:phrase_end]` の cosine half-arch）
+    の形は変更しない。R14 時点では拡張区間 `[ext_start, seg.start_sample)`
+    のみを埋めていたため、`build_amplitude_envelope` が書いた元の attack
+    フェード `[seg.start_sample, seg.start_sample+ar)` が手つかずのまま残り、
+    「外挿区間で立ち上がった直後に seg.start_sample でゼロ近傍へ落ち、
+    そこから再度フェードインする」ノッチが生じていた（review #262 R19
+    指摘 1）。本修正はフェードそのものを延長端へ移設し、単一の立ち上がりに
+    する: `[ext_start, ext_start+ar)` を 0→`connect_level` へフェードイン
+    （`ar` = 元のアタック時間そのまま）、続く `[ext_start+ar,
+    seg.start_sample+ar)` を `connect_level` で定数充填する（旧フェード区間
+    `[seg.start_sample, seg.start_sample+ar)` もこの充填で上書きされ、
+    二重フェードが解消する）。`connect_level` は既存 `amp_env` の
+    `seg.start_sample+ar` 時点の値（フェード完了直後の定常値）をそのまま
+    読む——`build_amplitude_envelope` のアーチ/フェード実装を再現せず、
+    マジックナンバーの二重実装を避けつつ、`seg.start_sample+ar` 以降
+    （不変）との段差をゼロにする。
+    """
+    amp = amp_env.copy()
+    if amp.shape[0] == 0:
+        return amp
+    for seg, ext_start, ar in _phrase_head_preutterance_shifts(
+        segments, note_origin_shift_frames, sr, frame_period_ms
+    ):
+        connect_idx = min(seg.start_sample + ar, amp.shape[0] - 1)
+        connect_level = float(amp[connect_idx])
+        fill_end = min(seg.start_sample + ar, amp.shape[0])
+        if fill_end > ext_start:
+            amp[ext_start:fill_end] = connect_level
+        if ar > 0:
+            fade_end = min(ext_start + ar, amp.shape[0])
+            fade_len = fade_end - ext_start
+            if fade_len > 0:
+                amp[ext_start:fade_end] = connect_level * np.linspace(0.0, 1.0, fade_len)
+    return amp
+
+
+def _extend_phrase_head_f0_for_preutterance(
+    f0_persample: np.ndarray, segments: list, note_origin_shift_frames: List[int], sr: int, frame_period_ms: float,
+) -> np.ndarray:
+    """P3 修正 (review #262 R19 指摘 3): origin-shift 済みフレーズ頭
+    preutterance の F0 無声化 (0Hz) を防ぐ、振幅側と対になる F0 後方延長。
+
+    `perf.build_f0_contour` はフレーズ先頭より前（ブレス無音区間）を常に
+    ゼロ初期化したままのため、`_note_frame_track` がシフト分だけ前へずらして
+    サンプリングすると preutterance 区間の F0 が 0 のまま拾われる
+    （`_extend_phrase_head_amp_for_preutterance` の R14 修正により当該区間は
+    もはや無音でなくなっており、F0=0 は無声ノイズとして可聴になりうる）。
+
+    対象ノート判定は `_extend_phrase_head_amp_for_preutterance` と同一
+    （`_phrase_head_preutterance_shifts` を共有）。延長区間 `[ext_start,
+    seg.start_sample)` を、ノート開始時点の F0（`seg.start_sample` の輪郭値。
+    それ自体がまだ 0 の場合は同ノート内で最初に現れる有声値）で定数外挿する。
+    ビブラート等の時間変化は延長区間には適用しない（定数で足りる・仕様上
+    preutterance は「直前のノート開始ピッチへ滑らかに繋がる」だけで十分）。
+    """
+    f0 = f0_persample.copy()
+    if f0.shape[0] == 0:
+        return f0
+    for seg, ext_start, _ar in _phrase_head_preutterance_shifts(
+        segments, note_origin_shift_frames, sr, frame_period_ms
+    ):
+        start_idx = min(seg.start_sample, f0.shape[0] - 1)
+        onset_f0 = float(f0[start_idx])
+        if onset_f0 <= 0.0:
+            tail = f0[start_idx:]
+            voiced = tail[tail > 0.0]
+            onset_f0 = float(voiced[0]) if voiced.size > 0 else 0.0
+        if onset_f0 > 0.0:
+            f0[ext_start:seg.start_sample] = onset_f0
+    return f0
+
+
+def _midi_to_hz(m: float) -> float:
+    return 440.0 * 2.0 ** ((m - 69.0) / 12.0)
+
+
+def build_score(name: str) -> Tuple[list, float]:
+    if name == "sakura":
+        return sc.build_sakura_score(), sc.TEMPO_BPM
+    if name == "umi":
+        return sc_umi.build_umi_score(), sc_umi.TEMPO_BPM
+    raise ValueError(f"unknown score: {name!r} (expected 'sakura' or 'umi')")
+
+
+def render(
+    score_name: str,
+    voice_spec_path: str | Path,
+    wav_path: Optional[str | Path] = None,
+    notes_csv_path: Optional[str | Path] = None,
+    cache_dir: Optional[str | Path] = None,
+    out_path: Optional[str | Path] = None,
+    w_p: float = un.DEFAULT_W_P,
+    w_d: float = un.DEFAULT_W_D,
+    w_c: float = un.DEFAULT_W_C,
+    w_v: float = un.DEFAULT_W_V,
+    apply_consonants: bool = True,
+    donor: str = "vocadito",
+    consonant_source: Optional[str] = None,
+    voicebank_root: Optional[str | Path] = None,
+) -> dict:
+    """VG-F1 / 追補 F1.1 / 追補 F1.2 パイプライン本体。
+
+    `donor`: "vocadito"（既定・従来どおり）| "ritsu"（UTAU oto バンク・
+    追補 F1.2-B）| "pjs"（PJS lab バンク・追補 F1.2-C）。既存 CLI 挙動は
+    `donor="vocadito"` の場合に完全不変（追補 F1.2 Acceptance 「既存 CLI
+    挙動は不変」）。
+
+    `consonant_source`: "recorded"（bank 提供の録音済み子音を前置。無ければ
+    synthetic へフォールバック・件数記録）| "synthetic"（従来の
+    `consonants.apply_consonant_onset` のみ）| "none"（子音加工なし）。
+    省略時は donor に応じた既定（vocadito -> "synthetic", ritsu/pjs ->
+    "recorded"）。`apply_consonants=False` は "none" と等価（後方互換の
+    `--no-consonants` フラグ用）。
+    """
+    if consonant_source is None:
+        consonant_source = "synthetic" if donor == "vocadito" else "recorded"
+    if not apply_consonants:
+        consonant_source = "none"
+    if consonant_source not in CONSONANT_SOURCE_CHOICES:
+        raise ValueError(f"unknown consonant_source: {consonant_source!r}")
+    if donor not in DONOR_CHOICES:
+        raise ValueError(f"unknown donor: {donor!r} (expected one of {DONOR_CHOICES})")
+    # P2 修正 (review #262 R9・`r3789495255`): donor="ritsu" は F1.4 で VCV unit
+    # 経路（子音は録音済み調音遷移として unit 内に不可分に録り込み済み・§1.8/1.3）
+    # へ全面移行済みのため、`consonant_source="none"/"synthetic"`（および
+    # `--no-consonants` の "none" 翻訳）は録音済み VCV 遷移を後から取り除く/
+    # 差し替えることができず意味を成さない。従来はここを黙って "vcv" へ上書きして
+    # いた（=指定を無視）が、重い bank 分析（WORLD 解析・oto.ini 全数走査）より
+    # 前の fail-closed な明示エラーへ変更する。donor="ritsu" で対応する唯一の値は
+    # "recorded"（既定）のみ。
+    if donor == "ritsu" and consonant_source != "recorded":
+        raise ValueError(
+            "donor='ritsu' は VCV 録音遷移が不可分のため consonant_source は "
+            "'vcv' 固定（内部的には 'recorded' 既定のみ対応）です。"
+            "'none'/'synthetic' の指定や --no-consonants は非対応です。"
+        )
+
+    spec = vs.load_voice_spec(voice_spec_path)
+    # P1 修正 (review #262 R2): 重い WORLD 分析より前に spec.donor の provenance
+    # を fail-closed で検証する（§ _validate_spec_donor docstring 参照）。
+    # R6 修正: bank 構築完了後にもう一度 `_validate_spec_donor` を呼ぶ
+    # （post-build revalidation・§ bank 構築直後のコメント参照）ため、
+    # ここでの呼び出しは「無関係な入力での無駄な WORLD 分析を防ぐ fail-fast」
+    # の役割に限定される。
+    donor_provenance = _validate_spec_donor(spec, donor, wav_path, voicebank_root)
+    notes, tempo_bpm = build_score(score_name)
+    segments, total_samples = perf.build_timeline(notes, sr=SR, tempo_bpm=tempo_bpm)
+    # F1.4 R3: score 由来の絶対総尺（frame 数）。donor="ritsu"（VCV/preutterance
+    # 経路）の `joins.assemble_absolute` はこの固定長バッファへ trim せずに
+    # 配置するため、総尺は常に score 準拠（±1 frame の丸め誤差のみ）になる。
+    score_total_frames = frames_for_samples(total_samples, SR)
+    # P1 修正 (review #262): f0/振幅の per-sample トラックは segments/total_samples
+    # だけに依存する（donor 選択より前に決められる）。旧実装はこれらを
+    # assemble_v2 呼び出しの後段で構築し、圧縮後フレーム数でナイーブに再インデックス
+    # していたためタイムラインがズレていた（`_note_frame_track` + `jn.assemble_control_tracks_v2`
+    # 経由で圧縮後タイムラインへ正しく整列させる。後段の placements 構築後に使う）。
+    note_dur_frames_list = [
+        max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1) for seg in segments
+    ]
+    portamento_ms = float(spec.perf.get("portamento_ms", 55.0))
+    base_f0_persample = pg.build_perf_f0(
+        segments, total_samples, SR, spec.perf, seed=spec.seed, portamento_ms=portamento_ms
+    )
+    amp_env = perf.build_amplitude_envelope(segments, total_samples, SR)
+
+    consonant_clips: Dict[str, list] = {}
+    donor_extra_stats: dict = {}
+    vcv_selection_stats: dict = {}
+    vcv_placement_stats: dict = {}
+    is_vcv = donor == "ritsu"  # 追補 F1.4: ritsu は VCV unit 経路（他は v0/F1.2 のまま）
+
+    if donor == "vocadito":
+        if wav_path is None:
+            raise ValueError("donor='vocadito' には --wav（ドナー wav パス）が必須です")
+        bank = db.build_donor_bank(wav_path, notes_csv_path=notes_csv_path, cache_dir=cache_dir)
+        # 追補 F1.1-A: donor unit を母音分類し、選択コストへ母音制約を効かせる。
+        # select_units は unit.index -> ラベル文字列を期待するため、VowelClassResult
+        # から label のみ抜き出す（分布・F1/F2 の record 用には unit_vowel_results を残す）。
+        unit_vowel_results = vc.classify_donor_units(bank)
+        unit_vowel_labels = {idx: r.label for idx, r in unit_vowel_results.items()}
+    elif donor == "ritsu":
+        if voicebank_root is None:
+            raise ValueError("donor='ritsu' には --voicebank-root（UTAU 音源ルート）が必須です")
+        # 追補 F1.4-A: VCV unit 化（donor_bank_utau v2）。旧「母音核 unit + 録音子音
+        # クリップ挿入」経路（v1 `build_donor_bank_utau`）は F1.3 までの互換・単体
+        # テストのため関数として残置するが render.py からはもう呼ばない。
+        required_contexts = _vcv_required_contexts(segments)
+        bank, unit_contexts, donor_extra_stats = dbu.build_donor_bank_utau_vcv(
+            voicebank_root, cache_dir=cache_dir, required_contexts=required_contexts,
+        )
+        # record/CLI 表示用の母音分布（選択には使わない・文脈キー一致が代替）。
+        unit_vowel_labels = {}
+        for idx, ctx in unit_contexts.items():
+            _onset, _v, _status = dbu.normalize_mora_kana(ctx.mora)
+            if _status == "ok" and _v:
+                unit_vowel_labels[idx] = _v
+    else:  # donor == "pjs"
+        if voicebank_root is None:
+            raise ValueError("donor='pjs' には --voicebank-root（PJS コーパスルート）が必須です")
+        target_median_hz = float(np.median([_midi_to_hz(seg.note.midi) for seg in segments]))
+        # P2 修正 (review #262 R12): coverage は選択時の約束ではなく実際に
+        # 構築できた unit/クリップから導出する（終端修正）。sakura/umi の
+        # 必須子音オンセット + 5 母音（`_select_lab_files` が従来から貪欲
+        # 被覆の target にしている固定集合と同一）を明示的に必須要件として
+        # 渡し、realized coverage がこれを満たさなければ fail-closed で
+        # 拒否させる（§ build_donor_bank_utau_vcv の required_contexts と
+        # 対称。近傍/global フォールバックへの黙った縮退を禁止）。
+        bank, unit_vowel_labels, consonant_clips, donor_extra_stats = dbl.build_donor_bank_lab(
+            voicebank_root, target_median_hz=target_median_hz, cache_dir=cache_dir,
+            required_onsets=dbu.REQUIRED_ONSETS, required_vowels=dbl.VOWELS_5,
+        )
+
+    # P2 修正 (review #262 R6・`r3789428504`): bank 構築完了後・成果物公開前に
+    # provenance を再照合する（post-build revalidation）。`_validate_spec_donor`
+    # 冒頭の検証（重い WORLD 分析より前の fail-fast）と builder 内部の実際の
+    # read（bank 構築）は別読みであるため、その間に入力ファイルが書き換われば
+    # 「spec 一致の provenance を返しつつ別バイトを分析」しうる（TOCTOU）。
+    # ここで同じ検証をもう一度実行し、bank 構築時点までの間に対象ファイルが
+    # 変化していないことを確認する（identity hash が変化 = 不一致で
+    # `DonorProvenanceError`・fail-closed）。cache-hit 経路でも
+    # `voicebank_identity_hash`/`corpus_identity_hash`（vocadito は
+    # `sha256_of`）はキャッシュに依存せず毎回ディスクを直接再走査するため、
+    # bank 構築が pickle 復元だった場合でも同じ強度で検証できる。以降で使う
+    # `donor_provenance` はこの再検証後の値（分析直後の状態を反映）で上書きする。
+    donor_provenance = _validate_spec_donor(spec, donor, wav_path, voicebank_root)
+
+    # 追補 F1.3-B item1: unit の収録時レベルを除去する（母音核区間の平均パワーで
+    # sp を正規化）。ドナー種別を問わず一律に適用（DonorBank は 3 ドナー共通の
+    # スキーマ）。concat cost が正規化後の実レンダー値と整合するよう
+    # head/tail_log_bands も再計算済みの bank を以降で使う。
+    bank, energy_norm_stats = db.normalize_unit_energy(bank)
+
+    n_bins = bank.sp.shape[1]
+    consonant_events: List[cons.ConsonantEvent] = []
+    n_recorded_consonants_used = 0
+    n_recorded_consonants_fallback_synthetic = 0
+
+    if is_vcv:
+        # 追補 F1.4-C: 文脈キー完全一致必須の VCV 選択（w_c/w_v は使わない
+        # ——文脈フィルタが母音一致を自動充足するため）。
+        vcv_targets = [
+            un.VCVTargetNote(
+                pitch_hz=_midi_to_hz(seg.note.midi),
+                duration_sec=(seg.end_sample - seg.start_sample) / SR,
+                label=seg.note.mora.kana, prev_vowel=ctx[0], mora=ctx[1],
+            )
+            for seg, ctx in zip(segments, un.vcv_context_sequence(segments))
+        ]
+        ctx_map = {idx: (c.prev_vowel, c.mora) for idx, c in unit_contexts.items()}
+        selections, sel_stats = un.select_vcv_units(vcv_targets, bank.units, ctx_map, w_p=w_p, w_d=w_d)
+        vcv_selection_stats = sel_stats
+        placements, resolved_list, vcv_placement_stats = _build_vcv_placements(segments, selections, bank)
+        # 追補 F1.4-B item3: consonants.py 合成 / recorded クリップ挿入経路は
+        # VCV 経路では不使用（子音は unit に録り込み済み）。
+        consonant_source = "vcv"
+    else:
+        targets = [
+            un.TargetNote(
+                pitch_hz=_midi_to_hz(seg.note.midi),
+                duration_sec=(seg.end_sample - seg.start_sample) / SR,
+                label=seg.note.mora.kana,
+                vowel_target=un.mora_to_vowel_target(seg.note.mora),
+            )
+            for seg in segments
+        ]
+        selections, sel_stats = un.select_units(
+            targets, bank.units, w_p=w_p, w_d=w_d, w_c=w_c, unit_vowels=unit_vowel_labels, w_v=w_v
+        )
+
+        placements = []
+        resolved_list = []
+        cursor = 0
+        prev_end_sample = 0
+        for note_index, (seg, sel) in enumerate(zip(segments, selections)):
+            gap_samples = seg.start_sample - prev_end_sample
+            gap_frames = frames_for_samples(gap_samples, SR) if gap_samples > 0 else 0
+            cursor += gap_frames
+            note_dur_frames = max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1)
+            resolved = un.resolve_unit_to_note(
+                bank, sel.unit, note_dur_frames, note_index=note_index, frame_period_ms=FRAME_PERIOD_MS
+            )
+            onset = seg.note.mora.onset
+            if consonant_source != "none" and onset is not None:
+                # 追補 F1.2-D: consonant_source="recorded" は bank 提供の録音済み
+                # 子音クリップを unit 先頭へ preutterance 相当分（クリップの実長）
+                # だけ前置する（joins.assemble の 30ms クロスフェードが接続を担う）。
+                # クリップが無ければ synthetic（追補 F1.1-B）へフォールバックする。
+                used_recorded = False
+                if consonant_source == "recorded":
+                    clips = consonant_clips.get(onset)
+                    if clips:
+                        clip = clips[0]  # 決定論選択（bank 側で句頭優先・名前昇順ソート済み）
+                        resolved, event = prepend_recorded_consonant(resolved, clip, note_index)
+                        consonant_events.append(event)
+                        n_recorded_consonants_used += 1
+                        used_recorded = True
+                    else:
+                        n_recorded_consonants_fallback_synthetic += 1
+                if not used_recorded:
+                    # 追補 F1.1-B: 母音制約選択 -> 子音オンセット加工 -> (この後の) joins/perf_genes/warp。
+                    proc_sp, proc_ap, event = cons.apply_consonant_onset(
+                        resolved.sp, resolved.ap, onset, SR, frame_period_ms=FRAME_PERIOD_MS
+                    )
+                    if event is not None:
+                        consonant_events.append(dataclasses.replace(event, note_index=note_index))
+                    resolved = dataclasses.replace(resolved, sp=proc_sp, ap=proc_ap)
+            resolved_list.append(resolved)
+            start_frame = cursor
+            end_frame = start_frame + resolved.n_frames
+            placements.append(
+                jn.NotePlacement(
+                    start_frame=start_frame, end_frame=end_frame, sp=resolved.sp, ap=resolved.ap,
+                    has_join_to_prev=not seg.is_phrase_first,
+                    # 追補 F1.3-A: 選択された donor unit の oto overlap（フレーム）を
+                    # そのまま接合長として使う。録音子音を前置した場合も vowel unit
+                    # 自身の overlap 値を流用する（子音クリップ自体は oto overlap を
+                    # 持たないための近似・[実装決定・record 記録]）。None = 情報なし
+                    # (vocadito/pjs) -> assemble_v2 が DEFAULT_OVERLAP_MS へフォールバック。
+                    overlap_frames=sel.unit.overlap_frames,
+                )
+            )
+            cursor = end_frame
+            prev_end_sample = seg.end_sample
+
+    if is_vcv:
+        # F1.4 R3: 絶対グリッド配置（総尺は score 準拠・trim しない）。
+        sp_seq, ap_seq, join_stats = jn.assemble_absolute(score_total_frames, n_bins, placements)
+    else:
+        # 追補 F1.3-A: v1 の単側ブレンド（jn.assemble）ではなく true overlap-add
+        # （jn.assemble_v2）のみを使う。n_total_frames は overlap 分だけ短くなった
+        # 実際の圧縮後タイムライン長を join_stats から受け取る（vocadito/pjs は
+        # 無変更・回帰リスクを避けるため R3 のスコープ外）。
+        sp_seq, ap_seq, join_stats = jn.assemble_v2(n_bins, placements, frame_period_ms=FRAME_PERIOD_MS)
+    n_total_frames = join_stats["n_total_frames"]
+
+    sp_seq, ap_seq = vs.apply_warp(sp_seq, ap_seq, SR, spec.warp)
+
+    # P1 修正 (review #262): f0/振幅トラックを sp/ap と同じ圧縮後タイムライン上へ
+    # ノート単位で再構築する。placements[i] の実スパン（consonant 前置で
+    # note_dur_frames_list[i] より長いことがある）に対して perf_genes の
+    # per-sample トラックを抽出し（`_note_frame_track`）、sp/ap と全く同じ
+    # run/overlap 圧縮（`jn.assemble_control_tracks_v2`）へ通すことで、
+    # join を経るたびに累積していたズレ（旧: 圧縮後フレーム数から作った
+    # 素朴な等間隔インデックスで圧縮前の生タイムラインを読み出していたバグ）
+    # を解消する。overlap 区間は f0 を log domain（sp と同じ）・振幅を
+    # linear domain（ap と同じ）でブレンドする。
+    # P1 修正 (review #262 R4・`r3789341843`): donor="ritsu"（VCV 経路）は
+    # `_build_vcv_placements` が計算した note ごとの実効配置シフト
+    # （`vcv_placement_stats["shift_per_note"]`）をサンプリング原点へも
+    # 適用する（sp/ap の絶対配置と同じだけ f0/振幅の取り出し位置を前へ
+    # ずらす。vocadito/pjs 経路は shift=0 のリストで従来どおり無補正）。
+    note_origin_shift_frames: List[int] = (
+        list(vcv_placement_stats["shift_per_note"]) if is_vcv else [0] * len(placements)
+    )
+    # P2 修正 (review #262 R14・`r3789636053`): origin-shift されたフレーズ頭
+    # preutterance が `amp_env` のゼロ初期化ブレス区間を拾って消音される問題
+    # を、amp トラック抽出専用にフレーズ頭のみ前方へ定数外挿した複製で回避
+    # する（vocadito/pjs 経路は shift 全 0 のため no-op）。
+    # P3 修正 (review #262 R19 指摘 3): 同じ理由で `base_f0_persample` も
+    # 無声区間 (F0=0) を拾ってしまうため、対になる F0 後方延長を追加する
+    # （`_extend_phrase_head_f0_for_preutterance` docstring 参照。対象ノート
+    # 判定は amp 側と共有・vocadito/pjs 経路は no-op）。
+    amp_env_for_extraction = (
+        _extend_phrase_head_amp_for_preutterance(
+            amp_env, segments, note_origin_shift_frames, SR, FRAME_PERIOD_MS
+        )
+        if is_vcv
+        else amp_env
+    )
+    base_f0_for_extraction = (
+        _extend_phrase_head_f0_for_preutterance(
+            base_f0_persample, segments, note_origin_shift_frames, SR, FRAME_PERIOD_MS
+        )
+        if is_vcv
+        else base_f0_persample
+    )
+    note_f0_tracks = [
+        _note_frame_track(
+            base_f0_for_extraction, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS,
+            origin_shift_frames=note_origin_shift_frames[i],
+        )
+        for i, p in enumerate(placements)
+    ]
+    note_amp_tracks = [
+        _note_frame_track(
+            amp_env_for_extraction, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS,
+            origin_shift_frames=note_origin_shift_frames[i],
+        )
+        for i, p in enumerate(placements)
+    ]
+    if is_vcv:
+        f0_seq, amp_seq, control_track_stats = jn.assemble_control_tracks_absolute(
+            score_total_frames, placements, note_f0_tracks, note_amp_tracks
+        )
+    else:
+        f0_seq, amp_seq, control_track_stats = jn.assemble_control_tracks_v2(
+            placements, note_f0_tracks, note_amp_tracks, frame_period_ms=FRAME_PERIOD_MS
+        )
+    assert f0_seq.shape[0] == n_total_frames, (
+        f"f0_seq/sp_seq フレーム数不一致: {f0_seq.shape[0]} != {n_total_frames}"
+    )
+    assert amp_seq.shape[0] == n_total_frames, (
+        f"amp_seq/sp_seq フレーム数不一致: {amp_seq.shape[0]} != {n_total_frames}"
+    )
+
+    y = pw.synthesize(
+        np.ascontiguousarray(f0_seq), np.ascontiguousarray(sp_seq), np.ascontiguousarray(ap_seq),
+        SR, FRAME_PERIOD_MS,
+    )
+    y = np.asarray(y, dtype=np.float64)
+
+    # 追補 F1.3-B item2: 振幅の唯一の権威 = performance.build_amplitude_envelope
+    # （フレーズアーチ）。unit 由来の振幅は F1.3-B item1 の正規化で spectral 形状
+    # のみに縮退済みなので、ここで乗算するフレーズアーチ + articulation
+    # エンベロープが最終波形の音量ダイナミクスを決める唯一の経路になる
+    # （singer/render_song.py の amp_render 適用パターンと同じ乗算方式）。
+    # P1 修正: amp_seq は sp_seq/ap_seq と同じ**フレーム**単位（圧縮後タイムライン
+    # 上で正しく整列済み）のため、y（サンプル単位）へ適用する際はフレーム→サンプル
+    # の素朴な等分割で読み出す（旧実装のような圧縮前タイムラインとの取り違えはない）。
+    if len(y) > 0 and len(amp_seq) > 0:
+        samples_per_frame = SR * FRAME_PERIOD_MS / 1000.0
+        frame_idx_for_sample = np.minimum(
+            (np.arange(len(y)) / samples_per_frame).astype(np.int64), len(amp_seq) - 1
+        )
+        y = y * amp_seq[frame_idx_for_sample]
+
+    peak = float(np.max(np.abs(y))) if len(y) else 0.0
+    if peak > 0:
+        y = y / peak * PEAK_NORM
+
+    output_sha256: Optional[str] = None
+    if out_path is not None:
+        # P1 修正 (review #262 R2): --out が保護入力（--wav/--voice/--notes-csv/
+        # --voicebank-root 配下）と衝突していないか書き込み前に fail-closed で
+        # 拒否してから、staging + os.replace で atomic 公開する。
+        # P2 修正 (review #262 R11・`r3789543157`): --out が donor bank キャッシュ
+        # （--cache-dir 配下に生成される donor_bank_*.npz/utau_bank_*.pkl/
+        # lab_bank_*.pkl）と衝突する場合、cache-hit render はまずそのキャッシュを
+        # 読み、その後同じパスを WAV バイト列で atomic 置換してしまう
+        # （次回同一 render はそのキャッシュを読んでデコード失敗する）。
+        # cache_dir を protected_roots へ追加し、同じ resolved containment 検査で
+        # 拒否する。
+        _reject_output_collision(
+            out_path,
+            protected_files=[wav_path, voice_spec_path, notes_csv_path],
+            protected_roots=[voicebank_root, cache_dir],
+        )
+        output_sha256 = _atomic_write_wav(y, SR, out_path)
+
+    cap_modes = [r.cap_mode for r in resolved_list]
+    return dict(
+        y=y, sr=SR, n_total_frames=n_total_frames, total_samples_timeline=total_samples,
+        selections=selections, selection_stats=sel_stats, join_stats=join_stats,
+        control_track_stats=control_track_stats,
+        donor_bank_stats=bank.stats, donor_bank_source=bank.source, wav_sha256=bank.wav_sha256,
+        output_sha256=output_sha256,
+        donor=donor, consonant_source=consonant_source, donor_extra_stats=donor_extra_stats,
+        donor_provenance=donor_provenance,
+        n_stretch_extended_looped=cap_modes.count("extended_looped"),
+        n_stretch_compressed_truncated=cap_modes.count("compressed_truncated"),
+        n_stretch_none=cap_modes.count("none"),
+        unit_vowels=unit_vowel_labels, vowel_distribution=_vowel_distribution_from_labels(unit_vowel_labels),
+        consonant_events=consonant_events,
+        consonant_class_counts=dict(Counter(e.consonant_class for e in consonant_events)),
+        n_recorded_consonants_used=n_recorded_consonants_used,
+        n_recorded_consonants_fallback_synthetic=n_recorded_consonants_fallback_synthetic,
+        energy_norm_stats=energy_norm_stats,
+        is_vcv=is_vcv, vcv_selection_stats=vcv_selection_stats, vcv_placement_stats=vcv_placement_stats,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="VG-F1 Foundry Adapter render CLI")
+    parser.add_argument("--score", required=True, choices=["sakura", "umi"])
+    parser.add_argument("--voice", required=True, help="voice spec JSON path")
+    parser.add_argument("--out", required=True, help="output WAV path")
+    parser.add_argument("--donor", default="vocadito", choices=list(DONOR_CHOICES), help="追補 F1.2-D: ドナー選択")
+    parser.add_argument("--wav", default=None, help="donor WAV path（donor=vocadito で必須）")
+    parser.add_argument("--notes-csv", default=None, help="donor notes annotation CSV（vocadito・省略時 fallback）")
+    parser.add_argument(
+        "--voicebank-root", default=None,
+        help="UTAU 音源ルート（donor=ritsu）または PJS コーパスルート（donor=pjs）",
+    )
+    parser.add_argument("--cache-dir", default=None, help="donor bank npz/pkl キャッシュディレクトリ")
+    parser.add_argument(
+        "--consonant-source", default=None, choices=list(CONSONANT_SOURCE_CHOICES),
+        help=(
+            "追補 F1.2-D: 子音供給元（省略時 donor に応じた既定）。"
+            "donor=ritsu は VCV 録音遷移が不可分のため 'recorded'（既定）のみ対応・"
+            "'none'/'synthetic' はエラー（review #262 R9）"
+        ),
+    )
+    parser.add_argument(
+        "--no-consonants", action="store_true",
+        help=(
+            "子音オンセット加工を無効化する（--consonant-source none と等価。旧 F1.1-B 互換フラグ）。"
+            "donor=ritsu では非対応（エラー・review #262 R9）"
+        ),
+    )
+    args = parser.parse_args()
+
+    result = render(
+        args.score, args.voice, args.wav, notes_csv_path=args.notes_csv,
+        cache_dir=args.cache_dir, out_path=args.out, apply_consonants=not args.no_consonants,
+        donor=args.donor, consonant_source=args.consonant_source, voicebank_root=args.voicebank_root,
+    )
+    print(f"wrote {args.out}: {len(result['y'])} samples ({len(result['y']) / result['sr']:.3f}s)")
+    print(f"donor={result['donor']} consonant_source={result['consonant_source']}")
+    print(f"donor_provenance={result['donor_provenance']}")
+    print(f"donor_bank_source={result['donor_bank_source']} wav_sha256={result['wav_sha256']}")
+    print(f"output_sha256={result['output_sha256']}")
+    print(f"donor_bank_stats={result['donor_bank_stats']}")
+    print(f"selection_stats={result['selection_stats']}")
+    print(f"vowel_distribution={result['vowel_distribution']}")
+    print(f"consonant_class_counts={result['consonant_class_counts']}")
+    print(
+        f"recorded_consonants_used={result['n_recorded_consonants_used']} "
+        f"fallback_synthetic={result['n_recorded_consonants_fallback_synthetic']}"
+    )
+    print(f"join_stats={result['join_stats']}")
+    print(f"energy_norm_stats={result['energy_norm_stats']}")
+    print(
+        f"stretch: none={result['n_stretch_none']} "
+        f"extended_looped={result['n_stretch_extended_looped']} "
+        f"compressed_truncated={result['n_stretch_compressed_truncated']}"
+    )
+    if result["is_vcv"]:
+        print(f"vcv_selection_stats={result['vcv_selection_stats']}")
+        print(f"vcv_placement_stats={result['vcv_placement_stats']}")
+
+
+if __name__ == "__main__":
+    main()
