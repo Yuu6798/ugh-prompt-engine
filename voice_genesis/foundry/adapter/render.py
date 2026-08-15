@@ -314,7 +314,6 @@ def _build_vcv_placements(
     """
     placements: List[jn.NotePlacement] = []
     resolved_list: List[un.ResolvedVCVSegment] = []
-    cursor = 0
     prev_end_sample = 0
     n_shift_applied = 0
     n_shift_clipped = 0
@@ -325,7 +324,15 @@ def _build_vcv_placements(
     for note_index, (seg, sel) in enumerate(zip(segments, selections)):
         gap_samples = seg.start_sample - prev_end_sample
         gap_frames = frames_for_samples(gap_samples, SR) if gap_samples > 0 else 0
-        cursor += gap_frames
+        # P2 修正 (review #262 R14・`r3789636058`): 名目開始フレームは「丸めた
+        # duration の累積（旧 cursor）」ではなく `seg.start_sample` から毎ノート
+        # 独立に絶対換算する。累積方式は各ノートの `frames_for_samples()` 丸め
+        # 誤差（最大 ±0.5 frame）が後続ノートへそのまま伝播し、score が非整数
+        # フレーム長のビートを含む場合（例: umi 楽曲の 1 拍 = 16,364 サンプル、
+        # 136.36... frame）に累積ドリフトを生む（record 実測: umi 終盤で
+        # −3 frame(15ms)・末尾に補償パディングが残る）。絶対換算は各ノートが
+        # 独立に score グリッドへ re-snap されるため誤差が伝播しない。
+        nominal_frame = frames_for_samples(seg.start_sample, SR)
         note_dur_frames = max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1)
         resolved = un.resolve_vcv_unit_to_note(
             bank, sel.unit, note_dur_frames, note_index=note_index, frame_period_ms=FRAME_PERIOD_MS
@@ -336,8 +343,8 @@ def _build_vcv_placements(
 
         preutt = sel.unit.preutterance_frames or 0
         lead = min(preutt, gap_frames) if seg.is_phrase_first else preutt
-        shift = min(lead, cursor)  # バッファ先頭（0）より前へは配置しない
-        start_frame = cursor - shift
+        shift = min(lead, nominal_frame)  # バッファ先頭（0）より前へは配置しない
+        start_frame = nominal_frame - shift
         shift_per_note.append(shift)
         if shift > 0:
             n_shift_applied += 1
@@ -355,7 +362,6 @@ def _build_vcv_placements(
                 preutterance_frames=sel.unit.preutterance_frames,
             )
         )
-        cursor = cursor + resolved.n_frames
         prev_end_sample = seg.end_sample
 
     stats = dict(
@@ -427,6 +433,57 @@ def _note_frame_track(
     sample_idx = np.round(seg.start_sample + k * samples_per_frame).astype(np.int64)
     sample_idx = np.clip(sample_idx, 0, per_sample.shape[0] - 1)
     return per_sample[sample_idx]
+
+
+def _extend_phrase_head_amp_for_preutterance(
+    amp_env: np.ndarray, segments: list, note_origin_shift_frames: List[int], sr: int, frame_period_ms: float,
+) -> np.ndarray:
+    """P2 修正 (review #262 R14・`r3789636053`): origin-shift 済みフレーズ頭
+    preutterance の消音を防ぐ。
+
+    `_note_frame_track` は `origin_shift_frames`（`_build_vcv_placements` が
+    計算した実効 shift）分だけサンプリング原点を `seg.start_sample` より前へ
+    ずらす。しかし `perf.build_amplitude_envelope` はフレーズ先頭より前
+    （ブレス無音区間）を常にゼロ初期化したままのため、ずらしたサンプリング
+    原点が拾うのはこのゼロ区間で、preutterance に置いた録音済み子音/遷移
+    （典型 100ms）がゼロ乗算で消音されていた（review #262 R13・
+    `r3789636053`）。
+
+    フレーズアーチ自体（`amp[phrase_start:phrase_end]` の cosine half-arch）
+    の形は変更しない。フレーズ先頭ノートの attack 値（`NOTE_ATTACK_RELEASE_MS`
+    のフェード完了直後に落ち着く定常値 = フェード適用前のアーチ境界値）を
+    shift 分だけ前方（preutterance 区間）へ定数外挿し、attack フェードの
+    開始点もその外挿区間の先頭へ前倒しする（無音からの立ち上がりクリック
+    防止・既存の attack フェード規約と対称）。ブレスの無音区間はこの分だけ
+    短くなる（`[phrase_start - shift, phrase_start)` が可聴になる）。
+    """
+    amp = amp_env.copy()
+    if amp.shape[0] == 0:
+        return amp
+    samples_per_frame = sr * frame_period_ms / 1000.0
+    attack_release = int(sr * perf.NOTE_ATTACK_RELEASE_MS / 1000.0)
+    for seg, shift_frames in zip(segments, note_origin_shift_frames):
+        if not seg.is_phrase_first or shift_frames <= 0:
+            continue
+        shift_samples = int(round(shift_frames * samples_per_frame))
+        ext_start = max(0, seg.start_sample - shift_samples)
+        if ext_start >= seg.start_sample:
+            continue
+        n = seg.end_sample - seg.start_sample
+        ar = min(attack_release, n // 4) if n >= 4 else 0
+        # フェード完了直後（既にフェード非適用領域）の定常値をそのまま読む
+        # ——`build_amplitude_envelope` のアーチ/フェード実装を再現せず、
+        # 既に構築済みの `amp_env` から読むことでマジックナンバーの二重実装
+        # を避ける。
+        steady_idx = min(seg.start_sample + ar, amp.shape[0] - 1)
+        head_level = float(amp[steady_idx])
+        amp[ext_start:seg.start_sample] = head_level
+        if ar > 0:
+            fade_end = min(ext_start + ar, seg.start_sample)
+            fade_len = fade_end - ext_start
+            if fade_len > 0:
+                amp[ext_start:fade_end] = head_level * np.linspace(0.0, 1.0, fade_len, endpoint=False)
+    return amp
 
 
 def _midi_to_hz(m: float) -> float:
@@ -711,6 +768,18 @@ def render(
     note_origin_shift_frames: List[int] = (
         list(vcv_placement_stats["shift_per_note"]) if is_vcv else [0] * len(placements)
     )
+    # P2 修正 (review #262 R14・`r3789636053`): origin-shift されたフレーズ頭
+    # preutterance が `amp_env` のゼロ初期化ブレス区間を拾って消音される問題
+    # を、amp トラック抽出専用にフレーズ頭のみ前方へ定数外挿した複製で回避
+    # する（f0 トラックは無変更 = `_extend_phrase_head_amp_for_preutterance`
+    # docstring 参照。vocadito/pjs 経路は shift 全 0 のため no-op）。
+    amp_env_for_extraction = (
+        _extend_phrase_head_amp_for_preutterance(
+            amp_env, segments, note_origin_shift_frames, SR, FRAME_PERIOD_MS
+        )
+        if is_vcv
+        else amp_env
+    )
     note_f0_tracks = [
         _note_frame_track(
             base_f0_persample, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS,
@@ -720,7 +789,7 @@ def render(
     ]
     note_amp_tracks = [
         _note_frame_track(
-            amp_env, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS,
+            amp_env_for_extraction, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS,
             origin_shift_frames=note_origin_shift_frames[i],
         )
         for i, p in enumerate(placements)

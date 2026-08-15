@@ -13,7 +13,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional
 
 import numpy as np
 import scipy.signal as sig
@@ -26,13 +26,35 @@ class OutputCollisionError(ValueError):
     § adapter/render.py `OutputCollisionError` と対称の設計）。"""
 
 
-def band_shares(x: np.ndarray, sr: int) -> dict[str, float]:
-    """Welch PSD（nperseg=4096, noverlap=2048）の帯域別パワー比を返す。
+_BAND_KEYS = ("b0_500", "b500_1k", "b1k_3k", "b3k_5k", "b5k_8k", "b8k_nyq")
+
+
+def band_shares(x: np.ndarray, sr: int) -> dict[str, Any]:
+    """Welch PSD（既定 nperseg=4096, noverlap=2048）の帯域別パワー比を返す。
 
     帯域: [0,500)/[500,1k)/[1k,3k)/[3k,5k)/[5k,8k)/[8k,nyq)。
     加えて `tilt_db_per_decade_1k_8k`（PSD dB の log10(f) 回帰勾配、1k-8kHz）。
+
+    P2 修正 (review #262 R14・`r3789636063`): 入力が 2,048 サンプル以下
+    （24kHz で約85ms）だと、SciPy は `nperseg` を内部で信号長へ縮小する一方
+    `noverlap` は既定の 2048 のまま渡されるため `noverlap >= nperseg` エラーで
+    クラッシュしていた（短い donor/計測クリップで計測 CLI が例外終了する）。
+    `nperseg` を利用可能サンプル数から導出し、`noverlap` を常に `nperseg`
+    未満に保つことでクラッシュを避ける。空入力は `welch` を一切呼ばず、
+    `hnr_median_db` の「計測不能は NaN（JSON では null）」規約と対称に、
+    全帯域 `None` + `status` フィールドで明示的に報告する（fail-fast の例外
+    ではなく計測不能の記録）。
     """
-    f, p = sig.welch(x, sr, nperseg=4096, noverlap=2048)
+    n = len(x)
+    if n == 0:
+        result: dict[str, Any] = {k: None for k in _BAND_KEYS}
+        result["tilt_db_per_decade_1k_8k"] = None
+        result["status"] = "empty_input"
+        return result
+
+    nperseg = min(4096, n)
+    noverlap = nperseg // 2
+    f, p = sig.welch(x, sr, nperseg=nperseg, noverlap=noverlap)
     p_db = 10 * np.log10(p + 1e-20)
     tot = np.sum(p)
 
@@ -41,9 +63,11 @@ def band_shares(x: np.ndarray, sr: int) -> dict[str, float]:
         return float(np.sum(p[m]) / (tot + 1e-20))
 
     m = (f >= 1000) & (f <= 8000)
-    slope = float(np.polyfit(np.log10(f[m]), p_db[m], 1)[0])
+    # 短入力は周波数分解能が粗く（bin 間隔 = sr/nperseg）、1k-8kHz 帯に 2 点
+    # 未満しか入らないことがある（回帰に最低 2 点必要）。その場合は None。
+    slope: Optional[float] = float(np.polyfit(np.log10(f[m]), p_db[m], 1)[0]) if np.sum(m) >= 2 else None
 
-    return {
+    result = {
         "b0_500": band(0, 500),
         "b500_1k": band(500, 1000),
         "b1k_3k": band(1000, 3000),
@@ -51,7 +75,9 @@ def band_shares(x: np.ndarray, sr: int) -> dict[str, float]:
         "b5k_8k": band(5000, 8000),
         "b8k_nyq": band(8000, sr / 2),
         "tilt_db_per_decade_1k_8k": slope,
+        "status": "ok" if nperseg == 4096 else "short_input",
     }
+    return result
 
 
 def hnr_median_db(x: np.ndarray, sr: int) -> float:

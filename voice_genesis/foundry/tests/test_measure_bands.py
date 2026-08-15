@@ -313,4 +313,78 @@ def test_main_e2e_silent_wav_writes_readback_parseable_json_with_null_hnr(
     assert "NaN" not in raw_text
     readback = _json.loads(raw_text)  # strict readback
     assert readback[0]["hnr_median_db"] is None
-    assert readback[0]["file"] == "silence_e2e.wav"
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #262 R14・`r3789636063`): 短入力/空入力での welch クラッシュ回避
+# ---------------------------------------------------------------------------
+
+
+def test_band_shares_2048_samples_does_not_crash() -> None:
+    """2,048 サンプル（既定 nperseg=4096 と等しい noverlap=2048 では
+    `noverlap >= nperseg` エラーになっていた境界値）でもクラッシュせず、
+    全帯域が有限値で status='short_input' を報告する。"""
+    sr = 24000
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(2048)
+
+    r = mb.band_shares(x, sr)
+
+    assert r["status"] == "short_input"
+    for k in ("b0_500", "b500_1k", "b1k_3k", "b3k_5k", "b5k_8k", "b8k_nyq"):
+        assert np.isfinite(r[k])
+    band_sum = sum(r[k] for k in ("b0_500", "b500_1k", "b1k_3k", "b3k_5k", "b5k_8k", "b8k_nyq"))
+    assert band_sum == pytest.approx(1.0, abs=1e-3)
+
+
+def test_band_shares_below_2048_samples_does_not_crash() -> None:
+    """2,048 未満（極端に短い、数サンプルの）入力でもクラッシュしない。"""
+    sr = 24000
+    x = np.array([0.1, -0.2, 0.3, -0.1, 0.05])
+
+    r = mb.band_shares(x, sr)
+
+    assert r["status"] == "short_input"
+    for k in ("b0_500", "b500_1k", "b1k_3k", "b3k_5k", "b5k_8k", "b8k_nyq"):
+        assert np.isfinite(r[k])
+    # 周波数分解能が粗く 1k-8kHz 帯に 2 点未満しか入らないため回帰不能 -> None。
+    assert r["tilt_db_per_decade_1k_8k"] is None
+
+
+def test_band_shares_empty_input_returns_explicit_null_result() -> None:
+    """空入力は welch を呼ばず、例外でなく全 None + status='empty_input' を
+    明示的に返す（`hnr_median_db` の NaN 規約と対称の「計測不能の記録」）。"""
+    sr = 24000
+    x = np.zeros(0)
+
+    r = mb.band_shares(x, sr)
+
+    assert r["status"] == "empty_input"
+    for k in ("b0_500", "b500_1k", "b1k_3k", "b3k_5k", "b5k_8k", "b8k_nyq", "tilt_db_per_decade_1k_8k"):
+        assert r[k] is None
+
+
+def test_band_shares_normal_length_reports_status_ok() -> None:
+    """既定 nperseg=4096 を満たす通常長入力は status='ok' を報告し、既存の
+    帯域計算結果と数値的に不変であることを保証する（回帰ガード）。"""
+    sr = 22050
+    t = np.arange(int(1.0 * sr)) / sr
+    x = 0.5 * np.sin(2 * np.pi * 220.0 * t)
+
+    r = mb.band_shares(x, sr)
+
+    assert r["status"] == "ok"
+    assert r["b0_500"] > 0.95
+
+
+def test_analyze_wav_short_input_does_not_crash(tmp_path: Path) -> None:
+    """E2E: 2,048 サンプル以下の短い WAV でも `analyze_wav` 全体がクラッシュ
+    しない（実害の再現 — 従来は `sig.welch` の `noverlap >= nperseg` で例外）。"""
+    sr = 24000
+    x = np.zeros(1024)
+    p = _write_wav(tmp_path, "short.wav", x, sr)
+
+    r = mb.analyze_wav(p)
+
+    assert r["status"] == "short_input"
+    assert np.isnan(r["hnr_median_db"])

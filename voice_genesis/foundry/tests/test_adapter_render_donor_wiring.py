@@ -16,7 +16,8 @@ import soundfile as sf
 
 import donor_bank_lab as dbl
 import donor_bank_utau as dbu
-import render as rd
+import render as rd  # sys.path へ singer/ を追加する副作用に依存（下の performance import 前に必要）
+import performance as perf
 import units as un
 import voice_spec as vs
 
@@ -374,6 +375,155 @@ def test_note_frame_track_origin_shift_pre_beat_region_holds_previous_note_value
     assert np.all(track[shift:] == 222.0)
 
 
+# ---------------------------------------------------------------------------
+# P2 修正 (review #262 R14・`r3789636053`): _extend_phrase_head_amp_for_preutterance
+# （origin-shift されたフレーズ頭 preutterance の消音を防ぐ）
+# ---------------------------------------------------------------------------
+
+
+def _amp_env_with_phrase(
+    total_samples: int, phrase_start: int, phrase_end: int, arch_level: float, sr: int = 24000,
+) -> np.ndarray:
+    """`perf.build_amplitude_envelope` の出力形状（フレーズ区間のみ非ゼロ +
+    フレーズ先頭の attack フェード）を模した合成 fixture。"""
+    amp = np.zeros(total_samples, dtype=np.float64)
+    amp[phrase_start:phrase_end] = arch_level
+    attack_release = int(sr * perf.NOTE_ATTACK_RELEASE_MS / 1000.0)
+    n = phrase_end - phrase_start
+    ar = min(attack_release, n // 4) if n >= 4 else 0
+    if ar > 0:
+        amp[phrase_start:phrase_start + ar] *= np.linspace(0.0, 1.0, ar)
+    return amp
+
+
+def test_extend_phrase_head_amp_makes_preutterance_region_audible() -> None:
+    """origin-shift 分（shift_frames）だけ前方に amp_env を定数外挿し、旧実装で
+    ゼロだったブレス区間（preutterance を置いた区間）が非ゼロになることを
+    確認する（実害の再現・review #262 R13 `r3789636053`）。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    amp_env = _amp_env_with_phrase(10000, phrase_start=5000, phrase_end=7000, arch_level=0.9, sr=sr)
+    shift_frames = 20  # -> 20 * 120 = 2400 samples
+    # 修正前: この区間はブレスのゼロ初期化のまま。
+    assert np.all(amp_env[2600:5000] == 0.0)
+
+    extended = rd._extend_phrase_head_amp_for_preutterance(
+        amp_env, [seg], [shift_frames], sr, frame_period_ms=5.0,
+    )
+
+    # 拡張区間の大半（フェード完了後）は非ゼロ（子音/遷移が可聴になる）。
+    assert extended[4500] > 0.0
+    assert extended[4999] > 0.0
+    # フェード完了後の水準は「フェード適用前のアーチ境界値」（= arch_level）
+    # に一致する（マジックナンバー再実装ではなく amp_env から読んだ値）。
+    assert extended[4999] == pytest.approx(0.9, abs=1e-9)
+
+
+def test_extend_phrase_head_amp_fades_in_at_extended_edge_no_click() -> None:
+    """外挿区間の先頭は 0 から滑らかにフェードイン（クリック防止）し、突然
+    フルレベルへジャンプしない。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    amp_env = _amp_env_with_phrase(10000, phrase_start=5000, phrase_end=7000, arch_level=0.9, sr=sr)
+    shift_frames = 20
+
+    extended = rd._extend_phrase_head_amp_for_preutterance(
+        amp_env, [seg], [shift_frames], sr, frame_period_ms=5.0,
+    )
+
+    ext_start = 5000 - shift_frames * 120  # 2600
+    assert extended[ext_start] == 0.0  # フェード先頭
+    assert 0.0 < extended[ext_start + 100] < 0.9  # フェード途中は単調に増加
+    assert extended[ext_start + 100] < extended[4999]
+
+
+def test_extend_phrase_head_amp_untouched_before_extended_region() -> None:
+    """外挿区間より手前（本来のブレス無音）は変更しない。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    amp_env = _amp_env_with_phrase(10000, phrase_start=5000, phrase_end=7000, arch_level=0.9, sr=sr)
+    shift_frames = 20
+
+    extended = rd._extend_phrase_head_amp_for_preutterance(
+        amp_env, [seg], [shift_frames], sr, frame_period_ms=5.0,
+    )
+
+    ext_start = 5000 - shift_frames * 120
+    assert np.all(extended[:ext_start] == 0.0)
+
+
+def test_extend_phrase_head_amp_leaves_phrase_body_unchanged() -> None:
+    """フレーズアーチ自体（`[phrase_start, phrase_end)`）の形は変更しない。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    amp_env = _amp_env_with_phrase(10000, phrase_start=5000, phrase_end=7000, arch_level=0.9, sr=sr)
+    shift_frames = 20
+
+    extended = rd._extend_phrase_head_amp_for_preutterance(
+        amp_env, [seg], [shift_frames], sr, frame_period_ms=5.0,
+    )
+
+    assert np.array_equal(extended[5000:7000], amp_env[5000:7000])
+
+
+def test_extend_phrase_head_amp_skips_mid_phrase_notes() -> None:
+    """`is_phrase_first=False`（レガート接続の mid-phrase ノート）は shift>0
+    でも変更しない（このノートには preutterance によるブレス消音問題が
+    発生しない——直前ノートの音が既にそこにある）。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=False)
+    amp_env = _amp_env_with_phrase(10000, phrase_start=5000, phrase_end=7000, arch_level=0.9, sr=sr)
+
+    extended = rd._extend_phrase_head_amp_for_preutterance(
+        amp_env, [seg], [20], sr, frame_period_ms=5.0,
+    )
+
+    assert np.array_equal(extended, amp_env)
+
+
+def test_extend_phrase_head_amp_zero_shift_is_noop() -> None:
+    """shift=0（preutterance を消費できない=直前ギャップ 0）は変更しない
+    （vocadito/pjs 経路は shift 全 0 のリストで呼ばれるため完全不変）。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    amp_env = _amp_env_with_phrase(10000, phrase_start=5000, phrase_end=7000, arch_level=0.9, sr=sr)
+
+    extended = rd._extend_phrase_head_amp_for_preutterance(
+        amp_env, [seg], [0], sr, frame_period_ms=5.0,
+    )
+
+    assert np.array_equal(extended, amp_env)
+
+
+def test_extend_phrase_head_amp_clamps_at_zero_when_shift_exceeds_start() -> None:
+    """shift がノート開始位置そのものより大きい場合、外挿区間はバッファ先頭
+    （index 0）でクランプされる（負インデックスへは書き込まない）。"""
+    sr = 24000
+    seg = _FakeSeg(start_sample=100, end_sample=2100, is_phrase_first=True)
+    amp_env = _amp_env_with_phrase(10000, phrase_start=100, phrase_end=2100, arch_level=0.9, sr=sr)
+    shift_frames = 20  # shift_samples=2400 > seg.start_sample=100
+
+    extended = rd._extend_phrase_head_amp_for_preutterance(
+        amp_env, [seg], [shift_frames], sr, frame_period_ms=5.0,
+    )
+
+    assert extended.shape == amp_env.shape  # クラッシュせず、負インデックスを書かない
+    assert extended[0] == 0.0  # 0 側でクランプされた外挿区間の先頭 = フェード始点
+    assert extended[99] > 0.0  # クランプ後の区間内は可聴（フェード進行中）
+    assert extended[99] < extended[460]  # フェードは単調に増加し、アーチ水準へ向かう
+
+
+def test_extend_phrase_head_amp_does_not_mutate_input() -> None:
+    sr = 24000
+    seg = _FakeSeg(start_sample=5000, end_sample=7000, is_phrase_first=True)
+    amp_env = _amp_env_with_phrase(10000, phrase_start=5000, phrase_end=7000, arch_level=0.9, sr=sr)
+    before = amp_env.copy()
+
+    rd._extend_phrase_head_amp_for_preutterance(amp_env, [seg], [20], sr, frame_period_ms=5.0)
+
+    assert np.array_equal(amp_env, before)
+
+
 def test_build_vcv_placements_stats_shift_per_note_matches_start_frame_shift() -> None:
     """`_build_vcv_placements` の `stats["shift_per_note"]` は各 note の実効
     shift（`cursor - start_frame`）と一致する（`_note_frame_track` の
@@ -395,6 +545,56 @@ def test_build_vcv_placements_stats_shift_per_note_matches_start_frame_shift() -
     breath_frames = 50
     naive_start_1 = breath_frames + resolved_list[0].n_frames
     assert placements[1].start_frame == naive_start_1 - stats["shift_per_note"][1]
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #262 R14・`r3789636058`): 名目開始フレームは cursor 累積で
+# なく seg.start_sample からの絶対換算（累積ドリフト回避）
+# ---------------------------------------------------------------------------
+
+
+def test_build_vcv_placements_nominal_start_matches_absolute_sample_rounding() -> None:
+    """非整数フレーム長の拍（umi の 1 拍 = 16,364 サンプル @24kHz・5ms hop
+    = 136.36... frame）を含むスコアで、各ノートの名目開始フレーム
+    （`start_frame + shift_per_note`）が `round(seg.start_sample / hop)` と
+    厳密に一致することを検証する（record 実測: 旧 cursor 累積方式は umi 終盤
+    で −3 frame(15ms) ドリフトしていた）。"""
+    sr = 24000
+    beat = 16364  # umi score の 1 拍サンプル数（非整数 frame 長: 136.36...）
+    n_notes = 8
+    # 全ノート mid-phrase（is_phrase_first=False）にして preutterance shift を
+    # 0 に保ち、名目位置そのものを直接検証する（shift の影響を分離）。
+    segs = [_FakeSeg(i * beat, (i + 1) * beat, i == 0) for i in range(n_notes)]
+    bank = _FakeBankVCV()
+    units = [_vcv_unit(i, overlap_frames=4, preutterance_frames=0) for i in range(n_notes)]
+    selections = [_FakeVCVSelection(u) for u in units]
+
+    placements, _resolved_list, stats = rd._build_vcv_placements(segs, selections, bank)
+
+    for i, seg in enumerate(segs):
+        expected_nominal = rd.frames_for_samples(seg.start_sample, sr)
+        actual_nominal = placements[i].start_frame + stats["shift_per_note"][i]
+        assert actual_nominal == expected_nominal, f"note {i}: drift detected"
+
+
+def test_build_vcv_placements_no_end_padding_drift_across_many_notes() -> None:
+    """非整数フレーム長ビートが 20 ノート続いても、最終ノートの名目終端フレーム
+    が score 総尺の絶対換算と一致し続ける（丸め誤差が伝播しない = 末尾パディング
+    が生じない）ことを回帰的に確認する。"""
+    sr = 24000
+    beat = 16364
+    n_notes = 20
+    segs = [_FakeSeg(i * beat, (i + 1) * beat, False) for i in range(n_notes)]
+    bank = _FakeBankVCV()
+    units = [_vcv_unit(i, overlap_frames=4, preutterance_frames=0) for i in range(n_notes)]
+    selections = [_FakeVCVSelection(u) for u in units]
+
+    placements, _resolved_list, stats = rd._build_vcv_placements(segs, selections, bank)
+
+    last_seg = segs[-1]
+    expected_nominal_last = rd.frames_for_samples(last_seg.start_sample, sr)
+    actual_nominal_last = placements[-1].start_frame + stats["shift_per_note"][-1]
+    assert actual_nominal_last == expected_nominal_last
 
 
 # ---------------------------------------------------------------------------
