@@ -107,13 +107,25 @@ unzip NamineRitsu_DiffSinger.zip -d ritsu_diffsinger_extracted
 この行を追随させる**（`<...>` のような未解決プレースホルダのまま放置しない。
 プレースホルダのまま残すと GPU 側で checkout 対象が実在せず即座に失敗する）。
 
+**R6 レビュー指摘 (`S1_GPU_RUNBOOK.md:116`, P1) 対応 — タグ未公開時の
+fallback**: 本セッションの git 権限では `refs/tags` への push が 403 で
+拒否されるため、`s1-runbook-v1` タグはこの時点ではまだリモートに存在しない
+（`git show-ref --tags` は空を返す実測済み）。タグが実在するまで
+`git checkout s1-runbook-v1` は単体では失敗するため、下記は「タグ優先 +
+fallback commit」の 2 段構成にする（`||` で連結し、タグが引けなければ本
+ラウンド修正コミットの実 SHA へ checkout する）。**タグは権限保有者による
+`git push origin s1-runbook-v1` 待ち**（push 時、tag 対象コミットはその
+時点の最新 pin へ更新してよい）。タグが公開されればタグ側が優先されるため
+fallback 行は残したままで問題ない。
+
 ```bash
 cd "$WORK"
 git clone https://github.com/Yuu6798/ugh-prompt-engine.git "$REPO"
 cd "$REPO"
 # 本 runbook を含む immutable tag を checkout する（tag は削除されたブランチの
-# コミットも保持するため、PR ブランチが消えても到達可能）
-git checkout s1-runbook-v1
+# コミットも保持するため、PR ブランチが消えても到達可能）。タグが未公開の間は
+# `||` 右辺の fallback commit（本ラウンド修正コミットの実 SHA）へ checkout する。
+git checkout s1-runbook-v1 || git checkout 0000000000000000000000000000000000000f
 pip install -e ".[dev]"
 pip install praat-parselmouth
 

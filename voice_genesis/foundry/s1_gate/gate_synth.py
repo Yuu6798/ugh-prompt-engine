@@ -123,13 +123,17 @@ REFLOW_SAMPLING_STEPS = 20
 # ============================================================================
 
 def load_song_module(song: str, singer_dir: Path):
+    """楽曲モジュール読み込み。戻り値に実際に import したモジュールファイルの
+    絶対パスも含める（PR #263 R6 レビュー指摘: gate summary の input_sha256 が
+    合成実装そのもの — 本スクリプトと score.py/score_umi.py — の変更を検出
+    できなかったため、呼び出し側でこのパスを sha256 化して記録する）。"""
     sys.path.insert(0, str(singer_dir))
     if song == "sakura":
         import score as sc  # noqa: E402  (read-only import from repo)
-        return sc.build_sakura_score, sc.beats_to_seconds, sc.TEMPO_BPM
+        return sc.build_sakura_score, sc.beats_to_seconds, sc.TEMPO_BPM, Path(sc.__file__).resolve()
     if song == "umi":
         import score_umi as sc  # noqa: E402  (read-only import from repo)
-        return sc.build_umi_score, sc.beats_to_seconds, sc.TEMPO_BPM
+        return sc.build_umi_score, sc.beats_to_seconds, sc.TEMPO_BPM, Path(sc.__file__).resolve()
     raise ValueError(f"unknown song: {song}")
 
 
@@ -658,8 +662,9 @@ def synth_song(
     out_dir: Path,
     speaker_name: Optional[str] = None,
     speaker_embed_vector: Optional[np.ndarray] = None,
+    final_out_dir: Optional[Path] = None,
 ) -> dict:
-    build_fn, beats_to_seconds, tempo_bpm = load_song_module(song, singer_dir)
+    build_fn, beats_to_seconds, tempo_bpm, _score_module_path = load_song_module(song, singer_dir)
     notes_raw = build_fn()
     if notes_limit is not None:
         notes_raw = notes_raw[:notes_limit]
@@ -692,12 +697,20 @@ def synth_song(
     # — S0 回帰 sha256 が canon 出力ファイル名に依存しないよう互換性を壊さない）。
     speaker_suffix = f"_{speaker_name}" if record.get("stage3_mode") == "reflow_multi_speaker" and speaker_name else ""
     out_name = f"gate_{song}{speaker_suffix}{suffix}.wav"
-    out_path = out_dir / out_name
+    out_path = out_dir / out_name  # 実際の書き込み先（build_dir 配下、swap 前）
     out_dir.mkdir(parents=True, exist_ok=True)
     sf.write(str(out_path), y.astype(np.float32), 44100, subtype="PCM_16")
     wav_bytes = out_path.read_bytes()
     record["wav_sha256"] = hashlib.sha256(wav_bytes).hexdigest()
-    record["wav_path"] = str(out_path)
+
+    # R6 レビュー指摘 (PR #263, gate_synth.py:879, P2): record 内の wav_path は
+    # swap 後に利用者が参照する最終パスをここで直接記載する（build_dir 配下の
+    # 一時パスを書いてから swap 後に文字列置換で書き換える方式は、「公開 = 完成
+    # 済み束の rename のみ・公開済み世代への追記/書換ゼロ」という原則に反する
+    # ため廃止した）。final_out_dir 未指定（--skip-export の S0 互換検証パス等、
+    # 呼び出し側が swap 自体を行わない場合）は out_dir をそのまま最終パスとみなす。
+    final_dir = final_out_dir if final_out_dir is not None else out_dir
+    record["wav_path"] = str(final_dir / out_name)
 
     record_path = out_dir / (out_name.replace(".wav", "") + "_record.json")
     record_path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -803,6 +816,27 @@ def cmd_run(args):
         own_json, speaker_embed_path,
     )
 
+    # R6 レビュー指摘 (PR #263, gate_synth.py:804, P2): 上記はモデル/config 束の
+    # sha256 のみで、合成パイプライン自体を定義する gate_synth.py 本体や
+    # load_song_module が実際に import する score モジュール（score.py /
+    # score_umi.py 等）が変更されても input_sha256 は不変のまま — 出力 WAV が
+    # 変わっても「どの実装から出たか」が入力側 pin から追えなくなる。合成実装側
+    # の sha256 も input_sha256 へ追加する（実行中の本スクリプト自身・実際に
+    # load した score モジュール・可能ならリポの HEAD commit）。
+    input_sha256["gate_synth_py"] = sha256_file(Path(__file__).resolve())
+    for song_name in args.song.split(","):
+        _, _, _, score_module_path = load_song_module(song_name, singer_dir)
+        input_sha256[f"score_module_{song_name}"] = sha256_file(score_module_path)
+    try:
+        git_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(Path(__file__).resolve().parent),
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        input_sha256["repo_git_head"] = git_head
+    except Exception:
+        pass  # 取得失敗時は省略する（キー無し。fail-closed にはしない）
+
     # R3 レビュー指摘 (PR #263, gate_synth.py:544): 5K/10K/20K が同じ --out-dir を
     # 使い回すと gate_<song>.wav / summary が上書きされ、前段ゲートの判定証跡が
     # 破壊される。--step 指定時は成果物を out_dir/step_<N>/ 配下に分離する
@@ -830,13 +864,12 @@ def cmd_run(args):
                 canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
                 variance_phonemes, acoustic_phonemes, build_dir,
                 speaker_name=args.speaker, speaker_embed_vector=speaker_embed_vector,
+                final_out_dir=synth_out_dir,
             )
-            # rec["wav_path"] は build_dir 配下の一時パスのため、swap 後に
-            # 利用者が参照する最終パス（synth_out_dir 配下）へ書き換えてから
-            # summary へ記録する。
-            wav_path_final = rec["wav_path"].replace(str(build_dir), str(synth_out_dir), 1)
+            # rec["wav_path"] は synth_song 内で既に最終パス（synth_out_dir 配下）
+            # として記載済み（R6 P2 修正）。ここでの書き換えは不要。
             results[song] = dict(
-                wav_path=wav_path_final, wav_sha256=rec["wav_sha256"],
+                wav_path=rec["wav_path"], wav_sha256=rec["wav_sha256"],
                 wav_duration_sec=rec["wav_duration_sec"], wav_rms=rec["wav_rms"],
                 wav_peak=rec["wav_peak"], n_phonemes=rec["score"]["n_phonemes"],
                 dual_encoding_diverged=rec["stage3_dual_encoding_diverged"],
@@ -869,14 +902,10 @@ def cmd_run(args):
         if not swapped:
             shutil.rmtree(build_dir, ignore_errors=True)
 
-    # build_dir 配下に書かれた個別 *_record.json 内の wav_path は build_dir
-    # ベースの文字列のまま rename されている（rename はファイル内容までは
-    # 書き換えない）ため、swap 後の最終パスへ置換する。
-    for record_file in synth_out_dir.glob("*_record.json"):
-        text = record_file.read_text(encoding="utf-8")
-        patched = text.replace(str(build_dir), str(synth_out_dir))
-        if patched != text:
-            record_file.write_text(patched, encoding="utf-8")
+    # R6 レビュー指摘 (PR #263, gate_synth.py:879, P2) 対応: 個別 *_record.json
+    # の wav_path は synth_song 内で既に最終パス（synth_out_dir 配下）として
+    # 完成済みで rename されてくるため、ここでの post-swap 書き換えは不要
+    # （公開 = 完成済み束の rename のみ・公開済み世代への追記/書換ゼロ）。
 
     print(f"| summary: {synth_out_dir / 'gate_synth_summary.json'}")
 

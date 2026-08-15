@@ -72,10 +72,22 @@ S0 検分より、推論チェーンは linguistic→dur→pitch（variance 系�
 
 ## 6. Acceptance Criteria（S1 出口）
 
-- [ ] D2 変換器が動き、リツ VCV の実効分数・音素被覆が record に記録される
-- [ ] 統合 transcriptions.csv（2 話者・spk_id 付き）が binarize 全件通過
-- [ ] GPU runbook（実行者非依存・pin 付き）が `docs/` または `foundry/` に置かれる
-- [ ] 学習が回り、早期ゲート checkpoint の CPU 合成 WAV が User に届く
+- [x] D2 変換器が動き、リツ VCV の実効分数・音素被覆が record に記録される
+      （`s1_dataprep/README.md`: 456 セグメント・A3+F4）
+- [x] 2 話者データセット（話者別 transcriptions.csv 2 本 + config `datasets:`
+      の spk_id 指定）が binarize 全件通過（train 733 / valid 10）
+      （R6 レビュー指摘反映: `build_dataset.py` は意図的に話者ごとの
+      transcriptions.csv を分離出力し、`spk_id` は 2 話者統合を担う
+      `s1_multispeaker_acoustic_config.yaml` の `datasets:` エントリ側に付与
+      する設計であり、単一の統合 `transcriptions.csv` に 2 話者・spk_id を
+      同居させる構成は実装が意図的に採らないため、実装の実態に合わせて
+      表現を更新した。binarize 実測値: `S1_GPU_RUNBOOK.md` §「学習規模
+      フィールドの追記」/ `s1_dataprep/README.md` train 733 / valid 10）
+- [x] GPU runbook（実行者非依存・pin 付き）が `docs/` または `foundry/` に置かれる
+      （`S1_GPU_RUNBOOK.md`）
+- [x] 学習が回り、早期ゲート checkpoint の CPU 合成 WAV が User に届く
+      （5K checkpoint 到達・`results_s1/s1_record_2026-08-15.md`・
+      `s1_gate/gate_synth.py` で 4 WAV 合成済み）
 - [ ] **S1 ゲート（耳判定）**: 自前学習の合成が「土俵に乗る」か — 軸別
   （日本語/滑らかさ/歌声/ノイズ）で判定。全軸可なら S2 へ、不可なら不足軸を
   特定して §5 の backfill を検討
