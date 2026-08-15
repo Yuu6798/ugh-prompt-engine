@@ -154,10 +154,18 @@ valid total duration: 57.72s
 sha256 マニフェストを生成し、記録に残す:
 
 ```bash
+# 変換 CSV・辞書・config の束（binary/ は下で別 manifest にし二重計上を避ける）
 find "$OUT/ritsu_diffsinger_db" "$OUT/pjs_staging/diffsinger_db" \
      "$OUT/merged_ja_dict.txt" "$OUT/s1_multispeaker_acoustic_config.yaml" \
-     "$OUT/binary" -type f -exec sha256sum {} + | sort -k2 > s1_bundle_manifest.sha256
-sha256sum s1_bundle_manifest.sha256   # manifest 自体の sha256 も取る
+     -type f ! -name "*_manifest.sha256" -exec sha256sum {} + \
+     | sort -k2 > "$OUT/s1_bundle_manifest.sha256"
+sha256sum "$OUT/s1_bundle_manifest.sha256"
+
+# binary/ の束（manifest を出力先ディレクトリ内に置く場合、自己参照を必ず除外する
+# — 除外しないと「空の自分自身」を含む再現不能なハッシュになる。S1 初回実行の実地知見）
+find "$OUT/binary" -type f ! -name "s1_binary_manifest.sha256" -exec sha256sum {} + \
+     | sort -k2 > "$OUT/binary/s1_binary_manifest.sha256"
+sha256sum "$OUT/binary/s1_binary_manifest.sha256"
 ```
 
 - `s1_bundle_manifest.sha256` 自体の sha256 を、費用記録表（§6）と
