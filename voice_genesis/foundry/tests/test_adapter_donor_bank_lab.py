@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+import donor_bank as db
 import donor_bank_lab as dbl
 
 
@@ -134,10 +135,18 @@ def test_select_lab_files_covers_onsets_and_vowels(tmp_path: Path) -> None:
         p.write_text("\n".join(lines) + "\n")
         paths.append(p)
 
-    selected, stats = dbl._select_lab_files(paths, required_onsets=dbl.REQUIRED_ONSETS, min_files=2, max_files=10)
+    selected, stats, lab_bytes_by_path = dbl._select_lab_files(
+        paths, required_onsets=dbl.REQUIRED_ONSETS, min_files=2, max_files=10
+    )
     assert set(dbl.REQUIRED_ONSETS) <= set(stats["covered_onsets"])
     assert set(stats["covered_vowels"]) == set(dbl.VOWELS_5)
     assert selected == sorted(selected, key=lambda p: p.stem)
+    # review #262 R5 (r3789400804) 是正: 選択段で read したバイト列が選択
+    # ファイル分だけ保持され、内容が実ファイルと一致すること（split-read
+    # 解消の直接検証）。
+    assert set(lab_bytes_by_path.keys()) == set(selected)
+    for p in selected:
+        assert lab_bytes_by_path[p] == p.read_bytes()
 
 
 # --- End-to-end（合成 wav + .lab、実データ非依存） ---
@@ -211,9 +220,20 @@ def test_build_donor_bank_lab_cache_roundtrip(tmp_path: Path) -> None:
 
 
 def test_build_donor_bank_lab_reads_each_file_exactly_once(tmp_path: Path, monkeypatch) -> None:
-    """P2 修正 (review #262 R3): 選択された .lab / _song.wav は、ハッシュと
-    decode/parse の両方に同一 read 結果を使う（split-read を直接 enforce。
-    § donor_bank_utau.py の同種テストと対称の設計）。"""
+    """P2 修正 (review #262 R3・R5): 選択された .lab / _song.wav は、
+    「選択（`_select_lab_files`）」「ハッシュ」「decode/parse」の全段で同一
+    read 結果を使う（split-read を直接 enforce。§ donor_bank_utau.py の
+    同種テストと対称の設計）。
+
+    [R5 `r3789400804` 是正で強化] 旧 `_select_lab_files` は内部で
+    `parse_lab(path)` -> `Path.read_text()` を呼んでおり、本テストが監視
+    する `Path.read_bytes` の呼び出し回数には現れなかった（選択段の read が
+    本テストの死角になっていた）。是正後は選択段も `read_bytes()` を使い、
+    その結果を最後まで再利用するため、`read_bytes` 呼び出し回数=1 は
+    「選択段を含めた全段で単一 read」であることを直接保証する。`read_text`
+    が .lab に対して一切呼ばれないこと（= 旧 `parse_lab` 経路が使われて
+    いないこと）も合わせて enforce する。
+    """
     root = tmp_path / "pjs_corpus"
     d = root / "pjs001"
     d.mkdir(parents=True)
@@ -224,17 +244,25 @@ def test_build_donor_bank_lab_reads_each_file_exactly_once(tmp_path: Path, monke
 
     counts: Dict[str, int] = {}
     orig_read_bytes = Path.read_bytes
+    orig_read_text = Path.read_text
+    read_text_calls: List[str] = []
 
     def _counting_read_bytes(self):
         key = str(self.resolve())
         counts[key] = counts.get(key, 0) + 1
         return orig_read_bytes(self)
 
+    def _tracking_read_text(self, *args, **kwargs):
+        read_text_calls.append(str(self.resolve()))
+        return orig_read_text(self, *args, **kwargs)
+
     monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+    monkeypatch.setattr(Path, "read_text", _tracking_read_text)
     dbl.build_donor_bank_lab(root, target_median_hz=260.0, min_files=1, max_files=5)
 
     assert counts.get(str(lab_path.resolve())) == 1
     assert counts.get(str(wav_path.resolve())) == 1
+    assert str(lab_path.resolve()) not in read_text_calls
 
 
 def test_build_donor_bank_lab_cache_stale_after_lab_edit(tmp_path: Path) -> None:
@@ -264,3 +292,39 @@ def test_build_donor_bank_lab_cache_stale_after_lab_edit(tmp_path: Path) -> None
 
     assert dur2 != dur1  # 古いキャッシュを再利用していれば dur1 のまま
     assert len(list(cache_dir.glob("lab_bank_*.pkl"))) == 2
+
+
+def test_build_donor_bank_lab_cache_write_failure_leaves_no_corrupt_pickle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P2 修正 (review #262 R5・`r3789400805`): pickle cache 書き込み中の
+    失敗（プロセス kill 相当）が最終 `cache_path` に破損 pickle を残さない
+    ことを検証する（実害シナリオの直接再現: 是正前は直書きのため、中断時に
+    corrupt pickle が残ると `cache_path.exists()` が真のまま以後の全
+    リクエストが `pickle.load` で失敗し続けた。是正後は再構築へフォール
+    バックできることを確認する）。
+    """
+    root = tmp_path / "pjs_corpus"
+    d = root / "pjs001"
+    d.mkdir(parents=True)
+    _write_sine_wav(d / "pjs001_song.wav", duration_s=1.0)
+    (d / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 s\n4000000 9000000 o\n")
+    cache_dir = tmp_path / "cache"
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated pickle.dump failure")
+
+    monkeypatch.setattr(db.pickle, "dump", _boom)
+    with pytest.raises(RuntimeError):
+        dbl.build_donor_bank_lab(root, target_median_hz=260.0, cache_dir=cache_dir, min_files=1, max_files=5)
+    assert list(cache_dir.glob("lab_bank_*.pkl")) == []
+    assert list(cache_dir.glob("lab_bank_*.pkl.*.tmp")) == []
+
+    # 再構築（クラッシュ後の次リクエスト相当）が破損 pickle の読み込み失敗
+    # なしに成功することを確認する。
+    monkeypatch.undo()
+    bank, _uv, _c, stats = dbl.build_donor_bank_lab(
+        root, target_median_hz=260.0, cache_dir=cache_dir, min_files=1, max_files=5
+    )
+    assert stats["cache_hit"] is False
+    assert len(list(cache_dir.glob("lab_bank_*.pkl"))) == 1

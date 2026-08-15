@@ -49,6 +49,7 @@ from donor_bank import (  # noqa: E402
     _log_band_vector,
     aggregate_content_hash,
     analyze_donor_world,
+    atomic_pickle_dump,
     sha256_of,
 )
 from donor_bank_utau import ConsonantClip, REQUIRED_ONSETS  # noqa: E402  (adapter sibling import)
@@ -240,21 +241,34 @@ def _select_lab_files(
     required_onsets: Sequence[str] = REQUIRED_ONSETS,
     min_files: int = 6,
     max_files: int = 10,
-) -> Tuple[List[Path], dict]:
+) -> Tuple[List[Path], dict, Dict[Path, bytes]]:
     """必須子音オンセット + 5 母音を貪欲被覆する .lab ファイル部分集合を選ぶ
     （決定論・ファイル名（`pjsNNN`）昇順走査・音声デコード不要）。
+
+    P2 修正 (review #262 R5・`r3789400804`): 選択判定のため各候補 .lab を
+    `read_bytes()` し、その場で decode/parse してトークン化する（従来の
+    `parse_lab(path)` 呼び出しは内部で独自に read していた）。選択された
+    ファイルについては read 済みのバイト列を `lab_bytes_by_path` として
+    返し、呼び出し側（`build_donor_bank_lab`）がハッシュ計算・mora 分解の
+    両方でそのまま再利用できるようにする。旧実装は選択段の read がハッシュ/
+    分析段の read と分離していたため（split-read）、選択→ハッシュ→分析の間に
+    .lab が変わると `selection_stats`（coverage 報告）と実際に構築される
+    bank の内容が乖離しうる TOCTOU 窓があった。
     """
     required = set(required_onsets)
     covered_onsets: set = set()
     covered_vowels: set = set()
     selected: List[Path] = []
+    lab_bytes_by_path: Dict[Path, bytes] = {}
     for path in sorted(lab_paths, key=lambda p: p.stem):
-        phonemes = parse_lab(path)
+        lab_bytes = path.read_bytes()
+        phonemes = parse_lab_text(lab_bytes.decode("utf-8"))
         tokens = {p.phoneme for p in phonemes}
         new_onsets = (tokens & required) - covered_onsets
         new_vowels = (tokens & set(VOWELS_5)) - covered_vowels
         if new_onsets or new_vowels or len(selected) < min_files:
             selected.append(path)
+            lab_bytes_by_path[path] = lab_bytes
             covered_onsets |= tokens & required
             covered_vowels |= tokens & set(VOWELS_5)
         if len(selected) >= max_files:
@@ -266,7 +280,7 @@ def _select_lab_files(
         covered_onsets=sorted(covered_onsets), missing_onsets=sorted(required - covered_onsets),
         covered_vowels=sorted(covered_vowels), min_files=min_files, max_files=max_files,
     )
-    return selected, stats
+    return selected, stats, lab_bytes_by_path
 
 
 def build_donor_bank_lab(
@@ -295,19 +309,21 @@ def build_donor_bank_lab(
     # 対応する _song.wav の内容ハッシュをキー材料へ含める（donor_bank_utau の
     # v1/v2 builder と同じ是正・同じ理由: root path + options のみのキーだと
     # `--cache-dir` 再利用時のコーパス編集が検知されない）。
-    selected_paths, selection_stats = _select_lab_files(lab_paths, REQUIRED_ONSETS, min_files, max_files)
-    # P2 修正 (review #262 R3): 選択された .lab / _song.wav を「1 回 read した
-    # バイト列から hash と decode/parse の両方を導出」する形に統一する
+    selected_paths, selection_stats, lab_bytes_by_path = _select_lab_files(
+        lab_paths, REQUIRED_ONSETS, min_files, max_files
+    )
+    # P2 修正 (review #262 R3・R5): 選択された .lab / _song.wav を「1 回 read
+    # したバイト列から hash と decode/parse の両方を導出」する形に統一する
     # （measure_bands.py R1 修正・donor_bank_utau.py 同種修正と同じ流儀）。
-    # 旧実装は hash 用に `sha256_of` で read した後、メイン loop の
-    # `parse_lab`/`_load_wav_24k`/`sha256_of`（再ハッシュ）がさらに 2 回
-    # read していた（split-read。TOCTOU 窓）。
+    # .lab は `_select_lab_files` が選択判定のため既に read 済みのバイト列を
+    # `lab_bytes_by_path` として返すため、ここで再度 read しない（R5
+    # `r3789400804` 是正: 旧実装は選択段の read とは独立に、ここでもう一度
+    # `read_bytes()` していた = split-read。TOCTOU 窓）。_song.wav は
+    # ここが初読のため通常どおり read する。
     content_hashes: List[Tuple[str, str]] = []
-    lab_bytes_by_path: Dict[Path, bytes] = {}
     wav_bytes_by_lab: Dict[Path, bytes] = {}
     for lab_path in selected_paths:
-        lab_bytes = lab_path.read_bytes()
-        lab_bytes_by_path[lab_path] = lab_bytes
+        lab_bytes = lab_bytes_by_path[lab_path]
         rel_lab = str(lab_path.relative_to(root))
         content_hashes.append((rel_lab, hashlib.sha256(lab_bytes).hexdigest()))
         wav_path = lab_path.parent / f"{lab_path.stem}_song.wav"
@@ -454,6 +470,9 @@ def build_donor_bank_lab(
 
     result = (bank, unit_vowels, consonant_clips, stats)
     if cache_path is not None:
-        with open(cache_path, "wb") as f:
-            pickle.dump(result, f)
+        # P2 修正 (review #262 R5・`r3789400805`): staging + `os.replace` で
+        # atomic 公開する（§ donor_bank_utau.py の同種是正と対称の設計。
+        # 直書きだと中断時に破損 pickle が残り、以後 `cache_path.exists()`
+        # が真のまま全リクエストが読み込み失敗し続ける）。
+        atomic_pickle_dump(result, cache_path)
     return result

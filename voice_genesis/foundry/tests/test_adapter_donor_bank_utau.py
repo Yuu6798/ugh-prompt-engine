@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+import donor_bank as db
 import donor_bank_utau as dbu
 
 
@@ -283,6 +284,64 @@ def test_build_donor_bank_utau_cache_roundtrip(tmp_path: Path) -> None:
     # ことを検証する（旧実装は保存時の False を復元後もそのまま返していた）。
     assert s2["cache_hit"] is True
     assert bank2.stats["cache_hit"] is True
+
+
+def test_build_donor_bank_utau_cache_write_failure_leaves_no_corrupt_pickle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P2 修正 (review #262 R5・`r3789400805`): v1 builder の pickle cache
+    書き込み中の失敗（プロセス kill 相当）が最終 `cache_path` に破損 pickle
+    を残さないことを検証する（実害シナリオの直接再現。§ donor_bank_lab.py
+    の同種テストと対称の設計）。
+    """
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+    cache_dir = tmp_path / "cache"
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated pickle.dump failure")
+
+    monkeypatch.setattr(db.pickle, "dump", _boom)
+    with pytest.raises(RuntimeError):
+        dbu.build_donor_bank_utau(root, cache_dir=cache_dir, min_units_per_vowel=1, max_wav_files=5)
+    assert list(cache_dir.glob("utau_bank_*.pkl")) == []
+    assert list(cache_dir.glob("utau_bank_*.pkl.*.tmp")) == []
+
+    monkeypatch.undo()
+    _bank, _uv, _c, stats = dbu.build_donor_bank_utau(
+        root, cache_dir=cache_dir, min_units_per_vowel=1, max_wav_files=5
+    )
+    assert stats["cache_hit"] is False
+    assert len(list(cache_dir.glob("utau_bank_*.pkl"))) == 1
+
+
+def test_build_donor_bank_utau_vcv_cache_write_failure_leaves_no_corrupt_pickle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P2 修正 (review #262 R5・`r3789400805`): v2 (VCV) builder の同種是正。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+    cache_dir = tmp_path / "cache"
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated pickle.dump failure")
+
+    monkeypatch.setattr(db.pickle, "dump", _boom)
+    with pytest.raises(RuntimeError):
+        dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5)
+    assert list(cache_dir.glob("utau_bank_vcv_*.pkl")) == []
+    assert list(cache_dir.glob("utau_bank_vcv_*.pkl.*.tmp")) == []
+
+    monkeypatch.undo()
+    _bank, _ctx, stats = dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5)
+    assert stats["cache_hit"] is False
+    assert len(list(cache_dir.glob("utau_bank_vcv_*.pkl"))) == 1
 
 
 # --- 追補 F1.3-A item1: unit スキーマ拡張（oto overlap / preutterance） ---

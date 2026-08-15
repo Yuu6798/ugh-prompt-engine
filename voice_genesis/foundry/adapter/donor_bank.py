@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
+import pickle
+import tempfile
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pyworld as pw
@@ -70,6 +73,51 @@ def aggregate_content_hash(paths_and_hashes: Sequence[Tuple[str, str]]) -> str:
     """
     material = "|".join(f"{path}:{digest}" for path, digest in sorted(paths_and_hashes))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _atomic_stage_and_replace(path: Path, write_fn) -> None:
+    """staging tempfile へ `write_fn(file_obj)` で書き込み、成功後にのみ
+    `os.replace` で `path` へ atomic 公開する共通実装（AGENTS.md Persistent
+    Artifact Safety Gate 項目6「全構築後公開」準拠。`render.py
+    _atomic_write_wav` / `measure_bands.py _atomic_write_text` と同じ流儀）。
+
+    [P2 修正・review #262 R5・`r3789400805`] donor cache（pickle/npz）の
+    書き込みが最終パス直書きだったため、書き込み中断（プロセス kill・
+    ディスク満杯等）で破損キャッシュが残り、以後 `cache_path.exists()` が
+    真を返し続けて全リクエストが壊れた pickle/npz の読み込みで失敗し続ける
+    実害があった。staging + `os.replace` へ統一し、`except BaseException`
+    （`KeyboardInterrupt`/`SystemExit` 含む）で staging を best-effort 削除
+    してから re-raise する。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            write_fn(f)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def atomic_pickle_dump(obj: Any, path: str | Path) -> None:
+    """donor bank キャッシュ（pickle）を staging + `os.replace` で atomic
+    公開する（§ `_atomic_stage_and_replace` 参照）。UTAU v1/v2(VCV)・PJS の
+    各 builder が共通で使う。
+    """
+    _atomic_stage_and_replace(Path(path), lambda f: pickle.dump(obj, f))
+
+
+def atomic_savez(path: str | Path, **arrays: np.ndarray) -> None:
+    """donor bank キャッシュ（npz）を staging + `os.replace` で atomic 公開
+    する（§ `_atomic_stage_and_replace` 参照）。`np.savez` はパス文字列を
+    渡すと `.npz` 拡張子を自動付与するため、file-like object（fd 経由の
+    file object）を渡して staging 名をそのまま使う。
+    """
+    _atomic_stage_and_replace(Path(path), lambda f: np.savez(f, **arrays))
 
 
 def load_donor_24k(wav_path: str | Path) -> Tuple[np.ndarray, int]:
@@ -417,13 +465,17 @@ def _cache_key(wav_sha256: str, notes_csv_sha256: Optional[str], frame_period_ms
 
 
 def _save_cache(path: Path, bank: DonorBank) -> None:
+    """P2 修正 (review #262 R5・`r3789400805` ファミリー是正): `np.savez`
+    直書きを `atomic_savez`（staging + `os.replace`）へ置換した（同種の
+    UTAU/PJS pickle キャッシュ是正と対称の設計。§ `atomic_savez` 参照）。
+    """
     starts = np.array([u.start_frame for u in bank.units], dtype=np.int64)
     ends = np.array([u.end_frame for u in bank.units], dtype=np.int64)
     medians = np.array([u.median_f0 for u in bank.units], dtype=np.float64)
     durations = np.array([u.duration_s for u in bank.units], dtype=np.float64)
     heads = np.stack([u.head_log_bands for u in bank.units], axis=0) if bank.units else np.zeros((0, N_LOG_BANDS))
     tails = np.stack([u.tail_log_bands for u in bank.units], axis=0) if bank.units else np.zeros((0, N_LOG_BANDS))
-    np.savez(
+    atomic_savez(
         path, f0=bank.f0, sp=bank.sp, ap=bank.ap,
         unit_start=starts, unit_end=ends, unit_median_f0=medians, unit_duration_s=durations,
         unit_head_log_bands=heads, unit_tail_log_bands=tails,

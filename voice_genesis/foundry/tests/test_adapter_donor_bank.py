@@ -196,6 +196,97 @@ def test_build_donor_bank_cache_roundtrip(tmp_path: Path) -> None:
     ]
 
 
+# --- P2 修正 (review #262 R5・`r3789400805`): donor cache の atomic 公開 ---
+# （`atomic_pickle_dump`/`atomic_savez` は donor_bank.py に共通実装され、
+#   donor_bank_utau.py（v1/v2）・donor_bank_lab.py・本ファイルの npz cache
+#   すべてが利用する。§ render.py `_atomic_write_wav` と同じテスト流儀）。
+
+
+def test_atomic_savez_writes_readable_content_no_tmp_residue(tmp_path: Path) -> None:
+    path = tmp_path / "bank.npz"
+    db.atomic_savez(path, a=np.arange(5), b=np.array(["x"]))
+    assert path.exists()
+    z = np.load(path, allow_pickle=False)
+    assert list(z["a"]) == [0, 1, 2, 3, 4]
+    assert list(z["b"]) == ["x"]
+    assert list(tmp_path.glob("bank.npz.*.tmp")) == []
+
+
+def test_atomic_savez_no_partial_file_on_failure(tmp_path: Path, monkeypatch) -> None:
+    """AGENTS.md Persistent Artifact Safety Gate 項目7「公開途中失敗の注入
+    テスト」: `np.savez` が失敗しても最終 path に部分成果物を残さない。"""
+    path = tmp_path / "bank.npz"
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated savez failure")
+
+    monkeypatch.setattr(db.np, "savez", _boom)
+    with pytest.raises(RuntimeError):
+        db.atomic_savez(path, a=np.arange(3))
+    assert not path.exists()
+    assert list(tmp_path.glob("bank.npz.*.tmp")) == []
+
+
+def test_atomic_savez_does_not_clobber_existing_cache_on_failure(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "bank.npz"
+    db.atomic_savez(path, a=np.arange(3))
+    before_bytes = path.read_bytes()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated savez failure")
+
+    monkeypatch.setattr(db.np, "savez", _boom)
+    with pytest.raises(RuntimeError):
+        db.atomic_savez(path, a=np.arange(9))
+    assert path.read_bytes() == before_bytes  # 旧キャッシュが無傷のまま残る
+    z = np.load(path, allow_pickle=False)
+    assert list(z["a"]) == [0, 1, 2]  # 破損 npz ではなく正常に読み戻せる
+
+
+def test_atomic_pickle_dump_writes_readable_content_no_tmp_residue(tmp_path: Path) -> None:
+    path = tmp_path / "bank.pkl"
+    db.atomic_pickle_dump({"x": 1, "y": [1, 2, 3]}, path)
+    assert path.exists()
+    import pickle
+
+    with open(path, "rb") as f:
+        assert pickle.load(f) == {"x": 1, "y": [1, 2, 3]}
+    assert list(tmp_path.glob("bank.pkl.*.tmp")) == []
+
+
+def test_atomic_pickle_dump_no_partial_file_on_failure(tmp_path: Path, monkeypatch) -> None:
+    """公開途中失敗の注入テスト: `pickle.dump` が失敗しても最終 path に
+    破損 pickle を残さない（review #262 R5 `r3789400805` の実害シナリオ
+    ——旧実装は直書きだったため、中断時に破損ファイルが残り
+    `cache_path.exists()` が真のまま以後の全リクエストが読み込み失敗し
+    続けた）。
+    """
+    path = tmp_path / "bank.pkl"
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated pickle.dump failure")
+
+    monkeypatch.setattr(db.pickle, "dump", _boom)
+    with pytest.raises(RuntimeError):
+        db.atomic_pickle_dump({"x": 1}, path)
+    assert not path.exists()  # cache_path.exists() が真になり続ける実害が再発しない
+    assert list(tmp_path.glob("bank.pkl.*.tmp")) == []
+
+
+def test_atomic_pickle_dump_does_not_clobber_existing_cache_on_failure(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "bank.pkl"
+    db.atomic_pickle_dump({"x": 1}, path)
+    before_bytes = path.read_bytes()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated pickle.dump failure")
+
+    monkeypatch.setattr(db.pickle, "dump", _boom)
+    with pytest.raises(RuntimeError):
+        db.atomic_pickle_dump({"x": 2}, path)
+    assert path.read_bytes() == before_bytes  # 旧キャッシュが無傷のまま残る
+
+
 # --- normalize_unit_energy（追補 F1.3-B item1） ---
 
 

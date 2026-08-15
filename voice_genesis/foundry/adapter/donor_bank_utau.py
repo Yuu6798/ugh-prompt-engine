@@ -57,6 +57,7 @@ from donor_bank import (  # noqa: E402
     _log_band_vector,
     aggregate_content_hash,
     analyze_donor_world,
+    atomic_pickle_dump,
     sha256_of,
 )
 
@@ -677,8 +678,10 @@ def build_donor_bank_utau_vcv(
 
     result = (bank, unit_contexts, stats)
     if cache_path is not None:
-        with open(cache_path, "wb") as f:
-            pickle.dump(result, f)
+        # P2 修正 (review #262 R5・`r3789400805`): staging + `os.replace` で
+        # atomic 公開する（直書きだと中断時に破損 pickle が残り、以後
+        # `cache_path.exists()` が真のまま全リクエストが読み込み失敗し続ける）。
+        atomic_pickle_dump(result, cache_path)
     return result
 
 
@@ -906,6 +909,7 @@ def build_donor_bank_utau(
 
     result = (bank, unit_vowels, consonant_clips, stats)
     if cache_path is not None:
-        with open(cache_path, "wb") as f:
-            pickle.dump(result, f)
+        # P2 修正 (review #262 R5・`r3789400805`): § build_donor_bank_utau_vcv
+        # と同じ是正（atomic 公開）。
+        atomic_pickle_dump(result, cache_path)
     return result
