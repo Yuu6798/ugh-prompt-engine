@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import hashlib
+from pathlib import Path
 
 import numpy as np
 import pyworld as pw
@@ -28,6 +29,42 @@ from scipy.ndimage import uniform_filter1d
 SR = 24000
 FRAME_PERIOD_MS = 5.0
 SPARSE_THRESHOLD = 3  # このフレーム数未満のビンは疎とみなし隣接ビンへ拡張検索
+
+# 本スクリプトが --out 配下へ書く固定出力名（衝突検査対象）
+OUTPUT_NAMES = (
+    "f1b_donor_excerpt.wav",
+    "f1b_template_neutral.wav",
+    "f1b_template_dark.wav",
+    "f1b_template_bright_breathy.wav",
+    "f1b_glue_run_log.json",
+)
+
+
+class OutputCollisionError(ValueError):
+    """固定出力名が --donor-wav / --control-npz と衝突する場合に送出する（fail-closed）。"""
+
+
+def _reject_output_collision(out_path: str | Path, protected_inputs: list[str | Path]) -> None:
+    """P1 修正 (review #262 R13): `--donor-wav`/`--control-npz` に本スクリプトの
+    固定出力名（`OUTPUT_NAMES`）と同じパスを渡すと、書き込みが実験の入力そのもの
+    を破壊する（`--donor-wav <out>/f1b_template_neutral.wav` 等）。全固定出力を
+    書き込み開始前に全保護入力へ resolved 比較（symlink 解決後の完全一致）で
+    突き合わせ、衝突があれば fail-closed で拒否する
+    （`measure_bands._reject_output_collision`/`render._reject_output_collision`
+    と同型の軽量実装。詳細判断は `results_f1_4/f1_4_record_2026-08-15.md`
+    「R13 対応」節参照）。
+    """
+    out_resolved = Path(out_path).resolve()
+    for p in protected_inputs:
+        if p is None:
+            continue
+        p_path = Path(p)
+        if not p_path.exists():
+            continue  # 未使用/未指定パス
+        if out_resolved == p_path.resolve():
+            raise OutputCollisionError(
+                f"出力 ({out_path}) が保護入力 ({p}) と衝突しています（fail-closed で拒否）"
+            )
 
 
 def hz_to_bin(f0: np.ndarray) -> np.ndarray:
@@ -186,6 +223,11 @@ def main() -> None:
     parser.add_argument("--control-npz", required=True, help="共通 f0/amp npz パス（f1a_control.npz）")
     args = parser.parse_args()
     out_dir = args.out
+
+    # --- 出力衝突検査（書き込み開始前・fail-closed） ---
+    protected_inputs = [args.donor_wav, args.control_npz]
+    for name in OUTPUT_NAMES:
+        _reject_output_collision(f"{out_dir}/{name}", protected_inputs)
 
     log: list[str] = []
 

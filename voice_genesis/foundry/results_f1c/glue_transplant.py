@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from pathlib import Path
 
 import numpy as np
 import pyworld as pw
@@ -33,6 +34,36 @@ WINDOW_STEP_SEC = 0.5
 MACRO_MEDIAN_MS = 200.0  # ドナーマクロ音高の移動median窓幅
 SHORT_GAP_MS = 300.0  # 短い無声ギャップとみなす上限（線形補間で橋渡し）
 MICRO_CLIP_CENTS = 150.0
+
+# 本スクリプトが --out 配下へ書く固定出力名（衝突検査対象）
+OUTPUT_NAMES = (
+    "f1c_roundtrip.wav",
+    "f1c_transplant.wav",
+    "f1c_robotf0.wav",
+    "f1c_glue_run_log.json",
+)
+
+
+class OutputCollisionError(ValueError):
+    """固定出力名が --donor-wav と衝突する場合に送出する（fail-closed）。"""
+
+
+def _reject_output_collision(out_path: str | Path, protected_inputs: list[str | Path]) -> None:
+    """P1 修正 (review #262 R13): `results_f1b/glue_template.py` と同型の衝突
+    ガード（詳細意図はそちら参照）。`--donor-wav` が本スクリプトの固定出力名
+    と衝突する場合、書き込み開始前に fail-closed で拒否する。
+    """
+    out_resolved = Path(out_path).resolve()
+    for p in protected_inputs:
+        if p is None:
+            continue
+        p_path = Path(p)
+        if not p_path.exists():
+            continue
+        if out_resolved == p_path.resolve():
+            raise OutputCollisionError(
+                f"出力 ({out_path}) が保護入力 ({p}) と衝突しています（fail-closed で拒否）"
+            )
 
 
 def sha256_of(path: str) -> str:
@@ -182,6 +213,11 @@ def main() -> None:
     out_dir = args.out
     note_track_vib0 = f"{out_dir}/f1c_note_track.npz"
     note_track_vib30 = f"{out_dir}/f1c_note_track_vib30.npz"
+
+    # --- 出力衝突検査（書き込み開始前・fail-closed） ---
+    protected_inputs = [args.donor_wav]
+    for name in OUTPUT_NAMES:
+        _reject_output_collision(f"{out_dir}/{name}", protected_inputs)
 
     log: list[str] = []
 

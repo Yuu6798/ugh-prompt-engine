@@ -50,6 +50,7 @@ from donor_bank import (  # noqa: E402
     aggregate_content_hash,
     analyze_donor_world,
     atomic_pickle_dump,
+    reject_paths_outside_root,
     sha256_of,
 )
 from donor_bank_utau import (  # noqa: E402  (adapter sibling import)
@@ -208,6 +209,15 @@ def corpus_identity_hash(corpus_root: str | Path) -> str:
     lab_paths = sorted(root.glob("pjs*/pjs*.lab"))
     if not lab_paths:
         raise FileNotFoundError(f"no pjs*/pjs*.lab found under {root}")
+    # P2 修正 (review #262 R13): `pjsNNN/` が corpus_root 外を指す symlink の
+    # 場合、上の glob は symlink を辿って外部の `.lab` を返しうる。resolve
+    # 後の root 包含検査を read 前に行う（`donor_bank.reject_paths_outside_root`。
+    # 詳細意図は同関数 docstring 参照）。
+    candidate_paths: List[Path] = []
+    for lab_path in lab_paths:
+        candidate_paths.append(lab_path)
+        candidate_paths.append(lab_path.parent / f"{lab_path.stem}_song.wav")
+    reject_paths_outside_root(candidate_paths, root, source_label="PJS corpus_identity_hash")
     pairs: List[Tuple[str, str]] = []
     for lab_path in lab_paths:
         pairs.append((str(lab_path.relative_to(root)), sha256_of(lab_path)))
@@ -409,6 +419,20 @@ def build_donor_bank_lab(
     lab_paths = sorted(root.glob("pjs*/pjs*.lab"))
     if not lab_paths:
         raise FileNotFoundError(f"no pjs*/pjs*.lab found under {root}")
+
+    # P2 修正 (review #262 R13): `pjsNNN/` が corpus_root 外を指す symlink の
+    # 場合、上の glob は symlink を辿って外部の `.lab` を返し、後続の
+    # `_select_lab_files`/analysis がその外部ファイルとペア `_song.wav` を
+    # そのまま read してしまう（render の出力ガードは `voicebank_root` 配下
+    # のみを保護するため、脱出先ドナーが上書きされても検知されない）。
+    # `_select_lab_files` が候補 .lab を read し始める前に、resolve 後の
+    # root 包含検査で fail-closed に拒否する（`donor_bank.reject_paths_outside_root`。
+    # 詳細意図は同関数 docstring 参照）。
+    candidate_paths: List[Path] = []
+    for lab_path in lab_paths:
+        candidate_paths.append(lab_path)
+        candidate_paths.append(lab_path.parent / f"{lab_path.stem}_song.wav")
+    reject_paths_outside_root(candidate_paths, root, source_label="PJS build_donor_bank_lab")
 
     # P1 修正 (review #262): .lab 選択（`_select_lab_files`）は音声デコード
     # 不要な軽量処理のため、キャッシュ判定より前倒しして選択された .lab /

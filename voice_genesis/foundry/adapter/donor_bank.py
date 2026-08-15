@@ -76,6 +76,46 @@ def aggregate_content_hash(paths_and_hashes: Sequence[Tuple[str, str]]) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def reject_paths_outside_root(
+    paths: Sequence[str | Path], root: str | Path, source_label: str
+) -> None:
+    """P2 修正 (review #262 R13): 候補パス集合が `root` 配下（symlink 解決後）に
+    収まっているかを fail-closed に検査する共通ヘルパー
+    （`donor_bank_utau._reject_wav_paths_outside_root` の resolve 包含検査部分
+    と対称・共通化。PJS 側の候補パスは `Path.glob` が返す実ファイルパスで
+    あり、oto.ini の `filename=` フィールドのような未検証テキスト由来では
+    ないため UTAU 版が持つ語彙的 `../`/絶対パス検査は不要——resolve 後包含
+    検査のみで足りる）。
+
+    PJS コーパスでは `pjsNNN/` ディレクトリ自体が `corpus_root` 外を指す
+    symlink の場合、`root.glob("pjs*/pjs*.lab")` は symlink を辿って外部の
+    `.lab` を返し、対応する `_song.wav` も同じ外部ディレクトリから読まれる
+    （`voicebank_identity_hash`/`corpus_identity_hash` の識別対象はコーパス
+    直下の実体のみのため、脱出先ファイルは provenance の対象外のまま分析
+    される実害がある）。呼び出し側は選択対象（`.lab`/`_song.wav` 双方）を
+    read する前に、本関数へ渡して検査する。
+
+    1 件でも root 外を指せば、違反エントリを列挙した `ValueError` を送出し、
+    脱出先ファイルを黙って read しない（fail-closed）。
+    """
+    root_resolved = Path(root).resolve()
+    violations: List[str] = []
+    for p in paths:
+        candidate = Path(p)
+        try:
+            resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError):
+            violations.append(str(candidate))
+            continue
+        if not resolved.is_relative_to(root_resolved):
+            violations.append(str(candidate))
+    if violations:
+        raise ValueError(
+            f"{source_label}: corpus_root 外を指すパスを検出しました "
+            f"（symlink 解決後の包含検査で拒否・fail-closed）: {violations}"
+        )
+
+
 def _atomic_stage_and_replace(path: Path, write_fn) -> None:
     """staging tempfile へ `write_fn(file_obj)` で書き込み、成功後にのみ
     `os.replace` で `path` へ atomic 公開する共通実装（AGENTS.md Persistent

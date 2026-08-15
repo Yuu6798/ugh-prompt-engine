@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import hashlib
+from pathlib import Path
 
 import numpy as np
 import pyworld as pw
@@ -33,6 +34,36 @@ from scipy.ndimage import uniform_filter1d
 SR = 24000
 FRAME_PERIOD_MS = 5.0
 CONTINUITY_SEMITONE_THRESHOLD = 1.0  # i+1 継続採用の許容半音差
+
+# 本スクリプトが --out 配下へ書く固定出力名（衝突検査対象）
+OUTPUT_NAMES = (
+    "f1b_nn_neutral.wav",
+    "f1b_nn_dark.wav",
+    "f1b_nn_bright_breathy.wav",
+    "f1b_nn_glue_run_log.json",
+)
+
+
+class OutputCollisionError(ValueError):
+    """固定出力名が --donor-wav / --control-npz と衝突する場合に送出する（fail-closed）。"""
+
+
+def _reject_output_collision(out_path: str | Path, protected_inputs: list[str | Path]) -> None:
+    """P1 修正 (review #262 R13): `glue_template.py` と同型の衝突ガード
+    （詳細意図はそちら参照）。`--donor-wav`/`--control-npz` が本スクリプトの
+    固定出力名と衝突する場合、書き込み開始前に fail-closed で拒否する。
+    """
+    out_resolved = Path(out_path).resolve()
+    for p in protected_inputs:
+        if p is None:
+            continue
+        p_path = Path(p)
+        if not p_path.exists():
+            continue
+        if out_resolved == p_path.resolve():
+            raise OutputCollisionError(
+                f"出力 ({out_path}) が保護入力 ({p}) と衝突しています（fail-closed で拒否）"
+            )
 
 
 def semitone_dist(f_a: float, f_b: float) -> float:
@@ -183,6 +214,11 @@ def main() -> None:
     parser.add_argument("--control-npz", required=True, help="共通 f0/amp npz パス（f1a_control.npz）")
     args = parser.parse_args()
     out_dir = args.out
+
+    # --- 出力衝突検査（書き込み開始前・fail-closed） ---
+    protected_inputs = [args.donor_wav, args.control_npz]
+    for name in OUTPUT_NAMES:
+        _reject_output_collision(f"{out_dir}/{name}", protected_inputs)
 
     log: list[str] = []
 

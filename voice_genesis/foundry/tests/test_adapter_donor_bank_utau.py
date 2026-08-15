@@ -766,6 +766,69 @@ def test_reject_wav_paths_outside_root_absolute_path_inside_root(tmp_path: Path)
         dbu._reject_wav_paths_outside_root(pdir_a3, "A3", [str(inside)], root)
 
 
+# --- P2 修正 (review #262 R13・`_wav_ref_is_basename`): 非 basename ネスト参照 ---
+# （`samples/foo.wav` 等）は絶対パスでも `..` 脱出でもないため R8/R10 の検査を
+# いずれも素通りし resolve 後も root 配下に留まるが、`voicebank_identity_hash`
+# の非再帰 glob からは不可視のまま分析される。
+
+
+def test_wav_ref_is_basename_accepts_plain_filename() -> None:
+    assert dbu._wav_ref_is_basename("_test.wav") is True
+
+
+def test_wav_ref_is_basename_rejects_forward_slash_nesting() -> None:
+    assert dbu._wav_ref_is_basename("samples/foo.wav") is False
+
+
+def test_wav_ref_is_basename_rejects_backslash_nesting() -> None:
+    """pathlib は POSIX 上で `\\` を区切り文字と解釈しないため、文字列検査で拾う。"""
+    assert dbu._wav_ref_is_basename("samples\\foo.wav") is False
+
+
+def test_wav_ref_is_basename_rejects_dotdot_and_dot() -> None:
+    assert dbu._wav_ref_is_basename("..") is False
+    assert dbu._wav_ref_is_basename(".") is False
+
+
+def test_wav_ref_is_basename_rejects_absolute_path() -> None:
+    assert dbu._wav_ref_is_basename("/etc/passwd") is False
+
+
+def test_wav_ref_is_lexically_safe_delegates_to_basename_check() -> None:
+    assert dbu._wav_ref_is_lexically_safe("_test.wav") is True
+    assert dbu._wav_ref_is_lexically_safe("samples/foo.wav") is False
+
+
+def test_reject_wav_paths_outside_root_rejects_nested_reference_even_when_inside_root(
+    tmp_path: Path,
+) -> None:
+    """`samples/foo.wav` は resolve 後も voicebank root 配下（A3 のサブ
+    ディレクトリ）に収まるため、R8/R10 の検査（絶対パス・`..`・resolve 後
+    包含）はいずれも素通りする。R13 で非 basename 参照自体を拒否する。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    (pdir / "samples").mkdir(parents=True)
+    (pdir / "samples" / "foo.wav").write_bytes(b"not-a-real-wav")
+
+    with pytest.raises(ValueError, match=r"A3/samples/foo\.wav"):
+        dbu._reject_wav_paths_outside_root(pdir, "A3", ["samples/foo.wav"], root)
+
+
+def test_build_donor_bank_utau_rejects_nested_wav_reference_end_to_end(tmp_path: Path) -> None:
+    """oto.ini が `samples/foo.wav`（pitch dir のサブディレクトリ）を参照する
+    場合、`build_donor_bank_utau` は WORLD 分析へ進む前に fail-closed で拒否
+    する（識別対象を pitch dir 直下に固定したまま、その外を指す参照を
+    黙って分析しない）。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    (pdir / "samples").mkdir(parents=True)
+    _write_sine_wav(pdir / "samples" / "foo.wav", duration_s=1.0)
+    (pdir / "oto.ini").write_bytes("samples/foo.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    with pytest.raises(ValueError, match="voicebank root"):
+        dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
+
+
 def test_build_donor_bank_utau_rejects_oto_wav_traversal_end_to_end(tmp_path: Path) -> None:
     """P2 修正 (review #262 R8・`r3789486145`): `../` を含む filename= を供給する
     悪意/破損 oto.ini から `build_donor_bank_utau` を呼ぶと、WORLD 分析（外部 wav の

@@ -304,17 +304,52 @@ def _ms_to_frame(ms: float, frame_period_ms: float) -> int:
     return int(round(ms / frame_period_ms))
 
 
-def _wav_ref_is_lexically_safe(wav_filename: str) -> bool:
-    """絶対パス・`..` 成分を含む wav 参照を語彙的に拒否する（`_reject_wav_paths_outside_root`
-    の語彙的検査（review #262 R10）と同じ判定を、selection 段のヘッダ probe
-    より前に軽量に再利用するためのヘルパー。selection 段で任意ファイルを
-    read しないための防御・[実装決定・record 記録]。最終的な網羅的検査
-    （symlink 解決込み）は `_reject_wav_paths_outside_root` が選択済み集合へ
-    改めて適用する——本関数は selection 段の probe を安全側に倒すだけの
-    軽量フィルタで、これを置き換えない）。
+def _wav_ref_is_basename(wav_filename: str) -> bool:
+    """oto.ini の wav 参照が pitch dir 直下の basename であるかを判定する
+    （review #262 R13 新設。`_wav_ref_is_lexically_safe`/
+    `_reject_wav_paths_outside_root` 共通の語彙的判定本体）。
+
+    [設計判断・要 record] `samples/foo.wav` のようなネスト参照は絶対パス
+    でも `..` を含む脱出でもないため、`_reject_wav_paths_outside_root` の
+    resolve 後 root 包含検査を素通りする（voicebank root 配下に留まった
+    まま、対象 pitch dir の**サブディレクトリ**を指すだけ）。しかし
+    `voicebank_identity_hash()` は各 pitch dir **直下**の `*.wav` のみを
+    非再帰 glob (`pdir.glob("*.wav")`) で列挙するため、この種の参照は
+    identity の対象外のまま WORLD 分析へ読み込まれる——ネストされた収録を
+    差し替えても `voicebank_identity_hash`/`spec.donor.voicebank_sha256`
+    は変化せず、両 provenance 検証が素通りしたまま render 済みバイト列
+    だけが変わる実害がある。
+
+    UTAU の実運用慣行（oto.ini の `filename=` は同一ディレクトリ内の
+    wav ファイル名のみを指す。ベンダ配布 voicebank・主要エディタが生成
+    する oto.ini はいずれも basename 参照のみ）とも整合するため、
+    非 basename 参照（`/` または `\\` を含む、あるいは `..`/`.` そのもの）
+    は fail-closed で拒否する（identity の全数インベントリ性を保つ
+    最小変更。もし実データで非 basename 参照が確認された場合は、
+    identity 側をネスト対応へ拡張する設計へ切替え、判断を record する
+    ——本 record の「R13 対応」節を参照）。
     """
+    if "/" in wav_filename or "\\" in wav_filename:
+        return False
+    if wav_filename in ("", ".", ".."):
+        return False
     lexical = Path(wav_filename)
-    return not (lexical.is_absolute() or ".." in lexical.parts)
+    if lexical.is_absolute() or ".." in lexical.parts:
+        return False
+    return lexical.name == wav_filename
+
+
+def _wav_ref_is_lexically_safe(wav_filename: str) -> bool:
+    """絶対パス・`..` 成分・非 basename（`/`/`\\` を含むネスト参照。review
+    #262 R13）を含む wav 参照を語彙的に拒否する（`_reject_wav_paths_outside_root`
+    の語彙的検査と同じ判定を、selection 段のヘッダ probe より前に軽量に
+    再利用するためのヘルパー。selection 段で任意ファイルを read しないため
+    の防御・[実装決定・record 記録]。最終的な網羅的検査（symlink 解決込み）
+    は `_reject_wav_paths_outside_root` が選択済み集合へ改めて適用する——
+    本関数は selection 段の probe を安全側に倒すだけの軽量フィルタで、
+    これを置き換えない）。
+    """
+    return _wav_ref_is_basename(wav_filename)
 
 
 def _probe_wav_duration_ms(path: Path) -> Optional[float]:
@@ -479,12 +514,19 @@ def _reject_wav_paths_outside_root(
     指せば resolve 検査を素通りしてしまう。そのため `.resolve()` を呼ぶ前に、
     各 wav_filename を語彙的（文字列の構成要素）に検査し、絶対パス・`..`
     成分を含むものは symlink 解決を待たず即座に拒否する。
+
+    P2 修正 (review #262 R13): `samples/foo.wav` のような非 basename ネスト
+    参照は、絶対パスでも `..` 脱出でもないため上記 2 検査をいずれも素通り
+    し、resolve 後も voicebank root 配下（対象 pitch dir のサブディレクトリ）
+    に留まる。しかし `voicebank_identity_hash()` は pitch dir 直下のみを
+    非再帰 glob するため、この種の参照は identity の対象外のまま分析され
+    続ける（`_wav_ref_is_basename` docstring 参照）。語彙的検査を
+    `_wav_ref_is_basename` へ委譲し、非 basename 参照も同じ即座拒否に含める。
     """
     root_resolved = root.resolve()
     violations: List[str] = []
     for wav_filename in wav_filenames:
-        lexical = Path(wav_filename)
-        if lexical.is_absolute() or ".." in lexical.parts:
+        if not _wav_ref_is_basename(wav_filename):
             violations.append(f"{pdir_name}/{wav_filename}")
             continue
         candidate = pdir / wav_filename

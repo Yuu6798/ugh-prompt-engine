@@ -536,3 +536,63 @@ def test_build_donor_bank_lab_deterministic_repeat_with_required_coverage(tmp_pa
     assert np.array_equal(bank1.sp, bank2.sp)
     assert np.array_equal(bank1.ap, bank2.ap)
     assert uv1 == uv2
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #262 R13): pjsNNN/ が corpus_root 外を指す symlink の拒否
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_identity_hash_rejects_symlinked_pjs_dir_outside_root(tmp_path: Path) -> None:
+    root = tmp_path / "pjs_corpus"
+    root.mkdir()
+    outside = tmp_path / "outside_pjs001"
+    outside.mkdir()
+    _write_sine_wav(outside / "pjs001_song.wav", duration_s=1.0)
+    (outside / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 k\n4000000 9000000 a\n")
+
+    (root / "pjs001").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="corpus_root 外"):
+        dbl.corpus_identity_hash(root)
+
+
+def test_build_donor_bank_lab_rejects_symlinked_pjs_dir_outside_root(tmp_path: Path) -> None:
+    """P2 修正 (review #262 R13): `pjsNNN/` が corpus_root 外を指す symlink の
+    場合、glob が返す外部 `.lab`/`_song.wav` を read せず fail-closed で拒否する
+    （render の出力ガードは `voicebank_root` 配下のみを保護するため、脱出先
+    ドナーが分析後に上書きされても検知されない実害を防ぐ）。
+    """
+    root = tmp_path / "pjs_corpus"
+    root.mkdir()
+    outside = tmp_path / "outside_pjs001"
+    outside.mkdir()
+    _write_sine_wav(outside / "pjs001_song.wav", duration_s=2.0)
+    (outside / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 k\n4000000 9000000 a\n")
+
+    (root / "pjs001").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="corpus_root 外"):
+        dbl.build_donor_bank_lab(root, target_median_hz=260.0, min_files=1, max_files=5)
+
+
+def test_build_donor_bank_lab_mixed_real_and_symlinked_dirs_rejects_whole_call(tmp_path: Path) -> None:
+    """正規の pjsNNN と脱出 symlink が混在するコーパスでも、脱出分だけ黙って
+    skip せず呼び出し全体を拒否する（部分的な読み飛ばしは選択統計の偽装に
+    つながるため。`build_donor_bank_lab_missing_paired_wav_fails_closed` と
+    同じ fail-closed 方針）。
+    """
+    root = tmp_path / "pjs_corpus"
+    d1 = root / "pjs001"
+    d1.mkdir(parents=True)
+    _write_sine_wav(d1 / "pjs001_song.wav", duration_s=2.0)
+    (d1 / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 k\n4000000 9000000 a\n")
+
+    outside = tmp_path / "outside_pjs002"
+    outside.mkdir()
+    _write_sine_wav(outside / "pjs002_song.wav", duration_s=2.0)
+    (outside / "pjs002.lab").write_text("0 3000000 pau\n3000000 4000000 s\n4000000 9000000 o\n")
+    (root / "pjs002").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="corpus_root 外"):
+        dbl.build_donor_bank_lab(root, target_median_hz=260.0, min_files=1, max_files=5)

@@ -553,3 +553,54 @@ def test_aggregate_content_hash_changes_when_path_changes_but_hash_set_same() ->
 def test_aggregate_content_hash_empty() -> None:
     # 空でもエラーにならず安定した値を返す（決定論・空集合の hash）。
     assert db.aggregate_content_hash([]) == db.aggregate_content_hash([])
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #262 R13): reject_paths_outside_root — symlink 脱出の共通拒否
+# ---------------------------------------------------------------------------
+
+
+def test_reject_paths_outside_root_accepts_paths_inside_root(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    p = root / "sub" / "file.wav"
+    p.write_bytes(b"x")
+    db.reject_paths_outside_root([p], root, source_label="test")  # no raise
+
+
+def test_reject_paths_outside_root_missing_path_inside_root_does_not_raise(tmp_path: Path) -> None:
+    """未作成（分析前に probe する _song.wav 等）でも lexical に root 配下なら通す
+    （strict=False resolve）。"""
+    root = tmp_path / "root"
+    root.mkdir()
+    missing = root / "sub" / "not_yet_written.wav"
+    db.reject_paths_outside_root([missing], root, source_label="test")  # no raise
+
+
+def test_reject_paths_outside_root_rejects_symlinked_dir_escape(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "file.lab").write_text("x")
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="root 外"):
+        db.reject_paths_outside_root(
+            [root / "linked" / "file.lab"], root, source_label="test"
+        )
+
+
+def test_reject_paths_outside_root_lists_violation_in_message(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    bad = root / "linked" / "escaped.wav"
+
+    with pytest.raises(ValueError) as excinfo:
+        db.reject_paths_outside_root([bad], root, source_label="test-source")
+    msg = str(excinfo.value)
+    assert "test-source" in msg
+    assert "escaped.wav" in msg

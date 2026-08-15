@@ -25,6 +25,31 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from glue_template_nn import load_donor_24k, analyze_donor, select_nn_sequence, FRAME_PERIOD_MS  # noqa: E402
 
+# 本スクリプトが --out 配下へ書く固定出力名（衝突検査対象）
+OUTPUT_NAMES = ("f1b_h1_diagnosis.json",)
+
+
+class OutputCollisionError(ValueError):
+    """固定出力名が --donor-wav / --control-npz と衝突する場合に送出する（fail-closed）。"""
+
+
+def _reject_output_collision(out_path: str | Path, protected_inputs: list[str | Path]) -> None:
+    """P1 修正 (review #262 R13): `glue_template.py` と同型の衝突ガード
+    （詳細意図はそちら参照）。`--donor-wav`/`--control-npz` が本スクリプトの
+    固定出力名と衝突する場合、書き込み開始前に fail-closed で拒否する。
+    """
+    out_resolved = Path(out_path).resolve()
+    for p in protected_inputs:
+        if p is None:
+            continue
+        p_path = Path(p)
+        if not p_path.exists():
+            continue
+        if out_resolved == p_path.resolve():
+            raise OutputCollisionError(
+                f"出力 ({out_path}) が保護入力 ({p}) と衝突しています（fail-closed で拒否）"
+            )
+
 
 def env_ratio_rows(sp: np.ndarray, freqs: np.ndarray) -> np.ndarray:
     m_1k3k = (freqs >= 1000) & (freqs < 3000)
@@ -46,6 +71,11 @@ def main() -> None:
     parser.add_argument("--control-npz", required=True, help="共通 f0/amp npz パス（f1a_control.npz）")
     args = parser.parse_args()
     out_dir = args.out
+
+    # --- 出力衝突検査（書き込み開始前・fail-closed） ---
+    protected_inputs = [args.donor_wav, args.control_npz]
+    for name in OUTPUT_NAMES:
+        _reject_output_collision(f"{out_dir}/{name}", protected_inputs)
 
     log = []
     donor_audio, sr = load_donor_24k(args.donor_wav)
