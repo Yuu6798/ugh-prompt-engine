@@ -238,3 +238,46 @@ singer/ S6–S9 の耳検証済みレシピを WORLD パラメータ領域へ移
 - [ ] sakura / umi × ritsu の F1.3 版 WAV + bit 一致・F1.2 版と sha 差分記録
 - [ ] 耳判定 A/B 素材: F1.3 リツ vs F1.2 リツ vs vocadito 基準線
 - [ ] ruff / foundry テスト全 green / singer 38 本非破壊
+
+---
+
+## 追補 F1.4 — VCV 遷移内包 unit への転換（2026-08-15・F1.3 耳判定「接合点未改善」を受けて）
+
+背景 = `results_f1_3/f1_3_record_2026-08-15.md` 耳判定節。診断: 現行の「母音核 unit +
+子音クリップ挿入」は接合を V→C→V 遷移点（知覚的最敏感部）で行っており、VCV 銀行の
+設計意図（遷移は録音済み・接合は母音定常部中央）と逆。
+
+### F1.4-A VCV unit 化（donor_bank_utau v2）
+
+1. unit の単位を oto.ini の **VCV エイリアス**（「a か」= 前母音尾 + /k/ + 母音）へ転換。
+   録音済み調音遷移を切らずに保持する。フレーズ頭は「- か」型（先頭形）エイリアスを使用
+2. 各 unit に (prev_vowel, mora) の文脈キーを付与。preutterance / overlap は
+   oto 値をフレームで保持（F1.3 スキーマを流用）
+3. 語尾: 「a −」型の休止形（R）エイリアスが存在すれば phrase 末に使用、無ければ
+   減衰テーパで代替（実在調査を record に記録）
+
+### F1.4-B 接合位置の移動と preutterance 消費
+
+1. 接合 = **隣接 VCV unit の母音定常部同士**の overlap-add（前 unit の母音尾定常部と
+   次 unit の前母音部を oto overlap 位置で重ねる = UTAU エンジンの標準結線）
+2. **preutterance 消費**: 各 unit をノート開始より preutterance 分だけ**前**に配置し、
+   母音の立ち上がりが拍に着地するようタイムラインを補正（総尺は score 準拠を維持）
+3. 合成子音層（consonants.py）はリツ経路では不使用になる（vocadito/pjs 用に温存）。
+   録音子音クリップ挿入経路も VCV 経路では廃止
+
+### F1.4-C 選択
+
+- 候補 = 文脈キー (prev_vowel, mora) 完全一致を必須、音高は 2 音階（A3/F4）から
+  |Δsemitone| 最小を選択（従来コストの音高項・長さ項は継続、母音ペナルティは
+  文脈キー一致で自動充足）
+- 完全一致候補が無い mora は record に列挙し、近縁文脈（prev_vowel を x 扱い）へ
+  フォールバック（発動記録）
+
+### F1.4 Acceptance
+
+- [ ] sakura / umi の全 mora が VCV 文脈で解決（フォールバック件数記録）
+- [ ] preutterance 消費のタイムライン整合テスト（拍位置に母音開始が着地）
+- [ ] 接合が母音定常部で行われることの構造テスト（接合フレームの音素区分検証）
+- [ ] sakura / umi × ritsu F1.4 版 WAV + bit 一致・F1.3 版と比較保持
+- [ ] ruff / foundry テスト全 green / singer 38 本非破壊
+- [ ] 耳判定素材（F1.4 vs F1.3 vs vocadito 基準線）
