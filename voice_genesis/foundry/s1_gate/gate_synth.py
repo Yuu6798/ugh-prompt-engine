@@ -2,6 +2,35 @@
 
 対応: `voice_genesis/foundry/S1_GPU_RUNBOOK.md` §5.2-5.4。
 
+--- 多話者 reflow acoustic 対応（2026-08-15、S1 5K 実 ckpt で追加） -------------
+  S1 は `backbone_type: lynxnet2` / `diffusion_type: reflow` / `num_spk: 2` /
+  `use_shallow_diffusion: true` の多話者 reflow-diffusion モデルであり、export
+  された acoustic.onnx の入力 I/F は canon 配布（単一話者・DDPM 系・`speedup`）
+  とは異なる（`spk_embed` [1,n_frames,384] 必須・`depth` は float スカラー・
+  `speedup` でなく `steps`(int64 スカラー) 必須）。`run_pipeline` は
+  acoustic.onnx の実際の入力名を実行時に検査し、`spk_embed`+`steps` が両方
+  存在すれば reflow 多話者パス、なければ従来の canon DDPM パス（後方互換・
+  無変更）を使う。
+
+  サンプリング仕様の根拠（記録: `s1_5k_gate_record.md`）:
+  - `depth`: OpenUtau `DiffSingerRenderer.cs` の既定動作
+    （`Preferences.Default.DiffSingerDepth` 既定値 1.0 を
+    `singer.dsConfig.maxDepth`（export 時の dsconfig.yaml `max_depth`）で
+    クランプ）をそのまま採用。`RectifiedFlowONNX.forward`
+    （`deployment/modules/rectified_flow.py`）の
+    `t_start = max(1 - depth, self.t_start)` により、このアーキテクチャで
+    到達可能な最深（=最も noise 依存度が高い＝shallow 開始を意味する値）
+    になる。
+  - `steps`: 学習時 `config.yaml` の `sampling_steps: 20` を採用。OpenUtau
+    `Preferences.cs` の `DiffSingerSteps` 既定値も同じ 20 で独立に一致。
+  - `spk_embed`: export 済み `<exp_name>.<speaker>.emb`（384-dim float32、
+    話者ベクトル）を全フレームへ定数タイル化する
+    （OpenUtau `DiffSingerSpeakerEmbedManager.PhraseSpeakerEmbedByFrame`
+    の単一話者・ボイスカラーカーブなしケースと同一の畳み込み結果）。
+  - `--speaker {ritsu,pjs}`: acoustic ディレクトリの `<exp_name>.<speaker>.emb`
+    を検索して読み込む。reflow パスでは必須（見つからなければ fail-closed で
+    停止）。canon DDPM パスでは無視される。
+
 本スクリプトの CPU 推論チェーン（linguistic -> dur -> linguistic(2回目) -> pitch
 -> acoustic -> vocoder）は、波音リツ DiffSinger CPU 直接推論スパイク（`s0_probe_record.md`、
 scratchpad 完結・非コミット。実行日 2026-08-15、フル配線 sha256 決定論確認済み:
@@ -77,9 +106,14 @@ SEED = 42
 HEAD_FRAMES = 8
 TAIL_FRAMES = 8
 LEAD_PADDING_MS = 500.0
-ACOUSTIC_STEPS = 20
+ACOUSTIC_STEPS = 20  # canon DDPM 経路専用（speedup 計算の除数、後方互換維持のため無変更）
 PITCH_STEPS = 10
 VOWEL_SET = {"a", "i", "u", "e", "o", "N"}
+
+# reflow 多話者 acoustic 経路の sampling steps。根拠: 学習時 config.yaml の
+# `sampling_steps: 20` と、OpenUtau `Preferences.cs` の `DiffSingerSteps` 既定値
+# 20 が独立に一致（両方 S1 5K checkpoint で実測確認済み。docstring 冒頭参照）。
+REFLOW_SAMPLING_STEPS = 20
 
 
 # ============================================================================
@@ -164,16 +198,23 @@ def collect_input_sha256(
     canon_model_dir: Path,
     vocoder_dir: Path,
     acoustic_onnx_path: Path,
+    acoustic_dsconfig_path: Path,
     own_json: Optional[Path],
+    speaker_embed_path: Optional[Path] = None,
 ) -> Dict[str, Optional[str]]:
     """gate 判定を駆動した入力モデル束の sha256 を集約する。
 
     出力 WAV の sha256 だけでは「どのモデル束からその判定が出たか」を後日
     一意に特定できない（ckpt・config・export 済み acoustic.onnx・
-    phonemes.json・canon variance 各 onnx・vocoder onnx のいずれかが差し替わって
+    phonemes.json・acoustic dsconfig.yaml（`run_pipeline` が `max_depth` を
+    読む）・canon phonemes.txt（variance トークン ID 割当に使う）・canon
+    variance 各 onnx・vocoder onnx・話者 embedding のいずれかが差し替わって
     いても出力 WAV との対応関係が追えない）ため、gate summary へ入力側 sha256
-    も併記する。ファイルが存在しない場合（`--skip-export` で ckpt/config が
-    対象外、own_json が canon フォールバック時など）は `None` を記録する。
+    も併記する。実際に `run_pipeline`/`cmd_run` が load する全ファイルを網羅する
+    （PR #263 R3 レビュー指摘: dsconfig と canon phonemes.txt が抜けていた）。
+    ファイルが存在しない場合（`--skip-export` で ckpt/config が対象外、
+    own_json が canon フォールバック時、canon DDPM 経路で speaker_embed_path が
+    None など）は `None` を記録する。
     """
     shas: Dict[str, Optional[str]] = {}
 
@@ -192,10 +233,19 @@ def collect_input_sha256(
     shas["acoustic_phonemes_json"] = (
         sha256_file(own_json) if own_json is not None and own_json.exists() else None
     )
+    shas["acoustic_dsconfig_yaml"] = (
+        sha256_file(acoustic_dsconfig_path) if acoustic_dsconfig_path.exists() else None
+    )
+    shas["speaker_embed"] = (
+        sha256_file(speaker_embed_path)
+        if speaker_embed_path is not None and speaker_embed_path.exists()
+        else None
+    )
 
     linguistic_onnx = canon_model_dir / "linguistic.onnx"
     variance_dur_onnx = canon_model_dir / "dsdur" / "dur.onnx"
     variance_pitch_onnx = canon_model_dir / "dspitch" / "pitch.onnx"
+    canon_phonemes_txt = canon_model_dir / "phonemes.txt"
     vocoder_onnx = vocoder_dir / "nsf_hifigan.onnx"
     shas["canon_linguistic_onnx"] = (
         sha256_file(linguistic_onnx) if linguistic_onnx.exists() else None
@@ -205,6 +255,9 @@ def collect_input_sha256(
     )
     shas["canon_variance_pitch_onnx"] = (
         sha256_file(variance_pitch_onnx) if variance_pitch_onnx.exists() else None
+    )
+    shas["canon_phonemes_txt"] = (
+        sha256_file(canon_phonemes_txt) if canon_phonemes_txt.exists() else None
     )
     shas["vocoder_onnx"] = sha256_file(vocoder_onnx) if vocoder_onnx.exists() else None
     return shas
@@ -225,6 +278,22 @@ def load_own_phonemes_json(path: Path) -> Dict[str, int]:
 def find_own_phonemes_json(acoustic_dir: Path) -> Optional[Path]:
     candidates = sorted(acoustic_dir.glob("*.phonemes.json"))
     return candidates[0] if candidates else None
+
+
+def find_speaker_embed(acoustic_dir: Path, speaker: str) -> Optional[Path]:
+    """export.py `_export_spk_embed` が書き出す `<exp_name>.<speaker>.emb`
+    （384-dim float32 raw バイナリ、話者ベクトル 1 本）を探す。reflow 多話者
+    acoustic の `spk_embed` 入力構築に使う（見つからなければ None、呼び出し側
+    が fail-closed で停止する）。"""
+    candidates = sorted(acoustic_dir.glob(f"*.{speaker}.emb"))
+    return candidates[0] if candidates else None
+
+
+def load_speaker_embed_vector(path: Path) -> np.ndarray:
+    """`<exp_name>.<speaker>.emb` を 1 次元 float32 ベクトルとして読む
+    （export 側は `spk_embed.cpu().numpy().tobytes()` で書き出す raw バイナリ、
+    ヘッダなし）。"""
+    return np.frombuffer(path.read_bytes(), dtype=np.float32).copy()
 
 
 def build_own_dictionary_from_binarize(diffsinger_repo: Path, dictionary_ja: Path) -> Dict[str, int]:
@@ -293,6 +362,17 @@ def run_export_acoustic(diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, st
     print("| export cmd:", " ".join(cmd))
     subprocess.run(cmd, cwd=str(diffsinger_repo), check=True)
     if not (out_path / "acoustic.onnx").exists():
+        # BUGFIX (5K gate 実測, 2026-08-15): scripts/export.py acoustic の実出力は
+        # `acoustic.onnx` 固定名ではなく `<exp_name>.onnx`（+ freeze_spk 付与時は
+        # `<exp_name>.<speaker>.onnx`）。1 個だけ *.onnx が見つかった場合に限り
+        # `acoustic.onnx` へエイリアスコピーする（複数ある場合は決め打ちできない
+        # ため何もせず後続の存在チェックで fail-closed に停止させる）。
+        onnx_candidates = sorted(out_path.glob("*.onnx"))
+        if len(onnx_candidates) == 1:
+            shutil.copy2(onnx_candidates[0], out_path / "acoustic.onnx")
+            print(f"| aliased {onnx_candidates[0].name} -> acoustic.onnx "
+                  f"(gate_synth.py naming-assumption bugfix)")
+    if not (out_path / "acoustic.onnx").exists():
         raise RuntimeError(f"export.py did not produce {out_path}/acoustic.onnx")
     return out_path
 
@@ -343,8 +423,11 @@ def run_pipeline(
     variance_phonemes: Dict[str, int],
     acoustic_phonemes: Dict[str, int],
     record: dict,
+    speaker_name: Optional[str] = None,
+    speaker_embed_vector: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     ort.set_seed(SEED)
+    record["seed"] = SEED
     so = ort.SessionOptions()
     so.intra_op_num_threads = 1
     so.inter_op_num_threads = 1
@@ -357,6 +440,12 @@ def run_pipeline(
     sess_acoustic = ort.InferenceSession(str(acoustic_onnx_path), sess_options=so, providers=providers)
     sess_vocoder = ort.InferenceSession(str(vocoder_dir / "nsf_hifigan.onnx"), sess_options=so, providers=providers)
     record["model_load_sec"] = time.time() - t_load0
+
+    # acoustic.onnx の実際の入力名で経路を判定する（canon 単一話者 DDPM か、
+    # S1 多話者 reflow か）。§docstring 冒頭「多話者 reflow acoustic 対応」参照。
+    acoustic_input_names = {i.name for i in sess_acoustic.get_inputs()}
+    is_reflow_multi_speaker = {"spk_embed", "steps"}.issubset(acoustic_input_names)
+    record["stage3_mode"] = "reflow_multi_speaker" if is_reflow_multi_speaker else "canon_ddpm"
 
     dsconfig = yaml.safe_load(acoustic_dsconfig_path.read_text(encoding="utf-8"))
     hop_size = 512
@@ -471,19 +560,57 @@ def run_pipeline(
     a_tokens2 = [sp_idx_a] + [acoustic_phonemes[p] for p in real_phones] + [sp_idx_a]
 
     f0_hz = (440.0 * (2.0 ** ((pitch_pred - 69.0) / 12.0))).astype(np.float32)
-    max_depth_raw = float(dsconfig.get("max_depth", 1000))
-    depth_float = max_depth_raw / 1000.0
-    int64_depth = int(round(depth_float * 1000))
-    acoustic_speedup = max(1, int64_depth // ACOUSTIC_STEPS)
-    int64_depth = (int64_depth // acoustic_speedup) * acoustic_speedup
 
-    acoustic_out = sess_acoustic.run(None, {
-        "tokens": np.array([a_tokens2], dtype=np.int64),
-        "durations": np.array([ph_dur2], dtype=np.int64),
-        "f0": f0_hz.reshape(1, -1),
-        "depth": np.array(int64_depth, dtype=np.int64),
-        "speedup": np.array(acoustic_speedup, dtype=np.int64),
-    })
+    if is_reflow_multi_speaker:
+        # --- reflow 多話者 acoustic（S1）: depth(float scalar)/steps(int64 scalar)/
+        # spk_embed([1,n_frames,384]) 必須。根拠は docstring 冒頭・
+        # `s1_5k_gate_record.md` 参照。
+        if speaker_embed_vector is None:
+            raise SystemExit(
+                "ERROR: acoustic.onnx requires 'spk_embed' (S1 多話者 reflow "
+                "モデル)だが、話者 embedding が読み込まれていない。"
+                "--speaker {ritsu,pjs} が acoustic ディレクトリの "
+                "*.<speaker>.emb と一致しているか確認すること（fail-closed）。"
+            )
+        # dsconfig の max_depth は既に 0-1 float（reflow exporter:
+        # `dsconfig['max_depth'] = 1 - self.model.diffusion.t_start`）。
+        # OpenUtau 既定と同じく Preferences 側の希望値 1.0 を max_depth でクランプする。
+        max_depth = float(dsconfig.get("max_depth", 1.0))
+        depth_value = min(1.0, max_depth)
+        steps_value = REFLOW_SAMPLING_STEPS
+        spk_embed_frames = np.tile(
+            speaker_embed_vector.astype(np.float32).reshape(1, 1, -1),
+            (1, total_frames, 1),
+        )
+        acoustic_out = sess_acoustic.run(None, {
+            "tokens": np.array([a_tokens2], dtype=np.int64),
+            "durations": np.array([ph_dur2], dtype=np.int64),
+            "f0": f0_hz.reshape(1, -1),
+            "spk_embed": spk_embed_frames,
+            "depth": np.array(depth_value, dtype=np.float32),
+            "steps": np.array(steps_value, dtype=np.int64),
+        })
+        record["stage3_speaker"] = speaker_name
+        record["stage3_depth"] = depth_value
+        record["stage3_steps"] = steps_value
+        record["stage3_dsconfig_max_depth"] = max_depth
+    else:
+        max_depth_raw = float(dsconfig.get("max_depth", 1000))
+        depth_float = max_depth_raw / 1000.0
+        int64_depth = int(round(depth_float * 1000))
+        acoustic_speedup = max(1, int64_depth // ACOUSTIC_STEPS)
+        int64_depth = (int64_depth // acoustic_speedup) * acoustic_speedup
+
+        acoustic_out = sess_acoustic.run(None, {
+            "tokens": np.array([a_tokens2], dtype=np.int64),
+            "durations": np.array([ph_dur2], dtype=np.int64),
+            "f0": f0_hz.reshape(1, -1),
+            "depth": np.array(int64_depth, dtype=np.int64),
+            "speedup": np.array(acoustic_speedup, dtype=np.int64),
+        })
+        record["stage3_depth"] = int64_depth
+        record["stage3_speedup"] = acoustic_speedup
+
     acoustic_names = [o.name for o in sess_acoustic.get_outputs()]
     mel = acoustic_out[acoustic_names.index("mel")]
     record["stage3_elapsed_sec"] = time.time() - t0
@@ -512,6 +639,8 @@ def synth_song(
     variance_phonemes: Dict[str, int],
     acoustic_phonemes: Dict[str, int],
     out_dir: Path,
+    speaker_name: Optional[str] = None,
+    speaker_embed_vector: Optional[np.ndarray] = None,
 ) -> dict:
     build_fn, beats_to_seconds, tempo_bpm = load_song_module(song, singer_dir)
     notes_raw = build_fn()
@@ -524,6 +653,7 @@ def synth_song(
         notes_raw, beats_to_seconds, tempo_bpm,
         canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
         variance_phonemes, acoustic_phonemes, record,
+        speaker_name=speaker_name, speaker_embed_vector=speaker_embed_vector,
     )
     record["total_elapsed_sec"] = time.time() - t_total0
 
@@ -541,7 +671,10 @@ def synth_song(
     record["wav_rms"] = rms
 
     suffix = f"_n{notes_limit}" if notes_limit is not None else ""
-    out_name = f"gate_{song}{suffix}.wav"
+    # reflow 多話者経路のみファイル名に話者を含める（canon 経路は既存命名を維持
+    # — S0 回帰 sha256 が canon 出力ファイル名に依存しないよう互換性を壊さない）。
+    speaker_suffix = f"_{speaker_name}" if record.get("stage3_mode") == "reflow_multi_speaker" and speaker_name else ""
+    out_name = f"gate_{song}{speaker_suffix}{suffix}.wav"
     out_path = out_dir / out_name
     out_dir.mkdir(parents=True, exist_ok=True)
     sf.write(str(out_path), y.astype(np.float32), 44100, subtype="PCM_16")
@@ -561,7 +694,10 @@ def synth_song(
 def cmd_run(args):
     canon_model_dir = Path(args.canon_model_dir)
     vocoder_dir = Path(args.vocoder_dir)
-    out_dir = Path(args.out_dir)
+    # BUGFIX (5K gate 実測, 2026-08-15): --out-dir を相対パスのまま run_export_acoustic
+    # に渡すと、subprocess.run(cmd, cwd=diffsinger_repo) の cwd 基準で解決されてしまい
+    # 意図した出力先に書かれない。resolve() で絶対パス化してから使う。
+    out_dir = Path(args.out_dir).resolve()
     singer_dir = Path(args.singer_dir) if args.singer_dir else DEFAULT_SINGER_DIR
     variance_phonemes = load_canon_phonemes(canon_model_dir / "phonemes.txt")
 
@@ -583,6 +719,17 @@ def cmd_run(args):
             acoustic_dsconfig_path = canon_model_dir / "dsconfig.yaml"
 
     own_json = find_own_phonemes_json(acoustic_dir)
+
+    # 話者 embedding（reflow 多話者 acoustic 用）。canon DDPM acoustic には
+    # 対応する *.emb が存在しないため speaker_embed_path/vector は None のままで、
+    # run_pipeline 側が acoustic.onnx の入力名から不要と判定して無視する。
+    speaker_embed_path = find_speaker_embed(acoustic_dir, args.speaker) if args.speaker else None
+    speaker_embed_vector = (
+        load_speaker_embed_vector(speaker_embed_path) if speaker_embed_path is not None else None
+    )
+    if args.speaker and speaker_embed_path is not None:
+        print(f"| speaker embed: {speaker_embed_path} ({speaker_embed_vector.shape[0]}-dim)")
+
     if args.tokens == "canon":
         # 明示的な S0 互換検証専用パス。事故で本番に紛れ込まないよう、
         # own_json が存在するのに --tokens canon を指定した場合も警告する
@@ -611,33 +758,55 @@ def cmd_run(args):
         encoding_mode = f"own ({own_json.name})"
     print(f"| acoustic token encoding: {encoding_mode}")
 
+    # R3 レビュー指摘 (PR #263, gate_synth.py:616): run_pipeline が実際に load する
+    # dsconfig.yaml と canon phonemes.txt も入力 sha256 に含める（+ speaker_embed）。
     input_sha256 = collect_input_sha256(
-        args, canon_model_dir, vocoder_dir, acoustic_onnx_path, own_json,
+        args, canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
+        own_json, speaker_embed_path,
     )
+
+    # R3 レビュー指摘 (PR #263, gate_synth.py:544): 5K/10K/20K が同じ --out-dir を
+    # 使い回すと gate_<song>.wav / summary が上書きされ、前段ゲートの判定証跡が
+    # 破壊される。--step 指定時は成果物を out_dir/step_<N>/ 配下に分離する
+    # （--skip-export の S0 互換検証パスは step 未指定のままなので out_dir 直下 = 無変更）。
+    synth_out_dir = (out_dir / f"step_{args.step}") if args.step is not None else out_dir
+    synth_out_dir.mkdir(parents=True, exist_ok=True)
 
     songs = args.song.split(",")
     results = {}
     for song in songs:
-        print(f"| synthesizing: {song} (notes_limit={args.notes_limit})")
+        print(f"| synthesizing: {song} (notes_limit={args.notes_limit}, speaker={args.speaker})")
         rec = synth_song(
             song, args.notes_limit, singer_dir,
             canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
-            variance_phonemes, acoustic_phonemes, out_dir,
+            variance_phonemes, acoustic_phonemes, synth_out_dir,
+            speaker_name=args.speaker, speaker_embed_vector=speaker_embed_vector,
         )
         results[song] = dict(
             wav_path=rec["wav_path"], wav_sha256=rec["wav_sha256"],
             wav_duration_sec=rec["wav_duration_sec"], wav_rms=rec["wav_rms"],
             wav_peak=rec["wav_peak"], n_phonemes=rec["score"]["n_phonemes"],
             dual_encoding_diverged=rec["stage3_dual_encoding_diverged"],
+            stage3_mode=rec["stage3_mode"],
+            stage3_depth=rec.get("stage3_depth"),
+            stage3_steps=rec.get("stage3_steps"),
+            stage3_speaker=rec.get("stage3_speaker"),
         )
         print(f"|   sha256={rec['wav_sha256']} dur={rec['wav_duration_sec']:.3f}s "
-              f"rms={rec['wav_rms']:.4f} diverged={rec['stage3_dual_encoding_diverged']}")
+              f"rms={rec['wav_rms']:.4f} diverged={rec['stage3_dual_encoding_diverged']} "
+              f"mode={rec['stage3_mode']}")
 
-    summary_path = out_dir / "gate_synth_summary.json"
+    summary_path = synth_out_dir / "gate_synth_summary.json"
     summary_path.write_text(json.dumps({
+        "step": args.step,
         "acoustic_encoding_mode": encoding_mode,
         "acoustic_onnx_path": str(acoustic_onnx_path),
         "input_sha256": input_sha256,
+        "sampling_params": {
+            "seed": SEED,
+            "speaker": args.speaker,
+            "reflow_sampling_steps_constant": REFLOW_SAMPLING_STEPS,
+        },
         "results": results,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"| summary: {summary_path}")
@@ -680,6 +849,10 @@ def main():
     p_run.add_argument("--singer-dir", default=None,
                         help="score.py/score_umi.py の所在 (既定: このスクリプトから見た "
                              f"'voice_genesis/singer/' = {DEFAULT_SINGER_DIR})")
+    p_run.add_argument("--speaker", choices=["ritsu", "pjs"], default="ritsu",
+                        help="reflow 多話者 acoustic 用の話者選択。acoustic ディレクトリの "
+                             "'*.<speaker>.emb' を読み込んで spk_embed を構築する（既定 ritsu"
+                             "＝主判定話者）。canon 単一話者 DDPM acoustic では無視される。")
     p_run.set_defaults(func=cmd_run)
 
     p_map = sub.add_parser("mapping-check", help="自前語彙 <-> canon 617/46 語彙の写像テーブル検証")
