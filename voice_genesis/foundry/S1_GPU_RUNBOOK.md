@@ -224,18 +224,25 @@ linguistic.onnx(2回目) -> pitch.onnx -> acoustic.onnx -> vocoder`）を再利�
 差し替える**。
 
 **既知の相互運用性要件（要確認・未検証。実装前に必ず踏む）**: `acoustic.onnx`
-の入力 `tokens`（int64 音素 ID 列）は、**自前学習に使った辞書
-（`merged_ja_dict.txt` から binarize が生成する `dictionary-ja.txt`/
-`phonemes.txt`）の ID 空間**であり、カノン配布 `linguistic.onnx`/`dur.onnx`/
-`pitch.onnx` が使う `tokens`（カノン公式 617/46 語彙の ID 空間）とは**別物**
-である（実測: `acoustic.onnx` の入力は `tokens`/`durations`/`f0`/`depth`/
-`speedup` のみで、`linguistic.onnx` の連続値出力 `encoder_out` は経由しない。
-`onnx_io_dump.txt` 参照）。したがって CPU 合成スクリプトでは:
+の入力 `tokens`（int64 音素 ID 列）は、**自前学習に使った語彙
+（`merged_ja_dict.txt` から binarize が生成する `dictionary-ja.txt` を元に
+`export.py acoustic` が書き出す `<model_name>.phonemes.json`）の ID 空間**
+であり、カノン配布 `linguistic.onnx`/`dur.onnx`/`pitch.onnx` が使う `tokens`
+（カノン公式 617/46 語彙の ID 空間）とは**別物**である（実測: `acoustic.onnx`
+の入力は `tokens`/`durations`/`f0`/`depth`/`speedup` のみで、`linguistic.onnx`
+の連続値出力 `encoder_out` は経由しない。`onnx_io_dump.txt` 参照）。
+したがって CPU 合成スクリプトでは:
 
 1. `linguistic.onnx`/`dur.onnx`/`pitch.onnx` 呼び出し用の `tokens` は
    **従来どおりカノン公式辞書で符号化**する（変更しない）。
 2. `acoustic.onnx` へ渡す `tokens` は、**同じ音素文字列列**（ph_seq）を
-   **自前 `phonemes.txt`（binarize 出力）で再符号化**したものを使う。
+   **自前 `<model_name>.phonemes.json`（`export.py acoustic` が
+   `deployment/exporters/acoustic_exporter.py:_export_phonemes` で
+   `acoustic.onnx` と同じ出力ディレクトリに書き出す、`phone_to_id` の flat
+   JSON dict。`utils/phoneme_utils.py:PhonemeDictionary.dump` の出力形式で、
+   改行区切りの plain-text `phonemes.txt` ではない — 実装時に精読して判明した
+   実体。canon 配布物の `phonemes.txt` はカノン側が別途変換・同梱したもので、
+   export.py の標準出力形式ではない）で再符号化**したものを使う。
 3. `durations`（フレーム長）は `dur.onnx` が出した値をそのまま流用してよい
    （音素の並び順が同一であれば ID 空間に依存しない）。
 
