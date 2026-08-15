@@ -61,7 +61,7 @@ P1 でこのスタックを基底に「人間らしさ特徴量」を選定す�
 ## 5. Acceptance Criteria
 
 - [ ] `voice_genesis/foundry/refset/`（新設）に generator/manifest/features のコード一式
-- [ ] 1 万本の第 1 バッチが scratchpad に生成され、manifest（JSONL shard）が
+- [ ] P0-min バッチ（軸別スイープ 500–1,000 本）が scratchpad に生成され、manifest（JSONL shard）が
   リポにコミットされる（音声非コミット・sha256 と regen_cmd で再生成可能）
 - [ ] 決定論: 同一 seed で manifest が bit 一致（抜き取り 100 本の音声 sha 一致）
 - [ ] 4 系統すべて非空・パラメータ被覆の要約統計が record に記録
