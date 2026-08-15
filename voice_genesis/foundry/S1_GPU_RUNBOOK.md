@@ -111,7 +111,9 @@ cd "$REPO"
 # 本 runbook を含む immutable commit を checkout する（例: 本修正コミットの SHA。
 # PR マージ後は main のマージコミット/タグへ読み替える。開発中の一時ブランチ名は
 # 削除・先行されうるため参照しない）
-git checkout <本修正コミットの SHA、または PR マージ後の main マージコミット/タグ>
+git checkout 2d9774270b80f3e3cd625cda6e834cdeabf53363   # 本修正コミット（PR #263
+                        # R2 レビュー6件対応）。PR マージ後は main の
+                        # マージコミット/タグへ読み替える
 pip install -e ".[dev]"
 pip install praat-parselmouth
 
