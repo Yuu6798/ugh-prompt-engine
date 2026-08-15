@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from donor_bank import DonorBank, DonorUnit  # noqa: F401  (adapter sibling import)
+import joins as jn  # adapter sibling import・追補 F1.3-A: ループ境界 overlap-add
 import vowel_class as vc  # noqa: F401  (adapter sibling import・追補 F1.1-A)
 
 DEFAULT_W_P = 1.0
@@ -70,6 +71,10 @@ STRETCH_RATIO_MIN = 0.5
 STRETCH_RATIO_MAX = 2.0
 # 往復ループに使う unit 中央区間の割合（中央 50%）。
 LOOP_CENTER_FRACTION = 0.5
+# 追補 F1.3-A item3: 長音ループ（往復）境界の overlap-add 長。joins.py
+# DEFAULT_OVERLAP_MS（oto 情報を持たない銀行の固定値）と同じ規約を踏襲する
+# （ループ折返しは donor 側の oto overlap 情報を持たないため常に固定値）。
+LOOP_OVERLAP_MS = jn.DEFAULT_OVERLAP_MS
 
 
 def _semitone_dist(f_a: float, f_b: float) -> float:
@@ -254,7 +259,10 @@ def _linear_resample_frames(x: np.ndarray, out_len: int) -> np.ndarray:
 
 
 def _ping_pong_pad(seg: np.ndarray, deficit: int) -> Tuple[np.ndarray, int]:
-    """seg（中央 50% 区間）を往復（forward/backward 交互）で並べ deficit フレーム分作る。"""
+    """[v1・テスト互換のため残置。render.py からは呼ばれない]
+    seg（中央 50% 区間）を往復（forward/backward 交互）で並べ deficit フレーム分
+    作る（硬い折り返し・overlap-add 無し）。追補 F1.3-A item3 で `_ping_pong_pad_v2`
+    に置き換えられた。"""
     seg_len = seg.shape[0]
     if seg_len == 0 or deficit <= 0:
         return seg[:0], 0
@@ -270,6 +278,39 @@ def _ping_pong_pad(seg: np.ndarray, deficit: int) -> Tuple[np.ndarray, int]:
         forward = not forward
         n_cycles += 1
     return np.concatenate(pieces, axis=0), n_cycles
+
+
+def _ping_pong_pad_v2(
+    sp_seg: np.ndarray, ap_seg: np.ndarray, deficit: int, overlap_frames: int
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    """追補 F1.3-A item3: (sp_seg, ap_seg)（中央 50% 区間）を往復で並べ deficit
+    フレーム分作る。折返し境界（forward/backward 交互の継ぎ目）を
+    `joins.overlap_add_concat` の true overlap-add で平滑化する（`_ping_pong_pad`
+    の硬い折返しを廃止）。ピースが 1 個のみ（deficit <= seg_len）の場合は
+    継ぎ目が無いため overlap-add を適用しない。
+    """
+    seg_len = sp_seg.shape[0]
+    if seg_len == 0 or deficit <= 0:
+        return sp_seg[:0], ap_seg[:0], 0
+    sp_pieces: List[np.ndarray] = []
+    ap_pieces: List[np.ndarray] = []
+    total = 0
+    forward = True
+    n_cycles = 0
+    while total < deficit:
+        sp_piece = sp_seg if forward else sp_seg[::-1]
+        ap_piece = ap_seg if forward else ap_seg[::-1]
+        take = min(seg_len, deficit - total)
+        sp_pieces.append(sp_piece[:take])
+        ap_pieces.append(ap_piece[:take])
+        total += take
+        forward = not forward
+        n_cycles += 1
+    if len(sp_pieces) == 1:
+        return sp_pieces[0], ap_pieces[0], n_cycles
+    pairs = list(zip(sp_pieces, ap_pieces))
+    sp_out, ap_out, _stats = jn.overlap_add_concat(pairs, overlap_frames)
+    return sp_out, ap_out, n_cycles
 
 
 def _force_length(x: np.ndarray, target_len: int) -> np.ndarray:
@@ -298,15 +339,20 @@ class ResolvedSegment:
 
 
 def resolve_unit_to_note(
-    bank: DonorBank, unit: DonorUnit, target_n_frames: int, note_index: int = -1
+    bank: DonorBank, unit: DonorUnit, target_n_frames: int, note_index: int = -1,
+    frame_period_ms: float = 5.0,
 ) -> ResolvedSegment:
     """donor unit を note の目標フレーム長へ尺合わせする。
 
     比率 target/unit_len を [0.5, 2.0] にキャップして線形リサンプルする。
     2.0 を超える長音は、キャップ後の unit 中央 50% 区間を往復ループして
-    不足分を延伸する。0.5 未満（過圧縮）はキャップ後の結果を先頭から
-    target 長へ切り詰める（最終フレームで不足すれば末尾フレームを保持して
-    埋める。設計書に明記のない edge case のため実装決定・record 記録）。
+    不足分を延伸する（追補 F1.3-A item3: 折返し境界・sp_base との接続境界とも
+    `joins.overlap_add_concat` の true overlap-add で平滑化する）。0.5 未満
+    （過圧縮）はキャップ後の結果を先頭から target 長へ切り詰める（最終フレーム
+    で不足すれば末尾フレームを保持して埋める。設計書に明記のない edge case の
+    ため実装決定・record 記録）。`frame_period_ms` はループ overlap 長（既定
+    40ms）をフレーム数へ換算するためだけに使う（既定値はプロジェクト全体で
+    使われる 5ms・全既存呼び出しは省略可）。
     """
     unit_len = unit.end_frame - unit.start_frame
     if unit_len <= 0:
@@ -330,10 +376,13 @@ def resolve_unit_to_note(
         center_hi = base_len - base_len // 4
         if center_hi <= center_lo:
             center_hi = min(base_len, center_lo + 1)
-        sp_pad, n_loop_cycles = _ping_pong_pad(sp_base[center_lo:center_hi], deficit)
-        ap_pad, _ = _ping_pong_pad(ap_base[center_lo:center_hi], deficit)
-        sp_out = np.concatenate([sp_base, sp_pad], axis=0)
-        ap_out = np.concatenate([ap_base, ap_pad], axis=0)
+        loop_overlap_frames = max(1, int(round(LOOP_OVERLAP_MS / frame_period_ms)))
+        sp_pad, ap_pad, n_loop_cycles = _ping_pong_pad_v2(
+            sp_base[center_lo:center_hi], ap_base[center_lo:center_hi], deficit, loop_overlap_frames
+        )
+        sp_out, ap_out, _join_stats = jn.overlap_add_concat(
+            [(sp_base, ap_base), (sp_pad, ap_pad)], loop_overlap_frames
+        )
     elif true_ratio < STRETCH_RATIO_MIN:
         cap_mode = "compressed_truncated"
         sp_out = sp_base[:target_n_frames]

@@ -152,3 +152,77 @@ def test_resolve_unit_to_note_deterministic_repeat() -> None:
     assert np.array_equal(r1.sp, r2.sp)
     assert np.array_equal(r1.ap, r2.ap)
     assert r1.n_loop_cycles == r2.n_loop_cycles
+
+
+# --- 追補 F1.3-A item3: 長音ループ境界の overlap-add ---
+
+
+def _interior_jumps(sp: np.ndarray) -> np.ndarray:
+    diffs = np.log(sp[1:] + 1e-8) - np.log(sp[:-1] + 1e-8)
+    return np.linalg.norm(diffs, axis=1)
+
+
+def test_ping_pong_pad_v2_matches_v1_total_length() -> None:
+    n_bins = 4
+    seg_len = 20
+    sp = np.abs(np.random.default_rng(5).standard_normal((seg_len, n_bins))) + 1.0
+    ap = np.full((seg_len, n_bins), 0.2)
+    deficit = 90  # 4.5 cycles 相当
+
+    sp_v1, n1 = un._ping_pong_pad(sp, deficit)
+    sp_v2, ap_v2, n2 = un._ping_pong_pad_v2(sp, ap, deficit, overlap_frames=6)
+
+    assert n1 == n2  # サイクル数（ピース数）は overlap-add の有無で不変
+    assert sp_v1.shape[0] == deficit  # v1: 硬い折返し・deficit ちょうど
+    # v2: overlap-add で継ぎ目ごとに短くなる（ピース数-1 回の join 分）。
+    assert sp_v2.shape[0] < deficit
+    assert ap_v2.shape[0] == sp_v2.shape[0]
+
+
+def test_ping_pong_pad_v2_seam_smoother_than_hard_fold() -> None:
+    """折返し境界の overlap-add が「硬い折返し」より継ぎ目の跳びを増大させない
+    ことを確認する（`_ping_pong_pad` (v1) との比較。完全な平滑化は主張しないが、
+    overlap-add 適用箇所の跳びが単位内部の跳び分布を極端に超えないことを見る）。
+    """
+    n_bins = 5
+    seg_len = 30
+    rng = np.random.default_rng(9)
+    sp = np.abs(1.0 + 0.3 * rng.standard_normal((seg_len, n_bins)).cumsum(axis=0) * 0.05) + 0.5
+    ap = np.full((seg_len, n_bins), 0.2)
+    deficit = 3 * seg_len  # ちょうど 3 ピース（2 継ぎ目）
+
+    sp_v2, _ap_v2, n_cycles = un._ping_pong_pad_v2(sp, ap, deficit, overlap_frames=8)
+    assert n_cycles == 3
+    jumps_v2 = _interior_jumps(sp_v2)
+    jumps_interior = _interior_jumps(sp)
+    # 折返し継ぎ目付近の跳びが unit 内部の跳び分布の最大値を極端に超えない
+    # （硬い折返しであれば方向反転点で跳びが跳ね上がりうる）。
+    assert np.max(jumps_v2) <= np.max(jumps_interior) * 3.0
+
+
+def test_resolve_unit_to_note_extended_loop_v2_seams_use_overlap_add() -> None:
+    """resolve_unit_to_note が実際に v2 ループパディングを使っており、
+    (a) 最終形状は target_n_frames ちょうど、(b) n_loop_cycles >= 1、
+    という既存 acceptance を壊さないことを確認する（後方互換）。"""
+    n_bins = 4
+    sp, ap = _sp_ap_for_unit(50, n_bins, 1.0)
+    bank = _FakeBank(sp, ap)
+    unit = _make_unit(0, 0, 50, 220.0)
+    target_n_frames = 400
+    resolved = un.resolve_unit_to_note(bank, unit, target_n_frames, frame_period_ms=5.0)
+    assert resolved.n_frames == target_n_frames
+    assert resolved.cap_mode == "extended_looped"
+    assert resolved.n_loop_cycles >= 1
+    assert resolved.sp.shape == (target_n_frames, n_bins)
+
+
+def test_resolve_unit_to_note_loop_deterministic_with_frame_period() -> None:
+    n_bins = 4
+    sp, ap = _sp_ap_for_unit(50, n_bins, 1.0)
+    bank = _FakeBank(sp, ap)
+    unit = _make_unit(0, 0, 50, 220.0)
+    r1 = un.resolve_unit_to_note(bank, unit, 350, frame_period_ms=5.0)
+    r2 = un.resolve_unit_to_note(bank, unit, 350, frame_period_ms=5.0)
+    assert np.array_equal(r1.sp, r2.sp)
+    assert np.array_equal(r1.ap, r2.ap)
+    assert r1.n_loop_cycles == r2.n_loop_cycles

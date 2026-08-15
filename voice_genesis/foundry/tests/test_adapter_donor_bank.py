@@ -163,3 +163,85 @@ def test_build_donor_bank_cache_roundtrip(tmp_path: Path) -> None:
     assert [(u.start_frame, u.end_frame) for u in bank1.units] == [
         (u.start_frame, u.end_frame) for u in bank2.units
     ]
+
+
+# --- normalize_unit_energy（追補 F1.3-B item1） ---
+
+
+def _bank_with_levels(levels: list, n_bins: int = 4, unit_len: int = 20) -> db.DonorBank:
+    """各 unit が指定レベル（sp の一様スカラー）を持つ合成 bank を組み立てる。"""
+    n_total = unit_len * len(levels)
+    sp = np.zeros((n_total, n_bins), dtype=np.float64)
+    ap = np.zeros((n_total, n_bins), dtype=np.float64)
+    units = []
+    for i, level in enumerate(levels):
+        s, e = i * unit_len, (i + 1) * unit_len
+        # 単位内部にも軽い変動を持たせる（正規化がスケールのみを揃え形状は保つことの確認用）。
+        base = level + 0.01 * np.arange(unit_len)[:, None]
+        sp[s:e] = base
+        ap[s:e] = 0.2 + 0.01 * i  # レベルと無関係な ap（正規化で不変であることの確認用）
+        units.append(
+            db.DonorUnit(
+                index=i, start_frame=s, end_frame=e, median_f0=220.0, duration_s=unit_len * 5.0 / 1000.0,
+                head_log_bands=db._log_band_vector(sp[s], db.SR),
+                tail_log_bands=db._log_band_vector(sp[e - 1], db.SR),
+                overlap_frames=3 + i, preutterance_frames=2 + i,
+            )
+        )
+    return db.DonorBank(
+        sr=db.SR, frame_period_ms=5.0, f0=np.full(n_total, 220.0), sp=sp, ap=ap, units=units,
+        wav_sha256="dummy", source="synthetic_test", notes_csv_path=None, stats={},
+    )
+
+
+def test_normalize_unit_energy_equalizes_unit_mean_power() -> None:
+    bank = _bank_with_levels([1.0, 4.0, 9.0])
+    normalized, stats = db.normalize_unit_energy(bank)
+    levels = [db._unit_mean_power(normalized.sp, u) for u in normalized.units]
+    # 正規化後は全 unit の平均パワーがほぼ揃う（中央値ターゲットへ収束）。
+    assert levels[0] == pytest.approx(levels[1], rel=1e-9)
+    assert levels[1] == pytest.approx(levels[2], rel=1e-9)
+    assert stats["post_variance"] < stats["pre_variance"]
+    assert stats["pre_variance"] > 0.0
+    assert stats["post_variance"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_normalize_unit_energy_leaves_ap_unchanged() -> None:
+    bank = _bank_with_levels([1.0, 4.0, 9.0])
+    normalized, _stats = db.normalize_unit_energy(bank)
+    assert np.array_equal(normalized.ap, bank.ap)
+
+
+def test_normalize_unit_energy_preserves_overlap_preutterance_fields() -> None:
+    bank = _bank_with_levels([1.0, 4.0, 9.0])
+    normalized, _stats = db.normalize_unit_energy(bank)
+    assert [u.overlap_frames for u in normalized.units] == [u.overlap_frames for u in bank.units]
+    assert [u.preutterance_frames for u in normalized.units] == [u.preutterance_frames for u in bank.units]
+
+
+def test_normalize_unit_energy_recomputes_head_tail_log_bands() -> None:
+    bank = _bank_with_levels([1.0, 9.0])
+    normalized, _stats = db.normalize_unit_energy(bank)
+    for u in normalized.units:
+        expected_head = db._log_band_vector(normalized.sp[u.start_frame], db.SR)
+        expected_tail = db._log_band_vector(normalized.sp[u.end_frame - 1], db.SR)
+        assert np.allclose(u.head_log_bands, expected_head)
+        assert np.allclose(u.tail_log_bands, expected_tail)
+
+
+def test_normalize_unit_energy_deterministic_repeat() -> None:
+    bank = _bank_with_levels([2.0, 5.0, 3.0, 8.0])
+    n1, s1 = db.normalize_unit_energy(bank)
+    n2, s2 = db.normalize_unit_energy(bank)
+    assert np.array_equal(n1.sp, n2.sp)
+    assert s1 == s2
+
+
+def test_normalize_unit_energy_empty_units_is_noop() -> None:
+    bank = db.DonorBank(
+        sr=db.SR, frame_period_ms=5.0, f0=np.zeros(0), sp=np.zeros((0, 4)), ap=np.zeros((0, 4)),
+        units=[], wav_sha256="dummy", source="synthetic_test", notes_csv_path=None, stats={},
+    )
+    normalized, stats = db.normalize_unit_energy(bank)
+    assert normalized is bank
+    assert stats["n_units"] == 0

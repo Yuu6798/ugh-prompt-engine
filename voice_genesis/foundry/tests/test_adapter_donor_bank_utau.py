@@ -250,3 +250,64 @@ def test_build_donor_bank_utau_cache_roundtrip(tmp_path: Path) -> None:
     bank2, uv2, _c2, s2 = dbu.build_donor_bank_utau(root, cache_dir=cache_dir, min_units_per_vowel=1, max_wav_files=5)
     assert np.array_equal(bank1.sp, bank2.sp)
     assert uv1 == uv2
+
+
+# --- 追補 F1.3-A item1: unit スキーマ拡張（oto overlap / preutterance） ---
+
+
+def test_build_donor_bank_utau_units_carry_overlap_and_preutterance(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=2.0)
+    # entry1: preutterance=40ms(=8frames@5ms), overlap=10ms(=2frames)
+    # entry2: preutterance=80ms(=16frames), overlap=20ms(=4frames)
+    oto_text = (
+        "_test.wav=- あA3,0,80,1500,40,10\n"
+        "_test.wav=a かA3,800,150,300,80,20\n"
+    )
+    (pdir / "oto.ini").write_bytes(oto_text.encode("cp932"))
+
+    bank, _uv, _clips, _stats = dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
+    assert len(bank.units) == 2
+    assert bank.units[0].overlap_frames == 2
+    assert bank.units[0].preutterance_frames == 8
+    assert bank.units[1].overlap_frames == 4
+    assert bank.units[1].preutterance_frames == 16
+
+
+def test_build_donor_bank_utau_negative_overlap_clamped_to_zero(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    # overlap=-15ms (負値) -> クランプされ 0 フレームになる。
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,-15\n".encode("cp932"))
+
+    bank, _uv, _clips, stats = dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
+    assert bank.units[0].overlap_frames == 0
+    assert stats["n_negative_overlap_clamped"] == 1
+
+
+def test_build_donor_bank_utau_cache_key_changed_by_schema_version(tmp_path: Path) -> None:
+    """[実装決定・record] 追補 F1.3-A のスキーマ拡張でキー材料へバージョンマーカーを
+    足したため、旧スキーマ（overlap/preutterance フィールド無し）のキャッシュファイル名
+    とは絶対に衝突しないことを確認する（衝突すれば古い pickle を AttributeError 無しに
+    読み込んでしまい、新フィールドが欠落したまま静かに動いてしまう）。
+    """
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    cache_dir = tmp_path / "cache"
+    dbu.build_donor_bank_utau(root, cache_dir=cache_dir, min_units_per_vowel=1, max_wav_files=5)
+    cached = list(cache_dir.glob("utau_bank_*.pkl"))
+    assert len(cached) == 1
+    # 旧スキーマ相当のキー材料（バージョンマーカー無し）と衝突しないことを確認する。
+    import hashlib
+
+    legacy_key_material = f"{root}|A3|5.0|1|5"
+    legacy_key = hashlib.sha256(legacy_key_material.encode("utf-8")).hexdigest()[:24]
+    assert legacy_key not in cached[0].name

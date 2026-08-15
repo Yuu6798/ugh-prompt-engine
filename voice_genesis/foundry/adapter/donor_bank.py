@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from dataclasses import replace as dataclasses_replace
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -214,6 +215,12 @@ class DonorUnit:
     duration_s: float
     head_log_bands: np.ndarray  # (N_LOG_BANDS,)
     tail_log_bands: np.ndarray  # (N_LOG_BANDS,)
+    # 追補 F1.3-A: oto.ini 由来の overlap / preutterance をフレーム単位で保持する
+    # スキーマ拡張。None = 情報なし（vocadito / pjs）。joins.py v2 は None の場合
+    # 固定 40ms へフォールバックする（donor_bank_utau.py のみ実値を設定）。
+    # preutterance_frames は本 F1.3 では保持のみ（消費は未実装・record 記録）。
+    overlap_frames: Optional[int] = None
+    preutterance_frames: Optional[int] = None
 
 
 def _build_units(
@@ -250,6 +257,76 @@ class DonorBank:
     source: str  # "notes_csv" | "energy_valley_fallback"
     notes_csv_path: Optional[str]
     stats: dict
+
+
+def _unit_mean_power(sp: np.ndarray, unit: DonorUnit) -> float:
+    """unit（母音核）区間の平均フレームパワー（sp 各ビン総和のフレーム平均）。"""
+    seg = sp[unit.start_frame:unit.end_frame]
+    if seg.shape[0] == 0:
+        return 0.0
+    return float(np.mean(np.sum(seg, axis=1)))
+
+
+def normalize_unit_energy(bank: DonorBank) -> Tuple[DonorBank, dict]:
+    """追補 F1.3-B item1: 各 unit の収録時レベルを除去する（母音核区間の平均
+    パワーで sp を正規化）。
+
+    正規化先の基準レベルは bank 内の unit 平均パワーの中央値（データ駆動・
+    決定論。恒常的な絶対スケール定数を置くより bank ごとの典型レベルに
+    自然に合う・[実装決定・record 記録]）。各 unit の frame 範囲の sp に
+    一様スケール係数 `target/unit_mean_power` を掛ける（ap はレベル非依存の
+    比率量のため変更しない）。head/tail_log_bands は正規化後の値で再計算し、
+    units.py の接合コスト（concat cost）が正規化後の実レンダー値と整合する
+    ようにする。
+
+    unit を持たない bank（units 空）はそのまま返す。unit 間で frame 範囲が
+    重複しない前提（donor_bank / donor_bank_utau / donor_bank_lab のいずれも
+    非重複区間で unit を切り出す設計）。
+    """
+    if not bank.units:
+        return bank, dict(n_units=0, target_power=0.0, pre_variance=0.0, post_variance=0.0)
+
+    pre_levels = np.array([_unit_mean_power(bank.sp, u) for u in bank.units], dtype=np.float64)
+    positive = pre_levels[pre_levels > 0]
+    target_power = float(np.median(positive)) if len(positive) else 0.0
+
+    sp2 = bank.sp.copy()
+    new_units: List[DonorUnit] = []
+    n_skipped_zero_power = 0
+    gains: List[float] = []
+    for u, level in zip(bank.units, pre_levels):
+        if level <= 0 or target_power <= 0:
+            n_skipped_zero_power += 1
+            new_units.append(u)
+            gains.append(1.0)
+            continue
+        gain = target_power / level
+        sp2[u.start_frame:u.end_frame] *= gain
+        gains.append(gain)
+        head = _log_band_vector(sp2[u.start_frame], bank.sr)
+        tail = _log_band_vector(sp2[u.end_frame - 1], bank.sr)
+        new_units.append(dataclasses_replace(u, head_log_bands=head, tail_log_bands=tail))
+
+    post_levels = np.array([_unit_mean_power(sp2, u) for u in new_units], dtype=np.float64)
+
+    def _variance_of(levels: np.ndarray) -> float:
+        positive_levels = levels[levels > 0]
+        return float(np.var(positive_levels)) if len(positive_levels) else 0.0
+
+    stats = dict(
+        n_units=len(bank.units),
+        target_power=target_power,
+        n_skipped_zero_power=n_skipped_zero_power,
+        pre_variance=_variance_of(pre_levels),
+        post_variance=_variance_of(post_levels),
+        pre_mean=float(np.mean(pre_levels)) if len(pre_levels) else 0.0,
+        post_mean=float(np.mean(post_levels)) if len(post_levels) else 0.0,
+        gain_min=float(np.min(gains)) if gains else 1.0,
+        gain_max=float(np.max(gains)) if gains else 1.0,
+        gain_median=float(np.median(gains)) if gains else 1.0,
+    )
+    new_bank = dataclasses_replace(bank, sp=sp2, units=new_units)
+    return new_bank, stats
 
 
 def _cache_key(wav_sha256: str, notes_csv_path: Optional[str], frame_period_ms: float) -> str:

@@ -1,26 +1,32 @@
-"""adapter/joins.py — VG-F1: 単位接合（WORLD パラメータ領域の 30ms クロスフェード）。
+"""adapter/joins.py — VG-F1: 単位接合（WORLD パラメータ領域のクロスフェード）。
 
-設計書 §2 joins.py に対応する。f0 はここでは扱わない（ドナー由来を使わず、
-全区間 perf_genes が生成する = F2 軸の単離）。
+設計書 §2 joins.py + 追補 F1.3-A に対応する。f0 はここでは扱わない（ドナー由来を
+使わず、全区間 perf_genes が生成する = F2 軸の単離）。
 
-配置方式: 各 note を対応する resolve 済み frame 長でそのまま [start,end) に
-書き込み（総フレーム数は timeline 由来でそのまま保存・overlap-add で縮めない）、
-フレーズ内で連続する note 境界（`has_join_to_prev=True`）だけに、境界直前の
-crossfade_frames // 2 x2 個のフレームを対象として log-sp 線形 + ap 線形の
-クロスフェードを適用する（直前 unit の実フレームを、直後 unit の先頭フレーム
-へ向けて上書きブレンドする。境界そのもの（次 unit の最初のフレーム）は
-無改変のため、ブレンド終端と自然に連続する）。無声ギャップ（フレーズ間ブレス
-等、どの note にも配置されない frame）は直前の有効フレームで carry-forward
-する。
+v1（`assemble` / `CROSSFADE_MS`）: 各 note を resolve 済み frame 長でそのまま
+[start,end) に書き込み（総フレーム数は timeline 由来でそのまま保存・縮めない）、
+境界直前の frame を対象に単側ブレンド（直前 unit の末尾フレームを、直後 unit の
+先頭フレームへ向けて上書きブレンド）する。F1.2 耳判定（息の切れ・接ぎの粗さ）の
+原因のひとつと特定された（`results_f1_2/f1_2_record_2026-08-15.md` 耳判定節）。
+**render.py からは呼ばれない**（テスト互換のため関数として残す。追補 F1.3-A）。
+
+v2（`assemble_v2`）: true overlap-add。隣接 note（同一フレーズ内、breath を
+挟まない）を `overlap_frames` 分だけ実際に重ねて配置し（総フレーム数が
+overlap 分だけ短くなる = タイムライン総尺の重なり補正）、重なり区間で
+log-sp 線形 + ap 線形のクロスフェードを行う。overlap 長は選択された donor
+unit の oto overlap（UTAU バンク）を優先し、情報が無い unit（vocadito/pjs）は
+`DEFAULT_OVERLAP_MS`（固定 40ms）を使う。長音ループの折返し境界にも同じ
+overlap-add 機構を `units.py` から `overlap_add_concat` 経由で流用する。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
-CROSSFADE_MS = 30.0
+CROSSFADE_MS = 30.0  # v1（旧・単側ブレンド）専用。v2 は DEFAULT_OVERLAP_MS を使う。
+DEFAULT_OVERLAP_MS = 40.0  # 追補 F1.3-A item2: oto 情報を持たない銀行の固定 overlap 長
 EPS = 1e-8
 
 
@@ -31,6 +37,10 @@ class NotePlacement:
     sp: np.ndarray  # (n_frames, n_bins)  resolve 済み
     ap: np.ndarray  # (n_frames, n_bins)
     has_join_to_prev: bool  # True: 直前 note と同一フレーズ内で連続（breath を挟まない）
+    # 追補 F1.3-A: この note を「前の note」へ接合する際の overlap 長（フレーム）。
+    # None = oto overlap 情報なし（assemble_v2 が DEFAULT_OVERLAP_MS へフォールバック）。
+    # v1 の `assemble` はこのフィールドを無視する（後方互換）。
+    overlap_frames: Optional[int] = None
 
 
 def _carry_forward_gaps(
@@ -99,5 +109,166 @@ def assemble(
         n_joins_skipped_short=n_joins_skipped_short,
         n_gap_frames=n_gap_frames,
         n_placements=len(placements),
+    )
+    return sp_seq, ap_seq, stats
+
+
+# ---------------------------------------------------------------------------
+# 追補 F1.3-A: v2 true overlap-add
+# ---------------------------------------------------------------------------
+
+
+def overlap_add_concat(
+    pieces: Sequence[Tuple[np.ndarray, np.ndarray]], overlap_frames: "int | Sequence[int]"
+) -> Tuple[np.ndarray, np.ndarray, dict]:
+    """(sp, ap) ペアの列を true overlap-add で連結する（汎用ヘルパー）。
+
+    各ピースは独立した音源断片（donor unit・長音ループの往復片など）を想定する。
+    隣接ピース間を `overlap_frames`（int なら全 join 共通、Sequence なら
+    `len(pieces)-1` 個の join 別値）だけ重ねて配置し、重なり区間を log-sp 線形 +
+    ap 線形でクロスフェードする（区間長は各ピース長でクランプ・2 フレーム未満は
+    スキップして単純連結にフォールバック）。総フレーム数は overlap 分だけ短く
+    なる（真の overlap-add。単側ブレンドとは異なり切り詰めが発生する）。
+    `units.py` のループ境界 overlap-add と `joins.assemble_v2` の両方から使う
+    共通実装。
+    """
+    if not pieces:
+        return np.zeros((0, 0)), np.zeros((0, 0)), dict(
+            n_joins_applied=0, n_joins_skipped_short=0, overlap_frames_applied=[]
+        )
+    n_joins = len(pieces) - 1
+    if isinstance(overlap_frames, int):
+        overlaps = [overlap_frames] * n_joins
+    else:
+        overlaps = list(overlap_frames)
+        if len(overlaps) != n_joins:
+            raise ValueError(f"overlap_frames の長さ {len(overlaps)} != n_joins {n_joins}")
+
+    sp_acc, ap_acc = pieces[0][0].copy(), pieces[0][1].copy()
+    n_joins_applied = 0
+    n_joins_skipped_short = 0
+    overlaps_applied: List[int] = []
+
+    for (sp_p, ap_p), ov_req in zip(pieces[1:], overlaps):
+        prev_len = sp_acc.shape[0]
+        cur_len = sp_p.shape[0]
+        ov = min(max(ov_req, 0), prev_len, cur_len)
+        if ov < 2:
+            n_joins_skipped_short += 1
+            sp_acc = np.concatenate([sp_acc, sp_p], axis=0)
+            ap_acc = np.concatenate([ap_acc, ap_p], axis=0)
+            continue
+        w = np.linspace(0.0, 1.0, ov)[:, None]
+        tail_log = np.log(sp_acc[-ov:] + EPS)
+        head_log = np.log(sp_p[:ov] + EPS)
+        blended_sp = np.exp(tail_log * (1.0 - w) + head_log * w)
+        blended_ap = ap_acc[-ov:] * (1.0 - w) + ap_p[:ov] * w
+        sp_acc = np.concatenate([sp_acc[:-ov], blended_sp, sp_p[ov:]], axis=0)
+        ap_acc = np.concatenate([ap_acc[:-ov], blended_ap, ap_p[ov:]], axis=0)
+        n_joins_applied += 1
+        overlaps_applied.append(ov)
+
+    stats = dict(
+        n_joins_applied=n_joins_applied,
+        n_joins_skipped_short=n_joins_skipped_short,
+        overlap_frames_applied=overlaps_applied,
+    )
+    return sp_acc, ap_acc, stats
+
+
+def _resolve_join_overlap(requested: Optional[int], default_frames: int) -> int:
+    return requested if requested is not None and requested >= 0 else default_frames
+
+
+def assemble_v2(
+    n_bins: int,
+    placements: Sequence[NotePlacement],
+    frame_period_ms: float = 5.0,
+    default_overlap_ms: float = DEFAULT_OVERLAP_MS,
+) -> Tuple[np.ndarray, np.ndarray, dict]:
+    """追補 F1.3-A: true overlap-add 版の接合（render.py はこちらのみを使う）。
+
+    `placements` の start_frame/end_frame は render.py が overlap を考慮せず
+    素朴に連結した「圧縮前」タイムライン座標（既存のカーソル方式そのまま）で
+    渡ってくる。本関数はフレーズ内で連続する note（`has_join_to_prev=True`）を
+    「run」としてグルーピングし、run 内は `overlap_add_concat` で true
+    overlap-add 連結する（総尺がその分だけ縮む = タイムライン総尺の重なり
+    補正）。run と run の間（フレーズ間ブレス等）は従来どおり gap を保持し、
+    直前の有効フレームで carry-forward する。overlap 長は
+    `placements[i].overlap_frames`（選択された donor unit の oto overlap）を
+    優先し、None なら `default_overlap_ms`（固定 40ms）を使う。
+    """
+    if not placements:
+        return np.zeros((0, n_bins)), np.zeros((0, n_bins)), dict(
+            n_joins_applied=0, n_joins_skipped_short=0, n_gap_frames=0,
+            n_placements=0, overlap_frames_applied=[], overlap_frames_mean=0.0,
+            default_overlap_frames=max(1, int(round(default_overlap_ms / frame_period_ms))),
+            n_runs=0, n_total_frames=0,
+        )
+
+    default_overlap_frames = max(1, int(round(default_overlap_ms / frame_period_ms)))
+
+    runs: List[List[int]] = [[0]]
+    for i in range(1, len(placements)):
+        if placements[i].has_join_to_prev:
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+
+    n_joins_applied = 0
+    n_joins_skipped_short = 0
+    overlaps_applied: List[int] = []
+    run_blocks: List[Tuple[np.ndarray, np.ndarray]] = []
+
+    for run in runs:
+        pieces = [(placements[i].sp, placements[i].ap) for i in run]
+        join_overlaps = [
+            _resolve_join_overlap(placements[i].overlap_frames, default_overlap_frames) for i in run[1:]
+        ]
+        sp_block, ap_block, run_stats = overlap_add_concat(pieces, join_overlaps)
+        run_blocks.append((sp_block, ap_block))
+        n_joins_applied += run_stats["n_joins_applied"]
+        n_joins_skipped_short += run_stats["n_joins_skipped_short"]
+        overlaps_applied.extend(run_stats["overlap_frames_applied"])
+
+    sp_chunks: List[np.ndarray] = []
+    ap_chunks: List[np.ndarray] = []
+    prev_naive_end: Optional[int] = None
+    n_gap_frames = 0
+
+    for run, (sp_block, ap_block) in zip(runs, run_blocks):
+        naive_start = placements[run[0]].start_frame
+        if prev_naive_end is None:
+            # 先頭の未配置ギャップ（あれば）は最初の有効フレームで forward-fill
+            # する（v1 の _carry_forward_gaps と同じ規約）。
+            if naive_start > 0:
+                n_gap_frames += naive_start
+                sp_chunks.append(np.repeat(sp_block[:1], naive_start, axis=0))
+                ap_chunks.append(np.repeat(ap_block[:1], naive_start, axis=0))
+        else:
+            gap = max(0, naive_start - prev_naive_end)
+            if gap > 0:
+                n_gap_frames += gap
+                last_sp = sp_chunks[-1][-1:]
+                last_ap = ap_chunks[-1][-1:]
+                sp_chunks.append(np.repeat(last_sp, gap, axis=0))
+                ap_chunks.append(np.repeat(last_ap, gap, axis=0))
+        sp_chunks.append(sp_block)
+        ap_chunks.append(ap_block)
+        prev_naive_end = placements[run[-1]].end_frame
+
+    sp_seq = np.concatenate(sp_chunks, axis=0)
+    ap_seq = np.concatenate(ap_chunks, axis=0)
+
+    stats = dict(
+        n_joins_applied=n_joins_applied,
+        n_joins_skipped_short=n_joins_skipped_short,
+        n_gap_frames=n_gap_frames,
+        n_placements=len(placements),
+        n_runs=len(runs),
+        overlap_frames_applied=overlaps_applied,
+        overlap_frames_mean=float(np.mean(overlaps_applied)) if overlaps_applied else 0.0,
+        default_overlap_frames=default_overlap_frames,
+        n_total_frames=int(sp_seq.shape[0]),
     )
     return sp_seq, ap_seq, stats

@@ -350,7 +350,13 @@ def build_donor_bank_utau(
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        key_material = f"{root}|{','.join(pitch_dirs)}|{frame_period_ms}|{min_units_per_vowel}|{max_wav_files}"
+        # 追補 F1.3-A: unit スキーマへ overlap/preutterance フレームを追加した
+        # ため、キー材料へバージョンマーカーを足して旧キャッシュ（フィールド無し
+        # の DonorUnit を pickle 済み）との衝突を避ける（実装決定・record 記録）。
+        key_material = (
+            f"{root}|{','.join(pitch_dirs)}|{frame_period_ms}|{min_units_per_vowel}|{max_wav_files}"
+            f"|schema=f1.3-overlap-preutt-v1"
+        )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"utau_bank_{key}.pkl"
         if cache_path.exists():
@@ -369,6 +375,7 @@ def build_donor_bank_utau(
     n_dropped_short_vowel = 0
     n_unmapped_kana = 0
     n_sokuon_skipped = 0
+    n_negative_overlap_clamped = 0
     n_entries_total = 0
     pitch_hz_by_dir: Dict[str, float] = {}
     n_wav_files_analyzed = 0
@@ -424,11 +431,21 @@ def build_donor_bank_utau(
                     head = _log_band_vector(donor["sp"][v_start], sr)
                     tail = _log_band_vector(donor["sp"][v_end - 1], sr)
                     idx = len(units)
+                    # 追補 F1.3-A item1: oto overlap/preutterance をフレーム単位で保持する
+                    # （スキーマ拡張）。overlap_ms が負値の行は 0 にクランプする（負の
+                    # overlap は一部 UTAU 音源で「重ねない」意図の表記だが、joins.py v2
+                    # は非負のクロスフェード長として扱うため。件数を record 記録する）。
+                    raw_overlap_frames = _ms_to_frame(e.overlap_ms, frame_period_ms)
+                    if raw_overlap_frames < 0:
+                        n_negative_overlap_clamped += 1
+                    overlap_frames = max(0, raw_overlap_frames)
+                    preutterance_frames = max(0, _ms_to_frame(e.preutterance_ms, frame_period_ms))
                     units.append(
                         DonorUnit(
                             index=idx, start_frame=frame_offset + v_start, end_frame=frame_offset + v_end,
                             median_f0=median_f0, duration_s=duration_s,
                             head_log_bands=head, tail_log_bands=tail,
+                            overlap_frames=overlap_frames, preutterance_frames=preutterance_frames,
                         )
                     )
                     if vowel:
@@ -468,7 +485,8 @@ def build_donor_bank_utau(
         n_pitch_dirs=len(pitch_dirs), pitch_dirs=list(pitch_dirs), pitch_hz_by_dir=pitch_hz_by_dir,
         n_entries_total=n_entries_total, n_units_kept=len(units),
         n_dropped_short_vowel=n_dropped_short_vowel, n_unmapped_kana=n_unmapped_kana,
-        n_sokuon_skipped=n_sokuon_skipped, n_wav_files_analyzed=n_wav_files_analyzed,
+        n_sokuon_skipped=n_sokuon_skipped, n_negative_overlap_clamped=n_negative_overlap_clamped,
+        n_wav_files_analyzed=n_wav_files_analyzed,
         n_consonant_clips_by_onset={k: len(v) for k, v in sorted(consonant_clips.items())},
         vowel_distribution={v: sum(1 for lbl in unit_vowels.values() if lbl == v) for v in "aiueo"},
         selection_stats_by_dir=selection_stats_by_dir,

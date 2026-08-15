@@ -164,6 +164,12 @@ def render(
             voicebank_root, target_median_hz=target_median_hz, cache_dir=cache_dir
         )
 
+    # 追補 F1.3-B item1: unit の収録時レベルを除去する（母音核区間の平均パワーで
+    # sp を正規化）。ドナー種別を問わず一律に適用（DonorBank は 3 ドナー共通の
+    # スキーマ）。concat cost が正規化後の実レンダー値と整合するよう
+    # head/tail_log_bands も再計算済みの bank を以降で使う。
+    bank, energy_norm_stats = db.normalize_unit_energy(bank)
+
     targets = [
         un.TargetNote(
             pitch_hz=_midi_to_hz(seg.note.midi),
@@ -190,7 +196,9 @@ def render(
         gap_frames = frames_for_samples(gap_samples, SR) if gap_samples > 0 else 0
         cursor += gap_frames
         note_dur_frames = max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1)
-        resolved = un.resolve_unit_to_note(bank, sel.unit, note_dur_frames, note_index=note_index)
+        resolved = un.resolve_unit_to_note(
+            bank, sel.unit, note_dur_frames, note_index=note_index, frame_period_ms=FRAME_PERIOD_MS
+        )
         onset = seg.note.mora.onset
         if consonant_source != "none" and onset is not None:
             # 追補 F1.2-D: consonant_source="recorded" は bank 提供の録音済み
@@ -223,15 +231,22 @@ def render(
             jn.NotePlacement(
                 start_frame=start_frame, end_frame=end_frame, sp=resolved.sp, ap=resolved.ap,
                 has_join_to_prev=not seg.is_phrase_first,
+                # 追補 F1.3-A: 選択された donor unit の oto overlap（フレーム）を
+                # そのまま接合長として使う。録音子音を前置した場合も vowel unit
+                # 自身の overlap 値を流用する（子音クリップ自体は oto overlap を
+                # 持たないための近似・[実装決定・record 記録]）。None = 情報なし
+                # (vocadito/pjs) -> assemble_v2 が DEFAULT_OVERLAP_MS へフォールバック。
+                overlap_frames=sel.unit.overlap_frames,
             )
         )
         cursor = end_frame
         prev_end_sample = seg.end_sample
 
-    n_total_frames = cursor
-    sp_seq, ap_seq, join_stats = jn.assemble(
-        n_total_frames, n_bins, placements, frame_period_ms=FRAME_PERIOD_MS
-    )
+    # 追補 F1.3-A: v1 の単側ブレンド（jn.assemble）ではなく true overlap-add
+    # （jn.assemble_v2）のみを使う。n_total_frames は overlap 分だけ短くなった
+    # 実際の圧縮後タイムライン長を join_stats から受け取る。
+    sp_seq, ap_seq, join_stats = jn.assemble_v2(n_bins, placements, frame_period_ms=FRAME_PERIOD_MS)
+    n_total_frames = join_stats["n_total_frames"]
 
     sp_seq, ap_seq = vs.apply_warp(sp_seq, ap_seq, SR, spec.warp)
 
@@ -248,6 +263,17 @@ def render(
         SR, FRAME_PERIOD_MS,
     )
     y = np.asarray(y, dtype=np.float64)
+
+    # 追補 F1.3-B item2: 振幅の唯一の権威 = performance.build_amplitude_envelope
+    # （フレーズアーチ）。unit 由来の振幅は F1.3-B item1 の正規化で spectral 形状
+    # のみに縮退済みなので、ここで乗算するフレーズアーチ + articulation
+    # エンベロープが最終波形の音量ダイナミクスを決める唯一の経路になる
+    # （singer/render_song.py の amp_render 適用パターンと同じ乗算方式）。
+    amp_env = perf.build_amplitude_envelope(segments, total_samples, SR)
+    if len(y) > 0 and len(amp_env) > 0:
+        amp_idx = np.minimum(np.arange(len(y)), len(amp_env) - 1)
+        y = y * amp_env[amp_idx]
+
     peak = float(np.max(np.abs(y))) if len(y) else 0.0
     if peak > 0:
         y = y / peak * PEAK_NORM
@@ -269,6 +295,7 @@ def render(
         consonant_class_counts=dict(Counter(e.consonant_class for e in consonant_events)),
         n_recorded_consonants_used=n_recorded_consonants_used,
         n_recorded_consonants_fallback_synthetic=n_recorded_consonants_fallback_synthetic,
+        energy_norm_stats=energy_norm_stats,
     )
 
 
@@ -312,6 +339,7 @@ def main() -> None:
         f"fallback_synthetic={result['n_recorded_consonants_fallback_synthetic']}"
     )
     print(f"join_stats={result['join_stats']}")
+    print(f"energy_norm_stats={result['energy_norm_stats']}")
     print(
         f"stretch: none={result['n_stretch_none']} "
         f"extended_looped={result['n_stretch_extended_looped']} "
