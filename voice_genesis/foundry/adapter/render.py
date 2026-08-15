@@ -17,7 +17,7 @@ import dataclasses
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pyworld as pw
@@ -35,6 +35,8 @@ import performance as perf  # noqa: E402  (singer、read-only import)
 
 import consonants as cons  # noqa: E402  (追補 F1.1-B)
 import donor_bank as db  # noqa: E402
+import donor_bank_lab as dbl  # noqa: E402  (追補 F1.2-C)
+import donor_bank_utau as dbu  # noqa: E402  (追補 F1.2-B)
 import joins as jn  # noqa: E402
 import perf_genes as pg  # noqa: E402
 import units as un  # noqa: E402
@@ -44,6 +46,33 @@ import vowel_class as vc  # noqa: E402  (追補 F1.1-A)
 SR = 24000
 FRAME_PERIOD_MS = 5.0
 PEAK_NORM = 0.6
+
+DONOR_CHOICES = ("vocadito", "ritsu", "pjs")
+CONSONANT_SOURCE_CHOICES = ("recorded", "synthetic", "none")
+
+
+def _vowel_distribution_from_labels(labels: dict) -> dict:
+    """unit.index -> ラベル(str) の辞書から母音別件数分布を作る（3 ドナー共通）。"""
+    dist: Dict[str, int] = {}
+    for lbl in labels.values():
+        dist[lbl] = dist.get(lbl, 0) + 1
+    return dist
+
+
+def prepend_recorded_consonant(
+    resolved: "un.ResolvedSegment", clip: "dbu.ConsonantClip", note_index: int
+) -> Tuple["un.ResolvedSegment", "cons.ConsonantEvent"]:
+    """追補 F1.2-D: 録音済み子音クリップ（自然長・非伸縮）を resolved 母音核
+    frame 列の先頭へ前置する。総 frame 数はクリップ分だけ増える
+    （joins.assemble の 30ms クロスフェードが後続の接続を担う。決定論・純関数）。
+    """
+    new_sp = np.concatenate([clip.sp, resolved.sp], axis=0)
+    new_ap = np.concatenate([clip.ap, resolved.ap], axis=0)
+    new_resolved = dataclasses.replace(resolved, sp=new_sp, ap=new_ap, n_frames=new_sp.shape[0])
+    event = cons.ConsonantEvent(
+        note_index=note_index, onset=clip.onset, consonant_class="recorded", n_frames_processed=clip.n_frames,
+    )
+    return new_resolved, event
 
 
 def _frame_period_s() -> float:
@@ -69,7 +98,7 @@ def build_score(name: str) -> Tuple[list, float]:
 def render(
     score_name: str,
     voice_spec_path: str | Path,
-    wav_path: str | Path,
+    wav_path: Optional[str | Path] = None,
     notes_csv_path: Optional[str | Path] = None,
     cache_dir: Optional[str | Path] = None,
     out_path: Optional[str | Path] = None,
@@ -78,18 +107,62 @@ def render(
     w_c: float = un.DEFAULT_W_C,
     w_v: float = un.DEFAULT_W_V,
     apply_consonants: bool = True,
+    donor: str = "vocadito",
+    consonant_source: Optional[str] = None,
+    voicebank_root: Optional[str | Path] = None,
 ) -> dict:
+    """VG-F1 / 追補 F1.1 / 追補 F1.2 パイプライン本体。
+
+    `donor`: "vocadito"（既定・従来どおり）| "ritsu"（UTAU oto バンク・
+    追補 F1.2-B）| "pjs"（PJS lab バンク・追補 F1.2-C）。既存 CLI 挙動は
+    `donor="vocadito"` の場合に完全不変（追補 F1.2 Acceptance 「既存 CLI
+    挙動は不変」）。
+
+    `consonant_source`: "recorded"（bank 提供の録音済み子音を前置。無ければ
+    synthetic へフォールバック・件数記録）| "synthetic"（従来の
+    `consonants.apply_consonant_onset` のみ）| "none"（子音加工なし）。
+    省略時は donor に応じた既定（vocadito -> "synthetic", ritsu/pjs ->
+    "recorded"）。`apply_consonants=False` は "none" と等価（後方互換の
+    `--no-consonants` フラグ用）。
+    """
+    if consonant_source is None:
+        consonant_source = "synthetic" if donor == "vocadito" else "recorded"
+    if not apply_consonants:
+        consonant_source = "none"
+    if consonant_source not in CONSONANT_SOURCE_CHOICES:
+        raise ValueError(f"unknown consonant_source: {consonant_source!r}")
+    if donor not in DONOR_CHOICES:
+        raise ValueError(f"unknown donor: {donor!r} (expected one of {DONOR_CHOICES})")
+
     spec = vs.load_voice_spec(voice_spec_path)
     notes, tempo_bpm = build_score(score_name)
     segments, total_samples = perf.build_timeline(notes, sr=SR, tempo_bpm=tempo_bpm)
 
-    bank = db.build_donor_bank(wav_path, notes_csv_path=notes_csv_path, cache_dir=cache_dir)
+    consonant_clips: Dict[str, list] = {}
+    donor_extra_stats: dict = {}
 
-    # 追補 F1.1-A: donor unit を母音分類し、選択コストへ母音制約を効かせる。
-    # select_units は unit.index -> ラベル文字列を期待するため、VowelClassResult
-    # から label のみ抜き出す（分布・F1/F2 の record 用には unit_vowel_results を残す）。
-    unit_vowel_results = vc.classify_donor_units(bank)
-    unit_vowel_labels = {idx: r.label for idx, r in unit_vowel_results.items()}
+    if donor == "vocadito":
+        if wav_path is None:
+            raise ValueError("donor='vocadito' には --wav（ドナー wav パス）が必須です")
+        bank = db.build_donor_bank(wav_path, notes_csv_path=notes_csv_path, cache_dir=cache_dir)
+        # 追補 F1.1-A: donor unit を母音分類し、選択コストへ母音制約を効かせる。
+        # select_units は unit.index -> ラベル文字列を期待するため、VowelClassResult
+        # から label のみ抜き出す（分布・F1/F2 の record 用には unit_vowel_results を残す）。
+        unit_vowel_results = vc.classify_donor_units(bank)
+        unit_vowel_labels = {idx: r.label for idx, r in unit_vowel_results.items()}
+    elif donor == "ritsu":
+        if voicebank_root is None:
+            raise ValueError("donor='ritsu' には --voicebank-root（UTAU 音源ルート）が必須です")
+        bank, unit_vowel_labels, consonant_clips, donor_extra_stats = dbu.build_donor_bank_utau(
+            voicebank_root, cache_dir=cache_dir
+        )
+    else:  # donor == "pjs"
+        if voicebank_root is None:
+            raise ValueError("donor='pjs' には --voicebank-root（PJS コーパスルート）が必須です")
+        target_median_hz = float(np.median([_midi_to_hz(seg.note.midi) for seg in segments]))
+        bank, unit_vowel_labels, consonant_clips, donor_extra_stats = dbl.build_donor_bank_lab(
+            voicebank_root, target_median_hz=target_median_hz, cache_dir=cache_dir
+        )
 
     targets = [
         un.TargetNote(
@@ -108,6 +181,8 @@ def render(
     placements: List[jn.NotePlacement] = []
     resolved_list: List[un.ResolvedSegment] = []
     consonant_events: List[cons.ConsonantEvent] = []
+    n_recorded_consonants_used = 0
+    n_recorded_consonants_fallback_synthetic = 0
     cursor = 0
     prev_end_sample = 0
     for note_index, (seg, sel) in enumerate(zip(segments, selections)):
@@ -116,14 +191,31 @@ def render(
         cursor += gap_frames
         note_dur_frames = max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1)
         resolved = un.resolve_unit_to_note(bank, sel.unit, note_dur_frames, note_index=note_index)
-        if apply_consonants:
-            # 追補 F1.1-B: 母音制約選択 -> 子音オンセット加工 -> (この後の) joins/perf_genes/warp。
-            proc_sp, proc_ap, event = cons.apply_consonant_onset(
-                resolved.sp, resolved.ap, seg.note.mora.onset, SR, frame_period_ms=FRAME_PERIOD_MS
-            )
-            if event is not None:
-                consonant_events.append(dataclasses.replace(event, note_index=note_index))
-            resolved = dataclasses.replace(resolved, sp=proc_sp, ap=proc_ap)
+        onset = seg.note.mora.onset
+        if consonant_source != "none" and onset is not None:
+            # 追補 F1.2-D: consonant_source="recorded" は bank 提供の録音済み
+            # 子音クリップを unit 先頭へ preutterance 相当分（クリップの実長）
+            # だけ前置する（joins.assemble の 30ms クロスフェードが接続を担う）。
+            # クリップが無ければ synthetic（追補 F1.1-B）へフォールバックする。
+            used_recorded = False
+            if consonant_source == "recorded":
+                clips = consonant_clips.get(onset)
+                if clips:
+                    clip = clips[0]  # 決定論選択（bank 側で句頭優先・名前昇順ソート済み）
+                    resolved, event = prepend_recorded_consonant(resolved, clip, note_index)
+                    consonant_events.append(event)
+                    n_recorded_consonants_used += 1
+                    used_recorded = True
+                else:
+                    n_recorded_consonants_fallback_synthetic += 1
+            if not used_recorded:
+                # 追補 F1.1-B: 母音制約選択 -> 子音オンセット加工 -> (この後の) joins/perf_genes/warp。
+                proc_sp, proc_ap, event = cons.apply_consonant_onset(
+                    resolved.sp, resolved.ap, onset, SR, frame_period_ms=FRAME_PERIOD_MS
+                )
+                if event is not None:
+                    consonant_events.append(dataclasses.replace(event, note_index=note_index))
+                resolved = dataclasses.replace(resolved, sp=proc_sp, ap=proc_ap)
         resolved_list.append(resolved)
         start_frame = cursor
         end_frame = start_frame + resolved.n_frames
@@ -168,12 +260,15 @@ def render(
         y=y, sr=SR, n_total_frames=n_total_frames, total_samples_timeline=total_samples,
         selections=selections, selection_stats=sel_stats, join_stats=join_stats,
         donor_bank_stats=bank.stats, donor_bank_source=bank.source, wav_sha256=bank.wav_sha256,
+        donor=donor, consonant_source=consonant_source, donor_extra_stats=donor_extra_stats,
         n_stretch_extended_looped=cap_modes.count("extended_looped"),
         n_stretch_compressed_truncated=cap_modes.count("compressed_truncated"),
         n_stretch_none=cap_modes.count("none"),
-        unit_vowels=unit_vowel_results, vowel_distribution=vc.vowel_distribution(unit_vowel_results),
+        unit_vowels=unit_vowel_labels, vowel_distribution=_vowel_distribution_from_labels(unit_vowel_labels),
         consonant_events=consonant_events,
         consonant_class_counts=dict(Counter(e.consonant_class for e in consonant_events)),
+        n_recorded_consonants_used=n_recorded_consonants_used,
+        n_recorded_consonants_fallback_synthetic=n_recorded_consonants_fallback_synthetic,
     )
 
 
@@ -182,25 +277,40 @@ def main() -> None:
     parser.add_argument("--score", required=True, choices=["sakura", "umi"])
     parser.add_argument("--voice", required=True, help="voice spec JSON path")
     parser.add_argument("--out", required=True, help="output WAV path")
-    parser.add_argument("--wav", required=True, help="donor WAV path (vocadito clip)")
-    parser.add_argument("--notes-csv", default=None, help="donor notes annotation CSV（省略時 fallback）")
-    parser.add_argument("--cache-dir", default=None, help="donor bank npz キャッシュディレクトリ")
+    parser.add_argument("--donor", default="vocadito", choices=list(DONOR_CHOICES), help="追補 F1.2-D: ドナー選択")
+    parser.add_argument("--wav", default=None, help="donor WAV path（donor=vocadito で必須）")
+    parser.add_argument("--notes-csv", default=None, help="donor notes annotation CSV（vocadito・省略時 fallback）")
+    parser.add_argument(
+        "--voicebank-root", default=None,
+        help="UTAU 音源ルート（donor=ritsu）または PJS コーパスルート（donor=pjs）",
+    )
+    parser.add_argument("--cache-dir", default=None, help="donor bank npz/pkl キャッシュディレクトリ")
+    parser.add_argument(
+        "--consonant-source", default=None, choices=list(CONSONANT_SOURCE_CHOICES),
+        help="追補 F1.2-D: 子音供給元（省略時 donor に応じた既定）",
+    )
     parser.add_argument(
         "--no-consonants", action="store_true",
-        help="子音オンセット加工を無効化する（A/B 比較用。追補 F1.1-B CLI 互換フラグ）",
+        help="子音オンセット加工を無効化する（--consonant-source none と等価。旧 F1.1-B 互換フラグ）",
     )
     args = parser.parse_args()
 
     result = render(
         args.score, args.voice, args.wav, notes_csv_path=args.notes_csv,
         cache_dir=args.cache_dir, out_path=args.out, apply_consonants=not args.no_consonants,
+        donor=args.donor, consonant_source=args.consonant_source, voicebank_root=args.voicebank_root,
     )
     print(f"wrote {args.out}: {len(result['y'])} samples ({len(result['y']) / result['sr']:.3f}s)")
+    print(f"donor={result['donor']} consonant_source={result['consonant_source']}")
     print(f"donor_bank_source={result['donor_bank_source']} wav_sha256={result['wav_sha256']}")
     print(f"donor_bank_stats={result['donor_bank_stats']}")
     print(f"selection_stats={result['selection_stats']}")
     print(f"vowel_distribution={result['vowel_distribution']}")
     print(f"consonant_class_counts={result['consonant_class_counts']}")
+    print(
+        f"recorded_consonants_used={result['n_recorded_consonants_used']} "
+        f"fallback_synthetic={result['n_recorded_consonants_fallback_synthetic']}"
+    )
     print(f"join_stats={result['join_stats']}")
     print(
         f"stretch: none={result['n_stretch_none']} "
