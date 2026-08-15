@@ -124,10 +124,18 @@ python scripts/binarize.py --config "$OUT/s1_multispeaker_acoustic_config.yaml"
 ```
 train 733 件（ritsu 451 + pjs 282）
 valid  10 件（ritsu 5 + pjs 5）
-train total duration: 4171.08s
-valid total duration: 67.35s
+train total duration: 4180.71s
+valid total duration: 57.72s
+合計 duration: 4238.43s
 エラー・Traceback 0 件
 ```
+
+> **照合値の訂正（2026-08-16）**: 初版に記載した train 4171.08s / valid 67.35s は
+> 中間版 CSV 由来の陳腐化した値だった（S1 実行時に RunPod 実測とズレて発覚。
+> 収載版スクリプトの再実行では上記の値になることを本環境でも確認済み）。件数・
+> 合計 duration・音素分布が一致し duration の差が train/valid 間で相殺する場合、
+> 差分は valid 選定のみであり学習品質への実害はない。valid 選定の内容非依存な
+> 位置ベース設計は follow-up で安定化予定（`s1_split_nondeterminism` 調査参照）。
 
 （`s1b_dataset_record.md` §5.2 の実測値と同一。データ準備コード自体は
 `s1_dataprep/README.md` §4 で scratchpad 実測との byte-diff 一致を別途確認済み
