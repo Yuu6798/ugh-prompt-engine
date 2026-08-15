@@ -85,9 +85,12 @@ unzip NamineRitsu_DiffSinger.zip -d ritsu_diffsinger_extracted
 ## 3. 本リポ clone → s1_dataprep 実行 → binarize
 
 ```bash
-git clone <本リポジトリの URL> ugh-prompt-engine
+git clone https://github.com/Yuu6798/ugh-prompt-engine.git ugh-prompt-engine
 cd ugh-prompt-engine
-git checkout claude/voicegenesis-dev-continue-rfwf3p   # または該当ブランチ/タグ
+# 本 runbook を含む immutable commit を checkout する（例: 本修正コミットの SHA。
+# PR マージ後は main のマージコミット/タグへ読み替える。開発中の一時ブランチ名は
+# 削除・先行されうるため参照しない）
+git checkout <本修正コミットの SHA、または PR マージ後の main マージコミット/タグ>
 pip install -e ".[dev]"
 pip install praat-parselmouth
 
@@ -130,7 +133,7 @@ valid total duration: 57.72s
 エラー・Traceback 0 件
 ```
 
-> **照合値の訂正（2026-08-16）**: 初版に記載した train 4171.08s / valid 67.35s は
+> **照合値の訂正（2026-08-15）**: 初版に記載した train 4171.08s / valid 67.35s は
 > 中間版 CSV 由来の陳腐化した値だった（S1 実行時に RunPod 実測とズレて発覚。
 > 収載版スクリプトの再実行では上記の値になることを本環境でも確認済み）。件数・
 > 合計 duration・音素分布が一致し duration の差が train/valid 間で相殺する場合、
@@ -140,6 +143,29 @@ valid total duration: 57.72s
 （`s1b_dataset_record.md` §5.2 の実測値と同一。データ準備コード自体は
 `s1_dataprep/README.md` §4 で scratchpad 実測との byte-diff 一致を別途確認済み
 のため、この照合はデータ取得・環境差異の検知が主目的）
+
+### 3.1 生成データ束の pin（binarize 完走後、必須）
+
+素材取得（§2）の sha256 だけでは、変換器（`nnsvs-db-converter`）のドリフト・
+ステージングの古いファイル残留・転送時の破損を検知できない（同じ入力 sha256
+でも生成された学習データ束が別物になり得るため、後日の checkpoint がどの
+データ束から学習されたか特定できなくなるリスクがある）。binarize 完走直後に、
+**生成データ束そのもの**（変換 CSV・辞書・config・binary dir）のファイル別
+sha256 マニフェストを生成し、記録に残す:
+
+```bash
+find "$OUT/ritsu_diffsinger_db" "$OUT/pjs_staging/diffsinger_db" \
+     "$OUT/merged_ja_dict.txt" "$OUT/s1_multispeaker_acoustic_config.yaml" \
+     "$OUT/binary" -type f -exec sha256sum {} + | sort -k2 > s1_bundle_manifest.sha256
+sha256sum s1_bundle_manifest.sha256   # manifest 自体の sha256 も取る
+```
+
+- `s1_bundle_manifest.sha256` 自体の sha256 を、費用記録表（§6）と
+  `voice_genesis/foundry/results_s1/s1_record_<date>.md` の該当 record に記載する
+  （その checkpoint がどのデータ束から学習されたかを一意に特定できるようにする
+  ため）。
+- マニフェスト本体（`s1_bundle_manifest.sha256`）自体もあわせて record と同じ場所
+  へ保存する（差分検知の一次証跡）。
 
 ---
 
@@ -208,38 +234,44 @@ scp -P <port> \
 
 回収の都度、**費用実測を記録する**（§7）。
 
-### 5.2 ONNX export（本セッション側で実行、CPU で足りる）
+### 5.2 ONNX export（`s1_gate/gate_synth.py run` に内包・本セッション側で実行、CPU で足りる）
+
+`voice_genesis/foundry/s1_gate/gate_synth.py`（本リポ収載。モデル pin・使い方は
+同ディレクトリの `README.md` 参照）の `run` サブコマンドが、`scripts/export.py
+acoustic` の実行を内包している。手動で export だけ別途行う必要はない:
 
 ```bash
-cd DiffSinger   # ↑ §1 と同じ commit の clone を本セッション側にも用意しておく
-mkdir -p checkpoints/s1_ritsu_pjs_acoustic_v1
-cp <回収した ckpt/config.yaml> checkpoints/s1_ritsu_pjs_acoustic_v1/
-
-python scripts/export.py acoustic \
-    --exp s1_ritsu_pjs_acoustic_v1 \
-    --ckpt <STEP> \
-    --out  <出力先>/onnx_gate_<STEP>/
+python voice_genesis/foundry/s1_gate/gate_synth.py run \
+    --diffsinger-repo <DiffSinger clone（↑ §1 と同じ commit）> \
+    --ckpt-dir <回収した checkpoints/<exp_name>/ (ckpt+config.yaml)> \
+    --step <STEP> --exp-name s1_ritsu_pjs_acoustic_v1 \
+    --canon-model-dir <NamineRitsu_DiffSinger 展開先> \
+    --vocoder-dir <nsf_hifigan.onnx 展開先> \
+    --out-dir <出力先>
 ```
 
-出力: `<出力先>/onnx_gate_<STEP>/acoustic.onnx`（+ 付随ファイル）。
+内部で `checkpoints/<exp_name>/` を用意して `scripts/export.py acoustic` を実行し、
+`<出力先>/onnx_gate_<STEP>/acoustic.onnx`（+ `acoustic.phonemes.json`）を生成する。
 
-### 5.3 CPU 合成（既存 S0 推論チェーンへの差し替え）
+### 5.3 CPU 合成（既存 S0 推論チェーンへの差し替え、`gate_synth.py` が実装済み）
 
-`s0_probe_record.md` の CPU 推論チェーン（`linguistic.onnx -> dur.onnx ->
-linguistic.onnx(2回目) -> pitch.onnx -> acoustic.onnx -> vocoder`）を再利用
-する。**linguistic/dur/pitch/vocoder はカノン氏配布のまま**（`DESIGN_S1_p2poc.md`
-§2 のスコープどおり）、**`acoustic.onnx` だけを §5.2 の export 成果物へ
-差し替える**。
+`s1_gate/gate_synth.py`（`s0_probe_record.md` の CPU 推論チェーン
+`linguistic.onnx -> dur.onnx -> linguistic.onnx(2回目) -> pitch.onnx ->
+acoustic.onnx -> vocoder` の一般化・収載版）が §5.2 の acoustic 差し替えを
+自動で行う。**linguistic/dur/pitch/vocoder はカノン氏配布のまま**
+（`DESIGN_S1_p2poc.md` §2 のスコープどおり）、**`acoustic.onnx` だけを §5.2 の
+export 成果物へ差し替える**設計であり、追加のコマンドは不要（§5.2 の `run`
+呼び出し 1 回で export → 差し替え → 合成まで完走する）。
 
-**既知の相互運用性要件（要確認・未検証。実装前に必ず踏む）**: `acoustic.onnx`
-の入力 `tokens`（int64 音素 ID 列）は、**自前学習に使った語彙
+**相互運用性要件（`gate_synth.py` が実装・fail-closed で強制済み）**:
+`acoustic.onnx` の入力 `tokens`（int64 音素 ID 列）は、**自前学習に使った語彙
 （`merged_ja_dict.txt` から binarize が生成する `dictionary-ja.txt` を元に
 `export.py acoustic` が書き出す `<model_name>.phonemes.json`）の ID 空間**
 であり、カノン配布 `linguistic.onnx`/`dur.onnx`/`pitch.onnx` が使う `tokens`
 （カノン公式 617/46 語彙の ID 空間）とは**別物**である（実測: `acoustic.onnx`
 の入力は `tokens`/`durations`/`f0`/`depth`/`speedup` のみで、`linguistic.onnx`
-の連続値出力 `encoder_out` は経由しない。`onnx_io_dump.txt` 参照）。
-したがって CPU 合成スクリプトでは:
+の連続値出力 `encoder_out` は経由しない。`onnx_io_dump.txt`、scratchpad
+非コミット、参照）。したがって `gate_synth.py` は:
 
 1. `linguistic.onnx`/`dur.onnx`/`pitch.onnx` 呼び出し用の `tokens` は
    **従来どおりカノン公式辞書で符号化**する（変更しない）。
@@ -248,19 +280,23 @@ linguistic.onnx(2回目) -> pitch.onnx -> acoustic.onnx -> vocoder`）を再利�
    `deployment/exporters/acoustic_exporter.py:_export_phonemes` で
    `acoustic.onnx` と同じ出力ディレクトリに書き出す、`phone_to_id` の flat
    JSON dict。`utils/phoneme_utils.py:PhonemeDictionary.dump` の出力形式で、
-   改行区切りの plain-text `phonemes.txt` ではない — 実装時に精読して判明した
-   実体。canon 配布物の `phonemes.txt` はカノン側が別途変換・同梱したもので、
-   export.py の標準出力形式ではない）で再符号化**したものを使う。
-3. `durations`（フレーム長）は `dur.onnx` が出した値をそのまま流用してよい
+   改行区切りの plain-text `phonemes.txt` ではない — canon 配布物の
+   `phonemes.txt` はカノン側が別途変換・同梱したもので、export.py の標準出力
+   形式ではない）で再符号化**したものを使う。既定 `--tokens own` は
+   fail-closed（`*.phonemes.json` が無ければエラー終了、canon 符号化への
+   暗黙フォールバックはしない）。
+3. `durations`（フレーム長）は `dur.onnx` が出した値をそのまま流用する
    （音素の並び順が同一であれば ID 空間に依存しない）。
 
 この差し替えを外すと、クラッシュはしないが**誤った音素へ着地した音声**が
-出力される（サイレントな不整合のため、実装時に見落とさないこと）。
+出力される（サイレントな不整合。`gate_synth.py` の fail-closed 設計が防ぐ）。
 
 ### 5.4 耳判定
 
-`さくら`（`voice_genesis/singer/score.py: build_sakura_score()`）・`うみ`
-（`voice_genesis/singer/score_umi.py: build_umi_score()`）の 2 曲を合成し、
+§5.2 の `gate_synth.py run`（既定 `--song sakura,umi` で両曲を合成）が
+`<出力先>/gate_sakura.wav` / `<出力先>/gate_umi.wav` を生成する（`さくら`:
+`voice_genesis/singer/score.py: build_sakura_score()`、`うみ`:
+`voice_genesis/singer/score_umi.py: build_umi_score()`）。この 2 曲を
 **S0 と同一の軸**で User 判定を仰ぐ:
 
 - 日本語

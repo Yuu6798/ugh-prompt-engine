@@ -35,7 +35,13 @@ DEFAULT_LANG_DEF = {
 def stage_song_wavs(pjs_root: Path, staging_dir: Path) -> int:
     """`PJS_corpus_ver1.1/pjsNNN/` 配下の song 系のみをシンボリックリンクで
     `pjsNNN.lab` / `pjsNNN.wav` としてリネームする。冪等（既存リンクは張り
-    直す）。戻り値はステージングできたペア数。"""
+    直す）。戻り値はステージングできたペア数。
+
+    `pjs_root` が相対パスの場合、シンボリックリンクのターゲットは
+    `staging_dir` からの相対として解釈されて壊れるため、リンク先は必ず
+    `resolve()` した絶対パスで張る。
+    """
+    pjs_root = pjs_root.resolve()
     staging_dir.mkdir(parents=True, exist_ok=True)
     song_dirs = sorted(p for p in pjs_root.iterdir() if p.is_dir() and p.name.startswith("pjs"))
     n_staged = 0
@@ -66,7 +72,13 @@ def run_converter(
     `-T 0` 無音しきい値、`-L` 言語定義、`-m` MIDI 推定（note_seq/note_dur 取得）、
     `-c` ph_num 付与、`-B` breath 検出（AP 音素。付けないと binarize の
     `check_coverage()` が AP=0 件で `BinarizationError` になる）。
+
+    `converter_dir` が相対パスの場合、`db_converter.py` のパスを組んでから
+    `cwd=converter_dir` で実行すると `cwd` 変更後に相対パスが再解釈され二重連結
+    になる（`nnsvs-db-converter/nnsvs-db-converter/db_converter.py`）ため、先に
+    `resolve()` して絶対パス化してからスクリプトパスを組む。
     """
+    converter_dir = converter_dir.resolve()
     cmd = [
         python_bin, str(converter_dir / "db_converter.py"),
         "-T", "0", "-L", str(lang_def_path), "-m", "-c", "-B",

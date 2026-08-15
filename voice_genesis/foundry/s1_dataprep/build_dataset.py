@@ -17,7 +17,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -77,11 +79,41 @@ def build_merged_dict(symbol_sets: Sequence[Set[str]]) -> List[Tuple[str, str]]:
     return [(sym, sym) for sym in sorted(union)]
 
 
+def render_dict_text(pairs: Sequence[Tuple[str, str]]) -> str:
+    """`write_dict` が書き出す辞書ファイルの内容をテキストとして組み立てる
+    （atomic 公開のため、書き込み前に全文をメモリ上で確定させる）。"""
+    return "".join(f"{sym}\t{mapped}\n" for sym, mapped in pairs)
+
+
 def write_dict(path: Path, pairs: Sequence[Tuple[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        for sym, mapped in pairs:
-            f.write(f"{sym}\t{mapped}\n")
+        f.write(render_dict_text(pairs))
+
+
+def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """staging tempfile へ書き込み、成功後にのみ `os.replace` で `path` へ
+    atomic 公開する（`adapter/donor_bank.py _atomic_stage_and_replace` /
+    `adapter/voice_spec.py save_voice_spec` と同じ流儀。AGENTS.md Persistent
+    Artifact Safety Gate 項目6「全構築後公開」準拠）。
+
+    [P2 修正] `problems` が非空でも辞書/config/report を書いてから失敗
+    return していたため、失敗した再実行が既存の有効な成果物を壊し得た。
+    呼び出し側 (`main`) で全構築・全検証を終えてから、成功時のみこの関数で
+    公開する構造へ是正。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(content)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def validate_speaker(
@@ -207,7 +239,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ritsu_symbols = collect_phoneme_symbols(ritsu_rows)
     pjs_symbols = collect_phoneme_symbols(pjs_rows)
     merged_pairs = build_merged_dict([ritsu_symbols, pjs_symbols])
-    write_dict(args.out_dict, merged_pairs)
+    dict_text = render_dict_text(merged_pairs)
 
     ritsu_prefixes = select_test_prefixes(ritsu_rows, args.n_test_prefixes)
     pjs_prefixes = select_test_prefixes(pjs_rows, args.n_test_prefixes)
@@ -220,8 +252,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ("pjs", 1, args.pjs_raw_dir, pjs_prefixes),
         ],
     )
-    args.out_config.parent.mkdir(parents=True, exist_ok=True)
-    args.out_config.write_text(config_text, encoding="utf-8")
 
     report = {
         "ritsu_segments": len(ritsu_rows),
@@ -235,14 +265,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "pjs_test_prefixes": pjs_prefixes,
         "problems": problems,
     }
-    if args.report is not None:
-        args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report_text = json.dumps(report, ensure_ascii=False, indent=2)
+    print(report_text)
 
-    print(json.dumps(report, ensure_ascii=False, indent=2))
     if problems:
+        # [P2 修正] 検証失敗時は辞書/config/report のいずれも公開しない
+        # （全構築・全検証をここまでで終え、失敗が確定したら成果物には
+        # 触れずに return する。既存の有効な成果物を壊さない）。
         print(f"validation FAILED: {len(problems)} problem(s)", file=sys.stderr)
         return 1
+
+    # 全構築・全検証が終わり、成功が確定してからのみ atomic 公開する。
+    _atomic_write_text(args.out_dict, dict_text)
+    _atomic_write_text(args.out_config, config_text)
+    if args.report is not None:
+        _atomic_write_text(args.report, report_text + "\n")
+
     print("validation OK")
     return 0
 
