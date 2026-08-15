@@ -300,6 +300,7 @@ def _build_vcv_placements(
     n_shift_applied = 0
     n_shift_clipped = 0
     shift_frames: List[int] = []
+    shift_per_note: List[int] = []
     head_clipped_note_indices: List[int] = []
 
     for note_index, (seg, sel) in enumerate(zip(segments, selections)):
@@ -318,6 +319,7 @@ def _build_vcv_placements(
         lead = min(preutt, gap_frames) if seg.is_phrase_first else preutt
         shift = min(lead, cursor)  # バッファ先頭（0）より前へは配置しない
         start_frame = cursor - shift
+        shift_per_note.append(shift)
         if shift > 0:
             n_shift_applied += 1
             shift_frames.append(shift)
@@ -346,6 +348,12 @@ def _build_vcv_placements(
         ),
         n_head_clipped=len(head_clipped_note_indices),
         head_clipped_note_indices=head_clipped_note_indices,
+        # P1 修正 (review #262 R4・`r3789341843`): note ごとの実効配置シフト
+        # （ブレスギャップ/バッファ先頭でクリップ済みの `shift`）を placements
+        # と同じ並びで公開する。`_note_frame_track` の `origin_shift_frames`
+        # へそのまま渡すことで、f0/振幅トラックのサンプリング原点を sp/ap の
+        # 絶対配置（`start_frame = cursor - shift`）と一致させる。
+        shift_per_note=shift_per_note,
     )
     return placements, resolved_list, stats
 
@@ -360,6 +368,7 @@ def frames_for_samples(n_samples: int, sr: int) -> int:
 
 def _note_frame_track(
     per_sample: np.ndarray, seg, note_dur_frames: int, n_frames: int, sr: int, frame_period_ms: float,
+    origin_shift_frames: int = 0,
 ) -> np.ndarray:
     """P1 修正 (review #262): 1 note の resolve 後フレーム列（`n_frames`）に
     対応する perf_genes per-sample トラック（`base_f0_persample`/`amp_env`。
@@ -374,6 +383,20 @@ def _note_frame_track(
     seg の実スパン [start_sample, end_sample) に対応するよう原点をずらす
     （先頭の余剰フレームは子音が鳴る時間帯 = seg 開始より前へ自然に延びる。
     0 側でクランプ）。
+
+    `origin_shift_frames`（P1 修正・review #262 R4・`r3789341843`）:
+    `donor="ritsu"`（VCV 経路）専用。`render.py` `_build_vcv_placements` は
+    unit を「拍位置 − lead（preutterance 相当・ブレスギャップでクリップ済み）」
+    の絶対座標へ配置するが、本関数は従来 `seg.start_sample`（= score 上の拍
+    位置そのもの）を原点にサンプリングしていたため、f0/振幅トラックの**内容**
+    が sp/ap の絶対配置より `lead` フレーム分だけ「早取り」されていた
+    （sp/ap 自身のフレーム数・配置位置は正しいままだったため、旧実装では
+    join を経ても致命的な破綻は生じないが、拍位置での f0/振幅の値自体が
+    ズレる——`_build_vcv_placements` が計算した実効 shift（`lead` をブレス
+    ギャップ/バッファ先頭でクリップした後の値）を渡すことで、サンプリング
+    原点を配置と同じだけ前へずらし、拍位置に着地するフレームが score 上の
+    拍位置ちょうどの値を持つよう補正する（`origin_shift_frames=0` は従来
+    どおり無補正 = vocadito/pjs 経路は完全不変）。
     """
     if n_frames <= 0:
         return np.zeros(0, dtype=np.float64)
@@ -381,7 +404,7 @@ def _note_frame_track(
         return np.zeros(n_frames, dtype=np.float64)
     samples_per_frame = sr * frame_period_ms / 1000.0
     extra_head = max(0, n_frames - note_dur_frames)
-    k = np.arange(n_frames) - extra_head
+    k = np.arange(n_frames) - extra_head - origin_shift_frames
     sample_idx = np.round(seg.start_sample + k * samples_per_frame).astype(np.int64)
     sample_idx = np.clip(sample_idx, 0, per_sample.shape[0] - 1)
     return per_sample[sample_idx]
@@ -621,15 +644,25 @@ def render(
     # 素朴な等間隔インデックスで圧縮前の生タイムラインを読み出していたバグ）
     # を解消する。overlap 区間は f0 を log domain（sp と同じ）・振幅を
     # linear domain（ap と同じ）でブレンドする。
+    # P1 修正 (review #262 R4・`r3789341843`): donor="ritsu"（VCV 経路）は
+    # `_build_vcv_placements` が計算した note ごとの実効配置シフト
+    # （`vcv_placement_stats["shift_per_note"]`）をサンプリング原点へも
+    # 適用する（sp/ap の絶対配置と同じだけ f0/振幅の取り出し位置を前へ
+    # ずらす。vocadito/pjs 経路は shift=0 のリストで従来どおり無補正）。
+    note_origin_shift_frames: List[int] = (
+        list(vcv_placement_stats["shift_per_note"]) if is_vcv else [0] * len(placements)
+    )
     note_f0_tracks = [
         _note_frame_track(
-            base_f0_persample, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS
+            base_f0_persample, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS,
+            origin_shift_frames=note_origin_shift_frames[i],
         )
         for i, p in enumerate(placements)
     ]
     note_amp_tracks = [
         _note_frame_track(
-            amp_env, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS
+            amp_env, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS,
+            origin_shift_frames=note_origin_shift_frames[i],
         )
         for i, p in enumerate(placements)
     ]

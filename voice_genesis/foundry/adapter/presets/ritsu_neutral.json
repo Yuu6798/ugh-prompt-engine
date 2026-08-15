@@ -3,7 +3,7 @@
   "donor": {
     "dataset": "ritsu",
     "voicebank_name": "波音リツ強連続音Ver1.5.1",
-    "voicebank_sha256": "e722b36cd5b9c7ed68686fcf85d539e09186188c268b94476a061ce711d00206"
+    "voicebank_sha256": "86e1c57b50b781eaba92b57254b2df106a61766f08fbacac8399e54208cd6c8e"
   },
   "warp": {
     "formant_scale": 1.0,

@@ -189,14 +189,27 @@ def parse_oto_text(text: str) -> List[OtoEntry]:
 def voicebank_identity_hash(
     voicebank_root: str | Path, pitch_dirs: Optional[Sequence[str]] = None
 ) -> Tuple[str, List[str]]:
-    """P1 修正 (review #262 R2): UTAU voicebank の「実体」ハッシュ（render.py の
-    `spec.donor` provenance 照合用の軽量前段。WORLD 分析より前に安価に計算する）。
+    """P1 修正 (review #262 R2・R4 で WAV バイトを追加): UTAU voicebank の
+    「実体」ハッシュ（render.py の `spec.donor` provenance 照合用の軽量前段。
+    重い WORLD 分析より前に計算する）。
 
-    全 pitch dir の oto.ini を `(相対パス, sha256)` ペアで
+    全 pitch dir の oto.ini + 配下の全 `*.wav` を `(相対パス, sha256)` ペアで
     `donor_bank.aggregate_content_hash` へ渡した集約値を返す。oto.ini は
     unit のセグメンテーション（どのバイトがどの mora か）を決める権威情報
-    なので、これが変われば全 unit 境界が変わる = donor の実体を代表する
-    identity として妥当（wav バイト全体を毎回ハッシュするより軽量）。
+    だが、それだけでは donor の実体を代表しない（review #262 R3 指摘
+    `r3789341845`: oto.ini を変えずに WAV バイトだけ差し替えても検知でき
+    ない）。WORLD が実際に分析するのは WAV サンプルそのものであるため、
+    識別対象を「解析対象の annotation（oto.ini）+ WAV」の決定論集約へ拡張
+    した。wav 全数ハッシュはバイト読み出しのみ（WORLD 分析は伴わない）ため
+    「軽量前段」の設計意図は維持される。
+
+    [実装決定・record 記録] `_validate_spec_donor` はこの identity 検証を
+    `_select_wav_subset_for_contexts` の被覆選択（render 対象スコアが要求
+    する文脈次第で結果が変わる）より**前**に行うため、「選択された wav
+    部分集合」ではなく pitch dir 配下の**全** wav を対象にする（選択に
+    依存しない安定した identity。差し替え検知の網羅性も選択部分集合より
+    広く、fail-closed の意図に合致する）。
+
     戻り値は `(digest, pitch_dirs)`（record/エラーメッセージ用に pitch_dirs
     も返す）。
     """
@@ -207,9 +220,12 @@ def voicebank_identity_hash(
         )
     if not pitch_dirs:
         raise FileNotFoundError(f"no pitch dir with oto.ini found under {root}")
-    pairs = [
-        (f"{pdir_name}/oto.ini", sha256_of(root / pdir_name / "oto.ini")) for pdir_name in pitch_dirs
-    ]
+    pairs: List[Tuple[str, str]] = []
+    for pdir_name in pitch_dirs:
+        pdir = root / pdir_name
+        pairs.append((f"{pdir_name}/oto.ini", sha256_of(pdir / "oto.ini")))
+        for wav_path in sorted(pdir.glob("*.wav")):
+            pairs.append((f"{pdir_name}/{wav_path.name}", sha256_of(wav_path)))
     return aggregate_content_hash(pairs), list(pitch_dirs)
 
 

@@ -3,7 +3,7 @@
   "donor": {
     "dataset": "pjs",
     "corpus_name": "PJS_corpus_ver1.1",
-    "corpus_sha256": "ed7b6e5603bbcdad44826cf7ba365260a71123789d4b91d4dbbcd8df9b1547f9"
+    "corpus_sha256": "9905cec08fbaf43fa545400498a7908ef28567e8f60a5ba005fb2e00d526f996"
   },
   "warp": {
     "formant_scale": 1.0,

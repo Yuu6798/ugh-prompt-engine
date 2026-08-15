@@ -302,6 +302,102 @@ def test_note_frame_track_zero_n_frames_returns_empty() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P1 修正 (review #262 R4・`r3789341843`): _note_frame_track の origin_shift_frames
+# （VCV 経路の f0/振幅サンプリング原点を絶対配置シフトへ整合させる）
+# ---------------------------------------------------------------------------
+
+
+def test_note_frame_track_origin_shift_moves_sampling_window_earlier() -> None:
+    """`origin_shift_frames=shift` は、k=0 が `seg.start_sample -
+    shift*samples_per_frame` を指すようサンプリング原点を前へずらす
+    （`_build_vcv_placements` の `start_frame = cursor - shift` と同じ原点
+    シフトを、コントロールトラック抽出にも適用する）。"""
+    sr = 24000
+    per_sample = np.arange(10000, dtype=np.float64)  # per_sample[i] == i
+    seg = _MiniSeg(start_sample=5000)  # 0 側クランプの影響を受けないよう十分大きく取る
+    note_dur_frames = 5
+    samples_per_frame = 120.0  # 24000 * 5ms/1000
+    shift = 20  # frame
+
+    track = rd._note_frame_track(
+        per_sample, seg, note_dur_frames, n_frames=5, sr=sr, frame_period_ms=5.0,
+        origin_shift_frames=shift,
+    )
+    expected = np.array([5000 - shift * samples_per_frame + k * samples_per_frame for k in range(5)])
+    assert np.array_equal(track, expected)
+
+
+def test_note_frame_track_origin_shift_zero_matches_default_behavior() -> None:
+    """`origin_shift_frames=0`（既定値）は従来どおり無補正
+    （vocadito/pjs 経路の完全不変を保証する回帰ガード）。"""
+    sr = 24000
+    per_sample = np.arange(10000, dtype=np.float64)
+    seg = _MiniSeg(start_sample=1000)
+    default = rd._note_frame_track(per_sample, seg, 5, n_frames=5, sr=sr, frame_period_ms=5.0)
+    explicit_zero = rd._note_frame_track(
+        per_sample, seg, 5, n_frames=5, sr=sr, frame_period_ms=5.0, origin_shift_frames=0,
+    )
+    assert np.array_equal(default, explicit_zero)
+
+
+def test_note_frame_track_origin_shift_preutterance_frame_lands_at_beat_sample() -> None:
+    """origin_shift_frames=shift・shift=preutterance のとき、track の
+    frame[shift]（= unit の真のアタック点）は per_sample[seg.start_sample]
+    （= score 上の拍位置そのもの）を指す（P1 検証 (a)/(b): f0 の拍位置整合）。"""
+    sr = 24000
+    per_sample = np.arange(10000, dtype=np.float64)
+    seg = _MiniSeg(start_sample=1000)
+    shift = 20
+    track = rd._note_frame_track(
+        per_sample, seg, note_dur_frames=40, n_frames=40, sr=sr, frame_period_ms=5.0,
+        origin_shift_frames=shift,
+    )
+    assert track[shift] == 1000.0
+
+
+def test_note_frame_track_origin_shift_pre_beat_region_holds_previous_note_value() -> None:
+    """P1 検証 (c): shift 適用前の pre-beat 区間（k < shift）は
+    `seg.start_sample` より前の per_sample（= 前ノートの f0/振幅を保持する
+    連続トラック上の値）から読み出され、次ノート自身の frame[0]（=
+    seg.start_sample の値）が前倒しで現れないことを確認する。"""
+    sr = 24000
+    per_sample = np.concatenate([np.full(1000, 111.0), np.full(9000, 222.0)])  # 境界=1000
+    seg = _MiniSeg(start_sample=1000)
+    shift = 20
+    track = rd._note_frame_track(
+        per_sample, seg, note_dur_frames=40, n_frames=40, sr=sr, frame_period_ms=5.0,
+        origin_shift_frames=shift,
+    )
+    # pre-beat 区間（k=0..shift-1）は前ノート値（111.0）を保持する。
+    assert np.all(track[:shift] == 111.0)
+    # frame[shift]（拍位置）以降は新ノート値（222.0）。
+    assert np.all(track[shift:] == 222.0)
+
+
+def test_build_vcv_placements_stats_shift_per_note_matches_start_frame_shift() -> None:
+    """`_build_vcv_placements` の `stats["shift_per_note"]` は各 note の実効
+    shift（`cursor - start_frame`）と一致する（`_note_frame_track` の
+    `origin_shift_frames` へそのまま渡せることの検算）。"""
+    sr = 24000
+    breath_samples = int(0.25 * sr)
+    segs = [
+        _FakeSeg(0, sr, True),
+        _FakeSeg(sr + breath_samples, sr + breath_samples + sr, True),
+    ]
+    bank = _FakeBankVCV()
+    unit0 = _vcv_unit(0, overlap_frames=4, preutterance_frames=0)
+    unit1 = _vcv_unit(1, overlap_frames=4, preutterance_frames=15)
+    selections = [_FakeVCVSelection(unit0), _FakeVCVSelection(unit1)]
+
+    placements, resolved_list, stats = rd._build_vcv_placements(segs, selections, bank)
+
+    assert stats["shift_per_note"] == [0, 15]
+    breath_frames = 50
+    naive_start_1 = breath_frames + resolved_list[0].n_frames
+    assert placements[1].start_frame == naive_start_1 - stats["shift_per_note"][1]
+
+
+# ---------------------------------------------------------------------------
 # P1 修正 (review #262 R2): spec.donor の provenance 照合（fail-closed）
 # ---------------------------------------------------------------------------
 
@@ -393,6 +489,87 @@ def test_validate_spec_donor_pjs_hash_mismatch_raises(tmp_path: Path) -> None:
     root = tmp_path / "pjs_corpus"
     _write_minimal_pjs_lab(root, "pjs001")
     spec = _spec_with_donor({"dataset": "pjs", "corpus_sha256": "f" * 64})
+    with pytest.raises(rd.DonorProvenanceError):
+        rd._validate_spec_donor(spec, "pjs", None, root)
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #262 R4・`r3789341845`): identity ハッシュへの WAV バイト包含
+# ---------------------------------------------------------------------------
+
+
+def _write_minimal_oto_with_wav(
+    pdir: Path, wav_filename: str = "_test.wav", wav_bytes: bytes = b"WAVDATA"
+) -> None:
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "oto.ini").write_bytes(f"{wav_filename}=- あ{pdir.name},0,80,900,40,10\n".encode("cp932"))
+    (pdir / wav_filename).write_bytes(wav_bytes)
+
+
+def test_voicebank_identity_hash_changes_when_wav_bytes_change(tmp_path: Path) -> None:
+    """oto.ini を変えずに WAV バイトだけ差し替えても identity ハッシュが変わる
+    ことを確認する（旧実装は oto.ini のみをハッシュしており検知できなかった
+    ——review #262 R3 指摘の実害シナリオそのもの）。"""
+    root = tmp_path / "voicebank"
+    _write_minimal_oto_with_wav(root / "A3", wav_bytes=b"original wav bytes")
+    sha_before, _ = dbu.voicebank_identity_hash(root)
+
+    (root / "A3" / "_test.wav").write_bytes(b"replaced wav bytes!!")  # oto.ini 無変更
+    sha_after, _ = dbu.voicebank_identity_hash(root)
+
+    assert sha_before != sha_after
+
+
+def test_voicebank_identity_hash_stable_when_nothing_changes(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    _write_minimal_oto_with_wav(root / "A3", wav_bytes=b"stable wav bytes")
+    sha1, _ = dbu.voicebank_identity_hash(root)
+    sha2, _ = dbu.voicebank_identity_hash(root)
+    assert sha1 == sha2
+
+
+def test_validate_spec_donor_ritsu_detects_wav_swap_with_unchanged_oto(tmp_path: Path) -> None:
+    """実害シナリオ（review #262 R3 指摘 `r3789341845`）: oto.ini を無変更の
+    まま WAV だけ差し替えても、旧実装（oto.ini のみハッシュ）は fail-closed
+    検証を素通りしていた。新実装は WAV バイトも identity に含むため検出する。
+    """
+    root = tmp_path / "voicebank"
+    _write_minimal_oto_with_wav(root / "A3", wav_bytes=b"pinned donor bytes")
+    pinned_sha, _ = dbu.voicebank_identity_hash(root)
+    spec = _spec_with_donor({"dataset": "ritsu", "voicebank_sha256": pinned_sha})
+    rd._validate_spec_donor(spec, "ritsu", None, root)  # pin 時点では一致する
+
+    (root / "A3" / "_test.wav").write_bytes(b"swapped donor bytes!")  # oto.ini 無変更
+    with pytest.raises(rd.DonorProvenanceError):
+        rd._validate_spec_donor(spec, "ritsu", None, root)
+
+
+def _write_minimal_pjs_lab_with_wav(root: Path, name: str, wav_bytes: bytes = b"WAVDATA") -> None:
+    pdir = root / name
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / f"{name}.lab").write_text("0 1000000 pau\n1000000 2000000 a\n2000000 3000000 pau\n")
+    (pdir / f"{name}_song.wav").write_bytes(wav_bytes)
+
+
+def test_corpus_identity_hash_changes_when_song_wav_bytes_change(tmp_path: Path) -> None:
+    root = tmp_path / "pjs_corpus"
+    _write_minimal_pjs_lab_with_wav(root, "pjs001", wav_bytes=b"original song bytes")
+    sha_before = dbl.corpus_identity_hash(root)
+
+    (root / "pjs001" / "pjs001_song.wav").write_bytes(b"replaced song bytes!!")  # .lab 無変更
+    sha_after = dbl.corpus_identity_hash(root)
+
+    assert sha_before != sha_after
+
+
+def test_validate_spec_donor_pjs_detects_wav_swap_with_unchanged_lab(tmp_path: Path) -> None:
+    root = tmp_path / "pjs_corpus"
+    _write_minimal_pjs_lab_with_wav(root, "pjs001", wav_bytes=b"pinned song bytes")
+    pinned_sha = dbl.corpus_identity_hash(root)
+    spec = _spec_with_donor({"dataset": "pjs", "corpus_sha256": pinned_sha})
+    rd._validate_spec_donor(spec, "pjs", None, root)  # pin 時点では一致する
+
+    (root / "pjs001" / "pjs001_song.wav").write_bytes(b"swapped song bytes!")  # .lab 無変更
     with pytest.raises(rd.DonorProvenanceError):
         rd._validate_spec_donor(spec, "pjs", None, root)
 

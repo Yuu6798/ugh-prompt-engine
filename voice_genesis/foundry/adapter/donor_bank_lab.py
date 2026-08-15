@@ -184,19 +184,31 @@ def compute_octave_transpose(donor_median_hz: float, target_median_hz: float) ->
 
 
 def corpus_identity_hash(corpus_root: str | Path) -> str:
-    """P1 修正 (review #262 R2): PJS コーパスの「実体」ハッシュ（render.py の
-    `spec.donor` provenance 照合用。§ donor_bank_utau.voicebank_identity_hash
-    と対称の設計）。
+    """P1 修正 (review #262 R2・R4 で WAV バイトを追加): PJS コーパスの
+    「実体」ハッシュ（render.py の `spec.donor` provenance 照合用。
+    § donor_bank_utau.voicebank_identity_hash と対称の設計）。
 
-    全 `pjsNNN/pjsNNN.lab`（コーパス全体の音素セグメンテーション。どのファイル
-    がどの mora かを決める権威情報）を `(corpus_root からの相対パス, sha256)`
-    ペアで `donor_bank.aggregate_content_hash` へ渡した集約値を返す。
+    全 `pjsNNN/pjsNNN.lab`（音素セグメンテーション。どのファイルがどの mora
+    かを決める権威情報）+ 対応する `pjsNNN_song.wav`（存在すれば）を
+    `(corpus_root からの相対パス, sha256)` ペアで `donor_bank.aggregate_content_hash`
+    へ渡した集約値を返す。.lab だけでは donor の実体を代表しない（review
+    #262 R3 指摘 `r3789341845`: .lab を変えずに WAV バイトだけ差し替えても
+    検知できない）。WORLD が実際に分析するのは WAV サンプルそのものである
+    ため、識別対象を「解析対象の annotation（.lab）+ WAV」の決定論集約へ
+    拡張した（`_select_lab_files` の被覆選択より前に行う検証のため、選択
+    部分集合ではなくコーパス全体を対象にする — § voicebank_identity_hash と
+    同じ実装決定）。
     """
     root = Path(corpus_root)
     lab_paths = sorted(root.glob("pjs*/pjs*.lab"))
     if not lab_paths:
         raise FileNotFoundError(f"no pjs*/pjs*.lab found under {root}")
-    pairs = [(str(p.relative_to(root)), sha256_of(p)) for p in lab_paths]
+    pairs: List[Tuple[str, str]] = []
+    for lab_path in lab_paths:
+        pairs.append((str(lab_path.relative_to(root)), sha256_of(lab_path)))
+        wav_path = lab_path.parent / f"{lab_path.stem}_song.wav"
+        if wav_path.exists():
+            pairs.append((str(wav_path.relative_to(root)), sha256_of(wav_path)))
     return aggregate_content_hash(pairs)
 
 

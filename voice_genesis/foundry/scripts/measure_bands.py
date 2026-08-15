@@ -10,12 +10,20 @@ import argparse
 import hashlib
 import io
 import json
+import os
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 import numpy as np
 import scipy.signal as sig
 import soundfile as sf
+
+
+class OutputCollisionError(ValueError):
+    """P1 修正 (review #262 R4・`r3789341847`): `--out` が計測対象の入力 WAV の
+    いずれかと衝突する（fail-closed。書き込み前に検出する。
+    § adapter/render.py `OutputCollisionError` と対称の設計）。"""
 
 
 def band_shares(x: np.ndarray, sr: int) -> dict[str, float]:
@@ -111,6 +119,49 @@ def analyze_wav(path: str | Path) -> dict[str, Any]:
     return result
 
 
+def _reject_output_collision(out_path: str | Path, input_paths: List[str | Path]) -> None:
+    """P1 修正 (review #262 R4・`r3789341847`): `--out` が `wav_paths`（位置引数の
+    計測対象 WAV）のいずれかと衝突する場合は、分析後の書き込み前に fail-closed
+    で拒否する（例: `measure_bands.py donor.wav --out donor.wav` は分析結果の
+    JSON で donor.wav を上書きし、計測対象そのものを破壊してしまう）。
+
+    resolved 比較（symlink 解決後の完全一致）で判定する（AGENTS.md Persistent
+    Artifact Safety Gate 項目2）。存在しない入力パス（この時点までに
+    `analyze_wav` が既に読めているはずだが、念のため防御的に）はスキップする。
+    """
+    out_resolved = Path(out_path).resolve()
+    for p in input_paths:
+        p_path = Path(p)
+        if not p_path.exists():
+            continue
+        if out_resolved == p_path.resolve():
+            raise OutputCollisionError(
+                f"--out ({out_path}) が計測対象の入力 ({p}) と衝突しています（fail-closed で拒否）"
+            )
+
+
+def _atomic_write_text(text: str, out_path: str | Path) -> None:
+    """P2 修正 (review #262 R4・`r3789341850`): staging + `os.replace` で計測
+    レポート JSON を atomic 公開する（AGENTS.md Persistent Artifact Safety
+    Gate 項目6「全構築後公開」準拠。§ adapter/render.py `_atomic_write_wav`
+    と同じ流儀 —— `except BaseException` で staging を best-effort 削除して
+    から re-raise）。
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=out_path.parent, prefix=f"{out_path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp_name, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def _round_floats(d: dict[str, Any], ndigits: int = 5) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in d.items():
@@ -135,7 +186,11 @@ def main() -> None:
 
     text = json.dumps(results, indent=2, ensure_ascii=False)
     if args.out:
-        Path(args.out).write_text(text + "\n", encoding="utf-8")
+        # P1 修正 (review #262 R4・`r3789341847`): 公開（書き込み）前に入力との
+        # 衝突を fail-closed で拒否する。
+        _reject_output_collision(args.out, list(args.wav_paths))
+        # P2 修正 (review #262 R4・`r3789341850`): staging + os.replace で atomic 公開。
+        _atomic_write_text(text + "\n", args.out)
     else:
         print(text)
 

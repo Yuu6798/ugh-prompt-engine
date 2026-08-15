@@ -128,3 +128,125 @@ def test_deterministic_repeat(tmp_path: Path) -> None:
             assert np.isnan(v2)
         else:
             assert v1 == v2
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #262 R4・`r3789341847`): --out が入力 WAV と衝突する場合の拒否
+# ---------------------------------------------------------------------------
+
+
+def test_reject_output_collision_out_equals_input_wav_raises(tmp_path: Path) -> None:
+    sr = 22050
+    p = _write_wav(tmp_path, "donor.wav", np.zeros(int(0.1 * sr)), sr)
+    with pytest.raises(mb.OutputCollisionError):
+        mb._reject_output_collision(p, [p])
+
+
+def test_reject_output_collision_out_equals_one_of_multiple_inputs_raises(tmp_path: Path) -> None:
+    sr = 22050
+    p1 = _write_wav(tmp_path, "a.wav", np.zeros(int(0.1 * sr)), sr)
+    p2 = _write_wav(tmp_path, "b.wav", np.zeros(int(0.1 * sr)), sr)
+    with pytest.raises(mb.OutputCollisionError):
+        mb._reject_output_collision(p2, [p1, p2])
+
+
+def test_reject_output_collision_unrelated_out_does_not_raise(tmp_path: Path) -> None:
+    sr = 22050
+    p = _write_wav(tmp_path, "donor.wav", np.zeros(int(0.1 * sr)), sr)
+    out_path = tmp_path / "report.json"
+    mb._reject_output_collision(out_path, [p])  # no raise
+
+
+def test_reject_output_collision_symlinked_out_resolves_before_compare(tmp_path: Path) -> None:
+    sr = 22050
+    real_wav = _write_wav(tmp_path, "real.wav", np.zeros(int(0.1 * sr)), sr)
+    alias = tmp_path / "alias.wav"
+    alias.symlink_to(real_wav)
+    with pytest.raises(mb.OutputCollisionError):
+        mb._reject_output_collision(alias, [real_wav])
+
+
+def test_reject_output_collision_missing_input_path_is_skipped(tmp_path: Path) -> None:
+    out_path = tmp_path / "report.json"
+    missing = tmp_path / "does_not_exist.wav"
+    mb._reject_output_collision(out_path, [missing])  # no raise (input never existed)
+
+
+def test_main_rejects_out_aliasing_input(tmp_path: Path, monkeypatch, capsys) -> None:
+    """CLI 経由（`measure_bands.py donor.wav --out donor.wav`）でも fail-closed
+    で拒否され、donor.wav が JSON で上書きされないことを確認する（実害の再現）。"""
+    sr = 22050
+    p = _write_wav(tmp_path, "donor.wav", np.zeros(int(0.1 * sr)), sr)
+    before_bytes = p.read_bytes()
+    monkeypatch.setattr(sys, "argv", ["measure_bands.py", str(p), "--out", str(p)])
+    with pytest.raises(mb.OutputCollisionError):
+        mb.main()
+    assert p.read_bytes() == before_bytes  # donor.wav は無傷のまま
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #262 R4・`r3789341850`): 計測レポート JSON の atomic 公開
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_text_writes_readable_content(tmp_path: Path) -> None:
+    out_path = tmp_path / "report.json"
+    mb._atomic_write_text('{"a": 1}\n', out_path)
+    assert out_path.read_text(encoding="utf-8") == '{"a": 1}\n'
+    # tempfile が残っていない（staging cleanup 確認）。
+    assert list(tmp_path.glob("report.json.*.tmp")) == []
+
+
+def test_atomic_write_text_no_partial_file_on_failure(tmp_path: Path, monkeypatch) -> None:
+    """AGENTS.md Persistent Artifact Safety Gate 項目7「公開途中失敗の注入
+    テスト」: staging への write が失敗しても最終 out_path に部分成果物を残さない。"""
+    out_path = tmp_path / "report.json"
+
+    class _BoomFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def write(self, *_args, **_kwargs):
+            raise RuntimeError("simulated write failure")
+
+    monkeypatch.setattr(mb.os, "fdopen", lambda *_a, **_k: _BoomFile())
+    with pytest.raises(RuntimeError):
+        mb._atomic_write_text('{"a": 1}\n', out_path)
+    assert not out_path.exists()
+    assert list(tmp_path.glob("report.json.*.tmp")) == []
+
+
+def test_atomic_write_text_does_not_clobber_existing_output_on_failure(tmp_path: Path, monkeypatch) -> None:
+    """公開直前まで既存の有効な出力を保持し、失敗時は破壊しない
+    （staging + os.replace の atomicity）。"""
+    out_path = tmp_path / "report.json"
+    mb._atomic_write_text('{"a": 1}\n', out_path)
+    before_bytes = out_path.read_bytes()
+
+    class _BoomFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def write(self, *_args, **_kwargs):
+            raise RuntimeError("simulated write failure")
+
+    monkeypatch.setattr(mb.os, "fdopen", lambda *_a, **_k: _BoomFile())
+    with pytest.raises(RuntimeError):
+        mb._atomic_write_text('{"a": 2}\n', out_path)
+    assert out_path.read_bytes() == before_bytes  # 旧ファイルが無傷のまま残る
+
+
+def test_main_writes_out_atomically(tmp_path: Path, monkeypatch) -> None:
+    sr = 22050
+    p = _write_wav(tmp_path, "src.wav", np.zeros(int(0.1 * sr)), sr)
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(sys, "argv", ["measure_bands.py", str(p), "--out", str(out_path)])
+    mb.main()
+    assert out_path.exists()
+    assert list(tmp_path.glob("report.json.*.tmp")) == []
