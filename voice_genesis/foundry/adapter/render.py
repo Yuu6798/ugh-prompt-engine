@@ -557,8 +557,16 @@ def render(
         if voicebank_root is None:
             raise ValueError("donor='pjs' には --voicebank-root（PJS コーパスルート）が必須です")
         target_median_hz = float(np.median([_midi_to_hz(seg.note.midi) for seg in segments]))
+        # P2 修正 (review #262 R12): coverage は選択時の約束ではなく実際に
+        # 構築できた unit/クリップから導出する（終端修正）。sakura/umi の
+        # 必須子音オンセット + 5 母音（`_select_lab_files` が従来から貪欲
+        # 被覆の target にしている固定集合と同一）を明示的に必須要件として
+        # 渡し、realized coverage がこれを満たさなければ fail-closed で
+        # 拒否させる（§ build_donor_bank_utau_vcv の required_contexts と
+        # 対称。近傍/global フォールバックへの黙った縮退を禁止）。
         bank, unit_vowel_labels, consonant_clips, donor_extra_stats = dbl.build_donor_bank_lab(
-            voicebank_root, target_median_hz=target_median_hz, cache_dir=cache_dir
+            voicebank_root, target_median_hz=target_median_hz, cache_dir=cache_dir,
+            required_onsets=dbu.REQUIRED_ONSETS, required_vowels=dbl.VOWELS_5,
         )
 
     # P2 修正 (review #262 R6・`r3789428504`): bank 構築完了後・成果物公開前に

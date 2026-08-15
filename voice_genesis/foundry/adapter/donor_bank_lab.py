@@ -52,7 +52,11 @@ from donor_bank import (  # noqa: E402
     atomic_pickle_dump,
     sha256_of,
 )
-from donor_bank_utau import ConsonantClip, REQUIRED_ONSETS  # noqa: E402  (adapter sibling import)
+from donor_bank_utau import (  # noqa: E402  (adapter sibling import)
+    ConsonantClip,
+    REQUIRED_ONSETS,
+    enforce_realized_onset_vowel_coverage,
+)
 
 # .lab の時刻単位（HTS 標準 = 100ns）。
 LAB_TIME_UNIT_S = 1e-7
@@ -236,8 +240,26 @@ def _load_wav_24k_bytes(data: bytes, source: str = "<bytes>") -> Tuple[np.ndarra
     return np.ascontiguousarray(y.astype(np.float64)), SR
 
 
+def _probe_wav_duration_s(path: Path) -> Optional[float]:
+    """WAV ヘッダのみ（`soundfile.info`）から実長 (秒) を probe する（フル
+    デコード不要・計算資源境界に適う軽量プローブ。review #262 R12。
+    § donor_bank_utau._probe_wav_duration_ms と対称の設計）。読めなければ
+    None（選択時は「実長不明」として扱い、クランプ無し=旧挙動へフォール
+    バックする。実際の欠落/破損の fail-closed 検出は既存の `missing_wav`
+    チェック（R6）が別途担う）。
+    """
+    try:
+        info = sf.info(str(path))
+    except Exception:
+        return None
+    if info.samplerate <= 0:
+        return None
+    return info.frames / info.samplerate
+
+
 def _usable_onsets_and_vowels(
-    phonemes: Sequence[LabPhoneme], required: set, frame_period_ms: float
+    phonemes: Sequence[LabPhoneme], required: set, frame_period_ms: float,
+    wav_duration_s: Optional[float] = None,
 ) -> Tuple[set, set]:
     """`group_lab_to_morae` でグルーピングした後、実際に unit/clip 化できる
     区間（子音 >= 1 フレーム、母音核 >= `MIN_UNIT_FRAMES_ABS` フレーム）から
@@ -245,19 +267,41 @@ def _usable_onsets_and_vowels(
     の unit/clip 化条件（子音: `c_end - c_start >= 1`、母音:
     `v_end - v_start >= MIN_UNIT_FRAMES_ABS`）と一致させる。音声デコードは
     不要（時刻から算出したフレーム数のみで判定する）。
+
+    P2 修正 (review #262 R12・`r3789559167`): `wav_duration_s` が渡された
+    場合、境界フレームをその実長（`_probe_wav_duration_s` によるヘッダのみ
+    probe）でクランプしてから判定する。旧実装はペア wav の実長を一切見て
+    いなかったため、切詰め/破損 `_song.wav` で EOF を越える区間がそのまま
+    「usable」と報告され、`build_donor_bank_lab` 本体（実 WORLD 分析後の
+    `n_donor_frames` でクランプ）が同じ区間を 0 フレームへ潰して unit/clip
+    を作らなくても coverage 報告は成功のままになりうる実害があった。
+    `wav_duration_s=None`（後方互換・wav 未取得の呼び出し元向け）の場合は
+    従来どおり未クランプで判定する——正しさの最終担保はいずれの場合も
+    build 後の realized coverage 再計算（`enforce_realized_onset_vowel_coverage`）
+    が fail-closed backstop として持つ。
     """
     morae, _mstats = group_lab_to_morae(phonemes)
+    n_frames_bound: Optional[int] = (
+        _ms_to_frame(wav_duration_s, frame_period_ms) if wav_duration_s is not None else None
+    )
+
+    def _frame(sec: float) -> int:
+        f = _ms_to_frame(sec, frame_period_ms)
+        if n_frames_bound is not None:
+            f = max(0, min(f, n_frames_bound))
+        return f
+
     usable_onsets: set = set()
     usable_vowels: set = set()
     for m in morae:
         if m.onset is not None and m.onset in required and m.onset_start_s is not None:
-            c_start = _ms_to_frame(m.onset_start_s, frame_period_ms)
-            c_end = _ms_to_frame(m.onset_end_s, frame_period_ms)
+            c_start = _frame(m.onset_start_s)
+            c_end = _frame(m.onset_end_s)
             if c_end - c_start >= 1:
                 usable_onsets.add(m.onset)
         if m.vowel in VOWELS_5:
-            v_start = _ms_to_frame(m.vowel_start_s, frame_period_ms)
-            v_end = _ms_to_frame(m.vowel_end_s, frame_period_ms)
+            v_start = _frame(m.vowel_start_s)
+            v_end = _frame(m.vowel_end_s)
             if v_end - v_start >= MIN_UNIT_FRAMES_ABS:
                 usable_vowels.add(m.vowel)
     return usable_onsets, usable_vowels
@@ -291,6 +335,15 @@ def _select_lab_files(
     `MIN_UNIT_FRAMES_ABS` 未満に丸まる母音区間が偽って「covered」と報告され、
     貪欲選択が同じ音素を持つ後続ファイルの有効な収録を skip する実害を防ぐ
     （`build_donor_bank_lab` の実際の unit/clip 化条件と一致させる）。
+
+    P2 修正 (review #262 R12・`r3789559167`): `_usable_onsets_and_vowels` は
+    R10 是正後もペア wav の実長を一切見ていなかったため、切詰め/破損
+    `_song.wav` では EOF を越える区間が引き続き usable と誤判定されていた。
+    候補ごとに対応する `<stem>_song.wav` の実長（ヘッダのみ・
+    `_probe_wav_duration_s`）を probe し、境界フレームをその実長へクランプ
+    してから usable 判定する（wav が無い/読めない候補は `wav_duration_s=None`
+    で従来どおり未クランプ判定へフォールバック——正しさの最終担保は build 後の
+    realized coverage 再計算が fail-closed backstop として持つため安全）。
     """
     required = set(required_onsets)
     covered_onsets: set = set()
@@ -300,7 +353,11 @@ def _select_lab_files(
     for path in sorted(lab_paths, key=lambda p: p.stem):
         lab_bytes = path.read_bytes()
         phonemes = parse_lab_text(lab_bytes.decode("utf-8"))
-        usable_onsets, usable_vowels = _usable_onsets_and_vowels(phonemes, required, frame_period_ms)
+        wav_path = path.parent / f"{path.stem}_song.wav"
+        wav_duration_s = _probe_wav_duration_s(wav_path)
+        usable_onsets, usable_vowels = _usable_onsets_and_vowels(
+            phonemes, required, frame_period_ms, wav_duration_s=wav_duration_s
+        )
         new_onsets = usable_onsets - covered_onsets
         new_vowels = usable_vowels - covered_vowels
         if new_onsets or new_vowels or len(selected) < min_files:
@@ -327,6 +384,8 @@ def build_donor_bank_lab(
     frame_period_ms: float = FRAME_PERIOD_MS,
     min_files: int = 6,
     max_files: int = 10,
+    required_onsets: Optional[Sequence[str]] = None,
+    required_vowels: Optional[Sequence[str]] = None,
 ) -> Tuple[DonorBank, Dict[int, str], Dict[str, List[ConsonantClip]], dict]:
     """PJS コーパスルート（`pjsNNN/pjsNNN.lab` + `pjsNNN_song.wav` を含む）を分析する。
 
@@ -335,6 +394,16 @@ def build_donor_bank_lab(
     最寄りのオクターブへ丸めた移調量として `median_f0` へ適用する。
 
     戻り値の形は `donor_bank_utau.build_donor_bank_utau` と同一（対称設計）。
+
+    `required_onsets`/`required_vowels`（review #262 R12 終端修正）: 与えると
+    build 完了後の realized coverage（実際に構築できた consonant_clips /
+    unit_vowels）をこれと照合し、不足があれば
+    `donor_bank_utau.enforce_realized_onset_vowel_coverage` が列挙付きで
+    fail-closed する（§ donor_bank_utau.build_donor_bank_utau と対称）。
+    既定 None は「要件無し」（後方互換の opt-in 契約。合成 fixture の
+    単体テスト・要件非依存の汎用利用のため）。選択（`_select_lab_files`）
+    自体の被覆目標には影響しない（selection の target は従来どおり
+    `REQUIRED_ONSETS`/`VOWELS_5` 固定）。
     """
     root = Path(corpus_root)
     lab_paths = sorted(root.glob("pjs*/pjs*.lab"))
@@ -410,8 +479,18 @@ def build_donor_bank_lab(
                 cached_bank, cached_unit_vowels, cached_consonant_clips, cached_stats = pickle.load(f)
             # P2 修正 (review #262 R3): pickle 復元は保存時の `stats["cache_hit"]
             # =False` をそのまま返していた（donor_bank_utau.py の同種修正と揃える）。
+            # P2 修正 (review #262 R12): `required_onsets`/`required_vowels` は
+            # cache key 材料に含まれない（§ donor_bank_utau.build_donor_bank_utau
+            # と同じ理由・同じ是正）。cache-hit でも毎回 realized coverage を
+            # 再検証する。
+            realized_coverage = enforce_realized_onset_vowel_coverage(
+                cached_consonant_clips, cached_unit_vowels, required_onsets, required_vowels,
+                source_label=f"PJS donor bank cache ({root})",
+            )
             cached_stats["cache_hit"] = True
+            cached_stats["realized_coverage"] = realized_coverage
             cached_bank.stats["cache_hit"] = True
+            cached_bank.stats["realized_coverage"] = realized_coverage
             return cached_bank, cached_unit_vowels, cached_consonant_clips, cached_stats
 
     all_f0: List[np.ndarray] = []
@@ -515,6 +594,14 @@ def build_donor_bank_lab(
     # 理由・同じ是正（v1/v2/PJS 対称）。
     wav_sha256 = aggregate_content_hash(wav_sha_pairs)
 
+    # P2 修正 (review #262 R12・`r3789559167`): § donor_bank_utau.py と同じ
+    # 理由・同じ是正（v1/v2/PJS 対称）。coverage は selection_stats の約束
+    # ではなく実際に構築できた consonant_clips/unit_vowels から導出する。
+    realized_coverage = enforce_realized_onset_vowel_coverage(
+        consonant_clips, unit_vowels, required_onsets, required_vowels,
+        source_label=f"PJS donor bank ({root})",
+    )
+
     stats = dict(
         n_files_analyzed=len(selected_paths), n_units_kept=len(units),
         n_dropped_short_vowel=n_dropped_short_vowel, n_mora_no_vowel_skipped=n_mora_no_vowel_skipped,
@@ -524,6 +611,7 @@ def build_donor_bank_lab(
         | {"N": sum(1 for lbl in unit_vowels.values() if lbl == "N")},
         donor_median_hz_raw=donor_median_hz, target_median_hz=target_median_hz,
         transpose_semitones=transpose_semitones, selection_stats=selection_stats,
+        realized_coverage=realized_coverage,
         cache_hit=False,
     )
 

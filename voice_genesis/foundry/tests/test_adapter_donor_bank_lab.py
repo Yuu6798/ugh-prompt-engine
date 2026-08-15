@@ -436,3 +436,103 @@ def test_build_donor_bank_lab_cache_write_failure_leaves_no_corrupt_pickle(
     )
     assert stats["cache_hit"] is False
     assert len(list(cache_dir.glob("lab_bank_*.pkl"))) == 1
+
+
+# --- review #262 R12 (`r3789559167`): coverage は選択時の約束ではなく実際に ---
+# 構築できた unit/クリップから導出する（終端修正）。§ donor_bank_utau.py の
+# 対称テストと対で読む。
+
+
+def test_select_lab_files_truncated_wav_does_not_mask_later_valid_recording(tmp_path: Path) -> None:
+    """先頭で見つかった .lab が declare する母音区間が、対応する `_song.wav`
+    の実長（切詰め）を越えている場合、その区間は selection 段で usable と
+    報告されず、同じ母音を実際に収録している後続ファイルが選択される
+    ことを確認する（R10 是正はラベルのグルーピングのみを見ており、ペア
+    wav の実長は見ていなかったため、この乖離を検出できなかった）。
+    """
+    root = tmp_path / "pjs_corpus"
+    d1 = root / "pjs001"
+    d1.mkdir(parents=True)
+    # pjs001: lab は 's'(0.3-0.4s) + 'o'(0.4-0.9s) を宣言するが、_song.wav は
+    # 0.35s で切詰められている（'o' の宣言区間は EOF を越える）。
+    _write_sine_wav(d1 / "pjs001_song.wav", duration_s=0.35)
+    (d1 / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 s\n4000000 9000000 o\n")
+
+    d2 = root / "pjs002"
+    d2.mkdir(parents=True)
+    # pjs002: 同じ 's'+'o' を実際にフルレングスで収録した有効な wav。
+    _write_sine_wav(d2 / "pjs002_song.wav", duration_s=2.0)
+    (d2 / "pjs002.lab").write_text("0 3000000 pau\n3000000 4000000 s\n4000000 9000000 o\n")
+
+    paths = [d1 / "pjs001.lab", d2 / "pjs002.lab"]
+    selected, stats, _lab_bytes = dbl._select_lab_files(
+        paths, required_onsets=("s",), min_files=1, max_files=5
+    )
+
+    # pjs001 の 'o' は切詰めのため usable と報告されず、pjs002 が新規の
+    # 'o' カバレッジを提供するファイルとして選択される。
+    assert (d2 / "pjs002.lab") in selected
+    assert "o" in stats["covered_vowels"]
+
+
+def test_build_donor_bank_lab_truncated_wav_fails_closed_with_missing_enumerated(
+    tmp_path: Path,
+) -> None:
+    """切詰め wav しか存在しない corpus で `required_vowels` を満たせない
+    場合、後段のクランプで unit が 0 化されても coverage 報告が成功のまま
+    にはならず、不足を列挙した `ValueError` で fail-closed する。"""
+    root = tmp_path / "pjs_corpus"
+    d1 = root / "pjs001"
+    d1.mkdir(parents=True)
+    _write_sine_wav(d1 / "pjs001_song.wav", duration_s=0.35)  # EOF より前に切詰め
+    (d1 / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 s\n4000000 9000000 o\n")
+
+    with pytest.raises(ValueError, match=r"realized coverage") as excinfo:
+        dbl.build_donor_bank_lab(
+            root, target_median_hz=260.0, min_files=1, max_files=5,
+            required_onsets=["s"], required_vowels=["o"],
+        )
+    msg = str(excinfo.value)
+    assert "missing_vowels=['o']" in msg
+
+
+def test_build_donor_bank_lab_realized_coverage_matches_selection_when_valid(tmp_path: Path) -> None:
+    """正常系: 全要件が有効に構築できる場合、必須要件と realized coverage が
+    一致する（分母を隠さない・乖離が無いことの直接確認）。"""
+    root = tmp_path / "pjs_corpus"
+    d = root / "pjs001"
+    d.mkdir(parents=True)
+    _write_sine_wav(d / "pjs001_song.wav", duration_s=2.0)
+    (d / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 k\n4000000 9000000 a\n")
+
+    bank, unit_vowels, consonant_clips, stats = dbl.build_donor_bank_lab(
+        root, target_median_hz=260.0, min_files=1, max_files=5,
+        required_onsets=["k"], required_vowels=["a"],
+    )
+    assert stats["realized_coverage"]["missing_onsets"] == []
+    assert stats["realized_coverage"]["missing_vowels"] == []
+    assert stats["realized_coverage"]["covered_onsets"] == ["k"]
+    assert stats["realized_coverage"]["covered_vowels"] == ["a"]
+    assert "k" in consonant_clips
+    assert set(unit_vowels.values()) == {"a"}
+
+
+def test_build_donor_bank_lab_deterministic_repeat_with_required_coverage(tmp_path: Path) -> None:
+    """必須要件 enforcement 込みの経路でも決定論（再構築で bit 一致）。"""
+    root = tmp_path / "pjs_corpus"
+    d = root / "pjs001"
+    d.mkdir(parents=True)
+    _write_sine_wav(d / "pjs001_song.wav", duration_s=2.0)
+    (d / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 k\n4000000 9000000 a\n")
+
+    bank1, uv1, _c1, _s1 = dbl.build_donor_bank_lab(
+        root, target_median_hz=260.0, min_files=1, max_files=5,
+        required_onsets=["k"], required_vowels=["a"],
+    )
+    bank2, uv2, _c2, _s2 = dbl.build_donor_bank_lab(
+        root, target_median_hz=260.0, min_files=1, max_files=5,
+        required_onsets=["k"], required_vowels=["a"],
+    )
+    assert np.array_equal(bank1.sp, bank2.sp)
+    assert np.array_equal(bank1.ap, bank2.ap)
+    assert uv1 == uv2

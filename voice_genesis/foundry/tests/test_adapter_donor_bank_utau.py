@@ -656,12 +656,23 @@ def test_build_donor_bank_utau_missing_selected_wav_raises(tmp_path: Path) -> No
 def test_build_donor_bank_utau_vcv_required_contexts_change_cache_key(tmp_path: Path) -> None:
     """[実装決定・record] required_contexts が異なれば選択される wav 部分集合が
     変わりうるため、キャッシュキーへ含める（衝突すると別スコア向けの部分
-    集合バンクを誤って再利用してしまう）。"""
+    集合バンクを誤って再利用してしまう）。
+
+    [R12 是正で fixture 拡張] realized coverage の fail-closed 検証
+    （§ enforce_realized_context_coverage）が入ったため、各呼び出しの
+    `required_contexts` は fixture 内で実際に realized 可能な文脈でなければ
+    ならない。両方の文脈を用意した上で、呼び出しごとに異なる部分集合を
+    要求することでキャッシュキーの独立性のみを検証する。
+    """
     root = tmp_path / "voicebank"
     pdir = root / "A3"
     pdir.mkdir(parents=True)
-    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
-    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+    _write_sine_wav(pdir / "_test.wav", duration_s=2.0)
+    oto_text = (
+        "_test.wav=- あA3,0,80,1500,40,10\n"
+        "_test.wav=a かA3,800,150,300,80,20\n"
+    )
+    (pdir / "oto.ini").write_bytes(oto_text.encode("cp932"))
 
     cache_dir = tmp_path / "cache"
     dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5, required_contexts=[(None, "あ")])
@@ -818,3 +829,148 @@ def test_build_donor_bank_utau_wav_sha256_changes_when_same_named_wavs_swap_cont
 
     bank_after, _uv2, _c2, _s2 = dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
     assert bank_before.wav_sha256 != bank_after.wav_sha256
+
+
+# --- review #262 R12 (`r3789559165`): coverage は選択時の約束ではなく実際に ---
+# 構築できた unit から導出する（終端修正）。§ donor_bank_lab.py の対称テストと
+# 対で読む。
+
+
+def test_build_donor_bank_utau_vcv_frontload_skips_invalid_entry_selects_later_valid_wav(
+    tmp_path: Path,
+) -> None:
+    """先頭で見つかった oto エントリの `[offset, cutoff)` 区間が不正/短小
+    （MIN_UNIT_FRAMES_ABS 未満）でも、同じ VCV 文脈を持つ後続の有効な wav が
+    選択・分析され、実際に unit が構築されることを確認する。旧実装は
+    エイリアス文字列の一致だけで即座に文脈を `remaining` から除去していた
+    ため、不正な先行エントリが有効な後続 wav の選択を遮っていた（selection
+    の "発見済み" 報告と実際に構築できる unit が乖離する実害）。
+    """
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    # f_a_bad.wav（ファイル名昇順で先）: duration=100ms。blank=99 -> cutoff =
+    # 100-99=1ms -> [0,1)ms は frame_period=5ms で 0 frame（不正/短小区間）。
+    _write_sine_wav(pdir / "f_a_bad.wav", duration_s=0.1)
+    # f_b_good.wav（ファイル名昇順で後）: duration=2000ms の有効な wav。
+    _write_sine_wav(pdir / "f_b_good.wav", duration_s=2.0)
+    oto_text = (
+        "f_a_bad.wav=a かA3,0,10,99,10,5\n"
+        "f_b_good.wav=a かA3,800,150,300,80,20\n"
+    )
+    (pdir / "oto.ini").write_bytes(oto_text.encode("cp932"))
+
+    bank, unit_contexts, stats = dbu.build_donor_bank_utau_vcv(
+        root, max_wav_files=5, required_contexts=[("a", "か")]
+    )
+
+    # 不正な先行エントリしか持たない f_a_bad.wav は分析対象へ選ばれず、
+    # 有効な f_b_good.wav のみが選択・分析される。
+    assert stats["n_wav_files_analyzed"] == 1
+    assert stats["selection_stats_by_dir"]["A3"]["missing_contexts"] == []
+    assert stats["selection_stats_by_dir"]["A3"]["n_entries_rejected_unusable"] == 1
+    assert len(bank.units) == 1
+    assert unit_contexts[0] == dbu.VCVContext(prev_vowel="a", mora="か", is_phrase_initial=False)
+    assert stats["realized_coverage"]["missing_contexts"] == []
+    assert stats["realized_coverage"]["covered_contexts"] == [("a", "か")]
+
+
+def test_build_donor_bank_utau_vcv_frontload_deterministic_repeat(tmp_path: Path) -> None:
+    """§ 上記テストと同一 fixture の決定論再現（前倒し検証込みの経路）。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "f_a_bad.wav", duration_s=0.1)
+    _write_sine_wav(pdir / "f_b_good.wav", duration_s=2.0)
+    oto_text = (
+        "f_a_bad.wav=a かA3,0,10,99,10,5\n"
+        "f_b_good.wav=a かA3,800,150,300,80,20\n"
+    )
+    (pdir / "oto.ini").write_bytes(oto_text.encode("cp932"))
+
+    bank1, ctx1, _s1 = dbu.build_donor_bank_utau_vcv(root, max_wav_files=5, required_contexts=[("a", "か")])
+    bank2, ctx2, _s2 = dbu.build_donor_bank_utau_vcv(root, max_wav_files=5, required_contexts=[("a", "か")])
+    assert np.array_equal(bank1.sp, bank2.sp)
+    assert np.array_equal(bank1.ap, bank2.ap)
+    assert ctx1 == ctx2
+
+
+def test_build_donor_bank_utau_vcv_realized_coverage_matches_selection_when_valid(
+    tmp_path: Path,
+) -> None:
+    """正常系: 全文脈が有効に構築できる場合、選択時 coverage と realized
+    coverage が一致する（分母を隠さない・乖離が無いことの直接確認）。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=2.0)
+    oto_text = (
+        "_test.wav=- あA3,0,80,1500,40,10\n"
+        "_test.wav=a かA3,800,150,300,80,20\n"
+    )
+    (pdir / "oto.ini").write_bytes(oto_text.encode("cp932"))
+    required = [(None, "あ"), ("a", "か")]
+
+    bank, unit_contexts, stats = dbu.build_donor_bank_utau_vcv(root, max_wav_files=5, required_contexts=required)
+
+    sel_missing = stats["selection_stats_by_dir"]["A3"]["missing_contexts"]
+    realized_missing = stats["realized_coverage"]["missing_contexts"]
+    assert sel_missing == [] == realized_missing
+    assert stats["realized_coverage"]["covered_contexts"] == sorted(required, key=lambda c: (c[0] or "", c[1]))
+    assert len(bank.units) == 2
+
+
+def test_build_donor_bank_utau_vcv_fails_closed_when_required_context_unreachable(
+    tmp_path: Path,
+) -> None:
+    """必須文脈が voicebank 内のどこにも存在しない場合、近傍/global
+    フォールバックへ黙って縮退せず、不足文脈を列挙した `ValueError` で
+    fail-closed する。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    with pytest.raises(ValueError, match=r"realized coverage"):
+        dbu.build_donor_bank_utau_vcv(
+            root, max_wav_files=5, required_contexts=[(None, "あ"), ("a", "か")]
+        )
+
+
+def test_build_donor_bank_utau_required_onsets_vowels_pass_when_satisfied(tmp_path: Path) -> None:
+    """v1 builder（`build_donor_bank_utau`）でも realized coverage の必須要件
+    enforcement が使える（§ VCV 版と対称。3 銀行統一の終端修正）。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=2.0)
+    oto_text = (
+        "_test.wav=- あA3,0,80,1500,40,10\n"
+        "_test.wav=a かA3,800,150,300,80,20\n"
+    )
+    (pdir / "oto.ini").write_bytes(oto_text.encode("cp932"))
+
+    bank, unit_vowels, consonant_clips, stats = dbu.build_donor_bank_utau(
+        root, min_units_per_vowel=1, max_wav_files=5,
+        required_onsets=["k"], required_vowels=["a"],
+    )
+    assert stats["realized_coverage"]["missing_onsets"] == []
+    assert stats["realized_coverage"]["missing_vowels"] == []
+    assert "k" in consonant_clips
+    assert set(unit_vowels.values()) == {"a"}
+
+
+def test_build_donor_bank_utau_required_onsets_fails_closed_when_missing(tmp_path: Path) -> None:
+    """v1 builder: 必須 onset がどこにも構築できない場合は fail-closed する。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    with pytest.raises(ValueError, match=r"realized coverage"):
+        dbu.build_donor_bank_utau(
+            root, min_units_per_vowel=1, max_wav_files=5,
+            required_onsets=["k"], required_vowels=["a"],
+        )

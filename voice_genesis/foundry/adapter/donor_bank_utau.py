@@ -304,6 +304,132 @@ def _ms_to_frame(ms: float, frame_period_ms: float) -> int:
     return int(round(ms / frame_period_ms))
 
 
+def _wav_ref_is_lexically_safe(wav_filename: str) -> bool:
+    """絶対パス・`..` 成分を含む wav 参照を語彙的に拒否する（`_reject_wav_paths_outside_root`
+    の語彙的検査（review #262 R10）と同じ判定を、selection 段のヘッダ probe
+    より前に軽量に再利用するためのヘルパー。selection 段で任意ファイルを
+    read しないための防御・[実装決定・record 記録]。最終的な網羅的検査
+    （symlink 解決込み）は `_reject_wav_paths_outside_root` が選択済み集合へ
+    改めて適用する——本関数は selection 段の probe を安全側に倒すだけの
+    軽量フィルタで、これを置き換えない）。
+    """
+    lexical = Path(wav_filename)
+    return not (lexical.is_absolute() or ".." in lexical.parts)
+
+
+def _probe_wav_duration_ms(path: Path) -> Optional[float]:
+    """WAV ヘッダのみ（`soundfile.info`）から実長 (ms) を probe する（フル
+    デコード不要・計算資源境界に適う軽量プローブ。review #262 R12）。
+    読めなければ None（選択時は「使用不可」として扱う。実際の欠落/破損の
+    fail-closed 検出は既存の `missing_wav` チェック（R9）が別途担う）。
+    """
+    try:
+        info = sf.info(str(path))
+    except Exception:
+        return None
+    if info.samplerate <= 0:
+        return None
+    return info.frames / info.samplerate * 1000.0
+
+
+def _oto_entry_is_usable(e: "OtoEntry", wav_duration_ms: float, frame_period_ms: float) -> bool:
+    """selection 時の前倒し検証 (review #262 R12): `build_donor_bank_utau_vcv`
+    本体が行う `[offset, cutoff)` のフレーム区間クランプ（§ 同関数の
+    `seg_start`/`seg_end` 算出）を、実 WORLD 分析前の wav 実長（ヘッダのみ）
+    だけで近似再現し、`MIN_UNIT_FRAMES_ABS` 未満に丸まる不正/短小区間を
+    selection 段階で弾く（不正な先行エントリが有効な後続 wav の選択を
+    遮らないようにするため）。
+
+    近似の n_donor_frames（`wav_duration_ms` から算出）は本体分析時の実
+    WORLD フレーム数とわずかに異なりうるため、本関数は「selection の質を
+    上げる前倒しフィルタ」に過ぎない。正しさの最終担保は build 後の
+    realized coverage 再計算（`enforce_realized_context_coverage`）が
+    fail-closed backstop として持つ。
+    """
+    approx_n_frames = max(0, _ms_to_frame(wav_duration_ms, frame_period_ms))
+    cutoff_ms = cutoff_position_ms(e.offset_ms, e.blank_ms, wav_duration_ms)
+    seg_start = max(0, min(_ms_to_frame(e.offset_ms, frame_period_ms), approx_n_frames))
+    seg_end = max(0, min(_ms_to_frame(cutoff_ms, frame_period_ms), approx_n_frames))
+    return (seg_end - seg_start) >= MIN_UNIT_FRAMES_ABS
+
+
+def realized_onset_vowel_coverage(
+    consonant_clips: Dict[str, List["ConsonantClip"]], unit_vowels: Dict[int, str]
+) -> Tuple[set, set]:
+    """`consonant_clips`/`unit_vowels`（実際に構築された onset クリップ・
+    母音 unit）から realized coverage（onset 集合・vowel 集合）を導く
+    （UTAU v1 / PJS 共通ヘルパー。review #262 R12: coverage は選択時の約束
+    ではなく実際に構築できた unit/クリップから導出する、の共有実装）。
+    """
+    realized_onsets = {onset for onset, clips in consonant_clips.items() if clips}
+    realized_vowels = {v for v in unit_vowels.values() if v in "aiueo"}
+    return realized_onsets, realized_vowels
+
+
+def enforce_realized_onset_vowel_coverage(
+    consonant_clips: Dict[str, List["ConsonantClip"]],
+    unit_vowels: Dict[int, str],
+    required_onsets: Optional[Sequence[str]],
+    required_vowels: Optional[Sequence[str]],
+    source_label: str,
+) -> dict:
+    """realized coverage を必須要件に照らし fail-closed する（review #262
+    R12 終端修正: UTAU v1 / PJS 共通ヘルパー。§ `enforce_realized_context_coverage`
+    の VCV 版と対称の設計）。不足があれば列挙付きの `ValueError` を送出する。
+    `required_onsets`/`required_vowels=None` は「要件無し」（後方互換の
+    opt-in 契約。合成 fixture の単体テスト・要件非依存の汎用利用のため
+    既定 None）。要件を満たす（または要件無し）場合は record/デバッグ用の
+    realized_coverage dict を返す。
+    """
+    realized_onsets, realized_vowels = realized_onset_vowel_coverage(consonant_clips, unit_vowels)
+    missing_onsets = sorted(set(required_onsets) - realized_onsets) if required_onsets is not None else []
+    missing_vowels = sorted(set(required_vowels) - realized_vowels) if required_vowels is not None else []
+    if missing_onsets or missing_vowels:
+        raise ValueError(
+            f"{source_label}: realized coverage が必須要件を満たしていません "
+            f"(selection 時は covered と報告された可能性があるが、正規化/クリップで "
+            f"棄却され実際には onset クリップ/母音 unit を構築できなかった要素を含む): "
+            f"missing_onsets={missing_onsets}, missing_vowels={missing_vowels}"
+        )
+    return dict(
+        covered_onsets=sorted(realized_onsets), covered_vowels=sorted(realized_vowels),
+        missing_onsets=missing_onsets, missing_vowels=missing_vowels,
+    )
+
+
+def enforce_realized_context_coverage(
+    unit_contexts: Dict[int, "VCVContext"],
+    required_contexts: Optional[Sequence[Tuple[Optional[str], str]]],
+    source_label: str,
+) -> dict:
+    """realized（実際に構築された unit）の VCV 文脈集合を必須文脈と照合し、
+    不足があれば列挙付きで fail-closed する（review #262 R12 終端修正:
+    coverage は選択時の約束ではなく実際に構築できた unit から導出する。
+    近傍/global フォールバックへの黙った縮退を禁止する）。
+
+    `required_contexts=None` は「要件無し」（後方互換の opt-in 契約、合成
+    fixture の単体テスト・汎用利用のため）。要件を満たす場合は
+    realized_coverage 記録用の dict を返す。
+    """
+    realized = {(ctx.prev_vowel, ctx.mora) for ctx in unit_contexts.values()}
+    if required_contexts is None:
+        missing: List[Tuple[Optional[str], str]] = []
+    else:
+        missing = sorted(set(required_contexts) - realized, key=lambda c: (c[0] or "", c[1]))
+    if missing:
+        raise ValueError(
+            f"{source_label}: realized coverage が必須文脈を満たしていません "
+            f"(selection 時は covered と報告された可能性があるが、正規化/クリップで "
+            f"棄却され実際には unit を構築できなかった文脈を含む。近傍/global "
+            f"フォールバックへの黙った縮退は禁止のため fail-closed): {missing}"
+        )
+    return dict(
+        covered_contexts=sorted(realized, key=lambda c: (c[0] or "", c[1])),
+        n_contexts_required=(len(required_contexts) if required_contexts is not None else 0),
+        missing_contexts=missing,
+    )
+
+
 def _load_wav_24k(path: str | Path) -> Tuple[np.ndarray, int, float]:
     """UTAU wav（想定 44.1kHz）を読み込み 24kHz へリサンプルする。
 
@@ -464,7 +590,9 @@ def _select_wav_subset_for_contexts(
     entries_by_wav: "OrderedDict[str, List[OtoEntry]]",
     pitch_dirs: Sequence[str],
     required_contexts: Optional[Sequence[Tuple[Optional[str], str]]],
+    pdir: Optional[Path] = None,
     max_wav_files: int = 200,
+    frame_period_ms: float = FRAME_PERIOD_MS,
 ) -> Tuple[List[str], dict]:
     """追補 F1.4-A: 必須 VCV 文脈（(prev_vowel, mora) のタプル列）を含む wav
     ファイルをファイル名昇順の決定論走査で選択する（計算資源境界を「必要な
@@ -476,6 +604,20 @@ def _select_wav_subset_for_contexts(
     `max_wav_files` 件、旧関数のフォールバック相当）にフォールバックする
     （合成 fixture でのテスト・将来スコア向けの汎用利用のため）。見つから
     なかった文脈は `missing_contexts` に列挙する。
+
+    P2 修正 (review #262 R12・`r3789559165`): `pdir` が渡された場合、各
+    候補ファイルのエントリを「発見済み」として `remaining` から除去する前に
+    wav 実長（ヘッダのみ・`_probe_wav_duration_ms`）から `_oto_entry_is_usable`
+    で `[offset, cutoff)` 区間の妥当性を前倒し検証する。旧実装はエイリアス
+    文字列の一致だけで即座に文脈を除去していたため、最初に見つかった
+    エントリが不正/短小区間（後段の正規化/クリップで棄却される）でも
+    「発見済み」扱いになり、同じ文脈を持つ後続の有効な wav が選択されない
+    まま素通りされていた（selection_stats_by_dir は covered のまま更新
+    されない実害）。`pdir=None`（後方互換・wav 実体を伴わない合成 fixture
+    での単体テスト用）の場合は wav ヘッダを probe できないため従来どおり
+    文字列一致のみで判定する——正しさの最終担保はいずれの場合も build 後の
+    realized coverage 再計算（`enforce_realized_context_coverage`）が
+    fail-closed backstop として持つため、`pdir=None` でも安全性は失われない。
     """
     all_files = sorted(entries_by_wav.keys())
     if required_contexts is None:
@@ -488,16 +630,28 @@ def _select_wav_subset_for_contexts(
     remaining = set(required_contexts)
     n_required = len(remaining)
     selected: List[str] = []
+    n_entries_rejected_unusable = 0
     for fname in all_files:
         if not remaining or len(selected) >= max_wav_files:
             break
+        wav_duration_ms: Optional[float] = None
+        if pdir is not None:
+            if not _wav_ref_is_lexically_safe(fname):
+                continue  # 不正な参照は probe せず候補から除外（最終検査は _reject_wav_paths_outside_root）
+            wav_duration_ms = _probe_wav_duration_ms(pdir / fname)
+            if wav_duration_ms is None:
+                continue  # ヘッダを読めない候補は選択時点で使用不可扱い（missing_wav fail-closed が最終検出）
         file_has_needed = False
         for e in entries_by_wav[fname]:
             prev, mora, _is_initial = parse_alias_mora(e.alias, pitch_dirs)
             ctx = (prev, mora)
-            if ctx in remaining:
-                file_has_needed = True
-                remaining.discard(ctx)
+            if ctx not in remaining:
+                continue
+            if wav_duration_ms is not None and not _oto_entry_is_usable(e, wav_duration_ms, frame_period_ms):
+                n_entries_rejected_unusable += 1
+                continue
+            file_has_needed = True
+            remaining.discard(ctx)
         if file_has_needed:
             selected.append(fname)
     selected.sort()  # 決定論のため最終的にファイル名昇順で固定
@@ -505,7 +659,8 @@ def _select_wav_subset_for_contexts(
     stats = dict(
         n_wav_selected=len(selected), n_wav_total=len(all_files),
         n_contexts_required=n_required, n_contexts_found=n_required - len(missing),
-        missing_contexts=missing, mode="context_coverage",
+        missing_contexts=missing, n_entries_rejected_unusable=n_entries_rejected_unusable,
+        mode="context_coverage",
     )
     return selected, stats
 
@@ -567,7 +722,8 @@ def build_donor_bank_utau_vcv(
         for e in entries:
             entries_by_wav.setdefault(e.wav_filename, []).append(e)
         selected_files, sel_stats = _select_wav_subset_for_contexts(
-            entries_by_wav, pitch_dirs, required_contexts, max_wav_files
+            entries_by_wav, pitch_dirs, required_contexts, pdir=pdir,
+            max_wav_files=max_wav_files, frame_period_ms=frame_period_ms,
         )
         _reject_wav_paths_outside_root(pdir, pdir_name, selected_files, root)
         wav_bytes_by_file: Dict[str, bytes] = {}
@@ -626,8 +782,19 @@ def build_donor_bank_utau_vcv(
             # `stats["cache_hit"]=False` をそのまま返していた（record の
             # cache_hit が常に False のまま = キャッシュ命中を record 上で
             # 判別できない）。復元パスでは True へ上書きする。
+            # P2 修正 (review #262 R12): cache-hit 経路でも realized coverage を
+            # 再検証する（`required_contexts` は cache key 材料に含まれるため
+            # 同一キーの hit は同一要件で構築済みのはずだが、fail-closed の
+            # 対称性・防御的一貫性のため cache-hit/fresh-build の両経路で
+            # 同じ検証を通す・[実装決定・record 記録]）。
+            realized_coverage = enforce_realized_context_coverage(
+                cached_unit_contexts, required_contexts,
+                source_label=f"UTAU VCV donor bank cache ({root})",
+            )
             cached_stats["cache_hit"] = True
+            cached_stats["realized_coverage"] = realized_coverage
             cached_bank.stats["cache_hit"] = True
+            cached_bank.stats["realized_coverage"] = realized_coverage
             return cached_bank, cached_unit_contexts, cached_stats
 
     all_f0: List[np.ndarray] = []
@@ -738,6 +905,16 @@ def build_donor_bank_utau_vcv(
     # 報告し得る = provenance 破損）。
     wav_sha256 = aggregate_content_hash(wav_sha_pairs)
 
+    # P2 修正 (review #262 R12・`r3789559165`): coverage は選択時
+    # (`selection_stats_by_dir`) の約束ではなく、実際に構築できた unit
+    # （`unit_contexts`。正規化/クリップの棄却がすべて確定した後）から
+    # 導出し直す。不足があれば近傍/global フォールバックへ黙って縮退させず
+    # fail-closed で拒否する（終端修正: R6/R9/R10 個別 coverage 修正を
+    # 包含する一般解）。
+    realized_coverage = enforce_realized_context_coverage(
+        unit_contexts, required_contexts, source_label=f"UTAU VCV donor bank ({root})"
+    )
+
     stats = dict(
         n_pitch_dirs=len(pitch_dirs), pitch_dirs=list(pitch_dirs), pitch_hz_by_dir=pitch_hz_by_dir,
         n_entries_total=n_entries_total, n_units_kept=len(units),
@@ -745,6 +922,7 @@ def build_donor_bank_utau_vcv(
         n_sokuon_skipped=n_sokuon_skipped, n_negative_overlap_clamped=n_negative_overlap_clamped,
         n_wav_files_analyzed=n_wav_files_analyzed,
         selection_stats_by_dir=selection_stats_by_dir,
+        realized_coverage=realized_coverage,
         cache_hit=False,
     )
 
@@ -769,6 +947,8 @@ def build_donor_bank_utau(
     frame_period_ms: float = FRAME_PERIOD_MS,
     min_units_per_vowel: int = 8,
     max_wav_files: int = 40,
+    required_onsets: Optional[Sequence[str]] = None,
+    required_vowels: Optional[Sequence[str]] = None,
 ) -> Tuple[DonorBank, Dict[int, str], Dict[str, List[ConsonantClip]], dict]:
     """UTAU 音源ルート（character.txt / oto.ini / 音階フォルダ群）を分析する。
 
@@ -782,6 +962,14 @@ def build_donor_bank_utau(
     - consonant_clips は onset(str) -> 録音済み子音クリップのリスト
       （句頭 "- X" エイリアス由来を優先、同率は (wav名, alias) 昇順で決定論
       ソート）。
+
+    `required_onsets`/`required_vowels`（review #262 R12 終端修正）: 与えると
+    build 完了後の realized coverage（実際に構築できた consonant_clips /
+    unit_vowels）をこれと照合し、不足があれば `enforce_realized_onset_vowel_coverage`
+    が列挙付きで fail-closed する。既定 None は「要件無し」（後方互換の
+    opt-in 契約。合成 fixture の単体テスト・要件非依存の汎用利用のため）。
+    選択（`_select_wav_subset`）自体の被覆目標には影響しない（selection の
+    target は従来どおり `REQUIRED_ONSETS`/`min_units_per_vowel` 固定）。
     """
     root = Path(voicebank_root)
     if pitch_dirs is None:
@@ -859,8 +1047,19 @@ def build_donor_bank_utau(
             with open(cache_path, "rb") as f:
                 cached_bank, cached_unit_vowels, cached_consonant_clips, cached_stats = pickle.load(f)
             # P2 修正 (review #262 R3): § build_donor_bank_utau_vcv と同じ是正。
+            # P2 修正 (review #262 R12): `required_onsets`/`required_vowels` は
+            # cache key 材料に含まれない（selection/build 結果自体には影響しない
+            # 純粋な pass/fail 要件のため）。cache-hit でも毎回 realized coverage
+            # を再検証する（cache key が同じでも呼び出し側ごとに要件が異なり
+            # うる・[実装決定・record 記録]）。
+            realized_coverage = enforce_realized_onset_vowel_coverage(
+                cached_consonant_clips, cached_unit_vowels, required_onsets, required_vowels,
+                source_label=f"UTAU v1 donor bank cache ({root})",
+            )
             cached_stats["cache_hit"] = True
+            cached_stats["realized_coverage"] = realized_coverage
             cached_bank.stats["cache_hit"] = True
+            cached_bank.stats["realized_coverage"] = realized_coverage
             return cached_bank, cached_unit_vowels, cached_consonant_clips, cached_stats
 
     all_f0: List[np.ndarray] = []
@@ -984,6 +1183,14 @@ def build_donor_bank_utau(
     # build_donor_bank_utau_vcv と同じ理由・同じ是正（v1/v2 対称）。
     wav_sha256 = aggregate_content_hash(wav_sha_pairs)
 
+    # P2 修正 (review #262 R12): § build_donor_bank_utau_vcv と同じ理由・
+    # 同じ是正（v1/v2/PJS 対称）。coverage は selection_stats_by_dir の約束
+    # ではなく実際に構築できた consonant_clips/unit_vowels から導出する。
+    realized_coverage = enforce_realized_onset_vowel_coverage(
+        consonant_clips, unit_vowels, required_onsets, required_vowels,
+        source_label=f"UTAU v1 donor bank ({root})",
+    )
+
     stats = dict(
         n_pitch_dirs=len(pitch_dirs), pitch_dirs=list(pitch_dirs), pitch_hz_by_dir=pitch_hz_by_dir,
         n_entries_total=n_entries_total, n_units_kept=len(units),
@@ -993,6 +1200,7 @@ def build_donor_bank_utau(
         n_consonant_clips_by_onset={k: len(v) for k, v in sorted(consonant_clips.items())},
         vowel_distribution={v: sum(1 for lbl in unit_vowels.values() if lbl == v) for v in "aiueo"},
         selection_stats_by_dir=selection_stats_by_dir,
+        realized_coverage=realized_coverage,
         cache_hit=False,
     )
 
