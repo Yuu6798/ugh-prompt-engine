@@ -311,3 +311,129 @@ def test_build_donor_bank_utau_cache_key_changed_by_schema_version(tmp_path: Pat
     legacy_key_material = f"{root}|A3|5.0|1|5"
     legacy_key = hashlib.sha256(legacy_key_material.encode("utf-8")).hexdigest()[:24]
     assert legacy_key not in cached[0].name
+
+
+# --- 追補 F1.4-A: VCV unit 化（donor_bank_utau v2） ---
+
+
+def test_select_wav_subset_for_contexts_covers_required_and_records_missing() -> None:
+    from collections import OrderedDict
+
+    entries_by_wav = OrderedDict(
+        [
+            ("f_aka.wav", [_entry(0.0, "a かA3"), _entry(500.0, "a きA3")]),
+            ("f_hatsu.wav", [_entry(0.0, "- あA3")]),
+            ("f_unrelated.wav", [_entry(0.0, "i さA3")]),
+        ]
+    )
+    required = [(None, "あ"), ("a", "か")]
+    selected, stats = dbu._select_wav_subset_for_contexts(entries_by_wav, ["A3"], required)
+    assert set(selected) == {"f_aka.wav", "f_hatsu.wav"}
+    assert stats["missing_contexts"] == []
+    assert stats["n_contexts_found"] == 2
+    assert selected == sorted(selected)  # 決定論
+
+
+def test_select_wav_subset_for_contexts_records_missing_context() -> None:
+    from collections import OrderedDict
+
+    entries_by_wav = OrderedDict([("f1.wav", [_entry(0.0, "a かA3")])])
+    required = [(None, "あ"), ("a", "か")]  # "(None, あ)" は存在しない
+    selected, stats = dbu._select_wav_subset_for_contexts(entries_by_wav, ["A3"], required)
+    assert selected == ["f1.wav"]
+    assert stats["missing_contexts"] == [(None, "あ")]
+    assert stats["n_contexts_found"] == 1
+
+
+def test_select_wav_subset_for_contexts_none_uses_generic_fallback() -> None:
+    from collections import OrderedDict
+
+    entries_by_wav = OrderedDict((f"f{i}.wav", [_entry(0.0, "- あA3")]) for i in range(10))
+    selected, stats = dbu._select_wav_subset_for_contexts(entries_by_wav, ["A3"], None, max_wav_files=3)
+    assert len(selected) == 3
+    assert stats["mode"] == "generic"
+
+
+def test_build_donor_bank_utau_vcv_unit_spans_full_offset_to_cutoff(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=2.0)
+    # wav_duration=2000ms。cutoff = wav_duration - |blank|（cutoff_position_ms 規約）。
+    # entry1: cutoff=2000-1500=500ms=100frame -> [0,100)frame、
+    #   consonant_end=0+80=80ms=16frame -> vcore_rel=16。
+    # entry2: offset=800ms=160frame、cutoff=2000-300=1700ms=340frame -> [160,340)frame、
+    #   consonant_end=800+150=950ms=190frame -> vcore_rel=190-160=30frame。
+    oto_text = (
+        "_test.wav=- あA3,0,80,1500,40,10\n"
+        "_test.wav=a かA3,800,150,300,80,20\n"
+    )
+    (pdir / "oto.ini").write_bytes(oto_text.encode("cp932"))
+
+    bank, unit_contexts, stats = dbu.build_donor_bank_utau_vcv(root, max_wav_files=5)
+    assert len(bank.units) == 2
+    assert bank.source == "utau_oto_vcv"
+
+    u0, u1 = bank.units
+    assert (u0.start_frame, u0.end_frame) == (0, 100)
+    assert u0.vowel_core_start_frame == 16
+    assert (u1.start_frame, u1.end_frame) == (160, 340)
+    assert u1.vowel_core_start_frame == 30
+    assert u1.overlap_frames == 4
+    assert u1.preutterance_frames == 16
+
+    assert unit_contexts[0].prev_vowel is None
+    assert unit_contexts[0].mora == "あ"
+    assert unit_contexts[0].is_phrase_initial is True
+    assert unit_contexts[1] == dbu.VCVContext(prev_vowel="a", mora="か", is_phrase_initial=False)
+    assert stats["n_units_kept"] == 2
+
+
+def test_build_donor_bank_utau_vcv_deterministic_repeat(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=2.0)
+    oto_text = (
+        "_test.wav=- あA3,0,80,1500,40,10\n"
+        "_test.wav=a かA3,800,150,300,80,20\n"
+    )
+    (pdir / "oto.ini").write_bytes(oto_text.encode("cp932"))
+
+    bank1, ctx1, _s1 = dbu.build_donor_bank_utau_vcv(root, max_wav_files=5)
+    bank2, ctx2, _s2 = dbu.build_donor_bank_utau_vcv(root, max_wav_files=5)
+    assert np.array_equal(bank1.sp, bank2.sp)
+    assert np.array_equal(bank1.ap, bank2.ap)
+    assert ctx1 == ctx2
+
+
+def test_build_donor_bank_utau_vcv_cache_roundtrip(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    cache_dir = tmp_path / "cache"
+    bank1, ctx1, s1 = dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5)
+    assert s1["cache_hit"] is False
+    bank2, ctx2, s2 = dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5)
+    assert np.array_equal(bank1.sp, bank2.sp)
+    assert ctx1 == ctx2
+
+
+def test_build_donor_bank_utau_vcv_required_contexts_change_cache_key(tmp_path: Path) -> None:
+    """[実装決定・record] required_contexts が異なれば選択される wav 部分集合が
+    変わりうるため、キャッシュキーへ含める（衝突すると別スコア向けの部分
+    集合バンクを誤って再利用してしまう）。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    (pdir / "oto.ini").write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    cache_dir = tmp_path / "cache"
+    dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5, required_contexts=[(None, "あ")])
+    dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5, required_contexts=[("a", "か")])
+    cached = list(cache_dir.glob("utau_bank_vcv_*.pkl"))
+    assert len(cached) == 2

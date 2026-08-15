@@ -218,9 +218,17 @@ class DonorUnit:
     # 追補 F1.3-A: oto.ini 由来の overlap / preutterance をフレーム単位で保持する
     # スキーマ拡張。None = 情報なし（vocadito / pjs）。joins.py v2 は None の場合
     # 固定 40ms へフォールバックする（donor_bank_utau.py のみ実値を設定）。
-    # preutterance_frames は本 F1.3 では保持のみ（消費は未実装・record 記録）。
+    # preutterance_frames は F1.3 では保持のみだったが、F1.4 でフレーズ頭の
+    # タイムライン配置消費に使われる（render.py 参照）。
     overlap_frames: Optional[int] = None
     preutterance_frames: Optional[int] = None
+    # 追補 F1.4-A: VCV unit の内部構造。unit 先頭（= start_frame）からの相対
+    # フレームオフセットで、[0, vowel_core_start_frame) が録音済み調音遷移
+    # （前母音尾 + 子音 + 母音アタック・伸縮しない固定区間）、
+    # [vowel_core_start_frame, end_frame-start_frame) が母音定常部（伸縮/
+    # 往復ループの対象）。None = unit 全体が伸縮対象（vocadito/pjs/F1.3までの
+    # 旧 UTAU unit の後方互換動作。resolve_unit_to_note がそのまま使う）。
+    vowel_core_start_frame: Optional[int] = None
 
 
 def _build_units(
@@ -259,9 +267,26 @@ class DonorBank:
     stats: dict
 
 
+def _unit_vowel_core_range(unit: DonorUnit) -> Tuple[int, int]:
+    """unit の「母音核区間」の絶対フレーム範囲 [start,end) を返す。
+
+    追補 F1.4-A: `vowel_core_start_frame` が設定されている VCV unit は
+    録音済み調音遷移（先頭側の固定区間）を除いた母音定常部のみを指す
+    （F1.3-B item1 の「母音核区間の平均パワー」という規定に、VCV 化後も
+    忠実であるための対応・[実装決定・record 記録]）。None（vocadito/pjs/
+    旧 UTAU unit）は unit 全体をそのまま使う（後方互換）。
+    """
+    core_start = unit.start_frame
+    if unit.vowel_core_start_frame is not None:
+        core_start = unit.start_frame + unit.vowel_core_start_frame
+    core_start = max(unit.start_frame, min(core_start, unit.end_frame))
+    return core_start, unit.end_frame
+
+
 def _unit_mean_power(sp: np.ndarray, unit: DonorUnit) -> float:
     """unit（母音核）区間の平均フレームパワー（sp 各ビン総和のフレーム平均）。"""
-    seg = sp[unit.start_frame:unit.end_frame]
+    s, e = _unit_vowel_core_range(unit)
+    seg = sp[s:e]
     if seg.shape[0] == 0:
         return 0.0
     return float(np.mean(np.sum(seg, axis=1)))

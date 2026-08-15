@@ -59,6 +59,21 @@ def _vowel_distribution_from_labels(labels: dict) -> dict:
     return dist
 
 
+def _vcv_required_contexts(segments: list) -> List[Tuple[Optional[str], str]]:
+    """追補 F1.4-A: レンダリング対象スコアが実際に必要とする VCV 文脈キーの
+    重複無し決定論順リスト（`donor_bank_utau.build_donor_bank_utau_vcv` の
+    `required_contexts` へそのまま渡す・キャッシュキー材料にも使う）。
+    """
+    seen: List[Tuple[Optional[str], str]] = []
+    seen_set = set()
+    for ctx in un.vcv_context_sequence(segments):
+        if ctx not in seen_set:
+            seen_set.add(ctx)
+            seen.append(ctx)
+    seen.sort(key=lambda c: (c[0] or "", c[1]))
+    return seen
+
+
 def prepend_recorded_consonant(
     resolved: "un.ResolvedSegment", clip: "dbu.ConsonantClip", note_index: int
 ) -> Tuple["un.ResolvedSegment", "cons.ConsonantEvent"]:
@@ -73,6 +88,81 @@ def prepend_recorded_consonant(
         note_index=note_index, onset=clip.onset, consonant_class="recorded", n_frames_processed=clip.n_frames,
     )
     return new_resolved, event
+
+
+def _build_vcv_placements(
+    segments: list, selections: List["un.VCVUnitSelection"], bank: "db.DonorBank",
+) -> Tuple[List["jn.NotePlacement"], List["un.ResolvedVCVSegment"], dict]:
+    """追補 F1.4-B: VCV unit の配置。接合は F1.3 と同じ機構（unit 自身の
+    oto overlap を join 長として使う true overlap-add・`joins.assemble_v2`
+    がフレーズ内 run 単位で処理する）を続投する。新規なのは
+    **フレーズ先頭ノートの preutterance 消費**（item2/item3）: 先頭ノートの
+    配置開始位置をノート開始（cursor）より `min(preutterance_frames,
+    直前のブレスギャップ frames)` だけ前へずらし、母音アタックが拍に近づくよう
+    補正する（フレーズ間ブレス 0.25s の範囲内でクリップ・件数記録）。
+
+    フレーズ内部（`has_join_to_prev=True`）のノートは、`joins.assemble_v2` が
+    run 内を `overlap_frames` のみで純粋に overlap-add 連結するため
+    （start_frame/end_frame は run 境界以外で未使用）、明示的な cursor シフトを
+    加えなくても preutterance/overlap の相対関係（overlap < preutterance <
+    vowel_core、実データで確認済み）が自然にタイムライン配置を規律する
+    （[実装決定・record 記録] §Open Questions 参照）。`end_frame` は常に
+    shift の影響を受けないシフト前 cursor 基準で計算する（次 run のギャップ
+    計算を狂わせないため）。
+    """
+    placements: List[jn.NotePlacement] = []
+    resolved_list: List[un.ResolvedVCVSegment] = []
+    cursor = 0
+    prev_end_sample = 0
+    n_preutterance_applied = 0
+    n_preutterance_clipped = 0
+    preutterance_shift_frames: List[int] = []
+    head_clipped_note_indices: List[int] = []
+
+    for note_index, (seg, sel) in enumerate(zip(segments, selections)):
+        gap_samples = seg.start_sample - prev_end_sample
+        gap_frames = frames_for_samples(gap_samples, SR) if gap_samples > 0 else 0
+        cursor += gap_frames
+        note_dur_frames = max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1)
+        resolved = un.resolve_vcv_unit_to_note(
+            bank, sel.unit, note_dur_frames, note_index=note_index, frame_period_ms=FRAME_PERIOD_MS
+        )
+        if resolved.head_clipped:
+            head_clipped_note_indices.append(note_index)
+        resolved_list.append(resolved)
+
+        start_frame = cursor
+        if seg.is_phrase_first:
+            preutt = sel.unit.preutterance_frames or 0
+            shift = min(preutt, gap_frames)
+            if shift > 0:
+                start_frame = cursor - shift
+                n_preutterance_applied += 1
+                preutterance_shift_frames.append(shift)
+                if shift < preutt:
+                    n_preutterance_clipped += 1
+        end_frame = cursor + resolved.n_frames  # シフト非依存（次 run のギャップ計算のため）
+
+        placements.append(
+            jn.NotePlacement(
+                start_frame=start_frame, end_frame=end_frame, sp=resolved.sp, ap=resolved.ap,
+                has_join_to_prev=not seg.is_phrase_first, overlap_frames=sel.unit.overlap_frames,
+            )
+        )
+        cursor = cursor + resolved.n_frames
+        prev_end_sample = seg.end_sample
+
+    stats = dict(
+        n_preutterance_applied=n_preutterance_applied,
+        n_preutterance_clipped=n_preutterance_clipped,
+        preutterance_shift_frames=preutterance_shift_frames,
+        preutterance_shift_frames_mean=(
+            float(np.mean(preutterance_shift_frames)) if preutterance_shift_frames else 0.0
+        ),
+        n_head_clipped=len(head_clipped_note_indices),
+        head_clipped_note_indices=head_clipped_note_indices,
+    )
+    return placements, resolved_list, stats
 
 
 def _frame_period_s() -> float:
@@ -140,6 +230,9 @@ def render(
 
     consonant_clips: Dict[str, list] = {}
     donor_extra_stats: dict = {}
+    vcv_selection_stats: dict = {}
+    vcv_placement_stats: dict = {}
+    is_vcv = donor == "ritsu"  # 追補 F1.4: ritsu は VCV unit 経路（他は v0/F1.2 のまま）
 
     if donor == "vocadito":
         if wav_path is None:
@@ -153,9 +246,19 @@ def render(
     elif donor == "ritsu":
         if voicebank_root is None:
             raise ValueError("donor='ritsu' には --voicebank-root（UTAU 音源ルート）が必須です")
-        bank, unit_vowel_labels, consonant_clips, donor_extra_stats = dbu.build_donor_bank_utau(
-            voicebank_root, cache_dir=cache_dir
+        # 追補 F1.4-A: VCV unit 化（donor_bank_utau v2）。旧「母音核 unit + 録音子音
+        # クリップ挿入」経路（v1 `build_donor_bank_utau`）は F1.3 までの互換・単体
+        # テストのため関数として残置するが render.py からはもう呼ばない。
+        required_contexts = _vcv_required_contexts(segments)
+        bank, unit_contexts, donor_extra_stats = dbu.build_donor_bank_utau_vcv(
+            voicebank_root, cache_dir=cache_dir, required_contexts=required_contexts,
         )
+        # record/CLI 表示用の母音分布（選択には使わない・文脈キー一致が代替）。
+        unit_vowel_labels = {}
+        for idx, ctx in unit_contexts.items():
+            _onset, _v, _status = dbu.normalize_mora_kana(ctx.mora)
+            if _status == "ok" and _v:
+                unit_vowel_labels[idx] = _v
     else:  # donor == "pjs"
         if voicebank_root is None:
             raise ValueError("donor='pjs' には --voicebank-root（PJS コーパスルート）が必須です")
@@ -170,77 +273,97 @@ def render(
     # head/tail_log_bands も再計算済みの bank を以降で使う。
     bank, energy_norm_stats = db.normalize_unit_energy(bank)
 
-    targets = [
-        un.TargetNote(
-            pitch_hz=_midi_to_hz(seg.note.midi),
-            duration_sec=(seg.end_sample - seg.start_sample) / SR,
-            label=seg.note.mora.kana,
-            vowel_target=un.mora_to_vowel_target(seg.note.mora),
-        )
-        for seg in segments
-    ]
-    selections, sel_stats = un.select_units(
-        targets, bank.units, w_p=w_p, w_d=w_d, w_c=w_c, unit_vowels=unit_vowel_labels, w_v=w_v
-    )
-
     n_bins = bank.sp.shape[1]
-    placements: List[jn.NotePlacement] = []
-    resolved_list: List[un.ResolvedSegment] = []
     consonant_events: List[cons.ConsonantEvent] = []
     n_recorded_consonants_used = 0
     n_recorded_consonants_fallback_synthetic = 0
-    cursor = 0
-    prev_end_sample = 0
-    for note_index, (seg, sel) in enumerate(zip(segments, selections)):
-        gap_samples = seg.start_sample - prev_end_sample
-        gap_frames = frames_for_samples(gap_samples, SR) if gap_samples > 0 else 0
-        cursor += gap_frames
-        note_dur_frames = max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1)
-        resolved = un.resolve_unit_to_note(
-            bank, sel.unit, note_dur_frames, note_index=note_index, frame_period_ms=FRAME_PERIOD_MS
-        )
-        onset = seg.note.mora.onset
-        if consonant_source != "none" and onset is not None:
-            # 追補 F1.2-D: consonant_source="recorded" は bank 提供の録音済み
-            # 子音クリップを unit 先頭へ preutterance 相当分（クリップの実長）
-            # だけ前置する（joins.assemble の 30ms クロスフェードが接続を担う）。
-            # クリップが無ければ synthetic（追補 F1.1-B）へフォールバックする。
-            used_recorded = False
-            if consonant_source == "recorded":
-                clips = consonant_clips.get(onset)
-                if clips:
-                    clip = clips[0]  # 決定論選択（bank 側で句頭優先・名前昇順ソート済み）
-                    resolved, event = prepend_recorded_consonant(resolved, clip, note_index)
-                    consonant_events.append(event)
-                    n_recorded_consonants_used += 1
-                    used_recorded = True
-                else:
-                    n_recorded_consonants_fallback_synthetic += 1
-            if not used_recorded:
-                # 追補 F1.1-B: 母音制約選択 -> 子音オンセット加工 -> (この後の) joins/perf_genes/warp。
-                proc_sp, proc_ap, event = cons.apply_consonant_onset(
-                    resolved.sp, resolved.ap, onset, SR, frame_period_ms=FRAME_PERIOD_MS
-                )
-                if event is not None:
-                    consonant_events.append(dataclasses.replace(event, note_index=note_index))
-                resolved = dataclasses.replace(resolved, sp=proc_sp, ap=proc_ap)
-        resolved_list.append(resolved)
-        start_frame = cursor
-        end_frame = start_frame + resolved.n_frames
-        placements.append(
-            jn.NotePlacement(
-                start_frame=start_frame, end_frame=end_frame, sp=resolved.sp, ap=resolved.ap,
-                has_join_to_prev=not seg.is_phrase_first,
-                # 追補 F1.3-A: 選択された donor unit の oto overlap（フレーム）を
-                # そのまま接合長として使う。録音子音を前置した場合も vowel unit
-                # 自身の overlap 値を流用する（子音クリップ自体は oto overlap を
-                # 持たないための近似・[実装決定・record 記録]）。None = 情報なし
-                # (vocadito/pjs) -> assemble_v2 が DEFAULT_OVERLAP_MS へフォールバック。
-                overlap_frames=sel.unit.overlap_frames,
+
+    if is_vcv:
+        # 追補 F1.4-C: 文脈キー完全一致必須の VCV 選択（w_c/w_v は使わない
+        # ——文脈フィルタが母音一致を自動充足するため）。
+        vcv_targets = [
+            un.VCVTargetNote(
+                pitch_hz=_midi_to_hz(seg.note.midi),
+                duration_sec=(seg.end_sample - seg.start_sample) / SR,
+                label=seg.note.mora.kana, prev_vowel=ctx[0], mora=ctx[1],
             )
+            for seg, ctx in zip(segments, un.vcv_context_sequence(segments))
+        ]
+        ctx_map = {idx: (c.prev_vowel, c.mora) for idx, c in unit_contexts.items()}
+        selections, sel_stats = un.select_vcv_units(vcv_targets, bank.units, ctx_map, w_p=w_p, w_d=w_d)
+        vcv_selection_stats = sel_stats
+        placements, resolved_list, vcv_placement_stats = _build_vcv_placements(segments, selections, bank)
+        # 追補 F1.4-B item3: consonants.py 合成 / recorded クリップ挿入経路は
+        # VCV 経路では不使用（子音は unit に録り込み済み）。
+        consonant_source = "vcv"
+    else:
+        targets = [
+            un.TargetNote(
+                pitch_hz=_midi_to_hz(seg.note.midi),
+                duration_sec=(seg.end_sample - seg.start_sample) / SR,
+                label=seg.note.mora.kana,
+                vowel_target=un.mora_to_vowel_target(seg.note.mora),
+            )
+            for seg in segments
+        ]
+        selections, sel_stats = un.select_units(
+            targets, bank.units, w_p=w_p, w_d=w_d, w_c=w_c, unit_vowels=unit_vowel_labels, w_v=w_v
         )
-        cursor = end_frame
-        prev_end_sample = seg.end_sample
+
+        placements = []
+        resolved_list = []
+        cursor = 0
+        prev_end_sample = 0
+        for note_index, (seg, sel) in enumerate(zip(segments, selections)):
+            gap_samples = seg.start_sample - prev_end_sample
+            gap_frames = frames_for_samples(gap_samples, SR) if gap_samples > 0 else 0
+            cursor += gap_frames
+            note_dur_frames = max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1)
+            resolved = un.resolve_unit_to_note(
+                bank, sel.unit, note_dur_frames, note_index=note_index, frame_period_ms=FRAME_PERIOD_MS
+            )
+            onset = seg.note.mora.onset
+            if consonant_source != "none" and onset is not None:
+                # 追補 F1.2-D: consonant_source="recorded" は bank 提供の録音済み
+                # 子音クリップを unit 先頭へ preutterance 相当分（クリップの実長）
+                # だけ前置する（joins.assemble の 30ms クロスフェードが接続を担う）。
+                # クリップが無ければ synthetic（追補 F1.1-B）へフォールバックする。
+                used_recorded = False
+                if consonant_source == "recorded":
+                    clips = consonant_clips.get(onset)
+                    if clips:
+                        clip = clips[0]  # 決定論選択（bank 側で句頭優先・名前昇順ソート済み）
+                        resolved, event = prepend_recorded_consonant(resolved, clip, note_index)
+                        consonant_events.append(event)
+                        n_recorded_consonants_used += 1
+                        used_recorded = True
+                    else:
+                        n_recorded_consonants_fallback_synthetic += 1
+                if not used_recorded:
+                    # 追補 F1.1-B: 母音制約選択 -> 子音オンセット加工 -> (この後の) joins/perf_genes/warp。
+                    proc_sp, proc_ap, event = cons.apply_consonant_onset(
+                        resolved.sp, resolved.ap, onset, SR, frame_period_ms=FRAME_PERIOD_MS
+                    )
+                    if event is not None:
+                        consonant_events.append(dataclasses.replace(event, note_index=note_index))
+                    resolved = dataclasses.replace(resolved, sp=proc_sp, ap=proc_ap)
+            resolved_list.append(resolved)
+            start_frame = cursor
+            end_frame = start_frame + resolved.n_frames
+            placements.append(
+                jn.NotePlacement(
+                    start_frame=start_frame, end_frame=end_frame, sp=resolved.sp, ap=resolved.ap,
+                    has_join_to_prev=not seg.is_phrase_first,
+                    # 追補 F1.3-A: 選択された donor unit の oto overlap（フレーム）を
+                    # そのまま接合長として使う。録音子音を前置した場合も vowel unit
+                    # 自身の overlap 値を流用する（子音クリップ自体は oto overlap を
+                    # 持たないための近似・[実装決定・record 記録]）。None = 情報なし
+                    # (vocadito/pjs) -> assemble_v2 が DEFAULT_OVERLAP_MS へフォールバック。
+                    overlap_frames=sel.unit.overlap_frames,
+                )
+            )
+            cursor = end_frame
+            prev_end_sample = seg.end_sample
 
     # 追補 F1.3-A: v1 の単側ブレンド（jn.assemble）ではなく true overlap-add
     # （jn.assemble_v2）のみを使う。n_total_frames は overlap 分だけ短くなった
@@ -296,6 +419,7 @@ def render(
         n_recorded_consonants_used=n_recorded_consonants_used,
         n_recorded_consonants_fallback_synthetic=n_recorded_consonants_fallback_synthetic,
         energy_norm_stats=energy_norm_stats,
+        is_vcv=is_vcv, vcv_selection_stats=vcv_selection_stats, vcv_placement_stats=vcv_placement_stats,
     )
 
 
@@ -345,6 +469,9 @@ def main() -> None:
         f"extended_looped={result['n_stretch_extended_looped']} "
         f"compressed_truncated={result['n_stretch_compressed_truncated']}"
     )
+    if result["is_vcv"]:
+        print(f"vcv_selection_stats={result['vcv_selection_stats']}")
+        print(f"vcv_placement_stats={result['vcv_placement_stats']}")
 
 
 if __name__ == "__main__":

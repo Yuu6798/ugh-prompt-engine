@@ -244,6 +244,128 @@ def select_units(
     return selections, stats
 
 
+# ---------------------------------------------------------------------------
+# 追補 F1.4-C: VCV unit 選択（文脈キー完全一致必須 + 音高最小差）
+# ---------------------------------------------------------------------------
+
+
+def vcv_context_sequence(segments: Sequence) -> List[Tuple[Optional[str], str]]:
+    """score タイムライン（`performance.TimelineSegment` 列）から各 note の
+    VCV 文脈キー (prev_vowel, mora_kana) を導出する（追補 F1.4-C）。
+
+    フレーズ先頭（`seg.is_phrase_first`）は prev_vowel=None（oto の "-" 先頭形
+    に対応）、それ以外は直前ノートの `mora.vowel` を使う。`performance.py` が
+    既に計算済みの `is_phrase_first` をそのまま使う（フレーズ境界判定ロジックの
+    二重実装を避ける・[実装決定]）。duck-typed（`seg.is_phrase_first` /
+    `seg.note.mora.kana` / `seg.note.mora.vowel` を持つ列であれば良い）。
+    """
+    out: List[Tuple[Optional[str], str]] = []
+    prev_vowel: Optional[str] = None
+    for seg in segments:
+        pv = None if seg.is_phrase_first else prev_vowel
+        out.append((pv, seg.note.mora.kana))
+        prev_vowel = seg.note.mora.vowel
+    return out
+
+
+@dataclass(frozen=True)
+class VCVTargetNote:
+    pitch_hz: float
+    duration_sec: float
+    label: str = ""
+    prev_vowel: Optional[str] = None  # None = フレーズ先頭（oto "-" 形）
+    mora: str = ""  # 対象モーラかな（oto エイリアスの右トークンと同じ表記）
+
+
+@dataclass(frozen=True)
+class VCVUnitSelection:
+    note_index: int
+    unit: DonorUnit
+    cost_pitch: float
+    cost_duration: float
+    cost_total: float
+    n_candidates: int
+    prev_vowel_target: Optional[str]
+    mora_target: str
+    # "exact" = (prev_vowel, mora) 完全一致 / "near" = mora 一致・prev_vowel を
+    # x 扱いしたフォールバック / "global" = mora すら一致する候補が無く
+    # 全 unit へ最終フォールバック（想定外・record で要注視）。
+    match_kind: str
+
+
+def select_vcv_units(
+    targets: Sequence[VCVTargetNote],
+    units: Sequence[DonorUnit],
+    unit_contexts: Dict[int, Tuple[Optional[str], str]],
+    w_p: float = DEFAULT_W_P,
+    w_d: float = DEFAULT_W_D,
+) -> Tuple[List[VCVUnitSelection], dict]:
+    """追補 F1.4-C: VCV unit 選択。候補 = 文脈キー (prev_vowel, mora) 完全一致
+    必須（`unit_contexts` = donor_bank_utau.build_donor_bank_utau_vcv が返す
+    unit.index -> (prev_vowel, mora)）。完全一致が無い mora は近縁文脈
+    （prev_vowel を x 扱い = mora のみ一致）へフォールバックする（発動記録）。
+    それでも候補が無い場合（想定外）は全 unit へ最終フォールバックする。
+
+    候補内では音高差 |Δsemitone|（w_p）+ 長さ差（w_d）の従来コストで
+    argmin（決定論・tie は unit.index 昇順）。母音不一致ペナルティは文脈キー
+    フィルタで自動充足済みのため使わない（設計書 F1.4-C の記述どおり）。
+    """
+    if not units:
+        raise ValueError("units is empty: donor bank に単位が 1 つもない")
+    sorted_units = sorted(units, key=lambda u: u.index)
+
+    selections: List[VCVUnitSelection] = []
+    n_exact = 0
+    n_near_fallback = 0
+    n_global_fallback = 0
+    fallback_moras: List[Tuple[int, Optional[str], str]] = []
+
+    for i, note in enumerate(targets):
+        exact = [u for u in sorted_units if unit_contexts.get(u.index) == (note.prev_vowel, note.mora)]
+        if exact:
+            candidates = exact
+            match_kind = "exact"
+        else:
+            near = [u for u in sorted_units if unit_contexts.get(u.index, (None, ""))[1] == note.mora]
+            if near:
+                candidates = near
+                match_kind = "near"
+                n_near_fallback += 1
+                fallback_moras.append((i, note.prev_vowel, note.mora))
+            else:
+                candidates = list(sorted_units)
+                match_kind = "global"
+                n_global_fallback += 1
+                fallback_moras.append((i, note.prev_vowel, note.mora))
+
+        if match_kind == "exact":
+            n_exact += 1
+
+        best: Optional[Tuple[float, DonorUnit, float, float]] = None
+        for u in candidates:  # sorted_units 由来なので index 昇順を保つ
+            cp = _semitone_dist(u.median_f0, note.pitch_hz)
+            cd = abs(float(np.log(max(u.duration_s, 1e-6) / max(note.duration_sec, 1e-6))))
+            total = w_p * cp + w_d * cd
+            if best is None or total < best[0]:
+                best = (total, u, cp, cd)
+
+        assert best is not None
+        total, u, cp, cd = best
+        selections.append(
+            VCVUnitSelection(
+                note_index=i, unit=u, cost_pitch=cp, cost_duration=cd, cost_total=total,
+                n_candidates=len(candidates), prev_vowel_target=note.prev_vowel, mora_target=note.mora,
+                match_kind=match_kind,
+            )
+        )
+
+    stats = dict(
+        n_notes=len(targets), n_exact=n_exact, n_near_fallback=n_near_fallback,
+        n_global_fallback=n_global_fallback, fallback_notes=fallback_moras,
+    )
+    return selections, stats
+
+
 def _linear_resample_frames(x: np.ndarray, out_len: int) -> np.ndarray:
     """frame 軸の線形リサンプル（各周波数ビンごとに独立に線形補間）。"""
     n = x.shape[0]
@@ -398,4 +520,127 @@ def resolve_unit_to_note(
         note_index=note_index, sp=sp_out, ap=ap_out, n_frames=target_n_frames,
         true_ratio=true_ratio, applied_ratio=applied_ratio, cap_mode=cap_mode,
         n_loop_cycles=n_loop_cycles,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 追補 F1.4-A/5: VCV unit の尺合わせ（録音済み調音遷移は伸縮せず保持し、
+# 母音定常部のみ伸縮/往復ループする）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResolvedVCVSegment:
+    note_index: int
+    sp: np.ndarray  # (n_frames, n_bins)
+    ap: np.ndarray  # (n_frames, n_bins)
+    n_frames: int
+    head_frames: int  # 録音済み調音遷移（伸縮なし）の長さ
+    core_true_ratio: float
+    core_applied_ratio: float
+    cap_mode: str  # "none" | "extended_looped" | "compressed_truncated" | "degenerate_empty_core"
+    n_loop_cycles: int
+    head_clipped: bool  # 目標長が調音遷移長未満の縮退ケース（発動を記録すること）
+
+
+def resolve_vcv_unit_to_note(
+    bank: DonorBank, unit: DonorUnit, target_n_frames: int, note_index: int = -1,
+    frame_period_ms: float = 5.0,
+) -> ResolvedVCVSegment:
+    """追補 F1.4-A item1 / F1.4 §5: VCV unit を note の目標フレーム長へ尺合わせする。
+
+    録音済み調音遷移（unit 先頭 〜 `vowel_core_start_frame`）は**伸縮せず**その
+    まま保持する（「録音済み調音遷移を切らずに保持する」= VCV 銀行の資産をその
+    まま使う）。母音定常部（`vowel_core_start_frame` 〜 unit 終端）のみを
+    `resolve_unit_to_note` と同じ機構（[0.5,2.0] キャップ + 往復ループの
+    overlap-add）で目標残長へ伸縮する。両者を単純連結する（境界は同一の連続
+    録音由来のため、伸縮による時間ワープはあっても振幅・スペクトルの不連続は
+    生じない・[実装決定]）。
+
+    `unit.vowel_core_start_frame` が None（後方互換）の場合は境界 0 として
+    扱う（= unit 全体が母音定常部・実質 `resolve_unit_to_note` と同じ挙動）。
+
+    目標長が調音遷移長未満（縮退ケース。実コーパスでは note 最短でも
+    調音遷移よりずっと長いため通常発動しない）は調音遷移を先頭から
+    `target_n_frames - 1` フレームへ切り詰め、母音定常部に最低 1 フレームを
+    残す（`head_clipped=True` で record 記録対象・設計書に明記のない edge case
+    のため実装決定）。
+    """
+    unit_len = unit.end_frame - unit.start_frame
+    if unit_len <= 0:
+        raise ValueError(f"degenerate unit (empty frame range): {unit}")
+    target_n_frames = max(target_n_frames, 1)
+
+    vcore_rel = unit.vowel_core_start_frame if unit.vowel_core_start_frame is not None else 0
+    vcore_rel = max(0, min(vcore_rel, unit_len))
+
+    head_len = vcore_rel
+    head_clipped = False
+    if head_len >= target_n_frames:
+        head_len = max(0, target_n_frames - 1)
+        head_clipped = True
+
+    head_sp = bank.sp[unit.start_frame:unit.start_frame + head_len]
+    head_ap = bank.ap[unit.start_frame:unit.start_frame + head_len]
+
+    core_target = max(1, target_n_frames - head_len)
+    core_src_sp = bank.sp[unit.start_frame + vcore_rel:unit.end_frame]
+    core_src_ap = bank.ap[unit.start_frame + vcore_rel:unit.end_frame]
+    core_len = core_src_sp.shape[0]
+
+    if core_len <= 0:
+        # 縮退（母音定常部が空）: 直前フレーム（無ければ調音遷移末尾）を保持して埋める。
+        fill_sp = bank.sp[unit.end_frame - 1:unit.end_frame]
+        fill_ap = bank.ap[unit.end_frame - 1:unit.end_frame]
+        if fill_sp.shape[0] == 0:
+            fill_sp = np.zeros((1, bank.sp.shape[1]), dtype=bank.sp.dtype)
+            fill_ap = np.zeros((1, bank.ap.shape[1]), dtype=bank.ap.dtype)
+        core_sp = np.repeat(fill_sp, core_target, axis=0)
+        core_ap = np.repeat(fill_ap, core_target, axis=0)
+        true_ratio = 0.0
+        applied_ratio = 0.0
+        cap_mode = "degenerate_empty_core"
+        n_loop_cycles = 0
+    else:
+        true_ratio = core_target / core_len
+        applied_ratio = min(max(true_ratio, STRETCH_RATIO_MIN), STRETCH_RATIO_MAX)
+        base_len = max(1, int(round(core_len * applied_ratio)))
+        sp_base = _linear_resample_frames(core_src_sp, base_len)
+        ap_base = _linear_resample_frames(core_src_ap, base_len)
+
+        n_loop_cycles = 0
+        if true_ratio > STRETCH_RATIO_MAX:
+            cap_mode = "extended_looped"
+            deficit = core_target - base_len
+            center_lo = base_len // 4
+            center_hi = base_len - base_len // 4
+            if center_hi <= center_lo:
+                center_hi = min(base_len, center_lo + 1)
+            loop_overlap_frames = max(1, int(round(LOOP_OVERLAP_MS / frame_period_ms)))
+            sp_pad, ap_pad, n_loop_cycles = _ping_pong_pad_v2(
+                sp_base[center_lo:center_hi], ap_base[center_lo:center_hi], deficit, loop_overlap_frames
+            )
+            core_sp, core_ap, _stats = jn.overlap_add_concat(
+                [(sp_base, ap_base), (sp_pad, ap_pad)], loop_overlap_frames
+            )
+        elif true_ratio < STRETCH_RATIO_MIN:
+            cap_mode = "compressed_truncated"
+            core_sp = sp_base[:core_target]
+            core_ap = ap_base[:core_target]
+        else:
+            cap_mode = "none"
+            core_sp, core_ap = sp_base, ap_base
+
+        core_sp = _force_length(core_sp, core_target)
+        core_ap = _force_length(core_ap, core_target)
+
+    sp_out = np.concatenate([head_sp, core_sp], axis=0) if head_len > 0 else core_sp
+    ap_out = np.concatenate([head_ap, core_ap], axis=0) if head_len > 0 else core_ap
+    sp_out = _force_length(sp_out, target_n_frames)
+    ap_out = _force_length(ap_out, target_n_frames)
+
+    return ResolvedVCVSegment(
+        note_index=note_index, sp=sp_out, ap=ap_out, n_frames=target_n_frames,
+        head_frames=head_len, core_true_ratio=true_ratio, core_applied_ratio=applied_ratio,
+        cap_mode=cap_mode, n_loop_cycles=n_loop_cycles, head_clipped=head_clipped,
     )

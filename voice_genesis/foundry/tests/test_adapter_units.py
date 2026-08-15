@@ -226,3 +226,220 @@ def test_resolve_unit_to_note_loop_deterministic_with_frame_period() -> None:
     assert np.array_equal(r1.sp, r2.sp)
     assert np.array_equal(r1.ap, r2.ap)
     assert r1.n_loop_cycles == r2.n_loop_cycles
+
+
+# --- 追補 F1.4-A/C: VCV unit の文脈キー選択 ---
+
+
+def _make_vcv_unit(
+    index: int, start: int, end: int, median_f0: float, vcore_rel: int,
+    overlap_frames: int = 4, preutterance_frames: int = 12,
+) -> db.DonorUnit:
+    n = db.N_LOG_BANDS
+    return db.DonorUnit(
+        index=index, start_frame=start, end_frame=end, median_f0=median_f0,
+        duration_s=(end - start) * 5.0 / 1000.0,
+        head_log_bands=np.zeros(n), tail_log_bands=np.zeros(n),
+        overlap_frames=overlap_frames, preutterance_frames=preutterance_frames,
+        vowel_core_start_frame=vcore_rel,
+    )
+
+
+class _FakeSeg:
+    class _Mora:
+        def __init__(self, kana: str, vowel: str) -> None:
+            self.kana = kana
+            self.vowel = vowel
+
+    class _Note:
+        def __init__(self, mora: "_FakeSeg._Mora", midi: float = 57.0) -> None:
+            self.mora = mora
+            self.midi = midi
+
+    def __init__(self, kana: str, vowel: str, is_phrase_first: bool, midi: float = 57.0) -> None:
+        self.note = _FakeSeg._Note(_FakeSeg._Mora(kana, vowel), midi=midi)
+        self.is_phrase_first = is_phrase_first
+
+
+def test_vcv_context_sequence_phrase_initial_is_none() -> None:
+    segs = [_FakeSeg("さ", "a", True), _FakeSeg("く", "u", False), _FakeSeg("ら", "a", False)]
+    ctx = un.vcv_context_sequence(segs)
+    assert ctx == [(None, "さ"), ("a", "く"), ("u", "ら")]
+
+
+def test_vcv_context_sequence_new_phrase_resets_prev_vowel() -> None:
+    segs = [
+        _FakeSeg("さ", "a", True), _FakeSeg("く", "u", False),
+        _FakeSeg("や", "a", True),  # 新フレーズ -> prev_vowel は None（直前の "u" を継承しない）
+    ]
+    ctx = un.vcv_context_sequence(segs)
+    assert ctx == [(None, "さ"), ("a", "く"), (None, "や")]
+
+
+def test_select_vcv_units_prefers_exact_context_match() -> None:
+    units = [
+        _make_vcv_unit(0, 0, 100, 220.0, vcore_rel=20),  # context (None, "か") 相当
+        _make_vcv_unit(1, 100, 200, 220.0, vcore_rel=20),  # context ("a", "か")
+    ]
+    unit_contexts = {0: (None, "か"), 1: ("a", "か")}
+    targets = [un.VCVTargetNote(pitch_hz=220.0, duration_sec=0.4, prev_vowel="a", mora="か")]
+    sels, stats = un.select_vcv_units(targets, units, unit_contexts)
+    assert sels[0].unit.index == 1
+    assert sels[0].match_kind == "exact"
+    assert stats == dict(n_notes=1, n_exact=1, n_near_fallback=0, n_global_fallback=0, fallback_notes=[])
+
+
+def test_select_vcv_units_falls_back_to_mora_only_when_context_missing() -> None:
+    units = [_make_vcv_unit(0, 0, 100, 220.0, vcore_rel=20)]
+    unit_contexts = {0: ("i", "か")}  # 要求は ("a","か") だが存在しない -> mora のみ一致でフォールバック
+    targets = [un.VCVTargetNote(pitch_hz=220.0, duration_sec=0.4, prev_vowel="a", mora="か")]
+    sels, stats = un.select_vcv_units(targets, units, unit_contexts)
+    assert sels[0].unit.index == 0
+    assert sels[0].match_kind == "near"
+    assert stats["n_near_fallback"] == 1
+    assert stats["fallback_notes"] == [(0, "a", "か")]
+
+
+def test_select_vcv_units_global_fallback_when_mora_absent() -> None:
+    units = [_make_vcv_unit(0, 0, 100, 220.0, vcore_rel=20)]
+    unit_contexts = {0: ("i", "き")}  # mora "か" 自体が存在しない
+    targets = [un.VCVTargetNote(pitch_hz=220.0, duration_sec=0.4, prev_vowel="a", mora="か")]
+    sels, stats = un.select_vcv_units(targets, units, unit_contexts)
+    assert sels[0].unit.index == 0
+    assert sels[0].match_kind == "global"
+    assert stats["n_global_fallback"] == 1
+
+
+def test_select_vcv_units_picks_min_pitch_distance_among_exact_matches() -> None:
+    units = [
+        _make_vcv_unit(0, 0, 100, 220.0, vcore_rel=20),  # A3
+        _make_vcv_unit(1, 100, 200, 349.23, vcore_rel=20),  # F4
+    ]
+    unit_contexts = {0: ("a", "か"), 1: ("a", "か")}
+    targets = [un.VCVTargetNote(pitch_hz=330.0, duration_sec=0.4, prev_vowel="a", mora="か")]  # F4 寄り
+    sels, _stats = un.select_vcv_units(targets, units, unit_contexts)
+    assert sels[0].unit.index == 1
+
+
+def test_select_vcv_units_tie_break_smallest_index() -> None:
+    units = [
+        _make_vcv_unit(0, 0, 100, 220.0, vcore_rel=20),
+        _make_vcv_unit(1, 100, 200, 220.0, vcore_rel=20),
+    ]
+    unit_contexts = {0: ("a", "か"), 1: ("a", "か")}
+    targets = [un.VCVTargetNote(pitch_hz=220.0, duration_sec=0.4, prev_vowel="a", mora="か")]
+    sels, _stats = un.select_vcv_units(targets, units, unit_contexts)
+    assert sels[0].unit.index == 0
+
+
+def test_select_vcv_units_deterministic_repeat() -> None:
+    units = [
+        _make_vcv_unit(0, 0, 100, 220.0, vcore_rel=20),
+        _make_vcv_unit(1, 100, 200, 245.0, vcore_rel=15),
+    ]
+    unit_contexts = {0: ("a", "か"), 1: ("a", "か")}
+    targets = [un.VCVTargetNote(pitch_hz=230.0, duration_sec=0.4, prev_vowel="a", mora="か")]
+    s1, _ = un.select_vcv_units(targets, units, unit_contexts)
+    s2, _ = un.select_vcv_units(targets, units, unit_contexts)
+    assert s1[0].unit.index == s2[0].unit.index
+    assert s1[0].cost_total == pytest.approx(s2[0].cost_total)
+
+
+def test_select_vcv_units_empty_units_raises() -> None:
+    with pytest.raises(ValueError):
+        un.select_vcv_units([un.VCVTargetNote(220.0, 0.5, mora="か")], [], {})
+
+
+# --- 追補 F1.4-A/5: VCV unit の尺合わせ（録音済み調音遷移は伸縮せず保持） ---
+
+
+def test_resolve_vcv_unit_to_note_preserves_head_unstretched() -> None:
+    n_bins = 4
+    # 先頭 20 フレーム = 録音済み調音遷移（固定値 5.0）、以降 = 母音定常部（1.0 系列）。
+    sp = np.concatenate([np.full((20, n_bins), 5.0), np.full((80, n_bins), 1.0)], axis=0)
+    ap = np.full((100, n_bins), 0.1)
+    bank = _FakeBank(sp, ap)
+    unit = _make_vcv_unit(0, 0, 100, 220.0, vcore_rel=20)
+    resolved = un.resolve_vcv_unit_to_note(bank, unit, target_n_frames=120)
+    assert resolved.head_frames == 20
+    assert resolved.head_clipped is False
+    # 先頭 20 フレームは録音済み値そのまま（伸縮なし）。
+    assert np.array_equal(resolved.sp[:20], sp[:20])
+    assert resolved.n_frames == 120
+
+
+def test_resolve_vcv_unit_to_note_core_loops_for_long_note() -> None:
+    n_bins = 4
+    sp = np.concatenate([np.full((10, n_bins), 5.0), np.full((40, n_bins), 1.0)], axis=0)
+    ap = np.full((50, n_bins), 0.1)
+    bank = _FakeBank(sp, ap)
+    unit = _make_vcv_unit(0, 0, 50, 220.0, vcore_rel=10)
+    resolved = un.resolve_vcv_unit_to_note(bank, unit, target_n_frames=500)
+    assert resolved.n_frames == 500
+    assert resolved.head_frames == 10
+    assert resolved.cap_mode == "extended_looped"
+    assert np.array_equal(resolved.sp[:10], sp[:10])  # head は往復ループの対象外
+
+
+def test_resolve_vcv_unit_to_note_core_truncated_for_short_note() -> None:
+    n_bins = 4
+    sp = np.concatenate([np.full((10, n_bins), 5.0), np.full((190, n_bins), 1.0)], axis=0)
+    ap = np.full((200, n_bins), 0.1)
+    bank = _FakeBank(sp, ap)
+    unit = _make_vcv_unit(0, 0, 200, 220.0, vcore_rel=10)
+    resolved = un.resolve_vcv_unit_to_note(bank, unit, target_n_frames=40)
+    assert resolved.n_frames == 40
+    assert resolved.cap_mode == "compressed_truncated"
+    assert resolved.head_frames == 10
+
+
+def test_resolve_vcv_unit_to_note_head_clipped_when_target_shorter_than_transition() -> None:
+    n_bins = 4
+    sp = np.full((100, n_bins), 1.0)
+    ap = np.full((100, n_bins), 0.1)
+    bank = _FakeBank(sp, ap)
+    unit = _make_vcv_unit(0, 0, 100, 220.0, vcore_rel=50)  # 遷移がとても長い
+    resolved = un.resolve_vcv_unit_to_note(bank, unit, target_n_frames=10)  # 目標が遷移より短い
+    assert resolved.head_clipped is True
+    assert resolved.head_frames < 50
+    assert resolved.n_frames == 10
+
+
+def test_resolve_vcv_unit_to_note_none_vcore_behaves_like_whole_unit_loop() -> None:
+    """`vowel_core_start_frame=None`（後方互換）は unit 全体が母音定常部扱い
+    （head_frames=0）になることを確認する。"""
+    n_bins = 4
+    sp, ap = _sp_ap_for_unit(50, n_bins, 1.0)
+    bank = _FakeBank(sp, ap)
+    unit = _make_unit(0, 0, 50, 220.0)  # vowel_core_start_frame は既定 None
+    resolved = un.resolve_vcv_unit_to_note(bank, unit, target_n_frames=120)
+    assert resolved.head_frames == 0
+    assert resolved.n_frames == 120
+
+
+def test_resolve_vcv_unit_to_note_deterministic_repeat() -> None:
+    n_bins = 4
+    sp = np.concatenate([np.full((8, n_bins), 5.0), np.full((42, n_bins), 1.0)], axis=0)
+    ap = np.full((50, n_bins), 0.1)
+    bank = _FakeBank(sp, ap)
+    unit = _make_vcv_unit(0, 0, 50, 220.0, vcore_rel=8)
+    r1 = un.resolve_vcv_unit_to_note(bank, unit, 350)
+    r2 = un.resolve_vcv_unit_to_note(bank, unit, 350)
+    assert np.array_equal(r1.sp, r2.sp)
+    assert np.array_equal(r1.ap, r2.ap)
+    assert r1.n_loop_cycles == r2.n_loop_cycles
+
+
+# --- 追補 F1.4-B: 接合が母音定常部で行われることの構造的検証 ---
+
+
+def test_vcv_unit_overlap_falls_before_vowel_core_boundary() -> None:
+    """接合長（unit.overlap_frames）は常に母音核開始フレーム
+    （vowel_core_start_frame）より手前 = 録音済みの前母音尾部分に収まる
+    べきという構造不変条件（実データでの実測: 波音リツ oto.ini 全 1059
+    非フレーズ先頭エイリアスで overlap_ms < consonant_ms が 100% 成立。
+    `results_f1_4` record 参照）。"""
+    unit = _make_vcv_unit(0, 0, 200, 220.0, vcore_rel=74, overlap_frames=20, preutterance_frames=60)
+    assert unit.overlap_frames < unit.vowel_core_start_frame
+    assert unit.preutterance_frames < unit.vowel_core_start_frame
+    assert unit.overlap_frames <= unit.preutterance_frames

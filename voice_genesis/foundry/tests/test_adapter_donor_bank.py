@@ -245,3 +245,82 @@ def test_normalize_unit_energy_empty_units_is_noop() -> None:
     normalized, stats = db.normalize_unit_energy(bank)
     assert normalized is bank
     assert stats["n_units"] == 0
+
+
+# --- 追補 F1.4-A: VCV unit（vowel_core_start_frame あり）の正規化基準域 ---
+
+
+def _vcv_bank_with_transition_and_core(
+    transition_level: float, core_level: float, n_bins: int = 4, transition_len: int = 8, core_len: int = 40,
+) -> db.DonorBank:
+    """1 unit の中に「調音遷移（transition_level）+ 母音定常部（core_level）」を
+    持つ合成 VCV bank を組み立てる（正規化が母音定常部だけを基準にすることの検証用）。
+    """
+    n_total = transition_len + core_len
+    sp = np.concatenate(
+        [np.full((transition_len, n_bins), transition_level), np.full((core_len, n_bins), core_level)], axis=0
+    )
+    ap = np.full((n_total, n_bins), 0.15)
+    unit = db.DonorUnit(
+        index=0, start_frame=0, end_frame=n_total, median_f0=220.0, duration_s=n_total * 5.0 / 1000.0,
+        head_log_bands=db._log_band_vector(sp[0], db.SR), tail_log_bands=db._log_band_vector(sp[-1], db.SR),
+        overlap_frames=2, preutterance_frames=6, vowel_core_start_frame=transition_len,
+    )
+    return db.DonorBank(
+        sr=db.SR, frame_period_ms=5.0, f0=np.full(n_total, 220.0), sp=sp, ap=ap, units=[unit],
+        wav_sha256="dummy", source="synthetic_test_vcv", notes_csv_path=None, stats={},
+    )
+
+
+def test_unit_mean_power_uses_vowel_core_only_when_present() -> None:
+    bank = _vcv_bank_with_transition_and_core(transition_level=100.0, core_level=1.0)
+    unit = bank.units[0]
+    # 調音遷移の極端な値（100.0）に引きずられず、母音定常部（1.0）だけが平均パワーに反映される。
+    level = db._unit_mean_power(bank.sp, unit)
+    expected = 1.0 * bank.sp.shape[1]  # n_bins 個の 1.0 の総和
+    assert level == pytest.approx(expected)
+
+
+def test_normalize_unit_energy_does_not_distort_by_transition_level() -> None:
+    """2 unit が同じ母音定常部レベルだが異なる調音遷移レベルを持つ場合、
+    正規化後は両方ともほぼ同じゲインになる（調音遷移の極端値に引きずられない）。"""
+    n_bins = 4
+    core_len = 30
+    trans_len = 8
+    sp = np.concatenate(
+        [
+            np.full((trans_len, n_bins), 50.0), np.full((core_len, n_bins), 2.0),
+            np.full((trans_len, n_bins), 0.01), np.full((core_len, n_bins), 2.0),
+        ],
+        axis=0,
+    )
+    ap = np.full((sp.shape[0], n_bins), 0.1)
+    u0_end = trans_len + core_len
+    units = [
+        db.DonorUnit(
+            index=0, start_frame=0, end_frame=u0_end, median_f0=220.0, duration_s=u0_end * 5.0 / 1000.0,
+            head_log_bands=db._log_band_vector(sp[0], db.SR), tail_log_bands=db._log_band_vector(sp[u0_end - 1], db.SR),
+            vowel_core_start_frame=trans_len,
+        ),
+        db.DonorUnit(
+            index=1, start_frame=u0_end, end_frame=sp.shape[0], median_f0=220.0,
+            duration_s=(sp.shape[0] - u0_end) * 5.0 / 1000.0,
+            head_log_bands=db._log_band_vector(sp[u0_end], db.SR), tail_log_bands=db._log_band_vector(sp[-1], db.SR),
+            vowel_core_start_frame=trans_len,
+        ),
+    ]
+    bank = db.DonorBank(
+        sr=db.SR, frame_period_ms=5.0, f0=np.full(sp.shape[0], 220.0), sp=sp, ap=ap, units=units,
+        wav_sha256="dummy", source="synthetic_test_vcv", notes_csv_path=None, stats={},
+    )
+    _normalized, stats = db.normalize_unit_energy(bank)
+    assert stats["gain_min"] == pytest.approx(stats["gain_max"], rel=1e-9)
+
+
+def test_unit_mean_power_backward_compatible_when_vcore_none() -> None:
+    """`vowel_core_start_frame=None`（旧 unit）は unit 全体を使う旧挙動のまま。"""
+    bank = _bank_with_levels([1.0, 4.0])
+    for u in bank.units:
+        assert u.vowel_core_start_frame is None
+    level0 = db._unit_mean_power(bank.sp, bank.units[0])
+    assert level0 == pytest.approx(np.mean(np.sum(bank.sp[0:20], axis=1)))

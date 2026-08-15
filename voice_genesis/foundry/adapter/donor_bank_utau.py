@@ -317,6 +317,235 @@ def _select_wav_subset(
     return selected, stats
 
 
+# ---------------------------------------------------------------------------
+# 追補 F1.4-A: VCV unit 化（donor_bank_utau v2）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VCVContext:
+    """VCV unit の文脈キー（追補 F1.4-A item2）。"""
+    prev_vowel: Optional[str]  # None = フレーズ先頭（oto "-" 形）
+    mora: str  # 対象モーラかな（oto エイリアス右トークンと同じ表記）
+    is_phrase_initial: bool
+
+
+def _select_wav_subset_for_contexts(
+    entries_by_wav: "OrderedDict[str, List[OtoEntry]]",
+    pitch_dirs: Sequence[str],
+    required_contexts: Optional[Sequence[Tuple[Optional[str], str]]],
+    max_wav_files: int = 200,
+) -> Tuple[List[str], dict]:
+    """追補 F1.4-A: 必須 VCV 文脈（(prev_vowel, mora) のタプル列）を含む wav
+    ファイルをファイル名昇順の決定論走査で選択する（計算資源境界を「必要な
+    文脈を過不足なく含む最小集合」に絞ることで、旧 `_select_wav_subset` の
+    汎用オンセット被覆ヒューリスティックに依らず sakura/umi の全 mora を
+    確実に解決対象にする・[実装決定・record 記録]）。
+
+    `required_contexts=None` の場合は文脈非依存の汎用選択（ファイル名昇順で
+    `max_wav_files` 件、旧関数のフォールバック相当）にフォールバックする
+    （合成 fixture でのテスト・将来スコア向けの汎用利用のため）。見つから
+    なかった文脈は `missing_contexts` に列挙する。
+    """
+    all_files = sorted(entries_by_wav.keys())
+    if required_contexts is None:
+        selected = all_files[:max_wav_files]
+        return selected, dict(
+            n_wav_selected=len(selected), n_wav_total=len(all_files),
+            n_contexts_required=0, n_contexts_found=0, missing_contexts=[], mode="generic",
+        )
+
+    remaining = set(required_contexts)
+    n_required = len(remaining)
+    selected: List[str] = []
+    for fname in all_files:
+        if not remaining or len(selected) >= max_wav_files:
+            break
+        file_has_needed = False
+        for e in entries_by_wav[fname]:
+            prev, mora, _is_initial = parse_alias_mora(e.alias, pitch_dirs)
+            ctx = (prev, mora)
+            if ctx in remaining:
+                file_has_needed = True
+                remaining.discard(ctx)
+        if file_has_needed:
+            selected.append(fname)
+    selected.sort()  # 決定論のため最終的にファイル名昇順で固定
+    missing = sorted(remaining, key=lambda c: (c[0] or "", c[1]))
+    stats = dict(
+        n_wav_selected=len(selected), n_wav_total=len(all_files),
+        n_contexts_required=n_required, n_contexts_found=n_required - len(missing),
+        missing_contexts=missing, mode="context_coverage",
+    )
+    return selected, stats
+
+
+def build_donor_bank_utau_vcv(
+    voicebank_root: str | Path,
+    pitch_dirs: Optional[Sequence[str]] = None,
+    cache_dir: Optional[str | Path] = None,
+    frame_period_ms: float = FRAME_PERIOD_MS,
+    required_contexts: Optional[Sequence[Tuple[Optional[str], str]]] = None,
+    max_wav_files: int = 200,
+) -> Tuple[DonorBank, Dict[int, VCVContext], dict]:
+    """追補 F1.4-A: UTAU 音源ルートを VCV unit として分析する（donor_bank_utau v2）。
+
+    v1（`build_donor_bank_utau`）との違い: unit の frame 範囲が
+    `[offset, cutoff)`（母音安定区間だけでなく、録音済みの前母音尾+子音+
+    母音アタックの遷移全体）へ拡張される。子音は unit 内に録り込まれる
+    ため `ConsonantClip` 別保持は行わない（F1.4-B item3「録音子音クリップ
+    挿入経路も VCV 経路では廃止」）。
+
+    戻り値: (DonorBank, unit_contexts, stats)。unit_contexts は
+    unit.index -> `VCVContext`（選択は `units.select_vcv_units` が使う）。
+    """
+    root = Path(voicebank_root)
+    if pitch_dirs is None:
+        pitch_dirs = sorted(
+            p.name for p in root.iterdir() if p.is_dir() and (p / "oto.ini").exists()
+        )
+    if not pitch_dirs:
+        raise FileNotFoundError(f"no pitch dir with oto.ini found under {root}")
+
+    cache_path: Optional[Path] = None
+    if cache_dir is not None:
+        cache_dir = Path(cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        ctx_material = "|".join(f"{c[0] or '-'}:{c[1]}" for c in sorted(
+            required_contexts or (), key=lambda c: (c[0] or "", c[1])
+        ))
+        key_material = (
+            f"{root}|{','.join(pitch_dirs)}|{frame_period_ms}|{max_wav_files}|{ctx_material}"
+            f"|schema=f1.4-vcv-v1"
+        )
+        key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
+        cache_path = cache_dir / f"utau_bank_vcv_{key}.pkl"
+        if cache_path.exists():
+            with open(cache_path, "rb") as f:
+                return pickle.load(f)
+
+    all_f0: List[np.ndarray] = []
+    all_sp: List[np.ndarray] = []
+    all_ap: List[np.ndarray] = []
+    units: List[DonorUnit] = []
+    unit_contexts: Dict[int, VCVContext] = {}
+    frame_offset = 0
+    wav_sha_parts: List[str] = []
+
+    n_dropped_short = 0
+    n_unmapped_kana = 0
+    n_sokuon_skipped = 0
+    n_negative_overlap_clamped = 0
+    n_entries_total = 0
+    pitch_hz_by_dir: Dict[str, float] = {}
+    n_wav_files_analyzed = 0
+    selection_stats_by_dir: Dict[str, dict] = {}
+
+    for pdir_name in pitch_dirs:
+        pdir = root / pdir_name
+        oto_path = pdir / "oto.ini"
+        pitch_hz_by_dir[pdir_name] = note_name_to_hz(pdir_name)
+        entries = parse_oto_ini(oto_path)
+        n_entries_total += len(entries)
+        entries_by_wav: "OrderedDict[str, List[OtoEntry]]" = OrderedDict()
+        for e in entries:
+            entries_by_wav.setdefault(e.wav_filename, []).append(e)
+
+        selected_files, sel_stats = _select_wav_subset_for_contexts(
+            entries_by_wav, pitch_dirs, required_contexts, max_wav_files
+        )
+        selection_stats_by_dir[pdir_name] = sel_stats
+
+        for wav_filename in selected_files:
+            wav_path = pdir / wav_filename
+            if not wav_path.exists():
+                continue
+            x, sr, wav_duration_ms = _load_wav_24k(wav_path)
+            wav_sha_parts.append(sha256_of(wav_path))
+            donor = analyze_donor_world(x, sr, frame_period_ms)
+            n_donor_frames = len(donor["f0"])
+            n_wav_files_analyzed += 1
+
+            for e in sorted(entries_by_wav[wav_filename], key=lambda e: (e.offset_ms, e.alias)):
+                prev_vowel, mora_kana, is_phrase_initial = parse_alias_mora(e.alias, pitch_dirs)
+                onset, vowel, status = normalize_mora_kana(mora_kana)  # noqa: F841 (vowel は record 目的のみ未使用)
+                if status == "unmapped":
+                    n_unmapped_kana += 1
+                    continue
+                if status == "sokuon":
+                    n_sokuon_skipped += 1
+                    continue
+
+                consonant_end_ms = e.offset_ms + e.consonant_ms
+                cutoff_ms = cutoff_position_ms(e.offset_ms, e.blank_ms, wav_duration_ms)
+
+                seg_start = max(0, min(_ms_to_frame(e.offset_ms, frame_period_ms), n_donor_frames))
+                seg_end = max(0, min(_ms_to_frame(cutoff_ms, frame_period_ms), n_donor_frames))
+                if seg_end - seg_start < MIN_UNIT_FRAMES_ABS:
+                    n_dropped_short += 1
+                    continue
+                vcore_abs = max(0, min(_ms_to_frame(consonant_end_ms, frame_period_ms), n_donor_frames))
+                vcore_rel = max(0, min(vcore_abs - seg_start, seg_end - seg_start))
+
+                seg_f0 = donor["f0"][seg_start:seg_end]
+                voiced = seg_f0[seg_f0 > 0]
+                median_f0 = float(np.median(voiced)) if len(voiced) else pitch_hz_by_dir[pdir_name]
+                duration_s = (seg_end - seg_start) * frame_period_ms / 1000.0
+                head = _log_band_vector(donor["sp"][seg_start], sr)
+                tail = _log_band_vector(donor["sp"][seg_end - 1], sr)
+
+                raw_overlap_frames = _ms_to_frame(e.overlap_ms, frame_period_ms)
+                if raw_overlap_frames < 0:
+                    n_negative_overlap_clamped += 1
+                overlap_frames = max(0, raw_overlap_frames)
+                preutterance_frames = max(0, _ms_to_frame(e.preutterance_ms, frame_period_ms))
+
+                idx = len(units)
+                units.append(
+                    DonorUnit(
+                        index=idx, start_frame=frame_offset + seg_start, end_frame=frame_offset + seg_end,
+                        median_f0=median_f0, duration_s=duration_s,
+                        head_log_bands=head, tail_log_bands=tail,
+                        overlap_frames=overlap_frames, preutterance_frames=preutterance_frames,
+                        vowel_core_start_frame=vcore_rel,
+                    )
+                )
+                unit_contexts[idx] = VCVContext(
+                    prev_vowel=prev_vowel, mora=mora_kana, is_phrase_initial=is_phrase_initial
+                )
+
+            all_f0.append(donor["f0"])
+            all_sp.append(donor["sp"])
+            all_ap.append(donor["ap"])
+            frame_offset += n_donor_frames
+
+    bank_f0 = np.concatenate(all_f0) if all_f0 else np.zeros(0)
+    bank_sp = np.concatenate(all_sp, axis=0) if all_sp else np.zeros((0, N_LOG_BANDS))
+    bank_ap = np.concatenate(all_ap, axis=0) if all_ap else np.zeros((0, N_LOG_BANDS))
+    wav_sha256 = hashlib.sha256("|".join(sorted(wav_sha_parts)).encode("utf-8")).hexdigest()
+
+    stats = dict(
+        n_pitch_dirs=len(pitch_dirs), pitch_dirs=list(pitch_dirs), pitch_hz_by_dir=pitch_hz_by_dir,
+        n_entries_total=n_entries_total, n_units_kept=len(units),
+        n_dropped_short=n_dropped_short, n_unmapped_kana=n_unmapped_kana,
+        n_sokuon_skipped=n_sokuon_skipped, n_negative_overlap_clamped=n_negative_overlap_clamped,
+        n_wav_files_analyzed=n_wav_files_analyzed,
+        selection_stats_by_dir=selection_stats_by_dir,
+        cache_hit=False,
+    )
+
+    bank = DonorBank(
+        sr=SR, frame_period_ms=frame_period_ms, f0=bank_f0, sp=bank_sp, ap=bank_ap,
+        units=units, wav_sha256=wav_sha256, source="utau_oto_vcv", notes_csv_path=None, stats=stats,
+    )
+
+    result = (bank, unit_contexts, stats)
+    if cache_path is not None:
+        with open(cache_path, "wb") as f:
+            pickle.dump(result, f)
+    return result
+
+
 def build_donor_bank_utau(
     voicebank_root: str | Path,
     pitch_dirs: Optional[Sequence[str]] = None,

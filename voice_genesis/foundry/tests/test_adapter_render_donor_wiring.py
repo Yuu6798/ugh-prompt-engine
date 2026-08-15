@@ -79,3 +79,136 @@ def test_vowel_distribution_from_labels() -> None:
 
 def test_vowel_distribution_from_labels_empty() -> None:
     assert rd._vowel_distribution_from_labels({}) == {}
+
+
+# --- 追補 F1.4-B: VCV 配置（preutterance 消費のタイムライン整合） ---
+
+
+class _FakeMora:
+    def __init__(self, kana: str, vowel: str) -> None:
+        self.kana = kana
+        self.vowel = vowel
+
+
+class _FakeNote:
+    def __init__(self, kana: str, vowel: str, midi: float = 57.0) -> None:
+        self.mora = _FakeMora(kana, vowel)
+        self.midi = midi
+
+
+class _FakeSeg:
+    def __init__(
+        self, start_sample: int, end_sample: int, is_phrase_first: bool, kana: str = "か", vowel: str = "a",
+    ) -> None:
+        self.start_sample = start_sample
+        self.end_sample = end_sample
+        self.is_phrase_first = is_phrase_first
+        self.note = _FakeNote(kana, vowel)
+
+
+def _vcv_unit(index: int, overlap_frames: int, preutterance_frames: int, n_frames: int = 200) -> dbu.DonorUnit:
+    n = 4
+    return dbu.DonorUnit(
+        index=index, start_frame=0, end_frame=n_frames, median_f0=220.0, duration_s=n_frames * 5.0 / 1000.0,
+        head_log_bands=np.zeros(n), tail_log_bands=np.zeros(n),
+        overlap_frames=overlap_frames, preutterance_frames=preutterance_frames,
+        vowel_core_start_frame=min(preutterance_frames + 4, n_frames),
+    )
+
+
+class _FakeVCVSelection:
+    def __init__(self, unit: dbu.DonorUnit) -> None:
+        self.unit = unit
+
+
+class _FakeBankVCV:
+    def __init__(self, n_bins: int = 4, n_frames: int = 200) -> None:
+        self.sp = np.arange(n_frames * n_bins, dtype=np.float64).reshape(n_frames, n_bins) + 1.0
+        self.ap = np.full((n_frames, n_bins), 0.1)
+
+
+def test_build_vcv_placements_phrase_first_shifts_start_by_preutterance() -> None:
+    """フレーズ先頭（is_phrase_first=True）のノートは preutterance 分だけ
+    cursor より前に配置される（利用可能なギャップ = ブレス 0.25s = 50 frame
+    @5ms を下回る preutterance なのでクリップされない）。"""
+    sr = 24000
+    breath_samples = int(0.25 * sr)
+    segs = [
+        _FakeSeg(0, sr, True),  # 最初のフレーズ（ギャップ無し）
+        _FakeSeg(sr + breath_samples, sr + breath_samples + sr, True),  # 2番目のフレーズ頭（0.25s ブレス）
+    ]
+    bank = _FakeBankVCV()
+    unit0 = _vcv_unit(0, overlap_frames=4, preutterance_frames=12)
+    unit1 = _vcv_unit(1, overlap_frames=4, preutterance_frames=20)
+    selections = [_FakeVCVSelection(unit0), _FakeVCVSelection(unit1)]
+
+    placements, resolved_list, stats = rd._build_vcv_placements(segs, selections, bank)
+
+    # 最初のノート: 直前ギャップ 0 -> shift=0（preutterance を消費できない）。
+    assert placements[0].start_frame == 0
+    # 2番目のノート: ギャップ=50frame(0.25s) >= preutterance(20) -> shift=20 満額。
+    breath_frames = 50  # 0.25s @ 5ms
+    naive_start = breath_frames + resolved_list[0].n_frames
+    assert placements[1].start_frame == naive_start - 20
+    assert stats["n_preutterance_applied"] == 1  # 最初のノートは shift=0 なのでカウント外
+    assert stats["n_preutterance_clipped"] == 0
+    assert stats["preutterance_shift_frames"] == [20]
+
+
+def test_build_vcv_placements_clips_preutterance_within_breath_budget() -> None:
+    """preutterance がブレスギャップより大きい場合はギャップ幅にクリップされる
+    （0.25s の範囲内でクリップ・発動記録）。"""
+    sr = 24000
+    breath_samples = int(0.25 * sr)  # -> 50 frames @5ms
+    segs = [
+        _FakeSeg(0, sr, True),
+        _FakeSeg(sr + breath_samples, sr + breath_samples + sr, True),
+    ]
+    bank = _FakeBankVCV()
+    unit0 = _vcv_unit(0, overlap_frames=4, preutterance_frames=0)
+    unit1 = _vcv_unit(1, overlap_frames=4, preutterance_frames=999)  # ギャップよりずっと大きい
+    selections = [_FakeVCVSelection(unit0), _FakeVCVSelection(unit1)]
+
+    placements, resolved_list, stats = rd._build_vcv_placements(segs, selections, bank)
+
+    breath_frames = 50
+    naive_start = breath_frames + resolved_list[0].n_frames
+    assert placements[1].start_frame == naive_start - breath_frames  # クリップされ 50 frame のみ消費
+    assert stats["n_preutterance_clipped"] == 1
+    assert stats["preutterance_shift_frames"] == [50]
+
+
+def test_build_vcv_placements_mid_phrase_note_start_unshifted() -> None:
+    """フレーズ内部（has_join_to_prev=True）のノートは start_frame を
+    シフトしない（接合は overlap_frames 由来の overlap-add に委ねる）。"""
+    sr = 24000
+    segs = [_FakeSeg(0, sr, True), _FakeSeg(sr, 2 * sr, False)]
+    bank = _FakeBankVCV()
+    unit0 = _vcv_unit(0, overlap_frames=4, preutterance_frames=10)
+    unit1 = _vcv_unit(1, overlap_frames=4, preutterance_frames=30)
+    selections = [_FakeVCVSelection(unit0), _FakeVCVSelection(unit1)]
+
+    placements, resolved_list, _stats = rd._build_vcv_placements(segs, selections, bank)
+    assert placements[1].start_frame == resolved_list[0].n_frames  # cursor そのまま（シフト無し）
+    assert placements[1].has_join_to_prev is True
+    assert placements[1].overlap_frames == 4
+
+
+def test_build_vcv_placements_end_frame_unaffected_by_shift() -> None:
+    """end_frame は shift 非依存（次 run のギャップ計算を狂わせないため）。"""
+    sr = 24000
+    breath_samples = int(0.25 * sr)
+    segs = [
+        _FakeSeg(0, sr, True),
+        _FakeSeg(sr + breath_samples, sr + breath_samples + sr, True),
+    ]
+    bank = _FakeBankVCV()
+    unit0 = _vcv_unit(0, overlap_frames=4, preutterance_frames=0)
+    unit1 = _vcv_unit(1, overlap_frames=4, preutterance_frames=15)
+    selections = [_FakeVCVSelection(unit0), _FakeVCVSelection(unit1)]
+
+    placements, resolved_list, _stats = rd._build_vcv_placements(segs, selections, bank)
+    breath_frames = 50
+    naive_start = breath_frames + resolved_list[0].n_frames
+    assert placements[1].end_frame == naive_start + resolved_list[1].n_frames
+    assert placements[1].start_frame < placements[1].end_frame - resolved_list[1].n_frames + 1
