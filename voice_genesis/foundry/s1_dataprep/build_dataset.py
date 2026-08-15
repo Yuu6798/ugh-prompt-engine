@@ -116,6 +116,123 @@ def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> 
         raise
 
 
+def _preflight_writable(paths: Sequence[Path]) -> None:
+    """公開対象の全パスについて、書込可能性を事前検証する（実際の書き込みを
+    始める前に全件をチェックし、途中失敗による「混合世代」— 辞書は新・config は
+    旧のような公開状態 — を未然に防ぐ）。
+
+    - 既存ディレクトリをそのまま出力先に指定した場合（`--out-config` に既存
+      ディレクトリを渡す等。Codex 再現手順）は、`os.replace` が
+      `IsADirectoryError` を投げて他の成果物だけ公開済みという事故になる前に
+      ここで検出する。
+    - 親ディレクトリの書込可否も、実際に probe ファイルを作成して確認する
+      （`os.access` は root では常に True を返す等の既知の弱点があるため）。
+    """
+    for path in paths:
+        if path.is_dir():
+            raise IsADirectoryError(
+                f"out path is an existing directory, not a file: {path}"
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        probe_fd, probe_name = tempfile.mkstemp(
+            dir=path.parent, prefix=f"{path.name}.", suffix=".writetest.tmp"
+        )
+        try:
+            os.close(probe_fd)
+        finally:
+            os.unlink(probe_name)
+
+
+def _publish_outputs(items: Sequence[Tuple[Path, str]]) -> None:
+    """複数出力（辞書/config/report）を検証してから一括で atomic 公開する
+    （遷移性: 途中失敗時に混合世代の成果物が残らないようにする）。
+
+    手順: (1) 全パスの書込可能性を事前検証（`_preflight_writable`） →
+    (2) 新内容を staging tempfile へ書き込み → (3) 既存ファイルをバックアップ
+    へ退避 → (4) staging を `os.replace` で一括公開。(3)/(4) の途中で失敗
+    したら、公開済み分をバックアップから巻き戻し、staging/バックアップの
+    残骸を片付けてから再送出する。
+    """
+    paths = [p for p, _ in items]
+    _preflight_writable(paths)
+
+    # Phase 1: 新内容を staging tempfile へ書き込む（実パスにはまだ触れない）。
+    staged: List[Tuple[Path, str]] = []
+    try:
+        for path, content in items:
+            fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except BaseException:
+                os.unlink(tmp_name)
+                raise
+            staged.append((path, tmp_name))
+    except BaseException:
+        for _path, tmp_name in staged:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        raise
+
+    # Phase 2: 既存ファイルをバックアップへ退避する（無ければ None を記録）。
+    backups: List[Tuple[Path, Optional[str]]] = []
+    try:
+        for path, _tmp_name in staged:
+            if path.exists():
+                bak_fd, bak_name = tempfile.mkstemp(
+                    dir=path.parent, prefix=f"{path.name}.", suffix=".prepublish-bak"
+                )
+                os.close(bak_fd)
+                os.unlink(bak_name)
+                os.replace(path, bak_name)
+                backups.append((path, bak_name))
+            else:
+                backups.append((path, None))
+    except BaseException:
+        # 退避中の失敗: ここまでの退避分を復元し、staging を破棄する。
+        for path, bak_name in backups:
+            if bak_name is not None:
+                os.replace(bak_name, path)
+        for _path, tmp_name in staged:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        raise
+
+    # Phase 3: staging を実パスへ一括公開する。
+    published = 0
+    try:
+        for path, tmp_name in staged:
+            os.replace(tmp_name, path)
+            published += 1
+    except BaseException:
+        # 途中失敗: 公開済み分をバックアップから巻き戻し、未公開分の
+        # staging/バックアップを片付ける（旧成果物を確実に復元する）。
+        for i, (path, tmp_name) in enumerate(staged):
+            bak_name = backups[i][1]
+            if i < published:
+                if bak_name is not None:
+                    os.replace(bak_name, path)
+                else:
+                    os.unlink(path)
+            else:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                if bak_name is not None:
+                    os.replace(bak_name, path)
+        raise
+
+    # 全件公開に成功: バックアップを削除する。
+    for _path, bak_name in backups:
+        if bak_name is not None:
+            os.unlink(bak_name)
+
+
 def validate_speaker(
     speaker_name: str, raw_dir: Path, rows: Sequence[Dict[str, str]]
 ) -> List[str]:
@@ -275,11 +392,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"validation FAILED: {len(problems)} problem(s)", file=sys.stderr)
         return 1
 
-    # 全構築・全検証が終わり、成功が確定してからのみ atomic 公開する。
-    _atomic_write_text(args.out_dict, dict_text)
-    _atomic_write_text(args.out_config, config_text)
+    # 全構築・全検証が終わり、成功が確定してからのみ、辞書/config/report を
+    # 遷移的に（全て公開できるか事前検証してから一括で）公開する。
+    outputs: List[Tuple[Path, str]] = [
+        (args.out_dict, dict_text),
+        (args.out_config, config_text),
+    ]
     if args.report is not None:
-        _atomic_write_text(args.report, report_text + "\n")
+        outputs.append((args.report, report_text + "\n"))
+    try:
+        _publish_outputs(outputs)
+    except OSError as exc:
+        # 公開失敗（既存ディレクトリを出力先に指定 / 書込不可等）。
+        # `_publish_outputs` が事前検証・巻き戻しで混合世代を防いだ上での
+        # 失敗であり、既存の有効な成果物は無事なはず（呼び出し側で再実行可能）。
+        print(f"error: failed to publish outputs: {exc}", file=sys.stderr)
+        return 1
 
     print("validation OK")
     return 0

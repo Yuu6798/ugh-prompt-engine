@@ -154,6 +154,62 @@ def fit_duration_sum(durations: List[int], total: int) -> List[int]:
 # 2. 音素辞書 (二重符号化: variance=canon固定 / acoustic=自前 or canon fallback)
 # ============================================================================
 
+def sha256_file(path: Path) -> str:
+    """ファイル全体の sha256 hex digest（gate summary の入力側 pin 用）。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def collect_input_sha256(
+    args,
+    canon_model_dir: Path,
+    vocoder_dir: Path,
+    acoustic_onnx_path: Path,
+    own_json: Optional[Path],
+) -> Dict[str, Optional[str]]:
+    """gate 判定を駆動した入力モデル束の sha256 を集約する。
+
+    出力 WAV の sha256 だけでは「どのモデル束からその判定が出たか」を後日
+    一意に特定できない（ckpt・config・export 済み acoustic.onnx・
+    phonemes.json・canon variance 各 onnx・vocoder onnx のいずれかが差し替わって
+    いても出力 WAV との対応関係が追えない）ため、gate summary へ入力側 sha256
+    も併記する。ファイルが存在しない場合（`--skip-export` で ckpt/config が
+    対象外、own_json が canon フォールバック時など）は `None` を記録する。
+    """
+    shas: Dict[str, Optional[str]] = {}
+
+    if not args.skip_export:
+        ckpt_dir = Path(args.ckpt_dir)
+        ckpt_file = ckpt_dir / f"model_ckpt_steps_{args.step}.ckpt"
+        train_config_file = ckpt_dir / "config.yaml"
+        shas["ckpt"] = sha256_file(ckpt_file) if ckpt_file.exists() else None
+        shas["train_config_yaml"] = (
+            sha256_file(train_config_file) if train_config_file.exists() else None
+        )
+
+    shas["acoustic_onnx"] = (
+        sha256_file(acoustic_onnx_path) if acoustic_onnx_path.exists() else None
+    )
+    shas["acoustic_phonemes_json"] = (
+        sha256_file(own_json) if own_json is not None and own_json.exists() else None
+    )
+
+    linguistic_onnx = canon_model_dir / "linguistic.onnx"
+    variance_dur_onnx = canon_model_dir / "dsdur" / "dur.onnx"
+    variance_pitch_onnx = canon_model_dir / "dspitch" / "pitch.onnx"
+    vocoder_onnx = vocoder_dir / "nsf_hifigan.onnx"
+    shas["canon_linguistic_onnx"] = (
+        sha256_file(linguistic_onnx) if linguistic_onnx.exists() else None
+    )
+    shas["canon_variance_dur_onnx"] = (
+        sha256_file(variance_dur_onnx) if variance_dur_onnx.exists() else None
+    )
+    shas["canon_variance_pitch_onnx"] = (
+        sha256_file(variance_pitch_onnx) if variance_pitch_onnx.exists() else None
+    )
+    shas["vocoder_onnx"] = sha256_file(vocoder_onnx) if vocoder_onnx.exists() else None
+    return shas
+
+
 def load_canon_phonemes(path: Path) -> Dict[str, int]:
     """canon 配布 phonemes.txt（改行区切りリスト、行番号=ID、0=<PAD>）。"""
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -555,6 +611,10 @@ def cmd_run(args):
         encoding_mode = f"own ({own_json.name})"
     print(f"| acoustic token encoding: {encoding_mode}")
 
+    input_sha256 = collect_input_sha256(
+        args, canon_model_dir, vocoder_dir, acoustic_onnx_path, own_json,
+    )
+
     songs = args.song.split(",")
     results = {}
     for song in songs:
@@ -577,6 +637,7 @@ def cmd_run(args):
     summary_path.write_text(json.dumps({
         "acoustic_encoding_mode": encoding_mode,
         "acoustic_onnx_path": str(acoustic_onnx_path),
+        "input_sha256": input_sha256,
         "results": results,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"| summary: {summary_path}")

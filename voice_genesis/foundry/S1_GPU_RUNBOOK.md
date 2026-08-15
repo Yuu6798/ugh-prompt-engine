@@ -33,14 +33,26 @@
 
 ## 1. 環境構築（GPU インスタンス側）
 
+**本 runbook 全体（§1–§4）で使う絶対パス変数**。冒頭で一度定義し、以後の
+各節は必ずこれらの変数から `cd` して作業する（clone 位置の入れ子事故 —
+例えば `ugh-prompt-engine` の中に `DiffSinger` を clone してしまう等 — を
+構造的に排除するため。相対パスでの `cd` 積み重ねに依存しない）:
+
 ```bash
+WORK=~/s1work
+DS="$WORK/DiffSinger"
+REPO="$WORK/ugh-prompt-engine"
+OUT="$WORK/s1_data"
+mkdir -p "$WORK"
+cd "$WORK"
+
 # CUDA 版を先に確認してから torch を合わせる（イメージ既定の CUDA と
 # 不一致だと動かない。イメージのタグに CUDA 版が書かれていることが多い）
 nvidia-smi
 python -V   # 3.11 系を推奨（データ準備側の実測環境と揃える）
 
-git clone https://github.com/openvpi/DiffSinger.git
-cd DiffSinger
+git clone https://github.com/openvpi/DiffSinger.git "$DS"
+cd "$DS"
 git checkout e2307b1   # データ準備の動作検証で使った commit と同じ pin。
                         # 別 commit を使う場合は理由と commit hash を記録に残す
 pip install -r requirements.txt
@@ -65,6 +77,8 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 | 3 | リツ公式 DiffSinger 配布 zip（`dsdur/dsdict.yaml` のみ使用） | `https://www.canon-voice.com/voice/NamineRitsu_DiffSinger.zip` | `5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530` |
 
 ```bash
+cd "$WORK"   # §1 で定義した WORK 直下（DiffSinger clone の中に混ざらないように）
+
 curl -L -o r73_strong_ren0151.zip "https://www.canon-voice.com/voice/r73_strong_ren0151.zip"
 sha256sum r73_strong_ren0151.zip   # 88c7b3ef...df66dde76 と照合
 
@@ -84,9 +98,16 @@ unzip NamineRitsu_DiffSinger.zip -d ritsu_diffsinger_extracted
 
 ## 3. 本リポ clone → s1_dataprep 実行 → binarize
 
+**pin 追随の作法**: 下記 `git checkout` 行はこの runbook を含む具体的な
+commit SHA を指す。本書の内容を変更するたびに、その変更を含む最新 commit
+の SHA へこの行を追随させる（`<...>` のような未解決プレースホルダのまま
+放置しない。プレースホルダのまま残すと GPU 側で checkout 対象が実在せず
+即座に失敗する）。
+
 ```bash
-git clone https://github.com/Yuu6798/ugh-prompt-engine.git ugh-prompt-engine
-cd ugh-prompt-engine
+cd "$WORK"
+git clone https://github.com/Yuu6798/ugh-prompt-engine.git "$REPO"
+cd "$REPO"
 # 本 runbook を含む immutable commit を checkout する（例: 本修正コミットの SHA。
 # PR マージ後は main のマージコミット/タグへ読み替える。開発中の一時ブランチ名は
 # 削除・先行されうるため参照しない）
@@ -94,18 +115,18 @@ git checkout <本修正コミットの SHA、または PR マージ後の main �
 pip install -e ".[dev]"
 pip install praat-parselmouth
 
-git clone https://github.com/UtaUtaUtau/nnsvs-db-converter.git
-cd nnsvs-db-converter && git checkout 185ada6 && cd ..
+git clone https://github.com/UtaUtaUtau/nnsvs-db-converter.git "$WORK/nnsvs-db-converter"
+cd "$WORK/nnsvs-db-converter" && git checkout 185ada6 && cd "$REPO"
 
-OUT=~/s1_data
+mkdir -p "$OUT"
 python voice_genesis/foundry/s1_dataprep/convert_ritsu.py \
-    --voicebank-root "<素材1展開先>/波音リツ強連続音Ver1.5.1" \
-    --dsdict         "<素材3展開先>/NamineRitsu_DiffSinger/dsdur/dsdict.yaml" \
+    --voicebank-root "$WORK/ritsu_extracted/波音リツ強連続音Ver1.5.1" \
+    --dsdict         "$WORK/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger/dsdur/dsdict.yaml" \
     --out-dir        "$OUT/ritsu_diffsinger_db"
 
 python voice_genesis/foundry/s1_dataprep/convert_pjs.py \
-    --pjs-root       "<素材2展開先>/PJS_corpus_ver1.1" \
-    --converter-dir  ./nnsvs-db-converter \
+    --pjs-root       "$WORK/pjs_extracted/PJS_corpus_ver1.1" \
+    --converter-dir  "$WORK/nnsvs-db-converter" \
     --staging-dir    "$OUT/pjs_staging"
 
 python voice_genesis/foundry/s1_dataprep/build_dataset.py \
@@ -116,8 +137,31 @@ python voice_genesis/foundry/s1_dataprep/build_dataset.py \
     --binary-data-dir  "$OUT/binary" \
     --report           "$OUT/build_report.json"
 # "validation OK" を確認する（"validation FAILED" のまま先へ進まない）
+```
 
-cd DiffSinger
+**学習規模フィールドの追記（binarize より前・build_dataset 直後に行う）**:
+`build_dataset.py` が生成した `s1_multispeaker_acoustic_config.yaml` に、
+学習規模に関わるフィールドを binarize を走らせる**前**に追記する。**追記対象は
+この config だけ**（`configs/acoustic.yaml` 等の DiffSinger 側デフォルトは
+変更しない）。こうしておくことで、binarize の入力・学習の入力・§3.1 で
+pin する config が常に同一の最終形になる（manifest は最終 config を pin する
+という流れに一本化する。学習実行時に追記して binarize 後の config と
+食い違う状態を作らない）。
+
+```yaml
+# $OUT/s1_multispeaker_acoustic_config.yaml の末尾に追記
+max_updates: 40000
+val_check_interval: 5000    # 既定 4000 だと 5K/10K/20K の節目に checkpoint が
+                              # 乗らない。早期ゲート節目 (5K/10K/20K) と一致させる
+num_ckpt_keep: 10            # 既定 5 だと 40K/5K=8 個の非 permanent checkpoint を
+                              # 保持しきれず、早期の 5K/10K が学習後半で prune
+                              # される（`permanent_ckpt_start` 既定 60000 は
+                              # 40K 総 steps では発火しないため無効）。
+                              # 8 個全てを学習完了まで残せる余裕を持たせる
+```
+
+```bash
+cd "$DS"
 python scripts/binarize.py --config "$OUT/s1_multispeaker_acoustic_config.yaml"
 ```
 
@@ -151,7 +195,13 @@ valid total duration: 57.72s
 でも生成された学習データ束が別物になり得るため、後日の checkpoint がどの
 データ束から学習されたか特定できなくなるリスクがある）。binarize 完走直後に、
 **生成データ束そのもの**（変換 CSV・辞書・config・binary dir）のファイル別
-sha256 マニフェストを生成し、記録に残す:
+sha256 マニフェストを生成し、記録に残す。
+
+> **config は学習フィールド追記後の最終形でハッシュする**: `s1_multispeaker_acoustic_config.yaml`
+> は §3 の binarize 実行前に学習規模フィールド（`max_updates`/
+> `val_check_interval`/`num_ckpt_keep`）を既に追記済みのため、ここで
+> ハッシュする config はその最終形と一致する。binarize 後に config を
+> 書き換えて manifest と実体がずれる事故を構造的に防ぐ。
 
 ```bash
 # 変換 CSV・辞書・config の束（binary/ は下で別 manifest にし二重計上を避ける）
@@ -177,31 +227,19 @@ sha256sum "$OUT/binary/s1_binary_manifest.sha256"
 
 ---
 
-## 4. acoustic 学習 config（2 話者・40K steps）
+## 4. acoustic 学習実行（2 話者・40K steps）
 
-`build_dataset.py` が生成した `s1_multispeaker_acoustic_config.yaml`
-（§3）をベースに、学習規模に関わるフィールドを追記する。**追記対象はこの
-config だけ**（`configs/acoustic.yaml` 等の DiffSinger 側デフォルトは変更
-しない）。
-
-```yaml
-# $OUT/s1_multispeaker_acoustic_config.yaml の末尾に追記
-max_updates: 40000
-val_check_interval: 5000    # 既定 4000 だと 5K/10K/20K の節目に checkpoint が
-                              # 乗らない。早期ゲート節目 (5K/10K/20K) と一致させる
-num_ckpt_keep: 10            # 既定 5 だと 40K/5K=8 個の非 permanent checkpoint を
-                              # 保持しきれず、早期の 5K/10K が学習後半で prune
-                              # される（`permanent_ckpt_start` 既定 60000 は
-                              # 40K 総 steps では発火しないため無効）。
-                              # 8 個全てを学習完了まで残せる余裕を持たせる
-```
+学習規模に関わる config フィールド（`max_updates`/`val_check_interval`/
+`num_ckpt_keep`）は §3 で `build_dataset.py` 直後・binarize 実行前に
+既に追記済み（config は学習フィールド追記後の最終形で §3.1 の manifest に
+pin される設計。ここでの追加編集は不要）。ここでは学習の実行のみを行う。
 
 学習実行（`exp_name` は checkpoint 保存先 `checkpoints/<exp_name>/` になる。
 中断・再起動後は同じコマンドを再実行すれば直近の checkpoint から自動再開
 する。明示的にやり直したい場合のみ `--reset` を付ける）:
 
 ```bash
-cd DiffSinger   # base_config: configs/acoustic.yaml が相対パスのため必須
+cd "$DS"   # base_config: configs/acoustic.yaml が相対パスのため必須
 python scripts/train.py \
     --config "$OUT/s1_multispeaker_acoustic_config.yaml" \
     --exp_name s1_ritsu_pjs_acoustic_v1

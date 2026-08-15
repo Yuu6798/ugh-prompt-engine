@@ -73,12 +73,16 @@ def run_converter(
     `-c` ph_num 付与、`-B` breath 検出（AP 音素。付けないと binarize の
     `check_coverage()` が AP=0 件で `BinarizationError` になる）。
 
-    `converter_dir` が相対パスの場合、`db_converter.py` のパスを組んでから
-    `cwd=converter_dir` で実行すると `cwd` 変更後に相対パスが再解釈され二重連結
-    になる（`nnsvs-db-converter/nnsvs-db-converter/db_converter.py`）ため、先に
-    `resolve()` して絶対パス化してからスクリプトパスを組む。
+    `converter_dir`/`staging_dir`/`lang_def_path` のいずれかが相対パスの場合、
+    `cwd=converter_dir` で実行すると `cwd` 変更後に相対パスが再解釈されて
+    壊れる（`converter_dir` は `nnsvs-db-converter/nnsvs-db-converter/...` の
+    二重連結、`staging_dir`/`lang_def_path` は呼び出し元の cwd ではなく
+    `converter_dir` 基準で誤って再解釈される）ため、コマンド構築前に全て
+    `resolve()` して絶対パス化する。
     """
     converter_dir = converter_dir.resolve()
+    staging_dir = staging_dir.resolve()
+    lang_def_path = lang_def_path.resolve()
     cmd = [
         python_bin, str(converter_dir / "db_converter.py"),
         "-T", "0", "-L", str(lang_def_path), "-m", "-c", "-B",
