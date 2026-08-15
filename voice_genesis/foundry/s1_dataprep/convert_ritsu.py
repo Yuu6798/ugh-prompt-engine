@@ -32,7 +32,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
+import shutil
 import sys
 from collections import Counter, OrderedDict
 from pathlib import Path
@@ -226,6 +228,22 @@ def build_segment_for_wav(
 # ---------------------------------------------------------------------------
 
 
+def _swap_into_place(staging_dir: Path, out_dir: Path) -> None:
+    """`staging_dir`（完全に構築済み）を `out_dir` へ原子的に差し替える。
+
+    途中失敗時の新旧世代混在防止（review #263 R3 P1）: 旧 `out_dir` は削除
+    せず `<out_dir>.old` へ退避してから `staging_dir` を最終名へ rename する
+    （POSIX の `rename(2)` はディレクトリの置換をアトミックに行う）。次回
+    実行時に前回の `.old` が残っていれば先に削除してから退避する。
+    """
+    old_dir = out_dir.parent / f"{out_dir.name}.old"
+    if old_dir.exists():
+        shutil.rmtree(old_dir)
+    if out_dir.exists():
+        out_dir.rename(old_dir)
+    staging_dir.rename(out_dir)
+
+
 def convert(
     voicebank_root: Path,
     dsdict_path: Path,
@@ -233,9 +251,37 @@ def convert(
     pitch_dirs: Sequence[str] = DEFAULT_PITCH_DIRS,
 ) -> dict:
     """リツ voicebank の pitch dir 群を変換し、`out_dir` に
-    `transcriptions.csv` / `wavs/` / `provenance.json` を書く。冪等
-    （既存 out_dir を再実行すると同一内容で上書きされる）。統計 dict を返す
-    （呼び出し側で JSON 保存・print する）。"""
+    `transcriptions.csv` / `wavs/` / `provenance.json` / `d2_stats.json` を
+    書く。冪等（既存 out_dir を再実行すると同一内容で上書きされる）。
+
+    出力は `<out_dir>.staging-<pid>` に完全構築してから、成功時のみ
+    `out_dir` と原子的に swap する（review #263 R3 P1: 途中失敗や再実行時に
+    旧世代 WAV/CSV が新世代と混在するのを防ぐ）。失敗時は staging を削除し
+    既存の `out_dir` はそのまま残す。統計 dict を返す（呼び出し側で JSON
+    保存・print する）。"""
+    out_dir = Path(out_dir)
+    staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True)
+    try:
+        summary = _convert_into(voicebank_root, dsdict_path, staging_dir, pitch_dirs)
+        _swap_into_place(staging_dir, out_dir)
+    except BaseException:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+    return summary
+
+
+def _convert_into(
+    voicebank_root: Path,
+    dsdict_path: Path,
+    out_dir: Path,
+    pitch_dirs: Sequence[str],
+) -> dict:
+    """`convert()` の本体。`out_dir`（呼び出し元では fresh な staging dir）
+    に `transcriptions.csv` / `wavs/` / `provenance.json` / `d2_stats.json`
+    を書き込む。"""
     mora_dict = build_mora_dict(dsdict_path)
     out_wavs = out_dir / "wavs"
     out_wavs.mkdir(parents=True, exist_ok=True)

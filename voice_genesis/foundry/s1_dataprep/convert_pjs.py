@@ -12,11 +12,20 @@ PJS は `pjsNNN.lab` に対し `pjsNNN_song.wav`/`pjsNNN_speech.wav` という�
 ヒット）。本スクリプトは PJS 本体には一切触れず、song wav のみをシンボリック
 リンクで `pjsNNN.wav` へリネームしたステージングディレクトリを作ってから
 変換器を呼ぶ（発話系 `_speech.wav` はステージングに含めない）。
+
+symlink 群 + 変換出力（`diffsinger_db/`）は毎回 fresh な
+`<staging-dir>.build-<pid>` に完全構築してから、成功時のみ `--staging-dir`
+と原子的に swap する（review #263 R3 P1）。これにより途中失敗時の新旧世代
+混在を防ぐと同時に、`pjs_root` から消えた曲の symlink が再実行後も
+`--staging-dir` に残り続ける問題も解消する（build dir は毎回空から始まる
+ため）。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -91,6 +100,24 @@ def run_converter(
     return subprocess.run(cmd, cwd=str(converter_dir), capture_output=True, text=True, check=False)
 
 
+def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
+    """`build_dir`（symlink 群 + `diffsinger_db/` を完全に構築済み）を
+    `staging_dir` へ原子的に差し替える。
+
+    途中失敗時の新旧世代混在防止（review #263 R3 P1）: 旧 `staging_dir` は
+    削除せず `<staging_dir>.old` へ退避してから `build_dir` を最終名へ
+    rename する。`build_dir` を常に空の状態から作り直すことで、
+    `pjs_root` から消えた曲の symlink が再実行後も残り続ける問題も併せて
+    解消する。
+    """
+    old_dir = staging_dir.parent / f"{staging_dir.name}.old"
+    if old_dir.exists():
+        shutil.rmtree(old_dir)
+    if staging_dir.exists():
+        staging_dir.rename(old_dir)
+    build_dir.rename(staging_dir)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -104,7 +131,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--staging-dir", type=Path, required=True,
         help="song wav のリネーム済みステージング先。変換出力 "
-             "'<staging-dir>/diffsinger_db/' もここに生成される (新規/上書き可、冪等)",
+             "'<staging-dir>/diffsinger_db/' もここに生成される (新規/上書き可、冪等)。"
+             "内部では '<staging-dir>.build-<pid>' に完全構築してから成功時のみ"
+             "原子的に swap する (review #263 R3 P1)",
     )
     parser.add_argument(
         "--lang-def", type=Path, default=None,
@@ -116,22 +145,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    n_staged = stage_song_wavs(args.pjs_root, args.staging_dir)
-    if n_staged == 0:
-        print(f"error: no pjsNNN song wav found under {args.pjs_root}", file=sys.stderr)
-        return 1
+    staging_dir: Path = args.staging_dir
+    build_dir = staging_dir.parent / f"{staging_dir.name}.build-{os.getpid()}"
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+    build_dir.mkdir(parents=True)
+    swapped = False
+    try:
+        n_staged = stage_song_wavs(args.pjs_root, build_dir)
+        if n_staged == 0:
+            print(f"error: no pjsNNN song wav found under {args.pjs_root}", file=sys.stderr)
+            return 1
 
-    lang_def_path = args.lang_def or (args.staging_dir / "lang.json")
-    write_lang_def(lang_def_path)
+        lang_def_path = args.lang_def or (build_dir / "lang.json")
+        write_lang_def(lang_def_path)
 
-    result = run_converter(args.converter_dir, args.staging_dir, lang_def_path, args.python_bin)
-    sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    if result.returncode != 0:
-        print(f"error: db_converter.py failed (exit {result.returncode})", file=sys.stderr)
-        return result.returncode
+        result = run_converter(args.converter_dir, build_dir, lang_def_path, args.python_bin)
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        if result.returncode != 0:
+            print(f"error: db_converter.py failed (exit {result.returncode})", file=sys.stderr)
+            return result.returncode
 
-    out_db = args.staging_dir / "diffsinger_db"
+        _swap_into_place(build_dir, staging_dir)
+        swapped = True
+    finally:
+        if not swapped:
+            shutil.rmtree(build_dir, ignore_errors=True)
+
+    out_db = staging_dir / "diffsinger_db"
     print(f"n_song_staged={n_staged}")
     print(f"output_dir={out_db}")
     return 0

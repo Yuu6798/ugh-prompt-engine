@@ -98,22 +98,22 @@ unzip NamineRitsu_DiffSinger.zip -d ritsu_diffsinger_extracted
 
 ## 3. 本リポ clone → s1_dataprep 実行 → binarize
 
-**pin 追随の作法**: 下記 `git checkout` 行はこの runbook を含む具体的な
-commit SHA を指す。本書の内容を変更するたびに、その変更を含む最新 commit
-の SHA へこの行を追随させる（`<...>` のような未解決プレースホルダのまま
-放置しない。プレースホルダのまま残すと GPU 側で checkout 対象が実在せず
-即座に失敗する）。
+**pin 追随の作法**: 生コミット SHA は PR ブランチ削除後に到達不能になりうる
+（review #263 R3: squash/rebase マージだと中間コミットが main の履歴に残らない
+場合がある。実測は本節末尾の「pin 方式の事実確認」参照）。そのため本 runbook
+は annotated tag で恒久化する。下記 `git checkout` 行は `s1-runbook-v1` タグを
+指す（タグは削除されたブランチのコミットもオブジェクトとして保持し続ける）。
+**runbook 更新時は `s1-runbook-v2`, `v3`, ... と新しい annotated tag を打って
+この行を追随させる**（`<...>` のような未解決プレースホルダのまま放置しない。
+プレースホルダのまま残すと GPU 側で checkout 対象が実在せず即座に失敗する）。
 
 ```bash
 cd "$WORK"
 git clone https://github.com/Yuu6798/ugh-prompt-engine.git "$REPO"
 cd "$REPO"
-# 本 runbook を含む immutable commit を checkout する（例: 本修正コミットの SHA。
-# PR マージ後は main のマージコミット/タグへ読み替える。開発中の一時ブランチ名は
-# 削除・先行されうるため参照しない）
-git checkout 2d9774270b80f3e3cd625cda6e834cdeabf53363   # 本修正コミット（PR #263
-                        # R2 レビュー6件対応）。PR マージ後は main の
-                        # マージコミット/タグへ読み替える
+# 本 runbook を含む immutable tag を checkout する（tag は削除されたブランチの
+# コミットも保持するため、PR ブランチが消えても到達可能）
+git checkout s1-runbook-v1
 pip install -e ".[dev]"
 pip install praat-parselmouth
 
@@ -140,6 +140,21 @@ python voice_genesis/foundry/s1_dataprep/build_dataset.py \
     --report           "$OUT/build_report.json"
 # "validation OK" を確認する（"validation FAILED" のまま先へ進まない）
 ```
+
+**pin 方式の事実確認（review #263 R3 P1・2026-08-15 実測）**: レビューは
+「squash commit `1b594ae` を基準にすると生コミット SHA `2d97742` が
+到達不能」と指摘した。実測: `git log --oneline origin/main -5` は本 PR
+未マージの時点で `main` 側 HEAD が PR #262 の
+`Merge pull request #262 from ...`（通常のマージコミット）であることを示し、
+`git merge-base --is-ancestor 2d97742 origin/main` は非ゼロ終了（false）
+— これは単に本 PR #263 がまだ `main` にマージされていないためであり、
+squash マージが原因ではない。`1b594ae` はローカルの `.git` に存在せず
+（`git cat-file -t 1b594ae` は `fatal: Not a valid object name`）、
+実在確認はできなかった。過去の PR #262 マージが通常のマージコミット方式
+（squash ではない）だった実績を踏まえると、本 PR も同方式でマージされれば
+中間コミットは `main` の履歴に残り本来は到達可能になる可能性が高いが、
+マージ方式は PR 作成者の操作に依存し将来変わりうるため、マージ方式に
+依存しない恒久 pin として annotated tag を採用する。
 
 **学習規模フィールドの追記（binarize より前・build_dataset 直後に行う）**:
 `build_dataset.py` が生成した `s1_multispeaker_acoustic_config.yaml` に、
@@ -205,19 +220,25 @@ sha256 マニフェストを生成し、記録に残す。
 > ハッシュする config はその最終形と一致する。binarize 後に config を
 > 書き換えて manifest と実体がずれる事故を構造的に防ぐ。
 
+**絶対パスを含む manifest は実行者のホームディレクトリ（`$OUT` の位置）に
+依存し再現不能になるため、必ず `cd` してから相対パスで hash する（review
+#263 R3 P2）。**
+
 ```bash
 # 変換 CSV・辞書・config の束（binary/ は下で別 manifest にし二重計上を避ける）
-find "$OUT/ritsu_diffsinger_db" "$OUT/pjs_staging/diffsinger_db" \
-     "$OUT/merged_ja_dict.txt" "$OUT/s1_multispeaker_acoustic_config.yaml" \
+cd "$OUT"
+find ritsu_diffsinger_db pjs_staging/diffsinger_db \
+     merged_ja_dict.txt s1_multispeaker_acoustic_config.yaml \
      -type f ! -name "*_manifest.sha256" -exec sha256sum {} + \
-     | sort -k2 > "$OUT/s1_bundle_manifest.sha256"
-sha256sum "$OUT/s1_bundle_manifest.sha256"
+     | sort -k2 > s1_bundle_manifest.sha256
+sha256sum s1_bundle_manifest.sha256
 
 # binary/ の束（manifest を出力先ディレクトリ内に置く場合、自己参照を必ず除外する
 # — 除外しないと「空の自分自身」を含む再現不能なハッシュになる。S1 初回実行の実地知見）
-find "$OUT/binary" -type f ! -name "s1_binary_manifest.sha256" -exec sha256sum {} + \
-     | sort -k2 > "$OUT/binary/s1_binary_manifest.sha256"
-sha256sum "$OUT/binary/s1_binary_manifest.sha256"
+cd "$OUT/binary"
+find . -type f ! -name "s1_binary_manifest.sha256" -exec sha256sum {} + \
+     | sort -k2 > s1_binary_manifest.sha256
+sha256sum s1_binary_manifest.sha256
 ```
 
 - `s1_bundle_manifest.sha256` 自体の sha256 を、費用記録表（§6）と

@@ -2,7 +2,8 @@
 
 - 日付: 2026-08-15
 - 位置づけ: `FOUNDRY_ROADMAP.md` S1。S0 通過（`results_s0/s0_record_2026-08-15.md`）を受けた実行設計
-- 状態: **User 承認待ち**（GPU 実行 = 費用発生を含むため）
+- 状態: **User 承認済み（2026-08-15 UTC）・GPU 実行中**（RTX 3090・record =
+  `results_s1/s1_record_2026-08-15.md`）
 - 一次材料（scratchpad・非コミット）: `s1_survey.md` / `s1_base_license_survey.md` / `s1a_conversion_record.md`
 
 ## 0. 前提の更新（当初 ROADMAP からの変更点）
@@ -45,7 +46,7 @@ S0 検分より、推論チェーンは linguistic→dur→pitch（variance 系�
 | 層 | 素材 | 変換 | 状態 |
 |---|---|---|---|
 | D1 | PJS 歌唱 100 曲・26.86 分 | nnsvs-db-converter → transcriptions.csv 287 seg | **検証済み**（S1a） |
-| D2 | リツ VCV 録音（A3/F4・oto 1,237 エントリ×2） | oto アラインメント→音素粒度 ph_seq/ph_dur 変換器（新設スパイク S1b） | 未着手 |
+| D2 | リツ VCV 録音（A3/F4・oto 1,237 エントリ×2） | oto アラインメント→音素粒度 ph_seq/ph_dur 変換器（`s1_dataprep/convert_ritsu.py`） | **完了**（456 セグメント/33.4 分） |
 | D3 | F1.4 合成レンダ（旋律多様性補完） | 既存レンダラ | **deferred**（最小スケール原則: D1+D2 で不足が実測されたときのみ） |
 
 - D2 変換器は既存 oto 解析資産（donor_bank_utau）を read-only 流用して scratchpad で作る
