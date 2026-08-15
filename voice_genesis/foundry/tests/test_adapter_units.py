@@ -142,6 +142,71 @@ def test_resolve_unit_to_note_compressed_truncated_for_short_target() -> None:
     assert resolved.sp.shape == (target_n_frames, n_bins)
 
 
+def _trailing_frozen_frame_count(sp: np.ndarray) -> int:
+    """`sp` 末尾から、直前フレームと完全一致するフレームが何本連続するかを
+    数える（`_force_length` の末尾フレーム複製＝凍結プラトーの直接計測）。"""
+    n = sp.shape[0]
+    if n == 0:
+        return 0
+    last = sp[-1]
+    count = 1
+    i = n - 2
+    while i >= 0 and np.array_equal(sp[i], last):
+        count += 1
+        i -= 1
+    return count
+
+
+def test_ping_pong_pad_v2_progresses_when_seg_len_le_overlap() -> None:
+    """P2 修正 (review #262 R6・`r3789428506`): `seg_len <= overlap_frames`
+    （短い unit の中央区間 <= ループ overlap 長）では、`jn.overlap_add_concat`
+    の内部クランプにより旧実装は join ごとの正味増分が 0 フレームになり、
+    何ピース足しても出力長が伸びなかった（`_force_length` の凍結補填で
+    ほぼ全区間が埋まる）。実効 overlap のクランプ（`seg_len - 1` 上限）に
+    より、`deficit` に対して十分な長さが生成されることを確認する。
+    """
+    n_bins = 3
+    seg_len = 6
+    overlap_frames = 8  # overlap_frames > seg_len（旧バグの発火条件）
+    sp = np.arange(seg_len * n_bins, dtype=np.float64).reshape(seg_len, n_bins) + 1.0
+    ap = np.full((seg_len, n_bins), 0.2)
+    deficit = 300
+
+    pad_raw_target = un._loop_pad_raw_target(seg_len, deficit, overlap_frames)
+    sp_pad, ap_pad, n_cycles = un._ping_pong_pad_v2(sp, ap, pad_raw_target, overlap_frames)
+
+    assert n_cycles > 1  # 複数ピースを積んでいる（旧バグでも n_cycles 自体は増える）
+    # 正味の出力長が deficit に対して十分（旧実装は seg_len 付近で頭打ちし、
+    # 何ピース追加しても伸びなかった）。
+    assert sp_pad.shape[0] >= deficit
+    assert ap_pad.shape[0] == sp_pad.shape[0]
+
+
+def test_resolve_unit_to_note_no_frozen_plateau_when_seg_len_le_overlap() -> None:
+    """P2 修正 (review #262 R6・`r3789428506`): 短い unit を 2 倍超で伸長し、
+    ループ中央区間（`center_hi - center_lo`）がループ overlap 長
+    （既定 8 frame=40ms/5ms）以下になるケースで、凍結補填（`_force_length` の
+    末尾フレーム複製）が高々 1 フレームに収まり、出力が往復ループの周期性を
+    保ったまま継続する（凍結プラトーへ縮退しない）ことを確認する。
+    """
+    n_bins = 4
+    sp, ap = _sp_ap_for_unit(6, n_bins, 1.0)  # unit_len=6 -> base_len=12 -> seg_len=6
+    bank = _FakeBank(sp, ap)
+    unit = _make_unit(0, 0, 6, 220.0)
+    target_n_frames = 600  # true_ratio=100 -> 2.0 キャップ -> 大幅な往復ループ延伸
+    resolved = un.resolve_unit_to_note(bank, unit, target_n_frames, frame_period_ms=5.0)
+
+    assert resolved.n_frames == target_n_frames
+    assert resolved.cap_mode == "extended_looped"
+    assert _trailing_frozen_frame_count(resolved.sp) <= 1
+
+    # 出力が往復ループの周期性を保ったまま継続していること（中盤区間が
+    # 単調な凍結値ではなく、フレーム間に有意な変化があることを見る）。
+    mid = resolved.sp[200:400]
+    interior_jumps = np.linalg.norm(np.diff(mid, axis=0), axis=1)
+    assert np.max(interior_jumps) > 0.0
+
+
 def test_resolve_unit_to_note_deterministic_repeat() -> None:
     n_bins = 4
     sp, ap = _sp_ap_for_unit(70, n_bins, 1.0)

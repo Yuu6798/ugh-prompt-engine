@@ -431,32 +431,77 @@ def _ping_pong_pad_v2(
     if len(sp_pieces) == 1:
         return sp_pieces[0], ap_pieces[0], n_cycles
     pairs = list(zip(sp_pieces, ap_pieces))
-    sp_out, ap_out, _stats = jn.overlap_add_concat(pairs, overlap_frames)
+    # P2 修正 (review #262 R6・`r3789428506`): `overlap_frames` が `seg_len` 以上
+    # だと `jn.overlap_add_concat` の内部クランプ（`ov = min(ov_req, prev_len,
+    # cur_len)`）で `ov == cur_len` となり、`sp_p[ov:]` が空になって join ごとの
+    # 正味増分が 0 フレームになる（何ピース足しても出力が伸びない）。
+    # `_loop_pad_raw_target` と同じ実効 overlap（`min(overlap_frames,
+    # seg_len - 1)`・下限 0）へクランプしてから渡し、進捗ゼロを構造的に排除する
+    # （§ `_effective_loop_overlap` docstring 参照。両関数で同一の実効値を使う
+    # ことが前提 —— ここが `_loop_pad_raw_target` の見積りとずれると、過小/過大
+    # 生成のどちらかに戻る）。
+    effective_overlap = _effective_loop_overlap(seg_len, overlap_frames)
+    sp_out, ap_out, _stats = jn.overlap_add_concat(pairs, effective_overlap)
     return sp_out, ap_out, n_cycles
+
+
+def _effective_loop_overlap(seg_len: int, overlap_frames: int) -> int:
+    """P2 修正 (review #262 R6): ループ piece 長 `seg_len` に対する実効 overlap。
+
+    `overlap_frames` をそのまま `seg_len` 以上の値で使うと、
+    `jn.overlap_add_concat` が `ov` を `cur_len`（= `seg_len`）へクランプし、
+    piece 全体がブレンド区間に飲まれて join ごとの正味増分が 0 になる
+    （`_ping_pong_pad_v2`/`_loop_pad_raw_target` 双方が影響を受ける）。
+    `seg_len - 1`（下限 0 = 非重畳連結へ縮退）へ制限し、`sp_p[ov:]` に
+    最低 1 フレームは残ることを構造的に保証する。
+    """
+    if seg_len <= 0:
+        return 0
+    return max(0, min(overlap_frames, seg_len - 1))
 
 
 def _loop_pad_raw_target(seg_len: int, deficit: int, overlap_frames: int) -> int:
     """P2 修正: 往復ループ材の overlap 損失補償。
 
-    `_ping_pong_pad_v2` はピース間 join のたびに `overlap_frames` 分だけ尺を
-    縮める（true overlap-add）。さらにその結果 (`sp_pad`) は `sp_base` との
-    base<->pad join でもう一度 `overlap_frames` 分縮む。単純に `deficit`
-    ちょうどの生ループ材を作ると、この 2 段の overlap 損失（内部 join 損失 +
-    base 接合損失）の分だけ最終出力が `target_n_frames` に届かず、呼び出し側の
-    `_force_length` が末尾フレーム複製（凍結プラトー）で不足を埋めることになる
-    （実測: 10 倍伸長で末尾 325ms が完全な静止フレームになるバグ。P2 review）。
+    `_ping_pong_pad_v2` はピース間 join のたびに実効 overlap
+    （`_effective_loop_overlap` 参照）分だけ尺を縮める（true overlap-add）。
+    さらにその結果 (`sp_pad`) は `sp_base` との base<->pad join でもう一度
+    `overlap_frames` 分縮む。単純に `deficit` ちょうどの生ループ材を作ると、
+    この 2 段の overlap 損失（内部 join 損失 + base 接合損失）の分だけ最終
+    出力が `target_n_frames` に届かず、呼び出し側の `_force_length` が末尾
+    フレーム複製（凍結プラトー）で不足を埋めることになる（実測: 10 倍伸長で
+    末尾 325ms が完全な静止フレームになるバグ。P2 review）。
 
-    ここでは `_ping_pong_pad_v2` へ渡す生（圧縮前）目標長を、内部 join 損失 +
-    base 接合損失の両方を見込んで過剰生成する（安全マージンとして 1 ピース分
-    余分に積む）。呼び出し側の `_force_length` が `n > target_len` の切り詰め
-    分岐（`x[:target_len]`）で target へトリムする（往復ループの周期性を保った
-    まま末尾側を捨てるだけなので、フリーズは発生しない）。
+    `seg_len <= overlap_frames`（短い unit を大きく伸長する場合に発生）では
+    旧実装の `max(seg_len - overlap_frames, 1)` が実際の正味増分（0 —— 上記
+    `_effective_loop_overlap` 参照）と乖離し、常に過小な `n_cycles_needed` を
+    返して凍結プラトーが再発していた（review #262 R6・`r3789428506`）。
+    `_ping_pong_pad_v2` と同じ `_effective_loop_overlap` で正味増分を見積もる
+    ことで、この場合も `net_per_cycle >= 1` が構造的に保証される。
+
+    base 接合損失は `_ping_pong_pad_v2` 内部の実効 overlap ではなく、
+    呼び出し側（`resolve_unit_to_note`）が渡す**素の** `overlap_frames`
+    そのもの（`sp_pad` は通常 `overlap_frames` より十分長いためクランプ
+    されない）。`seg_len <= overlap_frames` の場合、この base 接合損失
+    （`overlap_frames`）が旧来の安全マージン（ピース 1 個分 = `seg_len`
+    フレーム）を上回りうるため、単純な「+1 ピース」だけでは埋め合わせが
+    不足し、`_force_length` が数フレームの凍結補填を残すことがあった
+    （review #262 R6 の実測: `seg_len=6・overlap_frames=8` で 2 フレーム
+    残存）。ここでは `deficit + overlap_frames - seg_len` を正味増分で
+    ちょうど埋め合わせる周回数を求め、さらに 1 ピース分の余剰マージンを
+    積む（呼び出し側の `_force_length` が `n > target_len` の切り詰め分岐
+    （`x[:target_len]`）で target へトリムするため、生成過多は往復ループの
+    周期性を保ったまま末尾側を捨てるだけでフリーズは発生しない）。
     """
     if seg_len <= 0 or deficit <= 0:
         return deficit
-    net_per_cycle = max(seg_len - overlap_frames, 1)  # 1 ピース追加あたりの正味増分（圧縮後）
-    n_cycles_needed = -(-deficit // net_per_cycle)  # ceil division
-    return (n_cycles_needed + 1) * seg_len  # +1 ピースは base 接合損失 + 端数の安全マージン
+    effective_overlap = _effective_loop_overlap(seg_len, overlap_frames)
+    net_per_cycle = max(seg_len - effective_overlap, 1)  # 1 ピース追加あたりの正味増分（圧縮後）
+    # 内部 join 損失を吸収した後、さらに base 接合損失（overlap_frames）分の
+    # 「正味増分の積み増し」が必要（seg_len 分は最初のピースで既に確保済み）。
+    needed_extra = deficit + overlap_frames - seg_len
+    n_cycles_needed = -(-needed_extra // net_per_cycle) if needed_extra > 0 else 0  # ceil division
+    return (n_cycles_needed + 2) * seg_len  # 初期 1 ピース + 端数/base 接合の安全マージン 1 ピース
 
 
 def _force_length(x: np.ndarray, target_len: int) -> np.ndarray:

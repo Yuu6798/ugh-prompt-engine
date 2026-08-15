@@ -594,6 +594,79 @@ def test_validate_spec_donor_committed_presets_match_real_assets_if_present() ->
 
 
 # ---------------------------------------------------------------------------
+# P2 修正 (review #262 R6・`r3789428504`): bank 構築完了後の post-build
+# revalidation（`_validate_spec_donor` 単体の TOCTOU 検知力は上の swap テスト
+# 群で確認済み。ここでは render() が実際に bank 構築後にもう一度呼ぶ配線を
+# 直接検証する）。
+# ---------------------------------------------------------------------------
+
+
+def test_render_ritsu_revalidates_donor_provenance_after_bank_build(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`_validate_spec_donor` の初回呼び出し（重い WORLD 分析より前の
+    fail-fast）と実際の bank 構築 read の間に voicebank が書き換わる TOCTOU
+    窓を、post-build revalidation が検出することを render() 全体の配線として
+    確認する。
+
+    `dbu.build_donor_bank_utau_vcv`（実際の bank 構築本体）を軽量スタブへ
+    差し替え、その副作用として oto.ini を書き換える（bank 構築「中」に
+    voicebank が変化する状況を模す）。post-build revalidation が配線されて
+    いなければ、この変化は検出されないまま render() がそのまま（この後の
+    重い WORLD 合成へ）進んでしまう。
+    """
+    root = tmp_path / "voicebank"
+    _write_minimal_oto(root / "A3")
+    pinned_sha, _pitch_dirs = dbu.voicebank_identity_hash(root)
+    spec = _spec_with_donor({"dataset": "ritsu", "voicebank_sha256": pinned_sha})
+    spec_path = tmp_path / "spec.json"
+    vs.save_voice_spec(spec, spec_path)
+
+    def _tampering_build_stub(voicebank_root, cache_dir=None, required_contexts=None):
+        oto_path = Path(voicebank_root) / "A3" / "oto.ini"
+        oto_path.write_bytes(oto_path.read_bytes() + b"tampered=x,0,0,0,0,0\n")
+        return None, {}, {}  # bank/unit_contexts/donor_extra_stats（値は未使用まで到達しない）
+
+    monkeypatch.setattr(rd.dbu, "build_donor_bank_utau_vcv", _tampering_build_stub)
+
+    with pytest.raises(rd.DonorProvenanceError):
+        rd.render("sakura", spec_path, donor="ritsu", voicebank_root=root)
+
+
+def test_render_ritsu_no_revalidation_error_when_voicebank_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """対照ケース: bank 構築中に voicebank が変化しなければ post-build
+    revalidation は通過する（誤検知しないことの確認）。build スタブは
+    tamper なしで即座に戻り、その直後（`db.normalize_unit_energy` 呼び出し
+    直前）に配線された revalidation を通過した先で sentinel 例外を送出する
+    `normalize_unit_energy` スタブに到達することで、間に挟まる revalidation
+    が `DonorProvenanceError` を出していないことを直接確認する。
+    """
+    root = tmp_path / "voicebank"
+    _write_minimal_oto(root / "A3")
+    pinned_sha, _pitch_dirs = dbu.voicebank_identity_hash(root)
+    spec = _spec_with_donor({"dataset": "ritsu", "voicebank_sha256": pinned_sha})
+    spec_path = tmp_path / "spec.json"
+    vs.save_voice_spec(spec, spec_path)
+
+    class _ReachedPastRevalidation(Exception):
+        pass
+
+    def _untampered_build_stub(voicebank_root, cache_dir=None, required_contexts=None):
+        return None, {}, {}  # tamper なし
+
+    def _sentinel_normalize(bank):
+        raise _ReachedPastRevalidation("normalize_unit_energy reached without DonorProvenanceError")
+
+    monkeypatch.setattr(rd.dbu, "build_donor_bank_utau_vcv", _untampered_build_stub)
+    monkeypatch.setattr(rd.db, "normalize_unit_energy", _sentinel_normalize)
+
+    with pytest.raises(_ReachedPastRevalidation):
+        rd.render("sakura", spec_path, donor="ritsu", voicebank_root=root)
+
+
+# ---------------------------------------------------------------------------
 # P1 修正 (review #262 R2): --out の保護入力衝突拒否（fail-closed）
 # ---------------------------------------------------------------------------
 

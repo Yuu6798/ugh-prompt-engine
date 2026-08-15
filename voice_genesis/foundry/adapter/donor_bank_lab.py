@@ -312,6 +312,25 @@ def build_donor_bank_lab(
     selected_paths, selection_stats, lab_bytes_by_path = _select_lab_files(
         lab_paths, REQUIRED_ONSETS, min_files, max_files
     )
+    # P2 修正 (review #262 R6・`r3789428508`): 選択済み .lab に対応する
+    # `_song.wav` が欠けている場合は fail-closed で拒否する。旧実装は後段の
+    # 分析ループで黙って skip（`if wav_bytes is None: continue`）しつつ、
+    # `selection_stats`（coverage 報告）と `stats["n_files_analyzed"]
+    # =len(selected_paths)` は選択段の値をそのまま使い続けるため、実際には
+    # 分析されなかった .lab の音素被覆・ファイル数を「達成済み」として偽って
+    # 報告していた（部分的にしかコピーされていないコーパスで render が
+    # 「録音済みカバレッジあり」と偽装したまま synthetic フォールバックへ
+    # 静かに縮退しうる実害）。
+    missing_wav = [
+        str((p.parent / f"{p.stem}_song.wav").relative_to(root))
+        for p in selected_paths
+        if not (p.parent / f"{p.stem}_song.wav").exists()
+    ]
+    if missing_wav:
+        raise FileNotFoundError(
+            "selected PJS .lab files are missing their paired _song.wav "
+            f"(partial corpus under {root}?): {missing_wav}"
+        )
     # P2 修正 (review #262 R3・R5): 選択された .lab / _song.wav を「1 回 read
     # したバイト列から hash と decode/parse の両方を導出」する形に統一する
     # （measure_bands.py R1 修正・donor_bank_utau.py 同種修正と同じ流儀）。
@@ -327,10 +346,11 @@ def build_donor_bank_lab(
         rel_lab = str(lab_path.relative_to(root))
         content_hashes.append((rel_lab, hashlib.sha256(lab_bytes).hexdigest()))
         wav_path = lab_path.parent / f"{lab_path.stem}_song.wav"
-        if wav_path.exists():
-            wav_bytes = wav_path.read_bytes()
-            wav_bytes_by_lab[lab_path] = wav_bytes
-            content_hashes.append((str(wav_path.relative_to(root)), hashlib.sha256(wav_bytes).hexdigest()))
+        # fail-closed 検査（上）で選択済み .lab は全て対応 wav が存在すると
+        # 確認済みのため、ここでは無条件に read する（黙って skip しない）。
+        wav_bytes = wav_path.read_bytes()
+        wav_bytes_by_lab[lab_path] = wav_bytes
+        content_hashes.append((str(wav_path.relative_to(root)), hashlib.sha256(wav_bytes).hexdigest()))
     # P2 修正 (review #262 R2): (相対パス, sha256) ペアで集約する
     # （§ donor_bank_utau.py と同じ理由・同じ是正）。
     content_digest = aggregate_content_hash(content_hashes)

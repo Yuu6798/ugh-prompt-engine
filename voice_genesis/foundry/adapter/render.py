@@ -96,6 +96,14 @@ def _validate_spec_donor(
     ハッシュ不一致のいずれかで即座に `DonorProvenanceError` を送出する
     （AGENTS.md L465-468 参照。実データ分析より前段で検証するため、無関係な
     入力での無駄な WORLD 分析も防ぐ）。一致時は record 用の照合結果 dict を返す。
+
+    冪等（同一ファイル状態なら何度呼んでも同じ結果）なため、`render()` は本
+    関数を 2 回呼ぶ（review #262 R6 修正）: ①WORLD 分析より前の fail-fast、
+    ②bank 構築完了後・成果物公開前の post-build revalidation（この 2 回目が
+    ①と bank 構築本体の read との間の TOCTOU 窓を閉じる。`voicebank_identity_hash`/
+    `corpus_identity_hash`/`sha256_of` はいずれもキャッシュを介さず毎回
+    ディスクを直接再走査するため、bank 構築が cache hit だった場合でも
+    2 回目の呼び出しが独立した鮮度検証になる）。
     """
     declared = dict(spec.donor)
     declared_dataset = declared.get("dataset")
@@ -464,6 +472,10 @@ def render(
     spec = vs.load_voice_spec(voice_spec_path)
     # P1 修正 (review #262 R2): 重い WORLD 分析より前に spec.donor の provenance
     # を fail-closed で検証する（§ _validate_spec_donor docstring 参照）。
+    # R6 修正: bank 構築完了後にもう一度 `_validate_spec_donor` を呼ぶ
+    # （post-build revalidation・§ bank 構築直後のコメント参照）ため、
+    # ここでの呼び出しは「無関係な入力での無駄な WORLD 分析を防ぐ fail-fast」
+    # の役割に限定される。
     donor_provenance = _validate_spec_donor(spec, donor, wav_path, voicebank_root)
     notes, tempo_bpm = build_score(score_name)
     segments, total_samples = perf.build_timeline(notes, sr=SR, tempo_bpm=tempo_bpm)
@@ -523,6 +535,20 @@ def render(
         bank, unit_vowel_labels, consonant_clips, donor_extra_stats = dbl.build_donor_bank_lab(
             voicebank_root, target_median_hz=target_median_hz, cache_dir=cache_dir
         )
+
+    # P2 修正 (review #262 R6・`r3789428504`): bank 構築完了後・成果物公開前に
+    # provenance を再照合する（post-build revalidation）。`_validate_spec_donor`
+    # 冒頭の検証（重い WORLD 分析より前の fail-fast）と builder 内部の実際の
+    # read（bank 構築）は別読みであるため、その間に入力ファイルが書き換われば
+    # 「spec 一致の provenance を返しつつ別バイトを分析」しうる（TOCTOU）。
+    # ここで同じ検証をもう一度実行し、bank 構築時点までの間に対象ファイルが
+    # 変化していないことを確認する（identity hash が変化 = 不一致で
+    # `DonorProvenanceError`・fail-closed）。cache-hit 経路でも
+    # `voicebank_identity_hash`/`corpus_identity_hash`（vocadito は
+    # `sha256_of`）はキャッシュに依存せず毎回ディスクを直接再走査するため、
+    # bank 構築が pickle 復元だった場合でも同じ強度で検証できる。以降で使う
+    # `donor_provenance` はこの再検証後の値（分析直後の状態を反映）で上書きする。
+    donor_provenance = _validate_spec_donor(spec, donor, wav_path, voicebank_root)
 
     # 追補 F1.3-B item1: unit の収録時レベルを除去する（母音核区間の平均パワーで
     # sp を正規化）。ドナー種別を問わず一律に適用（DonorBank は 3 ドナー共通の

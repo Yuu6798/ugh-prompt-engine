@@ -195,6 +195,36 @@ def test_build_donor_bank_lab_end_to_end(tmp_path: Path) -> None:
     assert unit_vowels == unit_vowels2
 
 
+def test_build_donor_bank_lab_missing_paired_wav_fails_closed(tmp_path: Path) -> None:
+    """P2 修正 (review #262 R6・`r3789428508`): 選択済み .lab に対応する
+    `_song.wav` が欠けている partial corpus（wav が 1 本だけコピーされて
+    いない）は黙って skip せず fail-closed で拒否する。旧実装は分析ループで
+    `if wav_bytes is None: continue` により静かに skip しつつ、
+    `selection_stats`（coverage 報告）と `stats["n_files_analyzed"]
+    =len(selected_paths)` は選択段の値をそのまま使い続けるため、実際には
+    分析されなかった .lab の音素被覆・ファイル数を「達成済み」として偽って
+    報告していた。
+    """
+    root = tmp_path / "pjs_corpus"
+    d1 = root / "pjs001"
+    d1.mkdir(parents=True)
+    _write_sine_wav(d1 / "pjs001_song.wav", duration_s=1.0)
+    (d1 / "pjs001.lab").write_text("0 3000000 pau\n3000000 4000000 s\n4000000 9000000 o\n")
+
+    d2 = root / "pjs002"
+    d2.mkdir(parents=True)
+    # 対応する _song.wav を意図的に作らない（partial corpus: 1 本だけ wav が
+    # 欠損している状況を模す）。
+    (d2 / "pjs002.lab").write_text("0 3000000 pau\n3000000 4000000 k\n4000000 9000000 a\n")
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        dbl.build_donor_bank_lab(root, target_median_hz=260.0, min_files=2, max_files=5)
+    msg = str(excinfo.value)
+    # 欠損ペアの列挙（どの .lab/wav が欠けているか）がエラーメッセージに含まれる。
+    assert "pjs002_song.wav" in msg
+    assert "pjs001" not in msg  # 欠けていないファイルは列挙されない
+
+
 def test_build_donor_bank_lab_cache_roundtrip(tmp_path: Path) -> None:
     root = tmp_path / "pjs_corpus"
     d = root / "pjs001"
