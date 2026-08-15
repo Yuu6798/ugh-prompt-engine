@@ -206,3 +206,35 @@ singer/ S6–S9 の耳検証済みレシピを WORLD パラメータ領域へ移
 - [ ] ruff / foundry テスト / singer 38 本非破壊
 - [ ] identity 留意（リツ = 既知キャラ声 → Genome 変形最低量の適用対象）を record に明記
 - [ ] 耳判定素材提出（質問: 日本語発声ゲートを通ったか）
+
+---
+
+## 追補 F1.3 — 接合の規律（2026-08-15・F1.2 耳判定「息の切れ方・つなぎ方が粗い」を受けて）
+
+背景 = `results_f1_2/f1_2_record_2026-08-15.md` 耳判定節。言語軸（リツ最良）と
+滑らかさ軸（vocadito 最良）が独立実証された。F1.3 はリツ経路の滑らかさ回復。
+
+### F1.3-A oto overlap 準拠の true overlap-add 接合（joins.py v2）
+
+1. donor_bank_utau の unit に oto.ini の overlap / preutterance をフレーム単位で保持
+   させ（スキーマ拡張）、隣接 unit の接合を **oto 指定の overlap 区間での
+   true overlap-add**（WORLD パラメータ領域: log-sp / ap クロスフェード・タイムラインは
+   overlap 分だけ重ねる = 単側ブレンド廃止）に置き換える
+2. oto 情報を持たない銀行（vocadito / pjs）は固定 40ms の true overlap-add へ統一
+3. 長音ループ（往復）境界にも同じ overlap-add を適用（現行の硬い折り返しを廃止）
+
+### F1.3-B unit エネルギー正規化 + フレーズ呼吸ダイナミクス
+
+1. 各 unit の収録時レベルを除去: 母音核区間の平均パワーで sp を正規化
+   （収録包絡の持ち込みが「息の切れ」の主因）
+2. 振幅の唯一の権威 = performance.build_amplitude_envelope（フレーズアーチ）+
+   perf_genes。unit 由来の振幅は spectral 形状のみに縮退させる
+3. 正規化前後の unit 間レベル分散を record に記録（効果の定量・最適化には使わない）
+
+### F1.3 Acceptance
+
+- [ ] 接合部のタイムライン整合（overlap 重なり分の総尺補正）を決定論テストで enforce
+- [ ] 合成 unit での接合エネルギー連続性テスト（境界跳び ≤ 内部分布、overlap-add 版）
+- [ ] sakura / umi × ritsu の F1.3 版 WAV + bit 一致・F1.2 版と sha 差分記録
+- [ ] 耳判定 A/B 素材: F1.3 リツ vs F1.2 リツ vs vocadito 基準線
+- [ ] ruff / foundry テスト全 green / singer 38 本非破壊
