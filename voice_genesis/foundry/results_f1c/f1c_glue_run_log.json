@@ -1,0 +1,90 @@
+{
+  "log": [
+    "donor loaded: 844993 samples @ 24000Hz (35.208s), resampled from 44100Hz via resample_poly(80/147)",
+    "donor wav sha256=8dcc99c3b08a9a5800b793e3d65cccfb4464961f15cf8ccde25bd4c8b853d519",
+    "donor WORLD analysis: n_frames=7042 voiced_frames=5863 (0.8326) frame_period=5.0ms",
+    "note track vib0 loaded: total_samples=590000 (24.583s) voiced_frac=0.9492",
+    "note track vib30 loaded: voiced_frac=0.9492",
+    "n_target_frames=4917 (== window length in donor frames, no time-stretch)",
+    "window search: 22 candidates @ step=0.5s (offsets 0.0s..10.5s)",
+    "window W selected: start_frame=1900 start_sec=9.500s voiced_ratio=0.8589 (max among candidates)",
+    "top5 candidate windows (start_sec, voiced_ratio): [(9.5, 0.858857), (10.0, 0.85845), (10.5, 0.850315), (0.5, 0.845231), (9.0, 0.844621)]",
+    "macro pitch: moving median window=41 frames (205ms), gap-bridge threshold=60 frames (300ms)",
+    "gap stats in window W: n_gaps=10 lengths_frames=[142, 112, 124, 2, 9, 156, 4, 18, 11, 116] n_long_gap_frames(edge-hold, > threshold)=650",
+    "micro_cents: computed at 4223 donor-voiced frames, clipped(+-150.0c) triggered on 58 frames (0.0137)",
+    "note track (vib0) zero-hold: n_zero_samples_globally=30000 (0.0508 of samples). At donor-voiced frames landing inside a sakura breath (note_hz==0, held): n=204/4223 (0.0483) -> policy: donor voice is allowed through on held note_hz (per brief)",
+    "note track (vib30) for robotf0: at donor-voiced frames where the vib30 track itself is 0 (inside a sakura breath, NOT held per brief): n=204/4223 (0.0483) -> those frames synthesize as f0=0 despite donor voicing (recorded, not corrected)",
+    "wrote f1c_roundtrip.wav: 590040 samples (24.585s), window's own f0/sp/ap, no modification, peak-norm 0.6",
+    "wrote f1c_transplant.wav: 590040 samples (24.585s), f0=note_hz(vib0,ffilled)*2^(micro_cents/1200) at donor-voiced frames, f0=0 at donor-unvoiced frames, window's own sp/ap unmodified, peak-norm 0.6",
+    "wrote f1c_robotf0.wav: 590040 samples (24.585s), f0=note_hz(vib30, unheld) at donor-voiced frames, f0=0 at donor-unvoiced frames (and at donor-voiced frames landing in a sakura breath, see above), window's own sp/ap unmodified, peak-norm 0.6",
+    "(i) transplant f0 deviation from note track (cents, clipped +-150.0): median=0.00 abs_median=4.61 abs_p90=38.32 range=[-150.00, 150.00]"
+  ],
+  "window": {
+    "start_frame": 1900,
+    "start_sec": 9.5,
+    "voiced_ratio": 0.8588570266422615,
+    "n_target_frames": 4917,
+    "top5_candidates": [
+      {
+        "start_frame": 1900,
+        "start_sec": 9.5,
+        "voiced_ratio": 0.858857
+      },
+      {
+        "start_frame": 2000,
+        "start_sec": 10.0,
+        "voiced_ratio": 0.85845
+      },
+      {
+        "start_frame": 2100,
+        "start_sec": 10.5,
+        "voiced_ratio": 0.850315
+      },
+      {
+        "start_frame": 100,
+        "start_sec": 0.5,
+        "voiced_ratio": 0.845231
+      },
+      {
+        "start_frame": 1800,
+        "start_sec": 9.0,
+        "voiced_ratio": 0.844621
+      }
+    ]
+  },
+  "gap_stats": {
+    "n_gaps": 10,
+    "gap_lengths": [
+      142,
+      112,
+      124,
+      2,
+      9,
+      156,
+      4,
+      18,
+      11,
+      116
+    ],
+    "max_gap_frames_threshold": 60,
+    "n_long_gap_frames": 650
+  },
+  "micro_cents_clip_stats": {
+    "n_donor_voiced": 4223,
+    "n_clipped": 58
+  },
+  "note_track_zero_hold": {
+    "n_held_samples_global": 30000,
+    "n_frames_in_breath_gate_transplant": 204,
+    "n_frames_zero_gap_robotf0": 204
+  },
+  "f1c_i_transplant_f0_deviation_cents": {
+    "n_donor_voiced_frames": 4223,
+    "deviation_cents_median": 0.0,
+    "deviation_cents_abs_median": 4.611002993344851,
+    "deviation_cents_abs_p90": 38.32056866800624,
+    "deviation_cents_min": -150.0,
+    "deviation_cents_max": 150.0,
+    "clip_trigger_rate": 0.013734312100402558
+  }
+}
