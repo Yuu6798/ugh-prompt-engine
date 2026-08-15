@@ -41,6 +41,14 @@ class NotePlacement:
     # None = oto overlap 情報なし（assemble_v2 が DEFAULT_OVERLAP_MS へフォールバック）。
     # v1 の `assemble` はこのフィールドを無視する（後方互換）。
     overlap_frames: Optional[int] = None
+    # P1 修正 (review #262 R2): この note 自身の oto preutterance（フレーム）。
+    # None = 情報なし（vocadito/pjs。後方互換で追加トリム無し）。VCV unit
+    # （donor_bank_utau）のみ実値を設定する。`assemble_v2` / `assemble_control_tracks_v2`
+    # が「preutterance_frames - 実効 overlap_frames」だけ直前 note の末尾を
+    # 追加でハードトリムする際に使う（overlap のブレンド幅そのものは変えず、
+    # ブレンドに入る前のアキュムレータだけ先に削る = preutterance 点が
+    # 名目上のビート位置へ正しく整列する。§ render.py `_build_vcv_placements` 参照）。
+    preutterance_frames: Optional[int] = None
 
 
 def _carry_forward_gaps(
@@ -119,7 +127,9 @@ def assemble(
 
 
 def overlap_add_concat(
-    pieces: Sequence[Tuple[np.ndarray, np.ndarray]], overlap_frames: "int | Sequence[int]"
+    pieces: Sequence[Tuple[np.ndarray, np.ndarray]],
+    overlap_frames: "int | Sequence[int]",
+    extra_trim_frames: "int | Sequence[int] | None" = None,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """(sp, ap) ペアの列を true overlap-add で連結する（汎用ヘルパー）。
 
@@ -131,10 +141,18 @@ def overlap_add_concat(
     なる（真の overlap-add。単側ブレンドとは異なり切り詰めが発生する）。
     `units.py` のループ境界 overlap-add と `joins.assemble_v2` の両方から使う
     共通実装。
+
+    `extra_trim_frames`（P1 修正 review #262 R2）: 各 join の直前に、ブレンドとは
+    別に直前アキュムレータ末尾を追加でハードトリムするフレーム数（int なら全 join
+    共通、Sequence なら join 別値、None/省略 = 全 join 0 = 従来どおり）。
+    `joins.assemble_v2` が VCV unit の preutterance 消費（overlap だけでは
+    consume しきれない「preutterance - overlap」分の直前 note 末尾）に使う
+    （ブレンド幅=overlap は変えず、ブレンド開始点だけ前へ動かす）。
     """
     if not pieces:
         return np.zeros((0, 0)), np.zeros((0, 0)), dict(
-            n_joins_applied=0, n_joins_skipped_short=0, overlap_frames_applied=[]
+            n_joins_applied=0, n_joins_skipped_short=0, overlap_frames_applied=[],
+            n_extra_trim_frames_applied=0,
         )
     n_joins = len(pieces) - 1
     if isinstance(overlap_frames, int):
@@ -143,14 +161,29 @@ def overlap_add_concat(
         overlaps = list(overlap_frames)
         if len(overlaps) != n_joins:
             raise ValueError(f"overlap_frames の長さ {len(overlaps)} != n_joins {n_joins}")
+    if extra_trim_frames is None:
+        trims = [0] * n_joins
+    elif isinstance(extra_trim_frames, int):
+        trims = [extra_trim_frames] * n_joins
+    else:
+        trims = list(extra_trim_frames)
+        if len(trims) != n_joins:
+            raise ValueError(f"extra_trim_frames の長さ {len(trims)} != n_joins {n_joins}")
 
     sp_acc, ap_acc = pieces[0][0].copy(), pieces[0][1].copy()
     n_joins_applied = 0
     n_joins_skipped_short = 0
     overlaps_applied: List[int] = []
+    n_extra_trim_frames_applied = 0
 
-    for (sp_p, ap_p), ov_req in zip(pieces[1:], overlaps):
+    for (sp_p, ap_p), ov_req, trim_req in zip(pieces[1:], overlaps, trims):
         prev_len = sp_acc.shape[0]
+        trim = max(0, min(trim_req, prev_len))
+        if trim > 0:
+            sp_acc = sp_acc[:-trim]
+            ap_acc = ap_acc[:-trim]
+            n_extra_trim_frames_applied += trim
+            prev_len -= trim
         cur_len = sp_p.shape[0]
         ov = min(max(ov_req, 0), prev_len, cur_len)
         if ov < 2:
@@ -172,12 +205,28 @@ def overlap_add_concat(
         n_joins_applied=n_joins_applied,
         n_joins_skipped_short=n_joins_skipped_short,
         overlap_frames_applied=overlaps_applied,
+        n_extra_trim_frames_applied=n_extra_trim_frames_applied,
     )
     return sp_acc, ap_acc, stats
 
 
 def _resolve_join_overlap(requested: Optional[int], default_frames: int) -> int:
     return requested if requested is not None and requested >= 0 else default_frames
+
+
+def _resolve_extra_trim(preutterance_frames: Optional[int], resolved_overlap_frames: int) -> int:
+    """P1 修正 (review #262 R2): join の追加ハードトリム量。
+
+    `preutterance_frames` が無い unit（vocadito/pjs）は常に 0（従来どおり
+    overlap のみで接合・後方互換）。VCV unit で `preutterance_frames` が
+    `resolved_overlap_frames`（実効 overlap）を上回る分だけ、ブレンド幅とは
+    別に直前アキュムレータ末尾を追加でハードトリムする（overlap のみ消費する
+    従来実装は preutterance 点が `preutterance_frames - overlap_frames` だけ
+    名目ビートより遅延していた = review #262 R2 P1 指摘）。
+    """
+    if preutterance_frames is None:
+        return 0
+    return max(0, preutterance_frames - resolved_overlap_frames)
 
 
 def compute_runs(placements: Sequence[NotePlacement]) -> List[List[int]]:
@@ -247,7 +296,16 @@ def assemble_control_tracks_v2(
         join_overlaps = [
             _resolve_join_overlap(placements[i].overlap_frames, default_overlap_frames) for i in run[1:]
         ]
-        primary_block2d, secondary_block2d, _run_stats = overlap_add_concat(pieces, join_overlaps)
+        # P1 修正 (review #262 R2): sp/ap（assemble_v2）と全く同じ extra_trim を
+        # 適用する（preutterance 消費で run 内総尺が変わるため、f0/振幅トラックの
+        # フレーム数を sp/ap と厳密一致させるには同じトリム量が必須）。
+        join_extra_trims = [
+            _resolve_extra_trim(placements[i].preutterance_frames, ov)
+            for i, ov in zip(run[1:], join_overlaps)
+        ]
+        primary_block2d, secondary_block2d, _run_stats = overlap_add_concat(
+            pieces, join_overlaps, join_extra_trims
+        )
         primary_block = primary_block2d[:, 0]
         secondary_block = secondary_block2d[:, 0]
 
@@ -287,13 +345,24 @@ def assemble_v2(
     直前の有効フレームで carry-forward する。overlap 長は
     `placements[i].overlap_frames`（選択された donor unit の oto overlap）を
     優先し、None なら `default_overlap_ms`（固定 40ms）を使う。
+
+    P1 修正 (review #262 R2): `placements[i].preutterance_frames` が設定されて
+    いる場合（VCV unit）、overlap のブレンド幅そのものは変えず、ブレンド開始点の
+    直前に `preutterance_frames - 実効overlap_frames` フレーム分だけ直前
+    アキュムレータ末尾を追加でハードトリムする（`_resolve_extra_trim` /
+    `overlap_add_concat` の `extra_trim_frames`）。これにより unit 自身の
+    preutterance フレーム（真の母音アタック点）が、直前 note までの累積長
+    （= 名目上のビート位置）にちょうど整列する（従来は overlap のみ消費して
+    いたため `preutterance_frames - overlap_frames` 分だけ名目ビートより遅延
+    していた）。`preutterance_frames=None`（vocadito/pjs）は常に trim=0 で
+    従来どおり不変。
     """
     if not placements:
         return np.zeros((0, n_bins)), np.zeros((0, n_bins)), dict(
             n_joins_applied=0, n_joins_skipped_short=0, n_gap_frames=0,
             n_placements=0, overlap_frames_applied=[], overlap_frames_mean=0.0,
             default_overlap_frames=max(1, int(round(default_overlap_ms / frame_period_ms))),
-            n_runs=0, n_total_frames=0,
+            n_runs=0, n_total_frames=0, n_extra_trim_frames_applied=0,
         )
 
     default_overlap_frames = max(1, int(round(default_overlap_ms / frame_period_ms)))
@@ -303,6 +372,7 @@ def assemble_v2(
     n_joins_applied = 0
     n_joins_skipped_short = 0
     overlaps_applied: List[int] = []
+    n_extra_trim_frames_applied = 0
     run_blocks: List[Tuple[np.ndarray, np.ndarray]] = []
 
     for run in runs:
@@ -310,11 +380,16 @@ def assemble_v2(
         join_overlaps = [
             _resolve_join_overlap(placements[i].overlap_frames, default_overlap_frames) for i in run[1:]
         ]
-        sp_block, ap_block, run_stats = overlap_add_concat(pieces, join_overlaps)
+        join_extra_trims = [
+            _resolve_extra_trim(placements[i].preutterance_frames, ov)
+            for i, ov in zip(run[1:], join_overlaps)
+        ]
+        sp_block, ap_block, run_stats = overlap_add_concat(pieces, join_overlaps, join_extra_trims)
         run_blocks.append((sp_block, ap_block))
         n_joins_applied += run_stats["n_joins_applied"]
         n_joins_skipped_short += run_stats["n_joins_skipped_short"]
         overlaps_applied.extend(run_stats["overlap_frames_applied"])
+        n_extra_trim_frames_applied += run_stats["n_extra_trim_frames_applied"]
 
     sp_chunks: List[np.ndarray] = []
     ap_chunks: List[np.ndarray] = []
@@ -355,5 +430,6 @@ def assemble_v2(
         overlap_frames_mean=float(np.mean(overlaps_applied)) if overlaps_applied else 0.0,
         default_overlap_frames=default_overlap_frames,
         n_total_frames=int(sp_seq.shape[0]),
+        n_extra_trim_frames_applied=n_extra_trim_frames_applied,
     )
     return sp_seq, ap_seq, stats

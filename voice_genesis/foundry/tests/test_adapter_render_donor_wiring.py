@@ -4,16 +4,21 @@
 """
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
 import numpy as np
+import pytest
+import soundfile as sf
 
+import donor_bank_lab as dbl
 import donor_bank_utau as dbu
 import render as rd
 import units as un
+import voice_spec as vs
 
 
 def _resolved(n_frames: int, n_bins: int = 8, fill: float = 1.0) -> un.ResolvedSegment:
@@ -192,6 +197,10 @@ def test_build_vcv_placements_mid_phrase_note_start_unshifted() -> None:
     assert placements[1].start_frame == resolved_list[0].n_frames  # cursor そのまま（シフト無し）
     assert placements[1].has_join_to_prev is True
     assert placements[1].overlap_frames == 4
+    # P1 修正 (review #262 R2): mid-phrase note の preutterance_frames は
+    # joins.assemble_v2 側の追加トリム（_resolve_extra_trim）で消費するために
+    # NotePlacement へそのまま渡す。
+    assert placements[1].preutterance_frames == 30
 
 
 def test_build_vcv_placements_end_frame_unaffected_by_shift() -> None:
@@ -275,3 +284,220 @@ def test_note_frame_track_zero_n_frames_returns_empty() -> None:
     seg = _MiniSeg(start_sample=0)
     track = rd._note_frame_track(np.arange(10.0), seg, note_dur_frames=4, n_frames=0, sr=24000, frame_period_ms=5.0)
     assert track.shape == (0,)
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #262 R2): spec.donor の provenance 照合（fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def _spec_with_donor(donor: dict) -> vs.FoundryVoiceSpec:
+    return vs.FoundryVoiceSpec(schema=vs.SCHEMA, donor=donor, warp={}, perf={}, seed=1)
+
+
+def test_validate_spec_donor_vocadito_matching_hash_passes(tmp_path: Path) -> None:
+    wav_path = tmp_path / "donor.wav"
+    wav_path.write_bytes(b"not a real wav, only hashed as bytes")
+    sha = hashlib.sha256(wav_path.read_bytes()).hexdigest()
+    spec = _spec_with_donor({"dataset": "vocadito", "clip": 2, "sha256": sha})
+    result = rd._validate_spec_donor(spec, "vocadito", wav_path, None)
+    assert result["dataset"] == "vocadito"
+    assert result["actual_sha256"] == sha
+
+
+def test_validate_spec_donor_vocadito_hash_mismatch_raises(tmp_path: Path) -> None:
+    wav_path = tmp_path / "donor.wav"
+    wav_path.write_bytes(b"actual donor bytes")
+    spec = _spec_with_donor({"dataset": "vocadito", "clip": 2, "sha256": "0" * 64})
+    with pytest.raises(rd.DonorProvenanceError):
+        rd._validate_spec_donor(spec, "vocadito", wav_path, None)
+
+
+def test_validate_spec_donor_dataset_mismatch_raises(tmp_path: Path) -> None:
+    """spec.donor.dataset='vocadito' のまま --donor=ritsu で render しようとする
+    ケース（review #262 R2 P1 の core scenario: 委員会 spec を無関係な
+    --voicebank-root と組み合わせて provenance を偽装できた）。"""
+    wav_path = tmp_path / "donor.wav"
+    wav_path.write_bytes(b"x")
+    sha = hashlib.sha256(wav_path.read_bytes()).hexdigest()
+    spec = _spec_with_donor({"dataset": "vocadito", "clip": 2, "sha256": sha})
+    with pytest.raises(rd.DonorProvenanceError):
+        rd._validate_spec_donor(spec, "ritsu", None, tmp_path)
+
+
+def _write_minimal_oto(pdir: Path, wav_filename: str = "_test.wav") -> None:
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "oto.ini").write_bytes(f"{wav_filename}=- あ{pdir.name},0,80,900,40,10\n".encode("cp932"))
+
+
+def test_validate_spec_donor_ritsu_matching_hash_passes(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    _write_minimal_oto(root / "A3")
+    _write_minimal_oto(root / "F4")
+    actual_sha, _pitch_dirs = dbu.voicebank_identity_hash(root)
+    spec = _spec_with_donor({"dataset": "ritsu", "voicebank_sha256": actual_sha})
+    result = rd._validate_spec_donor(spec, "ritsu", None, root)
+    assert result["dataset"] == "ritsu"
+    assert result["actual_sha256"] == actual_sha
+
+
+def test_validate_spec_donor_ritsu_hash_mismatch_raises(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    _write_minimal_oto(root / "A3")
+    spec = _spec_with_donor({"dataset": "ritsu", "voicebank_sha256": "0" * 64})
+    with pytest.raises(rd.DonorProvenanceError):
+        rd._validate_spec_donor(spec, "ritsu", None, root)
+
+
+def test_validate_spec_donor_ritsu_missing_hash_key_raises(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    _write_minimal_oto(root / "A3")
+    spec = _spec_with_donor({"dataset": "ritsu"})  # voicebank_sha256 欠落
+    with pytest.raises(rd.DonorProvenanceError):
+        rd._validate_spec_donor(spec, "ritsu", None, root)
+
+
+def _write_minimal_pjs_lab(root: Path, name: str) -> None:
+    pdir = root / name
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / f"{name}.lab").write_text("0 1000000 pau\n1000000 2000000 a\n2000000 3000000 pau\n")
+
+
+def test_validate_spec_donor_pjs_matching_hash_passes(tmp_path: Path) -> None:
+    root = tmp_path / "pjs_corpus"
+    _write_minimal_pjs_lab(root, "pjs001")
+    _write_minimal_pjs_lab(root, "pjs002")
+    actual_sha = dbl.corpus_identity_hash(root)
+    spec = _spec_with_donor({"dataset": "pjs", "corpus_sha256": actual_sha})
+    result = rd._validate_spec_donor(spec, "pjs", None, root)
+    assert result["dataset"] == "pjs"
+    assert result["actual_sha256"] == actual_sha
+
+
+def test_validate_spec_donor_pjs_hash_mismatch_raises(tmp_path: Path) -> None:
+    root = tmp_path / "pjs_corpus"
+    _write_minimal_pjs_lab(root, "pjs001")
+    spec = _spec_with_donor({"dataset": "pjs", "corpus_sha256": "f" * 64})
+    with pytest.raises(rd.DonorProvenanceError):
+        rd._validate_spec_donor(spec, "pjs", None, root)
+
+
+def test_validate_spec_donor_committed_presets_match_real_assets_if_present() -> None:
+    """presets/{neutral,warped,ritsu_neutral,pjs_neutral}.json の donor 宣言は
+    それぞれが依拠するデータセットの pin。ここではスキーマ形状のみ検証する
+    （実データ（vocadito/ritsu/pjs）は非コミット・実体照合は環境依存のため
+    対象外 — 実体照合ロジック自体は上記の合成 fixture テストで検証済み）。
+    """
+    presets_dir = Path(__file__).resolve().parent.parent / "adapter" / "presets"
+    expectations = {
+        "neutral.json": ("vocadito", "sha256"),
+        "warped.json": ("vocadito", "sha256"),
+        "ritsu_neutral.json": ("ritsu", "voicebank_sha256"),
+        "pjs_neutral.json": ("pjs", "corpus_sha256"),
+    }
+    for filename, (dataset, hash_key) in expectations.items():
+        spec = vs.load_voice_spec(presets_dir / filename)
+        assert spec.donor["dataset"] == dataset
+        assert isinstance(spec.donor[hash_key], str) and len(spec.donor[hash_key]) == 64
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #262 R2): --out の保護入力衝突拒否（fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def test_reject_output_collision_out_equals_wav_path_raises(tmp_path: Path) -> None:
+    wav_path = tmp_path / "donor.wav"
+    wav_path.write_bytes(b"x")
+    with pytest.raises(rd.OutputCollisionError):
+        rd._reject_output_collision(wav_path, protected_files=[wav_path], protected_roots=[])
+
+
+def test_reject_output_collision_out_equals_voice_spec_path_raises(tmp_path: Path) -> None:
+    spec_path = tmp_path / "voice.json"
+    spec_path.write_text("{}")
+    with pytest.raises(rd.OutputCollisionError):
+        rd._reject_output_collision(spec_path, protected_files=[None, spec_path, None], protected_roots=[])
+
+
+def test_reject_output_collision_out_inside_voicebank_root_raises(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    root.mkdir()
+    out_path = root / "A3" / "clobbered.wav"
+    with pytest.raises(rd.OutputCollisionError):
+        rd._reject_output_collision(out_path, protected_files=[], protected_roots=[root])
+
+
+def test_reject_output_collision_unrelated_path_does_not_raise(tmp_path: Path) -> None:
+    wav_path = tmp_path / "donor.wav"
+    wav_path.write_bytes(b"x")
+    root = tmp_path / "voicebank"
+    root.mkdir()
+    out_path = tmp_path / "out" / "result.wav"
+    rd._reject_output_collision(out_path, protected_files=[wav_path], protected_roots=[root])  # ok: no raise
+
+
+def test_reject_output_collision_symlinked_out_resolves_before_compare(tmp_path: Path) -> None:
+    """resolved containment（symlink 解決後）で判定する（AGENTS.md Persistent
+    Artifact Safety Gate 項目2）。"""
+    real_wav = tmp_path / "real_donor.wav"
+    real_wav.write_bytes(b"x")
+    alias = tmp_path / "alias.wav"
+    alias.symlink_to(real_wav)
+    with pytest.raises(rd.OutputCollisionError):
+        rd._reject_output_collision(alias, protected_files=[real_wav], protected_roots=[])
+
+
+def test_reject_output_collision_none_paths_are_skipped(tmp_path: Path) -> None:
+    out_path = tmp_path / "out.wav"
+    rd._reject_output_collision(out_path, protected_files=[None, None], protected_roots=[None])  # no raise
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #262 R2): WAV 出力の atomic 公開
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_wav_writes_readable_content(tmp_path: Path) -> None:
+    out_path = tmp_path / "out.wav"
+    y = np.linspace(-0.5, 0.5, 240).astype(np.float64)
+    rd._atomic_write_wav(y, 24000, out_path)
+    assert out_path.exists()
+    y_read, sr_read = sf.read(str(out_path))
+    assert sr_read == 24000
+    assert len(y_read) == 240
+    # tempfile が残っていない（staging cleanup 確認）。
+    leftovers = list(tmp_path.glob("out.wav.*.tmp"))
+    assert leftovers == []
+
+
+def test_atomic_write_wav_no_partial_file_on_failure(tmp_path: Path, monkeypatch) -> None:
+    """AGENTS.md Persistent Artifact Safety Gate 項目7「公開途中失敗の注入
+    テスト」: `sf.write` が失敗しても最終 out_path に部分成果物を残さない。"""
+    out_path = tmp_path / "out.wav"
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated write failure")
+
+    monkeypatch.setattr(rd.sf, "write", _boom)
+    y = np.zeros(10)
+    with pytest.raises(RuntimeError):
+        rd._atomic_write_wav(y, 24000, out_path)
+    assert not out_path.exists()
+    assert list(tmp_path.glob("out.wav.*.tmp")) == []
+
+
+def test_atomic_write_wav_does_not_clobber_existing_output_on_failure(tmp_path: Path, monkeypatch) -> None:
+    """公開直前まで既存の有効な出力を保持し、失敗時は破壊しない
+    （staging + os.replace の atomicity）。"""
+    out_path = tmp_path / "out.wav"
+    rd._atomic_write_wav(np.zeros(10), 24000, out_path)
+    before_bytes = out_path.read_bytes()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated write failure")
+
+    monkeypatch.setattr(rd.sf, "write", _boom)
+    with pytest.raises(RuntimeError):
+        rd._atomic_write_wav(np.ones(10), 24000, out_path)
+    assert out_path.read_bytes() == before_bytes  # 旧ファイルが無傷のまま残る

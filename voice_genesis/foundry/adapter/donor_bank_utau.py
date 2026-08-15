@@ -177,19 +177,66 @@ def parse_oto_ini(path: str | Path) -> List[OtoEntry]:
     return entries
 
 
+def voicebank_identity_hash(
+    voicebank_root: str | Path, pitch_dirs: Optional[Sequence[str]] = None
+) -> Tuple[str, List[str]]:
+    """P1 修正 (review #262 R2): UTAU voicebank の「実体」ハッシュ（render.py の
+    `spec.donor` provenance 照合用の軽量前段。WORLD 分析より前に安価に計算する）。
+
+    全 pitch dir の oto.ini を `(相対パス, sha256)` ペアで
+    `donor_bank.aggregate_content_hash` へ渡した集約値を返す。oto.ini は
+    unit のセグメンテーション（どのバイトがどの mora か）を決める権威情報
+    なので、これが変われば全 unit 境界が変わる = donor の実体を代表する
+    identity として妥当（wav バイト全体を毎回ハッシュするより軽量）。
+    戻り値は `(digest, pitch_dirs)`（record/エラーメッセージ用に pitch_dirs
+    も返す）。
+    """
+    root = Path(voicebank_root)
+    if pitch_dirs is None:
+        pitch_dirs = sorted(
+            p.name for p in root.iterdir() if p.is_dir() and (p / "oto.ini").exists()
+        )
+    if not pitch_dirs:
+        raise FileNotFoundError(f"no pitch dir with oto.ini found under {root}")
+    pairs = [
+        (f"{pdir_name}/oto.ini", sha256_of(root / pdir_name / "oto.ini")) for pdir_name in pitch_dirs
+    ]
+    return aggregate_content_hash(pairs), list(pitch_dirs)
+
+
 def cutoff_position_ms(offset_ms: float, blank_ms: float, wav_duration_ms: float) -> float:
     """右ブランク (blank) からサンプル終端位置（ms, ファイル先頭起点）を求める。
 
-    [実装決定・較正 1 回・record 記録] 波音リツ強連続音 Ver1.5.1 の oto.ini を
-    実測すると、行の大多数（A3: 1235/1237, F4: 1236/1237）は blank が正号
-    で書かれている。これを「ファイル先頭からの絶対位置」として解釈すると
-    offset > cutoff になる矛盾行が複数発生する（例: offset=2166,blank=1733
-    で絶対位置解釈だと長さ -433ms）。一方 `wav_duration_ms - abs(blank_ms)`
-    （符号に関わらず「ファイル終端からの距離」として扱う）だと同エイリアス
-    群で一貫して正の長さが得られる（実測・複数エイリアスで検算済み）。
-    本関数はこの較正済み解釈を採用する。offset を下回らないよう安全にクランプする。
+    [P1 修正・review #262 R2] UTAU oto.ini の右ブランクは符号で意味が変わる
+    （出典: 実測較正 + 一次資料 https://utaudb.sakura.ne.jp/knowledge.php?id=21
+    「ブランクが正の数の場合、wavファイルの末尾からの時間[ms]で定義される」
+    「ブランクが負の数の場合、オフセットからの時間[ms]に-1を乗じたもので
+    定義される」= `blank_ms = -(cutoff_ms - offset_ms)` すなわち
+    `cutoff_ms = offset_ms - blank_ms`）。
+
+    - **blank>=0（実データの大多数、A3:1235/1237・F4:1236/1237）**:
+      ファイル終端からの距離。`cutoff = wav_duration_ms - blank_ms`
+      （旧実装から不変。実測較正: offset=2166,blank=1733,dur=4667 ->
+      cutoff=2934。絶対位置解釈だと offset>cutoff の矛盾行が発生するため
+      この解釈を採る）。
+    - **blank<0（実データでは稀。波音リツ強連続音 Ver1.5.1 実測: A3 2 件
+      `n ぬA3`(offset=2749,blank=-600)・`- ぽA3`(offset=79,blank=-600)、
+      F4 1 件 `- ちょF4`(offset=714,blank=-600)。VCV では上記のとおり数件
+      レベルだが、他 UTAU 音源では CVVC/連続音の設計次第で多数になりうる）**:
+      offset からの固定長。`cutoff = offset_ms - blank_ms`（= offset +
+      |blank|）。旧実装は blank の符号を無視して両方とも
+      `wav_duration_ms - abs(blank_ms)` として扱っていたため、この分岐では
+      cutoff が実際より大きくなり隣接収録材料を巻き込んでいた（review #262
+      R2 P2 指摘・実測: `n ぬA3` は旧実装 3996ms・正しくは 3349ms、647ms も
+      過大に長い区間を切り出していた）。
+
+    いずれの分岐も offset を下回らず wav_duration_ms を上回らないよう安全に
+    クランプする（破損値対策・従来どおり）。
     """
-    pos = wav_duration_ms - abs(blank_ms)
+    if blank_ms >= 0:
+        pos = wav_duration_ms - blank_ms
+    else:
+        pos = offset_ms - blank_ms  # == offset_ms + abs(blank_ms)
     return max(offset_ms, min(pos, wav_duration_ms))
 
 
@@ -415,13 +462,13 @@ def build_donor_bank_utau_vcv(
     # voicebank_root 配下の WAV/oto.ini を編集しても古い pickle を返す
     # サイレントな provenance 破損があった。
     pitch_dir_prep: Dict[str, dict] = {}
-    content_hashes: List[str] = []
+    content_hashes: List[Tuple[str, str]] = []
     for pdir_name in pitch_dirs:
         pdir = root / pdir_name
         oto_path = pdir / "oto.ini"
         oto_bytes = oto_path.read_bytes()
         oto_sha256 = hashlib.sha256(oto_bytes).hexdigest()
-        content_hashes.append(oto_sha256)
+        content_hashes.append((f"{pdir_name}/oto.ini", oto_sha256))
         entries = parse_oto_ini(oto_path)
         entries_by_wav: "OrderedDict[str, List[OtoEntry]]" = OrderedDict()
         for e in entries:
@@ -432,11 +479,14 @@ def build_donor_bank_utau_vcv(
         for wav_filename in selected_files:
             wav_path = pdir / wav_filename
             if wav_path.exists():
-                content_hashes.append(sha256_of(wav_path))
+                content_hashes.append((f"{pdir_name}/{wav_filename}", sha256_of(wav_path)))
         pitch_dir_prep[pdir_name] = dict(
             entries=entries, entries_by_wav=entries_by_wav,
             selected_files=selected_files, sel_stats=sel_stats,
         )
+    # P2 修正 (review #262 R2): (相対パス, sha256) ペアで集約する（パス非結合の
+    # hash 集合だけでは、2 ファイルが中身を入れ替えても同一集約ダイジェストに
+    # なってしまう = provenance 破損。§ donor_bank.aggregate_content_hash 参照）。
     content_digest = aggregate_content_hash(content_hashes)
 
     cache_path: Optional[Path] = None
@@ -448,7 +498,7 @@ def build_donor_bank_utau_vcv(
         ))
         key_material = (
             f"{root}|{','.join(pitch_dirs)}|{frame_period_ms}|{max_wav_files}|{ctx_material}"
-            f"|content={content_digest}|schema=f1.4-vcv-content-hash-v2"
+            f"|content={content_digest}|schema=f1.4-vcv-content-hash-v3"
         )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"utau_bank_vcv_{key}.pkl"
@@ -605,12 +655,12 @@ def build_donor_bank_utau(
     # 解析 + wav 部分集合選択をキャッシュ判定より前倒しし、選択された WAV/oto.ini
     # の内容ハッシュをキー材料へ含める。
     pitch_dir_prep: Dict[str, dict] = {}
-    content_hashes: List[str] = []
+    content_hashes: List[Tuple[str, str]] = []
     for pdir_name in pitch_dirs:
         pdir = root / pdir_name
         oto_path = pdir / "oto.ini"
         oto_bytes = oto_path.read_bytes()
-        content_hashes.append(hashlib.sha256(oto_bytes).hexdigest())
+        content_hashes.append((f"{pdir_name}/oto.ini", hashlib.sha256(oto_bytes).hexdigest()))
         entries = parse_oto_ini(oto_path)
         entries_by_wav: "OrderedDict[str, List[OtoEntry]]" = OrderedDict()
         for e in entries:
@@ -621,11 +671,13 @@ def build_donor_bank_utau(
         for wav_filename in selected_files:
             wav_path = pdir / wav_filename
             if wav_path.exists():
-                content_hashes.append(sha256_of(wav_path))
+                content_hashes.append((f"{pdir_name}/{wav_filename}", sha256_of(wav_path)))
         pitch_dir_prep[pdir_name] = dict(
             entries=entries, entries_by_wav=entries_by_wav,
             selected_files=selected_files, sel_stats=sel_stats,
         )
+    # P2 修正 (review #262 R2): (相対パス, sha256) ペアで集約する（§ 上の
+    # build_donor_bank_utau_vcv と同じ理由）。
     content_digest = aggregate_content_hash(content_hashes)
 
     cache_path: Optional[Path] = None
@@ -636,9 +688,10 @@ def build_donor_bank_utau(
         # ため、キー材料へバージョンマーカーを足して旧キャッシュ（フィールド無し
         # の DonorUnit を pickle 済み）との衝突を避ける（実装決定・record 記録）。
         # P1 修正 (review #262): 内容ハッシュ追加に伴いマーカーを v2 へ更新。
+        # P2 修正 (review #262 R2): 集約方式変更（パス非結合 -> パス結合）に伴い v3 へ更新。
         key_material = (
             f"{root}|{','.join(pitch_dirs)}|{frame_period_ms}|{min_units_per_vowel}|{max_wav_files}"
-            f"|content={content_digest}|schema=f1.3-overlap-preutt-content-hash-v2"
+            f"|content={content_digest}|schema=f1.3-overlap-preutt-content-hash-v3"
         )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"utau_bank_{key}.pkl"

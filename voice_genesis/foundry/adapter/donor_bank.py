@@ -44,17 +44,31 @@ def sha256_of(path: str | Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def aggregate_content_hash(hashes: Sequence[str]) -> str:
-    """複数の内容ハッシュ（sha256 hex 文字列）を sorted 連結して単一ダイジェスト
-    へ再ハッシュする（P1 修正: donor bank キャッシュキー材料用の内容ダイジェスト
-    集約。入力順に依存しない・決定論）。
+def aggregate_content_hash(paths_and_hashes: Sequence[Tuple[str, str]]) -> str:
+    """複数の (相対パス, 内容ハッシュ) ペアを、パスで決定論ソートしてから
+    `path:hash` 連結し単一ダイジェストへ再ハッシュする（P1 修正: donor bank
+    キャッシュキー材料用の内容ダイジェスト集約。入力順に依存しない・決定論）。
 
     donor_bank_utau.py / donor_bank_lab.py の各 builder（v1/v2/PJS）が
     キャッシュキーへ「対象 WAV 群 + oto.ini/.lab/notes CSV のバイト sha256」を
     含めるために使う共通ヘルパー（AGENTS.md Persistent Artifact Safety Gate
     項目8「input + output hash 記録」に対応・review #262 P1 指摘の是正）。
+
+    [P2 修正・review #262 R2] 旧実装は hash 値のみを sorted 連結しており、
+    どのパス名がどの digest を持つかを捨てていた。2 個の選択済みファイル
+    （2 つの WAV 同士、または WAV と oto.ini/.lab/notes CSV）が中身を入れ
+    替えてもファイル名が変わらなければ hash の集合は不変で、集約ダイジェスト
+    も同一になってしまう（キャッシュが古い/差し替わった中身を検出できない
+    provenance 破損）。`(パス, hash)` ペアを `path:hash` 形式で連結することで
+    「どのパスがどの内容か」を集約ダイジェストへ確実に反映する（実装決定:
+    区切り文字 `:` はファイルパス内に出現しうるが、ペア同士の区切りは `|` で
+    固定しているため `path:hash` 内部の `:` はハッシュとの曖昧性を生まない
+    ——hash は常に固定長 64 文字の hex で末尾から切り出せるため——が、本関数は
+    単純化のため文字列全体を連結対象とする。呼び出し側は相対パスを渡すこと
+    （絶対パスは実行環境依存で決定論を壊すため不可）。
     """
-    return hashlib.sha256("|".join(sorted(hashes)).encode("utf-8")).hexdigest()
+    material = "|".join(f"{path}:{digest}" for path, digest in sorted(paths_and_hashes))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def load_donor_24k(wav_path: str | Path) -> Tuple[np.ndarray, int]:

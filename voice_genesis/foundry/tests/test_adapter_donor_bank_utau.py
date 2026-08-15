@@ -127,10 +127,37 @@ def test_cutoff_position_ms_distance_from_end_interpretation() -> None:
     assert cutoff == pytest.approx(2934.0)
 
 
-def test_cutoff_position_ms_negative_blank_same_interpretation() -> None:
-    # 符号付き（負）の行でも abs() で同じ扱いになる（実データに 2-3 件存在）。
+def test_cutoff_position_ms_negative_blank_is_offset_relative_fixed_length() -> None:
+    """P1 修正 (review #262 R2): 負の blank は「ファイル終端からの距離」ではなく
+    「offset からの固定長」（cutoff = offset - blank_ms = offset + |blank_ms|）。
+
+    実データ較正: 波音リツ強連続音 Ver1.5.1 A3 `n ぬA3`
+    （offset=2749, blank=-600, wav_duration=4596.24）。一次資料
+    https://utaudb.sakura.ne.jp/knowledge.php?id=21 「ブランクが負の数の場合、
+    オフセットからの時間[ms]に-1を乗じたもので定義される」
+    = `blank_ms = -(cutoff_ms - offset_ms)` = `cutoff_ms = offset_ms - blank_ms`。
+    旧実装（`wav_duration_ms - abs(blank_ms)` = 3996.24ms）は offset からの
+    固定長という符号意味を無視しており、647ms も過大な区間を切り出していた。
+    """
     cutoff_pos = dbu.cutoff_position_ms(offset_ms=2749.0, blank_ms=-600.0, wav_duration_ms=4596.24)
-    assert cutoff_pos == pytest.approx(4596.24 - 600.0)
+    assert cutoff_pos == pytest.approx(2749.0 + 600.0)
+    assert cutoff_pos == pytest.approx(3349.0)
+
+
+def test_cutoff_position_ms_negative_blank_independent_of_wav_duration() -> None:
+    """負の blank は offset からの固定長なので、wav_duration_ms を変えても
+    cutoff は不変（旧実装は wav_duration_ms に依存しており、この不変条件を
+    満たさなかった）。"""
+    cutoff_a = dbu.cutoff_position_ms(offset_ms=100.0, blank_ms=-50.0, wav_duration_ms=1000.0)
+    cutoff_b = dbu.cutoff_position_ms(offset_ms=100.0, blank_ms=-50.0, wav_duration_ms=5000.0)
+    assert cutoff_a == cutoff_b == pytest.approx(150.0)
+
+
+def test_cutoff_position_ms_negative_blank_clamped_to_wav_duration_when_degenerate() -> None:
+    """offset + |blank| が wav_duration_ms を超える破損値は wav_duration_ms へ
+    クランプする（従来の破損値保護を負分岐でも維持）。"""
+    cutoff = dbu.cutoff_position_ms(offset_ms=3900.0, blank_ms=-500.0, wav_duration_ms=4000.0)
+    assert cutoff == pytest.approx(4000.0)
 
 
 def test_cutoff_position_ms_clamped_to_offset_when_degenerate() -> None:

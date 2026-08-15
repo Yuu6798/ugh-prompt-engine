@@ -371,3 +371,36 @@ def test_unit_mean_power_backward_compatible_when_vcore_none() -> None:
         assert u.vowel_core_start_frame is None
     level0 = db._unit_mean_power(bank.sp, bank.units[0])
     assert level0 == pytest.approx(np.mean(np.sum(bank.sp[0:20], axis=1)))
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #262 R2): aggregate_content_hash はパスと hash を結合する
+# ---------------------------------------------------------------------------
+
+
+def test_aggregate_content_hash_deterministic_order_independent() -> None:
+    pairs_a = [("b/file2", "hash2"), ("a/file1", "hash1")]
+    pairs_b = [("a/file1", "hash1"), ("b/file2", "hash2")]
+    assert db.aggregate_content_hash(pairs_a) == db.aggregate_content_hash(pairs_b)
+
+
+def test_aggregate_content_hash_detects_content_swap_between_same_named_paths() -> None:
+    """2 ファイルが中身（sha256）を入れ替えても、パスと結合せずに hash 集合
+    だけを sorted 連結すると集約ダイジェストが不変になってしまう（旧実装の
+    provenance 破損。review #262 R2 P2 指摘）。パス結合後は検知できる。"""
+    before = [("a.wav", "hash_A"), ("b.wav", "hash_B")]
+    after_swapped = [("a.wav", "hash_B"), ("b.wav", "hash_A")]
+    assert db.aggregate_content_hash(before) != db.aggregate_content_hash(after_swapped)
+
+
+def test_aggregate_content_hash_changes_when_path_changes_but_hash_set_same() -> None:
+    """hash の集合が同じでも、どちらのパスがどの hash かが変われば別ダイジェスト
+    になる（上のスワップテストと相補的な検証）。"""
+    a = [("x.wav", "h1"), ("y.wav", "h2")]
+    b = [("x.wav", "h2"), ("y.wav", "h1")]
+    assert db.aggregate_content_hash(a) != db.aggregate_content_hash(b)
+
+
+def test_aggregate_content_hash_empty() -> None:
+    # 空でもエラーにならず安定した値を返す（決定論・空集合の hash）。
+    assert db.aggregate_content_hash([]) == db.aggregate_content_hash([])

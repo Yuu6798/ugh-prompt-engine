@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -49,6 +51,170 @@ PEAK_NORM = 0.6
 
 DONOR_CHOICES = ("vocadito", "ritsu", "pjs")
 CONSONANT_SOURCE_CHOICES = ("recorded", "synthetic", "none")
+
+
+class DonorProvenanceError(ValueError):
+    """P1 修正 (review #262 R2): `spec.donor` の宣言が実際の描画入力
+    （--donor/--wav/--voicebank-root）と一致しない（fail-closed）。"""
+
+
+class OutputCollisionError(ValueError):
+    """P1 修正 (review #262 R2): `--out` が保護入力（--wav/--voice/--notes-csv/
+    --voicebank-root 配下）と衝突する（fail-closed。書き込み前に検出する）。"""
+
+
+def _validate_spec_donor(
+    spec: "vs.FoundryVoiceSpec",
+    donor: str,
+    wav_path: Optional[str | Path],
+    voicebank_root: Optional[str | Path],
+) -> dict:
+    """P1 修正 (review #262 R2): `spec.donor` の宣言を実際の描画入力の実体
+    ハッシュと fail-closed で照合する。
+
+    従来は `spec.donor`（dataset/sha256）が読み込まれるだけで一度も検証され
+    ず、実際のドナーは `--donor`/`--wav`/`--voicebank-root` から独立に決まる
+    ため、コミット済み neutral/warped spec の vocadito sha256 を宣言したまま
+    任意の wav や ritsu/pjs バンクを描画でき、provenance が嘘をつけた
+    （review #262 R2 P1 指摘）。
+
+    `donor` dict のスキーマ拡張（foundry-voice/0.1・破壊的変更ではなく
+    dataset 別の許容キーを追加するのみ。既存 vocadito 形は不変）:
+
+    - `dataset="vocadito"`: 既存どおり `{"dataset":"vocadito","clip":int,
+      "sha256":str}`。`sha256` は `--wav` の内容 sha256 と一致必須。
+    - `dataset="ritsu"`: `{"dataset":"ritsu","voicebank_sha256":str}`。
+      `voicebank_sha256` は `--voicebank-root` 配下の全 pitch dir oto.ini を
+      `donor_bank_utau.voicebank_identity_hash` で集約した値と一致必須
+      （oto.ini は unit セグメンテーションの権威情報 = 意味のある identity pin。
+      wav 全バイトを毎回ハッシュするより軽量で WORLD 分析より前に検証できる）。
+    - `dataset="pjs"`: `{"dataset":"pjs","corpus_sha256":str}`。同様に
+      `donor_bank_lab.corpus_identity_hash`（全 pjsNNN/pjsNNN.lab の集約）
+      と一致必須。
+
+    `dataset` が `--donor` と不一致、宣言ハッシュ欠落/型不正、または実体
+    ハッシュ不一致のいずれかで即座に `DonorProvenanceError` を送出する
+    （AGENTS.md L465-468 参照。実データ分析より前段で検証するため、無関係な
+    入力での無駄な WORLD 分析も防ぐ）。一致時は record 用の照合結果 dict を返す。
+    """
+    declared = dict(spec.donor)
+    declared_dataset = declared.get("dataset")
+    if declared_dataset != donor:
+        raise DonorProvenanceError(
+            f"spec.donor.dataset={declared_dataset!r} は --donor={donor!r} と不一致です"
+            "（provenance 検証: fail-closed）"
+        )
+
+    if donor == "vocadito":
+        if wav_path is None:
+            raise DonorProvenanceError("donor='vocadito' の provenance 検証には --wav が必須です")
+        declared_sha = declared.get("sha256")
+        actual_sha = db.sha256_of(wav_path)
+        if not isinstance(declared_sha, str) or declared_sha != actual_sha:
+            raise DonorProvenanceError(
+                f"spec.donor.sha256={declared_sha!r} は --wav の実体 sha256={actual_sha!r} と"
+                "不一致です（provenance 検証: fail-closed）"
+            )
+        return dict(dataset="vocadito", declared_sha256=declared_sha, actual_sha256=actual_sha)
+
+    if donor == "ritsu":
+        if voicebank_root is None:
+            raise DonorProvenanceError("donor='ritsu' の provenance 検証には --voicebank-root が必須です")
+        declared_sha = declared.get("voicebank_sha256")
+        actual_sha, pitch_dirs = dbu.voicebank_identity_hash(voicebank_root)
+        if not isinstance(declared_sha, str) or declared_sha != actual_sha:
+            raise DonorProvenanceError(
+                f"spec.donor.voicebank_sha256={declared_sha!r} は --voicebank-root の実体ハッシュ="
+                f"{actual_sha!r}（pitch_dirs={pitch_dirs}）と不一致です（provenance 検証: fail-closed）"
+            )
+        return dict(dataset="ritsu", declared_sha256=declared_sha, actual_sha256=actual_sha)
+
+    # donor == "pjs"
+    if voicebank_root is None:
+        raise DonorProvenanceError("donor='pjs' の provenance 検証には --voicebank-root が必須です")
+    declared_sha = declared.get("corpus_sha256")
+    actual_sha = dbl.corpus_identity_hash(voicebank_root)
+    if not isinstance(declared_sha, str) or declared_sha != actual_sha:
+        raise DonorProvenanceError(
+            f"spec.donor.corpus_sha256={declared_sha!r} は --voicebank-root の実体ハッシュ="
+            f"{actual_sha!r} と不一致です（provenance 検証: fail-closed）"
+        )
+    return dict(dataset="pjs", declared_sha256=declared_sha, actual_sha256=actual_sha)
+
+
+def _reject_output_collision(
+    out_path: str | Path,
+    protected_files: "List[Optional[str | Path]]",
+    protected_roots: "List[Optional[str | Path]]",
+) -> None:
+    """P1 修正 (review #262 R2): `--out` が保護入力と衝突する場合は書き込み前に
+    fail-closed で拒否する（AGENTS.md 永続成果物の「公開サイト」設計チェック
+    リスト項目2「衝突ガードは必須引数」準拠）。
+
+    resolved containment（symlink 解決後の一致・`is_relative_to` 相当）で判定
+    する（AGENTS.md Persistent Artifact Safety Gate 項目2）。字句検証
+    （`../` 遡上判定）は本関数では行わない —— `out_path`/保護パスはいずれも
+    CLI から渡される独立した絶対/相対パスであり、path-join で組み立てる
+    値ではないため、字句検証が防ぐ「base の外への脱出」は該当しない
+    （resolved 比較のみで十分）。
+
+    `protected_files`（単一ファイルとの完全一致）と `protected_roots`
+    （ディレクトリ配下への包含）の両方を検査する。`None` 要素はスキップする
+    （donor 種別ごとに未使用の引数があるため）。
+    """
+    out_resolved = Path(out_path).resolve()
+    for f in protected_files:
+        if f is None:
+            continue
+        f_path = Path(f)
+        if not f_path.exists():
+            continue  # 未使用/未指定パス（vocadito の notes_csv 省略時等）
+        if out_resolved == f_path.resolve():
+            raise OutputCollisionError(
+                f"--out ({out_path}) が保護入力 ({f}) と衝突しています（fail-closed で拒否）"
+            )
+    for root in protected_roots:
+        if root is None:
+            continue
+        root_path = Path(root)
+        if not root_path.exists():
+            continue
+        root_resolved = root_path.resolve()
+        try:
+            out_resolved.relative_to(root_resolved)
+        except ValueError:
+            continue
+        raise OutputCollisionError(
+            f"--out ({out_path}) が保護ディレクトリ ({root}) 配下です（fail-closed で拒否）"
+        )
+
+
+def _atomic_write_wav(y: np.ndarray, sr: int, out_path: str | Path) -> None:
+    """P2 修正 (review #262 R2): staging + `os.replace` で成果物 WAV を atomic
+    公開する（AGENTS.md Persistent Artifact Safety Gate 項目6「全構築後公開」
+    準拠。`src/svp_rpe/utils/atomic_io.atomic_write_bytes` と同じ流儀だが、
+    `src/` は変更禁止のため adapter 内に独立実装する）。
+
+    `sf.write` の失敗（プロセス kill・ディスク満杯等）やインタラプトが
+    途中で起きても、`out_path` に既存の有効な出力があればそれを破壊せず、
+    staging tempfile を best-effort で削除してから re-raise する
+    （`except BaseException` — `KeyboardInterrupt`/`SystemExit` も含む）。
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=out_path.parent, prefix=f"{out_path.name}.", suffix=".tmp")
+    os.close(fd)  # sf.write はパス経由で自前ハンドルを開くため fd は即閉じる
+    try:
+        # staging 名の拡張子は `.tmp`（拡張子から format を推測できない）ため
+        # `format="WAV"` を明示する。
+        sf.write(tmp_name, y, sr, subtype="PCM_16", format="WAV")
+        os.replace(tmp_name, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _vowel_distribution_from_labels(labels: dict) -> dict:
@@ -93,22 +259,23 @@ def prepend_recorded_consonant(
 def _build_vcv_placements(
     segments: list, selections: List["un.VCVUnitSelection"], bank: "db.DonorBank",
 ) -> Tuple[List["jn.NotePlacement"], List["un.ResolvedVCVSegment"], dict]:
-    """追補 F1.4-B: VCV unit の配置。接合は F1.3 と同じ機構（unit 自身の
-    oto overlap を join 長として使う true overlap-add・`joins.assemble_v2`
-    がフレーズ内 run 単位で処理する）を続投する。新規なのは
-    **フレーズ先頭ノートの preutterance 消費**（item2/item3）: 先頭ノートの
-    配置開始位置をノート開始（cursor）より `min(preutterance_frames,
+    """追補 F1.4-B（P1 修正 review #262 R2 で preutterance 消費経路を訂正）:
+    VCV unit の配置。**フレーズ先頭ノートの preutterance 消費**（item2/item3）:
+    先頭ノートの配置開始位置をノート開始（cursor）より `min(preutterance_frames,
     直前のブレスギャップ frames)` だけ前へずらし、母音アタックが拍に近づくよう
     補正する（フレーズ間ブレス 0.25s の範囲内でクリップ・件数記録）。
 
-    フレーズ内部（`has_join_to_prev=True`）のノートは、`joins.assemble_v2` が
-    run 内を `overlap_frames` のみで純粋に overlap-add 連結するため
-    （start_frame/end_frame は run 境界以外で未使用）、明示的な cursor シフトを
-    加えなくても preutterance/overlap の相対関係（overlap < preutterance <
-    vowel_core、実データで確認済み）が自然にタイムライン配置を規律する
-    （[実装決定・record 記録] §Open Questions 参照）。`end_frame` は常に
-    shift の影響を受けないシフト前 cursor 基準で計算する（次 run のギャップ
-    計算を狂わせないため）。
+    フレーズ内部（`has_join_to_prev=True`）のノートは、ここで明示的な cursor
+    シフトを加えない点は F1.4 初版と同じだが、`NotePlacement.preutterance_frames`
+    を渡すことで `joins.assemble_v2`（`_resolve_extra_trim`）側が overlap のみ
+    でなく `preutterance_frames - 実効overlap_frames` 分の追加ハードトリムを
+    直前 note 末尾へ適用する（review #262 R2 P1 指摘: 旧実装は overlap のみを
+    消費していたため、母音アタック点が名目ビートより `preutterance_frames -
+    overlap_frames` フレーム遅延していた。修正後はブレンド幅=overlap を保った
+    まま、ブレンド開始点だけ前へ動かして母音アタック点をビートへ整列させる）。
+    `end_frame` は常に shift の影響を受けないシフト前 cursor 基準で計算する
+    （次 run のギャップ計算を狂わせないため。preutterance 消費の実体は
+    `joins.py` 側の追加トリムであり `end_frame` とは独立）。
     """
     placements: List[jn.NotePlacement] = []
     resolved_list: List[un.ResolvedVCVSegment] = []
@@ -147,6 +314,15 @@ def _build_vcv_placements(
             jn.NotePlacement(
                 start_frame=start_frame, end_frame=end_frame, sp=resolved.sp, ap=resolved.ap,
                 has_join_to_prev=not seg.is_phrase_first, overlap_frames=sel.unit.overlap_frames,
+                # P1 修正 (review #262 R2): mid-phrase note の preutterance を
+                # run assembler（joins.assemble_v2/_resolve_extra_trim）へ渡す。
+                # フレーズ先頭ノートは既に上で cursor シフト消費済みのため
+                # ここでも preutterance_frames を渡すと二重消費になるが、
+                # phrase-first は has_join_to_prev=False で run 境界になるため
+                # assemble_v2 側の extra_trim は run 内部の join にしか適用されず
+                # 無害（run[0] の preutterance_frames は _resolve_extra_trim の
+                # 対象外）。
+                preutterance_frames=sel.unit.preutterance_frames,
             )
         )
         cursor = cursor + resolved.n_frames
@@ -254,6 +430,9 @@ def render(
         raise ValueError(f"unknown donor: {donor!r} (expected one of {DONOR_CHOICES})")
 
     spec = vs.load_voice_spec(voice_spec_path)
+    # P1 修正 (review #262 R2): 重い WORLD 分析より前に spec.donor の provenance
+    # を fail-closed で検証する（§ _validate_spec_donor docstring 参照）。
+    donor_provenance = _validate_spec_donor(spec, donor, wav_path, voicebank_root)
     notes, tempo_bpm = build_score(score_name)
     segments, total_samples = perf.build_timeline(notes, sr=SR, tempo_bpm=tempo_bpm)
     # P1 修正 (review #262): f0/振幅の per-sample トラックは segments/total_samples
@@ -472,7 +651,15 @@ def render(
         y = y / peak * PEAK_NORM
 
     if out_path is not None:
-        sf.write(str(out_path), y, SR, subtype="PCM_16")
+        # P1 修正 (review #262 R2): --out が保護入力（--wav/--voice/--notes-csv/
+        # --voicebank-root 配下）と衝突していないか書き込み前に fail-closed で
+        # 拒否してから、staging + os.replace で atomic 公開する。
+        _reject_output_collision(
+            out_path,
+            protected_files=[wav_path, voice_spec_path, notes_csv_path],
+            protected_roots=[voicebank_root],
+        )
+        _atomic_write_wav(y, SR, out_path)
 
     cap_modes = [r.cap_mode for r in resolved_list]
     return dict(
@@ -481,6 +668,7 @@ def render(
         control_track_stats=control_track_stats,
         donor_bank_stats=bank.stats, donor_bank_source=bank.source, wav_sha256=bank.wav_sha256,
         donor=donor, consonant_source=consonant_source, donor_extra_stats=donor_extra_stats,
+        donor_provenance=donor_provenance,
         n_stretch_extended_looped=cap_modes.count("extended_looped"),
         n_stretch_compressed_truncated=cap_modes.count("compressed_truncated"),
         n_stretch_none=cap_modes.count("none"),
@@ -524,6 +712,7 @@ def main() -> None:
     )
     print(f"wrote {args.out}: {len(result['y'])} samples ({len(result['y']) / result['sr']:.3f}s)")
     print(f"donor={result['donor']} consonant_source={result['consonant_source']}")
+    print(f"donor_provenance={result['donor_provenance']}")
     print(f"donor_bank_source={result['donor_bank_source']} wav_sha256={result['wav_sha256']}")
     print(f"donor_bank_stats={result['donor_bank_stats']}")
     print(f"selection_stats={result['selection_stats']}")

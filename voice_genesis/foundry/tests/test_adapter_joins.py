@@ -319,6 +319,132 @@ def test_assemble_v2_empty_placements() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P1 修正 (review #262 R2): preutterance 消費（`extra_trim_frames` /
+# `_resolve_extra_trim`）— overlap のみでは attack 点が preutt-overlap 分
+# 名目ビートより遅延する不具合の修正。
+# ---------------------------------------------------------------------------
+
+
+def test_overlap_add_concat_extra_trim_removes_prev_tail_before_blend() -> None:
+    n_bins = 2
+    sp_a = np.full((30, n_bins), 1.0)
+    sp_b = np.full((30, n_bins), 2.0)
+    ap_a = np.full((30, n_bins), 0.1)
+    ap_b = np.full((30, n_bins), 0.2)
+    ov = 4
+    trim = 6
+    sp_out, _ap_out, stats = jn.overlap_add_concat([(sp_a, ap_a), (sp_b, ap_b)], ov, trim)
+    # 総尺は overlap 分だけでなく trim 分もさらに短くなる。
+    assert sp_out.shape[0] == 30 + 30 - ov - trim
+    assert stats["n_extra_trim_frames_applied"] == trim
+    assert stats["overlap_frames_applied"] == [ov]
+
+
+def test_overlap_add_concat_extra_trim_none_is_backward_compatible() -> None:
+    """`extra_trim_frames` 省略（None）は従来どおり trim=0（後方互換）。"""
+    n_bins = 3
+    sp_a = np.full((20, n_bins), 1.0)
+    sp_b = np.full((20, n_bins), 2.0)
+    ap_a = np.full((20, n_bins), 0.1)
+    ap_b = np.full((20, n_bins), 0.1)
+    ov = 5
+    sp_with_none, _ap1, stats1 = jn.overlap_add_concat([(sp_a, ap_a), (sp_b, ap_b)], ov, None)
+    sp_omitted, _ap2, stats2 = jn.overlap_add_concat([(sp_a, ap_a), (sp_b, ap_b)], ov)
+    assert np.array_equal(sp_with_none, sp_omitted)
+    assert stats1["n_extra_trim_frames_applied"] == stats2["n_extra_trim_frames_applied"] == 0
+
+
+def test_overlap_add_concat_extra_trim_clamped_to_accumulator_length() -> None:
+    """trim 要求が現時点のアキュムレータ長を超える場合はアキュムレータ全体
+    までにクランプする（負の長さにならない）。"""
+    n_bins = 2
+    sp_a = np.full((5, n_bins), 1.0)
+    sp_b = np.full((10, n_bins), 2.0)
+    ap_a = np.full((5, n_bins), 0.1)
+    ap_b = np.full((10, n_bins), 0.1)
+    sp_out, _ap_out, stats = jn.overlap_add_concat([(sp_a, ap_a), (sp_b, ap_b)], 2, 999)
+    assert stats["n_extra_trim_frames_applied"] == 5  # 5 フレームしかないアキュムレータへクランプ
+    assert sp_out.shape[0] >= 0
+
+
+def _resolve_extra_trim_direct(preutt, ov: int) -> int:
+    return jn._resolve_extra_trim(preutt, ov)
+
+
+def test_resolve_extra_trim_none_preutterance_is_zero() -> None:
+    """`preutterance_frames=None`（vocadito/pjs unit）は常に trim=0。"""
+    assert _resolve_extra_trim_direct(None, 4) == 0
+
+
+def test_resolve_extra_trim_positive_when_preutterance_exceeds_overlap() -> None:
+    assert _resolve_extra_trim_direct(60, 20) == 40
+
+
+def test_resolve_extra_trim_zero_when_preutterance_not_exceeding_overlap() -> None:
+    assert _resolve_extra_trim_direct(10, 20) == 0
+    assert _resolve_extra_trim_direct(20, 20) == 0
+
+
+def test_assemble_v2_preutterance_attack_frame_lands_at_nominal_beat() -> None:
+    """タイミングテスト（review #262 R2 P1 の実害検証）: mid-phrase note の
+    `preutterance_frames` フレーム目（真の母音アタック点）が、直前 note の
+    累積長（= 名目上のビート位置）にちょうど整列することを検証する。
+
+    overlap のみを消費する旧実装では、この位置に `sp_b[overlap_frames]`
+    （録音済み遷移の途中、まだアタック前）が来てしまい、`preutterance_frames -
+    overlap_frames` フレーム分だけアタックが遅延していた。
+    """
+    n_bins = 2
+    n1 = 50
+    overlap = 5
+    preutt = 18  # overlap より大きい（実データの overlap<preutterance 不変条件を模す）
+    sp_a = np.full((n1, n_bins), 1.0)
+    ap_a = np.full((n1, n_bins), 0.1)
+    n2 = 40
+    # unit_b の各フレームを一意な値でマークする（frame index の検算用）。
+    sp_b = np.stack([np.full(n_bins, 100.0 + i) for i in range(n2)], axis=0)
+    ap_b = np.full((n2, n_bins), 0.2)
+
+    placements = [
+        jn.NotePlacement(0, n1, sp_a, ap_a, has_join_to_prev=False, overlap_frames=None),
+        jn.NotePlacement(
+            n1, n1 + n2, sp_b, ap_b, has_join_to_prev=True,
+            overlap_frames=overlap, preutterance_frames=preutt,
+        ),
+    ]
+    sp_seq, _ap_seq, stats = jn.assemble_v2(n_bins, placements, frame_period_ms=5.0)
+
+    # 総尺は overlap ではなく preutterance 分だけ短くなる（trim=preutt-overlap
+    # が overlap 消費に追加で乗る）。
+    assert sp_seq.shape[0] == n1 + n2 - preutt
+    assert stats["n_extra_trim_frames_applied"] == preutt - overlap
+
+    # unit_b の frame[preutt]（真のアタック点）が、直前 note の累積長 n1
+    # （= 名目ビート位置）にちょうど一致する。
+    assert np.allclose(sp_seq[n1], sp_b[preutt])
+
+
+def test_assemble_v2_preutterance_none_matches_overlap_only_behavior() -> None:
+    """`preutterance_frames=None`（vocadito/pjs unit）は従来どおり overlap の
+    みを消費する（後方互換・回帰なし）。"""
+    n_bins = 3
+    n1, n2 = 40, 40
+    ov = 8
+    sp_a = np.full((n1, n_bins), 1.0)
+    ap_a = np.full((n1, n_bins), 0.1)
+    sp_b = np.full((n2, n_bins), 2.0)
+    ap_b = np.full((n2, n_bins), 0.2)
+
+    placements_no_preutt = [
+        jn.NotePlacement(0, n1, sp_a, ap_a, has_join_to_prev=False, overlap_frames=None),
+        jn.NotePlacement(n1, n1 + n2, sp_b, ap_b, has_join_to_prev=True, overlap_frames=ov),
+    ]
+    sp_seq, _ap_seq, stats = jn.assemble_v2(n_bins, placements_no_preutt, frame_period_ms=5.0)
+    assert sp_seq.shape[0] == n1 + n2 - ov
+    assert stats["n_extra_trim_frames_applied"] == 0
+
+
+# ---------------------------------------------------------------------------
 # P1 修正 (review #262): f0/振幅トラックの圧縮後タイムライン整合
 # ---------------------------------------------------------------------------
 
@@ -406,6 +532,40 @@ def test_assemble_control_tracks_v2_matches_sp_ap_frame_for_frame_with_multiple_
         sp_first_pure = int(np.argmax(np.isclose(sp_seq[:, 0], note_val)))
         f0_first_pure = int(np.argmax(np.isclose(f0_seq, note_val)))
         assert abs(sp_first_pure - f0_first_pure) <= 1
+
+
+def test_assemble_control_tracks_v2_stays_aligned_with_sp_ap_when_preutterance_set() -> None:
+    """P1 修正 (review #262 R2): mid-phrase note が `preutterance_frames` を
+    持つ場合（VCV unit）、`assemble_control_tracks_v2`（f0/振幅）は
+    `assemble_v2`（sp/ap）と全く同じ extra_trim を適用してフレーム数が
+    厳密一致し続ける（別々の trim 計算になると `n_total_frames` が食い違い、
+    render.py の assert（f0_seq.shape[0]==n_total_frames）が落ちる）。
+    """
+    n_bins = 1
+    n1, n2 = 50, 40
+    overlap, preutt = 5, 18
+    sp_a = np.full((n1, n_bins), 1.0)
+    ap_a = np.full((n1, n_bins), 0.1)
+    sp_b = np.full((n2, n_bins), 5.0)
+    ap_b = np.full((n2, n_bins), 0.5)
+
+    placements = [
+        jn.NotePlacement(0, n1, sp_a, ap_a, has_join_to_prev=False, overlap_frames=None),
+        jn.NotePlacement(
+            n1, n1 + n2, sp_b, ap_b, has_join_to_prev=True,
+            overlap_frames=overlap, preutterance_frames=preutt,
+        ),
+    ]
+    sp_seq, _ap_seq, join_stats = jn.assemble_v2(n_bins, placements, frame_period_ms=5.0)
+
+    note_f0_tracks = [np.full(n1, 1.0), np.full(n2, 5.0)]
+    note_amp_tracks = [np.full(n1, 0.1), np.full(n2, 0.5)]
+    f0_seq, _amp_seq, control_stats = jn.assemble_control_tracks_v2(
+        placements, note_f0_tracks, note_amp_tracks, frame_period_ms=5.0
+    )
+
+    assert control_stats["n_total_frames"] == join_stats["n_total_frames"] == n1 + n2 - preutt
+    assert f0_seq.shape[0] == sp_seq.shape[0]
 
 
 def test_assemble_control_tracks_v2_gap_is_zero_not_carried_forward() -> None:

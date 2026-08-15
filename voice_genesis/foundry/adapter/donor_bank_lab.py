@@ -173,6 +173,23 @@ def compute_octave_transpose(donor_median_hz: float, target_median_hz: float) ->
     return int(round(semitone_diff / 12.0)) * 12
 
 
+def corpus_identity_hash(corpus_root: str | Path) -> str:
+    """P1 修正 (review #262 R2): PJS コーパスの「実体」ハッシュ（render.py の
+    `spec.donor` provenance 照合用。§ donor_bank_utau.voicebank_identity_hash
+    と対称の設計）。
+
+    全 `pjsNNN/pjsNNN.lab`（コーパス全体の音素セグメンテーション。どのファイル
+    がどの mora かを決める権威情報）を `(corpus_root からの相対パス, sha256)`
+    ペアで `donor_bank.aggregate_content_hash` へ渡した集約値を返す。
+    """
+    root = Path(corpus_root)
+    lab_paths = sorted(root.glob("pjs*/pjs*.lab"))
+    if not lab_paths:
+        raise FileNotFoundError(f"no pjs*/pjs*.lab found under {root}")
+    pairs = [(str(p.relative_to(root)), sha256_of(p)) for p in lab_paths]
+    return aggregate_content_hash(pairs)
+
+
 def _ms_to_frame(sec: float, frame_period_ms: float) -> int:
     return int(round(sec * 1000.0 / frame_period_ms))
 
@@ -249,12 +266,15 @@ def build_donor_bank_lab(
     # v1/v2 builder と同じ是正・同じ理由: root path + options のみのキーだと
     # `--cache-dir` 再利用時のコーパス編集が検知されない）。
     selected_paths, selection_stats = _select_lab_files(lab_paths, REQUIRED_ONSETS, min_files, max_files)
-    content_hashes: List[str] = []
+    content_hashes: List[Tuple[str, str]] = []
     for lab_path in selected_paths:
-        content_hashes.append(sha256_of(lab_path))
+        rel_lab = str(lab_path.relative_to(root))
+        content_hashes.append((rel_lab, sha256_of(lab_path)))
         wav_path = lab_path.parent / f"{lab_path.stem}_song.wav"
         if wav_path.exists():
-            content_hashes.append(sha256_of(wav_path))
+            content_hashes.append((str(wav_path.relative_to(root)), sha256_of(wav_path)))
+    # P2 修正 (review #262 R2): (相対パス, sha256) ペアで集約する
+    # （§ donor_bank_utau.py と同じ理由・同じ是正）。
     content_digest = aggregate_content_hash(content_hashes)
 
     cache_path: Optional[Path] = None
@@ -263,7 +283,7 @@ def build_donor_bank_lab(
         cache_dir.mkdir(parents=True, exist_ok=True)
         key_material = (
             f"{root}|{frame_period_ms}|{min_files}|{max_files}|{round(target_median_hz, 3)}"
-            f"|content={content_digest}|schema=content-hash-v1"
+            f"|content={content_digest}|schema=content-hash-v2"
         )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"lab_bank_{key}.pkl"

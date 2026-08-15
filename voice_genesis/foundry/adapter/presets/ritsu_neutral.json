@@ -1,0 +1,32 @@
+{
+  "schema": "foundry-voice/0.1",
+  "donor": {
+    "dataset": "ritsu",
+    "voicebank_name": "波音リツ強連続音Ver1.5.1",
+    "voicebank_sha256": "e722b36cd5b9c7ed68686fcf85d539e09186188c268b94476a061ce711d00206"
+  },
+  "warp": {
+    "formant_scale": 1.0,
+    "tilt_db_oct": 0.0,
+    "breath_lift": 0.0
+  },
+  "perf": {
+    "onset_glide": {
+      "depth_cents": -80.0,
+      "time_ms": 60.0
+    },
+    "vibrato": {
+      "rate_hz": 5.2,
+      "depth_cents": 25.0,
+      "onset_ms": 150.0,
+      "phase_reset_per_note": true
+    },
+    "drift": {
+      "depth_cents": 10.0,
+      "rate_hz": 0.4
+    },
+    "jitter_cents": 3.0,
+    "portamento_ms": 55.0
+  },
+  "seed": 11
+}
