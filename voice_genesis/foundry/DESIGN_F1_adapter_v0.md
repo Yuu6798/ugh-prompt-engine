@@ -86,7 +86,8 @@ presets: `neutral.json` と `warped.json`（formant_scale 0.96・tilt −1.5・v
 
 ### render.py
 
-CLI: `python -m adapter.render --score sakura --voice presets/neutral.json --out x.wav`
+CLI: `python -m adapter.render --score sakura --voice presets/neutral.json --wav <vocadito_2.wav>
+--notes-csv <vocadito_2_notesA1.csv> --out x.wav`
 （相対 import 問題を避ける実行形態は実装時に確定してよい。--score は sakura / umi）。
 出力 24kHz PCM_16・ピーク 0.6。同一 spec + seed → **同一バイト列**（決定論契約）。
 
