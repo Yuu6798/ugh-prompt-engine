@@ -244,18 +244,29 @@ def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     正規パス `staging_dir` が消失したまま旧世代は `.old` にしか存在しない
     状態になる。新世代 rename を `except BaseException` で保護し、失敗時は
     退避済みの旧世代を `staging_dir` へ復元してから再送出する。
+
+    review #263 R8 P2（`gate_synth.py` の同型ヘルパーと同一のファミリー
+    修正）: R7 の保護は新世代 rename のみを try で囲んでいたため、退避
+    rename（`staging_dir` -> `.old`）が完了した直後・try 進入前にも中断窓が
+    残っていた。加えて、退避完了の判定を `evicted_old = True` という後続
+    代入で行っていたため、`rename(2)` 自体は成功しているのに代入文自体が
+    実行されない極めて狭い窓も理論上残る。退避 rename から公開 rename
+    までの遷移全体を単一の try/except BaseException で覆うと同時に、
+    「退避が完了したか」の判定をフラグ変数ではなく `old_dir.exists()` と
+    いう実ファイルシステム状態の観測へ置き換える（このメソッド冒頭で
+    `.old` を消去済みのため、except 到達時点で `old_dir` が存在するのは
+    今回の退避 rename が成功した場合のみであり、フラグの代入タイミングに
+    依存しない）。これにより両方の中断窓を閉じる。
     """
     old_dir = staging_dir.parent / f"{staging_dir.name}.old"
     if old_dir.exists():
         shutil.rmtree(old_dir)
-    evicted_old = False
-    if staging_dir.exists():
-        staging_dir.rename(old_dir)
-        evicted_old = True
     try:
+        if staging_dir.exists():
+            staging_dir.rename(old_dir)
         build_dir.rename(staging_dir)
     except BaseException:
-        if evicted_old:
+        if old_dir.exists() and not staging_dir.exists():
             old_dir.rename(staging_dir)
         raise
 

@@ -393,6 +393,23 @@ def run_export_acoustic(diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, st
         shutil.copy2(onnx_candidates[0], alias_path)
         print(f"| aliased {onnx_candidates[0].name} -> acoustic.onnx "
               f"(gate_synth.py naming-assumption bugfix)")
+    elif len(onnx_candidates) > 1:
+        # review #263 R8 P2: 非 alias *.onnx が複数存在する場合、今回の export
+        # 由来がどれかを決め打ちできない。従来はこの分岐で何もせず後段の
+        # `alias_path.exists()` チェックへ落ちていたため、alias_path が
+        # 前回（別 checkpoint）export 由来のまま残っていると、その stale な
+        # alias を暗黙に流用して合成が進んでしまう fail-open だった
+        # （ckpt/config の sha256 は新しいものを記録しつつ、実際に読み込む
+        # acoustic.onnx は古いままという R5 P1 と同種の不整合を再発させる）。
+        # 曖昧な場合は alias を更新せず、既存 alias の有無に関わらず
+        # fail-closed で停止する（stale alias の暗黙流用を禁止）。
+        names = ", ".join(p.name for p in onnx_candidates)
+        raise RuntimeError(
+            f"ambiguous export output in {out_path}: multiple non-alias *.onnx "
+            f"candidates ({names}) found — cannot determine which one this "
+            f"export produced. Refusing to fall back to any pre-existing "
+            f"acoustic.onnx alias (fail-closed); clean {out_path} and re-export."
+        )
     if not alias_path.exists():
         raise RuntimeError(f"export.py did not produce {alias_path}")
     return out_path
@@ -738,18 +755,29 @@ def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
     `except BaseException` で保護し、失敗時は退避済みの旧世代を `out_dir`
     へ復元してから再送出する。旧世代が存在しなかった場合（初回実行等）は
     復元対象が無いためそのまま再送出する。
+
+    review #263 R8 P2: R7 の保護は新世代 rename のみを try で囲んでいたため、
+    退避 rename（`out_dir` -> `.old`）が完了した直後・try 進入前にも中断窓
+    （`KeyboardInterrupt` 等）が残っていた。加えて、退避完了の判定を
+    `evicted_old = True` という後続代入で行っていたため、`rename(2)` 自体は
+    成功しているのに（Python の呼び出しフレームへ制御が戻る前に割り込みが
+    入るなどして）その代入文自体が実行されない極めて狭い窓も理論上残る。
+    退避 rename から公開 rename までの遷移全体を単一の try/except
+    BaseException で覆うと同時に、「退避が完了したか」の判定をフラグ変数
+    ではなく `old_dir.exists()` という実ファイルシステム状態の観測へ置き換
+    える（このメソッド冒頭で `.old` を消去済みのため、except 到達時点で
+    `old_dir` が存在するのは今回の退避 rename が成功した場合のみであり、
+    フラグの代入タイミングに依存しない）。これにより両方の中断窓を閉じる。
     """
     old_dir = out_dir.parent / f"{out_dir.name}.old"
     if old_dir.exists():
         shutil.rmtree(old_dir)
-    evicted_old = False
-    if out_dir.exists():
-        out_dir.rename(old_dir)
-        evicted_old = True
     try:
+        if out_dir.exists():
+            out_dir.rename(old_dir)
         build_dir.rename(out_dir)
     except BaseException:
-        if evicted_old:
+        if old_dir.exists() and not out_dir.exists():
             old_dir.rename(out_dir)
         raise
 
