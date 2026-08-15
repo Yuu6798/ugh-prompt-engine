@@ -173,6 +173,35 @@ def frames_for_samples(n_samples: int, sr: int) -> int:
     return max(int(round(n_samples / sr / _frame_period_s())), 0)
 
 
+def _note_frame_track(
+    per_sample: np.ndarray, seg, note_dur_frames: int, n_frames: int, sr: int, frame_period_ms: float,
+) -> np.ndarray:
+    """P1 修正 (review #262): 1 note の resolve 後フレーム列（`n_frames`）に
+    対応する perf_genes per-sample トラック（`base_f0_persample`/`amp_env`。
+    圧縮前の生スコアサンプル時間軸で構築済み）の値を、**このノート自身の
+    圧縮前・実スパン内**で決定論的に抽出する（他ノートの overlap 圧縮とは
+    無関係。圧縮後タイムラインへの整列は `joins.assemble_control_tracks_v2`
+    が sp/ap と同じ run/overlap 機構で後段に行う）。
+
+    `n_frames` は録音済み子音の前置（`prepend_recorded_consonant`）で
+    `note_dur_frames`（= seg の生スコア尺から素朴に求めたフレーム数）より
+    長くなることがある。その場合、末尾側の `note_dur_frames` フレームが
+    seg の実スパン [start_sample, end_sample) に対応するよう原点をずらす
+    （先頭の余剰フレームは子音が鳴る時間帯 = seg 開始より前へ自然に延びる。
+    0 側でクランプ）。
+    """
+    if n_frames <= 0:
+        return np.zeros(0, dtype=np.float64)
+    if per_sample.shape[0] == 0:
+        return np.zeros(n_frames, dtype=np.float64)
+    samples_per_frame = sr * frame_period_ms / 1000.0
+    extra_head = max(0, n_frames - note_dur_frames)
+    k = np.arange(n_frames) - extra_head
+    sample_idx = np.round(seg.start_sample + k * samples_per_frame).astype(np.int64)
+    sample_idx = np.clip(sample_idx, 0, per_sample.shape[0] - 1)
+    return per_sample[sample_idx]
+
+
 def _midi_to_hz(m: float) -> float:
     return 440.0 * 2.0 ** ((m - 69.0) / 12.0)
 
@@ -227,6 +256,19 @@ def render(
     spec = vs.load_voice_spec(voice_spec_path)
     notes, tempo_bpm = build_score(score_name)
     segments, total_samples = perf.build_timeline(notes, sr=SR, tempo_bpm=tempo_bpm)
+    # P1 修正 (review #262): f0/振幅の per-sample トラックは segments/total_samples
+    # だけに依存する（donor 選択より前に決められる）。旧実装はこれらを
+    # assemble_v2 呼び出しの後段で構築し、圧縮後フレーム数でナイーブに再インデックス
+    # していたためタイムラインがズレていた（`_note_frame_track` + `jn.assemble_control_tracks_v2`
+    # 経由で圧縮後タイムラインへ正しく整列させる。後段の placements 構築後に使う）。
+    note_dur_frames_list = [
+        max(frames_for_samples(seg.end_sample - seg.start_sample, SR), 1) for seg in segments
+    ]
+    portamento_ms = float(spec.perf.get("portamento_ms", 55.0))
+    base_f0_persample = pg.build_perf_f0(
+        segments, total_samples, SR, spec.perf, seed=spec.seed, portamento_ms=portamento_ms
+    )
+    amp_env = perf.build_amplitude_envelope(segments, total_samples, SR)
 
     consonant_clips: Dict[str, list] = {}
     donor_extra_stats: dict = {}
@@ -373,13 +415,36 @@ def render(
 
     sp_seq, ap_seq = vs.apply_warp(sp_seq, ap_seq, SR, spec.warp)
 
-    portamento_ms = float(spec.perf.get("portamento_ms", 55.0))
-    base_f0_persample = pg.build_perf_f0(
-        segments, total_samples, SR, spec.perf, seed=spec.seed, portamento_ms=portamento_ms
+    # P1 修正 (review #262): f0/振幅トラックを sp/ap と同じ圧縮後タイムライン上へ
+    # ノート単位で再構築する。placements[i] の実スパン（consonant 前置で
+    # note_dur_frames_list[i] より長いことがある）に対して perf_genes の
+    # per-sample トラックを抽出し（`_note_frame_track`）、sp/ap と全く同じ
+    # run/overlap 圧縮（`jn.assemble_control_tracks_v2`）へ通すことで、
+    # join を経るたびに累積していたズレ（旧: 圧縮後フレーム数から作った
+    # 素朴な等間隔インデックスで圧縮前の生タイムラインを読み出していたバグ）
+    # を解消する。overlap 区間は f0 を log domain（sp と同じ）・振幅を
+    # linear domain（ap と同じ）でブレンドする。
+    note_f0_tracks = [
+        _note_frame_track(
+            base_f0_persample, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS
+        )
+        for i, p in enumerate(placements)
+    ]
+    note_amp_tracks = [
+        _note_frame_track(
+            amp_env, segments[i], note_dur_frames_list[i], p.sp.shape[0], SR, FRAME_PERIOD_MS
+        )
+        for i, p in enumerate(placements)
+    ]
+    f0_seq, amp_seq, control_track_stats = jn.assemble_control_tracks_v2(
+        placements, note_f0_tracks, note_amp_tracks, frame_period_ms=FRAME_PERIOD_MS
     )
-    frame_t = np.arange(n_total_frames) * _frame_period_s()
-    sample_idx = np.minimum(np.round(frame_t * SR).astype(np.int64), max(total_samples - 1, 0))
-    f0_seq = base_f0_persample[sample_idx] if total_samples > 0 else np.zeros(n_total_frames)
+    assert f0_seq.shape[0] == n_total_frames, (
+        f"f0_seq/sp_seq フレーム数不一致: {f0_seq.shape[0]} != {n_total_frames}"
+    )
+    assert amp_seq.shape[0] == n_total_frames, (
+        f"amp_seq/sp_seq フレーム数不一致: {amp_seq.shape[0]} != {n_total_frames}"
+    )
 
     y = pw.synthesize(
         np.ascontiguousarray(f0_seq), np.ascontiguousarray(sp_seq), np.ascontiguousarray(ap_seq),
@@ -392,10 +457,15 @@ def render(
     # のみに縮退済みなので、ここで乗算するフレーズアーチ + articulation
     # エンベロープが最終波形の音量ダイナミクスを決める唯一の経路になる
     # （singer/render_song.py の amp_render 適用パターンと同じ乗算方式）。
-    amp_env = perf.build_amplitude_envelope(segments, total_samples, SR)
-    if len(y) > 0 and len(amp_env) > 0:
-        amp_idx = np.minimum(np.arange(len(y)), len(amp_env) - 1)
-        y = y * amp_env[amp_idx]
+    # P1 修正: amp_seq は sp_seq/ap_seq と同じ**フレーム**単位（圧縮後タイムライン
+    # 上で正しく整列済み）のため、y（サンプル単位）へ適用する際はフレーム→サンプル
+    # の素朴な等分割で読み出す（旧実装のような圧縮前タイムラインとの取り違えはない）。
+    if len(y) > 0 and len(amp_seq) > 0:
+        samples_per_frame = SR * FRAME_PERIOD_MS / 1000.0
+        frame_idx_for_sample = np.minimum(
+            (np.arange(len(y)) / samples_per_frame).astype(np.int64), len(amp_seq) - 1
+        )
+        y = y * amp_seq[frame_idx_for_sample]
 
     peak = float(np.max(np.abs(y))) if len(y) else 0.0
     if peak > 0:
@@ -408,6 +478,7 @@ def render(
     return dict(
         y=y, sr=SR, n_total_frames=n_total_frames, total_samples_timeline=total_samples,
         selections=selections, selection_stats=sel_stats, join_stats=join_stats,
+        control_track_stats=control_track_stats,
         donor_bank_stats=bank.stats, donor_bank_source=bank.source, wav_sha256=bank.wav_sha256,
         donor=donor, consonant_source=consonant_source, donor_extra_stats=donor_extra_stats,
         n_stretch_extended_looped=cap_modes.count("extended_looped"),

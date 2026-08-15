@@ -313,6 +313,59 @@ def test_build_donor_bank_utau_cache_key_changed_by_schema_version(tmp_path: Pat
     assert legacy_key not in cached[0].name
 
 
+# --- P1 修正 (review #262): キャッシュキーの内容ハッシュ（oto.ini 編集検知） ---
+
+
+def test_build_donor_bank_utau_cache_stale_after_oto_edit(tmp_path: Path) -> None:
+    """v1 builder: `--cache-dir` 再利用中に oto.ini を 1 バイト編集（overlap
+    値を変更）すると、古い pickle を返さず再計算されることを確認する
+    （旧実装は root path + options のみがキー材料で、oto.ini の内容は
+    キーに反映されなかった）。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    oto_path = pdir / "oto.ini"
+    oto_path.write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    cache_dir = tmp_path / "cache"
+    bank1, _uv1, _c1, s1 = dbu.build_donor_bank_utau(
+        root, cache_dir=cache_dir, min_units_per_vowel=1, max_wav_files=5
+    )
+    assert s1["cache_hit"] is False
+    assert bank1.units[0].overlap_frames == 2  # 10ms @ 5ms
+
+    oto_path.write_bytes("_test.wav=- あA3,0,80,900,40,30\n".encode("cp932"))  # overlap 10->30
+    bank2, _uv2, _c2, _s2 = dbu.build_donor_bank_utau(
+        root, cache_dir=cache_dir, min_units_per_vowel=1, max_wav_files=5
+    )
+    # 古いキャッシュ（overlap_frames=2）を誤って再利用していれば ==2 のまま
+    # になる。編集が反映されている（==6）ことが「キャッシュが stale でない」
+    # ことの直接証拠。
+    assert bank2.units[0].overlap_frames == 6  # 30ms @ 5ms
+    assert len(list(cache_dir.glob("utau_bank_*.pkl"))) == 2
+
+
+def test_build_donor_bank_utau_vcv_cache_stale_after_oto_edit(tmp_path: Path) -> None:
+    """v2 (VCV) builder: 同じく oto.ini 編集がキャッシュキーへ反映される。"""
+    root = tmp_path / "voicebank"
+    pdir = root / "A3"
+    pdir.mkdir(parents=True)
+    _write_sine_wav(pdir / "_test.wav", duration_s=1.0)
+    oto_path = pdir / "oto.ini"
+    oto_path.write_bytes("_test.wav=- あA3,0,80,900,40,10\n".encode("cp932"))
+
+    cache_dir = tmp_path / "cache"
+    bank1, _ctx1, s1 = dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5)
+    assert s1["cache_hit"] is False
+    assert bank1.units[0].overlap_frames == 2
+
+    oto_path.write_bytes("_test.wav=- あA3,0,80,900,40,30\n".encode("cp932"))
+    bank2, _ctx2, _s2 = dbu.build_donor_bank_utau_vcv(root, cache_dir=cache_dir, max_wav_files=5)
+    assert bank2.units[0].overlap_frames == 6
+    assert len(list(cache_dir.glob("utau_bank_vcv_*.pkl"))) == 2
+
+
 # --- 追補 F1.4-A: VCV unit 化（donor_bank_utau v2） ---
 
 

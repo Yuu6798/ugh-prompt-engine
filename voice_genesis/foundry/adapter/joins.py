@@ -180,6 +180,96 @@ def _resolve_join_overlap(requested: Optional[int], default_frames: int) -> int:
     return requested if requested is not None and requested >= 0 else default_frames
 
 
+def compute_runs(placements: Sequence[NotePlacement]) -> List[List[int]]:
+    """`placements` を「フレーズ内で連続する note（run）」へグルーピングする
+    （`has_join_to_prev=True` の連鎖）。`assemble_v2` と
+    `assemble_control_tracks_v2` の両方が同じグルーピングを使うための共通
+    ヘルパー（P1 修正: f0/振幅トラックを sp/ap と同一の run 構造・同一の
+    overlap 圧縮で再構築するために、run 分割ロジックの二重実装を避ける）。
+    """
+    if not placements:
+        return []
+    runs: List[List[int]] = [[0]]
+    for i in range(1, len(placements)):
+        if placements[i].has_join_to_prev:
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    return runs
+
+
+def assemble_control_tracks_v2(
+    placements: Sequence[NotePlacement],
+    note_primary_tracks: Sequence[np.ndarray],
+    note_secondary_tracks: Sequence[np.ndarray],
+    frame_period_ms: float = 5.0,
+    default_overlap_ms: float = DEFAULT_OVERLAP_MS,
+) -> Tuple[np.ndarray, np.ndarray, dict]:
+    """P1 修正 (review #262): f0/振幅などの制御トラックを、sp/ap と**同一の**
+    圧縮後タイムライン（`assemble_v2` が作る run 構造・overlap 量）へ frame
+    単位で正しく整列させて再構築する。
+
+    バグの背景: 旧実装は `base_f0_persample`/`amp_env` を「圧縮前の生スコア
+    サンプル時間軸」で構築し、圧縮後フレーム数 `n_total_frames` から作った
+    素朴な等間隔インデックスでそれを読み出していた。`assemble_v2` は
+    フレーズ内 run を true overlap-add で圧縮する（join のたびに総尺が
+    overlap 分だけ縮む）ため、この読み出しは join を経るたびにズレが累積する
+    （render.py:377-398 で確認された P1 バグ）。
+
+    本関数は sp/ap と全く同じ `compute_runs` グルーピング + 同じ
+    `_resolve_join_overlap` による overlap 長決定を使い、各 note の
+    per-frame トラック（`note_primary_tracks[i]`/`note_secondary_tracks[i]`、
+    各要素は `placements[i].sp.shape[0]` と同じフレーム数）を
+    `overlap_add_concat` へ渡す（sp と同じ log ブレンド / ap と同じ線形
+    ブレンドを流用: primary=log domain（f0 に自然）、secondary=linear
+    domain（振幅に自然））。run 間ギャップ（フレーズ間ブレス等）は
+    carry-forward せず 0 埋めする（sp/ap の carry-forward はスペクトル包絡の
+    連続性のためだが、f0/振幅は無声区間で真に 0 であるべきため = 元の
+    per-sample トラックが breath 区間で自然に 0 になっているのと同じ意味論）。
+
+    戻り値の系列長は sp_seq/ap_seq の `n_total_frames` と厳密に一致する
+    （同一の run 構造・同一の gap 長算出のため）。
+    """
+    if not placements:
+        return np.zeros(0), np.zeros(0), dict(n_total_frames=0)
+
+    default_overlap_frames = max(1, int(round(default_overlap_ms / frame_period_ms)))
+    runs = compute_runs(placements)
+
+    primary_chunks: List[np.ndarray] = []
+    secondary_chunks: List[np.ndarray] = []
+    prev_naive_end: Optional[int] = None
+
+    for run in runs:
+        pieces = [
+            (note_primary_tracks[i].reshape(-1, 1), note_secondary_tracks[i].reshape(-1, 1)) for i in run
+        ]
+        join_overlaps = [
+            _resolve_join_overlap(placements[i].overlap_frames, default_overlap_frames) for i in run[1:]
+        ]
+        primary_block2d, secondary_block2d, _run_stats = overlap_add_concat(pieces, join_overlaps)
+        primary_block = primary_block2d[:, 0]
+        secondary_block = secondary_block2d[:, 0]
+
+        naive_start = placements[run[0]].start_frame
+        if prev_naive_end is None:
+            if naive_start > 0:
+                primary_chunks.append(np.zeros(naive_start))
+                secondary_chunks.append(np.zeros(naive_start))
+        else:
+            gap = max(0, naive_start - prev_naive_end)
+            if gap > 0:
+                primary_chunks.append(np.zeros(gap))
+                secondary_chunks.append(np.zeros(gap))
+        primary_chunks.append(primary_block)
+        secondary_chunks.append(secondary_block)
+        prev_naive_end = placements[run[-1]].end_frame
+
+    primary_seq = np.concatenate(primary_chunks, axis=0)
+    secondary_seq = np.concatenate(secondary_chunks, axis=0)
+    return primary_seq, secondary_seq, dict(n_total_frames=int(primary_seq.shape[0]))
+
+
 def assemble_v2(
     n_bins: int,
     placements: Sequence[NotePlacement],
@@ -208,12 +298,7 @@ def assemble_v2(
 
     default_overlap_frames = max(1, int(round(default_overlap_ms / frame_period_ms)))
 
-    runs: List[List[int]] = [[0]]
-    for i in range(1, len(placements)):
-        if placements[i].has_join_to_prev:
-            runs[-1].append(i)
-        else:
-            runs.append([i])
+    runs = compute_runs(placements)
 
     n_joins_applied = 0
     n_joins_skipped_short = 0

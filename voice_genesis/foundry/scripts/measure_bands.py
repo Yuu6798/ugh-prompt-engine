@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -79,12 +80,21 @@ def hnr_median_db(x: np.ndarray, sr: int) -> float:
 
 
 def analyze_wav(path: str | Path) -> dict[str, Any]:
-    """WAV を読み込み、帯域占有率 + HNR + 基本統計量を返す。"""
-    x, sr = sf.read(str(path), dtype="float64")
+    """WAV を読み込み、帯域占有率 + HNR + 基本統計量を返す。
+
+    Persistent Artifact Safety Gate（AGENTS.md 項目1）: 単一 read で parse +
+    hash する（decode 用 `sf.read` と hash 用 `read_bytes` を別々に呼ぶと、
+    両者の間にファイルが書き換えられた場合に記録される sha256 が実際に
+    解析したサンプル列と食い違う TOCTOU 窓が生まれるため）。1 回の
+    `read_bytes()` で得た同一バイト列から、`io.BytesIO` 経由のデコードと
+    sha256 の両方を導出する。
+    """
+    data = Path(path).read_bytes()
+    sha256 = hashlib.sha256(data).hexdigest()
+    x, sr = sf.read(io.BytesIO(data), dtype="float64")
     if x.ndim > 1:
         x = x.mean(axis=1)
 
-    sha256 = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     peak = float(np.max(np.abs(x))) if len(x) else 0.0
     rms = float(np.sqrt(np.mean(x**2))) if len(x) else 0.0
 

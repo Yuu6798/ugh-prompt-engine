@@ -44,6 +44,19 @@ def sha256_of(path: str | Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def aggregate_content_hash(hashes: Sequence[str]) -> str:
+    """複数の内容ハッシュ（sha256 hex 文字列）を sorted 連結して単一ダイジェスト
+    へ再ハッシュする（P1 修正: donor bank キャッシュキー材料用の内容ダイジェスト
+    集約。入力順に依存しない・決定論）。
+
+    donor_bank_utau.py / donor_bank_lab.py の各 builder（v1/v2/PJS）が
+    キャッシュキーへ「対象 WAV 群 + oto.ini/.lab/notes CSV のバイト sha256」を
+    含めるために使う共通ヘルパー（AGENTS.md Persistent Artifact Safety Gate
+    項目8「input + output hash 記録」に対応・review #262 P1 指摘の是正）。
+    """
+    return hashlib.sha256("|".join(sorted(hashes)).encode("utf-8")).hexdigest()
+
+
 def load_donor_24k(wav_path: str | Path) -> Tuple[np.ndarray, int]:
     """44.1kHz ドナー wav を読み込み、24kHz へ有理比 80/147 でリサンプルする。
 
@@ -354,10 +367,19 @@ def normalize_unit_energy(bank: DonorBank) -> Tuple[DonorBank, dict]:
     return new_bank, stats
 
 
-def _cache_key(wav_sha256: str, notes_csv_path: Optional[str], frame_period_ms: float) -> str:
+def _cache_key(wav_sha256: str, notes_csv_sha256: Optional[str], frame_period_ms: float) -> str:
+    """P1 修正 (review #262): `notes_csv_sha256` は notes CSV の**内容**
+    sha256（呼び出し側が `sha256_of(notes_csv_path)` で計算・パス文字列では
+    ない）。旧実装はパス文字列のみを材料にしていたため、同一 `--cache-dir` を
+    再利用しつつ notes CSV を in-place 編集しても古いキャッシュを返す
+    サイレントな provenance 破損があった（wav 側は既に `wav_sha256` で内容
+    ハッシュ済みだったが notes CSV 側だけ抜けていた）。
+    `schema=content-hash-v1` はフィールド意味変更（パス文字列 -> 内容ハッシュ）
+    に伴う旧キャッシュとの衝突回避マーカー。
+    """
     material = (
-        f"{wav_sha256}|{notes_csv_path or 'fallback'}|{frame_period_ms}|{N_LOG_BANDS}|"
-        f"{MIN_UNIT_SEC}|{MAX_UNIT_SEC}|{MIN_UNIT_FRAMES_ABS}"
+        f"{wav_sha256}|{notes_csv_sha256 or 'fallback'}|{frame_period_ms}|{N_LOG_BANDS}|"
+        f"{MIN_UNIT_SEC}|{MAX_UNIT_SEC}|{MIN_UNIT_FRAMES_ABS}|schema=content-hash-v1"
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
@@ -424,7 +446,10 @@ def build_donor_bank(
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        key = _cache_key(wav_sha256, notes_csv_str if use_notes else None, frame_period_ms)
+        # P1 修正: notes CSV は内容ハッシュ（パスではない）をキー材料にする
+        # （`sha256_of` 自体は軽い read_bytes 1 回のみで WORLD 分析ほど高くない）。
+        notes_csv_sha256 = sha256_of(notes_csv_path) if use_notes else None  # type: ignore[arg-type]
+        key = _cache_key(wav_sha256, notes_csv_sha256, frame_period_ms)
         cache_path = cache_dir / f"donor_bank_{key}.npz"
         if cache_path.exists():
             return _load_cache(cache_path)

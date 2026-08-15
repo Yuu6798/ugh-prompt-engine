@@ -46,6 +46,7 @@ from donor_bank import (  # noqa: E402
     N_LOG_BANDS,
     SR,
     _log_band_vector,
+    aggregate_content_hash,
     analyze_donor_world,
     sha256_of,
 )
@@ -242,18 +243,33 @@ def build_donor_bank_lab(
     if not lab_paths:
         raise FileNotFoundError(f"no pjs*/pjs*.lab found under {root}")
 
+    # P1 修正 (review #262): .lab 選択（`_select_lab_files`）は音声デコード
+    # 不要な軽量処理のため、キャッシュ判定より前倒しして選択された .lab /
+    # 対応する _song.wav の内容ハッシュをキー材料へ含める（donor_bank_utau の
+    # v1/v2 builder と同じ是正・同じ理由: root path + options のみのキーだと
+    # `--cache-dir` 再利用時のコーパス編集が検知されない）。
+    selected_paths, selection_stats = _select_lab_files(lab_paths, REQUIRED_ONSETS, min_files, max_files)
+    content_hashes: List[str] = []
+    for lab_path in selected_paths:
+        content_hashes.append(sha256_of(lab_path))
+        wav_path = lab_path.parent / f"{lab_path.stem}_song.wav"
+        if wav_path.exists():
+            content_hashes.append(sha256_of(wav_path))
+    content_digest = aggregate_content_hash(content_hashes)
+
     cache_path: Optional[Path] = None
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        key_material = f"{root}|{frame_period_ms}|{min_files}|{max_files}|{round(target_median_hz, 3)}"
+        key_material = (
+            f"{root}|{frame_period_ms}|{min_files}|{max_files}|{round(target_median_hz, 3)}"
+            f"|content={content_digest}|schema=content-hash-v1"
+        )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"lab_bank_{key}.pkl"
         if cache_path.exists():
             with open(cache_path, "rb") as f:
                 return pickle.load(f)
-
-    selected_paths, selection_stats = _select_lab_files(lab_paths, REQUIRED_ONSETS, min_files, max_files)
 
     all_f0: List[np.ndarray] = []
     all_sp: List[np.ndarray] = []

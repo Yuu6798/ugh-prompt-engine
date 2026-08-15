@@ -54,6 +54,7 @@ from donor_bank import (  # noqa: E402
     N_LOG_BANDS,
     SR,
     _log_band_vector,
+    aggregate_content_hash,
     analyze_donor_world,
     sha256_of,
 )
@@ -407,6 +408,37 @@ def build_donor_bank_utau_vcv(
     if not pitch_dirs:
         raise FileNotFoundError(f"no pitch dir with oto.ini found under {root}")
 
+    # P1 修正 (review #262): キャッシュキーに WAV/oto.ini の**内容**ハッシュを
+    # 含めるため、oto.ini 解析 + wav 部分集合選択（どちらも軽量・WORLD 分析を
+    # 伴わない）をキャッシュ判定より前に前倒しする。旧実装は root path +
+    # options のみをキー材料にしていたため、`--cache-dir` 再利用時に
+    # voicebank_root 配下の WAV/oto.ini を編集しても古い pickle を返す
+    # サイレントな provenance 破損があった。
+    pitch_dir_prep: Dict[str, dict] = {}
+    content_hashes: List[str] = []
+    for pdir_name in pitch_dirs:
+        pdir = root / pdir_name
+        oto_path = pdir / "oto.ini"
+        oto_bytes = oto_path.read_bytes()
+        oto_sha256 = hashlib.sha256(oto_bytes).hexdigest()
+        content_hashes.append(oto_sha256)
+        entries = parse_oto_ini(oto_path)
+        entries_by_wav: "OrderedDict[str, List[OtoEntry]]" = OrderedDict()
+        for e in entries:
+            entries_by_wav.setdefault(e.wav_filename, []).append(e)
+        selected_files, sel_stats = _select_wav_subset_for_contexts(
+            entries_by_wav, pitch_dirs, required_contexts, max_wav_files
+        )
+        for wav_filename in selected_files:
+            wav_path = pdir / wav_filename
+            if wav_path.exists():
+                content_hashes.append(sha256_of(wav_path))
+        pitch_dir_prep[pdir_name] = dict(
+            entries=entries, entries_by_wav=entries_by_wav,
+            selected_files=selected_files, sel_stats=sel_stats,
+        )
+    content_digest = aggregate_content_hash(content_hashes)
+
     cache_path: Optional[Path] = None
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
@@ -416,7 +448,7 @@ def build_donor_bank_utau_vcv(
         ))
         key_material = (
             f"{root}|{','.join(pitch_dirs)}|{frame_period_ms}|{max_wav_files}|{ctx_material}"
-            f"|schema=f1.4-vcv-v1"
+            f"|content={content_digest}|schema=f1.4-vcv-content-hash-v2"
         )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"utau_bank_vcv_{key}.pkl"
@@ -443,17 +475,11 @@ def build_donor_bank_utau_vcv(
 
     for pdir_name in pitch_dirs:
         pdir = root / pdir_name
-        oto_path = pdir / "oto.ini"
         pitch_hz_by_dir[pdir_name] = note_name_to_hz(pdir_name)
-        entries = parse_oto_ini(oto_path)
-        n_entries_total += len(entries)
-        entries_by_wav: "OrderedDict[str, List[OtoEntry]]" = OrderedDict()
-        for e in entries:
-            entries_by_wav.setdefault(e.wav_filename, []).append(e)
-
-        selected_files, sel_stats = _select_wav_subset_for_contexts(
-            entries_by_wav, pitch_dirs, required_contexts, max_wav_files
-        )
+        prep = pitch_dir_prep[pdir_name]
+        entries_by_wav = prep["entries_by_wav"]
+        n_entries_total += len(prep["entries"])
+        selected_files, sel_stats = prep["selected_files"], prep["sel_stats"]
         selection_stats_by_dir[pdir_name] = sel_stats
 
         for wav_filename in selected_files:
@@ -575,6 +601,33 @@ def build_donor_bank_utau(
     if not pitch_dirs:
         raise FileNotFoundError(f"no pitch dir with oto.ini found under {root}")
 
+    # P1 修正 (review #262): build_donor_bank_utau_vcv と同じ理由で、oto.ini
+    # 解析 + wav 部分集合選択をキャッシュ判定より前倒しし、選択された WAV/oto.ini
+    # の内容ハッシュをキー材料へ含める。
+    pitch_dir_prep: Dict[str, dict] = {}
+    content_hashes: List[str] = []
+    for pdir_name in pitch_dirs:
+        pdir = root / pdir_name
+        oto_path = pdir / "oto.ini"
+        oto_bytes = oto_path.read_bytes()
+        content_hashes.append(hashlib.sha256(oto_bytes).hexdigest())
+        entries = parse_oto_ini(oto_path)
+        entries_by_wav: "OrderedDict[str, List[OtoEntry]]" = OrderedDict()
+        for e in entries:
+            entries_by_wav.setdefault(e.wav_filename, []).append(e)
+        selected_files, sel_stats = _select_wav_subset(
+            entries_by_wav, pitch_dirs, REQUIRED_ONSETS, min_units_per_vowel, max_wav_files
+        )
+        for wav_filename in selected_files:
+            wav_path = pdir / wav_filename
+            if wav_path.exists():
+                content_hashes.append(sha256_of(wav_path))
+        pitch_dir_prep[pdir_name] = dict(
+            entries=entries, entries_by_wav=entries_by_wav,
+            selected_files=selected_files, sel_stats=sel_stats,
+        )
+    content_digest = aggregate_content_hash(content_hashes)
+
     cache_path: Optional[Path] = None
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
@@ -582,9 +635,10 @@ def build_donor_bank_utau(
         # 追補 F1.3-A: unit スキーマへ overlap/preutterance フレームを追加した
         # ため、キー材料へバージョンマーカーを足して旧キャッシュ（フィールド無し
         # の DonorUnit を pickle 済み）との衝突を避ける（実装決定・record 記録）。
+        # P1 修正 (review #262): 内容ハッシュ追加に伴いマーカーを v2 へ更新。
         key_material = (
             f"{root}|{','.join(pitch_dirs)}|{frame_period_ms}|{min_units_per_vowel}|{max_wav_files}"
-            f"|schema=f1.3-overlap-preutt-v1"
+            f"|content={content_digest}|schema=f1.3-overlap-preutt-content-hash-v2"
         )
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
         cache_path = cache_dir / f"utau_bank_{key}.pkl"
@@ -612,17 +666,11 @@ def build_donor_bank_utau(
 
     for pdir_name in pitch_dirs:
         pdir = root / pdir_name
-        oto_path = pdir / "oto.ini"
         pitch_hz_by_dir[pdir_name] = note_name_to_hz(pdir_name)
-        entries = parse_oto_ini(oto_path)
-        n_entries_total += len(entries)
-        entries_by_wav: "OrderedDict[str, List[OtoEntry]]" = OrderedDict()
-        for e in entries:
-            entries_by_wav.setdefault(e.wav_filename, []).append(e)
-
-        selected_files, sel_stats = _select_wav_subset(
-            entries_by_wav, pitch_dirs, REQUIRED_ONSETS, min_units_per_vowel, max_wav_files
-        )
+        prep = pitch_dir_prep[pdir_name]
+        entries_by_wav = prep["entries_by_wav"]
+        n_entries_total += len(prep["entries"])
+        selected_files, sel_stats = prep["selected_files"], prep["sel_stats"]
         selection_stats_by_dir[pdir_name] = sel_stats
 
         for wav_filename in selected_files:

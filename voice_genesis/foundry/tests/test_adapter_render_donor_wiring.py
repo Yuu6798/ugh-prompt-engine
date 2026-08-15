@@ -212,3 +212,66 @@ def test_build_vcv_placements_end_frame_unaffected_by_shift() -> None:
     naive_start = breath_frames + resolved_list[0].n_frames
     assert placements[1].end_frame == naive_start + resolved_list[1].n_frames
     assert placements[1].start_frame < placements[1].end_frame - resolved_list[1].n_frames + 1
+
+
+# --- P1 修正 (review #262): _note_frame_track（f0/振幅トラックのノート単位抽出） ---
+
+
+class _MiniSeg:
+    def __init__(self, start_sample: int) -> None:
+        self.start_sample = start_sample
+
+
+def test_note_frame_track_samples_at_frame_boundaries() -> None:
+    """圧縮前・ノート自身の実スパン内で、5ms(=24000*0.005=120 samples) おきに
+    per-sample トラックをサンプリングする（consonant 前置なし = extra_head=0）。"""
+    sr = 24000
+    per_sample = np.arange(10000, dtype=np.float64)  # per_sample[i] == i（読み出し位置の検算用）
+    seg = _MiniSeg(start_sample=1000)
+    note_dur_frames = 5
+    track = rd._note_frame_track(per_sample, seg, note_dur_frames, n_frames=5, sr=sr, frame_period_ms=5.0)
+    samples_per_frame = sr * 5.0 / 1000.0  # 120
+    expected = np.array([1000 + k * samples_per_frame for k in range(5)])
+    assert np.array_equal(track, expected)
+
+
+def test_note_frame_track_consonant_extended_head_maps_backward() -> None:
+    """録音子音前置で n_frames > note_dur_frames の場合、末尾 note_dur_frames
+    フレームが seg の実スパンへ整列し、先頭の余剰フレーム（子音）は
+    seg.start_sample より前へマップされる。"""
+    sr = 24000
+    per_sample = np.arange(10000, dtype=np.float64)
+    seg = _MiniSeg(start_sample=1000)
+    note_dur_frames = 5
+    n_frames = 8  # 3 フレーム分の子音が前置されたと仮定
+    track = rd._note_frame_track(per_sample, seg, note_dur_frames, n_frames, sr=sr, frame_period_ms=5.0)
+    samples_per_frame = 120.0
+    extra_head = n_frames - note_dur_frames  # 3
+    expected = np.array([1000 + (k - extra_head) * samples_per_frame for k in range(n_frames)])
+    assert np.array_equal(track, expected)
+    # 末尾 note_dur_frames フレームは通常ケースと一致する。
+    normal = rd._note_frame_track(per_sample, seg, note_dur_frames, note_dur_frames, sr=sr, frame_period_ms=5.0)
+    assert np.array_equal(track[extra_head:], normal)
+
+
+def test_note_frame_track_clips_at_zero_when_head_extends_before_start() -> None:
+    """seg.start_sample - extra_head*samples_per_frame が負になる場合は 0 側へ
+    クランプする（per_sample トラック範囲外を読まない）。"""
+    sr = 24000
+    per_sample = np.arange(100, dtype=np.float64)
+    seg = _MiniSeg(start_sample=10)
+    track = rd._note_frame_track(per_sample, seg, note_dur_frames=2, n_frames=10, sr=sr, frame_period_ms=5.0)
+    assert track[0] == 0.0  # クランプされて先頭サンプルを指す
+    assert np.all(track >= 0.0)
+
+
+def test_note_frame_track_empty_per_sample_returns_zeros() -> None:
+    seg = _MiniSeg(start_sample=0)
+    track = rd._note_frame_track(np.zeros(0), seg, note_dur_frames=4, n_frames=4, sr=24000, frame_period_ms=5.0)
+    assert np.array_equal(track, np.zeros(4))
+
+
+def test_note_frame_track_zero_n_frames_returns_empty() -> None:
+    seg = _MiniSeg(start_sample=0)
+    track = rd._note_frame_track(np.arange(10.0), seg, note_dur_frames=4, n_frames=0, sr=24000, frame_period_ms=5.0)
+    assert track.shape == (0,)

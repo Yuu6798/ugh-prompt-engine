@@ -316,3 +316,142 @@ def test_assemble_v2_empty_placements() -> None:
     assert sp_seq.shape == (0, 4)
     assert ap_seq.shape == (0, 4)
     assert stats["n_total_frames"] == 0
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #262): f0/振幅トラックの圧縮後タイムライン整合
+# ---------------------------------------------------------------------------
+
+
+def _flat_placement(
+    n_frames: int, n_bins: int, sp_value: float, ap_value: float, has_join_to_prev: bool,
+    overlap_frames,
+) -> jn.NotePlacement:
+    sp = np.full((n_frames, n_bins), sp_value)
+    ap = np.full((n_frames, n_bins), ap_value)
+    # start_frame/end_frame は assemble_v2/assemble_control_tracks_v2 のどちらも
+    # 「圧縮前の素朴な連結カーソル」を仮定するので、この検証ではギャップ無しの
+    # 単純な累積値を使う（render.py の実配線と同じ規約）。
+    return jn.NotePlacement(
+        start_frame=0, end_frame=n_frames, sp=sp, ap=ap,
+        has_join_to_prev=has_join_to_prev, overlap_frames=overlap_frames,
+    )
+
+
+def _relayout_start_end(placements: list) -> list:
+    """start_frame/end_frame を「素朴な連結カーソル」で振り直す（render.py の
+    cursor 方式と同じ・ギャップ無し）。"""
+    out = []
+    cursor = 0
+    for p in placements:
+        n = p.sp.shape[0]
+        out.append(
+            jn.NotePlacement(
+                start_frame=cursor, end_frame=cursor + n, sp=p.sp, ap=p.ap,
+                has_join_to_prev=p.has_join_to_prev, overlap_frames=p.overlap_frames,
+            )
+        )
+        cursor += n
+    return out
+
+
+def test_assemble_control_tracks_v2_matches_sp_ap_frame_for_frame_with_multiple_joins() -> None:
+    """P1 修正 acceptance: 接合 2 回以上を含む系列で、f0/振幅トラックが
+    sp/ap と全く同じ圧縮後タイムライン（run 構造・overlap 量）に整列する
+    ことを検証する（review #262 の指摘: 旧実装は圧縮前タイムラインを
+    圧縮後フレーム数でナイーブに再インデックスしていたためズレていた）。
+
+    note track の値を sp/ap の flat 値そのものに合わせておけば
+    （n_bins=1）、`assemble_control_tracks_v2` の出力は
+    `assemble_v2`（sp/ap 側）の出力と厳密に一致するはず（両者が同一の
+    run 分割・同一の overlap 量で `overlap_add_concat` を呼ぶため）。
+    厳密一致は「±1 フレーム」より強い保証であり、第 N ノートの音高変化
+    フレームが圧縮後タイムラインのノート境界と一致することを直接示す。
+    """
+    n_bins = 1
+    note_values = [1.0, 5.0, 9.0, 13.0]  # 4 note -> 3 join（「接合 2 回以上」を満たす）
+    note_lens = [60, 55, 65, 50]
+    overlaps = [None, 12, 7]  # None は DEFAULT_OVERLAP_MS へフォールバック
+
+    placements = []
+    for i, (val, n) in enumerate(zip(note_values, note_lens)):
+        ov = overlaps[i - 1] if i > 0 else None
+        placements.append(
+            _flat_placement(
+                n, n_bins, sp_value=val, ap_value=val * 0.1,
+                has_join_to_prev=(i > 0), overlap_frames=ov,
+            )
+        )
+    placements = _relayout_start_end(placements)
+
+    sp_seq, ap_seq, join_stats = jn.assemble_v2(n_bins, placements, frame_period_ms=5.0)
+    assert join_stats["n_joins_applied"] >= 2  # 「接合 2 回以上」を満たすことを確認
+
+    note_f0_tracks = [np.full(p.sp.shape[0], note_values[i]) for i, p in enumerate(placements)]
+    note_amp_tracks = [np.full(p.sp.shape[0], note_values[i] * 0.1) for i, p in enumerate(placements)]
+    f0_seq, amp_seq, control_stats = jn.assemble_control_tracks_v2(
+        placements, note_f0_tracks, note_amp_tracks, frame_period_ms=5.0
+    )
+
+    assert control_stats["n_total_frames"] == join_stats["n_total_frames"]
+    assert f0_seq.shape[0] == sp_seq.shape[0]
+    # 厳密一致（同一 run/overlap 構造で同一の重みを使って blend しているため）。
+    assert np.allclose(f0_seq, sp_seq[:, 0])
+    assert np.allclose(amp_seq, ap_seq[:, 0])
+
+    # ノート境界（第 N ノートの「音高変化」フレーム）が圧縮後タイムライン上で
+    # 一致することを明示的にも確認する: 各ノートの blend 区間終端（純粋に
+    # そのノートの値になる最初のフレーム）が f0_seq/sp_seq で同一インデックス。
+    for note_val in note_values[1:]:
+        sp_first_pure = int(np.argmax(np.isclose(sp_seq[:, 0], note_val)))
+        f0_first_pure = int(np.argmax(np.isclose(f0_seq, note_val)))
+        assert abs(sp_first_pure - f0_first_pure) <= 1
+
+
+def test_assemble_control_tracks_v2_gap_is_zero_not_carried_forward() -> None:
+    """run 間ギャップ（ブレス等）は f0/振幅では 0（無声）で埋める（sp/ap の
+    carry-forward とは異なる意味論であることの確認）。"""
+    n_bins = 1
+    p1 = _flat_placement(20, n_bins, sp_value=2.0, ap_value=0.2, has_join_to_prev=False, overlap_frames=None)
+    p2 = _flat_placement(15, n_bins, sp_value=9.0, ap_value=0.4, has_join_to_prev=False, overlap_frames=None)
+    placements = [
+        jn.NotePlacement(10, 30, p1.sp, p1.ap, has_join_to_prev=False),
+        jn.NotePlacement(60, 75, p2.sp, p2.ap, has_join_to_prev=False),
+    ]
+    note_f0_tracks = [np.full(20, 220.0), np.full(15, 330.0)]
+    note_amp_tracks = [np.full(20, 0.8), np.full(15, 0.6)]
+    f0_seq, amp_seq, stats = jn.assemble_control_tracks_v2(
+        placements, note_f0_tracks, note_amp_tracks, frame_period_ms=5.0
+    )
+    # assemble_v2 系（v1 の `assemble` と異なり明示的な n_total_frames 引数を
+    # 取らない）は最後の placement の end_frame までしか出力しない
+    # （末尾の「未配置領域」という概念自体が無い）。
+    assert stats["n_total_frames"] == 75
+    assert np.all(f0_seq[0:10] == 0.0)  # 先頭ギャップ
+    assert np.all(f0_seq[30:60] == 0.0)  # note 間ギャップ
+    assert np.all(amp_seq[30:60] == 0.0)
+    assert np.allclose(f0_seq[10:30], 220.0)
+    assert np.allclose(f0_seq[60:75], 330.0)
+
+
+def test_assemble_control_tracks_v2_empty_placements() -> None:
+    f0_seq, amp_seq, stats = jn.assemble_control_tracks_v2([], [], [])
+    assert f0_seq.shape == (0,)
+    assert amp_seq.shape == (0,)
+    assert stats["n_total_frames"] == 0
+
+
+def test_assemble_control_tracks_v2_deterministic_repeat() -> None:
+    n_bins = 1
+    placements = [
+        _flat_placement(40, n_bins, 1.0, 0.1, has_join_to_prev=False, overlap_frames=None),
+        _flat_placement(40, n_bins, 5.0, 0.3, has_join_to_prev=True, overlap_frames=9),
+    ]
+    placements = _relayout_start_end(placements)
+    note_f0 = [np.full(40, 200.0), np.full(40, 300.0)]
+    note_amp = [np.full(40, 0.5), np.full(40, 0.7)]
+    f0_1, amp_1, stats1 = jn.assemble_control_tracks_v2(placements, note_f0, note_amp, frame_period_ms=5.0)
+    f0_2, amp_2, stats2 = jn.assemble_control_tracks_v2(placements, note_f0, note_amp, frame_period_ms=5.0)
+    assert np.array_equal(f0_1, f0_2)
+    assert np.array_equal(amp_1, amp_2)
+    assert stats1 == stats2

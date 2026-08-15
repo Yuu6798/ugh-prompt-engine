@@ -435,6 +435,30 @@ def _ping_pong_pad_v2(
     return sp_out, ap_out, n_cycles
 
 
+def _loop_pad_raw_target(seg_len: int, deficit: int, overlap_frames: int) -> int:
+    """P2 修正: 往復ループ材の overlap 損失補償。
+
+    `_ping_pong_pad_v2` はピース間 join のたびに `overlap_frames` 分だけ尺を
+    縮める（true overlap-add）。さらにその結果 (`sp_pad`) は `sp_base` との
+    base<->pad join でもう一度 `overlap_frames` 分縮む。単純に `deficit`
+    ちょうどの生ループ材を作ると、この 2 段の overlap 損失（内部 join 損失 +
+    base 接合損失）の分だけ最終出力が `target_n_frames` に届かず、呼び出し側の
+    `_force_length` が末尾フレーム複製（凍結プラトー）で不足を埋めることになる
+    （実測: 10 倍伸長で末尾 325ms が完全な静止フレームになるバグ。P2 review）。
+
+    ここでは `_ping_pong_pad_v2` へ渡す生（圧縮前）目標長を、内部 join 損失 +
+    base 接合損失の両方を見込んで過剰生成する（安全マージンとして 1 ピース分
+    余分に積む）。呼び出し側の `_force_length` が `n > target_len` の切り詰め
+    分岐（`x[:target_len]`）で target へトリムする（往復ループの周期性を保った
+    まま末尾側を捨てるだけなので、フリーズは発生しない）。
+    """
+    if seg_len <= 0 or deficit <= 0:
+        return deficit
+    net_per_cycle = max(seg_len - overlap_frames, 1)  # 1 ピース追加あたりの正味増分（圧縮後）
+    n_cycles_needed = -(-deficit // net_per_cycle)  # ceil division
+    return (n_cycles_needed + 1) * seg_len  # +1 ピースは base 接合損失 + 端数の安全マージン
+
+
 def _force_length(x: np.ndarray, target_len: int) -> np.ndarray:
     n = x.shape[0]
     if n == target_len:
@@ -499,8 +523,9 @@ def resolve_unit_to_note(
         if center_hi <= center_lo:
             center_hi = min(base_len, center_lo + 1)
         loop_overlap_frames = max(1, int(round(LOOP_OVERLAP_MS / frame_period_ms)))
+        pad_raw_target = _loop_pad_raw_target(center_hi - center_lo, deficit, loop_overlap_frames)
         sp_pad, ap_pad, n_loop_cycles = _ping_pong_pad_v2(
-            sp_base[center_lo:center_hi], ap_base[center_lo:center_hi], deficit, loop_overlap_frames
+            sp_base[center_lo:center_hi], ap_base[center_lo:center_hi], pad_raw_target, loop_overlap_frames
         )
         sp_out, ap_out, _join_stats = jn.overlap_add_concat(
             [(sp_base, ap_base), (sp_pad, ap_pad)], loop_overlap_frames
@@ -617,8 +642,9 @@ def resolve_vcv_unit_to_note(
             if center_hi <= center_lo:
                 center_hi = min(base_len, center_lo + 1)
             loop_overlap_frames = max(1, int(round(LOOP_OVERLAP_MS / frame_period_ms)))
+            pad_raw_target = _loop_pad_raw_target(center_hi - center_lo, deficit, loop_overlap_frames)
             sp_pad, ap_pad, n_loop_cycles = _ping_pong_pad_v2(
-                sp_base[center_lo:center_hi], ap_base[center_lo:center_hi], deficit, loop_overlap_frames
+                sp_base[center_lo:center_hi], ap_base[center_lo:center_hi], pad_raw_target, loop_overlap_frames
             )
             core_sp, core_ap, _stats = jn.overlap_add_concat(
                 [(sp_base, ap_base), (sp_pad, ap_pad)], loop_overlap_frames

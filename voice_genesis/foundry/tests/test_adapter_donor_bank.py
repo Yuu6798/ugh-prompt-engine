@@ -194,6 +194,53 @@ def _bank_with_levels(levels: list, n_bins: int = 4, unit_len: int = 20) -> db.D
     )
 
 
+# --- P1 修正 (review #262): キャッシュキーの内容ハッシュ（notes CSV 編集検知） ---
+
+
+def _write_mini_wav(path: Path, sr: int = 44100, dur: float = 1.0) -> None:
+    import soundfile as sf
+
+    t = np.arange(int(dur * sr)) / sr
+    x = 0.3 * np.sin(2 * np.pi * 220.0 * t)
+    sf.write(str(path), x, sr, subtype="PCM_16")
+
+
+def test_cache_key_changes_when_notes_csv_content_edited(tmp_path: Path) -> None:
+    """notes CSV のバイト内容を 1 バイトでも変えればキャッシュキーが変わる
+    （同一 --cache-dir 再利用時に notes CSV を in-place 編集しても古い
+    pickle/npz を返さないこと。旧実装はパス文字列のみをキー材料にしていた
+    ため、この edit はキーへ反映されなかった）。"""
+    notes_path = tmp_path / "notes.csv"
+    notes_path.write_text("0.0,300.0,0.5\n0.5,320.0,0.3\n")
+    wav_sha = "a" * 64
+
+    key_before = db._cache_key(wav_sha, db.sha256_of(notes_path), 5.0)
+
+    notes_path.write_text("0.0,300.0,0.5\n0.5,320.0,0.35\n")  # 1 値だけ編集
+    key_after = db._cache_key(wav_sha, db.sha256_of(notes_path), 5.0)
+
+    assert key_before != key_after
+
+
+def test_build_donor_bank_cache_stale_after_notes_csv_edit(tmp_path: Path) -> None:
+    """build_donor_bank を通した end-to-end 確認: notes CSV 編集後は
+    cache_hit=False で再計算される（編集前の古い npz を誤って再利用しない）。"""
+    wav_path = tmp_path / "mini_donor.wav"
+    _write_mini_wav(wav_path)
+    notes_path = tmp_path / "notes.csv"
+    notes_path.write_text("0.0,300.0,0.5\n0.5,320.0,0.3\n")
+    cache_dir = tmp_path / "cache"
+
+    bank1 = db.build_donor_bank(wav_path, notes_csv_path=notes_path, cache_dir=cache_dir)
+    assert bank1.stats.get("cache_hit") is False
+
+    notes_path.write_text("0.0,300.0,0.5\n0.5,320.0,0.35\n")  # duration を編集
+    bank2 = db.build_donor_bank(wav_path, notes_csv_path=notes_path, cache_dir=cache_dir)
+    assert bank2.stats.get("cache_hit") is False  # 古いキャッシュを再利用しない
+    cached_files = list(cache_dir.glob("donor_bank_*.npz"))
+    assert len(cached_files) == 2  # 編集前後で別々のキャッシュファイル
+
+
 def test_normalize_unit_energy_equalizes_unit_mean_power() -> None:
     bank = _bank_with_levels([1.0, 4.0, 9.0])
     normalized, stats = db.normalize_unit_energy(bank)

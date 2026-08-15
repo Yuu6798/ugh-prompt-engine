@@ -202,3 +202,32 @@ def test_build_donor_bank_lab_cache_roundtrip(tmp_path: Path) -> None:
     )
     assert np.array_equal(bank1.sp, bank2.sp)
     assert uv1 == uv2
+
+
+def test_build_donor_bank_lab_cache_stale_after_lab_edit(tmp_path: Path) -> None:
+    """P1 修正 (review #262): `--cache-dir` 再利用中に .lab を編集（母音境界を
+    ずらす）すると、古い pickle を返さず再計算されることを確認する（旧実装は
+    root path + options のみがキー材料で .lab/wav の内容は反映されなかった）。
+    """
+    root = tmp_path / "pjs_corpus"
+    d = root / "pjs001"
+    d.mkdir(parents=True)
+    _write_sine_wav(d / "pjs001_song.wav", duration_s=1.0)
+    lab_path = d / "pjs001.lab"
+    lab_path.write_text("0 3000000 pau\n3000000 4000000 s\n4000000 9000000 o\n")
+
+    cache_dir = tmp_path / "cache"
+    bank1, _uv1, _c1, _s1 = dbl.build_donor_bank_lab(
+        root, target_median_hz=260.0, cache_dir=cache_dir, min_files=1, max_files=5
+    )
+    dur1 = bank1.units[0].duration_s
+
+    # 母音境界を後ろへずらす（vowel span [4000000,9000000) -> [4000000,7000000)）。
+    lab_path.write_text("0 3000000 pau\n3000000 4000000 s\n4000000 7000000 o\n")
+    bank2, _uv2, _c2, _s2 = dbl.build_donor_bank_lab(
+        root, target_median_hz=260.0, cache_dir=cache_dir, min_files=1, max_files=5
+    )
+    dur2 = bank2.units[0].duration_s
+
+    assert dur2 != dur1  # 古いキャッシュを再利用していれば dur1 のまま
+    assert len(list(cache_dir.glob("lab_bank_*.pkl"))) == 2

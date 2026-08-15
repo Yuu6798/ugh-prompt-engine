@@ -70,6 +70,49 @@ def test_silence_hnr_is_nan(tmp_path: Path) -> None:
     assert np.isnan(r["hnr_median_db"])
 
 
+def test_analyze_wav_reads_file_bytes_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    """P2 修正 (review #262): decode (soundfile) と hash (sha256) を同一
+    バイト列から導出する（Persistent Artifact Safety Gate 項目1「単一 read で
+    parse + hash」）。`Path.read_bytes` の呼び出し回数が厳密に 1 回であることを
+    直接検証する（TOCTOU 窓の排除を、実装詳細ではなく振る舞いとして enforce）。
+    """
+    sr = 22050
+    t = np.arange(int(0.3 * sr)) / sr
+    x = 0.4 * np.sin(2 * np.pi * 440.0 * t)
+    p = _write_wav(tmp_path, "single_read.wav", x, sr)
+
+    call_count = 0
+    orig_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self):
+        nonlocal call_count
+        call_count += 1
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    r = mb.analyze_wav(p)
+
+    assert call_count == 1
+    assert r["sha256"] == hashlib_sha256_of(p)
+
+
+def hashlib_sha256_of(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_analyze_wav_sha256_matches_full_file_bytes(tmp_path: Path) -> None:
+    """sha256 は実際にデコードしたのと同一バイト列（ファイル全体）から
+    導出されていることを確認する（decode に使った BytesIO の中身と一致）。"""
+    sr = 22050
+    x = np.zeros(int(0.2 * sr))
+    p = _write_wav(tmp_path, "match.wav", x, sr)
+    r = mb.analyze_wav(p)
+    assert r["sha256"] == hashlib_sha256_of(p)
+
+
 def test_deterministic_repeat(tmp_path: Path) -> None:
     sr = 22050
     t = np.arange(int(0.5 * sr)) / sr
