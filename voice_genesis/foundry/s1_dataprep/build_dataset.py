@@ -116,6 +116,55 @@ def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> 
         raise
 
 
+class OutputCollisionError(ValueError):
+    """P1 修正 (review #263 R4): `--out-dict`/`--out-config`/`--report` が
+    互いに衝突する、または保護入力（Ritsu/PJS 両 raw dir 配下の
+    transcriptions.csv・wavs/・参照ファイル）と衝突する場合に送出する
+    （fail-closed。書き込み前に検出する。`adapter/render.py`/
+    `scripts/measure_bands.py` の `OutputCollisionError` と対称の設計）。"""
+
+
+def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequence[Path]) -> None:
+    """公開対象の全出力パス（resolve 後）を相互および保護入力ルートと照合し、
+    衝突があれば公開前に fail-closed で拒否する。
+
+    Codex 再現手順（`--out-dict` に Ritsu の入力 raw dir 配下の CSV を渡す）
+    では、検証成功後の `_publish_outputs` がその CSV を辞書内容で上書きし、
+    入力そのものを破壊してしまう。resolved 比較（symlink 解決後の完全一致・
+    包含）で判定する（AGENTS.md Persistent Artifact Safety Gate 項目2）。
+
+    - 出力同士: `--out-dict`/`--out-config`/`--report` が同一パスを指す場合
+      （最後に書いたものが他方を無言で上書きする）。
+    - 出力と保護入力: `--ritsu-raw-dir`/`--pjs-raw-dir` 配下（`transcriptions.csv`・
+      `wavs/`・その他参照ファイルを含むルートごと）を出力先に指定した場合。
+    """
+    resolved_outs = [(p, p.resolve()) for p in out_paths]
+
+    for i, (p_i, r_i) in enumerate(resolved_outs):
+        for p_j, r_j in resolved_outs[i + 1 :]:
+            if r_i == r_j:
+                raise OutputCollisionError(
+                    f"output paths collide with each other: {p_i} == {p_j}（fail-closed で拒否）"
+                )
+
+    for root in protected_roots:
+        if not root.exists():
+            continue
+        root_resolved = root.resolve()
+        for p, r in resolved_outs:
+            if r == root_resolved:
+                raise OutputCollisionError(
+                    f"output path {p} collides with protected input root {root}（fail-closed で拒否）"
+                )
+            try:
+                r.relative_to(root_resolved)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"output path {p} is inside protected input root {root}（fail-closed で拒否）"
+            )
+
+
 def _preflight_writable(paths: Sequence[Path]) -> None:
     """公開対象の全パスについて、書込可能性を事前検証する（実際の書き込みを
     始める前に全件をチェックし、途中失敗による「混合世代」— 辞書は新・config は
@@ -400,6 +449,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ]
     if args.report is not None:
         outputs.append((args.report, report_text + "\n"))
+
+    # [P1 修正] (review #263 R4) 全出力パスを相互および両 raw dir（入力の
+    # transcriptions.csv/wavs/参照ファイル）と照合し、衝突があれば公開前に
+    # fail-closed で拒否する。
+    _reject_output_collision(
+        [p for p, _ in outputs],
+        protected_roots=[args.ritsu_raw_dir, args.pjs_raw_dir],
+    )
+
     try:
         _publish_outputs(outputs)
     except OSError as exc:

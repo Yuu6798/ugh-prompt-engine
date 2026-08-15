@@ -19,6 +19,12 @@ symlink 群 + 変換出力（`diffsinger_db/`）は毎回 fresh な
 混在を防ぐと同時に、`pjs_root` から消えた曲の symlink が再実行後も
 `--staging-dir` に残り続ける問題も解消する（build dir は毎回空から始まる
 ため）。
+
+`--lang-def` が `--staging-dir` 配下を明示的に指す場合、書き込み先を
+`build_dir` 配下の同じ相対位置へ再マップする（review #263 R4 P2）。fresh
+build では `--staging-dir` がまだ存在せず書き込みが失敗し、旧 `--staging-dir`
+が残っている場合は build 外＝旧世代側に書かれて `_swap_into_place` の
+`.old` 退避で消えてしまうため（`--staging-dir` 外を指す場合は従来通り）。
 """
 from __future__ import annotations
 
@@ -70,6 +76,27 @@ def stage_song_wavs(pjs_root: Path, staging_dir: Path) -> int:
 
 def write_lang_def(path: Path) -> None:
     path.write_text(json.dumps(DEFAULT_LANG_DEF, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+
+
+def _resolve_lang_def_path(lang_def_arg: Optional[Path], staging_dir: Path, build_dir: Path) -> Path:
+    """`--lang-def` の実書き込み先を決める（P2 修正・review #263 R4）。
+
+    `--lang-def` 省略時は既定どおり `build_dir / "lang.json"`。明示指定時、
+    それが `staging_dir` 配下を指す場合は build 中に存在しない（fresh build
+    では `<staging>.build-<pid>` しか無く書き込みが FileNotFoundError になる）
+    か、旧 `staging_dir` が残っていれば build 外＝旧世代側に書かれてしまい
+    `_swap_into_place` の `.old` 退避で消える（コーパスと一緒に staged→
+    published されない）。`staging_dir` 配下を指す出力先は同じ相対位置の
+    `build_dir` 配下へ再マップし、コーパスと一緒に swap されるようにする。
+    `staging_dir` 外を指す場合は従来通りそのパスへ書く。
+    """
+    if lang_def_arg is None:
+        return build_dir / "lang.json"
+    try:
+        rel = lang_def_arg.resolve().relative_to(staging_dir.resolve())
+    except ValueError:
+        return lang_def_arg
+    return build_dir / rel
 
 
 def run_converter(
@@ -157,7 +184,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"error: no pjsNNN song wav found under {args.pjs_root}", file=sys.stderr)
             return 1
 
-        lang_def_path = args.lang_def or (build_dir / "lang.json")
+        lang_def_path = _resolve_lang_def_path(args.lang_def, staging_dir, build_dir)
         write_lang_def(lang_def_path)
 
         result = run_converter(args.converter_dir, build_dir, lang_def_path, args.python_bin)

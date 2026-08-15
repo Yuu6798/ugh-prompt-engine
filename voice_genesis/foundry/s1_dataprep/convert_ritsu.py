@@ -138,6 +138,14 @@ def build_mora_dict(dsdict_path: Path) -> Dict[str, List[str]]:
 # ---------------------------------------------------------------------------
 
 
+class MissingSourceWavError(FileNotFoundError):
+    """P2 修正 (review #263 R4): oto が参照する WAV が実在しない場合、黙って
+    skip して縮小コーパスの成功を報告するのではなく、欠落ファイル名を全収集
+    してから公開前に fail-closed で拒否する（`_convert_into` が例外を送出
+    すると `convert()` の `except BaseException` が staging を削除して
+    `out_dir` を swap しないため、既存の有効な成果物は無事のまま残る）。"""
+
+
 def _ms_to_s(ms: float) -> float:
     return max(0.0, ms) / 1000.0
 
@@ -287,6 +295,7 @@ def _convert_into(
     out_wavs.mkdir(parents=True, exist_ok=True)
 
     rows: List[dict] = []
+    missing_wavs: List[str] = []
     global_stats = dict(
         n_wav_total=0, n_entries_total=0, n_unmapped_total=0, n_sokuon_total=0,
         total_audio_s=0.0, total_sp_s=0.0, total_voiced_s=0.0,
@@ -306,6 +315,11 @@ def _convert_into(
         for idx, (wav_filename, entries) in enumerate(sorted(entries_by_wav.items()), start=1):
             wav_path = pdir / wav_filename
             if not wav_path.exists():
+                # [P2 修正] 黙って skip すると oto が参照する音素区間ごと
+                # コーパスから欠落し、縮小コーパスのまま成功報告してしまう
+                # （review #263 R4）。全 pitch dir 走査後に一括で fail する
+                # ため、ここでは欠落ファイル名を収集するのみに留める。
+                missing_wavs.append(str((pdir / wav_filename).relative_to(voicebank_root)))
                 continue
             info = sf.info(str(wav_path))
             wav_duration_ms = info.frames / info.samplerate * 1000.0
@@ -345,6 +359,16 @@ def _convert_into(
         global_stats["n_unmapped_total"] += dir_stats["n_unmapped"]
         global_stats["n_sokuon_total"] += dir_stats["n_sokuon"]
         global_stats["total_audio_s"] += dir_stats["audio_s"]
+
+    if missing_wavs:
+        # [P2 修正] (review #263 R4) 欠落 WAV があれば、書き込み開始前に
+        # 全欠落ファイル名を報告して fail-closed で拒否する（縮小コーパスの
+        # 成功報告を禁止。完全な抽出では missing_wavs は空のまま挙動不変）。
+        raise MissingSourceWavError(
+            f"{len(missing_wavs)} oto-referenced wav file(s) missing under "
+            f"{voicebank_root} (fail-closed, corpus not published): "
+            + ", ".join(sorted(missing_wavs))
+        )
 
     with open(out_dir / "transcriptions.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["name", "ph_seq", "ph_dur"])
