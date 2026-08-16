@@ -2,7 +2,7 @@
 
 - 日付: 2026-08-15
 - 位置づけ: `FOUNDRY_ROADMAP.md` S1。S0 通過（`results_s0/s0_record_2026-08-15.md`）を受けた実行設計
-- 状態: **User 承認済み（2026-08-15 UTC）・GPU 実行中**（RTX 3090・record =
+- 状態: **完了（2026-08-16 UTC・S1 ゲート通過）**（RTX 3090・record =
   `results_s1/s1_record_2026-08-15.md`）
 - 一次材料（scratchpad・非コミット）: `s1_survey.md` / `s1_base_license_survey.md` / `s1a_conversion_record.md`
 
@@ -90,10 +90,15 @@ S0 検分より、推論チェーンは linguistic→dur→pitch（variance 系�
       （5K checkpoint 到達・`results_s1/s1_record_2026-08-15.md` §「5K 早期
       ゲート合成（本環境・2026-08-15 UTC）」・`s1_gate/gate_synth.py` で
       sha256 記録付き 4 WAV 合成済み・耳判定は User へ送付済み）
-- [ ] **S1 ゲート（耳判定）**: 自前学習の合成が「土俵に乗る」か — 軸別
+- [x] **S1 ゲート（耳判定）**: 自前学習の合成が「土俵に乗る」か — 軸別
   （日本語/滑らかさ/歌声/ノイズ）で判定。全軸可なら S2 へ、不可なら不足軸を
   特定して §5 の backfill を検討
-- [ ] `results_s1/s1_record_<date>.md`（統計・費用実測・耳判定逐語・Open Questions）
+      （run3 40K checkpoint・`results_s1/s1_record_2026-08-15.md` §「S1 ゲート
+      判定（2026-08-16・User・通過）」— 5 判定ポイント全てクリア・通過。
+      S2 へ移行）
+- [x] `results_s1/s1_record_<date>.md`（統計・費用実測・耳判定逐語・Open Questions）
+      （`results_s1/s1_record_2026-08-15.md` — run3 費用実測・
+      「run 3 40K ゲート合成」節・「S1 ゲート判定」節・Open Questions 完備）
 
 ## 7. Scope
 
