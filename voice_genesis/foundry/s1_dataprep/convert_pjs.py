@@ -879,6 +879,77 @@ _SWAP_BACKUP_MARKER_CONTENT = (
 )
 
 
+def _stamp_swap_backup_marker(dir_path: Path) -> None:
+    """`dir_path` 直下へ `_SWAP_BACKUP_MARKER_NAME` を冪等かつ安全にスタンプ
+    する（`_swap_into_place` の `build_dir`/`staging_dir` 双方の呼び出し
+    site から使う共有ヘルパー。`gate_synth.py` の `_swap_step_dir_into_place`
+    にも同型ヘルパーを同時導入する）。
+
+    review #264 R29 P1: `staging_dir` は（アップグレード前の canonical 等）
+    本ツール外で内容が作られていた/変更され得るディレクトリであり得るため、
+    そこに `_SWAP_BACKUP_MARKER_NAME` という名前の symlink が事前に存在する
+    ケースを想定しなければならない。単純な `write_text()`（内部 `open()`
+    は既定で symlink を追従する）でこの経路にスタンプすると、symlink の
+    リンク先（本ツール管理外の任意の外部ファイル）を追従して開き、
+    truncate または新規作成してしまう data-destruction path になる。
+
+    修正: 書き込み前に `Path.is_symlink()`（symlink 自体の種別を symlink
+    追従なしに判定できる）でリンクか否かを確認し、
+    - symlink、または存在するが通常ファイルでない場合は、中身を見ずに
+      即座に fail-closed で拒否する（例外送出。呼び出し元の swap は続行
+      させない）。
+    - 存在し通常ファイルの場合、内容が既知のマーカー内容と一致するかを
+      検証する。一致すれば既にスタンプ済みとみなし無変更で受理する
+      （冪等・上書きしない）。不一致なら「本ツール由来のマーカーではない
+      不審な同名ファイル」とみなし fail-closed で拒否する。
+    - 存在しない場合のみ、`O_CREAT | O_EXCL | O_NOFOLLOW` で排他生成する。
+      `O_EXCL` が「存在しない場合のみ作成」を検査(`is_symlink`/`exists`)と
+      作成の間の TOCTOU 窓ごと原子的に保証し、`O_NOFOLLOW` は万一そこへ
+      symlink が滑り込んでいても追従せず即座に失敗させる（レビュー指摘の
+      「O_CREAT|O_EXCL|O_NOFOLLOW 相当の排他生成」に対応）。
+    """
+    marker_path = dir_path / _SWAP_BACKUP_MARKER_NAME
+    if marker_path.is_symlink():
+        raise SystemExit(
+            f"ERROR: {marker_path} exists as a symlink. Refusing to stamp a swap "
+            f"backup marker through it — write_text() would follow the link and "
+            f"truncate/create its external target. Remove it (or replace it with "
+            f"a regular file) and re-run."
+        )
+    if marker_path.exists():
+        if not marker_path.is_file():
+            raise SystemExit(
+                f"ERROR: {marker_path} exists but is not a regular file (and not a "
+                f"symlink either — e.g. a device/fifo). Refusing to stamp a swap "
+                f"backup marker over it — move it away manually and re-run."
+            )
+        if marker_path.read_text(encoding="utf-8") != _SWAP_BACKUP_MARKER_CONTENT:
+            raise SystemExit(
+                f"ERROR: {marker_path} exists but its content does not match the "
+                f"expected swap backup marker. Refusing to overwrite an unverified "
+                f"file — move it away manually and re-run."
+            )
+        return
+    try:
+        fd = os.open(
+            str(marker_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644
+        )
+    except OSError as exc:
+        raise SystemExit(
+            f"ERROR: failed to exclusively create swap backup marker {marker_path} "
+            f"(lost a race, or it is a symlink rejected by O_NOFOLLOW): {exc}"
+        )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(_SWAP_BACKUP_MARKER_CONTENT)
+    except BaseException:
+        try:
+            os.unlink(marker_path)
+        except OSError:
+            pass
+        raise
+
+
 def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     """`build_dir`（symlink 群 + `diffsinger_db/` を完全に構築済み）を
     `staging_dir` へ原子的に差し替える。
@@ -949,11 +1020,18 @@ def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     しない」という R25 の不変条件は変わらない ——このガードは上記で
     `.old` が既に存在するケースに対してのみ働き、今回このステップで新たに
     `staging_dir` から作る `.old` には及ばない。
+
+    review #264 R29 P1: 上記マーカー書き込み（`build_dir`/`staging_dir`
+    双方）は `_stamp_swap_backup_marker` へ委譲する。素の `write_text()` は
+    symlink を追従して開くため、`staging_dir`（本ツール外で作られた
+    canonical であり得る）配下にマーカー名の symlink が事前に存在すると、
+    そのリンク先の外部ファイルを truncate/新規作成してしまう
+    data-destruction path だった。`_stamp_swap_backup_marker` docstring
+    参照（`gate_synth.py` の `_swap_step_dir_into_place` も同型ヘルパーで
+    同時修正）。
     """
     build_dir.mkdir(parents=True, exist_ok=True)
-    (build_dir / _SWAP_BACKUP_MARKER_NAME).write_text(
-        _SWAP_BACKUP_MARKER_CONTENT, encoding="utf-8"
-    )
+    _stamp_swap_backup_marker(build_dir)
     old_dir = staging_dir.parent / f"{staging_dir.name}.old"
     if old_dir.exists():
         marker_path = old_dir / _SWAP_BACKUP_MARKER_NAME
@@ -972,9 +1050,11 @@ def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     try:
         if staging_dir.exists():
             # review #264 R28 P2: スタンプしてから退避する（docstring 参照）。
-            (staging_dir / _SWAP_BACKUP_MARKER_NAME).write_text(
-                _SWAP_BACKUP_MARKER_CONTENT, encoding="utf-8"
-            )
+            # review #264 R29 P1: `staging_dir` は本ツール外で作られた
+            # canonical であり得るため、`_stamp_swap_backup_marker` の
+            # symlink 拒否経路を通す（`_stamp_swap_backup_marker` docstring
+            # 参照）。
+            _stamp_swap_backup_marker(staging_dir)
             staging_dir.rename(old_dir)
         build_dir.rename(staging_dir)
     except BaseException:

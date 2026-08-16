@@ -139,6 +139,45 @@ def test_swap_step_dir_into_place_migrates_unmarked_pre_existing_canonical(
     assert not (old_dir / "pre_marker_gen.txt").exists()
 
 
+def test_swap_step_dir_into_place_rejects_marker_symlink_in_out_dir_without_following_it(
+    tmp_path: Path,
+) -> None:
+    """review #264 R29 P1 再現・是正確認 (gate_synth.py:1526 スレッド)。
+
+    マーカー導入前に作られた既存 `out_dir`（R28 P2 のスタンプ経路）に
+    `_SWAP_BACKUP_MARKER_NAME` という名前の symlink が（本ツール外で偶然/
+    悪意を持って）存在すると、旧実装の `write_text()` はこれを追従して
+    開き、リンク先の外部ファイルを truncate/新規作成してしまう
+    data-destruction path だった（`convert_pjs.py` の `_swap_into_place` も
+    同型。同時修正 — `tests/test_s1_dataprep_ph_dur_duration.py` の
+    `test_swap_into_place_rejects_marker_symlink_in_staging_dir_without_
+    following_it` 参照）。修正後は symlink を検出して fail-closed 拒否し、
+    外部ターゲットは無傷のまま残ることを確認する。
+    """
+    external_target = tmp_path / "external_target.txt"
+    external_target.write_text("do not touch me", encoding="utf-8")
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "pre_marker_gen.txt").write_text("pre-marker generation", encoding="utf-8")
+    marker_symlink = out_dir / gs._SWAP_BACKUP_MARKER_NAME
+    marker_symlink.symlink_to(external_target)
+
+    build_dir = tmp_path / "out.build-1"
+    build_dir.mkdir()
+    (build_dir / "gen1.txt").write_text("gen1", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        gs._swap_step_dir_into_place(build_dir, out_dir)
+
+    # 外部ターゲットは無傷のまま（truncate/上書きされていない）。
+    assert external_target.read_text(encoding="utf-8") == "do not touch me"
+    # out_dir 自体も swap されず旧世代のまま（symlink も残置される）。
+    assert (out_dir / "pre_marker_gen.txt").exists()
+    assert not (out_dir / "gen1.txt").exists()
+    assert marker_symlink.is_symlink()
+
+
 def test_swap_step_dir_into_place_first_run_has_no_old_dir_to_verify(tmp_path: Path) -> None:
     """初回実行（`.old` が存在しない）では検証自体が発生せず、通常どおり
     公開される。"""
