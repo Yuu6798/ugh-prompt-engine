@@ -60,6 +60,25 @@ staged swap + `BaseException` 巻き戻しと同型パターン。R12 P2 対応�
 がリストであることを検証し、不一致は `LedgerSchemaError` で fail-closed
 拒否する（`load_ledger` 参照。R13 P2 対応 — 未知/破損スキーマの台帳へ
 現行版のエントリを無自覚に追記・公開してしまう事故を防ぐ）。
+
+`entries` 各要素についても `LedgerEntry` の必須フィールド・型（`_LEDGER_
+ENTRY_REQUIRED_FIELDS` 参照）を検証し、欠損・型不正は同じく
+`LedgerSchemaError` で fail-closed 拒否する（`_validate_ledger_entry`
+参照。R19 P2 対応 — schema バージョンが一致していてもエントリ単位で
+`source_sha256` 等が欠けた/破損した台帳が無自覚に受理されると、
+`_check_duplicate_sources` がそのエントリの重複検査を静かにスキップし、
+重複ドナー音声や破損 provenance が再公開されてしまう）。schema が現行版
+一致している台帳のエントリは現行形状であるべきであり、正式 intake 運用は
+未実施のため後方互換の負担も無い。
+
+`--ledger` が `out_dir` 内にある配置（append ワークフロー）では、2 回目
+以降のバッチの preflight で `--ledger` 自身が `out_dir` の既存エントリと
+して見つかる。これは事故ではなく意図した配置のため、`_check_ledger_path_
+collisions` は resolve 済みパスが `--ledger` 自身と完全一致し、かつ中身が
+現行スキーマの台帳として読み込める場合に限りこの既存エントリを衝突対象
+から除外する（`_is_existing_ledger_file` 参照。R19 P2 対応。中身が台帳と
+して読み込めない場合＝`--ledger` が誤って正規化 wav 等の無関係な既存
+ファイルを指しているケースは、従来通り衝突として fail-closed 拒否する）。
 """
 from __future__ import annotations
 
@@ -267,13 +286,68 @@ def measure_loudness(wav_path: Path) -> tuple[float, Optional[float], Optional[f
     return duration_sec, rms_dbfs, peak_dbfs
 
 
+# `LedgerEntry` の各フィールドが台帳 JSON 上で満たすべき必須性・型
+# （R19 P2 対応。`_validate_ledger_entry` 参照）。`Optional[X]` なフィールド
+# は `type(None)` を許容型に含める。`float` 系フィールドは JSON 上で整数値
+# （小数部無し）になり得るため `int` も許容する（`bool` は `int` の
+# サブクラスだが、台帳エントリの数値フィールドに `bool` が入ることは正規の
+# 生成経路では起こらないため、ここでは区別しない）。
+_LEDGER_ENTRY_REQUIRED_FIELDS: Dict[str, tuple] = {
+    "card_id": (str, type(None)),
+    "source_filename": (str,),
+    "source_sha256": (str,),
+    "source_size_bytes": (int,),
+    "normalized_path": (str,),
+    "sha256": (str,),
+    "received_at": (str,),
+    "duration_sec": (float, int),
+    "sample_rate": (int,),
+    "rms_dbfs": (float, int, type(None)),
+    "peak_dbfs": (float, int, type(None)),
+    "alignment_status": (str,),
+}
+
+
+def _validate_ledger_entry(entry: object, index: int, ledger_path: Path) -> None:
+    """`entries[index]` が `LedgerEntry` の必須フィールド・型を満たすことを
+    検証する（R19 P2 対応）。欠損・型不正は `LedgerSchemaError` で
+    fail-closed 拒否する。
+
+    旧実装は `entries` がリストであることしか検証しておらず、
+    `source_sha256` を欠くエントリ（例: schema バージョンが一致するだけの
+    破損/旧世代台帳）がそのまま通過していた。`_check_duplicate_sources` は
+    `source_sha256` の無いエントリを黙ってスキップするため、そのエントリが
+    表す重複ドナー音声/破損 provenance が検出されずに再公開される穴が
+    あった（R19 P2 レビュー指摘）。
+    """
+    if not isinstance(entry, dict):
+        raise LedgerSchemaError(
+            f"{ledger_path} の entries[{index}] が dict ではありません "
+            f"(type={type(entry).__name__})。fail-closed で拒否します"
+        )
+    for field, allowed_types in _LEDGER_ENTRY_REQUIRED_FIELDS.items():
+        if field not in entry:
+            raise LedgerSchemaError(
+                f"{ledger_path} の entries[{index}] にフィールド {field!r} が"
+                f"ありません。fail-closed で拒否します"
+            )
+        value = entry[field]
+        if not isinstance(value, allowed_types):
+            raise LedgerSchemaError(
+                f"{ledger_path} の entries[{index}].{field} の型が不正です "
+                f"(type={type(value).__name__})。fail-closed で拒否します"
+            )
+
+
 def load_ledger(ledger_path: Path) -> dict:
     """既存台帳を読み込む。存在しなければ新規スキーマの空台帳を返す。
 
     既存台帳がある場合は `schema == LEDGER_SCHEMA` の完全一致と `entries`
     がリストであることを検証する（R13 P2 対応）。どちらか不一致なら
     `LedgerSchemaError` を送出し fail-closed で拒否する（未知・旧バージョン
-    ・破損した台帳への暗黙の追記・公開を防ぐ）。
+    ・破損した台帳への暗黙の追記・公開を防ぐ）。さらに `entries` 各要素が
+    `LedgerEntry` の必須フィールド・型を満たすことも検証する（R19 P2
+    対応。`_validate_ledger_entry` 参照）。
     """
     if not ledger_path.exists():
         return {"schema": LEDGER_SCHEMA, "entries": []}
@@ -291,7 +365,28 @@ def load_ledger(ledger_path: Path) -> dict:
             f"{ledger_path} の entries がリストではありません "
             f"(type={type(entries).__name__})。fail-closed で拒否します"
         )
+    for index, entry in enumerate(entries):
+        _validate_ledger_entry(entry, index, ledger_path)
     return ledger
+
+
+def _is_existing_ledger_file(path: Path) -> bool:
+    """`path` が現行スキーマの台帳ファイルとして読み込み可能かどうかを判定
+    する（R19 P2 対応）。
+
+    `_check_ledger_path_collisions` が `--ledger` 自身の既存ファイルを
+    『正当な既存台帳（読み込んで追記する対象）』と『偶然そこにあった無関係
+    なファイル（正規化 wav 等、上書きすると破壊する）』とで区別するために
+    使う。`load_ledger` が送出し得る例外（JSON 解析失敗・スキーマ不一致・
+    エントリ形状不正・デコード不能なバイト列）はいずれも「台帳として読め
+    ない」ことを意味するため `False` として扱い、呼び出し側は従来通り衝突
+    として fail-closed 拒否する。
+    """
+    try:
+        load_ledger(path)
+    except (LedgerSchemaError, ValueError, OSError, UnicodeDecodeError):
+        return False
+    return True
 
 
 def _atomic_write(path: Path, writer: Callable[[Path], None]) -> None:
@@ -375,7 +470,11 @@ def _check_ledger_path_collisions(
     - 今回バッチの導出出力（staging 内の一時パス・`out_dir` 内の最終正規化
       wav。衝突すると `save_ledger()` が台帳記録済みの音声 hash の実体を
       JSON で上書きする）
-    - `out_dir` に既に公開済みの他バッチのファイル（同じ理由で上書き事故になる）
+    - `out_dir` に既に公開済みの他バッチのファイル（同じ理由で上書き事故になる。
+      ただし `--ledger` 自身が `out_dir` 内の既存台帳ファイルを指している
+      場合（append ワークフロー）は例外 — `_is_existing_ledger_file` で
+      中身が現行スキーマの台帳として読み込めることを確認できたときに限り、
+      この衝突対象から除外する。R19 P2 対応）
     - staging ディレクトリ自体（`--ledger` がその内部を指していると、
       `run()` の `finally` が staging を丸ごと `rmtree` する際に、直前に
       保存したはずの台帳ごと消え去る）
@@ -406,13 +505,25 @@ def _check_ledger_path_collisions(
 
     if out_dir.exists():
         for existing in out_dir.iterdir():
-            if existing.is_file() and resolved_ledger == existing.resolve():
-                raise LedgerPathCollisionError(
-                    f"--ledger ({ledger_path}) は out_dir に公開済みの既存"
-                    f"ファイル ({existing}) と衝突しています（fail-closed で"
-                    f"拒否。過去バッチの正規化 wav を JSON で上書きする事故を"
-                    f"防止）"
-                )
+            if not existing.is_file() or resolved_ledger != existing.resolve():
+                continue
+            if _is_existing_ledger_file(existing):
+                # R19 P2 対応: `--ledger` が `out_dir` 内にある配置（append
+                # ワークフロー）では、2 回目以降のバッチでこの preflight が
+                # `--ledger` 自身を「out_dir に公開済みの既存ファイル」として
+                # 見つけてしまう（resolved パスが完全一致するため）。これは
+                # 事故ではなく意図した配置であり、中身が現行スキーマの台帳
+                # として読み込める場合に限り衝突対象から除外する。中身が
+                # 台帳として読み込めない場合（`--ledger` が誤って正規化 wav
+                # 等の無関係な既存ファイルを指しているケース）は除外せず、
+                # 従来通り下の衝突として拒否する。
+                continue
+            raise LedgerPathCollisionError(
+                f"--ledger ({ledger_path}) は out_dir に公開済みの既存"
+                f"ファイル ({existing}) と衝突しています（fail-closed で"
+                f"拒否。過去バッチの正規化 wav を JSON で上書きする事故を"
+                f"防止）"
+            )
 
     resolved_staging = staging_dir.resolve()
     try:

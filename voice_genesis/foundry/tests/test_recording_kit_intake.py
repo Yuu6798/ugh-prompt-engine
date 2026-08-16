@@ -63,6 +63,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 from typing import Dict, Iterator, List
@@ -112,6 +113,29 @@ def _fake_normalize_to_wav(monkeypatch: pytest.MonkeyPatch, *, fail_for: set[str
         _write_fake_source(dst, seed=seed, sample_rate=intake.TARGET_SAMPLE_RATE)
 
     monkeypatch.setattr(intake, "normalize_to_wav", _fake)
+
+
+def _valid_ledger_entry_dict(**overrides: object) -> Dict[str, object]:
+    """`LedgerEntry` の全必須フィールドを満たす台帳エントリ dict を返す
+    （R19 P2: `load_ledger` がエントリ単位で必須フィールド・型を検証する
+    ようになったため、手書きの台帳 fixture もこの形状を満たす必要がある）。
+    """
+    entry: Dict[str, object] = {
+        "card_id": "UC-001",
+        "source_filename": "UC-001.wav",
+        "source_sha256": hashlib.sha256(b"placeholder source bytes").hexdigest(),
+        "source_size_bytes": 25,
+        "normalized_path": "out/UC-001.norm24k.wav",
+        "sha256": hashlib.sha256(b"placeholder normalized bytes").hexdigest(),
+        "received_at": "2026-01-01T00:00:00Z",
+        "duration_sec": 0.05,
+        "sample_rate": intake.TARGET_SAMPLE_RATE,
+        "rms_dbfs": -20.0,
+        "peak_dbfs": -6.0,
+        "alignment_status": "not_started",
+    }
+    entry.update(overrides)
+    return entry
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +435,56 @@ def test_check_ledger_path_collisions_rejects_existing_out_dir_file(tmp_path: Pa
         intake._check_ledger_path_collisions(existing, [src], filenames, out_dir, staging_dir)
 
 
+# ---------------------------------------------------------------------------
+# R19 P2 (intake.py:409): out_dir 内台帳の衝突誤検知の解消
+# ---------------------------------------------------------------------------
+
+
+def test_check_ledger_path_collisions_allows_existing_valid_ledger_at_ledger_path(
+    tmp_path: Path,
+) -> None:
+    """`--ledger` が `out_dir` 内にある正当な配置（append ワークフロー）では、
+    2 回目以降のバッチの preflight で `--ledger` 自身が『out_dir に公開済みの
+    既存ファイル』として見つかる。中身が現行スキーマの台帳として読み込める
+    場合は、これを衝突として拒否してはならない（R19 P2 の再現）。
+    """
+    src = tmp_path / "UC-002.wav"
+    src.write_bytes(b"a")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    ledger_path = out_dir / "user_donor_ledger.json"
+    intake.save_ledger(
+        ledger_path, {"schema": intake.LEDGER_SCHEMA, "entries": [_valid_ledger_entry_dict()]}
+    )
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    filenames = {src: "UC-002.norm24k.wav"}
+
+    intake._check_ledger_path_collisions(ledger_path, [src], filenames, out_dir, staging_dir)
+
+
+def test_check_ledger_path_collisions_still_rejects_non_ledger_file_at_ledger_path(
+    tmp_path: Path,
+) -> None:
+    """`--ledger` が `out_dir` 内の既存ファイルを指していても、中身が台帳と
+    して読み込めない（例: 正規化 wav 等の無関係なファイル）場合は、従来通り
+    衝突として fail-closed 拒否する（`_is_existing_ledger_file` の除外条件が
+    『中身が台帳として読める』場合のみに限定されていることの回帰）。
+    """
+    src = tmp_path / "UC-002.wav"
+    src.write_bytes(b"a")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    existing = out_dir / "UC-001.norm24k.wav"
+    existing.write_bytes(b"already published")
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    filenames = {src: "UC-002.norm24k.wav"}
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake._check_ledger_path_collisions(existing, [src], filenames, out_dir, staging_dir)
+
+
 def test_check_ledger_path_collisions_allows_normal_ledger_path(tmp_path: Path) -> None:
     """通常の（衝突しない）`--ledger` パスは preflight を素通りする。"""
     src = tmp_path / "UC-001.wav"
@@ -471,6 +545,39 @@ def test_run_rejects_ledger_colliding_with_derived_normalized_wav(
         intake.run(incoming_dir, out_dir, colliding_ledger)
 
     assert not colliding_ledger.exists(), "衝突する導出出力パスへは何も書かれてはならない"
+
+
+def test_run_appends_second_batch_when_ledger_lives_inside_out_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R19 P2 の再現（E2E）: `--ledger` を `--out-dir` 内に置く正当な配置で、
+    1 回目の intake が成功し台帳・wav が `out_dir` に公開された後、2 回目の
+    バッチ（追記）も `_check_ledger_path_collisions` の誤検知で拒否されずに
+    成功しなければならない。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    ledger_path = out_dir / "user_donor_ledger.json"
+
+    first_incoming = tmp_path / "incoming1"
+    first_incoming.mkdir()
+    (first_incoming / "UC-001.wav").write_bytes(b"first donor bytes")
+
+    first_entries = intake.run(first_incoming, out_dir, ledger_path)
+    assert len(first_entries) == 1
+
+    second_incoming = tmp_path / "incoming2"
+    second_incoming.mkdir()
+    (second_incoming / "UC-002.wav").write_bytes(b"second donor bytes")
+
+    second_entries = intake.run(second_incoming, out_dir, ledger_path)
+    assert len(second_entries) == 1
+
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 2
+    source_filenames = {e["source_filename"] for e in ledger["entries"]}
+    assert source_filenames == {"UC-001.wav", "UC-002.wav"}
 
 
 # ---------------------------------------------------------------------------
@@ -715,14 +822,106 @@ def test_load_ledger_rejects_non_list_entries(tmp_path: Path) -> None:
 
 def test_load_ledger_accepts_matching_schema_and_list_entries(tmp_path: Path) -> None:
     ledger_path = tmp_path / "user_donor_ledger.json"
+    valid_entry = _valid_ledger_entry_dict()
     ledger_path.write_text(
-        f'{{"schema": "{intake.LEDGER_SCHEMA}", "entries": [{{"card_id": "UC-001"}}]}}',
+        json.dumps({"schema": intake.LEDGER_SCHEMA, "entries": [valid_entry]}),
         encoding="utf-8",
     )
 
     ledger = intake.load_ledger(ledger_path)
     assert ledger["schema"] == intake.LEDGER_SCHEMA
-    assert ledger["entries"] == [{"card_id": "UC-001"}]
+    assert ledger["entries"] == [valid_entry]
+
+
+# ---------------------------------------------------------------------------
+# R19 P2 (intake.py:289): 台帳エントリ単位の fail-closed 検証
+# ---------------------------------------------------------------------------
+
+
+def test_load_ledger_rejects_entry_missing_source_sha256(tmp_path: Path) -> None:
+    """R19 P2 の再現: `source_sha256` を欠くエントリ（schema バージョンは
+    一致するだけの破損/旧世代台帳）を、旧実装は `entries` がリストである
+    ことしか検証しないため無自覚に受理していた。修正後はエントリ単位の
+    必須フィールド検証で fail-closed 拒否する。
+    """
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    broken_entry = _valid_ledger_entry_dict()
+    del broken_entry["source_sha256"]
+    ledger_path.write_text(
+        json.dumps({"schema": intake.LEDGER_SCHEMA, "entries": [broken_entry]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "card_id",
+        "source_filename",
+        "source_sha256",
+        "source_size_bytes",
+        "normalized_path",
+        "sha256",
+        "received_at",
+        "duration_sec",
+        "sample_rate",
+        "rms_dbfs",
+        "peak_dbfs",
+        "alignment_status",
+    ],
+)
+def test_load_ledger_rejects_entry_missing_any_required_field(
+    tmp_path: Path, field: str
+) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    broken_entry = _valid_ledger_entry_dict()
+    del broken_entry[field]
+    ledger_path.write_text(
+        json.dumps({"schema": intake.LEDGER_SCHEMA, "entries": [broken_entry]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_load_ledger_rejects_entry_with_wrong_field_type(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    broken_entry = _valid_ledger_entry_dict(source_sha256=12345)
+    ledger_path.write_text(
+        json.dumps({"schema": intake.LEDGER_SCHEMA, "entries": [broken_entry]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_load_ledger_rejects_non_dict_entry(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(
+        f'{{"schema": "{intake.LEDGER_SCHEMA}", "entries": ["not-a-dict"]}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_load_ledger_accepts_entry_with_null_card_id_and_dbfs(tmp_path: Path) -> None:
+    """`card_id`/`rms_dbfs`/`peak_dbfs` は `Optional` なので `None` を許容する。"""
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    entry = _valid_ledger_entry_dict(card_id=None, rms_dbfs=None, peak_dbfs=None)
+    ledger_path.write_text(
+        json.dumps({"schema": intake.LEDGER_SCHEMA, "entries": [entry]}),
+        encoding="utf-8",
+    )
+
+    ledger = intake.load_ledger(ledger_path)
+    assert ledger["entries"] == [entry]
 
 
 def test_run_rejects_broken_schema_ledger_before_processing_starts(
@@ -781,7 +980,7 @@ def test_run_restores_previous_ledger_when_interrupted_right_after_save_ledger_r
 
     previous_ledger = {
         "schema": intake.LEDGER_SCHEMA,
-        "entries": [{"card_id": "UC-001", "source_filename": "UC-001.wav"}],
+        "entries": [_valid_ledger_entry_dict()],
     }
     intake.save_ledger(ledger_path, previous_ledger)
     previous_ledger_bytes = ledger_path.read_bytes()
