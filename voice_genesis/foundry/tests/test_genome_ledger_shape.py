@@ -52,7 +52,10 @@ REQUIRED_GENOME_KEYS = {
     "status",
 }
 
-EXPECTED_VOICE_IDS = {f"VG-S2-{i:03d}" for i in range(1, 11)}
+# [P2 修正] (review #264 R2) `genomes` 配列そのものの並び順 = VG-S2-001..010
+# という契約（バッチ1〜3が鍛造順に追記される設計、`s2_record_2026-08-16.md`
+# の §番号進行と対応）を固定 fixture として enforce する。
+EXPECTED_VOICE_ID_ORDER = tuple(f"VG-S2-{i:03d}" for i in range(1, 11))
 
 
 @pytest.fixture(scope="module")
@@ -114,10 +117,17 @@ def test_voice_id_is_unique(ledger: Dict[str, Any]) -> None:
     assert len(voice_ids) == len(set(voice_ids)), f"duplicate voice_id(s) in ledger: {voice_ids}"
 
 
-def test_vg_s2_001_through_010_all_present(ledger: Dict[str, Any]) -> None:
-    voice_ids = {g["voice_id"] for g in ledger["genomes"]}
-    missing = EXPECTED_VOICE_IDS - voice_ids
-    assert not missing, f"missing expected voice_id(s): {sorted(missing)}"
+def test_vg_s2_001_through_010_all_present_in_exact_order(ledger: Dict[str, Any]) -> None:
+    """[P2 修正] (review #264 R2) 当初は集合比較（存在チェックのみ）だったが、
+    これは (a) 並び順の入れ替えと (b) VG-S2-011 等の余剰エントリ混入（集合の
+    包含チェックでは検出できない）の双方を見逃す。`genomes` 配列の voice_id
+    列が `EXPECTED_VOICE_ID_ORDER` と完全一致（順序・件数とも）することを
+    enforce する順序付き完全一致検査へ強化する。"""
+    voice_id_sequence = tuple(g["voice_id"] for g in ledger["genomes"])
+    assert voice_id_sequence == EXPECTED_VOICE_ID_ORDER, (
+        f"genomes voice_id order mismatch: expected {EXPECTED_VOICE_ID_ORDER}, "
+        f"got {voice_id_sequence}"
+    )
 
 
 def test_anchors_section_has_both_anchor_embeddings(ledger: Dict[str, Any]) -> None:

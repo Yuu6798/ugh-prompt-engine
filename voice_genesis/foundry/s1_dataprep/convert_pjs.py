@@ -148,6 +148,19 @@ PJS_EXPECTED_IDS: Tuple[str, ...] = tuple(f"pjs{i:03d}" for i in range(1, 101))
 # or 絶対0.1sの大きい方。両ファイルとも既存の record スクリプト群の慣例に
 # 倣い、共有モジュール新設ではなく値を直接コピペする）。閾値内の行は完全
 # 無変更のまま返す（282 件の既知良好セグメントは byte 単位で不変）。
+#
+# [P1 修正] (review #264 R2) 上記 R1 修正は EOF より完全に後ろの音素を
+# `ph_dur=0.0` のまま `ph_seq`/`ph_num`/`note_seq`/`note_dur` に残す設計
+# だったが、下流 `build_dataset.py` `validate_speaker` は `d <= 0` の
+# ph_dur を持つ行を無条件に reject するため、修復 5 セグメントが
+# `convert_pjs.py` 単体では成功しても `build_dataset.py` を通す時点で
+# **必ず** validate 失敗する統合バグだった（R1 の単体テストは
+# `normalize_ph_dur_to_wav_duration` の戻り値のみを検査し、
+# `validate_speaker` まで通していなかったため検出できなかった）。
+# `ph_dur=0.0` になった音素は「実質削除」ではなく実際に整列フィールド
+# （`ph_seq`/`ph_dur`/`ph_num`/該当ノートの `note_seq`/`note_dur`）から
+# 削除する方式へ変更する（`_drop_dead_phonemes` 参照）。EOF 以前の音素の
+# 境界・値は本修正でも一切変更しない。
 DURATION_REL_TOLERANCE = 0.05
 DURATION_ABS_TOLERANCE_SEC = 0.1
 
@@ -177,9 +190,11 @@ def _truncate_ph_dur_tail_to_wav_duration(
     先頭からの累積時刻が `wav_dur` に達するまでの音素は完全無変更で返す
     （＝前方の音素境界を一切ズラさない）。累積時刻が `wav_dur` を跨ぐ音素
     （EOF 跨ぎ）は、そこでちょうど `wav_dur` に達するよう長さを切り詰める。
-    それより後ろの音素（EOF より完全に後ろ）は 0 にする（実質削除。ただし
-    `ph_seq`/`ph_num`/`note_seq`/`note_dur` と行内で 1:1 対応する配列の
-    ため、要素自体は削除せず長さ 0 で保持する）。
+    それより後ろの音素（EOF より完全に後ろ）は 0 にする。この関数自体は
+    `ph_seq`/`ph_num`/`note_seq`/`note_dur` との位置対応を保つため要素を
+    削除せず、常に入力と同じ長さのリストを返す（0.0 になった音素を整列
+    フィールドから実際に削除するのは呼び出し元 `_drop_dead_phonemes` の
+    役割 — review #264 R2）。
 
     申告合計が `wav_dur` に届かない場合（本コーパスでは未観測だが対称に
     扱う）は、最後の音素の長さへ不足分を加算して合計を一致させる（この
@@ -212,16 +227,85 @@ def _truncate_ph_dur_tail_to_wav_duration(
     return result, n_touched
 
 
+def _drop_dead_phonemes(row: Dict[str, str], ph_dur: List[float]) -> Dict[str, str]:
+    """`ph_dur`（`_truncate_ph_dur_tail_to_wav_duration` 適用後、長さ 0 の
+    音素を含み得る）に基づき、長さ 0 になった音素を `ph_seq`/`ph_dur` および
+    対応するノート単位フィールド（`ph_num` があれば、それが指すノートの
+    `note_seq`/`note_dur` も）から実際に削除した新しい行を返す。
+
+    [P1 修正] (review #264 R2) `ph_dur=0.0` の音素をゼロ長のまま整列
+    フィールドに残すと、下流 `build_dataset.py` `validate_speaker` の
+    `d <= 0` チェックが無条件に reject するため、修復セグメントが
+    `build_dataset.py` を通す時点で必ず fail する統合バグになっていた。
+    音素自体を要素ごと削除することでこれを解消する（EOF 以前の音素は
+    `ph_dur` に 0.0 が含まれない限り一切削除・変更されない）。
+
+    `ph_num`（ノートごとの音素数、`sum(ph_num) == len(ph_seq)` の対応関係）
+    が存在する場合は、各ノートの残存音素数を数え直し、音素が 1 個も残らな
+    かったノートは `ph_num`（および同じインデックス対応の `note_seq`/
+    `note_dur`、存在すれば）から丸ごと除去する。`ph_num`/`note_seq`/
+    `note_dur` が存在しない・空の行（例: PJS の生 `transcriptions.csv` には
+    無いテスト用簡易行）は対象外としてそのままにする。
+    """
+    keep = [d > 0.0 for d in ph_dur]
+    new_row = dict(row)
+    new_row["ph_dur"] = " ".join(str(round(d, 12)) for d in ph_dur)
+    if all(keep):
+        return new_row
+
+    ph_seq = row["ph_seq"].split()
+    if len(ph_seq) != len(ph_dur):
+        # 対応が取れない行は安全側（削除せず ph_dur のみ更新）に倒す。
+        # 正常な `transcriptions.csv` では `ph_seq`/`ph_dur` は常に同長
+        # （`validate_speaker` が別途 enforce する）ため通常到達しない。
+        return new_row
+    new_row["ph_seq"] = " ".join(p for p, k in zip(ph_seq, keep) if k)
+    new_row["ph_dur"] = " ".join(str(round(d, 12)) for d, k in zip(ph_dur, keep) if k)
+
+    ph_num_raw = row.get("ph_num")
+    if not ph_num_raw:
+        return new_row
+    ph_num = [int(x) for x in ph_num_raw.split()]
+    if sum(ph_num) != len(ph_dur):
+        return new_row  # 対応が取れない場合は ph_num 以降には触れない
+
+    # 各音素がどのノート（ph_num のインデックス）に属するかを展開する。
+    note_of_phoneme: List[int] = []
+    for note_idx, count in enumerate(ph_num):
+        note_of_phoneme.extend([note_idx] * count)
+    surviving_counts: Dict[int, int] = {}
+    for note_idx, k in zip(note_of_phoneme, keep):
+        if k:
+            surviving_counts[note_idx] = surviving_counts.get(note_idx, 0) + 1
+    surviving_note_indices = [i for i in range(len(ph_num)) if surviving_counts.get(i, 0) > 0]
+    new_row["ph_num"] = " ".join(str(surviving_counts[i]) for i in surviving_note_indices)
+
+    for note_field in ("note_seq", "note_dur"):
+        values_raw = row.get(note_field)
+        if not values_raw:
+            continue
+        values = values_raw.split()
+        if len(values) != len(ph_num):
+            continue  # 対応が取れない場合はそのノートフィールドには触れない
+        new_row[note_field] = " ".join(values[i] for i in surviving_note_indices)
+
+    return new_row
+
+
 def normalize_ph_dur_to_wav_duration(
     rows: List[Dict[str, str]], wav_dir: Path
 ) -> Tuple[List[Dict[str, str]], List[str]]:
     """各行の ph_dur 合計が実 wav 長と許容誤差（相対5% or 絶対0.1sの大きい方）
     を超えて乖離している場合、末尾側だけを切り詰め/延長して合計を実 wav 長へ
     正規化した新しい行のリストを返す（`_truncate_ph_dur_tail_to_wav_duration`
-    参照。前方の音素境界は一切変更しない — [P1 修正] review #264 R1）。乖離が
-    許容内の行は同一オブジェクトのまま（内容も無変更で）返す。2 個目の戻り値
-    は正規化を適用した行の人間可読ログ（適用 0 件なら空リスト。呼び出し側は
-    これを CSV 再公開の要否判定に使う）。
+    参照。前方の音素境界は一切変更しない — [P1 修正] review #264 R1）。
+    切り詰めの結果 `ph_dur=0.0` になった音素は `ph_seq`/`ph_num`/
+    `note_seq`/`note_dur` から実際に削除する（`_drop_dead_phonemes` 参照 —
+    [P1 修正] review #264 R2。ゼロ長のまま残すと下流 `validate_speaker` の
+    `d <= 0` チェックで必ず reject されるため）。乖離が許容内の行は同一
+    オブジェクトのまま（内容も無変更で）返す。2 個目の戻り値は正規化を適用
+    した行の人間可読ログ（適用 0 件なら空リスト。呼び出し側はこれを CSV
+    再公開の要否判定に使う）。
     """
     fixed_rows: List[Dict[str, str]] = []
     fix_log: List[str] = []
@@ -245,15 +329,16 @@ def normalize_ph_dur_to_wav_duration(
             fixed_rows.append(row)
             continue
         new_ph_dur, n_touched = _truncate_ph_dur_tail_to_wav_duration(ph_dur, wav_dur)
-        new_row = dict(row)
-        # `str(round(x, 12))` は `db_converter.py` `to_lengths_string()` と
-        # 同じ書式（元 ph_dur の生成に使われている書式に揃える）。
-        new_row["ph_dur"] = " ".join(str(round(d, 12)) for d in new_ph_dur)
+        n_dropped = sum(1 for d in new_ph_dur if d <= 0.0)
+        new_row = _drop_dead_phonemes(row, new_ph_dur)
         fixed_rows.append(new_row)
+        surviving_dur = [float(x) for x in new_row["ph_dur"].split()] if new_row["ph_dur"] else []
         fix_log.append(
-            f"{row['name']}: ph_dur total {total:.4f}s -> {math.fsum(new_ph_dur):.4f}s "
+            f"{row['name']}: ph_dur total {total:.4f}s -> {math.fsum(surviving_dur):.4f}s "
             f"(wav duration {wav_dur:.4f}s, tail-truncated: {n_touched} trailing "
-            "phoneme(s) adjusted, forward boundaries preserved)"
+            f"phoneme(s) adjusted, forward boundaries preserved"
+            + (f", {n_dropped} zero-length phoneme(s) removed" if n_dropped else "")
+            + ")"
         )
     return fixed_rows, fix_log
 

@@ -151,12 +151,20 @@ def test_build_dataset_main_strict_duration_fails_closed(tmp_path: Path, capsys)
 def test_normalize_ph_dur_truncates_tail_of_overshooting_row(tmp_path: Path) -> None:
     """[P1 修正] (review #264 R1) 比例縮小ではなく末尾切り詰め方式。EOF
     （実 wav 長）以前の音素境界（この例では先頭 "SP" の 1.0s）は完全無変更
-    のまま返され、EOF を跨ぐ音素だけが短縮/ゼロ化されることを検証する。"""
+    のまま返され、EOF を跨ぐ音素だけが短縮される。
+
+    [P1 修正] (review #264 R2) EOF より完全に後ろの音素は `ph_dur=0.0` の
+    まま残さず、`ph_seq`/`ph_dur`/`ph_num`（対応するノートが空になった場合）
+    から実際に削除する（0.0 のまま残すと下流 `build_dataset.validate_speaker`
+    の `d <= 0` チェックで必ず reject されるため）。
+    """
     wav_dir = tmp_path / "wavs"
     _write_wav(wav_dir / "seg000.wav", 3.0)
     rows = [{"name": "seg000", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0", "ph_num": "1 1 1"}]
     fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert len(fix_log) == 1
+    assert "1 zero-length phoneme(s) removed" in fix_log[0]
+    new_seq = fixed_rows[0]["ph_seq"].split()
     new_dur = [float(x) for x in fixed_rows[0]["ph_dur"].split()]
     assert sum(round(d, 6) for d in new_dur) == 3.0
     # 前方境界保存: 累積時刻が EOF(3.0s) に達するまでの先頭 "SP"（1.0s）は
@@ -165,11 +173,71 @@ def test_normalize_ph_dur_truncates_tail_of_overshooting_row(tmp_path: Path) -> 
     # EOF を跨ぐ "a"（1.0s ~ 5.0s の予定）は EOF でちょうど収まるよう
     # 2.0s へ短縮される
     assert new_dur[1] == 2.0
-    # EOF より完全に後ろの末尾 "SP" はゼロ化される
-    assert new_dur[2] == 0.0
-    # ph_seq/ph_num など他フィールドは無変更
-    assert fixed_rows[0]["ph_seq"] == rows[0]["ph_seq"]
-    assert fixed_rows[0]["ph_num"] == rows[0]["ph_num"]
+    # EOF より完全に後ろの末尾 "SP" は要素ごと削除される（ゼロ長のまま残さない）
+    assert new_seq == ["SP", "a"]
+    assert len(new_dur) == 2
+    # 削除された末尾 "SP" は自身の専用ノート（ph_num 3個目=1）だったため、
+    # そのノート自体も ph_num から除去される
+    assert fixed_rows[0]["ph_num"] == "1 1"
+
+
+def test_normalize_ph_dur_removes_note_seq_note_dur_for_emptied_note(tmp_path: Path) -> None:
+    """`note_seq`/`note_dur`（ノート単位フィールド）が存在する場合も、音素が
+    1個も残らなかったノートは同じインデックスで除去されることを検証する
+    （review #264 R2）。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg000.wav", 3.0)
+    rows = [
+        {
+            "name": "seg000",
+            "ph_seq": "SP a SP",
+            "ph_dur": "1.0 4.0 1.0",
+            "ph_num": "1 1 1",
+            "note_seq": "rest 60 rest",
+            "note_dur": "1.0 4.0 1.0",
+        }
+    ]
+    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert len(fix_log) == 1
+    assert fixed_rows[0]["ph_num"] == "1 1"
+    assert fixed_rows[0]["note_seq"] == "rest 60"
+    assert fixed_rows[0]["note_dur"] == "1.0 4.0"
+
+
+def test_normalize_ph_dur_partial_note_survives_with_reduced_count(tmp_path: Path) -> None:
+    """1個のノートに複数音素が対応しており、そのうち一部だけが EOF より後ろへ
+    落ちる場合、ノート自体は残しつつ `ph_num` のそのノートの数だけ減ること
+    を検証する（`ph_num` の対応ノートが空にならない限りノートは削除されない）。
+    """
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg004.wav", 1.5)
+    # ノート0="SP"（1音素）、ノート1="k"+"a"+"i"（3音素）。累積:
+    # SP(0.5)->0.5, k(0.5)->1.0, a(1.5)->EOF(1.5)超過なので EOF 跨ぎとして
+    # 1.5-1.0=0.5 に短縮（crossed）。crossed 以降の "i" は完全に EOF より
+    # 後ろへ落ちるため 0.0 化->削除対象になる。
+    rows = [
+        {
+            "name": "seg004",
+            "ph_seq": "SP k a i",
+            "ph_dur": "0.5 0.5 1.5 1.0",
+            "ph_num": "1 3",
+            "note_seq": "rest 60",
+            "note_dur": "0.5 3.0",
+        }
+    ]
+    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert len(fix_log) == 1
+    new_seq = fixed_rows[0]["ph_seq"].split()
+    new_dur = [float(x) for x in fixed_rows[0]["ph_dur"].split()]
+    # "i" のみ完全に EOF より後ろに落ちるため削除される
+    assert new_seq == ["SP", "k", "a"]
+    assert len(new_dur) == 3
+    assert sum(round(d, 6) for d in new_dur) == 1.5
+    # ノート1（"k","a","i" のうち "i" のみ喪失）は残存するが音素数が 3->2 に減る
+    assert fixed_rows[0]["ph_num"] == "1 2"
+    # ノート自体は消えていないので note_seq/note_dur は無変更
+    assert fixed_rows[0]["note_seq"] == rows[0]["note_seq"]
+    assert fixed_rows[0]["note_dur"] == rows[0]["note_dur"]
 
 
 def test_normalize_ph_dur_forward_boundaries_preserved_multi_phoneme(tmp_path: Path) -> None:
@@ -229,3 +297,81 @@ def test_normalize_ph_dur_mixed_batch_only_touches_violating_rows(tmp_path: Path
     assert fixed_rows[0] is good
     assert fixed_rows[1] is not bad
     assert sum(round(float(x), 6) for x in fixed_rows[1]["ph_dur"].split()) == 3.0
+
+
+# --- end-to-end: normalize -> transcriptions.csv -> build_dataset.validate_speaker
+#
+# [P1 修正] (review #264 R2): R1 のテストは `normalize_ph_dur_to_wav_duration`
+# の戻り値のみを検査し、下流 `build_dataset.validate_speaker` まで実際に
+# 通していなかった。旧方式（EOF より完全に後ろの音素を ph_dur=0.0 のまま
+# ph_seq 等に残す）は `validate_speaker` の `any(d <= 0 for d in ph_dur)`
+# チェックに無条件で reject され、修復セグメントは `convert_pjs.py` 単体では
+# 成功しても `build_dataset.py` を通す時点で必ず fail する統合バグだった。
+# 以下のテストは「毒サンプル捜査」で実測判明した5件（`pjs004_seg003` /
+# `pjs016_seg000` / `pjs029_seg002` / `pjs030_seg001` / `pjs031_seg001`、
+# `results_s1/s1_record_2026-08-15.md` 参照）と同じ構造不良（末尾に1個以上
+# EOF より完全に後ろの音素を持つ行）を代表する行を正規化 ->
+# `transcriptions.csv` へ実際に書き出し・読み戻し -> `validate_speaker` まで
+# 通して、0 件の問題（fail-closed に引っかからない）で公開できることを
+# end-to-end で確認する（実 PJS 音源・`nnsvs-db-converter` 実 clone は本
+# 環境では利用不能な machine-dependent 素材のため、構造を再現した合成 wav
+# で代替する。実素材での再測定は別途 machine-dependent 検証として扱う）。
+
+
+def test_normalize_then_build_dataset_validate_speaker_passes_end_to_end(
+    tmp_path: Path,
+) -> None:
+    import csv as _csv
+
+    raw_dir = tmp_path / "pjs_raw"
+    wav_dir = raw_dir / "wavs"
+    # pjs004/pjs029/pjs030 相当（`s1_record_2026-08-15.md` 実測記録どおり
+    # 「末尾1音素（全件SP）がゼロ化されるのみ」）: 申告合計が実 wav 長を
+    # 大きく超過し、末尾 SP が完全に EOF より後ろへ落ちる代表例。
+    _write_wav(wav_dir / "seg000.wav", 3.0)
+    # pjs016_seg000 相当（末尾から2番目の母音が短縮され、末尾 SP がゼロ化）:
+    # EOF 跨ぎ音素自体は短縮されて生存し（削除されない）、それより後ろの
+    # 末尾 SP のみが削除対象になる代表例。
+    _write_wav(wav_dir / "seg001.wav", 2.0)
+    rows = [
+        {
+            "name": "seg000",
+            "ph_seq": "SP a SP",
+            "ph_dur": "1.0 4.0 1.0",
+            "ph_num": "1 1 1",
+            "note_seq": "rest 60 rest",
+            "note_dur": "1.0 4.0 1.0",
+        },
+        {
+            "name": "seg001",
+            "ph_seq": "SP k a i SP",
+            "ph_dur": "0.5 0.5 0.5 3.0 1.0",
+            "ph_num": "1 1 2 1",
+            "note_seq": "rest 60 60 rest",
+            "note_dur": "0.5 0.5 3.5 1.0",
+        },
+    ]
+
+    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert len(fix_log) == 2  # 両行とも許容誤差を超過し正規化対象になる
+
+    csv_path = raw_dir / "transcriptions.csv"
+    fieldnames = ["name", "ph_seq", "ph_dur", "ph_num", "note_seq", "note_dur"]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = _csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(fixed_rows)
+
+    reloaded = bd.read_transcriptions(csv_path)
+    # 正規化により ph_dur=0.0 の音素が1個も残っていないこと（validate_speaker
+    # の d<=0 チェックに引っかかる要素が存在しないこと）を先に確認する。
+    for row in reloaded:
+        durs = [float(x) for x in row["ph_dur"].split()]
+        assert all(d > 0.0 for d in durs), (row["name"], durs)
+        assert len(row["ph_seq"].split()) == len(durs)
+
+    problems = bd.validate_speaker("pjs", raw_dir, reloaded)
+    assert problems == [], problems
+
+    duration_warnings = bd.check_ph_dur_duration("pjs", wav_dir, reloaded)
+    assert duration_warnings == [], duration_warnings

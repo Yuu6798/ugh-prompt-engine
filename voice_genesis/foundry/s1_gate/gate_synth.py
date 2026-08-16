@@ -131,6 +131,23 @@ SCORE_MODULE_FILENAMES: Dict[str, str] = {
     "umi": "score_umi.py",
 }
 
+# [P2 修正] (review #264 R2) `score_umi.py` は `from score import ScoreNote`
+# で `score.py` に推移的依存する（`voice_genesis/singer/score_umi.py` 参照）。
+# `sys.modules` からの evict 対象・provenance sha256 の pin 対象は、song
+# モジュール本体だけでなくこの推移的依存も含める必要がある（含めないと、
+# `score_umi` 側だけ evict しても `import score` がキャッシュ済みの
+# `score` モジュールオブジェクトをそのまま返し、別 `singer_dir` 由来の
+# 古い `score.py` 内容が合成に使われ得る）。両モジュールが共通で依存する
+# `phoneme_jp.py` も同じ理由で対象に含める。
+SCORE_MODULE_DEPENDENCY_FILENAMES: Dict[str, Tuple[str, ...]] = {
+    "sakura": ("phoneme_jp.py",),
+    "umi": ("score.py", "phoneme_jp.py"),
+}
+
+# `load_song_module`/`cmd_run` が evict/pin する score 系モジュール名の全体
+# 集合（`sys.modules` のキー名。ファイル名の拡張子を除いた stem と一致）。
+_ALL_SCORE_FAMILY_MODULE_NAMES: Tuple[str, ...] = ("score", "score_umi", "phoneme_jp")
+
 
 def score_module_path_for(song: str, singer_dir: Path) -> Path:
     """`load_song_module` が import する前に、対象ファイルの絶対パスを解決する
@@ -139,6 +156,17 @@ def score_module_path_for(song: str, singer_dir: Path) -> Path:
     if filename is None:
         raise ValueError(f"unknown song: {song}")
     return (singer_dir / filename).resolve()
+
+
+def score_module_dependency_paths_for(song: str, singer_dir: Path) -> Dict[str, Path]:
+    """`song` の song モジュールが推移的に依存する `singer_dir` 直下のモジュール
+    ファイルの絶対パスを、依存ファイル名（拡張子なし stem）をキーにして返す
+    （review #264 R2: provenance sha256 の pin 対象を依存モジュールへ拡張する
+    ための事前解決。`score_module_path_for` の依存版）。"""
+    return {
+        Path(filename).stem: (singer_dir / filename).resolve()
+        for filename in SCORE_MODULE_DEPENDENCY_FILENAMES.get(song, ())
+    }
 
 
 def load_song_module(song: str, singer_dir: Path):
@@ -160,11 +188,24 @@ def load_song_module(song: str, singer_dir: Path):
     モジュール名を `sys.modules` から evict し、常に現在の `sys.path`
     （直前に挿入した `singer_dir`）からファイルを再ロードさせることで
     これを封じる。
+
+    [P2 修正] (review #264 R2) R1 は呼び出し対象の song モジュール名
+    （`score` または `score_umi`）のみを evict していたが、`score_umi.py`
+    は `from score import ScoreNote` で `score` モジュールへ推移的に依存する
+    （`SCORE_MODULE_DEPENDENCY_FILENAMES` 参照）。`song == "umi"` の evict が
+    `score_umi` だけだと、`import score_umi` 内部の `from score import
+    ScoreNote` は `sys.modules["score"]` に別 `singer_dir` 由来の古いモジュール
+    がキャッシュされていればそれをそのまま返す（R1 と同型のハッシュ偽装が
+    `score` 側で再発する）。song に関わらず score 系モジュール
+    （`score`/`score_umi`/`phoneme_jp`）を毎回まとめて evict することで、
+    直接 import 対象・推移的依存の双方を常に現在の `singer_dir` から
+    再ロードさせる。
     """
     module_name = "score" if song == "sakura" else "score_umi" if song == "umi" else None
     if module_name is None:
         raise ValueError(f"unknown song: {song}")
-    sys.modules.pop(module_name, None)
+    for dependent_module_name in _ALL_SCORE_FAMILY_MODULE_NAMES:
+        sys.modules.pop(dependent_module_name, None)
     sys.path.insert(0, str(singer_dir))
     if song == "sakura":
         import score as sc  # noqa: E402  (read-only import from repo)
@@ -1109,10 +1150,21 @@ def cmd_run(args):
     # される」事故を防ぐ）。
     input_sha256["gate_synth_py"] = sha256_file(Path(__file__).resolve())
     score_module_paths: Dict[str, Path] = {}
+    # [P2 修正] (review #264 R2) song モジュール本体（`score.py`/`score_umi.py`）
+    # だけでなく、それが推移的に依存するモジュール（`score_umi.py` ->
+    # `score.py`、両者 -> `phoneme_jp.py`。`load_song_module` の evict 対象
+    # 拡張と対にする）も provenance sha256 の pin 対象へ含める。含めないと、
+    # 依存モジュールだけが差し替わった場合に「どの実装から出たか」を pin から
+    # 追えない。
+    dependency_module_paths: Dict[str, Path] = {}
     for song_name in args.song.split(","):
         module_path = score_module_path_for(song_name, singer_dir)
         input_sha256[f"score_module_{song_name}"] = sha256_file(module_path)
         score_module_paths[song_name] = module_path
+        for dep_stem, dep_path in score_module_dependency_paths_for(song_name, singer_dir).items():
+            pin_key = f"score_module_{song_name}_dep_{dep_stem}"
+            input_sha256[pin_key] = sha256_file(dep_path) if dep_path.exists() else None
+            dependency_module_paths[pin_key] = dep_path
     for song_name in args.song.split(","):
         _, _, _, imported_module_path = load_song_module(song_name, singer_dir)
         if imported_module_path != score_module_paths[song_name]:
@@ -1176,6 +1228,18 @@ def cmd_run(args):
                 raise SystemExit(
                     f"ERROR: score module '{module_path}' changed during synthesis "
                     f"(pinned sha256={recorded_sha}, now={current_sha}). "
+                    f"Refusing to publish a summary whose provenance pin no longer "
+                    f"matches the on-disk implementation."
+                )
+        # [P2 修正] (review #264 R2) 依存モジュール（score.py/phoneme_jp.py）
+        # も song モジュール本体と同じ事後照合の対象にする。
+        for pin_key, dep_path in dependency_module_paths.items():
+            recorded_sha = input_sha256[pin_key]
+            current_sha = sha256_file(dep_path) if dep_path.exists() else None
+            if current_sha != recorded_sha:
+                raise SystemExit(
+                    f"ERROR: score module dependency '{dep_path}' changed during "
+                    f"synthesis (pinned sha256={recorded_sha}, now={current_sha}). "
                     f"Refusing to publish a summary whose provenance pin no longer "
                     f"matches the on-disk implementation."
                 )
