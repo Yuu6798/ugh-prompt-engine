@@ -5,8 +5,10 @@ ph_dur 合計が実音声長を大きく超過する」構造不良を検出/是
 
 - `build_dataset.check_ph_dur_duration` / `build_dataset.py` の
   `--strict-duration` 2 段階仕様（既定 warn・fail-closed はオプトイン）
-- `convert_pjs.normalize_ph_dur_to_wav_duration`（許容誤差超過行のみ比例
-  縮小/拡大で正規化。許容内の行は同一オブジェクトのまま完全無変更で返す）
+- `convert_pjs.normalize_ph_dur_to_wav_duration`（許容誤差超過 overshoot 行
+  のみ末尾切り詰めで正規化。undershoot 行は fail-closed で違反収集し無変更
+  のまま返す — review #264 R5。許容内の行は同一オブジェクトのまま完全
+  無変更で返す）
 """
 from __future__ import annotations
 
@@ -151,7 +153,7 @@ def test_check_note_dur_consistency_skips_rows_without_note_dur() -> None:
 def test_check_note_dur_consistency_wired_into_validate_speaker_unconditionally(
     tmp_path: Path,
 ) -> None:
-    """`check_ph_dur_duration`（wav vs ph_dur、既知4件の乖離を warn に留める
+    """`check_ph_dur_duration`（wav vs ph_dur、既知5件の乖離を warn に留める
     2段階仕様）と異なり、ph_dur↔note_dur のクロスフィールド不変量は常に
     `validate_speaker` の problems（fail-closed）へ合流することを検証する
     （`--strict-duration` フラグに依存しない）。"""
@@ -251,7 +253,8 @@ def test_normalize_ph_dur_truncates_tail_of_overshooting_row(tmp_path: Path) -> 
     wav_dir = tmp_path / "wavs"
     _write_wav(wav_dir / "seg000.wav", 3.0)
     rows = [{"name": "seg000", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0", "ph_num": "1 1 1"}]
-    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert undershoot == []
     assert len(fix_log) == 1
     assert "1 zero-length phoneme(s) removed" in fix_log[0]
     new_seq = fixed_rows[0]["ph_seq"].split()
@@ -287,7 +290,8 @@ def test_normalize_ph_dur_removes_note_seq_note_dur_for_emptied_note(tmp_path: P
             "note_dur": "1.0 4.0 1.0",
         }
     ]
-    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert undershoot == []
     assert len(fix_log) == 1
     assert fixed_rows[0]["ph_num"] == "1 1"
     assert fixed_rows[0]["note_seq"] == "rest 60"
@@ -327,7 +331,8 @@ def test_normalize_ph_dur_partial_note_survives_with_reduced_count(tmp_path: Pat
             "note_dur": "0.5 3.0",
         }
     ]
-    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert undershoot == []
     assert len(fix_log) == 1
     new_seq = fixed_rows[0]["ph_seq"].split()
     new_dur = [float(x) for x in fixed_rows[0]["ph_dur"].split()]
@@ -355,7 +360,8 @@ def test_normalize_ph_dur_forward_boundaries_preserved_multi_phoneme(tmp_path: P
     # 累積: 0.3 / 0.7 / 1.2(=0.3+0.4+... 実際は 0.3,0.4,0.5 -> 1.2) / 続いて
     # 大きな最終音素が EOF を大きく超過する
     rows = [{"name": "seg002", "ph_seq": "a i u SP", "ph_dur": "0.3 0.4 0.5 5.0"}]
-    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert undershoot == []
     assert len(fix_log) == 1
     new_dur = [float(x) for x in fixed_rows[0]["ph_dur"].split()]
     # EOF(2.0s) 以前の 3 音素は完全無変更
@@ -367,19 +373,39 @@ def test_normalize_ph_dur_forward_boundaries_preserved_multi_phoneme(tmp_path: P
     assert sum(round(d, 6) for d in new_dur) == 2.0
 
 
-def test_normalize_ph_dur_undershoot_extends_last_phoneme_only(tmp_path: Path) -> None:
-    """申告合計が実 wav 長を下回る場合も対称に扱い、不足分は最後の音素へ
-    のみ加算する（前方境界は無変更）。"""
+def test_normalize_ph_dur_undershoot_is_rejected_fail_closed(tmp_path: Path) -> None:
+    """[P2 修正] (review #264 R5) 申告合計が実 wav 長を下回る場合
+    （undershoot）は、もはや最後の音素へ不足分を加算して合成しない。EOF
+    クランプ診断は overshoot のみを説明し undershoot は原因未特定・
+    現行素材でも未観測のため、行は無変更のまま返し違反として収集する
+    （公開前に fail-closed で拒否するのは呼び出し元 `main()` の責務）。"""
     wav_dir = tmp_path / "wavs"
     _write_wav(wav_dir / "seg003.wav", 4.0)
-    rows = [{"name": "seg003", "ph_seq": "a i SP", "ph_dur": "0.5 0.5 0.5"}]  # 合計1.5s vs 実4.0s
-    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
-    assert len(fix_log) == 1
-    new_dur = [float(x) for x in fixed_rows[0]["ph_dur"].split()]
-    assert new_dur[0] == 0.5
-    assert new_dur[1] == 0.5
-    assert abs(new_dur[2] - 3.0) < 1e-9
-    assert sum(round(d, 6) for d in new_dur) == 4.0
+    row = {"name": "seg003", "ph_seq": "a i SP", "ph_dur": "0.5 0.5 0.5"}  # 合計1.5s vs 実4.0s
+    rows = [row]
+    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert fix_log == []  # overshoot 用ログには積まれない
+    assert len(undershoot) == 1
+    assert "seg003" in undershoot[0]
+    assert "1.5000s" in undershoot[0]
+    assert "4.0000s" in undershoot[0]
+    assert "undershoot" in undershoot[0]
+    # 行自体は無変更（捏造した境界を書き込まない）のまま返る
+    assert fixed_rows[0] is row
+    assert fixed_rows[0]["ph_dur"] == "0.5 0.5 0.5"
+
+
+def test_normalize_ph_dur_undershoot_within_tolerance_is_untouched(tmp_path: Path) -> None:
+    """許容誤差（絶対0.1s）内の undershoot は従来通り無変更のまま許容する
+    （fail-closed の対象は許容超過の undershoot のみ）。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg005.wav", 3.05)
+    row = {"name": "seg005", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}  # 合計3.0s vs 実3.05s
+    rows = [row]
+    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert fix_log == []
+    assert undershoot == []
+    assert fixed_rows[0] is row
 
 
 def test_normalize_ph_dur_leaves_within_tolerance_row_byte_identical(tmp_path: Path) -> None:
@@ -387,8 +413,9 @@ def test_normalize_ph_dur_leaves_within_tolerance_row_byte_identical(tmp_path: P
     _write_wav(wav_dir / "seg001.wav", 3.0)
     row = {"name": "seg001", "ph_seq": "SP a SP", "ph_dur": "1.0 1.02 1.0"}
     rows = [row]
-    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []
+    assert undershoot == []
     assert fixed_rows[0] is row  # 無変更行は同一オブジェクトのまま返る
 
 
@@ -398,7 +425,8 @@ def test_normalize_ph_dur_mixed_batch_only_touches_violating_rows(tmp_path: Path
     _write_wav(wav_dir / "bad.wav", 3.0)
     good = {"name": "good", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
     bad = {"name": "bad", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0"}
-    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration([good, bad], wav_dir)
+    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration([good, bad], wav_dir)
+    assert undershoot == []
     assert len(fix_log) == 1
     assert "bad" in fix_log[0]
     assert fixed_rows[0] is good
@@ -459,7 +487,8 @@ def test_normalize_then_build_dataset_validate_speaker_passes_end_to_end(
         },
     ]
 
-    fixed_rows, fix_log = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert undershoot == []
     assert len(fix_log) == 2  # 両行とも許容誤差を超過し正規化対象になる
 
     csv_path = raw_dir / "transcriptions.csv"

@@ -331,7 +331,7 @@ def _publish_outputs(items: Sequence[Tuple[Path, str]]) -> None:
 # 消滅する）。整合性の低い教師信号が binarize 済みデータへ無警告で混入する
 # のを防ぐため、ph_dur 合計と実 wav 長の整合を検査する。フレーム量子化
 # （timestep 11.61ms 相当）を考慮し、相対 5% or 絶対 0.1s の大きい方を許容
-# 誤差とする。ただし現行 PJS 素材で 4 件が既知違反のため、既定は fail-closed
+# 誤差とする。ただし現行 PJS 素材で 5 件が既知違反のため、既定は fail-closed
 # にせず warn のみに留め、`--strict-duration` 指定時のみ problems へ昇格させて
 # fail させる 2 段階仕様にする（`convert_pjs.py` の `DURATION_REL_TOLERANCE`/
 # `DURATION_ABS_TOLERANCE_SEC` と同一閾値。両ファイルとも既存の record スクリプト
@@ -542,7 +542,7 @@ def validate_speaker(
 
     # fix (2026-08-16, review #264 R3): ph_dur 合計と note_dur 合計のクロス
     # フィールド不変量は構造的整合性（`check_ph_dur_duration` の「現行 PJS
-    # 素材に既知4件の乖離あり」という経緯とは異なる）であり、常に fail-closed
+    # 素材に既知5件の乖離あり」という経緯とは異なる）であり、常に fail-closed
     # で扱う（`--strict-duration` の分岐対象にしない）。
     problems += check_note_dur_consistency(speaker_name, rows)
     return problems
@@ -681,7 +681,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="ph_dur 合計と実 wav 長の乖離（相対5%% or 絶対0.1sの大きい方を超過）を"
              "warning ではなく problem として扱い、検証を fail させる。"
              "既定 (指定なし) は warning のみで公開は継続する "
-             "(現行 PJS 素材で 4 件が既知違反のため)。",
+             "(現行 PJS 素材で 5 件が既知違反のため)。",
     )
     args = parser.parse_args(argv)
 

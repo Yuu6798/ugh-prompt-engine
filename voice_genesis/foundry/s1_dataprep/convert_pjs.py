@@ -141,8 +141,8 @@ PJS_EXPECTED_IDS: Tuple[str, ...] = tuple(f"pjs{i:03d}" for i in range(1, 101))
 # 収まらない」としていたのはこの 1 音素浸食を指しており、比例縮小の根拠には
 # ならない — 前方の音素境界は本方式でも一切ズレない）。
 #
-# 申告合計が実 wav 長を下回る場合（本コーパスでは未観測）も対称に扱い、
-# 末尾音素の長さを補って合計を一致させる（前方境界は同様に無変更）。
+# 申告合計が実 wav 長を下回る場合（undershoot）は、下記 R5 の通り自動修復
+# しない（fail-closed で拒否する）。
 #
 # 閾値判定自体は `build_dataset.py` `check_ph_dur_duration` と同一（相対5%
 # or 絶対0.1sの大きい方。両ファイルとも既存の record スクリプト群の慣例に
@@ -171,6 +171,22 @@ PJS_EXPECTED_IDS: Tuple[str, ...] = tuple(f"pjs{i:03d}" for i in range(1, 101))
 # （`_drop_dead_phonemes` 参照）。あわせて `build_dataset.py` の readback
 # 検証に ph_dur合計↔note_dur合計のクロスフィールド不変量検査
 # （`check_note_dur_consistency`）を追加する。
+#
+# [P2 修正] (review #264 R5) 上記 R1〜R3 は一貫して「申告合計が実 wav 長を
+# 上回る場合（overshoot）は対称に、下回る場合（undershoot）も末尾音素へ
+# 不足分を加算して合計を一致させる」という対称設計だったが、これは誤りだった
+# ——冒頭の EOF クランプ診断（`db_converter.py` の numpy スライスが実音声
+# 終端でクランプすることによる overshoot）は overshoot のみを説明しており、
+# undershoot（例: 申告末尾に無音区間があるが実 wav にその無音が収録されて
+# いない等）はそもそも原因未特定で、現行 PJS 素材でも未観測（overshoot 5件
+# のみが実測されている）。原因不明の不足分を無条件に最後の音素へ加算すると、
+# 実際には存在しない/性質不明の音声区間を特定の音素の持続時間として捏造して
+# 教師信号に混入させることになり、`_drop_dead_phonemes` の note_dur 再計算
+# まで通過するため下流の整合性検査も素通りしてしまう。したがって undershoot
+# は自動修復せず、許容誤差（相対5%/絶対0.1s）を超えるものは違反として全収集
+# した上で公開前に fail-closed で拒否する（許容誤差内の微差は従来通り無変更
+# のまま許容——拒否対象は許容超過の undershoot のみ）。overshoot の末尾切り
+# 詰め挙動（R1〜R3）自体は変更しない。
 DURATION_REL_TOLERANCE = 0.05
 DURATION_ABS_TOLERANCE_SEC = 0.1
 
@@ -195,7 +211,11 @@ def _truncate_ph_dur_tail_to_wav_duration(
 ) -> Tuple[List[float], int]:
     """`ph_dur`（先頭からの各音素長 秒、開始時刻0の累積列）を、末尾側だけを
     調整して合計が実 wav 長 `wav_dur` に一致するようにした新しいリストを
-    返す（[P1 修正] review #264 R1）。
+    返す（[P1 修正] review #264 R1）。呼び出し元は申告合計が `wav_dur` を
+    超過する行（overshoot）に対してのみこの関数を呼ぶ契約とする（undershoot
+    行は [P2 修正] review #264 R5 により本関数を呼ばず、呼び出し元
+    `normalize_ph_dur_to_wav_duration` が違反として収集し fail-closed で
+    拒否する — 詳細はモジュール冒頭コメント参照）。
 
     先頭からの累積時刻が `wav_dur` に達するまでの音素は完全無変更で返す
     （＝前方の音素境界を一切ズラさない）。累積時刻が `wav_dur` を跨ぐ音素
@@ -206,13 +226,8 @@ def _truncate_ph_dur_tail_to_wav_duration(
     フィールドから実際に削除するのは呼び出し元 `_drop_dead_phonemes` の
     役割 — review #264 R2）。
 
-    申告合計が `wav_dur` に届かない場合（本コーパスでは未観測だが対称に
-    扱う）は、最後の音素の長さへ不足分を加算して合計を一致させる（この
-    場合も前方の音素境界は無変更）。
-
     2 個目の戻り値は EOF 跨ぎ以降で長さが変化した音素の個数（ログ用。
-    跨ぎ音素自体 + ゼロ化された後続音素の合計。申告合計が届かず末尾を
-    延長したケースでは 1）。
+    跨ぎ音素自体 + ゼロ化された後続音素の合計）。
     """
     result = list(ph_dur)
     cum = 0.0
@@ -227,13 +242,7 @@ def _truncate_ph_dur_tail_to_wav_duration(
             cum = wav_dur
         else:
             cum += d
-    if crossed_at is not None:
-        n_touched = len(ph_dur) - crossed_at
-    elif cum < wav_dur:
-        result[-1] += wav_dur - cum
-        n_touched = 1
-    else:
-        n_touched = 0
+    n_touched = len(ph_dur) - crossed_at if crossed_at is not None else 0
     return result, n_touched
 
 
@@ -339,21 +348,34 @@ def _drop_dead_phonemes(row: Dict[str, str], ph_dur: List[float]) -> Dict[str, s
 
 def normalize_ph_dur_to_wav_duration(
     rows: List[Dict[str, str]], wav_dir: Path
-) -> Tuple[List[Dict[str, str]], List[str]]:
+) -> Tuple[List[Dict[str, str]], List[str], List[str]]:
     """各行の ph_dur 合計が実 wav 長と許容誤差（相対5% or 絶対0.1sの大きい方）
-    を超えて乖離している場合、末尾側だけを切り詰め/延長して合計を実 wav 長へ
-    正規化した新しい行のリストを返す（`_truncate_ph_dur_tail_to_wav_duration`
-    参照。前方の音素境界は一切変更しない — [P1 修正] review #264 R1）。
-    切り詰めの結果 `ph_dur=0.0` になった音素は `ph_seq`/`ph_num`/
-    `note_seq`/`note_dur` から実際に削除する（`_drop_dead_phonemes` 参照 —
-    [P1 修正] review #264 R2。ゼロ長のまま残すと下流 `validate_speaker` の
-    `d <= 0` チェックで必ず reject されるため）。乖離が許容内の行は同一
-    オブジェクトのまま（内容も無変更で）返す。2 個目の戻り値は正規化を適用
-    した行の人間可読ログ（適用 0 件なら空リスト。呼び出し側はこれを CSV
-    再公開の要否判定に使う）。
+    を超えて乖離している場合の是正/検出を行う。
+
+    許容超過が **overshoot**（申告合計 > 実 wav 長）の場合のみ、末尾側を
+    切り詰めて合計を実 wav 長へ正規化した新しい行を返す
+    （`_truncate_ph_dur_tail_to_wav_duration` 参照。前方の音素境界は一切
+    変更しない — [P1 修正] review #264 R1）。切り詰めの結果 `ph_dur=0.0`
+    になった音素は `ph_seq`/`ph_num`/`note_seq`/`note_dur` から実際に削除
+    する（`_drop_dead_phonemes` 参照 — [P1 修正] review #264 R2。ゼロ長の
+    まま残すと下流 `validate_speaker` の `d <= 0` チェックで必ず reject
+    されるため）。
+
+    許容超過が **undershoot**（申告合計 < 実 wav 長）の場合は自動修復
+    **しない**（[P2 修正] review #264 R5）。モジュール冒頭コメントの EOF
+    クランプ診断は overshoot のみを説明しており、undershoot は原因未特定
+    かつ現行 PJS 素材でも未観測のため、原因不明の不足分を音素の持続時間へ
+    捏造して混入させることを避け、行を無変更のまま返しつつ 3 個目の戻り値
+    `undershoot_violations` へ人間可読の説明とともに収集する（呼び出し元が
+    公開前に fail-closed で拒否する）。
+
+    乖離が許容内の行は同一オブジェクトのまま（内容も無変更で）返す。
+    2 個目の戻り値は overshoot 正規化を適用した行の人間可読ログ（適用 0 件
+    なら空リスト。呼び出し側はこれを CSV 再公開の要否判定に使う）。
     """
     fixed_rows: List[Dict[str, str]] = []
     fix_log: List[str] = []
+    undershoot_violations: List[str] = []
     for row in rows:
         try:
             ph_dur = [float(x) for x in row["ph_dur"].split()]
@@ -373,6 +395,18 @@ def normalize_ph_dur_to_wav_duration(
         if diff <= tol:
             fixed_rows.append(row)
             continue
+        if total < wav_dur:
+            # [P2 修正] (review #264 R5) undershoot は末尾音素へ不足分を
+            # 加算して合成せず、違反として収集し行は無変更のまま返す。
+            undershoot_violations.append(
+                f"{row['name']}: ph_dur total {total:.4f}s < wav duration "
+                f"{wav_dur:.4f}s by {wav_dur - total:.4f}s (undershoot beyond "
+                f"tolerance {tol:.4f}s; the EOF-clamp diagnosis this module "
+                "documents explains overshoot only, undershoot cause is "
+                "unobserved/unexplained — fail-closed, not auto-repaired)"
+            )
+            fixed_rows.append(row)
+            continue
         new_ph_dur, n_touched = _truncate_ph_dur_tail_to_wav_duration(ph_dur, wav_dur)
         n_dropped = sum(1 for d in new_ph_dur if d <= 0.0)
         new_row = _drop_dead_phonemes(row, new_ph_dur)
@@ -385,7 +419,7 @@ def normalize_ph_dur_to_wav_duration(
             + (f", {n_dropped} zero-length phoneme(s) removed" if n_dropped else "")
             + ")"
         )
-    return fixed_rows, fix_log
+    return fixed_rows, fix_log, undershoot_violations
 
 
 class OutputCollisionError(ValueError):
@@ -873,13 +907,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             # fix (2026-08-16, review #264 R1 P1 で修復方式を是正): ph_dur
             # 合計と実 wav 長が許容誤差を超えて乖離する行（s1_poison_scan
-            # 捜査で判明した5件）を、末尾側だけを切り詰め/延長した ph_dur で
-            # 正規化する（前方の音素境界は無変更 —
+            # 捜査で判明した5件、いずれも overshoot）を、末尾側だけを切り
+            # 詰めた ph_dur で正規化する（前方の音素境界は無変更 —
             # `_truncate_ph_dur_tail_to_wav_duration` 参照）。乖離が許容内の
             # 行は無変更のため、正規化対象が皆無なら CSV は書き換えない
             # （bytewise 不変を保つ）。
+            #
+            # [P2 修正] (review #264 R5) undershoot（申告合計 < 実 wav 長）は
+            # 自動修復せず、公開前に fail-closed で拒否する（モジュール冒頭
+            # コメント参照。EOF クランプ診断は overshoot のみを説明し、
+            # undershoot は原因未特定・現行素材でも未観測のため）。
             out_wav_dir = build_dir / "diffsinger_db" / "wavs"
-            out_rows, ph_dur_fix_log = normalize_ph_dur_to_wav_duration(out_rows, out_wav_dir)
+            out_rows, ph_dur_fix_log, ph_dur_undershoot_violations = normalize_ph_dur_to_wav_duration(
+                out_rows, out_wav_dir
+            )
+            if ph_dur_undershoot_violations:
+                print(
+                    f"error: {len(ph_dur_undershoot_violations)} row(s) have ph_dur total "
+                    "below wav duration beyond tolerance (undershoot, fail-closed, not "
+                    "published): " + "; ".join(ph_dur_undershoot_violations),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
             if ph_dur_fix_log:
                 for msg in ph_dur_fix_log:
                     print(f"ph_dur normalized: {msg}")
