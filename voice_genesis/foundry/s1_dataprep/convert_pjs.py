@@ -383,7 +383,7 @@ def _drop_dead_phonemes(row: Dict[str, str], ph_dur: List[float]) -> Dict[str, s
 
 def normalize_ph_dur_to_wav_duration(
     rows: List[Dict[str, str]], wav_dir: Path
-) -> Tuple[List[Dict[str, str]], List[str], List[str], List[str]]:
+) -> Tuple[List[Dict[str, str]], List[str], List[str], List[str], List[str]]:
     """各行の ph_dur 合計が実 wav 長と許容誤差（相対5% or 絶対0.1sの大きい方）
     を超えて乖離している場合の是正/検出を行う。
 
@@ -413,6 +413,19 @@ def normalize_ph_dur_to_wav_duration(
     （undershoot_violations と同じ「全収集してから呼び出し側が fail-closed
     で判定する」設計）。
 
+    fix (2026-08-16, review #264 R9 P2, convert_pjs.py:449): `db_converter.py`
+    が成功終了していても、CSV 行が指す WAV が欠落・破損・ゼロ長で
+    `_wav_duration_seconds()` が `None`/非正を返す場合がある。従来はこの
+    ケースを「検証不能 = skip」として行を無変更のまま黙って残していたが、
+    後続の coverage ゲートは CSV から抽出した曲 ID しか見ておらず、
+    `_swap_into_place()` がこの不完全な行を含むデータセットをそのまま公開
+    してしまっていた（変換器は成功を報告するため、この不整合は気づかれずに
+    通過し得る）。検証不能を「無視してよい」とはみなさず、5 個目の戻り値
+    `missing_wav_violations` へ人間可読の説明とともに全件収集し、呼び出し元
+    が公開前に fail-closed で拒否できるようにする（unsafe_name_violations/
+    undershoot_violations と同型の「全収集してから呼び出し側が判定する」
+    設計）。
+
     乖離が許容内の行は同一オブジェクトのまま（内容も無変更で）返す。
     2 個目の戻り値は overshoot 正規化を適用した行の人間可読ログ（適用 0 件
     なら空リスト。呼び出し側はこれを CSV 再公開の要否判定に使う）。
@@ -421,6 +434,7 @@ def normalize_ph_dur_to_wav_duration(
     fix_log: List[str] = []
     undershoot_violations: List[str] = []
     unsafe_name_violations: List[str] = []
+    missing_wav_violations: List[str] = []
     resolved_wav_dir = wav_dir.resolve()
     for row in rows:
         try:
@@ -445,6 +459,14 @@ def normalize_ph_dur_to_wav_duration(
             continue
         wav_dur = _wav_duration_seconds(wav_dir / f"{name}.wav")
         if wav_dur is None or wav_dur <= 0:
+            # fix (2026-08-16, review #264 R9 P2): 検証不能（WAV 欠落/破損/
+            # ゼロ長）を skip せず、公開前 fail-closed の判定材料として収集
+            # する（モジュール docstring・呼び出し元 fail-closed 判定を参照）。
+            missing_wav_violations.append(
+                f"{name}: wav missing, unreadable, or non-positive duration "
+                f"({wav_dir / f'{name}.wav'} — cannot validate ph_dur against "
+                "actual wav duration; not opened/verified, fail-closed)"
+            )
             fixed_rows.append(row)
             continue
         total = math.fsum(ph_dur)
@@ -477,7 +499,7 @@ def normalize_ph_dur_to_wav_duration(
             + (f", {n_dropped} zero-length phoneme(s) removed" if n_dropped else "")
             + ")"
         )
-    return fixed_rows, fix_log, undershoot_violations, unsafe_name_violations
+    return fixed_rows, fix_log, undershoot_violations, unsafe_name_violations, missing_wav_violations
 
 
 class OutputCollisionError(ValueError):
@@ -989,12 +1011,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 ph_dur_fix_log,
                 ph_dur_undershoot_violations,
                 ph_dur_unsafe_name_violations,
+                ph_dur_missing_wav_violations,
             ) = normalize_ph_dur_to_wav_duration(out_rows, out_wav_dir)
             if ph_dur_unsafe_name_violations:
                 print(
                     f"error: {len(ph_dur_unsafe_name_violations)} row(s) have an unsafe wav "
                     "name (path traversal / symlink escape, fail-closed, not published): "
                     + "; ".join(ph_dur_unsafe_name_violations),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+            if ph_dur_missing_wav_violations:
+                # fix (2026-08-16, review #264 R9 P2): db_converter.py が成功
+                # 終了していても、CSV 行の WAV が欠落・破損・ゼロ長で検証
+                # 不能な場合は「skip = 無視してよい」とみなさず公開前に
+                # fail-closed で拒否する（モジュール docstring 参照）。
+                print(
+                    f"error: {len(ph_dur_missing_wav_violations)} row(s) have a missing/"
+                    "unreadable/zero-length wav (cannot validate ph_dur, fail-closed, "
+                    "not published): " + "; ".join(ph_dur_missing_wav_violations),
                     file=sys.stderr,
                 )
                 _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)

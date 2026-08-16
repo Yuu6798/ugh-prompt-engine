@@ -453,12 +453,35 @@ def check_note_dur_consistency(
        が有効な形で存在する場合は `ph_dur` を `ph_num` でノート単位へ
        グループ化し、各ノートの `ph_dur` 小計 ↔ 対応する `note_dur` を
        個別に比較する（閾値は `check_ph_dur_duration` と同一定数、ノート
-       ごとの `ph_dur` 小計を基準にする）。`ph_num` が存在しない・不正な
-       形（数値化不可・要素数不一致・`sum(ph_num) != len(ph_dur)`・非正の
-       count を含む）の場合は、ノート単位の対応付けができないため合計
-       同士の比較（旧来の挙動）へフォールバックする（`note_dur` を持たない
-       speaker（例: Ritsu）由来の行では `ph_num` も存在しないため、この
-       フォールバック経路を通ることはない）。
+       ごとの `ph_dur` 小計を基準にする）。`ph_num` フィールド自体が
+       存在しない（行に `ph_num` 列が無い/空）場合のみ、ノート単位の
+       対応付け材料が無いとみなし合計同士の比較（旧来の挙動）へ
+       フォールバックする（`note_dur` を持たない speaker（例: Ritsu）由来の
+       行では `ph_num` も存在しないため、このフォールバック経路を通ることは
+       ない）。
+
+    fix (2026-08-16, review #264 R9 P2, build_dataset.py:502): `ph_num` が
+    「存在するが不正な形」（数値化不可・要素数不一致・
+    `sum(ph_num) != len(ph_dur)`・非正の count を含む）の場合、従来は
+    上記フォールバックへ流れて合計同士の比較のみで判定していた。この経路
+    は「ノート単位の対応付けが壊れている」という事実自体を握りつぶし、
+    例えば `ph_num="1 x"`（非数値）/ `ph_dur="1 1"` / `note_dur="1 1"` の
+    ように合計が偶然一致するだけの破損行を無検査のまま通過させていた
+    （note-to-phoneme alignment が使い物にならないことを検出できない）。
+    `ph_num` が実際に **存在する** 行では、不正な形はもはや「対応付け材料
+    が無い」ケースと同一視せず、独立の violation として拒否する
+    （fail-closed。合計比較へのフォールバックは行わない）。フォールバック
+    対象は `ph_num` フィールド自体が存在しない行のみに限定する。
+
+    fix (2026-08-16, review #264 R11 P2, build_dataset.py:519): `ph_num`
+    が有効でノート単位比較が行える場合、従来は合計比較を **skip** して
+    ノート単位比較のみで判定していた。これは「ノートごとの差は許容誤差内
+    だが多数ノートにわたって同方向へ積み上がる」行を見逃す（例: 100 ノート
+    それぞれが 0.09s だけ note_dur を上回る場合、ノート単位では許容
+    0.1s 以内に個別に埋もれるが、合計では 9s の乖離になる）。ノート単位
+    比較は合計比較の **代替ではなく追加** とし、`ph_num` の有無・妥当性に
+    関わらず合計同士の比較を常に行う（AND 条件。両方が独立に違反を検出
+    し得る）。
 
     `note_dur` を持たない行（例: Ritsu 側が `note_dur` を書き出さない場合）
     はスキップする。数値化できない・非有限な `ph_dur` は他の既存チェック
@@ -496,21 +519,42 @@ def check_note_dur_consistency(
         per_note_ph_totals: Optional[List[float]] = None
         ph_num_raw = row.get("ph_num")
         if ph_num_raw:
+            # fix (2026-08-16, review #264 R9 P2): ph_num フィールド自体が
+            # 存在する行では、不正な形を「対応付け材料が無い」ケースへ
+            # フォールバックさせず、malformed_reason が設定され次第 violation
+            # として拒否する（合計比較へは絶対に流さない）。
+            malformed_reason: Optional[str] = None
             try:
                 ph_num = [int(x) for x in ph_num_raw.split()]
             except ValueError:
                 ph_num = []
-            if (
-                ph_num
-                and all(n > 0 for n in ph_num)
-                and len(ph_num) == len(note_dur)
-                and sum(ph_num) == len(ph_dur)
-            ):
-                per_note_ph_totals = []
-                idx = 0
-                for count in ph_num:
-                    per_note_ph_totals.append(math.fsum(ph_dur[idx:idx + count]))
-                    idx += count
+                malformed_reason = f"non-numeric ph_num ({ph_num_raw!r})"
+            if malformed_reason is None and not ph_num:
+                malformed_reason = f"empty ph_num ({ph_num_raw!r})"
+            if malformed_reason is None and not all(n > 0 for n in ph_num):
+                malformed_reason = f"non-positive element in ph_num ({ph_num_raw!r})"
+            if malformed_reason is None and len(ph_num) != len(note_dur):
+                malformed_reason = (
+                    f"len(ph_num)={len(ph_num)} != len(note_dur)={len(note_dur)} "
+                    f"(ph_num={ph_num_raw!r})"
+                )
+            if malformed_reason is None and sum(ph_num) != len(ph_dur):
+                malformed_reason = (
+                    f"sum(ph_num)={sum(ph_num)} != len(ph_dur)={len(ph_dur)} "
+                    f"(ph_num={ph_num_raw!r})"
+                )
+            if malformed_reason is not None:
+                violations.append(
+                    f"{speaker_name}: {row['name']} has malformed ph_num: "
+                    f"{malformed_reason}; cannot establish note-to-phoneme alignment, "
+                    "refusing to fall back to total-only ph_dur/note_dur comparison"
+                )
+                continue
+            per_note_ph_totals = []
+            idx = 0
+            for count in ph_num:
+                per_note_ph_totals.append(math.fsum(ph_dur[idx:idx + count]))
+                idx += count
 
         if per_note_ph_totals is not None:
             for note_idx, (ph_note_total, note_val) in enumerate(
@@ -524,16 +568,24 @@ def check_note_dur_consistency(
                         f"{ph_note_total:.4f}s vs note_dur {note_val:.4f}s "
                         f"(diff {diff:.4f}s > tolerance {tol:.4f}s)"
                     )
-        else:
-            ph_total = math.fsum(ph_dur)
-            note_total = math.fsum(note_dur)
-            tol = max(ph_total * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
-            diff = abs(ph_total - note_total)
-            if diff > tol:
-                violations.append(
-                    f"{speaker_name}: {row['name']} ph_dur total {ph_total:.4f}s vs "
-                    f"note_dur total {note_total:.4f}s (diff {diff:.4f}s > tolerance {tol:.4f}s)"
-                )
+
+        # fix (2026-08-16, review #264 R11 P2, build_dataset.py:519): 合計
+        # 比較は per_note_ph_totals の有無に関わらず **常に** 行う
+        # （per-note 判定が使えた場合でも skip しない、AND 条件）。per-note
+        # 比較のみだと、ノートごとの差が許容誤差内に収まりながら多数ノートに
+        # わたって同方向へ積み上がる行（例: 100 ノート × 0.09s 差はノート単位
+        # では許容 0.1s 以内に埋もれるが、合計では 9s 乖離になる）を見逃す。
+        # per-note 比較のみで合計検査を skip していた旧実装はこの累積乖離を
+        # 検出できなかった。
+        ph_total = math.fsum(ph_dur)
+        note_total = math.fsum(note_dur)
+        tol = max(ph_total * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+        diff = abs(ph_total - note_total)
+        if diff > tol:
+            violations.append(
+                f"{speaker_name}: {row['name']} ph_dur total {ph_total:.4f}s vs "
+                f"note_dur total {note_total:.4f}s (diff {diff:.4f}s > tolerance {tol:.4f}s)"
+            )
     return violations
 
 

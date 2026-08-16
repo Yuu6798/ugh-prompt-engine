@@ -99,6 +99,25 @@ import onnxruntime as ort
 import soundfile as sf
 import yaml
 
+# [P2 修正] (review #264 R10, gate_synth.py:1200) gate_synth.py 自身の
+# provenance ハッシュを、モジュールのトップレベルコードが実行される
+# タイミング（import/実行開始直後、argparse や cmd_run 本体が走るより
+# 前）で 1 回だけ read_bytes() して確定する。従来は `cmd_run` の実行途中
+# （synth ループ開始前）で `sha256_file(__file__)` を呼んでおり、これは
+# 「プロセス起動時に Python インタプリタが実際に read/exec した本体スクリプト
+# の bytes」ではなく「cmd_run がその行に到達した時点でディスク上にある
+# bytes」を記録していた——両者の間（プロセス起動〜cmd_run 到達まで、CLI
+# 引数パース等を含む）に本ファイルが書き換えられていても検出できない
+# TOCTOU 窓が残っていた。本モジュールの実行が始まって最初に到達する
+# トップレベル文としてここでハッシュを固定することで、この窓を実務上
+# 最小化する（score モジュールの「1 回だけ read して pin する」方式と
+# 同じ考え方）。`cmd_run` はこの値をそのまま `input_sha256["gate_synth_py"]`
+# へ転記し（再読み込みしない）、公開直前に同じパスを再ハッシュして
+# この値と突き合わせる事後照合を追加する（score モジュールと同じ
+# pre+post 二段方式。不一致なら fail-closed で公開を止める）。
+_GATE_SYNTH_PY_PATH = Path(__file__).resolve()
+_GATE_SYNTH_PY_LOAD_TIME_SHA256 = hashlib.sha256(_GATE_SYNTH_PY_PATH.read_bytes()).hexdigest()
+
 # `voice_genesis/foundry/s1_gate/gate_synth.py` から見て `voice_genesis/singer/`
 # は 2 階層上の兄弟ディレクトリ（parents[0]=s1_gate, [1]=foundry, [2]=voice_genesis）。
 # ハードコード絶対パスは使わず、リポジトリのどこに clone されても動くように
@@ -307,8 +326,33 @@ def fit_duration_sum(durations: List[int], total: int) -> List[int]:
 # ============================================================================
 
 def sha256_file(path: Path) -> str:
-    """ファイル全体の sha256 hex digest（gate summary の入力側 pin 用）。"""
+    """ファイル全体の sha256 hex digest（gate summary の入力側 pin 用）。
+
+    呼び出し側がパース/ロードに使うのとは別の read になる（TOCTOU 窓を
+    開ける）ため、実際にパース/ロードされるバッファをそのままハッシュしたい
+    呼び出し元は `_read_bytes_and_sha256` を使うこと。本関数は「別途 hash
+    するだけで内容は使わない」用途（ckpt・train config・onnx モデル束など、
+    このスクリプト自身がバイト列をパースしない入力）向けに残す。
+    """
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _read_bytes_and_sha256(path: Path) -> Tuple[bytes, str]:
+    """`path` を一度だけ `read_bytes()` し、そのバッファ自体と sha256 hex
+    digest を返す。
+
+    [P2 修正] (review #264 R9, gate_synth.py:1168) `variance_phonemes`
+    （canon `phonemes.txt`）・`acoustic_phonemes`（`*.phonemes.json`）・
+    話者 embedding（`*.<speaker>.emb`）は、従来 `cmd_run` がパース/ロード用に
+    1 回 read し、`collect_input_sha256` が provenance pin 用に `sha256_file()`
+    でもう 1 回 read していた（score モジュールで既に修正済みだった構造と
+    同型の TOCTOU: 2 回の read の間にファイルが差し替わると、「pin した
+    ハッシュ」と「実際にパース/ロードされた内容」が食い違い得る）。本関数を
+    介して 1 回の read で得たバッファを両用途（パース/ロードと sha256 化）に
+    使うことで、この窓を構造的に閉じる（`_read_and_exec_module` と同じ方式）。
+    """
+    data = path.read_bytes()
+    return data, hashlib.sha256(data).hexdigest()
 
 
 def collect_input_sha256(
@@ -319,6 +363,9 @@ def collect_input_sha256(
     acoustic_dsconfig_path: Path,
     own_json: Optional[Path],
     speaker_embed_path: Optional[Path] = None,
+    canon_phonemes_txt_sha: Optional[str] = None,
+    own_json_sha: Optional[str] = None,
+    speaker_embed_sha: Optional[str] = None,
 ) -> Dict[str, Optional[str]]:
     """gate 判定を駆動した入力モデル束の sha256 を集約する。
 
@@ -333,6 +380,15 @@ def collect_input_sha256(
     ファイルが存在しない場合（`--skip-export` で ckpt/config が対象外、
     own_json が canon フォールバック時、canon DDPM 経路で speaker_embed_path が
     None など）は `None` を記録する。
+
+    [P2 修正] (review #264 R9, gate_synth.py:1168) `canon_phonemes_txt_sha`/
+    `own_json_sha`/`speaker_embed_sha` は、呼び出し側が `_read_bytes_and_sha256`
+    経由でパース/ロードと同一 read から得た sha256 を渡すための引数（実際に
+    使われたバッファそのものの hash）。渡された場合はそれを優先して記録し、
+    本関数内での再 read（`sha256_file`）は行わない。未指定（None）の場合の
+    み従来どおり `sha256_file()` で個別に読み直す（own_json が `--tokens
+    canon` でパースされずに存在するだけのケースなど、パース由来のバッファが
+    存在しない場合の後方互換フォールバック）。
     """
     shas: Dict[str, Optional[str]] = {}
 
@@ -349,15 +405,19 @@ def collect_input_sha256(
         sha256_file(acoustic_onnx_path) if acoustic_onnx_path.exists() else None
     )
     shas["acoustic_phonemes_json"] = (
-        sha256_file(own_json) if own_json is not None and own_json.exists() else None
+        own_json_sha if own_json_sha is not None
+        else (sha256_file(own_json) if own_json is not None and own_json.exists() else None)
     )
     shas["acoustic_dsconfig_yaml"] = (
         sha256_file(acoustic_dsconfig_path) if acoustic_dsconfig_path.exists() else None
     )
     shas["speaker_embed"] = (
-        sha256_file(speaker_embed_path)
-        if speaker_embed_path is not None and speaker_embed_path.exists()
-        else None
+        speaker_embed_sha if speaker_embed_sha is not None
+        else (
+            sha256_file(speaker_embed_path)
+            if speaker_embed_path is not None and speaker_embed_path.exists()
+            else None
+        )
     )
 
     linguistic_onnx = canon_model_dir / "linguistic.onnx"
@@ -375,22 +435,47 @@ def collect_input_sha256(
         sha256_file(variance_pitch_onnx) if variance_pitch_onnx.exists() else None
     )
     shas["canon_phonemes_txt"] = (
-        sha256_file(canon_phonemes_txt) if canon_phonemes_txt.exists() else None
+        canon_phonemes_txt_sha if canon_phonemes_txt_sha is not None
+        else (sha256_file(canon_phonemes_txt) if canon_phonemes_txt.exists() else None)
     )
     shas["vocoder_onnx"] = sha256_file(vocoder_onnx) if vocoder_onnx.exists() else None
     return shas
 
 
+def _parse_canon_phonemes(text: str) -> Dict[str, int]:
+    lines = text.splitlines()
+    return {line: i for i, line in enumerate(lines)}
+
+
 def load_canon_phonemes(path: Path) -> Dict[str, int]:
     """canon 配布 phonemes.txt（改行区切りリスト、行番号=ID、0=<PAD>）。"""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return {line: i for i, line in enumerate(lines)}
+    return _parse_canon_phonemes(path.read_text(encoding="utf-8"))
+
+
+def load_canon_phonemes_with_sha(path: Path) -> Tuple[Dict[str, int], str]:
+    """`load_canon_phonemes` と同じパースを行いつつ、パースに使ったバッファの
+    sha256 も返す（`_read_bytes_and_sha256` 参照。`cmd_run` の provenance pin
+    用）。"""
+    data, digest = _read_bytes_and_sha256(path)
+    return _parse_canon_phonemes(data.decode("utf-8")), digest
+
+
+def _parse_own_phonemes(text: str) -> Dict[str, int]:
+    return json.loads(text)
 
 
 def load_own_phonemes_json(path: Path) -> Dict[str, int]:
     """export.py `_export_phonemes` が書き出す `<model_name>.phonemes.json`
     （phone_to_id の flat dict）。実 ckpt が届いた場合の本番経路。"""
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _parse_own_phonemes(path.read_text(encoding="utf-8"))
+
+
+def load_own_phonemes_json_with_sha(path: Path) -> Tuple[Dict[str, int], str]:
+    """`load_own_phonemes_json` と同じパースを行いつつ、パースに使ったバッファ
+    の sha256 も返す（`_read_bytes_and_sha256` 参照。`cmd_run` の provenance
+    pin 用）。"""
+    data, digest = _read_bytes_and_sha256(path)
+    return _parse_own_phonemes(data.decode("utf-8")), digest
 
 
 def acoustic_export_basename(acoustic_dir: Path, acoustic_onnx_path: Path) -> Optional[str]:
@@ -480,6 +565,14 @@ def load_speaker_embed_vector(path: Path) -> np.ndarray:
     （export 側は `spk_embed.cpu().numpy().tobytes()` で書き出す raw バイナリ、
     ヘッダなし）。"""
     return np.frombuffer(path.read_bytes(), dtype=np.float32).copy()
+
+
+def load_speaker_embed_vector_with_sha(path: Path) -> Tuple[np.ndarray, str]:
+    """`load_speaker_embed_vector` と同じロードを行いつつ、ロードに使った
+    バッファの sha256 も返す（`_read_bytes_and_sha256` 参照。`cmd_run` の
+    provenance pin 用）。"""
+    data, digest = _read_bytes_and_sha256(path)
+    return np.frombuffer(data, dtype=np.float32).copy(), digest
 
 
 def build_own_dictionary_from_binarize(diffsinger_repo: Path, dictionary_ja: Path) -> Dict[str, int]:
@@ -1047,7 +1140,13 @@ def cmd_run(args):
     # 意図した出力先に書かれない。resolve() で絶対パス化してから使う。
     out_dir = Path(args.out_dir).resolve()
     singer_dir = Path(args.singer_dir) if args.singer_dir else DEFAULT_SINGER_DIR
-    variance_phonemes = load_canon_phonemes(canon_model_dir / "phonemes.txt")
+    # [P2 修正] (review #264 R9, gate_synth.py:1168) パースに使うバッファと
+    # provenance pin 用ハッシュのバッファを同一 read から得る
+    # （`_read_bytes_and_sha256` 参照。従来は下記 `collect_input_sha256` が
+    # 別 read で `sha256_file()` していた）。
+    variance_phonemes, canon_phonemes_txt_sha = load_canon_phonemes_with_sha(
+        canon_model_dir / "phonemes.txt"
+    )
 
     # R3 レビュー指摘 (PR #263, gate_synth.py:544): 5K/10K/20K が同じ --out-dir を
     # 使い回すと gate_<song>.wav / summary が上書きされ、前段ゲートの判定証跡が
@@ -1129,12 +1228,25 @@ def cmd_run(args):
     speaker_embed_path = (
         find_speaker_embed(acoustic_dir, args.speaker, export_basename) if args.speaker else None
     )
-    speaker_embed_vector = (
-        load_speaker_embed_vector(speaker_embed_path) if speaker_embed_path is not None else None
-    )
+    # [P2 修正] (review #264 R9, gate_synth.py:1168) ロードに使うバッファと
+    # provenance pin 用ハッシュのバッファを同一 read から得る（`_read_bytes_
+    # and_sha256` 参照）。
+    speaker_embed_vector = None
+    speaker_embed_sha: Optional[str] = None
+    if speaker_embed_path is not None:
+        speaker_embed_vector, speaker_embed_sha = load_speaker_embed_vector_with_sha(
+            speaker_embed_path
+        )
     if args.speaker and speaker_embed_path is not None:
         print(f"| speaker embed: {speaker_embed_path} ({speaker_embed_vector.shape[0]}-dim)")
 
+    # [P2 修正] (review #264 R9, gate_synth.py:1168) own_json が実際にパース
+    # されて acoustic_phonemes を構築した場合のみ、そのパースに使ったバッファ
+    # の sha256 を記録する（`--tokens canon` で own_json が存在しても無視され
+    # るケースは「パースされたバッファ」が存在しないため None のまま —
+    # collect_input_sha256 側が sha256_file() による従来の別 read へ
+    # フォールバックする）。
+    own_json_sha: Optional[str] = None
     if args.tokens == "canon":
         # 明示的な S0 互換検証専用パス。事故で本番に紛れ込まないよう、
         # own_json が存在するのに --tokens canon を指定した場合も警告する
@@ -1159,15 +1271,27 @@ def cmd_run(args):
                 f"  S0 互換検証（canon acoustic.onnx をそのまま使う）が目的なら "
                 f"--tokens canon を明示指定すること。"
             )
-        acoustic_phonemes = load_own_phonemes_json(own_json)
+        acoustic_phonemes, own_json_sha = load_own_phonemes_json_with_sha(own_json)
         encoding_mode = f"own ({own_json.name})"
     print(f"| acoustic token encoding: {encoding_mode}")
 
     # R3 レビュー指摘 (PR #263, gate_synth.py:616): run_pipeline が実際に load する
     # dsconfig.yaml と canon phonemes.txt も入力 sha256 に含める（+ speaker_embed）。
+    # [P2 修正] (review #264 R9, gate_synth.py:1168) canon_phonemes_txt_sha/
+    # own_json_sha/speaker_embed_sha は上記で実際にパース/ロードしたバッファ
+    # から得た sha256（未パースの場合は None、内部で従来の別 read にフォール
+    # バック）。acoustic_onnx / canon 各 onnx / vocoder_onnx / dsconfig.yaml は
+    # この時点では load 前（onnxruntime.InferenceSession によるロードは後段
+    # run_pipeline 内）のため引き続き pre-load hash として sha256_file() で
+    # 読む。これらは合成完了後・公開直前に再ハッシュして pre-load hash と
+    # 突き合わせる（下記「モデル/config 束の事後照合」参照。score モジュール
+    # と同じ pre+post 二段方式で TOCTOU 窓を閉じる）。
     input_sha256 = collect_input_sha256(
         args, canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
         own_json, speaker_embed_path,
+        canon_phonemes_txt_sha=canon_phonemes_txt_sha,
+        own_json_sha=own_json_sha,
+        speaker_embed_sha=speaker_embed_sha,
     )
 
     # R6 レビュー指摘 (PR #263, gate_synth.py:804, P2): 上記はモデル/config 束の
@@ -1197,7 +1321,13 @@ def cmd_run(args):
     # song ごとに 1 回だけ呼び、返ってきた `module_shas`（exec に実際使った
     # バッファの sha256）をそのまま `input_sha256` へ転記し、`build_fn` 等は
     # `synth_song` へそのまま渡す（`synth_song` 側の再ロードを廃止）。
-    input_sha256["gate_synth_py"] = sha256_file(Path(__file__).resolve())
+    #
+    # [P2 修正] (review #264 R10, gate_synth.py:1200) ここで `sha256_file()`
+    # による再読み込みは行わず、モジュール実行開始直後に確定済みの
+    # `_GATE_SYNTH_PY_LOAD_TIME_SHA256`（ファイル先頭のコメント参照）を
+    # そのまま転記する。公開直前の事後照合は下記「gate_synth.py 自身の
+    # 事後照合」ブロックで行う。
+    input_sha256["gate_synth_py"] = _GATE_SYNTH_PY_LOAD_TIME_SHA256
     score_module_paths: Dict[str, Path] = {}
     dependency_module_paths: Dict[str, Path] = {}
     song_modules: Dict[str, Tuple[Callable, Callable, float]] = {}
@@ -1290,12 +1420,93 @@ def cmd_run(args):
                     f"matches the on-disk implementation."
                 )
 
+        # [P2 修正] (review #264 R10, gate_synth.py:1200) gate_synth.py 自身
+        # の事後照合: モジュール実行開始直後に固定した `_GATE_SYNTH_PY_
+        # LOAD_TIME_SHA256`（ファイル先頭のコメント参照）を、合成完了後・
+        # 公開（`_swap_step_dir_into_place`）直前に同じパスを再読み込みして
+        # 突き合わせる。長時間の合成中に本スクリプト自身が書き換えられて
+        # いた場合、記録済み pin（プロセス起動時点の実装）とディスク上の
+        # 現在の実装が食い違うため fail-closed で止める（score モジュールと
+        # 同じ pre+post 二段方式）。
+        gate_synth_py_current_sha = sha256_file(_GATE_SYNTH_PY_PATH)
+        if gate_synth_py_current_sha != _GATE_SYNTH_PY_LOAD_TIME_SHA256:
+            raise SystemExit(
+                f"ERROR: gate_synth.py itself changed during synthesis "
+                f"(pinned sha256={_GATE_SYNTH_PY_LOAD_TIME_SHA256} — sha256 captured "
+                f"at module load time — now={gate_synth_py_current_sha}). Refusing to "
+                f"publish a summary whose provenance pin no longer matches the "
+                f"on-disk implementation that (may have) run."
+            )
+
+        # [P2 修正] (review #264 R9, gate_synth.py:1168) モデル/config 束の
+        # 事後照合: `run_pipeline`（`synth_song` 経由で上記ループ内で既に
+        # 呼ばれている）が実際に open する onnx モデル群と `acoustic_dsconfig_
+        # path` は、いずれも `collect_input_sha256` が load 前（`onnxruntime.
+        # InferenceSession`/`yaml.safe_load` 呼び出し前）に取得した pre-load
+        # hash として `input_sha256` へ既に記録済み。スコア modules と同じ
+        # 二段方式（load 前 hash + 公開直前の再 hash 照合）で TOCTOU 窓を閉じる
+        # ため、合成完了後・公開（`_swap_step_dir_into_place`）前にこれらを
+        # 再読み込みして pre-load hash と突き合わせ、不一致（差し替え）または
+        # 消失を検出したら fail-closed で止める。
+        model_config_paths: Dict[str, Path] = {
+            "canon_linguistic_onnx": canon_model_dir / "linguistic.onnx",
+            "canon_variance_dur_onnx": canon_model_dir / "dsdur" / "dur.onnx",
+            "canon_variance_pitch_onnx": canon_model_dir / "dspitch" / "pitch.onnx",
+            "acoustic_onnx": acoustic_onnx_path,
+            "vocoder_onnx": vocoder_dir / "nsf_hifigan.onnx",
+            "acoustic_dsconfig_yaml": acoustic_dsconfig_path,
+        }
+        for pin_key, model_path in model_config_paths.items():
+            recorded_sha = input_sha256.get(pin_key)
+            if recorded_sha is None:
+                # pre-load hash 取得時点で存在しなかった（= 今回の実行で使わ
+                # れなかった）入力。事後照合の対象外。
+                continue
+            if not model_path.exists():
+                raise SystemExit(
+                    f"ERROR: model/config input '{model_path}' (pin_key={pin_key}) "
+                    f"went missing during synthesis (pre-load pinned sha256="
+                    f"{recorded_sha}). Refusing to publish a summary whose "
+                    f"provenance pin no longer matches an existing on-disk input."
+                )
+            current_sha = sha256_file(model_path)
+            if current_sha != recorded_sha:
+                raise SystemExit(
+                    f"ERROR: model/config input '{model_path}' (pin_key={pin_key}) "
+                    f"changed during synthesis (pre-load pinned sha256={recorded_sha} "
+                    f"— now={current_sha}). Refusing to publish a summary whose "
+                    f"provenance pin no longer matches the on-disk model/config "
+                    f"actually used by run_pipeline."
+                )
+
         summary_path = build_dir / "gate_synth_summary.json"
         summary_path.write_text(json.dumps({
             "step": args.step,
             "acoustic_encoding_mode": encoding_mode,
             "acoustic_onnx_path": str(acoustic_onnx_path),
             "input_sha256": input_sha256,
+            # (review #264 R9, gate_synth.py:1168) input_sha256 の各 key が
+            # どの方式で「実際に使われたバイト」であることを保証しているかの
+            # 注記。score_module_* / *_dep_* は review #264 R6 の単一 read
+            # 方式と同様の構造。
+            "input_sha256_provenance_method": {
+                "canon_phonemes_txt": "single-read (hash == buffer parsed into variance_phonemes)",
+                "acoustic_phonemes_json": "single-read (hash == buffer parsed into acoustic_phonemes, "
+                                           "when actually parsed; else sha256_file() re-read)",
+                "speaker_embed": "single-read (hash == buffer loaded into spk_embed vector)",
+                "score_module_*": "single-read (hash == buffer compiled/exec'd; review #264 R6)",
+                "*_dep_*": "single-read (hash == buffer compiled/exec'd; review #264 R6)",
+                "gate_synth_py": "load-time hash (captured at module exec start) + "
+                                  "pre-publish re-hash (fail-closed on mismatch; review #264 R10)",
+                "canon_linguistic_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
+                "canon_variance_dur_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
+                "canon_variance_pitch_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
+                "acoustic_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
+                "vocoder_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
+                "acoustic_dsconfig_yaml": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
+                "ckpt": "sha256_file() only (export.py が別プロセスで消費、compile/exec 対象外)",
+                "train_config_yaml": "sha256_file() only (export.py が別プロセスで消費、compile/exec 対象外)",
+            },
             "sampling_params": {
                 "seed": SEED,
                 "speaker": args.speaker,
