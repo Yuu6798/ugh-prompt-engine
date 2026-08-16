@@ -92,7 +92,7 @@ import sys
 import time
 import types
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import onnxruntime as ort
@@ -123,52 +123,11 @@ REFLOW_SAMPLING_STEPS = 20
 # 0. スコア読み込み（さくら/うみ共通インタフェース）
 # ============================================================================
 
-# review #263 R16 P2: song 名 -> score モジュールファイル名の対応表。
-# `load_song_module` が実際に import する対象と同一命名規則（`singer_dir` 直下）。
-# import 前にファイルパスを確定させ sha256 を取得するために、import 実行と
-# 分離して公開する。
-SCORE_MODULE_FILENAMES: Dict[str, str] = {
-    "sakura": "score.py",
-    "umi": "score_umi.py",
-}
 
-# [P2 修正] (review #264 R2) `score_umi.py` は `from score import ScoreNote`
-# で `score.py` に推移的依存する（`voice_genesis/singer/score_umi.py` 参照）。
-# `sys.modules` からの evict 対象・provenance sha256 の pin 対象は、song
-# モジュール本体だけでなくこの推移的依存も含める必要がある（含めないと、
-# `score_umi` 側だけ evict しても `import score` がキャッシュ済みの
-# `score` モジュールオブジェクトをそのまま返し、別 `singer_dir` 由来の
-# 古い `score.py` 内容が合成に使われ得る）。両モジュールが共通で依存する
-# `phoneme_jp.py` も同じ理由で対象に含める。
-SCORE_MODULE_DEPENDENCY_FILENAMES: Dict[str, Tuple[str, ...]] = {
-    "sakura": ("phoneme_jp.py",),
-    "umi": ("score.py", "phoneme_jp.py"),
-}
-
-
-def score_module_path_for(song: str, singer_dir: Path) -> Path:
-    """`load_song_module` が import する前に、対象ファイルの絶対パスを解決する
-    （review #263 R16 P2: import 前ハッシュ取得のための事前解決）。"""
-    filename = SCORE_MODULE_FILENAMES.get(song)
-    if filename is None:
-        raise ValueError(f"unknown song: {song}")
-    return (singer_dir / filename).resolve()
-
-
-def score_module_dependency_paths_for(song: str, singer_dir: Path) -> Dict[str, Path]:
-    """`song` の song モジュールが推移的に依存する `singer_dir` 直下のモジュール
-    ファイルの絶対パスを、依存ファイル名（拡張子なし stem）をキーにして返す
-    （review #264 R2: provenance sha256 の pin 対象を依存モジュールへ拡張する
-    ための事前解決。`score_module_path_for` の依存版）。"""
-    return {
-        Path(filename).stem: (singer_dir / filename).resolve()
-        for filename in SCORE_MODULE_DEPENDENCY_FILENAMES.get(song, ())
-    }
-
-
-def _exec_module_from_path(module_name: str, path: Path) -> types.ModuleType:
-    """`path` のソースバイトを直接 `compile()`/`exec()` してモジュール
-    オブジェクトを構築し、`sys.modules[module_name]` へ登録して返す。
+def _exec_module_from_source(module_name: str, path: Path, source: bytes) -> types.ModuleType:
+    """呼び出し側が一度だけ `read_bytes()` 済みの `source` を直接
+    `compile()`/`exec()` してモジュールオブジェクトを構築し、
+    `sys.modules[module_name]` へ登録して返す。
 
     [P2 修正] (review #264 R3) `import <module>` 文（標準 `SourceFileLoader`）
     は既定でタイムスタンプ方式の `__pycache__/*.pyc` キャッシュを条件付きで
@@ -178,17 +137,20 @@ def _exec_module_from_path(module_name: str, path: Path) -> types.ModuleType:
     score.py が同一サイズの内容へ差し替わり、かつファイルシステムの
     タイムスタンプ精度内（同一 tick）で書き換えられた場合、`.pyc` ヘッダの
     (mtime, size) がなお一致し、古いバイトコードがそのまま実行され得る。
-    このとき呼び出し元（`cmd_run`）が `sha256_file()` で読んだ「ハッシュ
-    した内容」と「実際に実行された内容」が食い違う（provenance summary の
-    偽装）。
 
-    本関数は `import` 文を一切使わず、ソースを直接 `read_bytes()` して
-    `compile()`/`exec()` する。`compile()` は `.pyc` キャッシュの生成/参照
-    を一切行わない（そのキャッシュ機構は `importlib` の import 機構側にのみ
-    存在する）ため、「ハッシュした内容 = 実行された内容」が構造的に保証
-    される。
+    本関数は `import` 文を一切使わず、`compile()`/`exec()` する。
+    `compile()` は `.pyc` キャッシュの生成/参照を一切行わない（そのキャッシュ
+    機構は `importlib` の import 機構側にのみ存在する）ため stale `.pyc` を
+    踏まない。
+
+    [P2 修正] (review #264 R6) 従来は本関数が内部で `path.read_bytes()` して
+    いたため、呼び出し側（`load_song_module`）が provenance sha256 用に読む
+    read と、本関数が exec 用に読む read が別 read になり、両者の間にファイル
+    が差し替えられると「記録した pin」と「実際に exec された内容」が食い違い
+    得た（TOCTOU）。`source` を呼び出し側から受け取る形にすることで、
+    ハッシュ計算に使ったバッファと exec するバッファが構造的に同一であること
+    を保証する（`_read_and_exec_module` 参照）。
     """
-    source = path.read_bytes()
     module = types.ModuleType(module_name)
     module.__file__ = str(path)
     sys.modules[module_name] = module
@@ -201,49 +163,90 @@ def _exec_module_from_path(module_name: str, path: Path) -> types.ModuleType:
     return module
 
 
-def load_song_module(song: str, singer_dir: Path):
+def _read_and_exec_module(module_name: str, path: Path) -> Tuple[types.ModuleType, str]:
+    """`path` を一度だけ `read_bytes()` し、同じバッファを sha256 化（provenance
+    pin 用）と `compile()`/`exec()`（実行用）の両方に使う。戻り値は
+    `(module, sha256_hex)`。
+
+    [P2 修正] (review #264 R6) `load_song_module` の唯一の read 経路にする
+    ことで、「pin したハッシュ」と「実際に exec された内容」が別 read に
+    起因して食い違う TOCTOU 窓を構造的に閉じる。
+    """
+    source = path.read_bytes()
+    digest = hashlib.sha256(source).hexdigest()
+    module = _exec_module_from_source(module_name, path, source)
+    return module, digest
+
+
+def load_song_module(
+    song: str, singer_dir: Path
+) -> Tuple[Callable, Callable, float, Path, Dict[str, Tuple[Path, str]]]:
     """楽曲モジュール読み込み。戻り値に実際に import したモジュールファイルの
-    絶対パスも含める（PR #263 R6 レビュー指摘: gate summary の input_sha256 が
+    絶対パスと、読み込んだ全モジュール（本体 + 推移的依存）の provenance
+    sha256 も含める（PR #263 R6 レビュー指摘: gate summary の input_sha256 が
     合成実装そのもの — 本スクリプトと score.py/score_umi.py — の変更を検出
     できなかったため、呼び出し側でこのパスを sha256 化して記録する）。
 
     依存順（`phoneme_jp` -> `score` -> `score_umi`。`song == "sakura"` は
-    `score_umi` を読まない）で `_exec_module_from_path` を呼び、常に
+    `score_umi` を読まない）で `_read_and_exec_module` を呼び、常に
     `singer_dir` 配下の現在のソースバイトを compile/exec する。
+
+    戻り値の 5 番目の要素 `module_shas` は
+    `{pin_key: (実際に exec したファイルの絶対パス, その sha256 hex digest)}`。
+    `pin_key` は `cmd_run` の `input_sha256` 既存キー命名（本体
+    `score_module_{song}` / 依存 `score_module_{song}_dep_{stem}`）と同一。
 
     [P2 修正] (review #264 R1) 別 `singer_dir`（または以前の呼び出し）由来の
     `sys.modules` キャッシュを踏まない。
     [P2 修正] (review #264 R2) `score_umi.py` が推移的に依存する
-    `score`/`phoneme_jp` も song に関わらず毎回フレッシュにする
-    （`SCORE_MODULE_DEPENDENCY_FILENAMES` 参照）。
+    `score`/`phoneme_jp` も song に関わらず毎回フレッシュにする。
     [P2 修正] (review #264 R3) `import` 文自体が触れ得る `__pycache__` の
     stale `.pyc` 再利用を、`import` 文を使わない実装へ切り替えることで
-    構造的に封じる（`_exec_module_from_path` docstring 参照）。
-    `_exec_module_from_path` は呼ぶたびに `sys.modules[name]` を無条件で
+    構造的に封じる（`_exec_module_from_source` docstring 参照）。
+    `_exec_module_from_source` は呼ぶたびに `sys.modules[name]` を無条件で
     新しいモジュールオブジェクトへ上書きするため、R1/R2 が行っていた事前
     evict ループ（`sys.modules.pop`）は本実装では不要（上書き自体が evict を
     包含する、より強い保証のため）。
+    [P2 修正] (review #264 R6) provenance sha256 の取得（旧: `cmd_run` 側で
+    `sha256_file()` を個別に呼ぶ）と実際の exec を本関数 1 回の呼び出しへ
+    統合した（`_read_and_exec_module` 参照）。あわせて `cmd_run` 側にあった
+    「path 事前解決 → hash → 検証用 import → `synth_song` 内での再 import」
+    という 4 段の別読み込みも、本関数 1 回の呼び出しへ統合する（`synth_song`
+    は本関数が返す `build_fn` 等をそのまま使い、内部で再ロードしない）。
     """
     if song not in ("sakura", "umi"):
         raise ValueError(f"unknown song: {song}")
 
+    module_shas: Dict[str, Tuple[Path, str]] = {}
+
     phoneme_jp_path = (singer_dir / "phoneme_jp.py").resolve()
-    _exec_module_from_path("phoneme_jp", phoneme_jp_path)
+    _, phoneme_jp_sha = _read_and_exec_module("phoneme_jp", phoneme_jp_path)
+    module_shas[f"score_module_{song}_dep_phoneme_jp"] = (phoneme_jp_path, phoneme_jp_sha)
 
     score_path = (singer_dir / "score.py").resolve()
-    sc_score = _exec_module_from_path("score", score_path)
+    sc_score, score_sha = _read_and_exec_module("score", score_path)
 
     if song == "sakura":
+        module_shas[f"score_module_{song}"] = (score_path, score_sha)
         return (
             sc_score.build_sakura_score,
             sc_score.beats_to_seconds,
             sc_score.TEMPO_BPM,
             score_path,
+            module_shas,
         )
 
+    module_shas[f"score_module_{song}_dep_score"] = (score_path, score_sha)
     score_umi_path = (singer_dir / "score_umi.py").resolve()
-    sc_umi = _exec_module_from_path("score_umi", score_umi_path)
-    return sc_umi.build_umi_score, sc_umi.beats_to_seconds, sc_umi.TEMPO_BPM, score_umi_path
+    sc_umi, score_umi_sha = _read_and_exec_module("score_umi", score_umi_path)
+    module_shas[f"score_module_{song}"] = (score_umi_path, score_umi_sha)
+    return (
+        sc_umi.build_umi_score,
+        sc_umi.beats_to_seconds,
+        sc_umi.TEMPO_BPM,
+        score_umi_path,
+        module_shas,
+    )
 
 
 def mora_phonemes(mora) -> List[str]:
@@ -846,7 +849,9 @@ def run_pipeline(
 def synth_song(
     song: str,
     notes_limit: Optional[int],
-    singer_dir: Path,
+    build_fn: Callable,
+    beats_to_seconds: Callable,
+    tempo_bpm: float,
     canon_model_dir: Path,
     vocoder_dir: Path,
     acoustic_onnx_path: Path,
@@ -858,7 +863,13 @@ def synth_song(
     speaker_embed_vector: Optional[np.ndarray] = None,
     final_out_dir: Optional[Path] = None,
 ) -> dict:
-    build_fn, beats_to_seconds, tempo_bpm, _score_module_path = load_song_module(song, singer_dir)
+    # [P2 修正] (review #264 R6) 従来は `singer_dir` を受け取りここで
+    # `load_song_module` を再び呼んでいた（`cmd_run` が provenance pin 用に
+    # 既に 1 回読み込み済みの score モジュールを、ここでもう一度別 read で
+    # ロードし直す — TOCTOU 窓を増やす redundant reload）。呼び出し元
+    # （`cmd_run`）が `load_song_module` で 1 回だけ読み込んだ `build_fn` /
+    # `beats_to_seconds` / `tempo_bpm` をそのまま受け取ることで、song モジュール
+    # のファイル read はプロセス全体を通じて 1 回のみになる。
     notes_raw = build_fn()
     if notes_limit is not None:
         notes_raw = notes_raw[:notes_limit]
@@ -1167,41 +1178,40 @@ def cmd_run(args):
     # の sha256 も input_sha256 へ追加する（実行中の本スクリプト自身・実際に
     # load した score モジュール・可能ならリポの HEAD commit）。
     #
-    # [P2 修正] (review #263 R16) 従来は `load_song_module`（内部で import 済み）
-    # の戻りパスを import 実行の *後* に sha256 化していたため、import 実行から
-    # ハッシュ取得までの間に score モジュールが差し替えられても pin が新しい
-    # 内容の方を記録してしまい、「実際に import された（合成に使われた）内容」
-    # と記録済み sha256 が食い違い得た。import 前にファイルパスを確定 sha256 化
-    # してから import することで pin を import 直前の内容へ固定する（load 時
-    # pin）。さらに合成完了後（`_score_module_sha256_at_import` 参照）に同じ
-    # パスを再ハッシュし、不一致なら公開（`_swap_step_dir_into_place`）前に
-    # fail-closed で止める（事後照合。長時間走る合成の最中に score モジュールが
-    # 書き換えられて「記録された pin と実際に使われた実装が食い違ったまま公開
-    # される」事故を防ぐ）。
+    # [P2 修正] (review #263 R16) import 前にファイルパスを確定 sha256 化して
+    # から import することで pin を import 直前の内容へ固定する（load 時 pin）。
+    # さらに合成完了後に同じパスを再ハッシュし、不一致なら公開
+    # （`_swap_step_dir_into_place`）前に fail-closed で止める（事後照合。
+    # 長時間走る合成の最中に score モジュールが書き換えられて「記録された pin
+    # と実際に使われた実装が食い違ったまま公開される」事故を防ぐ）。
+    #
+    # [P2 修正] (review #264 R6) 従来は「hash 用に `sha256_file()` で読む read」
+    # と「`load_song_module`（内部の `_exec_module_from_source`）が exec 用に
+    # 読む read」が別 read だったため、両者の間にファイルが差し替えられると
+    # 記録した pin と実際に exec された内容が食い違い得た（TOCTOU）。さらに
+    # そのあと `synth_song` 内でも同じモジュールをもう一度 `load_song_module`
+    # で読み直しており（redundant reload）、read 回数・TOCTOU 窓の両方が
+    # 不必要に多かった。`load_song_module` 自身が「1 回だけ read_bytes() した
+    # バッファをハッシュにも compile/exec にも使う」ように統合された
+    # （`_read_and_exec_module` 参照）ため、ここでは `load_song_module` を
+    # song ごとに 1 回だけ呼び、返ってきた `module_shas`（exec に実際使った
+    # バッファの sha256）をそのまま `input_sha256` へ転記し、`build_fn` 等は
+    # `synth_song` へそのまま渡す（`synth_song` 側の再ロードを廃止）。
     input_sha256["gate_synth_py"] = sha256_file(Path(__file__).resolve())
     score_module_paths: Dict[str, Path] = {}
-    # [P2 修正] (review #264 R2) song モジュール本体（`score.py`/`score_umi.py`）
-    # だけでなく、それが推移的に依存するモジュール（`score_umi.py` ->
-    # `score.py`、両者 -> `phoneme_jp.py`。`load_song_module` の evict 対象
-    # 拡張と対にする）も provenance sha256 の pin 対象へ含める。含めないと、
-    # 依存モジュールだけが差し替わった場合に「どの実装から出たか」を pin から
-    # 追えない。
     dependency_module_paths: Dict[str, Path] = {}
+    song_modules: Dict[str, Tuple[Callable, Callable, float]] = {}
     for song_name in args.song.split(","):
-        module_path = score_module_path_for(song_name, singer_dir)
-        input_sha256[f"score_module_{song_name}"] = sha256_file(module_path)
+        build_fn, beats_to_seconds, tempo_bpm, module_path, module_shas = load_song_module(
+            song_name, singer_dir
+        )
+        song_modules[song_name] = (build_fn, beats_to_seconds, tempo_bpm)
         score_module_paths[song_name] = module_path
-        for dep_stem, dep_path in score_module_dependency_paths_for(song_name, singer_dir).items():
-            pin_key = f"score_module_{song_name}_dep_{dep_stem}"
-            input_sha256[pin_key] = sha256_file(dep_path) if dep_path.exists() else None
-            dependency_module_paths[pin_key] = dep_path
-    for song_name in args.song.split(","):
-        _, _, _, imported_module_path = load_song_module(song_name, singer_dir)
-        if imported_module_path != score_module_paths[song_name]:
-            raise SystemExit(
-                f"ERROR: score module path mismatch for song '{song_name}': "
-                f"expected {score_module_paths[song_name]}, imported {imported_module_path}"
-            )
+        main_pin_key = f"score_module_{song_name}"
+        for pin_key, (pinned_path, pinned_sha) in module_shas.items():
+            input_sha256[pin_key] = pinned_sha
+            if pin_key != main_pin_key:
+                dependency_module_paths[pin_key] = pinned_path
     try:
         git_head = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -1223,8 +1233,9 @@ def cmd_run(args):
         results = {}
         for song in songs:
             print(f"| synthesizing: {song} (notes_limit={args.notes_limit}, speaker={args.speaker})")
+            build_fn, beats_to_seconds, tempo_bpm = song_modules[song]
             rec = synth_song(
-                song, args.notes_limit, singer_dir,
+                song, args.notes_limit, build_fn, beats_to_seconds, tempo_bpm,
                 canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
                 variance_phonemes, acoustic_phonemes, build_dir,
                 speaker_name=args.speaker, speaker_embed_vector=speaker_embed_vector,
@@ -1246,18 +1257,22 @@ def cmd_run(args):
                   f"rms={rec['wav_rms']:.4f} diverged={rec['stage3_dual_encoding_diverged']} "
                   f"mode={rec['stage3_mode']}")
 
-        # [P2 修正] (review #263 R16) 事後照合: import 前に pin した
-        # score_module_{song} の sha256 を、合成完了後（公開直前）に再計算し
-        # 一致を確認する。長時間の合成中に score モジュールが書き換えられて
-        # いた場合、記録済み pin と実際に使われた実装が食い違うため、公開
-        # （`_swap_step_dir_into_place`）前に fail-closed で止める。
+        # [P2 修正] (review #263 R16) 事後照合: `load_song_module` が exec に
+        # 実際使ったバッファの sha256（`input_sha256[f"score_module_{song}"]`。
+        # review #264 R6 により「hash した内容」と「exec した内容」は同一
+        # read から得られる構造的保証がある）を、合成完了後（公開直前）に
+        # ディスクを再読み込みして再計算した sha256 と突き合わせる。長時間の
+        # 合成中に score モジュールが書き換えられていた場合、記録済み pin と
+        # ディスク上の現在の実装が食い違うため、公開（`_swap_step_dir_into_place`）
+        # 前に fail-closed で止める。
         for song_name, module_path in score_module_paths.items():
             recorded_sha = input_sha256[f"score_module_{song_name}"]
             current_sha = sha256_file(module_path)
             if current_sha != recorded_sha:
                 raise SystemExit(
                     f"ERROR: score module '{module_path}' changed during synthesis "
-                    f"(pinned sha256={recorded_sha}, now={current_sha}). "
+                    f"(pinned sha256={recorded_sha} — sha256 of the buffer actually "
+                    f"compiled/exec'd at load time — now={current_sha}). "
                     f"Refusing to publish a summary whose provenance pin no longer "
                     f"matches the on-disk implementation."
                 )
@@ -1269,7 +1284,8 @@ def cmd_run(args):
             if current_sha != recorded_sha:
                 raise SystemExit(
                     f"ERROR: score module dependency '{dep_path}' changed during "
-                    f"synthesis (pinned sha256={recorded_sha}, now={current_sha}). "
+                    f"synthesis (pinned sha256={recorded_sha} — sha256 of the buffer "
+                    f"actually compiled/exec'd at load time — now={current_sha}). "
                     f"Refusing to publish a summary whose provenance pin no longer "
                     f"matches the on-disk implementation."
                 )

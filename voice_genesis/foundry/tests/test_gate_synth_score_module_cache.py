@@ -15,6 +15,7 @@ evict されずキャッシュが残り得る（R1 と同型のバグが依存�
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 import py_compile
@@ -99,7 +100,7 @@ def test_load_song_module_umi_reflects_new_score_py_across_singer_dirs(
     dir_a = _make_fake_singer_dir(tmp_path, "singer_a", marker="A")
     dir_b = _make_fake_singer_dir(tmp_path, "singer_b", marker="B")
 
-    _, _, _, path_a = gs.load_song_module("umi", dir_a)
+    _, _, _, path_a, _ = gs.load_song_module("umi", dir_a)
     assert path_a == (dir_a / "score_umi.py").resolve()
     import score as sc_after_a  # sys.modules に載った直後の状態を直接検査
 
@@ -109,7 +110,7 @@ def test_load_song_module_umi_reflects_new_score_py_across_singer_dirs(
     # から2回目の「umi」ロードを行った際、旧実装（score_umi のみ evict）だと
     # `score` モジュールは evict されず sys.modules にキャッシュされたままの
     # dir_a 版（MARKER="A"）が使われ続けてしまっていた。
-    _, _, _, path_b = gs.load_song_module("umi", dir_b)
+    _, _, _, path_b, _ = gs.load_song_module("umi", dir_b)
     assert path_b == (dir_b / "score_umi.py").resolve()
     import score as sc_after_b
 
@@ -159,8 +160,73 @@ def test_load_song_module_bypasses_stale_pycache(tmp_path: Path) -> None:
     os.utime(score_path, (orig_mtime, orig_mtime))
     assert score_path.stat().st_mtime == orig_mtime  # mtime 強制一致（size は marker 1文字で自動一致）
 
-    _, _, _, path = gs.load_song_module("sakura", singer_dir)
+    _, _, _, path, _ = gs.load_song_module("sakura", singer_dir)
     assert path == score_path.resolve()
     # stale .pyc（MARKER="A"）ではなく現在のソースバイト（MARKER="B"）が
     # 実行されたことを確認する。
     assert sys.modules["score"].MARKER == "B"
+
+
+def test_load_song_module_hash_and_exec_share_single_read_toctou(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """review #264 R6 (P2) の再現テスト。
+
+    旧実装は「provenance sha256 用の read」（呼び出し側 `cmd_run` の
+    `sha256_file()`）と「exec 用の read」（`_exec_module_from_path` 内部の
+    `path.read_bytes()`）が別 read だった。両者の間にファイルが差し替え
+    られると、記録した pin（旧内容の sha256）と実際に exec された内容
+    （新内容）が食い違い得た（TOCTOU）。
+
+    本テストは `score.py` への `Path.read_bytes()` を監視し、
+    `load_song_module` がその 1 回の呼び出しの中で `score.py` をちょうど
+    1 回しか読まないこと、かつ read が返った直後にファイルを差し替えても
+    （＝旧脆弱性が存在すれば「exec read」がその新内容を拾ってしまうはずの
+    条件）、`module_shas` に記録される sha256 と実際に exec されたモジュール
+    の中身が「差し替え前」の内容のまま一致し続けること（read が 1 回に
+    統合され、TOCTOU 窓自体が構造的に存在しないこと）を検証する。
+    """
+    singer_dir = _make_fake_singer_dir(tmp_path, "singer_toctou", marker="A")
+    score_path = (singer_dir / "score.py").resolve()
+    original_bytes = score_path.read_bytes()
+    original_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    swapped_source = _SCORE_SRC_TEMPLATE.format(marker="SWAPPED")
+    real_read_bytes = Path.read_bytes
+    call_count = {"score": 0}
+
+    def _read_bytes_with_race(self: Path) -> bytes:
+        data = real_read_bytes(self)
+        if self == score_path:
+            call_count["score"] += 1
+            # score.py への read_bytes() が値を返した *直後* にファイルを
+            # 差し替える（＝旧実装の「hash read」と「exec read」の間に
+            # 攻撃者が割り込む条件の再現）。新実装は read が 1 回のみのため、
+            # この差し替えは以後の compile/exec/ハッシュに一切影響しないはず。
+            score_path.write_text(swapped_source, encoding="utf-8")
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", _read_bytes_with_race)
+
+    build_fn, beats_to_seconds, tempo_bpm, module_path, module_shas = gs.load_song_module(
+        "sakura", singer_dir
+    )
+
+    assert call_count["score"] == 1, (
+        "score.py への read_bytes() は 1 回だけであるべき"
+        "（hash と exec が同一バッファを共有する = TOCTOU 窓の不在の前提）"
+    )
+    assert module_path == score_path
+    recorded_path, recorded_sha = module_shas["score_module_sakura"]
+    assert recorded_path == score_path
+    assert recorded_sha == original_sha
+    # 実際に exec されたのは差し替え前（MARKER="A"）の内容であり、
+    # レース越しに割り込んだ SWAPPED 版ではない。
+    assert sys.modules["score"].MARKER == "A"
+
+    # ディスク上は既に差し替わっている（攻撃が「成功」した状態）。
+    # cmd_run 側の事後照合（公開直前に同じパスを sha256_file() で再ハッシュ）
+    # がこのドリフトを正しく検出できることも併せて確認する
+    # （load 時ハッシュ = exec 内容の保証と、事後の disk drift 検出は別の
+    # 安全網であり、本修正はどちらも壊していないことの回帰防止）。
+    assert gs.sha256_file(score_path) != recorded_sha
