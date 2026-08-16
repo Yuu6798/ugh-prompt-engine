@@ -118,6 +118,17 @@ fallback commit」の 2 段構成にする（`||` で連結し、タグが引け
 時点の最新 pin へ更新してよい）。タグが公開されればタグ側が優先されるため
 fallback 行は残したままで問題ない。
 
+**review #263 R13 P1 是正**: fallback commit は本節が要求する完全なレシピ
+（§3.1 が manifest 対象にする `*.normalized.yaml` を `build_dataset.py` が
+生成する版・学習規模フィールドをビルダー自身が最終形で出力する版）を実装
+した commit を指す必要がある。旧 fallback `905a21f` は R12 の正規化コピー
+実装より前の到達可能コミットであり、その版の `build_dataset.py` は
+`*.normalized.yaml` を一切生成しないため、fallback 経由で checkout すると
+§3.1 の `find` が対象ファイルを見つけられないまま manifest が不完全な
+まま通ってしまう（fail-closed にならない）。fallback を本ラウンド修正
+コミット（学習フィールド昇格を含む完全なレシピを実装した最新コミット）
+の実 SHA へ更新する。
+
 ```bash
 cd "$WORK"
 git clone https://github.com/Yuu6798/ugh-prompt-engine.git "$REPO"
@@ -125,7 +136,7 @@ cd "$REPO"
 # 本 runbook を含む immutable tag を checkout する（tag は削除されたブランチの
 # コミットも保持するため、PR ブランチが消えても到達可能）。タグが未公開の間は
 # `||` 右辺の fallback commit（本ラウンド修正コミットの実 SHA）へ checkout する。
-git checkout s1-runbook-v1 || git checkout 905a21fb0f41b8918fb66c902295fd2b07d4734c
+git checkout s1-runbook-v1 || git checkout dce71dd769d01e86a43f1515fe9eb228d4b9f9f4
 pip install -e ".[dev]"
 pip install praat-parselmouth
 
