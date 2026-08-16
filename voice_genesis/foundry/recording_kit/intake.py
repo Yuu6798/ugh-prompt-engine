@@ -16,9 +16,22 @@ ffmpeg は外部バイナリ依存のため、実行時に `shutil.which("ffmpeg
 失敗しない — `python -c "import intake"` や pytest 収集を壊さない）。
 
 カード ID はファイル名の先頭トークン（`_` または空白区切りの最初の要素）
-を `cards.md` の ID 形式（`UC-\\d{3}`）として抽出する。マッチしない場合は
+を `cards.md` の ID 形式（`UC-\\d{3}`）として抽出する。3 桁の直後は
+stem 終端か区切り文字（`_`/空白/`.`/`-`）のみ許可し、`UC-0010` や
+`UC-001oops` のような非区切りの続きはマッチさせない（誤って別カードの
+プレフィックスに誤帰属しないための境界チェック）。マッチしない場合は
 `card_id: null` のまま記録し、後で手動補完できるようにする（fail-closed
 にせず記録は残す — 積み立て運用の「録ったものは失わない」を優先）。
+
+同一 stem（拡張子違いの再送・再録）は正規化後ファイル名が衝突するため、
+事前に `assign_normalized_filenames` で全入力の派生ファイル名を予約し、
+2 件目以降はテイク連番（`UC-001.take2.norm24k.wav` 等）で一意化する
+（積み立て運用では同カードの再録が正常系のため fail-closed にはしない）。
+
+正規化 wav の書き出しと台帳更新は staging ディレクトリ上でバッチ全体を
+構築してから一括で `--out-dir` / `--ledger` へ公開する。途中で
+変換・測定が失敗した場合は staging を破棄するだけで済み、公開済み
+ディレクトリと台帳は失敗前の状態のまま変化しない（部分バッチを残さない）。
 """
 from __future__ import annotations
 
@@ -29,10 +42,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import soundfile as sf
@@ -43,7 +57,9 @@ SUPPORTED_EXTENSIONS = (".wav", ".m4a", ".mp3")
 
 TARGET_SAMPLE_RATE = 24000
 
-CARD_ID_PATTERN = re.compile(r"^(UC-\d{3})", re.IGNORECASE)
+# 3 桁の直後は stem 終端 ($) か区切り文字のみ許可（非有界マッチで
+# `UC-0010` を `UC-001` に誤帰属させない。R11 P2 対応）。
+CARD_ID_PATTERN = re.compile(r"^(UC-\d{3})(?=$|[_\s.\-])", re.IGNORECASE)
 
 LEDGER_SCHEMA = "user-donor-ledger/0.1"
 
@@ -84,6 +100,36 @@ def extract_card_id(filename: str) -> Optional[str]:
     if match is None:
         return None
     return match.group(1).upper()
+
+
+def assign_normalized_filenames(inputs: List[Path], out_dir: Path) -> Dict[Path, str]:
+    """入力ごとに一意な正規化後ファイル名（`out_dir` 直下、拡張子込み）を予約する。
+
+    `UC-001.wav` と `UC-001.m4a` のように拡張子違いで stem が一致する入力は、
+    そのままだと同じ `{stem}.norm24k.wav` に解決されて衝突する（2 回目の
+    ffmpeg -y が 1 回目を上書きし、台帳側は 2 エントリのまま hash が
+    不整合になる）。ここで全入力を事前に検査し、2 件目以降はテイク連番
+    （`{stem}.take2.norm24k.wav`, `take3`, ...）で一意化する。
+
+    既存の `out_dir` 内ファイル名とも衝突しないようにする（別バッチの
+    既存収録を上書きしない）。`inputs` の順序（`discover_inputs` の
+    名前順）がそのままテイク番号の割り当て順になるため決定論的。
+    """
+    taken: set[str] = set()
+    if out_dir.exists():
+        taken.update(p.name for p in out_dir.iterdir() if p.is_file())
+
+    assigned: Dict[Path, str] = {}
+    for src in inputs:
+        stem = src.stem
+        candidate = f"{stem}.norm24k.wav"
+        take_no = 2
+        while candidate in taken:
+            candidate = f"{stem}.take{take_no}.norm24k.wav"
+            take_no += 1
+        taken.add(candidate)
+        assigned[src] = candidate
+    return assigned
 
 
 def normalize_to_wav(src: Path, dst: Path) -> None:
@@ -156,18 +202,25 @@ def save_ledger(ledger_path: Path, ledger: dict) -> None:
     tmp_path.replace(ledger_path)
 
 
-def process_one(src: Path, out_dir: Path) -> LedgerEntry:
-    card_id = extract_card_id(src.name)
-    normalized_path = out_dir / f"{src.stem}.norm24k.wav"
-    normalize_to_wav(src, normalized_path)
+def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) -> LedgerEntry:
+    """`src` を `staging_dir/filename` へ正規化し、公開後の想定パスで台帳エントリを作る。
 
-    duration_sec, rms_dbfs, peak_dbfs = measure_loudness(normalized_path)
+    実ファイルは呼び出し時点では `staging_dir` にしか存在しない
+    （`run` が全件成功後に `publish_dir` へ一括移動する）。`normalized_path`
+    には公開後の最終パス（`publish_dir/filename`）を記録するため、台帳の
+    内容は公開完了後の状態と最初から一致する。
+    """
+    card_id = extract_card_id(src.name)
+    staged_path = staging_dir / filename
+    normalize_to_wav(src, staged_path)
+
+    duration_sec, rms_dbfs, peak_dbfs = measure_loudness(staged_path)
 
     return LedgerEntry(
         card_id=card_id,
         source_filename=src.name,
-        normalized_path=str(normalized_path),
-        sha256=sha256_of(normalized_path),
+        normalized_path=str(publish_dir / filename),
+        sha256=sha256_of(staged_path),
         received_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         duration_sec=round(duration_sec, 3),
         sample_rate=TARGET_SAMPLE_RATE,
@@ -178,12 +231,41 @@ def process_one(src: Path, out_dir: Path) -> LedgerEntry:
 
 
 def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntry]:
-    inputs = discover_inputs(incoming_dir)
-    entries = [process_one(src, out_dir) for src in inputs]
+    """受領ディレクトリを取り込み、`out_dir` と `ledger_path` を一括更新する。
 
-    ledger = load_ledger(ledger_path)
-    ledger.setdefault("entries", []).extend(asdict(e) for e in entries)
-    save_ledger(ledger_path, ledger)
+    変換・測定は `out_dir` の兄弟に作る一時 staging ディレクトリで行い、
+    全入力の処理が成功した場合のみ staging から `out_dir` へファイルを
+    移動し、続けて台帳を保存する（バッチ全体が 1 フェーズで公開される）。
+    途中で例外（`KeyboardInterrupt`/`SystemExit` を含む）が発生した場合は
+    `finally` で staging を丸ごと破棄するだけで、`out_dir`・`ledger_path`
+    は呼び出し前の状態のまま変化しない（部分バッチを残さない。R10 P2 対応）。
+    """
+    inputs = discover_inputs(incoming_dir)
+    if not inputs:
+        return []
+
+    filenames = assign_normalized_filenames(inputs, out_dir)
+
+    staging_root = out_dir.parent
+    staging_root.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix=".intake-staging-", dir=str(staging_root)))
+    try:
+        entries = [
+            process_one(src, staging_dir, filenames[src], out_dir) for src in inputs
+        ]
+
+        ledger = load_ledger(ledger_path)
+        ledger.setdefault("entries", []).extend(asdict(e) for e in entries)
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for src in inputs:
+            staged_path = staging_dir / filenames[src]
+            final_path = out_dir / filenames[src]
+            shutil.move(str(staged_path), str(final_path))
+
+        save_ledger(ledger_path, ledger)
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
     return entries
 
