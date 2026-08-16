@@ -124,6 +124,7 @@ import os  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
+import tempfile  # noqa: E402
 import time  # noqa: E402
 import types  # noqa: E402
 from typing import Callable, Dict, List, Optional, Sequence, Tuple  # noqa: E402
@@ -1185,6 +1186,38 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
             )
 
 
+def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """staging tempfile へ書き込み、成功後にのみ `os.replace` で `path` へ
+    atomic 公開する（`s1_dataprep/build_dataset.py` `_atomic_write_text` /
+    `adapter/donor_bank.py` `_atomic_stage_and_replace` と同じ流儀）。
+
+    review #264 R15 追い掃討 (PR #264, gate_synth.py:1718, P2):
+    `cmd_mapping_check` の従来実装は `os.getpid()` を tmp ファイル名に含める
+    決定論的パスへ直接 `write_text` していたため、(a) 同一プロセス内で同じ
+    `--out` に対し複数回呼ばれると tmp パスが衝突し得る、(b)
+    `write_text`（内部 `open()`）は `O_CREAT` のみで既存ファイルを黙って
+    truncate するため、シンボリックリンク経由の攻撃や他プロセスが同名 tmp
+    を残していた場合に排他性がない。`tempfile.mkstemp`（`O_CREAT | O_EXCL`
+    で一意生成保証）+ 失敗時 tmp 削除 + `os.replace` の原子的差し替えへ
+    是正（`s1_dataprep`/`recording_kit`/`adapter` 各所の同型ヘルパーと同じ
+    パターン。依存方向の不自然さを避けるため、共有モジュール化ではなく
+    本ファイル内へコピペ実装する既存慣例に倣う。上の `OutputCollisionError`
+    docstring 参照）。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(content)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
     """`build_dir`（全曲の wav/record + summary を完全に構築済み）を
     `out_dir`（`step_<N>/` 等の合成成果物ディレクトリ）へ原子的に差し替える
@@ -1710,14 +1743,12 @@ def cmd_mapping_check(args):
     result = build_phoneme_mapping(own_phonemes, canon_phonemes)
     result["own_source"] = own_source
 
-    # [P2 修正] (review #263 R14) 直接 write_text は書き込み途中で kill
-    # された場合に破損 JSON が out_path へ残り得る。同一ディレクトリへ
-    # 一時ファイルを書いてから os.replace() で原子的に差し替える
-    # （convert_pjs.py `write_lang_def` と同型パターン。POSIX の `rename(2)`
-    # は同一ファイルシステム内で atomic）。
-    tmp_path = out_path.parent / f".{out_path.name}.tmp-{os.getpid()}"
-    tmp_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp_path, out_path)
+    # [P2 修正] (review #263 R14; review #264 R15 追い掃討で決定論 tmp パス
+    # を排他生成へ是正) 直接 write_text は書き込み途中で kill された場合に
+    # 破損 JSON が out_path へ残り得る。`_atomic_write_text`（本ファイル内
+    # 定義。`tempfile.mkstemp` の排他生成 + 失敗時 tmp 削除 + `os.replace`
+    # の原子的差し替え）で公開する。
+    _atomic_write_text(out_path, json.dumps(result, indent=2, ensure_ascii=False))
 
     print(json.dumps({k: v for k, v in result.items() if k != "mapping"}, indent=2, ensure_ascii=False))
     print(f"| full mapping table: {out_path}")
