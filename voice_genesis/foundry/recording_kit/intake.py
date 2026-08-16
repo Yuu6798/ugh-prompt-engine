@@ -1008,6 +1008,34 @@ def _check_existing_artifacts(ledger: dict, ledger_path: Path, out_dir: Path) ->
         source_filename = entry.get("source_filename", "<unknown>")
         raw_normalized_path = entry["normalized_path"]
         recorded_sha256 = entry["sha256"]
+
+        # [P2 修正] (review #264 R25) `Path(...).name` で basename を取り出す
+        # 前に、記録された normalized_path **自体**を検証する。旧実装は
+        # 絶対パス/`..` を含む raw 値であっても即座に basename だけを信頼
+        # して切り詰め、`out_dir / <basename>` へ組み直した実体のバイト列が
+        # たまたま記録済み sha256 と一致すれば、そのまま健全な既存エントリ
+        # として受理し無変更のまま再公開していた（台帳の記録値自体が破損/
+        # 改ざんされていたという事実そのものを隠蔽してしまう）。basename
+        # 抽出より前に raw 値自体を resolve し、out_dir 配下に収まって
+        # いることを要求する（収まらなければ「台帳の記録値自体が不正」
+        # として列挙し fail-closed 拒否する。後段の
+        # `_is_safe_ledger_artifact_name` + resolve 封じ込め検査は、この
+        # 検査を通過した raw 値の basename に対する多層防御として維持する）。
+        try:
+            raw_resolved = Path(raw_normalized_path).resolve()
+        except (OSError, ValueError):
+            raw_resolved = None
+        if raw_resolved is None or (
+            raw_resolved != resolved_out_dir and resolved_out_dir not in raw_resolved.parents
+        ):
+            problems.append(
+                f"- entries[{index}] ({source_filename}): normalized_path "
+                f"({raw_normalized_path}) の記録値自体が out_dir "
+                f"({resolved_out_dir}) の外側を指しています（台帳の記録値"
+                f"自体が不正なため拒否します）"
+            )
+            continue
+
         artifact_name = Path(raw_normalized_path).name
         if not _is_safe_ledger_artifact_name(artifact_name):
             problems.append(

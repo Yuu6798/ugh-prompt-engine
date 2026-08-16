@@ -2183,6 +2183,38 @@ def test_check_existing_artifacts_rejects_out_dir_symlink_escape(tmp_path: Path)
         intake._check_existing_artifacts(ledger, ledger_path, out_dir)
 
 
+def test_check_existing_artifacts_rejects_raw_path_outside_out_dir_even_when_basename_digest_coincidentally_matches(
+    tmp_path: Path,
+) -> None:
+    """review #264 R25 P2 の再現: `normalized_path` が out_dir 外の絶対パス
+    （例: `/external/take.wav`）を記録している場合、そのファイル名部分
+    （`take.wav`）を out_dir と結合した実体がたまたま記録済み sha256 と
+    一致していても、raw の記録値自体が out_dir 外を指している以上
+    `LedgerArtifactIntegrityError` で fail-closed 拒否する。
+
+    旧実装（R24 まで）は `Path(...).name` で basename だけを信頼して
+    `out_dir/<basename>` へ再構築してから封じ込め検査をかけていたため、
+    この再構築後の実体そのものは常に out_dir 配下になり検査が無意味化
+    していた（台帳の記録値自体が破損/改ざんされていたことを見逃す）。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    matching_bytes = b"coincidentally identical bytes at the basename path"
+    matching_sha256 = hashlib.sha256(matching_bytes).hexdigest()
+    # out_dir 配下に「たまたま」同じ basename・同じバイト列のファイルが存在する。
+    (out_dir / "take.wav").write_bytes(matching_bytes)
+
+    entry = _valid_ledger_entry_dict(
+        normalized_path="/external/take.wav", sha256=matching_sha256
+    )
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    _write_ledger_with_entry(ledger_path, entry)
+    ledger = intake.load_ledger(ledger_path)
+
+    with pytest.raises(intake.LedgerArtifactIntegrityError):
+        intake._check_existing_artifacts(ledger, ledger_path, out_dir)
+
+
 def test_run_rejects_append_when_existing_normalized_wav_is_deleted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

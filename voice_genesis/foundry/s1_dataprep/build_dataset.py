@@ -654,12 +654,45 @@ def validate_speaker(
     if missing:
         problems.append(f"{speaker_name}: {len(missing)} wav missing under {wav_dir}, e.g. {missing[:3]}")
 
+    # [P2 修正] (review #264 R25) 上記 `missing` は `.exists()` のみを見る
+    # ため、wav が存在するが読めない（非 PCM/破損）・duration<=0 の場合を
+    # 検出できない。`check_ph_dur_duration` はこのケースを「duration 比較を
+    # スキップする合図」として黙って continue するのみで（既定 warn の
+    # `--strict-duration` 2 段階仕様自体は妥当。乖離判定を warn-tier に
+    # 留める設計と、readback 失敗そのものを無条件 violation にする本検査は
+    # 別の関心事）、readback 失敗そのものは `--strict-duration` の有無に
+    # 関わらず常に fail-closed な問題として扱う（使用不能な音声が公開
+    # コーパスへ混入するのを防ぐ）。存在確認を通過した名前のみを対象にする
+    # （`missing` と排他）。
+    existing_names = [n for n in safe_names if n not in set(missing)]
+    unreadable = [
+        n for n in existing_names
+        if (d := wav_duration_seconds(wav_dir / f"{n}.wav")) is None or d <= 0
+    ]
+    if unreadable:
+        problems.append(
+            f"{speaker_name}: {len(unreadable)} wav unreadable or non-positive duration "
+            f"under {wav_dir}, e.g. {unreadable[:3]}"
+        )
+
     for row in rows:
         ph_seq = row["ph_seq"].split()
         try:
             ph_dur = [float(x) for x in row["ph_dur"].split()]
         except ValueError:
             problems.append(f"{speaker_name}: {row['name']} has non-numeric ph_dur")
+            continue
+        # [P2 修正] (review #264 R25) `ph_seq=""` かつ `ph_dur=""` はいずれも
+        # 空リストへ parse され、直後の長さ一致検査（0 == 0）を素通りして
+        # しまう。必須の整列フィールドが両方空という構造不良を明示的に
+        # violation として拒否する（後続の length-mismatch/non-positive/
+        # non-finite 検査はいずれも空リストに対して no-op のため、これらに
+        # 頼ると検出漏れになる）。
+        if not ph_seq or not ph_dur:
+            problems.append(
+                f"{speaker_name}: {row['name']} has empty ph_seq/ph_dur "
+                f"(ph_seq={len(ph_seq)} elem(s), ph_dur={len(ph_dur)} elem(s))"
+            )
             continue
         if len(ph_seq) != len(ph_dur):
             problems.append(

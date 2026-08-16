@@ -729,14 +729,34 @@ def build_phoneme_mapping(own_phonemes: Dict[str, int], canon_phonemes: Dict[str
 # 3. export.py acoustic 実行（GPU 側 ckpt が届いた本番経路のみ）
 # ============================================================================
 
-def _git_head_and_dirty(repo_path: Path) -> Tuple[object, object]:
-    """指定リポジトリの HEAD commit と作業ツリー dirty 状態を取得する。
+def _git_head_and_dirty(repo_path: Path) -> Tuple[object, object, object, object]:
+    """指定リポジトリの HEAD commit・作業ツリー dirty 状態・その内容ハッシュを
+    取得する。戻り値は `(head, dirty, status_sha256, diff_sha256)`。
 
     [P2 修正] (review #264 R24, gate_synth.py:1585) 呼び出し側 (`cmd_run`) が
     export subprocess の**前後**でこの関数を呼び、pre/post を照合できるよう
     切り出した。git リポでない・取得失敗の場合は fail-closed にせず
-    `("unavailable", "unavailable")` を返す（呼び出し側で summary へそのまま
-    可視化する。従来の単発取得時と同じ挙動）。
+    `("unavailable", "unavailable", "unavailable", "unavailable")` を返す
+    （呼び出し側で summary へそのまま可視化する。従来の単発取得時と同じ挙動）。
+
+    [P2 修正] (review #264 R25) 従来は dirty 状態を `bool` 1 個へ縮約して
+    いたため、export 前後で checkout が既に dirty のまま別内容へ変化した
+    （dirty→dirty のまま porcelain status/diff 内容が変わった）ケースを
+    pre/post 照合が検出できなかった（`(HEAD, True)` が両者とも同じ値の
+    ため一致判定を素通りする）。`git status --porcelain` の生テキスト全体の
+    sha256（`status_sha256`）と `git diff HEAD` の生バイト列の sha256
+    （`diff_sha256`）を追加で取得し、呼び出し側 (`_check_diffsinger_repo_stable`)
+    がこれらも含めて完全一致を要求する。dirty でない場合も一貫して計算する
+    （`git diff HEAD` は空 diff の固定ハッシュを返す。dirty/not-dirty の
+    分岐で計算有無を変えると、diff 計算自体をスキップした未計算状態と
+    「本当に無変化」を summary 上で区別できなくなるため）。
+
+    境界宣言（PR #264 R25 レビュー返信参照）: untracked ファイルの内容や
+    リポジトリ外からの import まで含めた「実行された exporter クロージャ
+    全体」のハッシュ化は際限がなく、本関数のスコープには含めない。dirty な
+    checkout のまま実行した run は summary が既に「pin として信頼不能」と
+    開示しており、正典 run は runbook が clean pinned checkout を必須とする
+    ため、この強化をもって exporter provenance 系列の追い込みを終端とする。
     """
     try:
         head = subprocess.run(
@@ -744,38 +764,55 @@ def _git_head_and_dirty(repo_path: Path) -> Tuple[object, object]:
             cwd=str(repo_path),
             capture_output=True, text=True, check=True,
         ).stdout.strip()
-        dirty_status = subprocess.run(
+        status_text = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=str(repo_path),
             capture_output=True, text=True, check=True,
         ).stdout
-        return head, bool(dirty_status.strip())
+        dirty = bool(status_text.strip())
+        status_sha256 = hashlib.sha256(status_text.encode("utf-8")).hexdigest()
+        diff_bytes = subprocess.run(
+            ["git", "diff", "HEAD"],
+            cwd=str(repo_path),
+            capture_output=True, check=True,
+        ).stdout
+        diff_sha256 = hashlib.sha256(diff_bytes).hexdigest()
+        return head, dirty, status_sha256, diff_sha256
     except Exception:
-        return "unavailable", "unavailable"
+        return "unavailable", "unavailable", "unavailable", "unavailable"
 
 
 def _check_diffsinger_repo_stable(
     repo_path: Path,
     pre_head: object,
     pre_dirty: object,
+    pre_status_sha256: object,
+    pre_diff_sha256: object,
     post_head: object,
     post_dirty: object,
+    post_status_sha256: object,
+    post_diff_sha256: object,
 ) -> None:
-    """export.py subprocess の前後で取得した diffsinger_repo の HEAD/dirty を
-    照合する（review #264 R24 P2）。不一致（HEAD 変化 or dirty 状態変化）は
-    export 中に checkout が動いたことを意味し、ONNX の provenance を pin
-    できないため `SystemExit` で fail-closed する。どちらか一方でも
+    """export.py subprocess の前後で取得した diffsinger_repo の
+    HEAD/dirty/status_sha256/diff_sha256 を照合する（review #264 R24 P2 /
+    R25 P2）。不一致（HEAD 変化・dirty 状態変化・dirty のままの内容変化を
+    含む）は export 中に checkout が動いたことを意味し、ONNX の provenance
+    を pin できないため `SystemExit` で fail-closed する。どちらか一方でも
     `"unavailable"`（git 情報取得失敗）の場合は照合不能として素通りする
     （R20 の既存挙動を維持 — export 自体は git 情報が無くても継続する）。
     """
     if "unavailable" in (pre_head, post_head):
         return
-    if (pre_head, pre_dirty) != (post_head, post_dirty):
+    pre = (pre_head, pre_dirty, pre_status_sha256, pre_diff_sha256)
+    post = (post_head, post_dirty, post_status_sha256, post_diff_sha256)
+    if pre != post:
         raise SystemExit(
             f"ERROR: DiffSinger checkout ({repo_path}) changed during "
             f"export.py execution "
-            f"(pre: head={pre_head} dirty={pre_dirty}, "
-            f"post: head={post_head} dirty={post_dirty}). "
+            f"(pre: head={pre_head} dirty={pre_dirty} status_sha256={pre_status_sha256} "
+            f"diff_sha256={pre_diff_sha256}, "
+            f"post: head={post_head} dirty={post_dirty} status_sha256={post_status_sha256} "
+            f"diff_sha256={post_diff_sha256}). "
             f"Refusing to publish a summary whose exporter revision pin cannot be "
             f"trusted — the acoustic.onnx bytes may have been generated from a "
             f"checkout state that no longer matches either snapshot."
@@ -1325,6 +1362,12 @@ def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> 
         raise
 
 
+_SWAP_BACKUP_MARKER_NAME = ".gate_synth_swap_backup_marker"
+_SWAP_BACKUP_MARKER_CONTENT = (
+    "gate_synth._swap_step_dir_into_place backup marker — do not create manually\n"
+)
+
+
 def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
     """`build_dir`（全曲の wav/record + summary を完全に構築済み）を
     `out_dir`（`step_<N>/` 等の合成成果物ディレクトリ）へ原子的に差し替える
@@ -1359,9 +1402,41 @@ def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
     える（このメソッド冒頭で `.old` を消去済みのため、except 到達時点で
     `old_dir` が存在するのは今回の退避 rename が成功した場合のみであり、
     フラグの代入タイミングに依存しない）。これにより両方の中断窓を閉じる。
+
+    review #264 R25 P1: 上記いずれの経路でも、`old_dir` が既存の場合は
+    「それが本ツールが過去の swap で作った退避物である」ことを検証せず
+    無条件で `shutil.rmtree` していた。`<out_dir>.old` という決定論的な
+    パスへ、本ツールと無関係なディレクトリ（手動作業の残骸・別ツールの
+    出力等）が偶然存在していた場合、検証なしに丸ごと削除してしまう破壊
+    経路だった（`convert_pjs.py` の `_swap_into_place` も同型の構造で
+    同時修正）。本ツールが公開する `build_dir` には常に固定内容のマーカー
+    ファイル（`_SWAP_BACKUP_MARKER_NAME`）を埋め込み、`build_dir` ->
+    `out_dir` -> `.old` と rename でパスが遷移してもマーカー自体はディレ
+    クトリの中身として一緒に運ばれる（rename の原子性にそのまま乗るため、
+    マーカー書き込みのための追加の競合窓を作らない）。`old_dir` に既存の
+    ディレクトリがある場合、このマーカーの有無/内容一致で「本ツールが過去
+    に作った退避物か」を検証し、一致しなければ fail-closed で拒否する
+    （手動で退避してから再実行するよう案内する。中断で退避直後にマーカー
+    書き込みへ到達できなかった場合も同じ経路で拒否され、安全側に倒れる）。
     """
+    build_dir.mkdir(parents=True, exist_ok=True)
+    (build_dir / _SWAP_BACKUP_MARKER_NAME).write_text(
+        _SWAP_BACKUP_MARKER_CONTENT, encoding="utf-8"
+    )
     old_dir = out_dir.parent / f"{out_dir.name}.old"
     if old_dir.exists():
+        marker_path = old_dir / _SWAP_BACKUP_MARKER_NAME
+        marker_ok = (
+            marker_path.is_file()
+            and marker_path.read_text(encoding="utf-8") == _SWAP_BACKUP_MARKER_CONTENT
+        )
+        if not marker_ok:
+            raise SystemExit(
+                f"ERROR: backup path {old_dir} already exists but does not look like "
+                f"a previous swap backup created by this tool (missing/mismatched "
+                f"marker {marker_path}). Refusing to delete an unverified directory — "
+                f"move it away manually and re-run."
+            )
         shutil.rmtree(old_dir)
     try:
         if out_dir.exists():
@@ -1458,6 +1533,8 @@ def cmd_run(args):
     # summary へ記録する（下記「diffsinger_repo_git_head」参照）。
     diffsinger_repo_pre_head: object = None
     diffsinger_repo_pre_dirty: object = None
+    diffsinger_repo_pre_status_sha256: object = None
+    diffsinger_repo_pre_diff_sha256: object = None
     if args.skip_export:
         acoustic_dir = Path(args.acoustic_dir)
         acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
@@ -1467,19 +1544,23 @@ def cmd_run(args):
             acoustic_dsconfig_path = canon_model_dir / "dsconfig.yaml"
     else:
         diffsinger_repo_path = Path(args.diffsinger_repo)
-        diffsinger_repo_pre_head, diffsinger_repo_pre_dirty = _git_head_and_dirty(
-            diffsinger_repo_path
-        )
+        (
+            diffsinger_repo_pre_head, diffsinger_repo_pre_dirty,
+            diffsinger_repo_pre_status_sha256, diffsinger_repo_pre_diff_sha256,
+        ) = _git_head_and_dirty(diffsinger_repo_path)
         exported_dir, ckpt_sha, train_config_sha = run_export_acoustic(
             Path(args.diffsinger_repo), Path(args.ckpt_dir), args.exp_name, args.step, out_dir,
         )
-        diffsinger_repo_post_head, diffsinger_repo_post_dirty = _git_head_and_dirty(
-            diffsinger_repo_path
-        )
+        (
+            diffsinger_repo_post_head, diffsinger_repo_post_dirty,
+            diffsinger_repo_post_status_sha256, diffsinger_repo_post_diff_sha256,
+        ) = _git_head_and_dirty(diffsinger_repo_path)
         _check_diffsinger_repo_stable(
             diffsinger_repo_path,
             diffsinger_repo_pre_head, diffsinger_repo_pre_dirty,
+            diffsinger_repo_pre_status_sha256, diffsinger_repo_pre_diff_sha256,
             diffsinger_repo_post_head, diffsinger_repo_post_dirty,
+            diffsinger_repo_post_status_sha256, diffsinger_repo_post_diff_sha256,
         )
         acoustic_dir = exported_dir
         acoustic_onnx_path = exported_dir / "acoustic.onnx"
@@ -1662,6 +1743,11 @@ def cmd_run(args):
     if not args.skip_export:
         input_sha256["diffsinger_repo_git_head"] = diffsinger_repo_pre_head
         input_sha256["diffsinger_repo_dirty"] = diffsinger_repo_pre_dirty
+        # [P2 修正] (review #264 R25) bool 縮約では拾えない「dirty のまま
+        # 内容が変わった」ケースの検出材料を summary にも可視化する
+        # （`_git_head_and_dirty`/`_check_diffsinger_repo_stable` docstring 参照）。
+        input_sha256["diffsinger_repo_status_sha256"] = diffsinger_repo_pre_status_sha256
+        input_sha256["diffsinger_repo_diff_sha256"] = diffsinger_repo_pre_diff_sha256
 
     # synth_out_dir/build_dir/old_dir は cmd_run 冒頭（R9 preflight）で算出済み。
     if build_dir.exists():
@@ -1865,6 +1951,16 @@ def cmd_run(args):
                                              "etc.) and is recorded verbatim rather than skipping "
                                              "the key",
                 "diffsinger_repo_dirty": "see diffsinger_repo_git_head (same pre/post capture)",
+                "diffsinger_repo_status_sha256": "sha256 of the raw 'git status --porcelain' text "
+                                                  "(same pre/post capture as diffsinger_repo_git_head; "
+                                                  "review #264 R25). Detects a dirty->dirty content "
+                                                  "change that a bare dirty bool cannot distinguish "
+                                                  "from 'no change'. Does not cover untracked file "
+                                                  "content — see diffsinger_repo_diff_sha256 and the "
+                                                  "PR #264 R25 reply for the accepted boundary.",
+                "diffsinger_repo_diff_sha256": "sha256 of the raw 'git diff HEAD' bytes (same "
+                                                "pre/post capture; review #264 R25). Empty diff "
+                                                "hashes to a fixed constant when the tree is clean.",
             },
             "sampling_params": {
                 "seed": SEED,

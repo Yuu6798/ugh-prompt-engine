@@ -1345,3 +1345,298 @@ def test_write_lang_def_external_new_file_removed_when_interrupted_after_replace
         ])
 
     assert not lang_def_path.exists()
+
+
+# --- convert_pjs._swap_into_place: 無関係な既存 .old ディレクトリの保護
+# (review #264 R25 P1, convert_pjs.py:1216 スレッド + 本文直書き P1) ---------
+#
+# `_swap_into_place` は `<staging_dir>.old` が既存の場合、それが本ツールが
+# 過去の swap で作った退避物である保証なしに無条件で `shutil.rmtree` して
+# いた。決定論的なパスへ本ツールと無関係なディレクトリが偶然存在していた
+# 場合、検証なしに丸ごと削除してしまう破壊経路（`gate_synth.py` の
+# `_swap_step_dir_into_place` と同型。同時修正）。
+
+
+def test_swap_into_place_rejects_unrelated_old_dir(tmp_path: Path) -> None:
+    """本ツールが作った退避物であることを示すマーカーを持たない
+    `<staging_dir>.old` は fail-closed 拒否され、無変更のまま残る（削除
+    されない）。"""
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    (staging_dir / "existing.txt").write_text("old generation", encoding="utf-8")
+
+    old_dir = tmp_path / "staging.old"
+    old_dir.mkdir()
+    (old_dir / "unrelated.txt").write_text("not created by this tool", encoding="utf-8")
+
+    build_dir = tmp_path / "staging.build-123"
+    build_dir.mkdir()
+    (build_dir / "new.txt").write_text("new generation", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        cp._swap_into_place(build_dir, staging_dir)
+
+    # 無関係な old_dir は削除されず中身も無変更のまま。
+    assert old_dir.exists()
+    assert (old_dir / "unrelated.txt").read_text(encoding="utf-8") == "not created by this tool"
+    # staging_dir も swap されず旧世代のまま公開は起きていない。
+    assert (staging_dir / "existing.txt").exists()
+    assert not (staging_dir / "new.txt").exists()
+
+
+def test_swap_into_place_rotates_own_backup_across_three_runs(tmp_path: Path) -> None:
+    """本ツール自身が過去の swap で作った `.old`（マーカー付き）は、通常
+    どおりローテートされて削除される（正常系の回帰ガード）。
+
+    マーカーは `build_dir` -> `staging_dir` -> `.old` と rename でしか
+    運ばれないため、`.old` にマーカーが乗るのは「`staging_dir` 自体が
+    本ツールの swap 経由で作られていた」場合のみ。初回 swap
+    （`staging_dir` 未存在）の直後にできる `staging_dir` にはこの時点で
+    まだマーカーが付いているが、`.old` はまだ存在しない。2 回目 swap で
+    初めて `.old`（マーカー付き）が生まれ、3 回目 swap でそのローテート
+    を検証できる。
+    """
+    staging_dir = tmp_path / "staging"  # 初回 swap 前は未存在（クリーンな初回実行）
+    old_dir = tmp_path / "staging.old"
+
+    build_dir1 = tmp_path / "staging.build-1"
+    build_dir1.mkdir()
+    (build_dir1 / "gen1.txt").write_text("gen1", encoding="utf-8")
+    cp._swap_into_place(build_dir1, staging_dir)
+    assert (staging_dir / "gen1.txt").exists()
+    assert not old_dir.exists()  # 初回は退避対象が無い
+
+    build_dir2 = tmp_path / "staging.build-2"
+    build_dir2.mkdir()
+    (build_dir2 / "gen2.txt").write_text("gen2", encoding="utf-8")
+    cp._swap_into_place(build_dir2, staging_dir)
+    assert (staging_dir / "gen2.txt").exists()
+    assert old_dir.exists()
+    assert (old_dir / "gen1.txt").exists()  # 2回目で初めて .old (マーカー付き) が生まれる
+
+    build_dir3 = tmp_path / "staging.build-3"
+    build_dir3.mkdir()
+    (build_dir3 / "gen3.txt").write_text("gen3", encoding="utf-8")
+    cp._swap_into_place(build_dir3, staging_dir)  # 3回目: 前回の .old を安全にローテート
+
+    assert (staging_dir / "gen3.txt").exists()
+    assert old_dir.exists()
+    assert (old_dir / "gen2.txt").exists()
+    assert not (old_dir / "gen1.txt").exists()
+
+
+# --- convert_pjs.main(): swap 完了判定のファイルシステム導出
+# (review #264 R25 P2, convert_pjs.py:1216) ----------------------------------
+#
+# 従来は `_swap_into_place()` 呼び出し**直後**の `swapped = True` という
+# 後続代入変数で「swap が完了したか」を判定していた。`_swap_into_place()`
+# 自体が正常 return した直後・この代入文実行前に `KeyboardInterrupt`/
+# `SystemExit` が飛ぶと、実際には公開 rename が完了しているのに `swapped`
+# は `False` のままハンドラへ落ち、公開済みの新世代コーパスに対して外部
+# `--lang-def` だけ旧内容へ巻き戻してしまう（新旧混成生成）。修正後は
+# `build_dir.exists()` という実ファイルシステム状態から completion を
+# 導出する。
+
+
+def _fake_run_converter_success(pjs_expected_ids, write_wav_fn):
+    """`run_converter`（実 `db_converter.py` subprocess 呼び出し）を軽量に
+    フェイクする。実変換器を使わず、`build_dir/diffsinger_db/` 配下へ
+    validate_speaker 等の下流検査を全通貨する最小構成（曲ごとに1セグメント
+    ・1音素、wav 長と ph_dur が厳密一致）を直接生成する。"""
+    import subprocess as _subprocess
+
+    def _fake(converter_dir: Path, build_dir: Path, lang_def_path: Path, python_bin: str):
+        out_dir = build_dir / "diffsinger_db"
+        wav_dir = out_dir / "wavs"
+        wav_dir.mkdir(parents=True)
+        rows = []
+        for song_id in pjs_expected_ids:
+            name = f"{song_id}_seg000"
+            write_wav_fn(wav_dir / f"{name}.wav", 0.01, sr=8000)
+            rows.append({"name": name, "ph_seq": "a", "ph_dur": "0.01"})
+        csv_path = out_dir / "transcriptions.csv"
+        import csv as _csv
+
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = _csv.DictWriter(f, fieldnames=["name", "ph_seq", "ph_dur"])
+            writer.writeheader()
+            writer.writerows(rows)
+        return _subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    return _fake
+
+
+def test_swap_completion_from_filesystem_keeps_new_lang_def_when_swap_already_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """review #264 R25 P2 の再現の裏返し（修正後の期待挙動）: swap が
+    実際には完了した直後に割り込まれても、公開済みの新世代コーパスに対して
+    外部 lang-def を旧内容へ巻き戻してはならない（新世代で統一）。"""
+    pjs_root = tmp_path / "pjs_root"
+    _stage_all_pjs_dummy(pjs_root)
+    converter_dir = tmp_path / "converter"
+    converter_dir.mkdir()
+    staging_dir = tmp_path / "staging"
+    lang_def_path = tmp_path / "external_lang.json"
+    old_content = b'{"pre_existing": true}\n'
+    lang_def_path.write_bytes(old_content)
+
+    monkeypatch.setattr(cp, "run_converter", _fake_run_converter_success(cp.PJS_EXPECTED_IDS, _write_wav))
+
+    real_swap_into_place = cp._swap_into_place
+
+    def _swap_then_interrupt(build_dir: Path, staging_dir_arg: Path) -> None:
+        # 実 swap（rename の原子性そのもの）は完走させ、`_swap_into_place`
+        # が呼び出し元へ正常 return した直後・`swapped = True` 相当の
+        # タイミングで割り込みが飛んだ状況を再現する。
+        real_swap_into_place(build_dir, staging_dir_arg)
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(cp, "_swap_into_place", _swap_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        cp.main([
+            "--pjs-root", str(pjs_root),
+            "--converter-dir", str(converter_dir),
+            "--staging-dir", str(staging_dir),
+            "--lang-def", str(lang_def_path),
+        ])
+
+    # 公開（swap）自体は完了しているため、コーパスは新世代のまま公開される。
+    assert (staging_dir / "diffsinger_db" / "transcriptions.csv").exists()
+    # lang-def は巻き戻されず新内容のまま（新世代で統一。混成生成にならない）。
+    assert lang_def_path.read_bytes() != old_content
+    assert json.loads(lang_def_path.read_text(encoding="utf-8")) == cp.DEFAULT_LANG_DEF
+
+
+def test_swap_completion_from_filesystem_restores_old_lang_def_when_swap_did_not_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰ガード: swap が実際には完了していない中断では、従来どおり外部
+    lang-def を実行前の内容へ巻き戻す（旧世代で統一。修正がこの既存経路を
+    壊していないことを固定する）。"""
+    pjs_root = tmp_path / "pjs_root"
+    _stage_all_pjs_dummy(pjs_root)
+    converter_dir = tmp_path / "converter"
+    converter_dir.mkdir()
+    staging_dir = tmp_path / "staging"
+    lang_def_path = tmp_path / "external_lang.json"
+    old_content = b'{"pre_existing": true}\n'
+    lang_def_path.write_bytes(old_content)
+
+    monkeypatch.setattr(cp, "run_converter", _fake_run_converter_success(cp.PJS_EXPECTED_IDS, _write_wav))
+
+    def _swap_never_runs(build_dir: Path, staging_dir_arg: Path) -> None:
+        # swap 自体を一切実行せずに中断（= build_dir はそのまま存在し続ける）。
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(cp, "_swap_into_place", _swap_never_runs)
+
+    with pytest.raises(KeyboardInterrupt):
+        cp.main([
+            "--pjs-root", str(pjs_root),
+            "--converter-dir", str(converter_dir),
+            "--staging-dir", str(staging_dir),
+            "--lang-def", str(lang_def_path),
+        ])
+
+    # swap が起きていないため staging_dir は旧世代（未公開）のまま。
+    assert not (staging_dir / "diffsinger_db").exists()
+    # lang-def は実行前の内容へ巻き戻される。
+    assert lang_def_path.read_bytes() == old_content
+
+
+# --- build_dataset.validate_speaker: 空 ph_seq/ph_dur の同時空受理
+# (review #264 R25 P2 本文直書き, build_dataset.py:658-660) ------------------
+#
+# `ph_seq=""` かつ `ph_dur=""` はいずれも空リストへ parse され、長さ一致
+# 検査（0 == 0）を素通りする。必須の整列フィールドが両方空という構造不良を
+# 明示的に検出する。
+
+
+def test_validate_speaker_rejects_both_ph_seq_and_ph_dur_empty(tmp_path: Path) -> None:
+    """再現ケースそのもの: ph_seq/ph_dur が両方空文字列の行は、長さ一致
+    （0==0）・非正/非有限（空リストに対して no-op）のいずれも素通りする
+    ため、旧実装では一切の violation を出さず公開されてしまっていた。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg000.wav", 1.0)
+    rows = [{"name": "seg000", "ph_seq": "", "ph_dur": ""}]
+    problems = bd.validate_speaker("pjs", tmp_path, rows)
+    assert any("seg000" in p and "empty ph_seq/ph_dur" in p for p in problems)
+
+
+def test_validate_speaker_rejects_ph_seq_empty_ph_dur_nonempty(tmp_path: Path) -> None:
+    """片方だけ空のケース（長さ不一致にもなるため、既存の length-mismatch
+    ではなく新設の empty 検査で先に検出されることを確認する）。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg001.wav", 1.0)
+    rows = [{"name": "seg001", "ph_seq": "", "ph_dur": "1.0"}]
+    problems = bd.validate_speaker("pjs", tmp_path, rows)
+    assert any("seg001" in p and "empty ph_seq/ph_dur" in p for p in problems)
+
+
+def test_validate_speaker_accepts_normal_nonempty_ph_seq_ph_dur(tmp_path: Path) -> None:
+    """正常系の回帰ガード: 通常どおり非空の ph_seq/ph_dur は empty 検査に
+    引っかからない。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg002.wav", 1.0)
+    rows = [{"name": "seg002", "ph_seq": "a", "ph_dur": "1.0"}]
+    problems = bd.validate_speaker("pjs", tmp_path, rows)
+    assert not any("empty ph_seq/ph_dur" in p for p in problems)
+
+
+# --- build_dataset.validate_speaker: 読めない/非正 duration WAV の
+# 無条件違反化 (review #264 R25 P2, build_dataset.py:655 スレッド) -----------
+#
+# 従来の `missing` は `.exists()` のみを見るため、WAV が存在するが読めない
+# （非 PCM/破損）・duration<=0 の場合を検出できず、`check_ph_dur_duration`
+# 側も readback 失敗を「比較スキップの合図」として黙って continue するのみ
+# だった（`--strict-duration` 未指定時は既定で警告扱いに留まる 2 段階仕様
+# 自体は妥当だが、readback 失敗そのものは無条件で violation にする）。
+
+
+def test_validate_speaker_rejects_corrupt_wav_unconditionally(tmp_path: Path) -> None:
+    """破損 WAV（wave モジュールで open できない内容）は `--strict-duration`
+    の有無に関わらず常に violation として検出される。"""
+    wav_dir = tmp_path / "wavs"
+    wav_dir.mkdir()
+    (wav_dir / "seg000.wav").write_bytes(b"not a real wav file, corrupt header")
+    rows = [{"name": "seg000", "ph_seq": "a", "ph_dur": "1.0"}]
+    problems = bd.validate_speaker("pjs", tmp_path, rows)
+    assert any("seg000" in p and "unreadable or non-positive duration" in p for p in problems)
+
+
+def test_validate_speaker_rejects_header_only_zero_duration_wav_unconditionally(
+    tmp_path: Path,
+) -> None:
+    """ヘッダのみで実データフレームが0のWAV（duration=0）も同様に
+    unconditional violation として検出される。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg001.wav", 0.0)
+    rows = [{"name": "seg001", "ph_seq": "a", "ph_dur": "1.0"}]
+    problems = bd.validate_speaker("pjs", tmp_path, rows)
+    assert any("seg001" in p and "unreadable or non-positive duration" in p for p in problems)
+
+
+def test_validate_speaker_accepts_healthy_wav_readback(tmp_path: Path) -> None:
+    """正常系の回帰ガード: 正常に読める正 duration WAV は readback 検査に
+    引っかからない。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg002.wav", 1.0)
+    rows = [{"name": "seg002", "ph_seq": "a", "ph_dur": "1.0"}]
+    problems = bd.validate_speaker("pjs", tmp_path, rows)
+    assert not any("unreadable or non-positive duration" in p for p in problems)
+
+
+def test_validate_speaker_does_not_double_report_missing_wav_as_unreadable(
+    tmp_path: Path,
+) -> None:
+    """`missing`（.exists()==False）と `unreadable`（readback 失敗）は排他:
+    存在しない wav は missing 側でのみ報告され、unreadable 側では二重
+    報告されない。"""
+    wav_dir = tmp_path / "wavs"
+    wav_dir.mkdir()
+    rows = [{"name": "nope", "ph_seq": "a", "ph_dur": "1.0"}]
+    problems = bd.validate_speaker("pjs", tmp_path, rows)
+    assert any("wav missing" in p for p in problems)
+    assert not any("unreadable or non-positive duration" in p for p in problems)

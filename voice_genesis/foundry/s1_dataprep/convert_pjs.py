@@ -873,6 +873,12 @@ def run_converter(
     return subprocess.run(cmd, cwd=str(converter_dir), capture_output=True, text=True, check=False)
 
 
+_SWAP_BACKUP_MARKER_NAME = ".convert_pjs_swap_backup_marker"
+_SWAP_BACKUP_MARKER_CONTENT = (
+    "convert_pjs._swap_into_place backup marker — do not create manually\n"
+)
+
+
 def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     """`build_dir`（symlink 群 + `diffsinger_db/` を完全に構築済み）を
     `staging_dir` へ原子的に差し替える。
@@ -903,9 +909,41 @@ def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     `.old` を消去済みのため、except 到達時点で `old_dir` が存在するのは
     今回の退避 rename が成功した場合のみであり、フラグの代入タイミングに
     依存しない）。これにより両方の中断窓を閉じる。
+
+    review #264 R25 P1（`gate_synth.py` の同型ヘルパーと同一のファミリー
+    修正）: 上記いずれの経路でも、`old_dir` が既存の場合は「それが本ツール
+    が過去の swap で作った退避物である」ことを検証せず無条件で
+    `shutil.rmtree` していた。`<staging_dir>.old` という決定論的なパスへ、
+    本ツールと無関係なディレクトリ（手動作業の残骸・別ツールの出力等）が
+    偶然存在していた場合、検証なしに丸ごと削除してしまう破壊経路だった。
+    本ツールが公開する `build_dir` には常に固定内容のマーカーファイル
+    （`_SWAP_BACKUP_MARKER_NAME`）を埋め込み、`build_dir` -> `staging_dir`
+    -> `.old` と rename でパスが遷移してもマーカー自体はディレクトリの
+    中身として一緒に運ばれる（rename の原子性にそのまま乗るため、マーカー
+    書き込みのための追加の競合窓を作らない）。`old_dir` に既存のディレクト
+    リがある場合、このマーカーの有無/内容一致で「本ツールが過去に作った
+    退避物か」を検証し、一致しなければ fail-closed で拒否する（手動で退避
+    してから再実行するよう案内する。中断で退避直後にマーカー書き込みへ
+    到達できなかった場合も同じ経路で拒否され、安全側に倒れる）。
     """
+    build_dir.mkdir(parents=True, exist_ok=True)
+    (build_dir / _SWAP_BACKUP_MARKER_NAME).write_text(
+        _SWAP_BACKUP_MARKER_CONTENT, encoding="utf-8"
+    )
     old_dir = staging_dir.parent / f"{staging_dir.name}.old"
     if old_dir.exists():
+        marker_path = old_dir / _SWAP_BACKUP_MARKER_NAME
+        marker_ok = (
+            marker_path.is_file()
+            and marker_path.read_text(encoding="utf-8") == _SWAP_BACKUP_MARKER_CONTENT
+        )
+        if not marker_ok:
+            raise SystemExit(
+                f"ERROR: backup path {old_dir} already exists but does not look like "
+                f"a previous swap backup created by this tool (missing/mismatched "
+                f"marker {marker_path}). Refusing to delete an unverified directory — "
+                f"move it away manually and re-run."
+            )
         shutil.rmtree(old_dir)
     try:
         if staging_dir.exists():
@@ -987,7 +1025,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)
-    swapped = False
     try:
         missing_pairs: List[str] = []
         escaped_pairs: List[str] = []
@@ -1213,12 +1250,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 os.replace(tmp_csv_name, out_csv_path)
 
             _swap_into_place(build_dir, staging_dir)
-            swapped = True
         except BaseException:
-            _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+            # [P2 修正] (review #264 R25 P2) 従来は `swapped = True` という
+            # `_swap_into_place()` 呼び出し**直後**の後続代入変数で「swap が
+            # 完了したか」を判定していた。`_swap_into_place()` 自体が正常
+            # return した直後・この代入文実行前に `KeyboardInterrupt`/
+            # `SystemExit` が飛ぶと、実際には公開 rename が完了しているのに
+            # `swapped` は `False` のままこのハンドラへ落ち、公開済みの
+            # 新世代コーパスに対して外部 `--lang-def` だけ旧内容へ巻き戻して
+            # しまう（新旧混成生成: コーパスは新世代・lang-def は旧世代）。
+            #
+            # `_swap_into_place()` の契約上、例外を外へ伝播させずに正常
+            # return するのは `build_dir` が公開先（`staging_dir`）へ完全に
+            # rename され尽くして消滅した場合のみである。逆に内部の
+            # rename が失敗した場合は例外がそのままここまで伝播し、
+            # POSIX `rename(2)` はディレクトリ単位で atomic なため
+            # `build_dir` は部分状態を残さず存在し続ける。よってフラグ
+            # ではなく `build_dir.exists()` という実ファイルシステム状態から
+            # completion を導出する: 存在しない＝swap 完了後の中断（新世代で
+            # 統一。lang-def は巻き戻さない）、存在する＝swap 未完了の中断
+            # （旧世代で統一。従来通り巻き戻す）。
+            if build_dir.exists():
+                _restore_lang_def_backup(
+                    lang_def_path, lang_def_backup, created_new=lang_def_created_new
+                )
             raise
     finally:
-        if not swapped:
+        if build_dir.exists():
             shutil.rmtree(build_dir, ignore_errors=True)
 
     out_db = staging_dir / "diffsinger_db"
