@@ -15,6 +15,9 @@ evict されずキャッシュが残り得る（R1 と同型のバグが依存�
 """
 from __future__ import annotations
 
+import importlib.util
+import os
+import py_compile
 import sys
 from pathlib import Path
 from typing import Iterator
@@ -128,4 +131,36 @@ def test_load_song_module_evicts_full_score_family_before_import(tmp_path: Path)
     # song に関わらず score 系全体に対して行われるため、次の umi ロードが
     # dir_b の score.py を正しく反映することを確認する。
     gs.load_song_module("umi", dir_b)
+    assert sys.modules["score"].MARKER == "B"
+
+
+def test_load_song_module_bypasses_stale_pycache(tmp_path: Path) -> None:
+    """review #264 R3 の再現テスト。`sys.modules` からの evict（R1/R2）は
+    「別 singer_dir から連続ロード」問題は封じるが、`import` 文自体が触れる
+    `__pycache__/*.pyc` のタイムスタンプ方式キャッシュまでは防げない。
+
+    ここでは MARKER="A" の `score.py` から標準の `.pyc`（timestamp 方式）を
+    先に生成し、その後 `score.py` を同じ文字数（MARKER は1文字同士の置換
+    のため size 不変）の MARKER="B" 版へ差し替えつつ mtime を意図的に旧版と
+    完全一致させる（＝標準 `import` なら stale な `.pyc`（MARKER="A"）を
+    そのまま再利用してしまう典型的な条件を人工的に作る）。`load_song_module`
+    が `.pyc` を一切参照せず、常に現在のソースバイト（MARKER="B"）を実行
+    することを検証する。
+    """
+    singer_dir = _make_fake_singer_dir(tmp_path, "singer_stale", marker="A")
+    score_path = singer_dir / "score.py"
+
+    orig_mtime = score_path.stat().st_mtime
+    py_compile.compile(str(score_path), doraise=True)
+    pyc_path = Path(importlib.util.cache_from_source(str(score_path)))
+    assert pyc_path.exists(), "py_compile が .pyc を生成できていない（テスト前提の破綻）"
+
+    score_path.write_text(_SCORE_SRC_TEMPLATE.format(marker="B"), encoding="utf-8")
+    os.utime(score_path, (orig_mtime, orig_mtime))
+    assert score_path.stat().st_mtime == orig_mtime  # mtime 強制一致（size は marker 1文字で自動一致）
+
+    _, _, _, path = gs.load_song_module("sakura", singer_dir)
+    assert path == score_path.resolve()
+    # stale .pyc（MARKER="A"）ではなく現在のソースバイト（MARKER="B"）が
+    # 実行されたことを確認する。
     assert sys.modules["score"].MARKER == "B"

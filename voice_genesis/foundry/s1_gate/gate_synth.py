@@ -90,6 +90,7 @@ import shutil
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -144,10 +145,6 @@ SCORE_MODULE_DEPENDENCY_FILENAMES: Dict[str, Tuple[str, ...]] = {
     "umi": ("score.py", "phoneme_jp.py"),
 }
 
-# `load_song_module`/`cmd_run` が evict/pin する score 系モジュール名の全体
-# 集合（`sys.modules` のキー名。ファイル名の拡張子を除いた stem と一致）。
-_ALL_SCORE_FAMILY_MODULE_NAMES: Tuple[str, ...] = ("score", "score_umi", "phoneme_jp")
-
 
 def score_module_path_for(song: str, singer_dir: Path) -> Path:
     """`load_song_module` が import する前に、対象ファイルの絶対パスを解決する
@@ -169,51 +166,84 @@ def score_module_dependency_paths_for(song: str, singer_dir: Path) -> Dict[str, 
     }
 
 
+def _exec_module_from_path(module_name: str, path: Path) -> types.ModuleType:
+    """`path` のソースバイトを直接 `compile()`/`exec()` してモジュール
+    オブジェクトを構築し、`sys.modules[module_name]` へ登録して返す。
+
+    [P2 修正] (review #264 R3) `import <module>` 文（標準 `SourceFileLoader`）
+    は既定でタイムスタンプ方式の `__pycache__/*.pyc` キャッシュを条件付きで
+    再利用する。R1/R2 の `sys.modules` evict は「同名モジュールが別内容で
+    既にキャッシュ済み」の場合を封じるが、evict 後に実行される `import` 文
+    自体は依然としてファイルシステム上の `.pyc` を信頼し得る——例えば
+    score.py が同一サイズの内容へ差し替わり、かつファイルシステムの
+    タイムスタンプ精度内（同一 tick）で書き換えられた場合、`.pyc` ヘッダの
+    (mtime, size) がなお一致し、古いバイトコードがそのまま実行され得る。
+    このとき呼び出し元（`cmd_run`）が `sha256_file()` で読んだ「ハッシュ
+    した内容」と「実際に実行された内容」が食い違う（provenance summary の
+    偽装）。
+
+    本関数は `import` 文を一切使わず、ソースを直接 `read_bytes()` して
+    `compile()`/`exec()` する。`compile()` は `.pyc` キャッシュの生成/参照
+    を一切行わない（そのキャッシュ機構は `importlib` の import 機構側にのみ
+    存在する）ため、「ハッシュした内容 = 実行された内容」が構造的に保証
+    される。
+    """
+    source = path.read_bytes()
+    module = types.ModuleType(module_name)
+    module.__file__ = str(path)
+    sys.modules[module_name] = module
+    code = compile(source, str(path), "exec")
+    try:
+        exec(code, module.__dict__)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
 def load_song_module(song: str, singer_dir: Path):
     """楽曲モジュール読み込み。戻り値に実際に import したモジュールファイルの
     絶対パスも含める（PR #263 R6 レビュー指摘: gate summary の input_sha256 が
     合成実装そのもの — 本スクリプトと score.py/score_umi.py — の変更を検出
     できなかったため、呼び出し側でこのパスを sha256 化して記録する）。
 
-    [P2 修正] (review #264 R1) `import score as sc` は `sys.modules` に既に
-    同名モジュールがキャッシュされている場合、`sys.path` を書き換えても
-    キャッシュされたモジュールオブジェクトをそのまま返すだけで
-    `singer_dir` 配下の現在のファイル内容を一切再読込しない
-    （Python の import 文の仕様）。呼び出し側（`cmd_run`）はこの関数の
-    呼び出し *前* に対象ファイルを直接 `sha256_file()` で読んで pin して
-    いるため、同名モジュールが別 `singer_dir`（または以前の呼び出し）から
-    既にキャッシュされていると、pin されたハッシュ（＝ディスク上の最新
-    内容）と実際に import されて合成に使われるコード（＝キャッシュされた
-    旧内容）が食い違う「ハッシュ偽装」が成立し得る。import 前に該当
-    モジュール名を `sys.modules` から evict し、常に現在の `sys.path`
-    （直前に挿入した `singer_dir`）からファイルを再ロードさせることで
-    これを封じる。
+    依存順（`phoneme_jp` -> `score` -> `score_umi`。`song == "sakura"` は
+    `score_umi` を読まない）で `_exec_module_from_path` を呼び、常に
+    `singer_dir` 配下の現在のソースバイトを compile/exec する。
 
-    [P2 修正] (review #264 R2) R1 は呼び出し対象の song モジュール名
-    （`score` または `score_umi`）のみを evict していたが、`score_umi.py`
-    は `from score import ScoreNote` で `score` モジュールへ推移的に依存する
-    （`SCORE_MODULE_DEPENDENCY_FILENAMES` 参照）。`song == "umi"` の evict が
-    `score_umi` だけだと、`import score_umi` 内部の `from score import
-    ScoreNote` は `sys.modules["score"]` に別 `singer_dir` 由来の古いモジュール
-    がキャッシュされていればそれをそのまま返す（R1 と同型のハッシュ偽装が
-    `score` 側で再発する）。song に関わらず score 系モジュール
-    （`score`/`score_umi`/`phoneme_jp`）を毎回まとめて evict することで、
-    直接 import 対象・推移的依存の双方を常に現在の `singer_dir` から
-    再ロードさせる。
+    [P2 修正] (review #264 R1) 別 `singer_dir`（または以前の呼び出し）由来の
+    `sys.modules` キャッシュを踏まない。
+    [P2 修正] (review #264 R2) `score_umi.py` が推移的に依存する
+    `score`/`phoneme_jp` も song に関わらず毎回フレッシュにする
+    （`SCORE_MODULE_DEPENDENCY_FILENAMES` 参照）。
+    [P2 修正] (review #264 R3) `import` 文自体が触れ得る `__pycache__` の
+    stale `.pyc` 再利用を、`import` 文を使わない実装へ切り替えることで
+    構造的に封じる（`_exec_module_from_path` docstring 参照）。
+    `_exec_module_from_path` は呼ぶたびに `sys.modules[name]` を無条件で
+    新しいモジュールオブジェクトへ上書きするため、R1/R2 が行っていた事前
+    evict ループ（`sys.modules.pop`）は本実装では不要（上書き自体が evict を
+    包含する、より強い保証のため）。
     """
-    module_name = "score" if song == "sakura" else "score_umi" if song == "umi" else None
-    if module_name is None:
+    if song not in ("sakura", "umi"):
         raise ValueError(f"unknown song: {song}")
-    for dependent_module_name in _ALL_SCORE_FAMILY_MODULE_NAMES:
-        sys.modules.pop(dependent_module_name, None)
-    sys.path.insert(0, str(singer_dir))
+
+    phoneme_jp_path = (singer_dir / "phoneme_jp.py").resolve()
+    _exec_module_from_path("phoneme_jp", phoneme_jp_path)
+
+    score_path = (singer_dir / "score.py").resolve()
+    sc_score = _exec_module_from_path("score", score_path)
+
     if song == "sakura":
-        import score as sc  # noqa: E402  (read-only import from repo)
-        return sc.build_sakura_score, sc.beats_to_seconds, sc.TEMPO_BPM, Path(sc.__file__).resolve()
-    if song == "umi":
-        import score_umi as sc  # noqa: E402  (read-only import from repo)
-        return sc.build_umi_score, sc.beats_to_seconds, sc.TEMPO_BPM, Path(sc.__file__).resolve()
-    raise ValueError(f"unknown song: {song}")
+        return (
+            sc_score.build_sakura_score,
+            sc_score.beats_to_seconds,
+            sc_score.TEMPO_BPM,
+            score_path,
+        )
+
+    score_umi_path = (singer_dir / "score_umi.py").resolve()
+    sc_umi = _exec_module_from_path("score_umi", score_umi_path)
+    return sc_umi.build_umi_score, sc_umi.beats_to_seconds, sc_umi.TEMPO_BPM, score_umi_path
 
 
 def mora_phonemes(mora) -> List[str]:

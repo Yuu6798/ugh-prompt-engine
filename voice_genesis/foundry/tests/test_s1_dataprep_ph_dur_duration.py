@@ -75,6 +75,50 @@ def test_check_ph_dur_duration_skips_missing_wav(tmp_path: Path) -> None:
     assert bd.check_ph_dur_duration("pjs", wav_dir, rows) == []
 
 
+# --- build_dataset.check_note_dur_consistency (review #264 R3) -------------
+
+
+def test_check_note_dur_consistency_flags_mismatch() -> None:
+    rows = [
+        {"name": "seg004", "ph_seq": "SP k a", "ph_dur": "0.5 0.5 0.5", "note_dur": "0.5 3.0"}
+    ]
+    violations = bd.check_note_dur_consistency("pjs", rows)
+    assert len(violations) == 1
+    assert "seg004" in violations[0]
+    assert "1.5000s" in violations[0]  # ph_dur 合計
+    assert "3.5000s" in violations[0]  # note_dur 合計
+
+
+def test_check_note_dur_consistency_within_tolerance_is_silent() -> None:
+    # ph_dur 合計 3.0 vs note_dur 合計 3.02: 差0.02s は絶対許容0.1sの範囲内
+    rows = [
+        {"name": "seg000", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0", "note_dur": "1.0 1.02 1.0"}
+    ]
+    assert bd.check_note_dur_consistency("pjs", rows) == []
+
+
+def test_check_note_dur_consistency_skips_rows_without_note_dur() -> None:
+    rows = [{"name": "seg000", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}]  # note_dur 列なし
+    assert bd.check_note_dur_consistency("pjs", rows) == []
+
+
+def test_check_note_dur_consistency_wired_into_validate_speaker_unconditionally(
+    tmp_path: Path,
+) -> None:
+    """`check_ph_dur_duration`（wav vs ph_dur、既知4件の乖離を warn に留める
+    2段階仕様）と異なり、ph_dur↔note_dur のクロスフィールド不変量は常に
+    `validate_speaker` の problems（fail-closed）へ合流することを検証する
+    （`--strict-duration` フラグに依存しない）。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg004.wav", 3.0)
+    raw_dir = tmp_path
+    rows = [
+        {"name": "seg004", "ph_seq": "SP k a", "ph_dur": "1.0 1.0 1.0", "note_dur": "1.0 1.0 5.0"}
+    ]
+    problems = bd.validate_speaker("pjs", raw_dir, rows)
+    assert any("seg004" in p and "note_dur total" in p for p in problems)
+
+
 # --- build_dataset.py main() 2段階仕様（warn既定 / --strict-duration fail） --
 
 
@@ -201,13 +245,25 @@ def test_normalize_ph_dur_removes_note_seq_note_dur_for_emptied_note(tmp_path: P
     assert len(fix_log) == 1
     assert fixed_rows[0]["ph_num"] == "1 1"
     assert fixed_rows[0]["note_seq"] == "rest 60"
-    assert fixed_rows[0]["note_dur"] == "1.0 4.0"
+    # [P2 修正] (review #264 R3) note1（"a"）は 4.0s -> 2.0s へ truncate される
+    # ため、note_dur も同じ 2.0s へ再計算される（旧実装は "4.0" のまま残り、
+    # ph_dur 合計との不変量が崩れていた）。
+    assert fixed_rows[0]["note_dur"] == "1.0 2.0"
+    new_dur_total = sum(float(x) for x in fixed_rows[0]["ph_dur"].split())
+    note_dur_total = sum(float(x) for x in fixed_rows[0]["note_dur"].split())
+    assert new_dur_total == note_dur_total  # クロスフィールド不変量
 
 
 def test_normalize_ph_dur_partial_note_survives_with_reduced_count(tmp_path: Path) -> None:
     """1個のノートに複数音素が対応しており、そのうち一部だけが EOF より後ろへ
     落ちる場合、ノート自体は残しつつ `ph_num` のそのノートの数だけ減ること
     を検証する（`ph_num` の対応ノートが空にならない限りノートは削除されない）。
+
+    [P2 修正] (review #264 R3) 生存ノート（note1）の `note_dur` も、その
+    ノートに属する生存音素の新 ph_dur 合計へ追従して短縮されることを検証
+    する（旧実装は note_dur を旧値 3.0 のまま残し、ph_dur 合計 1.0（wav 全体
+    では 1.5s）と note_dur 合計 3.5s が食い違ったまま下流へ渡っていた —
+    レビュー指摘の「ph_dur/wav 1.5s vs note_dur 3.5s」の再現ケース）。
     """
     wav_dir = tmp_path / "wavs"
     _write_wav(wav_dir / "seg004.wav", 1.5)
@@ -235,9 +291,14 @@ def test_normalize_ph_dur_partial_note_survives_with_reduced_count(tmp_path: Pat
     assert sum(round(d, 6) for d in new_dur) == 1.5
     # ノート1（"k","a","i" のうち "i" のみ喪失）は残存するが音素数が 3->2 に減る
     assert fixed_rows[0]["ph_num"] == "1 2"
-    # ノート自体は消えていないので note_seq/note_dur は無変更
+    # ノート自体は消えていないので note_seq（音高/歌詞情報）は無変更のまま
     assert fixed_rows[0]["note_seq"] == rows[0]["note_seq"]
-    assert fixed_rows[0]["note_dur"] == rows[0]["note_dur"]
+    # note_dur は旧値 "0.5 3.0" のままではなく、生存音素の新 ph_dur 合計へ
+    # 追従する: note0=SP(0.5, 無変更) / note1=k(0.5)+a(0.5, truncate後)=1.0
+    # （旧実装バグ: "0.5 3.0" のまま残り ph_dur 合計との不変量が崩れていた）。
+    assert fixed_rows[0]["note_dur"] == "0.5 1.0"
+    note_dur_total = sum(float(x) for x in fixed_rows[0]["note_dur"].split())
+    assert note_dur_total == sum(round(d, 6) for d in new_dur)  # クロスフィールド不変量
 
 
 def test_normalize_ph_dur_forward_boundaries_preserved_multi_phoneme(tmp_path: Path) -> None:

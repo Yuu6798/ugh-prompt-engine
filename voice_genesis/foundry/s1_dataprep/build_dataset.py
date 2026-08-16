@@ -388,6 +388,55 @@ def check_ph_dur_duration(
     return violations
 
 
+def check_note_dur_consistency(
+    speaker_name: str, rows: Sequence[Dict[str, str]]
+) -> List[str]:
+    """`ph_dur` 合計と `note_dur` 合計のクロスフィールド不変量を検査する。
+
+    fix (2026-08-16, review #264 R3): `convert_pjs.py` の EOF 末尾切り詰め/
+    削除処理（`_drop_dead_phonemes`）は、EOF がノートの途中を切る場合
+    （ノート自体は音素を1個以上残して生存するが末尾側の一部音素だけが
+    truncate/drop される場合）に生存ノートの `note_dur` を旧値のまま残す
+    実装バグを含んでいた。修正後もこの不変量（同一行内で
+    `sum(note_dur) == sum(ph_dur)`、`note_dur` を持たない speaker では
+    チェック対象外）を readback 時に enforce することで、将来の同型
+    回帰（本関数がある限り上流の実装がどうであれ）を検出する。
+
+    `note_dur` を持たない行（例: Ritsu 側が `note_dur` を書き出さない場合）
+    はスキップする。閾値は `check_ph_dur_duration` と同一定数
+    （相対5% or 絶対0.1sの大きい方。`ph_dur` 合計を基準にする — wav 実長
+    との整合は `check_ph_dur_duration` が別途担保するため、ここでは
+    2 フィールド間の整合のみを見る）。数値化できない・非有限な値は他の
+    既存チェック（ph_seq/ph_dur 長さ不一致・非有限 ph_dur 等）が別途検出
+    するため、ここではスキップする（全収集してから呼び出し側が判定する
+    設計は `check_ph_dur_duration` と同じ）。
+    """
+    violations: List[str] = []
+    for row in rows:
+        note_dur_raw = row.get("note_dur")
+        if not note_dur_raw:
+            continue
+        try:
+            ph_dur = [float(x) for x in row["ph_dur"].split()]
+            note_dur = [float(x) for x in note_dur_raw.split()]
+        except ValueError:
+            continue
+        if not ph_dur or not note_dur:
+            continue
+        if not all(math.isfinite(d) for d in ph_dur) or not all(math.isfinite(d) for d in note_dur):
+            continue
+        ph_total = math.fsum(ph_dur)
+        note_total = math.fsum(note_dur)
+        tol = max(ph_total * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+        diff = abs(ph_total - note_total)
+        if diff > tol:
+            violations.append(
+                f"{speaker_name}: {row['name']} ph_dur total {ph_total:.4f}s vs "
+                f"note_dur total {note_total:.4f}s (diff {diff:.4f}s > tolerance {tol:.4f}s)"
+            )
+    return violations
+
+
 def validate_speaker(
     speaker_name: str, raw_dir: Path, rows: Sequence[Dict[str, str]]
 ) -> List[str]:
@@ -460,6 +509,12 @@ def validate_speaker(
         # 防ぐ最終防衛線）。
         if any(not math.isfinite(d) for d in ph_dur):
             problems.append(f"{speaker_name}: {row['name']} has non-finite ph_dur")
+
+    # fix (2026-08-16, review #264 R3): ph_dur 合計と note_dur 合計のクロス
+    # フィールド不変量は構造的整合性（`check_ph_dur_duration` の「現行 PJS
+    # 素材に既知4件の乖離あり」という経緯とは異なる）であり、常に fail-closed
+    # で扱う（`--strict-duration` の分岐対象にしない）。
+    problems += check_note_dur_consistency(speaker_name, rows)
     return problems
 
 

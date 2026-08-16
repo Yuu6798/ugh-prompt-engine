@@ -161,6 +161,16 @@ PJS_EXPECTED_IDS: Tuple[str, ...] = tuple(f"pjs{i:03d}" for i in range(1, 101))
 # （`ph_seq`/`ph_dur`/`ph_num`/該当ノートの `note_seq`/`note_dur`）から
 # 削除する方式へ変更する（`_drop_dead_phonemes` 参照）。EOF 以前の音素の
 # 境界・値は本修正でも一切変更しない。
+#
+# [P2 修正] (review #264 R3) 上記 R2 修正は、ノート自体は音素を1個以上
+# 残して生存するが末尾側の一部音素だけが truncate/drop されるケース
+# （EOF がノートの途中を切る場合）で、生存ノートの `note_dur` を旧値の
+# まま残していた。これにより ph_dur 合計/wav 長と note_dur 合計が食い違う
+# （新設テストの 1.5s vs 3.5s ケース）。生存ノートの `note_dur` を、その
+# ノートに属する生存音素の新 ph_dur 合計へ再計算するよう修正する
+# （`_drop_dead_phonemes` 参照）。あわせて `build_dataset.py` の readback
+# 検証に ph_dur合計↔note_dur合計のクロスフィールド不変量検査
+# （`check_note_dur_consistency`）を追加する。
 DURATION_REL_TOLERANCE = 0.05
 DURATION_ABS_TOLERANCE_SEC = 0.1
 
@@ -246,18 +256,38 @@ def _drop_dead_phonemes(row: Dict[str, str], ph_dur: List[float]) -> Dict[str, s
     `note_dur`、存在すれば）から丸ごと除去する。`ph_num`/`note_seq`/
     `note_dur` が存在しない・空の行（例: PJS の生 `transcriptions.csv` には
     無いテスト用簡易行）は対象外としてそのままにする。
+
+    [P2 修正] (review #264 R3) EOF がノートの途中を切る場合（ノート自体は
+    音素を 1 個以上残して生存するが、末尾側の一部音素だけが truncate/drop
+    される場合）、生存ノートの `note_dur` を旧値のまま残すと、そのノートに
+    属する生存音素の ph_dur 合計と食い違ったまま（例: ph_dur 合計/wav 長
+    1.5s に対し note_dur 合計が旧値 3.5s のまま）下流 DiffSinger 学習へ渡って
+    しまう。生存ノートの `note_dur` は「そのノートに属する生存音素（keep）
+    の新 ph_dur 合計」へ再計算する（`note_seq` は音高/歌詞情報でありタイミ
+    ングと無関係のため、従来どおりフィルタのみで再計算はしない）。
+
+    この再計算は「1個以上の音素が丸ごと drop されたノート」だけでなく、
+    「1個も drop されていないが末尾の音素が truncate だけされたノート」
+    （＝旧実装が `all(keep)` で早期 return し、`ph_dur` のみ更新して
+    `note_seq`/`note_dur`/`ph_num` に一切触れなかったケース）にも及ぶ
+    必要がある——実 PJS 素材の `pjs031_seg001`（EOF 跨ぎ音素が末尾音素
+    そのものでゼロ化対象なし）で、旧実装のまま note_dur が更新されず
+    `build_dataset.check_note_dur_consistency` に実測で reject されることを
+    確認した。そのため本実装は `all(keep)` による早期 return を廃し、
+    音素の要素削除が不要な場合（`keep` が全て True）でも
+    `ph_num`/`note_seq`/`note_dur` の再計算パスを常に通す（削除対象が無い
+    場合、`surviving_note_indices` は全ノートを含む恒等写像になり、
+    `ph_num`/`note_seq` の値は結果的に無変更のまま返る）。
     """
     keep = [d > 0.0 for d in ph_dur]
     new_row = dict(row)
-    new_row["ph_dur"] = " ".join(str(round(d, 12)) for d in ph_dur)
-    if all(keep):
-        return new_row
 
     ph_seq = row["ph_seq"].split()
     if len(ph_seq) != len(ph_dur):
         # 対応が取れない行は安全側（削除せず ph_dur のみ更新）に倒す。
         # 正常な `transcriptions.csv` では `ph_seq`/`ph_dur` は常に同長
         # （`validate_speaker` が別途 enforce する）ため通常到達しない。
+        new_row["ph_dur"] = " ".join(str(round(d, 12)) for d in ph_dur)
         return new_row
     new_row["ph_seq"] = " ".join(p for p, k in zip(ph_seq, keep) if k)
     new_row["ph_dur"] = " ".join(str(round(d, 12)) for d, k in zip(ph_dur, keep) if k)
@@ -287,7 +317,22 @@ def _drop_dead_phonemes(row: Dict[str, str], ph_dur: List[float]) -> Dict[str, s
         values = values_raw.split()
         if len(values) != len(ph_num):
             continue  # 対応が取れない場合はそのノートフィールドには触れない
-        new_row[note_field] = " ".join(values[i] for i in surviving_note_indices)
+        if note_field == "note_dur":
+            # [P2 修正] (review #264 R3) 生存ノートの note_dur を、その
+            # ノートに属する生存音素の新 ph_dur 合計へ再計算する（ph_dur
+            # 合計との不変量を常に保つ。詳細は関数 docstring 参照）。
+            new_row[note_field] = " ".join(
+                str(round(
+                    sum(
+                        d for note_idx, d, k in zip(note_of_phoneme, ph_dur, keep)
+                        if note_idx == i and k
+                    ),
+                    12,
+                ))
+                for i in surviving_note_indices
+            )
+        else:
+            new_row[note_field] = " ".join(values[i] for i in surviving_note_indices)
 
     return new_row
 
