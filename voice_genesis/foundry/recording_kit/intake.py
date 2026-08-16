@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -74,7 +75,7 @@ import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import soundfile as sf
@@ -265,13 +266,53 @@ def load_ledger(ledger_path: Path) -> dict:
     return ledger
 
 
+def _atomic_write(path: Path, writer: Callable[[Path], None]) -> None:
+    """`path` の親ディレクトリに一意な一時ファイルを**排他生成**し、
+    `writer(tmp_path)` にその中身を書かせてから `path` へ `replace()` する
+    （R14 P1 対応。`save_ledger`/`_restore_ledger` の共通実装）。
+
+    旧実装は `<ledger>.tmp`（`save_ledger`）/ `<ledger>.rollback.tmp`
+    （`_restore_ledger`）という**決定論的**な一時パスを使っており、たとえば
+    `out/user_donor_ledger.json` の隣に無関係な `out/user_donor_ledger.json.tmp`
+    が既に存在した場合、`open("w")`/`write_bytes()` がそれを黙って
+    truncate し、続く `replace()` がそのファイル名ごと消してしまう事故が
+    あった。衝突 preflight（`_check_ledger_path_collisions`）は `--ledger`
+    本体のみを検査対象としており、この決定論的な派生 tmp パスまでは
+    対象に含んでいなかった。
+
+    `tempfile.mkstemp` の排他生成（`O_CREAT | O_EXCL`）へ切り替えることで、
+    既存ファイルへの書き込みが構造的に発生しなくなる（無関係ファイルとの
+    衝突自体が原理的に起こらない）。書き込み中に失敗した場合は tmp ファイルを
+    削除して残さない。
+
+    tmp パスは常に `path.parent` 直下にランダム名で生成される。`--ledger`
+    本体が `_check_ledger_path_collisions` の preflight を通過していれば
+    （incoming 原本・導出出力・staging ディレクトリ自体のいずれとも resolve
+    済みパスで衝突しない）、この tmp パスが同じ集合と衝突することは
+    `mkstemp` の一意生成保証により実質的に起こらない — 本 docstring がその
+    衝突 preflight の適用範囲宣言を兼ねる（R14 P1 レビュー指摘の要求どおり、
+    一時公開パスも preflight の保護対象であることを明記する）。
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        writer(tmp_path)
+        tmp_path.replace(path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 def save_ledger(ledger_path: Path, ledger: dict) -> None:
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = ledger_path.with_suffix(ledger_path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as f:
-        json.dump(ledger, f, ensure_ascii=False, indent=2)
-        f.write("\n")
-    tmp_path.replace(ledger_path)
+
+    def _write(tmp_path: Path) -> None:
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(ledger, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+
+    _atomic_write(ledger_path, _write)
 
 
 def _restore_ledger(ledger_path: Path, previous_bytes: Optional[bytes]) -> None:
@@ -279,16 +320,15 @@ def _restore_ledger(ledger_path: Path, previous_bytes: Optional[bytes]) -> None:
     巻き戻す（R13 P2 対応）。`previous_bytes` が `None`（開始前は台帳が
     存在しなかった）場合は、このバッチが新規生成した台帳を削除する。
 
-    `save_ledger()` と同じ tmp ファイル + `replace()` の手順で書き戻す
-    （巻き戻し処理自体の中断でも中途半端な JSON を `ledger_path` に残さない）。
+    `save_ledger()` と同じ `_atomic_write`（排他生成 tmp + `replace()`）で
+    書き戻す（巻き戻し処理自体の中断でも中途半端な JSON を `ledger_path` に
+    残さない。R14 P1 対応で決定論的 tmp パスを排した）。
     """
     if previous_bytes is None:
         if ledger_path.exists():
             ledger_path.unlink()
         return
-    tmp_path = ledger_path.with_suffix(ledger_path.suffix + ".rollback.tmp")
-    tmp_path.write_bytes(previous_bytes)
-    tmp_path.replace(ledger_path)
+    _atomic_write(ledger_path, lambda tmp_path: tmp_path.write_bytes(previous_bytes))
 
 
 def _check_ledger_path_collisions(
@@ -376,6 +416,19 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
     古いバイト列を、正規化 wav が新しいバイト列を反映するというねじれが
     起き得た。単一 read から得たバイト列をハッシュにも変換入力にも使う
     ことで、ハッシュ対象と変換入力が構造的に一致することを保証する。
+
+    スナップショットは `staging_dir` 直下に置かず、専用サブディレクトリ
+    `staging_dir/src_snapshots/{元ファイル名}` へ配置する（R14 P1 対応）。
+    旧実装は `staging_dir/__src_snapshot__{元ファイル名}` というプレフィクス
+    方式で、公開対象の staged 出力 `staging_dir/{filename}`（トップレベル）
+    と同じ名前空間を共有していた。バッチに `__src_snapshot__z.wav` と
+    `z.norm24k.wav` が同居すると、前者の派生出力名が
+    `__src_snapshot__z.norm24k.wav` になり、これが後者のスナップショット
+    パスと一致してしまう。後発の `write_bytes()` が先発の正規化済み出力を
+    ledger hash 計算後に上書きし、公開されるバイト列が台帳エントリと
+    食い違うミスラベルが発生していた。サブディレクトリへ分離することで、
+    スナップショットのパス空間は staged 出力のパス空間と構造的に交差しない
+    （`staging_dir` 直下の子はスナップショットに一切現れない）。
     """
     card_id = extract_card_id(src.name)
 
@@ -383,7 +436,9 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
     source_size_bytes = len(source_bytes)
 
-    snapshot_path = staging_dir / f"__src_snapshot__{src.name}"
+    snapshot_dir = staging_dir / "src_snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = snapshot_dir / src.name
     snapshot_path.write_bytes(source_bytes)
 
     staged_path = staging_dir / filename

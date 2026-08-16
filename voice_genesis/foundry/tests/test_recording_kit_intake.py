@@ -33,6 +33,14 @@
   そのまま受理していた（`schema == LEDGER_SCHEMA` の完全一致と `entries`
   がリストであることを検証し、不一致は `LedgerSchemaError` で fail-closed
   拒否することで解消）
+- R14 P1 (intake.py:270): `save_ledger`/`_restore_ledger` が使う
+  決定論的な `<ledger>.tmp` パスに、無関係な既存ファイルが偶然存在すると
+  黙って truncate ＋ 消失させてしまう（`tempfile.mkstemp` による排他生成
+  一意 tmp パスへ切り替えて解消）
+- R14 P1 (intake.py:387): `__src_snapshot__{name}` プレフィクス方式の
+  スナップショットパスが、入力の組み合わせ次第で staged 出力名と衝突し
+  得た（`staging_dir/src_snapshots/{元ファイル名}` という専用サブ
+  ディレクトリへ分離することで、名前空間を構造的に非交差にして解消）
 """
 from __future__ import annotations
 
@@ -72,8 +80,10 @@ def _fake_normalize_to_wav(monkeypatch: pytest.MonkeyPatch, *, fail_for: set[str
     例外を送出する（R10 P2 のバッチ途中失敗を再現するため）。
 
     R13 P2 対応で `normalize_to_wav` へ渡される `src` は `process_one` が
-    staging 内へ作るスナップショット（`__src_snapshot__{元ファイル名}`）に
-    変わったため、元ファイル名との一致は完全一致でなく部分一致で判定する。
+    staging 内へ作るスナップショット（R14 P1 以降は
+    `src_snapshots/{元ファイル名}`、ファイル名自体は元ファイル名のまま）に
+    変わったため、元ファイル名との一致は完全一致でなく部分一致で判定する
+    （プレフィクス方式だった旧実装からの互換のため部分一致のまま残す）。
     """
     fail_names = fail_for or set()
 
@@ -579,7 +589,9 @@ def test_process_one_converts_a_staging_snapshot_not_the_original_source(
     assert len(seen_srcs) == 1
     converted_src = seen_srcs[0]
     assert converted_src != src, "ffmpeg 入力は原本ではなく staging 内スナップショットであること"
-    assert converted_src.parent == staging_dir
+    assert converted_src.parent == staging_dir / "src_snapshots", (
+        "スナップショットは専用サブディレクトリ配下でなければならない（R14 P1 対応）"
+    )
     assert converted_src.read_bytes() == b"original donor bytes"
     # 原本は一切書き換えられていない。
     assert src.read_bytes() == b"original donor bytes"
@@ -773,6 +785,142 @@ def test_run_deletes_new_ledger_when_interrupted_and_no_ledger_existed_before(
         "台帳が元々存在しなかった場合は、新規生成された台帳が削除されなければならない"
     )
     assert not out_dir.exists() or list(out_dir.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# R14 P1: 台帳 tmp パスの排他化（無関係な既存ファイルを truncate しない）
+# ---------------------------------------------------------------------------
+
+
+def test_save_ledger_does_not_clobber_unrelated_preexisting_tmp_file(tmp_path: Path) -> None:
+    """R14 P1 の再現: `<ledger>.tmp` という決定論的パスに無関係な既存
+    ファイル（例: `out/user_donor_ledger.json.tmp`）が既にあると、旧実装は
+    それを `open("w")` で黙って truncate し、`replace()` でそのファイル名
+    ごと消してしまっていた。修正後は `tempfile.mkstemp` の排他生成一意
+    パスを使うため、この無関係ファイルは一切変更されない。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    ledger_path = out_dir / "user_donor_ledger.json"
+    unrelated_tmp = out_dir / "user_donor_ledger.json.tmp"
+    unrelated_bytes = b"precious unrelated data, not a ledger tmp file"
+    unrelated_tmp.write_bytes(unrelated_bytes)
+
+    intake.save_ledger(ledger_path, {"schema": intake.LEDGER_SCHEMA, "entries": []})
+
+    assert unrelated_tmp.exists(), "無関係な既存ファイルが消えてはならない"
+    assert unrelated_tmp.read_bytes() == unrelated_bytes
+    assert intake.load_ledger(ledger_path)["entries"] == []
+
+
+def test_restore_ledger_does_not_clobber_unrelated_preexisting_tmp_file(tmp_path: Path) -> None:
+    """`_restore_ledger` も `save_ledger` と同じ `_atomic_write` を使うため、
+    同種の無関係 tmp ファイルを保護する。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    ledger_path = out_dir / "user_donor_ledger.json"
+    ledger_path.write_bytes(b'{"schema": "user-donor-ledger/0.1", "entries": []}')
+    previous_bytes = ledger_path.read_bytes()
+
+    unrelated_tmp = out_dir / "user_donor_ledger.json.tmp"
+    unrelated_bytes = b"precious unrelated data"
+    unrelated_tmp.write_bytes(unrelated_bytes)
+
+    intake._restore_ledger(ledger_path, previous_bytes)
+
+    assert unrelated_tmp.read_bytes() == unrelated_bytes
+    assert ledger_path.read_bytes() == previous_bytes
+
+
+def test_atomic_write_removes_tmp_file_on_writer_failure(tmp_path: Path) -> None:
+    """書き込み中に失敗した場合、tmp ファイルを残さない（fail-closed のクリーン
+    アップ）。"""
+    target = tmp_path / "target.json"
+
+    def _boom(tmp_write_path: Path) -> None:
+        tmp_write_path.write_text("partial", encoding="utf-8")
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        intake._atomic_write(target, _boom)
+
+    assert not target.exists()
+    leftover = list(tmp_path.iterdir())
+    assert leftover == [], "書き込み失敗時は tmp ファイルを残してはならない"
+
+
+def test_run_does_not_clobber_unrelated_ledger_tmp_sibling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R14 P1 の再現（レビュー指摘の実例そのもの）: `out/user_donor_ledger.json`
+    の隣に無関係な `out/user_donor_ledger.json.tmp` が既に存在するバッチを
+    公開しても、その無関係ファイルは無傷のまま残る。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"a")
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    ledger_path = out_dir / "user_donor_ledger.json"
+    unrelated_tmp = out_dir / "user_donor_ledger.json.tmp"
+    unrelated_bytes = b"unrelated pre-existing file"
+    unrelated_tmp.write_bytes(unrelated_bytes)
+
+    entries = intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert len(entries) == 1
+    assert unrelated_tmp.read_bytes() == unrelated_bytes
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# R14 P1: スナップショットの専用サブディレクトリ分離
+# ---------------------------------------------------------------------------
+
+
+def test_run_resolves_snapshot_and_staged_output_namespace_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R14 P1 の再現（レビュー指摘の再現ケースそのもの）: 入力
+    `__src_snapshot__z.wav`（1件目、name 順で先に処理される）の派生出力名は
+    `__src_snapshot__z.norm24k.wav`。旧実装（`staging_dir/__src_snapshot__
+    {元ファイル名}` プレフィクス方式）ではこれが 2 件目 `z.norm24k.wav` の
+    スナップショットパスと一致し、2 件目のスナップショット書き込み
+    （`write_bytes()`）が 1 件目の正規化済み出力を ledger hash 計算後に
+    上書きしてしまっていた（公開されるバイト列と台帳の sha256 が食い違う
+    ミスラベル公開）。修正後はスナップショットが `src_snapshots/` サブ
+    ディレクトリへ分離されるため、この衝突は構造的に起こらない。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "__src_snapshot__z.wav").write_bytes(b"first donor bytes")
+    (incoming_dir / "z.norm24k.wav").write_bytes(b"second donor bytes")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    entries = intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert len(entries) == 2
+    published_files = sorted(out_dir.iterdir())
+    assert len(published_files) == 2, "2 件とも別々のファイルとして公開されていること"
+
+    # 公開されたファイルの実バイト列が台帳の sha256 と食い違っていないこと
+    # （旧実装ではここで 1 件目の公開ファイルが破損値になり不一致が起きていた）。
+    for entry in entries:
+        published = Path(entry.normalized_path)
+        assert published.exists()
+        assert intake.sha256_of(published) == entry.sha256, (
+            f"{published} の実バイト列が台帳の sha256 と食い違っている"
+            "（スナップショット/staged 出力の名前空間衝突によるミスラベル公開）"
+        )
 
 
 # ---------------------------------------------------------------------------

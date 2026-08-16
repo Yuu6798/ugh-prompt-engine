@@ -483,16 +483,26 @@ def check_note_dur_consistency(
     関わらず合計同士の比較を常に行う（AND 条件。両方が独立に違反を検出
     し得る）。
 
-    `note_dur` を持たない行（例: Ritsu 側が `note_dur` を書き出さない場合）
-    はスキップする。数値化できない・非有限な `ph_dur` は他の既存チェック
+    `note_dur` 列そのものを持たない行（例: Ritsu 側が `note_dur` を書き出さない
+    場合）はスキップする。数値化できない・非有限な `ph_dur` は他の既存チェック
     （ph_seq/ph_dur 長さ不一致・非有限 ph_dur 等）が別途検出するため、
     ここではスキップする（全収集してから呼び出し側が判定する設計は
     `check_ph_dur_duration` と同じ）。
+
+    fix (2026-08-16, review #264 R14 P2, build_dataset.py:496): 列は
+    **存在するが値が空文字列** の行（例: CSV セルが空欄）は、旧実装の
+    truthy ガード（`if not note_dur_raw`）が「列が存在しない」場合と同一視
+    してスキップしていた。これにより、直後の `if not note_dur:` による
+    「note_dur が空」の拒否分岐が実際には到達不能になっていた（空文字列は
+    その手前で既に skip されるため）。欠落（列が無い＝optional）と空値
+    （列はあるが値が無い＝不正）を区別し、`row.get("note_dur") is None`
+    （列自体が無い）でのみ skip、空文字列を含む「値はあるが空/空白のみ」の
+    行は後続の空チェックまで通して明示的に拒否する。
     """
     violations: List[str] = []
     for row in rows:
         note_dur_raw = row.get("note_dur")
-        if not note_dur_raw:
+        if note_dur_raw is None:
             continue
         try:
             ph_dur = [float(x) for x in row["ph_dur"].split()]
