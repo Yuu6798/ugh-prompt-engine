@@ -827,6 +827,7 @@ def _publish_exported_acoustic(
     pre_dirty: object,
     pre_status_sha256: object,
     pre_diff_sha256: object,
+    rollback_state: Dict[str, object],
 ) -> None:
     """review #264 R27 P2: `run_export_acoustic()` が返した `staging_dir` を、
     diffsinger_repo の post snapshot 取得 + `_check_diffsinger_repo_stable()`
@@ -837,6 +838,36 @@ def _publish_exported_acoustic(
     が `SystemExit`）時は `staging_dir` を削除して canonical（旧世代があれば
     それ）を無傷のまま残す — 「新 ONNX + 旧 gate summary」の混成世代が
     publish される窓を閉じる（`run_export_acoustic()` docstring 参照）。
+
+    review #264 R30 P2 (rename-to-bookkeeping window): 従来は呼び出し元
+    `_cmd_run_impl` が本関数の呼び出し**直後**の後続代入
+    （`_rollback_state["onnx_out_path"] = exported_dir`）で公開先を記帳して
+    いた。本関数の唯一の残り処理が `_swap_step_dir_into_place()` であり、
+    それが正常 return した（＝canonical への公開が完了した）**直後**・
+    呼び出し元のその代入文が実行される**前**に `KeyboardInterrupt`/
+    `SystemExit` が割り込むと、`cmd_run()` の rollback wrapper は
+    `onnx_out_path is None` のまま「未公開」と誤認して巻き戻しを skip し、
+    新 ONNX と旧 `gate_synth_summary.json` の混成公開状態が残っていた
+    （R28 が閉じた窓と対称）。
+
+    修正: 記帳を呼び出し元の後続代入ではなく、本関数内で
+    `_swap_step_dir_into_place()` 呼び出しを直接くるむ `try/finally` へ
+    移す。`_swap_step_dir_into_place()` の契約上、例外を外へ伝播させずに
+    正常 return するのは `staging_dir` が公開先（`out_path`）へ完全に
+    rename され尽くして消滅した場合のみであり、内部の rename が失敗すれば
+    POSIX `rename(2)` のディレクトリ単位 atomic 性により `staging_dir` は
+    部分状態を残さず存在し続ける（`_swap_step_dir_into_place` docstring
+    参照）。したがってフラグ的な後続代入ではなく `staging_dir.exists()`
+    という実ファイルシステム状態から公開完了を導出する（`_cmd_run_impl`
+    が `"swapped"` に対して R29 で確立した同型パターン）。
+
+    この `finally` は `_check_diffsinger_repo_stable()` 失敗時の早期
+    `except BaseException` 節（`staging_dir` を削除して即 raise）とは別の
+    より内側の try/finally であり、検査失敗で早期リターンする経路は
+    `_swap_step_dir_into_place()` 自体を一度も呼ばないためこの finally には
+    到達しない（構造的に「早期失敗による削除」と「swap 成功による消費」を
+    混同しない——両者とも事後の `staging_dir.exists()` は False になり得る
+    ため、finally のスコープをこの呼び出しだけに絞ることで曖昧さを排除する）。
     """
     (
         post_head, post_dirty, post_status_sha256, post_diff_sha256,
@@ -850,7 +881,11 @@ def _publish_exported_acoustic(
     except BaseException:
         shutil.rmtree(staging_dir, ignore_errors=True)
         raise
-    _swap_step_dir_into_place(staging_dir, out_path)
+    try:
+        _swap_step_dir_into_place(staging_dir, out_path)
+    finally:
+        if not staging_dir.exists():
+            rollback_state["onnx_out_path"] = out_path
 
 
 def run_export_acoustic(
@@ -1683,6 +1718,18 @@ def _cmd_run_impl(args, _rollback_state: Dict[str, object]) -> None:
     「実際には公開済みなのに `swapped=False`」という誤判定を生み、
     `cmd_run` 側の不要なロールバックが「新 summary + 旧 ONNX」の逆混成を
     再導入し得た）。
+
+    review #264 R30 P2: `"onnx_out_path"` も同じ原則で書き込む。従来は
+    `_publish_exported_acoustic()` 呼び出しの直後、本関数側の後続代入
+    （`_rollback_state["onnx_out_path"] = exported_dir`）で記帳していたが、
+    その代入文実行前の中断窓が「新 ONNX + 旧 gate summary」の混成を再導入し
+    得た（`_publish_exported_acoustic` docstring 参照）。修正: `_rollback_
+    state` を `_publish_exported_acoustic()` へ直接渡し、同関数内部の
+    `_swap_step_dir_into_place()` をくるむ `finally` から `staging_dir.
+    exists()`（実ファイルシステム状態）で書き込ませる。これにより
+    `_rollback_state` の全フィールドが「後続代入」ではなく「対応する
+    不可逆操作を直接くるむ finally からの fs 状態導出」という単一の原則に
+    統一される。
     """
     canon_model_dir = Path(args.canon_model_dir)
     vocoder_dir = Path(args.vocoder_dir)
@@ -1776,6 +1823,12 @@ def _cmd_run_impl(args, _rollback_state: Dict[str, object]) -> None:
     # `gate_synth_summary.json` が常に同一の完走 run 由来であることを保証する
     # （`_rollback_swapped_step_dir` docstring 参照）。skip-export 経路では
     # 公開自体が発生しないため None のまま。
+    #
+    # review #264 R30 P2: この記録自体は本呼び出しの**後続代入**ではなく、
+    # `_publish_exported_acoustic()` 内部の `_swap_step_dir_into_place()` を
+    # くるむ `try/finally` から書き込まれる（`_publish_exported_acoustic`
+    # docstring 参照）。公開直後・呼び出し元の代入前という中断窓を
+    # 構造的に消すため、`_rollback_state` を本関数へ直接渡す。
     if args.skip_export:
         acoustic_dir = Path(args.acoustic_dir)
         acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
@@ -1801,8 +1854,8 @@ def _cmd_run_impl(args, _rollback_state: Dict[str, object]) -> None:
             diffsinger_repo_path, staging_dir, exported_dir,
             diffsinger_repo_pre_head, diffsinger_repo_pre_dirty,
             diffsinger_repo_pre_status_sha256, diffsinger_repo_pre_diff_sha256,
+            _rollback_state,
         )
-        _rollback_state["onnx_out_path"] = exported_dir
         acoustic_dir = exported_dir
         acoustic_onnx_path = exported_dir / "acoustic.onnx"
         acoustic_dsconfig_path = exported_dir / "dsconfig.yaml"
@@ -2281,6 +2334,15 @@ def cmd_run(args) -> None:
     `finally` で `build_dir.exists()` から導出される（Python の代入
     タイミングに依存しない。`_cmd_run_impl` docstring 参照）。ここでの
     参照方法は変わらない。
+
+    review #264 R30 P2: `"onnx_out_path"` の書き込み自体も、`_cmd_run_impl`
+    が呼ぶ `_publish_exported_acoustic()` 内の `finally` で `staging_dir.
+    exists()` から導出される（`_publish_exported_acoustic` docstring
+    参照）。ここでの参照方法（`onnx_out_path is not None and not
+    rollback_state["swapped"]`）は変わらない——`_rollback_state` の全
+    フィールドが「対応する不可逆操作を直接くるむ finally からの fs 状態
+    導出」で埋まるようになったことで、このラッパー自身の読み取りロジックは
+    無変更のまま rename-to-bookkeeping 窓が構造的に閉じる。
     """
     rollback_state: Dict[str, object] = {"onnx_out_path": None, "swapped": False}
     try:

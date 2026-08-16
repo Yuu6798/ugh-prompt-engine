@@ -435,6 +435,97 @@ def test_cmd_run_still_rolls_back_onnx_when_synth_swap_itself_fails_before_compl
     assert not (out_dir / "onnx_gate_5000.old").exists()
 
 
+def test_cmd_run_rolls_back_onnx_when_interrupted_right_after_onnx_swap_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """review #264 R30 P2 再現・是正確認 (gate_synth.py:1805 スレッド)。
+
+    旧実装は `_publish_exported_acoustic()` 呼び出し**直後**の後続代入
+    （`_rollback_state["onnx_out_path"] = exported_dir`）で `onnx_gate_<step>`
+    の公開先を記帳していた。`_publish_exported_acoustic()` の唯一の残り
+    処理である `_swap_step_dir_into_place()` 自体は正常 return（=
+    `onnx_gate_<step>` への公開が完了）していても、その代入文が実行される
+    **前**に `KeyboardInterrupt`/`SystemExit` が割り込むケースを、本物の
+    `_swap_step_dir_into_place` を呼んだ直後（＝旧代入相当の位置）に例外を
+    送出する monkeypatch で再現する。
+
+    修正前: `_rollback_state["onnx_out_path"]` は `None` のまま `cmd_run` の
+    rollback wrapper へ伝わり、`onnx_out_path is not None` の条件が成立せず
+    ロールバックが skip される——既に新世代へ差し替わった `onnx_gate_<step>`
+    が、公開されなかった旧 `gate_synth_summary.json` と組み合わさって
+    「新 ONNX + 旧 gate summary」の混成公開状態が残っていた。
+    修正後: 記帳は `_publish_exported_acoustic()` 内部の `finally` で
+    `staging_dir.exists()`（実ファイルシステム状態）から導出されるため、
+    このタイミングの中断でも公開完了が正しく認識され、`onnx_gate_<step>`
+    は正しくロールバックされて旧世代へ復元される。
+    """
+    diffsinger_repo = tmp_path / "diffsinger_repo"
+    _make_diffsinger_export_repo(diffsinger_repo, b"ONNX-GEN-1")
+    ckpt_dir_1 = _make_ckpt_dir(tmp_path, "ckpt_1", b"CKPT-1", b"CONFIG-1")
+    canon_model_dir = _make_canon_model_dir(tmp_path)
+    vocoder_dir = _make_vocoder_dir(tmp_path)
+    out_dir = tmp_path / "out"
+    singer_dir = _make_singer_dir(tmp_path)
+
+    fake_record = {
+        "wav_path": "fake.wav", "wav_sha256": "0" * 64, "wav_duration_sec": 0.1,
+        "wav_rms": 0.0, "wav_peak": 0.0,
+        "score": {"n_phonemes": 0},
+        "stage3_dual_encoding_diverged": False, "stage3_mode": "fake",
+        "stage3_depth": None, "stage3_steps": None, "stage3_speaker": None,
+    }
+    monkeypatch.setattr(gs, "synth_song", lambda *a, **k: dict(fake_record))
+
+    # --- 1回目: 完走させて旧世代を作る。
+    args1 = _make_run_args(
+        diffsinger_repo=diffsinger_repo, ckpt_dir=ckpt_dir_1,
+        canon_model_dir=canon_model_dir, vocoder_dir=vocoder_dir,
+        out_dir=out_dir, singer_dir=singer_dir,
+    )
+    gs.cmd_run(args1)
+
+    onnx_out_path = out_dir / "onnx_gate_5000"
+    summary_path = out_dir / "step_5000" / "gate_synth_summary.json"
+    old_generation_onnx_bytes = (onnx_out_path / "acoustic.onnx").read_bytes()
+    old_generation_summary_bytes = summary_path.read_bytes()
+
+    # --- 2回目: onnx_gate_5000 への swap は完走するが、その直後
+    # （旧実装の後続代入に相当する位置）で中断する。`_swap_step_dir_into_place`
+    # は 1 run 中に 2 回呼ばれる（onnx_gate_<step> 公開 / synth_out_dir 公開）
+    # ため、公開先が `onnx_gate_5000` の場合にだけ割り込む。
+    (diffsinger_repo / "scripts" / "export.py").write_text(
+        _EXPORT_PY_TEMPLATE.format(onnx_bytes=b"ONNX-GEN-2-SHOULD-BE-ROLLED-BACK"),
+        encoding="utf-8",
+    )
+    ckpt_dir_2 = _make_ckpt_dir(tmp_path, "ckpt_2", b"CKPT-2", b"CONFIG-2")
+
+    real_swap = gs._swap_step_dir_into_place
+
+    def _swap_then_interrupt(build_dir: Path, out_dir_arg: Path) -> None:
+        real_swap(build_dir, out_dir_arg)  # 本物の rename を完走させる。
+        if out_dir_arg == onnx_out_path:
+            raise RuntimeError(
+                "interrupted right after onnx swap completed (test-injected)"
+            )
+
+    monkeypatch.setattr(gs, "_swap_step_dir_into_place", _swap_then_interrupt)
+
+    args2 = _make_run_args(
+        diffsinger_repo=diffsinger_repo, ckpt_dir=ckpt_dir_2,
+        canon_model_dir=canon_model_dir, vocoder_dir=vocoder_dir,
+        out_dir=out_dir, singer_dir=singer_dir,
+    )
+    with pytest.raises(RuntimeError, match="interrupted right after"):
+        gs.cmd_run(args2)
+
+    # onnx_gate_5000 は旧世代へロールバックされている——中断タイミングに
+    # 関わらず公開完了が正しく認識され、rollback wrapper が発火した証拠。
+    assert (onnx_out_path / "acoustic.onnx").read_bytes() == old_generation_onnx_bytes
+    # summary も旧世代のまま（新規 build_dir は未公開のまま finally で掃除される）。
+    assert summary_path.read_bytes() == old_generation_summary_bytes
+    assert not (out_dir / "onnx_gate_5000.old").exists()
+
+
 def test_cmd_run_publishes_onnx_when_run_completes_successfully(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -295,11 +295,15 @@ def test_publish_exported_acoustic_swaps_canonical_on_stable_checkout(
         repo_dir, ckpt_dir, "s1_gate", 5000, out_dir
     )
 
-    gs._publish_exported_acoustic(repo_dir, staging_dir, out_path, *pre)
+    rollback_state: dict = {"onnx_out_path": None}
+    gs._publish_exported_acoustic(repo_dir, staging_dir, out_path, *pre, rollback_state)
 
     assert out_path.exists()
     assert (out_path / "acoustic.onnx").read_bytes() == b"ONNX-STABLE"
     assert not staging_dir.exists()
+    # review #264 R30 P2: 公開完了は本関数内の finally から記帳される
+    # （呼び出し元の後続代入には依存しない）。
+    assert rollback_state["onnx_out_path"] == out_path
 
 
 def test_publish_exported_acoustic_leaves_canonical_untouched_on_unstable_checkout(
@@ -319,9 +323,11 @@ def test_publish_exported_acoustic_leaves_canonical_untouched_on_unstable_checko
     staging_dir1, out_path, _, _ = gs.run_export_acoustic(
         repo_dir, ckpt_dir_a, "s1_gate", 5000, out_dir
     )
-    gs._publish_exported_acoustic(repo_dir, staging_dir1, out_path, *pre1)
+    rollback_state1: dict = {"onnx_out_path": None}
+    gs._publish_exported_acoustic(repo_dir, staging_dir1, out_path, *pre1, rollback_state1)
     old_generation_bytes = (out_path / "acoustic.onnx").read_bytes()
     assert old_generation_bytes == b"ONNX-STABLE"
+    assert rollback_state1["onnx_out_path"] == out_path
 
     # 2 回目: exporter 自体が checkout を動かす（安定性検査が fail-closed で
     # 拒否するはずのシナリオ）。
@@ -337,10 +343,15 @@ def test_publish_exported_acoustic_leaves_canonical_untouched_on_unstable_checko
     # staging には新世代が既に書き出されている（swap 前）。
     assert (staging_dir2 / "acoustic.onnx").read_bytes() == b"ONNX-FROM-UNSTABLE-CHECKOUT"
 
+    rollback_state2: dict = {"onnx_out_path": None}
     with pytest.raises(SystemExit):
-        gs._publish_exported_acoustic(repo_dir, staging_dir2, out_path2, *pre2)
+        gs._publish_exported_acoustic(repo_dir, staging_dir2, out_path2, *pre2, rollback_state2)
 
     # canonical は旧世代のまま無傷 — 新 ONNX が混成公開されていない。
     assert (out_path / "acoustic.onnx").read_bytes() == old_generation_bytes
     # staging は掃除され、リークしていない。
     assert not staging_dir2.exists()
+    # review #264 R30 P2 回帰ガード: 検査失敗で `_swap_step_dir_into_place()`
+    # 自体を一度も呼ばない経路では、`rollback_state` へ書き込まれない
+    # （早期削除を「swap 完了」と混同しない）。
+    assert rollback_state2["onnx_out_path"] is None
