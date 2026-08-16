@@ -57,6 +57,18 @@ skip 仕様は他の呼び出し元のため変更せず）全 pitch dir の oto
 を全収集してから、実際の WAV 読み込み/書き込みを一切始める前に fail-closed
 で拒否する（`missing_wavs`/`wav_ref_violations` と同じ「全収集してから公開前
 に止める」設計）。
+
+review #263 R14 P2: R13 の `_find_malformed_oto_lines` は行が残っているが
+malformed（フィールド数不一致・非数値値）な場合のみ検出できる。有効な行が
+丸ごと削除された場合（`=` を含む行自体が存在しない）は R13 検査を素通りし、
+`parse_oto_text` も件数が減ったことを黙って許容するため、縮小コーパスの
+まま成功報告してしまう余地が残っていた。素材 pin 済み voicebank（強連続音
+Ver1.5.1）の実測値（`EXPECTED_OTO_ENTRIES` = A3/F4 各 1237 エントリ）を
+期待契約として保持し、パース後の実エントリ総数と照合する。不一致があれば
+（行削除・truncation による `=` 喪失のいずれでも）全 pitch dir 分を集約して
+から、実際の読み込み/書き込みを一切始める前に fail-closed で拒否する
+（`--expected-oto-entries` で override 可。別 voicebank を意図的に使う運用
+のための脱出弁で、既定は厳格）。
 """
 from __future__ import annotations
 
@@ -83,6 +95,13 @@ import donor_bank_utau as dbu  # noqa: E402  read-only import
 DEFAULT_PITCH_DIRS: Tuple[str, ...] = ("A3", "F4")
 SP_THRESHOLD_MS = 20.0
 MIN_PHONEME_MS = 1.0  # 退化区間 (<=0ms) のガード用フロア
+
+# 素材 pin 済み voicebank（波音リツ 強連続音 Ver1.5.1）の実測エントリ総数
+# (review #263 R14 P2)。`_convert_into` はパース後の実エントリ総数をこの
+# 契約値と照合し、不一致（行削除・truncation による `=` 喪失）を公開前に
+# fail-closed で検出する。別 voicebank を意図的に使う場合は
+# `--expected-oto-entries` で override（`none` で無効化）する。
+EXPECTED_OTO_ENTRIES: Dict[str, int] = {"A3": 1237, "F4": 1237}
 
 # ---------------------------------------------------------------------------
 # 1. Ritsu 公式辞書 (617 語彙) パーサ（PyYAML の bool 誤変換回避のため手書き）
@@ -233,6 +252,49 @@ class MalformedOtoEntryError(ValueError):
     から、実際の読み込み/書き込みを一切始める前に fail-closed で拒否する
     （`WavPathEscapeError`/`MissingSourceWavError` と同じ「全収集してから
     公開前に止める」設計）。"""
+
+
+class UnexpectedOtoEntryCountError(ValueError):
+    """P2 修正 (review #263 R14): pitch dir ごとにパースされた oto エントリ
+    総数が期待契約（既定: `EXPECTED_OTO_ENTRIES`、素材 pin 済み voicebank
+    強連続音 Ver1.5.1 の実測値）と一致しない場合に送出する（fail-closed）。
+
+    `_find_malformed_oto_lines`（R13）は行が残っているが malformed な場合
+    のみ検出でき、有効な行が丸ごと削除された場合（`=` を含む行自体が消える）
+    は検出できない。パース後の実エントリ総数を契約値と照合することで、
+    行削除・truncation による `=` 喪失のいずれも公開前に検出する。全
+    pitch dir 分を集約してから、実際の読み込み/書き込みを一切始める前に
+    fail-closed で拒否する（`MalformedOtoEntryError`/`WavPathEscapeError`
+    と同じ「全収集してから公開前に止める」設計）。"""
+
+
+def _parse_expected_oto_entries_arg(value: str) -> Dict[str, int]:
+    """`--expected-oto-entries` の値を解釈する (review #263 R14)。
+
+    - `"none"`（大小文字無視）: 期待件数契約を無効化する（空 dict を返す =
+      どの pitch dir も件数チェック対象外になる）
+    - `"A3=1237,F4=1237"`: 明示的な override dict を返す。素材 pin 済み
+      voicebank（強連続音 Ver1.5.1）以外を意図的に使う場合の脱出弁。
+    """
+    if value.strip().lower() == "none":
+        return {}
+    result: Dict[str, int] = {}
+    for pair in value.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        key, sep, val = pair.partition("=")
+        key = key.strip()
+        val = val.strip()
+        if not sep or not key or not val:
+            raise ValueError(f"invalid --expected-oto-entries entry: {pair!r}")
+        try:
+            result[key] = int(val)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid --expected-oto-entries count for {key!r}: {val!r}"
+            ) from exc
+    return result
 
 
 def _find_malformed_oto_lines(text: str) -> List[Tuple[int, str]]:
@@ -407,6 +469,7 @@ def convert(
     dsdict_path: Path,
     out_dir: Path,
     pitch_dirs: Sequence[str] = DEFAULT_PITCH_DIRS,
+    expected_oto_entries: Optional[Dict[str, int]] = None,
 ) -> dict:
     """リツ voicebank の pitch dir 群を変換し、`out_dir` に
     `transcriptions.csv` / `wavs/` / `provenance.json` / `d2_stats.json` を
@@ -416,14 +479,22 @@ def convert(
     `out_dir` と原子的に swap する（review #263 R3 P1: 途中失敗や再実行時に
     旧世代 WAV/CSV が新世代と混在するのを防ぐ）。失敗時は staging を削除し
     既存の `out_dir` はそのまま残す。統計 dict を返す（呼び出し側で JSON
-    保存・print する）。"""
+    保存・print する）。
+
+    `expected_oto_entries`（review #263 R14）: pitch dir 名 -> 期待エントリ
+    総数。`None`（省略時）は既定の `EXPECTED_OTO_ENTRIES` を使う。空 dict
+    (`{}`) を渡すと契約チェックを無効化する。"""
     out_dir = Path(out_dir)
+    if expected_oto_entries is None:
+        expected_oto_entries = dict(EXPECTED_OTO_ENTRIES)
     staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
     staging_dir.mkdir(parents=True)
     try:
-        summary = _convert_into(voicebank_root, dsdict_path, staging_dir, pitch_dirs)
+        summary = _convert_into(
+            voicebank_root, dsdict_path, staging_dir, pitch_dirs, expected_oto_entries
+        )
         _swap_into_place(staging_dir, out_dir)
     except BaseException:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -436,6 +507,7 @@ def _convert_into(
     dsdict_path: Path,
     out_dir: Path,
     pitch_dirs: Sequence[str],
+    expected_oto_entries: Dict[str, int],
 ) -> dict:
     """`convert()` の本体。`out_dir`（呼び出し元では fresh な staging dir）
     に `transcriptions.csv` / `wavs/` / `provenance.json` / `d2_stats.json`
@@ -454,6 +526,7 @@ def _convert_into(
     pitch_dir_entries: Dict[str, "OrderedDict[str, List[dbu.OtoEntry]]"] = {}
     wav_ref_violations: List[str] = []
     malformed_oto_lines: List[str] = []
+    oto_entry_count_violations: List[str] = []
     for pdir_name in pitch_dirs:
         pdir = voicebank_root / pdir_name
         oto_path = pdir / "oto.ini"
@@ -466,6 +539,15 @@ def _convert_into(
             for lineno, content in _find_malformed_oto_lines(oto_text)
         )
         oto_entries = dbu.parse_oto_text(oto_text)
+        # review #263 R14 P2: 有効な行が丸ごと削除された場合（malformed 行
+        # として検出されない）を捕捉するため、パース後の実エントリ総数を
+        # 期待契約 `expected_oto_entries` と照合する。契約が存在しない
+        # pitch dir（override で対象外にした場合）はチェックしない。
+        expected_n = expected_oto_entries.get(pdir_name)
+        if expected_n is not None and len(oto_entries) != expected_n:
+            oto_entry_count_violations.append(
+                f"{pdir_name}: parsed {len(oto_entries)} entries, expected {expected_n}"
+            )
         entries_by_wav: "OrderedDict[str, List[dbu.OtoEntry]]" = OrderedDict()
         for e in oto_entries:
             entries_by_wav.setdefault(e.wav_filename, []).append(e)
@@ -482,6 +564,14 @@ def _convert_into(
             "(dbu.parse_oto_text would silently skip these — fail-closed "
             "before any read/write, corpus not published): "
             + "; ".join(sorted(malformed_oto_lines))
+        )
+
+    if oto_entry_count_violations:
+        raise UnexpectedOtoEntryCountError(
+            f"{len(oto_entry_count_violations)} pitch dir(s) have unexpected oto "
+            "entry count(s) (row deletion or truncated '=' loss would silently "
+            "reduce the corpus — fail-closed before any read/write, corpus not "
+            "published): " + "; ".join(sorted(oto_entry_count_violations))
         )
 
     if wav_ref_violations:
@@ -682,7 +772,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--pitch-dirs", nargs="+", default=list(DEFAULT_PITCH_DIRS),
         help=f"走査する pitch dir 名 (既定: {list(DEFAULT_PITCH_DIRS)})",
     )
+    parser.add_argument(
+        "--expected-oto-entries", default=None,
+        help="pitch dir ごとの期待 oto エントリ総数契約 (review #263 R14)。"
+             f"既定は素材 pin 済み voicebank（強連続音 Ver1.5.1）の実測値 "
+             f"{EXPECTED_OTO_ENTRIES}。'A3=1237,F4=1237' 形式で override、"
+             "'none' で無効化できる（別 voicebank を意図的に使う場合）。",
+    )
     args = parser.parse_args(argv)
+
+    if args.expected_oto_entries is None:
+        expected_oto_entries = dict(EXPECTED_OTO_ENTRIES)
+    else:
+        try:
+            expected_oto_entries = _parse_expected_oto_entries_arg(args.expected_oto_entries)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
     # [P1 修正] (review #263 R5) --out-dir が --voicebank-root/--dsdict と
     # 重なる場合、staging 構築や swap を始める前（公開開始前）に fail-closed
@@ -708,7 +814,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    summary = convert(args.voicebank_root, args.dsdict, args.out_dir, args.pitch_dirs)
+    summary = convert(
+        args.voicebank_root, args.dsdict, args.out_dir, args.pitch_dirs, expected_oto_entries
+    )
 
     print(f"n_segments={summary['n_segments']}")
     print(f"n_wav_total={summary['n_wav_total']}")

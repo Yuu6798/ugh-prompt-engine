@@ -817,7 +817,12 @@ class OutputCollisionError(ValueError):
     使い回して過去の export 成果物を `--out-dir` 配下に置いたまま同じ木を
     `--out-dir` に再指定すると、`_swap_step_dir_into_place` の rename が
     既に読み込み済みのモデル束を `.old` へ退避し、次回実行時にその `.old`
-    が rmtree される（モデル束の消失）。"""
+    が rmtree される（モデル束の消失）。
+
+    review #263 R14 P1: モデル重み（onnx/ckpt）だけでなく、`--singer-dir`
+    （score.py/score_umi.py の実装ルート）や `gate_synth.py` 自身の親
+    ディレクトリも `--out-dir` に指定され得る load 済み実装ルートであり、
+    同様に `.old` 退避 -> 次回 rmtree で消失し得るため保護対象に含める。"""
 
 
 def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequence[Path]) -> None:
@@ -948,7 +953,21 @@ def cmd_run(args):
     # resolve 済みの全モデル入力を、公開（swap）を始める前に `synth_out_dir`
     # 本体・その派生パス（`.old`/`.build-<pid>`）・`out_dir`（export 自体が
     # 直接書き込む先）に対して衝突拒否する。
-    protected_model_roots: List[Path] = [canon_model_dir, vocoder_dir]
+    #
+    # R14 レビュー指摘 (PR #263, gate_synth.py:955, P1): 上記はモデル重み
+    # （onnx/ckpt）のみを保護しており、`--skip-export` かつ `--step` 省略の
+    # S0 互換検証パスでは `--singer-dir`（score.py/score_umi.py の実装
+    # ルート。`load_song_module` が本体をロードする）や本スクリプト自身の
+    # 親ディレクトリ（`gate_synth.py` 自体もこの後 `sha256_file(__file__)`
+    # で読み直す）が衝突ガード対象外だった。`--out-dir` をこれらへ指定すると
+    # synth_out_dir==out_dir のまま preflight を素通りし、合成完了後に
+    # `_swap_step_dir_into_place` がスコア実装/本スクリプトの所在ディレクトリ
+    # を gate 成果物へ差し替え、次回実行時の `.old` rmtree で実装コード
+    # そのものが消失し得る。load する実装ルート（`singer_dir` と
+    # `Path(__file__).resolve().parent`）も保護対象へ追加する。
+    protected_model_roots: List[Path] = [
+        canon_model_dir, vocoder_dir, singer_dir, Path(__file__).resolve().parent,
+    ]
     if args.skip_export:
         protected_model_roots.append(Path(args.acoustic_dir))
     elif args.ckpt_dir:
@@ -1116,11 +1135,36 @@ def cmd_run(args):
 
 def cmd_mapping_check(args):
     diffsinger_repo = Path(args.diffsinger_repo)
-    canon_phonemes = load_canon_phonemes(Path(args.canon_phonemes_txt))
-    own_phonemes = build_own_dictionary_from_binarize(diffsinger_repo, Path(args.own_dictionary_ja))
-    result = build_phoneme_mapping(own_phonemes, canon_phonemes)
+    own_dictionary_ja = Path(args.own_dictionary_ja)
+    canon_phonemes_txt = Path(args.canon_phonemes_txt)
     out_path = Path(args.out) if args.out else Path("mapping_check.json")
-    out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # R14 レビュー指摘 (PR #263, gate_synth.py:1123, P2): --out が
+    # --own-dictionary-ja/--canon-phonemes-txt（または --diffsinger-repo）と
+    # 一致すると、両入力をメモリへ読み込み済みのこの後の書き込みが入力
+    # 辞書ファイルそのものを mapping JSON で黙って置き換え・破壊してしまう。
+    # resolve 済みの全入力と --out を、実際の読み込みを始める前に衝突照合し
+    # fail-closed で拒否する（入力は読み込み前のため無傷のまま失敗する）。
+    try:
+        _reject_output_collision(
+            [out_path], protected_roots=[diffsinger_repo, own_dictionary_ja, canon_phonemes_txt]
+        )
+    except OutputCollisionError as exc:
+        raise SystemExit(f"error: {exc}")
+
+    canon_phonemes = load_canon_phonemes(canon_phonemes_txt)
+    own_phonemes = build_own_dictionary_from_binarize(diffsinger_repo, own_dictionary_ja)
+    result = build_phoneme_mapping(own_phonemes, canon_phonemes)
+
+    # [P2 修正] (review #263 R14) 直接 write_text は書き込み途中で kill
+    # された場合に破損 JSON が out_path へ残り得る。同一ディレクトリへ
+    # 一時ファイルを書いてから os.replace() で原子的に差し替える
+    # （convert_pjs.py `write_lang_def` と同型パターン。POSIX の `rename(2)`
+    # は同一ファイルシステム内で atomic）。
+    tmp_path = out_path.parent / f".{out_path.name}.tmp-{os.getpid()}"
+    tmp_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp_path, out_path)
+
     print(json.dumps({k: v for k, v in result.items() if k != "mapping"}, indent=2, ensure_ascii=False))
     print(f"| full mapping table: {out_path}")
 

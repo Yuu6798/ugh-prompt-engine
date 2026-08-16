@@ -70,6 +70,16 @@ review #263 R11 で 1 件追加修正: 上記 R10 のバックアップは `--la
 書き込み前に対象パスの存在有無を記録し、新規パスだった場合は失敗時に
 作成物を `unlink` して「実行前は存在しなかった」状態へ戻す（既存ファイル
 ケースの復元動作は無変更）。
+
+review #263 R14 P1: `stage_song_wavs` は `.lab`/`_song.wav` の存在判定に
+`exists()` を使うが、`exists()` は symlink 解決先までは検査しない。期待
+`.lab`/`_song.wav` 自体が `--pjs-root` 外を指す symlink（逃避）の場合、
+`exists()` は素通りし、本スクリプトが張るステージング symlink もその逃避を
+そのまま引き継ぐ。結果として `db_converter.py` が pjs-root 外の任意ラベル/
+音声を黙って学習に取り込みつつ、100 曲ペアのゲートは通過してしまう。
+`.lab`/`_song.wav` を `resolve()` し、pjs-root（resolve 済み）配下に収まら
+ないものを全収集し、symlink を張る前に公開前 fail-closed で拒否する
+（`missing_pairs` と同じ「全収集してから公開前に止める」設計）。
 """
 from __future__ import annotations
 
@@ -162,7 +172,10 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
 
 
 def stage_song_wavs(
-    pjs_root: Path, staging_dir: Path, missing_pairs: Optional[List[str]] = None
+    pjs_root: Path,
+    staging_dir: Path,
+    missing_pairs: Optional[List[str]] = None,
+    escaped_pairs: Optional[List[str]] = None,
 ) -> int:
     """`PJS_corpus_ver1.1/pjsNNN/` 配下の song 系のみをシンボリックリンクで
     `pjsNNN.lab` / `pjsNNN.wav` としてリネームする。冪等（既存リンクは張り
@@ -187,6 +200,16 @@ def stage_song_wavs(
     するのではなく、契約どおりの期待 ID 集合 `PJS_EXPECTED_IDS`
     （pjs001-pjs100）に対して走査することで、ディレクトリ丸ごと欠落と
     片方欠けの双方を同じ `missing_pairs` 経路で検出する。
+
+    [P1 修正] (review #263 R14) `.lab`/`_song.wav` の存在判定に使う
+    `exists()` は symlink 解決先までは検査しないため、期待 `.lab`/
+    `_song.wav` 自体が `pjs_root` 外を指す symlink（逃避）であっても素通り
+    し、本関数が張るステージング symlink もその逃避先をそのまま指してしまう
+    （`db_converter.py` が pjs_root 外の任意ラベル/音声を黙って学習に取り
+    込む）。両ソースを `resolve()` し、pjs_root（resolve 済み）配下に
+    収まらないものは `escaped_pairs` へ収集して symlink を張らずスキップ
+    する（`missing_pairs` と同じ「全収集してから公開前に止める」経路で
+    呼び出し元が一括判定する）。
     """
     pjs_root = pjs_root.resolve()
     staging_dir.mkdir(parents=True, exist_ok=True)
@@ -198,6 +221,12 @@ def stage_song_wavs(
         if not lab_src.exists() or not wav_src.exists():
             if missing_pairs is not None:
                 missing_pairs.append(name)
+            continue
+        lab_resolved = lab_src.resolve()
+        wav_resolved = wav_src.resolve()
+        if not lab_resolved.is_relative_to(pjs_root) or not wav_resolved.is_relative_to(pjs_root):
+            if escaped_pairs is not None:
+                escaped_pairs.append(name)
             continue
         for dst, src in ((staging_dir / f"{name}.lab", lab_src), (staging_dir / f"{name}.wav", wav_src)):
             if dst.is_symlink() or dst.exists():
@@ -414,7 +443,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     swapped = False
     try:
         missing_pairs: List[str] = []
-        n_staged = stage_song_wavs(args.pjs_root, build_dir, missing_pairs)
+        escaped_pairs: List[str] = []
+        n_staged = stage_song_wavs(args.pjs_root, build_dir, missing_pairs, escaped_pairs)
         if n_staged == 0:
             print(f"error: no pjsNNN song wav found under {args.pjs_root}", file=sys.stderr)
             return 1
@@ -427,6 +457,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 f"error: {len(missing_pairs)} pjsNNN song dir(s) missing .lab or "
                 f"_song.wav under {args.pjs_root} (fail-closed, not staged/published): "
                 + ", ".join(missing_pairs),
+                file=sys.stderr,
+            )
+            return 1
+        if escaped_pairs:
+            # [P1 修正] (review #263 R14) .lab/_song.wav 自体が pjs_root 外を
+            # 指す symlink（逃避）だった song を全収集し、symlink を張らず
+            # swap 前に一括で fail-closed 拒否する（正常な素材では
+            # escaped_pairs は常に空のため挙動不変）。
+            print(
+                f"error: {len(escaped_pairs)} pjsNNN song dir(s) have .lab or "
+                f"_song.wav resolving outside {args.pjs_root} (symlink escape, "
+                "fail-closed, not staged/published): " + ", ".join(escaped_pairs),
                 file=sys.stderr,
             )
             return 1
