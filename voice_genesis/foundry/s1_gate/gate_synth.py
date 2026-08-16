@@ -441,6 +441,8 @@ def collect_input_sha256(
     own_json_sha: Optional[str] = None,
     speaker_embed_sha: Optional[str] = None,
     model_shas: Optional[Dict[str, str]] = None,
+    ckpt_sha: Optional[str] = None,
+    train_config_sha: Optional[str] = None,
 ) -> Dict[str, Optional[str]]:
     """gate 判定を駆動した入力モデル束の sha256 を集約する。
 
@@ -476,6 +478,16 @@ def collect_input_sha256(
     だけではこの窓は閉じない）。未指定（None）の場合のみ従来どおり
     `sha256_file()` で個別に読み直す（`load_model_bundle_bytes` を経由しない
     呼び出し向けの後方互換フォールバック）。
+
+    [P2 修正] (review #264 R20) `ckpt_sha`/`train_config_sha` は、
+    `run_export_acoustic()` が exporter に実際に消費させたバイト列（1 回だけ
+    `read_bytes()` したバッファ）から得た sha256。渡された場合はそれを優先
+    して記録し、本関数内での再 read は行わない（従来は `run_export_acoustic`
+    が checkpoint/config をコピー・消費した後に、この関数が元ディレクトリ
+    から改めて `sha256_file()` で読み直しており、コピー〜re-read の間の
+    差し替えを検出できない TOCTOU 窓があった）。未指定（None）の場合のみ
+    従来どおり `sha256_file()` で個別に読み直す（`run_export_acoustic` を
+    経由しない呼び出し向けの後方互換フォールバック）。
     """
     shas: Dict[str, Optional[str]] = {}
     model_shas = model_shas or {}
@@ -484,9 +496,13 @@ def collect_input_sha256(
         ckpt_dir = Path(args.ckpt_dir)
         ckpt_file = ckpt_dir / f"model_ckpt_steps_{args.step}.ckpt"
         train_config_file = ckpt_dir / "config.yaml"
-        shas["ckpt"] = sha256_file(ckpt_file) if ckpt_file.exists() else None
+        shas["ckpt"] = (
+            ckpt_sha if ckpt_sha is not None
+            else (sha256_file(ckpt_file) if ckpt_file.exists() else None)
+        )
         shas["train_config_yaml"] = (
-            sha256_file(train_config_file) if train_config_file.exists() else None
+            train_config_sha if train_config_sha is not None
+            else (sha256_file(train_config_file) if train_config_file.exists() else None)
         )
 
     shas["acoustic_onnx"] = (
@@ -713,9 +729,16 @@ def build_phoneme_mapping(own_phonemes: Dict[str, int], canon_phonemes: Dict[str
 # 3. export.py acoustic 実行（GPU 側 ckpt が届いた本番経路のみ）
 # ============================================================================
 
-def run_export_acoustic(diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, step: int, out_dir: Path) -> Path:
+def run_export_acoustic(
+    diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, step: int, out_dir: Path
+) -> Tuple[Path, str, str]:
     """`checkpoints/<exp_name>/` を用意して `scripts/export.py acoustic` を実行する。
     §5.2 の手順そのもの。CPU で足りる（export はモデルロード+グラフ変換のみ）。
+
+    返り値は `(out_path, ckpt_sha256, train_config_sha256)`。後者2つは
+    exporter に実際に消費させたバイト列（下記 R20 P2 参照）の sha256 hex
+    digest で、`collect_input_sha256` が `sha256_file()` の別 read へ
+    フォールバックせずそのまま summary へ pin できるようにする。
     """
     ckpt_target = diffsinger_repo / "checkpoints" / exp_name
     ckpt_target.mkdir(parents=True, exist_ok=True)
@@ -723,65 +746,96 @@ def run_export_acoustic(diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, st
     config_file = ckpt_dir / "config.yaml"
     if not ckpt_file.exists() or not config_file.exists():
         raise FileNotFoundError(f"expected {ckpt_file} and {config_file} in {ckpt_dir}")
-    shutil.copy2(ckpt_file, ckpt_target / ckpt_file.name)
-    shutil.copy2(config_file, ckpt_target / "config.yaml")
+
+    # review #264 R20 P2 (checkpoint TOCTOU): 従来は `collect_input_sha256`
+    # 側が `run_export_acoustic()` 完了後（＝ここでの `shutil.copy2` による
+    # コピー・exporter subprocess による消費が終わった後）に、元の ckpt_dir
+    # から改めて `sha256_file()` で読み直して summary の pin ハッシュを得て
+    # いた。コピー〜その re-read の間に学習/同期プロセス等が元ファイルを
+    # 差し替えると、「ONNX は旧バイトから生成されたのに summary は新バイトを
+    # pin する」乖離が生じ得た。ここで一度だけ `read_bytes()` し、その同じ
+    # バイト列を (a) sha256 化、(b) `ckpt_target` への書き出し（exporter が
+    # 消費する実体）の両方に使うことで、「記録したハッシュ = exporter が
+    # 実際に消費したバイト列」を構造的に保証する（score モジュールの
+    # `_read_and_exec_module`/`_read_bytes_and_sha256` と同型パターン）。
+    ckpt_bytes, ckpt_sha = _read_bytes_and_sha256(ckpt_file)
+    config_bytes, config_sha = _read_bytes_and_sha256(config_file)
+    (ckpt_target / ckpt_file.name).write_bytes(ckpt_bytes)
+    (ckpt_target / "config.yaml").write_bytes(config_bytes)
 
     out_path = out_dir / f"onnx_gate_{step}"
-    cmd = [
-        sys.executable, "scripts/export.py", "acoustic",
-        "--exp", exp_name,
-        "--ckpt", str(step),
-        "--out", str(out_path),
-    ]
-    print("| export cmd:", " ".join(cmd))
-    subprocess.run(cmd, cwd=str(diffsinger_repo), check=True)
 
-    # BUGFIX (5K gate 実測, 2026-08-15): scripts/export.py acoustic の実出力は
-    # `acoustic.onnx` 固定名ではなく `<exp_name>.onnx`（+ freeze_spk 付与時は
-    # `<exp_name>.<speaker>.onnx`）。1 個だけ *.onnx が見つかった場合に限り
-    # `acoustic.onnx` へエイリアスコピーする（複数ある場合は決め打ちできない
-    # ため何もせず後続の存在チェックで fail-closed に停止させる）。
+    # review #264 R20 P1 (stale ONNX candidates): 従来は `out_path`
+    # （`--out-dir`/`--step` の組み合わせから決定論的に決まる固定パス）へ
+    # 直接 export しており、同じ組み合わせを使い回す再実行（例: 5K -> 10K
+    # checkpoint への差し替え）で `out_path` に前回実行の残置ファイルが
+    # 混在し得た。この状態では下記の glob が「今回の subprocess が生成した
+    # ファイル」と「過去の残置ファイル」を区別できず、exporter が exit 0
+    # でも stale な非 alias ONNX を新 alias として採用してしまう窓があった
+    # （summary の checkpoint/config ハッシュは新しいのに、実際に読み込む
+    # acoustic.onnx だけ古いままという provenance 崩壊）。
     #
-    # BUGFIX (review #263 R5 P1): 旧実装は `acoustic.onnx` が既存の場合に
-    # このブロック全体を skip していたため、同じ --out-dir へ再 export
-    # した際（例: 5K -> 10K checkpoint への差し替え）に alias コピーが
-    # 更新されず、新 ckpt から export した `<exp_name>.onnx` が存在するのに
-    # 旧 checkpoint 由来の `acoustic.onnx` のまま合成される（ckpt/config の
-    # sha256 は新しいものを記録しながら、実際に読み込む acoustic.onnx は
-    # 古いままという不整合）。alias 候補の探索自体からは alias_path 自身を
-    # 除外した上で、既存 alias の有無に関わらず毎回新しい export 出力から
-    # 置き直す（export.py が直接 `acoustic.onnx` という名前で書き出す場合は
-    # その時点で subprocess が上書き済みのため、この分岐は素通りする）。
-    alias_path = out_path / "acoustic.onnx"
-    onnx_candidates = sorted(
-        p for p in out_path.glob("*.onnx") if p.resolve() != alias_path.resolve()
+    # 修正: 呼び出しごとに一意な fresh staging ディレクトリへ export し、
+    # 今回の invocation が生成したファイルのみを検査・alias 化してから、
+    # `_swap_step_dir_into_place`（review #263 R5/R7/R8 P1/P2 で確立済みの
+    # 2 段 rename + BaseException 巻き戻しパターン）で `out_path` へ原子的に
+    # 差し替える。旧世代は削除されず `out_path.old` へ退避される
+    # （swap 自体の意味論はそのまま流用）。staging 再利用時の残置物という
+    # 概念自体を構造的に消す — glob 対象ディレクトリは常に空から始まる。
+    out_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(dir=str(out_dir), prefix=f".onnx_gate_{step}.build-")
     )
-    if len(onnx_candidates) == 1:
-        if alias_path.exists() or alias_path.is_symlink():
-            alias_path.unlink()
-        shutil.copy2(onnx_candidates[0], alias_path)
-        print(f"| aliased {onnx_candidates[0].name} -> acoustic.onnx "
-              f"(gate_synth.py naming-assumption bugfix)")
-    elif len(onnx_candidates) > 1:
-        # review #263 R8 P2: 非 alias *.onnx が複数存在する場合、今回の export
-        # 由来がどれかを決め打ちできない。従来はこの分岐で何もせず後段の
-        # `alias_path.exists()` チェックへ落ちていたため、alias_path が
-        # 前回（別 checkpoint）export 由来のまま残っていると、その stale な
-        # alias を暗黙に流用して合成が進んでしまう fail-open だった
-        # （ckpt/config の sha256 は新しいものを記録しつつ、実際に読み込む
-        # acoustic.onnx は古いままという R5 P1 と同種の不整合を再発させる）。
-        # 曖昧な場合は alias を更新せず、既存 alias の有無に関わらず
-        # fail-closed で停止する（stale alias の暗黙流用を禁止）。
-        names = ", ".join(p.name for p in onnx_candidates)
-        raise RuntimeError(
-            f"ambiguous export output in {out_path}: multiple non-alias *.onnx "
-            f"candidates ({names}) found — cannot determine which one this "
-            f"export produced. Refusing to fall back to any pre-existing "
-            f"acoustic.onnx alias (fail-closed); clean {out_path} and re-export."
+    try:
+        cmd = [
+            sys.executable, "scripts/export.py", "acoustic",
+            "--exp", exp_name,
+            "--ckpt", str(step),
+            "--out", str(staging_dir),
+        ]
+        print("| export cmd:", " ".join(cmd))
+        subprocess.run(cmd, cwd=str(diffsinger_repo), check=True)
+
+        # BUGFIX (5K gate 実測, 2026-08-15): scripts/export.py acoustic の実出力は
+        # `acoustic.onnx` 固定名ではなく `<exp_name>.onnx`（+ freeze_spk 付与時は
+        # `<exp_name>.<speaker>.onnx`）。1 個だけ *.onnx が見つかった場合に限り
+        # `acoustic.onnx` へエイリアスコピーする（複数ある場合は決め打ちできない
+        # ため何もせず後続の存在チェックで fail-closed に停止させる）。
+        alias_path = staging_dir / "acoustic.onnx"
+        onnx_candidates = sorted(
+            p for p in staging_dir.glob("*.onnx") if p.resolve() != alias_path.resolve()
         )
-    if not alias_path.exists():
-        raise RuntimeError(f"export.py did not produce {alias_path}")
-    return out_path
+        if len(onnx_candidates) == 1:
+            if alias_path.exists() or alias_path.is_symlink():
+                alias_path.unlink()
+            shutil.copy2(onnx_candidates[0], alias_path)
+            print(f"| aliased {onnx_candidates[0].name} -> acoustic.onnx "
+                  f"(gate_synth.py naming-assumption bugfix)")
+        elif len(onnx_candidates) > 1:
+            # review #263 R8 P2: 非 alias *.onnx が複数存在する場合、今回の
+            # export 由来のどれを採るか決め打ちできない。fresh staging
+            # ディレクトリのため候補は必ず今回の invocation 由来だが、
+            # それでも複数あれば曖昧なので fail-closed で停止する。
+            names = ", ".join(p.name for p in onnx_candidates)
+            raise RuntimeError(
+                f"ambiguous export output in {staging_dir}: multiple non-alias "
+                f"*.onnx candidates ({names}) found — cannot determine which "
+                f"one this export produced. Refusing to fall back to any "
+                f"pre-existing acoustic.onnx alias (fail-closed); clean "
+                f"{staging_dir} and re-export."
+            )
+        if not alias_path.exists():
+            raise RuntimeError(f"export.py did not produce {alias_path}")
+    except BaseException:
+        # exporter が期待物を生成しなかった／曖昧だった場合、staging を
+        # 掃除して再送出する。`out_path`（前回世代があれば）には一切触れて
+        # いないため、失敗時に stale な前回世代が誤って公開されることはない
+        # （fail-closed）。
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+
+    _swap_step_dir_into_place(staging_dir, out_path)
+    return out_path, ckpt_sha, config_sha
 
 
 # ============================================================================
@@ -1337,6 +1391,8 @@ def cmd_run(args):
     except OutputCollisionError as exc:
         raise SystemExit(f"error: {exc}")
 
+    ckpt_sha: Optional[str] = None
+    train_config_sha: Optional[str] = None
     if args.skip_export:
         acoustic_dir = Path(args.acoustic_dir)
         acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
@@ -1345,7 +1401,7 @@ def cmd_run(args):
             # canon 配布 zip はトップレベルにも dsconfig.yaml を持つ
             acoustic_dsconfig_path = canon_model_dir / "dsconfig.yaml"
     else:
-        exported_dir = run_export_acoustic(
+        exported_dir, ckpt_sha, train_config_sha = run_export_acoustic(
             Path(args.diffsinger_repo), Path(args.ckpt_dir), args.exp_name, args.step, out_dir,
         )
         acoustic_dir = exported_dir
@@ -1442,6 +1498,8 @@ def cmd_run(args):
         own_json_sha=own_json_sha,
         speaker_embed_sha=speaker_embed_sha,
         model_shas=model_shas,
+        ckpt_sha=ckpt_sha,
+        train_config_sha=train_config_sha,
     )
 
     # R6 レビュー指摘 (PR #263, gate_synth.py:804, P2): 上記はモデル/config 束の
@@ -1501,6 +1559,40 @@ def cmd_run(args):
         input_sha256["repo_git_head"] = git_head
     except Exception:
         pass  # 取得失敗時は省略する（キー無し。fail-closed にはしない）
+
+    # [P2 修正] (review #264 R20) 上記 `repo_git_head` は gate_synth.py 自身が
+    # 属する ugh リポの HEAD であり、非 `--skip-export` 経路で実際に
+    # `scripts/export.py` を実行した `args.diffsinger_repo` checkout の pin
+    # ではなかった（export の実装は DiffSinger 側リポにあり、そちらの
+    # checkout がどのコミット・作業ツリー状態かで生成される acoustic.onnx が
+    # 変わり得るのに、summary からは追跡できなかった）。export 実行時
+    # （`--skip-export` 経路では export 自体を行わないため対象外 — 既存
+    # summary 構造は変えず、キー自体を省く）に限り
+    # `git -C <diffsinger_repo> rev-parse HEAD` / `git status --porcelain`
+    # を取得し、`diffsinger_repo_git_head`/`diffsinger_repo_dirty` として
+    # 記録する。git リポでない・取得失敗の場合は fail-closed にはせず
+    # （export 自体の既存挙動は変えない）、代わりに明示の `"unavailable"`
+    # をそのまま summary へ記録して「pin が取れなかったこと」自体を正直に
+    # 可視化する（サイレントにキーを省いて「未検査」を「pin 済み」と区別
+    # できなくしない）。
+    if not args.skip_export:
+        diffsinger_repo_path = Path(args.diffsinger_repo)
+        try:
+            diffsinger_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(diffsinger_repo_path),
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            dirty_status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(diffsinger_repo_path),
+                capture_output=True, text=True, check=True,
+            ).stdout
+            input_sha256["diffsinger_repo_git_head"] = diffsinger_head
+            input_sha256["diffsinger_repo_dirty"] = bool(dirty_status.strip())
+        except Exception:
+            input_sha256["diffsinger_repo_git_head"] = "unavailable"
+            input_sha256["diffsinger_repo_dirty"] = "unavailable"
 
     # synth_out_dir/build_dir/old_dir は cmd_run 冒頭（R9 preflight）で算出済み。
     if build_dir.exists():
