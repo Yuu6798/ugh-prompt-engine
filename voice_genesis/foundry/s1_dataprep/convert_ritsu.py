@@ -37,6 +37,14 @@ review #263 R7 で 2 件追加修正（`convert_pjs.py` と同型のファミリ
 拒否する。(2) `_swap_into_place` の 2 段 rename を `try/except
 BaseException` で保護し、新世代 rename 失敗時は退避済み旧世代を元パスへ
 復元してから再送出する。
+
+review #263 R9 P1（`convert_pjs.py` と同一のファミリー修正）: 衝突ガード
+が `--out-dir` 本体のみを検査し、`_swap_into_place` が実際に削除・rename
+する派生パス（`<out-dir>.old`・`<out-dir>.staging-<pid>`）を対象外に
+していた。例えば `--out-dir=/tmp/published`,
+`--voicebank-root=/tmp/published.old` は事前チェックを素通りしたのち、
+公開時に `old_dir` の `rmtree` が `voicebank_root`（保護入力）そのものを
+削除する。派生パスもガード対象に含める。
 """
 from __future__ import annotations
 
@@ -531,8 +539,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # で拒否する。--out-dir は成功時に丸ごと rename/`.old` 退避/rmtree
     # されるため、保護入力と重なっていると voicebank 本体や dsdict.yaml
     # そのものを破壊し得る。
+    #
+    # [P1 修正] (review #263 R9) 上記は --out-dir 本体のみを検査していたが、
+    # `_swap_into_place` が実際に削除・rename するのは `<out-dir>.old`
+    # （毎回 rmtree）と `<out-dir>.staging-<pid>`（成功時に --out-dir へ
+    # rename）という派生パスであり、これらはチェック対象外だった。派生
+    # パスを算出してガード対象に加える（staging_dir は `convert()` 内部と
+    # 同じ pid 由来の同一パスを再算出するのみで、実際の構築先はここでは
+    # 作らない＝重複作成なし）。
+    out_dir: Path = args.out_dir
+    old_dir = out_dir.parent / f"{out_dir.name}.old"
+    staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
     try:
-        _reject_output_collision([args.out_dir], protected_roots=[args.voicebank_root, args.dsdict])
+        _reject_output_collision(
+            [out_dir, old_dir, staging_dir], protected_roots=[args.voicebank_root, args.dsdict]
+        )
     except OutputCollisionError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

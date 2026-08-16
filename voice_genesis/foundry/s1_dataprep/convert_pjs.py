@@ -40,6 +40,20 @@ review #263 R7 で 3 件追加修正: (1) 衝突ガードの包含判定を双�
 `os.replace()` の staged 方式にする。(3) `_swap_into_place` の 2 段
 rename を `try/except BaseException` で保護し、新世代 rename 失敗時は
 退避済み旧世代を元パスへ復元してから再送出する。
+
+review #263 R9 で 2 件追加修正: (1) `stage_song_wavs` が「存在する
+ディレクトリのみ検査」していたため、抽出が `pjsNNN` ディレクトリ自体を
+丸ごと落とした場合（`.lab`/`_song.wav` の片方欠けではなく曲ディレクトリ
+そのものが無い）を検出できなかった（実測: pjs001-pjs099 のみで実行すると
+`(99, [])` が返り縮小コーパスが成功報告される）。期待 ID 集合
+（`PJS_EXPECTED_IDS` = pjs001-pjs100）に対して走査する方式へ変更し、
+存在しないディレクトリも `missing_pairs` へ含める（`convert_pjs.py` と
+`convert_ritsu.py` の同型修正）。(2) 衝突ガードが `--staging-dir` 本体
+のみを検査し、`_swap_into_place` が実際に削除・rename する派生パス
+（`<staging-dir>.old`・`<staging-dir>.build-<pid>`）を対象外にしていた。
+例えば `--staging-dir=/tmp/published`, `--pjs-root=/tmp/published.old`
+は事前チェックを素通りしたのち、公開時に `old_dir` の `rmtree` が
+`pjs_root`（保護入力）そのものを削除する。派生パスもガード対象に含める。
 """
 from __future__ import annotations
 
@@ -50,7 +64,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 # nnsvs-db-converter 同梱の `lang.sample.json` と同一内容
 # （`s1a_conversion_record.md` §2: 日本語ラベルのモーラ分割規則としてそのまま
@@ -60,6 +74,11 @@ DEFAULT_LANG_DEF = {
     "vowels": ["a", "i", "u", "e", "o", "N", "A", "I", "U", "E", "O"],
     "liquids": {"w": ["k", "g"], "y": True},
 }
+
+# PJS_corpus_ver1.1 の契約 = pjs001-pjs100 の 100 曲（review #263 R9 P2）。
+# `stage_song_wavs` はこの期待 ID 集合に対して走査することで、抽出が
+# `pjsNNN` ディレクトリ自体を丸ごと落とした場合も検出できる。
+PJS_EXPECTED_IDS: Tuple[str, ...] = tuple(f"pjs{i:03d}" for i in range(1, 101))
 
 
 class OutputCollisionError(ValueError):
@@ -142,13 +161,22 @@ def stage_song_wavs(
     不完全コーパスのまま成功報告してしまう。`missing_pairs` を渡した場合、
     欠落した song 名を収集するのみに留め（例外は送出しない）、呼び出し元が
     `_swap_into_place`（公開）の前に一括で fail-closed 判定できるようにする。
+
+    [P2 修正] (review #263 R9) R5 の対応は「`pjs_root` 配下に実在するディレ
+    クトリのみ」を検査していたため、抽出処理が `pjsNNN` ディレクトリ自体を
+    丸ごと落とした場合（`.lab`/`_song.wav` の片方だけが欠けたのではなく
+    曲ディレクトリそのものが存在しない）は `missing_pairs` に一切現れず
+    `n_staged` も非ゼロのまま成功してしまう（実測: pjs001-pjs099 のみで
+    `(99, [])` が返る）。`pjs_root.iterdir()` で発見したディレクトリを走査
+    するのではなく、契約どおりの期待 ID 集合 `PJS_EXPECTED_IDS`
+    （pjs001-pjs100）に対して走査することで、ディレクトリ丸ごと欠落と
+    片方欠けの双方を同じ `missing_pairs` 経路で検出する。
     """
     pjs_root = pjs_root.resolve()
     staging_dir.mkdir(parents=True, exist_ok=True)
-    song_dirs = sorted(p for p in pjs_root.iterdir() if p.is_dir() and p.name.startswith("pjs"))
     n_staged = 0
-    for d in song_dirs:
-        name = d.name
+    for name in PJS_EXPECTED_IDS:
+        d = pjs_root / name
         lab_src = d / f"{name}.lab"
         wav_src = d / f"{name}_song.wav"
         if not lab_src.exists() or not wav_src.exists():
@@ -313,7 +341,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # ため、--staging-dir 外を指す --lang-def もここで衝突ガード対象に含める
     # （--staging-dir 配下を指す場合は build_dir 経由で swap に含まれ、
     # 既存の --staging-dir チェックで保護済みのため対象外）。
-    guarded_outputs: List[Path] = [staging_dir]
+    #
+    # [P1 修正] (review #263 R9) 上記は --staging-dir 本体のみを検査して
+    # いたが、`_swap_into_place` が実際に削除・rename するのは
+    # `<staging-dir>.old`（毎回 rmtree）と `<staging-dir>.build-<pid>`
+    # （成功時に --staging-dir へ rename）という派生パスであり、これらは
+    # チェック対象外だった。例えば `--staging-dir=/tmp/published`,
+    # `--pjs-root=/tmp/published.old` は本チェックを素通りしたのち、公開時
+    # に `old_dir` の `rmtree` が `pjs_root`（保護入力）そのものを削除する。
+    # 派生パスを算出してガード対象に加える（build_dir は後段の実際の構築
+    # 先と同じ pid 由来の同一パスを再利用し、二重定義を避ける）。
+    old_dir = staging_dir.parent / f"{staging_dir.name}.old"
+    build_dir = staging_dir.parent / f"{staging_dir.name}.build-{os.getpid()}"
+
+    guarded_outputs: List[Path] = [staging_dir, old_dir, build_dir]
     if args.lang_def is not None:
         try:
             args.lang_def.resolve().relative_to(staging_dir.resolve())
@@ -325,7 +366,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    build_dir = staging_dir.parent / f"{staging_dir.name}.build-{os.getpid()}"
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)

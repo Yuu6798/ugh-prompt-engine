@@ -91,7 +91,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import onnxruntime as ort
@@ -734,6 +734,66 @@ def synth_song(
     return record
 
 
+class OutputCollisionError(ValueError):
+    """P1 修正 (review #263 R9): `cmd_run` の公開先（`synth_out_dir` および
+    `_swap_step_dir_into_place` が実際に削除・rename する派生パス
+    `<synth_out_dir>.old`/`<synth_out_dir>.build-<pid>`）が、resolve 済みの
+    モデル入力（`--acoustic-dir`/`--canon-model-dir`/`--vocoder-dir`/
+    `--ckpt-dir`）と衝突する場合に送出する（fail-closed。公開前 preflight
+    で検出する）。`convert_pjs.py`/`convert_ritsu.py` の `OutputCollisionError`
+    と同型判定（record スクリプト群の既存慣例に倣い、共有モジュール新設
+    ではなく各ファイル内へコピペ実装）。
+
+    `--step` を省略した `--skip-export` の S0 互換検証パスでは
+    `synth_out_dir == out_dir` になるが、`--acoustic-dir`/`--ckpt-dir` を
+    使い回して過去の export 成果物を `--out-dir` 配下に置いたまま同じ木を
+    `--out-dir` に再指定すると、`_swap_step_dir_into_place` の rename が
+    既に読み込み済みのモデル束を `.old` へ退避し、次回実行時にその `.old`
+    が rmtree される（モデル束の消失）。"""
+
+
+def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequence[Path]) -> None:
+    """`out_paths`（resolve 後）を相互および `protected_roots`（存在する
+    もののみ、resolve 後）と照合し、衝突があれば公開前に fail-closed で
+    拒否する（`convert_pjs.py`/`convert_ritsu.py` の同名ヘルパーと同一の
+    resolved 比較ロジック。双方向の内包判定を含む）。
+    """
+    resolved_outs = [(p, p.resolve()) for p in out_paths]
+
+    for i, (p_i, r_i) in enumerate(resolved_outs):
+        for p_j, r_j in resolved_outs[i + 1 :]:
+            if r_i == r_j:
+                raise OutputCollisionError(
+                    f"output paths collide with each other: {p_i} == {p_j}（fail-closed で拒否）"
+                )
+
+    for root in protected_roots:
+        if not root.exists():
+            continue
+        root_resolved = root.resolve()
+        for p, r in resolved_outs:
+            if r == root_resolved:
+                raise OutputCollisionError(
+                    f"output path {p} collides with protected input root {root}（fail-closed で拒否）"
+                )
+            try:
+                r.relative_to(root_resolved)
+            except ValueError:
+                pass
+            else:
+                raise OutputCollisionError(
+                    f"output path {p} is inside protected input root {root}（fail-closed で拒否）"
+                )
+            try:
+                root_resolved.relative_to(r)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"protected input root {root} is inside output path {p}"
+                f"（fail-closed で拒否。出力側の公開処理が保護 root を巻き込む）"
+            )
+
+
 def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
     """`build_dir`（全曲の wav/record + summary を完全に構築済み）を
     `out_dir`（`step_<N>/` 等の合成成果物ディレクトリ）へ原子的に差し替える
@@ -795,6 +855,43 @@ def cmd_run(args):
     out_dir = Path(args.out_dir).resolve()
     singer_dir = Path(args.singer_dir) if args.singer_dir else DEFAULT_SINGER_DIR
     variance_phonemes = load_canon_phonemes(canon_model_dir / "phonemes.txt")
+
+    # R3 レビュー指摘 (PR #263, gate_synth.py:544): 5K/10K/20K が同じ --out-dir を
+    # 使い回すと gate_<song>.wav / summary が上書きされ、前段ゲートの判定証跡が
+    # 破壊される。--step 指定時は成果物を out_dir/step_<N>/ 配下に分離する
+    # （--skip-export の S0 互換検証パスは step 未指定のままなので out_dir 直下 = 無変更）。
+    synth_out_dir = (out_dir / f"step_{args.step}") if args.step is not None else out_dir
+
+    # R5 レビュー指摘 (PR #263, gate_synth.py:779, P2): 曲ごとに synth_out_dir
+    # へ直接書き込むと、複数曲合成中の 1 曲目以降で失敗した場合に部分的な
+    # wav/summary が新旧世代で混在する。全曲 + summary を fresh な一時
+    # ディレクトリへ完全に生成してから、成功時のみ atomic に synth_out_dir
+    # と swap する（`_swap_step_dir_into_place`）。build_dir/old_dir はここで
+    # 前倒しして算出し、下記 R9 preflight のガード対象に含める。
+    build_dir = synth_out_dir.parent / f"{synth_out_dir.name}.build-{os.getpid()}"
+    old_dir = synth_out_dir.parent / f"{synth_out_dir.name}.old"
+
+    # R9 レビュー指摘 (PR #263, gate_synth.py:778, P1): `--skip-export` 省略時
+    # に `synth_out_dir` が `--acoustic-dir`/`--canon-model-dir`/
+    # `--vocoder-dir`/`--ckpt-dir` のいずれかと同じ（または内包関係にある）
+    # ディレクトリに指定されると、既にロード済みのモデル束が
+    # `_swap_step_dir_into_place` の rename で `.old` へ退避され gate 成果物に
+    # 差し替わり、次回実行時にその `.old` が rmtree されてモデル束が消失する。
+    # resolve 済みの全モデル入力を、公開（swap）を始める前に `synth_out_dir`
+    # 本体・その派生パス（`.old`/`.build-<pid>`）・`out_dir`（export 自体が
+    # 直接書き込む先）に対して衝突拒否する。
+    protected_model_roots: List[Path] = [canon_model_dir, vocoder_dir]
+    if args.skip_export:
+        protected_model_roots.append(Path(args.acoustic_dir))
+    elif args.ckpt_dir:
+        protected_model_roots.append(Path(args.ckpt_dir))
+    guarded_publish_paths: List[Path] = [synth_out_dir, old_dir, build_dir]
+    if out_dir.resolve() != synth_out_dir.resolve():
+        guarded_publish_paths.append(out_dir)
+    try:
+        _reject_output_collision(guarded_publish_paths, protected_roots=protected_model_roots)
+    except OutputCollisionError as exc:
+        raise SystemExit(f"error: {exc}")
 
     if args.skip_export:
         acoustic_dir = Path(args.acoustic_dir)
@@ -881,18 +978,7 @@ def cmd_run(args):
     except Exception:
         pass  # 取得失敗時は省略する（キー無し。fail-closed にはしない）
 
-    # R3 レビュー指摘 (PR #263, gate_synth.py:544): 5K/10K/20K が同じ --out-dir を
-    # 使い回すと gate_<song>.wav / summary が上書きされ、前段ゲートの判定証跡が
-    # 破壊される。--step 指定時は成果物を out_dir/step_<N>/ 配下に分離する
-    # （--skip-export の S0 互換検証パスは step 未指定のままなので out_dir 直下 = 無変更）。
-    synth_out_dir = (out_dir / f"step_{args.step}") if args.step is not None else out_dir
-
-    # R5 レビュー指摘 (PR #263, gate_synth.py:779, P2): 曲ごとに synth_out_dir
-    # へ直接書き込むと、複数曲合成中の 1 曲目以降で失敗した場合に部分的な
-    # wav/summary が新旧世代で混在する。全曲 + summary を fresh な一時
-    # ディレクトリへ完全に生成してから、成功時のみ atomic に synth_out_dir
-    # と swap する（`_swap_step_dir_into_place`）。
-    build_dir = synth_out_dir.parent / f"{synth_out_dir.name}.build-{os.getpid()}"
+    # synth_out_dir/build_dir/old_dir は cmd_run 冒頭（R9 preflight）で算出済み。
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)
