@@ -819,16 +819,67 @@ def _check_diffsinger_repo_stable(
         )
 
 
+def _publish_exported_acoustic(
+    diffsinger_repo_path: Path,
+    staging_dir: Path,
+    out_path: Path,
+    pre_head: object,
+    pre_dirty: object,
+    pre_status_sha256: object,
+    pre_diff_sha256: object,
+) -> None:
+    """review #264 R27 P2: `run_export_acoustic()` が返した `staging_dir` を、
+    diffsinger_repo の post snapshot 取得 + `_check_diffsinger_repo_stable()`
+    成功の後に限り `out_path`（canonical）へ swap する。
+
+    export subprocess 実行前に取得済みの pre 値 (`pre_head` 等) を受け取り、
+    ここで post 値を取得して照合する。検査失敗（`_check_diffsinger_repo_stable`
+    が `SystemExit`）時は `staging_dir` を削除して canonical（旧世代があれば
+    それ）を無傷のまま残す — 「新 ONNX + 旧 gate summary」の混成世代が
+    publish される窓を閉じる（`run_export_acoustic()` docstring 参照）。
+    """
+    (
+        post_head, post_dirty, post_status_sha256, post_diff_sha256,
+    ) = _git_head_and_dirty(diffsinger_repo_path)
+    try:
+        _check_diffsinger_repo_stable(
+            diffsinger_repo_path,
+            pre_head, pre_dirty, pre_status_sha256, pre_diff_sha256,
+            post_head, post_dirty, post_status_sha256, post_diff_sha256,
+        )
+    except BaseException:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+    _swap_step_dir_into_place(staging_dir, out_path)
+
+
 def run_export_acoustic(
     diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, step: int, out_dir: Path
-) -> Tuple[Path, str, str]:
+) -> Tuple[Path, Path, str, str]:
     """`checkpoints/<exp_name>/` を用意して `scripts/export.py acoustic` を実行する。
     §5.2 の手順そのもの。CPU で足りる（export はモデルロード+グラフ変換のみ）。
 
-    返り値は `(out_path, ckpt_sha256, train_config_sha256)`。後者2つは
-    exporter に実際に消費させたバイト列（下記 R20 P2 参照）の sha256 hex
-    digest で、`collect_input_sha256` が `sha256_file()` の別 read へ
-    フォールバックせずそのまま summary へ pin できるようにする。
+    返り値は `(staging_dir, out_path, ckpt_sha256, train_config_sha256)`。
+    後者2つは exporter に実際に消費させたバイト列（下記 R20 P2 参照）の
+    sha256 hex digest で、`collect_input_sha256` が `sha256_file()` の
+    別 read へフォールバックせずそのまま summary へ pin できるようにする。
+
+    review #264 R27 P2 (exporter 安定性検査前の ONNX 公開): 従来はこの関数の
+    末尾で `_swap_step_dir_into_place(staging_dir, out_path)` を呼び、
+    canonical パス `out_path` を新世代へ即座に差し替えてから return して
+    いた。しかし呼び出し側 `cmd_run()` が export 後の git snapshot 取得
+    （post 値）と `_check_diffsinger_repo_stable()` による pre/post 照合を
+    行うのは、この関数が return した**後**である。そのため exporter 実行中に
+    diffsinger checkout が動いて安定性検査が fail-closed で拒否する場合でも、
+    canonical には既に新 ONNX が公開済みという「新 ONNX + 旧 gate summary」の
+    混成世代が残ってしまっていた（安定性検査の意味が publish 後追いになる）。
+    修正: swap をこの関数から呼び出し側へ委譲する。`out_path` には一切触れず、
+    検査済みの `staging_dir`（マーカーファイル書き込み等の swap 前処理は未了、
+    `_swap_step_dir_into_place` が担当）と、swap 先として使うべき `out_path`
+    をそのまま返す。呼び出し側は post snapshot 取得 → 安定性検査成功の後に
+    のみ `_swap_step_dir_into_place(staging_dir, out_path)` を呼び、検査失敗時は
+    `staging_dir` を削除して canonical を無傷に保つ（既存の staged swap +
+    BaseException 巻き戻しの流儀をそのまま踏襲）。
     """
     ckpt_target = diffsinger_repo / "checkpoints" / exp_name
     ckpt_target.mkdir(parents=True, exist_ok=True)
@@ -924,8 +975,11 @@ def run_export_acoustic(
         shutil.rmtree(staging_dir, ignore_errors=True)
         raise
 
-    _swap_step_dir_into_place(staging_dir, out_path)
-    return out_path, ckpt_sha, config_sha
+    # review #264 R27 P2: swap は呼び出し側 (`cmd_run`) が post snapshot 取得 +
+    # `_check_diffsinger_repo_stable()` 成功の後に行う（上記 docstring 参照）。
+    # ここでは `out_path`（canonical）に一切触れず、検査済みの `staging_dir`
+    # とその swap 先をそのまま返す。
+    return staging_dir, out_path, ckpt_sha, config_sha
 
 
 # ============================================================================
@@ -1548,19 +1602,18 @@ def cmd_run(args):
             diffsinger_repo_pre_head, diffsinger_repo_pre_dirty,
             diffsinger_repo_pre_status_sha256, diffsinger_repo_pre_diff_sha256,
         ) = _git_head_and_dirty(diffsinger_repo_path)
-        exported_dir, ckpt_sha, train_config_sha = run_export_acoustic(
+        # review #264 R27 P2: `run_export_acoustic()` はもう canonical パスへ
+        # swap しない（staging に留め置いたまま `staging_dir`/`exported_dir`
+        # の両方を返す）。post snapshot 取得 + 安定性検査 + swap は
+        # `_publish_exported_acoustic()` に委譲する（検査失敗時は staging を
+        # 掃除して canonical を無傷のまま残す。docstring 参照）。
+        staging_dir, exported_dir, ckpt_sha, train_config_sha = run_export_acoustic(
             Path(args.diffsinger_repo), Path(args.ckpt_dir), args.exp_name, args.step, out_dir,
         )
-        (
-            diffsinger_repo_post_head, diffsinger_repo_post_dirty,
-            diffsinger_repo_post_status_sha256, diffsinger_repo_post_diff_sha256,
-        ) = _git_head_and_dirty(diffsinger_repo_path)
-        _check_diffsinger_repo_stable(
-            diffsinger_repo_path,
+        _publish_exported_acoustic(
+            diffsinger_repo_path, staging_dir, exported_dir,
             diffsinger_repo_pre_head, diffsinger_repo_pre_dirty,
             diffsinger_repo_pre_status_sha256, diffsinger_repo_pre_diff_sha256,
-            diffsinger_repo_post_head, diffsinger_repo_post_dirty,
-            diffsinger_repo_post_status_sha256, diffsinger_repo_post_diff_sha256,
         )
         acoustic_dir = exported_dir
         acoustic_onnx_path = exported_dir / "acoustic.onnx"

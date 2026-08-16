@@ -22,11 +22,19 @@ sha256 を追加し、これらも含めて完全一致を要求するよう強�
 直接検証する（`cmd_run` 全体を実際の音声合成込みで動かすのは重いため、
 設計判断は「pre/post 取得関数を monkeypatch して不一致時の fail-closed と
 サマリ記録を固定する」— PR #264 R24/R25 レビュー対応の Design Memo 参照）。
+
+review #264 R27 P2 追加: `run_export_acoustic()` が canonical への swap を
+自分ではもう行わず、post snapshot 取得 + 安定性検査 + swap の orchestration
+は新設の `_publish_exported_acoustic()` が担う（exporter 安定性検査前に
+ONNX が公開されてしまう窓を閉じる）。本ファイル末尾のテスト群がこの
+orchestration を、フェイク exporter に checkout 自体を動かさせる実 git
+状態遷移で固定する。
 """
 from __future__ import annotations
 
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -182,3 +190,157 @@ def test_check_diffsinger_repo_stable_skips_when_post_unavailable(tmp_path: Path
         "abc123", False, "s1", "d1",
         "unavailable", "unavailable", "unavailable", "unavailable",
     )  # no raise
+
+
+# ----------------------------------------------------------------------------
+# review #264 R27 P2 再現テスト: `_publish_exported_acoustic()`
+#
+# `run_export_acoustic()` は canonical (`out_path`) への swap をもう自分では
+# 行わず、staging に留め置いたまま返す。`_publish_exported_acoustic()` が
+# post snapshot 取得 + `_check_diffsinger_repo_stable()` の成功を確認して
+# から初めて swap を行う orchestration を担う。ここでは実際の DiffSinger
+# checkout（git repo）を用意し、フェイク exporter 自体に checkout を動かさせる
+# ことで「安定性検査が実際に失敗する状況で、canonical が汚染されないこと」を
+# 実測する（monkeypatch ではなく実 git 状態遷移で固定する）。
+# ----------------------------------------------------------------------------
+
+def _make_diffsinger_export_repo(repo_dir: Path, export_py_src: str) -> None:
+    _init_git_repo(repo_dir)
+    # `python scripts/export.py` の実行自体が `scripts/__pycache__/*.pyc` を
+    # 副生成し、`run_export_acoustic()` 自身も `checkpoints/<exp_name>/` を
+    # diffsinger_repo 直下へ書き出す（exporter に消費させる ckpt/config の
+    # 置き場）。これらを追跡すると「exporter は checkout を一切動かして
+    # いないのに status_sha256 が pre/post で変わる」偽陽性を安定性検査に
+    # 混入させてしまう（本テストの関心事 = R27 の swap 順序と無関係な
+    # confound）。実運用の DiffSinger checkout も通常この 2 つを gitignore
+    # 済みの前提のため、それに揃える。
+    (repo_dir / ".gitignore").write_text(
+        "__pycache__/\n*.pyc\ncheckpoints/\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", ".gitignore"], cwd=str(repo_dir), check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add gitignore"], cwd=str(repo_dir), check=True
+    )
+    (repo_dir / "scripts").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "scripts" / "export.py").write_text(export_py_src, encoding="utf-8")
+
+
+def _make_ckpt_dir(base: Path, name: str, ckpt_content: bytes, config_content: bytes) -> Path:
+    d = base / name
+    d.mkdir(parents=True)
+    (d / "model_ckpt_steps_5000.ckpt").write_bytes(ckpt_content)
+    (d / "config.yaml").write_bytes(config_content)
+    return d
+
+
+_EXPORT_PY_STABLE = textwrap.dedent(
+    """\
+    import argparse
+    from pathlib import Path
+
+    def main():
+        p = argparse.ArgumentParser()
+        p.add_argument("mode")
+        p.add_argument("--exp", required=True)
+        p.add_argument("--ckpt", required=True)
+        p.add_argument("--out", required=True)
+        args = p.parse_args()
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{args.exp}.onnx").write_bytes(b"ONNX-STABLE")
+
+    if __name__ == "__main__":
+        main()
+    """
+)
+
+_EXPORT_PY_MUTATES_CHECKOUT = textwrap.dedent(
+    """\
+    import argparse
+    from pathlib import Path
+
+    def main():
+        p = argparse.ArgumentParser()
+        p.add_argument("mode")
+        p.add_argument("--exp", required=True)
+        p.add_argument("--ckpt", required=True)
+        p.add_argument("--out", required=True)
+        args = p.parse_args()
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{args.exp}.onnx").write_bytes(b"ONNX-FROM-UNSTABLE-CHECKOUT")
+        # exporter 実行中に checkout 自体が動く（例: 依存パッケージの
+        # setup.py 実行や別プロセスの同時書き込みを模す）。
+        (Path(__file__).resolve().parent.parent / "README.md").write_text(
+            "mutated-during-export\\n", encoding="utf-8"
+        )
+
+    if __name__ == "__main__":
+        main()
+    """
+)
+
+
+def test_publish_exported_acoustic_swaps_canonical_on_stable_checkout(
+    tmp_path: Path,
+) -> None:
+    """検査成功時: staging が canonical (`out_path`) へ swap されること。"""
+    repo_dir = tmp_path / "diffsinger_repo"
+    _make_diffsinger_export_repo(repo_dir, _EXPORT_PY_STABLE)
+    ckpt_dir = _make_ckpt_dir(tmp_path, "ckpt", b"CKPT", b"CONFIG")
+    out_dir = tmp_path / "out"
+
+    pre = gs._git_head_and_dirty(repo_dir)
+    staging_dir, out_path, _, _ = gs.run_export_acoustic(
+        repo_dir, ckpt_dir, "s1_gate", 5000, out_dir
+    )
+
+    gs._publish_exported_acoustic(repo_dir, staging_dir, out_path, *pre)
+
+    assert out_path.exists()
+    assert (out_path / "acoustic.onnx").read_bytes() == b"ONNX-STABLE"
+    assert not staging_dir.exists()
+
+
+def test_publish_exported_acoustic_leaves_canonical_untouched_on_unstable_checkout(
+    tmp_path: Path,
+) -> None:
+    """review #264 R27 P2 の再現本体: exporter 実行中に checkout が動いて
+    安定性検査が fail-closed で拒否する場合、canonical (`out_path`) の旧世代
+    が「新 ONNX + 旧 gate summary」の混成へ差し替わってはならない — 旧世代
+    (あれば) が無傷のまま残り、staging は掃除される。"""
+    repo_dir = tmp_path / "diffsinger_repo"
+    _make_diffsinger_export_repo(repo_dir, _EXPORT_PY_STABLE)
+    ckpt_dir_a = _make_ckpt_dir(tmp_path, "ckpt_a", b"CKPT-A", b"CONFIG-A")
+    out_dir = tmp_path / "out"
+
+    # 1 回目: 正常発行して旧世代を作る。
+    pre1 = gs._git_head_and_dirty(repo_dir)
+    staging_dir1, out_path, _, _ = gs.run_export_acoustic(
+        repo_dir, ckpt_dir_a, "s1_gate", 5000, out_dir
+    )
+    gs._publish_exported_acoustic(repo_dir, staging_dir1, out_path, *pre1)
+    old_generation_bytes = (out_path / "acoustic.onnx").read_bytes()
+    assert old_generation_bytes == b"ONNX-STABLE"
+
+    # 2 回目: exporter 自体が checkout を動かす（安定性検査が fail-closed で
+    # 拒否するはずのシナリオ）。
+    (repo_dir / "scripts" / "export.py").write_text(
+        _EXPORT_PY_MUTATES_CHECKOUT, encoding="utf-8"
+    )
+    ckpt_dir_b = _make_ckpt_dir(tmp_path, "ckpt_b", b"CKPT-B", b"CONFIG-B")
+    pre2 = gs._git_head_and_dirty(repo_dir)
+    staging_dir2, out_path2, _, _ = gs.run_export_acoustic(
+        repo_dir, ckpt_dir_b, "s1_gate", 5000, out_dir
+    )
+    assert out_path2 == out_path
+    # staging には新世代が既に書き出されている（swap 前）。
+    assert (staging_dir2 / "acoustic.onnx").read_bytes() == b"ONNX-FROM-UNSTABLE-CHECKOUT"
+
+    with pytest.raises(SystemExit):
+        gs._publish_exported_acoustic(repo_dir, staging_dir2, out_path2, *pre2)
+
+    # canonical は旧世代のまま無傷 — 新 ONNX が混成公開されていない。
+    assert (out_path / "acoustic.onnx").read_bytes() == old_generation_bytes
+    # staging は掃除され、リークしていない。
+    assert not staging_dir2.exists()

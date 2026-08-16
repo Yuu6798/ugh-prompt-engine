@@ -104,23 +104,34 @@ def _make_ckpt_dir(base: Path, name: str, ckpt_content: bytes, config_content: b
 
 def test_run_export_acoustic_normal_generation_adopts_alias(tmp_path: Path) -> None:
     """正常系: fresh staging へ export し、単一 *.onnx を acoustic.onnx へ
-    alias 化して out_path へ swap する。"""
+    alias 化する。review #264 R27 P2: `run_export_acoustic()` 自体はもう
+    canonical (`out_path`) へ swap しない — staging に留め置いたまま
+    `(staging_dir, out_path, ...)` を返す。呼び出し側が明示的に
+    `_swap_step_dir_into_place` を呼ぶまで `out_path` は未生成のまま。"""
     repo = _make_diffsinger_repo(tmp_path, _FAKE_EXPORT_PY)
     ckpt_content = b"CKPT-CONTENT-A"
     config_content = b"CONFIG-CONTENT-A"
     ckpt_dir = _make_ckpt_dir(tmp_path, "ckpt_a", ckpt_content, config_content)
     out_dir = tmp_path / "out"
 
-    out_path, ckpt_sha, train_config_sha = gs.run_export_acoustic(
+    staging_dir, out_path, ckpt_sha, train_config_sha = gs.run_export_acoustic(
         repo, ckpt_dir, "s1_gate", 5000, out_dir
     )
 
     assert out_path == out_dir / "onnx_gate_5000"
+    # canonical はまだ swap されていない — staging に留め置かれたまま。
+    assert not out_path.exists()
+    staged_alias = staging_dir / "acoustic.onnx"
+    assert staged_alias.exists()
+    assert staged_alias.read_bytes() == ckpt_content
+    assert ckpt_sha == hashlib.sha256(ckpt_content).hexdigest()
+    assert train_config_sha == hashlib.sha256(config_content).hexdigest()
+
+    gs._swap_step_dir_into_place(staging_dir, out_path)
+
     alias = out_path / "acoustic.onnx"
     assert alias.exists()
     assert alias.read_bytes() == ckpt_content
-    assert ckpt_sha == hashlib.sha256(ckpt_content).hexdigest()
-    assert train_config_sha == hashlib.sha256(config_content).hexdigest()
     # staging ディレクトリ自体は swap で消費され、out_dir 直下に残らない。
     leftovers = [p for p in out_dir.iterdir() if p.name.startswith(".onnx_gate_")]
     assert leftovers == []
@@ -137,7 +148,10 @@ def test_run_export_acoustic_does_not_adopt_stale_onnx_when_exporter_produces_no
     out_dir = tmp_path / "out"
 
     repo_ok = _make_diffsinger_repo(tmp_path / "repo_ok", _FAKE_EXPORT_PY)
-    out_path, _, _ = gs.run_export_acoustic(repo_ok, ckpt_dir_a, "s1_gate", 5000, out_dir)
+    staging_dir_a, out_path, _, _ = gs.run_export_acoustic(
+        repo_ok, ckpt_dir_a, "s1_gate", 5000, out_dir
+    )
+    gs._swap_step_dir_into_place(staging_dir_a, out_path)
     first_gen_bytes = (out_path / "acoustic.onnx").read_bytes()
     assert first_gen_bytes == b"CKPT-A"
 
@@ -165,7 +179,10 @@ def test_run_export_acoustic_ambiguous_candidates_fail_closed_leaves_prior_gener
     ckpt_dir_a = _make_ckpt_dir(tmp_path, "ckpt_a", b"CKPT-A", b"CONFIG-A")
     out_dir = tmp_path / "out"
     repo_ok = _make_diffsinger_repo(tmp_path / "repo_ok", _FAKE_EXPORT_PY)
-    out_path, _, _ = gs.run_export_acoustic(repo_ok, ckpt_dir_a, "s1_gate", 5000, out_dir)
+    staging_dir_a, out_path, _, _ = gs.run_export_acoustic(
+        repo_ok, ckpt_dir_a, "s1_gate", 5000, out_dir
+    )
+    gs._swap_step_dir_into_place(staging_dir_a, out_path)
     first_gen_bytes = (out_path / "acoustic.onnx").read_bytes()
 
     ckpt_dir_b = _make_ckpt_dir(tmp_path, "ckpt_b", b"CKPT-B", b"CONFIG-B")
@@ -208,7 +225,7 @@ def test_run_export_acoustic_ckpt_sha_pins_snapshot_not_post_race_bytes(
 
     monkeypatch.setattr(gs.subprocess, "run", _run_with_race)
 
-    out_path, ckpt_sha, train_config_sha = gs.run_export_acoustic(
+    staging_dir, out_path, ckpt_sha, train_config_sha = gs.run_export_acoustic(
         repo, ckpt_dir, "s1_gate", 5000, out_dir
     )
 
@@ -217,8 +234,9 @@ def test_run_export_acoustic_ckpt_sha_pins_snapshot_not_post_race_bytes(
     assert ckpt_sha == hashlib.sha256(original_ckpt).hexdigest()
     assert train_config_sha == hashlib.sha256(original_config).hexdigest()
     # exporter が実際に消費した（= 生成物へ書き出した）バイト列も同じく
-    # 差し替え前の内容 — 記録ハッシュ = exporter が消費したバイト列。
-    assert (out_path / "acoustic.onnx").read_bytes() == original_ckpt
+    # 差し替え前の内容 — 記録ハッシュ = exporter が消費したバイト列
+    # （まだ swap 前の staging 側で確認する）。
+    assert (staging_dir / "acoustic.onnx").read_bytes() == original_ckpt
     # ディスク上（ckpt_dir 側）は既に差し替わっている（レースが「成功」した
     # 状態）ことの確認 — この後段の drift は別の安全網（事後照合）の役割。
     assert ckpt_file.read_bytes() == b"CKPT-SWAPPED-AFTER-SNAPSHOT"
