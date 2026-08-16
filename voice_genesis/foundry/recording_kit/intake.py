@@ -103,6 +103,13 @@ class LedgerPathCollisionError(RuntimeError):
     """
 
 
+class OutputPathCollisionError(RuntimeError):
+    """公開直前の最終出力パス検証（`_check_publish_path`）が、既存エントリ
+    （ディレクトリ・symlink 含む）との衝突、または `out_dir` の外側への
+    脱出を検出した場合に送出する（R16 P1 対応）。
+    """
+
+
 class LedgerSchemaError(RuntimeError):
     """既存台帳の `schema` が `LEDGER_SCHEMA` と一致しない、または `entries`
     がリストでない場合に送出する（R13 P2 対応）。旧実装は `entries` さえ
@@ -164,13 +171,21 @@ def assign_normalized_filenames(inputs: List[Path], out_dir: Path) -> Dict[Path,
     不整合になる）。ここで全入力を事前に検査し、2 件目以降はテイク連番
     （`{stem}.take2.norm24k.wav`, `take3`, ...）で一意化する。
 
-    既存の `out_dir` 内ファイル名とも衝突しないようにする（別バッチの
+    既存の `out_dir` 内エントリ名とも衝突しないようにする（別バッチの
     既存収録を上書きしない）。`inputs` の順序（`discover_inputs` の
     名前順）がそのままテイク番号の割り当て順になるため決定論的。
+
+    予約対象は通常ファイルに限らず、`out_dir` 直下の**全エントリ**
+    （ディレクトリ・symlink を含む）とする（R16 P1 対応）。旧実装は
+    `p.is_file()` でファイルのみを予約していたため、`out_dir` に同名の
+    ディレクトリ（または外部を指す symlink ディレクトリ）が既に存在する
+    場合にその名前を予約せず、後続の公開フェーズで `shutil.move` が
+    そのディレクトリの**中へ**ファイルを移動してしまう（symlink 経由なら
+    `out_dir` の外側へ書き込む）事故につながっていた。
     """
     taken: set[str] = set()
     if out_dir.exists():
-        taken.update(p.name for p in out_dir.iterdir() if p.is_file())
+        taken.update(p.name for p in out_dir.iterdir())
 
     assigned: Dict[Path, str] = {}
     for src in inputs:
@@ -399,6 +414,41 @@ def _check_ledger_path_collisions(
         )
 
 
+def _check_publish_path(final_path: Path, out_dir: Path) -> None:
+    """公開直前に `final_path` の安全性を検証する（R16 P1 対応）。
+
+    `assign_normalized_filenames` の予約は `out_dir` の**スナップショット
+    時点**の状態に基づく事前検査であり、予約から実際の `shutil.move` まで
+    の間に `out_dir` の中身が変わる可能性（TOCTOU）や、予約ロジック自体の
+    見落としに対する最終防御としてここでも検証する。
+
+    - `final_path` が既に存在する場合（ディレクトリ・symlink 含む）は拒否
+      する。`shutil.move` は移動先が既存ディレクトリだと"そのディレクトリの
+      中へ"移動する挙動を持つため、ここを見落とすと `out_dir` に同名の
+      ディレクトリ（または symlink ディレクトリ）が存在する場合に、想定と
+      異なる場所へファイルが書き込まれる（ledger の `normalized_path` が
+      指す実体と食い違う）。
+    - `final_path.parent` の resolve 済みパスが `out_dir` の resolve 済み
+      パスと一致することを検証する（`out_dir` 自体が symlink ディレクトリ
+      経由になっている場合に、公開先が `out_dir` の外側へ脱出するケースを
+      拒否する）。
+    """
+    if final_path.exists() or final_path.is_symlink():
+        raise OutputPathCollisionError(
+            f"公開先に既存エントリがあります ({final_path})。fail-closed で"
+            f"拒否します（ディレクトリ/symlink 経由の意図しない書き込みを防止。"
+            f"R16 P1 対応）"
+        )
+    resolved_parent = final_path.parent.resolve()
+    resolved_out_dir = out_dir.resolve()
+    if resolved_parent != resolved_out_dir:
+        raise OutputPathCollisionError(
+            f"公開先の親ディレクトリ ({resolved_parent}) が out_dir "
+            f"({resolved_out_dir}) と一致しません。fail-closed で拒否します"
+            f"（symlink ディレクトリ経由の out_dir 脱出を防止。R16 P1 対応）"
+        )
+
+
 def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) -> LedgerEntry:
     """`src` を `staging_dir/filename` へ正規化し、公開後の想定パスで台帳エントリを作る。
 
@@ -529,6 +579,10 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
             for src in inputs:
                 staged_path = staging_dir / filenames[src]
                 final_path = out_dir / filenames[src]
+                # R16 P1 対応: shutil.move 直前に最終防御として検証する
+                # （assign_normalized_filenames の予約後に out_dir の中身が
+                # 変わった場合・予約ロジック自体の見落としに対する備え）。
+                _check_publish_path(final_path, out_dir)
                 shutil.move(str(staged_path), str(final_path))
                 moved.append((final_path, staged_path))
 

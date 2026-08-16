@@ -41,13 +41,23 @@
   スナップショットパスが、入力の組み合わせ次第で staged 出力名と衝突し
   得た（`staging_dir/src_snapshots/{元ファイル名}` という専用サブ
   ディレクトリへ分離することで、名前空間を構造的に非交差にして解消）
+- R16 P1 (intake.py:173): `assign_normalized_filenames` の出力名予約が
+  `p.is_file()` でファイルのみを対象にしており、`out_dir` に同名の
+  ディレクトリ・symlink ディレクトリが既に存在してもその名前を予約しない。
+  公開フェーズの `shutil.move` は移動先が既存ディレクトリだと"その中へ"
+  移動する挙動を持つため、同名ディレクトリがあると wav がその中に置かれ
+  台帳は誤ってディレクトリ自体を `normalized_path` として記録し、symlink
+  ディレクトリなら `out_dir` の外側へ書き込まれる。予約対象を `out_dir`
+  の全エントリへ拡張し、さらに公開直前に `_check_publish_path` で
+  最終防御（既存エントリなら拒否・親ディレクトリが `out_dir` と一致する
+  ことを検証）することで解消
 """
 from __future__ import annotations
 
 import hashlib
 import sys
 from pathlib import Path
-from typing import Iterator, List
+from typing import Dict, Iterator, List
 
 import numpy as np
 import pytest
@@ -176,6 +186,41 @@ def test_assign_normalized_filenames_avoids_collision_with_existing_out_dir(
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     (out_dir / "UC-001.norm24k.wav").write_bytes(b"already published")
+
+    inputs = [tmp_path / "UC-001.wav"]
+    assigned = intake.assign_normalized_filenames(inputs, out_dir)
+
+    assert assigned[inputs[0]] == "UC-001.take2.norm24k.wav"
+
+
+def test_assign_normalized_filenames_avoids_collision_with_existing_directory(
+    tmp_path: Path,
+) -> None:
+    """R16 P1 の再現: `out_dir` に同名の**ディレクトリ**が既に存在する場合、
+    旧実装（`p.is_file()` のみ予約）はその名前を予約しないため、テイク番号を
+    振らずそのまま衝突する候補名を返していた。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "UC-001.norm24k.wav").mkdir()  # ディレクトリとして既存
+
+    inputs = [tmp_path / "UC-001.wav"]
+    assigned = intake.assign_normalized_filenames(inputs, out_dir)
+
+    assert assigned[inputs[0]] == "UC-001.take2.norm24k.wav"
+
+
+def test_assign_normalized_filenames_avoids_collision_with_existing_symlink(
+    tmp_path: Path,
+) -> None:
+    """R16 P1 の再現: `out_dir` に同名の symlink（外部ディレクトリを指す）が
+    既に存在する場合も同様に予約されなければならない。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    external = tmp_path / "external_secret"
+    external.mkdir()
+    (out_dir / "UC-001.norm24k.wav").symlink_to(external, target_is_directory=True)
 
     inputs = [tmp_path / "UC-001.wav"]
     assigned = intake.assign_normalized_filenames(inputs, out_dir)
@@ -921,6 +966,138 @@ def test_run_resolves_snapshot_and_staged_output_namespace_collision(
             f"{published} の実バイト列が台帳の sha256 と食い違っている"
             "（スナップショット/staged 出力の名前空間衝突によるミスラベル公開）"
         )
+
+
+# ---------------------------------------------------------------------------
+# R16 P1: 公開直前の出力パス最終検証（ディレクトリ/symlink 経由の事故防止）
+# ---------------------------------------------------------------------------
+
+
+def test_check_publish_path_rejects_existing_directory(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    final_path = out_dir / "UC-001.norm24k.wav"
+    final_path.mkdir()
+
+    with pytest.raises(intake.OutputPathCollisionError):
+        intake._check_publish_path(final_path, out_dir)
+
+
+def test_check_publish_path_rejects_existing_symlink_to_external_dir(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    external = tmp_path / "external_secret"
+    external.mkdir()
+    final_path = out_dir / "UC-001.norm24k.wav"
+    final_path.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(intake.OutputPathCollisionError):
+        intake._check_publish_path(final_path, out_dir)
+
+
+def test_check_publish_path_rejects_parent_outside_out_dir(tmp_path: Path) -> None:
+    """`final_path.parent` が `out_dir` の resolve 済みパスと一致しない場合も
+    拒否する（`out_dir` 自体が symlink 経由になっているケース等への備え）。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    final_path = other_dir / "UC-001.norm24k.wav"
+
+    with pytest.raises(intake.OutputPathCollisionError):
+        intake._check_publish_path(final_path, out_dir)
+
+
+def test_check_publish_path_allows_new_file(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    final_path = out_dir / "UC-001.norm24k.wav"
+
+    intake._check_publish_path(final_path, out_dir)  # 例外を送出しないこと
+
+
+def test_run_rejects_publish_when_out_dir_has_colliding_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R16 P1 の再現（レビュー指摘の再現ケース ①）: `out_dir` に既に同名の
+    ディレクトリが存在する状態で公開しようとするケースの全体挙動を検証する。
+    `assign_normalized_filenames`（予約段階の修正）を意図的にバイパスし、
+    公開直前の最終防御（`_check_publish_path`）単独でも事故を防げることを
+    確認する（予約漏れ・TOCTOU に対する多層防御の検証）。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    donor_original = incoming_dir / "UC-001.wav"
+    donor_original.write_bytes(b"precious original bytes")
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    colliding_dir = out_dir / "UC-001.norm24k.wav"
+    colliding_dir.mkdir()
+    (colliding_dir / "sentinel.txt").write_bytes(b"pre-existing directory contents")
+
+    def _assign_without_reservation_fix(inputs: List[Path], out_dir_arg: Path) -> Dict[Path, str]:
+        return {src: f"{src.stem}.norm24k.wav" for src in inputs}
+
+    monkeypatch.setattr(intake, "assign_normalized_filenames", _assign_without_reservation_fix)
+
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    with pytest.raises(intake.OutputPathCollisionError):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert donor_original.read_bytes() == b"precious original bytes", (
+        "原本 incoming ファイルは一切変更されてはならない"
+    )
+    assert colliding_dir.is_dir()
+    assert [p.name for p in colliding_dir.iterdir()] == ["sentinel.txt"], (
+        "既存ディレクトリの中身が変わってはならない（wav がその中へ移動されない）"
+    )
+    assert not ledger_path.exists()
+
+
+def test_run_rejects_publish_when_out_dir_has_colliding_symlink_to_external_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R16 P1 の再現（レビュー指摘の再現ケース ②）: `out_dir` に同名の
+    symlink ディレクトリ（外部を指す）が存在する場合、`shutil.move` は
+    その中へファイルを移動し `out_dir` の外側へ書き込んでしまう。最終防御が
+    これを拒否し、外部ディレクトリには何も書き込まれないことを検証する。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    donor_original = incoming_dir / "UC-001.wav"
+    donor_original.write_bytes(b"precious original bytes")
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    external_dir = tmp_path / "external_outside_out_dir"
+    external_dir.mkdir()
+    colliding_symlink = out_dir / "UC-001.norm24k.wav"
+    colliding_symlink.symlink_to(external_dir, target_is_directory=True)
+
+    def _assign_without_reservation_fix(inputs: List[Path], out_dir_arg: Path) -> Dict[Path, str]:
+        return {src: f"{src.stem}.norm24k.wav" for src in inputs}
+
+    monkeypatch.setattr(intake, "assign_normalized_filenames", _assign_without_reservation_fix)
+
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    with pytest.raises(intake.OutputPathCollisionError):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert donor_original.read_bytes() == b"precious original bytes", (
+        "原本 incoming ファイルは一切変更されてはならない"
+    )
+    assert list(external_dir.iterdir()) == [], (
+        "out_dir の外側（symlink の指す先）へは何も書き込まれてはならない"
+    )
+    assert not ledger_path.exists()
 
 
 # ---------------------------------------------------------------------------

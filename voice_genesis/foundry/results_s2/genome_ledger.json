@@ -4,6 +4,7 @@
   "note_blind_discipline": "本台帳は各候補のパラメータ(alpha/method等)を保持するが、判定用ブラインドラベル(candidate_A〜D、バッチ2はcandidate_E〜H、バッチ3はcandidate_I〜J)や最終WAVのsha256は、判定完了までの封印中は意図的に含めない。台帳とブラインド対応表(バッチ1: results_s2/s2_record_2026-08-16.md 参照・中身は非開示。バッチ2: blind_mapping2.json、非コミット。バッチ3: blind_mapping3.json、非コミット)を非交差に保つことで封印中のブラインドを維持する — DESIGN_S2_foundry_loop.md §5/§7。**2状態ポリシー**: 封印中は非開示、User耳判定受領・開封後（本ファイルでは `status: \"UNSEALED_...\"` で明示）は正体をブラインド対応表と突き合わせて開示し、該当ラベルを `blind_label_batchN` フィールドとして genome エントリへ追記する(例: VG-S2-009/010 の `blind_label_batch3`)。最終WAVのsha256は開封後もハッシュ相関防止のため引き続き含めない(§note_batch2_hidden_control_UNSEALED_2026-08-16 参照)。",
   "note_batch2_hidden_control": "VG-S2-008 (H') は method=hidden_anchor_control のみを記録し、実体がritsu/pjsどちらのアンカー埋め込みか(identity_latent_ref含む)は意図的に一切含めない — 台帳の恒久公開性(git管理)により、埋め込みバイト列とのハッシュ照合で正体が逆算されるのを防ぐため。実体は blind_mapping2.json(非コミット・scratchpad限定)にのみ封印。",
   "note_batch2_hidden_control_UNSEALED_2026-08-16": "User耳判定受領・開封済み(results_s2/s2_record_2026-08-16.md §11)。VG-S2-008の実体は anchor_ritsu の spk_embed そのもの（リツ、補間・摂動なし）。log-melスペクトル距離で anchor_ritsu との距離が0.000（完全一致、combined_dist.py実測）であることも独立に確認済み。identity_latent_refは実ベクトルのblobハッシュ相関を避けるためnullのまま維持する（正体はテキストとして開示済みのため、ハッシュ開示の必要性自体が消滅している）。",
+  "note_batch2_UNSEALED_2026-08-16": "User耳判定受領・開封済み(results_s2/s2_record_2026-08-16.md §11.2)。提示ラベルE=VG-S2-006(lerp_extrapolate α=1.4、PJS側外挿)、F=VG-S2-005(lerp_extrapolate α=-0.4、リツ側外挿)、G=VG-S2-008(隠しコントロール、note_batch2_hidden_control_UNSEALED_2026-08-16参照)、H=VG-S2-007(orthogonal_perturbation)。以前の版はGのみstatus/blind_label_batch2を更新しておりE/F/Hのgenomeエントリが`CANDIDATE`のまま未反映で§11の開封記録と矛盾していたため、本改訂で該当4エントリのstatusを`UNSEALED_2026-08-16`・blind_label_batch2を追記し一致させた(PR #264 R16 P2対応。開封の事実関係・判定内容自体の書き換えではなく台帳側の記帳漏れ是正)。",
   "note_batch3": "VG-S2-009/010 はブラインドラベル(candidate_I/J、バッチ3独自のcandidate_{I,J}.wav)判定完了まで台帳にラベル対応・最終WAVのsha256を含めない(バッチ1/2と同じ非交差方針。対応表は blind_mapping3.json、非コミット・scratchpad限定)。",
   "note_batch3_UNSEALED_2026-08-16": "User耳判定受領・開封済み(results_s2/s2_record_2026-08-16.md §13)。blind_mapping3.jsonのsha256照合済み(f74bc6f4...c828a8d8、改変なし)。提示ラベルI = VG-S2-010（起点=e_p純PJSアンカー、破綻なし・PJSにかなり近いとUser判定）。提示ラベルJ = VG-S2-009（起点=lerp0.65、第三の声だがり→ん破綻残存とUser判定）。J=lerp0.65起点であることから、S11.4のリツ極欠陥診断（H3）は維持・修正不要と判定（§13.3）。",
   "batch": "S2-batch1+batch2+batch3",
@@ -78,7 +79,8 @@
       "mutation_ops": ["INTERP_LERP_EXTRAPOLATE_ALPHA_-0.40"],
       "seed": 42,
       "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
-      "status": "CANDIDATE"
+      "status": "UNSEALED_2026-08-16",
+      "blind_label_batch2": "F"
     },
     {
       "voice_id": "VG-S2-006",
@@ -92,7 +94,8 @@
       "mutation_ops": ["INTERP_LERP_EXTRAPOLATE_ALPHA_1.40"],
       "seed": 42,
       "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
-      "status": "CANDIDATE"
+      "status": "UNSEALED_2026-08-16",
+      "blind_label_batch2": "E"
     },
     {
       "voice_id": "VG-S2-007",
@@ -106,7 +109,8 @@
       "mutation_ops": ["INTERP_ORTHOGONAL_PERTURB_MAGNITUDE_HALF_DIFFNORM"],
       "seed": 42,
       "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
-      "status": "CANDIDATE"
+      "status": "UNSEALED_2026-08-16",
+      "blind_label_batch2": "H"
     },
     {
       "voice_id": "VG-S2-008",
@@ -120,7 +124,8 @@
       "mutation_ops": ["HIDDEN_CONTROL_ANCHOR_COPY_SEALED"],
       "seed": 42,
       "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
-      "status": "UNSEALED_2026-08-16"
+      "status": "UNSEALED_2026-08-16",
+      "blind_label_batch2": "G"
     },
     {
       "voice_id": "VG-S2-009",
