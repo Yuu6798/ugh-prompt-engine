@@ -120,6 +120,19 @@ class LedgerSchemaError(RuntimeError):
     """
 
 
+class DuplicateSourceError(RuntimeError):
+    """今回バッチの入力の `source_sha256` が、既存台帳のエントリまたは同一
+    バッチ内の他ファイルと一致する場合に送出する（R17 P2 対応）。
+
+    incoming をクリアせずに再実行した場合や、同じ収録が別ファイル名で
+    2 度届いた場合、無条件の追記だと同一バイト列の take が台帳へ重複
+    記録され、コーパスが 1 ドナー収録を二重に計上してしまう（「本物の
+    再録」＝バイト列が異なる場合と「重複送付」＝バイト列が同一の場合の
+    区別を失う）。`_check_duplicate_sources` が staging → `out_dir` への
+    一括公開より前に検査し、重複があれば部分公開せず fail-closed 拒否する。
+    """
+
+
 @dataclass(frozen=True)
 class LedgerEntry:
     """`user_donor_ledger.json` の `entries` 1 件分。
@@ -449,6 +462,52 @@ def _check_publish_path(final_path: Path, out_dir: Path) -> None:
         )
 
 
+def _check_duplicate_sources(entries: List[LedgerEntry], ledger: dict) -> None:
+    """今回バッチ `entries` の `source_sha256` を、既存台帳の全エントリ①
+    および同一バッチ内の他ファイル②の両方と突き合わせ、重複があれば
+    fail-closed 拒否する（R17 P2 対応。`run` が staging → `out_dir` へ
+    一括公開する直前の preflight として呼ぶ）。
+
+    バイト列が異なる再録（`source_sha256` が異なる）は対象外 — 積み立て
+    運用の「同カードの再録は正常系」という方針（本ファイル冒頭の docstring
+    参照）を壊さない。重複が見つかった場合は、どのファイルがどのエントリ/
+    ファイルと重複しているかを列挙した単一の例外で公開全体を拒否し、
+    部分公開はしない。
+    """
+    existing_by_hash: Dict[str, List[str]] = {}
+    for existing_entry in ledger.get("entries", []):
+        existing_hash = existing_entry.get("source_sha256")
+        if existing_hash is None:
+            continue
+        existing_by_hash.setdefault(existing_hash, []).append(
+            existing_entry.get("source_filename", "<unknown>")
+        )
+
+    batch_by_hash: Dict[str, List[str]] = {}
+    for entry in entries:
+        batch_by_hash.setdefault(entry.source_sha256, []).append(entry.source_filename)
+
+    problems: List[str] = []
+    for source_sha256, batch_filenames in batch_by_hash.items():
+        ledger_matches = existing_by_hash.get(source_sha256, [])
+        if ledger_matches:
+            problems.append(
+                f"- source_sha256={source_sha256[:12]}...: バッチ内 {batch_filenames} が"
+                f"既存台帳のエントリ {ledger_matches} と同一バイト列です"
+            )
+        if len(batch_filenames) > 1:
+            problems.append(
+                f"- source_sha256={source_sha256[:12]}...: バッチ内 {batch_filenames} 同士が"
+                f"同一バイト列で重複しています"
+            )
+
+    if problems:
+        raise DuplicateSourceError(
+            "重複した source_sha256 を検出したため公開全体を拒否します"
+            "（fail-closed。部分公開はしません。R17 P2 対応）:\n" + "\n".join(problems)
+        )
+
+
 def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) -> LedgerEntry:
     """`src` を `staging_dir/filename` へ正規化し、公開後の想定パスで台帳エントリを作る。
 
@@ -563,6 +622,12 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
         entries = [
             process_one(src, staging_dir, filenames[src], out_dir) for src in inputs
         ]
+
+        # R17 P2 対応: staging → out_dir への一括公開より前の preflight として、
+        # 今回バッチ各ファイルの source_sha256 を既存台帳・同一バッチ内の他
+        # ファイルの両方と突き合わせ、重複があれば公開全体を fail-closed 拒否
+        # する（部分公開はしない）。
+        _check_duplicate_sources(entries, ledger)
 
         ledger.setdefault("entries", []).extend(asdict(e) for e in entries)
 

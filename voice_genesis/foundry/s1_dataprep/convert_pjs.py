@@ -392,7 +392,7 @@ def _drop_dead_phonemes(row: Dict[str, str], ph_dur: List[float]) -> Dict[str, s
 
 def normalize_ph_dur_to_wav_duration(
     rows: List[Dict[str, str]], wav_dir: Path
-) -> Tuple[List[Dict[str, str]], List[str], List[str], List[str], List[str]]:
+) -> Tuple[List[Dict[str, str]], List[str], List[str], List[str], List[str], List[str]]:
     """各行の ph_dur 合計が実 wav 長と許容誤差（相対5% or 絶対0.1sの大きい方）
     を超えて乖離している場合の是正/検出を行う。
 
@@ -435,6 +435,26 @@ def normalize_ph_dur_to_wav_duration(
     undershoot_violations と同型の「全収集してから呼び出し側が判定する」
     設計）。
 
+    fix (2026-08-16, review #264 R17 P2, convert_pjs.py:456): `ph_dur` が
+    非数文字列/空/`nan`/`inf` の行は、旧実装だと最初の検査で即座に
+    `continue` し、同じ行に対する後続の name 安全性検査・missing/
+    unreadable WAV 検査を丸ごと短絡していた。これらは本来 `ph_dur` の
+    妥当性とは独立な観点（`row["name"]` と実 WAV ファイルにしか依存しない）
+    であるにもかかわらず、`ph_dur` 側の異常だけが先に continue すると
+    どの violation リストにも記録されない行が生まれ得る（例:
+    `name="../../escape", ph_dur="nan"` は 5 個の violation リストすべてが
+    空のまま通過し、`main()` は `_swap_into_place()` まで到達して成功を
+    報告してしまう）。本実装は行単位で独立な検査（ph_dur 妥当性・name
+    安全性・WAV 可読性）を互いに短絡させず毎回実行し、該当する検査ごとに
+    その violation リストへ記録してから、いずれか1つでも失敗していれば
+    当該行は無変更のまま次の行へ進む。ただし「name が不安全なら WAV を
+    絶対に open しない」という安全上の依存関係（review #264 R7）だけは
+    維持する — WAV の可読性検査は name 安全性検査を通過した場合にのみ行う。
+    非数/非有限の `ph_dur` 自体も 6 個目の戻り値 `malformed_ph_dur_violations`
+    へ人間可読の説明とともに全件収集し、他の violation と同様に呼び出し元
+    が公開前に fail-closed で拒否できるようにする（旧実装はこのケースを
+    どの violation にも計上せず黙って skip していた）。
+
     乖離が許容内の行は同一オブジェクトのまま（内容も無変更で）返す。
     2 個目の戻り値は overshoot 正規化を適用した行の人間可読ログ（適用 0 件
     なら空リスト。呼び出し側はこれを CSV 再公開の要否判定に使う）。
@@ -444,18 +464,29 @@ def normalize_ph_dur_to_wav_duration(
     undershoot_violations: List[str] = []
     unsafe_name_violations: List[str] = []
     missing_wav_violations: List[str] = []
+    malformed_ph_dur_violations: List[str] = []
     resolved_wav_dir = wav_dir.resolve()
     for row in rows:
-        try:
-            ph_dur = [float(x) for x in row["ph_dur"].split()]
-        except ValueError:
-            fixed_rows.append(row)
-            continue
-        if not ph_dur or not all(math.isfinite(d) for d in ph_dur):
-            fixed_rows.append(row)
-            continue
         name = row["name"]
-        if not _is_safe_wav_name(name, wav_dir, resolved_wav_dir):
+
+        # R17 P2 対応: 以下 3 検査（ph_dur 妥当性・name 安全性・WAV
+        # 可読性）は互いに独立な観点のため短絡させず、いずれも必ず実行する
+        # （WAV 可読性のみ、安全のため name 安全性を通過した場合に限る）。
+        try:
+            ph_dur: Optional[List[float]] = [float(x) for x in row["ph_dur"].split()]
+        except ValueError:
+            ph_dur = None
+        if ph_dur is not None and (not ph_dur or not all(math.isfinite(d) for d in ph_dur)):
+            ph_dur = None
+        if ph_dur is None:
+            malformed_ph_dur_violations.append(
+                f"{name}: ph_dur field is malformed (unparseable, empty, or "
+                "contains a non-finite value such as nan/inf); cannot be "
+                "validated against wav duration, fail-closed, not published"
+            )
+
+        name_is_safe = _is_safe_wav_name(name, wav_dir, resolved_wav_dir)
+        if not name_is_safe:
             # fix (2026-08-16, review #264 R7): 安全でない name は
             # `_wav_duration_seconds`（= wave.open）へ渡さず、公開前
             # fail-closed の判定材料として収集するのみに留める。
@@ -464,20 +495,25 @@ def normalize_ph_dur_to_wav_duration(
                 "separator rejected, or resolved path escapes wav_dir — "
                 "possibly via symlink); not opened, fail-closed"
             )
+
+        wav_dur: Optional[float] = None
+        if name_is_safe:
+            wav_dur = _wav_duration_seconds(wav_dir / f"{name}.wav")
+            if wav_dur is None or wav_dur <= 0:
+                # fix (2026-08-16, review #264 R9 P2): 検証不能（WAV 欠落/破損/
+                # ゼロ長）を skip せず、公開前 fail-closed の判定材料として収集
+                # する（モジュール docstring・呼び出し元 fail-closed 判定を参照）。
+                missing_wav_violations.append(
+                    f"{name}: wav missing, unreadable, or non-positive duration "
+                    f"({wav_dir / f'{name}.wav'} — cannot validate ph_dur against "
+                    "actual wav duration; not opened/verified, fail-closed)"
+                )
+                wav_dur = None
+
+        if ph_dur is None or not name_is_safe or wav_dur is None:
             fixed_rows.append(row)
             continue
-        wav_dur = _wav_duration_seconds(wav_dir / f"{name}.wav")
-        if wav_dur is None or wav_dur <= 0:
-            # fix (2026-08-16, review #264 R9 P2): 検証不能（WAV 欠落/破損/
-            # ゼロ長）を skip せず、公開前 fail-closed の判定材料として収集
-            # する（モジュール docstring・呼び出し元 fail-closed 判定を参照）。
-            missing_wav_violations.append(
-                f"{name}: wav missing, unreadable, or non-positive duration "
-                f"({wav_dir / f'{name}.wav'} — cannot validate ph_dur against "
-                "actual wav duration; not opened/verified, fail-closed)"
-            )
-            fixed_rows.append(row)
-            continue
+
         total = math.fsum(ph_dur)
         tol = max(wav_dur * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
         diff = abs(total - wav_dur)
@@ -508,7 +544,14 @@ def normalize_ph_dur_to_wav_duration(
             + (f", {n_dropped} zero-length phoneme(s) removed" if n_dropped else "")
             + ")"
         )
-    return fixed_rows, fix_log, undershoot_violations, unsafe_name_violations, missing_wav_violations
+    return (
+        fixed_rows,
+        fix_log,
+        undershoot_violations,
+        unsafe_name_violations,
+        missing_wav_violations,
+        malformed_ph_dur_violations,
+    )
 
 
 class OutputCollisionError(ValueError):
@@ -1044,7 +1087,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 ph_dur_undershoot_violations,
                 ph_dur_unsafe_name_violations,
                 ph_dur_missing_wav_violations,
+                ph_dur_malformed_violations,
             ) = normalize_ph_dur_to_wav_duration(out_rows, out_wav_dir)
+            if ph_dur_malformed_violations:
+                # fix (2026-08-16, review #264 R17 P2, convert_pjs.py:456):
+                # ph_dur が非数文字列/空/nan/inf の行は、それ単独でも公開前
+                # fail-closed で拒否する（他の independent な検査 —
+                # unsafe-name/missing-wav — が短絡されず別途この直後で走る
+                # ため、同じ行が複数 violation に同時計上され得る）。
+                print(
+                    f"error: {len(ph_dur_malformed_violations)} row(s) have a malformed "
+                    "ph_dur field (unparseable, empty, or non-finite such as nan/inf; "
+                    "fail-closed, not published): " + "; ".join(ph_dur_malformed_violations),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
             if ph_dur_unsafe_name_violations:
                 print(
                     f"error: {len(ph_dur_unsafe_name_violations)} row(s) have an unsafe wav "

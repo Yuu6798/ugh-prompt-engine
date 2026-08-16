@@ -51,6 +51,14 @@
   の全エントリへ拡張し、さらに公開直前に `_check_publish_path` で
   最終防御（既存エントリなら拒否・親ディレクトリが `out_dir` と一致する
   ことを検証）することで解消
+- R17 P2 (intake.py:567): incoming をクリアせずに再実行した場合や、同じ
+  収録が別ファイル名で 2 度届いた場合、旧実装は無条件に台帳へ追記して
+  おり、同一 `source_sha256` の take が二重計上され得た（「本物の再録」＝
+  バイト列が異なる場合との区別を失う）。今回バッチ各ファイルの
+  `source_sha256` を既存台帳の全エントリ・同一バッチ内の他ファイルの
+  両方と突き合わせ、重複があれば staging → `out_dir` 一括公開の直前で
+  fail-closed 拒否する（`_check_duplicate_sources`）ことで解消。バイト列が
+  異なる再録は影響を受けない
 """
 from __future__ import annotations
 
@@ -1141,3 +1149,95 @@ def test_run_with_real_ffmpeg_resolves_stem_collision(tmp_path: Path) -> None:
             assert data.shape[1] == 1
     hashes = {e.sha256 for e in entries}
     assert len(hashes) == 2
+
+
+# ---------------------------------------------------------------------------
+# R17 P2 (intake.py:567): source_sha256 重複の preflight fail-closed 拒否
+# ---------------------------------------------------------------------------
+
+
+def test_run_rejects_duplicate_against_existing_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """既存台帳に同一 `source_sha256` のエントリが既にある状態で、同じバイト
+    列を別ファイル名で再度取り込もうとすると fail-closed 拒否する
+    （incoming をクリアせずに再実行した場合や、同じ収録が別名で 2 度届く
+    ケースの二重計上を防止）。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    first_incoming = tmp_path / "incoming1"
+    first_incoming.mkdir()
+    (first_incoming / "UC-001.wav").write_bytes(b"identical donor bytes")
+    intake.run(first_incoming, out_dir, ledger_path)
+
+    ledger_before = ledger_path.read_bytes()
+    published_before = sorted(p.name for p in out_dir.iterdir())
+
+    second_incoming = tmp_path / "incoming2"
+    second_incoming.mkdir()
+    # 別ファイル名だが第1バッチと完全に同じバイト列（重複送付を再現）。
+    (second_incoming / "UC-001_resend.wav").write_bytes(b"identical donor bytes")
+
+    with pytest.raises(intake.DuplicateSourceError):
+        intake.run(second_incoming, out_dir, ledger_path)
+
+    # 部分公開はしない: 台帳・公開済みファイル一覧は第2バッチ実行前後で不変。
+    assert ledger_path.read_bytes() == ledger_before
+    assert sorted(p.name for p in out_dir.iterdir()) == published_before
+
+
+def test_run_rejects_duplicate_within_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同一バッチ内に完全に同じバイト列のファイルが2件届いた場合も
+    fail-closed 拒否する（既存台帳側に重複が無くても検出する）。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"same bytes twice")
+    (incoming_dir / "UC-002.wav").write_bytes(b"same bytes twice")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    with pytest.raises(intake.DuplicateSourceError):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert not ledger_path.exists()
+    assert not out_dir.exists() or list(out_dir.iterdir()) == []
+
+
+def test_run_allows_genuine_retake_with_different_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同じカードの再録（バイト列が異なる = 別テイク）は `source_sha256` が
+    一致しないため、重複拒否の影響を受けず正常に公開される（積み立て運用の
+    「同カードの再録は正常系」を壊さないことの回帰ガード）。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    first_incoming = tmp_path / "incoming1"
+    first_incoming.mkdir()
+    (first_incoming / "UC-001.wav").write_bytes(b"take one bytes")
+    intake.run(first_incoming, out_dir, ledger_path)
+
+    second_incoming = tmp_path / "incoming2"
+    second_incoming.mkdir()
+    (second_incoming / "UC-001_take2.wav").write_bytes(b"take two bytes, genuinely different")
+
+    entries = intake.run(second_incoming, out_dir, ledger_path)
+
+    assert len(entries) == 1
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 2
+    source_hashes = {e["source_sha256"] for e in ledger["entries"]}
+    assert len(source_hashes) == 2

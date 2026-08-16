@@ -9,6 +9,13 @@ ph_dur 合計が実音声長を大きく超過する」構造不良を検出/是
   のみ末尾切り詰めで正規化。undershoot 行は fail-closed で違反収集し無変更
   のまま返す — review #264 R5。許容内の行は同一オブジェクトのまま完全
   無変更で返す）
+- `convert_pjs.normalize_ph_dur_to_wav_duration`: ph_dur が非数/空/非有限
+  （nan/inf）の行を `malformed_ph_dur_violations` へ収集して fail-closed
+  拒否し、同じ行の name 安全性検査・missing/unreadable WAV 検査を短絡
+  しない（review #264 R17 P2, convert_pjs.py:456。旧実装は ph_dur 側の
+  異常が先に continue すると独立な後続検査が丸ごとスキップされ、
+  `name="../../escape", ph_dur="nan"` のような行がどの violation にも
+  記録されず通過し得た）
 """
 from __future__ import annotations
 
@@ -524,7 +531,7 @@ def test_normalize_ph_dur_truncates_tail_of_overshooting_row(tmp_path: Path) -> 
     wav_dir = tmp_path / "wavs"
     _write_wav(wav_dir / "seg000.wav", 3.0)
     rows = [{"name": "seg000", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0", "ph_num": "1 1 1"}]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
     assert unsafe == []
     assert missing == []
@@ -563,7 +570,7 @@ def test_normalize_ph_dur_removes_note_seq_note_dur_for_emptied_note(tmp_path: P
             "note_dur": "1.0 4.0 1.0",
         }
     ]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
     assert unsafe == []
     assert missing == []
@@ -606,7 +613,7 @@ def test_normalize_ph_dur_partial_note_survives_with_reduced_count(tmp_path: Pat
             "note_dur": "0.5 3.0",
         }
     ]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
     assert unsafe == []
     assert missing == []
@@ -637,7 +644,7 @@ def test_normalize_ph_dur_forward_boundaries_preserved_multi_phoneme(tmp_path: P
     # 累積: 0.3 / 0.7 / 1.2(=0.3+0.4+... 実際は 0.3,0.4,0.5 -> 1.2) / 続いて
     # 大きな最終音素が EOF を大きく超過する
     rows = [{"name": "seg002", "ph_seq": "a i u SP", "ph_dur": "0.3 0.4 0.5 5.0"}]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
     assert unsafe == []
     assert missing == []
@@ -662,7 +669,7 @@ def test_normalize_ph_dur_undershoot_is_rejected_fail_closed(tmp_path: Path) -> 
     _write_wav(wav_dir / "seg003.wav", 4.0)
     row = {"name": "seg003", "ph_seq": "a i SP", "ph_dur": "0.5 0.5 0.5"}  # 合計1.5s vs 実4.0s
     rows = [row]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []  # overshoot 用ログには積まれない
     assert len(undershoot) == 1
     assert "seg003" in undershoot[0]
@@ -683,7 +690,7 @@ def test_normalize_ph_dur_undershoot_within_tolerance_is_untouched(tmp_path: Pat
     _write_wav(wav_dir / "seg005.wav", 3.05)
     row = {"name": "seg005", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}  # 合計3.0s vs 実3.05s
     rows = [row]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []
     assert undershoot == []
     assert unsafe == []
@@ -696,7 +703,7 @@ def test_normalize_ph_dur_leaves_within_tolerance_row_byte_identical(tmp_path: P
     _write_wav(wav_dir / "seg001.wav", 3.0)
     row = {"name": "seg001", "ph_seq": "SP a SP", "ph_dur": "1.0 1.02 1.0"}
     rows = [row]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []
     assert undershoot == []
     assert unsafe == []
@@ -717,7 +724,7 @@ def test_normalize_ph_dur_missing_wav_is_collected_not_silently_skipped(tmp_path
     wav_dir.mkdir()
     row = {"name": "nope", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
     rows = [row]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []
     assert undershoot == []
     assert unsafe == []
@@ -734,7 +741,7 @@ def test_normalize_ph_dur_zero_length_wav_is_collected_not_silently_skipped(tmp_
     (wav_dir / "empty.wav").write_bytes(b"")
     row = {"name": "empty", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
     rows = [row]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []
     assert undershoot == []
     assert unsafe == []
@@ -752,7 +759,7 @@ def test_normalize_ph_dur_missing_wav_fails_closed_via_main(tmp_path: Path) -> N
     wav_dir = tmp_path / "wavs"
     wav_dir.mkdir()
     row = {"name": "gone", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration([row], wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration([row], wav_dir)
     assert len(missing) == 1  # main() はこれを検知して return 1 する
     assert fixed_rows[0] is row
 
@@ -763,7 +770,7 @@ def test_normalize_ph_dur_mixed_batch_only_touches_violating_rows(tmp_path: Path
     _write_wav(wav_dir / "bad.wav", 3.0)
     good = {"name": "good", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
     bad = {"name": "bad", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0"}
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration([good, bad], wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration([good, bad], wav_dir)
     assert undershoot == []
     assert unsafe == []
     assert missing == []
@@ -827,7 +834,7 @@ def test_normalize_then_build_dataset_validate_speaker_passes_end_to_end(
         },
     ]
 
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
     assert unsafe == []
     assert missing == []
@@ -883,7 +890,7 @@ def test_normalize_ph_dur_does_not_open_path_traversal_name(tmp_path: Path) -> N
 
     row = {"name": "../../outside/secret", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
     rows = [row]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []
     assert undershoot == []
     assert len(unsafe) == 1
@@ -905,7 +912,7 @@ def test_normalize_ph_dur_does_not_open_symlink_escape(tmp_path: Path) -> None:
 
     row = {"name": "evil", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
     rows = [row]
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []
     assert undershoot == []
     assert len(unsafe) == 1
@@ -922,7 +929,7 @@ def test_normalize_ph_dur_unsafe_name_mixed_with_safe_rows(tmp_path: Path) -> No
     _write_wav(wav_dir / "good.wav", 3.0)
     good = {"name": "good", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0", "ph_num": "1 1 1"}
     evil = {"name": "../escape", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration(
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
         [good, evil], wav_dir
     )
     assert undershoot == []
@@ -944,9 +951,130 @@ def test_normalize_ph_dur_unsafe_name_fails_closed_via_main(tmp_path: Path, caps
     wav_dir = tmp_path / "wavs"
     wav_dir.mkdir()
     row = {"name": "/etc/passwd", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
-    fixed_rows, fix_log, undershoot, unsafe, missing = cp.normalize_ph_dur_to_wav_duration([row], wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration([row], wav_dir)
     assert len(unsafe) == 1  # main() はこれを検知して return 1 する
     assert missing == []
+    assert fixed_rows[0] is row
+
+
+# --- convert_pjs.normalize_ph_dur_to_wav_duration: 非有限 ph_dur の拒否 +
+# 行単位で独立な検査の非短絡化 (review #264 R17 P2, convert_pjs.py:456) -------
+#
+# 旧実装は ph_dur が非数/空/非有限（nan/inf）の行を最初の検査で即 continue
+# しており、同じ行に対する name 安全性検査・missing/unreadable WAV 検査を
+# 丸ごと短絡していた。これらは ph_dur の妥当性とは独立な観点（row["name"]
+# と実 WAV ファイルにしか依存しない）であるにもかかわらず、ph_dur 側の
+# 異常だけが先に continue すると、どの violation リストにも記録されない
+# 行が生まれ得た（fail-closed をすり抜ける）。
+
+
+def test_normalize_ph_dur_rejects_nan_as_malformed(tmp_path: Path) -> None:
+    """`ph_dur` に `nan` が含まれる行は `malformed_ph_dur_violations` へ
+    収集され、行は無変更のまま返る。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg000.wav", 3.0)
+    row = {"name": "seg000", "ph_seq": "SP a SP", "ph_dur": "1.0 nan 1.0"}
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert fix_log == []
+    assert undershoot == []
+    assert unsafe == []
+    assert missing == []
+    assert len(malformed) == 1
+    assert "seg000" in malformed[0]
+    assert fixed_rows[0] is row
+
+
+def test_normalize_ph_dur_rejects_inf_as_malformed(tmp_path: Path) -> None:
+    """`ph_dur` に `inf` が含まれる行も同様に malformed として拒否する。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg001.wav", 3.0)
+    row = {"name": "seg001", "ph_seq": "SP a SP", "ph_dur": "1.0 inf 1.0"}
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert len(malformed) == 1
+    assert "seg001" in malformed[0]
+    assert fixed_rows[0] is row
+
+
+def test_normalize_ph_dur_malformed_and_unsafe_name_both_recorded(tmp_path: Path) -> None:
+    """レビュー再現例: `name="../../escape"` かつ `ph_dur="nan"` の行は、
+    旧実装だと ph_dur の非有限判定で即 continue し、unsafe_name_violations
+    には一切現れず、5個の violation リストすべてが空のまま通過していた。
+    修正後は ph_dur 妥当性検査と name 安全性検査が短絡せず両方実行され、
+    `malformed_ph_dur_violations` と `unsafe_name_violations` の両方に
+    同時に記録される。"""
+    wav_dir = tmp_path / "pjs" / "wavs"
+    wav_dir.mkdir(parents=True)
+    row = {"name": "../../escape", "ph_seq": "SP a SP", "ph_dur": "nan"}
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert fix_log == []
+    assert undershoot == []
+    assert len(unsafe) == 1
+    assert "../../escape" in unsafe[0]
+    assert missing == []
+    assert len(malformed) == 1
+    assert "../../escape" in malformed[0]
+    assert fixed_rows[0] is row  # unsafe なので open されておらず無変更
+
+
+def test_normalize_ph_dur_malformed_and_missing_wav_both_recorded(tmp_path: Path) -> None:
+    """`ph_dur` が malformed かつ WAV が欠落している行は、name 自体は安全
+    なので missing_wav_violations と malformed_ph_dur_violations の両方に
+    記録される（name 安全性検査は ph_dur 妥当性に関わらず必ず走ることの
+    確認）。"""
+    wav_dir = tmp_path / "wavs"
+    wav_dir.mkdir(parents=True)
+    row = {"name": "no_such_wav", "ph_seq": "SP a SP", "ph_dur": "nan"}
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert unsafe == []
+    assert len(missing) == 1
+    assert "no_such_wav" in missing[0]
+    assert len(malformed) == 1
+    assert "no_such_wav" in malformed[0]
+    assert fixed_rows[0] is row
+
+
+def test_normalize_ph_dur_malformed_mixed_with_safe_rows(tmp_path: Path) -> None:
+    """malformed な行と正常な行が混在する場合、正常な行は通常どおり処理され
+    （overshoot 正規化も含め）、malformed な行だけが
+    `malformed_ph_dur_violations` へ収集されることを確認する。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "good.wav", 3.0)
+    _write_wav(wav_dir / "bad.wav", 3.0)
+    good = {"name": "good", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0", "ph_num": "1 1 1"}
+    bad = {"name": "bad", "ph_seq": "SP a SP", "ph_dur": "1.0 nan 1.0"}
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [good, bad], wav_dir
+    )
+    assert undershoot == []
+    assert unsafe == []
+    assert missing == []
+    assert len(malformed) == 1
+    assert "bad" in malformed[0]
+    assert len(fix_log) == 1
+    assert "good" in fix_log[0]
+    assert fixed_rows[0] is not good  # overshoot 正規化により新しい行になる
+    assert fixed_rows[1] is bad  # malformed な行は無変更のまま
+
+
+def test_normalize_ph_dur_malformed_fails_closed_via_main(tmp_path: Path) -> None:
+    """`main()` は `malformed_ph_dur_violations` が非空なら swap 前に
+    fail-closed で拒否する判定条件を、`normalize_ph_dur_to_wav_duration`
+    を直接呼んだ結果で確認する。"""
+    wav_dir = tmp_path / "wavs"
+    wav_dir.mkdir()
+    row = {"name": "seg002", "ph_seq": "SP a SP", "ph_dur": "not-a-number"}
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert len(malformed) == 1  # main() はこれを検知して return 1 する
     assert fixed_rows[0] is row
 
 
