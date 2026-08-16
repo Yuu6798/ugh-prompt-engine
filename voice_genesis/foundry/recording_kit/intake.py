@@ -1207,8 +1207,7 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
 
     公開フェーズ（`out_dir` へのファイル移動 + `save_ledger`）に入る直前に
     既存台帳のバイト列スナップショットを取っておく（無ければ `None`）。
-    公開フェーズは移動済みファイルを `moved` に記録しながら進める。移動
-    そのものが失敗した場合・全ファイル移動後に台帳保存が失敗した場合の
+    移動そのものが失敗した場合・全ファイル移動後に台帳保存が失敗した場合の
     いずれも `except BaseException` で捕捉し、それまでに公開済みだった
     wav を staging へ移動し直し（`out_dir` を呼び出し前の状態へ巻き戻して）
     、台帳もスナップショットへ復元してから re-raise する。`save_ledger()`
@@ -1219,6 +1218,27 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
     失敗したバッチの痕跡は `out_dir`/`ledger_path` のどちらにも残らない
     （`gate_synth.py` の staged swap + `BaseException` 巻き戻しと同型パターン。
     R12 P2 対応）。
+
+    [R26 P2 修正: build_dataset.py:280-281 と同型の move→記帳窓を除去]
+    従来は公開ループが `shutil.move()` 成功直後に `moved.append(...)` する
+    後続代入で「移動済み集合」を記帳していたため、move 完了〜append 実行の
+    間で `KeyboardInterrupt`/`SystemExit` が飛ぶと巻き戻しハンドラがその
+    WAV を知らず、台帳復元 + staging 削除の後に untracked な正規化 WAV が
+    `out_dir` に残り得た（次回 run がこの orphan を避けてテイク連番を割り
+    当ててしまう）。現在は `moved` リストを持たず、巻き戻し時に `out_dir`/
+    `staging_dir` 双方のファイル実在から移動済み集合をその場で再構成する:
+    `final_path.exists() and not staged_path.exists()` を「自分がこの項目を
+    move した」の判定条件とする（`final_path.exists()` 単独では、
+    `_check_publish_path` が検出する既存の無関係な衝突物 — 今回バッチとは
+    無関係に out_dir へ元から存在するディレクトリ/symlink 等 — を誤って
+    「自分が移動したもの」と取り違え得るため、move の実行で `staged_path`
+    側からも消えているという対の条件まで確認する）。公開先ファイル名
+    （`filenames[src]`）は `assign_normalized_filenames` により事前予約済みで
+    他プロセスと衝突しないため、この対の判定は「この項目の move が完了
+    したか」を rename の原子性（`shutil.move` は `staging_dir` と `out_dir`
+    が同一ファイルシステム上にあるため内部的に `os.rename` を使う）を根拠に
+    ファイルシステム状態から直接判定でき、Python 側の記帳ステップに依存
+    しない。
 
     上記全体（`assign_normalized_filenames` の out_dir スキャンから公開・
     台帳保存・ロールバックまで）は `<ledger>.lock` への `fcntl.flock
@@ -1324,7 +1344,6 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
                     ledger_path.read_bytes() if ledger_path.exists() else None
                 )
 
-                moved: List[tuple[Path, Path]] = []  # (final_path, staged_path) の公開済み一覧
                 try:
                     for src in inputs:
                         staged_path = staging_dir / filenames[src]
@@ -1334,7 +1353,6 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
                         # 変わった場合・予約ロジック自体の見落としに対する備え）。
                         _check_publish_path(final_path, out_dir)
                         shutil.move(str(staged_path), str(final_path))
-                        moved.append((final_path, staged_path))
 
                     save_ledger(ledger_path, ledger)
                 except BaseException:
@@ -1342,8 +1360,24 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
                     # （逆順で戻すのは他ファイルとの依存関係はないが、失敗直近のものから
                     # 先に処理するほうが診断しやすいための慣習）。staging は外側の
                     # finally でまるごと削除されるため、戻した分は最終的に消える。
-                    for final_path, staged_path in reversed(moved):
-                        if final_path.exists():
+                    # [R26 P2] `moved` リストのような後続代入には頼らず、`out_dir`
+                    # 側の実在から今回バッチの移動済み集合をその場で再構成する
+                    # （docstring の R26 修正メモ参照）。判定は `final_path.exists()`
+                    # 単独ではなく `not staged_path.exists()` も併せて見る:
+                    # `_check_publish_path` が検出する既存の衝突（out_dir に
+                    # 今回バッチと無関係なディレクトリ/symlink が既に存在する
+                    # ケース）では、move を試みる前に例外が飛ぶため
+                    # `staged_path` は staging に残ったまま・`final_path` は
+                    # その無関係な既存物のまま実在し続ける。`final_path.exists()`
+                    # のみで判定すると、この無関係な既存物を「自分が移動した
+                    # もの」と誤認して `staging` 側へ move してしまう
+                    # （staged_path と衝突する事故）。`staged_path` が消えている
+                    # （= move で運び出された）ことを併せて確認することで、
+                    # 「自分が実際に move した項目」だけを正しく特定する。
+                    for src in reversed(inputs):
+                        staged_path = staging_dir / filenames[src]
+                        final_path = out_dir / filenames[src]
+                        if final_path.exists() and not staged_path.exists():
                             shutil.move(str(final_path), str(staged_path))
                     # 台帳もスナップショット時点へ復元する（R13 P2 対応。
                     # save_ledger() 成功直後の中断で新台帳が既に replace 済みの

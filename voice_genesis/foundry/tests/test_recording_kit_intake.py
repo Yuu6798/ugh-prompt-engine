@@ -112,6 +112,15 @@
   エントリについて `normalized_path` の実在と実バイト列 sha256 の一致を
   検証し、欠損・不一致は `LedgerArtifactIntegrityError` で fail-closed
   拒否することで解消（`_check_existing_artifacts`）
+- R26 P2 (intake.py:1337): 公開ループが `shutil.move()` 成功直後に
+  `moved.append(...)` する後続代入で移動済み集合を記帳していたため、
+  move 完了〜append 実行の間で `KeyboardInterrupt`/`SystemExit` が飛ぶと
+  巻き戻しハンドラがその WAV を知らず、台帳復元 + staging 削除の後に
+  untracked な正規化 WAV が `out_dir` に残っていた（次回 run がこの
+  orphan を避けてテイク連番を割り当ててしまう）。`moved` リストを廃し、
+  巻き戻し時に `out_dir` 側のファイル実在（`final_path.exists()`）から
+  移動済み集合をその場で再構成することで解消（`build_dataset.py` の
+  `_publish_outputs` R26 修正と同型パターン）
 """
 from __future__ import annotations
 
@@ -736,6 +745,103 @@ def test_run_rolls_back_all_published_wavs_when_ledger_save_fails(
     assert _published_entries(out_dir) == [], (
         "台帳保存失敗時は、直前に移動済みだった全 wav が out_dir から巻き戻されて"
         "いなければならない"
+    )
+    leftover_staging = [
+        p for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith(".intake-staging-")
+    ]
+    assert leftover_staging == []
+
+
+# ---------------------------------------------------------------------------
+# R26 P2 (intake.py:1337): move→記帳窓の除去
+#
+# 旧実装は `shutil.move()` 成功直後に `moved.append(...)` する後続代入で
+# 移動済み集合を記帳していた。move 完了〜append の間で `KeyboardInterrupt`/
+# `SystemExit` が飛ぶと、巻き戻しハンドラ（`moved` を逆順に辿る）がその
+# WAV を知らず、orphan（台帳未記載・out_dir にだけ残る正規化 WAV）を
+# 残していた。以下は「move は成功したが append 前」の状況を monkeypatch で
+# 直接再現する（既存の「move 呼び出し自体が失敗する」ケースとは異なる窓）。
+# ---------------------------------------------------------------------------
+
+
+def test_run_removes_orphan_wav_when_interrupted_right_after_first_move_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """1 件目の `shutil.move()` が実際に完了した直後（旧実装の `moved.append`
+    実行前に相当するタイミング）に中断しても、その WAV が out_dir に
+    untracked のまま残らない。"""
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"a")
+    (incoming_dir / "UC-002.wav").write_bytes(b"b")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    real_move = intake.shutil.move
+    move_calls = {"n": 0}
+
+    def _move_then_interrupt_on_first(src, dst):
+        result = real_move(src, dst)
+        move_calls["n"] += 1
+        if move_calls["n"] == 1:
+            # ここが「move 成功〜moved.append」の窓に相当するタイミング。
+            raise KeyboardInterrupt()
+        return result
+
+    monkeypatch.setattr(intake.shutil, "move", _move_then_interrupt_on_first)
+
+    with pytest.raises(KeyboardInterrupt):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert not ledger_path.exists(), "公開フェーズ失敗時は台帳へ一切記帳されてはならない"
+    assert _published_entries(out_dir) == [], (
+        "move 成功直後に中断しても、untracked な正規化 WAV が out_dir に"
+        "残ってはならない（orphan 禁止）"
+    )
+    leftover_staging = [
+        p for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith(".intake-staging-")
+    ]
+    assert leftover_staging == []
+
+
+def test_run_removes_all_orphan_wavs_when_interrupted_right_after_a_later_move_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """3 件中 2 件目の `shutil.move()` が完了した直後に中断した場合、
+    1 件目（旧実装でも `moved` に記帳済み）と 2 件目（旧実装では窓に
+    落ちて未記帳）の両方が out_dir から巻き戻される。"""
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"a")
+    (incoming_dir / "UC-002.wav").write_bytes(b"b")
+    (incoming_dir / "UC-003.wav").write_bytes(b"c")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    real_move = intake.shutil.move
+    move_calls = {"n": 0}
+
+    def _move_then_interrupt_on_second(src, dst):
+        result = real_move(src, dst)
+        move_calls["n"] += 1
+        if move_calls["n"] == 2:
+            raise KeyboardInterrupt()
+        return result
+
+    monkeypatch.setattr(intake.shutil, "move", _move_then_interrupt_on_second)
+
+    with pytest.raises(KeyboardInterrupt):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert not ledger_path.exists()
+    assert _published_entries(out_dir) == [], (
+        "巻き戻し後は 1 件目・2 件目のいずれも out_dir に残ってはならない"
     )
     leftover_staging = [
         p for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith(".intake-staging-")

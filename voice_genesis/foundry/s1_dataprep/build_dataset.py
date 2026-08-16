@@ -268,6 +268,17 @@ def _publish_outputs(items: Sequence[Tuple[Path, str]]) -> None:
         raise
 
     # Phase 2: 既存ファイルをバックアップへ退避する（無ければ None を記録）。
+    #
+    # [R26 P2 修正] 従来は `os.replace(path, bak_name)` が成功した直後に
+    # `backups.append(...)` していたため、rename 成功〜記帳の間で
+    # `KeyboardInterrupt`/`SystemExit` が飛ぶと巻き戻しハンドラがその退避を
+    # 知らず、canonical パス（`path`）が欠けたまま untracked な `bak_name` が
+    # 残る窓があった。記帳（`backups.append`）を rename 呼び出しの**前**に
+    # 済ませる順序へ変更し、巻き戻し時は「記帳の有無」ではなく
+    # `os.path.exists(bak_name)`（ファイルシステム状態）で実際に rename が
+    # 完了したかを判定する。rename は原子的（中間状態が存在しない）ため、
+    # この判定は「記帳済みだが rename 未実行」（bak_name 不在 → no-op で
+    # 安全）と「rename 完了」（bak_name 実在 → 復元）を取り違えない。
     backups: List[Tuple[Path, Optional[str]]] = []
     try:
         for path, _tmp_name in staged:
@@ -277,14 +288,15 @@ def _publish_outputs(items: Sequence[Tuple[Path, str]]) -> None:
                 )
                 os.close(bak_fd)
                 os.unlink(bak_name)
-                os.replace(path, bak_name)
                 backups.append((path, bak_name))
+                os.replace(path, bak_name)
             else:
                 backups.append((path, None))
     except BaseException:
         # 退避中の失敗: ここまでの退避分を復元し、staging を破棄する。
+        # bak_name が実在するものだけが「実際に退避が完了した」対象。
         for path, bak_name in backups:
-            if bak_name is not None:
+            if bak_name is not None and os.path.exists(bak_name):
                 os.replace(bak_name, path)
         for _path, tmp_name in staged:
             try:
@@ -294,28 +306,35 @@ def _publish_outputs(items: Sequence[Tuple[Path, str]]) -> None:
         raise
 
     # Phase 3: staging を実パスへ一括公開する。
-    published = 0
+    #
+    # [R26 P2 修正] 従来は `os.replace(tmp_name, path)` 成功直後に
+    # `published += 1` していたため、同型の rename→記帳窓があった
+    # （公開成功〜カウンタ更新の間で中断すると、その項目が未公開扱いのまま
+    # 巻き戻しへ入り、`bak_name is None` の項目では新規公開済みファイルが
+    # 消されずに残存し得た）。カウンタに頼らず、`tmp_name` がまだ実在するか
+    # （＝この項目の rename がまだ起きていないか）をファイルシステムから
+    # 判定する（rename は原子的なので tmp_name の実在/不在で二値に定まる）。
     try:
         for path, tmp_name in staged:
             os.replace(tmp_name, path)
-            published += 1
     except BaseException:
         # 途中失敗: 公開済み分をバックアップから巻き戻し、未公開分の
         # staging/バックアップを片付ける（旧成果物を確実に復元する）。
-        for i, (path, tmp_name) in enumerate(staged):
-            bak_name = backups[i][1]
-            if i < published:
-                if bak_name is not None:
-                    os.replace(bak_name, path)
-                else:
-                    os.unlink(path)
-            else:
+        for (path, tmp_name), (_bpath, bak_name) in zip(staged, backups):
+            if os.path.exists(tmp_name):
+                # tmp_name がまだ実在 = この項目の rename は未実行。
                 try:
                     os.unlink(tmp_name)
                 except OSError:
                     pass
                 if bak_name is not None:
                     os.replace(bak_name, path)
+            else:
+                # tmp_name が消えている = rename 完了（公開済み）。旧内容へ復元する。
+                if bak_name is not None:
+                    os.replace(bak_name, path)
+                else:
+                    os.unlink(path)
         raise
 
     # 全件公開に成功: バックアップを削除する。

@@ -1640,3 +1640,111 @@ def test_validate_speaker_does_not_double_report_missing_wav_as_unreadable(
     problems = bd.validate_speaker("pjs", tmp_path, rows)
     assert any("wav missing" in p for p in problems)
     assert not any("unreadable or non-positive duration" in p for p in problems)
+
+
+# --- build_dataset._publish_outputs: rename→記帳窓の除去
+# (review #264 R26 P2, build_dataset.py:280-281 スレッド) --------------------
+#
+# 従来は (a) バックアップ退避 `os.replace(path, bak_name)` 成功直後・
+# `backups.append(...)` 実行前、(b) 公開 `os.replace(tmp_name, path)` 成功
+# 直後・`published += 1` 実行前、のそれぞれに「rename は完了しているが
+# Python の後続代入がまだ走っていない」窓があった。この窓で
+# `KeyboardInterrupt`/`SystemExit` が飛ぶと、巻き戻しハンドラがその rename
+# の完了を知らず、(a) は canonical パス欠落+untracked バックアップ残置、
+# (b) は本来存在しなかった出力が公開されたまま残る、という事故になり得た。
+# 修正後は記帳をファイルシステム状態（`bak_name`/`tmp_name` の実在）から
+# 導出するため、この 2 箇所を含む monkeypatch 再現でいずれも安全に
+# 巻き戻ることを固定する。
+
+
+def test_publish_outputs_interrupt_right_after_backup_replace_still_restores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """バックアップ rename (`os.replace(path, bak_name)`) が完了した直後に
+    `KeyboardInterrupt` が飛んでも、canonical パスは旧内容のまま復元され、
+    untracked バックアップも残らない。"""
+    path = tmp_path / "out.txt"
+    path.write_text("old-content", encoding="utf-8")
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def _replace_then_interrupt_once(src: object, dst: object) -> None:
+        real_replace(src, dst)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # ここが「rename 成功〜記帳」の窓（旧実装では backups.append 前）
+            # に相当するタイミング。以降の呼び出し（巻き戻し自身が行う
+            # os.replace）は素通しする。
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(bd.os, "replace", _replace_then_interrupt_once)
+
+    with pytest.raises(KeyboardInterrupt):
+        bd._publish_outputs([(path, "new-content")])
+
+    # canonical パス欠落・orphan バックアップのいずれも残らない。
+    assert path.exists()
+    assert path.read_text(encoding="utf-8") == "old-content"
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_publish_outputs_interrupt_right_after_publish_replace_removes_new_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """事前に存在しなかった出力の公開 rename (`os.replace(tmp_name, path)`)
+    が完了した直後に `KeyboardInterrupt` が飛んでも、その出力は「本来存在
+    しなかった」状態へ復元される（部分公開が残らない）。"""
+    path = tmp_path / "out.txt"
+    assert not path.exists()
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def _replace_then_interrupt_once(src: object, dst: object) -> None:
+        real_replace(src, dst)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # ここが「公開 rename 成功〜published += 1」の窓に相当する
+            # タイミング（この items 構成ではバックアップ対象が無いため
+            # phase 3 の公開 rename が最初の os.replace 呼び出しになる）。
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(bd.os, "replace", _replace_then_interrupt_once)
+
+    with pytest.raises(KeyboardInterrupt):
+        bd._publish_outputs([(path, "new-content")])
+
+    # 部分公開（本来存在しなかった出力が残る）は起きない。
+    assert not path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_publish_outputs_interrupt_right_after_publish_replace_restores_prior_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """既存出力を持つ項目の公開 rename 完了直後に中断しても、旧内容へ
+    正しく復元される（bak_name 経由の復元も published カウンタに依存しない
+    ことを確認）。"""
+    path = tmp_path / "out.txt"
+    path.write_text("old-content", encoding="utf-8")
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def _replace_then_interrupt_on_publish(src: object, dst: object) -> None:
+        real_replace(src, dst)
+        calls["n"] += 1
+        # 呼び出し1回目 = phase 2 のバックアップ退避（素通し）。
+        # 呼び出し2回目 = phase 3 の公開 rename。ここで中断させる。
+        if calls["n"] == 2:
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(bd.os, "replace", _replace_then_interrupt_on_publish)
+
+    with pytest.raises(KeyboardInterrupt):
+        bd._publish_outputs([(path, "new-content")])
+
+    assert path.exists()
+    assert path.read_text(encoding="utf-8") == "old-content"
+    assert list(tmp_path.iterdir()) == [path]
