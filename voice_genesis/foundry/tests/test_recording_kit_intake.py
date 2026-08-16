@@ -20,6 +20,19 @@
   `BaseException` 巻き戻しで解消）
 - R12 P2: 台帳エントリが正規化後 wav の sha256 のみを記録し、incoming 原本の
   provenance を追跡できない（`source_sha256`/`source_size_bytes` の追記で解消）
+- R13 P2 (gate_synth.py:119 の自己ハッシュ束縛は本ファイル対象外。境界宣言は
+  PR #264 レビュースレッド参照): `process_one` が `source_sha256`/
+  `source_size_bytes` を計算する read と `ffmpeg` が実際に変換する read が
+  別タイミングだった（`src` を staging 内スナップショットへ一度だけ read し、
+  ハッシュと変換入力の両方をそのスナップショットから確定させることで解消）
+- R13 P2: 公開フェーズ（`out_dir` への移動 + `save_ledger`）の巻き戻しが
+  WAV のみで台帳を復元していなかった（`save_ledger()` 成功直後・関数が
+  返る前の中断シナリオを含めて、公開フェーズ開始前の台帳バイト列
+  スナップショットへ復元することで解消）
+- R13 P2: `load_ledger` が `schema` の不一致を無視して `entries` があれば
+  そのまま受理していた（`schema == LEDGER_SCHEMA` の完全一致と `entries`
+  がリストであることを検証し、不一致は `LedgerSchemaError` で fail-closed
+  拒否することで解消）
 """
 from __future__ import annotations
 
@@ -57,11 +70,15 @@ def _fake_normalize_to_wav(monkeypatch: pytest.MonkeyPatch, *, fail_for: set[str
     """`normalize_to_wav`（ffmpeg 呼び出し）を、ソースファイル名から決定論的に
     内容が変わる偽 wav 書き出しへ差し替える。`fail_for` に含まれるソース名は
     例外を送出する（R10 P2 のバッチ途中失敗を再現するため）。
+
+    R13 P2 対応で `normalize_to_wav` へ渡される `src` は `process_one` が
+    staging 内へ作るスナップショット（`__src_snapshot__{元ファイル名}`）に
+    変わったため、元ファイル名との一致は完全一致でなく部分一致で判定する。
     """
     fail_names = fail_for or set()
 
     def _fake(src: Path, dst: Path) -> None:
-        if src.name in fail_names:
+        if any(name in src.name for name in fail_names):
             raise intake.subprocess.CalledProcessError(1, ["ffmpeg"], b"", b"boom")
         seed = sum(src.name.encode("utf-8"))
         _write_fake_source(dst, seed=seed, sample_rate=intake.TARGET_SAMPLE_RATE)
@@ -530,6 +547,232 @@ def test_run_records_source_sha256_for_each_entry(
     for raw_entry in ledger["entries"]:
         assert "source_sha256" in raw_entry
         assert "source_size_bytes" in raw_entry
+
+
+# ---------------------------------------------------------------------------
+# R13 P2: ハッシュ対象バイトと変換入力の一本化
+# ---------------------------------------------------------------------------
+
+
+def test_process_one_converts_a_staging_snapshot_not_the_original_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`normalize_to_wav` に渡される `src` は incoming の原本パスではなく、
+    staging 内のスナップショットでなければならない（単一 read の証跡）。
+    """
+    seen_srcs: List[Path] = []
+
+    def _fake(src: Path, dst: Path) -> None:
+        seen_srcs.append(src)
+        _write_fake_source(dst, seed=1, sample_rate=intake.TARGET_SAMPLE_RATE)
+
+    monkeypatch.setattr(intake, "normalize_to_wav", _fake)
+
+    src = tmp_path / "UC-001.wav"
+    src.write_bytes(b"original donor bytes")
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    publish_dir = tmp_path / "out"
+
+    intake.process_one(src, staging_dir, "UC-001.norm24k.wav", publish_dir)
+
+    assert len(seen_srcs) == 1
+    converted_src = seen_srcs[0]
+    assert converted_src != src, "ffmpeg 入力は原本ではなく staging 内スナップショットであること"
+    assert converted_src.parent == staging_dir
+    assert converted_src.read_bytes() == b"original donor bytes"
+    # 原本は一切書き換えられていない。
+    assert src.read_bytes() == b"original donor bytes"
+
+
+def test_process_one_hash_matches_the_bytes_actually_converted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`source_sha256`/`source_size_bytes` は変換入力（スナップショット）と
+    同一バイト列から確定していること。原本が読み込み直後に差し替わっても、
+    台帳に記録されるのはスナップショット取得時点のバイト列である。
+    """
+    captured: dict = {}
+
+    def _fake(src: Path, dst: Path) -> None:
+        captured["snapshot_bytes"] = src.read_bytes()
+        _write_fake_source(dst, seed=2, sample_rate=intake.TARGET_SAMPLE_RATE)
+
+    monkeypatch.setattr(intake, "normalize_to_wav", _fake)
+
+    src = tmp_path / "UC-001.wav"
+    original_bytes = b"bytes present at snapshot time"
+    src.write_bytes(original_bytes)
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    publish_dir = tmp_path / "out"
+
+    entry = intake.process_one(src, staging_dir, "UC-001.norm24k.wav", publish_dir)
+
+    assert captured["snapshot_bytes"] == original_bytes
+    assert entry.source_sha256 == hashlib.sha256(original_bytes).hexdigest()
+    assert entry.source_size_bytes == len(original_bytes)
+
+
+# ---------------------------------------------------------------------------
+# R13 P2: 台帳スキーマの fail-fast 検証
+# ---------------------------------------------------------------------------
+
+
+def test_load_ledger_rejects_mismatched_schema(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(
+        '{"schema": "user-donor-ledger/0.9-typo", "entries": []}', encoding="utf-8"
+    )
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_load_ledger_rejects_missing_schema_field(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text('{"entries": []}', encoding="utf-8")
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_load_ledger_rejects_non_list_entries(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(
+        f'{{"schema": "{intake.LEDGER_SCHEMA}", "entries": {{"not": "a list"}}}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_load_ledger_accepts_matching_schema_and_list_entries(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(
+        f'{{"schema": "{intake.LEDGER_SCHEMA}", "entries": [{{"card_id": "UC-001"}}]}}',
+        encoding="utf-8",
+    )
+
+    ledger = intake.load_ledger(ledger_path)
+    assert ledger["schema"] == intake.LEDGER_SCHEMA
+    assert ledger["entries"] == [{"card_id": "UC-001"}]
+
+
+def test_run_rejects_broken_schema_ledger_before_processing_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """壊れた/未知スキーマの台帳が既存の場合、`run()` は変換・公開のいずれも
+    開始せずに `LedgerSchemaError` で fail-closed 拒否する。
+    """
+    normalize_calls: List[Path] = []
+
+    def _fake(src: Path, dst: Path) -> None:
+        normalize_calls.append(src)
+        _write_fake_source(dst, seed=3, sample_rate=intake.TARGET_SAMPLE_RATE)
+
+    monkeypatch.setattr(intake, "normalize_to_wav", _fake)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"a")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text('{"schema": "unknown/0.0", "entries": []}', encoding="utf-8")
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert normalize_calls == [], "スキーマ不一致の場合は変換を一切開始してはならない"
+    assert not out_dir.exists() or list(out_dir.iterdir()) == []
+    # 既存の壊れた台帳自体は書き換えられていない。
+    assert ledger_path.read_text(encoding="utf-8") == '{"schema": "unknown/0.0", "entries": []}'
+
+
+# ---------------------------------------------------------------------------
+# R13 P2: 公開フェーズ中断時の台帳復元
+# ---------------------------------------------------------------------------
+
+
+def test_run_restores_previous_ledger_when_interrupted_right_after_save_ledger_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`save_ledger()` が正常にディスクへ台帳を replace した直後・呼び出し元へ
+    制御が返る前に `KeyboardInterrupt`/`SystemExit` が届くケースを再現する。
+    旧実装は WAV だけを staging へ巻き戻し、台帳は新バッチのエントリを含んだ
+    まま publicly visible に残った（存在しない wav パスを指す壊れた台帳）。
+    修正後は台帳も公開フェーズ開始前の内容へ復元される。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-002.wav").write_bytes(b"new donor bytes")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    previous_ledger = {
+        "schema": intake.LEDGER_SCHEMA,
+        "entries": [{"card_id": "UC-001", "source_filename": "UC-001.wav"}],
+    }
+    intake.save_ledger(ledger_path, previous_ledger)
+    previous_ledger_bytes = ledger_path.read_bytes()
+
+    real_save_ledger = intake.save_ledger
+
+    def _save_then_interrupt(path: Path, ledger: dict) -> None:
+        real_save_ledger(path, ledger)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(intake, "save_ledger", _save_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert ledger_path.read_bytes() == previous_ledger_bytes, (
+        "save_ledger() 成功直後の中断でも、台帳は公開フェーズ開始前の内容へ"
+        "復元されなければならない"
+    )
+    assert not out_dir.exists() or list(out_dir.iterdir()) == [], (
+        "台帳と同様、公開済み wav も巻き戻されていなければならない"
+    )
+
+
+def test_run_deletes_new_ledger_when_interrupted_and_no_ledger_existed_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """公開フェーズ開始前に台帳が存在しなかった場合、`save_ledger()` 成功直後
+    の中断でも、このバッチが新規生成した台帳ファイルは削除される（「無し」の
+    状態への復元）。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"a")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    assert not ledger_path.exists()
+
+    real_save_ledger = intake.save_ledger
+
+    def _save_then_interrupt(path: Path, ledger: dict) -> None:
+        real_save_ledger(path, ledger)
+        raise SystemExit(1)
+
+    monkeypatch.setattr(intake, "save_ledger", _save_then_interrupt)
+
+    with pytest.raises(SystemExit):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert not ledger_path.exists(), (
+        "台帳が元々存在しなかった場合は、新規生成された台帳が削除されなければならない"
+    )
+    assert not out_dir.exists() or list(out_dir.iterdir()) == []
 
 
 # ---------------------------------------------------------------------------

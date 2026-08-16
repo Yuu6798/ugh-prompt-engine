@@ -82,41 +82,56 @@ scratchpad 完結・非コミット。実行日 2026-08-15、フル配線 sha256
 """
 from __future__ import annotations
 
-import argparse
+# [P2 修正] (review #264 R10, gate_synth.py:1200; R13, gate_synth.py:119)
+# gate_synth.py 自身の provenance ハッシュを、モジュールのトップレベル
+# コードが実行される中で最初に到達する文として（`from __future__ import
+# annotations` の直後・NumPy/ONNX 等の重い import より前）1 回だけ
+# read_bytes() して確定する。R10 まではこの計算を `cmd_run` の実行途中
+# （synth ループ開始前）で行っており、「プロセス起動時に Python インタプリタ
+# が実際に read/exec した本体スクリプトの bytes」ではなく「cmd_run がその
+# 行に到達した時点でディスク上にある bytes」を記録していた。R10 でモジュール
+# 先頭へ移したが、当時は NumPy/ONNXRuntime 等の低速 import の後段に置いて
+# おり、それら import の所要時間だけ TOCTOU 窓が残っていた（R13 指摘）。
+# これを import 文より前（hashlib/Path という stdlib のみで計算できる形）
+# へ動かすことで、窓を「インタープリタが本ファイルを read/compile してから
+# この行が実行されるまで」のマイクロ秒級に縮める。
+#
+# ここで縮められるのはあくまで実務上の最小化であり、ゼロにはならない
+# （境界宣言）: このプロセス自身が自分の起動時に「ローダーが実際に消費した
+# バイト」を内側から束縛することは原理的に不可能である。自己ハッシュより
+# 前には必ずインタープリタによる read/compile が先行しており、外側にラン
+# チャーを足しても、そのランチャー自身が「起動〜自己ハッシュ」という同型の
+# 窓を新たに持つだけで問題を後退させるにすぎない（infinite regress）。した
+# がって内側で可能な最小化（本移動）をもって自己ハッシュ系列の対応はここで
+# 終端とし、残る irreducible な窓の担保は、呼び出し側が本プロセスの起動
+# より前にファイルをハッシュする外部 attestation 層（`S1_GPU_RUNBOOK.md`
+# §3.1 の manifest 方式）の担当領域とする。
+#
+# `cmd_run` はこの値をそのまま `input_sha256["gate_synth_py"]` へ転記し
+# （再読み込みしない）、公開直前に同じパスを再ハッシュしてこの値と突き
+# 合わせる事後照合を行う（score モジュールと同じ pre+post 二段方式。
+# 不一致なら fail-closed で公開を止める。この事後照合ロジック自体は本
+# 変更で無改変）。
 import hashlib
-import json
-import os
-import shutil
-import subprocess
-import sys
-import time
-import types
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-import numpy as np
-import onnxruntime as ort
-import soundfile as sf
-import yaml
-
-# [P2 修正] (review #264 R10, gate_synth.py:1200) gate_synth.py 自身の
-# provenance ハッシュを、モジュールのトップレベルコードが実行される
-# タイミング（import/実行開始直後、argparse や cmd_run 本体が走るより
-# 前）で 1 回だけ read_bytes() して確定する。従来は `cmd_run` の実行途中
-# （synth ループ開始前）で `sha256_file(__file__)` を呼んでおり、これは
-# 「プロセス起動時に Python インタプリタが実際に read/exec した本体スクリプト
-# の bytes」ではなく「cmd_run がその行に到達した時点でディスク上にある
-# bytes」を記録していた——両者の間（プロセス起動〜cmd_run 到達まで、CLI
-# 引数パース等を含む）に本ファイルが書き換えられていても検出できない
-# TOCTOU 窓が残っていた。本モジュールの実行が始まって最初に到達する
-# トップレベル文としてここでハッシュを固定することで、この窓を実務上
-# 最小化する（score モジュールの「1 回だけ read して pin する」方式と
-# 同じ考え方）。`cmd_run` はこの値をそのまま `input_sha256["gate_synth_py"]`
-# へ転記し（再読み込みしない）、公開直前に同じパスを再ハッシュして
-# この値と突き合わせる事後照合を追加する（score モジュールと同じ
-# pre+post 二段方式。不一致なら fail-closed で公開を止める）。
 _GATE_SYNTH_PY_PATH = Path(__file__).resolve()
 _GATE_SYNTH_PY_LOAD_TIME_SHA256 = hashlib.sha256(_GATE_SYNTH_PY_PATH.read_bytes()).hexdigest()
+
+import argparse  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+import types  # noqa: E402
+from typing import Callable, Dict, List, Optional, Sequence, Tuple  # noqa: E402
+
+import numpy as np  # noqa: E402
+import onnxruntime as ort  # noqa: E402
+import soundfile as sf  # noqa: E402
+import yaml  # noqa: E402
 
 # `voice_genesis/foundry/s1_gate/gate_synth.py` から見て `voice_genesis/singer/`
 # は 2 階層上の兄弟ディレクトリ（parents[0]=s1_gate, [1]=foundry, [2]=voice_genesis）。

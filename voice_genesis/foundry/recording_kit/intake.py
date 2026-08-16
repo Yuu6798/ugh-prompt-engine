@@ -42,13 +42,24 @@ wav）・out_dir 内の既存公開済みファイル・staging ディレクト�
 公開フェーズ（`out_dir` へのファイル移動 + 台帳保存）は、移動済みファイルを
 記録しながら進め、移動そのものが失敗した場合・全ファイル移動後に台帳保存が
 失敗した場合のいずれも `except BaseException` で捕捉し、それまでに公開済み
-だった wav を staging へ巻き戻してから re-raise する（`gate_synth.py` の
-staged swap + `BaseException` 巻き戻しと同型パターン。R12 P2 対応）。台帳
-エントリには正規化後 wav の sha256 に加え、元 incoming ファイルのバイト列
-sha256（`source_sha256`）とサイズ（`source_size_bytes`）も記録する
-（incoming ファイルは可変なファイル名でしか代表されておらず、削除・差し替え
-後に「どの原本バイト列から正規化 wav が作られたか」を追跡できなくする穴を
-防ぐ。R12 P2 対応）。
+だった wav を staging へ巻き戻し、台帳ファイルも公開フェーズ開始前のバイト
+列（無かった場合は削除）へ復元してから re-raise する（`gate_synth.py` の
+staged swap + `BaseException` 巻き戻しと同型パターン。R12 P2 対応。台帳の
+巻き戻しは R13 P2 対応 — `save_ledger()` 成功直後・関数が返る前に
+`KeyboardInterrupt`/`SystemExit` が届くケースを含む）。台帳エントリには
+正規化後 wav の sha256 に加え、元 incoming ファイルのバイト列 sha256
+（`source_sha256`）とサイズ（`source_size_bytes`）も記録する（incoming
+ファイルは可変なファイル名でしか代表されておらず、削除・差し替え後に
+「どの原本バイト列から正規化 wav が作られたか」を追跡できなくする穴を
+防ぐ。R12 P2 対応）。この `source_sha256`/`source_size_bytes` は、変換
+（ffmpeg）へ渡すバイト列と同一の単一 read から確定する（`process_one`
+参照。R13 P2 対応 — 別々の read だと incoming ファイルが read 間で
+差し替わった場合に台帳と実際の変換入力がねじれる）。
+
+既存台帳を読み込む際は `schema == LEDGER_SCHEMA` の完全一致と `entries`
+がリストであることを検証し、不一致は `LedgerSchemaError` で fail-closed
+拒否する（`load_ledger` 参照。R13 P2 対応 — 未知/破損スキーマの台帳へ
+現行版のエントリを無自覚に追記・公開してしまう事故を防ぐ）。
 """
 from __future__ import annotations
 
@@ -88,6 +99,16 @@ class FfmpegNotFoundError(RuntimeError):
 class LedgerPathCollisionError(RuntimeError):
     """`--ledger` が incoming/導出出力/staging ディレクトリと衝突する場合に
     送出する（R12 P1 対応。`_check_ledger_path_collisions` 参照）。
+    """
+
+
+class LedgerSchemaError(RuntimeError):
+    """既存台帳の `schema` が `LEDGER_SCHEMA` と一致しない、または `entries`
+    がリストでない場合に送出する（R13 P2 対応）。旧実装は `entries` さえ
+    存在すれば `schema` の値（誤植・別バージョン）を無視して現行版の
+    エントリを追記・公開しており、この実装が解釈できない/意図しない
+    フォーマットの台帳を静かに書き換えてしまっていた。`load_ledger` で
+    fail-closed 拒否し、処理・公開のいずれも開始させない。
     """
 
 
@@ -218,10 +239,30 @@ def measure_loudness(wav_path: Path) -> tuple[float, Optional[float], Optional[f
 
 
 def load_ledger(ledger_path: Path) -> dict:
+    """既存台帳を読み込む。存在しなければ新規スキーマの空台帳を返す。
+
+    既存台帳がある場合は `schema == LEDGER_SCHEMA` の完全一致と `entries`
+    がリストであることを検証する（R13 P2 対応）。どちらか不一致なら
+    `LedgerSchemaError` を送出し fail-closed で拒否する（未知・旧バージョン
+    ・破損した台帳への暗黙の追記・公開を防ぐ）。
+    """
     if not ledger_path.exists():
         return {"schema": LEDGER_SCHEMA, "entries": []}
     with ledger_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        ledger = json.load(f)
+    schema = ledger.get("schema")
+    if schema != LEDGER_SCHEMA:
+        raise LedgerSchemaError(
+            f"{ledger_path} の schema ({schema!r}) が {LEDGER_SCHEMA!r} と一致しません"
+            f"（fail-closed で拒否。未知/旧バージョンの台帳への誤った追記・公開を防止）"
+        )
+    entries = ledger.get("entries")
+    if not isinstance(entries, list):
+        raise LedgerSchemaError(
+            f"{ledger_path} の entries がリストではありません "
+            f"(type={type(entries).__name__})。fail-closed で拒否します"
+        )
+    return ledger
 
 
 def save_ledger(ledger_path: Path, ledger: dict) -> None:
@@ -230,6 +271,23 @@ def save_ledger(ledger_path: Path, ledger: dict) -> None:
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(ledger, f, ensure_ascii=False, indent=2)
         f.write("\n")
+    tmp_path.replace(ledger_path)
+
+
+def _restore_ledger(ledger_path: Path, previous_bytes: Optional[bytes]) -> None:
+    """`ledger_path` を公開フェーズ開始前のバイト列 (`previous_bytes`) へ
+    巻き戻す（R13 P2 対応）。`previous_bytes` が `None`（開始前は台帳が
+    存在しなかった）場合は、このバッチが新規生成した台帳を削除する。
+
+    `save_ledger()` と同じ tmp ファイル + `replace()` の手順で書き戻す
+    （巻き戻し処理自体の中断でも中途半端な JSON を `ledger_path` に残さない）。
+    """
+    if previous_bytes is None:
+        if ledger_path.exists():
+            ledger_path.unlink()
+        return
+    tmp_path = ledger_path.with_suffix(ledger_path.suffix + ".rollback.tmp")
+    tmp_path.write_bytes(previous_bytes)
     tmp_path.replace(ledger_path)
 
 
@@ -309,17 +367,27 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
     には公開後の最終パス（`publish_dir/filename`）を記録するため、台帳の
     内容は公開完了後の状態と最初から一致する。
 
-    `source_sha256`/`source_size_bytes` は変換前に `src`（incoming の元
-    ファイル）を直接読んで記録する（R12 P2 対応。ffmpeg は `src` を読み取る
-    だけで書き換えないため変換前後どちらで読んでも値は同じだが、原本の
-    provenance を明示するため変換前に固定する）。
+    `source_sha256`/`source_size_bytes` は `src`（incoming の元ファイル）を
+    一度だけ読んだバイト列から確定し、同じバイト列を staging 内スナップ
+    ショットとして書き出す（R13 P2 対応）。以後の変換（`normalize_to_wav`）
+    はこのスナップショットを入力とし、`src` 原本には二度と触れない。旧
+    実装は sha256/size を計算する read と ffmpeg が実際に読む read が別
+    タイミングだったため、その間に incoming ファイルが差し替わると台帳が
+    古いバイト列を、正規化 wav が新しいバイト列を反映するというねじれが
+    起き得た。単一 read から得たバイト列をハッシュにも変換入力にも使う
+    ことで、ハッシュ対象と変換入力が構造的に一致することを保証する。
     """
     card_id = extract_card_id(src.name)
-    source_sha256 = sha256_of(src)
-    source_size_bytes = src.stat().st_size
+
+    source_bytes = src.read_bytes()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    source_size_bytes = len(source_bytes)
+
+    snapshot_path = staging_dir / f"__src_snapshot__{src.name}"
+    snapshot_path.write_bytes(source_bytes)
 
     staged_path = staging_dir / filename
-    normalize_to_wav(src, staged_path)
+    normalize_to_wav(snapshot_path, staged_path)
 
     duration_sec, rms_dbfs, peak_dbfs = measure_loudness(staged_path)
 
@@ -350,16 +418,24 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
     は呼び出し前の状態のまま変化しない（部分バッチを残さない。R10 P2 対応）。
 
     実際の変換・測定（`process_one`）を始める前に `_check_ledger_path_collisions`
-    で `--ledger` の衝突を preflight 検査する（R12 P1 対応）。
+    で `--ledger` の衝突を preflight 検査し（R12 P1 対応）、続けて既存台帳を
+    `load_ledger` で読み込む（schema 不一致は `LedgerSchemaError` で
+    fail-closed 拒否し、変換・公開のいずれも開始しない。R13 P2 対応）。
 
-    公開フェーズ（`out_dir` へのファイル移動 + `save_ledger`）は、移動済み
-    ファイルを `moved` に記録しながら進める。移動そのものが失敗した場合・
-    全ファイル移動後に台帳保存が失敗した場合のいずれも `except BaseException`
-    で捕捉し、それまでに公開済みだった wav を staging へ移動し直して
-    （`out_dir` を呼び出し前の状態へ巻き戻して）から re-raise する。巻き戻し
-    後は外側の `finally` が staging ごと削除するため、失敗したバッチの痕跡は
-    `out_dir`/`ledger_path` のどちらにも残らない（`gate_synth.py` の staged
-    swap + `BaseException` 巻き戻しと同型パターン。R12 P2 対応）。
+    公開フェーズ（`out_dir` へのファイル移動 + `save_ledger`）に入る直前に
+    既存台帳のバイト列スナップショットを取っておく（無ければ `None`）。
+    公開フェーズは移動済みファイルを `moved` に記録しながら進める。移動
+    そのものが失敗した場合・全ファイル移動後に台帳保存が失敗した場合の
+    いずれも `except BaseException` で捕捉し、それまでに公開済みだった
+    wav を staging へ移動し直し（`out_dir` を呼び出し前の状態へ巻き戻して）
+    、台帳もスナップショットへ復元してから re-raise する。`save_ledger()`
+    が完走した直後・関数が呼び出し元へ返る前に `KeyboardInterrupt`/
+    `SystemExit` が届いた場合（新台帳が既に `ledger_path` へ replace 済み）
+    も同じ `except BaseException` で捕捉され、台帳は復元される（R13 P2
+    対応）。巻き戻し後は外側の `finally` が staging ごと削除するため、
+    失敗したバッチの痕跡は `out_dir`/`ledger_path` のどちらにも残らない
+    （`gate_synth.py` の staged swap + `BaseException` 巻き戻しと同型パターン。
+    R12 P2 対応）。
     """
     inputs = discover_inputs(incoming_dir)
     if not inputs:
@@ -373,12 +449,24 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
     try:
         _check_ledger_path_collisions(ledger_path, inputs, filenames, out_dir, staging_dir)
 
+        # R13 P2 対応: 台帳の読み込み（schema 検証込み）は実際の変換・測定
+        # （process_one）より前の preflight として行う。壊れた/未知スキーマの
+        # 台帳が存在する場合はここで LedgerSchemaError が送出され、変換・
+        # 公開のいずれも開始しない。
+        ledger = load_ledger(ledger_path)
+
         entries = [
             process_one(src, staging_dir, filenames[src], out_dir) for src in inputs
         ]
 
-        ledger = load_ledger(ledger_path)
         ledger.setdefault("entries", []).extend(asdict(e) for e in entries)
+
+        # R13 P2 対応: 公開フェーズ開始前の台帳バイト列スナップショット
+        # （無ければ None = 「無し」の印）。BaseException 巻き戻し時に
+        # WAV と合わせてこれへ復元する。
+        previous_ledger_bytes: Optional[bytes] = (
+            ledger_path.read_bytes() if ledger_path.exists() else None
+        )
 
         out_dir.mkdir(parents=True, exist_ok=True)
         moved: List[tuple[Path, Path]] = []  # (final_path, staged_path) の公開済み一覧
@@ -398,6 +486,10 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
             for final_path, staged_path in reversed(moved):
                 if final_path.exists():
                     shutil.move(str(final_path), str(staged_path))
+            # 台帳もスナップショット時点へ復元する（R13 P2 対応。
+            # save_ledger() 成功直後の中断で新台帳が既に replace 済みの
+            # ケースを含む）。
+            _restore_ledger(ledger_path, previous_ledger_bytes)
             raise
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
