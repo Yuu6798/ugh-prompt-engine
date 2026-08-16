@@ -138,13 +138,18 @@ false-success。`process_one` 参照）。
 
 append 実行（既存台帳へのエントリ追記）時は、実際の変換（`process_one`）を
 始める前の preflight として、既存台帳の全エントリについて `normalized_path`
-が指す正規化 wav の実在と、実バイト列 sha256 が台帳記録値と一致することを
-検証する（`_check_existing_artifacts` 参照。R23 P2 対応）。`_validate_
-ledger_entry` は `sha256`/`normalized_path` の構文的妥当性しか検証しない
-ため、公開済みの正規化 wav が `run()` の外側で削除・差し替えられていても
-`load_ledger()` は通過してしまう。この検証はロック（`<ledger>.lock` →
-`<out_dir>/.intake.lock`）取得後・変換開始前に行うため、検証後に他プロセスが
-実体を差し替えるレースは out_dir ロックが構造的に防ぐ。欠損・不一致は
+が `out_dir` 配下に収まること・指す正規化 wav の実在・実バイト列 sha256 が
+台帳記録値と一致することを検証する（`_check_existing_artifacts` 参照。
+R23 P2 / R24 P2 対応）。`_validate_ledger_entry` は `sha256`/`normalized_path`
+の構文的妥当性しか検証しないため、公開済みの正規化 wav が `run()` の外側で
+削除・差し替えられていても `load_ledger()` は通過してしまう。さらに
+`normalized_path` の**ファイル名部分のみ**を信頼して現在の `out_dir` と
+結合して再構築し、resolve 後の実パスが `out_dir` 配下に収まることを
+検証してから初めて実在・sha256 照合を行う（絶対パスで out_dir 外を指す
+エントリ・out_dir 内 symlink 経由で外側へ迂回するエントリの両方を拒否）。
+この検証はロック（`<ledger>.lock` → `<out_dir>/.intake.lock`）取得後・変換
+開始前に行うため、検証後に他プロセスが実体を差し替えるレースは out_dir
+ロックが構造的に防ぐ。欠損・不一致・封じ込め違反は
 `LedgerArtifactIntegrityError` で列挙付き fail-closed 拒否する。
 """
 from __future__ import annotations
@@ -264,8 +269,8 @@ class DuplicateSourceError(RuntimeError):
 
 class LedgerArtifactIntegrityError(RuntimeError):
     """既存台帳のエントリが指す `normalized_path` の実体が欠損している、
-    または実バイト列の sha256 が台帳記録値と一致しない場合に送出する
-    （R23 P2 対応）。
+    台帳記録値と実バイト列の sha256 が一致しない、または `normalized_path`
+    が `out_dir` の外側を指している場合に送出する（R23 P2 / R24 P2 対応）。
 
     `_validate_ledger_entry` は `sha256`/`normalized_path` について
     「64 桁の小文字 hex 文字列である」「非空文字列である」という構文的
@@ -276,6 +281,19 @@ class LedgerArtifactIntegrityError(RuntimeError):
     （旧実装は sha256 の再計算を一切行わなかった）。`_check_existing_
     artifacts` が append 実行時の preflight として全既存エントリを
     検証し、欠損・不一致があれば公開全体を fail-closed 拒否する。
+
+    [P2 修正] (review #264 R24) `normalized_path` が絶対パスで out_dir の
+    外側を指す、または out_dir 内の symlink 経由で外側へ迂回する場合、
+    旧実装はその外部実体をそのまま追跡してしまい、記録済み sha256 と
+    偶然一致すればそのまま append を許してしまっていた（`out_dir` という
+    公開名前空間の外側にある実体を、あたかも公開済み成果物であるかのように
+    台帳へ再固定化する穴）。`_check_existing_artifacts` は `normalized_path`
+    の**ファイル名部分のみ**を信頼し（ディレクトリ部分は無視 — 記録された
+    ディレクトリ部分は改ざんされ得る）、常に現在の `out_dir` と結合して
+    再構築したパスに対して検証する。ファイル名部分は `..`/絶対パス/
+    セパレータを含む場合に字句検査で拒否し（`_is_safe_ledger_artifact_name`
+    参照。`s1_dataprep` の `_is_safe_wav_name` と同型）、続けて resolve 後の
+    実パスが `out_dir` 配下に収まることを確認する（symlink 迂回拒否）。
     """
 
 
@@ -527,10 +545,21 @@ def _validate_ledger_entry(entry: object, index: int, ledger_path: Path) -> None
     if not math.isfinite(duration_sec) or duration_sec <= 0.0:
         _reject("duration_sec", f"有限かつ正の値ではありません (value={duration_sec!r})")
 
-    # sample_rate: 正の整数（TARGET_SAMPLE_RATE 由来。0 以下は不正）。
+    # sample_rate: TARGET_SAMPLE_RATE (24kHz) との完全一致。
+    # [P2 修正] (review #264 R24) 従来は「正の整数」のみを検査しており、
+    # 型は正しいが値が異なる（例: `sample_rate: 44100`）エントリを素通り
+    # させていた。`process_one` は常に `sample_rate=TARGET_SAMPLE_RATE` の
+    # エントリしか生成しない契約のため、それ以外の値を持つエントリは
+    # 台帳の記録内容自体が実装契約と矛盾しており、append で再公開すると
+    # 「24kHz 正規化 wav の台帳」という契約が台帳内部で自己矛盾したまま
+    # 固定化される。完全一致のみを許容する。
     sample_rate = entry["sample_rate"]
-    if sample_rate <= 0:
-        _reject("sample_rate", f"正の値ではありません (value={sample_rate!r})")
+    if sample_rate != TARGET_SAMPLE_RATE:
+        _reject(
+            "sample_rate",
+            f"TARGET_SAMPLE_RATE ({TARGET_SAMPLE_RATE}) と一致しません "
+            f"(value={sample_rate!r})",
+        )
 
     # source_size_bytes: 非負の整数（負のバイト数は物理的に無効）。
     source_size_bytes = entry["source_size_bytes"]
@@ -923,10 +952,25 @@ def _check_duplicate_sources(entries: List[LedgerEntry], ledger: dict) -> None:
         )
 
 
-def _check_existing_artifacts(ledger: dict, ledger_path: Path) -> None:
+def _is_safe_ledger_artifact_name(name: str) -> bool:
+    """`name` が `out_dir` 配下の単一ファイル名として安全かを判定する
+    （字句検査のみ。resolve 後の封じ込め検査は呼び出し側が別途行う）。
+
+    review #264 R24 P2 対応。`s1_dataprep` の `_is_safe_wav_name` と同型の
+    判定ロジック（絶対パス・`..`/`.` セグメント・パス区切り文字を拒否）。
+    """
+    if not name or os.path.isabs(name) or os.sep in name or (os.altsep and os.altsep in name):
+        return False
+    if name in (".", ".."):
+        return False
+    return True
+
+
+def _check_existing_artifacts(ledger: dict, ledger_path: Path, out_dir: Path) -> None:
     """append 実行時の preflight として、既存台帳の全エントリについて
-    `normalized_path` が指す正規化 wav の実在と、実バイト列 sha256 が台帳
-    記録値と一致することを検証する（R23 P2 対応）。
+    `normalized_path` が `out_dir` 配下に収まること・指す正規化 wav の実在・
+    実バイト列 sha256 が台帳記録値と一致することを検証する（R23 P2 /
+    R24 P2 対応）。
 
     `_validate_ledger_entry` は `sha256`/`normalized_path` の構文的妥当性
     （hex 文字列形式・非空文字列）しか検証しないため、公開済みの正規化 wav
@@ -935,6 +979,18 @@ def _check_existing_artifacts(ledger: dict, ledger_path: Path) -> None:
     含んだまま台帳が再公開され、壊れた/偽の provenance が固定化される
     （`LedgerArtifactIntegrityError` docstring 参照）。
 
+    [P2 修正] (review #264 R24) 従来はハッシュ照合の**前に** `normalized_path`
+    が `out_dir` の外側を指していないかを検証しておらず、絶対パスで
+    out_dir 外を指すエントリや、out_dir 内の symlink 経由で外側へ迂回する
+    エントリを、外部実体のバイト列が記録済み sha256 とたまたま一致すれば
+    そのまま受理してしまっていた。ここでは記録された `normalized_path` の
+    **ファイル名部分のみ**を信頼し（ディレクトリ部分は改ざんされ得るため
+    無視）、`_is_safe_ledger_artifact_name` による字句検査（絶対パス・
+    `..`/セパレータ拒否）を通過したファイル名を、呼び出し時点の `out_dir`
+    と結合して再構築する。さらに resolve 後の実パスが `out_dir` 配下に
+    収まることを確認してから（symlink 迂回拒否）はじめて実在・sha256 照合
+    を行う。
+
     `run()` はロック（`<ledger>.lock` → `<out_dir>/.intake.lock`）取得後・
     変換（`process_one`）開始前に本関数を呼ぶ。out_dir ロック保持中に検査
     するため、検査完了後に他プロセスが同じ正規化 wav を差し替えるレースは
@@ -942,15 +998,38 @@ def _check_existing_artifacts(ledger: dict, ledger_path: Path) -> None:
     専用の preflight）。コーパス規模（数十ファイル）では全既存エントリの
     再ハッシュコスト（O(コーパス全体)）は無視できる。
 
-    欠損・不一致は、どのエントリがどう壊れているかを列挙した単一の例外で
-    公開全体を fail-closed 拒否する（`_check_duplicate_sources` と同様、
-    部分的な黙認はしない）。
+    欠損・不一致・封じ込め違反は、どのエントリがどう壊れているかを列挙した
+    単一の例外で公開全体を fail-closed 拒否する（`_check_duplicate_sources`
+    と同様、部分的な黙認はしない）。
     """
+    resolved_out_dir = out_dir.resolve()
     problems: List[str] = []
     for index, entry in enumerate(ledger.get("entries", [])):
         source_filename = entry.get("source_filename", "<unknown>")
-        normalized_path = Path(entry["normalized_path"])
+        raw_normalized_path = entry["normalized_path"]
         recorded_sha256 = entry["sha256"]
+        artifact_name = Path(raw_normalized_path).name
+        if not _is_safe_ledger_artifact_name(artifact_name):
+            problems.append(
+                f"- entries[{index}] ({source_filename}): normalized_path "
+                f"({raw_normalized_path}) のファイル名部分 ({artifact_name!r}) "
+                f"が安全な形式ではありません（絶対パス/`..`/セパレータ経由の "
+                f"out_dir 外への逸脱の可能性があるため拒否します）"
+            )
+            continue
+        normalized_path = out_dir / artifact_name
+        resolved_candidate = normalized_path.resolve()
+        if (
+            resolved_candidate != resolved_out_dir
+            and resolved_out_dir not in resolved_candidate.parents
+        ):
+            problems.append(
+                f"- entries[{index}] ({source_filename}): normalized_path "
+                f"({raw_normalized_path}) の実体解決先 ({resolved_candidate}) "
+                f"が out_dir ({resolved_out_dir}) の外側です（symlink 経由の "
+                f"迂回の可能性があるため拒否します）"
+            )
+            continue
         if not normalized_path.is_file():
             problems.append(
                 f"- entries[{index}] ({source_filename}): normalized_path "
@@ -1196,7 +1275,7 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
                 # normalized_path の実在とバイト列 sha256 一致を検証する。
                 # out_dir ロック保持中の検査のため、検査後のレースはロックが防ぐ
                 # （`_check_existing_artifacts` docstring 参照）。
-                _check_existing_artifacts(ledger, ledger_path)
+                _check_existing_artifacts(ledger, ledger_path, out_dir)
 
                 entries = [
                     process_one(src, staging_dir, filenames[src], out_dir) for src in inputs

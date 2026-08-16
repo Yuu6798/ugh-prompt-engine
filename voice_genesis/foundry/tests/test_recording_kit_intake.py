@@ -1921,6 +1921,7 @@ def test_load_ledger_rejects_negative_source_size_bytes(tmp_path: Path) -> None:
         ({"duration_sec": True}, "duration_secがbool"),
         ({"sample_rate": 0}, "sample_rateが0"),
         ({"sample_rate": -24000}, "sample_rateが負"),
+        ({"sample_rate": 44100}, "sample_rateがTARGET_SAMPLE_RATE(24000)と不一致（R24 P2）"),
         ({"source_size_bytes": True}, "source_size_bytesがbool"),
         ({"rms_dbfs": float("nan")}, "rms_dbfsがNaN"),
         ({"rms_dbfs": float("inf")}, "rms_dbfsがinf"),
@@ -2101,7 +2102,85 @@ def test_check_existing_artifacts_accepts_healthy_ledger(
     intake.run(incoming_dir, out_dir, ledger_path)
 
     ledger = intake.load_ledger(ledger_path)
-    intake._check_existing_artifacts(ledger, ledger_path)  # 例外を送出しなければ成功
+    intake._check_existing_artifacts(ledger, ledger_path, out_dir)  # 例外を送出しなければ成功
+
+
+def test_check_existing_artifacts_rejects_absolute_external_normalized_path(
+    tmp_path: Path,
+) -> None:
+    """review #264 R24 P2 の再現: `normalized_path` が `out_dir` の外側を指す
+    絶対パスの場合、実バイト列が記録済み sha256 と一致していても
+    `LedgerArtifactIntegrityError` で fail-closed 拒否する（旧実装は外部実体を
+    そのまま追跡し、ハッシュが一致すれば通過させていた）。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    external_file = external_dir / "secret.wav"
+    external_bytes = b"external bytes outside out_dir"
+    external_file.write_bytes(external_bytes)
+    external_sha256 = hashlib.sha256(external_bytes).hexdigest()
+
+    entry = _valid_ledger_entry_dict(
+        normalized_path=str(external_file), sha256=external_sha256
+    )
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    _write_ledger_with_entry(ledger_path, entry)
+    ledger = intake.load_ledger(ledger_path)
+
+    with pytest.raises(intake.LedgerArtifactIntegrityError):
+        intake._check_existing_artifacts(ledger, ledger_path, out_dir)
+
+
+def test_check_existing_artifacts_rejects_relative_dotdot_escape(tmp_path: Path) -> None:
+    """review #264 R24 P2 の再現: `normalized_path` が `../` で out_dir の外へ
+    逃げる相対パスの場合も、実バイト列が一致していても fail-closed 拒否する。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    sibling_dir = tmp_path / "sibling"
+    sibling_dir.mkdir()
+    secret = sibling_dir / "secret.wav"
+    secret_bytes = b"sibling directory bytes reached via dotdot escape"
+    secret.write_bytes(secret_bytes)
+    secret_sha256 = hashlib.sha256(secret_bytes).hexdigest()
+
+    entry = _valid_ledger_entry_dict(
+        normalized_path="../sibling/secret.wav", sha256=secret_sha256
+    )
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    _write_ledger_with_entry(ledger_path, entry)
+    ledger = intake.load_ledger(ledger_path)
+
+    with pytest.raises(intake.LedgerArtifactIntegrityError):
+        intake._check_existing_artifacts(ledger, ledger_path, out_dir)
+
+
+def test_check_existing_artifacts_rejects_out_dir_symlink_escape(tmp_path: Path) -> None:
+    """review #264 R24 P2 の再現: `normalized_path` が指す名前が `out_dir`
+    直下に存在してはいるが、それ自体が `out_dir` の外側を指す symlink である
+    場合（resolve 後の封じ込め検査対象）も fail-closed 拒否する。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    external_target = tmp_path / "external_secret.wav"
+    external_bytes = b"external bytes reached via an out_dir-local symlink"
+    external_target.write_bytes(external_bytes)
+    external_sha256 = hashlib.sha256(external_bytes).hexdigest()
+
+    link_path = out_dir / "UC-001.norm24k.wav"
+    link_path.symlink_to(external_target)
+
+    entry = _valid_ledger_entry_dict(
+        normalized_path=str(link_path), sha256=external_sha256
+    )
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    _write_ledger_with_entry(ledger_path, entry)
+    ledger = intake.load_ledger(ledger_path)
+
+    with pytest.raises(intake.LedgerArtifactIntegrityError):
+        intake._check_existing_artifacts(ledger, ledger_path, out_dir)
 
 
 def test_run_rejects_append_when_existing_normalized_wav_is_deleted(

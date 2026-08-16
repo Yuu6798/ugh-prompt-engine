@@ -729,6 +729,59 @@ def build_phoneme_mapping(own_phonemes: Dict[str, int], canon_phonemes: Dict[str
 # 3. export.py acoustic 実行（GPU 側 ckpt が届いた本番経路のみ）
 # ============================================================================
 
+def _git_head_and_dirty(repo_path: Path) -> Tuple[object, object]:
+    """指定リポジトリの HEAD commit と作業ツリー dirty 状態を取得する。
+
+    [P2 修正] (review #264 R24, gate_synth.py:1585) 呼び出し側 (`cmd_run`) が
+    export subprocess の**前後**でこの関数を呼び、pre/post を照合できるよう
+    切り出した。git リポでない・取得失敗の場合は fail-closed にせず
+    `("unavailable", "unavailable")` を返す（呼び出し側で summary へそのまま
+    可視化する。従来の単発取得時と同じ挙動）。
+    """
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_path),
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        dirty_status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(repo_path),
+            capture_output=True, text=True, check=True,
+        ).stdout
+        return head, bool(dirty_status.strip())
+    except Exception:
+        return "unavailable", "unavailable"
+
+
+def _check_diffsinger_repo_stable(
+    repo_path: Path,
+    pre_head: object,
+    pre_dirty: object,
+    post_head: object,
+    post_dirty: object,
+) -> None:
+    """export.py subprocess の前後で取得した diffsinger_repo の HEAD/dirty を
+    照合する（review #264 R24 P2）。不一致（HEAD 変化 or dirty 状態変化）は
+    export 中に checkout が動いたことを意味し、ONNX の provenance を pin
+    できないため `SystemExit` で fail-closed する。どちらか一方でも
+    `"unavailable"`（git 情報取得失敗）の場合は照合不能として素通りする
+    （R20 の既存挙動を維持 — export 自体は git 情報が無くても継続する）。
+    """
+    if "unavailable" in (pre_head, post_head):
+        return
+    if (pre_head, pre_dirty) != (post_head, post_dirty):
+        raise SystemExit(
+            f"ERROR: DiffSinger checkout ({repo_path}) changed during "
+            f"export.py execution "
+            f"(pre: head={pre_head} dirty={pre_dirty}, "
+            f"post: head={post_head} dirty={post_dirty}). "
+            f"Refusing to publish a summary whose exporter revision pin cannot be "
+            f"trusted — the acoustic.onnx bytes may have been generated from a "
+            f"checkout state that no longer matches either snapshot."
+        )
+
+
 def run_export_acoustic(
     diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, step: int, out_dir: Path
 ) -> Tuple[Path, str, str]:
@@ -1393,6 +1446,18 @@ def cmd_run(args):
 
     ckpt_sha: Optional[str] = None
     train_config_sha: Optional[str] = None
+    # [P2 修正] (review #264 R24, gate_synth.py:1585) 従来は export subprocess
+    # 実行**後**（このあと数百行先、synth ループ開始直前）に diffsinger_repo
+    # の HEAD/dirty を 1 回だけ読んでいたため、export と読み取りの間に
+    # checkout が進む/元に戻ると「ONNX は旧バイトから生成されたのに summary
+    # は後から読んだ別リビジョンを pin する」偽 pin が起き得た（指摘の通り）。
+    # ここで export subprocess 起動**前**に pre 状態を取得し、export 完了
+    # 直後に post 状態を取得して照合する。不一致（HEAD 変化 or dirty 状態
+    # 変化）なら export 中に checkout が動いた証拠であり、ONNX の provenance
+    # を信頼できないため fail-closed で停止する。pre 値を正式 pin として
+    # summary へ記録する（下記「diffsinger_repo_git_head」参照）。
+    diffsinger_repo_pre_head: object = None
+    diffsinger_repo_pre_dirty: object = None
     if args.skip_export:
         acoustic_dir = Path(args.acoustic_dir)
         acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
@@ -1401,8 +1466,20 @@ def cmd_run(args):
             # canon 配布 zip はトップレベルにも dsconfig.yaml を持つ
             acoustic_dsconfig_path = canon_model_dir / "dsconfig.yaml"
     else:
+        diffsinger_repo_path = Path(args.diffsinger_repo)
+        diffsinger_repo_pre_head, diffsinger_repo_pre_dirty = _git_head_and_dirty(
+            diffsinger_repo_path
+        )
         exported_dir, ckpt_sha, train_config_sha = run_export_acoustic(
             Path(args.diffsinger_repo), Path(args.ckpt_dir), args.exp_name, args.step, out_dir,
+        )
+        diffsinger_repo_post_head, diffsinger_repo_post_dirty = _git_head_and_dirty(
+            diffsinger_repo_path
+        )
+        _check_diffsinger_repo_stable(
+            diffsinger_repo_path,
+            diffsinger_repo_pre_head, diffsinger_repo_pre_dirty,
+            diffsinger_repo_post_head, diffsinger_repo_post_dirty,
         )
         acoustic_dir = exported_dir
         acoustic_onnx_path = exported_dir / "acoustic.onnx"
@@ -1568,31 +1645,23 @@ def cmd_run(args):
     # 変わり得るのに、summary からは追跡できなかった）。export 実行時
     # （`--skip-export` 経路では export 自体を行わないため対象外 — 既存
     # summary 構造は変えず、キー自体を省く）に限り
-    # `git -C <diffsinger_repo> rev-parse HEAD` / `git status --porcelain`
-    # を取得し、`diffsinger_repo_git_head`/`diffsinger_repo_dirty` として
-    # 記録する。git リポでない・取得失敗の場合は fail-closed にはせず
-    # （export 自体の既存挙動は変えない）、代わりに明示の `"unavailable"`
-    # をそのまま summary へ記録して「pin が取れなかったこと」自体を正直に
-    # 可視化する（サイレントにキーを省いて「未検査」を「pin 済み」と区別
-    # できなくしない）。
+    # `diffsinger_repo_git_head`/`diffsinger_repo_dirty` として記録する。
+    # git リポでない・取得失敗の場合は fail-closed にはせず（export 自体の
+    # 既存挙動は変えない）、代わりに明示の `"unavailable"` をそのまま summary
+    # へ記録して「pin が取れなかったこと」自体を正直に可視化する
+    # （サイレントにキーを省いて「未検査」を「pin 済み」と区別できなくしない）。
+    #
+    # [P2 修正] (review #264 R24, gate_synth.py:1585) 従来はこの時点
+    # （export 完了から数百行後、synth ループ開始直前）で HEAD/dirty を
+    # 初めて 1 回だけ読んでおり、export subprocess 実行中〜この読み取りまで
+    # の間に checkout が進む/元に戻ると偽 pin になり得た（指摘の通り）。
+    # 上記 `cmd_run` 冒頭・export 呼び出しの直前直後で pre/post を取得して
+    # 既に照合済み（不一致なら fail-closed で既に停止している）ため、ここでは
+    # その pre 値（= ONNX 生成時点の真の checkout 状態）をそのまま summary
+    # へ転記するのみで、再取得は行わない。
     if not args.skip_export:
-        diffsinger_repo_path = Path(args.diffsinger_repo)
-        try:
-            diffsinger_head = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(diffsinger_repo_path),
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            dirty_status = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=str(diffsinger_repo_path),
-                capture_output=True, text=True, check=True,
-            ).stdout
-            input_sha256["diffsinger_repo_git_head"] = diffsinger_head
-            input_sha256["diffsinger_repo_dirty"] = bool(dirty_status.strip())
-        except Exception:
-            input_sha256["diffsinger_repo_git_head"] = "unavailable"
-            input_sha256["diffsinger_repo_dirty"] = "unavailable"
+        input_sha256["diffsinger_repo_git_head"] = diffsinger_repo_pre_head
+        input_sha256["diffsinger_repo_dirty"] = diffsinger_repo_pre_dirty
 
     # synth_out_dir/build_dir/old_dir は cmd_run 冒頭（R9 preflight）で算出済み。
     if build_dir.exists():
@@ -1785,6 +1854,17 @@ def cmd_run(args):
                                       "train_config_sha — the current sole call site always "
                                       "supplies it when config.yaml exists, so this fallback is "
                                       "not exercised in practice (review #264 R21)",
+                "diffsinger_repo_git_head": "pre-export snapshot (HEAD/dirty captured immediately "
+                                             "before the export.py subprocess launches) + "
+                                             "post-export re-check (fail-closed SystemExit before "
+                                             "any output is published if HEAD or dirty state "
+                                             "changed during export.py execution; review #264 R24). "
+                                             "This key is only populated on the real export path "
+                                             "(not --skip-export); 'unavailable' means git info "
+                                             "could not be obtained (not a git repo, git missing, "
+                                             "etc.) and is recorded verbatim rather than skipping "
+                                             "the key",
+                "diffsinger_repo_dirty": "see diffsinger_repo_git_head (same pre/post capture)",
             },
             "sampling_params": {
                 "seed": SEED,
