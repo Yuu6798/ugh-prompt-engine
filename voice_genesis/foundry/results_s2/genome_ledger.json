@@ -3,6 +3,7 @@
   "schema_ref": "VISION_evolution_theory_v0.1.md 付録A.1 VoiceGenome",
   "note_blind_discipline": "本台帳は各候補のパラメータ(alpha/method等)を保持するが、判定用ブラインドラベル(candidate_A〜D、バッチ2はcandidate_E〜H)や最終WAVのsha256は意図的に含めない。台帳とブラインド対応表(バッチ1: results_s2/s2_record_2026-08-16.md 参照・中身は非開示。バッチ2: blind_mapping2.json、非コミット)を非交差に保つことでブラインドを維持する — DESIGN_S2_foundry_loop.md §5/§7。",
   "note_batch2_hidden_control": "VG-S2-008 (H') は method=hidden_anchor_control のみを記録し、実体がritsu/pjsどちらのアンカー埋め込みか(identity_latent_ref含む)は意図的に一切含めない — 台帳の恒久公開性(git管理)により、埋め込みバイト列とのハッシュ照合で正体が逆算されるのを防ぐため。実体は blind_mapping2.json(非コミット・scratchpad限定)にのみ封印。",
+  "note_batch2_hidden_control_UNSEALED_2026-08-16": "User耳判定受領・開封済み(results_s2/s2_record_2026-08-16.md §11)。VG-S2-008の実体は anchor_ritsu の spk_embed そのもの（リツ、補間・摂動なし）。log-melスペクトル距離で anchor_ritsu との距離が0.000（完全一致、combined_dist.py実測）であることも独立に確認済み。identity_latent_refは実ベクトルのblobハッシュ相関を避けるためnullのまま維持する（正体はテキストとして開示済みのため、ハッシュ開示の必要性自体が消滅している）。",
   "batch": "S2-batch1+batch2",
   "date": "2026-08-16",
   "backbone_checkpoint": "sha256:052376e81b1e4672bf676802ba4348283037f352bd622e0f8a9ad0ac514c5ce2",
@@ -111,13 +112,13 @@
       "parent_ids": ["VG-S2-ANCHOR-RITSU", "VG-S2-ANCHOR-PJS"],
       "backbone_checkpoint": "sha256:052376e81b1e4672bf676802ba4348283037f352bd622e0f8a9ad0ac514c5ce2",
       "identity_latent_ref": null,
-      "identity": {"interpolation_space": "spk_embed_384d", "method": "hidden_anchor_control", "alpha": null, "note": "アンカー埋め込みそのもの(ritsuまたはpjs)。seed固定の擬似乱数で選択。どちらのアンカーかは意図的に本台帳・record本文に含めない — blind_mapping2.json(非コミット)にのみ封印。判定完了後にUser/評価担当が同ファイルを開封して解釈する"},
+      "identity": {"interpolation_space": "spk_embed_384d", "method": "hidden_anchor_control", "alpha": null, "note": "【2026-08-16開封済み】アンカー埋め込みそのもの = anchor_ritsu（リツ、補間・摂動なし）。seed固定の擬似乱数で選択。開封根拠: blind_mapping2.json §hidden_anchor_identity_SEALED（開封時点でsha256照合済み）+ log-melスペクトル距離0.000（anchor_ritsuと完全一致、combined_dist.py実測、s2_record_2026-08-16.md §11.3）"},
       "phonation": {},
       "performance_prior": {},
       "mutation_ops": ["HIDDEN_CONTROL_ANCHOR_COPY_SEALED"],
       "seed": 42,
       "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
-      "status": "CANDIDATE"
+      "status": "UNSEALED_2026-08-16"
     }
   ],
   "anchors": {
