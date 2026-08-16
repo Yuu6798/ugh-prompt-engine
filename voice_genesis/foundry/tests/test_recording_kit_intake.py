@@ -1,6 +1,6 @@
-"""test_recording_kit_intake.py — review #264 R10/R11 再現テスト。
+"""test_recording_kit_intake.py — review #264 R10/R11/R12 再現テスト。
 
-`recording_kit/intake.py` への 3 件の指摘を再現・検証する:
+`recording_kit/intake.py` への指摘を再現・検証する:
 
 - R10 P1: `UC-001.wav` と `UC-001.m4a` のように拡張子違いで stem が一致する
   入力が同じ `{stem}.norm24k.wav` に解決され、2 回目の ffmpeg -y が 1 回目を
@@ -10,9 +10,20 @@
   一括公開 + 失敗時ロールバックで解消）
 - R11 P2: `UC-0010.m4a` のような非有界マッチが `UC-001` に誤帰属する
   （3 桁直後の境界チェックで解消）
+- R12 P1: `--ledger` が incoming 元ファイル・導出出力（staging 内/最終正規化
+  wav）・staging ディレクトリ自体と衝突する場合、`save_ledger()` がドナー
+  原本や正規化済み wav を JSON で上書きしてしまう（`_check_ledger_path_
+  collisions` の処理開始前 preflight で解消）
+- R12 P2: 公開フェーズ（`out_dir` への移動ループ + `save_ledger`）の途中で
+  移動または台帳保存が失敗すると、既に公開済みの wav が巻き戻されず
+  `out_dir` に部分公開が残留する（移動済みファイルを staging へ戻す
+  `BaseException` 巻き戻しで解消）
+- R12 P2: 台帳エントリが正規化後 wav の sha256 のみを記録し、incoming 原本の
+  provenance を追跡できない（`source_sha256`/`source_size_bytes` の追記で解消）
 """
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 from typing import Iterator, List
@@ -241,6 +252,284 @@ def test_run_no_inputs_leaves_out_dir_and_ledger_untouched(
     assert entries == []
     assert not out_dir.exists()
     assert not ledger_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# R12 P1: --ledger のパス衝突 preflight 拒否
+# ---------------------------------------------------------------------------
+
+
+def test_check_ledger_path_collisions_rejects_incoming_source(tmp_path: Path) -> None:
+    src = tmp_path / "UC-001.wav"
+    src.write_bytes(b"a")
+    out_dir = tmp_path / "out"
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    filenames = {src: "UC-001.norm24k.wav"}
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake._check_ledger_path_collisions(src, [src], filenames, out_dir, staging_dir)
+
+
+def test_check_ledger_path_collisions_rejects_final_normalized_wav(tmp_path: Path) -> None:
+    src = tmp_path / "UC-001.wav"
+    src.write_bytes(b"a")
+    out_dir = tmp_path / "out"
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    filenames = {src: "UC-001.norm24k.wav"}
+    ledger_path = out_dir / "UC-001.norm24k.wav"
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake._check_ledger_path_collisions(ledger_path, [src], filenames, out_dir, staging_dir)
+
+
+def test_check_ledger_path_collisions_rejects_staged_output(tmp_path: Path) -> None:
+    src = tmp_path / "UC-001.wav"
+    src.write_bytes(b"a")
+    out_dir = tmp_path / "out"
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    filenames = {src: "UC-001.norm24k.wav"}
+    ledger_path = staging_dir / "UC-001.norm24k.wav"
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake._check_ledger_path_collisions(ledger_path, [src], filenames, out_dir, staging_dir)
+
+
+def test_check_ledger_path_collisions_rejects_staging_dir_itself(tmp_path: Path) -> None:
+    """`--ledger` が staging ディレクトリ内部を指す場合、バッチ終了時の
+    `rmtree(staging_dir)` で保存直後の台帳ごと消える事故を防ぐ。
+    """
+    src = tmp_path / "UC-001.wav"
+    src.write_bytes(b"a")
+    out_dir = tmp_path / "out"
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    filenames = {src: "UC-001.norm24k.wav"}
+    ledger_path = staging_dir / "user_donor_ledger.json"
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake._check_ledger_path_collisions(ledger_path, [src], filenames, out_dir, staging_dir)
+
+
+def test_check_ledger_path_collisions_rejects_existing_out_dir_file(tmp_path: Path) -> None:
+    """今回バッチの導出出力でなくても、`out_dir` に既に公開済みの他バッチの
+    ファイルと衝突する場合も拒否する。
+    """
+    src = tmp_path / "UC-002.wav"
+    src.write_bytes(b"a")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    existing = out_dir / "UC-001.norm24k.wav"
+    existing.write_bytes(b"already published")
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    filenames = {src: "UC-002.norm24k.wav"}
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake._check_ledger_path_collisions(existing, [src], filenames, out_dir, staging_dir)
+
+
+def test_check_ledger_path_collisions_allows_normal_ledger_path(tmp_path: Path) -> None:
+    """通常の（衝突しない）`--ledger` パスは preflight を素通りする。"""
+    src = tmp_path / "UC-001.wav"
+    src.write_bytes(b"a")
+    out_dir = tmp_path / "out"
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    filenames = {src: "UC-001.norm24k.wav"}
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    intake._check_ledger_path_collisions(ledger_path, [src], filenames, out_dir, staging_dir)
+
+
+def test_run_rejects_ledger_colliding_with_incoming_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R12 P1 の再現: `--ledger` が incoming の元ファイルを指す場合、旧実装は
+    変換・公開後の `save_ledger()` がその元ファイルを JSON で上書きしドナー
+    原本を破壊していた。修正後は変換開始前に fail-closed 拒否し、原本は
+    一切変更されない。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    donor_original = incoming_dir / "UC-001.wav"
+    donor_original.write_bytes(b"precious original bytes")
+
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake.run(incoming_dir, out_dir, donor_original)
+
+    assert donor_original.read_bytes() == b"precious original bytes", (
+        "preflight 拒否後も incoming 原本が一切変更されてはならない"
+    )
+    assert not out_dir.exists() or list(out_dir.iterdir()) == []
+
+
+def test_run_rejects_ledger_colliding_with_derived_normalized_wav(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R12 P1 の再現: `--ledger` が最終正規化 wav のパスと一致する場合、旧
+    実装は公開後の `save_ledger()` がその wav を JSON で上書きしていた
+    （台帳が記録する音声 hash の実体が消える）。修正後は変換開始前に
+    fail-closed 拒否する。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"a")
+
+    out_dir = tmp_path / "out"
+    colliding_ledger = out_dir / "UC-001.norm24k.wav"
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake.run(incoming_dir, out_dir, colliding_ledger)
+
+    assert not colliding_ledger.exists(), "衝突する導出出力パスへは何も書かれてはならない"
+
+
+# ---------------------------------------------------------------------------
+# R12 P2: 公開フェーズ途中失敗のロールバック
+# ---------------------------------------------------------------------------
+
+
+def test_run_rolls_back_published_wavs_when_a_later_move_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R12 P2 の再現: 公開フェーズ（`out_dir` への移動ループ）で 2 件目の
+    移動が失敗した場合、旧実装は 1 件目を `out_dir` へ公開したまま巻き戻さず
+    例外送出していた（台帳は未記帳のまま部分公開が残留）。修正後は公開済み
+    だった 1 件目も staging へ戻され、`out_dir` に痕跡が残らない。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"a")
+    (incoming_dir / "UC-002.wav").write_bytes(b"b")
+    (incoming_dir / "UC-003.wav").write_bytes(b"c")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    real_move = intake.shutil.move
+    move_calls = {"n": 0}
+
+    def _flaky_move(src, dst):
+        move_calls["n"] += 1
+        if move_calls["n"] == 2:
+            raise OSError("simulated failure during publish move")
+        return real_move(src, dst)
+
+    monkeypatch.setattr(intake.shutil, "move", _flaky_move)
+
+    with pytest.raises(OSError):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert not ledger_path.exists(), "公開フェーズ失敗時は台帳へ一切記帳されてはならない"
+    assert not out_dir.exists() or list(out_dir.iterdir()) == [], (
+        "巻き戻し後は out_dir に公開済み wav が残ってはならない（部分公開の禁止）"
+    )
+    leftover_staging = [
+        p for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith(".intake-staging-")
+    ]
+    assert leftover_staging == []
+
+
+def test_run_rolls_back_all_published_wavs_when_ledger_save_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R12 P2 の再現（指摘の本丸）: 全 wav の移動が完了した直後に台帳保存が
+    失敗した場合、旧実装は `out_dir` に全 wav を公開したまま台帳だけ未更新の
+    状態で例外送出していた（部分公開）。修正後は移動済みの wav 全てを
+    staging へ巻き戻す。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"a")
+    (incoming_dir / "UC-002.wav").write_bytes(b"b")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    def _boom_save_ledger(path: Path, ledger: dict) -> None:
+        raise OSError("simulated ledger write failure")
+
+    monkeypatch.setattr(intake, "save_ledger", _boom_save_ledger)
+
+    with pytest.raises(OSError):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert not ledger_path.exists()
+    assert not out_dir.exists() or list(out_dir.iterdir()) == [], (
+        "台帳保存失敗時は、直前に移動済みだった全 wav が out_dir から巻き戻されて"
+        "いなければならない"
+    )
+    leftover_staging = [
+        p for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith(".intake-staging-")
+    ]
+    assert leftover_staging == []
+
+
+# ---------------------------------------------------------------------------
+# R12 P2: 元 incoming ファイルの sha256/サイズ記帳
+# ---------------------------------------------------------------------------
+
+
+def test_process_one_records_source_sha256_and_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_normalize_to_wav(monkeypatch)
+
+    src = tmp_path / "UC-001.wav"
+    src_bytes = b"incoming donor bytes for hashing"
+    src.write_bytes(src_bytes)
+
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    publish_dir = tmp_path / "out"
+
+    entry = intake.process_one(src, staging_dir, "UC-001.norm24k.wav", publish_dir)
+
+    assert entry.source_sha256 == hashlib.sha256(src_bytes).hexdigest()
+    assert entry.source_size_bytes == len(src_bytes)
+    # 正規化後 wav の sha256（`sha256`）とは別物であること（原本と正規化後で
+    # 内容が異なる以上、両ハッシュも一致しないはず）。
+    assert entry.sha256 != entry.source_sha256
+
+
+def test_run_records_source_sha256_for_each_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"donor one")
+    (incoming_dir / "UC-002.wav").write_bytes(b"donor two")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    entries = intake.run(incoming_dir, out_dir, ledger_path)
+
+    by_source = {e.source_filename: e for e in entries}
+    assert by_source["UC-001.wav"].source_sha256 == hashlib.sha256(b"donor one").hexdigest()
+    assert by_source["UC-001.wav"].source_size_bytes == len(b"donor one")
+    assert by_source["UC-002.wav"].source_sha256 == hashlib.sha256(b"donor two").hexdigest()
+    assert by_source["UC-002.wav"].source_size_bytes == len(b"donor two")
+
+    ledger = intake.load_ledger(ledger_path)
+    for raw_entry in ledger["entries"]:
+        assert "source_sha256" in raw_entry
+        assert "source_size_bytes" in raw_entry
 
 
 # ---------------------------------------------------------------------------

@@ -355,6 +355,64 @@ def _read_bytes_and_sha256(path: Path) -> Tuple[bytes, str]:
     return data, hashlib.sha256(data).hexdigest()
 
 
+def load_model_bundle_bytes(
+    canon_model_dir: Path,
+    vocoder_dir: Path,
+    acoustic_onnx_path: Path,
+    acoustic_dsconfig_path: Path,
+) -> Tuple[Dict[str, bytes], Dict[str, str]]:
+    """`run_pipeline` が load する ONNX モデル束 + `dsconfig.yaml` を 1 回だけ
+    read し、そのバッファ（そのまま `InferenceSession`/`yaml.safe_load` に
+    渡す）と sha256 を返す。
+
+    [P2 修正] (review #264 R12, gate_synth.py:1447) 従来は `collect_input_
+    sha256` が pre-load hash 用に `sha256_file()` で 1 回読み、`run_pipeline`
+    が `onnxruntime.InferenceSession`/`yaml.safe_load` 用に別 read でもう
+    一度読んでいた。この構成では、2 回の read の間にファイルが差し替えられ、
+    かつ公開直前の事後照合（`sha256_file()` での再読み込み）前に元へ戻され
+    ると、記録される pre/post ハッシュはどちらも「差し替え前後で一致する」
+    内容になり、実際に推論/パースへ使われたバイト列とは食い違う ——
+    pre/post 二段照合はこの TOCTOU 窓を閉じない（指摘の通り）。
+
+    `cmd_run` が本関数で 1 回だけ `read_bytes()` したバッファを `run_pipeline`
+    （`InferenceSession`/`yaml.safe_load`）へそのまま渡し、同じバッファの
+    sha256 を `collect_input_sha256` の pin としても使うことで、TOCTOU 窓を
+    構造的に閉じる（score モジュールの `_read_and_exec_module`/
+    `_read_bytes_and_sha256` と同型パターン）。既存の pre/post 二段照合
+    （`model_config_paths` 事後再ハッシュ）は、長時間の合成中に on-disk 実装
+    が書き換えられていないかを検出する belt として残す（正式な記録用ハッシュ
+    は本関数のバッファ由来になったため、この belt は「消費バッファ由来の
+    pin」と「公開直前のディスク上の内容」の食い違い検出に役割が変わる）。
+
+    返す dict のキーは `collect_input_sha256`/`model_config_paths`（事後
+    照合）の pin_key と揃えてある。
+    """
+    linguistic_bytes, linguistic_sha = _read_bytes_and_sha256(canon_model_dir / "linguistic.onnx")
+    dur_bytes, dur_sha = _read_bytes_and_sha256(canon_model_dir / "dsdur" / "dur.onnx")
+    pitch_bytes, pitch_sha = _read_bytes_and_sha256(canon_model_dir / "dspitch" / "pitch.onnx")
+    acoustic_bytes, acoustic_sha = _read_bytes_and_sha256(acoustic_onnx_path)
+    vocoder_bytes, vocoder_sha = _read_bytes_and_sha256(vocoder_dir / "nsf_hifigan.onnx")
+    dsconfig_bytes, dsconfig_sha = _read_bytes_and_sha256(acoustic_dsconfig_path)
+
+    model_bytes: Dict[str, bytes] = {
+        "canon_linguistic_onnx": linguistic_bytes,
+        "canon_variance_dur_onnx": dur_bytes,
+        "canon_variance_pitch_onnx": pitch_bytes,
+        "acoustic_onnx": acoustic_bytes,
+        "vocoder_onnx": vocoder_bytes,
+        "acoustic_dsconfig_yaml": dsconfig_bytes,
+    }
+    model_shas: Dict[str, str] = {
+        "canon_linguistic_onnx": linguistic_sha,
+        "canon_variance_dur_onnx": dur_sha,
+        "canon_variance_pitch_onnx": pitch_sha,
+        "acoustic_onnx": acoustic_sha,
+        "vocoder_onnx": vocoder_sha,
+        "acoustic_dsconfig_yaml": dsconfig_sha,
+    }
+    return model_bytes, model_shas
+
+
 def collect_input_sha256(
     args,
     canon_model_dir: Path,
@@ -366,6 +424,7 @@ def collect_input_sha256(
     canon_phonemes_txt_sha: Optional[str] = None,
     own_json_sha: Optional[str] = None,
     speaker_embed_sha: Optional[str] = None,
+    model_shas: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Optional[str]]:
     """gate 判定を駆動した入力モデル束の sha256 を集約する。
 
@@ -389,8 +448,21 @@ def collect_input_sha256(
     み従来どおり `sha256_file()` で個別に読み直す（own_json が `--tokens
     canon` でパースされずに存在するだけのケースなど、パース由来のバッファが
     存在しない場合の後方互換フォールバック）。
+
+    [P2 修正] (review #264 R12, gate_synth.py:1447) `model_shas` は、呼び出し
+    側が `load_model_bundle_bytes` で 1 回だけ read し `InferenceSession`/
+    `yaml.safe_load` にそのまま渡したバッファの sha256（`acoustic_onnx`/
+    `acoustic_dsconfig_yaml`/`canon_linguistic_onnx`/`canon_variance_dur_onnx`/
+    `canon_variance_pitch_onnx`/`vocoder_onnx` の 6 key）。渡された場合は
+    それを優先して記録し、本関数内での再 read（`sha256_file`）は行わない
+    （従来は常に別 read だったため、記録した hash と実際に load されたバッファ
+    が食い違い得る TOCTOU 窓があった — 指摘の通り、公開直前の pre/post 照合
+    だけではこの窓は閉じない）。未指定（None）の場合のみ従来どおり
+    `sha256_file()` で個別に読み直す（`load_model_bundle_bytes` を経由しない
+    呼び出し向けの後方互換フォールバック）。
     """
     shas: Dict[str, Optional[str]] = {}
+    model_shas = model_shas or {}
 
     if not args.skip_export:
         ckpt_dir = Path(args.ckpt_dir)
@@ -402,14 +474,16 @@ def collect_input_sha256(
         )
 
     shas["acoustic_onnx"] = (
-        sha256_file(acoustic_onnx_path) if acoustic_onnx_path.exists() else None
+        model_shas["acoustic_onnx"] if "acoustic_onnx" in model_shas
+        else (sha256_file(acoustic_onnx_path) if acoustic_onnx_path.exists() else None)
     )
     shas["acoustic_phonemes_json"] = (
         own_json_sha if own_json_sha is not None
         else (sha256_file(own_json) if own_json is not None and own_json.exists() else None)
     )
     shas["acoustic_dsconfig_yaml"] = (
-        sha256_file(acoustic_dsconfig_path) if acoustic_dsconfig_path.exists() else None
+        model_shas["acoustic_dsconfig_yaml"] if "acoustic_dsconfig_yaml" in model_shas
+        else (sha256_file(acoustic_dsconfig_path) if acoustic_dsconfig_path.exists() else None)
     )
     shas["speaker_embed"] = (
         speaker_embed_sha if speaker_embed_sha is not None
@@ -426,19 +500,25 @@ def collect_input_sha256(
     canon_phonemes_txt = canon_model_dir / "phonemes.txt"
     vocoder_onnx = vocoder_dir / "nsf_hifigan.onnx"
     shas["canon_linguistic_onnx"] = (
-        sha256_file(linguistic_onnx) if linguistic_onnx.exists() else None
+        model_shas["canon_linguistic_onnx"] if "canon_linguistic_onnx" in model_shas
+        else (sha256_file(linguistic_onnx) if linguistic_onnx.exists() else None)
     )
     shas["canon_variance_dur_onnx"] = (
-        sha256_file(variance_dur_onnx) if variance_dur_onnx.exists() else None
+        model_shas["canon_variance_dur_onnx"] if "canon_variance_dur_onnx" in model_shas
+        else (sha256_file(variance_dur_onnx) if variance_dur_onnx.exists() else None)
     )
     shas["canon_variance_pitch_onnx"] = (
-        sha256_file(variance_pitch_onnx) if variance_pitch_onnx.exists() else None
+        model_shas["canon_variance_pitch_onnx"] if "canon_variance_pitch_onnx" in model_shas
+        else (sha256_file(variance_pitch_onnx) if variance_pitch_onnx.exists() else None)
     )
     shas["canon_phonemes_txt"] = (
         canon_phonemes_txt_sha if canon_phonemes_txt_sha is not None
         else (sha256_file(canon_phonemes_txt) if canon_phonemes_txt.exists() else None)
     )
-    shas["vocoder_onnx"] = sha256_file(vocoder_onnx) if vocoder_onnx.exists() else None
+    shas["vocoder_onnx"] = (
+        model_shas["vocoder_onnx"] if "vocoder_onnx" in model_shas
+        else (sha256_file(vocoder_onnx) if vocoder_onnx.exists() else None)
+    )
     return shas
 
 
@@ -727,16 +807,29 @@ def run_pipeline(
     notes_raw,
     beats_to_seconds,
     tempo_bpm: float,
-    canon_model_dir: Path,
-    vocoder_dir: Path,
-    acoustic_onnx_path: Path,
-    acoustic_dsconfig_path: Path,
+    model_bytes: Dict[str, bytes],
     variance_phonemes: Dict[str, int],
     acoustic_phonemes: Dict[str, int],
     record: dict,
     speaker_name: Optional[str] = None,
     speaker_embed_vector: Optional[np.ndarray] = None,
 ) -> np.ndarray:
+    """`model_bytes` は `load_model_bundle_bytes` が 1 回だけ read したモデル束
+    + dsconfig.yaml のバッファ（`canon_linguistic_onnx`/`canon_variance_dur_onnx`/
+    `canon_variance_pitch_onnx`/`acoustic_onnx`/`vocoder_onnx`/
+    `acoustic_dsconfig_yaml` の 6 key）。
+
+    [P2 修正] (review #264 R12, gate_synth.py:1447) 従来はここで各モデル/
+    config を path から個別に read しており、`collect_input_sha256` が
+    hash 用に読む read とは別 read だった（TOCTOU: 差し替え→hash→
+    元に戻す→ここで load、という順で差し替えられると、記録される
+    pre-load hash と実際に推論へ使われたバイト列が食い違う。公開直前の
+    pre/post 照合もこの窓を閉じない — 指摘の通り）。呼び出し側
+    （`cmd_run`）が `load_model_bundle_bytes` で 1 回だけ read したバッファを
+    そのまま `InferenceSession`/`yaml.safe_load` へ渡すことで、hash と
+    load が同一バッファ由来であることを構造的に保証する
+    （`_read_and_exec_module` と同型パターン）。
+    """
     ort.set_seed(SEED)
     record["seed"] = SEED
     so = ort.SessionOptions()
@@ -745,11 +838,11 @@ def run_pipeline(
     providers = ["CPUExecutionProvider"]
 
     t_load0 = time.time()
-    sess_linguistic = ort.InferenceSession(str(canon_model_dir / "linguistic.onnx"), sess_options=so, providers=providers)
-    sess_dur = ort.InferenceSession(str(canon_model_dir / "dsdur" / "dur.onnx"), sess_options=so, providers=providers)
-    sess_pitch = ort.InferenceSession(str(canon_model_dir / "dspitch" / "pitch.onnx"), sess_options=so, providers=providers)
-    sess_acoustic = ort.InferenceSession(str(acoustic_onnx_path), sess_options=so, providers=providers)
-    sess_vocoder = ort.InferenceSession(str(vocoder_dir / "nsf_hifigan.onnx"), sess_options=so, providers=providers)
+    sess_linguistic = ort.InferenceSession(model_bytes["canon_linguistic_onnx"], sess_options=so, providers=providers)
+    sess_dur = ort.InferenceSession(model_bytes["canon_variance_dur_onnx"], sess_options=so, providers=providers)
+    sess_pitch = ort.InferenceSession(model_bytes["canon_variance_pitch_onnx"], sess_options=so, providers=providers)
+    sess_acoustic = ort.InferenceSession(model_bytes["acoustic_onnx"], sess_options=so, providers=providers)
+    sess_vocoder = ort.InferenceSession(model_bytes["vocoder_onnx"], sess_options=so, providers=providers)
     record["model_load_sec"] = time.time() - t_load0
 
     # acoustic.onnx の実際の入力名で経路を判定する（canon 単一話者 DDPM か、
@@ -758,7 +851,7 @@ def run_pipeline(
     is_reflow_multi_speaker = {"spk_embed", "steps"}.issubset(acoustic_input_names)
     record["stage3_mode"] = "reflow_multi_speaker" if is_reflow_multi_speaker else "canon_ddpm"
 
-    dsconfig = yaml.safe_load(acoustic_dsconfig_path.read_text(encoding="utf-8"))
+    dsconfig = yaml.safe_load(model_bytes["acoustic_dsconfig_yaml"].decode("utf-8"))
     hop_size = 512
     sample_rate = 44100
     frame_ms = 1000.0 * hop_size / sample_rate
@@ -945,10 +1038,7 @@ def synth_song(
     build_fn: Callable,
     beats_to_seconds: Callable,
     tempo_bpm: float,
-    canon_model_dir: Path,
-    vocoder_dir: Path,
-    acoustic_onnx_path: Path,
-    acoustic_dsconfig_path: Path,
+    model_bytes: Dict[str, bytes],
     variance_phonemes: Dict[str, int],
     acoustic_phonemes: Dict[str, int],
     out_dir: Path,
@@ -971,7 +1061,7 @@ def synth_song(
     t_total0 = time.time()
     y = run_pipeline(
         notes_raw, beats_to_seconds, tempo_bpm,
-        canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
+        model_bytes,
         variance_phonemes, acoustic_phonemes, record,
         speaker_name=speaker_name, speaker_embed_vector=speaker_embed_vector,
     )
@@ -1280,18 +1370,30 @@ def cmd_run(args):
     # [P2 修正] (review #264 R9, gate_synth.py:1168) canon_phonemes_txt_sha/
     # own_json_sha/speaker_embed_sha は上記で実際にパース/ロードしたバッファ
     # から得た sha256（未パースの場合は None、内部で従来の別 read にフォール
-    # バック）。acoustic_onnx / canon 各 onnx / vocoder_onnx / dsconfig.yaml は
-    # この時点では load 前（onnxruntime.InferenceSession によるロードは後段
-    # run_pipeline 内）のため引き続き pre-load hash として sha256_file() で
-    # 読む。これらは合成完了後・公開直前に再ハッシュして pre-load hash と
-    # 突き合わせる（下記「モデル/config 束の事後照合」参照。score モジュール
-    # と同じ pre+post 二段方式で TOCTOU 窓を閉じる）。
+    # バック）。
+    #
+    # [P2 修正] (review #264 R12, gate_synth.py:1447) acoustic_onnx / canon 各
+    # onnx / vocoder_onnx / dsconfig.yaml は、従来は「hash 用の sha256_file()
+    # 別 read」と「run_pipeline 内の InferenceSession/yaml.safe_load 用の別
+    # read」に分かれており、両 read の間の差し替えを公開直前の pre/post 照合
+    # だけでは検出できなかった（指摘の通り）。`load_model_bundle_bytes` で
+    # ここで 1 回だけ read したバッファを model_shas として pin し、同じ
+    # バッファ（model_bytes）を下記ループの `synth_song`/`run_pipeline` へ
+    # そのまま渡す（hash と load が同一バッファ由来であることを構造的に
+    # 保証。score モジュールの `_read_and_exec_module` と同型）。長時間の
+    # 合成中に on-disk 実装が書き換えられていないかは、従来通り合成完了後・
+    # 公開直前に再ハッシュして pre-load hash と突き合わせる belt を残す
+    # （下記「モデル/config 束の事後照合」参照）。
+    model_bytes, model_shas = load_model_bundle_bytes(
+        canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
+    )
     input_sha256 = collect_input_sha256(
         args, canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
         own_json, speaker_embed_path,
         canon_phonemes_txt_sha=canon_phonemes_txt_sha,
         own_json_sha=own_json_sha,
         speaker_embed_sha=speaker_embed_sha,
+        model_shas=model_shas,
     )
 
     # R6 レビュー指摘 (PR #263, gate_synth.py:804, P2): 上記はモデル/config 束の
@@ -1366,7 +1468,7 @@ def cmd_run(args):
             build_fn, beats_to_seconds, tempo_bpm = song_modules[song]
             rec = synth_song(
                 song, args.notes_limit, build_fn, beats_to_seconds, tempo_bpm,
-                canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
+                model_bytes,
                 variance_phonemes, acoustic_phonemes, build_dir,
                 speaker_name=args.speaker, speaker_embed_vector=speaker_embed_vector,
                 final_out_dir=synth_out_dir,
@@ -1438,16 +1540,20 @@ def cmd_run(args):
                 f"on-disk implementation that (may have) run."
             )
 
-        # [P2 修正] (review #264 R9, gate_synth.py:1168) モデル/config 束の
-        # 事後照合: `run_pipeline`（`synth_song` 経由で上記ループ内で既に
-        # 呼ばれている）が実際に open する onnx モデル群と `acoustic_dsconfig_
-        # path` は、いずれも `collect_input_sha256` が load 前（`onnxruntime.
-        # InferenceSession`/`yaml.safe_load` 呼び出し前）に取得した pre-load
-        # hash として `input_sha256` へ既に記録済み。スコア modules と同じ
-        # 二段方式（load 前 hash + 公開直前の再 hash 照合）で TOCTOU 窓を閉じる
-        # ため、合成完了後・公開（`_swap_step_dir_into_place`）前にこれらを
-        # 再読み込みして pre-load hash と突き合わせ、不一致（差し替え）または
-        # 消失を検出したら fail-closed で止める。
+        # [P2 修正] (review #264 R9, gate_synth.py:1168; R12, gate_synth.py:1447)
+        # モデル/config 束の事後照合: `run_pipeline`（`synth_song` 経由で上記
+        # ループ内で既に呼ばれている）が実際に open した onnx モデル群と
+        # `acoustic_dsconfig_path` は、`load_model_bundle_bytes` が 1 回だけ
+        # read したバッファ（`model_bytes`）を `InferenceSession`/
+        # `yaml.safe_load` にそのまま渡して使用済みで、その同一バッファの
+        # sha256（`model_shas`）が `input_sha256` へ既に記録されている
+        # （R12 対応: hash と load が同一 read 由来であることが構造的に保証
+        # されるため、ここより前の TOCTOU 窓は既に閉じている）。以下の再読み込み
+        # + 突き合わせは、長時間走る合成の最中に on-disk の実装/モデル資材が
+        # 書き換えられていないかを検出する belt（score modules と同じ
+        # pre+post 二段方式）であり、不一致（差し替え）または消失を検出したら
+        # 合成完了後・公開（`_swap_step_dir_into_place`）前に fail-closed で
+        # 止める。
         model_config_paths: Dict[str, Path] = {
             "canon_linguistic_onnx": canon_model_dir / "linguistic.onnx",
             "canon_variance_dur_onnx": canon_model_dir / "dsdur" / "dur.onnx",
@@ -1485,10 +1591,13 @@ def cmd_run(args):
             "acoustic_encoding_mode": encoding_mode,
             "acoustic_onnx_path": str(acoustic_onnx_path),
             "input_sha256": input_sha256,
-            # (review #264 R9, gate_synth.py:1168) input_sha256 の各 key が
-            # どの方式で「実際に使われたバイト」であることを保証しているかの
-            # 注記。score_module_* / *_dep_* は review #264 R6 の単一 read
-            # 方式と同様の構造。
+            # (review #264 R9, gate_synth.py:1168; R12, gate_synth.py:1447)
+            # input_sha256 の各 key がどの方式で「実際に使われたバイト」で
+            # あることを保証しているかの注記。score_module_* / *_dep_* は
+            # review #264 R6 の単一 read 方式と同様の構造。onnx/dsconfig 系は
+            # R12 で load_model_bundle_bytes による単一 read 方式へ移行済み
+            # （hash した buffer をそのまま InferenceSession/yaml.safe_load に
+            # 渡す）。pre-publish re-hash は on-disk 実装の書き換え検出用 belt。
             "input_sha256_provenance_method": {
                 "canon_phonemes_txt": "single-read (hash == buffer parsed into variance_phonemes)",
                 "acoustic_phonemes_json": "single-read (hash == buffer parsed into acoustic_phonemes, "
@@ -1498,12 +1607,18 @@ def cmd_run(args):
                 "*_dep_*": "single-read (hash == buffer compiled/exec'd; review #264 R6)",
                 "gate_synth_py": "load-time hash (captured at module exec start) + "
                                   "pre-publish re-hash (fail-closed on mismatch; review #264 R10)",
-                "canon_linguistic_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
-                "canon_variance_dur_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
-                "canon_variance_pitch_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
-                "acoustic_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
-                "vocoder_onnx": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
-                "acoustic_dsconfig_yaml": "pre-load hash + pre-publish re-hash (fail-closed on mismatch)",
+                "canon_linguistic_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                          "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "canon_variance_dur_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                            "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "canon_variance_pitch_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                              "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "acoustic_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                  "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "vocoder_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                 "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "acoustic_dsconfig_yaml": "single-read (hash == buffer passed to yaml.safe_load) + "
+                                           "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
                 "ckpt": "sha256_file() only (export.py が別プロセスで消費、compile/exec 対象外)",
                 "train_config_yaml": "sha256_file() only (export.py が別プロセスで消費、compile/exec 対象外)",
             },

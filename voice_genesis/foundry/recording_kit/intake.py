@@ -32,6 +32,23 @@ stem 終端か区切り文字（`_`/空白/`.`/`-`）のみ許可し、`UC-0010`
 構築してから一括で `--out-dir` / `--ledger` へ公開する。途中で
 変換・測定が失敗した場合は staging を破棄するだけで済み、公開済み
 ディレクトリと台帳は失敗前の状態のまま変化しない（部分バッチを残さない）。
+
+`--ledger` の解決パスは、処理開始前に incoming の元音源ファイル・
+今回バッチの導出出力（staging 内の一時パス・`out_dir` 内の最終正規化
+wav）・out_dir 内の既存公開済みファイル・staging ディレクトリ自体との
+衝突を preflight で fail-closed 拒否する（symlink 迂回を防ぐため resolve
+済みパスで比較。R12 P1 対応）。
+
+公開フェーズ（`out_dir` へのファイル移動 + 台帳保存）は、移動済みファイルを
+記録しながら進め、移動そのものが失敗した場合・全ファイル移動後に台帳保存が
+失敗した場合のいずれも `except BaseException` で捕捉し、それまでに公開済み
+だった wav を staging へ巻き戻してから re-raise する（`gate_synth.py` の
+staged swap + `BaseException` 巻き戻しと同型パターン。R12 P2 対応）。台帳
+エントリには正規化後 wav の sha256 に加え、元 incoming ファイルのバイト列
+sha256（`source_sha256`）とサイズ（`source_size_bytes`）も記録する
+（incoming ファイルは可変なファイル名でしか代表されておらず、削除・差し替え
+後に「どの原本バイト列から正規化 wav が作られたか」を追跡できなくする穴を
+防ぐ。R12 P2 対応）。
 """
 from __future__ import annotations
 
@@ -68,12 +85,26 @@ class FfmpegNotFoundError(RuntimeError):
     """ffmpeg バイナリが見つからない場合に送出する。"""
 
 
+class LedgerPathCollisionError(RuntimeError):
+    """`--ledger` が incoming/導出出力/staging ディレクトリと衝突する場合に
+    送出する（R12 P1 対応。`_check_ledger_path_collisions` 参照）。
+    """
+
+
 @dataclass(frozen=True)
 class LedgerEntry:
-    """`user_donor_ledger.json` の `entries` 1 件分。"""
+    """`user_donor_ledger.json` の `entries` 1 件分。
+
+    `source_sha256`/`source_size_bytes` は正規化前の incoming ファイル自体の
+    バイト列 sha256 とサイズ（R12 P2 対応。`source_filename` だけでは
+    ファイル名が可変で、incoming 削除・差し替え後に原本 provenance を
+    追跡できないため、hash で固定する）。
+    """
 
     card_id: Optional[str]
     source_filename: str
+    source_sha256: str
+    source_size_bytes: int
     normalized_path: str
     sha256: str
     received_at: str
@@ -202,6 +233,74 @@ def save_ledger(ledger_path: Path, ledger: dict) -> None:
     tmp_path.replace(ledger_path)
 
 
+def _check_ledger_path_collisions(
+    ledger_path: Path,
+    inputs: List[Path],
+    filenames: Dict[Path, str],
+    out_dir: Path,
+    staging_dir: Path,
+) -> None:
+    """`--ledger` の resolve 済みパスが以下のいずれとも衝突しないことを検査する
+    （R12 P1 対応。convert_pjs.py/gate_synth.py の衝突拒否ファミリーと同じ
+    流儀 — fail-closed・resolve 済みパス比較で symlink 迂回を封じる）。
+
+    - incoming の元音源ファイル（衝突すると `save_ledger()` がドナー原本を
+      JSON で上書きし、原本を破壊する）
+    - 今回バッチの導出出力（staging 内の一時パス・`out_dir` 内の最終正規化
+      wav。衝突すると `save_ledger()` が台帳記録済みの音声 hash の実体を
+      JSON で上書きする）
+    - `out_dir` に既に公開済みの他バッチのファイル（同じ理由で上書き事故になる）
+    - staging ディレクトリ自体（`--ledger` がその内部を指していると、
+      `run()` の `finally` が staging を丸ごと `rmtree` する際に、直前に
+      保存したはずの台帳ごと消え去る）
+
+    `run()` 内で staging_dir 作成直後・実際の変換/移動/台帳保存より前に
+    呼ぶこと（`--incoming-dir` を読むだけの preflight で、音声処理は一切
+    発生しない）。
+    """
+    resolved_ledger = ledger_path.resolve()
+
+    for src in inputs:
+        if resolved_ledger == src.resolve():
+            raise LedgerPathCollisionError(
+                f"--ledger ({ledger_path}) は incoming の元音源ファイル ({src}) "
+                f"と衝突しています（fail-closed で拒否。ドナー原本の破壊を防止）"
+            )
+
+    for src in inputs:
+        filename = filenames[src]
+        for derived_dir in (staging_dir, out_dir):
+            candidate = derived_dir / filename
+            if resolved_ledger == candidate.resolve():
+                raise LedgerPathCollisionError(
+                    f"--ledger ({ledger_path}) は導出出力 ({candidate}) と衝突"
+                    f"しています（fail-closed で拒否。正規化 wav を JSON で"
+                    f"上書きする事故を防止）"
+                )
+
+    if out_dir.exists():
+        for existing in out_dir.iterdir():
+            if existing.is_file() and resolved_ledger == existing.resolve():
+                raise LedgerPathCollisionError(
+                    f"--ledger ({ledger_path}) は out_dir に公開済みの既存"
+                    f"ファイル ({existing}) と衝突しています（fail-closed で"
+                    f"拒否。過去バッチの正規化 wav を JSON で上書きする事故を"
+                    f"防止）"
+                )
+
+    resolved_staging = staging_dir.resolve()
+    try:
+        resolved_ledger.relative_to(resolved_staging)
+    except ValueError:
+        pass
+    else:
+        raise LedgerPathCollisionError(
+            f"--ledger ({ledger_path}) は staging ディレクトリ ({staging_dir}) "
+            f"自体または内部を指しています（fail-closed で拒否。バッチ終了時の "
+            f"staging 削除で台帳ごと消失する事故を防止）"
+        )
+
+
 def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) -> LedgerEntry:
     """`src` を `staging_dir/filename` へ正規化し、公開後の想定パスで台帳エントリを作る。
 
@@ -209,8 +308,16 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
     （`run` が全件成功後に `publish_dir` へ一括移動する）。`normalized_path`
     には公開後の最終パス（`publish_dir/filename`）を記録するため、台帳の
     内容は公開完了後の状態と最初から一致する。
+
+    `source_sha256`/`source_size_bytes` は変換前に `src`（incoming の元
+    ファイル）を直接読んで記録する（R12 P2 対応。ffmpeg は `src` を読み取る
+    だけで書き換えないため変換前後どちらで読んでも値は同じだが、原本の
+    provenance を明示するため変換前に固定する）。
     """
     card_id = extract_card_id(src.name)
+    source_sha256 = sha256_of(src)
+    source_size_bytes = src.stat().st_size
+
     staged_path = staging_dir / filename
     normalize_to_wav(src, staged_path)
 
@@ -219,6 +326,8 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
     return LedgerEntry(
         card_id=card_id,
         source_filename=src.name,
+        source_sha256=source_sha256,
+        source_size_bytes=source_size_bytes,
         normalized_path=str(publish_dir / filename),
         sha256=sha256_of(staged_path),
         received_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -239,6 +348,18 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
     途中で例外（`KeyboardInterrupt`/`SystemExit` を含む）が発生した場合は
     `finally` で staging を丸ごと破棄するだけで、`out_dir`・`ledger_path`
     は呼び出し前の状態のまま変化しない（部分バッチを残さない。R10 P2 対応）。
+
+    実際の変換・測定（`process_one`）を始める前に `_check_ledger_path_collisions`
+    で `--ledger` の衝突を preflight 検査する（R12 P1 対応）。
+
+    公開フェーズ（`out_dir` へのファイル移動 + `save_ledger`）は、移動済み
+    ファイルを `moved` に記録しながら進める。移動そのものが失敗した場合・
+    全ファイル移動後に台帳保存が失敗した場合のいずれも `except BaseException`
+    で捕捉し、それまでに公開済みだった wav を staging へ移動し直して
+    （`out_dir` を呼び出し前の状態へ巻き戻して）から re-raise する。巻き戻し
+    後は外側の `finally` が staging ごと削除するため、失敗したバッチの痕跡は
+    `out_dir`/`ledger_path` のどちらにも残らない（`gate_synth.py` の staged
+    swap + `BaseException` 巻き戻しと同型パターン。R12 P2 対応）。
     """
     inputs = discover_inputs(incoming_dir)
     if not inputs:
@@ -250,6 +371,8 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
     staging_root.mkdir(parents=True, exist_ok=True)
     staging_dir = Path(tempfile.mkdtemp(prefix=".intake-staging-", dir=str(staging_root)))
     try:
+        _check_ledger_path_collisions(ledger_path, inputs, filenames, out_dir, staging_dir)
+
         entries = [
             process_one(src, staging_dir, filenames[src], out_dir) for src in inputs
         ]
@@ -258,12 +381,24 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
         ledger.setdefault("entries", []).extend(asdict(e) for e in entries)
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        for src in inputs:
-            staged_path = staging_dir / filenames[src]
-            final_path = out_dir / filenames[src]
-            shutil.move(str(staged_path), str(final_path))
+        moved: List[tuple[Path, Path]] = []  # (final_path, staged_path) の公開済み一覧
+        try:
+            for src in inputs:
+                staged_path = staging_dir / filenames[src]
+                final_path = out_dir / filenames[src]
+                shutil.move(str(staged_path), str(final_path))
+                moved.append((final_path, staged_path))
 
-        save_ledger(ledger_path, ledger)
+            save_ledger(ledger_path, ledger)
+        except BaseException:
+            # 巻き戻し: ここまでに out_dir へ公開済みの wav を staging へ戻す
+            # （逆順で戻すのは他ファイルとの依存関係はないが、失敗直近のものから
+            # 先に処理するほうが診断しやすいための慣習）。staging は外側の
+            # finally でまるごと削除されるため、戻した分は最終的に消える。
+            for final_path, staged_path in reversed(moved):
+                if final_path.exists():
+                    shutil.move(str(final_path), str(staged_path))
+            raise
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
