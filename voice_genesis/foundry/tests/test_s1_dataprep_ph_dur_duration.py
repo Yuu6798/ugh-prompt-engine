@@ -75,6 +75,52 @@ def test_check_ph_dur_duration_skips_missing_wav(tmp_path: Path) -> None:
     assert bd.check_ph_dur_duration("pjs", wav_dir, rows) == []
 
 
+# --- build_dataset.check_ph_dur_duration: パストラバーサル fail-closed
+# (review #264 R4 P2) -------------------------------------------------------
+
+
+def test_check_ph_dur_duration_does_not_open_path_traversal_name(tmp_path: Path) -> None:
+    """`row["name"]` が `../../outside/secret` のような wav_dir 外を指す名前
+    でも、`check_ph_dur_duration` は `validate_speaker` の安全 name 判定より
+    前に WAV を open してはならない（open してしまうと外部ファイル内容が
+    duration 検査経由で読み取られる）。安全でない name は黙ってスキップし、
+    violation を報告しない（unsafe name の problems 昇格は `validate_speaker`
+    側の責務）。"""
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    # wav_dir 側の申告 ph_dur と大きく乖離した長さの secret wav
+    # （もし open されていれば violation として検出されてしまうはずの内容）。
+    _write_wav(outside_dir / "secret.wav", 10.0)
+
+    raw_dir = tmp_path / "pjs"
+    wav_dir = raw_dir / "wavs"
+    wav_dir.mkdir(parents=True)
+
+    rows = [{"name": "../../outside/secret", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}]
+    assert bd.check_ph_dur_duration("pjs", wav_dir, rows) == []
+    # validate_speaker 側は同じ名前を unsafe として検出し、fail-closed に乗せる。
+    problems = bd.validate_speaker("pjs", raw_dir, rows)
+    assert any("unsafe name" in p for p in problems)
+
+
+def test_check_ph_dur_duration_does_not_open_symlink_escape(tmp_path: Path) -> None:
+    """wav_dir 配下の symlink が wav_dir 外の実ファイルへ逃げている場合も、
+    resolve 後のパスが wav_dir 配下に収まらない限り open しない。"""
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    _write_wav(outside_dir / "secret.wav", 10.0)
+
+    raw_dir = tmp_path / "pjs"
+    wav_dir = raw_dir / "wavs"
+    wav_dir.mkdir(parents=True)
+    (wav_dir / "evil.wav").symlink_to(outside_dir / "secret.wav")
+
+    rows = [{"name": "evil", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}]
+    assert bd.check_ph_dur_duration("pjs", wav_dir, rows) == []
+    problems = bd.validate_speaker("pjs", raw_dir, rows)
+    assert any("unsafe name" in p for p in problems)
+
+
 # --- build_dataset.check_note_dur_consistency (review #264 R3) -------------
 
 

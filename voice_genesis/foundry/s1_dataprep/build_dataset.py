@@ -340,6 +340,31 @@ DURATION_REL_TOLERANCE = 0.05
 DURATION_ABS_TOLERANCE_SEC = 0.1
 
 
+def _is_safe_wav_name(name: str, wav_dir: Path, resolved_wav_dir: Path) -> bool:
+    """`name` が `wav_dir` 配下の `<name>.wav` を安全に指すかを判定する
+    （字句検査 + resolve 封じ込め検査）。
+
+    fix (2026-08-16, review #264 R4 P2): `check_ph_dur_duration` が
+    `validate_speaker` の安全 name 判定より前に `wav_dir / f"{name}.wav"` を
+    無検査で `wave.open` していたため、`../../outside` のような `name` や
+    wav_dir 外へ逃げる symlink 経由で `wav_dir` 外の任意ファイルを読み取れて
+    しまう穴があった。`validate_speaker` の安全集合判定（字句検査: 絶対パス・
+    `..` セグメント・パス区切り文字を拒否 + resolve 後の実パスが `wav_dir`
+    配下に収まることを確認する多層防御）と同一ロジックをここへ切り出し、
+    両関数で共有する（open 前に必ずこの関数を通す）。
+    """
+    if not name or os.path.isabs(name) or os.sep in name or (os.altsep and os.altsep in name):
+        return False
+    parts = name.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return False
+    candidate = wav_dir / f"{name}.wav"
+    resolved_candidate = candidate.resolve()
+    if resolved_candidate != resolved_wav_dir and resolved_wav_dir not in resolved_candidate.parents:
+        return False
+    return True
+
+
 def wav_duration_seconds(path: Path) -> Optional[float]:
     """`path` の WAV 実長を秒で返す。読み取れない（非存在・非 PCM・破損）場合は
     `None`（この検査をスキップする合図。存在チェック自体は `validate_speaker`
@@ -363,7 +388,16 @@ def check_ph_dur_duration(
     violation メッセージのリストとして全件収集して返す（`validate_speaker` と
     同じ「全収集してから呼び出し側が判定する」設計。既定では戻り値は warning
     として扱われ、`--strict-duration` 時のみ呼び出し側が problems へ昇格させる）。
+
+    fix (2026-08-16, review #264 R4 P2): `row["name"]` を字句検査 + resolve
+    封じ込め検査（`_is_safe_wav_name`、`validate_speaker` の安全集合判定と
+    同一ロジック）を通してから初めて `wav_duration_seconds`（= WAV open）を
+    呼ぶ。安全でない name（`../../outside` 等のパストラバーサル・wav_dir 外へ
+    逃げる symlink 経由）は WAV を open せずスキップする（不安全 name の
+    problems 昇格は `validate_speaker` 側が別途担当するため、ここでは黙って
+    スキップしてよい）。
     """
+    resolved_wav_dir = wav_dir.resolve()
     violations: List[str] = []
     for row in rows:
         try:
@@ -372,7 +406,10 @@ def check_ph_dur_duration(
             continue  # 数値でない ph_dur は validate_speaker が別途検出する
         if not ph_dur or not all(math.isfinite(d) for d in ph_dur):
             continue  # 空/非有限は validate_speaker が別途検出する
-        wav_dur = wav_duration_seconds(wav_dir / f"{row['name']}.wav")
+        name = row["name"]
+        if not _is_safe_wav_name(name, wav_dir, resolved_wav_dir):
+            continue  # 不安全な name は open せずスキップ（validate_speaker が別途検出する）
+        wav_dur = wav_duration_seconds(wav_dir / f"{name}.wav")
         if wav_dur is None or wav_dur <= 0:
             continue
         total = math.fsum(ph_dur)
@@ -459,24 +496,17 @@ def validate_speaker(
     # （絶対パス・`..` セグメント・パス区切り文字を拒否）に加え、resolve 後の
     # 実パスが wav_dir 配下に収まることも検証する（シンボリックリンク等の
     # 迂回にも対応する多層防御）。違反は全件収集し、既存の fail-closed
-    # 集約（呼び出し側で他の問題と合流して最終的に停止）に乗せる。
+    # 集約（呼び出し側で他の問題と合流して最終的に停止）に乗せる。判定ロジック
+    # 本体は `_is_safe_wav_name`（review #264 R4 P2 で `check_ph_dur_duration`
+    # と共有化）。
     resolved_wav_dir = wav_dir.resolve()
     unsafe: List[str] = []
     safe_names: List[str] = []
     for n in sorted(set(names)):
-        if not n or os.path.isabs(n) or os.sep in n or (os.altsep and os.altsep in n):
+        if _is_safe_wav_name(n, wav_dir, resolved_wav_dir):
+            safe_names.append(n)
+        else:
             unsafe.append(n)
-            continue
-        parts = n.split("/")
-        if any(p in ("", ".", "..") for p in parts):
-            unsafe.append(n)
-            continue
-        candidate = wav_dir / f"{n}.wav"
-        resolved_candidate = candidate.resolve()
-        if resolved_candidate != resolved_wav_dir and resolved_wav_dir not in resolved_candidate.parents:
-            unsafe.append(n)
-            continue
-        safe_names.append(n)
     if unsafe:
         problems.append(
             f"{speaker_name}: {len(unsafe)} unsafe name(s) in transcriptions.csv "
