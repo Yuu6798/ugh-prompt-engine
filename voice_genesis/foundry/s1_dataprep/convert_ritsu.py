@@ -69,12 +69,23 @@ Ver1.5.1）の実測値（`EXPECTED_OTO_ENTRIES` = A3/F4 各 1237 エントリ�
 から、実際の読み込み/書き込みを一切始める前に fail-closed で拒否する
 （`--expected-oto-entries` で override 可。別 voicebank を意図的に使う運用
 のための脱出弁で、既定は厳格）。
+
+review #263 R15 P2: `_find_malformed_oto_lines` の非数値判定は Python の
+`float()` に委ねていたが、`float("nan")`/`float("inf")`/`float("-inf")` は
+`ValueError` を送出せず受理されるため、oto.ini の数値フィールドが
+非有限値の行は malformed として検出されず、件数も減らないため R14 の
+`EXPECTED_OTO_ENTRIES` 契約チェックもすり抜ける。境界計算
+（`build_segment_for_wav` の offset/consonant/blank 演算）が非有限値で汚染
+され、非有限 `ph_dur` を生成し得る。`math.isfinite()` を追加し、非有限値も
+malformed 行として列挙する（`build_dataset.validate_speaker` 側の下流検証も
+同時に是正、同ファイル該当箇所参照）。
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -305,7 +316,12 @@ def _find_malformed_oto_lines(text: str) -> List[Tuple[int, str]]:
     呼び出し元（既存の skip 仕様に依存し得る）の挙動まで変わってしまう
     ため、判定規則のみを本ファイルへ複製する（`_wav_ref_is_basename` と
     同じ既存パターン。R12 P1 コメント参照）。空行・`"="` を含まない行
-    （コメント/区切りとして無視される）は対象外。"""
+    （コメント/区切りとして無視される）は対象外。
+
+    review #263 R15 P2: `float()` は `"nan"`/`"inf"`/`"-inf"`（大小文字・
+    符号違いを含む）を例外なく受理するため、非有限値は `math.isfinite()`
+    で別途弾く（offset/consonant/blank の境界演算がこれらの値で汚染される
+    のを公開前に検出するため）。"""
     malformed: List[Tuple[int, str]] = []
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
@@ -317,9 +333,11 @@ def _find_malformed_oto_lines(text: str) -> List[Tuple[int, str]]:
             malformed.append((lineno, raw_line))
             continue
         try:
-            for value in parts[1:]:
-                float(value)
+            values = [float(value) for value in parts[1:]]
         except ValueError:
+            malformed.append((lineno, raw_line))
+            continue
+        if not all(math.isfinite(value) for value in values):
             malformed.append((lineno, raw_line))
     return malformed
 

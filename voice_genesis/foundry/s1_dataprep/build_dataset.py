@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 import tempfile
@@ -355,6 +356,14 @@ def validate_speaker(
             )
         if any(d <= 0 for d in ph_dur):
             problems.append(f"{speaker_name}: {row['name']} has non-positive ph_dur")
+        # [P2 修正] (review #263 R15) `d <= 0` は nan（比較が常に False）・
+        # inf（`0 < inf` なので通過）を検出できない。上流 `convert_ritsu.py`/
+        # `convert_pjs.py` が非有限値を fail-closed で拒否するようになった
+        # 後も、本関数は独立した下流ゲートとして自前でも非有限値を検出する
+        # （多話者統合コーパスへ非有限 ph_dur が混入したまま公開されるのを
+        # 防ぐ最終防衛線）。
+        if any(not math.isfinite(d) for d in ph_dur):
+            problems.append(f"{speaker_name}: {row['name']} has non-finite ph_dur")
     return problems
 
 

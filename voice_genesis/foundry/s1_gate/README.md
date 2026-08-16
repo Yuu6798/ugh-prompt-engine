@@ -78,5 +78,10 @@ python gate_synth.py run --skip-export --tokens canon \
 - `unmapped_own` の非空チェックは `run` に未実装（`mapping-check` を実 ckpt の
   `acoustic.phonemes.json` に対しても別途走らせ、`unmapped_own_count` を確認する
   運用を 5K 到達時の耳判定前に徹底する）。
-- acoustic 差し替え自体（実 ckpt での動作）は本 README 執筆時点で未検証（GPU 学習
-  が前提のため、S1 GPU 実行以降のスコープ）。
+- acoustic 差し替え自体（実 ckpt での動作）は **検証済み**（review #263 R15 是正:
+  旧記載を更新）。5K checkpoint（`model_ckpt_steps_5000.ckpt`、多話者 reflow
+  acoustic）の export + ritsu/pjs × さくら/うみ 4 本合成を実施し、決定論再現
+  （独立 2 回の `run` 呼び出しで sha256 完全一致）・canon 回帰（`--tokens canon`
+  経路が S0 probe 値と完全一致）とも実測確認済み。詳細・sha256 は
+  `results_s1/s1_record_2026-08-15.md`「5K 早期ゲート合成」節が正。**耳判定・
+  音質評価は引き続きスコープ外**（同節「耳判定逐語」参照。判定待ち）。
