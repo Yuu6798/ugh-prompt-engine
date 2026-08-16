@@ -1,0 +1,79 @@
+{
+  "schema": "voicegenesis-genome-ledger/0.1",
+  "schema_ref": "VISION_evolution_theory_v0.1.md 付録A.1 VoiceGenome",
+  "note_blind_discipline": "本台帳は各候補のパラメータ(alpha/method等)を保持するが、判定用ブラインドラベル(candidate_A〜D)や最終WAVのsha256は意図的に含めない。台帳とブラインド対応表(results_s2/s2_record_2026-08-16.md 参照。中身は非開示)を非交差に保つことでブラインドを維持する — DESIGN_S2_foundry_loop.md §5/§7。",
+  "batch": "S2-batch1",
+  "date": "2026-08-16",
+  "backbone_checkpoint": "sha256:052376e81b1e4672bf676802ba4348283037f352bd622e0f8a9ad0ac514c5ce2",
+  "genomes": [
+    {
+      "voice_id": "VG-S2-001",
+      "generation": 1,
+      "parent_ids": ["VG-S2-ANCHOR-RITSU", "VG-S2-ANCHOR-PJS"],
+      "backbone_checkpoint": "sha256:052376e81b1e4672bf676802ba4348283037f352bd622e0f8a9ad0ac514c5ce2",
+      "identity_latent_ref": "blob:sha256:e3f222599222461eb146bcd02759351c706058b4c5ae6d30b7a48a04e7702d68",
+      "identity": {"interpolation_space": "spk_embed_384d", "method": "lerp", "alpha": 0.2},
+      "phonation": {},
+      "performance_prior": {},
+      "mutation_ops": ["INTERP_LERP_ALPHA_0.20"],
+      "seed": 42,
+      "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
+      "status": "CANDIDATE"
+    },
+    {
+      "voice_id": "VG-S2-002",
+      "generation": 1,
+      "parent_ids": ["VG-S2-ANCHOR-RITSU", "VG-S2-ANCHOR-PJS"],
+      "backbone_checkpoint": "sha256:052376e81b1e4672bf676802ba4348283037f352bd622e0f8a9ad0ac514c5ce2",
+      "identity_latent_ref": "blob:sha256:8538e45dd7d645280bc88339eb0c9d97a2ded5a26ccd75e05541c51863281782",
+      "identity": {"interpolation_space": "spk_embed_384d", "method": "lerp", "alpha": 0.5},
+      "phonation": {},
+      "performance_prior": {},
+      "mutation_ops": ["INTERP_LERP_ALPHA_0.50"],
+      "seed": 42,
+      "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
+      "status": "CANDIDATE"
+    },
+    {
+      "voice_id": "VG-S2-003",
+      "generation": 1,
+      "parent_ids": ["VG-S2-ANCHOR-RITSU", "VG-S2-ANCHOR-PJS"],
+      "backbone_checkpoint": "sha256:052376e81b1e4672bf676802ba4348283037f352bd622e0f8a9ad0ac514c5ce2",
+      "identity_latent_ref": "blob:sha256:75e84674d86e26167b90007b8e7bd46e360a23cf61442093843b493c80b154f8",
+      "identity": {"interpolation_space": "spk_embed_384d", "method": "lerp", "alpha": 0.8},
+      "phonation": {},
+      "performance_prior": {},
+      "mutation_ops": ["INTERP_LERP_ALPHA_0.80"],
+      "seed": 42,
+      "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
+      "status": "CANDIDATE"
+    },
+    {
+      "voice_id": "VG-S2-004",
+      "generation": 1,
+      "parent_ids": ["VG-S2-ANCHOR-RITSU", "VG-S2-ANCHOR-PJS"],
+      "backbone_checkpoint": "sha256:052376e81b1e4672bf676802ba4348283037f352bd622e0f8a9ad0ac514c5ce2",
+      "identity_latent_ref": "blob:sha256:512b7344be6dad0891986006edcfa9f0edfbb31260f9efc3bb04098088e2c24f",
+      "identity": {"interpolation_space": "spk_embed_384d", "method": "slerp", "alpha": 0.5, "slerp_note": "方向は単位球面上で球面補間、大きさはノルムの線形補間"},
+      "phonation": {},
+      "performance_prior": {},
+      "mutation_ops": ["INTERP_SLERP_ALPHA_0.50"],
+      "seed": 42,
+      "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
+      "status": "CANDIDATE"
+    }
+  ],
+  "anchors": {
+    "VG-S2-ANCHOR-RITSU": {
+      "description": "run3 40K acoustic checkpoint の spk_embed (話者=ritsu, 384次元)。リツ原音（商用可・改変可、results_s0/s0_record_2026-08-15.md §3 参照）由来。",
+      "source": "s1_ritsu_pjs_acoustic_v1.ritsu.emb（run3 export）",
+      "embed_l2_norm": 1.2269226
+    },
+    "VG-S2-ANCHOR-PJS": {
+      "description": "run3 40K acoustic checkpoint の spk_embed (話者=pjs, 384次元)。PJS歌唱コーパス（CC BY-SA 4.0）由来。",
+      "source": "s1_ritsu_pjs_acoustic_v1.pjs.emb（run3 export）",
+      "embed_l2_norm": 1.3936023
+    },
+    "anchor_cosine_similarity": -0.33517197
+  }
+}
