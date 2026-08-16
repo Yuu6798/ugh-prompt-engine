@@ -338,7 +338,38 @@ def validate_speaker(
         dup = sorted({n for n in names if names.count(n) > 1})
         problems.append(f"{speaker_name}: duplicate name(s) in transcriptions.csv: {dup[:5]}")
 
-    missing = [n for n in sorted(set(names)) if not (wav_dir / f"{n}.wav").exists()]
+    # [P1 修正] (review #263 R16) transcriptions.csv の `name` は外部生成物
+    # （convert_ritsu.py/convert_pjs.py の出力）であり、`wav_dir / f"{n}.wav"`
+    # に無検査で連結すると絶対パスや `..` を含む `name` によって wav_dir の
+    # 外を指すパスを組み立てられてしまう（パストラバーサル）。字句検査
+    # （絶対パス・`..` セグメント・パス区切り文字を拒否）に加え、resolve 後の
+    # 実パスが wav_dir 配下に収まることも検証する（シンボリックリンク等の
+    # 迂回にも対応する多層防御）。違反は全件収集し、既存の fail-closed
+    # 集約（呼び出し側で他の問題と合流して最終的に停止）に乗せる。
+    resolved_wav_dir = wav_dir.resolve()
+    unsafe: List[str] = []
+    safe_names: List[str] = []
+    for n in sorted(set(names)):
+        if not n or os.path.isabs(n) or os.sep in n or (os.altsep and os.altsep in n):
+            unsafe.append(n)
+            continue
+        parts = n.split("/")
+        if any(p in ("", ".", "..") for p in parts):
+            unsafe.append(n)
+            continue
+        candidate = wav_dir / f"{n}.wav"
+        resolved_candidate = candidate.resolve()
+        if resolved_candidate != resolved_wav_dir and resolved_wav_dir not in resolved_candidate.parents:
+            unsafe.append(n)
+            continue
+        safe_names.append(n)
+    if unsafe:
+        problems.append(
+            f"{speaker_name}: {len(unsafe)} unsafe name(s) in transcriptions.csv "
+            f"(absolute path / '..' / path separator rejected), e.g. {sorted(unsafe)[:3]}"
+        )
+
+    missing = [n for n in safe_names if not (wav_dir / f"{n}.wav").exists()]
     if missing:
         problems.append(f"{speaker_name}: {len(missing)} wav missing under {wav_dir}, e.g. {missing[:3]}")
 

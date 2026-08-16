@@ -84,6 +84,7 @@ review #263 R14 P1: `stage_song_wavs` は `.lab`/`_song.wav` の存在判定に
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import shutil
@@ -134,6 +135,14 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
     （`staging_dir.rename(old_dir)` は `staging_dir` 配下の `pjs_root` も
     丸ごと退避先へ連れて行く）、以後 symlink ターゲットが指す絶対パスが
     消失した状態でコーパスが破壊される。
+
+    [P2 修正] (review #263 R16) `guarded_outputs` 相互の照合が等価判定のみ
+    だったため、祖先/子孫関係（例: `--lang-def` が `<staging-dir>.old` 配下
+    を指す）を見逃していた。`.old`/`.build-<pid>` は `_swap_into_place` が
+    rename/rmtree する派生パスであり、`--lang-def` がその配下にあると公開時
+    の退避・削除に巻き込まれて `write_lang_def`/`_restore_lang_def_backup`
+    のバックアップ復元と食い違う。`build_dataset.py` R10 と同型のロジック
+    （`relative_to` による双方向包含判定）を出力相互にも適用する。
     """
     resolved_outs = [(p, p.resolve()) for p in out_paths]
 
@@ -143,6 +152,27 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
                 raise OutputCollisionError(
                     f"output paths collide with each other: {p_i} == {p_j}（fail-closed で拒否）"
                 )
+            # [P2 修正] (review #263 R16) 等価判定のみでは出力パス同士が
+            # 祖先/子孫関係にある場合（例: `--staging-dir` の派生パス
+            # `<staging-dir>.old`/`<staging-dir>.build-<pid>` 配下を
+            # `--lang-def` が指すケース）を見逃す。双方向で祖先/子孫関係も
+            # 公開前に fail-closed で拒否する（`build_dataset.py`
+            # `_reject_output_collision` R10 と同型ロジック）。
+            try:
+                r_j.relative_to(r_i)
+            except ValueError:
+                pass
+            else:
+                raise OutputCollisionError(
+                    f"output path {p_j} is inside output path {p_i}（fail-closed で拒否）"
+                )
+            try:
+                r_i.relative_to(r_j)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"output path {p_i} is inside output path {p_j}（fail-closed で拒否）"
+            )
 
     for root in protected_roots:
         if not root.exists():
@@ -503,6 +533,61 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"error: db_converter.py failed (exit {result.returncode})", file=sys.stderr)
                 _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
                 return result.returncode
+
+            # [P2 修正] (review #263 R16) db_converter.py が exit 0 でも、
+            # 内部で早期に空の結果を返して正常終了しているケース（Codex 再現:
+            # 空出力 + lang.json のみが公開される）を exit code だけでは検出
+            # できない。swap（公開）の前に、実際に生成された
+            # `diffsinger_db/transcriptions.csv` の存在・行数 > 0・期待曲数
+            # （今回ステージングした曲 ID 集合。完全素材では PJS 契約どおり
+            # 100 曲）との整合を検証し、欠落・不整合なら fail-closed で拒否
+            # する（`build_dataset.py` `validate_speaker` の下流検証と対の
+            # 「生成側」ゲート）。曲数と行数は一致しない点に注意（実測: 実際の
+            # `db_converter.py` は 1 曲を複数セグメント `pjsNNN_segXXX` へ
+            # 分割するため 100 曲 -> 287 行が正常。したがって行数の等価判定
+            # ではなく、行の `name` が指す曲 ID 集合による被覆判定で整合を見る
+            # — 詳細は下記コメント参照）。
+            out_csv_path = build_dir / "diffsinger_db" / "transcriptions.csv"
+            if not out_csv_path.exists():
+                print(
+                    f"error: db_converter.py exited 0 but {out_csv_path} was not produced "
+                    "(fail-closed, not published)",
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+            with open(out_csv_path, newline="", encoding="utf-8") as f:
+                out_rows = list(csv.DictReader(f))
+            if len(out_rows) == 0:
+                print(
+                    f"error: {out_csv_path} has 0 data rows (fail-closed, not published)",
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+            # `db_converter.py` は 1 曲を複数セグメント（`pjsNNN_segXXX`）へ
+            # 分割して書き出すため、行数は曲数（`n_staged`）と一致しない
+            # （実測: 100 曲 -> 287 行が正常）。「行数 == 曲数」の等価判定は
+            # 誤検知になるため、行の `name` 先頭が指す曲 ID（`pjsNNN` 部分）を
+            # 集計し、今回ステージングした曲 ID 集合（`PJS_EXPECTED_IDS` から
+            # missing_pairs/escaped_pairs を除いたもの）が全件カバーされて
+            # いるかで整合を判定する（曲が丸ごと出力から欠落するケースを検出）。
+            staged_ids = {
+                n for n in PJS_EXPECTED_IDS if n not in missing_pairs and n not in escaped_pairs
+            }
+            covered_ids = {
+                row["name"].split("_seg")[0] for row in out_rows if row.get("name")
+            }
+            uncovered = sorted(staged_ids - covered_ids)
+            if uncovered:
+                print(
+                    f"error: {out_csv_path} has no row for {len(uncovered)} staged song(s) "
+                    f"out of {len(staged_ids)} (fail-closed, not published), e.g. "
+                    + ", ".join(uncovered[:5]),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
 
             _swap_into_place(build_dir, staging_dir)
             swapped = True

@@ -122,6 +122,25 @@ REFLOW_SAMPLING_STEPS = 20
 # 0. スコア読み込み（さくら/うみ共通インタフェース）
 # ============================================================================
 
+# review #263 R16 P2: song 名 -> score モジュールファイル名の対応表。
+# `load_song_module` が実際に import する対象と同一命名規則（`singer_dir` 直下）。
+# import 前にファイルパスを確定させ sha256 を取得するために、import 実行と
+# 分離して公開する。
+SCORE_MODULE_FILENAMES: Dict[str, str] = {
+    "sakura": "score.py",
+    "umi": "score_umi.py",
+}
+
+
+def score_module_path_for(song: str, singer_dir: Path) -> Path:
+    """`load_song_module` が import する前に、対象ファイルの絶対パスを解決する
+    （review #263 R16 P2: import 前ハッシュ取得のための事前解決）。"""
+    filename = SCORE_MODULE_FILENAMES.get(song)
+    if filename is None:
+        raise ValueError(f"unknown song: {song}")
+    return (singer_dir / filename).resolve()
+
+
 def load_song_module(song: str, singer_dir: Path):
     """楽曲モジュール読み込み。戻り値に実際に import したモジュールファイルの
     絶対パスも含める（PR #263 R6 レビュー指摘: gate summary の input_sha256 が
@@ -1057,10 +1076,31 @@ def cmd_run(args):
     # 変わっても「どの実装から出たか」が入力側 pin から追えなくなる。合成実装側
     # の sha256 も input_sha256 へ追加する（実行中の本スクリプト自身・実際に
     # load した score モジュール・可能ならリポの HEAD commit）。
+    #
+    # [P2 修正] (review #263 R16) 従来は `load_song_module`（内部で import 済み）
+    # の戻りパスを import 実行の *後* に sha256 化していたため、import 実行から
+    # ハッシュ取得までの間に score モジュールが差し替えられても pin が新しい
+    # 内容の方を記録してしまい、「実際に import された（合成に使われた）内容」
+    # と記録済み sha256 が食い違い得た。import 前にファイルパスを確定 sha256 化
+    # してから import することで pin を import 直前の内容へ固定する（load 時
+    # pin）。さらに合成完了後（`_score_module_sha256_at_import` 参照）に同じ
+    # パスを再ハッシュし、不一致なら公開（`_swap_step_dir_into_place`）前に
+    # fail-closed で止める（事後照合。長時間走る合成の最中に score モジュールが
+    # 書き換えられて「記録された pin と実際に使われた実装が食い違ったまま公開
+    # される」事故を防ぐ）。
     input_sha256["gate_synth_py"] = sha256_file(Path(__file__).resolve())
+    score_module_paths: Dict[str, Path] = {}
     for song_name in args.song.split(","):
-        _, _, _, score_module_path = load_song_module(song_name, singer_dir)
-        input_sha256[f"score_module_{song_name}"] = sha256_file(score_module_path)
+        module_path = score_module_path_for(song_name, singer_dir)
+        input_sha256[f"score_module_{song_name}"] = sha256_file(module_path)
+        score_module_paths[song_name] = module_path
+    for song_name in args.song.split(","):
+        _, _, _, imported_module_path = load_song_module(song_name, singer_dir)
+        if imported_module_path != score_module_paths[song_name]:
+            raise SystemExit(
+                f"ERROR: score module path mismatch for song '{song_name}': "
+                f"expected {score_module_paths[song_name]}, imported {imported_module_path}"
+            )
     try:
         git_head = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -1105,6 +1145,22 @@ def cmd_run(args):
                   f"rms={rec['wav_rms']:.4f} diverged={rec['stage3_dual_encoding_diverged']} "
                   f"mode={rec['stage3_mode']}")
 
+        # [P2 修正] (review #263 R16) 事後照合: import 前に pin した
+        # score_module_{song} の sha256 を、合成完了後（公開直前）に再計算し
+        # 一致を確認する。長時間の合成中に score モジュールが書き換えられて
+        # いた場合、記録済み pin と実際に使われた実装が食い違うため、公開
+        # （`_swap_step_dir_into_place`）前に fail-closed で止める。
+        for song_name, module_path in score_module_paths.items():
+            recorded_sha = input_sha256[f"score_module_{song_name}"]
+            current_sha = sha256_file(module_path)
+            if current_sha != recorded_sha:
+                raise SystemExit(
+                    f"ERROR: score module '{module_path}' changed during synthesis "
+                    f"(pinned sha256={recorded_sha}, now={current_sha}). "
+                    f"Refusing to publish a summary whose provenance pin no longer "
+                    f"matches the on-disk implementation."
+                )
+
         summary_path = build_dir / "gate_synth_summary.json"
         summary_path.write_text(json.dumps({
             "step": args.step,
@@ -1134,27 +1190,55 @@ def cmd_run(args):
 
 
 def cmd_mapping_check(args):
-    diffsinger_repo = Path(args.diffsinger_repo)
-    own_dictionary_ja = Path(args.own_dictionary_ja)
+    # review #263 R16 P2: README `s1_gate/README.md` §3 の運用記述
+    # （「mapping-check を実 ckpt の acoustic.phonemes.json に対しても別途
+    # 走らせ、unmapped_own_count を確認する」）は、従来 CLI が
+    # `--own-dictionary-ja`（binarize 入力の辞書テキストから
+    # `PhonemeDictionary` でシミュレートした ID 空間）しか受け付けず、export
+    # 済みの実 `*.phonemes.json`（`run` が実際に消費する語彙そのもの）を
+    # 直接照合できなかった。`--export-phonemes-json` を追加し、実消費写像を
+    # そのまま検査できるようにする（両モードは排他 — どちらの ID 空間を
+    # 検査しているかを呼び出し側に必ず明示させる）。
+    own_dictionary_ja = Path(args.own_dictionary_ja) if args.own_dictionary_ja else None
+    export_phonemes_json = Path(args.export_phonemes_json) if args.export_phonemes_json else None
+    if (own_dictionary_ja is None) == (export_phonemes_json is None):
+        raise SystemExit(
+            "error: specify exactly one of --own-dictionary-ja (binarize 入力の "
+            "dictionary-ja.txt から PhonemeDictionary でシミュレート) or "
+            "--export-phonemes-json (export.py が実際に書き出した *.phonemes.json "
+            "= run が実際に消費する写像そのもの)"
+        )
+    diffsinger_repo = Path(args.diffsinger_repo) if args.diffsinger_repo else None
+    if own_dictionary_ja is not None and diffsinger_repo is None:
+        raise SystemExit("error: --own-dictionary-ja の指定時は --diffsinger-repo も必須です")
+
     canon_phonemes_txt = Path(args.canon_phonemes_txt)
     out_path = Path(args.out) if args.out else Path("mapping_check.json")
 
-    # R14 レビュー指摘 (PR #263, gate_synth.py:1123, P2): --out が
-    # --own-dictionary-ja/--canon-phonemes-txt（または --diffsinger-repo）と
-    # 一致すると、両入力をメモリへ読み込み済みのこの後の書き込みが入力
-    # 辞書ファイルそのものを mapping JSON で黙って置き換え・破壊してしまう。
-    # resolve 済みの全入力と --out を、実際の読み込みを始める前に衝突照合し
-    # fail-closed で拒否する（入力は読み込み前のため無傷のまま失敗する）。
+    # R14 レビュー指摘 (PR #263, gate_synth.py:1123, P2): --out が入力ファイルの
+    # いずれかと一致すると、両入力をメモリへ読み込み済みのこの後の書き込みが
+    # 入力ファイルそのものを mapping JSON で黙って置き換え・破壊してしまう。
+    # resolve 済みの全入力（存在するもののみ）と --out を、実際の読み込みを
+    # 始める前に衝突照合し fail-closed で拒否する（入力は読み込み前のため
+    # 無傷のまま失敗する）。
+    protected_roots = [canon_phonemes_txt]
+    for p in (diffsinger_repo, own_dictionary_ja, export_phonemes_json):
+        if p is not None:
+            protected_roots.append(p)
     try:
-        _reject_output_collision(
-            [out_path], protected_roots=[diffsinger_repo, own_dictionary_ja, canon_phonemes_txt]
-        )
+        _reject_output_collision([out_path], protected_roots=protected_roots)
     except OutputCollisionError as exc:
         raise SystemExit(f"error: {exc}")
 
     canon_phonemes = load_canon_phonemes(canon_phonemes_txt)
-    own_phonemes = build_own_dictionary_from_binarize(diffsinger_repo, own_dictionary_ja)
+    if export_phonemes_json is not None:
+        own_phonemes = load_own_phonemes_json(export_phonemes_json)
+        own_source = f"export-phonemes-json:{export_phonemes_json}"
+    else:
+        own_phonemes = build_own_dictionary_from_binarize(diffsinger_repo, own_dictionary_ja)
+        own_source = f"own-dictionary-ja:{own_dictionary_ja} (simulated via PhonemeDictionary)"
     result = build_phoneme_mapping(own_phonemes, canon_phonemes)
+    result["own_source"] = own_source
 
     # [P2 修正] (review #263 R14) 直接 write_text は書き込み途中で kill
     # された場合に破損 JSON が out_path へ残り得る。同一ディレクトリへ
@@ -1202,8 +1286,15 @@ def main():
     p_run.set_defaults(func=cmd_run)
 
     p_map = sub.add_parser("mapping-check", help="自前語彙 <-> canon 617/46 語彙の写像テーブル検証")
-    p_map.add_argument("--diffsinger-repo", required=True)
-    p_map.add_argument("--own-dictionary-ja", required=True, help="binarize 入力 dictionary-ja.txt / merged_ja_dict.txt")
+    p_map.add_argument("--diffsinger-repo", default=None,
+                        help="openvpi/DiffSinger clone (e2307b1)。--own-dictionary-ja 使用時のみ必須")
+    p_map.add_argument("--own-dictionary-ja", default=None,
+                        help="binarize 入力 dictionary-ja.txt / merged_ja_dict.txt から "
+                             "PhonemeDictionary でシミュレート（--export-phonemes-json と排他）")
+    p_map.add_argument("--export-phonemes-json", default=None,
+                        help="review #263 R16 P2: export.py が書き出した実 "
+                             "<exp_name>.phonemes.json をそのまま検査する（run が実際に消費する "
+                             "写像そのものと一致。--own-dictionary-ja と排他、いずれか一方を指定）")
     p_map.add_argument("--canon-phonemes-txt", required=True)
     p_map.add_argument("--out", default=None)
     p_map.set_defaults(func=cmd_mapping_check)
