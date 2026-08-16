@@ -75,6 +75,27 @@
   `duration_sec` の非正・非有限を `NonPositiveDurationError` で fail-closed
   拒否することで解消（`convert_pjs.py`/`build_dataset.py` の「非正
   duration は無条件で不正」という意味論と揃える）
+- R22 P1 (intake.py:510): `<ledger>.lock` は `--ledger` のパスのみから
+  導出されるため、別 `--ledger` かつ同一 `--out-dir` を指す 2 つの intake
+  プロセスは異なるロックを取得してしまい並行実行を防げなかった。両者が
+  同じ正規化ファイル名を予約・公開しようとすると、後勝ちの `shutil.move()`
+  が先発の wav を上書きし、台帳のハッシュと実バイト列が乖離し得た。
+  `<out_dir>/.intake.lock` への `fcntl.flock(LOCK_EX | LOCK_NB)` を ledger
+  ロックに続けて固定順（ledger → out_dir）で追加取得し、`out_dir`（公開
+  名前空間）自体も直列化することで解消（`OutDirLockError` で fail-closed
+  拒否）
+- R22 P2 (intake.py:380): R19 P2 のエントリ単位検証はフィールドの必須性・
+  型までしか見ておらず、型は正しいが値として不正（`source_sha256:
+  "garbage"`、`duration_sec: NaN`、`sample_rate: true`（`bool` は `int` の
+  サブクラスのため型検査を素通りする）、負の `source_size_bytes` 等）な
+  エントリはそのまま通過していた。`_validate_ledger_entry` を `LedgerEntry`
+  が生成しうる値域（sha256 系は 64 桁小文字 hex・duration_sec は有限かつ
+  正・sample_rate/source_size_bytes は非 bool の正/非負整数・rms_dbfs/
+  peak_dbfs は None か有限 float・received_at は ISO 8601 として parse
+  可能・alignment_status は実装が書く語彙・card_id は UC-NNN 形式か None・
+  パス系文字列は非空）まで拡張することで解消。台帳検証階層は「schema 完全
+  一致 (R13) → entries リスト (R13) → エントリ必須フィールド/型 (R19) →
+  値不変条件 (R22)」で完結する
 """
 from __future__ import annotations
 
@@ -153,6 +174,29 @@ def _valid_ledger_entry_dict(**overrides: object) -> Dict[str, object]:
     }
     entry.update(overrides)
     return entry
+
+
+def _write_ledger_with_entry(ledger_path: Path, entry: Dict[str, object]) -> None:
+    """`entry` 1 件だけを持つ台帳 JSON を書き出す（R22 P2 の値不変条件テスト
+    共通ヘルパー）。"""
+    ledger_path.write_text(
+        json.dumps({"schema": intake.LEDGER_SCHEMA, "entries": [entry]}),
+        encoding="utf-8",
+    )
+
+
+def _published_entries(out_dir: Path) -> List[Path]:
+    """`out_dir` 直下の公開済みエントリを、R22 P1 が残置する
+    `.intake.lock` を除いて列挙する。
+
+    `run()` は preflight の一部として `out_dir` を必ず作成し
+    `<out_dir>/.intake.lock` を残置するようになった（R22 P1 対応）ため、
+    「バッチが公開物を一切残さなかったこと」を検証するテストは、この
+    ロックファイル自体を公開物とみなさないよう除外する必要がある。
+    """
+    if not out_dir.exists():
+        return []
+    return sorted(p for p in out_dir.iterdir() if p.name != ".intake.lock")
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +355,7 @@ def test_run_resolves_stem_collision_with_distinct_hashes_and_take_names(
     }
 
     # 実ファイルが両方とも out_dir に存在し、台帳の sha256 と一致する。
-    published_files = sorted(out_dir.iterdir())
+    published_files = _published_entries(out_dir)
     assert len(published_files) == 2
     for entry in entries:
         published = Path(entry.normalized_path)
@@ -348,8 +392,9 @@ def test_run_rolls_back_whole_batch_on_mid_batch_failure(
         intake.run(incoming_dir, out_dir, ledger_path)
 
     assert not ledger_path.exists(), "失敗したバッチは台帳へ一切記帳されてはならない"
-    assert not out_dir.exists() or list(out_dir.iterdir()) == [], (
-        "失敗したバッチの正規化 wav が out_dir に残ってはならない（部分公開の禁止）"
+    assert _published_entries(out_dir) == [], (
+        "失敗したバッチの正規化 wav が out_dir に残ってはならない（部分公開の禁止。"
+        "R22 P1 の out_dir ロック残置ファイルは除外して判定する）"
     )
     # staging 用の一時ディレクトリも後片付けされていること。
     leftover_staging = [
@@ -538,7 +583,7 @@ def test_run_rejects_ledger_colliding_with_incoming_source(
     assert donor_original.read_bytes() == b"precious original bytes", (
         "preflight 拒否後も incoming 原本が一切変更されてはならない"
     )
-    assert not out_dir.exists() or list(out_dir.iterdir()) == []
+    assert _published_entries(out_dir) == []
 
 
 def test_run_rejects_ledger_colliding_with_derived_normalized_wav(
@@ -636,7 +681,7 @@ def test_run_rolls_back_published_wavs_when_a_later_move_fails(
         intake.run(incoming_dir, out_dir, ledger_path)
 
     assert not ledger_path.exists(), "公開フェーズ失敗時は台帳へ一切記帳されてはならない"
-    assert not out_dir.exists() or list(out_dir.iterdir()) == [], (
+    assert _published_entries(out_dir) == [], (
         "巻き戻し後は out_dir に公開済み wav が残ってはならない（部分公開の禁止）"
     )
     leftover_staging = [
@@ -672,7 +717,7 @@ def test_run_rolls_back_all_published_wavs_when_ledger_save_fails(
         intake.run(incoming_dir, out_dir, ledger_path)
 
     assert not ledger_path.exists()
-    assert not out_dir.exists() or list(out_dir.iterdir()) == [], (
+    assert _published_entries(out_dir) == [], (
         "台帳保存失敗時は、直前に移動済みだった全 wav が out_dir から巻き戻されて"
         "いなければならない"
     )
@@ -967,7 +1012,7 @@ def test_run_rejects_broken_schema_ledger_before_processing_starts(
         intake.run(incoming_dir, out_dir, ledger_path)
 
     assert normalize_calls == [], "スキーマ不一致の場合は変換を一切開始してはならない"
-    assert not out_dir.exists() or list(out_dir.iterdir()) == []
+    assert _published_entries(out_dir) == []
     # 既存の壊れた台帳自体は書き換えられていない。
     assert ledger_path.read_text(encoding="utf-8") == '{"schema": "unknown/0.0", "entries": []}'
 
@@ -1017,7 +1062,7 @@ def test_run_restores_previous_ledger_when_interrupted_right_after_save_ledger_r
         "save_ledger() 成功直後の中断でも、台帳は公開フェーズ開始前の内容へ"
         "復元されなければならない"
     )
-    assert not out_dir.exists() or list(out_dir.iterdir()) == [], (
+    assert _published_entries(out_dir) == [], (
         "台帳と同様、公開済み wav も巻き戻されていなければならない"
     )
 
@@ -1053,7 +1098,7 @@ def test_run_deletes_new_ledger_when_interrupted_and_no_ledger_existed_before(
     assert not ledger_path.exists(), (
         "台帳が元々存在しなかった場合は、新規生成された台帳が削除されなければならない"
     )
-    assert not out_dir.exists() or list(out_dir.iterdir()) == []
+    assert _published_entries(out_dir) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1178,7 +1223,7 @@ def test_run_resolves_snapshot_and_staged_output_namespace_collision(
     entries = intake.run(incoming_dir, out_dir, ledger_path)
 
     assert len(entries) == 2
-    published_files = sorted(out_dir.iterdir())
+    published_files = _published_entries(out_dir)
     assert len(published_files) == 2, "2 件とも別々のファイルとして公開されていること"
 
     # 公開されたファイルの実バイト列が台帳の sha256 と食い違っていないこと
@@ -1353,7 +1398,7 @@ def test_run_with_real_ffmpeg_resolves_stem_collision(tmp_path: Path) -> None:
     entries = intake.run(incoming_dir, out_dir, ledger_path)
 
     assert len(entries) == 2
-    published = sorted(out_dir.iterdir())
+    published = _published_entries(out_dir)
     assert len(published) == 2
     for entry in entries:
         published_path = Path(entry.normalized_path)
@@ -1426,7 +1471,7 @@ def test_run_rejects_duplicate_within_batch(
         intake.run(incoming_dir, out_dir, ledger_path)
 
     assert not ledger_path.exists()
-    assert not out_dir.exists() or list(out_dir.iterdir()) == []
+    assert _published_entries(out_dir) == []
 
 
 def test_run_allows_genuine_retake_with_different_bytes(
@@ -1673,4 +1718,241 @@ def test_run_rejects_header_only_normalized_wav_end_to_end(
         intake.run(incoming_dir, out_dir, ledger_path)
 
     assert not ledger_path.exists()
-    assert not out_dir.exists() or list(out_dir.iterdir()) == []
+    assert _published_entries(out_dir) == []
+
+
+# ---------------------------------------------------------------------------
+# R22 P1: out_dir 単位の直列化（`<out_dir>/.intake.lock` への flock）
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_lock_path_and_out_dir_lock_path_are_distinct(tmp_path: Path) -> None:
+    """`<ledger>.lock` と `<out_dir>/.intake.lock` は別パス・別ロックである
+    ことの回帰ガード（R22 P1 の前提: ledger → out_dir の固定順取得が意味を
+    持つためには、両者が同じファイルに縮退してはならない）。
+    """
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    out_dir = tmp_path / "out"
+
+    ledger_lock_path = intake._ledger_lock_path(ledger_path)
+    out_dir_lock_path = intake._out_dir_lock_path(out_dir)
+
+    assert ledger_lock_path != out_dir_lock_path
+    assert ledger_lock_path.resolve() != out_dir_lock_path.resolve()
+    assert out_dir_lock_path == out_dir / ".intake.lock"
+
+
+def test_run_rejects_when_out_dir_lock_already_held_by_different_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R22 P1 の再現: 別 `--ledger` かつ同一 `--out-dir` を対象とする 2 つの
+    intake プロセスは、`<ledger>.lock` の取得先パスが異なるため旧実装では
+    並行実行できてしまっていた（両者が同じ正規化ファイル名を予約・公開しよう
+    とすると、後勝ちの `shutil.move()` が先発の wav を上書きし、台帳の
+    ハッシュと実バイト列が乖離する）。`<out_dir>/.intake.lock` を先行取得
+    しておくと、別の `--ledger` を指す後発 `run()` もこの out_dir ロックに
+    より `OutDirLockError` で fail-closed 拒否されることを検証する（ledger
+    ロックだけでは検出できない競合を out_dir ロックが直列化する）。拒否時は
+    台帳・out_dir のどちらにも新規の公開痕跡を残さない。ロック解放後は同じ
+    入力で正常に成功する。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"out-dir lock contention donor bytes")
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    out_dir_lock_path = intake._out_dir_lock_path(out_dir)
+    # 実際の OS レベル flock を先行取得することで「別 --ledger を使う別
+    # プロセスが同じ out_dir を対象に実行中」を再現する。
+    held_lock_file = open(out_dir_lock_path, "a+", encoding="utf-8")
+    intake.fcntl.flock(held_lock_file, intake.fcntl.LOCK_EX | intake.fcntl.LOCK_NB)
+    try:
+        with pytest.raises(intake.OutDirLockError):
+            intake.run(incoming_dir, out_dir, ledger_path)
+
+        assert not ledger_path.exists()
+        assert _published_entries(out_dir) == [], (
+            "out_dir ロック拒否時は新規の公開物を残してはならない"
+        )
+    finally:
+        intake.fcntl.flock(held_lock_file, intake.fcntl.LOCK_UN)
+        held_lock_file.close()
+
+    # ロック解放後は待ち合わせなしで正常に成功する。
+    entries = intake.run(incoming_dir, out_dir, ledger_path)
+    assert len(entries) == 1
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 1
+
+
+def test_run_rejects_ledger_pointing_at_out_dir_lock_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--ledger` が `<out_dir>/.intake.lock`（R22 P1 が新設した out_dir
+    ロックファイルのパスそのもの）を指す退化ケースも fail-closed 拒否する。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"a")
+
+    out_dir = tmp_path / "out"
+    colliding_ledger = intake._out_dir_lock_path(out_dir)
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake.run(incoming_dir, out_dir, colliding_ledger)
+
+
+# ---------------------------------------------------------------------------
+# R22 P2: 台帳エントリの値レベル不変条件検証（型は正しいが値が不正なケース）
+# ---------------------------------------------------------------------------
+
+
+def test_load_ledger_accepts_entry_satisfying_all_value_invariants(tmp_path: Path) -> None:
+    """R22 P2 正常系回帰: 生成コードが実際に書き込む形状の台帳エントリは、
+    追加した値不変条件検証を経ても引き続き受理される。
+    """
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    entry = _valid_ledger_entry_dict()
+    _write_ledger_with_entry(ledger_path, entry)
+
+    ledger = intake.load_ledger(ledger_path)
+    assert ledger["entries"] == [entry]
+
+
+@pytest.mark.parametrize("field", ["source_sha256", "sha256"])
+def test_load_ledger_rejects_garbage_hash(tmp_path: Path, field: str) -> None:
+    """R22 P2 の再現（指摘の実例①）: `source_sha256: "garbage"` のように型は
+    str だが 64 桁の小文字 hex ではない値を、R19 P2 の型チェックのみでは
+    素通りしていた。
+    """
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    entry = _valid_ledger_entry_dict(**{field: "garbage"})
+    _write_ledger_with_entry(ledger_path, entry)
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_load_ledger_rejects_nan_duration(tmp_path: Path) -> None:
+    """R22 P2 の再現（指摘の実例②）: `duration_sec: NaN` は型としては
+    float で正当だが、非有限値は使用不能なドナー音声を意味する。
+    """
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    entry = _valid_ledger_entry_dict(duration_sec=float("nan"))
+    _write_ledger_with_entry(ledger_path, entry)
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_load_ledger_rejects_bool_sample_rate(tmp_path: Path) -> None:
+    """R22 P2 の再現（指摘の実例③）: `sample_rate: true` は `bool` が `int`
+    のサブクラスであるため、R19 P2 の型チェック (`isinstance(value, (int,))`)
+    を素通りしていた。
+    """
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    entry = _valid_ledger_entry_dict(sample_rate=True)
+    _write_ledger_with_entry(ledger_path, entry)
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_load_ledger_rejects_negative_source_size_bytes(tmp_path: Path) -> None:
+    """R22 P2 の再現（指摘の実例④）: 負の `source_size_bytes` は型としては
+    int で正当だが、バイト数として物理的に無効。
+    """
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    entry = _valid_ledger_entry_dict(source_size_bytes=-1)
+    _write_ledger_with_entry(ledger_path, entry)
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "description"),
+    [
+        ({"source_sha256": "0" * 63}, "source_sha256 が63桁（短い）"),
+        ({"source_sha256": "g" * 64}, "source_sha256 が16進以外の文字を含む"),
+        ({"source_sha256": "A" * 64}, "source_sha256 が大文字hex（hexdigest()は小文字のみ生成）"),
+        ({"sha256": "not-a-hash"}, "sha256 がhexではない"),
+        ({"duration_sec": 0.0}, "duration_secが0"),
+        ({"duration_sec": -1.0}, "duration_secが負"),
+        ({"duration_sec": float("inf")}, "duration_secがinf"),
+        ({"duration_sec": True}, "duration_secがbool"),
+        ({"sample_rate": 0}, "sample_rateが0"),
+        ({"sample_rate": -24000}, "sample_rateが負"),
+        ({"source_size_bytes": True}, "source_size_bytesがbool"),
+        ({"rms_dbfs": float("nan")}, "rms_dbfsがNaN"),
+        ({"rms_dbfs": float("inf")}, "rms_dbfsがinf"),
+        ({"rms_dbfs": True}, "rms_dbfsがbool"),
+        ({"peak_dbfs": float("nan")}, "peak_dbfsがNaN"),
+        ({"peak_dbfs": True}, "peak_dbfsがbool"),
+        ({"received_at": "not-a-date"}, "received_atがISO8601として不正"),
+        ({"received_at": "2026-13-40"}, "received_atが暦として不正"),
+        ({"alignment_status": "done"}, "alignment_statusが未知の語彙"),
+        ({"alignment_status": ""}, "alignment_statusが空文字列"),
+        ({"card_id": "UC-1"}, "card_idがUC-NNN形式ではない（桁不足）"),
+        ({"card_id": "XX-001"}, "card_idがUC-で始まらない"),
+        ({"card_id": "uc-001"}, "card_idが小文字（生成コードは常に大文字）"),
+        ({"card_id": ""}, "card_idが空文字列"),
+        ({"source_filename": ""}, "source_filenameが空文字列"),
+        ({"normalized_path": ""}, "normalized_pathが空文字列"),
+    ],
+)
+def test_load_ledger_rejects_entry_violating_value_invariant(
+    tmp_path: Path, overrides: Dict[str, object], description: str
+) -> None:
+    """R22 P2: `_LEDGER_ENTRY_REQUIRED_FIELDS` の型検査は通過するが値として
+    不正なエントリを、値不変条件検証がフィールドごとに fail-closed 拒否する
+    ことのパラメタライズ回帰（`description` はテスト失敗時の可読性のための
+    ラベルで、アサーション自体には使わない）。
+    """
+    del description
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    entry = _valid_ledger_entry_dict(**overrides)
+    _write_ledger_with_entry(ledger_path, entry)
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.load_ledger(ledger_path)
+
+
+def test_run_rejects_publish_when_existing_ledger_has_invalid_entry_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run()` E2E: 既存台帳に値不変条件違反のエントリが混入している場合、
+    `load_ledger` 経由で preflight 拒否され、変換・公開のいずれも開始しない
+    （R22 P2 の再現を `run()` 全体で確認する）。
+    """
+    normalize_calls: List[Path] = []
+
+    def _fake(src: Path, dst: Path) -> None:
+        normalize_calls.append(src)
+        _write_fake_source(dst, seed=4, sample_rate=intake.TARGET_SAMPLE_RATE)
+
+    monkeypatch.setattr(intake, "normalize_to_wav", _fake)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-002.wav").write_bytes(b"a")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    broken_entry = _valid_ledger_entry_dict(sample_rate=True)
+    _write_ledger_with_entry(ledger_path, broken_entry)
+    ledger_bytes_before = ledger_path.read_bytes()
+
+    with pytest.raises(intake.LedgerSchemaError):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert normalize_calls == [], "既存台帳のエントリが不正な場合は変換を一切開始してはならない"
+    assert _published_entries(out_dir) == []
+    assert ledger_path.read_bytes() == ledger_bytes_before, "既存の壊れた台帳自体は書き換えられない"

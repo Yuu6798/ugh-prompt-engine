@@ -71,6 +71,17 @@ ENTRY_REQUIRED_FIELDS` 参照）を検証し、欠損・型不正は同じく
 一致している台帳のエントリは現行形状であるべきであり、正式 intake 運用は
 未実施のため後方互換の負担も無い。
 
+さらに、型が合っているだけでは検出できない値レベルの不変条件も
+`_validate_ledger_entry` が検証する（R22 P2 対応 — `source_sha256:
+"garbage"`、`duration_sec: NaN`、`sample_rate: true`（`bool` は `int` の
+サブクラスのため型検査を素通りする）、負の `source_size_bytes` 等、型
+検査だけでは弾けない不正値が `_check_duplicate_sources` の重複検査を
+すり抜けたり `json.dump()` で非有限値が再出力され続けたりする穴を防ぐ）。
+これにより台帳検証階層は「schema 完全一致 (R13) → entries リスト (R13)
+→ エントリ必須フィールド/型 (R19) → 値不変条件 (R22)」で完結し、
+`LedgerEntry` が生成しうる全フィールドについて値域検証が揃った
+（`_validate_ledger_entry` 参照）。
+
 `--ledger` が `out_dir` 内にある配置（append ワークフロー）では、2 回目
 以降のバッチの preflight で `--ledger` 自身が `out_dir` の既存エントリと
 して見つかる。これは事故ではなく意図した配置のため、`_check_ledger_path_
@@ -99,6 +110,22 @@ intake プロセスが並行実行されると、両方が同じ旧台帳を読�
 衝突検査対象の一員（incoming 原本・導出出力との衝突は拒否対象、
 `out_dir` 内の「公開済み既存ファイル」走査では自分自身の予約物として
 除外）として整合させる。
+
+`<ledger>.lock` に加えて `<out_dir>/.intake.lock` への `fcntl.flock
+(LOCK_EX | LOCK_NB)` も取得し、`out_dir`（公開名前空間）自体も別ロックで
+直列化する（R22 P1 対応）。`<ledger>.lock` のロックパスは `--ledger` の
+パスのみから導出されるため、**別の `--ledger` かつ同一 `--out-dir`** を
+指す 2 つの intake プロセスは異なるロックを取得してしまい並行実行を防げ
+ない。両者が `assign_normalized_filenames` のスナップショットに基づき
+同じ正規化ファイル名を予約・`_check_publish_path` を通過した場合、後勝ちの
+`shutil.move()` が先発の wav を上書きし、台帳に記録済みのハッシュと
+`out_dir` 上の実バイト列が乖離する（片方の台帳だけが不整合を検出できない
+まま残る）。ロック取得順序は **ledger → out_dir の固定順**（両ロックとも
+片方向の順序でのみ取得するためデッドロックは起きない）。out_dir ロックも
+`LOCK_NB` で取得し、既に別プロセスが保持している場合は `OutDirLockError`
+で即座に fail-closed 拒否する。残置ポリシー（`unlink` しない）・
+`_check_ledger_path_collisions` の予約物除外の考え方は `<ledger>.lock` と
+同じ（`_out_dir_lock_path` 参照）。
 """
 from __future__ import annotations
 
@@ -157,6 +184,18 @@ class LedgerLockError(RuntimeError):
 
     別の intake プロセスが同一台帳を対象に実行中であることを意味する。
     待ち合わせず即座に fail-closed 拒否する（`run` docstring 参照）。
+    """
+
+
+class OutDirLockError(RuntimeError):
+    """`run()` が `<out_dir>/.intake.lock` の `fcntl.flock(LOCK_EX | LOCK_NB)` を
+    ノンブロッキングで取得できなかった場合に送出する（R22 P1 対応）。
+
+    `<ledger>.lock` は `--ledger` のパスのみから導出されるため、別
+    `--ledger` かつ同一 `--out-dir` を指す 2 つの intake プロセスは異なる
+    ロックを取得してしまい並行実行を防げない（`run` docstring 参照）。
+    公開名前空間である `out_dir` 自体を別ロックで直列化することでこの穴を
+    塞ぐ。待ち合わせず即座に fail-closed 拒否する。
     """
 
 
@@ -333,9 +372,9 @@ def measure_loudness(wav_path: Path) -> tuple[float, Optional[float], Optional[f
 # `LedgerEntry` の各フィールドが台帳 JSON 上で満たすべき必須性・型
 # （R19 P2 対応。`_validate_ledger_entry` 参照）。`Optional[X]` なフィールド
 # は `type(None)` を許容型に含める。`float` 系フィールドは JSON 上で整数値
-# （小数部無し）になり得るため `int` も許容する（`bool` は `int` の
-# サブクラスだが、台帳エントリの数値フィールドに `bool` が入ることは正規の
-# 生成経路では起こらないため、ここでは区別しない）。
+# （小数部無し）になり得るため `int` も許容する。`bool` は `int` の
+# サブクラスのためこの型チェックだけでは素通りするが、値レベルの不変条件
+# 検証（`_LEDGER_ENTRY_VALUE_VALIDATORS` 参照。R22 P2 対応）で別途弾く。
 _LEDGER_ENTRY_REQUIRED_FIELDS: Dict[str, tuple] = {
     "card_id": (str, type(None)),
     "source_filename": (str,),
@@ -351,11 +390,39 @@ _LEDGER_ENTRY_REQUIRED_FIELDS: Dict[str, tuple] = {
     "alignment_status": (str,),
 }
 
+# sha256/source_sha256 の値域: `hashlib.sha256(...).hexdigest()` が生成する
+# 64 桁の小文字 hex 文字列のみを正とする（R22 P2 対応）。
+_LEDGER_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+# card_id の値域: `extract_card_id()` が返す `UC-NNN`（3 桁, 大文字）形式の
+# 完全一致のみを正とする（R22 P2 対応。ファイル名中の接頭辞境界チェックを
+# 行う `CARD_ID_PATTERN` とは異なり、値そのものの完全一致を要求する）。
+_LEDGER_CARD_ID_PATTERN = re.compile(r"^UC-\d{3}$")
+
+# alignment_status の値域: 現行実装 (`process_one`) が書き込む語彙のみ
+# （R22 P2 対応。アラインメント実装後に語彙を拡張する場合はここも同期して
+# 更新すること — `LedgerEntry.alignment_status` docstring 参照）。
+_LEDGER_ALIGNMENT_STATUS_VALUES = frozenset({"not_started"})
+
+# bool は int のサブクラスのため `_LEDGER_ENTRY_REQUIRED_FIELDS` の型検査
+# だけでは `sample_rate: true` 等を素通りさせてしまう（R22 P2 レビュー
+# 指摘）。数値であるべき全フィールドを対象に明示的に bool を拒否する。
+_LEDGER_ENTRY_NUMERIC_FIELDS = (
+    "duration_sec",
+    "sample_rate",
+    "source_size_bytes",
+    "rms_dbfs",
+    "peak_dbfs",
+)
+
+# 非空でなければならないパス/ファイル名系フィールド（R22 P2 対応）。
+_LEDGER_ENTRY_NON_EMPTY_STRING_FIELDS = ("source_filename", "normalized_path")
+
 
 def _validate_ledger_entry(entry: object, index: int, ledger_path: Path) -> None:
-    """`entries[index]` が `LedgerEntry` の必須フィールド・型を満たすことを
-    検証する（R19 P2 対応）。欠損・型不正は `LedgerSchemaError` で
-    fail-closed 拒否する。
+    """`entries[index]` が `LedgerEntry` の必須フィールド・型・値不変条件を
+    満たすことを検証する（R19 P2: フィールド必須性・型 / R22 P2: 値不変条件）。
+    違反は `LedgerSchemaError` で fail-closed 拒否する。
 
     旧実装は `entries` がリストであることしか検証しておらず、
     `source_sha256` を欠くエントリ（例: schema バージョンが一致するだけの
@@ -363,6 +430,18 @@ def _validate_ledger_entry(entry: object, index: int, ledger_path: Path) -> None
     `source_sha256` の無いエントリを黙ってスキップするため、そのエントリが
     表す重複ドナー音声/破損 provenance が検出されずに再公開される穴が
     あった（R19 P2 レビュー指摘）。
+
+    R19 P2 のフィールド必須性・型検証は「型が合っているか」までしか見て
+    おらず、型は正しいが値として不正（`source_sha256: "garbage"`、
+    `duration_sec: NaN`、`sample_rate: true`、負の `source_size_bytes` 等）
+    な場合はそのまま通過していた。無効な値のまま `_check_duplicate_sources`
+    の重複検査をすり抜けたり、`json.dump()` が非有限値を再出力し続けたり
+    することで、`load_ledger()` を通過しているにも関わらず台帳が実質的に
+    壊れた状態を保つ穴があった（R22 P2 レビュー指摘）。`LedgerEntry` が
+    生成コード（`process_one`/`extract_card_id`/`measure_loudness` 等）を
+    通じて実際に生成しうる値域を正として、フィールド単位で不変条件を検証する
+    （本関数が台帳検証ファミリーの最終段: schema 完全一致 (R13) → entries
+    リスト (R13) → エントリ必須フィールド/型 (R19) → 値不変条件 (R22)）。
     """
     if not isinstance(entry, dict):
         raise LedgerSchemaError(
@@ -381,6 +460,71 @@ def _validate_ledger_entry(entry: object, index: int, ledger_path: Path) -> None
                 f"{ledger_path} の entries[{index}].{field} の型が不正です "
                 f"(type={type(value).__name__})。fail-closed で拒否します"
             )
+
+    def _reject(field: str, reason: str) -> None:
+        raise LedgerSchemaError(
+            f"{ledger_path} の entries[{index}].{field} が不正です（{reason}）。"
+            f"fail-closed で拒否します（R22 P2 対応）"
+        )
+
+    # bool は int のサブクラスのため、数値フィールドはまず bool 混入を弾く。
+    for field in _LEDGER_ENTRY_NUMERIC_FIELDS:
+        if isinstance(entry[field], bool):
+            _reject(field, f"bool 値です (value={entry[field]!r})")
+
+    # sha256 / source_sha256: 64 桁の小文字 hex 文字列。
+    for field in ("sha256", "source_sha256"):
+        value = entry[field]
+        if not _LEDGER_SHA256_PATTERN.fullmatch(value):
+            _reject(field, f"64 桁の小文字 hex 文字列ではありません (value={value!r})")
+
+    # duration_sec: 有限かつ正（0 以下・NaN・inf は不正）。
+    duration_sec = entry["duration_sec"]
+    if not math.isfinite(duration_sec) or duration_sec <= 0.0:
+        _reject("duration_sec", f"有限かつ正の値ではありません (value={duration_sec!r})")
+
+    # sample_rate: 正の整数（TARGET_SAMPLE_RATE 由来。0 以下は不正）。
+    sample_rate = entry["sample_rate"]
+    if sample_rate <= 0:
+        _reject("sample_rate", f"正の値ではありません (value={sample_rate!r})")
+
+    # source_size_bytes: 非負の整数（負のバイト数は物理的に無効）。
+    source_size_bytes = entry["source_size_bytes"]
+    if source_size_bytes < 0:
+        _reject("source_size_bytes", f"負の値です (value={source_size_bytes!r})")
+
+    # rms_dbfs / peak_dbfs: None または有限 float（無音時は None、それ以外は
+    # `20.0 * log10(...)` の結果であり NaN/inf にはならないはず）。
+    for field in ("rms_dbfs", "peak_dbfs"):
+        value = entry[field]
+        if value is not None and not math.isfinite(value):
+            _reject(field, f"有限値でも None でもありません (value={value!r})")
+
+    # received_at: ISO 8601 として parse 可能。
+    received_at = entry["received_at"]
+    try:
+        datetime.fromisoformat(received_at)
+    except ValueError:
+        _reject("received_at", f"ISO 8601 として解釈できません (value={received_at!r})")
+
+    # alignment_status: 現行実装が書き込む語彙に一致。
+    alignment_status = entry["alignment_status"]
+    if alignment_status not in _LEDGER_ALIGNMENT_STATUS_VALUES:
+        _reject(
+            "alignment_status",
+            f"既知の語彙 {sorted(_LEDGER_ALIGNMENT_STATUS_VALUES)} に含まれません "
+            f"(value={alignment_status!r})",
+        )
+
+    # card_id: None または `UC-NNN`（3 桁）形式の完全一致。
+    card_id = entry["card_id"]
+    if card_id is not None and not _LEDGER_CARD_ID_PATTERN.fullmatch(card_id):
+        _reject("card_id", f"UC-NNN 形式ではありません (value={card_id!r})")
+
+    # パス/ファイル名系フィールド: 非空文字列。
+    for field in _LEDGER_ENTRY_NON_EMPTY_STRING_FIELDS:
+        if entry[field] == "":
+            _reject(field, "空文字列です")
 
 
 def load_ledger(ledger_path: Path) -> dict:
@@ -508,6 +652,17 @@ def _ledger_lock_path(ledger_path: Path) -> Path:
     衝突として検出されないようにする）。
     """
     return ledger_path.parent / f"{ledger_path.name}.lock"
+
+
+def _out_dir_lock_path(out_dir: Path) -> Path:
+    """`out_dir` に対応する排他制御用ロックファイルの決定論的パスを返す
+    （R22 P1 対応。`run()` docstring 参照）。`out_dir` 直下に `.intake.lock`
+    として配置する（`out_dir` 自体が公開名前空間であり、ロックもその名前空間の
+    一部として扱う）。`.norm24k.wav`/`.takeN.norm24k.wav` で終わる正規化後
+    ファイル名の集合とは名前空間が構造的に交差しないため、通常の公開フローで
+    このパスに実ファイルが衝突することはない。
+    """
+    return out_dir / ".intake.lock"
 
 
 def _check_ledger_path_collisions(
@@ -839,6 +994,11 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
     (LOCK_EX | LOCK_NB)` で直列化される（R21 P1 対応。モジュール docstring
     参照）。ロック取得はノンブロッキングで行い、既に別プロセスが保持して
     いる場合は待たずに `LedgerLockError` で即座に fail-closed 拒否する。
+
+    さらに `<out_dir>/.intake.lock` への同種の `flock` も、ledger ロック
+    取得に続けて固定順で取得する（R22 P1 対応。モジュール docstring 参照）。
+    別 `--ledger` かつ同一 `--out-dir` の並行実行を直列化するためで、取得
+    できない場合は待ち合わせず `OutDirLockError` で fail-closed 拒否する。
     """
     inputs = discover_inputs(incoming_dir)
     if not inputs:
@@ -864,74 +1024,106 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
                 f"待ち合わせず再実行してください）"
             ) from exc
 
-        filenames = assign_normalized_filenames(inputs, out_dir)
-
-        staging_root = out_dir.parent
-        staging_root.mkdir(parents=True, exist_ok=True)
-        staging_dir = Path(
-            tempfile.mkdtemp(prefix=".intake-staging-", dir=str(staging_root))
-        )
+        # R22 P1 対応: out_dir（公開名前空間）も別ロックで直列化する。取得
+        # 順序は ledger → out_dir の固定順（両ロックとも同じ順序でしか取得
+        # しないためデッドロックは起きない）。ロックファイルを置くために
+        # out_dir をここで先に確保する（`assign_normalized_filenames` の
+        # out_dir スキャンより前であることが直列化の前提）。
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir_lock_path = _out_dir_lock_path(out_dir)
+        if ledger_path.resolve() == out_dir_lock_path.resolve():
+            raise LedgerPathCollisionError(
+                f"--ledger ({ledger_path}) は out_dir ロックファイル "
+                f"({out_dir_lock_path}) と衝突しています（fail-closed で拒否。"
+                f"R22 P1 対応）"
+            )
+        out_dir_lock_file = open(out_dir_lock_path, "a+", encoding="utf-8")
         try:
-            _check_ledger_path_collisions(
-                ledger_path, inputs, filenames, out_dir, staging_dir, lock_path=lock_path
-            )
-
-            # R13 P2 対応: 台帳の読み込み（schema 検証込み）は実際の変換・測定
-            # （process_one）より前の preflight として行う。壊れた/未知スキーマの
-            # 台帳が存在する場合はここで LedgerSchemaError が送出され、変換・
-            # 公開のいずれも開始しない。
-            ledger = load_ledger(ledger_path)
-
-            entries = [
-                process_one(src, staging_dir, filenames[src], out_dir) for src in inputs
-            ]
-
-            # R17 P2 対応: staging → out_dir への一括公開より前の preflight として、
-            # 今回バッチ各ファイルの source_sha256 を既存台帳・同一バッチ内の他
-            # ファイルの両方と突き合わせ、重複があれば公開全体を fail-closed 拒否
-            # する（部分公開はしない）。
-            _check_duplicate_sources(entries, ledger)
-
-            ledger.setdefault("entries", []).extend(asdict(e) for e in entries)
-
-            # R13 P2 対応: 公開フェーズ開始前の台帳バイト列スナップショット
-            # （無ければ None = 「無し」の印）。BaseException 巻き戻し時に
-            # WAV と合わせてこれへ復元する。
-            previous_ledger_bytes: Optional[bytes] = (
-                ledger_path.read_bytes() if ledger_path.exists() else None
-            )
-
-            out_dir.mkdir(parents=True, exist_ok=True)
-            moved: List[tuple[Path, Path]] = []  # (final_path, staged_path) の公開済み一覧
             try:
-                for src in inputs:
-                    staged_path = staging_dir / filenames[src]
-                    final_path = out_dir / filenames[src]
-                    # R16 P1 対応: shutil.move 直前に最終防御として検証する
-                    # （assign_normalized_filenames の予約後に out_dir の中身が
-                    # 変わった場合・予約ロジック自体の見落としに対する備え）。
-                    _check_publish_path(final_path, out_dir)
-                    shutil.move(str(staged_path), str(final_path))
-                    moved.append((final_path, staged_path))
+                fcntl.flock(out_dir_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise OutDirLockError(
+                    f"別の intake プロセスが同一 out_dir ({out_dir}) を対象に"
+                    f"実行中です（ロック: {out_dir_lock_path}）。fail-closed で"
+                    f"拒否します（並行 intake による公開名前空間の競合を防止。"
+                    f"R22 P1 対応。待ち合わせず再実行してください）"
+                ) from exc
 
-                save_ledger(ledger_path, ledger)
-            except BaseException:
-                # 巻き戻し: ここまでに out_dir へ公開済みの wav を staging へ戻す
-                # （逆順で戻すのは他ファイルとの依存関係はないが、失敗直近のものから
-                # 先に処理するほうが診断しやすいための慣習）。staging は外側の
-                # finally でまるごと削除されるため、戻した分は最終的に消える。
-                for final_path, staged_path in reversed(moved):
-                    if final_path.exists():
-                        shutil.move(str(final_path), str(staged_path))
-                # 台帳もスナップショット時点へ復元する（R13 P2 対応。
-                # save_ledger() 成功直後の中断で新台帳が既に replace 済みの
-                # ケースを含む）。
-                _restore_ledger(ledger_path, previous_ledger_bytes)
-                raise
+            filenames = assign_normalized_filenames(inputs, out_dir)
+
+            staging_root = out_dir.parent
+            staging_root.mkdir(parents=True, exist_ok=True)
+            staging_dir = Path(
+                tempfile.mkdtemp(prefix=".intake-staging-", dir=str(staging_root))
+            )
+            try:
+                _check_ledger_path_collisions(
+                    ledger_path, inputs, filenames, out_dir, staging_dir, lock_path=lock_path
+                )
+
+                # R13 P2 対応: 台帳の読み込み（schema 検証込み）は実際の変換・測定
+                # （process_one）より前の preflight として行う。壊れた/未知スキーマの
+                # 台帳が存在する場合はここで LedgerSchemaError が送出され、変換・
+                # 公開のいずれも開始しない。
+                ledger = load_ledger(ledger_path)
+
+                entries = [
+                    process_one(src, staging_dir, filenames[src], out_dir) for src in inputs
+                ]
+
+                # R17 P2 対応: staging → out_dir への一括公開より前の preflight として、
+                # 今回バッチ各ファイルの source_sha256 を既存台帳・同一バッチ内の他
+                # ファイルの両方と突き合わせ、重複があれば公開全体を fail-closed 拒否
+                # する（部分公開はしない）。
+                _check_duplicate_sources(entries, ledger)
+
+                ledger.setdefault("entries", []).extend(asdict(e) for e in entries)
+
+                # R13 P2 対応: 公開フェーズ開始前の台帳バイト列スナップショット
+                # （無ければ None = 「無し」の印）。BaseException 巻き戻し時に
+                # WAV と合わせてこれへ復元する。
+                previous_ledger_bytes: Optional[bytes] = (
+                    ledger_path.read_bytes() if ledger_path.exists() else None
+                )
+
+                moved: List[tuple[Path, Path]] = []  # (final_path, staged_path) の公開済み一覧
+                try:
+                    for src in inputs:
+                        staged_path = staging_dir / filenames[src]
+                        final_path = out_dir / filenames[src]
+                        # R16 P1 対応: shutil.move 直前に最終防御として検証する
+                        # （assign_normalized_filenames の予約後に out_dir の中身が
+                        # 変わった場合・予約ロジック自体の見落としに対する備え）。
+                        _check_publish_path(final_path, out_dir)
+                        shutil.move(str(staged_path), str(final_path))
+                        moved.append((final_path, staged_path))
+
+                    save_ledger(ledger_path, ledger)
+                except BaseException:
+                    # 巻き戻し: ここまでに out_dir へ公開済みの wav を staging へ戻す
+                    # （逆順で戻すのは他ファイルとの依存関係はないが、失敗直近のものから
+                    # 先に処理するほうが診断しやすいための慣習）。staging は外側の
+                    # finally でまるごと削除されるため、戻した分は最終的に消える。
+                    for final_path, staged_path in reversed(moved):
+                        if final_path.exists():
+                            shutil.move(str(final_path), str(staged_path))
+                    # 台帳もスナップショット時点へ復元する（R13 P2 対応。
+                    # save_ledger() 成功直後の中断で新台帳が既に replace 済みの
+                    # ケースを含む）。
+                    _restore_ledger(ledger_path, previous_ledger_bytes)
+                    raise
+            finally:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+
+            return entries
         finally:
-            shutil.rmtree(staging_dir, ignore_errors=True)
-
-        return entries
+            # R22 P1 対応: `flock` はプロセス終了・例外時にも OS が自動解放
+            # するため、ここでの明示 unlock はベルト。ロックファイル自体は
+            # `unlink` しない（削除すると unlink 直後・別プロセスの open+
+            # flock 直後という窓で二重ロックが成立し得るため。`<ledger>.lock`
+            # と同じ残置ポリシー）。
+            fcntl.flock(out_dir_lock_file, fcntl.LOCK_UN)
+            out_dir_lock_file.close()
     finally:
         # R21 P1 対応: `flock` はプロセス終了・例外時にも OS が自動解放する
         # ため、ここでの明示 unlock はベルト（早期解放によるロック保持時間の
