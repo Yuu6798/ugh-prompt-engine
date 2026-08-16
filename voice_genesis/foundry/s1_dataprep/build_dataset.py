@@ -428,25 +428,43 @@ def check_ph_dur_duration(
 def check_note_dur_consistency(
     speaker_name: str, rows: Sequence[Dict[str, str]]
 ) -> List[str]:
-    """`ph_dur` 合計と `note_dur` 合計のクロスフィールド不変量を検査する。
+    """`ph_dur` と `note_dur` のクロスフィールド不変量を検査する。
 
     fix (2026-08-16, review #264 R3): `convert_pjs.py` の EOF 末尾切り詰め/
     削除処理（`_drop_dead_phonemes`）は、EOF がノートの途中を切る場合
     （ノート自体は音素を1個以上残して生存するが末尾側の一部音素だけが
     truncate/drop される場合）に生存ノートの `note_dur` を旧値のまま残す
-    実装バグを含んでいた。修正後もこの不変量（同一行内で
-    `sum(note_dur) == sum(ph_dur)`、`note_dur` を持たない speaker では
-    チェック対象外）を readback 時に enforce することで、将来の同型
-    回帰（本関数がある限り上流の実装がどうであれ）を検出する。
+    実装バグを含んでいた。修正後もこの不変量を readback 時に enforce する
+    ことで、将来の同型回帰（本関数がある限り上流の実装がどうであれ）を
+    検出する。
+
+    fix (2026-08-16, review #264 R8 P2 x2):
+    1. `note_dur` の非数値・非有限（nan/inf）・非正値は、以前は他の既存
+       チェックが別途検出する想定で黙って skip していたが、実際には
+       `note_dur` を独立に検証する箇所が他に存在せず、壊れた `note_dur` が
+       無検査のまま公開されていた（`ph_dur` は `validate_speaker` 本体が
+       別途 non-numeric/non-finite/non-positive を検出するため、ここでは
+       skip のままでよい）。`note_dur` はここが唯一の検査箇所のため、
+       同じ3種の不正を violation として拒否する（fail-closed）。
+    2. 合計同士の比較だけでは、ノート間で duration が移動しつつ合計が
+       一致する破損（例: `ph_num="1 2"` / `ph_dur="1 1 1"` /
+       `note_dur="2 1"`）を見逃す。`ph_num`（ノートごとの音素数、
+       `sum(ph_num) == len(ph_dur)` かつ `len(ph_num) == len(note_dur)`）
+       が有効な形で存在する場合は `ph_dur` を `ph_num` でノート単位へ
+       グループ化し、各ノートの `ph_dur` 小計 ↔ 対応する `note_dur` を
+       個別に比較する（閾値は `check_ph_dur_duration` と同一定数、ノート
+       ごとの `ph_dur` 小計を基準にする）。`ph_num` が存在しない・不正な
+       形（数値化不可・要素数不一致・`sum(ph_num) != len(ph_dur)`・非正の
+       count を含む）の場合は、ノート単位の対応付けができないため合計
+       同士の比較（旧来の挙動）へフォールバックする（`note_dur` を持たない
+       speaker（例: Ritsu）由来の行では `ph_num` も存在しないため、この
+       フォールバック経路を通ることはない）。
 
     `note_dur` を持たない行（例: Ritsu 側が `note_dur` を書き出さない場合）
-    はスキップする。閾値は `check_ph_dur_duration` と同一定数
-    （相対5% or 絶対0.1sの大きい方。`ph_dur` 合計を基準にする — wav 実長
-    との整合は `check_ph_dur_duration` が別途担保するため、ここでは
-    2 フィールド間の整合のみを見る）。数値化できない・非有限な値は他の
-    既存チェック（ph_seq/ph_dur 長さ不一致・非有限 ph_dur 等）が別途検出
-    するため、ここではスキップする（全収集してから呼び出し側が判定する
-    設計は `check_ph_dur_duration` と同じ）。
+    はスキップする。数値化できない・非有限な `ph_dur` は他の既存チェック
+    （ph_seq/ph_dur 長さ不一致・非有限 ph_dur 等）が別途検出するため、
+    ここではスキップする（全収集してから呼び出し側が判定する設計は
+    `check_ph_dur_duration` と同じ）。
     """
     violations: List[str] = []
     for row in rows:
@@ -455,22 +473,67 @@ def check_note_dur_consistency(
             continue
         try:
             ph_dur = [float(x) for x in row["ph_dur"].split()]
+        except ValueError:
+            continue  # 数値化できない ph_dur は validate_speaker が別途検出する
+        if not ph_dur or not all(math.isfinite(d) for d in ph_dur):
+            continue  # 空/非有限な ph_dur は validate_speaker が別途検出する
+
+        try:
             note_dur = [float(x) for x in note_dur_raw.split()]
         except ValueError:
+            violations.append(f"{speaker_name}: {row['name']} has non-numeric note_dur")
             continue
-        if not ph_dur or not note_dur:
+        if not note_dur:
+            violations.append(f"{speaker_name}: {row['name']} has empty note_dur")
             continue
-        if not all(math.isfinite(d) for d in ph_dur) or not all(math.isfinite(d) for d in note_dur):
+        if not all(math.isfinite(d) for d in note_dur):
+            violations.append(f"{speaker_name}: {row['name']} has non-finite note_dur")
             continue
-        ph_total = math.fsum(ph_dur)
-        note_total = math.fsum(note_dur)
-        tol = max(ph_total * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
-        diff = abs(ph_total - note_total)
-        if diff > tol:
-            violations.append(
-                f"{speaker_name}: {row['name']} ph_dur total {ph_total:.4f}s vs "
-                f"note_dur total {note_total:.4f}s (diff {diff:.4f}s > tolerance {tol:.4f}s)"
-            )
+        if any(d <= 0 for d in note_dur):
+            violations.append(f"{speaker_name}: {row['name']} has non-positive note_dur")
+            continue
+
+        per_note_ph_totals: Optional[List[float]] = None
+        ph_num_raw = row.get("ph_num")
+        if ph_num_raw:
+            try:
+                ph_num = [int(x) for x in ph_num_raw.split()]
+            except ValueError:
+                ph_num = []
+            if (
+                ph_num
+                and all(n > 0 for n in ph_num)
+                and len(ph_num) == len(note_dur)
+                and sum(ph_num) == len(ph_dur)
+            ):
+                per_note_ph_totals = []
+                idx = 0
+                for count in ph_num:
+                    per_note_ph_totals.append(math.fsum(ph_dur[idx:idx + count]))
+                    idx += count
+
+        if per_note_ph_totals is not None:
+            for note_idx, (ph_note_total, note_val) in enumerate(
+                zip(per_note_ph_totals, note_dur)
+            ):
+                tol = max(ph_note_total * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+                diff = abs(ph_note_total - note_val)
+                if diff > tol:
+                    violations.append(
+                        f"{speaker_name}: {row['name']} note[{note_idx}] ph_dur subtotal "
+                        f"{ph_note_total:.4f}s vs note_dur {note_val:.4f}s "
+                        f"(diff {diff:.4f}s > tolerance {tol:.4f}s)"
+                    )
+        else:
+            ph_total = math.fsum(ph_dur)
+            note_total = math.fsum(note_dur)
+            tol = max(ph_total * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+            diff = abs(ph_total - note_total)
+            if diff > tol:
+                violations.append(
+                    f"{speaker_name}: {row['name']} ph_dur total {ph_total:.4f}s vs "
+                    f"note_dur total {note_total:.4f}s (diff {diff:.4f}s > tolerance {tol:.4f}s)"
+                )
     return violations
 
 

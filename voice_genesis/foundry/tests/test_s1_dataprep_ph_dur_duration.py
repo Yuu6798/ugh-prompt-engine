@@ -150,6 +150,51 @@ def test_check_note_dur_consistency_skips_rows_without_note_dur() -> None:
     assert bd.check_note_dur_consistency("pjs", rows) == []
 
 
+# --- review #264 R8 P2 x2: note_dur 妥当性 + ノート単位比較 -----------------
+
+
+def test_check_note_dur_consistency_rejects_non_numeric_note_dur() -> None:
+    rows = [{"name": "seg000", "ph_seq": "SP a", "ph_dur": "1.0 1.0", "note_dur": "1.0 abc"}]
+    violations = bd.check_note_dur_consistency("pjs", rows)
+    assert len(violations) == 1
+    assert "seg000" in violations[0]
+    assert "non-numeric note_dur" in violations[0]
+
+
+def test_check_note_dur_consistency_rejects_non_finite_note_dur() -> None:
+    rows = [{"name": "seg000", "ph_seq": "SP a", "ph_dur": "1.0 1.0", "note_dur": "1.0 nan"}]
+    violations = bd.check_note_dur_consistency("pjs", rows)
+    assert len(violations) == 1
+    assert "seg000" in violations[0]
+    assert "non-finite note_dur" in violations[0]
+
+
+def test_check_note_dur_consistency_rejects_non_positive_note_dur() -> None:
+    rows = [{"name": "seg000", "ph_seq": "SP a", "ph_dur": "1.0 1.0", "note_dur": "1.0 0.0"}]
+    violations = bd.check_note_dur_consistency("pjs", rows)
+    assert len(violations) == 1
+    assert "seg000" in violations[0]
+    assert "non-positive note_dur" in violations[0]
+
+
+def test_check_note_dur_consistency_detects_boundary_shift_with_matching_total() -> None:
+    """合計は一致する（3.0 == 3.0）が、ph_num によるノート単位の対応付けで
+    見ると境界が1秒ズレている破損（review #264 R8 P2 再現ケース）を検出する。
+    """
+    rows = [
+        {
+            "name": "seg005",
+            "ph_seq": "SP a k",
+            "ph_dur": "1 1 1",
+            "ph_num": "1 2",
+            "note_dur": "2 1",
+        }
+    ]
+    violations = bd.check_note_dur_consistency("pjs", rows)
+    assert len(violations) == 2
+    assert all("seg005" in v and "note[" in v for v in violations)
+
+
 def test_check_note_dur_consistency_wired_into_validate_speaker_unconditionally(
     tmp_path: Path,
 ) -> None:
