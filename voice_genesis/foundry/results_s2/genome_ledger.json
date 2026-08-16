@@ -7,6 +7,7 @@
   "note_batch2_UNSEALED_2026-08-16": "User耳判定受領・開封済み(results_s2/s2_record_2026-08-16.md §11.2)。提示ラベルE=VG-S2-006(lerp_extrapolate α=1.4、PJS側外挿)、F=VG-S2-005(lerp_extrapolate α=-0.4、リツ側外挿)、G=VG-S2-008(隠しコントロール、note_batch2_hidden_control_UNSEALED_2026-08-16参照)、H=VG-S2-007(orthogonal_perturbation)。以前の版はGのみstatus/blind_label_batch2を更新しておりE/F/Hのgenomeエントリが`CANDIDATE`のまま未反映で§11の開封記録と矛盾していたため、本改訂で該当4エントリのstatusを`UNSEALED_2026-08-16`・blind_label_batch2を追記し一致させた(PR #264 R16 P2対応。開封の事実関係・判定内容自体の書き換えではなく台帳側の記帳漏れ是正)。",
   "note_batch3": "VG-S2-009/010 はブラインドラベル(candidate_I/J、バッチ3独自のcandidate_{I,J}.wav)判定完了まで台帳にラベル対応・最終WAVのsha256を含めない(バッチ1/2と同じ非交差方針。対応表は blind_mapping3.json、非コミット・scratchpad限定)。",
   "note_batch3_UNSEALED_2026-08-16": "User耳判定受領・開封済み(results_s2/s2_record_2026-08-16.md §13)。blind_mapping3.jsonのsha256照合済み(f74bc6f4...c828a8d8、改変なし)。提示ラベルI = VG-S2-010（起点=e_p純PJSアンカー、破綻なし・PJSにかなり近いとUser判定）。提示ラベルJ = VG-S2-009（起点=lerp0.65、第三の声だがり→ん破綻残存とUser判定）。J=lerp0.65起点であることから、S11.4のリツ極欠陥診断（H3）は維持・修正不要と判定（§13.3）。",
+  "note_batch1_UNSEALED_2026-08-16": "User耳判定受領・開封済み(results_s2/s2_record_2026-08-16.md §5)。§5.3開封対応表: A=lerp α=0.2(VG-S2-001)、B=slerp α=0.5(VG-S2-004)、C=lerp α=0.5(VG-S2-002)、D=lerp α=0.8(VG-S2-003)。バッチ2/3は台帳へ開封後の`status`/`blind_label_batchN`を反映済みだったが、バッチ1の該当4エントリ(VG-S2-001〜004)は`CANDIDATE`のまま未反映で§5.3の開封記録と矛盾していたため、本改訂で`status: \"UNSEALED_2026-08-16\"`・`blind_label_batch1`を追記し一致させた(PR #264 R18 P2対応。開封の事実関係・判定内容自体の書き換えではなく台帳側の記帳漏れ是正、note_batch2_UNSEALED_2026-08-16と同型)。バッチ1固有の経緯として、原判定(ブラインド時・§5.1「全てPJSに近似」)と開示後修正(§5.2「全曲リツより」への転換)を両方保持する正直会計が既に§5.2に記録済みであり、本ノートはその記述・注記を一切変更しない（追記のみ。どちらの判定を採用するかという論点には触れない — 台帳のUNSEALED化は開封の事実のみを記帳する）。",
   "batch": "S2-batch1+batch2+batch3",
   "date": "2026-08-16",
   "backbone_checkpoint": "sha256:052376e81b1e4672bf676802ba4348283037f352bd622e0f8a9ad0ac514c5ce2",
@@ -23,7 +24,8 @@
       "mutation_ops": ["INTERP_LERP_ALPHA_0.20"],
       "seed": 42,
       "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
-      "status": "CANDIDATE"
+      "status": "UNSEALED_2026-08-16",
+      "blind_label_batch1": "A"
     },
     {
       "voice_id": "VG-S2-002",
@@ -37,7 +39,8 @@
       "mutation_ops": ["INTERP_LERP_ALPHA_0.50"],
       "seed": 42,
       "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
-      "status": "CANDIDATE"
+      "status": "UNSEALED_2026-08-16",
+      "blind_label_batch1": "C"
     },
     {
       "voice_id": "VG-S2-003",
@@ -51,7 +54,8 @@
       "mutation_ops": ["INTERP_LERP_ALPHA_0.80"],
       "seed": 42,
       "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
-      "status": "CANDIDATE"
+      "status": "UNSEALED_2026-08-16",
+      "blind_label_batch1": "D"
     },
     {
       "voice_id": "VG-S2-004",
@@ -65,7 +69,8 @@
       "mutation_ops": ["INTERP_SLERP_ALPHA_0.50"],
       "seed": 42,
       "rights_class": "SYNTHETIC_INTERP_PJS_CC_BY_SA_INHERITED",
-      "status": "CANDIDATE"
+      "status": "UNSEALED_2026-08-16",
+      "blind_label_batch1": "B"
     },
     {
       "voice_id": "VG-S2-005",

@@ -1078,6 +1078,122 @@ def test_normalize_ph_dur_malformed_fails_closed_via_main(tmp_path: Path) -> Non
     assert fixed_rows[0] is row
 
 
+# --- convert_pjs.normalize_ph_dur_to_wav_duration: 非正 ph_dur の拒否
+# (review #264 R18 P2, convert_pjs.py:480) -----------------------------------
+#
+# `ph_dur="-1 2"` のような負値混じりの行は、合計が実 wav 長と偶然一致する
+# （相殺）と旧実装の合計比較だけでは検出できず、そのまま公開されていた。
+# `build_dataset.validate_speaker` の `any(d <= 0 for d in ph_dur)` は無条件
+# reject するため、`convert_pjs.py` 単体では成功しても下流で必ず fail する
+# 統合バグだった（R2/R17 と同型）。負値は無条件で malformed、ゼロは
+# `_drop_dead_phonemes` の overshoot 修復経路が正規に処理する値のため
+# malformed 扱いしないが、修復を経ずに（または修復が効かずに）ゼロが公開行
+# へ残るケースは別途 fail-closed で拒否する。
+
+
+def test_normalize_ph_dur_rejects_negative_duration_that_cancels_total(tmp_path: Path) -> None:
+    """レビュー再現例そのもの: `ph_dur="-1 2"` は合計 1.0s が 1 秒 WAV と
+    一致するため、合計比較だけでは検出できない。負値は合計比較の前に
+    無条件で malformed 判定される。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg000.wav", 1.0)
+    row = {"name": "seg000", "ph_seq": "a i", "ph_dur": "-1 2"}
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert fix_log == []
+    assert undershoot == []
+    assert unsafe == []
+    assert missing == []
+    assert len(malformed) == 1
+    assert "seg000" in malformed[0]
+    assert "negative" in malformed[0]
+    assert fixed_rows[0] is row  # malformed のため無変更のまま
+
+
+def test_normalize_ph_dur_rejects_negative_duration_regardless_of_total(tmp_path: Path) -> None:
+    """相殺せずとも、負値が1個でも含まれていれば無条件で malformed になる
+    ことを確認する（total が wav_dur から大きく外れていても同じ扱い）。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg001.wav", 5.0)
+    row = {"name": "seg001", "ph_seq": "a i u", "ph_dur": "1.0 -0.5 1.0"}
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert fix_log == []
+    assert undershoot == []
+    assert len(malformed) == 1
+    assert "seg001" in malformed[0]
+    assert fixed_rows[0] is row
+
+
+def test_normalize_ph_dur_zero_via_overshoot_repair_path_is_not_malformed(tmp_path: Path) -> None:
+    """ゼロが `_drop_dead_phonemes` の overshoot 修復経路（正規の除去先）に
+    入る場合は malformed 扱いされず、従来通り除去されて公開されることの
+    回帰ガード（既存 `test_normalize_ph_dur_truncates_tail_of_overshooting_row`
+    と同じ構造を、本 fix が壊していないことを明示的に固定する）。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg002.wav", 3.0)
+    row = {"name": "seg002", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0", "ph_num": "1 1 1"}
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert malformed == []  # ゼロは修復経路が正規に処理するため malformed にならない
+    assert undershoot == []
+    assert unsafe == []
+    assert missing == []
+    assert len(fix_log) == 1
+    new_dur = [float(x) for x in fixed_rows[0]["ph_dur"].split()]
+    assert all(d > 0.0 for d in new_dur)  # ゼロは実際に除去されている
+
+
+def test_normalize_ph_dur_rejects_zero_within_tolerance_never_repaired(tmp_path: Path) -> None:
+    """申告合計が許容誤差内で実 wav 長と一致するため overshoot 修復が
+    トリガーされない行に、ゼロ長音素が既に含まれているケース（「修復経路
+    に入らないゼロ」）。総和が変わらないため合計比較だけでは検出できず、
+    修復も走らないため無修復のまま公開されてしまう。fail-closed で拒否
+    することを確認する。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg003.wav", 2.0)
+    row = {"name": "seg003", "ph_seq": "a i u", "ph_dur": "1.0 0.0 1.0"}  # 合計2.0s、許容内一致
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert fix_log == []
+    assert undershoot == []
+    assert unsafe == []
+    assert missing == []
+    assert len(malformed) == 1
+    assert "seg003" in malformed[0]
+    assert "within tolerance" in malformed[0]
+    assert fixed_rows[0] is row  # 行自体は無変更のまま（公開されない）
+
+
+def test_normalize_ph_dur_rejects_residual_zero_after_length_mismatch_fallback(
+    tmp_path: Path,
+) -> None:
+    """`_drop_dead_phonemes` の ph_seq/ph_dur 長不一致フォールバック（安全側
+    で削除せず ph_dur のみ更新）を通ると、overshoot 修復が呼ばれてもゼロ長
+    音素が除去されずに published 出力へ残り得る。この残存ゼロを公開直前に
+    検出して fail-closed で拒否することを確認する。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "seg004.wav", 1.0)
+    # ph_seq (2要素) と ph_dur (3要素) が対応しないため `_drop_dead_phonemes`
+    # は安全側フォールバックへ入り、truncate で 0.0 化された末尾要素を
+    # 削除せずそのまま返す。
+    row = {"name": "seg004", "ph_seq": "a i", "ph_dur": "0.5 0.5 2.0"}  # 合計3.0s vs 実1.0s
+    fixed_rows, fix_log, undershoot, unsafe, missing, malformed = cp.normalize_ph_dur_to_wav_duration(
+        [row], wav_dir
+    )
+    assert fix_log == []
+    assert undershoot == []
+    assert unsafe == []
+    assert missing == []
+    assert len(malformed) == 1
+    assert "seg004" in malformed[0]
+    assert "after overshoot repair" in malformed[0]
+
+
 # --- convert_pjs._is_safe_wav_name / build_dataset._is_safe_wav_name:
 # 挙動同値性 (review #264 R7) -------------------------------------------------
 #

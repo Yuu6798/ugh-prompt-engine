@@ -455,6 +455,27 @@ def normalize_ph_dur_to_wav_duration(
     が公開前に fail-closed で拒否できるようにする（旧実装はこのケースを
     どの violation にも計上せず黙って skip していた）。
 
+    fix (2026-08-16, review #264 R18 P2, convert_pjs.py:480): 有限だが非正
+    （`d <= 0`）の音素長は、合計比較だけでは検出できない相殺（例:
+    `ph_dur="-1 2"` は 1 秒 WAV に対し合計 1.0s で一致し diff=0 になる）を
+    通じて無変更のまま公開され得ていた。`build_dataset.py` の
+    `validate_speaker` は `any(d <= 0 for d in ph_dur)` を無条件 reject する
+    ため、この行は `convert_pjs.py` 単体では成功しても下流で必ず fail する
+    統合バグになる（R2/R17 と同型）。本実装は **負値（`d < 0`）は無条件で
+    malformed** として扱う（相殺は合計比較の対象外にできないため、値の
+    段階で拒否する）。一方 **ゼロ（`d == 0`）は `_drop_dead_phonemes` が
+    overshoot 修復経路で正規に除去する値**（`_truncate_ph_dur_tail_to_wav_duration`
+    が EOF 以降の音素を 0.0 化し、`_drop_dead_phonemes` がそれを整列
+    フィールドから削除する — R1/R2 参照）であり、修復経路に入るゼロを
+    malformed 扱いすると正規の overshoot 修復が機能しなくなる。そのため
+    ゼロは parse 段階では malformed としない。ただし (a) 申告合計が許容誤差
+    内で一致し overshoot 修復が一切トリガーされない行にゼロが残っている
+    場合、(b) `_drop_dead_phonemes` の ph_seq/ph_dur 長不一致フォールバック
+    （関数 docstring 参照）でゼロが除去されずに残った場合、のいずれも
+    「修復を経ずに（または修復が実質効かずに）ゼロが公開行へ残る」ケース
+    のため、両方とも公開直前に検出して `malformed_ph_dur_violations` へ
+    fail-closed で追加収集する（詳細は本関数の実装コメント参照）。
+
     乖離が許容内の行は同一オブジェクトのまま（内容も無変更で）返す。
     2 個目の戻り値は overshoot 正規化を適用した行の人間可読ログ（適用 0 件
     なら空リスト。呼び出し側はこれを CSV 再公開の要否判定に使う）。
@@ -476,13 +497,23 @@ def normalize_ph_dur_to_wav_duration(
             ph_dur: Optional[List[float]] = [float(x) for x in row["ph_dur"].split()]
         except ValueError:
             ph_dur = None
-        if ph_dur is not None and (not ph_dur or not all(math.isfinite(d) for d in ph_dur)):
+        if ph_dur is not None and (
+            not ph_dur
+            or not all(math.isfinite(d) for d in ph_dur)
+            # [P2 修正] (review #264 R18) 負の音素長は他の音素と相殺して
+            # 合計比較を素通りし得る（"-1 2" 対 1 秒 WAV の例）ため、合計
+            # 比較の前に無条件で malformed 判定する。ゼロ（d == 0.0）はここ
+            # では malformed としない — `_drop_dead_phonemes` の overshoot
+            # 修復経路が正規に処理する値のため（関数 docstring 参照）。
+            or any(d < 0.0 for d in ph_dur)
+        ):
             ph_dur = None
         if ph_dur is None:
             malformed_ph_dur_violations.append(
-                f"{name}: ph_dur field is malformed (unparseable, empty, or "
-                "contains a non-finite value such as nan/inf); cannot be "
-                "validated against wav duration, fail-closed, not published"
+                f"{name}: ph_dur field is malformed (unparseable, empty, "
+                "negative, or contains a non-finite value such as nan/inf); "
+                "cannot be validated against wav duration, fail-closed, not "
+                "published"
             )
 
         name_is_safe = _is_safe_wav_name(name, wav_dir, resolved_wav_dir)
@@ -518,6 +549,21 @@ def normalize_ph_dur_to_wav_duration(
         tol = max(wav_dur * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
         diff = abs(total - wav_dur)
         if diff <= tol:
+            if any(d <= 0.0 for d in ph_dur):
+                # [P2 修正] (review #264 R18) この分岐に到達する時点で
+                # 負値は既に malformed 判定済み（上記）のため、ここで残り
+                # 得るのはゼロのみ。申告合計が許容誤差内で一致している
+                # ため overshoot 修復（`_truncate_ph_dur_tail_to_wav_duration`
+                # → `_drop_dead_phonemes`）が一切トリガーされず、ゼロ長
+                # 音素が無修復のまま公開されてしまう。「修復経路に入る
+                # ゼロ」の正規ケースではないため fail-closed で拒否する。
+                malformed_ph_dur_violations.append(
+                    f"{name}: ph_dur field contains a non-positive phoneme "
+                    f"duration even though the total ({total:.4f}s) is within "
+                    f"tolerance of the wav duration ({wav_dur:.4f}s), so the "
+                    "overshoot repair path that would remove a zero-length "
+                    "phoneme is never triggered; fail-closed, not published"
+                )
             fixed_rows.append(row)
             continue
         if total < wav_dur:
@@ -535,8 +581,24 @@ def normalize_ph_dur_to_wav_duration(
         new_ph_dur, n_touched = _truncate_ph_dur_tail_to_wav_duration(ph_dur, wav_dur)
         n_dropped = sum(1 for d in new_ph_dur if d <= 0.0)
         new_row = _drop_dead_phonemes(row, new_ph_dur)
-        fixed_rows.append(new_row)
         surviving_dur = [float(x) for x in new_row["ph_dur"].split()] if new_row["ph_dur"] else []
+        if any(d <= 0.0 for d in surviving_dur):
+            # [P2 修正] (review #264 R18) `_drop_dead_phonemes` は
+            # ph_seq/ph_dur が同長の通常経路ではゼロ長音素を確実に除去する
+            # が、両者の長さが対応しない安全側フォールバック（同関数
+            # docstring 参照）では削除を行わず ph_dur のみ更新するため、
+            # ゼロ長音素が published 出力にそのまま残り得る。これは
+            # 「修復経路に入ったゼロ」の正規ケースではなく修復が実質
+            # 効かなかった異常系のため、公開前に fail-closed で拒否する。
+            malformed_ph_dur_violations.append(
+                f"{name}: ph_dur field still contains a non-positive phoneme "
+                "duration after overshoot repair (ph_seq/ph_dur length "
+                "mismatch prevented zero-length phoneme removal); "
+                "fail-closed, not published"
+            )
+            fixed_rows.append(new_row)
+            continue
+        fixed_rows.append(new_row)
         fix_log.append(
             f"{name}: ph_dur total {total:.4f}s -> {math.fsum(surviving_dur):.4f}s "
             f"(wav duration {wav_dur:.4f}s, tail-truncated: {n_touched} trailing "
