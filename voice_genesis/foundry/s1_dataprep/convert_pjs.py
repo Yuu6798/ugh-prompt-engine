@@ -96,6 +96,15 @@ import wave
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+# review #264 R15 P2: `write_lang_def` の tmp+replace 公開を `build_dataset.py`
+# の `_atomic_write_text`（排他生成 `tempfile.mkstemp` + `os.replace`）へ
+# 共通化する。同一ディレクトリ (`s1_dataprep/`) のスクリプトで、`convert_pjs.py`
+# を直接実行した場合も pytest 経由（`tests/test_s1_dataprep_ph_dur_duration.py`
+# が事前に `s1_dataprep/` を sys.path へ挿入）で import した場合も、
+# `build_dataset` は解決可能（同ディレクトリが sys.path に乗る）。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_dataset import _atomic_write_text  # noqa: E402
+
 # nnsvs-db-converter 同梱の `lang.sample.json` と同一内容
 # （`s1a_conversion_record.md` §2: 日本語ラベルのモーラ分割規則としてそのまま
 # 妥当だったため採用。本スクリプトはこの内容を明示的に書き出すことで、外部
@@ -669,10 +678,19 @@ def write_lang_def(path: Path) -> None:
     途中で kill された場合等に破損 JSON が残り得るため、`path` と同一
     ディレクトリに一時ファイルを作ってから `os.replace()` で原子的に
     差し替える（POSIX の `rename(2)` は同一ファイルシステム内で atomic）。
+
+    fix (2026-08-16, review #264 R15 P1, convert_pjs.py:673-674): 旧実装は
+    `.{path.name}.tmp-{os.getpid()}` という**決定論的**な tmp パスを直接
+    `write_text` していた。同一 pid が再利用される、または呼び出し元が
+    複数回同一 `path` に対して呼ぶ状況で、この tmp パスに無関係な既存
+    ファイルが存在すると `write_text` がそれを黙って truncate してしまう
+    （`recording_kit/intake.py` の `_atomic_write` R14 P1 対応、
+    `build_dataset.py` の `_atomic_write_text` と同型の欠陥）。
+    `build_dataset._atomic_write_text`（`tempfile.mkstemp` の排他生成
+    (`O_CREAT | O_EXCL`) + `os.replace`。書き込み失敗時は tmp を削除）へ
+    共通化し、無関係ファイルとの衝突が構造的に起こらないようにする。
     """
-    tmp_path = path.parent / f".{path.name}.tmp-{os.getpid()}"
-    tmp_path.write_text(json.dumps(DEFAULT_LANG_DEF, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
-    os.replace(tmp_path, path)
+    _atomic_write_text(path, json.dumps(DEFAULT_LANG_DEF, ensure_ascii=False, indent=4) + "\n")
 
 
 def _restore_lang_def_backup(path: Path, backup: Optional[bytes], *, created_new: bool = False) -> None:
@@ -917,9 +935,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             lang_def_backup = lang_def_path.read_bytes()
         lang_def_created_new = lang_def_is_external and not lang_def_pre_existed
 
-        write_lang_def(lang_def_path)
-
+        # fix (2026-08-16, review #264 R15 P1, convert_pjs.py:920):
+        # `write_lang_def(lang_def_path)` は従来この `try` ブロックの外側で
+        # 呼ばれており、`_restore_lang_def_backup` を呼ぶ `except
+        # BaseException` の保護範囲外だった。上のバックアップ/新規作成判定
+        # 自体は書き込み前に済ませてあるため、`write_lang_def` 呼び出し中
+        # または直後（`os.replace` 完了〜次の行に到達するまでの間）に
+        # `KeyboardInterrupt`/`SystemExit` を含む `BaseException` が飛ぶと、
+        # 外部永続物（`--staging-dir` 外の `--lang-def`）だけが新内容へ
+        # 更新されたまま巻き戻されずに残ってしまう。`write_lang_def` 自体を
+        # `try` 内へ移し、この隙間を塞ぐ（`write_lang_def` が `os.replace`
+        # 未達のまま中断した場合、外部ファイルはまだ変化していないため
+        # `_restore_lang_def_backup` は no-op で安全 — 既存ファイルなら
+        # backup で上書きするだけの恒等操作、新規パスなら
+        # `path.unlink(missing_ok=True)` が何もしない）。
         try:
+            write_lang_def(lang_def_path)
+
             result = run_converter(args.converter_dir, build_dir, lang_def_path, args.python_bin)
             sys.stdout.write(result.stdout)
             sys.stderr.write(result.stderr)

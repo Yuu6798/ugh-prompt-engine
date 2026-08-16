@@ -528,11 +528,23 @@ def check_note_dur_consistency(
 
         per_note_ph_totals: Optional[List[float]] = None
         ph_num_raw = row.get("ph_num")
-        if ph_num_raw:
+        if ph_num_raw is not None:
             # fix (2026-08-16, review #264 R9 P2): ph_num フィールド自体が
             # 存在する行では、不正な形を「対応付け材料が無い」ケースへ
             # フォールバックさせず、malformed_reason が設定され次第 violation
             # として拒否する（合計比較へは絶対に流さない）。
+            #
+            # fix (2026-08-16, review #264 R15 P2, build_dataset.py:531):
+            # 旧実装は `if ph_num_raw:` という truthy ガードを使っており、
+            # `ph_num` 列が存在するが値が空文字列（例: CSV セルが空欄）の行を
+            # 「列自体が無い」場合と同一視して下のフォールバック（合計比較の
+            # みで判定）へ流していた。これにより下の「空 ph_num」チェックが
+            # 到達不能になり、note-to-phoneme 対応付けが確立できない行でも
+            # 合計が偶然一致すれば通過してしまっていた（`note_dur` R14
+            # 修正と同型の欠陥）。欠落（列が無い＝optional）と空値（列は
+            # あるが値が無い＝不正）を `is not None` で区別し、空文字列は
+            # 以下の malformed_reason 判定（「empty ph_num」）まで通して
+            # 明示的に拒否する。
             malformed_reason: Optional[str] = None
             try:
                 ph_num = [int(x) for x in ph_num_raw.split()]

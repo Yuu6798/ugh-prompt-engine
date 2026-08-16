@@ -12,9 +12,13 @@ ph_dur 合計が実音声長を大きく超過する」構造不良を検出/是
 """
 from __future__ import annotations
 
+import json
+import os
 import sys
 import wave
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "s1_dataprep"))
 
@@ -306,9 +310,55 @@ def test_check_note_dur_consistency_rejects_ph_num_sum_mismatch() -> None:
     assert "sum(ph_num)" in violations[0]
 
 
+def test_check_note_dur_consistency_rejects_present_but_empty_ph_num() -> None:
+    """review #264 R15 P2 (build_dataset.py:531): `ph_num` 列は存在するが
+    値が空文字列（CSV セルが空欄）の行を拒否する。
+
+    旧実装の truthy ガード（`if ph_num_raw:`）は空文字列も「列が無い」場合
+    と同一視して合計比較へのフォールバックへ流しており、`ph_dur`/`note_dur`
+    の合計がたまたま一致する（本ケースは 2 == 2）ため violation を検出
+    できず、使い物にならない note-to-phoneme 対応付けをそのまま通過させて
+    いた（`note_dur` R14 P2 と同型の欠陥）。`is None` 判定への変更後は
+    「empty ph_num」として malformed 拒否されることを固定する。
+    """
+    rows = [
+        {
+            "name": "seg011",
+            "ph_seq": "SP a",
+            "ph_dur": "1 1",
+            "ph_num": "",
+            "note_dur": "1 1",
+        }
+    ]
+    violations = bd.check_note_dur_consistency("pjs", rows)
+    assert len(violations) == 1
+    assert "seg011" in violations[0]
+    assert "malformed ph_num" in violations[0]
+    assert "empty ph_num" in violations[0]
+
+
+def test_check_note_dur_consistency_rejects_whitespace_only_ph_num() -> None:
+    """空白のみの値（`split()` すると空リストになる）も同様に拒否する。"""
+    rows = [
+        {
+            "name": "seg012",
+            "ph_seq": "SP a",
+            "ph_dur": "1 1",
+            "ph_num": "   ",
+            "note_dur": "1 1",
+        }
+    ]
+    violations = bd.check_note_dur_consistency("pjs", rows)
+    assert len(violations) == 1
+    assert "malformed ph_num" in violations[0]
+    assert "empty ph_num" in violations[0]
+
+
 def test_check_note_dur_consistency_falls_back_to_total_only_when_ph_num_absent() -> None:
-    """`ph_num` フィールド自体が存在しない行（列が無い/空）では、従来通り
-    合計同士の比較へフォールバックする（malformed 拒否の対象外）。"""
+    """`ph_num` 列自体が存在しない行（`row.get("ph_num") is None`）では、
+    従来通り合計同士の比較へフォールバックする（malformed 拒否の対象外。
+    R15 P2 で「値が空文字列」のケースと明確に区別されるようになった —
+    そちらは上の `test_..._rejects_present_but_empty_ph_num` 参照）。"""
     rows = [
         {"name": "seg010", "ph_seq": "SP a", "ph_dur": "1 1", "note_dur": "1 1"}
     ]
@@ -933,3 +983,121 @@ def test_is_safe_wav_name_matches_build_dataset_behavior(tmp_path: Path) -> None
         assert cp._is_safe_wav_name(name, wav_dir, resolved_wav_dir) == bd._is_safe_wav_name(
             name, wav_dir, resolved_wav_dir
         ), name
+
+
+# --- review #264 R15 P1: write_lang_def の決定論 tmp パス排除 + rollback
+# 保護領域の拡張 (convert_pjs.py:673-674, :920) ------------------------------
+
+
+def test_write_lang_def_does_not_touch_colliding_deterministic_tmp_name(tmp_path: Path) -> None:
+    """`write_lang_def` は旧実装の決定論的 tmp パス（`.{name}.tmp-{pid}`）を
+    もはや使わない（`build_dataset._atomic_write_text` の `tempfile.mkstemp`
+    排他生成へ共通化）。このパスに無関係な既存ファイルが偶然存在していても、
+    書き込みに巻き込まれず内容がそのまま残ることを固定する（intake.py
+    `_atomic_write` R14 P1 と同型の欠陥の再発防止）。
+    """
+    path = tmp_path / "lang.json"
+    stray_tmp = tmp_path / f".{path.name}.tmp-{os.getpid()}"
+    stray_content = b"unrelated pre-existing file that must survive untouched"
+    stray_tmp.write_bytes(stray_content)
+
+    cp.write_lang_def(path)
+
+    assert stray_tmp.read_bytes() == stray_content
+    assert json.loads(path.read_text(encoding="utf-8")) == cp.DEFAULT_LANG_DEF
+    # mkstemp が生成した実際の tmp ファイルも成功時に replace 済みで残らない。
+    leftover = [
+        p for p in tmp_path.iterdir()
+        if p not in (path, stray_tmp)
+    ]
+    assert leftover == []
+
+
+def _stage_all_pjs_dummy(pjs_root: Path) -> None:
+    """`stage_song_wavs` は wav 内容を検証せず存在確認のみ行うため、
+    PJS_EXPECTED_IDS 全100件分のダミー `.lab`/`_song.wav` を用意すれば
+    `main()` の missing_pairs/escaped_pairs fail-closed ガードを通過できる。
+    """
+    for name in cp.PJS_EXPECTED_IDS:
+        d = pjs_root / name
+        d.mkdir(parents=True)
+        (d / f"{name}.lab").write_text("dummy\n", encoding="utf-8")
+        (d / f"{name}_song.wav").write_bytes(b"")
+
+
+def test_write_lang_def_external_rollback_when_interrupted_after_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """review #264 R15 P1 (convert_pjs.py:920): `write_lang_def` は従来
+    `main()` の `try` ブロックの外側で呼ばれており、`_restore_lang_def_backup`
+    を呼ぶ `except BaseException` の保護範囲外だった。`write_lang_def` の
+    実行が `os.replace` まで完了した直後（関数から戻る前）に
+    `KeyboardInterrupt`/`SystemExit` を含む `BaseException` が飛ぶと、
+    `--staging-dir` 外を指す外部 `--lang-def` だけが新内容へ更新された
+    まま巻き戻されずに残っていた。`write_lang_def` 自体を `try` 内へ
+    移したことで、この隙間でも `_restore_lang_def_backup` が発火し、
+    実行前のバイト列へ復元されることを固定する（既存ファイルだった場合）。
+    """
+    pjs_root = tmp_path / "pjs_root"
+    _stage_all_pjs_dummy(pjs_root)
+    converter_dir = tmp_path / "converter"
+    converter_dir.mkdir()
+    staging_dir = tmp_path / "staging"
+    lang_def_path = tmp_path / "external_lang.json"
+    old_content = b'{"pre_existing": true}\n'
+    lang_def_path.write_bytes(old_content)
+
+    real_atomic_write_text = cp._atomic_write_text
+
+    def _write_then_interrupt(path: Path, content: str, **kwargs: object) -> None:
+        # os.replace までは実行させ（= 外部永続物は新内容へ更新済み）、
+        # write_lang_def が呼び出し元へ戻る前に割り込みが飛んだ状況を再現する。
+        real_atomic_write_text(path, content, **kwargs)
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(cp, "_atomic_write_text", _write_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        cp.main([
+            "--pjs-root", str(pjs_root),
+            "--converter-dir", str(converter_dir),
+            "--staging-dir", str(staging_dir),
+            "--lang-def", str(lang_def_path),
+        ])
+
+    assert lang_def_path.read_bytes() == old_content
+
+
+def test_write_lang_def_external_new_file_removed_when_interrupted_after_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """上のテストの「実行前は外部 lang-def が存在しなかった」変種。
+    `write_lang_def` が新規作成した直後に割り込まれても、`created_new=True`
+    分岐（review #263 R11）により作成物が削除され「実行前は存在しなかった」
+    状態へ戻ることを固定する。
+    """
+    pjs_root = tmp_path / "pjs_root"
+    _stage_all_pjs_dummy(pjs_root)
+    converter_dir = tmp_path / "converter"
+    converter_dir.mkdir()
+    staging_dir = tmp_path / "staging"
+    lang_def_path = tmp_path / "external_lang.json"
+    assert not lang_def_path.exists()
+
+    real_atomic_write_text = cp._atomic_write_text
+
+    def _write_then_interrupt(path: Path, content: str, **kwargs: object) -> None:
+        real_atomic_write_text(path, content, **kwargs)
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(cp, "_atomic_write_text", _write_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        cp.main([
+            "--pjs-root", str(pjs_root),
+            "--converter-dir", str(converter_dir),
+            "--staging-dir", str(staging_dir),
+            "--lang-def", str(lang_def_path),
+        ])
+
+    assert not lang_def_path.exists()
