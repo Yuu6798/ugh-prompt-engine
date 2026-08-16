@@ -86,8 +86,9 @@ S0 検分より、推論チェーンは linguistic→dur→pitch（variance 系�
 - [x] GPU runbook（実行者非依存・pin 付き）が `docs/` または `foundry/` に置かれる
       （`S1_GPU_RUNBOOK.md`）
 - [x] 学習が回り、早期ゲート checkpoint の CPU 合成 WAV が User に届く
-      （5K checkpoint 到達・`results_s1/s1_record_2026-08-15.md`・
-      `s1_gate/gate_synth.py` で 4 WAV 合成済み）
+      （5K checkpoint 到達・`results_s1/s1_record_2026-08-15.md` §「5K 早期
+      ゲート合成（本環境・2026-08-15 UTC）」・`s1_gate/gate_synth.py` で
+      sha256 記録付き 4 WAV 合成済み・耳判定は User へ送付済み）
 - [ ] **S1 ゲート（耳判定）**: 自前学習の合成が「土俵に乗る」か — 軸別
   （日本語/滑らかさ/歌声/ノイズ）で判定。全軸可なら S2 へ、不可なら不足軸を
   特定して §5 の backfill を検討

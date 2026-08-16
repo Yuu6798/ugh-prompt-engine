@@ -62,6 +62,14 @@ converter 実行〜swap 完了のいずれかが失敗すると、外部 lang-de
 内容のまま取り残され、コーパスと外部 lang-def の世代が食い違う。上書き前に
 元内容をメモリへバックアップし、以降のいずれかの失敗で元へ復元する
 （成功時のみ確定）。
+
+review #263 R11 で 1 件追加修正: 上記 R10 のバックアップは `--lang-def` が
+**既存ファイル**を指す場合のみ機能し、**新規パス**（元ファイルなし）を指す
+場合はバックアップが `None` のまま `_restore_lang_def_backup` が何もせず、
+`write_lang_def` が新規作成したファイルが失敗経路でも残留してしまっていた。
+書き込み前に対象パスの存在有無を記録し、新規パスだった場合は失敗時に
+作成物を `unlink` して「実行前は存在しなかった」状態へ戻す（既存ファイル
+ケースの復元動作は無変更）。
 """
 from __future__ import annotations
 
@@ -214,21 +222,30 @@ def write_lang_def(path: Path) -> None:
     os.replace(tmp_path, path)
 
 
-def _restore_lang_def_backup(path: Path, backup: Optional[bytes]) -> None:
-    """[P2 修正] (review #263 R10) `--lang-def` が `--staging-dir` 外の既存
-    ファイルを指す場合の巻き戻しヘルパー。`backup` が `None`（バックアップを
-    取っていない = 対象外パスまたはファイル未存在）なら何もしない。
+def _restore_lang_def_backup(path: Path, backup: Optional[bytes], *, created_new: bool = False) -> None:
+    """[P2 修正] (review #263 R10, R11) `--lang-def` が `--staging-dir` 外を
+    指す場合の巻き戻しヘルパー。`backup` が非 `None` なら元内容へ復元する。
+    `backup` が `None` かつ `created_new=True`（= 書き込み前に存在しなかった
+    新規パスへ `write_lang_def` が新規作成した）場合は、作成されたファイルを
+    削除して「実行前は存在しなかった」状態へ戻す。それ以外（`backup=None` かつ
+    `created_new=False` — 対象外パス、または `--staging-dir` 配下で
+    build_dir 経由の swap/rmtree に委ねる既存ファイル）は何もしない。
 
     `--staging-dir` 外を指す `--lang-def` への書き込みは、`_swap_into_place`
     による新旧世代の原子的 swap の対象外（swap 前に直接上書きする）。この
-    書き込み後、converter 実行〜swap 完了のいずれかが失敗すると、外部
-    lang-def だけが新内容のまま取り残され、コーパスと外部 lang-def の世代が
-    食い違う。呼び出し元 (`main`) が上書き前に元内容をバックアップしておき、
-    失敗経路でこの関数を呼んで復元することで、コーパスと外部 lang-def の
-    世代を常に一致させる（成功時のみ確定＝バックアップは破棄）。
+    書き込み後、converter 実行〜swap 完了のいずれかが失敗すると:
+    - 元ファイルが存在していた場合: 新内容のまま取り残され、コーパスと外部
+      lang-def の世代が食い違う（呼び出し元がバックアップした元内容へ復元）
+    - 元ファイルが存在しなかった場合（review #263 R11）: 新規作成された
+      ファイルがそのまま残留し、「このパスには元々何もなかった」という実行前
+      状態と食い違う（作成物を削除して原状回復する）
+    いずれも成功時のみ確定（この関数は呼ばれない＝バックアップ/新規作成の
+    どちらも破棄しない）。
     """
     if backup is not None:
         path.write_bytes(backup)
+    elif created_new:
+        path.unlink(missing_ok=True)
 
 
 def _resolve_lang_def_path(lang_def_arg: Optional[Path], staging_dir: Path, build_dir: Path) -> Path:
@@ -416,14 +433,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         lang_def_path = _resolve_lang_def_path(args.lang_def, staging_dir, build_dir)
 
-        # [P2 修正] (review #263 R10) lang_def_path が --staging-dir 外の
-        # 既存ファイルを指す場合（= args.lang_def と同一パスかつ既に存在）、
-        # write_lang_def はここで swap の外側で直接上書きする。以降の
-        # converter 実行〜swap 完了のいずれかが失敗した場合に元内容へ
-        # 巻き戻せるよう、上書き前にバックアップを取る（成功時のみ確定）。
+        # [P2 修正] (review #263 R10, R11) lang_def_path が --staging-dir 外を
+        # 指す場合（= args.lang_def と同一パス）、write_lang_def はここで
+        # swap の外側で直接書く。以降の converter 実行〜swap 完了のいずれかが
+        # 失敗した場合に原状復帰できるよう、書き込み前の状態を記録しておく
+        # （成功時のみ確定）:
+        #   - 既存ファイルだった場合: 上書き前の内容をバックアップし、失敗時に
+        #     復元する（review #263 R10）。
+        #   - 新規パス（元ファイルなし）だった場合: 失敗時に write_lang_def が
+        #     新規作成したファイルを削除し、「元々存在しなかった」状態へ戻す
+        #     （review #263 R11。バックアップを取らないだけでは新規作成分が
+        #     残留し続けてしまうため）。
+        lang_def_is_external = args.lang_def is not None and lang_def_path == args.lang_def
+        lang_def_pre_existed = lang_def_is_external and lang_def_path.exists()
         lang_def_backup: Optional[bytes] = None
-        if args.lang_def is not None and lang_def_path == args.lang_def and lang_def_path.exists():
+        if lang_def_pre_existed:
             lang_def_backup = lang_def_path.read_bytes()
+        lang_def_created_new = lang_def_is_external and not lang_def_pre_existed
 
         write_lang_def(lang_def_path)
 
@@ -433,13 +459,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             sys.stderr.write(result.stderr)
             if result.returncode != 0:
                 print(f"error: db_converter.py failed (exit {result.returncode})", file=sys.stderr)
-                _restore_lang_def_backup(lang_def_path, lang_def_backup)
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
                 return result.returncode
 
             _swap_into_place(build_dir, staging_dir)
             swapped = True
         except BaseException:
-            _restore_lang_def_backup(lang_def_path, lang_def_backup)
+            _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
             raise
     finally:
         if not swapped:
