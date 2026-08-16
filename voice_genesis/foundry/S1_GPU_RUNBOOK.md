@@ -168,26 +168,21 @@ squash マージが原因ではない。`1b594ae` はローカルの `.git` に�
 マージ方式は PR 作成者の操作に依存し将来変わりうるため、マージ方式に
 依存しない恒久 pin として annotated tag を採用する。
 
-**学習規模フィールドの追記（binarize より前・build_dataset 直後に行う）**:
-`build_dataset.py` が生成した `s1_multispeaker_acoustic_config.yaml` に、
-学習規模に関わるフィールドを binarize を走らせる**前**に追記する。**追記対象は
-この config だけ**（`configs/acoustic.yaml` 等の DiffSinger 側デフォルトは
-変更しない）。こうしておくことで、binarize の入力・学習の入力・§3.1 で
-pin する config が常に同一の最終形になる（manifest は最終 config を pin する
-という流れに一本化する。学習実行時に追記して binarize 後の config と
-食い違う状態を作らない）。
-
-```yaml
-# $OUT/s1_multispeaker_acoustic_config.yaml の末尾に追記
-max_updates: 40000
-val_check_interval: 5000    # 既定 4000 だと 5K/10K/20K の節目に checkpoint が
-                              # 乗らない。早期ゲート節目 (5K/10K/20K) と一致させる
-num_ckpt_keep: 10            # 既定 5 だと 40K/5K=8 個の非 permanent checkpoint を
-                              # 保持しきれず、早期の 5K/10K が学習後半で prune
-                              # される（`permanent_ckpt_start` 既定 60000 は
-                              # 40K 総 steps では発火しないため無効）。
-                              # 8 個全てを学習完了まで残せる余裕を持たせる
-```
+**学習規模フィールドは `build_dataset.py` が最終形で出力する（review #263
+R13 P1 是正）**: `max_updates`/`val_check_interval`/`num_ckpt_keep` は
+§3 冒頭の `build_dataset.py` 呼び出し（既に上で実行済み）が config へ
+書き込み済みであり、本節での手動追記は不要になった（旧版は binarize 実行前に
+`s1_multispeaker_acoustic_config.yaml` の末尾へ手動追記する手順だったが、
+`build_dataset.py` が同時に書き出す正規化コピー
+`s1_multispeaker_acoustic_config.yaml.normalized.yaml`（§3.1 が manifest 対象
+にする方）にはこの手動追記が反映されず、live config と §3.1 が pin する
+内容が食い違っていた）。**既定値は 40000 / 5000 / 10**（早期ゲート節目
+5K/10K/20K に checkpoint を確実に乗せるため。既定 `val_check_interval`
+4000 だと節目に乗らない・既定 `num_ckpt_keep` 5 だと `permanent_ckpt_start`
+既定 60000 が 40K 総 steps では発火せず早期 checkpoint が prune される）。
+値を変更したい場合は `build_dataset.py` 呼び出し時に
+`--max-updates`/`--val-check-interval`/`--num-ckpt-keep` を指定する
+（live config・正規化コピーの両方へ同一値が反映される）。
 
 ```bash
 cd "$DS"
@@ -226,11 +221,13 @@ valid total duration: 57.72s
 **生成データ束そのもの**（変換 CSV・辞書・config・binary dir）のファイル別
 sha256 マニフェストを生成し、記録に残す。
 
-> **config は学習フィールド追記後の最終形でハッシュする**: `s1_multispeaker_acoustic_config.yaml`
-> は §3 の binarize 実行前に学習規模フィールド（`max_updates`/
-> `val_check_interval`/`num_ckpt_keep`）を既に追記済みのため、ここで
-> ハッシュする config はその最終形と一致する。binarize 後に config を
-> 書き換えて manifest と実体がずれる事故を構造的に防ぐ。
+> **config は学習フィールド込みの最終形でハッシュする（review #263 R13 P1
+> 是正）**: 学習規模フィールド（`max_updates`/`val_check_interval`/
+> `num_ckpt_keep`）は `build_dataset.py` が live config・正規化コピーの
+> 両方へ最初から書き込む（§3 参照。binarize 実行前の手動追記手順は廃止
+> 済み）。そのためここでハッシュする正規化コピーは常にその最終形と一致し、
+> binarize 後に config を書き換えて manifest と実体がずれる事故を構造的に
+> 防ぐ。
 
 **絶対パスを含む manifest は実行者のホームディレクトリ（`$OUT` の位置）に
 依存し再現不能になるため、必ず `cd` してから相対パスで hash する（review
@@ -274,9 +271,11 @@ sha256sum s1_binary_manifest.sha256
 ## 4. acoustic 学習実行（2 話者・40K steps）
 
 学習規模に関わる config フィールド（`max_updates`/`val_check_interval`/
-`num_ckpt_keep`）は §3 で `build_dataset.py` 直後・binarize 実行前に
-既に追記済み（config は学習フィールド追記後の最終形で §3.1 の manifest に
-pin される設計。ここでの追加編集は不要）。ここでは学習の実行のみを行う。
+`num_ckpt_keep`）は §3 の `build_dataset.py` 呼び出し時点で既に config へ
+書き込み済み（既定 40000/5000/10。値を変える場合は §3 の
+`--max-updates`/`--val-check-interval`/`--num-ckpt-keep` を使う。config は
+学習フィールド込みの最終形で §3.1 の manifest に pin される設計。ここでの
+追加編集は不要）。ここでは学習の実行のみを行う。
 
 学習実行（`exp_name` は checkpoint 保存先 `checkpoints/<exp_name>/` になる。
 中断・再起動後は同じコマンドを再実行すれば直近の checkpoint から自動再開

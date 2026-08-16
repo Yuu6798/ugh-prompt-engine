@@ -45,6 +45,18 @@ review #263 R9 P1（`convert_pjs.py` と同一のファミリー修正）: 衝�
 `--voicebank-root=/tmp/published.old` は事前チェックを素通りしたのち、
 公開時に `old_dir` の `rmtree` が `voicebank_root`（保護入力）そのものを
 削除する。派生パスもガード対象に含める。
+
+review #263 R13 P2: 共有アダプタ `donor_bank_utau.parse_oto_text` は
+フィールド数不一致・非数値値の行を黙って skip する実装決定（同モジュール
+docstring 参照）のため、`oto.ini` が truncated/malformed な行を含んでいても
+`parse_oto_ini` は例外を出さず縮小したエントリ集合を返す。参照先 WAV が
+実在すれば `missing_wavs` ガードも発火しないため、音素区間が黙ってコーパス
+から欠落したまま成功報告してしまう。本ファイルは（共有モジュールの既存
+skip 仕様は他の呼び出し元のため変更せず）全 pitch dir の oto.ini をあらかじめ
+走査し、`parse_oto_text` と同一規則で棄却される行（pitch dir・行番号・内容）
+を全収集してから、実際の WAV 読み込み/書き込みを一切始める前に fail-closed
+で拒否する（`missing_wavs`/`wav_ref_violations` と同じ「全収集してから公開前
+に止める」設計）。
 """
 from __future__ import annotations
 
@@ -212,6 +224,42 @@ class WavPathEscapeError(ValueError):
     （絶対パス・`..` 脱出・非 basename ネスト参照・symlink 逃避）を含む場合に
     送出する（fail-closed。実際の読み込みを一切始める前、`_convert_into` の
     冒頭で全 pitch dir 分の違反を集約検出してから送出する）。"""
+
+
+class MalformedOtoEntryError(ValueError):
+    """P2 修正 (review #263 R13): `dbu.parse_oto_text` が黙って skip する
+    malformed 行（フィールド数不一致・非数値値。同モジュールの実装決定）を
+    本変換器は許容しない。棄却行を pitch dir・行番号・内容ごと全収集して
+    から、実際の読み込み/書き込みを一切始める前に fail-closed で拒否する
+    （`WavPathEscapeError`/`MissingSourceWavError` と同じ「全収集してから
+    公開前に止める」設計）。"""
+
+
+def _find_malformed_oto_lines(text: str) -> List[Tuple[int, str]]:
+    """`dbu.parse_oto_text` と同一の解析規則で判定し、黙って skip される
+    malformed 行を行番号（1-origin）付きで列挙する。
+
+    共有モジュール `donor_bank_utau.parse_oto_text` を変更すると他の
+    呼び出し元（既存の skip 仕様に依存し得る）の挙動まで変わってしまう
+    ため、判定規則のみを本ファイルへ複製する（`_wav_ref_is_basename` と
+    同じ既存パターン。R12 P1 コメント参照）。空行・`"="` を含まない行
+    （コメント/区切りとして無視される）は対象外。"""
+    malformed: List[Tuple[int, str]] = []
+    for lineno, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or "=" not in line:
+            continue
+        _wav_filename, _, rest = line.partition("=")
+        parts = rest.split(",")
+        if len(parts) != 6:
+            malformed.append((lineno, raw_line))
+            continue
+        try:
+            for value in parts[1:]:
+                float(value)
+        except ValueError:
+            malformed.append((lineno, raw_line))
+    return malformed
 
 
 class MissingSourceWavError(FileNotFoundError):
@@ -405,9 +453,19 @@ def _convert_into(
     # パスを読むことはない）。
     pitch_dir_entries: Dict[str, "OrderedDict[str, List[dbu.OtoEntry]]"] = {}
     wav_ref_violations: List[str] = []
+    malformed_oto_lines: List[str] = []
     for pdir_name in pitch_dirs:
         pdir = voicebank_root / pdir_name
-        oto_entries = dbu.parse_oto_ini(pdir / "oto.ini")
+        oto_path = pdir / "oto.ini"
+        # dbu.parse_oto_ini(path) と等価に decode + parse するが、テキストを
+        # 一度だけ read してここでの malformed 行検査と共有する（二重 read
+        # を避ける）。
+        oto_text = dbu.decode_oto_bytes(oto_path.read_bytes())
+        malformed_oto_lines.extend(
+            f"{pdir_name}/oto.ini:{lineno}: {content}"
+            for lineno, content in _find_malformed_oto_lines(oto_text)
+        )
+        oto_entries = dbu.parse_oto_text(oto_text)
         entries_by_wav: "OrderedDict[str, List[dbu.OtoEntry]]" = OrderedDict()
         for e in oto_entries:
             entries_by_wav.setdefault(e.wav_filename, []).append(e)
@@ -416,6 +474,14 @@ def _convert_into(
             _reject_wav_paths_outside_root(
                 pdir, pdir_name, list(entries_by_wav.keys()), voicebank_root
             )
+        )
+
+    if malformed_oto_lines:
+        raise MalformedOtoEntryError(
+            f"{len(malformed_oto_lines)} malformed oto.ini row(s) detected "
+            "(dbu.parse_oto_text would silently skip these — fail-closed "
+            "before any read/write, corpus not published): "
+            + "; ".join(sorted(malformed_oto_lines))
         )
 
     if wav_ref_violations:

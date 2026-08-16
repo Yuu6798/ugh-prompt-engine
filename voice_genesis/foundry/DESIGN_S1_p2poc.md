@@ -81,8 +81,9 @@ S0 検分より、推論チェーンは linguistic→dur→pitch（variance 系�
       `s1_multispeaker_acoustic_config.yaml` の `datasets:` エントリ側に付与
       する設計であり、単一の統合 `transcriptions.csv` に 2 話者・spk_id を
       同居させる構成は実装が意図的に採らないため、実装の実態に合わせて
-      表現を更新した。binarize 実測値: `S1_GPU_RUNBOOK.md` §「学習規模
-      フィールドの追記」/ `s1_dataprep/README.md` train 733 / valid 10）
+      表現を更新した。binarize 実測値: `S1_GPU_RUNBOOK.md` §3
+      （学習規模フィールドは review #263 R13 以降 `build_dataset.py` が
+      最終形で出力）/ `s1_dataprep/README.md` train 733 / valid 10）
 - [x] GPU runbook（実行者非依存・pin 付き）が `docs/` または `foundry/` に置かれる
       （`S1_GPU_RUNBOOK.md`）
 - [x] 学習が回り、早期ゲート checkpoint の CPU 合成 WAV が User に届く

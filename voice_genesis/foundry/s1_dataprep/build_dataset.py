@@ -28,6 +28,15 @@ from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 # §5.1 と同じ扱い）。
 SPECIAL_TOKENS: Set[str] = {"AP", "SP"}
 
+# review #263 R13 P1: 学習規模フィールド（`max_updates`/`val_check_interval`/
+# `num_ckpt_keep`）の既定値。`S1_GPU_RUNBOOK.md` §3 が binarize 前に手動追記
+# していた値と同一（早期ゲート節目 5K/10K/20K に checkpoint を確実に乗せる
+# ための現行 runbook 値）。CLI 引数で上書きしない限りこの値が config へ
+# 書き込まれる。
+DEFAULT_MAX_UPDATES = 40000
+DEFAULT_VAL_CHECK_INTERVAL = 5000
+DEFAULT_NUM_CKPT_KEEP = 10
+
 
 def read_transcriptions(csv_path: Path) -> List[Dict[str, str]]:
     with open(csv_path, newline="", encoding="utf-8") as f:
@@ -354,6 +363,10 @@ def build_config_yaml(
     binary_data_dir: Path,
     speakers: Sequence[Tuple[str, int, Path, Sequence[str]]],
     path_fmt: "Callable[[Path], str]" = str,
+    *,
+    max_updates: int = DEFAULT_MAX_UPDATES,
+    val_check_interval: int = DEFAULT_VAL_CHECK_INTERVAL,
+    num_ckpt_keep: int = DEFAULT_NUM_CKPT_KEEP,
 ) -> str:
     """`scripts/binarize.py --config <this>` にそのまま渡せる acoustic config
     を組み立てる（`s1b_multispeaker_acoustic_config.yaml` と同一構造）。
@@ -365,6 +378,14 @@ def build_config_yaml(
     走行中の学習・binarize が参照するため無変更を維持する）。ハッシュ用の
     正規化コピー（`build_normalized_config_yaml`）はこれを実行者 home 非依存の
     表現へ差し替えるために使う。
+
+    `max_updates`/`val_check_interval`/`num_ckpt_keep`（review #263 R13 P1
+    昇格）: 学習規模に関わる 3 フィールドを config 末尾へ書き込む。従来は
+    `S1_GPU_RUNBOOK.md` §3 が binarize 実行前に手動追記していたが、正規化
+    コピー（`.normalized.yaml`）はビルド時点で既に書き出し済みのため
+    手動追記の対象外となり、実効 config と `§3.1` が pin する manifest 対象が
+    食い違っていた（R13 指摘）。ビルダー自身が最終形（live config + 正規化
+    コピーの両方）を出力することでこの食い違いを構造的に無くす。
     """
     lines: List[str] = []
     lines.append("base_config:")
@@ -401,6 +422,9 @@ def build_config_yaml(
     lines.append("binarization_args:")
     lines.append("  shuffle: true")
     lines.append("  num_workers: 0")
+    lines.append(f"max_updates: {max_updates}")
+    lines.append(f"val_check_interval: {val_check_interval}")
+    lines.append(f"num_ckpt_keep: {num_ckpt_keep}")
     lines.append("")
     return "\n".join(lines)
 
@@ -448,6 +472,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument("--n-test-prefixes", type=int, default=5, help="話者ごとの検証用セグメント数")
     parser.add_argument("--report", type=Path, default=None, help="検証レポート JSON の出力先 (省略可)")
+    # review #263 R13 P1: 学習規模フィールドを CLI 引数へ昇格（既定値は
+    # S1_GPU_RUNBOOK.md 現行値と同一。build_config_yaml docstring 参照）。
+    parser.add_argument(
+        "--max-updates", type=int, default=DEFAULT_MAX_UPDATES,
+        help=f"config へ書き込む max_updates (既定: {DEFAULT_MAX_UPDATES})",
+    )
+    parser.add_argument(
+        "--val-check-interval", type=int, default=DEFAULT_VAL_CHECK_INTERVAL,
+        help=f"config へ書き込む val_check_interval (既定: {DEFAULT_VAL_CHECK_INTERVAL})",
+    )
+    parser.add_argument(
+        "--num-ckpt-keep", type=int, default=DEFAULT_NUM_CKPT_KEEP,
+        help=f"config へ書き込む num_ckpt_keep (既定: {DEFAULT_NUM_CKPT_KEEP})",
+    )
     args = parser.parse_args(argv)
 
     ritsu_csv = args.ritsu_raw_dir / "transcriptions.csv"
@@ -482,6 +520,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         dict_path=args.out_dict,
         binary_data_dir=args.binary_data_dir,
         speakers=speakers,
+        max_updates=args.max_updates,
+        val_check_interval=args.val_check_interval,
+        num_ckpt_keep=args.num_ckpt_keep,
     )
 
     # review #263 R12 P2: 実行時 config (`args.out_config` へ公開する上記
@@ -499,6 +540,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         binary_data_dir=args.binary_data_dir,
         speakers=speakers,
         path_fmt=lambda p: normalize_path_field(p, config_dir),
+        max_updates=args.max_updates,
+        val_check_interval=args.val_check_interval,
+        num_ckpt_keep=args.num_ckpt_keep,
     )
 
     report = {
