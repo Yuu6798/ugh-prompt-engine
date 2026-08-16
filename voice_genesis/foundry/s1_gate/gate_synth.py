@@ -281,18 +281,86 @@ def load_own_phonemes_json(path: Path) -> Dict[str, int]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def find_own_phonemes_json(acoustic_dir: Path) -> Optional[Path]:
+def acoustic_export_basename(acoustic_dir: Path, acoustic_onnx_path: Path) -> Optional[str]:
+    """acoustic.onnx が指す export の basename（`<exp_name>`）を推定する。
+
+    review #263 R12 P1: `find_own_phonemes_json`/`find_speaker_embed` が
+    複数候補から辞書順先頭を暗黙選択していた（`--acoustic-dir` を使い回すと
+    別 export 由来の *.phonemes.json/*.emb が紛れ込み得る）。`run_export_acoustic`
+    は実 export 出力 `<exp_name>.onnx` を `acoustic.onnx` へエイリアスコピー
+    するため、`acoustic_dir` 内の *.onnx のうち `acoustic_onnx_path`（resolve
+    後）と異なるものがちょうど 1 個あれば、その stem を export basename として
+    返す（`<exp_name>.phonemes.json`/`<exp_name>.<speaker>.emb` の対応付けに使う）。
+    0 個/複数個で決め打ちできない場合（canon 配布ディレクトリ = alias 無し、
+    または alias 元が複数残存）は None を返し、呼び出し側が単一候補フォール
+    バックまたは fail-closed で処理する。
+    """
+    resolved_target = acoustic_onnx_path.resolve() if acoustic_onnx_path.exists() else None
+    onnx_candidates = [
+        p for p in sorted(acoustic_dir.glob("*.onnx"))
+        if resolved_target is None or p.resolve() != resolved_target
+    ]
+    if len(onnx_candidates) == 1:
+        return onnx_candidates[0].stem
+    return None
+
+
+def find_own_phonemes_json(
+    acoustic_dir: Path, export_basename: Optional[str] = None
+) -> Optional[Path]:
+    """review #263 R12 P1: `*.phonemes.json` が複数存在する場合、辞書順先頭の
+    暗黙選択をやめる。`export_basename`（acoustic.onnx の export basename）が
+    分かっていれば `<export_basename>.phonemes.json` を優先的に選ぶ。単一候補
+    しかなければ従来どおりそれを返す（対応付け不能かつ複数候補の場合のみ
+    fail-closed で停止する — 誤った音素 ID 空間へサイレントに着地するのを防ぐ）。
+    """
     candidates = sorted(acoustic_dir.glob("*.phonemes.json"))
-    return candidates[0] if candidates else None
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    if export_basename is not None:
+        matched = [p for p in candidates if p.name == f"{export_basename}.phonemes.json"]
+        if len(matched) == 1:
+            return matched[0]
+    raise SystemExit(
+        f"ERROR: multiple *.phonemes.json candidates found in '{acoustic_dir}' "
+        f"({[p.name for p in candidates]}) and none matched the acoustic export "
+        f"basename ({export_basename!r}) unambiguously. Refusing to silently pick "
+        f"the alphabetically-first candidate (fail-closed, review #263 R12 P1) — "
+        f"clean the directory so only the intended export's companion files remain."
+    )
 
 
-def find_speaker_embed(acoustic_dir: Path, speaker: str) -> Optional[Path]:
+def find_speaker_embed(
+    acoustic_dir: Path, speaker: str, export_basename: Optional[str] = None
+) -> Optional[Path]:
     """export.py `_export_spk_embed` が書き出す `<exp_name>.<speaker>.emb`
     （384-dim float32 raw バイナリ、話者ベクトル 1 本）を探す。reflow 多話者
     acoustic の `spk_embed` 入力構築に使う（見つからなければ None、呼び出し側
-    が fail-closed で停止する）。"""
+    が fail-closed で停止する）。
+
+    review #263 R12 P1: 同一話者の `*.<speaker>.emb` が複数存在する場合、
+    辞書順先頭の暗黙選択をやめる。`find_own_phonemes_json` と同じ
+    export_basename 対応付けを適用し、対応付け不能かつ複数候補なら
+    fail-closed（単一候補時は従来どおり）。
+    """
     candidates = sorted(acoustic_dir.glob(f"*.{speaker}.emb"))
-    return candidates[0] if candidates else None
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    if export_basename is not None:
+        matched = [p for p in candidates if p.name == f"{export_basename}.{speaker}.emb"]
+        if len(matched) == 1:
+            return matched[0]
+    raise SystemExit(
+        f"ERROR: multiple *.{speaker}.emb candidates found in '{acoustic_dir}' "
+        f"({[p.name for p in candidates]}) and none matched the acoustic export "
+        f"basename ({export_basename!r}) unambiguously. Refusing to silently pick "
+        f"the alphabetically-first candidate (fail-closed, review #263 R12 P1) — "
+        f"clean the directory so only the intended export's companion files remain."
+    )
 
 
 def load_speaker_embed_vector(path: Path) -> np.ndarray:
@@ -910,12 +978,18 @@ def cmd_run(args):
         if not acoustic_dsconfig_path.exists():
             acoustic_dsconfig_path = canon_model_dir / "dsconfig.yaml"
 
-    own_json = find_own_phonemes_json(acoustic_dir)
+    # review #263 R12 P1: 複数候補（*.phonemes.json / *.<speaker>.emb）の対応
+    # 付けに使う export basename を先に推定する（`acoustic_export_basename`
+    # docstring 参照）。
+    export_basename = acoustic_export_basename(acoustic_dir, acoustic_onnx_path)
+    own_json = find_own_phonemes_json(acoustic_dir, export_basename)
 
     # 話者 embedding（reflow 多話者 acoustic 用）。canon DDPM acoustic には
     # 対応する *.emb が存在しないため speaker_embed_path/vector は None のままで、
     # run_pipeline 側が acoustic.onnx の入力名から不要と判定して無視する。
-    speaker_embed_path = find_speaker_embed(acoustic_dir, args.speaker) if args.speaker else None
+    speaker_embed_path = (
+        find_speaker_embed(acoustic_dir, args.speaker, export_basename) if args.speaker else None
+    )
     speaker_embed_vector = (
         load_speaker_embed_vector(speaker_embed_path) if speaker_embed_path is not None else None
     )

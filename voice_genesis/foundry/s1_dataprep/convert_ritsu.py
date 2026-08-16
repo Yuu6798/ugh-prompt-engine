@@ -157,6 +157,63 @@ def build_mora_dict(dsdict_path: Path) -> Dict[str, List[str]]:
 # ---------------------------------------------------------------------------
 
 
+def _wav_ref_is_basename(wav_filename: str) -> bool:
+    """oto.ini の wav 参照が pitch dir 直下の basename であるかを判定する
+    （`adapter/donor_bank_utau._wav_ref_is_basename` と同型判定。review #263
+    R12 P1: リポジトリの既存慣例（record スクリプト群は共有モジュール新設
+    ではなく各ファイルへコピペ実装する）に倣い、本ファイルへ複製する）。"""
+    if "/" in wav_filename or "\\" in wav_filename:
+        return False
+    if wav_filename in ("", ".", ".."):
+        return False
+    lexical = Path(wav_filename)
+    if lexical.is_absolute() or ".." in lexical.parts:
+        return False
+    return lexical.name == wav_filename
+
+
+def _reject_wav_paths_outside_root(
+    pdir: Path, pdir_name: str, wav_filenames: Sequence[str], root: Path
+) -> List[str]:
+    """oto.ini が参照する WAV ファイル名を検査し、voicebank root 外を指す
+    参照を検出する（review #263 R12 P1: `adapter/donor_bank_utau.
+    _reject_wav_paths_outside_root` と同型のファミリー修正）。
+
+    二段検査: (1) 語彙的検査（絶対パス・`..` 成分・非 basename の `/`/`\\`
+    区切りネスト参照を即座に拒否）→ (2) `.resolve()`（symlink 解決込み）した
+    上で voicebank root 配下に収まっているかを検査。語彙的検査を先に行うのは
+    `donor_bank_utau` と同じ理由（symlink 解決前に脱出パターンを弾く。かつ
+    resolve だけでは `A3/../F4/foo.wav` のように root 配下には留まりながら
+    自分の pitch dir を脱出する参照を見逃す）。
+
+    黙って除外せず、違反エントリ（`<pdir_name>/<wav_filename>` 形式）の
+    一覧を返す。呼び出し側が全 pitch dir 分の違反を集約してから、実際の
+    読み込みを一切始める前に一括で fail-closed する。
+    """
+    root_resolved = root.resolve()
+    violations: List[str] = []
+    for wav_filename in wav_filenames:
+        if not _wav_ref_is_basename(wav_filename):
+            violations.append(f"{pdir_name}/{wav_filename}")
+            continue
+        candidate = pdir / wav_filename
+        try:
+            resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError):
+            violations.append(f"{pdir_name}/{wav_filename}")
+            continue
+        if not resolved.is_relative_to(root_resolved):
+            violations.append(f"{pdir_name}/{wav_filename}")
+    return violations
+
+
+class WavPathEscapeError(ValueError):
+    """P1 修正 (review #263 R12): oto.ini が voicebank root 外を指す WAV 参照
+    （絶対パス・`..` 脱出・非 basename ネスト参照・symlink 逃避）を含む場合に
+    送出する（fail-closed。実際の読み込みを一切始める前、`_convert_into` の
+    冒頭で全 pitch dir 分の違反を集約検出してから送出する）。"""
+
+
 class MissingSourceWavError(FileNotFoundError):
     """P2 修正 (review #263 R4): oto が参照する WAV が実在しない場合、黙って
     skip して縮小コーパスの成功を報告するのではなく、欠落ファイル名を全収集
@@ -339,6 +396,36 @@ def _convert_into(
     out_wavs = out_dir / "wavs"
     out_wavs.mkdir(parents=True, exist_ok=True)
 
+    # review #263 R12 P1: 各 pitch dir の oto.ini を先に全件パースし、参照 WAV
+    # の経路検査（字句検査 + resolve 後 root 包含検査の二段）を全 pitch dir
+    # 分集約してから、実際の読み込み/書き込みを一切始める前に一括で
+    # fail-closed する（`missing_wavs` と同じ「全収集してから公開前に止める」
+    # 設計。字句・resolve のいずれかで違反した wav_filename は、後段の
+    # 読み込みループでも同じファイルを読むため、ここで弾けば実際に不正な
+    # パスを読むことはない）。
+    pitch_dir_entries: Dict[str, "OrderedDict[str, List[dbu.OtoEntry]]"] = {}
+    wav_ref_violations: List[str] = []
+    for pdir_name in pitch_dirs:
+        pdir = voicebank_root / pdir_name
+        oto_entries = dbu.parse_oto_ini(pdir / "oto.ini")
+        entries_by_wav: "OrderedDict[str, List[dbu.OtoEntry]]" = OrderedDict()
+        for e in oto_entries:
+            entries_by_wav.setdefault(e.wav_filename, []).append(e)
+        pitch_dir_entries[pdir_name] = entries_by_wav
+        wav_ref_violations.extend(
+            _reject_wav_paths_outside_root(
+                pdir, pdir_name, list(entries_by_wav.keys()), voicebank_root
+            )
+        )
+
+    if wav_ref_violations:
+        raise WavPathEscapeError(
+            "oto.ini references WAV file(s) that resolve outside the voicebank "
+            f"root {voicebank_root.resolve()} (rejected as path traversal / "
+            "symlink escape, fail-closed before any read — corpus not "
+            f"published): {sorted(wav_ref_violations)}"
+        )
+
     rows: List[dict] = []
     missing_wavs: List[str] = []
     global_stats = dict(
@@ -350,10 +437,7 @@ def _convert_into(
 
     for pdir_name in pitch_dirs:
         pdir = voicebank_root / pdir_name
-        oto_entries = dbu.parse_oto_ini(pdir / "oto.ini")
-        entries_by_wav: "OrderedDict[str, List[dbu.OtoEntry]]" = OrderedDict()
-        for e in oto_entries:
-            entries_by_wav.setdefault(e.wav_filename, []).append(e)
+        entries_by_wav = pitch_dir_entries[pdir_name]
 
         dir_stats = dict(n_wav=0, n_entries=0, n_unmapped=0, n_sokuon=0, audio_s=0.0)
 

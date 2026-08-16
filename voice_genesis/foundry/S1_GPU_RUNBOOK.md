@@ -236,11 +236,20 @@ sha256 マニフェストを生成し、記録に残す。
 依存し再現不能になるため、必ず `cd` してから相対パスで hash する（review
 #263 R3 P2）。**
 
+**config は正規化コピー（`*.normalized.yaml`）の方を manifest 対象にする
+（review #263 R12 P2）**: `s1_multispeaker_acoustic_config.yaml` 自体は
+`dictionary`/`raw_data_dir`/`binary_data_dir` に実行者の `$OUT` 絶対パスを
+埋め込むため、同一入力でも実行者ごとに config バイト列・ひいては
+`s1_bundle_manifest.sha256` が変わってしまう。`build_dataset.py` が併せて
+書き出す `s1_multispeaker_acoustic_config.yaml.normalized.yaml`（同じパス
+フィールドを config 自身の所在からの相対パスへ正規化したハッシュ専用コピー。
+実行時 config 本体は無変更）を代わりに manifest 対象へ含める。
+
 ```bash
 # 変換 CSV・辞書・config の束（binary/ は下で別 manifest にし二重計上を避ける）
 cd "$OUT"
 find ritsu_diffsinger_db pjs_staging/diffsinger_db \
-     merged_ja_dict.txt s1_multispeaker_acoustic_config.yaml \
+     merged_ja_dict.txt s1_multispeaker_acoustic_config.yaml.normalized.yaml \
      -type f ! -name "*_manifest.sha256" -exec sha256sum {} + \
      | sort -k2 > s1_bundle_manifest.sha256
 sha256sum s1_bundle_manifest.sha256

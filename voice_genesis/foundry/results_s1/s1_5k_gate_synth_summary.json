@@ -1,0 +1,112 @@
+{
+  "_note": "S1 5K 早期ゲート合成の gate_synth_summary.json 集約コミット（PR #263 Codex R12 P2 対応）。scratchpad `s1_gate_5k/r5_regress/{reflow_5k,reflow_5k_pjs}/step_5000/gate_synth_summary.json`（`gate_synth.py run` の実 export -> 合成フル再実行、HEAD 1b23c18 時点。`r5_regression_note.md` 参照）を ritsu/pjs 両話者分そのまま集約する。両ファイルとも `results_s1/s1_record_2026-08-15.md` §『5K 早期ゲート合成』/scratchpad `s1_5k_gate_record.md` §8.3 に記載の 4 本の WAV sha256 と完全一致する （決定論確認済み・無回帰）。`acoustic_onnx_path`/`results.*.wav_path` は 生成時点のスクラッチパッド絶対パス（本セッションの一時ディレクトリ）を そのまま記録したものであり、他環境では存在しない参考値。入力側の sha256（`input_sha256`）と WAV 本体の `wav_sha256` が本ファイルの本体。",
+  "step": 5000,
+  "by_speaker": {
+    "ritsu": {
+      "step": 5000,
+      "acoustic_encoding_mode": "own (s1_ritsu_pjs_acoustic_v1.phonemes.json)",
+      "acoustic_onnx_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/s1_gate_5k/r5_regress/reflow_5k/onnx_gate_5000/acoustic.onnx",
+      "input_sha256": {
+        "ckpt": "e537b94c839960583e82fc81553d1ace74abcedfee52a8d40dbbfaba27424a19",
+        "train_config_yaml": "b5369fc84381c6c8bd8226fb5d6a3865300aaf2fc7bf7837cf35dfdda82cf4fa",
+        "acoustic_onnx": "430797a2f05513acece79eb46655b7b32de932fb1928fad559432b3f5e1a2937",
+        "acoustic_phonemes_json": "31e6778bcc1e3f1fc28330b4ec1fb6e459512bcfd0dfd815ad3cc8855ee989ea",
+        "acoustic_dsconfig_yaml": "66cc1a94a9cf18a7c1f851e5dd5fe2d7aa51d3dba2e62cb521c49282ad6a7058",
+        "speaker_embed": "6bf245f32518ddc2ef42ba2e143592efe7493ee33bbfbd03853bcf08ea7c47ae",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "canon_phonemes_txt": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+        "gate_synth_py": "1f4296312b7f077eb7fc468a38297ada07403f2bdd0da3d3164ddff8bbc58f1c",
+        "score_module_sakura": "24a6004daeb0b5d02c55c87642c6eac2cb2ca931c97570d1be666b6a57ade116",
+        "score_module_umi": "59106e629bd523d8f6272e768ff6b96a4fcb22756314f382c865da2e1c68561e",
+        "repo_git_head": "1b23c189f343243a55ffb088e19cdc0e119e6ac8"
+      },
+      "sampling_params": {
+        "seed": 42,
+        "speaker": "ritsu",
+        "reflow_sampling_steps_constant": 20
+      },
+      "results": {
+        "sakura": {
+          "wav_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/s1_gate_5k/r5_regress/reflow_5k/step_5000/gate_sakura_ritsu.wav",
+          "wav_sha256": "2fd3025538281c7cfd508b8c2ded0d168b5bca386fbb2226ed51b07d65431efc",
+          "wav_duration_sec": 23.579863945578232,
+          "wav_rms": 0.09133301094273162,
+          "wav_peak": 0.6,
+          "n_phonemes": 39,
+          "dual_encoding_diverged": true,
+          "stage3_mode": "reflow_multi_speaker",
+          "stage3_depth": 0.6,
+          "stage3_steps": 20,
+          "stage3_speaker": "ritsu"
+        },
+        "umi": {
+          "wav_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/s1_gate_5k/r5_regress/reflow_5k/step_5000/gate_umi_ritsu.wav",
+          "wav_sha256": "f17b31efd3c2ba5e663f78ffe4db3d8745d5bd166424cf4db40d361ce1d07a28",
+          "wav_duration_sec": 11.110748299319727,
+          "wav_rms": 0.09258492046813038,
+          "wav_peak": 0.6,
+          "n_phonemes": 19,
+          "dual_encoding_diverged": true,
+          "stage3_mode": "reflow_multi_speaker",
+          "stage3_depth": 0.6,
+          "stage3_steps": 20,
+          "stage3_speaker": "ritsu"
+        }
+      }
+    },
+    "pjs": {
+      "step": 5000,
+      "acoustic_encoding_mode": "own (s1_ritsu_pjs_acoustic_v1.phonemes.json)",
+      "acoustic_onnx_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/s1_gate_5k/r5_regress/reflow_5k_pjs/onnx_gate_5000/acoustic.onnx",
+      "input_sha256": {
+        "ckpt": "e537b94c839960583e82fc81553d1ace74abcedfee52a8d40dbbfaba27424a19",
+        "train_config_yaml": "b5369fc84381c6c8bd8226fb5d6a3865300aaf2fc7bf7837cf35dfdda82cf4fa",
+        "acoustic_onnx": "430797a2f05513acece79eb46655b7b32de932fb1928fad559432b3f5e1a2937",
+        "acoustic_phonemes_json": "31e6778bcc1e3f1fc28330b4ec1fb6e459512bcfd0dfd815ad3cc8855ee989ea",
+        "acoustic_dsconfig_yaml": "66cc1a94a9cf18a7c1f851e5dd5fe2d7aa51d3dba2e62cb521c49282ad6a7058",
+        "speaker_embed": "5c2f1217df79f12792647394cbf7584ebd986d7d00259ed73b9a2e1046b1f7bc",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "canon_phonemes_txt": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
+      "sampling_params": {
+        "seed": 42,
+        "speaker": "pjs",
+        "reflow_sampling_steps_constant": 20
+      },
+      "results": {
+        "sakura": {
+          "wav_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/s1_gate_5k/r5_regress/reflow_5k_pjs/step_5000/gate_sakura_pjs.wav",
+          "wav_sha256": "b84a4e18cc59c3bba0470b965528e2703c8fb59cb9b4b826327b35fa70308a39",
+          "wav_duration_sec": 23.579863945578232,
+          "wav_rms": 0.07998039178156052,
+          "wav_peak": 0.6,
+          "n_phonemes": 39,
+          "dual_encoding_diverged": true,
+          "stage3_mode": "reflow_multi_speaker",
+          "stage3_depth": 0.6,
+          "stage3_steps": 20,
+          "stage3_speaker": "pjs"
+        },
+        "umi": {
+          "wav_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/1c025cfe-cb3e-592b-b577-d0be9640c799/scratchpad/s1_gate_5k/r5_regress/reflow_5k_pjs/step_5000/gate_umi_pjs.wav",
+          "wav_sha256": "6eedc9739f9eb898d1bcd9abe9915653796db14253c7383848782189fc53714c",
+          "wav_duration_sec": 11.110748299319727,
+          "wav_rms": 0.07095381295173646,
+          "wav_peak": 0.6,
+          "n_phonemes": 19,
+          "dual_encoding_diverged": true,
+          "stage3_mode": "reflow_multi_speaker",
+          "stage3_depth": 0.6,
+          "stage3_steps": 20,
+          "stage3_speaker": "pjs"
+        }
+      }
+    }
+  }
+}

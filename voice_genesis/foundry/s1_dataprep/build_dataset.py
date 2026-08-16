@@ -21,7 +21,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 # AP/SP は DiffSinger の `PhonemeDictionary` が自動登録する特殊トークンであり、
 # 辞書ファイルへは含めない（`s1a_conversion_record.md` §3 / `s1b_dataset_record.md`
@@ -353,23 +353,31 @@ def build_config_yaml(
     dict_path: Path,
     binary_data_dir: Path,
     speakers: Sequence[Tuple[str, int, Path, Sequence[str]]],
+    path_fmt: "Callable[[Path], str]" = str,
 ) -> str:
     """`scripts/binarize.py --config <this>` にそのまま渡せる acoustic config
     を組み立てる（`s1b_multispeaker_acoustic_config.yaml` と同一構造）。
     `speakers` は `(speaker_name, spk_id, raw_data_dir, test_prefixes)` の列。
+
+    `path_fmt`（review #263 R12 P2 新設）: `dict_path`/`raw_data_dir`/
+    `binary_data_dir` の 3 パスフィールドをどう文字列化するかを差し替える
+    フック。既定 `str` は従来どおり絶対パスをそのまま書く（実行時 config は
+    走行中の学習・binarize が参照するため無変更を維持する）。ハッシュ用の
+    正規化コピー（`build_normalized_config_yaml`）はこれを実行者 home 非依存の
+    表現へ差し替えるために使う。
     """
     lines: List[str] = []
     lines.append("base_config:")
     lines.append("  - configs/acoustic.yaml")
     lines.append("")
     lines.append("dictionaries:")
-    lines.append(f"  ja: {dict_path}")
+    lines.append(f"  ja: {path_fmt(dict_path)}")
     lines.append("extra_phonemes: []")
     lines.append("merged_phoneme_groups: []")
     lines.append("")
     lines.append("datasets:")
     for name, spk_id, raw_dir, prefixes in speakers:
-        lines.append(f"  - raw_data_dir: {raw_dir}")
+        lines.append(f"  - raw_data_dir: {path_fmt(raw_dir)}")
         lines.append(f"    speaker: {name}")
         lines.append(f"    spk_id: {spk_id}")
         lines.append("    language: ja")
@@ -377,7 +385,7 @@ def build_config_yaml(
         for p in prefixes:
             lines.append(f"      - {p}")
     lines.append("")
-    lines.append(f"binary_data_dir: {binary_data_dir}")
+    lines.append(f"binary_data_dir: {path_fmt(binary_data_dir)}")
     lines.append("")
     lines.append("# CPU-only, checkpoint-free feature extraction")
     lines.append("# (S1a/S1b と同じ理由: hnsep 既定 'vr' は checkpoints/vr/model.pt を")
@@ -395,6 +403,31 @@ def build_config_yaml(
     lines.append("  num_workers: 0")
     lines.append("")
     return "\n".join(lines)
+
+
+def normalize_path_field(path: Path, config_dir: Path) -> str:
+    """review #263 R12 P2: config のパスフィールド（dictionary/raw_data_dir/
+    binary_data_dir）を、ハッシュ対象として実行者 home に依存しない形へ
+    正規化する。
+
+    `config_dir`（正規化コピー自身の所在）の子孫であれば `..` を含まない
+    相対パスへ変換する（`$OUT` 配下に config・辞書・raw dir・binary dir が
+    すべて収まる runbook §3 の標準レイアウトでは、`$OUT` の絶対位置に関わらず
+    常に同一の相対パスになる）。子孫でない（`..` で始まる = config の外へ
+    出る）場合は、実行者ごとに `..` の段数が変わり得て digest がやはり
+    executor 依存になるため、basename のみを埋め込んだ固定プレースホルダへ
+    落とす。
+    """
+    resolved_path = path.resolve()
+    resolved_config_dir = config_dir.resolve()
+    try:
+        rel = os.path.relpath(resolved_path, start=resolved_config_dir)
+    except ValueError:
+        # 異なるドライブ (Windows) 等、relpath 自体が計算不能な場合。
+        return f"<EXTERNAL_PATH:{resolved_path.name}>"
+    if rel.split(os.sep, 1)[0] == os.pardir:
+        return f"<EXTERNAL_PATH:{resolved_path.name}>"
+    return rel.replace(os.sep, "/")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -441,13 +474,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ritsu_prefixes = select_test_prefixes(ritsu_rows, args.n_test_prefixes)
     pjs_prefixes = select_test_prefixes(pjs_rows, args.n_test_prefixes)
 
+    speakers = [
+        ("ritsu", 0, args.ritsu_raw_dir, ritsu_prefixes),
+        ("pjs", 1, args.pjs_raw_dir, pjs_prefixes),
+    ]
     config_text = build_config_yaml(
         dict_path=args.out_dict,
         binary_data_dir=args.binary_data_dir,
-        speakers=[
-            ("ritsu", 0, args.ritsu_raw_dir, ritsu_prefixes),
-            ("pjs", 1, args.pjs_raw_dir, pjs_prefixes),
-        ],
+        speakers=speakers,
+    )
+
+    # review #263 R12 P2: 実行時 config (`args.out_config` へ公開する上記
+    # `config_text`) は絶対パス（dictionary/raw_data_dir/binary_data_dir）を
+    # 含んだまま無変更で維持する（走行中の学習・binarize が実際に参照する
+    # ファイルのため、パス形式を変えると互換性を壊す）。ハッシュ用にのみ、
+    # パスフィールドを config 自身の所在からの相対 / 固定プレースホルダへ
+    # 正規化した別コピー `<out-config>.normalized.yaml` を追加で書き出す
+    # （§3.1 の manifest はこちらを pin する — 実効 config の内容は同一だが、
+    # 実行者の home ディレクトリ配置に digest が左右されなくなる）。
+    normalized_config_path = args.out_config.with_name(args.out_config.name + ".normalized.yaml")
+    config_dir = args.out_config.parent
+    normalized_config_text = build_config_yaml(
+        dict_path=args.out_dict,
+        binary_data_dir=args.binary_data_dir,
+        speakers=speakers,
+        path_fmt=lambda p: normalize_path_field(p, config_dir),
     )
 
     report = {
@@ -477,6 +528,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     outputs: List[Tuple[Path, str]] = [
         (args.out_dict, dict_text),
         (args.out_config, config_text),
+        (normalized_config_path, normalized_config_text),
     ]
     if args.report is not None:
         outputs.append((args.report, report_text + "\n"))
