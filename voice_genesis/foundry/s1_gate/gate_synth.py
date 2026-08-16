@@ -145,7 +145,26 @@ def load_song_module(song: str, singer_dir: Path):
     """楽曲モジュール読み込み。戻り値に実際に import したモジュールファイルの
     絶対パスも含める（PR #263 R6 レビュー指摘: gate summary の input_sha256 が
     合成実装そのもの — 本スクリプトと score.py/score_umi.py — の変更を検出
-    できなかったため、呼び出し側でこのパスを sha256 化して記録する）。"""
+    できなかったため、呼び出し側でこのパスを sha256 化して記録する）。
+
+    [P2 修正] (review #264 R1) `import score as sc` は `sys.modules` に既に
+    同名モジュールがキャッシュされている場合、`sys.path` を書き換えても
+    キャッシュされたモジュールオブジェクトをそのまま返すだけで
+    `singer_dir` 配下の現在のファイル内容を一切再読込しない
+    （Python の import 文の仕様）。呼び出し側（`cmd_run`）はこの関数の
+    呼び出し *前* に対象ファイルを直接 `sha256_file()` で読んで pin して
+    いるため、同名モジュールが別 `singer_dir`（または以前の呼び出し）から
+    既にキャッシュされていると、pin されたハッシュ（＝ディスク上の最新
+    内容）と実際に import されて合成に使われるコード（＝キャッシュされた
+    旧内容）が食い違う「ハッシュ偽装」が成立し得る。import 前に該当
+    モジュール名を `sys.modules` から evict し、常に現在の `sys.path`
+    （直前に挿入した `singer_dir`）からファイルを再ロードさせることで
+    これを封じる。
+    """
+    module_name = "score" if song == "sakura" else "score_umi" if song == "umi" else None
+    if module_name is None:
+        raise ValueError(f"unknown song: {song}")
+    sys.modules.pop(module_name, None)
     sys.path.insert(0, str(singer_dir))
     if song == "sakura":
         import score as sc  # noqa: E402  (read-only import from repo)

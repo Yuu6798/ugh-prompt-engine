@@ -110,10 +110,11 @@ DEFAULT_LANG_DEF = {
 # `pjsNNN` ディレクトリ自体を丸ごと落とした場合も検出できる。
 PJS_EXPECTED_IDS: Tuple[str, ...] = tuple(f"pjs{i:03d}" for i in range(1, 101))
 
-# fix (2026-08-16, s1_poison_scan 捜査結果を受けての導入): 4/287 PJS セグメント
-# （pjs004_seg003 / pjs016_seg000 / pjs029_seg002 / pjs030_seg001）で、
-# `db_converter.py` が書き出す `transcriptions.csv` の申告 ph_dur 合計が実
-# `.wav` 長の 1.37〜1.89 倍という構造不良が判明した。
+# fix (2026-08-16, s1_poison_scan 捜査結果を受けての導入。review #264 R1 P1
+# で修復方式を是正): 5/287 PJS セグメント（pjs004_seg003 / pjs016_seg000 /
+# pjs029_seg002 / pjs030_seg001 / pjs031_seg001）で、`db_converter.py` が
+# 書き出す `transcriptions.csv` の申告 ph_dur 合計が実 `.wav` 長を
+# 1.10〜1.89 倍超過する構造不良が判明した。
 #
 # 原因（本 clone の `process_lab_wav_pair()` を精読して特定): 同関数は
 # `.lab` の時刻をそのまま `segment.to_lengths_string()` 経由で ph_dur として
@@ -123,16 +124,30 @@ PJS_EXPECTED_IDS: Tuple[str, ...] = tuple(f"pjs{i:03d}" for i in range(1, 101))
 # 実音声の終端でクランプするため、ph_dur は「本来あるべきだった長さ」を、
 # wav は「実際に存在した音声」を報告し、両者が食い違う。
 #
-# 実測（4件全数）: 末尾フォノーム（全件 SP）を除いた残り ph_dur 合計だけでも
-# 実 wav 長を 14〜34ms 超過する 3 件（pjs004/pjs029/pjs030、フレーム量子化
-# ≈timestep 11.61ms 相当の丸め誤差域）と、226ms（+5.4%）超過する 1 件
-# （pjs016_seg000）がある。後者は「末尾 SP だけを実長に合わせて再計算」では
-# 許容誤差内に収まらない（末尾以外にも実 wav 長を超える申告が残る）ため、
-# 末尾集中の是正ではなく全 ph_dur を比例縮小して合計を実 wav 長へ正規化する
-# 方式を採る（`build_dataset.py` `check_ph_dur_duration` と同一閾値 —
-# 相対5% or 絶対0.1sの大きい方。両ファイルとも既存の record スクリプト群の
-# 慣例に倣い、共有モジュール新設ではなく値を直接コピペする）。閾値内の行は
-# 完全無変更のまま返す（283 件の既知良好セグメントは byte 単位で不変）。
+# [P1 修正] (review #264 R1) 当初実装は全 ph_dur を wav_dur/total で比例
+# 縮小し合計を実 wav 長へ正規化していたが、これは原因（末尾クランプ）とは
+# 無関係な EOF（実音声終端）以前の正しい音素境界まで一様にズラしてしまう
+# 副作用を持つ。原因の構造上、乖離は常に「実 wav 終端より後ろ」の申告時刻に
+# 集中しており、終端以前の申告時刻はそもそも正しい。したがって EOF を跨ぐ
+# 末尾側の音素だけを切り詰め/ゼロ化し、それ以前の境界は完全無変更のまま
+# 返す方式（`_truncate_ph_dur_tail_to_wav_duration`）へ変更する。
+#
+# 実測（5件全数、末尾からの累積で EOF 跨ぎ位置を特定): pjs004/pjs029/
+# pjs030/pjs031 は末尾 1 音素（全件 SP）がゼロ化されるのみで、EOF を跨ぐ
+# 直前音素への浸食は 14〜34ms（フレーム量子化 ≈timestep 11.61ms 相当の
+# 丸め誤差域、pjs031 のみ EOF 跨ぎが最終音素自体でゼロ化対象なし）。
+# pjs016_seg000 のみ末尾から 2 番目の母音（"u"）が 226ms（+5.4%）短縮され
+# 末尾 SP がゼロ化される（旧実装のコメントが「末尾 SP だけの補正では
+# 収まらない」としていたのはこの 1 音素浸食を指しており、比例縮小の根拠には
+# ならない — 前方の音素境界は本方式でも一切ズレない）。
+#
+# 申告合計が実 wav 長を下回る場合（本コーパスでは未観測）も対称に扱い、
+# 末尾音素の長さを補って合計を一致させる（前方境界は同様に無変更）。
+#
+# 閾値判定自体は `build_dataset.py` `check_ph_dur_duration` と同一（相対5%
+# or 絶対0.1sの大きい方。両ファイルとも既存の record スクリプト群の慣例に
+# 倣い、共有モジュール新設ではなく値を直接コピペする）。閾値内の行は完全
+# 無変更のまま返す（282 件の既知良好セグメントは byte 単位で不変）。
 DURATION_REL_TOLERANCE = 0.05
 DURATION_ABS_TOLERANCE_SEC = 0.1
 
@@ -152,15 +167,61 @@ def _wav_duration_seconds(path: Path) -> Optional[float]:
         return None
 
 
+def _truncate_ph_dur_tail_to_wav_duration(
+    ph_dur: List[float], wav_dur: float
+) -> Tuple[List[float], int]:
+    """`ph_dur`（先頭からの各音素長 秒、開始時刻0の累積列）を、末尾側だけを
+    調整して合計が実 wav 長 `wav_dur` に一致するようにした新しいリストを
+    返す（[P1 修正] review #264 R1）。
+
+    先頭からの累積時刻が `wav_dur` に達するまでの音素は完全無変更で返す
+    （＝前方の音素境界を一切ズラさない）。累積時刻が `wav_dur` を跨ぐ音素
+    （EOF 跨ぎ）は、そこでちょうど `wav_dur` に達するよう長さを切り詰める。
+    それより後ろの音素（EOF より完全に後ろ）は 0 にする（実質削除。ただし
+    `ph_seq`/`ph_num`/`note_seq`/`note_dur` と行内で 1:1 対応する配列の
+    ため、要素自体は削除せず長さ 0 で保持する）。
+
+    申告合計が `wav_dur` に届かない場合（本コーパスでは未観測だが対称に
+    扱う）は、最後の音素の長さへ不足分を加算して合計を一致させる（この
+    場合も前方の音素境界は無変更）。
+
+    2 個目の戻り値は EOF 跨ぎ以降で長さが変化した音素の個数（ログ用。
+    跨ぎ音素自体 + ゼロ化された後続音素の合計。申告合計が届かず末尾を
+    延長したケースでは 1）。
+    """
+    result = list(ph_dur)
+    cum = 0.0
+    crossed_at: Optional[int] = None
+    for i, d in enumerate(ph_dur):
+        if crossed_at is not None:
+            result[i] = 0.0
+            continue
+        if cum + d > wav_dur:
+            result[i] = wav_dur - cum
+            crossed_at = i
+            cum = wav_dur
+        else:
+            cum += d
+    if crossed_at is not None:
+        n_touched = len(ph_dur) - crossed_at
+    elif cum < wav_dur:
+        result[-1] += wav_dur - cum
+        n_touched = 1
+    else:
+        n_touched = 0
+    return result, n_touched
+
+
 def normalize_ph_dur_to_wav_duration(
     rows: List[Dict[str, str]], wav_dir: Path
 ) -> Tuple[List[Dict[str, str]], List[str]]:
     """各行の ph_dur 合計が実 wav 長と許容誤差（相対5% or 絶対0.1sの大きい方）
-    を超えて乖離している場合、全 ph_dur を比例縮小/拡大して合計を実 wav 長へ
-    正規化した新しい行のリストを返す。乖離が許容内の行は同一オブジェクトの
-    まま（内容も無変更で）返す。2 個目の戻り値は正規化を適用した行の
-    人間可読ログ（適用 0 件なら空リスト。呼び出し側はこれを CSV 再公開の
-    要否判定に使う）。
+    を超えて乖離している場合、末尾側だけを切り詰め/延長して合計を実 wav 長へ
+    正規化した新しい行のリストを返す（`_truncate_ph_dur_tail_to_wav_duration`
+    参照。前方の音素境界は一切変更しない — [P1 修正] review #264 R1）。乖離が
+    許容内の行は同一オブジェクトのまま（内容も無変更で）返す。2 個目の戻り値
+    は正規化を適用した行の人間可読ログ（適用 0 件なら空リスト。呼び出し側は
+    これを CSV 再公開の要否判定に使う）。
     """
     fixed_rows: List[Dict[str, str]] = []
     fix_log: List[str] = []
@@ -183,8 +244,7 @@ def normalize_ph_dur_to_wav_duration(
         if diff <= tol:
             fixed_rows.append(row)
             continue
-        scale = wav_dur / total
-        new_ph_dur = [d * scale for d in ph_dur]
+        new_ph_dur, n_touched = _truncate_ph_dur_tail_to_wav_duration(ph_dur, wav_dur)
         new_row = dict(row)
         # `str(round(x, 12))` は `db_converter.py` `to_lengths_string()` と
         # 同じ書式（元 ph_dur の生成に使われている書式に揃える）。
@@ -192,7 +252,8 @@ def normalize_ph_dur_to_wav_duration(
         fixed_rows.append(new_row)
         fix_log.append(
             f"{row['name']}: ph_dur total {total:.4f}s -> {math.fsum(new_ph_dur):.4f}s "
-            f"(wav duration {wav_dur:.4f}s, scale {scale:.4f})"
+            f"(wav duration {wav_dur:.4f}s, tail-truncated: {n_touched} trailing "
+            "phoneme(s) adjusted, forward boundaries preserved)"
         )
     return fixed_rows, fix_log
 
@@ -680,10 +741,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
                 return 1
 
-            # fix (2026-08-16): ph_dur 合計と実 wav 長が許容誤差を超えて乖離する
-            # 行（s1_poison_scan 捜査で判明した4件）を、比例縮小/拡大した ph_dur
-            # で正規化する。乖離が許容内の行は無変更のため、正規化対象が皆無
-            # なら CSV は書き換えない（bytewise 不変を保つ）。
+            # fix (2026-08-16, review #264 R1 P1 で修復方式を是正): ph_dur
+            # 合計と実 wav 長が許容誤差を超えて乖離する行（s1_poison_scan
+            # 捜査で判明した5件）を、末尾側だけを切り詰め/延長した ph_dur で
+            # 正規化する（前方の音素境界は無変更 —
+            # `_truncate_ph_dur_tail_to_wav_duration` 参照）。乖離が許容内の
+            # 行は無変更のため、正規化対象が皆無なら CSV は書き換えない
+            # （bytewise 不変を保つ）。
             out_wav_dir = build_dir / "diffsinger_db" / "wavs"
             out_rows, ph_dur_fix_log = normalize_ph_dur_to_wav_duration(out_rows, out_wav_dir)
             if ph_dur_fix_log:

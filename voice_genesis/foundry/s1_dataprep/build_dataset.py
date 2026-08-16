@@ -593,7 +593,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument(
         "--strict-duration", action="store_true",
-        help="ph_dur 合計と実 wav 長の乖離（相対5% or 絶対0.1sの大きい方を超過）を"
+        help="ph_dur 合計と実 wav 長の乖離（相対5%% or 絶対0.1sの大きい方を超過）を"
              "warning ではなく problem として扱い、検証を fail させる。"
              "既定 (指定なし) は warning のみで公開は継続する "
              "(現行 PJS 素材で 4 件が既知違反のため)。",
