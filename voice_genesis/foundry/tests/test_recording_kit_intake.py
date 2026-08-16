@@ -96,6 +96,22 @@
   パス系文字列は非空）まで拡張することで解消。台帳検証階層は「schema 完全
   一致 (R13) → entries リスト (R13) → エントリ必須フィールド/型 (R19) →
   値不変条件 (R22)」で完結する
+- R23 P2 (intake.py:954): `process_one` の非正 duration 拒否は正規化後 wav
+  の生の長さしか見ておらず、生値が正でも台帳へ書き込む丸め後の値
+  (`round(duration_sec, 3)`) が 0.0 になる場合（0.5ms 未満の録音。例:
+  0.0004 秒）はそのまま台帳へ記録・公開していた。台帳が自身の validator
+  （`_validate_ledger_entry` の duration_sec > 0 不変条件）に違反した
+  エントリを含んだまま公開され、次回 append の `load_ledger()` が
+  `LedgerSchemaError` で fail する false-success を招く。丸め後の値にも
+  同じ非正・非有限検査を適用することで解消（他の丸め対象フィールド
+  `rms_dbfs`/`peak_dbfs` は丸めても有限性が保たれるため同型の穴は無い）
+- R23 P2 (intake.py:557): append 実行時、旧実装は既存台帳のエントリ単位
+  検証（R19/R22）が `sha256`/`normalized_path` の構文的妥当性しか見ておら
+  ず、公開済みの正規化 wav が外部から削除・差し替えられていても検出でき
+  なかった。ロック取得後・変換開始前の preflight として、既存台帳の全
+  エントリについて `normalized_path` の実在と実バイト列 sha256 の一致を
+  検証し、欠損・不一致は `LedgerArtifactIntegrityError` で fail-closed
+  拒否することで解消（`_check_existing_artifacts`）
 """
 from __future__ import annotations
 
@@ -1038,11 +1054,24 @@ def test_run_restores_previous_ledger_when_interrupted_right_after_save_ledger_r
     (incoming_dir / "UC-002.wav").write_bytes(b"new donor bytes")
 
     out_dir = tmp_path / "out"
+    out_dir.mkdir()
     ledger_path = tmp_path / "user_donor_ledger.json"
 
+    # R23 P2 対応: `run()` は preflight で既存台帳の全エントリについて
+    # `normalized_path` の実在と sha256 一致を検証する
+    # （`_check_existing_artifacts`）ため、この既存エントリも実在する実体を
+    # 指す必要がある（本テストの関心事は台帳バイト列の巻き戻しであり、
+    # このプレイトの通過はその前提）。
+    existing_wav = out_dir / "UC-001.norm24k.wav"
+    existing_wav.write_bytes(b"existing published donor wav bytes")
     previous_ledger = {
         "schema": intake.LEDGER_SCHEMA,
-        "entries": [_valid_ledger_entry_dict()],
+        "entries": [
+            _valid_ledger_entry_dict(
+                normalized_path=str(existing_wav),
+                sha256=intake.sha256_of(existing_wav),
+            )
+        ],
     }
     intake.save_ledger(ledger_path, previous_ledger)
     previous_ledger_bytes = ledger_path.read_bytes()
@@ -1062,8 +1091,10 @@ def test_run_restores_previous_ledger_when_interrupted_right_after_save_ledger_r
         "save_ledger() 成功直後の中断でも、台帳は公開フェーズ開始前の内容へ"
         "復元されなければならない"
     )
-    assert _published_entries(out_dir) == [], (
-        "台帳と同様、公開済み wav も巻き戻されていなければならない"
+    assert _published_entries(out_dir) == [existing_wav], (
+        "このバッチが公開した wav（UC-002）は巻き戻され、公開フェーズ開始前から"
+        "存在した既存 wav（UC-001、`_check_existing_artifacts` の対象）だけが"
+        "残っていなければならない"
     )
 
 
@@ -1956,3 +1987,215 @@ def test_run_rejects_publish_when_existing_ledger_has_invalid_entry_value(
     assert normalize_calls == [], "既存台帳のエントリが不正な場合は変換を一切開始してはならない"
     assert _published_entries(out_dir) == []
     assert ledger_path.read_bytes() == ledger_bytes_before, "既存の壊れた台帳自体は書き換えられない"
+
+
+# ---------------------------------------------------------------------------
+# R23 P2 (1/2): 丸め後 duration_sec が 0 になる境界ケースの拒否
+# ---------------------------------------------------------------------------
+
+
+def _fake_normalize_to_wav_with_frame_count(
+    monkeypatch: pytest.MonkeyPatch, frame_count: int
+) -> None:
+    """`normalize_to_wav` を、入力に関わらず `frame_count` フレームぶんの
+    無音 wav を書き出す偽実装へ差し替える（`duration_sec` の丸め境界を
+    ぴったり作るため。R23 P2）。
+    """
+
+    def _fake(src: Path, dst: Path) -> None:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(dst), "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(intake.TARGET_SAMPLE_RATE)
+            f.writeframes(b"\x00\x00" * frame_count)
+
+    monkeypatch.setattr(intake, "normalize_to_wav", _fake)
+
+
+def test_process_one_rejects_duration_rounding_to_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`process_one()`: 生の `duration_sec` は正だが、台帳へ書き込む丸め後の
+    値 (`round(duration_sec, 3)`) が 0.0 になる場合（0.5ms 未満の録音）も
+    `NonPositiveDurationError` で fail-closed 拒否する（R23 P2 の再現）。
+
+    10 フレーム / 24000Hz = 0.0004166...秒（生値は正だが `round(x, 3) == 0.0`）。
+    """
+    _fake_normalize_to_wav_with_frame_count(monkeypatch, frame_count=10)
+
+    src = tmp_path / "incoming" / "UC-001.wav"
+    src.parent.mkdir()
+    _write_fake_source(src, seed=1)
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(intake.NonPositiveDurationError):
+        intake.process_one(src, staging_dir, "UC-001.norm24k.wav", out_dir)
+
+
+def test_process_one_accepts_duration_at_or_above_one_millisecond(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """境界の反対側の回帰: 24 フレーム / 24000Hz = 0.001 秒ちょうどは丸め後も
+    正のため受理される（R23 P2 で拡張した検査が過剰拒否していないことの
+    確認）。
+    """
+    _fake_normalize_to_wav_with_frame_count(monkeypatch, frame_count=24)
+
+    src = tmp_path / "incoming" / "UC-001.wav"
+    src.parent.mkdir()
+    _write_fake_source(src, seed=1)
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    out_dir = tmp_path / "out"
+
+    entry = intake.process_one(src, staging_dir, "UC-001.norm24k.wav", out_dir)
+
+    assert entry.duration_sec == pytest.approx(0.001)
+
+
+def test_run_rejects_duration_rounding_to_zero_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run()` E2E: 丸め後 `duration_sec` が 0 になる正規化後 wav を生む
+    incoming ファイルはバッチ全体を fail-closed 拒否し、台帳・out_dir の
+    いずれにも記録・公開されない（R23 P2 の再現）。
+    """
+    _fake_normalize_to_wav_with_frame_count(monkeypatch, frame_count=10)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"donor bytes yielding sub-millisecond output")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    with pytest.raises(intake.NonPositiveDurationError):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert not ledger_path.exists()
+    assert _published_entries(out_dir) == []
+
+
+# ---------------------------------------------------------------------------
+# R23 P2 (2/2): append 時の既存正規化 wav 実体照合
+# ---------------------------------------------------------------------------
+
+
+def test_check_existing_artifacts_accepts_healthy_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_check_existing_artifacts()`: 実体が揃っている健全な台帳は無音で
+    通過する（R23 P2 の正常系回帰）。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"first donor bytes")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    intake.run(incoming_dir, out_dir, ledger_path)
+
+    ledger = intake.load_ledger(ledger_path)
+    intake._check_existing_artifacts(ledger, ledger_path)  # 例外を送出しなければ成功
+
+
+def test_run_rejects_append_when_existing_normalized_wav_is_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run()` E2E: 1 回目の intake で公開済みの正規化 wav が外部から削除
+    された状態で 2 回目（追記）を実行すると、変換を始める前の preflight で
+    `LedgerArtifactIntegrityError` により fail-closed 拒否する（R23 P2 の
+    再現。指摘の実例 ①: 欠損）。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    first_incoming = tmp_path / "incoming1"
+    first_incoming.mkdir()
+    (first_incoming / "UC-001.wav").write_bytes(b"first donor bytes")
+    intake.run(first_incoming, out_dir, ledger_path)
+
+    published = _published_entries(out_dir)
+    assert len(published) == 1
+    published[0].unlink()
+
+    second_incoming = tmp_path / "incoming2"
+    second_incoming.mkdir()
+    (second_incoming / "UC-002.wav").write_bytes(b"second donor bytes")
+
+    with pytest.raises(intake.LedgerArtifactIntegrityError):
+        intake.run(second_incoming, out_dir, ledger_path)
+
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 1, "既存の壊れたエントリが増殖して二重に記録されてはならない"
+    assert _published_entries(out_dir) == [], "拒否後は 2 回目バッチの wav も公開されてはならない"
+
+
+def test_run_rejects_append_when_existing_normalized_wav_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run()` E2E: 1 回目の intake で公開済みの正規化 wav が外部から異なる
+    バイト列へ差し替えられた状態で 2 回目（追記）を実行すると、sha256
+    不一致を検出して `LedgerArtifactIntegrityError` で fail-closed 拒否する
+    （R23 P2 の再現。指摘の実例 ②: 差し替え）。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    first_incoming = tmp_path / "incoming1"
+    first_incoming.mkdir()
+    (first_incoming / "UC-001.wav").write_bytes(b"first donor bytes")
+    intake.run(first_incoming, out_dir, ledger_path)
+
+    published = _published_entries(out_dir)
+    assert len(published) == 1
+    published[0].write_bytes(b"tampered bytes that do not match the recorded sha256")
+
+    second_incoming = tmp_path / "incoming2"
+    second_incoming.mkdir()
+    (second_incoming / "UC-002.wav").write_bytes(b"second donor bytes")
+
+    with pytest.raises(intake.LedgerArtifactIntegrityError):
+        intake.run(second_incoming, out_dir, ledger_path)
+
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 1
+    assert len(_published_entries(out_dir)) == 1, (
+        "拒否後は既存の（差し替えられたままの）ファイル以外は公開されてはならない"
+    )
+
+
+def test_run_appends_second_batch_when_existing_artifacts_are_healthy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run()` E2E 正常系: 既存の公開済み正規化 wav が無傷であれば、
+    `_check_existing_artifacts` の preflight を通過して 2 回目のバッチも
+    通常通り追記される（R23 P2 が健全な append を壊していないことの確認）。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    first_incoming = tmp_path / "incoming1"
+    first_incoming.mkdir()
+    (first_incoming / "UC-001.wav").write_bytes(b"first donor bytes")
+    intake.run(first_incoming, out_dir, ledger_path)
+
+    second_incoming = tmp_path / "incoming2"
+    second_incoming.mkdir()
+    (second_incoming / "UC-002.wav").write_bytes(b"second donor bytes")
+    second_entries = intake.run(second_incoming, out_dir, ledger_path)
+
+    assert len(second_entries) == 1
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 2

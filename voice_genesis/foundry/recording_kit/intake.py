@@ -126,6 +126,26 @@ intake プロセスが並行実行されると、両方が同じ旧台帳を読�
 で即座に fail-closed 拒否する。残置ポリシー（`unlink` しない）・
 `_check_ledger_path_collisions` の予約物除外の考え方は `<ledger>.lock` と
 同じ（`_out_dir_lock_path` 参照）。
+
+`duration_sec` の非正/非有限検査（`NonPositiveDurationError`）は、正規化
+後 wav の生の長さだけでなく、台帳へ実際に書き込む丸め後の値
+（`round(duration_sec, 3)`）にも適用する（R23 P2 対応）。ffmpeg が
+0.0005 秒未満の正の長さの WAV しか生成しなかった場合、生値は非正チェックを
+素通りするが丸め後は `duration_sec: 0.0` となり、`_validate_ledger_entry`
+自身の duration_sec > 0 不変条件に違反したエントリのまま公開されてしまう
+（見かけ上成功した intake が次回 append の `load_ledger()` を fail させる
+false-success。`process_one` 参照）。
+
+append 実行（既存台帳へのエントリ追記）時は、実際の変換（`process_one`）を
+始める前の preflight として、既存台帳の全エントリについて `normalized_path`
+が指す正規化 wav の実在と、実バイト列 sha256 が台帳記録値と一致することを
+検証する（`_check_existing_artifacts` 参照。R23 P2 対応）。`_validate_
+ledger_entry` は `sha256`/`normalized_path` の構文的妥当性しか検証しない
+ため、公開済みの正規化 wav が `run()` の外側で削除・差し替えられていても
+`load_ledger()` は通過してしまう。この検証はロック（`<ledger>.lock` →
+`<out_dir>/.intake.lock`）取得後・変換開始前に行うため、検証後に他プロセスが
+実体を差し替えるレースは out_dir ロックが構造的に防ぐ。欠損・不一致は
+`LedgerArtifactIntegrityError` で列挙付き fail-closed 拒否する。
 """
 from __future__ import annotations
 
@@ -209,6 +229,13 @@ class NonPositiveDurationError(RuntimeError):
     台帳へ記録・公開していた。`convert_pjs.py`/`build_dataset.py` の
     「非正 duration は無条件で不正」という意味論と揃え、台帳エントリの
     構築・公開の前に fail-closed 拒否する。
+
+    R23 P2 対応で検査を拡張: 生値が正でも、台帳へ実際に書き込む丸め後の
+    値（`round(duration_sec, 3)`）が 0 になる場合（0.5ms 未満の録音）も
+    同じ例外で拒否する（`process_one` 参照）。丸め後 0.0 のまま公開すると
+    台帳が自身の validator（`_validate_ledger_entry` の duration_sec > 0
+    不変条件）に違反した状態になり、次回 append の `load_ledger()` が
+    `LedgerSchemaError` で失敗する false-success を防ぐ。
     """
 
 
@@ -232,6 +259,23 @@ class DuplicateSourceError(RuntimeError):
     再録」＝バイト列が異なる場合と「重複送付」＝バイト列が同一の場合の
     区別を失う）。`_check_duplicate_sources` が staging → `out_dir` への
     一括公開より前に検査し、重複があれば部分公開せず fail-closed 拒否する。
+    """
+
+
+class LedgerArtifactIntegrityError(RuntimeError):
+    """既存台帳のエントリが指す `normalized_path` の実体が欠損している、
+    または実バイト列の sha256 が台帳記録値と一致しない場合に送出する
+    （R23 P2 対応）。
+
+    `_validate_ledger_entry` は `sha256`/`normalized_path` について
+    「64 桁の小文字 hex 文字列である」「非空文字列である」という構文的
+    妥当性しか検証しておらず、公開済みの正規化 wav が削除・差し替えられた
+    後でも台帳自体は妥当な形として通過してしまう。この状態で append を
+    実行すると、`run()` は実体との不整合に気づかないまま既存エントリを
+    含んだ台帳を再公開し、壊れた/偽の provenance を固定化してしまう
+    （旧実装は sha256 の再計算を一切行わなかった）。`_check_existing_
+    artifacts` が append 実行時の preflight として全既存エントリを
+    検証し、欠損・不一致があれば公開全体を fail-closed 拒否する。
     """
 
 
@@ -879,6 +923,59 @@ def _check_duplicate_sources(entries: List[LedgerEntry], ledger: dict) -> None:
         )
 
 
+def _check_existing_artifacts(ledger: dict, ledger_path: Path) -> None:
+    """append 実行時の preflight として、既存台帳の全エントリについて
+    `normalized_path` が指す正規化 wav の実在と、実バイト列 sha256 が台帳
+    記録値と一致することを検証する（R23 P2 対応）。
+
+    `_validate_ledger_entry` は `sha256`/`normalized_path` の構文的妥当性
+    （hex 文字列形式・非空文字列）しか検証しないため、公開済みの正規化 wav
+    が `run()` の外側で削除・差し替えられた場合でも `load_ledger()` は
+    通過してしまう。この状態で append すると、実体と食い違う既存エントリを
+    含んだまま台帳が再公開され、壊れた/偽の provenance が固定化される
+    （`LedgerArtifactIntegrityError` docstring 参照）。
+
+    `run()` はロック（`<ledger>.lock` → `<out_dir>/.intake.lock`）取得後・
+    変換（`process_one`）開始前に本関数を呼ぶ。out_dir ロック保持中に検査
+    するため、検査完了後に他プロセスが同じ正規化 wav を差し替えるレースは
+    ロックが構造的に防ぐ（本関数自体は out_dir へ一切書き込まない読み取り
+    専用の preflight）。コーパス規模（数十ファイル）では全既存エントリの
+    再ハッシュコスト（O(コーパス全体)）は無視できる。
+
+    欠損・不一致は、どのエントリがどう壊れているかを列挙した単一の例外で
+    公開全体を fail-closed 拒否する（`_check_duplicate_sources` と同様、
+    部分的な黙認はしない）。
+    """
+    problems: List[str] = []
+    for index, entry in enumerate(ledger.get("entries", [])):
+        source_filename = entry.get("source_filename", "<unknown>")
+        normalized_path = Path(entry["normalized_path"])
+        recorded_sha256 = entry["sha256"]
+        if not normalized_path.is_file():
+            problems.append(
+                f"- entries[{index}] ({source_filename}): normalized_path "
+                f"({normalized_path}) が存在しません（削除された可能性が"
+                f"あります）"
+            )
+            continue
+        actual_sha256 = sha256_of(normalized_path)
+        if actual_sha256 != recorded_sha256:
+            problems.append(
+                f"- entries[{index}] ({source_filename}): normalized_path "
+                f"({normalized_path}) の実バイト列 sha256 "
+                f"({actual_sha256[:12]}...) が台帳記録値 "
+                f"({recorded_sha256[:12]}...) と一致しません（差し替えられた"
+                f"可能性があります）"
+            )
+
+    if problems:
+        raise LedgerArtifactIntegrityError(
+            f"{ledger_path} の既存エントリに実体との不整合を検出したため "
+            f"append を拒否します（fail-closed。部分公開はしません。"
+            f"R23 P2 対応）:\n" + "\n".join(problems)
+        )
+
+
 def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) -> LedgerEntry:
     """`src` を `staging_dir/filename` へ正規化し、公開後の想定パスで台帳エントリを作る。
 
@@ -919,6 +1016,16 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
     「成功した intake」として記録される穴。`convert_pjs.py`/
     `build_dataset.py` の「非正 duration は無条件で不正」という意味論と
     揃える）。
+
+    この生値検査に加え、台帳へ実際に書き込む丸め後の値
+    (`round(duration_sec, 3)`) についても同じ 0 以下/非有限チェックを行う
+    （R23 P2 対応）。ffmpeg が 0.0005 秒未満の正の長さの WAV を生成した
+    場合、生値は非正チェックを素通りするが丸め後は `duration_sec: 0.0`
+    となり、`_validate_ledger_entry` 自身の duration_sec > 0 不変条件に
+    違反した状態のまま公開されてしまう（false-success で次回 append の
+    `load_ledger()` が失敗する）。他の丸め対象フィールド
+    (`rms_dbfs`/`peak_dbfs`) は丸めても有限性が保たれるため同型の穴は
+    無い — 不正値になり得るのは下限 0 を持つ `duration_sec` のみ。
     """
     card_id = extract_card_id(src.name)
 
@@ -943,6 +1050,23 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
             f"行いません。R21 P2 対応）"
         )
 
+    # R23 P2 対応: 生値 (duration_sec) は正でも、台帳へ実際に書き込む丸め後の
+    # 値 (round(duration_sec, 3)) が 0 になり得る（例: ffmpeg が 0.0005 秒未満の
+    # フレームしか書き出さなかった場合）。丸め後 0.0 のまま台帳へ記録すると
+    # `_validate_ledger_entry` 自身の duration_sec > 0 不変条件に違反した
+    # エントリを公開してしまい、次回 append の `load_ledger()` が
+    # `LedgerSchemaError` で fail する。0.5ms 未満の録音は素材として無意味な
+    # ため、生値の検査と同じく台帳構築前に fail-closed 拒否する。
+    rounded_duration_sec = round(duration_sec, 3)
+    if not math.isfinite(rounded_duration_sec) or rounded_duration_sec <= 0.0:
+        raise NonPositiveDurationError(
+            f"{src.name}: 正規化後 wav ({staged_path}) の長さは生値では正"
+            f"(duration_sec={duration_sec!r}) ですが、台帳へ書き込む丸め後の値"
+            f"(round(duration_sec, 3)={rounded_duration_sec!r}) が 0 以下です。"
+            f"0.5ms 未満の録音は素材として無意味なため fail-closed で拒否します"
+            f"（台帳への記録・公開のいずれも行いません。R23 P2 対応）"
+        )
+
     return LedgerEntry(
         card_id=card_id,
         source_filename=src.name,
@@ -951,7 +1075,7 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
         normalized_path=str(publish_dir / filename),
         sha256=sha256_of(staged_path),
         received_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        duration_sec=round(duration_sec, 3),
+        duration_sec=rounded_duration_sec,
         sample_rate=TARGET_SAMPLE_RATE,
         rms_dbfs=round(rms_dbfs, 2) if rms_dbfs is not None else None,
         peak_dbfs=round(peak_dbfs, 2) if peak_dbfs is not None else None,
@@ -1066,6 +1190,13 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
                 # 台帳が存在する場合はここで LedgerSchemaError が送出され、変換・
                 # 公開のいずれも開始しない。
                 ledger = load_ledger(ledger_path)
+
+                # R23 P2 対応: append 実行時（既存台帳にエントリがある場合）は、
+                # 実際の変換（process_one）を始める前に、既存エントリ全件の
+                # normalized_path の実在とバイト列 sha256 一致を検証する。
+                # out_dir ロック保持中の検査のため、検査後のレースはロックが防ぐ
+                # （`_check_existing_artifacts` docstring 参照）。
+                _check_existing_artifacts(ledger, ledger_path)
 
                 entries = [
                     process_one(src, staging_dir, filenames[src], out_dir) for src in inputs
