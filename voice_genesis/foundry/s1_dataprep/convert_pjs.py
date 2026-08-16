@@ -925,6 +925,30 @@ def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     退避物か」を検証し、一致しなければ fail-closed で拒否する（手動で退避
     してから再実行するよう案内する。中断で退避直後にマーカー書き込みへ
     到達できなかった場合も同じ経路で拒否され、安全側に倒れる）。
+
+    review #264 R28 P2（アップグレード時の自己ロック是正。`gate_synth.py`
+    の `_swap_step_dir_into_place` も同型の構造で同時修正）: 上記 R25 の
+    検証はマーカー導入**後**に本関数経由で作られた `staging_dir` は正しく
+    扱えるが、マーカー導入**前**に作られていた既存の `staging_dir`
+    （本関数を初めて含むバージョンへアップグレードした直後の canonical）
+    にはマーカーが無い。この状態で最初の swap を実行すると「`staging_dir`
+    -> `.old` へ退避」自体は成功する（`.old` が既存でなければ R25 のガード
+    は発火しない）ものの、退避された `.old` 自身にはマーカーが無いまま
+    残る。次回の rerun がこの `.old` を検証すると不一致で拒否され、以後は
+    手動掃除が恒久的に必要になる自己ロックに陥る。
+
+    修正: `staging_dir` を `.old` へ退避する**直前**に、その `staging_dir`
+    自身へマーカーを書き込む（無ければ新規作成、既にあれば無変更で
+    上書き — 冪等）。今まさに本関数がこの `staging_dir` を canonical から
+    退避しようとしている時点で、その出自（＝「本関数の swap によって今から
+    `.old` になる」）は本関数自身が保証できるため、マーカー導入前に
+    作られていたかどうかによらずスタンプして問題ない。これにより退避後の
+    `.old` は常にマーカー付きになり、次回以降の rerun がそれを正しく
+    「本ツール由来」と認識できる（1 回きりのアップグレード後は自己解消）。
+    既存の「退避**前**から存在していた無関係な `.old` は検証なしに削除
+    しない」という R25 の不変条件は変わらない ——このガードは上記で
+    `.old` が既に存在するケースに対してのみ働き、今回このステップで新たに
+    `staging_dir` から作る `.old` には及ばない。
     """
     build_dir.mkdir(parents=True, exist_ok=True)
     (build_dir / _SWAP_BACKUP_MARKER_NAME).write_text(
@@ -947,6 +971,10 @@ def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
         shutil.rmtree(old_dir)
     try:
         if staging_dir.exists():
+            # review #264 R28 P2: スタンプしてから退避する（docstring 参照）。
+            (staging_dir / _SWAP_BACKUP_MARKER_NAME).write_text(
+                _SWAP_BACKUP_MARKER_CONTENT, encoding="utf-8"
+            )
             staging_dir.rename(old_dir)
         build_dir.rename(staging_dir)
     except BaseException:

@@ -1642,6 +1642,95 @@ def test_run_allows_genuine_retake_with_different_bytes(
 
 
 # ---------------------------------------------------------------------------
+# review #264 R28 P2 (intake.py:936): 既存台帳**内部**のエントリ同士の
+# `source_sha256` 重複を preflight で検出する
+# ---------------------------------------------------------------------------
+
+
+def test_run_rejects_when_existing_ledger_has_internal_duplicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """従来の `_check_duplicate_sources` は今回バッチの `source_sha256` を
+    「既存台帳の各エントリ」および「同一バッチ内の他ファイル」とだけ突き
+    合わせており、既存台帳**自体**が手動マージ/旧世代の不具合ある run から
+    の復旧等で既に同一 `source_sha256` を持つ複数エントリを含んでいても
+    検出しなかった（バッチ側が完全に無関係な新規バイト列でも通過していた）。
+
+    2 回の正規 `run()` で台帳へ実在する 2 エントリを作った後、台帳 JSON を
+    直接書き換えて 2 件目の `source_sha256` を 1 件目と同一に改変する
+    （手動マージ/復旧による内部重複混入を模す。`normalized_path`/`sha256`
+    ＝公開済み正規化 wav 側の記録はそのまま健全に保つ — `_check_existing_
+    artifacts` の対象は `source_sha256` ではなくこちら）。この状態で第3の
+    完全に無関係なバイト列を取り込もうとしても、台帳内部重複自体を理由に
+    fail-closed 拒否され、部分公開もしないこと。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    first_incoming = tmp_path / "incoming1"
+    first_incoming.mkdir()
+    (first_incoming / "UC-001.wav").write_bytes(b"donor bytes one")
+    intake.run(first_incoming, out_dir, ledger_path)
+
+    second_incoming = tmp_path / "incoming2"
+    second_incoming.mkdir()
+    (second_incoming / "UC-002.wav").write_bytes(b"donor bytes two, genuinely different")
+    intake.run(second_incoming, out_dir, ledger_path)
+
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 2
+    # 台帳を直接改変し、2件目の source_sha256 を1件目と同一へ書き換える
+    # （手動マージ/復旧で紛れ込む内部重複を模す）。normalized_path/sha256
+    # （公開済み正規化 wav 側）は無変更のまま — `_check_existing_artifacts`
+    # が別途検証する健全性はこの改変で壊さない。
+    ledger["entries"][1]["source_sha256"] = ledger["entries"][0]["source_sha256"]
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+    ledger_before = ledger_path.read_bytes()
+    published_before = sorted(p.name for p in out_dir.iterdir())
+
+    third_incoming = tmp_path / "incoming3"
+    third_incoming.mkdir()
+    (third_incoming / "UC-003.wav").write_bytes(b"donor bytes three, unrelated to the others")
+
+    with pytest.raises(intake.DuplicateSourceError):
+        intake.run(third_incoming, out_dir, ledger_path)
+
+    # 部分公開はしない: 台帳・公開済みファイル一覧は第3バッチ実行前後で不変。
+    assert ledger_path.read_bytes() == ledger_before
+    assert sorted(p.name for p in out_dir.iterdir()) == published_before
+
+
+def test_run_succeeds_when_existing_ledger_has_no_internal_duplicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """健全な台帳（既存エントリ間で `source_sha256` の重複が無い）に対しては、
+    新設の内部重複検査による回帰は無く、無関係な新規バイト列の取り込みが
+    従来どおり成功すること。"""
+    _fake_normalize_to_wav(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    first_incoming = tmp_path / "incoming1"
+    first_incoming.mkdir()
+    (first_incoming / "UC-001.wav").write_bytes(b"donor bytes one")
+    intake.run(first_incoming, out_dir, ledger_path)
+
+    second_incoming = tmp_path / "incoming2"
+    second_incoming.mkdir()
+    (second_incoming / "UC-002.wav").write_bytes(b"donor bytes two, genuinely different")
+    entries = intake.run(second_incoming, out_dir, ledger_path)
+
+    assert len(entries) == 1
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 2
+    source_hashes = {e["source_sha256"] for e in ledger["entries"]}
+    assert len(source_hashes) == 2
+
+
+# ---------------------------------------------------------------------------
 # R21 P1: 並行 intake の直列化（`<ledger>.lock` への flock）
 # ---------------------------------------------------------------------------
 

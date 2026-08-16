@@ -917,6 +917,16 @@ def _check_duplicate_sources(entries: List[LedgerEntry], ledger: dict) -> None:
     参照）を壊さない。重複が見つかった場合は、どのファイルがどのエントリ/
     ファイルと重複しているかを列挙した単一の例外で公開全体を拒否し、
     部分公開はしない。
+
+    review #264 R28 P2: 上記③に加えて④既存台帳**内部**のエントリ同士の
+    `source_sha256` 重複も検査する。従来はバッチ側の重複検査
+    （新規 vs 既存①・新規 vs 新規②）のみで、台帳自体に既に同一
+    `source_sha256` を持つ複数エントリが混入していた場合（手動マージ・
+    旧世代の不具合ある run からの復旧等）はバッチが無関係な内容でも検出
+    されなかった。台帳の「同一 source は 1 エントリのみ」という重複禁止
+    契約に台帳自体が既に反している以上、その状態のまま新規エントリを
+    積み増して公開することも fail-closed で拒否する（append preflight ＝
+    R22 の値検証と同じ位置）。
     """
     existing_by_hash: Dict[str, List[str]] = {}
     for existing_entry in ledger.get("entries", []):
@@ -932,6 +942,13 @@ def _check_duplicate_sources(entries: List[LedgerEntry], ledger: dict) -> None:
         batch_by_hash.setdefault(entry.source_sha256, []).append(entry.source_filename)
 
     problems: List[str] = []
+    for source_sha256, ledger_filenames in existing_by_hash.items():
+        if len(ledger_filenames) > 1:
+            problems.append(
+                f"- source_sha256={source_sha256[:12]}...: 既存台帳のエントリ "
+                f"{ledger_filenames} 同士が既に同一バイト列で重複しています"
+                f"（台帳内部の重複。バッチとは無関係に台帳自体が是正必要です）"
+            )
     for source_sha256, batch_filenames in batch_by_hash.items():
         ledger_matches = existing_by_hash.get(source_sha256, [])
         if ledger_matches:

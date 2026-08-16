@@ -1472,6 +1472,32 @@ def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
     に作った退避物か」を検証し、一致しなければ fail-closed で拒否する
     （手動で退避してから再実行するよう案内する。中断で退避直後にマーカー
     書き込みへ到達できなかった場合も同じ経路で拒否され、安全側に倒れる）。
+
+    review #264 R28 P2（アップグレード時の自己ロック是正。
+    `convert_pjs.py` の `_swap_into_place` も同型の構造で同時修正）:
+    上記 R25 の検証はマーカー導入**後**に本関数経由で作られた `out_dir` は
+    正しく扱えるが、マーカー導入**前**に作られていた既存の `out_dir`
+    （本関数を初めて含むバージョンへアップグレードした直後の canonical）
+    にはマーカーが無い。この状態で最初の swap を実行すると、無条件で
+    「`out_dir` -> `.old` へ退避」自体は成功する（`.old` が既存でなければ
+    R25 のガードは発火しない）ものの、退避された `.old` 自身にはマーカーが
+    無いまま残る。次回の rerun がこの `.old` を「本ツール由来か」検証すると
+    不一致で拒否され、以後は手動掃除が恒久的に必要になる自己ロックに陥る
+    （アップグレード直後の 1 回だけでなく、ユーザーが `.old` を毎回手動で
+    退避しない限り永続する）。
+
+    修正: `out_dir` を `.old` へ退避する**直前**に、その `out_dir`
+    自身へマーカーを書き込む（無ければ新規作成、既にあれば無変更で
+    上書き — 冪等）。今まさに本関数がこの `out_dir` を canonical から
+    退避しようとしている時点で、その出自（＝「本関数の swap によって
+    今から `.old` になる」）は本関数自身が保証できるため、マーカー導入前に
+    作られていたかどうかによらずスタンプして問題ない。これにより退避後の
+    `.old` は常にマーカー付きになり、次回以降の rerun がそれを正しく
+    「本ツール由来」と認識できる（1 回きりのアップグレード後は自己解消）。
+    既存の「退避**前**から存在していた無関係な `.old`（本ツールと無関係な
+    ディレクトリ）は検証なしに削除しない」という R25 の不変条件は変わらない
+    ——このガードは上記で `.old` が既に存在するケースに対してのみ働き、
+    今回このステップで新たに `out_dir` から作る `.old` には及ばない。
     """
     build_dir.mkdir(parents=True, exist_ok=True)
     (build_dir / _SWAP_BACKUP_MARKER_NAME).write_text(
@@ -1494,6 +1520,10 @@ def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
         shutil.rmtree(old_dir)
     try:
         if out_dir.exists():
+            # review #264 R28 P2: スタンプしてから退避する（docstring 参照）。
+            (out_dir / _SWAP_BACKUP_MARKER_NAME).write_text(
+                _SWAP_BACKUP_MARKER_CONTENT, encoding="utf-8"
+            )
             out_dir.rename(old_dir)
         build_dir.rename(out_dir)
     except BaseException:
@@ -1502,11 +1532,71 @@ def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
         raise
 
 
+def _rollback_swapped_step_dir(out_dir: Path) -> None:
+    """`_swap_step_dir_into_place(_, out_dir)` が成功させた公開を取り消し、
+    `out_dir` を「その swap 直前の状態」（旧世代があれば `.old` から復元、
+    無ければ未生成の状態）へ戻す。
+
+    review #264 R28 P2: `cmd_run` の非 `--skip-export` 経路は、export 直後
+    （phoneme/embedding discovery・model load・synthesis・公開直前の事後
+    ハッシュ照合より**前**）に `_publish_exported_acoustic()` 経由で
+    `onnx_gate_<step>` を canonical へ公開していた。この後続段のいずれかが
+    失敗すると、`onnx_gate_<step>` は既に新世代へ差し替わっているのに
+    `step_<N>/gate_synth_summary.json`（別途 build_dir/synth_out_dir の swap
+    が成功した場合のみ公開される）は旧世代のまま残り、旧 summary が pin する
+    `acoustic_onnx_path` のハッシュがそのパスの実体（新世代）と一致しなくなる
+    ——「新 ONNX + 旧 gate summary」の混成公開状態。
+
+    `cmd_run`（wrapper。本体は `_cmd_run_impl`）はこの関数を、
+    build_dir/synth_out_dir の最終公開（`_rollback_state["swapped"]`）まで
+    `_cmd_run_impl` が到達しなかった場合の `finally` 節から呼び、
+    `onnx_gate_<step>` の公開も未完了へ揃える（build_dir 側の未公開時
+    クリーンアップと対の処理。`_cmd_run_impl` 冒頭の docstring 参照）。
+
+    `_swap_step_dir_into_place` 自身の直後の rename 窓を守る `except
+    BaseException` 巻き戻しと同じ「`old_dir.exists()` という実ファイル
+    システム状態で判定する」流儀に倣う: `.old` が存在すればそれが真の旧世代
+    であり、`out_dir` を退けて `.old` を `out_dir` へ戻す。`.old` が存在
+    しなければ今回が初回公開だったということであり、`out_dir` を削除して
+    「未公開」状態（この run が始まる前の状態）へ戻す。
+
+    ベストエフォート: 呼び出し元は常に既存の例外を再送出する経路（`finally`
+    / `except BaseException: ... raise`）から呼ぶため、ロールバック自体が
+    失敗しても元の例外を握り潰してはならない。`OSError` は握って警告を出す
+    のみに留める。
+    """
+    old_dir = out_dir.parent / f"{out_dir.name}.old"
+    try:
+        if old_dir.exists():
+            if out_dir.exists():
+                shutil.rmtree(out_dir)
+            old_dir.rename(out_dir)
+        elif out_dir.exists():
+            shutil.rmtree(out_dir)
+    except OSError as exc:
+        print(
+            f"| WARNING: failed to roll back {out_dir} after a downstream failure "
+            f"(canonical may still reflect the just-published generation): {exc}",
+            file=sys.stderr,
+        )
+
+
 # ============================================================================
 # 5. CLI
 # ============================================================================
 
-def cmd_run(args):
+def _cmd_run_impl(args, _rollback_state: Dict[str, object]) -> None:
+    """`cmd_run` の本体。`_rollback_state` は呼び出し元 `cmd_run` が渡す
+    ミュータブルな辞書で、非 `--skip-export` 経路が `onnx_gate_<step>` を
+    canonical へ公開した場合の `out_path`（キー `"onnx_out_path"`）と、
+    本関数がその後の全段（phoneme/embedding discovery・model load・
+    synthesis・事後ハッシュ照合・summary/build_dir の最終公開）まで完走した
+    かどうか（キー `"swapped"`）を書き込む。本関数が完走前に任意の例外
+    （`SystemExit`/`KeyboardInterrupt` 含む）で中断した場合、`_rollback_state`
+    はその時点までの進捗を正確に反映したまま呼び出し元へ伝わり、`cmd_run`
+    の `finally` 節が `onnx_gate_<step>` の公開を取り消す（review #264
+    R28 P2。`_rollback_swapped_step_dir` docstring 参照）。
+    """
     canon_model_dir = Path(args.canon_model_dir)
     vocoder_dir = Path(args.vocoder_dir)
     # BUGFIX (5K gate 実測, 2026-08-15): --out-dir を相対パスのまま run_export_acoustic
@@ -1589,6 +1679,16 @@ def cmd_run(args):
     diffsinger_repo_pre_dirty: object = None
     diffsinger_repo_pre_status_sha256: object = None
     diffsinger_repo_pre_diff_sha256: object = None
+    # review #264 R28 P2: 非 skip-export 経路のみ `_publish_exported_acoustic()`
+    # が `onnx_gate_<step>` を canonical へ公開する。その公開先パスを
+    # `_rollback_state["onnx_out_path"]`（呼び出し元 `cmd_run` の rollback
+    # wrapper が例外発生時に読む正本）へ記録する。この run が後続段
+    # （phoneme discovery/model load/synthesis/事後ハッシュ照合/summary 公開）
+    # のどこかで失敗した場合、`cmd_run` の `finally` 節が
+    # `_rollback_swapped_step_dir` でこの公開を取り消し、`onnx_gate_<step>` と
+    # `gate_synth_summary.json` が常に同一の完走 run 由来であることを保証する
+    # （`_rollback_swapped_step_dir` docstring 参照）。skip-export 経路では
+    # 公開自体が発生しないため None のまま。
     if args.skip_export:
         acoustic_dir = Path(args.acoustic_dir)
         acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
@@ -1615,6 +1715,7 @@ def cmd_run(args):
             diffsinger_repo_pre_head, diffsinger_repo_pre_dirty,
             diffsinger_repo_pre_status_sha256, diffsinger_repo_pre_diff_sha256,
         )
+        _rollback_state["onnx_out_path"] = exported_dir
         acoustic_dir = exported_dir
         acoustic_onnx_path = exported_dir / "acoustic.onnx"
         acoustic_dsconfig_path = exported_dir / "dsconfig.yaml"
@@ -2025,6 +2126,11 @@ def cmd_run(args):
 
         _swap_step_dir_into_place(build_dir, synth_out_dir)
         swapped = True
+        # review #264 R28 P2: build_dir/synth_out_dir（gate_synth_summary.json
+        # を含む束）の公開が完走した時点で初めて、`onnx_gate_<step>` の公開
+        # 取り消し（呼び出し元 `cmd_run` の rollback wrapper 参照）を不要と
+        # 印付ける。
+        _rollback_state["swapped"] = True
     finally:
         if not swapped:
             shutil.rmtree(build_dir, ignore_errors=True)
@@ -2035,6 +2141,38 @@ def cmd_run(args):
     # （公開 = 完成済み束の rename のみ・公開済み世代への追記/書換ゼロ）。
 
     print(f"| summary: {synth_out_dir / 'gate_synth_summary.json'}")
+
+
+def cmd_run(args) -> None:
+    """review #264 R28 P2: `_cmd_run_impl` を rollback wrapper 越しに呼ぶ。
+
+    従来（R27 まで）は非 `--skip-export` 経路で `_publish_exported_acoustic()`
+    が `onnx_gate_<step>` を canonical へ公開した**直後**（phoneme/embedding
+    discovery・model load・synthesis・事後ハッシュ照合・
+    `step_<N>/gate_synth_summary.json` の最終公開より**前**）に処理が続いて
+    いた。この間のどの段が失敗しても `onnx_gate_<step>` は既に新世代へ公開
+    済みのまま残り、古い `step_<N>/gate_synth_summary.json`（旧世代の
+    `acoustic_onnx` ハッシュを pin）と組み合わさって「新 ONNX + 旧 gate
+    summary」の混成公開状態が生じ得た（旧 summary が pin するハッシュが、
+    そのパスの実体（新世代）ともう一致しない）。
+
+    `_cmd_run_impl` は完走した場合にのみ `_rollback_state["swapped"] = True`
+    を書き込む（`onnx_gate_<step>` を公開した場合は同時に
+    `_rollback_state["onnx_out_path"]` へその公開先を書き込む）。ここでは
+    `_cmd_run_impl` を `finally` で包み、完走しなかった（`"swapped"` が
+    立っていない）にもかかわらず `onnx_gate_<step>` を公開済みだった場合に
+    限り `_rollback_swapped_step_dir` でその公開を取り消す。これにより
+    `onnx_gate_<step>` と `gate_synth_summary.json` は常に同一の完走 run 由来
+    であるという契約が回復する（`_rollback_swapped_step_dir` docstring
+    参照）。skip-export 経路は `onnx_out_path` が常に None のため no-op。
+    """
+    rollback_state: Dict[str, object] = {"onnx_out_path": None, "swapped": False}
+    try:
+        _cmd_run_impl(args, rollback_state)
+    finally:
+        onnx_out_path = rollback_state["onnx_out_path"]
+        if onnx_out_path is not None and not rollback_state["swapped"]:
+            _rollback_swapped_step_dir(onnx_out_path)  # type: ignore[arg-type]
 
 
 def cmd_mapping_check(args):
