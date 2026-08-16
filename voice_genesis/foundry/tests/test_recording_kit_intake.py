@@ -59,12 +59,29 @@
   両方と突き合わせ、重複があれば staging → `out_dir` 一括公開の直前で
   fail-closed 拒否する（`_check_duplicate_sources`）ことで解消。バイト列が
   異なる再録は影響を受けない
+- R21 P1 (intake.py:765): 同一 `out_dir`/`--ledger` を対象に 2 つの intake
+  プロセスが並行実行されると、両方が同じ旧台帳を読み込み、それぞれ別の
+  wav を公開した上で `save_ledger()` を呼び、後発の save が先発の追記済み
+  エントリを丸ごと上書きしていた（先発の wav は `out_dir` に存在するのに
+  台帳には記録されないデータ損失。ロールバック機構をすり抜ける正常終了
+  パスで起きる）。`run()` 全体（preflight〜公開〜台帳 save〜ロールバック）
+  を `<ledger>.lock` への `fcntl.flock(LOCK_EX | LOCK_NB)` で直列化し、
+  取得できない場合は `LedgerLockError` で即座に fail-closed 拒否すること
+  で解消
+- R21 P2 (intake.py:667): ヘッダのみの WAV（フレーム数 0）や、ffmpeg が
+  exit 0 でもフレームを一切書き出さなかった場合、`measure_loudness()` が
+  `duration_sec == 0.0` を返し、旧実装はこれをそのまま有効な intake として
+  台帳へ記録・公開していた。`process_one` が台帳エントリ構築前に
+  `duration_sec` の非正・非有限を `NonPositiveDurationError` で fail-closed
+  拒否することで解消（`convert_pjs.py`/`build_dataset.py` の「非正
+  duration は無条件で不正」という意味論と揃える）
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import sys
+import wave
 from pathlib import Path
 from typing import Dict, Iterator, List
 
@@ -1440,3 +1457,220 @@ def test_run_allows_genuine_retake_with_different_bytes(
     assert len(ledger["entries"]) == 2
     source_hashes = {e["source_sha256"] for e in ledger["entries"]}
     assert len(source_hashes) == 2
+
+
+# ---------------------------------------------------------------------------
+# R21 P1: 並行 intake の直列化（`<ledger>.lock` への flock）
+# ---------------------------------------------------------------------------
+
+
+def test_run_rejects_when_ledger_lock_already_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`<ledger>.lock` を別プロセス相当（先行 `flock` 取得）が保持している
+    状態で `run()` を呼ぶと、待ち合わせず `LedgerLockError` で即座に
+    fail-closed 拒否する（R21 P1 の再現）。拒否時は台帳・out_dir のいずれ
+    にも痕跡を残さない。ロック解放後は同じ入力で正常に成功する。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"lock contention donor bytes")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    lock_path = intake._ledger_lock_path(ledger_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    # 実際の OS レベル flock を先行取得することで「別プロセスが実行中」を
+    # 再現する（flock は open file description 単位の排他制御のため、同一
+    # プロセス内の別 open() でも競合が成立する）。
+    held_lock_file = open(lock_path, "a+", encoding="utf-8")
+    intake.fcntl.flock(held_lock_file, intake.fcntl.LOCK_EX | intake.fcntl.LOCK_NB)
+    try:
+        with pytest.raises(intake.LedgerLockError):
+            intake.run(incoming_dir, out_dir, ledger_path)
+
+        assert not ledger_path.exists()
+        assert not out_dir.exists() or list(out_dir.iterdir()) == []
+    finally:
+        intake.fcntl.flock(held_lock_file, intake.fcntl.LOCK_UN)
+        held_lock_file.close()
+
+    # ロック解放後は待ち合わせなしで正常に成功する。
+    entries = intake.run(incoming_dir, out_dir, ledger_path)
+    assert len(entries) == 1
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 1
+
+
+def test_run_leaves_lock_file_in_place_after_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """成功後も `<ledger>.lock` は削除されず空ファイルとして残置される
+    （削除すると unlink 直後・別プロセスの open+flock 直後という窓で
+    二重ロックが成立し得るための設計。R21 P1）。残置したロックファイルが
+    2 回目のバッチ実行（同一 out_dir/ledger 配置）を妨げないことも確認する。
+    """
+    _fake_normalize_to_wav(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    first_incoming = tmp_path / "incoming1"
+    first_incoming.mkdir()
+    (first_incoming / "UC-001.wav").write_bytes(b"first lock persistence bytes")
+    intake.run(first_incoming, out_dir, ledger_path)
+
+    lock_path = intake._ledger_lock_path(ledger_path)
+    assert lock_path.exists()
+    assert lock_path.stat().st_size == 0
+
+    second_incoming = tmp_path / "incoming2"
+    second_incoming.mkdir()
+    (second_incoming / "UC-002.wav").write_bytes(b"second lock persistence bytes")
+    entries = intake.run(second_incoming, out_dir, ledger_path)
+
+    assert len(entries) == 1
+    assert lock_path.exists()
+    ledger = intake.load_ledger(ledger_path)
+    assert len(ledger["entries"]) == 2
+
+
+def test_check_ledger_path_collisions_ignores_own_reserved_lock_file(
+    tmp_path: Path,
+) -> None:
+    """append ワークフロー（`--ledger` が `out_dir` 内）で残置された
+    `<ledger>.lock` が、`out_dir` 内の「公開済み既存ファイル」走査に
+    引っかからないことを直接検証する（R21 P1）。`lock_path` を渡さない
+    （旧来の呼び出し形）場合の後方互換も併せて確認する。
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    ledger_path = out_dir / "user_donor_ledger.json"
+    intake.save_ledger(ledger_path, {"schema": intake.LEDGER_SCHEMA, "entries": []})
+    lock_path = intake._ledger_lock_path(ledger_path)
+    lock_path.write_bytes(b"")  # R21 P1: run() が残置する空ファイルを模擬
+
+    src = tmp_path / "incoming" / "UC-001.wav"
+    src.parent.mkdir()
+    _write_fake_source(src, seed=1)
+    filenames = {src: "UC-001.norm24k.wav"}
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+
+    # lock_path を渡すと、残置ロックファイルは予約済み扱いで除外される。
+    intake._check_ledger_path_collisions(
+        ledger_path, [src], filenames, out_dir, staging_dir, lock_path=lock_path
+    )
+
+    # lock_path 省略時（旧来の呼び出し）でも、ロックファイルはただの
+    # `out_dir` 内既存ファイルとして扱われるが、resolved_ledger との比較は
+    # ledger_path 自身にしか一致しないため、この場合も衝突しない
+    # （ロックファイル名 != 台帳ファイル名）。
+    intake._check_ledger_path_collisions(ledger_path, [src], filenames, out_dir, staging_dir)
+
+
+def test_check_ledger_path_collisions_rejects_lock_path_matching_incoming_source(
+    tmp_path: Path,
+) -> None:
+    """`lock_path` が incoming の元音源ファイルと衝突する場合も、`--ledger`
+    自身と同様に fail-closed 拒否する（R21 P1）。
+    """
+    out_dir = tmp_path / "out"
+    src = tmp_path / "incoming" / "UC-001.wav"
+    src.parent.mkdir()
+    _write_fake_source(src, seed=1)
+    filenames = {src: "UC-001.norm24k.wav"}
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    with pytest.raises(intake.LedgerPathCollisionError):
+        intake._check_ledger_path_collisions(
+            ledger_path, [src], filenames, out_dir, staging_dir, lock_path=src
+        )
+
+
+# ---------------------------------------------------------------------------
+# R21 P2: 非正 duration（ヘッダのみ WAV 等）の拒否
+# ---------------------------------------------------------------------------
+
+
+def _fake_normalize_to_wav_header_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`normalize_to_wav` を、入力に関わらずヘッダのみ（フレーム数 0）の
+    wav を書き出す偽実装へ差し替える（ffmpeg が exit 0 でもフレームを
+    一切書き出さなかったケースの再現。R21 P2）。
+    """
+
+    def _fake(src: Path, dst: Path) -> None:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(dst), "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(intake.TARGET_SAMPLE_RATE)
+            f.writeframes(b"")
+
+    monkeypatch.setattr(intake, "normalize_to_wav", _fake)
+
+
+def test_measure_loudness_returns_zero_duration_for_header_only_wav(tmp_path: Path) -> None:
+    """`measure_loudness()` 単体の回帰ガード: ヘッダのみ wav は
+    `duration_sec == 0.0` を返す（`process_one` の fail-closed 拒否の前提）。
+    """
+    wav_path = tmp_path / "header_only.wav"
+    with wave.open(str(wav_path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(intake.TARGET_SAMPLE_RATE)
+        f.writeframes(b"")
+
+    duration_sec, rms_dbfs, peak_dbfs = intake.measure_loudness(wav_path)
+
+    assert duration_sec == 0.0
+    assert rms_dbfs is None
+    assert peak_dbfs is None
+
+
+def test_process_one_rejects_header_only_normalized_wav(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`process_one()` 単体: 正規化後 wav がヘッダのみ（フレーム数 0）の
+    場合、台帳エントリを構築せず `NonPositiveDurationError` で fail-closed
+    拒否する（R21 P2 の再現）。
+    """
+    _fake_normalize_to_wav_header_only(monkeypatch)
+
+    src = tmp_path / "incoming" / "UC-001.wav"
+    src.parent.mkdir()
+    _write_fake_source(src, seed=1)
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(intake.NonPositiveDurationError):
+        intake.process_one(src, staging_dir, "UC-001.norm24k.wav", out_dir)
+
+
+def test_run_rejects_header_only_normalized_wav_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run()` E2E: ヘッダのみ wav を生む incoming ファイルはバッチ全体を
+    fail-closed 拒否し、台帳・out_dir のいずれにも記録・公開されない
+    （R21 P2 の再現）。
+    """
+    _fake_normalize_to_wav_header_only(monkeypatch)
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "UC-001.wav").write_bytes(b"donor bytes yielding zero-frame output")
+
+    out_dir = tmp_path / "out"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+
+    with pytest.raises(intake.NonPositiveDurationError):
+        intake.run(incoming_dir, out_dir, ledger_path)
+
+    assert not ledger_path.exists()
+    assert not out_dir.exists() or list(out_dir.iterdir()) == []

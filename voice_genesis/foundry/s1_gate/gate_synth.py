@@ -1731,13 +1731,19 @@ def cmd_run(args):
             "acoustic_encoding_mode": encoding_mode,
             "acoustic_onnx_path": str(acoustic_onnx_path),
             "input_sha256": input_sha256,
-            # (review #264 R9, gate_synth.py:1168; R12, gate_synth.py:1447)
+            # (review #264 R9, gate_synth.py:1168; R12, gate_synth.py:1447;
+            # R21, gate_synth.py:1762-1763)
             # input_sha256 の各 key がどの方式で「実際に使われたバイト」で
             # あることを保証しているかの注記。score_module_* / *_dep_* は
             # review #264 R6 の単一 read 方式と同様の構造。onnx/dsconfig 系は
             # R12 で load_model_bundle_bytes による単一 read 方式へ移行済み
             # （hash した buffer をそのまま InferenceSession/yaml.safe_load に
             # 渡す）。pre-publish re-hash は on-disk 実装の書き換え検出用 belt。
+            # ckpt/train_config_yaml は R20 で run_export_acoustic() 内の単一
+            # read（_read_bytes_and_sha256()）束縛へ移行済み（R21 でこの
+            # method 記述を実態に追随させた — 移行時点では旧来の独立
+            # sha256_file() read の記述のまま取り残されていたため、summary
+            # の provenance 記述が実装と乖離していた）。
             "input_sha256_provenance_method": {
                 "canon_phonemes_txt": "single-read (hash == buffer parsed into variance_phonemes)",
                 "acoustic_phonemes_json": "single-read (hash == buffer parsed into acoustic_phonemes, "
@@ -1759,8 +1765,26 @@ def cmd_run(args):
                                  "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
                 "acoustic_dsconfig_yaml": "single-read (hash == buffer passed to yaml.safe_load) + "
                                            "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
-                "ckpt": "sha256_file() only (export.py が別プロセスで消費、compile/exec 対象外)",
-                "train_config_yaml": "sha256_file() only (export.py が別プロセスで消費、compile/exec 対象外)",
+                "ckpt": "single-read (hash == buffer run_export_acoustic() reads once via "
+                        "_read_bytes_and_sha256() and writes into checkpoints/<exp_name>/, "
+                        "consumed by the export.py subprocess; review #264 R20). This key is "
+                        "only populated on the real export path (not --skip-export); no "
+                        "pre-publish re-hash belt (ckpt is not reloaded after export, unlike "
+                        "the onnx/dsconfig models). collect_input_sha256()'s sha256_file() "
+                        "re-read is a fallback for callers that omit ckpt_sha — the current "
+                        "sole call site always supplies it when ckpt exists, so this fallback "
+                        "is not exercised in practice (review #264 R21)",
+                "train_config_yaml": "single-read (hash == buffer run_export_acoustic() reads "
+                                      "once via _read_bytes_and_sha256() and writes into "
+                                      "checkpoints/<exp_name>/config.yaml, consumed by the "
+                                      "export.py subprocess; review #264 R20). This key is only "
+                                      "populated on the real export path (not --skip-export); no "
+                                      "pre-publish re-hash belt (config.yaml is not reloaded "
+                                      "after export). collect_input_sha256()'s sha256_file() "
+                                      "re-read is a fallback for callers that omit "
+                                      "train_config_sha — the current sole call site always "
+                                      "supplies it when config.yaml exists, so this fallback is "
+                                      "not exercised in practice (review #264 R21)",
             },
             "sampling_params": {
                 "seed": SEED,

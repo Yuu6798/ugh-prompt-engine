@@ -79,12 +79,34 @@ collisions` は resolve 済みパスが `--ledger` 自身と完全一致し、�
 から除外する（`_is_existing_ledger_file` 参照。R19 P2 対応。中身が台帳と
 して読み込めない場合＝`--ledger` が誤って正規化 wav 等の無関係な既存
 ファイルを指しているケースは、従来通り衝突として fail-closed 拒否する）。
+
+`run()` は本体（preflight の衝突検査〜変換〜公開〜台帳保存〜ロール
+バック）全体を `<ledger>.lock` への `fcntl.flock(LOCK_EX | LOCK_NB)` で
+直列化する（R21 P1 対応）。同一 `out_dir`/`--ledger` を対象に 2 つの
+intake プロセスが並行実行されると、両方が同じ旧台帳を読み込み、それぞれ
+別の wav を公開した上で `save_ledger()` を呼ぶ — 後発の save が先発の
+追記済みエントリを丸ごと上書きし、先発の wav が `out_dir` には存在する
+のに台帳には記録されない、というデータ損失がロールバック機構をすり抜けて
+（両プロセスとも自分の中では正常終了するため）発生し得た。ロック取得は
+`LOCK_NB`（ノンブロッキング）で行い、取得できない場合は「別の intake が
+実行中」の `LedgerLockError` で即座に fail-closed 拒否する（静かに
+待ち合わせない — 運用上は失敗を明示するほうが安全）。ロックファイルは
+空ファイルのまま残置する（`unlink` すると、ある プロセスが unlink 直後・
+別プロセスが同じ旧パスを開いて flock した直後という窓で二重ロックが
+成立してしまうため。`flock` はプロセス終了・例外時にも OS が自動解放
+する）。残置したロックファイル自身が `_check_ledger_path_collisions` の
+既存ファイル走査に誤って引っかからないよう、同関数へ `lock_path` を渡し、
+衝突検査対象の一員（incoming 原本・導出出力との衝突は拒否対象、
+`out_dir` 内の「公開済み既存ファイル」走査では自分自身の予約物として
+除外）として整合させる。
 """
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -126,6 +148,28 @@ class OutputPathCollisionError(RuntimeError):
     """公開直前の最終出力パス検証（`_check_publish_path`）が、既存エントリ
     （ディレクトリ・symlink 含む）との衝突、または `out_dir` の外側への
     脱出を検出した場合に送出する（R16 P1 対応）。
+    """
+
+
+class LedgerLockError(RuntimeError):
+    """`run()` が `<ledger>.lock` の `fcntl.flock(LOCK_EX | LOCK_NB)` を
+    ノンブロッキングで取得できなかった場合に送出する（R21 P1 対応）。
+
+    別の intake プロセスが同一台帳を対象に実行中であることを意味する。
+    待ち合わせず即座に fail-closed 拒否する（`run` docstring 参照）。
+    """
+
+
+class NonPositiveDurationError(RuntimeError):
+    """正規化後 wav の `duration_sec` が 0 以下、または非有限（NaN/inf）の
+    場合に送出する（R21 P2 対応）。
+
+    ヘッダのみの WAV（フレーム数 0）や、ffmpeg が exit 0 でもフレームを
+    一切書き出さなかった場合に `measure_loudness()` が `duration_sec ==
+    0.0` を返すことがあり、旧実装はこれをそのまま有効な intake として
+    台帳へ記録・公開していた。`convert_pjs.py`/`build_dataset.py` の
+    「非正 duration は無条件で不正」という意味論と揃え、台帳エントリの
+    構築・公開の前に fail-closed 拒否する。
     """
 
 
@@ -454,12 +498,25 @@ def _restore_ledger(ledger_path: Path, previous_bytes: Optional[bytes]) -> None:
     _atomic_write(ledger_path, lambda tmp_path: tmp_path.write_bytes(previous_bytes))
 
 
+def _ledger_lock_path(ledger_path: Path) -> Path:
+    """`ledger_path` に対応する排他制御用ロックファイルの決定論的パスを返す
+    （R21 P1 対応。`run()` docstring 参照）。`ledger_path` と同じ親
+    ディレクトリに `{ledger_path.name}.lock` として配置する
+    （append ワークフローで `--ledger` が `out_dir` 内にある場合、ロック
+    ファイルも `out_dir` 内に残置される — `_check_ledger_path_collisions`
+    が `lock_path` を衝突検査の予約対象として扱うことで、この残置が誤って
+    衝突として検出されないようにする）。
+    """
+    return ledger_path.parent / f"{ledger_path.name}.lock"
+
+
 def _check_ledger_path_collisions(
     ledger_path: Path,
     inputs: List[Path],
     filenames: Dict[Path, str],
     out_dir: Path,
     staging_dir: Path,
+    lock_path: Optional[Path] = None,
 ) -> None:
     """`--ledger` の resolve 済みパスが以下のいずれとも衝突しないことを検査する
     （R12 P1 対応。convert_pjs.py/gate_synth.py の衝突拒否ファミリーと同じ
@@ -479,33 +536,69 @@ def _check_ledger_path_collisions(
       `run()` の `finally` が staging を丸ごと `rmtree` する際に、直前に
       保存したはずの台帳ごと消え去る）
 
+    `lock_path`（`run()` が `_ledger_lock_path()` で決定論的に導出する
+    `<ledger>.lock`）を渡した場合は、これも上記の incoming 原本・導出出力
+    衝突検査に同じ資格で加える（R21 P1 対応 — ロックファイルという新しい
+    永続アーティファクトを、ドナー原本や正規化済み wav を上書きし得る
+    "書き込み先" の集合から構造的に除外する）。加えて `out_dir` 内の
+    「公開済み既存ファイル」走査では、`lock_path` と一致する既存エントリを
+    我々自身が残置したロックファイルとして予約済み扱いし、衝突対象から
+    除外する（ロックファイルは残置する設計のため、2 回目以降のバッチで
+    毎回この走査に引っかかっては preflight が壊れる）。
+
     `run()` 内で staging_dir 作成直後・実際の変換/移動/台帳保存より前に
     呼ぶこと（`--incoming-dir` を読むだけの preflight で、音声処理は一切
     発生しない）。
     """
     resolved_ledger = ledger_path.resolve()
+    resolved_lock = lock_path.resolve() if lock_path is not None else None
 
     for src in inputs:
-        if resolved_ledger == src.resolve():
+        resolved_src = src.resolve()
+        if resolved_ledger == resolved_src:
             raise LedgerPathCollisionError(
                 f"--ledger ({ledger_path}) は incoming の元音源ファイル ({src}) "
                 f"と衝突しています（fail-closed で拒否。ドナー原本の破壊を防止）"
+            )
+        if resolved_lock is not None and resolved_lock == resolved_src:
+            raise LedgerPathCollisionError(
+                f"ロックファイル ({lock_path}) は incoming の元音源ファイル "
+                f"({src}) と衝突しています（fail-closed で拒否。ドナー原本の "
+                f"破壊を防止。R21 P1 対応）"
             )
 
     for src in inputs:
         filename = filenames[src]
         for derived_dir in (staging_dir, out_dir):
             candidate = derived_dir / filename
-            if resolved_ledger == candidate.resolve():
+            resolved_candidate = candidate.resolve()
+            if resolved_ledger == resolved_candidate:
                 raise LedgerPathCollisionError(
                     f"--ledger ({ledger_path}) は導出出力 ({candidate}) と衝突"
                     f"しています（fail-closed で拒否。正規化 wav を JSON で"
                     f"上書きする事故を防止）"
                 )
+            if resolved_lock is not None and resolved_lock == resolved_candidate:
+                raise LedgerPathCollisionError(
+                    f"ロックファイル ({lock_path}) は導出出力 ({candidate}) と"
+                    f"衝突しています（fail-closed で拒否。正規化 wav をロック"
+                    f"ファイルで上書きする事故を防止。R21 P1 対応）"
+                )
 
     if out_dir.exists():
         for existing in out_dir.iterdir():
-            if not existing.is_file() or resolved_ledger != existing.resolve():
+            if not existing.is_file():
+                continue
+            resolved_existing = existing.resolve()
+            if resolved_lock is not None and resolved_existing == resolved_lock:
+                # R21 P1 対応: 我々自身が残置したロックファイル（append
+                # ワークフローで `--ledger` が `out_dir` 内にある場合、
+                # `<ledger>.lock` も `out_dir` 内に残る）。ロックファイルは
+                # 削除しない設計（flock の意味が壊れる競合窓を避けるため）
+                # なので、2 回目以降のバッチではこの走査に必ず現れる —
+                # 予約済みの自己所有物として除外し、衝突対象にしない。
+                continue
+            if resolved_ledger != resolved_existing:
                 continue
             if _is_existing_ledger_file(existing):
                 # R19 P2 対応: `--ledger` が `out_dir` 内にある配置（append
@@ -536,6 +629,18 @@ def _check_ledger_path_collisions(
             f"自体または内部を指しています（fail-closed で拒否。バッチ終了時の "
             f"staging 削除で台帳ごと消失する事故を防止）"
         )
+    if resolved_lock is not None:
+        try:
+            resolved_lock.relative_to(resolved_staging)
+        except ValueError:
+            pass
+        else:
+            raise LedgerPathCollisionError(
+                f"ロックファイル ({lock_path}) は staging ディレクトリ "
+                f"({staging_dir}) 自体または内部を指しています（fail-closed で"
+                f"拒否。バッチ終了時の staging 削除でロックファイルごと消失"
+                f"する事故を防止。R21 P1 対応）"
+            )
 
 
 def _check_publish_path(final_path: Path, out_dir: Path) -> None:
@@ -649,6 +754,16 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
     食い違うミスラベルが発生していた。サブディレクトリへ分離することで、
     スナップショットのパス空間は staged 出力のパス空間と構造的に交差しない
     （`staging_dir` 直下の子はスナップショットに一切現れない）。
+
+    正規化後 wav の `duration_sec` が 0 以下、または非有限（NaN/inf）の
+    場合は台帳エントリの構築前に `NonPositiveDurationError` で fail-closed
+    拒否する（R21 P2 対応）。ヘッダのみの WAV（フレーム数 0）や、ffmpeg が
+    exit 0 でもフレームを一切書き出さなかった場合に `measure_loudness()`
+    が `duration_sec == 0.0` を返すことがあり、旧実装はこれをそのまま
+    有効な intake として台帳へ記録・公開していた（使用不能なドナー音声が
+    「成功した intake」として記録される穴。`convert_pjs.py`/
+    `build_dataset.py` の「非正 duration は無条件で不正」という意味論と
+    揃える）。
     """
     card_id = extract_card_id(src.name)
 
@@ -665,6 +780,13 @@ def process_one(src: Path, staging_dir: Path, filename: str, publish_dir: Path) 
     normalize_to_wav(snapshot_path, staged_path)
 
     duration_sec, rms_dbfs, peak_dbfs = measure_loudness(staged_path)
+    if not math.isfinite(duration_sec) or duration_sec <= 0.0:
+        raise NonPositiveDurationError(
+            f"{src.name}: 正規化後 wav ({staged_path}) の長さが 0 以下または"
+            f"非有限です (duration_sec={duration_sec!r})。使用不能なドナー"
+            f"音声のため fail-closed で拒否します（台帳への記録・公開のいずれも"
+            f"行いません。R21 P2 対応）"
+        )
 
     return LedgerEntry(
         card_id=card_id,
@@ -711,75 +833,115 @@ def run(incoming_dir: Path, out_dir: Path, ledger_path: Path) -> List[LedgerEntr
     失敗したバッチの痕跡は `out_dir`/`ledger_path` のどちらにも残らない
     （`gate_synth.py` の staged swap + `BaseException` 巻き戻しと同型パターン。
     R12 P2 対応）。
+
+    上記全体（`assign_normalized_filenames` の out_dir スキャンから公開・
+    台帳保存・ロールバックまで）は `<ledger>.lock` への `fcntl.flock
+    (LOCK_EX | LOCK_NB)` で直列化される（R21 P1 対応。モジュール docstring
+    参照）。ロック取得はノンブロッキングで行い、既に別プロセスが保持して
+    いる場合は待たずに `LedgerLockError` で即座に fail-closed 拒否する。
     """
     inputs = discover_inputs(incoming_dir)
     if not inputs:
         return []
 
-    filenames = assign_normalized_filenames(inputs, out_dir)
-
-    staging_root = out_dir.parent
-    staging_root.mkdir(parents=True, exist_ok=True)
-    staging_dir = Path(tempfile.mkdtemp(prefix=".intake-staging-", dir=str(staging_root)))
+    # R21 P1 対応: ロック取得は preflight の最初（`_check_ledger_path_
+    # collisions` より前）に行い、`assign_normalized_filenames` の out_dir
+    # スキャンから公開・台帳 save・ロールバックまでの全トランザクションを
+    # ロック保持中に実行する。プロセス終了・例外時は OS が flock を自動
+    # 解放するため、ここでの `finally` はファイルディスクリプタの後始末の
+    # みで良い（ロックファイル自体は削除しない — モジュール docstring 参照）。
+    lock_path = _ledger_lock_path(ledger_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = open(lock_path, "a+", encoding="utf-8")
     try:
-        _check_ledger_path_collisions(ledger_path, inputs, filenames, out_dir, staging_dir)
-
-        # R13 P2 対応: 台帳の読み込み（schema 検証込み）は実際の変換・測定
-        # （process_one）より前の preflight として行う。壊れた/未知スキーマの
-        # 台帳が存在する場合はここで LedgerSchemaError が送出され、変換・
-        # 公開のいずれも開始しない。
-        ledger = load_ledger(ledger_path)
-
-        entries = [
-            process_one(src, staging_dir, filenames[src], out_dir) for src in inputs
-        ]
-
-        # R17 P2 対応: staging → out_dir への一括公開より前の preflight として、
-        # 今回バッチ各ファイルの source_sha256 を既存台帳・同一バッチ内の他
-        # ファイルの両方と突き合わせ、重複があれば公開全体を fail-closed 拒否
-        # する（部分公開はしない）。
-        _check_duplicate_sources(entries, ledger)
-
-        ledger.setdefault("entries", []).extend(asdict(e) for e in entries)
-
-        # R13 P2 対応: 公開フェーズ開始前の台帳バイト列スナップショット
-        # （無ければ None = 「無し」の印）。BaseException 巻き戻し時に
-        # WAV と合わせてこれへ復元する。
-        previous_ledger_bytes: Optional[bytes] = (
-            ledger_path.read_bytes() if ledger_path.exists() else None
-        )
-
-        out_dir.mkdir(parents=True, exist_ok=True)
-        moved: List[tuple[Path, Path]] = []  # (final_path, staged_path) の公開済み一覧
         try:
-            for src in inputs:
-                staged_path = staging_dir / filenames[src]
-                final_path = out_dir / filenames[src]
-                # R16 P1 対応: shutil.move 直前に最終防御として検証する
-                # （assign_normalized_filenames の予約後に out_dir の中身が
-                # 変わった場合・予約ロジック自体の見落としに対する備え）。
-                _check_publish_path(final_path, out_dir)
-                shutil.move(str(staged_path), str(final_path))
-                moved.append((final_path, staged_path))
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise LedgerLockError(
+                f"別の intake プロセスが同一台帳 ({ledger_path}) を対象に実行"
+                f"中です（ロック: {lock_path}）。fail-closed で拒否します"
+                f"（並行 intake による台帳データ損失を防止。R21 P1 対応。"
+                f"待ち合わせず再実行してください）"
+            ) from exc
 
-            save_ledger(ledger_path, ledger)
-        except BaseException:
-            # 巻き戻し: ここまでに out_dir へ公開済みの wav を staging へ戻す
-            # （逆順で戻すのは他ファイルとの依存関係はないが、失敗直近のものから
-            # 先に処理するほうが診断しやすいための慣習）。staging は外側の
-            # finally でまるごと削除されるため、戻した分は最終的に消える。
-            for final_path, staged_path in reversed(moved):
-                if final_path.exists():
-                    shutil.move(str(final_path), str(staged_path))
-            # 台帳もスナップショット時点へ復元する（R13 P2 対応。
-            # save_ledger() 成功直後の中断で新台帳が既に replace 済みの
-            # ケースを含む）。
-            _restore_ledger(ledger_path, previous_ledger_bytes)
-            raise
+        filenames = assign_normalized_filenames(inputs, out_dir)
+
+        staging_root = out_dir.parent
+        staging_root.mkdir(parents=True, exist_ok=True)
+        staging_dir = Path(
+            tempfile.mkdtemp(prefix=".intake-staging-", dir=str(staging_root))
+        )
+        try:
+            _check_ledger_path_collisions(
+                ledger_path, inputs, filenames, out_dir, staging_dir, lock_path=lock_path
+            )
+
+            # R13 P2 対応: 台帳の読み込み（schema 検証込み）は実際の変換・測定
+            # （process_one）より前の preflight として行う。壊れた/未知スキーマの
+            # 台帳が存在する場合はここで LedgerSchemaError が送出され、変換・
+            # 公開のいずれも開始しない。
+            ledger = load_ledger(ledger_path)
+
+            entries = [
+                process_one(src, staging_dir, filenames[src], out_dir) for src in inputs
+            ]
+
+            # R17 P2 対応: staging → out_dir への一括公開より前の preflight として、
+            # 今回バッチ各ファイルの source_sha256 を既存台帳・同一バッチ内の他
+            # ファイルの両方と突き合わせ、重複があれば公開全体を fail-closed 拒否
+            # する（部分公開はしない）。
+            _check_duplicate_sources(entries, ledger)
+
+            ledger.setdefault("entries", []).extend(asdict(e) for e in entries)
+
+            # R13 P2 対応: 公開フェーズ開始前の台帳バイト列スナップショット
+            # （無ければ None = 「無し」の印）。BaseException 巻き戻し時に
+            # WAV と合わせてこれへ復元する。
+            previous_ledger_bytes: Optional[bytes] = (
+                ledger_path.read_bytes() if ledger_path.exists() else None
+            )
+
+            out_dir.mkdir(parents=True, exist_ok=True)
+            moved: List[tuple[Path, Path]] = []  # (final_path, staged_path) の公開済み一覧
+            try:
+                for src in inputs:
+                    staged_path = staging_dir / filenames[src]
+                    final_path = out_dir / filenames[src]
+                    # R16 P1 対応: shutil.move 直前に最終防御として検証する
+                    # （assign_normalized_filenames の予約後に out_dir の中身が
+                    # 変わった場合・予約ロジック自体の見落としに対する備え）。
+                    _check_publish_path(final_path, out_dir)
+                    shutil.move(str(staged_path), str(final_path))
+                    moved.append((final_path, staged_path))
+
+                save_ledger(ledger_path, ledger)
+            except BaseException:
+                # 巻き戻し: ここまでに out_dir へ公開済みの wav を staging へ戻す
+                # （逆順で戻すのは他ファイルとの依存関係はないが、失敗直近のものから
+                # 先に処理するほうが診断しやすいための慣習）。staging は外側の
+                # finally でまるごと削除されるため、戻した分は最終的に消える。
+                for final_path, staged_path in reversed(moved):
+                    if final_path.exists():
+                        shutil.move(str(final_path), str(staged_path))
+                # 台帳もスナップショット時点へ復元する（R13 P2 対応。
+                # save_ledger() 成功直後の中断で新台帳が既に replace 済みの
+                # ケースを含む）。
+                _restore_ledger(ledger_path, previous_ledger_bytes)
+                raise
+        finally:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
+        return entries
     finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)
-
-    return entries
+        # R21 P1 対応: `flock` はプロセス終了・例外時にも OS が自動解放する
+        # ため、ここでの明示 unlock はベルト（早期解放によるロック保持時間の
+        # 最小化）。ロックファイル自体は `unlink` しない（削除すると、
+        # あるプロセスの unlink 直後・別プロセスが同じ旧パスを開いて flock
+        # した直後という窓で二重ロックが成立し得るため。空ファイルとして
+        # 残置し続けることが `_check_ledger_path_collisions` の `lock_path`
+        # 引数と整合する設計）。
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
