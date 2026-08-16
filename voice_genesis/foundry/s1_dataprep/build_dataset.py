@@ -21,6 +21,7 @@ import math
 import os
 import sys
 import tempfile
+import wave
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -323,6 +324,70 @@ def _publish_outputs(items: Sequence[Tuple[Path, str]]) -> None:
             os.unlink(bak_name)
 
 
+# fix (2026-08-16, s1_poison_scan 捜査結果を受けての導入): PJS 4 セグメントで
+# 申告 ph_dur 合計が実音声長の 1.37〜1.89 倍という構造不良が見つかった
+# （末尾 SP の申告時間が数秒単位あるにもかかわらず実 wav がそれより短く、
+# `get_mel2ph_torch` の length クランプで末尾フォノームが 0 フレームへ完全
+# 消滅する）。整合性の低い教師信号が binarize 済みデータへ無警告で混入する
+# のを防ぐため、ph_dur 合計と実 wav 長の整合を検査する。フレーム量子化
+# （timestep 11.61ms 相当）を考慮し、相対 5% or 絶対 0.1s の大きい方を許容
+# 誤差とする。ただし現行 PJS 素材で 4 件が既知違反のため、既定は fail-closed
+# にせず warn のみに留め、`--strict-duration` 指定時のみ problems へ昇格させて
+# fail させる 2 段階仕様にする（`convert_pjs.py` の `DURATION_REL_TOLERANCE`/
+# `DURATION_ABS_TOLERANCE_SEC` と同一閾値。両ファイルとも既存の record スクリプト
+# 群の慣例に倣い、共有モジュール新設ではなく値を直接コピペする）。
+DURATION_REL_TOLERANCE = 0.05
+DURATION_ABS_TOLERANCE_SEC = 0.1
+
+
+def wav_duration_seconds(path: Path) -> Optional[float]:
+    """`path` の WAV 実長を秒で返す。読み取れない（非存在・非 PCM・破損）場合は
+    `None`（この検査をスキップする合図。存在チェック自体は `validate_speaker`
+    の既存ロジックが別途担当する）。"""
+    if not path.exists():
+        return None
+    try:
+        with wave.open(str(path), "rb") as w:
+            rate = w.getframerate()
+            if rate <= 0:
+                return None
+            return w.getnframes() / rate
+    except (wave.Error, OSError, EOFError):
+        return None
+
+
+def check_ph_dur_duration(
+    speaker_name: str, wav_dir: Path, rows: Sequence[Dict[str, str]]
+) -> List[str]:
+    """`ph_dur` 合計と実 wav 長の乖離を検出する。乖離があっても例外にせず
+    violation メッセージのリストとして全件収集して返す（`validate_speaker` と
+    同じ「全収集してから呼び出し側が判定する」設計。既定では戻り値は warning
+    として扱われ、`--strict-duration` 時のみ呼び出し側が problems へ昇格させる）。
+    """
+    violations: List[str] = []
+    for row in rows:
+        try:
+            ph_dur = [float(x) for x in row["ph_dur"].split()]
+        except ValueError:
+            continue  # 数値でない ph_dur は validate_speaker が別途検出する
+        if not ph_dur or not all(math.isfinite(d) for d in ph_dur):
+            continue  # 空/非有限は validate_speaker が別途検出する
+        wav_dur = wav_duration_seconds(wav_dir / f"{row['name']}.wav")
+        if wav_dur is None or wav_dur <= 0:
+            continue
+        total = math.fsum(ph_dur)
+        tol = max(wav_dur * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+        diff = abs(total - wav_dur)
+        if diff > tol:
+            ratio = total / wav_dur
+            violations.append(
+                f"{speaker_name}: {row['name']} ph_dur total {total:.4f}s vs wav "
+                f"duration {wav_dur:.4f}s (ratio {ratio:.3f}x, diff {diff:.4f}s > "
+                f"tolerance {tol:.4f}s)"
+            )
+    return violations
+
+
 def validate_speaker(
     speaker_name: str, raw_dir: Path, rows: Sequence[Dict[str, str]]
 ) -> List[str]:
@@ -526,6 +591,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--num-ckpt-keep", type=int, default=DEFAULT_NUM_CKPT_KEEP,
         help=f"config へ書き込む num_ckpt_keep (既定: {DEFAULT_NUM_CKPT_KEEP})",
     )
+    parser.add_argument(
+        "--strict-duration", action="store_true",
+        help="ph_dur 合計と実 wav 長の乖離（相対5% or 絶対0.1sの大きい方を超過）を"
+             "warning ではなく problem として扱い、検証を fail させる。"
+             "既定 (指定なし) は warning のみで公開は継続する "
+             "(現行 PJS 素材で 4 件が既知違反のため)。",
+    )
     args = parser.parse_args(argv)
 
     ritsu_csv = args.ritsu_raw_dir / "transcriptions.csv"
@@ -543,6 +615,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     problems: List[str] = []
     problems += validate_speaker("ritsu", args.ritsu_raw_dir, ritsu_rows)
     problems += validate_speaker("pjs", args.pjs_raw_dir, pjs_rows)
+
+    duration_warnings: List[str] = []
+    duration_warnings += check_ph_dur_duration(
+        "ritsu", args.ritsu_raw_dir / "wavs", ritsu_rows
+    )
+    duration_warnings += check_ph_dur_duration(
+        "pjs", args.pjs_raw_dir / "wavs", pjs_rows
+    )
+    for w in duration_warnings:
+        print(f"{'problem' if args.strict_duration else 'warning'}: {w}", file=sys.stderr)
+    if args.strict_duration:
+        problems += duration_warnings
 
     ritsu_symbols = collect_phoneme_symbols(ritsu_rows)
     pjs_symbols = collect_phoneme_symbols(pjs_rows)
@@ -596,6 +680,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "ritsu_test_prefixes": ritsu_prefixes,
         "pjs_test_prefixes": pjs_prefixes,
         "problems": problems,
+        "duration_warnings": duration_warnings,
+        "strict_duration": args.strict_duration,
     }
     report_text = json.dumps(report, ensure_ascii=False, indent=2)
     print(report_text)

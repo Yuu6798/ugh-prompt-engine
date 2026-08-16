@@ -86,12 +86,15 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import wave
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 # nnsvs-db-converter 同梱の `lang.sample.json` と同一内容
 # （`s1a_conversion_record.md` §2: 日本語ラベルのモーラ分割規則としてそのまま
@@ -106,6 +109,92 @@ DEFAULT_LANG_DEF = {
 # `stage_song_wavs` はこの期待 ID 集合に対して走査することで、抽出が
 # `pjsNNN` ディレクトリ自体を丸ごと落とした場合も検出できる。
 PJS_EXPECTED_IDS: Tuple[str, ...] = tuple(f"pjs{i:03d}" for i in range(1, 101))
+
+# fix (2026-08-16, s1_poison_scan 捜査結果を受けての導入): 4/287 PJS セグメント
+# （pjs004_seg003 / pjs016_seg000 / pjs029_seg002 / pjs030_seg001）で、
+# `db_converter.py` が書き出す `transcriptions.csv` の申告 ph_dur 合計が実
+# `.wav` 長の 1.37〜1.89 倍という構造不良が判明した。
+#
+# 原因（本 clone の `process_lab_wav_pair()` を精読して特定): 同関数は
+# `.lab` の時刻をそのまま `segment.to_lengths_string()` 経由で ph_dur として
+# 書き出す一方、実際の wav は `x[s:e]`（`s`/`e` は `.lab` 由来のサンプル位置）
+# という numpy スライスで書き出す。`.lab` が想定する終端が実音声（PJS 配布
+# `_song.wav`）の実長より後ろにある場合、numpy スライスは例外を出さず黙って
+# 実音声の終端でクランプするため、ph_dur は「本来あるべきだった長さ」を、
+# wav は「実際に存在した音声」を報告し、両者が食い違う。
+#
+# 実測（4件全数）: 末尾フォノーム（全件 SP）を除いた残り ph_dur 合計だけでも
+# 実 wav 長を 14〜34ms 超過する 3 件（pjs004/pjs029/pjs030、フレーム量子化
+# ≈timestep 11.61ms 相当の丸め誤差域）と、226ms（+5.4%）超過する 1 件
+# （pjs016_seg000）がある。後者は「末尾 SP だけを実長に合わせて再計算」では
+# 許容誤差内に収まらない（末尾以外にも実 wav 長を超える申告が残る）ため、
+# 末尾集中の是正ではなく全 ph_dur を比例縮小して合計を実 wav 長へ正規化する
+# 方式を採る（`build_dataset.py` `check_ph_dur_duration` と同一閾値 —
+# 相対5% or 絶対0.1sの大きい方。両ファイルとも既存の record スクリプト群の
+# 慣例に倣い、共有モジュール新設ではなく値を直接コピペする）。閾値内の行は
+# 完全無変更のまま返す（283 件の既知良好セグメントは byte 単位で不変）。
+DURATION_REL_TOLERANCE = 0.05
+DURATION_ABS_TOLERANCE_SEC = 0.1
+
+
+def _wav_duration_seconds(path: Path) -> Optional[float]:
+    """`path` の WAV 実長を秒で返す。読み取れない場合は `None`
+    （呼び出し側はこの ph_dur 正規化をスキップする）。"""
+    if not path.exists():
+        return None
+    try:
+        with wave.open(str(path), "rb") as w:
+            rate = w.getframerate()
+            if rate <= 0:
+                return None
+            return w.getnframes() / rate
+    except (wave.Error, OSError, EOFError):
+        return None
+
+
+def normalize_ph_dur_to_wav_duration(
+    rows: List[Dict[str, str]], wav_dir: Path
+) -> Tuple[List[Dict[str, str]], List[str]]:
+    """各行の ph_dur 合計が実 wav 長と許容誤差（相対5% or 絶対0.1sの大きい方）
+    を超えて乖離している場合、全 ph_dur を比例縮小/拡大して合計を実 wav 長へ
+    正規化した新しい行のリストを返す。乖離が許容内の行は同一オブジェクトの
+    まま（内容も無変更で）返す。2 個目の戻り値は正規化を適用した行の
+    人間可読ログ（適用 0 件なら空リスト。呼び出し側はこれを CSV 再公開の
+    要否判定に使う）。
+    """
+    fixed_rows: List[Dict[str, str]] = []
+    fix_log: List[str] = []
+    for row in rows:
+        try:
+            ph_dur = [float(x) for x in row["ph_dur"].split()]
+        except ValueError:
+            fixed_rows.append(row)
+            continue
+        if not ph_dur or not all(math.isfinite(d) for d in ph_dur):
+            fixed_rows.append(row)
+            continue
+        wav_dur = _wav_duration_seconds(wav_dir / f"{row['name']}.wav")
+        if wav_dur is None or wav_dur <= 0:
+            fixed_rows.append(row)
+            continue
+        total = math.fsum(ph_dur)
+        tol = max(wav_dur * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+        diff = abs(total - wav_dur)
+        if diff <= tol:
+            fixed_rows.append(row)
+            continue
+        scale = wav_dur / total
+        new_ph_dur = [d * scale for d in ph_dur]
+        new_row = dict(row)
+        # `str(round(x, 12))` は `db_converter.py` `to_lengths_string()` と
+        # 同じ書式（元 ph_dur の生成に使われている書式に揃える）。
+        new_row["ph_dur"] = " ".join(str(round(d, 12)) for d in new_ph_dur)
+        fixed_rows.append(new_row)
+        fix_log.append(
+            f"{row['name']}: ph_dur total {total:.4f}s -> {math.fsum(new_ph_dur):.4f}s "
+            f"(wav duration {wav_dur:.4f}s, scale {scale:.4f})"
+        )
+    return fixed_rows, fix_log
 
 
 class OutputCollisionError(ValueError):
@@ -557,7 +646,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
                 return 1
             with open(out_csv_path, newline="", encoding="utf-8") as f:
-                out_rows = list(csv.DictReader(f))
+                reader = csv.DictReader(f)
+                out_fieldnames = reader.fieldnames
+                out_rows = list(reader)
             if len(out_rows) == 0:
                 print(
                     f"error: {out_csv_path} has 0 data rows (fail-closed, not published)",
@@ -588,6 +679,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
                 _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
                 return 1
+
+            # fix (2026-08-16): ph_dur 合計と実 wav 長が許容誤差を超えて乖離する
+            # 行（s1_poison_scan 捜査で判明した4件）を、比例縮小/拡大した ph_dur
+            # で正規化する。乖離が許容内の行は無変更のため、正規化対象が皆無
+            # なら CSV は書き換えない（bytewise 不変を保つ）。
+            out_wav_dir = build_dir / "diffsinger_db" / "wavs"
+            out_rows, ph_dur_fix_log = normalize_ph_dur_to_wav_duration(out_rows, out_wav_dir)
+            if ph_dur_fix_log:
+                for msg in ph_dur_fix_log:
+                    print(f"ph_dur normalized: {msg}")
+                tmp_csv_fd, tmp_csv_name = tempfile.mkstemp(
+                    dir=out_csv_path.parent, prefix=f"{out_csv_path.name}.", suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(tmp_csv_fd, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.DictWriter(f, fieldnames=out_fieldnames)
+                        writer.writeheader()
+                        writer.writerows(out_rows)
+                except BaseException:
+                    os.unlink(tmp_csv_name)
+                    raise
+                os.replace(tmp_csv_name, out_csv_path)
 
             _swap_into_place(build_dir, staging_dir)
             swapped = True
