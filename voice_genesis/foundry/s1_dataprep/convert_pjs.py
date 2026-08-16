@@ -54,6 +54,14 @@ review #263 R9 で 2 件追加修正: (1) `stage_song_wavs` が「存在する
 例えば `--staging-dir=/tmp/published`, `--pjs-root=/tmp/published.old`
 は事前チェックを素通りしたのち、公開時に `old_dir` の `rmtree` が
 `pjs_root`（保護入力）そのものを削除する。派生パスもガード対象に含める。
+
+review #263 R10 で 1 件追加修正: `--lang-def` が `--staging-dir` 外の既存
+ファイルを指す場合、`write_lang_def` は swap の外側（`_swap_into_place` に
+よる新旧世代の原子的差し替えの対象外）で直接上書きする。この上書き後、
+converter 実行〜swap 完了のいずれかが失敗すると、外部 lang-def だけが新
+内容のまま取り残され、コーパスと外部 lang-def の世代が食い違う。上書き前に
+元内容をメモリへバックアップし、以降のいずれかの失敗で元へ復元する
+（成功時のみ確定）。
 """
 from __future__ import annotations
 
@@ -204,6 +212,23 @@ def write_lang_def(path: Path) -> None:
     tmp_path = path.parent / f".{path.name}.tmp-{os.getpid()}"
     tmp_path.write_text(json.dumps(DEFAULT_LANG_DEF, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+def _restore_lang_def_backup(path: Path, backup: Optional[bytes]) -> None:
+    """[P2 修正] (review #263 R10) `--lang-def` が `--staging-dir` 外の既存
+    ファイルを指す場合の巻き戻しヘルパー。`backup` が `None`（バックアップを
+    取っていない = 対象外パスまたはファイル未存在）なら何もしない。
+
+    `--staging-dir` 外を指す `--lang-def` への書き込みは、`_swap_into_place`
+    による新旧世代の原子的 swap の対象外（swap 前に直接上書きする）。この
+    書き込み後、converter 実行〜swap 完了のいずれかが失敗すると、外部
+    lang-def だけが新内容のまま取り残され、コーパスと外部 lang-def の世代が
+    食い違う。呼び出し元 (`main`) が上書き前に元内容をバックアップしておき、
+    失敗経路でこの関数を呼んで復元することで、コーパスと外部 lang-def の
+    世代を常に一致させる（成功時のみ確定＝バックアップは破棄）。
+    """
+    if backup is not None:
+        path.write_bytes(backup)
 
 
 def _resolve_lang_def_path(lang_def_arg: Optional[Path], staging_dir: Path, build_dir: Path) -> Path:
@@ -390,17 +415,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 1
 
         lang_def_path = _resolve_lang_def_path(args.lang_def, staging_dir, build_dir)
+
+        # [P2 修正] (review #263 R10) lang_def_path が --staging-dir 外の
+        # 既存ファイルを指す場合（= args.lang_def と同一パスかつ既に存在）、
+        # write_lang_def はここで swap の外側で直接上書きする。以降の
+        # converter 実行〜swap 完了のいずれかが失敗した場合に元内容へ
+        # 巻き戻せるよう、上書き前にバックアップを取る（成功時のみ確定）。
+        lang_def_backup: Optional[bytes] = None
+        if args.lang_def is not None and lang_def_path == args.lang_def and lang_def_path.exists():
+            lang_def_backup = lang_def_path.read_bytes()
+
         write_lang_def(lang_def_path)
 
-        result = run_converter(args.converter_dir, build_dir, lang_def_path, args.python_bin)
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
-        if result.returncode != 0:
-            print(f"error: db_converter.py failed (exit {result.returncode})", file=sys.stderr)
-            return result.returncode
+        try:
+            result = run_converter(args.converter_dir, build_dir, lang_def_path, args.python_bin)
+            sys.stdout.write(result.stdout)
+            sys.stderr.write(result.stderr)
+            if result.returncode != 0:
+                print(f"error: db_converter.py failed (exit {result.returncode})", file=sys.stderr)
+                _restore_lang_def_backup(lang_def_path, lang_def_backup)
+                return result.returncode
 
-        _swap_into_place(build_dir, staging_dir)
-        swapped = True
+            _swap_into_place(build_dir, staging_dir)
+            swapped = True
+        except BaseException:
+            _restore_lang_def_backup(lang_def_path, lang_def_backup)
+            raise
     finally:
         if not swapped:
             shutil.rmtree(build_dir, ignore_errors=True)

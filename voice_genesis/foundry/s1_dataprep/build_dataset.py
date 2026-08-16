@@ -134,7 +134,12 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
     包含）で判定する（AGENTS.md Persistent Artifact Safety Gate 項目2）。
 
     - 出力同士: `--out-dict`/`--out-config`/`--report` が同一パスを指す場合
-      （最後に書いたものが他方を無言で上書きする）。
+      （最後に書いたものが他方を無言で上書きする）。R10 で祖先/子孫関係
+      （例: `--out-dict=/tmp/artifact`, `--out-config=/tmp/artifact/config.yaml`）
+      も対象に追加（`_preflight_writable` の `mkdir(parents=True)` が祖先側
+      出力パスをディレクトリとして先に作ってしまい、後続の祖先側公開が
+      「ファイルでディレクトリを置換」しようとして失敗し、子孫側だけ公開
+      された混合世代を招くため）。
     - 出力と保護入力: `--ritsu-raw-dir`/`--pjs-raw-dir` 配下（`transcriptions.csv`・
       `wavs/`・その他参照ファイルを含むルートごと）を出力先に指定した場合。
     """
@@ -146,6 +151,32 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
                 raise OutputCollisionError(
                     f"output paths collide with each other: {p_i} == {p_j}（fail-closed で拒否）"
                 )
+            # [P2 修正] (review #263 R10) 等価判定のみでは、出力パス同士が
+            # 祖先/子孫関係にある場合（例: --out-dict=/tmp/artifact,
+            # --out-config=/tmp/artifact/config.yaml）を見逃す。
+            # `_preflight_writable`/`_publish_outputs` は各出力の親ディレクトリ
+            # を `mkdir(parents=True, exist_ok=True)` するため、子孫側の
+            # preflight が祖先側の出力パスをディレクトリとして先に作って
+            # しまい、後続の祖先側公開 (`os.replace`) が「ファイルで
+            # ディレクトリを置換」しようとして失敗し、子孫側だけ公開された
+            # 混合世代を招く（Codex 再現手順: 上記 2 パス）。祖先/子孫関係も
+            # 公開前に fail-closed で拒否する（`convert_pjs.py`
+            # `_reject_output_collision` の保護 root 双方向判定と同型ロジック）。
+            try:
+                r_j.relative_to(r_i)
+            except ValueError:
+                pass
+            else:
+                raise OutputCollisionError(
+                    f"output path {p_j} is inside output path {p_i}（fail-closed で拒否）"
+                )
+            try:
+                r_i.relative_to(r_j)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"output path {p_i} is inside output path {p_j}（fail-closed で拒否）"
+            )
 
     for root in protected_roots:
         if not root.exists():
