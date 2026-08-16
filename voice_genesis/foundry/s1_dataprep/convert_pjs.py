@@ -191,6 +191,41 @@ DURATION_REL_TOLERANCE = 0.05
 DURATION_ABS_TOLERANCE_SEC = 0.1
 
 
+def _is_safe_wav_name(name: str, wav_dir: Path, resolved_wav_dir: Path) -> bool:
+    """`name` が `wav_dir` 配下の `<name>.wav` を安全に指すかを判定する
+    （字句検査 + resolve 封じ込め検査）。
+
+    fix (2026-08-16, review #264 R7): `normalize_ph_dur_to_wav_duration` は
+    `db_converter.py`（外部変換器）が出力した `row["name"]` を無検査で
+    `wav_dir / f"{name}.wav"` へ連結し `_wav_duration_seconds`（=
+    `wave.open`）へ渡していた。`row["name"]` は外部生成物で信頼できない
+    入力のため、`../../outside` のような name や wav_dir 外へ逃げる symlink
+    経由で wav_dir 外の任意ファイル（特殊ファイルを含む）を duration
+    チェック目的で読み取れてしまう穴があった（`build_dataset.py`
+    `check_ph_dur_duration` で review #264 R4 P2 に修正済みの同型の穴が、
+    別ファイルの別呼び出し箇所で再発したもの）。
+
+    判定ロジックは `build_dataset._is_safe_wav_name` と同一（絶対パス・
+    `..` セグメント・パス区切り文字を拒否する字句検査 + resolve 後の実
+    パスが `wav_dir` 配下に収まることを確認する多層防御）だが、record
+    スクリプト群の既存慣例（本ファイル冒頭の `DURATION_REL_TOLERANCE` 等、
+    モジュール冒頭コメント参照）に倣い、共有モジュール新設ではなくロジック
+    をこちらへコピペ実装する。両実装の挙動同値性は
+    `tests/test_s1_dataprep_ph_dur_duration.py` の
+    `test_is_safe_wav_name_matches_build_dataset_behavior` で担保する。
+    """
+    if not name or os.path.isabs(name) or os.sep in name or (os.altsep and os.altsep in name):
+        return False
+    parts = name.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return False
+    candidate = wav_dir / f"{name}.wav"
+    resolved_candidate = candidate.resolve()
+    if resolved_candidate != resolved_wav_dir and resolved_wav_dir not in resolved_candidate.parents:
+        return False
+    return True
+
+
 def _wav_duration_seconds(path: Path) -> Optional[float]:
     """`path` の WAV 実長を秒で返す。読み取れない場合は `None`
     （呼び出し側はこの ph_dur 正規化をスキップする）。"""
@@ -348,7 +383,7 @@ def _drop_dead_phonemes(row: Dict[str, str], ph_dur: List[float]) -> Dict[str, s
 
 def normalize_ph_dur_to_wav_duration(
     rows: List[Dict[str, str]], wav_dir: Path
-) -> Tuple[List[Dict[str, str]], List[str], List[str]]:
+) -> Tuple[List[Dict[str, str]], List[str], List[str], List[str]]:
     """各行の ph_dur 合計が実 wav 長と許容誤差（相対5% or 絶対0.1sの大きい方）
     を超えて乖離している場合の是正/検出を行う。
 
@@ -369,6 +404,15 @@ def normalize_ph_dur_to_wav_duration(
     `undershoot_violations` へ人間可読の説明とともに収集する（呼び出し元が
     公開前に fail-closed で拒否する）。
 
+    fix (2026-08-16, review #264 R7): `row["name"]` は外部変換器
+    `db_converter.py` の出力（信頼できない入力）であり、`_wav_duration_seconds`
+    で WAV を open する前に安全 name 判定（`_is_safe_wav_name`。絶対パス・
+    `..` トラバーサル・wav_dir 外へ逃げる symlink 経由を拒否）を通す。安全
+    でない name は open せず、行は無変更のまま返しつつ 4 個目の戻り値
+    `unsafe_name_violations` へ人間可読の説明とともに全件収集する
+    （undershoot_violations と同じ「全収集してから呼び出し側が fail-closed
+    で判定する」設計）。
+
     乖離が許容内の行は同一オブジェクトのまま（内容も無変更で）返す。
     2 個目の戻り値は overshoot 正規化を適用した行の人間可読ログ（適用 0 件
     なら空リスト。呼び出し側はこれを CSV 再公開の要否判定に使う）。
@@ -376,6 +420,8 @@ def normalize_ph_dur_to_wav_duration(
     fixed_rows: List[Dict[str, str]] = []
     fix_log: List[str] = []
     undershoot_violations: List[str] = []
+    unsafe_name_violations: List[str] = []
+    resolved_wav_dir = wav_dir.resolve()
     for row in rows:
         try:
             ph_dur = [float(x) for x in row["ph_dur"].split()]
@@ -385,7 +431,19 @@ def normalize_ph_dur_to_wav_duration(
         if not ph_dur or not all(math.isfinite(d) for d in ph_dur):
             fixed_rows.append(row)
             continue
-        wav_dur = _wav_duration_seconds(wav_dir / f"{row['name']}.wav")
+        name = row["name"]
+        if not _is_safe_wav_name(name, wav_dir, resolved_wav_dir):
+            # fix (2026-08-16, review #264 R7): 安全でない name は
+            # `_wav_duration_seconds`（= wave.open）へ渡さず、公開前
+            # fail-closed の判定材料として収集するのみに留める。
+            unsafe_name_violations.append(
+                f"{name}: unsafe wav name (absolute path / '..' segment / path "
+                "separator rejected, or resolved path escapes wav_dir — "
+                "possibly via symlink); not opened, fail-closed"
+            )
+            fixed_rows.append(row)
+            continue
+        wav_dur = _wav_duration_seconds(wav_dir / f"{name}.wav")
         if wav_dur is None or wav_dur <= 0:
             fixed_rows.append(row)
             continue
@@ -399,7 +457,7 @@ def normalize_ph_dur_to_wav_duration(
             # [P2 修正] (review #264 R5) undershoot は末尾音素へ不足分を
             # 加算して合成せず、違反として収集し行は無変更のまま返す。
             undershoot_violations.append(
-                f"{row['name']}: ph_dur total {total:.4f}s < wav duration "
+                f"{name}: ph_dur total {total:.4f}s < wav duration "
                 f"{wav_dur:.4f}s by {wav_dur - total:.4f}s (undershoot beyond "
                 f"tolerance {tol:.4f}s; the EOF-clamp diagnosis this module "
                 "documents explains overshoot only, undershoot cause is "
@@ -413,13 +471,13 @@ def normalize_ph_dur_to_wav_duration(
         fixed_rows.append(new_row)
         surviving_dur = [float(x) for x in new_row["ph_dur"].split()] if new_row["ph_dur"] else []
         fix_log.append(
-            f"{row['name']}: ph_dur total {total:.4f}s -> {math.fsum(surviving_dur):.4f}s "
+            f"{name}: ph_dur total {total:.4f}s -> {math.fsum(surviving_dur):.4f}s "
             f"(wav duration {wav_dur:.4f}s, tail-truncated: {n_touched} trailing "
             f"phoneme(s) adjusted, forward boundaries preserved"
             + (f", {n_dropped} zero-length phoneme(s) removed" if n_dropped else "")
             + ")"
         )
-    return fixed_rows, fix_log, undershoot_violations
+    return fixed_rows, fix_log, undershoot_violations, unsafe_name_violations
 
 
 class OutputCollisionError(ValueError):
@@ -917,10 +975,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # 自動修復せず、公開前に fail-closed で拒否する（モジュール冒頭
             # コメント参照。EOF クランプ診断は overshoot のみを説明し、
             # undershoot は原因未特定・現行素材でも未観測のため）。
+            #
+            # fix (2026-08-16, review #264 R7) `out_rows` の `name` は外部
+            # 変換器 `db_converter.py` の出力（信頼できない入力）であり、
+            # 絶対パス・`..` トラバーサル・wav_dir 外へ逃げる symlink 経由の
+            # name を `_is_safe_wav_name` で拒否する（`_wav_duration_seconds`
+            # で open する前に判定するのは `normalize_ph_dur_to_wav_duration`
+            # 内部の責務。ここでは違反が1件でもあれば公開前に fail-closed で
+            # 拒否する）。
             out_wav_dir = build_dir / "diffsinger_db" / "wavs"
-            out_rows, ph_dur_fix_log, ph_dur_undershoot_violations = normalize_ph_dur_to_wav_duration(
-                out_rows, out_wav_dir
-            )
+            (
+                out_rows,
+                ph_dur_fix_log,
+                ph_dur_undershoot_violations,
+                ph_dur_unsafe_name_violations,
+            ) = normalize_ph_dur_to_wav_duration(out_rows, out_wav_dir)
+            if ph_dur_unsafe_name_violations:
+                print(
+                    f"error: {len(ph_dur_unsafe_name_violations)} row(s) have an unsafe wav "
+                    "name (path traversal / symlink escape, fail-closed, not published): "
+                    + "; ".join(ph_dur_unsafe_name_violations),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
             if ph_dur_undershoot_violations:
                 print(
                     f"error: {len(ph_dur_undershoot_violations)} row(s) have ph_dur total "

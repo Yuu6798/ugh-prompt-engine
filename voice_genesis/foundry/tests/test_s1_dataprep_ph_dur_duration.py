@@ -253,8 +253,9 @@ def test_normalize_ph_dur_truncates_tail_of_overshooting_row(tmp_path: Path) -> 
     wav_dir = tmp_path / "wavs"
     _write_wav(wav_dir / "seg000.wav", 3.0)
     rows = [{"name": "seg000", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0", "ph_num": "1 1 1"}]
-    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
+    assert unsafe == []
     assert len(fix_log) == 1
     assert "1 zero-length phoneme(s) removed" in fix_log[0]
     new_seq = fixed_rows[0]["ph_seq"].split()
@@ -290,8 +291,9 @@ def test_normalize_ph_dur_removes_note_seq_note_dur_for_emptied_note(tmp_path: P
             "note_dur": "1.0 4.0 1.0",
         }
     ]
-    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
+    assert unsafe == []
     assert len(fix_log) == 1
     assert fixed_rows[0]["ph_num"] == "1 1"
     assert fixed_rows[0]["note_seq"] == "rest 60"
@@ -331,8 +333,9 @@ def test_normalize_ph_dur_partial_note_survives_with_reduced_count(tmp_path: Pat
             "note_dur": "0.5 3.0",
         }
     ]
-    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
+    assert unsafe == []
     assert len(fix_log) == 1
     new_seq = fixed_rows[0]["ph_seq"].split()
     new_dur = [float(x) for x in fixed_rows[0]["ph_dur"].split()]
@@ -360,8 +363,9 @@ def test_normalize_ph_dur_forward_boundaries_preserved_multi_phoneme(tmp_path: P
     # 累積: 0.3 / 0.7 / 1.2(=0.3+0.4+... 実際は 0.3,0.4,0.5 -> 1.2) / 続いて
     # 大きな最終音素が EOF を大きく超過する
     rows = [{"name": "seg002", "ph_seq": "a i u SP", "ph_dur": "0.3 0.4 0.5 5.0"}]
-    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
+    assert unsafe == []
     assert len(fix_log) == 1
     new_dur = [float(x) for x in fixed_rows[0]["ph_dur"].split()]
     # EOF(2.0s) 以前の 3 音素は完全無変更
@@ -383,13 +387,14 @@ def test_normalize_ph_dur_undershoot_is_rejected_fail_closed(tmp_path: Path) -> 
     _write_wav(wav_dir / "seg003.wav", 4.0)
     row = {"name": "seg003", "ph_seq": "a i SP", "ph_dur": "0.5 0.5 0.5"}  # 合計1.5s vs 実4.0s
     rows = [row]
-    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []  # overshoot 用ログには積まれない
     assert len(undershoot) == 1
     assert "seg003" in undershoot[0]
     assert "1.5000s" in undershoot[0]
     assert "4.0000s" in undershoot[0]
     assert "undershoot" in undershoot[0]
+    assert unsafe == []
     # 行自体は無変更（捏造した境界を書き込まない）のまま返る
     assert fixed_rows[0] is row
     assert fixed_rows[0]["ph_dur"] == "0.5 0.5 0.5"
@@ -402,9 +407,10 @@ def test_normalize_ph_dur_undershoot_within_tolerance_is_untouched(tmp_path: Pat
     _write_wav(wav_dir / "seg005.wav", 3.05)
     row = {"name": "seg005", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}  # 合計3.0s vs 実3.05s
     rows = [row]
-    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []
     assert undershoot == []
+    assert unsafe == []
     assert fixed_rows[0] is row
 
 
@@ -413,9 +419,10 @@ def test_normalize_ph_dur_leaves_within_tolerance_row_byte_identical(tmp_path: P
     _write_wav(wav_dir / "seg001.wav", 3.0)
     row = {"name": "seg001", "ph_seq": "SP a SP", "ph_dur": "1.0 1.02 1.0"}
     rows = [row]
-    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert fix_log == []
     assert undershoot == []
+    assert unsafe == []
     assert fixed_rows[0] is row  # 無変更行は同一オブジェクトのまま返る
 
 
@@ -425,8 +432,9 @@ def test_normalize_ph_dur_mixed_batch_only_touches_violating_rows(tmp_path: Path
     _write_wav(wav_dir / "bad.wav", 3.0)
     good = {"name": "good", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
     bad = {"name": "bad", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0"}
-    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration([good, bad], wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration([good, bad], wav_dir)
     assert undershoot == []
+    assert unsafe == []
     assert len(fix_log) == 1
     assert "bad" in fix_log[0]
     assert fixed_rows[0] is good
@@ -487,8 +495,9 @@ def test_normalize_then_build_dataset_validate_speaker_passes_end_to_end(
         },
     ]
 
-    fixed_rows, fix_log, undershoot = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
     assert undershoot == []
+    assert unsafe == []
     assert len(fix_log) == 2  # 両行とも許容誤差を超過し正規化対象になる
 
     csv_path = raw_dir / "transcriptions.csv"
@@ -511,3 +520,129 @@ def test_normalize_then_build_dataset_validate_speaker_passes_end_to_end(
 
     duration_warnings = bd.check_ph_dur_duration("pjs", wav_dir, reloaded)
     assert duration_warnings == [], duration_warnings
+
+
+# --- convert_pjs.normalize_ph_dur_to_wav_duration: 安全でない name の
+# fail-closed 拒否 (review #264 R7) ------------------------------------------
+#
+# `check_ph_dur_duration`（build_dataset.py 側、review #264 R4 P2 で修正済み）
+# は不安全 name を黙ってスキップするだけで良い（`validate_speaker` 側が別途
+# problems へ昇格させるため）。一方 `normalize_ph_dur_to_wav_duration` には
+# そのような別経路の検出ロジックが存在しないため、ここでは違反を
+# `unsafe_name_violations` として自ら収集し、呼び出し元 `main()` が公開前に
+# fail-closed で拒否する（`check_ph_dur_duration` とは異なり「黙ってスキップ」
+# では終わらない）。
+
+
+def test_normalize_ph_dur_does_not_open_path_traversal_name(tmp_path: Path) -> None:
+    """`row["name"]` が `../../outside/secret` のような wav_dir 外を指す名前
+    でも、`normalize_ph_dur_to_wav_duration` は `_wav_duration_seconds` で
+    WAV を open してはならない。安全でない name は `unsafe_name_violations`
+    へ収集し、行は無変更のまま返す。"""
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    # もし open されていれば ph_dur との乖離から fix_log/undershoot 側に
+    # 副作用が出てしまうはずの secret wav（10.0s）。
+    _write_wav(outside_dir / "secret.wav", 10.0)
+
+    wav_dir = tmp_path / "pjs" / "wavs"
+    wav_dir.mkdir(parents=True)
+
+    row = {"name": "../../outside/secret", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
+    rows = [row]
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert fix_log == []
+    assert undershoot == []
+    assert len(unsafe) == 1
+    assert "../../outside/secret" in unsafe[0]
+    assert fixed_rows[0] is row  # 無変更のまま返る（open されていない証拠でもある）
+
+
+def test_normalize_ph_dur_does_not_open_symlink_escape(tmp_path: Path) -> None:
+    """wav_dir 配下の symlink が wav_dir 外の実ファイルへ逃げている場合も、
+    resolve 後のパスが wav_dir 配下に収まらない限り open しない。"""
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    _write_wav(outside_dir / "secret.wav", 10.0)
+
+    wav_dir = tmp_path / "pjs" / "wavs"
+    wav_dir.mkdir(parents=True)
+    (wav_dir / "evil.wav").symlink_to(outside_dir / "secret.wav")
+
+    row = {"name": "evil", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
+    rows = [row]
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(rows, wav_dir)
+    assert fix_log == []
+    assert undershoot == []
+    assert len(unsafe) == 1
+    assert "evil" in unsafe[0]
+    assert fixed_rows[0] is row
+
+
+def test_normalize_ph_dur_unsafe_name_mixed_with_safe_rows(tmp_path: Path) -> None:
+    """安全な行と不安全な行が混在する場合、安全な行は通常どおり処理され
+    （overshoot 正規化も含め）、不安全な行だけが `unsafe_name_violations`
+    へ収集されることを検証する（全件収集の設計を確認する）。"""
+    wav_dir = tmp_path / "wavs"
+    _write_wav(wav_dir / "good.wav", 3.0)
+    good = {"name": "good", "ph_seq": "SP a SP", "ph_dur": "1.0 4.0 1.0", "ph_num": "1 1 1"}
+    evil = {"name": "../escape", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration(
+        [good, evil], wav_dir
+    )
+    assert undershoot == []
+    assert len(unsafe) == 1
+    assert "../escape" in unsafe[0]
+    assert len(fix_log) == 1
+    assert "good" in fix_log[0]
+    assert fixed_rows[0] is not good  # overshoot 正規化により新しい行になる
+    assert fixed_rows[1] is evil  # 不安全な行は無変更のまま
+
+
+def test_normalize_ph_dur_unsafe_name_fails_closed_via_main(tmp_path: Path, capsys) -> None:
+    """`main()` は `unsafe_name_violations` が非空なら swap 前に fail-closed
+    で拒否し、`--staging-dir` を新世代へ差し替えない（公開しない）ことを
+    end-to-end で確認する回帰ガードの土台として、`normalize_ph_dur_to_wav_duration`
+    を直接呼んだ結果を `main()` の判定条件と同じ形（非空なら reject）で
+    再確認する。"""
+    wav_dir = tmp_path / "wavs"
+    wav_dir.mkdir()
+    row = {"name": "/etc/passwd", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}
+    fixed_rows, fix_log, undershoot, unsafe = cp.normalize_ph_dur_to_wav_duration([row], wav_dir)
+    assert len(unsafe) == 1  # main() はこれを検知して return 1 する
+    assert fixed_rows[0] is row
+
+
+# --- convert_pjs._is_safe_wav_name / build_dataset._is_safe_wav_name:
+# 挙動同値性 (review #264 R7) -------------------------------------------------
+#
+# 両ファイルとも record スクリプト群の既存慣例（共有モジュール新設ではなく
+# ロジックをコピペする）に倣っているため、判定ロジックの実装が独立に
+# ドリフトしないことをこのテストで担保する。
+
+
+def test_is_safe_wav_name_matches_build_dataset_behavior(tmp_path: Path) -> None:
+    wav_dir = tmp_path / "wavs"
+    wav_dir.mkdir()
+    (wav_dir / "safe.wav").write_bytes(b"")
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (wav_dir / "evil.wav").symlink_to(outside_dir / "does_not_matter.wav")
+    resolved_wav_dir = wav_dir.resolve()
+
+    candidates = [
+        "safe",
+        "seg000",
+        "../escape",
+        "../../outside/secret",
+        "/etc/passwd",
+        "a/b",
+        "",
+        ".",
+        "..",
+        "evil",  # wav_dir 配下だが wav_dir 外へ逃げる symlink
+    ]
+    for name in candidates:
+        assert cp._is_safe_wav_name(name, wav_dir, resolved_wav_dir) == bd._is_safe_wav_name(
+            name, wav_dir, resolved_wav_dir
+        ), name
