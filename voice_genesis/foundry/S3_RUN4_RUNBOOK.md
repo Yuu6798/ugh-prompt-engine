@@ -158,44 +158,38 @@ exclusions.json の sha256 実測値。手打ちなし）。
 
 ---
 
-## 3. 3 話者アセンブリ — 現状のギャップ（★着手前に必ず解消する）
+## 3. 3 話者アセンブリ — `assemble_run4.py`（実装済み 2026-08-17）
 
-`DESIGN_S3_backfill.md` §4 は「S1 の build_dataset 呼び出しに datasets へ spk3
-追加 + D3 追加」と書くが、**現状の `s1_dataprep/build_dataset.py` は 2 話者
-（ritsu/pjs）専用に実装がハードコードされており、そのままでは 3 話者化できない**
-（一次ソース確認済み、2026-08-17 時点）:
+**（R3 改訂: 本節の旧版は「結合スクリプト未実装」と記述していたが、
+`s1_dataprep/assemble_run4.py` の実装完了に伴い全面差し替え。§8.1 と整合）**
 
-- CLI 引数は `--ritsu-raw-dir` / `--pjs-raw-dir` の 2 つのみが必須で定義され、
-  3 話者目（user）を渡す引数が存在しない（`build_dataset.py:838-851`）。
-- `main()` 内で `speakers` が
-  `[("ritsu", 0, args.ritsu_raw_dir, ritsu_prefixes), ("pjs", 1, args.pjs_raw_dir, pjs_prefixes)]`
-  と 2 要素で直書きされている（`build_dataset.py:913-916`）。`num_spk` は
-  `len(speakers)` から自動算出される（`build_dataset.py:799`）ため、3 話者目を
-  リストへ加えれば `num_spk: 3` になる設計だが、それを行う CLI 経路が無い。
-- 辞書統合（`build_merged_dict`）・検証（`validate_speaker`）・duration 検査
-  （`check_ph_dur_duration`/`check_note_dur_consistency`）は話者数に依存しない
-  汎用ロジックのため、3 話者化そのものは大きな設計変更を要さない
-  （`speakers` タプルのリストを 3 要素にし、`--user-raw-dir` を CLI へ追加し、
-  `validate_speaker`/`check_ph_dur_duration` を user 分にも呼ぶだけで足りる
-  可能性が高い）が、**この拡張コードは本セッション時点で未実装**。
+`s1_dataprep/assemble_run4.py` が run 4 の 3 話者 raw 構成を一括で行う
+（`build_dataset.py` は無変更のまま、その検証関数群を read-only import で再利用）:
 
-加えて D3 は「spk=ritsu 側への追加」（`d3_dataset_record.md` §5 = 話者別
-データ分離は維持したまま **既存 ritsu の raw dir へ合流**させる設計）だが、
-これも実現する結合スクリプトが存在しない。`convert_ritsu.py` と
-`convert_d3.py` の出力はいずれも同一契約（`transcriptions.csv` +
-`wavs/`）だが:
+```bash
+python voice_genesis/foundry/s1_dataprep/assemble_run4.py \
+    --ritsu-raw-dir <D2 = convert_ritsu 出力> \
+    --d3-raw-dir    <D3 = convert_d3 出力> \
+    --pjs-raw-dir   <D1 = convert_pjs 出力> \
+    --user-raw-dir  <user = convert_user 出力> \
+    --out-dir       <run4_raw>
+```
 
-- ファイル名衝突: `convert_ritsu.py` は `ritsu_<pdir>_<idx:03d>`（例
-  `ritsu_A3_001`）という命名（`convert_ritsu.py:636`）、D3 は
-  `<score>_seed<seed>`（例 `sakura_seed11`）という命名で、**目視観察の限りでは
-  衝突しない**が、これは本タスクでの簡易照合であり、結合を実装する側で
-  ファイル名の全数比較による無衝突の実測確認を必須とする。
-- 結合手順（2 つの `transcriptions.csv` のヘッダ 1 回化 + 行連結、2 つの
-  `wavs/` のマージ）自体を行うスクリプトが存在しない。
+- **D3→ritsu 合流**（transcriptions.csv 行連結 + wavs/ マージ）を内部で実施。
+  name 列・wav 実ファイル名の**全数比較による無衝突検査**込み（衝突 =
+  fail-closed。ローカル実測: ritsu 456 + D3 40 = 496 行・衝突 0）
+- spk_id は **ritsu(D2+D3)=0 / pjs=1 / user=2** 固定（既存 2 話者 checkpoint の
+  順序を保存し user を新規 3 番目に置く。根拠は同スクリプト docstring）
+- 3 話者それぞれに validate_speaker / check_ph_dur_duration /
+  check_note_dur_consistency を実行し、全問題収集 → 1 件でも fail-closed
+- 統合辞書・assembly_manifest.json（各話者 row/wav 数・合計秒数・
+  transcriptions sha256・衝突検査結果）も出力
 
-**この節はクローが着手前に解消する実装作業として扱う**（本パッケージ化タスク
-は新規 2 ファイル [pins.json + 本 runbook] のみが許可され、既存ファイル変更・
-新規スクリプト作成は範囲外のため、ここでは実装しない）。詳細は §8。
+注意: 本セッションのローカル実測は D1 のみ合成ミニフィクスチャ
+（`--pjs-is-fixture`）で行った。**本番は実 PJS（convert_pjs 出力）を渡し
+`--pjs-is-fixture` を付けないこと**。学習 config（binarize 入力）の生成は
+`build_dataset.py` main() が担っていた範囲のうち 3 話者版が必要なもの =
+assemble_run4 の出力 + §4 の config 差分適用で構成する。
 
 ---
 
