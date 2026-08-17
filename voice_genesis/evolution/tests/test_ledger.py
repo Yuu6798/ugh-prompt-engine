@@ -351,6 +351,67 @@ def test_write_rejects_forged_vertex_pull_child_with_tampered_weight(tmp_path: P
     assert forged.genome_id not in led.list_genome_ids()
 
 
+# --- PR #267 Codex R9 指摘3（P1）: symlink による台帳外脱出 -----------------
+
+
+def test_read_rejects_symlink_to_external_valid_genome(tmp_path: Path, founder) -> None:
+    """`<ledger>/<genome_id>.json` が台帳ディレクトリ外の、有効な genome を
+    指す symlink であっても `read()` は追従せず拒否する（外部実体が
+    たまたま有効な genome JSON であっても、台帳エントリとしては認めない）。
+    """
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    external_path = outside_dir / "external.json"
+    external_path.write_text(models.genome_to_json(founder) + "\n", encoding="utf-8")
+
+    ledger_dir = tmp_path / "ledger"
+    ledger_dir.mkdir()
+    led = ledger_mod.Ledger(ledger_dir)
+    link_path = ledger_dir / f"{founder.genome_id}.json"
+    link_path.symlink_to(external_path)
+    assert link_path.is_symlink()
+
+    with pytest.raises(ledger_mod.LedgerError):
+        led.read(founder.genome_id)
+
+
+def test_write_idempotent_branch_rejects_symlink_to_external_entity(tmp_path: Path, founder) -> None:
+    """`write()` の既存ファイル分岐（`os.link` が `FileExistsError` を送出
+    する経路）でも、宛先が台帳ディレクトリ外への symlink なら冪等比較の
+    前に拒否される（バイト内容がたとえ一致していても、外部実体を台帳
+    エントリと同一視しない）。
+    """
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    external_path = outside_dir / "external.json"
+    payload = models.genome_to_json(founder) + "\n"
+    external_path.write_text(payload, encoding="utf-8")
+
+    ledger_dir = tmp_path / "ledger"
+    ledger_dir.mkdir()
+    led = ledger_mod.Ledger(ledger_dir)
+    link_path = ledger_dir / f"{founder.genome_id}.json"
+    link_path.symlink_to(external_path)
+
+    with pytest.raises(ledger_mod.LedgerError):
+        led.write(founder)
+    # 外部実体は書き換えられていない（fail-closed で早期拒否）。
+    assert external_path.read_text(encoding="utf-8") == payload
+
+
+def test_write_and_read_regular_file_behavior_unchanged(tmp_path: Path, founder) -> None:
+    """通常ファイル（symlink でない）の write/read 挙動は symlink ガード
+    追加後も不変（回帰確認）。"""
+    led = ledger_mod.Ledger(tmp_path)
+    path = led.write(founder)
+    assert not path.is_symlink()
+    loaded = led.read(founder.genome_id)
+    assert loaded == founder
+    # 冪等 no-op（既存ファイル分岐）も引き続き成功する。
+    path2 = led.write(founder)
+    assert path2 == path
+
+
 def test_read_rejects_renamed_file(tmp_path: Path, founder) -> None:
     """ファイルがリネームされ、ファイル名（要求 genome_id）と内容の自己申告
     genome_id が食い違う場合、`read()` は拒否する（自己申告 ID の再計算一致

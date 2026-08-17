@@ -365,6 +365,81 @@ def test_submit_rejects_nonfinite_quality(founders) -> None:
         arc.submit(ritsu, float("nan"), quality_floor=0.5)
 
 
+# --- PR #267 Codex R9 指摘1（P2）: submit() の未検証受理 --------------------
+
+
+def test_submit_rejects_directly_constructed_genome_with_invalid_coords(founders) -> None:
+    """呼び出し側が `build_genome()`/`genome_from_dict()` を経由せず
+    `models.VoiceGenome` を直接構築すると、simplex 上に存在しない座標
+    （負の成分）でも従来の submit() は無検証で受理し、`cells()` に無い
+    セル（例: (-1, 2, 3)）で elite 化・occupancy 汚染が起きていた。修正後は
+    genome_from_dict() round-trip 検証が座標の非負制約違反を検出し
+    `GenomeValidationError` で拒否する。
+    """
+    forged = models.VoiceGenome(
+        schema=models.SCHEMA_GENOME,
+        genome_id="0" * 16,
+        coords=models.Coords(-0.1, 0.5, 0.6),
+        seed=0,
+        lineage="L-U",
+        generation=0,
+        parents=(),
+        operator="founder",
+        operator_params={},
+        anchors_provenance=None,
+        notes="",
+    )
+    arc = archive_mod.Archive()
+    with pytest.raises(models.GenomeValidationError):
+        arc.submit(forged, 0.9, quality_floor=0.5)
+    # cells() に無いセルへ汚染されていないこと。
+    assert simplex.cell_id(forged.coords) not in arc.cells()
+    for cell in arc.cells():
+        assert arc.elite_at(cell) is None
+        assert arc.protected_at(cell) is None
+    assert arc.eviction_log == []
+
+
+def test_submit_rejects_directly_constructed_genome_with_forged_lineage(founders) -> None:
+    """座標自体は正規形だが、座標由来 lineage（L-R）と矛盾する偽装 lineage
+    （L-U）を直接構築で宣言した genome は、`_validate_lineage_for_genome()`
+    による座標整合検証で拒否される。
+    """
+    ritsu, *_ = founders
+    forged = models.VoiceGenome(
+        schema=models.SCHEMA_GENOME,
+        genome_id=ritsu.genome_id,
+        coords=ritsu.coords,
+        seed=ritsu.seed,
+        lineage="L-U",  # ritsu.coords は L-R 由来 — 座標と矛盾する偽装
+        generation=ritsu.generation,
+        parents=ritsu.parents,
+        operator=ritsu.operator,
+        operator_params=ritsu.operator_params,
+        anchors_provenance=ritsu.anchors_provenance,
+        notes=ritsu.notes,
+    )
+    arc = archive_mod.Archive()
+    with pytest.raises(models.GenomeValidationError):
+        arc.submit(forged, 0.9, quality_floor=0.5)
+    cell = simplex.cell_id(forged.coords)
+    assert arc.elite_at(cell) is None
+    assert arc.protected_at(cell) is None
+    assert arc.eviction_log == []
+
+
+def test_submit_accepts_genuine_genome_built_via_build_genome_unchanged(founders) -> None:
+    """`build_genome()`/`bootstrap.founder_genomes()` 経由の正規 genome の
+    受理挙動は round-trip 検証の追加後も不変（回帰確認）。
+    """
+    ritsu, *_ = founders
+    arc = archive_mod.Archive()
+    result = arc.submit(ritsu, 0.8, quality_floor=0.5)
+    assert result == "elite"
+    cell = simplex.cell_id(ritsu.coords)
+    assert arc.elite_at(cell).genome_id == ritsu.genome_id
+
+
 def test_all_cells_initially_empty() -> None:
     arc = archive_mod.Archive()
     assert arc.cells() == simplex.all_cell_ids(5)

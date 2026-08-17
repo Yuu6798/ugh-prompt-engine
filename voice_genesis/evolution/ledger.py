@@ -62,6 +62,15 @@ operator/operator_params の6フィールドを被覆する内容アドレスの
 `operator_params` に記録済みであるため完全決定論であり、再導出関数が
 送出しうる `ValueError`（例: vertex_pull の両親 anchors_provenance
 不一致）も `LedgerError` へ正規化して fail-closed で拒否する。
+
+`read()`・`write()` の既存ファイル分岐はいずれもアクセス直前に
+`_reject_symlink_escape()` を通す（PR #267 Codex R9 指摘3, 2026-08-17
+採用: `<ledger>/<genome_id>.json` が台帳ディレクトリ外への symlink の場合、
+従来の `read()` は追従して外部実体をそのまま台帳エントリとして読み込み、
+`write()` の冪等比較（バイト同一なら no-op）も外部実体を台帳エントリと
+同一視していた）。パスが symlink であること、または resolve 済みパスが
+`self.directory` の外側を指すことのいずれかを検出したら `LedgerError` で
+fail-closed 拒否する。
 """
 from __future__ import annotations
 
@@ -101,6 +110,35 @@ class Ledger:
         if not _GENOME_ID_RE.match(genome_id):
             raise LedgerError(f"invalid genome_id format: {genome_id!r}")
         return self.directory / f"{genome_id}.json"
+
+    def _reject_symlink_escape(self, path: Path) -> None:
+        """`<ledger>/<genome_id>.json` が symlink である、または解決後の
+        パスが `self.directory` の外側を指す場合は `LedgerError` で
+        fail-closed 拒否する（PR #267 Codex R9 指摘3, 2026-08-17 採用: 従来
+        `read()`/`write()` の既存ファイル分岐はいずれもこのパスをそのまま
+        追従していたため、台帳外への symlink が置かれると `read()` は外部の
+        実体をそのまま台帳エントリとして読み込み、`write()` の冪等比較
+        （バイト同一なら no-op）も外部実体を台帳エントリと同一視していた —
+        symlink の付け替えだけで台帳外のファイルを台帳エントリとして偽装
+        できてしまう。既存の containment 検査の家風（resolve 済みパス比較
+        — `foundry/s1_gate/forge_triangle.py` 等）に揃える。呼び出し元は
+        `path` が `read()`/`write()` の既存ファイル分岐（アクセス直前）で
+        呼ぶことを前提とする。
+        """
+        if path.is_symlink():
+            raise LedgerError(
+                f"refusing to access {path}: ledger entries must be regular files, not symlinks "
+                "(symlink escape guard — PR #267 Codex R9 指摘3)"
+            )
+        directory_resolved = self.directory.resolve()
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(directory_resolved)
+        except ValueError:
+            raise LedgerError(
+                f"refusing to access {path}: resolved path {resolved} escapes the ledger directory "
+                f"{directory_resolved} (symlink escape guard — PR #267 Codex R9 指摘3)"
+            ) from None
 
     def write(self, genome: models.VoiceGenome) -> Path:
         """genome を `<genome_id>.json` として排他 create で公開する。同一
@@ -193,6 +231,10 @@ class Ledger:
             try:
                 os.link(tmp_name, path)
             except FileExistsError:
+                # symlink escape guard（Codex R9 指摘3）: 冪等比較の対象が
+                # 台帳ディレクトリ配下の実体であることを、内容を読む前に
+                # 検査する。
+                self._reject_symlink_escape(path)
                 existing = path.read_bytes()
                 if existing == payload:
                     return path
@@ -244,6 +286,10 @@ class Ledger:
 
     def read(self, genome_id: str) -> models.VoiceGenome:
         path = self.path_for(genome_id)
+        # symlink escape guard（Codex R9 指摘3）: 存在しないファイルへの
+        # 素通し（FileNotFoundError）は変えず、symlink（壊れているものを
+        # 含む）や台帳ディレクトリ外を指す実体だけを検出前に拒否する。
+        self._reject_symlink_escape(path)
         data = json.loads(path.read_text(encoding="utf-8"))
         genome = models.genome_from_dict(data)
         if genome.genome_id != genome_id:

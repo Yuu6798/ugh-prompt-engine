@@ -828,18 +828,41 @@ _EVAL_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
 _EVALUATOR_KEYS: FrozenSet[str] = frozenset({"kind", "version"})
 
 
+# DESIGN_VG_E0.md §5「総合1点スコアのフィールドを作らないことを schema
+# レベルで強制」の実装対象語彙（Codex R9 指摘2, PR #267 R9 採用
+# 2026-08-17）: axes は per-dimension 軸名のみを許可し、総合点相当の名前
+# （大文字小文字非区別・前後空白 trim 後に比較）は builder/loader 双方で
+# fail-closed 拒否する。
+_RESERVED_AXIS_NAMES: FrozenSet[str] = frozenset({
+    "overall", "total", "score", "aggregate", "composite", "summary",
+})
+
+
 def _validate_axes(axes: Mapping[str, Any]) -> Dict[str, float]:
-    """axes dict の各キーが非空文字列であること + 各値が有限 float である
-    ことを検証し、正規化した dict を返す。`build_evaluation_record()`
-    （書込経路）と `evaluation_record_from_dict()`（読込経路）の両方から
-    呼ばれる単一実装（Codex 指摘B, PR #267 R4 採用 2026-08-17: 従来 loader は
-    空文字列 axis 名を検証せず素通ししていた — builder 側の非空文字列検証と
-    非対称だった）。
+    """axes dict の各キーが非空文字列であること + 予約された総合点相当の
+    名前でないこと + 各値が有限 float であることを検証し、正規化した dict
+    を返す。`build_evaluation_record()`（書込経路）と
+    `evaluation_record_from_dict()`（読込経路）の両方から呼ばれる単一実装
+    （Codex 指摘B, PR #267 R4 採用 2026-08-17: 従来 loader は空文字列 axis 名
+    を検証せず素通ししていた — builder 側の非空文字列検証と非対称だった）。
+
+    予約名ブロックリスト（`_RESERVED_AXIS_NAMES`）は DESIGN_VG_E0.md §5
+    「総合1点スコアのフィールドを作らないことを schema レベルで強制」の
+    実装（Codex 指摘2, PR #267 R9 採用 2026-08-17: 従来
+    `axes={"overall": 0.95}` 等の総合点名素通しが builder/loader 双方で
+    無検証だった）。大文字小文字非区別・前後空白 trim 後に比較する。
     """
     validated: Dict[str, float] = {}
     for name, value in axes.items():
         if not isinstance(name, str) or not name:
             raise GenomeValidationError(f"axes key must be a non-empty string, got {name!r}")
+        if name.strip().casefold() in _RESERVED_AXIS_NAMES:
+            raise GenomeValidationError(
+                f"axes key {name!r} is a reserved single-score name "
+                f"({sorted(_RESERVED_AXIS_NAMES)}, case-insensitive after trim) — "
+                "DESIGN_VG_E0.md §5 permanently bans a single aggregate score field; "
+                "axes must be per-dimension only"
+            )
         validated[name] = _require_finite_float(value, f"axes.{name}")
     return validated
 

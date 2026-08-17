@@ -730,6 +730,60 @@ def test_evaluation_record_from_dict_rejects_empty_string_axis_key() -> None:
         models.evaluation_record_from_dict(d)
 
 
+# --- PR #267 Codex R9 指摘2（P2）: 総合1点スコア名の予約ブロックリスト -----
+
+
+@pytest.mark.parametrize(
+    "reserved_name",
+    ["overall", "total", "score", "aggregate", "composite", "summary"],
+)
+def test_build_evaluation_record_rejects_reserved_axis_name(reserved_name: str) -> None:
+    """DESIGN_VG_E0.md §5「総合1点スコアのフィールドを作らないことを schema
+    レベルで強制」— axes キーに予約された総合点相当の名前を使うと builder
+    側で fail-closed 拒否される。"""
+    with pytest.raises(models.GenomeValidationError, match="reserved single-score name"):
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set="d3-probe/0.1",
+            evaluator=models.Evaluator(kind="training", version="v0"),
+            axes={reserved_name: 0.95},
+        )
+
+
+@pytest.mark.parametrize(
+    "reserved_variant",
+    ["Overall", "TOTAL", " score ", "Aggregate\t", "COMPOSITE", "  Summary"],
+)
+def test_build_evaluation_record_rejects_reserved_axis_name_case_and_whitespace_variants(
+    reserved_variant: str,
+) -> None:
+    """予約名判定は大文字小文字非区別・前後空白 trim 後に比較する。"""
+    with pytest.raises(models.GenomeValidationError, match="reserved single-score name"):
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set="d3-probe/0.1",
+            evaluator=models.Evaluator(kind="training", version="v0"),
+            axes={reserved_variant: 0.5},
+        )
+
+
+def test_evaluation_record_from_dict_rejects_reserved_axis_name() -> None:
+    """loader 側（`evaluation_record_from_dict()`）も builder と同じ
+    `_validate_axes()` 共有実装を通るため、予約名は同様に拒否される。"""
+    d = models.evaluation_record_to_dict(_base_eval_record())
+    d["axes"] = {"overall": 0.95}
+    with pytest.raises(models.GenomeValidationError, match="reserved single-score name"):
+        models.evaluation_record_from_dict(d)
+
+
+def test_build_evaluation_record_accepts_ordinary_axis_names_unchanged() -> None:
+    """通常の per-dimension 軸名（予約名を含まない）の受理は不変（回帰確認）。"""
+    record = models.build_evaluation_record(
+        genome_id="a" * 16, probe_set="d3-probe/0.1",
+        evaluator=models.Evaluator(kind="training", version="v0"),
+        axes={"naturalness": 0.8, "pitch_accuracy": 0.7, "scoreboard_novelty": 0.3},
+    )
+    assert record.axes == {"naturalness": 0.8, "pitch_accuracy": 0.7, "scoreboard_novelty": 0.3}
+
+
 # --- blind_batch × evaluator.kind 束縛（Codex 指摘A） ----------------------
 
 

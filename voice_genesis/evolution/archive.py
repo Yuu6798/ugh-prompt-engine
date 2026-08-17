@@ -100,6 +100,12 @@ class Archive:
         """genome をその座標が属するセルへ提出する。戻り値は
         `"elite"` / `"protected"` / `"rejected"` のいずれか。
 
+        冒頭で `genome` を `models.genome_from_dict(models.genome_to_dict(genome))`
+        の round-trip 経由で builder/loader と同一の不変量検証に通す（PR #267
+        Codex R9 指摘1）。直接構築された不正 genome（simplex 上に存在しない
+        座標・座標と矛盾する偽装 lineage 等）は `models.GenomeValidationError`
+        で fail-closed 拒否する。
+
         判定順序:
         1. `quality >= quality_floor` かつ（セルに elite が無い、または
            `quality` が既存 elite の quality を上回る）→ elite として採用
@@ -135,6 +141,25 @@ class Archive:
             raise ValueError(f"non-finite quality rejected: {quality}")
         if not math.isfinite(quality_floor):
             raise ValueError(f"non-finite quality_floor rejected: {quality_floor}")
+
+        # PR #267 Codex R9 指摘1（P2）, 2026-08-17 採用: submit() は呼び出し側が
+        # `models.VoiceGenome(...)` を直接構築した genome（build_genome()/
+        # genome_from_dict() を経由しない = 不変量検証を一切通っていない）を
+        # 無検証で受理していた — 例えば `Coords(-0.1, 0.5, 0.6)` のような
+        # simplex 上に存在しない座標や、座標と矛盾する偽装 lineage が、
+        # `cells()` に一切現れないセル（例: (-1, 2, 3)）で elite 化・
+        # occupancy 汚染を引き起こす。`ledger.write()` の publish 直前
+        # round-trip 検証（Codex 指摘2）と同じ家風で、genome_to_dict() →
+        # genome_from_dict() の round-trip により builder/loader と単一の
+        # 不変量検証（型・数値範囲・genome_id 再計算一致・座標由来 lineage
+        # 整合・NOVELTY⇔operator 整合等）を強制する（二重実装を避ける）。
+        try:
+            models.genome_from_dict(models.genome_to_dict(genome))
+        except models.GenomeValidationError as exc:
+            raise models.GenomeValidationError(
+                f"refusing to submit genome_id {genome.genome_id!r}: failed full validation via "
+                f"genome_from_dict() round-trip ({exc})"
+            ) from exc
 
         cell = self._cell_for(genome)
         incoming = models.ArchiveEntry(genome_id=genome.genome_id, lineage=genome.lineage, quality=quality)
