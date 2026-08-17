@@ -95,8 +95,12 @@ seed=701 のみ 1 サンプル・1 LSB のバイト差が出て pin 不一致に
   含まない**ことを確認する（どちらか一方でも満たさなければ render に入らず停止する）。
 
   ```bash
-  python -c "import numpy; print(numpy.show_config('dicts')['SIMD Extensions']['found'])"
+  python -c "import numpy; f = numpy.show_config('dicts')['SIMD Extensions']['found']; \
+    assert 'X86_V3' in f and 'X86_V4' not in f, f; print('SIMD gate OK:', f)"
   ```
+
+  （両条件を assert に符号化してあるため、非 0 exit = ゲート不通過。目視でなく
+  コマンドの成否で判定できる）
 
   AVX-512 ホストでは設定が効いた証明（`X86_V4` が消える）、AVX2 ホストでは
   元々 `X86_V4` を含まない（no-op の確認）。`X86_V3` の実在要求は、AVX2 未満の
