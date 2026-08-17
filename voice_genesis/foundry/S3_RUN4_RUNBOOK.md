@@ -1,0 +1,335 @@
+# S3 run 4 GPU 実行 runbook（クロー向け・S1 runbook 差分方式）
+
+設計正本: [`DESIGN_S3_backfill.md`](DESIGN_S3_backfill.md) §4「Phase D — run 4 GPU
+実行」。**本書は `S1_GPU_RUNBOOK.md` の内容を変更しない**（S1 runbook は S1 の
+正本のまま不変。参照のみ）。本書と設計が食い違ったら**設計
+（`DESIGN_S3_backfill.md`）が勝つ**。`S1_GPU_RUNBOOK.md` の規律（§0 冒頭）を
+踏襲する: 本書は手順のみを記述し、閾値・予算上限・学習規模は設計側が凍結する。
+
+**方針**: 音声データセットの転送は行わない。全素材・全データセットは**決定論
+pin からの再生成**でクローへ受け渡す。実体そのもの（wav/csv）はコミットしない。
+pin 表 = [`results_s3/run4_dataset_pins.json`](results_s3/run4_dataset_pins.json)
+（D3/user 各データセットの transcriptions.csv・wavs 全本・(user のみ)
+exclusions.json の sha256 実測値。手打ちなし）。
+
+**重要 — 本書は「実装済み手順の記述」ではない**: §4/§6 は現状のリポジトリに
+存在しないコード（3 話者対応の `build_dataset.py` 拡張、`--speaker user` 対応の
+`gate_synth.py` 拡張、3 アンカー三角補間フォージスクリプト）を前提とする。
+該当箇所には**現状のギャップと、クローが着手前に埋める必要がある実装**を
+明記した。§8 に全件を集約する。
+
+---
+
+## 0. 予算・承認状態
+
+`DESIGN_S3_backfill.md` §4・§7 Q2 のとおり:
+
+- 見積 **$2–5**、**上限 $8 で打ち切り**（`S1_GPU_RUNBOOK.md` の $15 上限とは
+  別値 — run 4 は run 3 のパラメータ踏襲 + 2 データセット追加のみで学習規模
+  自体は変わらないため、S1 実測（run3 40K = 実測 ~4.3h ≈ $1.1〜2.2、RTX 3090
+  Community $0.22/h）を踏まえた run 4 固有の低い上限）。
+- **User 承認済み（2026-08-17、タイミング任意）**。着手はクロー稼働タイミング
+  待ちのみ。
+- 費用記録の作法は `S1_GPU_RUNBOOK.md` §6 と同一（節目ごとに UTC 時刻・累積
+  経過時間・累積費用実測・備考を記録する。自己申告ではなくダッシュボード実測
+  額を使う）。
+
+---
+
+## 1. 素材表（S1 runbook §2 との差分）
+
+| # | 素材 | 出典 | 差分 |
+|---|---|---|---|
+| 1–3 | 波音リツ強連続音 Ver1.5.1 / PJS corpus ver1.1 / リツ公式 DiffSinger 配布 zip | `S1_GPU_RUNBOOK.md` §2 の pin 表をそのまま使用 | 変更なし |
+| 4（新規） | User 音源 17 本（donor_A/donor_B mp3 2 本 + m4a 15 本。Drive「音楽サンプル」原本） | `recording_kit/user_donor_ledger.json`（`user-donor-ledger/0.1`）の各エントリ `source_sha256` が正 | 本書で新規追加。取得は User 側（原本は Drive 保管、本セッションは非保有） |
+
+素材 4 の pin 照合は「17 本すべての `source_sha256` が台帳の値と一致すること」
+（台帳を手打ちしない・改変しない）。台帳のフィールド定義・カード対応表は
+`recording_kit/intake_records/intake_record_2026-08-17.md` §2/§6 が正本。
+
+---
+
+## 2. データセット再生成手順
+
+**照合不一致はそこで停止する（黙って続行しない）**。以下 (a)(b)(c) はすべて
+このルールに従う。
+
+### 2.1 (a) D1 (PJS) / D2 (リツ) — S1 と同一
+
+`S1_GPU_RUNBOOK.md` §2〜§3 をそのまま実行する（`convert_ritsu.py` /
+`convert_pjs.py` の呼び出し・照合値は無変更）。差分なし。
+
+### 2.2 (b) D3 再生成 → `convert_d3.py` → pin 照合
+
+1. リツ voicebank を `s1_dataprep/README.md` §0 の pin（zip
+   `88c7b3ef…df66dde76`）で取得・照合済みのものを使う（(a) で取得済みの実体を
+   再利用してよい）。
+2. `results_s3/d3_manifest.json`（40 セル事前登録殻: 4 スコア
+   `sakura`/`umi`/`d3_sustain`/`d3_kana` × 10 seed
+   `11,101,211,307,401,503,601,701,809,907`、base preset
+   `adapter/presets/ritsu_neutral.json` の `seed` フィールドのみを差し替えた
+   spec 変種）に従い、各セルを `adapter/render.py`（`SCORE_REGISTRY` 対応済み）
+   で render する:
+
+   ```bash
+   python -m adapter.render \
+       --score <score> --voice <ritsu_neutral の seed 差し替え版 spec> \
+       --donor ritsu --voicebank-root <波音リツ展開先> \
+       --out <out>/<score>_seed<seed>.wav \
+       --timing-out <out>/<score>_seed<seed>.csv
+   ```
+
+   spec 変種の生成方法・具体のファイル配置は
+   `results_s3/d3_manifest_results.json` の各セルの `spec_path`（例:
+   `.../specs/ritsu_neutral_seed11.json`）が実例。**`seed=11` の `sakura`/`umi`
+   セルは `d3_manifest.json` の tripwire sha256（`sakura_seed11_wav_sha256` /
+   `umi_seed11_wav_sha256`）とバイト一致することを最初に確認する**（不一致 =
+   環境ドリフトとして全セル無効・そこで停止）。
+3. 生成した 40 セル（wav + timing csv）の sha256 を、`d3_manifest_results.json`
+   の対応セル（`wav_sha256`/`timing_csv_sha256`）と全数照合する。
+4. `s1_dataprep/convert_d3.py` で変換する:
+
+   ```bash
+   python voice_genesis/foundry/s1_dataprep/convert_d3.py \
+       --render-dir <40 セルの wav+csv を含むディレクトリ> \
+       --out-dir <D3 dataset out>
+   ```
+
+   出力 `<D3 dataset out>/transcriptions.csv` + `wavs/`（44.1kHz）。
+5. `<D3 dataset out>/transcriptions.csv` の sha256 と `wavs/` 40 本各々の
+   sha256 を `results_s3/run4_dataset_pins.json` の `d3.transcriptions_csv_sha256`
+   / `d3.wav_sha256` と全数照合する。
+
+   ```bash
+   sha256sum <D3 dataset out>/transcriptions.csv
+   ( cd <D3 dataset out>/wavs && sha256sum *.wav )
+   # run4_dataset_pins.json の d3.wav_sha256 と diff
+   ```
+
+再現手順の完全版・実効分数の参照値（ph_dur 合計 1200.50s = 20.008 分）=
+`results_s3/d3_dataset_record.md` §4。
+
+### 2.3 (c) user 再生成 → `intake.py` → `convert_user.py` → pin 照合
+
+1. User 原本 17 本（Drive「音楽サンプル」）を取得し、各ファイルの sha256 を
+   `recording_kit/user_donor_ledger.json` の `source_sha256` と 17/17 照合する
+   （台帳に列挙された `card_id`/`source_filename` 対応表 =
+   `intake_records/intake_record_2026-08-17.md` §2）。
+2. `recording_kit/intake.py` で正規化（24kHz mono s16、ffmpeg 決定論変換。
+   `intake_record_2026-08-17.md` §5/§4 の手順・パラメータをそのまま踏襲）:
+
+   ```bash
+   python voice_genesis/foundry/recording_kit/intake.py \
+       --incoming-dir <17本を収めた incoming> \
+       --out-dir <user_donor_normalized 相当> \
+       --ledger voice_genesis/foundry/recording_kit/user_donor_ledger.json
+   ```
+
+   生成した正規化 wav 17 本の sha256 を台帳 `sha256` フィールドと照合する
+   （`intake_record_2026-08-17.md` §4 のとおり、ffmpeg 版差でバイト不一致に
+   なった場合は黙って台帳値を書き換えず、一致する版を探すか再 intake を設計
+   する）。
+3. `s1_dataprep/convert_user.py` で変換する（`--dsdict` はリツ公式
+   DiffSinger 配布 zip の `dsdur/dsdict.yaml`、`S1_GPU_RUNBOOK.md` 素材 3 の
+   pin `5c7b8c32…` で事前照合済みのものを使う）:
+
+   ```bash
+   python voice_genesis/foundry/s1_dataprep/convert_user.py \
+       --normalized-dir <正規化 wav 17 本のディレクトリ> \
+       --ledger voice_genesis/foundry/recording_kit/user_donor_ledger.json \
+       --dsdict <NamineRitsu_DiffSinger 展開先>/dsdur/dsdict.yaml \
+       --out-dir <user dataset out>
+   ```
+
+   出力 = `transcriptions.csv`（15/17 採用）+ `wavs/`（44.1kHz）+
+   `exclusions.json`（UC-009/UC-010 の除外理由）。
+4. `<user dataset out>/transcriptions.csv` / `exclusions.json` / `wavs/` 15 本
+   各々の sha256 を `results_s3/run4_dataset_pins.json` の `user.*` と全数照合
+   する。
+
+再現手順の全文（tier 別アラインメント戦略・dsdict グラフェム音素化の詳細・
+実効分数 ph_dur 合計 233.395s = 3.890 分・音素被覆 33 種）=
+`results_s3/user_dataset_record.md`（全文）。
+
+---
+
+## 3. 3 話者アセンブリ — 現状のギャップ（★着手前に必ず解消する）
+
+`DESIGN_S3_backfill.md` §4 は「S1 の build_dataset 呼び出しに datasets へ spk3
+追加 + D3 追加」と書くが、**現状の `s1_dataprep/build_dataset.py` は 2 話者
+（ritsu/pjs）専用に実装がハードコードされており、そのままでは 3 話者化できない**
+（一次ソース確認済み、2026-08-17 時点）:
+
+- CLI 引数は `--ritsu-raw-dir` / `--pjs-raw-dir` の 2 つのみが必須で定義され、
+  3 話者目（user）を渡す引数が存在しない（`build_dataset.py:838-851`）。
+- `main()` 内で `speakers` が
+  `[("ritsu", 0, args.ritsu_raw_dir, ritsu_prefixes), ("pjs", 1, args.pjs_raw_dir, pjs_prefixes)]`
+  と 2 要素で直書きされている（`build_dataset.py:913-916`）。`num_spk` は
+  `len(speakers)` から自動算出される（`build_dataset.py:799`）ため、3 話者目を
+  リストへ加えれば `num_spk: 3` になる設計だが、それを行う CLI 経路が無い。
+- 辞書統合（`build_merged_dict`）・検証（`validate_speaker`）・duration 検査
+  （`check_ph_dur_duration`/`check_note_dur_consistency`）は話者数に依存しない
+  汎用ロジックのため、3 話者化そのものは大きな設計変更を要さない
+  （`speakers` タプルのリストを 3 要素にし、`--user-raw-dir` を CLI へ追加し、
+  `validate_speaker`/`check_ph_dur_duration` を user 分にも呼ぶだけで足りる
+  可能性が高い）が、**この拡張コードは本セッション時点で未実装**。
+
+加えて D3 は「spk=ritsu 側への追加」（`d3_dataset_record.md` §5 = 話者別
+データ分離は維持したまま **既存 ritsu の raw dir へ合流**させる設計）だが、
+これも実現する結合スクリプトが存在しない。`convert_ritsu.py` と
+`convert_d3.py` の出力はいずれも同一契約（`transcriptions.csv` +
+`wavs/`）だが:
+
+- ファイル名衝突: `convert_ritsu.py` は `ritsu_<pdir>_<idx:03d>`（例
+  `ritsu_A3_001`）という命名（`convert_ritsu.py:636`）、D3 は
+  `<score>_seed<seed>`（例 `sakura_seed11`）という命名で、**目視観察の限りでは
+  衝突しない**が、これは本タスクでの簡易照合であり、結合を実装する側で
+  ファイル名の全数比較による無衝突の実測確認を必須とする。
+- 結合手順（2 つの `transcriptions.csv` のヘッダ 1 回化 + 行連結、2 つの
+  `wavs/` のマージ）自体を行うスクリプトが存在しない。
+
+**この節はクローが着手前に解消する実装作業として扱う**（本パッケージ化タスク
+は新規 2 ファイル [pins.json + 本 runbook] のみが許可され、既存ファイル変更・
+新規スクリプト作成は範囲外のため、ここでは実装しない）。詳細は §8。
+
+---
+
+## 4. 学習構成（run 3 踏襲）— 設定の所在に関する注意
+
+`DESIGN_S3_backfill.md` §4: 「finetune 機構・bf16+clip・LR 0.0002・40K・各 5K
+節目 NaN スキャン」を run 3 から踏襲する。**これらは `build_dataset.py` の CLI
+引数では設定できない**（同スクリプトが CLI で公開する学習規模フィールドは
+`--max-updates`/`--val-check-interval`/`--num-ckpt-keep` の 3 つのみ —
+`build_dataset.py:854-867`。LR/finetune/精度/clip の CLI フックは無い）。
+
+`results_s1/s1_record_2026-08-15.md` の記述（§ run3 起動・§ config.yaml の
+逸脱と対処、行 452-495）によれば、run 3 ではこれらは **GPU インスタンス側で
+`config.yaml` を手動編集**して設定された:
+
+- `finetune_enabled: True`
+- `finetune_ckpt_path: <run 1 の 5K checkpoint パス>`（run 4 では対応する
+  「直近の安定 checkpoint」を指す値に読み替える必要がある — run 3 40K
+  checkpoint そのものを指すのか、run 3 のどこかの中間 checkpoint を指すのか
+  は `DESIGN_S3_backfill.md` に明記が無い）
+- `pl_trainer_precision: bf16-mixed`
+- `optimizer_args.lr: 0.0002`
+- 勾配クリッピング 1.0（s1_record では `gradient_clip_val=1.0` と表記される
+  が、config.yaml 上の正確なキー名 — トップレベルか `pl_trainer_*` 配下か —
+  は s1_record 本文に明記が無い）
+
+**run 3 実際の `config.yaml` 実体は本リポジトリに存在しない**（AI-Drive
+`/s1_ritsu_pjs_acoustic_v1/run3/` へ退避済みと s1_record にあるが、本セッション
+はそこへアクセスできない）。したがって上記キー名・finetune 元 checkpoint の
+具体パスは s1_record の文章記述からの引用であり、**実 YAML との一次照合は
+できていない**。クロー側で run 3 の実 `config.yaml`（AI-Drive 退避先）を確認し、
+run 4 の `config.yaml`（§3 の 3 話者化拡張後の `build_dataset.py` が生成する
+版）へ同一キー・同一値を移植することを要確認とする（§8）。
+
+40K steps・各 5K 節目 NaN スキャンは `S1_GPU_RUNBOOK.md` §5 の早期打ち切り
+ゲート手順と同一の運用（5K/10K/20K/40K の節目で checkpoint 回収 + state_dict
+の非有限値チェック）をそのまま適用する。
+
+---
+
+## 5. ゲート判定材料の生成手順（① ~ ④）— User 耳判定の受け皿
+
+`DESIGN_S3_backfill.md` §4 のとおり、判定そのものは User が行う。クローは
+判定材料 wav の生成までを担う。
+
+### ①リツ極再現（り→ん判定用の合成）
+
+`s1_gate/gate_synth.py run`（`--speaker ritsu`・既定）で sakura/umi を合成し、
+り→ん破綻（長母音サステインの崩壊、`DESIGN_S3_backfill.md` §0-1 の仮説）が
+D3 投入前後でどう変化したかを聴取できる形で揃える。手順自体は
+`S1_GPU_RUNBOOK.md` §5.2/§5.3 と同一（`--ckpt-dir`/`--step`/`--exp-name` を
+run 4 の checkpoint に差し替えるのみ）。
+
+### ②spk3 アンカー単独合成（第 3 声の立ち）
+
+**現状のギャップ**: `s1_gate/gate_synth.py` の `--speaker` は
+`choices=["ritsu", "pjs"]` にハードコードされている（`gate_synth.py:2444`）。
+`user` は選択肢に存在しない。spk3（user）単独合成を行うには、`--speaker` の
+choices 拡張 + user 話者埋め込み（acoustic 学習側の `spk_id=2` に対応する
+`spk_embed`）を読む経路の追加が必要だが、**この拡張コードは本セッション時点で
+未実装**（§8）。
+
+### ③既存 2 アンカーの回帰（S1 ゲート 5 点）
+
+`results_s1/s1_record_2026-08-15.md` §「S1 ゲート判定」の 5 判定ポイント
+（①歌声か ②日本語か ③接合ノイズ不在の維持 ④S0 との差が量的か ⑤2 話者の
+描き分け）を、run 4 の checkpoint による sakura/umi × ritsu/pjs 合成 4 本
+（①と同じ `gate_synth.py run` 呼び出しを `--speaker pjs` でも実行）に対して
+再実施する。回帰対象はこの 5 点であり、材料生成の手順自体は run 3 判定時と
+同一。
+
+### ④三角形内部補間バッチ（S2 と同じブラインド規律への参照）
+
+`results_s2/s2_record_2026-08-16.md`（2 アンカー間 lerp/slerp・4 候補分割・
+ブラインドシャッフル・隠しコントロール `H'` の規律）を「同じ規律」の参照先
+とする。**現状のギャップ**: S2 のブラインド合成は `s2_forge.py`
+（`scratchpad/s2_batch1/s2_forge.py` 由来、本リポジトリには非コミット）で
+実装されており、これは 2 アンカー（ritsu/pjs）間の線分補間専用。run 4 の
+「三角形内部」（3 アンカー間の重心座標補間）はこのスクリプトの拡張が必要だが、
+**この拡張コードは本セッション時点で存在しない**（§8）。ブラインド規律
+（シャッフル・隠しコントロール・封印された対応表）そのものの設計は
+`s2_record_2026-08-16.md` を一次ソースとしてそのまま踏襲できる。
+
+---
+
+## 6. 成果物の持ち帰り様式
+
+`S1_GPU_RUNBOOK.md` §6 の費用記録表と同一書式に加え、run 4 は下記を
+`results_s3/s3_record_<date>.md`（`DESIGN_S3_backfill.md` §6 Acceptance
+Criteria が要求する出口記録）へ記帳する:
+
+| 区分 | 記帳内容 |
+|---|---|
+| 学習ログ | train.log・TensorBoard events（5K 節目ごとの NaN スキャン結果を含む） |
+| checkpoint | 5K/10K/20K/40K（打ち切り時は直近）の sha256・退避先 |
+| 判定材料 wav | ①~④ 各材料の wav sha256・生成コマンド・(④のみ) ブラインド対応表（封印） |
+| 費用実測 | `S1_GPU_RUNBOOK.md` §6 表と同一書式（起動・各節目・終了/打ち切り理由） |
+| D3/spk3 の効果帰属 | User 耳判定逐語 + Claude 側の解釈（Fable 設計判断） |
+| Open Questions | 未解決事項（§8 の「要確認」で解消しなかった項目を含む） |
+
+---
+
+## 7. 検証（本セッションで実施済み）
+
+- `results_s3/run4_dataset_pins.json` の全 sha256（transcriptions.csv 2 件・
+  exclusions.json 1 件・wav 55 本）を、実体（`d3_dataset_run/dataset/` /
+  `c_verify/user_dataset_v2/`）に対して独立再計算し、**全件一致を確認済み**
+  （不一致 0 件）。
+- 本書に記載した全コマンド・パス・config 項目は、以下の一次ソースへ接地
+  確認済み: `S1_GPU_RUNBOOK.md`（§1 参照コマンド）、`build_dataset.py`（CLI
+  引数・`speakers` 直書き・`num_spk` 算出・学習規模フィールドの範囲）、
+  `convert_d3.py`/`convert_user.py`（CLI 引数）、`gate_synth.py`（`--speaker`
+  choices）、`render.py`（`SCORE_REGISTRY`/`--timing-out`）、
+  `d3_manifest.json`/`d3_manifest_results.json`、`user_donor_ledger.json`、
+  `intake_record_2026-08-17.md`、`s1_record_2026-08-15.md`、
+  `s2_record_2026-08-16.md`。接地できなかった項目（run 3 実 config.yaml の
+  キー名・finetune 元 checkpoint の具体パス）は §4/§8 で「要確認」と明記した。
+
+---
+
+## 8. クロー側で要確認（実装ギャップ・未接地事項の一覧）
+
+1. **3 話者アセンブリ**（§3）: **ローカル実装済みへ更新（2026-08-17）** —
+   `s1_dataprep/assemble_run4.py`（新規ファイル方式・build_dataset.py 非接触）
+   が D3→ritsu 合流（ファイル名無衝突の全数実測込み）+ 3 話者 raw 構成 +
+   検証ゲートを担う。使い方は同スクリプトの docstring とテストを参照。
+2. **run 3 の実 `config.yaml`**（§4）: AI-Drive `/s1_ritsu_pjs_acoustic_v1/run3/`
+   退避先の実体を確認し、`finetune_enabled`/`finetune_ckpt_path`/
+   `pl_trainer_precision`/`optimizer_args.lr`/勾配クリッピングの正確なキー名・
+   値を一次ソースから再確認する（s1_record の文章記述からの引用のみで未接地）。
+3. **run 4 の `finetune_ckpt_path`**（§4）: **裁定済み（Fable 2026-08-17）** —
+   run 4 は run 3 checkpoint を継続せず、**run 3 レシピの完全再現**（スクラッチ
+   開始 + 5K 節目で optimizer 新品の finetune 機構を再適用）とする。理由 =
+   run 4 と run 3 の差分を「データのみ」に閉じ、D3/spk3 の効果帰属を清潔に保つ
+   （S2 の単一要因教訓）。`finetune_ckpt_path` は run 4 自身の 5K checkpoint を指す。
+4. **`gate_synth.py --speaker user` 対応**（§5②）: choices 拡張 + user 話者
+   埋め込み読み出し経路の追加。
+5. **3 アンカー三角補間フォージスクリプト**（§5④）: `s2_forge.py`
+   （scratchpad 非コミット）の 2 アンカー線分補間から 3 アンカー重心座標
+   補間への拡張。
+6. **D3/ritsu 結合時のファイル名無衝突**（§3）: `assemble_run4.py` が結合時に
+   全数比較で実測検査する（fail-closed）。本書の目視照合は参考情報へ格下げ。
