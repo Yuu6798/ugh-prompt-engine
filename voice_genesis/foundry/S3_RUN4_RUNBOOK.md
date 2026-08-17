@@ -62,7 +62,7 @@ config.yaml の一次照合（AI-Drive 退避先）のみ**。§8 に全件を�
 ### 2.2 (b) D3 再生成 → `convert_d3.py` → pin 照合
 
 **決定論環境規約（SIMD レベル pin・2026-08-17 追加）— 本節のどのコマンドよりも
-先に、以下の 3 ゲートをすべて通過すること（`run_d3_cells.py` 自体はこれらを
+先に、以下の 4 ゲートをすべて通過すること（`run_d3_cells.py` 自体はこれらを
 検査しないため、未通過のまま render を始めると高価な render 完走後に初めて
 hash 不一致で落ちる）**: D3 render 実行前に
 必ず `export NPY_DISABLE_CPU_FEATURES=X86_V4` を設定する（numpy の AVX-512
@@ -114,6 +114,13 @@ seed=701 のみ 1 サンプル・1 LSB のバイト差が出て pin 不一致に
   に列挙される dispatch グループ名（`X86_V3`/`X86_V4` 等）のみ。設定が
   効いたかは必ずゲート 2 の `show_config` 実測で確認する（「設定した
   つもり」を信用しない）。
+- **ゲート 4（旧環境 cache の破棄）**: `run_d3_cells.py` は既存
+  `<out-dir>/cache` を無条件に再利用し、donor 解析 pickle のキーは voicebank
+  内容とオプションのみで**数値スタック版・SIMD レベルを含まない**。このため
+  版揃え・SIMD 設定をやり直しても、旧環境で作られた cache の解析配列が
+  render に流用され、不一致が全セル完走後まで発覚しない。**環境（版 pin・
+  SIMD 設定のいずれか）を変更した後の再実行では、render 前に
+  `<out-dir>/cache` を削除するか新規 `--out-dir` を使うこと**。
 - ffmpeg 版 pin（`ffmpeg 6.1.1-3ubuntu5`、`recording_kit/intake_records/
   intake_record_2026-08-17.md` 参照）と同格の環境契約として扱う——render
   環境の再現に必須。
