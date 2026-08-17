@@ -1222,6 +1222,37 @@ def test_render_ritsu_consonant_source_default_none_does_not_raise_at_this_gate(
 
 
 # ---------------------------------------------------------------------------
+# P2 修正 (review #265 R5・有限性ファミリー終端掃討): unit 選択コストの重み
+# w_p/w_d/w_c/w_v は有限・非負を要求する（重い WORLD 分析より前）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf"), -0.5])
+@pytest.mark.parametrize("kwarg_name", ["w_p", "w_d", "w_c", "w_v"])
+def test_render_rejects_non_finite_or_negative_weight_before_heavy_analysis(
+    kwarg_name: str, bad_value: float
+) -> None:
+    """`w_p`/`w_d`/`w_c`/`w_v` は `units.py` の `total = w_p * cp + w_d * cd +
+    w_c * cc + cv` に使われる — `nan` は全候補の `total` を `nan` にして
+    選択を無効化し、`inf`/負値も無意味な入力のため、重い分析（spec 読み込み
+    より前）で fail-closed 拒否する。voice_spec_path に実在しないダミー
+    パスを渡しても本ゲートの ValueError が先に飛ぶことで「重い分析より
+    前」であることも合わせて検証する。"""
+    kwargs = {"w_p": 1.0, "w_d": 0.3, "w_c": 1.0, "w_v": 25.0}
+    kwargs[kwarg_name] = bad_value
+    with pytest.raises(ValueError, match=kwarg_name):
+        rd.render("sakura", "/nonexistent/voice_spec.json", **kwargs)
+
+
+def test_render_default_weights_do_not_raise_at_this_gate() -> None:
+    """既定値（`un.DEFAULT_W_P` 等）はいずれも有限・非負のため本ゲートに
+    抵触せず、後続の spec 読み込みまで到達する（誤検知しないことの対照
+    テスト）。"""
+    with pytest.raises(FileNotFoundError):
+        rd.render("sakura", "/nonexistent/voice_spec.json")
+
+
+# ---------------------------------------------------------------------------
 # P1 修正 (review #265): --timing-out の衝突検査を合成前に fail-closed で行う
 # ---------------------------------------------------------------------------
 
@@ -1480,6 +1511,82 @@ def test_atomic_write_wav_and_timing_first_publish_rolls_back_to_absence_on_seco
 
     assert not out_path.exists()
     assert not timing_out_path.exists()
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #265 R5): 退避 rename フェーズ自体もロールバック対象に
+# 含める（R3 時点では退避 rename が BaseException ハンドラの外にあり、
+# 1 個目の退避成功後・2 個目の退避失敗で正 WAV が退避先へ移動したまま
+# 復元されず終わる退行があった）
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_wav_and_timing_restores_wav_when_second_backup_rename_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """R5 が修正した核心シナリオ: 1 個目 (WAV) の退避 rename が成功した直後に
+    2 個目 (timing CSV) の退避 rename が失敗しても、WAV は退避先 (`.bak`) に
+    取り残されず、元のパス・元のバイト列へ完全に戻る（CSV も未着手のまま
+    元のバイト列で残る）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows_v1[0]["row_index"] = "0"
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    real_rename = rd.os.rename
+    call_count = {"n": 0}
+
+    def _rename_second_call_fails(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated failure on the second backup rename (timing csv)")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(rd.os, "rename", _rename_second_call_fails)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows_v2[0]["row_index"] = "1"
+    with pytest.raises(RuntimeError, match="second backup rename"):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows_v2, timing_out_path)
+
+    # R5 以前はここで out_path が存在しなかった（退避先に取り残されたまま）。
+    assert out_path.exists()
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.exists()
+    assert timing_out_path.read_bytes() == csv_before
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_restores_csv_when_wav_backup_rename_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """対称ケース: 1 個目 (WAV) の退避 rename そのものが失敗した場合、CSV は
+    未着手のまま・WAV も元のバイト列のまま残る（rename は原子的なので部分
+    バイト列は生じない）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated failure on the first backup rename (wav)")
+
+    monkeypatch.setattr(rd.os, "rename", _boom)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    with pytest.raises(RuntimeError, match="first backup rename"):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows_v2, timing_out_path)
+
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.read_bytes() == csv_before
     assert list(tmp_path.glob("*.bak")) == []
     assert list(tmp_path.glob("*.tmp")) == []
 

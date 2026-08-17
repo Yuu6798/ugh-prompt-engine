@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import sys
 import wave
@@ -174,6 +175,60 @@ def test_normal_three_speaker_assembly_publishes_manifest(tmp_path: Path) -> Non
 
     manifest_on_disk = json.loads((out_dir / "assembly_manifest.json").read_text(encoding="utf-8"))
     assert manifest_on_disk == manifest
+
+
+# ---------------------------------------------------------------------------
+# 1.5 P1 修正 (review #265 R5): assembly_manifest.json は公開した wav 実体
+# そのものへのバイト束縛（{name: sha256}）を各話者ごとに持つ
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_records_per_wav_sha256_matching_published_bytes(tmp_path: Path) -> None:
+    """`assembly_manifest.json` の各話者エントリに `wav_sha256`
+    （`{basename: sha256}`）が含まれ、値が実際に公開された `<out_dir>/<spk>/
+    wavs/*.wav` のバイト列の実測 sha256 と一致する（手打ちでも `wav_count`/
+    `transcriptions_csv_sha256` からの類推でもなく、公開後のファイルを直接
+    読んで検証する）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = tmp_path / "run4_raw"
+
+    manifest = assemble_run4.assemble(
+        ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True
+    )
+
+    for spk_name in ("ritsu", "pjs", "user"):
+        wav_sha256 = manifest["speakers"][spk_name]["wav_sha256"]
+        wavs_dir = out_dir / spk_name / "wavs"
+        actual_names = {p.name for p in wavs_dir.glob("*.wav")}
+        assert set(wav_sha256) == actual_names
+        for name, expected_sha in wav_sha256.items():
+            actual_sha = hashlib.sha256((wavs_dir / name).read_bytes()).hexdigest()
+            assert actual_sha == expected_sha, f"{spk_name}/{name}: sha256 mismatch"
+        assert manifest["speakers"][spk_name]["wav_count"] == len(wav_sha256)
+
+
+def test_manifest_wav_sha256_detects_tampering(tmp_path: Path) -> None:
+    """`wav_sha256` の実測値は公開直後のバイト列そのものを識別するため、
+    公開後に wav が（同名のまま）差し替わればもう一致しなくなることを確認
+    する（`wav_count`/`transcriptions_csv_sha256` だけでは検出できなかった
+    実害シナリオ）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = tmp_path / "run4_raw"
+
+    manifest = assemble_run4.assemble(
+        ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True
+    )
+    pinned_sha = manifest["speakers"]["user"]["wav_sha256"]["UC-001.wav"]
+
+    (out_dir / "user" / "wavs" / "UC-001.wav").write_bytes(b"tampered bytes, not the real wav")
+    actual_sha = hashlib.sha256((out_dir / "user" / "wavs" / "UC-001.wav").read_bytes()).hexdigest()
+    assert actual_sha != pinned_sha
 
 
 def _make_empty_pjs_raw_dir(root: Path) -> Path:

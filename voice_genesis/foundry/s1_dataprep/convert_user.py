@@ -845,7 +845,14 @@ def convert(
     参照。旧 R2 実装は `protected_files` が完全一致のみで、この包含ケースを
     見逃していた。加えて R2 実装は `dsdict_path` 自体を保護入力集合に含めて
     いなかった）。
+
+    P2 修正 (review #265 R5): `duration_tolerance_sec` は最初に有限・非負を
+    検査する（`convert_d3._require_finite_nonnegative_duration_tolerance` を
+    read-only import で再利用。`nan`/`+inf` を渡すと `convert()` 内部の
+    duration self-check（`diff > duration_tolerance_sec`）が常時 `False` に
+    なり乖離を無条件で素通りする）。
     """
+    convert_d3._require_finite_nonnegative_duration_tolerance(duration_tolerance_sec)
     normalized_dir = Path(normalized_dir)
     ledger_path = Path(ledger_path)
     dsdict_path = Path(dsdict_path)
@@ -1040,6 +1047,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
     except (
         convert_d3.OutputCollisionError,
+        convert_d3.InvalidDurationToleranceError,
         LedgerMismatchError,
         AllCardsExcludedError,
         DsDictError,

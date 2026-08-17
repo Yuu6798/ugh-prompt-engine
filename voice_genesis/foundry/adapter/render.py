@@ -16,6 +16,7 @@ import argparse
 import csv
 import dataclasses
 import hashlib
+import math
 import os
 import sys
 import tempfile
@@ -310,8 +311,25 @@ def _atomic_write_wav_and_timing(
     両方を `os.replace` し、どちらか一方でも失敗したら新たに公開された側を
     削除し、退避しておいた旧世代を両方とも復元する（`recording_kit/intake.py`
     `run()` の公開フェーズ巻き戻し・`gate_synth.py` `_swap_step_dir_into_place`
-    の `.old` 退避と同型パターン。復元判定はファイルシステム状態
-    （退避有無・新パスの実在）で行い、Python 変数の記帳には頼らない）。
+    の `.old` 退避と同型パターン）。
+
+    P2 修正 (review #265 R5): R3 時点では退避 rename フェーズ自体が
+    `BaseException` ハンドラの**外**にあった。1 個目（WAV）の退避 rename が
+    成功した直後・2 個目（timing CSV）の退避 rename が失敗すると、正 WAV は
+    `wav_backup` へ移動されたまま復元されずに例外が抜けていた（`out_path`
+    には何も無い状態で終わる——「片方だけ新しい」より悪い「片方が消える」
+    退行）。本修正は退避 rename 2 回・`os.replace` 2 回の**計 4 ステップ全て
+    を単一の `try`/`except BaseException` 配下**に置く。各宛先が「退避済み
+    か」（`backup_path.exists()`）は `_swap_into_place` 系ヘルパーと同じ
+    ファイルシステム状態の観測で判定できるが、「そもそも公開前に存在して
+    いたか」（`had_previous`）だけは退避直前の一度きりの `.exists()` 読み
+    取り（副作用なし・失敗時も何も変更しない）に拠らないと判別できない
+    （`had_previous=False` で `os.replace` 済み = 宛先が新規に実在／
+    `had_previous=True` で退避が未着手 = 宛先が元のまま実在、のいずれも
+    「`backup_path` 不在 かつ 宛先が実在」という同一のファイルシステム状態
+    になり得るため）。よって `had_previous` は依然 Python 変数で保持するが、
+    それ以外の巻き戻し判定（どこまで進んだか）は全て `backup_path.exists()`/
+    `new_path.exists()` というファイルシステム状態から導く。
     """
     out_path = Path(out_path)
     timing_out_path = Path(timing_out_path)
@@ -325,39 +343,53 @@ def _atomic_write_wav_and_timing(
             pass
         raise
 
-    # 公開直前に既存宛先（あれば）を同一ディレクトリの退避名へ rename する
-    # （バイトコピーしない）。`os.getpid()` サフィックスは同一プロセス内での
-    # 再入・並行呼び出しでの退避名衝突を避けるための実務上の目安であり、
-    # 本関数自体の並行実行に対する排他は呼び出し側の責務（他の swap 系
-    # ヘルパーと同様）。
+    # 退避名の決定 + 前回クラッシュ等の残骸掃除（`out_path`/`timing_out_path`
+    # 自体にはまだ一切触れていない準備段階のため、ここでの失敗はロール
+    # バック不要——何も公開前の状態から動いていない）。
     wav_backup = out_path.parent / f"{out_path.name}.prev-{os.getpid()}.bak"
     csv_backup = timing_out_path.parent / f"{timing_out_path.name}.prev-{os.getpid()}.bak"
     for stale in (wav_backup, csv_backup):
         if stale.exists():
             os.unlink(stale)
+    # `.exists()` は副作用の無い読み取りのみ（`had_previous` の記帳自体が
+    # 失敗して部分状態を残すことはない）。
     wav_had_previous = out_path.exists()
     csv_had_previous = timing_out_path.exists()
-    if wav_had_previous:
-        os.rename(out_path, wav_backup)
-    if csv_had_previous:
-        os.rename(timing_out_path, csv_backup)
 
     try:
+        # 退避 rename（あれば）→ 両方公開、の 4 ステップを単一トランザクション
+        # として扱う（R5 修正: 退避 rename もこの try 配下に含める）。
+        if wav_had_previous:
+            os.rename(out_path, wav_backup)
+        if csv_had_previous:
+            os.rename(timing_out_path, csv_backup)
         os.replace(wav_tmp, out_path)
         os.replace(csv_tmp, timing_out_path)
     except BaseException:
-        # 巻き戻し: 各宛先について「自分がこの呼び出しで新世代へ差し替えた
-        # か」を宛先の実在（`new_path.exists()`）で判定する（`os.replace` は
-        # 原子的なので、失敗した置換対象は「未着手のまま」——既に退避済みで
-        # 存在しない——のいずれかであり、部分バイト列が残ることはない）。
+        # 巻き戻し: 各宛先について「退避 rename が完了しているか」を
+        # `backup_path.exists()` というファイルシステム状態で判定する
+        # （`os.rename`/`os.replace` はいずれも原子的なため、失敗した
+        # 呼び出しは「未着手のまま」のいずれかであり、部分バイト列が残る
+        # ことはない）。
         for new_path, backup_path, had_previous in (
             (out_path, wav_backup, wav_had_previous),
             (timing_out_path, csv_backup, csv_had_previous),
         ):
-            if new_path.exists():
-                os.unlink(new_path)
             if had_previous:
-                os.rename(backup_path, new_path)
+                if backup_path.exists():
+                    # 退避 rename 済み（この後 os.replace が成功していれば
+                    # new_path は新世代、失敗していれば new_path は不在）。
+                    # いずれの場合も「新世代を消し、旧世代を戻す」で復元する。
+                    if new_path.exists():
+                        os.unlink(new_path)
+                    os.rename(backup_path, new_path)
+                # backup_path が無ければ退避 rename 自体が未着手 —
+                # new_path は元のバイト列のまま残っているため何もしない。
+            else:
+                # 公開前は存在しなかった宛先: os.replace が走っていれば
+                # new_path が新規に生成されているので削除して「未公開」へ戻す。
+                if new_path.exists():
+                    os.unlink(new_path)
         for tmp in (wav_tmp, csv_tmp):
             if os.path.exists(tmp):
                 try:
@@ -365,6 +397,15 @@ def _atomic_write_wav_and_timing(
                 except OSError:
                     pass
         raise
+
+    # 公開成功: 退避しておいた旧世代はもう不要。
+    for backup, had_previous in ((wav_backup, wav_had_previous), (csv_backup, csv_had_previous)):
+        if had_previous:
+            try:
+                os.unlink(backup)
+            except OSError:
+                pass
+    return output_sha256
 
     # 公開成功: 退避しておいた旧世代はもう不要。
     for backup, had_previous in ((wav_backup, wav_had_previous), (csv_backup, csv_had_previous)):
@@ -934,6 +975,20 @@ def render(
             "'vcv' 固定（内部的には 'recorded' 既定のみ対応）です。"
             "'none'/'synthetic' の指定や --no-consonants は非対応です。"
         )
+    # P2 修正 (review #265 R5・有限性ファミリー終端掃討): unit 選択コストの
+    # 重み `w_p`/`w_d`/`w_c`/`w_v` は `units.py` `select_units`/
+    # `select_vcv_units` 内で `total = w_p * cp + w_d * cd + w_c * cc + cv`
+    # として使われる。`nan` を渡すと全候補の `total` が `nan` になり、
+    # `min()`/比較演算が事実上無効化されて選択が定義不能になる（例外にも
+    # ならない静かな縮退）。`inf` は他コスト項を無視した縮退選択、負値は
+    # ペナルティ方向の反転（近い/一致するほど不利になる）という無意味な
+    # 入力のため、いずれも重い WORLD 分析より前に fail-closed で拒否する。
+    for _name, _value in (("w_p", w_p), ("w_d", w_d), ("w_c", w_c), ("w_v", w_v)):
+        if not math.isfinite(_value) or _value < 0.0:
+            raise ValueError(
+                f"{_name} must be a finite, non-negative number (got {_value!r}; "
+                "fail-closed で拒否 — nan/inf は unit 選択コストの total を無効化する)"
+            )
 
     spec = vs.load_voice_spec(voice_spec_path)
     # P1 修正 (review #262 R2): 重い WORLD 分析より前に spec.donor の provenance

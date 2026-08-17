@@ -133,6 +133,27 @@ class EmptyDatasetError(ValueError):
     `--out-dir` を黙って置き換える false-success を防止する）。"""
 
 
+class InvalidDurationToleranceError(ValueError):
+    """P2 修正 (review #265 R5): `duration_tolerance_sec` が有限かつ非負で
+    ない場合に送出する（`convert_d3.convert()`/`convert_user.convert()`
+    両方の公開 API 入口で検査する。`nan`/`+inf` を渡すと
+    `if diff > duration_tolerance_sec:` 比較が常時 `False` になり乖離検査を
+    無条件で素通りする（NaN との比較は Python では常に `False`）。`-inf`/
+    負値も同様に無意味な入力のため、まとめて fail-closed で拒否する。"""
+
+
+def _require_finite_nonnegative_duration_tolerance(duration_tolerance_sec: float) -> None:
+    """`duration_tolerance_sec` の共通検査（`convert_d3.py`/`convert_user.py`
+    の両公開 API 入口から呼ぶ）。`math.isfinite` は `nan`/`+inf`/`-inf` の
+    いずれも `False` を返すため、この 1 呼び出しで両方を検出できる。"""
+    if not math.isfinite(duration_tolerance_sec) or duration_tolerance_sec < 0.0:
+        raise InvalidDurationToleranceError(
+            f"duration_tolerance_sec must be a finite, non-negative number "
+            f"(got {duration_tolerance_sec!r}; fail-closed で拒否 — nan/inf は "
+            "乖離検査 `diff > duration_tolerance_sec` を常時 False で素通りさせる)"
+        )
+
+
 # ---------------------------------------------------------------------------
 # 1. ペア発見（wav <-> 同名 timing CSV）
 # ---------------------------------------------------------------------------
@@ -508,7 +529,11 @@ def convert(
     `--out-dir` が `render_dir` と衝突していても無検査で通過し得た）。
     加えて `discover_pairs()` が 0 件（空データセット）の場合も staging
     構築前に fail-closed で拒否する（`EmptyDatasetError`）。
+
+    P2 修正 (review #265 R5): `duration_tolerance_sec` は最初に有限・非負を
+    検査する（`_require_finite_nonnegative_duration_tolerance`）。
     """
+    _require_finite_nonnegative_duration_tolerance(duration_tolerance_sec)
     render_dir = Path(render_dir)
     out_dir = Path(out_dir)
     old_dir = out_dir.parent / f"{out_dir.name}.old"
@@ -628,6 +653,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (
         OutputCollisionError,
         EmptyDatasetError,
+        InvalidDurationToleranceError,
         PairDiscoveryError,
         MalformedTimingCsvError,
         DurationMismatchError,

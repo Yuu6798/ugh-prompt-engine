@@ -826,6 +826,30 @@ def test_convert_bad_dsdict_fails_closed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 5.5 P2 修正 (review #265 R5): duration_tolerance_sec の nan/inf/負値は
+# fail-closed（convert_d3 と共有の検査関数を read-only import で再利用）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf"), -0.01])
+def test_convert_rejects_non_finite_or_negative_duration_tolerance(
+    tmp_path: Path, bad_value: float
+) -> None:
+    """`nan`/`+inf` は乖離検査 (`internal duration self-check`) を常時
+    無条件で素通りさせる。`-inf`/負値も無意味な入力のため、まとめて公開
+    API 入口で fail-closed 拒否する（`convert_d3.InvalidDurationToleranceError`
+    を read-only import で共有）。"""
+    cards = {"UC-012": _t2_uc012_samples()}
+    ledger_path, normalized_dir = _write_ledger_and_normalized(tmp_path, cards)
+    dsdict_path = _write_test_dsdict(tmp_path)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(cu.convert_d3.InvalidDurationToleranceError):
+        cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path, duration_tolerance_sec=bad_value)
+    assert not out_dir.exists()
+
+
+# ---------------------------------------------------------------------------
 # 6. 決定論: 同一入力 -> 同一出力バイト列
 # ---------------------------------------------------------------------------
 

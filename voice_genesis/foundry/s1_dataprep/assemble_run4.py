@@ -72,7 +72,9 @@ read-only import で再利用する（`convert_user.py` が `convert_d3.py` か�
    呼び出し、`<out-dir>/dict.txt` として同型の成果物を生成する。
 
 5. **assembly manifest**: `<out-dir>/assembly_manifest.json` に、話者ごとの
-   row 数・wav 数・`ph_dur` 合計秒数・`transcriptions.csv` の sha256・spk_id
+   row 数・wav 数・`ph_dur` 合計秒数・`transcriptions.csv` の sha256・
+   **各 wav の `{name: sha256}`**（review #265 R5 P1 追加。公開した wav 実体
+   そのものへのバイト束縛。staging 内の実測値のみで手打ちしない）・spk_id
    対応・衝突検査結果（0 件であることの実測記録）を書く。決定論を保つため
    ウォールクロック時刻等は含めない（同一入力 → 同一出力バイトを維持する）。
 
@@ -244,17 +246,31 @@ def _run_gates(speaker_name: str, spk_dir: Path, rows: Sequence[Dict[str, str]])
     return problems
 
 
+def _wav_sha256_map(spk_dir: Path) -> Dict[str, str]:
+    """`spk_dir/wavs/*.wav` 各ファイルの `{basename: sha256}` を実測する
+    （P1 修正・review #265 R5: `assembly_manifest.json` が wav 数・合計秒数・
+    CSV sha のみで、公開した wav 実体そのものへのバイト束縛を持たなかった
+    ため、公開後に取り違え/破損した wav があっても manifest 側からは検出
+    できなかった）。`_copy_wavs` 完了後・`_swap_into_place` より前の staging
+    内 wav 実体に対して行う（`convert_d3.py`/`convert_user.py` の pin 照合と
+    同じ「実測のみ・手打ちなし」規約。ファイル名昇順で決定論的に列挙する）。
+    """
+    wavs_dir = spk_dir / "wavs"
+    return {p.name: _sha256_file(p) for p in sorted(wavs_dir.glob("*.wav"))}
+
+
 def _speaker_manifest_entry(
     spk_dir: Path, rows: Sequence[Dict[str, str]], spk_id: int
 ) -> Dict[str, object]:
-    wav_count = len(list((spk_dir / "wavs").glob("*.wav")))
+    wav_sha256 = _wav_sha256_map(spk_dir)
     csv_path = spk_dir / "transcriptions.csv"
     return {
         "spk_id": spk_id,
         "row_count": len(rows),
-        "wav_count": wav_count,
+        "wav_count": len(wav_sha256),
         "ph_dur_total_seconds": round(_ph_dur_total_seconds(rows), 3),
         "transcriptions_csv_sha256": _sha256_file(csv_path),
+        "wav_sha256": wav_sha256,
     }
 
 
@@ -337,7 +353,7 @@ def _assemble_into(
 
     # --- 5. assembly manifest（決定論のためウォールクロック時刻を含めない） ---
     manifest: Dict[str, object] = {
-        "schema": "run4-assembly-manifest/0.1",
+        "schema": "run4-assembly-manifest/0.2",
         "spk_id": dict(SPK_IDS),
         "speakers": {
             "ritsu": {

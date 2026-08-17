@@ -347,6 +347,66 @@ def test_duration_mismatch_within_tolerance_passes(tmp_path: Path) -> None:
     assert row["name"] == "cellA"
 
 
+# ---------------------------------------------------------------------------
+# 3.5 P2 修正 (review #265 R5): duration_tolerance_sec の nan/inf/負値は
+# fail-closed（乖離検査 `diff > duration_tolerance_sec` の常時 False 素通り
+# を防止）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf"), -0.01])
+def test_convert_rejects_non_finite_or_negative_duration_tolerance(
+    tmp_path: Path, bad_value: float
+) -> None:
+    """`nan`/`+inf` は `diff > duration_tolerance_sec` を常時 `False` にして
+    乖離検査を無条件で素通りさせる（NaN との比較は Python では常に
+    `False`）。`-inf`/負値も無意味な入力のため、まとめて公開 API 入口で
+    fail-closed 拒否する。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(convert_d3.InvalidDurationToleranceError):
+        convert_d3.convert(render_dir, out_dir, duration_tolerance_sec=bad_value)
+    assert not out_dir.exists()
+
+
+def test_convert_rejects_nan_duration_tolerance_even_with_grossly_mismatched_wav(
+    tmp_path: Path,
+) -> None:
+    """実害の再現: `duration_tolerance_sec=nan` を許すと、実際には秒単位で
+    ずれた wav でも `diff > nan` が常に `False` のため乖離検査を通過して
+    しまう（修正前の挙動）。修正後は乖離を評価するより前に
+    `InvalidDurationToleranceError` で拒否され、決してこの wav が公開
+    されない。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    _write_wav(render_dir / "cellA.wav", 999.0)  # 極端な乖離（996.5s）
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(convert_d3.InvalidDurationToleranceError):
+        convert_d3.convert(render_dir, out_dir, duration_tolerance_sec=float("nan"))
+    assert not out_dir.exists()
+
+
+@_ffmpeg_required
+def test_convert_zero_duration_tolerance_is_accepted_as_finite_nonnegative(tmp_path: Path) -> None:
+    """境界値 `0.0` は有限かつ非負のため許可される（`< 0.0` であって
+    `<= 0.0` ではないことの確認）。`cellA` フィクスチャは wav 実長と
+    `ph_dur` 合計が厳密に一致するため、`tolerance=0.0` でも
+    `InvalidDurationToleranceError`/`DurationMismatchError` いずれも出さず
+    正常に変換が完走する。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    out_dir = tmp_path / "out"
+
+    summary = convert_d3.convert(render_dir, out_dir, duration_tolerance_sec=0.0)
+    assert summary["n_segments"] == 1
+
+
 @_ffmpeg_required
 def test_convert_end_to_end_duration_mismatch_publishes_nothing(tmp_path: Path) -> None:
     render_dir = tmp_path / "render"
