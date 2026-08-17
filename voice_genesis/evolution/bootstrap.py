@@ -63,11 +63,29 @@ def run_bootstrap(ledger_dir: Path) -> List[Path]:
        既存ファイルの有無と内容一致を全数チェックする。全既存 + 全一致なら
        冪等成功として何も書かずに既存パスを返す。1件でも内容衝突があれば
        何も書かずに `LedgerConflictError` を送出する（append-only 台帳の
-       意味論に揃える）。
+       意味論に揃える）。この既存判定は `Ledger` の symlink/containment
+       ガード（`_reject_symlink_escape()`）を経由する（PR #267 Codex R12
+       指摘3, 2026-08-17 採用: 従来は生 `read_bytes()` で比較していたため、
+       `<ledger>/<genome_id>.json` が台帳ディレクトリ外への symlink でも
+       内容さえ一致すれば「既存 + 一致」と誤認し、4件全てがこの状態だと
+       `Ledger.write()` を一度も呼ばずに冪等成功として早期 return していた
+       ——`write()`/`read()` なら拒否するはずの迂回を pre-check だけが
+       素通ししていた）。
     2. rollback: 事前検証を通過してもなお write 中に失敗した場合（並行書込み
        等の残余ケース）は、この実行で新規作成したファイルのみを unlink して
        実行前状態へ復元してから例外を再送出する（事前から存在したファイルは
-       一切変更しない）。
+       一切変更しない）。「新規作成したか」は pre-check 時点の存在有無からの
+       推定ではなく、`Ledger.write()` が返す `WriteResult.created`（実際に
+       `os.link` で新規作成したか）を唯一の正本として判定する（PR #267
+       Codex R12 指摘2, 2026-08-17 採用: pre-check と write の間に並行
+       プロセスが同一バイトの founder を publish していた場合、推定ベースの
+       判定では write() の冪等成功をこの実行の新規作成と誤認し、rollback が
+       他プロセスの正当なエントリを unlink し得た）。rollback は
+       `KeyboardInterrupt`/`SystemExit` を含む `BaseException` を捕捉して
+       行う（PR #267 Codex R12 指摘1, 2026-08-17 採用: 従来の
+       `except Exception` ではこれらで部分状態が残った。gate_synth.py の
+       swap rollback と同じ「`except BaseException` で捕捉 → 復元 → 再送出」
+       の家風に揃える）。
     """
     ledger = Ledger(ledger_dir)
     genomes = founder_genomes()
@@ -77,6 +95,11 @@ def run_bootstrap(ledger_dir: Path) -> List[Path]:
     conflicts: List[str] = []
     pre_existing: List[bool] = []
     for genome, path, payload in zip(genomes, paths, payloads):
+        # symlink/containment ガード（PR #267 Codex R12 指摘3）: write()/
+        # read() の既存ファイル分岐と同じガードを、アクセス（read_bytes()）
+        # 直前に通す。存在しない通常パスに対しては no-op（read()/write() と
+        # 同じ挙動）。
+        ledger._reject_symlink_escape(path)
         exists = path.exists()
         pre_existing.append(exists)
         if exists and path.read_bytes() != payload:
@@ -95,13 +118,13 @@ def run_bootstrap(ledger_dir: Path) -> List[Path]:
     written_new: List[Path] = []
     try:
         result_paths: List[Path] = []
-        for genome, was_pre_existing in zip(genomes, pre_existing):
-            written_path = ledger.write(genome)
-            if not was_pre_existing:
-                written_new.append(written_path)
-            result_paths.append(written_path)
+        for genome in genomes:
+            result = ledger.write(genome)
+            if result.created:
+                written_new.append(result.path)
+            result_paths.append(result.path)
         return result_paths
-    except Exception:
+    except BaseException:
         for p in written_new:
             try:
                 p.unlink()

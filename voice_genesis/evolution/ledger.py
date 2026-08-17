@@ -71,6 +71,16 @@ operator/operator_params の6フィールドを被覆する内容アドレスの
 同一視していた）。パスが symlink であること、または resolve 済みパスが
 `self.directory` の外側を指すことのいずれかを検出したら `LedgerError` で
 fail-closed 拒否する。
+
+`write()` の戻り値は `WriteResult`（`path` + `created`）（PR #267 Codex
+R12 指摘2, 2026-08-17 採用）: `created=True` は今回の呼び出しが
+`os.link` による排他 create を実際に成功させた（＝真に新規作成した）
+ことを、`created=False` は既存ファイルとバイト同一内容による冪等
+no-op（他プロセスが同一 genome_id を先に publish 済みだった等）を
+意味する。呼び出し側（`bootstrap.run_bootstrap()` の rollback 等）は
+「pre-check 時に存在しなかったはず」という推定ではなく、この実測フラグ
+だけを rollback 対象の判定に使うことで、pre-check と write の間の
+並行 publish による他者の正当エントリの誤 unlink を防げる。
 """
 from __future__ import annotations
 
@@ -80,7 +90,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, NamedTuple
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -98,6 +108,23 @@ class LedgerError(ValueError):
 class LedgerConflictError(LedgerError):
     """append-only 台帳: 既存 genome_id に異なる内容で上書きしようとした
     （PR 経由のみ変更可 — DESIGN_VG_E0.md §6）。"""
+
+
+class WriteResult(NamedTuple):
+    """`Ledger.write()` の戻り値（PR #267 Codex R12 指摘2, 2026-08-17 採用）。
+
+    `path`: 公開先パス（`<ledger>/<genome_id>.json`）。
+    `created`: この呼び出しが `os.link` による排他 create を実際に成功
+    させ、真に新規作成したかどうか。`FileExistsError` を捕捉した上での
+    バイト同一冪等 no-op は `False`（＝このプロセスはファイルシステムに
+    何も新規作成していない）。呼び出し側が「自分が本当に作ったファイルか」
+    を判定するための唯一の正本であり、事前の存在チェックからの推定に
+    置き換えてはならない（pre-check と write の間の並行 publish を
+    区別できないため）。
+    """
+
+    path: Path
+    created: bool
 
 
 class Ledger:
@@ -140,11 +167,15 @@ class Ledger:
                 f"{directory_resolved} (symlink escape guard — PR #267 Codex R9 指摘3)"
             ) from None
 
-    def write(self, genome: models.VoiceGenome) -> Path:
+    def write(self, genome: models.VoiceGenome) -> WriteResult:
         """genome を `<genome_id>.json` として排他 create で公開する。同一
         genome_id に既に同一内容が書かれていれば冪等 no-op（bootstrap の
         再実行でバイト同一を保つため）。異なる内容での既存ファイルとの
         衝突は `LedgerConflictError`（append-only 規律の機械的補強）。
+
+        戻り値は `WriteResult(path, created)`（PR #267 Codex R12 指摘2,
+        2026-08-17 採用）: `created` はこの呼び出しが実際に新規作成した
+        かどうかの実測値（`WriteResult` docstring 参照）。
         """
         path = self.path_for(genome.genome_id)
         payload = (models.genome_to_json(genome) + "\n").encode("utf-8")
@@ -237,7 +268,7 @@ class Ledger:
                 self._reject_symlink_escape(path)
                 existing = path.read_bytes()
                 if existing == payload:
-                    return path
+                    return WriteResult(path=path, created=False)
                 raise LedgerConflictError(
                     f"genome_id {genome.genome_id!r} already exists in the ledger with different "
                     "content (append-only ledger — changes must go through a PR, not an overwrite)"
@@ -247,7 +278,7 @@ class Ledger:
                 os.unlink(tmp_name)
             except OSError:
                 pass
-        return path
+        return WriteResult(path=path, created=True)
 
     def _rederive_child(
         self, genome: models.VoiceGenome, loaded_parents: Dict[str, models.VoiceGenome]

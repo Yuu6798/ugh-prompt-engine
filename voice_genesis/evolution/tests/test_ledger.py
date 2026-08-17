@@ -24,9 +24,10 @@ def founder():
 
 def test_write_creates_file_named_by_genome_id(tmp_path: Path, founder) -> None:
     led = ledger_mod.Ledger(tmp_path)
-    path = led.write(founder)
-    assert path == tmp_path / f"{founder.genome_id}.json"
-    assert path.exists()
+    result = led.write(founder)
+    assert result.path == tmp_path / f"{founder.genome_id}.json"
+    assert result.path.exists()
+    assert result.created is True
 
 
 def test_write_read_roundtrip(tmp_path: Path, founder) -> None:
@@ -38,10 +39,12 @@ def test_write_read_roundtrip(tmp_path: Path, founder) -> None:
 
 def test_write_is_idempotent_for_identical_content(tmp_path: Path, founder) -> None:
     led = ledger_mod.Ledger(tmp_path)
-    p1 = led.write(founder)
-    b1 = p1.read_bytes()
-    p2 = led.write(founder)
-    b2 = p2.read_bytes()
+    r1 = led.write(founder)
+    b1 = r1.path.read_bytes()
+    assert r1.created is True
+    r2 = led.write(founder)
+    b2 = r2.path.read_bytes()
+    assert r2.created is False
     assert b1 == b2
 
 
@@ -79,7 +82,7 @@ def test_path_for_rejects_malformed_genome_id(tmp_path: Path) -> None:
 
 def test_write_produces_pretty_json_with_trailing_newline(tmp_path: Path, founder) -> None:
     led = ledger_mod.Ledger(tmp_path)
-    path = led.write(founder)
+    path = led.write(founder).path
     text = path.read_text(encoding="utf-8")
     assert text.endswith("\n")
     assert models.genome_from_json(text) == founder
@@ -181,8 +184,9 @@ def test_write_accepts_genome_after_parent_published(tmp_path: Path, founder) ->
     led = ledger_mod.Ledger(tmp_path)
     child = operators.drift(founder, rng_seed=1, step=0.02)
     led.write(founder)
-    path = led.write(child)
-    assert path == tmp_path / f"{child.genome_id}.json"
+    result = led.write(child)
+    assert result.path == tmp_path / f"{child.genome_id}.json"
+    assert result.created is True
     assert led.exists(child.genome_id)
 
 
@@ -403,13 +407,16 @@ def test_write_and_read_regular_file_behavior_unchanged(tmp_path: Path, founder)
     """通常ファイル（symlink でない）の write/read 挙動は symlink ガード
     追加後も不変（回帰確認）。"""
     led = ledger_mod.Ledger(tmp_path)
-    path = led.write(founder)
+    result1 = led.write(founder)
+    path = result1.path
+    assert result1.created is True
     assert not path.is_symlink()
     loaded = led.read(founder.genome_id)
     assert loaded == founder
     # 冪等 no-op（既存ファイル分岐）も引き続き成功する。
-    path2 = led.write(founder)
-    assert path2 == path
+    result2 = led.write(founder)
+    assert result2.path == path
+    assert result2.created is False
 
 
 def test_read_rejects_renamed_file(tmp_path: Path, founder) -> None:
