@@ -75,10 +75,20 @@ class Archive:
            する（追い出し記録付き — PR #267 Codex R5 指摘2: elite に到達した
            lineage はもはや「唯一」ではないため）。
         2. 1 に該当しない場合（floor 未満、または floor 以上だが既存 elite
-           に劣る）: この genome の lineage が Archive 全体のどの elite にも
-           一致しない（＝この lineage が elite として一切生き残っていない）
-           場合に限り、保護スロットで採否判定する（既存の保護スロット
-           占有者より quality が高ければ採用・追い出し記録を append）。
+           に劣る — いずれの場合も elite 競争に敗れたとして 2 へフォール
+           スルーする。PR #267 Codex R6 指摘2, 2026-08-17 採用: 従来は
+           floor 以上で elite に劣った場合に即 `"rejected"` を return して
+           おり、保護スロット判定へフォールスルーしなかった。above-floor
+           だが既存 elite に劣る候補でも、その lineage が Archive 全体の
+           どの elite にも一切代表されていなければ「系統的に唯一」であり
+           保護スロットの対象になるべき — 実例: 別セルの L-R elite
+           (q=0.9) に対し、未代表の L-C 候補 (q=0.8, floor=0.5) が
+           above-floor であるという理由だけで保護スロットを素通りし
+           拒否されていた）: この genome の lineage が Archive 全体の
+           どの elite にも一致しない（＝この lineage が elite として一切
+           生き残っていない）場合に限り、保護スロットで採否判定する
+           （既存の保護スロット占有者より quality が高ければ採用・追い出し
+           記録を append）。
         3. いずれにも該当しなければ `"rejected"`。
         """
         if not math.isfinite(quality):
@@ -102,7 +112,11 @@ class Archive:
                 self._elite[cell] = incoming
                 self._evict_protected_for_lineage(incoming.lineage, incoming)
                 return "elite"
-            return "rejected"
+            # PR #267 Codex R6 指摘2（P2）: above-floor だが既存 elite に劣る
+            # 候補は、即 "rejected" にせず保護スロット判定（2.）へフォール
+            # スルーする — この genome の lineage が elite として一切
+            # 生き残っていなければ、below-floor の候補と同様に保護スロットの
+            # 対象になるべきため（early return しない = 意図的な fall-through）。
 
         if not self._lineage_has_elite(genome.lineage):
             existing = self._protected.get(cell)

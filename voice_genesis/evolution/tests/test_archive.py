@@ -162,6 +162,57 @@ def test_elite_acceptance_evicts_stale_protected_slot_of_same_lineage(founders) 
     assert arc.protected_at(cell_a).genome_id == novelty_challenger.genome_id
 
 
+# --- PR #267 Codex R6 指摘2（P2）: above-floor 敗退候補の保護スロット素通り ---
+
+
+def test_above_floor_loser_falls_through_to_protected_slot(founders) -> None:
+    """Codex R6 指摘2実測: `LINEAGE_THRESHOLD`(0.55)は grid セル境界(0.2刻み)
+    と揃っていないため、同一セル (r-index 2 = r∈[0.4,0.6)) の中に L-R
+    (r=0.58>=0.55) と L-C (r=0.5<0.55) の両方の座標が存在しうる。この同一
+    セルで L-R elite (q=0.9) が既に確立している状態で未代表 L-C 候補
+    (q=0.8, floor=0.5) を提出すると、above-floor だが既存 elite に劣る
+    という理由だけで即 "rejected" されていた（保護スロット判定への
+    フォールスルーが無かった）。L-C は Archive 全体のどの elite にも代表
+    されていない（唯一の系統）ため、above-floor の敗北者でも保護スロットの
+    対象になるべき — 修正後は "protected" として受理される。
+    """
+    arc = archive_mod.Archive()
+
+    lr_elite = models.build_genome(
+        coords=models.Coords(0.58, 0.21, 0.21), seed=0, lineage="L-R", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    lc_candidate = models.build_genome(
+        coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    cell = simplex.cell_id(lr_elite.coords)
+    assert simplex.cell_id(lc_candidate.coords) == cell  # 同一セルであることが前提条件
+
+    assert arc.submit(lr_elite, 0.9, quality_floor=0.5) == "elite"
+
+    result = arc.submit(lc_candidate, 0.8, quality_floor=0.5)
+    assert result == "protected"
+    assert arc.protected_at(cell).genome_id == lc_candidate.genome_id
+    assert arc.elite_at(cell).genome_id == lr_elite.genome_id  # elite は上書きされない
+
+
+def test_above_floor_loser_with_represented_lineage_still_rejected(founders) -> None:
+    """above-floor 敗退のフォールスルーは「その lineage が elite として
+    一切代表されていない」場合のみ保護スロットへ入る。lineage が既に
+    elite で代表済みなら、above-floor 敗退はやはり "rejected"（保護スロット
+    のフォールスルーが無条件の救済にならないことの回帰確認）。
+    """
+    ritsu, *_ = founders
+    arc = archive_mod.Archive()
+    arc.submit(ritsu, 0.9, quality_floor=0.5)  # L-R の elite を確立(同一セル)
+    challenger = operators.drift(ritsu, rng_seed=1, step=0.01)
+    assert challenger.lineage == "L-R"
+    assert simplex.cell_id(challenger.coords) == simplex.cell_id(ritsu.coords)
+    result = arc.submit(challenger, 0.6, quality_floor=0.5)  # above floor だが劣る
+    assert result == "rejected"
+
+
 def test_occupancy_counts(founders) -> None:
     ritsu, pjs, usr, center = founders
     arc = archive_mod.Archive()

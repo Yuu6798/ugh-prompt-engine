@@ -30,6 +30,17 @@ parents 空はそのまま許可。非 founder の genome が未 publish / typo 
 親 ID を参照していても従来は write が通り、系譜グラフに宙吊りエッジ
 （存在しない親への参照）が恒久化していた）。不在親は `LedgerError` で
 fail-closed。
+
+親検証は `self.exists(parent_id)`（パス存在のみ）ではなく
+`self.read(parent_id)` の成功で行う（PR #267 Codex R6 指摘3, 2026-08-17
+採用: `exists()` はファイルの有無しか見ないため、親の位置に破損した
+JSON や genome_id 不一致の実体が置かれていても検出できず publish が
+通っていた。`read()` を経由すれば `genome_from_dict()` のフル検証
+（schema・genome_id 再計算一致・lineage 座標整合）とファイル名↔内容の
+自己申告 ID 束縛検証まで働く）。`read()` が送出しうる
+`FileNotFoundError` / `json.JSONDecodeError` /
+`models.GenomeValidationError` / `LedgerError` はいずれも
+`LedgerError` へ正規化して fail-closed で拒否する。
 """
 from __future__ import annotations
 
@@ -87,17 +98,30 @@ class Ledger:
                 f"round-trip validation via genome_from_dict() ({exc})"
             ) from exc
 
-        # publish 前検証（Codex R5 指摘1）: parents の各 genome_id が台帳に
-        # 実在することを確認する（founder = parents 空はそのまま通過）。
-        # 未 publish / typo の親 ID を許すと系譜グラフに宙吊りエッジが
-        # 恒久化するため fail-closed で拒否する。
+        # publish 前検証（Codex R5 指摘1 / R6 指摘3）: parents の各 genome_id
+        # が台帳に実在することを `self.read(parent_id)` の成功で確認する
+        # （founder = parents 空はそのまま通過）。従来の `self.exists()` は
+        # パス存在しか見ないため、親の位置に破損 JSON や genome_id 不一致の
+        # 実体が置かれていても通過していた。`read()` を経由することで
+        # `genome_from_dict()` のフル検証（schema・genome_id 再計算一致・
+        # lineage 座標整合）+ ファイル名↔内容の自己申告 ID 束縛検証まで
+        # 働かせる。未 publish / typo / 破損 / ID 不一致のいずれも
+        # fail-closed で拒否する。
         for parent_id in genome.parents:
-            if not self.exists(parent_id):
+            try:
+                self.read(parent_id)
+            except FileNotFoundError:
                 raise LedgerError(
                     f"refusing to publish genome_id {genome.genome_id!r}: parent {parent_id!r} does "
                     "not exist in the ledger (parents must already be published — an unpublished or "
                     "mistyped parent id would leave a dangling edge in the lineage graph)"
-                )
+                ) from None
+            except (json.JSONDecodeError, models.GenomeValidationError, LedgerError) as exc:
+                raise LedgerError(
+                    f"refusing to publish genome_id {genome.genome_id!r}: parent {parent_id!r} failed "
+                    f"full ledger validation on read ({exc}) — a corrupted, tampered, or genome_id-"
+                    "mismatched parent must not be treated as a valid publish target"
+                ) from exc
 
         self.directory.mkdir(parents=True, exist_ok=True)
 

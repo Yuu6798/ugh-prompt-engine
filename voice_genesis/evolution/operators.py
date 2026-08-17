@@ -55,6 +55,15 @@ def drift(parent: models.VoiceGenome, *, rng_seed: int, step: float) -> models.V
     """重心座標を一様ランダム方向へ最大 step の微動（単体内へ射影）。
     親1個体。`operator_params = {rng_seed, step<=0.08}`。
     """
+    # PR #267 Codex R6 指摘1（P1）: 挙動に影響する float（ここでは step）は
+    # 入口で6桁固定丸めしてから計算に使う（build_genome() の operator_params
+    # 正規化 — models._require_bounded_float(normalize=True) — と同じ丸め
+    # 規約。丸め→上限検査の順序も揃える）。丸め前の生値で座標計算すると、
+    # 記録される operator_params.step（丸め後の6桁値）と実際に座標計算へ
+    # 使われた値が食い違い、記録済み params からの再実行が別 genome_id を
+    # 生んでいた（実例: step=0.02000049 は記録上 0.02 だが、丸め前の生値で
+    # 計算した座標は step=0.02 で再実行した座標と一致しない）。
+    step = round(step, 6)
     if not (0.0 <= step <= models.DRIFT_STEP_MAX):
         raise ValueError(f"drift step must be within [0, {models.DRIFT_STEP_MAX}], got {step}")
     rng = random.Random(rng_seed)
@@ -88,6 +97,10 @@ def vertex_pull(
     （DESIGN_VG_E0.md §4「系統内/系統間判定はオペレータではなく台帳が行う」
     — 本実装ではこの判定点を vertex_pull 自身が担う）。
     """
+    # PR #267 Codex R6 指摘1（P1）: weight/pull も drift の step と同じ理由で
+    # 入口で6桁固定丸めしてから計算に使う（丸め→上限検査の順序を揃える）。
+    weight = round(weight, 6)
+    pull = round(pull, 6)
     if not (0.0 <= weight <= 1.0):
         raise ValueError(f"vertex_pull weight must be within [0, 1], got {weight}")
     if vertex not in models.ANCHOR_NAMES:
@@ -154,6 +167,9 @@ def edge_walk(
         raise ValueError(f"edge_walk edge must name anchors from {models.ANCHOR_NAMES}, got {edge!r}")
     if edge[0] == edge[1]:
         raise ValueError(f"edge_walk edge must name two distinct anchors, got {edge!r}")
+    # PR #267 Codex R6 指摘1（P1）: step も drift と同じ理由で入口で6桁固定
+    # 丸めしてから計算に使う（丸め→上限検査の順序を揃える）。
+    step = round(step, 6)
     if not (0.0 <= step <= models.EDGE_WALK_STEP_MAX):
         raise ValueError(f"edge_walk step must be within [0, {models.EDGE_WALK_STEP_MAX}], got {step}")
 

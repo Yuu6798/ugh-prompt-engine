@@ -185,6 +185,46 @@ def test_write_accepts_genome_after_parent_published(tmp_path: Path, founder) ->
     assert led.exists(child.genome_id)
 
 
+# --- PR #267 Codex R6 指摘3（P1）: 親検証は self.read() の完全検証で行う ----
+
+
+def test_write_rejects_genome_with_broken_json_parent(tmp_path: Path, founder) -> None:
+    """親 genome_id のファイルが台帳ディレクトリに存在していても、中身が
+    壊れた JSON なら `exists()` は真を返すが `read()` は失敗する。publish
+    前の親検証が `read()` を経由するようになったことで、この破損親を参照
+    する子 genome の write は拒否される。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    child = operators.drift(founder, rng_seed=1, step=0.02)
+    parent_path = tmp_path / f"{founder.genome_id}.json"
+    parent_path.parent.mkdir(parents=True, exist_ok=True)
+    parent_path.write_text("{ this is not valid json", encoding="utf-8")
+    assert led.exists(founder.genome_id)  # ファイルは存在する(壊れているだけ)
+    with pytest.raises(ledger_mod.LedgerError):
+        led.write(child)
+    assert child.genome_id not in led.list_genome_ids()
+
+
+def test_write_rejects_genome_with_id_mismatched_parent(tmp_path: Path, founder) -> None:
+    """親 genome_id のファイルが存在し、中身は有効な genome だが、ファイル名
+    が要求する genome_id と内容の自己申告 genome_id が食い違う（別個体の
+    JSON を親の位置にコピーした状況を模す）場合、`exists()` は真を返すが
+    `read()` はファイル名/内容束縛違反として拒否する。この不整合な親を
+    参照する子 genome の write は拒否される。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    child = operators.drift(founder, rng_seed=1, step=0.02)
+    other = bootstrap.founder_genomes()[1]
+    assert other.genome_id != founder.genome_id
+    parent_path = tmp_path / f"{founder.genome_id}.json"
+    parent_path.parent.mkdir(parents=True, exist_ok=True)
+    parent_path.write_text(models.genome_to_json(other) + "\n", encoding="utf-8")
+    assert led.exists(founder.genome_id)  # ファイルは存在する(ID 不一致なだけ)
+    with pytest.raises(ledger_mod.LedgerError):
+        led.write(child)
+    assert child.genome_id not in led.list_genome_ids()
+
+
 def test_read_rejects_renamed_file(tmp_path: Path, founder) -> None:
     """ファイルがリネームされ、ファイル名（要求 genome_id）と内容の自己申告
     genome_id が食い違う場合、`read()` は拒否する（自己申告 ID の再計算一致

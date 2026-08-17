@@ -339,6 +339,57 @@ def test_vertex_pull_rejects_one_sided_anchors_provenance(founders) -> None:
         operators.vertex_pull(a, pjs, weight=0.5, vertex="user", pull=0.1)
 
 
+# --- PR #267 Codex R6 指摘1（P1）: recorded params からの再現 -----------------
+
+
+def test_drift_recorded_step_reproduces_same_genome_id(founders) -> None:
+    """Codex R6 指摘1実測: step=0.02000049 は build_genome の6桁正規化で
+    operator_params.step=0.02 として記録されるが、丸め前は座標計算に
+    生値(0.02000049)を使っていたため、記録された params(step=0.02)から
+    再実行すると別の genome_id になっていた。入口で6桁丸めしてから計算に
+    使うことで、記録済み params からの再実行が同一 genome_id を再現する。
+    """
+    ritsu, _pjs, _usr, _center = founders
+    original = operators.drift(ritsu, rng_seed=0, step=0.02000049)
+    assert original.operator_params["step"] == 0.02
+    assert original.coords == models.Coords(0.989738, 0.0, 0.010262)
+    replayed = operators.drift(
+        ritsu, rng_seed=original.operator_params["rng_seed"], step=original.operator_params["step"],
+    )
+    assert replayed.genome_id == original.genome_id
+    assert models.genome_to_json(replayed) == models.genome_to_json(original)
+
+
+def test_vertex_pull_recorded_params_reproduce_same_genome_id(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    original = operators.vertex_pull(
+        ritsu, pjs, weight=0.500000499, vertex="user", pull=0.100000499,
+    )
+    replayed = operators.vertex_pull(
+        ritsu, pjs,
+        weight=original.operator_params["weight"],
+        vertex=original.operator_params["vertex"],
+        pull=original.operator_params["pull"],
+    )
+    assert replayed.genome_id == original.genome_id
+    assert models.genome_to_json(replayed) == models.genome_to_json(original)
+
+
+def test_edge_walk_recorded_step_reproduces_same_genome_id(founders) -> None:
+    _ritsu, pjs, _usr, _center = founders
+    original = operators.edge_walk(
+        pjs, rng_seed=7, edge=("ritsu", "pjs"), step=0.02000049,
+    )
+    assert original.operator_params["step"] == 0.02
+    assert original.coords == models.Coords(0.018957, 0.981043, 0.0)
+    replayed = operators.edge_walk(
+        pjs, rng_seed=original.operator_params["rng_seed"],
+        edge=tuple(original.operator_params["edge"]), step=original.operator_params["step"],
+    )
+    assert replayed.genome_id == original.genome_id
+    assert models.genome_to_json(replayed) == models.genome_to_json(original)
+
+
 def test_anchors_provenance_propagation_does_not_change_genome_id(founders) -> None:
     """genome_id は anchors_provenance を除外して計算される設計（models.py）
     のため、伝播しても子の genome_id は不変。"""
