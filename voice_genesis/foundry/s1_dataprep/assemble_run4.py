@@ -359,17 +359,33 @@ def _validate_live_datasets_shape(live_datasets: object) -> List[str]:
     return []
 
 
-def _load_yaml_config(path: Path) -> Dict[str, object]:
-    """YAML config を読み、`dict` かつ `datasets` がリストであることを
-    検査する（`refresh_config_pin` の入力/自己検算再読込の両方から使う共通
-    ヘルパー）。"""
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict):
+def _parse_yaml_config_bytes(data: bytes, path: Path) -> Dict[str, object]:
+    """`data`（すでに読み込み済みの生バイト列）を YAML として parse し、
+    `dict` かつ `datasets` がリストであることを検査する。`path` はエラー
+    メッセージ表示専用で、ここではファイルへは一切触れない（P1 修正・
+    review #14: `refresh_config_pin` が live config を「parse 用」と
+    「sha256 計算用」で 2 回 `read`/`read_bytes` していたため、2 読の間に
+    ファイルが書き換わると「旧バイト由来の normalized コピー + 新バイトの
+    config_sha256」という意味的に不整合な pin 束が成立し得た。呼び出し側は
+    必ず 1 回だけ `read_bytes()` した同一バイト列をこの関数と sha256 計算の
+    両方に渡すこと）。"""
+    data_text = data.decode("utf-8")
+    parsed = yaml.safe_load(data_text)
+    if not isinstance(parsed, dict):
         raise RefreshConfigPinError(f"{path}: not a YAML mapping (fail-closed)")
-    if not isinstance(data.get("datasets"), list):
+    if not isinstance(parsed.get("datasets"), list):
         raise RefreshConfigPinError(f"{path}: 'datasets' is not a list (fail-closed)")
-    return data
+    return parsed
+
+
+def _load_yaml_config(path: Path) -> Dict[str, object]:
+    """`path` を 1 回だけ `read_bytes()` し、`_parse_yaml_config_bytes` で
+    parse する（`refresh_config_pin` の自己検算再読込 (`verify_tmp_path`) から
+    使う共通ヘルパー。`assemble()` 側の他の呼び出し元には影響しない —
+    このモジュール内で `_load_yaml_config` を呼ぶのは
+    `refresh_config_pin`（P1 修正で bytes 経由の直呼びへ変更済み）と
+    verify reread のみ）。"""
+    return _parse_yaml_config_bytes(Path(path).read_bytes(), path)
 
 
 def _normalize_config_dict(live_config: Dict[str, object], config_dir: Path) -> Dict[str, object]:
@@ -587,7 +603,12 @@ def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> 
     する（公開エントリポイント。モジュール docstring「`refresh-config-pin`
     サブコマンド」節参照）。
 
-    live config を読み、パス系フィールドだけを `config_dir` 基準の相対パス
+    live config は **1 回だけ** `read_bytes()` し、その同一バイト列を
+    parse・正規化・sha256 記帳のすべてに使う（review #14 P1 修正: 旧実装は
+    parse 用の読み込みと `config.config_sha256` 記帳用の読み込みを別々に
+    行っており、2 読の間にファイルが書き換わると「旧バイト由来の
+    normalized コピー + 新バイトの config_sha256」という意味的に不整合な
+    pin 束が成立し得た）。パス系フィールドだけを `config_dir` 基準の相対パス
     へ正規化した版を staging tempfile へ書き出す。書き込み後に再読込し、
     live config と「パス系フィールドを除いて完全一致」することを
     `_semantic_diff` で検査する——一致しなければ `ConfigPinMismatchError` で
@@ -617,7 +638,16 @@ def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> 
         raise RefreshConfigPinError(f"{config_path}: not found (fail-closed)")
     config_dir = Path(config_dir) if config_dir is not None else config_path.parent
 
-    live = _load_yaml_config(config_path)
+    # P1 修正 (review #14): live config は 1 回だけ `read_bytes()` し、その
+    # 同一バイト列を parse・正規化・sha256 計算のすべてに使う（ファイルパス
+    # からの再読を排除する）。旧実装は `_load_yaml_config(config_path)` で
+    # 一度読み、後段の manifest 更新で `_sha256_file(config_path)` により
+    # 別途もう一度読んでいたため、2 読の間にファイルが書き換わると「旧
+    # バイト由来の normalized コピー + 新バイトの config_sha256」という
+    # 意味的に不整合な pin 束が成立し得た（トランザクション自体は成功する
+    # ため検出されない）。
+    live_bytes = config_path.read_bytes()
+    live = _parse_yaml_config_bytes(live_bytes, config_path)
 
     # review #265 R11 P1: リスト形状そのもの（エントリ数・重複無し・
     # 順序/内容）を検査する（§ `_validate_live_datasets_shape` docstring
@@ -658,7 +688,11 @@ def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> 
     if manifest_path is not None:
         manifest_text = _compute_updated_manifest_text(
             manifest_path,
-            config_sha256=_sha256_file(config_path),
+            # P1 修正 (review #14): ここで `config_path` を再度読み直さない。
+            # `live_bytes`（この関数冒頭で 1 回だけ読み、parse にも使った
+            # のと同一バイト列）から直接計算する — parse に使われたバイト列
+            # と記帳される sha256 が常に一致することを保証する。
+            config_sha256=hashlib.sha256(live_bytes).hexdigest(),
             normalized_config_sha256=hashlib.sha256(normalized_text.encode("utf-8")).hexdigest(),
         )
         if manifest_text is None:

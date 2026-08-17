@@ -680,6 +680,67 @@ def test_refresh_config_pin_updates_manifest_config_sha256(tmp_path: Path) -> No
     assert manifest_before == manifest_after
 
 
+def test_refresh_config_pin_reads_live_config_bytes_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1 修正 (review #14): 旧実装は live config を parse 用と
+    `config.config_sha256` 記帳用とで別々に読んでおり、2 読の間にファイルが
+    書き換わると「旧バイト由来の normalized コピー + 新バイトの
+    config_sha256」という意味的に不整合な pin 束が成立し得た。本テストは
+    1 回目の `read_bytes()` が返った直後にディスク上の `config_path` を
+    別内容へ差し替えるフックを注入し、(1) `config_path` への
+    `Path.read_bytes` 呼び出しが厳密に 1 回であること、(2) 公開された
+    `.normalized.yaml`（parse 結果由来）と manifest の `config_sha256` が
+    いずれも「parse に使われた旧バイト列」基準で一致し、差し替え後の新
+    バイト列の sha256 には汚染されないことを確認する。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+    normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
+    manifest_path = out_dir / "assembly_manifest.json"
+
+    with open(config_path, "a", encoding="utf-8") as f:
+        f.write("lr: 0.0001\n")
+    stale_bytes = config_path.read_bytes()  # parse に使われるべきバイト列
+
+    swapped_bytes = stale_bytes.replace(b"lr: 0.0001", b"lr: 0.9999")
+    assert swapped_bytes != stale_bytes
+
+    real_read_bytes = Path.read_bytes
+    read_call_count = {"n": 0}
+
+    def _tracking_read_bytes(self: Path) -> bytes:
+        if self == config_path:
+            read_call_count["n"] += 1
+            data = real_read_bytes(self)
+            if read_call_count["n"] == 1:
+                # 1 回目の read が返った直後、ディスク上のファイルを
+                # 別内容へ差し替える（parse 用・sha256 用に 2 回読む実装
+                # であれば、2 回目の read はこの新バイト列を拾ってしまう）。
+                config_path.write_bytes(swapped_bytes)
+            return data
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _tracking_read_bytes)
+
+    assemble_run4.refresh_config_pin(config_path)
+
+    assert read_call_count["n"] == 1
+
+    expected_sha256 = hashlib.sha256(stale_bytes).hexdigest()
+    swapped_sha256 = hashlib.sha256(swapped_bytes).hexdigest()
+    assert expected_sha256 != swapped_sha256
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["config"]["config_sha256"] == expected_sha256
+    assert manifest["config"]["config_sha256"] != swapped_sha256
+
+    # parse に使われたのも旧バイト列であること（normalized コピーへ反映
+    # された値が「差し替え後」ではなく「差し替え前」の lr であることで
+    # 検証する）。
+    refreshed = yaml.safe_load(normalized_path.read_text(encoding="utf-8"))
+    assert refreshed["lr"] == 0.0001
+
+
 def test_publish_config_pin_transaction_rolls_back_both_files_on_mid_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
