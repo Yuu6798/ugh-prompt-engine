@@ -247,8 +247,29 @@ def _require_finite_float(value: Any, field: str) -> float:
     return out
 
 
-def _require_bounded_float(value: Any, field: str, *, lo: float, hi: float) -> float:
+def _require_bounded_float(value: Any, field: str, *, lo: float, hi: float, normalize: bool) -> float:
+    """`normalize=True`（構築経路・build_genome 経由）は座標と同じ小数6桁
+    固定丸めへ正規化してから返す（Codex 指摘B: 丸めていない生値が
+    operator_params にそのまま格納・serialize されると、genome_id ハッシュ
+    計算は既に6桁丸め後の値で正規化される一方（`_canonicalize_for_hash`）、
+    格納ペイロード自体は生値のままだったため `weight=0.5` と
+    `weight=0.5000001` が同一 genome_id・異なるペイロードになっていた）。
+    丸めは上限値検査より先に行う（丸め後値で境界判定する — 丸めで初めて
+    境界に一致する値を一貫して受理するため、丸め前チェックとの矛盾を防ぐ）。
+
+    `normalize=False`（デシリアライズ経路・genome_from_dict 経由）は
+    coords の `_validate_coords_value` と対称に、既に6桁丸め済みでない
+    float を fail-closed で拒否する（正規化されていないペイロードが
+    そのまま台帳へ紛れ込むのを防ぐ）。
+    """
     out = _require_finite_float(value, field)
+    if normalize:
+        out = round(out, 6)
+    elif round(out, 6) != out:
+        raise GenomeValidationError(
+            f"{field} must already be rounded to 6 decimal places (operator_params normalization "
+            f"contract — DESIGN_VG_E0.md §4), got {value!r}"
+        )
     if not (lo <= out <= hi):
         raise GenomeValidationError(f"{field} must be within [{lo}, {hi}], got {out!r}")
     return out
@@ -260,11 +281,17 @@ def _require_anchor_name(value: Any, field: str) -> str:
     return value
 
 
-def _validate_operator_params(operator: str, params: Mapping[str, Any]) -> Dict[str, Any]:
+def _validate_operator_params(operator: str, params: Mapping[str, Any], *, normalize: bool) -> Dict[str, Any]:
     """operator ごとの閉じた operator_params 語彙・型・数値上限を検証し、
     正規形（tuple は list へ）の dict を返す。build_genome()（書込経路）と
     genome_from_dict()（読込経路）の両方から呼ばれる単一実装
     （proto1/registry.py R28「書読対称性」と同じ設計判断）。
+
+    `normalize` は float（weight/pull/step 等）の6桁丸め挙動を書込/読込
+    経路で非対称にする（Codex 指摘B）: 書込側（`normalize=True`）は生値を
+    座標と同じ規約へ丸めて格納し、読込側（`normalize=False`）は既に
+    丸め済みでない値を fail-closed で拒否する。int/str/bool の各フィールド
+    （rng_seed/new_seed/vertex/edge）は丸め対象外で不変。
     """
     if not isinstance(params, Mapping):
         raise GenomeValidationError(f"operator_params must be an object, got {type(params).__name__}")
@@ -284,7 +311,9 @@ def _validate_operator_params(operator: str, params: Mapping[str, Any]) -> Dict[
             raise GenomeValidationError(f"operator=drift missing operator_params key(s): {sorted(missing)}")
         return {
             "rng_seed": _require_int(params["rng_seed"], "operator_params.rng_seed"),
-            "step": _require_bounded_float(params["step"], "operator_params.step", lo=0.0, hi=DRIFT_STEP_MAX),
+            "step": _require_bounded_float(
+                params["step"], "operator_params.step", lo=0.0, hi=DRIFT_STEP_MAX, normalize=normalize
+            ),
         }
 
     if operator == "vertex_pull":
@@ -296,10 +325,12 @@ def _validate_operator_params(operator: str, params: Mapping[str, Any]) -> Dict[
         if missing:
             raise GenomeValidationError(f"operator=vertex_pull missing operator_params key(s): {sorted(missing)}")
         return {
-            "weight": _require_bounded_float(params["weight"], "operator_params.weight", lo=0.0, hi=1.0),
+            "weight": _require_bounded_float(
+                params["weight"], "operator_params.weight", lo=0.0, hi=1.0, normalize=normalize
+            ),
             "vertex": _require_anchor_name(params["vertex"], "operator_params.vertex"),
             "pull": _require_bounded_float(
-                params["pull"], "operator_params.pull", lo=0.0, hi=VERTEX_PULL_PULL_MAX
+                params["pull"], "operator_params.pull", lo=0.0, hi=VERTEX_PULL_PULL_MAX, normalize=normalize
             ),
         }
 
@@ -333,7 +364,9 @@ def _validate_operator_params(operator: str, params: Mapping[str, Any]) -> Dict[
         return {
             "rng_seed": _require_int(params["rng_seed"], "operator_params.rng_seed"),
             "edge": [a, b],
-            "step": _require_bounded_float(params["step"], "operator_params.step", lo=0.0, hi=EDGE_WALK_STEP_MAX),
+            "step": _require_bounded_float(
+                params["step"], "operator_params.step", lo=0.0, hi=EDGE_WALK_STEP_MAX, normalize=normalize
+            ),
         }
 
     if operator == "novelty_jump":
@@ -449,7 +482,9 @@ def build_genome(
         _validate_genome_id_format(p, "parents[]")
 
     _validate_coords_value(coords)
-    validated_params = _validate_operator_params(operator, operator_params)
+    # normalize=True: build_genome() は operator_params の float を6桁丸めへ
+    # 正規化してから格納する（Codex 指摘B）。
+    validated_params = _validate_operator_params(operator, operator_params, normalize=True)
     validated_anchors = (
         _validate_anchors_provenance(anchors_provenance) if anchors_provenance is not None else None
     )
@@ -559,8 +594,38 @@ def genome_from_dict(data: Any) -> VoiceGenome:
             f"operator={operator!r} requires exactly {expected_n} parent(s), got {len(parents)}"
         )
 
+    # Codex 指摘C: lineage=NOVELTY は operators.py 上、novelty_jump の全出力と
+    # 系統間（親 lineage 不一致）vertex_pull の出力に限定される（§3.1/§4
+    # 「系統内/系統間判定はオペレータではなく台帳が行う」— 本実装ではこの
+    # 判定点をオペレータ自身が担う設計のため、founder/drift/reseed/edge_walk
+    # は座標由来 lineage しか生成し得ない）。ローダーは従来これを検証せず、
+    # NOVELTY が任意 operator と組み合わせて宣言可能だった。
+    #
+    # vertex_pull については「両親の lineage が実際に異なっていたか」は
+    # このドキュメント単体（genome 1件の宣言値）からは検証不能 — 台帳上の
+    # 親個体の実体参照が必要なため、ここでは operator が vertex_pull で
+    # あることのみを許容条件とする。両親 lineage の実差分検証は台帳
+    # （ledger.py）側の責務として VG-E1 送り（今回はスコープ外）。
+    if lineage == "NOVELTY" and operator not in ("novelty_jump", "vertex_pull"):
+        raise GenomeValidationError(
+            f"lineage='NOVELTY' requires operator in ('novelty_jump', 'vertex_pull'), got operator={operator!r} "
+            "(NOVELTY isolation is limited to novelty_jump's own output and cross-lineage vertex_pull "
+            "crossings — DESIGN_VG_E0.md §3.1/§4; founder/drift/reseed/edge_walk cannot declare NOVELTY)"
+        )
+    # 逆方向: novelty_jump の出力は常に NOVELTY 隔離される（operators.py
+    # `novelty_jump()` 参照）。operator=novelty_jump で座標由来 lineage を
+    # 宣言したドキュメントは改ざん・破損として拒否する。
+    if operator == "novelty_jump" and lineage != "NOVELTY":
+        raise GenomeValidationError(
+            f"operator='novelty_jump' requires lineage='NOVELTY', got lineage={lineage!r} "
+            "(novelty_jump output is always NOVELTY-isolated by construction — DESIGN_VG_E0.md §4)"
+        )
+
     operator_params_raw = data["operator_params"]
-    operator_params = _validate_operator_params(operator, operator_params_raw)
+    # normalize=False: genome_from_dict() は既に6桁丸め済みでない float を
+    # fail-closed で拒否する（Codex 指摘B。build_genome() 側の normalize=True
+    # と対称）。
+    operator_params = _validate_operator_params(operator, operator_params_raw, normalize=False)
 
     anchors_raw = data["anchors_provenance"]
     if anchors_raw is not None and not isinstance(anchors_raw, dict):
@@ -648,6 +713,20 @@ def build_evaluation_record(
         validated_axes[name] = _require_finite_float(value, f"axes.{name}")
     if blind_batch is not None and not isinstance(blind_batch, str):
         raise GenomeValidationError(f"blind_batch must be a string or null, got {blind_batch!r}")
+    # Codex 指摘A: blind_batch は human 評価者専用のフィールド（training/hidden
+    # は機械評価者のため blind_batch という概念自体が成立しない）。kind が
+    # human 以外なら null 必須、human なら与える場合は非空文字列を要求する。
+    if evaluator.kind != "human":
+        if blind_batch is not None:
+            raise GenomeValidationError(
+                f"blind_batch must be null when evaluator.kind={evaluator.kind!r} "
+                "(blind_batch is reserved for evaluator.kind='human')"
+            )
+    elif blind_batch is not None and blind_batch == "":
+        raise GenomeValidationError(
+            "blind_batch must be a non-empty string when evaluator.kind='human' (empty string rejected), "
+            f"got {blind_batch!r}"
+        )
     if verdict is not None and verdict not in VERDICTS:
         raise GenomeValidationError(f"verdict must be one of {VERDICTS} or null, got {verdict!r}")
     return EvaluationRecord(
@@ -715,6 +794,20 @@ def evaluation_record_from_dict(data: Any) -> EvaluationRecord:
     blind_batch = data["blind_batch"]
     if blind_batch is not None and not isinstance(blind_batch, str):
         raise GenomeValidationError(f"blind_batch must be a string or null, got {blind_batch!r}")
+    # Codex 指摘A（build_evaluation_record と対称。デシリアライズ側でも同じ
+    # fail-closed 拘束を強制しないと、宣言値をそのまま信頼する経路が抜け道
+    # になる）。
+    if kind != "human":
+        if blind_batch is not None:
+            raise GenomeValidationError(
+                f"blind_batch must be null when evaluator.kind={kind!r} "
+                "(blind_batch is reserved for evaluator.kind='human')"
+            )
+    elif blind_batch is not None and blind_batch == "":
+        raise GenomeValidationError(
+            "blind_batch must be a non-empty string when evaluator.kind='human' (empty string rejected), "
+            f"got {blind_batch!r}"
+        )
 
     verdict = data["verdict"]
     if verdict is not None and verdict not in VERDICTS:

@@ -176,8 +176,15 @@ def test_genome_from_dict_rejects_lineage_coords_mismatch() -> None:
 def test_genome_from_dict_allows_novelty_regardless_of_coords() -> None:
     """NOVELTY は座標によらず許容される（novelty_jump 由来の1世代限定隔離
     — DESIGN_VG_E0.md §3.1）。lineage を NOVELTY にすると genome_id も
-    （lineage が6フィールドの1つのため）変わるので併せて再計算する。"""
-    d = models.genome_to_dict(_base_genome())
+    （lineage が6フィールドの1つのため）変わるので併せて再計算する。
+    operator は NOVELTY 許容操作（novelty_jump/vertex_pull）の一方でなければ
+    ならない（Codex 指摘C）ため novelty_jump を使う — 座標は元 drift 個体の
+    ものをそのまま流用し「座標によらず許容される」ことを確認する。"""
+    base = models.build_genome(
+        coords=models.Coords(ritsu=0.5, pjs=0.2, user=0.3), seed=11, lineage="L-C", generation=1,
+        parents=("ffc44fd26d70e89d",), operator="novelty_jump", operator_params={"rng_seed": 7},
+    )
+    d = models.genome_to_dict(base)
     d["lineage"] = "NOVELTY"
     d["genome_id"] = models.compute_genome_id(
         coords=models.Coords(**d["coords"]), seed=d["seed"], lineage="NOVELTY",
@@ -312,6 +319,117 @@ def test_founder_requires_empty_operator_params() -> None:
         )
 
 
+# --- operator_params float 正規化（Codex 指摘B） --------------------------
+
+
+def test_build_genome_normalizes_operator_params_float_to_six_decimals() -> None:
+    """weight=0.5 と weight=0.5000001 は build_genome() で同一の6桁丸め値へ
+    正規化され、同一 genome_id・同一シリアライズペイロードになる（丸め前は
+    genome_id ハッシュ計算だけが独自に6桁丸めしていたため、ハッシュは一致
+    するのに格納ペイロードが食い違い、台帳の排他 create が「同一IDの宣言
+    差」として衝突していた）。"""
+    a = models.build_genome(
+        coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=1,
+        parents=("a" * 16, "b" * 16), operator="vertex_pull",
+        operator_params={"weight": 0.5, "vertex": "ritsu", "pull": 0.1},
+    )
+    b = models.build_genome(
+        coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=1,
+        parents=("a" * 16, "b" * 16), operator="vertex_pull",
+        operator_params={"weight": 0.5000001, "vertex": "ritsu", "pull": 0.1},
+    )
+    assert a.genome_id == b.genome_id
+    assert a.operator_params == {"weight": 0.5, "vertex": "ritsu", "pull": 0.1}
+    assert b.operator_params == {"weight": 0.5, "vertex": "ritsu", "pull": 0.1}
+    assert models.genome_to_dict(a) == models.genome_to_dict(b)
+
+
+def test_build_genome_rounds_before_bound_check_at_boundary() -> None:
+    """丸めは上限値検査より先に行う（順序の直接確認）: DRIFT_STEP_MAX(0.08)
+    より 3e-7 だけ大きい生値は丸め前チェックなら拒否されるはずだが、6桁
+    丸め後はちょうど 0.08 になり境界内として受理される。丸めても境界を
+    明確に超える値は引き続き拒否される。"""
+    just_over_max_pre_round = models.DRIFT_STEP_MAX + 3e-7
+    assert round(just_over_max_pre_round, 6) == models.DRIFT_STEP_MAX  # 丸めで境界に一致する前提の確認
+    g = models.build_genome(
+        coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=1,
+        parents=("a" * 16,), operator="drift",
+        operator_params={"rng_seed": 1, "step": just_over_max_pre_round},
+    )
+    assert g.operator_params["step"] == models.DRIFT_STEP_MAX
+
+    with pytest.raises(models.GenomeValidationError, match="step"):
+        models.build_genome(
+            coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=1,
+            parents=("a" * 16,), operator="drift",
+            operator_params={"rng_seed": 1, "step": models.DRIFT_STEP_MAX + 0.01},
+        )
+
+
+def test_genome_from_dict_rejects_non_normalized_operator_param_float() -> None:
+    """デシリアライズ経路は build_genome() と対称に、既に6桁丸め済みでない
+    operator_params の float を fail-closed で拒否する（Codex 指摘B）。"""
+    d = models.genome_to_dict(_base_genome())
+    d["operator_params"]["step"] = 0.0500001  # 7桁目が非ゼロ = 正規化されていない
+    with pytest.raises(models.GenomeValidationError, match="6 decimal"):
+        models.genome_from_dict(d)
+
+
+# --- NOVELTY / operator 整合（Codex 指摘C） --------------------------------
+
+
+def test_genome_from_dict_rejects_novelty_with_drift_operator() -> None:
+    """NOVELTY は operator ∈ {novelty_jump, vertex_pull} でしか宣言できない
+    （Codex 指摘C）。drift + NOVELTY は fail-closed で拒否する。"""
+    base = models.build_genome(
+        coords=models.Coords(0.5, 0.2, 0.3), seed=11, lineage="L-C", generation=1,
+        parents=("ffc44fd26d70e89d",), operator="drift", operator_params={"rng_seed": 7, "step": 0.05},
+    )
+    d = models.genome_to_dict(base)
+    d["lineage"] = "NOVELTY"
+    d["genome_id"] = models.compute_genome_id(
+        coords=models.Coords(**d["coords"]), seed=d["seed"], lineage="NOVELTY",
+        generation=d["generation"], parents=d["parents"], operator=d["operator"],
+        operator_params=d["operator_params"],
+    )
+    with pytest.raises(models.GenomeValidationError, match="NOVELTY"):
+        models.genome_from_dict(d)
+
+
+def test_genome_from_dict_rejects_novelty_jump_with_coordinate_lineage() -> None:
+    """逆方向: operator=novelty_jump は lineage=NOVELTY を必須とする
+    （Codex 指摘C）。座標由来 lineage（NOVELTY でない）を宣言した
+    novelty_jump ドキュメントは拒否する。"""
+    base = models.build_genome(
+        coords=models.Coords(0.5, 0.2, 0.3), seed=11, lineage="L-C", generation=1,
+        parents=("ffc44fd26d70e89d",), operator="novelty_jump", operator_params={"rng_seed": 7},
+    )
+    d = models.genome_to_dict(base)
+    with pytest.raises(models.GenomeValidationError, match="novelty_jump"):
+        models.genome_from_dict(d)
+
+
+def test_genome_from_dict_accepts_novelty_with_vertex_pull_operator() -> None:
+    """vertex_pull は系統間交配時に NOVELTY を宣言できる（両親 lineage が
+    実際に異なるかは本関数単体では検証不能 — 台帳参照が必要なため
+    VG-E1 送り。ここでは operator=vertex_pull であれば受理されることのみ
+    確認する）。"""
+    base = models.build_genome(
+        coords=models.Coords(0.5, 0.2, 0.3), seed=11, lineage="L-C", generation=1,
+        parents=("ffc44fd26d70e89d", "0123456789abcdef"), operator="vertex_pull",
+        operator_params={"weight": 0.5, "vertex": "ritsu", "pull": 0.1},
+    )
+    d = models.genome_to_dict(base)
+    d["lineage"] = "NOVELTY"
+    d["genome_id"] = models.compute_genome_id(
+        coords=models.Coords(**d["coords"]), seed=d["seed"], lineage="NOVELTY",
+        generation=d["generation"], parents=d["parents"], operator=d["operator"],
+        operator_params=d["operator_params"],
+    )
+    genome = models.genome_from_dict(d)
+    assert genome.lineage == "NOVELTY"
+
+
 # --- EvaluationRecord ------------------------------------------------------
 
 
@@ -374,6 +492,76 @@ def test_evaluation_record_rejects_nonfinite_axis() -> None:
             evaluator=models.Evaluator(kind="training", version="v0"),
             axes={"naturalness": float("nan")},
         )
+
+
+# --- blind_batch × evaluator.kind 束縛（Codex 指摘A） ----------------------
+
+
+@pytest.mark.parametrize("kind", ["training", "hidden"])
+def test_build_evaluation_record_rejects_blind_batch_for_non_human_kind(kind: str) -> None:
+    """kind が human 以外（training/hidden）の場合、blind_batch は null 必須
+    — 非 null は fail-closed で拒否する。"""
+    with pytest.raises(models.GenomeValidationError, match="blind_batch"):
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set="d3-probe/0.1",
+            evaluator=models.Evaluator(kind=kind, version="v0"),
+            axes={"naturalness": 0.8}, blind_batch="batch-1",
+        )
+
+
+def test_build_evaluation_record_rejects_empty_blind_batch_for_human_kind() -> None:
+    """kind=human で blind_batch を与える場合は非空文字列を要求する
+    （空文字は拒否）。"""
+    with pytest.raises(models.GenomeValidationError, match="blind_batch"):
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set="d3-probe/0.1",
+            evaluator=models.Evaluator(kind="human", version="v0"),
+            axes={"naturalness": 0.8}, blind_batch="",
+        )
+
+
+def test_build_evaluation_record_accepts_nonempty_blind_batch_for_human_kind() -> None:
+    r = models.build_evaluation_record(
+        genome_id="a" * 16, probe_set="d3-probe/0.1",
+        evaluator=models.Evaluator(kind="human", version="v0"),
+        axes={"naturalness": 0.8}, blind_batch="batch-1",
+    )
+    assert r.blind_batch == "batch-1"
+
+
+def test_build_evaluation_record_allows_null_blind_batch_for_human_kind() -> None:
+    """human でも blind_batch 自体は任意（null は許容、与える場合のみ非空
+    文字列を要求する）。"""
+    r = models.build_evaluation_record(
+        genome_id="a" * 16, probe_set="d3-probe/0.1",
+        evaluator=models.Evaluator(kind="human", version="v0"),
+        axes={"naturalness": 0.8}, blind_batch=None,
+    )
+    assert r.blind_batch is None
+
+
+@pytest.mark.parametrize("kind", ["training", "hidden"])
+def test_evaluation_record_from_dict_rejects_blind_batch_for_non_human_kind(kind: str) -> None:
+    """デシリアライズ経路は build_evaluation_record() と対称に、非 human
+    kind へ non-null blind_batch が紛れ込むのを拒否する。"""
+    d = models.evaluation_record_to_dict(
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set="d3-probe/0.1",
+            evaluator=models.Evaluator(kind="human", version="v0"),
+            axes={"naturalness": 0.8}, blind_batch="batch-1",
+        )
+    )
+    d["evaluator"]["kind"] = kind
+    with pytest.raises(models.GenomeValidationError, match="blind_batch"):
+        models.evaluation_record_from_dict(d)
+
+
+def test_evaluation_record_from_dict_rejects_empty_blind_batch_for_human_kind() -> None:
+    d = models.evaluation_record_to_dict(_base_eval_record())
+    d["evaluator"]["kind"] = "human"
+    d["blind_batch"] = ""
+    with pytest.raises(models.GenomeValidationError, match="blind_batch"):
+        models.evaluation_record_from_dict(d)
 
 
 # --- HackRecord -------------------------------------------------------------
