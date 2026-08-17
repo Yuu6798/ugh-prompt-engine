@@ -12,11 +12,11 @@ pin 表 = [`results_s3/run4_dataset_pins.json`](results_s3/run4_dataset_pins.jso
 （D3/user 各データセットの transcriptions.csv・wavs 全本・(user のみ)
 exclusions.json の sha256 実測値。手打ちなし）。
 
-**重要 — 本書は「実装済み手順の記述」ではない**: §4/§6 は現状のリポジトリに
-存在しないコード（3 話者対応の `build_dataset.py` 拡張、`--speaker user` 対応の
-`gate_synth.py` 拡張、3 アンカー三角補間フォージスクリプト）を前提とする。
-該当箇所には**現状のギャップと、クローが着手前に埋める必要がある実装**を
-明記した。§8 に全件を集約する。
+**実装状況（R4 改訂 2026-08-17）**: 当初「未実装」としていた 3 話者アセンブリ
+（`s1_dataprep/assemble_run4.py`）・user 話者合成（`s1_gate/gate_synth_run4.py`）・
+三角補間フォージ（`s1_gate/forge_triangle.py`）は**すべて実装済み**（§3/§5 参照。
+GPU 実測のみ未実施 = run 4 が初実行）。残る未解決ギャップは **run 3 実
+config.yaml の一次照合（AI-Drive 退避先）のみ**。§8 に全件を集約する。
 
 ---
 
