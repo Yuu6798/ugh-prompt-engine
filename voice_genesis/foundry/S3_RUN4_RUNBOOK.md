@@ -61,6 +61,32 @@ config.yaml の一次照合（AI-Drive 退避先）のみ**。§8 に全件を�
 
 ### 2.2 (b) D3 再生成 → `convert_d3.py` → pin 照合
 
+**本スクリプトで実行する（2026-08-17 追加）**: 下記手順 2〜3（40 セル
+render + tripwire 先行照合 + 全数 sha256 照合）は
+`scripts/run_d3_cells.py` 1 コマンドで置き換えられる（`render.py`/
+`converter` 群には一切触れない新規追加スクリプト。ローカル実測 = 40/40
+PASS、tripwire 2 件一致、所要 約 7 分 CPU のみ・GPU 不要）:
+
+```bash
+python voice_genesis/foundry/scripts/run_d3_cells.py \
+    --voicebank-root <波音リツ強連続音Ver1.5.1 展開先> \
+    --out-dir <出力ディレクトリ>
+```
+
+`--preset`/`--manifest`/`--results` は既定でリポ内正本
+（`adapter/presets/ritsu_neutral.json`/`results_s3/d3_manifest.json`/
+`results_s3/d3_manifest_results.json`）を指すため省略可。spec 変種は
+`json.dumps` によるJSON再シリアライズではなく `"seed"` 数値部分のみの
+テキスト置換で生成し、元 seed 値（=11）のセルが base preset とバイト
+同一であることを render 前に assert する。tripwire（sakura/umi の
+seed=11）が manifest の tripwire sha256 と不一致の場合は「環境ドリフト・
+全セル無効」として残り 38 セルを render せず即座に非 0 exit する。
+40 セル render 後、wav/timing csv の sha256 を
+`d3_manifest_results.json` と全数照合し、per-cell PASS/FAIL 表を
+stdout と `<out-dir>/verify_report.txt` へ出力する（1 件でも不一致なら
+非 0 exit）。以下の手順 2〜3 は参考情報として残す（手順 1・4・5 は
+本スクリプトの対象外— 変更なし）。
+
 1. リツ voicebank を `s1_dataprep/README.md` §0 の pin（zip
    `88c7b3ef…df66dde76`）で取得・照合済みのものを使う（(a) で取得済みの実体を
    再利用してよい）。
