@@ -379,6 +379,44 @@ def _require_reflow_multi_speaker_acoustic(args: argparse.Namespace, gate_synth)
     return acoustic_sha256
 
 
+def _rollback_or_remove_published_step_dir(synth_out_dir: Path) -> bool:
+    """drift 検出時のロールバック本体（review #265 R13 P2）。
+
+    一次ソース確認済み: `gate_synth.py` の `_swap_step_dir_into_place`
+    （`gate_synth.py:1531-1645`）は、swap のたびに旧世代を削除せず
+    `<synth_out_dir>.old`（`gate_synth.py:1618`
+    `old_dir = out_dir.parent / f"{out_dir.name}.old"`）へ退避する意味論を
+    持つ。したがって drift 検出時に新規公開分（`synth_out_dir`）を単純
+    `rmtree` するだけでは (a) 正本出力が空になり、(b) 有効だった旧世代が
+    `.old` に取り残されたままになる（`_swap_step_dir_into_place` 冒頭の
+    `.old` 無条件 `shutil.rmtree`——`gate_synth.py:1632`——が次回実行時に
+    それを消費してしまい得る）。
+
+    `gate_synth.py` 自身も同じ状況（swap 後段の失敗による取り消し）向けに
+    `_rollback_swapped_step_dir`（`gate_synth.py:1648-1694`）を持つ。
+    `gate_synth.py` は変更しない制約のため、本関数は private 関数を跨ぎ
+    import で再利用するのではなく、その意味論をそのまま複製する（本ファイル
+    既存の `_reject_speaker_embed_file_swap_collision` が
+    `synth_out_dir`/`build_dir`/`old_dir` の算出を複製している方式と同型）:
+    `.old` が存在すればそれが真の旧世代であり、`synth_out_dir` を退けて
+    `.old` を `synth_out_dir` へ戻す（復元）。`.old` が存在しなければ今回が
+    初回公開だったということであり、`synth_out_dir` を削除して「未公開」
+    状態へ戻す（呼び出し元が正本不在をエラーメッセージで明示する）。
+
+    戻り値: 旧世代を `.old` から復元できた場合 `True`、初回公開のため撤去
+    のみだった場合 `False`。
+    """
+    old_dir = synth_out_dir.parent / f"{synth_out_dir.name}.old"
+    restored = old_dir.exists()
+    if restored:
+        if synth_out_dir.exists():
+            shutil.rmtree(synth_out_dir)
+        old_dir.rename(synth_out_dir)
+    elif synth_out_dir.exists():
+        shutil.rmtree(synth_out_dir, ignore_errors=True)
+    return restored
+
+
 def _verify_acoustic_onnx_unchanged_after_cmd_run(
     args: argparse.Namespace, verified_sha256: str
 ) -> None:
@@ -401,8 +439,16 @@ def _verify_acoustic_onnx_unchanged_after_cmd_run(
     束縛ファミリーの標準的な緩和策を採る: 不一致を検出したら、
     `gate_synth.cmd_run` が既に書き終えている公開結果（`synth_out_dir` —
     `gate_synth.py:1753-1762` の算出をそのまま再現、`--step` 指定時は
-    `<out_dir>/step_<N>`）を削除してから fail-closed する（best-effort
-    削除・既に無ければ何もしない）。"""
+    `<out_dir>/step_<N>`）を撤去する。
+
+    review #265 R13 P2: 旧実装は単純 `rmtree` のみだったため、
+    `gate_synth.cmd_run`（delegate）の swap が `<synth_out_dir>.old` へ退避
+    済みの旧有効世代を残したまま正本を空にしていた（次回実行の `.old`
+    無条件 rmtree でその旧世代ごと消失し得る）。`_rollback_or_remove_
+    published_step_dir`（本ファイル内、`gate_synth.py` の
+    `_swap_step_dir_into_place`/`_rollback_swapped_step_dir` 意味論をそのまま
+    複製）に委譲し、`.old` があれば復元、無ければ（初回実行）撤去のみに
+    留めて正本不在を明示する。"""
     acoustic_onnx_path = Path(args.acoustic_dir) / "acoustic.onnx"
     actual_sha256 = _sha256_file(acoustic_onnx_path)
     if actual_sha256 == verified_sha256:
@@ -410,8 +456,22 @@ def _verify_acoustic_onnx_unchanged_after_cmd_run(
 
     out_dir = Path(args.out_dir)
     synth_out_dir = (out_dir / f"step_{args.step}") if args.step is not None else out_dir
-    if synth_out_dir.exists():
-        shutil.rmtree(synth_out_dir, ignore_errors=True)
+    old_dir = synth_out_dir.parent / f"{synth_out_dir.name}.old"
+    restored = _rollback_or_remove_published_step_dir(synth_out_dir)
+
+    if restored:
+        disposition = (
+            f"rolled back {synth_out_dir} to the previous generation restored from {old_dir} "
+            "(gate_synth.py _swap_step_dir_into_place keeps the prior generation at "
+            "<synth_out_dir>.old until the next successful swap — gate_synth.py:1618)"
+        )
+    else:
+        disposition = (
+            f"removed the newly published {synth_out_dir} — no previous generation existed at "
+            f"{old_dir} (this was the first publish to this --out-dir), so the canonical output "
+            f"is now ABSENT; re-run once a trustworthy acoustic.onnx is confirmed at "
+            f"{acoustic_onnx_path} before relying on {synth_out_dir}"
+        )
 
     raise SystemExit(
         f"error: acoustic.onnx at {acoustic_onnx_path} changed between "
@@ -420,8 +480,7 @@ def _verify_acoustic_onnx_unchanged_after_cmd_run(
         f"post-run={actual_sha256}). The reflow spk_embed/steps check may no longer apply to "
         "the model that was actually used for synthesis — the selected --speaker-embed-file "
         "could have been silently ignored by a swapped-in canon model, producing a blind "
-        f"batch. Refusing to leave {synth_out_dir} published (fail-closed, TOCTOU mitigation, "
-        "review #265 R12 P1)."
+        f"batch. {disposition} (fail-closed, TOCTOU mitigation, review #265 R13 P2)."
     )
 
 

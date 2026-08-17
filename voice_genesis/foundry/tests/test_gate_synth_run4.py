@@ -663,6 +663,106 @@ def test_verify_acoustic_onnx_unchanged_after_cmd_run_quarantines_step_dir(
     assert (out_dir / "unrelated.txt").exists()
 
 
+# --- review #265 R13 P2: drift ロールバックは gate_synth.py の swap 意味論に
+# 合わせて .old から旧世代を復元する（単純 rmtree では正本不在 + .old 取り残し
+# になる穴の修正）。ここから。 -----------------------------------------------
+
+
+def test_rollback_or_remove_published_step_dir_restores_from_old_when_present(
+    tmp_path: Path,
+) -> None:
+    """`.old` に旧世代が存在する場合、新規公開分を退けて `.old` から復元する
+    （`gate_synth.py` `_swap_step_dir_into_place`/`_rollback_swapped_step_dir`
+    と同一の意味論）。"""
+    synth_out_dir = tmp_path / "out"
+    synth_out_dir.mkdir()
+    (synth_out_dir / "song.wav").write_bytes(b"NEW-GENERATION-JUST-PUBLISHED")
+
+    old_dir = tmp_path / "out.old"
+    old_dir.mkdir()
+    (old_dir / "song.wav").write_bytes(b"PREVIOUS-VALID-GENERATION")
+
+    restored = gsr4._rollback_or_remove_published_step_dir(synth_out_dir)
+
+    assert restored is True
+    assert not old_dir.exists()  # .old が消費されて synth_out_dir へ戻った
+    assert synth_out_dir.exists()
+    assert (synth_out_dir / "song.wav").read_bytes() == b"PREVIOUS-VALID-GENERATION"
+
+
+def test_rollback_or_remove_published_step_dir_removes_only_when_no_old(
+    tmp_path: Path,
+) -> None:
+    """`.old` が存在しない（初回公開）場合は、従来どおり撤去のみで正本不在の
+    状態に戻す。"""
+    synth_out_dir = tmp_path / "out"
+    synth_out_dir.mkdir()
+    (synth_out_dir / "song.wav").write_bytes(b"NEW-GENERATION-JUST-PUBLISHED")
+
+    restored = gsr4._rollback_or_remove_published_step_dir(synth_out_dir)
+
+    assert restored is False
+    assert not synth_out_dir.exists()
+    assert not (tmp_path / "out.old").exists()
+
+
+def test_verify_acoustic_onnx_unchanged_after_cmd_run_restores_old_generation_on_drift(
+    tmp_path: Path,
+) -> None:
+    """受け入れ条件（review #265 R13 #3）: drift 検出時、`.old` に旧有効世代が
+    残っている場合は撤去だけでなくそこから復元する（正本を空のまま残さず、
+    `.old` も取り残さない）。"""
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
+    verified_sha256 = hashlib.sha256(acoustic_onnx_path.read_bytes()).hexdigest()
+    # モデルが cmd_run 実行中に差し替わったことを模擬する。
+    acoustic_onnx_path.write_bytes(b"\xff" * 999)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "song.wav").write_bytes(b"blind-batch-just-published")
+
+    old_dir = tmp_path / "out.old"
+    old_dir.mkdir()
+    (old_dir / "song.wav").write_bytes(b"previous-valid-generation")
+
+    args = argparse.Namespace(acoustic_dir=str(acoustic_dir), out_dir=str(out_dir), step=None)
+
+    with pytest.raises(SystemExit, match="acoustic.onnx"):
+        gsr4._verify_acoustic_onnx_unchanged_after_cmd_run(args, verified_sha256)
+
+    assert out_dir.exists()  # 正本不在にはしない — 旧世代を復元する
+    assert (out_dir / "song.wav").read_bytes() == b"previous-valid-generation"
+    assert not old_dir.exists()  # .old は復元に消費され、取り残されない
+
+
+def test_verify_acoustic_onnx_unchanged_after_cmd_run_first_publish_leaves_canonical_absent(
+    tmp_path: Path,
+) -> None:
+    """受け入れ条件（review #265 R13 #3）: `.old` が無い初回実行では従来どおり
+    撤去のみを行い、エラーメッセージで正本不在を明示する。"""
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
+    verified_sha256 = hashlib.sha256(acoustic_onnx_path.read_bytes()).hexdigest()
+    acoustic_onnx_path.write_bytes(b"\xff" * 999)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "song.wav").write_bytes(b"blind-batch-just-published")
+
+    args = argparse.Namespace(acoustic_dir=str(acoustic_dir), out_dir=str(out_dir), step=None)
+
+    with pytest.raises(SystemExit, match="ABSENT") as excinfo:
+        gsr4._verify_acoustic_onnx_unchanged_after_cmd_run(args, verified_sha256)
+
+    assert not out_dir.exists()
+    assert not (tmp_path / "out.old").exists()
+    assert "no previous generation existed" in str(excinfo.value)
+
+
+# --- review #265 R13 P2 ここまで ---------------------------------------------
+
+
 def test_run_with_speaker_embed_file_rejects_publish_when_model_swapped_during_cmd_run(
     tmp_path: Path,
 ) -> None:

@@ -45,6 +45,17 @@ python voice_genesis/foundry/scripts/run_d3_cells.py \\
    配下（または `render/` 配下）に置かれていた場合、次項以降の
    `.staging_render/` 無条件クリーンアップや atomic swap の退避/rmtree が
    これらの入力を巻き込んで削除し得るため）。
+0.5. **schema + 登録グリッド検査**（review #265 R13 P2）: `--manifest`/
+   `--results` の json.loads 直後、`schema` フィールドが
+   `MANIFEST_SCHEMA`/`RESULTS_SCHEMA` と完全一致することを検査する
+   （`validate_schema_versions` — `s1_dataprep/convert_user.py` の台帳
+   schema 検証と同型）。続けて `index_results_cells` が `(score, seed)` の
+   重複エントリを検出し（R12）、さらに `validate_results_cell_grid` が
+   `results` の `cells` キー集合を `manifest` の `scores` × `seeds` 直積
+   （期待 40 キー）と完全一致比較する。登録グリッド外の一意な余剰セルは
+   `main()` の検証ループ（`scores`/`seeds` の直積を走査）が一度も訪問しない
+   ため、素通しすると矛盾する results でも 40/40 PASS が出得る——欠落・
+   余剰いずれも render 開始前に fail-closed で停止する。
 1. **spec 変種生成**（`build_spec_variants`）: base preset
    （既定 `adapter/presets/ritsu_neutral.json`）のテキストから `"seed"` の
    数値部分のみをテキスト置換で差し替える（`json.dumps` によるJSON
@@ -132,6 +143,13 @@ DEFAULT_RESULTS = FOUNDRY_DIR / "results_s3" / "d3_manifest_results.json"
 # 前提とする設計のため、CLI では公開しない）。
 DONOR = "ritsu"
 
+# P2 修正 (review #265 R13): `--manifest`/`--results` の schema フィールドの
+# 期待値（`results_s3/d3_manifest.json`/`d3_manifest_results.json` の実測値と
+# 一致確認済み）。`s1_dataprep/convert_user.py` `LEDGER_SCHEMA`/`load_ledger`
+# の台帳 schema 検証と同型の fail-closed を、読み込み直後に行う。
+MANIFEST_SCHEMA = "d3-manifest/0.1"
+RESULTS_SCHEMA = "d3-manifest-results/0.1"
+
 # tripwire セル: `d3_manifest.json` の `tripwires` キー名（`sakura_seed11_...`/
 # `umi_seed11_...`）と対応する固定値。
 TRIPWIRE_SEED = 11
@@ -150,6 +168,18 @@ class SpecIdentityError(ValueError):
     得ないが、環境・エンコーディングのドリフトを検出する最終防衛線）。"""
 
 
+class SchemaMismatchError(ValueError):
+    """P2 修正 (review #265 R13): `--manifest`/`--results` の `schema`
+    フィールドが `MANIFEST_SCHEMA`/`RESULTS_SCHEMA` と完全一致しない場合に
+    送出する（`s1_dataprep/convert_user.py` `LedgerSchemaError`/
+    `load_ledger` と同型の fail-closed）。
+
+    schema フィールドが欠落・誤記・未来版であっても、`scores`/`seeds`/
+    `cells` 等のキー名が表面上互換であれば `validate_manifest_consistency`/
+    `index_results_cells` はそのまま消費してしまう。本例外は他の一切の
+    検査・render に先立ち、読み込み直後に検出する。"""
+
+
 class ManifestConsistencyError(ValueError):
     """`d3_manifest.json` と `d3_manifest_results.json` の
     scores/seeds/cells_total が一致しない場合に送出する（render 前の
@@ -166,6 +196,20 @@ class DuplicateCellError(ValueError):
     採用され前方は無検査のまま消える——矛盾を含む results でも 40/40 PASS
     が出得た。本例外は index 構築時（render・検証いずれよりも前）に検出し、
     黙って畳む前に停止する。"""
+
+
+class CellGridMismatchError(ValueError):
+    """P2 修正 (review #265 R13): `d3_manifest_results.json` の `cells`
+    キー集合（`(score, seed)`）が、登録済み manifest の `scores` × `seeds`
+    直積（期待 40 キー）と完全一致しない場合に送出する（index 構築後・
+    render 開始前の fail-closed）。
+
+    R12 の `DuplicateCellError` は同一キーの重複エントリを検出するが、
+    「一意だが登録グリッド外の余剰セル」（例: `score="obsolete", seed=1`）は
+    素通しする。`main()` は `manifest["scores"]`/`manifest["seeds"]` の直積を
+    走査して render・検証するため、この種の余剰セルは検証ループが一度も
+    訪問せず、矛盾を含む results でも 40/40 PASS が出得た。本例外は
+    余剰・欠落のいずれも fail-closed で検出し、render 前に停止する。"""
 
 
 class OutputCollisionError(ValueError):
@@ -350,6 +394,31 @@ def build_spec_variants(
 # ---------------------------------------------------------------------------
 
 
+def validate_schema_versions(manifest: dict, results: dict) -> None:
+    """P2 修正 (review #265 R13): `manifest["schema"]`/`results["schema"]` が
+    `MANIFEST_SCHEMA`/`RESULTS_SCHEMA` と完全一致することを検査する
+    （`convert_user.load_ledger` の台帳 schema 検証と同型の fail-closed）。
+
+    `main()` は json.loads 直後・他の一切の検査（`validate_manifest_
+    consistency`/`index_results_cells`/`validate_results_cell_grid`）より
+    前にこれを呼ぶ。欠落・誤記・未来版の schema を、キー名が表面上互換だと
+    いう理由で無警告のまま消費しない。"""
+    manifest_schema = manifest.get("schema")
+    if manifest_schema != MANIFEST_SCHEMA:
+        raise SchemaMismatchError(
+            f"manifest schema {manifest_schema!r} does not match expected "
+            f"{MANIFEST_SCHEMA!r} (fail-closed — refusing to read an unknown/legacy/"
+            "future-version manifest)"
+        )
+    results_schema = results.get("schema")
+    if results_schema != RESULTS_SCHEMA:
+        raise SchemaMismatchError(
+            f"results schema {results_schema!r} does not match expected "
+            f"{RESULTS_SCHEMA!r} (fail-closed — refusing to read an unknown/legacy/"
+            "future-version results file)"
+        )
+
+
 def validate_manifest_consistency(manifest: dict, results: dict) -> None:
     """`manifest`（殻）と `results`（実測正本）の scores/seeds/cells_total が
     一致することを検査する（render 前の fail-closed 事前検査）。"""
@@ -400,6 +469,28 @@ def index_results_cells(results: dict) -> Dict[Tuple[str, int], dict]:
             f"rendered/verified): {sorted(set(duplicate_keys))}"
         )
     return idx
+
+
+def validate_results_cell_grid(
+    results_idx: Dict[Tuple[str, int], dict], scores: Sequence[str], seeds: Sequence[int]
+) -> None:
+    """P2 修正 (review #265 R13): `results_idx`（`index_results_cells` の
+    出力）のキー集合が、`scores` × `seeds` の直積と完全一致することを検査
+    する（余剰・欠落いずれも fail-closed。`CellGridMismatchError` docstring
+    参照）。呼び出し元 `main()` はこの関数を index 構築の直後・render 開始
+    （spec 変種生成・tripwire render）よりも前に呼ぶため、グリッド不一致が
+    検出されれば render・検証のどちらも一切開始されない。
+    """
+    expected = {(score, seed) for score in scores for seed in seeds}
+    actual = set(results_idx)
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    if missing or extra:
+        raise CellGridMismatchError(
+            "d3_manifest_results.json cells do not match the registered scores x seeds "
+            f"grid exactly ({len(expected)} expected key(s)) — missing={missing} "
+            f"extra={extra} (fail-closed, nothing rendered/verified)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -692,20 +783,38 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     results = json.loads(results_path.read_text(encoding="utf-8"))
 
+    # P2 修正 (review #265 R13): schema 完全一致は読み込み直後・他の一切の
+    # 検査より前に検査する（`SchemaMismatchError` docstring 参照）。
+    try:
+        validate_schema_versions(manifest, results)
+    except SchemaMismatchError as exc:
+        print(f"ERROR: schema check failed: {exc}", file=sys.stderr)
+        return 1
+
     try:
         validate_manifest_consistency(manifest, results)
     except ManifestConsistencyError as exc:
         print(f"ERROR: manifest/results consistency check failed: {exc}", file=sys.stderr)
         return 1
 
+    scores: List[str] = manifest["scores"]
+    seeds: List[int] = manifest["seeds"]
+    tripwires: dict = manifest["tripwires"]
+
     try:
         results_idx = index_results_cells(results)
     except DuplicateCellError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    scores: List[str] = manifest["scores"]
-    seeds: List[int] = manifest["seeds"]
-    tripwires: dict = manifest["tripwires"]
+
+    # P2 修正 (review #265 R13): 登録グリッド外の余剰セル・欠落セルを
+    # render 開始前に fail-closed で検出する（`CellGridMismatchError`
+    # docstring 参照）。
+    try:
+        validate_results_cell_grid(results_idx, scores, seeds)
+    except CellGridMismatchError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
     # `specs_dir`/`render_dir`/`staging_dir`/`backup_dir` は preflight 検査
     # のため上で既に確定済み（P1 修正 (review #265 R11)）。

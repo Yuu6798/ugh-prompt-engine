@@ -177,6 +177,56 @@ def _results(scores: List[str], seeds: List[int], cells: List[dict]) -> dict:
     }
 
 
+def test_validate_schema_versions_accepts_matching_pair() -> None:
+    manifest = _manifest(["sakura", "umi"], [11, 101], {})
+    results = _results(["sakura", "umi"], [11, 101], [])
+    rdc.validate_schema_versions(manifest, results)  # no raise
+
+
+def test_validate_schema_versions_rejects_manifest_schema_mismatch() -> None:
+    """P2 修正 (review #265 R13): `--manifest` の schema が誤記・旧版・未来版
+    でも表面互換なキー名だけで消費してしまわない（fail-closed）。"""
+    manifest = _manifest(["sakura", "umi"], [11, 101], {})
+    manifest["schema"] = "d3-manifest/0.2"
+    results = _results(["sakura", "umi"], [11, 101], [])
+    with pytest.raises(rdc.SchemaMismatchError, match="manifest schema"):
+        rdc.validate_schema_versions(manifest, results)
+
+
+def test_validate_schema_versions_rejects_missing_manifest_schema() -> None:
+    manifest = _manifest(["sakura", "umi"], [11, 101], {})
+    del manifest["schema"]
+    results = _results(["sakura", "umi"], [11, 101], [])
+    with pytest.raises(rdc.SchemaMismatchError, match="manifest schema"):
+        rdc.validate_schema_versions(manifest, results)
+
+
+def test_validate_schema_versions_rejects_results_schema_mismatch() -> None:
+    manifest = _manifest(["sakura", "umi"], [11, 101], {})
+    results = _results(["sakura", "umi"], [11, 101], [])
+    results["schema"] = "d3-manifest-results/0.2"
+    with pytest.raises(rdc.SchemaMismatchError, match="results schema"):
+        rdc.validate_schema_versions(manifest, results)
+
+
+def test_validate_schema_versions_rejects_missing_results_schema() -> None:
+    manifest = _manifest(["sakura", "umi"], [11, 101], {})
+    results = _results(["sakura", "umi"], [11, 101], [])
+    del results["schema"]
+    with pytest.raises(rdc.SchemaMismatchError, match="results schema"):
+        rdc.validate_schema_versions(manifest, results)
+
+
+def test_validate_schema_versions_accepts_real_production_manifests() -> None:
+    """受け入れ条件 4: 正常系（実 d3_manifest.json / d3_manifest_results.json）
+    の schema 値が `MANIFEST_SCHEMA`/`RESULTS_SCHEMA` の期待値と一致すること
+    を担保する（本テストが落ちる = 期待定数が実ファイルの実測値とずれている
+    ことを意味する）。"""
+    manifest = json.loads(rdc.DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+    results = json.loads(rdc.DEFAULT_RESULTS.read_text(encoding="utf-8"))
+    rdc.validate_schema_versions(manifest, results)  # no raise
+
+
 def test_validate_manifest_consistency_accepts_matching_pair() -> None:
     manifest = _manifest(["sakura", "umi"], [11, 101], {})
     results = _results(["sakura", "umi"], [11, 101], [])
@@ -234,6 +284,51 @@ def test_index_results_cells_rejects_duplicate_score_seed_entries() -> None:
     ]
     with pytest.raises(rdc.DuplicateCellError, match=r"sakura.*11|11.*sakura"):
         rdc.index_results_cells({"cells": cells})
+
+
+def test_validate_results_cell_grid_accepts_exact_match() -> None:
+    cells = [
+        {"score": "sakura", "seed": 11}, {"score": "sakura", "seed": 101},
+        {"score": "umi", "seed": 11}, {"score": "umi", "seed": 101},
+    ]
+    idx = rdc.index_results_cells({"cells": cells})
+    rdc.validate_results_cell_grid(idx, ["sakura", "umi"], [11, 101])  # no raise
+
+
+def test_validate_results_cell_grid_rejects_extra_cell_outside_registered_grid() -> None:
+    """P2 修正 (review #265 R13) の核心シナリオ: 一意だが登録グリッド外の
+    余剰セル（score="obsolete", seed=1）は `DuplicateCellError`（R12）を
+    誘発しないが、`validate_results_cell_grid` が余剰として fail-closed で
+    検出する（旧実装だと `main()` の検証ループが `manifest["scores"]`/
+    `["seeds"]` の直積しか走査しないため、このセルは一度も訪問されず矛盾を
+    含む results でも 40/40 相当の PASS が出ていた）。"""
+    cells = [
+        {"score": "sakura", "seed": 11}, {"score": "sakura", "seed": 101},
+        {"score": "umi", "seed": 11}, {"score": "umi", "seed": 101},
+        {"score": "obsolete", "seed": 1},  # unique key, but outside the registered grid
+    ]
+    idx = rdc.index_results_cells({"cells": cells})
+    with pytest.raises(rdc.CellGridMismatchError, match="extra"):
+        rdc.validate_results_cell_grid(idx, ["sakura", "umi"], [11, 101])
+
+
+def test_validate_results_cell_grid_rejects_missing_cell() -> None:
+    cells = [
+        {"score": "sakura", "seed": 11}, {"score": "sakura", "seed": 101},
+        {"score": "umi", "seed": 11},  # missing (umi, 101)
+    ]
+    idx = rdc.index_results_cells({"cells": cells})
+    with pytest.raises(rdc.CellGridMismatchError, match="missing"):
+        rdc.validate_results_cell_grid(idx, ["sakura", "umi"], [11, 101])
+
+
+def test_validate_results_cell_grid_accepts_real_production_manifests() -> None:
+    """受け入れ条件 4: 正常系（実 d3_manifest.json / d3_manifest_results.json、
+    40 セル）の cells キー集合が scores x seeds 直積と厳密一致すること。"""
+    manifest = json.loads(rdc.DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+    results = json.loads(rdc.DEFAULT_RESULTS.read_text(encoding="utf-8"))
+    idx = rdc.index_results_cells(results)
+    rdc.validate_results_cell_grid(idx, manifest["scores"], manifest["seeds"])  # no raise
 
 
 def test_verify_cell_pass(tmp_path: Path) -> None:
@@ -521,6 +616,139 @@ def test_main_fails_closed_on_duplicate_cell_before_rendering(
 
     assert rc == 1
     assert calls == []  # render_cell は一度も呼ばれていない（render 前に拒否）
+    assert not (out_dir / "render").exists()
+
+
+def test_main_fails_closed_on_grid_extra_cell_before_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2 修正 (review #265 R13) 受け入れ条件: 一意だが登録グリッド外の余剰
+    セル（`DuplicateCellError` は誘発しない）があると、`main()` は
+    render_cell を一度も呼ばずに即時 FAIL する（旧実装なら検証ループが
+    このセルを一度も訪問せず、矛盾を含む results でも 40/40 相当の PASS が
+    出ていた）。"""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    results = json.loads(results_path.read_text(encoding="utf-8"))
+    results["cells"].append(
+        {
+            "score": "obsolete", "seed": 1,
+            "spec_sha256": "0" * 64, "wav_sha256": "0" * 64, "timing_csv_sha256": "0" * 64,
+        }
+    )
+    results_path.write_text(json.dumps(results), encoding="utf-8")
+
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 1
+    assert calls == []  # render_cell は一度も呼ばれていない（render 前に拒否）
+    assert not (out_dir / "render").exists()
+
+
+def test_main_fails_closed_on_grid_missing_cell_before_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2 修正 (review #265 R13) 受け入れ条件: 登録グリッドの一部セルが
+    `results["cells"]` に欠落していると、`main()` は render_cell を一度も
+    呼ばずに即時 FAIL する。"""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    results = json.loads(results_path.read_text(encoding="utf-8"))
+    del results["cells"][0]  # drop one registered (score, seed) cell
+    results_path.write_text(json.dumps(results), encoding="utf-8")
+
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 1
+    assert calls == []  # render_cell は一度も呼ばれていない（render 前に拒否）
+    assert not (out_dir / "render").exists()
+
+
+def test_main_fails_closed_on_manifest_schema_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2 修正 (review #265 R13) 受け入れ条件: `--manifest` の schema が
+    誤記だと `main()` は render_cell を一度も呼ばずに即時 FAIL する。"""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema"] = "d3-manifest/0.2"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 1
+    assert calls == []
+    assert not (out_dir / "render").exists()
+
+
+def test_main_fails_closed_on_results_schema_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2 修正 (review #265 R13) 受け入れ条件: `--results` の schema が
+    欠落していても `main()` は render_cell を一度も呼ばずに即時 FAIL する。"""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    results = json.loads(results_path.read_text(encoding="utf-8"))
+    del results["schema"]
+    results_path.write_text(json.dumps(results), encoding="utf-8")
+
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 1
+    assert calls == []
     assert not (out_dir / "render").exists()
 
 

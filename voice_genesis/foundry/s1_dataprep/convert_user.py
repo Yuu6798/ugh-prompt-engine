@@ -286,8 +286,17 @@ def reconcile_ledger(
 ) -> Dict[str, LedgerEntry]:
     """台帳の `normalized_path` のファイル名 + `sha256` を正として
     `normalized_dir` と突合する。欠落・sha256 不一致・（台帳に無い）余剰 wav・
-    card_id 重複（P2 修正 review #265）のいずれも全件収集してから
+    card_id 重複（P2 修正 review #265）・normalized_path 重複・sha256 重複
+    （P2 修正 review #265 R13）のいずれも全件収集してから
     `LedgerMismatchError` で fail-closed する。
+
+    P2 修正 (review #265 R13): 旧実装は card_id 重複のみを検査しており、
+    異なる card_id 2 枚が同一 `normalized_path`（+ 同一 sha256）を参照して
+    いても通過し、同一録音が 2 カード分として重複投入され得た。本関数は
+    `normalized_path`（basename 正規化後）と sha256 の双方を artifact
+    identity として追跡し、複数 card_id からの再利用を fail-closed 拒否する
+    （異なるファイル名でも sha256 が一致すれば、物理的に同一録音として
+    同様に拒否する）。
 
     P1 修正 (review #265 R7): `snapshot_dir` を指定すると、各エントリの
     sha256 照合を「`normalized_dir` の原本への複数回の別読み」ではなく
@@ -309,6 +318,13 @@ def reconcile_ledger(
     by_card: Dict[str, LedgerEntry] = {}
     referenced_filenames: set = set()
     entries_by_card_id: Dict[str, List[str]] = {}  # P2 修正: card_id 重複検出用
+    # P2 修正 (review #265 R13): normalized_path（basename）/sha256 の重複検出用。
+    # card_id 重複検査だけでは、異なる card_id 2 枚が同一 normalized_path
+    # （+同一 sha256）を参照するケースを見逃す——同一録音が 2 カード分として
+    # 重複投入され得る（`reconcile_ledger` docstring 節参照）。
+    entries_by_normalized_path: Dict[str, List[str]] = {}  # filename -> [card_id, ...]
+    entries_by_sha256: Dict[str, List[str]] = {}  # sha256 -> [card_id, ...]
+    filename_by_card_id: Dict[str, str] = {}  # sha256 重複メッセージの参考情報用
 
     if snapshot_dir is not None:
         snapshot_dir = Path(snapshot_dir)
@@ -352,6 +368,9 @@ def reconcile_ledger(
             card_id=str(card_id), filename=filename, sha256=str(expected_sha), path=resolved_path
         )
         entries_by_card_id.setdefault(str(card_id), []).append(filename)
+        entries_by_normalized_path.setdefault(filename, []).append(str(card_id))
+        entries_by_sha256.setdefault(actual_sha, []).append(str(card_id))
+        filename_by_card_id[str(card_id)] = filename
 
     # P2 修正 (review #265): card_id 重複を黙殺上書きせず fail-closed で検出する。
     # 再録 take の積み立て運用では複数台帳エントリが同一 card_id を指すことが
@@ -363,6 +382,40 @@ def reconcile_ledger(
         problems.append(
             f"{cid}: duplicate ledger entries for the same card_id "
             f"({len(entries_by_card_id[cid])}): {entries_by_card_id[cid]}"
+        )
+
+    # P2 修正 (review #265 R13): 異なる card_id が同一 normalized_path
+    # （basename）を参照する場合を fail-closed で検出する。card_id 重複検査
+    # だけでは、2 枚の異なるカードが同一 wav を指していても素通しし、同一
+    # 録音が 2 カード分として重複投入され得る（train データセットへ同一音声
+    # が 2 回分の学習ターゲットとして混入する）。
+    dup_normalized_paths = sorted(
+        fn for fn, cids in entries_by_normalized_path.items() if len(cids) > 1
+    )
+    for fn in dup_normalized_paths:
+        problems.append(
+            f"normalized_path {fn!r} is referenced by multiple card_ids "
+            f"({len(entries_by_normalized_path[fn])}): {entries_by_normalized_path[fn]} "
+            "(fail-closed — the same recording would otherwise be ingested as multiple "
+            "distinct cards)"
+        )
+
+    # P2 修正 (review #265 R13): 異なる normalized_path でも sha256（実バイト
+    # 列）が一致する場合も検出する（同一バイトの別ファイル名は物理的に同一
+    # 録音）。normalized_path が既に重複と報告済みの組は、同一ファイルの再掲
+    # に過ぎず追加情報が無いためここでは報告しない（同一 sha256 かつ同一
+    # normalized_path の場合のみ発生し得る自明な包含関係）。
+    dup_sha256 = sorted(sha for sha, cids in entries_by_sha256.items() if len(cids) > 1)
+    for sha in dup_sha256:
+        cids = entries_by_sha256[sha]
+        filenames = sorted({filename_by_card_id[cid] for cid in cids})
+        if len(filenames) <= 1:
+            continue  # already reported via dup_normalized_paths (same file, same bytes)
+        problems.append(
+            f"sha256 {sha!r} is referenced by multiple card_ids under different "
+            f"normalized_path filenames ({len(cids)}): {cids} -> {filenames} "
+            "(fail-closed — identical audio bytes under different filenames would "
+            "otherwise be ingested as separate recordings)"
         )
 
     actual_wavs = {p.name for p in normalized_dir.glob("*.wav")}

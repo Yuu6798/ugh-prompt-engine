@@ -504,6 +504,124 @@ def test_convert_duplicate_card_id_ledger_publishes_nothing(tmp_path: Path) -> N
 
 
 # ---------------------------------------------------------------------------
+# 1.5 P2 修正 (review #265 R13): normalized_path / sha256 の重複追跡
+# （card_id 重複検査だけでは見逃す、異なる card_id 2 枚が同一録音を指すケース）
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_ledger_duplicate_normalized_path_fails_closed(tmp_path: Path) -> None:
+    """核心シナリオ (review #265 R13): 異なる card_id 2 枚が同一
+    `normalized_path`（+同一 sha256）を参照すると、card_id 重複検査は素通し
+    するが（card_id 自体は異なるため）、`reconcile_ledger` は同一録音が 2
+    カード分として重複投入されるのを fail-closed で拒否する。"""
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    samples = _t2_uc012_samples()
+    shared_wav = normalized_dir / "shared_recording.norm24k.wav"
+    _write_wav(shared_wav, samples)
+    entries = [
+        {
+            "card_id": "UC-012", "normalized_path": f"user_donor_normalized/{shared_wav.name}",
+            "sha256": _sha256(shared_wav),
+        },
+        {
+            "card_id": "UC-013", "normalized_path": f"user_donor_normalized/{shared_wav.name}",
+            "sha256": _sha256(shared_wav),
+        },
+    ]
+    with pytest.raises(cu.LedgerMismatchError, match="normalized_path") as excinfo:
+        cu.reconcile_ledger(normalized_dir, entries)
+    msg = str(excinfo.value)
+    assert "UC-012" in msg and "UC-013" in msg
+    assert shared_wav.name in msg
+
+
+def test_convert_duplicate_normalized_path_ledger_publishes_nothing(tmp_path: Path) -> None:
+    """`convert()` エンドツーエンドでも normalized_path 重複が fail-closed で
+    拒否され、`out_dir` へは一切公開されない。"""
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    samples = _t2_uc012_samples()
+    shared_wav = normalized_dir / "shared_recording.norm24k.wav"
+    _write_wav(shared_wav, samples)
+    entries = [
+        {
+            "card_id": "UC-012", "normalized_path": f"user_donor_normalized/{shared_wav.name}",
+            "sha256": _sha256(shared_wav),
+        },
+        {
+            "card_id": "UC-013", "normalized_path": f"user_donor_normalized/{shared_wav.name}",
+            "sha256": _sha256(shared_wav),
+        },
+    ]
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(json.dumps(_make_ledger(entries), ensure_ascii=False), encoding="utf-8")
+    dsdict_path = _write_test_dsdict(tmp_path)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(cu.LedgerMismatchError, match="normalized_path"):
+        cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
+    assert not out_dir.exists()
+
+
+def test_reconcile_ledger_duplicate_sha256_under_different_filenames_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """異なる card_id 2 枚が異なる `normalized_path`（別ファイル名）だが同一
+    sha256（同一バイト列 = 物理的に同一録音）を参照する場合も fail-closed で
+    拒否する（同一バイトの別ファイル名も物理的に同一録音という docstring の
+    規約）。"""
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    samples = _t2_uc012_samples()
+    wav_a = normalized_dir / "UC-012_a.norm24k.wav"
+    wav_b = normalized_dir / "UC-013_b.norm24k.wav"
+    _write_wav(wav_a, samples)
+    _write_wav(wav_b, samples)  # byte-identical to wav_a but a different filename
+    assert wav_a.read_bytes() == wav_b.read_bytes()
+    entries = [
+        {
+            "card_id": "UC-012", "normalized_path": f"user_donor_normalized/{wav_a.name}",
+            "sha256": _sha256(wav_a),
+        },
+        {
+            "card_id": "UC-013", "normalized_path": f"user_donor_normalized/{wav_b.name}",
+            "sha256": _sha256(wav_b),
+        },
+    ]
+    with pytest.raises(cu.LedgerMismatchError, match="sha256") as excinfo:
+        cu.reconcile_ledger(normalized_dir, entries)
+    msg = str(excinfo.value)
+    assert "UC-012" in msg and "UC-013" in msg
+
+
+def test_reconcile_ledger_distinct_recordings_do_not_trigger_false_positive(
+    tmp_path: Path,
+) -> None:
+    """通常系の回帰防止: 異なる card_id が genuinely 異なる録音（別
+    normalized_path・別 sha256）を参照する場合は、新しい重複検査に一切
+    抵触しない。"""
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    wav_a = normalized_dir / "UC-012_a.norm24k.wav"
+    wav_b = normalized_dir / "UC-013_b.norm24k.wav"
+    _write_wav(wav_a, _t2_uc012_samples())
+    _write_wav(wav_b, _t0_umi_samples())
+    entries = [
+        {
+            "card_id": "UC-012", "normalized_path": f"user_donor_normalized/{wav_a.name}",
+            "sha256": _sha256(wav_a),
+        },
+        {
+            "card_id": "UC-013", "normalized_path": f"user_donor_normalized/{wav_b.name}",
+            "sha256": _sha256(wav_b),
+        },
+    ]
+    by_card = cu.reconcile_ledger(normalized_dir, entries)
+    assert set(by_card) == {"UC-012", "UC-013"}
+
+
+# ---------------------------------------------------------------------------
 # 1.6 P1 修正 (review #265): 衝突検査を convert() 自身が行う（CLI 経由でなくても
 # fail-closed）
 # ---------------------------------------------------------------------------
@@ -916,7 +1034,13 @@ def test_exclusions_json_dsdict_path_is_basename_only_no_absolute_path(tmp_path:
 
 @_ffmpeg_required
 def test_convert_uc010_excluded_with_dsdict_reason(tmp_path: Path) -> None:
-    cards = {"UC-010": _t2_uc012_samples(), "UC-012": _t2_uc012_samples()}
+    # UC-010 gets a trailing-silence pad so its wav bytes (and thus sha256)
+    # differ from UC-012's below — otherwise the two cards would coincide on
+    # the new normalized_path/sha256 duplicate-artifact fail-closed check
+    # (review #265 R13). UC-010 fails at dsdict tokenize before any segment
+    # analysis runs, so the extra trailing silence has no effect on the
+    # assertions below.
+    cards = {"UC-010": _concat(_t2_uc012_samples(), _silence(0.05)), "UC-012": _t2_uc012_samples()}
     ledger_path, normalized_dir = _write_ledger_and_normalized(tmp_path, cards)
     dsdict_path = _write_test_dsdict(tmp_path)
     out_dir = tmp_path / "out"
@@ -941,7 +1065,12 @@ def test_convert_output_passes_build_dataset_gates(tmp_path: Path) -> None:
         "UC-002": _t0_umi_samples(),
         "UC-003": _t1_card_samples(freqs=(110.0, 146.83, 174.61)),
         "UC-012": _t2_uc012_samples(),
-        "UC-013": _t2_uc012_samples(),
+        # UC-013 gets a trailing-silence pad so its wav bytes differ from
+        # UC-012's above (avoids the new normalized_path/sha256 duplicate
+        # fail-closed check, review #265 R13). UC-013's phrase count (4)
+        # already mismatches this 2-segment audio and gets excluded either
+        # way, so the extra silence changes nothing this test asserts.
+        "UC-013": _concat(_t2_uc012_samples(), _silence(0.07)),
     }
     ledger_path, normalized_dir = _write_ledger_and_normalized(tmp_path, cards)
     dsdict_path = _write_test_dsdict(tmp_path)
