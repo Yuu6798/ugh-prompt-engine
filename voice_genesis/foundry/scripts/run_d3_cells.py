@@ -11,6 +11,22 @@ python voice_genesis/foundry/scripts/run_d3_cells.py \\
     --out-dir <出力ディレクトリ>
 ```
 
+## 出力レイアウト
+
+```
+<out-dir>/
+├── specs/           spec 変種（10 本、seed ごと）
+├── render/          wav + timing csv が同一 stem で同居（40 wav + 40 csv）
+├── cache/           donor bank npz/pkl キャッシュ（render.py --cache-dir）
+└── verify_report.txt
+```
+
+`render/` に wav と timing csv を**同一ディレクトリへ同居**させるのは、
+`s1_dataprep/convert_d3.py` の `discover_pairs()` が単一ディレクトリ非再帰
+（`*.wav`/`*.csv` を stem で突き合わせ）で pair を発見する契約のため
+（PR #265 R8 指摘 #20）。runbook 手順 4 は本スクリプト実行後、
+`--render-dir <out-dir>/render` をそのまま渡せる。
+
 ## 手順（設計 = 本ファイル docstring が正、実装が一次ソース）
 
 1. **spec 変種生成**（`build_spec_variants`）: base preset
@@ -32,7 +48,13 @@ python voice_genesis/foundry/scripts/run_d3_cells.py \\
 4. **全数照合**: 40 セルの wav / timing csv sha256 を
    `d3_manifest_results.json` と全数照合し、per-cell PASS/FAIL 表を
    stdout と `<out-dir>/verify_report.txt` へ出力する。1 件でも不一致
-   （またはレンダ未達成）なら非 0 exit で終了する。
+   （またはレンダ未達成）なら非 0 exit で終了する。**このセッションで
+   render に失敗したセルは、その照合結果を無条件 FAIL に強制する**
+   （PR #265 R8 指摘 #21: 既存 `--out-dir` への再実行で当該セルの render
+   が失敗しても、前回実行の残存 wav/csv が sha256 一致して false PASS
+   になることを防ぐ — `render_cell` が render 前に当該セルの既存出力を
+   削除し、かつ render 失敗セルの集合を記録して §4 で強制上書きする
+   二重の防御）。
 
 ## 家風
 
@@ -246,9 +268,19 @@ def render_cell(
 
     渡す全パスは絶対パスへ解決済みであることを前提とする（呼び出し元の
     cwd に依存しない）。
+
+    render 前に `out_wav`/`out_timing` の既存ファイルを削除する（PR #265
+    R8 指摘 #21: 既存 `--out-dir` への再実行で今回の render が失敗しても、
+    前回実行の残存ファイルが `verify_cell` の sha256 照合を偶然通過して
+    false PASS になることを防ぐ — render.py は成功時のみ atomic に書くため、
+    このセルで失敗すれば `out_wav`/`out_timing` は存在しない状態のまま残る）。
     """
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     out_timing.parent.mkdir(parents=True, exist_ok=True)
+    if out_wav.exists():
+        out_wav.unlink()
+    if out_timing.exists():
+        out_timing.unlink()
     cmd = [
         python_exe,
         "-m",
@@ -414,8 +446,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     tripwires: dict = manifest["tripwires"]
 
     specs_dir = out_dir / "specs"
-    wavs_dir = out_dir / "wavs"
-    timing_dir = out_dir / "timing"
+    # wav + timing csv は同一ディレクトリへ同居させる（PR #265 R8 指摘 #20:
+    # `s1_dataprep/convert_d3.py` の `discover_pairs()` が単一ディレクトリ
+    # 非再帰・stem 突き合わせで pair を発見する契約のため。runbook 手順 4 は
+    # `--render-dir <out-dir>/render` をそのまま渡せる）。
+    render_dir = out_dir / "render"
 
     # --- 1. spec 変種生成 ---------------------------------------------------
     try:
@@ -436,8 +471,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     tripwire_lines: List[str] = []
     for score in TRIPWIRE_SCORES:
         spec = variants[TRIPWIRE_SEED]
-        out_wav = wavs_dir / f"{score}_seed{TRIPWIRE_SEED}.wav"
-        out_timing = timing_dir / f"{score}_seed{TRIPWIRE_SEED}.csv"
+        out_wav = render_dir / f"{score}_seed{TRIPWIRE_SEED}.wav"
+        out_timing = render_dir / f"{score}_seed{TRIPWIRE_SEED}.csv"
         print(f"--- tripwire render: {score} seed={TRIPWIRE_SEED} ---")
         outcome = render_cell(
             score=score,
@@ -480,14 +515,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print("tripwire check PASSED — proceeding to remaining cells")
 
     # --- 3. 残り 38 セル ------------------------------------------------
+    # このセッションで render に失敗したセルを記録する（PR #265 R8 指摘
+    # #21）。§4 でこの集合に載っているセルは、ディスク上の状態に関わらず
+    # 無条件 FAIL にする（`render_cell` の事前削除と合わせた二重の防御）。
+    render_failures: Dict[Tuple[str, int], str] = {}
     already_rendered = {(score, TRIPWIRE_SEED) for score in TRIPWIRE_SCORES}
     for score in scores:
         for seed in seeds:
             if (score, seed) in already_rendered:
                 continue
             spec = variants[seed]
-            out_wav = wavs_dir / f"{score}_seed{seed}.wav"
-            out_timing = timing_dir / f"{score}_seed{seed}.csv"
+            out_wav = render_dir / f"{score}_seed{seed}.wav"
+            out_timing = render_dir / f"{score}_seed{seed}.csv"
             print(f"--- rendering {score} seed={seed} ---")
             outcome = render_cell(
                 score=score,
@@ -498,11 +537,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 cache_dir=cache_dir,
             )
             if not outcome.ok:
-                print(
-                    f"FAIL: {score} seed={seed}: render failed "
-                    f"(returncode={outcome.returncode})"
-                )
+                reason = f"render subprocess failed this run (returncode={outcome.returncode})"
+                print(f"FAIL: {score} seed={seed}: {reason}")
                 print(outcome.stderr, file=sys.stderr)
+                render_failures[(score, seed)] = reason
             else:
                 print(f"OK: {score} seed={seed}")
 
@@ -510,8 +548,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     verifications: List[CellVerification] = []
     for score in scores:
         for seed in seeds:
-            out_wav = wavs_dir / f"{score}_seed{seed}.wav"
-            out_timing = timing_dir / f"{score}_seed{seed}.csv"
+            failure_reason = render_failures.get((score, seed))
+            if failure_reason is not None:
+                # このセッションで render が失敗した事実を最優先する — たとえ
+                # ディスク上に（前回実行由来の）sha256 一致ファイルが残って
+                # いても、無条件 FAIL にする（stale artifact による false
+                # PASS を許さない）。
+                verifications.append(
+                    CellVerification(score, seed, "FAIL", [failure_reason])
+                )
+                continue
+            out_wav = render_dir / f"{score}_seed{seed}.wav"
+            out_timing = render_dir / f"{score}_seed{seed}.csv"
             expected = results_idx.get((score, seed))
             verifications.append(verify_cell(score, seed, out_wav, out_timing, expected))
 

@@ -1,12 +1,17 @@
 """test_run_d3_cells.py — D3 コーパス再生成 CLI の単体テスト。
 
-実音源・実 render は使わない（合成フィクスチャのみ）。対象は 2 点:
+実音源・実 render は使わない（合成フィクスチャのみ）。対象は 3 点:
 
 1. spec 変種のテキスト置換が byte-identity 不変条件（`"seed"` 以外は一切
    変更しない・元の seed 値のセルは base preset とバイト同一）を守ること。
 2. tripwire / 全数照合ロジック（`verify_cell`/`format_report`/
    `validate_manifest_consistency`/`main` の制御フロー）が正しく
    PASS/FAIL を判定すること（render 自体は monkeypatch で差し替える）。
+3. PR #265 R8 指摘 #20/#21 の回帰防止: wav/timing csv が `<out>/render/`
+   に同居すること（`convert_d3.discover_pairs()` 契約）、および既存
+   `--out-dir` への再実行で当該セッションの render が失敗したセルは、
+   ディスク上に前回実行の残存ファイル（sha256 一致）があっても無条件
+   FAIL になること（stale artifact による false PASS の防止）。
 """
 from __future__ import annotations
 
@@ -457,3 +462,175 @@ def test_main_rejects_missing_voicebank_root(tmp_path: Path) -> None:
         ]
     )
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# 4. PR #265 R8 #20: wav/timing csv は <out>/render/ に同居する
+# ---------------------------------------------------------------------------
+
+
+def test_main_colocates_wav_and_timing_in_render_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`convert_d3.discover_pairs()` は単一ディレクトリ非再帰で `*.wav`/
+    `*.csv` を stem 突き合わせする契約のため、両者は同一ディレクトリへ
+    同居させる必要がある（別ディレクトリだと後続の convert_d3 実行に
+    未文書のマージ作業が要る = PR #265 R8 指摘 #20）。"""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 0
+    render_dir = out_dir / "render"
+    wav_stems = {p.stem for p in render_dir.glob("*.wav")}
+    csv_stems = {p.stem for p in render_dir.glob("*.csv")}
+    total_cells = len(SCORES) * len(SEEDS)
+    assert len(wav_stems) == total_cells
+    # every wav has a same-stem csv co-located in the same directory
+    # (this is exactly what convert_d3.discover_pairs() requires)
+    assert wav_stems == csv_stems
+    # the old separate-directory layout must not reappear
+    assert not (out_dir / "wavs").exists()
+    assert not (out_dir / "timing").exists()
+
+
+# ---------------------------------------------------------------------------
+# 5. PR #265 R8 #21: 再実行時の stale 成果物による false PASS の防止
+# ---------------------------------------------------------------------------
+
+
+def test_render_cell_deletes_stale_outputs_before_invoking_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit test on the real `render_cell` (not the main()-level fake): if a
+    stale wav/csv from a previous run already sits at the target path, and
+    this run's subprocess invocation fails, the stale files must not survive
+    the call (belt-and-suspenders layer #1 of the #21 fix)."""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    out_wav = render_dir / "sakura_seed11.wav"
+    out_timing = render_dir / "sakura_seed11.csv"
+    out_wav.write_bytes(b"STALE_WAV_FROM_PREVIOUS_RUN")
+    out_timing.write_bytes(b"STALE_TIMING_FROM_PREVIOUS_RUN")
+
+    class _FakeCompletedProcess:
+        returncode = 1
+        stdout = ""
+        stderr = "simulated render.py failure"
+
+    def _fake_subprocess_run(cmd, cwd, capture_output, text):
+        # Simulate a failing render.py invocation that writes nothing.
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(rdc.subprocess, "run", _fake_subprocess_run)
+
+    outcome = rdc.render_cell(
+        score="sakura",
+        spec_path=tmp_path / "spec.json",
+        out_wav=out_wav,
+        out_timing=out_timing,
+        voicebank_root=tmp_path / "voicebank",
+        cache_dir=tmp_path / "cache",
+    )
+
+    assert outcome.ok is False
+    assert not out_wav.exists()
+    assert not out_timing.exists()
+
+
+def _install_fake_render_no_cleanup_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: List[Tuple[str, int]],
+    fail_cell: Tuple[str, int],
+) -> None:
+    """Worst-case fake: for `fail_cell`, returns ok=False WITHOUT touching
+    the filesystem at all (i.e. it does *not* perform the render_cell
+    pre-clean step) — this isolates and exercises defense layer #2 alone
+    (the `render_failures` tracking / forced-FAIL in `main()`), independent
+    of layer #1 (`render_cell`'s own pre-clean, which this fake bypasses
+    entirely by replacing `render_cell` itself)."""
+
+    def _fake_render_cell(*, score, spec_path, out_wav, out_timing, voicebank_root, cache_dir, **_kw):
+        seed = int(out_wav.stem.rsplit("_seed", 1)[1])
+        calls.append((score, seed))
+        if (score, seed) == fail_cell:
+            return rdc.RenderOutcome(
+                ok=False, returncode=1, stdout="", stderr="simulated transient failure",
+                wav_path=out_wav, timing_path=out_timing,
+            )
+        wav_bytes, timing_bytes = _cell_bytes(score, seed)
+        out_wav.parent.mkdir(parents=True, exist_ok=True)
+        out_timing.parent.mkdir(parents=True, exist_ok=True)
+        out_wav.write_bytes(wav_bytes)
+        out_timing.write_bytes(timing_bytes)
+        return rdc.RenderOutcome(
+            ok=True, returncode=0, stdout="", stderr="", wav_path=out_wav, timing_path=out_timing
+        )
+
+    monkeypatch.setattr(rdc, "render_cell", _fake_render_cell)
+
+
+def test_main_forces_fail_despite_stale_correct_artifact_from_previous_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Core regression test for PR #265 R8 #21: re-running against an
+    existing `--out-dir` that already holds a *correct* (sha256-matching)
+    wav/csv for a cell from a previous successful run, where this run's
+    render for that same cell fails. Even with a fake `render_cell` that
+    performs none of layer #1's cleanup, `main()` must still report that
+    cell as FAIL — not silently PASS off the stale artifact."""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    fail_cell = ("d3_kana", 101)
+    # Pre-populate render/ with a stale-but-correct artifact for fail_cell,
+    # simulating a leftover from an earlier successful run.
+    render_dir = out_dir / "render"
+    render_dir.mkdir(parents=True)
+    stale_wav_bytes, stale_timing_bytes = _cell_bytes(*fail_cell)
+    (render_dir / f"{fail_cell[0]}_seed{fail_cell[1]}.wav").write_bytes(stale_wav_bytes)
+    (render_dir / f"{fail_cell[0]}_seed{fail_cell[1]}.csv").write_bytes(stale_timing_bytes)
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render_no_cleanup_on_failure(monkeypatch, calls, fail_cell)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 1
+    report = (out_dir / "verify_report.txt").read_text(encoding="utf-8")
+    # the stale artifact's sha256 does match the fixture's expected value —
+    # proving that a naive sha256-only check would have PASSed this cell.
+    expected_wav_sha = _sha(stale_wav_bytes)
+    idx = rdc.index_results_cells(json.loads(results_path.read_text(encoding="utf-8")))
+    assert idx[fail_cell]["wav_sha256"] == expected_wav_sha
+    # main() must still report FAIL for it, with a reason that names the
+    # render failure (not a sha256 mismatch verdict based on the stale file).
+    # (row prefix matches format_report's own `{score:<12}{seed:>6}` layout)
+    row_prefix = f'{fail_cell[0]:<12}{fail_cell[1]:>6}'
+    fail_line = next(line for line in report.splitlines() if line.startswith(row_prefix))
+    assert "FAIL" in fail_line
+    assert "render subprocess failed this run" in fail_line
+    total_cells = len(SCORES) * len(SEEDS)
+    assert f"TOTAL: {total_cells - 1}/{total_cells} PASS" in report
