@@ -63,6 +63,39 @@ class Archive:
                 reason="lineage_no_longer_unique",
             ))
 
+    def _route_evicted_elite_to_protection(self, evicted: models.ArchiveEntry, cell: CellId) -> None:
+        """elite スロットから追い出された個体を、保護スロット資格判定（R6の
+        above-floor 敗退フォールスルーと同じ経路）へルーティングする
+        （PR #267 Codex R7 指摘2, 2026-08-17 採用）。elite が別系統の高品質
+        個体に置換されたとき、追い出された個体の lineage が Archive 全体の
+        どの elite にも代表されなくなった場合（＝この個体こそが「系統的に
+        唯一」になった場合）に限り、追い出し先の同一セルの保護スロットへ
+        quality 比較で採否判定する。従来はこの経路が無く、単に破棄される
+        だけだったため、2個体を提出する順序（先に elite→後で高品質個体に
+        置換 / 先に高品質個体が elite→後で低品質個体が above-floor 敗退で
+        保護スロットへ）によって最終状態が異なっていた。
+
+        本メソッドが呼ばれる時点で `self._elite[cell]` は新 elite（=呼び出し元
+        の `incoming`）へ既に更新済みであることを前提とする（`_lineage_has_elite`
+        が置換後の状態を正しく反映するため）。`incoming` と `evicted` が同一
+        lineage の場合（通常の「同系統内でのより高品質な elite への置換」）は
+        `_lineage_has_elite(evicted.lineage)` が真のまま（incoming 自身がその
+        lineage を代表するため）となり、本メソッドは何もしない — 同系統内の
+        置換は保護スロットの対象にならない。
+        """
+        if self._lineage_has_elite(evicted.lineage):
+            return
+        existing_protected = self._protected.get(cell)
+        if existing_protected is None or evicted.quality > existing_protected.quality:
+            if existing_protected is not None:
+                self.eviction_log.append(models.EvictionEvent(
+                    cell=cell, slot="protected",
+                    evicted_genome_id=existing_protected.genome_id, evicted_quality=existing_protected.quality,
+                    incoming_genome_id=evicted.genome_id, incoming_quality=evicted.quality,
+                    reason="lineage_unique_replacement",
+                ))
+            self._protected[cell] = evicted
+
     def submit(self, genome: models.VoiceGenome, quality: float, *, quality_floor: float) -> str:
         """genome をその座標が属するセルへ提出する。戻り値は
         `"elite"` / `"protected"` / `"rejected"` のいずれか。
@@ -73,7 +106,14 @@ class Archive:
            （既存 elite があれば追い出し記録を append）。elite 採用時は
            同一 lineage が占有する保護スロット（どのセルであれ）を無効化
            する（追い出し記録付き — PR #267 Codex R5 指摘2: elite に到達した
-           lineage はもはや「唯一」ではないため）。
+           lineage はもはや「唯一」ではないため）。さらに、追い出された旧
+           elite の lineage が Archive 全体のどの elite にも一切代表され
+           なくなった場合は、その旧 elite を保護スロット資格判定へルーティング
+           する（PR #267 Codex R6 指摘2の above-floor 敗退フォールスルーと
+           同じ経路 — PR #267 Codex R7 指摘2, 2026-08-17 採用: 従来はこの
+           ルーティングが無く、elite 置換で追い出された個体は保護スロット
+           選定を経由せず即破棄されていたため、同じ2個体でも投入順序に
+           よって最終状態が変わっていた）。
         2. 1 に該当しない場合（floor 未満、または floor 以上だが既存 elite
            に劣る — いずれの場合も elite 競争に敗れたとして 2 へフォール
            スルーする。PR #267 Codex R6 指摘2, 2026-08-17 採用: 従来は
@@ -111,6 +151,8 @@ class Archive:
                     ))
                 self._elite[cell] = incoming
                 self._evict_protected_for_lineage(incoming.lineage, incoming)
+                if existing is not None:
+                    self._route_evicted_elite_to_protection(existing, cell)
                 return "elite"
             # PR #267 Codex R6 指摘2（P2）: above-floor だが既存 elite に劣る
             # 候補は、即 "rejected" にせず保護スロット判定（2.）へフォール

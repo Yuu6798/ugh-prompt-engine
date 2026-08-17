@@ -213,6 +213,138 @@ def test_above_floor_loser_with_represented_lineage_still_rejected(founders) -> 
     assert result == "rejected"
 
 
+# --- PR #267 Codex R7 指摘2（P2）: elite 追放時の系統保護の投入順依存 -------
+
+
+def test_elite_eviction_routes_orphaned_lineage_to_protection_regardless_of_submit_order(founders) -> None:
+    """報告の実例: L-R (0.58,0.21,0.21) q=0.8 → L-C (0.5,0.3,0.2) q=0.9 の順と
+    逆順で、最終状態が「L-C elite + L-R 保護」に一致する（投入順非依存）。
+
+    順1（L-R 先→L-C 後）: L-R がまず elite になり、後から来た高品質な
+    別系統 L-C が elite を奪う。追放された L-R はどの elite にも代表され
+    なくなるため、保護スロット資格判定へルーティングされる（本 fix の
+    対象経路）。
+    順2（L-C 先→L-R 後）: L-C が先に elite になるため、後から来た L-R は
+    quality で L-C に劣り即座に elite を奪えない。above-floor 敗退の
+    フォールスルー（PR #267 Codex R6 指摘2、既存経路）で保護スロットへ入る。
+    どちらの経路を通っても最終状態は同一でなければならない。
+    """
+    lr_coords = models.Coords(0.58, 0.21, 0.21)
+    lc_coords = models.Coords(0.5, 0.3, 0.2)
+    cell = simplex.cell_id(lr_coords)
+    assert simplex.cell_id(lc_coords) == cell  # 同一セルであることが前提条件
+
+    lr = models.build_genome(
+        coords=lr_coords, seed=0, lineage="L-R", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    lc = models.build_genome(
+        coords=lc_coords, seed=0, lineage="L-C", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    assert lr.lineage == "L-R"
+    assert lc.lineage == "L-C"
+
+    # 順1: L-R 先 → L-C 後。
+    arc_order1 = archive_mod.Archive()
+    assert arc_order1.submit(lr, 0.8, quality_floor=0.5) == "elite"
+    result = arc_order1.submit(lc, 0.9, quality_floor=0.5)
+    assert result == "elite"
+    assert arc_order1.elite_at(cell).genome_id == lc.genome_id
+    assert arc_order1.protected_at(cell) is not None
+    assert arc_order1.protected_at(cell).genome_id == lr.genome_id
+
+    # 順2: L-C 先 → L-R 後。
+    arc_order2 = archive_mod.Archive()
+    assert arc_order2.submit(lc, 0.9, quality_floor=0.5) == "elite"
+    result = arc_order2.submit(lr, 0.8, quality_floor=0.5)
+    assert result == "protected"
+    assert arc_order2.elite_at(cell).genome_id == lc.genome_id
+    assert arc_order2.protected_at(cell) is not None
+    assert arc_order2.protected_at(cell).genome_id == lr.genome_id
+
+    # 投入順に関わらず最終状態は一致する。
+    assert arc_order1.elite_at(cell).genome_id == arc_order2.elite_at(cell).genome_id
+    assert arc_order1.protected_at(cell).genome_id == arc_order2.protected_at(cell).genome_id
+
+
+def test_elite_eviction_does_not_protect_same_lineage_replacement(founders) -> None:
+    """elite が同一 lineage 内のより高品質な個体に置換された場合（通常の
+    「より良い演奏への更新」）は、追放された個体の lineage が新 elite 自身
+    によって引き続き代表されているため、保護スロットへはルーティングされ
+    ない（回帰確認 — `test_submit_higher_quality_evicts_previous_elite` の
+    前提と矛盾しないことの確認）。
+    """
+    ritsu, *_ = founders
+    arc = archive_mod.Archive()
+    arc.submit(ritsu, 0.5, quality_floor=0.3)
+    challenger = operators.drift(ritsu, rng_seed=1, step=0.01)
+    assert challenger.lineage == ritsu.lineage
+    cell = simplex.cell_id(ritsu.coords)
+    result = arc.submit(challenger, 0.9, quality_floor=0.3)
+    assert result == "elite"
+    assert arc.elite_at(cell).genome_id == challenger.genome_id
+    assert arc.protected_at(cell) is None
+
+
+def test_elite_eviction_protection_interacts_correctly_with_stale_protected_evict(founders) -> None:
+    """R5 修正（elite 受理で同系統保護スロットを evict する）と本 fix
+    （追放された elite を別系統として保護スロットへルーティングする）が
+    同一 `submit()` 呼び出し内で共存しても矛盾しないことを確認する:
+    evict の対象は「新 elite と同一 lineage」の保護スロットのみであり、
+    追放された旧 elite（新 elite とは別系統）の保護格納とは競合しない。
+    """
+    lr_coords = models.Coords(0.58, 0.21, 0.21)
+    lc_coords = models.Coords(0.5, 0.3, 0.2)
+    cell = simplex.cell_id(lr_coords)
+    assert simplex.cell_id(lc_coords) == cell
+
+    arc = archive_mod.Archive()
+
+    # 別セルに L-C の保護個体を先に確立する（L-C の elite がまだ無いため
+    # below-floor でも lineage-unique → 保護スロットへ）。
+    stale_lc_coords = simplex.normalize({"ritsu": 0.2, "pjs": 0.4, "user": 0.4})
+    stale_lc_protected = models.build_genome(
+        coords=stale_lc_coords, seed=0, lineage="L-C", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    stale_cell = simplex.cell_id(stale_lc_protected.coords)
+    assert stale_cell != cell
+    assert arc.submit(stale_lc_protected, 0.1, quality_floor=0.9) == "protected"
+
+    # cell で L-R が先に elite になる。
+    lr = models.build_genome(
+        coords=lr_coords, seed=0, lineage="L-R", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    assert arc.submit(lr, 0.8, quality_floor=0.5) == "elite"
+
+    # L-C の高品質個体が cell で elite を奪う: (a) L-R は別系統として cell の
+    # 保護スロットへ、(b) 別セルの stale L-C 保護個体は R5 の evict 対象。
+    lc = models.build_genome(
+        coords=lc_coords, seed=0, lineage="L-C", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    result = arc.submit(lc, 0.9, quality_floor=0.5)
+    assert result == "elite"
+
+    assert arc.elite_at(cell).genome_id == lc.genome_id
+    assert arc.protected_at(cell) is not None
+    assert arc.protected_at(cell).genome_id == lr.genome_id
+    assert arc.protected_at(stale_cell) is None  # R5 evict により消滅
+
+    # cell の保護スロットは空きだったため lr の格納は「追い出し」ではなく初回
+    # 充填（reason 付きイベントは記録されない）。elite スロットの置換
+    # （higher_quality_elite）は記録される。
+    reasons_at_cell = {ev.reason for ev in arc.eviction_log if ev.cell == cell}
+    assert reasons_at_cell == {"higher_quality_elite"}
+    stale_evictions = [
+        ev for ev in arc.eviction_log
+        if ev.reason == "lineage_no_longer_unique" and ev.evicted_genome_id == stale_lc_protected.genome_id
+    ]
+    assert len(stale_evictions) == 1
+
+
 def test_occupancy_counts(founders) -> None:
     ritsu, pjs, usr, center = founders
     arc = archive_mod.Archive()

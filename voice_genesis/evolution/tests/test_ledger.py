@@ -14,6 +14,7 @@ import bootstrap  # noqa: E402
 import ledger as ledger_mod  # noqa: E402
 import models  # noqa: E402
 import operators  # noqa: E402
+import simplex  # noqa: E402
 
 
 @pytest.fixture()
@@ -223,6 +224,131 @@ def test_write_rejects_genome_with_id_mismatched_parent(tmp_path: Path, founder)
     with pytest.raises(ledger_mod.LedgerError):
         led.write(child)
     assert child.genome_id not in led.list_genome_ids()
+
+
+# --- PR #267 Codex R7 指摘1（P1）: publish 時の子の再導出検証 ---------------
+
+
+def test_write_accepts_genuine_operator_outputs_for_all_single_parent_operators(tmp_path: Path, founder) -> None:
+    """drift/reseed/edge_walk/novelty_jump の正規の operator 出力はいずれも
+    再導出検証を通過して publish が成功する（親1個体の対応表の確認）。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    led.write(founder)
+
+    drift_child = operators.drift(founder, rng_seed=1, step=0.02)
+    led.write(drift_child)
+    assert led.exists(drift_child.genome_id)
+
+    reseed_child = operators.reseed(founder, new_seed=42)
+    led.write(reseed_child)
+    assert led.exists(reseed_child.genome_id)
+
+    edge_walk_child = operators.edge_walk(founder, rng_seed=3, edge=("ritsu", "pjs"), step=0.05)
+    led.write(edge_walk_child)
+    assert led.exists(edge_walk_child.genome_id)
+
+    novelty_child = operators.novelty_jump(founder, rng_seed=7)
+    led.write(novelty_child)
+    assert led.exists(novelty_child.genome_id)
+
+
+def test_write_accepts_genuine_vertex_pull_two_parent_child(tmp_path: Path) -> None:
+    """vertex_pull の正規の operator 出力（親2個体）は、`parents[0]`/
+    `parents[1]` の順にロードして再導出する経路を通過して publish が
+    成功する。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    ritsu, pjs, *_ = bootstrap.founder_genomes()
+    led.write(ritsu)
+    led.write(pjs)
+    child = operators.vertex_pull(ritsu, pjs, weight=0.4, vertex="user", pull=0.1)
+    assert child.parents == (ritsu.genome_id, pjs.genome_id)
+    led.write(child)
+    assert led.exists(child.genome_id)
+
+
+def test_write_rejects_forged_child_with_tampered_coords(tmp_path: Path, founder) -> None:
+    """実在親を正しく参照しつつ座標だけを無関係な値へすり替えた偽装子は、
+    ロード済み親からの決定論的再導出が別の genome_id を生むため拒否される
+    （親の実在検証だけでは検出できなかったケース）。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    led.write(founder)
+    genuine = operators.drift(founder, rng_seed=1, step=0.02)
+    forged_coords = simplex.normalize({"ritsu": 0.1, "pjs": 0.1, "user": 0.8})
+    forged = models.build_genome(
+        coords=forged_coords, seed=genuine.seed, lineage=simplex.assign_lineage(forged_coords),
+        generation=genuine.generation, parents=genuine.parents, operator=genuine.operator,
+        operator_params=genuine.operator_params, anchors_provenance=genuine.anchors_provenance,
+    )
+    assert forged.genome_id != genuine.genome_id
+    with pytest.raises(ledger_mod.LedgerError):
+        led.write(forged)
+    assert forged.genome_id not in led.list_genome_ids()
+
+
+def test_write_rejects_forged_child_with_tampered_generation(tmp_path: Path, founder) -> None:
+    """実在親 + 正規の coords/operator_params を宣言しつつ generation だけ
+    無関係な値（999）へすり替えた偽装子は、親からの再導出 generation
+    （`parent.generation + 1`）と食い違うため拒否される。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    led.write(founder)
+    genuine = operators.drift(founder, rng_seed=1, step=0.02)
+    forged = models.build_genome(
+        coords=genuine.coords, seed=genuine.seed, lineage=genuine.lineage, generation=999,
+        parents=genuine.parents, operator=genuine.operator, operator_params=genuine.operator_params,
+        anchors_provenance=genuine.anchors_provenance,
+    )
+    assert forged.genome_id != genuine.genome_id
+    with pytest.raises(ledger_mod.LedgerError):
+        led.write(forged)
+    assert forged.genome_id not in led.list_genome_ids()
+
+
+def test_write_rejects_forged_child_declaring_a_different_rng_seeds_coords(tmp_path: Path, founder) -> None:
+    """`operator_params={"rng_seed": 1, ...}` を宣言しつつ、実際には
+    `rng_seed=2` から生じる coords を宣言した偽装子（params 改竄 = 別
+    rng_seed の座標を宣言するケース）は、親からの再導出が rng_seed=1 の
+    本来の coords を再現するため拒否される。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    led.write(founder)
+    genuine_seed1 = operators.drift(founder, rng_seed=1, step=0.02)
+    genuine_seed2 = operators.drift(founder, rng_seed=2, step=0.02)
+    assert genuine_seed1.coords != genuine_seed2.coords
+
+    forged = models.build_genome(
+        coords=genuine_seed2.coords, seed=genuine_seed2.seed, lineage=genuine_seed2.lineage,
+        generation=genuine_seed2.generation, parents=genuine_seed2.parents, operator="drift",
+        operator_params={"rng_seed": 1, "step": 0.02}, anchors_provenance=genuine_seed2.anchors_provenance,
+    )
+    with pytest.raises(ledger_mod.LedgerError):
+        led.write(forged)
+    assert forged.genome_id not in led.list_genome_ids()
+
+
+def test_write_rejects_forged_vertex_pull_child_with_tampered_weight(tmp_path: Path) -> None:
+    """vertex_pull の親2個体は実在するが、`operator_params.weight` を
+    実際に使われた値と異なる値へすり替えた偽装子（coords は元の weight から
+    産出された値のまま）は、親からの再導出が別の coords/genome_id を生む
+    ため拒否される。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    ritsu, pjs, *_ = bootstrap.founder_genomes()
+    led.write(ritsu)
+    led.write(pjs)
+    genuine = operators.vertex_pull(ritsu, pjs, weight=0.4, vertex="user", pull=0.1)
+    forged = models.build_genome(
+        coords=genuine.coords, seed=genuine.seed, lineage=genuine.lineage, generation=genuine.generation,
+        parents=genuine.parents, operator="vertex_pull",
+        operator_params={"weight": 0.6, "vertex": "user", "pull": 0.1},
+        anchors_provenance=genuine.anchors_provenance,
+    )
+    with pytest.raises(ledger_mod.LedgerError):
+        led.write(forged)
+    assert forged.genome_id not in led.list_genome_ids()
 
 
 def test_read_rejects_renamed_file(tmp_path: Path, founder) -> None:

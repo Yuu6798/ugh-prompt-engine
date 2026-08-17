@@ -41,6 +41,27 @@ JSON や genome_id 不一致の実体が置かれていても検出できず pub
 `FileNotFoundError` / `json.JSONDecodeError` /
 `models.GenomeValidationError` / `LedgerError` はいずれも
 `LedgerError` へ正規化して fail-closed で拒否する。
+
+非 founder の publish 時は、上記でロード済みの実在親 + 子の
+`operator`/`operator_params` から `operators` モジュールの対応する純関数で
+子を決定論的に再導出し、再導出結果の `genome_id` が publish 対象の
+`genome_id` と一致することを検証する（PR #267 Codex R7 指摘1, 2026-08-17
+採用: 従来は親を `read()` で検証してもロード結果を捨てていたため、実在する
+親を正しく参照しつつ座標・generation・operator_params だけを無関係な値へ
+すり替えた「偽装子」でも publish が通った — 例えば実在親を parents[0] に
+指定したまま、無関係な座標や `generation=999` を宣言した genome でも、
+親の実在検証だけでは検出できない）。対応表: `drift`/`reseed`/`edge_walk`/
+`novelty_jump` は親1（`parents[0]` をロード）、`vertex_pull` は親2
+（`parents` の順にロード）。`founder` は再導出対象外（従来の parents 空
+検証のみ）。`genome_id` は coords/seed/lineage/generation/parents/
+operator/operator_params の6フィールドを被覆する内容アドレスのため
+`genome_id`比較で足りるが、`anchors_provenance` はこの6フィールドの外
+（genome_id 計算から除外— models.py 参照）にあるため、再導出結果が
+親から伝播した `anchors_provenance` と publish 対象の宣言値が一致する
+ことも別途比較する。再導出は operators.py が純関数・全パラメータが
+`operator_params` に記録済みであるため完全決定論であり、再導出関数が
+送出しうる `ValueError`（例: vertex_pull の両親 anchors_provenance
+不一致）も `LedgerError` へ正規化して fail-closed で拒否する。
 """
 from __future__ import annotations
 
@@ -50,12 +71,13 @@ import re
 import sys
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 import models  # noqa: E402
+import operators  # noqa: E402
 
 _GENOME_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
@@ -107,9 +129,10 @@ class Ledger:
         # lineage 座標整合）+ ファイル名↔内容の自己申告 ID 束縛検証まで
         # 働かせる。未 publish / typo / 破損 / ID 不一致のいずれも
         # fail-closed で拒否する。
+        loaded_parents: Dict[str, models.VoiceGenome] = {}
         for parent_id in genome.parents:
             try:
-                self.read(parent_id)
+                loaded_parents[parent_id] = self.read(parent_id)
             except FileNotFoundError:
                 raise LedgerError(
                     f"refusing to publish genome_id {genome.genome_id!r}: parent {parent_id!r} does "
@@ -122,6 +145,38 @@ class Ledger:
                     f"full ledger validation on read ({exc}) — a corrupted, tampered, or genome_id-"
                     "mismatched parent must not be treated as a valid publish target"
                 ) from exc
+
+        # publish 前検証（PR #267 Codex R7 指摘1）: 非 founder の子は、ロード
+        # 済みの実在親 + 子の operator/operator_params から operators モジュール
+        # の対応する純関数で決定論的に再導出し、再導出結果が publish 対象と
+        # （genome_id + anchors_provenance の両方で）一致することを検証する。
+        # 親の実在検証だけでは、実在親を参照しつつ座標/generation/params を
+        # 無関係な値へすり替えた偽装子を検出できないため。
+        if genome.operator != "founder":
+            try:
+                rederived = self._rederive_child(genome, loaded_parents)
+            except ValueError as exc:
+                raise LedgerError(
+                    f"refusing to publish genome_id {genome.genome_id!r}: deterministic re-derivation "
+                    f"via operators.{genome.operator}() from the loaded parent(s) raised {exc!r} — the "
+                    "declared operator_params cannot have produced this child from its declared parents"
+                ) from exc
+            if rederived.genome_id != genome.genome_id:
+                raise LedgerError(
+                    f"refusing to publish genome_id {genome.genome_id!r}: deterministic re-derivation "
+                    f"via operators.{genome.operator}() from the loaded parent(s) + declared "
+                    f"operator_params produced a different genome_id ({rederived.genome_id!r}) — the "
+                    "declared coords/generation/operator_params do not match what the operator would "
+                    "actually produce from the declared parents (forged child)"
+                ) from None
+            if rederived.anchors_provenance != genome.anchors_provenance:
+                raise LedgerError(
+                    f"refusing to publish genome_id {genome.genome_id!r}: deterministic re-derivation "
+                    f"via operators.{genome.operator}() propagates anchors_provenance="
+                    f"{rederived.anchors_provenance!r} from the loaded parent(s), but the publish "
+                    f"target declares anchors_provenance={genome.anchors_provenance!r} — genome_id does "
+                    "not cover anchors_provenance, so this mismatch would not otherwise be caught"
+                ) from None
 
         self.directory.mkdir(parents=True, exist_ok=True)
 
@@ -151,6 +206,41 @@ class Ledger:
             except OSError:
                 pass
         return path
+
+    def _rederive_child(
+        self, genome: models.VoiceGenome, loaded_parents: Dict[str, models.VoiceGenome]
+    ) -> models.VoiceGenome:
+        """publish 対象 `genome`（非 founder）を、`loaded_parents`（台帳から
+        `read()` 済みの実親）+ `genome.operator_params` から `operators`
+        モジュールの対応する純関数で決定論的に再導出する（PR #267 Codex R7
+        指摘1）。対応表: `drift`/`reseed`/`edge_walk`/`novelty_jump` は
+        `genome.parents[0]` の1親、`vertex_pull` は `genome.parents` の順に
+        2親。呼び出し元は `genome.operator != "founder"` を保証済みである
+        ことを前提とする。
+        """
+        params = genome.operator_params
+        if genome.operator == "vertex_pull":
+            parent_a = loaded_parents[genome.parents[0]]
+            parent_b = loaded_parents[genome.parents[1]]
+            return operators.vertex_pull(
+                parent_a, parent_b,
+                weight=params["weight"], vertex=params["vertex"], pull=params["pull"],
+            )
+
+        parent = loaded_parents[genome.parents[0]]
+        if genome.operator == "drift":
+            return operators.drift(parent, rng_seed=params["rng_seed"], step=params["step"])
+        if genome.operator == "reseed":
+            return operators.reseed(parent, new_seed=params["new_seed"])
+        if genome.operator == "edge_walk":
+            return operators.edge_walk(
+                parent, rng_seed=params["rng_seed"], edge=tuple(params["edge"]), step=params["step"]
+            )
+        if genome.operator == "novelty_jump":
+            return operators.novelty_jump(parent, rng_seed=params["rng_seed"])
+        raise LedgerError(  # pragma: no cover - 防御的（VALID_OPERATORS で事前拘束済み）
+            f"unsupported operator for re-derivation: {genome.operator!r}"
+        )
 
     def read(self, genome_id: str) -> models.VoiceGenome:
         path = self.path_for(genome_id)
