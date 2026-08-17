@@ -12,6 +12,9 @@
 - 台帳 shape が `test_genome_ledger_shape.py` の検証関数を通ること
   （検証ロジックを複製せず、同モジュールの関数をそのまま import して適用する）
 - 決定論（同一 seed → 同一結果、異なる seed → 異なるブラインド割当）
+- review #265（PR #265 Codex 第2波レビュー採用分）: P1 embed の形状・
+  有限性検証（切り詰め embed 拒否・NaN/Inf embed 拒否）、P2 重心座標の
+  非有限重み拒否（NaN/Inf 重み拒否）
 """
 from __future__ import annotations
 
@@ -96,6 +99,102 @@ def test_load_embed_vector_with_sha_matches_independent_sha256(tmp_path: Path) -
     assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# --- review #265 P1: embed の形状・有限性検証（fail-closed） ------------------
+
+
+def test_load_embed_vector_rejects_truncated_float_aligned_length(tmp_path: Path) -> None:
+    """383 要素分（float32 に整列した長さだが EMBED_DIM に満たない）の
+    切り詰められた embed は拒否される（従来は無検証で shape (383,) のまま
+    受理していた）。"""
+    vector = np.random.default_rng(1).standard_normal(ft.EMBED_DIM - 1).astype(np.float32)
+    path = tmp_path / "truncated.emb"
+    path.write_bytes(vector.tobytes())
+    with pytest.raises(ValueError, match=f"expected exactly {ft.EMBED_DIM}"):
+        ft.load_embed_vector(path)
+
+
+def test_load_embed_vector_rejects_oversized_float_aligned_length(tmp_path: Path) -> None:
+    vector = np.random.default_rng(2).standard_normal(ft.EMBED_DIM + 1).astype(np.float32)
+    path = tmp_path / "oversized.emb"
+    path.write_bytes(vector.tobytes())
+    with pytest.raises(ValueError, match=f"expected exactly {ft.EMBED_DIM}"):
+        ft.load_embed_vector(path)
+
+
+def test_load_embed_vector_rejects_nan_embed(tmp_path: Path) -> None:
+    vector = np.random.default_rng(3).standard_normal(ft.EMBED_DIM).astype(np.float32)
+    vector[5] = np.nan
+    path = tmp_path / "nan.emb"
+    path.write_bytes(vector.tobytes())
+    with pytest.raises(ValueError, match="non-finite"):
+        ft.load_embed_vector(path)
+
+
+def test_load_embed_vector_rejects_inf_embed(tmp_path: Path) -> None:
+    vector = np.random.default_rng(4).standard_normal(ft.EMBED_DIM).astype(np.float32)
+    vector[0] = np.inf
+    path = tmp_path / "inf.emb"
+    path.write_bytes(vector.tobytes())
+    with pytest.raises(ValueError, match="non-finite"):
+        ft.load_embed_vector(path)
+
+
+def test_load_embed_vector_with_sha_also_rejects_nan_embed(tmp_path: Path) -> None:
+    """`load_embed_vector_with_sha`（アンカー読み込みの実経路）も同じ
+    fail-closed 検証を通ること。"""
+    vector = np.random.default_rng(5).standard_normal(ft.EMBED_DIM).astype(np.float32)
+    vector[-1] = np.nan
+    path = tmp_path / "nan_with_sha.emb"
+    path.write_bytes(vector.tobytes())
+    with pytest.raises(ValueError, match="non-finite"):
+        ft.load_embed_vector_with_sha(path)
+
+
+def test_load_embed_vector_with_sha_also_rejects_truncated_embed(tmp_path: Path) -> None:
+    vector = np.random.default_rng(6).standard_normal(ft.EMBED_DIM - 10).astype(np.float32)
+    path = tmp_path / "truncated_with_sha.emb"
+    path.write_bytes(vector.tobytes())
+    with pytest.raises(ValueError, match=f"expected exactly {ft.EMBED_DIM}"):
+        ft.load_embed_vector_with_sha(path)
+
+
+def test_run_generate_rejects_nan_control_prior_embed(
+    tmp_path: Path, fake_anchor_paths: Dict[str, Path]
+) -> None:
+    """`--control-prior-embed` 経路（`_build_control_candidate` →
+    `load_embed_vector`）でも P1 の検証が効くこと。"""
+    import argparse
+
+    bad_prior = tmp_path / "prior_nan.emb"
+    prior_vector = np.random.default_rng(9).standard_normal(ft.EMBED_DIM).astype(np.float32)
+    prior_vector[3] = np.nan
+    bad_prior.write_bytes(prior_vector.tobytes())
+
+    args = argparse.Namespace(
+        cmd="generate",
+        ritsu_embed=str(fake_anchor_paths["ritsu"]),
+        pjs_embed=str(fake_anchor_paths["pjs"]),
+        user_embed=str(fake_anchor_paths["user"]),
+        out_dir=str(tmp_path / "out"),
+        seed=42,
+        batch_name="S3-batch1",
+        date="2026-08-17",
+        backbone_checkpoint="sha256:" + "4" * 64,
+        weights=[(0.5, 0.3, 0.2), (0.2, 0.5, 0.3), (0.3, 0.2, 0.5)],
+        voice_id_start=1,
+        generation=1,
+        rights_class=ft.RIGHTS_CLASS_TRIANGLE,
+        control_kind="prior",
+        control_anchor=None,
+        control_prior_embed=str(bad_prior),
+        control_prior_voice_id="VG-S2-004",
+        perturb_magnitude=0.0,
+        perturb_seed=None,
+    )
+    with pytest.raises(ValueError, match="non-finite"):
+        ft.run_generate(args)
+
+
 # --- 重心座標の数学 ------------------------------------------------------------
 
 
@@ -145,6 +244,76 @@ def test_barycentric_interpolate_rejects_negative_weight(
     e_r, e_p, e_u = fake_anchors["ritsu"], fake_anchors["pjs"], fake_anchors["user"]
     with pytest.raises(ValueError, match="negative weight"):
         ft.barycentric_interpolate(e_r, e_p, e_u, w_r, w_p, w_u)
+
+
+# --- review #265 P2: 重心座標の非有限重み拒否（simplex 検査より先に判定） ----
+
+
+@pytest.mark.parametrize(
+    "w_r,w_p,w_u",
+    [
+        (float("nan"), 0.5, 0.5),
+        (0.5, float("nan"), 0.5),
+        (0.5, 0.5, float("nan")),
+    ],
+)
+def test_barycentric_interpolate_rejects_nan_weight(
+    fake_anchors: Dict[str, np.ndarray], w_r: float, w_p: float, w_u: float
+) -> None:
+    """`nan < -atol` も `abs(nan+...-1.0) > atol` も常に False で素通り
+    していた穴の再現テスト（review #265 P2）。負重み・和=1 のどちらの
+    エラーメッセージでもなく、非有限性のエラーで拒否されること。"""
+    e_r, e_p, e_u = fake_anchors["ritsu"], fake_anchors["pjs"], fake_anchors["user"]
+    with pytest.raises(ValueError, match="non-finite weight"):
+        ft.barycentric_interpolate(e_r, e_p, e_u, w_r, w_p, w_u)
+
+
+@pytest.mark.parametrize(
+    "w_r,w_p,w_u",
+    [
+        (float("inf"), 0.5, 0.5),
+        (float("-inf"), 0.5, 0.5),
+        (0.5, float("inf"), 0.5),
+    ],
+)
+def test_barycentric_interpolate_rejects_inf_weight(
+    fake_anchors: Dict[str, np.ndarray], w_r: float, w_p: float, w_u: float
+) -> None:
+    e_r, e_p, e_u = fake_anchors["ritsu"], fake_anchors["pjs"], fake_anchors["user"]
+    with pytest.raises(ValueError, match="non-finite weight"):
+        ft.barycentric_interpolate(e_r, e_p, e_u, w_r, w_p, w_u)
+
+
+def test_run_generate_rejects_nan_cli_weights(
+    tmp_path: Path, fake_anchor_paths: Dict[str, Path]
+) -> None:
+    """CLI 経路（`--weights nan,0.5,0.5` 相当）で `run_generate` へ渡した
+    場合も P2 の検証で拒否されること。"""
+    import argparse
+
+    args = argparse.Namespace(
+        cmd="generate",
+        ritsu_embed=str(fake_anchor_paths["ritsu"]),
+        pjs_embed=str(fake_anchor_paths["pjs"]),
+        user_embed=str(fake_anchor_paths["user"]),
+        out_dir=str(tmp_path / "out"),
+        seed=42,
+        batch_name="S3-batch1",
+        date="2026-08-17",
+        backbone_checkpoint="sha256:" + "5" * 64,
+        weights=[(float("nan"), 0.5, 0.5), (0.2, 0.5, 0.3), (0.3, 0.2, 0.5)],
+        voice_id_start=1,
+        generation=1,
+        rights_class=ft.RIGHTS_CLASS_TRIANGLE,
+        control_kind="anchor",
+        control_anchor="ritsu",
+        control_prior_embed=None,
+        control_prior_voice_id=None,
+        perturb_magnitude=0.0,
+        perturb_seed=None,
+    )
+    with pytest.raises(ValueError, match="non-finite weight"):
+        ft.run_generate(args)
 
 
 def test_orthogonal_perturbation_vector_is_orthogonal_to_span(

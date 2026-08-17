@@ -100,6 +100,20 @@ import 自体が失敗する — `gate_synth_run4.py` と同じ制約）。本�
 - 隠しコントロールに「既判定個体」を使う運用（S2 の既判定 10 個体の実
   embed を run 4 個体と混合する）は、実 S2 embed ファイル（scratchpad 非
   コミット、本環境に非保有）を入力にした実測は未実施。
+
+## review #265（PR #265 Codex 第2波レビュー、採用済み）
+
+- **P1**: `load_embed_vector`/`load_embed_vector_with_sha` に fail-closed
+  検証を追加（`_validate_embed_vector`）。バイト列が `EMBED_DIM`(384) 個の
+  float32 に厳密に整列すること・全要素が有限（NaN/Inf 不可）であることを
+  アンカー embed・`--control-prior-embed` の両読み込み経路で全数検証する。
+  従来は切り詰められた float 整列長や NaN/Inf を含む破損 embed を無検証で
+  受理し、`candidate_*.emb` を成功出力してしまっていた。
+- **P2**: `barycentric_interpolate` の重み検証順序を変更し、負重み・和=1
+  検査より**先に**有限性検査を行う。NaN は Python の比較演算子が常に
+  `False` を返すため、`nan < -atol`（負重み検査）も
+  `abs(nan+...-1.0) > atol`（和=1 検査）もすり抜け、`--weights nan,0.5,0.5`
+  のような入力が simplex 検査全体を素通りしていた。
 """
 from __future__ import annotations
 
@@ -145,14 +159,44 @@ BLIND_LABELS: Tuple[str, str, str, str] = ("A", "B", "C", "D")
 # ---------------------------------------------------------------------------
 
 
+def _validate_embed_vector(vector: np.ndarray, *, source: str) -> None:
+    """review #265 P1: バイト列が `EMBED_DIM`(384) 個の float32 に**厳密に**
+    整列し、かつ全要素が有限（NaN/Inf 不可）であることを fail-closed で強制
+    する。従来はこの検証が無く、切り詰められた float 整列長（例: 383 要素分
+    のバイト数しかない破損ファイル）や NaN/Inf を含む embed をそのまま
+    受理して `candidate_*.emb` を成功出力してしまっていた（forge 成果物の
+    公開前に全数検証する設計判断 — PR #265 Codex 第2波レビュー採用）。
+    アンカー embed・`--control-prior-embed` の両方の読み込み経路
+    （`load_embed_vector`/`load_embed_vector_with_sha`）を通る。
+    """
+    if vector.shape != (EMBED_DIM,):
+        raise ValueError(
+            f"malformed embed at {source}: expected exactly {EMBED_DIM} float32 elements, "
+            f"got {vector.shape[0] if vector.ndim == 1 else vector.shape} "
+            f"(byte length not aligned to {EMBED_DIM} float32 values, or wrong dim — refusing to "
+            f"silently truncate/pad, fail-closed)"
+        )
+    if not np.all(np.isfinite(vector)):
+        n_nonfinite = int(np.count_nonzero(~np.isfinite(vector)))
+        raise ValueError(
+            f"malformed embed at {source}: contains {n_nonfinite} non-finite value(s) "
+            f"(NaN/Inf) out of {EMBED_DIM} — refusing to forge from a non-finite anchor/control "
+            f"embed, fail-closed"
+        )
+
+
 def load_embed_vector(path: Path) -> np.ndarray:
-    return np.frombuffer(path.read_bytes(), dtype=np.float32).copy()
+    vector = np.frombuffer(path.read_bytes(), dtype=np.float32).copy()
+    _validate_embed_vector(vector, source=str(path))
+    return vector
 
 
 def load_embed_vector_with_sha(path: Path) -> Tuple[np.ndarray, str]:
     data = path.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
-    return np.frombuffer(data, dtype=np.float32).copy(), digest
+    vector = np.frombuffer(data, dtype=np.float32).copy()
+    _validate_embed_vector(vector, source=str(path))
+    return vector, digest
 
 
 def vector_sha256(vector: np.ndarray) -> str:
@@ -175,7 +219,17 @@ def barycentric_interpolate(
     """`w_r*e_r + w_p*e_p + w_u*e_u`。重み `w_r+w_p+w_u=1` かつ全て `>=0`
     （三角形の閉じた内部 = 頂点・辺を含む 2-単体）を検証してから合成する。
     頂点そのもの（例: w_r=1, w_p=w_u=0）はアンカーを厳密に再現する。
+
+    review #265 P2: 有限性チェックを simplex 検査（負重み・和=1）より**先に**
+    行う。NaN は Python の `<`/`==` 比較が常に `False` を返すため、
+    `nan < -atol` も `abs(nan + ... - 1.0) > atol`（`nan > atol` も `False`）
+    もすり抜け、`--weights nan,0.5,0.5` のような入力が両チェックを素通り
+    してしまっていた（PR #265 Codex 第2波レビュー採用）。Inf も同様に
+    `total` を非有限化し和チェックをすり抜けうるため同じ扱いとする。
     """
+    for name, w in (("w_r", w_r), ("w_p", w_p), ("w_u", w_u)):
+        if not np.isfinite(w):
+            raise ValueError(f"non-finite weight rejected (barycentric requires finite w): {name}={w}")
     for name, w in (("w_r", w_r), ("w_p", w_p), ("w_u", w_u)):
         if w < -atol:
             raise ValueError(f"negative weight rejected (barycentric requires w>=0): {name}={w}")
