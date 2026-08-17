@@ -193,8 +193,9 @@ def discover_pairs(render_dir: Path) -> List[Tuple[str, Path, Path]]:
 def _snapshot_wav_pairs(
     pairs: List[Tuple[str, Path, Path]], snapshot_dir: Path
 ) -> List[Tuple[str, Path, Path]]:
-    """P1 修正 (review #265 R7): 各ペアの wav を `snapshot_dir` へ 1 回だけ
-    コピーし、`(stem, snapshot_wav_path, csv_path)` の列を返す。
+    """P1 修正 (review #265 R7・R9 で csv も対象化): 各ペアの wav **と timing
+    csv の両方**を `snapshot_dir` へ 1 回だけコピーし、
+    `(stem, snapshot_wav_path, snapshot_csv_path)` の列を返す。
 
     旧実装は `render_dir` 原本の同一 wav を `_wav_duration_seconds`
     （duration 整合検査、`build_transcription_row` 経由）と
@@ -208,14 +209,28 @@ def _snapshot_wav_pairs(
     ハッシュにも変換入力にも使う」原則と同型。convert_d3 には台帳照合が無い
     ため sha256 計算は不要で、`shutil.copy2` による単一コピーのみで足りる）。
 
-    `stem`/`wav_path.name` は `render_dir` 直下の非再帰 glob（`discover_pairs`）
-    由来のため、同一 `snapshot_dir` 内でファイル名衝突は起きない。
+    R9 P2 修正: R7 時点では wav のみを snapshot し、timing csv は
+    `render_dir` 原本パスのまま `build_transcription_row`（`_read_timing_rows`
+    経由）へ渡していた。wav の snapshot 取得と csv の読み取りは別タイミング
+    のため、その間に `render_dir` の csv が書き換わると「新しい wav の
+    duration/resample 結果」と「古い（または新しい、いずれにせよ wav とは
+    別世代の）csv 由来の ph_seq/ph_dur/note_seq」が混ざった transcriptions.csv
+    行が公開され得た（wav と csv が同一世代であるべき、という pair の前提が
+    壊れる）。csv も wav と同じ単一コピーで snapshot_dir へ写し、以後
+    `_read_timing_rows` はこの snapshot のみを読む——wav/csv どちらも
+    `render_dir` 原本には二度と触れない。
+
+    `stem`/`wav_path.name`/`csv_path.name` は `render_dir` 直下の非再帰 glob
+    （`discover_pairs`）由来のため、同一 `snapshot_dir` 内でファイル名衝突は
+    起きない（拡張子が異なるため wav/csv 間でも衝突しない）。
     """
     out: List[Tuple[str, Path, Path]] = []
     for stem, wav_path, csv_path in pairs:
         snapshot_wav = snapshot_dir / wav_path.name
         shutil.copy2(wav_path, snapshot_wav)
-        out.append((stem, snapshot_wav, csv_path))
+        snapshot_csv = snapshot_dir / csv_path.name
+        shutil.copy2(csv_path, snapshot_csv)
+        out.append((stem, snapshot_wav, snapshot_csv))
     return out
 
 

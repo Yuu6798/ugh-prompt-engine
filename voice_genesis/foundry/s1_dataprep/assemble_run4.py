@@ -113,10 +113,34 @@ D1 (PJS) の実体はローカルに存在しないため、テスト・ロー�
 `--pjs-is-fixture` を指定すると `assembly_manifest.json` にその旨が明記される。
 **本番実行時は `--pjs-raw-dir` を実 PJS 変換済み raw dir（`convert_pjs.py`
 の出力）へ差し替えて `--pjs-is-fixture` を外し、再実行する必要がある。**
+
+## `refresh-config-pin` サブコマンド（review #265 R9 P1 追加）
+
+`S3_RUN4_RUNBOOK.md` §4 は「LR/finetune/precision/勾配クリップの 4 項目は
+`run4_config_datasets.yaml`（live config）のみへ手動移植せよ」と指示するが、
+その手動編集を `.normalized.yaml`（pin 副本。実行者 home 非依存の記録用
+コピー）へ反映する手段が無く、pin が編集前のまま取り残されて「実際に
+実行された実験」を証明できなくなっていた。本サブコマンドは手動編集後の
+live config から `.normalized.yaml` を再生成する:
+
+```bash
+python voice_genesis/foundry/s1_dataprep/assemble_run4.py refresh-config-pin \
+    --config <out-dir>/run4_config_datasets.yaml
+```
+
+パス系フィールド（`dictionaries.ja`/`datasets[].raw_data_dir`/
+`binary_data_dir`）のみを正規化し、それ以外のキー・値（手動追記した
+LR/finetune/precision/勾配クリップを含む）は live config と完全一致する
+ことを書き込み後に再読込して検証する（`_semantic_diff`）。加えて
+`datasets[].speaker`/`spk_id` が既定マッピング（ritsu=0/pjs=1/user=2）から
+ずれていないかも検査する。不一致はいずれも `ConfigPinMismatchError` で
+fail-closed し、`.normalized.yaml` へは一切書き込まない。運用手順は
+「手動編集 → `refresh-config-pin` → 学習開始」（`S3_RUN4_RUNBOOK.md` §4）。
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -126,6 +150,8 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+
+import yaml
 
 # --- sibling import: build_dataset.py / convert_d3.py（同ディレクトリ。
 # read-only import で再利用する。既存ファイルには一切触れない。
@@ -167,6 +193,170 @@ class GateValidationError(ValueError):
             f"{len(self.problems)} problem(s) found during 3-speaker gate validation "
             f"(fail-closed, nothing published): {self.problems[:10]}"
         )
+
+
+class RefreshConfigPinError(ValueError):
+    """P1 修正 (review #265 R9): `refresh-config-pin` の入力 live config が
+    存在しない・YAML として読めない・`datasets` を持たない等、再生成の前提が
+    満たされない場合に送出する（fail-closed。`.normalized.yaml` へは一切
+    書き込まない）。"""
+
+
+class ConfigPinMismatchError(ValueError):
+    """P1 修正 (review #265 R9): 再生成した `.normalized.yaml` が live config
+    と「パス系フィールド（`dictionaries.ja`/`datasets[].raw_data_dir`/
+    `binary_data_dir`）を除いて完全一致」しなかった場合、または
+    `datasets[].speaker`/`spk_id` が既定マッピング（`SPK_IDS`）からずれて
+    いた場合に送出する（fail-closed。YAML 往復でのデータ破損・正規化ロジック
+    が意図しない箇所へ波及するバグ・手動編集での datasets 節の事故変更を
+    検出する安全網。`.normalized.yaml` へは一切書き込まない）。"""
+
+    def __init__(self, diffs: Sequence[str]) -> None:
+        self.diffs = list(diffs)
+        super().__init__(
+            f"{len(self.diffs)} semantic difference(s) between live config and the "
+            "regenerated normalized copy (fail-closed, normalized copy not published): "
+            f"{self.diffs[:10]}"
+        )
+
+
+# パス系フィールドの位置（`build_dataset.build_config_yaml` の `path_fmt` が
+# 触れるフィールドと同じ 3 箇所）。`_semantic_diff` はこれらの位置でのみ
+# live/normalized の値の相違を許容する。
+def _is_normalized_path_field_location(path: Tuple[object, ...]) -> bool:
+    if path in (("dictionaries", "ja"), ("binary_data_dir",)):
+        return True
+    if len(path) == 3 and path[0] == "datasets" and path[2] == "raw_data_dir":
+        return True
+    return False
+
+
+def _semantic_diff(
+    live: object, normalized: object, path: Tuple[object, ...] = ()
+) -> List[str]:
+    """`live`/`normalized` を再帰的に比較し、パス系フィールド
+    （`_is_normalized_path_field_location`）を除いて完全一致することを
+    確認する。不一致箇所の説明文字列のリストを返す（空リスト = 完全一致）。
+    """
+    if _is_normalized_path_field_location(path):
+        return []
+    location = ".".join(str(p) for p in path) or "<root>"
+    if isinstance(live, dict) and isinstance(normalized, dict):
+        if set(live.keys()) != set(normalized.keys()):
+            return [
+                f"{location}: key set differs (live={sorted(live.keys())}, "
+                f"normalized={sorted(normalized.keys())})"
+            ]
+        diffs: List[str] = []
+        for key in live:
+            diffs += _semantic_diff(live[key], normalized[key], path + (key,))
+        return diffs
+    if isinstance(live, list) and isinstance(normalized, list):
+        if len(live) != len(normalized):
+            return [f"{location}: list length differs ({len(live)} vs {len(normalized)})"]
+        diffs = []
+        for i, (a, b) in enumerate(zip(live, normalized)):
+            diffs += _semantic_diff(a, b, path + (i,))
+        return diffs
+    if live != normalized:
+        return [f"{location}: value differs (live={live!r}, normalized={normalized!r})"]
+    return []
+
+
+def _load_yaml_config(path: Path) -> Dict[str, object]:
+    """YAML config を読み、`dict` かつ `datasets` がリストであることを
+    検査する（`refresh_config_pin` の入力/自己検算再読込の両方から使う共通
+    ヘルパー）。"""
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise RefreshConfigPinError(f"{path}: not a YAML mapping (fail-closed)")
+    if not isinstance(data.get("datasets"), list):
+        raise RefreshConfigPinError(f"{path}: 'datasets' is not a list (fail-closed)")
+    return data
+
+
+def _normalize_config_dict(live_config: Dict[str, object], config_dir: Path) -> Dict[str, object]:
+    """`live_config` の deep copy を作り、パス系フィールド
+    （`dictionaries.ja`/`datasets[].raw_data_dir`/`binary_data_dir`）だけを
+    `build_dataset.normalize_path_field` で置換した辞書を返す。それ以外の
+    キー・値（LR/finetune/precision/勾配クリップ等、手動追記されたフィールド
+    を含む）は一切変更しない。"""
+    normalized = copy.deepcopy(live_config)
+    dictionaries = normalized.get("dictionaries")
+    if isinstance(dictionaries, dict) and "ja" in dictionaries:
+        dictionaries["ja"] = build_dataset.normalize_path_field(Path(dictionaries["ja"]), config_dir)
+    if "binary_data_dir" in normalized:
+        normalized["binary_data_dir"] = build_dataset.normalize_path_field(
+            Path(normalized["binary_data_dir"]), config_dir
+        )
+    for entry in normalized.get("datasets") or []:
+        if isinstance(entry, dict) and "raw_data_dir" in entry:
+            entry["raw_data_dir"] = build_dataset.normalize_path_field(
+                Path(entry["raw_data_dir"]), config_dir
+            )
+    return normalized
+
+
+def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> Path:
+    """P1 修正 (review #265 R9): 手動編集後の live config
+    (`run4_config_datasets.yaml`) から `.normalized.yaml` pin 副本を再生成
+    する（公開エントリポイント。モジュール docstring「`refresh-config-pin`
+    サブコマンド」節参照）。
+
+    live config を読み、パス系フィールドだけを `config_dir` 基準の相対パス
+    へ正規化した版を staging tempfile へ書き出す。書き込み後に再読込し、
+    live config と「パス系フィールドを除いて完全一致」することを
+    `_semantic_diff` で検査する——一致しなければ `ConfigPinMismatchError` で
+    fail-closed し、`.normalized.yaml` へは一切書き込まない（staging
+    tempfile のみで完結・失敗時は削除。`assemble()` の「全構築してから公開」
+    規約と同型）。加えて `datasets[].speaker`/`spk_id` が既定マッピング
+    （`SPK_IDS`）と一致することも検査する（手動編集で `datasets:` 節を誤って
+    触ってしまう典型的な事故の検出）。
+
+    `config_dir`（省略時 `config_path.parent`）: パス正規化の基準ディレクトリ
+    （`normalize_path_field` の `config_dir` 引数と同じ意味）。通常
+    `run4_config_datasets.yaml` は `<out-dir>` 直下にあるため省略でよい。
+
+    戻り値は書いた `.normalized.yaml` のパス。
+    """
+    config_path = Path(config_path)
+    if not config_path.exists():
+        raise RefreshConfigPinError(f"{config_path}: not found (fail-closed)")
+    config_dir = Path(config_dir) if config_dir is not None else config_path.parent
+
+    live = _load_yaml_config(config_path)
+
+    live_spk_map = {
+        entry["speaker"]: entry["spk_id"]
+        for entry in live.get("datasets") or []
+        if isinstance(entry, dict) and "speaker" in entry and "spk_id" in entry
+    }
+    if live_spk_map != SPK_IDS:
+        raise ConfigPinMismatchError(
+            [f"datasets speaker/spk_id mapping does not match SPK_IDS: "
+             f"expected={SPK_IDS}, actual={live_spk_map}"]
+        )
+
+    expected_normalized = _normalize_config_dict(live, config_dir)
+
+    normalized_path = config_path.with_name(config_path.name + ".normalized.yaml")
+    tmp_path = normalized_path.parent / f"{normalized_path.name}.tmp-{os.getpid()}"
+    text = yaml.safe_dump(expected_normalized, allow_unicode=True, sort_keys=False)
+    try:
+        tmp_path.write_text(text, encoding="utf-8")
+        reread = _load_yaml_config(tmp_path)
+        diffs = _semantic_diff(live, reread)
+        if diffs:
+            raise ConfigPinMismatchError(diffs)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+    os.replace(tmp_path, normalized_path)
+    return normalized_path
 
 
 def _read_csv_rows(path: Path) -> Tuple[List[str], List[List[str]]]:
@@ -587,7 +777,12 @@ def assemble(
     return manifest
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def _main_assemble(argv: Optional[Sequence[str]] = None) -> int:
+    """既定のサブコマンド（省略可）: 3 話者アセンブリ + config 生成。旧
+    `main()` の全内容（review #265 R9 でサブコマンド分岐の追加に伴い改名。
+    後方互換のため引数・挙動は完全不変 — 既存の runbook 呼び出し
+    （`--ritsu-raw-dir ...` から始まる従来どおりのフラット引数）は
+    `main()` がそのままここへ委譲する）。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--ritsu-raw-dir", type=Path, required=True,
@@ -657,6 +852,48 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
     print("assembly OK")
     return 0
+
+
+def _main_refresh_config_pin(argv: Optional[Sequence[str]] = None) -> int:
+    """`refresh-config-pin` サブコマンド本体（review #265 R9 P1。モジュール
+    docstring「`refresh-config-pin` サブコマンド」節参照）。"""
+    parser = argparse.ArgumentParser(
+        prog="assemble_run4.py refresh-config-pin",
+        description=(
+            "手動編集後の run4_config_datasets.yaml（live config）から "
+            ".normalized.yaml pin 副本を再生成する（review #265 R9 P1 対応）。"
+        ),
+    )
+    parser.add_argument(
+        "--config", type=Path, required=True,
+        help="編集済みの run4_config_datasets.yaml（live config）",
+    )
+    parser.add_argument(
+        "--config-dir", type=Path, default=None,
+        help="パス正規化の基準ディレクトリ（省略時 --config の親ディレクトリ）",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        normalized_path = refresh_config_pin(args.config, config_dir=args.config_dir)
+    except (RefreshConfigPinError, ConfigPinMismatchError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"wrote {normalized_path}")
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """CLI エントリポイント。第 1 引数が `refresh-config-pin`（`--` で始まら
+    ない裸のトークン）なら R9 で追加したサブコマンドへ委譲し、それ以外
+    （既存フラグの `--ritsu-raw-dir ...` から始まる従来どおりの呼び出し）は
+    そのまま `_main_assemble` へ渡す——既存の全 CLI 呼び出し・`assemble()`
+    呼び出しは完全不変（後方互換）。"""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "refresh-config-pin":
+        return _main_refresh_config_pin(argv[1:])
+    return _main_assemble(argv)
 
 
 if __name__ == "__main__":

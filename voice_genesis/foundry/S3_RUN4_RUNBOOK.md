@@ -252,6 +252,26 @@ LR/finetune/精度/勾配クリップの 4 項目のみを run 3 実 config.yaml
 自動導出可能な節は生成器が担い、run 3 由来で自動導出できない 4 項目は
 クローの手動移植に委ねる）。
 
+**この 4 項目の手動移植は `run4_config_datasets.yaml`（live config）のみへ
+行い、その直後に `refresh-config-pin` サブコマンドを実行して
+`.normalized.yaml`（pin 用コピー）を再生成すること**（review #265 R9 で
+新設・実装済み）:
+
+```bash
+python voice_genesis/foundry/s1_dataprep/assemble_run4.py refresh-config-pin \
+    --config <out-dir>/run4_config_datasets.yaml
+```
+
+手動編集を live config のみへ加えて pin 副本を放置すると、`.normalized.yaml`
+は編集前の内容のまま取り残され、実行された学習の実 config を証明する pin
+として機能しなくなる（R9 で判明した R7 の残穴）。`refresh-config-pin` は
+`datasets:`/`num_spk` 等のパス系フィールドを再正規化した上で、パス系以外の
+全キー・全値が live config と完全一致すること（＝手動追記した 4 項目が
+そのまま反映されていること）と、`datasets[].speaker`/`spk_id` の対応が
+既定マッピング（ritsu=0/pjs=1/user=2）から崩れていないことを再読込検証し、
+不一致があれば `.normalized.yaml` へは一切書き込まずに fail-closed する。
+運用手順は **「手動編集 → `refresh-config-pin` → 学習開始」** の順を厳守する。
+
 `results_s1/s1_record_2026-08-15.md` の記述（§ run3 起動・§ config.yaml の
 逸脱と対処、行 452-495）によれば、run 3 ではこれらは **GPU インスタンス側で
 `config.yaml` を手動編集**して設定された:

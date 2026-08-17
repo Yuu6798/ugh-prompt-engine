@@ -330,6 +330,16 @@ def _atomic_write_wav_and_timing(
     になり得るため）。よって `had_previous` は依然 Python 変数で保持するが、
     それ以外の巻き戻し判定（どこまで進んだか）は全て `backup_path.exists()`/
     `new_path.exists()` というファイルシステム状態から導く。
+
+    P1 修正 (review #265 R9): `os.rename`/`os.replace` はファイルとディレクトリ
+    を区別しない。`out_path`/`timing_out_path` が既存のディレクトリを指す
+    場合、退避 rename がディレクトリを丸ごと `wav_backup`/`csv_backup` へ
+    移動したうえで `os.replace` が新規 WAV/CSV ファイルを作り「公開成功」を
+    返してしまい、元のディレクトリの中身は誰も見に行かない退避名へ静かに
+    追いやられたまま失われる。公開直前（退避 rename の前）に両宛先が
+    「不在 or 通常ファイル」であることを検査し、ディレクトリ（またはそれ
+    以外の非通常ファイル）なら退避 rename を一切試みずに fail-closed で
+    拒否する。
     """
     out_path = Path(out_path)
     timing_out_path = Path(timing_out_path)
@@ -357,6 +367,26 @@ def _atomic_write_wav_and_timing(
     csv_had_previous = timing_out_path.exists()
 
     try:
+        # P1 修正 (review #265 R9): 公開直前に両宛先が「不在 or 通常ファイル」
+        # であることを検査する。`out_path`/`timing_out_path` が既存の
+        # ディレクトリ（またはそれ以外の非通常ファイル）を指す場合、
+        # `os.rename` はファイル/ディレクトリを区別しないため
+        # `os.rename(out_path, wav_backup)` はディレクトリを丸ごと退避先へ
+        # 移動してしまい、続く `os.replace(wav_tmp, out_path)` が新規 WAV
+        # ファイルを作って「公開成功」を返す——退避されたディレクトリと
+        # その中身は `wav_backup`/`csv_backup` という誰も見に行かない名前へ
+        # 静かに追いやられたまま失われる。既存ディレクトリを検出したら
+        # 退避 rename を一切試みる前に fail-closed で拒否する（この検査は
+        # 下の 4 ステップと同じ try 配下に置くため、失敗時は既存の
+        # `except BaseException` 巻き戻しがそのまま安全に効く——`backup_path`
+        # がまだ存在しないため「何もしなくてよい」分岐を通る）。
+        for _path, _had_previous in ((out_path, wav_had_previous), (timing_out_path, csv_had_previous)):
+            if _had_previous and not _path.is_file():
+                raise OutputCollisionError(
+                    f"{_path} は既存のディレクトリ（または通常ファイルではない何か）"
+                    "です。退避 rename がその中身ごと喪失させ得るため fail-closed で"
+                    "拒否します（review #265 R9 P1 対応）。"
+                )
         # 退避 rename（あれば）→ 両方公開、の 4 ステップを単一トランザクション
         # として扱う（R5 修正: 退避 rename もこの try 配下に含める）。
         if wav_had_previous:

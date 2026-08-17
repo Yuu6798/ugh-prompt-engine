@@ -399,6 +399,129 @@ def test_run4_config_assembly_manifest_bytes_unchanged_by_config_generation(tmp_
     }
 
 
+# ---------------------------------------------------------------------------
+# 1.6 P1 修正 (review #265 R9): `refresh-config-pin` — 手動編集後の
+# `.normalized.yaml` pin 副本再生成。「編集 → refresh → 等価検証 pass /
+# 意味的差分で fail」の両方向をコーディネータが明示要求。
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_config_pin_after_manual_edit_regenerates_normalized_copy(tmp_path: Path) -> None:
+    """runbook §4 が指示する手動編集（LR/finetune/precision/勾配クリップの
+    追記）を live config へ加えた後 `refresh_config_pin()` を呼ぶと、
+    (1) 例外を送出せず成功し、(2) 再生成された `.normalized.yaml` が
+    手動追記されたキーをそのまま含み、(3) パス系フィールドは引き続き
+    `out_dir` 基準の相対パスへ正規化されていることを確認する
+    （「編集 → refresh → 等価検証 pass」方向）。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+    normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
+    stale_normalized_text_before_edit = normalized_path.read_text(encoding="utf-8")
+
+    # runbook §4 の手動移植を模す: LR/finetune/precision/clip を live config
+    # のみへ追記する（正規化コピーは追随しないため、この時点で pin は stale）。
+    with open(config_path, "a", encoding="utf-8") as f:
+        f.write("lr: 0.0001\n")
+        f.write("finetune_ckpt_path: /some/finetune/ckpt.ckpt\n")
+        f.write("precision: 16-mixed\n")
+        f.write("clip_grad_norm: 1.0\n")
+
+    result_path = assemble_run4.refresh_config_pin(config_path)
+
+    assert result_path == normalized_path
+    refreshed = yaml.safe_load(normalized_path.read_text(encoding="utf-8"))
+    assert refreshed["lr"] == 0.0001
+    assert refreshed["finetune_ckpt_path"] == "/some/finetune/ckpt.ckpt"
+    assert refreshed["precision"] == "16-mixed"
+    assert refreshed["clip_grad_norm"] == 1.0
+    # パス系フィールドは引き続き相対パス（正規化維持）
+    assert not Path(refreshed["dictionaries"]["ja"]).is_absolute()
+    for entry in refreshed["datasets"]:
+        assert not Path(entry["raw_data_dir"]).is_absolute()
+    # 手動追記前の pin から中身が変わっている（refresh が実際に再生成した証拠）
+    assert normalized_path.read_text(encoding="utf-8") != stale_normalized_text_before_edit
+
+
+def test_refresh_config_pin_rejects_semantic_mismatch_from_datasets_tampering(tmp_path: Path) -> None:
+    """`datasets[].speaker`/`spk_id` の対応が既定マッピング（`SPK_IDS`）から
+    ずれている（例: 手動編集の際に誤って spk_id を書き換えた）場合、
+    `refresh_config_pin()` は `ConfigPinMismatchError` を送出し、
+    `.normalized.yaml` を一切書き換えない（「意味的差分で fail」方向）。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+    normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
+    normalized_text_before = normalized_path.read_text(encoding="utf-8")
+
+    live_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    for entry in live_config["datasets"]:
+        if entry["speaker"] == "user":
+            entry["spk_id"] = 99  # 誤編集: SPK_IDS["user"] == 2 からずれる
+    config_path.write_text(yaml.safe_dump(live_config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(assemble_run4.ConfigPinMismatchError):
+        assemble_run4.refresh_config_pin(config_path)
+
+    # fail-closed: 正規化コピーは一切変更されない
+    assert normalized_path.read_text(encoding="utf-8") == normalized_text_before
+    assert list(config_path.parent.glob("*.tmp-*")) == []
+
+
+def test_refresh_config_pin_rejects_unrelated_field_drift_between_live_and_reread(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """path フィールド以外で live config と再読込した正規化コピーとの間に
+    意味的な差分が生じた場合（YAML シリアライズ往復の破損や意図しない
+    フィールド変異を模す）も `ConfigPinMismatchError` で fail-closed する
+    ことを、`_normalize_config_dict` を monkeypatch して確認する。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+    normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
+    normalized_text_before = normalized_path.read_text(encoding="utf-8")
+
+    real_normalize = assemble_run4._normalize_config_dict
+
+    def _corrupting_normalize(live_config, config_dir):
+        normalized = real_normalize(live_config, config_dir)
+        normalized["max_updates"] = -1  # path フィールド以外を意図せず変異させる
+        return normalized
+
+    monkeypatch.setattr(assemble_run4, "_normalize_config_dict", _corrupting_normalize)
+
+    with pytest.raises(assemble_run4.ConfigPinMismatchError):
+        assemble_run4.refresh_config_pin(config_path)
+
+    assert normalized_path.read_text(encoding="utf-8") == normalized_text_before
+    assert list(config_path.parent.glob("*.tmp-*")) == []
+
+
+def test_refresh_config_pin_missing_config_fails_closed(tmp_path: Path) -> None:
+    """live config が存在しない場合は `RefreshConfigPinError` で fail-closed
+    する。"""
+    missing = tmp_path / "does_not_exist.yaml"
+    with pytest.raises(assemble_run4.RefreshConfigPinError):
+        assemble_run4.refresh_config_pin(missing)
+
+
+def test_main_refresh_config_pin_subcommand_end_to_end(tmp_path: Path, capsys) -> None:
+    """`assemble_run4.py refresh-config-pin --config <path>` の CLI 経路が
+    `refresh_config_pin()` と同じ結果を公開し、既存の（サブコマンド無指定）
+    `main()` 呼び出し形式は従来どおり `_main_assemble` へ委譲されることを
+    確認する（後方互換性）。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+    with open(config_path, "a", encoding="utf-8") as f:
+        f.write("lr: 0.0002\n")
+
+    exit_code = assemble_run4.main(["refresh-config-pin", "--config", str(config_path)])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "wrote" in captured.out
+
+    normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
+    refreshed = yaml.safe_load(normalized_path.read_text(encoding="utf-8"))
+    assert refreshed["lr"] == 0.0002
+
+
 def _make_empty_pjs_raw_dir(root: Path) -> Path:
     """pjs の空データセット（ヘッダのみ・データ行 0 件）フィクスチャ。"""
     out = root / "pjs_raw_empty"

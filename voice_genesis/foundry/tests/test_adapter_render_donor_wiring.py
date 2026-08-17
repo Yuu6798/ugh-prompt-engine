@@ -1635,6 +1635,69 @@ def test_atomic_write_wav_and_timing_restores_csv_when_wav_backup_rename_fails(
     assert list(tmp_path.glob("*.tmp")) == []
 
 
+# ---------------------------------------------------------------------------
+# P1 修正 (review #265 R9): out_path/timing_out_path が既存ディレクトリを
+# 指す場合、退避 rename がディレクトリごと喪失させ得るため fail-closed で
+# 拒否する（`os.rename`/`os.replace` はファイル/ディレクトリを区別しない）
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_wav_and_timing_rejects_out_path_that_is_a_directory(tmp_path: Path) -> None:
+    """`out_path` が既存ディレクトリの場合、退避 rename を一切試みずに
+    fail-closed で拒否する（ディレクトリの中身を保護する）。"""
+    out_path = tmp_path / "out.wav"
+    out_path.mkdir()
+    (out_path / "important_existing_file.txt").write_bytes(b"do not lose me")
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+
+    with pytest.raises(rd.OutputCollisionError, match="ディレクトリ"):
+        rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows, timing_out_path)
+
+    # ディレクトリとその中身が無傷のまま残る（退避 rename が一切走っていない）。
+    assert out_path.is_dir()
+    assert (out_path / "important_existing_file.txt").read_bytes() == b"do not lose me"
+    assert not timing_out_path.exists()
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_rejects_timing_out_path_that_is_a_directory(tmp_path: Path) -> None:
+    """`timing_out_path` が既存ディレクトリの場合も同様に fail-closed で
+    拒否し、`out_path` 側も一切公開しない（片方だけ公開する非対称も防ぐ）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    timing_out_path.mkdir()
+    (timing_out_path / "important_existing_file.txt").write_bytes(b"do not lose me")
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+
+    with pytest.raises(rd.OutputCollisionError, match="ディレクトリ"):
+        rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows, timing_out_path)
+
+    assert timing_out_path.is_dir()
+    assert (timing_out_path / "important_existing_file.txt").read_bytes() == b"do not lose me"
+    assert not out_path.exists()  # out_path 側も公開されない（非対称防止）
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_accepts_regular_files_at_both_destinations(tmp_path: Path) -> None:
+    """通常ファイル（ディレクトリでない）が既に存在する場合は誤検知せず、
+    従来どおり退避 → 公開が成功する（対照テスト）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    output_sha256 = rd._atomic_write_wav_and_timing(
+        np.ones(10), 24000, out_path, rows_v2, timing_out_path
+    )
+    assert output_sha256 == hashlib.sha256(out_path.read_bytes()).hexdigest()
+    assert out_path.is_file()
+    assert timing_out_path.is_file()
+
+
 def test_atomic_write_wav_and_timing_matches_atomic_write_wav_bytes(tmp_path: Path) -> None:
     """timing CSV 経由の公開でも、WAV バイト列そのものは単独経路
     (`_atomic_write_wav`) と完全一致する（合成結果に一切影響しないことの

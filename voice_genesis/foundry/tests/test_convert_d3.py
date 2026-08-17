@@ -252,6 +252,68 @@ def test_convert_publishes_snapshot_bytes_even_if_render_dir_wav_mutated_after_s
     assert published_bytes != direct_from_mutated.read_bytes()
 
 
+def test_snapshot_wav_pairs_also_copies_timing_csv(tmp_path: Path) -> None:
+    """P2 修正 (review #265 R9): `_snapshot_wav_pairs` は wav だけでなく
+    timing csv も `snapshot_dir` へコピーし、戻り値の csv_path が
+    `render_dir` 原本ではなくスナップショットを指す。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+
+    pairs = convert_d3.discover_pairs(render_dir)
+    snapshot_pairs = convert_d3._snapshot_wav_pairs(pairs, snapshot_dir)
+
+    _stem, snap_wav, snap_csv = snapshot_pairs[0]
+    assert snap_wav.parent == snapshot_dir
+    assert snap_csv.parent == snapshot_dir
+    assert snap_csv != render_dir / "cellA.csv"
+    assert snap_csv.read_bytes() == (render_dir / "cellA.csv").read_bytes()
+
+
+@_ffmpeg_required
+def test_convert_publishes_snapshot_csv_even_if_render_dir_csv_mutated_after_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P2 修正 (review #265 R9) の核心シナリオ: wav の snapshot 取得後（csv も
+    同時に snapshot 済み）に `render_dir` 原本の timing csv が別内容へ差し
+    替わっても、公開される `transcriptions.csv` 行は snapshot 取得時点の csv
+    内容のまま変化しない（旧実装は csv を snapshot せず `render_dir` 原本を
+    都度読んでいたため、wav と別世代の csv が混ざって公開され得た）。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    out_dir = tmp_path / "out"
+
+    real_read_timing_rows = convert_d3._read_timing_rows
+    mutated = {"done": False}
+
+    def _mutate_render_dir_csv_then_read(stem, csv_path):
+        # この時点で `csv_path` は既にスナップショットのはず（render_dir
+        # 原本ではない）。副作用として render_dir 原本の csv を全く別内容へ
+        # 差し替える。
+        if not mutated["done"]:
+            _write_timing_csv(
+                render_dir / "cellA.csv",
+                [_note_row(0, midi=72.0, ph_seq="z", ph_dur_sec="2.500000", ph_num=1, note_dur_sec=2.5)],
+            )
+            mutated["done"] = True
+        return real_read_timing_rows(stem, csv_path)
+
+    monkeypatch.setattr(convert_d3, "_read_timing_rows", _mutate_render_dir_csv_then_read)
+
+    convert_d3.convert(render_dir, out_dir)
+    assert mutated["done"]
+
+    with open(out_dir / "transcriptions.csv", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    row = next(r for r in rows if r["name"] == "cellA")
+    # 差し替え後の内容（"z" 単独）ではなく、snapshot 取得時点の元の内容
+    # （"a SP k a"）が公開されている。
+    assert row["ph_seq"] == "a SP k a"
+
+
 # ---------------------------------------------------------------------------
 # 2. ペア不整合 fail-closed
 # ---------------------------------------------------------------------------
