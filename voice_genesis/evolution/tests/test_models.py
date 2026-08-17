@@ -175,17 +175,17 @@ def test_genome_from_dict_rejects_lineage_coords_mismatch() -> None:
 
 def test_genome_from_dict_allows_novelty_regardless_of_coords() -> None:
     """NOVELTY は座標によらず許容される（novelty_jump 由来の1世代限定隔離
-    — DESIGN_VG_E0.md §3.1）。lineage を NOVELTY にすると genome_id も
-    （lineage が6フィールドの1つのため）変わるので併せて再計算する。
-    operator は NOVELTY 許容操作（novelty_jump/vertex_pull）の一方でなければ
-    ならない（Codex 指摘C）ため novelty_jump を使う — 座標は元 drift 個体の
-    ものをそのまま流用し「座標によらず許容される」ことを確認する。"""
+    — DESIGN_VG_E0.md §3.1）。operator=novelty_jump は build_genome() 経由でも
+    lineage=NOVELTY を必須とする（Codex 指摘A, PR #267 R4）ため、まず正しい
+    NOVELTY 個体を構築してから coords だけを「NOVELTY でなければ L-R になる
+    はずの」値へ書き換え、genome_id を再計算する — これで「座標によらず
+    許容される」ことをローダー側で直接確認できる。"""
     base = models.build_genome(
-        coords=models.Coords(ritsu=0.5, pjs=0.2, user=0.3), seed=11, lineage="L-C", generation=1,
+        coords=models.Coords(ritsu=0.5, pjs=0.2, user=0.3), seed=11, lineage="NOVELTY", generation=1,
         parents=("ffc44fd26d70e89d",), operator="novelty_jump", operator_params={"rng_seed": 7},
     )
     d = models.genome_to_dict(base)
-    d["lineage"] = "NOVELTY"
+    d["coords"] = {"ritsu": 0.9, "pjs": 0.05, "user": 0.05}  # 座標由来なら L-R になるはずの値
     d["genome_id"] = models.compute_genome_id(
         coords=models.Coords(**d["coords"]), seed=d["seed"], lineage="NOVELTY",
         generation=d["generation"], parents=d["parents"], operator=d["operator"],
@@ -399,12 +399,23 @@ def test_genome_from_dict_rejects_novelty_with_drift_operator() -> None:
 def test_genome_from_dict_rejects_novelty_jump_with_coordinate_lineage() -> None:
     """逆方向: operator=novelty_jump は lineage=NOVELTY を必須とする
     （Codex 指摘C）。座標由来 lineage（NOVELTY でない）を宣言した
-    novelty_jump ドキュメントは拒否する。"""
+    novelty_jump ドキュメントは拒否する。build_genome() 自体が同じ組合せを
+    拒否するようになった（Codex 指摘A, PR #267 R4）ため、ここでは一旦正しい
+    NOVELTY 個体を構築してから lineage だけを座標由来値へ書き換え、
+    genome_id を再計算してローダー単体の拒否を確認する（builder 側の同型
+    拒否は `test_build_genome_rejects_novelty_jump_with_coordinate_lineage`
+    が担当する）。"""
     base = models.build_genome(
-        coords=models.Coords(0.5, 0.2, 0.3), seed=11, lineage="L-C", generation=1,
+        coords=models.Coords(0.5, 0.2, 0.3), seed=11, lineage="NOVELTY", generation=1,
         parents=("ffc44fd26d70e89d",), operator="novelty_jump", operator_params={"rng_seed": 7},
     )
     d = models.genome_to_dict(base)
+    d["lineage"] = "L-C"  # (0.5, 0.2, 0.3) の座標由来 lineage と一致する値
+    d["genome_id"] = models.compute_genome_id(
+        coords=models.Coords(**d["coords"]), seed=d["seed"], lineage="L-C",
+        generation=d["generation"], parents=d["parents"], operator=d["operator"],
+        operator_params=d["operator_params"],
+    )
     with pytest.raises(models.GenomeValidationError, match="novelty_jump"):
         models.genome_from_dict(d)
 
@@ -428,6 +439,47 @@ def test_genome_from_dict_accepts_novelty_with_vertex_pull_operator() -> None:
     )
     genome = models.genome_from_dict(d)
     assert genome.lineage == "NOVELTY"
+
+
+# --- build_genome() の lineage 検証（Codex 指摘A, PR #267 R4） -------------
+#
+# 従来 build_genome() は宣言 lineage を素通ししていた（Archive.submit が
+# builder 出力を round-trip なしで消費する経路がある以上、書込経路そのもの
+# での強制が必要）。genome_from_dict() と共有の `_validate_lineage_for_genome()`
+# を build_genome() 経由でも直接検証する。
+
+
+def test_build_genome_rejects_lineage_coords_mismatch() -> None:
+    """coords=(1.0, 0.0, 0.0) は座標由来 lineage が L-R になるはずだが、
+    build_genome() へ改竄した lineage="L-C" を渡すと fail-closed で拒否する
+    （genome_from_dict() 側の同型検証と対称）。"""
+    with pytest.raises(models.GenomeValidationError, match="does not match coords-derived lineage"):
+        models.build_genome(
+            coords=models.Coords(1.0, 0.0, 0.0), seed=0, lineage="L-C", generation=0,
+            parents=(), operator="founder", operator_params={},
+        )
+
+
+def test_build_genome_rejects_drift_with_novelty_lineage() -> None:
+    """NOVELTY は operator ∈ {novelty_jump, vertex_pull} でしか宣言できない
+    （Codex 指摘C）。build_genome() 経由で drift + NOVELTY を渡すと拒否する。"""
+    with pytest.raises(models.GenomeValidationError, match="NOVELTY"):
+        models.build_genome(
+            coords=models.Coords(0.5, 0.2, 0.3), seed=11, lineage="NOVELTY", generation=1,
+            parents=("ffc44fd26d70e89d",), operator="drift", operator_params={"rng_seed": 7, "step": 0.05},
+        )
+
+
+def test_build_genome_rejects_novelty_jump_with_coordinate_lineage() -> None:
+    """逆方向: operator=novelty_jump は build_genome() 経由でも lineage=NOVELTY
+    を必須とする（Codex 指摘C）。coords=(0.5, 0.2, 0.3) は座標由来 lineage が
+    L-C と一致する値のため、ここで拒否されるのは coords 不一致チェックでは
+    なく novelty_jump 専用の逆方向チェックであることを担保する。"""
+    with pytest.raises(models.GenomeValidationError, match="novelty_jump"):
+        models.build_genome(
+            coords=models.Coords(0.5, 0.2, 0.3), seed=11, lineage="L-C", generation=1,
+            parents=("ffc44fd26d70e89d",), operator="novelty_jump", operator_params={"rng_seed": 7},
+        )
 
 
 # --- EvaluationRecord ------------------------------------------------------
@@ -492,6 +544,26 @@ def test_evaluation_record_rejects_nonfinite_axis() -> None:
             evaluator=models.Evaluator(kind="training", version="v0"),
             axes={"naturalness": float("nan")},
         )
+
+
+def test_build_evaluation_record_rejects_empty_string_axis_key() -> None:
+    with pytest.raises(models.GenomeValidationError, match="axes key must be a non-empty string"):
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set="d3-probe/0.1",
+            evaluator=models.Evaluator(kind="training", version="v0"),
+            axes={"": 0.5},
+        )
+
+
+def test_evaluation_record_from_dict_rejects_empty_string_axis_key() -> None:
+    """Codex 指摘B: build_evaluation_record() は空文字 axis 名を拒否するが、
+    従来 evaluation_record_from_dict() はこの検証を欠き素通ししていた。
+    builder と同じ非空文字列検証を loader 側にも適用する（共有ヘルパー
+    `_validate_axes()`）。"""
+    d = models.evaluation_record_to_dict(_base_eval_record())
+    d["axes"] = {"": 0.5}
+    with pytest.raises(models.GenomeValidationError, match="axes key must be a non-empty string"):
+        models.evaluation_record_from_dict(d)
 
 
 # --- blind_batch × evaluator.kind 束縛（Codex 指摘A） ----------------------

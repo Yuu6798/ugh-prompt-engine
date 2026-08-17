@@ -9,14 +9,22 @@ hack-record/0.1 + Archive 用の内部モデル）。
   デフォルト補完せず明示的に拒否する。
 - `genome_id` は宣言値をそのまま信頼せず、`compute_genome_id()` による
   再計算値と一致することを load 時に必ず検証する（改ざん・破損検出）。
-- lineage の「座標との整合性（NOVELTY 例外を除く）」は `genome_from_dict()`
-  が `simplex.assign_lineage()`（系統帰属の機械決定の一次ソース、§3.1）の
-  再計算値と照合して強制する（Codex 指摘3, 2026-08-17 採用: 従来は
-  build_genome() 経由の書込み側だけがこれを保証し、ローダーは宣言値を
-  そのまま信頼していた）。simplex.py が Coords 型のため models.py を
-  モジュールレベルで import する片方向依存を保ったまま、models.py 側は
-  genome_from_dict() 内のデファード import で import 時循環を回避する
-  （モジュールレベルでは依然として simplex.py に依存しない）。
+- lineage の「座標との整合性（NOVELTY 例外を除く）+ NOVELTY⇔operator の
+  双方向整合」は `_validate_lineage_for_genome()` が `simplex.assign_lineage()`
+  （系統帰属の機械決定の一次ソース、§3.1）の再計算値と照合して強制する
+  （Codex 指摘3, 2026-08-17 採用）。`build_genome()`（書込経路）と
+  `genome_from_dict()`（読込経路）の両方がこの単一実装を共有する（Codex
+  指摘A, PR #267 R4 採用 2026-08-17: 従来 build_genome() は宣言 lineage を
+  素通ししていた — Archive.submit が builder 出力を round-trip なしで
+  消費する経路がある以上、書込経路そのものでの強制が必要だった）。
+  simplex.py が Coords 型のため models.py をモジュールレベルで import する
+  片方向依存を保ったまま、models.py 側は `_validate_lineage_for_genome()`
+  内のデファード import で import 時循環を回避する（モジュールレベルでは
+  依然として simplex.py に依存しない）。
+- evaluation axes の「キーが非空文字列である」検証も `_validate_axes()` を
+  `build_evaluation_record()` と `evaluation_record_from_dict()` が共有する
+  （Codex 指摘B, PR #267 R4 採用 2026-08-17: 従来 loader は空文字列 axis 名を
+  素通ししていた）。
 """
 from __future__ import annotations
 
@@ -447,6 +455,62 @@ class VoiceGenome:
     notes: str
 
 
+def _validate_lineage_for_genome(coords: Coords, lineage: str, operator: str) -> None:
+    """lineage の座標整合性（NOVELTY 例外）+ NOVELTY⇔operator の双方向整合を
+    検証する共有ヘルパー。`build_genome()`（書込経路）と `genome_from_dict()`
+    （読込経路）の両方から呼ばれる単一実装（Codex 指摘A, PR #267 R4 採用
+    2026-08-17: 従来は genome_from_dict() のみがこれを検証し、build_genome()
+    は宣言 lineage を素通ししていた — Archive.submit が builder 出力を
+    round-trip なしで消費する経路がある以上、書込経路そのものでの強制が
+    必要。proto1/registry.py R28「書読対称性」と同じ設計判断）。呼び出し元は
+    lineage が `VALID_LINEAGES` に、operator が `VALID_OPERATORS` に属する
+    ことを事前に検証済みであることを前提とする。
+    """
+    if lineage != "NOVELTY":
+        # lineage は座標のみからの機械決定（NOVELTY 隔離を除く。
+        # DESIGN_VG_E0.md §3.1「機械決定・手書き上書き禁止」）。デファード
+        # import は models.py↔simplex.py の import 時循環を避けるため
+        # （simplex.py は models.Coords 型のため models をモジュールレベルで
+        # import する。ここでの遅延 import は呼び出し時点に両モジュールが
+        # 完全にロード済みであることを利用して循環を切る）。
+        import simplex  # noqa: E402
+
+        expected_lineage = simplex.assign_lineage(coords)
+        if lineage != expected_lineage:
+            raise GenomeValidationError(
+                f"lineage {lineage!r} does not match coords-derived lineage {expected_lineage!r} "
+                "(lineage is machine-derived from coords except for NOVELTY-origin genomes — "
+                "DESIGN_VG_E0.md §3.1; hand-edited lineage is rejected)"
+            )
+
+    # Codex 指摘C: lineage=NOVELTY は operators.py 上、novelty_jump の全出力と
+    # 系統間（親 lineage 不一致）vertex_pull の出力に限定される（§3.1/§4
+    # 「系統内/系統間判定はオペレータではなく台帳が行う」— 本実装ではこの
+    # 判定点をオペレータ自身が担う設計のため、founder/drift/reseed/edge_walk
+    # は座標由来 lineage しか生成し得ない）。
+    #
+    # vertex_pull については「両親の lineage が実際に異なっていたか」は
+    # このドキュメント単体（genome 1件の宣言値）からは検証不能 — 台帳上の
+    # 親個体の実体参照が必要なため、ここでは operator が vertex_pull で
+    # あることのみを許容条件とする。両親 lineage の実差分検証は台帳
+    # （ledger.py）側の責務として VG-E1 送り（今回はスコープ外）。
+    if lineage == "NOVELTY" and operator not in ("novelty_jump", "vertex_pull"):
+        raise GenomeValidationError(
+            f"lineage='NOVELTY' requires operator in ('novelty_jump', 'vertex_pull'), got operator={operator!r} "
+            "(NOVELTY isolation is limited to novelty_jump's own output and cross-lineage vertex_pull "
+            "crossings — DESIGN_VG_E0.md §3.1/§4; founder/drift/reseed/edge_walk cannot declare NOVELTY)"
+        )
+    # 逆方向: novelty_jump の出力は常に NOVELTY 隔離される（operators.py
+    # `novelty_jump()` 参照）。operator=novelty_jump で座標由来 lineage を
+    # 宣言した個体は改ざん・破損（読込経路）または構築誤り（書込経路）として
+    # 拒否する。
+    if operator == "novelty_jump" and lineage != "NOVELTY":
+        raise GenomeValidationError(
+            f"operator='novelty_jump' requires lineage='NOVELTY', got lineage={lineage!r} "
+            "(novelty_jump output is always NOVELTY-isolated by construction — DESIGN_VG_E0.md §4)"
+        )
+
+
 def build_genome(
     *,
     coords: Coords,
@@ -482,6 +546,9 @@ def build_genome(
         _validate_genome_id_format(p, "parents[]")
 
     _validate_coords_value(coords)
+    # 座標由来 lineage との整合 + NOVELTY⇔operator の双方向整合を強制する
+    # （Codex 指摘A, PR #267 R4）。genome_from_dict() と共有の単一実装。
+    _validate_lineage_for_genome(coords, lineage, operator)
     # normalize=True: build_genome() は operator_params の float を6桁丸めへ
     # 正規化してから格納する（Codex 指摘B）。
     validated_params = _validate_operator_params(operator, operator_params, normalize=True)
@@ -556,25 +623,6 @@ def genome_from_dict(data: Any) -> VoiceGenome:
     lineage = data["lineage"]
     if lineage not in VALID_LINEAGES:
         raise GenomeValidationError(f"lineage must be one of {VALID_LINEAGES}, got {lineage!r}")
-    if lineage != "NOVELTY":
-        # lineage は座標のみからの機械決定（NOVELTY 隔離を除く。
-        # DESIGN_VG_E0.md §3.1「機械決定・手書き上書き禁止」）。build_genome()
-        # 経由の書込み側（operators.py）は常に simplex.assign_lineage() で
-        # 正しい値を計算するが、genome_from_dict() は従来これを検証せず
-        # 宣言値をそのまま信頼していた（Codex 指摘3）。デファード import は
-        # models.py↔simplex.py の import 時循環を避けるため（simplex.py は
-        # models.Coords 型のため models をモジュールレベルで import する。
-        # ここでの遅延 import は呼び出し時点に両モジュールが完全にロード
-        # 済みであることを利用して循環を切る）。
-        import simplex  # noqa: E402
-
-        expected_lineage = simplex.assign_lineage(coords)
-        if lineage != expected_lineage:
-            raise GenomeValidationError(
-                f"lineage {lineage!r} does not match coords-derived lineage {expected_lineage!r} "
-                "(lineage is machine-derived from coords except for NOVELTY-origin genomes — "
-                "DESIGN_VG_E0.md §3.1; hand-edited lineage is rejected)"
-            )
 
     generation = data["generation"]
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
@@ -594,32 +642,12 @@ def genome_from_dict(data: Any) -> VoiceGenome:
             f"operator={operator!r} requires exactly {expected_n} parent(s), got {len(parents)}"
         )
 
-    # Codex 指摘C: lineage=NOVELTY は operators.py 上、novelty_jump の全出力と
-    # 系統間（親 lineage 不一致）vertex_pull の出力に限定される（§3.1/§4
-    # 「系統内/系統間判定はオペレータではなく台帳が行う」— 本実装ではこの
-    # 判定点をオペレータ自身が担う設計のため、founder/drift/reseed/edge_walk
-    # は座標由来 lineage しか生成し得ない）。ローダーは従来これを検証せず、
-    # NOVELTY が任意 operator と組み合わせて宣言可能だった。
-    #
-    # vertex_pull については「両親の lineage が実際に異なっていたか」は
-    # このドキュメント単体（genome 1件の宣言値）からは検証不能 — 台帳上の
-    # 親個体の実体参照が必要なため、ここでは operator が vertex_pull で
-    # あることのみを許容条件とする。両親 lineage の実差分検証は台帳
-    # （ledger.py）側の責務として VG-E1 送り（今回はスコープ外）。
-    if lineage == "NOVELTY" and operator not in ("novelty_jump", "vertex_pull"):
-        raise GenomeValidationError(
-            f"lineage='NOVELTY' requires operator in ('novelty_jump', 'vertex_pull'), got operator={operator!r} "
-            "(NOVELTY isolation is limited to novelty_jump's own output and cross-lineage vertex_pull "
-            "crossings — DESIGN_VG_E0.md §3.1/§4; founder/drift/reseed/edge_walk cannot declare NOVELTY)"
-        )
-    # 逆方向: novelty_jump の出力は常に NOVELTY 隔離される（operators.py
-    # `novelty_jump()` 参照）。operator=novelty_jump で座標由来 lineage を
-    # 宣言したドキュメントは改ざん・破損として拒否する。
-    if operator == "novelty_jump" and lineage != "NOVELTY":
-        raise GenomeValidationError(
-            f"operator='novelty_jump' requires lineage='NOVELTY', got lineage={lineage!r} "
-            "(novelty_jump output is always NOVELTY-isolated by construction — DESIGN_VG_E0.md §4)"
-        )
+    # 座標由来 lineage との整合（NOVELTY 例外）+ NOVELTY⇔operator の双方向
+    # 整合を強制する（Codex 指摘3/指摘C の統合実装。build_genome() と共有の
+    # 単一実装 — Codex 指摘A, PR #267 R4 で build_genome() 側にも同じ強制が
+    # 適用された）。従来はローダーのみがこれを検証し、build_genome() は
+    # 宣言 lineage を素通ししていた。
+    _validate_lineage_for_genome(coords, lineage, operator)
 
     operator_params_raw = data["operator_params"]
     # normalize=False: genome_from_dict() は既に6桁丸め済みでない float を
@@ -690,6 +718,22 @@ _EVAL_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
 _EVALUATOR_KEYS: FrozenSet[str] = frozenset({"kind", "version"})
 
 
+def _validate_axes(axes: Mapping[str, Any]) -> Dict[str, float]:
+    """axes dict の各キーが非空文字列であること + 各値が有限 float である
+    ことを検証し、正規化した dict を返す。`build_evaluation_record()`
+    （書込経路）と `evaluation_record_from_dict()`（読込経路）の両方から
+    呼ばれる単一実装（Codex 指摘B, PR #267 R4 採用 2026-08-17: 従来 loader は
+    空文字列 axis 名を検証せず素通ししていた — builder 側の非空文字列検証と
+    非対称だった）。
+    """
+    validated: Dict[str, float] = {}
+    for name, value in axes.items():
+        if not isinstance(name, str) or not name:
+            raise GenomeValidationError(f"axes key must be a non-empty string, got {name!r}")
+        validated[name] = _require_finite_float(value, f"axes.{name}")
+    return validated
+
+
 def build_evaluation_record(
     *,
     genome_id: str,
@@ -706,11 +750,7 @@ def build_evaluation_record(
         raise GenomeValidationError(f"evaluator.kind must be one of {EVALUATOR_KINDS}, got {evaluator.kind!r}")
     if not isinstance(evaluator.version, str) or not evaluator.version:
         raise GenomeValidationError(f"evaluator.version must be a non-empty string, got {evaluator.version!r}")
-    validated_axes: Dict[str, float] = {}
-    for name, value in axes.items():
-        if not isinstance(name, str) or not name:
-            raise GenomeValidationError(f"axes key must be a non-empty string, got {name!r}")
-        validated_axes[name] = _require_finite_float(value, f"axes.{name}")
+    validated_axes = _validate_axes(axes)
     if blind_batch is not None and not isinstance(blind_batch, str):
         raise GenomeValidationError(f"blind_batch must be a string or null, got {blind_batch!r}")
     # Codex 指摘A: blind_batch は human 評価者専用のフィールド（training/hidden
@@ -787,9 +827,9 @@ def evaluation_record_from_dict(data: Any) -> EvaluationRecord:
     axes_raw = data["axes"]
     if not isinstance(axes_raw, dict):
         raise GenomeValidationError(f"axes must be an object, got {type(axes_raw).__name__}")
-    axes: Dict[str, float] = {
-        name: _require_finite_float(value, f"axes.{name}") for name, value in axes_raw.items()
-    }
+    # Codex 指摘B: builder と同じ非空文字列 axis 名検証を loader 側にも適用
+    # する（従来 loader は空文字列キーを素通ししていた）。
+    axes = _validate_axes(axes_raw)
 
     blind_batch = data["blind_batch"]
     if blind_batch is not None and not isinstance(blind_batch, str):
