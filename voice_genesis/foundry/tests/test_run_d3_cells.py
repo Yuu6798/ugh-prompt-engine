@@ -222,6 +222,20 @@ def test_index_results_cells_keys_by_score_seed() -> None:
     assert ("sakura", 101) not in idx
 
 
+def test_index_results_cells_rejects_duplicate_score_seed_entries() -> None:
+    """P2 修正 (review #265 R12): 同一 (score, seed) の重複エントリを後勝ちで
+    黙って畳まず、index 構築時に `DuplicateCellError` で fail-closed する。
+    2 つのエントリは意図的に矛盾する `wav_sha256` を持つ — 旧実装なら後方の
+    値だけが採用され、前方の矛盾した記述は無検査のまま消えていた。"""
+    cells = [
+        {"score": "sakura", "seed": 11, "wav_sha256": "aaa"},
+        {"score": "sakura", "seed": 11, "wav_sha256": "bbb"},  # conflicting duplicate
+        {"score": "umi", "seed": 101, "wav_sha256": "ccc"},
+    ]
+    with pytest.raises(rdc.DuplicateCellError, match=r"sakura.*11|11.*sakura"):
+        rdc.index_results_cells({"cells": cells})
+
+
 def test_verify_cell_pass(tmp_path: Path) -> None:
     wav = tmp_path / "x.wav"
     timing = tmp_path / "x.csv"
@@ -473,6 +487,41 @@ def test_main_rejects_missing_voicebank_root(tmp_path: Path) -> None:
         ]
     )
     assert rc == 1
+
+
+def test_main_fails_closed_on_duplicate_cell_before_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2 修正 (review #265 R12) 受け入れ条件: `d3_manifest_results.json` に
+    矛盾する重複 (score, seed) エントリがあると、`main()` は render_cell を
+    一度も呼ばずに即時 FAIL する（矛盾重複入りでも 40/40 PASS が出る旧穴の
+    回帰防止）。"""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    results = json.loads(results_path.read_text(encoding="utf-8"))
+    dup_cell = dict(results["cells"][0])
+    dup_cell["wav_sha256"] = "conflicting-" + dup_cell["wav_sha256"]
+    results["cells"].append(dup_cell)
+    results_path.write_text(json.dumps(results), encoding="utf-8")
+
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 1
+    assert calls == []  # render_cell は一度も呼ばれていない（render 前に拒否）
+    assert not (out_dir / "render").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -680,6 +680,118 @@ def test_refresh_config_pin_updates_manifest_config_sha256(tmp_path: Path) -> No
     assert manifest_before == manifest_after
 
 
+def test_publish_config_pin_transaction_rolls_back_both_files_on_mid_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1 修正 (review #265 R12) 単体テスト: `.normalized.yaml` と
+    `assembly_manifest.json` の 2 ファイル公開の**途中**（2 個目の
+    `os.replace`）で失敗が注入されても、両方とも旧バイト列のまま無傷で
+    残る（1 個目だけ新しい「新 config + 旧/破損 manifest」の不整合バンドル
+    にならない）。staging/backup の残骸も残らない。"""
+    normalized_path = tmp_path / "run4_config_datasets.yaml.normalized.yaml"
+    manifest_path = tmp_path / "assembly_manifest.json"
+
+    old_normalized_bytes = b"old-normalized-content\n"
+    old_manifest_bytes = b'{"config": {"config_sha256": "old"}}\n'
+    normalized_path.write_bytes(old_normalized_bytes)
+    manifest_path.write_bytes(old_manifest_bytes)
+
+    real_os_replace = assemble_run4.os.replace
+    call_count = {"n": 0}
+
+    def _flaky_replace(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError("simulated I/O failure during manifest publish")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(assemble_run4.os, "replace", _flaky_replace)
+
+    with pytest.raises(OSError, match="simulated I/O failure"):
+        assemble_run4._publish_config_pin_transaction(
+            normalized_path, "new-normalized-content\n",
+            manifest_path, '{"config": {"config_sha256": "new"}}\n',
+        )
+
+    assert normalized_path.read_bytes() == old_normalized_bytes
+    assert manifest_path.read_bytes() == old_manifest_bytes
+    leftovers = {p.name for p in tmp_path.iterdir()}
+    assert leftovers == {normalized_path.name, manifest_path.name}
+
+
+def test_publish_config_pin_transaction_rolls_back_when_first_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """1 個目（normalized）の `os.replace` そのものが失敗した場合も、両方の
+    宛先が旧バイト列のまま無傷で残る（manifest 側は退避 rename すら発生し
+    ない設計だが、normalized 側の退避も正しく巻き戻ることを確認する）。"""
+    normalized_path = tmp_path / "run4_config_datasets.yaml.normalized.yaml"
+    manifest_path = tmp_path / "assembly_manifest.json"
+
+    old_normalized_bytes = b"old-normalized-content\n"
+    old_manifest_bytes = b'{"config": {"config_sha256": "old"}}\n'
+    normalized_path.write_bytes(old_normalized_bytes)
+    manifest_path.write_bytes(old_manifest_bytes)
+
+    real_os_replace = assemble_run4.os.replace
+    call_count = {"n": 0}
+
+    def _flaky_replace(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise OSError("simulated I/O failure during normalized publish")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(assemble_run4.os, "replace", _flaky_replace)
+
+    with pytest.raises(OSError, match="simulated I/O failure"):
+        assemble_run4._publish_config_pin_transaction(
+            normalized_path, "new-normalized-content\n",
+            manifest_path, '{"config": {"config_sha256": "new"}}\n',
+        )
+
+    assert normalized_path.read_bytes() == old_normalized_bytes
+    assert manifest_path.read_bytes() == old_manifest_bytes
+    leftovers = {p.name for p in tmp_path.iterdir()}
+    assert leftovers == {normalized_path.name, manifest_path.name}
+
+
+def test_refresh_config_pin_leaves_both_files_untouched_on_publish_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """指摘 3 の受け入れ条件（統合）: `refresh_config_pin()` の公開フェーズで
+    中断（manifest 側の `os.replace` が失敗）が起きても、`.normalized.yaml`
+    と `assembly_manifest.json` はどちらも編集前のバイト列のまま残る
+    （「新 config + 旧/破損 manifest」の不整合バンドルが発生しない）。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+    normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
+    manifest_path = out_dir / "assembly_manifest.json"
+
+    normalized_before = normalized_path.read_bytes()
+    manifest_before = manifest_path.read_bytes()
+
+    with open(config_path, "a", encoding="utf-8") as f:
+        f.write("lr: 0.0003\n")
+
+    real_os_replace = assemble_run4.os.replace
+    call_count = {"n": 0}
+
+    def _flaky_replace(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError("simulated publish failure")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(assemble_run4.os, "replace", _flaky_replace)
+
+    with pytest.raises(OSError, match="simulated publish failure"):
+        assemble_run4.refresh_config_pin(config_path)
+
+    assert normalized_path.read_bytes() == normalized_before
+    assert manifest_path.read_bytes() == manifest_before
+
+
 def test_refresh_config_pin_without_sibling_manifest_is_a_noop_for_manifest(
     tmp_path: Path,
 ) -> None:

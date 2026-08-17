@@ -583,6 +583,132 @@ def test_require_reflow_multi_speaker_acoustic_requires_existing_acoustic_onnx(
         gsr4._require_reflow_multi_speaker_acoustic(args, fake)
 
 
+# --- review #265 R12 P1: 検証 acoustic.onnx と cmd_run 実読み込みの TOCTOU --
+
+
+def test_require_reflow_multi_speaker_acoustic_returns_verified_sha256(tmp_path: Path) -> None:
+    """P1 修正 (review #265 R12): 戻り値は検証に使ったバイト列そのものから
+    計測した acoustic.onnx の sha256 である。"""
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
+    args = argparse.Namespace(skip_export=True, acoustic_dir=str(acoustic_dir))
+    fake = types.SimpleNamespace(ort=_make_fake_ort(_REFLOW_MULTI_SPEAKER_ACOUSTIC_INPUT_NAMES))
+
+    digest = gsr4._require_reflow_multi_speaker_acoustic(args, fake)
+
+    assert digest == hashlib.sha256(acoustic_onnx_path.read_bytes()).hexdigest()
+
+
+def test_verify_acoustic_onnx_unchanged_after_cmd_run_accepts_matching_sha256(
+    tmp_path: Path,
+) -> None:
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
+    args = argparse.Namespace(
+        acoustic_dir=str(acoustic_dir), out_dir=str(tmp_path / "out"), step=None,
+    )
+    verified_sha256 = hashlib.sha256(acoustic_onnx_path.read_bytes()).hexdigest()
+
+    gsr4._verify_acoustic_onnx_unchanged_after_cmd_run(args, verified_sha256)  # 例外なし = 合格
+
+
+def test_verify_acoustic_onnx_unchanged_after_cmd_run_rejects_mismatch_and_quarantines_output(
+    tmp_path: Path,
+) -> None:
+    """P1 修正 (review #265 R12) の核心シナリオ: 検証時の sha256 と事後再
+    ハッシュが不一致なら、`cmd_run` が既に書いた出力（`synth_out_dir` =
+    `--step` 未指定時は `out_dir` そのもの）を削除してから fail-closed する
+    （blind バッチを公開したまま残さない）。"""
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
+    verified_sha256 = hashlib.sha256(acoustic_onnx_path.read_bytes()).hexdigest()
+
+    # モデルが cmd_run 実行中に差し替わったことを模擬する。
+    acoustic_onnx_path.write_bytes(b"\xff" * 999)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "song.wav").write_bytes(b"published-but-should-be-quarantined")
+
+    args = argparse.Namespace(acoustic_dir=str(acoustic_dir), out_dir=str(out_dir), step=None)
+
+    with pytest.raises(SystemExit, match="acoustic.onnx"):
+        gsr4._verify_acoustic_onnx_unchanged_after_cmd_run(args, verified_sha256)
+
+    assert not out_dir.exists()  # 公開拒否: cmd_run が書いた出力が quarantine された
+
+
+def test_verify_acoustic_onnx_unchanged_after_cmd_run_quarantines_step_dir(
+    tmp_path: Path,
+) -> None:
+    """`--step` 指定時は `<out_dir>/step_<N>` のみを quarantine し、
+    `out_dir` 自体は残す（`gate_synth.py` の `synth_out_dir` 算出と同一）。"""
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
+    verified_sha256 = hashlib.sha256(acoustic_onnx_path.read_bytes()).hexdigest()
+    acoustic_onnx_path.write_bytes(b"\xff" * 999)
+
+    out_dir = tmp_path / "out"
+    step_dir = out_dir / "step_5000"
+    step_dir.mkdir(parents=True)
+    (step_dir / "song.wav").write_bytes(b"published-but-should-be-quarantined")
+    (out_dir / "unrelated.txt").write_bytes(b"keep-me")
+
+    args = argparse.Namespace(acoustic_dir=str(acoustic_dir), out_dir=str(out_dir), step=5000)
+
+    with pytest.raises(SystemExit, match="acoustic.onnx"):
+        gsr4._verify_acoustic_onnx_unchanged_after_cmd_run(args, verified_sha256)
+
+    assert not step_dir.exists()
+    assert (out_dir / "unrelated.txt").exists()
+
+
+def test_run_with_speaker_embed_file_rejects_publish_when_model_swapped_during_cmd_run(
+    tmp_path: Path,
+) -> None:
+    """統合テスト（受け入れ条件 4）: `cmd_run` をモックし、その実行中に
+    acoustic.onnx を差し替えると、`_run_with_speaker_embed_file` は
+    公開拒否（`SystemExit`）となり、`cmd_run` が書いた出力を quarantine
+    する。`cmd_run` 自体は 1 回だけ呼ばれる（委譲は起きた——TOCTOU の窓は
+    委譲の"前"ではなく"後"にあるため #13 の事前検査だけでは検出できない
+    ことの実証）。"""
+    embed_path = tmp_path / "candidate_A.emb"
+    _write_fake_384_embed(embed_path, seed=11)
+
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
+    out_dir = tmp_path / "out"
+
+    fake = _make_embed_lookup_fake_gate_synth()
+
+    def _cmd_run_swaps_model_mid_flight(run_args):
+        fake.state["cmd_run_calls"].append(run_args)
+        # 実 gate_synth.cmd_run と同じく、ここで実際に公開結果を書く。
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "song.wav").write_bytes(b"blind-batch-should-be-quarantined")
+        # TOCTOU を模擬: 検証済みの acoustic.onnx が実行中に別内容へ差し替わる。
+        acoustic_onnx_path.write_bytes(b"\x99" * 1234)
+
+    fake.cmd_run = _cmd_run_swaps_model_mid_flight
+
+    parser = gsr4.build_arg_parser()
+    argv = [
+        "run",
+        "--canon-model-dir", "/fake/canon",
+        "--vocoder-dir", "/fake/vocoder",
+        "--out-dir", str(out_dir),
+        "--skip-export", "--acoustic-dir", str(acoustic_dir),
+        "--speaker-embed-file", str(embed_path),
+    ]
+    args = parser.parse_args(argv)
+
+    with pytest.raises(SystemExit, match="acoustic.onnx"):
+        gsr4._run_with_speaker_embed_file(args, fake)
+
+    assert len(fake.state["cmd_run_calls"]) == 1  # 委譲は実際に起きた
+    assert not out_dir.exists()  # だが公開結果は quarantine され残らない
+
+
 def test_main_speaker_embed_file_rejects_canon_model_before_cmd_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

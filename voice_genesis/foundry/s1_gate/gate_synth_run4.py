@@ -162,7 +162,9 @@ own/canon token 符号化・provenance sha 記録・原子的出力公開・roll
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
@@ -311,7 +313,11 @@ def _reject_speaker_embed_file_swap_collision(args: argparse.Namespace) -> None:
         forge_triangle._reject_embed_input_collisions(managed_dir, [embed_path])
 
 
-def _require_reflow_multi_speaker_acoustic(args: argparse.Namespace, gate_synth) -> None:
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _require_reflow_multi_speaker_acoustic(args: argparse.Namespace, gate_synth) -> str:
     """review #265 R6 #13: acoustic.onnx が `spk_embed`/`steps` 入力を持つ
     reflow 多話者モデルであることを委譲前に検証する（`gate_synth.py:1097-1101`
     `is_reflow_multi_speaker` 判定と同一条件）。無ければ
@@ -323,6 +329,19 @@ def _require_reflow_multi_speaker_acoustic(args: argparse.Namespace, gate_synth)
     （委譲先の `_cmd_run_impl` が export.py を実行して初めて実体が確定する
     経路）では export 完了前にこの検証ができないため、`--speaker-embed-file`
     は `--skip-export`（+ 既に export 済みの `--acoustic-dir`）を必須とする。
+
+    戻り値は検証に使ったバイト列そのものから計測した acoustic.onnx の
+    sha256（review #265 R12 P1）。`gate_synth.py` を変更せずに以下の TOCTOU
+    を緩和するための「単一読み取り束縛」ファミリーの標準手当て: 本関数は
+    ここで読んだバイト列をそのまま `gate_synth.ort.InferenceSession` へ渡す
+    （パス再オープンではなく bytes 渡し——`onnxruntime.InferenceSession` は
+    `bytes` を第1引数に取れる）ため、検証した sha256 と検証したモデルの
+    入力集合は同一の読み取りに拠って一致することが構造的に保証される。
+    しかしこの直後に `gate_synth.cmd_run()` が同じパスを**独立に**再オープン
+    するため（`gate_synth.py` は変更しない制約上、その読み取り自体は避けられ
+    ない）、呼び出し元 `_run_with_speaker_embed_file` は本関数が返す sha256
+    を保持し、`cmd_run` 完了後に同パスを再ハッシュして一致を検証する
+    （`_verify_acoustic_onnx_unchanged_after_cmd_run` docstring 参照）。
     """
     if not args.skip_export:
         raise SystemExit(
@@ -341,8 +360,10 @@ def _require_reflow_multi_speaker_acoustic(args: argparse.Namespace, gate_synth)
             f"error: --speaker-embed-file requires an already-exported acoustic.onnx at "
             f"{acoustic_onnx_path} (--acoustic-dir); not found."
         )
+    acoustic_bytes = acoustic_onnx_path.read_bytes()
+    acoustic_sha256 = hashlib.sha256(acoustic_bytes).hexdigest()
     session = gate_synth.ort.InferenceSession(
-        str(acoustic_onnx_path), providers=["CPUExecutionProvider"],
+        acoustic_bytes, providers=["CPUExecutionProvider"],
     )
     input_names = {i.name for i in session.get_inputs()}
     if not {"spk_embed", "steps"}.issubset(input_names):
@@ -355,6 +376,53 @@ def _require_reflow_multi_speaker_acoustic(args: argparse.Namespace, gate_synth)
             "(gate_synth.py:1249-1263) and render every candidate identically (fail-closed, "
             "review #265 R6 #13)."
         )
+    return acoustic_sha256
+
+
+def _verify_acoustic_onnx_unchanged_after_cmd_run(
+    args: argparse.Namespace, verified_sha256: str
+) -> None:
+    """review #265 R12 P1: `_require_reflow_multi_speaker_acoustic` が検証時
+    に計測した acoustic.onnx の sha256（`verified_sha256`）を、
+    `gate_synth.cmd_run()` 完了後・公開結果を残す前に同パスの再ハッシュと
+    照合する（TOCTOU 対策）。
+
+    `_require_reflow_multi_speaker_acoustic` はディスク上の acoustic.onnx を
+    検証してから spk_embed/steps 入力を確認するが、直後に呼ばれる
+    `gate_synth.cmd_run()`（`gate_synth.py` は不変のため変更できない）は
+    同じパスを**独立に**再オープンして実際の合成へ使う。この 2 回の読み取り
+    の間にモデルファイルが差し替わると、「reflow モデルを検証したうえで
+    canon モデルで実際に合成する」という状態が成立し得て、選択した
+    `--speaker-embed-file` が canon_ddpm 分岐で黙って無視された blind
+    バッチが公開されてしまう（review #265 R6 #13 が防いだ穴の TOCTOU 版）。
+
+    `gate_synth.py` の API 契約は変えられない（cmd_run へバイト列を注入する
+    フックが無い）ため、ここでは事後の再ハッシュ照合という単一読み取り
+    束縛ファミリーの標準的な緩和策を採る: 不一致を検出したら、
+    `gate_synth.cmd_run` が既に書き終えている公開結果（`synth_out_dir` —
+    `gate_synth.py:1753-1762` の算出をそのまま再現、`--step` 指定時は
+    `<out_dir>/step_<N>`）を削除してから fail-closed する（best-effort
+    削除・既に無ければ何もしない）。"""
+    acoustic_onnx_path = Path(args.acoustic_dir) / "acoustic.onnx"
+    actual_sha256 = _sha256_file(acoustic_onnx_path)
+    if actual_sha256 == verified_sha256:
+        return
+
+    out_dir = Path(args.out_dir)
+    synth_out_dir = (out_dir / f"step_{args.step}") if args.step is not None else out_dir
+    if synth_out_dir.exists():
+        shutil.rmtree(synth_out_dir, ignore_errors=True)
+
+    raise SystemExit(
+        f"error: acoustic.onnx at {acoustic_onnx_path} changed between "
+        "_require_reflow_multi_speaker_acoustic's verification and gate_synth.cmd_run's "
+        f"independent reopen of the same path (sha256 verified={verified_sha256} != "
+        f"post-run={actual_sha256}). The reflow spk_embed/steps check may no longer apply to "
+        "the model that was actually used for synthesis — the selected --speaker-embed-file "
+        "could have been silently ignored by a swapped-in canon model, producing a blind "
+        f"batch. Refusing to leave {synth_out_dir} published (fail-closed, TOCTOU mitigation, "
+        "review #265 R12 P1)."
+    )
 
 
 def _run_with_speaker_embed_file(args: argparse.Namespace, gate_synth) -> None:
@@ -375,7 +443,7 @@ def _run_with_speaker_embed_file(args: argparse.Namespace, gate_synth) -> None:
     # 委譲前に fail-closed する（いずれも I/O が軽い順 — #14 はパス比較のみ、
     # #13 は onnxruntime セッション構築を伴う）。
     _reject_speaker_embed_file_swap_collision(args)
-    _require_reflow_multi_speaker_acoustic(args, gate_synth)
+    acoustic_sha256_verified = _require_reflow_multi_speaker_acoustic(args, gate_synth)
 
     label = args.speaker_embed_label or embed_path.stem
     print(
@@ -402,6 +470,13 @@ def _run_with_speaker_embed_file(args: argparse.Namespace, gate_synth) -> None:
     finally:
         gate_synth.find_speaker_embed = original_find_speaker_embed
         gate_synth.load_speaker_embed_vector_with_sha = original_load_speaker_embed_vector_with_sha
+
+    # review #265 R12 P1: cmd_run が正常完了した場合のみ、検証時に計測した
+    # acoustic.onnx の sha256 と再ハッシュを照合する（TOCTOU 対策。
+    # § `_verify_acoustic_onnx_unchanged_after_cmd_run` docstring 参照）。
+    # cmd_run が例外を送出した場合はここへ到達せず、上の finally で
+    # モンキーパッチ復元のみ行って再送出される。
+    _verify_acoustic_onnx_unchanged_after_cmd_run(args, acoustic_sha256_verified)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

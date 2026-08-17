@@ -156,6 +156,18 @@ class ManifestConsistencyError(ValueError):
     fail-closed 事前検査）。"""
 
 
+class DuplicateCellError(ValueError):
+    """P2 修正 (review #265 R12): `d3_manifest_results.json` の `cells` に
+    同一 `(score, seed)` の重複エントリがある場合に送出する（fail-closed）。
+
+    旧実装の `index_results_cells` は `dict` へ index する際に重複キーを
+    後勝ちで黙って畳んでいたため、同一 `(score, seed)` に矛盾する 2 つの
+    セル記述（例: 異なる `wav_sha256`）が含まれていても、後方の記述だけが
+    採用され前方は無検査のまま消える——矛盾を含む results でも 40/40 PASS
+    が出得た。本例外は index 構築時（render・検証いずれよりも前）に検出し、
+    黙って畳む前に停止する。"""
+
+
 class OutputCollisionError(ValueError):
     """P1 修正 (review #265 R11): 本スクリプトが削除・rename する管理下出力
     パス（`--out-dir`・`.staging_render/`・`render/`・swap 用退避先
@@ -365,10 +377,28 @@ def validate_manifest_consistency(manifest: dict, results: dict) -> None:
 
 
 def index_results_cells(results: dict) -> Dict[Tuple[str, int], dict]:
-    """`results["cells"]` を `(score, seed)` キーの辞書へ索引化する。"""
+    """`results["cells"]` を `(score, seed)` キーの辞書へ索引化する。
+
+    P2 修正 (review #265 R12): 同一 `(score, seed)` の重複エントリを検出
+    したら、後勝ちで黙って畳む前に `DuplicateCellError` で fail-closed する
+    （§ `DuplicateCellError` docstring 参照）。呼び出し元 `main()` はこの
+    関数を render 開始（spec 変種生成・tripwire render）よりも前に呼ぶため、
+    重複が検出されれば render・検証のどちらも一切開始されない。
+    """
     idx: Dict[Tuple[str, int], dict] = {}
+    duplicate_keys: List[Tuple[str, int]] = []
     for cell in results.get("cells", []):
-        idx[(cell["score"], cell["seed"])] = cell
+        key = (cell["score"], cell["seed"])
+        if key in idx:
+            duplicate_keys.append(key)
+            continue
+        idx[key] = cell
+    if duplicate_keys:
+        raise DuplicateCellError(
+            "d3_manifest_results.json contains duplicate (score, seed) cell "
+            f"entries — refusing to silently fold them (fail-closed, nothing "
+            f"rendered/verified): {sorted(set(duplicate_keys))}"
+        )
     return idx
 
 
@@ -668,7 +698,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"ERROR: manifest/results consistency check failed: {exc}", file=sys.stderr)
         return 1
 
-    results_idx = index_results_cells(results)
+    try:
+        results_idx = index_results_cells(results)
+    except DuplicateCellError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     scores: List[str] = manifest["scores"]
     seeds: List[int] = manifest["seeds"]
     tripwires: dict = manifest["tripwires"]

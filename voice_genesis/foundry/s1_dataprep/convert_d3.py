@@ -57,7 +57,11 @@ sha256 が一致することを実測確認済み）。
 
 `convert_ritsu.py`/`convert_pjs.py` と同型の設計:
 
-- 単一 read 束縛（timing CSV は 1 回だけ読む）
+- 単一 read 束縛（timing CSV は 1 回だけ読む）。wav/timing csv の snapshot
+  取得（`_snapshot_wav_pairs`）は単一 `dir_fd`（`render_dir` を 1 回だけ
+  `os.open` した結果）を通じて行い、`render_dir` が snapshot 中に rename で
+  別世代へ atomic swap されても常に取得時点の世代を読む（`openat(2)` が
+  `dir_fd` の指す inode を基準に名前解決するため。review #265 R12 P2）
 - 全収集してから公開前に fail-closed（ペア不整合・duration 乖離・timing CSV
   の欠損列/型崩れのいずれも、全違反を集めてから例外を送出する）
 - `<out-dir>.staging-<pid>` に完全構築してから `<out-dir>` へ原子的に swap
@@ -190,6 +194,33 @@ def discover_pairs(render_dir: Path) -> List[Tuple[str, Path, Path]]:
     return [(stem, wav_stems[stem], csv_stems[stem]) for stem in sorted(wav_stems)]
 
 
+class MixedGenerationPairError(ValueError):
+    """P2 修正 (review #265 R12): `_snapshot_wav_pairs` に渡された `pairs` の
+    wav/csv が同一の `render_dir`（親ディレクトリ）を指していない場合に
+    送出する。`discover_pairs()` は単一ディレクトリの非再帰 glob から pairs
+    を組み立てるため通常は起こり得ないが、`_snapshot_wav_pairs` を
+    `discover_pairs()` 以外の経路から呼ぶ場合の契約違反を検出する最終防衛線
+    （本関数は「単一 dirfd 経由で読む」ことで世代一致を保証する設計のため、
+    そもそも複数ディレクトリにまたがる pairs を渡されると保証が成立しない）。
+    """
+
+
+def _copy_from_dir_fd(name: str, dst: Path, dir_fd: int) -> None:
+    """`dir_fd` が指すディレクトリ世代内の `name`（basename）を `dst` へ
+    コピーする（`os.open(name, os.O_RDONLY, dir_fd=dir_fd)` = `openat(2)`
+    相当）。
+
+    `dir_fd` は inode（ディレクトリの実体）に束縛される — 呼び出し元が
+    `dir_fd` を取得した**後**に元のパスが rename/swap されても（例:
+    `render_dir` を新世代へ atomic に差し替える運用）、この fd 経由で開く
+    ファイルは常に取得時点の世代のままである（POSIX の `openat` はパス
+    ではなく `dir_fd` が指す inode を基準に名前解決するため）。
+    """
+    fd = os.open(name, os.O_RDONLY, dir_fd=dir_fd)
+    with os.fdopen(fd, "rb") as src_f, open(dst, "wb") as dst_f:
+        shutil.copyfileobj(src_f, dst_f)
+
+
 def _snapshot_wav_pairs(
     pairs: List[Tuple[str, Path, Path]], snapshot_dir: Path
 ) -> List[Tuple[str, Path, Path]]:
@@ -207,7 +238,7 @@ def _snapshot_wav_pairs(
     ことで、検証対象と変換入力が構造的に一致することを保証する
     （`recording_kit/intake.py` `process_one` の「単一 read から得たバイト列を
     ハッシュにも変換入力にも使う」原則と同型。convert_d3 には台帳照合が無い
-    ため sha256 計算は不要で、`shutil.copy2` による単一コピーのみで足りる）。
+    ため sha256 計算は不要で、単一コピーのみで足りる）。
 
     R9 P2 修正: R7 時点では wav のみを snapshot し、timing csv は
     `render_dir` 原本パスのまま `build_transcription_row`（`_read_timing_rows`
@@ -220,17 +251,54 @@ def _snapshot_wav_pairs(
     `_read_timing_rows` はこの snapshot のみを読む——wav/csv どちらも
     `render_dir` 原本には二度と触れない。
 
+    R12 P2 修正: R9 時点でも wav/csv は「独立した 2 回の pathname ベース
+    `shutil.copy2` 呼び出し」で snapshot していた。1 ペア内の wav コピーと
+    csv コピーの間に（あるいは異なるペア間で）`render_dir` が rename で
+    別世代へ atomic swap されると、2 回目以降の `copy2` は新世代のパスを
+    開き直してしまい、「旧 wav + 新 csv」のような**世代混合ペア**が
+    snapshot に混入し得た（`render_dir` はパス経由でしか参照していなかった
+    ため、この保証には構造的な穴があった）。
+
+    **保証の機構**: 全ペアに対して**単一の `dir_fd`**（`os.open(render_dir,
+    os.O_RDONLY)` で 1 回だけ取得）を通じてのみ wav/csv を読む
+    （`_copy_from_dir_fd`）。`dir_fd` はディレクトリの inode に束縛されるため、
+    取得後に `render_dir` が rename で別のディレクトリへ差し替えられても、
+    この fd 経由の `openat` は常に取得時点の世代のファイルを見る——複数回の
+    読みが同一世代内で行われることが OS のセマンティクスにより構造的に
+    保証され、Python 側の記帳（フラグ・タイムスタンプ比較等）には一切
+    依存しない。
+
     `stem`/`wav_path.name`/`csv_path.name` は `render_dir` 直下の非再帰 glob
     （`discover_pairs`）由来のため、同一 `snapshot_dir` 内でファイル名衝突は
-    起きない（拡張子が異なるため wav/csv 間でも衝突しない）。
+    起きない（拡張子が異なるため wav/csv 間でも衝突しない）。全 pairs が
+    同一の親ディレクトリ（`render_dir`）を指すことを前提とする——満たさない
+    場合は `MixedGenerationPairError` で拒否する（`discover_pairs()` 以外の
+    経路から呼ばれた場合の契約違反の検出）。
     """
     out: List[Tuple[str, Path, Path]] = []
-    for stem, wav_path, csv_path in pairs:
-        snapshot_wav = snapshot_dir / wav_path.name
-        shutil.copy2(wav_path, snapshot_wav)
-        snapshot_csv = snapshot_dir / csv_path.name
-        shutil.copy2(csv_path, snapshot_csv)
-        out.append((stem, snapshot_wav, snapshot_csv))
+    if not pairs:
+        return out
+
+    render_dir = pairs[0][1].parent
+    for _stem, wav_path, csv_path in pairs:
+        if wav_path.parent != render_dir or csv_path.parent != render_dir:
+            raise MixedGenerationPairError(
+                f"_snapshot_wav_pairs: expected all pairs to share a single parent "
+                f"directory {render_dir}, got wav={wav_path} csv={csv_path} "
+                "(fail-closed — the single-dir_fd generation guarantee requires a "
+                "single source directory)"
+            )
+
+    dir_fd = os.open(render_dir, os.O_RDONLY)
+    try:
+        for stem, wav_path, csv_path in pairs:
+            snapshot_wav = snapshot_dir / wav_path.name
+            snapshot_csv = snapshot_dir / csv_path.name
+            _copy_from_dir_fd(wav_path.name, snapshot_wav, dir_fd)
+            _copy_from_dir_fd(csv_path.name, snapshot_csv, dir_fd)
+            out.append((stem, snapshot_wav, snapshot_csv))
+    finally:
+        os.close(dir_fd)
     return out
 
 

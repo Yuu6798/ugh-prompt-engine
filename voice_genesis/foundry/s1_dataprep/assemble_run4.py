@@ -155,6 +155,11 @@ fail-closed し、`.normalized.yaml` へは一切書き込まない。運用手�
 成功時は `assembly_manifest.json`（config_path と同じディレクトリに
 存在する場合）の `config.config_sha256`/`config.normalized_config_sha256`
 も実測値へ更新する（review #265 R11 P1、§3 assembly manifest 節参照）。
+`.normalized.yaml` と `assembly_manifest.json` の 2 ファイルは単一
+トランザクション（両方 staging → 退避 rename → 両方 `os.replace`。片方の
+失敗で両方ロールバック）で公開する（review #265 R12 P2、
+§ `_publish_config_pin_transaction` docstring 参照）——中断・I/O エラーで
+「新 config + 旧/破損 manifest」という不整合バンドルが残ることはない。
 """
 from __future__ import annotations
 
@@ -167,6 +172,7 @@ import math
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -398,30 +404,181 @@ def _assembly_manifest_sibling(config_path: Path) -> Optional[Path]:
     return candidate if candidate.exists() else None
 
 
-def _update_manifest_config_pin(
+def _compute_updated_manifest_text(
     manifest_path: Path, *, config_sha256: str, normalized_config_sha256: str
-) -> None:
+) -> Optional[str]:
     """`assembly_manifest.json` の `config.config_sha256`/
-    `config.normalized_config_sha256` を実測値へ更新する（review #265 R11
-    P1）。`refresh_config_pin()` 成功直後に呼ばれる——手動編集で live config
-    のバイト列自体が変わっているため、`assemble()` 実行時に記帳した
-    config sha256 は refresh 後は stale になる。それを放置すると
-    「記帳された pin と実 config の一致」を学習開始前に確認する手順
-    （`S3_RUN4_RUNBOOK.md` §4）が編集前の値と照合してしまう。
+    `config.normalized_config_sha256` を実測値へ更新した**テキスト**を返す
+    （純関数・ファイルへは一切書き込まない）。`refresh_config_pin()` の
+    再生成直後に呼ばれる——手動編集で live config のバイト列自体が変わって
+    いるため、`assemble()` 実行時に記帳した config sha256 は refresh 後は
+    stale になる。それを放置すると「記帳された pin と実 config の一致」を
+    学習開始前に確認する手順（`S3_RUN4_RUNBOOK.md` §4）が編集前の値と照合
+    してしまう。
 
     `manifest_path` の `config` セクションが存在しない（`assembly_manifest.json`
-    自体が無い、または旧 schema で `config` キーを持たない）場合は何もしない
-    （no-op。`refresh_config_pin()` は manifest の有無に依存せず単独でも動く
-    ユーティリティであるため、manifest 不在を fail-closed の理由にはしない）。
+    自体が無い、または旧 schema で `config` キーを持たない）場合は `None` を
+    返す（no-op。`refresh_config_pin()` は manifest の有無に依存せず単独でも
+    動くユーティリティであるため、manifest 不在を fail-closed の理由には
+    しない）。
+
+    P1 修正 (review #265 R12): 旧実装（`_update_manifest_config_pin`）は
+    ここで直接 `write_text` して manifest を公開していた。`.normalized.yaml`
+    の `os.replace` 公開との間に非トランザクション性があり（中断・I/O
+    エラーで「新 config + 旧/破損 manifest」の不整合バンドルが残り得た）、
+    本関数は**テキストを返すだけ**にして、実際の公開は
+    `_publish_config_pin_transaction`（`.normalized.yaml` と単一トランザクション
+    で公開する）へ委譲する。
     """
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     config_section = data.get("config")
     if not isinstance(config_section, dict):
-        return
+        return None
     config_section["config_sha256"] = config_sha256
     config_section["normalized_config_sha256"] = normalized_config_sha256
-    text = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    manifest_path.write_text(text, encoding="utf-8")
+    return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def _stage_text_bytes(dest_path: Path, text: str) -> str:
+    """`dest_path` と同じディレクトリへ `text`（utf-8）を staging tempfile
+    として書き、そのパスを返す（`dest_path` 自体へはまだ触れない）。
+    `adapter/render.py` `_stage_wav_bytes`/`_stage_timing_csv_bytes` と同型の
+    「staging だけ済ませ、最終的な公開 (`os.replace`/退避 rename) は呼び出し
+    側が担う」分離。失敗時は staging tempfile を best-effort で削除してから
+    re-raise する。"""
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=dest_path.parent, prefix=f"{dest_path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return tmp_name
+
+
+class ConfigPinPublishError(ValueError):
+    """P1 修正 (review #265 R12): `_publish_config_pin_transaction` が公開
+    直前の検査（宛先が「不在 or 通常ファイル」であること）で異常を検出した
+    場合に送出する（`adapter/render.py` `_atomic_write_wav_and_timing` の
+    同名検査・review #265 R9 と同型 — 宛先が既存のディレクトリだと退避
+    rename がその中身ごと巻き込んで喪失させ得るため、退避を試みる前に
+    fail-closed で拒否する）。"""
+
+
+def _publish_config_pin_transaction(
+    normalized_path: Path,
+    normalized_text: str,
+    manifest_path: Optional[Path],
+    manifest_text: Optional[str],
+) -> None:
+    """P1 修正 (review #265 R12): `.normalized.yaml`（pin 副本）と
+    `assembly_manifest.json` の 2 ファイルを**単一トランザクション**で公開
+    する（`adapter/render.py` `_atomic_write_wav_and_timing`（review #265
+    R3/R5/R9 で確立済みの「両方 staging → 退避 rename → 両方 os.replace の
+    4 ステップを単一 `try`/`except BaseException` 配下に置く」パターン）と
+    同型。片方だけ公開されて「新 config + 旧/破損 manifest」のような不整合
+    バンドルが残ることを防ぐ）。
+
+    `manifest_path`/`manifest_text` がいずれも `None`（`assembly_manifest.json`
+    が無い、または `config` セクションを持たない no-op ケース）の場合は
+    `normalized_path` 単独の atomic 書き（staging tempfile -> `os.replace`）
+    のみを行う。
+
+    manifest 側の書き込み自体も（`_compute_updated_manifest_text` が返す
+    テキストを）staging tempfile 経由で公開するため、旧実装の直接
+    `write_text`（非 atomic・中断で破損 manifest が残り得た）は解消される。
+    """
+    normalized_path = Path(normalized_path)
+    normalized_tmp = _stage_text_bytes(normalized_path, normalized_text)
+
+    if manifest_path is None or manifest_text is None:
+        try:
+            os.replace(normalized_tmp, normalized_path)
+        except BaseException:
+            try:
+                os.unlink(normalized_tmp)
+            except OSError:
+                pass
+            raise
+        return
+
+    manifest_path = Path(manifest_path)
+    try:
+        manifest_tmp = _stage_text_bytes(manifest_path, manifest_text)
+    except BaseException:
+        try:
+            os.unlink(normalized_tmp)
+        except OSError:
+            pass
+        raise
+
+    normalized_backup = normalized_path.parent / f"{normalized_path.name}.prev-{os.getpid()}.bak"
+    manifest_backup = manifest_path.parent / f"{manifest_path.name}.prev-{os.getpid()}.bak"
+    for stale in (normalized_backup, manifest_backup):
+        if stale.exists():
+            os.unlink(stale)
+    # `.exists()` は副作用の無い読み取りのみ。
+    normalized_had_previous = normalized_path.exists()
+    manifest_had_previous = manifest_path.exists()
+
+    try:
+        for _path, _had_previous in (
+            (normalized_path, normalized_had_previous),
+            (manifest_path, manifest_had_previous),
+        ):
+            if _had_previous and not _path.is_file():
+                raise ConfigPinPublishError(
+                    f"{_path} は既存のディレクトリ（または通常ファイルではない何か）"
+                    "です。退避 rename がその中身ごと喪失させ得るため fail-closed で"
+                    "拒否します（review #265 R12 対応）。"
+                )
+        if normalized_had_previous:
+            os.rename(normalized_path, normalized_backup)
+        if manifest_had_previous:
+            os.rename(manifest_path, manifest_backup)
+        os.replace(normalized_tmp, normalized_path)
+        os.replace(manifest_tmp, manifest_path)
+    except BaseException:
+        # 巻き戻し: 各宛先について「退避 rename が完了しているか」を
+        # `backup_path.exists()` というファイルシステム状態で判定する
+        # （`adapter/render.py` `_atomic_write_wav_and_timing` と同一の
+        # 巻き戻しロジック）。
+        for new_path, backup_path, had_previous in (
+            (normalized_path, normalized_backup, normalized_had_previous),
+            (manifest_path, manifest_backup, manifest_had_previous),
+        ):
+            if had_previous:
+                if backup_path.exists():
+                    if new_path.exists():
+                        os.unlink(new_path)
+                    os.rename(backup_path, new_path)
+                # backup_path が無ければ退避 rename 自体が未着手 —
+                # new_path は元のバイト列のまま残っているため何もしない。
+            else:
+                if new_path.exists():
+                    os.unlink(new_path)
+        for tmp in (normalized_tmp, manifest_tmp):
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        raise
+
+    # 公開成功: 退避しておいた旧世代はもう不要。
+    for backup, had_previous in (
+        (normalized_backup, normalized_had_previous),
+        (manifest_backup, manifest_had_previous),
+    ):
+        if had_previous:
+            try:
+                os.unlink(backup)
+            except OSError:
+                pass
 
 
 def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> Path:
@@ -447,8 +604,11 @@ def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> 
     成功時、`config_path` と同じディレクトリに `assembly_manifest.json` が
     存在すれば（`assemble()` が書いたもの想定）、その `config.config_sha256`/
     `config.normalized_config_sha256` を実測値へ更新する（review #265 R11
-    P1、§ `_update_manifest_config_pin` docstring 参照。manifest が無ければ
-    no-op）。
+    P1）。`.normalized.yaml` と `assembly_manifest.json` の 2 ファイルは
+    **単一トランザクション**で公開する（review #265 R12 P2、§
+    `_publish_config_pin_transaction` docstring 参照）——中断・I/O エラーで
+    「新 config + 旧/破損 manifest」の不整合バンドルが残ることを防ぐ
+    （manifest が無ければ `.normalized.yaml` 単独の atomic 書きのみ）。
 
     戻り値は書いた `.normalized.yaml` のパス。
     """
@@ -469,30 +629,42 @@ def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> 
     expected_normalized = _normalize_config_dict(live, config_dir)
 
     normalized_path = config_path.with_name(config_path.name + ".normalized.yaml")
-    tmp_path = normalized_path.parent / f"{normalized_path.name}.tmp-{os.getpid()}"
-    text = yaml.safe_dump(expected_normalized, allow_unicode=True, sort_keys=False)
+    normalized_text = yaml.safe_dump(expected_normalized, allow_unicode=True, sort_keys=False)
+
+    # 検証専用の verify tempfile へ書いて再読込・semantic diff する
+    # （まだ `normalized_path`/`manifest_path` いずれの実ファイルにも一切
+    # 触れない——公開前の検証フェーズ）。verify tempfile はこの検証にのみ
+    # 使い、実際の公開用 staging（`_publish_config_pin_transaction` 内で
+    # 新たに用意する）とは別物として都度削除する。
+    verify_tmp_path = normalized_path.parent / f"{normalized_path.name}.verify-{os.getpid()}.tmp"
     try:
-        tmp_path.write_text(text, encoding="utf-8")
-        reread = _load_yaml_config(tmp_path)
+        verify_tmp_path.write_text(normalized_text, encoding="utf-8")
+        reread = _load_yaml_config(verify_tmp_path)
         diffs = _semantic_diff(live, reread)
         if diffs:
             raise ConfigPinMismatchError(diffs)
-    except BaseException:
+    finally:
         try:
-            tmp_path.unlink()
+            verify_tmp_path.unlink()
         except OSError:
             pass
-        raise
-    os.replace(tmp_path, normalized_path)
 
-    # review #265 R11 P1: manifest 記帳値を実測で更新する（存在すれば）。
+    # review #265 R11 P1 (§R12 で単一トランザクション化): manifest 記帳値を
+    # 実測で更新する（存在すれば）。`normalized_config_sha256` は公開前の
+    # `normalized_text`（検証済みバイト列）から直接計算する — 未公開の
+    # normalized 実体を再度読み直す必要はない。
     manifest_path = _assembly_manifest_sibling(config_path)
+    manifest_text: Optional[str] = None
     if manifest_path is not None:
-        _update_manifest_config_pin(
+        manifest_text = _compute_updated_manifest_text(
             manifest_path,
             config_sha256=_sha256_file(config_path),
-            normalized_config_sha256=_sha256_file(normalized_path),
+            normalized_config_sha256=hashlib.sha256(normalized_text.encode("utf-8")).hexdigest(),
         )
+        if manifest_text is None:
+            manifest_path = None  # config セクション無し = no-op ケース
+
+    _publish_config_pin_transaction(normalized_path, normalized_text, manifest_path, manifest_text)
 
     return normalized_path
 

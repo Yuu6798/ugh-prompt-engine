@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import os
 import sys
 import wave
 from pathlib import Path
@@ -312,6 +313,90 @@ def test_convert_publishes_snapshot_csv_even_if_render_dir_csv_mutated_after_sna
     # 差し替え後の内容（"z" 単独）ではなく、snapshot 取得時点の元の内容
     # （"a SP k a"）が公開されている。
     assert row["ph_seq"] == "a SP k a"
+
+
+# ---------------------------------------------------------------------------
+# 2.7 P2 修正 (review #265 R12): _snapshot_wav_pairs は単一 dir_fd 経由で
+# wav/csv を読むため、render_dir が snapshot の途中で atomic swap されても
+# 世代混合ペア（旧 wav + 新 csv）が発生しない
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_wav_pairs_reads_consistent_generation_despite_mid_snapshot_swap(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    """R12 の核心シナリオ: `_snapshot_wav_pairs` がディレクトリを `dir_fd`
+    として open した**直後**（= wav/csv 個々の read より前）に `render_dir`
+    が全く別内容の新世代へ atomic rename swap されても、snapshot される
+    バイト列は取得時点（swap 前）の旧世代のままである（`dir_fd` は inode
+    束縛のため、パスが差し替わっても `openat` は旧世代を見続ける）。
+
+    旧実装（pathname ベースの 2 回の `shutil.copy2`）ならこのタイミングの
+    swap で wav/csv が新世代のバイト列に化けてしまうところを、dir_fd 方式は
+    構造的に防ぐ。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    old_wav_bytes = (render_dir / "cellA.wav").read_bytes()
+    old_csv_bytes = (render_dir / "cellA.csv").read_bytes()
+
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+
+    pairs = convert_d3.discover_pairs(render_dir)
+
+    real_os_open = os.open
+    swap_done = {"value": False}
+
+    def _open_with_swap_on_dir_open(path, flags, *args, **kwargs):
+        fd = real_os_open(path, flags, *args, **kwargs)
+        # ディレクトリ自体の open（`dir_fd` kwarg 無し・`render_dir` パス）
+        # を検出した直後に、render_dir を全く別内容の新世代へ atomic swap
+        # する（wav/csv 個々の openat はまだ 1 件も行われていないタイミング）。
+        if not swap_done["value"] and "dir_fd" not in kwargs and str(path) == str(render_dir):
+            swap_done["value"] = True
+            new_gen = tmp_path / "render_new_gen"
+            new_gen.mkdir()
+            _write_timing_csv(
+                new_gen / "cellA.csv",
+                [_note_row(
+                    0, midi=72.0, ph_seq="z", ph_dur_sec="9.000000", ph_num=1, note_dur_sec=9.0
+                )],
+            )
+            _write_wav(new_gen / "cellA.wav", 9.0)
+            old_gen_stash = tmp_path / "render_old_gen_stash"
+            render_dir.rename(old_gen_stash)
+            new_gen.rename(render_dir)
+        return fd
+
+    monkeypatch.setattr(convert_d3.os, "open", _open_with_swap_on_dir_open)
+    snapshot_pairs = convert_d3._snapshot_wav_pairs(pairs, snapshot_dir)
+
+    assert swap_done["value"]  # swap フックが実際に発火したことの確認
+    _stem, snap_wav, snap_csv = snapshot_pairs[0]
+    assert snap_wav.read_bytes() == old_wav_bytes
+    assert snap_csv.read_bytes() == old_csv_bytes
+    # 新世代の内容は snapshot に一切混入していない。
+    assert snap_wav.read_bytes() != (render_dir / "cellA.wav").read_bytes()
+    assert snap_csv.read_bytes() != (render_dir / "cellA.csv").read_bytes()
+
+
+def test_snapshot_wav_pairs_rejects_pairs_spanning_multiple_directories(tmp_path: Path) -> None:
+    """`_snapshot_wav_pairs` は全 pairs が単一の親ディレクトリを指すことを
+    前提とする（単一 `dir_fd` で世代一致を保証する設計のため）。契約違反は
+    `MixedGenerationPairError` で拒否する。"""
+    dir_a = tmp_path / "dir_a"
+    dir_a.mkdir()
+    dir_b = tmp_path / "dir_b"
+    dir_b.mkdir()
+    _make_cell_a(dir_a)
+    _make_cell_a(dir_b)
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+
+    mixed_pairs = [("cellA", dir_a / "cellA.wav", dir_b / "cellA.csv")]
+    with pytest.raises(convert_d3.MixedGenerationPairError):
+        convert_d3._snapshot_wav_pairs(mixed_pairs, snapshot_dir)
 
 
 # ---------------------------------------------------------------------------
