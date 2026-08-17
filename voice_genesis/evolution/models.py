@@ -25,6 +25,12 @@ hack-record/0.1 + Archive 用の内部モデル）。
   `build_evaluation_record()` と `evaluation_record_from_dict()` が共有する
   （Codex 指摘B, PR #267 R4 採用 2026-08-17: 従来 loader は空文字列 axis 名を
   素通ししていた）。
+- `operator=founder` → `generation==0` 必須（非 founder は `generation>=1`）と
+  `operator=reseed` → `operator_params.new_seed == seed` 必須は
+  `_validate_operator_generation_and_seed()` を `build_genome()` と
+  `genome_from_dict()` が共有する（PR #267 Codex R5 指摘3/4, 2026-08-17
+  採用: 従来はどちらも任意の generation / 矛盾した new_seed が構築・読込
+  双方を素通りしていた）。
 """
 from __future__ import annotations
 
@@ -390,6 +396,45 @@ def _validate_operator_params(operator: str, params: Mapping[str, Any], *, norma
     raise GenomeValidationError(f"unknown operator: {operator!r}")  # pragma: no cover - defensive
 
 
+def _validate_operator_generation_and_seed(
+    operator: str, generation: int, seed: int, operator_params: Mapping[str, Any]
+) -> None:
+    """operator=founder → generation==0 必須（+ 非 founder → generation>=1）と、
+    operator=reseed → `operator_params.new_seed` == 直上位 `seed` 必須を検証する
+    共有ヘルパー。`build_genome()`（書込経路）と `genome_from_dict()`（読込
+    経路）の両方から呼ばれる単一実装（PR #267 Codex R5 指摘3/4, 2026-08-17
+    採用: 従来は operator=reseed の top-level `seed` と
+    `operator_params.new_seed` が矛盾しても構築・読込の双方が通っていた
+    （reseed は seed のみを変更するオペレータのため、この2値が食い違うと
+    genome の宣言 seed と意図した new_seed が乖離する）。同じく従来は
+    operator=founder が任意の generation で構築・load できた
+    （DESIGN_VG_E0.md §1「創始個体 = 0」に反する）。呼び出し元は
+    operator_params が既に `_validate_operator_params()` で検証済み
+    （reseed なら new_seed キーが存在する）であることを前提とする。
+    """
+    if operator == "founder":
+        if generation != 0:
+            raise GenomeValidationError(
+                f"operator='founder' requires generation == 0, got {generation!r} "
+                "(founder genomes are generation-0 by construction — DESIGN_VG_E0.md §1)"
+            )
+    elif generation < 1:
+        raise GenomeValidationError(
+            f"operator={operator!r} requires generation >= 1 (only operator='founder' may declare "
+            f"generation == 0 — DESIGN_VG_E0.md §1), got {generation!r}"
+        )
+
+    if operator == "reseed":
+        new_seed = operator_params["new_seed"]
+        if new_seed != seed:
+            raise GenomeValidationError(
+                f"operator='reseed' requires operator_params.new_seed ({new_seed!r}) to equal the "
+                f"top-level seed ({seed!r}) — reseed changes the genome's seed field itself, so a "
+                "mismatched new_seed would silently diverge the declared identity from the recorded "
+                "intent (PR #267 Codex R5 指摘3)"
+            )
+
+
 # ---------------------------------------------------------------------------
 # anchors_provenance（DESIGN_VG_E0.md §1/§6: run4 前は null、以後必須化）
 # ---------------------------------------------------------------------------
@@ -552,6 +597,9 @@ def build_genome(
     # normalize=True: build_genome() は operator_params の float を6桁丸めへ
     # 正規化してから格納する（Codex 指摘B）。
     validated_params = _validate_operator_params(operator, operator_params, normalize=True)
+    # founder の generation==0 強制 + reseed の new_seed==seed 束縛（Codex R5
+    # 指摘3/4）。genome_from_dict() と共有の単一実装。
+    _validate_operator_generation_and_seed(operator, generation, seed, validated_params)
     validated_anchors = (
         _validate_anchors_provenance(anchors_provenance) if anchors_provenance is not None else None
     )
@@ -654,6 +702,9 @@ def genome_from_dict(data: Any) -> VoiceGenome:
     # fail-closed で拒否する（Codex 指摘B。build_genome() 側の normalize=True
     # と対称）。
     operator_params = _validate_operator_params(operator, operator_params_raw, normalize=False)
+    # founder の generation==0 強制 + reseed の new_seed==seed 束縛（Codex R5
+    # 指摘3/4）。build_genome() と共有の単一実装。
+    _validate_operator_generation_and_seed(operator, generation, seed, operator_params)
 
     anchors_raw = data["anchors_provenance"]
     if anchors_raw is not None and not isinstance(anchors_raw, dict):

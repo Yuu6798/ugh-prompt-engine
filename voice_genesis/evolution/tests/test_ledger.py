@@ -158,6 +158,33 @@ def test_write_rejects_genome_broken_after_construction(tmp_path: Path) -> None:
 # --- Codex 指摘5（P2）: read の要求 ID 束縛 ----------------------------------
 
 
+# --- PR #267 Codex R5 指摘1（P1）: 台帳の孤児親参照 -------------------------
+
+
+def test_write_rejects_genome_with_unpublished_parent(tmp_path: Path, founder) -> None:
+    """親 genome がまだ台帳に write されていない状態で子 genome を write
+    しようとすると、系譜グラフに宙吊りエッジが生まれる前に `LedgerError`
+    で拒否される（親を write せずに参照するのは未 publish / typo のいずれ
+    でも区別できないため fail-closed）。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    child = operators.drift(founder, rng_seed=1, step=0.02)
+    assert not led.exists(founder.genome_id)
+    with pytest.raises(ledger_mod.LedgerError):
+        led.write(child)
+    assert led.list_genome_ids() == []
+
+
+def test_write_accepts_genome_after_parent_published(tmp_path: Path, founder) -> None:
+    """親を先に write すれば、同一の子 genome の write は成功する。"""
+    led = ledger_mod.Ledger(tmp_path)
+    child = operators.drift(founder, rng_seed=1, step=0.02)
+    led.write(founder)
+    path = led.write(child)
+    assert path == tmp_path / f"{child.genome_id}.json"
+    assert led.exists(child.genome_id)
+
+
 def test_read_rejects_renamed_file(tmp_path: Path, founder) -> None:
     """ファイルがリネームされ、ファイル名（要求 genome_id）と内容の自己申告
     genome_id が食い違う場合、`read()` は拒否する（自己申告 ID の再計算一致

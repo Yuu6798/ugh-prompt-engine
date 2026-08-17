@@ -319,6 +319,68 @@ def test_founder_requires_empty_operator_params() -> None:
         )
 
 
+# --- PR #267 Codex R5 指摘3（P2）: reseed の seed 束縛 ----------------------
+
+
+def test_build_genome_rejects_reseed_new_seed_mismatching_top_level_seed() -> None:
+    with pytest.raises(models.GenomeValidationError, match="new_seed"):
+        models.build_genome(
+            coords=models.Coords(0.5, 0.3, 0.2), seed=7, lineage="L-C", generation=1,
+            parents=("a" * 16,), operator="reseed", operator_params={"new_seed": 8},
+        )
+
+
+def test_genome_from_dict_rejects_reseed_new_seed_mismatching_top_level_seed() -> None:
+    d = models.genome_to_dict(models.build_genome(
+        coords=models.Coords(0.5, 0.3, 0.2), seed=7, lineage="L-C", generation=1,
+        parents=("a" * 16,), operator="reseed", operator_params={"new_seed": 7},
+    ))
+    d["seed"] = 9  # genome_id はもう再計算値と一致しなくなるが、seed 束縛
+    # チェックが genome_id チェックより先に走ることを確かめるため match で
+    # "new_seed" を要求する。
+    with pytest.raises(models.GenomeValidationError, match="new_seed"):
+        models.genome_from_dict(d)
+
+
+# --- PR #267 Codex R5 指摘4（P2）: founder の generation=0 強制 -------------
+
+
+def test_build_genome_rejects_founder_with_nonzero_generation() -> None:
+    with pytest.raises(models.GenomeValidationError, match="generation"):
+        models.build_genome(
+            coords=models.Coords(1.0, 0.0, 0.0), seed=0, lineage="L-R", generation=9,
+            parents=(), operator="founder", operator_params={},
+        )
+
+
+def test_genome_from_dict_rejects_founder_with_nonzero_generation() -> None:
+    d = models.genome_to_dict(models.build_genome(
+        coords=models.Coords(1.0, 0.0, 0.0), seed=0, lineage="L-R", generation=0,
+        parents=(), operator="founder", operator_params={},
+    ))
+    d["generation"] = 9
+    with pytest.raises(models.GenomeValidationError, match="generation"):
+        models.genome_from_dict(d)
+
+
+def test_build_genome_rejects_non_founder_with_generation_zero() -> None:
+    with pytest.raises(models.GenomeValidationError, match="generation"):
+        models.build_genome(
+            coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=0,
+            parents=("a" * 16,), operator="drift", operator_params={"rng_seed": 1, "step": 0.01},
+        )
+
+
+def test_genome_from_dict_rejects_non_founder_with_generation_zero() -> None:
+    d = models.genome_to_dict(models.build_genome(
+        coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=1,
+        parents=("a" * 16,), operator="drift", operator_params={"rng_seed": 1, "step": 0.01},
+    ))
+    d["generation"] = 0
+    with pytest.raises(models.GenomeValidationError, match="generation"):
+        models.genome_from_dict(d)
+
+
 # --- operator_params float 正規化（Codex 指摘B） --------------------------
 
 

@@ -44,6 +44,25 @@ class Archive:
     def _lineage_has_elite(self, lineage: str) -> bool:
         return any(entry.lineage == lineage for entry in self._elite.values())
 
+    def _evict_protected_for_lineage(self, lineage: str, incoming: models.ArchiveEntry) -> None:
+        """`lineage` が elite として（どのセルであれ）受理されたことで、同一
+        lineage が占有する保護スロットはもはや「系統的に唯一」ではなくなる
+        （PR #267 Codex R5 指摘2, 2026-08-17 採用）。該当する保護スロット
+        （複数セルにまたがりうる）を全て無効化し、追い出しイベントとして
+        記録する。従来はこの evict が無かったため、L-R の保護個体が elite
+        受理後もスロットを占有し続け、後から来る真に未代表の系統の個体を
+        品質比較で不当に弾いていた。
+        """
+        stale_cells = [c for c, entry in self._protected.items() if entry.lineage == lineage]
+        for c in stale_cells:
+            evicted = self._protected.pop(c)
+            self.eviction_log.append(models.EvictionEvent(
+                cell=c, slot="protected",
+                evicted_genome_id=evicted.genome_id, evicted_quality=evicted.quality,
+                incoming_genome_id=incoming.genome_id, incoming_quality=incoming.quality,
+                reason="lineage_no_longer_unique",
+            ))
+
     def submit(self, genome: models.VoiceGenome, quality: float, *, quality_floor: float) -> str:
         """genome をその座標が属するセルへ提出する。戻り値は
         `"elite"` / `"protected"` / `"rejected"` のいずれか。
@@ -51,7 +70,10 @@ class Archive:
         判定順序:
         1. `quality >= quality_floor` かつ（セルに elite が無い、または
            `quality` が既存 elite の quality を上回る）→ elite として採用
-           （既存 elite があれば追い出し記録を append）。
+           （既存 elite があれば追い出し記録を append）。elite 採用時は
+           同一 lineage が占有する保護スロット（どのセルであれ）を無効化
+           する（追い出し記録付き — PR #267 Codex R5 指摘2: elite に到達した
+           lineage はもはや「唯一」ではないため）。
         2. 1 に該当しない場合（floor 未満、または floor 以上だが既存 elite
            に劣る）: この genome の lineage が Archive 全体のどの elite にも
            一致しない（＝この lineage が elite として一切生き残っていない）
@@ -78,6 +100,7 @@ class Archive:
                         reason="higher_quality_elite",
                     ))
                 self._elite[cell] = incoming
+                self._evict_protected_for_lineage(incoming.lineage, incoming)
                 return "elite"
             return "rejected"
 

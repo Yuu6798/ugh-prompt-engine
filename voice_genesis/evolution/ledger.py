@@ -23,6 +23,13 @@ genome_id 再計算一致・lineage 座標整合・anchors_provenance sha256 構
 へ通す（Codex 指摘2, 2026-08-17 採用: 呼び出し側が `VoiceGenome` dataclass
 を直接構築したり `operator_params` の dict を変異させた場合、
 `build_genome()` の検証を経ずに壊れた genome が publish されうるため）。
+
+同じく publish 前検証として、`parents` の各 genome_id が台帳に実在する
+ことを確認する（PR #267 Codex R5 指摘1, 2026-08-17 採用: founder =
+parents 空はそのまま許可。非 founder の genome が未 publish / typo の
+親 ID を参照していても従来は write が通り、系譜グラフに宙吊りエッジ
+（存在しない親への参照）が恒久化していた）。不在親は `LedgerError` で
+fail-closed。
 """
 from __future__ import annotations
 
@@ -79,6 +86,18 @@ class Ledger:
                 f"refusing to publish genome_id {genome.genome_id!r}: serialized payload failed "
                 f"round-trip validation via genome_from_dict() ({exc})"
             ) from exc
+
+        # publish 前検証（Codex R5 指摘1）: parents の各 genome_id が台帳に
+        # 実在することを確認する（founder = parents 空はそのまま通過）。
+        # 未 publish / typo の親 ID を許すと系譜グラフに宙吊りエッジが
+        # 恒久化するため fail-closed で拒否する。
+        for parent_id in genome.parents:
+            if not self.exists(parent_id):
+                raise LedgerError(
+                    f"refusing to publish genome_id {genome.genome_id!r}: parent {parent_id!r} does "
+                    "not exist in the ledger (parents must already be published — an unpublished or "
+                    "mistyped parent id would leave a dangling edge in the lineage graph)"
+                )
 
         self.directory.mkdir(parents=True, exist_ok=True)
 
