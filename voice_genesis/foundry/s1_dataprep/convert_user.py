@@ -22,36 +22,63 @@ note_seq,note_dur）+ `wavs/`（44.1kHz mono s16、ffmpeg 決定論変換）。
   グリッチとして除外）。3 段ちょうどでなければ fail-closed でそのカードを除外する
   （黙って 2 段で通さない）。各段 = 単一母音音素（カード対応は `cards.md` T1 表で
   固定）。note は段内 f0 中央値（`librosa.pyin`）の最近傍整数 MIDI。
-- **T2**（UC-008〜017、短句）: `cards.md` の歌詞（引用符内の文言のみ。UC-017 の
-  「（息つぎ）」注記はフレーズ区切りとして解釈し除去）を `singer/phoneme_jp.py`
-  `kana_to_morae()` でモーラ列へ確定する。**`kana_to_morae` が未対応の文字
-  （促音「っ」、`_PLAIN_TABLE`/`_YOON_BASE` に無い濁音行 ば/だ/ざ・半濁音ぱ行・
-  カタカナ外来語音 ティ/ディ/ファ/フィ/フェ/フォ/ヴァ/ヴィ/ヴェ 等）に当たった
-  場合は、そのカードを丸ごと除外し理由を記録する（実装は止めない・黙殺しない）**。
-  促音「っ」の扱いについては下記「促音の扱い」節を参照。フレーズ数と一致する
-  有声ラン（無音ギャップ >= 0.1s、`batch3_t2_inspection.md` の手法と同型）が
-  検出できた場合のみラン内をモーラ数比例 + 子音定率（`CONSONANT_FRACTION`）で
-  配分する。note はラン内 f0 中央値 MIDI（フレーズ単位）。
+- **T2**（UC-008〜017、短句）: **[C2 改訂]** `cards.md` の歌詞（引用符内の文言
+  のみ。UC-017 の「（息つぎ）」注記はフレーズ区切りとして解釈し除去）を
+  `--dsdict`（正本 = リツ公式 DiffSinger 配布 zip の `dsdur/dsdict.yaml`、
+  617 グラフェムエントリ）へのグラフェム→音素 lookup で音素列へ確定する
+  （下記「dsdict.yaml によるグラフェム音素化（C2）」節参照）。フレーズ数と
+  一致する有声ラン（無音ギャップ >= 0.1s、`batch3_t2_inspection.md` の手法と
+  同型。**ラン数 > フレーズ数の場合のみ、最小ギャップの隣接ペア併合を数が
+  合うまで決定論的に繰り返して吸収する**。ラン数 < フレーズ数は従来どおり
+  fail-closed）が検出できた場合のみラン内をグラフェム重み比例 + 子音定率
+  （`CONSONANT_FRACTION`）で配分する。note はラン内 f0 中央値 MIDI（フレーズ
+  単位）。
 
-## 促音「っ」の扱い（`DESIGN_S3_backfill.md` §3.1 last bullet / §7 Q5）
+## dsdict.yaml によるグラフェム音素化（C2、`DESIGN_S3_backfill.md` §3.1 last
+   bullet / §7 Q5 の後継）
 
-`s1_dataprep` の統合辞書（`build_dataset.py` が `transcriptions.csv` の
-音素記号の和集合から動的生成する恒等写像辞書。実体ファイルは外部素材
-取得後にのみ生成される非コミット成果物で、本実装環境には存在しない）を
-一次ソース確認したところ、**促音の記号が実際に存在するかを本環境で直接
-確認することはできなかった**（`dsdict.yaml`・`merged_ja_dict.txt` いずれも
-未取得/未生成）。`s1_dataprep/README.md` §3 の実測記録は PJS 由来の
-残差記号として `cl`/`xx` が現れると記載しているが、これは nnsvs-db-converter
-の強制アラインメント出力に由来するものであり、本変換器（歌詞テキストからの
-直接音素化）が同じ意味で `cl` を発行してよい根拠にはならない。加えて
-`phoneme_jp.kana_to_morae` は促音を未実装のまま `ValueError` を送出し、
-`donor_bank_utau.normalize_mora_kana` も `"sokuon"` として明示的に未マップ
-のまま返す（`r09_design_memo.md` / `DESIGN_S3_backfill.md` §7 Q5 と同一の
-既存事実）。**したがって本実装は促音記号を一切 emit しない**。促音を含む
-カードは `kana_to_morae` の `ValueError` を通じて他の未対応文字と同じ経路で
-検出され、カード単位で除外し理由を記録する（`--out-dir` の `exclusions.json`
-+ CLI 標準出力）。対応するなら音素・タイミングモデル拡張の独立タスク
-（§7 Q5 と同じ結論）。
+C1（初版）は `s1_dataprep` の統合辞書の実体（`dsdict.yaml`）が本実装環境に
+存在せず、促音記号の実在を確認できなかったため `phoneme_jp.py`（ひらがな限定
+の最小サブセット）を使い、促音・カタカナ外来語音・濁音行ば/だ/ざ・半濁音ぱ行
+を未対応として T2 の大半を除外した。C2 では正本 `dsdict.yaml`（リツ公式
+DiffSinger 配布 zip、`S1_GPU_RUNBOOK.md` 素材 3 の pin `5c7b8c328180ea29…`
+と一致確認済み・617 エントリ）を一次ソース確認した上で採用する:
+
+- **促音「っ」**: `dsdict.yaml` に `grapheme: っ -> phonemes: [cl]` が実在する
+  （一次ソース確認済み）。**`cl` を emit する**（C1 の「促音記号を一切 emit
+  しない」方針を撤回）。durationは「短い子音相当」の配分として通常グラフェム
+  より小さい重み（`SOKUON_WEIGHT = 0.5`）を与える。
+- **濁音行 ば/だ/ざ・半濁音ぱ行**: `dsdict.yaml` に全行が実在する（b/d/z/p +
+  母音）。通常のグラフェムとして 2 音素（onset+vowel）で扱う。
+- **カタカナ外来語音**（ティ/ディ/ファ/フィ/フェ/フォ等）: `dsdict.yaml` に
+  カタカナ表記・ローマ字表記の両方が実在する（例: `ティ -> [t, I]`）。**最長
+  一致トークン化**（2 文字グラフェムを 1 文字グラフェムより優先）で正しく
+  1 トークンとして拾う（`phoneme_jp.py` の 1 文字ずつの逐次判定では「ティ」の
+  先頭「テ」だけで既に未対応判定になっていた — C1 からの改善点）。母音は
+  大文字（`I`/`A`/`U`/`E`/`O`、`dsdict.yaml` `symbols:` で `type: stop` に
+  分類される外来語専用の register）を用いる（辞書のとおり、ひらがな小文字の
+  母音と混同しない）。
+- **カタカナ促音「ッ」/ カタカナ撥音「ン」**: `dsdict.yaml` にはひらがな
+  「っ」「ん」の grapheme エントリのみが存在し、カタカナ単独形「ッ」「ン」は
+  実在しない（一次ソース確認済み、`grep` で該当なし）。これは "別の音への
+  代用" ではなく、同一の音素（`cl` / `N`）を指す**表記ゆれ**（外来語をカタカナ
+  で書く際の促音・撥音は日本語表記としてひらがな「っ」「ん」と完全に同一の
+  発音であり、辞書側がひらがな形のみを収録しているだけ）と判断し、
+  `_SOKUON_NASAL_KATAKANA_TO_HIRAGANA`（`ッ`→`っ`, `ン`→`ん`）でトークン化前に
+  正規化する。UC-008「カップ」・UC-009「ファンファーレ」がこれに該当し、
+  正規化なしでは辞書引きに失敗する（実測確認済み）。
+- **長音記号「ー」**: `dsdict.yaml` に grapheme エントリが無い（一次ソース
+  確認: `grep` で該当なし）。`phoneme_jp.py` と同じ意味論（直前トークンの
+  母音を延長するマーカー、独自の音素は追加しない）で扱う。durationは直前
+  トークンへ加算する重み（`CHOON_EXTRA_WEIGHT = 1.0`）として実装する。
+- **ヴ系グラフェム（ヴァ/ヴィ/ヴェ/ヴ 等）**: `dsdict.yaml` に一切実在しない
+  （一次ソース確認済み、`grep -n "ヴ"` で 0 件）。**代用マッピングは禁止**
+  （例: ASR 誤認識の「パ/ピ/ペ」等へ寄せない）。UC-010 は除外を継続し、理由を
+  「ヴ系グラフェムが正本辞書に非対応」へ更新する。
+
+対象カード再評価（cards.md の実文言を dsdict でトークン化した結果、一次ソース
+突合済み）: T2 復旧対象 = UC-008/009/011/012/013/014/015/016/017 の 9 枚
+（すべて dsdict で全文字マッピング可能）。UC-010 のみ除外継続（ヴ非対応）。
 
 ## 家風の踏襲
 
@@ -95,6 +122,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import soundfile as sf
 import librosa
+import yaml
 
 # --- sibling import: convert_d3.py（同ディレクトリ。resample/atomic-swap/
 # collision-guard を read-only import で再利用する。触れない・複製しない）。
@@ -138,6 +166,24 @@ T2_MIN_RUN_SEC = 0.05
 
 # 子音/母音比（モジュール docstring「子音/母音比の参考値」節参照）。
 CONSONANT_FRACTION = 0.3
+
+# --- dsdict.yaml トークン化（T2 専用、C2）: 定数は「dsdict.yaml による
+# グラフェム音素化（C2）」節参照。 ------------------------------------------
+
+# 促音「っ」= cl の duration 重み（"短い子音相当の配分"。通常グラフェムの
+# 重み 1.0 より小さい固定値。dsdict 上は cl も他グラフェムと同格の 1 エントリ
+# だが、実際の音価は他モーラより短いため duration 配分でのみ差を付ける）。
+SOKUON_WEIGHT = 0.5
+
+# 長音記号「ー」が直前トークンへ加算する追加 duration 重み（1.0 = 通常
+# モーラ 1 個分の伸長。母音を「もう1モーラ分」保持するという近似）。
+CHOON_EXTRA_WEIGHT = 1.0
+
+_CHOON_MARK = "ー"
+
+# カタカナ促音/撥音 -> ひらがな正規化（モジュール docstring 節参照。
+# "別の音への代用" ではなく同一音素の表記ゆれの正規化）。
+_SOKUON_NASAL_KATAKANA_TO_HIRAGANA: Dict[str, str] = {"ッ": "っ", "ン": "ん"}
 
 # `cards.md` T2 節「そのまま歌う文句」列から引用符内の文言のみを抽出し、
 # 空白区切りでフレーズ化したもの（UC-017 のみ「（息つぎ）」注記をフレーズ
@@ -259,6 +305,129 @@ def reconcile_ledger(
 
 
 # ---------------------------------------------------------------------------
+# 1.5 dsdict.yaml ロード + グラフェム最長一致トークン化（T2 専用、C2）
+# ---------------------------------------------------------------------------
+
+
+class DsDictError(ValueError):
+    """`--dsdict` の読み込み・構文が不正な場合に送出する（fail-closed。
+    T2 全カード除外の原因になり得るため CLI/`convert()` レベルで扱う）。"""
+
+
+class DsDictTokenizeError(ValueError):
+    """フレーズ中に `dsdict.yaml` のどのグラフェムにも一致しない文字が
+    見つかった場合に送出する（カード単位の除外理由として使う。ヴ系等、
+    辞書に実在しない音は代用マッピングしない — モジュール docstring
+    「dsdict.yaml によるグラフェム音素化（C2）」節参照）。"""
+
+
+@dataclass(frozen=True)
+class DsDict:
+    path: Path
+    sha256: str
+    table: Dict[str, List[str]]  # grapheme -> phonemes（辞書内で最初に現れた対応を正とする）
+    max_grapheme_len: int
+
+
+def load_dsdict(path: Path) -> DsDict:
+    """`dsdict.yaml`（`entries: [{grapheme, phonemes}, ...]`）を読み込み、
+    グラフェム -> 音素列の lookup テーブルを構築する。ファイル全体の sha256 も
+    併せて計算する（`--dsdict` の provenance として summary/exclusions.json へ
+    記帳するため）。"""
+    path = Path(path)
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise DsDictError(f"{path}: cannot read dsdict file ({exc})") from None
+    sha = hashlib.sha256(raw).hexdigest()
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        raise DsDictError(f"{path}: not valid YAML ({exc})") from None
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        raise DsDictError(f"{path}: missing top-level 'entries' list (fail-closed)")
+
+    table: Dict[str, List[str]] = {}
+    for entry in data["entries"]:
+        if not isinstance(entry, dict):
+            continue
+        grapheme = entry.get("grapheme")
+        phonemes = entry.get("phonemes")
+        if not grapheme or not isinstance(phonemes, list) or not phonemes:
+            continue
+        # 辞書内の重複 grapheme（ローマ字/かな 2 表記が同じ音素列を指す等）は
+        # 先勝ちで固定する（決定論。実測: `dsdict.yaml` に "cha"/"ja" 等の
+        # 重複あり、いずれも同一音素列を指すため実害なし）。
+        table.setdefault(str(grapheme), [str(p) for p in phonemes])
+
+    if not table:
+        raise DsDictError(f"{path}: no usable grapheme entries found (fail-closed)")
+
+    max_len = max(len(g) for g in table)
+    return DsDict(path=path, sha256=sha, table=table, max_grapheme_len=max_len)
+
+
+def _normalize_sokuon_nasal(text: str) -> str:
+    """カタカナ促音「ッ」/ 撥音「ン」をひらがな「っ」/「ん」へ正規化する
+    （`_SOKUON_NASAL_KATAKANA_TO_HIRAGANA` docstring 参照。同一音素の表記ゆれの
+    正規化であり、辞書に無い別の音への代用ではない）。"""
+    return "".join(_SOKUON_NASAL_KATAKANA_TO_HIRAGANA.get(ch, ch) for ch in text)
+
+
+def tokenize_with_dsdict(dsdict: DsDict, phrase: str) -> List[Tuple[str, List[str]]]:
+    """`phrase`（カタカナ促音/撥音の正規化後）を `dsdict` のグラフェムで
+    最長一致トークン化する。長音記号「ー」は独立トークン `("ー", [])`
+    （音素を追加しないマーカー）として返す。戻り値は `(grapheme, phonemes)`
+    の列。どのグラフェムにも一致しない文字が見つかった場合は
+    `DsDictTokenizeError` を送出する（代用マッピングはしない）。"""
+    text = _normalize_sokuon_nasal(phrase)
+    n = len(text)
+    out: List[Tuple[str, List[str]]] = []
+    i = 0
+    while i < n:
+        if text[i] == _CHOON_MARK:
+            out.append((_CHOON_MARK, []))
+            i += 1
+            continue
+        matched = False
+        max_try = min(dsdict.max_grapheme_len, n - i)
+        for length in range(max_try, 0, -1):
+            candidate = text[i:i + length]
+            phonemes = dsdict.table.get(candidate)
+            if phonemes is not None:
+                out.append((candidate, phonemes))
+                i += length
+                matched = True
+                break
+        if not matched:
+            raise DsDictTokenizeError(
+                f"unmapped grapheme in dsdict lookup: {text[i]!r} (phrase={phrase!r})"
+            )
+    return out
+
+
+def weighted_tokens_for_phrase(dsdict: DsDict, phrase: str) -> List[Tuple[List[str], float]]:
+    """`phrase` を dsdict でトークン化し、`(phonemes, duration_weight)` の列を
+    返す。長音「ー」は独立ノートを持たず、直前トークンの重みへ
+    `CHOON_EXTRA_WEIGHT` を加算する。促音「っ」(=`["cl"]`) は
+    `SOKUON_WEIGHT`、それ以外は通常重み 1.0（モーラ数比例）。"""
+    raw = tokenize_with_dsdict(dsdict, phrase)
+    weighted: List[List[object]] = []  # [phonemes, weight] (mutable for in-place +=)
+    for grapheme, phonemes in raw:
+        if grapheme == _CHOON_MARK:
+            if not weighted:
+                raise DsDictTokenizeError(
+                    f"phrase starts with a long-vowel mark, no preceding token to extend: "
+                    f"{phrase!r}"
+                )
+            weighted[-1][1] = weighted[-1][1] + CHOON_EXTRA_WEIGHT
+            continue
+        weight = SOKUON_WEIGHT if phonemes == ["cl"] else 1.0
+        weighted.append([list(phonemes), weight])
+    return [(phonemes, weight) for phonemes, weight in weighted]
+
+
+# ---------------------------------------------------------------------------
 # 2. 音声解析プリミティブ（RMS ゲート・f0 中央値。乱数不使用、決定論）
 # ---------------------------------------------------------------------------
 
@@ -369,6 +538,18 @@ def _durations_for_mora(mora: "pj.Mora", mora_dur: float) -> List[float]:
         cons_dur = mora_dur * CONSONANT_FRACTION
         return [cons_dur, mora_dur - cons_dur]
     return [mora_dur]
+
+
+def _durations_for_phonemes(phonemes: Sequence[str], note_dur: float) -> List[float]:
+    """dsdict トークン（T2, C2）用の汎用版: 2 音素（onset+vowel、促音 `cl`
+    単体を含む 1 音素トークンとは別枠）は `_durations_for_mora` と同じ
+    `CONSONANT_FRACTION` 分割、1 音素はそのまま全長を割り当てる。"""
+    if len(phonemes) == 2:
+        cons_dur = note_dur * CONSONANT_FRACTION
+        return [cons_dur, note_dur - cons_dur]
+    if len(phonemes) == 1:
+        return [note_dur]
+    raise ValueError(f"unexpected phoneme count in dsdict token: {phonemes!r}")
 
 
 def _fmt_dur(value: float) -> str:
@@ -517,57 +698,84 @@ def _process_t1_card(card_id: str, samples: np.ndarray, sr: int) -> Tuple[Option
 
 
 # ---------------------------------------------------------------------------
-# 6. T2（短句: phoneme_jp モーラ化 + 有声ラン境界のフレーズ割当）
+# 6. T2（短句: dsdict.yaml グラフェム音素化 [C2] + 有声ラン境界のフレーズ割当）
 # ---------------------------------------------------------------------------
 
 
-def _phrase_morae(
-    card_id: str, phrases: Sequence[str]
-) -> Tuple[Optional[List[List["pj.Mora"]]], Optional[str]]:
-    result: List[List[pj.Mora]] = []
+def _phrase_tokens_dsdict(
+    card_id: str, phrases: Sequence[str], dsdict: DsDict
+) -> Tuple[Optional[List[List[Tuple[List[str], float]]]], Optional[str]]:
+    result: List[List[Tuple[List[str], float]]] = []
     for phrase in phrases:
         try:
-            result.append(pj.kana_to_morae(phrase))
-        except ValueError as exc:
-            return None, f"{card_id}: unmapped kana in phrase {phrase!r}: {exc}"
+            result.append(weighted_tokens_for_phrase(dsdict, phrase))
+        except DsDictTokenizeError as exc:
+            return None, f"{card_id}: unmapped grapheme in dsdict for phrase {phrase!r}: {exc}"
     return result, None
 
 
-def _process_t2_card(card_id: str, samples: np.ndarray, sr: int) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+def _reconcile_t2_segment_count(
+    segments: List[Tuple[float, float]], expected: int
+) -> Tuple[Optional[List[Tuple[float, float]]], Optional[str]]:
+    """T2 専用の吸収規則（C2、`DESIGN_S3_backfill.md` §3.1 と別枠。T0 の
+    `_reconcile_segment_count`（+1 のみ・1 回きり）とは独立の関数 — T0/T1 の
+    出力バイト不変を保証するため、既存関数は一切変更しない）。ラン数 >
+    期待フレーズ数の場合のみ、ギャップ最小の隣接ペア併合を数が合うまで
+    決定論的に繰り返して吸収する。ラン数 < フレーズ数は吸収不能として
+    fail-closed のまま。"""
+    segs = list(segments)
+    if len(segs) < expected:
+        return None, (
+            f"expected {expected} voiced run(s), got {len(segs)} "
+            "(fail-closed; too few runs to merge down to the expected count)"
+        )
+    while len(segs) > expected:
+        gaps = [(segs[i + 1][0] - segs[i][1], i) for i in range(len(segs) - 1)]
+        _, merge_at = min(gaps, key=lambda pair: pair[0])
+        segs = segs[:merge_at] + [(segs[merge_at][0], segs[merge_at + 1][1])] + segs[merge_at + 2:]
+    return segs, None
+
+
+def _process_t2_card(
+    card_id: str, samples: np.ndarray, sr: int, dsdict: DsDict
+) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
     phrases = T2_PHRASES[card_id]
-    morae_per_phrase, err = _phrase_morae(card_id, phrases)
+    tokens_per_phrase, err = _phrase_tokens_dsdict(card_id, phrases, dsdict)
     if err is not None:
         return None, err
-    assert morae_per_phrase is not None
+    assert tokens_per_phrase is not None
 
     segs = _segments_by_gap(
         samples, sr, silence_db=SILENCE_DB, frame_sec=FRAME_SEC,
         min_gap_sec=T2_MIN_GAP_SEC, min_run_sec=T2_MIN_RUN_SEC,
     )
-    if len(segs) != len(phrases):
-        return None, (
-            f"{card_id}: expected {len(phrases)} voiced run(s) (one per space-delimited lyric "
-            f"phrase), got {len(segs)} (fail-closed exclusion)"
-        )
+    segs, err = _reconcile_t2_segment_count(segs, len(phrases))
+    if err is not None:
+        return None, f"{card_id}: {err}"
+    assert segs is not None
 
     builder = _RowBuilder()
     total_dur = len(samples) / sr
     prev_end = 0.0
-    for morae, (start, end) in zip(morae_per_phrase, segs):
+    for tokens, (start, end) in zip(tokens_per_phrase, segs):
         builder.add_rest(start - prev_end)
         seg_dur = end - start
         f0 = _f0_median_hz(samples, sr, start, end)
         if f0 is None:
             return None, f"{card_id}: no voiced f0 found in phrase run ({start:.3f}-{end:.3f}s) (fail-closed)"
         midi = _hz_to_midi_round(f0)
-        n_morae = len(morae)
-        if n_morae == 0:
-            return None, f"{card_id}: phrase produced zero morae (fail-closed)"
-        mora_dur = seg_dur / n_morae
-        for mora in morae:
-            phonemes = _phonemes_for_mora(mora)
-            durations = _durations_for_mora(mora, mora_dur)
-            builder.add_note(phonemes, durations, midi, mora_dur)
+        if not tokens:
+            return None, f"{card_id}: phrase produced zero dsdict tokens (fail-closed)"
+        total_weight = sum(weight for _, weight in tokens)
+        if total_weight <= 0:
+            return None, f"{card_id}: phrase has non-positive total token weight (fail-closed)"
+        unit_dur = seg_dur / total_weight
+        for phonemes, weight in tokens:
+            note_dur = unit_dur * weight
+            if note_dur <= 0.0:
+                return None, f"{card_id}: allocated non-positive note duration (fail-closed)"
+            durations = _durations_for_phonemes(phonemes, note_dur)
+            builder.add_note(phonemes, durations, midi, note_dur)
         prev_end = end
     builder.add_rest(total_dur - prev_end)
     return builder.to_row(card_id), None
@@ -578,7 +786,9 @@ def _process_t2_card(card_id: str, samples: np.ndarray, sr: int) -> Tuple[Option
 # ---------------------------------------------------------------------------
 
 
-def _dispatch_card(card_id: str, samples: np.ndarray, sr: int) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+def _dispatch_card(
+    card_id: str, samples: np.ndarray, sr: int, dsdict: DsDict
+) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
     tier = CARD_TIER.get(card_id)
     if tier is None:
         return None, f"{card_id}: no tier assignment (unknown card_id, fail-closed exclusion)"
@@ -587,25 +797,29 @@ def _dispatch_card(card_id: str, samples: np.ndarray, sr: int) -> Tuple[Optional
         return _process_t0_card(card_id, samples, sr, build_fn)
     if tier == "T1":
         return _process_t1_card(card_id, samples, sr)
-    return _process_t2_card(card_id, samples, sr)
+    return _process_t2_card(card_id, samples, sr, dsdict)
 
 
 def convert(
     normalized_dir: Path,
     ledger_path: Path,
     out_dir: Path,
+    dsdict_path: Path,
     duration_tolerance_sec: float = DEFAULT_DURATION_TOLERANCE_SEC,
     ffmpeg_bin: Optional[str] = None,
 ) -> Dict[str, object]:
     """`normalized_dir` の User 音源 17 本を `out_dir` へ変換する
     （`transcriptions.csv` + `wavs/` + `exclusions.json`）。台帳突合の違反や
-    全カード除外は fail-closed で例外を送出する。それ以外の個別カードの
-    アラインメント失敗は当該カードのみ除外し、他カードの変換は継続する。"""
+    全カード除外・`--dsdict` の読み込み失敗は fail-closed で例外を送出する。
+    それ以外の個別カードのアラインメント失敗は当該カードのみ除外し、他カードの
+    変換は継続する。`dsdict_path` は T2（短句）のグラフェム音素化にのみ使う
+    （T0/T1 は無改変、C2 参照）。"""
     normalized_dir = Path(normalized_dir)
     out_dir = Path(out_dir)
 
     entries = load_ledger(Path(ledger_path))
     by_card = reconcile_ledger(normalized_dir, entries)  # fail-closed はここで完結
+    dsdict = load_dsdict(Path(dsdict_path))  # fail-closed はここで完結
 
     rows: List[Dict[str, str]] = []
     included: List[str] = []
@@ -616,7 +830,7 @@ def convert(
         entry = by_card[card_id]
         samples, sr = _load_mono(entry.path)
         tier = CARD_TIER.get(card_id, "unknown")
-        row, reason = _dispatch_card(card_id, samples, sr)
+        row, reason = _dispatch_card(card_id, samples, sr, dsdict)
 
         if row is None:
             excluded.append({"card_id": card_id, "tier": tier, "reason": reason or "unknown"})
@@ -651,7 +865,7 @@ def convert(
         shutil.rmtree(staging_dir)
     staging_dir.mkdir(parents=True)
     try:
-        summary = _publish_into(rows, included, excluded, wav_paths, staging_dir, ffmpeg_bin)
+        summary = _publish_into(rows, included, excluded, wav_paths, staging_dir, ffmpeg_bin, dsdict)
         convert_d3._swap_into_place(staging_dir, out_dir)
     except BaseException:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -666,6 +880,7 @@ def _publish_into(
     wav_paths: Dict[str, Path],
     out_dir: Path,
     ffmpeg_bin: Optional[str],
+    dsdict: DsDict,
 ) -> Dict[str, object]:
     out_wavs = out_dir / "wavs"
     out_wavs.mkdir(parents=True, exist_ok=True)
@@ -702,8 +917,10 @@ def _publish_into(
                 voiced_ph_dur_s += d
 
     excluded_sorted = sorted(excluded, key=lambda e: e["card_id"])
+    dsdict_provenance = {"path": str(dsdict.path), "sha256": dsdict.sha256, "n_graphemes": len(dsdict.table)}
     exclusions_report = {
-        "schema": "convert-user-exclusions/0.1",
+        "schema": "convert-user-exclusions/0.2",
+        "dsdict": dsdict_provenance,
         "n_included": len(included),
         "n_excluded": len(excluded_sorted),
         "included_cards": sorted(included),
@@ -724,6 +941,7 @@ def _publish_into(
         phoneme_symbols=sorted(phoneme_symbols - {"SP"}),
         included_cards=sorted(included),
         excluded_cards=excluded_sorted,
+        dsdict=dsdict_provenance,
     )
 
 
@@ -745,6 +963,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--out-dir", type=Path, required=True,
         help="出力先 (transcriptions.csv / wavs/ / exclusions.json を書く)",
+    )
+    parser.add_argument(
+        "--dsdict", type=Path, required=True,
+        help=(
+            "リツ公式 DiffSinger 配布 zip の dsdur/dsdict.yaml（T2 のグラフェム"
+            "音素化に使用。sha256 は s1_dataprep/README.md の素材3 pin で"
+            "事前照合すること）"
+        ),
     )
     parser.add_argument(
         "--duration-tolerance-sec", type=float, default=DEFAULT_DURATION_TOLERANCE_SEC,
@@ -770,12 +996,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     try:
         summary = convert(
-            args.normalized_dir, args.ledger, args.out_dir,
+            args.normalized_dir, args.ledger, args.out_dir, args.dsdict,
             args.duration_tolerance_sec, args.ffmpeg_bin,
         )
     except (
         LedgerMismatchError,
         AllCardsExcludedError,
+        DsDictError,
         convert_d3.FfmpegNotFoundError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -791,6 +1018,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     print(f"included_cards={summary['included_cards']}")
     print(f"excluded_cards={[e['card_id'] for e in summary['excluded_cards']]}")
+    print(f"dsdict_sha256={summary['dsdict']['sha256']} n_graphemes={summary['dsdict']['n_graphemes']}")
     if summary["excluded_cards"]:
         print("exclusion reasons:", file=sys.stderr)
         for e in summary["excluded_cards"]:
