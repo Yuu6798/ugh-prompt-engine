@@ -101,15 +101,20 @@ seed=701 のみ 1 サンプル・1 LSB のバイト差が出て pin 不一致に
 実測記録 = `results_s3/d3_dataset_record.md` 改訂節）。AVX2 止まりのホスト
 では本設定は実質 no-op だが、ホスト差を意識せず一律に設定する。
 
-- **受け入れゲート**: render 前に以下を実行し、`found` が `X86_V4` を
-  含まないことを確認する。
+- **受け入れゲート**: render 前に以下を実行し、`found` が **`X86_V3` を
+  含み、かつ `X86_V4` を含まない**ことを確認する（どちらか一方でも満たさなければ
+  render に入らず停止する）。
 
   ```bash
   python -c "import numpy; print(numpy.show_config('dicts')['SIMD Extensions']['found'])"
   ```
 
   AVX-512 ホストでは設定が効いた証明（`X86_V4` が消える）、AVX2 ホストでは
-  元々 `X86_V4` を含まない（no-op の確認）。
+  元々 `X86_V4` を含まない（no-op の確認）。`X86_V3` の実在要求は、AVX2 未満の
+  ホストや `X86_V3` dispatch を持たない numpy ビルドが「X86_V4 不在」だけの
+  検査をすり抜け、高価な render 完走後に初めて hash 不一致で落ちる事態を
+  render 前に fail-closed で防ぐためのもの（そのような環境は X86_V3 契約の
+  正基準に到達できず、pin 再現の前提を満たさない）。
 - **罠**: numpy 2.4.6 の `NPY_DISABLE_CPU_FEATURES` は個別 AVX-512 機能名
   （`AVX512F` 等）や不正値を渡してもエラーなく黙って無視する（silent
   no-op）。有効な語彙は `numpy._core._multiarray_umath.__cpu_dispatch__`
