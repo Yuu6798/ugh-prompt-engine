@@ -73,12 +73,22 @@ User 確認を要する:
 |---|---|
 | 台帳 `user_donor_ledger.json` | 本リポジトリ（コミット） |
 | 受領検査記録 (md/json/txt) | 本ディレクトリ（コミット）+ Drive `user_donor_evac` |
-| 原本音源 17 本 | Drive「音楽サンプル」15 本 + `user_donor_evac`（T0 2 本を含む完全セット） |
-| 正規化 24kHz mono wav 17 本 | Drive `user_donor_evac/normalized/` |
+| 原本音源 batch2/3 の 15 本 | Drive「音楽サンプル」（sha256 一致確認済み） |
+| 原本音源 batch1 の 2 本 (T0) | **User デバイスのみ（Drive 未配置）— User に Drive 追加を依頼中** |
+| 正規化 24kHz mono wav 17 本 | 恒久保管なし（台帳 sha256 で pin・下記手順で原本から再生成） |
+
+正規化 wav は MCP 経由の base64 アップロードがコンテキスト規模的に非現実的
+（計約 11.5MB）のため Drive 保管せず、原本からの再生成で復元する:
+`ffmpeg -y -i <原本> -ac 1 -ar 24000 -sample_fmt s16 <name>.norm24k.wav`
+（intake.py の変換コマンドと同一パラメータ。本 intake の実行環境 =
+**ffmpeg 6.1.1-3ubuntu5**）。再生成後は
+台帳の `sha256` とバイト一致を確認すること。ffmpeg 版差でバイト不一致になった
+場合は、一致する版で再生成するか、台帳の該当規約に従い再 intake を設計する
+（黙って台帳値を書き換えない）。
 
 将来の append 実行（T3 追加収録等）の前提: intake.py の preflight は out_dir に
-既存正規化 wav の実在と sha256 一致を要求する。新しいコンテナでは Drive
-`user_donor_evac/normalized/` から out_dir へ復元してから append を実行すること。
+既存正規化 wav の実在と sha256 一致を要求する。新しいコンテナでは上記の
+再生成 + sha256 照合で out_dir を復元してから append を実行すること。
 
 ## 5. 実行手順の記録
 
@@ -93,6 +103,14 @@ python <repo>/voice_genesis/foundry/recording_kit/intake.py \
 incoming 構築時に全 17 本の sha256 を受領検査記帳値と照合してから実行
 （照合ログ = intake_run/verify.txt、揮発性のため結果要約を §6 に転記）。
 
-## 6. 実行結果
+## 6. 実行結果（2026-08-17 実測）
 
-<!-- intake 完了後に転記 -->
+- exit code 0・**17 件全件を単一バッチで記帳**（部分バッチなし）
+- 事前照合: incoming 17 本の sha256 = 受領検査記帳値と **17/17 PASS**
+- 事後検証: entries=17・card_id 被覆 missing/extra/dupes すべて空・null フィールドなし・
+  正規化 wav 17 本生成・`normalized_path` は相対パスのみ（コンテナ固有絶対パス混入なし）
+- 台帳エントリのフィールド: `card_id / source_filename / source_sha256 /
+  source_size_bytes / sha256 / normalized_path / duration_sec / sample_rate /
+  rms_dbfs / peak_dbfs / received_at / alignment_status`
+- アラインメント（音素境界付け）は intake.py のスコープ外（`alignment_status` は
+  未処理を示す初期値）— Phase C `convert_user.py` の担当
