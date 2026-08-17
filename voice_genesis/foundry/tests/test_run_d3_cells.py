@@ -708,6 +708,207 @@ def test_main_preserves_existing_render_dir_bytes_when_a_rerun_cell_fails(
     )
 
 
+# ---------------------------------------------------------------------------
+# 7. P1 修正 (review #265 R11): containment preflight — 入力パスが管理下の
+#    出力パス（`--out-dir`/`.staging_render/`/`render/`）配下にある場合、
+#    削除・書き込み開始前に fail-closed で拒否する
+# ---------------------------------------------------------------------------
+
+
+def test_reject_output_collision_rejects_out_paths_colliding_with_each_other() -> None:
+    p = Path("/tmp/same")
+    with pytest.raises(rdc.OutputCollisionError):
+        rdc._reject_output_collision([p, p], protected_roots=[])
+
+
+def test_reject_output_collision_rejects_protected_root_inside_out_path(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    protected_root = out_dir / "voicebank"  # out_dir の内側にある保護 root
+    protected_root.mkdir(parents=True)
+
+    with pytest.raises(rdc.OutputCollisionError):
+        rdc._reject_output_collision([out_dir], protected_roots=[protected_root])
+
+
+def test_reject_output_collision_rejects_out_path_inside_protected_root(tmp_path: Path) -> None:
+    protected_root = tmp_path / "voicebank"
+    protected_root.mkdir()
+    out_dir = protected_root / "nested_out"  # 保護 root の内側にある出力パス
+
+    with pytest.raises(rdc.OutputCollisionError):
+        rdc._reject_output_collision([out_dir], protected_roots=[protected_root])
+
+
+def test_reject_output_collision_rejects_protected_file_inside_out_path(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    protected_file = out_dir / "manifest.json"  # out_dir 配下にある保護ファイル
+    out_dir.mkdir()
+    protected_file.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(rdc.OutputCollisionError):
+        rdc._reject_output_collision(
+            [out_dir], protected_roots=[], protected_files=[protected_file]
+        )
+
+
+def test_reject_output_collision_sibling_paths_do_not_raise(tmp_path: Path) -> None:
+    """出力パスが保護入力の単なる兄弟であるだけなら誤検知しない（一般的な
+    運用: `--out-dir` と `--voicebank-root`/`--preset`/`--manifest`/
+    `--results` を同じ親ディレクトリ直下に置く）。"""
+    protected_root = tmp_path / "voicebank"
+    protected_root.mkdir()
+    protected_file = tmp_path / "preset.json"
+    protected_file.write_text("{}", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    rdc._reject_output_collision(
+        [out_dir], protected_roots=[protected_root], protected_files=[protected_file]
+    )  # no raise
+
+
+def test_main_rejects_voicebank_root_inside_out_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--voicebank-root` が `--out-dir` 配下にあると、`.staging_render/` の
+    無条件クリーンアップがこの入力を巻き込んで削除し得る。render は一切
+    呼ばれず（preflight で即座に停止する）非 0 exit で拒否されることを
+    確認する。"""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    out_dir = tmp_path / "out"
+    voicebank_root = out_dir / "voicebank"  # out_dir の内側 — 衝突を誘発
+    voicebank_root.mkdir(parents=True)
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 1
+    assert calls == []  # render は一切呼ばれていない
+    # out_dir 自体が既に存在していたが、preflight で拒否されたので
+    # voicebank_root が失われていないことを確認する（本 P1 修正の核心）。
+    assert voicebank_root.exists()
+
+
+def test_main_rejects_results_file_inside_staging_render_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--results` が `<out-dir>/.staging_render/` 配下にあると、次回
+    run 冒頭の `shutil.rmtree(staging_dir)` がこの入力ファイルを巻き込んで
+    削除し得る。preflight が render 前に拒否することを確認する。"""
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+    staging_dir = out_dir / ".staging_render"
+    staging_dir.mkdir(parents=True)
+
+    manifest_path, results_path_original = _write_fixture_manifest_and_results(tmp_path)
+    results_path = staging_dir / "results.json"  # .staging_render/ 配下に配置
+    results_path.write_text(results_path_original.read_text(encoding="utf-8"), encoding="utf-8")
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 1
+    assert calls == []
+    assert results_path.exists()  # preflight で拒否され、削除されていない
+
+
+def test_main_normal_layout_with_sibling_paths_still_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰防止: 通常運用（`--voicebank-root`/`--manifest`/`--results` が
+    `--out-dir` の外側・兄弟パスにある一般的な配置）は preflight 追加後も
+    従来どおり成功する。"""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--preset", str(rdc.DEFAULT_PRESET),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 0
+    assert len(calls) == len(SCORES) * len(SEEDS)
+
+
+# ---------------------------------------------------------------------------
+# 8. P2 修正 (review #265 R11): d3_manifest_results.json の path フィールドは
+#    コンテナ固有の絶対パスではなく basename でなければならない（回帰防止の
+#    走査テスト。sha256 値は一切変更されないことも合わせて確認する）。
+# ---------------------------------------------------------------------------
+
+
+def test_default_results_manifest_cell_paths_are_basenames_not_absolute() -> None:
+    """`results_s3/d3_manifest_results.json` の全 40 セルの `spec_path`/
+    `wav_path`/`timing_csv_path` が basename（区切り文字を含まない単一
+    ファイル名）であり、コンテナ固有の絶対パス（`/tmp/...` 等）を含まない
+    ことを走査する。実行環境が変わってもリポジトリのチェックアウトが
+    汚染されないことを保証する回帰テスト。"""
+    results = json.loads(rdc.DEFAULT_RESULTS.read_text(encoding="utf-8"))
+    cells = results["cells"]
+    assert len(cells) == 40
+
+    for cell in cells:
+        for key in ("spec_path", "wav_path", "timing_csv_path"):
+            value = cell[key]
+            assert "/" not in value, f"{key} is not a basename: {value!r}"
+            assert not value.startswith("/tmp"), f"{key} still contains a container path: {value!r}"
+            assert Path(value).name == value
+
+
+def test_default_results_manifest_sha256_values_unchanged_by_basename_migration() -> None:
+    """basename 化は `spec_sha256`/`wav_sha256`/`timing_csv_sha256`（計測済み
+    実測値）には一切触れていないことを確認する（本テストが張る具体値は
+    リポジトリの `d3_manifest_results.json` 実測値からの直接引用であり、
+    もし今後の再計測で正当に変わるならこのテストも合わせて更新すればよい
+    — ここでの主眼は「basename 移行の diff がハッシュ値を巻き込んでいない
+    こと」）。"""
+    results = json.loads(rdc.DEFAULT_RESULTS.read_text(encoding="utf-8"))
+    cells = {(c["score"], c["seed"]): c for c in results["cells"]}
+    sakura_11 = cells[("sakura", 11)]
+    assert sakura_11["wav_sha256"] == (
+        "833d65d8b1394d3e7fc655d0a41acc212e94a83adcc3ac7686b560b17469ec0c"
+    )
+    assert sakura_11["spec_sha256"] == (
+        "b0be5fa5adabaeb12472a179b3c5a4a86263c441b57bcfa6cb39e5d55cd7abb1"
+    )
+    assert sakura_11["timing_csv_sha256"] == (
+        "7337ecf611f77d06523e37683741c23ca2d89658ca91eef0291cb6777494ea1b"
+    )
+    # tripwire 一致確認（`validate_manifest_consistency` 系とは独立に、
+    # basename 化の前後でトップレベルの tripwire_check セクションが
+    # 変わっていないことも確認する）。
+    assert results["tripwire_check"]["sakura_match"] is True
+    assert results["tripwire_check"]["umi_match"] is True
+
+
 def test_verify_cell_fails_on_spec_sha256_mismatch_despite_matching_wav_timing(
     tmp_path: Path,
 ) -> None:

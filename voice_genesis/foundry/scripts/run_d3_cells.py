@@ -34,6 +34,17 @@ python voice_genesis/foundry/scripts/run_d3_cells.py \\
 
 ## 手順（設計 = 本ファイル docstring が正、実装が一次ソース）
 
+0. **containment preflight**（review #265 R11 P1）: 削除・書き込みを一切
+   開始する前に、管理下の出力パス（`--out-dir`・`.staging_render/`・
+   `render/`・swap 退避先 `render.bak_pre_swap`）が入力（`--voicebank-root`・
+   `--preset`・`--manifest`・`--results`）と衝突していないかを検査する
+   （`_reject_output_collision` — `s1_dataprep/convert_d3.py`/
+   `s1_dataprep/convert_pjs.py`/`s1_gate/gate_synth.py` 既存の publisher と
+   同型のコピペ実装）。1 件でも衝突すれば非 0 exit で即座に停止する
+   （`--voicebank-root`/`--preset`/`--manifest`/`--results` が `<out-dir>`
+   配下（または `render/` 配下）に置かれていた場合、次項以降の
+   `.staging_render/` 無条件クリーンアップや atomic swap の退避/rmtree が
+   これらの入力を巻き込んで削除し得るため）。
 1. **spec 変種生成**（`build_spec_variants`）: base preset
    （既定 `adapter/presets/ritsu_neutral.json`）のテキストから `"seed"` の
    数値部分のみをテキスト置換で差し替える（`json.dumps` によるJSON
@@ -92,6 +103,9 @@ python voice_genesis/foundry/scripts/run_d3_cells.py \\
   の完成品」のみを反映する。個別セルの render は常に使い捨ての
   `.staging_render/` へ書き、本置き場への反映は §5 の swap 一箇所に
   限定する（`gate_synth.py`/`convert_pjs.py` 既存の house pattern と同型）。
+- **containment preflight**: 削除・rename/rmtree を伴う出力操作の前には
+  必ず §0 の `_reject_output_collision` を通す（`gate_synth.py`/
+  `convert_pjs.py`/`convert_d3.py` 既存 publisher と同じ house pattern）。
 """
 from __future__ import annotations
 
@@ -140,6 +154,101 @@ class ManifestConsistencyError(ValueError):
     """`d3_manifest.json` と `d3_manifest_results.json` の
     scores/seeds/cells_total が一致しない場合に送出する（render 前の
     fail-closed 事前検査）。"""
+
+
+class OutputCollisionError(ValueError):
+    """P1 修正 (review #265 R11): 本スクリプトが削除・rename する管理下出力
+    パス（`--out-dir`・`.staging_render/`・`render/`・swap 用退避先
+    `render.bak_pre_swap`）が、resolve 済みの入力（`--voicebank-root`・
+    `--preset`・`--manifest`・`--results`）と衝突する場合に送出する
+    （fail-closed。削除・書き込み開始前の preflight で検出する）。
+
+    `.staging_render/` の無条件クリーンアップ（`main()` 冒頭の
+    `shutil.rmtree(staging_dir)`）と、全数 PASS 時の `_swap_staging_render_into_place`
+    （旧世代 `render/` を `.bak_pre_swap` へ退避 → rmtree）は、いずれも
+    `--out-dir` 配下または `render/` 配下に入力（特に `--voicebank-root`
+    のような巨大な展開済みディレクトリ、または `--preset`/`--manifest`/
+    `--results` のような単一ファイル）が置かれていた場合、これらの入力を
+    巻き込んで削除し得る。`s1_dataprep/convert_d3.py`/`s1_dataprep/convert_pjs.py`/
+    `s1_gate/gate_synth.py` の `OutputCollisionError`/`_reject_output_collision`
+    と同型判定（record スクリプト群の既存慣例に倣い、共有モジュール新設では
+    なく各ファイル内へコピペ実装する）。"""
+
+
+def _reject_output_collision(
+    out_paths: Sequence[Path],
+    protected_roots: Sequence[Path],
+    protected_files: Sequence[Optional[Path]] = (),
+) -> None:
+    """`out_paths`（resolve 後）を相互および `protected_roots`/`protected_files`
+    （存在するもののみ、resolve 後）と照合し、衝突があれば削除・書き込み
+    開始前に fail-closed で拒否する（`convert_d3.py`/`convert_pjs.py`/
+    `gate_synth.py` の同名ヘルパーと同一の resolved 比較ロジック。双方向の
+    内包判定を含む）。
+
+    `protected_roots` はディレクトリ全体（配下への包含・逆包含も検査）を
+    保護するのに対し、`protected_files` は単一ファイルを完全一致 + 「保護
+    ファイルが `out_path` 配下にある」場合のみ検査する（`out_path` が保護
+    ファイルの単なる兄弟であるだけなら誤検知しない）。`None`/未存在の要素は
+    スキップする。
+    """
+    resolved_outs = [(p, p.resolve()) for p in out_paths]
+
+    for i, (p_i, r_i) in enumerate(resolved_outs):
+        for p_j, r_j in resolved_outs[i + 1 :]:
+            if r_i == r_j:
+                raise OutputCollisionError(
+                    f"output paths collide with each other: {p_i} == {p_j}（fail-closed で拒否）"
+                )
+
+    for f in protected_files:
+        if f is None:
+            continue
+        f_path = Path(f)
+        if not f_path.exists():
+            continue
+        f_resolved = f_path.resolve()
+        for p, r in resolved_outs:
+            if r == f_resolved:
+                raise OutputCollisionError(
+                    f"output path {p} collides with protected input file {f}（fail-closed で拒否）"
+                )
+            try:
+                f_resolved.relative_to(r)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"protected input file {f} is inside output path {p}"
+                f"（fail-closed で拒否。出力側の削除/rename 処理が保護ファイルを"
+                f"巻き込む）"
+            )
+
+    for root in protected_roots:
+        if not root.exists():
+            continue
+        root_resolved = root.resolve()
+        for p, r in resolved_outs:
+            if r == root_resolved:
+                raise OutputCollisionError(
+                    f"output path {p} collides with protected input root {root}（fail-closed で拒否）"
+                )
+            try:
+                r.relative_to(root_resolved)
+            except ValueError:
+                pass
+            else:
+                raise OutputCollisionError(
+                    f"output path {p} is inside protected input root {root}（fail-closed で拒否）"
+                )
+            try:
+                root_resolved.relative_to(r)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"protected input root {root} is inside output path {p}"
+                f"（fail-closed で拒否。出力側の削除/rename 処理が保護 root を"
+                f"巻き込む）"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +630,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"ERROR: --results does not exist: {results_path}", file=sys.stderr)
         return 1
 
+    specs_dir = out_dir / "specs"
+    # wav + timing csv は同一ディレクトリへ同居させる（PR #265 R8 指摘 #20:
+    # `s1_dataprep/convert_d3.py` の `discover_pairs()` が単一ディレクトリ
+    # 非再帰・stem 突き合わせで pair を発見する契約のため。runbook 手順 4 は
+    # `--render-dir <out-dir>/render` をそのまま渡せる）。
+    render_dir = out_dir / "render"
+    staging_dir = out_dir / ".staging_render"
+    # `_swap_staging_render_into_place` が旧世代 `render_dir` を退避する先
+    # （P1 修正 (review #265 R11) の preflight 対象にも含める — この派生パス
+    # も rename/rmtree の対象になり得るため）。
+    backup_dir = render_dir.parent / f"{render_dir.name}.bak_pre_swap"
+
+    # P1 修正 (review #265 R11): 削除・書き込みを一切開始する前に、管理下の
+    # 出力パス（`--out-dir`・`.staging_render/`・`render/`・swap 退避先）が
+    # 入力（`--voicebank-root`・`--preset`・`--manifest`・`--results`）と
+    # 衝突していないかを preflight で検査する（§ `OutputCollisionError`
+    # docstring 参照。既存の `if staging_dir.exists(): shutil.rmtree(...)`
+    # 無条件クリーンアップ、および全数 PASS 後の atomic swap の双方が入力を
+    # 巻き込み得るため、その手前で拒否する）。
+    try:
+        _reject_output_collision(
+            [out_dir, staging_dir, render_dir, backup_dir],
+            protected_roots=[voicebank_root],
+            protected_files=[preset_path, manifest_path, results_path],
+        )
+    except OutputCollisionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     results = json.loads(results_path.read_text(encoding="utf-8"))
 
@@ -535,19 +673,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     seeds: List[int] = manifest["seeds"]
     tripwires: dict = manifest["tripwires"]
 
-    specs_dir = out_dir / "specs"
-    # wav + timing csv は同一ディレクトリへ同居させる（PR #265 R8 指摘 #20:
-    # `s1_dataprep/convert_d3.py` の `discover_pairs()` が単一ディレクトリ
-    # 非再帰・stem 突き合わせで pair を発見する契約のため。runbook 手順 4 は
-    # `--render-dir <out-dir>/render` をそのまま渡せる）。
-    render_dir = out_dir / "render"
-    # 本レビュー指摘 P1: 全セルの render 出力はまずこの使い捨て staging へ
-    # 書き、§4 の全数照合が全数 PASS した場合にのみ `render_dir` へ atomic
-    # swap する（`_swap_staging_render_into_place`）。既に有効な `render_dir`
-    # を持つ `--out-dir` へ再実行して途中セル（tripwire 含む）が失敗しても、
-    # render 呼び出しが `render_dir` に触れることは一切ないため旧世代の
-    # 有効なコーパスを喪失しない。
-    staging_dir = out_dir / ".staging_render"
+    # `specs_dir`/`render_dir`/`staging_dir`/`backup_dir` は preflight 検査
+    # のため上で既に確定済み（P1 修正 (review #265 R11)）。
+    #
+    # 本レビュー指摘 P1（R8）: 全セルの render 出力はまずこの使い捨て
+    # staging へ書き、§4 の全数照合が全数 PASS した場合にのみ `render_dir`
+    # へ atomic swap する（`_swap_staging_render_into_place`）。既に有効な
+    # `render_dir` を持つ `--out-dir` へ再実行して途中セル（tripwire 含む）
+    # が失敗しても、render 呼び出しが `render_dir` に触れることは一切ないため
+    # 旧世代の有効なコーパスを喪失しない。
+    #
     # 前回の中断・失敗 run が残した staging 残骸を掃除してから始める（新旧
     # 混在した staging を「今回 render しなかったセルも PASS 扱い」で
     # スワップしてしまう事故を防ぐ）。

@@ -75,7 +75,13 @@ read-only import で再利用する（`convert_user.py` が `convert_d3.py` か�
    row 数・wav 数・`ph_dur` 合計秒数・`transcriptions.csv` の sha256・
    **各 wav の `{name: sha256}`**（review #265 R5 P1 追加。公開した wav 実体
    そのものへのバイト束縛。staging 内の実測値のみで手打ちしない）・spk_id
-   対応・衝突検査結果（0 件であることの実測記録）を書く。決定論を保つため
+   対応・衝突検査結果（0 件であることの実測記録）を書く。**user 話者の
+   `exclusions.json`（存在する場合）は公開バイトから実測した sha256 も
+   `exclusions_json_sha256` として記帳する**（review #265 R11 P2: 従来は
+   `has_exclusions_json` の真偽値のみで、コピーしたファイル実体への
+   バイト束縛を持たなかった）。**生成した学習 config（`config_sha256`/
+   `normalized_config_sha256`）も併せて記帳する**（review #265 R11 P1、
+   § 6 参照。schema は `run4-assembly-manifest/0.3`）。決定論を保つため
    ウォールクロック時刻等は含めない（同一入力 → 同一出力バイトを維持する）。
 
 6. **3 話者学習 config 生成**（review #265 R7 P1 追加）: `build_dataset.py`
@@ -103,7 +109,12 @@ read-only import で再利用する（`convert_user.py` が `convert_d3.py` か�
    LR/finetune/精度/勾配クリップは `build_dataset.py`/本スクリプトいずれの
    CLI にもフックが無く、run 3 の実 `config.yaml` から手動移植が必要**
    （本関数はあくまで `datasets:`/`num_spk`/学習規模 3 フィールドの節を
-   生成するのみ）。
+   生成するのみ）。**生成した 2 ファイル（live/normalized）の sha256 は
+   `assembly_manifest.json` の `config` セクションへ記帳する**（review #265
+   R11 P1: 旧実装は `_write_run4_config()` の戻り値（sha256 2 値）を呼び出し
+   側 `_assemble_into()` が握り潰しており、manifest 上には config の実体を
+   証明する情報が一切残らなかった。`refresh-config-pin` 実行時（§
+   `refresh-config-pin` サブコマンド節参照）もこの記帳値を実測で更新する）。
 
 ## pjs フィクスチャに関する注意（★本番実行前に必ず確認）
 
@@ -133,9 +144,17 @@ python voice_genesis/foundry/s1_dataprep/assemble_run4.py refresh-config-pin \
 LR/finetune/precision/勾配クリップを含む）は live config と完全一致する
 ことを書き込み後に再読込して検証する（`_semantic_diff`）。加えて
 `datasets[].speaker`/`spk_id` が既定マッピング（ritsu=0/pjs=1/user=2）から
-ずれていないかも検査する。不一致はいずれも `ConfigPinMismatchError` で
+ずれていないかも検査する——**畳んだ `{speaker: spk_id}` マップではなく
+`datasets` の生リスト形状そのもの**（エントリ数=3・speaker 重複無し・
+順序/内容が一致）を見る（review #265 R11 P1: 旧実装は dict 内包で畳んで
+から比較しており、同一 speaker の重複エントリ（例: ritsu 2 行 + pjs +
+user の計 4 行）が畳まれて一致判定を通過し、壊れた config がそのまま pin
+として再発行され得た）。不一致はいずれも `ConfigPinMismatchError` で
 fail-closed し、`.normalized.yaml` へは一切書き込まない。運用手順は
 「手動編集 → `refresh-config-pin` → 学習開始」（`S3_RUN4_RUNBOOK.md` §4）。
+成功時は `assembly_manifest.json`（config_path と同じディレクトリに
+存在する場合）の `config.config_sha256`/`config.normalized_config_sha256`
+も実測値へ更新する（review #265 R11 P1、§3 assembly manifest 節参照）。
 """
 from __future__ import annotations
 
@@ -209,7 +228,15 @@ class ConfigPinMismatchError(ValueError):
     `datasets[].speaker`/`spk_id` が既定マッピング（`SPK_IDS`）からずれて
     いた場合に送出する（fail-closed。YAML 往復でのデータ破損・正規化ロジック
     が意図しない箇所へ波及するバグ・手動編集での datasets 節の事故変更を
-    検出する安全網。`.normalized.yaml` へは一切書き込まない）。"""
+    検出する安全網。`.normalized.yaml` へは一切書き込まない）。
+
+    review #265 R11 P1: `datasets` の**リスト形状そのもの**（エントリ数・
+    speaker の重複無し・順序/内容が既定と一致）も検査対象に含む（§
+    `_validate_live_datasets_shape` docstring 参照）。旧実装は
+    `{speaker: spk_id}` の dict 内包で畳んでから比較していたため、同一
+    speaker の重複エントリ（例: ritsu 2 行 + pjs + user の 4 行）が畳まれて
+    `SPK_IDS` と一致してしまい、壊れた config がそのまま pin として
+    再発行され得た。"""
 
     def __init__(self, diffs: Sequence[str]) -> None:
         self.diffs = list(diffs)
@@ -263,6 +290,69 @@ def _semantic_diff(
     return []
 
 
+def _validate_live_datasets_shape(live_datasets: object) -> List[str]:
+    """`live_datasets`（live config の `datasets` フィールド生値）の**リスト
+    形状そのもの**を検査する（review #265 R11 P1）。
+
+    旧実装は `{entry["speaker"]: entry["spk_id"] for entry in datasets}` の
+    dict 内包で畳んでから `SPK_IDS` と比較していたため、同一 speaker の
+    重複エントリ（例: `ritsu` が誤って 2 行、計 4 エントリ）が dict へ畳まれる
+    際に無言で 1 行へ収束し、畳んだ後のマップだけを見れば `SPK_IDS` と一致
+    してしまい PASS していた——壊れた 4-dataset config がそのまま
+    `.normalized.yaml` pin として再発行され得る fail-open 経路だった。
+
+    本関数は畳む前のリストを直接検査する:
+
+    1. 各エントリが `speaker`/`spk_id` を持つ mapping であること
+    2. エントリ数が `len(SPK_IDS)`（=3）と一致すること（重複行があれば
+       ここで確実に検出する — dict 内包のように黙って畳まれない）
+    3. `speaker` 列に重複が無いこと
+    4. `(speaker, spk_id)` の列が `SPK_IDS` の期待順序・期待内容
+       （`ritsu=0, pjs=1, user=2` の順）と完全一致すること
+
+    問題があれば説明文字列のリストを返す（空リスト = 問題無し）。1 個でも
+    構造的な問題（mapping でない・重複行）を検出したら、以降のチェックは
+    スキップして早期にその diff だけを返す（誤解を招く二次的な diff の
+    重畳を避ける）。
+    """
+    if not isinstance(live_datasets, list):
+        return [f"datasets: not a list (got {type(live_datasets).__name__})"]
+
+    entries: List[Tuple[object, object]] = []
+    shape_problems: List[str] = []
+    for i, entry in enumerate(live_datasets):
+        if not isinstance(entry, dict) or "speaker" not in entry or "spk_id" not in entry:
+            shape_problems.append(
+                f"datasets[{i}]: not a mapping with 'speaker'/'spk_id' keys ({entry!r})"
+            )
+            continue
+        entries.append((entry["speaker"], entry["spk_id"]))
+    if shape_problems:
+        return shape_problems
+
+    expected_order = list(SPK_IDS.items())  # [("ritsu", 0), ("pjs", 1), ("user", 2)]
+    if len(entries) != len(expected_order):
+        return [
+            f"datasets: expected exactly {len(expected_order)} entries "
+            f"(one per SPK_IDS speaker), got {len(entries)} (entries={entries!r}) "
+            "— duplicate/missing speaker rows are not silently folded"
+        ]
+
+    speakers = [s for s, _ in entries]
+    if len(set(speakers)) != len(speakers):
+        dupes = sorted({s for s in speakers if speakers.count(s) > 1})
+        return [
+            f"datasets: duplicate speaker row(s) detected: {dupes} (entries={entries!r})"
+        ]
+
+    if entries != expected_order:
+        return [
+            "datasets: speaker/spk_id entries do not match the expected "
+            f"order/content (expected={expected_order!r}, actual={entries!r})"
+        ]
+    return []
+
+
 def _load_yaml_config(path: Path) -> Dict[str, object]:
     """YAML config を読み、`dict` かつ `datasets` がリストであることを
     検査する（`refresh_config_pin` の入力/自己検算再読込の両方から使う共通
@@ -298,6 +388,42 @@ def _normalize_config_dict(live_config: Dict[str, object], config_dir: Path) -> 
     return normalized
 
 
+def _assembly_manifest_sibling(config_path: Path) -> Optional[Path]:
+    """`config_path` と同じディレクトリにある `assembly_manifest.json` を
+    返す（存在しなければ None）。`assemble()` の出力レイアウトでは
+    `run4_config_datasets.yaml` と `assembly_manifest.json` は常に
+    `<out-dir>` 直下の兄弟ファイルであるため、`refresh_config_pin()` が
+    記帳更新先を推定するのに使う（review #265 R11 P1）。"""
+    candidate = config_path.parent / "assembly_manifest.json"
+    return candidate if candidate.exists() else None
+
+
+def _update_manifest_config_pin(
+    manifest_path: Path, *, config_sha256: str, normalized_config_sha256: str
+) -> None:
+    """`assembly_manifest.json` の `config.config_sha256`/
+    `config.normalized_config_sha256` を実測値へ更新する（review #265 R11
+    P1）。`refresh_config_pin()` 成功直後に呼ばれる——手動編集で live config
+    のバイト列自体が変わっているため、`assemble()` 実行時に記帳した
+    config sha256 は refresh 後は stale になる。それを放置すると
+    「記帳された pin と実 config の一致」を学習開始前に確認する手順
+    （`S3_RUN4_RUNBOOK.md` §4）が編集前の値と照合してしまう。
+
+    `manifest_path` の `config` セクションが存在しない（`assembly_manifest.json`
+    自体が無い、または旧 schema で `config` キーを持たない）場合は何もしない
+    （no-op。`refresh_config_pin()` は manifest の有無に依存せず単独でも動く
+    ユーティリティであるため、manifest 不在を fail-closed の理由にはしない）。
+    """
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    config_section = data.get("config")
+    if not isinstance(config_section, dict):
+        return
+    config_section["config_sha256"] = config_sha256
+    config_section["normalized_config_sha256"] = normalized_config_sha256
+    text = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    manifest_path.write_text(text, encoding="utf-8")
+
+
 def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> Path:
     """P1 修正 (review #265 R9): 手動編集後の live config
     (`run4_config_datasets.yaml`) から `.normalized.yaml` pin 副本を再生成
@@ -318,6 +444,12 @@ def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> 
     （`normalize_path_field` の `config_dir` 引数と同じ意味）。通常
     `run4_config_datasets.yaml` は `<out-dir>` 直下にあるため省略でよい。
 
+    成功時、`config_path` と同じディレクトリに `assembly_manifest.json` が
+    存在すれば（`assemble()` が書いたもの想定）、その `config.config_sha256`/
+    `config.normalized_config_sha256` を実測値へ更新する（review #265 R11
+    P1、§ `_update_manifest_config_pin` docstring 参照。manifest が無ければ
+    no-op）。
+
     戻り値は書いた `.normalized.yaml` のパス。
     """
     config_path = Path(config_path)
@@ -327,16 +459,12 @@ def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> 
 
     live = _load_yaml_config(config_path)
 
-    live_spk_map = {
-        entry["speaker"]: entry["spk_id"]
-        for entry in live.get("datasets") or []
-        if isinstance(entry, dict) and "speaker" in entry and "spk_id" in entry
-    }
-    if live_spk_map != SPK_IDS:
-        raise ConfigPinMismatchError(
-            [f"datasets speaker/spk_id mapping does not match SPK_IDS: "
-             f"expected={SPK_IDS}, actual={live_spk_map}"]
-        )
+    # review #265 R11 P1: リスト形状そのもの（エントリ数・重複無し・
+    # 順序/内容）を検査する（§ `_validate_live_datasets_shape` docstring
+    # 参照。旧実装の dict 内包による畳み込みは重複行を黙って通していた）。
+    shape_problems = _validate_live_datasets_shape(live.get("datasets"))
+    if shape_problems:
+        raise ConfigPinMismatchError(shape_problems)
 
     expected_normalized = _normalize_config_dict(live, config_dir)
 
@@ -356,6 +484,16 @@ def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> 
             pass
         raise
     os.replace(tmp_path, normalized_path)
+
+    # review #265 R11 P1: manifest 記帳値を実測で更新する（存在すれば）。
+    manifest_path = _assembly_manifest_sibling(config_path)
+    if manifest_path is not None:
+        _update_manifest_config_pin(
+            manifest_path,
+            config_sha256=_sha256_file(config_path),
+            normalized_config_sha256=_sha256_file(normalized_path),
+        )
+
     return normalized_path
 
 
@@ -512,10 +650,12 @@ def _write_run4_config(
     `staging_dir` が `out_dir` へ rename されるため、staging 中に書く config
     も最終レイアウトの絶対パスを参照する必要がある（`build_dataset.py`
     `main()` が呼び出し元から渡された `--*-raw-dir` をそのまま埋め込むのと
-    同じ設計）。戻り値は書いた 2 ファイルのパス/sha256（呼び出し側が
-    manifest 相当の記録に使いたければ利用できるが、本関数自体は
-    `assembly_manifest.json` を変更しない——R5 検証方針「config 生成は
-    新規ファイルのみ差分」に合わせ、既存 manifest 構造は不変のまま維持する）。
+    同じ設計）。戻り値は書いた 2 ファイルのパス/sha256——本関数自体は
+    `assembly_manifest.json` に触れない（単一責務: staging へ config を書く
+    だけ）が、**呼び出し側 `_assemble_into()` はこの戻り値を
+    `manifest["config"]` へ記帳する**（review #265 R11 P1 修正: 旧実装は
+    この戻り値を握り潰し、生成した config の実体を manifest から一切
+    検証できなかった。詳細はモジュール docstring §5/§6 参照）。
     """
     final_ritsu_dir = out_dir / "ritsu"
     final_pjs_dir = out_dir / "pjs"
@@ -618,8 +758,14 @@ def _assemble_into(
     _copy_wavs(user_raw_dir / "wavs", user_dir / "wavs")
     user_exclusions_src = user_raw_dir / "exclusions.json"
     user_has_exclusions = user_exclusions_src.exists()
+    user_exclusions_sha256: Optional[str] = None
     if user_has_exclusions:
-        _copy_file_bytes(user_exclusions_src, user_dir / "exclusions.json")
+        user_exclusions_dst = user_dir / "exclusions.json"
+        _copy_file_bytes(user_exclusions_src, user_exclusions_dst)
+        # P2 修正 (review #265 R11): staged 出力バイトそのものから実測する
+        # （公開後の実体へのバイト束縛。`wav_sha256` と同じ「実測のみ・
+        # 手打ちなし」規約 — provenance binding ファミリーの掃討）。
+        user_exclusions_sha256 = _sha256_file(user_exclusions_dst)
 
     # --- 3. 3 話者ゲート検証（全問題収集 → 1 件でもあれば fail-closed） -------
     # P1 修正 (review #265): 話者の transcriptions.csv が行 0 件（空データ
@@ -654,7 +800,9 @@ def _assemble_into(
     build_dataset.write_dict(dict_path, merged_pairs)
 
     # --- 4.5. 3 話者学習 config 生成（review #265 R7 P1・§ _write_run4_config） ---
-    _write_run4_config(
+    # P1 修正 (review #265 R11): 戻り値（live/normalized 双方の sha256）を
+    # 握り潰さず manifest へ記帳する（§5 assembly manifest 節参照）。
+    config_result = _write_run4_config(
         staging_dir, out_dir, speaker_rows,
         binary_data_dir=binary_data_dir, n_test_prefixes=n_test_prefixes,
         max_updates=max_updates, val_check_interval=val_check_interval,
@@ -663,7 +811,7 @@ def _assemble_into(
 
     # --- 5. assembly manifest（決定論のためウォールクロック時刻を含めない） ---
     manifest: Dict[str, object] = {
-        "schema": "run4-assembly-manifest/0.2",
+        "schema": "run4-assembly-manifest/0.3",
         "spk_id": dict(SPK_IDS),
         "speakers": {
             "ritsu": {
@@ -681,6 +829,10 @@ def _assemble_into(
             "user": {
                 **_speaker_manifest_entry(user_dir, speaker_rows["user"], SPK_IDS["user"]),
                 "has_exclusions_json": user_has_exclusions,
+                # P2 修正 (review #265 R11): 公開バイトから実測した sha256
+                # （`has_exclusions_json` の真偽値だけでは実体へのバイト束縛が
+                # 無かった）。`exclusions.json` を持たない場合は None。
+                "exclusions_json_sha256": user_exclusions_sha256,
             },
         },
         "collision_check": {
@@ -694,6 +846,10 @@ def _assemble_into(
             "symbol_count": len(merged_pairs),
             "sha256": _sha256_file(dict_path),
         },
+        # P1 修正 (review #265 R11): 生成 config の sha256 記帳（live/
+        # normalized 双方）。`refresh_config_pin()` 実行時はこの値を実測で
+        # 更新する（§ refresh_config_pin docstring 参照）。
+        "config": dict(config_result),
         "gate": {
             "checks": ["validate_speaker", "check_ph_dur_duration", "check_note_dur_consistency"],
             "problems": [],

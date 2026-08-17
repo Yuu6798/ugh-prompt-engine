@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import copy
 import csv
 import hashlib
 import json
@@ -211,6 +212,47 @@ def test_manifest_records_per_wav_sha256_matching_published_bytes(tmp_path: Path
         assert manifest["speakers"][spk_name]["wav_count"] == len(wav_sha256)
 
 
+def test_manifest_records_exclusions_json_sha256_matching_published_bytes(tmp_path: Path) -> None:
+    """P2 修正 (review #265 R11): user の `exclusions.json` を run-4 バンドルへ
+    コピーする際、`assembly_manifest.json` の `speakers.user.exclusions_json_sha256`
+    へ、staged 出力バイトから実測した sha256 を記帳する（旧実装は
+    `has_exclusions_json` の真偽値のみで実体へのバイト束縛が無かった）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = tmp_path / "run4_raw"
+
+    manifest = assemble_run4.assemble(
+        ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True
+    )
+
+    published_exclusions = out_dir / "user" / "exclusions.json"
+    assert published_exclusions.exists()
+    expected_sha = hashlib.sha256(published_exclusions.read_bytes()).hexdigest()
+    assert manifest["speakers"]["user"]["exclusions_json_sha256"] == expected_sha
+
+    manifest_on_disk = json.loads((out_dir / "assembly_manifest.json").read_text(encoding="utf-8"))
+    assert manifest_on_disk["speakers"]["user"]["exclusions_json_sha256"] == expected_sha
+
+
+def test_manifest_exclusions_json_sha256_is_none_when_absent(tmp_path: Path) -> None:
+    """`exclusions.json` を持たない user raw dir では `exclusions_json_sha256`
+    は `None`（`has_exclusions_json` が `False` の場合との整合）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    (user_raw / "exclusions.json").unlink()
+    out_dir = tmp_path / "run4_raw"
+
+    manifest = assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir)
+
+    assert manifest["speakers"]["user"]["has_exclusions_json"] is False
+    assert manifest["speakers"]["user"]["exclusions_json_sha256"] is None
+    assert not (out_dir / "user" / "exclusions.json").exists()
+
+
 def test_manifest_wav_sha256_detects_tampering(tmp_path: Path) -> None:
     """`wav_sha256` の実測値は公開直後のバイト列そのものを識別するため、
     公開後に wav が（同名のまま）差し替わればもう一致しなくなることを確認
@@ -388,15 +430,28 @@ def test_run4_config_not_published_when_gate_validation_fails(tmp_path: Path) ->
     assert not (out_dir / "run4_config_datasets.yaml").exists()
 
 
-def test_run4_config_assembly_manifest_bytes_unchanged_by_config_generation(tmp_path: Path) -> None:
-    """config 生成の追加は `assembly_manifest.json` の内容へは一切影響しない
-    （新規ファイルのみの差分であることの直接確認 — R5 検証方針の踏襲）。"""
+def test_run4_config_assembly_manifest_records_config_sha256(tmp_path: Path) -> None:
+    """P1 修正 (review #265 R11): config 生成は `assembly_manifest.json` の
+    `config` セクションへ live/normalized 両方の sha256 を記帳する（旧実装は
+    `_write_run4_config()` の戻り値〔sha256 2 値〕を握り潰し、manifest には
+    一切記録されなかった）。schema も `0.3` へ上がっていることを確認する。"""
     out_dir = _assemble_normal_three_speaker(tmp_path)
     manifest = json.loads((out_dir / "assembly_manifest.json").read_text(encoding="utf-8"))
-    assert "config" not in manifest
+    assert manifest["schema"] == "run4-assembly-manifest/0.3"
     assert set(manifest.keys()) == {
-        "schema", "spk_id", "speakers", "collision_check", "dict", "gate", "notes",
+        "schema", "spk_id", "speakers", "collision_check", "dict", "config", "gate", "notes",
     }
+
+    config_path = out_dir / "run4_config_datasets.yaml"
+    normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
+    assert manifest["config"]["config_path"] == config_path.name
+    assert manifest["config"]["normalized_config_path"] == normalized_path.name
+    assert manifest["config"]["config_sha256"] == hashlib.sha256(
+        config_path.read_bytes()
+    ).hexdigest()
+    assert manifest["config"]["normalized_config_sha256"] == hashlib.sha256(
+        normalized_path.read_bytes()
+    ).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -494,12 +549,162 @@ def test_refresh_config_pin_rejects_unrelated_field_drift_between_live_and_rerea
     assert list(config_path.parent.glob("*.tmp-*")) == []
 
 
+def test_refresh_config_pin_rejects_duplicate_dataset_row_folded_to_matching_map(
+    tmp_path: Path,
+) -> None:
+    """P1 修正 (review #265 R11): `datasets` に同一 speaker の重複エントリ
+    （例: ritsu が誤って 2 行、計 4 エントリ）が混入していても、旧実装の
+    `{speaker: spk_id}` dict 内包による比較では畳まれて `SPK_IDS` と一致して
+    しまい PASS していた。本テストは重複行があっても畳んだマップが偶然
+    `SPK_IDS` と一致するケース（重複行が既存行と全く同一内容）を再現し、
+    それでも `ConfigPinMismatchError` で fail-closed することを確認する。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+    normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
+    normalized_text_before = normalized_path.read_text(encoding="utf-8")
+
+    live_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    ritsu_entry = next(e for e in live_config["datasets"] if e["speaker"] == "ritsu")
+    # 重複行を追加する — 内容は既存 ritsu 行と完全に同一なので、
+    # {speaker: spk_id} へ畳めば依然として SPK_IDS と一致してしまう
+    # （旧実装が見逃していた fail-open 経路そのもの）。
+    live_config["datasets"].append(copy.deepcopy(ritsu_entry))
+    assert len(live_config["datasets"]) == 4
+    config_path.write_text(
+        yaml.safe_dump(live_config, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+
+    with pytest.raises(assemble_run4.ConfigPinMismatchError) as exc_info:
+        assemble_run4.refresh_config_pin(config_path)
+    assert any("4" in d or "duplicate" in d for d in exc_info.value.diffs)
+
+    # fail-closed: 正規化コピーは一切変更されない
+    assert normalized_path.read_text(encoding="utf-8") == normalized_text_before
+    assert list(config_path.parent.glob("*.tmp-*")) == []
+
+
+def test_refresh_config_pin_rejects_datasets_out_of_order(tmp_path: Path) -> None:
+    """`datasets` のエントリ数・speaker/spk_id の集合は正しくても、順序が
+    既定（ritsu, pjs, user）からずれていれば fail-closed する（リスト形状
+    そのものを検査する新チェックの「順序」側）。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+
+    live_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    live_config["datasets"] = list(reversed(live_config["datasets"]))
+    config_path.write_text(
+        yaml.safe_dump(live_config, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+
+    with pytest.raises(assemble_run4.ConfigPinMismatchError):
+        assemble_run4.refresh_config_pin(config_path)
+
+
 def test_refresh_config_pin_missing_config_fails_closed(tmp_path: Path) -> None:
     """live config が存在しない場合は `RefreshConfigPinError` で fail-closed
     する。"""
     missing = tmp_path / "does_not_exist.yaml"
     with pytest.raises(assemble_run4.RefreshConfigPinError):
         assemble_run4.refresh_config_pin(missing)
+
+
+def test_validate_live_datasets_shape_accepts_canonical_entries() -> None:
+    datasets = [
+        {"speaker": "ritsu", "spk_id": 0},
+        {"speaker": "pjs", "spk_id": 1},
+        {"speaker": "user", "spk_id": 2},
+    ]
+    assert assemble_run4._validate_live_datasets_shape(datasets) == []
+
+
+def test_validate_live_datasets_shape_rejects_duplicate_row_count(tmp_path: Path) -> None:
+    """4 エントリ（ritsu が重複）は、畳んだ `{speaker: spk_id}` マップが
+    `SPK_IDS` と一致していても、リスト形状（エントリ数 3 期待）で拒否する。"""
+    datasets = [
+        {"speaker": "ritsu", "spk_id": 0},
+        {"speaker": "ritsu", "spk_id": 0},
+        {"speaker": "pjs", "spk_id": 1},
+        {"speaker": "user", "spk_id": 2},
+    ]
+    diffs = assemble_run4._validate_live_datasets_shape(datasets)
+    assert diffs
+    assert any("3" in d for d in diffs)
+
+
+def test_validate_live_datasets_shape_rejects_not_a_list() -> None:
+    diffs = assemble_run4._validate_live_datasets_shape("not-a-list")
+    assert diffs
+    assert any("not a list" in d for d in diffs)
+
+
+def test_validate_live_datasets_shape_rejects_wrong_order() -> None:
+    datasets = [
+        {"speaker": "pjs", "spk_id": 1},
+        {"speaker": "ritsu", "spk_id": 0},
+        {"speaker": "user", "spk_id": 2},
+    ]
+    diffs = assemble_run4._validate_live_datasets_shape(datasets)
+    assert diffs
+    assert any("order" in d for d in diffs)
+
+
+def test_refresh_config_pin_updates_manifest_config_sha256(tmp_path: Path) -> None:
+    """P1 修正 (review #265 R11): `refresh_config_pin()` 実行後、
+    `assembly_manifest.json` の `config.config_sha256`/
+    `config.normalized_config_sha256` が実測値へ更新される（手動編集で
+    live config のバイト列が変わっているため、`assemble()` 実行時に記帳
+    した値は refresh 前は stale になっている）。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+    normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
+    manifest_path = out_dir / "assembly_manifest.json"
+
+    manifest_before = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stale_config_sha = manifest_before["config"]["config_sha256"]
+
+    with open(config_path, "a", encoding="utf-8") as f:
+        f.write("lr: 0.0001\n")
+    # live config のバイト列は変わったが、記帳値はまだ編集前のまま stale。
+    assert hashlib.sha256(config_path.read_bytes()).hexdigest() != stale_config_sha
+
+    assemble_run4.refresh_config_pin(config_path)
+
+    manifest_after = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected_config_sha = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    expected_normalized_sha = hashlib.sha256(normalized_path.read_bytes()).hexdigest()
+    assert manifest_after["config"]["config_sha256"] == expected_config_sha
+    assert manifest_after["config"]["normalized_config_sha256"] == expected_normalized_sha
+    assert manifest_after["config"]["config_sha256"] != stale_config_sha
+    # config セクション以外は変更されない
+    manifest_before["config"] = manifest_after["config"]
+    assert manifest_before == manifest_after
+
+
+def test_refresh_config_pin_without_sibling_manifest_is_a_noop_for_manifest(
+    tmp_path: Path,
+) -> None:
+    """`assembly_manifest.json` が config と同じディレクトリに存在しない
+    （`assemble()` を経由しない直接テスト等）場合、`refresh_config_pin()` は
+    manifest 更新をスキップして通常どおり成功する（fail-closed の理由には
+    しない）。"""
+    out_dir = tmp_path / "standalone"
+    out_dir.mkdir()
+    config_path = out_dir / "run4_config_datasets.yaml"
+    config_text = build_dataset.build_config_yaml(
+        dict_path=out_dir / "dict.txt",
+        binary_data_dir=out_dir / "binary",
+        speakers=[
+            ("ritsu", 0, out_dir / "ritsu", ["a"]),
+            ("pjs", 1, out_dir / "pjs", ["b"]),
+            ("user", 2, out_dir / "user", ["c"]),
+        ],
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+
+    result_path = assemble_run4.refresh_config_pin(config_path)
+
+    assert result_path.exists()
+    assert not (out_dir / "assembly_manifest.json").exists()
 
 
 def test_main_refresh_config_pin_subcommand_end_to_end(tmp_path: Path, capsys) -> None:
@@ -672,9 +877,34 @@ def test_assembly_is_deterministic_across_two_runs(tmp_path: Path) -> None:
         Path("user/wavs/UC-001.wav"),
         Path("user/exclusions.json"),
         Path("dict.txt"),
-        Path("assembly_manifest.json"),
     ]
     for rel in rel_paths:
         b1 = (out_dir_1 / rel).read_bytes()
         b2 = (out_dir_2 / rel).read_bytes()
         assert b1 == b2, f"mismatch: {rel}"
+
+    # `assembly_manifest.json` は review #265 R11 P1 以降、live config の
+    # sha256（`config.config_sha256`）を記帳する。live config は
+    # `raw_data_dir`/`dict_path`/`binary_data_dir` に `out_dir` の絶対パスを
+    # 埋め込むため（`test_run4_config_normalized_copy_uses_relative_paths_and_is_host_independent`
+    # が確認する既存の設計どおり）、`out_dir` の絶対位置が異なれば
+    # `config.config_sha256` も異なるのが正しい——manifest 全体のバイト
+    # 一致ではなく、「config セクション以外は一致」+「`normalized_config_sha256`
+    # は host 非依存で一致」を検証する。
+    manifest_1 = json.loads((out_dir_1 / "assembly_manifest.json").read_text(encoding="utf-8"))
+    manifest_2 = json.loads((out_dir_2 / "assembly_manifest.json").read_text(encoding="utf-8"))
+    assert manifest_1["config"]["config_sha256"] != manifest_2["config"]["config_sha256"]
+    assert (
+        manifest_1["config"]["normalized_config_sha256"]
+        == manifest_2["config"]["normalized_config_sha256"]
+    )
+    manifest_1_without_config = {k: v for k, v in manifest_1.items() if k != "config"}
+    manifest_2_without_config = {k: v for k, v in manifest_2.items() if k != "config"}
+    assert manifest_1_without_config == manifest_2_without_config
+    assert (
+        manifest_1["config"]["config_path"] == manifest_2["config"]["config_path"]
+    )
+    assert (
+        manifest_1["config"]["normalized_config_path"]
+        == manifest_2["config"]["normalized_config_path"]
+    )

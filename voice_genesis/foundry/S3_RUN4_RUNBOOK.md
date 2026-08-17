@@ -214,7 +214,9 @@ python voice_genesis/foundry/s1_dataprep/assemble_run4.py \
 - 3 話者それぞれに validate_speaker / check_ph_dur_duration /
   check_note_dur_consistency を実行し、全問題収集 → 1 件でも fail-closed
 - 統合辞書・assembly_manifest.json（各話者 row/wav 数・合計秒数・
-  transcriptions sha256・衝突検査結果）も出力
+  transcriptions sha256・衝突検査結果・user の exclusions.json sha256・
+  生成 config の sha256〔live/normalized 両方〕）も出力（review #265 R11
+  P1/P2、schema `run4-assembly-manifest/0.3`）
 - **3 話者学習 config も自動生成する**（R7 改訂・§4 参照）: `build_dataset.py`
   `build_config_yaml()`（`speakers` 引数は話者数非依存の汎用実装）を
   read-only 再利用し、`<out-dir>/run4_config_datasets.yaml`（実行時 config）
@@ -271,6 +273,15 @@ python voice_genesis/foundry/s1_dataprep/assemble_run4.py refresh-config-pin \
 既定マッピング（ritsu=0/pjs=1/user=2）から崩れていないことを再読込検証し、
 不一致があれば `.normalized.yaml` へは一切書き込まずに fail-closed する。
 運用手順は **「手動編集 → `refresh-config-pin` → 学習開始」** の順を厳守する。
+
+`refresh-config-pin` 成功時、`assembly_manifest.json`（`<out-dir>` 直下に
+存在する場合）の `config.config_sha256`/`config.normalized_config_sha256` を
+実測値へ自動更新する（review #265 R11 P1）。**学習開始前に
+`sha256sum <out-dir>/run4_config_datasets.yaml` を実測し、
+`assembly_manifest.json` の `config.config_sha256` と一致することを目視
+確認すること**（記帳された pin と実際に学習へ渡す config が一致している
+ことの最終確認 — 手動編集後に `refresh-config-pin` の実行を忘れた場合は
+ここで不一致として検出できる）。
 
 `results_s1/s1_record_2026-08-15.md` の記述（§ run3 起動・§ config.yaml の
 逸脱と対処、行 452-495）によれば、run 3 ではこれらは **GPU インスタンス側で
