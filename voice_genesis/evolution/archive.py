@@ -137,6 +137,14 @@ class Archive:
            記録を append）。
         3. いずれにも該当しなければ `"rejected"`。
         """
+        # PR #267 Codex R10 指摘B（P2）, 2026-08-17 採用: bool は int のサブ
+        # クラスのため `math.isfinite(True)` は無検証で通り、`quality=True`
+        # が `quality=1.0` として選抜を汚染していた。有限性チェックより前に
+        # isinstance(x, bool) で fail-closed 拒否する。
+        if isinstance(quality, bool):
+            raise ValueError(f"bool quality rejected: {quality!r}")
+        if isinstance(quality_floor, bool):
+            raise ValueError(f"bool quality_floor rejected: {quality_floor!r}")
         if not math.isfinite(quality):
             raise ValueError(f"non-finite quality rejected: {quality}")
         if not math.isfinite(quality_floor):

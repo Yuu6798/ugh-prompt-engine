@@ -730,6 +730,46 @@ def test_evaluation_record_from_dict_rejects_empty_string_axis_key() -> None:
         models.evaluation_record_from_dict(d)
 
 
+# --- PR #267 Codex R10 指摘A（P2）: 空白のみ axis 名の fail-closed 拒否 ------
+
+
+@pytest.mark.parametrize(
+    "whitespace_only_name",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_build_evaluation_record_rejects_whitespace_only_axis_key(
+    whitespace_only_name: str,
+) -> None:
+    """従来の非空チェックは strip 前の文字列に対してで、空白のみキー
+    （半角スペース・タブ・全角スペース等）が `not name` を素通りしていた
+    （予約名チェックのみ strip 済み比較で非対称だった）。非空判定を
+    `name.strip()` に適用し fail-closed 拒否する（格納キー自体の trim は
+    行わない — 拒否のみ）。"""
+    with pytest.raises(models.GenomeValidationError, match="axes key must be a non-empty string"):
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set="d3-probe/0.1",
+            evaluator=models.Evaluator(kind="training", version="v0"),
+            axes={whitespace_only_name: 0.5},
+        )
+
+
+@pytest.mark.parametrize(
+    "whitespace_only_name",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_evaluation_record_from_dict_rejects_whitespace_only_axis_key(
+    whitespace_only_name: str,
+) -> None:
+    """loader 側（`evaluation_record_from_dict()`）も builder と同じ
+    `_validate_axes()` 共有実装を通るため、空白のみキーは同様に拒否される。"""
+    d = models.evaluation_record_to_dict(_base_eval_record())
+    d["axes"] = {whitespace_only_name: 0.5}
+    with pytest.raises(models.GenomeValidationError, match="axes key must be a non-empty string"):
+        models.evaluation_record_from_dict(d)
+
+
 # --- PR #267 Codex R9 指摘2（P2）: 総合1点スコア名の予約ブロックリスト -----
 
 

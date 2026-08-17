@@ -851,10 +851,16 @@ def _validate_axes(axes: Mapping[str, Any]) -> Dict[str, float]:
     実装（Codex 指摘2, PR #267 R9 採用 2026-08-17: 従来
     `axes={"overall": 0.95}` 等の総合点名素通しが builder/loader 双方で
     無検証だった）。大文字小文字非区別・前後空白 trim 後に比較する。
+
+    非空判定も trim 後の文字列に対して行う（Codex 指摘A, PR #267 R10 採用
+    2026-08-17: 従来は `not name` の非 strip 判定で `axes={"   ": 0.8}` の
+    ような空白のみキーが素通りしていた — 予約名チェックのみ strip 済み
+    比較で非対称だった）。格納するキー自体は元の文字列のまま（trim しない）
+    — 空白のみキーの拒否のみを行う。
     """
     validated: Dict[str, float] = {}
     for name, value in axes.items():
-        if not isinstance(name, str) or not name:
+        if not isinstance(name, str) or not name.strip():
             raise GenomeValidationError(f"axes key must be a non-empty string, got {name!r}")
         if name.strip().casefold() in _RESERVED_AXIS_NAMES:
             raise GenomeValidationError(

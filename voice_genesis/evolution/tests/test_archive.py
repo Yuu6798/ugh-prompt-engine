@@ -365,6 +365,34 @@ def test_submit_rejects_nonfinite_quality(founders) -> None:
         arc.submit(ritsu, float("nan"), quality_floor=0.5)
 
 
+# --- PR #267 Codex R10 指摘B（P2）: bool quality / quality_floor の黙認 ----
+
+
+def test_submit_rejects_bool_quality(founders) -> None:
+    """bool は int のサブクラスのため `math.isfinite(True)` は無検証で通り、
+    従来 `quality=True` は `quality=1.0` として選抜を汚染していた。
+    isinstance(x, bool) を有限性チェックより前に fail-closed 拒否する。"""
+    ritsu, *_ = founders
+    arc = archive_mod.Archive()
+    with pytest.raises(ValueError, match="bool quality"):
+        arc.submit(ritsu, True, quality_floor=0.5)
+
+
+def test_submit_rejects_bool_quality_floor(founders) -> None:
+    ritsu, *_ = founders
+    arc = archive_mod.Archive()
+    with pytest.raises(ValueError, match="bool quality_floor"):
+        arc.submit(ritsu, 0.8, quality_floor=False)
+
+
+def test_submit_accepts_ordinary_float_quality_unchanged(founders) -> None:
+    """通常の float quality/quality_floor の受理は不変（回帰確認）。"""
+    ritsu, *_ = founders
+    arc = archive_mod.Archive()
+    result = arc.submit(ritsu, 0.8, quality_floor=0.5)
+    assert result == "elite"
+
+
 # --- PR #267 Codex R9 指摘1（P2）: submit() の未検証受理 --------------------
 
 
