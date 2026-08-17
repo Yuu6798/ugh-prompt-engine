@@ -92,6 +92,34 @@ stdout と `<out-dir>/verify_report.txt` へ出力する（1 件でも不一致
 **`<out-dir>/render` をそのまま渡す**。以下の手順 2〜3 は参考情報として
 残す（手順 1・4・5 は本スクリプトの対象外 — 変更なし）。
 
+**決定論環境規約（SIMD レベル pin・2026-08-17 追加）**: D3 render 実行前に
+必ず `export NPY_DISABLE_CPU_FEATURES=X86_V4` を設定する（numpy の AVX-512
+dispatch カーネルを無効化し X86_V3=AVX2 相当に固定する）。pin
+（`d3_manifest_results.json` の `wav_sha256`）は X86_V3 生成環境を正基準
+として採用済みであり、AVX-512 ホストで本設定を欠くと `d3_sustain`
+seed=701 のみ 1 サンプル・1 LSB のバイト差が出て pin 不一致になる（原因・
+実測記録 = `results_s3/d3_dataset_record.md` 改訂節）。AVX2 止まりのホスト
+では本設定は実質 no-op だが、ホスト差を意識せず一律に設定する。
+
+- **受け入れゲート**: render 前に以下を実行し、`found` が `X86_V4` を
+  含まないことを確認する。
+
+  ```bash
+  python -c "import numpy; print(numpy.show_config('dicts')['SIMD Extensions']['found'])"
+  ```
+
+  AVX-512 ホストでは設定が効いた証明（`X86_V4` が消える）、AVX2 ホストでは
+  元々 `X86_V4` を含まない（no-op の確認）。
+- **罠**: numpy 2.4.6 の `NPY_DISABLE_CPU_FEATURES` は個別 AVX-512 機能名
+  （`AVX512F` 等）や不正値を渡してもエラーなく黙って無視する（silent
+  no-op）。有効な語彙は `numpy._core._multiarray_umath.__cpu_dispatch__`
+  に列挙される dispatch グループ名（`X86_V3`/`X86_V4` 等）のみ。設定が
+  効いたかは必ず上記ゲートの `show_config` 実測で確認する（「設定した
+  つもり」を信用しない）。
+- ffmpeg 版 pin（`ffmpeg 6.1.1-3ubuntu5`、`recording_kit/intake_records/
+  intake_record_2026-08-17.md` 参照）と同格の環境契約として扱う——render
+  環境の再現に必須。
+
 1. リツ voicebank を `s1_dataprep/README.md` §0 の pin（zip
    `88c7b3ef…df66dde76`）で取得・照合済みのものを使う（(a) で取得済みの実体を
    再利用してよい）。

@@ -530,14 +530,14 @@
       "spec_path": "ritsu_neutral_seed701.json",
       "spec_sha256": "89b95c089966480ffc3a26317691adcfb66456ef13ecacbfa8766bd32b668071",
       "wav_path": "d3_sustain_seed701.wav",
-      "wav_sha256": "88cae387a28ae0a6fb0a6a59daf7786c9b4e72ec8847be6fa3f13cdbf8200002",
+      "wav_sha256": "8b4f8a6095f3181d2a4cb97cf531cc915beeb65e3ceb89a02ebe4940f837fa6a",
       "timing_csv_path": "d3_sustain_seed701.csv",
       "timing_csv_sha256": "b659322393ffb89e04810644e1f161cb8e7570d42d3d5a6514f070e322d2d8d1",
       "duration_sec": 63.5,
       "rms": 0.078527,
       "n_frames": 1524000,
       "sample_rate": 24000,
-      "log_output_sha256": "88cae387a28ae0a6fb0a6a59daf7786c9b4e72ec8847be6fa3f13cdbf8200002",
+      "log_output_sha256": "8b4f8a6095f3181d2a4cb97cf531cc915beeb65e3ceb89a02ebe4940f837fa6a",
       "log_duration_sec": 63.5
     },
     {
