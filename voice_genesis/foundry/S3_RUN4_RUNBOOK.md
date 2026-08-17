@@ -61,8 +61,8 @@ config.yaml の一次照合（AI-Drive 退避先）のみ**。§8 に全件を�
 
 ### 2.2 (b) D3 再生成 → `convert_d3.py` → pin 照合
 
-**本スクリプトで実行する（2026-08-17 追加）**: 下記手順 2〜3（40 セル
-render + tripwire 先行照合 + 全数 sha256 照合）は
+**本スクリプトで実行する（2026-08-17 追加・R8 レイアウト修正込み）**: 下記
+手順 2〜3（40 セル render + tripwire 先行照合 + 全数 sha256 照合）は
 `scripts/run_d3_cells.py` 1 コマンドで置き換えられる（`render.py`/
 `converter` 群には一切触れない新規追加スクリプト。ローカル実測 = 40/40
 PASS、tripwire 2 件一致、所要 約 7 分 CPU のみ・GPU 不要）:
@@ -83,9 +83,14 @@ seed=11）が manifest の tripwire sha256 と不一致の場合は「環境ド�
 全セル無効」として残り 38 セルを render せず即座に非 0 exit する。
 40 セル render 後、wav/timing csv の sha256 を
 `d3_manifest_results.json` と全数照合し、per-cell PASS/FAIL 表を
-stdout と `<out-dir>/verify_report.txt` へ出力する（1 件でも不一致なら
-非 0 exit）。以下の手順 2〜3 は参考情報として残す（手順 1・4・5 は
-本スクリプトの対象外— 変更なし）。
+stdout と `<out-dir>/verify_report.txt` へ出力する（1 件でも不一致
+〔または当該セッションでの render 失敗〕なら非 0 exit。既存 `--out-dir`
+への再実行で render が失敗しても前回実行の残存ファイルで false PASS には
+ならない）。**出力は `<out-dir>/render/` に wav + timing csv を同一 stem で
+同居させる**（`convert_d3.py` の `discover_pairs()` が単一ディレクトリ
+非再帰で pair を発見する契約のため）ので、手順 4 の `--render-dir` には
+**`<out-dir>/render` をそのまま渡す**。以下の手順 2〜3 は参考情報として
+残す（手順 1・4・5 は本スクリプトの対象外 — 変更なし）。
 
 1. リツ voicebank を `s1_dataprep/README.md` §0 の pin（zip
    `88c7b3ef…df66dde76`）で取得・照合済みのものを使う（(a) で取得済みの実体を
@@ -210,22 +215,42 @@ python voice_genesis/foundry/s1_dataprep/assemble_run4.py \
   check_note_dur_consistency を実行し、全問題収集 → 1 件でも fail-closed
 - 統合辞書・assembly_manifest.json（各話者 row/wav 数・合計秒数・
   transcriptions sha256・衝突検査結果）も出力
+- **3 話者学習 config も自動生成する**（R7 改訂・§4 参照）: `build_dataset.py`
+  `build_config_yaml()`（`speakers` 引数は話者数非依存の汎用実装）を
+  read-only 再利用し、`<out-dir>/run4_config_datasets.yaml`（実行時 config）
+  + `<out-dir>/run4_config_datasets.yaml.normalized.yaml`（host 非依存の pin
+  用コピー）を出力する。`datasets:` は ritsu(0)/pjs(1)/user(2) の 3 エントリ・
+  `num_spk: 3`。`--binary-data-dir`/`--n-test-prefixes`/`--max-updates`/
+  `--val-check-interval`/`--num-ckpt-keep` で上書き可（既定値は
+  `build_dataset.py` と同一）
 
 注意: 本セッションのローカル実測は D1 のみ合成ミニフィクスチャ
 （`--pjs-is-fixture`）で行った。**本番は実 PJS（convert_pjs 出力）を渡し
-`--pjs-is-fixture` を付けないこと**。学習 config（binarize 入力）の生成は
-`build_dataset.py` main() が担っていた範囲のうち 3 話者版が必要なもの =
-assemble_run4 の出力 + §4 の config 差分適用で構成する。
+`--pjs-is-fixture` を付けないこと**。
 
 ---
 
 ## 4. 学習構成（run 3 踏襲）— 設定の所在に関する注意
 
+**3 話者版 `datasets:`/`num_spk`/学習規模 config は `assemble_run4.py`
+実行で自動生成される**（R7 改訂・実装済み。§3 参照）: `--out-dir` 実行後、
+`<out-dir>/run4_config_datasets.yaml`（実行時 config）と
+`<out-dir>/run4_config_datasets.yaml.normalized.yaml`（pin 用コピー）が
+既に揃っている。クローが本節の作業として行うのは、この `datasets:` 節
+（3 話者・`num_spk: 3`。生成済みのため編集不要）を土台に、**下記の
+LR/finetune/精度/勾配クリップの 4 項目のみを run 3 実 config.yaml から
+手動移植**すること（`build_dataset.py`/`assemble_run4.py` いずれの CLI にも
+この 4 項目のフックは無い——理由は次段落）。
+
 `DESIGN_S3_backfill.md` §4: 「finetune 機構・bf16+clip・LR 0.0002・40K・各 5K
 節目 NaN スキャン」を run 3 から踏襲する。**これらは `build_dataset.py` の CLI
 引数では設定できない**（同スクリプトが CLI で公開する学習規模フィールドは
 `--max-updates`/`--val-check-interval`/`--num-ckpt-keep` の 3 つのみ —
-`build_dataset.py:854-867`。LR/finetune/精度/clip の CLI フックは無い）。
+`build_dataset.py:854-867`。LR/finetune/精度/clip の CLI フックは無い。
+`assemble_run4.py` の config 生成も同じ 3 フィールドのみを公開し、これら
+4 項目は生成しない — 意図的な役割分担: `datasets:`/`num_spk`/学習規模の
+自動導出可能な節は生成器が担い、run 3 由来で自動導出できない 4 項目は
+クローの手動移植に委ねる）。
 
 `results_s1/s1_record_2026-08-15.md` の記述（§ run3 起動・§ config.yaml の
 逸脱と対処、行 452-495）によれば、run 3 ではこれらは **GPU インスタンス側で
@@ -338,11 +363,19 @@ Criteria が要求する出口記録）へ記帳する:
 1. **3 話者アセンブリ**（§3）: **ローカル実装済みへ更新（2026-08-17）** —
    `s1_dataprep/assemble_run4.py`（新規ファイル方式・build_dataset.py 非接触）
    が D3→ritsu 合流（ファイル名無衝突の全数実測込み）+ 3 話者 raw 構成 +
-   検証ゲートを担う。使い方は同スクリプトの docstring とテストを参照。
-2. **run 3 の実 `config.yaml`**（§4）: AI-Drive `/s1_ritsu_pjs_acoustic_v1/run3/`
-   退避先の実体を確認し、`finetune_enabled`/`finetune_ckpt_path`/
-   `pl_trainer_precision`/`optimizer_args.lr`/勾配クリッピングの正確なキー名・
-   値を一次ソースから再確認する（s1_record の文章記述からの引用のみで未接地）。
+   検証ゲート + **3 話者学習 config 生成**（R7 追加。`build_dataset.py`
+   `build_config_yaml()` を read-only 再利用し `run4_config_datasets.yaml`
+   [+ `.normalized.yaml`] を出力）を担う。使い方は同スクリプトの docstring
+   とテストを参照。
+2. **run 3 の実 `config.yaml`**（§4）: `datasets:`/`num_spk`/学習規模 3
+   フィールドの節は `assemble_run4.py` の config 生成で解消済み（R7）。
+   **残る要確認事項は LR/finetune/精度/勾配クリップの 4 項目のみ**
+   （§4 のとおり自動生成の対象外）: AI-Drive
+   `/s1_ritsu_pjs_acoustic_v1/run3/` 退避先の実体を確認し、
+   `finetune_enabled`/`finetune_ckpt_path`/`pl_trainer_precision`/
+   `optimizer_args.lr`/勾配クリッピングの正確なキー名・値を一次ソースから
+   再確認したうえで、生成済み `run4_config_datasets.yaml` へ手動移植する
+   （s1_record の文章記述からの引用のみで未接地）。
 3. **run 4 の `finetune_ckpt_path`**（§4）: **裁定済み（Fable 2026-08-17）** —
    run 4 は run 3 checkpoint を継続せず、**run 3 レシピの完全再現**（スクラッチ
    開始 + 5K 節目で optimizer 新品の finetune 機構を再適用）とする。理由 =

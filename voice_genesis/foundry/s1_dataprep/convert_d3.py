@@ -190,6 +190,35 @@ def discover_pairs(render_dir: Path) -> List[Tuple[str, Path, Path]]:
     return [(stem, wav_stems[stem], csv_stems[stem]) for stem in sorted(wav_stems)]
 
 
+def _snapshot_wav_pairs(
+    pairs: List[Tuple[str, Path, Path]], snapshot_dir: Path
+) -> List[Tuple[str, Path, Path]]:
+    """P1 修正 (review #265 R7): 各ペアの wav を `snapshot_dir` へ 1 回だけ
+    コピーし、`(stem, snapshot_wav_path, csv_path)` の列を返す。
+
+    旧実装は `render_dir` 原本の同一 wav を `_wav_duration_seconds`
+    （duration 整合検査、`build_transcription_row` 経由）と
+    `resample_to_44k1`（実際の公開バイト列の生成元、ffmpeg サブプロセスが
+    別途 open）の 2 箇所で別々のタイミングに open していた。両者の間で
+    `render_dir` の内容が変化すると、検証した duration と実際に公開される
+    バイト列が食い違い得る（TOCTOU）。ここで検証・resample のどちらより前に
+    1 回だけコピーし、以後の両処理をこのスナップショットのみに対して行う
+    ことで、検証対象と変換入力が構造的に一致することを保証する
+    （`recording_kit/intake.py` `process_one` の「単一 read から得たバイト列を
+    ハッシュにも変換入力にも使う」原則と同型。convert_d3 には台帳照合が無い
+    ため sha256 計算は不要で、`shutil.copy2` による単一コピーのみで足りる）。
+
+    `stem`/`wav_path.name` は `render_dir` 直下の非再帰 glob（`discover_pairs`）
+    由来のため、同一 `snapshot_dir` 内でファイル名衝突は起きない。
+    """
+    out: List[Tuple[str, Path, Path]] = []
+    for stem, wav_path, csv_path in pairs:
+        snapshot_wav = snapshot_dir / wav_path.name
+        shutil.copy2(wav_path, snapshot_wav)
+        out.append((stem, snapshot_wav, csv_path))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 2. timing CSV -> transcriptions.csv 1 行への変換
 # ---------------------------------------------------------------------------
@@ -532,13 +561,22 @@ def convert(
 
     P2 修正 (review #265 R5): `duration_tolerance_sec` は最初に有限・非負を
     検査する（`_require_finite_nonnegative_duration_tolerance`）。
+
+    P1 修正 (review #265 R7): 各 wav を duration 検査・resample のどちらより
+    前に `snapshot_dir` へ 1 回だけコピーし（`_snapshot_wav_pairs`）、以後の
+    両処理をこのスナップショットのみに対して行う（TOCTOU 対策。docstring
+    参照）。`snapshot_dir` は最終出力に含まれない一時領域で、成功・失敗
+    いずれの経路でも必ず削除する。
     """
     _require_finite_nonnegative_duration_tolerance(duration_tolerance_sec)
     render_dir = Path(render_dir)
     out_dir = Path(out_dir)
     old_dir = out_dir.parent / f"{out_dir.name}.old"
     staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
-    _reject_output_collision([out_dir, old_dir, staging_dir], protected_roots=[render_dir])
+    snapshot_dir = out_dir.parent / f"{out_dir.name}.snapshot-{os.getpid()}"
+    _reject_output_collision(
+        [out_dir, old_dir, staging_dir, snapshot_dir], protected_roots=[render_dir]
+    )
 
     pairs = discover_pairs(render_dir)  # fail-closed（ペア不整合）はここで完結
     if not pairs:
@@ -547,15 +585,23 @@ def convert(
             "(fail-closed, nothing published; any existing out_dir is left untouched)"
         )
 
-    if staging_dir.exists():
-        shutil.rmtree(staging_dir)
-    staging_dir.mkdir(parents=True)
+    if snapshot_dir.exists():
+        shutil.rmtree(snapshot_dir)
+    snapshot_dir.mkdir(parents=True)
     try:
-        summary = _convert_into(pairs, staging_dir, duration_tolerance_sec, ffmpeg_bin)
-        _swap_into_place(staging_dir, out_dir)
-    except BaseException:
-        shutil.rmtree(staging_dir, ignore_errors=True)
-        raise
+        snapshot_pairs = _snapshot_wav_pairs(pairs, snapshot_dir)
+
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        staging_dir.mkdir(parents=True)
+        try:
+            summary = _convert_into(snapshot_pairs, staging_dir, duration_tolerance_sec, ffmpeg_bin)
+            _swap_into_place(staging_dir, out_dir)
+        except BaseException:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
+    finally:
+        shutil.rmtree(snapshot_dir, ignore_errors=True)
     return summary
 
 

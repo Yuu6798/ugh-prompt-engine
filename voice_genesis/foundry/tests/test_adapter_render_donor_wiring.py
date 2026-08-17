@@ -1341,6 +1341,50 @@ def test_render_timing_out_none_skips_collision_check_and_reaches_build_score(
 
 
 # ---------------------------------------------------------------------------
+# P2 修正 (review #265 R7): timing_out_path の単独指定（out_path=None）は
+# 合成のみ行い何も書かずに正常終了する false-success だったため、
+# out_path 必須（同時指定のみ許可）を fail-closed で強制する
+# ---------------------------------------------------------------------------
+
+
+def test_render_timing_out_alone_without_out_raises_before_build_score(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`timing_out_path` のみ指定・`out_path=None` は、合成だけ行って WAV も
+    timing CSV も書かずに正常終了する false-success だった（§ 後段の公開
+    ブロックが `if out_path is not None:` の中にしか無く丸ごとスキップ
+    されるため）。重い合成（`build_score`）へ入る前に即座に拒否する。"""
+    spec_path, root = _ritsu_spec_and_voicebank(tmp_path)
+    timing_out_path = tmp_path / "out_timing.csv"
+
+    def _sentinel_build_score(_name):
+        raise AssertionError(
+            "build_score reached — timing_out_path-without-out_path check did not "
+            "fail before synthesis"
+        )
+
+    monkeypatch.setattr(rd, "build_score", _sentinel_build_score)
+
+    with pytest.raises(ValueError, match="timing_out_path"):
+        rd.render(
+            "sakura", spec_path, donor="ritsu", voicebank_root=root,
+            timing_out_path=timing_out_path,
+        )
+    assert not timing_out_path.exists()
+
+
+def test_render_out_alone_without_timing_out_does_not_raise_at_this_gate() -> None:
+    """`out_path` のみ指定・`timing_out_path` 省略は既存の正常系（WAV 単独
+    公開）のため、本ゲートには抵触しない（誤検知しないことの対照テスト）。"""
+    with pytest.raises(FileNotFoundError):
+        rd.render(
+            "sakura", "/nonexistent/voice_spec.json",
+            donor="ritsu", voicebank_root="/nonexistent/voicebank",
+            out_path="/nonexistent/out_dir/out.wav",
+        )
+
+
+# ---------------------------------------------------------------------------
 # P1 修正 (review #265): WAV + timing CSV の両方 staging → 両方公開
 # （非対称な部分公開の解消）
 # ---------------------------------------------------------------------------

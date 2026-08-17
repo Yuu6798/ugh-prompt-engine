@@ -209,6 +209,20 @@ CARD_TIER: Dict[str, str] = {
 }
 
 
+# P2 修正 (review #265 R7): 台帳 schema の完全一致検査（`recording_kit/intake.py`
+# `LEDGER_SCHEMA`/`load_ledger` R13 P2 対応・`intake.py:603-622` と同型の
+# fail-closed）。未知/旧バージョン/破損した台帳を無警告で読み込み、変換・公開
+# してしまうのを防ぐ。
+LEDGER_SCHEMA = "user-donor-ledger/0.1"
+
+
+class LedgerSchemaError(ValueError):
+    """`--ledger` の `schema` フィールドが `LEDGER_SCHEMA` と完全一致しない
+    場合に送出する（`recording_kit/intake.py` `LedgerSchemaError`/
+    `load_ledger` と同型の fail-closed。未知・旧バージョン・破損した台帳への
+    暗黙の変換・公開を防ぐ）。"""
+
+
 class LedgerMismatchError(ValueError):
     """台帳 (`--ledger`) と `--normalized-dir` の突合で欠落・余剰・sha256 不一致が
     見つかった場合に送出する（全違反を収集してから fail-closed、`convert_d3.py`
@@ -234,8 +248,22 @@ class LedgerEntry:
 
 
 def load_ledger(ledger_path: Path) -> List[Dict[str, object]]:
+    """`ledger_path`（`user_donor_ledger.json`）を読み込む。
+
+    P2 修正 (review #265 R7): `schema == LEDGER_SCHEMA` の完全一致を
+    `entries` のリスト検査より前に強制する（`recording_kit/intake.py`
+    `load_ledger`・`intake.py:603-622` と同型の fail-closed）。未知/旧
+    バージョン/破損した台帳（`schema` フィールド欠落・値違いを含む）を
+    無警告で読み込み、以後の突合・変換・公開へ進めてしまうのを防ぐ。
+    """
     with open(ledger_path, encoding="utf-8") as f:
         data = json.load(f)
+    schema = data.get("schema")
+    if schema != LEDGER_SCHEMA:
+        raise LedgerSchemaError(
+            f"{ledger_path}: schema {schema!r} does not match expected {LEDGER_SCHEMA!r} "
+            "(fail-closed — refusing to read an unknown/legacy/corrupt ledger)"
+        )
     entries = data.get("entries")
     if not isinstance(entries, list):
         raise LedgerMismatchError(
@@ -253,16 +281,38 @@ def _sha256_of(path: Path) -> str:
 
 
 def reconcile_ledger(
-    normalized_dir: Path, ledger_entries: Sequence[Dict[str, object]]
+    normalized_dir: Path, ledger_entries: Sequence[Dict[str, object]],
+    snapshot_dir: Optional[Path] = None,
 ) -> Dict[str, LedgerEntry]:
     """台帳の `normalized_path` のファイル名 + `sha256` を正として
     `normalized_dir` と突合する。欠落・sha256 不一致・（台帳に無い）余剰 wav・
     card_id 重複（P2 修正 review #265）のいずれも全件収集してから
-    `LedgerMismatchError` で fail-closed する。"""
+    `LedgerMismatchError` で fail-closed する。
+
+    P1 修正 (review #265 R7): `snapshot_dir` を指定すると、各エントリの
+    sha256 照合を「`normalized_dir` の原本への複数回の別読み」ではなく
+    「1 回だけ読んだバイト列」から行い、同じバイト列を `snapshot_dir` 直下へ
+    スナップショットとして書き出す（返す `LedgerEntry.path` はこの
+    スナップショットを指す）。旧実装は sha256 照合（本関数、原本を直接
+    open）と後続の音声解析（`_load_mono`）・resample
+    （`convert_d3.resample_to_44k1`、いずれも `LedgerEntry.path` 経由で原本を
+    別途 open）が別タイミングの別 read だったため、その間に `normalized_dir`
+    の内容が変化すると sha256 照合対象と実際の変換入力が食い違い得た
+    （TOCTOU）。以後の解析・resample はこのスナップショットのみを読み、
+    原本には二度と触れない（`recording_kit/intake.py` `process_one` の
+    「単一 read から得たバイト列をハッシュにも変換入力にも使う」原則と同型）。
+    省略時（`None`、既定）は従来どおり原本パスを直接ハッシュする
+    （本関数単体のテスト後方互換のため。実運用の `convert()` は常に
+    `snapshot_dir` を渡す）。
+    """
     problems: List[str] = []
     by_card: Dict[str, LedgerEntry] = {}
     referenced_filenames: set = set()
     entries_by_card_id: Dict[str, List[str]] = {}  # P2 修正: card_id 重複検出用
+
+    if snapshot_dir is not None:
+        snapshot_dir = Path(snapshot_dir)
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     for entry in ledger_entries:
         card_id = entry.get("card_id")
@@ -280,7 +330,18 @@ def reconcile_ledger(
         if not candidate.exists():
             problems.append(f"{card_id}: expected file missing under {normalized_dir}: {filename}")
             continue
-        actual_sha = _sha256_of(candidate)
+
+        if snapshot_dir is not None:
+            # 単一 read: このバイト列がハッシュ照合にも以後の解析/resample
+            # 入力にもなる（intake.py process_one と同型）。
+            source_bytes = candidate.read_bytes()
+            actual_sha = hashlib.sha256(source_bytes).hexdigest()
+            resolved_path = snapshot_dir / filename
+            resolved_path.write_bytes(source_bytes)
+        else:
+            actual_sha = _sha256_of(candidate)
+            resolved_path = candidate
+
         if actual_sha != expected_sha:
             problems.append(
                 f"{card_id}: sha256 mismatch for {filename} "
@@ -288,7 +349,7 @@ def reconcile_ledger(
             )
             continue
         by_card[str(card_id)] = LedgerEntry(
-            card_id=str(card_id), filename=filename, sha256=str(expected_sha), path=candidate
+            card_id=str(card_id), filename=filename, sha256=str(expected_sha), path=resolved_path
         )
         entries_by_card_id.setdefault(str(card_id), []).append(filename)
 
@@ -851,6 +912,13 @@ def convert(
     read-only import で再利用。`nan`/`+inf` を渡すと `convert()` 内部の
     duration self-check（`diff > duration_tolerance_sec`）が常時 `False` に
     なり乖離を無条件で素通りする）。
+
+    P1 修正 (review #265 R7): `normalized_dir` の各 wav は
+    `reconcile_ledger(..., snapshot_dir=...)` が sha256 照合と同じ単一
+    read でスナップショットへコピーし、以後の解析（`_load_mono`）・resample
+    （`_publish_into` 内の `resample_to_44k1`）はこのスナップショットのみを
+    読む（TOCTOU 対策。`reconcile_ledger` docstring 参照）。`snapshot_dir` は
+    最終出力に含まれない一時領域で、成功・失敗いずれの経路でも必ず削除する。
     """
     convert_d3._require_finite_nonnegative_duration_tolerance(duration_tolerance_sec)
     normalized_dir = Path(normalized_dir)
@@ -859,64 +927,73 @@ def convert(
     out_dir = Path(out_dir)
     old_dir = out_dir.parent / f"{out_dir.name}.old"
     staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
+    snapshot_dir = out_dir.parent / f"{out_dir.name}.snapshot-{os.getpid()}"
     convert_d3._reject_output_collision(
-        [out_dir, old_dir, staging_dir],
+        [out_dir, old_dir, staging_dir, snapshot_dir],
         protected_roots=[normalized_dir],
         protected_files=[ledger_path, dsdict_path],
     )
 
     entries = load_ledger(Path(ledger_path))
-    by_card = reconcile_ledger(normalized_dir, entries)  # fail-closed はここで完結
-    dsdict = load_dsdict(Path(dsdict_path))  # fail-closed はここで完結
 
-    rows: List[Dict[str, str]] = []
-    included: List[str] = []
-    excluded: List[Dict[str, str]] = []
-    wav_paths: Dict[str, Path] = {}
-
-    for card_id in sorted(by_card):
-        entry = by_card[card_id]
-        samples, sr = _load_mono(entry.path)
-        tier = CARD_TIER.get(card_id, "unknown")
-        row, reason = _dispatch_card(card_id, samples, sr, dsdict)
-
-        if row is None:
-            excluded.append({"card_id": card_id, "tier": tier, "reason": reason or "unknown"})
-            continue
-
-        wav_dur = len(samples) / sr
-        ph_total = math.fsum(float(x) for x in row["ph_dur"].split())
-        diff = abs(ph_total - wav_dur)
-        if diff > duration_tolerance_sec:
-            excluded.append({
-                "card_id": card_id, "tier": tier,
-                "reason": (
-                    f"internal duration self-check failed: ph_dur total {ph_total:.6f}s vs "
-                    f"wav duration {wav_dur:.6f}s (diff {diff:.6f}s > tolerance "
-                    f"{duration_tolerance_sec:.6f}s)"
-                ),
-            })
-            continue
-
-        rows.append(row)
-        included.append(card_id)
-        wav_paths[card_id] = entry.path
-
-    if not rows:
-        raise AllCardsExcludedError(
-            f"all {len(by_card)} card(s) excluded, nothing to publish (fail-closed): "
-            + json.dumps(excluded, ensure_ascii=False)
-        )
-
-    if staging_dir.exists():
-        shutil.rmtree(staging_dir)
-    staging_dir.mkdir(parents=True)
+    if snapshot_dir.exists():
+        shutil.rmtree(snapshot_dir)
     try:
-        summary = _publish_into(rows, included, excluded, wav_paths, staging_dir, ffmpeg_bin, dsdict)
-        convert_d3._swap_into_place(staging_dir, out_dir)
-    except BaseException:
-        shutil.rmtree(staging_dir, ignore_errors=True)
-        raise
+        # fail-closed はここで完結（P1 修正 R7: snapshot_dir 経由で単一 read）。
+        by_card = reconcile_ledger(normalized_dir, entries, snapshot_dir=snapshot_dir)
+        dsdict = load_dsdict(Path(dsdict_path))  # fail-closed はここで完結
+
+        rows: List[Dict[str, str]] = []
+        included: List[str] = []
+        excluded: List[Dict[str, str]] = []
+        wav_paths: Dict[str, Path] = {}
+
+        for card_id in sorted(by_card):
+            entry = by_card[card_id]
+            samples, sr = _load_mono(entry.path)  # スナップショットを読む
+            tier = CARD_TIER.get(card_id, "unknown")
+            row, reason = _dispatch_card(card_id, samples, sr, dsdict)
+
+            if row is None:
+                excluded.append({"card_id": card_id, "tier": tier, "reason": reason or "unknown"})
+                continue
+
+            wav_dur = len(samples) / sr
+            ph_total = math.fsum(float(x) for x in row["ph_dur"].split())
+            diff = abs(ph_total - wav_dur)
+            if diff > duration_tolerance_sec:
+                excluded.append({
+                    "card_id": card_id, "tier": tier,
+                    "reason": (
+                        f"internal duration self-check failed: ph_dur total {ph_total:.6f}s vs "
+                        f"wav duration {wav_dur:.6f}s (diff {diff:.6f}s > tolerance "
+                        f"{duration_tolerance_sec:.6f}s)"
+                    ),
+                })
+                continue
+
+            rows.append(row)
+            included.append(card_id)
+            wav_paths[card_id] = entry.path  # スナップショットのパス
+
+        if not rows:
+            raise AllCardsExcludedError(
+                f"all {len(by_card)} card(s) excluded, nothing to publish (fail-closed): "
+                + json.dumps(excluded, ensure_ascii=False)
+            )
+
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        staging_dir.mkdir(parents=True)
+        try:
+            # resample_to_44k1 もスナップショット（wav_paths[card_id]）を読む。
+            summary = _publish_into(rows, included, excluded, wav_paths, staging_dir, ffmpeg_bin, dsdict)
+            convert_d3._swap_into_place(staging_dir, out_dir)
+        except BaseException:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
+    finally:
+        shutil.rmtree(snapshot_dir, ignore_errors=True)
     return summary
 
 
@@ -1048,6 +1125,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (
         convert_d3.OutputCollisionError,
         convert_d3.InvalidDurationToleranceError,
+        LedgerSchemaError,
         LedgerMismatchError,
         AllCardsExcludedError,
         DsDictError,

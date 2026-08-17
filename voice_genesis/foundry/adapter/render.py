@@ -989,6 +989,20 @@ def render(
                 f"{_name} must be a finite, non-negative number (got {_value!r}; "
                 "fail-closed で拒否 — nan/inf は unit 選択コストの total を無効化する)"
             )
+    # P2 修正 (review #265 R7): `timing_out_path` 単独指定（`out_path=None`）
+    # は合成だけ行い WAV も timing CSV も一切書かずに正常終了する
+    # false-success だった——§ 後段の公開ブロックは `if out_path is not None:`
+    # の中でしか `_atomic_write_wav`/`_atomic_write_wav_and_timing` を呼ばず、
+    # `out_path=None` だとこのブロック自体が丸ごとスキップされるため、
+    # `timing_out_path` を指定した呼び出し元は「タイミング CSV が書かれた」
+    # と誤認しうる。`timing_out_path` は `out_path` との同時指定のみ許可し、
+    # 単独指定は重い合成へ入る前に即座に拒否する。
+    if timing_out_path is not None and out_path is None:
+        raise ValueError(
+            "timing_out_path を指定する場合は out_path も指定してください"
+            "（単独指定は合成のみ行い WAV も timing CSV も書かない false-success"
+            "になるため fail-closed で拒否します）。"
+        )
 
     spec = vs.load_voice_spec(voice_spec_path)
     # P1 修正 (review #262 R2): 重い WORLD 分析より前に spec.donor の provenance

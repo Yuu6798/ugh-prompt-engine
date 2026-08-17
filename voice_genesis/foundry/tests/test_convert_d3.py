@@ -177,6 +177,82 @@ def test_convert_output_passes_build_dataset_gates(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 2.6 P1 修正 (review #265 R7): wav の単一 read 束縛（duration 検査 と
+# resample が同じスナップショットのみを読む・TOCTOU 対策）
+# ---------------------------------------------------------------------------
+
+
+@_ffmpeg_required
+def test_resample_receives_snapshot_path_not_original_render_dir_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`resample_to_44k1` へ渡される `src` は `render_dir` 直下の原本ではなく
+    `.snapshot-<pid>` 配下のスナップショットである（`_snapshot_wav_pairs`
+    の配線確認）。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    out_dir = tmp_path / "out"
+
+    captured_srcs = []
+    real_resample = convert_d3.resample_to_44k1
+
+    def _capture(src, dst, ffmpeg_bin=None):
+        captured_srcs.append(Path(src))
+        return real_resample(src, dst, ffmpeg_bin=ffmpeg_bin)
+
+    monkeypatch.setattr(convert_d3, "resample_to_44k1", _capture)
+
+    convert_d3.convert(render_dir, out_dir)
+
+    assert len(captured_srcs) == 1
+    assert captured_srcs[0].parent != render_dir
+    assert ".snapshot-" in captured_srcs[0].parent.name
+
+
+@_ffmpeg_required
+def test_convert_publishes_snapshot_bytes_even_if_render_dir_wav_mutated_after_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P1 修正 (review #265 R7) の核心シナリオ: duration 検査の実行タイミング
+    （snapshot 取得後）で `render_dir` 原本の wav が別内容へ差し替わっても、
+    実際に公開される wav バイト列は snapshot 取得時点のまま変化しない
+    （旧実装は duration 検査と resample が別々に `render_dir` 原本を open
+    していたため、この間の差し替えが公開バイト列に反映されうる TOCTOU
+    だった）。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    out_dir = tmp_path / "out"
+
+    real_wav_duration_seconds = convert_d3._wav_duration_seconds
+    mutated = {"done": False}
+
+    def _mutate_render_dir_then_measure(path):
+        # この時点で `path` は既にスナップショットのはず（render_dir 原本
+        # ではない）。副作用として render_dir 原本を別内容（長さの異なる
+        # wav — 無音同士でも resample 後のバイト長が変わるため確実に検出
+        # できる）へ差し替える。
+        if not mutated["done"]:
+            _write_wav(render_dir / "cellA.wav", 5.0)
+            mutated["done"] = True
+        return real_wav_duration_seconds(path)
+
+    monkeypatch.setattr(convert_d3, "_wav_duration_seconds", _mutate_render_dir_then_measure)
+
+    convert_d3.convert(render_dir, out_dir)
+    assert mutated["done"]  # mutation フックが実際に発火したことの確認
+
+    published_bytes = (out_dir / "wavs" / "cellA.wav").read_bytes()
+
+    # 差し替え後の render_dir 原本を素朴に resample した場合とは一致しない
+    # （= 公開されたのが snapshot 由来のバイト列であることの証拠）。
+    direct_from_mutated = tmp_path / "direct_from_mutated.wav"
+    convert_d3.resample_to_44k1(render_dir / "cellA.wav", direct_from_mutated)
+    assert published_bytes != direct_from_mutated.read_bytes()
+
+
+# ---------------------------------------------------------------------------
 # 2. ペア不整合 fail-closed
 # ---------------------------------------------------------------------------
 

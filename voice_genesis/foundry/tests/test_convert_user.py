@@ -227,6 +227,56 @@ def _t2_uc012_samples_over_segmented(n_extra_splits: int = 4) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# 0.5 P2 修正 (review #265 R7): 台帳 schema の完全一致検査
+# （`recording_kit/intake.py` `load_ledger` と同型の fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def test_load_ledger_rejects_wrong_schema_value(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(
+        json.dumps({"schema": "user-donor-ledger/0.2", "entries": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    with pytest.raises(cu.LedgerSchemaError, match="schema"):
+        cu.load_ledger(ledger_path)
+
+
+def test_load_ledger_rejects_missing_schema_field(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(json.dumps({"entries": []}, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(cu.LedgerSchemaError):
+        cu.load_ledger(ledger_path)
+
+
+def test_load_ledger_accepts_exact_expected_schema(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(
+        json.dumps({"schema": cu.LEDGER_SCHEMA, "entries": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert cu.load_ledger(ledger_path) == []
+
+
+def test_convert_rejects_ledger_with_wrong_schema_without_publishing(tmp_path: Path) -> None:
+    """`convert()` エンドツーエンドでも schema 不一致が fail-closed で拒否され、
+    `out_dir` へは一切公開されない。"""
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(
+        json.dumps({"schema": "not-the-right-schema/9.9", "entries": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    dsdict_path = _write_test_dsdict(tmp_path)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(cu.LedgerSchemaError):
+        cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
+    assert not out_dir.exists()
+
+
+# ---------------------------------------------------------------------------
 # 1. 台帳突合: fail-closed（欠落・sha256 不一致・余剰）
 # ---------------------------------------------------------------------------
 
@@ -286,6 +336,107 @@ def test_reconcile_ledger_collects_multiple_violations(tmp_path: Path) -> None:
     msg = str(excinfo.value)
     assert "UC-012" in msg and "missing" in msg
     assert "extra wav" in msg and "UC-999" in msg
+
+
+# ---------------------------------------------------------------------------
+# 1.4 P1 修正 (review #265 R7): 単一 read 束縛（sha256 照合・音声解析・resample
+# が同じスナップショットのみを読む・TOCTOU 対策）
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_ledger_with_snapshot_dir_points_entry_at_snapshot(tmp_path: Path) -> None:
+    """`snapshot_dir` を指定すると `LedgerEntry.path` は `normalized_dir` 原本
+    ではなく `snapshot_dir` 配下のコピーを指し、その内容は原本と一致する。"""
+    ledger_path, normalized_dir = _write_ledger_and_normalized(
+        tmp_path, {"UC-012": _t2_uc012_samples()}
+    )
+    entries = cu.load_ledger(ledger_path)
+    snapshot_dir = tmp_path / "snapshot"
+
+    by_card = cu.reconcile_ledger(normalized_dir, entries, snapshot_dir=snapshot_dir)
+
+    entry = by_card["UC-012"]
+    assert entry.path.parent == snapshot_dir
+    assert entry.path != normalized_dir / "UC-012_test.norm24k.wav"
+    assert entry.path.read_bytes() == (normalized_dir / "UC-012_test.norm24k.wav").read_bytes()
+
+
+def test_reconcile_ledger_snapshot_dir_none_keeps_original_path(tmp_path: Path) -> None:
+    """`snapshot_dir` 省略時（`None`、既定）は従来どおり `normalized_dir` の
+    原本パスを指す（本関数単体テストの後方互換）。"""
+    ledger_path, normalized_dir = _write_ledger_and_normalized(
+        tmp_path, {"UC-012": _t2_uc012_samples()}
+    )
+    entries = cu.load_ledger(ledger_path)
+
+    by_card = cu.reconcile_ledger(normalized_dir, entries)
+
+    assert by_card["UC-012"].path == normalized_dir / "UC-012_test.norm24k.wav"
+
+
+@_ffmpeg_required
+def test_convert_wav_paths_point_to_snapshot_not_normalized_dir(tmp_path: Path, monkeypatch) -> None:
+    """`convert()` エンドツーエンドで、実際に resample へ渡される wav パス
+    （公開された wav の生成元）は `.snapshot-<pid>` 配下であり、
+    `normalized_dir` 直下ではない。"""
+    cards = {"UC-012": _t2_uc012_samples()}
+    ledger_path, normalized_dir = _write_ledger_and_normalized(tmp_path, cards)
+    dsdict_path = _write_test_dsdict(tmp_path)
+    out_dir = tmp_path / "out"
+
+    captured_srcs = []
+    real_resample = cu.convert_d3.resample_to_44k1
+
+    def _capture(src, dst, ffmpeg_bin=None):
+        captured_srcs.append(Path(src))
+        return real_resample(src, dst, ffmpeg_bin=ffmpeg_bin)
+
+    monkeypatch.setattr(cu.convert_d3, "resample_to_44k1", _capture)
+
+    cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
+
+    assert len(captured_srcs) == 1
+    assert captured_srcs[0].parent != normalized_dir
+    assert ".snapshot-" in captured_srcs[0].parent.name
+
+
+@_ffmpeg_required
+def test_convert_publishes_snapshot_bytes_even_if_normalized_dir_wav_mutated_after_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P1 修正 (review #265 R7) の核心シナリオ: 音声解析（snapshot 取得後）の
+    タイミングで `normalized_dir` 原本の wav が別内容へ差し替わっても、実際に
+    公開される wav バイト列は snapshot 取得時点のまま変化しない（旧実装は
+    sha256 照合・解析・resample が別々に `normalized_dir` 原本を open して
+    いたため、この間の差し替えが公開バイト列に反映されうる TOCTOU だった）。"""
+    cards = {"UC-012": _t2_uc012_samples()}
+    ledger_path, normalized_dir = _write_ledger_and_normalized(tmp_path, cards)
+    dsdict_path = _write_test_dsdict(tmp_path)
+    out_dir = tmp_path / "out"
+
+    real_load_mono = cu._load_mono
+    mutated = {"done": False}
+
+    def _mutate_normalized_dir_then_load(path):
+        # この時点で `path` は既にスナップショットのはず（normalized_dir
+        # 原本ではない）。副作用として原本を別内容（長さの異なる無音 wav）
+        # へ差し替える。
+        if not mutated["done"]:
+            _write_wav(normalized_dir / "UC-012_test.norm24k.wav", _silence(9.0))
+            mutated["done"] = True
+        return real_load_mono(path)
+
+    monkeypatch.setattr(cu, "_load_mono", _mutate_normalized_dir_then_load)
+
+    summary = cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
+    assert mutated["done"]
+    assert summary["included_cards"] == ["UC-012"]
+
+    published_bytes = (out_dir / "wavs" / "UC-012.wav").read_bytes()
+
+    direct_from_mutated = tmp_path / "direct_from_mutated.wav"
+    cu.convert_d3.resample_to_44k1(normalized_dir / "UC-012_test.norm24k.wav", direct_from_mutated)
+    assert published_bytes != direct_from_mutated.read_bytes()
 
 
 # ---------------------------------------------------------------------------

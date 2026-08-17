@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Sequence
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "s1_dataprep"))
 import assemble_run4  # noqa: E402
@@ -229,6 +230,173 @@ def test_manifest_wav_sha256_detects_tampering(tmp_path: Path) -> None:
     (out_dir / "user" / "wavs" / "UC-001.wav").write_bytes(b"tampered bytes, not the real wav")
     actual_sha = hashlib.sha256((out_dir / "user" / "wavs" / "UC-001.wav").read_bytes()).hexdigest()
     assert actual_sha != pinned_sha
+
+
+# ---------------------------------------------------------------------------
+# 1.6 P1 修正 (review #265 R7): 3 話者学習 config 生成
+# （`run4_config_datasets.yaml` + `.normalized.yaml`）
+# ---------------------------------------------------------------------------
+
+
+def _assemble_normal_three_speaker(tmp_path: Path) -> Path:
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = tmp_path / "run4_raw"
+    assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True)
+    return out_dir
+
+
+def test_run4_config_has_same_structure_as_build_dataset_two_speaker_config_with_three_datasets(
+    tmp_path: Path,
+) -> None:
+    """生成した 3 話者 config が `build_dataset.py` の 2 話者版
+    (`build_config_yaml()`) と同一のトップレベル構造・同一の `datasets:`
+    エントリ構造を持ち、`datasets` が 3 エントリ・`num_spk: 3` に
+    なっていることを構造的に確認する（コーディネータ指定の構造テスト）。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+
+    config_path = out_dir / "run4_config_datasets.yaml"
+    assert config_path.exists()
+    run4_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    # build_dataset.py 自身の 2 話者版を同じ関数で生成し、キー集合を比較する
+    # （read-only 再利用そのものの検証 — assemble_run4 が独自に config 構造を
+    # 二重実装していないことの裏付け）。
+    two_speaker_text = build_dataset.build_config_yaml(
+        dict_path=Path("/dummy/dict.txt"),
+        binary_data_dir=Path("/dummy/binary"),
+        speakers=[
+            ("ritsu", 0, Path("/dummy/ritsu"), ["a"]),
+            ("pjs", 1, Path("/dummy/pjs"), ["b"]),
+        ],
+    )
+    two_speaker_config = yaml.safe_load(two_speaker_text)
+
+    assert set(run4_config.keys()) == set(two_speaker_config.keys())
+    assert len(two_speaker_config["datasets"]) == 2
+    assert len(run4_config["datasets"]) == 3
+    assert run4_config["num_spk"] == 3
+    assert two_speaker_config["num_spk"] == 2
+    for entry in run4_config["datasets"]:
+        assert set(entry.keys()) == set(two_speaker_config["datasets"][0].keys())
+
+    names_and_ids = {(d["speaker"], d["spk_id"]) for d in run4_config["datasets"]}
+    assert names_and_ids == {("ritsu", 0), ("pjs", 1), ("user", 2)}
+    assert run4_config["use_spk_id"] is True
+    assert run4_config["use_lang_id"] is False
+
+
+def test_run4_config_raw_data_dir_points_to_final_out_dir_not_staging(tmp_path: Path) -> None:
+    """config 内の `raw_data_dir`/`dictionaries.ja`/`binary_data_dir` は
+    公開後の最終パス（`<out_dir>/...`）を指し、staging 中の一時パス
+    （`.staging-<pid>`）を指さない。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    run4_config = yaml.safe_load((out_dir / "run4_config_datasets.yaml").read_text(encoding="utf-8"))
+
+    for entry in run4_config["datasets"]:
+        raw_dir = Path(entry["raw_data_dir"])
+        assert raw_dir == out_dir / entry["speaker"]
+        assert ".staging-" not in str(raw_dir)
+    assert Path(run4_config["dictionaries"]["ja"]) == out_dir / "dict.txt"
+    assert Path(run4_config["binary_data_dir"]) == out_dir / "binary"
+
+
+def test_run4_config_normalized_copy_uses_relative_paths_and_is_host_independent(
+    tmp_path: Path,
+) -> None:
+    """`.normalized.yaml` コピーは `out_dir` 基準の相対パスを使い、生
+    config と異なり絶対パス（tmp_path 由来の実行環境固有プレフィクス）を
+    含まない。さらに、この相対表現は `out_dir` の絶対位置に依存しないため、
+    別々の `out_dir` へ同一論理内容で組み立てても正規化コピーはバイト
+    一致する（生 config は絶対パスが埋め込まれるため一致しない——これは
+    `build_dataset.py` 自身の設計どおりで回帰ではない）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir_1 = tmp_path / "run4_raw_cfg_1"
+    out_dir_2 = tmp_path / "nested" / "run4_raw_cfg_2"  # 異なる深さの絶対位置
+    assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir_1, pjs_is_fixture=True)
+    assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir_2, pjs_is_fixture=True)
+
+    normalized_1 = (out_dir_1 / "run4_config_datasets.yaml.normalized.yaml").read_text(encoding="utf-8")
+    normalized_2 = (out_dir_2 / "run4_config_datasets.yaml.normalized.yaml").read_text(encoding="utf-8")
+    assert normalized_1 == normalized_2  # host/絶対位置非依存
+
+    normalized_config = yaml.safe_load(normalized_1)
+    for entry in normalized_config["datasets"]:
+        assert not Path(entry["raw_data_dir"]).is_absolute()
+        assert str(tmp_path) not in entry["raw_data_dir"]
+    assert not Path(normalized_config["dictionaries"]["ja"]).is_absolute()
+
+    raw_1 = (out_dir_1 / "run4_config_datasets.yaml").read_text(encoding="utf-8")
+    raw_2 = (out_dir_2 / "run4_config_datasets.yaml").read_text(encoding="utf-8")
+    assert raw_1 != raw_2  # 絶対パスが異なるため一致しない（想定どおり）
+
+
+def test_run4_config_cli_knobs_are_applied(tmp_path: Path) -> None:
+    """`--binary-data-dir`/`--max-updates`/`--val-check-interval`/
+    `--num-ckpt-keep`/`--n-test-prefixes` が生成 config へ反映される。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = tmp_path / "run4_raw"
+    custom_binary_dir = tmp_path / "custom_binary"
+
+    assemble_run4.assemble(
+        ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True,
+        binary_data_dir=custom_binary_dir, n_test_prefixes=1,
+        max_updates=123, val_check_interval=45, num_ckpt_keep=6,
+    )
+
+    run4_config = yaml.safe_load((out_dir / "run4_config_datasets.yaml").read_text(encoding="utf-8"))
+    assert Path(run4_config["binary_data_dir"]) == custom_binary_dir
+    assert run4_config["max_updates"] == 123
+    assert run4_config["val_check_interval"] == 45
+    assert run4_config["num_ckpt_keep"] == 6
+    for entry in run4_config["datasets"]:
+        assert len(entry["test_prefixes"]) == 1
+
+
+def test_run4_config_default_knobs_match_build_dataset_defaults(tmp_path: Path) -> None:
+    """既定値省略時は `build_dataset.py` の `DEFAULT_MAX_UPDATES`/
+    `DEFAULT_VAL_CHECK_INTERVAL`/`DEFAULT_NUM_CKPT_KEEP`（run 3 が実際に
+    使った 40K steps・5K 節目という値）をそのまま流用する。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    run4_config = yaml.safe_load((out_dir / "run4_config_datasets.yaml").read_text(encoding="utf-8"))
+    assert run4_config["max_updates"] == build_dataset.DEFAULT_MAX_UPDATES
+    assert run4_config["val_check_interval"] == build_dataset.DEFAULT_VAL_CHECK_INTERVAL
+    assert run4_config["num_ckpt_keep"] == build_dataset.DEFAULT_NUM_CKPT_KEEP
+
+
+def test_run4_config_not_published_when_gate_validation_fails(tmp_path: Path) -> None:
+    """ゲート違反時は他の成果物同様、config も一切公開されない（config
+    生成が `_assemble_into` の他ステップと同じ原子的公開トランザクション内
+    にあることの確認）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path, ph_seq="a b", ph_dur="0.5")  # 長さ不一致で壊す
+    out_dir = tmp_path / "run4_raw"
+
+    with pytest.raises(assemble_run4.GateValidationError):
+        assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir)
+    assert not out_dir.exists()
+    assert not (out_dir / "run4_config_datasets.yaml").exists()
+
+
+def test_run4_config_assembly_manifest_bytes_unchanged_by_config_generation(tmp_path: Path) -> None:
+    """config 生成の追加は `assembly_manifest.json` の内容へは一切影響しない
+    （新規ファイルのみの差分であることの直接確認 — R5 検証方針の踏襲）。"""
+    out_dir = _assemble_normal_three_speaker(tmp_path)
+    manifest = json.loads((out_dir / "assembly_manifest.json").read_text(encoding="utf-8"))
+    assert "config" not in manifest
+    assert set(manifest.keys()) == {
+        "schema", "spk_id", "speakers", "collision_check", "dict", "gate", "notes",
+    }
 
 
 def _make_empty_pjs_raw_dir(root: Path) -> Path:

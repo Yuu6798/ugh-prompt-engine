@@ -78,6 +78,33 @@ read-only import で再利用する（`convert_user.py` が `convert_d3.py` か�
    対応・衝突検査結果（0 件であることの実測記録）を書く。決定論を保つため
    ウォールクロック時刻等は含めない（同一入力 → 同一出力バイトを維持する）。
 
+6. **3 話者学習 config 生成**（review #265 R7 P1 追加）: `build_dataset.py`
+   `main()` が 2 話者 config を生成する箇所（`build_config_yaml()`
+   `build_dataset.py:740-808`・`speakers` 引数は
+   `(speaker_name, spk_id, raw_data_dir, test_prefixes)` の列で **話者数に
+   依存しない汎用実装**であることを一次ソース確認済み）をそのまま
+   read-only import で 3 話者分呼び出し、`<out-dir>/run4_config_datasets.yaml`
+   （実行時 config・絶対パスのまま）+
+   `<out-dir>/run4_config_datasets.yaml.normalized.yaml`（pin 用・
+   `build_dataset.normalize_path_field()` で `<out-dir>` からの相対パスへ
+   正規化したコピー。実行者の home ディレクトリ配置に digest が左右され
+   ない）を書く。`datasets:` は ritsu(spk_id=0)/pjs(spk_id=1)/user(spk_id=2)
+   の 3 エントリ・`num_spk: 3`（`build_config_yaml` が `len(speakers)` から
+   自動算出）。`raw_data_dir`/`dict_path`/`binary_data_dir` はいずれも
+   **公開後の最終パス**（`<out-dir>/ritsu` 等）を指す（staging 中の一時パス
+   ではない——`_swap_into_place` で `staging_dir` が `out_dir` へ rename
+   されるため、staging 中に書く config も最終レイアウトの絶対パスを
+   参照する必要がある）。`--binary-data-dir`/`--n-test-prefixes`/
+   `--max-updates`/`--val-check-interval`/`--num-ckpt-keep` で
+   `build_dataset.py` 同名 CLI 引数と同じノブを上書きできる（既定値は
+   `build_dataset.py` の `DEFAULT_MAX_UPDATES`/`DEFAULT_VAL_CHECK_INTERVAL`/
+   `DEFAULT_NUM_CKPT_KEEP` をそのまま流用——run 3 が実際に使った 40K
+   steps・5K 節目という値と一致）。**`S3_RUN4_RUNBOOK.md` §4 のとおり
+   LR/finetune/精度/勾配クリップは `build_dataset.py`/本スクリプトいずれの
+   CLI にもフックが無く、run 3 の実 `config.yaml` から手動移植が必要**
+   （本関数はあくまで `datasets:`/`num_spk`/学習規模 3 フィールドの節を
+   生成するのみ）。
+
 ## pjs フィクスチャに関する注意（★本番実行前に必ず確認）
 
 D1 (PJS) の実体はローカルに存在しないため、テスト・ローカル実測では
@@ -274,18 +301,103 @@ def _speaker_manifest_entry(
     }
 
 
+def _write_run4_config(
+    staging_dir: Path,
+    out_dir: Path,
+    speaker_rows: Dict[str, List[Dict[str, str]]],
+    *,
+    binary_data_dir: Optional[Path],
+    n_test_prefixes: int,
+    max_updates: int,
+    val_check_interval: int,
+    num_ckpt_keep: int,
+) -> Dict[str, object]:
+    """P1 修正 (review #265 R7): `build_dataset.py` `build_config_yaml()`
+    （`speakers` 引数を話者数非依存の汎用リストとして受ける実装。モジュール
+    docstring §6 で一次ソース確認済み）を 3 話者分呼び出し、staging 内へ
+    `run4_config_datasets.yaml`（実行時 config・絶対パス）+
+    `run4_config_datasets.yaml.normalized.yaml`（pin 用・`out_dir` 基準の
+    相対パス）を書く。`raw_data_dir`/`dict_path`/`binary_data_dir` はいずれも
+    公開後の最終パス（`out_dir` 基準）を指す——`_swap_into_place` で
+    `staging_dir` が `out_dir` へ rename されるため、staging 中に書く config
+    も最終レイアウトの絶対パスを参照する必要がある（`build_dataset.py`
+    `main()` が呼び出し元から渡された `--*-raw-dir` をそのまま埋め込むのと
+    同じ設計）。戻り値は書いた 2 ファイルのパス/sha256（呼び出し側が
+    manifest 相当の記録に使いたければ利用できるが、本関数自体は
+    `assembly_manifest.json` を変更しない——R5 検証方針「config 生成は
+    新規ファイルのみ差分」に合わせ、既存 manifest 構造は不変のまま維持する）。
+    """
+    final_ritsu_dir = out_dir / "ritsu"
+    final_pjs_dir = out_dir / "pjs"
+    final_user_dir = out_dir / "user"
+    final_dict_path = out_dir / "dict.txt"
+    resolved_binary_data_dir = binary_data_dir if binary_data_dir is not None else out_dir / "binary"
+
+    speakers = [
+        ("ritsu", SPK_IDS["ritsu"], final_ritsu_dir,
+         build_dataset.select_test_prefixes(speaker_rows["ritsu"], n_test_prefixes)),
+        ("pjs", SPK_IDS["pjs"], final_pjs_dir,
+         build_dataset.select_test_prefixes(speaker_rows["pjs"], n_test_prefixes)),
+        ("user", SPK_IDS["user"], final_user_dir,
+         build_dataset.select_test_prefixes(speaker_rows["user"], n_test_prefixes)),
+    ]
+
+    config_path = staging_dir / "run4_config_datasets.yaml"
+    config_text = build_dataset.build_config_yaml(
+        dict_path=final_dict_path,
+        binary_data_dir=resolved_binary_data_dir,
+        speakers=speakers,
+        max_updates=max_updates,
+        val_check_interval=val_check_interval,
+        num_ckpt_keep=num_ckpt_keep,
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+
+    # `build_dataset.py` main() と同じ命名規約（`<out-config>.normalized.yaml`）
+    # で、実行者 home 非依存のパス表現を持つ pin 用コピーを併せて書く。
+    normalized_config_path = config_path.with_name(config_path.name + ".normalized.yaml")
+    normalized_config_text = build_dataset.build_config_yaml(
+        dict_path=final_dict_path,
+        binary_data_dir=resolved_binary_data_dir,
+        speakers=speakers,
+        path_fmt=lambda p: build_dataset.normalize_path_field(p, out_dir),
+        max_updates=max_updates,
+        val_check_interval=val_check_interval,
+        num_ckpt_keep=num_ckpt_keep,
+    )
+    normalized_config_path.write_text(normalized_config_text, encoding="utf-8")
+
+    return {
+        "config_path": config_path.name,
+        "normalized_config_path": normalized_config_path.name,
+        "config_sha256": _sha256_file(config_path),
+        "normalized_config_sha256": _sha256_file(normalized_config_path),
+    }
+
+
 def _assemble_into(
     staging_dir: Path,
+    out_dir: Path,
     ritsu_raw_dir: Path,
     d3_raw_dir: Path,
     pjs_raw_dir: Path,
     user_raw_dir: Path,
     *,
     pjs_is_fixture: bool,
+    binary_data_dir: Optional[Path],
+    n_test_prefixes: int,
+    max_updates: int,
+    val_check_interval: int,
+    num_ckpt_keep: int,
 ) -> Dict[str, object]:
     """staging_dir 配下に 3 話者 raw 構成 + dict.txt + assembly_manifest.json
-    を組み立てる。検証失敗時は例外を送出し、呼び出し側 (`assemble`) が
-    staging_dir ごと破棄する（`--out-dir` は一切変更されない）。"""
+    + 3 話者学習 config（`run4_config_datasets.yaml` 系。review #265 R7 P1
+    追加、§ `_write_run4_config` docstring 参照）を組み立てる。検証失敗時は
+    例外を送出し、呼び出し側 (`assemble`) が staging_dir ごと破棄する
+    （`--out-dir` は一切変更されない）。`out_dir` は config 内の
+    `raw_data_dir`/`dict_path`/`binary_data_dir` を公開後の最終パスで書く
+    ために必要（staging_dir 自身のパスは `_swap_into_place` 後に消える
+    一時名のため使えない）。"""
     # --- 1. D2(ritsu)/D3 合流 -------------------------------------------------
     ritsu_csv = ritsu_raw_dir / "transcriptions.csv"
     d3_csv = d3_raw_dir / "transcriptions.csv"
@@ -351,6 +463,14 @@ def _assemble_into(
     dict_path = staging_dir / "dict.txt"
     build_dataset.write_dict(dict_path, merged_pairs)
 
+    # --- 4.5. 3 話者学習 config 生成（review #265 R7 P1・§ _write_run4_config） ---
+    _write_run4_config(
+        staging_dir, out_dir, speaker_rows,
+        binary_data_dir=binary_data_dir, n_test_prefixes=n_test_prefixes,
+        max_updates=max_updates, val_check_interval=val_check_interval,
+        num_ckpt_keep=num_ckpt_keep,
+    )
+
     # --- 5. assembly manifest（決定論のためウォールクロック時刻を含めない） ---
     manifest: Dict[str, object] = {
         "schema": "run4-assembly-manifest/0.2",
@@ -410,8 +530,14 @@ def assemble(
     out_dir: Path,
     *,
     pjs_is_fixture: bool = False,
+    binary_data_dir: Optional[Path] = None,
+    n_test_prefixes: int = 5,
+    max_updates: int = build_dataset.DEFAULT_MAX_UPDATES,
+    val_check_interval: int = build_dataset.DEFAULT_VAL_CHECK_INTERVAL,
+    num_ckpt_keep: int = build_dataset.DEFAULT_NUM_CKPT_KEEP,
 ) -> Dict[str, object]:
-    """`out_dir` に 3 話者 run4 raw 構成を組み立てる（公開エントリポイント）。
+    """`out_dir` に 3 話者 run4 raw 構成 + 3 話者学習 config を組み立てる
+    （公開エントリポイント）。
 
     `<out_dir>.staging-<pid>` に完全構築 → 全検証を通過して初めて `out_dir`
     と原子的に swap する（`convert_d3.py` `_swap_into_place` を read-only
@@ -422,6 +548,14 @@ def assemble(
     はこの公開関数自身が行う（旧実装は CLI `main()` のみが preflight として
     呼んでおり、`assemble()` を非 CLI 経路から呼ぶと `--out-dir` が
     4 つの raw dir のいずれかと衝突していても無検査で通過し得た）。
+
+    `binary_data_dir`/`n_test_prefixes`/`max_updates`/`val_check_interval`/
+    `num_ckpt_keep`（review #265 R7 P1 追加）: `run4_config_datasets.yaml`
+    生成用のノブ（§ `_write_run4_config` docstring 参照）。`binary_data_dir`
+    省略時は `out_dir / "binary"` を使う。他は `build_dataset.py` の既定値
+    （`n_test_prefixes` は同スクリプト `--n-test-prefixes` の既定 5、他は
+    `DEFAULT_MAX_UPDATES`/`DEFAULT_VAL_CHECK_INTERVAL`/`DEFAULT_NUM_CKPT_KEEP`）
+    をそのまま流用する。
     """
     ritsu_raw_dir = Path(ritsu_raw_dir)
     d3_raw_dir = Path(d3_raw_dir)
@@ -440,8 +574,11 @@ def assemble(
     staging_dir.mkdir(parents=True)
     try:
         manifest = _assemble_into(
-            staging_dir, ritsu_raw_dir, d3_raw_dir, pjs_raw_dir, user_raw_dir,
+            staging_dir, out_dir, ritsu_raw_dir, d3_raw_dir, pjs_raw_dir, user_raw_dir,
             pjs_is_fixture=pjs_is_fixture,
+            binary_data_dir=Path(binary_data_dir) if binary_data_dir is not None else None,
+            n_test_prefixes=n_test_prefixes, max_updates=max_updates,
+            val_check_interval=val_check_interval, num_ckpt_keep=num_ckpt_keep,
         )
         convert_d3._swap_into_place(staging_dir, out_dir)
     except BaseException:
@@ -475,6 +612,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="--pjs-raw-dir が合成ミニ pjs フィクスチャであることを "
              "assembly_manifest.json に明記する（本番実行では指定しない）。",
     )
+    # review #265 R7 P1: 3 話者学習 config 生成ノブ（build_dataset.py 同名
+    # CLI 引数と同じ意味・既定値。§ _write_run4_config / assemble docstring 参照）。
+    parser.add_argument(
+        "--binary-data-dir", type=Path, default=None,
+        help="run4_config_datasets.yaml の binary_data_dir に書く binarize 出力先"
+             "（未生成のパスでよい。省略時は <out-dir>/binary）。",
+    )
+    parser.add_argument(
+        "--n-test-prefixes", type=int, default=5,
+        help="話者ごとの検証用セグメント数（build_dataset.py --n-test-prefixes と同義。既定 5）。",
+    )
+    parser.add_argument(
+        "--max-updates", type=int, default=build_dataset.DEFAULT_MAX_UPDATES,
+        help=f"config へ書き込む max_updates (既定: {build_dataset.DEFAULT_MAX_UPDATES})",
+    )
+    parser.add_argument(
+        "--val-check-interval", type=int, default=build_dataset.DEFAULT_VAL_CHECK_INTERVAL,
+        help=f"config へ書き込む val_check_interval (既定: {build_dataset.DEFAULT_VAL_CHECK_INTERVAL})",
+    )
+    parser.add_argument(
+        "--num-ckpt-keep", type=int, default=build_dataset.DEFAULT_NUM_CKPT_KEEP,
+        help=f"config へ書き込む num_ckpt_keep (既定: {build_dataset.DEFAULT_NUM_CKPT_KEEP})",
+    )
     args = parser.parse_args(argv)
 
     out_dir: Path = args.out_dir
@@ -484,6 +644,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         manifest = assemble(
             args.ritsu_raw_dir, args.d3_raw_dir, args.pjs_raw_dir, args.user_raw_dir, out_dir,
             pjs_is_fixture=args.pjs_is_fixture,
+            binary_data_dir=args.binary_data_dir, n_test_prefixes=args.n_test_prefixes,
+            max_updates=args.max_updates, val_check_interval=args.val_check_interval,
+            num_ckpt_keep=args.num_ckpt_keep,
         )
     except (
         convert_d3.OutputCollisionError, NameCollisionError, HeaderMismatchError, GateValidationError,
