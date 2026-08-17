@@ -11,6 +11,8 @@ import hashlib
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import bootstrap  # noqa: E402
@@ -88,3 +90,59 @@ def test_run_bootstrap_rerun_same_dir_is_idempotent(tmp_path: Path) -> None:
     first = sorted(p.name for p in bootstrap.run_bootstrap(tmp_path))
     second = sorted(p.name for p in bootstrap.run_bootstrap(tmp_path))
     assert first == second
+
+
+# --- PR #267 Codex R11 指摘2（P2）: ブートストラップの部分 publish 防止 --------
+
+
+def test_run_bootstrap_pre_check_conflict_writes_nothing(tmp_path: Path) -> None:
+    """事前衝突（3件目の位置に別内容ファイル）で何も書かれないことを検証
+    する。従来は逐次 `Ledger.write()` が3件目で `LedgerConflictError` を
+    送出する前に1-2件目が published のまま残っていた。"""
+    genomes = bootstrap.founder_genomes()
+    conflicting_genome_id = genomes[2].genome_id
+    conflicting_path = tmp_path / f"{conflicting_genome_id}.json"
+    conflicting_path.write_text('{"not": "a founder genome"}\n', encoding="utf-8")
+
+    with pytest.raises(ledger_mod.LedgerConflictError):
+        bootstrap.run_bootstrap(tmp_path)
+
+    # 衝突ファイル以外は一切書かれておらず、衝突ファイル自体も不変。
+    remaining = sorted(p.name for p in tmp_path.glob("*.json"))
+    assert remaining == [f"{conflicting_genome_id}.json"]
+    assert conflicting_path.read_text(encoding="utf-8") == '{"not": "a founder genome"}\n'
+
+
+def test_run_bootstrap_rolls_back_on_mid_write_failure(tmp_path: Path, monkeypatch) -> None:
+    """失敗注入: 3/4件目の write を monkeypatch で失敗させ、1-2件目が消えて
+    台帳が実行前状態（空）へ戻ることを検証する（並行書込み等の残余ケースに
+    対する rollback）。"""
+    original_write = ledger_mod.Ledger.write
+    call_count = {"n": 0}
+
+    def failing_write(self: ledger_mod.Ledger, genome: object) -> Path:
+        call_count["n"] += 1
+        if call_count["n"] == 3:
+            raise RuntimeError("injected failure on 3rd write")
+        return original_write(self, genome)
+
+    monkeypatch.setattr(ledger_mod.Ledger, "write", failing_write)
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        bootstrap.run_bootstrap(tmp_path)
+
+    remaining = list(tmp_path.glob("*.json")) if tmp_path.exists() else []
+    assert remaining == []
+    assert call_count["n"] == 3
+
+
+def test_run_bootstrap_idempotent_success_with_all_founders_pre_written(tmp_path: Path) -> None:
+    """事前検証の「全既存 + 全一致 = 冪等成功として何も書かず終了」経路:
+    先に正常に書き終えた台帳に対する再実行が、新規ファイルを一切作らず既存
+    パスをそのまま返すことを検証する。"""
+    first_paths = sorted(bootstrap.run_bootstrap(tmp_path))
+    mtimes_before = {p: p.stat().st_mtime_ns for p in first_paths}
+    second_paths = sorted(bootstrap.run_bootstrap(tmp_path))
+    assert first_paths == second_paths
+    for p in second_paths:
+        assert p.stat().st_mtime_ns == mtimes_before[p]

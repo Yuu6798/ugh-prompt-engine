@@ -439,3 +439,74 @@ def test_edge_walk_step_negative_zero_normalized(founders) -> None:
     assert a.genome_id == b.genome_id
     assert a.operator_params["step"] == 0.0
     assert math.copysign(1.0, a.operator_params["step"]) > 0.0
+
+
+# --- PR #267 Codex R11 指摘1（P2）: オペレータ入口の bool 拒否 ----------------
+#
+# bool は int のサブクラスのため round(step, 6) 等は step=False/True を無検証
+# で 0/1 へ通していた。step=False は「0歩変異」、weight=True/pull=True は
+# 「片親を全棄却する交配」として publish され得ていたため、round() より前に
+# isinstance(x, bool) を fail-closed 拒否する（archive.py の quality/
+# quality_floor 検査 — R10 指摘B — と同じ流儀）。
+
+
+def test_drift_rejects_bool_step_false(founders) -> None:
+    *_ , center = founders
+    with pytest.raises(ValueError, match="bool step rejected"):
+        operators.drift(center, rng_seed=1, step=False)
+
+
+def test_drift_rejects_bool_step_true(founders) -> None:
+    *_ , center = founders
+    with pytest.raises(ValueError, match="bool step rejected"):
+        operators.drift(center, rng_seed=1, step=True)
+
+
+def test_drift_accepts_ordinary_float_step(founders) -> None:
+    """bool 拒否の追加が通常の float 受理を壊していないことの回帰確認。"""
+    *_ , center = founders
+    child = operators.drift(center, rng_seed=1, step=0.02)
+    assert child.operator_params["step"] == 0.02
+
+
+def test_edge_walk_rejects_bool_step_false(founders) -> None:
+    *_ , center = founders
+    with pytest.raises(ValueError, match="bool step rejected"):
+        operators.edge_walk(center, rng_seed=1, edge=("ritsu", "pjs"), step=False)
+
+
+def test_edge_walk_accepts_ordinary_float_step(founders) -> None:
+    *_ , center = founders
+    child = operators.edge_walk(center, rng_seed=1, edge=("ritsu", "pjs"), step=0.02)
+    assert child.operator_params["step"] == 0.02
+
+
+def test_vertex_pull_rejects_bool_weight_true(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    with pytest.raises(ValueError, match="bool weight rejected"):
+        operators.vertex_pull(ritsu, pjs, weight=True, vertex="user", pull=0.1)
+
+
+def test_vertex_pull_rejects_bool_weight_false(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    with pytest.raises(ValueError, match="bool weight rejected"):
+        operators.vertex_pull(ritsu, pjs, weight=False, vertex="user", pull=0.1)
+
+
+def test_vertex_pull_rejects_bool_pull_true(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    with pytest.raises(ValueError, match="bool pull rejected"):
+        operators.vertex_pull(ritsu, pjs, weight=0.5, vertex="user", pull=True)
+
+
+def test_vertex_pull_rejects_bool_pull_false(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    with pytest.raises(ValueError, match="bool pull rejected"):
+        operators.vertex_pull(ritsu, pjs, weight=0.5, vertex="user", pull=False)
+
+
+def test_vertex_pull_accepts_ordinary_float_weight_and_pull(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    child = operators.vertex_pull(ritsu, pjs, weight=0.5, vertex="user", pull=0.1)
+    assert child.operator_params["weight"] == 0.5
+    assert child.operator_params["pull"] == 0.1

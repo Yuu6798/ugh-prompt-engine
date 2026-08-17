@@ -23,7 +23,7 @@ if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 import models  # noqa: E402
 import simplex  # noqa: E402
-from ledger import Ledger  # noqa: E402
+from ledger import Ledger, LedgerConflictError  # noqa: E402
 
 FOUNDER_SEED = 0
 
@@ -54,9 +54,60 @@ def founder_genomes() -> Tuple[models.VoiceGenome, ...]:
 def run_bootstrap(ledger_dir: Path) -> List[Path]:
     """創始4個体を `ledger_dir` へ決定論的に書き出す。既に同一内容で存在
     すれば冪等 no-op（`Ledger.write()` 参照）— 2回実行してもバイト同一。
+
+    PR #267 Codex R11 指摘2（P2）, 2026-08-17 採用: `Ledger.write()` を単純に
+    4回逐次呼ぶと、3/4件目が既存の衝突ファイル等で失敗した場合に先行分が
+    published のまま例外送出され、部分 publish が恒久化していた。
+
+    1. 事前検証: 4個体すべてを構築し、書き込み開始前に各 genome_id の
+       既存ファイルの有無と内容一致を全数チェックする。全既存 + 全一致なら
+       冪等成功として何も書かずに既存パスを返す。1件でも内容衝突があれば
+       何も書かずに `LedgerConflictError` を送出する（append-only 台帳の
+       意味論に揃える）。
+    2. rollback: 事前検証を通過してもなお write 中に失敗した場合（並行書込み
+       等の残余ケース）は、この実行で新規作成したファイルのみを unlink して
+       実行前状態へ復元してから例外を再送出する（事前から存在したファイルは
+       一切変更しない）。
     """
     ledger = Ledger(ledger_dir)
-    return [ledger.write(genome) for genome in founder_genomes()]
+    genomes = founder_genomes()
+    paths = [ledger.path_for(genome.genome_id) for genome in genomes]
+    payloads = [(models.genome_to_json(genome) + "\n").encode("utf-8") for genome in genomes]
+
+    conflicts: List[str] = []
+    pre_existing: List[bool] = []
+    for genome, path, payload in zip(genomes, paths, payloads):
+        exists = path.exists()
+        pre_existing.append(exists)
+        if exists and path.read_bytes() != payload:
+            conflicts.append(genome.genome_id)
+
+    if conflicts:
+        raise LedgerConflictError(
+            "bootstrap pre-check: refusing to write any founder file — existing content conflicts "
+            f"with founder genome(s) {conflicts!r} (append-only ledger — changes must go through a "
+            "PR, not an overwrite; no file was written by this run)"
+        )
+
+    if all(pre_existing):
+        return paths
+
+    written_new: List[Path] = []
+    try:
+        result_paths: List[Path] = []
+        for genome, was_pre_existing in zip(genomes, pre_existing):
+            written_path = ledger.write(genome)
+            if not was_pre_existing:
+                written_new.append(written_path)
+            result_paths.append(written_path)
+        return result_paths
+    except Exception:
+        for p in written_new:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        raise
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

@@ -66,6 +66,13 @@ def drift(parent: models.VoiceGenome, *, rng_seed: int, step: float) -> models.V
     # 丸め結果が -0.0 になり得るため正準 +0.0 へ正規化する（PR #267 Codex R8
     # 指摘: -0.0 は build_genome() 側でも正規化されるが、ここで正規化して
     # おくことで下の座標計算・境界検査も一貫して +0.0 を前提にできる）。
+    # PR #267 Codex R11 指摘1（P2）, 2026-08-17 採用: bool は int のサブ
+    # クラスのため round(step, 6) は step=False/True を無検証で 0/1 へ通し、
+    # step=False が「0歩変異」として publish され得た。round() より前に
+    # isinstance(x, bool) で fail-closed 拒否する（archive.py の quality/
+    # quality_floor 検査 — R10 指摘B — と同じ流儀）。
+    if isinstance(step, bool):
+        raise ValueError(f"bool step rejected: {step!r}")
     step = models.normalize_signed_zero(round(step, 6))
     if not (0.0 <= step <= models.DRIFT_STEP_MAX):
         raise ValueError(f"drift step must be within [0, {models.DRIFT_STEP_MAX}], got {step}")
@@ -103,6 +110,13 @@ def vertex_pull(
     # PR #267 Codex R6 指摘1（P1）: weight/pull も drift の step と同じ理由で
     # 入口で6桁固定丸めしてから計算に使う（丸め→上限検査の順序を揃える）。
     # -0.0 正規化（PR #267 Codex R8 指摘。drift の step と同じ理由）。
+    # PR #267 Codex R11 指摘1（P2）, 2026-08-17 採用: weight/pull も drift の
+    # step と同じ理由で round() より前に isinstance(x, bool) を拒否する。
+    # weight=True は「片親を全棄却する交配」として publish され得ていた。
+    if isinstance(weight, bool):
+        raise ValueError(f"bool weight rejected: {weight!r}")
+    if isinstance(pull, bool):
+        raise ValueError(f"bool pull rejected: {pull!r}")
     weight = models.normalize_signed_zero(round(weight, 6))
     pull = models.normalize_signed_zero(round(pull, 6))
     if not (0.0 <= weight <= 1.0):
@@ -174,6 +188,11 @@ def edge_walk(
     # PR #267 Codex R6 指摘1（P1）: step も drift と同じ理由で入口で6桁固定
     # 丸めしてから計算に使う（丸め→上限検査の順序を揃える）。
     # -0.0 正規化（PR #267 Codex R8 指摘。drift の step と同じ理由）。
+    # PR #267 Codex R11 指摘1（P2）, 2026-08-17 採用: step も drift と同じ
+    # 理由で round() より前に isinstance(x, bool) を拒否する。step=False は
+    # 「0歩変異」として publish され得ていた。
+    if isinstance(step, bool):
+        raise ValueError(f"bool step rejected: {step!r}")
     step = models.normalize_signed_zero(round(step, 6))
     if not (0.0 <= step <= models.EDGE_WALK_STEP_MAX):
         raise ValueError(f"edge_walk step must be within [0, {models.EDGE_WALK_STEP_MAX}], got {step}")
