@@ -80,12 +80,13 @@ seed=701 のみ 1 サンプル・1 LSB のバイト差が出て pin 不一致に
   （render 経路が実ロードする 4 つのみ。他ライブラリの版差は不問）:
 
   ```bash
-  python -c "import numpy, scipy, pyworld, soundfile; \
-    assert numpy.__version__ == '2.4.6', numpy.__version__; \
-    assert scipy.__version__ == '1.17.1', scipy.__version__; \
-    assert pyworld.__version__ == '0.3.5', pyworld.__version__; \
-    assert soundfile.__version__ == '0.14.0', soundfile.__version__; \
-    print('numeric stack pin OK')"
+  python -c "import sys, numpy, scipy, pyworld, soundfile; \
+    expected = {'numpy': '2.4.6', 'scipy': '1.17.1', 'pyworld': '0.3.5', 'soundfile': '0.14.0'}; \
+    actual = {'numpy': numpy.__version__, 'scipy': scipy.__version__, \
+              'pyworld': pyworld.__version__, 'soundfile': soundfile.__version__}; \
+    ok = actual == expected; \
+    print(('numeric stack pin OK' if ok else 'numeric stack pin NG:'), actual); \
+    sys.exit(0 if ok else 1)"
   ```
 
   版が違う場合は `pip install numpy==2.4.6 scipy==1.17.1 pyworld==0.3.5
@@ -95,12 +96,15 @@ seed=701 のみ 1 サンプル・1 LSB のバイト差が出て pin 不一致に
   含まない**ことを確認する（どちらか一方でも満たさなければ render に入らず停止する）。
 
   ```bash
-  python -c "import numpy; f = numpy.show_config('dicts')['SIMD Extensions']['found']; \
-    assert 'X86_V3' in f and 'X86_V4' not in f, f; print('SIMD gate OK:', f)"
+  python -c "import sys, numpy; f = numpy.show_config('dicts')['SIMD Extensions']['found']; \
+    ok = 'X86_V3' in f and 'X86_V4' not in f; \
+    print(('SIMD gate OK:' if ok else 'SIMD gate NG:'), f); sys.exit(0 if ok else 1)"
   ```
 
-  （両条件を assert に符号化してあるため、非 0 exit = ゲート不通過。目視でなく
-  コマンドの成否で判定できる）
+  （両条件を明示分岐 + `sys.exit` に符号化してあるため、非 0 exit = ゲート
+  不通過。目視でなくコマンドの成否で判定できる。`assert` は使わない —
+  `PYTHONOPTIMIZE=1/2` 環境では assert 文が剥がされ偽 PASS するため、
+  ゲート 1・2 とも optimize 設定に依存しない明示分岐で判定する）
 
   AVX-512 ホストでは設定が効いた証明（`X86_V4` が消える）、AVX2 ホストでは
   元々 `X86_V4` を含まない（no-op の確認）。`X86_V3` の実在要求は、AVX2 未満の
