@@ -5,6 +5,7 @@ DESIGN_VG_E0.md §7 AC「simplex 演算（normalize / L1距離 / セル割当）
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -57,6 +58,18 @@ def test_normalize_rejects_wildly_off_simplex_input() -> None:
     fail-closed で例外にする（際限なく救済しない）。"""
     with pytest.raises(ValueError, match="negative"):
         simplex.normalize({"ritsu": 0.0, "pjs": 2.0, "user": 2.0})
+
+
+def test_normalize_output_never_negative_zero_for_zero_components() -> None:
+    """normalize() の出力にある0値成分の符号は常に +0.0（-0.0 ではない）。
+    genome_id ハッシュの6桁固定表記が "-0.000000"/"0.000000" に分岐しない
+    ための前提（PR #267 Codex R8 指摘）。"""
+    c = simplex.normalize({"ritsu": -0.0, "pjs": 0.0, "user": 1.0})
+    assert c.ritsu == 0.0
+    assert c.pjs == 0.0
+    assert c.user == 1.0
+    assert math.copysign(1.0, c.ritsu) > 0.0
+    assert math.copysign(1.0, c.pjs) > 0.0
 
 
 def test_normalize_center_point_deterministic_tiebreak_favors_ritsu() -> None:

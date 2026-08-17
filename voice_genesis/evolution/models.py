@@ -106,6 +106,24 @@ class GenomeValidationError(ValueError):
     型・構造不正、または genome_id の再計算不一致（改ざん・破損）。"""
 
 
+def normalize_signed_zero(x: float) -> float:
+    """丸め後の値が負のゼロ（-0.0）であれば正準表現 +0.0 へ正規化する
+    （PR #267 Codex R8 指摘: `Coords(-0.0, 0.0, 1.0)` は `-0.0 < 0.0` が
+    False のため座標検証を素通りし、6桁固定表記のハッシュ計算で
+    `"-0.000000"` を emit する — 数値的に同一の `(0.0, 0.0, 1.0)` と別
+    genome_id になっていた。operator_params の weight/pull/step も同様に
+    丸め結果が -0.0 になり得る）。
+
+    `x == 0.0` は -0.0/+0.0 どちらでも True になるため、この1行で両方を
+    正のゼロへ吸収できる（`x + 0.0` は `-0.0 + 0.0 == 0.0` で一見動きそうに
+    見えるが、`-0.0 + (-0.0) == -0.0` のように加算相手が -0.0 側だと符号が
+    保存されるケースがあり実装として脆い — 実測して比較判定方式を採用した）。
+    丸め後の値にのみ適用すること（丸め前の微小非ゼロ値まで押し潰さないため。
+    呼び出し元は既に `round(x, 6)` 済みの値をここへ渡す）。
+    """
+    return 0.0 if x == 0.0 else x
+
+
 # ---------------------------------------------------------------------------
 # Coords（重心座標。値そのものは §2 の simplex.normalize() が生成する —
 # 本モジュールは型と「既に正規形か」の検証のみを持つ）
@@ -122,12 +140,22 @@ class Coords:
         return {"ritsu": self.ritsu, "pjs": self.pjs, "user": self.user}
 
 
-def _validate_coords_value(coords: Coords) -> None:
+def _validate_coords_value(coords: Coords, *, normalize: bool) -> Coords:
     """coords が Δ²（3頂点 ritsu/pjs/user、成分非負・合計1）上の正規形
-    （小数6桁丸め済み）であることを検証する（DESIGN_VG_E0.md §2）。
-    `simplex.normalize()` の出力契約そのものを検証するが、循環 import を
-    避けるため normalize() を呼ばずここで直接検証する。
+    （小数6桁丸め済み・符号付きゼロ非含有）であることを検証する
+    （DESIGN_VG_E0.md §2）。`simplex.normalize()` の出力契約そのものを
+    検証するが、循環 import を避けるため normalize() を呼ばずここで直接
+    検証する。
+
+    `normalize=True`（`build_genome()` 経由の書込経路）は -0.0 を正準
+    +0.0 へ正規化した `Coords` を返す。`normalize=False`
+    （`genome_from_dict()` 経由の読込経路）は `_require_bounded_float` の
+    operator_params 正規化と対称に、-0.0 を非正規形として fail-closed で
+    拒否する（PR #267 Codex R8 指摘: `-0.0 < 0.0` は False・
+    `round(-0.0, 6) != -0.0` も False のため、従来はどちらの既存チェックも
+    -0.0 を素通りしていた）。
     """
+    values: Dict[str, float] = {}
     total = 0.0
     for name in ANCHOR_NAMES:
         v = getattr(coords, name)
@@ -142,9 +170,20 @@ def _validate_coords_value(coords: Coords) -> None:
                 f"coords.{name} must already be rounded to 6 decimal places (normalize() output "
                 f"contract), got {v!r}"
             )
+        if v == 0.0 and math.copysign(1.0, v) < 0.0:
+            if normalize:
+                v = normalize_signed_zero(v)
+            else:
+                raise GenomeValidationError(
+                    f"coords.{name} must be canonical positive zero, not negative zero (-0.0) "
+                    "(normalize() output contract — DESIGN_VG_E0.md §2 丸め規約; PR #267 Codex R8), "
+                    f"got {v!r}"
+                )
+        values[name] = v
         total += v
     if abs(total - 1.0) > 1e-9:
         raise GenomeValidationError(f"coords must sum to 1.000000 (barycentric constraint), got {total!r}")
+    return Coords(**values)
 
 
 def _coords_from_dict(data: Any) -> Coords:
@@ -163,7 +202,7 @@ def _coords_from_dict(data: Any) -> Coords:
             raise GenomeValidationError(f"coords.{name} must be a number, got {raw!r}")
         values[name] = float(raw)
     coords = Coords(**values)
-    _validate_coords_value(coords)
+    coords = _validate_coords_value(coords, normalize=False)
     return coords
 
 
@@ -191,7 +230,12 @@ def _canonicalize_for_hash(obj: Any) -> Any:
     if isinstance(obj, float):
         if not math.isfinite(obj):
             raise GenomeValidationError(f"non-finite value rejected in genome_id payload: {obj!r}")
-        return format(round(obj, 6), ".6f")
+        # 丸め後のゼロが -0.0 のままだと `"-0.000000"` を emit し、数値的に
+        # 同一の 0.0 と別バイト列（別 genome_id）になる（PR #267 Codex R8
+        # 指摘）。coords/operator_params の各検証経路で -0.0 は既に正準
+        # +0.0 へ正規化・拒否済みのはずだが、genome_id 計算はこの関数が
+        # 全経路の単一集約点であるため、ここでも最終防衛として正規化する。
+        return format(normalize_signed_zero(round(obj, 6)), ".6f")
     if isinstance(obj, str):
         return obj
     if obj is None:
@@ -275,6 +319,11 @@ def _require_bounded_float(value: Any, field: str, *, lo: float, hi: float, norm
     coords の `_validate_coords_value` と対称に、既に6桁丸め済みでない
     float を fail-closed で拒否する（正規化されていないペイロードが
     そのまま台帳へ紛れ込むのを防ぐ）。
+
+    丸め結果が -0.0（負のゼロ）になり得る点も coords と対称に扱う
+    （PR #267 Codex R8 指摘）: `normalize=True` は `normalize_signed_zero()`
+    で正準 +0.0 へ正規化し、`normalize=False` は -0.0 を非正規形として
+    fail-closed で拒否する。
     """
     out = _require_finite_float(value, field)
     if normalize:
@@ -283,6 +332,14 @@ def _require_bounded_float(value: Any, field: str, *, lo: float, hi: float, norm
         raise GenomeValidationError(
             f"{field} must already be rounded to 6 decimal places (operator_params normalization "
             f"contract — DESIGN_VG_E0.md §4), got {value!r}"
+        )
+    if normalize:
+        out = normalize_signed_zero(out)
+    elif out == 0.0 and math.copysign(1.0, out) < 0.0:
+        raise GenomeValidationError(
+            f"{field} must be canonical positive zero, not negative zero (-0.0) "
+            "(operator_params normalization contract — DESIGN_VG_E0.md §4; PR #267 Codex R8), "
+            f"got {value!r}"
         )
     if not (lo <= out <= hi):
         raise GenomeValidationError(f"{field} must be within [{lo}, {hi}], got {out!r}")
@@ -590,7 +647,9 @@ def build_genome(
     for p in parents_tuple:
         _validate_genome_id_format(p, "parents[]")
 
-    _validate_coords_value(coords)
+    # normalize=True: build_genome() は座標の -0.0 を正準 +0.0 へ正規化して
+    # から genome_id 計算・格納に使う（PR #267 Codex R8 指摘）。
+    coords = _validate_coords_value(coords, normalize=True)
     # 座標由来 lineage との整合 + NOVELTY⇔operator の双方向整合を強制する
     # （Codex 指摘A, PR #267 R4）。genome_from_dict() と共有の単一実装。
     _validate_lineage_for_genome(coords, lineage, operator)

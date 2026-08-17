@@ -5,6 +5,7 @@ DESIGN_VG_E0.md §7 AC「schema4種のloader/validator（fail-closed・未知
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -85,6 +86,107 @@ def test_genome_id_fixed_decimal_representation_matters() -> None:
         parents=(), operator="founder", operator_params={},
     )
     assert a == b
+
+
+# --- 符号付きゼロの正規化（PR #267 Codex R8 指摘） --------------------------
+
+
+def test_genome_id_negative_zero_coord_matches_positive_zero() -> None:
+    """-0.0 と 0.0 は数値的に同一の重心座標だが、修正前は
+    `_canonicalize_for_hash` の6桁固定表記が `"-0.000000"` / `"0.000000"`
+    に分岐し、別 genome_id になっていた（`-0.0 < 0.0` は False・
+    `round(-0.0, 6) != -0.0` も False のため coords 検証の既存チェックを
+    両方すり抜けていた）。"""
+    a = models.compute_genome_id(
+        coords=models.Coords(-0.0, 0.0, 1.0), seed=0, lineage="L-U", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    b = models.compute_genome_id(
+        coords=models.Coords(0.0, 0.0, 1.0), seed=0, lineage="L-U", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    assert a == b
+
+
+def test_build_genome_normalizes_negative_zero_coord() -> None:
+    """build_genome()（書込経路）は座標の -0.0 を正準 +0.0 へ正規化してから
+    genome_id 計算・格納に使う: `Coords(-0.0, 0.0, 1.0)` と
+    `Coords(0.0, 0.0, 1.0)` は同一 genome_id・同一格納値になる。"""
+    a = models.build_genome(
+        coords=models.Coords(-0.0, 0.0, 1.0), seed=0, lineage="L-U", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    b = models.build_genome(
+        coords=models.Coords(0.0, 0.0, 1.0), seed=0, lineage="L-U", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    assert a.genome_id == b.genome_id
+    assert a.coords == b.coords
+    assert math.copysign(1.0, a.coords.ritsu) > 0.0
+    assert math.copysign(1.0, a.coords.pjs) > 0.0
+
+
+def test_genome_from_dict_rejects_negative_zero_coord() -> None:
+    """デシリアライズ経路（genome_from_dict）は operator_params の
+    `_require_bounded_float(normalize=False)` と対称に、座標の -0.0 を
+    非正規形として fail-closed で拒否する（台帳へ非正規形の値が紛れ込むのを
+    構造的に防ぐ）。"""
+    d = models.genome_to_dict(_base_genome())
+    d["coords"] = {"ritsu": -0.0, "pjs": 0.5, "user": 0.5}
+    with pytest.raises(models.GenomeValidationError, match="negative zero"):
+        models.genome_from_dict(d)
+
+
+def test_build_genome_normalizes_negative_zero_operator_param_float() -> None:
+    """operator_params.step が丸め後に -0.0 になっても、build_genome() は
+    正準 +0.0 へ正規化する（coords と同じ理由）。"""
+    a = models.build_genome(
+        coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=1,
+        parents=("a" * 16,), operator="drift",
+        operator_params={"rng_seed": 1, "step": -0.0},
+    )
+    b = models.build_genome(
+        coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=1,
+        parents=("a" * 16,), operator="drift",
+        operator_params={"rng_seed": 1, "step": 0.0},
+    )
+    assert a.genome_id == b.genome_id
+    assert a.operator_params == {"rng_seed": 1, "step": 0.0}
+    assert math.copysign(1.0, a.operator_params["step"]) > 0.0
+
+
+def test_genome_from_dict_rejects_negative_zero_operator_param_float() -> None:
+    """デシリアライズ経路は operator_params の -0.0 も coords と同様に
+    fail-closed で拒否する。"""
+    d = models.genome_to_dict(_base_genome())
+    d["operator_params"]["step"] = -0.0
+    with pytest.raises(models.GenomeValidationError, match="negative zero"):
+        models.genome_from_dict(d)
+
+
+def test_genome_to_json_never_emits_negative_zero() -> None:
+    """coords/operator_params のどのフィールドが -0.0 を経由しても、
+    genome_to_json() の出力テキストに `"-0.0"`（`"-0.000000"` を含む）が
+    現れないことを走査で担保する（全経路の回帰テスト）。"""
+    genomes = [
+        models.build_genome(
+            coords=models.Coords(-0.0, 0.0, 1.0), seed=0, lineage="L-U", generation=0,
+            parents=(), operator="founder", operator_params={},
+        ),
+        models.build_genome(
+            coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=1,
+            parents=("a" * 16,), operator="drift",
+            operator_params={"rng_seed": 1, "step": -0.0},
+        ),
+        models.build_genome(
+            coords=models.Coords(0.5, 0.3, 0.2), seed=0, lineage="L-C", generation=1,
+            parents=("a" * 16, "b" * 16), operator="vertex_pull",
+            operator_params={"weight": -0.0, "vertex": "ritsu", "pull": -0.0},
+        ),
+    ]
+    for g in genomes:
+        text = models.genome_to_json(g)
+        assert "-0.0" not in text
 
 
 # --- roundtrip / from_dict ------------------------------------------------

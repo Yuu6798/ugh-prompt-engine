@@ -63,7 +63,10 @@ def drift(parent: models.VoiceGenome, *, rng_seed: int, step: float) -> models.V
     # 使われた値が食い違い、記録済み params からの再実行が別 genome_id を
     # 生んでいた（実例: step=0.02000049 は記録上 0.02 だが、丸め前の生値で
     # 計算した座標は step=0.02 で再実行した座標と一致しない）。
-    step = round(step, 6)
+    # 丸め結果が -0.0 になり得るため正準 +0.0 へ正規化する（PR #267 Codex R8
+    # 指摘: -0.0 は build_genome() 側でも正規化されるが、ここで正規化して
+    # おくことで下の座標計算・境界検査も一貫して +0.0 を前提にできる）。
+    step = models.normalize_signed_zero(round(step, 6))
     if not (0.0 <= step <= models.DRIFT_STEP_MAX):
         raise ValueError(f"drift step must be within [0, {models.DRIFT_STEP_MAX}], got {step}")
     rng = random.Random(rng_seed)
@@ -99,8 +102,9 @@ def vertex_pull(
     """
     # PR #267 Codex R6 指摘1（P1）: weight/pull も drift の step と同じ理由で
     # 入口で6桁固定丸めしてから計算に使う（丸め→上限検査の順序を揃える）。
-    weight = round(weight, 6)
-    pull = round(pull, 6)
+    # -0.0 正規化（PR #267 Codex R8 指摘。drift の step と同じ理由）。
+    weight = models.normalize_signed_zero(round(weight, 6))
+    pull = models.normalize_signed_zero(round(pull, 6))
     if not (0.0 <= weight <= 1.0):
         raise ValueError(f"vertex_pull weight must be within [0, 1], got {weight}")
     if vertex not in models.ANCHOR_NAMES:
@@ -169,7 +173,8 @@ def edge_walk(
         raise ValueError(f"edge_walk edge must name two distinct anchors, got {edge!r}")
     # PR #267 Codex R6 指摘1（P1）: step も drift と同じ理由で入口で6桁固定
     # 丸めしてから計算に使う（丸め→上限検査の順序を揃える）。
-    step = round(step, 6)
+    # -0.0 正規化（PR #267 Codex R8 指摘。drift の step と同じ理由）。
+    step = models.normalize_signed_zero(round(step, 6))
     if not (0.0 <= step <= models.EDGE_WALK_STEP_MAX):
         raise ValueError(f"edge_walk step must be within [0, {models.EDGE_WALK_STEP_MAX}], got {step}")
 

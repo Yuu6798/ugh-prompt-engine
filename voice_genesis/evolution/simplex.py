@@ -76,7 +76,15 @@ def normalize(coords: CoordsLike) -> "models.Coords":
             "residual absorption drove the dominant component negative "
             f"(raw={raw!r}); refusing to emit an invalid simplex point"
         )
-    return models.Coords(**{k: micros[k] / _MICRO_PER_UNIT for k in ("ritsu", "pjs", "user")})
+    # micros はすべて非負 int のため `micros[k] / _MICRO_PER_UNIT` は理論上
+    # -0.0 を生まないが、genome_id ハッシュ・格納・整形の全経路で -0.0 を
+    # 恒久的に排除する防御として `normalize_signed_zero()` を最終防衛として
+    # 通す（PR #267 Codex R8 指摘。models._validate_coords_value の
+    # normalize=True 経路でも重ねて正規化されるが、単一責務の関数として
+    # ここでも保証しておく）。
+    return models.Coords(**{
+        k: models.normalize_signed_zero(micros[k] / _MICRO_PER_UNIT) for k in ("ritsu", "pjs", "user")
+    })
 
 
 def l1_distance(a: CoordsLike, b: CoordsLike) -> float:

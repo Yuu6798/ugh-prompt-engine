@@ -7,6 +7,7 @@ DESIGN_VG_E0.md §7 AC「オペレータ5種の決定論テスト（同一入力
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -400,3 +401,41 @@ def test_anchors_provenance_propagation_does_not_change_genome_id(founders) -> N
     assert bare_child.genome_id == anchored_child.genome_id
     assert bare_child.anchors_provenance is None
     assert anchored_child.anchors_provenance == _ANCHORS_A
+
+
+# --- PR #267 Codex R8 指摘: 符号付きゼロ（-0.0）の正規化 ---------------------
+
+
+def test_drift_step_negative_zero_normalized_to_positive_zero(founders) -> None:
+    """step=-1e-9 は `round(step, 6)` で -0.0 になる（丸め前は境界内の負の
+    微小値だが、丸め後は符号付きゼロ）。operators.py の入口正規化がないと
+    operator_params.step が -0.0 のまま記録され、同じ意図の step=0.0 と
+    別 genome_id になっていた。"""
+    ritsu, _pjs, _usr, _center = founders
+    assert repr(round(-1e-9, 6)) == "-0.0"  # 前提の確認
+    a = operators.drift(ritsu, rng_seed=0, step=-1e-9)
+    b = operators.drift(ritsu, rng_seed=0, step=0.0)
+    assert a.genome_id == b.genome_id
+    assert a.operator_params["step"] == 0.0
+    assert math.copysign(1.0, a.operator_params["step"]) > 0.0
+
+
+def test_vertex_pull_weight_and_pull_negative_zero_normalized(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    assert repr(round(-1e-9, 6)) == "-0.0"  # 前提の確認
+    a = operators.vertex_pull(ritsu, pjs, weight=-1e-9, vertex="user", pull=-1e-9)
+    b = operators.vertex_pull(ritsu, pjs, weight=0.0, vertex="user", pull=0.0)
+    assert a.genome_id == b.genome_id
+    assert a.operator_params["weight"] == 0.0
+    assert a.operator_params["pull"] == 0.0
+    assert math.copysign(1.0, a.operator_params["weight"]) > 0.0
+    assert math.copysign(1.0, a.operator_params["pull"]) > 0.0
+
+
+def test_edge_walk_step_negative_zero_normalized(founders) -> None:
+    _ritsu, pjs, _usr, _center = founders
+    a = operators.edge_walk(pjs, rng_seed=7, edge=("ritsu", "pjs"), step=-1e-9)
+    b = operators.edge_walk(pjs, rng_seed=7, edge=("ritsu", "pjs"), step=0.0)
+    assert a.genome_id == b.genome_id
+    assert a.operator_params["step"] == 0.0
+    assert math.copysign(1.0, a.operator_params["step"]) > 0.0
