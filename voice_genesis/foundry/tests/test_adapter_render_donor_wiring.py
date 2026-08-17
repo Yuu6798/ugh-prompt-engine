@@ -4,9 +4,11 @@
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import sys
 from pathlib import Path
+from typing import Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
@@ -1217,3 +1219,496 @@ def test_render_ritsu_consonant_source_default_none_does_not_raise_at_this_gate(
             "sakura", "/nonexistent/voice_spec.json",
             donor="ritsu", voicebank_root="/nonexistent/voicebank",
         )
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #265 R5・有限性ファミリー終端掃討): unit 選択コストの重み
+# w_p/w_d/w_c/w_v は有限・非負を要求する（重い WORLD 分析より前）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf"), -0.5])
+@pytest.mark.parametrize("kwarg_name", ["w_p", "w_d", "w_c", "w_v"])
+def test_render_rejects_non_finite_or_negative_weight_before_heavy_analysis(
+    kwarg_name: str, bad_value: float
+) -> None:
+    """`w_p`/`w_d`/`w_c`/`w_v` は `units.py` の `total = w_p * cp + w_d * cd +
+    w_c * cc + cv` に使われる — `nan` は全候補の `total` を `nan` にして
+    選択を無効化し、`inf`/負値も無意味な入力のため、重い分析（spec 読み込み
+    より前）で fail-closed 拒否する。voice_spec_path に実在しないダミー
+    パスを渡しても本ゲートの ValueError が先に飛ぶことで「重い分析より
+    前」であることも合わせて検証する。"""
+    kwargs = {"w_p": 1.0, "w_d": 0.3, "w_c": 1.0, "w_v": 25.0}
+    kwargs[kwarg_name] = bad_value
+    with pytest.raises(ValueError, match=kwarg_name):
+        rd.render("sakura", "/nonexistent/voice_spec.json", **kwargs)
+
+
+def test_render_default_weights_do_not_raise_at_this_gate() -> None:
+    """既定値（`un.DEFAULT_W_P` 等）はいずれも有限・非負のため本ゲートに
+    抵触せず、後続の spec 読み込みまで到達する（誤検知しないことの対照
+    テスト）。"""
+    with pytest.raises(FileNotFoundError):
+        rd.render("sakura", "/nonexistent/voice_spec.json")
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #265): --timing-out の衝突検査を合成前に fail-closed で行う
+# ---------------------------------------------------------------------------
+
+
+def _ritsu_spec_and_voicebank(tmp_path: Path) -> Tuple[Path, Path]:
+    """`donor='ritsu'` の最小 spec + voicebank を組み立て、`(spec_path, root)`
+    を返す（`test_render_ritsu_revalidates_donor_provenance_after_bank_build`
+    と同型のヘルパー）。"""
+    root = tmp_path / "voicebank"
+    _write_minimal_oto(root / "A3")
+    pinned_sha, _pitch_dirs = dbu.voicebank_identity_hash(root)
+    spec = _spec_with_donor({"dataset": "ritsu", "voicebank_sha256": pinned_sha})
+    spec_path = tmp_path / "spec.json"
+    vs.save_voice_spec(spec, spec_path)
+    return spec_path, root
+
+
+def test_render_timing_out_equals_out_raises_before_build_score(tmp_path: Path, monkeypatch) -> None:
+    """`--timing-out` が `--out` と一致する呼び出しは、`build_score` 以降の
+    重い合成パイプラインへ入る前に fail-closed で拒否される（`--out` は
+    まだファイルとして存在しない通常ケースでも検出できることが重要 ——
+    `_reject_output_collision` の `protected_files` は「既存の入力ファイル」
+    前提で `.exists()` スキップするため、それをそのまま `--out` へ流用すると
+    見逃す。build_score をセンチネル化し、「合成前」の位置であることも
+    合わせて検証する）。"""
+    spec_path, root = _ritsu_spec_and_voicebank(tmp_path)
+    out_path = tmp_path / "out.wav"
+    assert not out_path.exists()  # 通常ケース: --out はまだ存在しない
+
+    def _sentinel_build_score(_name):
+        raise AssertionError(
+            "build_score reached — timing-out collision check did not fail before synthesis"
+        )
+
+    monkeypatch.setattr(rd, "build_score", _sentinel_build_score)
+
+    with pytest.raises(rd.OutputCollisionError, match="timing-out"):
+        rd.render(
+            "sakura", spec_path, donor="ritsu", voicebank_root=root,
+            out_path=out_path, timing_out_path=out_path,
+        )
+
+
+def test_render_timing_out_inside_protected_root_raises_before_build_score(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`--timing-out` が保護入力（`--voicebank-root` 配下）と一致する場合も
+    合成前に fail-closed で拒否される。"""
+    spec_path, root = _ritsu_spec_and_voicebank(tmp_path)
+    out_path = tmp_path / "out.wav"
+    timing_out_path = root / "A3" / "oto.ini"  # voicebank_root 配下に衝突させる
+
+    def _sentinel_build_score(_name):
+        raise AssertionError(
+            "build_score reached — timing-out collision check did not fail before synthesis"
+        )
+
+    monkeypatch.setattr(rd, "build_score", _sentinel_build_score)
+
+    with pytest.raises(rd.OutputCollisionError):
+        rd.render(
+            "sakura", spec_path, donor="ritsu", voicebank_root=root,
+            out_path=out_path, timing_out_path=timing_out_path,
+        )
+
+
+def test_render_timing_out_none_skips_collision_check_and_reaches_build_score(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`timing_out_path` 省略時（`None`）はこのゲートに抵触せず、従来どおり
+    `build_score` まで到達する（新規ゲートが無関係な呼び出しを誤検知しない
+    ことの対照テスト）。"""
+    spec_path, root = _ritsu_spec_and_voicebank(tmp_path)
+    out_path = tmp_path / "out.wav"
+
+    class _ReachedBuildScore(Exception):
+        pass
+
+    def _sentinel_build_score(_name):
+        raise _ReachedBuildScore("build_score reached as expected")
+
+    monkeypatch.setattr(rd, "build_score", _sentinel_build_score)
+
+    with pytest.raises(_ReachedBuildScore):
+        rd.render("sakura", spec_path, donor="ritsu", voicebank_root=root, out_path=out_path)
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #265 R7): timing_out_path の単独指定（out_path=None）は
+# 合成のみ行い何も書かずに正常終了する false-success だったため、
+# out_path 必須（同時指定のみ許可）を fail-closed で強制する
+# ---------------------------------------------------------------------------
+
+
+def test_render_timing_out_alone_without_out_raises_before_build_score(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`timing_out_path` のみ指定・`out_path=None` は、合成だけ行って WAV も
+    timing CSV も書かずに正常終了する false-success だった（§ 後段の公開
+    ブロックが `if out_path is not None:` の中にしか無く丸ごとスキップ
+    されるため）。重い合成（`build_score`）へ入る前に即座に拒否する。"""
+    spec_path, root = _ritsu_spec_and_voicebank(tmp_path)
+    timing_out_path = tmp_path / "out_timing.csv"
+
+    def _sentinel_build_score(_name):
+        raise AssertionError(
+            "build_score reached — timing_out_path-without-out_path check did not "
+            "fail before synthesis"
+        )
+
+    monkeypatch.setattr(rd, "build_score", _sentinel_build_score)
+
+    with pytest.raises(ValueError, match="timing_out_path"):
+        rd.render(
+            "sakura", spec_path, donor="ritsu", voicebank_root=root,
+            timing_out_path=timing_out_path,
+        )
+    assert not timing_out_path.exists()
+
+
+def test_render_out_alone_without_timing_out_does_not_raise_at_this_gate() -> None:
+    """`out_path` のみ指定・`timing_out_path` 省略は既存の正常系（WAV 単独
+    公開）のため、本ゲートには抵触しない（誤検知しないことの対照テスト）。"""
+    with pytest.raises(FileNotFoundError):
+        rd.render(
+            "sakura", "/nonexistent/voice_spec.json",
+            donor="ritsu", voicebank_root="/nonexistent/voicebank",
+            out_path="/nonexistent/out_dir/out.wav",
+        )
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #265): WAV + timing CSV の両方 staging → 両方公開
+# （非対称な部分公開の解消）
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_wav_and_timing_publishes_both_files(tmp_path: Path) -> None:
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    y = np.linspace(-0.5, 0.5, 240).astype(np.float64)
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows[0]["row_index"] = "0"
+    rows[0]["row_kind"] = "rest"
+
+    output_sha256 = rd._atomic_write_wav_and_timing(y, 24000, out_path, rows, timing_out_path)
+
+    assert out_path.exists()
+    assert timing_out_path.exists()
+    assert output_sha256 == hashlib.sha256(out_path.read_bytes()).hexdigest()
+    with open(timing_out_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        written_rows = list(reader)
+    assert written_rows == rows
+    # staging tempfile が残っていない。
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_no_wav_publish_when_csv_staging_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P1 修正 (review #265) の核心: timing CSV の staging（書き込み）が失敗
+    したら、`--out` の WAV も公開されない（旧実装は WAV を先に公開してから
+    別途 CSV を書いていたため、CSV 失敗時に WAV だけが残る非対称があった）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    y = np.linspace(-0.5, 0.5, 240).astype(np.float64)
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated timing csv write failure")
+
+    monkeypatch.setattr(rd, "_stage_timing_csv_bytes", _boom)
+
+    with pytest.raises(RuntimeError):
+        rd._atomic_write_wav_and_timing(y, 24000, out_path, rows, timing_out_path)
+
+    assert not out_path.exists()  # WAV も非公開のまま（非対称解消の確認）
+    assert not timing_out_path.exists()
+    assert list(tmp_path.glob("*.tmp")) == []  # staging tempfile も残らない
+
+
+def test_atomic_write_wav_and_timing_does_not_clobber_existing_files_on_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """既存の有効な WAV/CSV がある状態で、CSV staging が失敗しても両方とも
+    無傷のまま残る。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated timing csv write failure")
+
+    monkeypatch.setattr(rd, "_stage_timing_csv_bytes", _boom)
+    with pytest.raises(RuntimeError):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows, timing_out_path)
+
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.read_bytes() == csv_before
+
+
+def test_atomic_write_wav_and_timing_rolls_back_both_when_second_replace_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P2 修正 (review #265 R3): 1 個目 (WAV) の `os.replace` が成功した直後に
+    2 個目 (timing CSV) が失敗すると、旧実装は WAV だけが新世代へ差し替わった
+    不整合状態を残していた。既存宛先のスナップショット（同一ディレクトリへの
+    退避 rename）を取ってから両方公開し、失敗時は両方とも巻き戻す実装により、
+    WAV/CSV 双方とも呼び出し前のバイト列へ完全に戻ることを確認する。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows_v1[0]["row_index"] = "0"
+    # 旧世代を公開しておく。
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    real_replace = rd.os.replace
+    call_count = {"n": 0}
+
+    def _replace_second_call_fails(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated failure on the second os.replace (timing csv)")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(rd.os, "replace", _replace_second_call_fails)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows_v2[0]["row_index"] = "1"
+    with pytest.raises(RuntimeError, match="second os.replace"):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows_v2, timing_out_path)
+
+    # 両方とも呼び出し前のバイト列へ完全に戻る（WAV だけが新しくなる非対称の
+    # 解消がこのテストの核心）。
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.read_bytes() == csv_before
+    # 退避 (.bak) / staging (.tmp) の痕跡が残らない。
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_rolls_back_both_when_first_replace_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """対称ケース: 1 個目 (WAV) の `os.replace` が失敗しても、2 個目 (CSV) は
+    未着手のまま・既存の旧世代は無傷で残る。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated failure on the first os.replace (wav)")
+
+    monkeypatch.setattr(rd.os, "replace", _boom)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    with pytest.raises(RuntimeError, match="first os.replace"):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows_v2, timing_out_path)
+
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.read_bytes() == csv_before
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_first_publish_rolls_back_to_absence_on_second_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """既存の宛先が無い（初回公開）状態で 2 個目が失敗した場合、WAV も
+    公開されず、双方とも「未公開」状態（呼び出し前と同じ = 存在しない）へ
+    戻る（`wav_had_previous=False` 経路の巻き戻し確認）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    assert not out_path.exists()
+    assert not timing_out_path.exists()
+
+    real_replace = rd.os.replace
+    call_count = {"n": 0}
+
+    def _replace_second_call_fails(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated failure on the second os.replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(rd.os, "replace", _replace_second_call_fails)
+
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    with pytest.raises(RuntimeError):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows, timing_out_path)
+
+    assert not out_path.exists()
+    assert not timing_out_path.exists()
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# P2 修正 (review #265 R5): 退避 rename フェーズ自体もロールバック対象に
+# 含める（R3 時点では退避 rename が BaseException ハンドラの外にあり、
+# 1 個目の退避成功後・2 個目の退避失敗で正 WAV が退避先へ移動したまま
+# 復元されず終わる退行があった）
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_wav_and_timing_restores_wav_when_second_backup_rename_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """R5 が修正した核心シナリオ: 1 個目 (WAV) の退避 rename が成功した直後に
+    2 個目 (timing CSV) の退避 rename が失敗しても、WAV は退避先 (`.bak`) に
+    取り残されず、元のパス・元のバイト列へ完全に戻る（CSV も未着手のまま
+    元のバイト列で残る）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows_v1[0]["row_index"] = "0"
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    real_rename = rd.os.rename
+    call_count = {"n": 0}
+
+    def _rename_second_call_fails(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated failure on the second backup rename (timing csv)")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(rd.os, "rename", _rename_second_call_fails)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows_v2[0]["row_index"] = "1"
+    with pytest.raises(RuntimeError, match="second backup rename"):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows_v2, timing_out_path)
+
+    # R5 以前はここで out_path が存在しなかった（退避先に取り残されたまま）。
+    assert out_path.exists()
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.exists()
+    assert timing_out_path.read_bytes() == csv_before
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_restores_csv_when_wav_backup_rename_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """対称ケース: 1 個目 (WAV) の退避 rename そのものが失敗した場合、CSV は
+    未着手のまま・WAV も元のバイト列のまま残る（rename は原子的なので部分
+    バイト列は生じない）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated failure on the first backup rename (wav)")
+
+    monkeypatch.setattr(rd.os, "rename", _boom)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    with pytest.raises(RuntimeError, match="first backup rename"):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows_v2, timing_out_path)
+
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.read_bytes() == csv_before
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #265 R9): out_path/timing_out_path が既存ディレクトリを
+# 指す場合、退避 rename がディレクトリごと喪失させ得るため fail-closed で
+# 拒否する（`os.rename`/`os.replace` はファイル/ディレクトリを区別しない）
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_wav_and_timing_rejects_out_path_that_is_a_directory(tmp_path: Path) -> None:
+    """`out_path` が既存ディレクトリの場合、退避 rename を一切試みずに
+    fail-closed で拒否する（ディレクトリの中身を保護する）。"""
+    out_path = tmp_path / "out.wav"
+    out_path.mkdir()
+    (out_path / "important_existing_file.txt").write_bytes(b"do not lose me")
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+
+    with pytest.raises(rd.OutputCollisionError, match="ディレクトリ"):
+        rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows, timing_out_path)
+
+    # ディレクトリとその中身が無傷のまま残る（退避 rename が一切走っていない）。
+    assert out_path.is_dir()
+    assert (out_path / "important_existing_file.txt").read_bytes() == b"do not lose me"
+    assert not timing_out_path.exists()
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_rejects_timing_out_path_that_is_a_directory(tmp_path: Path) -> None:
+    """`timing_out_path` が既存ディレクトリの場合も同様に fail-closed で
+    拒否し、`out_path` 側も一切公開しない（片方だけ公開する非対称も防ぐ）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    timing_out_path.mkdir()
+    (timing_out_path / "important_existing_file.txt").write_bytes(b"do not lose me")
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+
+    with pytest.raises(rd.OutputCollisionError, match="ディレクトリ"):
+        rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows, timing_out_path)
+
+    assert timing_out_path.is_dir()
+    assert (timing_out_path / "important_existing_file.txt").read_bytes() == b"do not lose me"
+    assert not out_path.exists()  # out_path 側も公開されない（非対称防止）
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_accepts_regular_files_at_both_destinations(tmp_path: Path) -> None:
+    """通常ファイル（ディレクトリでない）が既に存在する場合は誤検知せず、
+    従来どおり退避 → 公開が成功する（対照テスト）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    output_sha256 = rd._atomic_write_wav_and_timing(
+        np.ones(10), 24000, out_path, rows_v2, timing_out_path
+    )
+    assert output_sha256 == hashlib.sha256(out_path.read_bytes()).hexdigest()
+    assert out_path.is_file()
+    assert timing_out_path.is_file()
+
+
+def test_atomic_write_wav_and_timing_matches_atomic_write_wav_bytes(tmp_path: Path) -> None:
+    """timing CSV 経由の公開でも、WAV バイト列そのものは単独経路
+    (`_atomic_write_wav`) と完全一致する（合成結果に一切影響しないことの
+    直接的な裏付け）。"""
+    y = np.linspace(-0.3, 0.7, 480).astype(np.float64)
+    solo_path = tmp_path / "solo.wav"
+    rd._atomic_write_wav(y, 24000, solo_path)
+
+    combo_path = tmp_path / "combo.wav"
+    timing_out_path = tmp_path / "combo_timing.csv"
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(y, 24000, combo_path, rows, timing_out_path)
+
+    assert solo_path.read_bytes() == combo_path.read_bytes()

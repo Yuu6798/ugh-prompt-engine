@@ -1,0 +1,25 @@
+{
+  "schema": "d3-manifest/0.1",
+  "registered_at_utc": "2026-08-17",
+  "design": "voice_genesis/foundry/DESIGN_S3_backfill.md#22-量と変動生成",
+  "base_preset": {
+    "path": "voice_genesis/foundry/adapter/presets/ritsu_neutral.json",
+    "note": "seed フィールドのみをセル値へ差し替えた spec 変種を生成して使用する"
+  },
+  "voicebank_pin": {
+    "name": "波音リツ強連続音Ver1.5.1",
+    "zip_sha256": "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76",
+    "zip_size_bytes": 189261648,
+    "voicebank_sha256": "86e1c57b50b781eaba92b57254b2df106a61766f08fbacac8399e54208cd6c8e"
+  },
+  "scores": ["sakura", "umi", "d3_sustain", "d3_kana"],
+  "seeds": [11, 101, 211, 307, 401, 503, 601, 701, 809, 907],
+  "tripwires": {
+    "sakura_seed11_wav_sha256": "833d65d8b1394d3e7fc655d0a41acc212e94a83adcc3ac7686b560b17469ec0c",
+    "umi_seed11_wav_sha256": "9f561fa88cadaf4d395b6ed16dbf2d6e14326d3062668c4097acd8f398ea3a3a",
+    "note": "seed=11 は preset 焼き込み値 = B1 ベースラインと同一条件。生成セルがこの sha256 と不一致なら環境ドリフトとして全セル無効"
+  },
+  "cells_total": 40,
+  "cells": "生成後に d3_manifest_results.json へ {score, seed, spec_sha256, wav_sha256, timing_csv_sha256, duration_sec} を全セル記帳する（殻→実測の 2 段コミット・本ファイルは事前登録の殻）",
+  "estimated_total_audio_sec": 5456
+}

@@ -257,14 +257,34 @@ def vcv_context_sequence(segments: Sequence) -> List[Tuple[Optional[str], str]]:
     に対応）、それ以外は直前ノートの `mora.vowel` を使う。`performance.py` が
     既に計算済みの `is_phrase_first` をそのまま使う（フレーズ境界判定ロジックの
     二重実装を避ける・[実装決定]）。duck-typed（`seg.is_phrase_first` /
-    `seg.note.mora.kana` / `seg.note.mora.vowel` を持つ列であれば良い）。
+    `seg.note.mora.kana` / `seg.note.mora.vowel` / `seg.note.mora.is_moraic_nasal`
+    を持つ列であれば良い）。
+
+    S3 Phase B1 修正（`score_d3_kana.py` docstring 参照）: 直前モーラが撥音
+    「ん」（`mora.is_moraic_nasal=True`、`mora.vowel="N"`）の場合、oto.ini の
+    VCV エイリアス prev トークンは小文字 `"n"`（UTAU 慣習。実測: 波音リツ
+    強連続音 Ver1.5.1 に `"n わ"` 等のエイリアスが実在）を使うため、
+    `mora.vowel`（大文字 `"N"`）をそのまま使うと厳密一致が常に外れ `near`
+    フォールバックへ縮退する。撥音直後のみ prev トークンを `"n"` へ変換する
+    （sakura/umi は「ん」を含まないためこの分岐は発火せず無影響——変更前後の
+    byte-identity 回帰で実証済み）。
     """
     out: List[Tuple[Optional[str], str]] = []
     prev_vowel: Optional[str] = None
+    prev_is_moraic_nasal = False
     for seg in segments:
-        pv = None if seg.is_phrase_first else prev_vowel
+        if seg.is_phrase_first:
+            pv = None
+        elif prev_is_moraic_nasal:
+            pv = "n"
+        else:
+            pv = prev_vowel
         out.append((pv, seg.note.mora.kana))
         prev_vowel = seg.note.mora.vowel
+        # `getattr` with default: duck-typed 呼び出し元（テストの `_FakeSeg`
+        # 等）は `is_moraic_nasal` を持たないことがあるため、無ければ従来どおり
+        # False 扱い（分岐発火なし = 旧挙動）とする。
+        prev_is_moraic_nasal = getattr(seg.note.mora, "is_moraic_nasal", False)
     return out
 
 
