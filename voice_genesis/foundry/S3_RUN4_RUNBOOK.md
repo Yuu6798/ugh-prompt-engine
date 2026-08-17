@@ -61,6 +61,77 @@ config.yaml の一次照合（AI-Drive 退避先）のみ**。§8 に全件を�
 
 ### 2.2 (b) D3 再生成 → `convert_d3.py` → pin 照合
 
+**決定論環境規約（SIMD レベル pin・2026-08-17 追加）— 本節のどのコマンドよりも
+先に、以下の 4 ゲートをすべて通過すること（`run_d3_cells.py` 自体はこれらを
+検査しないため、未通過のまま render を始めると高価な render 完走後に初めて
+hash 不一致で落ちる）**: D3 render 実行前に
+必ず `export NPY_DISABLE_CPU_FEATURES=X86_V4` を設定する（numpy の AVX-512
+dispatch カーネルを無効化し X86_V3=AVX2 相当に固定する）。pin
+（`d3_manifest_results.json` の `wav_sha256`）は X86_V3 生成環境を正基準
+として採用済みであり、AVX-512 ホストで本設定を欠くと `d3_sustain`
+seed=701 のみ 1 サンプル・1 LSB のバイト差が出て pin 不一致になる（原因・
+実測記録 = `results_s3/d3_dataset_record.md` 改訂節）。AVX2 止まりのホスト
+では本設定は実質 no-op だが、ホスト差を意識せず一律に設定する。
+
+- **ゲート 1（数値スタックの版 pin）**: 本 SIMD 契約（`NPY_DISABLE_CPU_FEATURES`
+  の語彙・`show_config('dicts')` の API・dispatch グループ名）は **numpy 2.4.6 の
+  挙動**を前提とする。リポジトリの依存宣言（`numpy>=1.24`）は本契約より緩いため、
+  D3 render 環境では以下の実測版を pin とし、照合してから進む
+  （render 経路が実ロードする 4 つのみ。他ライブラリの版差は不問）:
+
+  ```bash
+  python -c "import sys, numpy, scipy, pyworld, soundfile; \
+    expected = {'numpy': '2.4.6', 'scipy': '1.17.1', 'pyworld': '0.3.5', 'soundfile': '0.14.0'}; \
+    actual = {'numpy': numpy.__version__, 'scipy': scipy.__version__, \
+              'pyworld': pyworld.__version__, 'soundfile': soundfile.__version__}; \
+    ok = actual == expected; \
+    print(('numeric stack pin OK' if ok else 'numeric stack pin NG:'), actual); \
+    sys.exit(0 if ok else 1)"
+  ```
+
+  版が違う場合は `pip install numpy==2.4.6 scipy==1.17.1 pyworld==0.3.5
+  soundfile==0.14.0` で合わせてからゲート 2 に進む。
+- **ゲート 2（SIMD 受け入れゲート）**: `export NPY_DISABLE_CPU_FEATURES=X86_V4`
+  を設定した上で以下を実行し、`found` が **`X86_V3` を含み、かつ `X86_V4` を
+  含まない**ことを確認する（どちらか一方でも満たさなければ render に入らず停止する）。
+
+  ```bash
+  python -c "import sys, numpy; f = numpy.show_config('dicts')['SIMD Extensions']['found']; \
+    ok = 'X86_V3' in f and 'X86_V4' not in f; \
+    print(('SIMD gate OK:' if ok else 'SIMD gate NG:'), f); sys.exit(0 if ok else 1)"
+  ```
+
+  （両条件を明示分岐 + `sys.exit` に符号化してあるため、非 0 exit = ゲート
+  不通過。目視でなくコマンドの成否で判定できる。`assert` は使わない —
+  `PYTHONOPTIMIZE=1/2` 環境では assert 文が剥がされ偽 PASS するため、
+  ゲート 1・2 とも optimize 設定に依存しない明示分岐で判定する）
+
+  AVX-512 ホストでは設定が効いた証明（`X86_V4` が消える）、AVX2 ホストでは
+  元々 `X86_V4` を含まない（no-op の確認）。`X86_V3` の実在要求は、AVX2 未満の
+  ホストや `X86_V3` dispatch を持たない numpy ビルドが「X86_V4 不在」だけの
+  検査をすり抜け、高価な render 完走後に初めて hash 不一致で落ちる事態を
+  render 前に fail-closed で防ぐためのもの（そのような環境は X86_V3 契約の
+  正基準に到達できず、pin 再現の前提を満たさない）。
+- **ゲート 3（罠の確認）**: numpy 2.4.6 の `NPY_DISABLE_CPU_FEATURES` は個別
+  AVX-512 機能名（`AVX512F` 等）や不正値を渡してもエラーなく黙って無視する
+  （silent no-op）。有効な語彙は `numpy._core._multiarray_umath.__cpu_dispatch__`
+  に列挙される dispatch グループ名（`X86_V3`/`X86_V4` 等）のみ。設定が
+  効いたかは必ずゲート 2 の `show_config` 実測で確認する（「設定した
+  つもり」を信用しない）。
+- **ゲート 4（旧環境 cache の破棄）**: `run_d3_cells.py` は既存
+  `<out-dir>/cache` を無条件に再利用し、donor 解析 pickle のキーは voicebank
+  内容とオプションのみで**数値スタック版・SIMD レベルを含まない**。このため
+  版揃え・SIMD 設定をやり直しても、旧環境で作られた cache の解析配列が
+  render に流用され、不一致が全セル完走後まで発覚しない。**判定は cache の
+  来歴で行う: 「本ゲート 1–3 を通過済みの現在の環境で自分が生成した」と確証
+  できる cache 以外（他マシンからのコピー・本契約制定前の生成物・出所不明の
+  既存 `<out-dir>` を含む）はすべて render 前に削除するか、新規 `--out-dir`
+  を使う**。迷ったら削除する（cache の再生成は安価で、stale cache の代償は
+  render 完走 1 回分）。
+- ffmpeg 版 pin（`ffmpeg 6.1.1-3ubuntu5`、`recording_kit/intake_records/
+  intake_record_2026-08-17.md` 参照）と同格の環境契約として扱う——render
+  環境の再現に必須。
+
 **本スクリプトで実行する（2026-08-17 追加・R8 レイアウト修正込み）**: 下記
 手順 2〜3（40 セル render + tripwire 先行照合 + 全数 sha256 照合）は
 `scripts/run_d3_cells.py` 1 コマンドで置き換えられる（`render.py`/

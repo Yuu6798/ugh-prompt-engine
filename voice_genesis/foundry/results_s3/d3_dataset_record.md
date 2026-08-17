@@ -49,3 +49,47 @@ seed 追加（マニフェスト改版=新殻の事前登録から）。
   `DESIGN_S3_backfill.md` §2.4）
 - binarize（openvpi/DiffSinger）は GPU 実行環境（クロー）側の分担
 - 残る Phase B 関連 Open Question: 促音っ（§7 Q5）
+
+## 6. pin 改訂記録（2026-08-17・SIMD レベル drift）
+
+### 6.1 発見
+
+pin 起源環境（AVX-512 = numpy dispatch `X86_V4`）で生成した `d3_manifest_results.json`
+の wav_sha256 を AVX2 止まりホスト（`X86_V3`）で再検証したところ、
+40 セル中 `d3_sustain` seed=701 のみが不一致になった。差分は int16 PCM
+1,524,000 サンプル中 **1 サンプル・1 LSB**（index 989445、`-1`）のみで、
+他 39 セル + tripwire 2 件（`sakura`/`umi` seed=11）+ 全 timing CSV +
+全 spec は完全一致していた。原因は numpy の AVX-512（`X86_V4`）dispatch
+カーネルの加算順序差（SIMD reduction の典型パターン）。詳細な反復記録・
+before/after `show_config` 実測・全 40 セル表 = セッション scratchpad
+`simd_pin_experiment/RESULT.md`（本 doc への転記が本節）。
+
+### 6.2 tripwire の盲点
+
+`sakura`/`umi` seed=11 の tripwire 照合はこのクラスの環境差を検出
+**できない**（両ホストで一致したまま）。SIMD dispatch ドリフトは
+tripwire を素通りし、40 セル全数照合で初めて表面化する種類の環境差である。
+
+### 6.3 X86_V3 を正基準に採用した理由
+
+- **AVX2 ホストでの決定論は独立に成立**（`NPY_DISABLE_CPU_FEATURES=X86_V4`
+  固定で 2 独立 run + warm cache run がバイト完全同一）。
+- X86_V3（AVX2 相当）は AVX-512 ホスト・AVX2 ホストの双方で到達可能な
+  「最小公倍数」の dispatch レベルである（AVX2 止まりのハードでは
+  そもそも `X86_V4` カーネルを選べないため、逆方向〔AVX2 ホストで
+  AVX-512 出力を再現〕は原理的に不可能。片方向のみ再現可能な X86_V3 側を
+  正とするほかない）。
+- `NPY_DISABLE_CPU_FEATURES=X86_V4` を render 前に一律設定する運用規約を
+  `S3_RUN4_RUNBOOK.md` §2.2 に追加した（受け入れゲート・silent no-op の罠
+  込み）。
+
+### 6.4 pin 値の対応表
+
+| ファイル | フィールド | 旧値（`X86_V4` 起源） | 新値（`X86_V3` 起源） |
+|---|---|---|---|
+| `d3_manifest_results.json` | `d3_sustain` seed=701 `wav_sha256` / `log_output_sha256` | `88cae387a28ae0a6fb0a6a59daf7786c9b4e72ec8847be6fa3f13cdbf8200002` | `8b4f8a6095f3181d2a4cb97cf531cc915beeb65e3ceb89a02ebe4940f837fa6a` |
+| `run4_dataset_pins.json` | `d3.wav_sha256["d3_sustain_seed701.wav"]`（44.1kHz 変換後） | `4cb56a3a33431764e7236a70e2eddc3d1f65ba261dc3b5a0b1cb5cba1dd2ce76` | `b37b3ee0c67a9f4a52263c0482c15865d4c3dc2abb7b74db61b687a1006cc153` |
+
+他 39 セル・`transcriptions_csv_sha256`・`wav_total_seconds_measured`
+（1200.3s）・`timing_csv_sha256` は全て pin 旧値と不変（X86_V3 環境での
+`convert_d3.py` 実測により確認済み）。
