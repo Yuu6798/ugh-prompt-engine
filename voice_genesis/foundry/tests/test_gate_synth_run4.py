@@ -11,14 +11,24 @@ onnxruntime を要求しない範囲 — speaker 解決・CLI 引数検証・
 `import gate_synth_run4` がこのテストモジュールのトップレベルで
 onnxruntime 無しに成功すること自体が、遅延 import 設計の中核的な検証項目
 である。
+
+review #265 R4 #11（PR #265 Codex 第4波レビュー採用分）: `--speaker-embed-file`
+（embed ファイル直指定モード。判定材料④ `forge_triangle.py` の
+`candidate_A.emb`〜D.emb を合成する経路）の引数排他・384 有限 float32
+検証（`forge_triangle` read-only import 経由）・`gate_synth.find_speaker_embed`/
+`load_speaker_embed_vector_with_sha` へのモンキーパッチ委譲とその復元
+（正常時・例外時の両方）を検証する。
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
+import types
 from pathlib import Path
 from typing import List
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "s1_gate"))
@@ -75,11 +85,18 @@ def test_parser_accepts_speaker_ritsu_and_pjs_unchanged() -> None:
         assert args.speaker == speaker
 
 
-def test_parser_default_speaker_is_ritsu() -> None:
-    """gate_synth.py の p_run と同じ既定値（無指定時 ritsu）を維持する。"""
+def test_parser_speaker_and_speaker_embed_file_both_default_to_none() -> None:
+    """review #265 R4 #11: raw parser レベルでは `--speaker` の既定値を
+    `None` にする（`main()` が両方省略時のみ 'ritsu' を適用する。理由は
+    `test_main_rejects_speaker_and_speaker_embed_file_together_even_when_*`
+    docstring 参照 — argparse の mutually-exclusive-group はデフォルト値と
+    明示指定値が一致すると検出をすり抜けるため、default="ritsu" のままだと
+    `--speaker ritsu --speaker-embed-file x.emb` の併用を検出できない）。"""
     parser = gsr4.build_arg_parser()
     args = parser.parse_args(REQUIRED_ARGV)
-    assert args.speaker == "ritsu"
+    assert args.speaker is None
+    assert args.speaker_embed_file is None
+    assert args.speaker_embed_label is None
 
 
 def test_parser_rejects_unknown_speaker() -> None:
@@ -191,6 +208,259 @@ def test_main_prints_resolved_spk_id_for_user(
     captured = capsys.readouterr()
     assert "speaker=user" in captured.out
     assert "spk_id=2" in captured.out
+
+
+def test_main_resolves_default_speaker_to_ritsu_when_neither_flag_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_module = _FakeGateSynthModule()
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake_module)
+
+    gsr4.main(REQUIRED_ARGV)
+
+    assert fake_module.calls[0].speaker == "ritsu"
+
+
+def test_main_rejects_speaker_and_speaker_embed_file_together_even_when_speaker_equals_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """review #265 R4 #11: `--speaker ritsu`（既定値と同一の明示指定）を
+    `--speaker-embed-file` と併用しても確実に拒否されること
+    （`add_mutually_exclusive_group` 依存だと `--speaker` の default が
+    'ritsu' の場合にこの組み合わせだけ検出漏れが起きることを実測で確認済み
+    — `main()` の post-parse 明示チェックで担保する）。"""
+    embed_path = tmp_path / "candidate_A.emb"
+    embed_path.write_bytes(b"\x00" * (384 * 4))
+    fake_module = _FakeGateSynthModule()
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake_module)
+
+    argv = REQUIRED_ARGV + ["--speaker", "ritsu", "--speaker-embed-file", str(embed_path)]
+    with pytest.raises(SystemExit, match="mutually exclusive"):
+        gsr4.main(argv)
+    assert fake_module.calls == []
+
+
+def test_main_rejects_speaker_and_speaker_embed_file_together_non_default_speaker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embed_path = tmp_path / "candidate_A.emb"
+    embed_path.write_bytes(b"\x00" * (384 * 4))
+    fake_module = _FakeGateSynthModule()
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake_module)
+
+    argv = REQUIRED_ARGV + ["--speaker", "user", "--speaker-embed-file", str(embed_path)]
+    with pytest.raises(SystemExit, match="mutually exclusive"):
+        gsr4.main(argv)
+    assert fake_module.calls == []
+
+
+# --- review #265 R4 #11: --speaker-embed-file（embed ファイル直指定モード） ---
+
+
+def _make_embed_lookup_fake_gate_synth() -> types.SimpleNamespace:
+    """`_run_with_speaker_embed_file` の属性差し替え（モンキーパッチ）を
+    検証するためのフェイク `gate_synth` モジュール代替。実モジュールと同様に
+    `find_speaker_embed`/`load_speaker_embed_vector_with_sha`/`cmd_run` を
+    プレーン関数として持つ（クラスのバウンドメソッド化を避け、実モジュール
+    属性の差し替え挙動に近づける）。`cmd_run` は `_cmd_run_impl` の該当箇所
+    と同型に `find_speaker_embed` → `load_speaker_embed_vector_with_sha` を
+    呼び出し、`_run_with_speaker_embed_file` の差し替えが最終的な値まで
+    届いているかを観測できるようにする。
+    """
+    state = {
+        "cmd_run_calls": [],
+        "find_speaker_embed_calls": [],
+        "load_speaker_embed_vector_with_sha_calls": [],
+        "observed_vector": None,
+        "observed_sha": None,
+    }
+
+    def find_speaker_embed(acoustic_dir, speaker, export_basename=None):
+        # 差し替えられていなければ到達する「素の」実装（呼ばれたら差し替え
+        # が効いていない証拠）。
+        state["find_speaker_embed_calls"].append((acoustic_dir, speaker, export_basename))
+        return None
+
+    def load_speaker_embed_vector_with_sha(path):
+        state["load_speaker_embed_vector_with_sha_calls"].append(path)
+        raise AssertionError(
+            "unpatched load_speaker_embed_vector_with_sha should not be reached in "
+            "--speaker-embed-file mode"
+        )
+
+    def cmd_run(args):
+        state["cmd_run_calls"].append(args)
+        found_path = fake.find_speaker_embed(Path("/fake/acoustic-dir"), args.speaker)
+        vector, sha = fake.load_speaker_embed_vector_with_sha(found_path)
+        state["observed_vector"] = vector
+        state["observed_sha"] = sha
+
+    fake = types.SimpleNamespace(
+        find_speaker_embed=find_speaker_embed,
+        load_speaker_embed_vector_with_sha=load_speaker_embed_vector_with_sha,
+        cmd_run=cmd_run,
+        state=state,
+    )
+    return fake
+
+
+def _write_fake_384_embed(path: Path, seed: int) -> np.ndarray:
+    vector = np.random.default_rng(seed).standard_normal(384).astype(np.float32)
+    path.write_bytes(vector.tobytes())
+    return vector
+
+
+def test_parser_accepts_speaker_embed_file_alone() -> None:
+    parser = gsr4.build_arg_parser()
+    args = parser.parse_args(REQUIRED_ARGV + ["--speaker-embed-file", "candidate_A.emb"])
+    assert args.speaker is None
+    assert args.speaker_embed_file == "candidate_A.emb"
+
+
+def test_run_with_speaker_embed_file_monkeypatches_and_delegates_loaded_vector(
+    tmp_path: Path,
+) -> None:
+    embed_path = tmp_path / "candidate_A.emb"
+    vector = _write_fake_384_embed(embed_path, seed=1)
+
+    fake = _make_embed_lookup_fake_gate_synth()
+    original_find = fake.find_speaker_embed
+    original_load = fake.load_speaker_embed_vector_with_sha
+
+    parser = gsr4.build_arg_parser()
+    args = parser.parse_args(REQUIRED_ARGV + ["--speaker-embed-file", str(embed_path)])
+
+    gsr4._run_with_speaker_embed_file(args, fake)
+
+    assert len(fake.state["cmd_run_calls"]) == 1
+    delegated = fake.state["cmd_run_calls"][0]
+    assert delegated.speaker == "candidate_A"  # ファイル名 stem 由来のラベル
+    assert delegated.out_dir == "/fake/out"  # 他の引数もそのまま透過している
+
+    # 差し替えられた値が run_pipeline 相当の消費点まで届いている
+    assert np.array_equal(fake.state["observed_vector"], vector)
+    assert fake.state["observed_sha"] == hashlib.sha256(vector.tobytes()).hexdigest()
+    # 素の（未差し替え）実装は一度も呼ばれていない
+    assert fake.state["find_speaker_embed_calls"] == []
+    assert fake.state["load_speaker_embed_vector_with_sha_calls"] == []
+
+    # 呼び出し後、フェイクモジュールの属性は元の関数へ復元されている
+    assert fake.find_speaker_embed is original_find
+    assert fake.load_speaker_embed_vector_with_sha is original_load
+
+
+def test_run_with_speaker_embed_file_restores_originals_even_if_cmd_run_raises(
+    tmp_path: Path,
+) -> None:
+    embed_path = tmp_path / "candidate_B.emb"
+    _write_fake_384_embed(embed_path, seed=2)
+
+    fake = _make_embed_lookup_fake_gate_synth()
+    original_find = fake.find_speaker_embed
+    original_load = fake.load_speaker_embed_vector_with_sha
+
+    def _boom(_args):
+        raise RuntimeError("simulated cmd_run failure")
+
+    fake.cmd_run = _boom
+
+    parser = gsr4.build_arg_parser()
+    args = parser.parse_args(REQUIRED_ARGV + ["--speaker-embed-file", str(embed_path)])
+
+    with pytest.raises(RuntimeError, match="simulated cmd_run failure"):
+        gsr4._run_with_speaker_embed_file(args, fake)
+
+    assert fake.find_speaker_embed is original_find
+    assert fake.load_speaker_embed_vector_with_sha is original_load
+
+
+def test_run_with_speaker_embed_file_default_label_is_file_stem(tmp_path: Path) -> None:
+    embed_path = tmp_path / "candidate_D.emb"
+    _write_fake_384_embed(embed_path, seed=3)
+    fake = _make_embed_lookup_fake_gate_synth()
+
+    parser = gsr4.build_arg_parser()
+    args = parser.parse_args(REQUIRED_ARGV + ["--speaker-embed-file", str(embed_path)])
+    gsr4._run_with_speaker_embed_file(args, fake)
+
+    assert fake.state["cmd_run_calls"][0].speaker == "candidate_D"
+
+
+def test_run_with_speaker_embed_file_explicit_label_overrides_stem(tmp_path: Path) -> None:
+    embed_path = tmp_path / "candidate_E.emb"
+    _write_fake_384_embed(embed_path, seed=4)
+    fake = _make_embed_lookup_fake_gate_synth()
+
+    parser = gsr4.build_arg_parser()
+    args = parser.parse_args(
+        REQUIRED_ARGV + ["--speaker-embed-file", str(embed_path), "--speaker-embed-label", "custom-label"]
+    )
+    gsr4._run_with_speaker_embed_file(args, fake)
+
+    assert fake.state["cmd_run_calls"][0].speaker == "custom-label"
+
+
+def test_main_delegates_speaker_embed_file_mode_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embed_path = tmp_path / "candidate_C.emb"
+    vector = _write_fake_384_embed(embed_path, seed=5)
+
+    fake = _make_embed_lookup_fake_gate_synth()
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake)
+
+    argv = REQUIRED_ARGV + [
+        "--speaker-embed-file", str(embed_path), "--speaker-embed-label", "my-label",
+    ]
+    gsr4.main(argv)
+
+    delegated = fake.state["cmd_run_calls"][0]
+    assert delegated.speaker == "my-label"
+    assert np.array_equal(fake.state["observed_vector"], vector)
+
+
+def test_main_speaker_embed_file_rejects_truncated_embed_before_delegating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """review #265 R4 #11(a): forge_triangle の 384 有限 float32 validator を
+    read-only import して再利用していること — 壊れた embed は `cmd_run` へ
+    到達する前に拒否される。"""
+    bad_path = tmp_path / "truncated.emb"
+    bad_vector = np.random.default_rng(6).standard_normal(383).astype(np.float32)
+    bad_path.write_bytes(bad_vector.tobytes())
+
+    fake = _make_embed_lookup_fake_gate_synth()
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake)
+
+    argv = REQUIRED_ARGV + ["--speaker-embed-file", str(bad_path)]
+    with pytest.raises(ValueError, match="expected exactly 384"):
+        gsr4.main(argv)
+    assert fake.state["cmd_run_calls"] == []
+
+
+def test_main_speaker_embed_file_rejects_nan_embed_before_delegating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad_path = tmp_path / "nan.emb"
+    bad_vector = np.random.default_rng(7).standard_normal(384).astype(np.float32)
+    bad_vector[10] = np.nan
+    bad_path.write_bytes(bad_vector.tobytes())
+
+    fake = _make_embed_lookup_fake_gate_synth()
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake)
+
+    argv = REQUIRED_ARGV + ["--speaker-embed-file", str(bad_path)]
+    with pytest.raises(ValueError, match="non-finite"):
+        gsr4.main(argv)
+    assert fake.state["cmd_run_calls"] == []
+
+
+def test_forge_triangle_sibling_import_succeeds_without_onnxruntime() -> None:
+    """`gate_synth_run4.py` がモジュールトップレベルで `forge_triangle` を
+    import できること（onnxruntime 非依存であることの裏付け。docstring
+    「embed ファイル直指定モード」冒頭の sibling import 前提）。"""
+    assert hasattr(gsr4, "forge_triangle")
+    assert hasattr(gsr4.forge_triangle, "load_embed_vector_with_sha")
 
 
 # --- 遅延 import そのもの ----------------------------------------------------

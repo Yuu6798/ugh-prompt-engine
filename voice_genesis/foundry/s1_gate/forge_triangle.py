@@ -114,6 +114,53 @@ import 自体が失敗する — `gate_synth_run4.py` と同じ制約）。本�
   `False` を返すため、`nan < -atol`（負重み検査）も
   `abs(nan+...-1.0) > atol`（和=1 検査）もすり抜け、`--weights nan,0.5,0.5`
   のような入力が simplex 検査全体を素通りしていた。
+
+## review #265 R3（PR #265 Codex 第3波レビュー、採用済み）
+
+- **#8 (P1)**: `run_generate` が correspondence/candidate embed/genome
+  ledger を `out_dir` へ逐次直接書きしていたため、途中失敗で新旧混合の
+  出力ディレクトリが残り得た（ブラインド評価の汚染源）。
+  `<out_dir>.staging-<pid>` へ全成果物を完全構築してから
+  `convert_d3._swap_into_place`（read-only import・原子 rename + 失敗時
+  ロールバック）で公開する方式へ変更。途中失敗（`BaseException`）は
+  staging を破棄し、既存 `out_dir` を無傷のまま残す。
+- **#9 (P1)**: candidate 出力（`out_dir` 配下）が入力 embed
+  （3 アンカー・`--control-prior-embed`）を上書きし得る穴を閉じた。
+  実害例: 前回バッチの `candidate_A.emb` を次回バッチの
+  `--control-prior-embed` として同一 `--out-dir` で渡すケース。
+  `_reject_embed_input_collisions`（新規・`convert_d3.OutputCollisionError`
+  を再利用）が `out_dir`/`<out_dir>.old`/staging の 3 管理パスいずれについ
+  ても「入力 embed がそのディレクトリ配下に包含される」向きの検査を
+  staging 構築前に fail-closed で行う。
+- **#10 (P2)**: `--perturb-magnitude` の非有限値（NaN/Inf）・負値を候補構築
+  前に拒否（`run_generate` 早期チェック + 消費点 `apply_perturbation`
+  双方で検証、P1/P2 と同じ「消費点で検証する」設計を踏襲）。数値 CLI 引数
+  の有限性を全数棚卸しした結果: `--seed`/`--voice-id-start`/`--generation`/
+  `--perturb-seed` は `type=int` で `int("nan")`/`int("inf")` が
+  `ValueError`（argparse 段階で `SystemExit`）になるため元から安全、
+  `--weights` の各成分は既存 P2（`barycentric_interpolate`）で有限性検査
+  済み。`--perturb-magnitude`（唯一の追加 `type=float` 引数）だけが未検査
+  だったため、本項目で閉じた。
+
+## review #265 R4（PR #265 Codex 第4波レビュー、採用済み）
+
+- **#12 (P1)**: `run_generate` が 3 アンカー embed を `load_embed_vector`
+  （ベクトルのみ）で読み込み、入力ファイルの sha256 を捨てていたため、
+  台帳には norms/cosines と呼び出し側自己申告の `backbone_checkpoint`
+  文字列しか残らず、異なる checkpoint 由来の embed 混入・アンカー差し替え
+  が起きても台帳上は同一 provenance を主張してしまっていた。3 アンカー
+  （`_load_anchors_with_sha`）・prior control（`_build_control_candidate`）
+  の読み込みを `load_embed_vector_with_sha` に統一し、各 sha256 を記録する:
+  アンカーは非秘匿（三角形の頂点そのもの・S2 の `VG-S2-ANCHOR-*` と同型で
+  常に公開）のため genome 台帳の `anchors` セクションへ `embed_sha256` として
+  そのまま公開する。隠しコントロール（anchor-copy / prior-individual-copy）
+  の入力ファイル sha256 は、公開すると開封前にブラインド秘匿が破れる
+  （台帳は恒久 git 管理、正体が sha256 相関で逆算されうる — S2
+  VG-S2-008 と同じ非交差方針）ため、公開 genome エントリ
+  （`identity_latent_ref` は従来どおり null）には**出さず**、封印済み
+  `correspondence.json`（開封後にのみ意味を持つ）へ `source_embed_sha256`
+  として記録する。`test_genome_ledger_shape.py` の必須キー集合は変更せず
+  追加フィールドとして配置（既存 shape 検証に影響なし、実測で確認）。
 """
 from __future__ import annotations
 
@@ -121,11 +168,29 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import math
+import os
 import random
+import shutil
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+_THIS_DIR = Path(__file__).resolve().parent
+_S1_DATAPREP_DIR = _THIS_DIR.parent / "s1_dataprep"
+
+# --- sibling import: s1_dataprep/convert_d3.py（read-only import。原子公開
+# `_swap_into_place`・衝突検査 `_reject_output_collision`・
+# `OutputCollisionError` を再利用する — review #265 R3 P1（#8/#9）。
+# convert_d3.py は numpy/onnxruntime に依存しない軽量スクリプト
+# （argparse/csv/math/os/shutil/subprocess/sys/wave のみ）のため、
+# `gate_synth.py` と違いモジュールトップレベルで import して問題ない
+# （`assemble_run4.py`/`convert_user.py` と同じ sibling-import 前例を踏襲）。
+if str(_S1_DATAPREP_DIR) not in sys.path:
+    sys.path.insert(0, str(_S1_DATAPREP_DIR))
+import convert_d3  # noqa: E402
 
 # gate_synth.py 契約（load_speaker_embed_vector, gate_synth.py:675-688）:
 # raw float32、ヘッダなし、話者ベクトル1本。384 は S1/S2 run3 実測値
@@ -277,6 +342,16 @@ def orthogonal_perturbation_vector(
 
 
 def apply_perturbation(base: np.ndarray, direction_unit: np.ndarray, magnitude: float) -> np.ndarray:
+    """review #265 R3 P2 (#10): `magnitude` の有限性・非負性をここ（実際の
+    消費点）で検証する。CLI 層（`run_generate`）でも早期に同じ検査を行うが、
+    `apply_perturbation` は直接 API 呼び出しからも到達可能なため、P1/P2
+    （embed 形状・有限性 / 重心座標の非有限重み拒否）と同じ「消費点で検証
+    する」設計を踏襲し、CLI を経由しない呼び出しも fail-closed にする。
+    """
+    if not math.isfinite(magnitude):
+        raise ValueError(f"non-finite perturbation magnitude rejected: {magnitude}")
+    if magnitude < 0.0:
+        raise ValueError(f"negative perturbation magnitude rejected: {magnitude}")
     return (base.astype(np.float32) + direction_unit.astype(np.float32) * np.float32(magnitude))
 
 
@@ -297,6 +372,18 @@ class GenomeCandidate:
     note: str
     parent_ids: Tuple[str, ...]
     is_hidden_control: bool = False
+    # review #265 R4 #12: 隠しコントロール（アンカー由来 / 既判定個体由来）の
+    # **入力ファイルの** sha256（`load_embed_vector_with_sha` 実測値。生成した
+    # `vector` 自身の sha ではなく、読み込みに使った実ファイルの sha —
+    # 両者は理論上一致するはずだが、実ファイル由来の値を明示的に運ぶことで
+    # 「読み込み・検証を経た実ファイルそのもの」の provenance を保つ）。
+    # 公開 genome 台帳（`identity_latent_ref`）には**入れない**
+    # （ブラインド秘匿の維持 — #12 の докstring 参照）。封印済み
+    # correspondence.json（開封後のみ意味を持つ）にのみ記録する。
+    # interior/barycentric candidate（3 アンカーの線形結合）には単一の
+    # 「入力ファイル」という概念が無いため None のまま
+    # （3 アンカー自身の sha は `build_anchor_section` が公開ledgerへ記録する）。
+    source_embed_sha256: Optional[str] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -365,11 +452,16 @@ def make_interior_candidate(
 def make_hidden_control_from_anchor(
     anchors: Dict[str, np.ndarray], anchor_name: str, *,
     voice_id: str, seed: int, rights_class: str = RIGHTS_CLASS_TRIANGLE,
+    anchor_shas: Optional[Dict[str, str]] = None,
 ) -> GenomeCandidate:
     """アンカー埋め込みそのものを隠しコントロールとして候補に混入する
     （S2 VG-S2-008 `hidden_anchor_control` と同型。`identity_latent_ref` は
     台帳側で null のまま維持する — docstring 冒頭「ブラインド規律の機械化」
-    #3 参照）。"""
+    #3 参照）。`anchor_shas`（review #265 R4 #12。`_load_anchors_with_sha` の
+    戻り値）を渡すと、選ばれたアンカーの入力ファイル sha256 を
+    `source_embed_sha256` として候補へ記録する（公開台帳には出さない —
+    `GenomeCandidate.source_embed_sha256` docstring 参照。省略時は従来どおり
+    `None`）。"""
     if anchor_name not in ANCHOR_NAMES:
         raise ValueError(f"unknown anchor_name {anchor_name!r}; expected one of {ANCHOR_NAMES}")
     return GenomeCandidate(
@@ -383,17 +475,21 @@ def make_hidden_control_from_anchor(
         note="hidden control (anchor identity sealed in correspondence.json until unsealed)",
         parent_ids=(ANCHOR_VOICE_IDS[anchor_name],),
         is_hidden_control=True,
+        source_embed_sha256=anchor_shas.get(anchor_name) if anchor_shas is not None else None,
     )
 
 
 def make_hidden_control_from_prior(
     prior_vector: np.ndarray, *,
     voice_id: str, prior_voice_id: str, seed: int, rights_class: str = RIGHTS_CLASS_TRIANGLE,
+    prior_embed_sha256: Optional[str] = None,
 ) -> GenomeCandidate:
     """既判定個体（例: S2 の VG-S2-xxx）の spk_embed を隠しコントロールとして
     候補に混入する。`prior_voice_id` は正体そのもの（`parent_ids` に記録され
     るが、genome 台帳の `identity_latent_ref` は null のまま — アンカー版と
-    同じ非交差方針）。
+    同じ非交差方針）。`prior_embed_sha256`（review #265 R4 #12。
+    `load_embed_vector_with_sha` の実測値）を渡すと `source_embed_sha256` と
+    して候補へ記録する（公開台帳には出さない。省略時は従来どおり `None`）。
     """
     return GenomeCandidate(
         voice_id=voice_id,
@@ -406,6 +502,7 @@ def make_hidden_control_from_prior(
         note="hidden control (previously-judged individual identity sealed in correspondence.json until unsealed)",
         parent_ids=(prior_voice_id,),
         is_hidden_control=True,
+        source_embed_sha256=prior_embed_sha256,
     )
 
 
@@ -415,6 +512,13 @@ def make_hidden_control_from_prior(
 
 
 def build_correspondence_table(batch: BlindBatch) -> Dict[str, Dict[str, object]]:
+    """review #265 R4 #12: `source_embed_sha256`（隠しコントロールの入力
+    ファイル sha256。interior candidate は None）を含める。これは
+    correspondence.json（封印・開封まで非公開）にのみ載る値であり、公開
+    genome 台帳（`genome_entry`）には出さない — アンカー差し替え・
+    checkpoint 混入を**開封後に**監査できるようにしつつ、開封前のブラインド
+    秘匿は維持する。
+    """
     table: Dict[str, Dict[str, object]] = {}
     for label, cand in batch.label_to_candidate.items():
         table[label] = {
@@ -423,6 +527,7 @@ def build_correspondence_table(batch: BlindBatch) -> Dict[str, Dict[str, object]
             "weights": cand.weights,
             "is_hidden_control": cand.is_hidden_control,
             "note": cand.note,
+            "source_embed_sha256": cand.source_embed_sha256,
         }
     return table
 
@@ -499,14 +604,29 @@ def genome_entry(cand: GenomeCandidate, *, generation: int, backbone_checkpoint:
     }
 
 
-def build_anchor_section(anchors: Dict[str, np.ndarray]) -> Dict[str, object]:
+def build_anchor_section(
+    anchors: Dict[str, np.ndarray], anchor_shas: Optional[Dict[str, str]] = None,
+) -> Dict[str, object]:
+    """review #265 R4 #12: `anchor_shas`（`_load_anchors_with_sha` の戻り値。
+    各アンカー**入力ファイル**の sha256）を渡すと `embed_sha256` フィールド
+    として各アンカーエントリへ記録する。アンカーの正体は元々非秘匿（三角形
+    の頂点そのもの・S2 の `VG-S2-ANCHOR-*` と同型で常に公開）のため、
+    隠しコントロールと異なり公開台帳へそのまま記録してよい —
+    「異なる checkpoint 由来の embed 混入・アンカー差し替え」を台帳の
+    self-reported `backbone_checkpoint` 文字列だけでなく実ファイルの sha256
+    でも検出可能にする（省略時は従来どおり `embed_sha256` キー無し =
+    後方互換）。
+    """
     section: Dict[str, object] = {}
     for name in ANCHOR_NAMES:
         vector = anchors[name]
-        section[ANCHOR_VOICE_IDS[name]] = {
+        entry: Dict[str, object] = {
             "description": f"run 4 acoustic checkpoint の spk_embed (話者={name}, {vector.shape[0]}次元)。",
             "embed_l2_norm": float(np.linalg.norm(vector)),
         }
+        if anchor_shas is not None and name in anchor_shas:
+            entry["embed_sha256"] = anchor_shas[name]
+        section[ANCHOR_VOICE_IDS[name]] = entry
     pairwise: Dict[str, float] = {}
     for a, b in (("ritsu", "pjs"), ("ritsu", "user"), ("pjs", "user")):
         va, vb = anchors[a], anchors[b]
@@ -520,11 +640,13 @@ def build_anchor_section(anchors: Dict[str, np.ndarray]) -> Dict[str, object]:
 def build_genome_ledger(
     candidates: Sequence[GenomeCandidate], anchors: Dict[str, np.ndarray], *,
     batch: str, date: str, backbone_checkpoint: str, generation: int = 1,
+    anchor_shas: Optional[Dict[str, str]] = None,
 ) -> Dict[str, object]:
     """`results_s2/genome_ledger.json`（`voicegenesis-genome-ledger/0.1`）と
     同一 schema・同一必須キー集合で run 4 の genome 台帳を組み立てる
     （`tests/test_genome_ledger_shape.py` の検証関数をそのまま適用して形状
-    適合を確認する — `tests/test_forge_triangle.py` 参照）。
+    適合を確認する — `tests/test_forge_triangle.py` 参照）。`anchor_shas`
+    （review #265 R4 #12）は `build_anchor_section` へそのまま渡す。
     """
     return {
         "schema": GENOME_LEDGER_SCHEMA,
@@ -536,8 +658,65 @@ def build_genome_ledger(
             genome_entry(c, generation=generation, backbone_checkpoint=backbone_checkpoint)
             for c in candidates
         ],
-        "anchors": build_anchor_section(anchors),
+        "anchors": build_anchor_section(anchors, anchor_shas),
     }
+
+
+# ---------------------------------------------------------------------------
+# 原子的公開（convert_d3._swap_into_place と同型）+ 入出力衝突検査
+# ---------------------------------------------------------------------------
+
+
+def _reject_embed_input_collisions(
+    managed_dir: Path, protected_embed_paths: Sequence[Optional[Path]],
+) -> None:
+    """review #265 R3 P1 (#9): `managed_dir`（`out_dir`/`<out_dir>.old`/
+    `<out_dir>.staging-<pid>` のいずれか — 原子公開の過程で丸ごと置換・削除
+    され得るディレクトリ）が、入力 embed ファイル（3 アンカー embed・
+    `--control-prior-embed`）を配下に含んでいる場合、公開前に fail-closed
+    で拒否する。
+
+    具体例（設計判断・レビュー指摘の実害例）: 前回バッチの
+    `<out_dir>/candidate_A.emb` を次回バッチの `--control-prior-embed` として
+    **同一 `--out-dir`** で渡すと、`_swap_into_place` は `out_dir` 全体を
+    `.old` へ退避してから `staging_dir` を `out_dir` へ差し替える —
+    入力ファイル自体は直ちには破壊されないが（`.old` へ退避されるだけ）、
+    それに気づかず次回以降の実行で `.old` が `shutil.rmtree` される時点で
+    元の入力ファイルは失われる。「今回は壊れないから安全」という暗黙の
+    前提に依存させず、入口で拒否する。
+
+    `convert_d3._reject_output_collision` は `protected_roots`（ディレクトリ
+    同士の双方向包含判定）と `protected_files`（単一ファイルの完全一致判定
+    のみ）の 2 種を提供するが、「単一の入力ファイルが出力ディレクトリ
+    **配下に包含される**」向きの判定は持たないため、本関数で補う
+    （判定結果は `convert_d3.OutputCollisionError` に統一する — 呼び出し側
+    が単一の例外型で捕捉できるようにする）。
+    """
+    if not managed_dir.exists():
+        return
+    managed_dir_resolved = managed_dir.resolve()
+    for raw in protected_embed_paths:
+        if raw is None:
+            continue
+        p = Path(raw)
+        if not p.exists():
+            continue
+        resolved = p.resolve()
+        if resolved == managed_dir_resolved:
+            raise convert_d3.OutputCollisionError(
+                f"input embed {p} IS the managed output path {managed_dir}"
+                f"（fail-closed で拒否）"
+            )
+        try:
+            resolved.relative_to(managed_dir_resolved)
+        except ValueError:
+            continue
+        raise convert_d3.OutputCollisionError(
+            f"input embed {p} is inside {managed_dir}, which this run's atomic staging "
+            f"publish will replace/discard wholesale（fail-closed で拒否。前回バッチの "
+            f"candidate embed を同一 out-dir 配下の --control-prior-embed 等として渡す "
+            f"ケースを含む）"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -598,31 +777,45 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_anchors(args: argparse.Namespace) -> Dict[str, np.ndarray]:
-    return {
-        "ritsu": load_embed_vector(Path(args.ritsu_embed)),
-        "pjs": load_embed_vector(Path(args.pjs_embed)),
-        "user": load_embed_vector(Path(args.user_embed)),
-    }
+def _load_anchors_with_sha(args: argparse.Namespace) -> Tuple[Dict[str, np.ndarray], Dict[str, str]]:
+    """review #265 R4 #12: 3 アンカーの読み込みを `load_embed_vector_with_sha`
+    に統一し、ベクトルと**入力ファイルの** sha256 の両方を返す（従来の
+    `_load_anchors` はベクトルのみ返し sha を捨てていた — 異なる checkpoint
+    由来の embed 混入・アンカー差し替えが起きても台帳上は self-reported
+    `backbone_checkpoint` 文字列しか残らず検出できなかった）。
+    """
+    vectors: Dict[str, np.ndarray] = {}
+    shas: Dict[str, str] = {}
+    for name, raw_path in (
+        ("ritsu", args.ritsu_embed), ("pjs", args.pjs_embed), ("user", args.user_embed),
+    ):
+        vector, sha = load_embed_vector_with_sha(Path(raw_path))
+        vectors[name] = vector
+        shas[name] = sha
+    return vectors, shas
 
 
-def _build_control_candidate(args: argparse.Namespace, anchors: Dict[str, np.ndarray], voice_id: str) -> GenomeCandidate:
+def _build_control_candidate(
+    args: argparse.Namespace, anchors: Dict[str, np.ndarray], voice_id: str,
+    anchor_shas: Dict[str, str],
+) -> GenomeCandidate:
     if args.control_kind == "anchor":
         if args.control_anchor is None:
             raise SystemExit("error: --control-kind anchor requires --control-anchor")
         return make_hidden_control_from_anchor(
             anchors, args.control_anchor, voice_id=voice_id, seed=args.seed,
-            rights_class=args.rights_class,
+            rights_class=args.rights_class, anchor_shas=anchor_shas,
         )
     if args.control_kind == "prior":
         if args.control_prior_embed is None or args.control_prior_voice_id is None:
             raise SystemExit(
                 "error: --control-kind prior requires --control-prior-embed and --control-prior-voice-id"
             )
-        prior_vector = load_embed_vector(Path(args.control_prior_embed))
+        # review #265 R4 #12: prior 個体も load_embed_vector_with_sha に統一する。
+        prior_vector, prior_sha = load_embed_vector_with_sha(Path(args.control_prior_embed))
         return make_hidden_control_from_prior(
             prior_vector, voice_id=voice_id, prior_voice_id=args.control_prior_voice_id,
-            seed=args.seed, rights_class=args.rights_class,
+            seed=args.seed, rights_class=args.rights_class, prior_embed_sha256=prior_sha,
         )
     raise SystemExit(f"error: unknown --control-kind {args.control_kind!r}")
 
@@ -632,10 +825,25 @@ def run_generate(args: argparse.Namespace) -> Dict[str, object]:
         raise SystemExit(
             f"error: --weights must be given exactly 3 times (3 interior candidates), got {len(args.weights)}"
         )
+    # review #265 R3 P2 (#10): --perturb-magnitude の有限性・非負性を候補
+    # 構築前に検証する（数値 CLI 引数の有限性ファミリー — embed(P1)/重み(P2)
+    # の残り 1 軸。他の数値引数は type=int のため int() が "nan"/"inf" を
+    # ValueError で拒否し argparse 段階で既に閉じている — 「全数確認」の
+    # 棚卸し結果は本関数 docstring 末尾参照）。
+    if not math.isfinite(args.perturb_magnitude):
+        raise SystemExit(
+            f"error: --perturb-magnitude must be finite, got {args.perturb_magnitude}"
+        )
+    if args.perturb_magnitude < 0.0:
+        raise SystemExit(
+            f"error: --perturb-magnitude must be non-negative, got {args.perturb_magnitude}"
+        )
     if args.perturb_magnitude > 0.0 and args.perturb_seed is None:
         raise SystemExit("error: --perturb-magnitude>0 requires --perturb-seed")
 
-    anchors = _load_anchors(args)
+    # --- 1. 入力ロード + 候補構築（すべてインメモリ。出力ファイルは一切
+    #        触れない — P1/P2/#10 の検証はここで完結する） -----------------
+    anchors, anchor_shas = _load_anchors_with_sha(args)  # review #265 R4 #12
     dim = anchors["ritsu"].shape[0]
 
     perturbation = None
@@ -652,36 +860,73 @@ def run_generate(args: argparse.Namespace) -> Dict[str, object]:
         )
         for i, (w_r, w_p, w_u) in enumerate(args.weights)
     ]
-    control_candidate = _build_control_candidate(args, anchors, voice_ids[3])
+    control_candidate = _build_control_candidate(args, anchors, voice_ids[3], anchor_shas)
 
     candidates = interior_candidates + [control_candidate]
     batch = build_blind_batch(candidates, shuffle_seed=args.seed)
 
+    # --- 2. 衝突検査（staging 構築の前に fail-closed。#9） ------------------
     out_dir = Path(args.out_dir)
-    correspondence = build_correspondence_table(batch)
-    correspondence_path, sha_path, digest = seal_correspondence(correspondence, out_dir)
-    embed_paths = write_blind_candidate_embeds(batch, out_dir)
+    old_dir = out_dir.parent / f"{out_dir.name}.old"
+    staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
 
-    ledger = build_genome_ledger(
-        candidates, anchors, batch=args.batch_name, date=args.date,
-        backbone_checkpoint=args.backbone_checkpoint, generation=args.generation,
-    )
-    ledger_path = out_dir / "genome_ledger_run4.json"
-    ledger_path.write_text(
-        json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=False), encoding="utf-8",
-    )
+    protected_embeds: List[Optional[Path]] = [
+        Path(args.ritsu_embed), Path(args.pjs_embed), Path(args.user_embed),
+    ]
+    if args.control_kind == "prior" and args.control_prior_embed is not None:
+        protected_embeds.append(Path(args.control_prior_embed))
+
+    convert_d3._reject_output_collision([out_dir, old_dir, staging_dir], protected_roots=[])
+    for managed_dir in (out_dir, old_dir, staging_dir):
+        _reject_embed_input_collisions(managed_dir, protected_embeds)
+
+    # --- 3. staging ディレクトリへ全成果物を完全構築 → 原子スワップ
+    #        （#8。convert_d3.convert()/_swap_into_place と同型。途中失敗は
+    #        BaseException で捕捉して staging を破棄し、既存 out_dir は
+    #        無傷のまま残す — ブラインド評価を汚染する「新旧混合の出力
+    #        ディレクトリ」を作らない） -----------------------------------
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True)
+    try:
+        correspondence = build_correspondence_table(batch)
+        correspondence_path, sha_path, digest = seal_correspondence(correspondence, staging_dir)
+        embed_paths = write_blind_candidate_embeds(batch, staging_dir)
+
+        ledger = build_genome_ledger(
+            candidates, anchors, batch=args.batch_name, date=args.date,
+            backbone_checkpoint=args.backbone_checkpoint, generation=args.generation,
+            anchor_shas=anchor_shas,
+        )
+        ledger_path = staging_dir / "genome_ledger_run4.json"
+        ledger_path.write_text(
+            json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=False), encoding="utf-8",
+        )
+
+        convert_d3._swap_into_place(staging_dir, out_dir)
+    except BaseException:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+
+    # staging_dir は _swap_into_place 完了時点で out_dir へ rename 済み
+    # （もう存在しない）。返す成果物パスは公開後の最終位置（out_dir 配下）
+    # へ揃える。
+    final_correspondence_path = out_dir / correspondence_path.name
+    final_sha_path = out_dir / sha_path.name
+    final_embed_paths = {label: out_dir / p.name for label, p in embed_paths.items()}
+    final_ledger_path = out_dir / ledger_path.name
 
     print(f"| forge_triangle: batch={args.batch_name} candidates={len(candidates)} seed={args.seed}")
-    print(f"| correspondence sealed: {correspondence_path} (sha256={digest})")
+    print(f"| correspondence sealed: {final_correspondence_path} (sha256={digest})")
     for label in BLIND_LABELS:
-        print(f"| {embed_paths[label]}")
-    print(f"| genome ledger: {ledger_path}")
+        print(f"| {final_embed_paths[label]}")
+    print(f"| genome ledger: {final_ledger_path}")
 
     return {
-        "correspondence_path": correspondence_path,
-        "sha_path": sha_path,
-        "embed_paths": embed_paths,
-        "ledger_path": ledger_path,
+        "correspondence_path": final_correspondence_path,
+        "sha_path": final_sha_path,
+        "embed_paths": final_embed_paths,
+        "ledger_path": final_ledger_path,
         "ledger": ledger,
     }
 

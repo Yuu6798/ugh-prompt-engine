@@ -66,6 +66,62 @@
 （前述のとおり `gate_synth.py` は spk_id を要求しない）。CLI 実行時の
 情報表示・呼び出し側の record 記帳用の参照テーブルとして提供する
 （`s1_dataprep/assemble_run4.py` が固定した spk_id 割当と一致させる）。
+
+## embed ファイル直指定モード（`--speaker-embed-file`、review #265 R4 #11）
+
+`s1_gate/forge_triangle.py`（判定材料④: 3 アンカー重心座標補間バッチ鍛造）が
+書き出す `candidate_A.emb`〜`candidate_D.emb` は `ritsu`/`pjs`/`user` いずれの
+命名規約（`<exp_name>.<speaker>.emb`）にも従わないため、`--speaker` 経路
+（`gate_synth.find_speaker_embed` の `*.<speaker>.emb` glob）では合成できない
+——「GPU 実行者が判定材料④を ad-hoc Python なしで合成できない」というギャップ
+（review #265 R4 #11）。本モードはこれを埋める。
+
+```bash
+python voice_genesis/foundry/s1_gate/gate_synth_run4.py run \
+    --diffsinger-repo <DiffSinger clone> --ckpt-dir <run4 checkpoints/<exp_name>/> \
+    --step <STEP> --exp-name s1_run4_acoustic_v1 \
+    --canon-model-dir <NamineRitsu_DiffSinger 展開先> \
+    --vocoder-dir <nsf_hifigan.onnx 展開先> \
+    --out-dir <出力先> \
+    --speaker-embed-file <forge_triangle 出力先>/candidate_A.emb
+```
+
+`--speaker`（`*.<speaker>.emb` glob 経路）と `--speaker-embed-file`（ファイル
+直指定）は排他（`argparse` の mutually exclusive group で両方明示指定を拒否
+する）。`--speaker-embed-label`（省略時はファイル名の stem、例
+`candidate_A.emb` → `candidate_A`）は出力ファイル名 suffix・print・summary
+record 用のラベル文字列であり、`SPEAKER_TO_SPK_ID` の対象外（`candidate_*`
+は run4 3 話者のどれか 1 つではなく三角形内部の合成個体のため spk_id を
+持たない）。
+
+**一次ソース確認済みの配線経路**（`gate_synth.py` 側は無変更のまま）:
+`run_pipeline(...)`（`gate_synth.py:1055-1064`）は `speaker_name`/
+`speaker_embed_vector` を直接引数に取り、`synth_song(...)`
+（`gate_synth.py:1284-1295`、`_cmd_run_impl` から `speaker_name=args.speaker,
+speaker_embed_vector=speaker_embed_vector` で呼ばれる — `gate_synth.py:2061`）
+がそのまま透過する。しかし `_cmd_run_impl` は `speaker_embed_vector` を
+外部から直接注入できる引数を持たず、`args.speaker` から
+`find_speaker_embed()` → `load_speaker_embed_vector_with_sha()` という固定
+経路でしか値を得ない（`gate_synth.py:1874/1882-1885`。いずれも `_cmd_run_impl`
+内のモジュールグローバル参照 — private 関数のため外部から差し替え引数を
+渡す公開フックが無い）。本モードはこの 2 関数を **本プロセス内・
+`gate_synth.cmd_run(args)` 呼び出しの間だけ**（`try/finally` で必ず復元）
+差し替え、`find_speaker_embed` は常に `--speaker-embed-file` のパスを返し、
+`load_speaker_embed_vector_with_sha` は常に事前ロード済みの候補ベクトル
+（`forge_triangle.load_embed_vector_with_sha` で 384 有限 float32 検証済み）を
+返すようにする。これにより `_cmd_run_impl` の残り全体（export 判定・
+own/canon token 符号化・provenance sha 記録・原子的出力公開・rollback）は
+**無改変のまま**再利用され、`run_pipeline` は最終的に本物の
+`speaker_embed_vector` 実引数として候補 embed を受け取る。
+
+この手法はモジュール属性の一時差し替え（モンキーパッチ）であり
+`gate_synth.py` のファイル自体には一切触れない（要件 (b) 充足）。リスクは
+`_cmd_run_impl` が将来 `find_speaker_embed`/`load_speaker_embed_vector_with_sha`
+の参照方法を変える（別名 import・クラスメソッド化等）とこの差し替えが
+無音で効かなくなる点 — 本環境は onnxruntime 非導入のため
+`_cmd_run_impl` を実行するテストで検知できず（GPU 実測未実施の一部として
+正直明記する）、フェイク `gate_synth` モジュールでの委譲経路テストのみが
+本環境の担保。
 """
 from __future__ import annotations
 
@@ -75,6 +131,15 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 _THIS_DIR = Path(__file__).resolve().parent
+
+# --- sibling import: s1_gate/forge_triangle.py（read-only import。384 有限
+# float32 embed 検証 `load_embed_vector_with_sha` を再利用する — review #265
+# R4 #11 (a)）。forge_triangle.py は onnxruntime に依存しない（numpy +
+# s1_dataprep/convert_d3.py の sibling import のみ）ため、`gate_synth.py` と
+# 異なりモジュールトップレベルで import して問題ない。
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+import forge_triangle  # noqa: E402
 
 # run 4 の 3 話者 spk_id 割当（`s1_dataprep/assemble_run4.py` が固定した表と
 # 同一。ritsu/pjs は run 3 までの checkpoint 割当を変更できないため 0/1 固定、
@@ -150,25 +215,100 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--singer-dir", default=None,
         help="score.py/score_umi.py の所在（既定: gate_synth.py の既定と同一）",
     )
+    # review #265 R4 #11: `--speaker`/`--speaker-embed-file` の排他は
+    # `argparse.add_mutually_exclusive_group()` を使わない。CPython の
+    # mutex group 実装（`argparse.py` `take_action`）は
+    # `argument_values is not action.default` でしか「明示指定されたか」を
+    # 判定しないため、明示指定した値が **たまたまデフォルト値と同一
+    # （`--speaker ritsu`）** だと検出をすり抜ける（実測で確認済み・
+    # `test_gate_synth_run4.py` に固定）。`--speaker` の既定値を `None` にし、
+    # `main()` で両方非 None のときのみ明示的に拒否する（デフォルト適用は
+    # 両方省略された場合にのみ `main()` 側で行う）。
     p_run.add_argument(
-        "--speaker", choices=SPEAKER_CHOICES, default="ritsu",
+        "--speaker", choices=SPEAKER_CHOICES, default=None,
         help="reflow 多話者 acoustic 用の話者選択（run 4 拡張: ritsu/pjs/user）。"
              "acoustic ディレクトリの '*.<speaker>.emb' を読み込んで spk_embed を"
              "構築する処理は gate_synth.py 側の実装をそのまま使う（本ラッパーは"
-             "choices のみ拡張・spk_id は関与しない。docstring 参照）。",
+             "choices のみ拡張・spk_id は関与しない。docstring 参照）。"
+             "既定 'ritsu'（--speaker/--speaker-embed-file 両方省略時）。"
+             "--speaker-embed-file と排他。",
+    )
+    p_run.add_argument(
+        "--speaker-embed-file", default=None,
+        help="384-dim float32 spk_embed ファイルを直接指定する（判定材料④:"
+             " forge_triangle.py の candidate_A.emb〜D.emb 等）。--speaker と"
+             "排他。docstring「embed ファイル直指定モード」参照。",
+    )
+    p_run.add_argument(
+        "--speaker-embed-label", default=None,
+        help="--speaker-embed-file 使用時の出力ファイル名 suffix / 記録用ラベル"
+             "（省略時はファイル名の stem。例: candidate_A.emb → 'candidate_A'）。"
+             "--speaker-embed-file 未指定時は無視される。",
     )
     p_run.set_defaults(func="run")
     return parser
+
+
+def _run_with_speaker_embed_file(args: argparse.Namespace, gate_synth) -> None:
+    """`--speaker-embed-file` 経由の委譲（review #265 R4 #11）。docstring
+    冒頭「embed ファイル直指定モード」の設計をそのまま実装する: `gate_synth`
+    の `find_speaker_embed`/`load_speaker_embed_vector_with_sha` を
+    `gate_synth.cmd_run(args)` 呼び出しの間だけ差し替え、事前ロード・検証済み
+    の候補ベクトルを `run_pipeline` の `speaker_embed_vector` 実引数へ届ける。
+    差し替えは必ず `try/finally` で復元する（`gate_synth` はプロセス内で
+    共有されるモジュールオブジェクトのため、復元漏れは後続呼び出しを汚染
+    しうる）。
+    """
+    embed_path = Path(args.speaker_embed_file)
+    # 384 有限 float32 検証込み（P1 と同一 validator を read-only import で再利用）。
+    vector, digest = forge_triangle.load_embed_vector_with_sha(embed_path)
+
+    label = args.speaker_embed_label or embed_path.stem
+    print(
+        f"| gate_synth_run4: speaker-embed-file={embed_path} "
+        f"(label={label!r}, sha256={digest})"
+    )
+
+    run_args = argparse.Namespace(**vars(args))
+    run_args.speaker = label  # _cmd_run_impl 内では print/出力ファイル名 suffix/summary record にのみ使われる文字列
+
+    original_find_speaker_embed = gate_synth.find_speaker_embed
+    original_load_speaker_embed_vector_with_sha = gate_synth.load_speaker_embed_vector_with_sha
+
+    def _fixed_find_speaker_embed(acoustic_dir, speaker, export_basename=None):
+        return embed_path
+
+    def _fixed_load_speaker_embed_vector_with_sha(path):
+        return vector, digest
+
+    gate_synth.find_speaker_embed = _fixed_find_speaker_embed
+    gate_synth.load_speaker_embed_vector_with_sha = _fixed_load_speaker_embed_vector_with_sha
+    try:
+        gate_synth.cmd_run(run_args)
+    finally:
+        gate_synth.find_speaker_embed = original_find_speaker_embed
+        gate_synth.load_speaker_embed_vector_with_sha = original_load_speaker_embed_vector_with_sha
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    spk_id = resolve_spk_id(args.speaker)
-    print(f"| gate_synth_run4: speaker={args.speaker} (spk_id={spk_id}, run4 3-speaker table)")
+    if args.speaker is not None and args.speaker_embed_file is not None:
+        raise SystemExit(
+            "error: --speaker and --speaker-embed-file are mutually exclusive "
+            f"(got --speaker={args.speaker!r} and --speaker-embed-file={args.speaker_embed_file!r})"
+        )
 
     gate_synth = _import_gate_synth()
+
+    if args.speaker_embed_file is not None:
+        _run_with_speaker_embed_file(args, gate_synth)
+        return
+
+    args.speaker = args.speaker or "ritsu"  # gate_synth.py p_run と同一の既定値
+    spk_id = resolve_spk_id(args.speaker)
+    print(f"| gate_synth_run4: speaker={args.speaker} (spk_id={spk_id}, run4 3-speaker table)")
     gate_synth.cmd_run(args)
 
 
