@@ -311,6 +311,16 @@ def _cell_bytes(score: str, seed: int) -> Tuple[bytes, bytes]:
     return f"WAV:{score}:{seed}".encode(), f"TIMING:{score}:{seed}".encode()
 
 
+def _spec_sha256_for_seed(seed: int) -> str:
+    """The sha256 that `build_spec_variants(rdc.DEFAULT_PRESET, ...)` will
+    actually produce for `seed`, computed independently via the same
+    text-substitution primitive so fixtures stay tied to the real preset
+    without hardcoding a digest."""
+    base_text = rdc.DEFAULT_PRESET.read_text(encoding="utf-8")
+    variant_text = rdc.substitute_seed(base_text, seed)
+    return _sha(variant_text.encode("utf-8"))
+
+
 def _write_fixture_manifest_and_results(tmp_path: Path) -> Tuple[Path, Path]:
     tripwires = {}
     for score in rdc.TRIPWIRE_SCORES:
@@ -326,6 +336,7 @@ def _write_fixture_manifest_and_results(tmp_path: Path) -> Tuple[Path, Path]:
                 {
                     "score": score,
                     "seed": seed,
+                    "spec_sha256": _spec_sha256_for_seed(seed),
                     "wav_sha256": _sha(wav_bytes),
                     "timing_csv_sha256": _sha(timing_bytes),
                 }
@@ -634,3 +645,136 @@ def test_main_forces_fail_despite_stale_correct_artifact_from_previous_run(
     assert "render subprocess failed this run" in fail_line
     total_cells = len(SCORES) * len(SEEDS)
     assert f"TOTAL: {total_cells - 1}/{total_cells} PASS" in report
+
+
+# ---------------------------------------------------------------------------
+# 6. rerun 時のコーパス喪失防止 (staging + atomic swap)
+# ---------------------------------------------------------------------------
+
+
+def test_main_preserves_existing_render_dir_bytes_when_a_rerun_cell_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Core regression test: re-running against an already-valid `--out-dir`
+    (a prior successful run populated `render/` with a full, verified
+    corpus) where this run's render fails partway through — including a
+    tripwire-adjacent non-tripwire cell — must leave every byte of the
+    existing `render/` untouched and exit non-zero, instead of losing the
+    previously-valid pairs mid-update (all render output must go through
+    `.staging_render/` and only swap into `render/` on an all-40-cells PASS).
+    """
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    # --- first run: fully successful, populates a real render/ corpus. ---
+    calls1: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls1)
+    rc1 = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+    assert rc1 == 0
+    render_dir = out_dir / "render"
+    staging_dir = out_dir / ".staging_render"
+    assert render_dir.is_dir()
+    assert not staging_dir.exists()  # swapped away, nothing left behind
+    before = {p.name: p.read_bytes() for p in render_dir.iterdir()}
+    assert before  # sanity: the first run actually wrote something
+
+    # --- second run: one non-tripwire cell fails render this session. ---
+    fail_cell = ("d3_kana", 101)
+    calls2: List[Tuple[str, int]] = []
+    _install_fake_render_no_cleanup_on_failure(monkeypatch, calls2, fail_cell)
+    rc2 = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+    assert rc2 == 1
+
+    after = {p.name: p.read_bytes() for p in render_dir.iterdir()}
+    assert after == before, (
+        "render/ must remain byte-for-byte unchanged when any rerun cell "
+        "fails — the previously-valid corpus must never be lost mid-update"
+    )
+
+
+def test_verify_cell_fails_on_spec_sha256_mismatch_despite_matching_wav_timing(
+    tmp_path: Path,
+) -> None:
+    """A cell whose generated spec has drifted from the pinned
+    `d3_manifest_results.json` `spec_sha256` must FAIL verification even
+    when its wav/timing csv bytes happen to match the expected hashes
+    (an un-pinned input must not be able to produce a silent false PASS)."""
+    wav = tmp_path / "x.wav"
+    timing = tmp_path / "x.csv"
+    wav.write_bytes(b"WAVDATA")
+    timing.write_bytes(b"TIMINGDATA")
+    expected = {
+        "wav_sha256": _sha(b"WAVDATA"),
+        "timing_csv_sha256": _sha(b"TIMINGDATA"),
+        "spec_sha256": _sha(b"PINNED_SPEC_BYTES"),
+    }
+
+    v = rdc.verify_cell(
+        "sakura", 11, wav, timing, expected, spec_sha256=_sha(b"DRIFTED_SPEC_BYTES")
+    )
+
+    assert v.status == "FAIL"
+    assert any("spec_sha256 mismatch" in r for r in v.reasons)
+    # wav/timing agreement is independently confirmed (proves this isn't a
+    # side effect of an unrelated wav/timing failure)
+    assert not any("wav_sha256 mismatch" in r for r in v.reasons)
+    assert not any("timing_csv_sha256 mismatch" in r for r in v.reasons)
+
+
+def test_main_fails_cell_when_manifest_spec_sha256_has_drifted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end wiring check: if `d3_manifest_results.json` records a
+    `spec_sha256` that does not match what `build_spec_variants` actually
+    produces for that seed (e.g. the pinned preset bytes drifted), `main()`
+    must FAIL that cell even though the fake render still writes wav/timing
+    bytes that match the fixture's `wav_sha256`/`timing_csv_sha256`."""
+    manifest_path, results_path = _write_fixture_manifest_and_results(tmp_path)
+    results = json.loads(results_path.read_text(encoding="utf-8"))
+    drifted_cell = ("sakura", 101)
+    for cell in results["cells"]:
+        if (cell["score"], cell["seed"]) == drifted_cell:
+            cell["spec_sha256"] = "0" * 64
+    results_path.write_text(json.dumps(results), encoding="utf-8")
+
+    voicebank_root = tmp_path / "voicebank"
+    voicebank_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    calls: List[Tuple[str, int]] = []
+    _install_fake_render(monkeypatch, calls)
+
+    rc = rdc.main(
+        [
+            "--voicebank-root", str(voicebank_root),
+            "--out-dir", str(out_dir),
+            "--manifest", str(manifest_path),
+            "--results", str(results_path),
+        ]
+    )
+
+    assert rc == 1
+    report = (out_dir / "verify_report.txt").read_text(encoding="utf-8")
+    row_prefix = f'{drifted_cell[0]:<12}{drifted_cell[1]:>6}'
+    fail_line = next(line for line in report.splitlines() if line.startswith(row_prefix))
+    assert "FAIL" in fail_line
+    assert "spec_sha256 mismatch" in fail_line
+    # the staging -> render swap must not have happened (not all cells PASSed):
+    # this is a fresh out_dir, so render/ must never have been created at all.
+    assert not (out_dir / "render").exists()
