@@ -139,8 +139,11 @@ run 4 と切り離して判断）→ 互換なら全個体 A/B（電子音ノイ
 - [x] 17 本の台帳記帳完了（source_sha256・カード対応）+ 検査記録の恒久退避（Phase A・2026-08-17）
 - [x] D3 データセットが build_dataset ゲートを通過し実効分数が record に記録される（Phase B・`results_s3/d3_dataset_record.md`）
 - [x] convert_user.py が動き、User 音源の実効分数・音素被覆が record に記録される（Phase C・`results_s3/user_dataset_record.md`・15/17 採用）
-- [ ] run 4 が回り、ゲート判定材料 ①〜④ が User に届く
-- [ ] `results_s3/s3_record_<date>.md`（費用実測・耳判定逐語・D3/spk3 の効果帰属・Open Questions）
+- [x] run 4 が回り、ゲート判定材料 ①〜③ が User に届く（Phase D・2026-08-17。
+  **④ は run 5 へ延期 — User 承認 2026-08-17**。理由と判定 =
+  `results_s3/s3_record_2026-08-17.md` §3/§5）
+- [x] `results_s3/s3_record_2026-08-17.md`（費用実測・耳判定逐語・D3/spk3 の
+  効果帰属・Open Questions。費用の最終実測値のみ転記待ち）
 
 ## 7. Open Questions（User 決裁 / 実測待ち）
 
