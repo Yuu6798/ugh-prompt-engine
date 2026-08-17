@@ -7,18 +7,30 @@
 内容での再書き込みは冪等 no-op として許可する — bootstrap の「2回実行で
 バイト同一」という要求と両立させるため）。
 
-atomic write は `svp_rpe.utils.atomic_io`（インストール済みパッケージ、
-`src/svp_rpe/utils/atomic_io.py`）があれば流用し、import できない環境
-（万一 svp-rpe が editable install されていない場合の防御）では
-tmp書き込み→`os.replace` の同型フォールバックを使う（DESIGN_VG_E0.md §6
-「atomic write は svp_rpe.utils の atomic_io があれば流用、無ければ
-tmp→rename」）。
+publish は **排他 create**（Codex 指摘1, 2026-08-17 採用）: 同一ディレクトリ内
+の一時ファイルへ書き込み・fsync してから `os.link(tmp, dst)` で公開する。
+`os.link` は宛先が既に存在すれば `FileExistsError` を送出する（`tmp →
+os.replace` は宛先の有無に関わらず常に成功する「後勝ち」publish のため、
+同一 genome_id への2並行初回書込みが notes/anchors_provenance の異なる
+内容で競合した場合に、後着が黙って先着を踏みつぶし得た）。`FileExistsError`
+を捕捉したら既存ファイルの内容と比較し、バイト同一なら冪等 no-op、異なれば
+`LedgerConflictError`（append-only 規律の機械的補強）— 既存の意味論は
+変更しない。
+
+書込み直前には publish 予定のシリアライズ済みバイト列を
+`models.genome_from_dict()`（読み取り側の完全検証: 未知キー拒否・
+genome_id 再計算一致・lineage 座標整合・anchors_provenance sha256 構文）
+へ通す（Codex 指摘2, 2026-08-17 採用: 呼び出し側が `VoiceGenome` dataclass
+を直接構築したり `operator_params` の dict を変異させた場合、
+`build_genome()` の検証を経ずに壊れた genome が publish されうるため）。
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -26,29 +38,6 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 import models  # noqa: E402
-
-try:
-    from svp_rpe.utils.atomic_io import atomic_write_bytes
-except ImportError:  # pragma: no cover - 防御的フォールバック（本環境では未到達）
-    import os
-    import tempfile
-
-    def atomic_write_bytes(path: Path, data: bytes) -> None:
-        path = Path(path)
-        output_dir = path.parent
-        output_dir.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{path.name}.", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(data)
-            os.replace(tmp_name, path)
-        except BaseException:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
-
 
 _GENOME_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
@@ -74,29 +63,66 @@ class Ledger:
         return self.directory / f"{genome_id}.json"
 
     def write(self, genome: models.VoiceGenome) -> Path:
-        """genome を `<genome_id>.json` として atomic に書き出す。同一
+        """genome を `<genome_id>.json` として排他 create で公開する。同一
         genome_id に既に同一内容が書かれていれば冪等 no-op（bootstrap の
-        再実行でバイト同一を保つため）。異なる内容での上書きは
-        `LedgerConflictError`（append-only 規律の機械的補強）。
+        再実行でバイト同一を保つため）。異なる内容での既存ファイルとの
+        衝突は `LedgerConflictError`（append-only 規律の機械的補強）。
         """
         path = self.path_for(genome.genome_id)
         payload = (models.genome_to_json(genome) + "\n").encode("utf-8")
-        if path.exists():
-            existing = path.read_bytes()
-            if existing == payload:
-                return path
-            raise LedgerConflictError(
-                f"genome_id {genome.genome_id!r} already exists in the ledger with different "
-                "content (append-only ledger — changes must go through a PR, not an overwrite)"
-            )
+
+        # publish 直前の round-trip 検証（Codex 指摘2）。
+        try:
+            models.genome_from_dict(json.loads(payload))
+        except models.GenomeValidationError as exc:
+            raise LedgerError(
+                f"refusing to publish genome_id {genome.genome_id!r}: serialized payload failed "
+                f"round-trip validation via genome_from_dict() ({exc})"
+            ) from exc
+
         self.directory.mkdir(parents=True, exist_ok=True)
-        atomic_write_bytes(path, payload)
+
+        # 排他 create publish（Codex 指摘1）: tmp へ書いて fsync してから
+        # os.link(tmp, dst) で公開する。宛先が既に存在すれば os.link は
+        # FileExistsError を送出するため、2並行初回書込みは片方が必ず負けて
+        # 既存意味論（バイト同一=冪等OK / 差異=LedgerConflictError）で解決する。
+        fd, tmp_name = tempfile.mkstemp(dir=self.directory, prefix=f"{path.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(tmp_name, path)
+            except FileExistsError:
+                existing = path.read_bytes()
+                if existing == payload:
+                    return path
+                raise LedgerConflictError(
+                    f"genome_id {genome.genome_id!r} already exists in the ledger with different "
+                    "content (append-only ledger — changes must go through a PR, not an overwrite)"
+                ) from None
+        finally:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
         return path
 
     def read(self, genome_id: str) -> models.VoiceGenome:
         path = self.path_for(genome_id)
         data = json.loads(path.read_text(encoding="utf-8"))
-        return models.genome_from_dict(data)
+        genome = models.genome_from_dict(data)
+        if genome.genome_id != genome_id:
+            # ファイル名(要求ID)↔内容の自己申告ID の契約を強制する（Codex
+            # 指摘5）: ファイルがリネームされる／別 genome_id のファイルの
+            # 中身をコピーされる等で、内容自己申告の genome_id 再計算検証
+            # （genome_from_dict 内）だけでは検出できない不整合を拒否する。
+            raise LedgerError(
+                f"genome_id mismatch: requested {genome_id!r} but {path} declares "
+                f"{genome.genome_id!r} (filename/content binding violated — renamed or corrupted file)"
+            )
+        return genome
 
     def exists(self, genome_id: str) -> bool:
         return self.path_for(genome_id).exists()

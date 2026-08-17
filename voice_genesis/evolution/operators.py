@@ -11,6 +11,14 @@ novelty_jump の出力と系統間 vertex_pull の出力は座標によらず強
 台帳が行う」— 本実装ではオペレータ関数自身がその判定点を担う。台帳
 （ledger.py）はオペレータが確定させた lineage をそのまま記帳するのみで
 再判定はしない）。
+
+`anchors_provenance` の伝播（Codex 指摘8, 2026-08-17 採用）: 単親オペレータ
+（drift/reseed/edge_walk/novelty_jump）は親の `anchors_provenance` を子へ
+そのまま伝播する。交配（vertex_pull）は両親の `anchors_provenance` が
+（None 同士を含め）完全一致する場合のみ伝播し、不一致は fail-closed で
+`ValueError` — 別 checkpoint 由来の個体を交配すると再現性の来歴が壊れる
+ため。`genome_id` は `anchors_provenance` を除外した6フィールドから計算
+される設計（models.py 参照）のため、この伝播で子の `genome_id` は変わらない。
 """
 from __future__ import annotations
 
@@ -64,6 +72,7 @@ def drift(parent: models.VoiceGenome, *, rng_seed: int, step: float) -> models.V
         coords=coords, seed=parent.seed, lineage=lineage, generation=parent.generation + 1,
         parents=(parent.genome_id,), operator="drift",
         operator_params={"rng_seed": rng_seed, "step": step},
+        anchors_provenance=parent.anchors_provenance,
     )
 
 
@@ -97,11 +106,24 @@ def vertex_pull(
     cross_lineage = parent_a.lineage != parent_b.lineage
     lineage = "NOVELTY" if cross_lineage else simplex.assign_lineage(coords)
 
+    # anchors_provenance の伝播は両親が一致する場合のみ許す（None 同士も
+    # 一致とみなす）。不一致は fail-closed — 別 checkpoint 由来の個体を
+    # 交配すると子の provenance が「どちらの由来か」曖昧になり再現性の
+    # 来歴が壊れるため（Codex 指摘8）。
+    if parent_a.anchors_provenance != parent_b.anchors_provenance:
+        raise ValueError(
+            "vertex_pull requires both parents to share the same anchors_provenance, got "
+            f"parent_a={parent_a.anchors_provenance!r} parent_b={parent_b.anchors_provenance!r} "
+            "(crossbreeding genomes anchored to different checkpoints would break provenance "
+            "reproducibility)"
+        )
+
     generation = max(parent_a.generation, parent_b.generation) + 1
     return models.build_genome(
         coords=coords, seed=parent_a.seed, lineage=lineage, generation=generation,
         parents=(parent_a.genome_id, parent_b.genome_id), operator="vertex_pull",
         operator_params={"weight": weight, "vertex": vertex, "pull": pull},
+        anchors_provenance=parent_a.anchors_provenance,
     )
 
 
@@ -118,6 +140,7 @@ def reseed(parent: models.VoiceGenome, *, new_seed: int) -> models.VoiceGenome:
     return models.build_genome(
         coords=parent.coords, seed=new_seed, lineage=lineage, generation=parent.generation + 1,
         parents=(parent.genome_id,), operator="reseed", operator_params={"new_seed": new_seed},
+        anchors_provenance=parent.anchors_provenance,
     )
 
 
@@ -139,32 +162,67 @@ def edge_walk(
     magnitude = rng.uniform(0.0, step)
     delta = sign * magnitude
 
+    a = getattr(parent.coords, edge[0])
+    b = getattr(parent.coords, edge[1])
+    # 移動可能な質量でクランプ（Codex 指摘7）: 親が辺端点の近く（選択座標が
+    # step 未満）にある場合、サンプルした delta で edge[0]+delta または
+    # edge[1]-delta が負に落ちうる。normalize() はそれを0へクランプし残差を
+    # raw の最大成分（辺の外側の第3軸 — 本来 edge_walk が不変に保つべき固定
+    # 軸）へ吸収するため、固定軸が動いてしまう（実測: 親(0.01,0,0.99)・
+    # edge=(ritsu,pjs)・rng_seed=0・step=0.1 で user が 0.99→0.914205 に変化）。
+    # delta を [-a, b] へ決定論的にクランプしてから normalize() へ渡すことで、
+    # edge[0]/edge[1] が常に非負となり残差吸収が発生せず、第3軸はバイト
+    # 不変で保たれる（追加の乱数消費なし — rng ストリームには影響しない）。
+    delta = max(-a, min(b, delta))
+
     raw = {name: getattr(parent.coords, name) for name in models.ANCHOR_NAMES}
-    raw[edge[0]] += delta
-    raw[edge[1]] -= delta
+    raw[edge[0]] = a + delta
+    raw[edge[1]] = b - delta
     coords = simplex.normalize(raw)
     lineage = simplex.assign_lineage(coords)
     return models.build_genome(
         coords=coords, seed=parent.seed, lineage=lineage, generation=parent.generation + 1,
         parents=(parent.genome_id,), operator="edge_walk",
         operator_params={"rng_seed": rng_seed, "edge": [edge[0], edge[1]], "step": step},
+        anchors_provenance=parent.anchors_provenance,
     )
 
 
+_NOVELTY_JUMP_MAX_ATTEMPTS = 10000
+
+
 def novelty_jump(parent: models.VoiceGenome, *, rng_seed: int) -> models.VoiceGenome:
-    """一様サンプルした遠方座標へ跳躍。NOVELTY 隔離付与。親1個体。
-    `operator_params = {rng_seed}`。
+    """一様サンプルした遠方座標へ跳躍（親からの L1 距離 ≥
+    `models.NOVELTY_JUMP_MIN_L1` を決定論的棄却サンプリングで保証）。
+    NOVELTY 隔離付与。親1個体。`operator_params = {rng_seed}`。
 
     Δ² 上の一様分布サンプリングは Kraemer 法（2つの一様乱数を昇順ソートし
     区間幅を3成分の重心座標として使う）を用いる。coords は親の位置に依存
     しない独立サンプルだが、台帳・genome_id の来歴としては親1個体を記録する
     （設計書 §4 の表「入力: 親1」）。
+
+    一様サンプル単独では親の近傍に着地しうる（実測: centroid 親 +
+    rng_seed=2031 で L1=0.00512 の「novelty」が生成された — Codex 指摘6）。
+    同一 `random.Random(rng_seed)` ストリームから決定論的棄却サンプリング
+    （合格するまでストリームを消費し続ける — シードの取り直しはしない）を
+    行い、`models.NOVELTY_JUMP_MIN_L1` 以上の L1 距離を持つ座標が出るまで
+    再サンプルする。上限試行回数到達は `RuntimeError`（単体上で
+    L1 ≥ `NOVELTY_JUMP_MIN_L1` の到達可能領域は常に大きいため、実際には
+    到達しない設計上の防御的フォールバック）。
     """
     rng = random.Random(rng_seed)
-    x1, x2 = sorted((rng.random(), rng.random()))
-    raw = {"ritsu": x1, "pjs": x2 - x1, "user": 1.0 - x2}
-    coords = simplex.normalize(raw)
-    return models.build_genome(
-        coords=coords, seed=parent.seed, lineage="NOVELTY", generation=parent.generation + 1,
-        parents=(parent.genome_id,), operator="novelty_jump", operator_params={"rng_seed": rng_seed},
+    for _attempt in range(_NOVELTY_JUMP_MAX_ATTEMPTS):
+        x1, x2 = sorted((rng.random(), rng.random()))
+        raw = {"ritsu": x1, "pjs": x2 - x1, "user": 1.0 - x2}
+        coords = simplex.normalize(raw)
+        if simplex.l1_distance(coords, parent.coords) >= models.NOVELTY_JUMP_MIN_L1:
+            return models.build_genome(
+                coords=coords, seed=parent.seed, lineage="NOVELTY", generation=parent.generation + 1,
+                parents=(parent.genome_id,), operator="novelty_jump",
+                operator_params={"rng_seed": rng_seed},
+                anchors_provenance=parent.anchors_provenance,
+            )
+    raise RuntimeError(  # pragma: no cover - 設計上到達不能（防御的フォールバック）
+        f"novelty_jump exhausted {_NOVELTY_JUMP_MAX_ATTEMPTS} rejection-sampling attempts without "
+        f"reaching L1 >= {models.NOVELTY_JUMP_MIN_L1} from the parent (rng_seed={rng_seed})"
     )

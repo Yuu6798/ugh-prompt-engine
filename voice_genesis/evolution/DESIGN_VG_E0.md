@@ -98,12 +98,14 @@ notes: ""
 | vertex_pull | 親 2 | 2 親の重み付き平均 → 指定頂点方向へ pull 混合 | {weight, vertex, pull≤0.2} |
 | reseed | 親 1 | coords 不変・seed のみ変更（Performance Revision） | {new_seed} |
 | edge_walk | 親 1 | 指定 2 頂点を結ぶ辺方向のみに沿って移動（軸制限変異） | {rng_seed, edge, step≤0.1} |
-| novelty_jump | 親 1 | 一様サンプルした遠方座標へ跳躍。NOVELTY 隔離付与 | {rng_seed} |
+| novelty_jump | 親 1 | 一様サンプルした遠方座標へ跳躍（親からの L1 距離 ≥ 0.4 を決定論的棄却サンプリングで保証）。NOVELTY 隔離付与 | {rng_seed} |
 
 - 乱数は必ず `operator_params.rng_seed` から `random.Random(rng_seed)` で
   生成（グローバル乱数禁止・NumPy 非依存 = SIMD 契約の外に置く）
 - 上限 step / pull は凍結値。文書 §5.2「意味付き変異 — 少数の要素だけを
-  変え原因を特定可能に保つ」の実装
+  変え原因を特定可能に保つ」の実装。novelty_jump の最小跳躍距離
+  `NOVELTY_JUMP_MIN_L1 = 0.4` も凍結値である（指摘採用 2026-08-17: 一様
+  サンプル単独では近傍着地を排除できないため）
 - 交配の**系統内 / 系統間判定**はオペレータではなく台帳が行う: 親 2 個体の
   lineage が異なる vertex_pull は自動的に NOVELTY 隔離（文書 §5.2 の
   Novelty Branch 隔離を機械化）

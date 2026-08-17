@@ -183,6 +183,21 @@ def test_edge_walk_rejects_step_above_max(founders) -> None:
         operators.edge_walk(center, rng_seed=1, edge=("ritsu", "pjs"), step=models.EDGE_WALK_STEP_MAX + 0.01)
 
 
+def test_edge_walk_clamps_delta_to_available_mass_at_edge_endpoint(founders) -> None:
+    """Codex 指摘7実測: 親 (0.01, 0, 0.99)・edge=(ritsu,pjs)・rng_seed=0・
+    step=0.1 は、delta をクランプせず normalize() に渡すと pjs が負に落ち、
+    残差吸収が辺の外側の固定軸 user から質量を奪って 0.99→0.914205 に
+    変えてしまっていた。delta を移動可能な質量 [-a, b] へ決定論的に
+    クランプすることで、辺の外側の座標はバイト不変で保存される。"""
+    parent = models.build_genome(
+        coords=models.Coords(0.01, 0.0, 0.99), seed=0, lineage="L-U", generation=0,
+        parents=(), operator="founder", operator_params={},
+    )
+    child = operators.edge_walk(parent, rng_seed=0, edge=("ritsu", "pjs"), step=0.1)
+    assert child.coords.user == 0.990000
+    _assert_valid_simplex_member(child)
+
+
 # --- novelty_jump -------------------------------------------------------
 
 
@@ -212,3 +227,125 @@ def test_novelty_jump_different_seeds_differ(founders) -> None:
     a = operators.novelty_jump(center, rng_seed=1)
     b = operators.novelty_jump(center, rng_seed=2)
     assert a.genome_id != b.genome_id
+
+
+def test_novelty_jump_enforces_min_l1_on_reported_near_miss_seed(founders) -> None:
+    """Codex 指摘6実測: centroid 親 + rng_seed=2031 は棄却サンプリング導入前
+    は L1=0.00512（親の直近傍）の「novelty」を生成していた。凍結下限
+    `NOVELTY_JUMP_MIN_L1=0.4` を満たすこと、かつ同一 rng_seed で決定論的
+    （2回実行でバイト同一）であることを確認する。"""
+    *_ , center = founders
+    child = operators.novelty_jump(center, rng_seed=2031)
+    assert simplex.l1_distance(child.coords, center.coords) >= models.NOVELTY_JUMP_MIN_L1
+    child_again = operators.novelty_jump(center, rng_seed=2031)
+    assert models.genome_to_json(child) == models.genome_to_json(child_again)
+
+
+def test_novelty_jump_min_l1_holds_across_founders_and_seeds(founders) -> None:
+    for parent in founders:
+        for seed in range(30):
+            child = operators.novelty_jump(parent, rng_seed=seed)
+            assert simplex.l1_distance(child.coords, parent.coords) >= models.NOVELTY_JUMP_MIN_L1
+
+
+# --- anchors_provenance 伝播（Codex 指摘8） ---------------------------------
+
+_ANCHORS_A = {
+    "checkpoint_sha256": "a" * 64,
+    "embed_sha256": {n: "a" * 64 for n in models.ANCHOR_NAMES},
+}
+_ANCHORS_B = {
+    "checkpoint_sha256": "b" * 64,
+    "embed_sha256": {n: "b" * 64 for n in models.ANCHOR_NAMES},
+}
+
+
+def _with_anchors(genome: models.VoiceGenome, anchors) -> models.VoiceGenome:
+    """テスト用ヘルパー: genome を anchors_provenance だけ差し替えて再構築
+    する（genome_id は anchors_provenance を除外して計算されるため id は
+    不変のまま）。"""
+    return models.build_genome(
+        coords=genome.coords, seed=genome.seed, lineage=genome.lineage,
+        generation=genome.generation, parents=genome.parents, operator=genome.operator,
+        operator_params=genome.operator_params, anchors_provenance=anchors, notes=genome.notes,
+    )
+
+
+def test_drift_propagates_parent_anchors_provenance(founders) -> None:
+    *_ , center = founders
+    anchored_parent = _with_anchors(center, _ANCHORS_A)
+    child = operators.drift(anchored_parent, rng_seed=1, step=0.02)
+    assert child.anchors_provenance == _ANCHORS_A
+
+
+def test_drift_propagates_none_anchors_provenance(founders) -> None:
+    *_ , center = founders
+    assert center.anchors_provenance is None
+    child = operators.drift(center, rng_seed=1, step=0.02)
+    assert child.anchors_provenance is None
+
+
+def test_reseed_propagates_parent_anchors_provenance(founders) -> None:
+    *_ , center = founders
+    anchored_parent = _with_anchors(center, _ANCHORS_A)
+    child = operators.reseed(anchored_parent, new_seed=5)
+    assert child.anchors_provenance == _ANCHORS_A
+
+
+def test_edge_walk_propagates_parent_anchors_provenance(founders) -> None:
+    *_ , center = founders
+    anchored_parent = _with_anchors(center, _ANCHORS_A)
+    child = operators.edge_walk(anchored_parent, rng_seed=1, edge=("ritsu", "pjs"), step=0.02)
+    assert child.anchors_provenance == _ANCHORS_A
+
+
+def test_novelty_jump_propagates_parent_anchors_provenance(founders) -> None:
+    *_ , center = founders
+    anchored_parent = _with_anchors(center, _ANCHORS_A)
+    child = operators.novelty_jump(anchored_parent, rng_seed=1)
+    assert child.anchors_provenance == _ANCHORS_A
+
+
+def test_vertex_pull_propagates_when_parents_match(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    anchored_ritsu = _with_anchors(ritsu, _ANCHORS_A)
+    sibling = operators.drift(anchored_ritsu, rng_seed=9, step=0.01)  # 同 lineage L-R
+    assert sibling.lineage == anchored_ritsu.lineage == "L-R"
+    assert sibling.anchors_provenance == _ANCHORS_A
+    child = operators.vertex_pull(anchored_ritsu, sibling, weight=0.5, vertex="user", pull=0.1)
+    assert child.anchors_provenance == _ANCHORS_A
+
+
+def test_vertex_pull_propagates_when_both_parents_none(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    assert ritsu.anchors_provenance is None
+    assert pjs.anchors_provenance is None
+    child = operators.vertex_pull(ritsu, pjs, weight=0.5, vertex="user", pull=0.1)
+    assert child.anchors_provenance is None
+
+
+def test_vertex_pull_rejects_mismatched_parent_anchors_provenance(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    a = _with_anchors(ritsu, _ANCHORS_A)
+    b = _with_anchors(pjs, _ANCHORS_B)
+    with pytest.raises(ValueError, match="anchors_provenance"):
+        operators.vertex_pull(a, b, weight=0.5, vertex="user", pull=0.1)
+
+
+def test_vertex_pull_rejects_one_sided_anchors_provenance(founders) -> None:
+    ritsu, pjs, _usr, _center = founders
+    a = _with_anchors(ritsu, _ANCHORS_A)
+    with pytest.raises(ValueError, match="anchors_provenance"):
+        operators.vertex_pull(a, pjs, weight=0.5, vertex="user", pull=0.1)
+
+
+def test_anchors_provenance_propagation_does_not_change_genome_id(founders) -> None:
+    """genome_id は anchors_provenance を除外して計算される設計（models.py）
+    のため、伝播しても子の genome_id は不変。"""
+    *_ , center = founders
+    bare_child = operators.drift(center, rng_seed=1, step=0.02)
+    anchored_parent = _with_anchors(center, _ANCHORS_A)
+    anchored_child = operators.drift(anchored_parent, rng_seed=1, step=0.02)
+    assert bare_child.genome_id == anchored_child.genome_id
+    assert bare_child.anchors_provenance is None
+    assert anchored_child.anchors_provenance == _ANCHORS_A

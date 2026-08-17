@@ -142,8 +142,10 @@ run 4 と切り離して判断）→ 互換なら全個体 A/B（電子音ノイ
 - [x] run 4 が回り、ゲート判定材料 ①〜③ が User に届く（Phase D・2026-08-17。
   **④ は run 5 へ延期 — User 承認 2026-08-17**。理由と判定 =
   `results_s3/s3_record_2026-08-17.md` §3/§5）
-- [x] `results_s3/s3_record_2026-08-17.md`（費用実測・耳判定逐語・D3/spk3 の
-  効果帰属・Open Questions。費用の最終実測値のみ転記待ち）
+- [x] `results_s3/s3_record_2026-08-17.md` 起草（耳判定逐語・D3/spk3 の
+  効果帰属・Open Questions）
+- [ ] 費用の最終実測値（ダッシュボード値）の s3_record §7 への転記
+  （2026-08-17 時点で未受領のため未完了として分離計上）
 
 ## 7. Open Questions（User 決裁 / 実測待ち）
 

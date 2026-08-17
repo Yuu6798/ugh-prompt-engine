@@ -55,7 +55,7 @@ def test_genome_id_excludes_notes_and_anchors_provenance() -> None:
     b = models.build_genome(
         coords=models.Coords(1.0, 0.0, 0.0), seed=0, lineage="L-R", generation=0,
         parents=(), operator="founder", operator_params={}, notes="note B",
-        anchors_provenance={"checkpoint_sha256": "x" * 64, "embed_sha256": {n: "y" * 64 for n in models.ANCHOR_NAMES}},
+        anchors_provenance={"checkpoint_sha256": "a" * 64, "embed_sha256": {n: "b" * 64 for n in models.ANCHOR_NAMES}},
     )
     assert a.genome_id == b.genome_id
 
@@ -160,6 +160,74 @@ def test_genome_from_dict_rejects_coords_not_summing_to_one() -> None:
     d["coords"] = {"ritsu": 0.4, "pjs": 0.4, "user": 0.4}
     with pytest.raises(models.GenomeValidationError):
         models.genome_from_dict(d)
+
+
+def test_genome_from_dict_rejects_lineage_coords_mismatch() -> None:
+    """Codex 指摘3: `_base_genome()` の coords (0.5/0.2/0.3) はどの成分も
+    0.55 未満のため座標由来 lineage は L-C（元々 lineage="L-C" で一致
+    している）。これを手書きで L-R に書き換えると、ローダーが座標由来の
+    再計算値との不一致を fail-closed で拒否する。"""
+    d = models.genome_to_dict(_base_genome())
+    d["lineage"] = "L-R"
+    with pytest.raises(models.GenomeValidationError, match="does not match coords-derived lineage"):
+        models.genome_from_dict(d)
+
+
+def test_genome_from_dict_allows_novelty_regardless_of_coords() -> None:
+    """NOVELTY は座標によらず許容される（novelty_jump 由来の1世代限定隔離
+    — DESIGN_VG_E0.md §3.1）。lineage を NOVELTY にすると genome_id も
+    （lineage が6フィールドの1つのため）変わるので併せて再計算する。"""
+    d = models.genome_to_dict(_base_genome())
+    d["lineage"] = "NOVELTY"
+    d["genome_id"] = models.compute_genome_id(
+        coords=models.Coords(**d["coords"]), seed=d["seed"], lineage="NOVELTY",
+        generation=d["generation"], parents=d["parents"], operator=d["operator"],
+        operator_params=d["operator_params"],
+    )
+    genome = models.genome_from_dict(d)
+    assert genome.lineage == "NOVELTY"
+
+
+def test_genome_from_dict_rejects_non_hex_checkpoint_sha256() -> None:
+    """Codex 指摘4: checkpoint_sha256 は正確に64文字の小文字16進を要求する
+    （非空文字列であれば何でも通っていた従来動作を締める）。"""
+    d = models.genome_to_dict(_base_genome())
+    d["anchors_provenance"] = {
+        "checkpoint_sha256": "z" * 64,  # 'z' は16進ではない
+        "embed_sha256": {n: "a" * 64 for n in models.ANCHOR_NAMES},
+    }
+    with pytest.raises(models.GenomeValidationError, match="checkpoint_sha256"):
+        models.genome_from_dict(d)
+
+
+def test_genome_from_dict_rejects_uppercase_sha256() -> None:
+    d = models.genome_to_dict(_base_genome())
+    d["anchors_provenance"] = {
+        "checkpoint_sha256": "A" * 64,  # 大文字は拒否（小文字限定契約）
+        "embed_sha256": {n: "a" * 64 for n in models.ANCHOR_NAMES},
+    }
+    with pytest.raises(models.GenomeValidationError, match="checkpoint_sha256"):
+        models.genome_from_dict(d)
+
+
+def test_genome_from_dict_rejects_wrong_length_embed_sha256() -> None:
+    d = models.genome_to_dict(_base_genome())
+    d["anchors_provenance"] = {
+        "checkpoint_sha256": "a" * 64,
+        "embed_sha256": {n: "a" * 63 for n in models.ANCHOR_NAMES},  # 63 文字（桁不足）
+    }
+    with pytest.raises(models.GenomeValidationError, match="embed_sha256"):
+        models.genome_from_dict(d)
+
+
+def test_genome_from_dict_accepts_valid_sha256() -> None:
+    d = models.genome_to_dict(_base_genome())
+    d["anchors_provenance"] = {
+        "checkpoint_sha256": "0123456789abcdef" * 4,
+        "embed_sha256": {n: "fedcba9876543210" * 4 for n in models.ANCHOR_NAMES},
+    }
+    genome = models.genome_from_dict(d)
+    assert genome.anchors_provenance["checkpoint_sha256"] == "0123456789abcdef" * 4
 
 
 def test_genome_from_dict_rejects_negative_coord() -> None:

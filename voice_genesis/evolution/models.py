@@ -9,14 +9,14 @@ hack-record/0.1 + Archive 用の内部モデル）。
   デフォルト補完せず明示的に拒否する。
 - `genome_id` は宣言値をそのまま信頼せず、`compute_genome_id()` による
   再計算値と一致することを load 時に必ず検証する（改ざん・破損検出）。
-- lineage の「座標との整合性（NOVELTY 例外を除く）」は本モジュールでは
-  検証しない — その検証は `simplex.assign_lineage()`（系統帰属の機械決定の
-  一次ソース、§3.1）に依存するが、本モジュールは simplex.py に依存しない
-  設計にしている（simplex.py が Coords 型を使うために models.py に依存する
-  片方向の依存関係を保つため）。単一 JSON ファイルの自己完結検証という
-  意味では `proto1/registry.py` の「parents が実際に registry に存在するかは
-  上位層（GenomeRegistry）が検証し、genome.py 自体は検証しない」という
-  責務分離と同型。
+- lineage の「座標との整合性（NOVELTY 例外を除く）」は `genome_from_dict()`
+  が `simplex.assign_lineage()`（系統帰属の機械決定の一次ソース、§3.1）の
+  再計算値と照合して強制する（Codex 指摘3, 2026-08-17 採用: 従来は
+  build_genome() 経由の書込み側だけがこれを保証し、ローダーは宣言値を
+  そのまま信頼していた）。simplex.py が Coords 型のため models.py を
+  モジュールレベルで import する片方向依存を保ったまま、models.py 側は
+  genome_from_dict() 内のデファード import で import 時循環を回避する
+  （モジュールレベルでは依然として simplex.py に依存しない）。
 """
 from __future__ import annotations
 
@@ -24,8 +24,19 @@ import hashlib
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, FrozenSet, Mapping, Optional, Sequence, Tuple
+
+# sibling import（simplex.py 等が踏襲する流儀。§ 下記 genome_from_dict() の
+# デファード `import simplex` のために、models.py 自身の読み込み時点で
+# 確実に _THIS_DIR を sys.path へ通しておく — 呼び出し元が既に通している
+# ケースが大半だが、models.py を直接 `import models` する経路（テスト等）
+# でも成立させるため自前で保証する）。
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
 
 # ---------------------------------------------------------------------------
 # 共通定数
@@ -60,8 +71,16 @@ DRIFT_STEP_MAX = 0.08
 VERTEX_PULL_PULL_MAX = 0.2
 EDGE_WALK_STEP_MAX = 0.1
 
+# novelty_jump の最小跳躍距離（凍結値。DESIGN_VG_E0.md §4）。Δ² 上の一様
+# サンプル単独では親の近傍に着地しうる（実測: centroid 親 + rng_seed=2031 で
+# L1=0.00512 の「novelty」が生成された — Codex 指摘 6, 採用 2026-08-17）ため、
+# operators.novelty_jump() は同一 rng ストリームからの決定論的棄却サンプリング
+# でこの下限を保証する。
+NOVELTY_JUMP_MIN_L1 = 0.4
+
 _GENOME_ID_LEN = 16
 _GENOME_ID_RE = re.compile(rf"^[0-9a-f]{{{_GENOME_ID_LEN}}}$")
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 EVALUATOR_KINDS: Tuple[str, str, str] = ("training", "hidden", "human")
 VERDICTS: Tuple[str, str, str] = ("pass", "fail", "hold")
@@ -345,9 +364,15 @@ def _validate_anchors_provenance(data: Mapping[str, Any]) -> Dict[str, Any]:
     missing = allowed - set(data.keys())
     if missing:
         raise GenomeValidationError(f"anchors_provenance missing required key(s): {sorted(missing)}")
+    # sha256 は「正確に64文字の小文字16進」を構文要求する（Codex 指摘4:
+    # 従来は非空文字列であれば何でも通っていたため、hex でない文字列や桁数
+    # 違いの値が fail-closed の外側にすり抜けていた）。
     checkpoint_sha256 = data["checkpoint_sha256"]
-    if not isinstance(checkpoint_sha256, str) or not checkpoint_sha256:
-        raise GenomeValidationError(f"anchors_provenance.checkpoint_sha256 must be a non-empty string, got {checkpoint_sha256!r}")
+    if not isinstance(checkpoint_sha256, str) or not _SHA256_HEX_RE.match(checkpoint_sha256):
+        raise GenomeValidationError(
+            "anchors_provenance.checkpoint_sha256 must be exactly 64 lowercase hex characters, "
+            f"got {checkpoint_sha256!r}"
+        )
     embed_sha256 = data["embed_sha256"]
     if not isinstance(embed_sha256, Mapping):
         raise GenomeValidationError(f"anchors_provenance.embed_sha256 must be an object, got {type(embed_sha256).__name__}")
@@ -360,8 +385,11 @@ def _validate_anchors_provenance(data: Mapping[str, Any]) -> Dict[str, Any]:
     out_embed: Dict[str, str] = {}
     for name in ANCHOR_NAMES:
         v = embed_sha256[name]
-        if not isinstance(v, str) or not v:
-            raise GenomeValidationError(f"anchors_provenance.embed_sha256.{name} must be a non-empty string, got {v!r}")
+        if not isinstance(v, str) or not _SHA256_HEX_RE.match(v):
+            raise GenomeValidationError(
+                f"anchors_provenance.embed_sha256.{name} must be exactly 64 lowercase hex characters, "
+                f"got {v!r}"
+            )
         out_embed[name] = v
     return {"checkpoint_sha256": checkpoint_sha256, "embed_sha256": out_embed}
 
@@ -493,6 +521,25 @@ def genome_from_dict(data: Any) -> VoiceGenome:
     lineage = data["lineage"]
     if lineage not in VALID_LINEAGES:
         raise GenomeValidationError(f"lineage must be one of {VALID_LINEAGES}, got {lineage!r}")
+    if lineage != "NOVELTY":
+        # lineage は座標のみからの機械決定（NOVELTY 隔離を除く。
+        # DESIGN_VG_E0.md §3.1「機械決定・手書き上書き禁止」）。build_genome()
+        # 経由の書込み側（operators.py）は常に simplex.assign_lineage() で
+        # 正しい値を計算するが、genome_from_dict() は従来これを検証せず
+        # 宣言値をそのまま信頼していた（Codex 指摘3）。デファード import は
+        # models.py↔simplex.py の import 時循環を避けるため（simplex.py は
+        # models.Coords 型のため models をモジュールレベルで import する。
+        # ここでの遅延 import は呼び出し時点に両モジュールが完全にロード
+        # 済みであることを利用して循環を切る）。
+        import simplex  # noqa: E402
+
+        expected_lineage = simplex.assign_lineage(coords)
+        if lineage != expected_lineage:
+            raise GenomeValidationError(
+                f"lineage {lineage!r} does not match coords-derived lineage {expected_lineage!r} "
+                "(lineage is machine-derived from coords except for NOVELTY-origin genomes — "
+                "DESIGN_VG_E0.md §3.1; hand-edited lineage is rejected)"
+            )
 
     generation = data["generation"]
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
