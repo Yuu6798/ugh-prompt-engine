@@ -118,9 +118,12 @@ seed=701 のみ 1 サンプル・1 LSB のバイト差が出て pin 不一致に
   `<out-dir>/cache` を無条件に再利用し、donor 解析 pickle のキーは voicebank
   内容とオプションのみで**数値スタック版・SIMD レベルを含まない**。このため
   版揃え・SIMD 設定をやり直しても、旧環境で作られた cache の解析配列が
-  render に流用され、不一致が全セル完走後まで発覚しない。**環境（版 pin・
-  SIMD 設定のいずれか）を変更した後の再実行では、render 前に
-  `<out-dir>/cache` を削除するか新規 `--out-dir` を使うこと**。
+  render に流用され、不一致が全セル完走後まで発覚しない。**判定は cache の
+  来歴で行う: 「本ゲート 1–3 を通過済みの現在の環境で自分が生成した」と確証
+  できる cache 以外（他マシンからのコピー・本契約制定前の生成物・出所不明の
+  既存 `<out-dir>` を含む）はすべて render 前に削除するか、新規 `--out-dir`
+  を使う**。迷ったら削除する（cache の再生成は安価で、stale cache の代償は
+  render 完走 1 回分）。
 - ffmpeg 版 pin（`ffmpeg 6.1.1-3ubuntu5`、`recording_kit/intake_records/
   intake_record_2026-08-17.md` 参照）と同格の環境契約として扱う——render
   環境の再現に必須。
