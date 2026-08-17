@@ -1383,6 +1383,107 @@ def test_atomic_write_wav_and_timing_does_not_clobber_existing_files_on_failure(
     assert timing_out_path.read_bytes() == csv_before
 
 
+def test_atomic_write_wav_and_timing_rolls_back_both_when_second_replace_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P2 修正 (review #265 R3): 1 個目 (WAV) の `os.replace` が成功した直後に
+    2 個目 (timing CSV) が失敗すると、旧実装は WAV だけが新世代へ差し替わった
+    不整合状態を残していた。既存宛先のスナップショット（同一ディレクトリへの
+    退避 rename）を取ってから両方公開し、失敗時は両方とも巻き戻す実装により、
+    WAV/CSV 双方とも呼び出し前のバイト列へ完全に戻ることを確認する。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows_v1[0]["row_index"] = "0"
+    # 旧世代を公開しておく。
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    real_replace = rd.os.replace
+    call_count = {"n": 0}
+
+    def _replace_second_call_fails(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated failure on the second os.replace (timing csv)")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(rd.os, "replace", _replace_second_call_fails)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows_v2[0]["row_index"] = "1"
+    with pytest.raises(RuntimeError, match="second os.replace"):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows_v2, timing_out_path)
+
+    # 両方とも呼び出し前のバイト列へ完全に戻る（WAV だけが新しくなる非対称の
+    # 解消がこのテストの核心）。
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.read_bytes() == csv_before
+    # 退避 (.bak) / staging (.tmp) の痕跡が残らない。
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_rolls_back_both_when_first_replace_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """対称ケース: 1 個目 (WAV) の `os.replace` が失敗しても、2 個目 (CSV) は
+    未着手のまま・既存の旧世代は無傷で残る。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows_v1 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows_v1, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated failure on the first os.replace (wav)")
+
+    monkeypatch.setattr(rd.os, "replace", _boom)
+
+    rows_v2 = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    with pytest.raises(RuntimeError, match="first os.replace"):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows_v2, timing_out_path)
+
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.read_bytes() == csv_before
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_first_publish_rolls_back_to_absence_on_second_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """既存の宛先が無い（初回公開）状態で 2 個目が失敗した場合、WAV も
+    公開されず、双方とも「未公開」状態（呼び出し前と同じ = 存在しない）へ
+    戻る（`wav_had_previous=False` 経路の巻き戻し確認）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    assert not out_path.exists()
+    assert not timing_out_path.exists()
+
+    real_replace = rd.os.replace
+    call_count = {"n": 0}
+
+    def _replace_second_call_fails(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated failure on the second os.replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(rd.os, "replace", _replace_second_call_fails)
+
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    with pytest.raises(RuntimeError):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows, timing_out_path)
+
+    assert not out_path.exists()
+    assert not timing_out_path.exists()
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 def test_atomic_write_wav_and_timing_matches_atomic_write_wav_bytes(tmp_path: Path) -> None:
     """timing CSV 経由の公開でも、WAV バイト列そのものは単独経路
     (`_atomic_write_wav`) と完全一致する（合成結果に一切影響しないことの

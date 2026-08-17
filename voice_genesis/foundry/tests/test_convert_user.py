@@ -386,10 +386,11 @@ def test_convert_rejects_out_dir_equal_to_ledger_file_without_cli(tmp_path: Path
 @_ffmpeg_required
 def test_convert_allows_out_dir_sibling_of_ledger_file(tmp_path: Path) -> None:
     """`--out-dir` が `--ledger` ファイルと同じ親ディレクトリの兄弟パスに
-    あるだけなら誤検知しない（`protected_files` は完全一致のみを保護し、
-    `ledger.parent` 全体は保護しない設計。既存テスト fixture がまさにこの
-    形 — `ledger_path`/`out_dir` を共通の `tmp_path` 直下に置く — であり、
-    もし誤検知していれば全 convert() エンドツーエンドテストが壊れる）。"""
+    あるだけなら誤検知しない（`protected_files` は完全一致・祖先包含のみを
+    保護し、`ledger.parent` 全体（＝兄弟パス全部）は保護しない設計。既存
+    テスト fixture がまさにこの形 — `ledger_path`/`out_dir` を共通の
+    `tmp_path` 直下に置く — であり、もし誤検知していれば全 convert()
+    エンドツーエンドテストが壊れる）。"""
     ledger_path, normalized_dir = _write_ledger_and_normalized(
         tmp_path, {"UC-012": _t2_uc012_samples()}
     )
@@ -398,6 +399,63 @@ def test_convert_allows_out_dir_sibling_of_ledger_file(tmp_path: Path) -> None:
 
     summary = cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
     assert summary["included_cards"] == ["UC-012"]
+
+
+def test_convert_rejects_out_dir_that_is_ancestor_of_ledger_file_without_cli(tmp_path: Path) -> None:
+    """P1 修正 (review #265 R3): `--out-dir` が `--ledger` ファイルの**祖先
+    ディレクトリ**の場合も fail-closed で拒否する（完全一致だけでなく双方向
+    の包含判定）。`normalized_dir` とは無関係な別ディレクトリへ台帳を置き、
+    `protected_roots`（`normalized_dir`）側の既存検査ではなく
+    `protected_files`（`ledger_path`）側の新規検査で拒否されることを分離
+    して確認する。"""
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    samples = _t2_uc012_samples()
+    wav_path = normalized_dir / "UC-012_test.norm24k.wav"
+    _write_wav(wav_path, samples)
+    ledger_dir = tmp_path / "ledger_home"  # normalized_dir とは無関係な別ディレクトリ
+    ledger_dir.mkdir()
+    ledger_path = ledger_dir / "user_donor_ledger.json"
+    entries = [{
+        "card_id": "UC-012", "source_filename": "UC-012_test.mp3",
+        "source_sha256": "0" * 64, "source_size_bytes": 1,
+        "normalized_path": f"user_donor_normalized/{wav_path.name}",
+        "sha256": _sha256(wav_path), "received_at": "2026-08-17T00:00:00Z",
+        "duration_sec": round(len(samples) / SR, 3), "sample_rate": SR,
+        "rms_dbfs": -18.0, "peak_dbfs": -3.0, "alignment_status": "not_started",
+    }]
+    ledger_path.write_text(json.dumps(_make_ledger(entries), ensure_ascii=False), encoding="utf-8")
+    dsdict_path = _write_test_dsdict(tmp_path)
+
+    with pytest.raises(cu.convert_d3.OutputCollisionError):
+        cu.convert(normalized_dir, ledger_path, ledger_dir, dsdict_path)  # out_dir = ledger の親
+
+
+def test_convert_rejects_out_dir_equal_to_dsdict_path_without_cli(tmp_path: Path) -> None:
+    """P1 修正 (review #265 R3): `--out-dir` が `--dsdict` ファイル自身と
+    一致する場合も fail-closed で拒否する（旧実装は `dsdict_path` を保護
+    入力集合に含めておらず、この衝突を検出できなかった）。"""
+    ledger_path, normalized_dir = _write_ledger_and_normalized(
+        tmp_path, {"UC-012": _t2_uc012_samples()}
+    )
+    dsdict_path = _write_test_dsdict(tmp_path)
+
+    with pytest.raises(cu.convert_d3.OutputCollisionError):
+        cu.convert(normalized_dir, ledger_path, dsdict_path, dsdict_path)
+
+
+def test_convert_rejects_out_dir_that_is_ancestor_of_dsdict_path_without_cli(tmp_path: Path) -> None:
+    """`--out-dir` が `--dsdict` ファイルの祖先ディレクトリの場合も
+    fail-closed で拒否する。"""
+    ledger_path, normalized_dir = _write_ledger_and_normalized(
+        tmp_path, {"UC-012": _t2_uc012_samples()}
+    )
+    dsdict_dir = tmp_path / "dsdict_home"  # ledger/normalized とは無関係な別ディレクトリ
+    dsdict_dir.mkdir()
+    dsdict_path = _write_test_dsdict(dsdict_dir)
+
+    with pytest.raises(cu.convert_d3.OutputCollisionError):
+        cu.convert(normalized_dir, ledger_path, dsdict_dir, dsdict_path)  # out_dir = dsdict の親
 
 
 # ---------------------------------------------------------------------------

@@ -410,15 +410,28 @@ def _reject_output_collision(
     protected_files: Sequence[Optional[Path]] = (),
 ) -> None:
     """`convert_ritsu.py` `_reject_output_collision` と同一ロジック（双方向
-    包含判定 + 相互衝突判定）に加え、`protected_files`（P1 修正・review #265）
-    で単一ファイル入力の**完全一致のみ**を検査する（`adapter/render.py`
+    包含判定 + 相互衝突判定）に加え、`protected_files`（P1 修正・review #265、
+    R3 で双方向化）で単一ファイル入力を保護する（`adapter/render.py`
     `_reject_output_collision` の `protected_files`/`protected_roots` 分離と
-    同型）。`protected_roots` はディレクトリ全体（配下への包含・逆包含も
-    検査）を保護するのに対し、`protected_files` は単一ファイル（例:
-    `--ledger` の JSON ファイル自身）だけを保護し、そのファイルと同じ
-    ディレクトリの兄弟パスを `--out-dir` に使う一般的な運用（例: 台帳と
-    出力先が同じ scratch ディレクトリ配下）を誤検知しない。`None`/未存在の
-    要素はスキップする。
+    同型だが、本関数は `out_paths` が `_swap_into_place` で**ディレクトリごと
+    rename/rmtree される**ことを踏まえ `protected_roots` と同じ双方向包含判定
+    を `protected_files` にも適用する）。`protected_roots` はディレクトリ全体
+    （配下への包含・逆包含も検査）を保護するのに対し、`protected_files` は
+    単一ファイル（例: `--ledger`/`--dsdict` の JSON/YAML ファイル自身）を
+    保護する:
+
+    - 完全一致（`out_path == protected_file`）
+    - 保護ファイルが `out_path` 配下（`.old`/`.staging-<pid>` 派生含む）に
+      ある場合（review #265 R3 P1 指摘: `out_dir` が保護ファイルの**祖先
+      ディレクトリ**だと、`_swap_into_place` が `out_dir` を `.old` へ
+      rename する際に保護ファイルごと退避・次回実行時の `rmtree` で消失
+      し得た。旧実装は完全一致のみ検査しており、この包含ケースを見逃して
+      いた）
+
+    のいずれかで fail-closed する。`out_path` が保護ファイルの兄弟（同じ
+    親ディレクトリの別パス）であるだけなら誤検知しない（台帳/辞書ファイルと
+    出力先が同じ scratch ディレクトリ配下にある一般的な運用を通す）。
+    `None`/未存在の要素はスキップする。
     """
     resolved_outs = [(p, p.resolve()) for p in out_paths]
 
@@ -441,6 +454,15 @@ def _reject_output_collision(
                 raise OutputCollisionError(
                     f"output path {p} collides with protected input file {f}（fail-closed で拒否）"
                 )
+            try:
+                f_resolved.relative_to(r)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"protected input file {f} is inside output path {p}"
+                f"（fail-closed で拒否。出力側の公開処理（rename/rmtree）が"
+                f"保護ファイルを巻き込む）"
+            )
 
     for root in protected_roots:
         if not root.exists():

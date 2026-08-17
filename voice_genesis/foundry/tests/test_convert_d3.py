@@ -237,6 +237,54 @@ def test_convert_rejects_out_dir_inside_render_dir_without_cli(tmp_path: Path) -
         convert_d3.convert(render_dir, out_dir)
 
 
+# ---------------------------------------------------------------------------
+# 2.6 P1 修正 (review #265 R3): _reject_output_collision の protected_files は
+# 完全一致だけでなく双方向の包含判定を行う（out_path が保護ファイルの祖先
+# ディレクトリの場合も fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def test_reject_output_collision_protected_file_exact_match_raises(tmp_path: Path) -> None:
+    protected_file = tmp_path / "ledger.json"
+    protected_file.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(convert_d3.OutputCollisionError):
+        convert_d3._reject_output_collision(
+            [protected_file], protected_roots=[], protected_files=[protected_file]
+        )
+
+
+def test_reject_output_collision_out_path_is_ancestor_of_protected_file_raises(tmp_path: Path) -> None:
+    """`out_path` が保護ファイルの祖先ディレクトリの場合、完全一致でなくても
+    fail-closed で拒否する（R3 P1 修正: `_swap_into_place` が `out_dir` を
+    `.old` へ rename する際に保護ファイルごと退避・次回実行時の `rmtree` で
+    消失し得るため。旧実装（完全一致のみ）はこのケースを見逃していた）。"""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    protected_file = out_dir / "ledger.json"  # out_dir の**内側**にある保護ファイル
+    protected_file.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(convert_d3.OutputCollisionError):
+        convert_d3._reject_output_collision(
+            [out_dir], protected_roots=[], protected_files=[protected_file]
+        )
+
+
+def test_reject_output_collision_out_path_is_sibling_of_protected_file_does_not_raise(
+    tmp_path: Path,
+) -> None:
+    """`out_path` が保護ファイルと同じ親ディレクトリの**兄弟**パスであるだけ
+    なら誤検知しない（一般的な運用: 台帳/辞書と出力先を同じ scratch
+    ディレクトリ直下に置く）。"""
+    protected_file = tmp_path / "ledger.json"
+    protected_file.write_text("{}", encoding="utf-8")
+    out_dir = tmp_path / "out_sibling"
+
+    convert_d3._reject_output_collision(
+        [out_dir], protected_roots=[], protected_files=[protected_file]
+    )  # no raise
+
+
 def test_convert_empty_render_dir_fails_closed_without_publishing(tmp_path: Path) -> None:
     """`discover_pairs()` が 0 件（wav/csv が 1 本も無い render_dir）の場合、
     staging 構築・swap の前に fail-closed で拒否する（空データセットで既存

@@ -299,10 +299,19 @@ def _atomic_write_wav_and_timing(
     両方の staging が成功して初めて順に `os.replace` する。戻り値は WAV の
     `output_sha256`（`_atomic_write_wav` と同じ契約）。
 
-    2 つの `os.replace` の間には理論上の窓が残る（多ファイルの真の単一
-    トランザクションは POSIX では組めない）が、従来問題になっていた
-    「CSV 側の書き込み失敗（ディスク満杯・権限等）で非対称が生じる」経路は
-    両方の staging 完了後にしか置換を始めないことで解消する。
+    P2 修正 (review #265 R3): 2 つの `os.replace` の間の窓で 1 個目
+    （WAV）が成功し 2 個目（timing CSV）が失敗すると、旧実装は WAV だけが
+    新世代へ差し替わった不整合な公開状態を残していた（`--out`/`--timing-out`
+    は「同じ合成結果を指す対」であるべきで、片方だけ新しいのは
+    `_build_timing_rows` docstring の「タイミング export は成果物 WAV の
+    合成結果を読むだけ」という契約と矛盾する）。ここでは公開の直前に
+    既存の `out_path`/`timing_out_path`（あれば）を**同一ディレクトリへ
+    退避 rename**（バイトコピーしない — WAV は大きくなり得るため）してから
+    両方を `os.replace` し、どちらか一方でも失敗したら新たに公開された側を
+    削除し、退避しておいた旧世代を両方とも復元する（`recording_kit/intake.py`
+    `run()` の公開フェーズ巻き戻し・`gate_synth.py` `_swap_step_dir_into_place`
+    の `.old` 退避と同型パターン。復元判定はファイルシステム状態
+    （退避有無・新パスの実在）で行い、Python 変数の記帳には頼らない）。
     """
     out_path = Path(out_path)
     timing_out_path = Path(timing_out_path)
@@ -315,16 +324,55 @@ def _atomic_write_wav_and_timing(
         except OSError:
             pass
         raise
+
+    # 公開直前に既存宛先（あれば）を同一ディレクトリの退避名へ rename する
+    # （バイトコピーしない）。`os.getpid()` サフィックスは同一プロセス内での
+    # 再入・並行呼び出しでの退避名衝突を避けるための実務上の目安であり、
+    # 本関数自体の並行実行に対する排他は呼び出し側の責務（他の swap 系
+    # ヘルパーと同様）。
+    wav_backup = out_path.parent / f"{out_path.name}.prev-{os.getpid()}.bak"
+    csv_backup = timing_out_path.parent / f"{timing_out_path.name}.prev-{os.getpid()}.bak"
+    for stale in (wav_backup, csv_backup):
+        if stale.exists():
+            os.unlink(stale)
+    wav_had_previous = out_path.exists()
+    csv_had_previous = timing_out_path.exists()
+    if wav_had_previous:
+        os.rename(out_path, wav_backup)
+    if csv_had_previous:
+        os.rename(timing_out_path, csv_backup)
+
     try:
         os.replace(wav_tmp, out_path)
         os.replace(csv_tmp, timing_out_path)
     except BaseException:
+        # 巻き戻し: 各宛先について「自分がこの呼び出しで新世代へ差し替えた
+        # か」を宛先の実在（`new_path.exists()`）で判定する（`os.replace` は
+        # 原子的なので、失敗した置換対象は「未着手のまま」——既に退避済みで
+        # 存在しない——のいずれかであり、部分バイト列が残ることはない）。
+        for new_path, backup_path, had_previous in (
+            (out_path, wav_backup, wav_had_previous),
+            (timing_out_path, csv_backup, csv_had_previous),
+        ):
+            if new_path.exists():
+                os.unlink(new_path)
+            if had_previous:
+                os.rename(backup_path, new_path)
         for tmp in (wav_tmp, csv_tmp):
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        raise
+
+    # 公開成功: 退避しておいた旧世代はもう不要。
+    for backup, had_previous in ((wav_backup, wav_had_previous), (csv_backup, csv_had_previous)):
+        if had_previous:
             try:
-                os.unlink(tmp)
+                os.unlink(backup)
             except OSError:
                 pass
-        raise
     return output_sha256
 
 

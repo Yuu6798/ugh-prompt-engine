@@ -833,24 +833,29 @@ def convert(
     P1 修正 (review #265): 衝突検査 (`convert_d3._reject_output_collision`)
     はこの公開関数自身が行う（旧実装は CLI `main()` のみが preflight として
     呼んでおり、`convert()` を非 CLI 経路から呼ぶと `--out-dir` が
-    `normalized_dir`/`--ledger` と衝突していても無検査で通過し得た）。
-    `normalized_dir`（音源本体のディレクトリ）は `protected_roots`（配下
-    全体を保護）、`ledger_path`（単一の JSON ファイル）は `protected_files`
-    （完全一致のみ保護）で検査する — 台帳ファイルの**兄弟**パスを
+    `normalized_dir`/`--ledger`/`--dsdict` と衝突していても無検査で通過し
+    得た）。`normalized_dir`（音源本体のディレクトリ）は `protected_roots`
+    （配下全体を保護）、`ledger_path`/`dsdict_path`（単一ファイル）は
+    `protected_files` で検査する — 台帳/辞書ファイルの**兄弟**パスを
     `--out-dir` に使う一般的な運用（同じ scratch ディレクトリ配下に台帳と
-    出力先を置く）を誤検知しないため（旧 CLI 実装は `ledger.parent` 全体を
-    `protected_roots` として扱っており、この一般的な運用を誤って拒否し
-    得た。`_reject_output_collision` docstring 参照）。
+    出力先を置く）は誤検知しないが、`--out-dir` がそれらファイルの**祖先
+    ディレクトリ**の場合は fail-closed で拒否する（R3 修正: `_swap_into_place`
+    が `out_dir` を `.old` へ rename する際に保護ファイルごと退避・次回実行
+    時の `rmtree` で消失し得るため。`_reject_output_collision` docstring
+    参照。旧 R2 実装は `protected_files` が完全一致のみで、この包含ケースを
+    見逃していた。加えて R2 実装は `dsdict_path` 自体を保護入力集合に含めて
+    いなかった）。
     """
     normalized_dir = Path(normalized_dir)
     ledger_path = Path(ledger_path)
+    dsdict_path = Path(dsdict_path)
     out_dir = Path(out_dir)
     old_dir = out_dir.parent / f"{out_dir.name}.old"
     staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
     convert_d3._reject_output_collision(
         [out_dir, old_dir, staging_dir],
         protected_roots=[normalized_dir],
-        protected_files=[ledger_path],
+        protected_files=[ledger_path, dsdict_path],
     )
 
     entries = load_ledger(Path(ledger_path))
