@@ -121,6 +121,23 @@ seed=701 のみ 1 サンプル・1 LSB のバイト差が出て pin 不一致に
   に列挙される dispatch グループ名（`X86_V3`/`X86_V4` 等）のみ。設定が
   効いたかは必ず上記ゲートの `show_config` 実測で確認する（「設定した
   つもり」を信用しない）。
+- **数値スタックの版 pin**: 本 SIMD 契約（`NPY_DISABLE_CPU_FEATURES` の語彙・
+  `show_config('dicts')` の API・dispatch グループ名）は **numpy 2.4.6 の挙動**を
+  前提とする。リポジトリの依存宣言（`numpy>=1.24`）は本契約より緩いため、
+  D3 render 環境では以下の実測版を pin とし、ゲートで照合してから進む
+  （render 経路が実ロードする 4 つのみ。他ライブラリの版差は不問）:
+
+  ```bash
+  python -c "import numpy, scipy, pyworld, soundfile; \
+    assert numpy.__version__ == '2.4.6', numpy.__version__; \
+    assert scipy.__version__ == '1.17.1', scipy.__version__; \
+    assert pyworld.__version__ == '0.3.5', pyworld.__version__; \
+    assert soundfile.__version__ == '0.14.0', soundfile.__version__; \
+    print('numeric stack pin OK')"
+  ```
+
+  版が違う場合は `pip install numpy==2.4.6 scipy==1.17.1 pyworld==0.3.5
+  soundfile==0.14.0` で合わせてから SIMD ゲートに進む。
 - ffmpeg 版 pin（`ffmpeg 6.1.1-3ubuntu5`、`recording_kit/intake_records/
   intake_record_2026-08-17.md` 参照）と同格の環境契約として扱う——render
   環境の再現に必須。
