@@ -1129,6 +1129,96 @@ def test_apply_perturbation_rejects_negative_magnitude_at_the_point_of_use() -> 
         ft.apply_perturbation(base, direction, -1.0)
 
 
+# --- review #265 R6 #15: float32 表現可能性 + 出力境界検証 ---------------------
+
+
+def test_run_generate_rejects_perturb_magnitude_that_is_finite_float64_but_overflows_float32(
+    tmp_path: Path, fake_anchor_paths: Dict[str, Path]
+) -> None:
+    """`math.isfinite(1e300)` は True（float64 として有限）だが、
+    `np.float32(1e300)` は inf 化する（spk_embed は float32）。入口の早期
+    チェックがこれを拒否すること（主たる防御は出力境界検証 — 下記
+    `test_write_blind_candidate_embeds_*` 参照）。"""
+    assert math.isfinite(1e300)  # 前提の再確認（float64 としては有限）
+    assert not np.isfinite(np.float32(1e300))  # float32 では inf 化する
+
+    args = _make_generate_args(
+        tmp_path, fake_anchor_paths, perturb_magnitude=1e300, perturb_seed=1,
+    )
+    with pytest.raises(SystemExit, match="float32"):
+        ft.run_generate(args)
+
+
+def test_write_blind_candidate_embeds_rejects_non_finite_candidate_vector_at_output_boundary(
+    tmp_path: Path,
+) -> None:
+    """review #265 R6 #15 の核心テスト:「出力境界検証により非有限 .emb の
+    公開が構造的に不可能になった」ことの直接証明。入口検証を全て素通りした
+    と仮定して（`GenomeCandidate` を直接構築し non-finite ベクトルを注入 —
+    実際の CLI 経路が生成しうるかどうかに依存しない）、`write_blind_
+    candidate_embeds` 自身が publish 直前に拒否することを確認する。
+    """
+    good_vector = np.zeros(ft.EMBED_DIM, dtype=np.float32)
+    bad_vector = np.zeros(ft.EMBED_DIM, dtype=np.float32)
+    bad_vector[0] = np.inf  # 何らかの経路（将来の新しい摂動方式・演算バグ等）で紛れ込んだと仮定
+
+    def _cand(voice_id: str, vector: np.ndarray) -> ft.GenomeCandidate:
+        return ft.GenomeCandidate(
+            voice_id=voice_id, vector=vector, method="test", weights=None,
+            mutation_ops=["TEST"], seed=1, rights_class="TEST", note="",
+            parent_ids=("VG-S3-ANCHOR-RITSU",),
+        )
+
+    candidates = [
+        _cand("VG-S3-901", good_vector), _cand("VG-S3-902", good_vector),
+        _cand("VG-S3-903", bad_vector), _cand("VG-S3-904", good_vector),
+    ]
+    batch = ft.build_blind_batch(candidates, shuffle_seed=1)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        ft.write_blind_candidate_embeds(batch, tmp_path)
+
+
+def test_write_blind_candidate_embeds_rejects_wrong_shape_candidate_vector_at_output_boundary(
+    tmp_path: Path,
+) -> None:
+    """shape 崩れ（384 以外の次元）も同じ出力境界検証で拒否されること。"""
+    wrong_shape_vector = np.zeros(ft.EMBED_DIM - 1, dtype=np.float32)
+
+    def _cand(voice_id: str, vector: np.ndarray) -> ft.GenomeCandidate:
+        return ft.GenomeCandidate(
+            voice_id=voice_id, vector=vector, method="test", weights=None,
+            mutation_ops=["TEST"], seed=1, rights_class="TEST", note="",
+            parent_ids=("VG-S3-ANCHOR-RITSU",),
+        )
+
+    good_vector = np.zeros(ft.EMBED_DIM, dtype=np.float32)
+    candidates = [
+        _cand("VG-S3-905", wrong_shape_vector), _cand("VG-S3-906", good_vector),
+        _cand("VG-S3-907", good_vector), _cand("VG-S3-908", good_vector),
+    ]
+    batch = ft.build_blind_batch(candidates, shuffle_seed=2)
+
+    with pytest.raises(ValueError, match="expected exactly"):
+        ft.write_blind_candidate_embeds(batch, tmp_path)
+
+
+def test_run_generate_end_to_end_never_publishes_a_non_finite_candidate_embed(
+    tmp_path: Path, fake_anchor_paths: Dict[str, Path]
+) -> None:
+    """`run_generate` を極端な（だが float32 上限未満の）摂動 magnitude で
+    実行しても、書き出された全 `.emb` は有限のまま — 出力境界検証が
+    `run_generate` の実運用経路でも常に効いていることを確認する。"""
+    args = _make_generate_args(
+        tmp_path, fake_anchor_paths,
+        perturb_magnitude=1e30, perturb_seed=1,  # 大きいが float32 上限(~3.4e38)未満
+    )
+    result = ft.run_generate(args)
+    for label in ft.BLIND_LABELS:
+        vector = ft.load_embed_vector(result["embed_paths"][label])
+        assert np.all(np.isfinite(vector))
+
+
 # --- 決定論（staging 化後の再確認） ---------------------------------------------
 
 

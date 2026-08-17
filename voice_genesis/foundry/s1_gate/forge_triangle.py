@@ -161,6 +161,22 @@ import 自体が失敗する — `gate_synth_run4.py` と同じ制約）。本�
   `correspondence.json`（開封後にのみ意味を持つ）へ `source_embed_sha256`
   として記録する。`test_genome_ledger_shape.py` の必須キー集合は変更せず
   追加フィールドとして配置（既存 shape 検証に影響なし、実測で確認）。
+
+## review #265 R6（PR #265 Codex 第6波レビュー、採用済み）
+
+- **#15 (P2)**: `--perturb-magnitude` の入口チェック（R3 #10）は
+  `math.isfinite()`（Python float64）で判定していたが、`1e300` のように
+  float64 としては有限でも `np.float32` へキャストした瞬間に桁あふれで
+  `inf` 化する値を見逃していた（`apply_perturbation` 内の
+  `np.float32(magnitude)` キャストがその混入点）。**修正の主軸は出力境界
+  での終端**: `write_blind_candidate_embeds`（publish 直前）が全候補
+  ベクトルへ `_validate_embed_vector`（P1 と同一 validator）を適用する
+  ようにし、magnitude の値・混入経路の列挙に一切依存せず、非有限
+  `.emb` の公開が構造的に不可能になる設計にした（個々の混入経路を
+  都度追いかける「もぐら叩き」をやめ、出口 1 箇所へ集約する —
+  ファミリー終端宣言の根拠）。加えて入口側にも `np.float32(magnitude)`
+  の表現可能性チェックを補助的に追加した（早期に分かりやすいエラーを出す
+  ためのみで、省略しても出力境界検証だけで安全性は保たれる）。
 """
 from __future__ import annotations
 
@@ -564,10 +580,25 @@ def write_blind_candidate_embeds(batch: BlindBatch, out_dir: Path) -> Dict[str, 
     """`candidate_<label>.emb`（label=A〜D）のみでファイルを書き出す。
     voice_id・method・重み等の識別情報はファイル名に一切含めない
     （docstring 冒頭「ブラインド規律の機械化」#4 参照）。
+
+    review #265 R6 #15: 書き出し**直前**に全候補ベクトルへ `_validate_embed_vector`
+    （P1 と同一の validator — shape==(EMBED_DIM,) かつ全要素有限）を適用する
+    出力境界検証。`math.isfinite(magnitude)` は Python の float64 値には
+    有限でも、`np.float32(magnitude)` へキャストした瞬間に桁あふれで `inf`
+    化しうる（例: `magnitude=1e300` — float64 としては有限だが float32 では
+    表現不能）。これは `apply_perturbation`（P2/#10）の入口チェックをすり
+    抜けて候補ベクトルへ non-finite を混入させる経路の一つでしかなく、
+    今後同種の経路（他の演算・将来の摂動方式追加等）が増えても、この出力
+    境界検証さえ通れば非有限 `.emb` の公開は構造的に不可能になる
+    （個々の混入経路を都度追いかける「もぐら叩き」をやめ、出口 1 箇所へ
+    集約する設計判断 — ファミリー終端宣言の根拠）。
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: Dict[str, Path] = {}
     for label, cand in batch.label_to_candidate.items():
+        _validate_embed_vector(
+            cand.vector, source=f"candidate_{label} (voice_id={cand.voice_id}, pre-publish)"
+        )
         path = out_dir / f"candidate_{label}.emb"
         write_embed_vector(path, cand.vector)
         paths[label] = path
@@ -837,6 +868,18 @@ def run_generate(args: argparse.Namespace) -> Dict[str, object]:
     if args.perturb_magnitude < 0.0:
         raise SystemExit(
             f"error: --perturb-magnitude must be non-negative, got {args.perturb_magnitude}"
+        )
+    # review #265 R6 #15: float64 としては有限（math.isfinite 通過済み）でも
+    # np.float32 表現域（±3.4e38 程度）を超える値（例: 1e300）は
+    # apply_perturbation 内の np.float32(magnitude) キャストで inf 化する。
+    # 入口側の早期チェックとして追加する（**主たる防御は下記の出力境界検証**
+    # — write_blind_candidate_embeds 直前の全候補 _validate_embed_vector。
+    # この入口チェックは早期にわかりやすいエラーを出すための補助でしかなく、
+    # 省略しても出力境界検証だけで非有限 .emb の公開は防がれる）。
+    if not np.isfinite(np.float32(args.perturb_magnitude)):
+        raise SystemExit(
+            f"error: --perturb-magnitude {args.perturb_magnitude} is finite as float64 but "
+            "overflows to inf when cast to float32 (spk_embed is float32) — reduce the magnitude"
         )
     if args.perturb_magnitude > 0.0 and args.perturb_seed is None:
         raise SystemExit("error: --perturb-magnitude>0 requires --perturb-seed")

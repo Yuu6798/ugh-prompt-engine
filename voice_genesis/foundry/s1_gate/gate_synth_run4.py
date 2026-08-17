@@ -122,10 +122,47 @@ own/canon token 符号化・provenance sha 記録・原子的出力公開・roll
 `_cmd_run_impl` を実行するテストで検知できず（GPU 実測未実施の一部として
 正直明記する）、フェイク `gate_synth` モジュールでの委譲経路テストのみが
 本環境の担保。
+
+## review #265 R6（PR #265 Codex 第6波レビュー、採用済み — #10/#11 の残穴）
+
+- **#13 (P1)**: `gate_synth.run_pipeline` は acoustic.onnx の入力名から
+  `stage3_mode` を判定し（`gate_synth.py:1097-1101`）、`canon_ddpm`
+  （単一話者・canon 配布モデル）を選ぶと `speaker_embed_vector` は stage3 で
+  一切消費されない（`gate_synth.py:1249-1263` の `else` 分岐は
+  `speaker_embed_vector` 引数を参照すらしない）。一次ソース確認済み: これは
+  `run_pipeline` 側のエラーにならず**静かに無視される**ため、`--speaker-
+  embed-file` で候補 A〜D それぞれ異なる embed を渡しても canon モデルでは
+  全候補が同一声の WAV になり、ブラインドバッチが（気づかれないまま）
+  無意味に成立してしまう。`_require_reflow_multi_speaker_acoustic` が
+  委譲前に acoustic.onnx の入力名を検査し（`gate_synth.ort`
+  = `gate_synth.py` が `import onnxruntime as ort` 済みのモジュール属性を
+  read-only で再利用、別セッションを開くだけで `gate_synth.py` 自体は
+  無改変）、`{"spk_embed", "steps"}` を含まなければ「canon モデルは直指定
+  モード不可」を明記して fail-closed する。この検査には解決済みの
+  acoustic.onnx 実体が要る（export 前は実体が存在しない）ため、
+  `--speaker-embed-file` は `--skip-export`（既に export 済みの
+  `--acoustic-dir`）を必須とする — 委譲を跨いだ export 実行経路
+  （`--skip-export` 無し）はこの検証が構造的にできないため対象外とし、
+  fail-closed で拒否する。
+- **#14 (P1)**: `gate_synth.cmd_run` の原子公開は `out_dir`（`--step` 指定時
+  は `<out_dir>/step_<N>`）と、その `.old`/`.build-<pid>` 退避パスを
+  `_swap_step_dir_into_place` で置換する（`gate_synth.py:1753-1762`
+  `synth_out_dir`/`build_dir`/`old_dir` の算出を一次ソースとしてそのまま
+  再現）。`gate_synth.py` 自身の `_reject_output_collision`
+  （`gate_synth.py:1785-1796`）は `--acoustic-dir`/`--canon-model-dir`/
+  `--vocoder-dir`/`--ckpt-dir` は保護するが、本ラッパー固有の
+  `--speaker-embed-file` を知らないため保護対象に含まれない。
+  `--speaker-embed-file` がこれら swap 管理パスの配下に解決されると、
+  合成中に入力 embed が破壊されうる。`_reject_speaker_embed_file_swap_
+  collision` が `forge_triangle._reject_embed_input_collisions`（#9 と同型の
+  双方向包含検査、read-only import で再利用）を `synth_out_dir`/
+  `build_dir`/`old_dir`（+ `--step` 指定時は `out_dir` 自身）それぞれへ
+  適用し、委譲前に fail-closed で拒否する。
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
@@ -249,19 +286,96 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _reject_speaker_embed_file_swap_collision(args: argparse.Namespace) -> None:
+    """review #265 R6 #14: `--speaker-embed-file` が `gate_synth.cmd_run` の
+    原子公開が置換する管理パス（`synth_out_dir`/`build_dir`/`old_dir` —
+    `gate_synth.py:1753-1762` の算出をそのまま再現）の配下に解決される場合、
+    委譲前に fail-closed で拒否する。`forge_triangle._reject_embed_input_
+    collisions`（#9 と同型の双方向包含検査）を read-only import で再利用する
+    （判定は `forge_triangle.convert_d3.OutputCollisionError`、`ValueError`
+    のサブクラス、で送出される）。
+    """
+    out_dir = Path(args.out_dir)
+    synth_out_dir = (out_dir / f"step_{args.step}") if args.step is not None else out_dir
+    # gate_synth.py:1761-1762 と同一の算出。cmd_run は本プロセス内で呼ばれる
+    # ため os.getpid() は cmd_run 内部の計算値と一致する。
+    build_dir = synth_out_dir.parent / f"{synth_out_dir.name}.build-{os.getpid()}"
+    old_dir = synth_out_dir.parent / f"{synth_out_dir.name}.old"
+
+    managed_dirs = [synth_out_dir, build_dir, old_dir]
+    if out_dir.resolve() != synth_out_dir.resolve():
+        managed_dirs.append(out_dir)
+
+    embed_path = Path(args.speaker_embed_file)
+    for managed_dir in managed_dirs:
+        forge_triangle._reject_embed_input_collisions(managed_dir, [embed_path])
+
+
+def _require_reflow_multi_speaker_acoustic(args: argparse.Namespace, gate_synth) -> None:
+    """review #265 R6 #13: acoustic.onnx が `spk_embed`/`steps` 入力を持つ
+    reflow 多話者モデルであることを委譲前に検証する（`gate_synth.py:1097-1101`
+    `is_reflow_multi_speaker` 判定と同一条件）。無ければ
+    `speaker_embed_vector` が `canon_ddpm` 分岐（`gate_synth.py:1249-1263`）で
+    黙って無視され、候補 A〜D が同一声のままブラインドバッチとして成立
+    してしまう（fail-closed で拒否する）。
+
+    本検査には解決済みの acoustic.onnx 実体が要る。`--skip-export` 無し
+    （委譲先の `_cmd_run_impl` が export.py を実行して初めて実体が確定する
+    経路）では export 完了前にこの検証ができないため、`--speaker-embed-file`
+    は `--skip-export`（+ 既に export 済みの `--acoustic-dir`）を必須とする。
+    """
+    if not args.skip_export:
+        raise SystemExit(
+            "error: --speaker-embed-file requires --skip-export (with --acoustic-dir "
+            "pointing at an already-exported acoustic.onnx) so the model's spk_embed/steps "
+            "inputs can be verified before delegating — on-the-fly export is not supported "
+            "in this mode (fail-closed, review #265 R6 #13)."
+        )
+    if not args.acoustic_dir:
+        raise SystemExit(
+            "error: --speaker-embed-file requires --acoustic-dir (paired with --skip-export)."
+        )
+    acoustic_onnx_path = Path(args.acoustic_dir) / "acoustic.onnx"
+    if not acoustic_onnx_path.exists():
+        raise SystemExit(
+            f"error: --speaker-embed-file requires an already-exported acoustic.onnx at "
+            f"{acoustic_onnx_path} (--acoustic-dir); not found."
+        )
+    session = gate_synth.ort.InferenceSession(
+        str(acoustic_onnx_path), providers=["CPUExecutionProvider"],
+    )
+    input_names = {i.name for i in session.get_inputs()}
+    if not {"spk_embed", "steps"}.issubset(input_names):
+        raise SystemExit(
+            f"error: acoustic.onnx at {acoustic_onnx_path} does not expose 'spk_embed'/'steps' "
+            "inputs — canon モデルは直指定モード不可（this is a canon single-speaker DDPM "
+            "model; --speaker-embed-file requires a reflow multi-speaker acoustic model, "
+            "gate_synth.py is_reflow_multi_speaker check gate_synth.py:1097-1101). Passing "
+            "this model would silently ignore speaker_embed_vector in the canon_ddpm branch "
+            "(gate_synth.py:1249-1263) and render every candidate identically (fail-closed, "
+            "review #265 R6 #13)."
+        )
+
+
 def _run_with_speaker_embed_file(args: argparse.Namespace, gate_synth) -> None:
-    """`--speaker-embed-file` 経由の委譲（review #265 R4 #11）。docstring
-    冒頭「embed ファイル直指定モード」の設計をそのまま実装する: `gate_synth`
-    の `find_speaker_embed`/`load_speaker_embed_vector_with_sha` を
-    `gate_synth.cmd_run(args)` 呼び出しの間だけ差し替え、事前ロード・検証済み
-    の候補ベクトルを `run_pipeline` の `speaker_embed_vector` 実引数へ届ける。
-    差し替えは必ず `try/finally` で復元する（`gate_synth` はプロセス内で
-    共有されるモジュールオブジェクトのため、復元漏れは後続呼び出しを汚染
-    しうる）。
+    """`--speaker-embed-file` 経由の委譲（review #265 R4 #11、R6 #13/#14 で
+    委譲前検査を追加）。docstring 冒頭「embed ファイル直指定モード」の設計
+    をそのまま実装する: `gate_synth` の `find_speaker_embed`/
+    `load_speaker_embed_vector_with_sha` を `gate_synth.cmd_run(args)`
+    呼び出しの間だけ差し替え、事前ロード・検証済みの候補ベクトルを
+    `run_pipeline` の `speaker_embed_vector` 実引数へ届ける。差し替えは必ず
+    `try/finally` で復元する（`gate_synth` はプロセス内で共有される
+    モジュールオブジェクトのため、復元漏れは後続呼び出しを汚染しうる）。
     """
     embed_path = Path(args.speaker_embed_file)
     # 384 有限 float32 検証込み（P1 と同一 validator を read-only import で再利用）。
     vector, digest = forge_triangle.load_embed_vector_with_sha(embed_path)
+
+    # review #265 R6: #14（swap 保護漏れ）→ #13（canon/単一話者モデル）の順で
+    # 委譲前に fail-closed する（いずれも I/O が軽い順 — #14 はパス比較のみ、
+    # #13 は onnxruntime セッション構築を伴う）。
+    _reject_speaker_embed_file_swap_collision(args)
+    _require_reflow_multi_speaker_acoustic(args, gate_synth)
 
     label = args.speaker_embed_label or embed_path.stem
     print(

@@ -18,11 +18,20 @@ review #265 R4 #11（PR #265 Codex 第4波レビュー採用分）: `--speaker-e
 検証（`forge_triangle` read-only import 経由）・`gate_synth.find_speaker_embed`/
 `load_speaker_embed_vector_with_sha` へのモンキーパッチ委譲とその復元
 （正常時・例外時の両方）を検証する。
+
+review #265 R6 #13/#14（PR #265 Codex 第6波レビュー採用分、#10/#11 の残穴）:
+#13 は acoustic.onnx が `spk_embed`/`steps` 入力を持たない canon 単一話者
+モデルを直指定モードへ渡すと `speaker_embed_vector` が黙って無視される穴の
+fail-closed 化（`gate_synth.ort.InferenceSession` の read-only 再利用を
+フェイク `ort` で検証）。#14 は `--speaker-embed-file` が `gate_synth.cmd_run`
+の原子公開が置換する管理パス（`out_dir`/`step_<N>`/`.old`/`.build-<pid>`）の
+配下に解決される場合の swap 保護漏れの fail-closed 化。
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import sys
 import types
 from pathlib import Path
@@ -254,10 +263,48 @@ def test_main_rejects_speaker_and_speaker_embed_file_together_non_default_speake
     assert fake_module.calls == []
 
 
-# --- review #265 R4 #11: --speaker-embed-file（embed ファイル直指定モード） ---
+# --- review #265 R4 #11 / R6 #13・#14: --speaker-embed-file（embed ファイル
+# 直指定モード） ---------------------------------------------------------------
 
 
-def _make_embed_lookup_fake_gate_synth() -> types.SimpleNamespace:
+_REFLOW_MULTI_SPEAKER_ACOUSTIC_INPUT_NAMES = frozenset(
+    {"tokens", "durations", "f0", "spk_embed", "depth", "steps"}
+)
+_CANON_SINGLE_SPEAKER_ACOUSTIC_INPUT_NAMES = frozenset(
+    {"tokens", "durations", "f0", "depth", "speedup"}
+)
+
+
+class _FakeOnnxValueInfo:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeInferenceSession:
+    def __init__(self, path, providers=None, *, input_names) -> None:
+        self.path = path
+        self.providers = providers
+        self._input_names = input_names
+
+    def get_inputs(self):
+        return [_FakeOnnxValueInfo(name) for name in self._input_names]
+
+
+def _make_fake_ort(input_names=_REFLOW_MULTI_SPEAKER_ACOUSTIC_INPUT_NAMES) -> types.SimpleNamespace:
+    """review #265 R6 #13: `gate_synth.ort`（`gate_synth.py` が
+    `import onnxruntime as ort` 済みのモジュール属性）の read-only 再利用を
+    検証するためのフェイク。既定は reflow 多話者モデル相当
+    （`spk_embed`/`steps` を含む）。"""
+
+    def _inference_session(path, providers=None):
+        return _FakeInferenceSession(path, providers=providers, input_names=input_names)
+
+    return types.SimpleNamespace(InferenceSession=_inference_session)
+
+
+def _make_embed_lookup_fake_gate_synth(
+    acoustic_input_names=_REFLOW_MULTI_SPEAKER_ACOUSTIC_INPUT_NAMES,
+) -> types.SimpleNamespace:
     """`_run_with_speaker_embed_file` の属性差し替え（モンキーパッチ）を
     検証するためのフェイク `gate_synth` モジュール代替。実モジュールと同様に
     `find_speaker_embed`/`load_speaker_embed_vector_with_sha`/`cmd_run` を
@@ -265,7 +312,8 @@ def _make_embed_lookup_fake_gate_synth() -> types.SimpleNamespace:
     属性の差し替え挙動に近づける）。`cmd_run` は `_cmd_run_impl` の該当箇所
     と同型に `find_speaker_embed` → `load_speaker_embed_vector_with_sha` を
     呼び出し、`_run_with_speaker_embed_file` の差し替えが最終的な値まで
-    届いているかを観測できるようにする。
+    届いているかを観測できるようにする。`ort`（review #265 R6 #13）は
+    `acoustic_input_names` で構成したフェイク onnxruntime。
     """
     state = {
         "cmd_run_calls": [],
@@ -299,6 +347,7 @@ def _make_embed_lookup_fake_gate_synth() -> types.SimpleNamespace:
         find_speaker_embed=find_speaker_embed,
         load_speaker_embed_vector_with_sha=load_speaker_embed_vector_with_sha,
         cmd_run=cmd_run,
+        ort=_make_fake_ort(acoustic_input_names),
         state=state,
     )
     return fake
@@ -308,6 +357,33 @@ def _write_fake_384_embed(path: Path, seed: int) -> np.ndarray:
     vector = np.random.default_rng(seed).standard_normal(384).astype(np.float32)
     path.write_bytes(vector.tobytes())
     return vector
+
+
+def _make_acoustic_dir_with_onnx(tmp_path: Path, name: str = "acoustic_dir") -> Path:
+    """review #265 R6 #13 が要求する `--skip-export --acoustic-dir` の
+    土台。フェイク `ort.InferenceSession` は中身を読まないため
+    `acoustic.onnx` はプレースホルダで足りる（存在確認のみが実チェック）。
+    """
+    acoustic_dir = tmp_path / name
+    acoustic_dir.mkdir(parents=True, exist_ok=True)
+    (acoustic_dir / "acoustic.onnx").write_bytes(b"\x00")
+    return acoustic_dir
+
+
+def _required_argv_with_valid_acoustic(
+    tmp_path: Path, *, out_dir: str = "/fake/out",
+) -> List[str]:
+    """embed ファイル直指定モードの「正常系」テストの土台 argv
+    （review #265 R6 #13 の `--skip-export`/`--acoustic-dir` 要件を満たす）。
+    `--speaker-embed-file` はテスト側で追加する。"""
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    return [
+        "run",
+        "--canon-model-dir", "/fake/canon",
+        "--vocoder-dir", "/fake/vocoder",
+        "--out-dir", out_dir,
+        "--skip-export", "--acoustic-dir", str(acoustic_dir),
+    ]
 
 
 def test_parser_accepts_speaker_embed_file_alone() -> None:
@@ -328,7 +404,8 @@ def test_run_with_speaker_embed_file_monkeypatches_and_delegates_loaded_vector(
     original_load = fake.load_speaker_embed_vector_with_sha
 
     parser = gsr4.build_arg_parser()
-    args = parser.parse_args(REQUIRED_ARGV + ["--speaker-embed-file", str(embed_path)])
+    argv = _required_argv_with_valid_acoustic(tmp_path) + ["--speaker-embed-file", str(embed_path)]
+    args = parser.parse_args(argv)
 
     gsr4._run_with_speaker_embed_file(args, fake)
 
@@ -365,7 +442,8 @@ def test_run_with_speaker_embed_file_restores_originals_even_if_cmd_run_raises(
     fake.cmd_run = _boom
 
     parser = gsr4.build_arg_parser()
-    args = parser.parse_args(REQUIRED_ARGV + ["--speaker-embed-file", str(embed_path)])
+    argv = _required_argv_with_valid_acoustic(tmp_path) + ["--speaker-embed-file", str(embed_path)]
+    args = parser.parse_args(argv)
 
     with pytest.raises(RuntimeError, match="simulated cmd_run failure"):
         gsr4._run_with_speaker_embed_file(args, fake)
@@ -380,7 +458,8 @@ def test_run_with_speaker_embed_file_default_label_is_file_stem(tmp_path: Path) 
     fake = _make_embed_lookup_fake_gate_synth()
 
     parser = gsr4.build_arg_parser()
-    args = parser.parse_args(REQUIRED_ARGV + ["--speaker-embed-file", str(embed_path)])
+    argv = _required_argv_with_valid_acoustic(tmp_path) + ["--speaker-embed-file", str(embed_path)]
+    args = parser.parse_args(argv)
     gsr4._run_with_speaker_embed_file(args, fake)
 
     assert fake.state["cmd_run_calls"][0].speaker == "candidate_D"
@@ -392,9 +471,10 @@ def test_run_with_speaker_embed_file_explicit_label_overrides_stem(tmp_path: Pat
     fake = _make_embed_lookup_fake_gate_synth()
 
     parser = gsr4.build_arg_parser()
-    args = parser.parse_args(
-        REQUIRED_ARGV + ["--speaker-embed-file", str(embed_path), "--speaker-embed-label", "custom-label"]
-    )
+    argv = _required_argv_with_valid_acoustic(tmp_path) + [
+        "--speaker-embed-file", str(embed_path), "--speaker-embed-label", "custom-label",
+    ]
+    args = parser.parse_args(argv)
     gsr4._run_with_speaker_embed_file(args, fake)
 
     assert fake.state["cmd_run_calls"][0].speaker == "custom-label"
@@ -409,7 +489,7 @@ def test_main_delegates_speaker_embed_file_mode_end_to_end(
     fake = _make_embed_lookup_fake_gate_synth()
     monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake)
 
-    argv = REQUIRED_ARGV + [
+    argv = _required_argv_with_valid_acoustic(tmp_path) + [
         "--speaker-embed-file", str(embed_path), "--speaker-embed-label", "my-label",
     ]
     gsr4.main(argv)
@@ -424,7 +504,8 @@ def test_main_speaker_embed_file_rejects_truncated_embed_before_delegating(
 ) -> None:
     """review #265 R4 #11(a): forge_triangle の 384 有限 float32 validator を
     read-only import して再利用していること — 壊れた embed は `cmd_run` へ
-    到達する前に拒否される。"""
+    到達する前に拒否される（embed 検証は #13/#14 より先に行われるため、
+    --skip-export/--acoustic-dir 無しの base argv でも到達を確認できる）。"""
     bad_path = tmp_path / "truncated.emb"
     bad_vector = np.random.default_rng(6).standard_normal(383).astype(np.float32)
     bad_path.write_bytes(bad_vector.tobytes())
@@ -453,6 +534,206 @@ def test_main_speaker_embed_file_rejects_nan_embed_before_delegating(
     with pytest.raises(ValueError, match="non-finite"):
         gsr4.main(argv)
     assert fake.state["cmd_run_calls"] == []
+
+
+# --- review #265 R6 #13: canon/単一話者モデルへの直指定を fail-closed 拒否 ----
+
+
+def test_require_reflow_multi_speaker_acoustic_accepts_reflow_model(tmp_path: Path) -> None:
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    args = argparse.Namespace(
+        skip_export=True, acoustic_dir=str(acoustic_dir),
+    )
+    fake = types.SimpleNamespace(ort=_make_fake_ort(_REFLOW_MULTI_SPEAKER_ACOUSTIC_INPUT_NAMES))
+    gsr4._require_reflow_multi_speaker_acoustic(args, fake)  # 例外なし = 合格
+
+
+def test_require_reflow_multi_speaker_acoustic_rejects_canon_model(tmp_path: Path) -> None:
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    args = argparse.Namespace(
+        skip_export=True, acoustic_dir=str(acoustic_dir),
+    )
+    fake = types.SimpleNamespace(ort=_make_fake_ort(_CANON_SINGLE_SPEAKER_ACOUSTIC_INPUT_NAMES))
+    with pytest.raises(SystemExit, match="canon モデルは直指定モード不可"):
+        gsr4._require_reflow_multi_speaker_acoustic(args, fake)
+
+
+def test_require_reflow_multi_speaker_acoustic_requires_skip_export(tmp_path: Path) -> None:
+    args = argparse.Namespace(skip_export=False, acoustic_dir=None)
+    fake = types.SimpleNamespace(ort=_make_fake_ort())
+    with pytest.raises(SystemExit, match="--skip-export"):
+        gsr4._require_reflow_multi_speaker_acoustic(args, fake)
+
+
+def test_require_reflow_multi_speaker_acoustic_requires_acoustic_dir(tmp_path: Path) -> None:
+    args = argparse.Namespace(skip_export=True, acoustic_dir=None)
+    fake = types.SimpleNamespace(ort=_make_fake_ort())
+    with pytest.raises(SystemExit, match="--acoustic-dir"):
+        gsr4._require_reflow_multi_speaker_acoustic(args, fake)
+
+
+def test_require_reflow_multi_speaker_acoustic_requires_existing_acoustic_onnx(
+    tmp_path: Path,
+) -> None:
+    empty_dir = tmp_path / "empty_acoustic_dir"
+    empty_dir.mkdir()
+    args = argparse.Namespace(skip_export=True, acoustic_dir=str(empty_dir))
+    fake = types.SimpleNamespace(ort=_make_fake_ort())
+    with pytest.raises(SystemExit, match="not found"):
+        gsr4._require_reflow_multi_speaker_acoustic(args, fake)
+
+
+def test_main_speaker_embed_file_rejects_canon_model_before_cmd_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """review #265 R6 #13 の受け入れ条件: canon モデルでは `cmd_run` へ一切
+    到達せず（= 候補 A〜D が同一声のまま成立してしまう実害が起こり得ない）。
+    """
+    embed_path = tmp_path / "candidate_A.emb"
+    _write_fake_384_embed(embed_path, seed=8)
+
+    fake = _make_embed_lookup_fake_gate_synth(
+        acoustic_input_names=_CANON_SINGLE_SPEAKER_ACOUSTIC_INPUT_NAMES,
+    )
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake)
+
+    argv = _required_argv_with_valid_acoustic(tmp_path) + ["--speaker-embed-file", str(embed_path)]
+    with pytest.raises(SystemExit, match="canon モデルは直指定モード不可"):
+        gsr4.main(argv)
+    assert fake.state["cmd_run_calls"] == []
+
+
+def test_main_speaker_embed_file_requires_skip_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embed_path = tmp_path / "candidate_A.emb"
+    _write_fake_384_embed(embed_path, seed=9)
+
+    fake = _make_embed_lookup_fake_gate_synth()
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake)
+
+    argv = REQUIRED_ARGV + ["--speaker-embed-file", str(embed_path)]  # --skip-export 無し
+    with pytest.raises(SystemExit, match="--skip-export"):
+        gsr4.main(argv)
+    assert fake.state["cmd_run_calls"] == []
+
+
+# --- review #265 R6 #14: swap 保護漏れ（--speaker-embed-file が原子公開の
+# 管理パス配下に解決される）の fail-closed 拒否 ------------------------------
+
+
+def test_reject_speaker_embed_file_swap_collision_rejects_embed_inside_out_dir(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    leaked = out_dir / "leftover_candidate.emb"
+    leaked.write_bytes(b"\x00" * (384 * 4))
+
+    args = argparse.Namespace(out_dir=str(out_dir), step=None, speaker_embed_file=str(leaked))
+    with pytest.raises(gsr4.forge_triangle.convert_d3.OutputCollisionError, match="inside"):
+        gsr4._reject_speaker_embed_file_swap_collision(args)
+
+
+def test_reject_speaker_embed_file_swap_collision_rejects_embed_inside_step_dir(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "out"
+    step_dir = out_dir / "step_5000"
+    step_dir.mkdir(parents=True)
+    leaked = step_dir / "leftover_candidate.emb"
+    leaked.write_bytes(b"\x00" * (384 * 4))
+
+    args = argparse.Namespace(out_dir=str(out_dir), step=5000, speaker_embed_file=str(leaked))
+    with pytest.raises(gsr4.forge_triangle.convert_d3.OutputCollisionError, match="inside"):
+        gsr4._reject_speaker_embed_file_swap_collision(args)
+
+
+def test_reject_speaker_embed_file_swap_collision_rejects_embed_inside_old_dir(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "out"
+    old_dir = tmp_path / "out.old"
+    old_dir.mkdir(parents=True)
+    leaked = old_dir / "prior_generation_candidate.emb"
+    leaked.write_bytes(b"\x00" * (384 * 4))
+
+    args = argparse.Namespace(out_dir=str(out_dir), step=None, speaker_embed_file=str(leaked))
+    with pytest.raises(gsr4.forge_triangle.convert_d3.OutputCollisionError, match="inside"):
+        gsr4._reject_speaker_embed_file_swap_collision(args)
+
+
+def test_reject_speaker_embed_file_swap_collision_rejects_embed_inside_build_dir(
+    tmp_path: Path,
+) -> None:
+    """`build_dir` の命名は `<synth_out_dir>.build-<pid>`（本プロセスの
+    `os.getpid()`）— `cmd_run` は同一プロセス内で呼ばれるため、テスト側で
+    同じ pid を使って構築すれば実際の管理パスと一致する。"""
+    out_dir = tmp_path / "out"
+    build_dir = tmp_path / f"out.build-{os.getpid()}"
+    build_dir.mkdir(parents=True)
+    leaked = build_dir / "leftover_candidate.emb"
+    leaked.write_bytes(b"\x00" * (384 * 4))
+
+    args = argparse.Namespace(out_dir=str(out_dir), step=None, speaker_embed_file=str(leaked))
+    with pytest.raises(gsr4.forge_triangle.convert_d3.OutputCollisionError, match="inside"):
+        gsr4._reject_speaker_embed_file_swap_collision(args)
+
+
+def test_reject_speaker_embed_file_swap_collision_allows_embed_outside_managed_paths(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    sibling = tmp_path / "forge_batch1" / "candidate_A.emb"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"\x00" * (384 * 4))
+
+    args = argparse.Namespace(out_dir=str(out_dir), step=None, speaker_embed_file=str(sibling))
+    gsr4._reject_speaker_embed_file_swap_collision(args)  # 例外なし = 合格
+
+
+def test_reject_speaker_embed_file_swap_collision_noop_when_nothing_exists_yet(
+    tmp_path: Path,
+) -> None:
+    """`out_dir`（および `.old`/`.build-<pid>`）がまだ存在しない初回実行では
+    何も検査対象が無く no-op（#9 と同じ「まだ無ければ許可」意味論）。"""
+    out_dir = tmp_path / "never_created"
+    embed_path = tmp_path / "candidate_A.emb"
+    embed_path.write_bytes(b"\x00" * (384 * 4))
+
+    args = argparse.Namespace(out_dir=str(out_dir), step=None, speaker_embed_file=str(embed_path))
+    gsr4._reject_speaker_embed_file_swap_collision(args)  # 例外なし = 合格
+
+
+def test_main_speaker_embed_file_rejects_when_embed_inside_out_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """review #265 R6 #14 の実害例そのもの: `--out-dir` 配下（前回バッチの
+    残留物等）を `--speaker-embed-file` に指定すると `cmd_run` へ一切到達せず
+    拒否される。"""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    leaked = out_dir / "leftover_candidate.emb"
+    leaked_vector = _write_fake_384_embed(leaked, seed=10)
+
+    fake = _make_embed_lookup_fake_gate_synth()
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake)
+
+    acoustic_dir = _make_acoustic_dir_with_onnx(tmp_path)
+    argv = [
+        "run",
+        "--canon-model-dir", "/fake/canon",
+        "--vocoder-dir", "/fake/vocoder",
+        "--out-dir", str(out_dir),
+        "--skip-export", "--acoustic-dir", str(acoustic_dir),
+        "--speaker-embed-file", str(leaked),
+    ]
+    with pytest.raises(gsr4.forge_triangle.convert_d3.OutputCollisionError, match="inside"):
+        gsr4.main(argv)
+    assert fake.state["cmd_run_calls"] == []
+    # 拒否前の状態のまま（入力ファイルは変更されない）
+    assert leaked.read_bytes() == leaked_vector.tobytes()
 
 
 def test_forge_triangle_sibling_import_succeeds_without_onnxruntime() -> None:
