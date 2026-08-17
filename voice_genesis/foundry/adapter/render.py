@@ -13,6 +13,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import csv
 import dataclasses
 import hashlib
 import os
@@ -20,7 +21,7 @@ import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pyworld as pw
@@ -34,6 +35,8 @@ for _p in (_SINGER_DIR, _HERE):
 
 import score as sc  # noqa: E402  (singer、read-only import)
 import score_umi as sc_umi  # noqa: E402  (singer、read-only import)
+import score_d3_sustain as sc_d3_sustain  # noqa: E402  (singer、read-only import。S3 Phase B1)
+import score_d3_kana as sc_d3_kana  # noqa: E402  (singer、read-only import。S3 Phase B1)
 import performance as perf  # noqa: E402  (singer、read-only import)
 
 import consonants as cons  # noqa: E402  (追補 F1.1-B)
@@ -554,12 +557,181 @@ def _midi_to_hz(m: float) -> float:
     return 440.0 * 2.0 ** ((m - 69.0) / 12.0)
 
 
+# S3 Phase B1: score registry 化（DESIGN_S3_backfill.md §2.3 B1）。
+# `--score` の choices ハードコード（旧: `["sakura", "umi"]` 直書き分岐）を
+# score 名 -> ノート列ビルダーの対応表へ置き換え、新規スコアモジュールを
+# 追加登録できる構造にする。AC = 既存 sakura/umi の同一 spec+seed 出力が
+# 本環境で変更前後バイト同一（f1_4 record の 3 回一致プロトコル準拠）。
+# 各ビルダーは `() -> Tuple[List[ScoreNote], float]`（ノート列, tempo_bpm）を
+# 返す（既存 `build_score` の戻り値契約を維持）。
+SCORE_REGISTRY: Dict[str, Callable[[], Tuple[list, float]]] = {
+    "sakura": lambda: (sc.build_sakura_score(), sc.TEMPO_BPM),
+    "umi": lambda: (sc_umi.build_umi_score(), sc_umi.TEMPO_BPM),
+    # S3 Phase B1 D3: サステイン譜（5 母音×低中高 3 段ロングトーン）+
+    # かな短句譜（VCV 被覆内・拗音/撥音を含む短句。§ score_d3_kana.py docstring
+    # に促音非対応の設計逸脱を記録）。
+    "d3_sustain": lambda: (sc_d3_sustain.build_d3_sustain_score(), sc_d3_sustain.TEMPO_BPM),
+    "d3_kana": lambda: (sc_d3_kana.build_d3_kana_score(), sc_d3_kana.TEMPO_BPM),
+}
+
+
+def register_score(name: str, builder: Callable[[], Tuple[list, float]]) -> None:
+    """新規スコアを registry へ追加登録する（テスト・将来スコア用のフック）。
+
+    既存キーへの再登録は明示的なミスを検知するため拒否する
+    （上書きしたい場合は `SCORE_REGISTRY[name] = builder` を直接使うこと）。
+    """
+    if name in SCORE_REGISTRY:
+        raise ValueError(f"score {name!r} is already registered (use SCORE_REGISTRY[name] = ... to overwrite)")
+    SCORE_REGISTRY[name] = builder
+
+
 def build_score(name: str) -> Tuple[list, float]:
-    if name == "sakura":
-        return sc.build_sakura_score(), sc.TEMPO_BPM
-    if name == "umi":
-        return sc_umi.build_umi_score(), sc_umi.TEMPO_BPM
-    raise ValueError(f"unknown score: {name!r} (expected 'sakura' or 'umi')")
+    try:
+        builder = SCORE_REGISTRY[name]
+    except KeyError:
+        raise ValueError(
+            f"unknown score: {name!r} (expected one of {sorted(SCORE_REGISTRY)})"
+        ) from None
+    return builder()
+
+
+# ---------------------------------------------------------------------------
+# S3 Phase B1: タイミング export（合成に実際に使った内部タイミングを CSV へ）
+# ---------------------------------------------------------------------------
+
+TIMING_CSV_FIELDS = [
+    "row_index", "row_kind", "note_index", "phrase_index", "is_phrase_first", "is_phrase_last",
+    "mora_kana", "onset", "vowel", "midi", "note_dur_frames", "note_dur_sec",
+    "ph_seq", "ph_dur_frames", "ph_dur_sec", "ph_num",
+]
+
+
+def _consonant_frames_by_note(consonant_events: List["cons.ConsonantEvent"]) -> Dict[int, int]:
+    """note_index -> 適用された子音イベントの `n_frames_processed`（先勝ち。
+    1 note に付く consonant event は高々 1 件という既存契約に従う）。"""
+    out: Dict[int, int] = {}
+    for ev in consonant_events:
+        out.setdefault(ev.note_index, ev.n_frames_processed)
+    return out
+
+
+def _build_timing_rows(
+    segments: list,
+    resolved_list: list,
+    note_dur_frames_list: List[int],
+    consonant_events: List["cons.ConsonantEvent"],
+    is_vcv: bool,
+    sr: int,
+    frame_period_ms: float,
+) -> List[dict]:
+    """S3 Phase B1: 合成に実際に使った内部タイミング（音素列/各音素の実時間長・
+    ノート列/ノート長）を、レンダー本体が使う内部構造（`segments`・
+    `resolved_list`・`note_dur_frames_list`・`consonant_events`）だけから導出
+    する（B3 `s1_dataprep/convert_d3.py` 側でのタイミング再計算の二重実装を
+    避けるための橋 = `DESIGN_S3_backfill.md` §2.3 B1「render と converter で
+    タイミング計算を二重実装しない」）。
+
+    行の種類（`row_kind`）:
+
+    - **"note"**: 各ノート 1 行。`ph_seq`/`ph_dur_frames`/`ph_dur_sec` はこの
+      ノート内の音素分解（半角スペース区切り、`ph_num` 個の値が並ぶ）:
+        - VCV（`donor="ritsu"`）: `ResolvedVCVSegment.head_frames`（録音済み
+          調音遷移・伸縮なし）と `n_frames - head_frames`（母音定常部）の
+          2 音素。onset の無い（母音のみ/撥音/長音）モーラは遷移区間を母音
+          音素へ吸収し 1 音素として報告する（このモデルに独立した子音
+          ラベルが存在しないため・[実装決定]）。
+        - 非 VCV（vocadito/pjs）: `consonant_events`（note_index キー）に
+          対応イベントがあれば `n_frames_processed` を子音区間、残りを母音
+          区間とする 2 音素。無ければ 1 音素（母音のみ、resolved 全長）。
+    - **"rest"**: フレーズ間ブレスに対応する行（`performance.build_timeline`
+      が挿入する無音区間・`BREATH_DURATION_SEC`）。`segments[i].start_sample -
+      segments[i-1].end_sample` から検出する（`build_timeline` 自身が置いた
+      ギャップをそのまま読むだけで、ブレス長を再計算しない・[実装決定]）。
+      `ph_seq="SP"`。
+
+    `note_dur_frames`/`note_dur_sec` は score 由来の**ノート長**
+    （`note_dur_frames_list`。VCV の絶対配置シフトや非 VCV の overlap 圧縮
+    より前の、各ノートに割り当てられた名目フレーム数——DiffSinger
+    `transcriptions.csv` の `note_dur` に対応する）。一方 `ph_dur_frames`
+    の合計は resolved unit の実フレーム数（`resolved.n_frames`。VCV は常に
+    `note_dur_frames` と一致・非 VCV は録音子音前置で `note_dur_frames` を
+    上回りうる）——`ph_dur` に対応する値（実際に合成へ使われた音素長）。
+    両者が異なりうることは DiffSinger のノート/音素の別レイヤー性
+    （`ph_num>=1` の音素が 1 note へ紐づく）と整合する。
+
+    レンダー結果 bit には一切影響しない（読み取りのみ・副作用なし）ため、
+    `render()` は `--timing-out` の指定有無に関わらず常に計算し
+    `result["timing_rows"]` へ格納する（CLI 側が要求時のみファイルへ書く）。
+    """
+    consonant_frames = _consonant_frames_by_note(consonant_events)
+    rows: List[dict] = []
+    row_index = 0
+    prev_end_sample: Optional[int] = None
+    for i, seg in enumerate(segments):
+        if prev_end_sample is not None:
+            gap_samples = seg.start_sample - prev_end_sample
+            if gap_samples > 0:
+                gap_frames = frames_for_samples(gap_samples, sr)
+                gap_sec = gap_frames * frame_period_ms / 1000.0
+                rows.append(dict(
+                    row_index=row_index, row_kind="rest", note_index="", phrase_index="",
+                    is_phrase_first="", is_phrase_last="", mora_kana="", onset="", vowel="",
+                    midi="", note_dur_frames=gap_frames, note_dur_sec=round(gap_sec, 6),
+                    ph_seq="SP", ph_dur_frames=str(gap_frames), ph_dur_sec=f"{gap_sec:.6f}",
+                    ph_num=1,
+                ))
+                row_index += 1
+
+        mora = seg.note.mora
+        resolved = resolved_list[i]
+        note_dur_frames = note_dur_frames_list[i]
+        n_frames = resolved.n_frames
+
+        if is_vcv:
+            head_frames = min(getattr(resolved, "head_frames", 0), n_frames)
+        else:
+            head_frames = min(consonant_frames.get(i, 0), n_frames)
+
+        if mora.onset is not None and head_frames > 0:
+            core_frames = max(n_frames - head_frames, 0)
+            ph_seq = [mora.onset, mora.vowel]
+            ph_dur_frames = [head_frames, core_frames]
+        else:
+            ph_seq = [mora.vowel]
+            ph_dur_frames = [n_frames]
+
+        rows.append(dict(
+            row_index=row_index, row_kind="note", note_index=i, phrase_index=seg.note.phrase_index,
+            is_phrase_first=seg.is_phrase_first, is_phrase_last=seg.is_phrase_last,
+            mora_kana=mora.kana, onset=(mora.onset or ""), vowel=mora.vowel, midi=seg.note.midi,
+            note_dur_frames=note_dur_frames, note_dur_sec=round(note_dur_frames * frame_period_ms / 1000.0, 6),
+            ph_seq=" ".join(ph_seq),
+            ph_dur_frames=" ".join(str(f) for f in ph_dur_frames),
+            ph_dur_sec=" ".join(f"{f * frame_period_ms / 1000.0:.6f}" for f in ph_dur_frames),
+            ph_num=len(ph_seq),
+        ))
+        row_index += 1
+        prev_end_sample = seg.end_sample
+    return rows
+
+
+def write_timing_csv(path: str | Path, rows: List[dict]) -> None:
+    """`_build_timing_rows` の行を CSV（`TIMING_CSV_FIELDS` 列）へ書く。
+
+    タイミング export は成果物 WAV とは独立した副次出力であり、
+    `_atomic_write_wav` が保護する「成果物公開の安全ゲート」対象（`--out`
+    衝突ガード・atomic replace）ではないため、同じ atomic 経路は要求しない
+    （[実装決定]。呼び出しは CLI の `--timing-out` 指定時のみで、失敗しても
+    既存 WAV 出力には影響しない）。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=TIMING_CSV_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
 
 
 def render(
@@ -883,6 +1055,13 @@ def render(
         f"amp_seq/sp_seq フレーム数不一致: {amp_seq.shape[0]} != {n_total_frames}"
     )
 
+    # S3 Phase B1: タイミング export 用の内部行を構築する（読み取りのみ・
+    # 既存の合成パス（f0_seq/sp_seq/ap_seq/y）には一切影響しない。§ 関数
+    # docstring 参照）。
+    timing_rows = _build_timing_rows(
+        segments, resolved_list, note_dur_frames_list, consonant_events, is_vcv, SR, FRAME_PERIOD_MS,
+    )
+
     y = pw.synthesize(
         np.ascontiguousarray(f0_seq), np.ascontiguousarray(sp_seq), np.ascontiguousarray(ap_seq),
         SR, FRAME_PERIOD_MS,
@@ -946,12 +1125,13 @@ def render(
         n_recorded_consonants_fallback_synthetic=n_recorded_consonants_fallback_synthetic,
         energy_norm_stats=energy_norm_stats,
         is_vcv=is_vcv, vcv_selection_stats=vcv_selection_stats, vcv_placement_stats=vcv_placement_stats,
+        timing_rows=timing_rows,
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="VG-F1 Foundry Adapter render CLI")
-    parser.add_argument("--score", required=True, choices=["sakura", "umi"])
+    parser.add_argument("--score", required=True, choices=sorted(SCORE_REGISTRY))
     parser.add_argument("--voice", required=True, help="voice spec JSON path")
     parser.add_argument("--out", required=True, help="output WAV path")
     parser.add_argument("--donor", default="vocadito", choices=list(DONOR_CHOICES), help="追補 F1.2-D: ドナー選択")
@@ -975,6 +1155,15 @@ def main() -> None:
         help=(
             "子音オンセット加工を無効化する（--consonant-source none と等価。旧 F1.1-B 互換フラグ）。"
             "donor=ritsu では非対応（エラー・review #262 R9）"
+        ),
+    )
+    parser.add_argument(
+        "--timing-out", default=None,
+        help=(
+            "S3 Phase B1: 合成に実際に使った内部タイミング（音素列/各音素の実時間長・"
+            "ノート列/ノート長）を CSV へ export するパス（省略時は export しない。"
+            "省略時の挙動・WAV 出力バイト列は完全不変 = DESIGN_S3_backfill.md §2.3 B1 AC）。"
+            "列仕様は `TIMING_CSV_FIELDS`/`_build_timing_rows` docstring 参照。"
         ),
     )
     args = parser.parse_args()
@@ -1007,6 +1196,9 @@ def main() -> None:
     if result["is_vcv"]:
         print(f"vcv_selection_stats={result['vcv_selection_stats']}")
         print(f"vcv_placement_stats={result['vcv_placement_stats']}")
+    if args.timing_out is not None:
+        write_timing_csv(args.timing_out, result["timing_rows"])
+        print(f"wrote timing csv {args.timing_out}: {len(result['timing_rows'])} rows")
 
 
 if __name__ == "__main__":
