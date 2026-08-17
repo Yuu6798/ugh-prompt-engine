@@ -209,6 +209,68 @@ def test_convert_with_missing_pair_publishes_nothing(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 2.5 P1 修正 (review #265): 衝突検査を convert() 自身が行う（CLI 経由でなくても
+# fail-closed）+ discover_pairs() 0 件（空データセット）を fail-closed
+# ---------------------------------------------------------------------------
+
+
+def test_convert_rejects_out_dir_colliding_with_render_dir_without_cli(tmp_path: Path) -> None:
+    """CLI `main()` を経由しない直接呼び出しでも `--out-dir` が `render_dir`
+    と衝突していれば `convert()` 自身が fail-closed で拒否する（review #265
+    P1: 旧実装は CLI のみが preflight していたため、非 CLI 経路はこの検査を
+    素通りしていた）。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+
+    with pytest.raises(convert_d3.OutputCollisionError):
+        convert_d3.convert(render_dir, render_dir)
+
+
+def test_convert_rejects_out_dir_inside_render_dir_without_cli(tmp_path: Path) -> None:
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    out_dir = render_dir / "nested_out"
+
+    with pytest.raises(convert_d3.OutputCollisionError):
+        convert_d3.convert(render_dir, out_dir)
+
+
+def test_convert_empty_render_dir_fails_closed_without_publishing(tmp_path: Path) -> None:
+    """`discover_pairs()` が 0 件（wav/csv が 1 本も無い render_dir）の場合、
+    staging 構築・swap の前に fail-closed で拒否する（空データセットで既存
+    `out_dir` を黙って置き換える false-success の防止）。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()  # 空のまま
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(convert_d3.EmptyDatasetError):
+        convert_d3.convert(render_dir, out_dir)
+    assert not out_dir.exists()
+
+
+@_ffmpeg_required
+def test_convert_empty_render_dir_does_not_clobber_existing_out_dir(tmp_path: Path) -> None:
+    """既存の `out_dir`（前回の正常な変換結果）がある状態で、空の render_dir
+    から再度 `convert()` を呼んでも既存の出力は破壊されない（false-success
+    防止の実害シナリオ）。"""
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    _make_cell_a(render_dir)
+    out_dir = tmp_path / "out"
+    convert_d3.convert(render_dir, out_dir)
+    existing_csv_bytes = (out_dir / "transcriptions.csv").read_bytes()
+
+    empty_render_dir = tmp_path / "render_empty"
+    empty_render_dir.mkdir()
+    with pytest.raises(convert_d3.EmptyDatasetError):
+        convert_d3.convert(empty_render_dir, out_dir)
+
+    assert (out_dir / "transcriptions.csv").read_bytes() == existing_csv_bytes
+
+
+# ---------------------------------------------------------------------------
 # 3. duration 乖離 fail-closed
 # ---------------------------------------------------------------------------
 

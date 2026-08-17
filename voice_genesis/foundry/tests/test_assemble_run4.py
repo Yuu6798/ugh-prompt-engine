@@ -176,6 +176,88 @@ def test_normal_three_speaker_assembly_publishes_manifest(tmp_path: Path) -> Non
     assert manifest_on_disk == manifest
 
 
+def _make_empty_pjs_raw_dir(root: Path) -> Path:
+    """pjs の空データセット（ヘッダのみ・データ行 0 件）フィクスチャ。"""
+    out = root / "pjs_raw_empty"
+    _write_csv(out / "transcriptions.csv", _FULL_HEADER, [])
+    (out / "wavs").mkdir(parents=True, exist_ok=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 1.5 P1 修正 (review #265): 空話者コーパス（transcriptions.csv 行 0 件）は
+# fail-closed（`validate_speaker`等が空リストに no-op で通過する false-success
+# 経路を明示的に閉じる）
+# ---------------------------------------------------------------------------
+
+
+def test_empty_speaker_corpus_fails_closed(tmp_path: Path) -> None:
+    """pjs の raw dir がヘッダのみ・データ行 0 件の場合、
+    `validate_speaker`/`check_ph_dur_duration`/`check_note_dur_consistency`
+    はいずれも空リストに対して no-op（`problems=[]`）で通過してしまうため、
+    ゲート回付の前に明示的に検出して fail-closed する（既存出力の false
+    -success な置換を防止）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_empty_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = tmp_path / "run4_raw"
+
+    with pytest.raises(assemble_run4.GateValidationError) as exc_info:
+        assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir)
+    assert any("zero row" in p and "pjs" in p for p in exc_info.value.problems)
+    assert not out_dir.exists()
+
+
+def test_empty_speaker_corpus_does_not_clobber_existing_out_dir(tmp_path: Path) -> None:
+    """既存の `out_dir`（前回の正常な組み立て結果）がある状態で、空の pjs
+    コーパスから再度 `assemble()` を呼んでも既存の出力は破壊されない。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = tmp_path / "run4_raw"
+    assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True)
+    existing_manifest_bytes = (out_dir / "assembly_manifest.json").read_bytes()
+
+    empty_pjs_raw = _make_empty_pjs_raw_dir(tmp_path)
+    with pytest.raises(assemble_run4.GateValidationError):
+        assemble_run4.assemble(ritsu_raw, d3_raw, empty_pjs_raw, user_raw, out_dir)
+
+    assert (out_dir / "assembly_manifest.json").read_bytes() == existing_manifest_bytes
+
+
+# ---------------------------------------------------------------------------
+# 1.6 P1 修正 (review #265): 衝突検査を assemble() 自身が行う（CLI 経由でなくても
+# fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def test_assemble_rejects_out_dir_colliding_with_raw_dir_without_cli(tmp_path: Path) -> None:
+    """CLI `main()` を経由しない直接呼び出しでも `--out-dir` が 4 つの raw dir
+    のいずれかと衝突していれば `assemble()` 自身が fail-closed で拒否する
+    （review #265 P1: 旧実装は CLI のみが preflight していたため、非 CLI
+    経路はこの検査を素通りしていた）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+
+    with pytest.raises(assemble_run4.convert_d3.OutputCollisionError):
+        assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, user_raw)
+
+
+def test_assemble_rejects_out_dir_inside_raw_dir_without_cli(tmp_path: Path) -> None:
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = d3_raw / "nested_out"
+
+    with pytest.raises(assemble_run4.convert_d3.OutputCollisionError):
+        assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir)
+
+
 # ---------------------------------------------------------------------------
 # 2. 名前衝突 fail-closed
 # ---------------------------------------------------------------------------

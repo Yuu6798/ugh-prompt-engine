@@ -4,9 +4,11 @@
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import sys
 from pathlib import Path
+from typing import Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
@@ -1217,3 +1219,181 @@ def test_render_ritsu_consonant_source_default_none_does_not_raise_at_this_gate(
             "sakura", "/nonexistent/voice_spec.json",
             donor="ritsu", voicebank_root="/nonexistent/voicebank",
         )
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #265): --timing-out の衝突検査を合成前に fail-closed で行う
+# ---------------------------------------------------------------------------
+
+
+def _ritsu_spec_and_voicebank(tmp_path: Path) -> Tuple[Path, Path]:
+    """`donor='ritsu'` の最小 spec + voicebank を組み立て、`(spec_path, root)`
+    を返す（`test_render_ritsu_revalidates_donor_provenance_after_bank_build`
+    と同型のヘルパー）。"""
+    root = tmp_path / "voicebank"
+    _write_minimal_oto(root / "A3")
+    pinned_sha, _pitch_dirs = dbu.voicebank_identity_hash(root)
+    spec = _spec_with_donor({"dataset": "ritsu", "voicebank_sha256": pinned_sha})
+    spec_path = tmp_path / "spec.json"
+    vs.save_voice_spec(spec, spec_path)
+    return spec_path, root
+
+
+def test_render_timing_out_equals_out_raises_before_build_score(tmp_path: Path, monkeypatch) -> None:
+    """`--timing-out` が `--out` と一致する呼び出しは、`build_score` 以降の
+    重い合成パイプラインへ入る前に fail-closed で拒否される（`--out` は
+    まだファイルとして存在しない通常ケースでも検出できることが重要 ——
+    `_reject_output_collision` の `protected_files` は「既存の入力ファイル」
+    前提で `.exists()` スキップするため、それをそのまま `--out` へ流用すると
+    見逃す。build_score をセンチネル化し、「合成前」の位置であることも
+    合わせて検証する）。"""
+    spec_path, root = _ritsu_spec_and_voicebank(tmp_path)
+    out_path = tmp_path / "out.wav"
+    assert not out_path.exists()  # 通常ケース: --out はまだ存在しない
+
+    def _sentinel_build_score(_name):
+        raise AssertionError(
+            "build_score reached — timing-out collision check did not fail before synthesis"
+        )
+
+    monkeypatch.setattr(rd, "build_score", _sentinel_build_score)
+
+    with pytest.raises(rd.OutputCollisionError, match="timing-out"):
+        rd.render(
+            "sakura", spec_path, donor="ritsu", voicebank_root=root,
+            out_path=out_path, timing_out_path=out_path,
+        )
+
+
+def test_render_timing_out_inside_protected_root_raises_before_build_score(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`--timing-out` が保護入力（`--voicebank-root` 配下）と一致する場合も
+    合成前に fail-closed で拒否される。"""
+    spec_path, root = _ritsu_spec_and_voicebank(tmp_path)
+    out_path = tmp_path / "out.wav"
+    timing_out_path = root / "A3" / "oto.ini"  # voicebank_root 配下に衝突させる
+
+    def _sentinel_build_score(_name):
+        raise AssertionError(
+            "build_score reached — timing-out collision check did not fail before synthesis"
+        )
+
+    monkeypatch.setattr(rd, "build_score", _sentinel_build_score)
+
+    with pytest.raises(rd.OutputCollisionError):
+        rd.render(
+            "sakura", spec_path, donor="ritsu", voicebank_root=root,
+            out_path=out_path, timing_out_path=timing_out_path,
+        )
+
+
+def test_render_timing_out_none_skips_collision_check_and_reaches_build_score(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`timing_out_path` 省略時（`None`）はこのゲートに抵触せず、従来どおり
+    `build_score` まで到達する（新規ゲートが無関係な呼び出しを誤検知しない
+    ことの対照テスト）。"""
+    spec_path, root = _ritsu_spec_and_voicebank(tmp_path)
+    out_path = tmp_path / "out.wav"
+
+    class _ReachedBuildScore(Exception):
+        pass
+
+    def _sentinel_build_score(_name):
+        raise _ReachedBuildScore("build_score reached as expected")
+
+    monkeypatch.setattr(rd, "build_score", _sentinel_build_score)
+
+    with pytest.raises(_ReachedBuildScore):
+        rd.render("sakura", spec_path, donor="ritsu", voicebank_root=root, out_path=out_path)
+
+
+# ---------------------------------------------------------------------------
+# P1 修正 (review #265): WAV + timing CSV の両方 staging → 両方公開
+# （非対称な部分公開の解消）
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_wav_and_timing_publishes_both_files(tmp_path: Path) -> None:
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    y = np.linspace(-0.5, 0.5, 240).astype(np.float64)
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rows[0]["row_index"] = "0"
+    rows[0]["row_kind"] = "rest"
+
+    output_sha256 = rd._atomic_write_wav_and_timing(y, 24000, out_path, rows, timing_out_path)
+
+    assert out_path.exists()
+    assert timing_out_path.exists()
+    assert output_sha256 == hashlib.sha256(out_path.read_bytes()).hexdigest()
+    with open(timing_out_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        written_rows = list(reader)
+    assert written_rows == rows
+    # staging tempfile が残っていない。
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_wav_and_timing_no_wav_publish_when_csv_staging_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P1 修正 (review #265) の核心: timing CSV の staging（書き込み）が失敗
+    したら、`--out` の WAV も公開されない（旧実装は WAV を先に公開してから
+    別途 CSV を書いていたため、CSV 失敗時に WAV だけが残る非対称があった）。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    y = np.linspace(-0.5, 0.5, 240).astype(np.float64)
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated timing csv write failure")
+
+    monkeypatch.setattr(rd, "_stage_timing_csv_bytes", _boom)
+
+    with pytest.raises(RuntimeError):
+        rd._atomic_write_wav_and_timing(y, 24000, out_path, rows, timing_out_path)
+
+    assert not out_path.exists()  # WAV も非公開のまま（非対称解消の確認）
+    assert not timing_out_path.exists()
+    assert list(tmp_path.glob("*.tmp")) == []  # staging tempfile も残らない
+
+
+def test_atomic_write_wav_and_timing_does_not_clobber_existing_files_on_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """既存の有効な WAV/CSV がある状態で、CSV staging が失敗しても両方とも
+    無傷のまま残る。"""
+    out_path = tmp_path / "out.wav"
+    timing_out_path = tmp_path / "out_timing.csv"
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(np.zeros(10), 24000, out_path, rows, timing_out_path)
+    wav_before = out_path.read_bytes()
+    csv_before = timing_out_path.read_bytes()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated timing csv write failure")
+
+    monkeypatch.setattr(rd, "_stage_timing_csv_bytes", _boom)
+    with pytest.raises(RuntimeError):
+        rd._atomic_write_wav_and_timing(np.ones(10), 24000, out_path, rows, timing_out_path)
+
+    assert out_path.read_bytes() == wav_before
+    assert timing_out_path.read_bytes() == csv_before
+
+
+def test_atomic_write_wav_and_timing_matches_atomic_write_wav_bytes(tmp_path: Path) -> None:
+    """timing CSV 経由の公開でも、WAV バイト列そのものは単独経路
+    (`_atomic_write_wav`) と完全一致する（合成結果に一切影響しないことの
+    直接的な裏付け）。"""
+    y = np.linspace(-0.3, 0.7, 480).astype(np.float64)
+    solo_path = tmp_path / "solo.wav"
+    rd._atomic_write_wav(y, 24000, solo_path)
+
+    combo_path = tmp_path / "combo.wav"
+    timing_out_path = tmp_path / "combo_timing.csv"
+    rows = [{k: "" for k in rd.TIMING_CSV_FIELDS}]
+    rd._atomic_write_wav_and_timing(y, 24000, combo_path, rows, timing_out_path)
+
+    assert solo_path.read_bytes() == combo_path.read_bytes()

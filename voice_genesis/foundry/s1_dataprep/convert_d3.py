@@ -127,6 +127,12 @@ class OutputCollisionError(ValueError):
     の rename/`.old` 退避・rmtree の前に検出する）。"""
 
 
+class EmptyDatasetError(ValueError):
+    """P1 修正 (review #265): `discover_pairs()` が 0 件のとき、staging 構築・
+    `_swap_into_place` の前に送出する（fail-closed。空データセットで既存
+    `--out-dir` を黙って置き換える false-success を防止する）。"""
+
+
 # ---------------------------------------------------------------------------
 # 1. ペア発見（wav <-> 同名 timing CSV）
 # ---------------------------------------------------------------------------
@@ -398,9 +404,22 @@ def _swap_into_place(staging_dir: Path, out_dir: Path) -> None:
         raise
 
 
-def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequence[Path]) -> None:
+def _reject_output_collision(
+    out_paths: Sequence[Path],
+    protected_roots: Sequence[Path],
+    protected_files: Sequence[Optional[Path]] = (),
+) -> None:
     """`convert_ritsu.py` `_reject_output_collision` と同一ロジック（双方向
-    包含判定 + 相互衝突判定）。"""
+    包含判定 + 相互衝突判定）に加え、`protected_files`（P1 修正・review #265）
+    で単一ファイル入力の**完全一致のみ**を検査する（`adapter/render.py`
+    `_reject_output_collision` の `protected_files`/`protected_roots` 分離と
+    同型）。`protected_roots` はディレクトリ全体（配下への包含・逆包含も
+    検査）を保護するのに対し、`protected_files` は単一ファイル（例:
+    `--ledger` の JSON ファイル自身）だけを保護し、そのファイルと同じ
+    ディレクトリの兄弟パスを `--out-dir` に使う一般的な運用（例: 台帳と
+    出力先が同じ scratch ディレクトリ配下）を誤検知しない。`None`/未存在の
+    要素はスキップする。
+    """
     resolved_outs = [(p, p.resolve()) for p in out_paths]
 
     for i, (p_i, r_i) in enumerate(resolved_outs):
@@ -408,6 +427,19 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
             if r_i == r_j:
                 raise OutputCollisionError(
                     f"output paths collide with each other: {p_i} == {p_j}（fail-closed で拒否）"
+                )
+
+    for f in protected_files:
+        if f is None:
+            continue
+        f_path = Path(f)
+        if not f_path.exists():
+            continue
+        f_resolved = f_path.resolve()
+        for p, r in resolved_outs:
+            if r == f_resolved:
+                raise OutputCollisionError(
+                    f"output path {p} collides with protected input file {f}（fail-closed で拒否）"
                 )
 
     for root in protected_roots:
@@ -447,11 +479,27 @@ def convert(
     （`transcriptions.csv` + `wavs/`）。`convert_ritsu.py` `convert()` と同型:
     `<out_dir>.staging-<pid>` に完全構築してから成功時のみ原子的 swap する。
     失敗時は staging を削除し既存 `out_dir` はそのまま残す。統計 dict を返す。
-    """
-    out_dir = Path(out_dir)
-    pairs = discover_pairs(render_dir)  # fail-closed（ペア不整合）はここで完結
 
+    P1 修正 (review #265): 衝突検査 (`_reject_output_collision`) はこの公開
+    関数自身が行う（旧実装は CLI `main()` のみが preflight として呼んでおり、
+    `convert()` を非 CLI 経路（他スクリプトからの直接呼び出し）から呼ぶと
+    `--out-dir` が `render_dir` と衝突していても無検査で通過し得た）。
+    加えて `discover_pairs()` が 0 件（空データセット）の場合も staging
+    構築前に fail-closed で拒否する（`EmptyDatasetError`）。
+    """
+    render_dir = Path(render_dir)
+    out_dir = Path(out_dir)
+    old_dir = out_dir.parent / f"{out_dir.name}.old"
     staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
+    _reject_output_collision([out_dir, old_dir, staging_dir], protected_roots=[render_dir])
+
+    pairs = discover_pairs(render_dir)  # fail-closed（ペア不整合）はここで完結
+    if not pairs:
+        raise EmptyDatasetError(
+            f"render-dir {render_dir} contains no wav/timing-csv pairs to convert "
+            "(fail-closed, nothing published; any existing out_dir is left untouched)"
+        )
+
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
     staging_dir.mkdir(parents=True)
@@ -549,22 +597,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    out_dir: Path = args.out_dir
-    old_dir = out_dir.parent / f"{out_dir.name}.old"
-    staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
-    try:
-        _reject_output_collision(
-            [out_dir, old_dir, staging_dir], protected_roots=[args.render_dir]
-        )
-    except OutputCollisionError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-
+    # P1 修正 (review #265): 衝突検査・空データセット検査は `convert()` 自身が
+    # 行う（公開関数へ移設済み。CLI 側の preflight 二重実装はしない）。
     try:
         summary = convert(
             args.render_dir, args.out_dir, args.duration_tolerance_sec, args.ffmpeg_bin
         )
     except (
+        OutputCollisionError,
+        EmptyDatasetError,
         PairDiscoveryError,
         MalformedTimingCsvError,
         DurationMismatchError,

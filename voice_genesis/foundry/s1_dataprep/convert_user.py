@@ -256,11 +256,13 @@ def reconcile_ledger(
     normalized_dir: Path, ledger_entries: Sequence[Dict[str, object]]
 ) -> Dict[str, LedgerEntry]:
     """台帳の `normalized_path` のファイル名 + `sha256` を正として
-    `normalized_dir` と突合する。欠落・sha256 不一致・（台帳に無い）余剰 wav の
-    いずれも全件収集してから `LedgerMismatchError` で fail-closed する。"""
+    `normalized_dir` と突合する。欠落・sha256 不一致・（台帳に無い）余剰 wav・
+    card_id 重複（P2 修正 review #265）のいずれも全件収集してから
+    `LedgerMismatchError` で fail-closed する。"""
     problems: List[str] = []
     by_card: Dict[str, LedgerEntry] = {}
     referenced_filenames: set = set()
+    entries_by_card_id: Dict[str, List[str]] = {}  # P2 修正: card_id 重複検出用
 
     for entry in ledger_entries:
         card_id = entry.get("card_id")
@@ -287,6 +289,19 @@ def reconcile_ledger(
             continue
         by_card[str(card_id)] = LedgerEntry(
             card_id=str(card_id), filename=filename, sha256=str(expected_sha), path=candidate
+        )
+        entries_by_card_id.setdefault(str(card_id), []).append(filename)
+
+    # P2 修正 (review #265): card_id 重複を黙殺上書きせず fail-closed で検出する。
+    # 再録 take の積み立て運用では複数台帳エントリが同一 card_id を指すことが
+    # 正常系としてあり得るため、上の `by_card[str(card_id)] = ...`（後勝ち）に
+    # 任せると先の take が黙って失われる。全重複を収集してから他の違反と
+    # 合わせて 1 回で fail-closed する。
+    dup_card_ids = sorted(cid for cid, files in entries_by_card_id.items() if len(files) > 1)
+    for cid in dup_card_ids:
+        problems.append(
+            f"{cid}: duplicate ledger entries for the same card_id "
+            f"({len(entries_by_card_id[cid])}): {entries_by_card_id[cid]}"
         )
 
     actual_wavs = {p.name for p in normalized_dir.glob("*.wav")}
@@ -813,9 +828,30 @@ def convert(
     全カード除外・`--dsdict` の読み込み失敗は fail-closed で例外を送出する。
     それ以外の個別カードのアラインメント失敗は当該カードのみ除外し、他カードの
     変換は継続する。`dsdict_path` は T2（短句）のグラフェム音素化にのみ使う
-    （T0/T1 は無改変、C2 参照）。"""
+    （T0/T1 は無改変、C2 参照）。
+
+    P1 修正 (review #265): 衝突検査 (`convert_d3._reject_output_collision`)
+    はこの公開関数自身が行う（旧実装は CLI `main()` のみが preflight として
+    呼んでおり、`convert()` を非 CLI 経路から呼ぶと `--out-dir` が
+    `normalized_dir`/`--ledger` と衝突していても無検査で通過し得た）。
+    `normalized_dir`（音源本体のディレクトリ）は `protected_roots`（配下
+    全体を保護）、`ledger_path`（単一の JSON ファイル）は `protected_files`
+    （完全一致のみ保護）で検査する — 台帳ファイルの**兄弟**パスを
+    `--out-dir` に使う一般的な運用（同じ scratch ディレクトリ配下に台帳と
+    出力先を置く）を誤検知しないため（旧 CLI 実装は `ledger.parent` 全体を
+    `protected_roots` として扱っており、この一般的な運用を誤って拒否し
+    得た。`_reject_output_collision` docstring 参照）。
+    """
     normalized_dir = Path(normalized_dir)
+    ledger_path = Path(ledger_path)
     out_dir = Path(out_dir)
+    old_dir = out_dir.parent / f"{out_dir.name}.old"
+    staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
+    convert_d3._reject_output_collision(
+        [out_dir, old_dir, staging_dir],
+        protected_roots=[normalized_dir],
+        protected_files=[ledger_path],
+    )
 
     entries = load_ledger(Path(ledger_path))
     by_card = reconcile_ledger(normalized_dir, entries)  # fail-closed はここで完結
@@ -860,7 +896,6 @@ def convert(
             + json.dumps(excluded, ensure_ascii=False)
         )
 
-    staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
     staging_dir.mkdir(parents=True)
@@ -917,7 +952,16 @@ def _publish_into(
                 voiced_ph_dur_s += d
 
     excluded_sorted = sorted(excluded, key=lambda e: e["card_id"])
-    dsdict_provenance = {"path": str(dsdict.path), "sha256": dsdict.sha256, "n_graphemes": len(dsdict.table)}
+    # P2 修正 (review #265 追加分): `dsdict.path` の全文字列（コンテナ固有の
+    # 絶対パス）を成果物へ焼き込まない — 実行環境ごとにバイト列が変わり、
+    # `run4_dataset_pins.json` の `exclusions_json_sha256` pin と矛盾する
+    # （intake ledger の `normalized_path` 同様、basename のみを記録する家風に
+    # 合わせる）。provenance として意味を持つのは `sha256`/`n_graphemes`
+    # （辞書の実体を一意に識別する）であり、`path` は参考情報の basename に
+    # 縮小する。
+    dsdict_provenance = {
+        "path": Path(dsdict.path).name, "sha256": dsdict.sha256, "n_graphemes": len(dsdict.table)
+    }
     exclusions_report = {
         "schema": "convert-user-exclusions/0.2",
         "dsdict": dsdict_provenance,
@@ -982,24 +1026,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    out_dir: Path = args.out_dir
-    old_dir = out_dir.parent / f"{out_dir.name}.old"
-    staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
-    try:
-        convert_d3._reject_output_collision(
-            [out_dir, old_dir, staging_dir],
-            protected_roots=[args.normalized_dir, args.ledger.parent],
-        )
-    except convert_d3.OutputCollisionError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-
+    # P1 修正 (review #265): 衝突検査は `convert()` 自身が行う（公開関数へ
+    # 移設済み。CLI 側の preflight 二重実装はしない）。
     try:
         summary = convert(
             args.normalized_dir, args.ledger, args.out_dir, args.dsdict,
             args.duration_tolerance_sec, args.ffmpeg_bin,
         )
     except (
+        convert_d3.OutputCollisionError,
         LedgerMismatchError,
         AllCardsExcludedError,
         DsDictError,

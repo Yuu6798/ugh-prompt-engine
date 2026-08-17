@@ -289,6 +289,118 @@ def test_reconcile_ledger_collects_multiple_violations(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 1.5 P2 修正 (review #265): card_id 重複を黙殺上書きせず fail-closed する
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_ledger_duplicate_card_id_fails_closed(tmp_path: Path) -> None:
+    """再録 take の積み立て運用では複数の台帳エントリが同一 card_id を指す
+    ことが正常系としてあり得るが、`reconcile_ledger` は黙って後勝ちで
+    上書きせず reconciliation エラーとして検出する（旧実装は
+    `by_card[str(card_id)] = ...` の後勝ち代入で先の take を黙殺していた）。"""
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    samples = _t2_uc012_samples()
+    take1 = normalized_dir / "UC-012_take1.norm24k.wav"
+    take2 = normalized_dir / "UC-012_take2.norm24k.wav"
+    _write_wav(take1, samples)
+    _write_wav(take2, samples * 0.5)
+    entries = [
+        {
+            "card_id": "UC-012", "normalized_path": f"user_donor_normalized/{take1.name}",
+            "sha256": _sha256(take1),
+        },
+        {
+            "card_id": "UC-012", "normalized_path": f"user_donor_normalized/{take2.name}",
+            "sha256": _sha256(take2),
+        },
+    ]
+    with pytest.raises(cu.LedgerMismatchError, match="duplicate") as excinfo:
+        cu.reconcile_ledger(normalized_dir, entries)
+    msg = str(excinfo.value)
+    assert "UC-012" in msg
+    assert take1.name in msg and take2.name in msg
+
+
+def test_convert_duplicate_card_id_ledger_publishes_nothing(tmp_path: Path) -> None:
+    """`convert()` エンドツーエンドでも card_id 重複が fail-closed で拒否され、
+    `out_dir` へは一切公開されない。"""
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    samples = _t2_uc012_samples()
+    take1 = normalized_dir / "UC-012_take1.norm24k.wav"
+    take2 = normalized_dir / "UC-012_take2.norm24k.wav"
+    _write_wav(take1, samples)
+    _write_wav(take2, samples)
+    entries = [
+        {
+            "card_id": "UC-012", "normalized_path": f"user_donor_normalized/{take1.name}",
+            "sha256": _sha256(take1),
+        },
+        {
+            "card_id": "UC-012", "normalized_path": f"user_donor_normalized/{take2.name}",
+            "sha256": _sha256(take2),
+        },
+    ]
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    ledger_path.write_text(json.dumps(_make_ledger(entries), ensure_ascii=False), encoding="utf-8")
+    dsdict_path = _write_test_dsdict(tmp_path)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(cu.LedgerMismatchError, match="duplicate"):
+        cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
+    assert not out_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# 1.6 P1 修正 (review #265): 衝突検査を convert() 自身が行う（CLI 経由でなくても
+# fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def test_convert_rejects_out_dir_colliding_with_normalized_dir_without_cli(tmp_path: Path) -> None:
+    """CLI `main()` を経由しない直接呼び出しでも `--out-dir` が
+    `normalized_dir` と衝突していれば `convert()` 自身が fail-closed で
+    拒否する（review #265 P1）。"""
+    ledger_path, normalized_dir = _write_ledger_and_normalized(
+        tmp_path, {"UC-012": _t2_uc012_samples()}
+    )
+    dsdict_path = _write_test_dsdict(tmp_path)
+
+    with pytest.raises(cu.convert_d3.OutputCollisionError):
+        cu.convert(normalized_dir, ledger_path, normalized_dir, dsdict_path)
+
+
+def test_convert_rejects_out_dir_equal_to_ledger_file_without_cli(tmp_path: Path) -> None:
+    """`--out-dir` が `--ledger` ファイル自身と一致する場合も fail-closed で
+    拒否する（`protected_files` の完全一致検査）。"""
+    ledger_path, normalized_dir = _write_ledger_and_normalized(
+        tmp_path, {"UC-012": _t2_uc012_samples()}
+    )
+    dsdict_path = _write_test_dsdict(tmp_path)
+
+    with pytest.raises(cu.convert_d3.OutputCollisionError):
+        cu.convert(normalized_dir, ledger_path, ledger_path, dsdict_path)
+
+
+@_ffmpeg_required
+def test_convert_allows_out_dir_sibling_of_ledger_file(tmp_path: Path) -> None:
+    """`--out-dir` が `--ledger` ファイルと同じ親ディレクトリの兄弟パスに
+    あるだけなら誤検知しない（`protected_files` は完全一致のみを保護し、
+    `ledger.parent` 全体は保護しない設計。既存テスト fixture がまさにこの
+    形 — `ledger_path`/`out_dir` を共通の `tmp_path` 直下に置く — であり、
+    もし誤検知していれば全 convert() エンドツーエンドテストが壊れる）。"""
+    ledger_path, normalized_dir = _write_ledger_and_normalized(
+        tmp_path, {"UC-012": _t2_uc012_samples()}
+    )
+    dsdict_path = _write_test_dsdict(tmp_path)
+    out_dir = tmp_path / "out_sibling"  # ledger_path と同じ tmp_path 直下
+
+    summary = cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
+    assert summary["included_cards"] == ["UC-012"]
+
+
+# ---------------------------------------------------------------------------
 # 2. dsdict.yaml ロード + グラフェム最長一致トークン化（C2）
 # ---------------------------------------------------------------------------
 
@@ -557,6 +669,40 @@ def test_convert_end_to_end_mixed_tiers_publishes_dataset(tmp_path: Path) -> Non
     assert exclusions["n_included"] == 4
     assert exclusions["n_excluded"] == 1
     assert exclusions["dsdict"]["sha256"] == summary["dsdict"]["sha256"]
+
+
+# ---------------------------------------------------------------------------
+# 5.5 P2 修正 (review #265 追加分): exclusions.json の dsdict.path はコンテナ
+# 固有の絶対パスを焼き込まず basename のみにする（pin 不変性）
+# ---------------------------------------------------------------------------
+
+
+@_ffmpeg_required
+def test_exclusions_json_dsdict_path_is_basename_only_no_absolute_path(tmp_path: Path) -> None:
+    """`exclusions.json` の `dsdict.path` は `--dsdict` の basename のみを
+    記録し、呼び出し環境固有の絶対パス（ディレクトリ区切り含む）を含まない
+    （`run4_dataset_pins.json` の `exclusions_json_sha256` pin が実行環境に
+    依存しないようにするため）。`sha256`/`n_graphemes` は辞書の実体を一意に
+    識別する provenance として不変のまま残す。"""
+    cards = {"UC-012": _t2_uc012_samples()}
+    ledger_path, normalized_dir = _write_ledger_and_normalized(tmp_path, cards)
+    # dsdict をネストしたディレクトリ配下に置き、絶対パスに複数のパス区切りが
+    # 含まれる状態を作る（basename 化されていなければ確実に検出できる）。
+    nested_dir = tmp_path / "nested" / "dsdict_dir"
+    nested_dir.mkdir(parents=True)
+    dsdict_path = _write_test_dsdict(nested_dir)
+    out_dir = tmp_path / "out"
+
+    summary = cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
+
+    exclusions = json.loads((out_dir / "exclusions.json").read_text(encoding="utf-8"))
+    assert exclusions["dsdict"]["path"] == "dsdict.yaml"
+    assert "/" not in exclusions["dsdict"]["path"]
+    assert str(nested_dir) not in json.dumps(exclusions)
+    # provenance として意味を持つ sha256/n_graphemes は不変。
+    assert exclusions["dsdict"]["sha256"] == hashlib.sha256(dsdict_path.read_bytes()).hexdigest()
+    assert exclusions["dsdict"]["sha256"] == summary["dsdict"]["sha256"]
+    assert exclusions["dsdict"]["n_graphemes"] == summary["dsdict"]["n_graphemes"]
 
 
 @_ffmpeg_required

@@ -221,6 +221,27 @@ def _atomic_write_wav(y: np.ndarray, sr: int, out_path: str | Path) -> str:
     staging バイト列を正本にする）。
     """
     out_path = Path(out_path)
+    tmp_name, output_sha256 = _stage_wav_bytes(y, sr, out_path)
+    try:
+        os.replace(tmp_name, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return output_sha256
+
+
+def _stage_wav_bytes(y: np.ndarray, sr: int, out_path: Path) -> Tuple[str, str]:
+    """P1 修正 (review #265): `_atomic_write_wav`/`_atomic_write_wav_and_timing`
+    共通の staging 処理を切り出したもの。`out_path` と同じディレクトリへ WAV を
+    書くが、まだ `out_path` への置換は行わない（戻り値 `(tmp_path, sha256)`。
+    最終的な `os.replace` は呼び出し側が担う）。失敗時は staging tempfile を
+    best-effort で削除してから re-raise する（`_atomic_write_wav` 従来実装と
+    同一の失敗時挙動）。
+    """
+    out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=out_path.parent, prefix=f"{out_path.name}.", suffix=".tmp")
     os.close(fd)  # sf.write はパス経由で自前ハンドルを開くため fd は即閉じる
@@ -229,12 +250,80 @@ def _atomic_write_wav(y: np.ndarray, sr: int, out_path: str | Path) -> str:
         # `format="WAV"` を明示する。
         sf.write(tmp_name, y, sr, subtype="PCM_16", format="WAV")
         output_sha256 = hashlib.sha256(Path(tmp_name).read_bytes()).hexdigest()
-        os.replace(tmp_name, out_path)
     except BaseException:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
+        raise
+    return tmp_name, output_sha256
+
+
+def _stage_timing_csv_bytes(rows: List[dict], timing_out_path: Path) -> str:
+    """P1 修正 (review #265): timing CSV の staging 版。`write_timing_csv` と
+    同じ列/内容を書くが、まだ `timing_out_path` への置換は行わない（戻り値は
+    staging tempfile のパス）。失敗時は staging tempfile を best-effort で
+    削除してから re-raise する。
+    """
+    timing_out_path = Path(timing_out_path)
+    timing_out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=timing_out_path.parent, prefix=f"{timing_out_path.name}.", suffix=".tmp"
+    )
+    os.close(fd)
+    try:
+        with open(tmp_name, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=TIMING_CSV_FIELDS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return tmp_name
+
+
+def _atomic_write_wav_and_timing(
+    y: np.ndarray, sr: int, out_path: str | Path,
+    timing_rows: List[dict], timing_out_path: str | Path,
+) -> str:
+    """P1 修正 (review #265): WAV + timing CSV を両方 staging してから両方
+    公開する。旧実装は `render()` が WAV を atomic 公開した後、CLI 側
+    (`main()`) が別途 `write_timing_csv` を（非 atomic に）呼んでいたため、
+    CSV 書き込みが後から失敗すると WAV だけが公開済みで残る非対称があった
+    （review #265 P1 指摘）。ここでは両ファイルとも staging tempfile を
+    書き終えるまで最終パス（`out_path`/`timing_out_path`）には一切触れず、
+    両方の staging が成功して初めて順に `os.replace` する。戻り値は WAV の
+    `output_sha256`（`_atomic_write_wav` と同じ契約）。
+
+    2 つの `os.replace` の間には理論上の窓が残る（多ファイルの真の単一
+    トランザクションは POSIX では組めない）が、従来問題になっていた
+    「CSV 側の書き込み失敗（ディスク満杯・権限等）で非対称が生じる」経路は
+    両方の staging 完了後にしか置換を始めないことで解消する。
+    """
+    out_path = Path(out_path)
+    timing_out_path = Path(timing_out_path)
+    wav_tmp, output_sha256 = _stage_wav_bytes(y, sr, out_path)
+    try:
+        csv_tmp = _stage_timing_csv_bytes(timing_rows, timing_out_path)
+    except BaseException:
+        try:
+            os.unlink(wav_tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        os.replace(wav_tmp, out_path)
+        os.replace(csv_tmp, timing_out_path)
+    except BaseException:
+        for tmp in (wav_tmp, csv_tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         raise
     return output_sha256
 
@@ -717,13 +806,15 @@ def _build_timing_rows(
 
 
 def write_timing_csv(path: str | Path, rows: List[dict]) -> None:
-    """`_build_timing_rows` の行を CSV（`TIMING_CSV_FIELDS` 列）へ書く。
+    """`_build_timing_rows` の行を CSV（`TIMING_CSV_FIELDS` 列）へ非 atomic に
+    直接書く（staging を経由しない単純書き込み）。
 
-    タイミング export は成果物 WAV とは独立した副次出力であり、
-    `_atomic_write_wav` が保護する「成果物公開の安全ゲート」対象（`--out`
-    衝突ガード・atomic replace）ではないため、同じ atomic 経路は要求しない
-    （[実装決定]。呼び出しは CLI の `--timing-out` 指定時のみで、失敗しても
-    既存 WAV 出力には影響しない）。
+    P1 修正 (review #265): CLI (`main()`) 経由の `--timing-out` 公開は、
+    現在は `render(..., timing_out_path=...)` 内の
+    `_atomic_write_wav_and_timing`（WAV と両方 staging → 両方 rename）が
+    担う。本関数は後方互換・プログラム的な単体利用（`render()` を介さず
+    `timing_rows` を直接ファイル化したい呼び出し元）向けに残す非 atomic な
+    素朴実装であり、`main()` からはもう呼ばれない。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -749,6 +840,7 @@ def render(
     donor: str = "vocadito",
     consonant_source: Optional[str] = None,
     voicebank_root: Optional[str | Path] = None,
+    timing_out_path: Optional[str | Path] = None,
 ) -> dict:
     """VG-F1 / 追補 F1.1 / 追補 F1.2 パイプライン本体。
 
@@ -763,6 +855,14 @@ def render(
     省略時は donor に応じた既定（vocadito -> "synthetic", ritsu/pjs ->
     "recorded"）。`apply_consonants=False` は "none" と等価（後方互換の
     `--no-consonants` フラグ用）。
+
+    `timing_out_path`: P1 修正 (review #265) `--timing-out` の公開パス。
+    指定時は `--out` と同じ保護入力衝突検査（`_reject_output_collision`）を
+    合成（`build_score`/WORLD 分析）より前に通す（重い処理を始める前の
+    fail-closed）。かつ WAV とタイミング CSV を両方 staging してから両方
+    公開する（`_atomic_write_wav_and_timing`）ため、CSV 書き込みが後から
+    失敗して WAV だけが残る非対称を避ける。省略時（`None`）は WAV 単独の
+    従来経路（`_atomic_write_wav`）のままで、出力バイト列は完全不変。
     """
     if consonant_source is None:
         consonant_source = "synthetic" if donor == "vocadito" else "recorded"
@@ -795,6 +895,27 @@ def render(
     # ここでの呼び出しは「無関係な入力での無駄な WORLD 分析を防ぐ fail-fast」
     # の役割に限定される。
     donor_provenance = _validate_spec_donor(spec, donor, wav_path, voicebank_root)
+    # P1 修正 (review #265): `--timing-out` の衝突検査を、`--out` の衝突検査
+    # （書き込み直前・§ 後段）とは独立に、重い合成（build_score 以降の
+    # perf/WORLD パイプライン）より前へ前倒しする。`--timing-out` が `--out`・
+    # 保護入力（--wav/--voice/--notes-csv/--voicebank-root/--cache-dir）の
+    # いずれかと一致する呼び出しを、無駄な重い処理を始める前に拒否する。
+    if timing_out_path is not None:
+        if out_path is not None and Path(timing_out_path).resolve() == Path(out_path).resolve():
+            # `_reject_output_collision` の `protected_files` は「既存の入力
+            # ファイル」を前提に `.exists()` でスキップする（--notes-csv 省略時
+            # 等）ため、まだ書かれていない `--out`（通常のケース）との一致判定
+            # には使えない。out/timing-out は互いに「これから書く 2 つの出力」
+            # であり、存在有無に関わらず厳密一致のみで衝突と判定する。
+            raise OutputCollisionError(
+                f"--timing-out ({timing_out_path}) が --out ({out_path}) と衝突しています"
+                "（fail-closed で拒否）"
+            )
+        _reject_output_collision(
+            timing_out_path,
+            protected_files=[wav_path, voice_spec_path, notes_csv_path],
+            protected_roots=[voicebank_root, cache_dir],
+        )
     notes, tempo_bpm = build_score(score_name)
     segments, total_samples = perf.build_timeline(notes, sr=SR, tempo_bpm=tempo_bpm)
     # F1.4 R3: score 由来の絶対総尺（frame 数）。donor="ritsu"（VCV/preutterance
@@ -1104,7 +1225,15 @@ def render(
             protected_files=[wav_path, voice_spec_path, notes_csv_path],
             protected_roots=[voicebank_root, cache_dir],
         )
-        output_sha256 = _atomic_write_wav(y, SR, out_path)
+        if timing_out_path is not None:
+            # P1 修正 (review #265): WAV + timing CSV を両方 staging してから
+            # 両方公開する（§ `_atomic_write_wav_and_timing` docstring 参照。
+            # 衝突検査自体は合成前の早期チェック（§ 冒頭）で既に完了済み）。
+            output_sha256 = _atomic_write_wav_and_timing(
+                y, SR, out_path, timing_rows, timing_out_path
+            )
+        else:
+            output_sha256 = _atomic_write_wav(y, SR, out_path)
 
     cap_modes = [r.cap_mode for r in resolved_list]
     return dict(
@@ -1172,6 +1301,7 @@ def main() -> None:
         args.score, args.voice, args.wav, notes_csv_path=args.notes_csv,
         cache_dir=args.cache_dir, out_path=args.out, apply_consonants=not args.no_consonants,
         donor=args.donor, consonant_source=args.consonant_source, voicebank_root=args.voicebank_root,
+        timing_out_path=args.timing_out,
     )
     print(f"wrote {args.out}: {len(result['y'])} samples ({len(result['y']) / result['sr']:.3f}s)")
     print(f"donor={result['donor']} consonant_source={result['consonant_source']}")
@@ -1197,7 +1327,9 @@ def main() -> None:
         print(f"vcv_selection_stats={result['vcv_selection_stats']}")
         print(f"vcv_placement_stats={result['vcv_placement_stats']}")
     if args.timing_out is not None:
-        write_timing_csv(args.timing_out, result["timing_rows"])
+        # P1 修正 (review #265): timing CSV は `render(..., timing_out_path=...)`
+        # 内で WAV と両方 staging → 両方 rename 済み（`_atomic_write_wav_and_timing`）
+        # のため、ここで別途 `write_timing_csv` を呼ばない（非対称公開の回避）。
         print(f"wrote timing csv {args.timing_out}: {len(result['timing_rows'])} rows")
 
 

@@ -304,12 +304,25 @@ def _assemble_into(
         _copy_file_bytes(user_exclusions_src, user_dir / "exclusions.json")
 
     # --- 3. 3 話者ゲート検証（全問題収集 → 1 件でもあれば fail-closed） -------
+    # P1 修正 (review #265): 話者の transcriptions.csv が行 0 件（空データ
+    # セット）の場合、`validate_speaker`/`check_ph_dur_duration`/
+    # `check_note_dur_consistency` はいずれも空リストに対して no-op で
+    # `problems=[]` を返す（`convert_d3.discover_pairs()` 0 件と同型の
+    # false-success 経路）。ゲートを回す前に明示的に検出し、空話者があれば
+    # 他の gate 違反と合わせて fail-closed する（staging へは書き込み済みだが
+    # `assemble()` 側で staging ごと破棄され `out_dir` は無変更のまま残る）。
     speaker_dirs = {"ritsu": merged_ritsu_dir, "pjs": pjs_dir, "user": user_dir}
     speaker_rows: Dict[str, List[Dict[str, str]]] = {}
     all_problems: List[str] = []
     for name, spk_dir in speaker_dirs.items():
         rows = build_dataset.read_transcriptions(spk_dir / "transcriptions.csv")
         speaker_rows[name] = rows
+        if not rows:
+            all_problems.append(
+                f"{name}: transcriptions.csv has zero row(s) after assembly "
+                "(fail-closed; refusing to publish an empty speaker corpus)"
+            )
+            continue
         all_problems += _run_gates(name, spk_dir, rows)
     if all_problems:
         raise GateValidationError(all_problems)
@@ -388,14 +401,24 @@ def assemble(
     と原子的に swap する（`convert_d3.py` `_swap_into_place` を read-only
     import で再利用。途中失敗・検証失敗時は staging を破棄し、既存の
     `out_dir` はそのまま残る）。
+
+    P1 修正 (review #265): 衝突検査 (`convert_d3._reject_output_collision`)
+    はこの公開関数自身が行う（旧実装は CLI `main()` のみが preflight として
+    呼んでおり、`assemble()` を非 CLI 経路から呼ぶと `--out-dir` が
+    4 つの raw dir のいずれかと衝突していても無検査で通過し得た）。
     """
     ritsu_raw_dir = Path(ritsu_raw_dir)
     d3_raw_dir = Path(d3_raw_dir)
     pjs_raw_dir = Path(pjs_raw_dir)
     user_raw_dir = Path(user_raw_dir)
     out_dir = Path(out_dir)
-
+    old_dir = out_dir.parent / f"{out_dir.name}.old"
     staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
+    convert_d3._reject_output_collision(
+        [out_dir, old_dir, staging_dir],
+        protected_roots=[ritsu_raw_dir, d3_raw_dir, pjs_raw_dir, user_raw_dir],
+    )
+
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
     staging_dir.mkdir(parents=True)
@@ -439,23 +462,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     out_dir: Path = args.out_dir
-    old_dir = out_dir.parent / f"{out_dir.name}.old"
-    staging_dir = out_dir.parent / f"{out_dir.name}.staging-{os.getpid()}"
-    try:
-        convert_d3._reject_output_collision(
-            [out_dir, old_dir, staging_dir],
-            protected_roots=[args.ritsu_raw_dir, args.d3_raw_dir, args.pjs_raw_dir, args.user_raw_dir],
-        )
-    except convert_d3.OutputCollisionError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-
+    # P1 修正 (review #265): 衝突検査は `assemble()` 自身が行う（公開関数へ
+    # 移設済み。CLI 側の preflight 二重実装はしない）。
     try:
         manifest = assemble(
             args.ritsu_raw_dir, args.d3_raw_dir, args.pjs_raw_dir, args.user_raw_dir, out_dir,
             pjs_is_fixture=args.pjs_is_fixture,
         )
-    except (NameCollisionError, HeaderMismatchError, GateValidationError) as exc:
+    except (
+        convert_d3.OutputCollisionError, NameCollisionError, HeaderMismatchError, GateValidationError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

@@ -75,7 +75,7 @@
     "converter": "voice_genesis/foundry/s1_dataprep/convert_user.py",
     "n_wavs": 15,
     "transcriptions_csv_sha256": "fc3a760c4c45c37760b8a846f90672acf7db39bc43ff1b3a02908fe9fd7deb3b",
-    "exclusions_json_sha256": "abbfacdc191e4e98008fbf55b7de31cd004e83054f580530c2a7e87afc7f8daa",
+    "exclusions_json_sha256": "682b6fb6b103dea00acdd16971eb52a6195933d1af45df86c591c76e875d9219",
     "wav_sha256": {
       "UC-001.wav": "40274942abf8522ebfd2ce1457dc99fc1b5061f2ff5720dc0cca1fed0f420240",
       "UC-002.wav": "c78692b8cf6b4305f5b2ef6c35fab70765e4c18a3babc23feac9ede450da7fa2",

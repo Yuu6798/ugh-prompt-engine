@@ -115,17 +115,22 @@ exclusions.json の sha256 実測値。手打ちなし）。
    `recording_kit/user_donor_ledger.json` の `source_sha256` と 17/17 照合する
    （台帳に列挙された `card_id`/`source_filename` 対応表 =
    `intake_records/intake_record_2026-08-17.md` §2）。
-2. `recording_kit/intake.py` で正規化（24kHz mono s16、ffmpeg 決定論変換。
-   `intake_record_2026-08-17.md` §5/§4 の手順・パラメータをそのまま踏襲）:
+2. 正規化 wav の **replay 再生成**（Codex R2 P1 対応・2026-08-17 改訂:
+   コミット済み台帳へ `intake.py` を再実行すると `_check_existing_artifacts`
+   （正規化 wav 未存在）と `_check_duplicate_sources`（source_sha256 既存）で
+   **必ず fail-closed 停止する**。intake.py は新規受領用であり replay 用では
+   ない）。replay は台帳を書き換えず、ffmpeg 直接変換で行う:
 
    ```bash
-   python voice_genesis/foundry/recording_kit/intake.py \
-       --incoming-dir <17本を収めた incoming> \
-       --out-dir <user_donor_normalized 相当> \
-       --ledger voice_genesis/foundry/recording_kit/user_donor_ledger.json
+   # 各原本について（パラメータ = intake_record_2026-08-17.md §4 と同一）
+   ffmpeg -y -i <原本> -ac 1 -ar 24000 -sample_fmt s16 <台帳 normalized_path のファイル名>
    ```
 
-   生成した正規化 wav 17 本の sha256 を台帳 `sha256` フィールドと照合する
+   代替: 空の一時台帳を指定して intake.py を実行し、生成エントリを
+   コミット済み台帳とフィールド比較してもよい（一時台帳は破棄する）。
+
+   いずれの場合も、生成した正規化 wav 17 本の sha256 を台帳 `sha256`
+   フィールドと照合する
    （`intake_record_2026-08-17.md` §4 のとおり、ffmpeg 版差でバイト不一致に
    なった場合は黙って台帳値を書き換えず、一致する版を探すか再 intake を設計
    する）。
@@ -246,12 +251,11 @@ run 4 の checkpoint に差し替えるのみ）。
 
 ### ②spk3 アンカー単独合成（第 3 声の立ち）
 
-**現状のギャップ**: `s1_gate/gate_synth.py` の `--speaker` は
-`choices=["ritsu", "pjs"]` にハードコードされている（`gate_synth.py:2444`）。
-`user` は選択肢に存在しない。spk3（user）単独合成を行うには、`--speaker` の
-choices 拡張 + user 話者埋め込み（acoustic 学習側の `spk_id=2` に対応する
-`spk_embed`）を読む経路の追加が必要だが、**この拡張コードは本セッション時点で
-未実装**（§8）。
+**実装済み（2026-08-17 更新）**: `s1_gate/gate_synth_run4.py` を使う
+（`gate_synth.py run` と同一引数の委譲ラッパーで `--speaker user` を受理。
+gate_synth の speaker 解決は `*.{speaker}.emb` の純文字列 glob のため、
+run 4 checkpoint から export した `*.user.emb` を置けば既存経路で合成される。
+GPU 実測は未実施 — run 4 の 5K 早期ゲートが初実行）。
 
 ### ③既存 2 アンカーの回帰（S1 ゲート 5 点）
 
@@ -266,13 +270,11 @@ choices 拡張 + user 話者埋め込み（acoustic 学習側の `spk_id=2` に�
 
 `results_s2/s2_record_2026-08-16.md`（2 アンカー間 lerp/slerp・4 候補分割・
 ブラインドシャッフル・隠しコントロール `H'` の規律）を「同じ規律」の参照先
-とする。**現状のギャップ**: S2 のブラインド合成は `s2_forge.py`
-（`scratchpad/s2_batch1/s2_forge.py` 由来、本リポジトリには非コミット）で
-実装されており、これは 2 アンカー（ritsu/pjs）間の線分補間専用。run 4 の
-「三角形内部」（3 アンカー間の重心座標補間）はこのスクリプトの拡張が必要だが、
-**この拡張コードは本セッション時点で存在しない**（§8）。ブラインド規律
-（シャッフル・隠しコントロール・封印された対応表）そのものの設計は
-`s2_record_2026-08-16.md` を一次ソースとしてそのまま踏襲できる。
+とする。**実装済み（2026-08-17 更新）**: `s1_gate/forge_triangle.py` を使う
+（3 アンカー重心座標補間 + S2 ブラインド規律の機械化: 対応表 sha256 封印分離・
+4 候補バッチ・隠しコントロール・無識別命名。genome 台帳は S2 同一 schema の
+VG-S3 系列）。GPU 実測は未実施 — 実 embed 入力は run 4 checkpoint export が
+初実行。規律の一次ソースは引き続き `s2_record_2026-08-16.md`。
 
 ---
 
@@ -326,10 +328,9 @@ Criteria が要求する出口記録）へ記帳する:
    開始 + 5K 節目で optimizer 新品の finetune 機構を再適用）とする。理由 =
    run 4 と run 3 の差分を「データのみ」に閉じ、D3/spk3 の効果帰属を清潔に保つ
    （S2 の単一要因教訓）。`finetune_ckpt_path` は run 4 自身の 5K checkpoint を指す。
-4. **`gate_synth.py --speaker user` 対応**（§5②）: choices 拡張 + user 話者
-   埋め込み読み出し経路の追加。
-5. **3 アンカー三角補間フォージスクリプト**（§5④）: `s2_forge.py`
-   （scratchpad 非コミット）の 2 アンカー線分補間から 3 アンカー重心座標
-   補間への拡張。
+4. **`gate_synth.py --speaker user` 対応**（§5②）: **実装済み（2026-08-17）**
+   — `s1_gate/gate_synth_run4.py`（委譲ラッパー・gate_synth.py 非接触）。
+5. **3 アンカー三角補間フォージスクリプト**（§5④）: **実装済み（2026-08-17）**
+   — `s1_gate/forge_triangle.py`（新規・ブラインド規律機械化込み）。
 6. **D3/ritsu 結合時のファイル名無衝突**（§3）: `assemble_run4.py` が結合時に
    全数比較で実測検査する（fail-closed）。本書の目視照合は参考情報へ格下げ。
