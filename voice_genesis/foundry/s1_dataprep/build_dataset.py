@@ -21,6 +21,7 @@ import math
 import os
 import sys
 import tempfile
+import wave
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -267,6 +268,17 @@ def _publish_outputs(items: Sequence[Tuple[Path, str]]) -> None:
         raise
 
     # Phase 2: 既存ファイルをバックアップへ退避する（無ければ None を記録）。
+    #
+    # [R26 P2 修正] 従来は `os.replace(path, bak_name)` が成功した直後に
+    # `backups.append(...)` していたため、rename 成功〜記帳の間で
+    # `KeyboardInterrupt`/`SystemExit` が飛ぶと巻き戻しハンドラがその退避を
+    # 知らず、canonical パス（`path`）が欠けたまま untracked な `bak_name` が
+    # 残る窓があった。記帳（`backups.append`）を rename 呼び出しの**前**に
+    # 済ませる順序へ変更し、巻き戻し時は「記帳の有無」ではなく
+    # `os.path.exists(bak_name)`（ファイルシステム状態）で実際に rename が
+    # 完了したかを判定する。rename は原子的（中間状態が存在しない）ため、
+    # この判定は「記帳済みだが rename 未実行」（bak_name 不在 → no-op で
+    # 安全）と「rename 完了」（bak_name 実在 → 復元）を取り違えない。
     backups: List[Tuple[Path, Optional[str]]] = []
     try:
         for path, _tmp_name in staged:
@@ -276,14 +288,15 @@ def _publish_outputs(items: Sequence[Tuple[Path, str]]) -> None:
                 )
                 os.close(bak_fd)
                 os.unlink(bak_name)
-                os.replace(path, bak_name)
                 backups.append((path, bak_name))
+                os.replace(path, bak_name)
             else:
                 backups.append((path, None))
     except BaseException:
         # 退避中の失敗: ここまでの退避分を復元し、staging を破棄する。
+        # bak_name が実在するものだけが「実際に退避が完了した」対象。
         for path, bak_name in backups:
-            if bak_name is not None:
+            if bak_name is not None and os.path.exists(bak_name):
                 os.replace(bak_name, path)
         for _path, tmp_name in staged:
             try:
@@ -293,34 +306,328 @@ def _publish_outputs(items: Sequence[Tuple[Path, str]]) -> None:
         raise
 
     # Phase 3: staging を実パスへ一括公開する。
-    published = 0
+    #
+    # [R26 P2 修正] 従来は `os.replace(tmp_name, path)` 成功直後に
+    # `published += 1` していたため、同型の rename→記帳窓があった
+    # （公開成功〜カウンタ更新の間で中断すると、その項目が未公開扱いのまま
+    # 巻き戻しへ入り、`bak_name is None` の項目では新規公開済みファイルが
+    # 消されずに残存し得た）。カウンタに頼らず、`tmp_name` がまだ実在するか
+    # （＝この項目の rename がまだ起きていないか）をファイルシステムから
+    # 判定する（rename は原子的なので tmp_name の実在/不在で二値に定まる）。
     try:
         for path, tmp_name in staged:
             os.replace(tmp_name, path)
-            published += 1
     except BaseException:
         # 途中失敗: 公開済み分をバックアップから巻き戻し、未公開分の
         # staging/バックアップを片付ける（旧成果物を確実に復元する）。
-        for i, (path, tmp_name) in enumerate(staged):
-            bak_name = backups[i][1]
-            if i < published:
-                if bak_name is not None:
-                    os.replace(bak_name, path)
-                else:
-                    os.unlink(path)
-            else:
+        for (path, tmp_name), (_bpath, bak_name) in zip(staged, backups):
+            if os.path.exists(tmp_name):
+                # tmp_name がまだ実在 = この項目の rename は未実行。
                 try:
                     os.unlink(tmp_name)
                 except OSError:
                     pass
                 if bak_name is not None:
                     os.replace(bak_name, path)
+            else:
+                # tmp_name が消えている = rename 完了（公開済み）。旧内容へ復元する。
+                if bak_name is not None:
+                    os.replace(bak_name, path)
+                else:
+                    os.unlink(path)
         raise
 
     # 全件公開に成功: バックアップを削除する。
     for _path, bak_name in backups:
         if bak_name is not None:
             os.unlink(bak_name)
+
+
+# fix (2026-08-16, s1_poison_scan 捜査結果を受けての導入): PJS 4 セグメントで
+# 申告 ph_dur 合計が実音声長の 1.37〜1.89 倍という構造不良が見つかった
+# （末尾 SP の申告時間が数秒単位あるにもかかわらず実 wav がそれより短く、
+# `get_mel2ph_torch` の length クランプで末尾フォノームが 0 フレームへ完全
+# 消滅する）。整合性の低い教師信号が binarize 済みデータへ無警告で混入する
+# のを防ぐため、ph_dur 合計と実 wav 長の整合を検査する。フレーム量子化
+# （timestep 11.61ms 相当）を考慮し、相対 5% or 絶対 0.1s の大きい方を許容
+# 誤差とする。ただし現行 PJS 素材で 5 件が既知違反のため、既定は fail-closed
+# にせず warn のみに留め、`--strict-duration` 指定時のみ problems へ昇格させて
+# fail させる 2 段階仕様にする（`convert_pjs.py` の `DURATION_REL_TOLERANCE`/
+# `DURATION_ABS_TOLERANCE_SEC` と同一閾値。両ファイルとも既存の record スクリプト
+# 群の慣例に倣い、共有モジュール新設ではなく値を直接コピペする）。
+DURATION_REL_TOLERANCE = 0.05
+DURATION_ABS_TOLERANCE_SEC = 0.1
+
+
+def _is_safe_wav_name(name: str, wav_dir: Path, resolved_wav_dir: Path) -> bool:
+    """`name` が `wav_dir` 配下の `<name>.wav` を安全に指すかを判定する
+    （字句検査 + resolve 封じ込め検査）。
+
+    fix (2026-08-16, review #264 R4 P2): `check_ph_dur_duration` が
+    `validate_speaker` の安全 name 判定より前に `wav_dir / f"{name}.wav"` を
+    無検査で `wave.open` していたため、`../../outside` のような `name` や
+    wav_dir 外へ逃げる symlink 経由で `wav_dir` 外の任意ファイルを読み取れて
+    しまう穴があった。`validate_speaker` の安全集合判定（字句検査: 絶対パス・
+    `..` セグメント・パス区切り文字を拒否 + resolve 後の実パスが `wav_dir`
+    配下に収まることを確認する多層防御）と同一ロジックをここへ切り出し、
+    両関数で共有する（open 前に必ずこの関数を通す）。
+    """
+    if not name or os.path.isabs(name) or os.sep in name or (os.altsep and os.altsep in name):
+        return False
+    parts = name.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return False
+    candidate = wav_dir / f"{name}.wav"
+    resolved_candidate = candidate.resolve()
+    if resolved_candidate != resolved_wav_dir and resolved_wav_dir not in resolved_candidate.parents:
+        return False
+    return True
+
+
+def wav_duration_seconds(path: Path) -> Optional[float]:
+    """`path` の WAV 実長を秒で返す。読み取れない（非存在・非 PCM・破損）場合は
+    `None`（この検査をスキップする合図。存在チェック自体は `validate_speaker`
+    の既存ロジックが別途担当する）。"""
+    if not path.exists():
+        return None
+    try:
+        with wave.open(str(path), "rb") as w:
+            rate = w.getframerate()
+            if rate <= 0:
+                return None
+            return w.getnframes() / rate
+    except (wave.Error, OSError, EOFError):
+        return None
+
+
+def check_ph_dur_duration(
+    speaker_name: str, wav_dir: Path, rows: Sequence[Dict[str, str]]
+) -> List[str]:
+    """`ph_dur` 合計と実 wav 長の乖離を検出する。乖離があっても例外にせず
+    violation メッセージのリストとして全件収集して返す（`validate_speaker` と
+    同じ「全収集してから呼び出し側が判定する」設計。既定では戻り値は warning
+    として扱われ、`--strict-duration` 時のみ呼び出し側が problems へ昇格させる）。
+
+    fix (2026-08-16, review #264 R4 P2): `row["name"]` を字句検査 + resolve
+    封じ込め検査（`_is_safe_wav_name`、`validate_speaker` の安全集合判定と
+    同一ロジック）を通してから初めて `wav_duration_seconds`（= WAV open）を
+    呼ぶ。安全でない name（`../../outside` 等のパストラバーサル・wav_dir 外へ
+    逃げる symlink 経由）は WAV を open せずスキップする（不安全 name の
+    problems 昇格は `validate_speaker` 側が別途担当するため、ここでは黙って
+    スキップしてよい）。
+    """
+    resolved_wav_dir = wav_dir.resolve()
+    violations: List[str] = []
+    for row in rows:
+        try:
+            ph_dur = [float(x) for x in row["ph_dur"].split()]
+        except ValueError:
+            continue  # 数値でない ph_dur は validate_speaker が別途検出する
+        if not ph_dur or not all(math.isfinite(d) for d in ph_dur):
+            continue  # 空/非有限は validate_speaker が別途検出する
+        name = row["name"]
+        if not _is_safe_wav_name(name, wav_dir, resolved_wav_dir):
+            continue  # 不安全な name は open せずスキップ（validate_speaker が別途検出する）
+        wav_dur = wav_duration_seconds(wav_dir / f"{name}.wav")
+        if wav_dur is None or wav_dur <= 0:
+            continue
+        total = math.fsum(ph_dur)
+        tol = max(wav_dur * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+        diff = abs(total - wav_dur)
+        if diff > tol:
+            ratio = total / wav_dur
+            violations.append(
+                f"{speaker_name}: {row['name']} ph_dur total {total:.4f}s vs wav "
+                f"duration {wav_dur:.4f}s (ratio {ratio:.3f}x, diff {diff:.4f}s > "
+                f"tolerance {tol:.4f}s)"
+            )
+    return violations
+
+
+def check_note_dur_consistency(
+    speaker_name: str, rows: Sequence[Dict[str, str]]
+) -> List[str]:
+    """`ph_dur` と `note_dur` のクロスフィールド不変量を検査する。
+
+    fix (2026-08-16, review #264 R3): `convert_pjs.py` の EOF 末尾切り詰め/
+    削除処理（`_drop_dead_phonemes`）は、EOF がノートの途中を切る場合
+    （ノート自体は音素を1個以上残して生存するが末尾側の一部音素だけが
+    truncate/drop される場合）に生存ノートの `note_dur` を旧値のまま残す
+    実装バグを含んでいた。修正後もこの不変量を readback 時に enforce する
+    ことで、将来の同型回帰（本関数がある限り上流の実装がどうであれ）を
+    検出する。
+
+    fix (2026-08-16, review #264 R8 P2 x2):
+    1. `note_dur` の非数値・非有限（nan/inf）・非正値は、以前は他の既存
+       チェックが別途検出する想定で黙って skip していたが、実際には
+       `note_dur` を独立に検証する箇所が他に存在せず、壊れた `note_dur` が
+       無検査のまま公開されていた（`ph_dur` は `validate_speaker` 本体が
+       別途 non-numeric/non-finite/non-positive を検出するため、ここでは
+       skip のままでよい）。`note_dur` はここが唯一の検査箇所のため、
+       同じ3種の不正を violation として拒否する（fail-closed）。
+    2. 合計同士の比較だけでは、ノート間で duration が移動しつつ合計が
+       一致する破損（例: `ph_num="1 2"` / `ph_dur="1 1 1"` /
+       `note_dur="2 1"`）を見逃す。`ph_num`（ノートごとの音素数、
+       `sum(ph_num) == len(ph_dur)` かつ `len(ph_num) == len(note_dur)`）
+       が有効な形で存在する場合は `ph_dur` を `ph_num` でノート単位へ
+       グループ化し、各ノートの `ph_dur` 小計 ↔ 対応する `note_dur` を
+       個別に比較する（閾値は `check_ph_dur_duration` と同一定数、ノート
+       ごとの `ph_dur` 小計を基準にする）。`ph_num` フィールド自体が
+       存在しない（行に `ph_num` 列が無い/空）場合のみ、ノート単位の
+       対応付け材料が無いとみなし合計同士の比較（旧来の挙動）へ
+       フォールバックする（`note_dur` を持たない speaker（例: Ritsu）由来の
+       行では `ph_num` も存在しないため、このフォールバック経路を通ることは
+       ない）。
+
+    fix (2026-08-16, review #264 R9 P2, build_dataset.py:502): `ph_num` が
+    「存在するが不正な形」（数値化不可・要素数不一致・
+    `sum(ph_num) != len(ph_dur)`・非正の count を含む）の場合、従来は
+    上記フォールバックへ流れて合計同士の比較のみで判定していた。この経路
+    は「ノート単位の対応付けが壊れている」という事実自体を握りつぶし、
+    例えば `ph_num="1 x"`（非数値）/ `ph_dur="1 1"` / `note_dur="1 1"` の
+    ように合計が偶然一致するだけの破損行を無検査のまま通過させていた
+    （note-to-phoneme alignment が使い物にならないことを検出できない）。
+    `ph_num` が実際に **存在する** 行では、不正な形はもはや「対応付け材料
+    が無い」ケースと同一視せず、独立の violation として拒否する
+    （fail-closed。合計比較へのフォールバックは行わない）。フォールバック
+    対象は `ph_num` フィールド自体が存在しない行のみに限定する。
+
+    fix (2026-08-16, review #264 R11 P2, build_dataset.py:519): `ph_num`
+    が有効でノート単位比較が行える場合、従来は合計比較を **skip** して
+    ノート単位比較のみで判定していた。これは「ノートごとの差は許容誤差内
+    だが多数ノートにわたって同方向へ積み上がる」行を見逃す（例: 100 ノート
+    それぞれが 0.09s だけ note_dur を上回る場合、ノート単位では許容
+    0.1s 以内に個別に埋もれるが、合計では 9s の乖離になる）。ノート単位
+    比較は合計比較の **代替ではなく追加** とし、`ph_num` の有無・妥当性に
+    関わらず合計同士の比較を常に行う（AND 条件。両方が独立に違反を検出
+    し得る）。
+
+    `note_dur` 列そのものを持たない行（例: Ritsu 側が `note_dur` を書き出さない
+    場合）はスキップする。数値化できない・非有限な `ph_dur` は他の既存チェック
+    （ph_seq/ph_dur 長さ不一致・非有限 ph_dur 等）が別途検出するため、
+    ここではスキップする（全収集してから呼び出し側が判定する設計は
+    `check_ph_dur_duration` と同じ）。
+
+    fix (2026-08-16, review #264 R14 P2, build_dataset.py:496): 列は
+    **存在するが値が空文字列** の行（例: CSV セルが空欄）は、旧実装の
+    truthy ガード（`if not note_dur_raw`）が「列が存在しない」場合と同一視
+    してスキップしていた。これにより、直後の `if not note_dur:` による
+    「note_dur が空」の拒否分岐が実際には到達不能になっていた（空文字列は
+    その手前で既に skip されるため）。欠落（列が無い＝optional）と空値
+    （列はあるが値が無い＝不正）を区別し、`row.get("note_dur") is None`
+    （列自体が無い）でのみ skip、空文字列を含む「値はあるが空/空白のみ」の
+    行は後続の空チェックまで通して明示的に拒否する。
+    """
+    violations: List[str] = []
+    for row in rows:
+        note_dur_raw = row.get("note_dur")
+        if note_dur_raw is None:
+            continue
+        try:
+            ph_dur = [float(x) for x in row["ph_dur"].split()]
+        except ValueError:
+            continue  # 数値化できない ph_dur は validate_speaker が別途検出する
+        if not ph_dur or not all(math.isfinite(d) for d in ph_dur):
+            continue  # 空/非有限な ph_dur は validate_speaker が別途検出する
+
+        try:
+            note_dur = [float(x) for x in note_dur_raw.split()]
+        except ValueError:
+            violations.append(f"{speaker_name}: {row['name']} has non-numeric note_dur")
+            continue
+        if not note_dur:
+            violations.append(f"{speaker_name}: {row['name']} has empty note_dur")
+            continue
+        if not all(math.isfinite(d) for d in note_dur):
+            violations.append(f"{speaker_name}: {row['name']} has non-finite note_dur")
+            continue
+        if any(d <= 0 for d in note_dur):
+            violations.append(f"{speaker_name}: {row['name']} has non-positive note_dur")
+            continue
+
+        per_note_ph_totals: Optional[List[float]] = None
+        ph_num_raw = row.get("ph_num")
+        if ph_num_raw is not None:
+            # fix (2026-08-16, review #264 R9 P2): ph_num フィールド自体が
+            # 存在する行では、不正な形を「対応付け材料が無い」ケースへ
+            # フォールバックさせず、malformed_reason が設定され次第 violation
+            # として拒否する（合計比較へは絶対に流さない）。
+            #
+            # fix (2026-08-16, review #264 R15 P2, build_dataset.py:531):
+            # 旧実装は `if ph_num_raw:` という truthy ガードを使っており、
+            # `ph_num` 列が存在するが値が空文字列（例: CSV セルが空欄）の行を
+            # 「列自体が無い」場合と同一視して下のフォールバック（合計比較の
+            # みで判定）へ流していた。これにより下の「空 ph_num」チェックが
+            # 到達不能になり、note-to-phoneme 対応付けが確立できない行でも
+            # 合計が偶然一致すれば通過してしまっていた（`note_dur` R14
+            # 修正と同型の欠陥）。欠落（列が無い＝optional）と空値（列は
+            # あるが値が無い＝不正）を `is not None` で区別し、空文字列は
+            # 以下の malformed_reason 判定（「empty ph_num」）まで通して
+            # 明示的に拒否する。
+            malformed_reason: Optional[str] = None
+            try:
+                ph_num = [int(x) for x in ph_num_raw.split()]
+            except ValueError:
+                ph_num = []
+                malformed_reason = f"non-numeric ph_num ({ph_num_raw!r})"
+            if malformed_reason is None and not ph_num:
+                malformed_reason = f"empty ph_num ({ph_num_raw!r})"
+            if malformed_reason is None and not all(n > 0 for n in ph_num):
+                malformed_reason = f"non-positive element in ph_num ({ph_num_raw!r})"
+            if malformed_reason is None and len(ph_num) != len(note_dur):
+                malformed_reason = (
+                    f"len(ph_num)={len(ph_num)} != len(note_dur)={len(note_dur)} "
+                    f"(ph_num={ph_num_raw!r})"
+                )
+            if malformed_reason is None and sum(ph_num) != len(ph_dur):
+                malformed_reason = (
+                    f"sum(ph_num)={sum(ph_num)} != len(ph_dur)={len(ph_dur)} "
+                    f"(ph_num={ph_num_raw!r})"
+                )
+            if malformed_reason is not None:
+                violations.append(
+                    f"{speaker_name}: {row['name']} has malformed ph_num: "
+                    f"{malformed_reason}; cannot establish note-to-phoneme alignment, "
+                    "refusing to fall back to total-only ph_dur/note_dur comparison"
+                )
+                continue
+            per_note_ph_totals = []
+            idx = 0
+            for count in ph_num:
+                per_note_ph_totals.append(math.fsum(ph_dur[idx:idx + count]))
+                idx += count
+
+        if per_note_ph_totals is not None:
+            for note_idx, (ph_note_total, note_val) in enumerate(
+                zip(per_note_ph_totals, note_dur)
+            ):
+                tol = max(ph_note_total * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+                diff = abs(ph_note_total - note_val)
+                if diff > tol:
+                    violations.append(
+                        f"{speaker_name}: {row['name']} note[{note_idx}] ph_dur subtotal "
+                        f"{ph_note_total:.4f}s vs note_dur {note_val:.4f}s "
+                        f"(diff {diff:.4f}s > tolerance {tol:.4f}s)"
+                    )
+
+        # fix (2026-08-16, review #264 R11 P2, build_dataset.py:519): 合計
+        # 比較は per_note_ph_totals の有無に関わらず **常に** 行う
+        # （per-note 判定が使えた場合でも skip しない、AND 条件）。per-note
+        # 比較のみだと、ノートごとの差が許容誤差内に収まりながら多数ノートに
+        # わたって同方向へ積み上がる行（例: 100 ノート × 0.09s 差はノート単位
+        # では許容 0.1s 以内に埋もれるが、合計では 9s 乖離になる）を見逃す。
+        # per-note 比較のみで合計検査を skip していた旧実装はこの累積乖離を
+        # 検出できなかった。
+        ph_total = math.fsum(ph_dur)
+        note_total = math.fsum(note_dur)
+        tol = max(ph_total * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+        diff = abs(ph_total - note_total)
+        if diff > tol:
+            violations.append(
+                f"{speaker_name}: {row['name']} ph_dur total {ph_total:.4f}s vs "
+                f"note_dur total {note_total:.4f}s (diff {diff:.4f}s > tolerance {tol:.4f}s)"
+            )
+    return violations
 
 
 def validate_speaker(
@@ -338,9 +645,54 @@ def validate_speaker(
         dup = sorted({n for n in names if names.count(n) > 1})
         problems.append(f"{speaker_name}: duplicate name(s) in transcriptions.csv: {dup[:5]}")
 
-    missing = [n for n in sorted(set(names)) if not (wav_dir / f"{n}.wav").exists()]
+    # [P1 修正] (review #263 R16) transcriptions.csv の `name` は外部生成物
+    # （convert_ritsu.py/convert_pjs.py の出力）であり、`wav_dir / f"{n}.wav"`
+    # に無検査で連結すると絶対パスや `..` を含む `name` によって wav_dir の
+    # 外を指すパスを組み立てられてしまう（パストラバーサル）。字句検査
+    # （絶対パス・`..` セグメント・パス区切り文字を拒否）に加え、resolve 後の
+    # 実パスが wav_dir 配下に収まることも検証する（シンボリックリンク等の
+    # 迂回にも対応する多層防御）。違反は全件収集し、既存の fail-closed
+    # 集約（呼び出し側で他の問題と合流して最終的に停止）に乗せる。判定ロジック
+    # 本体は `_is_safe_wav_name`（review #264 R4 P2 で `check_ph_dur_duration`
+    # と共有化）。
+    resolved_wav_dir = wav_dir.resolve()
+    unsafe: List[str] = []
+    safe_names: List[str] = []
+    for n in sorted(set(names)):
+        if _is_safe_wav_name(n, wav_dir, resolved_wav_dir):
+            safe_names.append(n)
+        else:
+            unsafe.append(n)
+    if unsafe:
+        problems.append(
+            f"{speaker_name}: {len(unsafe)} unsafe name(s) in transcriptions.csv "
+            f"(absolute path / '..' / path separator rejected), e.g. {sorted(unsafe)[:3]}"
+        )
+
+    missing = [n for n in safe_names if not (wav_dir / f"{n}.wav").exists()]
     if missing:
         problems.append(f"{speaker_name}: {len(missing)} wav missing under {wav_dir}, e.g. {missing[:3]}")
+
+    # [P2 修正] (review #264 R25) 上記 `missing` は `.exists()` のみを見る
+    # ため、wav が存在するが読めない（非 PCM/破損）・duration<=0 の場合を
+    # 検出できない。`check_ph_dur_duration` はこのケースを「duration 比較を
+    # スキップする合図」として黙って continue するのみで（既定 warn の
+    # `--strict-duration` 2 段階仕様自体は妥当。乖離判定を warn-tier に
+    # 留める設計と、readback 失敗そのものを無条件 violation にする本検査は
+    # 別の関心事）、readback 失敗そのものは `--strict-duration` の有無に
+    # 関わらず常に fail-closed な問題として扱う（使用不能な音声が公開
+    # コーパスへ混入するのを防ぐ）。存在確認を通過した名前のみを対象にする
+    # （`missing` と排他）。
+    existing_names = [n for n in safe_names if n not in set(missing)]
+    unreadable = [
+        n for n in existing_names
+        if (d := wav_duration_seconds(wav_dir / f"{n}.wav")) is None or d <= 0
+    ]
+    if unreadable:
+        problems.append(
+            f"{speaker_name}: {len(unreadable)} wav unreadable or non-positive duration "
+            f"under {wav_dir}, e.g. {unreadable[:3]}"
+        )
 
     for row in rows:
         ph_seq = row["ph_seq"].split()
@@ -348,6 +700,18 @@ def validate_speaker(
             ph_dur = [float(x) for x in row["ph_dur"].split()]
         except ValueError:
             problems.append(f"{speaker_name}: {row['name']} has non-numeric ph_dur")
+            continue
+        # [P2 修正] (review #264 R25) `ph_seq=""` かつ `ph_dur=""` はいずれも
+        # 空リストへ parse され、直後の長さ一致検査（0 == 0）を素通りして
+        # しまう。必須の整列フィールドが両方空という構造不良を明示的に
+        # violation として拒否する（後続の length-mismatch/non-positive/
+        # non-finite 検査はいずれも空リストに対して no-op のため、これらに
+        # 頼ると検出漏れになる）。
+        if not ph_seq or not ph_dur:
+            problems.append(
+                f"{speaker_name}: {row['name']} has empty ph_seq/ph_dur "
+                f"(ph_seq={len(ph_seq)} elem(s), ph_dur={len(ph_dur)} elem(s))"
+            )
             continue
         if len(ph_seq) != len(ph_dur):
             problems.append(
@@ -364,6 +728,12 @@ def validate_speaker(
         # 防ぐ最終防衛線）。
         if any(not math.isfinite(d) for d in ph_dur):
             problems.append(f"{speaker_name}: {row['name']} has non-finite ph_dur")
+
+    # fix (2026-08-16, review #264 R3): ph_dur 合計と note_dur 合計のクロス
+    # フィールド不変量は構造的整合性（`check_ph_dur_duration` の「現行 PJS
+    # 素材に既知5件の乖離あり」という経緯とは異なる）であり、常に fail-closed
+    # で扱う（`--strict-duration` の分岐対象にしない）。
+    problems += check_note_dur_consistency(speaker_name, rows)
     return problems
 
 
@@ -495,6 +865,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--num-ckpt-keep", type=int, default=DEFAULT_NUM_CKPT_KEEP,
         help=f"config へ書き込む num_ckpt_keep (既定: {DEFAULT_NUM_CKPT_KEEP})",
     )
+    parser.add_argument(
+        "--strict-duration", action="store_true",
+        help="ph_dur 合計と実 wav 長の乖離（相対5%% or 絶対0.1sの大きい方を超過）を"
+             "warning ではなく problem として扱い、検証を fail させる。"
+             "既定 (指定なし) は warning のみで公開は継続する "
+             "(現行 PJS 素材で 5 件が既知違反のため)。",
+    )
     args = parser.parse_args(argv)
 
     ritsu_csv = args.ritsu_raw_dir / "transcriptions.csv"
@@ -512,6 +889,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     problems: List[str] = []
     problems += validate_speaker("ritsu", args.ritsu_raw_dir, ritsu_rows)
     problems += validate_speaker("pjs", args.pjs_raw_dir, pjs_rows)
+
+    duration_warnings: List[str] = []
+    duration_warnings += check_ph_dur_duration(
+        "ritsu", args.ritsu_raw_dir / "wavs", ritsu_rows
+    )
+    duration_warnings += check_ph_dur_duration(
+        "pjs", args.pjs_raw_dir / "wavs", pjs_rows
+    )
+    for w in duration_warnings:
+        print(f"{'problem' if args.strict_duration else 'warning'}: {w}", file=sys.stderr)
+    if args.strict_duration:
+        problems += duration_warnings
 
     ritsu_symbols = collect_phoneme_symbols(ritsu_rows)
     pjs_symbols = collect_phoneme_symbols(pjs_rows)
@@ -565,6 +954,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "ritsu_test_prefixes": ritsu_prefixes,
         "pjs_test_prefixes": pjs_prefixes,
         "problems": problems,
+        "duration_warnings": duration_warnings,
+        "strict_duration": args.strict_duration,
     }
     report_text = json.dumps(report, ensure_ascii=False, indent=2)
     print(report_text)

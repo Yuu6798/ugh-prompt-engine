@@ -48,7 +48,11 @@ README は再現手順とモデル pin のみを扱う。
   `--tokens own` は fail-closed（`*.phonemes.json` が無いとエラー終了。canon
   符号化への暗黙フォールバックはしない）。
 - `mapping-check`: 自前音素語彙 <-> canon 617/46 語彙の対応表を検証（欠落音素の
-  列挙）。
+  列挙）。自前語彙の入力は `--own-dictionary-ja`（binarize 入力 dictionary-ja.txt
+  から `PhonemeDictionary` でシミュレート）と `--export-phonemes-json`（review
+  #263 R16 P2 追加。export.py が実際に書き出した `<exp_name>.phonemes.json` を
+  そのまま検査 — `run` が実際に消費する写像そのものと一致）のいずれか一方を
+  指定する（排他）。
 
 `score.py`/`score_umi.py` の所在は既定でこのスクリプトから見た
 `voice_genesis/singer/`（`--singer-dir` で上書き可）。
@@ -75,9 +79,12 @@ python gate_synth.py run --skip-export --tokens canon \
 
 ## 3. 既知の残リスク（`s1_gate_synth_record.md` §4 から引き継ぎ）
 
-- `unmapped_own` の非空チェックは `run` に未実装（`mapping-check` を実 ckpt の
-  `acoustic.phonemes.json` に対しても別途走らせ、`unmapped_own_count` を確認する
-  運用を 5K 到達時の耳判定前に徹底する）。
+- `unmapped_own` の非空チェックは `run` に未実装。実 ckpt の
+  `acoustic.phonemes.json` に対しては `mapping-check --export-phonemes-json
+  <acoustic_dir>/<exp_name>.phonemes.json --canon-phonemes-txt <...>/phonemes.txt`
+  （review #263 R16 P2 追加。`--own-dictionary-ja` のシミュレーションではなく
+  export 済みの実写像をそのまま検査する）を別途走らせ、`unmapped_own_count` を
+  確認する運用を 5K 到達時の耳判定前に徹底する。
 - acoustic 差し替え自体（実 ckpt での動作）は **検証済み**（review #263 R15 是正:
   旧記載を更新）。5K checkpoint（`model_ckpt_steps_5000.ckpt`、多話者 reflow
   acoustic）の export + ritsu/pjs × さくら/うみ 4 本合成を実施し、決定論再現

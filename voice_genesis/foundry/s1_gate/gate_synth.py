@@ -82,21 +82,57 @@ scratchpad 完結・非コミット。実行日 2026-08-15、フル配線 sha256
 """
 from __future__ import annotations
 
-import argparse
+# [P2 修正] (review #264 R10, gate_synth.py:1200; R13, gate_synth.py:119)
+# gate_synth.py 自身の provenance ハッシュを、モジュールのトップレベル
+# コードが実行される中で最初に到達する文として（`from __future__ import
+# annotations` の直後・NumPy/ONNX 等の重い import より前）1 回だけ
+# read_bytes() して確定する。R10 まではこの計算を `cmd_run` の実行途中
+# （synth ループ開始前）で行っており、「プロセス起動時に Python インタプリタ
+# が実際に read/exec した本体スクリプトの bytes」ではなく「cmd_run がその
+# 行に到達した時点でディスク上にある bytes」を記録していた。R10 でモジュール
+# 先頭へ移したが、当時は NumPy/ONNXRuntime 等の低速 import の後段に置いて
+# おり、それら import の所要時間だけ TOCTOU 窓が残っていた（R13 指摘）。
+# これを import 文より前（hashlib/Path という stdlib のみで計算できる形）
+# へ動かすことで、窓を「インタープリタが本ファイルを read/compile してから
+# この行が実行されるまで」のマイクロ秒級に縮める。
+#
+# ここで縮められるのはあくまで実務上の最小化であり、ゼロにはならない
+# （境界宣言）: このプロセス自身が自分の起動時に「ローダーが実際に消費した
+# バイト」を内側から束縛することは原理的に不可能である。自己ハッシュより
+# 前には必ずインタープリタによる read/compile が先行しており、外側にラン
+# チャーを足しても、そのランチャー自身が「起動〜自己ハッシュ」という同型の
+# 窓を新たに持つだけで問題を後退させるにすぎない（infinite regress）。した
+# がって内側で可能な最小化（本移動）をもって自己ハッシュ系列の対応はここで
+# 終端とし、残る irreducible な窓の担保は、呼び出し側が本プロセスの起動
+# より前にファイルをハッシュする外部 attestation 層（`S1_GPU_RUNBOOK.md`
+# §3.1 の manifest 方式）の担当領域とする。
+#
+# `cmd_run` はこの値をそのまま `input_sha256["gate_synth_py"]` へ転記し
+# （再読み込みしない）、公開直前に同じパスを再ハッシュしてこの値と突き
+# 合わせる事後照合を行う（score モジュールと同じ pre+post 二段方式。
+# 不一致なら fail-closed で公開を止める。この事後照合ロジック自体は本
+# 変更で無改変）。
 import hashlib
-import json
-import os
-import shutil
-import subprocess
-import sys
-import time
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
 
-import numpy as np
-import onnxruntime as ort
-import soundfile as sf
-import yaml
+_GATE_SYNTH_PY_PATH = Path(__file__).resolve()
+_GATE_SYNTH_PY_LOAD_TIME_SHA256 = hashlib.sha256(_GATE_SYNTH_PY_PATH.read_bytes()).hexdigest()
+
+import argparse  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+import types  # noqa: E402
+from typing import Callable, Dict, List, Optional, Sequence, Tuple  # noqa: E402
+
+import numpy as np  # noqa: E402
+import onnxruntime as ort  # noqa: E402
+import soundfile as sf  # noqa: E402
+import yaml  # noqa: E402
 
 # `voice_genesis/foundry/s1_gate/gate_synth.py` から見て `voice_genesis/singer/`
 # は 2 階層上の兄弟ディレクトリ（parents[0]=s1_gate, [1]=foundry, [2]=voice_genesis）。
@@ -122,19 +158,130 @@ REFLOW_SAMPLING_STEPS = 20
 # 0. スコア読み込み（さくら/うみ共通インタフェース）
 # ============================================================================
 
-def load_song_module(song: str, singer_dir: Path):
+
+def _exec_module_from_source(module_name: str, path: Path, source: bytes) -> types.ModuleType:
+    """呼び出し側が一度だけ `read_bytes()` 済みの `source` を直接
+    `compile()`/`exec()` してモジュールオブジェクトを構築し、
+    `sys.modules[module_name]` へ登録して返す。
+
+    [P2 修正] (review #264 R3) `import <module>` 文（標準 `SourceFileLoader`）
+    は既定でタイムスタンプ方式の `__pycache__/*.pyc` キャッシュを条件付きで
+    再利用する。R1/R2 の `sys.modules` evict は「同名モジュールが別内容で
+    既にキャッシュ済み」の場合を封じるが、evict 後に実行される `import` 文
+    自体は依然としてファイルシステム上の `.pyc` を信頼し得る——例えば
+    score.py が同一サイズの内容へ差し替わり、かつファイルシステムの
+    タイムスタンプ精度内（同一 tick）で書き換えられた場合、`.pyc` ヘッダの
+    (mtime, size) がなお一致し、古いバイトコードがそのまま実行され得る。
+
+    本関数は `import` 文を一切使わず、`compile()`/`exec()` する。
+    `compile()` は `.pyc` キャッシュの生成/参照を一切行わない（そのキャッシュ
+    機構は `importlib` の import 機構側にのみ存在する）ため stale `.pyc` を
+    踏まない。
+
+    [P2 修正] (review #264 R6) 従来は本関数が内部で `path.read_bytes()` して
+    いたため、呼び出し側（`load_song_module`）が provenance sha256 用に読む
+    read と、本関数が exec 用に読む read が別 read になり、両者の間にファイル
+    が差し替えられると「記録した pin」と「実際に exec された内容」が食い違い
+    得た（TOCTOU）。`source` を呼び出し側から受け取る形にすることで、
+    ハッシュ計算に使ったバッファと exec するバッファが構造的に同一であること
+    を保証する（`_read_and_exec_module` 参照）。
+    """
+    module = types.ModuleType(module_name)
+    module.__file__ = str(path)
+    sys.modules[module_name] = module
+    code = compile(source, str(path), "exec")
+    try:
+        exec(code, module.__dict__)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+def _read_and_exec_module(module_name: str, path: Path) -> Tuple[types.ModuleType, str]:
+    """`path` を一度だけ `read_bytes()` し、同じバッファを sha256 化（provenance
+    pin 用）と `compile()`/`exec()`（実行用）の両方に使う。戻り値は
+    `(module, sha256_hex)`。
+
+    [P2 修正] (review #264 R6) `load_song_module` の唯一の read 経路にする
+    ことで、「pin したハッシュ」と「実際に exec された内容」が別 read に
+    起因して食い違う TOCTOU 窓を構造的に閉じる。
+    """
+    source = path.read_bytes()
+    digest = hashlib.sha256(source).hexdigest()
+    module = _exec_module_from_source(module_name, path, source)
+    return module, digest
+
+
+def load_song_module(
+    song: str, singer_dir: Path
+) -> Tuple[Callable, Callable, float, Path, Dict[str, Tuple[Path, str]]]:
     """楽曲モジュール読み込み。戻り値に実際に import したモジュールファイルの
-    絶対パスも含める（PR #263 R6 レビュー指摘: gate summary の input_sha256 が
+    絶対パスと、読み込んだ全モジュール（本体 + 推移的依存）の provenance
+    sha256 も含める（PR #263 R6 レビュー指摘: gate summary の input_sha256 が
     合成実装そのもの — 本スクリプトと score.py/score_umi.py — の変更を検出
-    できなかったため、呼び出し側でこのパスを sha256 化して記録する）。"""
-    sys.path.insert(0, str(singer_dir))
+    できなかったため、呼び出し側でこのパスを sha256 化して記録する）。
+
+    依存順（`phoneme_jp` -> `score` -> `score_umi`。`song == "sakura"` は
+    `score_umi` を読まない）で `_read_and_exec_module` を呼び、常に
+    `singer_dir` 配下の現在のソースバイトを compile/exec する。
+
+    戻り値の 5 番目の要素 `module_shas` は
+    `{pin_key: (実際に exec したファイルの絶対パス, その sha256 hex digest)}`。
+    `pin_key` は `cmd_run` の `input_sha256` 既存キー命名（本体
+    `score_module_{song}` / 依存 `score_module_{song}_dep_{stem}`）と同一。
+
+    [P2 修正] (review #264 R1) 別 `singer_dir`（または以前の呼び出し）由来の
+    `sys.modules` キャッシュを踏まない。
+    [P2 修正] (review #264 R2) `score_umi.py` が推移的に依存する
+    `score`/`phoneme_jp` も song に関わらず毎回フレッシュにする。
+    [P2 修正] (review #264 R3) `import` 文自体が触れ得る `__pycache__` の
+    stale `.pyc` 再利用を、`import` 文を使わない実装へ切り替えることで
+    構造的に封じる（`_exec_module_from_source` docstring 参照）。
+    `_exec_module_from_source` は呼ぶたびに `sys.modules[name]` を無条件で
+    新しいモジュールオブジェクトへ上書きするため、R1/R2 が行っていた事前
+    evict ループ（`sys.modules.pop`）は本実装では不要（上書き自体が evict を
+    包含する、より強い保証のため）。
+    [P2 修正] (review #264 R6) provenance sha256 の取得（旧: `cmd_run` 側で
+    `sha256_file()` を個別に呼ぶ）と実際の exec を本関数 1 回の呼び出しへ
+    統合した（`_read_and_exec_module` 参照）。あわせて `cmd_run` 側にあった
+    「path 事前解決 → hash → 検証用 import → `synth_song` 内での再 import」
+    という 4 段の別読み込みも、本関数 1 回の呼び出しへ統合する（`synth_song`
+    は本関数が返す `build_fn` 等をそのまま使い、内部で再ロードしない）。
+    """
+    if song not in ("sakura", "umi"):
+        raise ValueError(f"unknown song: {song}")
+
+    module_shas: Dict[str, Tuple[Path, str]] = {}
+
+    phoneme_jp_path = (singer_dir / "phoneme_jp.py").resolve()
+    _, phoneme_jp_sha = _read_and_exec_module("phoneme_jp", phoneme_jp_path)
+    module_shas[f"score_module_{song}_dep_phoneme_jp"] = (phoneme_jp_path, phoneme_jp_sha)
+
+    score_path = (singer_dir / "score.py").resolve()
+    sc_score, score_sha = _read_and_exec_module("score", score_path)
+
     if song == "sakura":
-        import score as sc  # noqa: E402  (read-only import from repo)
-        return sc.build_sakura_score, sc.beats_to_seconds, sc.TEMPO_BPM, Path(sc.__file__).resolve()
-    if song == "umi":
-        import score_umi as sc  # noqa: E402  (read-only import from repo)
-        return sc.build_umi_score, sc.beats_to_seconds, sc.TEMPO_BPM, Path(sc.__file__).resolve()
-    raise ValueError(f"unknown song: {song}")
+        module_shas[f"score_module_{song}"] = (score_path, score_sha)
+        return (
+            sc_score.build_sakura_score,
+            sc_score.beats_to_seconds,
+            sc_score.TEMPO_BPM,
+            score_path,
+            module_shas,
+        )
+
+    module_shas[f"score_module_{song}_dep_score"] = (score_path, score_sha)
+    score_umi_path = (singer_dir / "score_umi.py").resolve()
+    sc_umi, score_umi_sha = _read_and_exec_module("score_umi", score_umi_path)
+    module_shas[f"score_module_{song}"] = (score_umi_path, score_umi_sha)
+    return (
+        sc_umi.build_umi_score,
+        sc_umi.beats_to_seconds,
+        sc_umi.TEMPO_BPM,
+        score_umi_path,
+        module_shas,
+    )
 
 
 def mora_phonemes(mora) -> List[str]:
@@ -195,8 +342,91 @@ def fit_duration_sum(durations: List[int], total: int) -> List[int]:
 # ============================================================================
 
 def sha256_file(path: Path) -> str:
-    """ファイル全体の sha256 hex digest（gate summary の入力側 pin 用）。"""
+    """ファイル全体の sha256 hex digest（gate summary の入力側 pin 用）。
+
+    呼び出し側がパース/ロードに使うのとは別の read になる（TOCTOU 窓を
+    開ける）ため、実際にパース/ロードされるバッファをそのままハッシュしたい
+    呼び出し元は `_read_bytes_and_sha256` を使うこと。本関数は「別途 hash
+    するだけで内容は使わない」用途（ckpt・train config・onnx モデル束など、
+    このスクリプト自身がバイト列をパースしない入力）向けに残す。
+    """
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _read_bytes_and_sha256(path: Path) -> Tuple[bytes, str]:
+    """`path` を一度だけ `read_bytes()` し、そのバッファ自体と sha256 hex
+    digest を返す。
+
+    [P2 修正] (review #264 R9, gate_synth.py:1168) `variance_phonemes`
+    （canon `phonemes.txt`）・`acoustic_phonemes`（`*.phonemes.json`）・
+    話者 embedding（`*.<speaker>.emb`）は、従来 `cmd_run` がパース/ロード用に
+    1 回 read し、`collect_input_sha256` が provenance pin 用に `sha256_file()`
+    でもう 1 回 read していた（score モジュールで既に修正済みだった構造と
+    同型の TOCTOU: 2 回の read の間にファイルが差し替わると、「pin した
+    ハッシュ」と「実際にパース/ロードされた内容」が食い違い得る）。本関数を
+    介して 1 回の read で得たバッファを両用途（パース/ロードと sha256 化）に
+    使うことで、この窓を構造的に閉じる（`_read_and_exec_module` と同じ方式）。
+    """
+    data = path.read_bytes()
+    return data, hashlib.sha256(data).hexdigest()
+
+
+def load_model_bundle_bytes(
+    canon_model_dir: Path,
+    vocoder_dir: Path,
+    acoustic_onnx_path: Path,
+    acoustic_dsconfig_path: Path,
+) -> Tuple[Dict[str, bytes], Dict[str, str]]:
+    """`run_pipeline` が load する ONNX モデル束 + `dsconfig.yaml` を 1 回だけ
+    read し、そのバッファ（そのまま `InferenceSession`/`yaml.safe_load` に
+    渡す）と sha256 を返す。
+
+    [P2 修正] (review #264 R12, gate_synth.py:1447) 従来は `collect_input_
+    sha256` が pre-load hash 用に `sha256_file()` で 1 回読み、`run_pipeline`
+    が `onnxruntime.InferenceSession`/`yaml.safe_load` 用に別 read でもう
+    一度読んでいた。この構成では、2 回の read の間にファイルが差し替えられ、
+    かつ公開直前の事後照合（`sha256_file()` での再読み込み）前に元へ戻され
+    ると、記録される pre/post ハッシュはどちらも「差し替え前後で一致する」
+    内容になり、実際に推論/パースへ使われたバイト列とは食い違う ——
+    pre/post 二段照合はこの TOCTOU 窓を閉じない（指摘の通り）。
+
+    `cmd_run` が本関数で 1 回だけ `read_bytes()` したバッファを `run_pipeline`
+    （`InferenceSession`/`yaml.safe_load`）へそのまま渡し、同じバッファの
+    sha256 を `collect_input_sha256` の pin としても使うことで、TOCTOU 窓を
+    構造的に閉じる（score モジュールの `_read_and_exec_module`/
+    `_read_bytes_and_sha256` と同型パターン）。既存の pre/post 二段照合
+    （`model_config_paths` 事後再ハッシュ）は、長時間の合成中に on-disk 実装
+    が書き換えられていないかを検出する belt として残す（正式な記録用ハッシュ
+    は本関数のバッファ由来になったため、この belt は「消費バッファ由来の
+    pin」と「公開直前のディスク上の内容」の食い違い検出に役割が変わる）。
+
+    返す dict のキーは `collect_input_sha256`/`model_config_paths`（事後
+    照合）の pin_key と揃えてある。
+    """
+    linguistic_bytes, linguistic_sha = _read_bytes_and_sha256(canon_model_dir / "linguistic.onnx")
+    dur_bytes, dur_sha = _read_bytes_and_sha256(canon_model_dir / "dsdur" / "dur.onnx")
+    pitch_bytes, pitch_sha = _read_bytes_and_sha256(canon_model_dir / "dspitch" / "pitch.onnx")
+    acoustic_bytes, acoustic_sha = _read_bytes_and_sha256(acoustic_onnx_path)
+    vocoder_bytes, vocoder_sha = _read_bytes_and_sha256(vocoder_dir / "nsf_hifigan.onnx")
+    dsconfig_bytes, dsconfig_sha = _read_bytes_and_sha256(acoustic_dsconfig_path)
+
+    model_bytes: Dict[str, bytes] = {
+        "canon_linguistic_onnx": linguistic_bytes,
+        "canon_variance_dur_onnx": dur_bytes,
+        "canon_variance_pitch_onnx": pitch_bytes,
+        "acoustic_onnx": acoustic_bytes,
+        "vocoder_onnx": vocoder_bytes,
+        "acoustic_dsconfig_yaml": dsconfig_bytes,
+    }
+    model_shas: Dict[str, str] = {
+        "canon_linguistic_onnx": linguistic_sha,
+        "canon_variance_dur_onnx": dur_sha,
+        "canon_variance_pitch_onnx": pitch_sha,
+        "acoustic_onnx": acoustic_sha,
+        "vocoder_onnx": vocoder_sha,
+        "acoustic_dsconfig_yaml": dsconfig_sha,
+    }
+    return model_bytes, model_shas
 
 
 def collect_input_sha256(
@@ -207,6 +437,12 @@ def collect_input_sha256(
     acoustic_dsconfig_path: Path,
     own_json: Optional[Path],
     speaker_embed_path: Optional[Path] = None,
+    canon_phonemes_txt_sha: Optional[str] = None,
+    own_json_sha: Optional[str] = None,
+    speaker_embed_sha: Optional[str] = None,
+    model_shas: Optional[Dict[str, str]] = None,
+    ckpt_sha: Optional[str] = None,
+    train_config_sha: Optional[str] = None,
 ) -> Dict[str, Optional[str]]:
     """gate 判定を駆動した入力モデル束の sha256 を集約する。
 
@@ -221,31 +457,73 @@ def collect_input_sha256(
     ファイルが存在しない場合（`--skip-export` で ckpt/config が対象外、
     own_json が canon フォールバック時、canon DDPM 経路で speaker_embed_path が
     None など）は `None` を記録する。
+
+    [P2 修正] (review #264 R9, gate_synth.py:1168) `canon_phonemes_txt_sha`/
+    `own_json_sha`/`speaker_embed_sha` は、呼び出し側が `_read_bytes_and_sha256`
+    経由でパース/ロードと同一 read から得た sha256 を渡すための引数（実際に
+    使われたバッファそのものの hash）。渡された場合はそれを優先して記録し、
+    本関数内での再 read（`sha256_file`）は行わない。未指定（None）の場合の
+    み従来どおり `sha256_file()` で個別に読み直す（own_json が `--tokens
+    canon` でパースされずに存在するだけのケースなど、パース由来のバッファが
+    存在しない場合の後方互換フォールバック）。
+
+    [P2 修正] (review #264 R12, gate_synth.py:1447) `model_shas` は、呼び出し
+    側が `load_model_bundle_bytes` で 1 回だけ read し `InferenceSession`/
+    `yaml.safe_load` にそのまま渡したバッファの sha256（`acoustic_onnx`/
+    `acoustic_dsconfig_yaml`/`canon_linguistic_onnx`/`canon_variance_dur_onnx`/
+    `canon_variance_pitch_onnx`/`vocoder_onnx` の 6 key）。渡された場合は
+    それを優先して記録し、本関数内での再 read（`sha256_file`）は行わない
+    （従来は常に別 read だったため、記録した hash と実際に load されたバッファ
+    が食い違い得る TOCTOU 窓があった — 指摘の通り、公開直前の pre/post 照合
+    だけではこの窓は閉じない）。未指定（None）の場合のみ従来どおり
+    `sha256_file()` で個別に読み直す（`load_model_bundle_bytes` を経由しない
+    呼び出し向けの後方互換フォールバック）。
+
+    [P2 修正] (review #264 R20) `ckpt_sha`/`train_config_sha` は、
+    `run_export_acoustic()` が exporter に実際に消費させたバイト列（1 回だけ
+    `read_bytes()` したバッファ）から得た sha256。渡された場合はそれを優先
+    して記録し、本関数内での再 read は行わない（従来は `run_export_acoustic`
+    が checkpoint/config をコピー・消費した後に、この関数が元ディレクトリ
+    から改めて `sha256_file()` で読み直しており、コピー〜re-read の間の
+    差し替えを検出できない TOCTOU 窓があった）。未指定（None）の場合のみ
+    従来どおり `sha256_file()` で個別に読み直す（`run_export_acoustic` を
+    経由しない呼び出し向けの後方互換フォールバック）。
     """
     shas: Dict[str, Optional[str]] = {}
+    model_shas = model_shas or {}
 
     if not args.skip_export:
         ckpt_dir = Path(args.ckpt_dir)
         ckpt_file = ckpt_dir / f"model_ckpt_steps_{args.step}.ckpt"
         train_config_file = ckpt_dir / "config.yaml"
-        shas["ckpt"] = sha256_file(ckpt_file) if ckpt_file.exists() else None
+        shas["ckpt"] = (
+            ckpt_sha if ckpt_sha is not None
+            else (sha256_file(ckpt_file) if ckpt_file.exists() else None)
+        )
         shas["train_config_yaml"] = (
-            sha256_file(train_config_file) if train_config_file.exists() else None
+            train_config_sha if train_config_sha is not None
+            else (sha256_file(train_config_file) if train_config_file.exists() else None)
         )
 
     shas["acoustic_onnx"] = (
-        sha256_file(acoustic_onnx_path) if acoustic_onnx_path.exists() else None
+        model_shas["acoustic_onnx"] if "acoustic_onnx" in model_shas
+        else (sha256_file(acoustic_onnx_path) if acoustic_onnx_path.exists() else None)
     )
     shas["acoustic_phonemes_json"] = (
-        sha256_file(own_json) if own_json is not None and own_json.exists() else None
+        own_json_sha if own_json_sha is not None
+        else (sha256_file(own_json) if own_json is not None and own_json.exists() else None)
     )
     shas["acoustic_dsconfig_yaml"] = (
-        sha256_file(acoustic_dsconfig_path) if acoustic_dsconfig_path.exists() else None
+        model_shas["acoustic_dsconfig_yaml"] if "acoustic_dsconfig_yaml" in model_shas
+        else (sha256_file(acoustic_dsconfig_path) if acoustic_dsconfig_path.exists() else None)
     )
     shas["speaker_embed"] = (
-        sha256_file(speaker_embed_path)
-        if speaker_embed_path is not None and speaker_embed_path.exists()
-        else None
+        speaker_embed_sha if speaker_embed_sha is not None
+        else (
+            sha256_file(speaker_embed_path)
+            if speaker_embed_path is not None and speaker_embed_path.exists()
+            else None
+        )
     )
 
     linguistic_onnx = canon_model_dir / "linguistic.onnx"
@@ -254,31 +532,62 @@ def collect_input_sha256(
     canon_phonemes_txt = canon_model_dir / "phonemes.txt"
     vocoder_onnx = vocoder_dir / "nsf_hifigan.onnx"
     shas["canon_linguistic_onnx"] = (
-        sha256_file(linguistic_onnx) if linguistic_onnx.exists() else None
+        model_shas["canon_linguistic_onnx"] if "canon_linguistic_onnx" in model_shas
+        else (sha256_file(linguistic_onnx) if linguistic_onnx.exists() else None)
     )
     shas["canon_variance_dur_onnx"] = (
-        sha256_file(variance_dur_onnx) if variance_dur_onnx.exists() else None
+        model_shas["canon_variance_dur_onnx"] if "canon_variance_dur_onnx" in model_shas
+        else (sha256_file(variance_dur_onnx) if variance_dur_onnx.exists() else None)
     )
     shas["canon_variance_pitch_onnx"] = (
-        sha256_file(variance_pitch_onnx) if variance_pitch_onnx.exists() else None
+        model_shas["canon_variance_pitch_onnx"] if "canon_variance_pitch_onnx" in model_shas
+        else (sha256_file(variance_pitch_onnx) if variance_pitch_onnx.exists() else None)
     )
     shas["canon_phonemes_txt"] = (
-        sha256_file(canon_phonemes_txt) if canon_phonemes_txt.exists() else None
+        canon_phonemes_txt_sha if canon_phonemes_txt_sha is not None
+        else (sha256_file(canon_phonemes_txt) if canon_phonemes_txt.exists() else None)
     )
-    shas["vocoder_onnx"] = sha256_file(vocoder_onnx) if vocoder_onnx.exists() else None
+    shas["vocoder_onnx"] = (
+        model_shas["vocoder_onnx"] if "vocoder_onnx" in model_shas
+        else (sha256_file(vocoder_onnx) if vocoder_onnx.exists() else None)
+    )
     return shas
+
+
+def _parse_canon_phonemes(text: str) -> Dict[str, int]:
+    lines = text.splitlines()
+    return {line: i for i, line in enumerate(lines)}
 
 
 def load_canon_phonemes(path: Path) -> Dict[str, int]:
     """canon 配布 phonemes.txt（改行区切りリスト、行番号=ID、0=<PAD>）。"""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return {line: i for i, line in enumerate(lines)}
+    return _parse_canon_phonemes(path.read_text(encoding="utf-8"))
+
+
+def load_canon_phonemes_with_sha(path: Path) -> Tuple[Dict[str, int], str]:
+    """`load_canon_phonemes` と同じパースを行いつつ、パースに使ったバッファの
+    sha256 も返す（`_read_bytes_and_sha256` 参照。`cmd_run` の provenance pin
+    用）。"""
+    data, digest = _read_bytes_and_sha256(path)
+    return _parse_canon_phonemes(data.decode("utf-8")), digest
+
+
+def _parse_own_phonemes(text: str) -> Dict[str, int]:
+    return json.loads(text)
 
 
 def load_own_phonemes_json(path: Path) -> Dict[str, int]:
     """export.py `_export_phonemes` が書き出す `<model_name>.phonemes.json`
     （phone_to_id の flat dict）。実 ckpt が届いた場合の本番経路。"""
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _parse_own_phonemes(path.read_text(encoding="utf-8"))
+
+
+def load_own_phonemes_json_with_sha(path: Path) -> Tuple[Dict[str, int], str]:
+    """`load_own_phonemes_json` と同じパースを行いつつ、パースに使ったバッファ
+    の sha256 も返す（`_read_bytes_and_sha256` 参照。`cmd_run` の provenance
+    pin 用）。"""
+    data, digest = _read_bytes_and_sha256(path)
+    return _parse_own_phonemes(data.decode("utf-8")), digest
 
 
 def acoustic_export_basename(acoustic_dir: Path, acoustic_onnx_path: Path) -> Optional[str]:
@@ -370,6 +679,14 @@ def load_speaker_embed_vector(path: Path) -> np.ndarray:
     return np.frombuffer(path.read_bytes(), dtype=np.float32).copy()
 
 
+def load_speaker_embed_vector_with_sha(path: Path) -> Tuple[np.ndarray, str]:
+    """`load_speaker_embed_vector` と同じロードを行いつつ、ロードに使った
+    バッファの sha256 も返す（`_read_bytes_and_sha256` 参照。`cmd_run` の
+    provenance pin 用）。"""
+    data, digest = _read_bytes_and_sha256(path)
+    return np.frombuffer(data, dtype=np.float32).copy(), digest
+
+
 def build_own_dictionary_from_binarize(diffsinger_repo: Path, dictionary_ja: Path) -> Dict[str, int]:
     """binarize 入力の dictionary-ja.txt (= merged_ja_dict.txt 相当) から、export.py
     が使うのと同じ `utils.phoneme_utils.PhonemeDictionary` で自前語彙を再構築する。
@@ -412,9 +729,192 @@ def build_phoneme_mapping(own_phonemes: Dict[str, int], canon_phonemes: Dict[str
 # 3. export.py acoustic 実行（GPU 側 ckpt が届いた本番経路のみ）
 # ============================================================================
 
-def run_export_acoustic(diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, step: int, out_dir: Path) -> Path:
+def _git_head_and_dirty(repo_path: Path) -> Tuple[object, object, object, object]:
+    """指定リポジトリの HEAD commit・作業ツリー dirty 状態・その内容ハッシュを
+    取得する。戻り値は `(head, dirty, status_sha256, diff_sha256)`。
+
+    [P2 修正] (review #264 R24, gate_synth.py:1585) 呼び出し側 (`cmd_run`) が
+    export subprocess の**前後**でこの関数を呼び、pre/post を照合できるよう
+    切り出した。git リポでない・取得失敗の場合は fail-closed にせず
+    `("unavailable", "unavailable", "unavailable", "unavailable")` を返す
+    （呼び出し側で summary へそのまま可視化する。従来の単発取得時と同じ挙動）。
+
+    [P2 修正] (review #264 R25) 従来は dirty 状態を `bool` 1 個へ縮約して
+    いたため、export 前後で checkout が既に dirty のまま別内容へ変化した
+    （dirty→dirty のまま porcelain status/diff 内容が変わった）ケースを
+    pre/post 照合が検出できなかった（`(HEAD, True)` が両者とも同じ値の
+    ため一致判定を素通りする）。`git status --porcelain` の生テキスト全体の
+    sha256（`status_sha256`）と `git diff HEAD` の生バイト列の sha256
+    （`diff_sha256`）を追加で取得し、呼び出し側 (`_check_diffsinger_repo_stable`)
+    がこれらも含めて完全一致を要求する。dirty でない場合も一貫して計算する
+    （`git diff HEAD` は空 diff の固定ハッシュを返す。dirty/not-dirty の
+    分岐で計算有無を変えると、diff 計算自体をスキップした未計算状態と
+    「本当に無変化」を summary 上で区別できなくなるため）。
+
+    境界宣言（PR #264 R25 レビュー返信参照）: untracked ファイルの内容や
+    リポジトリ外からの import まで含めた「実行された exporter クロージャ
+    全体」のハッシュ化は際限がなく、本関数のスコープには含めない。dirty な
+    checkout のまま実行した run は summary が既に「pin として信頼不能」と
+    開示しており、正典 run は runbook が clean pinned checkout を必須とする
+    ため、この強化をもって exporter provenance 系列の追い込みを終端とする。
+    """
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_path),
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        status_text = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(repo_path),
+            capture_output=True, text=True, check=True,
+        ).stdout
+        dirty = bool(status_text.strip())
+        status_sha256 = hashlib.sha256(status_text.encode("utf-8")).hexdigest()
+        diff_bytes = subprocess.run(
+            ["git", "diff", "HEAD"],
+            cwd=str(repo_path),
+            capture_output=True, check=True,
+        ).stdout
+        diff_sha256 = hashlib.sha256(diff_bytes).hexdigest()
+        return head, dirty, status_sha256, diff_sha256
+    except Exception:
+        return "unavailable", "unavailable", "unavailable", "unavailable"
+
+
+def _check_diffsinger_repo_stable(
+    repo_path: Path,
+    pre_head: object,
+    pre_dirty: object,
+    pre_status_sha256: object,
+    pre_diff_sha256: object,
+    post_head: object,
+    post_dirty: object,
+    post_status_sha256: object,
+    post_diff_sha256: object,
+) -> None:
+    """export.py subprocess の前後で取得した diffsinger_repo の
+    HEAD/dirty/status_sha256/diff_sha256 を照合する（review #264 R24 P2 /
+    R25 P2）。不一致（HEAD 変化・dirty 状態変化・dirty のままの内容変化を
+    含む）は export 中に checkout が動いたことを意味し、ONNX の provenance
+    を pin できないため `SystemExit` で fail-closed する。どちらか一方でも
+    `"unavailable"`（git 情報取得失敗）の場合は照合不能として素通りする
+    （R20 の既存挙動を維持 — export 自体は git 情報が無くても継続する）。
+    """
+    if "unavailable" in (pre_head, post_head):
+        return
+    pre = (pre_head, pre_dirty, pre_status_sha256, pre_diff_sha256)
+    post = (post_head, post_dirty, post_status_sha256, post_diff_sha256)
+    if pre != post:
+        raise SystemExit(
+            f"ERROR: DiffSinger checkout ({repo_path}) changed during "
+            f"export.py execution "
+            f"(pre: head={pre_head} dirty={pre_dirty} status_sha256={pre_status_sha256} "
+            f"diff_sha256={pre_diff_sha256}, "
+            f"post: head={post_head} dirty={post_dirty} status_sha256={post_status_sha256} "
+            f"diff_sha256={post_diff_sha256}). "
+            f"Refusing to publish a summary whose exporter revision pin cannot be "
+            f"trusted — the acoustic.onnx bytes may have been generated from a "
+            f"checkout state that no longer matches either snapshot."
+        )
+
+
+def _publish_exported_acoustic(
+    diffsinger_repo_path: Path,
+    staging_dir: Path,
+    out_path: Path,
+    pre_head: object,
+    pre_dirty: object,
+    pre_status_sha256: object,
+    pre_diff_sha256: object,
+    rollback_state: Dict[str, object],
+) -> None:
+    """review #264 R27 P2: `run_export_acoustic()` が返した `staging_dir` を、
+    diffsinger_repo の post snapshot 取得 + `_check_diffsinger_repo_stable()`
+    成功の後に限り `out_path`（canonical）へ swap する。
+
+    export subprocess 実行前に取得済みの pre 値 (`pre_head` 等) を受け取り、
+    ここで post 値を取得して照合する。検査失敗（`_check_diffsinger_repo_stable`
+    が `SystemExit`）時は `staging_dir` を削除して canonical（旧世代があれば
+    それ）を無傷のまま残す — 「新 ONNX + 旧 gate summary」の混成世代が
+    publish される窓を閉じる（`run_export_acoustic()` docstring 参照）。
+
+    review #264 R30 P2 (rename-to-bookkeeping window): 従来は呼び出し元
+    `_cmd_run_impl` が本関数の呼び出し**直後**の後続代入
+    （`_rollback_state["onnx_out_path"] = exported_dir`）で公開先を記帳して
+    いた。本関数の唯一の残り処理が `_swap_step_dir_into_place()` であり、
+    それが正常 return した（＝canonical への公開が完了した）**直後**・
+    呼び出し元のその代入文が実行される**前**に `KeyboardInterrupt`/
+    `SystemExit` が割り込むと、`cmd_run()` の rollback wrapper は
+    `onnx_out_path is None` のまま「未公開」と誤認して巻き戻しを skip し、
+    新 ONNX と旧 `gate_synth_summary.json` の混成公開状態が残っていた
+    （R28 が閉じた窓と対称）。
+
+    修正: 記帳を呼び出し元の後続代入ではなく、本関数内で
+    `_swap_step_dir_into_place()` 呼び出しを直接くるむ `try/finally` へ
+    移す。`_swap_step_dir_into_place()` の契約上、例外を外へ伝播させずに
+    正常 return するのは `staging_dir` が公開先（`out_path`）へ完全に
+    rename され尽くして消滅した場合のみであり、内部の rename が失敗すれば
+    POSIX `rename(2)` のディレクトリ単位 atomic 性により `staging_dir` は
+    部分状態を残さず存在し続ける（`_swap_step_dir_into_place` docstring
+    参照）。したがってフラグ的な後続代入ではなく `staging_dir.exists()`
+    という実ファイルシステム状態から公開完了を導出する（`_cmd_run_impl`
+    が `"swapped"` に対して R29 で確立した同型パターン）。
+
+    この `finally` は `_check_diffsinger_repo_stable()` 失敗時の早期
+    `except BaseException` 節（`staging_dir` を削除して即 raise）とは別の
+    より内側の try/finally であり、検査失敗で早期リターンする経路は
+    `_swap_step_dir_into_place()` 自体を一度も呼ばないためこの finally には
+    到達しない（構造的に「早期失敗による削除」と「swap 成功による消費」を
+    混同しない——両者とも事後の `staging_dir.exists()` は False になり得る
+    ため、finally のスコープをこの呼び出しだけに絞ることで曖昧さを排除する）。
+    """
+    (
+        post_head, post_dirty, post_status_sha256, post_diff_sha256,
+    ) = _git_head_and_dirty(diffsinger_repo_path)
+    try:
+        _check_diffsinger_repo_stable(
+            diffsinger_repo_path,
+            pre_head, pre_dirty, pre_status_sha256, pre_diff_sha256,
+            post_head, post_dirty, post_status_sha256, post_diff_sha256,
+        )
+    except BaseException:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+    try:
+        _swap_step_dir_into_place(staging_dir, out_path)
+    finally:
+        if not staging_dir.exists():
+            rollback_state["onnx_out_path"] = out_path
+
+
+def run_export_acoustic(
+    diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, step: int, out_dir: Path
+) -> Tuple[Path, Path, str, str]:
     """`checkpoints/<exp_name>/` を用意して `scripts/export.py acoustic` を実行する。
     §5.2 の手順そのもの。CPU で足りる（export はモデルロード+グラフ変換のみ）。
+
+    返り値は `(staging_dir, out_path, ckpt_sha256, train_config_sha256)`。
+    後者2つは exporter に実際に消費させたバイト列（下記 R20 P2 参照）の
+    sha256 hex digest で、`collect_input_sha256` が `sha256_file()` の
+    別 read へフォールバックせずそのまま summary へ pin できるようにする。
+
+    review #264 R27 P2 (exporter 安定性検査前の ONNX 公開): 従来はこの関数の
+    末尾で `_swap_step_dir_into_place(staging_dir, out_path)` を呼び、
+    canonical パス `out_path` を新世代へ即座に差し替えてから return して
+    いた。しかし呼び出し側 `cmd_run()` が export 後の git snapshot 取得
+    （post 値）と `_check_diffsinger_repo_stable()` による pre/post 照合を
+    行うのは、この関数が return した**後**である。そのため exporter 実行中に
+    diffsinger checkout が動いて安定性検査が fail-closed で拒否する場合でも、
+    canonical には既に新 ONNX が公開済みという「新 ONNX + 旧 gate summary」の
+    混成世代が残ってしまっていた（安定性検査の意味が publish 後追いになる）。
+    修正: swap をこの関数から呼び出し側へ委譲する。`out_path` には一切触れず、
+    検査済みの `staging_dir`（マーカーファイル書き込み等の swap 前処理は未了、
+    `_swap_step_dir_into_place` が担当）と、swap 先として使うべき `out_path`
+    をそのまま返す。呼び出し側は post snapshot 取得 → 安定性検査成功の後に
+    のみ `_swap_step_dir_into_place(staging_dir, out_path)` を呼び、検査失敗時は
+    `staging_dir` を削除して canonical を無傷に保つ（既存の staged swap +
+    BaseException 巻き戻しの流儀をそのまま踏襲）。
     """
     ckpt_target = diffsinger_repo / "checkpoints" / exp_name
     ckpt_target.mkdir(parents=True, exist_ok=True)
@@ -422,65 +922,99 @@ def run_export_acoustic(diffsinger_repo: Path, ckpt_dir: Path, exp_name: str, st
     config_file = ckpt_dir / "config.yaml"
     if not ckpt_file.exists() or not config_file.exists():
         raise FileNotFoundError(f"expected {ckpt_file} and {config_file} in {ckpt_dir}")
-    shutil.copy2(ckpt_file, ckpt_target / ckpt_file.name)
-    shutil.copy2(config_file, ckpt_target / "config.yaml")
+
+    # review #264 R20 P2 (checkpoint TOCTOU): 従来は `collect_input_sha256`
+    # 側が `run_export_acoustic()` 完了後（＝ここでの `shutil.copy2` による
+    # コピー・exporter subprocess による消費が終わった後）に、元の ckpt_dir
+    # から改めて `sha256_file()` で読み直して summary の pin ハッシュを得て
+    # いた。コピー〜その re-read の間に学習/同期プロセス等が元ファイルを
+    # 差し替えると、「ONNX は旧バイトから生成されたのに summary は新バイトを
+    # pin する」乖離が生じ得た。ここで一度だけ `read_bytes()` し、その同じ
+    # バイト列を (a) sha256 化、(b) `ckpt_target` への書き出し（exporter が
+    # 消費する実体）の両方に使うことで、「記録したハッシュ = exporter が
+    # 実際に消費したバイト列」を構造的に保証する（score モジュールの
+    # `_read_and_exec_module`/`_read_bytes_and_sha256` と同型パターン）。
+    ckpt_bytes, ckpt_sha = _read_bytes_and_sha256(ckpt_file)
+    config_bytes, config_sha = _read_bytes_and_sha256(config_file)
+    (ckpt_target / ckpt_file.name).write_bytes(ckpt_bytes)
+    (ckpt_target / "config.yaml").write_bytes(config_bytes)
 
     out_path = out_dir / f"onnx_gate_{step}"
-    cmd = [
-        sys.executable, "scripts/export.py", "acoustic",
-        "--exp", exp_name,
-        "--ckpt", str(step),
-        "--out", str(out_path),
-    ]
-    print("| export cmd:", " ".join(cmd))
-    subprocess.run(cmd, cwd=str(diffsinger_repo), check=True)
 
-    # BUGFIX (5K gate 実測, 2026-08-15): scripts/export.py acoustic の実出力は
-    # `acoustic.onnx` 固定名ではなく `<exp_name>.onnx`（+ freeze_spk 付与時は
-    # `<exp_name>.<speaker>.onnx`）。1 個だけ *.onnx が見つかった場合に限り
-    # `acoustic.onnx` へエイリアスコピーする（複数ある場合は決め打ちできない
-    # ため何もせず後続の存在チェックで fail-closed に停止させる）。
+    # review #264 R20 P1 (stale ONNX candidates): 従来は `out_path`
+    # （`--out-dir`/`--step` の組み合わせから決定論的に決まる固定パス）へ
+    # 直接 export しており、同じ組み合わせを使い回す再実行（例: 5K -> 10K
+    # checkpoint への差し替え）で `out_path` に前回実行の残置ファイルが
+    # 混在し得た。この状態では下記の glob が「今回の subprocess が生成した
+    # ファイル」と「過去の残置ファイル」を区別できず、exporter が exit 0
+    # でも stale な非 alias ONNX を新 alias として採用してしまう窓があった
+    # （summary の checkpoint/config ハッシュは新しいのに、実際に読み込む
+    # acoustic.onnx だけ古いままという provenance 崩壊）。
     #
-    # BUGFIX (review #263 R5 P1): 旧実装は `acoustic.onnx` が既存の場合に
-    # このブロック全体を skip していたため、同じ --out-dir へ再 export
-    # した際（例: 5K -> 10K checkpoint への差し替え）に alias コピーが
-    # 更新されず、新 ckpt から export した `<exp_name>.onnx` が存在するのに
-    # 旧 checkpoint 由来の `acoustic.onnx` のまま合成される（ckpt/config の
-    # sha256 は新しいものを記録しながら、実際に読み込む acoustic.onnx は
-    # 古いままという不整合）。alias 候補の探索自体からは alias_path 自身を
-    # 除外した上で、既存 alias の有無に関わらず毎回新しい export 出力から
-    # 置き直す（export.py が直接 `acoustic.onnx` という名前で書き出す場合は
-    # その時点で subprocess が上書き済みのため、この分岐は素通りする）。
-    alias_path = out_path / "acoustic.onnx"
-    onnx_candidates = sorted(
-        p for p in out_path.glob("*.onnx") if p.resolve() != alias_path.resolve()
+    # 修正: 呼び出しごとに一意な fresh staging ディレクトリへ export し、
+    # 今回の invocation が生成したファイルのみを検査・alias 化してから、
+    # `_swap_step_dir_into_place`（review #263 R5/R7/R8 P1/P2 で確立済みの
+    # 2 段 rename + BaseException 巻き戻しパターン）で `out_path` へ原子的に
+    # 差し替える。旧世代は削除されず `out_path.old` へ退避される
+    # （swap 自体の意味論はそのまま流用）。staging 再利用時の残置物という
+    # 概念自体を構造的に消す — glob 対象ディレクトリは常に空から始まる。
+    out_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(dir=str(out_dir), prefix=f".onnx_gate_{step}.build-")
     )
-    if len(onnx_candidates) == 1:
-        if alias_path.exists() or alias_path.is_symlink():
-            alias_path.unlink()
-        shutil.copy2(onnx_candidates[0], alias_path)
-        print(f"| aliased {onnx_candidates[0].name} -> acoustic.onnx "
-              f"(gate_synth.py naming-assumption bugfix)")
-    elif len(onnx_candidates) > 1:
-        # review #263 R8 P2: 非 alias *.onnx が複数存在する場合、今回の export
-        # 由来がどれかを決め打ちできない。従来はこの分岐で何もせず後段の
-        # `alias_path.exists()` チェックへ落ちていたため、alias_path が
-        # 前回（別 checkpoint）export 由来のまま残っていると、その stale な
-        # alias を暗黙に流用して合成が進んでしまう fail-open だった
-        # （ckpt/config の sha256 は新しいものを記録しつつ、実際に読み込む
-        # acoustic.onnx は古いままという R5 P1 と同種の不整合を再発させる）。
-        # 曖昧な場合は alias を更新せず、既存 alias の有無に関わらず
-        # fail-closed で停止する（stale alias の暗黙流用を禁止）。
-        names = ", ".join(p.name for p in onnx_candidates)
-        raise RuntimeError(
-            f"ambiguous export output in {out_path}: multiple non-alias *.onnx "
-            f"candidates ({names}) found — cannot determine which one this "
-            f"export produced. Refusing to fall back to any pre-existing "
-            f"acoustic.onnx alias (fail-closed); clean {out_path} and re-export."
+    try:
+        cmd = [
+            sys.executable, "scripts/export.py", "acoustic",
+            "--exp", exp_name,
+            "--ckpt", str(step),
+            "--out", str(staging_dir),
+        ]
+        print("| export cmd:", " ".join(cmd))
+        subprocess.run(cmd, cwd=str(diffsinger_repo), check=True)
+
+        # BUGFIX (5K gate 実測, 2026-08-15): scripts/export.py acoustic の実出力は
+        # `acoustic.onnx` 固定名ではなく `<exp_name>.onnx`（+ freeze_spk 付与時は
+        # `<exp_name>.<speaker>.onnx`）。1 個だけ *.onnx が見つかった場合に限り
+        # `acoustic.onnx` へエイリアスコピーする（複数ある場合は決め打ちできない
+        # ため何もせず後続の存在チェックで fail-closed に停止させる）。
+        alias_path = staging_dir / "acoustic.onnx"
+        onnx_candidates = sorted(
+            p for p in staging_dir.glob("*.onnx") if p.resolve() != alias_path.resolve()
         )
-    if not alias_path.exists():
-        raise RuntimeError(f"export.py did not produce {alias_path}")
-    return out_path
+        if len(onnx_candidates) == 1:
+            if alias_path.exists() or alias_path.is_symlink():
+                alias_path.unlink()
+            shutil.copy2(onnx_candidates[0], alias_path)
+            print(f"| aliased {onnx_candidates[0].name} -> acoustic.onnx "
+                  f"(gate_synth.py naming-assumption bugfix)")
+        elif len(onnx_candidates) > 1:
+            # review #263 R8 P2: 非 alias *.onnx が複数存在する場合、今回の
+            # export 由来のどれを採るか決め打ちできない。fresh staging
+            # ディレクトリのため候補は必ず今回の invocation 由来だが、
+            # それでも複数あれば曖昧なので fail-closed で停止する。
+            names = ", ".join(p.name for p in onnx_candidates)
+            raise RuntimeError(
+                f"ambiguous export output in {staging_dir}: multiple non-alias "
+                f"*.onnx candidates ({names}) found — cannot determine which "
+                f"one this export produced. Refusing to fall back to any "
+                f"pre-existing acoustic.onnx alias (fail-closed); clean "
+                f"{staging_dir} and re-export."
+            )
+        if not alias_path.exists():
+            raise RuntimeError(f"export.py did not produce {alias_path}")
+    except BaseException:
+        # exporter が期待物を生成しなかった／曖昧だった場合、staging を
+        # 掃除して再送出する。`out_path`（前回世代があれば）には一切触れて
+        # いないため、失敗時に stale な前回世代が誤って公開されることはない
+        # （fail-closed）。
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+
+    # review #264 R27 P2: swap は呼び出し側 (`cmd_run`) が post snapshot 取得 +
+    # `_check_diffsinger_repo_stable()` 成功の後に行う（上記 docstring 参照）。
+    # ここでは `out_path`（canonical）に一切触れず、検査済みの `staging_dir`
+    # とその swap 先をそのまま返す。
+    return staging_dir, out_path, ckpt_sha, config_sha
 
 
 # ============================================================================
@@ -522,16 +1056,29 @@ def run_pipeline(
     notes_raw,
     beats_to_seconds,
     tempo_bpm: float,
-    canon_model_dir: Path,
-    vocoder_dir: Path,
-    acoustic_onnx_path: Path,
-    acoustic_dsconfig_path: Path,
+    model_bytes: Dict[str, bytes],
     variance_phonemes: Dict[str, int],
     acoustic_phonemes: Dict[str, int],
     record: dict,
     speaker_name: Optional[str] = None,
     speaker_embed_vector: Optional[np.ndarray] = None,
 ) -> np.ndarray:
+    """`model_bytes` は `load_model_bundle_bytes` が 1 回だけ read したモデル束
+    + dsconfig.yaml のバッファ（`canon_linguistic_onnx`/`canon_variance_dur_onnx`/
+    `canon_variance_pitch_onnx`/`acoustic_onnx`/`vocoder_onnx`/
+    `acoustic_dsconfig_yaml` の 6 key）。
+
+    [P2 修正] (review #264 R12, gate_synth.py:1447) 従来はここで各モデル/
+    config を path から個別に read しており、`collect_input_sha256` が
+    hash 用に読む read とは別 read だった（TOCTOU: 差し替え→hash→
+    元に戻す→ここで load、という順で差し替えられると、記録される
+    pre-load hash と実際に推論へ使われたバイト列が食い違う。公開直前の
+    pre/post 照合もこの窓を閉じない — 指摘の通り）。呼び出し側
+    （`cmd_run`）が `load_model_bundle_bytes` で 1 回だけ read したバッファを
+    そのまま `InferenceSession`/`yaml.safe_load` へ渡すことで、hash と
+    load が同一バッファ由来であることを構造的に保証する
+    （`_read_and_exec_module` と同型パターン）。
+    """
     ort.set_seed(SEED)
     record["seed"] = SEED
     so = ort.SessionOptions()
@@ -540,11 +1087,11 @@ def run_pipeline(
     providers = ["CPUExecutionProvider"]
 
     t_load0 = time.time()
-    sess_linguistic = ort.InferenceSession(str(canon_model_dir / "linguistic.onnx"), sess_options=so, providers=providers)
-    sess_dur = ort.InferenceSession(str(canon_model_dir / "dsdur" / "dur.onnx"), sess_options=so, providers=providers)
-    sess_pitch = ort.InferenceSession(str(canon_model_dir / "dspitch" / "pitch.onnx"), sess_options=so, providers=providers)
-    sess_acoustic = ort.InferenceSession(str(acoustic_onnx_path), sess_options=so, providers=providers)
-    sess_vocoder = ort.InferenceSession(str(vocoder_dir / "nsf_hifigan.onnx"), sess_options=so, providers=providers)
+    sess_linguistic = ort.InferenceSession(model_bytes["canon_linguistic_onnx"], sess_options=so, providers=providers)
+    sess_dur = ort.InferenceSession(model_bytes["canon_variance_dur_onnx"], sess_options=so, providers=providers)
+    sess_pitch = ort.InferenceSession(model_bytes["canon_variance_pitch_onnx"], sess_options=so, providers=providers)
+    sess_acoustic = ort.InferenceSession(model_bytes["acoustic_onnx"], sess_options=so, providers=providers)
+    sess_vocoder = ort.InferenceSession(model_bytes["vocoder_onnx"], sess_options=so, providers=providers)
     record["model_load_sec"] = time.time() - t_load0
 
     # acoustic.onnx の実際の入力名で経路を判定する（canon 単一話者 DDPM か、
@@ -553,7 +1100,7 @@ def run_pipeline(
     is_reflow_multi_speaker = {"spk_embed", "steps"}.issubset(acoustic_input_names)
     record["stage3_mode"] = "reflow_multi_speaker" if is_reflow_multi_speaker else "canon_ddpm"
 
-    dsconfig = yaml.safe_load(acoustic_dsconfig_path.read_text(encoding="utf-8"))
+    dsconfig = yaml.safe_load(model_bytes["acoustic_dsconfig_yaml"].decode("utf-8"))
     hop_size = 512
     sample_rate = 44100
     frame_ms = 1000.0 * hop_size / sample_rate
@@ -737,11 +1284,10 @@ def run_pipeline(
 def synth_song(
     song: str,
     notes_limit: Optional[int],
-    singer_dir: Path,
-    canon_model_dir: Path,
-    vocoder_dir: Path,
-    acoustic_onnx_path: Path,
-    acoustic_dsconfig_path: Path,
+    build_fn: Callable,
+    beats_to_seconds: Callable,
+    tempo_bpm: float,
+    model_bytes: Dict[str, bytes],
     variance_phonemes: Dict[str, int],
     acoustic_phonemes: Dict[str, int],
     out_dir: Path,
@@ -749,7 +1295,13 @@ def synth_song(
     speaker_embed_vector: Optional[np.ndarray] = None,
     final_out_dir: Optional[Path] = None,
 ) -> dict:
-    build_fn, beats_to_seconds, tempo_bpm, _score_module_path = load_song_module(song, singer_dir)
+    # [P2 修正] (review #264 R6) 従来は `singer_dir` を受け取りここで
+    # `load_song_module` を再び呼んでいた（`cmd_run` が provenance pin 用に
+    # 既に 1 回読み込み済みの score モジュールを、ここでもう一度別 read で
+    # ロードし直す — TOCTOU 窓を増やす redundant reload）。呼び出し元
+    # （`cmd_run`）が `load_song_module` で 1 回だけ読み込んだ `build_fn` /
+    # `beats_to_seconds` / `tempo_bpm` をそのまま受け取ることで、song モジュール
+    # のファイル read はプロセス全体を通じて 1 回のみになる。
     notes_raw = build_fn()
     if notes_limit is not None:
         notes_raw = notes_raw[:notes_limit]
@@ -758,7 +1310,7 @@ def synth_song(
     t_total0 = time.time()
     y = run_pipeline(
         notes_raw, beats_to_seconds, tempo_bpm,
-        canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
+        model_bytes,
         variance_phonemes, acoustic_phonemes, record,
         speaker_name=speaker_name, speaker_embed_vector=speaker_embed_vector,
     )
@@ -867,6 +1419,115 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
             )
 
 
+def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """staging tempfile へ書き込み、成功後にのみ `os.replace` で `path` へ
+    atomic 公開する（`s1_dataprep/build_dataset.py` `_atomic_write_text` /
+    `adapter/donor_bank.py` `_atomic_stage_and_replace` と同じ流儀）。
+
+    review #264 R15 追い掃討 (PR #264, gate_synth.py:1718, P2):
+    `cmd_mapping_check` の従来実装は `os.getpid()` を tmp ファイル名に含める
+    決定論的パスへ直接 `write_text` していたため、(a) 同一プロセス内で同じ
+    `--out` に対し複数回呼ばれると tmp パスが衝突し得る、(b)
+    `write_text`（内部 `open()`）は `O_CREAT` のみで既存ファイルを黙って
+    truncate するため、シンボリックリンク経由の攻撃や他プロセスが同名 tmp
+    を残していた場合に排他性がない。`tempfile.mkstemp`（`O_CREAT | O_EXCL`
+    で一意生成保証）+ 失敗時 tmp 削除 + `os.replace` の原子的差し替えへ
+    是正（`s1_dataprep`/`recording_kit`/`adapter` 各所の同型ヘルパーと同じ
+    パターン。依存方向の不自然さを避けるため、共有モジュール化ではなく
+    本ファイル内へコピペ実装する既存慣例に倣う。上の `OutputCollisionError`
+    docstring 参照）。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(content)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+_SWAP_BACKUP_MARKER_NAME = ".gate_synth_swap_backup_marker"
+_SWAP_BACKUP_MARKER_CONTENT = (
+    "gate_synth._swap_step_dir_into_place backup marker — do not create manually\n"
+)
+
+
+def _stamp_swap_backup_marker(dir_path: Path) -> None:
+    """`dir_path` 直下へ `_SWAP_BACKUP_MARKER_NAME` を冪等かつ安全にスタンプ
+    する（`_swap_step_dir_into_place` の `build_dir`/`out_dir` 双方の呼び出し
+    site から使う共有ヘルパー。`convert_pjs.py` の `_swap_into_place` にも
+    同型ヘルパーを同時導入する）。
+
+    review #264 R29 P1: `out_dir` は（アップグレード前の canonical 等）
+    本ツール外で内容が作られていた/変更され得るディレクトリであり得るため、
+    そこに `_SWAP_BACKUP_MARKER_NAME` という名前の symlink が事前に存在する
+    ケースを想定しなければならない。単純な `write_text()`（内部 `open()`
+    は既定で symlink を追従する）でこの経路にスタンプすると、symlink の
+    リンク先（本ツール管理外の任意の外部ファイル）を追従して開き、
+    truncate または新規作成してしまう data-destruction path になる。
+
+    修正: 書き込み前に `Path.is_symlink()`（symlink 自体の種別を symlink
+    追従なしに判定できる）でリンクか否かを確認し、
+    - symlink、または存在するが通常ファイルでない場合は、中身を見ずに
+      即座に fail-closed で拒否する（例外送出。呼び出し元の swap は続行
+      させない）。
+    - 存在し通常ファイルの場合、内容が既知のマーカー内容と一致するかを
+      検証する。一致すれば既にスタンプ済みとみなし無変更で受理する
+      （冪等・上書きしない）。不一致なら「本ツール由来のマーカーではない
+      不審な同名ファイル」とみなし fail-closed で拒否する。
+    - 存在しない場合のみ、`O_CREAT | O_EXCL | O_NOFOLLOW` で排他生成する。
+      `O_EXCL` が「存在しない場合のみ作成」を検査(`is_symlink`/`exists`)と
+      作成の間の TOCTOU 窓ごと原子的に保証し、`O_NOFOLLOW` は万一そこへ
+      symlink が滑り込んでいても追従せず即座に失敗させる（レビュー指摘の
+      「O_CREAT|O_EXCL|O_NOFOLLOW 相当の排他生成」に対応）。
+    """
+    marker_path = dir_path / _SWAP_BACKUP_MARKER_NAME
+    if marker_path.is_symlink():
+        raise SystemExit(
+            f"ERROR: {marker_path} exists as a symlink. Refusing to stamp a swap "
+            f"backup marker through it — write_text() would follow the link and "
+            f"truncate/create its external target. Remove it (or replace it with "
+            f"a regular file) and re-run."
+        )
+    if marker_path.exists():
+        if not marker_path.is_file():
+            raise SystemExit(
+                f"ERROR: {marker_path} exists but is not a regular file (and not a "
+                f"symlink either — e.g. a device/fifo). Refusing to stamp a swap "
+                f"backup marker over it — move it away manually and re-run."
+            )
+        if marker_path.read_text(encoding="utf-8") != _SWAP_BACKUP_MARKER_CONTENT:
+            raise SystemExit(
+                f"ERROR: {marker_path} exists but its content does not match the "
+                f"expected swap backup marker. Refusing to overwrite an unverified "
+                f"file — move it away manually and re-run."
+            )
+        return
+    try:
+        fd = os.open(
+            str(marker_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644
+        )
+    except OSError as exc:
+        raise SystemExit(
+            f"ERROR: failed to exclusively create swap backup marker {marker_path} "
+            f"(lost a race, or it is a symlink rejected by O_NOFOLLOW): {exc}"
+        )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(_SWAP_BACKUP_MARKER_CONTENT)
+    except BaseException:
+        try:
+            os.unlink(marker_path)
+        except OSError:
+            pass
+        raise
+
+
 def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
     """`build_dir`（全曲の wav/record + summary を完全に構築済み）を
     `out_dir`（`step_<N>/` 等の合成成果物ディレクトリ）へ原子的に差し替える
@@ -901,12 +1562,81 @@ def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
     える（このメソッド冒頭で `.old` を消去済みのため、except 到達時点で
     `old_dir` が存在するのは今回の退避 rename が成功した場合のみであり、
     フラグの代入タイミングに依存しない）。これにより両方の中断窓を閉じる。
+
+    review #264 R25 P1: 上記いずれの経路でも、`old_dir` が既存の場合は
+    「それが本ツールが過去の swap で作った退避物である」ことを検証せず
+    無条件で `shutil.rmtree` していた。`<out_dir>.old` という決定論的な
+    パスへ、本ツールと無関係なディレクトリ（手動作業の残骸・別ツールの
+    出力等）が偶然存在していた場合、検証なしに丸ごと削除してしまう破壊
+    経路だった（`convert_pjs.py` の `_swap_into_place` も同型の構造で
+    同時修正）。本ツールが公開する `build_dir` には常に固定内容のマーカー
+    ファイル（`_SWAP_BACKUP_MARKER_NAME`）を埋め込み、`build_dir` ->
+    `out_dir` -> `.old` と rename でパスが遷移してもマーカー自体はディレ
+    クトリの中身として一緒に運ばれる（rename の原子性にそのまま乗るため、
+    マーカー書き込みのための追加の競合窓を作らない）。`old_dir` に既存の
+    ディレクトリがある場合、このマーカーの有無/内容一致で「本ツールが過去
+    に作った退避物か」を検証し、一致しなければ fail-closed で拒否する
+    （手動で退避してから再実行するよう案内する。中断で退避直後にマーカー
+    書き込みへ到達できなかった場合も同じ経路で拒否され、安全側に倒れる）。
+
+    review #264 R28 P2（アップグレード時の自己ロック是正。
+    `convert_pjs.py` の `_swap_into_place` も同型の構造で同時修正）:
+    上記 R25 の検証はマーカー導入**後**に本関数経由で作られた `out_dir` は
+    正しく扱えるが、マーカー導入**前**に作られていた既存の `out_dir`
+    （本関数を初めて含むバージョンへアップグレードした直後の canonical）
+    にはマーカーが無い。この状態で最初の swap を実行すると、無条件で
+    「`out_dir` -> `.old` へ退避」自体は成功する（`.old` が既存でなければ
+    R25 のガードは発火しない）ものの、退避された `.old` 自身にはマーカーが
+    無いまま残る。次回の rerun がこの `.old` を「本ツール由来か」検証すると
+    不一致で拒否され、以後は手動掃除が恒久的に必要になる自己ロックに陥る
+    （アップグレード直後の 1 回だけでなく、ユーザーが `.old` を毎回手動で
+    退避しない限り永続する）。
+
+    修正: `out_dir` を `.old` へ退避する**直前**に、その `out_dir`
+    自身へマーカーを書き込む（無ければ新規作成、既にあれば無変更で
+    上書き — 冪等）。今まさに本関数がこの `out_dir` を canonical から
+    退避しようとしている時点で、その出自（＝「本関数の swap によって
+    今から `.old` になる」）は本関数自身が保証できるため、マーカー導入前に
+    作られていたかどうかによらずスタンプして問題ない。これにより退避後の
+    `.old` は常にマーカー付きになり、次回以降の rerun がそれを正しく
+    「本ツール由来」と認識できる（1 回きりのアップグレード後は自己解消）。
+    既存の「退避**前**から存在していた無関係な `.old`（本ツールと無関係な
+    ディレクトリ）は検証なしに削除しない」という R25 の不変条件は変わらない
+    ——このガードは上記で `.old` が既に存在するケースに対してのみ働き、
+    今回このステップで新たに `out_dir` から作る `.old` には及ばない。
+
+    review #264 R29 P1: 上記マーカー書き込み（`build_dir`/`out_dir` 双方）は
+    `_stamp_swap_backup_marker` へ委譲する。素の `write_text()` は symlink を
+    追従して開くため、`out_dir`（本ツール外で作られた canonical であり得る）
+    配下にマーカー名の symlink が事前に存在すると、そのリンク先の外部
+    ファイルを truncate/新規作成してしまう data-destruction path だった。
+    `_stamp_swap_backup_marker` docstring 参照（`convert_pjs.py` の
+    `_swap_into_place` も同型ヘルパーで同時修正）。
     """
+    build_dir.mkdir(parents=True, exist_ok=True)
+    _stamp_swap_backup_marker(build_dir)
     old_dir = out_dir.parent / f"{out_dir.name}.old"
     if old_dir.exists():
+        marker_path = old_dir / _SWAP_BACKUP_MARKER_NAME
+        marker_ok = (
+            marker_path.is_file()
+            and marker_path.read_text(encoding="utf-8") == _SWAP_BACKUP_MARKER_CONTENT
+        )
+        if not marker_ok:
+            raise SystemExit(
+                f"ERROR: backup path {old_dir} already exists but does not look like "
+                f"a previous swap backup created by this tool (missing/mismatched "
+                f"marker {marker_path}). Refusing to delete an unverified directory — "
+                f"move it away manually and re-run."
+            )
         shutil.rmtree(old_dir)
     try:
         if out_dir.exists():
+            # review #264 R28 P2: スタンプしてから退避する（docstring 参照）。
+            # review #264 R29 P1: `out_dir` は本ツール外で作られた canonical
+            # であり得るため、`_stamp_swap_backup_marker` の symlink 拒否経路
+            # を通す（`_stamp_swap_backup_marker` docstring 参照）。
+            _stamp_swap_backup_marker(out_dir)
             out_dir.rename(old_dir)
         build_dir.rename(out_dir)
     except BaseException:
@@ -915,11 +1645,92 @@ def _swap_step_dir_into_place(build_dir: Path, out_dir: Path) -> None:
         raise
 
 
+def _rollback_swapped_step_dir(out_dir: Path) -> None:
+    """`_swap_step_dir_into_place(_, out_dir)` が成功させた公開を取り消し、
+    `out_dir` を「その swap 直前の状態」（旧世代があれば `.old` から復元、
+    無ければ未生成の状態）へ戻す。
+
+    review #264 R28 P2: `cmd_run` の非 `--skip-export` 経路は、export 直後
+    （phoneme/embedding discovery・model load・synthesis・公開直前の事後
+    ハッシュ照合より**前**）に `_publish_exported_acoustic()` 経由で
+    `onnx_gate_<step>` を canonical へ公開していた。この後続段のいずれかが
+    失敗すると、`onnx_gate_<step>` は既に新世代へ差し替わっているのに
+    `step_<N>/gate_synth_summary.json`（別途 build_dir/synth_out_dir の swap
+    が成功した場合のみ公開される）は旧世代のまま残り、旧 summary が pin する
+    `acoustic_onnx_path` のハッシュがそのパスの実体（新世代）と一致しなくなる
+    ——「新 ONNX + 旧 gate summary」の混成公開状態。
+
+    `cmd_run`（wrapper。本体は `_cmd_run_impl`）はこの関数を、
+    build_dir/synth_out_dir の最終公開（`_rollback_state["swapped"]`）まで
+    `_cmd_run_impl` が到達しなかった場合の `finally` 節から呼び、
+    `onnx_gate_<step>` の公開も未完了へ揃える（build_dir 側の未公開時
+    クリーンアップと対の処理。`_cmd_run_impl` 冒頭の docstring 参照）。
+
+    `_swap_step_dir_into_place` 自身の直後の rename 窓を守る `except
+    BaseException` 巻き戻しと同じ「`old_dir.exists()` という実ファイル
+    システム状態で判定する」流儀に倣う: `.old` が存在すればそれが真の旧世代
+    であり、`out_dir` を退けて `.old` を `out_dir` へ戻す。`.old` が存在
+    しなければ今回が初回公開だったということであり、`out_dir` を削除して
+    「未公開」状態（この run が始まる前の状態）へ戻す。
+
+    ベストエフォート: 呼び出し元は常に既存の例外を再送出する経路（`finally`
+    / `except BaseException: ... raise`）から呼ぶため、ロールバック自体が
+    失敗しても元の例外を握り潰してはならない。`OSError` は握って警告を出す
+    のみに留める。
+    """
+    old_dir = out_dir.parent / f"{out_dir.name}.old"
+    try:
+        if old_dir.exists():
+            if out_dir.exists():
+                shutil.rmtree(out_dir)
+            old_dir.rename(out_dir)
+        elif out_dir.exists():
+            shutil.rmtree(out_dir)
+    except OSError as exc:
+        print(
+            f"| WARNING: failed to roll back {out_dir} after a downstream failure "
+            f"(canonical may still reflect the just-published generation): {exc}",
+            file=sys.stderr,
+        )
+
+
 # ============================================================================
 # 5. CLI
 # ============================================================================
 
-def cmd_run(args):
+def _cmd_run_impl(args, _rollback_state: Dict[str, object]) -> None:
+    """`cmd_run` の本体。`_rollback_state` は呼び出し元 `cmd_run` が渡す
+    ミュータブルな辞書で、非 `--skip-export` 経路が `onnx_gate_<step>` を
+    canonical へ公開した場合の `out_path`（キー `"onnx_out_path"`）と、
+    本関数がその後の全段（phoneme/embedding discovery・model load・
+    synthesis・事後ハッシュ照合・summary/build_dir の最終公開）まで完走した
+    かどうか（キー `"swapped"`）を書き込む。本関数が完走前に任意の例外
+    （`SystemExit`/`KeyboardInterrupt` 含む）で中断した場合、`_rollback_state`
+    はその時点までの進捗を正確に反映したまま呼び出し元へ伝わり、`cmd_run`
+    の `finally` 節が `onnx_gate_<step>` の公開を取り消す（review #264
+    R28 P2。`_rollback_swapped_step_dir` docstring 参照）。
+
+    review #264 R29 P2: `"swapped"` は synth_out_dir 公開（`_swap_step_dir_
+    into_place` 呼び出し）直後の後続代入では**なく**、その try/finally の
+    `finally` 節で `build_dir.exists()`（実ファイルシステム状態）から
+    導出して書き込む。理由は下記 `finally` 節のインラインコメント参照
+    （要旨: 後続代入方式は、rename 成功直後・代入実行前の中断窓で
+    「実際には公開済みなのに `swapped=False`」という誤判定を生み、
+    `cmd_run` 側の不要なロールバックが「新 summary + 旧 ONNX」の逆混成を
+    再導入し得た）。
+
+    review #264 R30 P2: `"onnx_out_path"` も同じ原則で書き込む。従来は
+    `_publish_exported_acoustic()` 呼び出しの直後、本関数側の後続代入
+    （`_rollback_state["onnx_out_path"] = exported_dir`）で記帳していたが、
+    その代入文実行前の中断窓が「新 ONNX + 旧 gate summary」の混成を再導入し
+    得た（`_publish_exported_acoustic` docstring 参照）。修正: `_rollback_
+    state` を `_publish_exported_acoustic()` へ直接渡し、同関数内部の
+    `_swap_step_dir_into_place()` をくるむ `finally` から `staging_dir.
+    exists()`（実ファイルシステム状態）で書き込ませる。これにより
+    `_rollback_state` の全フィールドが「後続代入」ではなく「対応する
+    不可逆操作を直接くるむ finally からの fs 状態導出」という単一の原則に
+    統一される。
+    """
     canon_model_dir = Path(args.canon_model_dir)
     vocoder_dir = Path(args.vocoder_dir)
     # BUGFIX (5K gate 実測, 2026-08-15): --out-dir を相対パスのまま run_export_acoustic
@@ -927,7 +1738,13 @@ def cmd_run(args):
     # 意図した出力先に書かれない。resolve() で絶対パス化してから使う。
     out_dir = Path(args.out_dir).resolve()
     singer_dir = Path(args.singer_dir) if args.singer_dir else DEFAULT_SINGER_DIR
-    variance_phonemes = load_canon_phonemes(canon_model_dir / "phonemes.txt")
+    # [P2 修正] (review #264 R9, gate_synth.py:1168) パースに使うバッファと
+    # provenance pin 用ハッシュのバッファを同一 read から得る
+    # （`_read_bytes_and_sha256` 参照。従来は下記 `collect_input_sha256` が
+    # 別 read で `sha256_file()` していた）。
+    variance_phonemes, canon_phonemes_txt_sha = load_canon_phonemes_with_sha(
+        canon_model_dir / "phonemes.txt"
+    )
 
     # R3 レビュー指摘 (PR #263, gate_synth.py:544): 5K/10K/20K が同じ --out-dir を
     # 使い回すと gate_<song>.wav / summary が上書きされ、前段ゲートの判定証跡が
@@ -980,6 +1797,38 @@ def cmd_run(args):
     except OutputCollisionError as exc:
         raise SystemExit(f"error: {exc}")
 
+    ckpt_sha: Optional[str] = None
+    train_config_sha: Optional[str] = None
+    # [P2 修正] (review #264 R24, gate_synth.py:1585) 従来は export subprocess
+    # 実行**後**（このあと数百行先、synth ループ開始直前）に diffsinger_repo
+    # の HEAD/dirty を 1 回だけ読んでいたため、export と読み取りの間に
+    # checkout が進む/元に戻ると「ONNX は旧バイトから生成されたのに summary
+    # は後から読んだ別リビジョンを pin する」偽 pin が起き得た（指摘の通り）。
+    # ここで export subprocess 起動**前**に pre 状態を取得し、export 完了
+    # 直後に post 状態を取得して照合する。不一致（HEAD 変化 or dirty 状態
+    # 変化）なら export 中に checkout が動いた証拠であり、ONNX の provenance
+    # を信頼できないため fail-closed で停止する。pre 値を正式 pin として
+    # summary へ記録する（下記「diffsinger_repo_git_head」参照）。
+    diffsinger_repo_pre_head: object = None
+    diffsinger_repo_pre_dirty: object = None
+    diffsinger_repo_pre_status_sha256: object = None
+    diffsinger_repo_pre_diff_sha256: object = None
+    # review #264 R28 P2: 非 skip-export 経路のみ `_publish_exported_acoustic()`
+    # が `onnx_gate_<step>` を canonical へ公開する。その公開先パスを
+    # `_rollback_state["onnx_out_path"]`（呼び出し元 `cmd_run` の rollback
+    # wrapper が例外発生時に読む正本）へ記録する。この run が後続段
+    # （phoneme discovery/model load/synthesis/事後ハッシュ照合/summary 公開）
+    # のどこかで失敗した場合、`cmd_run` の `finally` 節が
+    # `_rollback_swapped_step_dir` でこの公開を取り消し、`onnx_gate_<step>` と
+    # `gate_synth_summary.json` が常に同一の完走 run 由来であることを保証する
+    # （`_rollback_swapped_step_dir` docstring 参照）。skip-export 経路では
+    # 公開自体が発生しないため None のまま。
+    #
+    # review #264 R30 P2: この記録自体は本呼び出しの**後続代入**ではなく、
+    # `_publish_exported_acoustic()` 内部の `_swap_step_dir_into_place()` を
+    # くるむ `try/finally` から書き込まれる（`_publish_exported_acoustic`
+    # docstring 参照）。公開直後・呼び出し元の代入前という中断窓を
+    # 構造的に消すため、`_rollback_state` を本関数へ直接渡す。
     if args.skip_export:
         acoustic_dir = Path(args.acoustic_dir)
         acoustic_onnx_path = acoustic_dir / "acoustic.onnx"
@@ -988,8 +1837,24 @@ def cmd_run(args):
             # canon 配布 zip はトップレベルにも dsconfig.yaml を持つ
             acoustic_dsconfig_path = canon_model_dir / "dsconfig.yaml"
     else:
-        exported_dir = run_export_acoustic(
+        diffsinger_repo_path = Path(args.diffsinger_repo)
+        (
+            diffsinger_repo_pre_head, diffsinger_repo_pre_dirty,
+            diffsinger_repo_pre_status_sha256, diffsinger_repo_pre_diff_sha256,
+        ) = _git_head_and_dirty(diffsinger_repo_path)
+        # review #264 R27 P2: `run_export_acoustic()` はもう canonical パスへ
+        # swap しない（staging に留め置いたまま `staging_dir`/`exported_dir`
+        # の両方を返す）。post snapshot 取得 + 安定性検査 + swap は
+        # `_publish_exported_acoustic()` に委譲する（検査失敗時は staging を
+        # 掃除して canonical を無傷のまま残す。docstring 参照）。
+        staging_dir, exported_dir, ckpt_sha, train_config_sha = run_export_acoustic(
             Path(args.diffsinger_repo), Path(args.ckpt_dir), args.exp_name, args.step, out_dir,
+        )
+        _publish_exported_acoustic(
+            diffsinger_repo_path, staging_dir, exported_dir,
+            diffsinger_repo_pre_head, diffsinger_repo_pre_dirty,
+            diffsinger_repo_pre_status_sha256, diffsinger_repo_pre_diff_sha256,
+            _rollback_state,
         )
         acoustic_dir = exported_dir
         acoustic_onnx_path = exported_dir / "acoustic.onnx"
@@ -1009,12 +1874,25 @@ def cmd_run(args):
     speaker_embed_path = (
         find_speaker_embed(acoustic_dir, args.speaker, export_basename) if args.speaker else None
     )
-    speaker_embed_vector = (
-        load_speaker_embed_vector(speaker_embed_path) if speaker_embed_path is not None else None
-    )
+    # [P2 修正] (review #264 R9, gate_synth.py:1168) ロードに使うバッファと
+    # provenance pin 用ハッシュのバッファを同一 read から得る（`_read_bytes_
+    # and_sha256` 参照）。
+    speaker_embed_vector = None
+    speaker_embed_sha: Optional[str] = None
+    if speaker_embed_path is not None:
+        speaker_embed_vector, speaker_embed_sha = load_speaker_embed_vector_with_sha(
+            speaker_embed_path
+        )
     if args.speaker and speaker_embed_path is not None:
         print(f"| speaker embed: {speaker_embed_path} ({speaker_embed_vector.shape[0]}-dim)")
 
+    # [P2 修正] (review #264 R9, gate_synth.py:1168) own_json が実際にパース
+    # されて acoustic_phonemes を構築した場合のみ、そのパースに使ったバッファ
+    # の sha256 を記録する（`--tokens canon` で own_json が存在しても無視され
+    # るケースは「パースされたバッファ」が存在しないため None のまま —
+    # collect_input_sha256 側が sha256_file() による従来の別 read へ
+    # フォールバックする）。
+    own_json_sha: Optional[str] = None
     if args.tokens == "canon":
         # 明示的な S0 互換検証専用パス。事故で本番に紛れ込まないよう、
         # own_json が存在するのに --tokens canon を指定した場合も警告する
@@ -1039,15 +1917,41 @@ def cmd_run(args):
                 f"  S0 互換検証（canon acoustic.onnx をそのまま使う）が目的なら "
                 f"--tokens canon を明示指定すること。"
             )
-        acoustic_phonemes = load_own_phonemes_json(own_json)
+        acoustic_phonemes, own_json_sha = load_own_phonemes_json_with_sha(own_json)
         encoding_mode = f"own ({own_json.name})"
     print(f"| acoustic token encoding: {encoding_mode}")
 
     # R3 レビュー指摘 (PR #263, gate_synth.py:616): run_pipeline が実際に load する
     # dsconfig.yaml と canon phonemes.txt も入力 sha256 に含める（+ speaker_embed）。
+    # [P2 修正] (review #264 R9, gate_synth.py:1168) canon_phonemes_txt_sha/
+    # own_json_sha/speaker_embed_sha は上記で実際にパース/ロードしたバッファ
+    # から得た sha256（未パースの場合は None、内部で従来の別 read にフォール
+    # バック）。
+    #
+    # [P2 修正] (review #264 R12, gate_synth.py:1447) acoustic_onnx / canon 各
+    # onnx / vocoder_onnx / dsconfig.yaml は、従来は「hash 用の sha256_file()
+    # 別 read」と「run_pipeline 内の InferenceSession/yaml.safe_load 用の別
+    # read」に分かれており、両 read の間の差し替えを公開直前の pre/post 照合
+    # だけでは検出できなかった（指摘の通り）。`load_model_bundle_bytes` で
+    # ここで 1 回だけ read したバッファを model_shas として pin し、同じ
+    # バッファ（model_bytes）を下記ループの `synth_song`/`run_pipeline` へ
+    # そのまま渡す（hash と load が同一バッファ由来であることを構造的に
+    # 保証。score モジュールの `_read_and_exec_module` と同型）。長時間の
+    # 合成中に on-disk 実装が書き換えられていないかは、従来通り合成完了後・
+    # 公開直前に再ハッシュして pre-load hash と突き合わせる belt を残す
+    # （下記「モデル/config 束の事後照合」参照）。
+    model_bytes, model_shas = load_model_bundle_bytes(
+        canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
+    )
     input_sha256 = collect_input_sha256(
         args, canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
         own_json, speaker_embed_path,
+        canon_phonemes_txt_sha=canon_phonemes_txt_sha,
+        own_json_sha=own_json_sha,
+        speaker_embed_sha=speaker_embed_sha,
+        model_shas=model_shas,
+        ckpt_sha=ckpt_sha,
+        train_config_sha=train_config_sha,
     )
 
     # R6 レビュー指摘 (PR #263, gate_synth.py:804, P2): 上記はモデル/config 束の
@@ -1057,10 +1961,47 @@ def cmd_run(args):
     # 変わっても「どの実装から出たか」が入力側 pin から追えなくなる。合成実装側
     # の sha256 も input_sha256 へ追加する（実行中の本スクリプト自身・実際に
     # load した score モジュール・可能ならリポの HEAD commit）。
-    input_sha256["gate_synth_py"] = sha256_file(Path(__file__).resolve())
+    #
+    # [P2 修正] (review #263 R16) import 前にファイルパスを確定 sha256 化して
+    # から import することで pin を import 直前の内容へ固定する（load 時 pin）。
+    # さらに合成完了後に同じパスを再ハッシュし、不一致なら公開
+    # （`_swap_step_dir_into_place`）前に fail-closed で止める（事後照合。
+    # 長時間走る合成の最中に score モジュールが書き換えられて「記録された pin
+    # と実際に使われた実装が食い違ったまま公開される」事故を防ぐ）。
+    #
+    # [P2 修正] (review #264 R6) 従来は「hash 用に `sha256_file()` で読む read」
+    # と「`load_song_module`（内部の `_exec_module_from_source`）が exec 用に
+    # 読む read」が別 read だったため、両者の間にファイルが差し替えられると
+    # 記録した pin と実際に exec された内容が食い違い得た（TOCTOU）。さらに
+    # そのあと `synth_song` 内でも同じモジュールをもう一度 `load_song_module`
+    # で読み直しており（redundant reload）、read 回数・TOCTOU 窓の両方が
+    # 不必要に多かった。`load_song_module` 自身が「1 回だけ read_bytes() した
+    # バッファをハッシュにも compile/exec にも使う」ように統合された
+    # （`_read_and_exec_module` 参照）ため、ここでは `load_song_module` を
+    # song ごとに 1 回だけ呼び、返ってきた `module_shas`（exec に実際使った
+    # バッファの sha256）をそのまま `input_sha256` へ転記し、`build_fn` 等は
+    # `synth_song` へそのまま渡す（`synth_song` 側の再ロードを廃止）。
+    #
+    # [P2 修正] (review #264 R10, gate_synth.py:1200) ここで `sha256_file()`
+    # による再読み込みは行わず、モジュール実行開始直後に確定済みの
+    # `_GATE_SYNTH_PY_LOAD_TIME_SHA256`（ファイル先頭のコメント参照）を
+    # そのまま転記する。公開直前の事後照合は下記「gate_synth.py 自身の
+    # 事後照合」ブロックで行う。
+    input_sha256["gate_synth_py"] = _GATE_SYNTH_PY_LOAD_TIME_SHA256
+    score_module_paths: Dict[str, Path] = {}
+    dependency_module_paths: Dict[str, Path] = {}
+    song_modules: Dict[str, Tuple[Callable, Callable, float]] = {}
     for song_name in args.song.split(","):
-        _, _, _, score_module_path = load_song_module(song_name, singer_dir)
-        input_sha256[f"score_module_{song_name}"] = sha256_file(score_module_path)
+        build_fn, beats_to_seconds, tempo_bpm, module_path, module_shas = load_song_module(
+            song_name, singer_dir
+        )
+        song_modules[song_name] = (build_fn, beats_to_seconds, tempo_bpm)
+        score_module_paths[song_name] = module_path
+        main_pin_key = f"score_module_{song_name}"
+        for pin_key, (pinned_path, pinned_sha) in module_shas.items():
+            input_sha256[pin_key] = pinned_sha
+            if pin_key != main_pin_key:
+                dependency_module_paths[pin_key] = pinned_path
     try:
         git_head = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -1071,20 +2012,51 @@ def cmd_run(args):
     except Exception:
         pass  # 取得失敗時は省略する（キー無し。fail-closed にはしない）
 
+    # [P2 修正] (review #264 R20) 上記 `repo_git_head` は gate_synth.py 自身が
+    # 属する ugh リポの HEAD であり、非 `--skip-export` 経路で実際に
+    # `scripts/export.py` を実行した `args.diffsinger_repo` checkout の pin
+    # ではなかった（export の実装は DiffSinger 側リポにあり、そちらの
+    # checkout がどのコミット・作業ツリー状態かで生成される acoustic.onnx が
+    # 変わり得るのに、summary からは追跡できなかった）。export 実行時
+    # （`--skip-export` 経路では export 自体を行わないため対象外 — 既存
+    # summary 構造は変えず、キー自体を省く）に限り
+    # `diffsinger_repo_git_head`/`diffsinger_repo_dirty` として記録する。
+    # git リポでない・取得失敗の場合は fail-closed にはせず（export 自体の
+    # 既存挙動は変えない）、代わりに明示の `"unavailable"` をそのまま summary
+    # へ記録して「pin が取れなかったこと」自体を正直に可視化する
+    # （サイレントにキーを省いて「未検査」を「pin 済み」と区別できなくしない）。
+    #
+    # [P2 修正] (review #264 R24, gate_synth.py:1585) 従来はこの時点
+    # （export 完了から数百行後、synth ループ開始直前）で HEAD/dirty を
+    # 初めて 1 回だけ読んでおり、export subprocess 実行中〜この読み取りまで
+    # の間に checkout が進む/元に戻ると偽 pin になり得た（指摘の通り）。
+    # 上記 `cmd_run` 冒頭・export 呼び出しの直前直後で pre/post を取得して
+    # 既に照合済み（不一致なら fail-closed で既に停止している）ため、ここでは
+    # その pre 値（= ONNX 生成時点の真の checkout 状態）をそのまま summary
+    # へ転記するのみで、再取得は行わない。
+    if not args.skip_export:
+        input_sha256["diffsinger_repo_git_head"] = diffsinger_repo_pre_head
+        input_sha256["diffsinger_repo_dirty"] = diffsinger_repo_pre_dirty
+        # [P2 修正] (review #264 R25) bool 縮約では拾えない「dirty のまま
+        # 内容が変わった」ケースの検出材料を summary にも可視化する
+        # （`_git_head_and_dirty`/`_check_diffsinger_repo_stable` docstring 参照）。
+        input_sha256["diffsinger_repo_status_sha256"] = diffsinger_repo_pre_status_sha256
+        input_sha256["diffsinger_repo_diff_sha256"] = diffsinger_repo_pre_diff_sha256
+
     # synth_out_dir/build_dir/old_dir は cmd_run 冒頭（R9 preflight）で算出済み。
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)
 
-    swapped = False
     try:
         songs = args.song.split(",")
         results = {}
         for song in songs:
             print(f"| synthesizing: {song} (notes_limit={args.notes_limit}, speaker={args.speaker})")
+            build_fn, beats_to_seconds, tempo_bpm = song_modules[song]
             rec = synth_song(
-                song, args.notes_limit, singer_dir,
-                canon_model_dir, vocoder_dir, acoustic_onnx_path, acoustic_dsconfig_path,
+                song, args.notes_limit, build_fn, beats_to_seconds, tempo_bpm,
+                model_bytes,
                 variance_phonemes, acoustic_phonemes, build_dir,
                 speaker_name=args.speaker, speaker_embed_vector=speaker_embed_vector,
                 final_out_dir=synth_out_dir,
@@ -1105,12 +2077,184 @@ def cmd_run(args):
                   f"rms={rec['wav_rms']:.4f} diverged={rec['stage3_dual_encoding_diverged']} "
                   f"mode={rec['stage3_mode']}")
 
+        # [P2 修正] (review #263 R16) 事後照合: `load_song_module` が exec に
+        # 実際使ったバッファの sha256（`input_sha256[f"score_module_{song}"]`。
+        # review #264 R6 により「hash した内容」と「exec した内容」は同一
+        # read から得られる構造的保証がある）を、合成完了後（公開直前）に
+        # ディスクを再読み込みして再計算した sha256 と突き合わせる。長時間の
+        # 合成中に score モジュールが書き換えられていた場合、記録済み pin と
+        # ディスク上の現在の実装が食い違うため、公開（`_swap_step_dir_into_place`）
+        # 前に fail-closed で止める。
+        for song_name, module_path in score_module_paths.items():
+            recorded_sha = input_sha256[f"score_module_{song_name}"]
+            current_sha = sha256_file(module_path)
+            if current_sha != recorded_sha:
+                raise SystemExit(
+                    f"ERROR: score module '{module_path}' changed during synthesis "
+                    f"(pinned sha256={recorded_sha} — sha256 of the buffer actually "
+                    f"compiled/exec'd at load time — now={current_sha}). "
+                    f"Refusing to publish a summary whose provenance pin no longer "
+                    f"matches the on-disk implementation."
+                )
+        # [P2 修正] (review #264 R2) 依存モジュール（score.py/phoneme_jp.py）
+        # も song モジュール本体と同じ事後照合の対象にする。
+        for pin_key, dep_path in dependency_module_paths.items():
+            recorded_sha = input_sha256[pin_key]
+            current_sha = sha256_file(dep_path) if dep_path.exists() else None
+            if current_sha != recorded_sha:
+                raise SystemExit(
+                    f"ERROR: score module dependency '{dep_path}' changed during "
+                    f"synthesis (pinned sha256={recorded_sha} — sha256 of the buffer "
+                    f"actually compiled/exec'd at load time — now={current_sha}). "
+                    f"Refusing to publish a summary whose provenance pin no longer "
+                    f"matches the on-disk implementation."
+                )
+
+        # [P2 修正] (review #264 R10, gate_synth.py:1200) gate_synth.py 自身
+        # の事後照合: モジュール実行開始直後に固定した `_GATE_SYNTH_PY_
+        # LOAD_TIME_SHA256`（ファイル先頭のコメント参照）を、合成完了後・
+        # 公開（`_swap_step_dir_into_place`）直前に同じパスを再読み込みして
+        # 突き合わせる。長時間の合成中に本スクリプト自身が書き換えられて
+        # いた場合、記録済み pin（プロセス起動時点の実装）とディスク上の
+        # 現在の実装が食い違うため fail-closed で止める（score モジュールと
+        # 同じ pre+post 二段方式）。
+        gate_synth_py_current_sha = sha256_file(_GATE_SYNTH_PY_PATH)
+        if gate_synth_py_current_sha != _GATE_SYNTH_PY_LOAD_TIME_SHA256:
+            raise SystemExit(
+                f"ERROR: gate_synth.py itself changed during synthesis "
+                f"(pinned sha256={_GATE_SYNTH_PY_LOAD_TIME_SHA256} — sha256 captured "
+                f"at module load time — now={gate_synth_py_current_sha}). Refusing to "
+                f"publish a summary whose provenance pin no longer matches the "
+                f"on-disk implementation that (may have) run."
+            )
+
+        # [P2 修正] (review #264 R9, gate_synth.py:1168; R12, gate_synth.py:1447)
+        # モデル/config 束の事後照合: `run_pipeline`（`synth_song` 経由で上記
+        # ループ内で既に呼ばれている）が実際に open した onnx モデル群と
+        # `acoustic_dsconfig_path` は、`load_model_bundle_bytes` が 1 回だけ
+        # read したバッファ（`model_bytes`）を `InferenceSession`/
+        # `yaml.safe_load` にそのまま渡して使用済みで、その同一バッファの
+        # sha256（`model_shas`）が `input_sha256` へ既に記録されている
+        # （R12 対応: hash と load が同一 read 由来であることが構造的に保証
+        # されるため、ここより前の TOCTOU 窓は既に閉じている）。以下の再読み込み
+        # + 突き合わせは、長時間走る合成の最中に on-disk の実装/モデル資材が
+        # 書き換えられていないかを検出する belt（score modules と同じ
+        # pre+post 二段方式）であり、不一致（差し替え）または消失を検出したら
+        # 合成完了後・公開（`_swap_step_dir_into_place`）前に fail-closed で
+        # 止める。
+        model_config_paths: Dict[str, Path] = {
+            "canon_linguistic_onnx": canon_model_dir / "linguistic.onnx",
+            "canon_variance_dur_onnx": canon_model_dir / "dsdur" / "dur.onnx",
+            "canon_variance_pitch_onnx": canon_model_dir / "dspitch" / "pitch.onnx",
+            "acoustic_onnx": acoustic_onnx_path,
+            "vocoder_onnx": vocoder_dir / "nsf_hifigan.onnx",
+            "acoustic_dsconfig_yaml": acoustic_dsconfig_path,
+        }
+        for pin_key, model_path in model_config_paths.items():
+            recorded_sha = input_sha256.get(pin_key)
+            if recorded_sha is None:
+                # pre-load hash 取得時点で存在しなかった（= 今回の実行で使わ
+                # れなかった）入力。事後照合の対象外。
+                continue
+            if not model_path.exists():
+                raise SystemExit(
+                    f"ERROR: model/config input '{model_path}' (pin_key={pin_key}) "
+                    f"went missing during synthesis (pre-load pinned sha256="
+                    f"{recorded_sha}). Refusing to publish a summary whose "
+                    f"provenance pin no longer matches an existing on-disk input."
+                )
+            current_sha = sha256_file(model_path)
+            if current_sha != recorded_sha:
+                raise SystemExit(
+                    f"ERROR: model/config input '{model_path}' (pin_key={pin_key}) "
+                    f"changed during synthesis (pre-load pinned sha256={recorded_sha} "
+                    f"— now={current_sha}). Refusing to publish a summary whose "
+                    f"provenance pin no longer matches the on-disk model/config "
+                    f"actually used by run_pipeline."
+                )
+
         summary_path = build_dir / "gate_synth_summary.json"
         summary_path.write_text(json.dumps({
             "step": args.step,
             "acoustic_encoding_mode": encoding_mode,
             "acoustic_onnx_path": str(acoustic_onnx_path),
             "input_sha256": input_sha256,
+            # (review #264 R9, gate_synth.py:1168; R12, gate_synth.py:1447;
+            # R21, gate_synth.py:1762-1763)
+            # input_sha256 の各 key がどの方式で「実際に使われたバイト」で
+            # あることを保証しているかの注記。score_module_* / *_dep_* は
+            # review #264 R6 の単一 read 方式と同様の構造。onnx/dsconfig 系は
+            # R12 で load_model_bundle_bytes による単一 read 方式へ移行済み
+            # （hash した buffer をそのまま InferenceSession/yaml.safe_load に
+            # 渡す）。pre-publish re-hash は on-disk 実装の書き換え検出用 belt。
+            # ckpt/train_config_yaml は R20 で run_export_acoustic() 内の単一
+            # read（_read_bytes_and_sha256()）束縛へ移行済み（R21 でこの
+            # method 記述を実態に追随させた — 移行時点では旧来の独立
+            # sha256_file() read の記述のまま取り残されていたため、summary
+            # の provenance 記述が実装と乖離していた）。
+            "input_sha256_provenance_method": {
+                "canon_phonemes_txt": "single-read (hash == buffer parsed into variance_phonemes)",
+                "acoustic_phonemes_json": "single-read (hash == buffer parsed into acoustic_phonemes, "
+                                           "when actually parsed; else sha256_file() re-read)",
+                "speaker_embed": "single-read (hash == buffer loaded into spk_embed vector)",
+                "score_module_*": "single-read (hash == buffer compiled/exec'd; review #264 R6)",
+                "*_dep_*": "single-read (hash == buffer compiled/exec'd; review #264 R6)",
+                "gate_synth_py": "load-time hash (captured at module exec start) + "
+                                  "pre-publish re-hash (fail-closed on mismatch; review #264 R10)",
+                "canon_linguistic_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                          "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "canon_variance_dur_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                            "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "canon_variance_pitch_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                              "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "acoustic_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                  "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "vocoder_onnx": "single-read (hash == buffer passed to InferenceSession) + "
+                                 "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "acoustic_dsconfig_yaml": "single-read (hash == buffer passed to yaml.safe_load) + "
+                                           "pre-publish re-hash belt (fail-closed on mismatch; review #264 R12)",
+                "ckpt": "single-read (hash == buffer run_export_acoustic() reads once via "
+                        "_read_bytes_and_sha256() and writes into checkpoints/<exp_name>/, "
+                        "consumed by the export.py subprocess; review #264 R20). This key is "
+                        "only populated on the real export path (not --skip-export); no "
+                        "pre-publish re-hash belt (ckpt is not reloaded after export, unlike "
+                        "the onnx/dsconfig models). collect_input_sha256()'s sha256_file() "
+                        "re-read is a fallback for callers that omit ckpt_sha — the current "
+                        "sole call site always supplies it when ckpt exists, so this fallback "
+                        "is not exercised in practice (review #264 R21)",
+                "train_config_yaml": "single-read (hash == buffer run_export_acoustic() reads "
+                                      "once via _read_bytes_and_sha256() and writes into "
+                                      "checkpoints/<exp_name>/config.yaml, consumed by the "
+                                      "export.py subprocess; review #264 R20). This key is only "
+                                      "populated on the real export path (not --skip-export); no "
+                                      "pre-publish re-hash belt (config.yaml is not reloaded "
+                                      "after export). collect_input_sha256()'s sha256_file() "
+                                      "re-read is a fallback for callers that omit "
+                                      "train_config_sha — the current sole call site always "
+                                      "supplies it when config.yaml exists, so this fallback is "
+                                      "not exercised in practice (review #264 R21)",
+                "diffsinger_repo_git_head": "pre-export snapshot (HEAD/dirty captured immediately "
+                                             "before the export.py subprocess launches) + "
+                                             "post-export re-check (fail-closed SystemExit before "
+                                             "any output is published if HEAD or dirty state "
+                                             "changed during export.py execution; review #264 R24). "
+                                             "This key is only populated on the real export path "
+                                             "(not --skip-export); 'unavailable' means git info "
+                                             "could not be obtained (not a git repo, git missing, "
+                                             "etc.) and is recorded verbatim rather than skipping "
+                                             "the key",
+                "diffsinger_repo_dirty": "see diffsinger_repo_git_head (same pre/post capture)",
+                "diffsinger_repo_status_sha256": "sha256 of the raw 'git status --porcelain' text "
+                                                  "(same pre/post capture as diffsinger_repo_git_head; "
+                                                  "review #264 R25). Detects a dirty->dirty content "
+                                                  "change that a bare dirty bool cannot distinguish "
+                                                  "from 'no change'. Does not cover untracked file "
+                                                  "content — see diffsinger_repo_diff_sha256 and the "
+                                                  "PR #264 R25 reply for the accepted boundary.",
+                "diffsinger_repo_diff_sha256": "sha256 of the raw 'git diff HEAD' bytes (same "
+                                                "pre/post capture; review #264 R25). Empty diff "
+                                                "hashes to a fixed constant when the tree is clean.",
+            },
             "sampling_params": {
                 "seed": SEED,
                 "speaker": args.speaker,
@@ -1120,9 +2264,39 @@ def cmd_run(args):
         }, indent=2, ensure_ascii=False), encoding="utf-8")
 
         _swap_step_dir_into_place(build_dir, synth_out_dir)
-        swapped = True
+        # review #264 R29 P2: 完了判定（下記 `_rollback_state["swapped"]`）は
+        # ここでの後続代入ではなく、下記 `finally` で実ファイルシステム状態
+        # から導出する（docstring 参照）。
     finally:
-        if not swapped:
+        # review #264 R29 P2: 従来は `_swap_step_dir_into_place()` 呼び出し
+        # 直後の後続代入（`swapped = True` / `_rollback_state["swapped"] =
+        # True`）で完了を記帳していたが、`_swap_step_dir_into_place()` 自体は
+        # 正常 return（= `build_dir.rename(synth_out_dir)` 完了 = 公開完了）
+        # していても、その直後・代入文実行前に `KeyboardInterrupt`/
+        # `SystemExit` が割り込むと、実際には公開済みなのに
+        # `_rollback_state["swapped"]` は `False` のまま呼び出し元
+        # `cmd_run` へ伝わっていた。この状態で `cmd_run` の `finally` が
+        # `_rollback_swapped_step_dir` を呼ぶと、既に新世代へ差し替わった
+        # `onnx_gate_<step>` だけを旧世代へ巻き戻し、`step_<N>/
+        # gate_synth_summary.json`（既に新世代を公開済み）はそのまま残る
+        # ——「新 summary + 旧 ONNX」の逆混成（R28 が対応した「新 ONNX + 旧
+        # summary」と表裏の破壊状態）を再導入していた。
+        #
+        # `build_dir` は synth_out_dir 公開の唯一の入力であり、
+        # `_swap_step_dir_into_place` が正常 return するのは
+        # `build_dir.rename(synth_out_dir)` が完了し `build_dir` 自身が
+        # （その名前のパスから）消滅した場合のみ（POSIX `rename(2)` は
+        # ディレクトリ単位で atomic なため、途中失敗時は `build_dir` が部分
+        # 状態を残さず存在し続ける — 上記 `_swap_step_dir_into_place`
+        # docstring 参照）。したがって、この `finally` 到達時点で
+        # `build_dir.exists()` を観測すれば、try 節がどの段（rename 直後か
+        # その手前の検証段か）で中断・失敗したかに関わらず、公開が完了した
+        # かどうかを Python の代入タイミングに依存せず正確に判定できる
+        # （`convert_pjs.py` の `main()` が review #264 R25 P2 で同じ理由から
+        # 採用した `build_dir.exists()` 判定と同型）。
+        swap_completed = not build_dir.exists()
+        _rollback_state["swapped"] = swap_completed
+        if not swap_completed:
             shutil.rmtree(build_dir, ignore_errors=True)
 
     # R6 レビュー指摘 (PR #263, gate_synth.py:879, P2) 対応: 個別 *_record.json
@@ -1133,37 +2307,109 @@ def cmd_run(args):
     print(f"| summary: {synth_out_dir / 'gate_synth_summary.json'}")
 
 
+def cmd_run(args) -> None:
+    """review #264 R28 P2: `_cmd_run_impl` を rollback wrapper 越しに呼ぶ。
+
+    従来（R27 まで）は非 `--skip-export` 経路で `_publish_exported_acoustic()`
+    が `onnx_gate_<step>` を canonical へ公開した**直後**（phoneme/embedding
+    discovery・model load・synthesis・事後ハッシュ照合・
+    `step_<N>/gate_synth_summary.json` の最終公開より**前**）に処理が続いて
+    いた。この間のどの段が失敗しても `onnx_gate_<step>` は既に新世代へ公開
+    済みのまま残り、古い `step_<N>/gate_synth_summary.json`（旧世代の
+    `acoustic_onnx` ハッシュを pin）と組み合わさって「新 ONNX + 旧 gate
+    summary」の混成公開状態が生じ得た（旧 summary が pin するハッシュが、
+    そのパスの実体（新世代）ともう一致しない）。
+
+    `_cmd_run_impl` は完走した場合にのみ `_rollback_state["swapped"] = True`
+    を書き込む（`onnx_gate_<step>` を公開した場合は同時に
+    `_rollback_state["onnx_out_path"]` へその公開先を書き込む）。ここでは
+    `_cmd_run_impl` を `finally` で包み、完走しなかった（`"swapped"` が
+    立っていない）にもかかわらず `onnx_gate_<step>` を公開済みだった場合に
+    限り `_rollback_swapped_step_dir` でその公開を取り消す。これにより
+    `onnx_gate_<step>` と `gate_synth_summary.json` は常に同一の完走 run 由来
+    であるという契約が回復する（`_rollback_swapped_step_dir` docstring
+    参照）。skip-export 経路は `onnx_out_path` が常に None のため no-op。
+
+    review #264 R29 P2: `"swapped"` の書き込み自体は `_cmd_run_impl` 内の
+    `finally` で `build_dir.exists()` から導出される（Python の代入
+    タイミングに依存しない。`_cmd_run_impl` docstring 参照）。ここでの
+    参照方法は変わらない。
+
+    review #264 R30 P2: `"onnx_out_path"` の書き込み自体も、`_cmd_run_impl`
+    が呼ぶ `_publish_exported_acoustic()` 内の `finally` で `staging_dir.
+    exists()` から導出される（`_publish_exported_acoustic` docstring
+    参照）。ここでの参照方法（`onnx_out_path is not None and not
+    rollback_state["swapped"]`）は変わらない——`_rollback_state` の全
+    フィールドが「対応する不可逆操作を直接くるむ finally からの fs 状態
+    導出」で埋まるようになったことで、このラッパー自身の読み取りロジックは
+    無変更のまま rename-to-bookkeeping 窓が構造的に閉じる。
+    """
+    rollback_state: Dict[str, object] = {"onnx_out_path": None, "swapped": False}
+    try:
+        _cmd_run_impl(args, rollback_state)
+    finally:
+        onnx_out_path = rollback_state["onnx_out_path"]
+        if onnx_out_path is not None and not rollback_state["swapped"]:
+            _rollback_swapped_step_dir(onnx_out_path)  # type: ignore[arg-type]
+
+
 def cmd_mapping_check(args):
-    diffsinger_repo = Path(args.diffsinger_repo)
-    own_dictionary_ja = Path(args.own_dictionary_ja)
+    # review #263 R16 P2: README `s1_gate/README.md` §3 の運用記述
+    # （「mapping-check を実 ckpt の acoustic.phonemes.json に対しても別途
+    # 走らせ、unmapped_own_count を確認する」）は、従来 CLI が
+    # `--own-dictionary-ja`（binarize 入力の辞書テキストから
+    # `PhonemeDictionary` でシミュレートした ID 空間）しか受け付けず、export
+    # 済みの実 `*.phonemes.json`（`run` が実際に消費する語彙そのもの）を
+    # 直接照合できなかった。`--export-phonemes-json` を追加し、実消費写像を
+    # そのまま検査できるようにする（両モードは排他 — どちらの ID 空間を
+    # 検査しているかを呼び出し側に必ず明示させる）。
+    own_dictionary_ja = Path(args.own_dictionary_ja) if args.own_dictionary_ja else None
+    export_phonemes_json = Path(args.export_phonemes_json) if args.export_phonemes_json else None
+    if (own_dictionary_ja is None) == (export_phonemes_json is None):
+        raise SystemExit(
+            "error: specify exactly one of --own-dictionary-ja (binarize 入力の "
+            "dictionary-ja.txt から PhonemeDictionary でシミュレート) or "
+            "--export-phonemes-json (export.py が実際に書き出した *.phonemes.json "
+            "= run が実際に消費する写像そのもの)"
+        )
+    diffsinger_repo = Path(args.diffsinger_repo) if args.diffsinger_repo else None
+    if own_dictionary_ja is not None and diffsinger_repo is None:
+        raise SystemExit("error: --own-dictionary-ja の指定時は --diffsinger-repo も必須です")
+
     canon_phonemes_txt = Path(args.canon_phonemes_txt)
     out_path = Path(args.out) if args.out else Path("mapping_check.json")
 
-    # R14 レビュー指摘 (PR #263, gate_synth.py:1123, P2): --out が
-    # --own-dictionary-ja/--canon-phonemes-txt（または --diffsinger-repo）と
-    # 一致すると、両入力をメモリへ読み込み済みのこの後の書き込みが入力
-    # 辞書ファイルそのものを mapping JSON で黙って置き換え・破壊してしまう。
-    # resolve 済みの全入力と --out を、実際の読み込みを始める前に衝突照合し
-    # fail-closed で拒否する（入力は読み込み前のため無傷のまま失敗する）。
+    # R14 レビュー指摘 (PR #263, gate_synth.py:1123, P2): --out が入力ファイルの
+    # いずれかと一致すると、両入力をメモリへ読み込み済みのこの後の書き込みが
+    # 入力ファイルそのものを mapping JSON で黙って置き換え・破壊してしまう。
+    # resolve 済みの全入力（存在するもののみ）と --out を、実際の読み込みを
+    # 始める前に衝突照合し fail-closed で拒否する（入力は読み込み前のため
+    # 無傷のまま失敗する）。
+    protected_roots = [canon_phonemes_txt]
+    for p in (diffsinger_repo, own_dictionary_ja, export_phonemes_json):
+        if p is not None:
+            protected_roots.append(p)
     try:
-        _reject_output_collision(
-            [out_path], protected_roots=[diffsinger_repo, own_dictionary_ja, canon_phonemes_txt]
-        )
+        _reject_output_collision([out_path], protected_roots=protected_roots)
     except OutputCollisionError as exc:
         raise SystemExit(f"error: {exc}")
 
     canon_phonemes = load_canon_phonemes(canon_phonemes_txt)
-    own_phonemes = build_own_dictionary_from_binarize(diffsinger_repo, own_dictionary_ja)
+    if export_phonemes_json is not None:
+        own_phonemes = load_own_phonemes_json(export_phonemes_json)
+        own_source = f"export-phonemes-json:{export_phonemes_json}"
+    else:
+        own_phonemes = build_own_dictionary_from_binarize(diffsinger_repo, own_dictionary_ja)
+        own_source = f"own-dictionary-ja:{own_dictionary_ja} (simulated via PhonemeDictionary)"
     result = build_phoneme_mapping(own_phonemes, canon_phonemes)
+    result["own_source"] = own_source
 
-    # [P2 修正] (review #263 R14) 直接 write_text は書き込み途中で kill
-    # された場合に破損 JSON が out_path へ残り得る。同一ディレクトリへ
-    # 一時ファイルを書いてから os.replace() で原子的に差し替える
-    # （convert_pjs.py `write_lang_def` と同型パターン。POSIX の `rename(2)`
-    # は同一ファイルシステム内で atomic）。
-    tmp_path = out_path.parent / f".{out_path.name}.tmp-{os.getpid()}"
-    tmp_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp_path, out_path)
+    # [P2 修正] (review #263 R14; review #264 R15 追い掃討で決定論 tmp パス
+    # を排他生成へ是正) 直接 write_text は書き込み途中で kill された場合に
+    # 破損 JSON が out_path へ残り得る。`_atomic_write_text`（本ファイル内
+    # 定義。`tempfile.mkstemp` の排他生成 + 失敗時 tmp 削除 + `os.replace`
+    # の原子的差し替え）で公開する。
+    _atomic_write_text(out_path, json.dumps(result, indent=2, ensure_ascii=False))
 
     print(json.dumps({k: v for k, v in result.items() if k != "mapping"}, indent=2, ensure_ascii=False))
     print(f"| full mapping table: {out_path}")
@@ -1202,8 +2448,15 @@ def main():
     p_run.set_defaults(func=cmd_run)
 
     p_map = sub.add_parser("mapping-check", help="自前語彙 <-> canon 617/46 語彙の写像テーブル検証")
-    p_map.add_argument("--diffsinger-repo", required=True)
-    p_map.add_argument("--own-dictionary-ja", required=True, help="binarize 入力 dictionary-ja.txt / merged_ja_dict.txt")
+    p_map.add_argument("--diffsinger-repo", default=None,
+                        help="openvpi/DiffSinger clone (e2307b1)。--own-dictionary-ja 使用時のみ必須")
+    p_map.add_argument("--own-dictionary-ja", default=None,
+                        help="binarize 入力 dictionary-ja.txt / merged_ja_dict.txt から "
+                             "PhonemeDictionary でシミュレート（--export-phonemes-json と排他）")
+    p_map.add_argument("--export-phonemes-json", default=None,
+                        help="review #263 R16 P2: export.py が書き出した実 "
+                             "<exp_name>.phonemes.json をそのまま検査する（run が実際に消費する "
+                             "写像そのものと一致。--own-dictionary-ja と排他、いずれか一方を指定）")
     p_map.add_argument("--canon-phonemes-txt", required=True)
     p_map.add_argument("--out", default=None)
     p_map.set_defaults(func=cmd_mapping_check)

@@ -84,13 +84,26 @@ review #263 R14 P1: `stage_song_wavs` は `.lab`/`_song.wav` の存在判定に
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import wave
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
+
+# review #264 R15 P2: `write_lang_def` の tmp+replace 公開を `build_dataset.py`
+# の `_atomic_write_text`（排他生成 `tempfile.mkstemp` + `os.replace`）へ
+# 共通化する。同一ディレクトリ (`s1_dataprep/`) のスクリプトで、`convert_pjs.py`
+# を直接実行した場合も pytest 経由（`tests/test_s1_dataprep_ph_dur_duration.py`
+# が事前に `s1_dataprep/` を sys.path へ挿入）で import した場合も、
+# `build_dataset` は解決可能（同ディレクトリが sys.path に乗る）。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_dataset import _atomic_write_text  # noqa: E402
 
 # nnsvs-db-converter 同梱の `lang.sample.json` と同一内容
 # （`s1a_conversion_record.md` §2: 日本語ラベルのモーラ分割規則としてそのまま
@@ -105,6 +118,502 @@ DEFAULT_LANG_DEF = {
 # `stage_song_wavs` はこの期待 ID 集合に対して走査することで、抽出が
 # `pjsNNN` ディレクトリ自体を丸ごと落とした場合も検出できる。
 PJS_EXPECTED_IDS: Tuple[str, ...] = tuple(f"pjs{i:03d}" for i in range(1, 101))
+
+# fix (2026-08-16, s1_poison_scan 捜査結果を受けての導入。review #264 R1 P1
+# で修復方式を是正): 5/287 PJS セグメント（pjs004_seg003 / pjs016_seg000 /
+# pjs029_seg002 / pjs030_seg001 / pjs031_seg001）で、`db_converter.py` が
+# 書き出す `transcriptions.csv` の申告 ph_dur 合計が実 `.wav` 長を
+# 1.10〜1.89 倍超過する構造不良が判明した。
+#
+# 原因（本 clone の `process_lab_wav_pair()` を精読して特定): 同関数は
+# `.lab` の時刻をそのまま `segment.to_lengths_string()` 経由で ph_dur として
+# 書き出す一方、実際の wav は `x[s:e]`（`s`/`e` は `.lab` 由来のサンプル位置）
+# という numpy スライスで書き出す。`.lab` が想定する終端が実音声（PJS 配布
+# `_song.wav`）の実長より後ろにある場合、numpy スライスは例外を出さず黙って
+# 実音声の終端でクランプするため、ph_dur は「本来あるべきだった長さ」を、
+# wav は「実際に存在した音声」を報告し、両者が食い違う。
+#
+# [P1 修正] (review #264 R1) 当初実装は全 ph_dur を wav_dur/total で比例
+# 縮小し合計を実 wav 長へ正規化していたが、これは原因（末尾クランプ）とは
+# 無関係な EOF（実音声終端）以前の正しい音素境界まで一様にズラしてしまう
+# 副作用を持つ。原因の構造上、乖離は常に「実 wav 終端より後ろ」の申告時刻に
+# 集中しており、終端以前の申告時刻はそもそも正しい。したがって EOF を跨ぐ
+# 末尾側の音素だけを切り詰め/ゼロ化し、それ以前の境界は完全無変更のまま
+# 返す方式（`_truncate_ph_dur_tail_to_wav_duration`）へ変更する。
+#
+# 実測（5件全数、末尾からの累積で EOF 跨ぎ位置を特定): pjs004/pjs029/
+# pjs030/pjs031 は末尾 1 音素（全件 SP）がゼロ化されるのみで、EOF を跨ぐ
+# 直前音素への浸食は 14〜34ms（フレーム量子化 ≈timestep 11.61ms 相当の
+# 丸め誤差域、pjs031 のみ EOF 跨ぎが最終音素自体でゼロ化対象なし）。
+# pjs016_seg000 のみ末尾から 2 番目の母音（"u"）が 226ms（+5.4%）短縮され
+# 末尾 SP がゼロ化される（旧実装のコメントが「末尾 SP だけの補正では
+# 収まらない」としていたのはこの 1 音素浸食を指しており、比例縮小の根拠には
+# ならない — 前方の音素境界は本方式でも一切ズレない）。
+#
+# 申告合計が実 wav 長を下回る場合（undershoot）は、下記 R5 の通り自動修復
+# しない（fail-closed で拒否する）。
+#
+# 閾値判定自体は `build_dataset.py` `check_ph_dur_duration` と同一（相対5%
+# or 絶対0.1sの大きい方。両ファイルとも既存の record スクリプト群の慣例に
+# 倣い、共有モジュール新設ではなく値を直接コピペする）。閾値内の行は完全
+# 無変更のまま返す（282 件の既知良好セグメントは byte 単位で不変）。
+#
+# [P1 修正] (review #264 R2) 上記 R1 修正は EOF より完全に後ろの音素を
+# `ph_dur=0.0` のまま `ph_seq`/`ph_num`/`note_seq`/`note_dur` に残す設計
+# だったが、下流 `build_dataset.py` `validate_speaker` は `d <= 0` の
+# ph_dur を持つ行を無条件に reject するため、修復 5 セグメントが
+# `convert_pjs.py` 単体では成功しても `build_dataset.py` を通す時点で
+# **必ず** validate 失敗する統合バグだった（R1 の単体テストは
+# `normalize_ph_dur_to_wav_duration` の戻り値のみを検査し、
+# `validate_speaker` まで通していなかったため検出できなかった）。
+# `ph_dur=0.0` になった音素は「実質削除」ではなく実際に整列フィールド
+# （`ph_seq`/`ph_dur`/`ph_num`/該当ノートの `note_seq`/`note_dur`）から
+# 削除する方式へ変更する（`_drop_dead_phonemes` 参照）。EOF 以前の音素の
+# 境界・値は本修正でも一切変更しない。
+#
+# [P2 修正] (review #264 R3) 上記 R2 修正は、ノート自体は音素を1個以上
+# 残して生存するが末尾側の一部音素だけが truncate/drop されるケース
+# （EOF がノートの途中を切る場合）で、生存ノートの `note_dur` を旧値の
+# まま残していた。これにより ph_dur 合計/wav 長と note_dur 合計が食い違う
+# （新設テストの 1.5s vs 3.5s ケース）。生存ノートの `note_dur` を、その
+# ノートに属する生存音素の新 ph_dur 合計へ再計算するよう修正する
+# （`_drop_dead_phonemes` 参照）。あわせて `build_dataset.py` の readback
+# 検証に ph_dur合計↔note_dur合計のクロスフィールド不変量検査
+# （`check_note_dur_consistency`）を追加する。
+#
+# [P2 修正] (review #264 R5) 上記 R1〜R3 は一貫して「申告合計が実 wav 長を
+# 上回る場合（overshoot）は対称に、下回る場合（undershoot）も末尾音素へ
+# 不足分を加算して合計を一致させる」という対称設計だったが、これは誤りだった
+# ——冒頭の EOF クランプ診断（`db_converter.py` の numpy スライスが実音声
+# 終端でクランプすることによる overshoot）は overshoot のみを説明しており、
+# undershoot（例: 申告末尾に無音区間があるが実 wav にその無音が収録されて
+# いない等）はそもそも原因未特定で、現行 PJS 素材でも未観測（overshoot 5件
+# のみが実測されている）。原因不明の不足分を無条件に最後の音素へ加算すると、
+# 実際には存在しない/性質不明の音声区間を特定の音素の持続時間として捏造して
+# 教師信号に混入させることになり、`_drop_dead_phonemes` の note_dur 再計算
+# まで通過するため下流の整合性検査も素通りしてしまう。したがって undershoot
+# は自動修復せず、許容誤差（相対5%/絶対0.1s）を超えるものは違反として全収集
+# した上で公開前に fail-closed で拒否する（許容誤差内の微差は従来通り無変更
+# のまま許容——拒否対象は許容超過の undershoot のみ）。overshoot の末尾切り
+# 詰め挙動（R1〜R3）自体は変更しない。
+DURATION_REL_TOLERANCE = 0.05
+DURATION_ABS_TOLERANCE_SEC = 0.1
+
+
+def _is_safe_wav_name(name: str, wav_dir: Path, resolved_wav_dir: Path) -> bool:
+    """`name` が `wav_dir` 配下の `<name>.wav` を安全に指すかを判定する
+    （字句検査 + resolve 封じ込め検査）。
+
+    fix (2026-08-16, review #264 R7): `normalize_ph_dur_to_wav_duration` は
+    `db_converter.py`（外部変換器）が出力した `row["name"]` を無検査で
+    `wav_dir / f"{name}.wav"` へ連結し `_wav_duration_seconds`（=
+    `wave.open`）へ渡していた。`row["name"]` は外部生成物で信頼できない
+    入力のため、`../../outside` のような name や wav_dir 外へ逃げる symlink
+    経由で wav_dir 外の任意ファイル（特殊ファイルを含む）を duration
+    チェック目的で読み取れてしまう穴があった（`build_dataset.py`
+    `check_ph_dur_duration` で review #264 R4 P2 に修正済みの同型の穴が、
+    別ファイルの別呼び出し箇所で再発したもの）。
+
+    判定ロジックは `build_dataset._is_safe_wav_name` と同一（絶対パス・
+    `..` セグメント・パス区切り文字を拒否する字句検査 + resolve 後の実
+    パスが `wav_dir` 配下に収まることを確認する多層防御）だが、record
+    スクリプト群の既存慣例（本ファイル冒頭の `DURATION_REL_TOLERANCE` 等、
+    モジュール冒頭コメント参照）に倣い、共有モジュール新設ではなくロジック
+    をこちらへコピペ実装する。両実装の挙動同値性は
+    `tests/test_s1_dataprep_ph_dur_duration.py` の
+    `test_is_safe_wav_name_matches_build_dataset_behavior` で担保する。
+    """
+    if not name or os.path.isabs(name) or os.sep in name or (os.altsep and os.altsep in name):
+        return False
+    parts = name.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return False
+    candidate = wav_dir / f"{name}.wav"
+    resolved_candidate = candidate.resolve()
+    if resolved_candidate != resolved_wav_dir and resolved_wav_dir not in resolved_candidate.parents:
+        return False
+    return True
+
+
+def _wav_duration_seconds(path: Path) -> Optional[float]:
+    """`path` の WAV 実長を秒で返す。読み取れない場合は `None`
+    （呼び出し側はこの ph_dur 正規化をスキップする）。"""
+    if not path.exists():
+        return None
+    try:
+        with wave.open(str(path), "rb") as w:
+            rate = w.getframerate()
+            if rate <= 0:
+                return None
+            return w.getnframes() / rate
+    except (wave.Error, OSError, EOFError):
+        return None
+
+
+def _truncate_ph_dur_tail_to_wav_duration(
+    ph_dur: List[float], wav_dur: float
+) -> Tuple[List[float], int]:
+    """`ph_dur`（先頭からの各音素長 秒、開始時刻0の累積列）を、末尾側だけを
+    調整して合計が実 wav 長 `wav_dur` に一致するようにした新しいリストを
+    返す（[P1 修正] review #264 R1）。呼び出し元は申告合計が `wav_dur` を
+    超過する行（overshoot）に対してのみこの関数を呼ぶ契約とする（undershoot
+    行は [P2 修正] review #264 R5 により本関数を呼ばず、呼び出し元
+    `normalize_ph_dur_to_wav_duration` が違反として収集し fail-closed で
+    拒否する — 詳細はモジュール冒頭コメント参照）。
+
+    先頭からの累積時刻が `wav_dur` に達するまでの音素は完全無変更で返す
+    （＝前方の音素境界を一切ズラさない）。累積時刻が `wav_dur` を跨ぐ音素
+    （EOF 跨ぎ）は、そこでちょうど `wav_dur` に達するよう長さを切り詰める。
+    それより後ろの音素（EOF より完全に後ろ）は 0 にする。この関数自体は
+    `ph_seq`/`ph_num`/`note_seq`/`note_dur` との位置対応を保つため要素を
+    削除せず、常に入力と同じ長さのリストを返す（0.0 になった音素を整列
+    フィールドから実際に削除するのは呼び出し元 `_drop_dead_phonemes` の
+    役割 — review #264 R2）。
+
+    2 個目の戻り値は EOF 跨ぎ以降で長さが変化した音素の個数（ログ用。
+    跨ぎ音素自体 + ゼロ化された後続音素の合計）。
+    """
+    result = list(ph_dur)
+    cum = 0.0
+    crossed_at: Optional[int] = None
+    for i, d in enumerate(ph_dur):
+        if crossed_at is not None:
+            result[i] = 0.0
+            continue
+        if cum + d > wav_dur:
+            result[i] = wav_dur - cum
+            crossed_at = i
+            cum = wav_dur
+        else:
+            cum += d
+    n_touched = len(ph_dur) - crossed_at if crossed_at is not None else 0
+    return result, n_touched
+
+
+def _drop_dead_phonemes(row: Dict[str, str], ph_dur: List[float]) -> Dict[str, str]:
+    """`ph_dur`（`_truncate_ph_dur_tail_to_wav_duration` 適用後、長さ 0 の
+    音素を含み得る）に基づき、長さ 0 になった音素を `ph_seq`/`ph_dur` および
+    対応するノート単位フィールド（`ph_num` があれば、それが指すノートの
+    `note_seq`/`note_dur` も）から実際に削除した新しい行を返す。
+
+    [P1 修正] (review #264 R2) `ph_dur=0.0` の音素をゼロ長のまま整列
+    フィールドに残すと、下流 `build_dataset.py` `validate_speaker` の
+    `d <= 0` チェックが無条件に reject するため、修復セグメントが
+    `build_dataset.py` を通す時点で必ず fail する統合バグになっていた。
+    音素自体を要素ごと削除することでこれを解消する（EOF 以前の音素は
+    `ph_dur` に 0.0 が含まれない限り一切削除・変更されない）。
+
+    `ph_num`（ノートごとの音素数、`sum(ph_num) == len(ph_seq)` の対応関係）
+    が存在する場合は、各ノートの残存音素数を数え直し、音素が 1 個も残らな
+    かったノートは `ph_num`（および同じインデックス対応の `note_seq`/
+    `note_dur`、存在すれば）から丸ごと除去する。`ph_num`/`note_seq`/
+    `note_dur` が存在しない・空の行（例: PJS の生 `transcriptions.csv` には
+    無いテスト用簡易行）は対象外としてそのままにする。
+
+    [P2 修正] (review #264 R3) EOF がノートの途中を切る場合（ノート自体は
+    音素を 1 個以上残して生存するが、末尾側の一部音素だけが truncate/drop
+    される場合）、生存ノートの `note_dur` を旧値のまま残すと、そのノートに
+    属する生存音素の ph_dur 合計と食い違ったまま（例: ph_dur 合計/wav 長
+    1.5s に対し note_dur 合計が旧値 3.5s のまま）下流 DiffSinger 学習へ渡って
+    しまう。生存ノートの `note_dur` は「そのノートに属する生存音素（keep）
+    の新 ph_dur 合計」へ再計算する（`note_seq` は音高/歌詞情報でありタイミ
+    ングと無関係のため、従来どおりフィルタのみで再計算はしない）。
+
+    この再計算は「1個以上の音素が丸ごと drop されたノート」だけでなく、
+    「1個も drop されていないが末尾の音素が truncate だけされたノート」
+    （＝旧実装が `all(keep)` で早期 return し、`ph_dur` のみ更新して
+    `note_seq`/`note_dur`/`ph_num` に一切触れなかったケース）にも及ぶ
+    必要がある——実 PJS 素材の `pjs031_seg001`（EOF 跨ぎ音素が末尾音素
+    そのものでゼロ化対象なし）で、旧実装のまま note_dur が更新されず
+    `build_dataset.check_note_dur_consistency` に実測で reject されることを
+    確認した。そのため本実装は `all(keep)` による早期 return を廃し、
+    音素の要素削除が不要な場合（`keep` が全て True）でも
+    `ph_num`/`note_seq`/`note_dur` の再計算パスを常に通す（削除対象が無い
+    場合、`surviving_note_indices` は全ノートを含む恒等写像になり、
+    `ph_num`/`note_seq` の値は結果的に無変更のまま返る）。
+    """
+    keep = [d > 0.0 for d in ph_dur]
+    new_row = dict(row)
+
+    ph_seq = row["ph_seq"].split()
+    if len(ph_seq) != len(ph_dur):
+        # 対応が取れない行は安全側（削除せず ph_dur のみ更新）に倒す。
+        # 正常な `transcriptions.csv` では `ph_seq`/`ph_dur` は常に同長
+        # （`validate_speaker` が別途 enforce する）ため通常到達しない。
+        new_row["ph_dur"] = " ".join(str(round(d, 12)) for d in ph_dur)
+        return new_row
+    new_row["ph_seq"] = " ".join(p for p, k in zip(ph_seq, keep) if k)
+    new_row["ph_dur"] = " ".join(str(round(d, 12)) for d, k in zip(ph_dur, keep) if k)
+
+    ph_num_raw = row.get("ph_num")
+    if not ph_num_raw:
+        return new_row
+    ph_num = [int(x) for x in ph_num_raw.split()]
+    if sum(ph_num) != len(ph_dur):
+        return new_row  # 対応が取れない場合は ph_num 以降には触れない
+
+    # 各音素がどのノート（ph_num のインデックス）に属するかを展開する。
+    note_of_phoneme: List[int] = []
+    for note_idx, count in enumerate(ph_num):
+        note_of_phoneme.extend([note_idx] * count)
+    surviving_counts: Dict[int, int] = {}
+    for note_idx, k in zip(note_of_phoneme, keep):
+        if k:
+            surviving_counts[note_idx] = surviving_counts.get(note_idx, 0) + 1
+    surviving_note_indices = [i for i in range(len(ph_num)) if surviving_counts.get(i, 0) > 0]
+    new_row["ph_num"] = " ".join(str(surviving_counts[i]) for i in surviving_note_indices)
+
+    for note_field in ("note_seq", "note_dur"):
+        values_raw = row.get(note_field)
+        if not values_raw:
+            continue
+        values = values_raw.split()
+        if len(values) != len(ph_num):
+            continue  # 対応が取れない場合はそのノートフィールドには触れない
+        if note_field == "note_dur":
+            # [P2 修正] (review #264 R3) 生存ノートの note_dur を、その
+            # ノートに属する生存音素の新 ph_dur 合計へ再計算する（ph_dur
+            # 合計との不変量を常に保つ。詳細は関数 docstring 参照）。
+            new_row[note_field] = " ".join(
+                str(round(
+                    sum(
+                        d for note_idx, d, k in zip(note_of_phoneme, ph_dur, keep)
+                        if note_idx == i and k
+                    ),
+                    12,
+                ))
+                for i in surviving_note_indices
+            )
+        else:
+            new_row[note_field] = " ".join(values[i] for i in surviving_note_indices)
+
+    return new_row
+
+
+def normalize_ph_dur_to_wav_duration(
+    rows: List[Dict[str, str]], wav_dir: Path
+) -> Tuple[List[Dict[str, str]], List[str], List[str], List[str], List[str], List[str]]:
+    """各行の ph_dur 合計が実 wav 長と許容誤差（相対5% or 絶対0.1sの大きい方）
+    を超えて乖離している場合の是正/検出を行う。
+
+    許容超過が **overshoot**（申告合計 > 実 wav 長）の場合のみ、末尾側を
+    切り詰めて合計を実 wav 長へ正規化した新しい行を返す
+    （`_truncate_ph_dur_tail_to_wav_duration` 参照。前方の音素境界は一切
+    変更しない — [P1 修正] review #264 R1）。切り詰めの結果 `ph_dur=0.0`
+    になった音素は `ph_seq`/`ph_num`/`note_seq`/`note_dur` から実際に削除
+    する（`_drop_dead_phonemes` 参照 — [P1 修正] review #264 R2。ゼロ長の
+    まま残すと下流 `validate_speaker` の `d <= 0` チェックで必ず reject
+    されるため）。
+
+    許容超過が **undershoot**（申告合計 < 実 wav 長）の場合は自動修復
+    **しない**（[P2 修正] review #264 R5）。モジュール冒頭コメントの EOF
+    クランプ診断は overshoot のみを説明しており、undershoot は原因未特定
+    かつ現行 PJS 素材でも未観測のため、原因不明の不足分を音素の持続時間へ
+    捏造して混入させることを避け、行を無変更のまま返しつつ 3 個目の戻り値
+    `undershoot_violations` へ人間可読の説明とともに収集する（呼び出し元が
+    公開前に fail-closed で拒否する）。
+
+    fix (2026-08-16, review #264 R7): `row["name"]` は外部変換器
+    `db_converter.py` の出力（信頼できない入力）であり、`_wav_duration_seconds`
+    で WAV を open する前に安全 name 判定（`_is_safe_wav_name`。絶対パス・
+    `..` トラバーサル・wav_dir 外へ逃げる symlink 経由を拒否）を通す。安全
+    でない name は open せず、行は無変更のまま返しつつ 4 個目の戻り値
+    `unsafe_name_violations` へ人間可読の説明とともに全件収集する
+    （undershoot_violations と同じ「全収集してから呼び出し側が fail-closed
+    で判定する」設計）。
+
+    fix (2026-08-16, review #264 R9 P2, convert_pjs.py:449): `db_converter.py`
+    が成功終了していても、CSV 行が指す WAV が欠落・破損・ゼロ長で
+    `_wav_duration_seconds()` が `None`/非正を返す場合がある。従来はこの
+    ケースを「検証不能 = skip」として行を無変更のまま黙って残していたが、
+    後続の coverage ゲートは CSV から抽出した曲 ID しか見ておらず、
+    `_swap_into_place()` がこの不完全な行を含むデータセットをそのまま公開
+    してしまっていた（変換器は成功を報告するため、この不整合は気づかれずに
+    通過し得る）。検証不能を「無視してよい」とはみなさず、5 個目の戻り値
+    `missing_wav_violations` へ人間可読の説明とともに全件収集し、呼び出し元
+    が公開前に fail-closed で拒否できるようにする（unsafe_name_violations/
+    undershoot_violations と同型の「全収集してから呼び出し側が判定する」
+    設計）。
+
+    fix (2026-08-16, review #264 R17 P2, convert_pjs.py:456): `ph_dur` が
+    非数文字列/空/`nan`/`inf` の行は、旧実装だと最初の検査で即座に
+    `continue` し、同じ行に対する後続の name 安全性検査・missing/
+    unreadable WAV 検査を丸ごと短絡していた。これらは本来 `ph_dur` の
+    妥当性とは独立な観点（`row["name"]` と実 WAV ファイルにしか依存しない）
+    であるにもかかわらず、`ph_dur` 側の異常だけが先に continue すると
+    どの violation リストにも記録されない行が生まれ得る（例:
+    `name="../../escape", ph_dur="nan"` は 5 個の violation リストすべてが
+    空のまま通過し、`main()` は `_swap_into_place()` まで到達して成功を
+    報告してしまう）。本実装は行単位で独立な検査（ph_dur 妥当性・name
+    安全性・WAV 可読性）を互いに短絡させず毎回実行し、該当する検査ごとに
+    その violation リストへ記録してから、いずれか1つでも失敗していれば
+    当該行は無変更のまま次の行へ進む。ただし「name が不安全なら WAV を
+    絶対に open しない」という安全上の依存関係（review #264 R7）だけは
+    維持する — WAV の可読性検査は name 安全性検査を通過した場合にのみ行う。
+    非数/非有限の `ph_dur` 自体も 6 個目の戻り値 `malformed_ph_dur_violations`
+    へ人間可読の説明とともに全件収集し、他の violation と同様に呼び出し元
+    が公開前に fail-closed で拒否できるようにする（旧実装はこのケースを
+    どの violation にも計上せず黙って skip していた）。
+
+    fix (2026-08-16, review #264 R18 P2, convert_pjs.py:480): 有限だが非正
+    （`d <= 0`）の音素長は、合計比較だけでは検出できない相殺（例:
+    `ph_dur="-1 2"` は 1 秒 WAV に対し合計 1.0s で一致し diff=0 になる）を
+    通じて無変更のまま公開され得ていた。`build_dataset.py` の
+    `validate_speaker` は `any(d <= 0 for d in ph_dur)` を無条件 reject する
+    ため、この行は `convert_pjs.py` 単体では成功しても下流で必ず fail する
+    統合バグになる（R2/R17 と同型）。本実装は **負値（`d < 0`）は無条件で
+    malformed** として扱う（相殺は合計比較の対象外にできないため、値の
+    段階で拒否する）。一方 **ゼロ（`d == 0`）は `_drop_dead_phonemes` が
+    overshoot 修復経路で正規に除去する値**（`_truncate_ph_dur_tail_to_wav_duration`
+    が EOF 以降の音素を 0.0 化し、`_drop_dead_phonemes` がそれを整列
+    フィールドから削除する — R1/R2 参照）であり、修復経路に入るゼロを
+    malformed 扱いすると正規の overshoot 修復が機能しなくなる。そのため
+    ゼロは parse 段階では malformed としない。ただし (a) 申告合計が許容誤差
+    内で一致し overshoot 修復が一切トリガーされない行にゼロが残っている
+    場合、(b) `_drop_dead_phonemes` の ph_seq/ph_dur 長不一致フォールバック
+    （関数 docstring 参照）でゼロが除去されずに残った場合、のいずれも
+    「修復を経ずに（または修復が実質効かずに）ゼロが公開行へ残る」ケース
+    のため、両方とも公開直前に検出して `malformed_ph_dur_violations` へ
+    fail-closed で追加収集する（詳細は本関数の実装コメント参照）。
+
+    乖離が許容内の行は同一オブジェクトのまま（内容も無変更で）返す。
+    2 個目の戻り値は overshoot 正規化を適用した行の人間可読ログ（適用 0 件
+    なら空リスト。呼び出し側はこれを CSV 再公開の要否判定に使う）。
+    """
+    fixed_rows: List[Dict[str, str]] = []
+    fix_log: List[str] = []
+    undershoot_violations: List[str] = []
+    unsafe_name_violations: List[str] = []
+    missing_wav_violations: List[str] = []
+    malformed_ph_dur_violations: List[str] = []
+    resolved_wav_dir = wav_dir.resolve()
+    for row in rows:
+        name = row["name"]
+
+        # R17 P2 対応: 以下 3 検査（ph_dur 妥当性・name 安全性・WAV
+        # 可読性）は互いに独立な観点のため短絡させず、いずれも必ず実行する
+        # （WAV 可読性のみ、安全のため name 安全性を通過した場合に限る）。
+        try:
+            ph_dur: Optional[List[float]] = [float(x) for x in row["ph_dur"].split()]
+        except ValueError:
+            ph_dur = None
+        if ph_dur is not None and (
+            not ph_dur
+            or not all(math.isfinite(d) for d in ph_dur)
+            # [P2 修正] (review #264 R18) 負の音素長は他の音素と相殺して
+            # 合計比較を素通りし得る（"-1 2" 対 1 秒 WAV の例）ため、合計
+            # 比較の前に無条件で malformed 判定する。ゼロ（d == 0.0）はここ
+            # では malformed としない — `_drop_dead_phonemes` の overshoot
+            # 修復経路が正規に処理する値のため（関数 docstring 参照）。
+            or any(d < 0.0 for d in ph_dur)
+        ):
+            ph_dur = None
+        if ph_dur is None:
+            malformed_ph_dur_violations.append(
+                f"{name}: ph_dur field is malformed (unparseable, empty, "
+                "negative, or contains a non-finite value such as nan/inf); "
+                "cannot be validated against wav duration, fail-closed, not "
+                "published"
+            )
+
+        name_is_safe = _is_safe_wav_name(name, wav_dir, resolved_wav_dir)
+        if not name_is_safe:
+            # fix (2026-08-16, review #264 R7): 安全でない name は
+            # `_wav_duration_seconds`（= wave.open）へ渡さず、公開前
+            # fail-closed の判定材料として収集するのみに留める。
+            unsafe_name_violations.append(
+                f"{name}: unsafe wav name (absolute path / '..' segment / path "
+                "separator rejected, or resolved path escapes wav_dir — "
+                "possibly via symlink); not opened, fail-closed"
+            )
+
+        wav_dur: Optional[float] = None
+        if name_is_safe:
+            wav_dur = _wav_duration_seconds(wav_dir / f"{name}.wav")
+            if wav_dur is None or wav_dur <= 0:
+                # fix (2026-08-16, review #264 R9 P2): 検証不能（WAV 欠落/破損/
+                # ゼロ長）を skip せず、公開前 fail-closed の判定材料として収集
+                # する（モジュール docstring・呼び出し元 fail-closed 判定を参照）。
+                missing_wav_violations.append(
+                    f"{name}: wav missing, unreadable, or non-positive duration "
+                    f"({wav_dir / f'{name}.wav'} — cannot validate ph_dur against "
+                    "actual wav duration; not opened/verified, fail-closed)"
+                )
+                wav_dur = None
+
+        if ph_dur is None or not name_is_safe or wav_dur is None:
+            fixed_rows.append(row)
+            continue
+
+        total = math.fsum(ph_dur)
+        tol = max(wav_dur * DURATION_REL_TOLERANCE, DURATION_ABS_TOLERANCE_SEC)
+        diff = abs(total - wav_dur)
+        if diff <= tol:
+            if any(d <= 0.0 for d in ph_dur):
+                # [P2 修正] (review #264 R18) この分岐に到達する時点で
+                # 負値は既に malformed 判定済み（上記）のため、ここで残り
+                # 得るのはゼロのみ。申告合計が許容誤差内で一致している
+                # ため overshoot 修復（`_truncate_ph_dur_tail_to_wav_duration`
+                # → `_drop_dead_phonemes`）が一切トリガーされず、ゼロ長
+                # 音素が無修復のまま公開されてしまう。「修復経路に入る
+                # ゼロ」の正規ケースではないため fail-closed で拒否する。
+                malformed_ph_dur_violations.append(
+                    f"{name}: ph_dur field contains a non-positive phoneme "
+                    f"duration even though the total ({total:.4f}s) is within "
+                    f"tolerance of the wav duration ({wav_dur:.4f}s), so the "
+                    "overshoot repair path that would remove a zero-length "
+                    "phoneme is never triggered; fail-closed, not published"
+                )
+            fixed_rows.append(row)
+            continue
+        if total < wav_dur:
+            # [P2 修正] (review #264 R5) undershoot は末尾音素へ不足分を
+            # 加算して合成せず、違反として収集し行は無変更のまま返す。
+            undershoot_violations.append(
+                f"{name}: ph_dur total {total:.4f}s < wav duration "
+                f"{wav_dur:.4f}s by {wav_dur - total:.4f}s (undershoot beyond "
+                f"tolerance {tol:.4f}s; the EOF-clamp diagnosis this module "
+                "documents explains overshoot only, undershoot cause is "
+                "unobserved/unexplained — fail-closed, not auto-repaired)"
+            )
+            fixed_rows.append(row)
+            continue
+        new_ph_dur, n_touched = _truncate_ph_dur_tail_to_wav_duration(ph_dur, wav_dur)
+        n_dropped = sum(1 for d in new_ph_dur if d <= 0.0)
+        new_row = _drop_dead_phonemes(row, new_ph_dur)
+        surviving_dur = [float(x) for x in new_row["ph_dur"].split()] if new_row["ph_dur"] else []
+        if any(d <= 0.0 for d in surviving_dur):
+            # [P2 修正] (review #264 R18) `_drop_dead_phonemes` は
+            # ph_seq/ph_dur が同長の通常経路ではゼロ長音素を確実に除去する
+            # が、両者の長さが対応しない安全側フォールバック（同関数
+            # docstring 参照）では削除を行わず ph_dur のみ更新するため、
+            # ゼロ長音素が published 出力にそのまま残り得る。これは
+            # 「修復経路に入ったゼロ」の正規ケースではなく修復が実質
+            # 効かなかった異常系のため、公開前に fail-closed で拒否する。
+            malformed_ph_dur_violations.append(
+                f"{name}: ph_dur field still contains a non-positive phoneme "
+                "duration after overshoot repair (ph_seq/ph_dur length "
+                "mismatch prevented zero-length phoneme removal); "
+                "fail-closed, not published"
+            )
+            fixed_rows.append(new_row)
+            continue
+        fixed_rows.append(new_row)
+        fix_log.append(
+            f"{name}: ph_dur total {total:.4f}s -> {math.fsum(surviving_dur):.4f}s "
+            f"(wav duration {wav_dur:.4f}s, tail-truncated: {n_touched} trailing "
+            f"phoneme(s) adjusted, forward boundaries preserved"
+            + (f", {n_dropped} zero-length phoneme(s) removed" if n_dropped else "")
+            + ")"
+        )
+    return (
+        fixed_rows,
+        fix_log,
+        undershoot_violations,
+        unsafe_name_violations,
+        missing_wav_violations,
+        malformed_ph_dur_violations,
+    )
 
 
 class OutputCollisionError(ValueError):
@@ -134,6 +643,14 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
     （`staging_dir.rename(old_dir)` は `staging_dir` 配下の `pjs_root` も
     丸ごと退避先へ連れて行く）、以後 symlink ターゲットが指す絶対パスが
     消失した状態でコーパスが破壊される。
+
+    [P2 修正] (review #263 R16) `guarded_outputs` 相互の照合が等価判定のみ
+    だったため、祖先/子孫関係（例: `--lang-def` が `<staging-dir>.old` 配下
+    を指す）を見逃していた。`.old`/`.build-<pid>` は `_swap_into_place` が
+    rename/rmtree する派生パスであり、`--lang-def` がその配下にあると公開時
+    の退避・削除に巻き込まれて `write_lang_def`/`_restore_lang_def_backup`
+    のバックアップ復元と食い違う。`build_dataset.py` R10 と同型のロジック
+    （`relative_to` による双方向包含判定）を出力相互にも適用する。
     """
     resolved_outs = [(p, p.resolve()) for p in out_paths]
 
@@ -143,6 +660,27 @@ def _reject_output_collision(out_paths: Sequence[Path], protected_roots: Sequenc
                 raise OutputCollisionError(
                     f"output paths collide with each other: {p_i} == {p_j}（fail-closed で拒否）"
                 )
+            # [P2 修正] (review #263 R16) 等価判定のみでは出力パス同士が
+            # 祖先/子孫関係にある場合（例: `--staging-dir` の派生パス
+            # `<staging-dir>.old`/`<staging-dir>.build-<pid>` 配下を
+            # `--lang-def` が指すケース）を見逃す。双方向で祖先/子孫関係も
+            # 公開前に fail-closed で拒否する（`build_dataset.py`
+            # `_reject_output_collision` R10 と同型ロジック）。
+            try:
+                r_j.relative_to(r_i)
+            except ValueError:
+                pass
+            else:
+                raise OutputCollisionError(
+                    f"output path {p_j} is inside output path {p_i}（fail-closed で拒否）"
+                )
+            try:
+                r_i.relative_to(r_j)
+            except ValueError:
+                continue
+            raise OutputCollisionError(
+                f"output path {p_i} is inside output path {p_j}（fail-closed で拒否）"
+            )
 
     for root in protected_roots:
         if not root.exists():
@@ -245,10 +783,19 @@ def write_lang_def(path: Path) -> None:
     途中で kill された場合等に破損 JSON が残り得るため、`path` と同一
     ディレクトリに一時ファイルを作ってから `os.replace()` で原子的に
     差し替える（POSIX の `rename(2)` は同一ファイルシステム内で atomic）。
+
+    fix (2026-08-16, review #264 R15 P1, convert_pjs.py:673-674): 旧実装は
+    `.{path.name}.tmp-{os.getpid()}` という**決定論的**な tmp パスを直接
+    `write_text` していた。同一 pid が再利用される、または呼び出し元が
+    複数回同一 `path` に対して呼ぶ状況で、この tmp パスに無関係な既存
+    ファイルが存在すると `write_text` がそれを黙って truncate してしまう
+    （`recording_kit/intake.py` の `_atomic_write` R14 P1 対応、
+    `build_dataset.py` の `_atomic_write_text` と同型の欠陥）。
+    `build_dataset._atomic_write_text`（`tempfile.mkstemp` の排他生成
+    (`O_CREAT | O_EXCL`) + `os.replace`。書き込み失敗時は tmp を削除）へ
+    共通化し、無関係ファイルとの衝突が構造的に起こらないようにする。
     """
-    tmp_path = path.parent / f".{path.name}.tmp-{os.getpid()}"
-    tmp_path.write_text(json.dumps(DEFAULT_LANG_DEF, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
-    os.replace(tmp_path, path)
+    _atomic_write_text(path, json.dumps(DEFAULT_LANG_DEF, ensure_ascii=False, indent=4) + "\n")
 
 
 def _restore_lang_def_backup(path: Path, backup: Optional[bytes], *, created_new: bool = False) -> None:
@@ -326,6 +873,83 @@ def run_converter(
     return subprocess.run(cmd, cwd=str(converter_dir), capture_output=True, text=True, check=False)
 
 
+_SWAP_BACKUP_MARKER_NAME = ".convert_pjs_swap_backup_marker"
+_SWAP_BACKUP_MARKER_CONTENT = (
+    "convert_pjs._swap_into_place backup marker — do not create manually\n"
+)
+
+
+def _stamp_swap_backup_marker(dir_path: Path) -> None:
+    """`dir_path` 直下へ `_SWAP_BACKUP_MARKER_NAME` を冪等かつ安全にスタンプ
+    する（`_swap_into_place` の `build_dir`/`staging_dir` 双方の呼び出し
+    site から使う共有ヘルパー。`gate_synth.py` の `_swap_step_dir_into_place`
+    にも同型ヘルパーを同時導入する）。
+
+    review #264 R29 P1: `staging_dir` は（アップグレード前の canonical 等）
+    本ツール外で内容が作られていた/変更され得るディレクトリであり得るため、
+    そこに `_SWAP_BACKUP_MARKER_NAME` という名前の symlink が事前に存在する
+    ケースを想定しなければならない。単純な `write_text()`（内部 `open()`
+    は既定で symlink を追従する）でこの経路にスタンプすると、symlink の
+    リンク先（本ツール管理外の任意の外部ファイル）を追従して開き、
+    truncate または新規作成してしまう data-destruction path になる。
+
+    修正: 書き込み前に `Path.is_symlink()`（symlink 自体の種別を symlink
+    追従なしに判定できる）でリンクか否かを確認し、
+    - symlink、または存在するが通常ファイルでない場合は、中身を見ずに
+      即座に fail-closed で拒否する（例外送出。呼び出し元の swap は続行
+      させない）。
+    - 存在し通常ファイルの場合、内容が既知のマーカー内容と一致するかを
+      検証する。一致すれば既にスタンプ済みとみなし無変更で受理する
+      （冪等・上書きしない）。不一致なら「本ツール由来のマーカーではない
+      不審な同名ファイル」とみなし fail-closed で拒否する。
+    - 存在しない場合のみ、`O_CREAT | O_EXCL | O_NOFOLLOW` で排他生成する。
+      `O_EXCL` が「存在しない場合のみ作成」を検査(`is_symlink`/`exists`)と
+      作成の間の TOCTOU 窓ごと原子的に保証し、`O_NOFOLLOW` は万一そこへ
+      symlink が滑り込んでいても追従せず即座に失敗させる（レビュー指摘の
+      「O_CREAT|O_EXCL|O_NOFOLLOW 相当の排他生成」に対応）。
+    """
+    marker_path = dir_path / _SWAP_BACKUP_MARKER_NAME
+    if marker_path.is_symlink():
+        raise SystemExit(
+            f"ERROR: {marker_path} exists as a symlink. Refusing to stamp a swap "
+            f"backup marker through it — write_text() would follow the link and "
+            f"truncate/create its external target. Remove it (or replace it with "
+            f"a regular file) and re-run."
+        )
+    if marker_path.exists():
+        if not marker_path.is_file():
+            raise SystemExit(
+                f"ERROR: {marker_path} exists but is not a regular file (and not a "
+                f"symlink either — e.g. a device/fifo). Refusing to stamp a swap "
+                f"backup marker over it — move it away manually and re-run."
+            )
+        if marker_path.read_text(encoding="utf-8") != _SWAP_BACKUP_MARKER_CONTENT:
+            raise SystemExit(
+                f"ERROR: {marker_path} exists but its content does not match the "
+                f"expected swap backup marker. Refusing to overwrite an unverified "
+                f"file — move it away manually and re-run."
+            )
+        return
+    try:
+        fd = os.open(
+            str(marker_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644
+        )
+    except OSError as exc:
+        raise SystemExit(
+            f"ERROR: failed to exclusively create swap backup marker {marker_path} "
+            f"(lost a race, or it is a symlink rejected by O_NOFOLLOW): {exc}"
+        )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(_SWAP_BACKUP_MARKER_CONTENT)
+    except BaseException:
+        try:
+            os.unlink(marker_path)
+        except OSError:
+            pass
+        raise
+
+
 def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     """`build_dir`（symlink 群 + `diffsinger_db/` を完全に構築済み）を
     `staging_dir` へ原子的に差し替える。
@@ -356,12 +980,81 @@ def _swap_into_place(build_dir: Path, staging_dir: Path) -> None:
     `.old` を消去済みのため、except 到達時点で `old_dir` が存在するのは
     今回の退避 rename が成功した場合のみであり、フラグの代入タイミングに
     依存しない）。これにより両方の中断窓を閉じる。
+
+    review #264 R25 P1（`gate_synth.py` の同型ヘルパーと同一のファミリー
+    修正）: 上記いずれの経路でも、`old_dir` が既存の場合は「それが本ツール
+    が過去の swap で作った退避物である」ことを検証せず無条件で
+    `shutil.rmtree` していた。`<staging_dir>.old` という決定論的なパスへ、
+    本ツールと無関係なディレクトリ（手動作業の残骸・別ツールの出力等）が
+    偶然存在していた場合、検証なしに丸ごと削除してしまう破壊経路だった。
+    本ツールが公開する `build_dir` には常に固定内容のマーカーファイル
+    （`_SWAP_BACKUP_MARKER_NAME`）を埋め込み、`build_dir` -> `staging_dir`
+    -> `.old` と rename でパスが遷移してもマーカー自体はディレクトリの
+    中身として一緒に運ばれる（rename の原子性にそのまま乗るため、マーカー
+    書き込みのための追加の競合窓を作らない）。`old_dir` に既存のディレクト
+    リがある場合、このマーカーの有無/内容一致で「本ツールが過去に作った
+    退避物か」を検証し、一致しなければ fail-closed で拒否する（手動で退避
+    してから再実行するよう案内する。中断で退避直後にマーカー書き込みへ
+    到達できなかった場合も同じ経路で拒否され、安全側に倒れる）。
+
+    review #264 R28 P2（アップグレード時の自己ロック是正。`gate_synth.py`
+    の `_swap_step_dir_into_place` も同型の構造で同時修正）: 上記 R25 の
+    検証はマーカー導入**後**に本関数経由で作られた `staging_dir` は正しく
+    扱えるが、マーカー導入**前**に作られていた既存の `staging_dir`
+    （本関数を初めて含むバージョンへアップグレードした直後の canonical）
+    にはマーカーが無い。この状態で最初の swap を実行すると「`staging_dir`
+    -> `.old` へ退避」自体は成功する（`.old` が既存でなければ R25 のガード
+    は発火しない）ものの、退避された `.old` 自身にはマーカーが無いまま
+    残る。次回の rerun がこの `.old` を検証すると不一致で拒否され、以後は
+    手動掃除が恒久的に必要になる自己ロックに陥る。
+
+    修正: `staging_dir` を `.old` へ退避する**直前**に、その `staging_dir`
+    自身へマーカーを書き込む（無ければ新規作成、既にあれば無変更で
+    上書き — 冪等）。今まさに本関数がこの `staging_dir` を canonical から
+    退避しようとしている時点で、その出自（＝「本関数の swap によって今から
+    `.old` になる」）は本関数自身が保証できるため、マーカー導入前に
+    作られていたかどうかによらずスタンプして問題ない。これにより退避後の
+    `.old` は常にマーカー付きになり、次回以降の rerun がそれを正しく
+    「本ツール由来」と認識できる（1 回きりのアップグレード後は自己解消）。
+    既存の「退避**前**から存在していた無関係な `.old` は検証なしに削除
+    しない」という R25 の不変条件は変わらない ——このガードは上記で
+    `.old` が既に存在するケースに対してのみ働き、今回このステップで新たに
+    `staging_dir` から作る `.old` には及ばない。
+
+    review #264 R29 P1: 上記マーカー書き込み（`build_dir`/`staging_dir`
+    双方）は `_stamp_swap_backup_marker` へ委譲する。素の `write_text()` は
+    symlink を追従して開くため、`staging_dir`（本ツール外で作られた
+    canonical であり得る）配下にマーカー名の symlink が事前に存在すると、
+    そのリンク先の外部ファイルを truncate/新規作成してしまう
+    data-destruction path だった。`_stamp_swap_backup_marker` docstring
+    参照（`gate_synth.py` の `_swap_step_dir_into_place` も同型ヘルパーで
+    同時修正）。
     """
+    build_dir.mkdir(parents=True, exist_ok=True)
+    _stamp_swap_backup_marker(build_dir)
     old_dir = staging_dir.parent / f"{staging_dir.name}.old"
     if old_dir.exists():
+        marker_path = old_dir / _SWAP_BACKUP_MARKER_NAME
+        marker_ok = (
+            marker_path.is_file()
+            and marker_path.read_text(encoding="utf-8") == _SWAP_BACKUP_MARKER_CONTENT
+        )
+        if not marker_ok:
+            raise SystemExit(
+                f"ERROR: backup path {old_dir} already exists but does not look like "
+                f"a previous swap backup created by this tool (missing/mismatched "
+                f"marker {marker_path}). Refusing to delete an unverified directory — "
+                f"move it away manually and re-run."
+            )
         shutil.rmtree(old_dir)
     try:
         if staging_dir.exists():
+            # review #264 R28 P2: スタンプしてから退避する（docstring 参照）。
+            # review #264 R29 P1: `staging_dir` は本ツール外で作られた
+            # canonical であり得るため、`_stamp_swap_backup_marker` の
+            # symlink 拒否経路を通す（`_stamp_swap_backup_marker` docstring
+            # 参照）。
+            _stamp_swap_backup_marker(staging_dir)
             staging_dir.rename(old_dir)
         build_dir.rename(staging_dir)
     except BaseException:
@@ -440,7 +1133,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)
-    swapped = False
     try:
         missing_pairs: List[str] = []
         escaped_pairs: List[str] = []
@@ -493,9 +1185,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             lang_def_backup = lang_def_path.read_bytes()
         lang_def_created_new = lang_def_is_external and not lang_def_pre_existed
 
-        write_lang_def(lang_def_path)
-
+        # fix (2026-08-16, review #264 R15 P1, convert_pjs.py:920):
+        # `write_lang_def(lang_def_path)` は従来この `try` ブロックの外側で
+        # 呼ばれており、`_restore_lang_def_backup` を呼ぶ `except
+        # BaseException` の保護範囲外だった。上のバックアップ/新規作成判定
+        # 自体は書き込み前に済ませてあるため、`write_lang_def` 呼び出し中
+        # または直後（`os.replace` 完了〜次の行に到達するまでの間）に
+        # `KeyboardInterrupt`/`SystemExit` を含む `BaseException` が飛ぶと、
+        # 外部永続物（`--staging-dir` 外の `--lang-def`）だけが新内容へ
+        # 更新されたまま巻き戻されずに残ってしまう。`write_lang_def` 自体を
+        # `try` 内へ移し、この隙間を塞ぐ（`write_lang_def` が `os.replace`
+        # 未達のまま中断した場合、外部ファイルはまだ変化していないため
+        # `_restore_lang_def_backup` は no-op で安全 — 既存ファイルなら
+        # backup で上書きするだけの恒等操作、新規パスなら
+        # `path.unlink(missing_ok=True)` が何もしない）。
         try:
+            write_lang_def(lang_def_path)
+
             result = run_converter(args.converter_dir, build_dir, lang_def_path, args.python_bin)
             sys.stdout.write(result.stdout)
             sys.stderr.write(result.stderr)
@@ -504,13 +1210,181 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
                 return result.returncode
 
+            # [P2 修正] (review #263 R16) db_converter.py が exit 0 でも、
+            # 内部で早期に空の結果を返して正常終了しているケース（Codex 再現:
+            # 空出力 + lang.json のみが公開される）を exit code だけでは検出
+            # できない。swap（公開）の前に、実際に生成された
+            # `diffsinger_db/transcriptions.csv` の存在・行数 > 0・期待曲数
+            # （今回ステージングした曲 ID 集合。完全素材では PJS 契約どおり
+            # 100 曲）との整合を検証し、欠落・不整合なら fail-closed で拒否
+            # する（`build_dataset.py` `validate_speaker` の下流検証と対の
+            # 「生成側」ゲート）。曲数と行数は一致しない点に注意（実測: 実際の
+            # `db_converter.py` は 1 曲を複数セグメント `pjsNNN_segXXX` へ
+            # 分割するため 100 曲 -> 287 行が正常。したがって行数の等価判定
+            # ではなく、行の `name` が指す曲 ID 集合による被覆判定で整合を見る
+            # — 詳細は下記コメント参照）。
+            out_csv_path = build_dir / "diffsinger_db" / "transcriptions.csv"
+            if not out_csv_path.exists():
+                print(
+                    f"error: db_converter.py exited 0 but {out_csv_path} was not produced "
+                    "(fail-closed, not published)",
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+            with open(out_csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                out_fieldnames = reader.fieldnames
+                out_rows = list(reader)
+            if len(out_rows) == 0:
+                print(
+                    f"error: {out_csv_path} has 0 data rows (fail-closed, not published)",
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+            # `db_converter.py` は 1 曲を複数セグメント（`pjsNNN_segXXX`）へ
+            # 分割して書き出すため、行数は曲数（`n_staged`）と一致しない
+            # （実測: 100 曲 -> 287 行が正常）。「行数 == 曲数」の等価判定は
+            # 誤検知になるため、行の `name` 先頭が指す曲 ID（`pjsNNN` 部分）を
+            # 集計し、今回ステージングした曲 ID 集合（`PJS_EXPECTED_IDS` から
+            # missing_pairs/escaped_pairs を除いたもの）が全件カバーされて
+            # いるかで整合を判定する（曲が丸ごと出力から欠落するケースを検出）。
+            staged_ids = {
+                n for n in PJS_EXPECTED_IDS if n not in missing_pairs and n not in escaped_pairs
+            }
+            covered_ids = {
+                row["name"].split("_seg")[0] for row in out_rows if row.get("name")
+            }
+            uncovered = sorted(staged_ids - covered_ids)
+            if uncovered:
+                print(
+                    f"error: {out_csv_path} has no row for {len(uncovered)} staged song(s) "
+                    f"out of {len(staged_ids)} (fail-closed, not published), e.g. "
+                    + ", ".join(uncovered[:5]),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+
+            # fix (2026-08-16, review #264 R1 P1 で修復方式を是正): ph_dur
+            # 合計と実 wav 長が許容誤差を超えて乖離する行（s1_poison_scan
+            # 捜査で判明した5件、いずれも overshoot）を、末尾側だけを切り
+            # 詰めた ph_dur で正規化する（前方の音素境界は無変更 —
+            # `_truncate_ph_dur_tail_to_wav_duration` 参照）。乖離が許容内の
+            # 行は無変更のため、正規化対象が皆無なら CSV は書き換えない
+            # （bytewise 不変を保つ）。
+            #
+            # [P2 修正] (review #264 R5) undershoot（申告合計 < 実 wav 長）は
+            # 自動修復せず、公開前に fail-closed で拒否する（モジュール冒頭
+            # コメント参照。EOF クランプ診断は overshoot のみを説明し、
+            # undershoot は原因未特定・現行素材でも未観測のため）。
+            #
+            # fix (2026-08-16, review #264 R7) `out_rows` の `name` は外部
+            # 変換器 `db_converter.py` の出力（信頼できない入力）であり、
+            # 絶対パス・`..` トラバーサル・wav_dir 外へ逃げる symlink 経由の
+            # name を `_is_safe_wav_name` で拒否する（`_wav_duration_seconds`
+            # で open する前に判定するのは `normalize_ph_dur_to_wav_duration`
+            # 内部の責務。ここでは違反が1件でもあれば公開前に fail-closed で
+            # 拒否する）。
+            out_wav_dir = build_dir / "diffsinger_db" / "wavs"
+            (
+                out_rows,
+                ph_dur_fix_log,
+                ph_dur_undershoot_violations,
+                ph_dur_unsafe_name_violations,
+                ph_dur_missing_wav_violations,
+                ph_dur_malformed_violations,
+            ) = normalize_ph_dur_to_wav_duration(out_rows, out_wav_dir)
+            if ph_dur_malformed_violations:
+                # fix (2026-08-16, review #264 R17 P2, convert_pjs.py:456):
+                # ph_dur が非数文字列/空/nan/inf の行は、それ単独でも公開前
+                # fail-closed で拒否する（他の independent な検査 —
+                # unsafe-name/missing-wav — が短絡されず別途この直後で走る
+                # ため、同じ行が複数 violation に同時計上され得る）。
+                print(
+                    f"error: {len(ph_dur_malformed_violations)} row(s) have a malformed "
+                    "ph_dur field (unparseable, empty, or non-finite such as nan/inf; "
+                    "fail-closed, not published): " + "; ".join(ph_dur_malformed_violations),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+            if ph_dur_unsafe_name_violations:
+                print(
+                    f"error: {len(ph_dur_unsafe_name_violations)} row(s) have an unsafe wav "
+                    "name (path traversal / symlink escape, fail-closed, not published): "
+                    + "; ".join(ph_dur_unsafe_name_violations),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+            if ph_dur_missing_wav_violations:
+                # fix (2026-08-16, review #264 R9 P2): db_converter.py が成功
+                # 終了していても、CSV 行の WAV が欠落・破損・ゼロ長で検証
+                # 不能な場合は「skip = 無視してよい」とみなさず公開前に
+                # fail-closed で拒否する（モジュール docstring 参照）。
+                print(
+                    f"error: {len(ph_dur_missing_wav_violations)} row(s) have a missing/"
+                    "unreadable/zero-length wav (cannot validate ph_dur, fail-closed, "
+                    "not published): " + "; ".join(ph_dur_missing_wav_violations),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+            if ph_dur_undershoot_violations:
+                print(
+                    f"error: {len(ph_dur_undershoot_violations)} row(s) have ph_dur total "
+                    "below wav duration beyond tolerance (undershoot, fail-closed, not "
+                    "published): " + "; ".join(ph_dur_undershoot_violations),
+                    file=sys.stderr,
+                )
+                _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+                return 1
+            if ph_dur_fix_log:
+                for msg in ph_dur_fix_log:
+                    print(f"ph_dur normalized: {msg}")
+                tmp_csv_fd, tmp_csv_name = tempfile.mkstemp(
+                    dir=out_csv_path.parent, prefix=f"{out_csv_path.name}.", suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(tmp_csv_fd, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.DictWriter(f, fieldnames=out_fieldnames)
+                        writer.writeheader()
+                        writer.writerows(out_rows)
+                except BaseException:
+                    os.unlink(tmp_csv_name)
+                    raise
+                os.replace(tmp_csv_name, out_csv_path)
+
             _swap_into_place(build_dir, staging_dir)
-            swapped = True
         except BaseException:
-            _restore_lang_def_backup(lang_def_path, lang_def_backup, created_new=lang_def_created_new)
+            # [P2 修正] (review #264 R25 P2) 従来は `swapped = True` という
+            # `_swap_into_place()` 呼び出し**直後**の後続代入変数で「swap が
+            # 完了したか」を判定していた。`_swap_into_place()` 自体が正常
+            # return した直後・この代入文実行前に `KeyboardInterrupt`/
+            # `SystemExit` が飛ぶと、実際には公開 rename が完了しているのに
+            # `swapped` は `False` のままこのハンドラへ落ち、公開済みの
+            # 新世代コーパスに対して外部 `--lang-def` だけ旧内容へ巻き戻して
+            # しまう（新旧混成生成: コーパスは新世代・lang-def は旧世代）。
+            #
+            # `_swap_into_place()` の契約上、例外を外へ伝播させずに正常
+            # return するのは `build_dir` が公開先（`staging_dir`）へ完全に
+            # rename され尽くして消滅した場合のみである。逆に内部の
+            # rename が失敗した場合は例外がそのままここまで伝播し、
+            # POSIX `rename(2)` はディレクトリ単位で atomic なため
+            # `build_dir` は部分状態を残さず存在し続ける。よってフラグ
+            # ではなく `build_dir.exists()` という実ファイルシステム状態から
+            # completion を導出する: 存在しない＝swap 完了後の中断（新世代で
+            # 統一。lang-def は巻き戻さない）、存在する＝swap 未完了の中断
+            # （旧世代で統一。従来通り巻き戻す）。
+            if build_dir.exists():
+                _restore_lang_def_backup(
+                    lang_def_path, lang_def_backup, created_new=lang_def_created_new
+                )
             raise
     finally:
-        if not swapped:
+        if build_dir.exists():
             shutil.rmtree(build_dir, ignore_errors=True)
 
     out_db = staging_dir / "diffsinger_db"
