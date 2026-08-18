@@ -1057,7 +1057,15 @@ def test_same_name_across_ritsu_and_d3synth_is_not_a_collision(tmp_path: Path) -
     """run 4 まではマージ先 (ritsu) 内での name/wav 衝突として fail-closed
     していたが、run 5 では ritsu と d3synth は別話者ディレクトリに分離される
     ため、同名行が存在しても正常に組み立てられる（話者ディレクトリが分ける
-    ので衝突自体が構造的に発生しない）。"""
+    ので衝突自体が構造的に発生しない）。
+
+    下流（binarize）の名前空間も一次ソース照合済み（2026-08-18・DiffSinger
+    e2307b1）: binarizer はアイテムを `f'{ds_id}:{item_name}'` の複合キーで
+    管理し（preprocessing/acoustic_binarizer.py:108 /
+    variance_binarizer.py:190。`ds_id` は config `datasets:` の enumerate
+    連番）、実バイナリ格納は名前非依存の整数連番（utils/indexed_datasets.py:
+    69-74）のため、**話者を跨ぐ同名アイテムは binarize でも衝突しない**
+    （run 5 実装 PR セルフレビュー #10 の検証結果）。"""
     ritsu_raw = _make_ritsu_raw_dir(tmp_path)
     d3_raw = _make_d3_raw_dir(
         tmp_path, extra_row=["ritsu_A3_001", "a", "1.0", "1", "60", "1.0"]

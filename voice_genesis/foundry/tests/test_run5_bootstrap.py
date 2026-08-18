@@ -21,13 +21,17 @@ import run5_bootstrap as r5b  # noqa: E402
 # --- material pins（PENDING fail-closed） -----------------------------------
 
 
-def _write_pins(tmp_path: Path, *, ffmpeg_sha, vocoder_sha) -> Path:
+def _write_pins(tmp_path: Path, *, ffmpeg_sha, vocoder_sha, model_ckpt_sha="d" * 64) -> Path:
     pins = {
         "schema": "run5-material-pins/0.1",
         "materials": {
             "ritsu_voicebank_zip": {"url": "https://example/r.zip", "sha256": "a" * 64},
             "ffmpeg_static": {"url": "https://example/f.tar.xz", "sha256": ffmpeg_sha},
-            "vocoder_nsf_hifigan_onnx": {"url": "https://example/v.onnx", "sha256": vocoder_sha},
+            "vocoder_pc_nsf_hifigan": {
+                "url": "https://example/v.zip", "sha256": vocoder_sha,
+                "model_ckpt_sha256": model_ckpt_sha,
+                "placement_dirname": "pc_nsf_hifigan_44.1k_hop512_128bin_2025.02",
+            },
             "diffsinger_repo": {"url": "https://example/ds.git", "commit": "e2307b1"},
         },
     }
@@ -43,7 +47,18 @@ def test_load_material_pins_rejects_pending_entries(tmp_path: Path) -> None:
     path = _write_pins(tmp_path, ffmpeg_sha=None, vocoder_sha=None)
     with pytest.raises(r5b.PinPendingError) as exc_info:
         r5b.load_material_pins(path)
-    assert exc_info.value.pending == ["ffmpeg_static", "vocoder_nsf_hifigan_onnx"]
+    assert exc_info.value.pending == ["ffmpeg_static", "vocoder_pc_nsf_hifigan"]
+
+
+def test_load_material_pins_rejects_pending_sub_hash_keys(tmp_path: Path) -> None:
+    """review セルフレビュー #9: トップレベル `sha256` 以外の `*_sha256`
+    キー（`model_ckpt_sha256` 等）が null に戻された退行も、素材取得前の
+    preflight で fail-closed する。"""
+    path = _write_pins(tmp_path, ffmpeg_sha="b" * 64, vocoder_sha="c" * 64,
+                       model_ckpt_sha=None)
+    with pytest.raises(r5b.PinPendingError) as exc_info:
+        r5b.load_material_pins(path)
+    assert exc_info.value.pending == ["vocoder_pc_nsf_hifigan.model_ckpt_sha256"]
 
 
 def test_load_material_pins_accepts_fully_pinned_table(tmp_path: Path) -> None:
@@ -78,6 +93,10 @@ def test_committed_material_pins_file_is_fully_pinned() -> None:
     # vocoder = クロー報告値（中・間接実証）
     assert vocoder["provenance"].startswith("中")
     assert "checkpoints/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02" in vocoder["placement"]
+    # bootstrap の配置名照合（セルフレビュー #6）が参照する機械可読フィールド。
+    # DiffSinger e2307b1 configs/acoustic.yaml:15 の既定 vocoder_ckpt ディレクトリ
+    # 名と一致していること（一次ソース照合 2026-08-18）。
+    assert vocoder["placement_dirname"] == "pc_nsf_hifigan_44.1k_hop512_128bin_2025.02"
 
 
 def test_check_required_env_lists_missing_vars() -> None:
@@ -258,6 +277,124 @@ def test_remaining_seconds_wall_clock_budget() -> None:
     assert r5b.remaining_seconds(0.0, 3600.0, limit=7200) == 3600.0
     assert r5b.remaining_seconds(0.0, 90000.0) <= 0  # 24h 上限超過
     assert r5b.remaining_seconds(100.0, 100.0) == r5b.WALL_CLOCK_LIMIT_SECONDS
+
+
+def test_stable_milestone_candidates_requires_size_stability() -> None:
+    """review セルフレビュー #2: 出現直後（サイズが前回ポーリングと不一致 =
+    書き込み中の可能性）の milestone はスキャン候補にしない。前回と同サイズ
+    になって初めて候補になる。"""
+    # 初回観測（prev 空）: 候補なし
+    assert r5b.stable_milestone_candidates([], {}, {5000: 100}) == []
+    # サイズ成長中: まだ候補にしない
+    assert r5b.stable_milestone_candidates([], {5000: 100}, {5000: 200}) == []
+    # サイズ安定: 候補化
+    assert r5b.stable_milestone_candidates([], {5000: 200}, {5000: 200}) == [5000]
+    # 処理済み (seen) は再候補にしない
+    assert r5b.stable_milestone_candidates([5000], {5000: 200}, {5000: 200}) == []
+    # 空ファイル (size 0) は候補にしない
+    assert r5b.stable_milestone_candidates([], {10000: 0}, {10000: 0}) == []
+    # 複数同時安定はソート順
+    assert r5b.stable_milestone_candidates(
+        [], {5000: 10, 10000: 20}, {10000: 20, 5000: 10}
+    ) == [5000, 10000]
+
+
+def test_milestone_ckpt_sizes_measures_only_milestones(tmp_path: Path) -> None:
+    (tmp_path / "model_ckpt_steps_5000.ckpt").write_bytes(b"abc")
+    (tmp_path / "model_ckpt_steps_1234.ckpt").write_bytes(b"x")
+    assert r5b.milestone_ckpt_sizes(tmp_path) == {5000: 3}
+
+
+# --- アーカイブ形式判定（review セルフレビュー #1/#7） ------------------------
+
+
+def test_detect_archive_format_sniffs_content_not_extension(tmp_path: Path) -> None:
+    """拡張子の無い固定名（Drive 直リンク取得の `user_sources_archive`）でも
+    magic バイトで zip / tar(gz/xz) を判定できる（旧実装は拡張子分岐のため
+    materials 段が構造的に完走不能だった — セルフレビュー #1 の回帰固定）。"""
+    import gzip
+    import io
+    import tarfile as tarfile_mod
+    import zipfile as zipfile_mod
+
+    zip_path = tmp_path / "user_sources_archive"  # 拡張子なし
+    with zipfile_mod.ZipFile(zip_path, "w") as z:
+        z.writestr("a.mp3", b"data")
+    assert r5b.detect_archive_format(zip_path) == "zip"
+
+    targz_path = tmp_path / "archive2"
+    buf = io.BytesIO()
+    with tarfile_mod.open(fileobj=buf, mode="w") as t:
+        info = tarfile_mod.TarInfo("b.m4a")
+        info.size = 4
+        t.addfile(info, io.BytesIO(b"data"))
+    targz_path.write_bytes(gzip.compress(buf.getvalue()))
+    assert r5b.detect_archive_format(targz_path) == "tar"
+
+    plain_tar = tmp_path / "archive3"
+    plain_tar.write_bytes(buf.getvalue())
+    assert r5b.detect_archive_format(plain_tar) == "tar"
+
+    junk = tmp_path / "junk"
+    junk.write_bytes(b"not an archive at all, definitely")
+    assert r5b.detect_archive_format(junk) is None
+
+
+def test_extract_archive_extracts_extensionless_zip_and_tar(tmp_path: Path) -> None:
+    import zipfile as zipfile_mod
+
+    zip_path = tmp_path / "user_sources_archive"
+    with zipfile_mod.ZipFile(zip_path, "w") as z:
+        z.writestr("inner/a.mp3", b"AAA")
+    dest = tmp_path / "out_zip"
+    r5b._extract_archive(zip_path, dest)
+    assert (dest / "inner" / "a.mp3").read_bytes() == b"AAA"
+
+    junk = tmp_path / "junk"
+    junk.write_bytes(b"garbage")
+    with pytest.raises(r5b.StageFailure, match="magic-byte"):
+        r5b._extract_archive(junk, tmp_path / "out_junk")
+
+
+# --- salvage 収集（review セルフレビュー #4） ---------------------------------
+
+
+def test_collect_salvage_artifacts_gathers_from_disk_state(tmp_path: Path) -> None:
+    """収集は呼び出し時点のディスク実態基準 — 学習が途中失敗しても、存在する
+    phase config / manifest / milestone ckpt / log / TB がすべて拾われる。"""
+    run5_raw = tmp_path / "run5_raw"
+    run5_raw.mkdir()
+    (run5_raw / "assembly_manifest.json").write_bytes(b"{}")
+    (run5_raw / "run5_config_phase_a.yaml").write_bytes(b"a")
+    # phase B config / training manifest は未生成（phase A 中の失敗を模す）
+
+    ds_repo = tmp_path / "DiffSinger"
+    ckpt_dir = ds_repo / "checkpoints" / r5b.EXP_NAME_PHASE_A
+    ckpt_dir.mkdir(parents=True)
+    (ckpt_dir / "model_ckpt_steps_5000.ckpt").write_bytes(b"ckpt")
+    (ckpt_dir / "model_ckpt_steps_1111.ckpt").write_bytes(b"not-milestone")
+    (ckpt_dir / "config.yaml").write_bytes(b"cfg")
+    (ckpt_dir / "train.log").write_bytes(b"log")
+    tb_dir = ckpt_dir / "lightning_logs" / "version_0"
+    tb_dir.mkdir(parents=True)
+    (tb_dir / "events.out.tfevents.123").write_bytes(b"tb")
+
+    artifacts = r5b.collect_salvage_artifacts(run5_raw, ds_repo)
+    names = [p.name for p in artifacts]
+    assert "assembly_manifest.json" in names
+    assert "run5_config_phase_a.yaml" in names
+    assert "model_ckpt_steps_5000.ckpt" in names
+    assert "model_ckpt_steps_1111.ckpt" not in names  # 節目以外は対象外
+    assert "config.yaml" in names
+    assert "train.log" in names
+    assert "events.out.tfevents.123" in names
+    # 未生成物はスキップ（存在するものだけ・重複なし）
+    assert "run5_config_phase_b.yaml" not in names
+    assert len(artifacts) == len(set(artifacts))
+
+
+def test_collect_salvage_artifacts_empty_when_nothing_exists(tmp_path: Path) -> None:
+    assert r5b.collect_salvage_artifacts(tmp_path / "nope", tmp_path / "nope2") == []
 
 
 # --- stage 計画 / heartbeat / self-stop --------------------------------------

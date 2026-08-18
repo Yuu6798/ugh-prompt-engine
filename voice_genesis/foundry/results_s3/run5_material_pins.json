@@ -49,6 +49,8 @@
       "sha256": "9d98ba73727f2abb75172cf8249d75182237e8472fc3b6ed09c721ae8b0e83c6",
       "model_ckpt_sha256": "d6dd28909d2a1a2dcf74b3e3aa0b82b48695b87979fdf41561940aeecd85c67f",
       "placement": "checkpoints/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/（DiffSinger clone 直下。run 4 実績の配置先を逐語踏襲）",
+      "placement_dirname": "pc_nsf_hifigan_44.1k_hop512_128bin_2025.02",
+      "placement_note": "一次ソース照合（2026-08-18・DiffSinger e2307b1 configs/acoustic.yaml:15）: `vocoder_ckpt: checkpoints/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/model.ckpt` が base config の既定値そのもの — 生成 config は vocoder_ckpt キーを持たず既定値に依存するため、この配置名からのずれは bootstrap が fail-closed で拒否する",
       "provenance": "中（クロー報告値・間接実証）: 値の起源は run 4 学習開始報告の逐語（Fable セッション transcript から回収）で、run 4 が本 pin の配置物で 40K 完走した実績が間接実証。本転記時（2026-08-18・run 5 実装セッション）に上記 URL から独立ダウンロードし zip sha256 / model.ckpt sha256 の一致を再実測済み — ただし『run 4 の Pod 上で実際に使われたバイト列』との同一性はクロー報告値経由の推定のまま（ffmpeg エントリのような当方起源の一次実測記録は無い）。",
       "note": "DESIGN_S4_run5.md §3.2 の素材表は本 vocoder を『nsf_hifigan.onnx（openvpi 公開 URL）』と記載していたが、run 4 実績の一次記録は pc_nsf_hifigan zip + model.ckpt だった。本エントリが正（DESIGN 側は本転記コミットで注記済み）。"
     }
