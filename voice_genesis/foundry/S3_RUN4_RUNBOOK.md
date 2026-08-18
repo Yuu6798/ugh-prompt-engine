@@ -262,6 +262,14 @@ stdout と `<out-dir>/verify_report.txt` へ出力する（1 件でも不一致
 
 ## 3. 3 話者アセンブリ — `assemble_run4.py`（実装済み 2026-08-17）
 
+> **歴史的記録（run 5 改訂・2026-08-18）**: 本節が記述する D3→ritsu 合流
+> （マージサブシステム）は run 5 の spk_id map v2（`DESIGN_S4_run5.md`
+> §1–§2）で撤去され、HEAD の `assemble_run4.py` は 4 話者
+> （ritsu/pjs/user/d3synth 全話者バイト単位コピー）版になった。run 4 を
+> 再現する場合は git 履歴（PR #268 マージ時点以前）の版を checkout する
+> こと（v1/v2 切替フラグは意図的に作っていない — DESIGN_S4 §2-1）。
+> 本節の記述は run 4 実行当時の記録としてそのまま残す。
+
 **（R3 改訂: 本節の旧版は「結合スクリプト未実装」と記述していたが、
 `s1_dataprep/assemble_run4.py` の実装完了に伴い全面差し替え。§8.1 と整合）**
 

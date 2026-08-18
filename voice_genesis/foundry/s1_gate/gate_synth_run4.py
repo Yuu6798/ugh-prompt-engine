@@ -180,10 +180,14 @@ if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 import forge_triangle  # noqa: E402
 
-# run 4 の 3 話者 spk_id 割当（`s1_dataprep/assemble_run4.py` が固定した表と
-# 同一。ritsu/pjs は run 3 までの checkpoint 割当を変更できないため 0/1 固定、
-# user は run 4 で新規追加された第 3 話者として次の空き番号 2）。
-SPEAKER_TO_SPK_ID = {"ritsu": 0, "pjs": 1, "user": 2}
+# spk_id map v2（`s1_dataprep/assemble_run4.py` の `SPK_IDS` と同一の表。
+# ritsu/pjs/user は run 3/run 4 checkpoint 割当を変更できないため 0/1/2 固定、
+# d3synth は run 5 で新設された第 4 話者（合成教師）として次の空き番号 3 —
+# DESIGN_S4_run5.md §1.1/§2-4。`--speaker d3synth` は合成教師声そのものの
+# 立ちを聴くゲート判定材料の 1 系統（三角形 Identity 空間には入れない —
+# DESIGN_S4 §4-4。gate_synth.py 側は `*.d3synth.emb` の文字列 glob で
+# そのまま解決するため、export 済み embed さえあれば既存経路で合成される）。
+SPEAKER_TO_SPK_ID = {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3}
 SPEAKER_CHOICES: tuple = tuple(SPEAKER_TO_SPK_ID)
 
 
@@ -265,7 +269,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # 両方省略された場合にのみ `main()` 側で行う）。
     p_run.add_argument(
         "--speaker", choices=SPEAKER_CHOICES, default=None,
-        help="reflow 多話者 acoustic 用の話者選択（run 4 拡張: ritsu/pjs/user）。"
+        help="reflow 多話者 acoustic 用の話者選択"
+             "（run 5 拡張: ritsu/pjs/user/d3synth）。"
              "acoustic ディレクトリの '*.<speaker>.emb' を読み込んで spk_embed を"
              "構築する処理は gate_synth.py 側の実装をそのまま使う（本ラッパーは"
              "choices のみ拡張・spk_id は関与しない。docstring 参照）。"
@@ -556,7 +561,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     args.speaker = args.speaker or "ritsu"  # gate_synth.py p_run と同一の既定値
     spk_id = resolve_spk_id(args.speaker)
-    print(f"| gate_synth_run4: speaker={args.speaker} (spk_id={spk_id}, run4 3-speaker table)")
+    print(f"| gate_synth_run4: speaker={args.speaker} (spk_id={spk_id}, spk_id map v2)")
     gate_synth.cmd_run(args)
 
 

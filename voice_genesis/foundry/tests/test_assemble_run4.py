@@ -1,9 +1,11 @@
-"""test_assemble_run4.py — S3 Phase D `s1_dataprep/assemble_run4.py` の検証。
+"""test_assemble_run4.py — `s1_dataprep/assemble_run4.py`（spk_id map v2）の検証。
 
-`S3_RUN4_RUNBOOK.md` §3 / `DESIGN_S3_backfill.md` §2.4 の受け入れ条件
-（正常 3 話者 / 名前衝突 fail / ゲート違反 fail / 決定論 2 回一致）を
-高速・合成フィクスチャで検証する（`test_convert_d3.py` と同じ流儀:
-実レンダ・実 voicebank には依存しない）。
+`DESIGN_S4_run5.md` §1–§2 の受け入れ条件（正常 4 話者・全話者バイト単位
+コピー / ゲート違反 fail / 決定論 2 回一致 / `refresh-config-pin` の 4 話者
+生リスト形状検査）を高速・合成フィクスチャで検証する（`test_convert_d3.py`
+と同じ流儀: 実レンダ・実 voicebank には依存しない）。run 4 までの D2/D3
+マージサブシステム検証（名前衝突 fail 等）はマージ撤去（DESIGN_S4 §2-2）に
+伴い削除し、代わりに「入力 raw dir とのバイト一致」を固定する。
 """
 from __future__ import annotations
 
@@ -106,34 +108,41 @@ def _make_user_raw_dir(root: Path, *, ph_seq: str = "a", ph_dur: str = "0.5") ->
 
 
 # ---------------------------------------------------------------------------
-# 1. 正常 3 話者
+# 1. 正常 4 話者（spk_id map v2・全話者バイト単位コピー）
 # ---------------------------------------------------------------------------
 
 
-def test_normal_three_speaker_assembly_publishes_manifest(tmp_path: Path) -> None:
+def test_normal_four_speaker_assembly_publishes_manifest(tmp_path: Path) -> None:
     ritsu_raw = _make_ritsu_raw_dir(tmp_path)
     d3_raw = _make_d3_raw_dir(tmp_path)
     pjs_raw = _make_pjs_raw_dir(tmp_path)
     user_raw = _make_user_raw_dir(tmp_path)
-    out_dir = tmp_path / "run4_raw"
+    out_dir = tmp_path / "run5_raw"
 
     manifest = assemble_run4.assemble(
         ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True
     )
 
-    # --- ritsu(=D2+D3) 合流結果 ---
+    # --- ritsu は D2 のみ（D3 はもうマージされない） ---
     ritsu_rows = build_dataset.read_transcriptions(out_dir / "ritsu" / "transcriptions.csv")
-    assert {r["name"] for r in ritsu_rows} == {
-        "ritsu_A3_001", "ritsu_A3_002", "sakura_seed11", "umi_seed11",
-    }
-    # D2 由来行は note_dur 列を持たない (欠落 = None) ことを確認する。
+    assert {r["name"] for r in ritsu_rows} == {"ritsu_A3_001", "ritsu_A3_002"}
+    # D2 の 3 列 CSV はそのまま複製され、note_dur 列を持たない (欠落 = None)。
     d2_row = next(r for r in ritsu_rows if r["name"] == "ritsu_A3_001")
     assert d2_row.get("note_dur") is None
     assert d2_row.get("ph_num") is None
-    d3_row = next(r for r in ritsu_rows if r["name"] == "sakura_seed11")
-    assert d3_row["note_dur"] == "0.3 0.7"
-    for stem in ("ritsu_A3_001", "ritsu_A3_002", "sakura_seed11", "umi_seed11"):
+    for stem in ("ritsu_A3_001", "ritsu_A3_002"):
         assert (out_dir / "ritsu" / "wavs" / f"{stem}.wav").exists()
+
+    # --- d3synth は第 4 話者としてそのまま複製 ---
+    d3synth_rows = build_dataset.read_transcriptions(
+        out_dir / "d3synth" / "transcriptions.csv"
+    )
+    assert {r["name"] for r in d3synth_rows} == {"sakura_seed11", "umi_seed11"}
+    d3_row = next(r for r in d3synth_rows if r["name"] == "sakura_seed11")
+    assert d3_row["note_dur"] == "0.3 0.7"
+    for stem in ("sakura_seed11", "umi_seed11"):
+        assert (out_dir / "d3synth" / "wavs" / f"{stem}.wav").exists()
+        assert not (out_dir / "ritsu" / "wavs" / f"{stem}.wav").exists()
 
     # --- pjs / user はそのまま複製 ---
     pjs_rows = build_dataset.read_transcriptions(out_dir / "pjs" / "transcriptions.csv")
@@ -144,39 +153,76 @@ def test_normal_three_speaker_assembly_publishes_manifest(tmp_path: Path) -> Non
     assert {r["name"] for r in user_rows} == {"UC-001"}
     assert (out_dir / "user" / "exclusions.json").exists()
 
-    # --- 3 話者ゲートは 0 issue ---
+    # --- 4 話者ゲートは 0 issue ---
     for name, spk_dir, rows in (
         ("ritsu", out_dir / "ritsu", ritsu_rows),
         ("pjs", out_dir / "pjs", pjs_rows),
         ("user", out_dir / "user", user_rows),
+        ("d3synth", out_dir / "d3synth", d3synth_rows),
     ):
         problems = build_dataset.validate_speaker(name, spk_dir, rows)
         problems += build_dataset.check_ph_dur_duration(name, spk_dir / "wavs", rows)
         problems += build_dataset.check_note_dur_consistency(name, rows)
         assert problems == [], f"{name}: {problems}"
 
-    # --- 辞書統合 ---
+    # --- 辞書統合（4 話者分のシンボル集合） ---
     dict_text = (out_dir / "dict.txt").read_text(encoding="utf-8")
     symbols = {line.split("\t")[0] for line in dict_text.splitlines() if line}
     assert symbols == {"a", "i", "u", "k", "s", "o"}
 
     # --- manifest ---
-    assert manifest["spk_id"] == {"ritsu": 0, "pjs": 1, "user": 2}
-    assert manifest["speakers"]["ritsu"]["row_count"] == 4
-    assert manifest["speakers"]["ritsu"]["wav_count"] == 4
-    assert manifest["speakers"]["ritsu"]["components"] == ["d2", "d3"]
+    assert manifest["spk_id"] == {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3}
+    assert manifest["speakers"]["ritsu"]["row_count"] == 2
+    assert manifest["speakers"]["ritsu"]["wav_count"] == 2
+    assert manifest["speakers"]["d3synth"]["row_count"] == 2
+    assert manifest["speakers"]["d3synth"]["wav_count"] == 2
+    assert manifest["speakers"]["d3synth"]["spk_id"] == 3
     assert manifest["speakers"]["pjs"]["row_count"] == 1
     assert manifest["speakers"]["pjs"]["is_fixture"] is True
     assert manifest["speakers"]["user"]["row_count"] == 1
     assert manifest["speakers"]["user"]["has_exclusions_json"] is True
-    assert manifest["collision_check"]["ritsu_d3_name_collisions"] == []
-    assert manifest["collision_check"]["ritsu_d3_wav_filename_collisions"] == []
+    # D2/D3 マージ専用だった collision_check / components 系フィールドは
+    # schema 0.4 で撤去済み。
+    assert "collision_check" not in manifest
+    assert "components" not in manifest["speakers"]["ritsu"]
     assert manifest["gate"]["problems"] == []
     assert manifest["dict"]["symbol_count"] == 6
     assert "notes" in manifest  # pjs_is_fixture=True の明記
 
     manifest_on_disk = json.loads((out_dir / "assembly_manifest.json").read_text(encoding="utf-8"))
     assert manifest_on_disk == manifest
+
+
+def test_all_four_speakers_are_byte_identical_copies_of_inputs(tmp_path: Path) -> None:
+    """マージ撤去後の中核契約: 4 話者すべての `transcriptions.csv`（+ wav 実体）
+    が入力 raw dir とバイト一致する（加工・行連結・ヘッダ変換が一切介在
+    しない）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = tmp_path / "run5_raw"
+
+    assemble_run4.assemble(
+        ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True
+    )
+
+    for src_dir, spk_name in (
+        (ritsu_raw, "ritsu"), (d3_raw, "d3synth"), (pjs_raw, "pjs"), (user_raw, "user"),
+    ):
+        assert (
+            (out_dir / spk_name / "transcriptions.csv").read_bytes()
+            == (src_dir / "transcriptions.csv").read_bytes()
+        ), f"{spk_name}: transcriptions.csv not byte-identical"
+        for src_wav in sorted((src_dir / "wavs").glob("*.wav")):
+            assert (
+                (out_dir / spk_name / "wavs" / src_wav.name).read_bytes()
+                == src_wav.read_bytes()
+            ), f"{spk_name}/{src_wav.name}: wav not byte-identical"
+    assert (
+        (out_dir / "user" / "exclusions.json").read_bytes()
+        == (user_raw / "exclusions.json").read_bytes()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +247,7 @@ def test_manifest_records_per_wav_sha256_matching_published_bytes(tmp_path: Path
         ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True
     )
 
-    for spk_name in ("ritsu", "pjs", "user"):
+    for spk_name in ("ritsu", "pjs", "user", "d3synth"):
         wav_sha256 = manifest["speakers"][spk_name]["wav_sha256"]
         wavs_dir = out_dir / spk_name / "wavs"
         actual_names = {p.name for p in wavs_dir.glob("*.wav")}
@@ -280,7 +326,7 @@ def test_manifest_wav_sha256_detects_tampering(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _assemble_normal_three_speaker(tmp_path: Path) -> Path:
+def _assemble_normal_four_speaker(tmp_path: Path) -> Path:
     ritsu_raw = _make_ritsu_raw_dir(tmp_path)
     d3_raw = _make_d3_raw_dir(tmp_path)
     pjs_raw = _make_pjs_raw_dir(tmp_path)
@@ -290,14 +336,14 @@ def _assemble_normal_three_speaker(tmp_path: Path) -> Path:
     return out_dir
 
 
-def test_run4_config_has_same_structure_as_build_dataset_two_speaker_config_with_three_datasets(
+def test_run4_config_has_same_structure_as_build_dataset_two_speaker_config_with_four_datasets(
     tmp_path: Path,
 ) -> None:
-    """生成した 3 話者 config が `build_dataset.py` の 2 話者版
+    """生成した 4 話者 config が `build_dataset.py` の 2 話者版
     (`build_config_yaml()`) と同一のトップレベル構造・同一の `datasets:`
-    エントリ構造を持ち、`datasets` が 3 エントリ・`num_spk: 3` に
+    エントリ構造を持ち、`datasets` が 4 エントリ・`num_spk: 4` に
     なっていることを構造的に確認する（コーディネータ指定の構造テスト）。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
 
     config_path = out_dir / "run4_config_datasets.yaml"
     assert config_path.exists()
@@ -318,14 +364,15 @@ def test_run4_config_has_same_structure_as_build_dataset_two_speaker_config_with
 
     assert set(run4_config.keys()) == set(two_speaker_config.keys())
     assert len(two_speaker_config["datasets"]) == 2
-    assert len(run4_config["datasets"]) == 3
-    assert run4_config["num_spk"] == 3
+    assert len(run4_config["datasets"]) == 4
+    assert run4_config["num_spk"] == 4
     assert two_speaker_config["num_spk"] == 2
     for entry in run4_config["datasets"]:
         assert set(entry.keys()) == set(two_speaker_config["datasets"][0].keys())
 
-    names_and_ids = {(d["speaker"], d["spk_id"]) for d in run4_config["datasets"]}
-    assert names_and_ids == {("ritsu", 0), ("pjs", 1), ("user", 2)}
+    names_and_ids = [(d["speaker"], d["spk_id"]) for d in run4_config["datasets"]]
+    # 既存話者の spk_id 不変 + d3synth は末尾追加（DESIGN_S4 §1.1）。
+    assert names_and_ids == [("ritsu", 0), ("pjs", 1), ("user", 2), ("d3synth", 3)]
     assert run4_config["use_spk_id"] is True
     assert run4_config["use_lang_id"] is False
 
@@ -334,7 +381,7 @@ def test_run4_config_raw_data_dir_points_to_final_out_dir_not_staging(tmp_path: 
     """config 内の `raw_data_dir`/`dictionaries.ja`/`binary_data_dir` は
     公開後の最終パス（`<out_dir>/...`）を指し、staging 中の一時パス
     （`.staging-<pid>`）を指さない。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     run4_config = yaml.safe_load((out_dir / "run4_config_datasets.yaml").read_text(encoding="utf-8"))
 
     for entry in run4_config["datasets"]:
@@ -407,7 +454,7 @@ def test_run4_config_default_knobs_match_build_dataset_defaults(tmp_path: Path) 
     """既定値省略時は `build_dataset.py` の `DEFAULT_MAX_UPDATES`/
     `DEFAULT_VAL_CHECK_INTERVAL`/`DEFAULT_NUM_CKPT_KEEP`（run 3 が実際に
     使った 40K steps・5K 節目という値）をそのまま流用する。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     run4_config = yaml.safe_load((out_dir / "run4_config_datasets.yaml").read_text(encoding="utf-8"))
     assert run4_config["max_updates"] == build_dataset.DEFAULT_MAX_UPDATES
     assert run4_config["val_check_interval"] == build_dataset.DEFAULT_VAL_CHECK_INTERVAL
@@ -434,12 +481,13 @@ def test_run4_config_assembly_manifest_records_config_sha256(tmp_path: Path) -> 
     """P1 修正 (review #265 R11): config 生成は `assembly_manifest.json` の
     `config` セクションへ live/normalized 両方の sha256 を記帳する（旧実装は
     `_write_run4_config()` の戻り値〔sha256 2 値〕を握り潰し、manifest には
-    一切記録されなかった）。schema も `0.3` へ上がっていることを確認する。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    一切記録されなかった）。schema が 4 話者版 `0.4` へ上がっていることを
+    確認する。"""
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     manifest = json.loads((out_dir / "assembly_manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == "run4-assembly-manifest/0.3"
+    assert manifest["schema"] == "run4-assembly-manifest/0.4"
     assert set(manifest.keys()) == {
-        "schema", "spk_id", "speakers", "collision_check", "dict", "config", "gate", "notes",
+        "schema", "spk_id", "speakers", "dict", "config", "gate", "notes",
     }
 
     config_path = out_dir / "run4_config_datasets.yaml"
@@ -468,7 +516,7 @@ def test_refresh_config_pin_after_manual_edit_regenerates_normalized_copy(tmp_pa
     手動追記されたキーをそのまま含み、(3) パス系フィールドは引き続き
     `out_dir` 基準の相対パスへ正規化されていることを確認する
     （「編集 → refresh → 等価検証 pass」方向）。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     config_path = out_dir / "run4_config_datasets.yaml"
     normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
     stale_normalized_text_before_edit = normalized_path.read_text(encoding="utf-8")
@@ -502,7 +550,7 @@ def test_refresh_config_pin_rejects_semantic_mismatch_from_datasets_tampering(tm
     ずれている（例: 手動編集の際に誤って spk_id を書き換えた）場合、
     `refresh_config_pin()` は `ConfigPinMismatchError` を送出し、
     `.normalized.yaml` を一切書き換えない（「意味的差分で fail」方向）。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     config_path = out_dir / "run4_config_datasets.yaml"
     normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
     normalized_text_before = normalized_path.read_text(encoding="utf-8")
@@ -528,7 +576,7 @@ def test_refresh_config_pin_rejects_unrelated_field_drift_between_live_and_rerea
     意味的な差分が生じた場合（YAML シリアライズ往復の破損や意図しない
     フィールド変異を模す）も `ConfigPinMismatchError` で fail-closed する
     ことを、`_normalize_config_dict` を monkeypatch して確認する。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     config_path = out_dir / "run4_config_datasets.yaml"
     normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
     normalized_text_before = normalized_path.read_text(encoding="utf-8")
@@ -558,7 +606,7 @@ def test_refresh_config_pin_rejects_duplicate_dataset_row_folded_to_matching_map
     しまい PASS していた。本テストは重複行があっても畳んだマップが偶然
     `SPK_IDS` と一致するケース（重複行が既存行と全く同一内容）を再現し、
     それでも `ConfigPinMismatchError` で fail-closed することを確認する。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     config_path = out_dir / "run4_config_datasets.yaml"
     normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
     normalized_text_before = normalized_path.read_text(encoding="utf-8")
@@ -569,14 +617,14 @@ def test_refresh_config_pin_rejects_duplicate_dataset_row_folded_to_matching_map
     # {speaker: spk_id} へ畳めば依然として SPK_IDS と一致してしまう
     # （旧実装が見逃していた fail-open 経路そのもの）。
     live_config["datasets"].append(copy.deepcopy(ritsu_entry))
-    assert len(live_config["datasets"]) == 4
+    assert len(live_config["datasets"]) == 5
     config_path.write_text(
         yaml.safe_dump(live_config, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
 
     with pytest.raises(assemble_run4.ConfigPinMismatchError) as exc_info:
         assemble_run4.refresh_config_pin(config_path)
-    assert any("4" in d or "duplicate" in d for d in exc_info.value.diffs)
+    assert any("5" in d or "duplicate" in d for d in exc_info.value.diffs)
 
     # fail-closed: 正規化コピーは一切変更されない
     assert normalized_path.read_text(encoding="utf-8") == normalized_text_before
@@ -585,9 +633,9 @@ def test_refresh_config_pin_rejects_duplicate_dataset_row_folded_to_matching_map
 
 def test_refresh_config_pin_rejects_datasets_out_of_order(tmp_path: Path) -> None:
     """`datasets` のエントリ数・speaker/spk_id の集合は正しくても、順序が
-    既定（ritsu, pjs, user）からずれていれば fail-closed する（リスト形状
-    そのものを検査する新チェックの「順序」側）。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    既定（ritsu, pjs, user, d3synth）からずれていれば fail-closed する
+    （リスト形状そのものを検査するチェックの「順序」側）。"""
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     config_path = out_dir / "run4_config_datasets.yaml"
 
     live_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -613,22 +661,38 @@ def test_validate_live_datasets_shape_accepts_canonical_entries() -> None:
         {"speaker": "ritsu", "spk_id": 0},
         {"speaker": "pjs", "spk_id": 1},
         {"speaker": "user", "spk_id": 2},
+        {"speaker": "d3synth", "spk_id": 3},
     ]
     assert assemble_run4._validate_live_datasets_shape(datasets) == []
 
 
 def test_validate_live_datasets_shape_rejects_duplicate_row_count(tmp_path: Path) -> None:
-    """4 エントリ（ritsu が重複）は、畳んだ `{speaker: spk_id}` マップが
-    `SPK_IDS` と一致していても、リスト形状（エントリ数 3 期待）で拒否する。"""
+    """5 エントリ（ritsu が重複）は、畳んだ `{speaker: spk_id}` マップが
+    `SPK_IDS` と一致していても、リスト形状（エントリ数 4 期待）で拒否する。"""
     datasets = [
         {"speaker": "ritsu", "spk_id": 0},
+        {"speaker": "ritsu", "spk_id": 0},
+        {"speaker": "pjs", "spk_id": 1},
+        {"speaker": "user", "spk_id": 2},
+        {"speaker": "d3synth", "spk_id": 3},
+    ]
+    diffs = assemble_run4._validate_live_datasets_shape(datasets)
+    assert diffs
+    assert any("4" in d for d in diffs)
+
+
+def test_validate_live_datasets_shape_rejects_missing_d3synth_row() -> None:
+    """v1（3 話者）形状の config は run 5 ではもう有効ではない — d3synth 行を
+    欠く 3 エントリはエントリ数検査で拒否する（spk_id map v2 への追随漏れの
+    検出）。"""
+    datasets = [
         {"speaker": "ritsu", "spk_id": 0},
         {"speaker": "pjs", "spk_id": 1},
         {"speaker": "user", "spk_id": 2},
     ]
     diffs = assemble_run4._validate_live_datasets_shape(datasets)
     assert diffs
-    assert any("3" in d for d in diffs)
+    assert any("4" in d for d in diffs)
 
 
 def test_validate_live_datasets_shape_rejects_not_a_list() -> None:
@@ -642,6 +706,7 @@ def test_validate_live_datasets_shape_rejects_wrong_order() -> None:
         {"speaker": "pjs", "spk_id": 1},
         {"speaker": "ritsu", "spk_id": 0},
         {"speaker": "user", "spk_id": 2},
+        {"speaker": "d3synth", "spk_id": 3},
     ]
     diffs = assemble_run4._validate_live_datasets_shape(datasets)
     assert diffs
@@ -654,7 +719,7 @@ def test_refresh_config_pin_updates_manifest_config_sha256(tmp_path: Path) -> No
     `config.normalized_config_sha256` が実測値へ更新される（手動編集で
     live config のバイト列が変わっているため、`assemble()` 実行時に記帳
     した値は refresh 前は stale になっている）。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     config_path = out_dir / "run4_config_datasets.yaml"
     normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
     manifest_path = out_dir / "assembly_manifest.json"
@@ -693,7 +758,7 @@ def test_refresh_config_pin_reads_live_config_bytes_exactly_once(
     `.normalized.yaml`（parse 結果由来）と manifest の `config_sha256` が
     いずれも「parse に使われた旧バイト列」基準で一致し、差し替え後の新
     バイト列の sha256 には汚染されないことを確認する。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     config_path = out_dir / "run4_config_datasets.yaml"
     normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
     manifest_path = out_dir / "assembly_manifest.json"
@@ -824,7 +889,7 @@ def test_refresh_config_pin_leaves_both_files_untouched_on_publish_failure(
     中断（manifest 側の `os.replace` が失敗）が起きても、`.normalized.yaml`
     と `assembly_manifest.json` はどちらも編集前のバイト列のまま残る
     （「新 config + 旧/破損 manifest」の不整合バンドルが発生しない）。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     config_path = out_dir / "run4_config_datasets.yaml"
     normalized_path = out_dir / "run4_config_datasets.yaml.normalized.yaml"
     manifest_path = out_dir / "assembly_manifest.json"
@@ -870,6 +935,7 @@ def test_refresh_config_pin_without_sibling_manifest_is_a_noop_for_manifest(
             ("ritsu", 0, out_dir / "ritsu", ["a"]),
             ("pjs", 1, out_dir / "pjs", ["b"]),
             ("user", 2, out_dir / "user", ["c"]),
+            ("d3synth", 3, out_dir / "d3synth", ["d"]),
         ],
     )
     config_path.write_text(config_text, encoding="utf-8")
@@ -885,7 +951,7 @@ def test_main_refresh_config_pin_subcommand_end_to_end(tmp_path: Path, capsys) -
     `refresh_config_pin()` と同じ結果を公開し、既存の（サブコマンド無指定）
     `main()` 呼び出し形式は従来どおり `_main_assemble` へ委譲されることを
     確認する（後方互換性）。"""
-    out_dir = _assemble_normal_three_speaker(tmp_path)
+    out_dir = _assemble_normal_four_speaker(tmp_path)
     config_path = out_dir / "run4_config_datasets.yaml"
     with open(config_path, "a", encoding="utf-8") as f:
         f.write("lr: 0.0002\n")
@@ -983,23 +1049,39 @@ def test_assemble_rejects_out_dir_inside_raw_dir_without_cli(tmp_path: Path) -> 
 
 
 # ---------------------------------------------------------------------------
-# 2. 名前衝突 fail-closed
+# 2. 話者間の同名行はもう衝突ではない（マージ撤去の帰結）
 # ---------------------------------------------------------------------------
 
 
-def test_name_collision_between_ritsu_and_d3_fails_closed(tmp_path: Path) -> None:
+def test_same_name_across_ritsu_and_d3synth_is_not_a_collision(tmp_path: Path) -> None:
+    """run 4 まではマージ先 (ritsu) 内での name/wav 衝突として fail-closed
+    していたが、run 5 では ritsu と d3synth は別話者ディレクトリに分離される
+    ため、同名行が存在しても正常に組み立てられる（話者ディレクトリが分ける
+    ので衝突自体が構造的に発生しない）。"""
     ritsu_raw = _make_ritsu_raw_dir(tmp_path)
-    # D3 側に ritsu と同名の行を混入させる（row/wav 双方衝突）。
     d3_raw = _make_d3_raw_dir(
         tmp_path, extra_row=["ritsu_A3_001", "a", "1.0", "1", "60", "1.0"]
     )
     pjs_raw = _make_pjs_raw_dir(tmp_path)
     user_raw = _make_user_raw_dir(tmp_path)
-    out_dir = tmp_path / "run4_raw"
+    out_dir = tmp_path / "run5_raw"
 
-    with pytest.raises(assemble_run4.NameCollisionError, match="ritsu_A3_001"):
-        assemble_run4.assemble(ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir)
-    assert not out_dir.exists()
+    manifest = assemble_run4.assemble(
+        ritsu_raw, d3_raw, pjs_raw, user_raw, out_dir, pjs_is_fixture=True
+    )
+
+    assert (out_dir / "ritsu" / "wavs" / "ritsu_A3_001.wav").exists()
+    assert (out_dir / "d3synth" / "wavs" / "ritsu_A3_001.wav").exists()
+    # 双方とも入力バイトのまま（互いを上書きしない）。
+    assert (
+        (out_dir / "ritsu" / "wavs" / "ritsu_A3_001.wav").read_bytes()
+        == (ritsu_raw / "wavs" / "ritsu_A3_001.wav").read_bytes()
+    )
+    assert (
+        (out_dir / "d3synth" / "wavs" / "ritsu_A3_001.wav").read_bytes()
+        == (d3_raw / "wavs" / "ritsu_A3_001.wav").read_bytes()
+    )
+    assert manifest["speakers"]["d3synth"]["row_count"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1042,8 +1124,9 @@ def test_assembly_is_deterministic_across_two_runs(tmp_path: Path) -> None:
         Path("ritsu/transcriptions.csv"),
         Path("ritsu/wavs/ritsu_A3_001.wav"),
         Path("ritsu/wavs/ritsu_A3_002.wav"),
-        Path("ritsu/wavs/sakura_seed11.wav"),
-        Path("ritsu/wavs/umi_seed11.wav"),
+        Path("d3synth/transcriptions.csv"),
+        Path("d3synth/wavs/sakura_seed11.wav"),
+        Path("d3synth/wavs/umi_seed11.wav"),
         Path("pjs/transcriptions.csv"),
         Path("pjs/wavs/pjs_song1_001.wav"),
         Path("user/transcriptions.csv"),

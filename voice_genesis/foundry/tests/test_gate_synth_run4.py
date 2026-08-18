@@ -48,14 +48,15 @@ import gate_synth_run4 as gsr4  # noqa: E402
 # --- speaker -> spk_id 解決 -------------------------------------------------
 
 
-def test_speaker_to_spk_id_table_matches_run4_assembly_assignment() -> None:
-    """`s1_dataprep/assemble_run4.py` が固定した spk_id 割当
-    （ritsu=0/pjs=1/user=2）と一致すること。"""
-    assert gsr4.SPEAKER_TO_SPK_ID == {"ritsu": 0, "pjs": 1, "user": 2}
+def test_speaker_to_spk_id_table_matches_run5_assembly_assignment() -> None:
+    """`s1_dataprep/assemble_run4.py` が固定した spk_id map v2
+    （ritsu=0/pjs=1/user=2/d3synth=3。DESIGN_S4_run5.md §1.1）と一致する
+    こと。"""
+    assert gsr4.SPEAKER_TO_SPK_ID == {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3}
 
 
 @pytest.mark.parametrize(
-    "speaker,expected_spk_id", [("ritsu", 0), ("pjs", 1), ("user", 2)]
+    "speaker,expected_spk_id", [("ritsu", 0), ("pjs", 1), ("user", 2), ("d3synth", 3)]
 )
 def test_resolve_spk_id_known_speakers(speaker: str, expected_spk_id: int) -> None:
     assert gsr4.resolve_spk_id(speaker) == expected_spk_id
@@ -66,8 +67,8 @@ def test_resolve_spk_id_unknown_speaker_raises_value_error() -> None:
         gsr4.resolve_spk_id("unknown_speaker")
 
 
-def test_speaker_choices_is_derived_from_table_and_ordered_ritsu_pjs_user() -> None:
-    assert gsr4.SPEAKER_CHOICES == ("ritsu", "pjs", "user")
+def test_speaker_choices_is_derived_from_table_and_ordered_by_spk_id() -> None:
+    assert gsr4.SPEAKER_CHOICES == ("ritsu", "pjs", "user", "d3synth")
 
 
 # --- CLI 引数検証 ------------------------------------------------------------
@@ -92,6 +93,14 @@ def test_parser_accepts_speaker_ritsu_and_pjs_unchanged() -> None:
     for speaker in ("ritsu", "pjs"):
         args = parser.parse_args(REQUIRED_ARGV + ["--speaker", speaker])
         assert args.speaker == speaker
+
+
+def test_parser_accepts_speaker_d3synth() -> None:
+    """run 5 拡張（DESIGN_S4 §2-4）: `--speaker d3synth` で合成教師声
+    そのものの立ちを聴けること（ゲート判定材料の 1 系統追加）。"""
+    parser = gsr4.build_arg_parser()
+    args = parser.parse_args(REQUIRED_ARGV + ["--speaker", "d3synth"])
+    assert args.speaker == "d3synth"
 
 
 def test_parser_speaker_and_speaker_embed_file_both_default_to_none() -> None:
@@ -217,6 +226,23 @@ def test_main_prints_resolved_spk_id_for_user(
     captured = capsys.readouterr()
     assert "speaker=user" in captured.out
     assert "spk_id=2" in captured.out
+
+
+def test_main_delegates_speaker_d3synth_and_prints_spk_id_3(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """run 5 拡張: `--speaker d3synth` が既存の `--speaker` 委譲経路（choices
+    のみ拡張・gate_synth.py 側は `*.d3synth.emb` の文字列 glob で解決）を
+    そのまま通ること。"""
+    fake_module = _FakeGateSynthModule()
+    monkeypatch.setattr(gsr4, "_import_gate_synth", lambda: fake_module)
+
+    gsr4.main(REQUIRED_ARGV + ["--speaker", "d3synth"])
+
+    assert fake_module.calls[0].speaker == "d3synth"
+    captured = capsys.readouterr()
+    assert "speaker=d3synth" in captured.out
+    assert "spk_id=3" in captured.out
 
 
 def test_main_resolves_default_speaker_to_ritsu_when_neither_flag_given(
