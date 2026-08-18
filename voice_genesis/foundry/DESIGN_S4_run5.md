@@ -18,8 +18,11 @@
    交絡した（s3_record §5・DESIGN_S3_backfill 改訂注記）。Q7（ノイズ混入の
    発生源分解）は ablation 専用走行を立てるより **ablation-by-sequence**
    （逐次単一介入の系列で自然に分解する）が安い:
-   run 5 で D3 を分離してもノイズが残れば発生源は user 宅録側と判明し、
-   消えれば D3 側と判明する。どちらに転んでも Q7 は 1 走行で前進する
+   run 5 で D3 を分離してもノイズが残れば発生源は user 宅録側、消えれば
+   D3 側という**強い方向性示唆**が得られる。どちらに転んでも Q7 は 1 走行で
+   前進する。ただし run 5 は別の学習走行であり GPU 学習の確率性による
+   走行間変動は分離できない — 判定は「実証」でなく方向性示唆として記録する
+   （s3_record §5 の帰属限界規律を継承）
 2. **④ 三角形補間バッチは run 5 checkpoint で生成し、VG-E1 第 0 世代を
    兼ねる**（run 4 checkpoint では生成しない — run 4 は品質劣化交絡を
    抱えたまま第 0 世代の基準にできない）
@@ -36,10 +39,10 @@ D3（合成教師データ）を ritsu の話者 ID から分離し、専用話�
 
 | speaker | spk_id v1 (run 4) | spk_id v2 (run 5) |
 |---|---|---|
-| ritsu (D2) | 0（D3 と同居） | 0（D2 のみ） |
+| ritsu | 0（runbook §4 表記: ritsu(D2+D3)=0） | 0（D2 のみ） |
 | pjs | 1 | 1 |
 | user | 2 | 2 |
-| **d3synth** | —（ritsu に混入） | **3（新設・合成教師）** |
+| **d3synth** | —（ritsu へマージ） | **3（新設・合成教師）** |
 
 - 既存話者の spk_id は**不変**（run 3/run 4 checkpoint との embed 互換の
   ため既存 ID の変更は恒久禁止 — assemble_run4.py §「spk_id は固定」の
@@ -48,8 +51,15 @@ D3（合成教師データ）を ritsu の話者 ID から分離し、専用話�
   日本語破綻が全面改善した機構的標的）を保ちつつ、リツの声色分布から
   合成音のアーティファクトを退避する仮説（= Q6 の検証）
 - データ内容は run 4 と**同一**（D3 wav 群・user 宅録・D2・pjs すべて
-  run 4 pin のまま）。**変わるのは帰属ラベルのみ**。これが「単一介入」の
-  実体であり、run 4 との差分を 1 変数に閉じる
+  run 4 pin のまま）。変わるのは**帰属ラベルと、その帰結としての
+  `num_spk: 4`（spk_embed テーブルへの行 1 本追加）**。これを 1 変数と
+  数え、run 4 との差分をこの 1 変数に閉じる
+- **学習開始点 = スクラッチ**（run 4 裁定の継承 — runbook §8:
+  run 3 レシピ完全再現 = スクラッチ開始 + 5K 節目で optimizer 新品の
+  finetune 機構再適用。`finetune_ckpt_path` は run 5 自身の 5K checkpoint
+  を指す）。run 4 checkpoint からの warm-start は**行わない** —
+  num_spk 3→4 で spk_embed 形状が変わり、拡張ロードという追加介入を
+  持ち込むため（単一介入原則に反する）
 
 ### 1.2 検証仮説（run 5 の主検証点）
 
@@ -57,8 +67,10 @@ D3（合成教師データ）を ritsu の話者 ID から分離し、専用話�
   保存されれば「共有デコーダ経由の矯正」仮説が強まり、消失すれば
   「ritsu 話者への直接混入が必要」と判明する — どちらでも設計知識になる
 - **Q7**: run 4 比のノイズ・音量交絡が run 5 で消えるか。
-  消える → D3 混入起因と判明（user 正規化の優先度を下げられる）。
-  残る → user 宅録起因と判明（run 6 = user 正規化 + T3 の根拠が立つ）
+  消える → D3 混入起因の方向性示唆（user 正規化の優先度を下げられる）。
+  残る → user 宅録起因の方向性示唆（run 6 = user 正規化 + T3 の根拠が
+  立つ）。いずれも走行間変動と交絡しうるため「実証」とは記録しない
+  （§0-1 の帰属限界注記）
 
 ## 2. 必要コード変更（マシン非依存・事前実装）
 
@@ -69,10 +81,15 @@ D3（合成教師データ）を ritsu の話者 ID から分離し、専用話�
    `datasets:` 4 エントリ・`num_spk: 4`・生リスト形状検査
    （エントリ数=4・重複無し・期待順序）の追随。v1/v2 の切替フラグは
    作らない（run 5 以降 v2 のみ。過去 run の再現は git 履歴が担う）
-2. **D3 出力の分離配置**: convert_d3 の出力を ritsu raw ディレクトリへ
-   同居させず `d3synth` 専用 raw ディレクトリへ置く（`discover_pairs()`
-   単一ディレクトリ規約はそのまま・配置先だけ変更）。assemble の
-   `--d3-raw-dir` を d3synth エントリとして取り込む配線
+2. **D3 分離 = D2/D3 マージサブシステムの撤去**（変更規模注意: 「配線
+   変更」ではない）: 現行の `--d3-raw-dir` は D2(ritsu) への行連結マージ
+   専用経路（ヘッダ接頭辞検査・`_write_merged_ritsu_csv` の CSV 連結・
+   D2/D3 間 name/wav 衝突検査 — `_assemble_into()` 実装）。run 5 では
+   このマージロジックを撤去し、ritsu は D2 のみを pjs/user と同型の
+   「バイト単位コピー」経路で、`--d3-raw-dir` は d3synth の第 4 エントリ
+   （同じくバイト単位コピー）として組み立てる。convert_d3 の
+   `discover_pairs()` 単一ディレクトリ規約は不変・出力配置先のみ
+   d3synth 専用 raw ディレクトリへ変更
 3. **`refresh-config-pin` の 4 話者検証**: 生リスト検査の期待値を
    `SPK_IDS` v2 に追随（重複畳み込み黙認バグの再導入をテストで防止）
 4. **`gate_synth_run4.py` の d3synth 対応**: `--speaker d3synth` で
@@ -96,23 +113,28 @@ D3（合成教師データ）を ritsu の話者 ID から分離し、専用話�
   3. 素材取得 + sha256 照合（§3.2）
   4. D3 再生成 → convert_d3（d3synth 配置）→ assemble（4 話者）→
      `refresh-config-pin` → assembly_manifest pin 照合
-  5. 学習（run 4 と同一の学習規模フィールド・max_updates 40K）
+  5. 学習（run 4 と同一の学習規模フィールド・max_updates 40K・
+     開始点 = §1.1 のスクラッチ裁定）
   6. 節目 checkpoint（5K/10K/20K/40K）+ config/辞書/log/TB の退避（§3.3）
   7. **自動停止**（成功・失敗いずれでも。Pod 放置課金を構造的に排除）
-- **監視 = RunPod API ポーリング**（Claude セッションから Pod 状態と
-  進捗マーカーファイルを定期確認）。進捗はステージ毎のマーカー +
-  exit code ファイルで表現し、報告文でなく成果物で完了判定する
-  （CLAUDE.md「完了判定は成果物で行う」の適用）
+- **監視 = RunPod API ポーリング + Drive heartbeat**。RunPod API は
+  Pod 内ファイルを読めないため、API ポーリングは Pod 生死・課金時間の
+  確認に限定し、**進捗の正はステージ毎のマーカー + exit code ファイルを
+  節目毎に Google Drive へ heartbeat push したもの**（§3.3 と同経路）と
+  する。報告文でなく成果物で完了判定する（CLAUDE.md「完了判定は成果物で
+  行う」の適用）
 
 ### 3.2 素材の搬入経路（無人取得可能な形に限定）
 
 | 素材 | 経路 | 照合 |
 |---|---|---|
 | ffmpeg static n6.1.2 | BtbN 公開 URL（pin 済み） | tarball sha256 = 既存 pin |
-| D3 素材・D2・pjs | 公開 pin URL（runbook 既存台帳） | 既存 sha256 pin |
+| D2（波音リツ強連続音 Ver1.5.1） | 公開 URL curl（S1_GPU_RUNBOOK §2） | 既存 sha256 pin |
+| D3 | **搬入しない — Pod 上でその場 render 生成**（入力 = 上記 D2 voicebank・ゲート 1–4 通過後 = §3.1 段階 4） | render 出力を run 4 の D3 pin と照合 |
+| pjs（PJS corpus ver1.1） | Google Drive ファイル ID + `gdown`（S1_GPU_RUNBOOK §2。D2 と別機構 — gdown 依存をブートストラップに含める） | 既存 sha256 pin |
 | user 宅録 | Google Drive 直リンク（`uc?export=download&id=` 形式・実証済み） | run 4 dataset pin |
 | config/辞書 | **リポジトリ内へ格納**（run 5 から。Drive/AI-Drive 手渡しを廃止） | git 内容アドレス |
-| vocoder | openvpi 公開 URL（run 4 と同一） | 既存 sha256 pin |
+| vocoder（nsf_hifigan.onnx） | openvpi 公開 URL（run 4 と同一） | run 4 使用時の URL + sha256 は **repo docs 未転記**（クロー報告値のみ）。**run 5 起動前の pin 転記を必須の先行タスク**とする（§5 AC の同時転記対象） |
 
 - user 宅録の Drive リンクは起動スクリプトへ**環境変数として注入**し、
   スクリプト本文（リポジトリにコミットされる）へは書かない
@@ -124,7 +146,9 @@ D3（合成教師データ）を ritsu の話者 ID から分離し、専用話�
   (c) 停止のみで Pod ディスクに残置し必要分だけ後日回収**
 - **裁定: (a) Google Drive push を主経路**とする（User が既にダッシュ
   ボードで扱える・直リンク取得の実証済み・追加アカウント不要）。
-  認証トークンは起動時環境変数で注入。push 後に sha256 サイドカーを
+  認証トークンは起動時環境変数で注入し、**成果物専用フォルダに権限を
+  限定したスコープ**とする（Drive 全域トークンの注入は不可 — Pod 側
+  侵害時の被害面を成果物フォルダに閉じる）。push 後に sha256 サイドカーを
   併置し、record への転記は wav pin と同形式で行う。
   (c) を保険として併用（push 失敗時も停止前にディスクへ完全退避）
 - 判定材料 wav（run 5 ゲート・run 4/run 3 アンカー比較）は tar.gz +
