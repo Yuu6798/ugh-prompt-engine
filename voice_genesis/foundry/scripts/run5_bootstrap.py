@@ -534,15 +534,18 @@ def collect_salvage_artifacts(run5_raw: Path, ds_repo: Path) -> List[Path]:
         run5_raw / "run5_config_phase_b.yaml",
         run5_raw / "run5_training_manifest.json",
     ]
-    log_dir = _LOG_DIR
-    if log_dir is not None:
-        candidates += sorted(log_dir.glob("*.log"))
     for exp_name in (EXP_NAME_PHASE_A, EXP_NAME_PHASE_B):
         ckpt_dir = ds_repo / "checkpoints" / exp_name
         for _step, ckpt in sorted(find_milestone_ckpts(ckpt_dir).items()):
             candidates.append(ckpt)
         for pattern in ("config.yaml", "*.log", "**/events.out.tfevents.*"):
             candidates += sorted(ckpt_dir.glob(pattern))
+    # コマンドログは**最後**に積む（review #4: 予算/wall-clock 枯渇時に
+    # 先に押し出されるべきは checkpoint。ログ 40 本超が先頭を占めると
+    # 本命の退避が間に合わない経路が生まれる）。
+    log_dir = _LOG_DIR
+    if log_dir is not None:
+        candidates += sorted(log_dir.glob("*.log"))
     unique: List[Path] = []
     for path in candidates:
         if path.exists() and path not in unique:
@@ -622,6 +625,21 @@ def tail_text(text: str, max_chars: int = 1500) -> str:
     return "…(先頭を省略)…\n" + text[-max_chars:]
 
 
+def read_tail(path: Path, max_bytes: int = 8192, max_chars: int = 1500) -> str:
+    """`path` の末尾だけを読んで文字列で返す（全文を読み込まない — review #2:
+    binarize / render 等は progress 出力でログが巨大になり得る）。読めなければ
+    空文字（診断の付随処理でさらに例外を起こさない）。"""
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            raw = f.read()
+    except OSError:
+        return ""
+    return tail_text(raw.decode("utf-8", errors="replace"), max_chars)
+
+
 def _run(argv: Sequence[str], *, cwd: Optional[Path] = None,
          env: Optional[Dict[str, str]] = None, timeout: Optional[float] = None,
          label: str = "") -> None:
@@ -650,11 +668,21 @@ def _run(argv: Sequence[str], *, cwd: Optional[Path] = None,
                 [str(a) for a in argv], cwd=str(cwd) if cwd else None,
                 env=env, timeout=timeout, stdout=f, stderr=subprocess.STDOUT,
             )
-        captured = log_path.read_text(encoding="utf-8", errors="replace")
+        captured = None  # 失敗時のみ末尾を読む（review #2: 成功時も全文を
+        # メモリへ載せていた。progress bar 系のステージはログが巨大になる）
     if result.returncode != 0:
         detail = f"[{label}] exit {result.returncode}: {printable}"
+        if _LOG_DIR is not None:
+            captured = read_tail(log_path)
         if captured:
-            detail += f"\n--- command output (tail) ---\n{tail_text(captured)}"
+            detail += f"\n--- command output (tail) ---\n{captured}"
+            # review #3（部分採用）: 出力をファイルへ落とすと Pod コンソールから
+            # 消えるため、失敗時の末尾だけは stdout にも流す（RunPod の
+            # コンテナログから人が読める経路を残す）。ライブ追従は heartbeat が
+            # 正であるという設計（DESIGN_S4 §3.1）どおり犠牲にする — ログ本体は
+            # ディスクに残り、salvage で Drive へ退避される。
+            print(f"| run5_bootstrap: [{label}] FAILED — output tail:\n{captured}",
+                  file=sys.stderr, flush=True)
         raise StageFailure(detail)
 
 
@@ -779,7 +807,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     start = time.monotonic()
     work: Path = args.work_dir
     work.mkdir(parents=True, exist_ok=True)
-    set_log_dir(work / "cmdlogs")
 
     exit_code = 0
     heartbeat: Optional[Heartbeat] = None
@@ -791,6 +818,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     try:
         # --- stage 1: preflight ---------------------------------------------
+        # review #5: mkdir 系は必ず try の内側で行う（finally の self-stop を
+        # 飛ばすと Pod が課金され続ける — セルフレビュー #3 で塞いだ露出）。
+        set_log_dir(work / "cmdlogs")
         missing = check_required_env(dict(os.environ))
         if missing:
             print(f"error: missing required env var(s): {missing}", file=sys.stderr)
@@ -813,7 +843,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         drive_folder_id = os.environ["RUN5_DRIVE_FOLDER_ID"]
         pusher = _rclone_pusher(rclone_conf, drive_folder_id)
         heartbeat = Heartbeat(work / "heartbeat", pusher)
-        heartbeat.mark("preflight", "ok")
+        # review #1: PJS 取得（backend copyid）と salvage が rclone 依存に
+        # なったため、**preflight で binary の実在・版・認証・フォルダ書き込みを
+        # まとめて実証する**（materials 段まで持ち越さない）。heartbeat の
+        # 通常 push は非致命なので、ここだけは strict push で確かめる。
+        _run(["rclone", "--config", rclone_conf, "version"],
+             label="preflight/rclone-version")
+        preflight_marker = heartbeat.mark("preflight", "ok")
+        if not _rclone_push_strict(rclone_conf, drive_folder_id, preflight_marker):
+            raise StageFailure(
+                "preflight: rclone push to the artifacts folder failed — "
+                "トークン/フォルダ ID/権限のいずれかが無効。監視も退避も"
+                "成立しないため起動を中止する（fail-closed）"
+            )
 
         try:
             # --- stage 2: gates（runbook §2.2） -----------------------------

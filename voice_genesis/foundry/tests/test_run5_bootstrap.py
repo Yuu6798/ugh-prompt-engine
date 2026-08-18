@@ -717,3 +717,42 @@ def test_pjs_pin_uses_drive_file_id_not_gdown() -> None:
     assert pjs["drive_file_id"] == "1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_"
     assert pjs["size_bytes"] == 275179158
     assert "Quota exceeded" in pjs["fetch_note"]
+
+
+# --- PR#272 セルフレビュー対応の回帰 ------------------------------------------
+
+
+def test_read_tail_reads_only_the_end_of_large_log(tmp_path: Path) -> None:
+    """review #2: 成功時も全文を読み込んでいた（progress 出力でログは巨大に
+    なり得る）。末尾のみをシークして読むこと・切り詰め印が付くことを固定。"""
+    log = tmp_path / "big.log"
+    log.write_text("A" * 200_000 + "END_MARKER", encoding="utf-8")
+    out = r5b.read_tail(log)
+    assert out.endswith("END_MARKER")
+    assert len(out) < 2_000
+    assert "省略" in out
+    # 読めないパスでも例外を投げない（診断の付随処理で二次障害を起こさない）
+    assert r5b.read_tail(tmp_path / "missing.log") == ""
+
+
+def test_collect_salvage_artifacts_puts_command_logs_last(tmp_path: Path) -> None:
+    """review #4: 予算/wall-clock 枯渇時に先に押し出すべきは checkpoint。
+    コマンドログは末尾に積む。"""
+    r5b.set_log_dir(tmp_path / "cmdlogs")
+    try:
+        for i in range(5):
+            (tmp_path / "cmdlogs" / f"stage{i}.log").write_text("x", encoding="utf-8")
+        run5_raw = tmp_path / "run5_raw"
+        run5_raw.mkdir()
+        (run5_raw / "assembly_manifest.json").write_bytes(b"{}")
+        ckpt_dir = tmp_path / "DiffSinger" / "checkpoints" / r5b.EXP_NAME_PHASE_B
+        ckpt_dir.mkdir(parents=True)
+        (ckpt_dir / "model_ckpt_steps_40000.ckpt").write_bytes(b"ckpt")
+
+        artifacts = r5b.collect_salvage_artifacts(run5_raw, tmp_path / "DiffSinger")
+        names = [p.name for p in artifacts]
+        ckpt_idx = names.index("model_ckpt_steps_40000.ckpt")
+        first_log_idx = min(i for i, n in enumerate(names) if n.endswith(".log"))
+        assert ckpt_idx < first_log_idx, f"checkpoint はログより先に push する: {names}"
+    finally:
+        r5b._LOG_DIR = None
