@@ -2,14 +2,15 @@
 
 ## Phase
 
-2026-08-17、**VoiceGenesis foundry が S0→S1→S2 を完走し PR #262/#263/#264 で main 編入**: S1（P2-PoC・リツ+PJS 2 話者統合学習・3 run 総費用 $5 弱）は fp16/bf16 発散 2 回を finetune 機構+LR 半減の run3 で克服して 40K 完走、**S1 耳ゲート 5 判定ポイント全クリア**（F1.x の構造病=接合ノイズが自前学習に不在＝方式転換の核心仮説を実証）。S2（工房一周）は spk_embed 補間 Genome 10 体をブラインド耳ゲート 3 バッチで判定し**「第三の声」実在 2 例**・「誰でもない×破綻なし」0/10 → backfill 処方箋（**D3=F1.4 レンダのリツ歌唱合成データ + BigVGAN v2 44kHz 差し替え**）確定（正本 = `voice_genesis/foundry/results_s1/s1_record_2026-08-15.md` / `results_s2/s2_record_2026-08-16.md`）。第 3 ドナー（User 本人・license-clean）の積み立て収録 17 本（T0×2/T1×5/T2×10）を受領検査済み=全て「使える」・音域は既存 2 ドナー比約 1 オクターブ低（補間三角形が大きく開く配置）。#264 の Codex レビューは R31/85 件を実害基準カットオフ+同型穴ファミリー終端 8 系列で処理（intake.py は flock 直列化・台帳 4 階層検証・封じ込め・原子公開で要塞化済み）。svp_rpe 本線は 08-14 時点から不変（M2e closeout 済・Intent Graph frontier=`intent.ai_score`）。**次の主戦線 = (1) VG run 4 設計（D3+BigVGAN+第 3 話者投入の同時/分離判断・User 着手指示待ち）、(2) 第 3 ドナー 17 本の正式 intake、(3) svp_rpe 側は M2e §12 User 決裁と Intent Graph ループ 1 周目が継続**。
+2026-08-18、**VoiceGenesis S3（run 4）完遂 + VG-E0 + run 5 設計 = PR #265–#268 全マージ**: run 4（第 3 ドナー正式 intake 17 本 + D3 合成教師データ + 3 話者学習 40K・NaN ゼロ・≈$2.95）は耳判定=**日本語破綻 全面改善（交絡あり未実証）/ run3 比ノイズ・音量交絡の品質劣化（実在確定・発生源未帰属=Q7）/ user 第三の声は方向性陽性・確定保留**。LRA 定量と耳の乖離=評価器ギャップとして記録（VG-E1 で「LRA 単独 Gate 禁止」要求事項化）。環境決定論契約 2 件を実測確立し runbook §2.2「4 ゲート」正本化（**ffmpeg BtbN static n6.1.2 pin / numpy SIMD X86_V3 pin**）。VG-E0（進化グラフ run 4 非依存層: voice-genome/0.1・N=5 三角格子 MAP-Elites・オペレータ 5 種・台帳→Archive 信頼連鎖・347 テスト）を #267 で main 編入。run 5 設計 = `DESIGN_S4_run5.md`（#268・Fable セルフレビュー 9 件対応済み）: **単一介入 = D3 話者分離（spk_id v2・d3synth=3）・スクラッチ学習・ablation-by-sequence で Q7 分解・④三角形補間 = VG-E1 第 0 世代・実行 = RunPod API 無人ブートストラップ（クロー引退が User 決定事項・環境 rannpoddo 疎通済み）・予算 cap $8**。user 正規化+T3 は run 6 送り。svp_rpe 本線は 08-14 時点から不変（M2e §12 User 決裁と Intent Graph ループ 1 周目が継続）。**次の主戦線 = (1) run 5 実装（DESIGN_S4 §2 コード変更 5 点 + §3 ブートストラップ + vocoder pin 転記が起動前必須）、(2) run 5 実行→VG-E1、(3) s3_record 未転記残 3 項目の回収**。
 
 ## Next-Issue Queue
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| VG run 4 設計 | D3+BigVGAN+第 3 話者の再学習設計 | P2 | S2 総括の backfill 処方箋（`results_s2/s2_record_2026-08-16.md`）。D3=F1.4 レンダでリツ歌唱合成データ・BigVGAN v2 44kHz（MIT）で商用路開通・第 3 話者（User 音源）を同時投入するか効果切り分けで分離するかは設計判断を先に出す。律速=User 着手指示 |
-| 第 3 ドナー正式 intake | User 音源 17 本の台帳記帳 | P2 | 受領検査済（scratchpad `user_donor/batch1-3`・全て「使える」・sha256 記帳済み。コンテナ揮発前の退避要検討）。intake.py は #264 R10–R30 で要塞化済み。UC-017 のみクリッピング要注意（再録推奨・非ブロッカー）・「あ」「お」の母音判別確信度=中は登録時に User 確認 |
+| run 5 実装 | DESIGN_S4 §2 コード変更 5 点 + §3 無人ブートストラップ | P2 | 正本=`voice_genesis/foundry/DESIGN_S4_run5.md`。assemble 4 話者化（D2/D3 マージサブシステム撤去→バイトコピー経路）・refresh-config-pin v2・gate_synth d3synth 対応・テスト + RunPod 起動スクリプト（4 ゲート→学習→Drive push→自動停止）。**起動前必須=vocoder（nsf_hifigan.onnx）URL+sha256 の repo 転記**（現状クロー報告値のみ）。マシン非依存につき Codex/Claude どちらでも実装可 |
+| s3_record 未転記残 3 項目 | checkpoint sha / 学習 log・TB sha / wav 生成コマンド対応表 | P3 | AI-Drive 退避物からの回収。クロー引退後の回収経路は run 5 の Drive push 経路確立と併せて解決（s3_record §7 の正直会計・費用は概算転記済み実測待ち） |
+| VG-E1 | Probe 合成配線 + 評価軸語彙凍結 + 第 0 世代取り込み | P3 | **run 5 checkpoint 律速**（④三角形補間が第 0 世代を兼ねる・DESIGN_S4 §4）。評価軸=LRA 単独禁止・ノイズ/区間レベル軸必須（run 4 評価器ギャップ）。d_min 校正・VG-E0 §8 の「run 4 判定材料④」文言更新もここで |
 | VG follow-up 11 件 | PR #262/#263 由来のコード修正キュー | P3 | #264 には含めず繰越（#264 本文 Notes for Reviewer 参照）。次の VG 実装 PR で対応 |
 | Intent Graph ループ 1 周目 | frontier=intent.ai_score の E2E 受け入れ条件定義 | P2 | 台帳は PR #256 でマージ済み（31 ノード・`svprpe intent-status`）。frontier が示す次作業=「AI 著述 → 決定論演奏者検収 → Score-level identity（sidecar 会計）」一気通貫デモの受け入れ条件を Design Memo 化。blocked=melody 系 3（m3d 起因・恒久）。台帳更新は PR レビュー経由のみ・claim 起草は一次ソース照合必須（08-10 の 6 件訂正の教訓） |
 | WI3 第 2 トランシェ | 実 Suno P5 ペア + tie 規則 v1 で人間校正を再事前登録 | P2 | 律速=実 Suno 4 take（A1/A2/B1/B2）の音源回収（sha pin のみ・Drive 未回収を #202 で実地確認。#94 方式で回収可）。v1 規則=作品単位同値類+距離マージン（#202 docs §3 の構造的棄権対策）・synth スタイル変換ペア拡充（p10 が唯一の「作品保存×yes」）。事前登録はし直し（事後変更なし） |
@@ -36,8 +37,8 @@
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #268 | run 5 Design Memo（DESIGN_S4: D3 話者分離の単一介入・スクラッチ学習・RunPod API 無人ブートストラップ・④=VG-E1 第 0 世代・cap $8）+ s3_record 費用概算転記（≈$2.95）。Codex 停止につき Fable セルフレビュー初運用（Sonnet 事実照合 6+設計観点 4 → 採用 9/見送り 1: 学習開始点欠落・D3 マージサブシステム撤去規模・素材経路誤りを是正） | 2026-08-18 | VG run 5 設計 |
+| #267 | VG-E0 進化グラフ run 4 非依存層（voice-genome/0.1・N=5 三角格子 25 セル MAP-Elites・オペレータ 5 種決定論・台帳→Archive 一方向信頼連鎖・347 テスト・pytest testpaths 編入）+ s3_record 起草。Codex R1–R17 で採用 30/境界宣言見送り 4・全 51 スレッド返信+resolve・利用上限到達で自然終結 | 2026-08-18 | VG-E0 |
+| #266 | run 4 SIMD pin 改訂（seed=701 の 1 LSB 分岐を AVX-512 無効化実験でバイト再現し X86_V3 正基準化）+ runbook §2.2「4 ゲート」正本化（数値スタック版 pin/SIMD 受け入れ/silent no-op/cache 来歴）。7 コミット・R8 境界打ち切り | 2026-08-17 | VG S3 環境契約 |
+| #265 | S3 run 4 本体: 第 3 ドナー正式 intake（17 本台帳記帳）+ D3 データ工場（registry→生成→convert_d3）+ convert_user + run 4 実行パッケージ（dataset pins + runbook）。R9–R14 処理・R14 で初の境界宣言型カットオフ→終結宣言掲示でマージ | 2026-08-17 | VG S3 |
 | #264 | S1 完了（run1–3 全会計・耳ゲート通過）+ S2 工房一周クローズ（Genome 10 体・「第三の声」2 例・backfill 処方箋 D3+BigVGAN）+ #263 マージ後着弾分対応。マージまでに Codex R12–R31 の 20 ラウンド追加着弾を実害基準カットオフで処理（累計 R31/85 件=採用 82・部分 2・境界宣言見送り 1）。同型穴ファミリー終端 8 系列（単一 read 束縛/自己ハッシュ/truthy/決定論 tmp/開封会計/台帳 4 階層/exporter provenance/rename→記帳窓）・canon 回帰 5 本+実 PJS byte-identity を全ラウンド実測維持。User 判断の打ち切り宣言でマージ | 2026-08-17 | VG S1/S2 closeout |
-| #263 | S0→S1 実装群: s1_dataprep（convert_pjs/convert_ritsu/build_dataset・PJS 287+リツ 456 セグメント・binarize train 733/valid 10）+ s1_gate/gate_synth（sha256 全束縛の 5K/40K ゲート合成）+ S1_GPU_RUNBOOK（実行者非依存・pin 付き）。Codex R1–R16=71 件処理（ph_dur 正規化は R1→R5 の 4 段階訂正履歴・実素材 byte-identity 規律を確立） | 2026-08-16 | VG S1 |
-| #262 | VoiceGenesis foundry 実体化第 1 弾: FOUNDRY_ROADMAP + F1 adapter v0（donor_bank/consonants ほか）+ P0 reference dataset + fixed6 耳判定記帳=F1.x 接合改善反復を終端し S0（自前推論チェーン検分）へ移行 | 2026-08-16 | VG F1.x→S0 |
-| #261 | feat: voice_genesis 仮想検証プログラム（harness/proto1/singer 3 層・152 ファイル・約 44k 行）を自己完結サブモジュールとして追加 — 本体 import 依存ゼロ・WAV 非同梱（sha256 検証可）・テスト 255 passed。Codex 16 ラウンド 41 指摘=採用 40/境界宣言 1（filelock プロセス間直列化 / plausibility 欠測照合 / results_final 正式再生成 / quick_s5 完全証拠要求 ほか）。m2-harness timeout cancelled は main 既存事象と裁定しコメント済みのまま User マージ | 2026-08-14 | voice_genesis |
-| #260 | docs(m2e): r7 完了 — census 1280/1280 の生データ + 破断曲線の dated 記録（M2e closeout）。膝=0dB〜−6dB 間・主因=voicing recall・stem 4 点全て direct 超え・昇格宣言なし。Codex P2×3 全採用（逸脱台帳 §6 正本新設 / 正典 4 面同期 / README 現況文掃討終端）。intent graph: dominance_break_curve→verified | 2026-08-14 | M2e closeout |
