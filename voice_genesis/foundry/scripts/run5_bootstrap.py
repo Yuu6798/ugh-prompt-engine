@@ -475,6 +475,30 @@ def guard_user_sources_size(root: Path) -> Tuple[int, int]:
     return len(files), total
 
 
+def plan_drive_id_fetch(listing_json: str) -> List[Tuple[str, str]]:
+    """`rclone lsjson --files-only` の出力から `[(file_id, local_name), ...]` を
+    決定論的に組み立てる（ID 昇順）。
+
+    **なぜ ID 指定が要るか**（2026-08-18 実地で確定）: Google Drive は同一
+    フォルダ内に**同じ表示名のファイルを複数持てる**（ID 管理のため）。録音
+    ファイル名が重複していると `rclone copy`（名前ベース）はローカル FS の
+    名前衝突を避けるため
+    `NOTICE: <name>: Duplicate object found in source - ignoring` として
+    2 本目以降を**黙って落とす** — run 5 三度目の起動は 17 本中 10 本しか
+    Pod に届かず、7 本が「中身が一致しない」として fail-closed した。
+    サーバ側 hash 一覧（`rclone hashsum`）では 17/17 見えるため、コピー経路を
+    通さない検証では発見できない穴だった。
+
+    ローカル名は衝突しないよう連番を前置する（照合は中身の sha256 で行うため
+    名前自体に意味は無い — `index_files_by_sha256` 参照）。"""
+    entries = json.loads(listing_json)
+    plan: List[Tuple[str, str]] = []
+    for i, entry in enumerate(sorted(entries, key=lambda e: e["ID"])):
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", entry.get("Name", ""))[-60:] or "file"
+        plan.append((entry["ID"], f"{i:03d}_{safe}"))
+    return plan
+
+
 def index_files_by_sha256(root: Path) -> Dict[str, List[Path]]:
     """`root` 配下（再帰）の全ファイルを `{sha256: [paths]}` で索引する。
     user 宅録原本の特定に使う（ファイル名非依存 — 台帳 `source_filename` は
@@ -959,10 +983,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                      label="materials/user-sources-archive")
                 _extract_archive(user_archive, user_src_dir)
             else:
-                _run(["rclone", "--config", rclone_conf, "copy",
-                      "run5drive:user_sources", user_src_dir,
-                      "--drive-root-folder-id", drive_folder_id],
-                     label="materials/user-sources-rclone")
+                # 名前ベースの `rclone copy` は Drive の同名重複を黙って落とす
+                # （§ `plan_drive_id_fetch` docstring）。lsjson で ID を列挙し、
+                # **1 本ずつ ID 指定で**取得する。
+                listing = subprocess.run(
+                    ["rclone", "--config", str(rclone_conf), "lsjson",
+                     "--files-only", "run5drive:user_sources",
+                     "--drive-root-folder-id", drive_folder_id],
+                    capture_output=True, text=True, check=True, timeout=300,
+                ).stdout
+                fetch_plan = plan_drive_id_fetch(listing)
+                print(f"| run5_bootstrap: user_sources = {len(fetch_plan)} file(s) "
+                      "by Drive ID (名前重複に非依存)", flush=True)
+                user_src_dir.mkdir(parents=True, exist_ok=True)
+                for file_id, local_name in fetch_plan:
+                    _run(["rclone", "--config", rclone_conf, "backend", "copyid",
+                          "run5drive:", file_id, user_src_dir / local_name],
+                         label="materials/user-sources-rclone")
 
             # 展開 + ffmpeg PATH 先頭化 + libavformat 60.16.100 実測
             _extract_archive(ritsu_zip, work / "ritsu_extracted")

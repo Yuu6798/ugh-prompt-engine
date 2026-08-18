@@ -756,3 +756,45 @@ def test_collect_salvage_artifacts_puts_command_logs_last(tmp_path: Path) -> Non
         assert ckpt_idx < first_log_idx, f"checkpoint はログより先に push する: {names}"
     finally:
         r5b._LOG_DIR = None
+
+
+# --- Drive の同名重複対策（ID 指定 fetch・2026-08-18 run 5 三度目の停止） -----
+
+
+_LSJSON_WITH_DUPLICATE_NAMES = json.dumps([
+    {"ID": "1bbb", "Name": "8月17日（午前0-29）.m4a のコピー", "Size": 100},
+    {"ID": "1aaa", "Name": "8月17日（午前0-29）.m4a のコピー", "Size": 101},
+    {"ID": "1ccc", "Name": "8月17日（午前0-18）.m4a のコピー", "Size": 102},
+])
+
+
+def test_plan_drive_id_fetch_gives_unique_local_names_for_duplicate_drive_names() -> None:
+    """Drive は同一フォルダに同名ファイルを複数持てる。名前ベースの
+    `rclone copy` は 2 本目以降を "Duplicate object found in source - ignoring"
+    で黙って落とし、run 5 三度目の起動は 17 本中 10 本しか届かず fail-closed
+    した。ID 指定なら全件に一意なローカル名が割り当たることを固定する。"""
+    plan = r5b.plan_drive_id_fetch(_LSJSON_WITH_DUPLICATE_NAMES)
+    assert len(plan) == 3
+    ids = [file_id for file_id, _ in plan]
+    names = [local for _, local in plan]
+    assert ids == ["1aaa", "1bbb", "1ccc"]  # ID 昇順で決定論
+    assert len(set(names)) == 3, f"ローカル名が衝突している: {names}"
+    assert all(n.startswith(f"{i:03d}_") for i, n in enumerate(names))
+
+
+def test_plan_drive_id_fetch_sanitizes_and_handles_edge_names() -> None:
+    listing = json.dumps([
+        {"ID": "z", "Name": "a/b\\c:*?.m4a"},
+        {"ID": "y", "Name": ""},
+        {"ID": "x", "Name": "x" * 200 + "_TAILNAME.m4a"},
+    ])
+    plan = r5b.plan_drive_id_fetch(listing)
+    names = [n for _, n in plan]
+    assert all("/" not in n and "\\" not in n for n in names)
+    assert any(n.endswith("file") for n in names)      # 空名のフォールバック
+    assert all(len(n) <= 4 + 60 for n in names)        # 連番 + 60 字上限
+    assert any("TAILNAME" in n for n in names)         # 末尾側を残す
+
+
+def test_plan_drive_id_fetch_empty_listing() -> None:
+    assert r5b.plan_drive_id_fetch("[]") == []

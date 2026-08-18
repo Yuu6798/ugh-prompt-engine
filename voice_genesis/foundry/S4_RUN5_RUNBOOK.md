@@ -125,6 +125,13 @@ RTX 3090 Community $0.22/h・containerDiskInGb 60）を踏襲する。起動コ�
   達すると HTML の "Quota exceeded" を返して失敗する — run 5 の二度目の起動が
   これで停止した（1 度目は上限到達前で成功しており、**再現性の無い停止**として
   現れる点に注意）。認証済み経路で sha256 一致を実測確認済み
+- **user_sources は Drive の file ID 指定で 1 本ずつ取る**（`lsjson` で列挙 →
+  `backend copyid`）。Drive は同一フォルダに**同じ表示名のファイルを複数**
+  持てるため、名前ベースの `rclone copy` は 2 本目以降を
+  `Duplicate object found in source - ignoring` として黙って落とす — run 5
+  三度目の起動は 17 本中 10 本しか Pod に届かず fail-closed した。
+  **注意: `rclone hashsum`（サーバ側 hash 一覧）では 17/17 見えるため、
+  コピー経路を通さない事前検証ではこの穴を発見できない**
 - 外部コマンドの出力は `<work>/cmdlogs/<stage>.log` に残り、失敗時は末尾が
   `failure.status.json` の detail に載る + ログ本体も salvage で Drive へ退避
   される（無人 Pod は人が入れないため、証跡はその場で残すしかない）
