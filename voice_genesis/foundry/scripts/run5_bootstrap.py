@@ -182,7 +182,7 @@ NUMERIC_STACK_PIN = (
 # ffmpeg 環境契約 1（s3_record 2026-08-17）: 44.1kHz 変換バイトは libavformat
 # 60.16.100（6.1.x）に依存する。
 FFMPEG_LIBAVFORMAT_PIN = (60, 16, 100)
-# `ffmpeg -version` はライブラリ版を `%d.%3d.%3d` で桁揃えして印字するため、
+# `ffmpeg -version` はライブラリ版を `%2d.%3d.%3d` で桁揃えして印字するため、
 # 実出力は `libavformat    60. 16.100 / 60. 16.100` のように **ドットの後に
 # 空白が入る**（2026-08-18 実測）。素朴な部分文字列照合（`"60.16.100" in out`）は
 # 構造的に成立せず、**run 5 初回起動はこれで fail-closed 停止した** — pin も
@@ -198,6 +198,21 @@ def parse_libavformat_version(version_output: str) -> Optional[Tuple[int, int, i
     if m is None:
         return None
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def summarize_ffmpeg_version(version_output: str, max_chars: int = 800) -> str:
+    """`ffmpeg -version` 出力から診断に要る行だけを抜き出す（先頭の
+    banner 行 + `lib*` の版一覧）。`configuration:` 行は 2KB 級で
+    heartbeat detail を埋め尽くすため落とす。
+
+    review（PR#271 セルフレビュー #1）: 版不一致で停止すると無人 Pod は
+    salvage → self-stop まで進んで人が入れない。エラーに parsed 値だけを
+    載せると「何が出ていたのか」が失われ、本コミットが直したのと同じ
+    証跡ゼロの停止になる — 実出力の要約を必ず同梱する。"""
+    lines = version_output.splitlines()
+    kept = [ln for ln in lines[:1]] + [ln for ln in lines if ln.lstrip().startswith("lib")]
+    text = "\n".join(kept) if kept else version_output
+    return text[:max_chars]
 
 
 class PinPendingError(RuntimeError):
@@ -872,6 +887,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 raise StageFailure(
                     f"ffmpeg static build does not report libavformat {expected} "
                     f"(parsed={actual_libavformat}, 環境契約 1・s3_record 2026-08-17)"
+                    f"\n--- ffmpeg -version (抜粋) ---\n"
+                    f"{summarize_ffmpeg_version(version_out)}"
                 )
 
             # user 原本 17/17 照合（source_sha256・台帳は改変しない。取得は

@@ -42,7 +42,7 @@
       "provenance": "強（当方実測）: Fable セッション実測が起源（run 4 前の 40/40 バイト再現検証 = scratchpad ffmpeg_static_verify/RESULT.md。tarball 実体を 2026-08-18 に sha256 再計算で一致再確認）。加えて本転記時（2026-08-18・run 5 実装セッション）に上記 URL から独立ダウンロードし、tarball sha256 / size / bin/ffmpeg sha256 / libavformat 60.16.100 の 4 点一致を再実測済み。",
       "url_note": "URL は日付固定 autobuild タグ（恒久リリース）。rolling alias（latest 等）経由では到達できないのが正常。",
       "acceptance": "tarball sha256 一致 + 展開 bin/ffmpeg sha256 一致 + `ffmpeg -version` の libavformat が 60.16.100 であること + D3 再生成 pin 照合 40/40（run4_dataset_pins.json d3.*）が最終ゲート",
-      "version_check_note": "`ffmpeg -version` はライブラリ版を `%d.%3d.%3d` で桁揃えするため実出力は `libavformat    60. 16.100 / 60. 16.100`（ドットの後に空白）。部分文字列 \"60.16.100\" は出力に存在しない — bootstrap は parse_libavformat_version で数値タプル比較する（2026-08-18: 素朴な部分文字列照合により run 5 初回起動が誤 fail-closed 停止した実地の罠）"
+      "version_check_note": "`ffmpeg -version` はライブラリ版を `%2d.%3d.%3d`（major も空白詰めされる） で桁揃えするため実出力は `libavformat    60. 16.100 / 60. 16.100`（ドットの後に空白）。部分文字列 \"60.16.100\" は出力に存在しない — bootstrap は parse_libavformat_version で数値タプル比較する（2026-08-18: 素朴な部分文字列照合により run 5 初回起動が誤 fail-closed 停止した実地の罠）"
     },
     "vocoder_pc_nsf_hifigan": {
       "description": "pc_nsf_hifigan（openvpi/vocoders 公開リリース・run 4 学習で使用実績のある vocoder checkpoint）。DiffSinger 学習側の vocoder（判定材料合成のローカル ONNX vocoder とは別物 — gate_synth.py の nsf_hifigan.onnx は S1 以来のローカル資産）",

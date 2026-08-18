@@ -577,14 +577,19 @@ def test_main_with_env_but_pending_pins_fails_closed(
 
 # --- ffmpeg libavformat 版パース（run 5 初回起動の fail-closed 原因） ---------
 
-# 実測 fixture（2026-08-18・BtbN n6.1.2 static を実際に展開して実行した出力の
-# 逐語。ffmpeg は `%d.%3d.%3d` で桁揃えするため 16 が " 16" になる）。
+# 実測 fixture（2026-08-18・BtbN n6.1.2 static を展開して `ffmpeg -version` を
+# 実行した出力から、**banner 行と lib 行のみを逐語で抜粋**したもの。長大な
+# `configuration:` 行（2KB 級）と `built with` 行は本テストの対象外につき省略）。
+# ffmpeg は `%2d.%3d.%3d` で桁揃えするため 16 が " 16"、単桁 major は " 9" になる。
 _REAL_FFMPEG_VERSION_OUTPUT = """ffmpeg version n6.1.2-8-gf00f71f590-20240930 Copyright (c) 2000-2024 the FFmpeg developers
-  built with gcc 14.2.0 (crosstool-NG 1.26.0.106_a68a2ea)
-  libavutil      58. 29.100 / 58. 29.100
-  libavcodec     60. 31.102 / 60. 31.102
-  libavformat    60. 16.100 / 60. 16.100
-  libavdevice    60.  3.100 / 60.  3.100
+libavutil      58. 29.100 / 58. 29.100
+libavcodec     60. 31.102 / 60. 31.102
+libavformat    60. 16.100 / 60. 16.100
+libavdevice    60.  3.100 / 60.  3.100
+libavfilter     9. 12.100 /  9. 12.100
+libswscale      7.  5.100 /  7.  5.100
+libswresample   4. 12.100 /  4. 12.100
+libpostproc    57.  3.100 / 57.  3.100
 """
 
 
@@ -609,3 +614,29 @@ def test_parse_libavformat_version_handles_unpadded_and_missing() -> None:
     # 該当行が無ければ None（= pin 不一致として fail-closed される）
     assert r5b.parse_libavformat_version("ffmpeg version 4.4.2\n libavcodec 58.\n") is None
     assert r5b.parse_libavformat_version("") is None
+
+
+def test_parse_libavformat_version_tolerates_single_digit_major_padding() -> None:
+    """`%2d` により単桁 major は " 9" と空白詰めされる（実測 fixture の
+    libavfilter 行が実例）。libavformat 以外の行に引っ張られないことも確認。"""
+    assert r5b.parse_libavformat_version("libavfilter     9. 12.100 /  9. 12.100\n") is None
+    assert r5b.parse_libavformat_version(
+        "libavformat     9. 12.100 /  9. 12.100\n"
+    ) == (9, 12, 100)
+
+
+def test_summarize_ffmpeg_version_keeps_diagnosis_drops_configuration() -> None:
+    """review PR#271 セルフレビュー #1: 版不一致で無人 Pod が停止したとき、
+    heartbeat に「何が出ていたか」を残す。banner + lib 行は残し、2KB 級の
+    `configuration:` 行は落とす。"""
+    raw = (
+        "ffmpeg version 4.4.2-0ubuntu0 Copyright (c) 2000-2021\n"
+        "  built with gcc 11\n"
+        "  configuration: " + "--enable-x " * 500 + "\n"
+        "  libavformat    58. 76.100 / 58. 76.100\n"
+    )
+    out = r5b.summarize_ffmpeg_version(raw)
+    assert "ffmpeg version 4.4.2" in out
+    assert "libavformat    58. 76.100" in out
+    assert "--enable-x" not in out
+    assert len(out) <= 800
