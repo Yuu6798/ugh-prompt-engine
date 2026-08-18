@@ -275,6 +275,21 @@ def compute_genome_id(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:_GENOME_ID_LEN]
 
 
+def _require_nonblank_str(value: Any, field: str) -> str:
+    """非空文字列であることを検証する（`str.strip()` 後が空になる空白のみの
+    値 — 例 `"   "` — を `not value` の truthiness 判定だけでは弾けない抜け穴
+    を塞ぐ。PR #267 Codex R13 指摘2: EvaluationRecord の `probe_set` /
+    `evaluator.version` / `blind_batch`（human 時）と HackRecord の `symptom`
+    / `evaluator_version` / `discovered_by` は同一の「参照文字列ファミリー」
+    として builder/loader 双方でこの単一実装を共有する。`_validate_axes()`
+    と同様、格納する値自体は元の文字列のまま返す（trim しない — 空白のみ値
+    の拒否のみを行う）。
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise GenomeValidationError(f"{field} must be a non-empty string, got {value!r}")
+    return value
+
+
 def _validate_genome_id_format(value: Any, field: str) -> str:
     if not isinstance(value, str):
         raise GenomeValidationError(f"{field} must be a string, got {value!r}")
@@ -883,29 +898,26 @@ def build_evaluation_record(
     verdict: Optional[str] = None,
 ) -> EvaluationRecord:
     _validate_genome_id_format(genome_id, "genome_id")
-    if not isinstance(probe_set, str) or not probe_set:
-        raise GenomeValidationError(f"probe_set must be a non-empty string, got {probe_set!r}")
+    _require_nonblank_str(probe_set, "probe_set")
     if evaluator.kind not in EVALUATOR_KINDS:
         raise GenomeValidationError(f"evaluator.kind must be one of {EVALUATOR_KINDS}, got {evaluator.kind!r}")
-    if not isinstance(evaluator.version, str) or not evaluator.version:
-        raise GenomeValidationError(f"evaluator.version must be a non-empty string, got {evaluator.version!r}")
+    _require_nonblank_str(evaluator.version, "evaluator.version")
     validated_axes = _validate_axes(axes)
     if blind_batch is not None and not isinstance(blind_batch, str):
         raise GenomeValidationError(f"blind_batch must be a string or null, got {blind_batch!r}")
     # Codex 指摘A: blind_batch は human 評価者専用のフィールド（training/hidden
     # は機械評価者のため blind_batch という概念自体が成立しない）。kind が
-    # human 以外なら null 必須、human なら与える場合は非空文字列を要求する。
+    # human 以外なら null 必須、human なら与える場合は非空文字列を要求する
+    # （空白のみ文字列も PR #267 R13 指摘2により拒否対象 — `_require_nonblank_str`
+    # は strip 後空を弾く）。
     if evaluator.kind != "human":
         if blind_batch is not None:
             raise GenomeValidationError(
                 f"blind_batch must be null when evaluator.kind={evaluator.kind!r} "
                 "(blind_batch is reserved for evaluator.kind='human')"
             )
-    elif blind_batch is not None and blind_batch == "":
-        raise GenomeValidationError(
-            "blind_batch must be a non-empty string when evaluator.kind='human' (empty string rejected), "
-            f"got {blind_batch!r}"
-        )
+    elif blind_batch is not None:
+        _require_nonblank_str(blind_batch, "blind_batch")
     if verdict is not None and verdict not in VERDICTS:
         raise GenomeValidationError(f"verdict must be one of {VERDICTS} or null, got {verdict!r}")
     return EvaluationRecord(
@@ -943,8 +955,7 @@ def evaluation_record_from_dict(data: Any) -> EvaluationRecord:
     genome_id = _validate_genome_id_format(data["genome_id"], "genome_id")
 
     probe_set = data["probe_set"]
-    if not isinstance(probe_set, str) or not probe_set:
-        raise GenomeValidationError(f"probe_set must be a non-empty string, got {probe_set!r}")
+    _require_nonblank_str(probe_set, "probe_set")
 
     evaluator_raw = data["evaluator"]
     if not isinstance(evaluator_raw, dict):
@@ -959,8 +970,7 @@ def evaluation_record_from_dict(data: Any) -> EvaluationRecord:
     if kind not in EVALUATOR_KINDS:
         raise GenomeValidationError(f"evaluator.kind must be one of {EVALUATOR_KINDS}, got {kind!r}")
     version = evaluator_raw["version"]
-    if not isinstance(version, str) or not version:
-        raise GenomeValidationError(f"evaluator.version must be a non-empty string, got {version!r}")
+    _require_nonblank_str(version, "evaluator.version")
     evaluator = Evaluator(kind=kind, version=version)
 
     axes_raw = data["axes"]
@@ -982,11 +992,8 @@ def evaluation_record_from_dict(data: Any) -> EvaluationRecord:
                 f"blind_batch must be null when evaluator.kind={kind!r} "
                 "(blind_batch is reserved for evaluator.kind='human')"
             )
-    elif blind_batch is not None and blind_batch == "":
-        raise GenomeValidationError(
-            "blind_batch must be a non-empty string when evaluator.kind='human' (empty string rejected), "
-            f"got {blind_batch!r}"
-        )
+    elif blind_batch is not None:
+        _require_nonblank_str(blind_batch, "blind_batch")
 
     verdict = data["verdict"]
     if verdict is not None and verdict not in VERDICTS:
@@ -1027,12 +1034,9 @@ def build_hack_record(
     disposition: str = "retained",
 ) -> HackRecord:
     _validate_genome_id_format(genome_id, "genome_id")
-    if not isinstance(symptom, str) or not symptom:
-        raise GenomeValidationError(f"symptom must be a non-empty string, got {symptom!r}")
-    if not isinstance(evaluator_version, str) or not evaluator_version:
-        raise GenomeValidationError(f"evaluator_version must be a non-empty string, got {evaluator_version!r}")
-    if not isinstance(discovered_by, str) or not discovered_by:
-        raise GenomeValidationError(f"discovered_by must be a non-empty string, got {discovered_by!r}")
+    _require_nonblank_str(symptom, "symptom")
+    _require_nonblank_str(evaluator_version, "evaluator_version")
+    _require_nonblank_str(discovered_by, "discovered_by")
     if disposition not in HACK_DISPOSITIONS:
         raise GenomeValidationError(f"disposition must be one of {HACK_DISPOSITIONS}, got {disposition!r}")
     return HackRecord(
@@ -1069,16 +1073,13 @@ def hack_record_from_dict(data: Any) -> HackRecord:
     genome_id = _validate_genome_id_format(data["genome_id"], "genome_id")
 
     symptom = data["symptom"]
-    if not isinstance(symptom, str) or not symptom:
-        raise GenomeValidationError(f"symptom must be a non-empty string, got {symptom!r}")
+    _require_nonblank_str(symptom, "symptom")
 
     evaluator_version = data["evaluator_version"]
-    if not isinstance(evaluator_version, str) or not evaluator_version:
-        raise GenomeValidationError(f"evaluator_version must be a non-empty string, got {evaluator_version!r}")
+    _require_nonblank_str(evaluator_version, "evaluator_version")
 
     discovered_by = data["discovered_by"]
-    if not isinstance(discovered_by, str) or not discovered_by:
-        raise GenomeValidationError(f"discovered_by must be a non-empty string, got {discovered_by!r}")
+    _require_nonblank_str(discovered_by, "discovered_by")
 
     disposition = data["disposition"]
     if disposition not in HACK_DISPOSITIONS:

@@ -894,6 +894,97 @@ def test_evaluation_record_from_dict_rejects_empty_blind_batch_for_human_kind() 
         models.evaluation_record_from_dict(d)
 
 
+# --- PR #267 Codex R13 指摘2（P2）: 空白のみ参照文字列の fail-closed 拒否 ---
+# probe_set / evaluator.version / blind_batch（human 時）は従来 truthiness
+# 判定（`not value`）のみで、strip 後に空になる空白のみ文字列（`"   "` 等）
+# を素通りしていた。`_require_nonblank_str()` 共有実装で builder/loader
+# 双方に strip 後非空検証を適用する（axes キー・HackRecord の同種フィールド
+# と同じ「参照文字列ファミリー」）。
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_build_evaluation_record_rejects_whitespace_only_probe_set(whitespace_only: str) -> None:
+    with pytest.raises(models.GenomeValidationError, match="probe_set must be a non-empty string"):
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set=whitespace_only,
+            evaluator=models.Evaluator(kind="training", version="v0"),
+            axes={"naturalness": 0.8},
+        )
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_evaluation_record_from_dict_rejects_whitespace_only_probe_set(whitespace_only: str) -> None:
+    d = models.evaluation_record_to_dict(_base_eval_record())
+    d["probe_set"] = whitespace_only
+    with pytest.raises(models.GenomeValidationError, match="probe_set must be a non-empty string"):
+        models.evaluation_record_from_dict(d)
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_build_evaluation_record_rejects_whitespace_only_evaluator_version(whitespace_only: str) -> None:
+    with pytest.raises(models.GenomeValidationError, match="evaluator.version must be a non-empty string"):
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set="d3-probe/0.1",
+            evaluator=models.Evaluator(kind="training", version=whitespace_only),
+            axes={"naturalness": 0.8},
+        )
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_evaluation_record_from_dict_rejects_whitespace_only_evaluator_version(whitespace_only: str) -> None:
+    d = models.evaluation_record_to_dict(_base_eval_record())
+    d["evaluator"]["version"] = whitespace_only
+    with pytest.raises(models.GenomeValidationError, match="evaluator.version must be a non-empty string"):
+        models.evaluation_record_from_dict(d)
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_build_evaluation_record_rejects_whitespace_only_blind_batch_for_human_kind(
+    whitespace_only: str,
+) -> None:
+    with pytest.raises(models.GenomeValidationError, match="blind_batch must be a non-empty string"):
+        models.build_evaluation_record(
+            genome_id="a" * 16, probe_set="d3-probe/0.1",
+            evaluator=models.Evaluator(kind="human", version="v0"),
+            axes={"naturalness": 0.8}, blind_batch=whitespace_only,
+        )
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_evaluation_record_from_dict_rejects_whitespace_only_blind_batch_for_human_kind(
+    whitespace_only: str,
+) -> None:
+    d = models.evaluation_record_to_dict(_base_eval_record())
+    d["evaluator"]["kind"] = "human"
+    d["blind_batch"] = whitespace_only
+    with pytest.raises(models.GenomeValidationError, match="blind_batch must be a non-empty string"):
+        models.evaluation_record_from_dict(d)
+
+
 # --- HackRecord -------------------------------------------------------------
 
 
@@ -926,4 +1017,85 @@ def test_hack_record_rejects_unknown_top_level_key() -> None:
     d = models.hack_record_to_dict(_base_hack_record())
     d["extra"] = 1
     with pytest.raises(models.GenomeValidationError, match="unknown key"):
+        models.hack_record_from_dict(d)
+
+
+# --- PR #267 Codex R13 指摘2（P2）: HackRecord の空白のみ参照文字列 ---------
+# symptom / evaluator_version / discovered_by も EvaluationRecord の
+# probe_set/evaluator.version/blind_batch と同じ参照文字列ファミリーとして
+# `_require_nonblank_str()` を共有する。
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_build_hack_record_rejects_whitespace_only_symptom(whitespace_only: str) -> None:
+    with pytest.raises(models.GenomeValidationError, match="symptom must be a non-empty string"):
+        models.build_hack_record(
+            genome_id="a" * 16, symptom=whitespace_only, evaluator_version="v0",
+            discovered_by="blind_batch_3",
+        )
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_hack_record_from_dict_rejects_whitespace_only_symptom(whitespace_only: str) -> None:
+    d = models.hack_record_to_dict(_base_hack_record())
+    d["symptom"] = whitespace_only
+    with pytest.raises(models.GenomeValidationError, match="symptom must be a non-empty string"):
+        models.hack_record_from_dict(d)
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_build_hack_record_rejects_whitespace_only_evaluator_version(whitespace_only: str) -> None:
+    with pytest.raises(models.GenomeValidationError, match="evaluator_version must be a non-empty string"):
+        models.build_hack_record(
+            genome_id="a" * 16, symptom="spectral spike exploit", evaluator_version=whitespace_only,
+            discovered_by="blind_batch_3",
+        )
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_hack_record_from_dict_rejects_whitespace_only_evaluator_version(whitespace_only: str) -> None:
+    d = models.hack_record_to_dict(_base_hack_record())
+    d["evaluator_version"] = whitespace_only
+    with pytest.raises(models.GenomeValidationError, match="evaluator_version must be a non-empty string"):
+        models.hack_record_from_dict(d)
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_build_hack_record_rejects_whitespace_only_discovered_by(whitespace_only: str) -> None:
+    with pytest.raises(models.GenomeValidationError, match="discovered_by must be a non-empty string"):
+        models.build_hack_record(
+            genome_id="a" * 16, symptom="spectral spike exploit", evaluator_version="v0",
+            discovered_by=whitespace_only,
+        )
+
+
+@pytest.mark.parametrize(
+    "whitespace_only",
+    [" ", "   ", "\t", "\n", "　", " \t　 "],
+    ids=["single-space", "spaces", "tab", "newline", "fullwidth-space", "mixed"],
+)
+def test_hack_record_from_dict_rejects_whitespace_only_discovered_by(whitespace_only: str) -> None:
+    d = models.hack_record_to_dict(_base_hack_record())
+    d["discovered_by"] = whitespace_only
+    with pytest.raises(models.GenomeValidationError, match="discovered_by must be a non-empty string"):
         models.hack_record_from_dict(d)
