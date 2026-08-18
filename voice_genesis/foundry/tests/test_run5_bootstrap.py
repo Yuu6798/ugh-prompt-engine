@@ -405,6 +405,30 @@ def test_collect_salvage_artifacts_empty_when_nothing_exists(tmp_path: Path) -> 
     assert r5b.collect_salvage_artifacts(tmp_path / "nope", tmp_path / "nope2") == []
 
 
+# --- user 原本の sha256 索引（ファイル名非依存の特定） -------------------------
+
+
+def test_index_files_by_sha256_is_filename_independent(tmp_path: Path) -> None:
+    """台帳 `source_filename`（intake 正規化名）と Drive 表示名（日本語日付名 +
+    「〜 のコピー」）は一致しないため、原本の特定は中身の sha256 で行う。
+    リネーム不要・重複コピー耐性の両方を固定する。"""
+    root = tmp_path / "src"
+    (root / "nested").mkdir(parents=True)
+    (root / "8月17日（午前0-18）.m4a のコピー").write_bytes(b"CONTENT-A")
+    (root / "nested" / "適当な別名.m4a").write_bytes(b"CONTENT-B")
+    # 同内容の重複コピー（Drive で 2 回コピーした状況）— どちらか一方に解決
+    (root / "8月17日（午前0-18）.m4a のコピー(1)").write_bytes(b"CONTENT-A")
+
+    index = r5b.index_files_by_sha256(root)
+
+    import hashlib
+    sha_a = hashlib.sha256(b"CONTENT-A").hexdigest()
+    sha_b = hashlib.sha256(b"CONTENT-B").hexdigest()
+    assert set(index) == {sha_a, sha_b}
+    assert index[sha_a].read_bytes() == b"CONTENT-A"
+    assert index[sha_b].name == "適当な別名.m4a"
+
+
 # --- stage 計画 / heartbeat / self-stop --------------------------------------
 
 

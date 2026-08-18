@@ -410,6 +410,20 @@ def milestone_ckpt_sizes(ckpt_dir: Path) -> Dict[int, int]:
     }
 
 
+def index_files_by_sha256(root: Path) -> Dict[str, Path]:
+    """`root` 配下（再帰）の全ファイルを `{sha256: path}` で索引する。
+    user 宅録原本の特定に使う（ファイル名非依存 — 台帳 `source_filename` は
+    intake 正規化名で Drive 表示名と一致せず、Drive コピーは「〜 のコピー」を
+    付けるため、名前照合は構造的に成立しない。中身 hash なら重複コピーにも
+    頑健）。同一 sha が複数あればソート順で先勝ち（同内容につき等価）。"""
+    index: Dict[str, Path] = {}
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        digest = sha256_file(path)
+        if digest not in index:
+            index[digest] = path
+    return index
+
+
 def collect_salvage_artifacts(run5_raw: Path, ds_repo: Path) -> List[Path]:
     """salvage 段で push すべき成果物を**その時点のディスク実態から**収集する
     （review セルフレビュー #4: 旧実装は学習 2 フェーズ完走後にのみ
@@ -780,23 +794,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             # user 原本 17/17 照合（source_sha256・台帳は改変しない。取得は
             # 上の分岐で user_src_dir へ済んでいる — 欠落・取り違えはここで
-            # fail-closed になる）
+            # fail-closed になる）。
+            # ファイル特定は **sha256（中身）で行い、ファイル名には依存しない**
+            # （2026-08-18 是正）: 台帳の `source_filename` は intake 時の正規化名
+            # （`UC-001_80716cf0.mp3` 等）だが、Drive 上の原本は録音時の表示名
+            # （日本語日付名）のままで、さらに Drive のコピー操作は「〜 のコピー」
+            # を付けるため、名前照合は構造的に成立しない。中身の hash が台帳と
+            # 一致するファイルを探す方式なら、リネーム不要・重複コピーにも
+            # 頑健（同一 sha の重複は同内容なのでどれを使っても等価）。
             ledger = json.loads(USER_DONOR_LEDGER_PATH.read_text(encoding="utf-8"))
             ledger_entries = ledger["entries"]
-            source_files = {p.name: p for p in user_src_dir.rglob("*") if p.is_file()}
+            files_by_sha = index_files_by_sha256(user_src_dir)
+            source_paths: Dict[str, Path] = {}
             diffs: List[str] = []
             for entry in ledger_entries:
-                src_name = entry["source_filename"]
-                if src_name not in source_files:
-                    diffs.append(f"user source missing: {src_name}")
-                    continue
-                actual = sha256_file(source_files[src_name])
-                if actual != entry["source_sha256"]:
+                found = files_by_sha.get(entry["source_sha256"])
+                if found is None:
                     diffs.append(
-                        f"user source {src_name}: {actual} != ledger source_sha256"
+                        f"user source missing (no file with sha256 "
+                        f"{entry['source_sha256'][:12]}… = {entry['source_filename']})"
                     )
+                    continue
+                source_paths[entry["card_id"]] = found
             if diffs:
                 raise PinMismatchError(diffs)
+            extras = len(files_by_sha) - len(
+                {e["source_sha256"] for e in ledger_entries} & set(files_by_sha)
+            )
+            print(f"| run5_bootstrap: user sources matched 17/17 by sha256 "
+                  f"({extras} extra file(s) ignored)", flush=True)
             heartbeat.mark("materials", "ok")
 
             # --- stage 4: datasets -----------------------------------------
@@ -827,7 +853,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             for entry in ledger_entries:
                 norm_name = Path(entry["normalized_path"]).name
                 norm_path = user_norm_dir / norm_name
-                _run(["ffmpeg", "-y", "-i", source_files[entry["source_filename"]],
+                _run(["ffmpeg", "-y", "-i", source_paths[entry["card_id"]],
                       "-ac", "1", "-ar", "24000", "-sample_fmt", "s16", norm_path],
                      label=f"datasets/user-normalize/{norm_name}")
                 actual = sha256_file(norm_path)

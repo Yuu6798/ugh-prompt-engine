@@ -48,9 +48,12 @@ vocoder = S1 以来のローカル資産、の 2 系統が別物という整理�
    リンク共有にしない）。URL `https://drive.google.com/drive/folders/<ID>` の
    `<ID>` が `RUN5_DRIVE_FOLDER_ID`
 2. その直下に **`user_sources/`** という名前のサブフォルダを作り、
-   「音楽サンプル」の原本 17 本（`user_donor_ledger.json` の
-   `source_filename` と同名のファイル）をコピーする。ファイル名が台帳と
-   1 本でもずれると bootstrap は 17/17 照合で fail-closed する（安全側）
+   「音楽サンプル」の原本 17 本をコピーする。**ファイル名はそのままでよい**
+   （Drive のコピーが付ける「〜 のコピー」も可・重複コピー混入も可）—
+   bootstrap は中身の sha256 で台帳 `source_sha256` と 17/17 照合して
+   ファイルを特定する（名前非依存。台帳の `source_filename` は intake
+   正規化名で Drive 表示名とは元々一致しない）。台帳のどれかの sha に
+   一致するファイルが 1 本でも見つからなければ fail-closed
 3. **rclone conf（サービスアカウント方式・推奨）**: 無人 Pod からの
    読み書きにはサービスアカウント（SA）が最も簡単で、アクセス範囲が
    「SA に共有したフォルダだけ」に自然に閉じる:
