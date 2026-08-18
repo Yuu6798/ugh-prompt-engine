@@ -1,0 +1,52 @@
+{
+  "schema": "run5-material-pins/0.1",
+  "purpose": "S4 run 5（RunPod API 無人ブートストラップ・DESIGN_S4_run5.md §3.2）の素材搬入 pin 表。scripts/run5_bootstrap.py が preflight で読む。sha256 が null のエントリが 1 件でもあれば bootstrap は素材取得に入らず fail-closed する（PENDING の解消 = 起動前必須の先行タスク）。値の出典は各エントリの source フィールドに明記する（手打ち新規値は置かない）。",
+  "materials": {
+    "ritsu_voicebank_zip": {
+      "description": "波音リツ強連続音 Ver1.5.1（D2 生成の入力 voicebank）",
+      "url": "https://www.canon-voice.com/voice/r73_strong_ren0151.zip",
+      "sha256": "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76",
+      "source": "S1_GPU_RUNBOOK.md §2 素材 1（s1_dataprep/README.md §0 と同一 pin）"
+    },
+    "pjs_corpus_zip": {
+      "description": "PJS corpus ver1.1（D1）。取得は gdown（Google Drive）",
+      "gdown_id": "1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_",
+      "sha256": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",
+      "source": "S1_GPU_RUNBOOK.md §2 素材 2"
+    },
+    "namine_ritsu_diffsinger_zip": {
+      "description": "リツ公式 DiffSinger 配布 zip（dsdur/dsdict.yaml のみ使用）",
+      "url": "https://www.canon-voice.com/voice/NamineRitsu_DiffSinger.zip",
+      "sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+      "source": "S1_GPU_RUNBOOK.md §2 素材 3"
+    },
+    "diffsinger_repo": {
+      "description": "openvpi/DiffSinger（binarize.py / train.py）",
+      "url": "https://github.com/openvpi/DiffSinger.git",
+      "commit": "e2307b1",
+      "source": "S1_GPU_RUNBOOK.md §1 / s1_dataprep/README.md"
+    },
+    "nnsvs_db_converter": {
+      "description": "UtaUtaUtau/nnsvs-db-converter（convert_pjs.py が呼ぶ変換器）",
+      "url": "https://github.com/UtaUtaUtau/nnsvs-db-converter.git",
+      "commit": "185ada6",
+      "source": "S1_GPU_RUNBOOK.md §3"
+    },
+    "ffmpeg_static": {
+      "description": "ffmpeg static n6.1.2（BtbN ビルド・libavformat 60.16.100）。D3 44.1kHz 変換バイトの決定論に必須（s3_record_2026-08-17.md §環境契約 1）",
+      "url": null,
+      "sha256": null,
+      "pending_reason": "run 4 で使用した BtbN tarball の正確な URL + sha256 はクロー側セッションの報告値のみで repo 未転記（BtbN は旧 branch の release alias を保持せず、dated autobuild タグの特定が必要）。User がクロー報告値を転記するまで PENDING。",
+      "acceptance": "tarball sha256 一致 + `ffmpeg -version` が libavformat 60.16.100 を示すこと + D3 再生成 pin 照合 40/40（run4_dataset_pins.json d3.*）が最終ゲート",
+      "source": "s3_record_2026-08-17.md（BtbN static n6.1.2 で 40/40 バイト再現）— 値は未転記"
+    },
+    "vocoder_nsf_hifigan_onnx": {
+      "description": "nsf_hifigan.onnx（openvpi 公開 URL・run 4 と同一の vocoder）。学習には不要だが判定材料合成（gate_synth）に必須",
+      "url": null,
+      "sha256": null,
+      "pending_reason": "run 4 使用時の URL + sha256 はクロー報告値のみで repo 未転記（DESIGN_S4_run5.md §3.2 が起動前必須の先行タスクと指定）。User がクロー報告値を転記するまで PENDING。",
+      "source": "DESIGN_S4_run5.md §3.2 素材表 — 値は未転記"
+    }
+  },
+  "dataset_pins_ref": "run4_dataset_pins.json（D3/user 再生成の照合先。run 5 はデータ内容が run 4 と同一 = DESIGN_S4 §1.1 のため同じ pin を使う）"
+}
