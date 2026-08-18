@@ -179,6 +179,41 @@ NUMERIC_STACK_PIN = (
     "numpy==2.4.6", "scipy==1.17.1", "pyworld==0.3.5", "soundfile==0.14.0",
 )
 
+# ffmpeg 環境契約 1（s3_record 2026-08-17）: 44.1kHz 変換バイトは libavformat
+# 60.16.100（6.1.x）に依存する。
+FFMPEG_LIBAVFORMAT_PIN = (60, 16, 100)
+# `ffmpeg -version` はライブラリ版を `%2d.%3d.%3d` で桁揃えして印字するため、
+# 実出力は `libavformat    60. 16.100 / 60. 16.100` のように **ドットの後に
+# 空白が入る**（2026-08-18 実測）。素朴な部分文字列照合（`"60.16.100" in out`）は
+# 構造的に成立せず、**run 5 初回起動はこれで fail-closed 停止した** — pin も
+# バイナリ（bin/ffmpeg sha256 照合は通過）も正しく、検査文字列だけが誤りだった。
+_LIBAVFORMAT_RE = re.compile(r"libavformat\s+(\d+)\.\s*(\d+)\.\s*(\d+)")
+
+
+def parse_libavformat_version(version_output: str) -> Optional[Tuple[int, int, int]]:
+    """`ffmpeg -version` の出力から libavformat の `(major, minor, micro)` を
+    返す（該当行が無ければ None）。空白揺れに耐える正規表現で読む
+    （§ `_LIBAVFORMAT_RE` のコメント参照）。"""
+    m = _LIBAVFORMAT_RE.search(version_output)
+    if m is None:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def summarize_ffmpeg_version(version_output: str, max_chars: int = 800) -> str:
+    """`ffmpeg -version` 出力から診断に要る行だけを抜き出す（先頭の
+    banner 行 + `lib*` の版一覧）。`configuration:` 行は 2KB 級で
+    heartbeat detail を埋め尽くすため落とす。
+
+    review（PR#271 セルフレビュー #1）: 版不一致で停止すると無人 Pod は
+    salvage → self-stop まで進んで人が入れない。エラーに parsed 値だけを
+    載せると「何が出ていたのか」が失われ、本コミットが直したのと同じ
+    証跡ゼロの停止になる — 実出力の要約を必ず同梱する。"""
+    lines = version_output.splitlines()
+    kept = [ln for ln in lines[:1]] + [ln for ln in lines if ln.lstrip().startswith("lib")]
+    text = "\n".join(kept) if kept else version_output
+    return text[:max_chars]
+
 
 class PinPendingError(RuntimeError):
     """`run5_material_pins.json` に sha256 未転記（null）の素材が残っている
@@ -846,10 +881,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             version_out = subprocess.run(
                 ["ffmpeg", "-version"], capture_output=True, text=True, check=True
             ).stdout
-            if "libavformat" not in version_out or "60.16.100" not in version_out:
+            actual_libavformat = parse_libavformat_version(version_out)
+            if actual_libavformat != FFMPEG_LIBAVFORMAT_PIN:
+                expected = ".".join(str(x) for x in FFMPEG_LIBAVFORMAT_PIN)
                 raise StageFailure(
-                    "ffmpeg static build does not report libavformat 60.16.100 "
-                    "(環境契約 1・s3_record 2026-08-17)"
+                    f"ffmpeg static build does not report libavformat {expected} "
+                    f"(parsed={actual_libavformat}, 環境契約 1・s3_record 2026-08-17)"
+                    f"\n--- ffmpeg -version (抜粋) ---\n"
+                    f"{summarize_ffmpeg_version(version_out)}"
                 )
 
             # user 原本 17/17 照合（source_sha256・台帳は改変しない。取得は

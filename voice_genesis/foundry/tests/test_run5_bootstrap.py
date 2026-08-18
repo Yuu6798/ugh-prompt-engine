@@ -573,3 +573,70 @@ def test_main_with_env_but_pending_pins_fails_closed(
     assert r5b.main(["--work-dir", str(tmp_path / "w")]) == 1
     err = capsys.readouterr().err
     assert "PENDING" in err
+
+
+# --- ffmpeg libavformat 版パース（run 5 初回起動の fail-closed 原因） ---------
+
+# 実測 fixture（2026-08-18・BtbN n6.1.2 static を展開して `ffmpeg -version` を
+# 実行した出力から、**banner 行と lib 行のみを逐語で抜粋**したもの。長大な
+# `configuration:` 行（2KB 級）と `built with` 行は本テストの対象外につき省略）。
+# ffmpeg は `%2d.%3d.%3d` で桁揃えするため 16 が " 16"、単桁 major は " 9" になる。
+_REAL_FFMPEG_VERSION_OUTPUT = """ffmpeg version n6.1.2-8-gf00f71f590-20240930 Copyright (c) 2000-2024 the FFmpeg developers
+libavutil      58. 29.100 / 58. 29.100
+libavcodec     60. 31.102 / 60. 31.102
+libavformat    60. 16.100 / 60. 16.100
+libavdevice    60.  3.100 / 60.  3.100
+libavfilter     9. 12.100 /  9. 12.100
+libswscale      7.  5.100 /  7.  5.100
+libswresample   4. 12.100 /  4. 12.100
+libpostproc    57.  3.100 / 57.  3.100
+"""
+
+
+def test_parse_libavformat_version_on_real_ffmpeg_output() -> None:
+    """run 5 初回起動はここで fail-closed した: 実出力は `libavformat    60. 16.100`
+    と**ドットの後に空白が入る**ため、素朴な `"60.16.100" in out` は構造的に
+    成立しない（pin もバイナリも正しかった）。実測 fixture で回帰を固定する。"""
+    assert r5b.parse_libavformat_version(_REAL_FFMPEG_VERSION_OUTPUT) == (60, 16, 100)
+    assert r5b.parse_libavformat_version(_REAL_FFMPEG_VERSION_OUTPUT) == r5b.FFMPEG_LIBAVFORMAT_PIN
+    # 旧実装が使っていた素朴な部分文字列は実出力に**存在しない**ことも固定する
+    # （この事実こそが初回停止の原因 — 再導入を防ぐ）。
+    assert "60.16.100" not in _REAL_FFMPEG_VERSION_OUTPUT
+
+
+def test_parse_libavformat_version_handles_unpadded_and_missing() -> None:
+    # 桁揃えが不要な値（空白なし）でも同じ結果になる
+    assert r5b.parse_libavformat_version("  libavformat    60.116.100 / 60.116.100\n") == (60, 116, 100)
+    # 別バージョンは pin と不一致として検出できる（7.x 系）
+    other = r5b.parse_libavformat_version("  libavformat    61. 7.100 / 61. 7.100\n")
+    assert other == (61, 7, 100)
+    assert other != r5b.FFMPEG_LIBAVFORMAT_PIN
+    # 該当行が無ければ None（= pin 不一致として fail-closed される）
+    assert r5b.parse_libavformat_version("ffmpeg version 4.4.2\n libavcodec 58.\n") is None
+    assert r5b.parse_libavformat_version("") is None
+
+
+def test_parse_libavformat_version_tolerates_single_digit_major_padding() -> None:
+    """`%2d` により単桁 major は " 9" と空白詰めされる（実測 fixture の
+    libavfilter 行が実例）。libavformat 以外の行に引っ張られないことも確認。"""
+    assert r5b.parse_libavformat_version("libavfilter     9. 12.100 /  9. 12.100\n") is None
+    assert r5b.parse_libavformat_version(
+        "libavformat     9. 12.100 /  9. 12.100\n"
+    ) == (9, 12, 100)
+
+
+def test_summarize_ffmpeg_version_keeps_diagnosis_drops_configuration() -> None:
+    """review PR#271 セルフレビュー #1: 版不一致で無人 Pod が停止したとき、
+    heartbeat に「何が出ていたか」を残す。banner + lib 行は残し、2KB 級の
+    `configuration:` 行は落とす。"""
+    raw = (
+        "ffmpeg version 4.4.2-0ubuntu0 Copyright (c) 2000-2021\n"
+        "  built with gcc 11\n"
+        "  configuration: " + "--enable-x " * 500 + "\n"
+        "  libavformat    58. 76.100 / 58. 76.100\n"
+    )
+    out = r5b.summarize_ffmpeg_version(raw)
+    assert "ffmpeg version 4.4.2" in out
+    assert "libavformat    58. 76.100" in out
+    assert "--enable-x" not in out
+    assert len(out) <= 800
