@@ -59,7 +59,8 @@ class ArchiveAdmissionError(ValueError):
 
 
 class Archive:
-    """MAP-Elites 型 Archive。`n` 分割の三角格子（既定 N=5、25セル）。
+    """MAP-Elites 型 Archive。`n` 分割の三角格子（凍結 N=5、25セル、
+    DESIGN_VG_E0.md §3.2）。
 
     `ledger` は必須引数（PR #267 Codex R14 指摘, 2026-08-18 採用）:
     `submit()` は「台帳掲載済みの個体のみを受理する」構造不変量を
@@ -69,9 +70,29 @@ class Archive:
     MAP-Elites 探索セッションを表す長寿命オブジェクトであり、`submit()`
     毎に異なる台帳を渡す設計上の必要性がない — `Ledger(directory)` が
     同型で directory を constructor 必須引数に取る家風にも揃う）。
+
+    `n` は現状 `simplex.GRID_N`（=5）以外の値を渡すと即 `ValueError` で
+    fail-closed 拒否する（PR #267 Codex R16 指摘・P2, 2026-08-18 採用）:
+    25セル契約は DESIGN_VG_E0.md §3.2 で凍結されており、変更には schema
+    版番の昇格が要る。修正前は非既定 n（例: n=4）をコンストラクタが無条件
+    受理しており、25セル契約と区別のつかない無版番の別グリッド Archive が
+    作れてしまっていた（`simplex.cell_id()` 側の `_MICRO_PER_UNIT % n`
+    整除チェックは n=4 のような約数では初回 submit でも発火せず、n=3 の
+    ような非約数でのみ事後的に失敗していたため、防御として不十分だった）。
+    このパラメータ自体は削除せず残す — 将来 schema 版番を昇格する際に
+    凍結値を明示的に更新する唯一のフックとして機能させるための設計判断
+    （呼び出し元が誤って任意の n を渡す経路を塞ぎつつ、版番昇格 PR が
+    触るべき単一箇所を残す）。
     """
 
     def __init__(self, ledger: Ledger, n: int = simplex.GRID_N):
+        if n != simplex.GRID_N:
+            raise ValueError(
+                f"unsupported grid size n={n!r}: Archive only accepts the frozen grid size "
+                f"simplex.GRID_N={simplex.GRID_N!r} (DESIGN_VG_E0.md §3.2's 25-cell contract). "
+                "Changing the grid size requires a schema version bump, not a constructor "
+                "argument — PR #267 Codex R16."
+            )
         self.ledger = ledger
         self.n = n
         self._cell_ids: FrozenSet[CellId] = simplex.all_cell_ids(n)

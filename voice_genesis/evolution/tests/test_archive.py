@@ -628,3 +628,31 @@ def test_all_cells_initially_empty(ledger) -> None:
     for cell in arc.cells():
         assert arc.elite_at(cell) is None
         assert arc.protected_at(cell) is None
+
+
+def test_construction_rejects_non_frozen_grid_size_n4(ledger) -> None:
+    """PR #267 Codex R16 指摘（P2）, 2026-08-18 採用: n=4 は `_MICRO_PER_UNIT`
+    (1,000,000) の約数のため `simplex.cell_id()` 側の整除チェックを素通り
+    し、初回 submit まで拒否されずに無版番の16セル Archive が動いてしまって
+    いた。コンストラクタ時点で fail-closed 拒否する。
+    """
+    with pytest.raises(ValueError, match="unsupported grid size"):
+        archive_mod.Archive(ledger, n=4)
+
+
+def test_construction_rejects_non_frozen_grid_size_n3(ledger) -> None:
+    """n=3 は `_MICRO_PER_UNIT` の非約数のため、修正前も `simplex.cell_id()`
+    側で初回 submit 時にのみ事後的に失敗していた（コンストラクタは無条件
+    受理）。修正後はコンストラクタ時点で他の非既定 n と同様に即座に
+    fail-closed 拒否される。
+    """
+    with pytest.raises(ValueError, match="unsupported grid size"):
+        archive_mod.Archive(ledger, n=3)
+
+
+def test_construction_default_grid_size_unchanged(ledger) -> None:
+    """既定構築（`n` 省略、= `simplex.GRID_N` = 5）の動作は本修正で不変。"""
+    arc = archive_mod.Archive(ledger)
+    assert arc.n == simplex.GRID_N == 5
+    assert arc.cells() == simplex.all_cell_ids(5)
+    assert len(arc.cells()) == 25
