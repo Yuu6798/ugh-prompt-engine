@@ -134,7 +134,7 @@ D3（合成教師データ）を ritsu の話者 ID から分離し、専用話�
 | pjs（PJS corpus ver1.1） | Google Drive ファイル ID + `gdown`（S1_GPU_RUNBOOK §2。D2 と別機構 — gdown 依存をブートストラップに含める） | 既存 sha256 pin |
 | user 宅録 | Google Drive 直リンク（`uc?export=download&id=` 形式・実証済み） | run 4 dataset pin |
 | config/辞書 | **リポジトリ内へ格納**（run 5 から。Drive/AI-Drive 手渡しを廃止） | git 内容アドレス |
-| vocoder（nsf_hifigan.onnx） | openvpi 公開 URL（run 4 と同一） | run 4 使用時の URL + sha256 は **repo docs 未転記**（クロー報告値のみ）。**run 5 起動前の pin 転記を必須の先行タスク**とする（§5 AC の同時転記対象） |
+| vocoder（nsf_hifigan.onnx） | openvpi 公開 URL（run 4 と同一） | run 4 使用時の URL + sha256 は **repo docs 未転記**（クロー報告値のみ）。**run 5 起動前の pin 転記を必須の先行タスク**とする（§5 AC の同時転記対象）。**→ 転記完了（2026-08-18・実装 PR）**: 一次記録の回収により run 4 実績の学習側 vocoder は onnx ではなく **pc_nsf_hifigan zip + model.ckpt**（配置 = DiffSinger checkpoints/ 直下）と判明。正本は `results_s3/run5_material_pins.json` の `vocoder_pc_nsf_hifigan`（provenance = クロー報告値・間接実証、転記時に URL/sha256 独立再実測済み）。本行の「nsf_hifigan.onnx」は判定材料合成のローカル ONNX vocoder（S1 以来のローカル資産）との混同で、起草時の誤記として記録する |
 
 - user 宅録の Drive リンクは起動スクリプトへ**環境変数として注入**し、
   スクリプト本文（リポジトリにコミットされる）へは書かない

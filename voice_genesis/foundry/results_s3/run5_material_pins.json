@@ -1,0 +1,59 @@
+{
+  "schema": "run5-material-pins/0.1",
+  "purpose": "S4 run 5（RunPod API 無人ブートストラップ・DESIGN_S4_run5.md §3.2）の素材搬入 pin 表。scripts/run5_bootstrap.py が preflight で読む。sha256 が null のエントリが 1 件でもあれば bootstrap は素材取得に入らず fail-closed する（PENDING の解消 = 起動前必須の先行タスク）。値の出典は各エントリの source フィールドに明記する（手打ち新規値は置かない）。",
+  "materials": {
+    "ritsu_voicebank_zip": {
+      "description": "波音リツ強連続音 Ver1.5.1（D2 生成の入力 voicebank）",
+      "url": "https://www.canon-voice.com/voice/r73_strong_ren0151.zip",
+      "sha256": "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76",
+      "source": "S1_GPU_RUNBOOK.md §2 素材 1（s1_dataprep/README.md §0 と同一 pin）"
+    },
+    "pjs_corpus_zip": {
+      "description": "PJS corpus ver1.1（D1）。取得は gdown（Google Drive）",
+      "gdown_id": "1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_",
+      "sha256": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",
+      "source": "S1_GPU_RUNBOOK.md §2 素材 2"
+    },
+    "namine_ritsu_diffsinger_zip": {
+      "description": "リツ公式 DiffSinger 配布 zip（dsdur/dsdict.yaml のみ使用）",
+      "url": "https://www.canon-voice.com/voice/NamineRitsu_DiffSinger.zip",
+      "sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+      "source": "S1_GPU_RUNBOOK.md §2 素材 3"
+    },
+    "diffsinger_repo": {
+      "description": "openvpi/DiffSinger（binarize.py / train.py）",
+      "url": "https://github.com/openvpi/DiffSinger.git",
+      "commit": "e2307b1",
+      "source": "S1_GPU_RUNBOOK.md §1 / s1_dataprep/README.md"
+    },
+    "nnsvs_db_converter": {
+      "description": "UtaUtaUtau/nnsvs-db-converter（convert_pjs.py が呼ぶ変換器）",
+      "url": "https://github.com/UtaUtaUtau/nnsvs-db-converter.git",
+      "commit": "185ada6",
+      "source": "S1_GPU_RUNBOOK.md §3"
+    },
+    "ffmpeg_static": {
+      "description": "ffmpeg static n6.1.2（BtbN ビルド・libavformat 60.16.100）。D3 44.1kHz 変換バイト + user replay 正規化の決定論に必須（s3_record_2026-08-17.md §環境契約 1）",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2024-09-30-15-36/ffmpeg-n6.1.2-8-gf00f71f590-linux64-gpl-6.1.tar.xz",
+      "sha256": "16ab3dbb56495f17428e5404959e7127f10a561293d867cba0393b2d33bb08c3",
+      "size_bytes": 106454476,
+      "extracted_ffmpeg_bin": "ffmpeg-n6.1.2-8-gf00f71f590-linux64-gpl-6.1/bin/ffmpeg",
+      "ffmpeg_bin_sha256": "1aabfcf5351c09f23de483052ccd804c8a0f4a4d0409667b400202edac3ce65d",
+      "provenance": "強（当方実測）: Fable セッション実測が起源（run 4 前の 40/40 バイト再現検証 = scratchpad ffmpeg_static_verify/RESULT.md。tarball 実体を 2026-08-18 に sha256 再計算で一致再確認）。加えて本転記時（2026-08-18・run 5 実装セッション）に上記 URL から独立ダウンロードし、tarball sha256 / size / bin/ffmpeg sha256 / libavformat 60.16.100 の 4 点一致を再実測済み。",
+      "url_note": "URL は日付固定 autobuild タグ（恒久リリース）。rolling alias（latest 等）経由では到達できないのが正常。",
+      "acceptance": "tarball sha256 一致 + 展開 bin/ffmpeg sha256 一致 + `ffmpeg -version` が libavformat 60.16.100 を示すこと + D3 再生成 pin 照合 40/40（run4_dataset_pins.json d3.*）が最終ゲート"
+    },
+    "vocoder_pc_nsf_hifigan": {
+      "description": "pc_nsf_hifigan（openvpi/vocoders 公開リリース・run 4 学習で使用実績のある vocoder checkpoint）。DiffSinger 学習側の vocoder（判定材料合成のローカル ONNX vocoder とは別物 — gate_synth.py の nsf_hifigan.onnx は S1 以来のローカル資産）",
+      "url": "https://github.com/openvpi/vocoders/releases/download/pc-nsf-hifigan-44.1k-hop512-128bin-2025.02/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.zip",
+      "sha256": "9d98ba73727f2abb75172cf8249d75182237e8472fc3b6ed09c721ae8b0e83c6",
+      "model_ckpt_sha256": "d6dd28909d2a1a2dcf74b3e3aa0b82b48695b87979fdf41561940aeecd85c67f",
+      "placement": "checkpoints/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/（DiffSinger clone 直下。run 4 実績の配置先を逐語踏襲）",
+      "placement_dirname": "pc_nsf_hifigan_44.1k_hop512_128bin_2025.02",
+      "placement_note": "一次ソース照合（2026-08-18・DiffSinger e2307b1 configs/acoustic.yaml:15）: `vocoder_ckpt: checkpoints/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/model.ckpt` が base config の既定値そのもの — 生成 config は vocoder_ckpt キーを持たず既定値に依存するため、この配置名からのずれは bootstrap が fail-closed で拒否する",
+      "provenance": "中（クロー報告値・間接実証）: 値の起源は run 4 学習開始報告の逐語（Fable セッション transcript から回収）で、run 4 が本 pin の配置物で 40K 完走した実績が間接実証。本転記時（2026-08-18・run 5 実装セッション）に上記 URL から独立ダウンロードし zip sha256 / model.ckpt sha256 の一致を再実測済み — ただし『run 4 の Pod 上で実際に使われたバイト列』との同一性はクロー報告値経由の推定のまま（ffmpeg エントリのような当方起源の一次実測記録は無い）。",
+      "note": "DESIGN_S4_run5.md §3.2 の素材表は本 vocoder を『nsf_hifigan.onnx（openvpi 公開 URL）』と記載していたが、run 4 実績の一次記録は pc_nsf_hifigan zip + model.ckpt だった。本エントリが正（DESIGN 側は本転記コミットで注記済み）。"
+    }
+  },
+  "dataset_pins_ref": "run4_dataset_pins.json（D3/user 再生成の照合先。run 5 はデータ内容が run 4 と同一 = DESIGN_S4 §1.1 のため同じ pin を使う）"
+}
