@@ -17,8 +17,8 @@ heartbeat 記帳・コマンド組み立て）のみ `tests/test_run5_bootstrap.
 
 1.  `preflight`      : env 検査（§ 環境変数）+ `run5_material_pins.json` の
                        PENDING 検査（sha256 が null の素材が 1 件でもあれば
-                       素材取得に入らず fail-closed — vocoder/ffmpeg の
-                       pin 転記が起動前必須の先行タスク = DESIGN_S4 §3.2）
+                       素材取得に入らず fail-closed。ffmpeg/vocoder の 2 件は
+                       2026-08-18 に転記完了 — pins 表の provenance 欄参照）
 2.  `gates`          : runbook §2.2 の 4 ゲート（数値スタック版 pin / SIMD
                        受け入れ X86_V3 / silent no-op 検査 / cache 来歴）。
                        ゲート 3 は「設定が効いたかは必ずゲート 2 の
@@ -208,9 +208,14 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def load_material_pins(path: Path = MATERIAL_PINS_PATH) -> Dict[str, dict]:
+def load_material_pins(path: Optional[Path] = None) -> Dict[str, dict]:
     """pin 表を読み、PENDING（`sha256` キーを持つのに null のままの素材）が
-    あれば `PinPendingError` で fail-closed する。戻り値は materials dict。"""
+    あれば `PinPendingError` で fail-closed する。戻り値は materials dict。
+    `path` 省略時はモジュール属性 `MATERIAL_PINS_PATH` を**呼び出し時**に
+    解決する（テストが monkeypatch で差し替えられるように — def 時束縛の
+    既定引数にしない）。"""
+    if path is None:
+        path = MATERIAL_PINS_PATH
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     materials = data["materials"]
     pending = sorted(
@@ -531,11 +536,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               materials["ffmpeg_static"]["url"]], label="materials/ffmpeg-static")
         verify_file_sha256(ffmpeg_tar, materials["ffmpeg_static"]["sha256"], "ffmpeg_static")
 
-        vocoder_onnx = dl / "nsf_hifigan.onnx"
-        _run(["curl", "-L", "--fail", "-o", vocoder_onnx,
-              materials["vocoder_nsf_hifigan_onnx"]["url"]], label="materials/vocoder")
-        verify_file_sha256(vocoder_onnx, materials["vocoder_nsf_hifigan_onnx"]["sha256"],
-                           "vocoder_nsf_hifigan_onnx")
+        # 学習側 vocoder（pc_nsf_hifigan zip + model.ckpt。run 4 実績 pin —
+        # pins 表 `vocoder_pc_nsf_hifigan` の provenance 欄参照）。zip と
+        # 内容物 model.ckpt の両方を照合し、配置は binarize 段（DiffSinger
+        # clone 後）で run 4 実績の checkpoints/ 直下パスへ行う。
+        vocoder_pin = materials["vocoder_pc_nsf_hifigan"]
+        vocoder_zip = dl / "pc_nsf_hifigan.zip"
+        _run(["curl", "-L", "--fail", "-o", vocoder_zip, vocoder_pin["url"]],
+             label="materials/vocoder")
+        verify_file_sha256(vocoder_zip, vocoder_pin["sha256"], "vocoder_pc_nsf_hifigan(zip)")
+        vocoder_extract_dir = work / "vocoder_extracted"
+        _extract_archive(vocoder_zip, vocoder_extract_dir)
+        vocoder_ckpts = sorted(vocoder_extract_dir.glob("**/model.ckpt"))
+        if len(vocoder_ckpts) != 1:
+            raise StageFailure(
+                f"vocoder zip must contain exactly one model.ckpt, found {len(vocoder_ckpts)}"
+            )
+        verify_file_sha256(vocoder_ckpts[0], vocoder_pin["model_ckpt_sha256"],
+                           "vocoder_pc_nsf_hifigan(model.ckpt)")
+        vocoder_dir = vocoder_ckpts[0].parent  # pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/
 
         user_archive = dl / "user_sources_archive"
         _run(["curl", "-L", "--fail", "-o", user_archive,
@@ -549,6 +568,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ffmpeg_bins = sorted((work / "ffmpeg_extracted").glob("**/bin/ffmpeg"))
         if not ffmpeg_bins:
             raise StageFailure("ffmpeg static tarball did not contain bin/ffmpeg")
+        # tarball sha に加えて展開後バイナリ実体も pin 照合する（pins 表
+        # `ffmpeg_bin_sha256` — 展開時破損・想定外レイアウトの検出）。
+        verify_file_sha256(ffmpeg_bins[0], materials["ffmpeg_static"]["ffmpeg_bin_sha256"],
+                           "ffmpeg_static(bin/ffmpeg)")
         os.environ["PATH"] = f"{ffmpeg_bins[0].parent}:{os.environ['PATH']}"
         version_out = subprocess.run(
             ["ffmpeg", "-version"], capture_output=True, text=True, check=True
@@ -679,6 +702,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
              label="binarize/clone-diffsinger")
         _run(["git", "-C", ds_repo, "checkout", materials["diffsinger_repo"]["commit"]],
              label="binarize/pin-diffsinger")
+        # vocoder 配置（run 4 実績の checkpoints/ 直下パスを逐語踏襲 —
+        # pins 表 `vocoder_pc_nsf_hifigan.placement`）。
+        vocoder_dest = ds_repo / "checkpoints" / vocoder_dir.name
+        vocoder_dest.parent.mkdir(parents=True, exist_ok=True)
+        _run(["cp", "-r", vocoder_dir, vocoder_dest], label="binarize/place-vocoder")
         _run([sys.executable, "-m", "pip", "install", "-r", ds_repo / "requirements.txt"],
              label="binarize/pip-requirements")
         _run([sys.executable, ds_repo / "scripts" / "binarize.py", "--config", live_config],

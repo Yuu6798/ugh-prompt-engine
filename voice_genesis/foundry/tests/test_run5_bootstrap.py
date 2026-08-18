@@ -54,14 +54,30 @@ def test_load_material_pins_accepts_fully_pinned_table(tmp_path: Path) -> None:
     assert materials["diffsinger_repo"]["commit"] == "e2307b1"
 
 
-def test_committed_material_pins_file_is_loadable_and_lists_known_pendings() -> None:
-    """コミット済みの `run5_material_pins.json` 自体が (1) JSON として読め、
-    (2) 現時点の PENDING がまさに ffmpeg_static / vocoder_nsf_hifigan_onnx の
-    2 件である（転記が完了したらこのテストの期待値を空に更新する = 転記
-    忘れ・転記完了の両方向を検出する）。"""
-    with pytest.raises(r5b.PinPendingError) as exc_info:
-        r5b.load_material_pins(r5b.MATERIAL_PINS_PATH)
-    assert exc_info.value.pending == ["ffmpeg_static", "vocoder_nsf_hifigan_onnx"]
+def test_committed_material_pins_file_is_fully_pinned() -> None:
+    """コミット済みの `run5_material_pins.json` が (1) JSON として読め、
+    (2) PENDING ゼロ（= 2026-08-18 の転記完了状態）であること。転記前は
+    本テストが PENDING 2 件（ffmpeg_static / vocoder_nsf_hifigan_onnx）を
+    期待していた — 期待値をこの「全転記済み」側へ更新したことで、以後
+    null へ戻す退行を検出する。"""
+    materials = r5b.load_material_pins(r5b.MATERIAL_PINS_PATH)
+
+    ffmpeg = materials["ffmpeg_static"]
+    assert ffmpeg["url"].startswith(
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2024-09-30-15-36/"
+    )
+    assert len(ffmpeg["sha256"]) == 64
+    assert len(ffmpeg["ffmpeg_bin_sha256"]) == 64
+    # 来歴強度の書き分け（User 指示 2026-08-18）: ffmpeg = 当方実測（強）
+    assert ffmpeg["provenance"].startswith("強")
+
+    vocoder = materials["vocoder_pc_nsf_hifigan"]
+    assert vocoder["url"].startswith("https://github.com/openvpi/vocoders/releases/download/")
+    assert len(vocoder["sha256"]) == 64
+    assert len(vocoder["model_ckpt_sha256"]) == 64
+    # vocoder = クロー報告値（中・間接実証）
+    assert vocoder["provenance"].startswith("中")
+    assert "checkpoints/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02" in vocoder["placement"]
 
 
 def test_check_required_env_lists_missing_vars() -> None:
@@ -316,11 +332,13 @@ def test_main_without_env_fails_closed_before_any_download(
 def test_main_with_env_but_pending_pins_fails_closed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """env が揃っていても、コミット済み pin 表に PENDING が残る現状では
-    preflight で fail-closed する（クロー報告値の転記が起動前必須である
-    ことの実行時表現）。"""
+    """env が揃っていても pin 表に PENDING が残っていれば preflight で
+    fail-closed する（起動前必須の先行タスクの実行時表現。コミット済み
+    pin 表は転記完了済みのため、PENDING 状態は一時 pin 表で再現する）。"""
     for name in r5b.REQUIRED_ENV_VARS:
         monkeypatch.setenv(name, "dummy")
+    pending_pins = _write_pins(tmp_path, ffmpeg_sha=None, vocoder_sha=None)
+    monkeypatch.setattr(r5b, "MATERIAL_PINS_PATH", pending_pins)
     assert r5b.main(["--work-dir", str(tmp_path / "w")]) == 1
     err = capsys.readouterr().err
     assert "PENDING" in err

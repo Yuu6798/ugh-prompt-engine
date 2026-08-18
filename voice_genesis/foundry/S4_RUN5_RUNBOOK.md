@@ -11,22 +11,23 @@ Google Drive 退避 → 自動停止を `scripts/run5_bootstrap.py` が単一実
 
 ---
 
-## 0. 起動前必須の先行タスク（PENDING pin の転記）
+## 0. 起動前必須の先行タスク — **転記完了（2026-08-18）**
 
-[`results_s3/run5_material_pins.json`](results_s3/run5_material_pins.json) に
-**sha256 未転記（null）のエントリが 2 件**ある。bootstrap は preflight でこれを
-検査し、1 件でも残っていれば素材取得に入らず fail-closed する:
+[`results_s3/run5_material_pins.json`](results_s3/run5_material_pins.json) の
+PENDING 2 件は User が一次記録から回収した値で転記済み。**来歴の強度が異なる**
+点に注意（同ファイル `provenance` 欄が正本）:
 
-| 素材 | 必要な値 | 出どころ |
+| 素材 | 来歴 | 転記時の独立検証（2026-08-18） |
 |---|---|---|
-| `ffmpeg_static`（BtbN static n6.1.2） | tarball の URL + sha256 | run 4 でクローが実際に使用した報告値（クロー側セッションログ） |
-| `vocoder_nsf_hifigan_onnx` | openvpi 公開 URL + sha256 | 同上（DESIGN_S4 §3.2 が起動前必須と指定） |
+| `ffmpeg_static`（BtbN n6.1.2・autobuild-2024-09-30-15-36） | **強** — 当方実測が起源（40/40 バイト再現検証の正本 = scratchpad ffmpeg_static_verify/RESULT.md・実体再検証済み） | URL から独立 DL し tarball sha256 / size / bin/ffmpeg sha256 / libavformat 60.16.100 の 4 点一致を再実測 |
+| `vocoder_pc_nsf_hifigan`（openvpi pc-nsf-hifigan 2025.02） | **中** — クロー報告値（run 4 学習開始報告の逐語）。run 4 が本配置物で 40K 完走した間接実証のみ | URL から独立 DL し zip sha256 / model.ckpt sha256 の一致を再実測（「run 4 Pod 上の実バイト列」との同一性はクロー報告値経由の推定のまま） |
 
-転記は User がクロー報告値を取得して `run5_material_pins.json` の `url`/`sha256`
-を埋め、`pending_reason` を削除して PR で main へ入れる。転記完了時は
-`tests/test_run5_bootstrap.py::test_committed_material_pins_file_is_loadable_and_lists_known_pendings`
-の期待値（現状 PENDING 2 件）を空リスト側へ更新すること（転記忘れ・転記完了の
-両方向をテストが検出する設計）。
+bootstrap preflight は引き続き null pin を fail-closed で拒否する（null へ戻す
+退行は `tests/test_run5_bootstrap.py::test_committed_material_pins_file_is_fully_pinned`
+が検出する）。なお DESIGN_S4 §3.2 の「nsf_hifigan.onnx」表記は run 4 実績の
+一次記録（pc_nsf_hifigan zip + model.ckpt）と食い違っていたため、pins 表側を
+正とする（学習側 vocoder = pc_nsf_hifigan ckpt / 判定材料合成のローカル ONNX
+vocoder = S1 以来のローカル資産、の 2 系統が別物という整理）。
 
 ---
 
