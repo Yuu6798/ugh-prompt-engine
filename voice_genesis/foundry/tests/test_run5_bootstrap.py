@@ -108,6 +108,14 @@ def test_check_required_env_lists_missing_vars() -> None:
     assert r5b.check_required_env(partial) == ["RUN5_DRIVE_FOLDER_ID"]
 
 
+def test_user_sources_url_is_optional_not_required() -> None:
+    """2026-08-18 User 裁定（案 A）: user 宅録原本の既定取得経路は成果物
+    フォルダ内 `user_sources/` からの rclone 取得であり、
+    `RUN5_USER_SOURCES_URL` は代替経路（任意）。必須 env に含めない。"""
+    assert "RUN5_USER_SOURCES_URL" not in r5b.REQUIRED_ENV_VARS
+    assert r5b.REQUIRED_ENV_VARS == ("RUN5_RCLONE_CONF_B64", "RUN5_DRIVE_FOLDER_ID")
+
+
 # --- dataset pin 照合 --------------------------------------------------------
 
 
@@ -395,6 +403,92 @@ def test_collect_salvage_artifacts_gathers_from_disk_state(tmp_path: Path) -> No
 
 def test_collect_salvage_artifacts_empty_when_nothing_exists(tmp_path: Path) -> None:
     assert r5b.collect_salvage_artifacts(tmp_path / "nope", tmp_path / "nope2") == []
+
+
+# --- user 原本の sha256 索引（ファイル名非依存の特定） -------------------------
+
+
+def test_index_files_by_sha256_is_filename_independent(tmp_path: Path) -> None:
+    """台帳 `source_filename`（intake 正規化名）と Drive 表示名（日本語日付名 +
+    「〜 のコピー」）は一致しないため、原本の特定は中身の sha256 で行う。
+    リネーム不要・重複コピー耐性の両方を固定する。"""
+    import hashlib
+
+    root = tmp_path / "src"
+    (root / "nested").mkdir(parents=True)
+    (root / "8月17日（午前0-18）.m4a のコピー").write_bytes(b"CONTENT-A")
+    (root / "nested" / "適当な別名.m4a").write_bytes(b"CONTENT-B")
+    # 同内容の重複コピー（Drive で 2 回コピーした状況）
+    (root / "8月17日（午前0-18）.m4a のコピー(1)").write_bytes(b"CONTENT-A")
+
+    index = r5b.index_files_by_sha256(root)
+
+    sha_a = hashlib.sha256(b"CONTENT-A").hexdigest()
+    sha_b = hashlib.sha256(b"CONTENT-B").hexdigest()
+    assert set(index) == {sha_a, sha_b}
+    # 重複は全パス保持（余剰カウントを正確にするため）。使うのは先頭（等価）。
+    assert len(index[sha_a]) == 2
+    assert index[sha_a][0].read_bytes() == b"CONTENT-A"
+    assert [p.name for p in index[sha_b]] == ["適当な別名.m4a"]
+
+
+def test_match_user_sources_resolves_by_content_and_counts_extras() -> None:
+    """review PR#270 セルフレビュー #3: 余剰は distinct sha 数ではなく実ファイル
+    数で数える（重複コピーの過小報告を防ぐ）。card_id → path の解決も確認。"""
+    entries = [
+        {"card_id": "UC-001", "source_filename": "UC-001_x.mp3", "source_sha256": "a" * 64},
+        {"card_id": "UC-002", "source_filename": "UC-002_y.m4a", "source_sha256": "b" * 64},
+    ]
+    p_needed = Path("/drive/UC1 のコピー.m4a")
+    p_needed2 = Path("/drive/UC1 のコピー(1).m4a")  # 同 sha の重複
+    p_needed_b = Path("/drive/UC2.m4a")
+    p_junk1 = Path("/drive/junk.m4a")
+    p_junk2 = Path("/drive/junk のコピー.m4a")  # 同 sha の無関係重複 3 本
+    p_junk3 = Path("/drive/junk のコピー(1).m4a")
+    files_by_sha = {
+        "a" * 64: [p_needed, p_needed2],
+        "b" * 64: [p_needed_b],
+        "c" * 64: [p_junk1, p_junk2, p_junk3],
+    }
+
+    source_paths, diffs, extras = r5b.match_user_sources(files_by_sha, entries)
+
+    assert diffs == []
+    assert source_paths == {"UC-001": p_needed, "UC-002": p_needed_b}
+    # 無関係 sha の実ファイルは 3 本 — distinct sha 数(1)ではなく 3 と数える
+    assert extras == 3
+
+
+def test_match_user_sources_reports_missing_with_diagnostic() -> None:
+    """該当 sha のファイルが無いエントリは fail-closed 用の diff に載り、
+    メッセージに『未コピー or 中身相違』の切り分けを含む（sha-only 照合で
+    診断信号が痩せる問題への言葉の補い — セルフレビュー #4）。"""
+    entries = [
+        {"card_id": "UC-001", "source_filename": "UC-001_x.mp3", "source_sha256": "a" * 64},
+    ]
+    source_paths, diffs, extras = r5b.match_user_sources({}, entries)
+    assert source_paths == {}
+    assert len(diffs) == 1
+    assert "UC-001_x.mp3" in diffs[0]
+    assert "未コピー" in diffs[0] or "中身" in diffs[0]
+
+
+def test_guard_user_sources_size_passes_normal_and_blocks_runaway(tmp_path: Path) -> None:
+    """review PR#270 セルフレビュー #1: 台帳規模（~2 MiB・17 本）は通し、
+    ファイル数がランナウェイ上限を超えたら hash 前に fail-closed する。"""
+    normal = tmp_path / "normal"
+    normal.mkdir()
+    for i in range(17):
+        (normal / f"f{i}.m4a").write_bytes(b"x" * 1000)
+    count, total = r5b.guard_user_sources_size(normal)
+    assert count == 17 and total == 17000
+
+    runaway = tmp_path / "runaway"
+    runaway.mkdir()
+    for i in range(r5b.USER_SOURCES_MAX_FILES + 1):
+        (runaway / f"f{i}.bin").write_bytes(b"x")
+    with pytest.raises(r5b.StageFailure, match="runaway guard"):
+        r5b.guard_user_sources_size(runaway)
 
 
 # --- stage 計画 / heartbeat / self-stop --------------------------------------

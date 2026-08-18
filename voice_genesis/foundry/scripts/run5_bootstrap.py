@@ -27,9 +27,9 @@ heartbeat 記帳・コマンド組み立て）のみ `tests/test_run5_bootstrap.
                        新規 Pod + 新規 `--out-dir`（既存 out-dir があれば
                        fail-closed）で cache 来歴を構造的に保証する
 3.  `materials`      : 素材取得 + sha256 全数照合（pins 表と 1 件でも
-                       不一致なら停止）。user 宅録原本は
-                       `RUN5_USER_SOURCES_URL`（環境変数注入 — スクリプト
-                       本文に Drive リンクは書かない）から取得し、
+                       不一致なら停止）。user 宅録原本は既定で成果物
+                       フォルダ内 `user_sources/` から rclone 取得
+                       （`RUN5_USER_SOURCES_URL` 指定時のみ直リンク経路）し、
                        `user_donor_ledger.json` の `source_sha256` と 17/17
                        照合する
 4.  `datasets`       : D3 再生成（`run_d3_cells.py`・tripwire 込み）→
@@ -75,11 +75,18 @@ Drive へ push する（「実際に実行された学習の実 config を証明
 
 ## 環境変数（Pod 作成時に注入。リポジトリへはコミットしない）
 
-- `RUN5_USER_SOURCES_URL` : user 宅録原本アーカイブ（17 本）の直リンク
 - `RUN5_RCLONE_CONF_B64`  : rclone.conf の base64（成果物専用フォルダに
                             権限を限定したスコープ — Drive 全域トークン
-                            不可 = DESIGN_S4 §3.3）
-- `RUN5_DRIVE_FOLDER_ID`  : 退避先 Google Drive フォルダ ID
+                            不可 = DESIGN_S4 §3.3。リモート名 `run5drive`）
+- `RUN5_DRIVE_FOLDER_ID`  : 成果物フォルダ ID（退避先。**user 宅録原本の
+                            入力元も兼ねる** — 下記）
+- `RUN5_USER_SOURCES_URL` : （任意）user 宅録原本アーカイブの直リンク。
+                            **省略時が既定経路（2026-08-18 User 裁定・
+                            案 A）**: 成果物フォルダ内の `user_sources/`
+                            サブフォルダ（原本 17 本を User がコピーして
+                            おく）から同じ rclone トークンで取得する —
+                            追加の共有設定・直リンク発行が不要で、原本を
+                            リンク公開せずに済む
 - `RUNPOD_POD_ID`         : RunPod が注入する Pod 自身の ID（self-stop 用）
 
 ## 予算・停止条件（DESIGN_S4 §3.4）
@@ -143,8 +150,10 @@ STAGE_PLAN: Tuple[str, ...] = (
     "binarize", "train_phase_a", "train_phase_b", "salvage", "self_stop",
 )
 
+# RUN5_USER_SOURCES_URL は必須から外れた（2026-08-18 User 裁定・案 A: 既定は
+# 成果物フォルダ内 user_sources/ からの rclone 取得。URL は代替経路）。
 REQUIRED_ENV_VARS = (
-    "RUN5_USER_SOURCES_URL", "RUN5_RCLONE_CONF_B64", "RUN5_DRIVE_FOLDER_ID",
+    "RUN5_RCLONE_CONF_B64", "RUN5_DRIVE_FOLDER_ID",
 )
 
 # runbook §2.2 ゲート 1/2 の判定ワンライナー（明示分岐 + sys.exit 符号化 —
@@ -399,6 +408,80 @@ def milestone_ckpt_sizes(ckpt_dir: Path) -> Dict[int, int]:
         for step, path in find_milestone_ckpts(ckpt_dir).items()
         if path.exists()
     }
+
+
+# user_sources ランナウェイガード（review PR#270 セルフレビュー #1）: rclone
+# 経路は user_sources/ 配下を無差別コピーするため、想定外に巨大／大量の
+# フォルダを掴むと課金 Pod のディスク・帯域を浪費する。台帳原本は 17 本・
+# 実測 ~2 MiB のため、桁違いの余裕（500 MiB / 200 files）を上限に置き、超過は
+# hash 前に fail-closed する（正当な「〜 のコピー」余剰は通す・runaway だけ止める）。
+USER_SOURCES_MAX_BYTES = 500 * 1024 * 1024
+USER_SOURCES_MAX_FILES = 200
+
+
+def _iter_files(root: Path) -> List[Path]:
+    return sorted(p for p in root.rglob("*") if p.is_file())
+
+
+def guard_user_sources_size(root: Path) -> Tuple[int, int]:
+    """`root` 配下の総ファイル数・総バイト数を測り、ランナウェイ上限
+    （`USER_SOURCES_MAX_*`）を超えていれば `StageFailure` で fail-closed する。
+    戻り値は (file_count, total_bytes)。hash を回す前に呼ぶ（大量ファイルの
+    全 hash 自体が浪費になるため）。"""
+    files = _iter_files(root)
+    total = sum(p.stat().st_size for p in files)
+    if len(files) > USER_SOURCES_MAX_FILES or total > USER_SOURCES_MAX_BYTES:
+        raise StageFailure(
+            f"user_sources runaway guard: {len(files)} file(s) / {total} bytes "
+            f"exceeds cap ({USER_SOURCES_MAX_FILES} files / {USER_SOURCES_MAX_BYTES} "
+            "bytes) — 想定は台帳原本 17 本・~2 MiB。巨大／無関係フォルダを掴んで"
+            "いないか user_sources/ を確認（fail-closed・hash 前に停止）"
+        )
+    return len(files), total
+
+
+def index_files_by_sha256(root: Path) -> Dict[str, List[Path]]:
+    """`root` 配下（再帰）の全ファイルを `{sha256: [paths]}` で索引する。
+    user 宅録原本の特定に使う（ファイル名非依存 — 台帳 `source_filename` は
+    intake 正規化名で Drive 表示名と一致せず、Drive コピーは「〜 のコピー」を
+    付けるため、名前照合は構造的に成立しない。中身 hash なら重複コピーにも
+    頑健）。同一 sha の重複は全パスを保持する（余剰カウントを正確にするため —
+    review PR#270 セルフレビュー #3。使う 1 本はソート順先頭で等価）。"""
+    index: Dict[str, List[Path]] = {}
+    for path in _iter_files(root):
+        index.setdefault(sha256_file(path), []).append(path)
+    return index
+
+
+def match_user_sources(
+    files_by_sha: Dict[str, List[Path]], ledger_entries: Sequence[dict]
+) -> Tuple[Dict[str, Path], List[str], int]:
+    """台帳エントリを sha256 で `files_by_sha` に突き合わせる（純関数）。
+    戻り値は (card_id -> path, 欠落 diff リスト, 余剰ファイル数)。
+
+    review PR#270 セルフレビュー #3/#4: 余剰は「distinct sha 数」ではなく
+    **実ファイル数**で数える（重複コピーの過小報告を防ぐ）。欠落メッセージは
+    「該当 sha のファイルが user_sources に無い＝未コピー or 別内容」である
+    ことを明示する（sha-only 照合では『名前は合うが中身違う』が『欠落』側に
+    出るため、診断の手掛かりを言葉で補う）。"""
+    source_paths: Dict[str, Path] = {}
+    diffs: List[str] = []
+    matched_shas: set = set()
+    for entry in ledger_entries:
+        paths = files_by_sha.get(entry["source_sha256"])
+        if not paths:
+            diffs.append(
+                f"user source not found by content: {entry['source_filename']} "
+                f"(sha256 {entry['source_sha256'][:12]}…) — user_sources/ に未コピー、"
+                "または該当ファイルの中身が台帳と異なる"
+            )
+            continue
+        source_paths[entry["card_id"]] = paths[0]
+        matched_shas.add(entry["source_sha256"])
+    matched_file_count = sum(len(files_by_sha[s]) for s in matched_shas)
+    total_files = sum(len(v) for v in files_by_sha.values())
+    extras = total_files - matched_file_count
+    return source_paths, diffs, extras
 
 
 def collect_salvage_artifacts(run5_raw: Path, ds_repo: Path) -> List[Path]:
@@ -728,9 +811,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     f"{vocoder_pin['placement_dirname']!r} (fail-closed)"
                 )
 
-            user_archive = dl / "user_sources_archive"
-            _run(["curl", "-L", "--fail", "-o", user_archive,
-                  os.environ["RUN5_USER_SOURCES_URL"]], label="materials/user-sources")
+            # user 宅録原本 17 本の取得（2026-08-18 User 裁定・案 A）:
+            # 既定は成果物フォルダ内 `user_sources/` サブフォルダから、退避と
+            # 同じ folder 限定 rclone トークンで取得する（追加の共有設定・
+            # 直リンク発行が不要 — 原本をリンク公開しない）。
+            # RUN5_USER_SOURCES_URL 指定時のみ直リンク + アーカイブ経路。
+            user_src_dir = work / "user_sources"
+            user_sources_url = os.environ.get("RUN5_USER_SOURCES_URL", "")
+            if user_sources_url:
+                user_archive = dl / "user_sources_archive"
+                _run(["curl", "-L", "--fail", "-o", user_archive, user_sources_url],
+                     label="materials/user-sources-archive")
+                _extract_archive(user_archive, user_src_dir)
+            else:
+                _run(["rclone", "--config", rclone_conf, "copy",
+                      "run5drive:user_sources", user_src_dir,
+                      "--drive-root-folder-id", drive_folder_id],
+                     label="materials/user-sources-rclone")
 
             # 展開 + ffmpeg PATH 先頭化 + libavformat 60.16.100 実測
             _extract_archive(ritsu_zip, work / "ritsu_extracted")
@@ -755,25 +852,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     "(環境契約 1・s3_record 2026-08-17)"
                 )
 
-            # user 原本 17/17 照合（source_sha256・台帳は改変しない）
-            user_src_dir = work / "user_sources"
-            _extract_archive(user_archive, user_src_dir)
+            # user 原本 17/17 照合（source_sha256・台帳は改変しない。取得は
+            # 上の分岐で user_src_dir へ済んでいる — 欠落・取り違えはここで
+            # fail-closed になる）。
+            # ファイル特定は **sha256（中身）で行い、ファイル名には依存しない**
+            # （2026-08-18 是正）: 台帳の `source_filename` は intake 時の正規化名
+            # （`UC-001_80716cf0.mp3` 等）だが、Drive 上の原本は録音時の表示名
+            # （日本語日付名）のままで、さらに Drive のコピー操作は「〜 のコピー」
+            # を付けるため、名前照合は構造的に成立しない。中身の hash が台帳と
+            # 一致するファイルを探す方式なら、リネーム不要・重複コピーにも
+            # 頑健（同一 sha の重複は同内容なのでどれを使っても等価）。
             ledger = json.loads(USER_DONOR_LEDGER_PATH.read_text(encoding="utf-8"))
             ledger_entries = ledger["entries"]
-            source_files = {p.name: p for p in user_src_dir.rglob("*") if p.is_file()}
-            diffs: List[str] = []
-            for entry in ledger_entries:
-                src_name = entry["source_filename"]
-                if src_name not in source_files:
-                    diffs.append(f"user source missing: {src_name}")
-                    continue
-                actual = sha256_file(source_files[src_name])
-                if actual != entry["source_sha256"]:
-                    diffs.append(
-                        f"user source {src_name}: {actual} != ledger source_sha256"
-                    )
+            guard_user_sources_size(user_src_dir)  # hash 前にランナウェイ停止
+            files_by_sha = index_files_by_sha256(user_src_dir)
+            source_paths, diffs, extras = match_user_sources(files_by_sha, ledger_entries)
             if diffs:
                 raise PinMismatchError(diffs)
+            n = len(ledger_entries)
+            print(f"| run5_bootstrap: user sources matched {len(source_paths)}/{n} "
+                  f"by sha256 ({extras} extra file(s) ignored)", flush=True)
             heartbeat.mark("materials", "ok")
 
             # --- stage 4: datasets -----------------------------------------
@@ -804,7 +902,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             for entry in ledger_entries:
                 norm_name = Path(entry["normalized_path"]).name
                 norm_path = user_norm_dir / norm_name
-                _run(["ffmpeg", "-y", "-i", source_files[entry["source_filename"]],
+                _run(["ffmpeg", "-y", "-i", source_paths[entry["card_id"]],
                       "-ac", "1", "-ar", "24000", "-sample_fmt", "s16", norm_path],
                      label=f"datasets/user-normalize/{norm_name}")
                 actual = sha256_file(norm_path)

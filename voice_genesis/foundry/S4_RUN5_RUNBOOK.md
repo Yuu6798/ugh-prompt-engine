@@ -36,11 +36,76 @@ vocoder = S1 以来のローカル資産、の 2 系統が別物という整理�
 | 環境変数 | 内容 | 注意 |
 |---|---|---|
 | `RUN5_PIN_COMMIT` | run 5 実行コードの pin コミット SHA（§2 のコード変更マージ後の main コミット） | プレースホルダのまま起動しない |
-| `RUN5_USER_SOURCES_URL` | user 宅録原本 17 本のアーカイブ（zip/tar.gz）の直リンク（`uc?export=download&id=` 形式実証済み） | スクリプト・リポジトリに書かない |
-| `RUN5_RCLONE_CONF_B64` | rclone.conf の base64。リモート名は `run5drive` | **成果物専用フォルダに権限を限定したスコープ**（Drive 全域トークン不可 — DESIGN_S4 §3.3。Pod 側侵害時の被害面を成果物フォルダに閉じる） |
-| `RUN5_DRIVE_FOLDER_ID` | 退避先 Google Drive フォルダ ID | 同上のフォルダ |
+| `RUN5_RCLONE_CONF_B64` | rclone.conf の base64。リモート名は `run5drive` | **成果物専用フォルダに権限を限定したスコープ**（Drive 全域トークン不可 — DESIGN_S4 §3.3。Pod 側侵害時の被害面を成果物フォルダに閉じる）。作り方は §1.1 |
+| `RUN5_DRIVE_FOLDER_ID` | 成果物フォルダの Google Drive フォルダ ID（URL の `folders/` 以降） | 退避先であり、user 宅録原本の入力元も兼ねる（§1.1） |
+| `RUN5_USER_SOURCES_URL`（任意） | user 宅録原本アーカイブの直リンク（`uc?export=download&id=` 形式実証済み） | **省略時が既定**（2026-08-18 User 裁定・案 A）: 成果物フォルダ内 `user_sources/` から rclone 取得。この変数は代替経路としてのみ使う |
 
 `RUNPOD_POD_ID` は RunPod が自動注入する（self-stop 用）。
+
+### 1.1 成果物フォルダの準備（既定経路・案 A）
+
+1. Google Drive に**成果物フォルダ**を 1 つ作る（**共有設定は非公開のまま** —
+   リンク共有にしない）。URL `https://drive.google.com/drive/folders/<ID>` の
+   `<ID>` が `RUN5_DRIVE_FOLDER_ID`
+2. その直下に **`user_sources/`** という名前のサブフォルダを作り、
+   「音楽サンプル」の原本 17 本をコピーする。**ファイル名はそのままでよい**
+   （Drive のコピーが付ける「〜 のコピー」も可・重複コピー混入も可）—
+   bootstrap は中身の sha256 で台帳 `source_sha256` と 17/17 照合して
+   ファイルを特定する（名前非依存。台帳の `source_filename` は intake
+   正規化名で Drive 表示名とは元々一致しない）。台帳のどれかの sha に
+   一致するファイルが 1 本でも見つからなければ fail-closed
+3. **rclone conf（トークンの権限範囲に注意）**: リモート名は `run5drive`。
+   下記いずれの方式でも、bootstrap は `--drive-root-folder-id
+   <RUN5_DRIVE_FOLDER_ID>` で成果物フォルダを起点に読み書きする。
+
+   **重要（セキュリティの実態）**: `scope = drive` のトークン自体は
+   「そのアカウント／SA の Drive 全域」への読み書き権を持つ。被害面を
+   成果物フォルダ 1 つに閉じ込めているのは **その主体に他のフォルダを
+   共有していないこと**であって、`scope` 値ではない。したがって:
+   - 使う主体には**成果物フォルダ以外を共有しない**（既存アカウントの
+     rclone トークンを流用しない — 全 Drive が露出する）
+   - conf に `root_folder_id` を書けば、そのトークンが起点を超えて辿るのを
+     防ぐ多層防御になる（`--drive-root-folder-id` フラグと二重でも無害）
+
+   **方式 A: サービスアカウント（SA）**
+   - Google Cloud Console →「API とサービス」で **Google Drive API を有効化**
+   - 「IAM と管理 → サービスアカウント」で SA 作成 →「鍵」タブから **JSON キー**
+   - 成果物フォルダを SA のメール（`...@....iam.gserviceaccount.com`）に
+     **編集者として共有**（SA の Drive は空なので、この 1 フォルダ以外は
+     存在しない = 実質のスコープ制限）
+   - ※ 組織ポリシー `iam.disableServiceAccountKeyCreation` が JSON キー作成を
+     ブロックする環境では方式 B を使う（2026-08-18 実地でこのブロックに遭遇）
+
+   ```ini
+   [run5drive]
+   type = drive
+   scope = drive
+   root_folder_id = <RUN5_DRIVE_FOLDER_ID>
+   service_account_credentials = <JSON キーの中身を 1 行で>
+   ```
+
+   **方式 B: 専用 Google アカウント + OAuth トークン（GCP 回避・実地採用）**
+   - run 5 専用の新規 Gmail を作る（**Drive は空のまま使う** — これが被害面の
+     封じ込め）。成果物フォルダをこの新アカウントに**編集者として共有**
+   - 端末（PC or Termux）で `rclone authorize "drive"` →
+     **必ず新アカウントでログイン**して承認 → 出力の JSON トークンを控える
+
+   ```ini
+   [run5drive]
+   type = drive
+   scope = drive
+   root_folder_id = <RUN5_DRIVE_FOLDER_ID>
+   token = <rclone authorize が出力した {"access_token":...} を 1 行で>
+   ```
+
+   いずれも base64 化して注入:
+
+   ```bash
+   base64 -w0 rclone.conf   # 出力を RUN5_RCLONE_CONF_B64 へ
+   ```
+   - JSON キー・トークン・conf・base64 はリポジトリ／チャット記録に残さない
+     運用が望ましい（トークン失効は SA の鍵削除、または新アカウントの
+     「セキュリティ → サードパーティのアクセス」で rclone を取り消して即時）
 
 ## 2. Pod 作成（RunPod REST API）
 
