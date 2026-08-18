@@ -27,9 +27,9 @@ heartbeat 記帳・コマンド組み立て）のみ `tests/test_run5_bootstrap.
                        新規 Pod + 新規 `--out-dir`（既存 out-dir があれば
                        fail-closed）で cache 来歴を構造的に保証する
 3.  `materials`      : 素材取得 + sha256 全数照合（pins 表と 1 件でも
-                       不一致なら停止）。user 宅録原本は
-                       `RUN5_USER_SOURCES_URL`（環境変数注入 — スクリプト
-                       本文に Drive リンクは書かない）から取得し、
+                       不一致なら停止）。user 宅録原本は既定で成果物
+                       フォルダ内 `user_sources/` から rclone 取得
+                       （`RUN5_USER_SOURCES_URL` 指定時のみ直リンク経路）し、
                        `user_donor_ledger.json` の `source_sha256` と 17/17
                        照合する
 4.  `datasets`       : D3 再生成（`run_d3_cells.py`・tripwire 込み）→
@@ -75,11 +75,18 @@ Drive へ push する（「実際に実行された学習の実 config を証明
 
 ## 環境変数（Pod 作成時に注入。リポジトリへはコミットしない）
 
-- `RUN5_USER_SOURCES_URL` : user 宅録原本アーカイブ（17 本）の直リンク
 - `RUN5_RCLONE_CONF_B64`  : rclone.conf の base64（成果物専用フォルダに
                             権限を限定したスコープ — Drive 全域トークン
-                            不可 = DESIGN_S4 §3.3）
-- `RUN5_DRIVE_FOLDER_ID`  : 退避先 Google Drive フォルダ ID
+                            不可 = DESIGN_S4 §3.3。リモート名 `run5drive`）
+- `RUN5_DRIVE_FOLDER_ID`  : 成果物フォルダ ID（退避先。**user 宅録原本の
+                            入力元も兼ねる** — 下記）
+- `RUN5_USER_SOURCES_URL` : （任意）user 宅録原本アーカイブの直リンク。
+                            **省略時が既定経路（2026-08-18 User 裁定・
+                            案 A）**: 成果物フォルダ内の `user_sources/`
+                            サブフォルダ（原本 17 本を User がコピーして
+                            おく）から同じ rclone トークンで取得する —
+                            追加の共有設定・直リンク発行が不要で、原本を
+                            リンク公開せずに済む
 - `RUNPOD_POD_ID`         : RunPod が注入する Pod 自身の ID（self-stop 用）
 
 ## 予算・停止条件（DESIGN_S4 §3.4）
@@ -143,8 +150,10 @@ STAGE_PLAN: Tuple[str, ...] = (
     "binarize", "train_phase_a", "train_phase_b", "salvage", "self_stop",
 )
 
+# RUN5_USER_SOURCES_URL は必須から外れた（2026-08-18 User 裁定・案 A: 既定は
+# 成果物フォルダ内 user_sources/ からの rclone 取得。URL は代替経路）。
 REQUIRED_ENV_VARS = (
-    "RUN5_USER_SOURCES_URL", "RUN5_RCLONE_CONF_B64", "RUN5_DRIVE_FOLDER_ID",
+    "RUN5_RCLONE_CONF_B64", "RUN5_DRIVE_FOLDER_ID",
 )
 
 # runbook §2.2 ゲート 1/2 の判定ワンライナー（明示分岐 + sys.exit 符号化 —
@@ -728,9 +737,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     f"{vocoder_pin['placement_dirname']!r} (fail-closed)"
                 )
 
-            user_archive = dl / "user_sources_archive"
-            _run(["curl", "-L", "--fail", "-o", user_archive,
-                  os.environ["RUN5_USER_SOURCES_URL"]], label="materials/user-sources")
+            # user 宅録原本 17 本の取得（2026-08-18 User 裁定・案 A）:
+            # 既定は成果物フォルダ内 `user_sources/` サブフォルダから、退避と
+            # 同じ folder 限定 rclone トークンで取得する（追加の共有設定・
+            # 直リンク発行が不要 — 原本をリンク公開しない）。
+            # RUN5_USER_SOURCES_URL 指定時のみ直リンク + アーカイブ経路。
+            user_src_dir = work / "user_sources"
+            user_sources_url = os.environ.get("RUN5_USER_SOURCES_URL", "")
+            if user_sources_url:
+                user_archive = dl / "user_sources_archive"
+                _run(["curl", "-L", "--fail", "-o", user_archive, user_sources_url],
+                     label="materials/user-sources-archive")
+                _extract_archive(user_archive, user_src_dir)
+            else:
+                _run(["rclone", "--config", rclone_conf, "copy",
+                      "run5drive:user_sources", user_src_dir,
+                      "--drive-root-folder-id", drive_folder_id],
+                     label="materials/user-sources-rclone")
 
             # 展開 + ffmpeg PATH 先頭化 + libavformat 60.16.100 実測
             _extract_archive(ritsu_zip, work / "ritsu_extracted")
@@ -755,9 +778,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     "(環境契約 1・s3_record 2026-08-17)"
                 )
 
-            # user 原本 17/17 照合（source_sha256・台帳は改変しない）
-            user_src_dir = work / "user_sources"
-            _extract_archive(user_archive, user_src_dir)
+            # user 原本 17/17 照合（source_sha256・台帳は改変しない。取得は
+            # 上の分岐で user_src_dir へ済んでいる — 欠落・取り違えはここで
+            # fail-closed になる）
             ledger = json.loads(USER_DONOR_LEDGER_PATH.read_text(encoding="utf-8"))
             ledger_entries = ledger["entries"]
             source_files = {p.name: p for p in user_src_dir.rglob("*") if p.is_file()}

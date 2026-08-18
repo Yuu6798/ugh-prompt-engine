@@ -108,6 +108,14 @@ def test_check_required_env_lists_missing_vars() -> None:
     assert r5b.check_required_env(partial) == ["RUN5_DRIVE_FOLDER_ID"]
 
 
+def test_user_sources_url_is_optional_not_required() -> None:
+    """2026-08-18 User 裁定（案 A）: user 宅録原本の既定取得経路は成果物
+    フォルダ内 `user_sources/` からの rclone 取得であり、
+    `RUN5_USER_SOURCES_URL` は代替経路（任意）。必須 env に含めない。"""
+    assert "RUN5_USER_SOURCES_URL" not in r5b.REQUIRED_ENV_VARS
+    assert r5b.REQUIRED_ENV_VARS == ("RUN5_RCLONE_CONF_B64", "RUN5_DRIVE_FOLDER_ID")
+
+
 # --- dataset pin 照合 --------------------------------------------------------
 
 

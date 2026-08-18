@@ -36,11 +36,46 @@ vocoder = S1 以来のローカル資産、の 2 系統が別物という整理�
 | 環境変数 | 内容 | 注意 |
 |---|---|---|
 | `RUN5_PIN_COMMIT` | run 5 実行コードの pin コミット SHA（§2 のコード変更マージ後の main コミット） | プレースホルダのまま起動しない |
-| `RUN5_USER_SOURCES_URL` | user 宅録原本 17 本のアーカイブ（zip/tar.gz）の直リンク（`uc?export=download&id=` 形式実証済み） | スクリプト・リポジトリに書かない |
-| `RUN5_RCLONE_CONF_B64` | rclone.conf の base64。リモート名は `run5drive` | **成果物専用フォルダに権限を限定したスコープ**（Drive 全域トークン不可 — DESIGN_S4 §3.3。Pod 側侵害時の被害面を成果物フォルダに閉じる） |
-| `RUN5_DRIVE_FOLDER_ID` | 退避先 Google Drive フォルダ ID | 同上のフォルダ |
+| `RUN5_RCLONE_CONF_B64` | rclone.conf の base64。リモート名は `run5drive` | **成果物専用フォルダに権限を限定したスコープ**（Drive 全域トークン不可 — DESIGN_S4 §3.3。Pod 側侵害時の被害面を成果物フォルダに閉じる）。作り方は §1.1 |
+| `RUN5_DRIVE_FOLDER_ID` | 成果物フォルダの Google Drive フォルダ ID（URL の `folders/` 以降） | 退避先であり、user 宅録原本の入力元も兼ねる（§1.1） |
+| `RUN5_USER_SOURCES_URL`（任意） | user 宅録原本アーカイブの直リンク（`uc?export=download&id=` 形式実証済み） | **省略時が既定**（2026-08-18 User 裁定・案 A）: 成果物フォルダ内 `user_sources/` から rclone 取得。この変数は代替経路としてのみ使う |
 
 `RUNPOD_POD_ID` は RunPod が自動注入する（self-stop 用）。
+
+### 1.1 成果物フォルダの準備（既定経路・案 A）
+
+1. Google Drive に**成果物フォルダ**を 1 つ作る（**共有設定は非公開のまま** —
+   リンク共有にしない）。URL `https://drive.google.com/drive/folders/<ID>` の
+   `<ID>` が `RUN5_DRIVE_FOLDER_ID`
+2. その直下に **`user_sources/`** という名前のサブフォルダを作り、
+   「音楽サンプル」の原本 17 本（`user_donor_ledger.json` の
+   `source_filename` と同名のファイル）をコピーする。ファイル名が台帳と
+   1 本でもずれると bootstrap は 17/17 照合で fail-closed する（安全側）
+3. **rclone conf（サービスアカウント方式・推奨）**: 無人 Pod からの
+   読み書きにはサービスアカウント（SA）が最も簡単で、アクセス範囲が
+   「SA に共有したフォルダだけ」に自然に閉じる:
+   - Google Cloud Console → 新規プロジェクト（既存でも可）→
+     「API とサービス」で **Google Drive API を有効化**
+   - 「IAM と管理 → サービスアカウント」で SA を作成 → 「鍵」タブから
+     **JSON キー**を作成しダウンロード
+   - 成果物フォルダを SA のメールアドレス（`...@....iam.gserviceaccount.com`）
+     に**編集者として共有**（この共有が実質のスコープ制限 — SA は他の
+     ファイルに一切届かない）
+   - rclone.conf を組み立てて base64 化:
+
+     ```ini
+     [run5drive]
+     type = drive
+     scope = drive
+     service_account_credentials = <JSON キーの中身を 1 行で>
+     ```
+
+     ```bash
+     base64 -w0 rclone.conf   # 出力を RUN5_RCLONE_CONF_B64 へ
+     ```
+   - JSON キー・conf・base64 はリポジトリ/チャット記録に残さない運用が
+     望ましい（漏洩時の被害面は共有した 1 フォルダに限定されるが、
+     キーのローテーションは SA の鍵削除で即時にできる）
 
 ## 2. Pod 作成（RunPod REST API）
 
