@@ -72,6 +72,20 @@ operator/operator_params の6フィールドを被覆する内容アドレスの
 `self.directory` の外側を指すことのいずれかを検出したら `LedgerError` で
 fail-closed 拒否する。
 
+`read()`/`write()` の JSON パースはいずれも `models.loads_strict()`
+（PR #267 Codex R15 指摘, 2026-08-18 採用）を経由する: 標準 `json.loads`
+は同一オブジェクト内の重複キーを後勝ちで黙って採用するため、台帳ファイルに
+重複キーが混入すると矛盾する `genome_id`/`operator_params`/入れ子
+`anchors_provenance` 宣言が検証（キー単位の型チェック・genome_id 再計算
+一致）をすり抜けて `genome_from_dict()` を通過し得た（重複キーそのものは
+検証対象にならないため）。`models.loads_strict()` は
+`object_pairs_hook` で全階層（トップレベルおよび `operator_params`/
+`anchors_provenance` 等の入れ子オブジェクト）の重複キーを検出し
+`DuplicateJSONKeyError`（`json.JSONDecodeError` のサブクラス）で
+fail-closed 拒否する。本モジュール内の JSON パース箇所（`write()` の
+round-trip 検証・`read()`）を含め、evolution 配下の JSON パースは全て
+この共有ローダーへ統一する。
+
 `write()` の戻り値は `WriteResult`（`path` + `created`）（PR #267 Codex
 R12 指摘2, 2026-08-17 採用）: `created=True` は今回の呼び出しが
 `os.link` による排他 create を実際に成功させた（＝真に新規作成した）
@@ -180,9 +194,14 @@ class Ledger:
         path = self.path_for(genome.genome_id)
         payload = (models.genome_to_json(genome) + "\n").encode("utf-8")
 
-        # publish 直前の round-trip 検証（Codex 指摘2）。
+        # publish 直前の round-trip 検証（Codex 指摘2）。json のパースは
+        # `models.loads_strict()`（object_pairs_hook で全階層の重複キーを
+        # fail-closed 拒否 — PR #267 Codex R15 指摘, 2026-08-18 採用）に
+        # 統一する。標準 `json.loads` は重複キーを後勝ちで黙って採用する
+        # ため、矛盾する genome_id/operator_params/入れ子 provenance 宣言が
+        # この検証をすり抜けて `genome_from_dict()` を通過し得た。
         try:
-            models.genome_from_dict(json.loads(payload))
+            models.genome_from_dict(models.loads_strict(payload))
         except models.GenomeValidationError as exc:
             raise LedgerError(
                 f"refusing to publish genome_id {genome.genome_id!r}: serialized payload failed "
@@ -321,7 +340,11 @@ class Ledger:
         # 素通し（FileNotFoundError）は変えず、symlink（壊れているものを
         # 含む）や台帳ディレクトリ外を指す実体だけを検出前に拒否する。
         self._reject_symlink_escape(path)
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # `models.loads_strict()`（重複キー fail-closed 拒否 — PR #267 Codex
+        # R15 指摘, 2026-08-18 採用）に統一する。理由は `write()` 冒頭の
+        # round-trip 検証と同一（重複キーの後勝ち黙認による矛盾宣言の素通り
+        # を防ぐ）。
+        data = models.loads_strict(path.read_text(encoding="utf-8"))
         genome = models.genome_from_dict(data)
         if genome.genome_id != genome_id:
             # ファイル名(要求ID)↔内容の自己申告ID の契約を強制する（Codex

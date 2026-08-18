@@ -5,6 +5,7 @@ DESIGN_VG_E0.md §7 AC「schema4種のloader/validator（fail-closed・未知
 """
 from __future__ import annotations
 
+import json
 import math
 import sys
 from pathlib import Path
@@ -204,6 +205,71 @@ def test_genome_roundtrip_to_json_from_json() -> None:
     text = models.genome_to_json(g)
     g2 = models.genome_from_json(text)
     assert g2 == g
+
+
+# --- PR #267 Codex R15 指摘（P2）: JSON 重複キーの黙認 ----------------------
+
+
+def _inject_duplicate_key(text: str, after_marker: str, key: str, value_json: str) -> str:
+    """`text`（`genome_to_json()` が出す `sort_keys=True, indent=2` の pretty
+    JSON）の `after_marker` を含む行の直後に `"{key}": {value_json},` を
+    差し込み、対象オブジェクトへ重複キーを注入するテスト用ヘルパー。
+    """
+    lines = text.split("\n")
+    idx = next(i for i, line in enumerate(lines) if after_marker in line)
+    indent = len(lines[idx + 1]) - len(lines[idx + 1].lstrip(" "))
+    injected = f'{" " * indent}"{key}": {value_json},'
+    lines.insert(idx + 1, injected)
+    return "\n".join(lines)
+
+
+def test_loads_strict_rejects_top_level_duplicate_key() -> None:
+    g = _base_genome()
+    text = models.genome_to_json(g)
+    dup_text = _inject_duplicate_key(text, '"genome_id"', "genome_id", '"0000000000000000"')
+    with pytest.raises(models.DuplicateJSONKeyError):
+        models.loads_strict(dup_text)
+
+
+def test_loads_strict_rejects_nested_duplicate_key_in_operator_params() -> None:
+    g = _base_genome()
+    text = models.genome_to_json(g)
+    dup_text = _inject_duplicate_key(text, '"operator_params": {', "rng_seed", "999")
+    with pytest.raises(models.DuplicateJSONKeyError):
+        models.loads_strict(dup_text)
+
+
+def test_loads_strict_rejects_nested_duplicate_key_in_anchors_provenance() -> None:
+    anchors = {
+        "checkpoint_sha256": "a" * 64,
+        "embed_sha256": {n: "a" * 64 for n in models.ANCHOR_NAMES},
+    }
+    g = models.build_genome(
+        coords=models.Coords(ritsu=0.5, pjs=0.2, user=0.3), seed=11, lineage="L-C",
+        generation=1, parents=("ffc44fd26d70e89d",), operator="drift",
+        operator_params={"rng_seed": 7, "step": 0.05}, anchors_provenance=anchors,
+    )
+    text = models.genome_to_json(g)
+    dup_text = _inject_duplicate_key(
+        text, '"checkpoint_sha256"', "checkpoint_sha256", '"' + "f" * 64 + '"'
+    )
+    with pytest.raises(models.DuplicateJSONKeyError):
+        models.loads_strict(dup_text)
+
+
+def test_loads_strict_matches_json_loads_for_well_formed_input() -> None:
+    g = _base_genome()
+    text = models.genome_to_json(g)
+    assert models.loads_strict(text) == json.loads(text)
+    assert models.genome_from_json(text) == g
+
+
+def test_genome_from_json_rejects_duplicate_key_as_validation_error() -> None:
+    g = _base_genome()
+    text = models.genome_to_json(g)
+    dup_text = _inject_duplicate_key(text, '"genome_id"', "genome_id", '"0000000000000000"')
+    with pytest.raises(models.GenomeValidationError):
+        models.genome_from_json(dup_text)
 
 
 def test_genome_from_dict_rejects_unknown_top_level_key() -> None:

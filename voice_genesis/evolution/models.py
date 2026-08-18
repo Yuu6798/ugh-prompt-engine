@@ -41,7 +41,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 # sibling import（simplex.py 等が踏襲する流儀。§ 下記 genome_from_dict() の
 # デファード `import simplex` のために、models.py 自身の読み込み時点で
@@ -104,6 +104,50 @@ HACK_DISPOSITIONS: Tuple[str, str] = ("retained", "superseded")
 class GenomeValidationError(ValueError):
     """VoiceGenome / EvaluationRecord / HackRecord の構築・デシリアライズ時の
     型・構造不正、または genome_id の再計算不一致（改ざん・破損）。"""
+
+
+class DuplicateJSONKeyError(json.JSONDecodeError):
+    """`loads_strict()` が JSON オブジェクト内の重複キーを検出した際に送出
+    する（PR #267 Codex R15 指摘, 2026-08-18 採用）。`json.JSONDecodeError`
+    のサブクラスとして定義することで、既存の `except json.JSONDecodeError`
+    節（`ledger.py`/`archive.py`/`genome_from_json()`）がコード変更なしに
+    そのまま fail-closed 拒否経路として機能する。
+    """
+
+
+def _reject_duplicate_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    """`json.loads(..., object_pairs_hook=...)` に渡すフック。標準の
+    `json.loads` は同一 JSON オブジェクト内に同じキーが複数回出現しても
+    エラーにせず、後勝ちで黙って採用する（Python の `dict` リテラル評価と
+    同じ挙動）。台帳ファイルでこれが起きると、矛盾する `genome_id` /
+    `operator_params` / 入れ子 `anchors_provenance` 宣言が検証（キー単位の
+    型チェック・genome_id 再計算一致）をすり抜けて `genome_from_dict()` を
+    通過し得る（重複キーそのものは検証対象にならないため）。
+
+    `object_pairs_hook` は文書内の全ての `{...}` ノードに対してボトムアップ
+    で（最も深い入れ子から順に）呼ばれるため、本フックをトップレベル
+    オブジェクトの構築に使うだけで `operator_params` / `anchors_provenance`
+    等、あらゆる深さの入れ子オブジェクトの重複キーも自動的に検出できる。
+    """
+    seen: set[str] = set()
+    result: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise DuplicateJSONKeyError(f"duplicate key in JSON object: {key!r}", "", 0)
+        seen.add(key)
+        result[key] = value
+    return result
+
+
+def loads_strict(data: Any) -> Any:
+    """`json.loads()` 相当だが、全階層の JSON オブジェクトで重複キーを
+    fail-closed 拒否する共有ローダー（PR #267 Codex R15 指摘, 2026-08-18
+    採用）。台帳・evolution モジュールの JSON パース箇所は本関数へ統一する
+    （`ledger.py` の `read()`/`write()` round-trip 検証、`genome_from_json()`
+    等）。重複キー検出時は `DuplicateJSONKeyError`（`json.JSONDecodeError`
+    のサブクラス）を送出する。
+    """
+    return json.loads(data, object_pairs_hook=_reject_duplicate_keys)
 
 
 def normalize_signed_zero(x: float) -> float:
@@ -809,7 +853,7 @@ def genome_from_dict(data: Any) -> VoiceGenome:
 
 def genome_from_json(text: str) -> VoiceGenome:
     try:
-        data = json.loads(text)
+        data = loads_strict(text)
     except json.JSONDecodeError as exc:
         raise GenomeValidationError(f"invalid JSON: {exc}") from exc
     return genome_from_dict(data)

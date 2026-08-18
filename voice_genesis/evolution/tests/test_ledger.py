@@ -230,6 +230,88 @@ def test_write_rejects_genome_with_id_mismatched_parent(tmp_path: Path, founder)
     assert child.genome_id not in led.list_genome_ids()
 
 
+# --- PR #267 Codex R15 指摘（P2）: JSON 重複キーの黙認 ----------------------
+
+
+def _inject_duplicate_key(text: str, after_marker: str, key: str, value_json: str) -> str:
+    """`text`（`genome_to_json()` が出す `sort_keys=True, indent=2` の pretty
+    JSON）の `after_marker` を含む行の直後に `"{key}": {value_json},` を
+    差し込み、対象オブジェクトへ重複キーを注入するテスト用ヘルパー。
+    """
+    lines = text.split("\n")
+    idx = next(i for i, line in enumerate(lines) if after_marker in line)
+    indent = len(lines[idx + 1]) - len(lines[idx + 1].lstrip(" "))
+    injected = f'{" " * indent}"{key}": {value_json},'
+    lines.insert(idx + 1, injected)
+    return "\n".join(lines)
+
+
+def test_read_rejects_top_level_duplicate_genome_id_key(tmp_path: Path, founder) -> None:
+    """台帳ファイル自体の JSON に `genome_id` が重複していると、標準
+    `json.loads` は後勝ちで黙って採用してしまう。`read()` は
+    `models.loads_strict()` 経由でこれを fail-closed 拒否する（矛盾する
+    genome_id 宣言が `genome_from_dict()` の検証をすり抜けるのを防ぐ）。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    path = led.path_for(founder.genome_id)
+    text = models.genome_to_json(founder)
+    dup_text = _inject_duplicate_key(text, '"genome_id"', "genome_id", '"0000000000000000"')
+    path.write_text(dup_text + "\n", encoding="utf-8")
+    with pytest.raises(models.DuplicateJSONKeyError):
+        led.read(founder.genome_id)
+
+
+def test_read_rejects_nested_duplicate_key_in_operator_params(tmp_path: Path, founder) -> None:
+    """`operator_params` のような入れ子オブジェクト内の重複キーも、
+    `object_pairs_hook` が全階層で呼ばれるため `read()` は同様に拒否する
+    （矛盾する operator_params 宣言が `genome_from_dict()` の検証をすり抜ける
+    のを防ぐ）。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    child = operators.drift(founder, rng_seed=1, step=0.02)
+    path = led.path_for(child.genome_id)
+    text = models.genome_to_json(child)
+    dup_text = _inject_duplicate_key(text, '"operator_params": {', "rng_seed", "999")
+    path.write_text(dup_text + "\n", encoding="utf-8")
+    with pytest.raises(models.DuplicateJSONKeyError):
+        led.read(child.genome_id)
+
+
+def test_write_rejects_genome_with_duplicate_key_parent(tmp_path: Path, founder) -> None:
+    """親 genome_id のファイルが台帳ディレクトリに存在していても、中身に
+    重複キー（例: `genome_id` 2回）があれば `read()` は
+    `DuplicateJSONKeyError`（`json.JSONDecodeError` のサブクラス）を送出
+    する。publish 前の親検証はこれを既存の `except json.JSONDecodeError`
+    節で捕捉し `LedgerError` へ正規化して拒否する（矛盾する親宣言を経由
+    した publish を防ぐ）。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    child = operators.drift(founder, rng_seed=1, step=0.02)
+    parent_path = tmp_path / f"{founder.genome_id}.json"
+    parent_path.parent.mkdir(parents=True, exist_ok=True)
+    text = models.genome_to_json(founder)
+    dup_text = _inject_duplicate_key(text, '"genome_id"', "genome_id", '"0000000000000000"')
+    parent_path.write_text(dup_text + "\n", encoding="utf-8")
+    assert led.exists(founder.genome_id)  # ファイルは存在する(重複キーがあるだけ)
+    with pytest.raises(ledger_mod.LedgerError):
+        led.write(child)
+    assert child.genome_id not in led.list_genome_ids()
+
+
+def test_write_idempotent_no_op_unaffected_by_strict_loader(tmp_path: Path, founder) -> None:
+    """重複キー拒否の導入が、正常な（重複キーの無い）台帳ファイルに対する
+    冪等 no-op 経路の動作を変えないことを確認する（write の round-trip
+    検証・read の parent 検証はいずれも整形済み JSON をそのまま通す）。
+    """
+    led = ledger_mod.Ledger(tmp_path)
+    r1 = led.write(founder)
+    assert r1.created is True
+    r2 = led.write(founder)
+    assert r2.created is False
+    assert r1.path.read_bytes() == r2.path.read_bytes()
+    assert led.read(founder.genome_id) == founder
+
+
 # --- PR #267 Codex R7 指摘1（P1）: publish 時の子の再導出検証 ---------------
 
 
