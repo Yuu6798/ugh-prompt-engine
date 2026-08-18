@@ -534,6 +534,9 @@ def collect_salvage_artifacts(run5_raw: Path, ds_repo: Path) -> List[Path]:
         run5_raw / "run5_config_phase_b.yaml",
         run5_raw / "run5_training_manifest.json",
     ]
+    log_dir = _LOG_DIR
+    if log_dir is not None:
+        candidates += sorted(log_dir.glob("*.log"))
     for exp_name in (EXP_NAME_PHASE_A, EXP_NAME_PHASE_B):
         ckpt_dir = ds_repo / "checkpoints" / exp_name
         for _step, ckpt in sorted(find_milestone_ckpts(ckpt_dir).items()):
@@ -593,17 +596,66 @@ class Heartbeat:
 # ---------------------------------------------------------------------------
 
 
+# `_run` のコマンド出力ログ置き場（`main` が起動直後に `set_log_dir` で設定する）。
+# None のままなら従来どおり出力を素通しする（--plan 等、ログ不要の経路）。
+_LOG_DIR: Optional[Path] = None
+
+
+def set_log_dir(path: Path) -> Path:
+    """`_run` の出力ログ置き場を設定して返す。"""
+    global _LOG_DIR
+    _LOG_DIR = Path(path)
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    return _LOG_DIR
+
+
+def sanitize_label(label: str) -> str:
+    """ステージラベルをログのファイル名へ落とす（`datasets/convert-d3` →
+    `datasets_convert-d3`）。空なら "run"。"""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", label) or "run"
+
+
+def tail_text(text: str, max_chars: int = 1500) -> str:
+    """末尾 `max_chars` 文字を返す（切り詰めたら先頭に印を付ける）。"""
+    if len(text) <= max_chars:
+        return text
+    return "…(先頭を省略)…\n" + text[-max_chars:]
+
+
 def _run(argv: Sequence[str], *, cwd: Optional[Path] = None,
          env: Optional[Dict[str, str]] = None, timeout: Optional[float] = None,
          label: str = "") -> None:
+    """外部コマンドを実行し、失敗したら `StageFailure` を送出する。
+
+    出力は `_LOG_DIR/<label>.log` へ落とし、**失敗時はその末尾をエラーへ
+    同梱する**（2026-08-18 実地: gdown が exit 1 で落ちた際、旧実装は
+    コマンド行と終了コードしか残さず、原因〔Drive の Quota exceeded〕の
+    特定に Pod 外からの再現調査を要した。無人 Pod は salvage → self-stop まで
+    進んで人が入れないため、証跡はその場で残すしかない）。ログ本体は
+    salvage で Drive へ退避される。"""
     printable = " ".join(shlex.quote(str(a)) for a in argv)
     print(f"| run5_bootstrap: [{label}] {printable}", flush=True)
-    result = subprocess.run(
-        [str(a) for a in argv], cwd=str(cwd) if cwd else None,
-        env=env, timeout=timeout,
-    )
+    if _LOG_DIR is None:
+        result = subprocess.run(
+            [str(a) for a in argv], cwd=str(cwd) if cwd else None,
+            env=env, timeout=timeout,
+        )
+        captured = ""
+    else:
+        log_path = _LOG_DIR / f"{sanitize_label(label)}.log"
+        with open(log_path, "ab") as f:
+            f.write(f"\n=== {printable} ===\n".encode())
+            f.flush()
+            result = subprocess.run(
+                [str(a) for a in argv], cwd=str(cwd) if cwd else None,
+                env=env, timeout=timeout, stdout=f, stderr=subprocess.STDOUT,
+            )
+        captured = log_path.read_text(encoding="utf-8", errors="replace")
     if result.returncode != 0:
-        raise StageFailure(f"[{label}] exit {result.returncode}: {printable}")
+        detail = f"[{label}] exit {result.returncode}: {printable}"
+        if captured:
+            detail += f"\n--- command output (tail) ---\n{tail_text(captured)}"
+        raise StageFailure(detail)
 
 
 def _rclone_argv(rclone_conf: Path, drive_folder_id: str, path: Path) -> List[str]:
@@ -727,6 +779,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     start = time.monotonic()
     work: Path = args.work_dir
     work.mkdir(parents=True, exist_ok=True)
+    set_log_dir(work / "cmdlogs")
 
     exit_code = 0
     heartbeat: Optional[Heartbeat] = None
@@ -789,12 +842,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             verify_file_sha256(ritsu_zip, materials["ritsu_voicebank_zip"]["sha256"],
                                "ritsu_voicebank_zip")
 
-            _run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "gdown"],
-                 label="materials/gdown-install")
+            # PJS corpus は公開 Drive ファイル。匿名 DL は Google 側の per-file
+            # 上限（"Quota exceeded"）に達すると HTML の警告/拒否ページを返し、
+            # gdown は exit 1 で落ちる（2026-08-18 実地: run 5 二度目の起動が
+            # これで停止。1 度目は上限到達前で成功していた）。**認証済み Drive
+            # API 経由なら同一バイト（sha256 一致を実測）を取得できる**ため、
+            # 既に注入済みの rclone トークンで `backend copyid`（ファイル ID
+            # 直指定）を使う。gdown 依存はこれで撤去。
             pjs_zip = dl / "PJS_corpus_ver1.1.zip"
-            _run(["gdown",
-                  f"https://drive.google.com/uc?id={materials['pjs_corpus_zip']['gdown_id']}",
-                  "-O", pjs_zip], label="materials/pjs-zip")
+            _run(["rclone", "--config", rclone_conf, "backend", "copyid",
+                  "run5drive:", materials["pjs_corpus_zip"]["drive_file_id"], pjs_zip],
+                 label="materials/pjs-zip")
             verify_file_sha256(pjs_zip, materials["pjs_corpus_zip"]["sha256"],
                                "pjs_corpus_zip")
 

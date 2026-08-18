@@ -9,9 +9,11 @@
       "source": "S1_GPU_RUNBOOK.md §2 素材 1（s1_dataprep/README.md §0 と同一 pin）"
     },
     "pjs_corpus_zip": {
-      "description": "PJS corpus ver1.1（D1）。取得は gdown（Google Drive）",
-      "gdown_id": "1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_",
+      "description": "PJS corpus ver1.1（D1）。公開 Google Drive ファイル",
+      "drive_file_id": "1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_",
       "sha256": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",
+      "size_bytes": 275179158,
+      "fetch_note": "取得は **認証済み Drive API 経由**（`rclone backend copyid run5drive: <drive_file_id> <dest>`・注入済みトークンを使用）。匿名 DL（gdown / `uc?export=download`）は Google の per-file 上限に達すると HTML の \"Quota exceeded\" ページを返して失敗する — 2026-08-18 実地で run 5 の 二度目の起動がこれで停止した（1 度目は上限到達前で成功）。認証済み経路で sha256 一致（本 pin 値）を実測確認済み。",
       "source": "S1_GPU_RUNBOOK.md §2 素材 2"
     },
     "namine_ritsu_diffsinger_zip": {

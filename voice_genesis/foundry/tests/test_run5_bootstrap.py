@@ -640,3 +640,80 @@ def test_summarize_ffmpeg_version_keeps_diagnosis_drops_configuration() -> None:
     assert "libavformat    58. 76.100" in out
     assert "--enable-x" not in out
     assert len(out) <= 800
+
+
+# --- コマンド出力ログ / 失敗時の証跡（2026-08-18 gdown 停止の教訓） ---------
+
+
+def test_sanitize_label_makes_safe_log_filenames() -> None:
+    assert r5b.sanitize_label("datasets/convert-d3") == "datasets_convert-d3"
+    assert r5b.sanitize_label("materials/pjs-zip") == "materials_pjs-zip"
+    assert r5b.sanitize_label("") == "run"
+    assert "/" not in r5b.sanitize_label("a/b/c")
+
+
+def test_tail_text_keeps_end_and_marks_truncation() -> None:
+    assert r5b.tail_text("short") == "short"
+    long = "x" * 100 + "TAIL_MARKER"
+    out = r5b.tail_text(long, max_chars=20)
+    assert out.endswith("TAIL_MARKER")
+    assert "省略" in out
+    assert len(out) <= 20 + 20  # 印の分だけ超える
+
+
+def test_run_failure_includes_command_output_tail(tmp_path: Path) -> None:
+    """外部コマンドが失敗したら、終了コードだけでなく**出力の末尾**を
+    StageFailure に載せる（旧実装はコマンド行と exit code のみで、gdown の
+    Drive Quota exceeded を Pod 外の再現調査でしか特定できなかった）。"""
+    r5b.set_log_dir(tmp_path / "cmdlogs")
+    try:
+        with pytest.raises(r5b.StageFailure) as exc_info:
+            r5b._run(
+                [sys.executable, "-c",
+                 "import sys; print('DIAGNOSTIC_NEEDLE'); sys.exit(3)"],
+                label="test/failing",
+            )
+        msg = str(exc_info.value)
+        assert "exit 3" in msg
+        assert "DIAGNOSTIC_NEEDLE" in msg
+        # ログ本体も残る（salvage で Drive へ退避される）
+        log = tmp_path / "cmdlogs" / "test_failing.log"
+        assert log.exists()
+        assert "DIAGNOSTIC_NEEDLE" in log.read_text(encoding="utf-8")
+    finally:
+        r5b._LOG_DIR = None
+
+
+def test_run_success_writes_log_without_raising(tmp_path: Path) -> None:
+    r5b.set_log_dir(tmp_path / "cmdlogs")
+    try:
+        r5b._run([sys.executable, "-c", "print('OK_LINE')"], label="test/ok")
+        log = tmp_path / "cmdlogs" / "test_ok.log"
+        assert "OK_LINE" in log.read_text(encoding="utf-8")
+    finally:
+        r5b._LOG_DIR = None
+
+
+def test_collect_salvage_artifacts_includes_command_logs(tmp_path: Path) -> None:
+    """コマンドログは失敗診断の一次証跡なので salvage 対象に含める。"""
+    r5b.set_log_dir(tmp_path / "cmdlogs")
+    try:
+        (tmp_path / "cmdlogs" / "materials_pjs-zip.log").write_text("boom", encoding="utf-8")
+        run5_raw = tmp_path / "run5_raw"
+        run5_raw.mkdir()
+        (run5_raw / "assembly_manifest.json").write_bytes(b"{}")
+        artifacts = r5b.collect_salvage_artifacts(run5_raw, tmp_path / "DiffSinger")
+        assert any(p.name == "materials_pjs-zip.log" for p in artifacts)
+    finally:
+        r5b._LOG_DIR = None
+
+
+def test_pjs_pin_uses_drive_file_id_not_gdown() -> None:
+    """PJS は認証済み Drive API（rclone backend copyid）で取得する — 匿名 DL の
+    per-file 上限（Quota exceeded）で無人走行が止まる経路を撤去した記録。"""
+    materials = r5b.load_material_pins(r5b.MATERIAL_PINS_PATH)
+    pjs = materials["pjs_corpus_zip"]
+    assert "gdown_id" not in pjs
+    assert pjs["drive_file_id"] == "1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_"
+    assert pjs["size_bytes"] == 275179158
+    assert "Quota exceeded" in pjs["fetch_note"]
