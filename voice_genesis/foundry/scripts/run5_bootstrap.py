@@ -410,18 +410,78 @@ def milestone_ckpt_sizes(ckpt_dir: Path) -> Dict[int, int]:
     }
 
 
-def index_files_by_sha256(root: Path) -> Dict[str, Path]:
-    """`root` 配下（再帰）の全ファイルを `{sha256: path}` で索引する。
+# user_sources ランナウェイガード（review PR#270 セルフレビュー #1）: rclone
+# 経路は user_sources/ 配下を無差別コピーするため、想定外に巨大／大量の
+# フォルダを掴むと課金 Pod のディスク・帯域を浪費する。台帳原本は 17 本・
+# 実測 ~2 MiB のため、桁違いの余裕（500 MiB / 200 files）を上限に置き、超過は
+# hash 前に fail-closed する（正当な「〜 のコピー」余剰は通す・runaway だけ止める）。
+USER_SOURCES_MAX_BYTES = 500 * 1024 * 1024
+USER_SOURCES_MAX_FILES = 200
+
+
+def _iter_files(root: Path) -> List[Path]:
+    return sorted(p for p in root.rglob("*") if p.is_file())
+
+
+def guard_user_sources_size(root: Path) -> Tuple[int, int]:
+    """`root` 配下の総ファイル数・総バイト数を測り、ランナウェイ上限
+    （`USER_SOURCES_MAX_*`）を超えていれば `StageFailure` で fail-closed する。
+    戻り値は (file_count, total_bytes)。hash を回す前に呼ぶ（大量ファイルの
+    全 hash 自体が浪費になるため）。"""
+    files = _iter_files(root)
+    total = sum(p.stat().st_size for p in files)
+    if len(files) > USER_SOURCES_MAX_FILES or total > USER_SOURCES_MAX_BYTES:
+        raise StageFailure(
+            f"user_sources runaway guard: {len(files)} file(s) / {total} bytes "
+            f"exceeds cap ({USER_SOURCES_MAX_FILES} files / {USER_SOURCES_MAX_BYTES} "
+            "bytes) — 想定は台帳原本 17 本・~2 MiB。巨大／無関係フォルダを掴んで"
+            "いないか user_sources/ を確認（fail-closed・hash 前に停止）"
+        )
+    return len(files), total
+
+
+def index_files_by_sha256(root: Path) -> Dict[str, List[Path]]:
+    """`root` 配下（再帰）の全ファイルを `{sha256: [paths]}` で索引する。
     user 宅録原本の特定に使う（ファイル名非依存 — 台帳 `source_filename` は
     intake 正規化名で Drive 表示名と一致せず、Drive コピーは「〜 のコピー」を
     付けるため、名前照合は構造的に成立しない。中身 hash なら重複コピーにも
-    頑健）。同一 sha が複数あればソート順で先勝ち（同内容につき等価）。"""
-    index: Dict[str, Path] = {}
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
-        digest = sha256_file(path)
-        if digest not in index:
-            index[digest] = path
+    頑健）。同一 sha の重複は全パスを保持する（余剰カウントを正確にするため —
+    review PR#270 セルフレビュー #3。使う 1 本はソート順先頭で等価）。"""
+    index: Dict[str, List[Path]] = {}
+    for path in _iter_files(root):
+        index.setdefault(sha256_file(path), []).append(path)
     return index
+
+
+def match_user_sources(
+    files_by_sha: Dict[str, List[Path]], ledger_entries: Sequence[dict]
+) -> Tuple[Dict[str, Path], List[str], int]:
+    """台帳エントリを sha256 で `files_by_sha` に突き合わせる（純関数）。
+    戻り値は (card_id -> path, 欠落 diff リスト, 余剰ファイル数)。
+
+    review PR#270 セルフレビュー #3/#4: 余剰は「distinct sha 数」ではなく
+    **実ファイル数**で数える（重複コピーの過小報告を防ぐ）。欠落メッセージは
+    「該当 sha のファイルが user_sources に無い＝未コピー or 別内容」である
+    ことを明示する（sha-only 照合では『名前は合うが中身違う』が『欠落』側に
+    出るため、診断の手掛かりを言葉で補う）。"""
+    source_paths: Dict[str, Path] = {}
+    diffs: List[str] = []
+    matched_shas: set = set()
+    for entry in ledger_entries:
+        paths = files_by_sha.get(entry["source_sha256"])
+        if not paths:
+            diffs.append(
+                f"user source not found by content: {entry['source_filename']} "
+                f"(sha256 {entry['source_sha256'][:12]}…) — user_sources/ に未コピー、"
+                "または該当ファイルの中身が台帳と異なる"
+            )
+            continue
+        source_paths[entry["card_id"]] = paths[0]
+        matched_shas.add(entry["source_sha256"])
+    matched_file_count = sum(len(files_by_sha[s]) for s in matched_shas)
+    total_files = sum(len(v) for v in files_by_sha.values())
+    extras = total_files - matched_file_count
+    return source_paths, diffs, extras
 
 
 def collect_salvage_artifacts(run5_raw: Path, ds_repo: Path) -> List[Path]:
@@ -804,25 +864,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # 頑健（同一 sha の重複は同内容なのでどれを使っても等価）。
             ledger = json.loads(USER_DONOR_LEDGER_PATH.read_text(encoding="utf-8"))
             ledger_entries = ledger["entries"]
+            guard_user_sources_size(user_src_dir)  # hash 前にランナウェイ停止
             files_by_sha = index_files_by_sha256(user_src_dir)
-            source_paths: Dict[str, Path] = {}
-            diffs: List[str] = []
-            for entry in ledger_entries:
-                found = files_by_sha.get(entry["source_sha256"])
-                if found is None:
-                    diffs.append(
-                        f"user source missing (no file with sha256 "
-                        f"{entry['source_sha256'][:12]}… = {entry['source_filename']})"
-                    )
-                    continue
-                source_paths[entry["card_id"]] = found
+            source_paths, diffs, extras = match_user_sources(files_by_sha, ledger_entries)
             if diffs:
                 raise PinMismatchError(diffs)
-            extras = len(files_by_sha) - len(
-                {e["source_sha256"] for e in ledger_entries} & set(files_by_sha)
-            )
-            print(f"| run5_bootstrap: user sources matched 17/17 by sha256 "
-                  f"({extras} extra file(s) ignored)", flush=True)
+            n = len(ledger_entries)
+            print(f"| run5_bootstrap: user sources matched {len(source_paths)}/{n} "
+                  f"by sha256 ({extras} extra file(s) ignored)", flush=True)
             heartbeat.mark("materials", "ok")
 
             # --- stage 4: datasets -----------------------------------------

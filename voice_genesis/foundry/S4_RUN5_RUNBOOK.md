@@ -54,31 +54,58 @@ vocoder = S1 以来のローカル資産、の 2 系統が別物という整理�
    ファイルを特定する（名前非依存。台帳の `source_filename` は intake
    正規化名で Drive 表示名とは元々一致しない）。台帳のどれかの sha に
    一致するファイルが 1 本でも見つからなければ fail-closed
-3. **rclone conf（サービスアカウント方式・推奨）**: 無人 Pod からの
-   読み書きにはサービスアカウント（SA）が最も簡単で、アクセス範囲が
-   「SA に共有したフォルダだけ」に自然に閉じる:
-   - Google Cloud Console → 新規プロジェクト（既存でも可）→
-     「API とサービス」で **Google Drive API を有効化**
-   - 「IAM と管理 → サービスアカウント」で SA を作成 → 「鍵」タブから
-     **JSON キー**を作成しダウンロード
-   - 成果物フォルダを SA のメールアドレス（`...@....iam.gserviceaccount.com`）
-     に**編集者として共有**（この共有が実質のスコープ制限 — SA は他の
-     ファイルに一切届かない）
-   - rclone.conf を組み立てて base64 化:
+3. **rclone conf（トークンの権限範囲に注意）**: リモート名は `run5drive`。
+   下記いずれの方式でも、bootstrap は `--drive-root-folder-id
+   <RUN5_DRIVE_FOLDER_ID>` で成果物フォルダを起点に読み書きする。
 
-     ```ini
-     [run5drive]
-     type = drive
-     scope = drive
-     service_account_credentials = <JSON キーの中身を 1 行で>
-     ```
+   **重要（セキュリティの実態）**: `scope = drive` のトークン自体は
+   「そのアカウント／SA の Drive 全域」への読み書き権を持つ。被害面を
+   成果物フォルダ 1 つに閉じ込めているのは **その主体に他のフォルダを
+   共有していないこと**であって、`scope` 値ではない。したがって:
+   - 使う主体には**成果物フォルダ以外を共有しない**（既存アカウントの
+     rclone トークンを流用しない — 全 Drive が露出する）
+   - conf に `root_folder_id` を書けば、そのトークンが起点を超えて辿るのを
+     防ぐ多層防御になる（`--drive-root-folder-id` フラグと二重でも無害）
 
-     ```bash
-     base64 -w0 rclone.conf   # 出力を RUN5_RCLONE_CONF_B64 へ
-     ```
-   - JSON キー・conf・base64 はリポジトリ/チャット記録に残さない運用が
-     望ましい（漏洩時の被害面は共有した 1 フォルダに限定されるが、
-     キーのローテーションは SA の鍵削除で即時にできる）
+   **方式 A: サービスアカウント（SA）**
+   - Google Cloud Console →「API とサービス」で **Google Drive API を有効化**
+   - 「IAM と管理 → サービスアカウント」で SA 作成 →「鍵」タブから **JSON キー**
+   - 成果物フォルダを SA のメール（`...@....iam.gserviceaccount.com`）に
+     **編集者として共有**（SA の Drive は空なので、この 1 フォルダ以外は
+     存在しない = 実質のスコープ制限）
+   - ※ 組織ポリシー `iam.disableServiceAccountKeyCreation` が JSON キー作成を
+     ブロックする環境では方式 B を使う（2026-08-18 実地でこのブロックに遭遇）
+
+   ```ini
+   [run5drive]
+   type = drive
+   scope = drive
+   root_folder_id = <RUN5_DRIVE_FOLDER_ID>
+   service_account_credentials = <JSON キーの中身を 1 行で>
+   ```
+
+   **方式 B: 専用 Google アカウント + OAuth トークン（GCP 回避・実地採用）**
+   - run 5 専用の新規 Gmail を作る（**Drive は空のまま使う** — これが被害面の
+     封じ込め）。成果物フォルダをこの新アカウントに**編集者として共有**
+   - 端末（PC or Termux）で `rclone authorize "drive"` →
+     **必ず新アカウントでログイン**して承認 → 出力の JSON トークンを控える
+
+   ```ini
+   [run5drive]
+   type = drive
+   scope = drive
+   root_folder_id = <RUN5_DRIVE_FOLDER_ID>
+   token = <rclone authorize が出力した {"access_token":...} を 1 行で>
+   ```
+
+   いずれも base64 化して注入:
+
+   ```bash
+   base64 -w0 rclone.conf   # 出力を RUN5_RCLONE_CONF_B64 へ
+   ```
+   - JSON キー・トークン・conf・base64 はリポジトリ／チャット記録に残さない
+     運用が望ましい（トークン失効は SA の鍵削除、または新アカウントの
+     「セキュリティ → サードパーティのアクセス」で rclone を取り消して即時）
 
 ## 2. Pod 作成（RunPod REST API）
 
