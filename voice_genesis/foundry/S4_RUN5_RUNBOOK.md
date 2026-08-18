@@ -118,6 +118,17 @@ RTX 3090 Community $0.22/h・containerDiskInGb 60）を踏襲する。起動コ�
 （$0.22/h × 24h ≈ $5.3）。スクリプト自体が死ぬ場合の課金露出は Q8 として設計受容
 済み — 第 2 防衛線は §3 のポーリングから の API stop。
 
+### 2.1 素材取得経路の注意（2026-08-18 実地）
+
+- **PJS corpus は認証済み Drive API で取る**（`rclone backend copyid`・注入済み
+  トークン）。匿名 DL（gdown / `uc?export=download`）は Google の per-file 上限に
+  達すると HTML の "Quota exceeded" を返して失敗する — run 5 の二度目の起動が
+  これで停止した（1 度目は上限到達前で成功しており、**再現性の無い停止**として
+  現れる点に注意）。認証済み経路で sha256 一致を実測確認済み
+- 外部コマンドの出力は `<work>/cmdlogs/<stage>.log` に残り、失敗時は末尾が
+  `failure.status.json` の detail に載る + ログ本体も salvage で Drive へ退避
+  される（無人 Pod は人が入れないため、証跡はその場で残すしかない）
+
 ## 3. 監視（RunPod API ポーリング + Drive heartbeat）
 
 - **進捗の正は Drive の heartbeat**（`<stage>.status.json` — 段階・status・UTC）。
