@@ -184,6 +184,18 @@ class Coords:
         return {"ritsu": self.ritsu, "pjs": self.pjs, "user": self.user}
 
 
+def is_valid_coord_scalar(value: Any) -> bool:
+    """coords 座標の生値として許容される型か判定する共有述語（bool 拒否・
+    `(int, float)` 以外は非許容 — 文字列を含む）。`_coords_from_dict()`
+    （読込経路）と `simplex._as_triple()`（`normalize()` 等の mapping 入力
+    経路）がこの単一述語を共有する（PR #267 Codex R17 指摘: 従来
+    `simplex.normalize()` の mapping 入力経路は `float()` 直呼びのため
+    `{"ritsu": True, ...}` や数値文字列を黙って数値変換しており、
+    `_coords_from_dict` の型検証と非対称だった）。
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _validate_coords_value(coords: Coords, *, normalize: bool) -> Coords:
     """coords が Δ²（3頂点 ritsu/pjs/user、成分非負・合計1）上の正規形
     （小数6桁丸め済み・符号付きゼロ非含有）であることを検証する
@@ -242,7 +254,7 @@ def _coords_from_dict(data: Any) -> Coords:
     values: Dict[str, float] = {}
     for name in ANCHOR_NAMES:
         raw = data[name]
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        if not is_valid_coord_scalar(raw):
             raise GenomeValidationError(f"coords.{name} must be a number, got {raw!r}")
         values[name] = float(raw)
     coords = Coords(**values)

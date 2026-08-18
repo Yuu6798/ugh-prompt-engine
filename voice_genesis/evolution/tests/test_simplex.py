@@ -112,6 +112,41 @@ def test_normalize_accepts_models_coords_input() -> None:
     assert a == b
 
 
+def test_normalize_rejects_bool_mapping_values() -> None:
+    """PR #267 Codex R17 指摘: bool は int のサブクラスのため `float()` 直呼び
+    だと {"ritsu": True, "pjs": False, "user": False} が黙って (1.0, 0.0, 0.0)
+    へ変換されてしまう — models._coords_from_dict と同じ述語で拒否する。"""
+    with pytest.raises(ValueError, match="must be a number"):
+        simplex.normalize({"ritsu": True, "pjs": False, "user": False})
+
+
+def test_normalize_rejects_numeric_string_mapping_values() -> None:
+    """数値文字列も `float()` 直呼びだと黙って変換されてしまっていた
+    （PR #267 Codex R17 指摘）。"""
+    with pytest.raises(ValueError, match="must be a number"):
+        simplex.normalize({"ritsu": "0.5", "pjs": 0.3, "user": 0.2})
+
+
+def test_normalize_still_accepts_plain_int_mapping_values() -> None:
+    """bool/str 拒否の追加後も、通常の int/float 座標は従来どおり受理する
+    （PR #267 Codex R17 の回帰防止）。"""
+    c = simplex.normalize({"ritsu": 1, "pjs": 0, "user": 0})
+    assert (c.ritsu, c.pjs, c.user) == (1.0, 0.0, 0.0)
+
+
+def test_l1_distance_rejects_bool_mapping_values() -> None:
+    """normalize() 以外の mapping 入力経路（l1_distance/assign_lineage/
+    cell_id は共通の `_as_triple()` を経由する）でも同じ拒否が効くことを
+    確認する。"""
+    with pytest.raises(ValueError, match="must be a number"):
+        simplex.l1_distance({"ritsu": True, "pjs": False, "user": False}, models.Coords(1, 0, 0))
+
+
+def test_assign_lineage_rejects_numeric_string_mapping_values() -> None:
+    with pytest.raises(ValueError, match="must be a number"):
+        simplex.assign_lineage({"ritsu": "1.0", "pjs": 0.0, "user": 0.0})
+
+
 # --- l1_distance() -----------------------------------------------------------
 
 

@@ -36,10 +36,24 @@ def _as_triple(coords: CoordsLike) -> Tuple[float, float, float]:
     if isinstance(coords, models.Coords):
         return coords.ritsu, coords.pjs, coords.user
     if isinstance(coords, Mapping):
-        try:
-            return float(coords["ritsu"]), float(coords["pjs"]), float(coords["user"])
-        except KeyError as exc:
-            raise ValueError(f"coords mapping missing key: {exc}") from exc
+        raw_values = {}
+        for name in ("ritsu", "pjs", "user"):
+            try:
+                raw_values[name] = coords[name]
+            except KeyError as exc:
+                raise ValueError(f"coords mapping missing key: {exc}") from exc
+        # 各生値を変換前に検証する（PR #267 Codex R17 指摘: bool/数値文字列の
+        # 黙変換を拒否 — models._coords_from_dict と同じ述語を共有する）。
+        for name, raw in raw_values.items():
+            if not models.is_valid_coord_scalar(raw):
+                raise ValueError(
+                    f"coords[{name!r}] must be a number (bool/str rejected), got {raw!r}"
+                )
+        return (
+            float(raw_values["ritsu"]),
+            float(raw_values["pjs"]),
+            float(raw_values["user"]),
+        )
     raise TypeError(f"coords must be models.Coords or a mapping, got {type(coords).__name__}")
 
 
