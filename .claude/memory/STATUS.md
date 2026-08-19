@@ -10,6 +10,7 @@
 |---|---|---|---|
 | run 5 実行 | RunPod 無人ブートストラップでの D3 話者分離走行（Q6/Q7）→ 耳判定①〜④ | P2 | 実装=#269 マージ済み。手順正本=`voice_genesis/foundry/S4_RUN5_RUNBOOK.md`。**律速=User 注入物 3 点**（user 宅録原本 17 本アーカイブの Drive 直リンク / 成果物フォルダ限定スコープの rclone conf base64 / 退避先 Drive フォルダ ID）+ `RUN5_PIN_COMMIT`=マージ後 main の SHA（0d96949 以降）。cap $8・24h 自己停止・NaN/pin 不一致 fail-closed・監視は Drive heartbeat が正 |
 | s3_record 未転記残 3 項目 | checkpoint sha / 学習 log・TB sha / wav 生成コマンド対応表 | P3 | AI-Drive 退避物からの回収。クロー引退後の回収経路は run 5 の Drive push 経路確立と併せて解決（s3_record §7 の正直会計・費用は概算転記済み実測待ち） |
+| VG-L0（学習回路） | 制御層「稽古」1 遷移の最小実験 — 別曲への技能転移の初観測 | P2 | **User 採用 2026-08-19**・正本=`voice_genesis/evolution/DESIGN_VG_L0.md`（進化理論 v0.2 収載 = `foundry/VISION_evolution_theory_v0.2.md` とセット）。制御層学習を採用（spk_embed 学習は恒久却下・Adapter は天井実測後）・Level 2 解禁条件 = 校正済み自動評価軸 ≥1・TRANSFER_SKILL 語彙化・文化島は v0.3 素材。前提 = run 5 checkpoint（GPU 学習ゼロ・VG-E1 と並行可・目安 <$1）。実装第 1 タスク = gate_synth 入力での制御軸表現力の実測 |
 | VG-E1 | Probe 合成配線 + 評価軸語彙凍結 + 第 0 世代取り込み | P3 | **run 5 checkpoint 律速**（④三角形補間が第 0 世代を兼ねる・DESIGN_S4 §4）。評価軸=LRA 単独禁止・ノイズ/区間レベル軸必須（run 4 評価器ギャップ）。d_min 校正・VG-E0 §8 の「run 4 判定材料④」文言更新もここで |
 | ドナー拡張（DX） | つくよみ第 4 頂点候補 + あみたろ発音教師枠の intake → run 7 | P3 | **User 正式採用 2026-08-18**・正本=`voice_genesis/foundry/DESIGN_DONOR_EXPANSION.md`（調査生データ=`donor_corpus_survey_2026-08-18.md`）。前提=つくよみ規約逐語 pin + ウィスパー f0 スクリーニング / あみたろ逐語 pin + 50% 会計。run 7 の介入選択は Q7 判定で分岐（D3 有罪→あみたろ教師交代先行）。頂点追加時は VG-E0 版番改訂を伴う |
 | VG follow-up 11 件 | PR #262/#263 由来のコード修正キュー | P3 | #264 には含めず繰越（#264 本文 Notes for Reviewer 参照）。次の VG 実装 PR で対応 |
