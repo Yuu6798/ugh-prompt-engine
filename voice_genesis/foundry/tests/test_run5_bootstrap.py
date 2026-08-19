@@ -919,11 +919,22 @@ def test_compare_execution_manifests_detects_environment_drift() -> None:
         pod_id="p2", repo_commit="abc", container_image="img", gpu="g")
     curr["stage_status"]["gates"] = {"status": "ok"}  # 比較対象外
     assert r5b.compare_execution_manifests(prev, curr) == []
+    # 前回側は走行完了時の最終形（実測版が追記済み）、今回側は preflight の
+    # 初期形（python のみ）— 共有キーが一致する限り差分にしない（セルフ
+    # レビュー #1: 等値比較だと構造的に毎回 environment_versions が差分になり
+    # 「match with previous run」が死文化する）。
+    prev["environment_versions"]["binarize_numeric_stack"] = "numpy 1.26.4"
+    assert r5b.compare_execution_manifests(prev, curr) == []
+    # 共有キー（python）の実差分は検出する
+    prev["environment_versions"]["python"] = "0.0.0"
+    assert r5b.compare_execution_manifests(prev, curr) == ["environment_versions"]
+    prev["environment_versions"]["python"] = curr["environment_versions"]["python"]
     curr["repo_commit"] = "def"
     curr["material_hashes"] = {"ffmpeg": {"sha256": "x"}}
     diffs = r5b.compare_execution_manifests(prev, curr)
     assert "repo_commit" in diffs and "material_hashes" in diffs
     assert "stage_status" not in diffs
+    assert "environment_versions" not in diffs
 
 
 def test_write_execution_manifest_lands_in_run5_raw_and_is_salvaged(
@@ -965,7 +976,10 @@ def test_summarize_material_hashes_keeps_only_sha256_keys() -> None:
 
 def test_lock_file_render_pins_match_runtime_gate() -> None:
     """外部レビュー P3: lock + runtime gate の二重保証 — lock ファイルの
-    確定 pin 行が NUMERIC_STACK_PIN と一致すること（drift 検出）。"""
+    確定 pin 行に NUMERIC_STACK_PIN が全て含まれること（drift 検出）。
+    部分集合検査にするのは、run 6 の freeze 捕獲後に lock へ追加 pin
+    （praat-parselmouth 等）が入る計画のため（等値だと lock 完全化 PR が
+    このテスト自身と矛盾する — セルフレビュー #6）。"""
     lock_path = (
         Path(r5b.__file__).resolve().parent / "requirements_run5_pod.lock")
     pinned = {
@@ -973,7 +987,14 @@ def test_lock_file_render_pins_match_runtime_gate() -> None:
         for line in lock_path.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     }
-    assert pinned == set(r5b.NUMERIC_STACK_PIN)
+    assert set(r5b.NUMERIC_STACK_PIN) <= pinned
+    # 逆方向の drift（lock 側の数値スタック 4 パッケージだけ別版で残る）も検出
+    gate_pkgs = {p.split("==")[0]: p for p in r5b.NUMERIC_STACK_PIN}
+    for line in pinned:
+        pkg = line.split("==")[0]
+        if pkg in gate_pkgs:
+            assert line == gate_pkgs[pkg], (
+                f"lock と NUMERIC_STACK_PIN の版が食い違う: {line}")
 
 
 def test_phase_remote_dirs_cover_both_phases_and_are_distinct() -> None:

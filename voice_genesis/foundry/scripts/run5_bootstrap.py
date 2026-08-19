@@ -667,11 +667,25 @@ def compare_execution_manifests(previous: Dict[str, object],
     """前回 manifest と今回の初期 manifest の差分キーを返す（空 = 一致）。
     fail-closed にはしない — 意図した差分（pin 更新・コミット前進）が正常系に
     普通に存在するため、比較結果は heartbeat の info として記録し、判断は
-    record / 人間側に残す。"""
-    return [
-        key for key in EXEC_MANIFEST_COMPARE_KEYS
-        if previous.get(key) != current.get(key)
-    ]
+    record / 人間側に残す。
+
+    environment_versions は**両方に存在するキーのみ**比較する（セルフ
+    レビュー #1: 前回側は走行完了時の最終形〔render/binarize の実測版が
+    追記済み〕、今回側は preflight 時点の初期形〔python のみ〕なので、
+    全体の等値比較だと構造的に常に差分になり、比較機能が死ぬ）。"""
+    diffs: List[str] = []
+    for key in EXEC_MANIFEST_COMPARE_KEYS:
+        prev_val = previous.get(key)
+        curr_val = current.get(key)
+        if key == "environment_versions" and isinstance(prev_val, dict) \
+                and isinstance(curr_val, dict):
+            shared = set(prev_val) & set(curr_val)
+            if any(prev_val[k] != curr_val[k] for k in shared):
+                diffs.append(key)
+            continue
+        if prev_val != curr_val:
+            diffs.append(key)
+    return diffs
 
 
 def probe_gpu_name() -> Optional[str]:
@@ -1082,12 +1096,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # 正常系（初回）。差分は info として記帳し fail-closed にはしない —
         # 意図した差分（pin 更新・コミット前進）が普通に存在する。
         prev_manifest_path = work / "previous_run_execution_manifest.json"
-        subprocess.run(
-            ["rclone", "--config", str(rclone_conf), "copyto",
-             f"run5drive:{EXEC_MANIFEST_NAME}", str(prev_manifest_path),
-             "--drive-root-folder-id", drive_folder_id],
-            timeout=300,
-        )
+        try:
+            subprocess.run(
+                ["rclone", "--config", str(rclone_conf), "copyto",
+                 f"run5drive:{EXEC_MANIFEST_NAME}", str(prev_manifest_path),
+                 "--drive-root-folder-id", drive_folder_id],
+                timeout=300,
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            # 情報目的の取得は run を落とさない（セルフレビュー #2:
+            # TimeoutExpired だけが素通りして preflight 全体を殺していた）。
+            print(f"| run5_bootstrap: previous manifest fetch failed "
+                  f"(non-fatal): {exc}", flush=True)
         if prev_manifest_path.exists():
             try:
                 prev_manifest = json.loads(
@@ -1468,9 +1488,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     tail = read_tail(train_log)
                     return f"\n--- train.log (tail) ---\n{tail}" if tail else ""
 
+                # -u: 子プロセスの stdout をアンバッファ化（セルフレビュー #3:
+                # ファイル向きの stdout はブロックバッファになり、NaN 検知等の
+                # SIGKILL 経路では直近出力が flush されず train.log 末尾の診断が
+                # 失敗直前を写さない）。
                 train_log_f = open(train_log, "ab")
                 proc = subprocess.Popen(
-                    [sys.executable, str(ds_repo / "scripts" / "train.py"),
+                    [sys.executable, "-u", str(ds_repo / "scripts" / "train.py"),
                      "--config", str(config_path), "--exp_name", exp_name],
                     cwd=str(ds_repo),
                     stdout=train_log_f, stderr=subprocess.STDOUT,
@@ -1579,23 +1603,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # --- stage 9: salvage（成功・失敗どちらでも必ず通る） -----------------
         # review セルフレビュー #4/#5: 成果物はこの時点のディスク実態から収集
         # し（失敗地点非依存）、push は致命側（失敗を exit code / heartbeat に
-        # 表面化させる）で行う。実行 manifest はここで hash 会計を確定して
-        # 書き出し（run5_raw 配下 = 収集対象）、push 後に salvage 会計を
-        # 反映した最終版を上書き push する（外部レビュー P2）。
-        exec_manifest["end_time"] = utc_now_iso()
-        exec_manifest["self_stop_status"] = (
-            "skipped (--skip-self-stop)" if args.skip_self_stop else "scheduled")
-        preview = collect_salvage_artifacts(run5_raw, ds_repo)
-        for path, dest in preview:
-            if dest.endswith("/checkpoints"):
-                exec_manifest["checkpoint_hashes"][f"{dest}/{path.name}"] = (
-                    sha256_file(path))
-            elif path.name.startswith("events.out.tfevents."):
-                exec_manifest["tensorboard_hashes"][f"{dest}/{path.name}"] = (
-                    sha256_file(path))
-        exec_manifest["salvage_status"] = "in_progress"
-        manifest_path = write_execution_manifest(exec_manifest, run5_raw)
-
+        # 表面化させる）で行う。**push が先・hash/manifest は後**（今回セルフ
+        # レビュー #5: wall-clock/予算枯渇の salvage で checkpoint の脱出前に
+        # 数 GB の sha256 計算を挟まない — 「checkpoint を先に押し出す」順序
+        # 規律は hash 会計にも適用する）。
         artifacts = collect_salvage_artifacts(run5_raw, ds_repo)
         salvage_failures = 0
         for path, dest in artifacts:
@@ -1612,11 +1623,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "salvage", salvage_status,
             detail=f"pushed {len(artifacts) - salvage_failures}/{len(artifacts)} artifact(s)",
         )
-        # salvage 会計を確定した最終版 manifest（小物 1 ファイル）を上書き push。
+        # 実行 manifest の会計を確定して書き出し・push（外部レビュー P2）。
+        # この push の失敗も exit code / heartbeat に表面化させる（今回セルフ
+        # レビュー #4: 戻り値無視は「正本の会計欠落」が静かに通る）。
+        exec_manifest["end_time"] = utc_now_iso()
+        exec_manifest["self_stop_status"] = (
+            "skipped (--skip-self-stop)" if args.skip_self_stop else "scheduled")
+        for path, dest in artifacts:
+            if dest.endswith("/checkpoints"):
+                exec_manifest["checkpoint_hashes"][f"{dest}/{path.name}"] = (
+                    sha256_file(path))
+            elif path.name.startswith("events.out.tfevents."):
+                exec_manifest["tensorboard_hashes"][f"{dest}/{path.name}"] = (
+                    sha256_file(path))
         exec_manifest["artifact_count"] = len(artifacts)
         exec_manifest["salvage_status"] = salvage_status
-        write_execution_manifest(exec_manifest, run5_raw)
-        _rclone_push_strict(rclone_conf, drive_folder_id, manifest_path)
+        manifest_path = write_execution_manifest(exec_manifest, run5_raw)
+        if not _rclone_push_strict(rclone_conf, drive_folder_id, manifest_path):
+            exit_code = 1
+            heartbeat.mark("exec_manifest_push", "failed",
+                           detail="run_execution_manifest.json push failed")
         return exit_code
 
     finally:
