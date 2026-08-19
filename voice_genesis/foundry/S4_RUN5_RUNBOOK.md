@@ -242,3 +242,32 @@ run 5 の実績 = このループの実例 4 件: ffmpeg 版検査（#271・逐�
 ID fetch + 回帰テスト）/ **phase 別 namespace 分離（2026-08-19 改修 —
 run 5 中の copyto 手動保全を「回避のまま終わらせず」根治 + 回帰テスト化
 した事例。s4_record §5.6）**。
+
+## 8. run 6 差分（RUN_PROFILE 方式・DESIGN_S5_run6.md が実験契約の正本）
+
+run 6 は本 runbook の手順をそのまま使い、**Pod 作成時の env に
+`RUN_PROFILE=run6` を 1 つ足すだけ**で切り替わる（`run5_bootstrap.py` が
+モジュール定数を差し替える — 無指定は run 5 と bit 同一の挙動）:
+
+| 項目 | run 5（既定） | run 6（`RUN_PROFILE=run6`） |
+|---|---|---|
+| run_id / exp 名 | `s4_run5` / `s4_run5_acoustic_{scratch,v1}` | `s5_run6` / `s5_run6_acoustic_{scratch,v1}` |
+| dataset pins | `results_s3/run4_dataset_pins.json` | `results_s3/run6_dataset_pins.json`（user 新実測 + d3 逐語継承） |
+| Drive 退避 | フォルダ直下 | **`run6/` prefix 配下**（heartbeat 含む全 push — run 5 成果物と混ざらない。監視スクリプトも `run6/` を見る） |
+| user 変換 | 正規化なし | `--normalize-loudness-lufs -26.1`（**pins の `normalization_target_lufs` が単一ソース** — bootstrap が読んで付与） |
+| 予算 cap | $8 | **$4**（DESIGN_S5 §0-4） |
+
+- **目標値 -26.1 LUFS の来歴**: ritsu 456 本 + pjs 287 本の変換済み学習 wav
+  全数の統合 LUFS 結合分布の中央値（pinned ローカル環境で実測・生データ =
+  Drive `run6/pin_evidence/`。ritsu 中央値 -27.97 / pjs -25.78）
+- **pin 生成の同一性証明**: ローカル pinned 環境（numeric stack + ffmpeg
+  n6.1.2 static + X86_V4 無効）での convert_user 出力は、transcriptions.csv /
+  exclusions.json が run 4 pin と**バイト一致**（wav のみ正規化で変化 =
+  単一介入のデータ面検証。user 15 本全てが変化）
+- **依存ドリフト事件（2026-08-19・資産化ループ §7 適用）**: 未 pin の numba が
+  0.66→0.67 へドリフトし、numpy 2.4.6 との組で `librosa.pyin` が SIGSEGV
+  （`NUMBA_DISABLE_JIT` でも回避不可 — guvectorize は対象外）。
+  `ANALYSIS_STACK_PIN`（numba==0.66.0 / librosa==0.11.0）を gates 段の
+  強制インストールと lock に追加して根治。**run 5 Pod が生き残ったのは
+  たまたま 0.66 系を解決していたため**（freeze 未捕獲の間接推定）— lock の
+  存在理由の実測第 1 号

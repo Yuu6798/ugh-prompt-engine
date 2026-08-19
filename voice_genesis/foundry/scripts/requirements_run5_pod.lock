@@ -23,6 +23,15 @@ soundfile==0.14.0
 # numpy==1.26.4  # DiffSinger requirements 導入後の実測値（info 記帳のみ・
 #                # 学習側は gate 対象外 = run5_bootstrap.py binarize 段の注記）
 #
+# [f0 解析系 — 2026-08-19 実測で確定（run 6 pin 生成時）]
+# numba 0.67.0 は numpy 2.4.6 と組むと librosa.pyin（guvectorize）が SIGSEGV
+# する（実測・NUMBA_DISABLE_JIT でも回避不可）。0.66.0 で解消を実測確認。
+# run 5 Pod は 0.66 系を解決していたと推定（freeze 未捕獲のため間接）—
+# 未 pin の numba が数日で 0.66→0.67 へドリフトして壊れた実例であり、
+# 本 lock の存在理由そのもの。bootstrap gates 段が本 pin を強制する。
+numba==0.66.0
+librosa==0.11.0
+#
 # [PENDING — run 6 の pip freeze 捕獲で確定させる]
 # praat-parselmouth==?   # pod_entry.sh で実行時解決（run 5 の実測版は未捕獲）
 # (DiffSinger requirements.txt の全依存)  # 上流 pin は repo commit e2307b1 で

@@ -120,6 +120,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+import pyloudnorm
 import soundfile as sf
 import librosa
 import yaml
@@ -232,6 +233,61 @@ class LedgerMismatchError(ValueError):
 class AllCardsExcludedError(ValueError):
     """17 枚全カードがアラインメント不能で除外され、公開できる行が 1 件も
     残らなかった場合に送出する（黙殺せず fail-closed で止める）。"""
+
+
+class LoudnessNormalizationError(ValueError):
+    """run 6 のラウドネス正規化段（`DESIGN_S5_run6.md` §1.1）の fail-closed。
+
+    2 つの失敗を黙殺しない: (a) ゲイン適用後のサンプルピークが PCM_16 の
+    表現上限を超える（クリップさせて「正規化済み」を装わない — 目標値の
+    再裁定を要求する）、(b) 統合ラウドネスが有限値として測れない（無音等。
+    測れない入力に暗黙ゲイン 0 dB を適用して通さない）。"""
+
+
+# run 6 正規化の会計ファイル名（out_dir 直下・pin 対象）。
+LOUDNESS_REPORT_NAME = "loudness_normalization.json"
+LOUDNESS_REPORT_SCHEMA = "user-loudness-normalization/0.1"
+# PCM_16 の正側表現上限（32767/32768）。これを超えるピークは書き出し時に
+# クリップするため fail-closed の閾値に使う。
+_PCM16_PEAK_LIMIT = 32767.0 / 32768.0
+
+
+def normalize_wav_loudness_in_place(
+    wav_path: Path, target_lufs: float
+) -> Dict[str, object]:
+    """`wav_path`（44.1kHz mono PCM_16）の統合ラウドネス（BS.1770 系・
+    pyloudnorm）を実測し、`target_lufs` へ**線形ゲインのみ**で合わせて
+    同パスへ書き戻す（DESIGN_S5 §1.1: 非線形処理なし・カード内ダイナミクス
+    保存・ピーク超過とラウドネス不能測定は fail-closed）。戻り値は会計
+    エントリ（pre/post LUFS・ゲイン dB・ピーク実測）。post_lufs は
+    **書き戻したファイルを読み直して再実測**した値（成果物そのものの証跡）。"""
+    data, sr = sf.read(wav_path)
+    meter = pyloudnorm.Meter(sr)
+    measured = float(meter.integrated_loudness(data))
+    if not math.isfinite(measured):
+        raise LoudnessNormalizationError(
+            f"{wav_path.name}: integrated loudness is not finite ({measured}) — "
+            "無音または測定不能な入力にはゲインを定義できない（fail-closed）"
+        )
+    gain_db = target_lufs - measured
+    adjusted = data * (10.0 ** (gain_db / 20.0))
+    peak = float(np.max(np.abs(adjusted))) if adjusted.size else 0.0
+    if peak > _PCM16_PEAK_LIMIT:
+        raise LoudnessNormalizationError(
+            f"{wav_path.name}: peak {peak:.6f} exceeds PCM_16 limit "
+            f"{_PCM16_PEAK_LIMIT:.6f} after {gain_db:+.2f} dB gain to "
+            f"{target_lufs} LUFS — クリップさせず停止する（目標値の再裁定を"
+            "要求。DESIGN_S5 §1.1 の true-peak ガード。実測はサンプルピーク）"
+        )
+    sf.write(wav_path, adjusted, sr, subtype="PCM_16")
+    verify_data, verify_sr = sf.read(wav_path)
+    post = float(pyloudnorm.Meter(verify_sr).integrated_loudness(verify_data))
+    return {
+        "pre_lufs": round(measured, 4),
+        "gain_db": round(gain_db, 4),
+        "post_lufs": round(post, 4),
+        "peak_after_gain": round(peak, 6),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -936,6 +992,7 @@ def convert(
     dsdict_path: Path,
     duration_tolerance_sec: float = DEFAULT_DURATION_TOLERANCE_SEC,
     ffmpeg_bin: Optional[str] = None,
+    normalize_loudness_lufs: Optional[float] = None,
 ) -> Dict[str, object]:
     """`normalized_dir` の User 音源 17 本を `out_dir` へ変換する
     （`transcriptions.csv` + `wavs/` + `exclusions.json`）。台帳突合の違反や
@@ -1040,7 +1097,8 @@ def convert(
         staging_dir.mkdir(parents=True)
         try:
             # resample_to_44k1 もスナップショット（wav_paths[card_id]）を読む。
-            summary = _publish_into(rows, included, excluded, wav_paths, staging_dir, ffmpeg_bin, dsdict)
+            summary = _publish_into(rows, included, excluded, wav_paths, staging_dir, ffmpeg_bin, dsdict,
+                                    normalize_loudness_lufs=normalize_loudness_lufs)
             convert_d3._swap_into_place(staging_dir, out_dir)
         except BaseException:
             shutil.rmtree(staging_dir, ignore_errors=True)
@@ -1058,6 +1116,7 @@ def _publish_into(
     out_dir: Path,
     ffmpeg_bin: Optional[str],
     dsdict: DsDict,
+    normalize_loudness_lufs: Optional[float] = None,
 ) -> Dict[str, object]:
     out_wavs = out_dir / "wavs"
     out_wavs.mkdir(parents=True, exist_ok=True)
@@ -1073,6 +1132,30 @@ def _publish_into(
 
     for card_id in sorted(included):
         convert_d3.resample_to_44k1(wav_paths[card_id], out_wavs / f"{card_id}.wav", ffmpeg_bin=ffmpeg_bin)
+
+    # run 6（DESIGN_S5_run6.md §1.1）: カード単位の統合ラウドネス正規化。
+    # None（既定）は従来動作 = run 4/5 出力のバイト再現をそのまま保つ。
+    loudness_report: Optional[Dict[str, object]] = None
+    if normalize_loudness_lufs is not None:
+        entries: Dict[str, object] = {}
+        for card_id in sorted(included):
+            entries[f"{card_id}.wav"] = normalize_wav_loudness_in_place(
+                out_wavs / f"{card_id}.wav", normalize_loudness_lufs
+            )
+        loudness_report = {
+            "schema": LOUDNESS_REPORT_SCHEMA,
+            "target_lufs": normalize_loudness_lufs,
+            "method": (
+                "BS.1770 integrated loudness (pyloudnorm.Meter) -> linear gain only; "
+                "peak guard = sample peak vs PCM_16 limit (fail-closed); "
+                "post_lufs re-measured from the written file"
+            ),
+            "entries": entries,
+        }
+        (out_dir / LOUDNESS_REPORT_NAME).write_text(
+            json.dumps(loudness_report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     n_note_rows = 0
     n_rest_rows = 0
@@ -1117,6 +1200,7 @@ def _publish_into(
     )
 
     return dict(
+        loudness_normalization=loudness_report,
         n_segments=len(rows_sorted),
         n_note_rows=n_note_rows,
         n_rest_rows=n_rest_rows,
@@ -1166,6 +1250,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--ffmpeg-bin", default=None,
         help="ffmpeg バイナリのパス (既定: PATH 上の 'ffmpeg' を shutil.which で解決)",
     )
+    parser.add_argument(
+        "--normalize-loudness-lufs", type=float, default=None,
+        help=(
+            "run 6 (DESIGN_S5 §1.1): 出力 wav をカード単位でこの統合ラウドネス"
+            " (LUFS) へ線形ゲイン正規化する。省略時は従来動作（正規化なし ="
+            " run 4/5 のバイト再現）。会計は loudness_normalization.json"
+        ),
+    )
     args = parser.parse_args(argv)
 
     # P1 修正 (review #265): 衝突検査は `convert()` 自身が行う（公開関数へ
@@ -1174,6 +1266,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         summary = convert(
             args.normalized_dir, args.ledger, args.out_dir, args.dsdict,
             args.duration_tolerance_sec, args.ffmpeg_bin,
+            normalize_loudness_lufs=args.normalize_loudness_lufs,
         )
     except (
         convert_d3.OutputCollisionError,
@@ -1182,6 +1275,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         LedgerMismatchError,
         AllCardsExcludedError,
         DsDictError,
+        LoudnessNormalizationError,
         convert_d3.FfmpegNotFoundError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
