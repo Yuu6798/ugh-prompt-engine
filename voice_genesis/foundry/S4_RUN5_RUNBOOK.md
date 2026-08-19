@@ -175,10 +175,25 @@ fail-closed 側に倒れる）。2 config の sha256 は `run5_training_manifest
 | checkpoint | phase A 5K + phase B の 5K/10K/20K/40K（節目毎に push 済み） |
 | ログ | `config.yaml`（train.py スナップショット）・`*.log`・TensorBoard events |
 
+- **同名衝突の罠（2026-08-19 実走で発見・現行実装の既知欠陥）**: push は
+  「ファイル名のみ」で Drive ルートへ行うため、phase A と phase B で同名の
+  `model_ckpt_steps_5000.ckpt` と `config.yaml` が**後勝ち上書き**になる
+  （最終残存はいずれも phase B 側）。run 5 では phase B の 5K push 前に
+  監視側から Drive サーバーサイド copyto で phase A 5K を
+  `phase_a_model_ckpt_steps_5000.ckpt` へ手動保全した（正しさは
+  `run5_training_manifest.json` の `phase_a_5k_ckpt_sha256` 一致で機械検証 —
+  s4_record §5.6）。恒久修正 = push のフェーズ別名前空間分離（次の
+  bootstrap 改修 PR）。それまで再走行時は同じ手動保全を必ず行うこと
+- 学習の生 stdout は退避されない（train.py はコンソール直結 —
+  s4_record §2 の正直会計）。学習証跡の正 = TB events + 節目 heartbeat +
+  checkpoint 実体
+
 s4 record（s3_record 様式）への転記は run 5 完了後に本セッション側で行う —
 **run 4 で未転記残となった 4 項目（checkpoint sha / 学習 log・TB sha /
 wav 生成コマンド対応表 / 費用）は run 5 では同時転記で完了させる**
-（DESIGN_S4 §5 AC）。
+（DESIGN_S4 §5 AC）。**→ 転記済み（2026-08-19）**: 正本 =
+[`results_s4/s4_record_2026-08-19.md`](results_s4/s4_record_2026-08-19.md)
+（項目 3 = wav 生成コマンド対応表のみ判定材料生成待ち・様式凍結済み）。
 
 ## 6. 判定材料 ①〜④（Pod 完走後・ローカル CPU）
 
