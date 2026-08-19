@@ -13,13 +13,22 @@ import で呼び出して**本台帳へ適用する（キー集合だけの再�
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any, Dict
 
 import pytest
 
-import test_genome_ledger_shape as s2_shape
+# 同ディレクトリの S2 shape テストをファイルパスで明示ロードする（素の
+# `import test_genome_ledger_shape` は pytest 既定の prepend import mode で
+# しか解決できず、--import-mode=importlib では collection error になる —
+# 今回セルフレビューで実測。パスロードは両モードで動く）。
+_S2_SHAPE_PATH = Path(__file__).resolve().parent / "test_genome_ledger_shape.py"
+_spec = importlib.util.spec_from_file_location("_s2_ledger_shape", _S2_SHAPE_PATH)
+assert _spec is not None and _spec.loader is not None
+s2_shape = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(s2_shape)
 
 LEDGER_PATH = (
     Path(__file__).resolve().parent.parent / "results_s4" / "genome_ledger.json"
@@ -68,6 +77,25 @@ def test_hidden_control_is_marked_weightless_and_unreferenced(
     # rights はリツ配布規約準拠（三角形合成の既定値を継承しない —
     # セルフレビュー #3）
     assert "RITSU" in control[0]["rights_class"]
+
+
+def test_anchors_present_typed_and_parent_ids_resolve(
+    ledger: Dict[str, Any],
+) -> None:
+    """anchors の実在・型と、genome の系譜参照（parent_ids）が実在アンカーへ
+    解決することを固定する（手編集での頂点削除・parent_id typo の機械検出 —
+    S2 スイートの anchors 検証に相当する S4 版）。"""
+    anchors = ledger["anchors"]
+    expected = {"VG-S3-ANCHOR-RITSU", "VG-S3-ANCHOR-PJS", "VG-S3-ANCHOR-USER"}
+    assert expected <= set(anchors)
+    for name in expected:
+        entry = anchors[name]
+        assert isinstance(entry["embed_sha256"], str) and len(entry["embed_sha256"]) == 64
+        assert isinstance(entry["embed_l2_norm"], float)
+    for genome in ledger["genomes"]:
+        for parent in genome["parent_ids"]:
+            assert parent in expected, (
+                f"{genome['voice_id']}: parent_id {parent} が実在アンカーに解決しない")
 
 
 def test_backbone_is_run5_40k_checkpoint(ledger: Dict[str, Any]) -> None:
