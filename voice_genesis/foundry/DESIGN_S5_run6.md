@@ -29,7 +29,7 @@
    流用で即走れるのに対し run 7 は intake/変換系の新設を要する、(c) run 6
    走行中に run 7 準備を並行できるため逆順にしても速くならない
    （User 承認 2026-08-19。あみたろ = 教師役の確定裁定は
-   [`DESIGN_DONOR_EXPANSION.md`](DESIGN_DONOR_EXPANSION.md) §2-2）
+   [`DESIGN_DONOR_EXPANSION.md`](DESIGN_DONOR_EXPANSION.md) §0 の裁定追記）
 4. 予算 cap: **$4**（run 5 実績 ≈$1.35 の約 3 倍。fail-closed 数回分を含む
    余裕。run 4/5 の cap $8 から実績に合わせて半減）
 
@@ -83,9 +83,12 @@ warm-start は正規化効果の帰属を壊す）。
    追随テスト（正規化の決定論・true-peak fail-closed・T1 カード内
    ダイナミクス保存）
 2. **user 側 dataset pin の更新**: 正規化で user 出力 wav のバイトが変わる
-   ため、`run4_dataset_pins.json` の user セクションに代わる **run 6 用
-   pin**（`run6_dataset_pins.json` — ritsu/pjs/d3 は run 4 pin を参照継承・
-   user のみ新実測）を実装 PR のローカル実行で生成・凍結する
+   ため、**run 6 用 pin**（`run6_dataset_pins.json`）を実装 PR のローカル
+   実行で生成・凍結する。構成 = user セクションのみ新実測 + d3 セクションは
+   run 4 pin を参照継承（`run4_dataset_pins.json` が持つのは **d3/user の
+   2 セクションのみ** — ritsu/pjs は dataset pin を持たず、素材 pin
+   〔run5_material_pins〕+ assembly manifest 照合で担保される現行方式を
+   そのまま継承する）
 3. **bootstrap の run 6 対応**: `run5_bootstrap.py` の run 依存定数
    （RUN_ID / exp_name / pin ファイル参照）のパラメータ化 or run 6 派生。
    同 PR に **salvage 追加候補 (c)** を同梱する — 学習 exp dir の
@@ -144,6 +147,6 @@ warm-start は正規化効果の帰属を壊す）。
 
 - run 6 走行中に並行可: あみたろコーパス intake（規約ページ逐語 pin +
   取得日時・台帳化）・ITA コーパス → DiffSinger 形式変換系の設計・50% 会計の
-  manifest 配線・D3 引退処理の設計（DX §2-2/§5 AC）
+  manifest 配線・D3 引退処理の設計（intake 前提 = DX §2-2・D3 引退の受け皿 = DX §3・実装 AC = DX §6）
 - T3 は引き続き任意のまま（Q11 が「データ量・音域被覆」側を示した場合のみ
   発動を再検討）
