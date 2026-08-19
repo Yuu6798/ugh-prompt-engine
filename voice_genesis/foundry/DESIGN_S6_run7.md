@@ -52,9 +52,19 @@
    モデル配布の比率ルールの会計基準が「**あみたろの声が入っている部分の
    長さ（無音部を除いた発話時間）がモデル全体に占める割合**」と明文化
    （§2-4 の会計はこの基準に同型で設計する）
-5. **emotion 系は不使用・recitation のみ**: ITA = emotion 100 文 +
-   recitation 324 文。感情演技の韻律変動は発音教師として交絡（教師の
-   目的 = 音素明瞭性の供給であり感情表現ではない）。recitation に限定する
+5. **emotion 系は不使用・recitation のみ・スタイル = ノーマル**: ITA =
+   emotion 100 文 + recitation 324 文。感情演技の韻律変動は発音教師として
+   交絡（教師の目的 = 音素明瞭性の供給であり感情表現ではない）。recitation
+   に限定する。**配布実態の実査（2026-08-19 追記）**: 「平均 7.6 テイク・
+   3,211 ファイル」の実体は 6 スタイル（ノーマル/るんるん/よふかし/
+   ぷんすか/ささやき A/B）の版違い。教師素材は**ノーマル**（「ひとつひとつの
+   音を正確にはっきりと発音した」音声読み上げ向けスタイル・一覧ページ逐語・
+   **1 文 1 ファイル** `recitationNNN.wav`・最新版 Ver.2.2〔2026-06-05〕）に
+   凍結する。**recitation ノーマル全文の実測総尺 = 1225.6 s（20.43 分・
+   324 本・平均 3.78 s）** — D3 dosage 1200.5 s とほぼ同尺で、§0-3 の同
+   dosage 契約は recitation 全文でぎりぎり成立する規模（除外の合計が実測
+   約 145 s を超えると §2-3 の下限 assert で fail-closed になり、その場合は
+   本 memo の改訂裁定に戻る）
 6. 予算 cap: **$4**（run 6 と同額。データ総量は D3→amitaro 同 dosage 交換で
    ほぼ不変・40K steps 同一につき run 5 実績 ≈$1.35 と同水準の見込み）
 
@@ -124,18 +134,25 @@ lr 2e-4 / clip 1.0）・S2/S4 の教師分離機構（spk_id 付与 + Identity �
 
 ### 2-2. 素材 pin
 
-- 配布 zip（または配布実体）の URL + sha256 を実装 PR の実ダウンロードで
-  確定し `run5_material_pins.json` 流儀で追記（配布ページはうpろだ形式の
-  ため直リンクは intake 時に確定する）
-- ITA テキスト正本 = GitHub mmorise/ita-corpus（配布記事からの公式参照）。
-  使用するテキストファイルの commit + sha256 を pin（かな読みの
-  音素化入力になるため、転写のドリフトは変換出力を変える）
+- **配布実体 = 個別 wav 直 URL**（実査 2026-08-19: 一括 zip の直リンクは
+  一次ページ群に存在しない）:
+  `https://amitaro.net/download/corpus/ita-sample/recitation/recitation{NNN}.wav`
+  （一覧ページ「全文試聴＆個別ダウンロード」系列・48kHz/PCM_16/mono を
+  取得プローブで実測確認）。取得ファイルの **sha256 全数**を run 7 pins
+  （`amitaro.staged_source_sha256`）に pin し、bootstrap は Drive 退避コピー
+  （`run7/amitaro_sources/`）をこの pin と**集合ごと**照合してから変換する
+- ITA テキスト正本 = GitHub mmorise/ita-corpus（配布記事からの公式参照・
+  パブリックドメイン宣言）。`recitation_transcript_utf8.txt` を commit +
+  sha256 で pin し、PD につき**バイト同一で repo に収載**する
+  （`s1_dataprep/data/` — かな読みの音素化入力になるため、転写のドリフトは
+  変換出力を変える。来歴 = intake 台帳）
 
 ### 2-3. 選定規則（決定論・記帳可能）
 
 1. recitation 324 文のみ（§0-5）を**文番号昇順**に走査
-2. 各文につき **1 テイク = 命名規則上の最小テイク番号**（テイク品質の
-   手動選抜はしない — 選定に耳を入れると「教師データの決定論的来歴」が
+2. 各文につき **ノーマルスタイルの 1 ファイル**（`recitationNNN.wav` —
+   §0-5 の配布実態どおり 1 文 1 ファイルで、テイク品質の手動選抜は
+   存在しない/しない。選定に耳を入れると「教師データの決定論的来歴」が
    壊れる）
 3. **除外は走査中に適用**: dsdict 未収載 grapheme を含む文は既存
    fail-closed 流儀でその場で除外・記帳（convert_user の exclusions.json
@@ -158,6 +175,14 @@ lr 2e-4 / clip 1.0）・S2/S4 の教師分離機構（spk_id 付与 + Identity �
 - 音素化 = dsdict 逐語 lookup・タイミング = RMS ラン分割・音高 =
   f0 中央値 MIDI（convert_user T2 と同一機構。ANALYSIS_STACK_PIN =
   numba 0.66.0 / librosa 0.11.0 / pyloudnorm 0.2.0 環境で実行）
+- **カナ→かな表記ゆれ正規化の 2 段 lookup（2026-08-19 実測追記）**: ritsu
+  dsdict は基本モーラを**ひらがな**グラフェムで、外来音結合（ティ/ファ 等）
+  を**カタカナ**グラフェムで持つ。ITA のカタカナ読みを生のまま引くと基本
+  モーラが unmapped になり **324 文中 304 文が除外**された（実測）。よって
+  lookup は「生カタカナ → ひらがな写像」の 2 段とする — これは
+  `convert_user._normalize_sokuon_nasal`（ッ/ン）と同じ「**同一音素の表記
+  ゆれの正規化であり、辞書に無い別の音への代用ではない**」原則の全カナ版。
+  ヴ 等どちらでも当たらない音は従来どおり fail-closed 除外（代用しない）
 - **投入前ラウドネス正規化 = -26.1 LUFS**（目標値の単一ソース =
   `run6_dataset_pins.json` の `normalization_target_lufs` — 手打ち再宣言
   しない）+ 会計 json（loudness_normalization.json 同型）。
