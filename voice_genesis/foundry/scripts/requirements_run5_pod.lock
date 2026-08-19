@@ -1,0 +1,29 @@
+# RunPod 実行環境の依存 lock（2026-08-19 外部レビュー P3）
+#
+# 目的: 実行時解決（pip install -e ".[dev]" / DiffSinger requirements.txt /
+# praat-parselmouth）で版が動く露出を、成功 run 基準の固定へ寄せる。
+# runtime gate（run5_bootstrap.py の 4 ゲート = 版 pin 検査）は維持し、
+# lock + runtime gate の二重保証とする。
+#
+# 会計（正直会計）: run 5（2026-08-19 完走・pin 9899f3c）は pip freeze を
+# 捕獲しておらず、学習側 venv の完全な実測版一覧は存在しない。本ファイルの
+# 確定 pin は run 5 で実測検証済みの範囲のみ。run 6 以降は bootstrap が
+# gates/pip-freeze・binarize/pip-freeze を cmdlog として salvage するため、
+# その実測 freeze から本ファイルを完全化する（PENDING の解消 PR を伴う）。
+#
+# [render / gates 環境 — run 5 実測・gate1 で毎回検証される]
+# run5_bootstrap.py の NUMERIC_STACK_PIN と同期必須
+# （tests/test_run5_bootstrap.py の同期テストが drift を検出する）。
+numpy==2.4.6
+scipy==1.17.1
+pyworld==0.3.5
+soundfile==0.14.0
+#
+# [学習側 venv — run 5 実測は部分のみ（binarize_numeric_stack heartbeat）]
+# numpy==1.26.4  # DiffSinger requirements 導入後の実測値（info 記帳のみ・
+#                # 学習側は gate 対象外 = run5_bootstrap.py binarize 段の注記）
+#
+# [PENDING — run 6 の pip freeze 捕獲で確定させる]
+# praat-parselmouth==?   # pod_entry.sh で実行時解決（run 5 の実測版は未捕獲）
+# (DiffSinger requirements.txt の全依存)  # 上流 pin は repo commit e2307b1 で
+#                                         # 間接固定・解決結果の実測は未捕獲
