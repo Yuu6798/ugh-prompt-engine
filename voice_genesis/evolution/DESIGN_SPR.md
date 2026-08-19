@@ -11,6 +11,8 @@
   思想は補論 A が正
 - 関連実装契約: [`DESIGN_VG_E0.md`](DESIGN_VG_E0.md)（Archive/追い出し/保護
   スロット）、[`DESIGN_VG_L0.md`](DESIGN_VG_L0.md)（学習回路・Level 定義）、
+  [`DESIGN_VG_TR0.md`](DESIGN_VG_TR0.md)（**Trial 層 = 本書の全行への証拠
+  生産層**。観測/採点/処遇の三分離・各行の Suite 対応 = 同 §9/§13）、
   [`../foundry/DESIGN_S4_run5.md`](../foundry/DESIGN_S4_run5.md)（④ = 第 0 世代）
 - 位置づけ: **生態系の全ゲートの評価設計の配線正本**。VG-E1 の評価軸凍結・
   ④の審査・VG-L0 の判定は、本書の Routing 表の「行の実装」として行う
