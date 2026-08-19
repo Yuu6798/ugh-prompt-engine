@@ -84,8 +84,16 @@ metadata:
 ```
 
 初期 PoC では既存 SCORE_REGISTRY の曲（sakura / umi / d3_sustain /
-d3_kana）を TrialScore として再利用してよい。将来は
-MIDI / MusicXML + lyrics → TrialScore compiler → `trial-score/0.x` へ拡張。
+d3_kana）を TrialScore として再利用してよい——ただしこれは**譜面定義の
+再利用**であり、実モデル合成経路がそれを受け付けるかは別問題（統合注記
+S5 の実測事実を参照）。将来は MIDI / MusicXML + lyrics →
+TrialScore compiler → `trial-score/0.x` へ拡張。
+
+- `source_class` は**学習 Dataset の source class（v0.2 §8: PROCEDURAL /
+  LICENSED_SYNTHETIC / R&D_REFERENCE / TARGETED_HUMAN）とは別語彙**。
+  対象が譜・歌詞（作曲/作詞の権利）であり学習音声と権利構造が異なるため
+  意図的に分ける。`RIGHTS_CLEAN` の根拠は DX トラックの規約逐語 pin 台帳と
+  同じ様式で記録する
 
 ## 4. TrialCondition（schema: `trial-condition/0.1`）
 
@@ -112,7 +120,7 @@ Trial 中は凍結。両者を混同しない）。
 | T1 | 基準歌唱 | 通常音域・通常テンポ・通常表現 | そもそも安定して歌えるか |
 | T2 | Register Trial | low / mid / high | 音域別破綻・register transition・高低音耐性 |
 | T3 | Tempo / Articulation | slow / normal / fast | 高速歌詞・子音潰れ・duration 追従・音素遷移 |
-| T4 | Sustain Trial | ロングトーン主体（既存 d3_sustain 譜が転用可能） | F0 stability・vibrato・長音破綻・breath/noise |
+| T4 | Sustain Trial | ロングトーン主体（既存 d3_sustain 譜が転用可能 — 譜として。実合成経路の対応は統合注記 S5） | F0 stability・vibrato・長音破綻・breath/noise |
 | T5 | Dynamics Trial | weak / normal / strong | 弱声・強声・attack・声質崩壊 |
 | T6 | Held-out Song Trial | 稽古・教育に未使用の曲 | 技能転移・過学習検出・実曲汎化の初観測（VG-L0 の held-out 判定と同一概念） |
 
@@ -178,11 +186,14 @@ TrialRecord に elite / reject / breeder 等の Selection verdict を書かな�
 
 | SPR 行 | Trial 供給 |
 |---|---|
-| 行 1（Viability） | 出生直後の Trial は軽量（TRS-BIRTH）。発声可能・critical artifact なし・renderer 成立のみ観測。成熟品質では淘汰しない |
+| 行 1（Viability） | 出生直後の Trial は軽量（TRS-BIRTH）。発声可能・critical artifact なし・renderer 成立のみ観測。成熟品質では淘汰しない。**④ 第 0 世代の審査が本行の最初の適用対象**（TR0 実装前は既存の耳判定様式で行 1 の圧のみを実施し、TR0 実装後に TRS-BIRTH として形式化する） |
 | 行 2（LearningGain） | 学習前後を**同一 TrialSuite** で: `Trial(r1) − Trial(r0)` の差分を Evaluation 層が Developmental として解釈 |
 | 行 3（Transferability） | Lesson 適用前後を同一 TrialSuite で測り、複数 Singer の Trial 差分を集めて後段評価 |
 | 行 4/5（Floor / Reproduction） | 同一 TrialSuite を成熟個体へ適用し、Absolute Floor と niche 相対選抜の証拠を供給 |
 | 行 7（S） | Backbone 更新前後で**同じ固定 Singer 群 × 同じ TrialSuite** を再実行し Population 全体の変化を測る |
+
+（行 6 = Eviction に対応行が無いのは、SPR が行 6 を「行 5 の実行機構であり
+独立の主圧ではない」と規定しているため — 証拠は行 5 と共有される）
 
 ## 10. Failure Routing（Trial 層自身は修正しない — 後段が原因分類して回路へ返す）
 
@@ -202,8 +213,14 @@ TrialRecord に elite / reject / breeder 等の Selection verdict を書かな�
   なら規定の D2/D3 契約内で再現できること
 - 記録: `state_mutation: NONE` / `render_replay: {run_count: 2,
   status: PASS, wav_match: BYTE_IDENTICAL | TOLERANCE_PASS}`
-  （実装 = 既存 wav sha256 pin 規律。SPR の Render Reproducibility と同一）
+  （実装 = 既存 wav sha256 pin 規律。**VG-L0 §6「決定性の分離」の
+  Render Reproducibility 層と同一**）
 - Trial 中に L / T を実行することは禁止
+- **実装注意（実測 2026-08-19）**: `gate_synth.py run` は**既定で ONNX
+  export/publish（モデルファイルの swap）が走る**（`--skip-export` の既定 =
+  False）。Trial runner は `--skip-export` の強制または export 経路を持たない
+  専用エントリで合成し、before/after state hash 検査がこの強制の検証器を
+  兼ねる（skip を忘れると hash 不一致で fail する — 契約が罠を自動検出する）
 
 ## 12. Trial Suite の公平性
 
@@ -233,7 +250,8 @@ TRS-BACKBONE（S 更新前後比較）/ TRS-STRESS（破綻条件探索）
 
 > **統合注記 S4（台帳の置き場所）**: TrialRecord / TrialProfile /
 > TrialSuite の台帳は **VG-E0 / VG-L0 の台帳と別系列の新設**
-> （`voice_genesis/trial/` 配下・schema は本書の 4 種を実装 PR で定義）。
+> （`voice_genesis/trial/` 配下・schema は本書の **5 種**〔score /
+> condition / record / profile / suite〕を実装 PR で定義）。
 > **VG-E0 の凍結 schema 3 種は非改変**。個体参照は genome_id または
 > 話者名（統合注記 S1 の読み替えに従う）。
 
@@ -247,18 +265,25 @@ TRS-BACKBONE（S 更新前後比較）/ TRS-STRESS（破綻条件探索）
 転用）/ 生成 = 既存 gate_synth・renderer / 出力 = WAV + TrialRecord +
 TrialProfile + Replay record。
 
-> **統合注記 S5（実装第 1 タスク）**: high-register / fast の条件は
-> **score レベルの決定論的変換**（移調 semitones・tempo_scale）の実装を
-> 要する（現行 SCORE_REGISTRY は固定譜のみ）。VG-L0 の「gate_synth 入力
-> での制御軸表現力の実測」と同一ファミリーの調査として**先に実測**し、
-> 表現できない条件は TR0 スコープから外して記録する（fail-closed）。
+> **統合注記 S5（実装第 1 タスク）**: 実合成経路の実測事実（2026-08-19）:
+> `gate_synth.py` の `load_song_module()` は **SCORE_REGISTRY を参照せず
+> sakura / umi をハードコード**しており、d3_sustain / d3_kana は実モデル
+> 合成経路では現状読み込めない（render.py の WORLD レンダラ経路のみ対応）。
+> したがって TR0 の実装第 1 タスクは 2 本: (a) **gate_synth の song loader
+> を TrialScore 対応へ拡張**（T4 の d3_sustain 転用もこの拡張後に成立）、
+> (b) high-register / fast 条件のための **score レベル決定論変換**
+> （移調 semitones・tempo_scale）の表現力実測。いずれも VG-L0 の
+> 「gate_synth 入力での制御軸表現力の実測」と同一ファミリーの調査として
+> **先に実測**し、表現できない条件は TR0 スコープから外して記録する
+> （fail-closed）。
 
 ## 16. Acceptance Criteria
 
 - [ ] `trial-score/0.1` / `trial-condition/0.1` / `trial-record/0.1`
   （+ `trial-suite/0.1` / `trial-profile/0.1`）の定義（新系列台帳・
   VG-E0 非改変 = 統合注記 S4）
-- [ ] SingerRevision を read-only で受ける Trial runner
+- [ ] SingerRevision を read-only で受ける Trial runner（gate_synth 利用時は
+  `--skip-export` 強制または export 経路なしの専用エントリ = §11 実装注意）
 - [ ] 同一 Trial の replay + before/after state hash 一致
 - [ ] 複数条件の WAV 生成 + failure event 記録（管理語彙 = 統合注記 S3）
 - [ ] TrialProfile 集約
