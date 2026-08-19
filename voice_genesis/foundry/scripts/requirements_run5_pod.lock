@@ -31,6 +31,8 @@ soundfile==0.14.0
 # 本 lock の存在理由そのもの。bootstrap gates 段が本 pin を強制する。
 numba==0.66.0
 librosa==0.11.0
+# pyloudnorm = run 6 正規化の数値を決める依存（run6 pin は 0.2.0 で生成）
+pyloudnorm==0.2.0
 #
 # [PENDING — run 6 の pip freeze 捕獲で確定させる]
 # praat-parselmouth==?   # pod_entry.sh で実行時解決（run 5 の実測版は未捕獲）

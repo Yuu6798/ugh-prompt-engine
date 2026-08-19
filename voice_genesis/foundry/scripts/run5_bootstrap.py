@@ -141,8 +141,10 @@ REMOTE_PREFIX = ""
 
 # --- run プロファイル（DESIGN_S5_run6.md §2-3: run 依存定数のパラメータ化）。
 # 環境変数 RUN_PROFILE（既定 "run5"）で選択し、apply_run_profile() が
-# モジュール定数を差し替える。run5 プロファイルは従来値そのもの（無指定の
-# 挙動は run 5 実走時と bit 同一）。convert_user の正規化目標
+# モジュール定数を差し替える。run5 プロファイルの**定数値**は run 5 実走時と
+# 同一（ただし gates 段の ANALYSIS_STACK_PIN 強制は全プロファイル共通の
+# 前進措置 — run 5 実走時は未 pin で numba 0.66 系を解決していたと推定
+# 〔freeze 未捕獲〕であり、歴史的環境の完全再現ではない）。convert_user の正規化目標
 # （normalize_loudness_lufs）は dataset pins ファイルの
 # user.normalization_target_lufs から読む（pin と実行値の単一ソース化）。
 RUN_PROFILES: Dict[str, Dict[str, object]] = {
@@ -241,12 +243,14 @@ NUMERIC_STACK_PIN = (
     "numpy==2.4.6", "scipy==1.17.1", "pyworld==0.3.5", "soundfile==0.14.0",
 )
 
-# f0 解析系 pin（2026-08-19 実測: numba 0.67.0 × numpy 2.4.6 は librosa.pyin
+# 解析系 pin（2026-08-19 実測: numba 0.67.0 × numpy 2.4.6 は librosa.pyin
 # が SIGSEGV。0.66.0 で解消。未 pin 依存のドリフトが数日で走行を壊した実例 —
 # requirements_run5_pod.lock と同期・gates 段で NUMERIC_STACK_PIN と同時に
-# 強制インストールする。gate1 の版検査対象には含めない〔検査契約は不変〕）。
+# 強制インストールする。gate1 の版検査対象には含めない〔検査契約は不変〕。
+# pyloudnorm は run 6 の正規化数値そのものを決める依存（run6 pin は
+# 0.2.0 で生成）— 未 pin だと同じドリフト類型で pin 照合が割れるため同梱）。
 ANALYSIS_STACK_PIN = (
-    "numba==0.66.0", "librosa==0.11.0",
+    "numba==0.66.0", "librosa==0.11.0", "pyloudnorm==0.2.0",
 )
 
 # ffmpeg 環境契約 1（s3_record 2026-08-17）: 44.1kHz 変換バイトは libavformat
@@ -758,6 +762,12 @@ def compare_execution_manifests(previous: Dict[str, object],
     return diffs
 
 
+# import 時に既定プロファイルを適用し、モジュール定数の正本を
+# RUN_PROFILES["run5"] に一本化する（セルフレビュー #4: 二重定義 drift 封じ。
+# main() は RUN_PROFILE env で上書きする）。
+apply_run_profile("run5")
+
+
 def probe_gpu_name() -> Optional[str]:
     """nvidia-smi から GPU 名を取る（無ければ None — manifest 用の観測値で
     あってゲートではない）。"""
@@ -972,6 +982,12 @@ def _run_capture(argv: Sequence[str], *, timeout: Optional[float] = None,
     return result.stdout
 
 
+def _remote_path(dest: str = "") -> str:
+    """成果物フォルダ起点の相対リモートパス（REMOTE_PREFIX と dest の合成 —
+    push/pull の両方がこの 1 箇所を通る。セルフレビュー #5）。"""
+    return "/".join(part for part in (REMOTE_PREFIX, dest) if part)
+
+
 def _rclone_argv(rclone_conf: Path, drive_folder_id: str, path: Path,
                  dest: str = "") -> List[str]:
     """`dest` は成果物フォルダ内のサブディレクトリ（例 "phase_a/checkpoints"）。
@@ -979,10 +995,9 @@ def _rclone_argv(rclone_conf: Path, drive_folder_id: str, path: Path,
     必ず `PHASE_REMOTE_DIRS` 由来の dest を渡す — 2026-08-19 外部レビュー P1
     （同名後勝ち上書きの根治。rclone は存在しないリモートディレクトリを
     copy 時に自動作成する）。"""
-    full_dest = "/".join(part for part in (REMOTE_PREFIX, dest) if part)
     return [
         "rclone", "--config", str(rclone_conf), "copy", str(path),
-        f"run5drive:{full_dest}", "--drive-root-folder-id", drive_folder_id,
+        f"run5drive:{_remote_path(dest)}", "--drive-root-folder-id", drive_folder_id,
     ]
 
 
@@ -1173,20 +1188,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # 正常系（初回）。差分は info として記帳し fail-closed にはしない —
         # 意図した差分（pin 更新・コミット前進）が普通に存在する。
         prev_manifest_path = work / "previous_run_execution_manifest.json"
-        try:
-            subprocess.run(
-                ["rclone", "--config", str(rclone_conf), "copyto",
-                 "run5drive:" + "/".join(
-                     part for part in (REMOTE_PREFIX, EXEC_MANIFEST_NAME) if part),
-                 str(prev_manifest_path),
-                 "--drive-root-folder-id", drive_folder_id],
-                timeout=300,
-            )
-        except (subprocess.SubprocessError, OSError) as exc:
-            # 情報目的の取得は run を落とさない（セルフレビュー #2:
-            # TimeoutExpired だけが素通りして preflight 全体を殺していた）。
-            print(f"| run5_bootstrap: previous manifest fetch failed "
-                  f"(non-fatal): {exc}", flush=True)
+        # 自プロファイルの prefix 内 → 無ければフォルダ直下（run 5 の置き場所）
+        # の順で探す（セルフレビュー: run 6 初回の比較相手は run 5 の manifest =
+        # DESIGN_S5 §3 の正常系。prefix のみだと初回走行で比較が黙って空振る）。
+        for candidate in dict.fromkeys(
+                (_remote_path(EXEC_MANIFEST_NAME), EXEC_MANIFEST_NAME)):
+            try:
+                subprocess.run(
+                    ["rclone", "--config", str(rclone_conf), "copyto",
+                     f"run5drive:{candidate}", str(prev_manifest_path),
+                     "--drive-root-folder-id", drive_folder_id],
+                    timeout=300,
+                )
+            except (subprocess.SubprocessError, OSError) as exc:
+                # 情報目的の取得は run を落とさない（TimeoutExpired だけが
+                # 素通りして preflight 全体を殺していた既知経路の再発防止）。
+                print(f"| run5_bootstrap: previous manifest fetch failed "
+                      f"(non-fatal): {exc}", flush=True)
+            if prev_manifest_path.exists():
+                break
         if prev_manifest_path.exists():
             try:
                 prev_manifest = json.loads(

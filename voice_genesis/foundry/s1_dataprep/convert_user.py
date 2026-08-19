@@ -263,7 +263,16 @@ def normalize_wav_loudness_in_place(
     **書き戻したファイルを読み直して再実測**した値（成果物そのものの証跡）。"""
     data, sr = sf.read(wav_path)
     meter = pyloudnorm.Meter(sr)
-    measured = float(meter.integrated_loudness(data))
+    try:
+        measured = float(meter.integrated_loudness(data))
+    except ValueError as exc:
+        # pyloudnorm はゲーティングブロック長 0.4s 未満の入力で素の ValueError
+        # を投げる（svp_rpe/physical_features.py の既知エッジ）— fail-closed の
+        # 分類語彙に収容する（セルフレビュー #3）。
+        raise LoudnessNormalizationError(
+            f"{wav_path.name}: integrated loudness unmeasurable ({exc}) — "
+            "0.4s 未満の短尺/破損カードにはゲインを定義できない（fail-closed）"
+        ) from exc
     if not math.isfinite(measured):
         raise LoudnessNormalizationError(
             f"{wav_path.name}: integrated loudness is not finite ({measured}) — "

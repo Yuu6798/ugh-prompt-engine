@@ -247,7 +247,9 @@ run 5 中の copyto 手動保全を「回避のまま終わらせず」根治 + 
 
 run 6 は本 runbook の手順をそのまま使い、**Pod 作成時の env に
 `RUN_PROFILE=run6` を 1 つ足すだけ**で切り替わる（`run5_bootstrap.py` が
-モジュール定数を差し替える — 無指定は run 5 と bit 同一の挙動）:
+モジュール定数を差し替える。無指定 = run5 プロファイルの**定数値**は run 5
+実走時と同一。ただし gates 段の解析系 pin 強制は全プロファイル共通の前進
+措置であり、歴史的環境の完全再現ではない — 下記事件）:
 
 | 項目 | run 5（既定） | run 6（`RUN_PROFILE=run6`） |
 |---|---|---|
@@ -267,7 +269,7 @@ run 6 は本 runbook の手順をそのまま使い、**Pod 作成時の env に
 - **依存ドリフト事件（2026-08-19・資産化ループ §7 適用）**: 未 pin の numba が
   0.66→0.67 へドリフトし、numpy 2.4.6 との組で `librosa.pyin` が SIGSEGV
   （`NUMBA_DISABLE_JIT` でも回避不可 — guvectorize は対象外）。
-  `ANALYSIS_STACK_PIN`（numba==0.66.0 / librosa==0.11.0）を gates 段の
+  `ANALYSIS_STACK_PIN`（numba==0.66.0 / librosa==0.11.0 / pyloudnorm==0.2.0〔run 6 正規化数値の決定依存 — pin 生成版で凍結〕）を gates 段の
   強制インストールと lock に追加して根治。**run 5 Pod が生き残ったのは
   たまたま 0.66 系を解決していたため**（freeze 未捕獲の間接推定）— lock の
   存在理由の実測第 1 号

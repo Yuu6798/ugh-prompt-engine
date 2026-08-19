@@ -1313,3 +1313,14 @@ def test_convert_without_normalization_is_legacy_and_reportless(
     summary = cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
     assert not (out_dir / cu.LOUDNESS_REPORT_NAME).exists()
     assert summary["loudness_normalization"] is None
+
+
+def test_normalize_wav_loudness_too_short_fails_closed(tmp_path: Path) -> None:
+    """pyloudnorm のゲーティングブロック長（0.4s）未満は素の ValueError を
+    投げる — fail-closed の分類語彙（LoudnessNormalizationError）に収容
+    されること（セルフレビュー #3 の回帰）。"""
+    sr = 44100
+    wav = tmp_path / "short.wav"
+    _write_pcm16_wav(wav, 0.1 * np.sin(2 * np.pi * 440 * np.arange(sr // 10) / sr), sr)
+    with pytest.raises(cu.LoudnessNormalizationError, match="unmeasurable"):
+        cu.normalize_wav_loudness_in_place(wav, -23.0)

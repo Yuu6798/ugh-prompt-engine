@@ -992,7 +992,8 @@ def test_lock_file_render_pins_match_runtime_gate() -> None:
     # lock と同期していること
     assert set(r5b.ANALYSIS_STACK_PIN) <= pinned
     # 逆方向の drift（lock 側の数値スタック 4 パッケージだけ別版で残る）も検出
-    gate_pkgs = {p.split("==")[0]: p for p in r5b.NUMERIC_STACK_PIN}
+    gate_pkgs = {p.split("==")[0]: p
+                 for p in (*r5b.NUMERIC_STACK_PIN, *r5b.ANALYSIS_STACK_PIN)}
     for line in pinned:
         pkg = line.split("==")[0]
         if pkg in gate_pkgs:
