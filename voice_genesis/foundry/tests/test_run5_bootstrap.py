@@ -1181,3 +1181,41 @@ def test_verify_assembly_pairs_follow_pins_sections() -> None:
     }
     diffs = r5b.verify_assembly_against_run4_pins(manifest, pins_bad)
     assert diffs and diffs[0].startswith("amitaro:")
+
+
+def test_expected_spk_maps_match_assemble_profiles() -> None:
+    """spk_id マップの三重定義ドリフト検出（セルフレビュー #4: bootstrap の
+    RUN_PROFILES.expected_spk_map と assemble_run4 の SPK_IDS/SPK_IDS_RUN7 が
+    手書き重複 — 片方だけの改訂は Pod 上の verify_spk_map まで発覚しない）。"""
+    import importlib.util
+    path = (Path(__file__).resolve().parent.parent / "s1_dataprep" / "assemble_run4.py")
+    spec = importlib.util.spec_from_file_location("assemble_run4_for_parity", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    assert r5b.RUN_PROFILES["run5"]["expected_spk_map"] == mod.SPK_IDS
+    assert r5b.RUN_PROFILES["run6"]["expected_spk_map"] == mod.SPK_IDS
+    assert r5b.RUN_PROFILES["run7"]["expected_spk_map"] == mod.SPK_IDS_RUN7
+    # 恒久欠番の番人: run7 マップに 3 が現れたら設計違反（DESIGN_S6 §0-2）。
+    assert 3 not in r5b.RUN_PROFILES["run7"]["expected_spk_map"].values()
+
+
+def test_prev_manifest_prefixes_follow_profile() -> None:
+    """run 7 の前回 manifest 探索は run6/ まで（直下 run 5 へ落ちない —
+    誤ベースライン比較の黙認防止・DESIGN_S6 §4）。"""
+    try:
+        r5b.apply_run_profile("run7")
+        assert r5b.PREV_MANIFEST_PREFIXES == ("run7", "run6")
+        r5b.apply_run_profile("run6")
+        assert r5b.PREV_MANIFEST_PREFIXES == ("run6", "")
+    finally:
+        r5b.apply_run_profile("run5")
+    assert r5b.PREV_MANIFEST_PREFIXES == ("",)
+
+
+def test_verify_assembly_fails_closed_without_teacher_section() -> None:
+    speaker_entry = {"transcriptions_csv_sha256": "x" * 64, "wav_sha256": {}}
+    manifest = {"speakers": {"user": dict(speaker_entry)}}
+    pins = {"user": dict(speaker_entry)}
+    diffs = r5b.verify_assembly_against_run4_pins(manifest, pins)
+    assert diffs and "教師セクション" in diffs[0]

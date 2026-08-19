@@ -156,6 +156,8 @@ RUN_PROFILES: Dict[str, Dict[str, object]] = {
         "remote_prefix": "",
         "assemble_profile": "run5",
         "expected_spk_map": {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3},
+        # preflight の前回 manifest 探索順（自 run の resume → 前 run の置き場）。
+        "prev_manifest_prefixes": ("",),
     },
     "run6": {
         "run_id": "s5_run6",
@@ -165,6 +167,8 @@ RUN_PROFILES: Dict[str, Dict[str, object]] = {
         "remote_prefix": "run6",
         "assemble_profile": "run5",
         "expected_spk_map": {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3},
+        # run 6 の比較相手 = run 5（フォルダ直下）— DESIGN_S5 §3 の正常系。
+        "prev_manifest_prefixes": ("run6", ""),
     },
     # run 7（DESIGN_S6_run7.md）: 教師交代 = d3synth 引退（spk_id 3 恒久欠番）
     # → amitaro（spk_id 4・num_spk 5）。教師データの生成/検証分岐は
@@ -177,6 +181,10 @@ RUN_PROFILES: Dict[str, Dict[str, object]] = {
         "remote_prefix": "run7",
         "assemble_profile": "run7",
         "expected_spk_map": {"ritsu": 0, "pjs": 1, "user": 2, "amitaro": 4},
+        # run 7 の比較相手 = run 6（DESIGN_S6 §4）。フォルダ直下（run 5）へは
+        # フォールバックしない — 誤ベースライン比較を黙って記帳するより
+        # 「no previous manifest」の方が正直（セルフレビュー #2）。
+        "prev_manifest_prefixes": ("run7", "run6"),
     },
 }
 
@@ -186,6 +194,7 @@ def apply_run_profile(name: str) -> Dict[str, object]:
     テストから呼ぶ。未知名は fail-closed）。戻り値はプロファイル辞書。"""
     global RUN_ID, EXP_NAME_PHASE_A, EXP_NAME_PHASE_B, PHASE_REMOTE_DIRS
     global DATASET_PINS_PATH, REMOTE_PREFIX, ASSEMBLE_PROFILE, EXPECTED_SPK_MAP
+    global PREV_MANIFEST_PREFIXES
     if name not in RUN_PROFILES:
         raise ValueError(
             f"unknown RUN_PROFILE {name!r} (expected one of {sorted(RUN_PROFILES)})"
@@ -199,6 +208,7 @@ def apply_run_profile(name: str) -> Dict[str, object]:
     REMOTE_PREFIX = str(profile["remote_prefix"])
     ASSEMBLE_PROFILE = str(profile["assemble_profile"])
     EXPECTED_SPK_MAP = dict(profile["expected_spk_map"])  # type: ignore[arg-type]
+    PREV_MANIFEST_PREFIXES = tuple(profile["prev_manifest_prefixes"])  # type: ignore[arg-type]
     return profile
 
 # phase 別の Drive 退避 namespace（2026-08-19 外部レビュー P1: run 5 実走で
@@ -223,6 +233,7 @@ RUN_ID = "s4_run5"
 # verify_spk_map で fail-closed に検出する）。apply_run_profile が差し替える。
 ASSEMBLE_PROFILE = "run5"
 EXPECTED_SPK_MAP: Dict[str, int] = {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3}
+PREV_MANIFEST_PREFIXES: Tuple[str, ...] = ("",)
 
 # runbook §4 の「LR/finetune/精度/勾配クリップ」4 項目（s1_record の文章
 # 記述 + s3_record の実測行〔bf16 / clip 1.0 / lr 2e-4〕からの引用。実 YAML
@@ -462,6 +473,13 @@ def verify_assembly_against_run4_pins(
         pairs.append(("d3synth", "d3"))
     if "amitaro" in dataset_pins:
         pairs.append(("amitaro", "amitaro"))
+    if len(pairs) == 1:
+        # 教師セクションを欠く pins は照合対象の脱落（セルフレビュー #3:
+        # user だけ照合して clean を返す fail-open を塞ぐ）。
+        diffs.append(
+            "dataset pins に教師セクション（'d3' or 'amitaro'）が無い — "
+            "教師話者が未照合のまま通過するため fail-closed"
+        )
     for speaker_name, pin_name in pairs:
         speaker = assembly_manifest["speakers"][speaker_name]
         pin = dataset_pins[pin_name]
@@ -1254,11 +1272,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # 正常系（初回）。差分は info として記帳し fail-closed にはしない —
         # 意図した差分（pin 更新・コミット前進）が普通に存在する。
         prev_manifest_path = work / "previous_run_execution_manifest.json"
-        # 自プロファイルの prefix 内 → 無ければフォルダ直下（run 5 の置き場所）
-        # の順で探す（セルフレビュー: run 6 初回の比較相手は run 5 の manifest =
-        # DESIGN_S5 §3 の正常系。prefix のみだと初回走行で比較が黙って空振る）。
-        for candidate in dict.fromkeys(
-                (_remote_path(EXEC_MANIFEST_NAME), EXEC_MANIFEST_NAME)):
+        # 探索順はプロファイルの prev_manifest_prefixes（自 run の resume →
+        # 前 run の置き場。run 7 は run6/ のみで直下 run 5 へは落ちない —
+        # DESIGN_S6 §4 の比較相手契約・セルフレビュー #2）。
+        _prefix_candidates = [
+            f"{pfx}/{EXEC_MANIFEST_NAME}" if pfx else EXEC_MANIFEST_NAME
+            for pfx in PREV_MANIFEST_PREFIXES
+        ]
+        for candidate in dict.fromkeys(_prefix_candidates):
             try:
                 subprocess.run(
                     ["rclone", "--config", str(rclone_conf), "copyto",
@@ -1517,10 +1538,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # の流儀。欠落・取り違え・余剰はここで fail-closed）。
                 amitaro_src_dir = work / "amitaro_sources"
                 amitaro_src_dir.mkdir(parents=True, exist_ok=True)
-                _run(["rclone", "--config", rclone_conf, "copy",
-                      f"run5drive:{_remote_path('amitaro_sources')}", amitaro_src_dir,
-                      "--drive-root-folder-id", drive_folder_id],
-                     timeout=3600, label="datasets/amitaro-sources-rclone")
+                # user_sources と同じ ID 指定取得（名前ベース copy は Drive の
+                # 同名重複を黙って落とす/取り違える — PR#274 の教訓を継承。
+                # セルフレビュー #1）。
+                amitaro_listing = _run_capture(
+                    ["rclone", "--config", rclone_conf, "lsjson", "--recursive",
+                     "--files-only",
+                     f"run5drive:{_remote_path('amitaro_sources')}",
+                     "--drive-root-folder-id", drive_folder_id],
+                    timeout=300, label="datasets/amitaro-sources-lsjson",
+                )
+                amitaro_plan = plan_drive_id_fetch(amitaro_listing)
+                print(f"| run5_bootstrap: amitaro_sources = {len(amitaro_plan)} "
+                      "file(s) by Drive ID", flush=True)
+                for file_id, local_name in amitaro_plan:
+                    _run(["rclone", "--config", rclone_conf, "backend", "copyid",
+                          "run5drive:", file_id, amitaro_src_dir / local_name],
+                         timeout=600, label="datasets/amitaro-sources-rclone")
                 staged_pins: Dict[str, str] = amitaro_pin["staged_source_sha256"]
                 actual_names = {p.name for p in amitaro_src_dir.glob("*.wav")}
                 staged_diffs: List[str] = []
@@ -1546,9 +1580,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                       "ita_recitation_transcript_utf8.txt",
                       "--dsdict", dsdict,
                       "--out-dir", amitaro_dataset,
-                      # 正規化目標は pins が単一ソース（run 6 user と同じ構造保証）
+                      # 正規化目標・dosage 帯は pins が単一ソース（run 6 user の
+                      # LUFS と同じ構造保証 — セルフレビュー #5）
                       "--normalize-loudness-lufs",
-                      str(amitaro_pin["normalization_target_lufs"])],
+                      str(amitaro_pin["normalization_target_lufs"]),
+                      "--dosage-target-s", str(amitaro_pin["dosage"]["target_s"]),
+                      "--dosage-tolerance", str(amitaro_pin["dosage"]["tolerance"])],
                      label="datasets/convert-amitaro")
                 amitaro_diffs = verify_dataset_against_pins(
                     amitaro_dataset, amitaro_pin, "amitaro"

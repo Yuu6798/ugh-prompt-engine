@@ -601,6 +601,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
              "amitaro.normalization_target_lufs）",
     )
     parser.add_argument("--ffmpeg-bin", type=str, default=None)
+    parser.add_argument(
+        "--dosage-target-s", type=float, default=DOSAGE_TARGET_S,
+        help="dosage 打ち切り目標秒（既定 = D3 pin 由来の定数。Pod 実行では "
+             "run7 pins の amitaro.dosage.target_s を bootstrap が渡す — "
+             "pin と実行値の単一ソース化）",
+    )
+    parser.add_argument(
+        "--dosage-tolerance", type=float, default=DOSAGE_TOLERANCE,
+        help="dosage 帯の許容比（既定 0.10。同上・pins の dosage.tolerance）",
+    )
     args = parser.parse_args(argv)
 
     summary = convert(
@@ -610,6 +620,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         out_dir=args.out_dir,
         normalize_loudness_lufs=args.normalize_loudness_lufs,
         ffmpeg_bin=args.ffmpeg_bin,
+        dosage_target_s=args.dosage_target_s,
+        dosage_tolerance=args.dosage_tolerance,
     )
     print(json.dumps(
         {k: summary[k] for k in

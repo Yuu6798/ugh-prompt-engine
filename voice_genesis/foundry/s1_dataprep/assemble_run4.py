@@ -612,6 +612,7 @@ def refresh_config_pin(
     config_path: Path,
     config_dir: Optional[Path] = None,
     expected_spk_ids: Optional[Dict[str, int]] = None,
+    expected_num_spk: Optional[int] = None,
 ) -> Path:
     """P1 修正 (review #265 R9): 手動編集後の live config
     (`run4_config_datasets.yaml`) から `.normalized.yaml` pin 副本を再生成
@@ -672,6 +673,21 @@ def refresh_config_pin(
     shape_problems = _validate_live_datasets_shape(
         live.get("datasets"), expected_spk_ids
     )
+    # `num_spk` も §0-2 契約フィールド（run 7 = 5・欠番 3 を含む埋め込み行数。
+    # セルフレビュー #6: datasets 節だけ検査すると num_spk の手動編集事故が
+    # そのまま pin 再発行される）。既定期待値 = max(期待 spk_id)+1 —
+    # 欠番の無い run 5/6 では話者数 4 と同値・欠番ありの run 7 では 5 になる
+    # （_write_run4_config の num_spk 決定と同じ不変量）。
+    _map = expected_spk_ids or SPK_IDS
+    effective_expected_num_spk = (
+        expected_num_spk if expected_num_spk is not None
+        else max(_map.values()) + 1
+    )
+    if live.get("num_spk") != effective_expected_num_spk:
+        shape_problems = shape_problems + [
+            f"num_spk: expected {effective_expected_num_spk}, "
+            f"got {live.get('num_spk')!r} (fail-closed)"
+        ]
     if shape_problems:
         raise ConfigPinMismatchError(shape_problems)
 
@@ -1290,11 +1306,14 @@ def _main_refresh_config_pin(argv: Optional[Sequence[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    expected_spk_ids = ASSEMBLE_PROFILES[args.profile]["spk_ids"]
+    prof = ASSEMBLE_PROFILES[args.profile]
+    expected_spk_ids = prof["spk_ids"]
+    expected_num_spk = prof["num_spk"]  # None = len(spk_ids)（run5 既定）
     try:
         normalized_path = refresh_config_pin(
             args.config, config_dir=args.config_dir,
             expected_spk_ids=expected_spk_ids,  # type: ignore[arg-type]
+            expected_num_spk=expected_num_spk,  # type: ignore[arg-type]
         )
     except (RefreshConfigPinError, ConfigPinMismatchError) as exc:
         print(f"error: {exc}", file=sys.stderr)
