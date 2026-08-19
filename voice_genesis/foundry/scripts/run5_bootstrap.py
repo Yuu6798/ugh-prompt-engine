@@ -135,6 +135,22 @@ PHASE_B_MAX_UPDATES = 40000
 EXP_NAME_PHASE_A = "s4_run5_acoustic_scratch"
 EXP_NAME_PHASE_B = "s4_run5_acoustic_v1"
 
+# phase 別の Drive 退避 namespace（2026-08-19 外部レビュー P1: run 5 実走で
+# phase A/B の `model_ckpt_steps_5000.ckpt` と `config.yaml` が同名 push で
+# 後勝ち上書きされ、phase A 5K は監視側の手動 copyto 保全を要した —
+# s4_record §5.6。milestone push と salvage の両方がこの規則を使い、
+# 同 basename でも独立に保存される）。
+PHASE_REMOTE_DIRS: Dict[str, str] = {
+    EXP_NAME_PHASE_A: "phase_a",
+    EXP_NAME_PHASE_B: "phase_b",
+}
+
+# 機械可読な実行正本（2026-08-19 外部レビュー P2: Markdown record とは別に、
+# 次回 run の preflight が前回成功走行と機械比較できる 1 ファイルを残す）。
+EXEC_MANIFEST_SCHEMA = "run-execution-manifest/0.1"
+EXEC_MANIFEST_NAME = "run_execution_manifest.json"
+RUN_ID = "s4_run5"
+
 # runbook §4 の「LR/finetune/精度/勾配クリップ」4 項目（s1_record の文章
 # 記述 + s3_record の実測行〔bf16 / clip 1.0 / lr 2e-4〕からの引用。実 YAML
 # との一次照合未達という限界は runbook §4 に明記済み — 本スクリプトも
@@ -550,38 +566,167 @@ def match_user_sources(
     return source_paths, diffs, extras
 
 
-def collect_salvage_artifacts(run5_raw: Path, ds_repo: Path) -> List[Path]:
+def collect_salvage_artifacts(run5_raw: Path,
+                              ds_repo: Path) -> List[Tuple[Path, str]]:
     """salvage 段で push すべき成果物を**その時点のディスク実態から**収集する
     （review セルフレビュー #4: 旧実装は学習 2 フェーズ完走後にのみ
     salvage_paths へ積んでいたため、途中失敗時に log/TB/phase config が
     一切 push されず「成功・失敗どちらでも退避」の契約に反していた。
     パスは決定論的に導出できるため、失敗地点に依らず存在するものを全部
-    拾う）。戻り値は存在するファイルのみ（重複なし・順序決定論）。"""
-    candidates: List[Path] = [
-        run5_raw / "assembly_manifest.json",
-        run5_raw / "run4_config_datasets.yaml.normalized.yaml",
-        run5_raw / "dict.txt",
-        run5_raw / "run5_config_phase_a.yaml",
-        run5_raw / "run5_config_phase_b.yaml",
-        run5_raw / "run5_training_manifest.json",
+    拾う）。戻り値は `(ローカルパス, Drive 側 dest)` の列（存在するもののみ・
+    重複なし・順序決定論）。
+
+    dest は 2026-08-19 外部レビュー P1 の namespace 規則: run 単位の pin 類は
+    フォルダ直下（""）、phase 別成果物は `phase_a/` / `phase_b/` 配下の
+    checkpoints / config / logs へ分離する（milestone push と同一規則 —
+    run 5 実走の同名後勝ち上書き〔s4_record §5.6〕の根治で、手動 copyto
+    保全を不要にする）。コマンドログは `cmdlogs/` へ。"""
+    candidates: List[Tuple[Path, str]] = [
+        (run5_raw / "assembly_manifest.json", ""),
+        (run5_raw / "run4_config_datasets.yaml.normalized.yaml", ""),
+        (run5_raw / "dict.txt", ""),
+        (run5_raw / "run5_training_manifest.json", ""),
+        (run5_raw / EXEC_MANIFEST_NAME, ""),
+        (run5_raw / "run5_config_phase_a.yaml", "phase_a/config"),
+        (run5_raw / "run5_config_phase_b.yaml", "phase_b/config"),
     ]
     for exp_name in (EXP_NAME_PHASE_A, EXP_NAME_PHASE_B):
+        phase_dest = PHASE_REMOTE_DIRS[exp_name]
         ckpt_dir = ds_repo / "checkpoints" / exp_name
         for _step, ckpt in sorted(find_milestone_ckpts(ckpt_dir).items()):
-            candidates.append(ckpt)
-        for pattern in ("config.yaml", "*.log", "**/events.out.tfevents.*"):
-            candidates += sorted(ckpt_dir.glob(pattern))
+            candidates.append((ckpt, f"{phase_dest}/checkpoints"))
+        candidates += [(p, f"{phase_dest}/config")
+                       for p in sorted(ckpt_dir.glob("config.yaml"))]
+        for pattern in ("*.log", "**/events.out.tfevents.*"):
+            candidates += [(p, f"{phase_dest}/logs")
+                           for p in sorted(ckpt_dir.glob(pattern))]
     # コマンドログは**最後**に積む（review #4: 予算/wall-clock 枯渇時に
     # 先に押し出されるべきは checkpoint。ログ 40 本超が先頭を占めると
     # 本命の退避が間に合わない経路が生まれる）。
     log_dir = _LOG_DIR
     if log_dir is not None:
-        candidates += sorted(log_dir.glob("*.log"))
-    unique: List[Path] = []
-    for path in candidates:
-        if path.exists() and path not in unique:
-            unique.append(path)
+        candidates += [(p, "cmdlogs") for p in sorted(log_dir.glob("*.log"))]
+    unique: List[Tuple[Path, str]] = []
+    for item in candidates:
+        if item[0].exists() and item not in unique:
+            unique.append(item)
     return unique
+
+
+def new_execution_manifest(*, pod_id: str, repo_commit: str,
+                           container_image: Optional[str],
+                           gpu: Optional[str]) -> Dict[str, object]:
+    """機械可読な実行正本の初期形（2026-08-19 外部レビュー P2）。
+    Markdown record（s4_record 等）の人間向け記帳とは別に、次回 run の
+    preflight が前回成功走行と比較できる構造化データを 1 ファイルに残す。
+    走行中に stage_status / 各 hash / salvage 会計が埋まり、salvage 段で
+    Drive フォルダ直下へ push される。"""
+    return {
+        "schema_version": EXEC_MANIFEST_SCHEMA,
+        "run_id": RUN_ID,
+        "pod_id": pod_id,
+        "repo_commit": repo_commit,
+        "container_image": container_image,
+        "gpu": gpu,
+        "start_time": utc_now_iso(),
+        "end_time": None,
+        "stage_status": {},
+        "environment_versions": {"python": sys.version.split()[0]},
+        "material_hashes": {},
+        "dataset_hashes": {},
+        "checkpoint_hashes": {},
+        "tensorboard_hashes": {},
+        "artifact_count": None,
+        "salvage_status": None,
+        "self_stop_status": "pending",
+        "failure_history": [],
+    }
+
+
+def summarize_material_hashes(
+    materials: Dict[str, Dict[str, object]]
+) -> Dict[str, Dict[str, object]]:
+    """素材 pin 表から sha256 系キーだけを抜いた要約（manifest の
+    material_hashes 欄）。pin 表そのものは repo が正本なので複製しない。"""
+    return {
+        name: {k: v for k, v in entry.items() if k.endswith("sha256")}
+        for name, entry in materials.items()
+    }
+
+
+# manifest 比較の対象キー（preflight での前回比較）。stage_status や費用系は
+# 走行毎に変わって当然なので比較しない — 環境・入力の同一性だけを見る。
+EXEC_MANIFEST_COMPARE_KEYS = (
+    "schema_version", "repo_commit", "container_image",
+    "material_hashes", "environment_versions",
+)
+
+
+def compare_execution_manifests(previous: Dict[str, object],
+                                current: Dict[str, object]) -> List[str]:
+    """前回 manifest と今回の初期 manifest の差分キーを返す（空 = 一致）。
+    fail-closed にはしない — 意図した差分（pin 更新・コミット前進）が正常系に
+    普通に存在するため、比較結果は heartbeat の info として記録し、判断は
+    record / 人間側に残す。
+
+    environment_versions は**両方に存在するキーのみ**比較する（セルフ
+    レビュー #1: 前回側は走行完了時の最終形〔render/binarize の実測版が
+    追記済み〕、今回側は preflight 時点の初期形〔python のみ〕なので、
+    全体の等値比較だと構造的に常に差分になり、比較機能が死ぬ）。"""
+    diffs: List[str] = []
+    for key in EXEC_MANIFEST_COMPARE_KEYS:
+        prev_val = previous.get(key)
+        curr_val = current.get(key)
+        if key == "environment_versions" and isinstance(prev_val, dict) \
+                and isinstance(curr_val, dict):
+            shared = set(prev_val) & set(curr_val)
+            if any(prev_val[k] != curr_val[k] for k in shared):
+                diffs.append(key)
+            continue
+        if prev_val != curr_val:
+            diffs.append(key)
+    return diffs
+
+
+def probe_gpu_name() -> Optional[str]:
+    """nvidia-smi から GPU 名を取る（無ければ None — manifest 用の観測値で
+    あってゲートではない）。"""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    name = result.stdout.strip().splitlines()
+    return name[0].strip() if name else None
+
+
+def probe_repo_commit(repo_root: Path) -> str:
+    """実行中リポジトリの HEAD SHA（取れなければ RUN5_PIN_COMMIT env に
+    フォールバック。両方欠けたら "unknown" — manifest 用の観測値）。"""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        pass
+    return os.environ.get("RUN5_PIN_COMMIT", "unknown")
+
+
+def write_execution_manifest(manifest: Dict[str, object], run5_raw: Path) -> Path:
+    run5_raw.mkdir(parents=True, exist_ok=True)
+    path = run5_raw / EXEC_MANIFEST_NAME
+    path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def build_stage_plan() -> Tuple[str, ...]:
@@ -600,12 +745,22 @@ class Heartbeat:
     マーカー…を Drive へ heartbeat push したもの」— 報告文でなく成果物で
     完了判定する）。push は runner（テストではフェイク）経由。"""
 
-    def __init__(self, heartbeat_dir: Path, pusher: Callable[[Path], None]) -> None:
+    def __init__(self, heartbeat_dir: Path, pusher: Callable[..., None],
+                 record: Optional[Dict[str, object]] = None) -> None:
         self.heartbeat_dir = Path(heartbeat_dir)
         self.heartbeat_dir.mkdir(parents=True, exist_ok=True)
         self._pusher = pusher
+        # 実行 manifest の stage_status へも同時記帳する（渡された dict を
+        # in-place 更新。detail は traceback 等で肥大しうるため切り詰める）。
+        self._record = record
 
     def mark(self, stage: str, status: str, detail: str = "") -> Path:
+        if self._record is not None:
+            self._record[stage] = {
+                "status": status,
+                "utc": utc_now_iso(),
+                "detail": tail_text(detail, 300) if detail else "",
+            }
         marker = self.heartbeat_dir / f"{stage}.status.json"
         marker.write_text(
             json.dumps(
@@ -747,22 +902,29 @@ def _run_capture(argv: Sequence[str], *, timeout: Optional[float] = None,
     return result.stdout
 
 
-def _rclone_argv(rclone_conf: Path, drive_folder_id: str, path: Path) -> List[str]:
+def _rclone_argv(rclone_conf: Path, drive_folder_id: str, path: Path,
+                 dest: str = "") -> List[str]:
+    """`dest` は成果物フォルダ内のサブディレクトリ（例 "phase_a/checkpoints"）。
+    空文字 = フォルダ直下（heartbeat / run 単位の pin 類）。phase 別成果物は
+    必ず `PHASE_REMOTE_DIRS` 由来の dest を渡す — 2026-08-19 外部レビュー P1
+    （同名後勝ち上書きの根治。rclone は存在しないリモートディレクトリを
+    copy 時に自動作成する）。"""
     return [
         "rclone", "--config", str(rclone_conf), "copy", str(path),
-        "run5drive:", "--drive-root-folder-id", drive_folder_id,
+        f"run5drive:{dest}", "--drive-root-folder-id", drive_folder_id,
     ]
 
 
-def _rclone_pusher(rclone_conf: Path, drive_folder_id: str) -> Callable[[Path], None]:
+def _rclone_pusher(rclone_conf: Path,
+                   drive_folder_id: str) -> Callable[..., None]:
     """heartbeat / 走行中 milestone 用の**非致命** pusher。失敗は進捗可視性の
     劣化であって成果物の毀損ではないため run を落とさない（最終的な成果物
     保全は salvage 段の `_rclone_push_strict` が担い、そちらの失敗は
     exit code / heartbeat status に表面化する — review セルフレビュー #5）。"""
-    def push(path: Path) -> None:
+    def push(path: Path, dest: str = "") -> None:
         try:
             subprocess.run(
-                _rclone_argv(rclone_conf, drive_folder_id, path),
+                _rclone_argv(rclone_conf, drive_folder_id, path, dest),
                 check=True, timeout=1800,
             )
         except (subprocess.SubprocessError, OSError) as exc:
@@ -771,14 +933,15 @@ def _rclone_pusher(rclone_conf: Path, drive_folder_id: str) -> Callable[[Path], 
     return push
 
 
-def _rclone_push_strict(rclone_conf: Path, drive_folder_id: str, path: Path) -> bool:
+def _rclone_push_strict(rclone_conf: Path, drive_folder_id: str, path: Path,
+                        dest: str = "") -> bool:
     """salvage 段用の**致命側** push（review セルフレビュー #5: 旧実装は
     salvage も swallow-all pusher を使い回しており、最終 checkpoint の push
     失敗が exit code にも heartbeat にも現れないまま self-stop していた）。
     成否を返す（タイムアウトは大型 checkpoint を考慮して 1 時間）。"""
     try:
         subprocess.run(
-            _rclone_argv(rclone_conf, drive_folder_id, path),
+            _rclone_argv(rclone_conf, drive_folder_id, path, dest),
             check=True, timeout=3600,
         )
         return True
@@ -903,7 +1066,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 1
         drive_folder_id = os.environ["RUN5_DRIVE_FOLDER_ID"]
         pusher = _rclone_pusher(rclone_conf, drive_folder_id)
-        heartbeat = Heartbeat(work / "heartbeat", pusher)
+        # 機械可読な実行正本（外部レビュー P2）。stage_status は Heartbeat が
+        # 同時記帳する。
+        exec_manifest = new_execution_manifest(
+            pod_id=os.environ.get("RUNPOD_POD_ID", ""),
+            repo_commit=probe_repo_commit(REPO_ROOT),
+            container_image=os.environ.get("RUNPOD_POD_IMAGE")
+            or os.environ.get("RUNPOD_IMAGE_NAME"),
+            gpu=probe_gpu_name(),
+        )
+        exec_manifest["material_hashes"] = summarize_material_hashes(materials)
+        heartbeat = Heartbeat(work / "heartbeat", pusher,
+                              record=exec_manifest["stage_status"])
         # review #1: PJS 取得（backend copyid）と salvage が rclone 依存に
         # なったため、**preflight で binary の実在・版・認証・フォルダ書き込みを
         # まとめて実証する**（materials 段まで持ち越さない）。heartbeat の
@@ -917,11 +1091,49 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "トークン/フォルダ ID/権限のいずれかが無効。監視も退避も"
                 "成立しないため起動を中止する（fail-closed）"
             )
+        # 前回走行の manifest と比較（外部レビュー P2: 「次回 run の preflight
+        # で前回成功 manifest と比較可能にする」）。前回が無い・読めないは
+        # 正常系（初回）。差分は info として記帳し fail-closed にはしない —
+        # 意図した差分（pin 更新・コミット前進）が普通に存在する。
+        prev_manifest_path = work / "previous_run_execution_manifest.json"
+        try:
+            subprocess.run(
+                ["rclone", "--config", str(rclone_conf), "copyto",
+                 f"run5drive:{EXEC_MANIFEST_NAME}", str(prev_manifest_path),
+                 "--drive-root-folder-id", drive_folder_id],
+                timeout=300,
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            # 情報目的の取得は run を落とさない（セルフレビュー #2:
+            # TimeoutExpired だけが素通りして preflight 全体を殺していた）。
+            print(f"| run5_bootstrap: previous manifest fetch failed "
+                  f"(non-fatal): {exc}", flush=True)
+        if prev_manifest_path.exists():
+            try:
+                prev_manifest = json.loads(
+                    prev_manifest_path.read_text(encoding="utf-8"))
+                diff_keys = compare_execution_manifests(prev_manifest, exec_manifest)
+                heartbeat.mark(
+                    "preflight_manifest_diff", "info",
+                    detail=("match with previous run" if not diff_keys
+                            else "differs from previous run: " + ", ".join(diff_keys)),
+                )
+            except (json.JSONDecodeError, OSError) as exc:
+                heartbeat.mark("preflight_manifest_diff", "info",
+                               detail=f"previous manifest unreadable: {exc}")
+        else:
+            heartbeat.mark("preflight_manifest_diff", "info",
+                           detail="no previous manifest (first instrumented run)")
 
         try:
             # --- stage 2: gates（runbook §2.2） -----------------------------
             _run([sys.executable, "-m", "pip", "install", "--no-cache-dir",
                   *NUMERIC_STACK_PIN], label="gates/pin-install")
+            # 実行時解決された全依存の実測 freeze を証跡化（外部レビュー P3:
+            # lock + runtime gate の二重保証の材料。次 run の lock 生成元）。
+            _run([sys.executable, "-m", "pip", "freeze"], label="gates/pip-freeze")
+            exec_manifest["environment_versions"]["render_numeric_stack_pin"] = (
+                list(NUMERIC_STACK_PIN))
             _run([sys.executable, "-c", GATE1_SNIPPET], label="gates/gate1")
             gate_env = dict(os.environ)
             gate_env["NPY_DISABLE_CPU_FEATURES"] = "X86_V4"
@@ -1190,6 +1402,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             asm_diffs = verify_assembly_against_run4_pins(assembly_manifest, dataset_pins)
             if asm_diffs:
                 raise PinMismatchError(asm_diffs)
+            dict_txt = run5_raw / "dict.txt"
+            exec_manifest["dataset_hashes"] = {
+                "live_config": sha256_file(live_config),
+                "assembly_manifest": sha256_file(run5_raw / "assembly_manifest.json"),
+                "dict_txt": sha256_file(dict_txt) if dict_txt.exists() else None,
+            }
             heartbeat.mark("assemble", "ok")
 
             # --- stage 6: binarize -----------------------------------------
@@ -1218,6 +1436,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 capture_output=True, text=True,
             ).stdout.strip()
             heartbeat.mark("binarize_numeric_stack", "info", detail=stack_report)
+            exec_manifest["environment_versions"]["binarize_numeric_stack"] = (
+                stack_report)
+            # 学習側 venv の実測 freeze（外部レビュー P3 — DiffSinger
+            # requirements は上流ファイル任せのため、実際に解決された版を
+            # 次 run の lock 生成元として残す）。
+            _run([sys.executable, "-m", "pip", "freeze"],
+                 label="binarize/pip-freeze")
             _run([sys.executable, ds_repo / "scripts" / "binarize.py",
                   "--config", live_config],
                  cwd=ds_repo, label="binarize/binarize")
@@ -1245,12 +1470,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 1 ポーリング周期安定するまでスキャンしない、(b) torch.load
                 失敗（exit 2）は NaN 判定と区別して再試行し、NAN_SCAN_MAX_RETRIES
                 回連続で読めない場合のみ「読めない checkpoint」として停止する
-                （NaN と誤記しない）。push はスキャン成功後のみ。"""
+                （NaN と誤記しない）。push はスキャン成功後のみ。
+
+                2026-08-19 外部レビュー P1/P2: milestone push は
+                `PHASE_REMOTE_DIRS` の namespace 配下へ行い（phase A/B の同名
+                後勝ち上書きの根治）、train.py の stdout/stderr は
+                `<ckpt_dir>/train.log` へ記録する（run 5 実走ではコンソール
+                直結で学習生ログが残らなかった — s4_record §2。salvage の
+                `*.log` glob が phase logs へ回収し、失敗時は末尾を
+                StageFailure 経由で failure heartbeat の detail に添付する）。"""
                 ckpt_dir = ds_repo / "checkpoints" / exp_name
+                phase_dest = PHASE_REMOTE_DIRS[exp_name]
+                ckpt_dir.mkdir(parents=True, exist_ok=True)
+                train_log = ckpt_dir / "train.log"
+
+                def train_log_tail() -> str:
+                    tail = read_tail(train_log)
+                    return f"\n--- train.log (tail) ---\n{tail}" if tail else ""
+
+                # -u: 子プロセスの stdout をアンバッファ化（セルフレビュー #3:
+                # ファイル向きの stdout はブロックバッファになり、NaN 検知等の
+                # SIGKILL 経路では直近出力が flush されず train.log 末尾の診断が
+                # 失敗直前を写さない）。
+                train_log_f = open(train_log, "ab")
                 proc = subprocess.Popen(
-                    [sys.executable, str(ds_repo / "scripts" / "train.py"),
+                    [sys.executable, "-u", str(ds_repo / "scripts" / "train.py"),
                      "--config", str(config_path), "--exp_name", exp_name],
                     cwd=str(ds_repo),
+                    stdout=train_log_f, stderr=subprocess.STDOUT,
                 )
                 seen: List[int] = []
                 prev_sizes: Dict[int, int] = {}
@@ -1267,11 +1514,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                 f"[{stage}] checkpoint at step {step} unreadable after "
                                 f"{NAN_SCAN_MAX_RETRIES} attempts (torch.load failure — "
                                 "NOT a NaN verdict; treating as corrupt checkpoint)"
+                                + train_log_tail()
                             )
                         return  # seen に入れず次ポーリングで再試行
                     seen.append(step)
                     if rc == 0:
-                        pusher(ckpt)
+                        pusher(ckpt, f"{phase_dest}/checkpoints")
                         heartbeat.mark(f"{stage}_step_{step}", "ok")
                     else:
                         heartbeat.mark(f"{stage}_step_{step}", "nan")
@@ -1279,6 +1527,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         raise StageFailure(
                             f"[{stage}] NaN detected at step {step} — fail-closed "
                             "(run 4 と同じ 5K 節目 NaN スキャン規律)"
+                            + train_log_tail()
                         )
 
                 try:
@@ -1289,7 +1538,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                 f"[{stage}] wall-clock limit "
                                 f"({WALL_CLOCK_LIMIT_SECONDS}s) reached — killing "
                                 "training and salvaging latest checkpoints "
-                                "(DESIGN_S4 §3.4)"
+                                "(DESIGN_S4 §3.4)" + train_log_tail()
                             )
                         now_sizes = milestone_ckpt_sizes(ckpt_dir)
                         for step in stable_milestone_candidates(seen, prev_sizes, now_sizes):
@@ -1305,12 +1554,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                     scan_retries[step] = NAN_SCAN_MAX_RETRIES - 1
                                     scan_and_handle(step)
                             if rc_proc != 0:
-                                raise StageFailure(f"[{stage}] train.py exit {rc_proc}")
+                                raise StageFailure(
+                                    f"[{stage}] train.py exit {rc_proc}"
+                                    + train_log_tail()
+                                )
                             return ckpt_dir
                         time.sleep(POLL_INTERVAL_SECONDS)
                 finally:
                     if proc.poll() is None:
                         proc.kill()
+                    train_log_f.close()
 
             ckpt_dir_a = train_phase(phase_a_cfg_path, EXP_NAME_PHASE_A, "train_phase_a")
             phase_a_5k = ckpt_dir_a / f"model_ckpt_steps_{PHASE_A_MAX_UPDATES}.ckpt"
@@ -1343,16 +1596,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             traceback.print_exc()
             heartbeat.mark("failure", "failed",
                            detail=f"{exc}\n{traceback.format_exc()}")
+            exec_manifest["failure_history"].append(
+                {"utc": utc_now_iso(), "error": tail_text(str(exc), 2000)})
             exit_code = 1
 
         # --- stage 9: salvage（成功・失敗どちらでも必ず通る） -----------------
         # review セルフレビュー #4/#5: 成果物はこの時点のディスク実態から収集
         # し（失敗地点非依存）、push は致命側（失敗を exit code / heartbeat に
-        # 表面化させる）で行う。
+        # 表面化させる）で行う。**push が先・hash/manifest は後**（今回セルフ
+        # レビュー #5: wall-clock/予算枯渇の salvage で checkpoint の脱出前に
+        # 数 GB の sha256 計算を挟まない — 「checkpoint を先に押し出す」順序
+        # 規律は hash 会計にも適用する）。
         artifacts = collect_salvage_artifacts(run5_raw, ds_repo)
         salvage_failures = 0
-        for path in artifacts:
-            if not _rclone_push_strict(rclone_conf, drive_folder_id, path):
+        for path, dest in artifacts:
+            if not _rclone_push_strict(rclone_conf, drive_folder_id, path, dest):
                 salvage_failures += 1
         if salvage_failures:
             salvage_status = "failed"
@@ -1365,6 +1623,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "salvage", salvage_status,
             detail=f"pushed {len(artifacts) - salvage_failures}/{len(artifacts)} artifact(s)",
         )
+        # 実行 manifest の会計を確定して書き出し・push（外部レビュー P2）。
+        # この push の失敗も exit code / heartbeat に表面化させる（今回セルフ
+        # レビュー #4: 戻り値無視は「正本の会計欠落」が静かに通る）。
+        exec_manifest["end_time"] = utc_now_iso()
+        exec_manifest["self_stop_status"] = (
+            "skipped (--skip-self-stop)" if args.skip_self_stop else "scheduled")
+        for path, dest in artifacts:
+            if dest.endswith("/checkpoints"):
+                exec_manifest["checkpoint_hashes"][f"{dest}/{path.name}"] = (
+                    sha256_file(path))
+            elif path.name.startswith("events.out.tfevents."):
+                exec_manifest["tensorboard_hashes"][f"{dest}/{path.name}"] = (
+                    sha256_file(path))
+        exec_manifest["artifact_count"] = len(artifacts)
+        exec_manifest["salvage_status"] = salvage_status
+        manifest_path = write_execution_manifest(exec_manifest, run5_raw)
+        if not _rclone_push_strict(rclone_conf, drive_folder_id, manifest_path):
+            exit_code = 1
+            heartbeat.mark("exec_manifest_push", "failed",
+                           detail="run_execution_manifest.json push failed")
         return exit_code
 
     finally:

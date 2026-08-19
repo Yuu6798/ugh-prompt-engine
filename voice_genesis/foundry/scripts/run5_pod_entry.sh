@@ -23,6 +23,10 @@ git clone https://github.com/Yuu6798/ugh-prompt-engine.git "$REPO"
 git -C "$REPO" checkout "$RUN5_PIN_COMMIT"
 
 cd "$REPO"
+# 依存の実行時解決は requirements_run5_pod.lock（同ディレクトリ）へ寄せる方針
+# （2026-08-19 外部レビュー P3）。確定 pin は bootstrap の gates 段
+# （NUMERIC_STACK_PIN・gate1 検査）が担い、この 2 行の実測解決版は bootstrap が
+# gates/pip-freeze cmdlog として捕獲・salvage する（lock 完全化の材料）。
 pip install -e ".[dev]"
 pip install --no-cache-dir praat-parselmouth
 

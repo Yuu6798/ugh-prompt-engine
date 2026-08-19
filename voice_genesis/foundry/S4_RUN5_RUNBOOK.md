@@ -163,22 +163,54 @@ assembly_manifest に pin 済み）から 2 つの phase config を導出する:
 手動移植 4 項目の無人版。キー名が s1_record の文章記述由来で実 YAML 一次照合
 未達という限界も継承 — 初回実測でキー名不一致が判明したら学習が即落ちるため
 fail-closed 側に倒れる）。2 config の sha256 は `run5_training_manifest.json`
-として Drive へ退避される。
+として Drive へ退避される。**キー名一次照合の限界は run 5 実走で解消済み**
+（train.py の config スナップショットに同キー・同値が採録 — s4_record §4）。
+
+### 4.1 依存の固定（lock + runtime gate の二重保証・2026-08-19 外部レビュー P3）
+
+- 確定 pin の正本 = `scripts/requirements_run5_pod.lock`（render/gates 環境の
+  数値スタック 4 点。bootstrap の `NUMERIC_STACK_PIN`〔gate1 が毎回検査〕との
+  同期はテストが固定）
+- 実行時解決が残る範囲（`pip install -e ".[dev]"` / praat-parselmouth /
+  DiffSinger requirements）は、bootstrap が **`pip freeze` を gates 段と
+  binarize 段の cmdlog として捕獲・salvage** する。run 5 は freeze 未捕獲の
+  ため lock は部分 pin — **run 6 の実測 freeze から lock を完全化する**
+  （lock ファイル内の PENDING 注記が解消条件）
 
 ## 5. 成果物（Drive 退避レイアウト）
 
-| 区分 | ファイル |
+2026-08-19 bootstrap 改修（外部レビュー P1/P2 採用）後のレイアウト。
+**run 5 実走時はフラット配置**だった（当時の実配置と手動保全の経緯 =
+s4_record §5.6）— 以下は run 6 以降に適用される:
+
+| 区分 | Drive 上の配置 |
 |---|---|
-| heartbeat | `<stage>.status.json` 群（exit code 込み） |
-| データ束 pin | `assembly_manifest.json` / `run4_config_datasets.yaml.normalized.yaml` / `dict.txt` |
-| 学習 config pin | `run5_config_phase_a.yaml` / `run5_config_phase_b.yaml` / `run5_training_manifest.json` |
-| checkpoint | phase A 5K + phase B の 5K/10K/20K/40K（節目毎に push 済み） |
-| ログ | `config.yaml`（train.py スナップショット）・`*.log`・TensorBoard events |
+| heartbeat | 直下の `<stage>.status.json` 群（exit code 込み。`preflight_manifest_diff` = 前回 manifest との比較 info を含む） |
+| 実行正本（機械可読） | 直下の `run_execution_manifest.json`（schema `run-execution-manifest/0.1`: pod/commit/環境版数/素材・データ・checkpoint・TB hash/stage_status/salvage 会計/failure_history。次回 preflight が前回走行と比較する） |
+| データ束 pin | 直下の `assembly_manifest.json` / `run4_config_datasets.yaml.normalized.yaml` / `dict.txt` / `run5_training_manifest.json` |
+| phase 別成果物 | `phase_a/` と `phase_b/` 配下に `checkpoints/`（節目 ckpt — milestone push・salvage とも同一規則）・`config/`（導出 config + train.py スナップショット `config.yaml`）・`logs/`（**`train.log` = 学習生 stdout/stderr**・TensorBoard events・その他ログ） |
+| コマンドログ | `cmdlogs/` 配下（各ステージの外部コマンド逐語出力 + `gates_pip-freeze` / `binarize_pip-freeze` = 依存 lock 完全化の材料） |
+
+- **同名衝突の罠（2026-08-19 実走で発見 → 同日 bootstrap 改修で根治済み）**:
+  旧実装は「ファイル名のみ」で Drive ルートへ push したため、phase A/B の
+  `model_ckpt_steps_5000.ckpt` と `config.yaml` が後勝ち上書きになった。
+  run 5 では phase B の 5K push 前に監視側から Drive サーバーサイド copyto で
+  phase A 5K を `phase_a_model_ckpt_steps_5000.ckpt` へ手動保全した（正しさは
+  `run5_training_manifest.json` の `phase_a_5k_ckpt_sha256` 一致で機械検証 —
+  s4_record §5.6）。現行実装は上表の phase 別 namespace により同 basename でも
+  独立保存され（回帰テストで固定）、**手動保全は不要**
+- 学習の生 stdout は run 5 では退避されなかった（当時の train.py は
+  コンソール直結 — s4_record §2 の正直会計）。現行実装は
+  `phase_*/logs/train.log` として記録・salvage し、学習失敗時は末尾が
+  failure heartbeat の detail に添付される（証跡 4 系統 = checkpoint /
+  TensorBoard / heartbeat / train log）
 
 s4 record（s3_record 様式）への転記は run 5 完了後に本セッション側で行う —
 **run 4 で未転記残となった 4 項目（checkpoint sha / 学習 log・TB sha /
 wav 生成コマンド対応表 / 費用）は run 5 では同時転記で完了させる**
-（DESIGN_S4 §5 AC）。
+（DESIGN_S4 §5 AC）。**→ 転記済み（2026-08-19）**: 正本 =
+[`results_s4/s4_record_2026-08-19.md`](results_s4/s4_record_2026-08-19.md)
+（項目 3 = wav 生成コマンド対応表のみ判定材料生成待ち・様式凍結済み）。
 
 ## 6. 判定材料 ①〜④（Pod 完走後・ローカル CPU）
 
@@ -187,3 +219,26 @@ checkpoint に対しローカルで `gate_synth.py run` / `gate_synth_run4.py`
 （`--speaker d3synth` で合成教師声の立ちも聴ける — DESIGN_S4 §4）/
 `forge_triangle.py`（④ = VG-E1 第 0 世代）を実行する。手順は
 `S3_RUN4_RUNBOOK.md` §5 と同一（checkpoint 差し替えのみ）。
+
+## 7. 実地障害の資産化ループ（運用ルール・2026-08-19 外部レビュー採用で正式化）
+
+GPU 実走で fail-closed（または手動回避を要する事象）が発生したら、次の
+ループを**必ず一周させてから**次の run へ進む。**「手動回避だけで次 run へ
+進む」ことを禁止する** — 回避は走行を救うが、根治・fixture・テストが無い
+回避は同じ障害を次 run へ持ち越す。
+
+```text
+fail-closed 発生
+  → 原因ログ確保（cmdlog / failure heartbeat / train.log — 証跡はその場に残る設計）
+  → 根本原因修正（PR）
+  → 実測 fixture 追加（実出力の逐語を fixture 化 — 例: ffmpeg -version の桁揃え出力）
+  → 回帰テスト追加（同型障害の再導入を機械検出）
+  → runbook 更新（罠の記録 = §2.1 / §5 の様式）
+  → 次 run へ反映（pin コミット更新）
+```
+
+run 5 の実績 = このループの実例 4 件: ffmpeg 版検査（#271・逐語 fixture +
+回帰テスト）/ PJS quota（#272・認証済み経路化）/ Drive 同名重複（#274・
+ID fetch + 回帰テスト）/ **phase 別 namespace 分離（2026-08-19 改修 —
+run 5 中の copyto 手動保全を「回避のまま終わらせず」根治 + 回帰テスト化
+した事例。s4_record §5.6）**。
