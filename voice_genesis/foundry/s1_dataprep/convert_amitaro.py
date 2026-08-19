@@ -143,9 +143,21 @@ def tokenize_reading_with_dsdict(
     dsdict: "cu.DsDict", phrase: str
 ) -> List[Tuple[str, List[str]]]:
     """`convert_user.tokenize_with_dsdict` と同じ最長一致だが、各候補
-    substring を「生のまま → ひらがな正規化」の順で引く 2 段 lookup を行う
-    （カタカナ結合エントリ〔ティ/ファ 等〕は生で当たり、基本モーラは正規化で
-    当たる）。長音「ー」は同様に独立マーカー。どちらでも当たらない文字は
+    substring を「**ひらがな正規化 → 生のまま**」の順で引く 2 段 lookup を
+    行う。順序の根拠（2026-08-19 実測 2 点）:
+
+    1. ritsu dsdict は基本モーラを**ひらがな = 小文字母音**（す→[s,u]・
+       か→[k,a]）で、同じモーラの**カタカナ**を**大文字母音**（ス→[s,U]・
+       カ→[k,A] — 別音素クラス）で持つ。ITA カタカナ読みを生優先で引くと
+       教師の母音がほぼ全て大文字クラスへ落ち、歌唱コーパス（ritsu/pjs/
+       user/ゲート曲）が使う通常母音と**不連続**になる — 発音教師の効果が
+       標的音素（例: 語尾 s u）に届かない。よって既定はひらがな側。
+    2. 外来音結合（ティ/ファ 等）は**カタカナ側にしか無い**（ひらがな写像
+       「てぃ」等は未収載）。生 lookup はこのフォールバックとして残す —
+       user T2 カードの表記慣行（基本モーラ = ひらがな・外来音 = カタカナ）
+       と同じ音素割当になる。
+
+    長音「ー」は同様に独立マーカー。どちらでも当たらない文字は
     `DsDictTokenizeError`（fail-closed・代用なし）。"""
     text = phrase
     n = len(text)
@@ -160,9 +172,9 @@ def tokenize_reading_with_dsdict(
         max_try = min(dsdict.max_grapheme_len, n - i)
         for length in range(max_try, 0, -1):
             candidate = text[i:i + length]
-            phonemes = dsdict.table.get(candidate)
+            phonemes = dsdict.table.get(_kata_to_hira(candidate))
             if phonemes is None:
-                phonemes = dsdict.table.get(_kata_to_hira(candidate))
+                phonemes = dsdict.table.get(candidate)
             if phonemes is not None:
                 out.append((candidate, phonemes))
                 i += length

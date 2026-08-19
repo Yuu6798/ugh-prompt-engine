@@ -32,8 +32,12 @@ _ffmpeg_required = pytest.mark.skipif(
 
 SR = 48000
 
+# 実 dsdict の構造を縮約再現: 基本モーラ = ひらがな（小文字母音）+ 同じ
+# モーラのカタカナ = 大文字母音（別音素クラス）+ 外来音結合 = カタカナのみ。
 _TEST_DSDICT = {
-    "サ": ["s", "a"], "ス": ["s", "u"], "カ": ["k", "a"], "タ": ["t", "a"],
+    "さ": ["s", "a"], "す": ["s", "u"], "か": ["k", "a"], "た": ["t", "a"],
+    "サ": ["s", "A"], "ス": ["s", "U"], "カ": ["k", "A"], "タ": ["t", "A"],
+    "ティ": ["t", "I"],
 }
 
 
@@ -126,6 +130,17 @@ def test_parse_transcript_rejects_wrong_sentence_id(
     path = _write_transcript(tmp_path, lines)
     with pytest.raises(ca.ConvertAmitaroError, match="RECITATION324_002"):
         ca.parse_transcript(path)
+
+
+def test_tokenize_reading_prefers_hiragana_lowercase_vowels(tmp_path: Path) -> None:
+    """カタカナ読みの基本モーラは**ひらがな側（小文字母音）**へ写す — 生カナ
+    優先だと大文字母音クラスへ落ち、歌唱コーパスの通常母音と不連続になる
+    （2026-08-19 実測・convert_amitaro docstring 参照）。外来音結合（ティ）は
+    ひらがな写像が未収載のため生カタカナへフォールバックする。"""
+    import convert_user as _cu
+    dsdict = _cu.load_dsdict(_write_dsdict(tmp_path))
+    tokens = ca.tokenize_reading_with_dsdict(dsdict, "スティサ")
+    assert tokens == [("ス", ["s", "u"]), ("ティ", ["t", "I"]), ("サ", ["s", "a"])]
 
 
 def test_split_reading_phrases() -> None:
