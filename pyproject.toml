@@ -112,7 +112,15 @@ where = ["src"]
 "svp_rpe.roundtrip.data" = ["*.json"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "voice_genesis/evolution/tests"]
+testpaths = [
+    "tests",
+    "voice_genesis/evolution/tests",
+    # foundry/tests 全体は onnxruntime 等の環境依存で collection error になるため、
+    # 依存フリーな genome 台帳 shape テストのみファイル単位で常時収集する
+    # (2026-08-19 セルフレビュー: 台帳の番人が CI 未収集だった)
+    "voice_genesis/foundry/tests/test_genome_ledger_shape.py",
+    "voice_genesis/foundry/tests/test_genome_ledger_s4_shape.py",
+]
 pythonpath = ["src", "."]
 markers = [
     "slow: 重い統合 / コーパス / property テスト（音声合成 + 抽出が長い）。日常の反復では `pytest -m \"not slow\"` で除外できる（CI は全件実行）",

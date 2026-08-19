@@ -1,10 +1,15 @@
 """test_genome_ledger_s4_shape.py — `results_s4/genome_ledger.json`
-（④ 三角形補間 = VG-E1 第 0 世代・VG-S3 系列 4 体）の形状テスト。
+（④ 三角形補間 = VG-E1 founding batch・VG-S3 系列 4 エントリ）の形状テスト。
 
-`test_genome_ledger_shape.py`（S2 台帳）の検証キー集合を **read-only import
-でそのまま再利用**し、検証ロジックの複製・分岐を避ける（forge_triangle の
-テストと同じ流儀）。値そのもの（判定 note 等）の正本は
-`results_s4/s4_record_2026-08-19.md` §6。
+`test_genome_ledger_shape.py`（S2 台帳）の**検証関数そのものを read-only
+import で呼び出して**本台帳へ適用する（キー集合だけの再利用では型検証が
+落ちる — セルフレビュー #6。forge_triangle のテストと同じ流儀）。
+値そのもの（判定 note 等）の正本は `results_s4/s4_record_2026-08-19.md` §6。
+
+本ファイルと S2 側の shape テストは pyproject の testpaths にファイル単位で
+登録されており CI で常時収集される（foundry/tests 全体は onnxruntime 等の
+環境依存で collection error になるため、依存フリーな台帳テストのみを
+個別登録 — セルフレビュー #2）。
 """
 from __future__ import annotations
 
@@ -14,10 +19,7 @@ from typing import Any, Dict
 
 import pytest
 
-from test_genome_ledger_shape import (  # noqa: F401 (再利用)
-    REQUIRED_GENOME_KEYS,
-    REQUIRED_TOP_LEVEL_KEYS,
-)
+import test_genome_ledger_shape as s2_shape
 
 LEDGER_PATH = (
     Path(__file__).resolve().parent.parent / "results_s4" / "genome_ledger.json"
@@ -31,36 +33,41 @@ def ledger() -> Dict[str, Any]:
     return json.loads(LEDGER_PATH.read_text(encoding="utf-8"))
 
 
-def test_top_level_required_keys_present(ledger: Dict[str, Any]) -> None:
-    assert REQUIRED_TOP_LEVEL_KEYS <= set(ledger)
+def test_s2_validators_hold_for_s4_ledger(ledger: Dict[str, Any]) -> None:
+    """S2 側の検証関数を直接適用（必須キー・genome キー・最低限の型・
+    voice_id 一意性）。ロジックの複製・分岐を避ける。"""
+    s2_shape.test_ledger_is_valid_json_object(ledger)
+    s2_shape.test_top_level_required_keys_present(ledger)
+    s2_shape.test_schema_is_pinned_version(ledger)
+    s2_shape.test_genomes_is_nonempty_list(ledger)
+    s2_shape.test_every_genome_has_required_keys(ledger)
+    s2_shape.test_every_genome_has_minimal_field_types(ledger)
+    s2_shape.test_voice_id_is_unique(ledger)
 
 
-def test_schema_is_pinned_version(ledger: Dict[str, Any]) -> None:
-    assert ledger["schema"] == "voicegenesis-genome-ledger/0.1"
-
-
-def test_every_genome_has_required_keys(ledger: Dict[str, Any]) -> None:
-    for genome in ledger["genomes"]:
-        missing = REQUIRED_GENOME_KEYS - set(genome)
-        assert not missing, f"{genome.get('voice_id')}: missing {sorted(missing)}"
-
-
-def test_vg_s3_batch1_all_present_unique_and_judged(ledger: Dict[str, Any]) -> None:
+def test_vg_s3_batch1_exact_order_and_judged(ledger: Dict[str, Any]) -> None:
     ids = [g["voice_id"] for g in ledger["genomes"]]
     assert ids == EXPECTED_VOICE_IDS
-    assert len(set(ids)) == len(ids)
     # 2026-08-19 開封済み判定が status に刻まれていること（未判定 CANDIDATE の
-    # まま main に居座らない — SPR 行 1 審査済み台帳だけが第 0 世代の正本）
+    # まま main に居座らない — SPR 行 1 審査済み台帳だけが founding batch の正本）
     for g in ledger["genomes"]:
         assert "UNSEALED_2026-08-19" in g["status"], g["voice_id"]
 
 
-def test_hidden_control_is_marked_and_weightless(ledger: Dict[str, Any]) -> None:
+def test_hidden_control_is_marked_weightless_and_unreferenced(
+    ledger: Dict[str, Any],
+) -> None:
     control = [g for g in ledger["genomes"] if "HIDDEN_CONTROL" in g["status"]]
     assert len(control) == 1
     assert control[0]["voice_id"] == "VG-S3-004"
-    # S2 VG-S2-008 と同型: 台帳上は identity_latent_ref を残さない（正体逆算防止）
+    # S2 VG-S2-008 と同型: 正体逆算防止のため latent 参照を残さない
     assert control[0]["identity_latent_ref"] is None
+    # アンカー素通しに補間重みは存在しない（weights キー自体が無い or None —
+    # セルフレビュー #6: 「weightless」を実際に検査する）
+    assert control[0]["identity"].get("weights") is None
+    # rights はリツ配布規約準拠（三角形合成の既定値を継承しない —
+    # セルフレビュー #3）
+    assert "RITSU" in control[0]["rights_class"]
 
 
 def test_backbone_is_run5_40k_checkpoint(ledger: Dict[str, Any]) -> None:
@@ -69,3 +76,7 @@ def test_backbone_is_run5_40k_checkpoint(ledger: Dict[str, Any]) -> None:
     assert ledger["backbone_checkpoint"] == expected
     for g in ledger["genomes"]:
         assert g["backbone_checkpoint"] == expected
+    # anchors の説明文が run 5 export を指すこと（run-4 期固定文言の再発防止）
+    for name, anchor in ledger["anchors"].items():
+        if isinstance(anchor, dict) and "description" in anchor:
+            assert "run 5" in anchor["description"], name

@@ -1,17 +1,17 @@
 {
   "anchors": {
     "VG-S3-ANCHOR-PJS": {
-      "description": "run 4 acoustic checkpoint の spk_embed (話者=pjs, 384次元)。",
+      "description": "run 5 acoustic 40K checkpoint（s4_run5_acoustic_v1・sha256:d3c51399…c3f8da5）から export した spk_embed (話者=pjs, 384次元)。",
       "embed_l2_norm": 1.6748943328857422,
       "embed_sha256": "f37a0eea27c1c61006143029c41e9f6c81ccae86a20b51c9e1e75e121b731620"
     },
     "VG-S3-ANCHOR-RITSU": {
-      "description": "run 4 acoustic checkpoint の spk_embed (話者=ritsu, 384次元)。",
+      "description": "run 5 acoustic 40K checkpoint（s4_run5_acoustic_v1・sha256:d3c51399…c3f8da5）から export した spk_embed (話者=ritsu, 384次元)。",
       "embed_l2_norm": 1.4743624925613403,
       "embed_sha256": "efd5fd8ded067fcb901d561a9f97b74aebbc814a3042321f73a80c85c23a5c6b"
     },
     "VG-S3-ANCHOR-USER": {
-      "description": "run 4 acoustic checkpoint の spk_embed (話者=user, 384次元)。",
+      "description": "run 5 acoustic 40K checkpoint（s4_run5_acoustic_v1・sha256:d3c51399…c3f8da5）から export した spk_embed (話者=user, 384次元)。",
       "embed_l2_norm": 1.7208442687988281,
       "embed_sha256": "dda22c6fd9b823af29aae0b98d169518f2a22136dd827c421dde42d6e0ad91ee"
     },
@@ -129,7 +129,7 @@
       ],
       "performance_prior": {},
       "phonation": {},
-      "rights_class": "SYNTHETIC_INTERP_TRIANGLE_PJS_CC_BY_SA_INHERITED_USER_OWN_VOICE",
+      "rights_class": "RITSU_ANCHOR_PASSTHROUGH_DISTRIBUTION_TERMS",
       "seed": 4001,
       "status": "HIDDEN_CONTROL_PASS_UNSEALED_2026-08-19",
       "voice_id": "VG-S3-004"
@@ -138,6 +138,8 @@
   "note_batch1_UNSEALED_2026-08-19": "④ = VG-E1 第 0 世代の出生審査。判定様式 = DESIGN_SPR Routing 行 1（Viability 弱圧のみ・第三の声性/品質定性は観測記録のみで reject 不使用）。材料 = 各候補の『うみ』合成（run 5 40K・-22.5 LUFS 統一試聴コピー）。User 判定逐語『全て発声として成立 Aが不安定だが破綻レベルではない』→ 4/4 viability PASS。観測メモ: A = VG-S3-002（user 0.70 の user 寄りセル）に不安定 — user 宅録の振幅不安定（s4_record §6.2 ②留保）と整合する表現型で、淘汰理由には使用しない",
   "note_batch1_hidden_control_UNSEALED_2026-08-19": "D = VG-S3-004 = ritsu アンカー素通し（hidden_anchor_control）。判定 = 発声成立（コントロール整合 PASS — アンカーを破綻と誤判定していない）。副産物: candidate_D の wav sha256 が判定材料①のrun5_gate_umi_ritsu.wav と完全一致（41e1ea58…）= 同一入力からのbyte-identical 再合成で Render Reproducibility の実測 PASS。規律上の注意: アンカー型コントロールは公開済みアンカー wav の sha 照合で判定前に正体が逆算可能（今回は操作者が判定前に sha 一致に気づいたが判定者へは非開示のまま判定完了）。以後のバッチは prior 型コントロールまたは anchor wav sha の判定後公開を推奨",
   "note_blind_discipline": "S2 と同一規律（forge_triangle.py が機械化）: 対応表 sha256 封印分離・4 候補（interior 3 + hidden control 1）・無識別命名 candidate_A..D。封印 sha256 = 2f5ad04af43b44c52b1e7b43f75a2bd9d51347098f5ea8a3e9d41c6ddf0762d2（開封時 verify_sealed_correspondence = True・改変なし）",
+  "note_generation_numbering": "台帳の generation=1 は S2 台帳規約の継承（アンカー = 第 0 相当・補間 = 第 1 世代）。VG-E1 で言う『第 0 世代』は進化ループ視点の呼称（creating founding population）であり台帳 generation とは別軸 — 両番号系の対応は VG-E1 の台帳接続時に凍結する（本台帳の値はそれまで S2 規約のまま）",
+  "note_tooling_corrections_2026-08-19": "forge_triangle.py の run-4 期由来の固定文言 2 点を台帳側で訂正: (a) anchors.description の『run 4 acoustic checkpoint』→ 実態は run 5 40K export、(b) hidden control への三角形合成用 rights_class 既定値の付与 → 実態はリツアンカー素通し（リツ権利者配布規約準拠）。tool 側の改修（run 名の引数化・control rights の分離）は次の forge_triangle 改修候補",
   "schema": "voicegenesis-genome-ledger/0.1",
   "schema_ref": "VISION_evolution_theory_v0.1.md 付録A.1 VoiceGenome"
 }
