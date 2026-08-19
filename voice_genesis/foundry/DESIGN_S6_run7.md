@@ -20,7 +20,8 @@
    40 wav・実効 20.008 分）を**引退**させ、実録音発音教師 **amitaro**
    （あみたろの声素材工房・ITA コーパス読み上げ音声）を**同 dosage で投入**
    する。データ差分は「教師データの実体」の 1 変数に閉じる — user/ritsu/pjs
-   データ・学習レシピ・辞書は run 6 と同一
+   データ・学習レシピ・辞書は run 6 と同一。ただし新教師の intake には
+   -26.1 LUFS への水準合わせが随伴する（会計上の注意 = §2-4）
 2. **spk_id 裁定: amitaro = spk_id 4・num_spk = 5・id 3（d3synth）は恒久欠番**。
    - 根拠 (a): 「既存 ID 恒久不変・追加は末尾のみ」規律（DESIGN_S4 §1.1・
      assemble の SPK_IDS 固定規約）。id 3 を amitaro に再利用すると、run 5/6
@@ -32,6 +33,14 @@
      `Embedding(num_spk, hidden_size)`（`modules/toplevel.py:150`）なので
      欠番のコストは未使用行 1 つ。スクラッチ学習につき行 3 は初期値のまま
      残るだけで学習に非干渉
+   - **欠番の強制検査（同 build_spk_map の罠への対策）**: DiffSinger は
+     `spk_id` 未指定のエントリへ**最小の空き番号を自動採番**する（同関数
+     77–84 行）— 設定ミスで amitaro の明示 spk_id が落ちると新教師が
+     **黙って id 3（歴史上の合成教師）に埋まり**、DiffSinger 側検査は
+     素通しになる。よって run 7 の assemble 検証と bootstrap preflight は
+     **spk_map.json が期待マップ `{ritsu:0, pjs:1, user:2, amitaro:4}` と
+     完全一致し、かつ id 3 が不在であることを assert**する（§3-3/§3-4 の
+     実装要件）
 3. **教師投入量 = D3 同等の実効 20 分（±10%）**。run 5/6 の教師 dosage
    （ph_dur 合計 1200.5 s）に合わせ、変えるのは教師の「実体」だけにする
    （量と質を同時に動かすと Q12 の帰属が壊れる）。ITA 全 3,211 ファイルの
@@ -85,8 +94,11 @@ lr 2e-4 / clip 1.0）・S2/S4 の教師分離機構（spk_id 付与 + Identity �
 
 ### 2-1. 規約の逐語 pin 台帳（`amitaro_intake_ledger.json` 新設）
 
-取得済み素材（2026-08-19T17:52:00Z・curl・生 HTML は Drive 退避 =
-repo には規約ページ全文を収載しない）:
+取得済み素材（2026-08-19T17:52:00Z・curl・生 HTML は **Drive
+`run7/intake_evidence/run7_intake_evidence_2026-08-19.tar.gz` に退避済み**
+〔tar sha256 `e9d2c0aa965bbac15aebdeb900c6a01b7fd673d6872b258feb7c94cd66c7e661`〕
+= repo には規約ページ全文を収載しない。run 6 の `run6/pin_evidence/` と
+同じ流儀）:
 
 | ページ | URL | sha256 |
 |---|---|---|
@@ -94,7 +106,8 @@ repo には規約ページ全文を収載しない）:
 | ITA コーパス配布記事 | https://amitaro.net/wp/ita_01/ | `4f0c5887c8478edac79456202234f1cc04b0ee5e1c2bfec9ace03dec85fa4c8e` |
 | ITA 読み上げ音声一覧 | https://amitaro.net/voice/corpus-list/ita/ | `8b49c73dbb82fc2d36da8e0710ba6eebdbe4aca8c62930a73133aaa5e2f71f76` |
 
-台帳に記帳する逐語（取得版から。要旨でなく引用）:
+台帳に記帳する逐語（**全て 1 行目の規約ページ〔sha `471d36a8…`〕から**。
+要旨でなく引用 — 引用と pin 対象ページの対応を台帳に持たせる）:
 
 - AI 学習許可: 「このページの規約を守れば、音声合成モデルや AI ボイス
   チェンジャーモデルの学習データとしても使えます。学術研究も OK です」
@@ -124,13 +137,20 @@ repo には規約ページ全文を収載しない）:
 2. 各文につき **1 テイク = 命名規則上の最小テイク番号**（テイク品質の
    手動選抜はしない — 選定に耳を入れると「教師データの決定論的来歴」が
    壊れる）
-3. 変換（§2-4）後の **ph_dur 累積が 1200.5 s に到達した文で打ち切り**
-   （到達文を含む）— D3 dosage ±10% に機械的に収まる
-4. 選定後の被覆検査: ①局所退行に対応する目標音素（さ行 onset・語尾
+3. **除外は走査中に適用**: dsdict 未収載 grapheme を含む文は既存
+   fail-closed 流儀でその場で除外・記帳（convert_user の exclusions.json
+   と同型・run 4 の UC-010「ヴ」前例あり）。除外文の ph_dur は累積に
+   **算入しない**
+4. 変換（§2-4）後の**採用文 ph_dur 累積が 1200.5 s に到達した文で打ち切り**
+   （到達文を含む）
+5. **dosage の fail-closed 検査**: 最終合計が **1200.5 s ±10%
+   （1080.45〜1320.55 s）に入ることを assert**。recitation 全文を走査し
+   きっても下限に届かない場合は**エラー停止**（黙って過少 dosage の教師
+   セットを出力しない — §0-3 の同 dosage 契約が Q12 帰属の前提のため。
+   その場合は選定規則を本 memo の改訂で裁定し直す）
+6. 選定後の被覆検査: ①局所退行に対応する目標音素（さ行 onset・語尾
    「す」）が選定セットに含まれることを機械検査。不足時は**本 memo の
    改訂で選定規則を裁定し直す**（黙って手動追加しない）
-5. dsdict 未収載 grapheme を含む文は既存 fail-closed 流儀で除外・記帳
-   （convert_user の exclusions.json と同型）
 
 ### 2-4. 変換系（`convert_amitaro.py`・convert_user の T2 機構を再利用）
 
@@ -138,10 +158,16 @@ repo には規約ページ全文を収載しない）:
 - 音素化 = dsdict 逐語 lookup・タイミング = RMS ラン分割・音高 =
   f0 中央値 MIDI（convert_user T2 と同一機構。ANALYSIS_STACK_PIN =
   numba 0.66.0 / librosa 0.11.0 / pyloudnorm 0.2.0 環境で実行）
-- **投入前ラウドネス正規化 = -26.1 LUFS**（run 6 で常設化した intake 衛生。
-  目標値の単一ソース = `run6_dataset_pins.json` の
-  `normalization_target_lufs` — 手打ち再宣言しない）+ 会計 json
-  （loudness_normalization.json 同型）
+- **投入前ラウドネス正規化 = -26.1 LUFS**（目標値の単一ソース =
+  `run6_dataset_pins.json` の `normalization_target_lufs` — 手打ち再宣言
+  しない）+ 会計 json（loudness_normalization.json 同型）。
+  **正直会計**: run 6 が凍結したのは「user だけを動かす」単一介入であり、
+  正規化はプロジェクトの常設 intake 方針として宣言されたものでは**ない**。
+  本 run で新素材 amitaro に正規化を適用するのは、run 6 で根治したばかりの
+  音量交絡（測定交絡）を無正規化の新素材で再導入しないための設計判断で
+  ある。引退する d3synth は無正規化だったため、**厳密には「教師の実体」に
+  「新教師の水準合わせ」が随伴する** — §0-1 の単一介入会計はこの随伴込みで
+  読むこと（Q12 の帰属に効く場合はこの複合を明記して記帳する）
 - **50% 会計の材料**: カード毎の発話時間（無音部除く = 有声実長）を変換
   manifest に記帳（§2-5 の分子）
 
@@ -169,11 +195,14 @@ repo には規約ページ全文を収載しない）:
 3. **assemble の run 7 対応**: SPK_IDS の run 7 版（ritsu=0/pjs=1/user=2/
    amitaro=4・num_spk=5・d3 エントリなし）。検証関数は run 依存の期待
    マッピングを引数化し、run 5/6 系（4 話者・num_spk 4）の検証は不変に保つ
-   + 構成比会計（§2-5）+ テスト
+   + 構成比会計（§2-5）+ **spk_id 欠番の強制検査**（§0-2: 期待マップ
+   完全一致 + id 3 不在の assert）+ テスト
 4. **bootstrap の run 7 プロファイル**: RUN_PROFILES へ run7 追加
    （run_id=s6_run7・exp=s6_run7_acoustic_{scratch,v1}・
    pins=run7_dataset_pins.json・REMOTE_PREFIX="run7"）+ amitaro 素材の
-   搬入/検証段 + gate_synth 教師単独枠の交代
+   搬入/検証段 + gate_synth 教師単独枠の交代 + **binarize 後の
+   spk_map.json 検査**（§0-2 の assert を Pod 側でも実施 — 自動採番の
+   罠は binarize 実行時に発現するため）
 5. **`run7_dataset_pins.json` のローカル生成**（pinned 環境 = run 6 pinlab
    同一手順）: d3 セクションなし・user = run 6 pin の逐語継承・amitaro =
    新実測（wav sha 全数・transcriptions/exclusions・loudness 会計・
