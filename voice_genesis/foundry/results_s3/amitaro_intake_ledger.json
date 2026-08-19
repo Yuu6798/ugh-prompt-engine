@@ -1,0 +1,98 @@
+{
+  "schema": "amitaro-intake-ledger/0.1",
+  "purpose": "run 7（DESIGN_S6_run7.md §2）実録音発音教師 amitaro の intake 契約台帳。規約の逐語 pin（取得時点固定）・配布実体・転写正本・クレジット/比率/禁止用途の記帳。user_donor_ledger と同思想の許諾証跡（DX §2-2）。",
+  "subject": {
+    "speaker": "あみたろ（あみたろの声素材工房）",
+    "material": "ITA コーパス読み上げ音声（ノーマルスタイル・recitation 324 文）",
+    "role": "実録音発音教師（Identity 空間外・spk_id 4。教師/ドナー兼任不可 = DX §0 裁定追記 2026-08-19）"
+  },
+  "terms_pin": {
+    "fetched_at_utc": "2026-08-19T17:52:00Z",
+    "fetch_method": "curl -sSL（生 HTML を取得しそのまま sha256）",
+    "terms_revision_note": "利用規約は 2026-08-11 改訂（サイト告知記事 https://amitaro.net/wp/20260811_01/ ）。本台帳の許諾根拠は下記取得版であり、調査時要約（donor_corpus_survey_2026-08-18.md）より優先する。",
+    "pages": [
+      {
+        "name": "フリー声素材ご利用規約（許諾条項の正本）",
+        "url": "https://amitaro.net/voice/voice_rule/",
+        "sha256": "471d36a8b026279cf4d9abf1c771529b639671327d73c292d40c72117f5a009a"
+      },
+      {
+        "name": "ITA コーパス配布記事",
+        "url": "https://amitaro.net/wp/ita_01/",
+        "sha256": "4f0c5887c8478edac79456202234f1cc04b0ee5e1c2bfec9ace03dec85fa4c8e"
+      },
+      {
+        "name": "ITA コーパス読み上げ音声 一覧・スタイル解説",
+        "url": "https://amitaro.net/voice/corpus-list/ita/",
+        "sha256": "8b49c73dbb82fc2d36da8e0710ba6eebdbe4aca8c62930a73133aaa5e2f71f76"
+      }
+    ],
+    "raw_html_evidence": {
+      "location": "Drive run7/intake_evidence/run7_intake_evidence_2026-08-19.tar.gz（repo には他者著作物の規約全文を収載しない）",
+      "tar_sha256": "e9d2c0aa965bbac15aebdeb900c6a01b7fd673d6872b258feb7c94cd66c7e661"
+    },
+    "verbatim_quotes_source": "全て voice_rule ページ（sha256 471d36a8…）から",
+    "verbatim_quotes": {
+      "ai_training_permission": [
+        "このページの規約を守れば、音声合成モデルやAIボイスチェンジャーモデルの学習データとしても使えます。学術研究もOKです。",
+        "学習・実験・研究目的での利用・共有はOKです。事前確認もいりません。"
+      ],
+      "credit_requirements": [
+        "学習データにあみたろの声を使用していることを明記してください。",
+        "あみたろ本人が作ったものではないことも明記してください。",
+        "クレジット表記の有料免除プランには対応していません。"
+      ],
+      "credit_format_for_trained_models": "学習データ：あみたろの声素材工房（https://amitaro.net/）",
+      "distribution_ratio_rule_basis": "あみたろの声が入っている部分の長さ（無音部を除いた発話時間）がモデル全体に占める割合によって、以下のルールが適用されます。",
+      "distribution_ratio_rule_conservative": "迷った場合は「50%以上」として扱ってください。",
+      "prohibited_uses_excerpt": [
+        "詐欺電話・自動音声詐欺（vishing）などの詐欺行為への使用",
+        "実在の人物が言っていない発言を言ったかのように見せかける音声（ディープフェイク）の作成",
+        "NFT・暗号資産関連のプロジェクトへの使用",
+        "ギャンブル・薬物・武器の宣伝への使用"
+      ]
+    },
+    "distribution_ratio_rule_summary": "おおむね 50% 未満 = 単体有料販売可（全素材共通ルール適用）/ おおむね 50% 以上 = 単体無料公開のみ可・有料販売禁止 / あみたろの声のみ = 条件付き無料公開のみ。ほか年齢制限・政治宗教用途等の全体禁止事項が適用される。"
+  },
+  "accounting_contract": {
+    "basis": "無音部を除いた発話時間（規約の会計基準に同型 — DESIGN_S6 §2-5）。実装上は transcriptions.csv の SP を除く ph_dur 合計（voiced_ph_dur_seconds）を分子・全話者同基準の合計を分母とする。",
+    "enforcement": "assemble（run 7 プロファイル）が assembly_manifest.json に per-speaker voiced_ph_dur_seconds と構成比を記帳し、amitaro share < 0.50 を assert する（fail-closed）。",
+    "expected_scale_note": "教師枠 = D3 同 dosage（total ph_dur 1200.5 s ≒ 実効 20 分）につき構造的に安全圏（概算 <10%）だが、会計は恒久配線する（DX §2-2-2）。"
+  },
+  "credit_obligation": {
+    "applies_to": "本教師データで学習したモデル・その合成音の公開物（配布・公開時に必須）",
+    "required_statements": [
+      "学習データにあみたろの声を使用していることの明記",
+      "あみたろ本人が作ったものではないことの明記"
+    ],
+    "format": "学習データ：あみたろの声素材工房（https://amitaro.net/）"
+  },
+  "prohibited_uses_compliance": "本プロジェクトの既存倫理線（なりすまし不可・来歴清潔・「誰でもない声」の証明）と整合し、規約の禁止用途（vishing・ディープフェイク・NFT/暗号資産・ギャンブル/薬物/武器宣伝・年齢制限・政治宗教等）に該当する用途を持たない。逸脱用途が生じないことをここに明記する（DX §2-2-4）。",
+  "material_spec": {
+    "style": "ノーマル（音声読み上げ向け・1 文 1 ファイル。一覧ページ表記の最新版 = Ver.2.2〔2026-06-05 更新〕）",
+    "style_rationale": "発音教師の目的（音素明瞭性の供給）に合致 —「ひとつひとつの音を正確にはっきりと発音した」スタイル（一覧ページ逐語）。emotion 系スタイル（るんるん/よふかし/ぷんすか/ささやきA/B）は感情韻律の交絡につき不使用（DESIGN_S6 §0-5）。",
+    "format": "WAVE / PCM 48,000Hz / 16bit / モノラル（配布記事の公表仕様。convert_amitaro が実測 assert する）",
+    "recording_environment": "自宅録音室（約2.4畳・防音処理）。暗騒音 18.5dB・残響時間(T60) 220ms（配布記事の公表値）"
+  },
+  "distribution_source": {
+    "url_pattern": "https://amitaro.net/download/corpus/ita-sample/recitation/recitation{NNN}.wav（NNN = 001..324・ゼロ詰め 3 桁。一覧ページ「ITAコーパス 全文試聴＆個別ダウンロード」= https://amitaro.net/voice/corpus-list/ita/ita-sample02/ 系列の個別配布実体）",
+    "bulk_zip_note": "一括 zip の直リンクは一次ページ群に存在しない（2026-08-19 実査）。取得は上記個別 URL で行い、取得ファイルの sha256 全数を run 7 pins（amitaro selection.json の staged_source_sha256）に pin する。",
+    "probe_sha256_2026_08_19": {
+      "recitation001.wav": "fe7ba2dd2f7f7c74e149f1625ba4e51eca2980918b73ec42d3daea4ba11e2c43",
+      "recitation002.wav": "f791379d389224a1bd2c4e251c85651273f1dbd1cbba760e8d01a05749d7d17f",
+      "recitation324.wav": "377b62443dd76e44f6bf705c1fd967979b9bd65c0dd121ccb0902eb9d076a4e6"
+    },
+    "probe_note": "上記 3 本は 2026-08-19 の取得プローブ実測（48000Hz/PCM_16/mono を soundfile で確認）。全数の確定 pin は intake 実行（run7 pins 生成）時の staged_source_sha256 が正本。"
+  },
+  "transcript_provenance": {
+    "repo_copy": "voice_genesis/foundry/s1_dataprep/data/ita_recitation_transcript_utf8.txt",
+    "sha256": "385fe5ed754ce0363510526a0ca09ebd657682e3a5097fcbaa757f6b239ffbd9",
+    "upstream": {
+      "repo": "https://github.com/mmorise/ita-corpus",
+      "commit": "994844bcac6925c900fd4ab45beab11b0b9ea7bd",
+      "file": "recitation_transcript_utf8.txt",
+      "licence": "パブリックドメイン（LICENCE.txt = Unlicense・sha256 386cc42a45b1a239d3abbe6f1223626f8359780affc0cc43494e8acc65fd15a4）。ITA コーパスは「使用料0円、パブリックドメインの文章集」（配布側一覧ページ逐語）につきバイト同一の repo 収載が可能"
+    },
+    "fetched_at_utc": "2026-08-19T18:28:00Z"
+  }
+}

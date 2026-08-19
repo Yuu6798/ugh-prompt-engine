@@ -192,6 +192,24 @@ import convert_d3  # noqa: E402
 # モジュール docstring §1 参照）。
 SPK_IDS: Dict[str, int] = {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3}
 
+# run 7（DESIGN_S6_run7.md §0-2）: d3synth（spk_id 3）引退 → **id 3 は恒久
+# 欠番**・amitaro（実録音発音教師）を末尾 id 4 で追加・num_spk=5。id 3 の
+# 再利用は永久禁止（歴史 checkpoint/ONNX/spk_map の「spk_id 3 = 合成教師」の
+# 意味を保存する — 既存 ID 恒久不変・追加は末尾のみの規律）。DiffSinger
+# binarizer は spk_id 未指定エントリへ**最小の空き番号を自動採番**するため
+# （base_binarizer.py build_spk_map）、欠番 3 が黙って埋まる事故は
+# bootstrap の spk_map.json 検査（verify_spk_map）で fail-closed に検出する。
+SPK_IDS_RUN7: Dict[str, int] = {"ritsu": 0, "pjs": 1, "user": 2, "amitaro": 4}
+RUN7_NUM_SPK = 5
+
+# profile → (教師話者名, 期待 spk_id マップ, num_spk 明示値〔None = len〕)。
+# run5 プロファイルは run 5/6 の実走・出力バイトと完全同一（run 6 も
+# データセット構成は run 5 と同じ 4 話者につき run5 プロファイルを使う）。
+ASSEMBLE_PROFILES: Dict[str, Dict[str, object]] = {
+    "run5": {"teacher_name": "d3synth", "spk_ids": SPK_IDS, "num_spk": None},
+    "run7": {"teacher_name": "amitaro", "spk_ids": SPK_IDS_RUN7, "num_spk": RUN7_NUM_SPK},
+}
+
 
 class GateValidationError(ValueError):
     """4 話者ゲート検証（`validate_speaker`/`check_ph_dur_duration`/
@@ -286,7 +304,9 @@ def _semantic_diff(
     return []
 
 
-def _validate_live_datasets_shape(live_datasets: object) -> List[str]:
+def _validate_live_datasets_shape(
+    live_datasets: object, expected_spk_ids: Optional[Dict[str, int]] = None
+) -> List[str]:
     """`live_datasets`（live config の `datasets` フィールド生値）の**リスト
     形状そのもの**を検査する（review #265 R11 P1）。
 
@@ -326,7 +346,8 @@ def _validate_live_datasets_shape(live_datasets: object) -> List[str]:
     if shape_problems:
         return shape_problems
 
-    expected_order = list(SPK_IDS.items())  # [("ritsu", 0), ("pjs", 1), ("user", 2), ("d3synth", 3)]
+    # 既定 = SPK_IDS（run 5/6）。run 7 は SPK_IDS_RUN7 を渡す（`--profile`）。
+    expected_order = list((expected_spk_ids or SPK_IDS).items())
     if len(entries) != len(expected_order):
         return [
             f"datasets: expected exactly {len(expected_order)} entries "
@@ -587,7 +608,11 @@ def _publish_config_pin_transaction(
                 pass
 
 
-def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> Path:
+def refresh_config_pin(
+    config_path: Path,
+    config_dir: Optional[Path] = None,
+    expected_spk_ids: Optional[Dict[str, int]] = None,
+) -> Path:
     """P1 修正 (review #265 R9): 手動編集後の live config
     (`run4_config_datasets.yaml`) から `.normalized.yaml` pin 副本を再生成
     する（公開エントリポイント。モジュール docstring「`refresh-config-pin`
@@ -642,7 +667,11 @@ def refresh_config_pin(config_path: Path, config_dir: Optional[Path] = None) -> 
     # review #265 R11 P1: リスト形状そのもの（エントリ数・重複無し・
     # 順序/内容）を検査する（§ `_validate_live_datasets_shape` docstring
     # 参照。旧実装の dict 内包による畳み込みは重複行を黙って通していた）。
-    shape_problems = _validate_live_datasets_shape(live.get("datasets"))
+    # `expected_spk_ids`（run 7 追加）: 既定 None = SPK_IDS（run 5/6 の挙動
+    # 不変）。run 7 config の pin 再発行は SPK_IDS_RUN7 を渡す（CLI --profile）。
+    shape_problems = _validate_live_datasets_shape(
+        live.get("datasets"), expected_spk_ids
+    )
     if shape_problems:
         raise ConfigPinMismatchError(shape_problems)
 
@@ -718,6 +747,17 @@ def _ph_dur_total_seconds(rows: Sequence[Dict[str, str]]) -> float:
     return math.fsum(values)
 
 
+def _voiced_ph_dur_seconds(rows: Sequence[Dict[str, str]]) -> float:
+    """SP（rest）を除いた ph_dur 実測合計（秒）。run 7 構成比会計の基準
+    （DESIGN_S6_run7.md §2-5 — 規約の「無音部を除いた発話時間」に同型）。"""
+    total = 0.0
+    for row in rows:
+        tokens = row["ph_seq"].split()
+        durs = [float(x) for x in row["ph_dur"].split()]
+        total += math.fsum(d for tok, d in zip(tokens, durs) if tok != "SP")
+    return total
+
+
 def _run_gates(speaker_name: str, spk_dir: Path, rows: Sequence[Dict[str, str]]) -> List[str]:
     """`build_dataset.py` の 3 ゲートを 1 話者分呼び出す（read-only import）。
     `check_ph_dur_duration` の乖離は `build_dataset.py` 本体の既定（warning
@@ -768,6 +808,8 @@ def _write_run4_config(
     max_updates: int,
     val_check_interval: int,
     num_ckpt_keep: int,
+    spk_ids: Optional[Dict[str, int]] = None,
+    num_spk: Optional[int] = None,
 ) -> Dict[str, object]:
     """P1 修正 (review #265 R7): `build_dataset.py` `build_config_yaml()`
     （`speakers` 引数を話者数非依存の汎用リストとして受ける実装。モジュール
@@ -789,12 +831,14 @@ def _write_run4_config(
     final_dict_path = out_dir / "dict.txt"
     resolved_binary_data_dir = binary_data_dir if binary_data_dir is not None else out_dir / "binary"
 
-    # `SPK_IDS` の宣言順（= spk_id 昇順）で datasets エントリを構成する
-    # （`_validate_live_datasets_shape` が検査する期待順序と同一の単一ソース）。
+    # spk_id マップの宣言順（= spk_id 昇順）で datasets エントリを構成する
+    # （`_validate_live_datasets_shape` が検査する期待順序と同一の単一ソース。
+    # 既定 = SPK_IDS〔run 5/6 不変〕・run 7 = SPK_IDS_RUN7 + num_spk 明示）。
+    effective_spk_ids = spk_ids or SPK_IDS
     speakers = [
         (name, spk_id, out_dir / name,
          build_dataset.select_test_prefixes(speaker_rows[name], n_test_prefixes))
-        for name, spk_id in SPK_IDS.items()
+        for name, spk_id in effective_spk_ids.items()
     ]
 
     config_path = staging_dir / "run4_config_datasets.yaml"
@@ -805,6 +849,7 @@ def _write_run4_config(
         max_updates=max_updates,
         val_check_interval=val_check_interval,
         num_ckpt_keep=num_ckpt_keep,
+        num_spk=num_spk,
     )
     config_path.write_text(config_text, encoding="utf-8")
 
@@ -819,6 +864,7 @@ def _write_run4_config(
         max_updates=max_updates,
         val_check_interval=val_check_interval,
         num_ckpt_keep=num_ckpt_keep,
+        num_spk=num_spk,
     )
     normalized_config_path.write_text(normalized_config_text, encoding="utf-8")
 
@@ -834,7 +880,7 @@ def _assemble_into(
     staging_dir: Path,
     out_dir: Path,
     ritsu_raw_dir: Path,
-    d3_raw_dir: Path,
+    teacher_raw_dir: Path,
     pjs_raw_dir: Path,
     user_raw_dir: Path,
     *,
@@ -844,6 +890,9 @@ def _assemble_into(
     max_updates: int,
     val_check_interval: int,
     num_ckpt_keep: int,
+    teacher_name: str = "d3synth",
+    spk_ids: Optional[Dict[str, int]] = None,
+    num_spk: Optional[int] = None,
 ) -> Dict[str, object]:
     """staging_dir 配下に 4 話者 raw 構成 + dict.txt + assembly_manifest.json
     + 4 話者学習 config（`run4_config_datasets.yaml` 系。review #265 R7 P1
@@ -853,17 +902,20 @@ def _assemble_into(
     `raw_data_dir`/`dict_path`/`binary_data_dir` を公開後の最終パスで書く
     ために必要（staging_dir 自身のパスは `_swap_into_place` 後に消える
     一時名のため使えない）。"""
+    effective_spk_ids = spk_ids or SPK_IDS
+
     # --- 1. 4 話者すべてバイト単位でそのまま複製 ------------------------------
     # run 5（DESIGN_S4 §2-2）: D2/D3 マージサブシステムは撤去済み。ritsu は
-    # D2 のみを、d3synth は `--d3-raw-dir`（convert_d3 出力）を、いずれも
+    # D2 のみを、教師話者（run 5/6 = d3synth〔convert_d3 出力〕・run 7 =
+    # amitaro〔convert_amitaro 出力〕）は `teacher_raw_dir` を、いずれも
     # pjs/user と同型の「バイト単位コピー」経路で組み立てる。
     ritsu_dir = staging_dir / "ritsu"
     _copy_file_bytes(ritsu_raw_dir / "transcriptions.csv", ritsu_dir / "transcriptions.csv")
     _copy_wavs(ritsu_raw_dir / "wavs", ritsu_dir / "wavs")
 
-    d3synth_dir = staging_dir / "d3synth"
-    _copy_file_bytes(d3_raw_dir / "transcriptions.csv", d3synth_dir / "transcriptions.csv")
-    _copy_wavs(d3_raw_dir / "wavs", d3synth_dir / "wavs")
+    teacher_dir = staging_dir / teacher_name
+    _copy_file_bytes(teacher_raw_dir / "transcriptions.csv", teacher_dir / "transcriptions.csv")
+    _copy_wavs(teacher_raw_dir / "wavs", teacher_dir / "wavs")
 
     pjs_dir = staging_dir / "pjs"
     _copy_file_bytes(pjs_raw_dir / "transcriptions.csv", pjs_dir / "transcriptions.csv")
@@ -892,7 +944,7 @@ def _assemble_into(
     # 他の gate 違反と合わせて fail-closed する（staging へは書き込み済みだが
     # `assemble()` 側で staging ごと破棄され `out_dir` は無変更のまま残る）。
     speaker_dirs = {
-        "ritsu": ritsu_dir, "pjs": pjs_dir, "user": user_dir, "d3synth": d3synth_dir,
+        "ritsu": ritsu_dir, "pjs": pjs_dir, "user": user_dir, teacher_name: teacher_dir,
     }
     speaker_rows: Dict[str, List[Dict[str, str]]] = {}
     all_problems: List[str] = []
@@ -911,7 +963,8 @@ def _assemble_into(
 
     # --- 3. 辞書統合（build_dataset.py main() と同じ 3 関数を read-only 再利用） ---
     symbol_sets = [
-        build_dataset.collect_phoneme_symbols(speaker_rows[name]) for name in SPK_IDS
+        build_dataset.collect_phoneme_symbols(speaker_rows[name])
+        for name in effective_spk_ids
     ]
     merged_pairs = build_dataset.build_merged_dict(symbol_sets)
     dict_path = staging_dir / "dict.txt"
@@ -924,32 +977,46 @@ def _assemble_into(
         staging_dir, out_dir, speaker_rows,
         binary_data_dir=binary_data_dir, n_test_prefixes=n_test_prefixes,
         max_updates=max_updates, val_check_interval=val_check_interval,
-        num_ckpt_keep=num_ckpt_keep,
+        num_ckpt_keep=num_ckpt_keep, spk_ids=effective_spk_ids, num_spk=num_spk,
     )
 
     # --- 4. assembly manifest（決定論のためウォールクロック時刻を含めない） ---
-    # schema 0.4（run 5・4 話者化）: D2/D3 マージ専用だった `collision_check`
-    # セクションと ritsu の `components`/`d2_*`/`d3_*` フィールドを撤去
-    # （モジュール docstring §4 参照）。
+    # schema 0.4（run 5/6・4 話者・d3synth 教師）: D2/D3 マージ専用だった
+    # `collision_check` セクションと ritsu の `components`/`d2_*`/`d3_*`
+    # フィールドを撤去（モジュール docstring §4 参照）。
+    # schema 0.5（run 7・DESIGN_S6_run7.md §2-5）: 教師 = amitaro（spk_id 4・
+    # id 3 恒久欠番）のとき。`num_spk` と `composition_accounting`（無音部を
+    # 除いた発話時間 = SP を除く ph_dur 合計を基準とする構成比 — 規約の
+    # 会計基準に同型）を追加し、amitaro share < 0.50 を assert する。
+    is_run7_shape = teacher_name != "d3synth" or num_spk is not None
     manifest: Dict[str, object] = {
-        "schema": "run4-assembly-manifest/0.4",
-        "spk_id": dict(SPK_IDS),
+        "schema": (
+            "run4-assembly-manifest/0.5" if is_run7_shape
+            else "run4-assembly-manifest/0.4"
+        ),
+        "spk_id": dict(effective_spk_ids),
         "speakers": {
-            "ritsu": _speaker_manifest_entry(ritsu_dir, speaker_rows["ritsu"], SPK_IDS["ritsu"]),
+            "ritsu": _speaker_manifest_entry(
+                ritsu_dir, speaker_rows["ritsu"], effective_spk_ids["ritsu"]
+            ),
             "pjs": {
-                **_speaker_manifest_entry(pjs_dir, speaker_rows["pjs"], SPK_IDS["pjs"]),
+                **_speaker_manifest_entry(
+                    pjs_dir, speaker_rows["pjs"], effective_spk_ids["pjs"]
+                ),
                 "is_fixture": pjs_is_fixture,
             },
             "user": {
-                **_speaker_manifest_entry(user_dir, speaker_rows["user"], SPK_IDS["user"]),
+                **_speaker_manifest_entry(
+                    user_dir, speaker_rows["user"], effective_spk_ids["user"]
+                ),
                 "has_exclusions_json": user_has_exclusions,
                 # P2 修正 (review #265 R11): 公開バイトから実測した sha256
                 # （`has_exclusions_json` の真偽値だけでは実体へのバイト束縛が
                 # 無かった）。`exclusions.json` を持たない場合は None。
                 "exclusions_json_sha256": user_exclusions_sha256,
             },
-            "d3synth": _speaker_manifest_entry(
-                d3synth_dir, speaker_rows["d3synth"], SPK_IDS["d3synth"]
+            teacher_name: _speaker_manifest_entry(
+                teacher_dir, speaker_rows[teacher_name], effective_spk_ids[teacher_name]
             ),
         },
         "dict": {
@@ -966,6 +1033,40 @@ def _assemble_into(
             "problems": [],
         },
     }
+    if is_run7_shape:
+        manifest["num_spk"] = (
+            num_spk if num_spk is not None else len(effective_spk_ids)
+        )
+        # 構成比会計（DESIGN_S6 §2-5・DX §2-2-2）: 分子/分母とも同基準の
+        # 「無音部を除いた発話時間」（SP を除く ph_dur 実測合計）。
+        voiced_seconds = {
+            name: round(_voiced_ph_dur_seconds(speaker_rows[name]), 3)
+            for name in effective_spk_ids
+        }
+        total_voiced = math.fsum(voiced_seconds.values())
+        if total_voiced <= 0.0:
+            raise GateValidationError(
+                ["composition_accounting: total voiced ph_dur is non-positive"]
+            )
+        shares = {
+            name: round(v / total_voiced, 6) for name, v in voiced_seconds.items()
+        }
+        manifest["composition_accounting"] = {
+            "basis": (
+                "voiced ph_dur seconds（transcriptions.csv の SP を除く ph_dur "
+                "実測合計 — 規約の会計基準「無音部を除いた発話時間」に同型・"
+                "DESIGN_S6_run7.md §2-5）"
+            ),
+            "per_speaker_voiced_seconds": voiced_seconds,
+            "total_voiced_seconds": round(total_voiced, 3),
+            "shares": shares,
+        }
+        if "amitaro" in shares and shares["amitaro"] >= 0.50:
+            raise GateValidationError([
+                f"composition_accounting: amitaro share {shares['amitaro']:.4f} >= 0.50 "
+                "(規約の配布比率ルール安全域を逸脱 — 教師枠 = 少量投入の契約違反。"
+                "fail-closed・DESIGN_S6 §2-5)"
+            ])
     if pjs_is_fixture:
         manifest.setdefault("notes", []).append(  # type: ignore[union-attr]
             "pjs はフィクスチャ実測（合成ミニ pjs）。本番実行には --pjs-raw-dir を"
@@ -992,10 +1093,15 @@ def assemble(
     max_updates: int = build_dataset.DEFAULT_MAX_UPDATES,
     val_check_interval: int = build_dataset.DEFAULT_VAL_CHECK_INTERVAL,
     num_ckpt_keep: int = build_dataset.DEFAULT_NUM_CKPT_KEEP,
+    profile: str = "run5",
 ) -> Dict[str, object]:
     """`out_dir` に 4 話者 raw 構成 + 4 話者学習 config を組み立てる
     （公開エントリポイント。run 5 = spk_id map v2・DESIGN_S4 §1.1。
-    `d3_raw_dir` は d3synth 話者（第 4 エントリ）の入力になる）。
+    `d3_raw_dir` は**教師話者スロット**の入力 — `profile="run5"`（既定）では
+    d3synth（convert_d3 出力・spk_id 3）、`profile="run7"`
+    （DESIGN_S6_run7.md §0-2）では amitaro（convert_amitaro 出力・spk_id 4・
+    id 3 恒久欠番・num_spk 5）として組み立てる。run5 プロファイルの出力は
+    従来とバイト同一）。
 
     `<out_dir>.staging-<pid>` に完全構築 → 全検証を通過して初めて `out_dir`
     と原子的に swap する（`convert_d3.py` `_swap_into_place` を read-only
@@ -1027,6 +1133,13 @@ def assemble(
         protected_roots=[ritsu_raw_dir, d3_raw_dir, pjs_raw_dir, user_raw_dir],
     )
 
+    if profile not in ASSEMBLE_PROFILES:
+        raise ValueError(
+            f"unknown assemble profile {profile!r} "
+            f"(expected one of {sorted(ASSEMBLE_PROFILES)})"
+        )
+    prof = ASSEMBLE_PROFILES[profile]
+
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
     staging_dir.mkdir(parents=True)
@@ -1037,6 +1150,9 @@ def assemble(
             binary_data_dir=Path(binary_data_dir) if binary_data_dir is not None else None,
             n_test_prefixes=n_test_prefixes, max_updates=max_updates,
             val_check_interval=val_check_interval, num_ckpt_keep=num_ckpt_keep,
+            teacher_name=str(prof["teacher_name"]),
+            spk_ids=prof["spk_ids"],  # type: ignore[arg-type]
+            num_spk=prof["num_spk"],  # type: ignore[arg-type]
         )
         convert_d3._swap_into_place(staging_dir, out_dir)
     except BaseException:
@@ -1057,10 +1173,22 @@ def _main_assemble(argv: Optional[Sequence[str]] = None) -> int:
         help="D2 = convert_ritsu.py の --out-dir (transcriptions.csv + wavs/)",
     )
     parser.add_argument(
-        "--d3-raw-dir", type=Path, required=True,
+        "--d3-raw-dir", type=Path, default=None,
         help="D3 = convert_d3.py の --out-dir (transcriptions.csv + wavs/)。"
              "run 5 からは d3synth 話者（spk_id=3・第 4 エントリ）として"
-             "バイト単位コピーされる（ritsu へのマージは撤去済み）。",
+             "バイト単位コピーされる（ritsu へのマージは撤去済み）。"
+             "--profile run5（既定）では必須。",
+    )
+    parser.add_argument(
+        "--amitaro-raw-dir", type=Path, default=None,
+        help="run 7 教師 = convert_amitaro.py の --out-dir。--profile run7 では"
+             "必須（d3synth 引退 = --d3-raw-dir と排他。DESIGN_S6_run7.md §1.1）。",
+    )
+    parser.add_argument(
+        "--profile", choices=sorted(ASSEMBLE_PROFILES), default="run5",
+        help="spk_id マップのプロファイル（run5 = 4 話者 d3synth 教師〔既定・"
+             "run 5/6 と同一出力〕/ run7 = amitaro 教師 spk_id 4・id 3 恒久欠番・"
+             "num_spk 5）。",
     )
     parser.add_argument(
         "--pjs-raw-dir", type=Path, required=True,
@@ -1103,15 +1231,30 @@ def _main_assemble(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     out_dir: Path = args.out_dir
+    # 教師スロットの入力をプロファイルで解決する（run5 = --d3-raw-dir /
+    # run7 = --amitaro-raw-dir。取り違え・二重指定は fail-closed）。
+    if args.profile == "run5":
+        if args.d3_raw_dir is None or args.amitaro_raw_dir is not None:
+            print("error: --profile run5 requires --d3-raw-dir "
+                  "(and must not have --amitaro-raw-dir)", file=sys.stderr)
+            return 1
+        teacher_raw_dir = args.d3_raw_dir
+    else:
+        if args.amitaro_raw_dir is None or args.d3_raw_dir is not None:
+            print("error: --profile run7 requires --amitaro-raw-dir "
+                  "(and must not have --d3-raw-dir — d3synth は引退・"
+                  "DESIGN_S6_run7.md §1.1)", file=sys.stderr)
+            return 1
+        teacher_raw_dir = args.amitaro_raw_dir
     # P1 修正 (review #265): 衝突検査は `assemble()` 自身が行う（公開関数へ
     # 移設済み。CLI 側の preflight 二重実装はしない）。
     try:
         manifest = assemble(
-            args.ritsu_raw_dir, args.d3_raw_dir, args.pjs_raw_dir, args.user_raw_dir, out_dir,
+            args.ritsu_raw_dir, teacher_raw_dir, args.pjs_raw_dir, args.user_raw_dir, out_dir,
             pjs_is_fixture=args.pjs_is_fixture,
             binary_data_dir=args.binary_data_dir, n_test_prefixes=args.n_test_prefixes,
             max_updates=args.max_updates, val_check_interval=args.val_check_interval,
-            num_ckpt_keep=args.num_ckpt_keep,
+            num_ckpt_keep=args.num_ckpt_keep, profile=args.profile,
         )
     except (convert_d3.OutputCollisionError, GateValidationError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1140,10 +1283,19 @@ def _main_refresh_config_pin(argv: Optional[Sequence[str]] = None) -> int:
         "--config-dir", type=Path, default=None,
         help="パス正規化の基準ディレクトリ（省略時 --config の親ディレクトリ）",
     )
+    parser.add_argument(
+        "--profile", choices=sorted(ASSEMBLE_PROFILES), default="run5",
+        help="datasets 節の期待 spk_id マップ（run5 = SPK_IDS〔既定〕/ "
+             "run7 = SPK_IDS_RUN7）。",
+    )
     args = parser.parse_args(argv)
 
+    expected_spk_ids = ASSEMBLE_PROFILES[args.profile]["spk_ids"]
     try:
-        normalized_path = refresh_config_pin(args.config, config_dir=args.config_dir)
+        normalized_path = refresh_config_pin(
+            args.config, config_dir=args.config_dir,
+            expected_spk_ids=expected_spk_ids,  # type: ignore[arg-type]
+        )
     except (RefreshConfigPinError, ConfigPinMismatchError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

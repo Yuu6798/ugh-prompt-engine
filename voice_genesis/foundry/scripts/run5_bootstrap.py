@@ -154,6 +154,8 @@ RUN_PROFILES: Dict[str, Dict[str, object]] = {
         "exp_b": "s4_run5_acoustic_v1",
         "dataset_pins": "run4_dataset_pins.json",
         "remote_prefix": "",
+        "assemble_profile": "run5",
+        "expected_spk_map": {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3},
     },
     "run6": {
         "run_id": "s5_run6",
@@ -161,6 +163,20 @@ RUN_PROFILES: Dict[str, Dict[str, object]] = {
         "exp_b": "s5_run6_acoustic_v1",
         "dataset_pins": "run6_dataset_pins.json",
         "remote_prefix": "run6",
+        "assemble_profile": "run5",
+        "expected_spk_map": {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3},
+    },
+    # run 7（DESIGN_S6_run7.md）: 教師交代 = d3synth 引退（spk_id 3 恒久欠番）
+    # → amitaro（spk_id 4・num_spk 5）。教師データの生成/検証分岐は
+    # dataset pins のセクション構成（"d3" or "amitaro"）が単一ソース。
+    "run7": {
+        "run_id": "s6_run7",
+        "exp_a": "s6_run7_acoustic_scratch",
+        "exp_b": "s6_run7_acoustic_v1",
+        "dataset_pins": "run7_dataset_pins.json",
+        "remote_prefix": "run7",
+        "assemble_profile": "run7",
+        "expected_spk_map": {"ritsu": 0, "pjs": 1, "user": 2, "amitaro": 4},
     },
 }
 
@@ -169,7 +185,7 @@ def apply_run_profile(name: str) -> Dict[str, object]:
     """RUN_PROFILES[name] をモジュール定数へ反映する（main() 冒頭と
     テストから呼ぶ。未知名は fail-closed）。戻り値はプロファイル辞書。"""
     global RUN_ID, EXP_NAME_PHASE_A, EXP_NAME_PHASE_B, PHASE_REMOTE_DIRS
-    global DATASET_PINS_PATH, REMOTE_PREFIX
+    global DATASET_PINS_PATH, REMOTE_PREFIX, ASSEMBLE_PROFILE, EXPECTED_SPK_MAP
     if name not in RUN_PROFILES:
         raise ValueError(
             f"unknown RUN_PROFILE {name!r} (expected one of {sorted(RUN_PROFILES)})"
@@ -181,6 +197,8 @@ def apply_run_profile(name: str) -> Dict[str, object]:
     PHASE_REMOTE_DIRS = {EXP_NAME_PHASE_A: "phase_a", EXP_NAME_PHASE_B: "phase_b"}
     DATASET_PINS_PATH = FOUNDRY_DIR / "results_s3" / str(profile["dataset_pins"])
     REMOTE_PREFIX = str(profile["remote_prefix"])
+    ASSEMBLE_PROFILE = str(profile["assemble_profile"])
+    EXPECTED_SPK_MAP = dict(profile["expected_spk_map"])  # type: ignore[arg-type]
     return profile
 
 # phase 別の Drive 退避 namespace（2026-08-19 外部レビュー P1: run 5 実走で
@@ -198,6 +216,13 @@ PHASE_REMOTE_DIRS: Dict[str, str] = {
 EXEC_MANIFEST_SCHEMA = "run-execution-manifest/0.1"
 EXEC_MANIFEST_NAME = "run_execution_manifest.json"
 RUN_ID = "s4_run5"
+
+# assemble のプロファイルと binarize 後 spk_map.json の期待マップ（run 7・
+# DESIGN_S6_run7.md §0-2: DiffSinger build_spk_map は spk_id 未指定エントリへ
+# 最小空き番号を自動採番するため、恒久欠番 3 が黙って埋まる事故を
+# verify_spk_map で fail-closed に検出する）。apply_run_profile が差し替える。
+ASSEMBLE_PROFILE = "run5"
+EXPECTED_SPK_MAP: Dict[str, int] = {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3}
 
 # runbook §4 の「LR/finetune/精度/勾配クリップ」4 項目（s1_record の文章
 # 記述 + s3_record の実測行〔bf16 / clip 1.0 / lr 2e-4〕からの引用。実 YAML
@@ -409,18 +434,34 @@ def verify_dataset_against_pins(
             actual = sha256_file(rep)
             if actual != pin_section["loudness_normalization_json_sha256"]:
                 diffs.append(f"{label}/loudness_normalization.json: {actual} != pin")
+    if "selection_json_sha256" in pin_section:
+        # run 7 amitaro: 選定来歴（dosage・staged 入力 sha・被覆検査）も
+        # pin 対象（DESIGN_S6_run7.md §2-3 — 選定が変わる = 教師データの
+        # 実体が変わったということ）。
+        rep = dataset_dir / "selection.json"
+        if not rep.exists():
+            diffs.append(f"{label}/selection.json: missing")
+        else:
+            actual = sha256_file(rep)
+            if actual != pin_section["selection_json_sha256"]:
+                diffs.append(f"{label}/selection.json: {actual} != pin")
     return diffs
 
 
 def verify_assembly_against_run4_pins(
     assembly_manifest: dict, dataset_pins: dict
 ) -> List[str]:
-    """assembly_manifest（4 話者・schema 0.4）の d3synth/user セクションが
-    `run4_dataset_pins.json` の d3/user pin と一致することを照合する
-    （データ内容は run 4 と同一 = DESIGN_S4 §1.1。assemble はバイト単位
-    コピーなので、話者ディレクトリの実測記帳が pin と一致するはず）。"""
+    """assembly_manifest の教師/user セクションが dataset pins と一致する
+    ことを照合する（assemble はバイト単位コピーなので、話者ディレクトリの
+    実測記帳が pin と一致するはず）。照合ペアは pins のセクション構成が
+    単一ソース: "d3" を持つ pins（run 5/6）は d3synth を、"amitaro" を持つ
+    pins（run 7・DESIGN_S6_run7.md）は amitaro を照合する。"""
     diffs: List[str] = []
-    pairs = (("d3synth", "d3"), ("user", "user"))
+    pairs: List[Tuple[str, str]] = [("user", "user")]
+    if "d3" in dataset_pins:
+        pairs.append(("d3synth", "d3"))
+    if "amitaro" in dataset_pins:
+        pairs.append(("amitaro", "amitaro"))
     for speaker_name, pin_name in pairs:
         speaker = assembly_manifest["speakers"][speaker_name]
         pin = dataset_pins[pin_name]
@@ -435,6 +476,31 @@ def verify_assembly_against_run4_pins(
             != user_pin["exclusions_json_sha256"]
         ):
             diffs.append("user: exclusions_json_sha256 != pin")
+    return diffs
+
+
+def verify_spk_map(spk_map_path: Path, expected: Dict[str, int]) -> List[str]:
+    """binarize 出力の `spk_map.json` を期待マップと**完全一致**で照合する
+    （DESIGN_S6_run7.md §0-2: DiffSinger `build_spk_map` は `spk_id` 未指定の
+    データセットへ**最小の空き番号を自動採番**する — 設定ミスで amitaro の
+    明示 spk_id が落ちると、新教師が黙って id 3〔歴史上の合成教師〕へ埋まり、
+    DiffSinger 側の検査（max < num_spk）は素通しになる。完全一致照合なら
+    自動採番の混入・欠番の充填・話者名の取り違えを全て検出する）。
+    戻り値は不一致の説明リスト（空 = 一致）。"""
+    if not spk_map_path.exists():
+        return [f"spk_map.json missing: {spk_map_path} (binarize 出力レイアウト異常)"]
+    actual = json.loads(spk_map_path.read_text(encoding="utf-8"))
+    diffs: List[str] = []
+    if actual != expected:
+        diffs.append(
+            f"spk_map.json mismatch: actual={actual!r} != expected={expected!r}"
+        )
+        vacant = sorted(set(actual.values()) - set(expected.values()))
+        if vacant:
+            diffs.append(
+                f"spk_map.json: unexpected spk_id value(s) {vacant} — 恒久欠番"
+                "（d3synth=3 引退枠等）が自動採番で埋まった疑い（fail-closed）"
+            )
     return diffs
 
 
@@ -1412,21 +1478,89 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # --- stage 4: datasets -----------------------------------------
             out.mkdir(exist_ok=True)
 
-            # D3 再生成（tripwire + 全数照合は run_d3_cells.py 自身が行う）
             voicebank_roots = sorted((work / "ritsu_extracted").glob("*波音リツ*"))
             voicebank_root = (
                 voicebank_roots[0] if voicebank_roots else (work / "ritsu_extracted")
             )
-            _run([sys.executable, FOUNDRY_DIR / "scripts" / "run_d3_cells.py",
-                  "--voicebank-root", voicebank_root,
-                  "--out-dir", d3_render_out], label="datasets/run-d3-cells")
-            d3_dataset = out / "d3synth_dataset"
-            _run([sys.executable, FOUNDRY_DIR / "s1_dataprep" / "convert_d3.py",
-                  "--render-dir", d3_render_out / "render",
-                  "--out-dir", d3_dataset], label="datasets/convert-d3")
-            d3_diffs = verify_dataset_against_pins(d3_dataset, dataset_pins["d3"], "d3")
-            if d3_diffs:
-                raise PinMismatchError(d3_diffs)
+
+            # dsdict はこの段の複数変換（教師/amitaro・user）が使うため先頭で
+            # 解決する（run 5/6 でも同一実体 — 位置の前倒しは挙動非依存）。
+            dsdict_candidates = sorted(
+                (work / "ritsu_diffsinger_extracted").glob("**/dsdur/dsdict.yaml")
+            )
+            if not dsdict_candidates:
+                raise StageFailure("dsdict.yaml not found in NamineRitsu_DiffSinger zip")
+            dsdict = dsdict_candidates[0]
+
+            # 教師データの生成/検証（分岐の単一ソース = dataset pins の
+            # セクション構成。run 5/6 = "d3"〔d3synth 再生成〕・run 7 =
+            # "amitaro"〔実録音教師 intake・DESIGN_S6_run7.md §2〕）。
+            teacher_dataset: Path
+            if "d3" in dataset_pins:
+                # D3 再生成（tripwire + 全数照合は run_d3_cells.py 自身が行う）
+                _run([sys.executable, FOUNDRY_DIR / "scripts" / "run_d3_cells.py",
+                      "--voicebank-root", voicebank_root,
+                      "--out-dir", d3_render_out], label="datasets/run-d3-cells")
+                d3_dataset = out / "d3synth_dataset"
+                _run([sys.executable, FOUNDRY_DIR / "s1_dataprep" / "convert_d3.py",
+                      "--render-dir", d3_render_out / "render",
+                      "--out-dir", d3_dataset], label="datasets/convert-d3")
+                d3_diffs = verify_dataset_against_pins(d3_dataset, dataset_pins["d3"], "d3")
+                if d3_diffs:
+                    raise PinMismatchError(d3_diffs)
+                teacher_dataset = d3_dataset
+            elif "amitaro" in dataset_pins:
+                amitaro_pin = dataset_pins["amitaro"]
+                # staged 48kHz raw を Drive（<prefix>/amitaro_sources/）から
+                # 取得し、pin の staged_source_sha256 と**集合ごと**全数照合
+                # してから変換する（user_sources と同じ「素材は sha で特定」
+                # の流儀。欠落・取り違え・余剰はここで fail-closed）。
+                amitaro_src_dir = work / "amitaro_sources"
+                amitaro_src_dir.mkdir(parents=True, exist_ok=True)
+                _run(["rclone", "--config", rclone_conf, "copy",
+                      f"run5drive:{_remote_path('amitaro_sources')}", amitaro_src_dir,
+                      "--drive-root-folder-id", drive_folder_id],
+                     timeout=3600, label="datasets/amitaro-sources-rclone")
+                staged_pins: Dict[str, str] = amitaro_pin["staged_source_sha256"]
+                actual_names = {p.name for p in amitaro_src_dir.glob("*.wav")}
+                staged_diffs: List[str] = []
+                if actual_names != set(staged_pins):
+                    staged_diffs.append(
+                        "amitaro_sources: file set mismatch "
+                        f"(missing={sorted(set(staged_pins) - actual_names)[:5]}, "
+                        f"extra={sorted(actual_names - set(staged_pins))[:5]})"
+                    )
+                for wav_name in sorted(set(staged_pins) & actual_names):
+                    actual_sha = sha256_file(amitaro_src_dir / wav_name)
+                    if actual_sha != staged_pins[wav_name]:
+                        staged_diffs.append(
+                            f"amitaro_sources/{wav_name}: {actual_sha} != pin"
+                        )
+                if staged_diffs:
+                    raise PinMismatchError(staged_diffs)
+                amitaro_dataset = out / "amitaro_dataset"
+                _run([sys.executable,
+                      FOUNDRY_DIR / "s1_dataprep" / "convert_amitaro.py",
+                      "--staged-dir", amitaro_src_dir,
+                      "--transcript", FOUNDRY_DIR / "s1_dataprep" / "data" /
+                      "ita_recitation_transcript_utf8.txt",
+                      "--dsdict", dsdict,
+                      "--out-dir", amitaro_dataset,
+                      # 正規化目標は pins が単一ソース（run 6 user と同じ構造保証）
+                      "--normalize-loudness-lufs",
+                      str(amitaro_pin["normalization_target_lufs"])],
+                     label="datasets/convert-amitaro")
+                amitaro_diffs = verify_dataset_against_pins(
+                    amitaro_dataset, amitaro_pin, "amitaro"
+                )
+                if amitaro_diffs:
+                    raise PinMismatchError(amitaro_diffs)
+                teacher_dataset = amitaro_dataset
+            else:
+                raise StageFailure(
+                    "dataset pins に教師セクション（'d3' or 'amitaro'）が無い "
+                    "(fail-closed — pins ファイルの取り違え疑い)"
+                )
 
             # user replay 正規化（runbook §2.3: intake.py は再実行しない —
             # ffmpeg 直接変換で台帳 normalized_path のファイル名へ再生成し、
@@ -1447,13 +1581,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     )
             if norm_diffs:
                 raise PinMismatchError(norm_diffs)
-
-            dsdict_candidates = sorted(
-                (work / "ritsu_diffsinger_extracted").glob("**/dsdur/dsdict.yaml")
-            )
-            if not dsdict_candidates:
-                raise StageFailure("dsdict.yaml not found in NamineRitsu_DiffSinger zip")
-            dsdict = dsdict_candidates[0]
 
             user_dataset = out / "user_dataset"
             convert_user_cmd = [
@@ -1493,16 +1620,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   "--staging-dir", out / "pjs_staging"], label="datasets/convert-pjs")
             heartbeat.mark("datasets", "ok")
 
-            # --- stage 5: assemble（4 話者・spk_id map v2） ------------------
+            # --- stage 5: assemble（教師スロットはプロファイル解決） --------
             assemble_script = FOUNDRY_DIR / "s1_dataprep" / "assemble_run4.py"
+            teacher_flag = (
+                "--amitaro-raw-dir" if ASSEMBLE_PROFILE == "run7" else "--d3-raw-dir"
+            )
             _run([sys.executable, assemble_script,
+                  "--profile", ASSEMBLE_PROFILE,
                   "--ritsu-raw-dir", out / "ritsu_diffsinger_db",
-                  "--d3-raw-dir", d3_dataset,
+                  teacher_flag, teacher_dataset,
                   "--pjs-raw-dir", out / "pjs_staging" / "diffsinger_db",
                   "--user-raw-dir", user_dataset,
                   "--out-dir", run5_raw], label="assemble/assemble")
             live_config = run5_raw / "run4_config_datasets.yaml"
             _run([sys.executable, assemble_script, "refresh-config-pin",
+                  "--profile", ASSEMBLE_PROFILE,
                   "--config", live_config], label="assemble/refresh-config-pin")
             assembly_manifest = json.loads(
                 (run5_raw / "assembly_manifest.json").read_text(encoding="utf-8")
@@ -1554,6 +1686,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             _run([sys.executable, ds_repo / "scripts" / "binarize.py",
                   "--config", live_config],
                  cwd=ds_repo, label="binarize/binarize")
+            # binarize 後の spk_map.json 完全一致検査（DESIGN_S6_run7.md
+            # §0-2/§3-4: DiffSinger 自動採番による欠番充填・話者取り違えを
+            # 学習前に fail-closed で止める。全プロファイル共通の前進措置 —
+            # run 5/6 でも期待マップは既知につき無害）。binary_data_dir は
+            # assemble が config へ書く既定 = <out-dir>/binary。
+            spk_map_diffs = verify_spk_map(
+                run5_raw / "binary" / "spk_map.json", EXPECTED_SPK_MAP
+            )
+            if spk_map_diffs:
+                raise PinMismatchError(spk_map_diffs)
+            heartbeat.mark(
+                "binarize_spk_map", "ok",
+                detail=json.dumps(EXPECTED_SPK_MAP, ensure_ascii=False, sort_keys=True),
+            )
             heartbeat.mark("binarize", "ok")
 
             # --- stage 7/8: 学習 2 フェーズ ---------------------------------

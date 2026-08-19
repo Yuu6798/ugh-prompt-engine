@@ -1172,3 +1172,125 @@ def test_assembly_is_deterministic_across_two_runs(tmp_path: Path) -> None:
         manifest_1["config"]["normalized_config_path"]
         == manifest_2["config"]["normalized_config_path"]
     )
+
+
+# ---------------------------------------------------------------------------
+# run 7 プロファイル（DESIGN_S6_run7.md §0-2/§2-5: amitaro 教師・spk_id 4・
+# id 3 恒久欠番・num_spk 5・構成比会計）
+# ---------------------------------------------------------------------------
+
+
+def _make_amitaro_raw_dir(root: Path, *, row: list | None = None,
+                          wav_sec: float = 1.0) -> Path:
+    out = root / "amitaro_raw"
+    default_row = ["recitation001", "s a SP s u", "0.2 0.3 0.1 0.2 0.2",
+                   "2 1 2", "60 rest 62", "0.5 0.1 0.4"]
+    _write_csv(out / "transcriptions.csv", _FULL_HEADER, [row or default_row])
+    _write_wav(out / "wavs" / "recitation001.wav", wav_sec)
+    return out
+
+
+def _assemble_run7(tmp_path: Path, **kwargs):
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    amitaro_raw = kwargs.pop("amitaro_raw", None) or _make_amitaro_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    out_dir = tmp_path / "run7_raw"
+    manifest = assemble_run4.assemble(
+        ritsu_raw, amitaro_raw, pjs_raw, user_raw, out_dir,
+        pjs_is_fixture=True, profile="run7", **kwargs
+    )
+    return manifest, out_dir
+
+
+def test_run7_assembly_uses_amitaro_teacher_and_vacant_id3(tmp_path: Path) -> None:
+    manifest, out_dir = _assemble_run7(tmp_path)
+    assert manifest["schema"] == "run4-assembly-manifest/0.5"
+    assert manifest["spk_id"] == {"ritsu": 0, "pjs": 1, "user": 2, "amitaro": 4}
+    assert 3 not in manifest["spk_id"].values()
+    assert manifest["num_spk"] == 5
+    assert (out_dir / "amitaro" / "transcriptions.csv").exists()
+    assert not (out_dir / "d3synth").exists()
+    assert manifest["speakers"]["amitaro"]["spk_id"] == 4
+
+
+def test_run7_config_has_num_spk_5_and_amitaro_dataset_entry(tmp_path: Path) -> None:
+    _manifest, out_dir = _assemble_run7(tmp_path)
+    config = yaml.safe_load((out_dir / "run4_config_datasets.yaml").read_text(encoding="utf-8"))
+    assert config["num_spk"] == 5
+    entries = [(e["speaker"], e["spk_id"]) for e in config["datasets"]]
+    assert entries == [("ritsu", 0), ("pjs", 1), ("user", 2), ("amitaro", 4)]
+
+
+def test_run7_manifest_records_composition_accounting(tmp_path: Path) -> None:
+    manifest, _out_dir = _assemble_run7(tmp_path)
+    acct = manifest["composition_accounting"]
+    # amitaro fixture: SP を除く ph_dur = 0.2+0.3+0.2+0.2 = 0.9
+    assert acct["per_speaker_voiced_seconds"]["amitaro"] == pytest.approx(0.9)
+    assert acct["total_voiced_seconds"] == pytest.approx(
+        sum(acct["per_speaker_voiced_seconds"].values()), abs=1e-3
+    )
+    assert abs(sum(acct["shares"].values()) - 1.0) < 1e-4
+    assert acct["shares"]["amitaro"] < 0.50
+
+
+def test_run7_amitaro_share_over_half_fails_closed(tmp_path: Path) -> None:
+    """規約の配布比率ルール安全域（amitaro < 50%）逸脱は assemble が
+    fail-closed で止める（DESIGN_S6 §2-5）。"""
+    big = _make_amitaro_raw_dir(
+        tmp_path,
+        row=["recitation001", "s a s u", "30 30 30 30", "2 2", "60 62", "60 60"],
+        wav_sec=120.0,
+    )
+    with pytest.raises(assemble_run4.GateValidationError, match="amitaro share"):
+        _assemble_run7(tmp_path, amitaro_raw=big)
+
+
+def test_run5_profile_output_shape_is_unchanged(tmp_path: Path) -> None:
+    """run5 プロファイル（既定）は schema 0.4 のまま・num_spk/構成比会計
+    キーを持たない（run 5/6 の出力バイト互換の回帰ガード）。"""
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    manifest = assemble_run4.assemble(
+        ritsu_raw, d3_raw, pjs_raw, user_raw, tmp_path / "run5_raw", pjs_is_fixture=True
+    )
+    assert manifest["schema"] == "run4-assembly-manifest/0.4"
+    assert "num_spk" not in manifest
+    assert "composition_accounting" not in manifest
+    assert manifest["spk_id"] == {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3}
+
+
+def test_refresh_config_pin_run7_profile_validates_run7_map(tmp_path: Path) -> None:
+    _manifest, out_dir = _assemble_run7(tmp_path)
+    config_path = out_dir / "run4_config_datasets.yaml"
+    # run7 期待マップなら通る。
+    normalized = assemble_run4.refresh_config_pin(
+        config_path, expected_spk_ids=assemble_run4.SPK_IDS_RUN7
+    )
+    assert normalized.exists()
+    # run5 期待マップ（既定）に対しては fail-closed（構成が別物）。
+    with pytest.raises(assemble_run4.ConfigPinMismatchError):
+        assemble_run4.refresh_config_pin(config_path)
+
+
+def test_build_config_yaml_rejects_num_spk_below_speaker_count(tmp_path: Path) -> None:
+    speakers = [("ritsu", 0, tmp_path, []), ("pjs", 1, tmp_path, [])]
+    with pytest.raises(ValueError, match="num_spk"):
+        build_dataset.build_config_yaml(
+            dict_path=tmp_path / "dict.txt", binary_data_dir=tmp_path / "binary",
+            speakers=speakers, num_spk=1,
+        )
+
+
+def test_assemble_rejects_unknown_profile(tmp_path: Path) -> None:
+    ritsu_raw = _make_ritsu_raw_dir(tmp_path)
+    d3_raw = _make_d3_raw_dir(tmp_path)
+    pjs_raw = _make_pjs_raw_dir(tmp_path)
+    user_raw = _make_user_raw_dir(tmp_path)
+    with pytest.raises(ValueError, match="unknown assemble profile"):
+        assemble_run4.assemble(
+            ritsu_raw, d3_raw, pjs_raw, user_raw, tmp_path / "out",
+            pjs_is_fixture=True, profile="run99",
+        )

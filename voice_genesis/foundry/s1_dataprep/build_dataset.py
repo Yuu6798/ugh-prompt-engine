@@ -746,6 +746,7 @@ def build_config_yaml(
     max_updates: int = DEFAULT_MAX_UPDATES,
     val_check_interval: int = DEFAULT_VAL_CHECK_INTERVAL,
     num_ckpt_keep: int = DEFAULT_NUM_CKPT_KEEP,
+    num_spk: Optional[int] = None,
 ) -> str:
     """`scripts/binarize.py --config <this>` にそのまま渡せる acoustic config
     を組み立てる（`s1b_multispeaker_acoustic_config.yaml` と同一構造）。
@@ -796,7 +797,17 @@ def build_config_yaml(
     lines.append("use_lang_id: false")
     lines.append("num_lang: 1")
     lines.append("use_spk_id: true")
-    lines.append(f"num_spk: {len(speakers)}")
+    # `num_spk`（run 7・DESIGN_S6_run7.md §0-2 追加）: 既定 None = 従来どおり
+    # len(speakers)（run 4/5/6 の出力バイト不変）。spk_id に恒久欠番を持つ
+    # プロファイル（run 7: d3synth=3 引退・amitaro=4・num_spk=5）は埋め込み
+    # テーブル行数 > データセット数となるため明示値を渡す。len(speakers)
+    # 未満の値は binarizer 側 assert まで進ませずここで fail-closed に拒否。
+    effective_num_spk = len(speakers) if num_spk is None else num_spk
+    if effective_num_spk < len(speakers):
+        raise ValueError(
+            f"num_spk={effective_num_spk} < len(speakers)={len(speakers)} (fail-closed)"
+        )
+    lines.append(f"num_spk: {effective_num_spk}")
     lines.append("")
     lines.append("binarization_args:")
     lines.append("  shuffle: true")
