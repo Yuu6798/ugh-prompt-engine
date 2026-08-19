@@ -798,3 +798,47 @@ def test_plan_drive_id_fetch_sanitizes_and_handles_edge_names() -> None:
 
 def test_plan_drive_id_fetch_empty_listing() -> None:
     assert r5b.plan_drive_id_fetch("[]") == []
+
+
+# --- PR#274 セルフレビュー対応の回帰 ------------------------------------------
+
+
+def test_plan_drive_id_fetch_rejects_entries_without_id() -> None:
+    """review #5: drive backend の lsjson は ID を出す前提 — 欠落は素の
+    KeyError ではなく、当該エントリを名指しする StageFailure で fail-closed。"""
+    listing = json.dumps([
+        {"ID": "ok1", "Name": "a.m4a"},
+        {"Name": "no-id.m4a"},
+    ])
+    with pytest.raises(r5b.StageFailure, match="without ID"):
+        r5b.plan_drive_id_fetch(listing)
+
+
+def test_run_capture_returns_stdout_logs_and_attaches_tail_on_failure(
+    tmp_path: Path,
+) -> None:
+    """review #2: 出力を parse に使う外部コマンド（lsjson）も cmdlog + 失敗時
+    tail 同梱の規約に乗せる（素の subprocess.run では gdown 事件で塞いだ
+    「証跡ゼロの停止」を再現してしまう）。"""
+    r5b.set_log_dir(tmp_path / "cmdlogs")
+    try:
+        out = r5b._run_capture(
+            [sys.executable, "-c", "print('CAPTURED_STDOUT')"],
+            label="test/capture-ok",
+        )
+        assert "CAPTURED_STDOUT" in out
+        log = tmp_path / "cmdlogs" / "test_capture-ok.log"
+        assert "CAPTURED_STDOUT" in log.read_text(encoding="utf-8")
+
+        with pytest.raises(r5b.StageFailure) as exc_info:
+            r5b._run_capture(
+                [sys.executable, "-c",
+                 "import sys; print('ERR_NEEDLE', file=sys.stderr); sys.exit(4)"],
+                label="test/capture-fail",
+            )
+        assert "exit 4" in str(exc_info.value)
+        assert "ERR_NEEDLE" in str(exc_info.value)
+        fail_log = tmp_path / "cmdlogs" / "test_capture-fail.log"
+        assert "ERR_NEEDLE" in fail_log.read_text(encoding="utf-8")
+    finally:
+        r5b._LOG_DIR = None

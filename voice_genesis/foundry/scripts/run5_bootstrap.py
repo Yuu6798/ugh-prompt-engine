@@ -492,6 +492,13 @@ def plan_drive_id_fetch(listing_json: str) -> List[Tuple[str, str]]:
     ローカル名は衝突しないよう連番を前置する（照合は中身の sha256 で行うため
     名前自体に意味は無い — `index_files_by_sha256` 参照）。"""
     entries = json.loads(listing_json)
+    missing_id = [e for e in entries if not e.get("ID")]
+    if missing_id:
+        raise StageFailure(
+            f"lsjson entries without ID ({len(missing_id)} 件) — drive backend の "
+            f"lsjson は ID を出すはずで、欠落は想定外のリモート/形式変更を示す "
+            f"(fail-closed): {missing_id[:3]!r}"
+        )
     plan: List[Tuple[str, str]] = []
     for i, entry in enumerate(sorted(entries, key=lambda e: e["ID"])):
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", entry.get("Name", ""))[-60:] or "file"
@@ -708,6 +715,36 @@ def _run(argv: Sequence[str], *, cwd: Optional[Path] = None,
             print(f"| run5_bootstrap: [{label}] FAILED — output tail:\n{captured}",
                   file=sys.stderr, flush=True)
         raise StageFailure(detail)
+
+
+def _run_capture(argv: Sequence[str], *, timeout: Optional[float] = None,
+                 label: str = "") -> str:
+    """`_run` の「stdout を parse に使いたい」変種。stdout を返しつつ、
+    stdout+stderr を `_LOG_DIR/<label>.log` にも書き、失敗時は末尾を
+    StageFailure に同梱する（review PR#274 #2: lsjson を素の subprocess.run
+    で呼ぶと、gdown 事件で塞いだ「証跡ゼロの停止」を新しいコードで再現して
+    しまう — 出力を要する呼び出しはこの関数を通す）。"""
+    printable = " ".join(shlex.quote(str(a)) for a in argv)
+    print(f"| run5_bootstrap: [{label}] {printable}", flush=True)
+    result = subprocess.run(
+        [str(a) for a in argv], capture_output=True, text=True, timeout=timeout,
+    )
+    if _LOG_DIR is not None:
+        log_path = _LOG_DIR / f"{sanitize_label(label)}.log"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"\n=== {printable} ===\n")
+            f.write(result.stdout)
+            if result.stderr:
+                f.write("\n--- stderr ---\n" + result.stderr)
+    if result.returncode != 0:
+        tail = tail_text((result.stdout + "\n" + result.stderr).strip())
+        detail = f"[{label}] exit {result.returncode}: {printable}"
+        if tail:
+            detail += f"\n--- command output (tail) ---\n{tail}"
+            print(f"| run5_bootstrap: [{label}] FAILED — output tail:\n{tail}",
+                  file=sys.stderr, flush=True)
+        raise StageFailure(detail)
+    return result.stdout
 
 
 def _rclone_argv(rclone_conf: Path, drive_folder_id: str, path: Path) -> List[str]:
@@ -986,20 +1023,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # 名前ベースの `rclone copy` は Drive の同名重複を黙って落とす
                 # （§ `plan_drive_id_fetch` docstring）。lsjson で ID を列挙し、
                 # **1 本ずつ ID 指定で**取得する。
-                listing = subprocess.run(
-                    ["rclone", "--config", str(rclone_conf), "lsjson",
+                # --recursive: 旧経路（rclone copy）は再帰コピーだったため、
+                # サブフォルダ整理された原本も従来どおり拾う（review PR#274 #1。
+                # 取得は ID 指定なのでローカル名はフラットのままで衝突しない）。
+                listing = _run_capture(
+                    ["rclone", "--config", rclone_conf, "lsjson", "--recursive",
                      "--files-only", "run5drive:user_sources",
                      "--drive-root-folder-id", drive_folder_id],
-                    capture_output=True, text=True, check=True, timeout=300,
-                ).stdout
+                    timeout=300, label="materials/user-sources-lsjson",
+                )
                 fetch_plan = plan_drive_id_fetch(listing)
                 print(f"| run5_bootstrap: user_sources = {len(fetch_plan)} file(s) "
                       "by Drive ID (名前重複に非依存)", flush=True)
                 user_src_dir.mkdir(parents=True, exist_ok=True)
+                # 1 本ずつの呼び出しは意図的（review PR#274 #4 の裁定）:
+                # copyid は複数 ID/path 対を 1 回で受けられるが、cmdlog 上の
+                # 失敗帰属をファイル単位にする方を取る（17 本 × 数 MB では
+                # プロセス起動オーバーヘッドは課金上無視できる）。timeout は
+                # 1 本のハングで finally の self-stop まで到達不能になるのを
+                # 防ぐ（review PR#274 #3 — TimeoutExpired は上位の except で
+                # salvage → self-stop に流れる）。
                 for file_id, local_name in fetch_plan:
                     _run(["rclone", "--config", rclone_conf, "backend", "copyid",
                           "run5drive:", file_id, user_src_dir / local_name],
-                         label="materials/user-sources-rclone")
+                         timeout=600, label="materials/user-sources-rclone")
 
             # 展開 + ffmpeg PATH 先頭化 + libavformat 60.16.100 実測
             _extract_archive(ritsu_zip, work / "ritsu_extracted")
