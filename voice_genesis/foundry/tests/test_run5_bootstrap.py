@@ -388,7 +388,7 @@ def test_collect_salvage_artifacts_gathers_from_disk_state(tmp_path: Path) -> No
     (tb_dir / "events.out.tfevents.123").write_bytes(b"tb")
 
     artifacts = r5b.collect_salvage_artifacts(run5_raw, ds_repo)
-    names = [p.name for p in artifacts]
+    names = [p.name for p, _dest in artifacts]
     assert "assembly_manifest.json" in names
     assert "run5_config_phase_a.yaml" in names
     assert "model_ckpt_steps_5000.ckpt" in names
@@ -399,10 +399,55 @@ def test_collect_salvage_artifacts_gathers_from_disk_state(tmp_path: Path) -> No
     # 未生成物はスキップ（存在するものだけ・重複なし）
     assert "run5_config_phase_b.yaml" not in names
     assert len(artifacts) == len(set(artifacts))
+    # dest は namespace 規則（run 単位 = 直下 / phase 別 = phase_a 配下）
+    dests = {p.name: dest for p, dest in artifacts}
+    assert dests["assembly_manifest.json"] == ""
+    assert dests["run5_config_phase_a.yaml"] == "phase_a/config"
+    assert dests["model_ckpt_steps_5000.ckpt"] == "phase_a/checkpoints"
+    assert dests["config.yaml"] == "phase_a/config"
+    assert dests["train.log"] == "phase_a/logs"
+    assert dests["events.out.tfevents.123"] == "phase_a/logs"
 
 
 def test_collect_salvage_artifacts_empty_when_nothing_exists(tmp_path: Path) -> None:
     assert r5b.collect_salvage_artifacts(tmp_path / "nope", tmp_path / "nope2") == []
+
+
+def test_salvage_namespaces_same_basename_across_phases(tmp_path: Path) -> None:
+    """2026-08-19 外部レビュー P1 の回帰: phase A/B に同じ basename
+    （model_ckpt_steps_5000.ckpt / config.yaml / train.log）が存在しても、
+    両方が独立した dest で保存される（run 5 実走の同名後勝ち上書き =
+    s4_record §5.6 の根治。手動 copyto 保全を不要にする）。"""
+    run5_raw = tmp_path / "run5_raw"
+    run5_raw.mkdir()
+    ds_repo = tmp_path / "DiffSinger"
+    for exp_name in (r5b.EXP_NAME_PHASE_A, r5b.EXP_NAME_PHASE_B):
+        ckpt_dir = ds_repo / "checkpoints" / exp_name
+        ckpt_dir.mkdir(parents=True)
+        (ckpt_dir / "model_ckpt_steps_5000.ckpt").write_bytes(b"ckpt-" + exp_name.encode())
+        (ckpt_dir / "config.yaml").write_bytes(b"cfg-" + exp_name.encode())
+        (ckpt_dir / "train.log").write_bytes(b"log-" + exp_name.encode())
+
+    artifacts = r5b.collect_salvage_artifacts(run5_raw, ds_repo)
+    by_basename: dict = {}
+    for path, dest in artifacts:
+        by_basename.setdefault(path.name, []).append(dest)
+    assert sorted(by_basename["model_ckpt_steps_5000.ckpt"]) == [
+        "phase_a/checkpoints", "phase_b/checkpoints"]
+    assert sorted(by_basename["config.yaml"]) == ["phase_a/config", "phase_b/config"]
+    assert sorted(by_basename["train.log"]) == ["phase_a/logs", "phase_b/logs"]
+    # (path, dest) 単位で全件ユニーク = 上書き衝突ゼロ
+    assert len(artifacts) == len(set(artifacts))
+
+
+def test_rclone_argv_copies_into_namespace_dest(tmp_path: Path) -> None:
+    """dest 指定時はリモート側サブディレクトリへ、無指定はフォルダ直下へ。"""
+    argv = r5b._rclone_argv(tmp_path / "rc.conf", "FOLDER", tmp_path / "x.ckpt",
+                            "phase_b/checkpoints")
+    assert "run5drive:phase_b/checkpoints" in argv
+    argv_root = r5b._rclone_argv(tmp_path / "rc.conf", "FOLDER", tmp_path / "x.json")
+    assert "run5drive:" in argv_root
+    assert "--drive-root-folder-id" in argv_root
 
 
 # --- user 原本の sha256 索引（ファイル名非依存の特定） -------------------------
@@ -703,7 +748,8 @@ def test_collect_salvage_artifacts_includes_command_logs(tmp_path: Path) -> None
         run5_raw.mkdir()
         (run5_raw / "assembly_manifest.json").write_bytes(b"{}")
         artifacts = r5b.collect_salvage_artifacts(run5_raw, tmp_path / "DiffSinger")
-        assert any(p.name == "materials_pjs-zip.log" for p in artifacts)
+        assert any(p.name == "materials_pjs-zip.log" and dest == "cmdlogs"
+                   for p, dest in artifacts)
     finally:
         r5b._LOG_DIR = None
 
@@ -750,7 +796,7 @@ def test_collect_salvage_artifacts_puts_command_logs_last(tmp_path: Path) -> Non
         (ckpt_dir / "model_ckpt_steps_40000.ckpt").write_bytes(b"ckpt")
 
         artifacts = r5b.collect_salvage_artifacts(run5_raw, tmp_path / "DiffSinger")
-        names = [p.name for p in artifacts]
+        names = [p.name for p, _dest in artifacts]
         ckpt_idx = names.index("model_ckpt_steps_40000.ckpt")
         first_log_idx = min(i for i, n in enumerate(names) if n.endswith(".log"))
         assert ckpt_idx < first_log_idx, f"checkpoint はログより先に push する: {names}"
@@ -842,3 +888,96 @@ def test_run_capture_returns_stdout_logs_and_attaches_tail_on_failure(
         assert "ERR_NEEDLE" in fail_log.read_text(encoding="utf-8")
     finally:
         r5b._LOG_DIR = None
+
+
+# --- 2026-08-19 外部レビュー対応（実行 manifest / lock 同期 / stage 記帳） ---
+
+
+def test_new_execution_manifest_has_review_required_fields() -> None:
+    """外部レビュー P2 の必須フィールドが初期形で全て存在すること。"""
+    m = r5b.new_execution_manifest(
+        pod_id="pod1", repo_commit="abc", container_image="img", gpu="RTX 3090")
+    for key in (
+        "schema_version", "run_id", "pod_id", "repo_commit", "container_image",
+        "gpu", "start_time", "end_time", "stage_status", "environment_versions",
+        "material_hashes", "dataset_hashes", "checkpoint_hashes",
+        "tensorboard_hashes", "artifact_count", "salvage_status",
+        "self_stop_status", "failure_history",
+    ):
+        assert key in m, key
+    assert m["schema_version"] == "run-execution-manifest/0.1"
+    assert m["failure_history"] == []
+    assert m["start_time"].endswith("Z")
+
+
+def test_compare_execution_manifests_detects_environment_drift() -> None:
+    """preflight の前回比較: 環境・入力キーの差分だけを報告し、走行毎に変わる
+    キー（stage_status 等）は比較しない。"""
+    prev = r5b.new_execution_manifest(
+        pod_id="p1", repo_commit="abc", container_image="img", gpu="g")
+    curr = r5b.new_execution_manifest(
+        pod_id="p2", repo_commit="abc", container_image="img", gpu="g")
+    curr["stage_status"]["gates"] = {"status": "ok"}  # 比較対象外
+    assert r5b.compare_execution_manifests(prev, curr) == []
+    curr["repo_commit"] = "def"
+    curr["material_hashes"] = {"ffmpeg": {"sha256": "x"}}
+    diffs = r5b.compare_execution_manifests(prev, curr)
+    assert "repo_commit" in diffs and "material_hashes" in diffs
+    assert "stage_status" not in diffs
+
+
+def test_write_execution_manifest_lands_in_run5_raw_and_is_salvaged(
+    tmp_path: Path,
+) -> None:
+    """manifest は run5_raw に書かれ、salvage 収集にフォルダ直下 dest で載る。"""
+    run5_raw = tmp_path / "run5_raw"
+    m = r5b.new_execution_manifest(
+        pod_id="p", repo_commit="c", container_image=None, gpu=None)
+    path = r5b.write_execution_manifest(m, run5_raw)
+    assert path == run5_raw / "run_execution_manifest.json"
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    assert loaded["schema_version"] == "run-execution-manifest/0.1"
+    artifacts = r5b.collect_salvage_artifacts(run5_raw, tmp_path / "DiffSinger")
+    assert (path, "") in artifacts
+
+
+def test_heartbeat_records_stage_status_into_manifest_record(tmp_path: Path) -> None:
+    """Heartbeat.mark は実行 manifest の stage_status へ同時記帳する（detail は
+    traceback 肥大を避けて切り詰め）。"""
+    record: dict = {}
+    hb = r5b.Heartbeat(tmp_path / "hb", lambda *_a, **_k: None, record=record)
+    hb.mark("gates", "ok")
+    hb.mark("failure", "failed", detail="X" * 5000)
+    assert record["gates"]["status"] == "ok"
+    assert record["gates"]["utc"].endswith("Z")
+    assert record["failure"]["status"] == "failed"
+    assert len(record["failure"]["detail"]) < 1000
+
+
+def test_summarize_material_hashes_keeps_only_sha256_keys() -> None:
+    materials = {
+        "ffmpeg": {"url": "http://x", "sha256": "aa", "bin_sha256": "bb",
+                   "size_bytes": 1},
+    }
+    summary = r5b.summarize_material_hashes(materials)
+    assert summary == {"ffmpeg": {"sha256": "aa", "bin_sha256": "bb"}}
+
+
+def test_lock_file_render_pins_match_runtime_gate() -> None:
+    """外部レビュー P3: lock + runtime gate の二重保証 — lock ファイルの
+    確定 pin 行が NUMERIC_STACK_PIN と一致すること（drift 検出）。"""
+    lock_path = (
+        Path(r5b.__file__).resolve().parent / "requirements_run5_pod.lock")
+    pinned = {
+        line.strip()
+        for line in lock_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    assert pinned == set(r5b.NUMERIC_STACK_PIN)
+
+
+def test_phase_remote_dirs_cover_both_phases_and_are_distinct() -> None:
+    """P1 回帰の土台: 両 phase に namespace が定義され、互いに異なること。"""
+    dirs = r5b.PHASE_REMOTE_DIRS
+    assert set(dirs) == {r5b.EXP_NAME_PHASE_A, r5b.EXP_NAME_PHASE_B}
+    assert dirs[r5b.EXP_NAME_PHASE_A] != dirs[r5b.EXP_NAME_PHASE_B]
