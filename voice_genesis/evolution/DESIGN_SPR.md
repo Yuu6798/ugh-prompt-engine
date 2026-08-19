@@ -51,7 +51,10 @@
   **schema 実装との関係**: 現行 `evaluation-record/0.1`（VG-E0 凍結）の
   `axes` は AbsoluteVector 相当のみ。Relative/Developmental の保存は
   VG-E1 実装時に**新 schema または版番改訂**で導入し、VG-E0 の凍結 3 種は
-  非改変とする
+  非改変とする。なお「axes = AbsoluteVector 相当」は本書の**解釈**
+  （VG-E0 本文は「軸名→値・語彙は VG-E1 で凍結」としか規定しない。
+  `verdict` が Gate 判定を担う構造との併せ読みによる推論であり、
+  VG-E1 の軸凍結時に正式化する）
 
 ## 2. Routing 表（v0 凍結・種別 = 主圧 / 制約）
 
@@ -61,13 +64,13 @@
 
 | # | 圧 / 資格 | 種別 | 回路/時点 | 強度・頻度 | 淘汰単位 | 分類 | 評価器（現在地） | 読んではならない信号（隔離） |
 |---|---|---|---|---|---|---|---|---|
-| 1 | Viability | 主圧 | E: 個体生成時（④含む） | **弱**・生成毎 | 個体 | Gate + 最低限 Absolute | 機械検査（validator/pin・Rights・Replay 可能性）+ 耳の粗判定（致命破綻・最低限の発声成立） | 成熟品質軸・稽古由来の成績（**「出生では殺しすぎない」= S2 型誤配線の禁止**） |
+| 1 | Viability | 主圧 | E: 個体生成時（④含む） | **弱**・生成毎 | 個体 | Gate + 最低限 Absolute | 機械検査（validator/pin・Rights・Genome/provenance 有効・Replay 可能性）+ 耳の粗判定（致命破綻・最低限の発声成立） | 成熟品質軸・稽古由来の成績（**「出生では殺しすぎない」= S2 型誤配線疑いの再発防止**） |
 | 2 | LearningGain | 主圧 | L: 稽古 commit 時 | 中・遷移毎 | Revision | Developmental（+ Gate: Identity/Replay・Absolute 非悪化） | 耳のブラインド順位付け（VG-L0）→ 軸単位で自動化 | niche 相対軸（**自己との競争** — 他個体と比較しない） |
-| 3 | Transferability | 主圧 | T: Lesson 選別時 | 中・Lesson 毎 | Lesson (Δ) | Relative（Lesson 間） | **未整備**（1:N 転移成績で校正 — 将来。General / Niche-Specific に分けて保存・総合 1 点化しない） | 単一個体の成績のみでの裁定 |
+| 3 | Transferability | 主圧 | T: Lesson 選別時 | 中・Lesson 毎 | Lesson (Δ) | **Developmental（各生徒の TransferGain）→ Relative（Lesson 間選抜）**の二段 | **未整備**（1:N の before/after 差分を保存し、その分布を根拠に Lesson 間比較 — 将来。General / Niche-Specific に分けて保存・総合 1 点化しない） | 単一個体の成績のみでの裁定 |
 | 4 | Quality Floor | **制約（繁殖資格）** | 成熟判定（Archive 参加前提） | 中〜強・成熟判定時 | 個体 | Absolute（Floor 用途） | 耳。軸の凍結 = VG-E1（LRA 単独禁止・ノイズ/区間レベル軸必須） | 稽古予算の個体差（**均一カリキュラム後のみ評価** — H16 会計） |
 | 5 | NicheRelativeAdvantage | 主圧 | E: 繁殖・Archive 挿入 | **最強**・世代毎 | 個体 | Relative（niche 相対） | 耳 + VG-E1 軸（未凍結）。処理 = Floor → Niche assignment → Relative competition → Elite/QD Archive → Parent pool | グローバル 1 位比較（異 niche を単一点で比較しない・総合スコア恒久禁止） |
-| 6 | Eviction | 主圧 | Archive 常時 | 中・常時 | 個体 | Relative（niche 相対） | VG-E0 実装済み（記録付き追い出し） | **保護スロットは圧の免除区域**（免除の事実と理由を記録） |
-| 7 | PopulationLevelImprovement | 主圧 | S: Backbone/評価器更新（現行 = run 単位スクラッチ再学習） | **低頻度・高影響**・run 毎 | 世界 | Absolute（生態系水準） | Design Memo 裁定 + 4 ゲート + 節目耳ゲート。見るもの = Quality-Constrained Coverage・critical niche survival・Hidden/Human alignment・Hack 再発率・平均故障率・Replay 安定性（補論 A §3.5） | 「最高個体が強くなったか」（問いは**成立領域が広がったか**）。更新後は全既存評価 revalidation required |
+| 6 | Eviction | **行 5 の実行機構**（独立の主圧ではない — 挿入と追い出しは同一操作の表裏） | Archive 常時 | 行 5 に従属 | 個体 | Relative（niche 相対） | 機構は VG-E0 実装済み（記録付き追い出し・EvictionEvent）。**ただし現行 Archive は呼び出し側供給の scalar `quality` を順序キーに使用**（archive.py `submit(genome, quality, quality_floor)` 実測）— SPR 準拠 comparator（軸別 evidence・niche 相対）の意味論は **VG-E1 で凍結** | **保護スロットは行 5 の圧からの明示的免除区域**（免除の事実と理由を記録） |
+| 7 | PopulationLevelImprovement | 主圧 | S: Backbone/評価器更新（現行 = run 単位スクラッチ再学習） | **低頻度・高影響**・run 毎 | 世界 | **Developmental（Population-level Δ）+ Gate/Absolute 制約** | Design Memo 裁定 + 4 ゲート + 節目耳ゲート。parent/child Backbone 間で **ΔCoverage（Quality-Constrained）・Δ故障率・ΔHack 再発率**等を比較し、critical niche survival・Hidden/Human alignment・Replay 安定性は**制約**として扱う（補論 A §3.5 の実装読み） | 「最高個体が強くなったか」（問いは**成立領域が広がったか**）。更新後は全既存評価 revalidation required |
 
 ## 3. 隔離規則（圧の漏れの禁止・v0 凍結）
 
@@ -88,7 +91,7 @@
    免除の記録必須
 7. **meta 圧（横串）**: Hidden 評価器 / Hack DB は特定行に属さず、
    **強いゲート（行 4/5/7）と Level 2 自動化が導入された全行**に横串適用
-   （Training 評価器単独 commit の禁止 = VG-L0 §5-4）
+   （Training 評価器単独 commit の禁止 = VG-L0 §5 禁止線 4）
 
 ## 4. 因果帰属（補論 A §7 = 既存規律の再確認）
 
@@ -101,11 +104,11 @@ v0.2 §6.1 A/B contract と同一。`G, L, T, S → A → R`・`D = ΔA`。
 
 | Routing 行 | 実装先 | 状態 |
 |---|---|---|
-| 行 1（Viability） | **④ 第 0 世代の審査**（run 5 checkpoint・DESIGN_S4 §4） | **即適用**: ④の耳判定は行 1 の弱圧のみ。「破綻なし・合成成立・第三の声か否かの観測」までが審査範囲 |
+| 行 1（Viability） | **④ 第 0 世代の審査**（run 5 checkpoint・DESIGN_S4 §4） | **即適用**: ④の耳判定は行 1 の弱圧のみ。**「破綻なし・合成成立」を viability 判定に使用**し、「第三の声か否か」「ノイズ・区間レベルの定性」は**観測・記録のみ**（出生時の reject 条件に使用しない — novelty/品質として効くのは後段の行 4/5）。DESIGN_S4 §4 末尾の耳判定総則（LRA 単独禁止・ノイズ/区間定性の必須併置）は①〜③の品質判定向けであり、④への適用は本書の行 1 配線が優先する（評価設計の正本 = 本書） |
 | 行 2（LearningGain） | VG-L0 最小実験（ブラインド順位付け） | 設計済み・run 5 後に実施 |
 | 行 3（Transferability） | 1:N 教育（VG-L 将来） | 未整備（校正器ごと将来） |
 | 行 4/5（Floor / Reproduction） | **VG-E1 の評価軸凍結** | VG-E1 の作業定義そのもの。行 4（Absolute Floor）と行 5（niche 相対）を区別して宣言する |
-| 行 6（Eviction） | VG-E0 実装済み | 稼働待ち（Archive 充填後） |
+| 行 6（Eviction） | VG-E0 Archive 機構 | 機構は実装済み（EvictionEvent 記録付き）。SPR 準拠の niche 比較規則（scalar quality キーの置換）は VG-E1 で凍結 |
 | 行 7（S） | S 系列 Design Memo + 4 ゲート | **既に運用中**（run 5 が現物） |
 
 ## 6. Acceptance Criteria（SPR v0 出口）
