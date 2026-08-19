@@ -135,6 +135,54 @@ PHASE_B_MAX_UPDATES = 40000
 EXP_NAME_PHASE_A = "s4_run5_acoustic_scratch"
 EXP_NAME_PHASE_B = "s4_run5_acoustic_v1"
 
+# Drive 退避の run 別 prefix（run 5 = フォルダ直下 ""・run 6 以降 = "run6" 等。
+# _rclone_argv が dest と結合する — 同一成果物フォルダ内で run が混ざらない）。
+REMOTE_PREFIX = ""
+
+# --- run プロファイル（DESIGN_S5_run6.md §2-3: run 依存定数のパラメータ化）。
+# 環境変数 RUN_PROFILE（既定 "run5"）で選択し、apply_run_profile() が
+# モジュール定数を差し替える。run5 プロファイルの**定数値**は run 5 実走時と
+# 同一（ただし gates 段の ANALYSIS_STACK_PIN 強制は全プロファイル共通の
+# 前進措置 — run 5 実走時は未 pin で numba 0.66 系を解決していたと推定
+# 〔freeze 未捕獲〕であり、歴史的環境の完全再現ではない）。convert_user の正規化目標
+# （normalize_loudness_lufs）は dataset pins ファイルの
+# user.normalization_target_lufs から読む（pin と実行値の単一ソース化）。
+RUN_PROFILES: Dict[str, Dict[str, object]] = {
+    "run5": {
+        "run_id": "s4_run5",
+        "exp_a": "s4_run5_acoustic_scratch",
+        "exp_b": "s4_run5_acoustic_v1",
+        "dataset_pins": "run4_dataset_pins.json",
+        "remote_prefix": "",
+    },
+    "run6": {
+        "run_id": "s5_run6",
+        "exp_a": "s5_run6_acoustic_scratch",
+        "exp_b": "s5_run6_acoustic_v1",
+        "dataset_pins": "run6_dataset_pins.json",
+        "remote_prefix": "run6",
+    },
+}
+
+
+def apply_run_profile(name: str) -> Dict[str, object]:
+    """RUN_PROFILES[name] をモジュール定数へ反映する（main() 冒頭と
+    テストから呼ぶ。未知名は fail-closed）。戻り値はプロファイル辞書。"""
+    global RUN_ID, EXP_NAME_PHASE_A, EXP_NAME_PHASE_B, PHASE_REMOTE_DIRS
+    global DATASET_PINS_PATH, REMOTE_PREFIX
+    if name not in RUN_PROFILES:
+        raise ValueError(
+            f"unknown RUN_PROFILE {name!r} (expected one of {sorted(RUN_PROFILES)})"
+        )
+    profile = RUN_PROFILES[name]
+    RUN_ID = str(profile["run_id"])
+    EXP_NAME_PHASE_A = str(profile["exp_a"])
+    EXP_NAME_PHASE_B = str(profile["exp_b"])
+    PHASE_REMOTE_DIRS = {EXP_NAME_PHASE_A: "phase_a", EXP_NAME_PHASE_B: "phase_b"}
+    DATASET_PINS_PATH = FOUNDRY_DIR / "results_s3" / str(profile["dataset_pins"])
+    REMOTE_PREFIX = str(profile["remote_prefix"])
+    return profile
+
 # phase 別の Drive 退避 namespace（2026-08-19 外部レビュー P1: run 5 実走で
 # phase A/B の `model_ckpt_steps_5000.ckpt` と `config.yaml` が同名 push で
 # 後勝ち上書きされ、phase A 5K は監視側の手動 copyto 保全を要した —
@@ -193,6 +241,16 @@ GATE2_SNIPPET = (
 )
 NUMERIC_STACK_PIN = (
     "numpy==2.4.6", "scipy==1.17.1", "pyworld==0.3.5", "soundfile==0.14.0",
+)
+
+# 解析系 pin（2026-08-19 実測: numba 0.67.0 × numpy 2.4.6 は librosa.pyin
+# が SIGSEGV。0.66.0 で解消。未 pin 依存のドリフトが数日で走行を壊した実例 —
+# requirements_run5_pod.lock と同期・gates 段で NUMERIC_STACK_PIN と同時に
+# 強制インストールする。gate1 の版検査対象には含めない〔検査契約は不変〕。
+# pyloudnorm は run 6 の正規化数値そのものを決める依存（run6 pin は
+# 0.2.0 で生成）— 未 pin だと同じドリフト類型で pin 照合が割れるため同梱）。
+ANALYSIS_STACK_PIN = (
+    "numba==0.66.0", "librosa==0.11.0", "pyloudnorm==0.2.0",
 )
 
 # ffmpeg 環境契約 1（s3_record 2026-08-17）: 44.1kHz 変換バイトは libavformat
@@ -341,6 +399,16 @@ def verify_dataset_against_pins(
             actual = sha256_file(excl)
             if actual != pin_section["exclusions_json_sha256"]:
                 diffs.append(f"{label}/exclusions.json: {actual} != pin")
+    if "loudness_normalization_json_sha256" in pin_section:
+        # run 6: 正規化会計も pin 対象（会計が変わる = 正規化実装/目標値が
+        # 変わったということ — 黙って通さない）。
+        rep = dataset_dir / "loudness_normalization.json"
+        if not rep.exists():
+            diffs.append(f"{label}/loudness_normalization.json: missing")
+        else:
+            actual = sha256_file(rep)
+            if actual != pin_section["loudness_normalization_json_sha256"]:
+                diffs.append(f"{label}/loudness_normalization.json: {actual} != pin")
     return diffs
 
 
@@ -597,6 +665,12 @@ def collect_salvage_artifacts(run5_raw: Path,
             candidates.append((ckpt, f"{phase_dest}/checkpoints"))
         candidates += [(p, f"{phase_dest}/config")
                        for p in sorted(ckpt_dir.glob("config.yaml"))]
+        # salvage 追加 (c)（DESIGN_S5 §2-3・s4_record §5.4 export 復旧記録）:
+        # ONNX export の必須入力 3 種は学習時に exp dir へ生成される —
+        # run 5 では未退避で、判定材料生成時に一次記録からの再作成を要した。
+        for pattern in ("spk_map.json", "lang_map.json", "dictionary-*.txt"):
+            candidates += [(p, f"{phase_dest}/config")
+                           for p in sorted(ckpt_dir.glob(pattern))]
         for pattern in ("*.log", "**/events.out.tfevents.*"):
             candidates += [(p, f"{phase_dest}/logs")
                            for p in sorted(ckpt_dir.glob(pattern))]
@@ -686,6 +760,12 @@ def compare_execution_manifests(previous: Dict[str, object],
         if prev_val != curr_val:
             diffs.append(key)
     return diffs
+
+
+# import 時に既定プロファイルを適用し、モジュール定数の正本を
+# RUN_PROFILES["run5"] に一本化する（セルフレビュー #4: 二重定義 drift 封じ。
+# main() は RUN_PROFILE env で上書きする）。
+apply_run_profile("run5")
 
 
 def probe_gpu_name() -> Optional[str]:
@@ -902,6 +982,12 @@ def _run_capture(argv: Sequence[str], *, timeout: Optional[float] = None,
     return result.stdout
 
 
+def _remote_path(dest: str = "") -> str:
+    """成果物フォルダ起点の相対リモートパス（REMOTE_PREFIX と dest の合成 —
+    push/pull の両方がこの 1 箇所を通る。セルフレビュー #5）。"""
+    return "/".join(part for part in (REMOTE_PREFIX, dest) if part)
+
+
 def _rclone_argv(rclone_conf: Path, drive_folder_id: str, path: Path,
                  dest: str = "") -> List[str]:
     """`dest` は成果物フォルダ内のサブディレクトリ（例 "phase_a/checkpoints"）。
@@ -911,7 +997,7 @@ def _rclone_argv(rclone_conf: Path, drive_folder_id: str, path: Path,
     copy 時に自動作成する）。"""
     return [
         "rclone", "--config", str(rclone_conf), "copy", str(path),
-        f"run5drive:{dest}", "--drive-root-folder-id", drive_folder_id,
+        f"run5drive:{_remote_path(dest)}", "--drive-root-folder-id", drive_folder_id,
     ]
 
 
@@ -1027,6 +1113,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"{i:2d}. {stage}")
         return 0
 
+    profile_name = os.environ.get("RUN_PROFILE", "run5")
+    apply_run_profile(profile_name)
+    print(f"| run5_bootstrap: RUN_PROFILE={profile_name} "
+          f"(run_id={RUN_ID}, dataset_pins={DATASET_PINS_PATH.name}, "
+          f"remote_prefix={REMOTE_PREFIX!r})", flush=True)
+
 
     start = time.monotonic()
     work: Path = args.work_dir
@@ -1096,18 +1188,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # 正常系（初回）。差分は info として記帳し fail-closed にはしない —
         # 意図した差分（pin 更新・コミット前進）が普通に存在する。
         prev_manifest_path = work / "previous_run_execution_manifest.json"
-        try:
-            subprocess.run(
-                ["rclone", "--config", str(rclone_conf), "copyto",
-                 f"run5drive:{EXEC_MANIFEST_NAME}", str(prev_manifest_path),
-                 "--drive-root-folder-id", drive_folder_id],
-                timeout=300,
-            )
-        except (subprocess.SubprocessError, OSError) as exc:
-            # 情報目的の取得は run を落とさない（セルフレビュー #2:
-            # TimeoutExpired だけが素通りして preflight 全体を殺していた）。
-            print(f"| run5_bootstrap: previous manifest fetch failed "
-                  f"(non-fatal): {exc}", flush=True)
+        # 自プロファイルの prefix 内 → 無ければフォルダ直下（run 5 の置き場所）
+        # の順で探す（セルフレビュー: run 6 初回の比較相手は run 5 の manifest =
+        # DESIGN_S5 §3 の正常系。prefix のみだと初回走行で比較が黙って空振る）。
+        for candidate in dict.fromkeys(
+                (_remote_path(EXEC_MANIFEST_NAME), EXEC_MANIFEST_NAME)):
+            try:
+                subprocess.run(
+                    ["rclone", "--config", str(rclone_conf), "copyto",
+                     f"run5drive:{candidate}", str(prev_manifest_path),
+                     "--drive-root-folder-id", drive_folder_id],
+                    timeout=300,
+                )
+            except (subprocess.SubprocessError, OSError) as exc:
+                # 情報目的の取得は run を落とさない（TimeoutExpired だけが
+                # 素通りして preflight 全体を殺していた既知経路の再発防止）。
+                print(f"| run5_bootstrap: previous manifest fetch failed "
+                      f"(non-fatal): {exc}", flush=True)
+            if prev_manifest_path.exists():
+                break
         if prev_manifest_path.exists():
             try:
                 prev_manifest = json.loads(
@@ -1128,7 +1227,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             # --- stage 2: gates（runbook §2.2） -----------------------------
             _run([sys.executable, "-m", "pip", "install", "--no-cache-dir",
-                  *NUMERIC_STACK_PIN], label="gates/pin-install")
+                  *NUMERIC_STACK_PIN, *ANALYSIS_STACK_PIN],
+                 label="gates/pin-install")
             # 実行時解決された全依存の実測 freeze を証跡化（外部レビュー P3:
             # lock + runtime gate の二重保証の材料。次 run の lock 生成元）。
             _run([sys.executable, "-m", "pip", "freeze"], label="gates/pip-freeze")
@@ -1356,11 +1456,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             dsdict = dsdict_candidates[0]
 
             user_dataset = out / "user_dataset"
-            _run([sys.executable, FOUNDRY_DIR / "s1_dataprep" / "convert_user.py",
-                  "--normalized-dir", user_norm_dir,
-                  "--ledger", USER_DONOR_LEDGER_PATH,
-                  "--dsdict", dsdict,
-                  "--out-dir", user_dataset], label="datasets/convert-user")
+            convert_user_cmd = [
+                sys.executable, FOUNDRY_DIR / "s1_dataprep" / "convert_user.py",
+                "--normalized-dir", user_norm_dir,
+                "--ledger", USER_DONOR_LEDGER_PATH,
+                "--dsdict", dsdict,
+                "--out-dir", user_dataset,
+            ]
+            # run 6（DESIGN_S5 §1.1/§2-2）: 正規化目標は dataset pins が単一
+            # ソース（pin 生成時と同じ値で実行されることを構造的に保証）。
+            norm_target = dataset_pins["user"].get("normalization_target_lufs")
+            if norm_target is not None:
+                convert_user_cmd += ["--normalize-loudness-lufs", str(norm_target)]
+            _run(convert_user_cmd, label="datasets/convert-user")
             user_diffs = verify_dataset_against_pins(
                 user_dataset, dataset_pins["user"], "user"
             )

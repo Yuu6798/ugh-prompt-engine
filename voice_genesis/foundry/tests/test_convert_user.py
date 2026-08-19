@@ -1196,3 +1196,131 @@ def test_t0_t1_rows_unaffected_by_dsdict_choice(tmp_path: Path) -> None:
     assert csv_a == csv_b
     for card_id in cards:
         assert _sha256(out_a / "wavs" / f"{card_id}.wav") == _sha256(out_b / "wavs" / f"{card_id}.wav")
+
+
+# ---------------------------------------------------------------------------
+# 8. run 6: カード単位ラウドネス正規化（DESIGN_S5_run6.md §1.1）
+# ---------------------------------------------------------------------------
+
+
+def _write_pcm16_wav(path: Path, samples: "np.ndarray", sr: int = 44100) -> None:
+    sf.write(path, samples, sr, subtype="PCM_16")
+
+
+def _integrated_lufs(path: Path) -> float:
+    import pyloudnorm
+
+    data, sr = sf.read(path)
+    return float(pyloudnorm.Meter(sr).integrated_loudness(data))
+
+
+def test_normalize_wav_loudness_in_place_hits_target_and_keeps_dynamics(
+    tmp_path: Path,
+) -> None:
+    """線形ゲインのみで目標 LUFS に着地し、カード内の相対ダイナミクス
+    （前半/後半の RMS 比）が保存されること（DESIGN_S5 §1.1: T1 の 3 段強弱の
+    ような意図された時間変動を消さない）。"""
+    sr = 44100
+    t = np.arange(sr * 2) / sr
+    quiet = 0.02 * np.sin(2 * np.pi * 220 * t[: sr])
+    loud = 0.08 * np.sin(2 * np.pi * 220 * t[sr:])
+    wav = tmp_path / "card.wav"
+    _write_pcm16_wav(wav, np.concatenate([quiet, loud]), sr)
+    pre_ratio_data, _ = sf.read(wav)
+    pre_ratio = float(np.sqrt(np.mean(pre_ratio_data[sr:] ** 2))
+                      / np.sqrt(np.mean(pre_ratio_data[:sr] ** 2)))
+
+    entry = cu.normalize_wav_loudness_in_place(wav, -23.0)
+
+    assert abs(_integrated_lufs(wav) - (-23.0)) < 0.1
+    assert abs(entry["post_lufs"] - (-23.0)) < 0.1
+    post_data, _ = sf.read(wav)
+    post_ratio = float(np.sqrt(np.mean(post_data[sr:] ** 2))
+                       / np.sqrt(np.mean(post_data[:sr] ** 2)))
+    assert abs(post_ratio - pre_ratio) < 0.01  # 相対ダイナミクス保存（線形ゲイン）
+    assert entry["peak_after_gain"] <= 32767.0 / 32768.0
+
+
+def test_normalize_wav_loudness_peak_guard_fails_closed(tmp_path: Path) -> None:
+    """ゲイン適用後に PCM_16 上限を超えるなら、クリップさせずに停止する。"""
+    sr = 44100
+    t = np.arange(sr * 2) / sr
+    wav = tmp_path / "hot.wav"
+    _write_pcm16_wav(wav, 0.9 * np.sin(2 * np.pi * 330 * t), sr)
+    before = _sha256(wav)
+    with pytest.raises(cu.LoudnessNormalizationError, match="peak"):
+        cu.normalize_wav_loudness_in_place(wav, -3.0)  # 大幅な正ゲイン要求
+    assert _sha256(wav) == before  # fail 時に元ファイルへ書き込まない
+
+
+def test_normalize_wav_loudness_non_finite_measurement_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """無音（統合ラウドネスが -inf）はゲインを定義できない — fail-closed。"""
+    sr = 44100
+    wav = tmp_path / "silence.wav"
+    _write_pcm16_wav(wav, np.zeros(sr * 2), sr)
+    with pytest.raises(cu.LoudnessNormalizationError, match="finite"):
+        cu.normalize_wav_loudness_in_place(wav, -23.0)
+
+
+@_ffmpeg_required
+def test_convert_with_normalization_reports_and_hits_target(tmp_path: Path) -> None:
+    """convert(normalize_loudness_lufs=…) の E2E: 全採用カードが目標 LUFS に
+    着地し、会計 loudness_normalization.json（pin 対象）が out_dir に載り、
+    summary にも同内容が返ること。2 回実行のバイト決定論も固定する。"""
+    cards = {
+        "UC-002": _t0_umi_samples(),
+        "UC-004": _t1_card_samples(),
+        "UC-012": _t2_uc012_samples(),
+    }
+    ledger_path, normalized_dir = _write_ledger_and_normalized(tmp_path, cards)
+    dsdict_path = _write_test_dsdict(tmp_path)
+
+    out1 = tmp_path / "out_norm1"
+    out2 = tmp_path / "out_norm2"
+    summary = cu.convert(normalized_dir, ledger_path, out1, dsdict_path,
+                         normalize_loudness_lufs=-23.0)
+    cu.convert(normalized_dir, ledger_path, out2, dsdict_path,
+               normalize_loudness_lufs=-23.0)
+
+    report_path = out1 / cu.LOUDNESS_REPORT_NAME
+    assert report_path.exists()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["schema"] == cu.LOUDNESS_REPORT_SCHEMA
+    assert report["target_lufs"] == -23.0
+    assert set(report["entries"]) == {f"{c}.wav" for c in summary["included_cards"]}
+    assert summary["loudness_normalization"]["entries"] == report["entries"]
+    for card_id in summary["included_cards"]:
+        assert abs(_integrated_lufs(out1 / "wavs" / f"{card_id}.wav") - (-23.0)) < 0.1
+        assert (_sha256(out1 / "wavs" / f"{card_id}.wav")
+                == _sha256(out2 / "wavs" / f"{card_id}.wav"))
+    assert (report_path.read_bytes()
+            == (out2 / cu.LOUDNESS_REPORT_NAME).read_bytes())
+
+
+@_ffmpeg_required
+def test_convert_without_normalization_is_legacy_and_reportless(
+    tmp_path: Path,
+) -> None:
+    """既定（None）は run 4/5 の従来動作: 会計ファイルを作らず、summary の
+    loudness_normalization も None（バイト再現性の回帰は既存の determinism
+    テストが担う）。"""
+    cards = {"UC-002": _t0_umi_samples()}
+    ledger_path, normalized_dir = _write_ledger_and_normalized(tmp_path, cards)
+    dsdict_path = _write_test_dsdict(tmp_path)
+    out_dir = tmp_path / "out_legacy"
+    summary = cu.convert(normalized_dir, ledger_path, out_dir, dsdict_path)
+    assert not (out_dir / cu.LOUDNESS_REPORT_NAME).exists()
+    assert summary["loudness_normalization"] is None
+
+
+def test_normalize_wav_loudness_too_short_fails_closed(tmp_path: Path) -> None:
+    """pyloudnorm のゲーティングブロック長（0.4s）未満は素の ValueError を
+    投げる — fail-closed の分類語彙（LoudnessNormalizationError）に収容
+    されること（セルフレビュー #3 の回帰）。"""
+    sr = 44100
+    wav = tmp_path / "short.wav"
+    _write_pcm16_wav(wav, 0.1 * np.sin(2 * np.pi * 440 * np.arange(sr // 10) / sr), sr)
+    with pytest.raises(cu.LoudnessNormalizationError, match="unmeasurable"):
+        cu.normalize_wav_loudness_in_place(wav, -23.0)

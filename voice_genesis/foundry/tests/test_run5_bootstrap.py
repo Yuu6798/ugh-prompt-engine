@@ -988,8 +988,12 @@ def test_lock_file_render_pins_match_runtime_gate() -> None:
         if line.strip() and not line.strip().startswith("#")
     }
     assert set(r5b.NUMERIC_STACK_PIN) <= pinned
+    # f0 解析系 pin（numba/librosa — 2026-08-19 の SIGSEGV 実測で確定）も
+    # lock と同期していること
+    assert set(r5b.ANALYSIS_STACK_PIN) <= pinned
     # 逆方向の drift（lock 側の数値スタック 4 パッケージだけ別版で残る）も検出
-    gate_pkgs = {p.split("==")[0]: p for p in r5b.NUMERIC_STACK_PIN}
+    gate_pkgs = {p.split("==")[0]: p
+                 for p in (*r5b.NUMERIC_STACK_PIN, *r5b.ANALYSIS_STACK_PIN)}
     for line in pinned:
         pkg = line.split("==")[0]
         if pkg in gate_pkgs:
@@ -1002,3 +1006,89 @@ def test_phase_remote_dirs_cover_both_phases_and_are_distinct() -> None:
     dirs = r5b.PHASE_REMOTE_DIRS
     assert set(dirs) == {r5b.EXP_NAME_PHASE_A, r5b.EXP_NAME_PHASE_B}
     assert dirs[r5b.EXP_NAME_PHASE_A] != dirs[r5b.EXP_NAME_PHASE_B]
+
+
+# --- run 6 対応（DESIGN_S5_run6.md §2: プロファイル・prefix・正規化 pin・salvage (c)） ---
+
+
+def test_apply_run_profile_run6_switches_constants_and_run5_restores() -> None:
+    try:
+        profile = r5b.apply_run_profile("run6")
+        assert r5b.RUN_ID == "s5_run6"
+        assert r5b.EXP_NAME_PHASE_A == "s5_run6_acoustic_scratch"
+        assert r5b.EXP_NAME_PHASE_B == "s5_run6_acoustic_v1"
+        assert set(r5b.PHASE_REMOTE_DIRS) == {
+            "s5_run6_acoustic_scratch", "s5_run6_acoustic_v1"}
+        assert r5b.DATASET_PINS_PATH.name == "run6_dataset_pins.json"
+        assert r5b.REMOTE_PREFIX == "run6"
+        assert profile["remote_prefix"] == "run6"
+    finally:
+        r5b.apply_run_profile("run5")
+    # run5 プロファイル = 従来値そのもの（無指定の挙動が run 5 実走と同一）
+    assert r5b.RUN_ID == "s4_run5"
+    assert r5b.EXP_NAME_PHASE_A == "s4_run5_acoustic_scratch"
+    assert r5b.DATASET_PINS_PATH.name == "run4_dataset_pins.json"
+    assert r5b.REMOTE_PREFIX == ""
+
+
+def test_apply_run_profile_rejects_unknown_name() -> None:
+    with pytest.raises(ValueError, match="unknown RUN_PROFILE"):
+        r5b.apply_run_profile("run99")
+
+
+def test_rclone_argv_composes_remote_prefix(tmp_path: Path) -> None:
+    """run 6 では全 push が run6/ prefix 配下（run 5 成果物と混ざらない）。"""
+    try:
+        r5b.apply_run_profile("run6")
+        argv = r5b._rclone_argv(tmp_path / "rc.conf", "FOLDER", tmp_path / "x.ckpt",
+                                "phase_b/checkpoints")
+        assert "run5drive:run6/phase_b/checkpoints" in argv
+        argv_root = r5b._rclone_argv(tmp_path / "rc.conf", "FOLDER", tmp_path / "hb.json")
+        assert "run5drive:run6" in argv_root
+    finally:
+        r5b.apply_run_profile("run5")
+    argv_run5 = r5b._rclone_argv(tmp_path / "rc.conf", "FOLDER", tmp_path / "x.ckpt",
+                                 "phase_a/checkpoints")
+    assert "run5drive:phase_a/checkpoints" in argv_run5
+
+
+def test_verify_dataset_checks_loudness_report_pin(tmp_path: Path) -> None:
+    """run 6 pin に loudness_normalization_json_sha256 がある場合、会計ファイル
+    の欠落・不一致を fail-closed で検出する。"""
+    ds = tmp_path / "ds"
+    (ds / "wavs").mkdir(parents=True)
+    (ds / "transcriptions.csv").write_bytes(b"csv")
+    (ds / "wavs" / "UC-001.wav").write_bytes(b"wav")
+    import hashlib
+
+    def sha(b: bytes) -> str:
+        return hashlib.sha256(b).hexdigest()
+
+    pin = {
+        "transcriptions_csv_sha256": sha(b"csv"),
+        "wav_sha256": {"UC-001.wav": sha(b"wav")},
+        "loudness_normalization_json_sha256": sha(b"report"),
+    }
+    diffs = r5b.verify_dataset_against_pins(ds, pin, "user")
+    assert any("loudness_normalization.json: missing" in d for d in diffs)
+    (ds / "loudness_normalization.json").write_bytes(b"report")
+    assert r5b.verify_dataset_against_pins(ds, pin, "user") == []
+    (ds / "loudness_normalization.json").write_bytes(b"tampered")
+    diffs = r5b.verify_dataset_against_pins(ds, pin, "user")
+    assert any("loudness_normalization.json:" in d and "!= pin" in d for d in diffs)
+
+
+def test_salvage_collects_export_required_maps_and_dictionary(tmp_path: Path) -> None:
+    """salvage 追加 (c): spk_map.json / lang_map.json / dictionary-*.txt が
+    phase config 配下へ収集される（run 5 の export 復旧を再発させない）。"""
+    run5_raw = tmp_path / "run5_raw"
+    run5_raw.mkdir()
+    ckpt_dir = tmp_path / "DiffSinger" / "checkpoints" / r5b.EXP_NAME_PHASE_B
+    ckpt_dir.mkdir(parents=True)
+    for name in ("spk_map.json", "lang_map.json", "dictionary-ja.txt"):
+        (ckpt_dir / name).write_bytes(b"x")
+    artifacts = r5b.collect_salvage_artifacts(run5_raw, tmp_path / "DiffSinger")
+    dests = {p.name: dest for p, dest in artifacts}
+    assert dests["spk_map.json"] == "phase_b/config"
+    assert dests["lang_map.json"] == "phase_b/config"
+    assert dests["dictionary-ja.txt"] == "phase_b/config"
