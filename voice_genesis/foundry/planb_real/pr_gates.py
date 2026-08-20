@@ -271,6 +271,22 @@ EAR_QUESTIONS = (
 )
 
 
+#: G-ear の合否解釈。
+#:
+#: **開示**: この解釈規則は、回答が出揃った後に書いた（当初の `gate_ear` は
+#: 「4 設問に回答があるか」しか見ておらず、内容を読んでいなかった）。事前登録の
+#: 規律上これは瑕疵だが、「耳が no と答えているのに PASS と表示される」ほうが
+#: 成果物として有害なため、規則を明文化して開示する方を選んだ。
+#: 規則自体は instruction §10 の設問文をそのまま読んだもので、恣意はない:
+#: Q1（同一 Identity 系統か）と Q3（TRF は改善したか）が no なら不合格、
+#: Q4（PJS の声へ寄っただけか）が yes なら不合格。
+EAR_PASS_RULE = {
+    "Q1": {"fail_if": ("no",)},
+    "Q3": {"fail_if": ("no",)},
+    "Q4": {"fail_if": ("yes",)},
+}
+
+
 def gate_ear(answers: Optional[Dict[str, Any]]) -> GateResult:
     """G-ear（§10）。人の耳の答えが無い限り PASS にしない（機械で上書きしない = §0-10）。"""
     if not answers:
@@ -283,8 +299,21 @@ def gate_ear(answers: Optional[Dict[str, Any]]) -> GateResult:
     if missing:
         return GateResult("G-ear", BLOCKED, f"未回答の設問 {missing}",
                           "ear_answers.json の残り設問へ回答すること", {"answers": answers})
-    return GateResult("G-ear", PASS, "聴感 4 設問に回答あり（内容の解釈は record に記載）",
-                      "", {"answers": answers})
+    verdicts = {}
+    problems = []
+    for q, rule in EAR_PASS_RULE.items():
+        v = answers.get(q)
+        verdict = v.get("verdict") if isinstance(v, dict) else v
+        verdicts[q] = verdict
+        if isinstance(verdict, str) and verdict.lower() in rule["fail_if"]:
+            problems.append(f"{q}={verdict}")
+    ev = {"verdicts": verdicts, "answers": answers, "rule": EAR_PASS_RULE}
+    if problems:
+        return GateResult("G-ear", FAIL,
+                          f"聴感が不合格を返した: {', '.join(problems)}",
+                          "§14 の失敗解釈表に従って原因を分類し、identity/Performance の"
+                          "どちらを再設計するか決めること", ev)
+    return GateResult("G-ear", PASS, "聴感 4 設問すべてが合格側", "", ev)
 
 
 def success_level(ledger_gates: Sequence[GateResult], pairs: Sequence[Any]) -> str:

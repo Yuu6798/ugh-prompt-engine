@@ -1168,15 +1168,61 @@
     },
     {
       "gate": "G-ear",
-      "status": "BLOCKED",
-      "detail": "聴感判定が未実施（機械評価では代替できない）",
-      "next_action": "results/<run>/ の R0–R4 wav を試聴し、ear_answers.json へ Q1: R0–R4 は同一 Identity 系統（Ritsu 系）に聞こえるか？ / Q2: Performance の違いは聞き分けられるか？ / Q3: terminal /ri/ failure は改善したか？ / Q4: PJS 本人の声へ近づいただけではないか？",
+      "status": "FAIL",
+      "detail": "聴感が不合格を返した: Q1=no, Q3=no",
+      "next_action": "§14 の失敗解釈表に従って原因を分類し、identity/Performance のどちらを再設計するか決めること",
       "evidence": {
-        "questions": {
-          "Q1": "R0–R4 は同一 Identity 系統（Ritsu 系）に聞こえるか？",
-          "Q2": "Performance の違いは聞き分けられるか？",
-          "Q3": "terminal /ri/ failure は改善したか？",
-          "Q4": "PJS 本人の声へ近づいただけではないか？"
+        "verdicts": {
+          "Q1": "no",
+          "Q3": "no",
+          "Q4": "no"
+        },
+        "answers": {
+          "listener": "User",
+          "listened_at": "2026-08-20",
+          "blinded": true,
+          "blind_salt": "run5-2",
+          "machine_result_seen_before_listening": true,
+          "identity_ap_scale_at_judgement": 0.25,
+          "material": "results/ear_set/terminal_ri__2018-215__pjs003-65/",
+          "session_log": "results/ear_session_log.json",
+          "Q1": {
+            "question": "R0–R4 は同一 Identity 系統（Ritsu 系）に聞こえるか？",
+            "verdict": "no",
+            "note": "R4 は『リツとして通らない』（項目5）。対策前の R0 も原音比で『微妙』（項目2）。ap 0.25 倍でノイズは明確に減ったが、往復単体でも『微妙よりの通らない』（項目7）"
+          },
+          "Q2": {
+            "question": "Performance の違いは聞き分けられるか？",
+            "verdict": "yes",
+            "note": "最後の『り』で音程の揺れ方に違いがある（項目8）。ただし自然なのは R0 側で、移植した結果が良くなってはいない。なお probe ノート 1 個にしか当てていないため『歌い方が移った』とは聞こえない（項目5）"
+          },
+          "Q3": {
+            "question": "terminal /ri/ failure は改善したか？",
+            "verdict": "no",
+            "note": "盲検で 2 回とも R0 を選択（項目1・項目9）。2 回目はノイズ交絡を除去し A/B 割り当ても反転させたが結論は同じ。R4 の欠陥は『音量の上がり方が不自然』『音の跳ね方が極端』。事前登録の主軸は改善を示すが耳は逆で、副軸 energy_tail の回帰（−1.13 → +6.96 dB）と G7 の FAIL 判定は耳と一致した"
+          },
+          "Q4": {
+            "question": "PJS 本人の声へ近づいただけではないか？",
+            "verdict": "no",
+            "note": "声は寄っていない（項目5）。G4 donor isolation の機械判定と一致"
+          }
+        },
+        "rule": {
+          "Q1": {
+            "fail_if": [
+              "no"
+            ]
+          },
+          "Q3": {
+            "fail_if": [
+              "no"
+            ]
+          },
+          "Q4": {
+            "fail_if": [
+              "yes"
+            ]
+          }
         }
       }
     }

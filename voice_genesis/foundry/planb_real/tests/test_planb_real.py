@@ -419,8 +419,14 @@ def test_trf_gate_uses_registered_axis_and_keeps_exploratory_separate(pair_resul
 def test_ear_gate_blocked_without_answers(pair_result):
     assert pr_gates.gate_ear(None).status == prs.BLOCKED
     assert pr_gates.gate_ear({"Q1": "yes"}).status == prs.BLOCKED
-    full = {k: "recorded" for k, _q in pr_gates.EAR_QUESTIONS}
-    assert pr_gates.gate_ear(full).status == prs.PASS
+    ok = {k: {"verdict": "yes"} for k, _q in pr_gates.EAR_QUESTIONS}
+    ok["Q4"] = {"verdict": "no"}          # Q4 は「PJS へ寄っただけか」なので no が合格側
+    assert pr_gates.gate_ear(ok).status == prs.PASS
+    # 回答があっても内容が不合格なら FAIL（「回答あり = 合格」にしない）
+    ng = dict(ok)
+    ng["Q3"] = {"verdict": "no"}
+    res = pr_gates.gate_ear(ng)
+    assert res.status == prs.FAIL and "Q3=no" in res.detail
 
 
 def test_success_level_never_claims_more_than_material(pair_result):
