@@ -1,0 +1,723 @@
+{
+  "config": {
+    "identity_genome": "voice_A",
+    "performance_genome": "voice_B",
+    "identity_tempo_bpm": 72.0,
+    "performance_tempo_bpm": 66.0,
+    "fault": true,
+    "fault_window_frac": 0.35,
+    "fault_depth": 0.85,
+    "primary_probe_kana": "り",
+    "holdout_probe_kana": [
+      "す"
+    ],
+    "medial_control": true,
+    "write_wav": true
+  },
+  "environment": {
+    "python": "3.11.15",
+    "numpy": "2.4.6",
+    "pyworld": "0.3.5",
+    "platform": "Linux-6.18.5-fc-v20-x86_64-with-glibc2.39"
+  },
+  "assets": {
+    "mode": "substitute(procedural R0.9 singer)",
+    "identity_source": "voice_A+nasal_drift",
+    "identity_sha256": "a4beb03fc8b2b5b8c57c30d3059c033630a62908705e61a7dfdba493b683457c",
+    "performance_source": "voice_B",
+    "nasal_envelope_source": "measured:の(onset_n_head)",
+    "n_units": 25,
+    "fault_injected": true
+  },
+  "probe_coverage": {
+    "terminal_ri": [
+      {
+        "index": 24,
+        "label": "り"
+      }
+    ],
+    "terminal_su": [
+      {
+        "index": 20,
+        "label": "す"
+      }
+    ],
+    "terminal_i": [],
+    "terminal_N": [],
+    "medial_ri": []
+  },
+  "probes": {
+    "primary": "り@24",
+    "holdout": [
+      "す@20"
+    ],
+    "medial_control": [
+      "ぎ@23"
+    ]
+  },
+  "trf_gate_frozen": {
+    "primary_probe": "り@24",
+    "primary_axis": "nasal_gain_db",
+    "r0_value_db": 2.718,
+    "failure_present": true,
+    "failure_presence_threshold_db": 1.0,
+    "required_improvement_db": 1.0,
+    "target_max_db": 1.718,
+    "regression_tol_db": 1.0,
+    "holdout_probes": [
+      "す@20"
+    ],
+    "holdout_r0_db": {
+      "す@20": -0.5496
+    },
+    "rule": "primary: R4 の nasal_gain_db <= target_max_db。ただし failure_present=False（R0 < 1.0dB）のときは not_evaluable とし成功に数えない。regression: drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと。holdout: 各 holdout probe の nasal_gain_db が R0 比 +regression_tol_db を超えないこと。"
+  },
+  "rungs": {
+    "R0": {
+      "rung": "R0",
+      "toggles": "none",
+      "wav_sha256": "7ade9901101f488ae93ca3c7ad7de6ffebf659e3fe9518021f1683cd609af016",
+      "duration_s": 24.6,
+      "trf": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.5496,
+          "drift_db": 5.9731,
+          "f0_sag_cents": 1.72,
+          "energy_tail_db": -1.0537,
+          "nasal_gain_shape_db": 7.4326,
+          "drift_shape_db": 8.0199
+        },
+        "ぎ@23": {
+          "unit_index": 23,
+          "label": "ぎ",
+          "nasal_gain_db": 0.1169,
+          "drift_db": 0.577,
+          "f0_sag_cents": 0.124,
+          "energy_tail_db": 0.3286,
+          "nasal_gain_shape_db": 0.1106,
+          "drift_shape_db": 0.6432
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 2.718,
+          "drift_db": 3.5162,
+          "f0_sag_cents": 1.216,
+          "energy_tail_db": -0.5041,
+          "nasal_gain_shape_db": 4.4455,
+          "drift_shape_db": 4.9558
+        }
+      },
+      "identity_core_lsd_db": 2.9227,
+      "donor_texture_lsd_db": 7.0818,
+      "f0_dev_rmse_cents": 60.571,
+      "dur_mae_ms": 143.461,
+      "energy_corr": 0.8493,
+      "release_taper_rmse_db": 8.6515
+    },
+    "R1": {
+      "rung": "R1",
+      "toggles": "f0",
+      "wav_sha256": "46d60085e2608b36d4e07a9b2d5b6d2601685a03d6d791e4dfda97abda6c379d",
+      "duration_s": 24.6,
+      "trf": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.6403,
+          "drift_db": 5.9051,
+          "f0_sag_cents": 0.651,
+          "energy_tail_db": -1.048,
+          "nasal_gain_shape_db": 7.2018,
+          "drift_shape_db": 7.7014
+        },
+        "ぎ@23": {
+          "unit_index": 23,
+          "label": "ぎ",
+          "nasal_gain_db": 0.3127,
+          "drift_db": 1.2196,
+          "f0_sag_cents": -19.136,
+          "energy_tail_db": 0.3011,
+          "nasal_gain_shape_db": 0.2077,
+          "drift_shape_db": 1.2641
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 2.72,
+          "drift_db": 3.5231,
+          "f0_sag_cents": 3.102,
+          "energy_tail_db": -0.4994,
+          "nasal_gain_shape_db": 4.446,
+          "drift_shape_db": 4.9551
+        }
+      },
+      "identity_core_lsd_db": 2.9379,
+      "donor_texture_lsd_db": 7.0147,
+      "f0_dev_rmse_cents": 39.537,
+      "dur_mae_ms": 143.461,
+      "energy_corr": 0.8457,
+      "release_taper_rmse_db": 8.7267
+    },
+    "R2": {
+      "rung": "R2",
+      "toggles": "duration",
+      "wav_sha256": "29c2f24af90ed8e70c9c9799aef2f36632dacaaa13bea513141e9a95cb306535",
+      "duration_s": 28.185,
+      "trf": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.06,
+          "drift_db": 5.3885,
+          "f0_sag_cents": 1.037,
+          "energy_tail_db": -0.8842,
+          "nasal_gain_shape_db": 6.9209,
+          "drift_shape_db": 7.2329
+        },
+        "ぎ@23": {
+          "unit_index": 23,
+          "label": "ぎ",
+          "nasal_gain_db": 0.0702,
+          "drift_db": 0.6283,
+          "f0_sag_cents": -1.801,
+          "energy_tail_db": 0.2425,
+          "nasal_gain_shape_db": 0.1913,
+          "drift_shape_db": 0.6452
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 2.4955,
+          "drift_db": 3.1369,
+          "f0_sag_cents": 0.31,
+          "energy_tail_db": -0.468,
+          "nasal_gain_shape_db": 4.037,
+          "drift_shape_db": 4.4724
+        }
+      },
+      "identity_core_lsd_db": 2.8875,
+      "donor_texture_lsd_db": 7.1023,
+      "f0_dev_rmse_cents": 72.81,
+      "dur_mae_ms": 0.967,
+      "energy_corr": 0.8307,
+      "release_taper_rmse_db": 8.5809
+    },
+    "R3": {
+      "rung": "R3",
+      "toggles": "f0+duration",
+      "wav_sha256": "7c2cac3e977d788617da91b0319155ae2fe1aaa8b1f661b42aa1278a01bfd347",
+      "duration_s": 28.185,
+      "trf": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.305,
+          "drift_db": 5.4822,
+          "f0_sag_cents": 4.048,
+          "energy_tail_db": -0.9032,
+          "nasal_gain_shape_db": 6.7564,
+          "drift_shape_db": 7.1351
+        },
+        "ぎ@23": {
+          "unit_index": 23,
+          "label": "ぎ",
+          "nasal_gain_db": 0.3477,
+          "drift_db": 1.3609,
+          "f0_sag_cents": -15.109,
+          "energy_tail_db": 0.3466,
+          "nasal_gain_shape_db": 0.2517,
+          "drift_shape_db": 1.3913
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 2.5582,
+          "drift_db": 3.1911,
+          "f0_sag_cents": 3.575,
+          "energy_tail_db": -0.4633,
+          "nasal_gain_shape_db": 4.1039,
+          "drift_shape_db": 4.5282
+        }
+      },
+      "identity_core_lsd_db": 2.8749,
+      "donor_texture_lsd_db": 7.051,
+      "f0_dev_rmse_cents": 31.671,
+      "dur_mae_ms": 0.967,
+      "energy_corr": 0.8478,
+      "release_taper_rmse_db": 8.5878
+    },
+    "R4": {
+      "rung": "R4",
+      "toggles": "f0+duration+energy+release",
+      "wav_sha256": "648e814d39f0f2dc58b00e3bd26a5f47e7fe316b5adeb330369a6b564a126fa1",
+      "duration_s": 28.185,
+      "trf": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.2438,
+          "drift_db": 2.0884,
+          "f0_sag_cents": 2.754,
+          "energy_tail_db": -3.3465,
+          "nasal_gain_shape_db": 2.4433,
+          "drift_shape_db": 12.0667
+        },
+        "ぎ@23": {
+          "unit_index": 23,
+          "label": "ぎ",
+          "nasal_gain_db": 0.3627,
+          "drift_db": 1.3463,
+          "f0_sag_cents": -15.149,
+          "energy_tail_db": 0.2047,
+          "nasal_gain_shape_db": 0.2319,
+          "drift_shape_db": 1.3794
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.3733,
+          "drift_db": 2.4169,
+          "f0_sag_cents": 2.648,
+          "energy_tail_db": -3.5507,
+          "nasal_gain_shape_db": 0.028,
+          "drift_shape_db": 0.519
+        }
+      },
+      "identity_core_lsd_db": 3.0233,
+      "donor_texture_lsd_db": 6.9947,
+      "f0_dev_rmse_cents": 40.16,
+      "dur_mae_ms": 0.967,
+      "energy_corr": 0.9194,
+      "release_taper_rmse_db": 4.7213
+    }
+  },
+  "supplement_rungs": {
+    "S1": {
+      "rung": "S1",
+      "toggles": "energy",
+      "wav_sha256": "542a712c6268d11a5b41583aeab4a096898ae58aabc30ded9a8212162723b20b",
+      "duration_s": 24.6,
+      "trf": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.0866,
+          "drift_db": 3.7967,
+          "f0_sag_cents": 1.447,
+          "energy_tail_db": -4.929,
+          "nasal_gain_shape_db": 6.5824,
+          "drift_shape_db": 11.4919
+        },
+        "ぎ@23": {
+          "unit_index": 23,
+          "label": "ぎ",
+          "nasal_gain_db": 0.1107,
+          "drift_db": 0.4931,
+          "f0_sag_cents": 0.106,
+          "energy_tail_db": 0.149,
+          "nasal_gain_shape_db": 0.0771,
+          "drift_shape_db": 0.6095
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 1.2445,
+          "drift_db": 1.7548,
+          "f0_sag_cents": 1.327,
+          "energy_tail_db": -4.5795,
+          "nasal_gain_shape_db": 4.4427,
+          "drift_shape_db": 4.9699
+        }
+      },
+      "identity_core_lsd_db": 3.0485,
+      "donor_texture_lsd_db": 7.0361,
+      "f0_dev_rmse_cents": 57.4,
+      "dur_mae_ms": 143.461,
+      "energy_corr": 0.9204,
+      "release_taper_rmse_db": 6.7025
+    },
+    "S2": {
+      "rung": "S2",
+      "toggles": "release",
+      "wav_sha256": "328d125f9d6d74bcaa195c60c15135e4e18830c049ed0bd3944fc957b12e033c",
+      "duration_s": 24.6,
+      "trf": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.5654,
+          "drift_db": 2.3548,
+          "f0_sag_cents": 0.762,
+          "energy_tail_db": -3.1826,
+          "nasal_gain_shape_db": 2.1244,
+          "drift_shape_db": 11.7257
+        },
+        "ぎ@23": {
+          "unit_index": 23,
+          "label": "ぎ",
+          "nasal_gain_db": 0.1169,
+          "drift_db": 0.577,
+          "f0_sag_cents": 0.124,
+          "energy_tail_db": 0.3286,
+          "nasal_gain_shape_db": 0.1106,
+          "drift_shape_db": 0.6432
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.6767,
+          "drift_db": 2.6042,
+          "f0_sag_cents": 0.589,
+          "energy_tail_db": -2.9711,
+          "nasal_gain_shape_db": 0.0107,
+          "drift_shape_db": 0.609
+        }
+      },
+      "identity_core_lsd_db": 2.865,
+      "donor_texture_lsd_db": 7.1838,
+      "f0_dev_rmse_cents": 60.612,
+      "dur_mae_ms": 143.461,
+      "energy_corr": 0.8787,
+      "release_taper_rmse_db": 4.2255
+    },
+    "S3": {
+      "rung": "S3",
+      "toggles": "energy+release",
+      "wav_sha256": "27b9518f0286420c4e1826a41472e3596c5eab1643681755bb6982dfd14e63ec",
+      "duration_s": 24.6,
+      "trf": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -1.088,
+          "drift_db": 2.9256,
+          "f0_sag_cents": 0.642,
+          "energy_tail_db": -3.2871,
+          "nasal_gain_shape_db": 2.093,
+          "drift_shape_db": 11.8517
+        },
+        "ぎ@23": {
+          "unit_index": 23,
+          "label": "ぎ",
+          "nasal_gain_db": 0.1107,
+          "drift_db": 0.4931,
+          "f0_sag_cents": 0.106,
+          "energy_tail_db": 0.149,
+          "nasal_gain_shape_db": 0.0771,
+          "drift_shape_db": 0.6095
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.3992,
+          "drift_db": 2.4906,
+          "f0_sag_cents": 0.72,
+          "energy_tail_db": -3.5617,
+          "nasal_gain_shape_db": 0.044,
+          "drift_shape_db": 0.5676
+        }
+      },
+      "identity_core_lsd_db": 3.0378,
+      "donor_texture_lsd_db": 7.0702,
+      "f0_dev_rmse_cents": 57.404,
+      "dur_mae_ms": 143.461,
+      "energy_corr": 0.9151,
+      "release_taper_rmse_db": 5.0414
+    },
+    "S4": {
+      "rung": "S4",
+      "toggles": "release",
+      "wav_sha256": "784a3ec75333ea953cbee0cdbed80f22b93c4f6b038a15a64530208bf0148db6",
+      "duration_s": 24.6,
+      "trf": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": 1.5025,
+          "drift_db": 2.4054,
+          "f0_sag_cents": 1.66,
+          "energy_tail_db": -4.7654,
+          "nasal_gain_shape_db": 5.6131,
+          "drift_shape_db": 13.2945
+        },
+        "ぎ@23": {
+          "unit_index": 23,
+          "label": "ぎ",
+          "nasal_gain_db": 0.1169,
+          "drift_db": 0.577,
+          "f0_sag_cents": 0.124,
+          "energy_tail_db": 0.3286,
+          "nasal_gain_shape_db": 0.1106,
+          "drift_shape_db": 0.6432
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 0.5617,
+          "drift_db": 1.8866,
+          "f0_sag_cents": 1.256,
+          "energy_tail_db": -4.2871,
+          "nasal_gain_shape_db": 4.3497,
+          "drift_shape_db": 5.1258
+        }
+      },
+      "identity_core_lsd_db": 2.8512,
+      "donor_texture_lsd_db": 7.1544,
+      "f0_dev_rmse_cents": 60.622,
+      "dur_mae_ms": 143.461,
+      "energy_corr": 0.8757,
+      "release_taper_rmse_db": 3.9609
+    }
+  },
+  "P0_reference_trf": [
+    {
+      "unit_index": 20,
+      "label": "す",
+      "nasal_gain_db": -1.3677,
+      "drift_db": 2.8221,
+      "f0_sag_cents": -6.366,
+      "energy_tail_db": -4.0145,
+      "nasal_gain_shape_db": 0.6375,
+      "drift_shape_db": 1.0661
+    },
+    {
+      "unit_index": 23,
+      "label": "ぎ",
+      "nasal_gain_db": 0.2293,
+      "drift_db": 0.809,
+      "f0_sag_cents": -22.325,
+      "energy_tail_db": 0.314,
+      "nasal_gain_shape_db": 0.1953,
+      "drift_shape_db": 0.8367
+    },
+    {
+      "unit_index": 24,
+      "label": "り",
+      "nasal_gain_db": -2.1759,
+      "drift_db": 3.0333,
+      "f0_sag_cents": 1.512,
+      "energy_tail_db": -4.0854,
+      "nasal_gain_shape_db": -0.0681,
+      "drift_shape_db": 0.294
+    }
+  ],
+  "gates": [
+    {
+      "gate": "G2",
+      "criterion": "criterion-6",
+      "status": "pass",
+      "detail": "PerformanceTrack の全 ndarray フィールドが 1 次元（spectral payload 不在）",
+      "evidence": {
+        "ndim_by_field": {
+          "f0_dev_cents": 1,
+          "f0_dev_unit_index": 1,
+          "f0_dev_unit_pos": 1,
+          "unit_durations_s": 1,
+          "energy_db": 1,
+          "energy_unit_index": 1,
+          "energy_unit_pos": 1,
+          "release.taper_db": 1
+        }
+      }
+    },
+    {
+      "gate": "G3",
+      "criterion": "criterion-6",
+      "status": "pass",
+      "detail": "合成器は Performance の宣言済み 1 次元フィールドのみを読んだ",
+      "evidence": {
+        "accessed": [
+          "energy_db",
+          "energy_unit_index",
+          "energy_unit_pos",
+          "f0_dev_cents",
+          "f0_dev_unit_index",
+          "f0_dev_unit_pos",
+          "n_units",
+          "release",
+          "release.hold_core",
+          "release.taper_db",
+          "release.window_frac",
+          "unit_durations_s"
+        ]
+      }
+    },
+    {
+      "gate": "G1",
+      "criterion": "criterion-5",
+      "status": "pass",
+      "detail": "同一入力 + 同一トグルで wav の sha256 が一致",
+      "evidence": {
+        "in_process": {
+          "first": [
+            "7ade9901101f488ae93ca3c7ad7de6ffebf659e3fe9518021f1683cd609af016",
+            "46d60085e2608b36d4e07a9b2d5b6d2601685a03d6d791e4dfda97abda6c379d",
+            "29c2f24af90ed8e70c9c9799aef2f36632dacaaa13bea513141e9a95cb306535",
+            "7c2cac3e977d788617da91b0319155ae2fe1aaa8b1f661b42aa1278a01bfd347",
+            "648e814d39f0f2dc58b00e3bd26a5f47e7fe316b5adeb330369a6b564a126fa1"
+          ],
+          "second": [
+            "7ade9901101f488ae93ca3c7ad7de6ffebf659e3fe9518021f1683cd609af016",
+            "46d60085e2608b36d4e07a9b2d5b6d2601685a03d6d791e4dfda97abda6c379d",
+            "29c2f24af90ed8e70c9c9799aef2f36632dacaaa13bea513141e9a95cb306535",
+            "7c2cac3e977d788617da91b0319155ae2fe1aaa8b1f661b42aa1278a01bfd347",
+            "648e814d39f0f2dc58b00e3bd26a5f47e7fe316b5adeb330369a6b564a126fa1"
+          ],
+          "identical": true
+        },
+        "cross_process": {
+          "sha": [
+            "7ade9901101f488ae93ca3c7ad7de6ffebf659e3fe9518021f1683cd609af016",
+            "46d60085e2608b36d4e07a9b2d5b6d2601685a03d6d791e4dfda97abda6c379d",
+            "29c2f24af90ed8e70c9c9799aef2f36632dacaaa13bea513141e9a95cb306535",
+            "7c2cac3e977d788617da91b0319155ae2fe1aaa8b1f661b42aa1278a01bfd347",
+            "648e814d39f0f2dc58b00e3bd26a5f47e7fe316b5adeb330369a6b564a126fa1"
+          ],
+          "identical": true
+        }
+      }
+    },
+    {
+      "gate": "G4",
+      "criterion": "criterion-6",
+      "status": "pass",
+      "detail": "donor テクスチャ距離 R0=7.082dB -> R4=6.995dB (Δ=-0.087dB, tol=0.5)",
+      "evidence": {
+        "r0_db": 7.0818,
+        "r4_db": 6.9947,
+        "delta_db": -0.0871,
+        "tol_db": 0.5
+      }
+    },
+    {
+      "gate": "G5",
+      "criterion": "criterion-4",
+      "status": "pass",
+      "detail": "各段が対応する performance 軸を期待方向へ動かしたか",
+      "evidence": {
+        "R1": {
+          "axis": "f0_dev_rmse_cents",
+          "r0": 60.5711,
+          "value": 39.5366,
+          "expected": "lower",
+          "moved": true
+        },
+        "R2": {
+          "axis": "dur_mae_ms",
+          "r0": 143.4612,
+          "value": 0.9673,
+          "expected": "lower",
+          "moved": true
+        },
+        "R3": {
+          "axis": "f0_dev_rmse_cents",
+          "r0": 60.5711,
+          "value": 31.6705,
+          "expected": "lower",
+          "moved": true
+        },
+        "R4": {
+          "axis": "energy_corr",
+          "r0": 0.8493,
+          "value": 0.9194,
+          "expected": "higher",
+          "moved": true
+        }
+      }
+    },
+    {
+      "gate": "G6",
+      "criterion": "criterion-1(machine-proxy)",
+      "status": "pass",
+      "detail": "identity 寄り margin の最小値 3.971dB (要求 >= 1.0dB)。聴感判定そのものは耳律速のため別建て",
+      "evidence": {
+        "by_rung": {
+          "R0": {
+            "identity_lsd_db": 2.9227,
+            "donor_lsd_db": 7.0818,
+            "margin_db": 4.1591
+          },
+          "R1": {
+            "identity_lsd_db": 2.9379,
+            "donor_lsd_db": 7.0147,
+            "margin_db": 4.0769
+          },
+          "R2": {
+            "identity_lsd_db": 2.8875,
+            "donor_lsd_db": 7.1023,
+            "margin_db": 4.2148
+          },
+          "R3": {
+            "identity_lsd_db": 2.8749,
+            "donor_lsd_db": 7.051,
+            "margin_db": 4.176
+          },
+          "R4": {
+            "identity_lsd_db": 3.0233,
+            "donor_lsd_db": 6.9947,
+            "margin_db": 3.9714
+          }
+        },
+        "min_margin_db": 1.0
+      }
+    },
+    {
+      "gate": "G8",
+      "criterion": "criterion-3",
+      "status": "pass",
+      "detail": "フレーズ中間 probe の drift 増分が 1.0dB 以内",
+      "evidence": {
+        "ぎ@23": {
+          "drift_r0_db": 0.577,
+          "drift_r4_db": 1.3463,
+          "delta_db": 0.7692
+        }
+      }
+    },
+    {
+      "gate": "G7",
+      "criterion": "criterion-2",
+      "status": "pass",
+      "detail": "り@24 の nasal_gain_db: R0=2.718 -> R4=-1.373 dB (必要 <= 1.718, 副軸回帰 ok)",
+      "evidence": {
+        "probe": "り@24",
+        "axis": "nasal_gain_db",
+        "r0_db": 2.718,
+        "r4_db": -1.3733,
+        "delta_db": -4.0913,
+        "target_max_db": 1.718,
+        "drift_db": {
+          "r0": 3.5162,
+          "r4": 2.4169
+        },
+        "energy_tail_db": {
+          "r0": -0.5041,
+          "r4": -3.5507
+        }
+      }
+    },
+    {
+      "gate": "G7-holdout",
+      "criterion": "criterion-3",
+      "status": "pass",
+      "detail": "held-out probe の回帰許容 1.0dB",
+      "evidence": {
+        "す@20": {
+          "r0_db": -0.5496,
+          "r4_db": -0.2438,
+          "delta_db": 0.3058
+        }
+      }
+    },
+    {
+      "gate": "G-ear",
+      "criterion": "criterion-1/2(perceptual)",
+      "status": "blocked",
+      "detail": "聴感判定（リツらしさ / 実 TRF の耳確認）は実資産 + 人間の耳が要る。本セッションでは実行不能のため成功に数えない",
+      "evidence": {}
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "context_phones": 22,
+  "pairs": {
+    "terminal_ri|2018#215|pjs003#65": {
+      "dir": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/diag/terminal_ri__2018-215__pjs003-65",
+      "aperiodicity": {
+        "ANCHOR": {
+          "mean_ap": 0.5397446221012032,
+          "tail_ap": 0.6901865712901144,
+          "tail_minus_body_ap": 0.19311833885678586,
+          "voiced_frac": 0.8846694796061885
+        },
+        "RT_world": {
+          "mean_ap": 0.524654346864735,
+          "tail_ap": 0.6316533930632927,
+          "tail_minus_body_ap": 0.13234639306501228,
+          "voiced_frac": 0.8959212376933896
+        },
+        "RT_flatf0": {
+          "mean_ap": 0.5169272873893965,
+          "tail_ap": 0.6555798205804012,
+          "tail_minus_body_ap": 0.17461982397916648,
+          "voiced_frac": 0.8945147679324894
+        },
+        "R0": {
+          "mean_ap": 0.5068967807874062,
+          "tail_ap": 0.6307479893328825,
+          "tail_minus_body_ap": 0.15653416635608813,
+          "voiced_frac": 0.8934081346423562
+        },
+        "R4": {
+          "mean_ap": 0.5212293296606466,
+          "tail_ap": 0.6729681640279449,
+          "tail_minus_body_ap": 0.18742502294698787,
+          "voiced_frac": 0.906030855539972
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "gate": "G-CENSUS",
+  "status": "PASS",
+  "detail": "Ritsu 110 対 / PJS 100 対、primary probe 両側に実在",
+  "evidence": {
+    "ritsu": {
+      "terminal_ri": 95,
+      "terminal_su": 37,
+      "terminal_i": 698,
+      "terminal_N": 73,
+      "medial_ri": 686
+    },
+    "pjs": {
+      "terminal_ri": 4,
+      "terminal_su": 0,
+      "terminal_i": 43,
+      "terminal_N": 7,
+      "medial_ri": 45
+    },
+    "ritsu_warnings": [
+      "lab が wav より長い: akatonbo.lab (lab 46.00s > wav 45.50s) — probe を除外した"
+    ],
+    "pjs_warnings": [
+      "lab が wav より長い: pjs004.lab (lab 16.80s > wav 14.40s) — probe を除外した",
+      "lab が wav より長い: pjs016.lab (lab 30.00s > wav 26.67s) — probe を除外した",
+      "lab が wav より長い: pjs029.lab (lab 21.33s > wav 18.67s) — probe を除外した",
+      "lab が wav より長い: pjs030.lab (lab 15.00s > wav 12.00s) — probe を除外した",
+      "lab が wav より長い: pjs031.lab (lab 9.23s > wav 8.77s) — probe を除外した"
+    ],
+    "usable_for_ladder": {
+      "terminal_ri": true,
+      "terminal_su": false,
+      "terminal_i": true,
+      "terminal_N": true,
+      "medial_ri": true
+    }
+  }
+}

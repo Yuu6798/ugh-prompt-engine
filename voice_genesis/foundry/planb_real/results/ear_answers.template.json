@@ -1,0 +1,33 @@
+{
+  "listener": "<回答者名>",
+  "listened_at": "<YYYY-MM-DD>",
+  "blinded": false,
+  "material": "results/ear_set/<pair>/{ANCHOR_ritsu,R0..R4,P0_pjs}.wav",
+  "machine_result_seen_before_listening": true,
+  "Q1": {
+    "verdict": "<yes|partial|no|unclear>",
+    "note": "<自由記述>",
+    "question": "R0–R4 は同一 Identity 系統（Ritsu 系）に聞こえるか？"
+  },
+  "Q2": {
+    "verdict": "<yes|partial|no|unclear>",
+    "note": "<自由記述>",
+    "question": "Performance の違いは聞き分けられるか？"
+  },
+  "Q3": {
+    "verdict": "<yes|partial|no|unclear>",
+    "note": "<自由記述>",
+    "question": "terminal /ri/ failure は改善したか？"
+  },
+  "Q4": {
+    "verdict": "<yes|partial|no|unclear>",
+    "note": "<自由記述>",
+    "question": "PJS 本人の声へ近づいただけではないか？"
+  },
+  "per_pair": {
+    "<pair_key>": {
+      "Q3_verdict": "<yes|partial|no|unclear>",
+      "note": ""
+    }
+  }
+}

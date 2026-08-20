@@ -1,0 +1,585 @@
+{
+  "registered_primary_axis": "nasal_gain_db",
+  "exploratory_axis": "nasal_gain_shape_db",
+  "exploratory_status": "CANDIDATE_SECONDARY_AXIS",
+  "frozen": {
+    "terminal_ri|2018#215|pjs003#65": {
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 6.052,
+      "failure_present": true,
+      "required_improvement_db": 1.513,
+      "target_max_db": 4.539,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_i|1st_color#86|pjs001#54": {
+      "pair_key": "terminal_i|1st_color#86|pjs001#54",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 1.1062,
+      "failure_present": true,
+      "required_improvement_db": 1.0,
+      "target_max_db": 0.1062,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_N|1st_color#478|pjs002#61": {
+      "pair_key": "terminal_N|1st_color#478|pjs002#61",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 0.4054,
+      "failure_present": false,
+      "required_improvement_db": 1.0,
+      "target_max_db": -0.5946,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "medial_ri|1st_color#104|pjs002#42": {
+      "pair_key": "medial_ri|1st_color#104|pjs002#42",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 0.3771,
+      "failure_present": false,
+      "required_improvement_db": 1.0,
+      "target_max_db": -0.6229,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_ri|2018#598|pjs065#29": {
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 6.4311,
+      "failure_present": true,
+      "required_improvement_db": 1.6078,
+      "target_max_db": 4.8233,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_i|1st_color#218|pjs001#73": {
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 2.6336,
+      "failure_present": true,
+      "required_improvement_db": 1.0,
+      "target_max_db": 1.6336,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_N|BRD#664|pjs017#27": {
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": -0.0879,
+      "failure_present": false,
+      "required_improvement_db": 1.0,
+      "target_max_db": -1.0879,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "medial_ri|1st_color#357|pjs002#54": {
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": -1.3743,
+      "failure_present": false,
+      "required_improvement_db": 1.0,
+      "target_max_db": -2.3743,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    }
+  },
+  "per_pair": {
+    "terminal_ri|2018#215|pjs003#65": {
+      "R0": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.052,
+          "drift_db": 8.0081,
+          "f0_sag_cents": -2.084,
+          "energy_tail_db": -1.1264,
+          "nasal_gain_shape_db": -1.7184,
+          "drift_shape_db": 7.4516
+        }
+      },
+      "R1": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.2128,
+          "drift_db": 8.0557,
+          "f0_sag_cents": -3.071,
+          "energy_tail_db": -1.1229,
+          "nasal_gain_shape_db": -1.366,
+          "drift_shape_db": 7.1864
+        }
+      },
+      "R2": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.1357,
+          "drift_db": 8.0405,
+          "f0_sag_cents": -3.352,
+          "energy_tail_db": -0.6729,
+          "nasal_gain_shape_db": -2.3462,
+          "drift_shape_db": 8.0463
+        }
+      },
+      "R3": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.118,
+          "drift_db": 8.1249,
+          "f0_sag_cents": 1.052,
+          "energy_tail_db": -0.8413,
+          "nasal_gain_shape_db": -1.7243,
+          "drift_shape_db": 7.4106
+        }
+      },
+      "R4": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 1.7371,
+          "drift_db": 2.1959,
+          "f0_sag_cents": 1.883,
+          "energy_tail_db": 6.9553,
+          "nasal_gain_shape_db": 0.5586,
+          "drift_shape_db": 2.4408
+        }
+      }
+    },
+    "terminal_i|1st_color#86|pjs001#54": {
+      "R0": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 1.1062,
+          "drift_db": 2.815,
+          "f0_sag_cents": -2.57,
+          "energy_tail_db": -0.2402,
+          "nasal_gain_shape_db": -0.0692,
+          "drift_shape_db": 8.1676
+        }
+      },
+      "R1": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 1.423,
+          "drift_db": 2.8459,
+          "f0_sag_cents": -54.699,
+          "energy_tail_db": -0.6425,
+          "nasal_gain_shape_db": -0.2394,
+          "drift_shape_db": 8.7396
+        }
+      },
+      "R2": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 1.2179,
+          "drift_db": 2.9475,
+          "f0_sag_cents": -2.179,
+          "energy_tail_db": -0.1852,
+          "nasal_gain_shape_db": -0.2912,
+          "drift_shape_db": 9.0395
+        }
+      },
+      "R3": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 1.5291,
+          "drift_db": 2.9421,
+          "f0_sag_cents": -56.323,
+          "energy_tail_db": -0.6049,
+          "nasal_gain_shape_db": 0.2708,
+          "drift_shape_db": 8.5027
+        }
+      },
+      "R4": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 0.9051,
+          "drift_db": 2.0054,
+          "f0_sag_cents": -54.613,
+          "energy_tail_db": -6.0462,
+          "nasal_gain_shape_db": 0.2409,
+          "drift_shape_db": 0.9249
+        }
+      }
+    },
+    "terminal_N|1st_color#478|pjs002#61": {
+      "R0": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": 0.4054,
+          "drift_db": 3.718,
+          "f0_sag_cents": -2.974,
+          "energy_tail_db": -1.1837,
+          "nasal_gain_shape_db": -10.6069,
+          "drift_shape_db": 16.7224
+        }
+      },
+      "R1": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": 0.4815,
+          "drift_db": 3.8042,
+          "f0_sag_cents": 1.912,
+          "energy_tail_db": -1.168,
+          "nasal_gain_shape_db": -9.7061,
+          "drift_shape_db": 16.2644
+        }
+      },
+      "R2": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": 0.4054,
+          "drift_db": 3.718,
+          "f0_sag_cents": -2.974,
+          "energy_tail_db": -1.1837,
+          "nasal_gain_shape_db": -10.6069,
+          "drift_shape_db": 16.7224
+        }
+      },
+      "R3": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": 0.4815,
+          "drift_db": 3.8042,
+          "f0_sag_cents": 1.912,
+          "energy_tail_db": -1.168,
+          "nasal_gain_shape_db": -9.7061,
+          "drift_shape_db": 16.2644
+        }
+      },
+      "R4": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.4623,
+          "drift_db": 1.1308,
+          "f0_sag_cents": 8.032,
+          "energy_tail_db": 0.93,
+          "nasal_gain_shape_db": 0.0435,
+          "drift_shape_db": 0.9826
+        }
+      }
+    },
+    "medial_ri|1st_color#104|pjs002#42": {
+      "R0": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 0.3771,
+          "drift_db": 3.4517,
+          "f0_sag_cents": -7.431,
+          "energy_tail_db": -0.8275,
+          "nasal_gain_shape_db": -0.2584,
+          "drift_shape_db": 3.4769
+        }
+      },
+      "R1": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 0.4614,
+          "drift_db": 3.4384,
+          "f0_sag_cents": -53.479,
+          "energy_tail_db": -0.8802,
+          "nasal_gain_shape_db": -0.1479,
+          "drift_shape_db": 3.4379
+        }
+      },
+      "R2": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 0.3472,
+          "drift_db": 3.4194,
+          "f0_sag_cents": -3.997,
+          "energy_tail_db": -0.6877,
+          "nasal_gain_shape_db": -0.1444,
+          "drift_shape_db": 3.485
+        }
+      },
+      "R3": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 0.2982,
+          "drift_db": 3.4779,
+          "f0_sag_cents": -43.81,
+          "energy_tail_db": -0.7137,
+          "nasal_gain_shape_db": -0.1343,
+          "drift_shape_db": 3.6174
+        }
+      },
+      "R4": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": -0.0419,
+          "drift_db": 3.3361,
+          "f0_sag_cents": -44.201,
+          "energy_tail_db": -2.133,
+          "nasal_gain_shape_db": -0.0462,
+          "drift_shape_db": 3.596
+        }
+      }
+    },
+    "terminal_ri|2018#598|pjs065#29": {
+      "R0": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.4311,
+          "drift_db": 8.2924,
+          "f0_sag_cents": -4.94,
+          "energy_tail_db": -2.2923,
+          "nasal_gain_shape_db": -0.6318,
+          "drift_shape_db": 4.776
+        }
+      },
+      "R1": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.1627,
+          "drift_db": 8.0635,
+          "f0_sag_cents": -10.774,
+          "energy_tail_db": -2.2803,
+          "nasal_gain_shape_db": -1.3275,
+          "drift_shape_db": 5.2501
+        }
+      },
+      "R2": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.2818,
+          "drift_db": 8.1976,
+          "f0_sag_cents": -1.37,
+          "energy_tail_db": -3.48,
+          "nasal_gain_shape_db": -1.1325,
+          "drift_shape_db": 5.2699
+        }
+      },
+      "R3": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 5.96,
+          "drift_db": 7.7496,
+          "f0_sag_cents": -14.83,
+          "energy_tail_db": -3.0158,
+          "nasal_gain_shape_db": -1.6604,
+          "drift_shape_db": 5.6738
+        }
+      },
+      "R4": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 1.7761,
+          "drift_db": 2.3888,
+          "f0_sag_cents": -4.189,
+          "energy_tail_db": -3.741,
+          "nasal_gain_shape_db": -0.4544,
+          "drift_shape_db": 0.9584
+        }
+      }
+    },
+    "terminal_i|1st_color#218|pjs001#73": {
+      "R0": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 2.6336,
+          "drift_db": 4.0779,
+          "f0_sag_cents": -1.829,
+          "energy_tail_db": -0.2396,
+          "nasal_gain_shape_db": -5.782,
+          "drift_shape_db": 9.8523
+        }
+      },
+      "R1": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 2.6125,
+          "drift_db": 4.0044,
+          "f0_sag_cents": -0.833,
+          "energy_tail_db": -0.3787,
+          "nasal_gain_shape_db": -4.3677,
+          "drift_shape_db": 8.2789
+        }
+      },
+      "R2": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 2.5455,
+          "drift_db": 4.0433,
+          "f0_sag_cents": -1.165,
+          "energy_tail_db": -0.1166,
+          "nasal_gain_shape_db": -5.3353,
+          "drift_shape_db": 9.3516
+        }
+      },
+      "R3": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 2.4727,
+          "drift_db": 3.9169,
+          "f0_sag_cents": 2.055,
+          "energy_tail_db": -0.2639,
+          "nasal_gain_shape_db": -5.2416,
+          "drift_shape_db": 9.1551
+        }
+      },
+      "R4": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 0.4142,
+          "drift_db": 0.8922,
+          "f0_sag_cents": 21.63,
+          "energy_tail_db": -0.1154,
+          "nasal_gain_shape_db": -0.2131,
+          "drift_shape_db": 0.8926
+        }
+      }
+    },
+    "terminal_N|BRD#664|pjs017#27": {
+      "R0": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.0879,
+          "drift_db": 3.9092,
+          "f0_sag_cents": -2.404,
+          "energy_tail_db": -0.4532,
+          "nasal_gain_shape_db": 0.0905,
+          "drift_shape_db": 4.3974
+        }
+      },
+      "R1": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.1206,
+          "drift_db": 4.2215,
+          "f0_sag_cents": -98.475,
+          "energy_tail_db": -0.5238,
+          "nasal_gain_shape_db": 0.1096,
+          "drift_shape_db": 4.6482
+        }
+      },
+      "R2": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.0879,
+          "drift_db": 3.9092,
+          "f0_sag_cents": -2.404,
+          "energy_tail_db": -0.4532,
+          "nasal_gain_shape_db": 0.0905,
+          "drift_shape_db": 4.3974
+        }
+      },
+      "R3": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.1206,
+          "drift_db": 4.2215,
+          "f0_sag_cents": -98.475,
+          "energy_tail_db": -0.5238,
+          "nasal_gain_shape_db": 0.1096,
+          "drift_shape_db": 4.6482
+        }
+      },
+      "R4": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.5479,
+          "drift_db": 2.3252,
+          "f0_sag_cents": -88.315,
+          "energy_tail_db": 0.1043,
+          "nasal_gain_shape_db": 0.1217,
+          "drift_shape_db": 1.3484
+        }
+      }
+    },
+    "medial_ri|1st_color#357|pjs002#54": {
+      "R0": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": -1.3743,
+          "drift_db": 5.1159,
+          "f0_sag_cents": 1.129,
+          "energy_tail_db": -1.7783,
+          "nasal_gain_shape_db": -2.1472,
+          "drift_shape_db": 5.6644
+        }
+      },
+      "R1": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": -1.2896,
+          "drift_db": 5.0907,
+          "f0_sag_cents": 21.381,
+          "energy_tail_db": -1.6092,
+          "nasal_gain_shape_db": -1.6395,
+          "drift_shape_db": 5.3783
+        }
+      },
+      "R2": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": -1.4738,
+          "drift_db": 4.9812,
+          "f0_sag_cents": 1.117,
+          "energy_tail_db": -1.6328,
+          "nasal_gain_shape_db": -2.2526,
+          "drift_shape_db": 5.6368
+        }
+      },
+      "R3": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": -1.706,
+          "drift_db": 5.1965,
+          "f0_sag_cents": 17.996,
+          "energy_tail_db": -1.4804,
+          "nasal_gain_shape_db": -2.5255,
+          "drift_shape_db": 5.7399
+        }
+      },
+      "R4": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.8813,
+          "drift_db": 11.7604,
+          "f0_sag_cents": 18.506,
+          "energy_tail_db": 1.8421,
+          "nasal_gain_shape_db": -3.2593,
+          "drift_shape_db": 6.5604
+        }
+      }
+    }
+  }
+}

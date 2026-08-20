@@ -1,0 +1,5 @@
+# 全長 wav（float32・1 本 ~2.5MB）は決定論的に再生成できるため commit しない。
+# record.json が各 rung の wav sha256 を pin しているので再現は検証可能。
+# 耳判定用の抜粋（excerpt_*.wav・16bit PCM）は commit する。
+*.wav
+!excerpt_*.wav

@@ -1,0 +1,244 @@
+{
+  "listener": "User",
+  "listened_at": "2026-08-20",
+  "blinded": true,
+  "machine_result_seen_before_listening": true,
+  "blinding_defect": "pair_key の sha256 最下位ビットで A/B を割り当てたところ、4 ペアとも A=R4 になった（1/8 の偶然）。ペア1 を開示した時点で残り 3 ペアの盲検性は失われている。以降の盲検は salt を変えて作り直す",
+  "items": [
+    {
+      "item": 1,
+      "question": "Q3 (blind) — terminal /ri/ failure は改善したか（ペア1）",
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "material": "BLIND_A.wav / BLIND_B.wav（各 3.6s、「ぽたり ぽたり」）",
+      "blind_key": {
+        "A": "R4",
+        "B": "R0"
+      },
+      "answer_raw": "1: B / 2: A,B ともに終端の「り」にノイズ混入、A のほうがひどい",
+      "verdict_blind": "B が良い",
+      "verdict_resolved": "R0 が良い = R4 は悪化",
+      "notes": [
+        "終端 /ri/ に**ノイズ混入**が A/B 双方で聴かれた（既存の軸はいずれも雑音性を測っていない）",
+        "A = R4 のほうがノイズがひどい"
+      ],
+      "machine_comparison": {
+        "registered_primary_axis": {
+          "R0": 5.708,
+          "R4": 1.562,
+          "machine_says": "R4 が改善"
+        },
+        "secondary_energy_tail_db": {
+          "R0": -0.48,
+          "R4": 7.09,
+          "machine_says": "R4 で終端が減衰しなくなった = 回帰"
+        },
+        "gate_verdict": "FAIL（副軸回帰による）",
+        "agreement": "主軸では機械と耳が**逆**。副軸 energy_tail の回帰と G7 の FAIL 判定は耳の『R4 が悪い』と一致した"
+      }
+    },
+    {
+      "item": 2,
+      "question": "ノイズの出所 — 原音 vs R0",
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "material": "ANCHOR_ritsu.wav（原音・WORLD 非経由） / R0.wav（baseline 合成）",
+      "answer_raw": "1: ノイズ無し / 2: ノイズ増加 / 3: 微妙",
+      "findings": {
+        "anchor_has_noise": false,
+        "r0_noise_vs_anchor": "増加",
+        "identity_same_singer": "微妙"
+      },
+      "implication": "R0 は Performance を一切移植していない baseline なので、劣化の出所は **Performance 移植ではなく identity 経路そのもの**（WORLD 往復 / F0 平坦化 / unit 分割・warp のいずれか）。instruction §14「Identity 崩壊 → identity path を再設計」に該当。Q1（同一 Identity 系統か）も R0 の時点で既に『微妙』であり、ラダー全体が劣化した土台の上に乗っていることになる",
+      "objective_check": {
+        "note": "耳が指摘した雑音性を WORLD の非周期性 ap で測ろうとしたが、知覚と一致しなかった",
+        "mean_ap": {
+          "ANCHOR": 0.5397,
+          "RT_world": 0.5247,
+          "RT_flatf0": 0.5169,
+          "R0": 0.5069,
+          "R4": 0.5212
+        },
+        "verdict": "ap 平均は R0 のほうが**低い**（= より周期的）と出る。ap は耳の『ノイズ』の代理にならない"
+      }
+    },
+    {
+      "item": 3,
+      "question": "劣化はどの段階か — RT_world vs R0",
+      "answer_raw": "1: ノイズあり / 2: world のほうが軽微",
+      "findings": {
+        "rt_world_has_noise": true,
+        "more_noise": "R0"
+      }
+    },
+    {
+      "item": 4,
+      "question": "F0 平坦化 vs ユニット分割・warp — RT_flatf0 vs R0",
+      "answer_raw": "1: world と同じくらい / 2: R0。特記: それぞれはノイズ量として誤差レベル。world・flat・R0 はそれぞれ原音と比べてノイズがあることは確定だが、それぞれのノイズ量は明確に差分があるほどではない",
+      "findings": {
+        "rt_flatf0_vs_rt_world": "同等（F0 平坦化はノイズを足していない）",
+        "rt_flatf0_vs_r0": "R0 のほうが多い（ただし誤差レベル）",
+        "qualifier": "3 段いずれも原音比でノイズあり。段間の差は明確に区別できるほどではない"
+      },
+      "localization": "**WORLD 往復そのものが支配的な原因**。F0 平坦化の寄与はほぼ無し、ユニット分割・warp の寄与は有意と言えるほどではない。identity を WORLD 経路で運ぶ設計自体が音質の天井を作っている"
+    },
+    {
+      "item": 5,
+      "question": "Q4/Q1 — R4 vs P0_pjs / R4 はリツとして通るか",
+      "answer_raw": "1: どちらでもない。歌い方を全く移植できてない / 2: 通らない",
+      "findings": {
+        "q4_pjs_voice_leak": "なし（G4 の機械判定と一致）",
+        "q4_style_transplanted": "移植できていない（耳）",
+        "q1_r4_passes_as_ritsu": false
+      },
+      "machine_cross_check": {
+        "components_actually_applied": true,
+        "evidence": {
+          "probe_unit_f0_std_Hz": {
+            "R0": 2.07,
+            "R1": 22.43,
+            "R4": 23.48
+          },
+          "probe_unit_f0_p2p_Hz": {
+            "R0": 13.7,
+            "R1": 95.14,
+            "R4": 94.35
+          },
+          "R0_vs_R1_rms_cents_in_probe_unit": 88.4,
+          "R0_vs_R4_gain_p2p_dB_in_probe_unit": 52.62,
+          "timing_shift_ms": 8.6
+        },
+        "interpretation": "成分は確かに出力へ届いている（F0 の揺れも利得も大きく変わっている）。にもかかわらず『歌い方が移植できていない』と聞こえるのは、**Performance を probe ノート 1 個にしか当てていない**ため。3.6 秒の抜粋は約 11 音節あり、そのうち最後の 1 音節だけが PJS 由来で、残りは素のリツ。設計上の意図（G3 の帰属を曖昧にしないため介入を probe に限定）だったが、その代償として知覚上の『歌い方の移植』は成立しない。このペアの timing 移植量は ±8.6ms で、そもそも可聴域下"
+      }
+    },
+    {
+      "item": 6,
+      "question": "Q2 — R0 vs R1（最後の「り」の音高の揺れ）",
+      "answer_raw": "りの部分にノイズがあるので判定不可",
+      "findings": {
+        "q2_verdict": "判定不可",
+        "cause": "identity 経路のノイズが判定対象区間を覆っている"
+      },
+      "implication": "Q2 は**計器ではなく素材の欠陥**で測れない。identity 経路のノイズを先に落とさない限り、終端 probe に対する聴感判定は成立しない"
+    },
+    {
+      "item": 7,
+      "question": "ノイズの機序 — 非周期成分の過大推定か",
+      "material": "ANCHOR / RT_ap_x1.00（現状） / RT_ap_x0.25（ap を 1/4）",
+      "machine_evidence": {
+        "world_param_sweep": {
+          "note": "f0_floor 60/150/250/350、frame_period 5.0/2.5/1.0ms を掃引したが mel-L1 は 4.995〜5.148dB でほぼ不変。**解析パラメータは効かない**"
+        },
+        "aperiodicity_stats": {
+          "mean": 0.593,
+          "p50": 0.657,
+          "p90": 1.0,
+          "note": "D4C が 10% 以上の帯域で『完全に非周期』と推定している"
+        },
+        "ap_scaling_mel_L1_dB": {
+          "x1.00": 5.033,
+          "x0.50": 4.318,
+          "x0.25": 3.855,
+          "x0.10": 3.384
+        },
+        "interpretation": "ap を絞ると客観距離が単調に改善する。非周期成分の過大推定が有力な機序"
+      },
+      "answer_raw": "（項目7）1: 明確に減少・ノイズほぼ無し / 2: 微妙よりの通らない / 3: 何も失われてない・0.25 のほうが単純に品質よい",
+      "findings": {
+        "noise_reduced": true,
+        "passes_as_original": "微妙よりの通らない",
+        "quality_cost": "なし（0.25 のほうが品質よい）",
+        "adopted": "AP_SCALE = 0.25 を identity 経路へ投入"
+      }
+    },
+    {
+      "item": 8,
+      "question": "Q2 再測 — R0 vs R1（ノイズ対策後）",
+      "answer_raw": "1: 明確に減少 / 2: ある / 3: R0",
+      "findings": {
+        "noise_after_fix": "明確に減少（ラダー出力でも確認）",
+        "q2_difference_audible": true,
+        "which_is_natural": "R0"
+      },
+      "implication": "**Q2 は yes** = 移植した成分は可聴。ただし移植後（R1）のほうが不自然と判定された。成分は届いているが、届いた結果が良くなっていない"
+    },
+    {
+      "item": 9,
+      "question": "Q3 再測（盲検・ノイズ対策後・割り当て引き直し）",
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "blind_key": {
+        "A": "R0",
+        "B": "R4"
+      },
+      "blind_salt": "run5-2",
+      "answer_raw": "1: A / 2: 音量の上がり方が不自然、音の跳ね方が極端",
+      "verdict_resolved": "R0 が良い = R4 は悪化（項目1 と同一結論の再現）",
+      "findings": {
+        "replication": "項目1 と同じ結論。ノイズ交絡を除去し A/B 割り当てを反転させても不変",
+        "described_defect": [
+          "音量の上がり方が不自然",
+          "音の跳ね方が極端"
+        ]
+      },
+      "machine_cross_check": {
+        "R0": {
+          "nasal_gain_db": 6.052,
+          "energy_tail_db": -1.13,
+          "drift_db": 8.01
+        },
+        "R4": {
+          "nasal_gain_db": 1.737,
+          "energy_tail_db": 6.96,
+          "drift_db": 2.2
+        },
+        "note": "耳の『音量の上がり方が不自然』は副軸 energy_tail_db の −1.13 → +6.96 dB（終端が減衰せず上がる）と一致する。『音の跳ね方が極端』は F0 逸脱移植の可聴な帰結。主軸 nasal_gain_db は +6.052 → +1.737 と『改善』を示すが耳は逆"
+      }
+    },
+    {
+      "item": 10,
+      "question": "Q1 の訂正 — 系統の一致 vs 原音との忠実度",
+      "trigger": "User 指摘「R0 系はリツか PJS かなら当たり前にリツだよ。原音と比べてという設問だったから no 裁定だけど」",
+      "answer_raw": "R 系はみな同じ歌い手に聞こえるよ",
+      "findings": {
+        "q1_identity_lineage": "yes",
+        "fidelity_to_original": "no"
+      },
+      "defect_in_procedure": "項目5 で Q1 を『リツ本人として通るか』と提示した。これは§10 Q1（同一 Identity 系統か）ではなく**原音忠実度**の設問であり、別軸の答えを Q1 として記録していた",
+      "impact": "§14 の『Identity 崩壊 → identity representation 不足』分岐は**該当しなくなる**。identity は保たれており、壊れているのは (a) 原音忠実度（雑音）と (b) Q3（TRF 改善）。G6 の機械 PASS とも整合する"
+    }
+  ],
+  "final_answers": {
+    "listener": "User",
+    "listened_at": "2026-08-20",
+    "blinded": true,
+    "blind_salt": "run5-2",
+    "machine_result_seen_before_listening": true,
+    "identity_ap_scale_at_judgement": 0.25,
+    "material": "results/ear_set/terminal_ri__2018-215__pjs003-65/",
+    "session_log": "results/ear_session_log.json",
+    "Q1": {
+      "question": "R0–R4 は同一 Identity 系統（Ritsu 系）に聞こえるか？",
+      "verdict": "yes",
+      "note": "「R 系はみな同じ歌い手に聞こえる」「リツか PJS かなら当たり前にリツ」（User）。R0–R4 は同一 Identity 系統として成立している",
+      "correction": "初回は本設問を『リツ本人として通るか』= **原音との忠実度**として提示してしまい、no を Q1 の答えとして記録した。これは設問の誤りで、§10 Q1 は系統の一致を問うもの。訂正済み"
+    },
+    "Q2": {
+      "question": "Performance の違いは聞き分けられるか？",
+      "verdict": "yes",
+      "note": "最後の『り』で音程の揺れ方に違いがある（項目8）。ただし自然なのは R0 側で、移植した結果が良くなってはいない。なお probe ノート 1 個にしか当てていないため『歌い方が移った』とは聞こえない（項目5）"
+    },
+    "Q3": {
+      "question": "terminal /ri/ failure は改善したか？",
+      "verdict": "no",
+      "note": "盲検で 2 回とも R0 を選択（項目1・項目9）。2 回目はノイズ交絡を除去し A/B 割り当ても反転させたが結論は同じ。R4 の欠陥は『音量の上がり方が不自然』『音の跳ね方が極端』。事前登録の主軸は改善を示すが耳は逆で、副軸 energy_tail の回帰（−1.13 → +6.96 dB）と G7 の FAIL 判定は耳と一致した"
+    },
+    "Q4": {
+      "question": "PJS 本人の声へ近づいただけではないか？",
+      "verdict": "no",
+      "note": "声は寄っていない（項目5）。G4 donor isolation の機械判定と一致"
+    },
+    "extra_axis_fidelity_to_original": {
+      "question": "（§10 の設問ではない）合成出力は原音として通るか",
+      "verdict": "no",
+      "note": "往復単体でも『微妙よりの通らない』。ap×0.25 でノイズは明確に減ったが原音との忠実度は回復していない。**Identity の同一性とは別軸**であり、identity 経路の音質問題として扱う"
+    }
+  }
+}
