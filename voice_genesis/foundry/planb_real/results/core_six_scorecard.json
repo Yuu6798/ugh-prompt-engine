@@ -69,7 +69,8 @@
       },
       "relation_to_G3": "登録ゲート G3 は **結果側（再解析値）** で測っており FAIL のまま。本検査は **意図側** を測ったもので、FAIL の原因が介入の漏れではなく**軸の交絡**であることを示す。G3 の判定は凍結どおり書き換えない",
       "confidence": "高",
-      "audit_note": "尺固定の対で厳密ゼロ。duration はバイト同一検査で別途確認（いずれも閾値非依存）"
+      "audit_note": "尺固定の対で厳密ゼロ。duration はバイト同一検査で別途確認（いずれも閾値非依存）",
+      "scope_caveat": "**『release』成分は taper + コア保持のみ**である。§4 が要求して抽出まではしている `voiced_tail_s` / `release_to_silence_s` / `terminal_f0_persistence` の 3 つは `build_compose_track` で `ReleaseSpec` へ渡らず、合成器に届いていない（レビュー指摘 r3825883525 で判明）。したがって追跡できているのは**release の一部**であり、名前が示す範囲より狭い。核心 5 の判定（適用した成分は追跡できる）は変わらないが、`release` と書いてある範囲は読み替えを要する"
     },
     "6_reproducible": {
       "question": "同条件で再現できるか",
@@ -115,5 +116,25 @@
       "G2 が cmd_gates から呼ばれておらず一度も走っていなかった（核心 4 の構造的証拠が欠けていた）"
     ],
     "effect_on_conclusions": "両方を修正した結果、核心 6 と核心 4 の証拠は**初めて実測に基づくもの**になった。判定自体は 6/6 のまま変わらない。併せてゲートを厳しくした結果 G7 の不通過が 2/8 → 3/8 へ増えた"
-  }
+  },
+  "open_boundary_declarations": [
+    {
+      "id": "r3825883525",
+      "item": "release の voicing 情報が合成へ渡っていない",
+      "decision": "記録して見送り",
+      "reason": "核心 5 の判定は『適用した成分を追跡できるか』であり、適用範囲の広さは別問題。範囲の狭さは scope_caveat として明記した"
+    },
+    {
+      "id": "r3825808080",
+      "item": "probe の尺による層別が未実施（stratify に呼び出し元が無い）",
+      "decision": "記録して見送り",
+      "reason": "選ばれた terminal /ri/ は 2 件とも約 0.45 秒で、利用可能な範囲 0.09–2.63 秒を代表していない。核心 2/3 の**一般化可能性**に効くが、判定そのものは変えない。核心 3 の確度『低』として既に記録済み"
+    },
+    {
+      "id": "r3825010885 / r3825010893 / r3825010896 / r3825561983",
+      "item": "surrogate PoC（planb/）側の原子的公開・provenance pin・identity 距離の平均化",
+      "decision": "コードは直さず境界宣言",
+      "reason": "instruction §9 が surrogate の結果を上書きしないことを求めており、コードを直して再走行すると凍結記録が壊れる。**いずれも結論を運ぶ real-corpus 側（planb_real/）では既に解消している**（wav の実バイト sha256 / staging からの原子的公開 / probe 局所の identity 距離）"
+    }
+  ]
 }
