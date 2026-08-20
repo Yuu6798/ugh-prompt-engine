@@ -155,11 +155,15 @@ def probe_run_failures(payload: dict, rc: int, tag: str) -> List[str]:
     bad = errored_labels(payload)
     if bad:
         out.append(f"{tag}: 条件が失敗 {bad}")
-    check = payload.get("consumed_model_bytes_check")
-    if check is None:
-        out.append(f"{tag}: consumed_model_bytes_check が結果に無い")
-    elif not check.get("ok"):
-        out.append(f"{tag}: 消費バイトが pin と不一致 {check.get('mismatches')}")
+    for key, label in (("consumed_model_bytes_check", "消費モデルバイト"),
+                       ("consumed_score_bytes_check", "実行された楽譜バイト")):
+        check = payload.get(key)
+        if check is None:
+            # 欠落は fail（probe は常に両方を出す）。「検査が無い」を
+            # 「検査に通った」と読み替えないための fail-closed。
+            out.append(f"{tag}: {key} が結果に無い")
+        elif not check.get("ok"):
+            out.append(f"{tag}: {label}が pin と不一致 {check.get('mismatches')}")
     return out
 
 
@@ -256,6 +260,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             probe_runs.append({
                 "tag": tag_name, "returncode": rc,
                 "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
+                "consumed_score_ok": (
+                    payload.get("consumed_score_bytes_check") or {}).get("ok"),
                 "failures": run_failures,
             })
             pin_maps.append((tag_name, pin_map(payload)))
@@ -286,6 +292,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         probe_runs.append({
             "tag": tag_name, "returncode": rc,
             "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
+            "consumed_score_ok": (
+                payload.get("consumed_score_bytes_check") or {}).get("ok"),
             "failures": run_failures,
         })
         pin_maps.append((tag_name, pin_map(payload)))

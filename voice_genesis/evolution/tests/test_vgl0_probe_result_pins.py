@@ -81,8 +81,55 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+SNAPSHOT_SCHEMA = "vgl0-probe-snapshot/0.1"
+
+
 def _snapshot_index() -> dict:
-    return _load(SNAPSHOT_INDEX)
+    """凍結台帳を読む。**schema 判別子を検査してから**中身を消費する。
+
+    宣言した discriminator を読み飛ばすと、typo や将来の非互換 schema が
+    0.1 として解釈され、壊れた provenance メタデータを黙って通す
+    （レビュー指摘 P2）。
+    """
+    index = _load(SNAPSHOT_INDEX)
+    assert index.get("schema") == SNAPSHOT_SCHEMA, (
+        f"snapshots/index.json の schema が未対応: {index.get('schema')!r} "
+        f"(対応 = {SNAPSHOT_SCHEMA})")
+    return index
+
+
+def _snapshot_path(entry: dict) -> Path:
+    """台帳の `file` を **registry ディレクトリ内**へ限定して解決する。
+
+    `file` に絶対パスや `../` が入ると `SNAPSHOTS / entry["file"]` が
+    `probes/snapshots` の外を指し、マシンローカルのバイト列を「コミット済み
+    実装」として hash してしまう（レビュー指摘 P2）。字句検査と解決後の
+    包含検査の両方で弾く。
+    """
+    raw = entry["file"]
+    assert raw and "/" not in raw and "\\" not in raw and raw not in (".", ".."), (
+        f"snapshot の file はディレクトリ区切りを含まない単一のファイル名で"
+        f"あること: {raw!r}")
+    assert not Path(raw).is_absolute(), f"snapshot の file が絶対パス: {raw!r}"
+    resolved = (SNAPSHOTS / raw).resolve()
+    assert resolved.is_relative_to(SNAPSHOTS.resolve()), (
+        f"snapshot {raw!r} が probes/snapshots の外を指している: {resolved}")
+    return resolved
+
+
+def _pinned_script_sha(result_name: str, script_name: str) -> str | None:
+    """正本結果が **その script について** pin している sha を取り出す。
+
+    probe は `pins.probe_script`（再現性結果も pins を持つ）、checker は
+    結果直下の `checker_script`。対応が無ければ None。
+    """
+    payload = _load(RECORDS / result_name)
+    if script_name == PROBE_SCRIPT.name:
+        pinned = (payload.get("pins") or {}).get("probe_script")
+        return (pinned or {}).get("sha256")
+    if script_name == REPRO_SCRIPT.name:
+        return (payload.get("checker_script") or {}).get("sha256")
+    return None
 
 
 def _resolve_source(script: Path, sha: str) -> Path:
@@ -99,7 +146,7 @@ def _resolve_source(script: Path, sha: str) -> Path:
     for entry in _snapshot_index()["snapshots"]:
         if entry["script"] != script.name or entry["sha256"] != sha:
             continue
-        frozen = SNAPSHOTS / entry["file"]
+        frozen = _snapshot_path(entry)
         assert frozen.exists(), f"index.json が指す snapshot が無い: {entry['file']}"
         assert _sha256(frozen) == sha, (
             f"snapshot {entry['file']} の実体が index.json の sha と一致しない")
@@ -278,7 +325,13 @@ def test_every_probe_subprocess_passed_all_gates() -> None:
     assert len(runs) == 10, f"検査したサブプロセス数が 10 でない: {len(runs)}"
     for run in runs:
         assert run["returncode"] == 0, f"{run['tag']}: rc={run['returncode']}"
-        assert run["consumed_ok"], f"{run['tag']}: 消費バイト検査が ok でない"
+        assert run["consumed_ok"], f"{run['tag']}: 消費モデルバイト検査が ok でない"
+        # 楽譜バイトゲートは 7 巡目フォローアップで追加。導入前の checker が
+        # 生んだ正本にはキーが無いので、**在るときだけ**検査する（rc ゲートが
+        # 落ちる側は上の returncode で覆われている）。
+        if run.get("consumed_score_ok") is not None:
+            assert run["consumed_score_ok"], (
+                f"{run['tag']}: 実行された楽譜バイト検査が ok でない")
         assert not run["failures"], f"{run['tag']}: {run['failures']}"
 
 
@@ -430,7 +483,7 @@ def test_snapshot_index_matches_its_files() -> None:
     """凍結台帳の各行が、実体・sha・参照先の 3 点で整合していること。"""
     index = _snapshot_index()
     for entry in index["snapshots"]:
-        frozen = SNAPSHOTS / entry["file"]
+        frozen = _snapshot_path(entry)
         assert frozen.exists(), f"index.json が指す snapshot が無い: {entry['file']}"
         assert _sha256(frozen) == entry["sha256"], (
             f"{entry['file']}: 実体の sha が index.json の記載と一致しない")
@@ -439,8 +492,18 @@ def test_snapshot_index_matches_its_files() -> None:
         for name in entry["measured_results"]:
             assert (RECORDS / name).exists(), (
                 f"{entry['file']}: 参照先の結果 {name} が無い")
+            # **帰属そのものを検証する**（レビュー指摘 P2）: 存在確認だけだと、
+            # 正本の一部だけを live 版で再生成したとき、その結果が古い
+            # snapshot の measured_results に残り続け、台帳が「この版が生んだ」
+            # と偽って主張する。pin を突き合わせて部分再実測での汚染を防ぐ。
+            pinned = _pinned_script_sha(name, entry["script"])
+            assert pinned == entry["sha256"], (
+                f"{entry['file']}: {name} は {entry['script']} の sha "
+                f"{(pinned or '<pin 無し>')[:12]}… を pin しており、この snapshot "
+                f"({entry['sha256'][:12]}…) が生んだ結果ではない。再実測したなら "
+                f"measured_results から外すこと")
 
-    listed = {e["file"] for e in index["snapshots"]}
+    listed = {_snapshot_path(e).name for e in index["snapshots"]}
     on_disk = {p.name for p in SNAPSHOTS.glob("*.py")}
     assert on_disk == listed, (
         f"snapshots/ の中身と index.json がずれている: "

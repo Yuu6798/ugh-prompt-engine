@@ -112,9 +112,11 @@ def test_checker_refuses_result_json_inside_the_singer_tree(
     chk, tmp_path: Path,
 ) -> None:
     """既定 singer ディレクトリの中身（楽譜）も書き込み先にできないこと。"""
-    import vgl0_control_axis_probe as probe_mod  # noqa: PLC0415
-
-    score = probe_mod.DEFAULT_SINGER_DIR / "score.py"
+    # checker が保持している probe モジュールを使う。ここで
+    # `import vgl0_control_axis_probe` と書くと、checker が import 時に
+    # `sys.path` へ入れた副作用に依存してしまう（本テストの fixture は
+    # 後片付けで path を戻すため、順序次第で ImportError になりうる）。
+    score = chk.probe_mod.DEFAULT_SINGER_DIR / "score.py"
     with pytest.raises(SystemExit):
         chk.main([*_model_args(tmp_path),
                   "--work-dir", str(tmp_path / "work"),
