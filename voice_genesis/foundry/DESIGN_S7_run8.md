@@ -1,7 +1,8 @@
 # DESIGN S7 — run 8（り→ん破綻の専用調査: **観測子先行の 2 段**）
 
-- 起草: 2026-08-20（Claude 設計）。**User 裁定 2026-08-20（第 2 次）で全面改訂**。
-  本書は初版（診断単発・追加収録なし）を**上書きする**
+- 起草: 2026-08-20（Claude 設計）。**User 裁定 2026-08-20（第 3 次）まで反映**。
+  本書は初版（診断単発・追加収録なし）を**上書き**し、第 3 次裁定で
+  観測子の定義・量交絡の除去法・耳判定集合・回帰閾値を確定した
 - 位置づけ: S 系列の第 7 設計書。**り→ん破綻は S3 以来の最古の未解決課題**で、
   `results_s6/s6_record_2026-08-20.md` §6-4 が「単一介入 run の副題として
   扱うより専用の調査に値する」と申し送った件の実施回
@@ -18,14 +19,20 @@
    Gate を挟んで学習まで到達する:
 
    ```
-   Run 8-0  標的被覆台帳（機械集計・GPU $0）
-      ↓
-   Run 8-A  観測子 PF-RI-NASAL/0.1 の構築 + 三世代への遡及適用（GPU $0）
+   Run 8-0（GPU $0・**run 番号を消費しない**）
+     a. 終端遷移台帳（SP/遷移密度の機械集計）
+     b. 固定 Probe Set 240 セル（**1 target event = 1 render**）
+     c. 観測子 terminal_release_failure/0.1 の全セル機械評価
+     d. 層化ブラインド耳校正（40 unique + 8 duplicate）
+     e. duration / SP / spk_embed の 3 レバー診断
       ↓ Gate（§7 合格条件）
-   Run 8-B  User 実歌唱の標的追加だけを単一介入として 40K 学習
+   Run 8-B  User 実歌唱の標的構成だけを単一介入として 40K 学習
       ↓
    観測子 + ブラインド A/B + 回帰対照 → **効果で終端宣言**
    ```
+
+   **第 3 次裁定で「Run 8-A」の呼称は Run 8-0 へ統合された**（観測段は
+   一つの GPU $0 ブロックとして扱う）。本書中の 8-0a/8-0b… は上記の細目を指す
 
    直接 8-B へ進めば、改善しても「実歌唱時間」「語尾 /ri/ の標的被覆」
    「長音符」「User 話者へのローカル効果」のどれが効いたか分からない
@@ -48,7 +55,17 @@
 
 6. **観測子が Gate を通らない場合、8-B へ進まない**。観測値は診断レポートとして
    残すが、**自動 Gate には昇格させない**。不成立は失敗ではなく結果であり、
-   成立を装った閾値調整で通してはならない
+   成立を装った閾値調整で通してはならない。ただし**空手で終わらせない** —
+   §7-2 の 3 レバー診断（GPU $0）を成果物として残す
+
+8. **1 target event = 1 render（測定契約）**。baseline probe は
+   「**終端対象を 1 個だけ持つ 1 レンダ**」に固定する。根拠 = レンダラに
+   フレーズの概念が無い（§4-0）。複数セルを連結する場合は**内部 SP を明示挿入
+   した「改変レンダ」**であり、現行 renderer の baseline 測定とは**別系統として
+   分離**して記帳する
+
+9. **観測子の呼称**は `terminal_release_failure`（TRF）とする。「り→ん」は
+   User の percept であって機構名ではない。TRF の下位軸は §5 で 5 系統に分ける
 
 7. 予算: **Run 8-0 / 8-A = GPU $0**（CPU 推論のみ）。**Run 8-B = 学習 1 本**
    （run 7 実績 ≈$1.40 と同水準・cap $4）。User の負担は
@@ -142,6 +159,21 @@ amitaro は `run7_dataset_pins.json` の `dosage.actual_voiced_ph_dur_s` = 864.9
 | H3 | 音素 `/ri/` に固有（`/i/`・`/su/`・`/N/` では起きない） | 対照 probe で同等に崩れる |
 | H4 | **話者**で崩壊境界が動く | 4 話者で境界が同一 |
 | H5 | 世代（データ構成）で境界が動く | run5/6/7 で境界が同一 |
+| **H-TTD** | **関連終端イベント密度**（`terminal transition density`）が効く | 台帳の密度順と破綻順が対応しない |
+| **H-dur** | duration conditioning が有効な因果レバーである | `/r/`-`/i/` 配分を振っても TRF 軸が動かない |
+
+**H-TTD の集計単位（第 3 次裁定）**: 初版が想定した「総 SP 数」では測れない。
+ritsu VCV には**孤立録音の頭尾 SP が大量に入り得る**が、それは
+「**長い実歌唱 /ri/→SP**」と同等ではない。よって §3 の台帳は
+`modality` × `preceding_phoneme` × `preceding_duration` ×
+`utterance_final / internal` × 遷移種別 × `pitch_bin` の
+**関連終端イベント密度**で比較する。
+
+**H-dur の到達限界（明記）**: `/r/`-`/i/` の時間配分を振って改善が出ても、
+**「破綻の原因は duration であって acoustic ではない」とは断定しない**。
+言えるのは「**duration conditioning が有効な因果レバーである**」までである。
+局在の主張には `ph_dur → pitch_pred → mel → waveform` の**差分保存**が要る
+（`localization.first_divergence_stage` はその足場であって結論ではない）。
 
 **H4 の到達限界（明記）**: 本設計は話者内で実歌唱 exposure を振らない。
 H4 が成立しても言えるのは「**境界は話者で動く**」までで、原因（実歌唱分数 /
@@ -166,16 +198,30 @@ manifest から時間と話者構成は確定できるが、**語尾 /ri/ のイ
 speaker
 modality:                    real_song | synthetic_song | VCV | speech
 local_real_singing_seconds
-phrase_final_ri_count
-phrase_final_ri_duration_seconds
-ri_to_SP_count
+
+# --- 関連終端イベント密度（第 3 次裁定・総 SP 数では測らない） ---
+terminal_events:
+  key:                       # 以下の直積で層別に数える
+    modality
+    preceding_phoneme        # ri | i | N | su | other
+    preceding_duration       # 直前ノートの実尺（秒）
+    position                 # utterance_final | internal
+    transition               # ri_to_SP | i_to_SP | N_to_SP | su_to_SP
+    pitch_bin                # low | mid | high（話者固有帯・§8-1）
+  value:
+    count
+    duration_seconds
+
+# --- 参考（密度の分母・単独では判定に使わない） ---
 ri_medial_count
-i_to_SP_count
-N_to_SP_count
-su_to_SP_count
 note_duration_bin:           1 | 2 | 4 beats
-pitch_bin:                   low | mid | high
 ```
+
+**`position` を必ず割る理由**: ritsu VCV は項目ごとの孤立録音なので
+**頭尾 SP が大量に入り得る**。それを総 SP 数として数えると
+「ritsu は →SP の実例が豊富」という誤った反証が出る。しかし
+**孤立録音の頭尾 SP は「長い実歌唱フレーズの末尾 /ri/→SP」と同等ではない** —
+先行音素も先行尺も位置も違う。H-TTD はこの層別の密度でのみ検証する。
 
 - 集計元 = 各話者の `transcriptions.csv`（音素列 + ph_dur）と譜面由来の
   フレーズ境界。**推定ではなく既知の境界から数える**
@@ -186,7 +232,32 @@ pitch_bin:                   low | mid | high
 「り」を丁寧に）は `batch3_t2_results.json` 実測で **duration_s = 12.843 の
 1 カード**。通し歌唱 2 本を含めても標的 `/ri/`→SP は低密度である。
 
-## 4. Run 8-A — 固定 Probe Set（24 セル）
+## 4. Run 8-0b — 固定 Probe Set（24 セル）
+
+### 4-0. 測定契約: レンダラにフレーズの概念が無い
+
+実装で確認した事実（**probe 設計を制約する**）:
+
+- `gate_synth` の SP は 3 箇所のみ — `v_tokens1 = [SP] + real_phones` の
+  **先頭 1 個**と `sp_idx_v` / `sp_idx_a` の**パディング**
+- `score.py` / `score_umi.py` に**休符ノートが無い**
+- `_NoteWithMs` は `ScoreNote.phrase_index` / `is_phrase_final` を**写さない**
+  （VG-L0 既報・grep 0 件）。**score 側には情報があるのに renderer が捨てている**
+
+したがって「**語尾 → SP**」が実際に実現するのは**発話末だけ**である。
+曲中のフレーズ末 /ri/ の直後には次の音素が来るだけで SP は存在しない。帰結:
+
+1. **1 target event = 1 render**（§0-8）。複数セルを 1 レンダに連結すると
+   **最後の 1 つしか「→SP」を持たず、24 中 23 セルが黙って無効になる**。
+   これは結果がそれらしく出てしまう類の穴なので実装要件として縛る
+2. **`terminal_SP_frames` は観測量ではない**。`TAIL_FRAMES` 由来の定数であり、
+   **入力メタデータ `input_tail_sp_frames` へ格下げ**する（§5）
+3. 陽性対照は成立する。さくら「かぎり」は**最終フレーズの 4 拍 /ri/** であり、
+   その後に tail SP が来る
+4. 連結レンダ（内部 SP を明示挿入した「改変レンダ」）は**別系統**として
+   分離記帳する。これは §7-2 のレバー 2 の実験系でもある
+
+### 4-1. 割付
 
 フル楽曲ではなく、**音素・長さ・位置を分離した短い譜面**を使う。
 
@@ -202,8 +273,9 @@ pitch_bin:                   low | mid | high
 
 音高帯 = 低 A3(57) / 中 D4(62) / 高 F4(65)（`score.py` 都節音階 deg1/deg3/deg5・
 `score_d3_sustain.py` と同一バンク帯。新規音律を導入しない）。
+**これは合成側の帯**であり、**8-B の収録側の帯は User 固有に作り直す**（§8-1）。
 
-### 4-1. 実曲アンカーは**フル譜面レンダ**である（H0 の要）
+### 4-2. 実曲アンカーは**フル譜面レンダ**である（H0 の要）
 
 `gate_synth.run_pipeline` は `notes_raw` **全体**を 1 本のトークン列
 （`v_tokens1 = [SP] + real_phones` 以下同様）へ符号化して dur / pitch /
@@ -218,7 +290,7 @@ acoustic の各 predictor に渡す（`gate_synth.py:1108-1133` を実コード�
   （既存 wav の流用では、不一致がジェネレータ/環境ドリフト由来か文脈由来か
   分離できない）。再レンダした P-ANCHOR が既知陽性ラベルを保つことを確認する
 
-### 4-2. 世代 × 話者への展開（240 セル）
+### 4-3. 世代 × 話者への展開（240 セル）
 
 ```
 run5 × {ritsu, pjs, user}            = 72
@@ -234,38 +306,75 @@ run7 × {ritsu, pjs, user, amitaro}   = 96
 - CPU レンダ 240 本の実行可能性: VG-L0 probe が **51 条件 × 3 走行 = 153 レンダ**を
   同経路で完走済み（同 record §4）。同オーダーである
 
-### 4-3. 辞書被覆の扱い
+### 4-4. 辞書被覆の扱い
 
 `かぎり` / `ひかり` / `いのり` / `めぐり` / `みわたす` / `うみ` / 撥音 `ん` は
 いずれも既存の変換系が扱う範囲（`convert_*` の `_normalize_sokuon_nasal` が
 ッ/ン を処理）。**未収載が出た場合は代用せず fail-closed で除外して記帳**し、
 該当する H の裁定を `undetermined` に落とす（黙って縮小しない）。
 
-## 5. 観測ベクトル `PF-RI-NASAL/0.1`
+## 5. 観測ベクトル `terminal_release_failure/0.1`（TRF）
 
-**単一スコアに潰さない。** セルごとに以下を記録する:
+**単一スコアに潰さない。** また**観測子名に percept を使わない** — 「り→ん」は
+User の聴取語であって機構名ではない（§0-9）。セルごとに以下を記録する:
 
 ```yaml
+# --- 入力メタデータ（観測量ではない・§4-0） ---
+input_meta:
+  input_tail_sp_frames              # TAIL_FRAMES 由来の定数。測定値ではない
+  commanded_note_frames             # dur モデル出力の命令区間
+
+# --- 主観測値（第 3 次裁定で確定） ---
+primary:
+  excess_tail_voiced_ms             # 命令終端を越えた有声の超過
+  release_after_score_boundary_ms   # 譜面境界を越えた解放遅れ
+  tail_f0_persistence               # 同区間の f0 継続
+  terminal_mel_persistence          # 終端 mel の持続
+
+# --- 補助 ---
 duration:
   r_frames                          # /r/ 区間フレーム数
   i_frames                          # 母音区間フレーム数
-  terminal_SP_frames                # 終端 SP のフレーム数
   duration_overshoot                # 命令区間に対する超過
-
 acoustic:
-  N_similarity_delta                # 終端 mel の /N/ 対照への接近量
+  N_similarity_delta                # 終端 mel の /N/ 対照への接近量（機構名）
   i_reference_distance              # 終端 mel の正常 /i/ 対照からの距離
-  terminal_mel_persistence          # 終端 mel の持続
-
 waveform:
-  tail_voiced_ms                    # 命令終端以降の有声継続
-  tail_f0_persistence               # 同区間の f0 継続
   energy_decay_slope                # 終端エネルギー減衰の傾き
-  release_after_score_boundary_ms   # 譜面境界を越えた解放遅れ
-
 localization:
   first_divergence_stage            # duration | pitch | acoustic | vocoder
 ```
+
+### 5-0. 無声対照との差分で測る（vocoder ringing の除去）
+
+主観測値はいずれも「命令終端を越えて何かが残る量」である。**vocoder は
+それ自体が固有の ringing を持つ**ため、生値をそのまま「解放の失敗」と
+読むと計器が vocoder の性質を測ってしまう。
+
+したがって**主観測値は全て無声対照との差分で報告する**:
+
+- 無声対照 = **同一話者・同一音高・同一尺で、終端が無声で終わるセル**
+  （P-SU-FINAL の無声化 `/su/` を既定の無声対照に使う。これは
+  レンダ側の対照であって学習素材ではないため §8-3 の held-out 規律と衝突しない）
+- 対照が取れないセルは `status = no_unvoiced_reference` で明示し、
+  **生値を差分と偽って記帳しない**
+
+### 5-1b. TRF の下位軸（percept を 1 本に潰さない）
+
+耳が「ん」と呼ぶ現象は単一機構とは限らない。TRF は次の 5 系統に分けて記帳し、
+**`N_similarity_delta` が動かないのに耳が「ん」と判定する経路を許容する**:
+
+| 下位軸 | 機構 |
+|---|---|
+| `nasal_like` | 終端 mel が `/N/` 対照へ接近 |
+| `glottalization` | 声門化 / vocal fry（低 f0・非周期性の増大） |
+| `prolonged_voicing` | 解放せず有声が続く |
+| `vowel_drift` | 母音の定常が別の母音へ流れる |
+| `intelligibility_loss` | 語として不成立（耳のみ） |
+
+**`N_similarity_delta` が動かず耳が「ん」と言った場合、それは計器の失敗ではなく
+「percept の実体が `/N/` ではなかった」という所見である** — 事前登録しておき、
+後から機構名を percept に合わせて曲げない（§0-4 の規律を観測子自身へ適用）。
 
 ### 5-1. 中核手法 — 話者内 3 対照差分
 
@@ -294,7 +403,7 @@ localization:
 - **ASR の文字認識は主判定にしない**。細かな鼻音化を一般 ASR が正しく校正できる
   保証がないため、**補助軸に留める**
 
-## 6. ブラインド耳校正
+## 6. ブラインド耳校正（40 unique + 8 duplicate）
 
 三世代の音源を**ランダム化し、モデル名・話者・世代を隠して**提示する。
 各クリップを 3 軸で 0〜3 判定:
@@ -308,6 +417,23 @@ localization:
 - **20% を重複提示して自己一致率（intra-rater agreement）も記録する**。
   この値が**計器の目標値**になる — 自己一致率を超えられない計器は成立と呼べない
 - 既存 record（s4/s5/s6）の耳判定は**再ラベルなしの追加 hold-out** として使う
+
+### 6-1. 耳判定の対象集合（事前固定）
+
+**240 セルは全て機械評価**する。耳判定はその部分集合に限り、
+**事前に固定する**（事後に足すと選択バイアスが入る）:
+
+| 層 | 内容 | セル数 |
+|---|---|---|
+| 三世代トレース | ritsu / pjs / user の三世代 + amitaro anchor | **10** |
+| run7 四話者 × 5 終端条件 | `{ri 終端, ri 語中, i 終端, N 終端, su 終端}` | **20** |
+| 極値 | duration / pitch の両端 | **6** |
+| 実曲アンカー | P-ANCHOR | **4** |
+| | **unique 合計** | **40** |
+| 重複提示 | 上記からの再提示（自己一致率用） | **+8** |
+
+提示は**ランダム順・モデル名/話者/世代を伏せる**。重複分は被験者に
+重複であることを知らせない。
 
 ## 7. Gate — 観測子の合格条件
 
@@ -326,7 +452,41 @@ localization:
 **通らない場合**: 観測値は診断レポートとして残すが**自動 Gate には昇格させず、
 8-B へ進まない**（§0-6）。
 
-## 8. Run 8-B — 標的密度の高い User 実歌唱を単一介入
+### 7-1. 回帰・変化判定の閾値（**8-0 完了後・8-B 開始前に固定**）
+
+事後に閾値を決めると何でも有意にできる。**Gate 通過直後、8-B の収録を始める
+前に凍結**し、以後変更しない:
+
+```yaml
+machine:
+  MDC95:                  # 反復誤差から算出する最小可検出変化
+    source: 独立プロセス反復（§7-6）の同一セル再現誤差
+    rule:   |Δ| > MDC95 のときのみ「変化した」と判定する
+human:
+  severity_shift:  中央値で 1 段以上（0–3 スケール）
+  agreement_floor: 20% 重複提示から得た weighted κ を事前固定し、
+                   これを下回る軸は判定に使わない
+```
+
+**PJS・うみ・語中 `/ri/`・`/su/` の「悪化」判定にも同一規則を使う**
+（改善だけ緩い基準で見ない）。
+
+### 7-2. Gate 不成立時の GPU $0 成果物（3 レバー診断）
+
+観測子が Gate を通らなくても**空手で終わらせない**（§0-6）。3 本とも
+**診断であって修復策ではない**:
+
+| レバー | 実験系 | 言えること |
+|---|---|---|
+| 1. `/r/`-`/i`/ duration 再配分 | note 総長を固定したまま配分比を **0.5 / 1.0 / 1.5 / 2.0** で振る | **duration conditioning の感度**。§2-3 H-dur の到達限界のとおり、改善しても原因の局在は主張しない |
+| 2. 明示 SP 挿入 | 発話末には既に tail SP があるため、**最終母音の一部を SP へ再配分し総尺を固定**して試す | **終端 cue の感度**。§4-0-4 の「改変レンダ」系統として分離記帳 |
+| 3. ritsu ⇄ pjs `spk_embed` 補間 | **0 / .25 / .5 / .75 / 1** で単調性を見る（`gate_synth.find_speaker_embed` の 384 次元ベクトル） | **speaker conditioning の直接診断**。単調に消えるなら破綻は話者埋め込みが担っている |
+
+**レバー 3 の正直会計**: 補間は identity を動かす。破綻が消えても
+「ritsu が治った」のではなく「**別の声になった**」であり、
+**修復策ではなく診断限定**である（第三の声の議論と混同しない）。
+
+## 8. Run 8-B — 標的構成だけを変える単一介入
 
 ### 8-1. 収録設計（5〜8 分・12〜13 カード）
 
@@ -339,12 +499,12 @@ localization:
   各カード: かぎり / ひかり / いのり / めぐり を各 2 回
   → 語尾 /ri/→SP を 72 イベント
 
-3 control cards:
+3 control cards:   # ★ 学習には入れない（§8-3）
   phrase-medial /ri/
   phrase-final  /i/
   phrase-final  /N/
 
-optional 1 card:
+1 control card:    # ★ 必須。学習には入れない（§8-3）
   phrase-final /su/（みわたす系）
 ```
 
@@ -354,25 +514,99 @@ optional 1 card:
 
 各カードには**固定テンポ・ガイド音・終端後の明示的な無音**を入れる。
 
+**音高帯は A3/D4/F4 固定にしない（第 3 次裁定）**。User が安定して出せる帯で
+なければ「低/中/高」という因子が成立しないため、**既存 User T1 録音の実測
+中央値から User 固有の low / mid / high ガイドを作る**。intake では:
+
+```yaml
+achieved_f0_median      # 実測 f0 中央値
+achieved_midi           # 同 MIDI 換算
+achieved_band           # 実測から割り当てた帯
+```
+
+を記録し、**意図した帯から外れたテイクは実測帯へ再ラベルするか除外**する。
+**意図した帯として黙って記帳しない**（黙って記帳すると音高因子が壊れる）。
+
 ### 8-2. アラインメント
 
 今回の対象は**数十〜数百ミリ秒の語尾**である。既存 T2 の
 「モーラ数比例の粗いヒューリスティック」では解像度が足りない。
 **score 由来の既知境界 + 手動スポット検査**でアラインメントする。
 
-### 8-3. 単一介入の会計
+### 8-3. 単一介入の会計 — **dosage 固定・置換設計**（第 3 次裁定の核心）
+
+初版は「run7 corpus **+** 標的 pack」だった。しかし user の現行 voiced は
+**171.88 s** しかなく、5〜8 分（300–480 s）を**足す**と user データは
+**3〜4 倍**になる。すると「**標的だから効いた**」と「**単に量が増えたから
+効いた**」が交絡し、8-B の主張が立たない。
+
+**したがって量を増やさない。user の有効 dosage を固定し、既存の非標的素材の
+一部を同秒数の /ri/ 標的素材へ置換する**:
 
 ```
+不変量（fail-closed で assert）:
+  user_effective_dosage(run8) == user_effective_dosage(run7)
+
 変える:
-  run7 corpus + user_phrase_final_ri_pack_v0.1
+  user 素材の**構成**のみ
+    既存非標的素材から N 秒を退避
+    → 同じ N 秒を user_phrase_final_ri_pack_v0.1 で置換
 
 変えない:
-  amitaro teacher / PJS・ritsu 素材 / 正規化条件 / spk_id /
-  学習設定 / seed・ExecutionProfile / 40K 手順 / sampler weighting
+  user 総 dosage / amitaro teacher / PJS・ritsu 素材 / 正規化条件 /
+  spk_id / 学習設定 / seed・ExecutionProfile / 40K 手順 / sampler weighting
 ```
 
 **追加素材を別 teacher ID へ複製したり oversampling したりしない**
 （二介入になるため）。
+
+**量を増やす設計を採る場合**（置換が成立しなかった場合の退避路）、
+結論は「**標的内容 または user 量増加のどちらかが効いた**」までに
+**限定して記帳する** — 分離できていないものを分離したと書かない。
+
+### 8-4. 対照は学習に入れない（held-out 専用）
+
+`/su/`→SP・`/i/`→SP・phrase-medial `/ri/` は **8-B の学習素材から除外**し、
+**held-out 評価専用**にする。
+
+**理由**: これらを学習 pack に入れると negative control ではなく
+**active control**（=それ自体が介入）になり、対照として機能しなくなる。
+収録はする（§8-1 の control cards）が、**学習コーパスには投入しない**。
+
+| 対照 | 収録 | 学習投入 | 用途 |
+|---|---|---|---|
+| `/su/`→SP | する | **しない** | 標的音素対策か一般解放技能かの弁別 + §5-0 の無声対照 |
+| `/i/`→SP | する | **しない** | `/r/` の寄与の分離 |
+| phrase-medial `/ri/` | する | **しない** | 位置（終端性）の分離 |
+
+### 8-5. **収録量と dosage 固定の衝突**（要 User 確認・本書では暫定解）
+
+裁定の 2 項目が数字の上で衝突する:
+
+| 裁定項目 | 値 |
+|---|---|
+| §8-1 収録設計 | **5〜8 分**（300–480 s）・12〜13 カード |
+| §8-3 dosage 固定 | user 有効 dosage = run 7 と同一 = **voiced 171.88 s**（ph_dur 233.395 s） |
+
+**収録量が user の全 dosage を上回る**。厳密に dosage を固定すると、
+5〜8 分の pack はそのままでは入らない（100% 置換でも足りない）。
+
+**本書の暫定解 = (b) 部分投入 + 余剰 held-out**:
+
+| 案 | 内容 | 評価 |
+|---|---|---|
+| (a) 完全置換 | user 素材を全て標的 pack へ差し替え | dosage は固定できるが**非標的の一般語彙を失う**。回帰リスクが高い |
+| **(b) 部分投入 + 余剰 held-out** | **収録は 5〜8 分行い、学習投入は run 7 と同秒数だけ決定論規則で選抜**。残りは held-out 評価素材へ回す | **両裁定を同時に満たす**。余剰が §8-4 の評価セルを増やす副次利得もある。**本書の既定** |
+| (c) 量を増やす | §8-3 の退避路 | 結論が「標的内容 **または** 量増加」に限定される |
+
+**(b) の選抜規則（決定論・事前登録）**: カード番号昇順に走査し、
+`3 durations × 3 pitch bands` の**各セルから均等**に採って
+run 7 の user dosage に到達した時点で打ち切る（`convert_amitaro` の
+§2-3 打ち切り規則と同型）。**耳で選ばない**（選定に耳を入れると
+標的素材の来歴が壊れる）。
+
+**User 確認事項**: (b) で進めてよいか。(a)/(c) を採る場合は本節を裁定で
+上書きする。
 
 ## 9. 結果による振り分け
 
@@ -386,6 +620,11 @@ optional 1 card:
 | `/ri/` と `/su/` が改善 | **一般的なフレーズ末解放技能**として成功 |
 | PJS・うみ・語中対照が**悪化** | 回帰として **run 8 を不採用** |
 
+**この表が引けるのは §8-4 の held-out 規律が守られた場合だけ**である。
+`/su/` を学習に入れてしまうと「`/su/` 不変」の行は原理的に引けない
+（入れた対照が動かないことは対照の情報にならない）。
+また**改善・悪化の判定は §7-1 で凍結した MDC95 / severity / κ 床による**。
+
 **「user だけ改善して ritsu が変わらない」場合が特に重要**である。その結果は
 「実歌唱が必要」という仮説を否定せず、**技能が speaker-local であること**を示す。
 その場合の次レバーは追加録音量ではなく、VG-L0 側の speaker-independent な
@@ -398,7 +637,7 @@ Performance Skill / TRANSFER_SKILL、または**話者条件と技能条件を�
 1. `results_s7/target_exposure_ledger.json` 生成器（§3 のフィールド）+ 形状テスト
 2. 集計は既存 `transcriptions.csv` と譜面境界から。**推定しない**
 
-### PR-2（8-A: 計器と probe）
+### PR-2（8-0b/c/d: 計器と probe）
 
 1. **`gate_synth` の song loader 最小拡張** — 現在 `song not in ("sakura","umi")`
    で弾く（`gate_synth.py:252`）。診断スコアモジュールを **sha256 pin したまま**
@@ -429,7 +668,7 @@ Performance Skill / TRANSFER_SKILL、または**話者条件と技能条件を�
 - [ ] 標的被覆台帳が 4 話者分そろい、`phrase_final_ri_count` 等が**機械集計**で埋まっている
 - [ ] 台帳から 8-B の収録量が導出されている（「5〜8 分」の根拠が数字で出ている）
 
-### Run 8-A
+### Run 8-0b/c/d（probe・計器・耳校正）
 
 - [ ] `load_song_module("sakura")` / `("umi")` の返り値と module sha が拡張前後で不変
 - [ ] 診断スコア生成器が §4 の 24 セルを過不足なく展開（重複 0・欠落 0）+ 決定論テスト
