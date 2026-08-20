@@ -95,7 +95,53 @@ def _snapshot_index() -> dict:
     assert index.get("schema") == SNAPSHOT_SCHEMA, (
         f"snapshots/index.json の schema が未対応: {index.get('schema')!r} "
         f"(対応 = {SNAPSHOT_SCHEMA})")
+    _assert_registry_is_unambiguous(index)
     return index
+
+
+def _assert_registry_is_unambiguous(index: dict) -> None:
+    """台帳が **矛盾する状態を表現できない**こと（レビュー指摘 P2）。
+
+    重複行があると、読み手（`{d["script"]: d for d in ...}` のような畳み込み）が
+    黙って片方を捨て、**古い宣言と新しい宣言が同居**したまま検査が通る。
+    重複は「どちらが正か」を台帳が答えられない状態なので、読み込み時点で落とす。
+
+    1 件だけ塞ぐと同型の穴が残るので、一意であるべきものを**全数**列挙する:
+
+    - `live_unmeasured` の `script`（同じ実装に 2 つの未実測宣言）
+    - `snapshots` の `file`（同じ凍結ファイルが 2 行）
+    - `snapshots` の `(script, sha256)`（同じ版が 2 行）
+    - 各 entry 内の `measured_results`（同じ結果を 2 度帰属）
+    - **結果ファイルの帰属先**（1 つの結果は 1 つの版からしか生まれない）
+    """
+    def _dupes(values):
+        seen, dupes = set(), []
+        for v in values:
+            (dupes.append(v) if v in seen else seen.add(v))
+        return sorted(set(dupes), key=str)
+
+    live = index.get("live_unmeasured") or []
+    bad = _dupes([e["script"] for e in live])
+    assert not bad, (
+        f"live_unmeasured に同じ script の宣言が複数ある: {bad}。"
+        " どちらが正か台帳が答えられないので、1 実装 1 宣言にすること")
+
+    snaps = index.get("snapshots") or []
+    bad = _dupes([e["file"] for e in snaps])
+    assert not bad, f"snapshots に同じ file の行が複数ある: {bad}"
+    bad = _dupes([(e["script"], e["sha256"]) for e in snaps])
+    assert not bad, f"snapshots に同じ (script, sha256) の行が複数ある: {bad}"
+
+    owners: dict[str, list[str]] = {}
+    for entry in snaps:
+        bad = _dupes(entry["measured_results"])
+        assert not bad, f"{entry['file']}: measured_results に重複がある: {bad}"
+        for name in entry["measured_results"]:
+            owners.setdefault((name, entry["script"]), []).append(entry["file"])
+    contested = {k: v for k, v in owners.items() if len(v) > 1}
+    assert not contested, (
+        f"同じ結果が同じ script の複数 snapshot に帰属している: {contested}。"
+        " 1 つの結果を生んだ版は 1 つしかない")
 
 
 def _snapshot_path(entry: dict) -> Path:
