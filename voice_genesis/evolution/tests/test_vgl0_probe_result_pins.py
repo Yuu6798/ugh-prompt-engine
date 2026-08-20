@@ -529,28 +529,74 @@ def test_no_orphan_snapshots() -> None:
             " 参照が切れた snapshot は index.json ごと削除すること")
 
 
+def _revalidation_coverage(entry: dict, script: Path) -> tuple[set[str], set[str]]:
+    """宣言された再検証セットのうち、live sha を pin できている結果 / いない結果。"""
+    live = _sha256(script)
+    required = set(entry["revalidation_results"])
+    covered = {name for name in required
+               if _pinned_script_sha(name, script.name) == live}
+    return covered, required - covered
+
+
 def test_live_scripts_are_measured_or_declared_unmeasured() -> None:
-    """live 実装が「実測済み」か「未実測と宣言済み」のどちらかであること。
+    """live 実装が「**完全に**実測済み」か「未実測と宣言済み」のどちらかであること。
 
     snapshot 機構は再実測の免除ではない。live 実装がどの正本からも pin されて
     いないなら、それは **実測証拠の無いコード**であり、`live_unmeasured` に
     理由と再検証条件を書かせて可視化する（黙って PASS の余韻を借りない）。
-    """
-    pinned = {_load(r)["pins"]["probe_script"]["sha256"] for r in RESULT_JSONS}
-    repro = _load(REPRO_JSON)
-    pinned |= {repro["probe_script"]["sha256"], repro["checker_script"]["sha256"]}
 
+    **部分再実測で宣言を消させない**（レビュー指摘 P2）: 「どれか 1 本でも live
+    sha を pin していれば実測済み」とすると、`revalidation` が要求する 6/8/10
+    ノート 3 走行 + 10 プロセス再現性のうち 1 本を作り直しただけで宣言が消え、
+    **残りの幾何が未実測であるという唯一の警告が失われる**。宣言に
+    `revalidation_results`（再検証で作り直すべき結果の全数）を持たせ、
+    **全数が live sha を pin して初めて実測済み**とする。
+
+    **宣言は live sha へ束縛する**（外部レビュー指摘）: live を再編集したら、
+    古い版に対する未実測宣言を流用できない。
+    """
     declared = {d["script"]: d for d in _snapshot_index()["live_unmeasured"]}
     for script in (PROBE_SCRIPT, REPRO_SCRIPT):
-        measured = _sha256(script) in pinned
         entry = declared.get(script.name)
-        if measured:
-            assert entry is None, (
-                f"{script.name}: 実測済みなのに live_unmeasured に残っている"
-                " — 再実測後は該当行を消すこと")
+        if entry is None:
+            # 宣言が無いなら「実測済み」の主張。全 revalidation 対象が live sha を
+            # pin していることを、snapshot 側の宣言に頼らず直接確かめる。
+            live = _sha256(script)
+            names = [r.name for r in (*RESULT_JSONS, REPRO_JSON)]
+            relevant = [n for n in names
+                        if _pinned_script_sha(n, script.name) is not None]
+            stale = [n for n in relevant if _pinned_script_sha(n, script.name) != live]
+            assert not stale, (
+                f"{script.name}: live_unmeasured に宣言が無い（= 実測済みの主張）"
+                f"のに、{stale} が別の版を pin している。未実測なら宣言を書くこと")
             continue
-        assert entry is not None, (
-            f"{script.name}: どの正本からも pin されていない（= 未実測）のに "
-            f"live_unmeasured へ宣言されていない。probes/snapshots/README.md")
+
+        assert entry.get("sha256") == _sha256(script), (
+            f"{script.name}: live_unmeasured.sha256 が現在の live sha と一致しない。"
+            " live を編集したら、古い版に対する未実測宣言は流用できない"
+            " — 宣言を書き直すか、再実測して宣言を消すこと")
         for key in ("reason", "revalidation"):
             assert entry.get(key), f"{script.name}: live_unmeasured.{key} が空"
+        assert entry.get("revalidation_results"), (
+            f"{script.name}: revalidation_results（再検証で作り直す結果の全数）が空"
+            " — 何をもって実測済みとするかが機械で判定できない")
+
+        covered, remaining = _revalidation_coverage(entry, script)
+        assert remaining, (
+            f"{script.name}: revalidation_results が全数 live sha を pin している"
+            f"（= 再検証完了）のに宣言が残っている。該当行を消すこと")
+        # 部分再実測は「宣言を消してよい」ではなく「まだ途中」。covered が
+        # 非空でも宣言は残り続ける（このアサートが無いと逆に消せてしまう）。
+        assert covered != set(entry["revalidation_results"])
+
+
+def test_declared_revalidation_sets_name_real_results() -> None:
+    """`revalidation_results` が実在する正本を指し、その script の pin を持つこと。"""
+    for entry in _snapshot_index()["live_unmeasured"]:
+        assert entry["revalidation_results"], f"{entry['script']}: 再検証セットが空"
+        for name in entry["revalidation_results"]:
+            assert (RECORDS / name).exists(), (
+                f"{entry['script']}: revalidation_results の {name} が無い")
+            assert _pinned_script_sha(name, entry["script"]) is not None, (
+                f"{entry['script']}: {name} は {entry['script']} の sha を pin して"
+                f"いないので、再検証の対象になり得ない")

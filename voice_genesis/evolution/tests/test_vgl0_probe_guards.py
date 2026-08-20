@@ -174,3 +174,180 @@ def test_run_probe_requires_the_owned_work_dir_argument(chk) -> None:
     """`owned_work_dir` は **キーワード必須**（渡し忘れを呼び出し時に落とす）。"""
     with pytest.raises(TypeError):
         chk.run_probe("python", [], Path("/tmp/out"), Path("/tmp/r.json"))
+
+
+# --------------------------------------------------------------------------
+# consumed_* 検査の**キー集合完全一致**（外部レビュー指摘）
+#
+# 「在るキーだけ照合して PASS」だと、空バンドル / キー欠落 / 未知キーが素通り
+# する。期待集合との完全一致を要求していることを、5 通りで固定する。
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def probe(chk):
+    return chk.probe_mod
+
+
+def _model_pins(probe) -> dict:
+    """`_CONSUMED_TO_PIN` の全 pin キーを持つ最小の pins。"""
+    return {pin: {"sha256": f"sha-{pin}"} for pin in probe._CONSUMED_TO_PIN.values()}
+
+
+def _model_consumed(probe) -> dict:
+    return {ck: f"sha-{pin}" for ck, pin in probe._CONSUMED_TO_PIN.items()}
+
+
+def _score_pins() -> dict:
+    return {
+        "score_module_sakura": {"sha256": "sha-score"},
+        "score_module_sakura_dep_phoneme_jp": {"sha256": "sha-dep"},
+        # 期待集合は score_module_* だけ。無関係な pin は混ざってはいけない
+        "acoustic_onnx": {"sha256": "sha-acoustic"},
+    }
+
+
+def _score_consumed() -> dict:
+    return {"score_module_sakura": "sha-score",
+            "score_module_sakura_dep_phoneme_jp": "sha-dep"}
+
+
+def test_consumed_model_check_passes_on_the_exact_key_set(probe) -> None:
+    out = probe.verify_consumed_bytes(
+        [{"label": "baseline", "consumed_model_sha256": _model_consumed(probe)}],
+        _model_pins(probe))
+    assert out["ok"], out["mismatches"]
+    assert out["distinct_bundles"] == 1
+
+
+@pytest.mark.parametrize("mutate,why", [
+    (lambda c: {}, "空バンドル"),
+    (lambda c: {k: v for k, v in list(c.items())[1:]}, "キー欠落"),
+    (lambda c: {**c, "unknown_onnx": "sha-x"}, "未知キー"),
+])
+def test_consumed_model_check_rejects_wrong_key_sets(probe, mutate, why) -> None:
+    consumed = mutate(_model_consumed(probe))
+    out = probe.verify_consumed_bytes(
+        [{"label": "baseline", "consumed_model_sha256": consumed}], _model_pins(probe))
+    assert not out["ok"], f"{why} が素通りした: {out}"
+
+
+def test_consumed_model_check_rejects_a_digest_mismatch(probe) -> None:
+    consumed = _model_consumed(probe)
+    consumed["vocoder_onnx"] = "sha-tampered"
+    out = probe.verify_consumed_bytes(
+        [{"label": "baseline", "consumed_model_sha256": consumed}], _model_pins(probe))
+    assert not out["ok"]
+    assert any("vocoder_onnx" in m for m in out["mismatches"])
+
+
+def test_consumed_model_check_rejects_a_run_with_no_records(probe) -> None:
+    """記録が 1 件も無い走行を「検査に通った」と読み替えないこと。"""
+    out = probe.verify_consumed_bytes([{"label": "baseline", "error": "boom"}],
+                                      _model_pins(probe))
+    assert not out["ok"]
+
+
+def test_consumed_score_check_passes_on_the_exact_key_set(probe) -> None:
+    out = probe.verify_consumed_score_bytes(
+        [{"label": "baseline", "consumed_score_sha256": _score_consumed()}],
+        _score_pins())
+    assert out["ok"], out["mismatches"]
+
+
+@pytest.mark.parametrize("mutate,why", [
+    (lambda c: {}, "空バンドル"),
+    (lambda c: {"score_module_sakura": c["score_module_sakura"]}, "依存キー欠落"),
+    (lambda c: {**c, "score_module_umi": "sha-y"}, "pins に無い未知キー"),
+])
+def test_consumed_score_check_rejects_wrong_key_sets(probe, mutate, why) -> None:
+    out = probe.verify_consumed_score_bytes(
+        [{"label": "baseline", "consumed_score_sha256": mutate(_score_consumed())}],
+        _score_pins())
+    assert not out["ok"], f"{why} が素通りした: {out}"
+
+
+def test_consumed_score_check_rejects_a_digest_mismatch(probe) -> None:
+    consumed = _score_consumed()
+    consumed["score_module_sakura"] = "sha-tampered"
+    out = probe.verify_consumed_score_bytes(
+        [{"label": "baseline", "consumed_score_sha256": consumed}], _score_pins())
+    assert not out["ok"]
+    assert any("score_module_sakura" in m for m in out["mismatches"])
+
+
+def test_consumed_score_check_rejects_missing_score_pins(probe) -> None:
+    """pins に `score_module_*` が無いと期待集合を決められない = FAIL。"""
+    out = probe.verify_consumed_score_bytes(
+        [{"label": "baseline", "consumed_score_sha256": _score_consumed()}],
+        {"acoustic_onnx": {"sha256": "sha-acoustic"}})
+    assert not out["ok"]
+
+
+def test_consumed_checks_reject_bundles_differing_between_conditions(probe) -> None:
+    """条件ごとにバイト列が違う走行を PASS にしない。"""
+    a = _model_consumed(probe)
+    b = dict(a, vocoder_onnx="sha-other")
+    out = probe.verify_consumed_bytes(
+        [{"label": "a", "consumed_model_sha256": a},
+         {"label": "b", "consumed_model_sha256": b}], _model_pins(probe))
+    assert not out["ok"]
+    assert out["distinct_bundles"] == 2
+
+
+# --------------------------------------------------------------------------
+# 所有マーカーの symlink 追従（レビュー指摘 P2）
+#
+# `Path.exists()` はリンクを追うので、マーカーが保護対象入力への symlink だと
+# 「所有している」と誤判定し、書き込みがリンク先を切り詰める。probe / checker
+# の**両方**が同じ形の穴を持っていたのでファミリーとして掃討した。
+# --------------------------------------------------------------------------
+
+
+def test_checker_rejects_a_symlinked_ownership_marker(chk, tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    victim = tmp_path / "victim.onnx"
+    victim.write_bytes(b"MODEL")
+    (work / chk.WORK_OWNER_MARKER).symlink_to(victim)
+    (work / "filler.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        chk.claim_work_dir(work)
+    assert victim.read_bytes() == b"MODEL", "symlink 先が切り詰められた"
+
+
+def test_probe_rejects_a_symlinked_ownership_marker(probe, tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"KEEP")
+    (out_dir / probe.OWNER_MARKER).symlink_to(victim)
+    with pytest.raises(SystemExit):
+        probe.reset_condition_dir(out_dir)
+    assert victim.read_bytes() == b"KEEP", "symlink 先が壊れた"
+    assert out_dir.exists(), "所有していないディレクトリを rmtree した"
+
+
+def test_own_marker_predicate_rejects_links_and_dirs(probe, tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.write_text("x", encoding="utf-8")
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    a_dir = tmp_path / "dir"
+    a_dir.mkdir()
+    assert probe.is_own_marker(real)
+    assert not probe.is_own_marker(link)
+    assert not probe.is_own_marker(a_dir)
+    assert not probe.is_own_marker(tmp_path / "missing")
+
+
+def test_write_own_marker_refuses_to_follow_an_existing_link(
+    probe, tmp_path: Path,
+) -> None:
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"KEEP")
+    link = tmp_path / "marker"
+    link.symlink_to(victim)
+    with pytest.raises(OSError):
+        probe.write_own_marker(link, "owned\n")
+    assert victim.read_bytes() == b"KEEP"

@@ -28,13 +28,25 @@
   "live_unmeasured": [
     {
       "script": "vgl0_control_axis_probe.py",
+      "sha256": "1c10039ab149c22f7206392d3c9b51e369566f38ace93cb98fa107afda5cf316",
+      "revalidation_results": [
+        "vgl0_control_axis_probe_result.json",
+        "vgl0_control_axis_probe_result_n6.json",
+        "vgl0_control_axis_probe_result_n10.json",
+        "vgl0_render_reproducibility_result.json"
+      ],
       "reason": "PR #289 7 巡目 P2『Verify the score bytes returned by each synthesis』の是正で consumed_score_bytes_check を追加した。追加したのは検査と fail-closed だけだが、**出力に影響しないことを実測で確かめてはいない** — 機構から因果を組み立てて 実測で確かめない誤りは本トラックで 3 度撤回した型なので、無実測のまま 『同じ WAV が出る』とは書かない。",
       "revalidation": "run 6 40K ONNX（acoustic/embed/phonemes.json）+ canon(NamineRitsu_DiffSinger) + nsf_hifigan を用意し、notes_limit 8/6/10 の 3 走行と vgl0_reproducibility_check の 10 プロセスを回して 4 本の結果 JSON を再生成する。資産は repo 外（Pod/Drive 律速）。"
     },
     {
       "script": "vgl0_reproducibility_check.py",
+      "sha256": "89febf80012523cd01f60944d65ddc14b598ae2f577a3d05c4bf3e55764b67fb",
+      "revalidation_results": [
+        "vgl0_render_reproducibility_result.json"
+      ],
       "reason": "PR #289 7 巡目 P2 2 件（派生 acoustic 入力の保護漏れ / 所有外 result ファイルの unlink）の是正。いずれも起動前の preflight と所有権検査で、合成経路には触れない。",
       "revalidation": "上と同じ再実測で vgl0_render_reproducibility_result.json を再生成する。"
     }
-  ]
+  ],
+  "live_unmeasured_note": "sha256 = 宣言時点の live 実装の sha。live を編集したら宣言は流用できない（テストが不一致で落ちる）。revalidation_results が **全数** live sha を pin して初めて『実測済み』とし、宣言を消してよい。1 本だけ作り直した部分再実測では宣言は残る。"
 }

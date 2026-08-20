@@ -50,7 +50,9 @@ import argparse
 import contextlib
 import hashlib
 import json
+import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -301,6 +303,31 @@ def note_region_energy(
 OWNER_MARKER = ".vgl0_probe_output"
 
 
+def is_own_marker(path: Path) -> bool:
+    """所有マーカーが **シンボリックリンクでない通常ファイル**か。
+
+    `Path.exists()` はリンクを追う。マーカーが保護対象入力への symlink だと
+    「所有している」と誤判定し、続く書き込みがリンク先を切り詰める /
+    `rmtree` が無関係なディレクトリを消す（レビュー指摘 P2）。`lstat` で
+    リンク自体を見る。
+    """
+    try:
+        st = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode)
+
+
+def write_own_marker(path: Path, text: str) -> None:
+    """所有マーカーを **リンクを追わずに**書く（`O_NOFOLLOW`）。
+
+    既存が symlink なら `OSError` になるので、リンク先の破壊が起きない。
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
 def reset_condition_dir(out_dir: Path) -> None:
     """条件ディレクトリを作り直す。**probe が作ったものだけ**消す。
 
@@ -314,17 +341,18 @@ def reset_condition_dir(out_dir: Path) -> None:
     無いディレクトリは消さずに fail-closed** にする。
     """
     if out_dir.exists():
-        if not (out_dir / OWNER_MARKER).exists():
+        if not is_own_marker(out_dir / OWNER_MARKER):
             raise SystemExit(
                 f"出力先 {out_dir} は probe が作ったディレクトリではない"
-                f"（所有マーカー {OWNER_MARKER} が無い）。無関係な成果物を"
-                f"消さないため中断する。--out-dir を空の場所へ変えること")
+                f"（所有マーカー {OWNER_MARKER} が通常ファイルとして無い）。"
+                f"無関係な成果物を消さないため中断する。"
+                f"--out-dir を空の場所へ変えること")
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
-    (out_dir / OWNER_MARKER).write_text(
+    write_own_marker(
+        out_dir / OWNER_MARKER,
         "vgl0_control_axis_probe が所有する出力ディレクトリ。"
-        "このファイルがあるディレクトリだけ probe は削除・再作成する。\n",
-        encoding="utf-8")
+        "このファイルがあるディレクトリだけ probe は削除・再作成する。\n")
 
 
 def synth_once(
@@ -691,6 +719,10 @@ def execution_profile() -> dict:
     }
 
 
+# `load_song_module` が返す楽譜 pin のキー接頭辞（`gate_synth.py:259-277`）。
+# 期待集合をこの接頭辞で pins から導くので、命名が変わったらここも変える。
+_SCORE_PIN_PREFIX = "score_module_"
+
 # `load_model_bundle_bytes` のキー -> `collect_pins` のキー
 _CONSUMED_TO_PIN = {
     "acoustic_onnx": "acoustic_onnx",
@@ -708,20 +740,37 @@ def verify_consumed_bytes(results: List[dict], pins: dict) -> dict:
     「記録された hash と実際に推論へ使われたバイト列が食い違う」窓を閉じる。
     ずれた場合は結果 JSON に不一致として残す（黙って通さない）。
 
+    **キー集合の完全一致を要求する**（レビュー指摘・外部）: 「在るキーだけ
+    照合して PASS」にすると、空バンドル / キー欠落 / 未知キーが素通りする。
+    期待集合 `_CONSUMED_TO_PIN` と実際の消費キーが一致しない条件は不一致扱い。
+
     射程の正直会計: ここで閉じられるのは `load_model_bundle_bytes` が返す
-    6 バッファ（canon 3 + acoustic + dsconfig + vocoder）だけ。話者 embed /
-    音素辞書 / 楽譜モジュールは gate_synth 側がパス read するため、
-    依然として `pins` のパス read に依存する。
+    6 バッファ（canon 3 + acoustic + dsconfig + vocoder）だけ。話者 embed と
+    音素辞書は gate_synth 側がパス read するため、依然として `pins` のパス read に
+    依存する（楽譜モジュールは `verify_consumed_score_bytes` で別途閉じた）。
     """
     seen = {json.dumps(r["consumed_model_sha256"], sort_keys=True)
             for r in results if "consumed_model_sha256" in r}
     mismatches = []
+    if not seen:
+        mismatches.append("消費モデルバイトを記録した条件が 1 件も無い")
     if len(seen) > 1:
         mismatches.append(f"条件間でモデルバイト列が異なる (distinct={len(seen)})")
+    expected = set(_CONSUMED_TO_PIN)
     for r in results:
-        for ck, digest in (r.get("consumed_model_sha256") or {}).items():
+        if "error" in r:
+            continue  # 失敗条件は main が rc=1 にする（ここで二重に鳴らさない）
+        consumed = r.get("consumed_model_sha256") or {}
+        actual = set(consumed)
+        if actual != expected:
+            mismatches.append(
+                f"{r['label']}: 消費モデルキー集合が期待と不一致 "
+                f"欠け={sorted(expected - actual)} / 余分={sorted(actual - expected)}")
+        for ck, digest in consumed.items():
             pin_key = _CONSUMED_TO_PIN.get(ck)
-            if pin_key and pins.get(pin_key, {}).get("sha256") != digest:
+            if pin_key is None:
+                continue  # 未知キーは上のキー集合検査が既に不一致にしている
+            if pins.get(pin_key, {}).get("sha256") != digest:
                 mismatches.append(
                     f"{r['label']}: 消費バイト列 {ck} が pins.{pin_key} と不一致")
     return {
@@ -747,15 +796,31 @@ def verify_consumed_score_bytes(results: List[dict], pins: dict) -> dict:
 
     pins 側のキーは `load_song_module` が返すキーそのもの
     （`score_module_<song>` / `score_module_<song>_dep_<module>`）で、
-    `collect_pins` がそのまま pins へ載せている。
+    `collect_pins` がそのまま pins へ載せている。**期待集合は pins 側の
+    `score_module_*` 全数**とし、モデル側と同じくキー集合の完全一致を要求する
+    （レビュー指摘・外部: 在るキーだけ照合すると空・欠落・未知キーが素通りする）。
     """
     seen = {json.dumps(r["consumed_score_sha256"], sort_keys=True)
             for r in results if "consumed_score_sha256" in r}
     mismatches = []
+    if not seen:
+        mismatches.append("実行された楽譜バイトを記録した条件が 1 件も無い")
     if len(seen) > 1:
         mismatches.append(f"条件間で楽譜バイト列が異なる (distinct={len(seen)})")
+    expected = {k for k in pins if k.startswith(_SCORE_PIN_PREFIX)}
+    if not expected:
+        mismatches.append(
+            f"pins に {_SCORE_PIN_PREFIX}* が 1 件も無い — 期待集合を決められない")
     for r in results:
-        for key, digest in (r.get("consumed_score_sha256") or {}).items():
+        if "error" in r:
+            continue
+        consumed = r.get("consumed_score_sha256") or {}
+        actual = set(consumed)
+        if actual != expected:
+            mismatches.append(
+                f"{r['label']}: 実行された楽譜キー集合が pins と不一致 "
+                f"欠け={sorted(expected - actual)} / 余分={sorted(actual - expected)}")
+        for key, digest in consumed.items():
             pinned = pins.get(key, {}).get("sha256")
             if pinned is None:
                 mismatches.append(

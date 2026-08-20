@@ -83,16 +83,20 @@ def claim_work_dir(work: Path) -> Path:
     if work.exists():
         if not work.is_dir():
             raise SystemExit(f"--work-dir {work} はディレクトリではない")
-        if not (work / WORK_OWNER_MARKER).exists() and any(work.iterdir()):
+        # マーカーは **symlink でない通常ファイル**であること。`exists()` は
+        # リンクを追うので、保護対象入力への symlink を置かれると「所有して
+        # いる」と誤判定し、下の書き込みがリンク先を切り詰める（レビュー指摘 P2）。
+        if not probe_mod.is_own_marker(work / WORK_OWNER_MARKER) and any(work.iterdir()):
             raise SystemExit(
                 f"--work-dir {work} は checker が作ったディレクトリではない"
-                f"（所有マーカー {WORK_OWNER_MARKER} が無く、中身がある）。"
-                f"無関係なファイルを消さないため中断する。空の場所を指すこと")
+                f"（所有マーカー {WORK_OWNER_MARKER} が通常ファイルとして無く、"
+                f"中身がある）。無関係なファイルを消さないため中断する。"
+                f"空の場所を指すこと")
     work.mkdir(parents=True, exist_ok=True)
-    (work / WORK_OWNER_MARKER).write_text(
+    probe_mod.write_own_marker(
+        work / WORK_OWNER_MARKER,
         "vgl0_reproducibility_check が所有する作業ディレクトリ。"
-        "このファイルがあるディレクトリの中だけ checker は削除・再作成する。\n",
-        encoding="utf-8")
+        "このファイルがあるディレクトリの中だけ checker は削除・再作成する。\n")
     return work
 
 

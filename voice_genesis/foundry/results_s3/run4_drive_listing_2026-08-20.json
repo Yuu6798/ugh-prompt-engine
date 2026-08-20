@@ -1,0 +1,78 @@
+{
+  "schema": "drive-listing-evidence/0.1",
+  "purpose": "s3_record §7.2 の負の所見（run 4 の checkpoint / train log / TensorBoard は Google Drive に無い）の一次証拠。負の主張は根拠を残さないと検証も反証もできないため、実行したクエリと戻り値をそのまま保存する。",
+  "collected_at_utc": "2026-08-20",
+  "tool": "MCP google_drive.search_files",
+  "queries": [
+    {
+      "id": "Q1",
+      "scope": "Drive 全体",
+      "query": "title contains 'run4' or title contains 'tb_events' or title contains 'train_run4'",
+      "page_size": 30,
+      "next_page_token": null,
+      "exhaustive": true,
+      "n_files": 5,
+      "files": [
+        {
+          "title": "run3_run4_40k_anchors.tar.gz",
+          "id": "14JNcG44R5hORsj7SSqUJjrXmcHcG2jiI",
+          "size": 12032404,
+          "created_utc": "2026-08-17T21:07:55.430Z"
+        },
+        {
+          "title": "gate10k_run4_samples.tar.gz",
+          "id": "17JDPZGfCNuh8zYIlyafY7i_KiYNWrWP0",
+          "size": 6880341,
+          "created_utc": "2026-08-17T14:12:00.086Z"
+        },
+        {
+          "title": "run4_config_datasets.yaml.normalized.yaml",
+          "id": "16Q4car7o2qISwXgQp_wJMSgZMjY8ug5y",
+          "size": 997,
+          "created_utc": "2026-08-20T11:11:58.673Z"
+        },
+        {
+          "title": "run4_config_datasets.yaml.normalized.yaml",
+          "id": "10ITToKjLScC76k-YpeTgHb_fi4G03wHr",
+          "size": 1004,
+          "created_utc": "2026-08-19T23:01:52.663Z"
+        },
+        {
+          "title": "run4_config_datasets.yaml.normalized.yaml",
+          "id": "1cVeRu82YPzG7wuaANVSH9s2YCajJtxN8",
+          "size": 1004,
+          "created_utc": "2026-08-19T06:32:58.827Z"
+        }
+      ]
+    },
+    {
+      "id": "Q2",
+      "scope": "run3/run4 受け渡しフォルダ 1_Hbi46PQ-fi1wxc6fZWglBjzTecfr0z_",
+      "query": "parentId = '1_Hbi46PQ-fi1wxc6fZWglBjzTecfr0z_' and (title contains 'run4' or title contains 'ckpt' or title contains 'checkpoint' or title contains 'tb_' or title contains 'train' or title contains 'log' or title contains 'gate')",
+      "page_size": 100,
+      "next_page_token": null,
+      "exhaustive": true,
+      "n_files": 2,
+      "files": [
+        {
+          "title": "run3_run4_40k_anchors.tar.gz",
+          "id": "14JNcG44R5hORsj7SSqUJjrXmcHcG2jiI",
+          "size": 12032404,
+          "created_utc": "2026-08-17T21:07:55.430Z"
+        },
+        {
+          "title": "gate10k_run4_samples.tar.gz",
+          "id": "17JDPZGfCNuh8zYIlyafY7i_KiYNWrWP0",
+          "size": 6880341,
+          "created_utc": "2026-08-17T14:12:00.086Z"
+        }
+      ]
+    }
+  ],
+  "conclusion": "節目 checkpoint（5K/10K/20K/40K × 3 分割）・train_run4.log.gz・tb_events_run4.tar.gz に相当するファイルは Q1/Q2 のいずれにも現れない。Drive 経由で回収できるのは判定材料 tar.gz 2 本のみ。",
+  "limits": [
+    "**タイトル検索であって全件列挙ではない**。キーワードを 1 つも含まない名前で 退避されていれば、この 2 クエリでは見つからない",
+    "フォルダの無条件全件列挙（parentId のみ）は 1 ページ目で next_page_token が 返り、本セッションでは尽くしていない。したがって『フォルダを全件走査した』とは言えず、主張できるのは『上記キーワードに一致するものは 2 件だけ』まで",
+    "サイズと作成時刻は Drive メタデータの実測。**sha256 照合はしていない**（12MB の取得が本セッションの経路では不可）"
+  ]
+}
