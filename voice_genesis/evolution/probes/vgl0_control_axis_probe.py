@@ -398,7 +398,10 @@ def synth_once(
     out_dir = cfg.out_dir / label
     reset_condition_dir(out_dir)
     try:
-        with open(cfg.out_dir / f"{label}.log", "w") as logf, \
+        # 派生ファイルは**所有マーカーのある条件ディレクトリの中**へ置く。
+        # 直下（`--out-dir/{label}.log`）だと、既存の無関係な同名ファイルを
+        # 黙って切り詰める（レビュー指摘 P2 / AGENTS.md「per-run パス」）。
+        with open(out_dir / "synth.log", "w") as logf, \
                 contextlib.redirect_stdout(logf):
             gs.synth_song(
                 cfg.song, cfg.notes_limit, build_fn, beats_to_seconds, tempo,
@@ -648,10 +651,19 @@ def assert_writes_do_not_touch_inputs(
                 raise SystemExit(
                     f"出力先 {w} は保護対象の入力そのものを指している。"
                     f"実行すると入力を破壊するため中断する")
-            if w in inp.parents:
+            # 包含は **両方向**で弾く（レビュー指摘 P2）。
+            #  (a) 出力が入力を含む -> rmtree で入力ごと消える
+            #  (b) 出力が保護ディレクトリの**内側** -> 例えば
+            #      `--result-json voice_genesis/singer/score.py` は singer_dir の
+            #      子孫なので (a) だけでは素通りし、合成後に楽譜を切り詰める
+            if inp.is_relative_to(w):
                 raise SystemExit(
                     f"出力先 {w} は保護対象の入力 {inp} を含むディレクトリ。"
                     f"条件ディレクトリの再作成で入力を破壊するため中断する")
+            if w.is_relative_to(inp):
+                raise SystemExit(
+                    f"出力先 {w} は保護対象 {inp} の内側にある。"
+                    f"入力ツリーへ書き込まないため中断する")
 
 
 def execution_profile() -> dict:

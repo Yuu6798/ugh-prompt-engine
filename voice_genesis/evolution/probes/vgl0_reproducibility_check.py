@@ -175,6 +175,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             SELF, PROBE, probe_mod.GATE_SYNTH_PATH,
             Path(a.acoustic_onnx), Path(a.acoustic_dir),
             Path(a.canon_dir), Path(a.vocoder_dir),
+            # 各サブプロセスは既定の singer ディレクトリから score.py /
+            # phoneme_jp.py を実行する。これを入れないと
+            # `--result-json .../singer/score.py` が全 probe 完走後に
+            # 楽譜を上書きする（レビュー指摘 P2）
+            probe_mod.DEFAULT_SINGER_DIR,
         ],
     )
     work.mkdir(parents=True, exist_ok=True)

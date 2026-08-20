@@ -1,14 +1,14 @@
 {
   "checker_script": {
     "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_reproducibility_check.py",
-    "sha256": "6d4542c2a91ca30fdc4428a06ceca4426efa102731a6af083df1291dd7a15771",
-    "sha256_after_run": "6d4542c2a91ca30fdc4428a06ceca4426efa102731a6af083df1291dd7a15771",
+    "sha256": "12f0aca19c2445ca12a1e6057e3ea78fe840f520f08aaac05bf0185c802232c4",
+    "sha256_after_run": "12f0aca19c2445ca12a1e6057e3ea78fe840f520f08aaac05bf0185c802232c4",
     "note": "sha256 は **ロード時**に固定した値。実行後の 再 hash と一致することを findings で検証する"
   },
   "pins": {
     "probe_script": {
       "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_control_axis_probe.py",
-      "sha256": "22bcec64227e45a20be6d4ac9375798276f8074c1755f66d3c78a8662a20f60a"
+      "sha256": "85e33df26a4a56af19d0627728d5d87cce7f80bcc6953f92976228d617823956"
     },
     "gate_synth": {
       "path": "/workspace/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth.py",
@@ -61,7 +61,7 @@
   },
   "probe_script": {
     "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_control_axis_probe.py",
-    "sha256": "22bcec64227e45a20be6d4ac9375798276f8074c1755f66d3c78a8662a20f60a"
+    "sha256": "85e33df26a4a56af19d0627728d5d87cce7f80bcc6953f92976228d617823956"
   },
   "consumed_model_bytes_check": {
     "distinct_bundles": 1,
@@ -325,8 +325,8 @@
     },
     {
       "check": "checker_unchanged_during_run",
-      "sha_at_load": "6d4542c2a91ca30fdc4428a06ceca4426efa102731a6af083df1291dd7a15771",
-      "sha_after_run": "6d4542c2a91ca30fdc4428a06ceca4426efa102731a6af083df1291dd7a15771",
+      "sha_at_load": "12f0aca19c2445ca12a1e6057e3ea78fe840f520f08aaac05bf0185c802232c4",
+      "sha_after_run": "12f0aca19c2445ca12a1e6057e3ea78fe840f520f08aaac05bf0185c802232c4",
       "match": true
     }
   ],
