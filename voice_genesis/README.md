@@ -197,6 +197,8 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 | `singer/results_s5/crosssong_report.md` | S5 cross-song identity 実証 + 証明書衛生 |
 | `singer/results_s9/nasal_place_report.md` | S9 鼻音調音位置 locus 実装（子音デバッグラダー完結） |
 | `singer/results_s9/s9_gate_record.md` | S6〜S9 耳駆動デバッグラダー全記録 + 教訓 |
+| `foundry/planb/DESIGN_PLANB_poc.md` | Plan B PoC の実験契約（Identity × Performance 分離・事前登録 TRF ゲート・被覆申告） |
+| `foundry/planb/results_pb0/pb0_record_2026-08-20.md` | Plan B PoC 第 1 走行（代替ドナーでの機構検証。受入 6 条件中 3 達成 / 2 は実資産・耳律速で未達） |
 
 各 `results_s*/underspec_log_s*.md` にサイクルごとの仕様逸脱・補充判断が
 記録されている。

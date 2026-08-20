@@ -1,0 +1,17 @@
+{
+  "primary_probe": "り@24",
+  "primary_axis": "nasal_gain_db",
+  "r0_value_db": 2.718,
+  "failure_present": true,
+  "failure_presence_threshold_db": 1.0,
+  "required_improvement_db": 1.0,
+  "target_max_db": 1.718,
+  "regression_tol_db": 1.0,
+  "holdout_probes": [
+    "す@20"
+  ],
+  "holdout_r0_db": {
+    "す@20": -0.5496
+  },
+  "rule": "primary: R4 の nasal_gain_db <= target_max_db。ただし failure_present=False（R0 < 1.0dB）のときは not_evaluable とし成功に数えない。regression: drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと。holdout: 各 holdout probe の nasal_gain_db が R0 比 +regression_tol_db を超えないこと。"
+}

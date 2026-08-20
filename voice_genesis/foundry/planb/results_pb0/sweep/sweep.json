@@ -1,0 +1,400 @@
+{
+  "depths": [
+    0.0,
+    0.2,
+    0.4,
+    0.6,
+    0.8,
+    1.0
+  ],
+  "rows": [
+    {
+      "depth": 0.0,
+      "R0": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.8775,
+          "drift_db": 2.5484,
+          "f0_sag_cents": 1.545,
+          "energy_tail_db": -3.8284,
+          "nasal_gain_shape_db": 2.666,
+          "drift_shape_db": 8.5384
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.8401,
+          "drift_db": 2.7742,
+          "f0_sag_cents": 1.037,
+          "energy_tail_db": -3.9191,
+          "nasal_gain_shape_db": 0.1472,
+          "drift_shape_db": 0.6701
+        }
+      },
+      "R4": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.5196,
+          "drift_db": 2.1231,
+          "f0_sag_cents": 2.606,
+          "energy_tail_db": -3.3946,
+          "nasal_gain_shape_db": 2.4342,
+          "drift_shape_db": 11.991
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.5477,
+          "drift_db": 2.4472,
+          "f0_sag_cents": 2.741,
+          "energy_tail_db": -3.5678,
+          "nasal_gain_shape_db": 0.0059,
+          "drift_shape_db": 0.5298
+        }
+      }
+    },
+    {
+      "depth": 0.2,
+      "R0": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -2.3634,
+          "drift_db": 5.9195,
+          "f0_sag_cents": 1.217,
+          "energy_tail_db": -0.2875,
+          "nasal_gain_shape_db": 3.9776,
+          "drift_shape_db": 7.2506
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 0.1357,
+          "drift_db": 0.6389,
+          "f0_sag_cents": 1.087,
+          "energy_tail_db": -0.1126,
+          "nasal_gain_shape_db": 1.0386,
+          "drift_shape_db": 1.2593
+        }
+      },
+      "R4": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.2588,
+          "drift_db": 2.1096,
+          "f0_sag_cents": 2.754,
+          "energy_tail_db": -3.3643,
+          "nasal_gain_shape_db": 2.4347,
+          "drift_shape_db": 12.0654
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.3987,
+          "drift_db": 2.4414,
+          "f0_sag_cents": 2.729,
+          "energy_tail_db": -3.5593,
+          "nasal_gain_shape_db": 0.0093,
+          "drift_shape_db": 0.5135
+        }
+      }
+    },
+    {
+      "depth": 0.4,
+      "R0": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.9567,
+          "drift_db": 4.8113,
+          "f0_sag_cents": 1.252,
+          "energy_tail_db": -0.5417,
+          "nasal_gain_shape_db": 4.9861,
+          "drift_shape_db": 6.5738
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 0.9746,
+          "drift_db": 1.1773,
+          "f0_sag_cents": 1.15,
+          "energy_tail_db": -0.231,
+          "nasal_gain_shape_db": 2.0475,
+          "drift_shape_db": 2.2643
+        }
+      },
+      "R4": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.2542,
+          "drift_db": 2.1031,
+          "f0_sag_cents": 2.754,
+          "energy_tail_db": -3.3588,
+          "nasal_gain_shape_db": 2.4373,
+          "drift_shape_db": 12.0658
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.3909,
+          "drift_db": 2.4339,
+          "f0_sag_cents": 2.704,
+          "energy_tail_db": -3.5566,
+          "nasal_gain_shape_db": 0.015,
+          "drift_shape_db": 0.5151
+        }
+      }
+    },
+    {
+      "depth": 0.6,
+      "R0": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.3053,
+          "drift_db": 4.8115,
+          "f0_sag_cents": 1.513,
+          "energy_tail_db": -0.7789,
+          "nasal_gain_shape_db": 5.957,
+          "drift_shape_db": 6.7241
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 1.8195,
+          "drift_db": 2.1679,
+          "f0_sag_cents": 1.205,
+          "energy_tail_db": -0.3536,
+          "nasal_gain_shape_db": 3.1338,
+          "drift_shape_db": 3.4352
+        }
+      },
+      "R4": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.2496,
+          "drift_db": 2.0966,
+          "f0_sag_cents": 2.754,
+          "energy_tail_db": -3.3533,
+          "nasal_gain_shape_db": 2.4399,
+          "drift_shape_db": 12.0662
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.3831,
+          "drift_db": 2.4263,
+          "f0_sag_cents": 2.679,
+          "energy_tail_db": -3.554,
+          "nasal_gain_shape_db": 0.0207,
+          "drift_shape_db": 0.5168
+        }
+      }
+    },
+    {
+      "depth": 0.8,
+      "R0": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.4285,
+          "drift_db": 5.6835,
+          "f0_sag_cents": 1.65,
+          "energy_tail_db": -1.0008,
+          "nasal_gain_shape_db": 7.1153,
+          "drift_shape_db": 7.6964
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 2.5632,
+          "drift_db": 3.2493,
+          "f0_sag_cents": 1.24,
+          "energy_tail_db": -0.475,
+          "nasal_gain_shape_db": 4.199,
+          "drift_shape_db": 4.6576
+        }
+      },
+      "R4": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.245,
+          "drift_db": 2.09,
+          "f0_sag_cents": 2.754,
+          "energy_tail_db": -3.3479,
+          "nasal_gain_shape_db": 2.4426,
+          "drift_shape_db": 12.0666
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.3752,
+          "drift_db": 2.4188,
+          "f0_sag_cents": 2.655,
+          "energy_tail_db": -3.5513,
+          "nasal_gain_shape_db": 0.0265,
+          "drift_shape_db": 0.5186
+        }
+      }
+    },
+    {
+      "depth": 1.0,
+      "R0": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -1.0457,
+          "drift_db": 6.9075,
+          "f0_sag_cents": 1.708,
+          "energy_tail_db": -1.2035,
+          "nasal_gain_shape_db": 8.3879,
+          "drift_shape_db": 9.068
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": 3.0887,
+          "drift_db": 4.2724,
+          "f0_sag_cents": 1.228,
+          "energy_tail_db": -0.5829,
+          "nasal_gain_shape_db": 5.1015,
+          "drift_shape_db": 5.787
+        }
+      },
+      "R4": {
+        "す@20": {
+          "unit_index": 20,
+          "label": "す",
+          "nasal_gain_db": -0.2403,
+          "drift_db": 2.0834,
+          "f0_sag_cents": 2.754,
+          "energy_tail_db": -3.3424,
+          "nasal_gain_shape_db": 2.4453,
+          "drift_shape_db": 12.067
+        },
+        "り@24": {
+          "unit_index": 24,
+          "label": "り",
+          "nasal_gain_db": -1.3673,
+          "drift_db": 2.4112,
+          "f0_sag_cents": 2.63,
+          "energy_tail_db": -3.5487,
+          "nasal_gain_shape_db": 0.0323,
+          "drift_shape_db": 0.5204
+        }
+      }
+    }
+  ],
+  "monotonicity": {
+    "す@20|nasal_gain_db": {
+      "values": [
+        -0.8775,
+        -2.3634,
+        -0.9567,
+        -0.3053,
+        -0.4285,
+        -1.0457
+      ],
+      "monotone_increasing": false,
+      "spearman_like": -0.2,
+      "range_db": -0.1682
+    },
+    "す@20|nasal_gain_shape_db": {
+      "values": [
+        2.666,
+        3.9776,
+        4.9861,
+        5.957,
+        7.1153,
+        8.3879
+      ],
+      "monotone_increasing": true,
+      "spearman_like": 1.0,
+      "range_db": 5.7219
+    },
+    "す@20|drift_db": {
+      "values": [
+        2.5484,
+        5.9195,
+        4.8113,
+        4.8115,
+        5.6835,
+        6.9075
+      ],
+      "monotone_increasing": false,
+      "spearman_like": 0.6,
+      "range_db": 4.3591
+    },
+    "す@20|drift_shape_db": {
+      "values": [
+        8.5384,
+        7.2506,
+        6.5738,
+        6.7241,
+        7.6964,
+        9.068
+      ],
+      "monotone_increasing": false,
+      "spearman_like": 0.2,
+      "range_db": 0.5296
+    },
+    "り@24|nasal_gain_db": {
+      "values": [
+        -1.8401,
+        0.1357,
+        0.9746,
+        1.8195,
+        2.5632,
+        3.0887
+      ],
+      "monotone_increasing": true,
+      "spearman_like": 1.0,
+      "range_db": 4.9288
+    },
+    "り@24|nasal_gain_shape_db": {
+      "values": [
+        0.1472,
+        1.0386,
+        2.0475,
+        3.1338,
+        4.199,
+        5.1015
+      ],
+      "monotone_increasing": true,
+      "spearman_like": 1.0,
+      "range_db": 4.9543
+    },
+    "り@24|drift_db": {
+      "values": [
+        2.7742,
+        0.6389,
+        1.1773,
+        2.1679,
+        3.2493,
+        4.2724
+      ],
+      "monotone_increasing": false,
+      "spearman_like": 0.6,
+      "range_db": 1.4982
+    },
+    "り@24|drift_shape_db": {
+      "values": [
+        0.6701,
+        1.2593,
+        2.2643,
+        3.4352,
+        4.6576,
+        5.787
+      ],
+      "monotone_increasing": true,
+      "spearman_like": 1.0,
+      "range_db": 5.1169
+    }
+  }
+}
