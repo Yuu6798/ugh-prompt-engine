@@ -141,7 +141,24 @@
         },
         "interpretation": "ap を絞ると客観距離が単調に改善する。非周期成分の過大推定が有力な機序"
       },
-      "answer_raw": null
+      "answer_raw": "（項目7）1: 明確に減少・ノイズほぼ無し / 2: 微妙よりの通らない / 3: 何も失われてない・0.25 のほうが単純に品質よい",
+      "findings": {
+        "noise_reduced": true,
+        "passes_as_original": "微妙よりの通らない",
+        "quality_cost": "なし（0.25 のほうが品質よい）",
+        "adopted": "AP_SCALE = 0.25 を identity 経路へ投入"
+      }
+    },
+    {
+      "item": 8,
+      "question": "Q2 再測 — R0 vs R1（ノイズ対策後）",
+      "answer_raw": "1: 明確に減少 / 2: ある / 3: R0",
+      "findings": {
+        "noise_after_fix": "明確に減少（ラダー出力でも確認）",
+        "q2_difference_audible": true,
+        "which_is_natural": "R0"
+      },
+      "implication": "**Q2 は yes** = 移植した成分は可聴。ただし移植後（R1）のほうが不自然と判定された。成分は届いているが、届いた結果が良くなっていない"
     }
   ]
 }

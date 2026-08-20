@@ -76,7 +76,8 @@ def _slice_original(lab_path: Path, phone_index: int) -> Optional[tuple]:
     return x, sr
 
 
-def build(blind: bool = False, kinds: Optional[List[str]] = None) -> Dict[str, Any]:
+def build(blind: bool = False, kinds: Optional[List[str]] = None,
+          salt: str = "") -> Dict[str, Any]:
     data = json.loads(LADDER_MANIFEST.read_text(encoding="utf-8"))
     manifest: Dict[str, Any] = {"pairs": {}}
     key: Dict[str, Any] = {}
@@ -112,8 +113,10 @@ def build(blind: bool = False, kinds: Optional[List[str]] = None) -> Dict[str, A
             files[rung] = str(out / f"{rung}.wav")
 
         if blind and "R0" in files and "R4" in files:
-            # 決定論的な伏せ方: pair_key の sha256 の最下位ビットで A/B を割り当てる
-            bit = int(hashlib.sha256(pair_key.encode("utf-8")).hexdigest(), 16) & 1
+            # 決定論的な伏せ方: (salt + pair_key) の sha256 の最下位ビットで A/B を割り当てる。
+            # salt 無しの初回は 4 ペアとも A=R4 に偏った（1/8 の偶然）ため、
+            # 再判定では salt を変えて割り当てを引き直す。
+            bit = int(hashlib.sha256((salt + pair_key).encode("utf-8")).hexdigest(), 16) & 1
             a_src, b_src = ("R0", "R4") if bit == 0 else ("R4", "R0")
             for label, rung in (("A", a_src), ("B", b_src)):
                 x, sr = sf.read(files[rung])
@@ -153,8 +156,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="G-ear の材料と回答様式を用意する")
     ap.add_argument("--blind", action="store_true", help="R0/R4 を A/B へ伏せる")
     ap.add_argument("--kinds", nargs="*", default=None, help="probe 種を絞る")
+    ap.add_argument("--salt", default="", help="A/B 割り当てを引き直す salt")
     args = ap.parse_args(argv)
-    man = build(blind=args.blind, kinds=args.kinds)
+    man = build(blind=args.blind, kinds=args.kinds, salt=args.salt)
     write_template()
     for pk, v in man["pairs"].items():
         print(f"{pk}\n   {sorted(v['files'])}")
