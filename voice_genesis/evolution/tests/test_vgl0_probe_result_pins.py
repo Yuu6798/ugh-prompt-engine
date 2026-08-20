@@ -566,6 +566,16 @@ def test_snapshot_index_matches_its_files() -> None:
                 f"{(pinned or '<pin 無し>')[:12]}… を pin しており、この snapshot "
                 f"({entry['sha256'][:12]}…) が生んだ結果ではない。再実測したなら "
                 f"measured_results から外すこと")
+        # **逆向きの全数性**（レビュー指摘 P2・10 巡目）: 上の検査は「載っている
+        # 名前が正しいか」しか見ない。この版が生んだ正本が台帳から抜け落ちても
+        # 素通りするので、その版を pin する正本の全数と一致することも要求する。
+        # README が `measured_results` を「その版が生んだ結果の全数」と定義して
+        # いる以上、定義そのものを機械で守る。
+        expected = _canonical_results_for(PROBES / entry["script"], entry["sha256"])
+        assert set(entry["measured_results"]) == expected, (
+            f"{entry['file']}: measured_results が、この版を pin する正本の全数と "
+            f"一致しない 欠け={sorted(expected - set(entry['measured_results']))} / "
+            f"余分={sorted(set(entry['measured_results']) - expected)}")
 
     listed = {_snapshot_path(e).name for e in index["snapshots"]}
     on_disk = {p.name for p in SNAPSHOTS.glob("*.py")}
@@ -593,16 +603,23 @@ def test_no_orphan_snapshots() -> None:
             " 参照が切れた snapshot は index.json ごと削除すること")
 
 
-def _canonical_results_for(script: Path) -> set[str]:
-    """その script の版を pin している **正本の全数**。
+def _canonical_results_for(script: Path, sha: str | None = None) -> set[str]:
+    """その script を pin している **正本の全数**（`sha` 指定でその版に限定）。
 
-    `revalidation_results` の期待集合はこれ。台帳側の記載だけから導くと、
-    正本が増えたり 1 件が宣言から抜け落ちたりしたときに、**残りが未実測でも
-    被覆が満たされたことになる**（レビュー指摘 P2・9 巡目）。「宣言が全数で
-    ある」という主張自体を機械で検査する。
+    台帳の 2 つのリストは**どちらも「全数」を主張している**:
+
+    - `live_unmeasured[].revalidation_results` = 再検証で作り直す正本の全数
+    - `snapshots[].measured_results`          = その凍結版が生んだ正本の全数
+
+    台帳側の記載だけから期待集合を導くと、正本が増えたり 1 件が抜け落ちたり
+    したときに、**残っている行だけを検査して素通り**する（レビュー指摘 P2・
+    9 巡目 = 前者 / 10 巡目 = 後者）。両方向とも「宣言が全数である」ことを
+    この helper 経由で機械検査する。
     """
     names = [r.name for r in (*RESULT_JSONS, REPRO_JSON)]
-    return {n for n in names if _pinned_script_sha(n, script.name) is not None}
+    return {n for n in names
+            if (_pinned_script_sha(n, script.name) is not None if sha is None
+                else _pinned_script_sha(n, script.name) == sha)}
 
 
 def _revalidation_coverage(entry: dict, script: Path) -> tuple[set[str], set[str]]:
