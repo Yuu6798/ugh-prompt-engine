@@ -59,6 +59,26 @@
         },
         "verdict": "ap 平均は R0 のほうが**低い**（= より周期的）と出る。ap は耳の『ノイズ』の代理にならない"
       }
+    },
+    {
+      "item": 3,
+      "question": "劣化はどの段階か — RT_world vs R0",
+      "answer_raw": "1: ノイズあり / 2: world のほうが軽微",
+      "findings": {
+        "rt_world_has_noise": true,
+        "more_noise": "R0"
+      }
+    },
+    {
+      "item": 4,
+      "question": "F0 平坦化 vs ユニット分割・warp — RT_flatf0 vs R0",
+      "answer_raw": "1: world と同じくらい / 2: R0。特記: それぞれはノイズ量として誤差レベル。world・flat・R0 はそれぞれ原音と比べてノイズがあることは確定だが、それぞれのノイズ量は明確に差分があるほどではない",
+      "findings": {
+        "rt_flatf0_vs_rt_world": "同等（F0 平坦化はノイズを足していない）",
+        "rt_flatf0_vs_r0": "R0 のほうが多い（ただし誤差レベル）",
+        "qualifier": "3 段いずれも原音比でノイズあり。段間の差は明確に区別できるほどではない"
+      },
+      "localization": "**WORLD 往復そのものが支配的な原因**。F0 平坦化の寄与はほぼ無し、ユニット分割・warp の寄与は有意と言えるほどではない。identity を WORLD 経路で運ぶ設計自体が音質の天井を作っている"
     }
   ]
 }
