@@ -8,6 +8,7 @@ wall-clock 判定・heartbeat 記帳・自動停止コマンド組み立て）�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -1251,15 +1252,89 @@ def test_place_staged_sources_reports_missing_and_extras(tmp_path: Path) -> None
     assert extras == 1
 
 
+def _write_staged(root: Path, name: str, payload: bytes) -> str:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / name).write_bytes(payload)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def test_place_staged_sources_diff_reports_what_actually_arrived(tmp_path: Path) -> None:
+    """欠落時の diff は **実際に届いていたファイル名**も含むこと。
+    run 7 初回 fail-closed の原因特定を可能にしたのは旧実装の
+    `missing=…/extra=…` であり、sha 照合化でその情報が消えては後退になる。"""
+    files_by_sha = {"c" * 64: [tmp_path / "000_recitation148.wav"]}
+    pins = {"recitation001.wav": "a" * 64, "recitation002.wav": "b" * 64}
+    resolved, diffs, extras = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
+    assert resolved == {} and extras == 1
+    assert len(diffs) == 1
+    msg = diffs[0]
+    assert "recitation001.wav" in msg          # 何が足りないか
+    assert "000_recitation148.wav" in msg      # 何が届いていたか
+    assert "2/2" in msg
+
+
 def test_place_staged_sources_is_deterministic_on_duplicate_content(tmp_path: Path) -> None:
-    """同一 sha の重複コピー（Drive 同名重複の実体）があっても解決先は
-    ソート順先頭で決定論。重複は**余剰に数えない** — 同一 sha は同内容で
-    どれを使っても等価、という `match_user_sources` と同じ設計。"""
-    dupes = [tmp_path / "000_a.wav", tmp_path / "001_a.wav"]
-    files_by_sha = {"a" * 64: dupes}
-    pins = {"recitation001.wav": "a" * 64}
-    first = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
-    second = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
-    assert first[0] == second[0]
-    assert first[0]["recitation001.wav"] == dupes[0]
-    assert first[2] == 0
+    """同一 sha の重複コピー（Drive 同名重複の実体）でも解決先は決定論。
+    依存の実体は `index_files_by_sha256`（`_iter_files` の sorted）なので、
+    **実ファイルを置いて索引経由で**検証する（純関数を 2 回呼ぶだけでは
+    ソート順の担保を何も検証していない）。重複は余剰に数えない
+    （同一 sha は同内容 = `match_user_sources` と同じ設計）。"""
+    src = tmp_path / "src"
+    payload = b"RIFFdup"
+    for name in ("002_a.wav", "000_a.wav", "001_a.wav"):
+        _write_staged(src, name, payload)
+    sha = hashlib.sha256(payload).hexdigest()
+    pins = {"recitation001.wav": sha}
+    resolved, diffs, extras = r5b.place_staged_sources_by_sha256(
+        r5b.index_files_by_sha256(src), pins)
+    assert diffs == []
+    # `_iter_files` の sorted によりソート順先頭（= 000_a.wav）が選ばれる
+    assert resolved["recitation001.wav"].name == "000_a.wav"
+    # 同一 sha の 3 本は「どれを使っても等価」なので全数 matched 扱い＝余剰 0
+    assert extras == 0
+
+
+# --- 配線そのものの回帰（materialize_staged_sources）------------------------
+
+
+def test_materialize_places_prefixed_files_under_pinned_names(tmp_path: Path) -> None:
+    """実際に壊れた配線 = 「連番前置名で取得 → 期待名で配置」を検証する。
+    純関数だけのテストでは、この配線が退行しても気づけない。"""
+    src = tmp_path / "src"
+    sha1 = _write_staged(src, "000_recitation148.wav", b"one")
+    sha2 = _write_staged(src, "001_recitation082.wav", b"two")
+    pins = {"recitation148.wav": sha1, "recitation082.wav": sha2}
+    dest = tmp_path / "named"
+    placed, extras = r5b.materialize_staged_sources(src, pins, dest)
+    assert sorted(p.name for p in dest.glob("*.wav")) == [
+        "recitation082.wav", "recitation148.wav"]
+    assert (dest / "recitation148.wav").read_bytes() == b"one"
+    assert placed["recitation082.wav"] == dest / "recitation082.wav"
+    assert extras == 0
+
+
+def test_materialize_fails_closed_on_missing_content(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    _write_staged(src, "000_x.wav", b"one")
+    pins = {"recitation001.wav": "d" * 64}
+    with pytest.raises(r5b.PinMismatchError):
+        r5b.materialize_staged_sources(src, pins, tmp_path / "named")
+    assert not (tmp_path / "named").exists()  # 失敗時は何も公開しない
+
+
+def test_materialize_refuses_existing_dest(tmp_path: Path) -> None:
+    """前走行の残骸を黙って消さない（gate 4 = d3_render_out と同流儀）。"""
+    src = tmp_path / "src"
+    sha = _write_staged(src, "000_x.wav", b"one")
+    dest = tmp_path / "named"
+    dest.mkdir()
+    with pytest.raises(r5b.StageFailure, match="既に存在"):
+        r5b.materialize_staged_sources(src, {"a.wav": sha}, dest)
+
+
+def test_materialize_rejects_path_traversal_in_pin_key(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    sha = _write_staged(src, "000_x.wav", b"one")
+    for bad in ("../escape.wav", "sub/dir.wav", ".."):
+        with pytest.raises(r5b.StageFailure, match="bare filename"):
+            r5b.materialize_staged_sources(src, {bad: sha}, tmp_path / f"n_{abs(hash(bad))}")

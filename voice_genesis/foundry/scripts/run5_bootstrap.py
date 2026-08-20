@@ -738,22 +738,73 @@ def place_staged_sources_by_sha256(
     （user_sources の `match_user_sources` と同じ「名前ではなく中身で特定」の
     流儀を、名前が要る素材へ拡張したもの）。"""
     resolved: Dict[str, Path] = {}
-    diffs: List[str] = []
+    missing: List[str] = []
     matched_shas: set = set()
     for name in sorted(pinned_sha):
         sha = pinned_sha[name]
         paths = files_by_sha.get(sha)
         if not paths:
-            diffs.append(
-                f"staged source not found by content: {name} "
-                f"(sha256 {sha[:12]}…) — 未コピー、または中身が pin と異なる"
-            )
+            missing.append(name)
             continue
         resolved[name] = paths[0]
         matched_shas.add(sha)
     matched_file_count = sum(len(files_by_sha[s]) for s in matched_shas)
-    total_files = sum(len(v) for v in files_by_sha.values())
-    return resolved, diffs, total_files - matched_file_count
+    all_paths = [p for paths in files_by_sha.values() for p in paths]
+    extras = len(all_paths) - matched_file_count
+    diffs: List[str] = []
+    if missing:
+        # **診断情報を必ず同梱する**（セルフレビュー: 旧実装の
+        # `missing=…/extra=…` メッセージこそが run 7 初回 fail-closed の
+        # 原因特定を可能にしたのに、sha 照合化で「何が届いたか」が消えていた —
+        # 直した障害を新コードでは診断できない、という後退だった）。
+        unmatched = sorted(
+            p.name for sha, paths in files_by_sha.items()
+            if sha not in matched_shas for p in paths
+        )
+        diffs.append(
+            f"staged sources not found by content: {len(missing)}/{len(pinned_sha)} "
+            f"件が未解決 (missing={missing[:5]}…) — 実際に届いていた "
+            f"{len(all_paths)} 本のうち未照合 {len(unmatched)} 本 "
+            f"(unmatched={unmatched[:5]}…)。未コピー、または中身が pin と異なる"
+        )
+    return resolved, diffs, extras
+
+
+def materialize_staged_sources(
+    src_dir: Path, pinned_sha: Dict[str, str], dest_dir: Path
+) -> Tuple[Dict[str, Path], int]:
+    """`src_dir`（取得したまま = 連番前置名）を中身 sha で索引し、`pinned_sha`
+    の**期待名で `dest_dir` へ配置**する。戻り値は (期待名 -> 配置先, 余剰数)。
+
+    欠落は `PinMismatchError` で fail-closed（余剰は info 扱い — 同一 sha の
+    重複コピーや Drive 側の無関係ファイルは害が無いため。`match_user_sources`
+    と同じ判断）。`dest_dir` が既存の場合は **gate 4（`d3_render_out`）と同じ
+    流儀で fail-closed** する — 前走行の残骸を黙って消して素材来歴を曖昧に
+    しない。pin キーがパス区切りを含む場合も拒否する（`dest_dir` 外への
+    書き出し防止）。"""
+    for name in sorted(pinned_sha):
+        if Path(name).name != name or name in ("", ".", ".."):
+            raise StageFailure(
+                f"staged pin key is not a bare filename: {name!r} "
+                "(fail-closed — 配置先ディレクトリ外への書き出しを拒否)"
+            )
+    if dest_dir.exists():
+        raise StageFailure(
+            f"staged 配置先が既に存在する: {dest_dir} — 前走行の残骸を黙って"
+            "上書きしない（fail-closed・gate 4 と同流儀）"
+        )
+    resolved, diffs, extras = place_staged_sources_by_sha256(
+        index_files_by_sha256(src_dir), pinned_sha
+    )
+    if diffs:
+        raise PinMismatchError(diffs)
+    dest_dir.mkdir(parents=True)
+    placed: Dict[str, Path] = {}
+    for name in sorted(resolved):
+        dest = dest_dir / name
+        shutil.copy2(resolved[name], dest)
+        placed[name] = dest
+    return placed, extras
 
 
 def collect_salvage_artifacts(run5_raw: Path,
@@ -1596,22 +1647,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # 取得ローカル名は連番前置（plan_drive_id_fetch の設計）。
                 # convert_amitaro は `recitationNNN.wav` の名前で走査するため、
                 # **中身 sha で pin の期待名へ解決してから**別ディレクトリへ
-                # 期待名で配置する（§ place_staged_sources_by_sha256）。
+                # 期待名で配置する（§ materialize_staged_sources）。
+                # hash 前にランナウェイ guard（user_sources と同じ露出 —
+                # rclone は取得先の中身を制御できない）。
+                guard_user_sources_size(amitaro_src_dir)
                 staged_pins: Dict[str, str] = amitaro_pin["staged_source_sha256"]
-                files_by_sha = index_files_by_sha256(amitaro_src_dir)
-                resolved, staged_diffs, extras = place_staged_sources_by_sha256(
-                    files_by_sha, staged_pins
-                )
-                if staged_diffs:
-                    raise PinMismatchError(staged_diffs)
                 amitaro_named_dir = work / "amitaro_named"
-                if amitaro_named_dir.exists():
-                    shutil.rmtree(amitaro_named_dir)
-                amitaro_named_dir.mkdir(parents=True)
-                for wav_name, src_path in sorted(resolved.items()):
-                    shutil.copy2(src_path, amitaro_named_dir / wav_name)
+                placed, extras = materialize_staged_sources(
+                    amitaro_src_dir, staged_pins, amitaro_named_dir
+                )
                 print(f"| run5_bootstrap: amitaro_sources resolved "
-                      f"{len(resolved)}/{len(staged_pins)} by sha256 "
+                      f"{len(placed)}/{len(staged_pins)} by sha256 → "
+                      f"{amitaro_named_dir.name}/ へ期待名で配置 "
                       f"({extras} extra file(s) ignored)", flush=True)
                 amitaro_dataset = out / "amitaro_dataset"
                 _run([sys.executable,
