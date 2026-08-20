@@ -593,10 +593,31 @@ def test_no_orphan_snapshots() -> None:
             " 参照が切れた snapshot は index.json ごと削除すること")
 
 
+def _canonical_results_for(script: Path) -> set[str]:
+    """その script の版を pin している **正本の全数**。
+
+    `revalidation_results` の期待集合はこれ。台帳側の記載だけから導くと、
+    正本が増えたり 1 件が宣言から抜け落ちたりしたときに、**残りが未実測でも
+    被覆が満たされたことになる**（レビュー指摘 P2・9 巡目）。「宣言が全数で
+    ある」という主張自体を機械で検査する。
+    """
+    names = [r.name for r in (*RESULT_JSONS, REPRO_JSON)]
+    return {n for n in names if _pinned_script_sha(n, script.name) is not None}
+
+
 def _revalidation_coverage(entry: dict, script: Path) -> tuple[set[str], set[str]]:
-    """宣言された再検証セットのうち、live sha を pin できている結果 / いない結果。"""
+    """宣言された再検証セットのうち、live sha を pin できている結果 / いない結果。
+
+    先に **宣言が正本の全数と一致している**ことを要求する（部分的な宣言で
+    被覆を満たせないようにする）。
+    """
     live = _sha256(script)
     required = set(entry["revalidation_results"])
+    expected = _canonical_results_for(script)
+    assert required == expected, (
+        f"{script.name}: revalidation_results が正本の全数と一致しない "
+        f"欠け={sorted(expected - required)} / 余分={sorted(required - expected)}。"
+        f" 宣言は「再検証で作り直す結果の全数」なので、正本が増えたら宣言も増やす")
     covered = {name for name in required
                if _pinned_script_sha(name, script.name) == live}
     return covered, required - covered
@@ -655,9 +676,15 @@ def test_live_scripts_are_measured_or_declared_unmeasured() -> None:
 
 
 def test_declared_revalidation_sets_name_real_results() -> None:
-    """`revalidation_results` が実在する正本を指し、その script の pin を持つこと。"""
+    """`revalidation_results` が実在する正本を指し、その script の pin を持つこと。
+
+    さらに **正本の全数と一致する**ことも要求する（レビュー指摘 P2・9 巡目）。
+    """
     for entry in _snapshot_index()["live_unmeasured"]:
         assert entry["revalidation_results"], f"{entry['script']}: 再検証セットが空"
+        script = PROBES / entry["script"]
+        assert set(entry["revalidation_results"]) == _canonical_results_for(script), (
+            f"{entry['script']}: revalidation_results が正本の全数と一致しない")
         for name in entry["revalidation_results"]:
             assert _record_path(name).exists(), (
                 f"{entry['script']}: revalidation_results の {name} が無い")
