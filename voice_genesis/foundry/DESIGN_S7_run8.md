@@ -585,6 +585,22 @@ intelligibility loss は**耳ラベルを取ったセルにのみ**存在する�
   それは「検査を通ったから」であって「`/su/` だから」ではない
 - 対照が取れないセルは `status = ringing_uncorrected` で明示し、
   **生値を差分と偽って記帳しない**
+- **`ringing_uncorrected` のセルを校正・Gate 計算に混ぜない**（2026-08-20 追加）。
+  一部のセルだけ生値・残りは参照との差分、という状態で同じ軸を z 化して
+  閾値を引くと、**Gate が「TRF がラベルを分離したから」ではなく
+  「生値と差分が混ざっていたから」通る/落ちる**。実際 leave-one-out では
+  「唯一検査を通った `/su/` レンダ」が自分だけ `ringing_uncorrected` になり、
+  他セルはそれを基準に補正される、という非対称が起こりうる。
+  よって:
+
+  ```
+  比較群（= 同一話者 × 同一世代）ごとに fallback を 1 つに揃える:
+    群内の全セルが補正可能  -> 全て補正値を使う
+    1 つでも補正不能        -> **その群は Gate から除外**し、
+                               status = ringing_uncorrected_group として記帳
+  校正セット・hold-out・Gate 1〜4 の計算には
+  **補正済みのセルだけ**を入れる（生値は診断レポートには残す）
+  ```
 
 ### 5-1b. TRF の下位軸（percept を 1 本に潰さない）
 
@@ -659,8 +675,50 @@ intelligibility loss は**耳ラベルを取ったセルにのみ**存在する�
 | | **unique 合計** | **40** |
 | 重複提示 | 上記からの再提示（自己一致率用） | **+8** |
 
-提示は**ランダム順・モデル名/話者/世代を伏せる**。重複分は被験者に
-重複であることを知らせない。
+**層の記述だけでは 40 セルは決まらない**（2026-08-20 追加）。「極値」は該当が
+多数あり、終端条件の行は duration / pitch を指定しておらず、`amitaro anchor` は
+実曲アンカー行と重複しうる。実装ごとに違う 40 セルを選べる — 最悪の場合
+**機械結果を見てから耳ラベル対象を選ぶ**ことすらでき、class support も
+primary 軸も Gate 合否も変わる。よって **cell_id を定義し、決定論的に列挙し、
+レンダ前に pin する**:
+
+```
+cell_id = <generation>/<speaker>/<probe>/<beats>/<pitch>
+  generation ∈ {run5, run6, run7}
+  beats      ∈ {b1, b2, b4}        # ★ §3 の秒 bin d0..d4 とは別名前空間
+  pitch      ∈ {p57, p62, p65}
+  P-ANCHOR は <generation>/<speaker>/P-ANCHOR/<region>
+             region ∈ {sakura-kagiri, sakura-miwatasu, umi}
+
+決定論的な列挙（互いに素になるよう構成する）:
+  A 三世代トレース (10):
+      {run5,run6,run7} × {ritsu,pjs,user} / P-RI-FINAL / b4 / p57   -> 9
+      run7/amitaro/P-ANCHOR/sakura-kagiri                            -> 1
+  B run7 四話者 × 5 終端条件 (20):
+      run7 × {ritsu,pjs,user,amitaro}
+           × {P-RI-FINAL,P-RI-MEDIAL,P-I-FINAL,P-N-FINAL,P-SU-FINAL}
+           / b4 / **p62**        # A が p57 なので衝突しない
+  C 極値 (6):
+      run7/ritsu/P-RI-FINAL/ (b1,p57) (b1,p62) (b1,p65)
+                             (b2,p57) (b2,p65) (b4,p65)
+                             # A の b4/p57・B の b4/p62 を避けてある
+  D 実曲アンカー (4):
+      run7/{ritsu,pjs,user}/P-ANCHOR/sakura-kagiri                   -> 3
+      run7/ritsu/P-ANCHOR/umi                                        -> 1
+  -> unique 40（重複ゼロを assert する）
+
+重複提示 8 件（20%）:
+  A/B/C/D の各ブロックから cell_id 昇順で先頭 2 件ずつ
+```
+
+**この 40 + 8 を `s7_listening_set.json` へ書き出し、sha256 を pin してから
+レンダを開始する。** 生成 → pin → レンダ の順序を守れば、機械結果を見てから
+対象を選ぶ経路が構造的に閉じる。レンダ後に集合を変えたくなった場合は
+**本 memo の改訂**として扱う。
+
+提示は**ランダム順・モデル名/話者/世代を伏せる**（伏せないのは §6 の
+`expected_terminal` と `position`）。重複分は被験者に重複であることを
+知らせない。
 
 ## 7. Gate — 観測子の合格条件
 
@@ -691,20 +749,38 @@ primary 軸の候補から外す。
 それを罰する**という自己矛盾になり、計器がラベルと一致していても
 8-B を偽ブロックしうる。よってセルの `expected_terminal` で場合分けする:
 
-```
-expected_terminal ∈ {ri, i, su, N}   （セル定義から機械的に決まる）
+**position も併せて場合分けする**（2026-08-20 追加）。`expected_terminal` だけで
+切ると **P-RI-MEDIAL** が取り残される — 語中 `/ri/` は**次の音素が続くので
+境界後に有声が継続するのが正しい挙動**であり、`continuous_voicing >= 2` を
+そのまま `break` にすると、Gate 4 が陰性として要求する同じセルを
+hold-out 側は break と呼ぶほど得点する。`/N/` と同型の自己矛盾になる。
 
-expected ∈ {ri, i, su}（鼻音化は逸脱）:
+```
+セル定義から機械的に決まる 2 つのキーで場合分けする:
+  expected_terminal ∈ {ri, i, su, N}
+  position          ∈ {final, medial}
+
+position == final かつ expected ∈ {ri, i, su}（鼻音化も継続発声も逸脱）:
   break : max(nasalization, continuous_voicing) >= 2
   ok    : max(nasalization, continuous_voicing) <= 1 かつ intelligibility <= 1
 
-expected == N（鼻音であるのが正解 = 鼻音化は逸脱ではない）:
+position == final かつ expected == N（鼻音であるのが正解）:
   break : continuous_voicing >= 2  または  intelligibility >= 2
   ok    : continuous_voicing <= 1  かつ    intelligibility <= 1
   ※ nasalization は **この行では使わない**
 
+position == medial（次音素が続くので終端解放は起きなくてよい）:
+  break : nasalization >= 2  または  intelligibility >= 2
+  ok    : nasalization <= 1  かつ    intelligibility <= 1
+  ※ continuous_voicing は **この行では使わない**
+     （語中の有声継続を失敗ラベルにしない）
+
 いずれも上記に当たらなければ borderline
 ```
+
+**Gate 4（§7-0 (8)）の陰性集合も同じ 2 キーの定義で判定する。** これで
+「正しい `/N/`」と「正しい語中 `/ri/`」は自分の基準で `ok` になり、
+hold-out accuracy と FPR ゲートが逆を向く経路が閉じる。
 
 **Gate 4 の陰性集合もこの `expected_terminal` 相対の定義で判定する**ので、
 正しくレンダされた `/N/` は自分の基準で `ok` になり、矛盾は消える。
@@ -781,6 +857,36 @@ AUC(primary) >= 0.80
 **(7) Gate 3「同方向に並べる」**: user について run5→run7 の
 `Δz_primary` の**符号**が、耳 severity の変化の符号と一致すること。
 **差分軸でのみ**評価する（絶対値は走行間変動を拾う）。
+
+**符号は「1 つ」ではないので集約規則を凍結する**（2026-08-20 追加）。user には
+run5/run7 で対応するセルが複数あり、耳 severity も 3 軸ある。セルごと・軸ごとに
+向きが割れると、実装によって Gate 3 が逆の結論を出す:
+
+```
+参加セル:
+  §6 の listening set のうち generation ∈ {run5, run7} かつ speaker == user
+  かつ 両世代で対応が取れている cell_id（片方欠測は除外し件数を記帳）
+
+機械側の代表値:
+  Δz_primary(cell) = z'_primary(run7) - z'_primary(run5)
+  代表値 = 参加セルにわたる **median**（平均でなく median。外れセルに強い）
+
+耳側の代表値:
+  severity(cell, gen) = max(該当 position/expected の break 判定に使う軸)
+      # §6 の 2 キー場合分けで「使わない」と定めた軸は max に入れない
+  Δseverity(cell) = severity(run7) - severity(run5)
+  代表値 = 参加セルにわたる **median**
+
+判定:
+  sign(median Δz_primary) == sign(median Δseverity)   -> Gate 3 pass
+  どちらかが 0（同値・タイ）                          -> **pass にしない**
+                                                         status = tied_direction
+  borderline ラベルのセルは Δseverity の計算から除外し、除外件数を記帳
+  参加セルが 5 未満                                    -> undetermined（Gate 不成立）
+```
+
+**タイを pass 側に倒さない**のは、「動かなかった」を「同方向だった」と
+読み替えないためである（§9-0b と同じ規律）。
 
 **(8) Gate 4「誤陽性にしない」**: うみ・語中 `/ri/`・正しい `/N/` のセル群で
 
