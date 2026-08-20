@@ -86,9 +86,11 @@ Agent ツールで spawn する際は必ず `model` を明示する（省略 NG:
 - **採否と方針はコミットメッセージに書く**（採用は何をどう直したか / 見送りは
   理由）。コミットは PR タイムラインに載るので、返信できない環境でも記録が残る
 - **対応済みスレッドは resolve する**（見送りは resolve せず境界宣言を付けて
-  残置 = `AGENTS.md` §3-3）。resolve/返信には GitHub App の repo スコープが要り、
-  **未付与の環境では両方とも不可**（REST 403 / GraphQL は pinned set のみ）。
-  その場合は採否をコミットに残し resolve は User へ引き継ぐ
+  残置 = `AGENTS.md` §3-3）。resolve/返信には GitHub App の repo スコープが要る。
+  **可否はセッションごとに違う**（2026-08-20 実測: #289 のセッションは REST 403
+  だったが、#291 のセッションは GitHub MCP の `resolve_review_thread` が通った）
+  ため、**「この環境では不可」と決めつけず毎回試す**。実際に不可のときだけ
+  採否をコミットに残し resolve は User へ引き継ぐ
 
 ## Workflow（Codex × Claude × User 分業オーケストレーション）
 
