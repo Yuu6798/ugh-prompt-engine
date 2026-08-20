@@ -29,6 +29,23 @@ import pr_lab  # noqa: E402
 #: 母音コアの既定範囲（lab に音素境界があるので unit 内の相対で十分）
 CORE_FRAC = (0.35, 0.85)
 
+#: 非周期性 `ap` の縮小率（identity 経路の音質対策）。
+#:
+#: 実測: リツ DB の高音区間（probe の f0 中央値 ≈ 498Hz）で D4C が非周期性を
+#: 過大推定しており（mean 0.593 / p50 0.657 / **p90 1.000**）、再合成が雑音的に
+#: 聞こえる原因になっていた。WORLD の解析パラメータ（f0_floor 60–350 /
+#: frame_period 1.0–5.0ms）の掃引では原音との mel-L1 距離が 4.995〜5.148dB と
+#: ほぼ不変で、**パラメータはレバーにならなかった**。`ap` を縮小すると距離が
+#: 単調改善する（x1.00 5.03 → x0.50 4.32 → x0.25 3.86 → x0.10 3.38 dB）。
+#:
+#: 0.25 は **User の耳判定で確定した値**（「明確に減少・ノイズほぼ無し」「何も
+#: 失われていない・0.25 のほうが単純に品質よい」）。客観距離では 0.10 がさらに
+#: 良いが**耳で検証していない**ため採らない。
+#:
+#: これは声質のノブであり、息成分は identity の一部である。**単一 probe での
+#: 耳判定に基づく暫定値**として扱い、他素材へ広げる前に再判定すること。
+AP_SCALE = 0.25
+
 #: probe の前に含める音素数の既定。
 #: 2 音素だと出力が 1 秒程度にしかならず**耳判定が成立しない**（実測: User 判定
 #: 「サンプルが 1 秒しかないから両方とも判定できない」）。フレーズとして
@@ -155,6 +172,9 @@ def build_identity_for_probe(
     wav, sr, offset = load_wav_mono(Path(wav_path), start_s=span_lo - pad_s,
                                     end_s=span_hi + pad_s)
     analysis = pbw.analyze(wav, sr)
+    if AP_SCALE != 1.0:
+        analysis = dataclasses.replace(
+            analysis, ap=np.clip(analysis.ap * AP_SCALE, 1e-6, 1.0))
     bank = px.build_identity_bank(analysis, _shift_units(units, offset), source_id=source_id)
     nasal, nasal_src = measure_nasal_envelope(
         Path(wav_path), lab.phones, near_s=0.5 * (span_lo + span_hi))

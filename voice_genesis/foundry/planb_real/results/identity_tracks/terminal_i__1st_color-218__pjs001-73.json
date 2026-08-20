@@ -1,6 +1,6 @@
 {
   "source_id": "ritsu_singing_db",
-  "identity_sha256": "edcddd216c84eabbd39800e22d7a3bed195c28d9385eb1245dd797e403a7da22",
+  "identity_sha256": "9dfa33332d4c4ce31665b46989f374c1b539b718c35f525ae9c02c7e135e5a8a",
   "units": [
     {
       "label": "t",
@@ -172,5 +172,6 @@
     }
   ],
   "probe_unit_index": 22,
-  "nasal_envelope_source": "measured:N@109.49s"
+  "nasal_envelope_source": "measured:N@109.49s",
+  "ap_scale": 0.25
 }

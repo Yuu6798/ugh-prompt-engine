@@ -216,6 +216,7 @@ def cmd_ladder(args) -> int:
                           for u in bank.units],
                 "probe_unit_index": probe_pos,
                 "nasal_envelope_source": bank.nasal_envelope_source,
+                "ap_scale": pr_identity.AP_SCALE,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             pairs_out.append(result)
 
@@ -223,6 +224,7 @@ def cmd_ladder(args) -> int:
         LADDER_MANIFEST.write_text(json.dumps({
             "environment": environment(),
             "context_phones": int(getattr(args, "context", pr_identity.DEFAULT_CONTEXT_PHONES)),
+            "identity_ap_scale": pr_identity.AP_SCALE,
             "ladder": [n for n, _ in pr_ladder.LADDER],
             "pairs": [p.as_dict() for p in pairs_out],
             "trf_gate_frozen": frozen,
