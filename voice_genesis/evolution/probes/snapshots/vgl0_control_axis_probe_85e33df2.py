@@ -50,9 +50,7 @@ import argparse
 import contextlib
 import hashlib
 import json
-import os
 import shutil
-import stat
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -303,75 +301,6 @@ def note_region_energy(
 OWNER_MARKER = ".vgl0_probe_output"
 
 
-# 所有マーカーの 1 行目に必ず入る判別子。2 行目に **そのマーカーが属する
-# ディレクトリの絶対パス**を書く。所有判定を「型」だけでなく「内容」と
-# 「場所」で行うため（レビュー指摘 P2）。
-MARKER_SENTINEL = "vgl0-owner-marker/1\n"
-_MARKER_DIR_PREFIX = "dir="
-
-
-def is_own_marker(path: Path) -> bool:
-    """所有マーカーが **このディレクトリのために自分が書いた実体**か。
-
-    「マーカーを騙る」経路はいくつもあり、**1 つずつ塞ぐと必ず取り残す**
-    （本 PR で 3 巡かけて symlink → hard link → 別マーカーへの hard link と
-    露呈した）。型・リンク数・内容・場所の 4 点を全部要求して系統ごと閉じる:
-
-    1. `lstat` が通常ファイル — `Path.exists()` はリンクを追うので、保護対象
-       入力への **symlink** を「所有」と誤判定しない
-    2. **`st_nlink == 1`** — hard link された実体は所有物と見なさない
-       （型では区別できない）
-    3. 先頭が `MARKER_SENTINEL` — モデルや楽譜への別名を取り違えない
-    4. 2 行目の `dir=` が **自分の親ディレクトリ**と一致 — *正当な別マーカー*
-       への hard link / コピーは判別子を保つので、3 だけでは通ってしまう。
-       場所に束縛して「よそのディレクトリのマーカー」を弾く
-
-    4 の副作用として、work ディレクトリを**移動・改名すると所有が外れる**。
-    fail-closed 側（消さずに止まる）なので安全側だが、その場合は空の場所を
-    指すか、残ったマーカーを手で消すこと。
-    """
-    try:
-        st = path.lstat()
-    except OSError:
-        return False
-    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-        return False
-    try:
-        with open(path, "rb") as fh:
-            head = fh.read(4096).decode("utf-8", "replace")
-    except OSError:
-        return False
-    if not head.startswith(MARKER_SENTINEL):
-        return False
-    lines = head.splitlines()
-    if len(lines) < 2 or not lines[1].startswith(_MARKER_DIR_PREFIX):
-        return False
-    recorded = lines[1][len(_MARKER_DIR_PREFIX):]
-    try:
-        return recorded == str(path.parent.resolve())
-    except OSError:
-        return False
-
-
-def write_own_marker(path: Path, text: str) -> None:
-    """所有マーカーを **新規作成のみ**で書く（`O_EXCL | O_NOFOLLOW`）。
-
-    既存を書き換えないのが要点（レビュー指摘 P2）: `O_TRUNC` で開くと、
-    マーカー名が保護対象入力への hard link だったときに**共有 inode を
-    切り詰める**。`O_NOFOLLOW` は symlink しか弾かないので、hard link は
-    「そもそも既存を開かない」ことでしか防げない。既存があれば
-    `FileExistsError`。
-
-    2 行目に所属ディレクトリを記録し、`is_own_marker` が場所を照合できる
-    ようにする。
-    """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(MARKER_SENTINEL)
-        fh.write(f"{_MARKER_DIR_PREFIX}{path.parent.resolve()}\n")
-        fh.write(text)
-
-
 def reset_condition_dir(out_dir: Path) -> None:
     """条件ディレクトリを作り直す。**probe が作ったものだけ**消す。
 
@@ -385,18 +314,17 @@ def reset_condition_dir(out_dir: Path) -> None:
     無いディレクトリは消さずに fail-closed** にする。
     """
     if out_dir.exists():
-        if not is_own_marker(out_dir / OWNER_MARKER):
+        if not (out_dir / OWNER_MARKER).exists():
             raise SystemExit(
                 f"出力先 {out_dir} は probe が作ったディレクトリではない"
-                f"（所有マーカー {OWNER_MARKER} が通常ファイルとして無い）。"
-                f"無関係な成果物を消さないため中断する。"
-                f"--out-dir を空の場所へ変えること")
+                f"（所有マーカー {OWNER_MARKER} が無い）。無関係な成果物を"
+                f"消さないため中断する。--out-dir を空の場所へ変えること")
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
-    write_own_marker(
-        out_dir / OWNER_MARKER,
+    (out_dir / OWNER_MARKER).write_text(
         "vgl0_control_axis_probe が所有する出力ディレクトリ。"
-        "このファイルがあるディレクトリだけ probe は削除・再作成する。\n")
+        "このファイルがあるディレクトリだけ probe は削除・再作成する。\n",
+        encoding="utf-8")
 
 
 def synth_once(
@@ -412,16 +340,8 @@ def synth_once(
 ) -> dict:
     """1 条件を合成し、実測値を返す。gate_synth 本体は無改変で、
     モジュール定数 / `build_inputs` / dur 出力のみ monkeypatch する。"""
-    build_fn, beats_to_seconds, tempo, _p, module_shas = gs.load_song_module(
+    build_fn, beats_to_seconds, tempo, _p, _shas = gs.load_song_module(
         cfg.song, cfg.singer_dir)
-    # **この合成が実際に実行した楽譜バイト**の digest（レビュー指摘 P2・7 巡目）。
-    # `collect_pins` は実行前に 1 度だけ楽譜を読む。長い多条件走行の途中で
-    # `score.py` / `phoneme_jp.py` が書き換わると、`load_song_module` は
-    # **新しいバイトを実行**するのに結果は古い pin を記録したまま success を
-    # 返しうる。gate_synth は per-call で消費 digest を返しているので、
-    # read-only I/O を変えずに条件ごとに突き合わせられる（§9 member 5 の
-    # 境界宣言のうち「楽譜モジュール分」はこれで閉じる）。
-    consumed_score = {key: digest for key, (_path, digest) in module_shas.items()}
     model_bytes, _ = gs.load_model_bundle_bytes(
         cfg.canon, cfg.vocoder, cfg.acoustic_onnx, cfg.acoustic_dsconfig)
     # **推論へ実際に渡ったバイト列**そのものを hash する（レビュー指摘）。
@@ -431,21 +351,9 @@ def synth_once(
     # `load_model_bundle_bytes` は 1 回だけ read したバッファを返すので、
     # ここで hash すれば記録と推論入力が同一バッファ由来だと構造的に言える。
     consumed = {k: sha256_bytes(v) for k, v in sorted(model_bytes.items())}
-    # **digest を返すローダを使う**（レビュー指摘 P2・12 巡目）。非 hash 版で
-    # 読むと、`collect_pins` が hash した後に差し替えられたバイトを合成が使っても
-    # 検査に掛からず、rc=0 のまま「使っていないバイト列」に provenance が
-    # 束縛される。gate_synth は `*_with_sha` を既に公開しており（本体も
-    # 1745/1883/1920 行で使用）、I/O 構造を変えずにそのまま閉じられる。
-    variance_phonemes, canon_phonemes_sha = gs.load_canon_phonemes_with_sha(
-        cfg.canon / "phonemes.txt")
-    acoustic_phonemes, acoustic_phonemes_sha = gs.load_own_phonemes_json_with_sha(
-        cfg.acoustic_phonemes_json)
-    emb, speaker_embed_sha = gs.load_speaker_embed_vector_with_sha(cfg.speaker_emb)
-    consumed_inputs = {
-        "canon_phonemes": canon_phonemes_sha,
-        "acoustic_phonemes_json": acoustic_phonemes_sha,
-        "speaker_embed": speaker_embed_sha,
-    }
+    variance_phonemes = gs.load_canon_phonemes(cfg.canon / "phonemes.txt")
+    acoustic_phonemes = gs.load_own_phonemes_json(cfg.acoustic_phonemes_json)
+    emb = gs.load_speaker_embed_vector(cfg.speaker_emb)
 
     notes_raw = build_fn()[: cfg.notes_limit]
     boundaries = phrase_boundary_indices(notes_raw)
@@ -554,8 +462,6 @@ def synth_once(
         "notes_scaled": build_patch.scaled_notes,
         "note_region_energy": regions,
         "consumed_model_sha256": consumed,
-        "consumed_score_sha256": consumed_score,
-        "consumed_input_sha256": consumed_inputs,
         "phone_frame_invariant": phone_frame_invariant(
             captured.get("acoustic_durations") or [],
             captured.get("note_target_frames") or [],
@@ -776,10 +682,6 @@ def execution_profile() -> dict:
     }
 
 
-# `load_song_module` が返す楽譜 pin のキー接頭辞（`gate_synth.py:259-277`）。
-# 期待集合をこの接頭辞で pins から導くので、命名が変わったらここも変える。
-_SCORE_PIN_PREFIX = "score_module_"
-
 # `load_model_bundle_bytes` のキー -> `collect_pins` のキー
 _CONSUMED_TO_PIN = {
     "acoustic_onnx": "acoustic_onnx",
@@ -797,150 +699,27 @@ def verify_consumed_bytes(results: List[dict], pins: dict) -> dict:
     「記録された hash と実際に推論へ使われたバイト列が食い違う」窓を閉じる。
     ずれた場合は結果 JSON に不一致として残す（黙って通さない）。
 
-    **キー集合の完全一致を要求する**（レビュー指摘・外部）: 「在るキーだけ
-    照合して PASS」にすると、空バンドル / キー欠落 / 未知キーが素通りする。
-    期待集合 `_CONSUMED_TO_PIN` と実際の消費キーが一致しない条件は不一致扱い。
-
     射程の正直会計: ここで閉じられるのは `load_model_bundle_bytes` が返す
-    6 バッファ（canon 3 + acoustic + dsconfig + vocoder）だけ。話者 embed と
-    音素辞書は gate_synth 側がパス read するため、依然として `pins` のパス read に
-    依存する（楽譜モジュールは `verify_consumed_score_bytes` で別途閉じた）。
+    6 バッファ（canon 3 + acoustic + dsconfig + vocoder）だけ。話者 embed /
+    音素辞書 / 楽譜モジュールは gate_synth 側がパス read するため、
+    依然として `pins` のパス read に依存する。
     """
     seen = {json.dumps(r["consumed_model_sha256"], sort_keys=True)
             for r in results if "consumed_model_sha256" in r}
     mismatches = []
-    if not seen:
-        mismatches.append("消費モデルバイトを記録した条件が 1 件も無い")
     if len(seen) > 1:
         mismatches.append(f"条件間でモデルバイト列が異なる (distinct={len(seen)})")
-    expected = set(_CONSUMED_TO_PIN)
     for r in results:
-        if "error" in r:
-            continue  # 失敗条件は main が rc=1 にする（ここで二重に鳴らさない）
-        consumed = r.get("consumed_model_sha256") or {}
-        actual = set(consumed)
-        if actual != expected:
-            mismatches.append(
-                f"{r['label']}: 消費モデルキー集合が期待と不一致 "
-                f"欠け={sorted(expected - actual)} / 余分={sorted(actual - expected)}")
-        for ck, digest in consumed.items():
+        for ck, digest in (r.get("consumed_model_sha256") or {}).items():
             pin_key = _CONSUMED_TO_PIN.get(ck)
-            if pin_key is None:
-                continue  # 未知キーは上のキー集合検査が既に不一致にしている
-            if pins.get(pin_key, {}).get("sha256") != digest:
+            if pin_key and pins.get(pin_key, {}).get("sha256") != digest:
                 mismatches.append(
                     f"{r['label']}: 消費バイト列 {ck} が pins.{pin_key} と不一致")
     return {
         "distinct_bundles": len(seen),
         "covered_keys": sorted(_CONSUMED_TO_PIN),
-        "not_covered": [],
-        # 残りは別検査へ移した（7 巡目 = 楽譜 / 12 巡目 = 音素辞書・話者 embed）。
-        # 射程がどこへ移ったかを機械可読に残す。
-        "covered_elsewhere": {
-            "score_module": "consumed_score_bytes_check",
-            "canon_phonemes": "consumed_input_bytes_check",
-            "acoustic_phonemes_json": "consumed_input_bytes_check",
-            "speaker_embed": "consumed_input_bytes_check",
-        },
-        "mismatches": mismatches,
-        "ok": not mismatches,
-    }
-
-
-def verify_consumed_score_bytes(results: List[dict], pins: dict) -> dict:
-    """全条件が同じ楽譜バイト列を実行し、かつそれが pin と一致するか。
-
-    `verify_consumed_bytes` がモデル 6 バッファについて閉じている窓を、
-    楽譜モジュール（`score.py` + 推移的依存）へ広げる。`collect_pins` の
-    パス read と、各条件の `load_song_module` が実行したバイトの間に
-    差し替えが起きても黙って通さない（レビュー指摘 P2・7 巡目）。
-
-    pins 側のキーは `load_song_module` が返すキーそのもの
-    （`score_module_<song>` / `score_module_<song>_dep_<module>`）で、
-    `collect_pins` がそのまま pins へ載せている。**期待集合は pins 側の
-    `score_module_*` 全数**とし、モデル側と同じくキー集合の完全一致を要求する
-    （レビュー指摘・外部: 在るキーだけ照合すると空・欠落・未知キーが素通りする）。
-    """
-    seen = {json.dumps(r["consumed_score_sha256"], sort_keys=True)
-            for r in results if "consumed_score_sha256" in r}
-    mismatches = []
-    if not seen:
-        mismatches.append("実行された楽譜バイトを記録した条件が 1 件も無い")
-    if len(seen) > 1:
-        mismatches.append(f"条件間で楽譜バイト列が異なる (distinct={len(seen)})")
-    expected = {k for k in pins if k.startswith(_SCORE_PIN_PREFIX)}
-    if not expected:
-        mismatches.append(
-            f"pins に {_SCORE_PIN_PREFIX}* が 1 件も無い — 期待集合を決められない")
-    for r in results:
-        if "error" in r:
-            continue
-        consumed = r.get("consumed_score_sha256") or {}
-        actual = set(consumed)
-        if actual != expected:
-            mismatches.append(
-                f"{r['label']}: 実行された楽譜キー集合が pins と不一致 "
-                f"欠け={sorted(expected - actual)} / 余分={sorted(actual - expected)}")
-        for key, digest in consumed.items():
-            pinned = pins.get(key, {}).get("sha256")
-            if pinned is None:
-                mismatches.append(
-                    f"{r['label']}: 実行した楽譜 {key} が pins に無い")
-            elif pinned != digest:
-                mismatches.append(
-                    f"{r['label']}: 実行した楽譜 {key} が pins.{key} と不一致")
-    covered = sorted({k for r in results
-                      for k in (r.get("consumed_score_sha256") or {})})
-    return {
-        "distinct_bundles": len(seen),
-        "covered_keys": covered,
-        "mismatches": mismatches,
-        "ok": not mismatches,
-    }
-
-
-# `*_with_sha` ローダで閉じる入力（pins のキーと同名）。
-_INPUT_PIN_KEYS = ("canon_phonemes", "acoustic_phonemes_json", "speaker_embed")
-
-
-def verify_consumed_input_bytes(results: List[dict], pins: dict) -> dict:
-    """音素辞書 / 話者 embed が **実際に読まれたバイト**と pin の一致を見る。
-
-    §9 member 5 は「gate_synth がパス read するので I/O 構造変更が要る」を理由に
-    射程外としていたが、**これは事実誤認だった**（レビュー指摘 P2・12 巡目）:
-    `load_canon_phonemes_with_sha` / `load_own_phonemes_json_with_sha` /
-    `load_speaker_embed_vector_with_sha` が既に存在し、gate_synth 本体も使って
-    いる。非 hash 版で読んでいたのは probe 側の選択でしかなかった。
-
-    モデル / 楽譜と同じく **キー集合の完全一致**を要求する。
-    """
-    seen = {json.dumps(r["consumed_input_sha256"], sort_keys=True)
-            for r in results if "consumed_input_sha256" in r}
-    mismatches = []
-    if not seen:
-        mismatches.append("消費入力バイトを記録した条件が 1 件も無い")
-    if len(seen) > 1:
-        mismatches.append(f"条件間で入力バイト列が異なる (distinct={len(seen)})")
-    expected = set(_INPUT_PIN_KEYS)
-    for r in results:
-        if "error" in r:
-            continue
-        consumed = r.get("consumed_input_sha256") or {}
-        actual = set(consumed)
-        if actual != expected:
-            mismatches.append(
-                f"{r['label']}: 消費入力キー集合が期待と不一致 "
-                f"欠け={sorted(expected - actual)} / 余分={sorted(actual - expected)}")
-        for key, digest in consumed.items():
-            pinned = pins.get(key, {}).get("sha256")
-            if pinned is None:
-                mismatches.append(f"{r['label']}: 消費入力 {key} が pins に無い")
-            elif pinned != digest:
-                mismatches.append(
-                    f"{r['label']}: 消費入力 {key} が pins.{key} と不一致")
-    return {
-        "distinct_bundles": len(seen),
-        "covered_keys": sorted(expected),
+        "not_covered": ["speaker_embed", "canon_phonemes",
+                        "acoustic_phonemes_json", "score_module"],
         "mismatches": mismatches,
         "ok": not mismatches,
     }
@@ -1000,14 +779,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"|   FAILED: {exc!r}"[:300], flush=True)
 
     consumed_check = verify_consumed_bytes(results, pins)
-    score_check = verify_consumed_score_bytes(results, pins)
-    input_check = verify_consumed_input_bytes(results, pins)
     impl_check = implementation_pin_check()
     payload = {
         "song": cfg.song, "notes_limit": cfg.notes_limit, "speaker": cfg.speaker,
         "consumed_model_bytes_check": consumed_check,
-        "consumed_score_bytes_check": score_check,
-        "consumed_input_bytes_check": input_check,
         "order": "reverse" if a.reverse else "forward",
         "single_condition": a.only,
         "pins": pins, "execution_profile": execution_profile(),
@@ -1042,12 +817,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     if not consumed_check["ok"]:
         print(f"\nCONSUMED BYTES MISMATCH: {consumed_check['mismatches']}")
-        return 1
-    if not score_check["ok"]:
-        print(f"\nCONSUMED SCORE MISMATCH: {score_check['mismatches']}")
-        return 1
-    if not input_check["ok"]:
-        print(f"\nCONSUMED INPUT MISMATCH: {input_check['mismatches']}")
         return 1
     if not impl_check["ok"]:
         print(f"\nIMPLEMENTATION CHANGED DURING RUN: {impl_check['changed_during_run']}")

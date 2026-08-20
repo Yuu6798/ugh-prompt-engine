@@ -1,0 +1,66 @@
+{
+  "schema": "vgl0-probe-snapshot/0.1",
+  "purpose": "結果 JSON が pin する probe / checker の sha を、live 実装が先へ進んだ後も repo 内の実体へ解決できるようにする凍結台帳。再実測は run 6 の 40K ONNX 等 repo 外資産に律速されるため、『編集したら必ず再実測』だけでは probe の 欠陥修正が詰む（PR #289 7 巡目の 3 件）。運用は snapshots/README.md が正本。",
+  "policy": {
+    "approved": "User 承認 2026-08-20（PR #291）— 恒久パターンではなく時限措置として採用",
+    "time_boxed": "run 6 の 40K ONNX + canon + vocoder が再用意でき次第、live 実装で正本を再生成する。凍結はその時点で不要になる。",
+    "retirement": "**出口は機械強制で、運用者の善意に依存しない**: 再実測 → 正本が live sha を pin → snapshot の measured_results 帰属が崩れる → 名前を外す → measured_results が空になり検査が落ちる → 行ごと削除 → ディレクトリと index の突き合わせで実体も削除。tests/test_vgl0_probe_result_pins.py がこの連鎖を強制する。",
+    "max_generations_per_script": 1,
+    "max_generations_rationale": "2 世代目を作りたくなったという事実自体が「再実測を構造的に先送りしている」合図。凍結ではなく再実測を選ぶこと。台帳検査が 2 世代目を弾く。",
+    "replacement_plan": "CI が履歴を取得できるようになったら（actions/checkout の fetch-depth を深くできたら）、凍結コピーを廃して **pin された sha を named commit の git blob と照合する方式**へ置換する。重複バイトがゼロになり、保守対象外のコピーも消える。現状は fetch-depth: 1 のため不可。",
+    "known_costs": [
+      "検査の比重が「実測の健全さ」から「台帳の整合」へ寄る（緑 = 帳簿が整合、の意味に近づく）",
+      "本 PR のレビュー指摘 18 件のうち約 8 件は本機構自体の穴だった（持ち込んだ欠陥がある）",
+      "凍結コピーは lint 対象外・リファクタ対象外（pyproject の extend-exclude）",
+      "未実測の live 実装が正本に居座る（live_unmeasured で可視化するが、ラベルは読み飛ばされうる）"
+    ]
+  },
+  "frozen_from_commit": "7f529da",
+  "snapshots": [
+    {
+      "script": "vgl0_control_axis_probe.py",
+      "file": "vgl0_control_axis_probe_85e33df2.py",
+      "sha256": "85e33df26a4a56af19d0627728d5d87cce7f80bcc6953f92976228d617823956",
+      "measured_results": [
+        "vgl0_control_axis_probe_result.json",
+        "vgl0_control_axis_probe_result_n6.json",
+        "vgl0_control_axis_probe_result_n10.json",
+        "vgl0_render_reproducibility_result.json"
+      ],
+      "note": "PR #289 マージ時点の版。record の C1–C7 と Render Reproducibility PASS はこの版が生んだ"
+    },
+    {
+      "script": "vgl0_reproducibility_check.py",
+      "file": "vgl0_reproducibility_check_12f0aca1.py",
+      "sha256": "12f0aca19c2445ca12a1e6057e3ea78fe840f520f08aaac05bf0185c802232c4",
+      "measured_results": [
+        "vgl0_render_reproducibility_result.json"
+      ],
+      "note": "PR #289 マージ時点の版。10 プロセスの verdict PASS はこの版が出した"
+    }
+  ],
+  "live_unmeasured": [
+    {
+      "script": "vgl0_control_axis_probe.py",
+      "sha256": "8078b54bcab0b0a043eae489884df754d9175d88ce99d4681bf4eb042e429c71",
+      "revalidation_results": [
+        "vgl0_control_axis_probe_result.json",
+        "vgl0_control_axis_probe_result_n6.json",
+        "vgl0_control_axis_probe_result_n10.json",
+        "vgl0_render_reproducibility_result.json"
+      ],
+      "reason": "PR #289 7 巡目 P2『Verify the score bytes returned by each synthesis』の是正で consumed_score_bytes_check を追加した。追加したのは検査と fail-closed だけだが、**出力に影響しないことを実測で確かめてはいない** — 機構から因果を組み立てて 実測で確かめない誤りは本トラックで 3 度撤回した型なので、無実測のまま 『同じ WAV が出る』とは書かない。",
+      "revalidation": "run 6 40K ONNX（acoustic/embed/phonemes.json）+ canon(NamineRitsu_DiffSinger) + nsf_hifigan を用意し、notes_limit 8/6/10 の 3 走行と vgl0_reproducibility_check の 10 プロセスを回して 4 本の結果 JSON を再生成する。資産は repo 外（Pod/Drive 律速）。"
+    },
+    {
+      "script": "vgl0_reproducibility_check.py",
+      "sha256": "c21e57e32fa78cd44fce55b7e25c2e07ec700808bedcb13b0c191130b6be2aa1",
+      "revalidation_results": [
+        "vgl0_render_reproducibility_result.json"
+      ],
+      "reason": "PR #289 7 巡目 P2 2 件（派生 acoustic 入力の保護漏れ / 所有外 result ファイルの unlink）の是正。いずれも起動前の preflight と所有権検査で、合成経路には触れない。",
+      "revalidation": "上と同じ再実測で vgl0_render_reproducibility_result.json を再生成する。"
+    }
+  ],
+  "live_unmeasured_note": "sha256 = 宣言時点の live 実装の sha。live を編集したら宣言は流用できない（テストが不一致で落ちる）。revalidation_results が **全数** live sha を pin して初めて『実測済み』とし、宣言を消してよい。1 本だけ作り直した部分再実測では宣言は残る。"
+}

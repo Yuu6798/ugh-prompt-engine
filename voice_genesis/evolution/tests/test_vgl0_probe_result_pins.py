@@ -43,6 +43,19 @@ RESULT_JSONS = [
 ]
 RESULT_JSON = RESULT_JSONS[0]
 
+SNAPSHOTS = PROBES / "snapshots"
+SNAPSHOT_INDEX = SNAPSHOTS / "index.json"
+
+# 正本結果ごとの **幾何**（レビュー指摘 P2・9 巡目）。`conditions` が空でない
+# ことだけを見ていると、`--only baseline` や `--notes-limit` 指定漏れで
+# 作り直された結果でも全アサーションが通ってしまい、「17 条件 / notes limit
+# 6・8・10」という record の主張が支えを失ったままスイートは緑になる。
+EXPECTED_GEOMETRY = {
+    "vgl0_control_axis_probe_result.json": 8,
+    "vgl0_control_axis_probe_result_n6.json": 6,
+    "vgl0_control_axis_probe_result_n10.json": 10,
+}
+
 # provenance の穴（本体 sha が同じでも monkeypatch で別 WAV が出る）を閉じる
 # ために結果へ束縛することを決めた pin キー。
 REQUIRED_PIN_KEYS = {
@@ -68,14 +81,168 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _probe_condition_labels() -> set[str]:
+SNAPSHOT_SCHEMA = "vgl0-probe-snapshot/0.1"
+
+
+def _snapshot_index() -> dict:
+    """凍結台帳を読む。**schema 判別子を検査してから**中身を消費する。
+
+    宣言した discriminator を読み飛ばすと、typo や将来の非互換 schema が
+    0.1 として解釈され、壊れた provenance メタデータを黙って通す
+    （レビュー指摘 P2）。
+    """
+    index = _load(SNAPSHOT_INDEX)
+    assert index.get("schema") == SNAPSHOT_SCHEMA, (
+        f"snapshots/index.json の schema が未対応: {index.get('schema')!r} "
+        f"(対応 = {SNAPSHOT_SCHEMA})")
+    _assert_registry_is_unambiguous(index)
+    return index
+
+
+def _assert_registry_is_unambiguous(index: dict) -> None:
+    """台帳が **矛盾する状態を表現できない**こと（レビュー指摘 P2）。
+
+    重複行があると、読み手（`{d["script"]: d for d in ...}` のような畳み込み）が
+    黙って片方を捨て、**古い宣言と新しい宣言が同居**したまま検査が通る。
+    重複は「どちらが正か」を台帳が答えられない状態なので、読み込み時点で落とす。
+
+    1 件だけ塞ぐと同型の穴が残るので、一意であるべきものを**全数**列挙する:
+
+    - `live_unmeasured` の `script`（同じ実装に 2 つの未実測宣言）
+    - `snapshots` の `file`（同じ凍結ファイルが 2 行）
+    - `snapshots` の `(script, sha256)`（同じ版が 2 行）
+    - 各 entry 内の `measured_results`（同じ結果を 2 度帰属）
+    - **結果ファイルの帰属先**（1 つの結果は 1 つの版からしか生まれない）
+    """
+    def _dupes(values):
+        seen, dupes = set(), []
+        for v in values:
+            (dupes.append(v) if v in seen else seen.add(v))
+        return sorted(set(dupes), key=str)
+
+    live = index.get("live_unmeasured") or []
+    bad = _dupes([e["script"] for e in live])
+    assert not bad, (
+        f"live_unmeasured に同じ script の宣言が複数ある: {bad}。"
+        " どちらが正か台帳が答えられないので、1 実装 1 宣言にすること")
+
+    snaps = index.get("snapshots") or []
+    bad = _dupes([e["file"] for e in snaps])
+    assert not bad, f"snapshots に同じ file の行が複数ある: {bad}"
+    bad = _dupes([(e["script"], e["sha256"]) for e in snaps])
+    assert not bad, f"snapshots に同じ (script, sha256) の行が複数ある: {bad}"
+
+    # **1 スクリプトにつき凍結は 1 世代まで**（User 承認の枠・2026-08-20）。
+    # 2 世代目を作りたくなったという事実自体が「再実測を構造的に先送りして
+    # いる」合図なので、凍結ではなく再実測を選ぶ。ここで機械的に止める。
+    bad = _dupes([e["script"] for e in snaps])
+    assert not bad, (
+        f"1 スクリプトに複数世代の snapshot がある: {bad}。"
+        " 凍結は 1 世代まで — 2 世代目が要るなら、それは再実測すべき合図"
+        "（probes/snapshots/README.md「時限措置としての枠」）")
+
+    owners: dict[str, list[str]] = {}
+    for entry in snaps:
+        bad = _dupes(entry["measured_results"])
+        assert not bad, f"{entry['file']}: measured_results に重複がある: {bad}"
+        for name in entry["measured_results"]:
+            owners.setdefault((name, entry["script"]), []).append(entry["file"])
+    contested = {k: v for k, v in owners.items() if len(v) > 1}
+    assert not contested, (
+        f"同じ結果が同じ script の複数 snapshot に帰属している: {contested}。"
+        " 1 つの結果を生んだ版は 1 つしかない")
+
+
+def _snapshot_path(entry: dict) -> Path:
+    """台帳の `file` を **registry ディレクトリ内**へ限定して解決する。
+
+    `file` に絶対パスや `../` が入ると `SNAPSHOTS / entry["file"]` が
+    `probes/snapshots` の外を指し、マシンローカルのバイト列を「コミット済み
+    実装」として hash してしまう（レビュー指摘 P2）。字句検査と解決後の
+    包含検査の両方で弾く。
+    """
+    raw = entry["file"]
+    assert raw and "/" not in raw and "\\" not in raw and raw not in (".", ".."), (
+        f"snapshot の file はディレクトリ区切りを含まない単一のファイル名で"
+        f"あること: {raw!r}")
+    assert not Path(raw).is_absolute(), f"snapshot の file が絶対パス: {raw!r}"
+    resolved = (SNAPSHOTS / raw).resolve()
+    assert resolved.is_relative_to(SNAPSHOTS.resolve()), (
+        f"snapshot {raw!r} が probes/snapshots の外を指している: {resolved}")
+    return resolved
+
+
+def _record_path(name: str) -> Path:
+    """台帳の結果名を **`evolution/records` 内**へ限定して解決する。
+
+    `snapshots[].file` は先に閉じたが、**`measured_results` と
+    `revalidation_results` は同じ形のまま `RECORDS / name` へ join していた**
+    （レビュー指摘 P2）。絶対パスや `../` が入れば records 外の JSON を読み、
+    細工した外部ファイルが snapshot 帰属や再検証被覆を満たしてしまう。
+    台帳由来の文字列がパスになる箇所は**全数**この helper を通す。
+    """
+    assert name and "/" not in name and "\\" not in name and name not in (".", ".."), (
+        f"結果名はディレクトリ区切りを含まない単一のファイル名であること: {name!r}")
+    assert not Path(name).is_absolute(), f"結果名が絶対パス: {name!r}"
+    resolved = (RECORDS / name).resolve()
+    assert resolved.is_relative_to(RECORDS.resolve()), (
+        f"結果名 {name!r} が evolution/records の外を指している: {resolved}")
+    return resolved
+
+
+def _pinned_script_sha(result_name: str, script_name: str) -> str | None:
+    """正本結果が **その script について** pin している sha を取り出す。
+
+    probe は `pins.probe_script`（再現性結果も pins を持つ）、checker は
+    結果直下の `checker_script`。対応が無ければ None。
+    """
+    payload = _load(_record_path(result_name))
+    if script_name == PROBE_SCRIPT.name:
+        pinned = (payload.get("pins") or {}).get("probe_script")
+        return (pinned or {}).get("sha256")
+    if script_name == REPRO_SCRIPT.name:
+        return (payload.get("checker_script") or {}).get("sha256")
+    return None
+
+
+def _resolve_source(script: Path, sha: str) -> Path:
+    """pin された sha を **repo 内の実体**へ解決する（live か snapshot）。
+
+    live 実装と一致すればそれが正解。一致しないときは
+    `probes/snapshots/` に凍結された「その結果を生んだ版」を探す
+    （運用は `probes/snapshots/README.md`）。どちらでも解決できなければ
+    fixture drift = 「実装を編集したが結果を再生成せず、旧版も凍結して
+    いない」なので落とす。
+    """
+    if _sha256(script) == sha:
+        return script
+    for entry in _snapshot_index()["snapshots"]:
+        if entry["script"] != script.name or entry["sha256"] != sha:
+            continue
+        frozen = _snapshot_path(entry)
+        assert frozen.exists(), f"index.json が指す snapshot が無い: {entry['file']}"
+        assert _sha256(frozen) == sha, (
+            f"snapshot {entry['file']} の実体が index.json の sha と一致しない")
+        return frozen
+    raise AssertionError(
+        f"pin された {script.name} の sha {sha[:12]}… が live 実装とも "
+        f"snapshot とも一致しない。実装を編集したなら (a) 再実行して結果 JSON を "
+        f"作り直すか、(b) 実測を生んだ版を probes/snapshots/ へ凍結して "
+        f"index.json へ登録すること（probes/snapshots/README.md）")
+
+
+def _probe_condition_labels(source: Path = PROBE_SCRIPT) -> set[str]:
     """probe の `CONDITIONS` から条件ラベルを **import せずに** 取り出す。
 
     probe を import すると `gate_synth` 経由で `onnxruntime` が要求され、
     CI 環境（onnxruntime 無し）では collection error になる。ラベルの正本は
     probe のソースなので、静的に読む。
+
+    `source` は既定で live 実装だが、**結果 JSON の幾何を検査するときは
+    その結果を生んだ版**（`_resolve_source`）を渡す。期待集合を live から
+    取ると、条件を増減した瞬間に過去の結果が「欠けている」と誤検出される。
     """
-    tree = ast.parse(PROBE_SCRIPT.read_text(encoding="utf-8"))
+    tree = ast.parse(source.read_text(encoding="utf-8"))
     for node in tree.body:
         targets = getattr(node, "targets", []) or [getattr(node, "target", None)]
         names = {t.id for t in targets if isinstance(t, ast.Name)}
@@ -109,12 +276,9 @@ def test_result_json_pins_the_committed_probe_script(result_json: Path) -> None:
     結果 JSON を再生成すること**（probe を変えたなら測定結果も変わりうる）。
     """
     pins = _load(result_json)["pins"]
-    assert pins["probe_script"]["sha256"] == _sha256(PROBE_SCRIPT), (
-        f"{result_json.name}: "
-        "結果 JSON の pins.probe_script.sha256 がコミット済み probe と一致しない。"
-        " probe を編集したなら再実行して結果 JSON を作り直すこと"
-        " (voice_genesis/evolution/probes/vgl0_control_axis_probe.py --help)"
-    )
+    # live 実装と一致しない場合は、その結果を生んだ版が snapshot として
+    # 凍結・登録されていることを要求する（drift はここで落ちる）。
+    _resolve_source(PROBE_SCRIPT, pins["probe_script"]["sha256"])
 
 
 @pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
@@ -185,7 +349,7 @@ def test_reproducibility_result_binds_the_input_pin_set() -> None:
     assert pins, "再現性結果に入力 pin セットが束縛されていない"
     missing = REQUIRED_PIN_KEYS - set(pins)
     assert not missing, f"再現性結果の pins に欠けがある: {sorted(missing)}"
-    assert pins["probe_script"]["sha256"] == _sha256(PROBE_SCRIPT)
+    _resolve_source(PROBE_SCRIPT, pins["probe_script"]["sha256"])
     # 主実測と同じ入力に対する verdict であること
     main_pins = _load(RESULT_JSON)["pins"]
     for key in sorted(REQUIRED_PIN_KEYS):
@@ -199,8 +363,9 @@ def test_reproducibility_covers_every_probe_condition() -> None:
     両実行が同じ条件を揃って落とすと突き合わせだけでは検出できないため、
     期待条件集合そのものと照合する（レビュー指摘）。
     """
-    expected = _probe_condition_labels()
     payload = _load(REPRO_JSON)
+    expected = _probe_condition_labels(
+        _resolve_source(PROBE_SCRIPT, payload["probe_script"]["sha256"]))
     covered = {f["label"] for f in payload["findings"]
                if f["check"] == "order_independence"}
     assert covered == expected, (
@@ -215,11 +380,8 @@ def test_reproducibility_result_pins_its_own_checker_and_probe() -> None:
     なったか」が canonical provenance から辿れない（レビュー指摘）。
     """
     payload = _load(REPRO_JSON)
-    assert payload["checker_script"]["sha256"] == _sha256(REPRO_SCRIPT), (
-        "再現性結果の checker_script.sha256 がコミット済みスクリプトと一致しない。"
-        " 検査スクリプトを編集したなら再実行して結果を作り直すこと")
-    assert payload["probe_script"]["sha256"] == _sha256(PROBE_SCRIPT), (
-        "再現性結果が pin する probe sha がコミット済み probe と一致しない")
+    _resolve_source(REPRO_SCRIPT, payload["checker_script"]["sha256"])
+    _resolve_source(PROBE_SCRIPT, payload["probe_script"]["sha256"])
 
 
 def test_every_probe_subprocess_passed_all_gates() -> None:
@@ -236,7 +398,16 @@ def test_every_probe_subprocess_passed_all_gates() -> None:
     assert len(runs) == 10, f"検査したサブプロセス数が 10 でない: {len(runs)}"
     for run in runs:
         assert run["returncode"] == 0, f"{run['tag']}: rc={run['returncode']}"
-        assert run["consumed_ok"], f"{run['tag']}: 消費バイト検査が ok でない"
+        assert run["consumed_ok"], f"{run['tag']}: 消費モデルバイト検査が ok でない"
+        # 楽譜バイトゲートは 7 巡目フォローアップで追加。導入前の checker が
+        # 生んだ正本にはキーが無いので、**在るときだけ**検査する（rc ゲートが
+        # 落ちる側は上の returncode で覆われている）。
+        if run.get("consumed_score_ok") is not None:
+            assert run["consumed_score_ok"], (
+                f"{run['tag']}: 実行された楽譜バイト検査が ok でない")
+        if run.get("consumed_input_ok") is not None:
+            assert run["consumed_input_ok"], (
+                f"{run['tag']}: 消費入力バイト検査が ok でない")
         assert not run["failures"], f"{run['tag']}: {run['failures']}"
 
 
@@ -249,11 +420,9 @@ def test_checker_self_pin_is_load_time_and_stable() -> None:
     """
     payload = _load(REPRO_JSON)
     checker = payload["checker_script"]
-    committed = _sha256(REPRO_SCRIPT)
-    assert checker["sha256"] == committed, (
-        "checker_script.sha256（ロード時 pin）がコミット済みスクリプトと一致しない")
-    assert checker["sha256_after_run"] == committed, (
-        "実行後の再 hash がコミット済みスクリプトと一致しない")
+    committed = _resolve_source(REPRO_SCRIPT, checker["sha256"])
+    assert checker["sha256_after_run"] == _sha256(committed), (
+        "実行後の再 hash が、判定を出した版のスクリプトと一致しない")
     stable = next(f for f in payload["findings"]
                   if f["check"] == "checker_unchanged_during_run")
     assert stable["match"], f"実行中に検査スクリプトが変化した: {stable}"
@@ -284,8 +453,8 @@ def test_implementation_pins_are_load_time_and_stable(result_json: Path) -> None
     check = _load(result_json)["implementation_pin_check"]
     assert check["ok"], (
         f"{result_json.name}: 実行中に実装が変化した {check['changed_during_run']}")
-    assert check["sha_at_load"]["probe_script"] == _sha256(PROBE_SCRIPT)
-    assert check["sha_after_run"]["probe_script"] == _sha256(PROBE_SCRIPT)
+    measured = _resolve_source(PROBE_SCRIPT, check["sha_at_load"]["probe_script"])
+    assert check["sha_after_run"]["probe_script"] == _sha256(measured)
     # gate_synth はロード時と実行後で一致していることだけ見る（コミット済み
     # 実体との照合はしない — 活発に変更されるため偽陽性になる）
     assert (check["sha_at_load"]["gate_synth"]
@@ -307,3 +476,356 @@ def test_reproducibility_result_is_fresh_process_based() -> None:
     for finding in payload["findings"]:
         assert finding.get("match"), f"再現性検査が不一致: {finding}"
     assert payload["verdict"] == "PASS", f"verdict={payload['verdict']} / {payload['failures']}"
+
+
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_canonical_result_geometry_supports_the_record(result_json: Path) -> None:
+    """正本結果が **record の主張どおりの幾何**で測られていること。
+
+    `conditions` が非空であることだけを検査していると、`--only baseline` で
+    作り直した結果や `--notes-limit` を渡し忘れた結果でも後続の全アサーションが
+    「たまたま在る行」だけを見て通る。record は「1 走行 17 条件」「notes limit
+    は 6 / 8 / 10」を主張しているので、その 3 点を機械で固定する
+    （レビュー指摘 P2・9 巡目）。
+
+    期待条件集合は **その結果を生んだ版**の `CONDITIONS` から取る。live から
+    取ると、条件を増減した瞬間に過去の正本が誤って落ちる。
+    """
+    payload = _load(result_json)
+    source = _resolve_source(PROBE_SCRIPT, payload["pins"]["probe_script"]["sha256"])
+    expected = _probe_condition_labels(source)
+
+    assert payload["single_condition"] is None, (
+        f"{result_json.name}: --only={payload['single_condition']} で作られた"
+        " 単一条件の結果が正本の位置に置かれている")
+    assert payload["order"] == "forward", (
+        f"{result_json.name}: 正本は forward 順の走行であること"
+        f"（order={payload['order']}）")
+
+    labels = [c["label"] for c in payload["conditions"]]
+    dupes = sorted({lbl for lbl in labels if labels.count(lbl) > 1})
+    assert not dupes, f"{result_json.name}: 条件ラベルが重複している {dupes}"
+    assert set(labels) == expected, (
+        f"{result_json.name}: 条件集合が測定版の CONDITIONS と一致しない "
+        f"欠け={sorted(expected - set(labels))} / 余分={sorted(set(labels) - expected)}")
+
+    want = EXPECTED_GEOMETRY[result_json.name]
+    assert payload["notes_limit"] == want, (
+        f"{result_json.name}: notes_limit={payload['notes_limit']} だが "
+        f"record はこのファイルを notes_limit={want} の走行として引用している")
+
+
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_consumed_score_bytes_match_the_pins(result_json: Path) -> None:
+    """実行された楽譜バイトが pin と一致していること。
+
+    `load_song_module()` は消費した楽譜モジュールの digest を per-call で返す。
+    それを捨てると、走行途中で `score.py` / `phoneme_jp.py` が差し替わっても
+    「古い pin を記録したまま新しいバイトで鳴らした WAV」が success で残る
+    （レビュー指摘 P2・7 巡目）。
+
+    この検査を持たない版で測った正本もあるため、**キーがある結果にだけ**
+    適用する。live 実装が検査を出すことは
+    `test_live_probe_still_verifies_consumed_score_bytes` が別に固定する。
+    """
+    payload = _load(result_json)
+    check = payload.get("consumed_score_bytes_check")
+    if check is None:
+        pytest.skip("この正本は楽譜バイト検査の導入前に測られている")
+    assert check["ok"], f"{result_json.name}: {check['mismatches']}"
+    assert check["distinct_bundles"] == 1, (
+        f"{result_json.name}: 条件間で楽譜バイト列が異なる "
+        f"(distinct={check['distinct_bundles']})")
+    pins = payload["pins"]
+    for cond in payload["conditions"]:
+        for key, digest in (cond.get("consumed_score_sha256") or {}).items():
+            assert pins[key]["sha256"] == digest, (
+                f"{cond['label']}: 実行した楽譜 {key} が pins と不一致")
+
+
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_consumed_input_bytes_match_the_pins(result_json: Path) -> None:
+    """音素辞書 / 話者 embed の**実際に読まれたバイト**が pin と一致すること。
+
+    §9 member 5 を「gate_synth の I/O 構造変更が要る」として射程外にしていたのは
+    事実誤認で、`*_with_sha` ローダが既に存在した（レビュー指摘 P2・12 巡目）。
+    導入前に測った正本にはキーが無いので、**在るときだけ**適用する。
+    """
+    payload = _load(result_json)
+    check = payload.get("consumed_input_bytes_check")
+    if check is None:
+        pytest.skip("この正本は消費入力バイト検査の導入前に測られている")
+    assert check["ok"], f"{result_json.name}: {check['mismatches']}"
+    assert check["distinct_bundles"] == 1
+    pins = payload["pins"]
+    for cond in payload["conditions"]:
+        for key, digest in (cond.get("consumed_input_sha256") or {}).items():
+            assert pins[key]["sha256"] == digest, (
+                f"{cond['label']}: 消費入力 {key} が pins と不一致")
+
+
+def test_live_probe_still_verifies_consumed_input_bytes() -> None:
+    """live probe が `*_with_sha` ローダと入力バイト検査を保持していること。"""
+    src = PROBE_SCRIPT.read_text(encoding="utf-8")
+    for token in ("load_canon_phonemes_with_sha",
+                  "load_own_phonemes_json_with_sha",
+                  "load_speaker_embed_vector_with_sha",
+                  "verify_consumed_input_bytes",
+                  "consumed_input_bytes_check"):
+        assert token in src, f"probe から {token} が消えている"
+    for token in ("gs.load_canon_phonemes(", "gs.load_own_phonemes_json(",
+                  "gs.load_speaker_embed_vector("):
+        assert token not in src, f"非 hash 版ローダ {token} が残っている"
+
+
+def test_live_probe_still_verifies_consumed_score_bytes() -> None:
+    """live probe が楽譜バイト検査を保持していること（是正の逆戻り検知）。
+
+    正本側は導入前の版で測られているので skip されうる。**実装側**が
+    検査を落としていないことは静的に固定しておく。
+    """
+    src = PROBE_SCRIPT.read_text(encoding="utf-8")
+    for token in ("consumed_score_sha256", "verify_consumed_score_bytes",
+                  "consumed_score_bytes_check"):
+        assert token in src, f"probe から {token} が消えている"
+
+
+def test_snapshot_index_matches_its_files() -> None:
+    """凍結台帳の各行が、実体・sha・参照先の 3 点で整合していること。"""
+    index = _snapshot_index()
+    for entry in index["snapshots"]:
+        frozen = _snapshot_path(entry)
+        assert frozen.exists(), f"index.json が指す snapshot が無い: {entry['file']}"
+        assert _sha256(frozen) == entry["sha256"], (
+            f"{entry['file']}: 実体の sha が index.json の記載と一致しない")
+        assert entry["measured_results"], (
+            f"{entry['file']}: この版が生んだ結果が 1 件も登録されていない")
+        for name in entry["measured_results"]:
+            assert _record_path(name).exists(), (
+                f"{entry['file']}: 参照先の結果 {name} が無い")
+            # **帰属そのものを検証する**（レビュー指摘 P2）: 存在確認だけだと、
+            # 正本の一部だけを live 版で再生成したとき、その結果が古い
+            # snapshot の measured_results に残り続け、台帳が「この版が生んだ」
+            # と偽って主張する。pin を突き合わせて部分再実測での汚染を防ぐ。
+            pinned = _pinned_script_sha(name, entry["script"])
+            assert pinned == entry["sha256"], (
+                f"{entry['file']}: {name} は {entry['script']} の sha "
+                f"{(pinned or '<pin 無し>')[:12]}… を pin しており、この snapshot "
+                f"({entry['sha256'][:12]}…) が生んだ結果ではない。再実測したなら "
+                f"measured_results から外すこと")
+        # **逆向きの全数性**（レビュー指摘 P2・10 巡目）: 上の検査は「載っている
+        # 名前が正しいか」しか見ない。この版が生んだ正本が台帳から抜け落ちても
+        # 素通りするので、その版を pin する正本の全数と一致することも要求する。
+        # README が `measured_results` を「その版が生んだ結果の全数」と定義して
+        # いる以上、定義そのものを機械で守る。
+        expected = _canonical_results_for(PROBES / entry["script"], entry["sha256"])
+        assert set(entry["measured_results"]) == expected, (
+            f"{entry['file']}: measured_results が、この版を pin する正本の全数と "
+            f"一致しない 欠け={sorted(expected - set(entry['measured_results']))} / "
+            f"余分={sorted(set(entry['measured_results']) - expected)}")
+
+    listed = {_snapshot_path(e).name for e in index["snapshots"]}
+    on_disk = {p.name for p in SNAPSHOTS.glob("*.py")}
+    assert on_disk == listed, (
+        f"snapshots/ の中身と index.json がずれている: "
+        f"未登録={sorted(on_disk - listed)} / 実体無し={sorted(listed - on_disk)}")
+
+
+def test_no_orphan_snapshots() -> None:
+    """どの結果からも pin されていない snapshot を残さない。
+
+    実測をやり直して結果を作り直したら、古い版は参照が切れる。放置すると
+    「凍結してあるから安全」という誤った印象だけが残るので、掃除を強制する。
+    """
+    pinned = set()
+    for result_json in RESULT_JSONS:
+        pinned.add(_load(result_json)["pins"]["probe_script"]["sha256"])
+    repro = _load(REPRO_JSON)
+    pinned.add(repro["probe_script"]["sha256"])
+    pinned.add(repro["checker_script"]["sha256"])
+
+    for entry in _snapshot_index()["snapshots"]:
+        assert entry["sha256"] in pinned, (
+            f"{entry['file']} はどの結果からも pin されていない孤児。"
+            " 参照が切れた snapshot は index.json ごと削除すること")
+
+
+def _canonical_results_for(script: Path, sha: str | None = None) -> set[str]:
+    """その script を pin している **正本の全数**（`sha` 指定でその版に限定）。
+
+    台帳の 2 つのリストは**どちらも「全数」を主張している**:
+
+    - `live_unmeasured[].revalidation_results` = 再検証で作り直す正本の全数
+    - `snapshots[].measured_results`          = その凍結版が生んだ正本の全数
+
+    台帳側の記載だけから期待集合を導くと、正本が増えたり 1 件が抜け落ちたり
+    したときに、**残っている行だけを検査して素通り**する（レビュー指摘 P2・
+    9 巡目 = 前者 / 10 巡目 = 後者）。両方向とも「宣言が全数である」ことを
+    この helper 経由で機械検査する。
+    """
+    names = [r.name for r in (*RESULT_JSONS, REPRO_JSON)]
+    return {n for n in names
+            if (_pinned_script_sha(n, script.name) is not None if sha is None
+                else _pinned_script_sha(n, script.name) == sha)}
+
+
+def _revalidation_coverage(entry: dict, script: Path) -> tuple[set[str], set[str]]:
+    """宣言された再検証セットのうち、live sha を pin できている結果 / いない結果。
+
+    先に **宣言が正本の全数と一致している**ことを要求する（部分的な宣言で
+    被覆を満たせないようにする）。
+    """
+    live = _sha256(script)
+    required = set(entry["revalidation_results"])
+    expected = _canonical_results_for(script)
+    assert required == expected, (
+        f"{script.name}: revalidation_results が正本の全数と一致しない "
+        f"欠け={sorted(expected - required)} / 余分={sorted(required - expected)}。"
+        f" 宣言は「再検証で作り直す結果の全数」なので、正本が増えたら宣言も増やす")
+    covered = {name for name in required
+               if _pinned_script_sha(name, script.name) == live}
+    return covered, required - covered
+
+
+def test_live_scripts_are_measured_or_declared_unmeasured() -> None:
+    """live 実装が「**完全に**実測済み」か「未実測と宣言済み」のどちらかであること。
+
+    snapshot 機構は再実測の免除ではない。live 実装がどの正本からも pin されて
+    いないなら、それは **実測証拠の無いコード**であり、`live_unmeasured` に
+    理由と再検証条件を書かせて可視化する（黙って PASS の余韻を借りない）。
+
+    **部分再実測で宣言を消させない**（レビュー指摘 P2）: 「どれか 1 本でも live
+    sha を pin していれば実測済み」とすると、`revalidation` が要求する 6/8/10
+    ノート 3 走行 + 10 プロセス再現性のうち 1 本を作り直しただけで宣言が消え、
+    **残りの幾何が未実測であるという唯一の警告が失われる**。宣言に
+    `revalidation_results`（再検証で作り直すべき結果の全数）を持たせ、
+    **全数が live sha を pin して初めて実測済み**とする。
+
+    **宣言は live sha へ束縛する**（外部レビュー指摘）: live を再編集したら、
+    古い版に対する未実測宣言を流用できない。
+    """
+    declared = {d["script"]: d for d in _snapshot_index()["live_unmeasured"]}
+    for script in (PROBE_SCRIPT, REPRO_SCRIPT):
+        entry = declared.get(script.name)
+        if entry is None:
+            # 宣言が無いなら「実測済み」の主張。全 revalidation 対象が live sha を
+            # pin していることを、snapshot 側の宣言に頼らず直接確かめる。
+            live = _sha256(script)
+            names = [r.name for r in (*RESULT_JSONS, REPRO_JSON)]
+            relevant = [n for n in names
+                        if _pinned_script_sha(n, script.name) is not None]
+            stale = [n for n in relevant if _pinned_script_sha(n, script.name) != live]
+            assert not stale, (
+                f"{script.name}: live_unmeasured に宣言が無い（= 実測済みの主張）"
+                f"のに、{stale} が別の版を pin している。未実測なら宣言を書くこと")
+            continue
+
+        assert entry.get("sha256") == _sha256(script), (
+            f"{script.name}: live_unmeasured.sha256 が現在の live sha と一致しない。"
+            " live を編集したら、古い版に対する未実測宣言は流用できない"
+            " — 宣言を書き直すか、再実測して宣言を消すこと")
+        for key in ("reason", "revalidation"):
+            assert entry.get(key), f"{script.name}: live_unmeasured.{key} が空"
+        assert entry.get("revalidation_results"), (
+            f"{script.name}: revalidation_results（再検証で作り直す結果の全数）が空"
+            " — 何をもって実測済みとするかが機械で判定できない")
+
+        covered, remaining = _revalidation_coverage(entry, script)
+        assert remaining, (
+            f"{script.name}: revalidation_results が全数 live sha を pin している"
+            f"（= 再検証完了）のに宣言が残っている。該当行を消すこと")
+        # 部分再実測は「宣言を消してよい」ではなく「まだ途中」。covered が
+        # 非空でも宣言は残り続ける（このアサートが無いと逆に消せてしまう）。
+        assert covered != set(entry["revalidation_results"])
+
+
+def test_declared_revalidation_sets_name_real_results() -> None:
+    """`revalidation_results` が実在する正本を指し、その script の pin を持つこと。
+
+    さらに **正本の全数と一致する**ことも要求する（レビュー指摘 P2・9 巡目）。
+    """
+    for entry in _snapshot_index()["live_unmeasured"]:
+        assert entry["revalidation_results"], f"{entry['script']}: 再検証セットが空"
+        script = PROBES / entry["script"]
+        assert set(entry["revalidation_results"]) == _canonical_results_for(script), (
+            f"{entry['script']}: revalidation_results が正本の全数と一致しない")
+        for name in entry["revalidation_results"]:
+            assert _record_path(name).exists(), (
+                f"{entry['script']}: revalidation_results の {name} が無い")
+            assert _pinned_script_sha(name, entry["script"]) is not None, (
+                f"{entry['script']}: {name} は {entry['script']} の sha を pin して"
+                f"いないので、再検証の対象になり得ない")
+
+
+def test_registry_result_names_stay_inside_records() -> None:
+    """台帳が名指しする結果名が **records 配下**に閉じていること。
+
+    `snapshots[].file` と同型の穴が `measured_results` /
+    `revalidation_results` に残っていた（レビュー指摘 P2）。台帳由来の文字列が
+    パスになる箇所は全数 `_record_path` を通す — ここはその契約の番人。
+    """
+    index = _snapshot_index()
+    names = [n for e in index["snapshots"] for n in e["measured_results"]]
+    names += [n for e in index["live_unmeasured"] for n in e["revalidation_results"]]
+    assert names, "台帳が結果を 1 件も名指ししていない"
+    for name in names:
+        assert _record_path(name).exists()
+
+    for bad in ("../secret.json", "/etc/passwd", "sub/dir.json", "..", ""):
+        with pytest.raises(AssertionError):
+            _record_path(bad)
+
+
+def test_checker_binds_the_probe_module_version_it_imported() -> None:
+    """checker が **自分で import した probe の版**を verdict へ束縛すること。
+
+    checker 側の検証（衝突ガード・期待条件集合）は import 時の in-memory 定義で
+    走る。その版が実行後の実体ともサブプロセスの pin とも一致して初めて、PASS を
+    probe のバイト列へ帰属できる（レビュー指摘 P2）。
+
+    導入前に測った正本にはこの finding が無いので、**在るときだけ**内容を
+    検査し、実装側が出し続けることは静的に固定する。
+    """
+    payload = _load(REPRO_JSON)
+    finding = next((f for f in payload["findings"]
+                    if f["check"] == "checker_probe_module_pinned"), None)
+    if finding is not None:
+        assert finding["match"], f"checker の probe 版が一致していない: {finding}"
+        assert finding["sha_at_import"] == finding["sha_after_run"]
+        assert finding["sha_at_import"] == finding["sha_subprocess_pin"]
+
+    src = REPRO_SCRIPT.read_text(encoding="utf-8")
+    for token in ("_PROBE_SHA_AT_IMPORT", "checker_probe_module_pinned"):
+        assert token in src, f"checker から {token} が消えている"
+
+
+def test_snapshot_policy_is_declared_and_time_boxed() -> None:
+    """凍結が **時限措置**として宣言されていること（User 承認の枠・2026-08-20）。
+
+    snapshot 機構は恒久パターンではない。採用の条件は
+    (1) 期限（再実測で自動消滅）、(2) 1 スクリプト 1 世代、(3) CI が履歴を
+    持てるようになったら git 履歴方式へ置換、の 3 点。台帳がこの枠を
+    **自分で宣言している**ことを固定する（宣言が消えたら枠も消える）。
+    """
+    policy = _snapshot_index().get("policy")
+    assert policy, "index.json に policy（時限措置の枠）が無い"
+    for key in ("time_boxed", "retirement", "max_generations_per_script",
+                "replacement_plan", "approved"):
+        assert policy.get(key), f"policy.{key} が空"
+    assert policy["max_generations_per_script"] == 1
+
+
+def test_snapshots_retire_automatically_on_remeasurement() -> None:
+    """再実測すれば凍結が **機械的に不要になる**こと（出口の存在）。
+
+    出口が運用者の善意に依存していると時限措置にならない。実際には:
+    再実測 → 正本が live sha を pin → snapshot の `measured_results` 帰属が
+    崩れる → 名前を外す → `measured_results` が空になり検査が落ちる →
+    行ごと削除 → ディレクトリと index の突き合わせで実体も削除。
+    この連鎖が成立するために必要な検査が揃っていることを確認する。
+    """
+    src = Path(__file__).read_text(encoding="utf-8")
+    for guard in ("test_snapshot_index_matches_its_files",
+                  "test_no_orphan_snapshots",
+                  "この版が生んだ結果が 1 件も登録されていない"):
+        assert guard in src, f"退場を強制する検査 {guard} が無い"
