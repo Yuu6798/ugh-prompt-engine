@@ -35,6 +35,30 @@
         "gate_verdict": "FAIL（副軸回帰による）",
         "agreement": "主軸では機械と耳が**逆**。副軸 energy_tail の回帰と G7 の FAIL 判定は耳の『R4 が悪い』と一致した"
       }
+    },
+    {
+      "item": 2,
+      "question": "ノイズの出所 — 原音 vs R0",
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "material": "ANCHOR_ritsu.wav（原音・WORLD 非経由） / R0.wav（baseline 合成）",
+      "answer_raw": "1: ノイズ無し / 2: ノイズ増加 / 3: 微妙",
+      "findings": {
+        "anchor_has_noise": false,
+        "r0_noise_vs_anchor": "増加",
+        "identity_same_singer": "微妙"
+      },
+      "implication": "R0 は Performance を一切移植していない baseline なので、劣化の出所は **Performance 移植ではなく identity 経路そのもの**（WORLD 往復 / F0 平坦化 / unit 分割・warp のいずれか）。instruction §14「Identity 崩壊 → identity path を再設計」に該当。Q1（同一 Identity 系統か）も R0 の時点で既に『微妙』であり、ラダー全体が劣化した土台の上に乗っていることになる",
+      "objective_check": {
+        "note": "耳が指摘した雑音性を WORLD の非周期性 ap で測ろうとしたが、知覚と一致しなかった",
+        "mean_ap": {
+          "ANCHOR": 0.5397,
+          "RT_world": 0.5247,
+          "RT_flatf0": 0.5169,
+          "R0": 0.5069,
+          "R4": 0.5212
+        },
+        "verdict": "ap 平均は R0 のほうが**低い**（= より周期的）と出る。ap は耳の『ノイズ』の代理にならない"
+      }
     }
   ]
 }
