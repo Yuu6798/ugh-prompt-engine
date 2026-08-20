@@ -1,0 +1,40 @@
+{
+  "listener": "User",
+  "listened_at": "2026-08-20",
+  "blinded": true,
+  "machine_result_seen_before_listening": true,
+  "blinding_defect": "pair_key の sha256 最下位ビットで A/B を割り当てたところ、4 ペアとも A=R4 になった（1/8 の偶然）。ペア1 を開示した時点で残り 3 ペアの盲検性は失われている。以降の盲検は salt を変えて作り直す",
+  "items": [
+    {
+      "item": 1,
+      "question": "Q3 (blind) — terminal /ri/ failure は改善したか（ペア1）",
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "material": "BLIND_A.wav / BLIND_B.wav（各 3.6s、「ぽたり ぽたり」）",
+      "blind_key": {
+        "A": "R4",
+        "B": "R0"
+      },
+      "answer_raw": "1: B / 2: A,B ともに終端の「り」にノイズ混入、A のほうがひどい",
+      "verdict_blind": "B が良い",
+      "verdict_resolved": "R0 が良い = R4 は悪化",
+      "notes": [
+        "終端 /ri/ に**ノイズ混入**が A/B 双方で聴かれた（既存の軸はいずれも雑音性を測っていない）",
+        "A = R4 のほうがノイズがひどい"
+      ],
+      "machine_comparison": {
+        "registered_primary_axis": {
+          "R0": 5.708,
+          "R4": 1.562,
+          "machine_says": "R4 が改善"
+        },
+        "secondary_energy_tail_db": {
+          "R0": -0.48,
+          "R4": 7.09,
+          "machine_says": "R4 で終端が減衰しなくなった = 回帰"
+        },
+        "gate_verdict": "FAIL（副軸回帰による）",
+        "agreement": "主軸では機械と耳が**逆**。副軸 energy_tail の回帰と G7 の FAIL 判定は耳の『R4 が悪い』と一致した"
+      }
+    }
+  ]
+}
