@@ -1223,6 +1223,15 @@ def test_verify_assembly_fails_closed_without_teacher_section() -> None:
 
 
 # --- run 7 初回起動の fail-closed 回帰（2026-08-20・素材取得の命名規則） ------
+# 契約（外部レビュー 2026-08-20 で明文化）: **今回 Drive から取得した実体だけで
+# pinned source set を完全に再構成できた場合にのみ** convert_amitaro へ進む。
+# 「名前ではなく中身で特定する」ことと「集合検証を緩める」ことは別問題。
+
+
+def _write_staged(root: Path, name: str, payload: bytes) -> str:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / name).write_bytes(payload)
+    return hashlib.sha256(payload).hexdigest()
 
 
 def test_place_staged_sources_resolves_prefixed_names_by_content(tmp_path: Path) -> None:
@@ -1234,28 +1243,10 @@ def test_place_staged_sources_resolves_prefixed_names_by_content(tmp_path: Path)
         "b" * 64: [tmp_path / "001_recitation082.wav"],
     }
     pins = {"recitation148.wav": "a" * 64, "recitation082.wav": "b" * 64}
-    resolved, diffs, extras = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
-    assert diffs == [] and extras == 0
-    assert resolved["recitation148.wav"].name == "000_recitation148.wav"
-    assert resolved["recitation082.wav"].name == "001_recitation082.wav"
-
-
-def test_place_staged_sources_reports_missing_and_extras(tmp_path: Path) -> None:
-    files_by_sha = {
-        "a" * 64: [tmp_path / "000_x.wav"],
-        "c" * 64: [tmp_path / "001_unexpected.wav"],
-    }
-    pins = {"recitation001.wav": "a" * 64, "recitation002.wav": "b" * 64}
-    resolved, diffs, extras = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
-    assert set(resolved) == {"recitation001.wav"}
-    assert len(diffs) == 1 and "recitation002.wav" in diffs[0]
-    assert extras == 1
-
-
-def _write_staged(root: Path, name: str, payload: bytes) -> str:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / name).write_bytes(payload)
-    return hashlib.sha256(payload).hexdigest()
+    res = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
+    assert res.ok and res.problems() == []
+    assert res.resolved["recitation148.wav"].name == "000_recitation148.wav"
+    assert res.resolved["recitation082.wav"].name == "001_recitation082.wav"
 
 
 def test_place_staged_sources_diff_reports_what_actually_arrived(tmp_path: Path) -> None:
@@ -1264,53 +1255,89 @@ def test_place_staged_sources_diff_reports_what_actually_arrived(tmp_path: Path)
     `missing=…/extra=…` であり、sha 照合化でその情報が消えては後退になる。"""
     files_by_sha = {"c" * 64: [tmp_path / "000_recitation148.wav"]}
     pins = {"recitation001.wav": "a" * 64, "recitation002.wav": "b" * 64}
-    resolved, diffs, extras = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
-    assert resolved == {} and extras == 1
-    assert len(diffs) == 1
-    msg = diffs[0]
+    res = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
+    assert res.resolved == {}
+    msg = "\n".join(res.problems())
     assert "recitation001.wav" in msg          # 何が足りないか
     assert "000_recitation148.wav" in msg      # 何が届いていたか
     assert "2/2" in msg
 
 
+def test_place_staged_sources_fails_closed_on_extra_file(tmp_path: Path) -> None:
+    """**余剰は fail-closed**（外部レビュー P1）: pin に無い実体が 1 本でも
+    あれば取得集合が pin と一致していない。旧実装の file set mismatch が
+    持っていた集合検証の強度を sha 照合化でも保つ。"""
+    files_by_sha = {
+        "a" * 64: [tmp_path / "000_ok.wav"],
+        "x" * 64: [tmp_path / "001_unrelated.wav"],
+    }
+    pins = {"recitation001.wav": "a" * 64}
+    res = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
+    assert not res.ok
+    assert [p.name for p in res.unexpected] == ["001_unrelated.wav"]
+    assert any("unexpected staged file" in d for d in res.problems())
+
+
+def test_place_staged_sources_rejects_duplicate_pin_sha(tmp_path: Path) -> None:
+    """**pin 側 sha の重複は fail-closed**（外部レビュー P2）: 1 つの物理
+    ファイルから複数の意味付きファイル名を作れてしまう。amitaro は
+    ファイル名 = 文番号が意味を持つため user_sources の「同一 sha は同一物」
+    判断を無条件に適用しない。多重度が曖昧な pin では**部分解決も返さない**。"""
+    files_by_sha = {"a" * 64: [tmp_path / "000_a.wav"]}
+    pins = {"recitation001.wav": "a" * 64, "recitation002.wav": "a" * 64}
+    res = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
+    assert not res.ok and res.resolved == {}
+    assert set(res.duplicate_pin_sha["a" * 64]) == {
+        "recitation001.wav", "recitation002.wav"}
+    assert any("duplicate staged-source sha256" in d for d in res.problems())
+
+
 def test_place_staged_sources_is_deterministic_on_duplicate_content(tmp_path: Path) -> None:
-    """同一 sha の重複コピー（Drive 同名重複の実体）でも解決先は決定論。
+    """同一 sha の物理重複があっても解決先は決定論（ソート順先頭）。
     依存の実体は `index_files_by_sha256`（`_iter_files` の sorted）なので、
-    **実ファイルを置いて索引経由で**検証する（純関数を 2 回呼ぶだけでは
-    ソート順の担保を何も検証していない）。重複は余剰に数えない
-    （同一 sha は同内容 = `match_user_sources` と同じ設計）。"""
+    **実ファイルを置いて索引経由で**検証する。なお重複した 2 本目以降は
+    pin 側から見れば余剰ではない（同一 sha は同内容）。"""
     src = tmp_path / "src"
     payload = b"RIFFdup"
     for name in ("002_a.wav", "000_a.wav", "001_a.wav"):
         _write_staged(src, name, payload)
-    sha = hashlib.sha256(payload).hexdigest()
-    pins = {"recitation001.wav": sha}
-    resolved, diffs, extras = r5b.place_staged_sources_by_sha256(
-        r5b.index_files_by_sha256(src), pins)
-    assert diffs == []
-    # `_iter_files` の sorted によりソート順先頭（= 000_a.wav）が選ばれる
-    assert resolved["recitation001.wav"].name == "000_a.wav"
-    # 同一 sha の 3 本は「どれを使っても等価」なので全数 matched 扱い＝余剰 0
-    assert extras == 0
+    pins = {"recitation001.wav": hashlib.sha256(payload).hexdigest()}
+    res = r5b.place_staged_sources_by_sha256(r5b.index_files_by_sha256(src), pins)
+    assert res.ok
+    assert res.resolved["recitation001.wav"].name == "000_a.wav"
+    assert res.unexpected == []
 
 
-# --- 配線そのものの回帰（materialize_staged_sources）------------------------
+# --- 配線そのものの回帰（materialize / clean staging）------------------------
 
 
 def test_materialize_places_prefixed_files_under_pinned_names(tmp_path: Path) -> None:
-    """実際に壊れた配線 = 「連番前置名で取得 → 期待名で配置」を検証する。
-    純関数だけのテストでは、この配線が退行しても気づけない。"""
+    """実際に壊れた配線 = 「連番前置名で取得 → 期待名で配置」を検証する。"""
     src = tmp_path / "src"
     sha1 = _write_staged(src, "000_recitation148.wav", b"one")
     sha2 = _write_staged(src, "001_recitation082.wav", b"two")
     pins = {"recitation148.wav": sha1, "recitation082.wav": sha2}
     dest = tmp_path / "named"
-    placed, extras = r5b.materialize_staged_sources(src, pins, dest)
+    res = r5b.materialize_staged_sources(src, pins, dest)
     assert sorted(p.name for p in dest.glob("*.wav")) == [
         "recitation082.wav", "recitation148.wav"]
     assert (dest / "recitation148.wav").read_bytes() == b"one"
-    assert placed["recitation082.wav"] == dest / "recitation082.wav"
-    assert extras == 0
+    assert len(res.resolved) == 2
+
+
+def test_materialize_exact_set_only(tmp_path: Path) -> None:
+    """324/324 相当の**完全一致のみ**が正常系。1 本余分なだけで停止する。"""
+    src = tmp_path / "src"
+    pins = {}
+    for i in range(1, 6):
+        pins[f"recitation{i:03d}.wav"] = _write_staged(
+            src, f"{i-1:03d}_recitation{i:03d}.wav", f"payload-{i}".encode())
+    dest = tmp_path / "named"
+    assert len(r5b.materialize_staged_sources(src, pins, dest).resolved) == 5
+
+    _write_staged(src, "999_unrelated.wav", b"stray")
+    with pytest.raises(r5b.PinMismatchError, match="unexpected staged file"):
+        r5b.materialize_staged_sources(src, pins, tmp_path / "named2")
 
 
 def test_materialize_fails_closed_on_missing_content(tmp_path: Path) -> None:
@@ -1335,6 +1362,40 @@ def test_materialize_refuses_existing_dest(tmp_path: Path) -> None:
 def test_materialize_rejects_path_traversal_in_pin_key(tmp_path: Path) -> None:
     src = tmp_path / "src"
     sha = _write_staged(src, "000_x.wav", b"one")
-    for bad in ("../escape.wav", "sub/dir.wav", ".."):
+    for i, bad in enumerate(("../escape.wav", "sub/dir.wav", "..")):
         with pytest.raises(r5b.StageFailure, match="bare filename"):
-            r5b.materialize_staged_sources(src, {bad: sha}, tmp_path / f"n_{abs(hash(bad))}")
+            r5b.materialize_staged_sources(src, {bad: sha}, tmp_path / f"n{i}")
+
+
+def test_staging_does_not_reuse_previous_run_files(tmp_path: Path) -> None:
+    """**外部レビュー P1 の中核**: 前回 run の残骸で今回の欠落を補完できない。
+
+    stale に SHA_A/SHA_B があり、今回の fetch は SHA_A のみ、pin は A/B の
+    両方 — clean staging を通せば B は missing として fail-closed になる
+    （掃除しないと古い B で成功してしまい、fail-closed 契約が破れる）。"""
+    staging = tmp_path / "amitaro_sources"
+    sha_a = _write_staged(staging, "000_stale_a.wav", b"payload-A")
+    sha_b = _write_staged(staging, "001_stale_b.wav", b"payload-B")
+    pins = {"recitation001.wav": sha_a, "recitation002.wav": sha_b}
+
+    # 掃除しない場合は「今回 fetch していない B」でも解決できてしまう（対比）
+    stale_res = r5b.place_staged_sources_by_sha256(
+        r5b.index_files_by_sha256(staging), pins)
+    assert stale_res.ok, "前提: 残骸があると解決できてしまう"
+
+    # clean staging → 今回の fetch（A のみ）を置く
+    r5b.prepare_clean_staging_dir(staging)
+    assert list(staging.iterdir()) == []
+    _write_staged(staging, "000_recitation001.wav", b"payload-A")
+    res = r5b.place_staged_sources_by_sha256(
+        r5b.index_files_by_sha256(staging), pins)
+    assert not res.ok
+    assert res.missing == ["recitation002.wav"]
+
+
+def test_prepare_clean_staging_dir_is_idempotent(tmp_path: Path) -> None:
+    d = tmp_path / "staging"
+    _write_staged(d, "leftover.wav", b"x")
+    assert r5b.prepare_clean_staging_dir(d) == d
+    assert list(d.iterdir()) == []
+    assert r5b.prepare_clean_staging_dir(d).exists()

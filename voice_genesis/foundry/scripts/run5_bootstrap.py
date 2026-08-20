@@ -111,6 +111,7 @@ import tarfile
 import time
 import traceback
 import zipfile
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -719,12 +720,67 @@ def match_user_sources(
     return source_paths, diffs, extras
 
 
+@dataclass(frozen=True)
+class StagedSourceResolution:
+    """staged 素材の照合結果（異常の**内容**を失わない構造化戻り値）。
+
+    int の `extras` だけを返す設計では呼び出し側が処理を忘れうる（実際
+    run 7 の初回修正で余剰の扱いが漏れ、外部レビューで指摘された）。
+    異常は種類ごとに保持し、`problems()` が診断メッセージへ落とす。"""
+
+    resolved: Dict[str, Path] = field(default_factory=dict)
+    missing: List[str] = field(default_factory=list)
+    unexpected: List[Path] = field(default_factory=list)
+    duplicate_pin_sha: Dict[str, List[str]] = field(default_factory=dict)
+    n_pinned: int = 0
+    n_staged_files: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems()
+
+    def problems(self) -> List[str]:
+        """fail-closed すべき理由の説明リスト（空 = 完全一致）。
+
+        契約（外部レビュー 2026-08-20 で明文化）: **pin の期待集合と、今回
+        取得した実体集合が 1 対 1 で完全一致した場合にのみ通す**。
+        「名前ではなく中身で特定する」ことと「集合検証を緩める」ことは
+        別問題であり、sha 照合化しても旧実装の集合 fail-closed 性を保つ。"""
+        diffs: List[str] = []
+        if self.duplicate_pin_sha:
+            diffs.append(
+                "duplicate staged-source sha256 in pin: "
+                + repr({sha[:12]: sorted(names)
+                        for sha, names in sorted(self.duplicate_pin_sha.items())})
+                + " — 同一実体から複数の意味付きファイル名を生成することに"
+                  "なるため fail-closed（amitaro はファイル名 = 文番号が意味を"
+                  "持つ。user_sources の『同一 sha は同一物』判断を無条件に"
+                  "適用しない）"
+            )
+        if self.missing:
+            unexpected_names = sorted(p.name for p in self.unexpected)
+            diffs.append(
+                f"staged sources not found by content: "
+                f"{len(self.missing)}/{self.n_pinned} 件が未解決 "
+                f"(missing={self.missing[:5]}…) — 実際に届いていた "
+                f"{self.n_staged_files} 本のうち未照合 "
+                f"{len(unexpected_names)} 本 (unmatched={unexpected_names[:5]}…)。"
+                "未コピー、または中身が pin と異なる"
+            )
+        if self.unexpected and not self.missing:
+            diffs.append(
+                f"unexpected staged file(s): {len(self.unexpected)} 本が pin に"
+                f"無い (extra={sorted(p.name for p in self.unexpected)[:5]}…) — "
+                "取得集合が pin と一致しないため fail-closed"
+            )
+        return diffs
+
+
 def place_staged_sources_by_sha256(
     files_by_sha: Dict[str, List[Path]], pinned_sha: Dict[str, str]
-) -> Tuple[Dict[str, Path], List[str], int]:
-    """pin の `{期待ファイル名: sha256}` を `files_by_sha` に突き合わせ、
-    **期待名 -> 実ファイルパス**の対応を返す純関数（戻り値は
-    (期待名 -> path, 欠落 diff, 余剰ファイル数)）。
+) -> StagedSourceResolution:
+    """pin の `{期待ファイル名: sha256}` を `files_by_sha`（**今回の取得のみ**
+    から作った索引）へ突き合わせ、`StagedSourceResolution` を返す純関数。
 
     **なぜ必要か**（run 7 初回起動の fail-closed で確定・2026-08-20）:
     `plan_drive_id_fetch` は Drive の同名重複に強くするため、ローカル名を
@@ -732,11 +788,31 @@ def place_staged_sources_by_sha256(
     user_sources はまさにそれ）。ところが amitaro 素材は
     **`recitationNNN.wav` という名前自体が意味を持つ**（`convert_amitaro` が
     文番号昇順で走査する）ため、取得したままの連番名では
-    「file set mismatch（missing=recitation001.wav… / extra=000_recitation148.wav…）」
-    で停止した。名前ベース取得へ戻すと Drive 同名重複の穴が復活するので、
-    **ID 指定取得は維持したまま、取得後に中身 sha で期待名へ解決する**
-    （user_sources の `match_user_sources` と同じ「名前ではなく中身で特定」の
-    流儀を、名前が要る素材へ拡張したもの）。"""
+    「file set mismatch」で停止した。名前ベース取得へ戻すと Drive 同名重複の
+    穴が復活するので、**ID 指定取得は維持したまま、取得後に中身 sha で
+    期待名へ解決する**。
+
+    ただし user_sources 由来の緩さ（余剰許容・同一 sha を同一物扱い）は
+    そのまま持ち込まない（外部レビュー 2026-08-20）:
+    - **余剰は fail-closed**（pin に無い実体が 1 本でもあれば集合不一致）
+    - **pin 側 sha の重複も fail-closed**（1 実体から複数の意味名を作れて
+      しまう。amitaro は名前が文番号という意味を担う）
+    """
+    sha_to_names: Dict[str, List[str]] = {}
+    for name, sha in pinned_sha.items():
+        sha_to_names.setdefault(sha, []).append(name)
+    duplicate_pin_sha = {
+        sha: names for sha, names in sha_to_names.items() if len(names) > 1
+    }
+    all_paths = [p for paths in files_by_sha.values() for p in paths]
+    if duplicate_pin_sha:
+        # 多重度が曖昧な pin では解決を試みない（部分解決を返して呼び出し側が
+        # 使ってしまう余地を残さない）。
+        return StagedSourceResolution(
+            duplicate_pin_sha=duplicate_pin_sha,
+            n_pinned=len(pinned_sha), n_staged_files=len(all_paths),
+        )
+
     resolved: Dict[str, Path] = {}
     missing: List[str] = []
     matched_shas: set = set()
@@ -748,39 +824,29 @@ def place_staged_sources_by_sha256(
             continue
         resolved[name] = paths[0]
         matched_shas.add(sha)
-    matched_file_count = sum(len(files_by_sha[s]) for s in matched_shas)
-    all_paths = [p for paths in files_by_sha.values() for p in paths]
-    extras = len(all_paths) - matched_file_count
-    diffs: List[str] = []
-    if missing:
-        # **診断情報を必ず同梱する**（セルフレビュー: 旧実装の
-        # `missing=…/extra=…` メッセージこそが run 7 初回 fail-closed の
-        # 原因特定を可能にしたのに、sha 照合化で「何が届いたか」が消えていた —
-        # 直した障害を新コードでは診断できない、という後退だった）。
-        unmatched = sorted(
-            p.name for sha, paths in files_by_sha.items()
-            if sha not in matched_shas for p in paths
-        )
-        diffs.append(
-            f"staged sources not found by content: {len(missing)}/{len(pinned_sha)} "
-            f"件が未解決 (missing={missing[:5]}…) — 実際に届いていた "
-            f"{len(all_paths)} 本のうち未照合 {len(unmatched)} 本 "
-            f"(unmatched={unmatched[:5]}…)。未コピー、または中身が pin と異なる"
-        )
-    return resolved, diffs, extras
+    unexpected = sorted(
+        (p for sha, paths in files_by_sha.items() if sha not in matched_shas
+         for p in paths),
+        key=lambda p: p.name,
+    )
+    return StagedSourceResolution(
+        resolved=resolved, missing=missing, unexpected=unexpected,
+        n_pinned=len(pinned_sha), n_staged_files=len(all_paths),
+    )
 
 
 def materialize_staged_sources(
     src_dir: Path, pinned_sha: Dict[str, str], dest_dir: Path
-) -> Tuple[Dict[str, Path], int]:
-    """`src_dir`（取得したまま = 連番前置名）を中身 sha で索引し、`pinned_sha`
-    の**期待名で `dest_dir` へ配置**する。戻り値は (期待名 -> 配置先, 余剰数)。
+) -> StagedSourceResolution:
+    """`src_dir`（**今回の取得のみ**が入った clean staging = 連番前置名）を
+    中身 sha で索引し、`pinned_sha` の**期待名で `dest_dir` へ配置**する。
 
-    欠落は `PinMismatchError` で fail-closed（余剰は info 扱い — 同一 sha の
-    重複コピーや Drive 側の無関係ファイルは害が無いため。`match_user_sources`
-    と同じ判断）。`dest_dir` が既存の場合は **gate 4（`d3_render_out`）と同じ
-    流儀で fail-closed** する — 前走行の残骸を黙って消して素材来歴を曖昧に
-    しない。pin キーがパス区切りを含む場合も拒否する（`dest_dir` 外への
+    `StagedSourceResolution.problems()` が非空なら `PinMismatchError` で
+    fail-closed し、**何も配置しない**（欠落・余剰・pin 側 sha 重複のいずれも
+    通さない = 期待集合と取得集合の 1 対 1 完全一致が通過条件）。
+    `dest_dir` が既存の場合は gate 4（`d3_render_out`）と同じ流儀で
+    fail-closed する — 前走行の残骸を黙って消して素材来歴を曖昧にしない。
+    pin キーがベアなファイル名でない場合も拒否する（`dest_dir` 外への
     書き出し防止）。"""
     for name in sorted(pinned_sha):
         if Path(name).name != name or name in ("", ".", ".."):
@@ -793,18 +859,30 @@ def materialize_staged_sources(
             f"staged 配置先が既に存在する: {dest_dir} — 前走行の残骸を黙って"
             "上書きしない（fail-closed・gate 4 と同流儀）"
         )
-    resolved, diffs, extras = place_staged_sources_by_sha256(
+    resolution = place_staged_sources_by_sha256(
         index_files_by_sha256(src_dir), pinned_sha
     )
-    if diffs:
-        raise PinMismatchError(diffs)
+    problems = resolution.problems()
+    if problems:
+        raise PinMismatchError(problems)
     dest_dir.mkdir(parents=True)
-    placed: Dict[str, Path] = {}
-    for name in sorted(resolved):
-        dest = dest_dir / name
-        shutil.copy2(resolved[name], dest)
-        placed[name] = dest
-    return placed, extras
+    for name in sorted(resolution.resolved):
+        shutil.copy2(resolution.resolved[name], dest_dir / name)
+    return resolution
+
+
+def prepare_clean_staging_dir(path: Path) -> Path:
+    """取得用 staging を**必ず空**にしてから返す（外部レビュー P1・2026-08-20）。
+
+    `mkdir(exist_ok=True)` のままだと、同一 work-dir を再利用した際に前回 run
+    の取得物が残り、`index_files_by_sha256` がそれを索引してしまう。すると
+    **今回の取得が欠落していても古いローカル実体で補完でき**、
+    「今回 Drive から取得した実体だけで pinned source set を再構成できた」
+    という fail-closed 契約が破れる。"""
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True)
+    return path
 
 
 def collect_salvage_artifacts(run5_raw: Path,
@@ -1625,8 +1703,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # 取得し、pin の staged_source_sha256 と**集合ごと**全数照合
                 # してから変換する（user_sources と同じ「素材は sha で特定」
                 # の流儀。欠落・取り違え・余剰はここで fail-closed）。
-                amitaro_src_dir = work / "amitaro_sources"
-                amitaro_src_dir.mkdir(parents=True, exist_ok=True)
+                # **今回の取得専用 clean staging**（外部レビュー P1）:
+                # 残骸が sha 索引へ混ざると今回の欠落を補完できてしまう。
+                amitaro_src_dir = prepare_clean_staging_dir(work / "amitaro_sources")
                 # user_sources と同じ ID 指定取得（名前ベース copy は Drive の
                 # 同名重複を黙って落とす/取り違える — PR#274 の教訓を継承。
                 # セルフレビュー #1）。
@@ -1653,13 +1732,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 guard_user_sources_size(amitaro_src_dir)
                 staged_pins: Dict[str, str] = amitaro_pin["staged_source_sha256"]
                 amitaro_named_dir = work / "amitaro_named"
-                placed, extras = materialize_staged_sources(
+                resolution = materialize_staged_sources(
                     amitaro_src_dir, staged_pins, amitaro_named_dir
                 )
                 print(f"| run5_bootstrap: amitaro_sources resolved "
-                      f"{len(placed)}/{len(staged_pins)} by sha256 → "
-                      f"{amitaro_named_dir.name}/ へ期待名で配置 "
-                      f"({extras} extra file(s) ignored)", flush=True)
+                      f"{len(resolution.resolved)}/{len(staged_pins)} by sha256 "
+                      f"→ {amitaro_named_dir.name}/ へ期待名で配置"
+                      f"（期待集合と完全一致）", flush=True)
                 amitaro_dataset = out / "amitaro_dataset"
                 _run([sys.executable,
                       FOUNDRY_DIR / "s1_dataprep" / "convert_amitaro.py",
