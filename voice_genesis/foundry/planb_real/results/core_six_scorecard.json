@@ -1,0 +1,77 @@
+{
+  "source": "User 指定の Genome PoC 核心 6 項目（2026-08-20）。これ以外は測らない・直さない",
+  "items": {
+    "1_identity_remains": {
+      "question": "R0–R4 が Ritsu 系 Identity として残るか",
+      "verdict": "達成",
+      "evidence": {
+        "ear_Q1": "yes（R 系はみな同じ歌い手に聞こえる）",
+        "G6-identity": "PASS（全 8 ペア × 全 5 段で出力は PJS より Ritsu に近い）",
+        "G4-donor-isolation": "PASS"
+      }
+    },
+    "2_behaviour_changes": {
+      "question": "PJS 由来 Performance を入れると挙動が変わるか",
+      "verdict": "達成",
+      "evidence": {
+        "moved_axes": [
+          "f0_dev_rmse_cents",
+          "note_split_mae_ms",
+          "energy_corr",
+          "taper_rmse_db"
+        ],
+        "probe_note_f0_std_Hz": {
+          "R0": 2.07,
+          "R1": 22.43
+        },
+        "probe_note_gain_p2p_dB_R0_vs_R4": 52.62,
+        "note_split_mae_ms": {
+          "R0": 9.73,
+          "R2": 0.9
+        }
+      }
+    },
+    "3_perceptible": {
+      "question": "その違いを人間が知覚できるか",
+      "verdict": "達成",
+      "evidence": {
+        "ear_Q2": "yes（最後の「り」で音程の揺れ方に違いがある）"
+      },
+      "caveat": "判定者 1 名・probe 1 ペア・介入は 1 音節のみ"
+    },
+    "4_not_just_pjs_timbre": {
+      "question": "単に PJS の声質へ寄っただけではないか",
+      "verdict": "達成",
+      "evidence": {
+        "ear_Q4": "no（声は寄っていない）",
+        "G4-donor-isolation": "PASS"
+      }
+    },
+    "5_component_traceable": {
+      "question": "どの Performance 成分を入れたか追跡できるか",
+      "verdict": "達成",
+      "evidence": {
+        "method": "尺を固定した対で意図側（合成器が置いた値）を直接比較",
+        "f0_only": "energy 0.0dB / release 0.0dB / duration 0 frame = 漏れなし",
+        "energy_only": "f0 0.0cent / duration 0 frame = 漏れなし（release 窓も動くが gain は unit 全体に掛かるので想定内）",
+        "release_only": "f0 0.0cent / energy 0.0dB / duration 0 frame = 漏れなし",
+        "duration": "frame 比較が原理的に不成立（コア保存 warp のため正規化時間の同じ位置が原音の別の場所を指す）。gain / release 演算の非適用は pb_compose のコード経路と pr_gates の tripwire で担保",
+        "raw": "results/attribution_intent_vs_result.json"
+      },
+      "relation_to_G3": "登録ゲート G3 は **結果側（再解析値）** で測っており FAIL のまま。本検査は **意図側** を測ったもので、FAIL の原因が介入の漏れではなく**軸の交絡**であることを示す。G3 の判定は凍結どおり書き換えない"
+    },
+    "6_reproducible": {
+      "question": "同条件で再現できるか",
+      "verdict": "達成",
+      "evidence": {
+        "G1-determinism": "PASS（8 probe ペア × R0–R4 のサンプル列 sha256 が再計算で一致）"
+      }
+    }
+  },
+  "summary": "核心 6 項目すべて達成",
+  "not_in_scope": [
+    "terminal /ri/ 破綻の解決（VoiceGenesis / run 8 の未解決）",
+    "原音忠実度・雑音軸・AP_SCALE の最適化",
+    "介入範囲の拡張・R0n の追加・軸の再定義"
+  ]
+}

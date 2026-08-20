@@ -1,0 +1,1084 @@
+{
+  "intent_tolerance": {
+    "f0_cents": 5.0,
+    "duration_frames": 1.0,
+    "energy_db": 0.5,
+    "release_db": 0.5
+  },
+  "pairs": {
+    "terminal_ri|2018#215|pjs003#65": {
+      "R1": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 38.046,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [
+          "f0_cents"
+        ],
+        "expected": [
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "R2": {
+        "deltas": {
+          "duration_frames": 2.0,
+          "f0_cents": 0.5873,
+          "energy_db": 0.6891,
+          "release_db": 0.7887
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": []
+      },
+      "R3": {
+        "deltas": {
+          "duration_frames": 2.0,
+          "f0_cents": 13.3207,
+          "energy_db": 0.6891,
+          "release_db": 0.7887
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": []
+      },
+      "R4": {
+        "deltas": {
+          "duration_frames": 2.0,
+          "f0_cents": 13.3207,
+          "energy_db": 12.4017,
+          "release_db": 39.5577
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "_isolation": {
+        "f0_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 38.046,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [
+            "f0_cents"
+          ],
+          "expected": [
+            "f0_cents"
+          ],
+          "leak": []
+        },
+        "energy_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 12.0,
+            "release_db": 12.0
+          },
+          "moved": [
+            "energy_db",
+            "release_db"
+          ],
+          "expected": [
+            "energy_db",
+            "release_db"
+          ],
+          "leak": []
+        },
+        "release_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 0.0,
+            "release_db": 37.0521
+          },
+          "moved": [
+            "release_db"
+          ],
+          "expected": [
+            "release_db"
+          ],
+          "leak": []
+        }
+      }
+    },
+    "terminal_ri|2018#598|pjs065#29": {
+      "R1": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 18.9853,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [
+          "f0_cents"
+        ],
+        "expected": [
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "R2": {
+        "deltas": {
+          "duration_frames": 8.0,
+          "f0_cents": 0.6545,
+          "energy_db": 2.9283,
+          "release_db": 2.4172
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": []
+      },
+      "R3": {
+        "deltas": {
+          "duration_frames": 8.0,
+          "f0_cents": 8.232,
+          "energy_db": 2.9283,
+          "release_db": 2.4172
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": []
+      },
+      "R4": {
+        "deltas": {
+          "duration_frames": 8.0,
+          "f0_cents": 8.232,
+          "energy_db": 12.0,
+          "release_db": 27.318
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "_isolation": {
+        "f0_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 18.9853,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [
+            "f0_cents"
+          ],
+          "expected": [
+            "f0_cents"
+          ],
+          "leak": []
+        },
+        "energy_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 12.0,
+            "release_db": 12.0
+          },
+          "moved": [
+            "energy_db",
+            "release_db"
+          ],
+          "expected": [
+            "energy_db",
+            "release_db"
+          ],
+          "leak": []
+        },
+        "release_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 0.0,
+            "release_db": 29.9267
+          },
+          "moved": [
+            "release_db"
+          ],
+          "expected": [
+            "release_db"
+          ],
+          "leak": []
+        }
+      }
+    },
+    "terminal_i|1st_color#86|pjs001#54": {
+      "R1": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 21.9058,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [
+          "f0_cents"
+        ],
+        "expected": [
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "R2": {
+        "deltas": {
+          "duration_frames": 6.0,
+          "f0_cents": 1.2065,
+          "energy_db": 1.013,
+          "release_db": 0.7433
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": []
+      },
+      "R3": {
+        "deltas": {
+          "duration_frames": 6.0,
+          "f0_cents": 4.9233,
+          "energy_db": 1.013,
+          "release_db": 0.7433
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": [
+          "f0_cents"
+        ]
+      },
+      "R4": {
+        "deltas": {
+          "duration_frames": 6.0,
+          "f0_cents": 4.9233,
+          "energy_db": 12.0,
+          "release_db": 29.9455
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": [
+          "f0_cents"
+        ]
+      },
+      "_isolation": {
+        "f0_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 21.9058,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [
+            "f0_cents"
+          ],
+          "expected": [
+            "f0_cents"
+          ],
+          "leak": []
+        },
+        "energy_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 12.0,
+            "release_db": 12.0
+          },
+          "moved": [
+            "energy_db",
+            "release_db"
+          ],
+          "expected": [
+            "energy_db",
+            "release_db"
+          ],
+          "leak": []
+        },
+        "release_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 0.0,
+            "release_db": 32.9306
+          },
+          "moved": [
+            "release_db"
+          ],
+          "expected": [
+            "release_db"
+          ],
+          "leak": []
+        }
+      }
+    },
+    "terminal_i|1st_color#218|pjs001#73": {
+      "R1": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 39.6947,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [
+          "f0_cents"
+        ],
+        "expected": [
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "R2": {
+        "deltas": {
+          "duration_frames": 11.0,
+          "f0_cents": 1.0614,
+          "energy_db": 17.496,
+          "release_db": 2.8129
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": []
+      },
+      "R3": {
+        "deltas": {
+          "duration_frames": 11.0,
+          "f0_cents": 6.3015,
+          "energy_db": 17.496,
+          "release_db": 2.8129
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": []
+      },
+      "R4": {
+        "deltas": {
+          "duration_frames": 11.0,
+          "f0_cents": 6.3015,
+          "energy_db": 22.2865,
+          "release_db": 35.6466
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "_isolation": {
+        "f0_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 39.6947,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [
+            "f0_cents"
+          ],
+          "expected": [
+            "f0_cents"
+          ],
+          "leak": []
+        },
+        "energy_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 12.0,
+            "release_db": 12.0
+          },
+          "moved": [
+            "energy_db",
+            "release_db"
+          ],
+          "expected": [
+            "energy_db",
+            "release_db"
+          ],
+          "leak": []
+        },
+        "release_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 0.0,
+            "release_db": 36.7227
+          },
+          "moved": [
+            "release_db"
+          ],
+          "expected": [
+            "release_db"
+          ],
+          "leak": []
+        }
+      }
+    },
+    "terminal_N|1st_color#478|pjs002#61": {
+      "R1": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 1.8204,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [],
+        "expected": [
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": [
+          "f0_cents"
+        ]
+      },
+      "R2": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 0.0,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [],
+        "expected": [
+          "duration_frames"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": [
+          "duration_frames"
+        ]
+      },
+      "R3": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 1.8204,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [],
+        "expected": [
+          "duration_frames",
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": [
+          "duration_frames",
+          "f0_cents"
+        ]
+      },
+      "R4": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 1.8204,
+          "energy_db": 12.0,
+          "release_db": 30.0615
+        },
+        "moved": [
+          "energy_db",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": [
+          "duration_frames",
+          "f0_cents"
+        ]
+      },
+      "_isolation": {
+        "f0_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 1.8204,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [],
+          "expected": [
+            "f0_cents"
+          ],
+          "leak": []
+        },
+        "energy_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 12.0,
+            "release_db": 12.0
+          },
+          "moved": [
+            "energy_db",
+            "release_db"
+          ],
+          "expected": [
+            "energy_db",
+            "release_db"
+          ],
+          "leak": []
+        },
+        "release_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 0.0,
+            "release_db": 32.6658
+          },
+          "moved": [
+            "release_db"
+          ],
+          "expected": [
+            "release_db"
+          ],
+          "leak": []
+        }
+      }
+    },
+    "terminal_N|BRD#664|pjs017#27": {
+      "R1": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 11.582,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [
+          "f0_cents"
+        ],
+        "expected": [
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "R2": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 0.0,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [],
+        "expected": [
+          "duration_frames"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": [
+          "duration_frames"
+        ]
+      },
+      "R3": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 11.582,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [
+          "f0_cents"
+        ],
+        "expected": [
+          "duration_frames",
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": [
+          "duration_frames"
+        ]
+      },
+      "R4": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 11.582,
+          "energy_db": 12.0,
+          "release_db": 19.0579
+        },
+        "moved": [
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": [
+          "duration_frames"
+        ]
+      },
+      "_isolation": {
+        "f0_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 11.582,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [
+            "f0_cents"
+          ],
+          "expected": [
+            "f0_cents"
+          ],
+          "leak": []
+        },
+        "energy_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 12.0,
+            "release_db": 9.6027
+          },
+          "moved": [
+            "energy_db",
+            "release_db"
+          ],
+          "expected": [
+            "energy_db",
+            "release_db"
+          ],
+          "leak": []
+        },
+        "release_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 0.0,
+            "release_db": 18.793
+          },
+          "moved": [
+            "release_db"
+          ],
+          "expected": [
+            "release_db"
+          ],
+          "leak": []
+        }
+      }
+    },
+    "medial_ri|1st_color#104|pjs002#42": {
+      "R1": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 11.6453,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [
+          "f0_cents"
+        ],
+        "expected": [
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "R2": {
+        "deltas": {
+          "duration_frames": 6.0,
+          "f0_cents": 3.1198,
+          "energy_db": 1.9197,
+          "release_db": 0.6554
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": []
+      },
+      "R3": {
+        "deltas": {
+          "duration_frames": 6.0,
+          "f0_cents": 5.5721,
+          "energy_db": 1.9197,
+          "release_db": 0.6554
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db",
+          "release_db"
+        ],
+        "missing": []
+      },
+      "R4": {
+        "deltas": {
+          "duration_frames": 6.0,
+          "f0_cents": 5.5721,
+          "energy_db": 12.0,
+          "release_db": 3.1663
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "_isolation": {
+        "f0_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 11.6453,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [
+            "f0_cents"
+          ],
+          "expected": [
+            "f0_cents"
+          ],
+          "leak": []
+        },
+        "energy_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 12.0,
+            "release_db": 3.8142
+          },
+          "moved": [
+            "energy_db",
+            "release_db"
+          ],
+          "expected": [
+            "energy_db",
+            "release_db"
+          ],
+          "leak": []
+        },
+        "release_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [],
+          "expected": [
+            "release_db"
+          ],
+          "leak": []
+        }
+      }
+    },
+    "medial_ri|1st_color#357|pjs002#54": {
+      "R1": {
+        "deltas": {
+          "duration_frames": 0.0,
+          "f0_cents": 23.9157,
+          "energy_db": 0.0,
+          "release_db": 0.0
+        },
+        "moved": [
+          "f0_cents"
+        ],
+        "expected": [
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "R2": {
+        "deltas": {
+          "duration_frames": 9.0,
+          "f0_cents": 1.3092,
+          "energy_db": 1.5316,
+          "release_db": 0.2855
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db"
+        ],
+        "expected": [
+          "duration_frames"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db"
+        ],
+        "missing": []
+      },
+      "R3": {
+        "deltas": {
+          "duration_frames": 9.0,
+          "f0_cents": 6.5346,
+          "energy_db": 1.5316,
+          "release_db": 0.2855
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents"
+        ],
+        "expected": [
+          "duration_frames",
+          "f0_cents"
+        ],
+        "not_comparable": [],
+        "leak": [
+          "energy_db"
+        ],
+        "missing": []
+      },
+      "R4": {
+        "deltas": {
+          "duration_frames": 9.0,
+          "f0_cents": 6.5346,
+          "energy_db": 12.3907,
+          "release_db": 12.0251
+        },
+        "moved": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "expected": [
+          "duration_frames",
+          "energy_db",
+          "f0_cents",
+          "release_db"
+        ],
+        "not_comparable": [],
+        "leak": [],
+        "missing": []
+      },
+      "_isolation": {
+        "f0_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 23.9157,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [
+            "f0_cents"
+          ],
+          "expected": [
+            "f0_cents"
+          ],
+          "leak": []
+        },
+        "energy_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 12.0,
+            "release_db": 12.0
+          },
+          "moved": [
+            "energy_db",
+            "release_db"
+          ],
+          "expected": [
+            "energy_db",
+            "release_db"
+          ],
+          "leak": []
+        },
+        "release_only": {
+          "deltas": {
+            "duration_frames": 0.0,
+            "f0_cents": 0.0,
+            "energy_db": 0.0,
+            "release_db": 0.0
+          },
+          "moved": [],
+          "expected": [
+            "release_db"
+          ],
+          "leak": []
+        }
+      }
+    }
+  },
+  "intervention_leaks": {},
+  "duration_note": "duration は frame 比較が原理的に成立しない（コア保存 warp のため正規化時間の同じ位置が原音の別の場所を指す）。gain / release 演算の非適用は pb_compose.compose のコード経路と pr_gates の tripwire で担保する",
+  "verdict": "尺を固定した対では介入の漏れなし = **成分は追跡できる**"
+}
