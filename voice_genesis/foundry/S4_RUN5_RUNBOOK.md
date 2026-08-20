@@ -296,5 +296,17 @@ run 7 も本 runbook の手順のまま、**Pod 作成時の env を `RUN_PROFIL
 - **教師 dosage**: recitation ノーマル全文 1225.6 s（実測）から決定論選定
   （DESIGN_S6 §2-3）。除外・採用の全数記帳 = amitaro_dataset の
   `selection.json`（pin 対象）
-- 判定材料（§6）: 教師単独枠は `--speaker amitaro`（gate_synth の choices は
-  全話者へ拡張済み — run 5 当時の場当たり改変を正規化）
+- 判定材料（§6）: 教師単独枠は `--speaker amitaro`（`gate_synth.py` の
+  choices も全話者へ拡張済み。**訂正**: run 5/6 の判定材料は元から
+  `gate_synth_run4.py`〔4 話者 choices〕で生成されており repo 正本のまま
+  再現可能 — s5_record §5.4 参照）
+- **素材取得の命名規則（run 7 初回起動の fail-closed・2026-08-20 実測）**:
+  `plan_drive_id_fetch` のローカル名は Drive 同名重複対策で
+  `{i:03d}_{元名}`（例 `000_recitation148.wav`）になる。user_sources は
+  中身 sha で照合するため無害だったが、**amitaro は `recitationNNN.wav`
+  という名前自体が意味を持つ**（convert_amitaro が文番号昇順で走査）ため、
+  名前ベースの集合照合が `missing=recitation001.wav… / extra=000_…` で
+  fail-closed した。恒久修正 = **ID 指定取得は維持したまま、取得後に
+  `place_staged_sources_by_sha256` で中身 sha から期待名へ解決し、
+  期待名で別ディレクトリへ配置**してから変換に渡す（名前が要る素材へ
+  「名前ではなく中身で特定」の流儀を拡張）

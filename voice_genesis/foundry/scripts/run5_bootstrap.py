@@ -104,6 +104,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -716,6 +717,43 @@ def match_user_sources(
     total_files = sum(len(v) for v in files_by_sha.values())
     extras = total_files - matched_file_count
     return source_paths, diffs, extras
+
+
+def place_staged_sources_by_sha256(
+    files_by_sha: Dict[str, List[Path]], pinned_sha: Dict[str, str]
+) -> Tuple[Dict[str, Path], List[str], int]:
+    """pin の `{期待ファイル名: sha256}` を `files_by_sha` に突き合わせ、
+    **期待名 -> 実ファイルパス**の対応を返す純関数（戻り値は
+    (期待名 -> path, 欠落 diff, 余剰ファイル数)）。
+
+    **なぜ必要か**（run 7 初回起動の fail-closed で確定・2026-08-20）:
+    `plan_drive_id_fetch` は Drive の同名重複に強くするため、ローカル名を
+    `{i:03d}_{元名}` の連番前置にする（照合は中身の sha256 で行う前提の設計 —
+    user_sources はまさにそれ）。ところが amitaro 素材は
+    **`recitationNNN.wav` という名前自体が意味を持つ**（`convert_amitaro` が
+    文番号昇順で走査する）ため、取得したままの連番名では
+    「file set mismatch（missing=recitation001.wav… / extra=000_recitation148.wav…）」
+    で停止した。名前ベース取得へ戻すと Drive 同名重複の穴が復活するので、
+    **ID 指定取得は維持したまま、取得後に中身 sha で期待名へ解決する**
+    （user_sources の `match_user_sources` と同じ「名前ではなく中身で特定」の
+    流儀を、名前が要る素材へ拡張したもの）。"""
+    resolved: Dict[str, Path] = {}
+    diffs: List[str] = []
+    matched_shas: set = set()
+    for name in sorted(pinned_sha):
+        sha = pinned_sha[name]
+        paths = files_by_sha.get(sha)
+        if not paths:
+            diffs.append(
+                f"staged source not found by content: {name} "
+                f"(sha256 {sha[:12]}…) — 未コピー、または中身が pin と異なる"
+            )
+            continue
+        resolved[name] = paths[0]
+        matched_shas.add(sha)
+    matched_file_count = sum(len(files_by_sha[s]) for s in matched_shas)
+    total_files = sum(len(v) for v in files_by_sha.values())
+    return resolved, diffs, total_files - matched_file_count
 
 
 def collect_salvage_artifacts(run5_raw: Path,
@@ -1555,27 +1593,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     _run(["rclone", "--config", rclone_conf, "backend", "copyid",
                           "run5drive:", file_id, amitaro_src_dir / local_name],
                          timeout=600, label="datasets/amitaro-sources-rclone")
+                # 取得ローカル名は連番前置（plan_drive_id_fetch の設計）。
+                # convert_amitaro は `recitationNNN.wav` の名前で走査するため、
+                # **中身 sha で pin の期待名へ解決してから**別ディレクトリへ
+                # 期待名で配置する（§ place_staged_sources_by_sha256）。
                 staged_pins: Dict[str, str] = amitaro_pin["staged_source_sha256"]
-                actual_names = {p.name for p in amitaro_src_dir.glob("*.wav")}
-                staged_diffs: List[str] = []
-                if actual_names != set(staged_pins):
-                    staged_diffs.append(
-                        "amitaro_sources: file set mismatch "
-                        f"(missing={sorted(set(staged_pins) - actual_names)[:5]}, "
-                        f"extra={sorted(actual_names - set(staged_pins))[:5]})"
-                    )
-                for wav_name in sorted(set(staged_pins) & actual_names):
-                    actual_sha = sha256_file(amitaro_src_dir / wav_name)
-                    if actual_sha != staged_pins[wav_name]:
-                        staged_diffs.append(
-                            f"amitaro_sources/{wav_name}: {actual_sha} != pin"
-                        )
+                files_by_sha = index_files_by_sha256(amitaro_src_dir)
+                resolved, staged_diffs, extras = place_staged_sources_by_sha256(
+                    files_by_sha, staged_pins
+                )
                 if staged_diffs:
                     raise PinMismatchError(staged_diffs)
+                amitaro_named_dir = work / "amitaro_named"
+                if amitaro_named_dir.exists():
+                    shutil.rmtree(amitaro_named_dir)
+                amitaro_named_dir.mkdir(parents=True)
+                for wav_name, src_path in sorted(resolved.items()):
+                    shutil.copy2(src_path, amitaro_named_dir / wav_name)
+                print(f"| run5_bootstrap: amitaro_sources resolved "
+                      f"{len(resolved)}/{len(staged_pins)} by sha256 "
+                      f"({extras} extra file(s) ignored)", flush=True)
                 amitaro_dataset = out / "amitaro_dataset"
                 _run([sys.executable,
                       FOUNDRY_DIR / "s1_dataprep" / "convert_amitaro.py",
-                      "--staged-dir", amitaro_src_dir,
+                      "--staged-dir", amitaro_named_dir,
                       "--transcript", FOUNDRY_DIR / "s1_dataprep" / "data" /
                       "ita_recitation_transcript_utf8.txt",
                       "--dsdict", dsdict,

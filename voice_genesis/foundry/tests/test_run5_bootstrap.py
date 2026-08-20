@@ -1219,3 +1219,47 @@ def test_verify_assembly_fails_closed_without_teacher_section() -> None:
     pins = {"user": dict(speaker_entry)}
     diffs = r5b.verify_assembly_against_run4_pins(manifest, pins)
     assert diffs and "教師セクション" in diffs[0]
+
+
+# --- run 7 初回起動の fail-closed 回帰（2026-08-20・素材取得の命名規則） ------
+
+
+def test_place_staged_sources_resolves_prefixed_names_by_content(tmp_path: Path) -> None:
+    """plan_drive_id_fetch のローカル名は `{i:03d}_{元名}` の連番前置なので、
+    **名前の一致では pin と突き合わせられない**（run 7 初回起動はこれで
+    file set mismatch 停止した）。中身 sha で期待名へ解決できること。"""
+    files_by_sha = {
+        "a" * 64: [tmp_path / "000_recitation148.wav"],
+        "b" * 64: [tmp_path / "001_recitation082.wav"],
+    }
+    pins = {"recitation148.wav": "a" * 64, "recitation082.wav": "b" * 64}
+    resolved, diffs, extras = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
+    assert diffs == [] and extras == 0
+    assert resolved["recitation148.wav"].name == "000_recitation148.wav"
+    assert resolved["recitation082.wav"].name == "001_recitation082.wav"
+
+
+def test_place_staged_sources_reports_missing_and_extras(tmp_path: Path) -> None:
+    files_by_sha = {
+        "a" * 64: [tmp_path / "000_x.wav"],
+        "c" * 64: [tmp_path / "001_unexpected.wav"],
+    }
+    pins = {"recitation001.wav": "a" * 64, "recitation002.wav": "b" * 64}
+    resolved, diffs, extras = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
+    assert set(resolved) == {"recitation001.wav"}
+    assert len(diffs) == 1 and "recitation002.wav" in diffs[0]
+    assert extras == 1
+
+
+def test_place_staged_sources_is_deterministic_on_duplicate_content(tmp_path: Path) -> None:
+    """同一 sha の重複コピー（Drive 同名重複の実体）があっても解決先は
+    ソート順先頭で決定論。重複は**余剰に数えない** — 同一 sha は同内容で
+    どれを使っても等価、という `match_user_sources` と同じ設計。"""
+    dupes = [tmp_path / "000_a.wav", tmp_path / "001_a.wav"]
+    files_by_sha = {"a" * 64: dupes}
+    pins = {"recitation001.wav": "a" * 64}
+    first = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
+    second = r5b.place_staged_sources_by_sha256(files_by_sha, pins)
+    assert first[0] == second[0]
+    assert first[0]["recitation001.wav"] == dupes[0]
+    assert first[2] == 0
