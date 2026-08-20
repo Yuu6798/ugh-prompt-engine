@@ -1,0 +1,2126 @@
+{
+  "song": "sakura",
+  "notes_limit": 6,
+  "speaker": "ritsu",
+  "order": "forward",
+  "single_condition": null,
+  "pins": {
+    "probe_script": {
+      "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_control_axis_probe.py",
+      "sha256": "0a9b9e7b2132b71b0399ec806a4d4405b69c9f0e757e06c0379bc1e59661ea31"
+    },
+    "gate_synth": {
+      "path": "/workspace/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth.py",
+      "sha256": "423c4d81fff39d511161d1032fb6ad648b25c8077937977a899bb3d920d063f7"
+    },
+    "acoustic_onnx": {
+      "path": "/workspace/gate_run6/out_ritsu/onnx_gate_40000/s5_run6_acoustic_v1.onnx",
+      "sha256": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706"
+    },
+    "acoustic_dsconfig": {
+      "path": "/workspace/gate_run6/out_ritsu/onnx_gate_40000/dsconfig.yaml",
+      "sha256": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c"
+    },
+    "acoustic_phonemes_json": {
+      "path": "/workspace/gate_run6/out_ritsu/onnx_gate_40000/s5_run6_acoustic_v1.phonemes.json",
+      "sha256": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8"
+    },
+    "speaker_embed": {
+      "path": "/workspace/gate_run6/out_ritsu/onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb",
+      "sha256": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c"
+    },
+    "canon_phonemes": {
+      "path": "/workspace/gate_run5/canon/NamineRitsu_DiffSinger/phonemes.txt",
+      "sha256": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb"
+    },
+    "canon_linguistic_onnx": {
+      "path": "/workspace/gate_run5/canon/NamineRitsu_DiffSinger/linguistic.onnx",
+      "sha256": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6"
+    },
+    "canon_dur_onnx": {
+      "path": "/workspace/gate_run5/canon/NamineRitsu_DiffSinger/dsdur/dur.onnx",
+      "sha256": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288"
+    },
+    "canon_pitch_onnx": {
+      "path": "/workspace/gate_run5/canon/NamineRitsu_DiffSinger/dspitch/pitch.onnx",
+      "sha256": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9"
+    },
+    "vocoder_onnx": {
+      "path": "/workspace/gate_run5/vocoder/nsf_hifigan.onnx",
+      "sha256": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+    },
+    "score_module_sakura_dep_phoneme_jp": {
+      "path": "/workspace/ugh-prompt-engine/voice_genesis/singer/phoneme_jp.py",
+      "sha256": "9cbc7e1d34771bb0db9a44a2fa1dbd3bbdc96e837afc497b3ca97dade55e70fc"
+    },
+    "score_module_sakura": {
+      "path": "/workspace/ugh-prompt-engine/voice_genesis/singer/score.py",
+      "sha256": "24a6004daeb0b5d02c55c87642c6eac2cb2ca931c97570d1be666b6a57ade116"
+    }
+  },
+  "execution_profile": {
+    "python": "3.11.15",
+    "platform": "Linux-6.18.5-fc-v20-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "numpy": "1.26.4",
+    "onnxruntime": "1.29.0",
+    "onnxruntime_providers": [
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "soundfile": "0.14.0",
+    "gate_synth_seed": 42
+  },
+  "conditions": [
+    {
+      "label": "baseline",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "2379dcda4a00cbcfeb6afd251ef557bd39373f175d7f17655a58a42473106173",
+      "duration_s": 6.8731,
+      "rms_normalized": 0.068864,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.123009,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.068831,
+          "peak": 0.174927
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.080465,
+          "peak": 0.343933
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.054955,
+          "peak": 0.216248
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.054535,
+          "peak": 0.143768
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.009335,
+          "peak": 0.051117
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 11,
+        "max_phone_frames": 122,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 52,
+        "margin_to_floor": 10,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.007458755501142491,
+        "wav_peak_raw": 0.06498590856790543,
+        "wav_rms": 0.06886498010578998,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 6.873106575963718,
+        "stage1_elapsed_sec": 0.02653050422668457,
+        "stage2_elapsed_sec": 1.3770849704742432,
+        "stage3_elapsed_sec": 9.19027829170227
+      }
+    },
+    {
+      "label": "baseline_repeat",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "2379dcda4a00cbcfeb6afd251ef557bd39373f175d7f17655a58a42473106173",
+      "duration_s": 6.8731,
+      "rms_normalized": 0.068864,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.123009,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.068831,
+          "peak": 0.174927
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.080465,
+          "peak": 0.343933
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.054955,
+          "peak": 0.216248
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.054535,
+          "peak": 0.143768
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.009335,
+          "peak": 0.051117
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 11,
+        "max_phone_frames": 122,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 52,
+        "margin_to_floor": 10,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.007458755501142491,
+        "wav_peak_raw": 0.06498590856790543,
+        "wav_rms": 0.06886498010578998,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 6.873106575963718,
+        "stage1_elapsed_sec": 0.010010957717895508,
+        "stage2_elapsed_sec": 1.1617968082427979,
+        "stage3_elapsed_sec": 8.782560348510742
+      }
+    },
+    {
+      "label": "cdur_x0.25",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 0.25,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "12e1cd8e384ad56e77880dcfee2015eece49576c91a1817e771231235c5331f9",
+      "duration_s": 6.8731,
+      "rms_normalized": 0.100267,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 6,
+      "dur_stats": {
+        "pred_consonant_frames": 148.64,
+        "pred_vowel_frames": 497.07,
+        "patched_consonant_frames": 37.16,
+        "pred_consonant_ratio": 0.2302,
+        "patched_consonant_ratio": 0.0696
+      },
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.134382,
+          "peak": 0.40799
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.119612,
+          "peak": 0.350861
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.129801,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.080305,
+          "peak": 0.303558
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.093349,
+          "peak": 0.234314
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.026613,
+          "peak": 0.104919
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 3,
+        "max_phone_frames": 138,
+        "min_consonant_frames": 3,
+        "min_vowel_frames": 66,
+        "margin_to_floor": 2,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.006789756844130644,
+        "wav_peak_raw": 0.04062977433204651,
+        "wav_rms": 0.10026770203508507,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 6.873106575963718,
+        "stage1_elapsed_sec": 0.01020503044128418,
+        "stage2_elapsed_sec": 1.2011873722076416,
+        "stage3_elapsed_sec": 8.50949478149414
+      }
+    },
+    {
+      "label": "cdur_x0.5",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 0.5,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "73ca88d10c930be9741de2953e10b02921a97c0b074bc9bd0b5dc3d4c57b518f",
+      "duration_s": 6.8731,
+      "rms_normalized": 0.054832,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 6,
+      "dur_stats": {
+        "pred_consonant_frames": 148.64,
+        "pred_vowel_frames": 497.07,
+        "patched_consonant_frames": 74.32,
+        "pred_consonant_ratio": 0.2302,
+        "patched_consonant_ratio": 0.1301
+      },
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.085819,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.069814,
+          "peak": 0.180786
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.066094,
+          "peak": 0.279388
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.04289,
+          "peak": 0.158173
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.042601,
+          "peak": 0.118347
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.006562,
+          "peak": 0.02832
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 6,
+        "max_phone_frames": 132,
+        "min_consonant_frames": 6,
+        "min_vowel_frames": 60,
+        "margin_to_floor": 5,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.007338818009284724,
+        "wav_peak_raw": 0.08030407130718231,
+        "wav_rms": 0.05483272185201161,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 6.873106575963718,
+        "stage1_elapsed_sec": 0.009876728057861328,
+        "stage2_elapsed_sec": 1.1752009391784668,
+        "stage3_elapsed_sec": 8.59845519065857
+      }
+    },
+    {
+      "label": "cdur_x1.5",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.5,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "c0e1f27552739b3795dd3faf29837ec1a055496e00ba7d7f6cd5de02f71080e4",
+      "duration_s": 6.8731,
+      "rms_normalized": 0.110599,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 6,
+      "dur_stats": {
+        "pred_consonant_frames": 148.64,
+        "pred_vowel_frames": 497.07,
+        "patched_consonant_frames": 222.96,
+        "pred_consonant_ratio": 0.2302,
+        "patched_consonant_ratio": 0.3097
+      },
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.140636,
+          "peak": 0.558472
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.128686,
+          "peak": 0.31604
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.146549,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.097914,
+          "peak": 0.392273
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.105172,
+          "peak": 0.289459
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.01754,
+          "peak": 0.08728
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 15,
+        "max_phone_frames": 114,
+        "min_consonant_frames": 15,
+        "min_vowel_frames": 45,
+        "margin_to_floor": 14,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.0063249017033956125,
+        "wav_peak_raw": 0.03431231901049614,
+        "wav_rms": 0.11059995743442742,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 6.873106575963718,
+        "stage1_elapsed_sec": 0.009459972381591797,
+        "stage2_elapsed_sec": 1.172814130783081,
+        "stage3_elapsed_sec": 8.567074298858643
+      }
+    },
+    {
+      "label": "cdur_x2.0",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 2.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "d7f9252ce7cd010de4f756438d2be826330070ae8e827df29aafd22218809dd2",
+      "duration_s": 6.8731,
+      "rms_normalized": 0.089247,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 6,
+      "dur_stats": {
+        "pred_consonant_frames": 148.64,
+        "pred_vowel_frames": 497.07,
+        "patched_consonant_frames": 297.28,
+        "pred_consonant_ratio": 0.2302,
+        "patched_consonant_ratio": 0.3742
+      },
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.102264,
+          "peak": 0.38736
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.104332,
+          "peak": 0.288239
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.122769,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.084926,
+          "peak": 0.317169
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.079249,
+          "peak": 0.228485
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.015782,
+          "peak": 0.100677
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 19,
+        "max_phone_frames": 107,
+        "min_consonant_frames": 19,
+        "min_vowel_frames": 41,
+        "margin_to_floor": 18,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.006057710285863394,
+        "wav_peak_raw": 0.04072491452097893,
+        "wav_rms": 0.08924822100352607,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 6.873106575963718,
+        "stage1_elapsed_sec": 0.011160850524902344,
+        "stage2_elapsed_sec": 1.3274481296539307,
+        "stage3_elapsed_sec": 9.118163108825684
+      }
+    },
+    {
+      "label": "cdur_x3.0",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 3.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "8d91f166ae350617e8e1ccc880fead60f588077dfc15b6be92f71b03d21c6a81",
+      "duration_s": 6.8731,
+      "rms_normalized": 0.090276,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 6,
+      "dur_stats": {
+        "pred_consonant_frames": 148.64,
+        "pred_vowel_frames": 497.07,
+        "patched_consonant_frames": 445.92,
+        "pred_consonant_ratio": 0.2302,
+        "patched_consonant_ratio": 0.4729
+      },
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.117449,
+          "peak": 0.515442
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.096163,
+          "peak": 0.244049
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.128576,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.07279,
+          "peak": 0.279755
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.072186,
+          "peak": 0.200989
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.013894,
+          "peak": 0.078522
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 25,
+        "max_phone_frames": 94,
+        "min_consonant_frames": 25,
+        "min_vowel_frames": 33,
+        "margin_to_floor": 24,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.0063235043808157546,
+        "wav_peak_raw": 0.042027223855257034,
+        "wav_rms": 0.09027726031955981,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 6.873106575963718,
+        "stage1_elapsed_sec": 0.010036945343017578,
+        "stage2_elapsed_sec": 1.1523385047912598,
+        "stage3_elapsed_sec": 8.492400169372559
+      }
+    },
+    {
+      "label": "cdur_x2.0_repeat",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 2.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "d7f9252ce7cd010de4f756438d2be826330070ae8e827df29aafd22218809dd2",
+      "duration_s": 6.8731,
+      "rms_normalized": 0.089247,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 6,
+      "dur_stats": {
+        "pred_consonant_frames": 148.64,
+        "pred_vowel_frames": 497.07,
+        "patched_consonant_frames": 297.28,
+        "pred_consonant_ratio": 0.2302,
+        "patched_consonant_ratio": 0.3742
+      },
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.102264,
+          "peak": 0.38736
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.104332,
+          "peak": 0.288239
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.122769,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.084926,
+          "peak": 0.317169
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.079249,
+          "peak": 0.228485
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.015782,
+          "peak": 0.100677
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 19,
+        "max_phone_frames": 107,
+        "min_consonant_frames": 19,
+        "min_vowel_frames": 41,
+        "margin_to_floor": 18,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.006057710285863394,
+        "wav_peak_raw": 0.04072491452097893,
+        "wav_rms": 0.08924822100352607,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 6.873106575963718,
+        "stage1_elapsed_sec": 0.010617733001708984,
+        "stage2_elapsed_sec": 1.192814588546753,
+        "stage3_elapsed_sec": 8.438548803329468
+      }
+    },
+    {
+      "label": "song_pad_head40",
+      "params": {
+        "head_frames": 40,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "5027c1b3ca6933a9430ad743b98be20afd9ca3a5c3b32ef2dad459900fd2565e",
+      "duration_s": 7.2446,
+      "rms_normalized": 0.054024,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.099214,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.059864,
+          "peak": 0.133606
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.066468,
+          "peak": 0.274658
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.036183,
+          "peak": 0.161377
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.03999,
+          "peak": 0.097595
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.007651,
+          "peak": 0.057526
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          40,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 11,
+        "max_phone_frames": 122,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 52,
+        "margin_to_floor": 10,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.00770068006435555,
+        "wav_peak_raw": 0.0855240747332573,
+        "wav_rms": 0.05402464806575237,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 7.244625850340136,
+        "stage1_elapsed_sec": 0.009499311447143555,
+        "stage2_elapsed_sec": 1.179657220840454,
+        "stage3_elapsed_sec": 8.542458057403564
+      }
+    },
+    {
+      "label": "song_pad_tail40",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 40,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "94a100241f7ac0a692a0a7b2e1534a5d02b9a337e4243732f3ab41057714688c",
+      "duration_s": 7.2446,
+      "rms_normalized": 0.10532,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.117808,
+          "peak": 0.431885
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.117994,
+          "peak": 0.376801
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.153383,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.085162,
+          "peak": 0.317139
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.114353,
+          "peak": 0.300049
+        },
+        {
+          "note_index": 5,
+          "frames": 144,
+          "rms": 0.021404,
+          "peak": 0.159271
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          40
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 11,
+        "max_phone_frames": 122,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 52,
+        "margin_to_floor": 10,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 576,
+        "sum_note_target_frames": 576
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.006351310082750882,
+        "wav_peak_raw": 0.036182355135679245,
+        "wav_rms": 0.10532166950881346,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 7.244625850340136,
+        "stage1_elapsed_sec": 0.009761571884155273,
+        "stage2_elapsed_sec": 1.2893033027648926,
+        "stage3_elapsed_sec": 9.037543058395386
+      }
+    },
+    {
+      "label": "phrase_breath_10f",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 10,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "1071eac72766d83eb79e41f2fed73b8fd7cf3d9dc1a6db9093ebd701a2298fe2",
+      "duration_s": 6.9892,
+      "rms_normalized": 0.092897,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        10,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 13,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 1,
+      "breath_note_indices": [
+        3
+      ],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.128766,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.129996,
+          "peak": 0.321289
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.112876,
+          "peak": 0.458466
+        },
+        {
+          "note_index": 3,
+          "frames": 10,
+          "rms": 0.012925,
+          "peak": 0.038879
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.081715,
+          "peak": 0.41745
+        },
+        {
+          "note_index": 5,
+          "frames": 72,
+          "rms": 0.076241,
+          "peak": 0.231689
+        },
+        {
+          "note_index": 6,
+          "frames": 144,
+          "rms": 0.018258,
+          "peak": 0.09671
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 13,
+        "min_phone_frames": 10,
+        "max_phone_frames": 125,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 34,
+        "margin_to_floor": 9,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 586,
+        "sum_note_target_frames": 586
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.007448345172426912,
+        "wav_peak_raw": 0.048106737434864044,
+        "wav_rms": 0.09289773827433484,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 6.989206349206349,
+        "stage1_elapsed_sec": 0.01027059555053711,
+        "stage2_elapsed_sec": 1.1933088302612305,
+        "stage3_elapsed_sec": 8.727139949798584
+      }
+    },
+    {
+      "label": "phrase_breath_20f",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 20,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "f1a2fd51f200ab264c2b98924d76b4f1d06ab8a1700baf642d921e0094a92982",
+      "duration_s": 7.1053,
+      "rms_normalized": 0.101205,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        20,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 13,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 1,
+      "breath_note_indices": [
+        3
+      ],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.141772,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.119655,
+          "peak": 0.293091
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.126246,
+          "peak": 0.542725
+        },
+        {
+          "note_index": 3,
+          "frames": 20,
+          "rms": 0.053539,
+          "peak": 0.150421
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.088807,
+          "peak": 0.329651
+        },
+        {
+          "note_index": 5,
+          "frames": 72,
+          "rms": 0.106918,
+          "peak": 0.258514
+        },
+        {
+          "note_index": 6,
+          "frames": 144,
+          "rms": 0.017924,
+          "peak": 0.103638
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 13,
+        "min_phone_frames": 11,
+        "max_phone_frames": 133,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 40,
+        "margin_to_floor": 10,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 596,
+        "sum_note_target_frames": 596
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.006694913420380795,
+        "wav_peak_raw": 0.03969087451696396,
+        "wav_rms": 0.10120583386268357,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 7.1053061224489795,
+        "stage1_elapsed_sec": 0.009394168853759766,
+        "stage2_elapsed_sec": 1.1764705181121826,
+        "stage3_elapsed_sec": 8.46249008178711
+      }
+    },
+    {
+      "label": "phrase_breath_20f_repeat",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 20,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "f1a2fd51f200ab264c2b98924d76b4f1d06ab8a1700baf642d921e0094a92982",
+      "duration_s": 7.1053,
+      "rms_normalized": 0.101205,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        20,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 13,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 1,
+      "breath_note_indices": [
+        3
+      ],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.141772,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.119655,
+          "peak": 0.293091
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.126246,
+          "peak": 0.542725
+        },
+        {
+          "note_index": 3,
+          "frames": 20,
+          "rms": 0.053539,
+          "peak": 0.150421
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.088807,
+          "peak": 0.329651
+        },
+        {
+          "note_index": 5,
+          "frames": 72,
+          "rms": 0.106918,
+          "peak": 0.258514
+        },
+        {
+          "note_index": 6,
+          "frames": 144,
+          "rms": 0.017924,
+          "peak": 0.103638
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 13,
+        "min_phone_frames": 11,
+        "max_phone_frames": 133,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 40,
+        "margin_to_floor": 10,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 596,
+        "sum_note_target_frames": 596
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.006694913420380795,
+        "wav_peak_raw": 0.03969087451696396,
+        "wav_rms": 0.10120583386268357,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 7.1053061224489795,
+        "stage1_elapsed_sec": 0.009659051895141602,
+        "stage2_elapsed_sec": 1.2169029712677002,
+        "stage3_elapsed_sec": 8.88778805732727
+      }
+    },
+    {
+      "label": "phrase_final_x1.25",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.25,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "5f3c3f51cd1070160cc0b5f21c84c8d51a402083a7f3538a42739ff6edc80235",
+      "duration_s": 7.709,
+      "rms_normalized": 0.075667,
+      "note_target_frames": [
+        72,
+        72,
+        180,
+        72,
+        72,
+        180
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 2,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.120629,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.067511,
+          "peak": 0.166168
+        },
+        {
+          "note_index": 2,
+          "frames": 180,
+          "rms": 0.102283,
+          "peak": 0.366699
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.05358,
+          "peak": 0.209167
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.064305,
+          "peak": 0.163055
+        },
+        {
+          "note_index": 5,
+          "frames": 180,
+          "rms": 0.014484,
+          "peak": 0.096222
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 11,
+        "max_phone_frames": 108,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 52,
+        "margin_to_floor": 10,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 648,
+        "sum_note_target_frames": 648
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.007134046508138034,
+        "wav_peak_raw": 0.05656846985220909,
+        "wav_rms": 0.07566808711753871,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 7.7090249433106575,
+        "stage1_elapsed_sec": 0.010129690170288086,
+        "stage2_elapsed_sec": 1.3617441654205322,
+        "stage3_elapsed_sec": 9.515142917633057
+      }
+    },
+    {
+      "label": "phrase_final_x1.5",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.5,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "d455fbf74072c4bd56f6c1d4ae7f9830147d75c198685247ed69febdac17edc0",
+      "duration_s": 8.5449,
+      "rms_normalized": 0.067845,
+      "note_target_frames": [
+        72,
+        72,
+        216,
+        72,
+        72,
+        216
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 2,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.114227,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.056767,
+          "peak": 0.176422
+        },
+        {
+          "note_index": 2,
+          "frames": 216,
+          "rms": 0.090899,
+          "peak": 0.346283
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.039656,
+          "peak": 0.163025
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.064409,
+          "peak": 0.171326
+        },
+        {
+          "note_index": 5,
+          "frames": 216,
+          "rms": 0.009457,
+          "peak": 0.042175
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 11,
+        "max_phone_frames": 120,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 51,
+        "margin_to_floor": 10,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 720,
+        "sum_note_target_frames": 720
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.0073843045452854795,
+        "wav_peak_raw": 0.06530312448740005,
+        "wav_rms": 0.06784641258667723,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 8.544943310657596,
+        "stage1_elapsed_sec": 0.009229898452758789,
+        "stage2_elapsed_sec": 1.4625155925750732,
+        "stage3_elapsed_sec": 10.455336809158325
+      }
+    },
+    {
+      "label": "last_note_x1.5",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 1.0,
+        "phrase_breath_frames": 0,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.5
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "7f02de9eabb160b9463b065476e528917db5743b6c1d952ee9d9b241274afa81",
+      "duration_s": 7.709,
+      "rms_normalized": 0.067035,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        72,
+        72,
+        216
+      ],
+      "n_phones": 12,
+      "dur_patch_applied": 0,
+      "dur_stats": null,
+      "breath_notes_inserted": 0,
+      "breath_note_indices": [],
+      "notes_scaled": 1,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.119347,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.067355,
+          "peak": 0.16272
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.085505,
+          "peak": 0.332092
+        },
+        {
+          "note_index": 3,
+          "frames": 72,
+          "rms": 0.053145,
+          "peak": 0.203033
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.065159,
+          "peak": 0.172516
+        },
+        {
+          "note_index": 5,
+          "frames": 216,
+          "rms": 0.017906,
+          "peak": 0.081146
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 12,
+        "min_phone_frames": 11,
+        "max_phone_frames": 123,
+        "min_consonant_frames": 11,
+        "min_vowel_frames": 52,
+        "margin_to_floor": 10,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 648,
+        "sum_note_target_frames": 648
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.006484096074843137,
+        "wav_peak_raw": 0.058035120368003845,
+        "wav_rms": 0.06703626390772136,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 7.7090249433106575,
+        "stage1_elapsed_sec": 0.009577751159667969,
+        "stage2_elapsed_sec": 1.336097002029419,
+        "stage3_elapsed_sec": 9.47795820236206
+      }
+    },
+    {
+      "label": "cdur_x2.0_phrase_breath_20f",
+      "params": {
+        "head_frames": 8,
+        "tail_frames": 8,
+        "consonant_duration_scale": 2.0,
+        "phrase_breath_frames": 20,
+        "phrase_final_scale": 1.0,
+        "last_note_scale": 1.0
+      },
+      "phrase_structure": {
+        "phrase_index_per_note": [
+          0,
+          0,
+          0,
+          1,
+          1,
+          1
+        ],
+        "is_phrase_final_per_note": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          true
+        ],
+        "internal_boundaries": [
+          2
+        ],
+        "last_note_is_phrase_final": true
+      },
+      "wav": "gate_sakura_ritsu_n6.wav",
+      "wav_sha256": "f9f8019776c032b4e918d0af5283663cca27ad103b1ab9159915ae3b77a11489",
+      "duration_s": 7.1053,
+      "rms_normalized": 0.111301,
+      "note_target_frames": [
+        72,
+        72,
+        144,
+        20,
+        72,
+        72,
+        144
+      ],
+      "n_phones": 13,
+      "dur_patch_applied": 7,
+      "dur_stats": {
+        "pred_consonant_frames": 194.92,
+        "pred_vowel_frames": 531.36,
+        "patched_consonant_frames": 389.83,
+        "pred_consonant_ratio": 0.2684,
+        "patched_consonant_ratio": 0.4232
+      },
+      "breath_notes_inserted": 1,
+      "breath_note_indices": [
+        3
+      ],
+      "notes_scaled": 0,
+      "note_region_energy": [
+        {
+          "note_index": 0,
+          "frames": 72,
+          "rms": 0.132825,
+          "peak": 0.530304
+        },
+        {
+          "note_index": 1,
+          "frames": 72,
+          "rms": 0.148837,
+          "peak": 0.393219
+        },
+        {
+          "note_index": 2,
+          "frames": 144,
+          "rms": 0.136484,
+          "peak": 0.600006
+        },
+        {
+          "note_index": 3,
+          "frames": 20,
+          "rms": 0.092586,
+          "peak": 0.257782
+        },
+        {
+          "note_index": 4,
+          "frames": 72,
+          "rms": 0.108612,
+          "peak": 0.467163
+        },
+        {
+          "note_index": 5,
+          "frames": 72,
+          "rms": 0.113457,
+          "peak": 0.29657
+        },
+        {
+          "note_index": 6,
+          "frames": 144,
+          "rms": 0.024293,
+          "peak": 0.146606
+        }
+      ],
+      "phone_frame_invariant": {
+        "measured": true,
+        "head_tail": [
+          8,
+          8
+        ],
+        "n_phones": 13,
+        "min_phone_frames": 19,
+        "max_phone_frames": 123,
+        "min_consonant_frames": 19,
+        "min_vowel_frames": 28,
+        "margin_to_floor": 18,
+        "n_phones_below_1_frame": 0,
+        "sum_preserved": true,
+        "sum_phone_frames": 596,
+        "sum_note_target_frames": 596
+      },
+      "raw_measures": {
+        "wav_rms_raw": 0.006137832981122898,
+        "wav_peak_raw": 0.03308737277984619,
+        "wav_rms": 0.1113022727182771,
+        "wav_peak": 0.6,
+        "wav_duration_sec": 7.1053061224489795,
+        "stage1_elapsed_sec": 0.009597539901733398,
+        "stage2_elapsed_sec": 1.2000455856323242,
+        "stage3_elapsed_sec": 8.707062005996704
+      }
+    }
+  ]
+}
