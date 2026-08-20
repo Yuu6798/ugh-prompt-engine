@@ -21,7 +21,7 @@
    ```
    Run 8-0（GPU $0・**run 番号を消費しない**）
      a. 終端遷移台帳（SP/遷移密度の機械集計）
-     b. 固定 Probe Set 240 セル（**1 target event = 1 render**）
+     b. 固定 Probe Set 360 セル（**1 target event = 1 render**）
      c. 観測子 terminal_release_failure/0.1 の全セル機械評価
      d. 層化ブラインド耳校正（40 unique + 8 duplicate）
      e. duration / SP / spk_embed の 3 レバー診断
@@ -215,9 +215,66 @@ terminal_events:
     count
     duration_seconds
 
-# --- 参考（密度の分母・単独では判定に使わない） ---
+# --- 密度の分母（層別に必ず記録する） ---
+  denominator:
+    eligible_terminal_count      # 同一 (modality × position × pitch_bin) 内の
+                                 # 全終端イベント数（transition を問わない）
+    eligible_terminal_seconds    # 同上の合計 ph_dur 秒
+
+# --- 参考（単独では判定に使わない） ---
 ri_medial_count
 note_duration_bin:           1 | 2 | 4 beats
+```
+
+**密度の定義（事前登録・実行可能形）**
+
+層 `k = (modality, position, pitch_bin, preceding_duration_bin)` について:
+
+```
+density(speaker, k, transition)
+  = terminal_events[k][transition].count
+    / denominator[k].eligible_terminal_count
+```
+
+分母は「**その層で終端イベントが起こり得た回数**」であり、
+分子と**同一の層キー**から取る（別層の分母を借りない）。
+
+**主層（primary stratum）を事前登録する** — 層をまたぐスカラー合成はしない
+（§0-5 の単一スコア禁止と同型）:
+
+```
+primary stratum:
+  position           = utterance_final
+  transition         = ri_to_SP
+  preceding_duration = ">= 2 beats"
+  modality / pitch_bin は層別に並べて報告する（合成しない）
+```
+
+判定は **話者間で primary stratum の density を並べる**ことで行い、
+`count` と `duration_seconds` の生値も必ず併記する（密度だけを見ると
+標本の薄い層が過大評価されるため）。
+
+**独立検算できる worked example**（数値は**説明用の架空値**・実測は台帳が出す）:
+
+| 話者 | 層 k | `ri_to_SP` count | `eligible_terminal_count` | density |
+|---|---|---|---|---|
+| pjs | real_song / utterance_final / mid / ≥2 beats | 12 | 150 | **0.0800** |
+| user | real_song / utterance_final / mid / ≥2 beats | 1 | 40 | **0.0250** |
+| ritsu | VCV / utterance_final / mid / ≥2 beats | 0 | 900 | **0.0000** |
+
+この例では ritsu の `eligible_terminal_count` が最大（孤立録音で終端が多い）
+にもかかわらず density は 0 になる。**総 SP 数で数えれば ritsu が最も豊富に
+見える**のに、層別密度では最も貧しい — これが §3 冒頭で「総 SP 数では測らない」
+と定めた理由の数値的な表現である。
+
+`supported / refuted` の条件も事前登録する:
+
+```
+supported : primary stratum の density が
+            「破綻しない話者 > 破綻する話者」の順序を満たす
+            かつ 最大値/最小値の比 >= 2.0
+refuted   : 順序が破れる、または比 < 2.0
+undetermined: いずれかの話者で eligible_terminal_count < 20（標本不足）
 ```
 
 **`position` を必ず割る理由**: ritsu VCV は項目ごとの孤立録音なので
@@ -235,7 +292,7 @@ note_duration_bin:           1 | 2 | 4 beats
 「り」を丁寧に）は `batch3_t2_results.json` 実測で **duration_s = 12.843 の
 1 カード**。通し歌唱 2 本を含めても標的 `/ri/`→SP は低密度である。
 
-## 4. Run 8-0b — 固定 Probe Set（24 セル）
+## 4. Run 8-0b — 固定 Probe Set（36 セル）
 
 ### 4-0. 測定契約: レンダラにフレーズの概念が無い
 
@@ -268,11 +325,20 @@ note_duration_bin:           1 | 2 | 4 beats
 |---|---|---|
 | P-RI-FINAL | 語尾 `/ri/`→SP：1・2・4 拍 × 低・中・高 | **9** |
 | P-RI-MEDIAL | 同じ `/ri/` を**フレーズ途中**に配置（位置の分離） | **3** |
-| P-I-FINAL | 語尾 `/i/`→SP：**r なし対照** | **3** |
-| P-N-FINAL | 正しい語尾 `/N/`→SP：**鼻音プロトタイプ** | **3** |
+| P-I-FINAL | 語尾 `/i/`→SP：**r なし対照**（1・2・4 拍 × 低・中・高） | **9** |
+| P-N-FINAL | 正しい語尾 `/N/`→SP：**鼻音プロトタイプ**（同 3×3） | **9** |
 | P-SU-FINAL | 語尾 `/su/`→SP：「みわたす」系対照 | **3** |
 | P-ANCHOR | **実曲アンカー**: 「かぎり」「みわたす」「うみ」 | **3** |
-| | **合計** | **24** |
+| | **合計** | **36** |
+
+**対照 2 系を 3×3 へ拡張した理由（事前登録割付の改訂・2026-08-20）**:
+§5-1 の中核手法（話者内 3 対照差分）は **同一話者・同一音高・同一尺**での
+比較を要求する。初版は `/ri/` を 9 セル置きながら `/i/` と `/N/` を各 3 セル
+しか置いていなかったため、**9 セル中 6 セルで 3 対照差分が定義できず**、
+`N_similarity_delta` / `i_reference_distance` と H3・H5 の裁定が構造的に
+欠測する。中核手法を 2/3 のセルで諦めるより、CPU レンダを増やす方が安い
+（GPU $0・追加 12 セル/世代話者）。**割付の改訂は本 memo の改訂として記帳する**
+（黙って増やさない）。
 
 音高帯 = 低 A3(57) / 中 D4(62) / 高 F4(65)（`score.py` 都節音階 deg1/deg3/deg5・
 `score_d3_sustain.py` と同一バンク帯。新規音律を導入しない）。
@@ -293,20 +359,20 @@ acoustic の各 predictor に渡す（`gate_synth.py:1108-1133` を実コード�
   （既存 wav の流用では、不一致がジェネレータ/環境ドリフト由来か文脈由来か
   分離できない）。再レンダした P-ANCHOR が既知陽性ラベルを保つことを確認する
 
-### 4-3. 世代 × 話者への展開（240 セル）
+### 4-3. 世代 × 話者への展開（360 セル）
 
 ```
-run5 × {ritsu, pjs, user}            = 72
-run6 × {ritsu, pjs, user}            = 72
-run7 × {ritsu, pjs, user, amitaro}   = 96
-                                合計 = 240
+run5 × {ritsu, pjs, user}            = 108
+run6 × {ritsu, pjs, user}            = 108
+run7 × {ritsu, pjs, user, amitaro}   = 144
+                                合計 = 360
 ```
 
 - run5/6 の gate 素材と 40K checkpoint は Drive に保管済み。run7 は
   40K checkpoint・ONNX/emb の sha256・CPU 生成コマンドが s6_record §3 に記録済み
 - **ONNX 実体が手元にない場合も 40K checkpoint から再 export し、記録済み
   sha256 と照合する**（照合不一致は fail-closed）
-- CPU レンダ 240 本の実行可能性: VG-L0 probe が **51 条件 × 3 走行 = 153 レンダ**を
+- CPU レンダ 360 本の実行可能性: VG-L0 probe が **51 条件 × 3 走行 = 153 レンダ**を
   同経路で完走済み（同 record §4）。同オーダーである
 
 ### 4-4. 辞書被覆の扱い
@@ -342,11 +408,32 @@ duration:
 acoustic:
   N_similarity_delta                # 終端 mel の /N/ 対照への接近量（機構名）
   i_reference_distance              # 終端 mel の正常 /i/ 対照からの距離
+  hnr_median_db_p1                  # 前半窓の HNR 中央値
+  hnr_median_db_p2                  # 後半窓の HNR 中央値
+  hnr_delta_db                      # p2 - p1（非周期性の増加 = 声門化の機構量）
+  vowel_drift_l1                    # 終端母音区間の前 1/3 mel と後 1/3 mel の L1
 waveform:
   energy_decay_slope                # 終端エネルギー減衰の傾き
 localization:
   first_divergence_stage            # duration | pitch | acoustic | vocoder
 ```
+
+### 5-0a. 下位軸と機械量の対応（**4/5 のみ機械軸を持つ**）
+
+§0-9 で TRF の下位軸を 5 つ宣言したが、**機械量を持つのは 4 つだけ**である。
+宣言と schema の乖離で「形状テストは通るのに宣言した軸が無い」偽成功が
+起きないよう、対応を明示する:
+
+| TRF 下位軸 | 機械量 | 備考 |
+|---|---|---|
+| nasal-like | `N_similarity_delta` / `i_reference_distance` | 話者内 3 対照差分（§5-1） |
+| glottalization / vocal fry | `hnr_delta_db`（+ `hnr_median_db_p2`） | 非周期性の増加。**知覚名は与えない** |
+| prolonged voicing | `excess_tail_voiced_ms` / `tail_f0_persistence` | 主観測値 |
+| vowel drift | `vowel_drift_l1` | 終端母音内の mel 変位 |
+| **intelligibility loss** | **なし（耳側専用）** | §6 の耳ラベル 3 軸目でのみ取る。**機械軸を持たないことを宣言する**（持たない軸を持つと書かない） |
+
+したがって AC の「全セルに軸値」は **機械 4 軸**に対する要求であり、
+intelligibility loss は**耳ラベルを取ったセルにのみ**存在する。
 
 ### 5-0. 無声対照との差分で測る（vocoder ringing の除去）
 
@@ -354,12 +441,38 @@ localization:
 それ自体が固有の ringing を持つ**ため、生値をそのまま「解放の失敗」と
 読むと計器が vocoder の性質を測ってしまう。
 
-したがって**主観測値は全て無声対照との差分で報告する**:
+したがって**主観測値は全て無声対照との差分で報告する**。ただし
+**無声対照の取り方に 2 つの罠がある**（2026-08-20 改訂）:
 
-- 無声対照 = **同一話者・同一音高・同一尺で、終端が無声で終わるセル**
-  （P-SU-FINAL の無声化 `/su/` を既定の無声対照に使う。これは
-  レンダ側の対照であって学習素材ではないため §8-3 の held-out 規律と衝突しない）
-- 対照が取れないセルは `status = no_unvoiced_reference` で明示し、
+1. **`/su/` は本質的に無声ではない** — `/su/` の終端は母音 `/u/` であり、
+   歌唱の長ノートでは無声化しない。「`/su/` だから無声」と決め打つと、
+   有声のまま鳴っている波形を ringing 基準にしてしまう
+2. **`/su/` は評価対象でもある** — `/su/` には「みわたす」で実際に観測された
+   連続発声の破綻がある。**破綻しているセルを基準にして差し引くと、
+   欠陥そのものを引き算する**ことになり偽陰性を生む
+
+よって無声対照は次の規則で作る:
+
+```
+1. 機械検査で無声を確認する:
+     終端窓の voiced_frames == 0
+   を満たしたレンダ**だけ**を ringing 基準の母集団に入れる
+   （「/su/ だから無声」という前提は使わない）
+
+2. leave-one-out:
+     評価対象セル自身は基準母集団から必ず除外する
+   （破綻セルが自分の基準に混じらないようにする）
+
+3. 基準が空なら差し引かない:
+     status = ringing_uncorrected
+   を立てて**生値のまま**報告する
+```
+
+- **`/su/` の二重役割を廃止する**: `/su/` は §8-4 の held-out 対照として
+  評価される側であり、**既定の ringing 基準としては使わない**。上記 1 の
+  検査を通った `/su/` レンダが結果的に基準母集団へ入ることはあるが、
+  それは「検査を通ったから」であって「`/su/` だから」ではない
+- 対照が取れないセルは `status = ringing_uncorrected` で明示し、
   **生値を差分と偽って記帳しない**
 
 ### 5-1b. TRF の下位軸（percept を 1 本に潰さない）
@@ -423,7 +536,7 @@ localization:
 
 ### 6-1. 耳判定の対象集合（事前固定）
 
-**240 セルは全て機械評価**する。耳判定はその部分集合に限り、
+**360 セルは全て機械評価**する。耳判定はその部分集合に限り、
 **事前に固定する**（事後に足すと選択バイアスが入る）:
 
 | 層 | 内容 | セル数 |
@@ -439,6 +552,88 @@ localization:
 重複であることを知らせない。
 
 ## 7. Gate — 観測子の合格条件
+
+### 7-0. 実行規則（**事前登録・実装間で結果が変わらない形にする**）
+
+Gate は「有料の 8-B を起こすか」を決める。**「陽性」「分離」「同方向」
+「誤陽性」に式と閾値が無ければ、同じデータで実装ごとに合否が変わる**。
+以下を事前登録する。
+
+**(0) 正規化** — 各機械軸は **(話者 × 世代) 内で z 化**する:
+
+```
+z(x) = (x - median_{cell in speaker×generation}(x)) / (1.4826 * MAD_{same})
+```
+
+話者内・世代内で中心化するので、§2-3 の走行間の水準シフトを構造的に落とす。
+MAD == 0 の軸はその (話者×世代) で `status = degenerate_axis` とし、
+primary 軸の候補から外す。
+
+**(1) 耳ラベルの 2 値化と borderline の扱い** — §6 の 0〜3 判定から:
+
+```
+break : max(nasalization, continuous_voicing) >= 2
+ok    : max(nasalization, continuous_voicing) <= 1  かつ  intelligibility <= 1
+それ以外 : borderline
+```
+
+- **borderline は校正から除外**する（閾値を borderline に合わせない）
+- **hold-out では除外せず `unscored` として保持**し、件数を報告する
+  （捨てた数が見えないと、都合の悪いセルを borderline に流す抜け道になる）
+
+**(2) primary 軸の選定**（校正セットのみで実行・hold-out は見ない）:
+
+```
+margin(axis) = | median(z_axis | break) - median(z_axis | ok) |
+primary      = argmax_axis margin(axis)
+tie-break    = 軸名の辞書順昇順（再現可能に固定）
+```
+
+**(3) 閾値の決定**（校正セットのみ）: primary 軸上で **Youden's J
+（= 感度 + 特異度 − 1）を最大化する点** `θ` を採る。同点なら `θ` は候補の
+**中央値**を採る。
+
+**(4) Gate 1「陽性として拾う」**: P-ANCHOR「かぎり」(ritsu・run7) が
+`θ` で **break 側に分類される**こと。1 セルの二値判定であり、閾値調整で
+これを通してはならない（§0-6）。
+
+**(5) Gate 2「分離する」**: hold-out 上で
+
+```
+AUC(primary) >= 0.80
+かつ 校正で固定した θ での accuracy >= 0.75
+```
+
+**(6) Gate 3「同方向に並べる」**: user について run5→run7 の
+`Δz_primary` の**符号**が、耳 severity の変化の符号と一致すること。
+**差分軸でのみ**評価する（絶対値は走行間変動を拾う）。
+
+**(7) Gate 4「誤陽性にしない」**: うみ・語中 `/ri/`・正しい `/N/` のセル群で
+
+```
+false_positive_rate = #(θ で break 判定) / #(当該セル群) <= 0.10
+```
+
+**(8) 天井の宣言**: 計器の hold-out accuracy は
+**§6 の重複提示から得た intra-rater 一致率（weighted κ）を超えられない**。
+`accuracy > 一致率` が出た場合は**計器が良いのではなく校正が漏れている**
+疑いとして扱い、`status = suspect_overfit` を立てて再検討する。
+
+**独立検算できる worked example**（数値は**説明用の架空値**）:
+
+| セル | 耳 | `z(excess_tail_voiced_ms)` | `z(hnr_delta_db)` |
+|---|---|---|---|
+| A | break | +1.8 | −0.4 |
+| B | break | +1.4 | +0.9 |
+| C | ok | −0.9 | +0.2 |
+| D | ok | −1.1 | −0.7 |
+
+`margin(excess_tail_voiced) = |median(+1.8,+1.4) − median(−0.9,−1.1)| = |1.6 − (−1.0)| = 2.6`、
+`margin(hnr_delta) = |median(−0.4,+0.9) − median(+0.2,−0.7)| = |0.25 − (−0.25)| = 0.5`。
+よって primary = `excess_tail_voiced_ms`。Youden's J 最大点は
+`θ = 0.25`（break 2/2・ok 0/2 → J = 1.0）。この `θ` を hold-out へ持ち込む。
+
+### 7-0b. 合格条件（上記の式で判定する）
 
 最低でも次の全てを満たすこと:
 
@@ -717,6 +912,36 @@ primary が空なら、その主張は `undetermined` で記帳する。
 | `/ri/` と `/su/` が改善 | **一般的なフレーズ末解放技能**として成功 |
 | PJS・うみ・語中対照が**悪化** | 回帰として **run 8 を不採用** |
 
+### 9-0. **この表は既定では因果裁定ではない**（2026-08-20 追加・P1 対応）
+
+run 8-B と run 7 の比較は**別 checkpoint 間の比較**であり、
+**§2-3 の実測（入力バイト不変の ritsu が run5→run6 で区間ラウドネス最大
+7.94 dB 動いた）が示すとおり、走行間ドリフトが介入効果と同程度以上ありうる**。
+probe を各 checkpoint 内で再レンダしてもこれは消えない（消えるのは
+レンダ側の変動だけで、学習/モデル側のドリフトは残る）。
+
+さらに **8-B で入力が変わるのは user だけ**である。ritsu / pjs の入力は不変
+なので、**その変化は「共有デコーダ経由の転移」と「走行間ドリフト」の和**で
+あり、単走行では分離できない。
+
+したがって:
+
+| 条件 | 表の読み方 |
+|---|---|
+| **未処置の同一契約反復（run 8-R）が無い**（既定） | 表の各行は**仮説対応表**であって因果裁定ではない。結果は `confounded / provisional` で記帳し、**因果の断定語（「転移した」「効いた」）を使わない** |
+| run 8-R がある | ドリフト幅が実測されるので、それを超えた差についてのみ表の行を**因果裁定として引ける** |
+
+**run 8-R = run 7 の完全同一設定での反復走行**（≈$1.4）。全部の場合に要る
+わけではないので、**条件付きで起こす**:
+
+- 結果が **ritsu / pjs の動き**に依存する行（1 行目「両方が改善」・
+  3 行目「ritsu のみ改善」）に着地した場合 → **run 8-R を起こしてから裁定する**
+- user だけが動く行（2 行目）や全話者不変（4 行目）→ user は唯一の被処置話者
+  なので run 8-R なしでも**限定付きで**読める（ただし「限定付き」と明記する）
+
+これは s5_record §6.2 が「帰属の確定には同一契約の反復走行（未実施）が要る」と
+自ら記録した未払い分の、**必要になった時点での取り立て**である。
+
 **この表が引けるのは §8-4 の held-out 規律が守られた場合だけ**である。
 `/su/` を学習に入れてしまうと「`/su/` 不変」の行は原理的に引けない
 （入れた対照が動かないことは対照の情報にならない）。
@@ -743,7 +968,7 @@ Performance Skill / TRANSFER_SKILL、または**話者条件と技能条件を�
    テストで縛る
 2. **正規化前波形の測定経路**（§5-2）— `synth_song` の read-only 契約を壊さず、
    測定用に生波形窓を取り出せる差し込み口。既定 off で現行とバイト同一
-3. **診断スコア生成器**（新規 `singer/score_diag_pf.py`）— §4 の 24 セルを
+3. **診断スコア生成器**（新規 `singer/score_diag_pf.py`）— §4 の 36 セルを
    決定論的に展開。`score.py` / `score_umi.py` は**無改変**で `ScoreNote` 型のみ
    import 流用（`score_d3_sustain.py` と同じ流儀）
 4. **probe**（`evolution/probes/s7a_pf_probe.py`）— VG-L0 probe の
@@ -768,10 +993,10 @@ Performance Skill / TRANSFER_SKILL、または**話者条件と技能条件を�
 ### Run 8-0b/c/d（probe・計器・耳校正）
 
 - [ ] `load_song_module("sakura")` / `("umi")` の返り値と module sha が拡張前後で不変
-- [ ] 診断スコア生成器が §4 の 24 セルを過不足なく展開（重複 0・欠落 0）+ 決定論テスト
-- [ ] 結果 JSON が **240 セルを全て列挙**し、各セルが `rendered`（wav sha256・
+- [ ] 診断スコア生成器が §4 の 36 セルを過不足なく展開（重複 0・欠落 0）+ 決定論テスト
+- [ ] 結果 JSON が **360 セルを全て列挙**し、各セルが `rendered`（wav sha256・
       命令区間・全軸値あり）か `dropped`（事前登録された理由コードあり）で埋まっている。
-      **達成条件は「240 セル全てがレンダされたこと」ではなく「240 セル全ての帰結が
+      **達成条件は「360 セル全てがレンダされたこと」ではなく「360 セル全ての帰結が
       記帳されたこと」**。脱落時は**削減後の有効セル数と、どの H が `undetermined` に
       落ちるか**を s7 record に明記する
 - [ ] **H0 の結果が記帳されている**（P-ANCHOR と同条件 probe セルの一致/不一致）。
@@ -818,8 +1043,9 @@ Performance Skill / TRANSFER_SKILL、または**話者条件と技能条件を�
    （未実施）が要る」と自ら記録した未払い分。本書は §5-1 の話者内差分でこれを
    構造的に回避する設計だが、**回避と解決は別**である。8-B の結果解釈で
    走行間変動が争点になった場合、run 7 の完全反復（≈$1.4）が最短の解決手段になる
-3. **s6_record §5-1 の文言**: 「実録音教師は合成教師の代替として機能する」は、
-   articulation 側は保存されたが sustain 側は保存も改善もされていない実測と
-   合っていない。また事前登録した局所退行 2 点のうち **「さ→あ」が未裁定**の
-   まま AC が充足扱いになっている。本書は run 9 以降の判断根拠として
-   s6_record を参照するため、**訂正または限定の追記が要る**（User 裁定待ち）
+3. ~~**s6_record §5-1 の文言**~~ — **解決済み（2026-08-20）**。User 裁定を受けて
+   s6_record §5-1 を訂正し（「代替として機能する」を撤回）、§5-1b で
+   「さ→あ 未裁定」と AC の部分充足を記帳した。さらに Codex 指摘を受けて
+   **§5-1 の見出しから「articulation 側に限り達成」も撤回**し、事前登録の
+   articulation 測度（さ行 onset）が未判定である以上 `undetermined` へ
+   格下げした。正典 3 面（s6_record §5-1 / §4-2 表 / STATUS.md）を同期済み
