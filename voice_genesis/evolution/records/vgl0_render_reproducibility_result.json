@@ -1,0 +1,361 @@
+{
+  "checker_script": {
+    "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_reproducibility_check.py",
+    "sha256": "12f0aca19c2445ca12a1e6057e3ea78fe840f520f08aaac05bf0185c802232c4",
+    "sha256_after_run": "12f0aca19c2445ca12a1e6057e3ea78fe840f520f08aaac05bf0185c802232c4",
+    "note": "sha256 は **ロード時**に固定した値。実行後の 再 hash と一致することを findings で検証する"
+  },
+  "pins": {
+    "probe_script": {
+      "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_control_axis_probe.py",
+      "sha256": "85e33df26a4a56af19d0627728d5d87cce7f80bcc6953f92976228d617823956"
+    },
+    "gate_synth": {
+      "path": "/workspace/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth.py",
+      "sha256": "423c4d81fff39d511161d1032fb6ad648b25c8077937977a899bb3d920d063f7"
+    },
+    "acoustic_onnx": {
+      "path": "/workspace/gate_run6/out_ritsu/onnx_gate_40000/s5_run6_acoustic_v1.onnx",
+      "sha256": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706"
+    },
+    "acoustic_dsconfig": {
+      "path": "/workspace/gate_run6/out_ritsu/onnx_gate_40000/dsconfig.yaml",
+      "sha256": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c"
+    },
+    "acoustic_phonemes_json": {
+      "path": "/workspace/gate_run6/out_ritsu/onnx_gate_40000/s5_run6_acoustic_v1.phonemes.json",
+      "sha256": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8"
+    },
+    "speaker_embed": {
+      "path": "/workspace/gate_run6/out_ritsu/onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb",
+      "sha256": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c"
+    },
+    "canon_phonemes": {
+      "path": "/workspace/gate_run5/canon/NamineRitsu_DiffSinger/phonemes.txt",
+      "sha256": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb"
+    },
+    "canon_linguistic_onnx": {
+      "path": "/workspace/gate_run5/canon/NamineRitsu_DiffSinger/linguistic.onnx",
+      "sha256": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6"
+    },
+    "canon_dur_onnx": {
+      "path": "/workspace/gate_run5/canon/NamineRitsu_DiffSinger/dsdur/dur.onnx",
+      "sha256": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288"
+    },
+    "canon_pitch_onnx": {
+      "path": "/workspace/gate_run5/canon/NamineRitsu_DiffSinger/dspitch/pitch.onnx",
+      "sha256": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9"
+    },
+    "vocoder_onnx": {
+      "path": "/workspace/gate_run5/vocoder/nsf_hifigan.onnx",
+      "sha256": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+    },
+    "score_module_sakura_dep_phoneme_jp": {
+      "path": "/workspace/ugh-prompt-engine/voice_genesis/singer/phoneme_jp.py",
+      "sha256": "9cbc7e1d34771bb0db9a44a2fa1dbd3bbdc96e837afc497b3ca97dade55e70fc"
+    },
+    "score_module_sakura": {
+      "path": "/workspace/ugh-prompt-engine/voice_genesis/singer/score.py",
+      "sha256": "24a6004daeb0b5d02c55c87642c6eac2cb2ca931c97570d1be666b6a57ade116"
+    }
+  },
+  "probe_script": {
+    "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_control_axis_probe.py",
+    "sha256": "85e33df26a4a56af19d0627728d5d87cce7f80bcc6953f92976228d617823956"
+  },
+  "consumed_model_bytes_check": {
+    "distinct_bundles": 1,
+    "covered_keys": [
+      "acoustic_dsconfig_yaml",
+      "acoustic_onnx",
+      "canon_linguistic_onnx",
+      "canon_variance_dur_onnx",
+      "canon_variance_pitch_onnx",
+      "vocoder_onnx"
+    ],
+    "not_covered": [
+      "speaker_embed",
+      "canon_phonemes",
+      "acoustic_phonemes_json",
+      "score_module"
+    ],
+    "mismatches": [],
+    "ok": true
+  },
+  "n_processes": 10,
+  "probe_runs": [
+    {
+      "tag": "replay baseline (procA)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay baseline (procB)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay cdur_x2.0 (procA)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay cdur_x2.0 (procB)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay phrase_breath_20f (procA)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay phrase_breath_20f (procB)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay phrase_final_x1.5 (procA)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay phrase_final_x1.5 (procB)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "order_independence forward",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "order_independence reverse",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    }
+  ],
+  "replay_labels": [
+    "baseline",
+    "cdur_x2.0",
+    "phrase_breath_20f",
+    "phrase_final_x1.5"
+  ],
+  "execution_profile": {
+    "python": "3.11.15",
+    "platform": "Linux-6.18.5-fc-v20-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "numpy": "1.26.4",
+    "onnxruntime": "1.29.0",
+    "onnxruntime_providers": [
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "soundfile": "0.14.0",
+    "gate_synth_seed": 42
+  },
+  "findings": [
+    {
+      "check": "fresh_process_replay",
+      "label": "baseline",
+      "sha_proc_a": "787ca23d1de7a011572262d00825abf2f4e8e9e1cc9ff55976b43a825d1b6551",
+      "sha_proc_b": "787ca23d1de7a011572262d00825abf2f4e8e9e1cc9ff55976b43a825d1b6551",
+      "match": true
+    },
+    {
+      "check": "fresh_process_replay",
+      "label": "cdur_x2.0",
+      "sha_proc_a": "391f375bd729ba7b2c1bf7951d5063c27a798f5d09833d9da70f18895a343ede",
+      "sha_proc_b": "391f375bd729ba7b2c1bf7951d5063c27a798f5d09833d9da70f18895a343ede",
+      "match": true
+    },
+    {
+      "check": "fresh_process_replay",
+      "label": "phrase_breath_20f",
+      "sha_proc_a": "da796c2d08953dfe5c037d4c74a1898617774227dbb1d6ae0d87aa8f036a5d4b",
+      "sha_proc_b": "da796c2d08953dfe5c037d4c74a1898617774227dbb1d6ae0d87aa8f036a5d4b",
+      "match": true
+    },
+    {
+      "check": "fresh_process_replay",
+      "label": "phrase_final_x1.5",
+      "sha_proc_a": "68e3c8fa103b4573545a24a1a0502ebd4f6e82e3f76b549763d8595835e3fc4d",
+      "sha_proc_b": "68e3c8fa103b4573545a24a1a0502ebd4f6e82e3f76b549763d8595835e3fc4d",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "baseline",
+      "sha_forward": "787ca23d1de7a011572262d00825abf2f4e8e9e1cc9ff55976b43a825d1b6551",
+      "sha_reverse": "787ca23d1de7a011572262d00825abf2f4e8e9e1cc9ff55976b43a825d1b6551",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "baseline_repeat",
+      "sha_forward": "787ca23d1de7a011572262d00825abf2f4e8e9e1cc9ff55976b43a825d1b6551",
+      "sha_reverse": "787ca23d1de7a011572262d00825abf2f4e8e9e1cc9ff55976b43a825d1b6551",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "cdur_x0.25",
+      "sha_forward": "e1897a872e092c04443bbf7e8172eaad028ef746ef5c3e277b4c38fa7d79f926",
+      "sha_reverse": "e1897a872e092c04443bbf7e8172eaad028ef746ef5c3e277b4c38fa7d79f926",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "cdur_x0.5",
+      "sha_forward": "9b4954f24066684aa3d4b2d88f5e8fd031b71f9cc73a0ae4bcf8ccc13389bac1",
+      "sha_reverse": "9b4954f24066684aa3d4b2d88f5e8fd031b71f9cc73a0ae4bcf8ccc13389bac1",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "cdur_x1.5",
+      "sha_forward": "e7d1208d8638213cda48def062c28853d5b1c3e4feea443e64ff6cdeabf858b1",
+      "sha_reverse": "e7d1208d8638213cda48def062c28853d5b1c3e4feea443e64ff6cdeabf858b1",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "cdur_x2.0",
+      "sha_forward": "391f375bd729ba7b2c1bf7951d5063c27a798f5d09833d9da70f18895a343ede",
+      "sha_reverse": "391f375bd729ba7b2c1bf7951d5063c27a798f5d09833d9da70f18895a343ede",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "cdur_x2.0_phrase_breath_20f",
+      "sha_forward": "a85d024f11df291540cde7f327b86973f0f5432af3d129c48b755adb74a86d1a",
+      "sha_reverse": "a85d024f11df291540cde7f327b86973f0f5432af3d129c48b755adb74a86d1a",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "cdur_x2.0_repeat",
+      "sha_forward": "391f375bd729ba7b2c1bf7951d5063c27a798f5d09833d9da70f18895a343ede",
+      "sha_reverse": "391f375bd729ba7b2c1bf7951d5063c27a798f5d09833d9da70f18895a343ede",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "cdur_x3.0",
+      "sha_forward": "8192c83fa20e61cc784700c151e690f70a9fe8afca53f37901c9aeb1b2e11ec4",
+      "sha_reverse": "8192c83fa20e61cc784700c151e690f70a9fe8afca53f37901c9aeb1b2e11ec4",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "last_note_x1.5",
+      "sha_forward": "64feb15a678853226297e5c064e2f2127f4236f87716f9623f6129173fb33dd8",
+      "sha_reverse": "64feb15a678853226297e5c064e2f2127f4236f87716f9623f6129173fb33dd8",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "phrase_breath_10f",
+      "sha_forward": "82a8ba7307bc18955ead1348a1b0e410de075f7ed682b2ba61d55c2d78491b87",
+      "sha_reverse": "82a8ba7307bc18955ead1348a1b0e410de075f7ed682b2ba61d55c2d78491b87",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "phrase_breath_20f",
+      "sha_forward": "da796c2d08953dfe5c037d4c74a1898617774227dbb1d6ae0d87aa8f036a5d4b",
+      "sha_reverse": "da796c2d08953dfe5c037d4c74a1898617774227dbb1d6ae0d87aa8f036a5d4b",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "phrase_breath_20f_repeat",
+      "sha_forward": "da796c2d08953dfe5c037d4c74a1898617774227dbb1d6ae0d87aa8f036a5d4b",
+      "sha_reverse": "da796c2d08953dfe5c037d4c74a1898617774227dbb1d6ae0d87aa8f036a5d4b",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "phrase_final_x1.25",
+      "sha_forward": "c65afe0edc6b959346d7d0854507c316c31dfecb93bed6c30cc58140fd611ac1",
+      "sha_reverse": "c65afe0edc6b959346d7d0854507c316c31dfecb93bed6c30cc58140fd611ac1",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "phrase_final_x1.5",
+      "sha_forward": "68e3c8fa103b4573545a24a1a0502ebd4f6e82e3f76b549763d8595835e3fc4d",
+      "sha_reverse": "68e3c8fa103b4573545a24a1a0502ebd4f6e82e3f76b549763d8595835e3fc4d",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "song_pad_head40",
+      "sha_forward": "20b6342f727ae83b6e8b78b86fc84c7f2d2de9bc90ea752a38060a19bb866b67",
+      "sha_reverse": "20b6342f727ae83b6e8b78b86fc84c7f2d2de9bc90ea752a38060a19bb866b67",
+      "match": true
+    },
+    {
+      "check": "order_independence",
+      "label": "song_pad_tail40",
+      "sha_forward": "0738256e2d7efd4523a6ba189e6c834c10f871e8adf65cf686d2ac754bce1ad0",
+      "sha_reverse": "0738256e2d7efd4523a6ba189e6c834c10f871e8adf65cf686d2ac754bce1ad0",
+      "match": true
+    },
+    {
+      "check": "execution_profile_identical",
+      "n_distinct": 1,
+      "match": true
+    },
+    {
+      "check": "pins_identical_across_processes",
+      "n_compared": 10,
+      "diffs": [],
+      "match": true
+    },
+    {
+      "check": "checker_unchanged_during_run",
+      "sha_at_load": "12f0aca19c2445ca12a1e6057e3ea78fe840f520f08aaac05bf0185c802232c4",
+      "sha_after_run": "12f0aca19c2445ca12a1e6057e3ea78fe840f520f08aaac05bf0185c802232c4",
+      "match": true
+    }
+  ],
+  "in_process_repeat": [
+    {
+      "check": "in_process_repeat",
+      "label": "baseline_repeat",
+      "sha": "787ca23d1de7a011572262d00825abf2f4e8e9e1cc9ff55976b43a825d1b6551",
+      "sha_base": "787ca23d1de7a011572262d00825abf2f4e8e9e1cc9ff55976b43a825d1b6551",
+      "match": true,
+      "note": "同一プロセス内の反復。independent replay の証拠にはならない"
+    },
+    {
+      "check": "in_process_repeat",
+      "label": "cdur_x2.0_repeat",
+      "sha": "391f375bd729ba7b2c1bf7951d5063c27a798f5d09833d9da70f18895a343ede",
+      "sha_base": "391f375bd729ba7b2c1bf7951d5063c27a798f5d09833d9da70f18895a343ede",
+      "match": true,
+      "note": "同一プロセス内の反復。independent replay の証拠にはならない"
+    },
+    {
+      "check": "in_process_repeat",
+      "label": "phrase_breath_20f_repeat",
+      "sha": "da796c2d08953dfe5c037d4c74a1898617774227dbb1d6ae0d87aa8f036a5d4b",
+      "sha_base": "da796c2d08953dfe5c037d4c74a1898617774227dbb1d6ae0d87aa8f036a5d4b",
+      "match": true,
+      "note": "同一プロセス内の反復。independent replay の証拠にはならない"
+    }
+  ],
+  "verdict": "PASS",
+  "failures": []
+}
