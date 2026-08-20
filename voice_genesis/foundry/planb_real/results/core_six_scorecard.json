@@ -8,7 +8,9 @@
         "ear_Q1": "yes（R 系はみな同じ歌い手に聞こえる）",
         "G6-identity": "PASS（全 8 ペア × 全 5 段で出力は PJS より Ritsu に近い）",
         "G4-donor-isolation": "PASS"
-      }
+      },
+      "confidence": "中",
+      "audit_note": "耳は明確（R 系はみな同じ歌い手）。機械側は『文脈を揃えた PJS の 1 トークンとの 2 択』どまり。第 3 参照（リツ別曲の /i/ 25 件）での検証を試みたが、原音自身も同じ物差しで PJS 寄りと出た（リツの曲間ばらつき 16.08dB > リツ-PJS 距離 12.36dB）= 物差しが話者同一性を測れていない。したがって核心 1 は事実上**耳のみ**に立つ"
     },
     "2_behaviour_changes": {
       "question": "PJS 由来 Performance を入れると挙動が変わるか",
@@ -29,7 +31,9 @@
           "R0": 9.73,
           "R2": 0.9
         }
-      }
+      },
+      "confidence": "高",
+      "audit_note": "第 1 走行で測った値が 5 走行を通して不変。移植が壊れている疑いを持って測りに行った値でもある"
     },
     "3_perceptible": {
       "question": "その違いを人間が知覚できるか",
@@ -37,7 +41,9 @@
       "evidence": {
         "ear_Q2": "yes（最後の「り」で音程の揺れ方に違いがある）"
       },
-      "caveat": "判定者 1 名・probe 1 ペア・介入は 1 音節のみ"
+      "caveat": "判定者 1 名・probe 1 ペア・介入は 1 音節のみ",
+      "confidence": "低",
+      "audit_note": "probe 1 ペア・判定者 1 名・機械値を開示した後の判定。判定は yes で明確だが標本が薄い"
     },
     "4_not_just_pjs_timbre": {
       "question": "単に PJS の声質へ寄っただけではないか",
@@ -45,7 +51,9 @@
       "evidence": {
         "ear_Q4": "no（声は寄っていない）",
         "G4-donor-isolation": "PASS"
-      }
+      },
+      "confidence": "中",
+      "audit_note": "耳 no + G4 PASS。ただし G4 も 2 択の物差し"
     },
     "5_component_traceable": {
       "question": "どの Performance 成分を入れたか追跡できるか",
@@ -58,14 +66,18 @@
         "duration": "frame 比較が原理的に不成立（コア保存 warp のため正規化時間の同じ位置が原音の別の場所を指す）。gain / release 演算の非適用は pb_compose のコード経路と pr_gates の tripwire で担保",
         "raw": "results/attribution_intent_vs_result.json"
       },
-      "relation_to_G3": "登録ゲート G3 は **結果側（再解析値）** で測っており FAIL のまま。本検査は **意図側** を測ったもので、FAIL の原因が介入の漏れではなく**軸の交絡**であることを示す。G3 の判定は凍結どおり書き換えない"
+      "relation_to_G3": "登録ゲート G3 は **結果側（再解析値）** で測っており FAIL のまま。本検査は **意図側** を測ったもので、FAIL の原因が介入の漏れではなく**軸の交絡**であることを示す。G3 の判定は凍結どおり書き換えない",
+      "confidence": "高",
+      "audit_note": "尺固定の対で厳密ゼロ。duration はバイト同一検査で別途確認（いずれも閾値非依存）"
     },
     "6_reproducible": {
       "question": "同条件で再現できるか",
       "verdict": "達成",
       "evidence": {
         "G1-determinism": "PASS（8 probe ペア × R0–R4 のサンプル列 sha256 が再計算で一致）"
-      }
+      },
+      "confidence": "高",
+      "audit_note": "sha256 の一致。解釈の余地なし"
     }
   },
   "summary": "核心 6 項目すべて達成",
@@ -73,5 +85,25 @@
     "terminal /ri/ 破綻の解決（VoiceGenesis / run 8 の未解決）",
     "原音忠実度・雑音軸・AP_SCALE の最適化",
     "介入範囲の拡張・R0n の追加・軸の再定義"
-  ]
+  ],
+  "audit": {
+    "question": "User 指摘に迎合した結論ではないか（2026-08-20）",
+    "independent_of_framing": [
+      "G1/G4/G6 は第 1 走行の値で 5 走行を通して不変",
+      "F0 std 2.07→22.43Hz は『移植が壊れている』疑いを持って測った値",
+      "duration のバイト同一検査は閾値非依存で、落ちうる検査だった",
+      "尺固定の分離検査の 0.0 は丸めでなく厳密ゼロ"
+    ],
+    "legitimate_changes_from_user": [
+      "Q1 の反転 = 私の設問が §10 と違っていた（系統 vs 原音忠実度）ための修正",
+      "核心 6 項目への限定 = 仕様は User のもの。かつ §18 が『terminal /ri/ の修理だけが目的ではない』と明記"
+    ],
+    "overstatements_admitted": [
+      "意図側の閾値を 1.0→5.0cent へ結果を見てから緩めた（決め手は閾値非依存の値だが、ゴールポストは動かした）",
+      "duration の分離を『コード経路で担保』と書いて実測と並べた（後から実測して埋めた）",
+      "核心 1 の機械証拠を実際より強く提示した（2 択どまり）"
+    ],
+    "cannot_rule_out": "核心 6 項目のリストは User 由来で、失敗していた項目をほぼ全て除外している。別の 6 項目なら失敗が残った可能性を測定では否定できない。ただし核心 5 は除外ではなく新しい測定で解いた"
+  },
+  "conclusion": "Voice = Identity + Performance への**部分分解は実コーパスで成立した**（核心 6/6）。ただしこれは『分離できた』であって『良くなった』ではない。移植した結果は耳で R0 より不自然と判定されている"
 }
