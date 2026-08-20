@@ -724,7 +724,7 @@ checker sha → プロセス間 pin と、同じファミリーの穴が 1 件�
 | 2 | 検査スクリプト（checker） | **ロード時** pin + 実行後の再 hash 一致を検査 |
 | 2b | gate_synth 本体 | **import 前** pin + 実行後の再 hash 一致（コミット実体との照合はしない = §9-2 の据え置き項目） |
 | 3 | acoustic / dsconfig / canon 3 onnx / vocoder | pin + **消費バッファそのものの hash と照合**（fail-closed） |
-| 4 | 楽譜モジュール（score.py + 依存） | pin + **条件ごとに `load_song_module` が返した消費 digest と照合**（fail-closed）。2026-08-20 フォローアップで昇格（§9-3） |
+| 4 | 楽譜モジュール（score.py + 依存） | pin のみ。**照合は実装済みだが未実測**（正本 4 本は凍結版が生んだもので当該検査を通っていない）→ 昇格は再実測後。2026-08-20 8 巡目で昇格を撤回 |
 | 5 | 話者 embed / 音素辞書 | pin のみ（**射程外** — 下記） |
 | 6 | ExecutionProfile | 全プロセスで一致を検査 |
 | 7 | プロセス間の pin 不変性 | 10 プロセス全ての pin セットを突き合わせ |
@@ -739,7 +739,8 @@ checker sha → プロセス間 pin と、同じファミリーの穴が 1 件�
 > 「ファミリー全数掃討」を宣言するときは、**同じ検査を全メンバーへ機械的に
 > 横展開したかを確認してから**宣言すること（本件の反省）。
 
-**終端宣言**: 上表 1〜4・6〜9 は閉じた。**5 は本 PR の射程外として境界を宣言する** —
+**終端宣言**: 上表 1〜3・6〜9 は閉じた。**4 と 5 は閉じていない**（4 = 実装済み・
+未実測 / 5 = 射程外）。**5 について境界を宣言する** —
 話者 embed / 音素辞書は `gate_synth` がパス read するため、消費バイト照合まで
 閉じるには gate_synth の I/O 構造変更（`load_model_bundle_bytes` 相当への集約）が
 必要で、本 PR の read-only 契約に反する。射程は結果 JSON の
@@ -754,6 +755,19 @@ checker sha → プロセス間 pin と、同じファミリーの穴が 1 件�
 > 本記録が 3 度撤回したのと同型（機構から因果を組み立てて実測しない）。
 > 境界宣言はメンバーごとに理由を実地確認してから引く。残る 5 は
 > 話者 embed / 音素辞書の 2 つで、理由は上のとおり変わらない。
+>
+> **その撤回に乗せて member 4 を「閉じた」としたのは早すぎた（8 巡目で再訂正）**:
+> 照合コードは書いたが、**正本 4 本はいずれも凍結版 `85e33df2…` が生んだもので
+> `consumed_score_bytes_check` を持たない**（fixture テストも当該フィールドの
+> 無い結果は skip する）。つまり **fail-closed 保証を実測した走行が 1 つも無い** —
+> 既存の正本については「多条件走行の途中で楽譜が差し替わっていない」ことを
+> 依然として排除できていない。member 4 は**実装済み・未実測**として開いたままに
+> し、live probe で正本を再生成した時点で昇格する。
+>
+> これは s6 record の申し送り「**対策は投入でなく効果で終端宣言する**」に自分で
+> 違反した形（り→ん破綻の帰属撤回と同じ機構 = 意図を効果と読んだ）。申し送りを
+> 書いた当人が次の PR で同じ誤りをしたので、**§9 の表では「実装済み」と
+> 「実測済み」を分けて書く**ことで構造的に防ぐ。
 
 **再開条件**（`AGENTS.md` §3-3 の宣言様式）: 本宣言を根拠に据え置くのは
 「宣言済み範囲の再指摘で、新しい実害経路を示さないもの」に限る。
@@ -784,8 +798,10 @@ Codex 自動レビューは **6 巡目で打ち切り**（User 裁定）。1〜6
 
 3 件目は §9 の「member 5 は gate_synth の I/O 構造変更が必要」という境界宣言の
 うち**楽譜モジュール分については前提が誤っていた**可能性を示す。
-→ **再検証の結果、指摘が正しかった**。§9 の表を改訂し、member 4 を消費
-digest 照合まで昇格した（§9-3）。
+→ **再検証の結果、指摘が正しかった**（楽譜は gate_synth 改変なしで照合できる）。
+ただし**照合を実装しただけでは member 4 は閉じない** — 正本 4 本は凍結版が生んだ
+もので当該検査を通っていないため、8 巡目で「実装済み・未実測」へ差し戻した
+（§9 の注記 / §9-3）。
 
 ## 9-2. レビュー採否の基準
 
@@ -820,7 +836,7 @@ digest 照合まで昇格した（§9-3）。
 
 | # | 指摘 | 対応 |
 |---|---|---|
-| 1 | Verify the score bytes returned by each synthesis（7 巡目 P2） | **採用**。`synth_once` が `load_song_module` の戻り値 digest を保持し、条件ごとに `consumed_score_sha256` として記録。`verify_consumed_score_bytes` で pin と突き合わせ、不一致は rc=1（fail-closed）。→ §9 member 4 を昇格 |
+| 1 | Verify the score bytes returned by each synthesis（7 巡目 P2） | **採用**。`synth_once` が `load_song_module` の戻り値 digest を保持し、条件ごとに `consumed_score_sha256` として記録。`verify_consumed_score_bytes` で pin と突き合わせ、不一致は rc=1（fail-closed）。**ただし §9 member 4 の昇格は 8 巡目で撤回** — 正本 4 本は凍結版が生んだもので当該検査を通っておらず、保証を実測した走行が無い（実装済み・未実測） |
 | 2 | Protect every derived acoustic input in the checker（7 巡目 P2） | **採用**。checker が保護リストを書き写すのをやめ、`ProbeConfig.protected_inputs()` を流用する単一ソースへ。`--acoustic-onnx` が `--acoustic-dir` の外にある場合の `*.phonemes.json` / `*.<spk>.emb` が自動で覆われる |
 | 3 | Refuse to unlink unowned checker result files（7 巡目 P2） | **採用**。work ディレクトリに所有マーカー `.vgl0_checker_workdir` を導入（probe の条件ディレクトリと同じ様式）。マーカーが無く空でもないディレクトリは fail-closed。`run_probe` は所有 work 直下の結果ファイルしか unlink しない |
 | 4 | Enforce each canonical result's full geometry（9 巡目 P2） | **採用**。正本 3 本に「条件集合が測定版の `CONDITIONS` と完全一致 / `single_condition is None` / `order == "forward"` / ファイル別 `notes_limit` 6・8・10」を機械検査。ラベル重複も落とす |
@@ -971,6 +987,20 @@ STATUS → 記録本体 → `conclusion` → `purpose` と**4 箇所を 4 巡か
 洗い（未限定は `purpose` 1 件のみと確認）、repo 全体を「Drive に無い / 存在
 しない」で grep して残存ゼロを確認した。「grep で全数当たってから閉じる」を
 今回は artifact 内部の**フィールド粒度**まで下ろしている。
+
+### bot 8 巡目（1 件・採用）— **自分の申し送りに違反していた**
+
+| 指摘 | 中身 | 対応 |
+|---|---|---|
+| Revalidate before closing the score-byte gate | 7 巡目で楽譜バイト照合を実装し §9 member 4 を「閉じた」としたが、**正本 4 本はいずれも凍結版が生んだもので `consumed_score_bytes_check` を持たない**（テストも skip する）。**fail-closed 保証を実測した走行が 1 つも無い**まま、記録が保証を主張していた | member 4 を「実装済み・未実測」へ差し戻し、終端宣言から外した（閉じたのは 1〜3・6〜9）。§9-3 の該当行にも撤回を明記 |
+
+**これは s6 record の申し送り「対策は投入でなく効果で終端宣言する」への違反**で、
+り→ん破綻の帰属撤回とまったく同じ機構（`score_d3_sustain.py` の docstring が
+言う「主力データ」= **意図**を**効果**と読んだ）。**申し送りを書いた当人が次の
+PR で同じ誤りを犯した**。
+
+散文の戒めが効かなかったので構造で防ぐ: §9 の表は今後
+**「実装済み」と「実測済み」を分けて書く**。実装だけで昇格させない。
 
 > **作業事故 1 件（正直会計）**: ミューテーション確認の後始末に
 > `git checkout -- <probe>` を使い、**同ラウンドの未コミット変更（consumed キー集合
