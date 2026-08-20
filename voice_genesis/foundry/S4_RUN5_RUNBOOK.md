@@ -284,7 +284,7 @@ run 7 も本 runbook の手順のまま、**Pod 作成時の env を `RUN_PROFIL
 | run_id / exp 名 | `s5_run6` / `s5_run6_acoustic_{scratch,v1}` | `s6_run7` / `s6_run7_acoustic_{scratch,v1}` |
 | dataset pins | `run6_dataset_pins.json` | `run7_dataset_pins.json`（**d3 セクションなし**・user = run 6 逐語継承・amitaro 新実測） |
 | Drive 退避 | `run6/` prefix | **`run7/` prefix**（教師素材の staged コピーは `run7/amitaro_sources/` — 起動前に push 必須） |
-| 教師データ | d3synth 再生成（run_d3_cells + convert_d3） | **amitaro intake**（Drive `run7/amitaro_sources/` 取得 → staged sha 全数照合 → `convert_amitaro.py` → pins 照合。分岐は pins のセクション構成が単一ソース） |
+| 教師データ | d3synth 再生成（run_d3_cells + convert_d3） | **amitaro intake**（Drive `run7/amitaro_sources/` を ID 指定取得 → **clean staging に取得 → 中身 sha で pin の期待名へ解決・配置**（欠落・余剰・pin sha 重複はいずれも fail-closed = 期待集合との 1 対 1 完全一致のみ通過）→ `convert_amitaro.py` → pins 照合。分岐は pins のセクション構成が単一ソース） |
 | assemble | `--profile run5`（既定・4 話者 d3synth） | `--profile run7 --amitaro-raw-dir …`（spk_id: amitaro=4・**id 3 恒久欠番**・num_spk 5・manifest schema 0.5 + 構成比会計〔amitaro share < 0.50 assert〕） |
 | binarize 後検査 | spk_map.json 完全一致（4 話者マップ） | spk_map.json 完全一致（amitaro=4・**id 3 不在**を assert — DiffSinger 自動採番の欠番充填事故を fail-closed 検出） |
 | 予算 cap | $4 | **$4**（DESIGN_S6 §0-6） |
@@ -296,5 +296,33 @@ run 7 も本 runbook の手順のまま、**Pod 作成時の env を `RUN_PROFIL
 - **教師 dosage**: recitation ノーマル全文 1225.6 s（実測）から決定論選定
   （DESIGN_S6 §2-3）。除外・採用の全数記帳 = amitaro_dataset の
   `selection.json`（pin 対象）
-- 判定材料（§6）: 教師単独枠は `--speaker amitaro`（gate_synth の choices は
-  全話者へ拡張済み — run 5 当時の場当たり改変を正規化）
+- 判定材料（§6）: 教師単独枠は `--speaker amitaro`（`gate_synth.py` の
+  choices も全話者へ拡張済み。**訂正**: run 5/6 の判定材料は元から
+  `gate_synth_run4.py`〔4 話者 choices〕で生成されており repo 正本のまま
+  再現可能 — s5_record §5.4 参照）
+- **素材取得の命名規則（run 7 初回起動の fail-closed・2026-08-20 実測）**:
+  `plan_drive_id_fetch` のローカル名は Drive 同名重複対策で
+  `{i:03d}_{元名}`（例 `000_recitation148.wav`）になる。user_sources は
+  中身 sha で照合するため無害だったが、**amitaro は `recitationNNN.wav`
+  という名前自体が意味を持つ**（convert_amitaro が文番号昇順で走査）ため、
+  名前ベースの集合照合が `missing=recitation001.wav… / extra=000_…` で
+  fail-closed した。恒久修正 = **ID 指定取得は維持したまま、取得後に
+  `materialize_staged_sources` で中身 sha から期待名へ解決し、期待名で
+  別ディレクトリへ配置**してから変換に渡す（名前が要る素材へ「名前ではなく
+  中身で特定」の流儀を拡張）。**照合の契約（外部レビュー 2026-08-20 で
+  明文化）**: 「名前ではなく中身で特定する」ことと「集合検証を緩める」ことは
+  別問題であり、**今回取得した実体だけで pinned source set を完全に再構成
+  できた場合にのみ**変換へ進む。したがって **欠落・余剰・pin 側 sha 重複の
+  いずれも fail-closed**（user_sources の余剰許容をそのまま持ち込まない —
+  amitaro_sources は pin と 1 対 1 の専用フォルダで、名前 = 文番号が意味を
+  持つため 1 実体から複数の意味名を作らせない）。加えて **staging は取得前に
+  必ず空にする**（`prepare_clean_staging_dir` — 前回 run の残骸が sha 索引へ
+  混ざると今回の欠落を古い実体で補完でき、fail-closed 契約が破れる）。配置先が
+  既存なら
+  fail-closed（gate 4 と同流儀。ただし `amitaro_named` は sha 検証済み素材から
+  再生成できる **derived** なので `clean_dest=True` で毎回作り直す — 同一
+  work-dir の再実行を残骸だけで止めない）、pin キーがベア名でなければ拒否。
+  **hash 前のランナウェイ guard は素材ごとに上限を渡す**
+  （`guard_staged_sources_size(max_files=len(staged_pins))` — user_sources 用の
+  200 本上限を amitaro〔正常系 324 本〕へ流用すると正常な取得が確定停止する。
+  外部レビュー P0・2026-08-20 実測で作り込んでいた run-stopper）

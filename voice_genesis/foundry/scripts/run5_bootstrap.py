@@ -104,12 +104,14 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
 import time
 import traceback
 import zipfile
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -621,26 +623,50 @@ def milestone_ckpt_sizes(ckpt_dir: Path) -> Dict[int, int]:
 USER_SOURCES_MAX_BYTES = 500 * 1024 * 1024
 USER_SOURCES_MAX_FILES = 200
 
+# amitaro staged source（run 7）: recitation ノーマル 324 本・実測 ~112 MiB
+# （117,667,370 bytes）。**ファイル数の上限は pin 件数を呼び出し側から渡す**
+# （user_sources の 200 本上限を流用すると 324 本で確定停止する — 外部レビュー
+# P0・2026-08-20 の run-stopper）。バイト上限だけここに桁違いの余裕を置く。
+AMITARO_SOURCES_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
 
 def _iter_files(root: Path) -> List[Path]:
     return sorted(p for p in root.rglob("*") if p.is_file())
 
 
-def guard_user_sources_size(root: Path) -> Tuple[int, int]:
-    """`root` 配下の総ファイル数・総バイト数を測り、ランナウェイ上限
-    （`USER_SOURCES_MAX_*`）を超えていれば `StageFailure` で fail-closed する。
+def guard_staged_sources_size(
+    root: Path, *, max_files: int, max_bytes: int, label: str
+) -> Tuple[int, int]:
+    """`root` 配下の総ファイル数・総バイト数を測り、上限超過なら
+    `StageFailure` で fail-closed する汎用ランナウェイ guard。
     戻り値は (file_count, total_bytes)。hash を回す前に呼ぶ（大量ファイルの
-    全 hash 自体が浪費になるため）。"""
+    全 hash 自体が浪費になるため）。
+
+    **上限は素材ごとに呼び出し側が明示する**（外部レビュー P0・2026-08-20:
+    user_sources 用の 200 本上限を amitaro〔正常系 324 本〕へ流用したため、
+    正常な取得が確定的に停止する run-stopper を作っていた）。guard の目的は
+    「巨大ファイル群・異常なファイル数・hash 前の runaway を止める」ことだけで、
+    **集合の正確な検証は後段の `materialize_staged_sources` が担う**。"""
     files = _iter_files(root)
     total = sum(p.stat().st_size for p in files)
-    if len(files) > USER_SOURCES_MAX_FILES or total > USER_SOURCES_MAX_BYTES:
+    if len(files) > max_files or total > max_bytes:
         raise StageFailure(
-            f"user_sources runaway guard: {len(files)} file(s) / {total} bytes "
-            f"exceeds cap ({USER_SOURCES_MAX_FILES} files / {USER_SOURCES_MAX_BYTES} "
-            "bytes) — 想定は台帳原本 17 本・~2 MiB。巨大／無関係フォルダを掴んで"
-            "いないか user_sources/ を確認（fail-closed・hash 前に停止）"
+            f"{label} runaway guard: {len(files)} file(s) / {total} bytes "
+            f"exceeds cap ({max_files} files / {max_bytes} bytes) — 巨大／"
+            f"無関係フォルダを掴んでいないか {label}/ を確認"
+            "（fail-closed・hash 前に停止）"
         )
     return len(files), total
+
+
+def guard_user_sources_size(root: Path) -> Tuple[int, int]:
+    """user_sources 専用の薄いラッパ（既存呼び出しの挙動を不変に保つ）。
+    想定は台帳原本 17 本・~2 MiB で、上限は桁違いの余裕（500 MiB / 200 files）。
+    正当な「〜 のコピー」余剰は通し、runaway だけ止める。"""
+    return guard_staged_sources_size(
+        root, max_files=USER_SOURCES_MAX_FILES,
+        max_bytes=USER_SOURCES_MAX_BYTES, label="user_sources",
+    )
 
 
 def plan_drive_id_fetch(listing_json: str) -> List[Tuple[str, str]]:
@@ -716,6 +742,184 @@ def match_user_sources(
     total_files = sum(len(v) for v in files_by_sha.values())
     extras = total_files - matched_file_count
     return source_paths, diffs, extras
+
+
+@dataclass(frozen=True)
+class StagedSourceResolution:
+    """staged 素材の照合結果（異常の**内容**を失わない構造化戻り値）。
+
+    int の `extras` だけを返す設計では呼び出し側が処理を忘れうる（実際
+    run 7 の初回修正で余剰の扱いが漏れ、外部レビューで指摘された）。
+    異常は種類ごとに保持し、`problems()` が診断メッセージへ落とす。"""
+
+    resolved: Dict[str, Path] = field(default_factory=dict)
+    missing: List[str] = field(default_factory=list)
+    unexpected: List[Path] = field(default_factory=list)
+    duplicate_pin_sha: Dict[str, List[str]] = field(default_factory=dict)
+    n_pinned: int = 0
+    n_staged_files: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems()
+
+    def problems(self) -> List[str]:
+        """fail-closed すべき理由の説明リスト（空 = 完全一致）。
+
+        契約（外部レビュー 2026-08-20 で明文化）: **pin の期待集合と、今回
+        取得した実体集合が 1 対 1 で完全一致した場合にのみ通す**。
+        「名前ではなく中身で特定する」ことと「集合検証を緩める」ことは
+        別問題であり、sha 照合化しても旧実装の集合 fail-closed 性を保つ。"""
+        diffs: List[str] = []
+        if self.duplicate_pin_sha:
+            diffs.append(
+                "duplicate staged-source sha256 in pin: "
+                + repr({sha[:12]: sorted(names)
+                        for sha, names in sorted(self.duplicate_pin_sha.items())})
+                + " — 同一実体から複数の意味付きファイル名を生成することに"
+                  "なるため fail-closed（amitaro はファイル名 = 文番号が意味を"
+                  "持つ。user_sources の『同一 sha は同一物』判断を無条件に"
+                  "適用しない）"
+            )
+        if self.missing:
+            unexpected_names = sorted(p.name for p in self.unexpected)
+            diffs.append(
+                f"staged sources not found by content: "
+                f"{len(self.missing)}/{self.n_pinned} 件が未解決 "
+                f"(missing={self.missing[:5]}…) — 実際に届いていた "
+                f"{self.n_staged_files} 本のうち未照合 "
+                f"{len(unexpected_names)} 本 (unmatched={unexpected_names[:5]}…)。"
+                "未コピー、または中身が pin と異なる"
+            )
+        if self.unexpected and not self.missing:
+            diffs.append(
+                f"unexpected staged file(s): {len(self.unexpected)} 本が pin に"
+                f"無い (extra={sorted(p.name for p in self.unexpected)[:5]}…) — "
+                "取得集合が pin と一致しないため fail-closed"
+            )
+        return diffs
+
+
+def place_staged_sources_by_sha256(
+    files_by_sha: Dict[str, List[Path]], pinned_sha: Dict[str, str]
+) -> StagedSourceResolution:
+    """pin の `{期待ファイル名: sha256}` を `files_by_sha`（**今回の取得のみ**
+    から作った索引）へ突き合わせ、`StagedSourceResolution` を返す純関数。
+
+    **なぜ必要か**（run 7 初回起動の fail-closed で確定・2026-08-20）:
+    `plan_drive_id_fetch` は Drive の同名重複に強くするため、ローカル名を
+    `{i:03d}_{元名}` の連番前置にする（照合は中身の sha256 で行う前提の設計 —
+    user_sources はまさにそれ）。ところが amitaro 素材は
+    **`recitationNNN.wav` という名前自体が意味を持つ**（`convert_amitaro` が
+    文番号昇順で走査する）ため、取得したままの連番名では
+    「file set mismatch」で停止した。名前ベース取得へ戻すと Drive 同名重複の
+    穴が復活するので、**ID 指定取得は維持したまま、取得後に中身 sha で
+    期待名へ解決する**。
+
+    ただし user_sources 由来の緩さ（余剰許容・同一 sha を同一物扱い）は
+    そのまま持ち込まない（外部レビュー 2026-08-20）:
+    - **余剰は fail-closed**（pin に無い実体が 1 本でもあれば集合不一致）
+    - **pin 側 sha の重複も fail-closed**（1 実体から複数の意味名を作れて
+      しまう。amitaro は名前が文番号という意味を担う）
+    """
+    sha_to_names: Dict[str, List[str]] = {}
+    for name, sha in pinned_sha.items():
+        sha_to_names.setdefault(sha, []).append(name)
+    duplicate_pin_sha = {
+        sha: names for sha, names in sha_to_names.items() if len(names) > 1
+    }
+    all_paths = [p for paths in files_by_sha.values() for p in paths]
+    if duplicate_pin_sha:
+        # 多重度が曖昧な pin では解決を試みない（部分解決を返して呼び出し側が
+        # 使ってしまう余地を残さない）。
+        return StagedSourceResolution(
+            duplicate_pin_sha=duplicate_pin_sha,
+            n_pinned=len(pinned_sha), n_staged_files=len(all_paths),
+        )
+
+    resolved: Dict[str, Path] = {}
+    missing: List[str] = []
+    matched_shas: set = set()
+    for name in sorted(pinned_sha):
+        sha = pinned_sha[name]
+        paths = files_by_sha.get(sha)
+        if not paths:
+            missing.append(name)
+            continue
+        resolved[name] = paths[0]
+        matched_shas.add(sha)
+    unexpected = sorted(
+        (p for sha, paths in files_by_sha.items() if sha not in matched_shas
+         for p in paths),
+        key=lambda p: p.name,
+    )
+    return StagedSourceResolution(
+        resolved=resolved, missing=missing, unexpected=unexpected,
+        n_pinned=len(pinned_sha), n_staged_files=len(all_paths),
+    )
+
+
+def materialize_staged_sources(
+    src_dir: Path, pinned_sha: Dict[str, str], dest_dir: Path,
+    *, clean_dest: bool = False,
+) -> StagedSourceResolution:
+    """`src_dir`（**今回の取得のみ**が入った clean staging = 連番前置名）を
+    中身 sha で索引し、`pinned_sha` の**期待名で `dest_dir` へ配置**する。
+
+    `StagedSourceResolution.problems()` が非空なら `PinMismatchError` で
+    fail-closed し、**何も配置しない**（欠落・余剰・pin 側 sha 重複のいずれも
+    通さない = 期待集合と取得集合の 1 対 1 完全一致が通過条件）。
+    `clean_dest`（外部レビュー P1・2026-08-20）: 既定 False では `dest_dir` が
+    既存なら fail-closed する（gate 4 = `d3_render_out` と同流儀）。True の
+    場合のみ配置直前に作り直す。**この違いは素材の性格に対応する**:
+
+    - **取得原本**（`amitaro_sources` 等）= 「今回 Drive から取得した証拠実体」。
+      取得前に必ず空にする（`prepare_clean_staging_dir`）が、後から黙って
+      消してよいものではない
+    - **derived**（`amitaro_named` 等）= sha 検証済み素材から決定論的に
+      再生成できる派生物。同一 work-dir での再実行を「前回の残骸がある」
+      だけの理由で止めないため clean rebuild してよい
+
+    pin キーがベアなファイル名でない場合は拒否する（`dest_dir` 外への
+    書き出し防止）。"""
+    for name in sorted(pinned_sha):
+        if Path(name).name != name or name in ("", ".", ".."):
+            raise StageFailure(
+                f"staged pin key is not a bare filename: {name!r} "
+                "(fail-closed — 配置先ディレクトリ外への書き出しを拒否)"
+            )
+    if dest_dir.exists():
+        if not clean_dest:
+            raise StageFailure(
+                f"staged 配置先が既に存在する: {dest_dir} — 前走行の残骸を黙って"
+                "上書きしない（fail-closed・gate 4 と同流儀。derived な配置先は "
+                "clean_dest=True を明示すること）"
+            )
+        shutil.rmtree(dest_dir)
+    resolution = place_staged_sources_by_sha256(
+        index_files_by_sha256(src_dir), pinned_sha
+    )
+    problems = resolution.problems()
+    if problems:
+        raise PinMismatchError(problems)
+    dest_dir.mkdir(parents=True)
+    for name in sorted(resolution.resolved):
+        shutil.copy2(resolution.resolved[name], dest_dir / name)
+    return resolution
+
+
+def prepare_clean_staging_dir(path: Path) -> Path:
+    """取得用 staging を**必ず空**にしてから返す（外部レビュー P1・2026-08-20）。
+
+    `mkdir(exist_ok=True)` のままだと、同一 work-dir を再利用した際に前回 run
+    の取得物が残り、`index_files_by_sha256` がそれを索引してしまう。すると
+    **今回の取得が欠落していても古いローカル実体で補完でき**、
+    「今回 Drive から取得した実体だけで pinned source set を再構成できた」
+    という fail-closed 契約が破れる。"""
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True)
+    return path
 
 
 def collect_salvage_artifacts(run5_raw: Path,
@@ -1536,8 +1740,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # 取得し、pin の staged_source_sha256 と**集合ごと**全数照合
                 # してから変換する（user_sources と同じ「素材は sha で特定」
                 # の流儀。欠落・取り違え・余剰はここで fail-closed）。
-                amitaro_src_dir = work / "amitaro_sources"
-                amitaro_src_dir.mkdir(parents=True, exist_ok=True)
+                # **今回の取得専用 clean staging**（外部レビュー P1）:
+                # 残骸が sha 索引へ混ざると今回の欠落を補完できてしまう。
+                amitaro_src_dir = prepare_clean_staging_dir(work / "amitaro_sources")
                 # user_sources と同じ ID 指定取得（名前ベース copy は Drive の
                 # 同名重複を黙って落とす/取り違える — PR#274 の教訓を継承。
                 # セルフレビュー #1）。
@@ -1555,27 +1760,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     _run(["rclone", "--config", rclone_conf, "backend", "copyid",
                           "run5drive:", file_id, amitaro_src_dir / local_name],
                          timeout=600, label="datasets/amitaro-sources-rclone")
+                # 取得ローカル名は連番前置（plan_drive_id_fetch の設計）。
+                # convert_amitaro は `recitationNNN.wav` の名前で走査するため、
+                # **中身 sha で pin の期待名へ解決してから**別ディレクトリへ
+                # 期待名で配置する（§ materialize_staged_sources）。
+                # hash 前にランナウェイ guard（user_sources と同じ露出 —
+                # rclone は取得先の中身を制御できない）。
                 staged_pins: Dict[str, str] = amitaro_pin["staged_source_sha256"]
-                actual_names = {p.name for p in amitaro_src_dir.glob("*.wav")}
-                staged_diffs: List[str] = []
-                if actual_names != set(staged_pins):
-                    staged_diffs.append(
-                        "amitaro_sources: file set mismatch "
-                        f"(missing={sorted(set(staged_pins) - actual_names)[:5]}, "
-                        f"extra={sorted(actual_names - set(staged_pins))[:5]})"
-                    )
-                for wav_name in sorted(set(staged_pins) & actual_names):
-                    actual_sha = sha256_file(amitaro_src_dir / wav_name)
-                    if actual_sha != staged_pins[wav_name]:
-                        staged_diffs.append(
-                            f"amitaro_sources/{wav_name}: {actual_sha} != pin"
-                        )
-                if staged_diffs:
-                    raise PinMismatchError(staged_diffs)
+                # hash 前のランナウェイ guard。**上限 = pin 件数**（正常系は
+                # 324 本 — user_sources の 200 本上限を流用しないこと）。
+                guard_staged_sources_size(
+                    amitaro_src_dir, max_files=len(staged_pins),
+                    max_bytes=AMITARO_SOURCES_MAX_BYTES, label="amitaro_sources",
+                )
+                # amitaro_named は**取得原本ではなく derived**（sha 検証済み
+                # 素材から決定論的に再生成できる）。同一 work-dir での再実行を
+                # 残骸だけで止めないよう clean rebuild する（外部レビュー P1）。
+                amitaro_named_dir = work / "amitaro_named"
+                resolution = materialize_staged_sources(
+                    amitaro_src_dir, staged_pins, amitaro_named_dir,
+                    clean_dest=True,
+                )
+                print(f"| run5_bootstrap: amitaro_sources resolved "
+                      f"{len(resolution.resolved)}/{len(staged_pins)} by sha256 "
+                      f"→ {amitaro_named_dir.name}/ へ期待名で配置"
+                      f"（期待集合と完全一致）", flush=True)
                 amitaro_dataset = out / "amitaro_dataset"
                 _run([sys.executable,
                       FOUNDRY_DIR / "s1_dataprep" / "convert_amitaro.py",
-                      "--staged-dir", amitaro_src_dir,
+                      "--staged-dir", amitaro_named_dir,
                       "--transcript", FOUNDRY_DIR / "s1_dataprep" / "data" /
                       "ita_recitation_transcript_utf8.txt",
                       "--dsdict", dsdict,
