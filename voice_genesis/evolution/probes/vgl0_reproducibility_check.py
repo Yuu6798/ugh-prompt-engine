@@ -29,6 +29,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -51,16 +52,26 @@ _SELF_SHA_AT_LOAD = hashlib.sha256(SELF.read_bytes()).hexdigest()
 # 期待条件集合は probe 本体の定義を単一ソースとして読む。両実行が「同じ条件を
 # 揃って落とした」場合、突き合わせだけでは検出できない（レビュー指摘）ので、
 # **期待集合そのもの**と照合する。
-# **import 前に probe の sha を固定する**（レビュー指摘 P2）。checker は
-# `probe_mod` の `ProbeConfig` / 衝突ガードを **自プロセスの in-memory 定義**で
-# 使う一方、結果に載る probe sha は**サブプロセスが報告した値**である。
-# import 後に live probe が編集されると、checker 側の検証は旧定義（例: 保護対象
-# 入力が増える前のリスト）で行われたのに、PASS は新しい sha に帰属してしまう。
-# 実行後の再 hash とサブプロセス pin の三者一致を publish 条件にする。
-_PROBE_SHA_AT_IMPORT = hashlib.sha256(PROBE.read_bytes()).hexdigest()
+# **hash したバイト列そのものを実行する**（レビュー指摘 P2・6 巡目）。
+#
+# checker は `probe_mod` の `ProbeConfig` / 衝突ガードを **自プロセスの
+# in-memory 定義**で使う一方、結果に載る probe sha は**サブプロセスが報告した
+# 値**である。したがって「checker 側の検証を行ったバイト列」を pin しないと、
+# 旧定義で検証した PASS が別の sha へ帰属しうる。
+#
+# ここで `read_bytes()` して `import` すると **2 回 read する窓**が残る
+# （hash した版と import された版が違い、その後で元に戻されると 3 つの hash が
+# 揃って PASS になる）。so: 読んだバッファを compile/exec して**同一バイト列**を
+# モジュール化する。`sys.modules` へ登録するので、以後の `import
+# vgl0_control_axis_probe` もこの実体を指す。
+_PROBE_SOURCE = PROBE.read_bytes()
+_PROBE_SHA_AT_IMPORT = hashlib.sha256(_PROBE_SOURCE).hexdigest()
 
 sys.path.insert(0, str(PROBE.parent))
-import vgl0_control_axis_probe as probe_mod  # noqa: E402
+probe_mod = types.ModuleType("vgl0_control_axis_probe")
+probe_mod.__file__ = str(PROBE)
+sys.modules["vgl0_control_axis_probe"] = probe_mod
+exec(compile(_PROBE_SOURCE, str(PROBE), "exec"), probe_mod.__dict__)
 
 EXPECTED_LABELS = {label for label, _ in probe_mod.CONDITIONS}
 

@@ -40,7 +40,7 @@
     },
     {
       "script": "vgl0_reproducibility_check.py",
-      "sha256": "4497fdc3d727179c7db3106cc96dd7742b37ea310439e20242439364dddf241d",
+      "sha256": "731e5602496bdda29dc445eb7ee106807c438dec56038c48bf14dea787f9e771",
       "revalidation_results": [
         "vgl0_render_reproducibility_result.json"
       ],

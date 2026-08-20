@@ -421,3 +421,26 @@ def test_claim_work_dir_keeps_an_existing_owned_marker_intact(
     before = marker.read_bytes()
     chk.claim_work_dir(work)
     assert marker.read_bytes() == before
+
+
+def test_checker_executes_the_probe_bytes_it_hashed(chk) -> None:
+    """checker は **hash したバッファそのもの**を probe として実行すること。
+
+    `read_bytes()` して別途 `import` すると 2 回 read する窓が残り、その間に
+    差し替えて元へ戻されると 3 つの hash が揃ったまま PASS が出る
+    （レビュー指摘 P2・6 巡目）。compile/exec なら「hash したバイト列」と
+    「実行したバイト列」が構造的に同一。
+    """
+    import hashlib  # noqa: PLC0415
+
+    src = (PROBES / "vgl0_reproducibility_check.py").read_text(encoding="utf-8")
+    assert "exec(compile(_PROBE_SOURCE" in src, (
+        "checker が hash 済みバッファから probe を実行していない")
+    assert "import vgl0_control_axis_probe" not in src, (
+        "パス経由の import が残っている（2 回 read の窓が開く）")
+
+    live = hashlib.sha256(
+        (PROBES / "vgl0_control_axis_probe.py").read_bytes()).hexdigest()
+    assert chk._PROBE_SHA_AT_IMPORT == live
+    assert chk.probe_mod.__name__ == "vgl0_control_axis_probe"
+    assert hasattr(chk.probe_mod, "ProbeConfig")
