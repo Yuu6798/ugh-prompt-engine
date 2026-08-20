@@ -623,26 +623,50 @@ def milestone_ckpt_sizes(ckpt_dir: Path) -> Dict[int, int]:
 USER_SOURCES_MAX_BYTES = 500 * 1024 * 1024
 USER_SOURCES_MAX_FILES = 200
 
+# amitaro staged source（run 7）: recitation ノーマル 324 本・実測 ~112 MiB
+# （117,667,370 bytes）。**ファイル数の上限は pin 件数を呼び出し側から渡す**
+# （user_sources の 200 本上限を流用すると 324 本で確定停止する — 外部レビュー
+# P0・2026-08-20 の run-stopper）。バイト上限だけここに桁違いの余裕を置く。
+AMITARO_SOURCES_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
 
 def _iter_files(root: Path) -> List[Path]:
     return sorted(p for p in root.rglob("*") if p.is_file())
 
 
-def guard_user_sources_size(root: Path) -> Tuple[int, int]:
-    """`root` 配下の総ファイル数・総バイト数を測り、ランナウェイ上限
-    （`USER_SOURCES_MAX_*`）を超えていれば `StageFailure` で fail-closed する。
+def guard_staged_sources_size(
+    root: Path, *, max_files: int, max_bytes: int, label: str
+) -> Tuple[int, int]:
+    """`root` 配下の総ファイル数・総バイト数を測り、上限超過なら
+    `StageFailure` で fail-closed する汎用ランナウェイ guard。
     戻り値は (file_count, total_bytes)。hash を回す前に呼ぶ（大量ファイルの
-    全 hash 自体が浪費になるため）。"""
+    全 hash 自体が浪費になるため）。
+
+    **上限は素材ごとに呼び出し側が明示する**（外部レビュー P0・2026-08-20:
+    user_sources 用の 200 本上限を amitaro〔正常系 324 本〕へ流用したため、
+    正常な取得が確定的に停止する run-stopper を作っていた）。guard の目的は
+    「巨大ファイル群・異常なファイル数・hash 前の runaway を止める」ことだけで、
+    **集合の正確な検証は後段の `materialize_staged_sources` が担う**。"""
     files = _iter_files(root)
     total = sum(p.stat().st_size for p in files)
-    if len(files) > USER_SOURCES_MAX_FILES or total > USER_SOURCES_MAX_BYTES:
+    if len(files) > max_files or total > max_bytes:
         raise StageFailure(
-            f"user_sources runaway guard: {len(files)} file(s) / {total} bytes "
-            f"exceeds cap ({USER_SOURCES_MAX_FILES} files / {USER_SOURCES_MAX_BYTES} "
-            "bytes) — 想定は台帳原本 17 本・~2 MiB。巨大／無関係フォルダを掴んで"
-            "いないか user_sources/ を確認（fail-closed・hash 前に停止）"
+            f"{label} runaway guard: {len(files)} file(s) / {total} bytes "
+            f"exceeds cap ({max_files} files / {max_bytes} bytes) — 巨大／"
+            f"無関係フォルダを掴んでいないか {label}/ を確認"
+            "（fail-closed・hash 前に停止）"
         )
     return len(files), total
+
+
+def guard_user_sources_size(root: Path) -> Tuple[int, int]:
+    """user_sources 専用の薄いラッパ（既存呼び出しの挙動を不変に保つ）。
+    想定は台帳原本 17 本・~2 MiB で、上限は桁違いの余裕（500 MiB / 200 files）。
+    正当な「〜 のコピー」余剰は通し、runaway だけ止める。"""
+    return guard_staged_sources_size(
+        root, max_files=USER_SOURCES_MAX_FILES,
+        max_bytes=USER_SOURCES_MAX_BYTES, label="user_sources",
+    )
 
 
 def plan_drive_id_fetch(listing_json: str) -> List[Tuple[str, str]]:
@@ -836,7 +860,8 @@ def place_staged_sources_by_sha256(
 
 
 def materialize_staged_sources(
-    src_dir: Path, pinned_sha: Dict[str, str], dest_dir: Path
+    src_dir: Path, pinned_sha: Dict[str, str], dest_dir: Path,
+    *, clean_dest: bool = False,
 ) -> StagedSourceResolution:
     """`src_dir`（**今回の取得のみ**が入った clean staging = 連番前置名）を
     中身 sha で索引し、`pinned_sha` の**期待名で `dest_dir` へ配置**する。
@@ -844,9 +869,18 @@ def materialize_staged_sources(
     `StagedSourceResolution.problems()` が非空なら `PinMismatchError` で
     fail-closed し、**何も配置しない**（欠落・余剰・pin 側 sha 重複のいずれも
     通さない = 期待集合と取得集合の 1 対 1 完全一致が通過条件）。
-    `dest_dir` が既存の場合は gate 4（`d3_render_out`）と同じ流儀で
-    fail-closed する — 前走行の残骸を黙って消して素材来歴を曖昧にしない。
-    pin キーがベアなファイル名でない場合も拒否する（`dest_dir` 外への
+    `clean_dest`（外部レビュー P1・2026-08-20）: 既定 False では `dest_dir` が
+    既存なら fail-closed する（gate 4 = `d3_render_out` と同流儀）。True の
+    場合のみ配置直前に作り直す。**この違いは素材の性格に対応する**:
+
+    - **取得原本**（`amitaro_sources` 等）= 「今回 Drive から取得した証拠実体」。
+      取得前に必ず空にする（`prepare_clean_staging_dir`）が、後から黙って
+      消してよいものではない
+    - **derived**（`amitaro_named` 等）= sha 検証済み素材から決定論的に
+      再生成できる派生物。同一 work-dir での再実行を「前回の残骸がある」
+      だけの理由で止めないため clean rebuild してよい
+
+    pin キーがベアなファイル名でない場合は拒否する（`dest_dir` 外への
     書き出し防止）。"""
     for name in sorted(pinned_sha):
         if Path(name).name != name or name in ("", ".", ".."):
@@ -855,10 +889,13 @@ def materialize_staged_sources(
                 "(fail-closed — 配置先ディレクトリ外への書き出しを拒否)"
             )
     if dest_dir.exists():
-        raise StageFailure(
-            f"staged 配置先が既に存在する: {dest_dir} — 前走行の残骸を黙って"
-            "上書きしない（fail-closed・gate 4 と同流儀）"
-        )
+        if not clean_dest:
+            raise StageFailure(
+                f"staged 配置先が既に存在する: {dest_dir} — 前走行の残骸を黙って"
+                "上書きしない（fail-closed・gate 4 と同流儀。derived な配置先は "
+                "clean_dest=True を明示すること）"
+            )
+        shutil.rmtree(dest_dir)
     resolution = place_staged_sources_by_sha256(
         index_files_by_sha256(src_dir), pinned_sha
     )
@@ -1729,11 +1766,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # 期待名で配置する（§ materialize_staged_sources）。
                 # hash 前にランナウェイ guard（user_sources と同じ露出 —
                 # rclone は取得先の中身を制御できない）。
-                guard_user_sources_size(amitaro_src_dir)
                 staged_pins: Dict[str, str] = amitaro_pin["staged_source_sha256"]
+                # hash 前のランナウェイ guard。**上限 = pin 件数**（正常系は
+                # 324 本 — user_sources の 200 本上限を流用しないこと）。
+                guard_staged_sources_size(
+                    amitaro_src_dir, max_files=len(staged_pins),
+                    max_bytes=AMITARO_SOURCES_MAX_BYTES, label="amitaro_sources",
+                )
+                # amitaro_named は**取得原本ではなく derived**（sha 検証済み
+                # 素材から決定論的に再生成できる）。同一 work-dir での再実行を
+                # 残骸だけで止めないよう clean rebuild する（外部レビュー P1）。
                 amitaro_named_dir = work / "amitaro_named"
                 resolution = materialize_staged_sources(
-                    amitaro_src_dir, staged_pins, amitaro_named_dir
+                    amitaro_src_dir, staged_pins, amitaro_named_dir,
+                    clean_dest=True,
                 )
                 print(f"| run5_bootstrap: amitaro_sources resolved "
                       f"{len(resolution.resolved)}/{len(staged_pins)} by sha256 "

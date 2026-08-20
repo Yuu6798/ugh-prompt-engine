@@ -1399,3 +1399,75 @@ def test_prepare_clean_staging_dir_is_idempotent(tmp_path: Path) -> None:
     assert r5b.prepare_clean_staging_dir(d) == d
     assert list(d.iterdir()) == []
     assert r5b.prepare_clean_staging_dir(d).exists()
+
+
+# --- 外部レビュー P0 回帰（2026-08-20）: guard の上限を素材ごとに分ける -------
+# run 7 の正常系は 324 本。user_sources 用 200 本上限を流用すると**正常な取得が
+# 確定的に停止する** run-stopper になる（実際に PR #288 head で作り込んでいた）。
+
+
+def test_amitaro_guard_accepts_pinned_file_count(tmp_path: Path) -> None:
+    src = tmp_path / "amitaro_sources"
+    for i in range(324):
+        _write_staged(src, f"{i:03d}_recitation{i+1:03d}.wav", f"p{i}".encode())
+    n, total = r5b.guard_staged_sources_size(
+        src, max_files=324, max_bytes=r5b.AMITARO_SOURCES_MAX_BYTES,
+        label="amitaro_sources")
+    assert n == 324 and total > 0
+
+
+def test_amitaro_guard_rejects_over_pinned_file_count(tmp_path: Path) -> None:
+    src = tmp_path / "amitaro_sources"
+    for i in range(325):
+        _write_staged(src, f"{i:03d}_x.wav", f"p{i}".encode())
+    with pytest.raises(r5b.StageFailure, match="amitaro_sources runaway guard"):
+        r5b.guard_staged_sources_size(
+            src, max_files=324, max_bytes=r5b.AMITARO_SOURCES_MAX_BYTES,
+            label="amitaro_sources")
+
+
+def test_user_sources_guard_keeps_its_own_caps(tmp_path: Path) -> None:
+    """user_sources 側の上限（200 本）は不変であること（run 5/6 経路の回帰）。"""
+    src = tmp_path / "user_sources"
+    for i in range(201):
+        _write_staged(src, f"{i:03d}_x.mp3", b"x")
+    with pytest.raises(r5b.StageFailure, match="user_sources runaway guard"):
+        r5b.guard_user_sources_size(src)
+
+
+def test_run7_amitaro_324_files_reach_materialize(tmp_path: Path) -> None:
+    """**配線レベルの回帰**: 324 本の正常取得が guard で止まらず
+    materialize まで到達し、期待名 324 本が揃うこと。今回の blocker は
+    helper 単体ではなく main の配線（guard の流用）で起きたため、
+    guard → materialize を続けて通す形で検証する。"""
+    src = tmp_path / "amitaro_sources"
+    pins: dict = {}
+    for i in range(1, 325):
+        sha = _write_staged(src, f"{i-1:03d}_recitation{i:03d}.wav",
+                            f"payload-{i}".encode())
+        pins[f"recitation{i:03d}.wav"] = sha
+    r5b.guard_staged_sources_size(
+        src, max_files=len(pins), max_bytes=r5b.AMITARO_SOURCES_MAX_BYTES,
+        label="amitaro_sources")
+    dest = tmp_path / "amitaro_named"
+    res = r5b.materialize_staged_sources(src, pins, dest, clean_dest=True)
+    assert res.ok and len(res.resolved) == 324
+    names = sorted(p.name for p in dest.glob("*.wav"))
+    assert names[0] == "recitation001.wav" and names[-1] == "recitation324.wav"
+    assert len(names) == 324
+
+
+def test_materialize_clean_dest_allows_rerun_in_same_workdir(tmp_path: Path) -> None:
+    """derived な配置先は再実行で残骸だけを理由に停止しない（外部レビュー P1）。
+    取得原本側の「既存なら fail-closed」は clean_dest 既定 False のまま。"""
+    src = tmp_path / "src"
+    sha = _write_staged(src, "000_a.wav", b"one")
+    pins = {"recitation001.wav": sha}
+    dest = tmp_path / "named"
+    r5b.materialize_staged_sources(src, pins, dest, clean_dest=True)
+    (dest / "stale_leftover.wav").write_bytes(b"stale")
+    res = r5b.materialize_staged_sources(src, pins, dest, clean_dest=True)
+    assert res.ok
+    assert sorted(p.name for p in dest.glob("*")) == ["recitation001.wav"]
+    with pytest.raises(r5b.StageFailure, match="既に存在"):
+        r5b.materialize_staged_sources(src, pins, dest)

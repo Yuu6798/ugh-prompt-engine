@@ -318,5 +318,11 @@ run 7 も本 runbook の手順のまま、**Pod 作成時の env を `RUN_PROFIL
   持つため 1 実体から複数の意味名を作らせない）。加えて **staging は取得前に
   必ず空にする**（`prepare_clean_staging_dir` — 前回 run の残骸が sha 索引へ
   混ざると今回の欠落を古い実体で補完でき、fail-closed 契約が破れる）。配置先が
-  既存なら fail-closed（gate 4 と同流儀）、pin キーがベア名でなければ拒否、
-  hash 前にランナウェイ guard を通す
+  既存なら
+  fail-closed（gate 4 と同流儀。ただし `amitaro_named` は sha 検証済み素材から
+  再生成できる **derived** なので `clean_dest=True` で毎回作り直す — 同一
+  work-dir の再実行を残骸だけで止めない）、pin キーがベア名でなければ拒否。
+  **hash 前のランナウェイ guard は素材ごとに上限を渡す**
+  （`guard_staged_sources_size(max_files=len(staged_pins))` — user_sources 用の
+  200 本上限を amitaro〔正常系 324 本〕へ流用すると正常な取得が確定停止する。
+  外部レビュー P0・2026-08-20 実測で作り込んでいた run-stopper）
