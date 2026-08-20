@@ -78,7 +78,7 @@
    |---|---|---|---|
    | **Run 8-0** | なし（CPU のみ） | **$0** | 観測段 |
    | **決定論だった場合** | 8-B + 8-R | **≈$2.80** | **因果裁定まで到達**（既定の完了経路） |
-   | 非決定論だった場合（既定） | 8-B + 8-R | ≈$2.80 | **探索的**として記帳（再裁定 8）。これも正当な出口 |
+   | 非決定論だった場合（既定） | 8-B + 8-R | ≈$2.80 | **探索的 / `provisional`** として記帳（再裁定 8）。**走行としては正当な停止点だが、AC の「効果で終端宣言」は充足しない**（= run 8 は終端しない・§9-0 / §11 と同一の扱い） |
    | 非決定論 + 形式的な因果裁定を要求する場合 | + 8-R2 | ≈$4.20 | **実験全体予算の User 承認が要る** |
 
    **各走行は cap $4 以内**（run 7 実績 ≈$1.40）。**実験全体で $3 を超える
@@ -393,11 +393,41 @@ overall H-TTD verdict:
 
 **独立検算できる worked example**（数値は**説明用の架空値**・実測は台帳が出す）:
 
-| 話者 | 層 k | `ri_to_SP` count | `eligible_terminal_count` | density |
-|---|---|---|---|---|
-| pjs | real_song / utterance_final / mid / d3+ | 12 | 150 | **0.0800** |
-| user | real_song / utterance_final / mid / d3+ | 1 | 40 | **0.0250** |
-| ritsu | VCV / utterance_final / mid / d3+ | 0 | 900 | **0.0000** |
+**層は `d3` と `d4` を分けて数える**（2026-08-20 訂正 — 初版の例は `d3+` と
+集約表記になっていたが、実契約は分母を**厳密な `preceding_duration_bin`** で
+索引し、投票も d3 / d4 を別々に行う。例に従って露出を合算した実装は
+違う density・違う総合裁定を出す）:
+
+| 話者 | modality | pitch | bin | `ri_to_SP` count | `eligible_terminal_count` | density | 層別 verdict |
+|---|---|---|---|---|---|---|---|
+| pjs | real_song | mid | **d3** | 7 | 90 | **0.0778** | — |
+| user | real_song | mid | **d3** | 1 | 25 | **0.0400** | — |
+| ritsu | VCV | mid | **d3** | 0 | 500 | **0.0000** | — |
+| pjs | real_song | mid | **d4** | 5 | 60 | **0.0833** | — |
+| user | real_song | mid | **d4** | 0 | 15 | **0.0000** | — |
+| ritsu | VCV | mid | **d4** | 0 | 400 | **0.0000** | — |
+
+層別裁定（ゼロ分岐と modality 規則を適用する）:
+
+```
+mid / d3:
+  ritsu は VCV = modality またぎ -> 比較から除外（undetermined 側）
+  pjs(0.0778) vs user(0.0400) は同 modality（real_song）で比較可
+  min = 0.0400 > 0 なので分岐 4 -> 順序は「破綻しない pjs > 破綻する user」で成立
+  比 = 0.0778 / 0.0400 = 1.94 < 2.0  ->  **refuted**
+
+mid / d4:
+  user の eligible_terminal_count = 15 < 20  ->  **undetermined**（標本不足）
+
+overall:
+  scored（undetermined でない層）= {mid/d3} の 1 層のみ
+  len(scored) >= 2 を満たさない  ->  **overall = undetermined**
+```
+
+**この例が示すこと**: `d3+` と合算していれば
+`pjs 12/150 = 0.0800` vs `user 1/40 = 0.0250`、比 3.2 で **supported** に見える。
+層を分けて契約どおり数えると **undetermined** になる。**同じ台帳から逆の結論**が
+出るので、例と契約の表記を揃えることは体裁の問題ではない。
 
 この例では ritsu の `eligible_terminal_count` が最大（孤立録音で終端が多い）
 にもかかわらず density は 0 になる。**総 SP 数で数えれば ritsu が最も豊富に
@@ -783,16 +813,23 @@ D 実曲アンカー (2):
 pin する**。
 
 ```
-対象世代: {run7, run8-R, run8-B}   # 8-R が無い場合は {run7, run8-B}
+対象世代: {run7} ∪ {全ての未処置反復} ∪ {run8-B}
+          # 未処置反復 = run8-R, run8-R2, ...（k 本すべて）
+          # ★ 2026-08-20 訂正: 初版は 8-R しか含めず 8-R2 を落としていた。
+          #   k>=2 の因果経路では機械側が k 本の平均でドリフト補正するのに、
+          #   耳側は 8-R 1 本しか見ないことになり、**機械と人手で対照母集団が
+          #   食い違う**。P3（語彙一般化）に至っては {run7, run8-B} だけで、
+          #   一様な走行水準シフトが「held-out の一般化」として報告されうる
 cell_id の語彙は §6-1 と同一（<generation>/<speaker>/<probe>/<beats>/<pitch>）
 
 P1 主効果（user・§6-1 A1 と同条件で三つ組にする）:
-    {run7, run8-R, run8-B} × user × {
+    {run7, 全未処置反復, run8-B} × user × {
         P-RI-FINAL/b4/p57, P-RI-FINAL/b2/p57, P-RI-FINAL/b4/p62,
-        P-I-FINAL/b4/p57,  P-N-FINAL/b4/p57 }                    -> 15
+        P-I-FINAL/b4/p57,  P-N-FINAL/b4/p57 }      -> k=1 で 15 / k=2 で 20
 P2 回帰対照（未処置話者・§9 の「悪化」判定の材料）:
-    {run7, run8-R, run8-B} × {ritsu, pjs} × {P-RI-FINAL/b4/p57,
-                                             P-N-FINAL/b4/p57}   -> 12
+    {run7, 全未処置反復, run8-B} × {ritsu, pjs} × {P-RI-FINAL/b4/p57,
+                                                   P-N-FINAL/b4/p57}
+                                                    -> k=1 で 12 / k=2 で 16
     # ★ run8-R を必ず含める（2026-08-20・P1 訂正）。初版は {run7, run8-B} だけで、
     #   **未処置話者の知覚上のドリフトが一度もラベルされない**構成だった。
     #   §9 は bit 一致しなくても k>=2 なら package-level の因果裁定を許すので、
@@ -801,11 +838,15 @@ P2 回帰対照（未処置話者・§9 の「悪化」判定の材料）:
     #   8-R が実施されない場合は、この block の人手による改善/回帰の裁定を
     #   **provisional 固定**とする（§9-0 と同じ扱い）
 P3 語彙一般化（**訓練に一度も入らない語**の /ri/ 終端 = §8-5-5 primary）:
-    {run7, run8-B} × user × {P-RI-FINAL-HELDOUT/b4/p57,
-                             P-RI-FINAL-HELDOUT/b4/p62}          ->  4
+    {run7, 全未処置反復, run8-B} × user × {P-RI-FINAL-HELDOUT/b4/p57,
+                                           P-RI-FINAL-HELDOUT/b4/p62}
+                                                    -> k=1 で 6 / k=2 で 8
                      ※ 語は `みのり` / `たより`（§8-1 の held-out 語彙から
                        文字コード昇順で 2 語）
--> unique 31 + 重複提示 6（20%・P1/P2/P3 から cell_id 昇順で 2 件ずつ）
+-> unique = k=1 で 33 / k=2 で 44 + 重複提示は unique の 20%
+   （P1/P2/P3 から cell_id 昇順で均等に採る）
+   ※ セル数は k に依存するので**固定値で書かない**。
+     実際の値は pin する `s7_post_listening_set.json` に記帳する
 ```
 
 **規約は §6-1 と同一**: ランダム順・**世代とモデル名を伏せる**（`expected_terminal`
@@ -816,9 +857,27 @@ P3 語彙一般化（**訓練に一度も入らない語**の /ri/ 終端 = §8-
 `s7_post_listening_set.json` へ書き出して sha256 を pin する。処置後に
 セルを選べると、`severity_shift` が「動いたセルを選んだ結果」になる。
 
-**集約**: 改善/回帰の判定は §7-1 の `severity_shift`（中央値で 1 段以上）を
-使い、セル間の集約は **Gate 3 と同じ median + タイは pass にしない**規則に揃える
-（§7-0 (7)）。borderline は集約から除外し件数を記帳する。
+**集約 — 耳側にも未処置ドリフトの補正を入れる**（2026-08-20 訂正）:
+
+初版は素の `severity_shift` の median をそのまま使っていた。しかし
+**run8-B と未処置反復が揃って 1 段動いた場合、対照が同じだけ動いていても
+「パッケージによる改善/回帰」と報告してしまう**。機械側は §7-1 で
+`b_bar_s`（k 本の平均シフト）を引いているのに、人手側だけ引いていなかった。
+
+```
+生の効果:     Δsev_B(cell)   = severity(run8-B) - severity(run7)
+未処置の効果: Δsev_ctrl(cell) = median over 全未処置反復 r of
+                                 ( severity(r) - severity(run7) )
+補正後:       Δsev*(cell)     = Δsev_B(cell) - Δsev_ctrl(cell)
+
+判定は Δsev* に対して §7-1 の基準（中央値で 1 段以上）を適用する
+セル間の集約は Gate 3 と同じ median + タイは pass にしない（§7-0 (7)）
+borderline は集約から除外し件数を記帳する
+
+未処置反復が 0 本（8-R 未実施）の場合:
+  Δsev_ctrl が定義できない -> **補正せず、人手の結論は provisional 固定**
+  （§9-0 の「8-R 無し = 全行 confounded / provisional」と同じ扱い）
+```
 
 ## 7. Gate — 観測子の合格条件
 
@@ -991,23 +1050,58 @@ run5/run7 で対応するセルが複数あり、耳 severity も 3 軸ある。
   §6 の listening set のうち generation ∈ {run5, run7} かつ speaker == user
   かつ 両世代で対応が取れている cell_id（片方欠測は除外し件数を記帳）
 
-機械側の代表値:
-  Δz_primary(cell) = z'_primary(run7) - z'_primary(run5)
-  代表値 = 参加セルにわたる **median**（平均でなく median。外れセルに強い）
+機械側の代表値 — **単純な Δz は使わない**（2026-08-20・重大な訂正）:
+  # ★ z 化は (話者 × 世代) 内で中心化するので、その母集団が**一様に動いた
+  #   変化は z から完全に消える**。run7 の全セルへ +10 ms 足しても z は不変で、
+  #   耳の severity だけ上がり Δz_primary = 0 -> tied_direction となって
+  #   **正しく動いている計器が Gate 3 で落ちる**。しかも本書は
+  #   「ritsu の 3 区間が全て同符号で動いた」= まさに一様シフト型のドリフトを
+  #   走行間変動の根拠にしている。その形の変化を検出できない正規化を
+  #   同じ文書で採用していた。
+  # 正規化を越えて残る **target 対 control のコントラスト**を使う:
 
-耳側の代表値:
+  contrast(gen) = median( z'_primary | target セル  )
+                - median( z'_primary | control セル )
+      target  セル = P-RI-FINAL 系（破綻が起きる想定）
+      control セル = P-N-FINAL / P-RI-MEDIAL / P-I-FINAL（起きない想定）
+  Δcontrast = contrast(run7) - contrast(run5)
+
+  一様シフトは target 側と control 側の両方に同じだけ乗るので **Δcontrast から
+  相殺され**、逆に `/ri/` 固有の変化は残る（= 消したいものだけ消える）。
+
+耳側の代表値 — **同じコントラスト構造で取る**:
   severity(cell, gen) = max(該当 position/expected の break 判定に使う軸)
       # §6 の 2 キー場合分けで「使わない」と定めた軸は max に入れない
-  Δseverity(cell) = severity(run7) - severity(run5)
-  代表値 = 参加セルにわたる **median**
+  sev_contrast(gen) = median( severity | target ) - median( severity | control )
+  Δsev_contrast = sev_contrast(run7) - sev_contrast(run5)
 
 判定:
-  sign(median Δz_primary) == sign(median Δseverity)   -> Gate 3 pass
-  どちらかが 0（同値・タイ）                          -> **pass にしない**
-                                                         status = tied_direction
-  borderline ラベルのセルは Δseverity の計算から除外し、除外件数を記帳
-  参加セルが 5 未満                                    -> undetermined（Gate 不成立）
+  sign(Δcontrast) == sign(Δsev_contrast)   -> Gate 3 pass
+  どちらかが 0（同値・タイ）                -> **pass にしない**
+                                              status = tied_direction
+  borderline ラベルのセルは耳側の計算から除外し、除外件数を記帳
+  target / control のどちらかが 3 セル未満   -> undetermined（Gate 不成立）
 ```
+
+**一様シフトに対する worked check（実装が必ず通す）**:
+
+```
+参加セルの z'_primary（run5）: target {+0.9, +1.1, +1.0} / control {-1.0, -0.9, -1.1}
+  contrast(run5) = 1.0 - (-1.0) = 2.0
+
+ケース A（一様シフト）: run7 で**全セル**の生値へ +10 ms
+  -> (話者×世代) 内中心化により z' は run5 と同一
+  -> contrast(run7) = 2.0、Δcontrast = 0     … 機械側は「変化なし」
+  -> 耳側も target/control 双方が同じだけ動けば Δsev_contrast = 0 で整合
+     （**旧規則ではここで tied_direction になり計器が落ちていた**）
+
+ケース B（target 固有の改善）: run7 で target セルだけ改善
+  -> contrast(run7) = 1.2、Δcontrast = -0.8  … 機械側は「target が良化」
+  -> 耳側も target だけ severity が下がれば符号一致で pass
+```
+
+**生スケールの median も併記する**（Gate には使わない診断値）。一様シフトが
+起きた事実自体は記録に残さないと、「何も起きなかった」と読まれてしまう。
 
 **タイを pass 側に倒さない**のは、「動かなかった」を「同方向だった」と
 読み替えないためである（§9-0b と同じ規律）。
@@ -2051,6 +2145,39 @@ supported     : duration intervention で primary TRF 軸が ε を超えて改�
 refuted       : 2/3 以上のセルで ε を超える逆方向
 その他        : undetermined
 ```
+
+#### 12-0-C2. **境界宣言 1 件 — B-1 候補空間の実名列挙は PR-1 で行う**
+
+§12-0-A-2 の候補空間は `voicing: algorithm A / B`、`mel: FFT / hop / mel bins`
+と**プレースホルダのまま**である。この状態では PR-1 が校正結果を見てから
+候補を選び足しても「meta-contract に従った」と主張でき、凍結した measurement
+spec と有料 Gate が再現不能になる — という指摘（Codex）は正しい。
+
+**それでも本 memo では実名を書かない。** 理由は §12-0 冒頭と同じで、
+どの voicing 実装・どの FFT 長が候補たりうるかは
+`ANALYSIS_STACK_PIN` の実バージョンと実データを一度通さないと決められず、
+紙の上で列挙すると「実在しない候補を凍結する」ことになる。
+
+**代わりに凍結する手順**（これで抜け穴は塞がる）:
+
+```
+PR-1 の calibration harness 実装の**最初のコミット**で、
+候補空間を実名・実数値で列挙した `s7_b1_candidate_space.json` を
+**校正を 1 度も走らせる前に**コミットし、sha256 を pin する。
+
+  voicing : 実装名 + バージョン（例: 依存 pin 上の関数名まで特定する）
+  window  : ミリ秒の実数値を列挙
+  hop     : 同上
+  mel     : n_fft / hop_length / n_mels を実数値で列挙
+
+以後この JSON へ**候補を追加しない**。追加が必要になった場合は
+本 memo の改訂として扱い、追加した事実と理由を記帳する。
+PR-2 開始 Gate の「B-1 候補空間 固定」はこの JSON の存在と pin で判定する。
+```
+
+**残る穴の正直な記述**: 「校正前にコミットする」という順序は**運用規律であって
+機械強制ではない**。PR-1 でこれを CI で縛れるか（候補 JSON の commit 時刻が
+校正成果物より前であることの検査）は実装時に判断する。
 
 #### 12-0-D. **PR-2 の開始 Gate（全て揃うまで着手禁止）**
 
