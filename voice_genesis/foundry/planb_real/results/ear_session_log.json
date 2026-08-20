@@ -191,6 +191,18 @@
         },
         "note": "耳の『音量の上がり方が不自然』は副軸 energy_tail_db の −1.13 → +6.96 dB（終端が減衰せず上がる）と一致する。『音の跳ね方が極端』は F0 逸脱移植の可聴な帰結。主軸 nasal_gain_db は +6.052 → +1.737 と『改善』を示すが耳は逆"
       }
+    },
+    {
+      "item": 10,
+      "question": "Q1 の訂正 — 系統の一致 vs 原音との忠実度",
+      "trigger": "User 指摘「R0 系はリツか PJS かなら当たり前にリツだよ。原音と比べてという設問だったから no 裁定だけど」",
+      "answer_raw": "R 系はみな同じ歌い手に聞こえるよ",
+      "findings": {
+        "q1_identity_lineage": "yes",
+        "fidelity_to_original": "no"
+      },
+      "defect_in_procedure": "項目5 で Q1 を『リツ本人として通るか』と提示した。これは§10 Q1（同一 Identity 系統か）ではなく**原音忠実度**の設問であり、別軸の答えを Q1 として記録していた",
+      "impact": "§14 の『Identity 崩壊 → identity representation 不足』分岐は**該当しなくなる**。identity は保たれており、壊れているのは (a) 原音忠実度（雑音）と (b) Q3（TRF 改善）。G6 の機械 PASS とも整合する"
     }
   ],
   "final_answers": {
@@ -204,8 +216,9 @@
     "session_log": "results/ear_session_log.json",
     "Q1": {
       "question": "R0–R4 は同一 Identity 系統（Ritsu 系）に聞こえるか？",
-      "verdict": "no",
-      "note": "R4 は『リツとして通らない』（項目5）。対策前の R0 も原音比で『微妙』（項目2）。ap 0.25 倍でノイズは明確に減ったが、往復単体でも『微妙よりの通らない』（項目7）"
+      "verdict": "yes",
+      "note": "「R 系はみな同じ歌い手に聞こえる」「リツか PJS かなら当たり前にリツ」（User）。R0–R4 は同一 Identity 系統として成立している",
+      "correction": "初回は本設問を『リツ本人として通るか』= **原音との忠実度**として提示してしまい、no を Q1 の答えとして記録した。これは設問の誤りで、§10 Q1 は系統の一致を問うもの。訂正済み"
     },
     "Q2": {
       "question": "Performance の違いは聞き分けられるか？",
@@ -221,6 +234,11 @@
       "question": "PJS 本人の声へ近づいただけではないか？",
       "verdict": "no",
       "note": "声は寄っていない（項目5）。G4 donor isolation の機械判定と一致"
+    },
+    "extra_axis_fidelity_to_original": {
+      "question": "（§10 の設問ではない）合成出力は原音として通るか",
+      "verdict": "no",
+      "note": "往復単体でも『微妙よりの通らない』。ap×0.25 でノイズは明確に減ったが原音との忠実度は回復していない。**Identity の同一性とは別軸**であり、identity 経路の音質問題として扱う"
     }
   }
 }

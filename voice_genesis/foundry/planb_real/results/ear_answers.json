@@ -9,8 +9,9 @@
   "session_log": "results/ear_session_log.json",
   "Q1": {
     "question": "R0–R4 は同一 Identity 系統（Ritsu 系）に聞こえるか？",
-    "verdict": "no",
-    "note": "R4 は『リツとして通らない』（項目5）。対策前の R0 も原音比で『微妙』（項目2）。ap 0.25 倍でノイズは明確に減ったが、往復単体でも『微妙よりの通らない』（項目7）"
+    "verdict": "yes",
+    "note": "「R 系はみな同じ歌い手に聞こえる」「リツか PJS かなら当たり前にリツ」（User）。R0–R4 は同一 Identity 系統として成立している",
+    "correction": "初回は本設問を『リツ本人として通るか』= **原音との忠実度**として提示してしまい、no を Q1 の答えとして記録した。これは設問の誤りで、§10 Q1 は系統の一致を問うもの。訂正済み"
   },
   "Q2": {
     "question": "Performance の違いは聞き分けられるか？",
@@ -26,5 +27,10 @@
     "question": "PJS 本人の声へ近づいただけではないか？",
     "verdict": "no",
     "note": "声は寄っていない（項目5）。G4 donor isolation の機械判定と一致"
+  },
+  "extra_axis_fidelity_to_original": {
+    "question": "（§10 の設問ではない）合成出力は原音として通るか",
+    "verdict": "no",
+    "note": "往復単体でも『微妙よりの通らない』。ap×0.25 でノイズは明確に減ったが原音との忠実度は回復していない。**Identity の同一性とは別軸**であり、identity 経路の音質問題として扱う"
   }
 }

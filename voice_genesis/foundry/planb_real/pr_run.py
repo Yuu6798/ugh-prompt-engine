@@ -292,7 +292,7 @@ def cmd_gates(args) -> int:
     ledger.add(pr_gates.gate_trf(pairs, frozen))
     answers = json.loads(EAR_ANSWERS.read_text(encoding="utf-8")) if EAR_ANSWERS.exists() else None
     ledger.add(pr_gates.gate_ear(answers))
-    level = pr_gates.success_level(ledger.gates, pairs)
+    level = pr_gates.success_level(ledger.gates, pairs, answers)
     GATE_RESULTS.parent.mkdir(parents=True, exist_ok=True)
     GATE_RESULTS.write_text(json.dumps(
         {**ledger.as_dict(), "success_level": level}, ensure_ascii=False, indent=2),

@@ -316,15 +316,29 @@ def gate_ear(answers: Optional[Dict[str, Any]]) -> GateResult:
     return GateResult("G-ear", PASS, "聴感 4 設問すべてが合格側", "", ev)
 
 
-def success_level(ledger_gates: Sequence[GateResult], pairs: Sequence[Any]) -> str:
-    """instruction §12 の到達レベルを機械的に判定する。"""
+def success_level(ledger_gates: Sequence[GateResult], pairs: Sequence[Any],
+                  ear_answers: Optional[Dict[str, Any]] = None) -> str:
+    """instruction §12 の到達レベルを機械的に判定する。
+
+    **訂正（開示）**: 当初の実装は S2 の判定に `G3-intervention`（介入の直交性）の
+    PASS を要求していた。しかし §12 を読み直すと、独立交換可能性は **S3** の条件
+    （「timing / F0 / release のうち少なくとも 2 要素を独立交換可能」）であって
+    S2 の条件ではない。S2 は「Ritsu 系 Identity を保ちながら PJS Performance の
+    **少なくとも 1 要素**で再現可能な挙動変化」である。仕様の読み違いによる
+    実装誤りだったため、条件を仕様どおりへ直した（閾値の調整ではない）。
+
+    S2 の条件（§12 をそのまま分解）:
+      - Ritsu 系 Identity を保っている  -> G6 PASS かつ 耳の Q1 が no でない
+      - PJS 由来の 1 要素以上で挙動変化 -> 動いた軸が 1 つ以上
+      - 「再現可能」                     -> G1 determinism PASS
+      - PJS へ寄っただけではない         -> G4 PASS
+    """
     st = {g.gate: g.status for g in ledger_gates}
     if st.get("G-MATERIAL") != PASS or st.get("G-LICENSE") != PASS:
         return "S0_NOT_REACHED"
     if not pairs:
         return "S0_ACQUISITION"
-    if st.get("G3-intervention") != PASS or st.get("G4-donor-isolation") != PASS:
-        return "S1_REAL_RENDER"
+
     moved_axes = set()
     for pair in pairs:
         base = pair.rungs.get("R0")
@@ -336,8 +350,17 @@ def success_level(ledger_gates: Sequence[GateResult], pairs: Sequence[Any]) -> s
                 b, c = getattr(base, axis), getattr(cur, axis)
                 if np.isfinite(b) and np.isfinite(c) and abs(c - b) > tol:
                     moved_axes.add(axis)
-    if st.get("G6-identity") != PASS or not moved_axes:
+
+    ear_q1 = None
+    if ear_answers:
+        q1 = ear_answers.get("Q1")
+        ear_q1 = q1.get("verdict") if isinstance(q1, dict) else q1
+    identity_ok = st.get("G6-identity") == PASS and (
+        ear_q1 is None or str(ear_q1).lower() != "no")
+
+    if not (identity_ok and st.get("G4-donor-isolation") == PASS
+            and st.get("G1-determinism") == PASS and moved_axes):
         return "S1_REAL_RENDER"
-    if len(moved_axes) >= 2:
+    if st.get("G3-intervention") == PASS and len(moved_axes) >= 2:
         return "S3_SKILL_ATTRIBUTION"
     return "S2_PARTIAL_SEPARATION"
