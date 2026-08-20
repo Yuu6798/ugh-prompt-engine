@@ -954,6 +954,24 @@ provenance は守れない（防御が意味を持つ境界の外側）。本 pr
 (b) `__main__` の実行バイト列を移植的に取得する手段が確立した、(c) 実測で
 **偶発的に**（攻撃者無しで）この窓を踏んだ事例が出た — のいずれか。
 
+### bot 7 巡目（1 件・採用）+ **負の主張の限定は「見出しフィールド」で担保する**
+
+| 指摘 | 中身 | 対応 |
+|---|---|---|
+| Scope the evidence purpose to the title queries | evidence artifact の `conclusion` / `limits` は限定済みなのに、**先頭の `purpose` だけが「Drive に無い」と無限定のまま**で、同一 artifact 内で自己矛盾していた | `purpose` を「Q1/Q2 では見つからなかった」へ限定。さらに `claim`（`assertion` / `scope` / `does_not_assert` / `recovery_route_status`）を機械可読で追加 |
+
+**同型の失敗が 4 回目だったので、直し方を変えた**: 「Drive 負の主張の限定」は
+STATUS → 記録本体 → `conclusion` → `purpose` と**4 箇所を 4 巡かけて individually
+直している**。原因は「限定は散文で書く」設計にあり、消費者が**どのフィールドを
+読むかで主張の強さが変わる**こと。今回は artifact へ `claim` を追加して、
+**主張と射程を 1 つのフィールドに同居**させた（`does_not_assert` を明示する形）。
+以後、負の所見は散文ではなくこの形で書く。
+
+**全数監査を実施**: artifact の全文字列フィールドを機械的に走査して断定表現を
+洗い（未限定は `purpose` 1 件のみと確認）、repo 全体を「Drive に無い / 存在
+しない」で grep して残存ゼロを確認した。「grep で全数当たってから閉じる」を
+今回は artifact 内部の**フィールド粒度**まで下ろしている。
+
 > **作業事故 1 件（正直会計）**: ミューテーション確認の後始末に
 > `git checkout -- <probe>` を使い、**同ラウンドの未コミット変更（consumed キー集合
 > 完全一致 + symlink マーカー修正）を消した**。復旧して再適用済み。検査のために

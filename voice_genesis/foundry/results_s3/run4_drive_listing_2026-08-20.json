@@ -1,6 +1,12 @@
 {
   "schema": "drive-listing-evidence/0.1",
-  "purpose": "s3_record §7.2 の負の所見（run 4 の checkpoint / train log / TensorBoard は Google Drive に無い）の一次証拠。負の主張は根拠を残さないと検証も反証もできないため、実行したクエリと戻り値をそのまま保存する。",
+  "purpose": "s3_record §7.2 の負の所見（run 4 の checkpoint / train log / TensorBoard が **Q1/Q2 のタイトル検索では見つからなかった**）の一次証拠。負の主張は根拠を残さないと検証も反証もできないため、実行したクエリと戻り値をそのまま保存する。",
+  "claim": {
+    "assertion": "Q1/Q2 のタイトル検索では run 4 の節目 checkpoint / train_run4.log.gz / tb_events_run4.tar.gz が見つからなかった",
+    "scope": "上記 2 クエリのタイトル一致のみ。フォルダの無条件全件列挙は未完了",
+    "does_not_assert": "これらのファイルが Google Drive に存在しないこと",
+    "recovery_route_status": "unconfirmed"
+  },
   "collected_at_utc": "2026-08-20",
   "tool": "MCP google_drive.search_files",
   "queries": [
