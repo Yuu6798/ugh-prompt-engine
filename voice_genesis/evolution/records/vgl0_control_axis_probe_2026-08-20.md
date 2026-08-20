@@ -915,6 +915,21 @@ snapshot 機構は**本 PR で新設した仕組みそのもの**なので、導
 > 「人間に渡す指示書」も provenance 汚染の経路になりうる — 指示書は実行されない
 > ので CI では捕まらず、**読んだ人が汚染を実行してしまう**点でむしろ危険。
 
+### bot 5 巡目（3 件・全採用）
+
+| 指摘 | 中身 | 対応 |
+|---|---|---|
+| Confine result names to the records directory | `snapshots[].file` は 1 巡目で閉じたが、**`measured_results` / `revalidation_results` は同じ形のまま `RECORDS / name` へ join していた**。絶対パスや `../` が入れば records 外の JSON を読み、細工した外部ファイルが snapshot 帰属や再検証被覆を満たす | `_record_path()` を新設し、台帳由来の文字列がパスになる箇所を**全数**通す。契約の番人テストも追加 |
+| Pin the probe module imported by the checker | checker 側の検証（衝突ガード・期待条件集合）は **import 時の in-memory 定義**で走るのに、結果に載る probe sha は**サブプロセスが報告した値**。import 後に live probe が編集されると、旧定義で検証した PASS が新しい sha へ帰属する | `_PROBE_SHA_AT_IMPORT` を import 前に固定し、**実行後の実体 / サブプロセス pin との三者一致**を publish 条件に（finding `checker_probe_module_pinned`） |
+| Keep the Drive recovery route unconfirmed | STATUS は前巡で限定したのに、**`s3_record` 本体が「回収経路は依然として存在しない」と断定したまま**で、直後の限界注記と同一記録内で矛盾していた | 「見つからない = 未確定であって存在しないと確定したのではない」へ書き換え、User 送りも暫定と明示。evidence artifact の `conclusion` も同じ範囲へ限定 |
+
+**同じ失敗を 3 度重ねた**: 「ファミリーを閉じたつもりで一部しか閉じていない」が
+§9 member 5（共通理由の一括適用）→ symlink/hard link → `file` は閉じたが
+`measured_results`/`revalidation_results` は残す、と 3 回続いた。さらに
+「1 箇所直して同語の別箇所を残す」が STATUS → 記録本体で 2 回。
+**今回は指摘 1 件につき「同じ形をした場所を grep で全数当たってから閉じる」を
+実施**（`_record_path` の適用箇所 4 つ / 「存在しない」の同語掃討）。
+
 > **作業事故 1 件（正直会計）**: ミューテーション確認の後始末に
 > `git checkout -- <probe>` を使い、**同ラウンドの未コミット変更（consumed キー集合
 > 完全一致 + symlink マーカー修正）を消した**。復旧して再適用済み。検査のために

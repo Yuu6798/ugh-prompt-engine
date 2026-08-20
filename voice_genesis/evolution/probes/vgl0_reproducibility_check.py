@@ -51,6 +51,14 @@ _SELF_SHA_AT_LOAD = hashlib.sha256(SELF.read_bytes()).hexdigest()
 # 期待条件集合は probe 本体の定義を単一ソースとして読む。両実行が「同じ条件を
 # 揃って落とした」場合、突き合わせだけでは検出できない（レビュー指摘）ので、
 # **期待集合そのもの**と照合する。
+# **import 前に probe の sha を固定する**（レビュー指摘 P2）。checker は
+# `probe_mod` の `ProbeConfig` / 衝突ガードを **自プロセスの in-memory 定義**で
+# 使う一方、結果に載る probe sha は**サブプロセスが報告した値**である。
+# import 後に live probe が編集されると、checker 側の検証は旧定義（例: 保護対象
+# 入力が増える前のリスト）で行われたのに、PASS は新しい sha に帰属してしまう。
+# 実行後の再 hash とサブプロセス pin の三者一致を publish 条件にする。
+_PROBE_SHA_AT_IMPORT = hashlib.sha256(PROBE.read_bytes()).hexdigest()
+
 sys.path.insert(0, str(PROBE.parent))
 import vgl0_control_axis_probe as probe_mod  # noqa: E402
 
@@ -350,6 +358,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     findings.append({"check": "pins_identical_across_processes",
                      "n_compared": len(pin_maps), "diffs": pin_diffs,
                      "match": not pin_diffs})
+
+    # --- 検査 4b: checker が import した probe の版 ---------------------------
+    # checker 側の検証（衝突ガード・期待条件集合）は import 時の in-memory 定義で
+    # 走る。その版が「実行後の実体」とも「サブプロセスが pin した版」とも一致して
+    # 初めて、PASS を probe のバイト列へ帰属できる（レビュー指摘 P2）。
+    probe_sha_after = sha256_path(PROBE)
+    subprocess_probe_pin = (fwd.get("pins") or {}).get("probe_script", {}).get("sha256")
+    probe_import_ok = (
+        _PROBE_SHA_AT_IMPORT == probe_sha_after == subprocess_probe_pin)
+    findings.append({
+        "check": "checker_probe_module_pinned",
+        "sha_at_import": _PROBE_SHA_AT_IMPORT,
+        "sha_after_run": probe_sha_after,
+        "sha_subprocess_pin": subprocess_probe_pin,
+        "match": probe_import_ok,
+    })
+    if not probe_import_ok:
+        failures.append(
+            "checker が import した probe の版と、実行後の実体 / サブプロセスの "
+            "pin が一致しない — checker 側の検証を行ったバイト列へ PASS を "
+            "帰属できない")
 
     # --- 検査 5: 検査スクリプト自身が実行中に書き換わっていないか -------------
     self_sha_after = hashlib.sha256(SELF.read_bytes()).hexdigest()

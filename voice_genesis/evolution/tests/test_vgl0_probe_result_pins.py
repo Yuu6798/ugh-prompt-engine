@@ -163,13 +163,31 @@ def _snapshot_path(entry: dict) -> Path:
     return resolved
 
 
+def _record_path(name: str) -> Path:
+    """台帳の結果名を **`evolution/records` 内**へ限定して解決する。
+
+    `snapshots[].file` は先に閉じたが、**`measured_results` と
+    `revalidation_results` は同じ形のまま `RECORDS / name` へ join していた**
+    （レビュー指摘 P2）。絶対パスや `../` が入れば records 外の JSON を読み、
+    細工した外部ファイルが snapshot 帰属や再検証被覆を満たしてしまう。
+    台帳由来の文字列がパスになる箇所は**全数**この helper を通す。
+    """
+    assert name and "/" not in name and "\\" not in name and name not in (".", ".."), (
+        f"結果名はディレクトリ区切りを含まない単一のファイル名であること: {name!r}")
+    assert not Path(name).is_absolute(), f"結果名が絶対パス: {name!r}"
+    resolved = (RECORDS / name).resolve()
+    assert resolved.is_relative_to(RECORDS.resolve()), (
+        f"結果名 {name!r} が evolution/records の外を指している: {resolved}")
+    return resolved
+
+
 def _pinned_script_sha(result_name: str, script_name: str) -> str | None:
     """正本結果が **その script について** pin している sha を取り出す。
 
     probe は `pins.probe_script`（再現性結果も pins を持つ）、checker は
     結果直下の `checker_script`。対応が無ければ None。
     """
-    payload = _load(RECORDS / result_name)
+    payload = _load(_record_path(result_name))
     if script_name == PROBE_SCRIPT.name:
         pinned = (payload.get("pins") or {}).get("probe_script")
         return (pinned or {}).get("sha256")
@@ -536,7 +554,7 @@ def test_snapshot_index_matches_its_files() -> None:
         assert entry["measured_results"], (
             f"{entry['file']}: この版が生んだ結果が 1 件も登録されていない")
         for name in entry["measured_results"]:
-            assert (RECORDS / name).exists(), (
+            assert _record_path(name).exists(), (
                 f"{entry['file']}: 参照先の結果 {name} が無い")
             # **帰属そのものを検証する**（レビュー指摘 P2）: 存在確認だけだと、
             # 正本の一部だけを live 版で再生成したとき、その結果が古い
@@ -641,8 +659,50 @@ def test_declared_revalidation_sets_name_real_results() -> None:
     for entry in _snapshot_index()["live_unmeasured"]:
         assert entry["revalidation_results"], f"{entry['script']}: 再検証セットが空"
         for name in entry["revalidation_results"]:
-            assert (RECORDS / name).exists(), (
+            assert _record_path(name).exists(), (
                 f"{entry['script']}: revalidation_results の {name} が無い")
             assert _pinned_script_sha(name, entry["script"]) is not None, (
                 f"{entry['script']}: {name} は {entry['script']} の sha を pin して"
                 f"いないので、再検証の対象になり得ない")
+
+
+def test_registry_result_names_stay_inside_records() -> None:
+    """台帳が名指しする結果名が **records 配下**に閉じていること。
+
+    `snapshots[].file` と同型の穴が `measured_results` /
+    `revalidation_results` に残っていた（レビュー指摘 P2）。台帳由来の文字列が
+    パスになる箇所は全数 `_record_path` を通す — ここはその契約の番人。
+    """
+    index = _snapshot_index()
+    names = [n for e in index["snapshots"] for n in e["measured_results"]]
+    names += [n for e in index["live_unmeasured"] for n in e["revalidation_results"]]
+    assert names, "台帳が結果を 1 件も名指ししていない"
+    for name in names:
+        assert _record_path(name).exists()
+
+    for bad in ("../secret.json", "/etc/passwd", "sub/dir.json", "..", ""):
+        with pytest.raises(AssertionError):
+            _record_path(bad)
+
+
+def test_checker_binds_the_probe_module_version_it_imported() -> None:
+    """checker が **自分で import した probe の版**を verdict へ束縛すること。
+
+    checker 側の検証（衝突ガード・期待条件集合）は import 時の in-memory 定義で
+    走る。その版が実行後の実体ともサブプロセスの pin とも一致して初めて、PASS を
+    probe のバイト列へ帰属できる（レビュー指摘 P2）。
+
+    導入前に測った正本にはこの finding が無いので、**在るときだけ**内容を
+    検査し、実装側が出し続けることは静的に固定する。
+    """
+    payload = _load(REPRO_JSON)
+    finding = next((f for f in payload["findings"]
+                    if f["check"] == "checker_probe_module_pinned"), None)
+    if finding is not None:
+        assert finding["match"], f"checker の probe 版が一致していない: {finding}"
+        assert finding["sha_at_import"] == finding["sha_after_run"]
+        assert finding["sha_at_import"] == finding["sha_subprocess_pin"]
+
+    src = REPRO_SCRIPT.read_text(encoding="utf-8")
+    for token in ("_PROBE_SHA_AT_IMPORT", "checker_probe_module_pinned"):
+        assert token in src, f"checker から {token} が消えている"
