@@ -126,20 +126,26 @@ warm-start は正規化効果の帰属を壊す）。
    （VG-E0 台帳接続対象は VG-S3-001..003・s4_record §7）。世代を跨いだ
    再鍛造の要否は VG-E1 で裁定する
 
-## 5. Acceptance Criteria（run 6 出口）
+## 5. Acceptance Criteria（run 6 出口）— **全充足・closeout 2026-08-20**
 
-- [ ] §2 のコード変更が PR で main に入っている（正規化 + pin + bootstrap
-  run 6 対応 + salvage (c) + テスト）
-- [ ] 学習 40K 完走（NaN ゼロ）または fail-closed 停止の証跡
-- [ ] 判定材料 ①②③ の生成と User 耳判定の記録（s5 record 起草 —
-  s4_record 様式・4 項目同時転記を継承）
-- [ ] Q10/Q11 の裁定記帳（②無留保確定 or 留保継続の理由分解）
-- [ ] `requirements_run5_pod.lock` の PENDING 解消（pip freeze 実測から）
-- [ ] 費用 ≤ $4
+出口記録の正本 = [`results_s5/s5_record_2026-08-20.md`](results_s5/s5_record_2026-08-20.md)
+
+- [x] §2 のコード変更が PR で main に入っている（PR #284: 正規化 + pin +
+  bootstrap run 6 対応 + salvage (c) + テスト）
+- [x] 学習 40K 完走（**NaN ゼロ**・起動 1 回で fail-closed ゼロ完走）
+- [x] 判定材料 ①②③ の生成と User 耳判定の記録（record §5.4 / §6.1）
+- [x] Q10/Q11 の裁定記帳（**Q10 = ②無留保確定**・Q11 = ④非生成につき直接
+  判定は未了だが「入口の水準正規化の射程外」で決着 — record §6.2/§6.3）
+- [x] `requirements_run5_pod.lock` の PENDING 解消（gates/binarize 2 段の
+  実測 freeze から。Pod 内に版の異なる 2 環境が共存する構造も明記）
+- [x] 費用 ≤ $4（**実測 ≈$1.40**）
 
 ## 6. Open Questions
 
-- Q10 / Q11: §1.2 の通り run 6 の主検証点
+- Q10 / Q11: §1.2 の通り run 6 の主検証点 → **裁定済み**（record §6.2/§6.3。
+  Q10 = 達成〔②無留保の「第三の声」確定〕/ Q11 = 音量の区間揺れは残存し、
+  発生源はカード内ダイナミクスまたはモデル/曲側 = 入口正規化の射程外と確定。
+  ④ user 寄りセル不安定の再評価は VG-E1 へ送り・T3 は任意のまま）
 - Q12（送り・run 7 の主検証点）: 実録音教師（あみたろ）で①の破綻矯正効果は
   保存されるか + 局所退行 2 点は消えるか（DESIGN_DONOR_EXPANSION §3）
 
