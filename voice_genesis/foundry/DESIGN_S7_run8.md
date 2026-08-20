@@ -72,7 +72,8 @@
 
 7. 予算: **Run 8-0 = GPU $0**（CPU 推論のみ）。**学習は 2 本** —
    **Run 8-B**（標的置換・≈$1.40）+ **Run 8-R**（run 7 完全同一設定の
-   未処置対照・≈$1.40）で **合計 ≈$2.80**（各走行 cap $4 内）。
+   未処置対照・≈$1.40）で **合計 ≈$2.80**。8-R が run 7 と bit 一致しない
+   場合のみ **8-R2 を追加**して合計 ≈$4.20（各走行 cap $4 内・§7-1 段階 0）。
    8-R は §9-0 のとおり**因果裁定の前提**であり、無い場合は全行が
    `confounded / provisional` になって run 8 は終端しない。User の負担は
    **ブラインド耳ラベル 1 回**と**8-B の候補プール収録 5〜8 分**
@@ -183,7 +184,7 @@ run 8-R が無ければ `confounded / provisional` である = §9-0）。
 **H-TTD の集計単位（第 3 次裁定）**: 初版が想定した「総 SP 数」では測れない。
 ritsu VCV には**孤立録音の頭尾 SP が大量に入り得る**が、それは
 「**長い実歌唱 /ri/→SP**」と同等ではない。よって §3 の台帳は
-`modality` × `preceding_phoneme` × `preceding_duration` ×
+`modality` × `preceding_phoneme` × `preceding_duration_bin` ×
 `utterance_final / internal` × 遷移種別 × `pitch_bin` の
 **関連終端イベント密度**で比較する。
 
@@ -222,7 +223,7 @@ terminal_events:
   key:                       # 以下の直積で層別に数える
     modality
     preceding_phoneme        # ri | i | N | su | other
-    preceding_duration       # 直前ノートの実尺（秒）
+    preceding_duration_bin   # **秒**で切る（beats を使わない・§3 の bin 表）
     position                 # utterance_final | internal
     transition               # ri_to_SP | i_to_SP | N_to_SP | su_to_SP
     pitch_bin                # low | mid | high（話者固有帯・§8-1）
@@ -240,6 +241,30 @@ terminal_events:
 ri_medial_count
 note_duration_bin:           1 | 2 | 4 beats
 ```
+
+**尺 bin は秒で定義する（2026-08-20 訂正）**: 初版は主層を「`>= 2 beats`」と
+書いていたが、**VCV / speech コーパスにはテンポが無く beats へ換算できない**。
+同じ `transcriptions.csv` から実装ごとに違う層へ入り、H-TTD の裁定が変わる。
+よって bin は**入力そのものの単位（秒 = `ph_dur` 由来）**で切る:
+
+```
+preceding_duration_bin:
+  d0: [0.0, 0.5)
+  d1: [0.5, 1.0)
+  d2: [1.0, 1.5)
+  d3: [1.5, 2.5)
+  d4: [2.5, inf)
+```
+
+**譜面のあるコーパス**（`synthetic_song` 等）も beats のまま数えず、
+`seconds = beats * 60 / tempo_bpm` で換算してから同じ秒 bin へ入れる
+（換算に使った `tempo_bpm` を行ごとに記帳する）。
+
+**主層の閾値**: 旧「`>= 2 beats`」は **`>= 1.5 s`（= `d3` 以上）**へ置き換える。
+根拠 = 2 拍の実尺は さくら（72 BPM）で 1.667 s・うみ（88 BPM）で 1.364 s であり、
+1.5 s はこの帯の中央。既知の破綻 2 例（「り」3.333 s = `d4` / 「す」1.667 s = `d3`）が
+主層に入り、成立する うみ最長音 2.045 s も `d3` に入る — **尺だけでは破綻を
+分離しない**ことは H1 の検証対象であって、主層の定義で先取りしない。
 
 **密度の定義（事前登録・実行可能形）**
 
@@ -261,7 +286,7 @@ density(speaker, k, transition)
 primary stratum:
   position           = utterance_final
   transition         = ri_to_SP
-  preceding_duration = ">= 2 beats"
+  preceding_duration_bin in {d3, d4}        # = >= 1.5 s
   modality / pitch_bin は層別に並べて報告する（合成しない）
 ```
 
@@ -273,9 +298,9 @@ primary stratum:
 
 | 話者 | 層 k | `ri_to_SP` count | `eligible_terminal_count` | density |
 |---|---|---|---|---|
-| pjs | real_song / utterance_final / mid / ≥2 beats | 12 | 150 | **0.0800** |
-| user | real_song / utterance_final / mid / ≥2 beats | 1 | 40 | **0.0250** |
-| ritsu | VCV / utterance_final / mid / ≥2 beats | 0 | 900 | **0.0000** |
+| pjs | real_song / utterance_final / mid / d3+ | 12 | 150 | **0.0800** |
+| user | real_song / utterance_final / mid / d3+ | 1 | 40 | **0.0250** |
+| ritsu | VCV / utterance_final / mid / d3+ | 0 | 900 | **0.0000** |
 
 この例では ritsu の `eligible_terminal_count` が最大（孤立録音で終端が多い）
 にもかかわらず density は 0 になる。**総 SP 数で数えれば ritsu が最も豊富に
@@ -642,6 +667,27 @@ tie-break    = 軸名の辞書順昇順（再現可能に固定）
 **Youden's J（= 感度 + 特異度 − 1）を最大化する点** `θ` を採る。同点なら
 `θ` は候補の**中央値**を採る。分類規則は **`z' >= θ` を break** に固定する。
 
+**(4b) 分割のクラス充足検査（fail-closed・2026-08-20 追加）**: 除外セルや
+`borderline` の落ち方によっては、校正セットや hold-out が **片クラスだけ**に
+なりうる（本書自身がその経路を許している）。その状態では
+**orientation・AUC・Youden 閾値がいずれも未定義**である一方、
+単一クラス集合に対する素の accuracy は高く見えてしまう。したがって:
+
+```
+必要条件（校正セット・hold-out それぞれで独立に検査）:
+  n(break) >= 5  かつ  n(ok) >= 5
+  かつ scored（= borderline でない）セルが各分割で >= 12
+
+満たさない場合:
+  status = insufficient_class_support
+  -> Gate 不成立（§0-6）。8-B へ進まない
+     ※ accuracy だけを見て「通った」と読まない
+```
+
+不足が起きても**耳ラベルの対象セルを事後に足して埋めない**
+（事後に標本を足すと事前登録が崩れる）。足す必要があるなら
+**本 memo の改訂**として層化設計をやり直す。
+
 **(5) Gate 1「陽性として拾う」**: P-ANCHOR「かぎり」(ritsu・run7) が
 `θ` で **break 側に分類される**こと。1 セルの二値判定であり、閾値調整で
 これを通してはならない（§0-6）。
@@ -726,18 +772,36 @@ rater_self_consistency_binary
 
 ```yaml
 machine:
-  MDC95:
-    source: run 8-R（未処置の同一契約反復・§9-0）と run 7 の同一セル差分
-    estimator: MDC95 = 1.96 * SD_d
-      # d_i   = x_i(run 7) - x_i(run 8-R)   … 同一セル i の対応差
-      # SD_d  = d の標本標準偏差（不偏・ddof=1）
-      # 注: 古典的な MDC95 = 1.96 * sqrt(2) * SEM と SEM = SD_d / sqrt(2)
-      #     は同値。SD_d 経由の方が中間量を挟まないので本書はこちらを正とする
-    grouping:  軸 × 話者ごとに独立に算出する（軸間・話者間でプールしない）
+  # --- 段階 0: まず決定論を試す（最も安く最も強い） ---
+  determinism_test:
+    run 8-R は run 7 の完全同一設定なので、出力が **bit 一致**なら
+    走行間ドリフトは 0 であり、以降の補正は一切要らない。
+    まずこれを検査する（§12 OQ1 の seed pin 状況の実地回答にもなる）。
+
+  # --- 段階 1: bit 一致しなかった場合 ---
+  drift_model:
+    per_speaker_shift:  b_s = mean_i( x_i(run 8-R) - x_i(run 7) )   # 平均シフト
+    within_scatter:     SD_d,s = SD_i( 同上の対応差 )（ddof=1）
+    corrected_effect:   Δ*_s = ( x(run 8-B) - x(run 7) ) - b_s
+      # ★ 初版の誤り: MDC95 = 1.96 * SD_d だけを使い b_s を無視していた。
+      #   未処置セルが一律 +10 ドリフトすると SD_d = 0 -> MDC95 = 0 になり、
+      #   run 8-B の同じ +10 が「標的パックの効果」と誤判定される。
+      #   §2-3 の実測（ritsu の 3 区間が +1.65/+5.35/+7.94 と**同符号**）は
+      #   まさに平均シフト型のドリフトであり、この穴は実データで踏む
+    between_run_variance: sigma_between
+      # k 本の未処置反復があるとき b_s の標本分散から推定する。
+      # **k = 1 では推定できない**（1 点に分散は無い）
+    bound:
+      k >= 2:  MDC95_s = 1.96 * sqrt( SD_d,s^2 / N + sigma_between,s^2 )
+               -> |Δ*_s| > MDC95_s のとき「変化した」と判定でき、
+                  §9 の行を**因果裁定として引ける**
+      k == 1:  Δ*_s は報告するが sigma_between が未推定のため
+               **判定は provisional 止まり**（§9-0 の confounded 扱いを維持）
+    grouping:  軸 × 話者ごとに独立算出（軸間・話者間でプールしない）
     min_n:     その (軸 × 話者) で対応の取れたセルが N >= 20
-      # N < 20 の場合は話者をプールして算出し status = mdc_pooled を立てる
-      # プールしても N < 20 なら当該軸は判定に使わない（undetermined）
-    rule:      |Δ| > MDC95 のときのみ「変化した」と判定する
+      # N < 20 は話者をプールし status = mdc_pooled。
+      # プールしても N < 20 なら当該軸は undetermined
+  rule: 上記 bound を満たしたときのみ「変化した」と判定する
 human:
   severity_shift:  中央値で 1 段以上（0–3 スケール）
   agreement_floor: 20% 重複提示から得た weighted κ を事前固定し、
@@ -747,16 +811,28 @@ human:
 ```
 
 **独立検算できる worked example**（数値は**説明用の架空値**）:
-ある (軸 = `excess_tail_voiced_ms`, 話者 = ritsu) で N = 25 セル、
-run 7 と run 8-R の対応差 `d` の標本 SD が `SD_d = 12.0 ms` だったとする。
+(軸 = `excess_tail_voiced_ms`, 話者 = user) で N = 25 セル。
 
 ```
-MDC95 = 1.96 * 12.0 = 23.52 ms
+run 8-R vs run 7:  b_user = +10.0 ms,  SD_d,user = 2.0 ms
+run 8-B vs run 7:  生の Δ = +12.0 ms
+drift 補正後:      Δ* = 12.0 - 10.0 = +2.0 ms
 ```
 
-このとき run 8-B が run 7 に対して `Δ = -18 ms`（短くなった＝改善方向）でも
-`|Δ| = 18 < 23.52` なので **「変化した」とは判定しない**。
-`Δ = -30 ms` なら `30 > 23.52` で改善と判定できる。
+**初版の式なら** `MDC95 = 1.96 * 2.0 = 3.92`、生の `Δ = 12.0 > 3.92` で
+「変化した」と誤判定していた — 実体は**未処置でも起きる +10 のドリフト**である。
+補正後は `Δ* = 2.0` で、k = 1 なら `sigma_between` が未推定につき
+**provisional**。仮に 8-R を 2 本取って `sigma_between,user = 3.0 ms` を
+得たなら:
+
+```
+MDC95 = 1.96 * sqrt( 2.0^2 / 25 + 3.0^2 ) = 1.96 * sqrt(0.16 + 9.0) = 5.93 ms
+|Δ*| = 2.0 < 5.93  ->  「変化した」とは判定しない
+```
+
+**費用への含意**: 段階 0 で bit 一致すれば追加費用ゼロで因果裁定に到達する。
+一致しない場合、因果裁定には未処置反復が **2 本**要る（8-R / 8-R2 =
+合計 ≈$2.80 追加）。**先に段階 0 を回す**のが最短かつ最安である。
 
 **PJS・うみ・語中 `/ri/`・`/su/` の「悪化」判定にも同一規則を使う**
 （改善だけ緩い基準で見ない）。
@@ -1060,12 +1136,19 @@ probe を各 checkpoint 内で再レンダしてもこれは消えない（消�
 
 **結論: 4 行すべてが run 8-R を要求する。**
 
-| run 8-R | 表の扱い |
+| 未処置対照の状態 | 表の扱い |
 |---|---|
-| **あり** | ドリフト幅が実測されるので、それを超えた差についてのみ**因果裁定として引ける** |
-| **なし** | **全行が `confounded / provisional`**。因果の断定語を使わず、§11 の「効果で終端宣言」も**充足しない**（= run 8 は終端しない） |
+| **run 8-R が run 7 と bit 一致**（= 学習が決定論） | ドリフト 0 が実証されるので、**追加費用ゼロで因果裁定として引ける**（最良ケース） |
+| **bit 一致せず・未処置反復 k = 1**（8-R のみ） | 平均シフト `b_s` は補正できるが、その**ばらつき `sigma_between` が 1 点からは推定できない**。よって `provisional` 止まり |
+| **bit 一致せず・k >= 2**（8-R + 8-R2） | `sigma_between` が推定でき、§7-1 の bound を超えた差についてのみ**因果裁定として引ける** |
+| **run 8-R なし** | **全行が `confounded / provisional`**。因果の断定語を使わず、§11 の「効果で終端宣言」も**充足しない**（= run 8 は終端しない） |
 
-**費用**: 8-B ≈$1.40 + 8-R ≈$1.40 = **約 $2.80**（各走行は cap $4 内）。
+**まず 8-R を 1 本回して bit 一致を検査する**（§7-1 段階 0）。一致すれば
+そこで打ち止め。一致しなかった場合にのみ 8-R2 の要否を判断する
+（この順序が最短かつ最安）。
+
+**費用**: 8-B ≈$1.40 + 8-R ≈$1.40 = **約 $2.80**。bit 一致しなかった場合に
+8-R2 を足すと **約 $4.20**（各走行は cap $4 内）。
 run 8-R は 8-B と**同一契約・同一素材**（= run 7 の設定そのまま）なので
 新規の設計判断はゼロであり、実装コストも増えない。
 
@@ -1158,9 +1241,13 @@ Performance Skill / TRANSFER_SKILL、または**話者条件と技能条件を�
 - [ ] 学習 40K 完走（NaN ゼロ）または fail-closed 停止の証跡
 - [ ] 観測子 + ブラインド A/B + 回帰対照（PJS・うみ・語中）の結果が出ている
 - [ ] §9 の振り分け表のどの行に該当するかが裁定されている
-- [ ] **run 8-R（未処置の同一契約反復）が実施され、ドリフト幅が実測されている**
-      — 無い場合は §9 の全行を `confounded / provisional` で記帳し、
-      **本 AC の「効果で終端宣言」は充足しない**（§9-0）
+- [ ] **run 8-R（未処置の同一契約反復）が実施され、まず run 7 との bit 一致が
+      検査されている**（§7-1 段階 0）。一致しなかった場合は平均シフト `b_s` で
+      補正し、`sigma_between` が推定できる k >= 2 を満たしているか、
+      満たさないなら `provisional` である旨が記帳されている
+- [ ] 8-R が無い、または k = 1 のまま因果を断定していないこと — §9 の全行を
+      `confounded / provisional` で記帳した場合、**本 AC の「効果で終端宣言」は
+      充足しない**（§9-0）
 - [ ] **効果で終端宣言**されている（「投入した」で終わらせない）
 - [ ] **主張範囲が §8-5-6 の表のどの行かが明記されている**（dosage 固定の
       部分置換 / (a) への退化 / (c) 量増加のいずれか）
