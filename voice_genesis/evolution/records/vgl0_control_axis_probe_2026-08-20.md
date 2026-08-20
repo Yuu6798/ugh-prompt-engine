@@ -732,6 +732,24 @@ checker sha → プロセス間 pin と、同じファミリーの穴が 1 件�
 巡数に関わらず再着手する。5 の恒久解決は前処理層の製品実装（§5-2 BLOCKER）と
 同時に行う。
 
+## 9-1. レビュー打ち切りとフォローアップ送り（2026-08-20・User 裁定）
+
+Codex 自動レビューは **6 巡目で打ち切り**（User 裁定）。1〜6 巡目の指摘は
+すべて採用・コミット済み（見送り 0 件）で、対応済みスレッドの resolve は
+実行環境の制約により User へ引き継ぐ（§9-2 末尾）。
+
+**7 巡目以降はフォローアップ PR で扱う。** 落とさないよう内容を記録する:
+
+| 指摘（7 巡目 P2） | 中身 | 扱い |
+|---|---|---|
+| Protect every derived acoustic input in the checker | `--acoustic-onnx` が `--acoustic-dir` の外にある場合、派生する `.phonemes.json` / `<spk>.emb` が checker 側の保護リストに無い。`ProbeConfig.protected_inputs()` を再利用すべき | フォローアップ |
+| Refuse to unlink unowned checker result files | checker の `result_json.unlink()` が所有検査なしに既存の無関係ファイルを消しうる（`order_forward.json` 等の固定名） | フォローアップ |
+| Verify the score bytes returned by each synthesis | `load_song_module()` が返す `_shas`（消費した楽譜モジュールの digest）を `synth_once` が捨てている。**gate_synth が既に per-call で返しているので、read-only I/O を変えずに検証できる** | フォローアップ。**§9 の member 5 境界宣言を一部見直す材料**（楽譜側は gate_synth 改変なしで閉じられる可能性がある） |
+
+3 件目は §9 の「member 5 は gate_synth の I/O 構造変更が必要」という境界宣言の
+うち**楽譜モジュール分については前提が誤っていた**可能性を示す。
+フォローアップで再検証し、必要なら §9 の表を改訂する。
+
 ## 9-2. レビュー採否の基準
 
 指摘を無差別に取り込むと、意図的な設計判断まで「修正」されて設計が濁る。
