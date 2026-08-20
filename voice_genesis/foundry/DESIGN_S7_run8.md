@@ -666,21 +666,12 @@ intelligibility loss は**耳ラベルを取ったセルにのみ**存在する�
 **360 セルは全て機械評価**する。耳判定はその部分集合に限り、
 **事前に固定する**（事後に足すと選択バイアスが入る）:
 
-| 層 | 内容 | セル数 |
-|---|---|---|
-| 三世代トレース | ritsu / pjs / user の三世代 + amitaro anchor | **10** |
-| run7 四話者 × 5 終端条件 | `{ri 終端, ri 語中, i 終端, N 終端, su 終端}` | **20** |
-| 極値 | duration / pitch の両端 | **6** |
-| 実曲アンカー | P-ANCHOR | **4** |
-| | **unique 合計** | **40** |
-| 重複提示 | 上記からの再提示（自己一致率用） | **+8** |
-
-**層の記述だけでは 40 セルは決まらない**（2026-08-20 追加）。「極値」は該当が
-多数あり、終端条件の行は duration / pitch を指定しておらず、`amitaro anchor` は
-実曲アンカー行と重複しうる。実装ごとに違う 40 セルを選べる — 最悪の場合
-**機械結果を見てから耳ラベル対象を選ぶ**ことすらでき、class support も
-primary 軸も Gate 合否も変わる。よって **cell_id を定義し、決定論的に列挙し、
-レンダ前に pin する**:
+**割付は Gate の充足可能性から逆算する**（2026-08-20・P1 訂正）。初版の割付は
+ブロック A だけが run7 以前を供給し、**校正セット（run5+run6）が 6 セルしか
+なかった** — §7-0 (4b) は各分割で `scored >= 12` かつ `n(break) >= 5` かつ
+`n(ok) >= 5` を要求し、Gate 3 は user の run5↔run7 対応ペアを 5 組要求するのに
+**1 組しか無かった**。つまり**完璧な計器でも 8-B が無条件でブロックされる**
+割付だった。世代方向へ配り直す:
 
 ```
 cell_id = <generation>/<speaker>/<probe>/<beats>/<pitch>
@@ -688,28 +679,48 @@ cell_id = <generation>/<speaker>/<probe>/<beats>/<pitch>
   beats      ∈ {b1, b2, b4}        # ★ §3 の秒 bin d0..d4 とは別名前空間
   pitch      ∈ {p57, p62, p65}
   P-ANCHOR は <generation>/<speaker>/P-ANCHOR/<region>
-             region ∈ {sakura-kagiri, sakura-miwatasu, umi}
 
-決定論的な列挙（互いに素になるよう構成する）:
-  A 三世代トレース (10):
-      {run5,run6,run7} × {ritsu,pjs,user} / P-RI-FINAL / b4 / p57   -> 9
-      run7/amitaro/P-ANCHOR/sakura-kagiri                            -> 1
-  B run7 四話者 × 5 終端条件 (20):
-      run7 × {ritsu,pjs,user,amitaro}
-           × {P-RI-FINAL,P-RI-MEDIAL,P-I-FINAL,P-N-FINAL,P-SU-FINAL}
-           / b4 / **p62**        # A が p57 なので衝突しない
-  C 極値 (6):
-      run7/ritsu/P-RI-FINAL/ (b1,p57) (b1,p62) (b1,p65)
-                             (b2,p57) (b2,p65) (b4,p65)
-                             # A の b4/p57・B の b4/p62 を避けてある
-  D 実曲アンカー (4):
-      run7/{ritsu,pjs,user}/P-ANCHOR/sakura-kagiri                   -> 3
-      run7/ritsu/P-ANCHOR/umi                                        -> 1
-  -> unique 40（重複ゼロを assert する）
+A 世代横断コア (24) — 校正セットと Gate 3 の供給源:
+  A1 user の run5↔run7 対応ペア（Gate 3 の 5 組・破綻寄りと正常寄りを混ぜる）
+       {run5, run7} × user × {
+           P-RI-FINAL/b4/p57, P-RI-FINAL/b2/p57, P-RI-FINAL/b4/p62,
+           P-I-FINAL/b4/p57,  P-N-FINAL/b4/p57 }              -> 10
+  A2 {run5, run6} × ritsu × {P-RI-FINAL/b4/p57, P-RI-FINAL/b2/p57,
+                             P-N-FINAL/b4/p57}                ->  6
+  A3 {run5, run6} × pjs   × {P-RI-FINAL/b4/p57, P-I-FINAL/b4/p57,
+                             P-RI-MEDIAL/b4/p57}              ->  6
+  A4 run6 × user × {P-RI-FINAL/b4/p57, P-N-FINAL/b4/p57}      ->  2
 
-重複提示 8 件（20%）:
-  A/B/C/D の各ブロックから cell_id 昇順で先頭 2 件ずつ
+B run7 終端条件スイープ (12) — hold-out の主力（A と p62 で分離し衝突回避）:
+  run7 × {ritsu, pjs, amitaro}
+       × {P-RI-FINAL, P-RI-MEDIAL, P-N-FINAL, P-SU-FINAL} / b4 / p62
+
+C 極値 (2):
+  run7/ritsu/P-RI-FINAL/b1/p57,  run7/ritsu/P-RI-FINAL/b1/p65
+
+D 実曲アンカー (2):
+  run7/ritsu/P-ANCHOR/sakura-kagiri   （§0-4 の陽性対照）
+  run7/pjs/P-ANCHOR/sakura-kagiri     （同条件の陰性）
+
+-> unique 40（重複ゼロを assert する）
 ```
+
+**充足可能性の検算**（この表を満たさない割付は pin しない）:
+
+| 要求元 | 条件 | 本割付の供給 |
+|---|---|---|
+| §7-0 (4b) 校正 | `scored >= 12` | run5+run6 = **19** ✓ |
+| §7-0 (4b) hold-out | `scored >= 12` | run7 = **21** ✓ |
+| Gate 3 | user の run5↔run7 対応 `>= 5` | A1 で **5 組** ✓ |
+| §0-4 陽性対照 | ritsu「かぎり」 | D に収載 ✓ |
+
+**クラス充足（`n(break)>=5` / `n(ok)>=5`）は耳が付くまで確定しない**ので、
+割付側でできるのは**両分割に破綻寄り（`/ri/` 終端・ritsu 系）と正常寄り
+（`/N/`・語中・pjs 系）を十分に混ぜておく**ことまでである。それでも足りなければ
+§7-0 (4b) の `insufficient_class_support` で fail-closed する
+（**耳ラベルを事後に足して埋めない**）。
+
+**重複提示 8 件（20%）**: A/B/C/D の各ブロックから `cell_id` 昇順で先頭 2 件ずつ。
 
 **この 40 + 8 を `s7_listening_set.json` へ書き出し、sha256 を pin してから
 レンダを開始する。** 生成 → pin → レンダ の順序を守れば、機械結果を見てから
@@ -1638,10 +1649,14 @@ Performance Skill / TRANSFER_SKILL、または**話者条件と技能条件を�
 
 ## 10. 必要コード変更（PR 経由・3 本に分割）
 
-### PR-1（8-0: 台帳）
+### PR-1（8-0: 台帳 + **B-1 校正ハーネス**）
 
 1. `results_s7/target_exposure_ledger.json` 生成器（§3 のフィールド）+ 形状テスト
 2. 集計は既存 `transcriptions.csv` と譜面境界から。**推定しない**
+3. **B-1 calibration harness**（§12-0-B）— 校正音源だけを通して TRF 主観測 4 値の
+   測定仕様を確定し、`TRF measurement spec / 1.0` として凍結する。
+   **本番 360 セルは 1 セルも通さない**
+4. **B-2 裁定代数の凍結**（§12-0-C）— B-1 凍結の直後・同じ PR 内で行う
 
 ### PR-2（8-0b/c/d: 計器と probe）
 
@@ -1726,26 +1741,128 @@ Performance Skill / TRANSFER_SKILL、または**話者条件と技能条件を�
 
 ## 12. Open Questions
 
-### 12-0. **境界宣言 — PR-2 着手前に凍結する残件**（2026-08-20・bot レビュー 11 巡目で打ち切り）
+### 12-0. **B-1 / B-2 の二段階凍結**（User 裁定 2026-08-20 で確定・境界宣言は解消）
 
-Codex レビューは 11 巡・38 スレッドを処理して**採用 36 / 境界宣言 2** で終端した
-（`AGENTS.md` §3-4 の上限 10 巡を 1 巡超過。超過分は「新しい実害経路のみ採用」の
-例外条項で選別し、下の 2 件は同型の反復と判定した）。
+Codex レビュー 12 巡で残した 2 件（B-1 = TRF 主観測 4 値の測定仕様 /
+B-2 = H0–H5 の裁定代数）について、**「今すぐ全部を数値凍結」も「PR-2 直前まで
+何も決めない」も却下**され、**二段階凍結**が裁定された。
 
-**残す 2 件は実在する欠落だが、埋めるのは Design Memo でなく PR-2 の実装設計の仕事**
-である。memo に測定コードの仕様を書き下すと、実装前に凍結できない細部
-（窓長・F0 判定の実挙動・mel 正規化の数値的安定性）を机上で決めることになり、
-VG-L0 で踏んだ「probe 自身の欠陥で誤った実測をした」経路に戻る:
+```
+今（本 memo）  : 凍結プロセスそのものを凍結する（meta-contract freeze）
+PR-1           : calibration harness -> B-1 実測校正 -> B-1 freeze -> B-2 freeze
+PR-2           : 本番 360 セルの production probe
+```
 
-| # | 残件 | 何が未定義か | 凍結の期限 |
-|---|---|---|---|
-| B-1 | **TRF 主観測 4 値の測定仕様** | 解析窓・有声/F0 判定規則・mel 表現と正規化・persistence の集約・譜面境界のアラインメント。これらは z 値 → primary 軸 → AUC → Gate 合否まで一直線に効く | **PR-2 の実装着手前**。実データで窓を 1 度触ってから凍結し、凍結後は §7-0 と同じ様式で worked example を付ける |
-| B-2 | **H0–H5 の裁定代数** | 「一致」「単調」「同一」の許容差、どの TRF 軸が参加するか、軸間・セル間の衝突をどう合成するか、最小支持数。§7-0（Gate）と §3（H-TTD）は凍結済みだが、H0–H5 は質的表現のまま | **PR-2 の実装着手前**。§3 の「層別裁定 + 多数決」と同じ型で書く |
+**なぜ二段階か**。B-1 は**測定器そのもの**で、
 
-**この 2 件が未凍結のまま PR-2 を実装してはならない。** AC（§11）の
-「H0–H5 に `supported / refuted / undetermined` が付く」は、B-2 が凍結されて
-初めて再現可能になる。**User へ渡すのはこの 2 件の凍結タイミングの裁定**である。
+```
+音声 -> B-1 -> TRF 4 値 -> z 値 -> primary axis -> AUC / Gate
+```
 
+と一直線に効く。よって **360 セルを作ってから B-1 を調整するのは不可**
+（結果を見ながら物差しを変えることになる）。一方、実音声を一度も通さずに
+窓長・F0 閾値・mel normalization を紙だけで固定するのも危険で、VG-L0 で実際に
+起きた「**測定器の意味を誤認して結果を後から撤回**」を再現しうる。
+
+#### 12-0-A. **今すぐ凍結する（数値ではなく「どう決めるか」）**
+
+**(A-1) calibration set を先に固定する** — **本番 360 セルとは完全分離**。
+少数の既知条件だけで構成する:
+
+```
+clean terminal /ri/
+clean /i/
+clean /N/
+forced long-tail            （終端を意図的に伸ばした条件）
+forced duration perturbation（配分を意図的にずらした条件）
+silence                     （無音）
+gain 違い                    （同一素材の振幅だけ変えた対）
+```
+
+**run5/6/7 の「どれが良い / 悪い」を B-1 の選定に使わない。**
+本番仮説の答えを見て測定器を選ぶ経路を構造的に断つ。
+
+**(A-2) B-1 の候補空間を事前登録する** — 校正後に**新しい候補を足さない**:
+
+```
+analysis window : 100 / 200 / 300 ms
+hop             : 5 / 10 ms
+voicing         : algorithm A / B
+mel             : FFT / hop / mel bins を固定値で列挙
+```
+
+**(A-3) B-1 の選択基準を固定する — `AUC 最大化は禁止`**:
+
+```
+再現性 / gain 不変性 / silence で 0 付近 /
+controlled perturbation への単調応答 / process 間再現性 / 数値安定性
+```
+
+**「病気を一番よく分離する測定法」ではなく「物理的に一番信用できる測定法」を選ぶ。**
+分離性能で測定器を選ぶと、測定器が仮説を先取りしてしまう。
+
+#### 12-0-B. **PR-1 で行う — B-1 calibration harness と `TRF measurement spec / 1.0`**
+
+校正音源だけを通して、主観測 4 値
+（`excess_tail_voiced_ms` / `release_after_score_boundary_ms` /
+`tail_f0_persistence` / `terminal_mel_persistence`）について次を確定する:
+
+```
+解析窓 / boundary alignment / voicing 判定 / F0 欠損処理 /
+mel 表現 / normalization / aggregation
+```
+
+確定したら **`TRF measurement spec / 1.0`** として凍結する。凍結物には
+**式 + 単位 + worked example + reference output** を持たせる
+（§7-0 / §3 と同じ様式）。
+
+#### 12-0-C. **B-1 凍結の直後に B-2 を閉じる**
+
+B-2 が B-1 より後なのは正しい順序である。ただし **B-2 の許容差を決めるために
+本番ラベル（「ritsu は悪い」「pjs は良い」）を見てはならない**。ε は
+**測定側の性質だけ**から決める:
+
+```
+ε_axis = max( numerical_floor, reproducibility_bound )
+
+  numerical_floor       : 数値量子化誤差
+  reproducibility_bound : 同一条件反復 + 独立 process 反復のばらつき
+```
+
+**「群を一番綺麗に分ける ε」にはしない。**
+
+H0–H5 それぞれに次を機械的に定義し、**必ず三値へ機械変換できる形**にする:
+
+```
+participating axes / direction / tolerance /
+minimum supporting cells / contradiction rule / final aggregation
+```
+
+書き方の例（H-dur）:
+
+```
+supported     : duration intervention で primary TRF 軸が ε を超えて改善
+                かつ 少なくとも 2/3 の pitch セルで同方向
+refuted       : 2/3 以上のセルで ε を超える逆方向
+その他        : undetermined
+```
+
+#### 12-0-D. **PR-2 の開始 Gate（全て揃うまで着手禁止）**
+
+```
+[ ] B-1 calibration set 固定
+[ ] B-1 候補空間 固定
+[ ] B-1 選択規則 固定
+[ ] B-1 measurement spec 1.0 凍結
+[ ] B-1 worked example 一致
+[ ] B-2 H0–H5 代数 凍結
+[ ] B-2 tolerance の由来記録（ε がどの反復・どの量子化から出たか）
+[ ] B-2 worked example
+[ ] **本番 360 セルを一度も見ていない**
+```
+
+最後の 1 行が本裁定の要である。これにより **VG-L0 型「測定器の欠陥で偽結論」**と
+**「本番結果を見てから物差しを調整する」**の**両方**を避けられる。
 
 
 1. **学習 seed の pin 状況**: §8-3 は seed / `ExecutionProfile` を「変えない」と
