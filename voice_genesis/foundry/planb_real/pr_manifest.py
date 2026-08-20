@@ -25,6 +25,30 @@ from pr_status import BLOCKED, PASS, GateResult
 
 CHUNK = 1 << 20
 
+#: 展開後に実際に消費する拡張子（この集合のバイトを pin し、gate で照合する）
+CONSUMED_EXT = (".lab", ".wav", ".flac")
+
+
+def aggregate_extracted_sha256(root: Path) -> tuple:
+    """展開ディレクトリのうち **実際に消費するファイル**の集約ハッシュ。
+
+    archive の sha256 だけでは、展開後に 1 ファイル差し替えられても検出できない
+    （レビュー指摘 r3825358558）。相対パスと各ファイルの sha256 を並べて
+    集約する（順序は相対パスのソート順で決定論）。
+    """
+    root = Path(root)
+    h = hashlib.sha256()
+    n = 0
+    for f in sorted(p for p in root.rglob("*")
+                    if p.is_file() and p.suffix.lower() in CONSUMED_EXT):
+        rel = f.relative_to(root).as_posix()
+        h.update(rel.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(sha256_file(f).encode("ascii"))
+        h.update(b"\n")
+        n += 1
+    return h.hexdigest(), n
+
 
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -57,6 +81,8 @@ class SourceEntry:
     local_material_path: Optional[str]
     redistribution: bool = False
     extracted_path: Optional[str] = None
+    extracted_sha256: Optional[str] = None   # 実際に消費する展開物の集約ハッシュ
+    extracted_file_count: Optional[int] = None
     notes: str = ""
 
     def missing_fields(self) -> List[str]:
@@ -73,6 +99,8 @@ def build_source_entry(
     """実ファイルから来歴を実測する。ファイルが無ければ FileNotFoundError。"""
     archive_path = Path(archive_path)
     license_document_path = Path(license_document_path)
+    ex_sha, ex_n = (aggregate_extracted_sha256(Path(extracted_path))
+                    if extracted_path else (None, None))
     return SourceEntry(
         source=source, version=version, download_origin=download_origin,
         archive_sha256=sha256_file(archive_path),
@@ -82,6 +110,7 @@ def build_source_entry(
         local_material_path=str(archive_path.resolve()),
         redistribution=False,
         extracted_path=str(Path(extracted_path).resolve()) if extracted_path else None,
+        extracted_sha256=ex_sha, extracted_file_count=ex_n,
         notes=notes,
     )
 
@@ -156,11 +185,27 @@ def gate_material(manifest: SourceManifest, repo_root: Path) -> GateResult:
             item["outside_repo"] = False
         else:
             item["outside_repo"] = True
-        # 展開後の主要ファイル存在
+        # 展開後の主要ファイル存在 + repo 外 + 消費バイトの一致
         ex = Path(entry.extracted_path) if entry.extracted_path else None
         item["extracted_present"] = bool(ex and ex.exists() and any(ex.rglob("*")))
         if not item["extracted_present"]:
             problems.append(f"{src}: 展開後ディレクトリが空または未指定")
+        elif _is_inside(ex, repo_root):
+            problems.append(f"{src}: **展開後コーパスがリポジトリ内にある**（raw corpus 非収載違反）")
+            item["extracted_outside_repo"] = False
+        else:
+            item["extracted_outside_repo"] = True
+            if not entry.extracted_sha256:
+                problems.append(f"{src}: 展開物の集約ハッシュが未記録")
+            else:
+                cur_sha, cur_n = aggregate_extracted_sha256(ex)
+                item["extracted_sha_matches"] = cur_sha == entry.extracted_sha256
+                item["extracted_file_count"] = cur_n
+                if not item["extracted_sha_matches"]:
+                    problems.append(
+                        f"{src}: **展開物が取得時から変化している**"
+                        f"（記録 {entry.extracted_sha256[:12]}… / 現在 {cur_sha[:12]}…、"
+                        f"{cur_n} ファイル）")
         checks[src] = item
 
     if problems:
@@ -252,8 +297,20 @@ def blank_ledger() -> LicenseLedger:
     return led
 
 
-def gate_license(ledger: LicenseLedger) -> GateResult:
-    """G-LICENSE（§2）。未記入 = 未確認として BLOCKED を返す。"""
+REQUIRED_CHECKLIST = {"ritsu_singing_db": RITSU_CHECKLIST, "pjs_corpus": PJS_CHECKLIST}
+
+
+def gate_license(ledger: LicenseLedger,
+                 manifest: Optional["SourceManifest"] = None) -> GateResult:
+    """G-LICENSE（§2）。未記入 = 未確認として BLOCKED を返す。
+
+    2 つの強化（レビュー指摘）:
+
+    - 正本規約は**実体を開いて sha256 を取り直し**、記録値および acquire 時の
+      `license_document_sha256` と一致することを確かめる（r3825325979）
+    - checklist は**必須キー集合と突き合わせ**、値が厳密に `True` であることを
+      要求する。キー欠落や `"yes"` のような文字列を通さない（r3825592731）
+    """
     problems: List[str] = []
     ev: Dict[str, Any] = {}
     for subject in ("ritsu_singing_db", "pjs_corpus"):
@@ -272,8 +329,40 @@ def gate_license(ledger: LicenseLedger) -> GateResult:
             problems.append(f"{subject}: 正本規約文書が未固定")
         if not rec.license_name:
             problems.append(f"{subject}: ライセンス名が未記録")
+        required = set(REQUIRED_CHECKLIST[subject])
+        got = set(rec.checklist)
+        missing_keys = sorted(required - got)
+        extra_keys = sorted(got - required)
+        bad_values = sorted(k for k, v in rec.checklist.items() if v is not True and v is not None)
+        item["missing_keys"] = missing_keys
+        item["extra_keys"] = extra_keys
+        item["non_true_values"] = bad_values
+        if missing_keys:
+            problems.append(f"{subject}: 確認項目が欠落 {missing_keys}")
+        if extra_keys:
+            problems.append(f"{subject}: 未定義の確認項目 {extra_keys}")
+        if bad_values:
+            problems.append(f"{subject}: 値が True でない項目 {bad_values}")
         if rec.unanswered():
             problems.append(f"{subject}: 未確認項目 {rec.unanswered()}")
+        # 正本規約の実体を開いて照合する
+        if rec.canonical_document:
+            doc = Path(rec.canonical_document)
+            if not doc.exists():
+                problems.append(f"{subject}: 正本規約の実体が存在しない（{doc}）")
+                item["document_exists"] = False
+            else:
+                actual = sha256_file(doc)
+                item["document_exists"] = True
+                item["document_sha_matches"] = actual == rec.document_sha256
+                if actual != rec.document_sha256:
+                    problems.append(
+                        f"{subject}: 規約文書の sha256 が実体と不一致（実体 {actual[:12]}…）")
+                if manifest is not None:
+                    e = manifest.entries.get(subject)
+                    if e and e.license_document_sha256 and e.license_document_sha256 != actual:
+                        problems.append(
+                            f"{subject}: acquire 時の規約 sha256 と現在の実体が不一致")
         if not rec.answered_by:
             problems.append(f"{subject}: answered_by 未記入（誰が読んだか不明）")
         if not rec.verbatim_excerpts:

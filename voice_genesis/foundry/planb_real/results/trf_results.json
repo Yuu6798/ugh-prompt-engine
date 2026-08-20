@@ -13,16 +13,6 @@
       "regression_tol_db": 1.0,
       "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
     },
-    "terminal_ri|2018#598|pjs065#29": {
-      "pair_key": "terminal_ri|2018#598|pjs065#29",
-      "primary_axis": "nasal_gain_db",
-      "r0_value_db": 6.4311,
-      "failure_present": true,
-      "required_improvement_db": 1.6078,
-      "target_max_db": 4.8233,
-      "regression_tol_db": 1.0,
-      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
-    },
     "terminal_i|1st_color#86|pjs001#54": {
       "pair_key": "terminal_i|1st_color#86|pjs001#54",
       "primary_axis": "nasal_gain_db",
@@ -30,16 +20,6 @@
       "failure_present": true,
       "required_improvement_db": 1.0,
       "target_max_db": 0.1062,
-      "regression_tol_db": 1.0,
-      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
-    },
-    "terminal_i|1st_color#218|pjs001#73": {
-      "pair_key": "terminal_i|1st_color#218|pjs001#73",
-      "primary_axis": "nasal_gain_db",
-      "r0_value_db": 2.6336,
-      "failure_present": true,
-      "required_improvement_db": 1.0,
-      "target_max_db": 1.6336,
       "regression_tol_db": 1.0,
       "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
     },
@@ -53,16 +33,6 @@
       "regression_tol_db": 1.0,
       "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
     },
-    "terminal_N|BRD#664|pjs017#27": {
-      "pair_key": "terminal_N|BRD#664|pjs017#27",
-      "primary_axis": "nasal_gain_db",
-      "r0_value_db": -0.0879,
-      "failure_present": false,
-      "required_improvement_db": 1.0,
-      "target_max_db": -1.0879,
-      "regression_tol_db": 1.0,
-      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
-    },
     "medial_ri|1st_color#104|pjs002#42": {
       "pair_key": "medial_ri|1st_color#104|pjs002#42",
       "primary_axis": "nasal_gain_db",
@@ -70,6 +40,36 @@
       "failure_present": false,
       "required_improvement_db": 1.0,
       "target_max_db": -0.6229,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_ri|2018#598|pjs065#29": {
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 6.4311,
+      "failure_present": true,
+      "required_improvement_db": 1.6078,
+      "target_max_db": 4.8233,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_i|1st_color#218|pjs001#73": {
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 2.6336,
+      "failure_present": true,
+      "required_improvement_db": 1.0,
+      "target_max_db": 1.6336,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_N|BRD#664|pjs017#27": {
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": -0.0879,
+      "failure_present": false,
+      "required_improvement_db": 1.0,
+      "target_max_db": -1.0879,
       "regression_tol_db": 1.0,
       "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
     },
@@ -147,68 +147,6 @@
         }
       }
     },
-    "terminal_ri|2018#598|pjs065#29": {
-      "R0": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 6.4311,
-          "drift_db": 8.2924,
-          "f0_sag_cents": -4.94,
-          "energy_tail_db": -2.2923,
-          "nasal_gain_shape_db": -0.6318,
-          "drift_shape_db": 4.776
-        }
-      },
-      "R1": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 6.1627,
-          "drift_db": 8.0635,
-          "f0_sag_cents": -10.774,
-          "energy_tail_db": -2.2803,
-          "nasal_gain_shape_db": -1.3275,
-          "drift_shape_db": 5.2501
-        }
-      },
-      "R2": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 6.2818,
-          "drift_db": 8.1976,
-          "f0_sag_cents": -1.37,
-          "energy_tail_db": -3.48,
-          "nasal_gain_shape_db": -1.1325,
-          "drift_shape_db": 5.2699
-        }
-      },
-      "R3": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 5.96,
-          "drift_db": 7.7496,
-          "f0_sag_cents": -14.83,
-          "energy_tail_db": -3.0158,
-          "nasal_gain_shape_db": -1.6604,
-          "drift_shape_db": 5.6738
-        }
-      },
-      "R4": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 1.7761,
-          "drift_db": 2.3888,
-          "f0_sag_cents": -4.189,
-          "energy_tail_db": -3.741,
-          "nasal_gain_shape_db": -0.4544,
-          "drift_shape_db": 0.9584
-        }
-      }
-    },
     "terminal_i|1st_color#86|pjs001#54": {
       "R0": {
         "i@22": {
@@ -268,68 +206,6 @@
           "energy_tail_db": -6.0462,
           "nasal_gain_shape_db": 0.2409,
           "drift_shape_db": 0.9249
-        }
-      }
-    },
-    "terminal_i|1st_color#218|pjs001#73": {
-      "R0": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 2.6336,
-          "drift_db": 4.0779,
-          "f0_sag_cents": -1.829,
-          "energy_tail_db": -0.2396,
-          "nasal_gain_shape_db": -5.782,
-          "drift_shape_db": 9.8523
-        }
-      },
-      "R1": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 2.6125,
-          "drift_db": 4.0044,
-          "f0_sag_cents": -0.833,
-          "energy_tail_db": -0.3787,
-          "nasal_gain_shape_db": -4.3677,
-          "drift_shape_db": 8.2789
-        }
-      },
-      "R2": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 2.5455,
-          "drift_db": 4.0433,
-          "f0_sag_cents": -1.165,
-          "energy_tail_db": -0.1166,
-          "nasal_gain_shape_db": -5.3353,
-          "drift_shape_db": 9.3516
-        }
-      },
-      "R3": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 2.4727,
-          "drift_db": 3.9169,
-          "f0_sag_cents": 2.055,
-          "energy_tail_db": -0.2639,
-          "nasal_gain_shape_db": -5.2416,
-          "drift_shape_db": 9.1551
-        }
-      },
-      "R4": {
-        "i@22": {
-          "unit_index": 22,
-          "label": "i",
-          "nasal_gain_db": 0.4142,
-          "drift_db": 0.8922,
-          "f0_sag_cents": 21.63,
-          "energy_tail_db": -0.1154,
-          "nasal_gain_shape_db": -0.2131,
-          "drift_shape_db": 0.8926
         }
       }
     },
@@ -395,68 +271,6 @@
         }
       }
     },
-    "terminal_N|BRD#664|pjs017#27": {
-      "R0": {
-        "N@22": {
-          "unit_index": 22,
-          "label": "N",
-          "nasal_gain_db": -0.0879,
-          "drift_db": 3.9092,
-          "f0_sag_cents": -2.404,
-          "energy_tail_db": -0.4532,
-          "nasal_gain_shape_db": 0.0905,
-          "drift_shape_db": 4.3974
-        }
-      },
-      "R1": {
-        "N@22": {
-          "unit_index": 22,
-          "label": "N",
-          "nasal_gain_db": -0.1206,
-          "drift_db": 4.2215,
-          "f0_sag_cents": -98.475,
-          "energy_tail_db": -0.5238,
-          "nasal_gain_shape_db": 0.1096,
-          "drift_shape_db": 4.6482
-        }
-      },
-      "R2": {
-        "N@22": {
-          "unit_index": 22,
-          "label": "N",
-          "nasal_gain_db": -0.0879,
-          "drift_db": 3.9092,
-          "f0_sag_cents": -2.404,
-          "energy_tail_db": -0.4532,
-          "nasal_gain_shape_db": 0.0905,
-          "drift_shape_db": 4.3974
-        }
-      },
-      "R3": {
-        "N@22": {
-          "unit_index": 22,
-          "label": "N",
-          "nasal_gain_db": -0.1206,
-          "drift_db": 4.2215,
-          "f0_sag_cents": -98.475,
-          "energy_tail_db": -0.5238,
-          "nasal_gain_shape_db": 0.1096,
-          "drift_shape_db": 4.6482
-        }
-      },
-      "R4": {
-        "N@22": {
-          "unit_index": 22,
-          "label": "N",
-          "nasal_gain_db": -0.5479,
-          "drift_db": 2.3252,
-          "f0_sag_cents": -88.315,
-          "energy_tail_db": 0.1043,
-          "nasal_gain_shape_db": 0.1217,
-          "drift_shape_db": 1.3484
-        }
-      }
-    },
     "medial_ri|1st_color#104|pjs002#42": {
       "R0": {
         "i@22": {
@@ -516,6 +330,192 @@
           "energy_tail_db": -2.133,
           "nasal_gain_shape_db": -0.0462,
           "drift_shape_db": 3.596
+        }
+      }
+    },
+    "terminal_ri|2018#598|pjs065#29": {
+      "R0": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.4311,
+          "drift_db": 8.2924,
+          "f0_sag_cents": -4.94,
+          "energy_tail_db": -2.2923,
+          "nasal_gain_shape_db": -0.6318,
+          "drift_shape_db": 4.776
+        }
+      },
+      "R1": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.1627,
+          "drift_db": 8.0635,
+          "f0_sag_cents": -10.774,
+          "energy_tail_db": -2.2803,
+          "nasal_gain_shape_db": -1.3275,
+          "drift_shape_db": 5.2501
+        }
+      },
+      "R2": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 6.2818,
+          "drift_db": 8.1976,
+          "f0_sag_cents": -1.37,
+          "energy_tail_db": -3.48,
+          "nasal_gain_shape_db": -1.1325,
+          "drift_shape_db": 5.2699
+        }
+      },
+      "R3": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 5.96,
+          "drift_db": 7.7496,
+          "f0_sag_cents": -14.83,
+          "energy_tail_db": -3.0158,
+          "nasal_gain_shape_db": -1.6604,
+          "drift_shape_db": 5.6738
+        }
+      },
+      "R4": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 1.7761,
+          "drift_db": 2.3888,
+          "f0_sag_cents": -4.189,
+          "energy_tail_db": -3.741,
+          "nasal_gain_shape_db": -0.4544,
+          "drift_shape_db": 0.9584
+        }
+      }
+    },
+    "terminal_i|1st_color#218|pjs001#73": {
+      "R0": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 2.6336,
+          "drift_db": 4.0779,
+          "f0_sag_cents": -1.829,
+          "energy_tail_db": -0.2396,
+          "nasal_gain_shape_db": -5.782,
+          "drift_shape_db": 9.8523
+        }
+      },
+      "R1": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 2.6125,
+          "drift_db": 4.0044,
+          "f0_sag_cents": -0.833,
+          "energy_tail_db": -0.3787,
+          "nasal_gain_shape_db": -4.3677,
+          "drift_shape_db": 8.2789
+        }
+      },
+      "R2": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 2.5455,
+          "drift_db": 4.0433,
+          "f0_sag_cents": -1.165,
+          "energy_tail_db": -0.1166,
+          "nasal_gain_shape_db": -5.3353,
+          "drift_shape_db": 9.3516
+        }
+      },
+      "R3": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 2.4727,
+          "drift_db": 3.9169,
+          "f0_sag_cents": 2.055,
+          "energy_tail_db": -0.2639,
+          "nasal_gain_shape_db": -5.2416,
+          "drift_shape_db": 9.1551
+        }
+      },
+      "R4": {
+        "i@22": {
+          "unit_index": 22,
+          "label": "i",
+          "nasal_gain_db": 0.4142,
+          "drift_db": 0.8922,
+          "f0_sag_cents": 21.63,
+          "energy_tail_db": -0.1154,
+          "nasal_gain_shape_db": -0.2131,
+          "drift_shape_db": 0.8926
+        }
+      }
+    },
+    "terminal_N|BRD#664|pjs017#27": {
+      "R0": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.0879,
+          "drift_db": 3.9092,
+          "f0_sag_cents": -2.404,
+          "energy_tail_db": -0.4532,
+          "nasal_gain_shape_db": 0.0905,
+          "drift_shape_db": 4.3974
+        }
+      },
+      "R1": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.1206,
+          "drift_db": 4.2215,
+          "f0_sag_cents": -98.475,
+          "energy_tail_db": -0.5238,
+          "nasal_gain_shape_db": 0.1096,
+          "drift_shape_db": 4.6482
+        }
+      },
+      "R2": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.0879,
+          "drift_db": 3.9092,
+          "f0_sag_cents": -2.404,
+          "energy_tail_db": -0.4532,
+          "nasal_gain_shape_db": 0.0905,
+          "drift_shape_db": 4.3974
+        }
+      },
+      "R3": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.1206,
+          "drift_db": 4.2215,
+          "f0_sag_cents": -98.475,
+          "energy_tail_db": -0.5238,
+          "nasal_gain_shape_db": 0.1096,
+          "drift_shape_db": 4.6482
+        }
+      },
+      "R4": {
+        "N@22": {
+          "unit_index": 22,
+          "label": "N",
+          "nasal_gain_db": -0.5479,
+          "drift_db": 2.3252,
+          "f0_sag_cents": -88.315,
+          "energy_tail_db": 0.1043,
+          "nasal_gain_shape_db": 0.1217,
+          "drift_shape_db": 1.3484
         }
       }
     },

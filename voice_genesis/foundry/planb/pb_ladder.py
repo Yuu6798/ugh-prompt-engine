@@ -89,7 +89,9 @@ def _subprocess_shas(cfg: RunConfig) -> List[str]:
            "--identity-genome", cfg.identity_genome,
            "--performance-genome", cfg.performance_genome,
            "--fault-depth", str(cfg.fault_depth),
-           "--fault-window-frac", str(cfg.fault_window_frac)]
+           "--fault-window-frac", str(cfg.fault_window_frac),
+           "--identity-tempo", str(cfg.identity_tempo_bpm),
+           "--performance-tempo", str(cfg.performance_tempo_bpm)]
     if not cfg.fault:
         cmd.append("--no-fault")
     proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -265,6 +267,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--identity-genome", default="voice_A")
     ap.add_argument("--performance-genome", default="voice_B")
     ap.add_argument("--fault-window-frac", type=float, default=0.35)
+    ap.add_argument("--identity-tempo", type=float, default=ps.IDENTITY_TEMPO_BPM)
+    ap.add_argument("--performance-tempo", type=float, default=ps.PERFORMANCE_TEMPO_BPM)
     ap.add_argument("--fault-depth", type=float, default=0.85)
     ap.add_argument("--no-fault", action="store_true",
                     help="合成故障を注入しない（陰性対照）")
@@ -276,6 +280,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     cfg = RunConfig(
         identity_genome=args.identity_genome,
         performance_genome=args.performance_genome,
+        identity_tempo_bpm=args.identity_tempo,
+        performance_tempo_bpm=args.performance_tempo,
         fault=not args.no_fault,
         fault_window_frac=args.fault_window_frac,
         fault_depth=args.fault_depth,
@@ -290,6 +296,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     record = run(cfg, Path(args.out))
     for g in record["gates"]:
         print(f"[{g['status'].upper():14s}] {g['gate']:11s} {g['criterion']:26s} {g['detail']}")
+    # ゲートが fail を返したら非ゼロで返す。表示だけして exit 0 だと、
+    # スクリプトや CI が却下された実験を成功と誤読する。
+    # blocked / not_evaluable は「設計どおり判定できない」状態なので成功扱いのまま。
+    failed = [g["gate"] for g in record["gates"] if g["status"] == "fail"]
+    if failed:
+        print(f"\n[FAIL] 機械ゲート不通過: {failed}")
+        return 1
     return 0
 
 

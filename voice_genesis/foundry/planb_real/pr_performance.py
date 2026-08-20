@@ -104,6 +104,7 @@ class RealPerformanceTrack:
             self.dynamics.sustain_db, self.dynamics.terminal_decay_db,
             self.release.voiced_tail_s, self.release.release_to_silence_s,
             self.release.terminal_f0_persistence, self.release.window_frac,
+            float(self.release.hold_core),   # 合成器が読む値なので digest に含める
         ], dtype=np.float64).tobytes())
         h.update(np.asarray(self.timing.phoneme_duration_s, dtype=np.float64).tobytes())
         h.update("|".join(self.timing.phoneme_labels).encode("utf-8"))

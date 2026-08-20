@@ -21,7 +21,7 @@
       "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/2018/2018.lab",
       "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs003/pjs003.lab",
       "identity_sha256": "38ebf35e77a1e4e50c02e2f463484d8c30228195052ec0eda0d58a1014967fbd",
-      "performance_sha256": "57b87bd258185f95ca9d7cf54db623e77e8bb9c1edfc3c25adeb26d39ad6396a",
+      "performance_sha256": "aecf69d27d54cb4e5bd9b0f08c8cdd17703f1c3809a4537673cb87ef558c9b26",
       "matching": {
         "pjs_note_duration_s": 0.5755,
         "pjs_consonant_duration_s": 0.043,
@@ -50,7 +50,7 @@
           "rung": "R0",
           "toggles": "none",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-215__pjs003-65/R0.wav",
-          "wav_file_sha256": "23c1a49c076d6e97845fb626eb68f22436b9079b6bc6ceb2e858de3a94796dbb",
+          "wav_file_sha256": "43bcf36ab5fb08032d253089260955d9600b6b28183132e02fdf056447c7c3e8",
           "samples_sha256": "1cdf3e2b4f2c253a4c4b75e4b81e0c789c6bf8d21ed19854efbee502470bebfb",
           "duration_s": 3.56,
           "trf": {
@@ -79,7 +79,7 @@
           "rung": "R1",
           "toggles": "f0",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-215__pjs003-65/R1.wav",
-          "wav_file_sha256": "30eb3d2855929eebeb7e509701e4724fce94164114ab37909786c553f32d8dd2",
+          "wav_file_sha256": "b0fc419c5682eee5468b5258575567d6f1793d444c73ff9eed0503c7b2ad71af",
           "samples_sha256": "0b7d43d0df693d4fc5f30b5e24d4e184db0ddd4b1cfe53c0e6b71b492860fdd2",
           "duration_s": 3.56,
           "trf": {
@@ -108,7 +108,7 @@
           "rung": "R2",
           "toggles": "duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-215__pjs003-65/R2.wav",
-          "wav_file_sha256": "27ddc9d2f044acbede29ba7cb585878a64c2c3ca5c7a31d6748c01ed29b6b1f3",
+          "wav_file_sha256": "d995a1cb6204536d46f43a58db153e4e89e41501bd906d3e0b430e3b8c221296",
           "samples_sha256": "72eb1307c95af235a804a3b4c0b4852018970fadf85c8ecf571c2a225ff8dcd0",
           "duration_s": 3.56,
           "trf": {
@@ -137,7 +137,7 @@
           "rung": "R3",
           "toggles": "f0+duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-215__pjs003-65/R3.wav",
-          "wav_file_sha256": "28f340779d7017a95a8a33b07fcb5af50aad4907967f31b2a6e02baa60bf4f8f",
+          "wav_file_sha256": "fc6a56b0366c3fb67f35e7387a39293a9ebcc39b697364e5ae131b552cec677b",
           "samples_sha256": "928d47a7a51cd452db3e2666403c00a91a1247e324d67570daf02c0ec2fb55b6",
           "duration_s": 3.56,
           "trf": {
@@ -166,7 +166,7 @@
           "rung": "R4",
           "toggles": "f0+duration+energy+release",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-215__pjs003-65/R4.wav",
-          "wav_file_sha256": "c6a618b6b0185c9aff2497a4ec7739f793d295a0694a50fc53710b4521aba95a",
+          "wav_file_sha256": "f3246f82f98662785821edf52e82349f82fb60fcb1152684e82678ccbfb7b027",
           "samples_sha256": "adaa3ec51867d53af031a5f90f537c44e6f4f30e526ad3b9d48e9cc7368846b6",
           "duration_s": 3.56,
           "trf": {
@@ -199,195 +199,12 @@
       }
     },
     {
-      "pair_key": "terminal_ri|2018#598|pjs065#29",
-      "probe_kind": "terminal_ri",
-      "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/2018/2018.lab",
-      "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs065/pjs065.lab",
-      "identity_sha256": "93a6e5a54aa6801f873fd6ddfa0d03a8e3734d99abb3555b0128682c66a5ca33",
-      "performance_sha256": "9f9b2eba9df2787373108b28f8cd163bb4607b2bacc213ef6e02db3ccc3ef047",
-      "matching": {
-        "pjs_note_duration_s": 0.252,
-        "pjs_consonant_duration_s": 0.041,
-        "pjs_vowel_duration_s": 0.211,
-        "pjs_consonant_share": 0.1627,
-        "pjs_vowel_share": 0.8373,
-        "ritsu_note_total_s": 0.489,
-        "ritsu_native_split_s": [
-          0.0419,
-          0.4471
-        ],
-        "transplanted_split_s": [
-          0.0796,
-          0.4094
-        ],
-        "note_unit_span": [
-          21,
-          22
-        ],
-        "timing_transplant_is_noop": false,
-        "absolute_hz_copied": false,
-        "absolute_seconds_copied": false
-      },
-      "rungs": {
-        "R0": {
-          "rung": "R0",
-          "toggles": "none",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R0.wav",
-          "wav_file_sha256": "e10866f8fceede9b0d20c83917f42ee9e1446b390f4e19484ad8cfafafdb0080",
-          "samples_sha256": "5cb3dcf4bde7261e16ef124beac382a5b6731600d36e43bfdd8192b5d7b35be7",
-          "duration_s": 3.765,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 6.4311,
-              "drift_db": 8.2924,
-              "f0_sag_cents": -4.94,
-              "energy_tail_db": -2.2923,
-              "nasal_gain_shape_db": -0.6318,
-              "drift_shape_db": 4.776
-            }
-          },
-          "identity_lsd_db": 3.9675,
-          "donor_lsd_db": 10.8663,
-          "f0_dev_rmse_cents": 43.2813,
-          "note_split_mae_ms": 37.5595,
-          "energy_corr": 0.7549,
-          "taper_rmse_db": 10.346,
-          "identity_shape_lsd_db": 2.9546,
-          "donor_shape_lsd_db": 10.9647,
-          "identity_margin_db": 6.8988
-        },
-        "R1": {
-          "rung": "R1",
-          "toggles": "f0",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R1.wav",
-          "wav_file_sha256": "b64186140bbbf7c51225096fb4874592d1c8ca255855fa9d8f7865d29ef55c8c",
-          "samples_sha256": "3e69931d8ea789495c7edebb6d0fa682d20de8ffe9371ebde860f187cb10fc43",
-          "duration_s": 3.765,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 6.1627,
-              "drift_db": 8.0635,
-              "f0_sag_cents": -10.774,
-              "energy_tail_db": -2.2803,
-              "nasal_gain_shape_db": -1.3275,
-              "drift_shape_db": 5.2501
-            }
-          },
-          "identity_lsd_db": 3.8161,
-          "donor_lsd_db": 10.8081,
-          "f0_dev_rmse_cents": 16.3844,
-          "note_split_mae_ms": 37.5595,
-          "energy_corr": 0.7675,
-          "taper_rmse_db": 10.4238,
-          "identity_shape_lsd_db": 2.7787,
-          "donor_shape_lsd_db": 10.8775,
-          "identity_margin_db": 6.992
-        },
-        "R2": {
-          "rung": "R2",
-          "toggles": "duration",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R2.wav",
-          "wav_file_sha256": "cef88b24e7d57199c86fd453955ded4128a21d0aba2900f3b41bd54cbb90287e",
-          "samples_sha256": "e98c8539fc11096e9e6181fe56d39ec2b4fd81bf2836ada1d38d3a646b441e2e",
-          "duration_s": 3.77,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 6.2818,
-              "drift_db": 8.1976,
-              "f0_sag_cents": -1.37,
-              "energy_tail_db": -3.48,
-              "nasal_gain_shape_db": -1.1325,
-              "drift_shape_db": 5.2699
-            }
-          },
-          "identity_lsd_db": 3.7,
-          "donor_lsd_db": 10.6799,
-          "f0_dev_rmse_cents": 44.212,
-          "note_split_mae_ms": 0.5,
-          "energy_corr": 0.7804,
-          "taper_rmse_db": 10.6661,
-          "identity_shape_lsd_db": 2.9165,
-          "donor_shape_lsd_db": 10.9027,
-          "identity_margin_db": 6.9799
-        },
-        "R3": {
-          "rung": "R3",
-          "toggles": "f0+duration",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R3.wav",
-          "wav_file_sha256": "f375bd5186ea19bd309c66240d11e93a9a55dba8dac881e09efa314ce962cc18",
-          "samples_sha256": "f7935c955ad0fa3e1fc522444c0c3489c75460853ca8515548050204f9dfdb41",
-          "duration_s": 3.77,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 5.96,
-              "drift_db": 7.7496,
-              "f0_sag_cents": -14.83,
-              "energy_tail_db": -3.0158,
-              "nasal_gain_shape_db": -1.6604,
-              "drift_shape_db": 5.6738
-            }
-          },
-          "identity_lsd_db": 3.3944,
-          "donor_lsd_db": 10.7249,
-          "f0_dev_rmse_cents": 14.8528,
-          "note_split_mae_ms": 0.5,
-          "energy_corr": 0.782,
-          "taper_rmse_db": 10.3615,
-          "identity_shape_lsd_db": 2.6146,
-          "donor_shape_lsd_db": 10.9129,
-          "identity_margin_db": 7.3305
-        },
-        "R4": {
-          "rung": "R4",
-          "toggles": "f0+duration+energy+release",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R4.wav",
-          "wav_file_sha256": "f9c278d1c8615149c62f555c12c0051864e0bc7f414dbbaf4713b98c5e80acbf",
-          "samples_sha256": "3b3940b1d7010af730094bdacd9a055996deeb579c561e35b6ef5fc3ebe433e6",
-          "duration_s": 3.77,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 1.7761,
-              "drift_db": 2.3888,
-              "f0_sag_cents": -4.189,
-              "energy_tail_db": -3.741,
-              "nasal_gain_shape_db": -0.4544,
-              "drift_shape_db": 0.9584
-            }
-          },
-          "identity_lsd_db": 2.5517,
-          "donor_lsd_db": 10.04,
-          "f0_dev_rmse_cents": 14.4611,
-          "note_split_mae_ms": 0.5,
-          "energy_corr": 0.9506,
-          "taper_rmse_db": 0.8452,
-          "identity_shape_lsd_db": 2.5608,
-          "donor_shape_lsd_db": 10.9029,
-          "identity_margin_db": 7.4883
-        }
-      },
-      "P0_reference": {
-        "pjs_wav": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs065/pjs065_song.wav",
-        "pjs_probe_index": 29,
-        "pjs_slice_offset_s": 4.208
-      }
-    },
-    {
       "pair_key": "terminal_i|1st_color#86|pjs001#54",
       "probe_kind": "terminal_i",
       "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/1st_color/1st_color.lab",
       "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001.lab",
       "identity_sha256": "075f58286353e622c28b69f7a1f26b613752b75a58a8526c95cc85da9bf29f2c",
-      "performance_sha256": "a11b89ab8f7f82f0c08a26248c3f0ece01282c9dab4996007c004b7ddaecc007",
+      "performance_sha256": "027b99eccb5f522399cdee919f7c1d65e69e0b91d8d633e4d4aa555ee5b6c37e",
       "matching": {
         "pjs_note_duration_s": 0.518,
         "pjs_consonant_duration_s": 0.062,
@@ -416,7 +233,7 @@
           "rung": "R0",
           "toggles": "none",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-86__pjs001-54/R0.wav",
-          "wav_file_sha256": "bbf716de2158cf72be582405c562e1d698aacdbedbd6638e3bf5b201d5a53e77",
+          "wav_file_sha256": "bf44f77d616baac7059422a978824c599ff5398640284d683adbda2f7c28f1d3",
           "samples_sha256": "06c9b125161e4851ac2b4411e27ab3fbb440c74a6023620ef3725ca85f4b3fa9",
           "duration_s": 8.985,
           "trf": {
@@ -445,7 +262,7 @@
           "rung": "R1",
           "toggles": "f0",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-86__pjs001-54/R1.wav",
-          "wav_file_sha256": "8f28561e3bf2b077b6eb625e976941f9a8a6f2cffe9bb07514860902afbe58c5",
+          "wav_file_sha256": "3f77a9fd4e7b4337832aa7a3b98831bcd6e09656dfcff0096945c79b0efbf903",
           "samples_sha256": "8289f9efe57a06ebde1de429006264ebe7267093ca734fcfd333b7ecd4a100d0",
           "duration_s": 8.985,
           "trf": {
@@ -474,7 +291,7 @@
           "rung": "R2",
           "toggles": "duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-86__pjs001-54/R2.wav",
-          "wav_file_sha256": "a966e9b57fe8917575750587c9a8711d649c4fc191bbc6f88d9663db76264c9f",
+          "wav_file_sha256": "7e250c4530ae1979efcfe908ad0f2408d2e1dfbc6d427aa0c7e34af140bcdc8b",
           "samples_sha256": "3bca79a4038e816f2b10582cd0338952d5686406f77e60c088ec1ae484ddb0e3",
           "duration_s": 8.98,
           "trf": {
@@ -503,7 +320,7 @@
           "rung": "R3",
           "toggles": "f0+duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-86__pjs001-54/R3.wav",
-          "wav_file_sha256": "dea07a3896c667011d947b0b5047815921a50d3739983f6cccfa3d5f5b074f87",
+          "wav_file_sha256": "c78877063e6815210ed7c3ee1cafb2824bfe103dcb364df8aa8c087776336d16",
           "samples_sha256": "23d9a0800add2465588e1409d3c803e21c7f3468eecbc95fc838d9cc7c97f2a2",
           "duration_s": 8.98,
           "trf": {
@@ -532,7 +349,7 @@
           "rung": "R4",
           "toggles": "f0+duration+energy+release",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-86__pjs001-54/R4.wav",
-          "wav_file_sha256": "f4b49057a68d8e10a3f2aa0fd539713a36ce5f8295124eedcd4850c5dc81fdea",
+          "wav_file_sha256": "86924154b6f15025850c279a7c9e78787ce654b6c96dfa32c50228641c9fc16f",
           "samples_sha256": "da6c6999ecb5924ca361d8dfae5063f4ab5e76d6438025b8133cbdecf16f0ea7",
           "duration_s": 8.98,
           "trf": {
@@ -565,195 +382,12 @@
       }
     },
     {
-      "pair_key": "terminal_i|1st_color#218|pjs001#73",
-      "probe_kind": "terminal_i",
-      "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/1st_color/1st_color.lab",
-      "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001.lab",
-      "identity_sha256": "9dfa33332d4c4ce31665b46989f374c1b539b718c35f525ae9c02c7e135e5a8a",
-      "performance_sha256": "782fb831d40dc0ff2c6e3409bd2a805e8f7da140da8d36ead40292b25c66721c",
-      "matching": {
-        "pjs_note_duration_s": 0.6947,
-        "pjs_consonant_duration_s": 0.0,
-        "pjs_vowel_duration_s": 0.6947,
-        "pjs_consonant_share": 0.0,
-        "pjs_vowel_share": 1.0,
-        "ritsu_note_total_s": 0.8938,
-        "ritsu_native_split_s": [
-          0.0718,
-          0.822
-        ],
-        "transplanted_split_s": [
-          0.0179,
-          0.8759
-        ],
-        "note_unit_span": [
-          21,
-          22
-        ],
-        "timing_transplant_is_noop": false,
-        "absolute_hz_copied": false,
-        "absolute_seconds_copied": false
-      },
-      "rungs": {
-        "R0": {
-          "rung": "R0",
-          "toggles": "none",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R0.wav",
-          "wav_file_sha256": "7309bc5afd45d29e2dd4cee2274e5782f7cd48ae49482fa275fa109870cd7962",
-          "samples_sha256": "133202a0c9f0cb4a8ee4efee72ffd4cc3ec68ca0fb93808642d4e7d12d7d416b",
-          "duration_s": 8.245,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 2.6336,
-              "drift_db": 4.0779,
-              "f0_sag_cents": -1.829,
-              "energy_tail_db": -0.2396,
-              "nasal_gain_shape_db": -5.782,
-              "drift_shape_db": 9.8523
-            }
-          },
-          "identity_lsd_db": 2.3227,
-          "donor_lsd_db": 10.3642,
-          "f0_dev_rmse_cents": 134.4144,
-          "note_split_mae_ms": 54.0313,
-          "energy_corr": 0.2982,
-          "taper_rmse_db": 9.3355,
-          "identity_shape_lsd_db": 1.9813,
-          "donor_shape_lsd_db": 10.3919,
-          "identity_margin_db": 8.0415
-        },
-        "R1": {
-          "rung": "R1",
-          "toggles": "f0",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R1.wav",
-          "wav_file_sha256": "40f652e607f9f6a496b63da8febb0a415bcd69839d0f4592c40c3476c232626f",
-          "samples_sha256": "f7042fcd668df433974a66e0851dcddd8e52e83325377f7dc712c04d98eaf78a",
-          "duration_s": 8.245,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 2.6125,
-              "drift_db": 4.0044,
-              "f0_sag_cents": -0.833,
-              "energy_tail_db": -0.3787,
-              "nasal_gain_shape_db": -4.3677,
-              "drift_shape_db": 8.2789
-            }
-          },
-          "identity_lsd_db": 2.195,
-          "donor_lsd_db": 10.2725,
-          "f0_dev_rmse_cents": 50.0945,
-          "note_split_mae_ms": 54.0313,
-          "energy_corr": 0.3,
-          "taper_rmse_db": 9.5047,
-          "identity_shape_lsd_db": 1.7696,
-          "donor_shape_lsd_db": 10.2942,
-          "identity_margin_db": 8.0775
-        },
-        "R2": {
-          "rung": "R2",
-          "toggles": "duration",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R2.wav",
-          "wav_file_sha256": "488bddd6c3994e85b27729beb12a2184260cc45cb13ea98d0482c34fcd081745",
-          "samples_sha256": "53af13b63eace104bb37fa9016f648f24c72f55de09d23f67a2377dd3e5b6907",
-          "duration_s": 8.25,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 2.5455,
-              "drift_db": 4.0433,
-              "f0_sag_cents": -1.165,
-              "energy_tail_db": -0.1166,
-              "nasal_gain_shape_db": -5.3353,
-              "drift_shape_db": 9.3516
-            }
-          },
-          "identity_lsd_db": 2.3438,
-          "donor_lsd_db": 10.3288,
-          "f0_dev_rmse_cents": 131.4635,
-          "note_split_mae_ms": 1.5313,
-          "energy_corr": 0.2904,
-          "taper_rmse_db": 9.0541,
-          "identity_shape_lsd_db": 2.0274,
-          "donor_shape_lsd_db": 10.3549,
-          "identity_margin_db": 7.9849
-        },
-        "R3": {
-          "rung": "R3",
-          "toggles": "f0+duration",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R3.wav",
-          "wav_file_sha256": "623cbcc7a4d51470f7430ead7fc22157252be3352f0f2707950bd0d5c375d986",
-          "samples_sha256": "6adf28ede8a0f3d5b50c27ea6d27a68cecfb2c78f8b7b4d27ef7e3ab9ac168dc",
-          "duration_s": 8.25,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 2.4727,
-              "drift_db": 3.9169,
-              "f0_sag_cents": 2.055,
-              "energy_tail_db": -0.2639,
-              "nasal_gain_shape_db": -5.2416,
-              "drift_shape_db": 9.1551
-            }
-          },
-          "identity_lsd_db": 2.1004,
-          "donor_lsd_db": 10.3188,
-          "f0_dev_rmse_cents": 49.1109,
-          "note_split_mae_ms": 1.5313,
-          "energy_corr": 0.292,
-          "taper_rmse_db": 9.1816,
-          "identity_shape_lsd_db": 1.7385,
-          "donor_shape_lsd_db": 10.3392,
-          "identity_margin_db": 8.2184
-        },
-        "R4": {
-          "rung": "R4",
-          "toggles": "f0+duration+energy+release",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R4.wav",
-          "wav_file_sha256": "dfaf67a238f4921dd563b29385fce367c0350edd438d023a100340b7a4875c44",
-          "samples_sha256": "43e0067d74a20a2ef5a888141fdad3b1e6795ac18d13962729f8f91c640aaad5",
-          "duration_s": 8.25,
-          "trf": {
-            "i@22": {
-              "unit_index": 22,
-              "label": "i",
-              "nasal_gain_db": 0.4142,
-              "drift_db": 0.8922,
-              "f0_sag_cents": 21.63,
-              "energy_tail_db": -0.1154,
-              "nasal_gain_shape_db": -0.2131,
-              "drift_shape_db": 0.8926
-            }
-          },
-          "identity_lsd_db": 1.7814,
-          "donor_lsd_db": 11.0343,
-          "f0_dev_rmse_cents": 295.8691,
-          "note_split_mae_ms": 1.5313,
-          "energy_corr": 0.7588,
-          "taper_rmse_db": 3.0788,
-          "identity_shape_lsd_db": 1.7825,
-          "donor_shape_lsd_db": 10.44,
-          "identity_margin_db": 9.2529
-        }
-      },
-      "P0_reference": {
-        "pjs_wav": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001_song.wav",
-        "pjs_probe_index": 73,
-        "pjs_slice_offset_s": 13.296
-      }
-    },
-    {
       "pair_key": "terminal_N|1st_color#478|pjs002#61",
       "probe_kind": "terminal_N",
       "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/1st_color/1st_color.lab",
       "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab",
       "identity_sha256": "3499029bc543fb1b63273572a8ff3c7ea90e9a5ce0e3ef9ccd75e5adc55ce026",
-      "performance_sha256": "dc8aa020fb8d1575a3133489593d6e24a495fd42b80f9e85ddd88b0de9227f59",
+      "performance_sha256": "a77680bdfe8a3f51deb76c505fe3ca477786eda3433e3caf519ed8c9eede5fc7",
       "matching": {
         "pjs_note_duration_s": 0.0873,
         "pjs_consonant_duration_s": 0.0,
@@ -780,7 +414,7 @@
           "rung": "R0",
           "toggles": "none",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__1st_color-478__pjs002-61/R0.wav",
-          "wav_file_sha256": "c7188bf5257267846d55b1521b37fd24d1e56f39e33273a590b30fc032c91be8",
+          "wav_file_sha256": "e8d6e09f8fdb040b46ca0268d38b48f720fda4bffe080b5d61d4683da749f183",
           "samples_sha256": "41bd4c763ba0573e84cb62fef30b7f62823fe8a9eca25d7cdd40234b721ea97e",
           "duration_s": 6.26,
           "trf": {
@@ -809,7 +443,7 @@
           "rung": "R1",
           "toggles": "f0",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__1st_color-478__pjs002-61/R1.wav",
-          "wav_file_sha256": "16893cecb1f459be88279543789269ecf7645dccabffaa24fc33ff706fa4eb33",
+          "wav_file_sha256": "57af9e083144f11ea3f6a4c7db2d15b77093d296712778fed0bcadc55b7f133e",
           "samples_sha256": "ddfd22575dc29eb3ae76c58f8d76f136f8100a507d47c1aaa7d6f55569be764b",
           "duration_s": 6.26,
           "trf": {
@@ -838,7 +472,7 @@
           "rung": "R2",
           "toggles": "duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__1st_color-478__pjs002-61/R2.wav",
-          "wav_file_sha256": "d0aabf404f1a4a167bf2166fc3e4d2454d36ba09d4c1d4bbbcff3f82355030ec",
+          "wav_file_sha256": "8df1344780f5f91a7a43807ab21567f37ced2272af4ceb5f32419858bf2877fb",
           "samples_sha256": "41bd4c763ba0573e84cb62fef30b7f62823fe8a9eca25d7cdd40234b721ea97e",
           "duration_s": 6.26,
           "trf": {
@@ -867,7 +501,7 @@
           "rung": "R3",
           "toggles": "f0+duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__1st_color-478__pjs002-61/R3.wav",
-          "wav_file_sha256": "d207e67e002381463e8dcb174682cbea3d6c490a4fb7238110920479b50f9c6d",
+          "wav_file_sha256": "7966020d624f73254067c7fff6cbca01b1b819a088885fa1a55016ec50014531",
           "samples_sha256": "ddfd22575dc29eb3ae76c58f8d76f136f8100a507d47c1aaa7d6f55569be764b",
           "duration_s": 6.26,
           "trf": {
@@ -896,7 +530,7 @@
           "rung": "R4",
           "toggles": "f0+duration+energy+release",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__1st_color-478__pjs002-61/R4.wav",
-          "wav_file_sha256": "02d6c7f5927085a4bac1221c735d7fef3153b5621cce2cd748105ffd582e79ea",
+          "wav_file_sha256": "9181aabf6f38ec42c7dfc3abc9082359adb3c563523158df7ee4e2e6c5be1347",
           "samples_sha256": "1020ea1eb346418addddc4e4cb97e1e18532c1bbc54919a8f52e00a543deca3e",
           "duration_s": 6.26,
           "trf": {
@@ -929,193 +563,12 @@
       }
     },
     {
-      "pair_key": "terminal_N|BRD#664|pjs017#27",
-      "probe_kind": "terminal_N",
-      "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/BRD/BRD.lab",
-      "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs017/pjs017.lab",
-      "identity_sha256": "33e9f82cbe542ec8447d8668ccb941d55f05ac3a990e1f5e9f064a6a6b29873b",
-      "performance_sha256": "8f6e1e6657f387f6569b48570e806f42e45a8e71cabd2d96945e3d500f5631ee",
-      "matching": {
-        "pjs_note_duration_s": 0.1875,
-        "pjs_consonant_duration_s": 0.0,
-        "pjs_vowel_duration_s": 0.1875,
-        "pjs_consonant_share": 0.0,
-        "pjs_vowel_share": 1.0,
-        "ritsu_note_total_s": 0.2682,
-        "ritsu_native_split_s": [
-          0.2682
-        ],
-        "transplanted_split_s": [
-          0.2682
-        ],
-        "note_unit_span": [
-          22,
-          22
-        ],
-        "timing_transplant_is_noop": true,
-        "absolute_hz_copied": false,
-        "absolute_seconds_copied": false
-      },
-      "rungs": {
-        "R0": {
-          "rung": "R0",
-          "toggles": "none",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R0.wav",
-          "wav_file_sha256": "662f14505e80568a1e7f0aea407fd056f7959f9af203ed226db8eb3f51883e63",
-          "samples_sha256": "3c2f66cc9f32c61bffa43f887c49ae1bb30d4b2ef49003529b81046db584b5d6",
-          "duration_s": 4.53,
-          "trf": {
-            "N@22": {
-              "unit_index": 22,
-              "label": "N",
-              "nasal_gain_db": -0.0879,
-              "drift_db": 3.9092,
-              "f0_sag_cents": -2.404,
-              "energy_tail_db": -0.4532,
-              "nasal_gain_shape_db": 0.0905,
-              "drift_shape_db": 4.3974
-            }
-          },
-          "identity_lsd_db": 2.9245,
-          "donor_lsd_db": 14.0976,
-          "f0_dev_rmse_cents": 49.0128,
-          "note_split_mae_ms": 1.8454,
-          "energy_corr": 0.0673,
-          "taper_rmse_db": 3.1318,
-          "identity_shape_lsd_db": 3.2977,
-          "donor_shape_lsd_db": 18.5603,
-          "identity_margin_db": 11.1731
-        },
-        "R1": {
-          "rung": "R1",
-          "toggles": "f0",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R1.wav",
-          "wav_file_sha256": "2d6d45dec8695c5d61c044c7cd12c4dbe80cc2c6ebf84f62bfeb801446322927",
-          "samples_sha256": "b56e65ac6c89403e8645dd933333de552b47eba8a6d6c8758ae5a3f97c576faa",
-          "duration_s": 4.53,
-          "trf": {
-            "N@22": {
-              "unit_index": 22,
-              "label": "N",
-              "nasal_gain_db": -0.1206,
-              "drift_db": 4.2215,
-              "f0_sag_cents": -98.475,
-              "energy_tail_db": -0.5238,
-              "nasal_gain_shape_db": 0.1096,
-              "drift_shape_db": 4.6482
-            }
-          },
-          "identity_lsd_db": 2.9451,
-          "donor_lsd_db": 14.0974,
-          "f0_dev_rmse_cents": 53.6689,
-          "note_split_mae_ms": 1.8454,
-          "energy_corr": 0.1031,
-          "taper_rmse_db": 3.0307,
-          "identity_shape_lsd_db": 3.3834,
-          "donor_shape_lsd_db": 18.6377,
-          "identity_margin_db": 11.1522
-        },
-        "R2": {
-          "rung": "R2",
-          "toggles": "duration",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R2.wav",
-          "wav_file_sha256": "49de10aba97449c8ccd676829682edeb6d2372539297b6085e1d5dd9bde78cf8",
-          "samples_sha256": "3c2f66cc9f32c61bffa43f887c49ae1bb30d4b2ef49003529b81046db584b5d6",
-          "duration_s": 4.53,
-          "trf": {
-            "N@22": {
-              "unit_index": 22,
-              "label": "N",
-              "nasal_gain_db": -0.0879,
-              "drift_db": 3.9092,
-              "f0_sag_cents": -2.404,
-              "energy_tail_db": -0.4532,
-              "nasal_gain_shape_db": 0.0905,
-              "drift_shape_db": 4.3974
-            }
-          },
-          "identity_lsd_db": 2.9245,
-          "donor_lsd_db": 14.0976,
-          "f0_dev_rmse_cents": 49.0128,
-          "note_split_mae_ms": 1.8454,
-          "energy_corr": 0.0673,
-          "taper_rmse_db": 3.1318,
-          "identity_shape_lsd_db": 3.2977,
-          "donor_shape_lsd_db": 18.5603,
-          "identity_margin_db": 11.1731
-        },
-        "R3": {
-          "rung": "R3",
-          "toggles": "f0+duration",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R3.wav",
-          "wav_file_sha256": "8a59fd67a2fa092346a3cc2d1446fb67233d0803e8500fb5ba252b5e736e87cb",
-          "samples_sha256": "b56e65ac6c89403e8645dd933333de552b47eba8a6d6c8758ae5a3f97c576faa",
-          "duration_s": 4.53,
-          "trf": {
-            "N@22": {
-              "unit_index": 22,
-              "label": "N",
-              "nasal_gain_db": -0.1206,
-              "drift_db": 4.2215,
-              "f0_sag_cents": -98.475,
-              "energy_tail_db": -0.5238,
-              "nasal_gain_shape_db": 0.1096,
-              "drift_shape_db": 4.6482
-            }
-          },
-          "identity_lsd_db": 2.9451,
-          "donor_lsd_db": 14.0974,
-          "f0_dev_rmse_cents": 53.6689,
-          "note_split_mae_ms": 1.8454,
-          "energy_corr": 0.1031,
-          "taper_rmse_db": 3.0307,
-          "identity_shape_lsd_db": 3.3834,
-          "donor_shape_lsd_db": 18.6377,
-          "identity_margin_db": 11.1522
-        },
-        "R4": {
-          "rung": "R4",
-          "toggles": "f0+duration+energy+release",
-          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R4.wav",
-          "wav_file_sha256": "d381a874b1eec904f9345714debcd9886e0eab360b31a8f8fce8b71359538be7",
-          "samples_sha256": "23d31a44837ea06beb8feb9677f71a4930c7132c9a71d8a003552e279cb1b6f2",
-          "duration_s": 4.53,
-          "trf": {
-            "N@22": {
-              "unit_index": 22,
-              "label": "N",
-              "nasal_gain_db": -0.5479,
-              "drift_db": 2.3252,
-              "f0_sag_cents": -88.315,
-              "energy_tail_db": 0.1043,
-              "nasal_gain_shape_db": 0.1217,
-              "drift_shape_db": 1.3484
-            }
-          },
-          "identity_lsd_db": 2.9909,
-          "donor_lsd_db": 13.944,
-          "f0_dev_rmse_cents": 49.6708,
-          "note_split_mae_ms": 1.8454,
-          "energy_corr": 0.954,
-          "taper_rmse_db": 1.9388,
-          "identity_shape_lsd_db": 3.4274,
-          "donor_shape_lsd_db": 18.6337,
-          "identity_margin_db": 10.9532
-        }
-      },
-      "P0_reference": {
-        "pjs_wav": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs017/pjs017_song.wav",
-        "pjs_probe_index": 27,
-        "pjs_slice_offset_s": 7.241
-      }
-    },
-    {
       "pair_key": "medial_ri|1st_color#104|pjs002#42",
       "probe_kind": "medial_ri",
       "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/1st_color/1st_color.lab",
       "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab",
       "identity_sha256": "efb55205489dcbc5e7f970dc077ce761614a2ed2d7b72b9858e1285d8e4f0a9b",
-      "performance_sha256": "a0a560efe04c7a9a032400eca9c5b7fa8cc6dd1aa66f574bf78d58d252dbfd86",
+      "performance_sha256": "65e4e5e301582b86eb7a07eb8602cf6cd0f24fcad3141a40079d483c80ba23cc",
       "matching": {
         "pjs_note_duration_s": 0.3133,
         "pjs_consonant_duration_s": 0.037,
@@ -1144,7 +597,7 @@
           "rung": "R0",
           "toggles": "none",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-104__pjs002-42/R0.wav",
-          "wav_file_sha256": "bd3c6b6354d978a5e916ba809452af9cb175f6c7868e293f2dc79904e39b2b98",
+          "wav_file_sha256": "415d0a015bda8eab35785505519a45d81b887b60a960b6d2070dfdb7ed29780d",
           "samples_sha256": "5cedc96a0254dc74d19d76f1d7fc093728dffc1f9cd017b3220ae42d19b7a508",
           "duration_s": 5.54,
           "trf": {
@@ -1173,7 +626,7 @@
           "rung": "R1",
           "toggles": "f0",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-104__pjs002-42/R1.wav",
-          "wav_file_sha256": "5776a262e9b3c7d23acd4419801bd8377738e351c5cb93fa050d9fc4766b54c6",
+          "wav_file_sha256": "ca5eb49557da4dc9e3b75d151c61ef64c0c489258f6c388c6cfe396a389da49b",
           "samples_sha256": "9d647efacd98919f0f5f7257bff0b8eeb175aa5a99f4ef4441fab709288636b5",
           "duration_s": 5.54,
           "trf": {
@@ -1202,7 +655,7 @@
           "rung": "R2",
           "toggles": "duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-104__pjs002-42/R2.wav",
-          "wav_file_sha256": "446f234e07a8ad8924989337089c2a2006c45ceee41f72a3fd8bc184cf927908",
+          "wav_file_sha256": "61b3238e8b6e6d35c6e3bd547b25d48802617913d79291a7630ca91962a4086e",
           "samples_sha256": "514bec3c29a102451da3fc1d95189cfb7881a024fe51616ae01009161b9e81fe",
           "duration_s": 5.545,
           "trf": {
@@ -1231,7 +684,7 @@
           "rung": "R3",
           "toggles": "f0+duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-104__pjs002-42/R3.wav",
-          "wav_file_sha256": "80734b2fcfa8170ce2942e5c39f0bec445ddf001b006ca3c3b528a337e596430",
+          "wav_file_sha256": "b5ec5e7dcaf472e99e248f4f57e981b410d5e8d13b59426ade8f35ec4b11f9c9",
           "samples_sha256": "b8d5e21cac0b4c25c9c8dacc74ee8fc9105b2b62da24cc70fde52b9cec817e94",
           "duration_s": 5.545,
           "trf": {
@@ -1260,7 +713,7 @@
           "rung": "R4",
           "toggles": "f0+duration+energy+release",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-104__pjs002-42/R4.wav",
-          "wav_file_sha256": "43849e5b14292507a8c4c1c7e108ccbf63c8db5e68f2fd05f27958d82f2bb4a8",
+          "wav_file_sha256": "6d85547905c306e9a9bcc8b18c2f6874729ba8c113afac4f52894fcb45ca8ab6",
           "samples_sha256": "e94fe4e078f5cd887b87b16c7f1aa603ea7d6cc14868988eecb4b51cc3ce3a52",
           "duration_s": 5.545,
           "trf": {
@@ -1293,12 +746,559 @@
       }
     },
     {
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "probe_kind": "terminal_ri",
+      "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/2018/2018.lab",
+      "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs065/pjs065.lab",
+      "identity_sha256": "93a6e5a54aa6801f873fd6ddfa0d03a8e3734d99abb3555b0128682c66a5ca33",
+      "performance_sha256": "a4bdbfbbd618391e65ad622cf78fbe6390deef2ce87512a2a150802afaf4de30",
+      "matching": {
+        "pjs_note_duration_s": 0.252,
+        "pjs_consonant_duration_s": 0.041,
+        "pjs_vowel_duration_s": 0.211,
+        "pjs_consonant_share": 0.1627,
+        "pjs_vowel_share": 0.8373,
+        "ritsu_note_total_s": 0.489,
+        "ritsu_native_split_s": [
+          0.0419,
+          0.4471
+        ],
+        "transplanted_split_s": [
+          0.0796,
+          0.4094
+        ],
+        "note_unit_span": [
+          21,
+          22
+        ],
+        "timing_transplant_is_noop": false,
+        "absolute_hz_copied": false,
+        "absolute_seconds_copied": false
+      },
+      "rungs": {
+        "R0": {
+          "rung": "R0",
+          "toggles": "none",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R0.wav",
+          "wav_file_sha256": "fd157e5328b3c4653e1fa8a4af95b9d9a7cf290518f98ffb770d37224f836e66",
+          "samples_sha256": "5cb3dcf4bde7261e16ef124beac382a5b6731600d36e43bfdd8192b5d7b35be7",
+          "duration_s": 3.765,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 6.4311,
+              "drift_db": 8.2924,
+              "f0_sag_cents": -4.94,
+              "energy_tail_db": -2.2923,
+              "nasal_gain_shape_db": -0.6318,
+              "drift_shape_db": 4.776
+            }
+          },
+          "identity_lsd_db": 3.9675,
+          "donor_lsd_db": 10.8663,
+          "f0_dev_rmse_cents": 43.2813,
+          "note_split_mae_ms": 37.5595,
+          "energy_corr": 0.7549,
+          "taper_rmse_db": 10.346,
+          "identity_shape_lsd_db": 2.9546,
+          "donor_shape_lsd_db": 10.9647,
+          "identity_margin_db": 6.8988
+        },
+        "R1": {
+          "rung": "R1",
+          "toggles": "f0",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R1.wav",
+          "wav_file_sha256": "cf495a05fbff17f013a498ecd2cf86903600f1a3fea2b6bece24ee6dc23ef654",
+          "samples_sha256": "3e69931d8ea789495c7edebb6d0fa682d20de8ffe9371ebde860f187cb10fc43",
+          "duration_s": 3.765,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 6.1627,
+              "drift_db": 8.0635,
+              "f0_sag_cents": -10.774,
+              "energy_tail_db": -2.2803,
+              "nasal_gain_shape_db": -1.3275,
+              "drift_shape_db": 5.2501
+            }
+          },
+          "identity_lsd_db": 3.8161,
+          "donor_lsd_db": 10.8081,
+          "f0_dev_rmse_cents": 16.3844,
+          "note_split_mae_ms": 37.5595,
+          "energy_corr": 0.7675,
+          "taper_rmse_db": 10.4238,
+          "identity_shape_lsd_db": 2.7787,
+          "donor_shape_lsd_db": 10.8775,
+          "identity_margin_db": 6.992
+        },
+        "R2": {
+          "rung": "R2",
+          "toggles": "duration",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R2.wav",
+          "wav_file_sha256": "882dd330ee999c9450b691345970496b79a76cf2c10176851c7ebcc14e664bdb",
+          "samples_sha256": "e98c8539fc11096e9e6181fe56d39ec2b4fd81bf2836ada1d38d3a646b441e2e",
+          "duration_s": 3.77,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 6.2818,
+              "drift_db": 8.1976,
+              "f0_sag_cents": -1.37,
+              "energy_tail_db": -3.48,
+              "nasal_gain_shape_db": -1.1325,
+              "drift_shape_db": 5.2699
+            }
+          },
+          "identity_lsd_db": 3.7,
+          "donor_lsd_db": 10.6799,
+          "f0_dev_rmse_cents": 44.212,
+          "note_split_mae_ms": 0.5,
+          "energy_corr": 0.7804,
+          "taper_rmse_db": 10.6661,
+          "identity_shape_lsd_db": 2.9165,
+          "donor_shape_lsd_db": 10.9027,
+          "identity_margin_db": 6.9799
+        },
+        "R3": {
+          "rung": "R3",
+          "toggles": "f0+duration",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R3.wav",
+          "wav_file_sha256": "2d31827734ca19093852e600aa7461ad0ef2ef60032eef046c082d4c18334ef4",
+          "samples_sha256": "f7935c955ad0fa3e1fc522444c0c3489c75460853ca8515548050204f9dfdb41",
+          "duration_s": 3.77,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 5.96,
+              "drift_db": 7.7496,
+              "f0_sag_cents": -14.83,
+              "energy_tail_db": -3.0158,
+              "nasal_gain_shape_db": -1.6604,
+              "drift_shape_db": 5.6738
+            }
+          },
+          "identity_lsd_db": 3.3944,
+          "donor_lsd_db": 10.7249,
+          "f0_dev_rmse_cents": 14.8528,
+          "note_split_mae_ms": 0.5,
+          "energy_corr": 0.782,
+          "taper_rmse_db": 10.3615,
+          "identity_shape_lsd_db": 2.6146,
+          "donor_shape_lsd_db": 10.9129,
+          "identity_margin_db": 7.3305
+        },
+        "R4": {
+          "rung": "R4",
+          "toggles": "f0+duration+energy+release",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_ri__2018-598__pjs065-29/R4.wav",
+          "wav_file_sha256": "a3764650d4658ec9255899189bbd9bdd9f0d6ad2a1bbe085d309884fe434eff2",
+          "samples_sha256": "3b3940b1d7010af730094bdacd9a055996deeb579c561e35b6ef5fc3ebe433e6",
+          "duration_s": 3.77,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 1.7761,
+              "drift_db": 2.3888,
+              "f0_sag_cents": -4.189,
+              "energy_tail_db": -3.741,
+              "nasal_gain_shape_db": -0.4544,
+              "drift_shape_db": 0.9584
+            }
+          },
+          "identity_lsd_db": 2.5517,
+          "donor_lsd_db": 10.04,
+          "f0_dev_rmse_cents": 14.4611,
+          "note_split_mae_ms": 0.5,
+          "energy_corr": 0.9506,
+          "taper_rmse_db": 0.8452,
+          "identity_shape_lsd_db": 2.5608,
+          "donor_shape_lsd_db": 10.9029,
+          "identity_margin_db": 7.4883
+        }
+      },
+      "P0_reference": {
+        "pjs_wav": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs065/pjs065_song.wav",
+        "pjs_probe_index": 29,
+        "pjs_slice_offset_s": 4.208
+      }
+    },
+    {
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "probe_kind": "terminal_i",
+      "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/1st_color/1st_color.lab",
+      "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001.lab",
+      "identity_sha256": "9dfa33332d4c4ce31665b46989f374c1b539b718c35f525ae9c02c7e135e5a8a",
+      "performance_sha256": "1be5bc8d6a8b193473eef3684aa98bdaa70c6dffe171b2ff8c909d4d246e8809",
+      "matching": {
+        "pjs_note_duration_s": 0.6947,
+        "pjs_consonant_duration_s": 0.0,
+        "pjs_vowel_duration_s": 0.6947,
+        "pjs_consonant_share": 0.0,
+        "pjs_vowel_share": 1.0,
+        "ritsu_note_total_s": 0.8938,
+        "ritsu_native_split_s": [
+          0.0718,
+          0.822
+        ],
+        "transplanted_split_s": [
+          0.0179,
+          0.8759
+        ],
+        "note_unit_span": [
+          21,
+          22
+        ],
+        "timing_transplant_is_noop": false,
+        "absolute_hz_copied": false,
+        "absolute_seconds_copied": false
+      },
+      "rungs": {
+        "R0": {
+          "rung": "R0",
+          "toggles": "none",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R0.wav",
+          "wav_file_sha256": "063131398762011c7b52183758ee1b91229f57d6f1993dd99bb606061f7b06d4",
+          "samples_sha256": "133202a0c9f0cb4a8ee4efee72ffd4cc3ec68ca0fb93808642d4e7d12d7d416b",
+          "duration_s": 8.245,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 2.6336,
+              "drift_db": 4.0779,
+              "f0_sag_cents": -1.829,
+              "energy_tail_db": -0.2396,
+              "nasal_gain_shape_db": -5.782,
+              "drift_shape_db": 9.8523
+            }
+          },
+          "identity_lsd_db": 2.3227,
+          "donor_lsd_db": 10.3642,
+          "f0_dev_rmse_cents": 134.4144,
+          "note_split_mae_ms": 54.0313,
+          "energy_corr": 0.2982,
+          "taper_rmse_db": 9.3355,
+          "identity_shape_lsd_db": 1.9813,
+          "donor_shape_lsd_db": 10.3919,
+          "identity_margin_db": 8.0415
+        },
+        "R1": {
+          "rung": "R1",
+          "toggles": "f0",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R1.wav",
+          "wav_file_sha256": "35eb4c6cdb2af549f9c556974e9c93c92978adda7b4e0305a3ffa748b1a6daf7",
+          "samples_sha256": "f7042fcd668df433974a66e0851dcddd8e52e83325377f7dc712c04d98eaf78a",
+          "duration_s": 8.245,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 2.6125,
+              "drift_db": 4.0044,
+              "f0_sag_cents": -0.833,
+              "energy_tail_db": -0.3787,
+              "nasal_gain_shape_db": -4.3677,
+              "drift_shape_db": 8.2789
+            }
+          },
+          "identity_lsd_db": 2.195,
+          "donor_lsd_db": 10.2725,
+          "f0_dev_rmse_cents": 50.0945,
+          "note_split_mae_ms": 54.0313,
+          "energy_corr": 0.3,
+          "taper_rmse_db": 9.5047,
+          "identity_shape_lsd_db": 1.7696,
+          "donor_shape_lsd_db": 10.2942,
+          "identity_margin_db": 8.0775
+        },
+        "R2": {
+          "rung": "R2",
+          "toggles": "duration",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R2.wav",
+          "wav_file_sha256": "0c765ce877e0a918cea329dfc4e470492aa28bee63c76f158e7608e108de8bab",
+          "samples_sha256": "53af13b63eace104bb37fa9016f648f24c72f55de09d23f67a2377dd3e5b6907",
+          "duration_s": 8.25,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 2.5455,
+              "drift_db": 4.0433,
+              "f0_sag_cents": -1.165,
+              "energy_tail_db": -0.1166,
+              "nasal_gain_shape_db": -5.3353,
+              "drift_shape_db": 9.3516
+            }
+          },
+          "identity_lsd_db": 2.3438,
+          "donor_lsd_db": 10.3288,
+          "f0_dev_rmse_cents": 131.4635,
+          "note_split_mae_ms": 1.5313,
+          "energy_corr": 0.2904,
+          "taper_rmse_db": 9.0541,
+          "identity_shape_lsd_db": 2.0274,
+          "donor_shape_lsd_db": 10.3549,
+          "identity_margin_db": 7.9849
+        },
+        "R3": {
+          "rung": "R3",
+          "toggles": "f0+duration",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R3.wav",
+          "wav_file_sha256": "cd7307ccdf105b274b212f0df5500bd219d1745197e0dd8a3751a14c8b319140",
+          "samples_sha256": "6adf28ede8a0f3d5b50c27ea6d27a68cecfb2c78f8b7b4d27ef7e3ab9ac168dc",
+          "duration_s": 8.25,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 2.4727,
+              "drift_db": 3.9169,
+              "f0_sag_cents": 2.055,
+              "energy_tail_db": -0.2639,
+              "nasal_gain_shape_db": -5.2416,
+              "drift_shape_db": 9.1551
+            }
+          },
+          "identity_lsd_db": 2.1004,
+          "donor_lsd_db": 10.3188,
+          "f0_dev_rmse_cents": 49.1109,
+          "note_split_mae_ms": 1.5313,
+          "energy_corr": 0.292,
+          "taper_rmse_db": 9.1816,
+          "identity_shape_lsd_db": 1.7385,
+          "donor_shape_lsd_db": 10.3392,
+          "identity_margin_db": 8.2184
+        },
+        "R4": {
+          "rung": "R4",
+          "toggles": "f0+duration+energy+release",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_i__1st_color-218__pjs001-73/R4.wav",
+          "wav_file_sha256": "10731c982ce05144017b3bfdf5b05276d3b56d07aed1801d0a30bd011ab7584a",
+          "samples_sha256": "43e0067d74a20a2ef5a888141fdad3b1e6795ac18d13962729f8f91c640aaad5",
+          "duration_s": 8.25,
+          "trf": {
+            "i@22": {
+              "unit_index": 22,
+              "label": "i",
+              "nasal_gain_db": 0.4142,
+              "drift_db": 0.8922,
+              "f0_sag_cents": 21.63,
+              "energy_tail_db": -0.1154,
+              "nasal_gain_shape_db": -0.2131,
+              "drift_shape_db": 0.8926
+            }
+          },
+          "identity_lsd_db": 1.7814,
+          "donor_lsd_db": 11.0343,
+          "f0_dev_rmse_cents": 295.8691,
+          "note_split_mae_ms": 1.5313,
+          "energy_corr": 0.7588,
+          "taper_rmse_db": 3.0788,
+          "identity_shape_lsd_db": 1.7825,
+          "donor_shape_lsd_db": 10.44,
+          "identity_margin_db": 9.2529
+        }
+      },
+      "P0_reference": {
+        "pjs_wav": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001_song.wav",
+        "pjs_probe_index": 73,
+        "pjs_slice_offset_s": 13.296
+      }
+    },
+    {
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "probe_kind": "terminal_N",
+      "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/BRD/BRD.lab",
+      "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs017/pjs017.lab",
+      "identity_sha256": "33e9f82cbe542ec8447d8668ccb941d55f05ac3a990e1f5e9f064a6a6b29873b",
+      "performance_sha256": "c382df9a5dcad18f6c06c713fa8264e73279b6e725f144bb4d0bd23c2879e438",
+      "matching": {
+        "pjs_note_duration_s": 0.1875,
+        "pjs_consonant_duration_s": 0.0,
+        "pjs_vowel_duration_s": 0.1875,
+        "pjs_consonant_share": 0.0,
+        "pjs_vowel_share": 1.0,
+        "ritsu_note_total_s": 0.2682,
+        "ritsu_native_split_s": [
+          0.2682
+        ],
+        "transplanted_split_s": [
+          0.2682
+        ],
+        "note_unit_span": [
+          22,
+          22
+        ],
+        "timing_transplant_is_noop": true,
+        "absolute_hz_copied": false,
+        "absolute_seconds_copied": false
+      },
+      "rungs": {
+        "R0": {
+          "rung": "R0",
+          "toggles": "none",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R0.wav",
+          "wav_file_sha256": "92288be563cf62c395218b81a1e1c3aba595942ecb70aaedf7b0c13acad65e3c",
+          "samples_sha256": "3c2f66cc9f32c61bffa43f887c49ae1bb30d4b2ef49003529b81046db584b5d6",
+          "duration_s": 4.53,
+          "trf": {
+            "N@22": {
+              "unit_index": 22,
+              "label": "N",
+              "nasal_gain_db": -0.0879,
+              "drift_db": 3.9092,
+              "f0_sag_cents": -2.404,
+              "energy_tail_db": -0.4532,
+              "nasal_gain_shape_db": 0.0905,
+              "drift_shape_db": 4.3974
+            }
+          },
+          "identity_lsd_db": 2.9245,
+          "donor_lsd_db": 14.0976,
+          "f0_dev_rmse_cents": 49.0128,
+          "note_split_mae_ms": 1.8454,
+          "energy_corr": 0.0673,
+          "taper_rmse_db": 3.1318,
+          "identity_shape_lsd_db": 3.2977,
+          "donor_shape_lsd_db": 18.5603,
+          "identity_margin_db": 11.1731
+        },
+        "R1": {
+          "rung": "R1",
+          "toggles": "f0",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R1.wav",
+          "wav_file_sha256": "3821087c3c3b37a7404331885ed941704b36574591d2a0e147638af838a648dc",
+          "samples_sha256": "b56e65ac6c89403e8645dd933333de552b47eba8a6d6c8758ae5a3f97c576faa",
+          "duration_s": 4.53,
+          "trf": {
+            "N@22": {
+              "unit_index": 22,
+              "label": "N",
+              "nasal_gain_db": -0.1206,
+              "drift_db": 4.2215,
+              "f0_sag_cents": -98.475,
+              "energy_tail_db": -0.5238,
+              "nasal_gain_shape_db": 0.1096,
+              "drift_shape_db": 4.6482
+            }
+          },
+          "identity_lsd_db": 2.9451,
+          "donor_lsd_db": 14.0974,
+          "f0_dev_rmse_cents": 53.6689,
+          "note_split_mae_ms": 1.8454,
+          "energy_corr": 0.1031,
+          "taper_rmse_db": 3.0307,
+          "identity_shape_lsd_db": 3.3834,
+          "donor_shape_lsd_db": 18.6377,
+          "identity_margin_db": 11.1522
+        },
+        "R2": {
+          "rung": "R2",
+          "toggles": "duration",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R2.wav",
+          "wav_file_sha256": "947ebefb490c1afd81a1a9786cc25dac338590c38590dcccf8ae2526cf31fe99",
+          "samples_sha256": "3c2f66cc9f32c61bffa43f887c49ae1bb30d4b2ef49003529b81046db584b5d6",
+          "duration_s": 4.53,
+          "trf": {
+            "N@22": {
+              "unit_index": 22,
+              "label": "N",
+              "nasal_gain_db": -0.0879,
+              "drift_db": 3.9092,
+              "f0_sag_cents": -2.404,
+              "energy_tail_db": -0.4532,
+              "nasal_gain_shape_db": 0.0905,
+              "drift_shape_db": 4.3974
+            }
+          },
+          "identity_lsd_db": 2.9245,
+          "donor_lsd_db": 14.0976,
+          "f0_dev_rmse_cents": 49.0128,
+          "note_split_mae_ms": 1.8454,
+          "energy_corr": 0.0673,
+          "taper_rmse_db": 3.1318,
+          "identity_shape_lsd_db": 3.2977,
+          "donor_shape_lsd_db": 18.5603,
+          "identity_margin_db": 11.1731
+        },
+        "R3": {
+          "rung": "R3",
+          "toggles": "f0+duration",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R3.wav",
+          "wav_file_sha256": "7f46f1f4c3ea3f46b382ec19469182f49ad1fc933b2d738d86ade95a14333e0a",
+          "samples_sha256": "b56e65ac6c89403e8645dd933333de552b47eba8a6d6c8758ae5a3f97c576faa",
+          "duration_s": 4.53,
+          "trf": {
+            "N@22": {
+              "unit_index": 22,
+              "label": "N",
+              "nasal_gain_db": -0.1206,
+              "drift_db": 4.2215,
+              "f0_sag_cents": -98.475,
+              "energy_tail_db": -0.5238,
+              "nasal_gain_shape_db": 0.1096,
+              "drift_shape_db": 4.6482
+            }
+          },
+          "identity_lsd_db": 2.9451,
+          "donor_lsd_db": 14.0974,
+          "f0_dev_rmse_cents": 53.6689,
+          "note_split_mae_ms": 1.8454,
+          "energy_corr": 0.1031,
+          "taper_rmse_db": 3.0307,
+          "identity_shape_lsd_db": 3.3834,
+          "donor_shape_lsd_db": 18.6377,
+          "identity_margin_db": 11.1522
+        },
+        "R4": {
+          "rung": "R4",
+          "toggles": "f0+duration+energy+release",
+          "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/terminal_N__BRD-664__pjs017-27/R4.wav",
+          "wav_file_sha256": "c7bceac08d81b9ec2d6bc01e1fd20388bef8732b09d94126b4054f4701a9b050",
+          "samples_sha256": "23d31a44837ea06beb8feb9677f71a4930c7132c9a71d8a003552e279cb1b6f2",
+          "duration_s": 4.53,
+          "trf": {
+            "N@22": {
+              "unit_index": 22,
+              "label": "N",
+              "nasal_gain_db": -0.5479,
+              "drift_db": 2.3252,
+              "f0_sag_cents": -88.315,
+              "energy_tail_db": 0.1043,
+              "nasal_gain_shape_db": 0.1217,
+              "drift_shape_db": 1.3484
+            }
+          },
+          "identity_lsd_db": 2.9909,
+          "donor_lsd_db": 13.944,
+          "f0_dev_rmse_cents": 49.6708,
+          "note_split_mae_ms": 1.8454,
+          "energy_corr": 0.954,
+          "taper_rmse_db": 1.9388,
+          "identity_shape_lsd_db": 3.4274,
+          "donor_shape_lsd_db": 18.6337,
+          "identity_margin_db": 10.9532
+        }
+      },
+      "P0_reference": {
+        "pjs_wav": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs017/pjs017_song.wav",
+        "pjs_probe_index": 27,
+        "pjs_slice_offset_s": 7.241
+      }
+    },
+    {
       "pair_key": "medial_ri|1st_color#357|pjs002#54",
       "probe_kind": "medial_ri",
       "ritsu_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2/DATABASE/1st_color/1st_color.lab",
       "pjs_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab",
       "identity_sha256": "70a01f55d1630a19bf4bfa4b2021c4916b05780c1b9d61581a6f82aebe5845e8",
-      "performance_sha256": "c69412ebd5f056a55891237f3b1842c08d855ad61ed70feb905c6dcac7e36df7",
+      "performance_sha256": "cb4da93d2b85c26ccdd36bbde8974445e47799fd3beb17b20126f208db816a1a",
       "matching": {
         "pjs_note_duration_s": 0.473,
         "pjs_consonant_duration_s": 0.038,
@@ -1327,7 +1327,7 @@
           "rung": "R0",
           "toggles": "none",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-357__pjs002-54/R0.wav",
-          "wav_file_sha256": "700db12cb1d11141d18675e207ade4d14ffd9bbab52f60fcc1dc9ffcc4072bf4",
+          "wav_file_sha256": "e6cf1d24c32b402eb283005ee5207431052d17ad9992b4df5db789cd87728916",
           "samples_sha256": "c9f9cf09c85fea2cad46bfd02c978b63d760cf5dd1c066d5d06f0397d61dda26",
           "duration_s": 4.54,
           "trf": {
@@ -1356,7 +1356,7 @@
           "rung": "R1",
           "toggles": "f0",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-357__pjs002-54/R1.wav",
-          "wav_file_sha256": "ce4936145e8981fb9161ce05014ef1f4ae3e251dffcdac9435d7952ae4007905",
+          "wav_file_sha256": "d723bbc51c5e58953b7ab61168e3c63a833ecab2c40316090bad56143777a9b7",
           "samples_sha256": "bc324e2d3d249648f7145f984622f1a356c1bf533bdc80f6de3e26175c540048",
           "duration_s": 4.54,
           "trf": {
@@ -1385,7 +1385,7 @@
           "rung": "R2",
           "toggles": "duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-357__pjs002-54/R2.wav",
-          "wav_file_sha256": "8c6686e0c1cdf61a1467b05e21a229f0ecb6fd6969f9168a650693c3860b22c0",
+          "wav_file_sha256": "cc86c9566d11c4db9c3993b57292a8aac6d85a211e70a2f2264875289562a4d9",
           "samples_sha256": "600b3fee96d6665336058e25700780c254c045138e8994089186d2c55bbad5ce",
           "duration_s": 4.545,
           "trf": {
@@ -1414,7 +1414,7 @@
           "rung": "R3",
           "toggles": "f0+duration",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-357__pjs002-54/R3.wav",
-          "wav_file_sha256": "c2ad1500a4e9af0d6e9eae292cc1aedd73b7f873446056810dd77e41a9251fc1",
+          "wav_file_sha256": "d57f7db5dbc096669289bf28dce1cffe39a17b960ce3e9d10ec287b65df0066b",
           "samples_sha256": "8c2c5aa6c6d501d85a29ca5c2b1e9fcf3f74f67208e7d68a20866cd2d01eda75",
           "duration_s": 4.545,
           "trf": {
@@ -1443,7 +1443,7 @@
           "rung": "R4",
           "toggles": "f0+duration+energy+release",
           "wav_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/planb_real/results/wav/medial_ri__1st_color-357__pjs002-54/R4.wav",
-          "wav_file_sha256": "946a03c5477544f3ad37cb6a76dd590f7feddd995d1edf68a1dd0cb4a5faf6a0",
+          "wav_file_sha256": "619d083d7b74dbf47a9af80b46b432a447d7ad7e8ad17adfe4fda81c8fcc1ae0",
           "samples_sha256": "4eb05ada0f1ffffea66f93417fe5530a7551ff1025fa2d0830c759711e92ed65",
           "duration_s": 4.545,
           "trf": {
@@ -1487,16 +1487,6 @@
       "regression_tol_db": 1.0,
       "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
     },
-    "terminal_ri|2018#598|pjs065#29": {
-      "pair_key": "terminal_ri|2018#598|pjs065#29",
-      "primary_axis": "nasal_gain_db",
-      "r0_value_db": 6.4311,
-      "failure_present": true,
-      "required_improvement_db": 1.6078,
-      "target_max_db": 4.8233,
-      "regression_tol_db": 1.0,
-      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
-    },
     "terminal_i|1st_color#86|pjs001#54": {
       "pair_key": "terminal_i|1st_color#86|pjs001#54",
       "primary_axis": "nasal_gain_db",
@@ -1504,16 +1494,6 @@
       "failure_present": true,
       "required_improvement_db": 1.0,
       "target_max_db": 0.1062,
-      "regression_tol_db": 1.0,
-      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
-    },
-    "terminal_i|1st_color#218|pjs001#73": {
-      "pair_key": "terminal_i|1st_color#218|pjs001#73",
-      "primary_axis": "nasal_gain_db",
-      "r0_value_db": 2.6336,
-      "failure_present": true,
-      "required_improvement_db": 1.0,
-      "target_max_db": 1.6336,
       "regression_tol_db": 1.0,
       "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
     },
@@ -1527,16 +1507,6 @@
       "regression_tol_db": 1.0,
       "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
     },
-    "terminal_N|BRD#664|pjs017#27": {
-      "pair_key": "terminal_N|BRD#664|pjs017#27",
-      "primary_axis": "nasal_gain_db",
-      "r0_value_db": -0.0879,
-      "failure_present": false,
-      "required_improvement_db": 1.0,
-      "target_max_db": -1.0879,
-      "regression_tol_db": 1.0,
-      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
-    },
     "medial_ri|1st_color#104|pjs002#42": {
       "pair_key": "medial_ri|1st_color#104|pjs002#42",
       "primary_axis": "nasal_gain_db",
@@ -1544,6 +1514,36 @@
       "failure_present": false,
       "required_improvement_db": 1.0,
       "target_max_db": -0.6229,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_ri|2018#598|pjs065#29": {
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 6.4311,
+      "failure_present": true,
+      "required_improvement_db": 1.6078,
+      "target_max_db": 4.8233,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_i|1st_color#218|pjs001#73": {
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": 2.6336,
+      "failure_present": true,
+      "required_improvement_db": 1.0,
+      "target_max_db": 1.6336,
+      "regression_tol_db": 1.0,
+      "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
+    },
+    "terminal_N|BRD#664|pjs017#27": {
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "primary_axis": "nasal_gain_db",
+      "r0_value_db": -0.0879,
+      "failure_present": false,
+      "required_improvement_db": 1.0,
+      "target_max_db": -1.0879,
       "regression_tol_db": 1.0,
       "rule": "R4 の primary axis <= target_max_db。failure_present=False なら NOT_EVALUABLE（改善を主張しない）。drift_db / energy_tail_db が R0 比 +regression_tol_db を超えないこと"
     },

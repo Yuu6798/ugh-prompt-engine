@@ -18,23 +18,6 @@
         "adaa3ec51867d53a"
       ]
     },
-    "terminal_ri|2018#598|pjs065#29": {
-      "identical": true,
-      "recorded": [
-        "5cb3dcf4bde7261e",
-        "3e69931d8ea78949",
-        "e98c8539fc11096e",
-        "f7935c955ad0fa3e",
-        "3b3940b1d7010af7"
-      ],
-      "recomputed": [
-        "5cb3dcf4bde7261e",
-        "3e69931d8ea78949",
-        "e98c8539fc11096e",
-        "f7935c955ad0fa3e",
-        "3b3940b1d7010af7"
-      ]
-    },
     "terminal_i|1st_color#86|pjs001#54": {
       "identical": true,
       "recorded": [
@@ -50,23 +33,6 @@
         "3bca79a4038e816f",
         "23d9a0800add2465",
         "da6c6999ecb5924c"
-      ]
-    },
-    "terminal_i|1st_color#218|pjs001#73": {
-      "identical": true,
-      "recorded": [
-        "133202a0c9f0cb4a",
-        "f7042fcd668df433",
-        "53af13b63eace104",
-        "6adf28ede8a0f3d5",
-        "43e0067d74a20a2e"
-      ],
-      "recomputed": [
-        "133202a0c9f0cb4a",
-        "f7042fcd668df433",
-        "53af13b63eace104",
-        "6adf28ede8a0f3d5",
-        "43e0067d74a20a2e"
       ]
     },
     "terminal_N|1st_color#478|pjs002#61": {
@@ -86,23 +52,6 @@
         "1020ea1eb346418a"
       ]
     },
-    "terminal_N|BRD#664|pjs017#27": {
-      "identical": true,
-      "recorded": [
-        "3c2f66cc9f32c61b",
-        "b56e65ac6c89403e",
-        "3c2f66cc9f32c61b",
-        "b56e65ac6c89403e",
-        "23d31a44837ea06b"
-      ],
-      "recomputed": [
-        "3c2f66cc9f32c61b",
-        "b56e65ac6c89403e",
-        "3c2f66cc9f32c61b",
-        "b56e65ac6c89403e",
-        "23d31a44837ea06b"
-      ]
-    },
     "medial_ri|1st_color#104|pjs002#42": {
       "identical": true,
       "recorded": [
@@ -118,6 +67,57 @@
         "514bec3c29a10245",
         "b8d5e21cac0b4c25",
         "e94fe4e078f5cd88"
+      ]
+    },
+    "terminal_ri|2018#598|pjs065#29": {
+      "identical": true,
+      "recorded": [
+        "5cb3dcf4bde7261e",
+        "3e69931d8ea78949",
+        "e98c8539fc11096e",
+        "f7935c955ad0fa3e",
+        "3b3940b1d7010af7"
+      ],
+      "recomputed": [
+        "5cb3dcf4bde7261e",
+        "3e69931d8ea78949",
+        "e98c8539fc11096e",
+        "f7935c955ad0fa3e",
+        "3b3940b1d7010af7"
+      ]
+    },
+    "terminal_i|1st_color#218|pjs001#73": {
+      "identical": true,
+      "recorded": [
+        "133202a0c9f0cb4a",
+        "f7042fcd668df433",
+        "53af13b63eace104",
+        "6adf28ede8a0f3d5",
+        "43e0067d74a20a2e"
+      ],
+      "recomputed": [
+        "133202a0c9f0cb4a",
+        "f7042fcd668df433",
+        "53af13b63eace104",
+        "6adf28ede8a0f3d5",
+        "43e0067d74a20a2e"
+      ]
+    },
+    "terminal_N|BRD#664|pjs017#27": {
+      "identical": true,
+      "recorded": [
+        "3c2f66cc9f32c61b",
+        "b56e65ac6c89403e",
+        "3c2f66cc9f32c61b",
+        "b56e65ac6c89403e",
+        "23d31a44837ea06b"
+      ],
+      "recomputed": [
+        "3c2f66cc9f32c61b",
+        "b56e65ac6c89403e",
+        "3c2f66cc9f32c61b",
+        "b56e65ac6c89403e",
+        "23d31a44837ea06b"
       ]
     },
     "medial_ri|1st_color#357|pjs002#54": {

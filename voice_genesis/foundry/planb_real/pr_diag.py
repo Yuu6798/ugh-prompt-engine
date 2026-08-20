@@ -70,12 +70,22 @@ def aperiodicity_stats(wav: np.ndarray, sr: int, *, tail_frac: float = 0.25) -> 
             "voiced_frac": float(np.mean(voiced))}
 
 
-def _flatten_f0(f0: np.ndarray, n_units: int = 1) -> np.ndarray:
-    """有声区間の F0 を全体中央値へ平坦化する（R0 の操作の単純版）。"""
+def _flatten_f0(f0: np.ndarray, unit_frames=None) -> np.ndarray:
+    """**unit ごとに** F0 を中央値へ平坦化する（R0 が行う操作と同じ粒度）。
+
+    以前はフレーズ全体を 1 つの中央値で潰しており、旋律そのものを壊していた。
+    それでは R0 の F0 操作を切り分ける診断にならない（レビュー指摘 r3825927060）。
+    """
     out = np.array(f0, dtype=np.float64)
-    v = out > 0.0
-    if np.any(v):
-        out[v] = float(np.median(out[v]))
+    spans = unit_frames if unit_frames else [(0, out.shape[0])]
+    for lo, hi in spans:
+        lo = max(0, min(lo, out.shape[0]))
+        hi = max(lo + 1, min(hi, out.shape[0]))
+        seg = out[lo:hi]
+        v = seg > 0.0
+        if np.any(v):
+            seg[v] = float(np.median(seg[v]))
+        out[lo:hi] = seg
     return out
 
 
@@ -109,7 +119,10 @@ def run(pair_key: Optional[str] = None) -> Dict[str, Any]:
         _write(out / "RT_world.wav", rt, sr)
         stats["RT_world"] = aperiodicity_stats(rt, sr)
 
-        rt_flat = pbw.synthesize(_flatten_f0(a.f0), a.sp, a.ap, sr, a.frame_period_ms)
+        fp2 = a.frame_period_ms / 1000.0
+        spans = [(int((lab.phones[i].start_s - lo) / fp2),
+                  int((lab.phones[i].end_s - lo) / fp2)) for i in ii]
+        rt_flat = pbw.synthesize(_flatten_f0(a.f0, spans), a.sp, a.ap, sr, a.frame_period_ms)
         _write(out / "RT_flatf0.wav", rt_flat, sr)
         stats["RT_flatf0"] = aperiodicity_stats(rt_flat, sr)
 

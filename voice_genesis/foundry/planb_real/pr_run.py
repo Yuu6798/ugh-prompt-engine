@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -40,7 +42,9 @@ import pr_lab  # noqa: E402
 import pr_ladder  # noqa: E402
 import pr_manifest as prm  # noqa: E402
 import pr_performance as prp  # noqa: E402
-from pr_status import BLOCKED, PASS, SKIPPED, GateResult, RunLedger, StopRule, summarize  # noqa: E402
+from pr_status import (  # noqa: E402
+    BLOCKED, PASS, SKIPPED, GateResult, RunLedger, StopRule, summarize,
+)
 
 RESULTS = _HERE / "results"
 MANIFEST = RESULTS / "source_manifest.json"
@@ -53,11 +57,26 @@ TRF_RESULTS = RESULTS / "trf_results.json"
 DETERMINISM = RESULTS / "determinism.json"
 GATE_RESULTS = RESULTS / "gate_results.json"
 EAR_ANSWERS = RESULTS / "ear_answers.json"
+CENSUS_GATE = RESULTS / "census_gate.json"
 PERF_DIR = RESULTS / "performance_tracks"
 ID_DIR = RESULTS / "identity_tracks"
 WAV_DIR = RESULTS / "wav"
+WAV_STAGING = RESULTS / "wav.staging"
 
 PROBE_PRIORITY = ("terminal_ri", "terminal_su", "terminal_i", "terminal_N", "medial_ri")
+
+
+def _dumps(obj: Any) -> str:
+    """NaN を出さない JSON 直列化（bare NaN は JSON 仕様外 = r3825494572）。"""
+    def _clean(o):
+        if isinstance(o, float):
+            return None if not np.isfinite(o) else o
+        if isinstance(o, dict):
+            return {k: _clean(v) for k, v in o.items()}
+        if isinstance(o, (list, tuple)):
+            return [_clean(v) for v in o]
+        return o
+    return json.dumps(_clean(obj), ensure_ascii=False, indent=2, allow_nan=False)
 
 
 def environment() -> Dict[str, Any]:
@@ -123,7 +142,10 @@ def cmd_census(args) -> int:
         cov = pr_census.coverage_comparison(inv_r, inv_p)
         COVERAGE.parent.mkdir(parents=True, exist_ok=True)
         COVERAGE.write_text(json.dumps(cov, ensure_ascii=False, indent=2), encoding="utf-8")
-        ledger.add(pr_census.gate_census(inv_r, inv_p, cov))
+        gc = pr_census.gate_census(inv_r, inv_p, cov)
+        CENSUS_GATE.write_text(json.dumps(gc.as_dict(), ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+        ledger.add(gc)
     except StopRule as exc:
         ledger.add(exc.as_result())
     print(summarize(ledger))
@@ -155,16 +177,37 @@ def cmd_ladder(args) -> int:
     pairs_out: List[Any] = []
     frozen: Dict[str, Dict[str, Any]] = {}
     try:
+        # 上流（資材・許諾・census 判定）を必ず再検査してから素材を消費する。
+        # 以前は census 出力ファイルの存在だけを見ており、G-MATERIAL / G-LICENSE /
+        # G-CENSUS が BLOCKED でもラダーが走った（レビュー指摘 r3825325976 /
+        # r3825561974）。
+        _require_upstream(ledger)
         if not INV_RITSU.exists() or not INV_PJS.exists():
             raise StopRule("G-LADDER", "census 出力が無い", "pr_run.py census を先に実行すること")
+        if not CENSUS_GATE.exists():
+            raise StopRule("G-CENSUS", "census の判定が記録されていない",
+                           "pr_run.py census を実行し直すこと")
+        cg = _gate_from_file(CENSUS_GATE, "G-CENSUS")
+        if cg.status != PASS:
+            raise StopRule("G-CENSUS", f"census が {cg.status}: {cg.detail}", cg.next_action)
         # probe 種を横断して拾う（§8 は primary 1 種 + control 4 種を求めている）。
         # 1 種で max_pairs を食い潰すと control が 1 件も走らないため per-kind で配る。
+        # probe 種を **round-robin** で配る。以前は種ごとに per_kind 件を積んでから
+        # 先頭を切り落としており、`--max-pairs 4` だと terminal_N / medial_ri の
+        # 対照が 1 件も入らなかった（レビュー指摘 r3825626124）。
         per_kind = max(1, int(getattr(args, "per_kind", 2)))
+        buckets = {k: _pairs_for_kind(k, per_kind) for k in PROBE_PRIORITY}
         selected: List[Tuple[str, Dict[str, Any], Dict[str, Any]]] = []
-        for kind in PROBE_PRIORITY:
-            for r_ev, p_ev in _pairs_for_kind(kind, per_kind):
-                selected.append((kind, r_ev, p_ev))
-        selected = selected[: args.max_pairs]
+        for slot in range(per_kind):
+            for kind in PROBE_PRIORITY:
+                if slot < len(buckets[kind]) and len(selected) < args.max_pairs:
+                    r_ev, p_ev = buckets[kind][slot]
+                    selected.append((kind, r_ev, p_ev))
+        dropped = {k: max(0, len(v) - sum(1 for x in selected if x[0] == k))
+                   for k, v in buckets.items()}
+        if any(dropped.values()):
+            print(f"[note] 上限により見送った probe: "
+                  f"{ {k: v for k, v in dropped.items() if v} }")
         if not selected:
             raise StopRule("G-LADDER", "両側に共通する probe が 1 件も無い",
                            "coverage_comparison.json の usable_for_ladder を確認すること")
@@ -196,7 +239,7 @@ def cmd_ladder(args) -> int:
                 p_analysis, p_phones, p_idx,
                 target_sr=bank.sr, target_bins=bank.sp[probe_pos].shape[1])
             key = f"{kind}|{r_lab_path.stem}#{r_ev['phone_index']}|{p_lab_path.stem}#{p_idx}"
-            out_dir = WAV_DIR / key.replace("|", "__").replace("#", "-")
+            out_dir = WAV_STAGING / key.replace("|", "__").replace("#", "-")
             result = pr_ladder.run_probe_pair(
                 pair_key=key, probe_kind=kind, bank=bank, probe_pos=probe_pos, perf=perf,
                 donor_core_sp=donor_core, ritsu_file=str(r_lab_path),
@@ -220,23 +263,33 @@ def cmd_ladder(args) -> int:
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             pairs_out.append(result)
 
+        # 全ペアが成功してから初めて公開する。途中で落ちた場合、旧 wav と
+        # 新 manifest が混在した「一貫して見える」成果物を残さない
+        # （レビュー指摘 r3825927055）。
+        if WAV_DIR.exists():
+            shutil.rmtree(WAV_DIR)
+        if WAV_STAGING.exists():
+            WAV_STAGING.rename(WAV_DIR)
+        for r in pairs_out:
+            for name, m in r.rungs.items():
+                m.wav_path = str(WAV_DIR / Path(m.wav_path).parent.name / f"{name}.wav")
         LADDER_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-        LADDER_MANIFEST.write_text(json.dumps({
+        LADDER_MANIFEST.write_text(_dumps({
             "environment": environment(),
             "context_phones": int(getattr(args, "context", pr_identity.DEFAULT_CONTEXT_PHONES)),
             "identity_ap_scale": pr_identity.AP_SCALE,
             "ladder": [n for n, _ in pr_ladder.LADDER],
             "pairs": [p.as_dict() for p in pairs_out],
             "trf_gate_frozen": frozen,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-        TRF_RESULTS.write_text(json.dumps({
+        }), encoding="utf-8")
+        TRF_RESULTS.write_text(_dumps({
             "registered_primary_axis": pr_gates.REGISTERED_PRIMARY_AXIS,
             "exploratory_axis": pr_gates.EXPLORATORY_AXIS,
             "exploratory_status": "CANDIDATE_SECONDARY_AXIS",
             "frozen": frozen,
             "per_pair": {p.pair_key: {n: m.trf for n, m in p.rungs.items()}
                          for p in pairs_out},
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        }), encoding="utf-8")
         ledger.add(GateResult("G-LADDER", PASS,
                               f"{len(pairs_out)} probe ペアで R0–R4 を生成", "",
                               {"pairs": [p.pair_key for p in pairs_out]}))
@@ -265,6 +318,58 @@ def _reload_pairs():
     return pairs, data.get("trf_gate_frozen", {})
 
 
+def _recompute_shas_subprocess() -> Dict[str, List[str]]:
+    """別プロセスで pin 済み入力から R0–R4 を作り直し、サンプル列 sha256 を得る。"""
+    proc = subprocess.run([sys.executable, str(_HERE / "pr_run.py"), "recompute-shas"],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        return {}
+    try:
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def cmd_recompute_shas(args) -> int:
+    """pin 済み入力からラダーを作り直し、pair_key -> [sha256...] を JSON で出す。"""
+    import pb_compose as pc
+    import pr_attribution as pa
+    data = json.loads(LADDER_MANIFEST.read_text(encoding="utf-8"))
+    ctx = int(data.get("context_phones", pr_identity.DEFAULT_CONTEXT_PHONES))
+    out: Dict[str, List[str]] = {}
+    for pair in data["pairs"]:
+        bank, pos, track = pa._rebuild(pair, ctx)
+        out[pair["pair_key"]] = [pc.compose(bank, track, tg).sha256()
+                                 for _n, tg in pr_ladder.LADDER]
+    print(json.dumps(out))
+    return 0
+
+
+def _run_structural_gate(pairs) -> GateResult:
+    """G2 を実際に走らせる（消費した bank / performance / track を作り直す）。"""
+    import pr_attribution as pa
+    data = json.loads(LADDER_MANIFEST.read_text(encoding="utf-8"))
+    ctx = int(data.get("context_phones", pr_identity.DEFAULT_CONTEXT_PHONES))
+    # tripwire は release 経路も踏ませたいので、**終端 probe を持つペア**を選ぶ
+    # （語中 probe だと `unit.is_terminal` が False で release 分岐に入らず、
+    #  どのフィールドが読まれるかが並び順に依存してしまう）
+    perfs, chosen = [], None
+    for pair in data["pairs"]:
+        bank, pos, track = pa._rebuild(pair, ctx)
+        perfs.append(pa._rebuild_performance(pair, ctx))
+        if chosen is None and pair["probe_kind"].startswith("terminal"):
+            chosen = (bank, track)
+    last = chosen
+    if last is None:
+        return GateResult("G2-structural", BLOCKED, "probe ペアが無く G2 を実行できない",
+                          "pr_run.py ladder を先に実行すること")
+    if not perfs:
+        # RealPerformanceTrack を個別に作り直せない場合でも、合成器の
+        # アクセス集合（tripwire）だけは必ず実測する
+        return pr_gates.gate_structural_separation([], last[0], last[1])
+    return pr_gates.gate_structural_separation(perfs, last[0], last[1])
+
+
 def cmd_gates(args) -> int:
     ledger = RunLedger()
     if not LADDER_MANIFEST.exists():
@@ -279,12 +384,22 @@ def cmd_gates(args) -> int:
         ledger.add(prm.gate_material(prm.SourceManifest.read(MANIFEST),
                                      prm.repo_root_of(_HERE)))
     if LICENSE.exists():
-        ledger.add(prm.gate_license(prm.LicenseLedger.read(LICENSE)))
+        ledger.add(prm.gate_license(prm.LicenseLedger.read(LICENSE),
+                                    prm.SourceManifest.read(MANIFEST) if MANIFEST.exists() else None))
+
+    # G1 は **pin 済み入力から作り直した値**と比較しなければ何も検証しない。
+    # 以前は記録済みハッシュをそのまま返しており、値を自分自身と比べていた
+    # （レビュー指摘 r3825325974）。別プロセスで再合成して突き合わせる。
+    recomputed = _recompute_shas_subprocess()
 
     def _recompute(pair):
-        return [m.samples_sha256 for m in pair.rungs.values()]
+        return recomputed.get(pair.pair_key, ["<not-recomputed>"])
 
     ledger.add(pr_gates.gate_determinism(pairs, _recompute))
+    # G2（構造分離）は cmd_gates から呼ばれていなかった（同 r3825463544）。
+    # Performance の 1 次元性と合成器のアクセス集合を実測する唯一のゲートなので、
+    # 消費した bank / performance / track を作り直して必ず走らせる。
+    ledger.add(_run_structural_gate(pairs))
     ledger.add(pr_gates.gate_intervention_tripwire(pairs))
     ledger.add(pr_gates.gate_donor_texture_isolation(pairs))
     ledger.add(pr_gates.gate_ladder_attribution(pairs))
@@ -294,9 +409,8 @@ def cmd_gates(args) -> int:
     ledger.add(pr_gates.gate_ear(answers))
     level = pr_gates.success_level(ledger.gates, pairs, answers)
     GATE_RESULTS.parent.mkdir(parents=True, exist_ok=True)
-    GATE_RESULTS.write_text(json.dumps(
-        {**ledger.as_dict(), "success_level": level}, ensure_ascii=False, indent=2),
-        encoding="utf-8")
+    GATE_RESULTS.write_text(_dumps({**ledger.as_dict(), "success_level": level}),
+                            encoding="utf-8")
     DETERMINISM.write_text(json.dumps(
         {"gate": "G1-determinism",
          "evidence": next((g.evidence for g in ledger.gates if g.gate == "G1-determinism"), {})},
@@ -304,6 +418,31 @@ def cmd_gates(args) -> int:
     print(summarize(ledger))
     print(f"success_level = {level}")
     return ledger.exit_code()
+
+
+def _gate_from_file(path: Path, gate: str) -> GateResult:
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+        return GateResult(d.get("gate", gate), d.get("status", BLOCKED),
+                          d.get("detail", ""), d.get("next_action", ""))
+    except Exception as exc:  # noqa: BLE001
+        return GateResult(gate, BLOCKED, f"{path.name} を読めない ({type(exc).__name__})")
+
+
+def _require_upstream(ledger: RunLedger) -> None:
+    """上流ゲート（資材・許諾・census）が PASS でなければ StopRule。"""
+    if not MANIFEST.exists():
+        raise StopRule("G-MATERIAL", "source_manifest.json が無い", "pr_run.py acquire")
+    r = prm.gate_material(prm.SourceManifest.read(MANIFEST), prm.repo_root_of(_HERE))
+    ledger.add(r)
+    if r.status != PASS:
+        raise StopRule(r.gate, r.detail, r.next_action)
+    if not LICENSE.exists():
+        raise StopRule("G-LICENSE", "LICENSE_LEDGER.json が無い", "pr_run.py acquire")
+    r = prm.gate_license(prm.LicenseLedger.read(LICENSE), prm.SourceManifest.read(MANIFEST))
+    ledger.add(r)
+    if r.status != PASS:
+        raise StopRule(r.gate, r.detail, r.next_action)
 
 
 def cmd_status(args) -> int:
@@ -315,7 +454,8 @@ def cmd_status(args) -> int:
         ledger.add(GateResult("G-MATERIAL", BLOCKED, "source_manifest.json が無い（資材未取得）",
                               "配布元から Ritsu 歌声 DB と PJS を取得し pr_run.py acquire"))
     if LICENSE.exists():
-        ledger.add(prm.gate_license(prm.LicenseLedger.read(LICENSE)))
+        ledger.add(prm.gate_license(prm.LicenseLedger.read(LICENSE),
+                                    prm.SourceManifest.read(MANIFEST) if MANIFEST.exists() else None))
     else:
         ledger.add(GateResult("G-LICENSE", BLOCKED, "LICENSE_LEDGER.json が無い",
                               "pr_run.py acquire が雛形を作る。確認項目は人が記入する"))
@@ -347,6 +487,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         a.add_argument(f"--{side}-version", default="")
         a.add_argument(f"--{side}-origin", default="")
     a.set_defaults(func=cmd_acquire)
+
+    sub.add_parser("recompute-shas",
+                   help="pin 済み入力からラダーを作り直し sha256 を出す（G1 用）"
+                   ).set_defaults(func=cmd_recompute_shas)
 
     for name, fn, helptext in (("census", cmd_census, "§3 コーパス census"),
                                ("gates", cmd_gates, "§10 機械ゲート"),

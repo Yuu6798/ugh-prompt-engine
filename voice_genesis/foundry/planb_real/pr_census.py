@@ -187,8 +187,14 @@ def census(root: Path, name: str) -> CorpusInventory:
                     inv.structure_warnings.append(
                         f"lab が wav より極端に短い: {lb.name} "
                         f"(lab {parsed.total_s:.2f}s << wav {wav_s:.2f}s, unit={parsed.time_unit})")
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # wav が開けないなら、その lab の probe は信用できない
+                reliable = False
+                inv.structure_warnings.append(
+                    f"wav を読めない: {lb.name} ({type(exc).__name__}) — probe を除外した")
+        if parsed.parse_warnings:
+            # 行が落ちた lab は音素列が欠けており、終端判定が偽になりうる
+            reliable = False
         events = _probe_events(parsed)
         if reliable:
             for ev in events:
@@ -199,7 +205,7 @@ def census(root: Path, name: str) -> CorpusInventory:
                 excluded[ev.kind] += 1
         if parsed.parse_warnings:
             inv.structure_warnings.append(
-                f"{lb.name}: パース警告 {len(parsed.parse_warnings)} 件")
+                f"{lb.name}: パース警告 {len(parsed.parse_warnings)} 件 — probe を除外した")
 
     inv.phoneme_vocabulary = dict(vocab.most_common())
     inv.lab_time_units = dict(units)
@@ -208,8 +214,14 @@ def census(root: Path, name: str) -> CorpusInventory:
     inv.excluded_probe_events = dict(excluded)
     paired_lab_stems = set()
     for lb in labs:
-        if wav_for_lab(lb) is not None:
-            paired_lab_stems.add(lb.stem)
+        w = wav_for_lab(lb)
+        if w is None:
+            continue
+        try:
+            sf.info(str(w))          # 開けることまで確かめる（存在だけでは足りない）
+        except Exception:  # noqa: BLE001
+            continue
+        paired_lab_stems.add(lb.stem)
     inv.paired_count = len(paired_lab_stems)
     inv.unpaired_lab = sorted(lab_stems - paired_lab_stems)[:50]
     used = {wav_for_lab(lb).stem for lb in labs if wav_for_lab(lb) is not None}

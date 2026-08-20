@@ -1,30 +1,34 @@
 {
-  "generated_at": "2026-08-20T20:43:09+00:00",
+  "generated_at": "2026-08-20T23:01:44+00:00",
   "entries": {
     "ritsu_singing_db": {
       "source": "ritsu_singing_db",
       "version": "Ver2.0.2",
-      "download_origin": "https://www.canon-voice.com/voicebanks/ -> https://drive.google.com/drive/folders/1XA2cm3UyRpAk_BJb1LTytOWrhjsZKbSN",
+      "download_origin": "https://www.canon-voice.com/voicebanks/ -> drive 1XA2cm3UyRpAk_BJb1LTytOWrhjsZKbSN",
       "archive_sha256": "3bb2e8e287a5cc888b49e46ee95dec60f7b20a5755c8a6f72b722d6a3da69168",
       "size_bytes": 1297977729,
-      "acquired_at": "2026-08-20T20:43:08+00:00",
+      "acquired_at": "2026-08-20T23:01:42+00:00",
       "license_document_sha256": "5441c81f142584239fa9f589122570226adcc22ce15242b78af839fb6ce0315e",
       "local_material_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_db/「波音リツ」歌声データベースVer2.0.2.zip",
       "redistribution": false,
       "extracted_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2",
+      "extracted_sha256": "f634340640b8088146165d6926eb68b0f0db5692f0b0731d928dc1414f842418",
+      "extracted_file_count": 220,
       "notes": ""
     },
     "pjs_corpus": {
       "source": "pjs_corpus",
       "version": "ver1.1",
-      "download_origin": "https://sites.google.com/site/shinnosuketakamichi/research-topics/pjs_corpus -> https://drive.google.com/uc?id=1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_",
+      "download_origin": "https://sites.google.com/site/shinnosuketakamichi/research-topics/pjs_corpus",
       "archive_sha256": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",
       "size_bytes": 275179158,
-      "acquired_at": "2026-08-20T20:43:09+00:00",
+      "acquired_at": "2026-08-20T23:01:44+00:00",
       "license_document_sha256": "97ae7aa710f64565e90a3be5eaaab0cfb57912d655a37455743220cca01f0345",
       "local_material_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs/pjs_corpus_ver1.1.zip",
       "redistribution": false,
       "extracted_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1",
+      "extracted_sha256": "60c5a31cf9e9bc3e6bb634d99abd485feada8fdeca7188c6b75d88c1ba48b66d",
+      "extracted_file_count": 303,
       "notes": ""
     }
   }

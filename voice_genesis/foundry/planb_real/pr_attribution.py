@@ -63,7 +63,12 @@ INTENT_TOL = {
 }
 
 
-def _rebuild(pair: Dict[str, Any], ctx: int):
+def _rebuild_performance(pair: Dict[str, Any], ctx: int):
+    """pin 済み入力から RealPerformanceTrack だけを作り直す（G2 が消費する）。"""
+    return _rebuild(pair, ctx, want_performance=True)[3]
+
+
+def _rebuild(pair: Dict[str, Any], ctx: int, want_performance: bool = False):
     pk = pair["pair_key"]
     r_lab_path = Path(pair["ritsu_file"])
     r_lab = pr_lab.read_lab(r_lab_path)
@@ -83,7 +88,10 @@ def _rebuild(pair: Dict[str, Any], ctx: int):
         f0=an.f0, power_db=pw, frame_period_ms=an.frame_period_ms,
         phones=pr_identity.shift_phones(p_lab.phones, off), vowel_index=p_idx,
         source_id="pjs", source_file=str(p_lab_path), probe_kind=pair["probe_kind"])
-    return bank, pos, pr_match.build_compose_track(bank, pos, perf)
+    track = pr_match.build_compose_track(bank, pos, perf)
+    if want_performance:
+        return bank, pos, track, perf
+    return bank, pos, track
 
 
 def _intent_deltas(base: pc.ComposeResult, cur: pc.ComposeResult,

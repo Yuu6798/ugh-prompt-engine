@@ -41,6 +41,30 @@ AXIS_MOVE_TOL = {
     "energy_corr": 0.02,
     "taper_rmse_db": 0.5,
 }
+
+#: 各軸の「意図した向き」。移植は donor の目標へ**近づける**はずなので、
+#: 遠ざかった場合を「動いた」と数えてはならない（レビュー指摘 r3825592726:
+#: `abs(d) > tol` だと悪化も『期待どおり動いた』になり、S3 へ誤昇格しうる）。
+AXIS_DIRECTION = {
+    "f0_dev_rmse_cents": "lower",
+    "note_split_mae_ms": "lower",
+    "energy_corr": "higher",
+    "taper_rmse_db": "lower",
+}
+
+
+def _moved_toward_target(axis: str, delta: float) -> bool:
+    tol = AXIS_MOVE_TOL[axis]
+    if abs(delta) <= tol:
+        return False
+    return delta < 0 if AXIS_DIRECTION[axis] == "lower" else delta > 0
+
+
+def _moved_away(axis: str, delta: float) -> bool:
+    tol = AXIS_MOVE_TOL[axis]
+    if abs(delta) <= tol:
+        return False
+    return delta > 0 if AXIS_DIRECTION[axis] == "lower" else delta < 0
 RUNG_EXPECTED_AXES = {
     "R1": {"f0_dev_rmse_cents"},
     "R2": {"note_split_mae_ms"},
@@ -101,42 +125,65 @@ def gate_structural_separation(perfs: Sequence[RealPerformanceTrack],
 
 
 def gate_intervention_tripwire(pairs: Sequence[Any]) -> GateResult:
-    """G3（§10）。各段で**意図した軸だけ**が動いたかを実測する。"""
+    """G3（§10）。各段で**意図した軸だけが意図した向きへ**動いたかを実測する。
+
+    2 つの修正（レビュー指摘・いずれもゲートを**厳しく**する方向）:
+
+    - `abs(delta) > tol` では悪化も「期待どおり動いた」と数えてしまうため、
+      `AXIS_DIRECTION` で向きを要求する（r3825592726）
+    - 転写が構造的に no-op になる probe（先行子音の無いノート）では
+      `note_split_mae_ms` は定義上動かない。これを「動くべき軸が動かない」と
+      数えるのは偽の失敗なので `not_evaluable` にする（r3825735595）
+    """
     ev: Dict[str, Any] = {}
     problems: List[str] = []
     for pair in pairs:
         base = pair.rungs.get("R0")
         if base is None:
             continue
+        noop_timing = bool(getattr(pair, "matching", {}).get("timing_transplant_is_noop", False))
         per_pair: Dict[str, Any] = {}
         for rung, expected in RUNG_EXPECTED_AXES.items():
             cur = pair.rungs.get(rung)
             if cur is None:
                 continue
-            moved = set()
-            deltas = {}
-            for axis, tol in AXIS_MOVE_TOL.items():
+            moved, away, deltas = set(), set(), {}
+            not_evaluable = set()
+            for axis in AXIS_MOVE_TOL:
+                if axis == "note_split_mae_ms" and noop_timing:
+                    deltas[axis] = None
+                    not_evaluable.add(axis)
+                    continue
                 b, c = getattr(base, axis), getattr(cur, axis)
                 if not (np.isfinite(b) and np.isfinite(c)):
                     deltas[axis] = None
+                    not_evaluable.add(axis)
                     continue
                 d = float(c - b)
                 deltas[axis] = round(d, 4)
-                if abs(d) > tol:
+                if _moved_toward_target(axis, d):
                     moved.add(axis)
-            per_pair[rung] = {"deltas": deltas, "moved": sorted(moved),
-                              "expected": sorted(expected)}
-            unexpected = moved - expected
-            missing = expected - moved
+                elif _moved_away(axis, d):
+                    away.add(axis)
+            exp = set(expected) - not_evaluable
+            per_pair[rung] = {"deltas": deltas, "moved_toward_target": sorted(moved),
+                              "moved_away_from_target": sorted(away),
+                              "expected": sorted(exp),
+                              "not_evaluable": sorted(not_evaluable)}
+            unexpected = (moved | away) - set(expected)
+            missing = exp - moved
             if unexpected:
                 problems.append(f"{pair.pair_key} {rung}: 想定外の軸が動いた {sorted(unexpected)}")
             if missing:
-                problems.append(f"{pair.pair_key} {rung}: 動くべき軸が動かない {sorted(missing)}")
+                problems.append(f"{pair.pair_key} {rung}: 目標へ近づくべき軸が近づかない {sorted(missing)}")
+            if away & set(expected):
+                problems.append(f"{pair.pair_key} {rung}: 目標から**遠ざかった** {sorted(away & set(expected))}")
         ev[pair.pair_key] = per_pair
     if problems:
         return GateResult("G3-intervention", FAIL, "; ".join(problems[:6]),
                           "成分トグルの実装か、軸の定義（交絡）を見直すこと", ev)
-    return GateResult("G3-intervention", PASS, "R1/R2/R3/R4 で意図した軸のみが動いた", "", ev)
+    return GateResult("G3-intervention", PASS,
+                      "R1/R2/R3/R4 で意図した軸のみが意図した向きへ動いた", "", ev)
 
 
 def gate_donor_texture_isolation(pairs: Sequence[Any], *,
@@ -205,9 +252,23 @@ def gate_trf(pairs: Sequence[Any], frozen: Dict[str, Dict[str, Any]]) -> GateRes
                 "r4_db": round(_trf_of(r4, EXPLORATORY_AXIS), 4),
                 "status": "CANDIDATE_SECONDARY_AXIS (判定に使わない)"}},
         }
+        is_primary = pair.probe_kind == "terminal_ri"
         if not fz["failure_present"]:
-            item["verdict"] = NOT_EVALUABLE
-            verdicts.append(NOT_EVALUABLE)
+            # baseline に破綻が無い probe（control 含む）は「改善」を問えないが、
+            # **悪化していないこと**は問える。以前は無条件に NOT_EVALUABLE として
+            # 見逃しており、medial /ri/ の +8.6dB の跳ねを取りこぼしていた
+            # （レビュー指摘 r3825463548）。
+            regress = v4 - v0
+            item["regression_db"] = round(regress, 4)
+            item["role"] = "primary" if is_primary else "control"
+            if regress > REGRESSION_TOL_DB:
+                item["verdict"] = FAIL
+                verdicts.append(FAIL)
+                item["reason"] = (f"破綻は無いが R4 で {regress:+.3f} dB 悪化した"
+                                  f"（許容 {REGRESSION_TOL_DB} dB）")
+            else:
+                item["verdict"] = NOT_EVALUABLE
+                verdicts.append(NOT_EVALUABLE)
         else:
             reg_ok = ((_trf_of(r4, "drift_db") - _trf_of(r0, "drift_db")) <= REGRESSION_TOL_DB
                       and (_trf_of(r4, "energy_tail_db")
@@ -358,8 +419,10 @@ def success_level(ledger_gates: Sequence[GateResult], pairs: Sequence[Any],
     identity_ok = st.get("G6-identity") == PASS and (
         ear_q1 is None or str(ear_q1).lower() != "no")
 
+    # G2（構造分離）と G1（再現性）が通っていなければ S2 以上を名乗らない
     if not (identity_ok and st.get("G4-donor-isolation") == PASS
-            and st.get("G1-determinism") == PASS and moved_axes):
+            and st.get("G1-determinism") == PASS
+            and st.get("G2-structural") == PASS and moved_axes):
         return "S1_REAL_RENDER"
     if st.get("G3-intervention") == PASS and len(moved_axes) >= 2:
         return "S3_SKILL_ATTRIBUTION"

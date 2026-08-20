@@ -36,7 +36,10 @@ for _p in (_HERE, _HERE.parent / "planb"):
 import pr_census  # noqa: E402
 import pr_gates  # noqa: E402
 import pr_identity  # noqa: E402
+import pr_ladder  # noqa: E402
 import pr_lab  # noqa: E402
+
+pa_sha = pr_ladder.sha256_bytes_of_file
 
 LADDER_MANIFEST = _HERE / "results" / "ladder_manifest.json"
 EAR_DIR = _HERE / "results" / "ear_set"
@@ -107,7 +110,16 @@ def build(blind: bool = False, kinds: Optional[List[str]] = None,
         for rung, m in p["rungs"].items():
             src = Path(m["wav_path"])
             if not src.exists():
-                continue
+                raise FileNotFoundError(
+                    f"{pair_key} {rung}: 記録された wav が存在しない（{src}）。"
+                    "聴取セットは pin 済みの成果物からしか作らない — "
+                    "pr_run.py ladder を実行し直すこと")
+            actual = pa_sha(src)
+            if actual != m["wav_file_sha256"]:
+                raise ValueError(
+                    f"{pair_key} {rung}: wav の sha256 が記録と不一致"
+                    f"（記録 {m['wav_file_sha256'][:12]}… / 実体 {actual[:12]}…）。"
+                    "別の走行の成果物に判定を貼り付けないため中断する")
             x, sr = sf.read(str(src))
             _write_pcm16(out / f"{rung}.wav", x, sr)
             files[rung] = str(out / f"{rung}.wav")

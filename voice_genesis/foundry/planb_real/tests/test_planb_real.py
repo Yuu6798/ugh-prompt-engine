@@ -182,21 +182,24 @@ def test_material_gate_passes_outside_repo(tmp_path):
     assert prm.gate_material(m, repo).status == prs.PASS
 
 
-def test_license_gate_is_blocked_until_answered():
+def test_license_gate_is_blocked_until_answered(tmp_path):
+    doc = tmp_path / "terms.txt"
+    doc.write_text("terms")
+    doc_sha = prm.sha256_file(doc)
     led = prm.blank_ledger()
     assert prm.gate_license(led).status == prs.BLOCKED
     # answered_by と逐語抜粋が無ければ、チェックリストが全て True でも通らない
     for subject, keys in (("ritsu_singing_db", prm.RITSU_CHECKLIST),
                           ("pjs_corpus", prm.PJS_CHECKLIST)):
         r = led.records[subject]
-        r.canonical_document, r.document_sha256, r.license_name = "d", "0" * 64, "t"
+        r.canonical_document, r.document_sha256, r.license_name = str(doc), doc_sha, "t"
         r.checklist = {k: True for k in keys}
     assert prm.gate_license(led).status == prs.BLOCKED
     for subject, keys in (("ritsu_singing_db", prm.RITSU_CHECKLIST),
                           ("pjs_corpus", prm.PJS_CHECKLIST)):
         rec = led.records[subject]
-        rec.canonical_document = "bundled_terms.txt"
-        rec.document_sha256 = "0" * 64
+        rec.canonical_document = str(doc)
+        rec.document_sha256 = doc_sha
         rec.license_name = "test"
         rec.answered_by = "tester"
         rec.verbatim_excerpts = ["excerpt"]
@@ -204,19 +207,41 @@ def test_license_gate_is_blocked_until_answered():
     assert prm.gate_license(led).status == prs.PASS
 
 
-def test_license_gate_fails_closed_on_negative_answer():
+def test_license_gate_fails_closed_on_negative_answer(tmp_path):
+    doc = tmp_path / "terms.txt"
+    doc.write_text("terms")
     led = prm.blank_ledger()
     for subject, keys in (("ritsu_singing_db", prm.RITSU_CHECKLIST),
                           ("pjs_corpus", prm.PJS_CHECKLIST)):
         rec = led.records[subject]
-        rec.canonical_document = "d"
-        rec.document_sha256 = "0" * 64
+        rec.canonical_document = str(doc)
+        rec.document_sha256 = prm.sha256_file(doc)
         rec.license_name = "test"
         rec.answered_by = "tester"
         rec.verbatim_excerpts = ["excerpt"]
         rec.checklist = {k: True for k in keys}
     led.records["ritsu_singing_db"].checklist["raw_db_redistribution_avoided"] = False
     assert prm.gate_license(led).status == prs.BLOCKED
+    # 規約文書の sha が実体と違えば通さない
+    led2 = prm.blank_ledger()
+    for subject, keys in (("ritsu_singing_db", prm.RITSU_CHECKLIST),
+                          ("pjs_corpus", prm.PJS_CHECKLIST)):
+        r = led2.records[subject]
+        r.canonical_document, r.document_sha256, r.license_name = str(doc), "0" * 64, "t"
+        r.answered_by = "tester"
+        r.verbatim_excerpts = ["x"]
+        r.checklist = {k: True for k in keys}
+    assert prm.gate_license(led2).status == prs.BLOCKED
+    # 確認項目のキーが欠けていれば通さない
+    led3 = prm.blank_ledger()
+    for subject, keys in (("ritsu_singing_db", prm.RITSU_CHECKLIST),
+                          ("pjs_corpus", prm.PJS_CHECKLIST)):
+        r = led3.records[subject]
+        r.canonical_document, r.document_sha256, r.license_name = str(doc), prm.sha256_file(doc), "t"
+        r.answered_by = "tester"
+        r.verbatim_excerpts = ["x"]
+        r.checklist = {k: True for k in list(keys)[:-1]}
+    assert prm.gate_license(led3).status == prs.BLOCKED
 
 
 # ---------------------------------------------------------------------------
