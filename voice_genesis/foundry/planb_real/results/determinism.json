@@ -1,0 +1,141 @@
+{
+  "gate": "G1-determinism",
+  "evidence": {
+    "terminal_ri|2018#215|pjs003#65": {
+      "identical": true,
+      "recorded": [
+        "f032e426af1153a1",
+        "fb8b996fa771b273",
+        "8218b8bffdcf462a",
+        "d1bc20e529cbcecd",
+        "cb686194be9a0003"
+      ],
+      "recomputed": [
+        "f032e426af1153a1",
+        "fb8b996fa771b273",
+        "8218b8bffdcf462a",
+        "d1bc20e529cbcecd",
+        "cb686194be9a0003"
+      ]
+    },
+    "terminal_ri|2018#598|pjs065#29": {
+      "identical": true,
+      "recorded": [
+        "78f132468f85bef1",
+        "961559f05ca90c79",
+        "3bd1e9d84dfe6355",
+        "43982ab2f2f3692f",
+        "b92ca181047193ce"
+      ],
+      "recomputed": [
+        "78f132468f85bef1",
+        "961559f05ca90c79",
+        "3bd1e9d84dfe6355",
+        "43982ab2f2f3692f",
+        "b92ca181047193ce"
+      ]
+    },
+    "terminal_i|1st_color#86|pjs001#54": {
+      "identical": true,
+      "recorded": [
+        "36417a3f97939190",
+        "8b511a16b87cc412",
+        "7a2f2b7f3d39e9f1",
+        "1ba7e4e8d826aac7",
+        "e8234400cab9b994"
+      ],
+      "recomputed": [
+        "36417a3f97939190",
+        "8b511a16b87cc412",
+        "7a2f2b7f3d39e9f1",
+        "1ba7e4e8d826aac7",
+        "e8234400cab9b994"
+      ]
+    },
+    "terminal_i|1st_color#218|pjs001#73": {
+      "identical": true,
+      "recorded": [
+        "dfa377cdde861921",
+        "eb6456ed33aea647",
+        "21a1f109f79599c7",
+        "f92b550ea1a18649",
+        "2baf5deed72300b3"
+      ],
+      "recomputed": [
+        "dfa377cdde861921",
+        "eb6456ed33aea647",
+        "21a1f109f79599c7",
+        "f92b550ea1a18649",
+        "2baf5deed72300b3"
+      ]
+    },
+    "terminal_N|1st_color#478|pjs002#61": {
+      "identical": true,
+      "recorded": [
+        "267a7e9636e938c7",
+        "bc9a0c1d4efdb524",
+        "267a7e9636e938c7",
+        "bc9a0c1d4efdb524",
+        "8d7ea304727955fa"
+      ],
+      "recomputed": [
+        "267a7e9636e938c7",
+        "bc9a0c1d4efdb524",
+        "267a7e9636e938c7",
+        "bc9a0c1d4efdb524",
+        "8d7ea304727955fa"
+      ]
+    },
+    "terminal_N|BRD#664|pjs017#27": {
+      "identical": true,
+      "recorded": [
+        "fcf57571a92cb1f3",
+        "a6f64e1a13e10baf",
+        "fcf57571a92cb1f3",
+        "a6f64e1a13e10baf",
+        "ccc5341f6d08c643"
+      ],
+      "recomputed": [
+        "fcf57571a92cb1f3",
+        "a6f64e1a13e10baf",
+        "fcf57571a92cb1f3",
+        "a6f64e1a13e10baf",
+        "ccc5341f6d08c643"
+      ]
+    },
+    "medial_ri|1st_color#104|pjs002#42": {
+      "identical": true,
+      "recorded": [
+        "bd50648ceaefd77c",
+        "2f289279221e6faf",
+        "aae2852388cd0169",
+        "a1754e80a2c758eb",
+        "732ac13b5ad435f7"
+      ],
+      "recomputed": [
+        "bd50648ceaefd77c",
+        "2f289279221e6faf",
+        "aae2852388cd0169",
+        "a1754e80a2c758eb",
+        "732ac13b5ad435f7"
+      ]
+    },
+    "medial_ri|1st_color#357|pjs002#54": {
+      "identical": true,
+      "recorded": [
+        "eb7c32a8da418522",
+        "e8247a8e6e16474d",
+        "023b53f1fe39396d",
+        "b7784323ba00caab",
+        "c6b078a45e8cc2ce"
+      ],
+      "recomputed": [
+        "eb7c32a8da418522",
+        "e8247a8e6e16474d",
+        "023b53f1fe39396d",
+        "b7784323ba00caab",
+        "c6b078a45e8cc2ce"
+      ]
+    }
+  }
+}

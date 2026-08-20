@@ -1,0 +1,89 @@
+{
+  "probe_counts": {
+    "terminal_ri": {
+      "ritsu": 95,
+      "pjs": 4
+    },
+    "terminal_su": {
+      "ritsu": 37,
+      "pjs": 0
+    },
+    "terminal_i": {
+      "ritsu": 698,
+      "pjs": 43
+    },
+    "terminal_N": {
+      "ritsu": 73,
+      "pjs": 7
+    },
+    "medial_ri": {
+      "ritsu": 686,
+      "pjs": 45
+    }
+  },
+  "usable_for_ladder": {
+    "terminal_ri": true,
+    "terminal_su": false,
+    "terminal_i": true,
+    "terminal_N": true,
+    "medial_ri": true
+  },
+  "identity_side_only": [
+    "terminal_su"
+  ],
+  "performance_side_only": [],
+  "absent_both": [],
+  "phoneme_vocabulary_overlap": [
+    "N",
+    "a",
+    "b",
+    "by",
+    "ch",
+    "cl",
+    "d",
+    "e",
+    "f",
+    "g",
+    "gy",
+    "h",
+    "hy",
+    "i",
+    "j",
+    "k",
+    "ky",
+    "m",
+    "my",
+    "n",
+    "ny",
+    "o",
+    "p",
+    "pau",
+    "py",
+    "r",
+    "ry",
+    "s",
+    "sh",
+    "t",
+    "ts",
+    "u",
+    "w",
+    "y",
+    "z"
+  ],
+  "ritsu_only_phonemes": [
+    "A",
+    "Edge",
+    "GlottalStop",
+    "I",
+    "O",
+    "U",
+    "br",
+    "dy",
+    "fy",
+    "sil",
+    "ty"
+  ],
+  "pjs_only_phonemes": [
+    "xx"
+  ]
+}

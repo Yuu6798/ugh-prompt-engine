@@ -1,0 +1,36 @@
+{
+  "source_id": "ritsu_singing_db",
+  "identity_sha256": "4411f48caf0d1b315f8806ff56c870f723584943c0e19a7404e9042112f10287",
+  "units": [
+    {
+      "label": "o",
+      "vowel": "o",
+      "start_s": 0.6,
+      "end_s": 1.1561,
+      "is_terminal": false
+    },
+    {
+      "label": "n",
+      "vowel": "C",
+      "start_s": 1.1561,
+      "end_s": 1.2344,
+      "is_terminal": false
+    },
+    {
+      "label": "i",
+      "vowel": "i",
+      "start_s": 1.2344,
+      "end_s": 2.0326,
+      "is_terminal": true
+    },
+    {
+      "label": "pau",
+      "vowel": "sil",
+      "start_s": 2.0326,
+      "end_s": 2.396,
+      "is_terminal": false
+    }
+  ],
+  "probe_unit_index": 2,
+  "nasal_envelope_source": "measured:N@32.10s"
+}

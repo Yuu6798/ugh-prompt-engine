@@ -1,0 +1,12 @@
+# raw corpus / 生成 WAV はリポジトリへ入れない（instruction §0-3・§15）。
+# 残すのは JSON 記録（sha256 で実体を pin する）のみ。
+wav/
+*.wav
+*.flac
+*.zip
+
+# ear_excerpts/ も同様に非収載。
+# 中身は Ritsu 収録音の再合成であり、歌声データベース利用規約 第3条（転載禁止）と
+# LICENSE_LEDGER.json に記帳した「PoC 出力は公開・頒布しない」方針に従う。
+# 耳判定は User へ直接受け渡す（公開経路に載せない）。
+ear_excerpts/

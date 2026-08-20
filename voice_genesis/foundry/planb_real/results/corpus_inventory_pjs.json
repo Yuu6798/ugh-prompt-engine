@@ -1,0 +1,939 @@
+{
+  "name": "pjs_corpus",
+  "root": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1",
+  "wav_count": 203,
+  "lab_count": 100,
+  "musicxml_count": 101,
+  "sample_rates": {
+    "48000": 203
+  },
+  "total_duration_s": 2188.204500000001,
+  "paired_count": 100,
+  "unpaired_wav": [
+    "background_20200530",
+    "background_20200601",
+    "background_20200602",
+    "pjs001_speech",
+    "pjs002_speech",
+    "pjs003_speech",
+    "pjs004_speech",
+    "pjs005_speech",
+    "pjs006_speech",
+    "pjs007_speech",
+    "pjs008_speech",
+    "pjs009_speech",
+    "pjs010_speech",
+    "pjs011_speech",
+    "pjs012_speech",
+    "pjs013_speech",
+    "pjs014_speech",
+    "pjs015_speech",
+    "pjs016_speech",
+    "pjs017_speech",
+    "pjs018_speech",
+    "pjs019_speech",
+    "pjs020_speech",
+    "pjs021_speech",
+    "pjs022_speech",
+    "pjs023_speech",
+    "pjs024_speech",
+    "pjs025_speech",
+    "pjs026_speech",
+    "pjs027_speech",
+    "pjs028_speech",
+    "pjs029_speech",
+    "pjs030_speech",
+    "pjs031_speech",
+    "pjs032_speech",
+    "pjs033_speech",
+    "pjs034_speech",
+    "pjs035_speech",
+    "pjs036_speech",
+    "pjs037_speech",
+    "pjs038_speech",
+    "pjs039_speech",
+    "pjs040_speech",
+    "pjs041_speech",
+    "pjs042_speech",
+    "pjs043_speech",
+    "pjs044_speech",
+    "pjs045_speech",
+    "pjs046_speech",
+    "pjs047_speech"
+  ],
+  "unpaired_lab": [],
+  "phoneme_vocabulary": {
+    "o": 883,
+    "a": 865,
+    "u": 732,
+    "i": 694,
+    "e": 490,
+    "pau": 388,
+    "k": 358,
+    "r": 321,
+    "t": 308,
+    "n": 301,
+    "N": 235,
+    "s": 191,
+    "sh": 168,
+    "d": 151,
+    "m": 142,
+    "g": 120,
+    "b": 95,
+    "w": 90,
+    "h": 71,
+    "ch": 69,
+    "j": 67,
+    "cl": 64,
+    "y": 62,
+    "p": 52,
+    "ts": 47,
+    "f": 44,
+    "z": 44,
+    "ky": 39,
+    "ny": 29,
+    "ry": 29,
+    "gy": 26,
+    "hy": 24,
+    "my": 16,
+    "by": 15,
+    "py": 7,
+    "xx": 1
+  },
+  "lab_time_units": {
+    "100ns": 100
+  },
+  "lab_styles": {
+    "mono": 100
+  },
+  "phrase_final_events": 288,
+  "devoiced_vowel_events": 0,
+  "excluded_probe_events": {
+    "terminal_su": 1
+  },
+  "unreliable_files": [
+    "pjs004.lab",
+    "pjs016.lab",
+    "pjs029.lab",
+    "pjs030.lab",
+    "pjs031.lab"
+  ],
+  "probes": {
+    "terminal_ri": [
+      {
+        "kind": "terminal_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs003/pjs003.lab",
+        "phone_index": 65,
+        "start_s": 11.4705,
+        "end_s": 12.003,
+        "vowel_duration_s": 0.5325
+      },
+      {
+        "kind": "terminal_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs065/pjs065.lab",
+        "phone_index": 29,
+        "start_s": 4.999,
+        "end_s": 5.21,
+        "vowel_duration_s": 0.211
+      },
+      {
+        "kind": "terminal_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs069/pjs069.lab",
+        "phone_index": 6,
+        "start_s": 3.876,
+        "end_s": 4.109,
+        "vowel_duration_s": 0.233
+      },
+      {
+        "kind": "terminal_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs094/pjs094.lab",
+        "phone_index": 143,
+        "start_s": 23.8653,
+        "end_s": 25.3323,
+        "vowel_duration_s": 1.467
+      }
+    ],
+    "terminal_su": [],
+    "terminal_i": [
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001.lab",
+        "phone_index": 54,
+        "start_s": 11.925,
+        "end_s": 12.381,
+        "vowel_duration_s": 0.456
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001.lab",
+        "phone_index": 73,
+        "start_s": 14.4,
+        "end_s": 15.0947,
+        "vowel_duration_s": 0.6947
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab",
+        "phone_index": 37,
+        "start_s": 9.988,
+        "end_s": 10.49,
+        "vowel_duration_s": 0.502
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs005/pjs005.lab",
+        "phone_index": 27,
+        "start_s": 5.4746,
+        "end_s": 5.6561,
+        "vowel_duration_s": 0.1815
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs005/pjs005.lab",
+        "phone_index": 51,
+        "start_s": 8.2871,
+        "end_s": 8.4806,
+        "vowel_duration_s": 0.1935
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs005/pjs005.lab",
+        "phone_index": 78,
+        "start_s": 13.7747,
+        "end_s": 14.1156,
+        "vowel_duration_s": 0.3409
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs008/pjs008.lab",
+        "phone_index": 72,
+        "start_s": 17.997,
+        "end_s": 18.1917,
+        "vowel_duration_s": 0.1947
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs014/pjs014.lab",
+        "phone_index": 19,
+        "start_s": 7.133,
+        "end_s": 7.504,
+        "vowel_duration_s": 0.371
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs017/pjs017.lab",
+        "phone_index": 6,
+        "start_s": 4.013,
+        "end_s": 4.506,
+        "vowel_duration_s": 0.493
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs022/pjs022.lab",
+        "phone_index": 10,
+        "start_s": 5.6767,
+        "end_s": 5.998,
+        "vowel_duration_s": 0.3213
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs026/pjs026.lab",
+        "phone_index": 25,
+        "start_s": 5.883,
+        "end_s": 5.998,
+        "vowel_duration_s": 0.115
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs027/pjs027.lab",
+        "phone_index": 38,
+        "start_s": 7.521,
+        "end_s": 8.984,
+        "vowel_duration_s": 1.463
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs032/pjs032.lab",
+        "phone_index": 98,
+        "start_s": 18.2278,
+        "end_s": 18.4785,
+        "vowel_duration_s": 0.2508
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs035/pjs035.lab",
+        "phone_index": 32,
+        "start_s": 11.1647,
+        "end_s": 11.3403,
+        "vowel_duration_s": 0.1757
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs038/pjs038.lab",
+        "phone_index": 6,
+        "start_s": 3.3294,
+        "end_s": 3.4356,
+        "vowel_duration_s": 0.1061
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs038/pjs038.lab",
+        "phone_index": 30,
+        "start_s": 5.258,
+        "end_s": 5.5644,
+        "vowel_duration_s": 0.3064
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs043/pjs043.lab",
+        "phone_index": 21,
+        "start_s": 4.8582,
+        "end_s": 5.0719,
+        "vowel_duration_s": 0.2138
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs044/pjs044.lab",
+        "phone_index": 59,
+        "start_s": 11.8285,
+        "end_s": 13.511,
+        "vowel_duration_s": 1.6825
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs053/pjs053.lab",
+        "phone_index": 4,
+        "start_s": 4.824,
+        "end_s": 5.399,
+        "vowel_duration_s": 0.575
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs053/pjs053.lab",
+        "phone_index": 19,
+        "start_s": 8.415,
+        "end_s": 10.181,
+        "vowel_duration_s": 1.766
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs054/pjs054.lab",
+        "phone_index": 75,
+        "start_s": 15.296,
+        "end_s": 15.894,
+        "vowel_duration_s": 0.598
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs056/pjs056.lab",
+        "phone_index": 44,
+        "start_s": 10.509,
+        "end_s": 11.0,
+        "vowel_duration_s": 0.491
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs057/pjs057.lab",
+        "phone_index": 37,
+        "start_s": 6.502,
+        "end_s": 6.994,
+        "vowel_duration_s": 0.492
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs060/pjs060.lab",
+        "phone_index": 35,
+        "start_s": 6.886,
+        "end_s": 7.125,
+        "vowel_duration_s": 0.239
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs061/pjs061.lab",
+        "phone_index": 54,
+        "start_s": 15.756,
+        "end_s": 16.511,
+        "vowel_duration_s": 0.755
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs061/pjs061.lab",
+        "phone_index": 63,
+        "start_s": 18.018,
+        "end_s": 18.746,
+        "vowel_duration_s": 0.728
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs063/pjs063.lab",
+        "phone_index": 36,
+        "start_s": 9.019,
+        "end_s": 9.4535,
+        "vowel_duration_s": 0.4345
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs064/pjs064.lab",
+        "phone_index": 61,
+        "start_s": 12.175,
+        "end_s": 13.793,
+        "vowel_duration_s": 1.618
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs065/pjs065.lab",
+        "phone_index": 43,
+        "start_s": 6.415,
+        "end_s": 7.583,
+        "vowel_duration_s": 1.168
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs069/pjs069.lab",
+        "phone_index": 34,
+        "start_s": 5.889,
+        "end_s": 5.994,
+        "vowel_duration_s": 0.105
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs072/pjs072.lab",
+        "phone_index": 43,
+        "start_s": 8.109,
+        "end_s": 8.688,
+        "vowel_duration_s": 0.579
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs074/pjs074.lab",
+        "phone_index": 22,
+        "start_s": 4.2957,
+        "end_s": 4.7283,
+        "vowel_duration_s": 0.4326
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs076/pjs076.lab",
+        "phone_index": 43,
+        "start_s": 13.3323,
+        "end_s": 13.6637,
+        "vowel_duration_s": 0.3313
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs076/pjs076.lab",
+        "phone_index": 60,
+        "start_s": 17.3443,
+        "end_s": 17.98,
+        "vowel_duration_s": 0.6357
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs079/pjs079.lab",
+        "phone_index": 70,
+        "start_s": 9.4,
+        "end_s": 9.979,
+        "vowel_duration_s": 0.579
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs080/pjs080.lab",
+        "phone_index": 64,
+        "start_s": 18.908,
+        "end_s": 19.807,
+        "vowel_duration_s": 0.899
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs081/pjs081.lab",
+        "phone_index": 55,
+        "start_s": 12.9351,
+        "end_s": 13.8302,
+        "vowel_duration_s": 0.8951
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs083/pjs083.lab",
+        "phone_index": 40,
+        "start_s": 10.9286,
+        "end_s": 12.4106,
+        "vowel_duration_s": 1.482
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs086/pjs086.lab",
+        "phone_index": 63,
+        "start_s": 16.807,
+        "end_s": 17.386,
+        "vowel_duration_s": 0.579
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs090/pjs090.lab",
+        "phone_index": 27,
+        "start_s": 9.006,
+        "end_s": 10.521,
+        "vowel_duration_s": 1.515
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs094/pjs094.lab",
+        "phone_index": 23,
+        "start_s": 4.6807,
+        "end_s": 4.998,
+        "vowel_duration_s": 0.3173
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs095/pjs095.lab",
+        "phone_index": 22,
+        "start_s": 5.3057,
+        "end_s": 5.5375,
+        "vowel_duration_s": 0.2318
+      },
+      {
+        "kind": "terminal_i",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs096/pjs096.lab",
+        "phone_index": 47,
+        "start_s": 5.4431,
+        "end_s": 5.5395,
+        "vowel_duration_s": 0.0964
+      }
+    ],
+    "terminal_N": [
+      {
+        "kind": "terminal_N",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab",
+        "phone_index": 61,
+        "start_s": 14.0913,
+        "end_s": 14.1787,
+        "vowel_duration_s": 0.0873
+      },
+      {
+        "kind": "terminal_N",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs017/pjs017.lab",
+        "phone_index": 27,
+        "start_s": 8.0735,
+        "end_s": 8.261,
+        "vowel_duration_s": 0.1875
+      },
+      {
+        "kind": "terminal_N",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs017/pjs017.lab",
+        "phone_index": 51,
+        "start_s": 12.0815,
+        "end_s": 12.271,
+        "vowel_duration_s": 0.1895
+      },
+      {
+        "kind": "terminal_N",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs042/pjs042.lab",
+        "phone_index": 38,
+        "start_s": 5.6092,
+        "end_s": 5.7812,
+        "vowel_duration_s": 0.1721
+      },
+      {
+        "kind": "terminal_N",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs082/pjs082.lab",
+        "phone_index": 69,
+        "start_s": 14.2867,
+        "end_s": 14.3866,
+        "vowel_duration_s": 0.0999
+      },
+      {
+        "kind": "terminal_N",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs084/pjs084.lab",
+        "phone_index": 38,
+        "start_s": 8.496,
+        "end_s": 8.6597,
+        "vowel_duration_s": 0.1637
+      },
+      {
+        "kind": "terminal_N",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs087/pjs087.lab",
+        "phone_index": 93,
+        "start_s": 21.022,
+        "end_s": 21.4296,
+        "vowel_duration_s": 0.4076
+      }
+    ],
+    "medial_ri": [
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab",
+        "phone_index": 42,
+        "start_s": 11.003,
+        "end_s": 11.2793,
+        "vowel_duration_s": 0.2763
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab",
+        "phone_index": 54,
+        "start_s": 13.002,
+        "end_s": 13.437,
+        "vowel_duration_s": 0.435
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs005/pjs005.lab",
+        "phone_index": 30,
+        "start_s": 6.006,
+        "end_s": 6.0975,
+        "vowel_duration_s": 0.0915
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs007/pjs007.lab",
+        "phone_index": 40,
+        "start_s": 12.1747,
+        "end_s": 12.2463,
+        "vowel_duration_s": 0.0717
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs007/pjs007.lab",
+        "phone_index": 56,
+        "start_s": 16.3463,
+        "end_s": 16.6697,
+        "vowel_duration_s": 0.3233
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs011/pjs011.lab",
+        "phone_index": 47,
+        "start_s": 9.3183,
+        "end_s": 9.415,
+        "vowel_duration_s": 0.0967
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs018/pjs018.lab",
+        "phone_index": 21,
+        "start_s": 3.8423,
+        "end_s": 3.969,
+        "vowel_duration_s": 0.1267
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs018/pjs018.lab",
+        "phone_index": 42,
+        "start_s": 7.8313,
+        "end_s": 7.933,
+        "vowel_duration_s": 0.1017
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs020/pjs020.lab",
+        "phone_index": 11,
+        "start_s": 3.1815,
+        "end_s": 3.4155,
+        "vowel_duration_s": 0.234
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs021/pjs021.lab",
+        "phone_index": 18,
+        "start_s": 7.8543,
+        "end_s": 8.9,
+        "vowel_duration_s": 1.0457
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs022/pjs022.lab",
+        "phone_index": 21,
+        "start_s": 8.004,
+        "end_s": 8.5717,
+        "vowel_duration_s": 0.5677
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs022/pjs022.lab",
+        "phone_index": 41,
+        "start_s": 12.6737,
+        "end_s": 13.2203,
+        "vowel_duration_s": 0.5467
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs028/pjs028.lab",
+        "phone_index": 12,
+        "start_s": 4.6865,
+        "end_s": 4.793,
+        "vowel_duration_s": 0.1065
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs028/pjs028.lab",
+        "phone_index": 58,
+        "start_s": 12.373,
+        "end_s": 12.4585,
+        "vowel_duration_s": 0.0855
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs035/pjs035.lab",
+        "phone_index": 4,
+        "start_s": 4.3423,
+        "end_s": 4.6147,
+        "vowel_duration_s": 0.2723
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs040/pjs040.lab",
+        "phone_index": 36,
+        "start_s": 6.3363,
+        "end_s": 6.487,
+        "vowel_duration_s": 0.1507
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs044/pjs044.lab",
+        "phone_index": 64,
+        "start_s": 14.632,
+        "end_s": 14.7455,
+        "vowel_duration_s": 0.1135
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs045/pjs045.lab",
+        "phone_index": 44,
+        "start_s": 6.3402,
+        "end_s": 6.4835,
+        "vowel_duration_s": 0.1434
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs048/pjs048.lab",
+        "phone_index": 50,
+        "start_s": 9.007,
+        "end_s": 9.1284,
+        "vowel_duration_s": 0.1214
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs049/pjs049.lab",
+        "phone_index": 46,
+        "start_s": 10.053,
+        "end_s": 10.482,
+        "vowel_duration_s": 0.429
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs054/pjs054.lab",
+        "phone_index": 110,
+        "start_s": 20.852,
+        "end_s": 20.961,
+        "vowel_duration_s": 0.109
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs055/pjs055.lab",
+        "phone_index": 4,
+        "start_s": 2.0899,
+        "end_s": 2.1973,
+        "vowel_duration_s": 0.1074
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs056/pjs056.lab",
+        "phone_index": 64,
+        "start_s": 13.6627,
+        "end_s": 13.7593,
+        "vowel_duration_s": 0.0967
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs058/pjs058.lab",
+        "phone_index": 50,
+        "start_s": 10.3363,
+        "end_s": 10.5703,
+        "vowel_duration_s": 0.234
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs060/pjs060.lab",
+        "phone_index": 14,
+        "start_s": 4.632,
+        "end_s": 4.823,
+        "vowel_duration_s": 0.191
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs061/pjs061.lab",
+        "phone_index": 61,
+        "start_s": 17.8115,
+        "end_s": 17.947,
+        "vowel_duration_s": 0.1355
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs063/pjs063.lab",
+        "phone_index": 7,
+        "start_s": 3.9321,
+        "end_s": 4.0488,
+        "vowel_duration_s": 0.1168
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs069/pjs069.lab",
+        "phone_index": 31,
+        "start_s": 5.623,
+        "end_s": 5.827,
+        "vowel_duration_s": 0.204
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs069/pjs069.lab",
+        "phone_index": 69,
+        "start_s": 9.497,
+        "end_s": 9.569,
+        "vowel_duration_s": 0.072
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs069/pjs069.lab",
+        "phone_index": 83,
+        "start_s": 10.757,
+        "end_s": 10.858,
+        "vowel_duration_s": 0.101
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs070/pjs070.lab",
+        "phone_index": 45,
+        "start_s": 9.4326,
+        "end_s": 9.5679,
+        "vowel_duration_s": 0.1353
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs072/pjs072.lab",
+        "phone_index": 23,
+        "start_s": 6.296,
+        "end_s": 6.388,
+        "vowel_duration_s": 0.092
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs073/pjs073.lab",
+        "phone_index": 29,
+        "start_s": 6.503,
+        "end_s": 6.675,
+        "vowel_duration_s": 0.172
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs074/pjs074.lab",
+        "phone_index": 11,
+        "start_s": 2.7857,
+        "end_s": 2.993,
+        "vowel_duration_s": 0.2073
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs074/pjs074.lab",
+        "phone_index": 29,
+        "start_s": 5.5794,
+        "end_s": 5.7707,
+        "vowel_duration_s": 0.1913
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs077/pjs077.lab",
+        "phone_index": 72,
+        "start_s": 13.3125,
+        "end_s": 13.779,
+        "vowel_duration_s": 0.4665
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs087/pjs087.lab",
+        "phone_index": 33,
+        "start_s": 9.4356,
+        "end_s": 9.7851,
+        "vowel_duration_s": 0.3496
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs088/pjs088.lab",
+        "phone_index": 28,
+        "start_s": 6.751,
+        "end_s": 6.831,
+        "vowel_duration_s": 0.08
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs092/pjs092.lab",
+        "phone_index": 35,
+        "start_s": 7.0518,
+        "end_s": 7.3338,
+        "vowel_duration_s": 0.2819
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs092/pjs092.lab",
+        "phone_index": 64,
+        "start_s": 11.6501,
+        "end_s": 11.936,
+        "vowel_duration_s": 0.2859
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs092/pjs092.lab",
+        "phone_index": 68,
+        "start_s": 12.3539,
+        "end_s": 12.6589,
+        "vowel_duration_s": 0.3049
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs096/pjs096.lab",
+        "phone_index": 52,
+        "start_s": 5.8816,
+        "end_s": 5.928,
+        "vowel_duration_s": 0.0464
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs097/pjs097.lab",
+        "phone_index": 39,
+        "start_s": 9.003,
+        "end_s": 9.1685,
+        "vowel_duration_s": 0.1655
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs100/pjs100.lab",
+        "phone_index": 3,
+        "start_s": 2.7902,
+        "end_s": 3.1898,
+        "vowel_duration_s": 0.3995
+      },
+      {
+        "kind": "medial_ri",
+        "file": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs100/pjs100.lab",
+        "phone_index": 76,
+        "start_s": 10.1518,
+        "end_s": 10.1992,
+        "vowel_duration_s": 0.0474
+      }
+    ]
+  },
+  "structure_warnings": [
+    "lab が wav より長い: pjs004.lab (lab 16.80s > wav 14.40s) — probe を除外した",
+    "lab が wav より長い: pjs016.lab (lab 30.00s > wav 26.67s) — probe を除外した",
+    "lab が wav より長い: pjs029.lab (lab 21.33s > wav 18.67s) — probe を除外した",
+    "lab が wav より長い: pjs030.lab (lab 15.00s > wav 12.00s) — probe を除外した",
+    "lab が wav より長い: pjs031.lab (lab 9.23s > wav 8.77s) — probe を除外した"
+  ],
+  "lab_wav_pairing_rule": "<stem>.wav|<stem>_song.wav",
+  "probe_counts": {
+    "terminal_ri": 4,
+    "terminal_su": 0,
+    "terminal_i": 43,
+    "terminal_N": 7,
+    "medial_ri": 45
+  }
+}
