@@ -286,6 +286,35 @@ def note_region_energy(
     return out
 
 
+OWNER_MARKER = ".vgl0_probe_output"
+
+
+def reset_condition_dir(out_dir: Path) -> None:
+    """条件ディレクトリを作り直す。**probe が作ったものだけ**消す。
+
+    使い回した `--out-dir` に前回の wav が残ると、gate_synth の wav 名が
+    notes_limit を含むため `sorted(...)[0]` が前回の測定結果を掴みうる
+    （例: `_n10` が `_n6` より前に並ぶ）。だが無条件 `rmtree` は、`--out-dir`
+    の打ち間違いや流用で**無関係な成果物を消す**（レビュー指摘 P2 /
+    AGENTS.md「衝突ガードは必須引数」）。
+
+    そこで probe が作ったディレクトリには所有マーカーを置き、**マーカーの
+    無いディレクトリは消さずに fail-closed** にする。
+    """
+    if out_dir.exists():
+        if not (out_dir / OWNER_MARKER).exists():
+            raise SystemExit(
+                f"出力先 {out_dir} は probe が作ったディレクトリではない"
+                f"（所有マーカー {OWNER_MARKER} が無い）。無関係な成果物を"
+                f"消さないため中断する。--out-dir を空の場所へ変えること")
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+    (out_dir / OWNER_MARKER).write_text(
+        "vgl0_control_axis_probe が所有する出力ディレクトリ。"
+        "このファイルがあるディレクトリだけ probe は削除・再作成する。\n",
+        encoding="utf-8")
+
+
 def synth_once(
     label: str,
     cfg: "ProbeConfig",
@@ -355,12 +384,7 @@ def synth_once(
     gs.build_inputs = build_inputs_probe  # type: ignore[assignment]
     gs.ort.InferenceSession = session_probe  # type: ignore[assignment]
     out_dir = cfg.out_dir / label
-    if out_dir.exists():
-        # 同じ --out-dir を別の --notes-limit で使い回すと、条件ディレクトリに
-        # 前回の wav が残る。gate_synth の wav 名は notes_limit を含むため
-        # `sorted(...)[0]` が**前回の測定結果**を掴みうる（例: _n10 が _n6 より
-        # 前に並ぶ）。fail-closed にせず作り直す。
-        shutil.rmtree(out_dir)
+    reset_condition_dir(out_dir)
     try:
         with open(cfg.out_dir / f"{label}.log", "w") as logf, \
                 contextlib.redirect_stdout(logf):

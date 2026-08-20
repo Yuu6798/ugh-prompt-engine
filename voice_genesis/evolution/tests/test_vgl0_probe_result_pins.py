@@ -240,6 +240,39 @@ def test_every_probe_subprocess_passed_all_gates() -> None:
         assert not run["failures"], f"{run['tag']}: {run['failures']}"
 
 
+def test_checker_self_pin_is_load_time_and_stable() -> None:
+    """検査スクリプトの sha が **ロード時に固定**され、実行後も一致していること。
+
+    実行後にディスクから読むと、10 本のサブプロセスが走る数分の間にファイルが
+    編集された場合「判定を出したのは旧コード / 記録は新ファイルの hash」に
+    なり、この fixture テストが別実装を検証してしまう（レビュー指摘 P2）。
+    """
+    payload = _load(REPRO_JSON)
+    checker = payload["checker_script"]
+    committed = _sha256(REPRO_SCRIPT)
+    assert checker["sha256"] == committed, (
+        "checker_script.sha256（ロード時 pin）がコミット済みスクリプトと一致しない")
+    assert checker["sha256_after_run"] == committed, (
+        "実行後の再 hash がコミット済みスクリプトと一致しない")
+    stable = next(f for f in payload["findings"]
+                  if f["check"] == "checker_unchanged_during_run")
+    assert stable["match"], f"実行中に検査スクリプトが変化した: {stable}"
+
+
+def test_pins_identical_across_every_subprocess() -> None:
+    """10 プロセスすべてが同一の pin セットで走ったこと。
+
+    forward の pin だけ保持して比較しないと、**出力に影響しないバイト変更**が
+    途中で入っても WAV は一致し PASS が出る（レビュー指摘 P2）。
+    """
+    payload = _load(REPRO_JSON)
+    finding = next(f for f in payload["findings"]
+                   if f["check"] == "pins_identical_across_processes")
+    assert finding["match"], f"プロセス間で pin が異なる: {finding['diffs']}"
+    assert finding["n_compared"] == 10, (
+        f"pin を比較したプロセス数が 10 でない: {finding['n_compared']}")
+
+
 def test_reproducibility_result_is_fresh_process_based() -> None:
     """Render Reproducibility は **独立プロセス間**で確認されていること。
 

@@ -26,7 +26,7 @@
   "pins": {
     "probe_script": {
       "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_control_axis_probe.py",
-      "sha256": "468491d2280f1b9bc073f32666fe479745166513cb6870e000369aa4f132f873"
+      "sha256": "deef11992b5e1aa0b553681408be79c48e2946fbc4887c7c76e387f35909d1b0"
     },
     "gate_synth": {
       "path": "/workspace/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth.py",
@@ -210,9 +210,9 @@
         "wav_rms": 0.06886498010578998,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.011610269546508789,
-        "stage2_elapsed_sec": 1.3594553470611572,
-        "stage3_elapsed_sec": 9.386495351791382
+        "stage1_elapsed_sec": 0.010007143020629883,
+        "stage2_elapsed_sec": 1.3013942241668701,
+        "stage3_elapsed_sec": 8.787320852279663
       }
     },
     {
@@ -334,9 +334,9 @@
         "wav_rms": 0.06886498010578998,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.010894536972045898,
-        "stage2_elapsed_sec": 1.1950790882110596,
-        "stage3_elapsed_sec": 8.645255088806152
+        "stage1_elapsed_sec": 0.017763614654541016,
+        "stage2_elapsed_sec": 1.1913766860961914,
+        "stage3_elapsed_sec": 8.488674879074097
       }
     },
     {
@@ -464,9 +464,9 @@
         "wav_rms": 0.10026770203508507,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.011968851089477539,
-        "stage2_elapsed_sec": 1.2812070846557617,
-        "stage3_elapsed_sec": 8.774798393249512
+        "stage1_elapsed_sec": 0.009511709213256836,
+        "stage2_elapsed_sec": 1.2011089324951172,
+        "stage3_elapsed_sec": 8.399787425994873
       }
     },
     {
@@ -594,9 +594,9 @@
         "wav_rms": 0.05483272185201161,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.012094259262084961,
-        "stage2_elapsed_sec": 1.1981394290924072,
-        "stage3_elapsed_sec": 8.941305875778198
+        "stage1_elapsed_sec": 0.009485483169555664,
+        "stage2_elapsed_sec": 1.1459689140319824,
+        "stage3_elapsed_sec": 8.378254413604736
       }
     },
     {
@@ -724,9 +724,9 @@
         "wav_rms": 0.11059995743442742,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.009237289428710938,
-        "stage2_elapsed_sec": 1.1881029605865479,
-        "stage3_elapsed_sec": 8.52875804901123
+        "stage1_elapsed_sec": 0.00949549674987793,
+        "stage2_elapsed_sec": 1.1472582817077637,
+        "stage3_elapsed_sec": 8.498505353927612
       }
     },
     {
@@ -854,9 +854,9 @@
         "wav_rms": 0.08924822100352607,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.010031700134277344,
-        "stage2_elapsed_sec": 1.1632859706878662,
-        "stage3_elapsed_sec": 8.52648639678955
+        "stage1_elapsed_sec": 0.009511470794677734,
+        "stage2_elapsed_sec": 1.1648297309875488,
+        "stage3_elapsed_sec": 8.339970111846924
       }
     },
     {
@@ -984,9 +984,9 @@
         "wav_rms": 0.09027726031955981,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.010461807250976562,
-        "stage2_elapsed_sec": 1.1530818939208984,
-        "stage3_elapsed_sec": 8.562153816223145
+        "stage1_elapsed_sec": 0.010548591613769531,
+        "stage2_elapsed_sec": 1.143855333328247,
+        "stage3_elapsed_sec": 8.610940933227539
       }
     },
     {
@@ -1114,9 +1114,9 @@
         "wav_rms": 0.08924822100352607,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.009698629379272461,
-        "stage2_elapsed_sec": 1.1159563064575195,
-        "stage3_elapsed_sec": 8.542497396469116
+        "stage1_elapsed_sec": 0.00980234146118164,
+        "stage2_elapsed_sec": 1.1540281772613525,
+        "stage3_elapsed_sec": 8.837149381637573
       }
     },
     {
@@ -1238,9 +1238,9 @@
         "wav_rms": 0.05402464806575237,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.244625850340136,
-        "stage1_elapsed_sec": 0.009953737258911133,
-        "stage2_elapsed_sec": 1.217355489730835,
-        "stage3_elapsed_sec": 8.941823244094849
+        "stage1_elapsed_sec": 0.010586023330688477,
+        "stage2_elapsed_sec": 1.3090531826019287,
+        "stage3_elapsed_sec": 9.26149845123291
       }
     },
     {
@@ -1362,9 +1362,9 @@
         "wav_rms": 0.10532166950881346,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.244625850340136,
-        "stage1_elapsed_sec": 0.00974273681640625,
-        "stage2_elapsed_sec": 1.1771774291992188,
-        "stage3_elapsed_sec": 8.970787048339844
+        "stage1_elapsed_sec": 0.009740352630615234,
+        "stage2_elapsed_sec": 1.199193000793457,
+        "stage3_elapsed_sec": 8.932603597640991
       }
     },
     {
@@ -1495,9 +1495,9 @@
         "wav_rms": 0.09289773827433484,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.989206349206349,
-        "stage1_elapsed_sec": 0.010449886322021484,
-        "stage2_elapsed_sec": 1.224860429763794,
-        "stage3_elapsed_sec": 8.762365818023682
+        "stage1_elapsed_sec": 0.009955883026123047,
+        "stage2_elapsed_sec": 1.214548110961914,
+        "stage3_elapsed_sec": 8.955505132675171
       }
     },
     {
@@ -1628,9 +1628,9 @@
         "wav_rms": 0.10120583386268357,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.1053061224489795,
-        "stage1_elapsed_sec": 0.010863065719604492,
-        "stage2_elapsed_sec": 1.3561933040618896,
-        "stage3_elapsed_sec": 9.448324918746948
+        "stage1_elapsed_sec": 0.009516477584838867,
+        "stage2_elapsed_sec": 1.2734708786010742,
+        "stage3_elapsed_sec": 8.883313417434692
       }
     },
     {
@@ -1761,9 +1761,9 @@
         "wav_rms": 0.10120583386268357,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.1053061224489795,
-        "stage1_elapsed_sec": 0.009853124618530273,
-        "stage2_elapsed_sec": 1.2336039543151855,
-        "stage3_elapsed_sec": 8.85750699043274
+        "stage1_elapsed_sec": 0.00975799560546875,
+        "stage2_elapsed_sec": 1.2256195545196533,
+        "stage3_elapsed_sec": 8.945619344711304
       }
     },
     {
@@ -1885,9 +1885,9 @@
         "wav_rms": 0.07566808711753871,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.7090249433106575,
-        "stage1_elapsed_sec": 0.009712696075439453,
-        "stage2_elapsed_sec": 1.4192695617675781,
-        "stage3_elapsed_sec": 9.722119569778442
+        "stage1_elapsed_sec": 0.010241031646728516,
+        "stage2_elapsed_sec": 1.3221540451049805,
+        "stage3_elapsed_sec": 9.849804401397705
       }
     },
     {
@@ -2009,9 +2009,9 @@
         "wav_rms": 0.06784641258667723,
         "wav_peak": 0.6,
         "wav_duration_sec": 8.544943310657596,
-        "stage1_elapsed_sec": 0.011619091033935547,
-        "stage2_elapsed_sec": 1.4831724166870117,
-        "stage3_elapsed_sec": 10.651303052902222
+        "stage1_elapsed_sec": 0.010357379913330078,
+        "stage2_elapsed_sec": 1.579103708267212,
+        "stage3_elapsed_sec": 11.522081136703491
       }
     },
     {
@@ -2133,9 +2133,9 @@
         "wav_rms": 0.06703626390772136,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.7090249433106575,
-        "stage1_elapsed_sec": 0.011626005172729492,
-        "stage2_elapsed_sec": 1.3684611320495605,
-        "stage3_elapsed_sec": 9.76047945022583
+        "stage1_elapsed_sec": 0.010225772857666016,
+        "stage2_elapsed_sec": 1.304182529449463,
+        "stage3_elapsed_sec": 9.380619525909424
       }
     },
     {
@@ -2272,9 +2272,9 @@
         "wav_rms": 0.1113022727182771,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.1053061224489795,
-        "stage1_elapsed_sec": 0.010755062103271484,
-        "stage2_elapsed_sec": 1.265688419342041,
-        "stage3_elapsed_sec": 8.911619186401367
+        "stage1_elapsed_sec": 0.00985860824584961,
+        "stage2_elapsed_sec": 1.2372198104858398,
+        "stage3_elapsed_sec": 8.911734819412231
       }
     }
   ]

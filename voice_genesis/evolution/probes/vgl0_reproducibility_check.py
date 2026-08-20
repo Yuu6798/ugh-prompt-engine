@@ -38,6 +38,15 @@ def sha256_path(p: Path) -> str:
 
 
 PROBE = Path(__file__).resolve().parent / "vgl0_control_axis_probe.py"
+SELF = Path(__file__).resolve()
+
+# **ロード時に自分自身の sha を固定する**。実行後にディスクから読むと、10 本の
+# サブプロセスが走っている数分の間にこのファイルが編集された場合、
+# 「判定を出したのは旧コード / 記録される hash は新ファイル」という乖離ができ、
+# fixture テストが別実装を検証してしまう（レビュー指摘 P2 /
+# AGENTS.md「hash した bytes と実行された bytes の間に cache の窓が無いか」）。
+# 実行後に再 hash して一致も検証する。
+_SELF_SHA_AT_LOAD = hashlib.sha256(SELF.read_bytes()).hexdigest()
 
 # 期待条件集合は probe 本体の定義を単一ソースとして読む。両実行が「同じ条件を
 # 揃って落とした」場合、突き合わせだけでは検出できない（レビュー指摘）ので、
@@ -118,6 +127,11 @@ def probe_run_failures(payload: dict, rc: int, tag: str) -> List[str]:
     return out
 
 
+def pin_map(payload: dict) -> Dict[str, str]:
+    """payload の pin を {key: sha256} へ畳む（パスは環境依存なので除く）。"""
+    return {k: v.get("sha256") for k, v in (payload.get("pins") or {}).items()}
+
+
 def sha_map(payload: dict) -> Dict[str, str]:
     return {c["label"]: c["wav_sha256"] for c in payload["conditions"]
             if "wav_sha256" in c}
@@ -165,6 +179,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # 「何プロセスを、どのゲートで検査したか」を結果に残す（PASS の根拠を
     # 後から数えられるようにする）
     probe_runs: List[dict] = []
+    # 全サブプロセスの pin を集めて突き合わせる。forward の pin だけ保持して
+    # 比較しないと、**出力に影響しないバイト変更**（score.py の整形など）が
+    # 途中で入っても WAV は一致し PASS が出てしまう（レビュー指摘 P2）。
+    pin_maps: List[Tuple[str, Dict[str, str]]] = []
 
     # --- 検査 1: fresh-process 反復 -----------------------------------------
     for label in REPLAY_LABELS:
@@ -182,6 +200,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
                 "failures": run_failures,
             })
+            pin_maps.append((tag_name, pin_map(payload)))
             # 失敗時は None を入れる。ここで KeyError を投げると結果 JSON が
             # 1 行も書かれずに落ち、何が起きたかが残らない。
             shas.append(sha_map(payload).get(label))
@@ -210,6 +229,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
             "failures": run_failures,
         })
+        pin_maps.append((tag_name, pin_map(payload)))
     fwd_shas, rev_shas = sha_map(fwd), sha_map(rev)
     # 積集合だけを回すと、片方で失敗した条件が黙って検査対象から消える。
     # 和集合で回し、欠けている側は不一致として扱う。
@@ -243,6 +263,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not exec_ok:
         failures.append("execution_profile differs between processes")
 
+    # --- 検査 4: 全サブプロセスの pin 一致 ----------------------------------
+    ref_tag, ref_pins = pin_maps[0]
+    pin_diffs = []
+    for tag_name, pins in pin_maps[1:]:
+        differing = sorted(k for k in set(ref_pins) | set(pins)
+                           if ref_pins.get(k) != pins.get(k))
+        if differing:
+            pin_diffs.append({"tag": tag_name, "vs": ref_tag, "keys": differing})
+            failures.append(f"{tag_name}: pin が {ref_tag} と異なる {differing}")
+    findings.append({"check": "pins_identical_across_processes",
+                     "n_compared": len(pin_maps), "diffs": pin_diffs,
+                     "match": not pin_diffs})
+
+    # --- 検査 5: 検査スクリプト自身が実行中に書き換わっていないか -------------
+    self_sha_after = hashlib.sha256(SELF.read_bytes()).hexdigest()
+    self_stable = self_sha_after == _SELF_SHA_AT_LOAD
+    findings.append({"check": "checker_unchanged_during_run",
+                     "sha_at_load": _SELF_SHA_AT_LOAD,
+                     "sha_after_run": self_sha_after, "match": self_stable})
+    if not self_stable:
+        failures.append(
+            "検査スクリプトが実行中に書き換わった — 判定を出したコードと "
+            "記録される hash が食い違うため verdict を信頼できない")
+
     # 同一プロセス内の反復（forward 実行の *_repeat 条件）は**別種の証拠**
     # として区別して残す — これは independent replay ではない。
     in_process = [
@@ -256,8 +300,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     payload = {
         # 結果を生んだコード自身の sha も束縛する（probe だけ pin して検査
         # スクリプトを pin しないと、PASS の出どころが辿れない）
-        "checker_script": {"path": str(Path(__file__).resolve()),
-                           "sha256": sha256_path(Path(__file__).resolve())},
+        "checker_script": {"path": str(SELF), "sha256": _SELF_SHA_AT_LOAD,
+                           "sha256_after_run": self_sha_after,
+                           "note": "sha256 は **ロード時**に固定した値。実行後の "
+                                   "再 hash と一致することを findings で検証する"},
         # verdict を入力そのものへ束縛する。probe/checker の sha だけでは
         # 「どのモデル・楽譜に対する PASS か」が結果から辿れない（レビュー指摘）。
         "pins": fwd.get("pins"),
