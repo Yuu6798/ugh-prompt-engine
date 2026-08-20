@@ -50,6 +50,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -105,6 +106,7 @@ class _DurOutputPatch:
             if probe.consonant_duration_scale == 1.0:
                 return out
             flags = captured.get("is_vowel_flags") or []
+            phones = captured.get("real_phones") or []
             pred = np.array(out[idx], dtype=np.float64)
             body = pred[0]
             changed = 0
@@ -112,6 +114,12 @@ class _DurOutputPatch:
             for i, is_vowel in enumerate(flags):
                 j = i + 1  # run_pipeline は offset=1（先頭 SP 分）から読む
                 if j >= len(body):
+                    continue
+                # ブレスとして挿入した SP は子音でも母音でもないので係数の
+                # 対象から外す（`phone_frame_invariant` と同じ扱いに揃える）。
+                # 揃えないと併用条件の子音比が SP を含んだ値になり、
+                # 子音軸単独の条件と比較できなくなる。
+                if i < len(phones) and phones[i] == "SP":
                     continue
                 if is_vowel:
                     pre_vow += float(body[j])
@@ -295,6 +303,13 @@ def synth_once(
         cfg.song, cfg.singer_dir)
     model_bytes, _ = gs.load_model_bundle_bytes(
         cfg.canon, cfg.vocoder, cfg.acoustic_onnx, cfg.acoustic_dsconfig)
+    # **推論へ実際に渡ったバイト列**そのものを hash する（レビュー指摘）。
+    # `collect_pins` はパスを別途 read するので、その read と合成が使う read の
+    # 間に差し替えが起きると記録と実体がずれる（gate_synth が
+    # `load_model_bundle_bytes` を導入したのと同じ TOCTOU の理屈）。
+    # `load_model_bundle_bytes` は 1 回だけ read したバッファを返すので、
+    # ここで hash すれば記録と推論入力が同一バッファ由来だと構造的に言える。
+    consumed = {k: sha256_bytes(v) for k, v in sorted(model_bytes.items())}
     variance_phonemes = gs.load_canon_phonemes(cfg.canon / "phonemes.txt")
     acoustic_phonemes = gs.load_own_phonemes_json(cfg.acoustic_phonemes_json)
     emb = gs.load_speaker_embed_vector(cfg.speaker_emb)
@@ -340,8 +355,15 @@ def synth_once(
     gs.build_inputs = build_inputs_probe  # type: ignore[assignment]
     gs.ort.InferenceSession = session_probe  # type: ignore[assignment]
     out_dir = cfg.out_dir / label
+    if out_dir.exists():
+        # 同じ --out-dir を別の --notes-limit で使い回すと、条件ディレクトリに
+        # 前回の wav が残る。gate_synth の wav 名は notes_limit を含むため
+        # `sorted(...)[0]` が**前回の測定結果**を掴みうる（例: _n10 が _n6 より
+        # 前に並ぶ）。fail-closed にせず作り直す。
+        shutil.rmtree(out_dir)
     try:
-        with contextlib.redirect_stdout(open(cfg.out_dir / f"{label}.log", "w")):
+        with open(cfg.out_dir / f"{label}.log", "w") as logf, \
+                contextlib.redirect_stdout(logf):
             gs.synth_song(
                 cfg.song, cfg.notes_limit, build_fn, beats_to_seconds, tempo,
                 model_bytes, variance_phonemes, acoustic_phonemes, out_dir,
@@ -353,7 +375,9 @@ def synth_once(
         gs.ort.InferenceSession = orig_session  # type: ignore[assignment]
 
     wavs = sorted(out_dir.rglob("*.wav"))
-    assert wavs, f"{label}: wav が生成されていない"
+    assert len(wavs) == 1, (
+        f"{label}: wav が 1 本であるべきだが {len(wavs)} 本ある "
+        f"({[w.name for w in wavs]}) — どれを測ったか一意に決まらない")
     data, sr = sf.read(str(wavs[0]))
     regions = note_region_energy(data, captured.get("note_target_frames") or [],
                                  head_frames)
@@ -398,6 +422,7 @@ def synth_once(
         if build_patch.inserted else [],
         "notes_scaled": build_patch.scaled_notes,
         "note_region_energy": regions,
+        "consumed_model_sha256": consumed,
         "phone_frame_invariant": phone_frame_invariant(
             captured.get("acoustic_durations") or [],
             captured.get("note_target_frames") or [],
@@ -487,11 +512,12 @@ class ProbeConfig:
         self.acoustic_dir = Path(a.acoustic_dir)
         self.acoustic_onnx = Path(a.acoustic_onnx)
         self.acoustic_dsconfig = self.acoustic_dir / "dsconfig.yaml"
-        self.acoustic_phonemes_json = Path(
-            str(self.acoustic_onnx).replace(".onnx", ".phonemes.json"))
+        # 末尾の .onnx だけを差し替える（`str.replace` は全出現を置換するので、
+        # 親ディレクトリ名に .onnx を含むパスで壊れる）
+        stem = self.acoustic_onnx.with_suffix("")
+        self.acoustic_phonemes_json = stem.with_name(stem.name + ".phonemes.json")
         self.speaker = a.speaker
-        self.speaker_emb = Path(
-            str(self.acoustic_onnx).replace(".onnx", f".{a.speaker}.emb"))
+        self.speaker_emb = stem.with_name(f"{stem.name}.{a.speaker}.emb")
         self.singer_dir = Path(a.singer_dir)
         self.song = a.song
         self.notes_limit = a.notes_limit
@@ -556,6 +582,49 @@ def execution_profile() -> dict:
     }
 
 
+# `load_model_bundle_bytes` のキー -> `collect_pins` のキー
+_CONSUMED_TO_PIN = {
+    "acoustic_onnx": "acoustic_onnx",
+    "acoustic_dsconfig_yaml": "acoustic_dsconfig",
+    "canon_linguistic_onnx": "canon_linguistic_onnx",
+    "canon_variance_dur_onnx": "canon_dur_onnx",
+    "canon_variance_pitch_onnx": "canon_pitch_onnx",
+    "vocoder_onnx": "vocoder_onnx",
+}
+
+
+def verify_consumed_bytes(results: List[dict], pins: dict) -> dict:
+    """全条件が同じモデルバイト列を消費し、かつそれが pin と一致するか。
+
+    「記録された hash と実際に推論へ使われたバイト列が食い違う」窓を閉じる。
+    ずれた場合は結果 JSON に不一致として残す（黙って通さない）。
+
+    射程の正直会計: ここで閉じられるのは `load_model_bundle_bytes` が返す
+    6 バッファ（canon 3 + acoustic + dsconfig + vocoder）だけ。話者 embed /
+    音素辞書 / 楽譜モジュールは gate_synth 側がパス read するため、
+    依然として `pins` のパス read に依存する。
+    """
+    seen = {json.dumps(r["consumed_model_sha256"], sort_keys=True)
+            for r in results if "consumed_model_sha256" in r}
+    mismatches = []
+    if len(seen) > 1:
+        mismatches.append(f"条件間でモデルバイト列が異なる (distinct={len(seen)})")
+    for r in results:
+        for ck, digest in (r.get("consumed_model_sha256") or {}).items():
+            pin_key = _CONSUMED_TO_PIN.get(ck)
+            if pin_key and pins.get(pin_key, {}).get("sha256") != digest:
+                mismatches.append(
+                    f"{r['label']}: 消費バイト列 {ck} が pins.{pin_key} と不一致")
+    return {
+        "distinct_bundles": len(seen),
+        "covered_keys": sorted(_CONSUMED_TO_PIN),
+        "not_covered": ["speaker_embed", "canon_phonemes",
+                        "acoustic_phonemes_json", "score_module"],
+        "mismatches": mismatches,
+        "ok": not mismatches,
+    }
+
+
 def build_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--canon-dir", required=True,
@@ -604,8 +673,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             results.append({"label": label, "params": kw, "error": repr(exc)[:400]})
             print(f"|   FAILED: {exc!r}"[:300], flush=True)
 
+    consumed_check = verify_consumed_bytes(results, pins)
     payload = {
         "song": cfg.song, "notes_limit": cfg.notes_limit, "speaker": cfg.speaker,
+        "consumed_model_bytes_check": consumed_check,
         "order": "reverse" if a.reverse else "forward",
         "single_condition": a.only,
         "pins": pins, "execution_profile": execution_profile(),
@@ -614,18 +685,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     Path(a.result_json).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    base = next((r for r in results if r["label"] == "baseline"), None)
+    base = next((r for r in results
+                 if r["label"] == "baseline" and "wav_sha256" in r), None)
     print("\n=== 表現力の実測 ===")
     for r in results:
         if "error" in r:
             print(f"{r['label']:30s} ERROR {r['error'][:80]}")
             continue
-        moved = base and r["wav_sha256"] != base["wav_sha256"]
         raw = r.get("raw_measures") or {}
+        if base is None:
+            # --only モードや baseline 失敗時は比較対象が無い。比較していない
+            # ことを "identical" と書くと嘘になるので明示する。
+            verdict = "(no baseline)"
+        else:
+            verdict = "CHANGED" if r["wav_sha256"] != base["wav_sha256"] else "identical"
         print(f"{r['label']:30s} dur={r['duration_s']:7.3f}s "
               f"rms_raw={raw.get('wav_rms_raw', float('nan')):.6f} "
               f"peak_raw={raw.get('wav_peak_raw', float('nan')):.6f} "
-              f"{'CHANGED' if moved else 'identical'}")
+              f"{verdict}")
+    # --- Fix: 全条件が失敗しても 0 を返していた（呼び出し側が検知できない）
+    failed = [r["label"] for r in results if "error" in r]
+    if failed:
+        print(f"\nFAILED conditions: {failed}")
+        return 1
+    if not consumed_check["ok"]:
+        print(f"\nCONSUMED BYTES MISMATCH: {consumed_check['mismatches']}")
+        return 1
     return 0
 
 

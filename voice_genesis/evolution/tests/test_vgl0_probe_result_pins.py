@@ -18,6 +18,7 @@ gate_synth sha を*記録*していれば provenance の役目を果たす（記
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -30,8 +31,17 @@ RECORDS = REPO_ROOT / "voice_genesis" / "evolution" / "records"
 
 PROBE_SCRIPT = PROBES / "vgl0_control_axis_probe.py"
 REPRO_SCRIPT = PROBES / "vgl0_reproducibility_check.py"
-RESULT_JSON = RECORDS / "vgl0_control_axis_probe_result.json"
 REPRO_JSON = RECORDS / "vgl0_render_reproducibility_result.json"
+
+# 主実測（notes_limit=8）と、フレーズ境界で切った補助実測（6 / 10）。
+# **正本 record が引用している結果はすべて検査対象にする** — 一部だけ守ると
+# 守られていないファイルで drift が起きる。
+RESULT_JSONS = [
+    RECORDS / "vgl0_control_axis_probe_result.json",
+    RECORDS / "vgl0_control_axis_probe_result_n6.json",
+    RECORDS / "vgl0_control_axis_probe_result_n10.json",
+]
+RESULT_JSON = RESULT_JSONS[0]
 
 # provenance の穴（本体 sha が同じでも monkeypatch で別 WAV が出る）を閉じる
 # ために結果へ束縛することを決めた pin キー。
@@ -58,7 +68,32 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("path", [PROBE_SCRIPT, REPRO_SCRIPT, RESULT_JSON, REPRO_JSON])
+def _probe_condition_labels() -> set[str]:
+    """probe の `CONDITIONS` から条件ラベルを **import せずに** 取り出す。
+
+    probe を import すると `gate_synth` 経由で `onnxruntime` が要求され、
+    CI 環境（onnxruntime 無し）では collection error になる。ラベルの正本は
+    probe のソースなので、静的に読む。
+    """
+    tree = ast.parse(PROBE_SCRIPT.read_text(encoding="utf-8"))
+    for node in tree.body:
+        targets = getattr(node, "targets", []) or [getattr(node, "target", None)]
+        names = {t.id for t in targets if isinstance(t, ast.Name)}
+        if "CONDITIONS" not in names:
+            continue
+        assert isinstance(node.value, ast.List), "CONDITIONS がリテラルのリストでない"
+        labels = set()
+        for elt in node.value.elts:
+            assert isinstance(elt, ast.Tuple) and elt.elts, "条件が (label, kwargs) でない"
+            label = elt.elts[0]
+            assert isinstance(label, ast.Constant) and isinstance(label.value, str)
+            labels.add(label.value)
+        return labels
+    raise AssertionError("probe に CONDITIONS が見つからない")
+
+
+@pytest.mark.parametrize(
+    "path", [PROBE_SCRIPT, REPRO_SCRIPT, REPRO_JSON, *RESULT_JSONS])
 def test_probe_artifacts_are_committed(path: Path) -> None:
     assert path.exists(), (
         f"{path.relative_to(REPO_ROOT)} が存在しない。probe 実装と結果は "
@@ -66,22 +101,25 @@ def test_probe_artifacts_are_committed(path: Path) -> None:
     )
 
 
-def test_result_json_pins_the_committed_probe_script() -> None:
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_result_json_pins_the_committed_probe_script(result_json: Path) -> None:
     """結果 JSON が pin する probe sha == コミット済み probe の sha。
 
     落ちたときの正しい対処は **pin を書き換えることではなく probe を再実行して
     結果 JSON を再生成すること**（probe を変えたなら測定結果も変わりうる）。
     """
-    pins = _load(RESULT_JSON)["pins"]
+    pins = _load(result_json)["pins"]
     assert pins["probe_script"]["sha256"] == _sha256(PROBE_SCRIPT), (
+        f"{result_json.name}: "
         "結果 JSON の pins.probe_script.sha256 がコミット済み probe と一致しない。"
         " probe を編集したなら再実行して結果 JSON を作り直すこと"
         " (voice_genesis/evolution/probes/vgl0_control_axis_probe.py --help)"
     )
 
 
-def test_result_json_binds_every_required_pin() -> None:
-    pins = _load(RESULT_JSON)["pins"]
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_result_json_binds_every_required_pin(result_json: Path) -> None:
+    pins = _load(result_json)["pins"]
     missing = REQUIRED_PIN_KEYS - set(pins)
     assert not missing, f"結果 JSON に pin されていない入力がある: {sorted(missing)}"
     for key, entry in pins.items():
@@ -91,16 +129,18 @@ def test_result_json_binds_every_required_pin() -> None:
         )
 
 
-def test_result_json_records_execution_profile() -> None:
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_result_json_records_execution_profile(result_json: Path) -> None:
     """決定論は ExecutionProfile を固定した上でしか主張できないので、
     どの環境で測ったかを結果自身が持っていること。"""
-    profile = _load(RESULT_JSON)["execution_profile"]
+    profile = _load(result_json)["execution_profile"]
     for key in ("python", "platform", "numpy", "onnxruntime", "gate_synth_seed"):
         assert profile.get(key), f"execution_profile.{key} が空"
 
 
-def test_every_condition_records_measurements_and_invariants() -> None:
-    payload = _load(RESULT_JSON)
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_every_condition_records_measurements_and_invariants(result_json: Path) -> None:
+    payload = _load(result_json)
     conditions = payload["conditions"]
     assert conditions, "条件が 1 件も記録されていない"
     for cond in conditions:
@@ -115,6 +155,71 @@ def test_every_condition_records_measurements_and_invariants() -> None:
             f"{label}: sum(ph_dur) != sum(note_target_frames)")
         assert inv["n_phones_below_1_frame"] == 0, (
             f"{label}: 1 フレーム未満の音素が {inv['n_phones_below_1_frame']} 個ある")
+
+
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_consumed_model_bytes_match_the_pins(result_json: Path) -> None:
+    """推論へ実際に渡ったバイト列の hash が、pin と一致していること。
+
+    パスを別 read して pin するだけでは、その read と合成が使う read の間に
+    差し替えが起きたときに記録と実体がずれる（レビュー指摘）。probe は
+    `load_model_bundle_bytes` が返した**そのバッファ**を hash している。
+    """
+    payload = _load(result_json)
+    check = payload["consumed_model_bytes_check"]
+    assert check["ok"], f"{result_json.name}: {check['mismatches']}"
+    assert check["distinct_bundles"] == 1, (
+        f"{result_json.name}: 条件間でモデルバイト列が異なる "
+        f"(distinct={check['distinct_bundles']})")
+    pins = payload["pins"]
+    for cond in payload["conditions"]:
+        consumed = cond["consumed_model_sha256"]
+        assert consumed["acoustic_onnx"] == pins["acoustic_onnx"]["sha256"]
+        assert consumed["vocoder_onnx"] == pins["vocoder_onnx"]["sha256"]
+
+
+def test_reproducibility_result_binds_the_input_pin_set() -> None:
+    """PASS が「どのモデル・楽譜に対する PASS か」を結果から辿れること。"""
+    payload = _load(REPRO_JSON)
+    pins = payload.get("pins")
+    assert pins, "再現性結果に入力 pin セットが束縛されていない"
+    missing = REQUIRED_PIN_KEYS - set(pins)
+    assert not missing, f"再現性結果の pins に欠けがある: {sorted(missing)}"
+    assert pins["probe_script"]["sha256"] == _sha256(PROBE_SCRIPT)
+    # 主実測と同じ入力に対する verdict であること
+    main_pins = _load(RESULT_JSON)["pins"]
+    for key in sorted(REQUIRED_PIN_KEYS):
+        assert pins[key]["sha256"] == main_pins[key]["sha256"], (
+            f"再現性結果と主実測で {key} の pin が違う")
+
+
+def test_reproducibility_covers_every_probe_condition() -> None:
+    """順序非依存性の検査が probe の全条件を覆っていること。
+
+    両実行が同じ条件を揃って落とすと突き合わせだけでは検出できないため、
+    期待条件集合そのものと照合する（レビュー指摘）。
+    """
+    expected = _probe_condition_labels()
+    payload = _load(REPRO_JSON)
+    covered = {f["label"] for f in payload["findings"]
+               if f["check"] == "order_independence"}
+    assert covered == expected, (
+        f"order_independence が全条件を覆っていない: 欠け={sorted(expected - covered)} / "
+        f"余分={sorted(covered - expected)}")
+
+
+def test_reproducibility_result_pins_its_own_checker_and_probe() -> None:
+    """PASS 判定を出したコード自身が結果に束縛されていること。
+
+    probe だけ pin して検査スクリプトを pin しないと、「どのロジックで PASS に
+    なったか」が canonical provenance から辿れない（レビュー指摘）。
+    """
+    payload = _load(REPRO_JSON)
+    assert payload["checker_script"]["sha256"] == _sha256(REPRO_SCRIPT), (
+        "再現性結果の checker_script.sha256 がコミット済みスクリプトと一致しない。"
+        " 検査スクリプトを編集したなら再実行して結果を作り直すこと")
+    assert payload["probe_script"]["sha256"] == _sha256(PROBE_SCRIPT), (
+        "再現性結果が pin する probe sha がコミット済み probe と一致しない")
 
 
 def test_reproducibility_result_is_fresh_process_based() -> None:

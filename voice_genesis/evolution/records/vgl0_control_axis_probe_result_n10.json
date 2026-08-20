@@ -2,12 +2,31 @@
   "song": "sakura",
   "notes_limit": 10,
   "speaker": "ritsu",
+  "consumed_model_bytes_check": {
+    "distinct_bundles": 1,
+    "covered_keys": [
+      "acoustic_dsconfig_yaml",
+      "acoustic_onnx",
+      "canon_linguistic_onnx",
+      "canon_variance_dur_onnx",
+      "canon_variance_pitch_onnx",
+      "vocoder_onnx"
+    ],
+    "not_covered": [
+      "speaker_embed",
+      "canon_phonemes",
+      "acoustic_phonemes_json",
+      "score_module"
+    ],
+    "mismatches": [],
+    "ok": true
+  },
   "order": "forward",
   "single_condition": null,
   "pins": {
     "probe_script": {
       "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_control_axis_probe.py",
-      "sha256": "0a9b9e7b2132b71b0399ec806a4d4405b69c9f0e757e06c0379bc1e59661ea31"
+      "sha256": "468491d2280f1b9bc073f32666fe479745166513cb6870e000369aa4f132f873"
     },
     "gate_synth": {
       "path": "/workspace/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth.py",
@@ -197,6 +216,14 @@
           "peak": 0.431824
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -220,9 +247,9 @@
         "wav_rms": 0.1089606653093105,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.052698412698414,
-        "stage1_elapsed_sec": 0.0283048152923584,
-        "stage2_elapsed_sec": 2.116779088973999,
-        "stage3_elapsed_sec": 14.484309196472168
+        "stage1_elapsed_sec": 0.01238703727722168,
+        "stage2_elapsed_sec": 2.272970199584961,
+        "stage3_elapsed_sec": 14.565715789794922
       }
     },
     {
@@ -350,6 +377,14 @@
           "peak": 0.431824
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -373,9 +408,9 @@
         "wav_rms": 0.1089606653093105,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.052698412698414,
-        "stage1_elapsed_sec": 0.012143135070800781,
-        "stage2_elapsed_sec": 1.939690113067627,
-        "stage3_elapsed_sec": 14.279928207397461
+        "stage1_elapsed_sec": 0.011921882629394531,
+        "stage2_elapsed_sec": 1.9383304119110107,
+        "stage3_elapsed_sec": 13.881839513778687
       }
     },
     {
@@ -509,6 +544,14 @@
           "peak": 0.477692
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -532,9 +575,9 @@
         "wav_rms": 0.10806195740695619,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.052698412698414,
-        "stage1_elapsed_sec": 0.011918067932128906,
-        "stage2_elapsed_sec": 1.9504365921020508,
-        "stage3_elapsed_sec": 14.27706003189087
+        "stage1_elapsed_sec": 0.011960268020629883,
+        "stage2_elapsed_sec": 1.9737274646759033,
+        "stage3_elapsed_sec": 14.407696723937988
       }
     },
     {
@@ -668,6 +711,14 @@
           "peak": 0.37735
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -691,9 +742,9 @@
         "wav_rms": 0.09674089490485845,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.052698412698414,
-        "stage1_elapsed_sec": 0.011584043502807617,
-        "stage2_elapsed_sec": 1.9557464122772217,
-        "stage3_elapsed_sec": 14.240092992782593
+        "stage1_elapsed_sec": 0.011614084243774414,
+        "stage2_elapsed_sec": 1.9523630142211914,
+        "stage3_elapsed_sec": 13.902000427246094
       }
     },
     {
@@ -827,6 +878,14 @@
           "peak": 0.429657
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -850,9 +909,9 @@
         "wav_rms": 0.1071711380429263,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.052698412698414,
-        "stage1_elapsed_sec": 0.012528657913208008,
-        "stage2_elapsed_sec": 1.9608275890350342,
-        "stage3_elapsed_sec": 13.868012189865112
+        "stage1_elapsed_sec": 0.012662410736083984,
+        "stage2_elapsed_sec": 1.932298183441162,
+        "stage3_elapsed_sec": 13.993293285369873
       }
     },
     {
@@ -986,6 +1045,14 @@
           "peak": 0.376068
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -1009,9 +1076,9 @@
         "wav_rms": 0.10047308928493731,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.052698412698414,
-        "stage1_elapsed_sec": 0.012021541595458984,
-        "stage2_elapsed_sec": 1.9305353164672852,
-        "stage3_elapsed_sec": 13.781328916549683
+        "stage1_elapsed_sec": 0.011828422546386719,
+        "stage2_elapsed_sec": 1.9379959106445312,
+        "stage3_elapsed_sec": 13.934478044509888
       }
     },
     {
@@ -1145,6 +1212,14 @@
           "peak": 0.389099
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -1168,9 +1243,9 @@
         "wav_rms": 0.1082489093859639,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.052698412698414,
-        "stage1_elapsed_sec": 0.011916875839233398,
-        "stage2_elapsed_sec": 1.9162306785583496,
-        "stage3_elapsed_sec": 13.782336711883545
+        "stage1_elapsed_sec": 0.011572837829589844,
+        "stage2_elapsed_sec": 1.8894922733306885,
+        "stage3_elapsed_sec": 13.790202379226685
       }
     },
     {
@@ -1304,6 +1379,14 @@
           "peak": 0.376068
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -1327,9 +1410,9 @@
         "wav_rms": 0.10047308928493731,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.052698412698414,
-        "stage1_elapsed_sec": 0.012258052825927734,
-        "stage2_elapsed_sec": 1.9020020961761475,
-        "stage3_elapsed_sec": 13.551590919494629
+        "stage1_elapsed_sec": 0.01213693618774414,
+        "stage2_elapsed_sec": 1.964249849319458,
+        "stage3_elapsed_sec": 13.894455909729004
       }
     },
     {
@@ -1457,6 +1540,14 @@
           "peak": 0.363373
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -1480,9 +1571,9 @@
         "wav_rms": 0.07409750744720127,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.42421768707483,
-        "stage1_elapsed_sec": 0.011989831924438477,
-        "stage2_elapsed_sec": 2.0833230018615723,
-        "stage3_elapsed_sec": 14.289833068847656
+        "stage1_elapsed_sec": 0.011797904968261719,
+        "stage2_elapsed_sec": 2.040121078491211,
+        "stage3_elapsed_sec": 14.33133840560913
       }
     },
     {
@@ -1610,6 +1701,14 @@
           "peak": 0.300659
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -1633,9 +1732,9 @@
         "wav_rms": 0.07216796144934091,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.42421768707483,
-        "stage1_elapsed_sec": 0.012455940246582031,
-        "stage2_elapsed_sec": 1.99700927734375,
-        "stage3_elapsed_sec": 14.424838304519653
+        "stage1_elapsed_sec": 0.011318445205688477,
+        "stage2_elapsed_sec": 1.9474425315856934,
+        "stage3_elapsed_sec": 14.197246551513672
       }
     },
     {
@@ -1780,6 +1879,14 @@
           "peak": 0.291595
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -1803,9 +1910,9 @@
         "wav_rms": 0.07725923043157938,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.284897959183674,
-        "stage1_elapsed_sec": 0.012057065963745117,
-        "stage2_elapsed_sec": 1.9801349639892578,
-        "stage3_elapsed_sec": 13.479736328125
+        "stage1_elapsed_sec": 0.012629508972167969,
+        "stage2_elapsed_sec": 1.9711453914642334,
+        "stage3_elapsed_sec": 14.094173669815063
       }
     },
     {
@@ -1950,6 +2057,14 @@
           "peak": 0.317383
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -1973,9 +2088,9 @@
         "wav_rms": 0.08829763435902206,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.517097505668934,
-        "stage1_elapsed_sec": 0.012348175048828125,
-        "stage2_elapsed_sec": 1.9754173755645752,
-        "stage3_elapsed_sec": 14.793133735656738
+        "stage1_elapsed_sec": 0.01390981674194336,
+        "stage2_elapsed_sec": 2.163818836212158,
+        "stage3_elapsed_sec": 14.682212352752686
       }
     },
     {
@@ -2120,6 +2235,14 @@
           "peak": 0.317383
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -2143,9 +2266,9 @@
         "wav_rms": 0.08829763435902206,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.517097505668934,
-        "stage1_elapsed_sec": 0.01287841796875,
-        "stage2_elapsed_sec": 1.926790714263916,
-        "stage3_elapsed_sec": 14.6839599609375
+        "stage1_elapsed_sec": 0.013622522354125977,
+        "stage2_elapsed_sec": 1.9704005718231201,
+        "stage3_elapsed_sec": 14.34860873222351
       }
     },
     {
@@ -2273,6 +2396,14 @@
           "peak": 0.246033
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -2296,9 +2427,9 @@
         "wav_rms": 0.05920806889870463,
         "wav_peak": 0.6,
         "wav_duration_sec": 12.30657596371882,
-        "stage1_elapsed_sec": 0.011959314346313477,
-        "stage2_elapsed_sec": 2.2954726219177246,
-        "stage3_elapsed_sec": 15.03392243385315
+        "stage1_elapsed_sec": 0.012443780899047852,
+        "stage2_elapsed_sec": 2.217784881591797,
+        "stage3_elapsed_sec": 15.513781785964966
       }
     },
     {
@@ -2426,6 +2557,14 @@
           "peak": 0.292542
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -2449,9 +2588,9 @@
         "wav_rms": 0.06668895333741427,
         "wav_peak": 0.6,
         "wav_duration_sec": 13.56045351473923,
-        "stage1_elapsed_sec": 0.011566162109375,
-        "stage2_elapsed_sec": 2.3917553424835205,
-        "stage3_elapsed_sec": 16.76677417755127
+        "stage1_elapsed_sec": 0.012032508850097656,
+        "stage2_elapsed_sec": 2.4287261962890625,
+        "stage3_elapsed_sec": 17.148890495300293
       }
     },
     {
@@ -2579,6 +2718,14 @@
           "peak": 0.444733
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -2602,9 +2749,9 @@
         "wav_rms": 0.11021229494388904,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.888616780045352,
-        "stage1_elapsed_sec": 0.014026403427124023,
-        "stage2_elapsed_sec": 2.2925291061401367,
-        "stage3_elapsed_sec": 14.931397676467896
+        "stage1_elapsed_sec": 0.012191057205200195,
+        "stage2_elapsed_sec": 2.0904970169067383,
+        "stage3_elapsed_sec": 15.19826078414917
       }
     },
     {
@@ -2667,13 +2814,13 @@
         144
       ],
       "n_phones": 21,
-      "dur_patch_applied": 11,
+      "dur_patch_applied": 9,
       "dur_stats": {
-        "pred_consonant_frames": 265.77,
+        "pred_consonant_frames": 227.18,
         "pred_vowel_frames": 863.16,
-        "patched_consonant_frames": 531.54,
-        "pred_consonant_ratio": 0.2354,
-        "patched_consonant_ratio": 0.3811
+        "patched_consonant_frames": 454.36,
+        "pred_consonant_ratio": 0.2084,
+        "patched_consonant_ratio": 0.3449
       },
       "breath_notes_inserted": 2,
       "breath_note_indices": [
@@ -2755,6 +2902,14 @@
           "peak": 0.43811
         }
       ],
+      "consumed_model_sha256": {
+        "acoustic_dsconfig_yaml": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "acoustic_onnx": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4"
+      },
       "phone_frame_invariant": {
         "measured": true,
         "head_tail": [
@@ -2778,9 +2933,9 @@
         "wav_rms": 0.1028362722513579,
         "wav_peak": 0.6,
         "wav_duration_sec": 11.517097505668934,
-        "stage1_elapsed_sec": 0.012256383895874023,
-        "stage2_elapsed_sec": 2.0200424194335938,
-        "stage3_elapsed_sec": 14.133400201797485
+        "stage1_elapsed_sec": 0.012462854385375977,
+        "stage2_elapsed_sec": 1.9613726139068604,
+        "stage3_elapsed_sec": 14.464328289031982
       }
     }
   ]

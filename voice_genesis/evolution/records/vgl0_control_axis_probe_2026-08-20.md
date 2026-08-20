@@ -669,3 +669,27 @@ STATUS canonical summary
 - レビューで意味が確定した後に `accepted` へ変更する
 - 本記録は現在 **PROVISIONAL**（冒頭）。PR #289 マージ時に accepted へ更新し、
   STATUS の該当行から `[PROVISIONAL]` を外す
+
+## 9. レビュー採否の基準
+
+指摘を無差別に取り込むと、意図的な設計判断まで「修正」されて設計が濁る。
+本 PR で直すのは次のいずれかに当たるものだけとする:
+
+1. **クリティカルな欠陥** — 誤った結論を出す / 検証が通ったように見えて通っていない
+2. **意味的汚染** — 未校正の値に知覚名を付ける等、後段の schema や
+   LearningTransition へ誤った意味を持ち込む
+3. **将来のバグ要因** — 下限ガード欠如・stale fixture・TOCTOU など、条件が
+   変わった時に静かに壊れる配線
+
+それ以外は**設計範囲**として据え置く。本 PR で据え置いたもの:
+
+- **probe が monkeypatch であること** — gate_synth の read-only 契約を守るため。
+  製品形は `apply_control_profile(...)`（§5-2）で、probe を先にその形にすると
+  製品設計を実測スクリプトの都合で決めることになる
+- **消費バイト hash が 6 バッファ止まり** — embed / 音素辞書 / 楽譜は gate_synth が
+  パス read する。閉じるには gate_synth の I/O 構造変更が必要で read-only 契約に反する
+  （射程は結果 JSON の `not_covered` に明記）
+- **`gate_synth.py` の sha を CI で照合しない** — 活発に変更されるため偽陽性製造機になる。
+  日付つき記録が測定時点を記録していれば provenance は足りる
+- **`safe_range: null` / 耳判定 0 件のまま** — 埋めることがレビューの禁じた操作そのもの
+- **`song_pad_*` 条件を残す** — 撤回した主張が何を測っていたかを名前で残すため
