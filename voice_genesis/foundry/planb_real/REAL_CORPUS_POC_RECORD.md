@@ -406,11 +406,16 @@ VoiceGenesis v1 完成。
 ## 7. 申し送り
 
 1. **G-ear は実施済みで FAIL（Q3=no のみ）**。§14 の「Identity 崩壊」分岐には
-   **該当しない**（Q1=yes）。壊れているのは terminal /ri/ の改善と、別軸の原音忠実度。
-   §14 の表に本走行の形（「主軸は改善を示すが耳は悪化と判定」）に当たる行は無く、
-   最も近いのは「R4 でのみ改善 → composite Performance Skill 候補」だが、
-   その『改善』が耳で否定されている。**Performance 側（特に release / dynamics）の
-   表現を疑うのが筋**で、identity 表現の作り直しではない
+   **該当しない**（Q1=yes）。**Performance 側（特に release / dynamics）の表現を
+   疑うのが筋**で、identity 表現の作り直しではない。
+   なお Q3（terminal /ri/ の改善）については、走行後に主軸を Ritsu **原音**へ当てた
+   結果、原音がすでに +5.654/+5.853 dB を示すことが分かった。この軸は
+   「モデルの破綻」ではなく「人間の歌唱に元からある終端の性質」を読んでおり、
+   `failure_present` の門が誤発火していた。**ただし terminal /ri/ 破綻の解決は
+   VoiceGenesis / run 8 の未解決であって本タスクの未解決ではない**（本タスクは
+   run 8 から独立）。この所見は run 8 の軸登録への申し送りとして渡すに留める。
+   本タスク自身の中心仮説は §18 の「Identity と Performance に部分分解できるか」であり、
+   詰めるべき箇所は [`NEXT_VERIFICATION_PLAN.md`](NEXT_VERIFICATION_PLAN.md) を正とする
 2. **G3 の交絡を切り分ける**。軸の再定義（測定窓を rung 間で固定する等）が要るが、
    事前登録の規律上、次版の登録として行うこと
 3. **PJS 側 probe が薄い**。terminal /ri/ が 4 件、terminal /su/ は 0 件（唯一の 1 件が
