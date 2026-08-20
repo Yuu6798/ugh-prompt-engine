@@ -273,3 +273,28 @@ run 6 は本 runbook の手順をそのまま使い、**Pod 作成時の env に
   強制インストールと lock に追加して根治。**run 5 Pod が生き残ったのは
   たまたま 0.66 系を解決していたため**（freeze 未捕獲の間接推定）— lock の
   存在理由の実測第 1 号
+
+## 9. run 7 差分（教師交代・DESIGN_S6_run7.md が実験契約の正本）
+
+run 7 も本 runbook の手順のまま、**Pod 作成時の env を `RUN_PROFILE=run7` に
+するだけ**で切り替わる:
+
+| 項目 | run 6（§8） | run 7（`RUN_PROFILE=run7`） |
+|---|---|---|
+| run_id / exp 名 | `s5_run6` / `s5_run6_acoustic_{scratch,v1}` | `s6_run7` / `s6_run7_acoustic_{scratch,v1}` |
+| dataset pins | `run6_dataset_pins.json` | `run7_dataset_pins.json`（**d3 セクションなし**・user = run 6 逐語継承・amitaro 新実測） |
+| Drive 退避 | `run6/` prefix | **`run7/` prefix**（教師素材の staged コピーは `run7/amitaro_sources/` — 起動前に push 必須） |
+| 教師データ | d3synth 再生成（run_d3_cells + convert_d3） | **amitaro intake**（Drive `run7/amitaro_sources/` 取得 → staged sha 全数照合 → `convert_amitaro.py` → pins 照合。分岐は pins のセクション構成が単一ソース） |
+| assemble | `--profile run5`（既定・4 話者 d3synth） | `--profile run7 --amitaro-raw-dir …`（spk_id: amitaro=4・**id 3 恒久欠番**・num_spk 5・manifest schema 0.5 + 構成比会計〔amitaro share < 0.50 assert〕） |
+| binarize 後検査 | spk_map.json 完全一致（4 話者マップ） | spk_map.json 完全一致（amitaro=4・**id 3 不在**を assert — DiffSinger 自動採番の欠番充填事故を fail-closed 検出） |
+| 予算 cap | $4 | **$4**（DESIGN_S6 §0-6） |
+
+- **起動前チェックリスト（run 7 固有）**: (1) run 6 の s5 record（①②③耳
+  判定）起草済み — DESIGN_S6 前提節のゲート、(2) Drive
+  `run7/amitaro_sources/` に staged 素材が push 済み（pin 生成時に実施）、
+  (3) `create_pod` の PIN_COMMIT をマージ後 main へ更新
+- **教師 dosage**: recitation ノーマル全文 1225.6 s（実測）から決定論選定
+  （DESIGN_S6 §2-3）。除外・採用の全数記帳 = amitaro_dataset の
+  `selection.json`（pin 対象）
+- 判定材料（§6）: 教師単独枠は `--speaker amitaro`（gate_synth の choices は
+  全話者へ拡張済み — run 5 当時の場当たり改変を正規化）

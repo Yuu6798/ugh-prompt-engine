@@ -1092,3 +1092,130 @@ def test_salvage_collects_export_required_maps_and_dictionary(tmp_path: Path) ->
     assert dests["spk_map.json"] == "phase_b/config"
     assert dests["lang_map.json"] == "phase_b/config"
     assert dests["dictionary-ja.txt"] == "phase_b/config"
+
+
+# --- run 7 プロファイル（DESIGN_S6_run7.md・教師交代） ------------------------
+
+
+def test_apply_run_profile_run7_switches_constants_and_run5_restores() -> None:
+    try:
+        profile = r5b.apply_run_profile("run7")
+        assert profile["run_id"] == "s6_run7"
+        assert r5b.RUN_ID == "s6_run7"
+        assert r5b.EXP_NAME_PHASE_A == "s6_run7_acoustic_scratch"
+        assert r5b.EXP_NAME_PHASE_B == "s6_run7_acoustic_v1"
+        assert r5b.DATASET_PINS_PATH.name == "run7_dataset_pins.json"
+        assert r5b.REMOTE_PREFIX == "run7"
+        assert r5b.ASSEMBLE_PROFILE == "run7"
+        assert r5b.EXPECTED_SPK_MAP == {"ritsu": 0, "pjs": 1, "user": 2, "amitaro": 4}
+        # 恒久欠番: id 3 は期待マップに存在しない（DESIGN_S6 §0-2）。
+        assert 3 not in r5b.EXPECTED_SPK_MAP.values()
+        assert r5b._remote_path("amitaro_sources") == "run7/amitaro_sources"
+    finally:
+        r5b.apply_run_profile("run5")
+    assert r5b.ASSEMBLE_PROFILE == "run5"
+    assert r5b.EXPECTED_SPK_MAP == {"ritsu": 0, "pjs": 1, "user": 2, "d3synth": 3}
+
+
+def test_verify_spk_map_accepts_exact_match(tmp_path: Path) -> None:
+    expected = {"ritsu": 0, "pjs": 1, "user": 2, "amitaro": 4}
+    path = tmp_path / "spk_map.json"
+    path.write_text(json.dumps(expected), encoding="utf-8")
+    assert r5b.verify_spk_map(path, expected) == []
+
+
+def test_verify_spk_map_detects_vacancy_autofill(tmp_path: Path) -> None:
+    """DiffSinger build_spk_map の自動採番で恒久欠番 3 が埋まった事故の検出
+    （DESIGN_S6 §0-2 の想定事故シナリオそのもの）。"""
+    expected = {"ritsu": 0, "pjs": 1, "user": 2, "amitaro": 4}
+    path = tmp_path / "spk_map.json"
+    path.write_text(
+        json.dumps({"ritsu": 0, "pjs": 1, "user": 2, "amitaro": 3}), encoding="utf-8"
+    )
+    diffs = r5b.verify_spk_map(path, expected)
+    assert diffs and any("欠番" in d for d in diffs)
+
+
+def test_verify_spk_map_missing_file_fails_closed(tmp_path: Path) -> None:
+    diffs = r5b.verify_spk_map(tmp_path / "spk_map.json", {"ritsu": 0})
+    assert diffs and "missing" in diffs[0]
+
+
+def test_verify_dataset_against_pins_checks_selection_json(tmp_path: Path) -> None:
+    """run 7 amitaro: selection.json（選定来歴）も pin 照合対象。"""
+    ds = tmp_path / "amitaro_dataset"
+    (ds / "wavs").mkdir(parents=True)
+    (ds / "transcriptions.csv").write_text("name\n", encoding="utf-8")
+    (ds / "selection.json").write_text("{}\n", encoding="utf-8")
+    csv_sha = r5b.sha256_file(ds / "transcriptions.csv")
+    good_sha = r5b.sha256_file(ds / "selection.json")
+    pin = {
+        "transcriptions_csv_sha256": csv_sha,
+        "wav_sha256": {},
+        "selection_json_sha256": good_sha,
+    }
+    assert r5b.verify_dataset_against_pins(ds, pin, "amitaro") == []
+    pin_bad = dict(pin, selection_json_sha256="0" * 64)
+    diffs = r5b.verify_dataset_against_pins(ds, pin_bad, "amitaro")
+    assert diffs and "selection.json" in diffs[0]
+
+
+def test_verify_assembly_pairs_follow_pins_sections() -> None:
+    """照合ペアは pins のセクション構成が単一ソース: amitaro pins（run 7）は
+    amitaro を、d3 pins（run 5/6）は d3synth を照合する。"""
+    speaker_entry = {"transcriptions_csv_sha256": "x" * 64, "wav_sha256": {"a.wav": "y" * 64}}
+    manifest = {
+        "speakers": {
+            "user": dict(speaker_entry, exclusions_json_sha256="z" * 64),
+            "amitaro": dict(speaker_entry),
+        }
+    }
+    pins = {
+        "user": dict(speaker_entry, exclusions_json_sha256="z" * 64),
+        "amitaro": dict(speaker_entry),
+    }
+    assert r5b.verify_assembly_against_run4_pins(manifest, pins) == []
+    pins_bad = {
+        "user": dict(speaker_entry, exclusions_json_sha256="z" * 64),
+        "amitaro": dict(speaker_entry, wav_sha256={"a.wav": "0" * 64}),
+    }
+    diffs = r5b.verify_assembly_against_run4_pins(manifest, pins_bad)
+    assert diffs and diffs[0].startswith("amitaro:")
+
+
+def test_expected_spk_maps_match_assemble_profiles() -> None:
+    """spk_id マップの三重定義ドリフト検出（セルフレビュー #4: bootstrap の
+    RUN_PROFILES.expected_spk_map と assemble_run4 の SPK_IDS/SPK_IDS_RUN7 が
+    手書き重複 — 片方だけの改訂は Pod 上の verify_spk_map まで発覚しない）。"""
+    import importlib.util
+    path = (Path(__file__).resolve().parent.parent / "s1_dataprep" / "assemble_run4.py")
+    spec = importlib.util.spec_from_file_location("assemble_run4_for_parity", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    assert r5b.RUN_PROFILES["run5"]["expected_spk_map"] == mod.SPK_IDS
+    assert r5b.RUN_PROFILES["run6"]["expected_spk_map"] == mod.SPK_IDS
+    assert r5b.RUN_PROFILES["run7"]["expected_spk_map"] == mod.SPK_IDS_RUN7
+    # 恒久欠番の番人: run7 マップに 3 が現れたら設計違反（DESIGN_S6 §0-2）。
+    assert 3 not in r5b.RUN_PROFILES["run7"]["expected_spk_map"].values()
+
+
+def test_prev_manifest_prefixes_follow_profile() -> None:
+    """run 7 の前回 manifest 探索は run6/ まで（直下 run 5 へ落ちない —
+    誤ベースライン比較の黙認防止・DESIGN_S6 §4）。"""
+    try:
+        r5b.apply_run_profile("run7")
+        assert r5b.PREV_MANIFEST_PREFIXES == ("run7", "run6")
+        r5b.apply_run_profile("run6")
+        assert r5b.PREV_MANIFEST_PREFIXES == ("run6", "")
+    finally:
+        r5b.apply_run_profile("run5")
+    assert r5b.PREV_MANIFEST_PREFIXES == ("",)
+
+
+def test_verify_assembly_fails_closed_without_teacher_section() -> None:
+    speaker_entry = {"transcriptions_csv_sha256": "x" * 64, "wav_sha256": {}}
+    manifest = {"speakers": {"user": dict(speaker_entry)}}
+    pins = {"user": dict(speaker_entry)}
+    diffs = r5b.verify_assembly_against_run4_pins(manifest, pins)
+    assert diffs and "教師セクション" in diffs[0]

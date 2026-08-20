@@ -2441,7 +2441,16 @@ def main():
     p_run.add_argument("--singer-dir", default=None,
                         help="score.py/score_umi.py の所在 (既定: このスクリプトから見た "
                              f"'voice_genesis/singer/' = {DEFAULT_SINGER_DIR})")
-    p_run.add_argument("--speaker", choices=["ritsu", "pjs"], default="ritsu",
+    # run 7 修正（DESIGN_S6_run7.md §3-4）: choices を全話者へ拡張する。
+    # run 5 の判定材料生成（s4_record §5.4）は `--speaker user`/`--speaker
+    # d3synth` を使ったが、当時の repo 実装は choices=["ritsu","pjs"] のまま
+    # で、ローカル作業コピーの場当たり改変で回避されていた（再現性ギャップ
+    # の正直会計 — record のコマンド対応表を repo コードで再現可能にする）。
+    # amitaro は run 7 の教師単独枠（d3synth 枠の後継）。emb の解決は
+    # `find_speaker_embed` が名前ベースで行うため choices 追加のみでよい。
+    p_run.add_argument("--speaker",
+                        choices=["ritsu", "pjs", "user", "d3synth", "amitaro"],
+                        default="ritsu",
                         help="reflow 多話者 acoustic 用の話者選択。acoustic ディレクトリの "
                              "'*.<speaker>.emb' を読み込んで spk_embed を構築する（既定 ritsu"
                              "＝主判定話者）。canon 単一話者 DDPM acoustic では無視される。")
