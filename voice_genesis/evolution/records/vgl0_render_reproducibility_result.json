@@ -1,7 +1,7 @@
 {
   "checker_script": {
     "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_reproducibility_check.py",
-    "sha256": "bd25764925c37bf133962672fcd22f852d8c34aaf23734828cd9a24ca65d9e54"
+    "sha256": "935bf445d871c2a1cd5023aad6ecb9fa224663c2047bed542473620ba42d96bd"
   },
   "pins": {
     "probe_script": {
@@ -81,6 +81,68 @@
     "ok": true
   },
   "n_processes": 10,
+  "probe_runs": [
+    {
+      "tag": "replay baseline (procA)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay baseline (procB)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay cdur_x2.0 (procA)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay cdur_x2.0 (procB)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay phrase_breath_20f (procA)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay phrase_breath_20f (procB)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay phrase_final_x1.5 (procA)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "replay phrase_final_x1.5 (procB)",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "order_independence forward",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    },
+    {
+      "tag": "order_independence reverse",
+      "returncode": 0,
+      "consumed_ok": true,
+      "failures": []
+    }
+  ],
   "replay_labels": [
     "baseline",
     "cdur_x2.0",

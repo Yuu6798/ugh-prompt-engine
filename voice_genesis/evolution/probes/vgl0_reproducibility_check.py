@@ -30,7 +30,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 def sha256_path(p: Path) -> str:
@@ -60,7 +60,21 @@ REPLAY_LABELS = [
 def run_probe(
     py: str, model_args: Sequence[str], out_dir: Path, result_json: Path,
     *, only: Optional[str] = None, reverse: bool = False,
-) -> dict:
+) -> Tuple[dict, int]:
+    """probe を 1 プロセス起動し、(結果 payload, 終了コード) を返す。
+
+    **起動前に結果ファイルを消す**: `--work-dir` を使い回した状態で新しい
+    プロセスが JSON を書く前に落ちる（import エラー・モデル欠落・強制終了）と、
+    前回成功時のファイルが残ったままになる。それを読むと「完走しなかった
+    probe」に対して PASS を出しうる（レビュー指摘 P1）。
+
+    **終了コードは呼び出し側へ返す**: probe は消費バイト/pin 不一致のとき
+    条件レベルの `error` を付けずに rc=1 を返す。rc を捨てると
+    `errored_labels` では拾えず、WAV hash が一致しているだけで PASS に
+    なりうる（レビュー指摘 P1）。
+    """
+    if result_json.exists():
+        result_json.unlink()
     cmd = [py, str(PROBE), *model_args,
            "--out-dir", str(out_dir), "--result-json", str(result_json)]
     if only:
@@ -68,22 +82,40 @@ def run_probe(
     if reverse:
         cmd += ["--reverse"]
     proc = subprocess.run(cmd, capture_output=True, text=True)
-    # probe は条件が失敗すると rc=1 を返すが、失敗も含めて結果 JSON へ
-    # 記録している。ここで即 SystemExit すると「何が失敗したか」が
-    # 結果に残らないので、**JSON が読めるならそれを返し、判定は
-    # 呼び出し側の errored_labels に委ねる**。JSON 自体が無い/壊れている
-    # ときだけ、記録しようがないので落とす。
+    # JSON が書かれていれば失敗も記録されているので読む（判定は呼び出し側）。
+    # 書かれていない/壊れているときは記録しようがないので落とす。
     if not result_json.exists():
         raise SystemExit(
             f"probe failed (rc={proc.returncode}) for only={only} reverse={reverse} "
             f"— 結果 JSON が書かれていない\n"
             f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}")
     try:
-        return json.loads(result_json.read_text(encoding="utf-8"))
+        return json.loads(result_json.read_text(encoding="utf-8")), proc.returncode
     except json.JSONDecodeError as exc:
         raise SystemExit(
             f"probe の結果 JSON が壊れている ({result_json}): {exc}\n"
             f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}") from exc
+
+
+def probe_run_failures(payload: dict, rc: int, tag: str) -> List[str]:
+    """1 回の probe 起動について、PASS を妨げる事象を全部拾う。
+
+    条件レベルの error だけを見ると、**probe の provenance ゲート
+    （消費バイトと pin の一致）が落ちた場合を見逃す** — そちらは rc でしか
+    表に出ない。rc・条件 error・消費バイト検査の 3 つを揃って検査する。
+    """
+    out: List[str] = []
+    if rc != 0:
+        out.append(f"{tag}: probe が非ゼロ終了 (rc={rc})")
+    bad = errored_labels(payload)
+    if bad:
+        out.append(f"{tag}: 条件が失敗 {bad}")
+    check = payload.get("consumed_model_bytes_check")
+    if check is None:
+        out.append(f"{tag}: consumed_model_bytes_check が結果に無い")
+    elif not check.get("ok"):
+        out.append(f"{tag}: 消費バイトが pin と不一致 {check.get('mismatches')}")
+    return out
 
 
 def sha_map(payload: dict) -> Dict[str, str]:
@@ -130,18 +162,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     findings: List[dict] = []
     exec_profiles: List[dict] = []
     failures: List[str] = []
+    # 「何プロセスを、どのゲートで検査したか」を結果に残す（PASS の根拠を
+    # 後から数えられるようにする）
+    probe_runs: List[dict] = []
 
     # --- 検査 1: fresh-process 反復 -----------------------------------------
     for label in REPLAY_LABELS:
         shas: List[Optional[str]] = []
         for rep in ("procA", "procB"):
             tag = f"replay_{label}_{rep}"
-            payload = run_probe(
+            payload, rc = run_probe(
                 a.python, model_args, work / tag, work / f"{tag}.json", only=label)
             exec_profiles.append(payload["execution_profile"])
-            bad = errored_labels(payload)
-            if bad:
-                failures.append(f"replay {label} ({rep}) の条件が失敗: {bad}")
+            tag_name = f"replay {label} ({rep})"
+            run_failures = probe_run_failures(payload, rc, tag_name)
+            failures.extend(run_failures)
+            probe_runs.append({
+                "tag": tag_name, "returncode": rc,
+                "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
+                "failures": run_failures,
+            })
             # 失敗時は None を入れる。ここで KeyError を投げると結果 JSON が
             # 1 行も書かれずに落ち、何が起きたかが残らない。
             shas.append(sha_map(payload).get(label))
@@ -156,15 +196,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"[replay] {label:24s} {'MATCH' if ok else 'MISMATCH'} {shown}")
 
     # --- 検査 2: 実行順の非依存性 -------------------------------------------
-    fwd = run_probe(a.python, model_args, work / "order_forward",
-                    work / "order_forward.json")
-    rev = run_probe(a.python, model_args, work / "order_reverse",
-                    work / "order_reverse.json", reverse=True)
+    fwd, fwd_rc = run_probe(a.python, model_args, work / "order_forward",
+                            work / "order_forward.json")
+    rev, rev_rc = run_probe(a.python, model_args, work / "order_reverse",
+                            work / "order_reverse.json", reverse=True)
     exec_profiles += [fwd["execution_profile"], rev["execution_profile"]]
-    for name, payload in (("forward", fwd), ("reverse", rev)):
-        bad = errored_labels(payload)
-        if bad:
-            failures.append(f"order_independence の {name} 実行で条件が失敗: {bad}")
+    for name, payload, rc in (("forward", fwd, fwd_rc), ("reverse", rev, rev_rc)):
+        tag_name = f"order_independence {name}"
+        run_failures = probe_run_failures(payload, rc, tag_name)
+        failures.extend(run_failures)
+        probe_runs.append({
+            "tag": tag_name, "returncode": rc,
+            "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
+            "failures": run_failures,
+        })
     fwd_shas, rev_shas = sha_map(fwd), sha_map(rev)
     # 積集合だけを回すと、片方で失敗した条件が黙って検査対象から消える。
     # 和集合で回し、欠けている側は不一致として扱う。
@@ -219,6 +264,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "probe_script": (fwd.get("pins") or {}).get("probe_script"),
         "consumed_model_bytes_check": fwd.get("consumed_model_bytes_check"),
         "n_processes": len(exec_profiles),
+        "probe_runs": probe_runs,
         "replay_labels": REPLAY_LABELS,
         "execution_profile": exec_profiles[0] if exec_profiles else None,
         "findings": findings,

@@ -222,6 +222,24 @@ def test_reproducibility_result_pins_its_own_checker_and_probe() -> None:
         "再現性結果が pin する probe sha がコミット済み probe と一致しない")
 
 
+def test_every_probe_subprocess_passed_all_gates() -> None:
+    """各サブプロセスが rc=0 かつ消費バイト検査 ok であること。
+
+    条件レベルの `error` だけを見ると、probe の provenance ゲート
+    （消費バイトと pin の一致）が落ちた場合を見逃す — そちらは終了コードに
+    しか出ない。WAV hash が一致しているだけで PASS にならないよう、
+    起動ごとのゲート結果を検査する（レビュー指摘 P1）。
+    """
+    runs = _load(REPRO_JSON)["probe_runs"]
+    assert runs, "サブプロセスのゲート結果が記録されていない"
+    # replay 4 条件 x 2 プロセス + 順序 2 プロセス = 10
+    assert len(runs) == 10, f"検査したサブプロセス数が 10 でない: {len(runs)}"
+    for run in runs:
+        assert run["returncode"] == 0, f"{run['tag']}: rc={run['returncode']}"
+        assert run["consumed_ok"], f"{run['tag']}: 消費バイト検査が ok でない"
+        assert not run["failures"], f"{run['tag']}: {run['failures']}"
+
+
 def test_reproducibility_result_is_fresh_process_based() -> None:
     """Render Reproducibility は **独立プロセス間**で確認されていること。
 
