@@ -303,28 +303,50 @@ def note_region_energy(
 OWNER_MARKER = ".vgl0_probe_output"
 
 
-def is_own_marker(path: Path) -> bool:
-    """所有マーカーが **シンボリックリンクでない通常ファイル**か。
+# 所有マーカーの 1 行目に必ず入る判別子。**内容で所有を判定する**ため、
+# 保護対象入力への hard link（symlink と違い lstat では通常ファイルに見え、
+# `O_NOFOLLOW` でも弾けない）をマーカーと誤認しない（レビュー指摘 P2）。
+MARKER_SENTINEL = "vgl0-owner-marker/1\n"
 
-    `Path.exists()` はリンクを追う。マーカーが保護対象入力への symlink だと
-    「所有している」と誤判定し、続く書き込みがリンク先を切り詰める /
-    `rmtree` が無関係なディレクトリを消す（レビュー指摘 P2）。`lstat` で
-    リンク自体を見る。
+
+def is_own_marker(path: Path) -> bool:
+    """所有マーカーが **自分が書いた実体**か。
+
+    3 つを要求する:
+
+    1. `lstat` が通常ファイル — `Path.exists()` はリンクを追うので、保護対象
+       入力への **symlink** を「所有」と誤判定しないため
+    2. 先頭が `MARKER_SENTINEL` — **hard link** は lstat でも通常ファイルに
+       見えるので、型では区別できない。中身で判定すれば、モデルや楽譜への
+       別名をマーカーと取り違えない
+    3. 読めること（読めないものは所有していないと見なす）
     """
     try:
         st = path.lstat()
     except OSError:
         return False
-    return stat.S_ISREG(st.st_mode)
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    want = MARKER_SENTINEL.encode("utf-8")
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(len(want)) == want
+    except OSError:
+        return False
 
 
 def write_own_marker(path: Path, text: str) -> None:
-    """所有マーカーを **リンクを追わずに**書く（`O_NOFOLLOW`）。
+    """所有マーカーを **新規作成のみ**で書く（`O_EXCL | O_NOFOLLOW`）。
 
-    既存が symlink なら `OSError` になるので、リンク先の破壊が起きない。
+    既存を書き換えないのが要点（レビュー指摘 P2）: `O_TRUNC` で開くと、
+    マーカー名が保護対象入力への hard link だったときに**共有 inode を
+    切り詰める**。`O_NOFOLLOW` は symlink しか弾かないので、hard link は
+    「そもそも既存を開かない」ことでしか防げない。既存があれば
+    `FileExistsError`。
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(MARKER_SENTINEL)
         fh.write(text)
 
 

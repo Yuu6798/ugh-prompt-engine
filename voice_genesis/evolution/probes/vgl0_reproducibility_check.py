@@ -89,14 +89,18 @@ def claim_work_dir(work: Path) -> Path:
         if not probe_mod.is_own_marker(work / WORK_OWNER_MARKER) and any(work.iterdir()):
             raise SystemExit(
                 f"--work-dir {work} は checker が作ったディレクトリではない"
-                f"（所有マーカー {WORK_OWNER_MARKER} が通常ファイルとして無く、"
-                f"中身がある）。無関係なファイルを消さないため中断する。"
+                f"（所有マーカー {WORK_OWNER_MARKER} が自分の書いた実体として"
+                f"無く、中身がある）。無関係なファイルを消さないため中断する。"
                 f"空の場所を指すこと")
     work.mkdir(parents=True, exist_ok=True)
-    probe_mod.write_own_marker(
-        work / WORK_OWNER_MARKER,
-        "vgl0_reproducibility_check が所有する作業ディレクトリ。"
-        "このファイルがあるディレクトリの中だけ checker は削除・再作成する。\n")
+    marker = work / WORK_OWNER_MARKER
+    # 既存の自前マーカーは**書き換えない**（再実行を妨げない / hard link 経由の
+    # 切り詰めを構造的に不可能にする）。無い場合だけ新規作成する。
+    if not probe_mod.is_own_marker(marker):
+        probe_mod.write_own_marker(
+            marker,
+            "vgl0_reproducibility_check が所有する作業ディレクトリ。"
+            "このファイルがあるディレクトリの中だけ checker は削除・再作成する。\n")
     return work
 
 

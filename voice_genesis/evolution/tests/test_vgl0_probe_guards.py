@@ -328,26 +328,96 @@ def test_probe_rejects_a_symlinked_ownership_marker(probe, tmp_path: Path) -> No
     assert out_dir.exists(), "所有していないディレクトリを rmtree した"
 
 
-def test_own_marker_predicate_rejects_links_and_dirs(probe, tmp_path: Path) -> None:
-    real = tmp_path / "real"
-    real.write_text("x", encoding="utf-8")
+def test_own_marker_predicate_accepts_only_its_own_writes(
+    probe, tmp_path: Path,
+) -> None:
+    mine = tmp_path / "mine"
+    probe.write_own_marker(mine, "owned\n")
+    assert probe.is_own_marker(mine)
+
+    # 判別子の無い通常ファイルは所有物ではない（**hard link 対策の要**:
+    # 保護対象入力への別名は lstat では通常ファイルに見えるので、型では
+    # 区別できず中身で判定するしかない）
+    foreign = tmp_path / "foreign"
+    foreign.write_text("x", encoding="utf-8")
+    assert not probe.is_own_marker(foreign)
+
     link = tmp_path / "link"
-    link.symlink_to(real)
+    link.symlink_to(mine)
+    assert not probe.is_own_marker(link), "symlink をマーカーと認めた"
+
     a_dir = tmp_path / "dir"
     a_dir.mkdir()
-    assert probe.is_own_marker(real)
-    assert not probe.is_own_marker(link)
     assert not probe.is_own_marker(a_dir)
     assert not probe.is_own_marker(tmp_path / "missing")
 
 
-def test_write_own_marker_refuses_to_follow_an_existing_link(
+def test_own_marker_predicate_rejects_a_hard_link_to_a_protected_input(
     probe, tmp_path: Path,
 ) -> None:
+    """保護対象入力への **hard link** をマーカーと誤認しないこと。
+
+    hard link は `lstat` でも通常ファイルに見え、`O_NOFOLLOW` でも弾けない。
+    型では区別できないので判別子で落とす（レビュー指摘 P2）。
+    """
+    protected = tmp_path / "acoustic.onnx"
+    protected.write_bytes(b"MODEL-BYTES")
+    alias = tmp_path / "marker"
+    alias.hardlink_to(protected)
+    assert not probe.is_own_marker(alias)
+
+
+def test_write_own_marker_never_truncates_an_existing_path(
+    probe, tmp_path: Path,
+) -> None:
+    """マーカー書き込みは **新規作成のみ**（`O_EXCL`）。
+
+    `O_TRUNC` で開くと、マーカー名が保護対象入力への hard link だったときに
+    共有 inode を切り詰める。symlink / hard link / 通常ファイルのいずれでも
+    既存を開かないことで、この経路を構造的に塞ぐ（レビュー指摘 P2）。
+    """
     victim = tmp_path / "victim"
     victim.write_bytes(b"KEEP")
-    link = tmp_path / "marker"
+
+    link = tmp_path / "sym"
     link.symlink_to(victim)
     with pytest.raises(OSError):
         probe.write_own_marker(link, "owned\n")
+
+    alias = tmp_path / "hard"
+    alias.hardlink_to(victim)
+    with pytest.raises(FileExistsError):
+        probe.write_own_marker(alias, "owned\n")
+
+    plain = tmp_path / "plain"
+    plain.write_bytes(b"KEEP2")
+    with pytest.raises(FileExistsError):
+        probe.write_own_marker(plain, "owned\n")
+
     assert victim.read_bytes() == b"KEEP"
+    assert plain.read_bytes() == b"KEEP2"
+
+
+def test_checker_rejects_a_hard_linked_ownership_marker(
+    chk, tmp_path: Path,
+) -> None:
+    """work ディレクトリのマーカーが保護対象への hard link でも壊さないこと。"""
+    work = tmp_path / "work"
+    work.mkdir()
+    victim = tmp_path / "acoustic.onnx"
+    victim.write_bytes(b"MODEL")
+    (work / chk.WORK_OWNER_MARKER).hardlink_to(victim)
+    with pytest.raises(SystemExit):
+        chk.claim_work_dir(work)
+    assert victim.read_bytes() == b"MODEL", "hard link 先が切り詰められた"
+
+
+def test_claim_work_dir_keeps_an_existing_owned_marker_intact(
+    chk, tmp_path: Path,
+) -> None:
+    """再実行時に既存の自前マーカーを書き換えない（O_EXCL の前提）。"""
+    work = chk.claim_work_dir(tmp_path / "work")
+    marker = work / chk.WORK_OWNER_MARKER
+    before = marker.read_bytes()
+    chk.claim_work_dir(work)
+    assert marker.read_bytes() == before
