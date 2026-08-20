@@ -405,6 +405,9 @@ def test_every_probe_subprocess_passed_all_gates() -> None:
         if run.get("consumed_score_ok") is not None:
             assert run["consumed_score_ok"], (
                 f"{run['tag']}: 実行された楽譜バイト検査が ok でない")
+        if run.get("consumed_input_ok") is not None:
+            assert run["consumed_input_ok"], (
+                f"{run['tag']}: 消費入力バイト検査が ok でない")
         assert not run["failures"], f"{run['tag']}: {run['failures']}"
 
 
@@ -538,6 +541,41 @@ def test_consumed_score_bytes_match_the_pins(result_json: Path) -> None:
         for key, digest in (cond.get("consumed_score_sha256") or {}).items():
             assert pins[key]["sha256"] == digest, (
                 f"{cond['label']}: 実行した楽譜 {key} が pins と不一致")
+
+
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_consumed_input_bytes_match_the_pins(result_json: Path) -> None:
+    """音素辞書 / 話者 embed の**実際に読まれたバイト**が pin と一致すること。
+
+    §9 member 5 を「gate_synth の I/O 構造変更が要る」として射程外にしていたのは
+    事実誤認で、`*_with_sha` ローダが既に存在した（レビュー指摘 P2・12 巡目）。
+    導入前に測った正本にはキーが無いので、**在るときだけ**適用する。
+    """
+    payload = _load(result_json)
+    check = payload.get("consumed_input_bytes_check")
+    if check is None:
+        pytest.skip("この正本は消費入力バイト検査の導入前に測られている")
+    assert check["ok"], f"{result_json.name}: {check['mismatches']}"
+    assert check["distinct_bundles"] == 1
+    pins = payload["pins"]
+    for cond in payload["conditions"]:
+        for key, digest in (cond.get("consumed_input_sha256") or {}).items():
+            assert pins[key]["sha256"] == digest, (
+                f"{cond['label']}: 消費入力 {key} が pins と不一致")
+
+
+def test_live_probe_still_verifies_consumed_input_bytes() -> None:
+    """live probe が `*_with_sha` ローダと入力バイト検査を保持していること。"""
+    src = PROBE_SCRIPT.read_text(encoding="utf-8")
+    for token in ("load_canon_phonemes_with_sha",
+                  "load_own_phonemes_json_with_sha",
+                  "load_speaker_embed_vector_with_sha",
+                  "verify_consumed_input_bytes",
+                  "consumed_input_bytes_check"):
+        assert token in src, f"probe から {token} が消えている"
+    for token in ("gs.load_canon_phonemes(", "gs.load_own_phonemes_json(",
+                  "gs.load_speaker_embed_vector("):
+        assert token not in src, f"非 hash 版ローダ {token} が残っている"
 
 
 def test_live_probe_still_verifies_consumed_score_bytes() -> None:

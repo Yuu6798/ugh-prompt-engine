@@ -42,7 +42,7 @@
   "live_unmeasured": [
     {
       "script": "vgl0_control_axis_probe.py",
-      "sha256": "1cbc9517e28327d3444a8bc1f2bca93b48725ab1a53967468ade1355d175e222",
+      "sha256": "8078b54bcab0b0a043eae489884df754d9175d88ce99d4681bf4eb042e429c71",
       "revalidation_results": [
         "vgl0_control_axis_probe_result.json",
         "vgl0_control_axis_probe_result_n6.json",
@@ -54,7 +54,7 @@
     },
     {
       "script": "vgl0_reproducibility_check.py",
-      "sha256": "731e5602496bdda29dc445eb7ee106807c438dec56038c48bf14dea787f9e771",
+      "sha256": "c21e57e32fa78cd44fce55b7e25c2e07ec700808bedcb13b0c191130b6be2aa1",
       "revalidation_results": [
         "vgl0_render_reproducibility_result.json"
       ],

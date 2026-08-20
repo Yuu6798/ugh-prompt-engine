@@ -183,7 +183,8 @@ def probe_run_failures(payload: dict, rc: int, tag: str) -> List[str]:
     if bad:
         out.append(f"{tag}: 条件が失敗 {bad}")
     for key, label in (("consumed_model_bytes_check", "消費モデルバイト"),
-                       ("consumed_score_bytes_check", "実行された楽譜バイト")):
+                       ("consumed_score_bytes_check", "実行された楽譜バイト"),
+                       ("consumed_input_bytes_check", "消費入力バイト")):
         check = payload.get(key)
         if check is None:
             # 欠落は fail（probe は常に両方を出す）。「検査が無い」を
@@ -289,6 +290,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
                 "consumed_score_ok": (
                     payload.get("consumed_score_bytes_check") or {}).get("ok"),
+                "consumed_input_ok": (
+                    payload.get("consumed_input_bytes_check") or {}).get("ok"),
                 "failures": run_failures,
             })
             pin_maps.append((tag_name, pin_map(payload)))
@@ -321,6 +324,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
             "consumed_score_ok": (
                 payload.get("consumed_score_bytes_check") or {}).get("ok"),
+            "consumed_input_ok": (
+                payload.get("consumed_input_bytes_check") or {}).get("ok"),
             "failures": run_failures,
         })
         pin_maps.append((tag_name, pin_map(payload)))

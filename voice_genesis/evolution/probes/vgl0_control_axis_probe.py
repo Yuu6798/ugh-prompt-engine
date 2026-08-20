@@ -431,9 +431,21 @@ def synth_once(
     # `load_model_bundle_bytes` は 1 回だけ read したバッファを返すので、
     # ここで hash すれば記録と推論入力が同一バッファ由来だと構造的に言える。
     consumed = {k: sha256_bytes(v) for k, v in sorted(model_bytes.items())}
-    variance_phonemes = gs.load_canon_phonemes(cfg.canon / "phonemes.txt")
-    acoustic_phonemes = gs.load_own_phonemes_json(cfg.acoustic_phonemes_json)
-    emb = gs.load_speaker_embed_vector(cfg.speaker_emb)
+    # **digest を返すローダを使う**（レビュー指摘 P2・12 巡目）。非 hash 版で
+    # 読むと、`collect_pins` が hash した後に差し替えられたバイトを合成が使っても
+    # 検査に掛からず、rc=0 のまま「使っていないバイト列」に provenance が
+    # 束縛される。gate_synth は `*_with_sha` を既に公開しており（本体も
+    # 1745/1883/1920 行で使用）、I/O 構造を変えずにそのまま閉じられる。
+    variance_phonemes, canon_phonemes_sha = gs.load_canon_phonemes_with_sha(
+        cfg.canon / "phonemes.txt")
+    acoustic_phonemes, acoustic_phonemes_sha = gs.load_own_phonemes_json_with_sha(
+        cfg.acoustic_phonemes_json)
+    emb, speaker_embed_sha = gs.load_speaker_embed_vector_with_sha(cfg.speaker_emb)
+    consumed_inputs = {
+        "canon_phonemes": canon_phonemes_sha,
+        "acoustic_phonemes_json": acoustic_phonemes_sha,
+        "speaker_embed": speaker_embed_sha,
+    }
 
     notes_raw = build_fn()[: cfg.notes_limit]
     boundaries = phrase_boundary_indices(notes_raw)
@@ -543,6 +555,7 @@ def synth_once(
         "note_region_energy": regions,
         "consumed_model_sha256": consumed,
         "consumed_score_sha256": consumed_score,
+        "consumed_input_sha256": consumed_inputs,
         "phone_frame_invariant": phone_frame_invariant(
             captured.get("acoustic_durations") or [],
             captured.get("note_target_frames") or [],
@@ -820,11 +833,15 @@ def verify_consumed_bytes(results: List[dict], pins: dict) -> dict:
     return {
         "distinct_bundles": len(seen),
         "covered_keys": sorted(_CONSUMED_TO_PIN),
-        "not_covered": ["speaker_embed", "canon_phonemes",
-                        "acoustic_phonemes_json"],
-        # 楽譜モジュールは `load_song_module` の戻り値で条件ごとに閉じた
-        # （7 巡目レビュー指摘）。射程がどこへ移ったかを機械可読に残す。
-        "covered_elsewhere": {"score_module": "consumed_score_bytes_check"},
+        "not_covered": [],
+        # 残りは別検査へ移した（7 巡目 = 楽譜 / 12 巡目 = 音素辞書・話者 embed）。
+        # 射程がどこへ移ったかを機械可読に残す。
+        "covered_elsewhere": {
+            "score_module": "consumed_score_bytes_check",
+            "canon_phonemes": "consumed_input_bytes_check",
+            "acoustic_phonemes_json": "consumed_input_bytes_check",
+            "speaker_embed": "consumed_input_bytes_check",
+        },
         "mismatches": mismatches,
         "ok": not mismatches,
     }
@@ -877,6 +894,53 @@ def verify_consumed_score_bytes(results: List[dict], pins: dict) -> dict:
     return {
         "distinct_bundles": len(seen),
         "covered_keys": covered,
+        "mismatches": mismatches,
+        "ok": not mismatches,
+    }
+
+
+# `*_with_sha` ローダで閉じる入力（pins のキーと同名）。
+_INPUT_PIN_KEYS = ("canon_phonemes", "acoustic_phonemes_json", "speaker_embed")
+
+
+def verify_consumed_input_bytes(results: List[dict], pins: dict) -> dict:
+    """音素辞書 / 話者 embed が **実際に読まれたバイト**と pin の一致を見る。
+
+    §9 member 5 は「gate_synth がパス read するので I/O 構造変更が要る」を理由に
+    射程外としていたが、**これは事実誤認だった**（レビュー指摘 P2・12 巡目）:
+    `load_canon_phonemes_with_sha` / `load_own_phonemes_json_with_sha` /
+    `load_speaker_embed_vector_with_sha` が既に存在し、gate_synth 本体も使って
+    いる。非 hash 版で読んでいたのは probe 側の選択でしかなかった。
+
+    モデル / 楽譜と同じく **キー集合の完全一致**を要求する。
+    """
+    seen = {json.dumps(r["consumed_input_sha256"], sort_keys=True)
+            for r in results if "consumed_input_sha256" in r}
+    mismatches = []
+    if not seen:
+        mismatches.append("消費入力バイトを記録した条件が 1 件も無い")
+    if len(seen) > 1:
+        mismatches.append(f"条件間で入力バイト列が異なる (distinct={len(seen)})")
+    expected = set(_INPUT_PIN_KEYS)
+    for r in results:
+        if "error" in r:
+            continue
+        consumed = r.get("consumed_input_sha256") or {}
+        actual = set(consumed)
+        if actual != expected:
+            mismatches.append(
+                f"{r['label']}: 消費入力キー集合が期待と不一致 "
+                f"欠け={sorted(expected - actual)} / 余分={sorted(actual - expected)}")
+        for key, digest in consumed.items():
+            pinned = pins.get(key, {}).get("sha256")
+            if pinned is None:
+                mismatches.append(f"{r['label']}: 消費入力 {key} が pins に無い")
+            elif pinned != digest:
+                mismatches.append(
+                    f"{r['label']}: 消費入力 {key} が pins.{key} と不一致")
+    return {
+        "distinct_bundles": len(seen),
+        "covered_keys": sorted(expected),
         "mismatches": mismatches,
         "ok": not mismatches,
     }
@@ -937,11 +1001,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     consumed_check = verify_consumed_bytes(results, pins)
     score_check = verify_consumed_score_bytes(results, pins)
+    input_check = verify_consumed_input_bytes(results, pins)
     impl_check = implementation_pin_check()
     payload = {
         "song": cfg.song, "notes_limit": cfg.notes_limit, "speaker": cfg.speaker,
         "consumed_model_bytes_check": consumed_check,
         "consumed_score_bytes_check": score_check,
+        "consumed_input_bytes_check": input_check,
         "order": "reverse" if a.reverse else "forward",
         "single_condition": a.only,
         "pins": pins, "execution_profile": execution_profile(),
@@ -979,6 +1045,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     if not score_check["ok"]:
         print(f"\nCONSUMED SCORE MISMATCH: {score_check['mismatches']}")
+        return 1
+    if not input_check["ok"]:
+        print(f"\nCONSUMED INPUT MISMATCH: {input_check['mismatches']}")
         return 1
     if not impl_check["ok"]:
         print(f"\nIMPLEMENTATION CHANGED DURING RUN: {impl_check['changed_during_run']}")
