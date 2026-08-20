@@ -1,0 +1,221 @@
+{
+  "note": "事前登録の主軸を **Ritsu 原音（合成を通していない収録音）** にそのまま当てた結果。R0 とほぼ同値であり、軸は『モデルの破綻』ではなく『人間の歌唱に元からある終端の性質』を読んでいる。R4 はその値を大きく下げる = **人間がやっていることから遠ざける**",
+  "pairs": {
+    "terminal_ri|2018#215|pjs003#65": {
+      "probe_kind": "terminal_ri",
+      "nasal_gain_db": {
+        "ANCHOR": 5.654,
+        "R0": 6.052,
+        "R4": 1.737,
+        "abs_dev_from_anchor": {
+          "R0": 0.398,
+          "R4": 3.917
+        }
+      },
+      "energy_tail_db": {
+        "ANCHOR": -2.04,
+        "R0": -1.13,
+        "R4": 6.96,
+        "abs_dev_from_anchor": {
+          "R0": 0.91,
+          "R4": 9.0
+        }
+      },
+      "nasal_gain_shape_db": {
+        "ANCHOR": 1.847,
+        "R0": -1.718,
+        "R4": 0.559
+      }
+    },
+    "terminal_ri|2018#598|pjs065#29": {
+      "probe_kind": "terminal_ri",
+      "nasal_gain_db": {
+        "ANCHOR": 5.853,
+        "R0": 6.431,
+        "R4": 1.776,
+        "abs_dev_from_anchor": {
+          "R0": 0.578,
+          "R4": 4.077
+        }
+      },
+      "energy_tail_db": {
+        "ANCHOR": -2.7,
+        "R0": -2.29,
+        "R4": -3.74,
+        "abs_dev_from_anchor": {
+          "R0": 0.41,
+          "R4": 1.04
+        }
+      },
+      "nasal_gain_shape_db": {
+        "ANCHOR": -1.374,
+        "R0": -0.632,
+        "R4": -0.454
+      }
+    },
+    "terminal_i|1st_color#86|pjs001#54": {
+      "probe_kind": "terminal_i",
+      "nasal_gain_db": {
+        "ANCHOR": 1.409,
+        "R0": 1.106,
+        "R4": 0.905,
+        "abs_dev_from_anchor": {
+          "R0": 0.303,
+          "R4": 0.504
+        }
+      },
+      "energy_tail_db": {
+        "ANCHOR": -0.98,
+        "R0": -0.24,
+        "R4": -6.05,
+        "abs_dev_from_anchor": {
+          "R0": 0.74,
+          "R4": 5.07
+        }
+      },
+      "nasal_gain_shape_db": {
+        "ANCHOR": -0.788,
+        "R0": -0.069,
+        "R4": 0.241
+      }
+    },
+    "terminal_i|1st_color#218|pjs001#73": {
+      "probe_kind": "terminal_i",
+      "nasal_gain_db": {
+        "ANCHOR": 2.457,
+        "R0": 2.634,
+        "R4": 0.414,
+        "abs_dev_from_anchor": {
+          "R0": 0.177,
+          "R4": 2.043
+        }
+      },
+      "energy_tail_db": {
+        "ANCHOR": -0.95,
+        "R0": -0.24,
+        "R4": -0.12,
+        "abs_dev_from_anchor": {
+          "R0": 0.71,
+          "R4": 0.83
+        }
+      },
+      "nasal_gain_shape_db": {
+        "ANCHOR": -5.029,
+        "R0": -5.782,
+        "R4": -0.213
+      }
+    },
+    "terminal_N|1st_color#478|pjs002#61": {
+      "probe_kind": "terminal_N",
+      "nasal_gain_db": {
+        "ANCHOR": 0.15,
+        "R0": 0.405,
+        "R4": -0.462,
+        "abs_dev_from_anchor": {
+          "R0": 0.255,
+          "R4": 0.612
+        }
+      },
+      "energy_tail_db": {
+        "ANCHOR": -1.34,
+        "R0": -1.18,
+        "R4": 0.93,
+        "abs_dev_from_anchor": {
+          "R0": 0.16,
+          "R4": 2.27
+        }
+      },
+      "nasal_gain_shape_db": {
+        "ANCHOR": -11.481,
+        "R0": -10.607,
+        "R4": 0.043
+      }
+    },
+    "terminal_N|BRD#664|pjs017#27": {
+      "probe_kind": "terminal_N",
+      "nasal_gain_db": {
+        "ANCHOR": -0.622,
+        "R0": -0.088,
+        "R4": -0.548,
+        "abs_dev_from_anchor": {
+          "R0": 0.534,
+          "R4": 0.074
+        }
+      },
+      "energy_tail_db": {
+        "ANCHOR": -0.93,
+        "R0": -0.45,
+        "R4": 0.1,
+        "abs_dev_from_anchor": {
+          "R0": 0.48,
+          "R4": 1.03
+        }
+      },
+      "nasal_gain_shape_db": {
+        "ANCHOR": -0.409,
+        "R0": 0.09,
+        "R4": 0.122
+      }
+    },
+    "medial_ri|1st_color#104|pjs002#42": {
+      "probe_kind": "medial_ri",
+      "nasal_gain_db": {
+        "ANCHOR": 0.192,
+        "R0": 0.377,
+        "R4": -0.042,
+        "abs_dev_from_anchor": {
+          "R0": 0.185,
+          "R4": 0.234
+        }
+      },
+      "energy_tail_db": {
+        "ANCHOR": -0.43,
+        "R0": -0.83,
+        "R4": -2.13,
+        "abs_dev_from_anchor": {
+          "R0": 0.4,
+          "R4": 1.7
+        }
+      },
+      "nasal_gain_shape_db": {
+        "ANCHOR": -0.212,
+        "R0": -0.258,
+        "R4": -0.046
+      }
+    },
+    "medial_ri|1st_color#357|pjs002#54": {
+      "probe_kind": "medial_ri",
+      "nasal_gain_db": {
+        "ANCHOR": -1.182,
+        "R0": -1.374,
+        "R4": 6.881,
+        "abs_dev_from_anchor": {
+          "R0": 0.192,
+          "R4": 8.063
+        }
+      },
+      "energy_tail_db": {
+        "ANCHOR": -1.62,
+        "R0": -1.78,
+        "R4": 1.84,
+        "abs_dev_from_anchor": {
+          "R0": 0.16,
+          "R4": 3.46
+        }
+      },
+      "nasal_gain_shape_db": {
+        "ANCHOR": -1.244,
+        "R0": -2.147,
+        "R4": -3.259
+      }
+    }
+  },
+  "ear_cross_check": {
+    "judged_pairs": [
+      "terminal_ri|2018#215|pjs003#65"
+    ],
+    "ear_verdict": "R0 が良い（盲検 2 回・A/B 反転でも不変）",
+    "absolute_axis_ranks": "R4 が良いと出る（+6.05 → +1.74）= 耳と逆",
+    "anchor_relative_ranks": "R0 が良いと出る（|R0-ANCHOR|=0.40 vs |R4-ANCHOR|=3.92 dB）= **耳と一致**。energy_tail でも同様（0.91 vs 9.00 dB）"
+  }
+}

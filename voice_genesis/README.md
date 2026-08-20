@@ -200,6 +200,7 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 | `foundry/planb/DESIGN_PLANB_poc.md` | Plan B PoC の実験契約（Identity × Performance 分離・事前登録 TRF ゲート・被覆申告） |
 | `foundry/planb/results_pb0/pb0_record_2026-08-20.md` | Plan B PoC 第 1 走行（代替ドナーでの機構検証。受入 6 条件中 3 達成 / 2 は実資産・耳律速で未達） |
 | `foundry/planb_real/DESIGN_PLANB_REAL_poc.md` | Real-Corpus PoC の実験契約（Ritsu 歌声DB Ver2.0.2 × PJS ver1.1・停止規則・実ラベル規約） |
+| `foundry/planb_real/NEXT_VERIFICATION_PLAN.md` | 第 1 走行を受けた検証計画の再構築（事前登録した TRF 主軸が人間の自然な歌唱を「破綻」と読んでいた実測を起点に、P0–P3 で優先順位づけ） |
 | `foundry/planb_real/REAL_CORPUS_POC_RECORD.md` | Real-Corpus PoC 第 1 走行（実コーパス取得〜R0–R4〜ゲート。TRF 主軸は終端 /ri/ でだけ立ち R4 でのみ動く。到達 = S1_REAL_RENDER） |
 
 各 `results_s*/underspec_log_s*.md` にサイクルごとの仕様逸脱・補充判断が
