@@ -66,39 +66,9 @@ REPLAY_LABELS = [
 ]
 
 
-WORK_OWNER_MARKER = ".vgl0_checker_workdir"
-
-
-def claim_work_dir(work: Path) -> Path:
-    """作業ディレクトリを **checker の所有物として確保する**。
-
-    checker は `order_forward.json` / `replay_baseline_procA.json` のような
-    **固定名**のファイルを work ディレクトリ直下へ書き、起動ごとに消す。
-    既存の無関係なディレクトリを `--work-dir` に指定すると、同名ファイルが
-    所有検査なしに消える（レビュー指摘 P2・7 巡目 / AGENTS.md「per-run パス」）。
-
-    そこで probe の条件ディレクトリと同じ様式で所有マーカーを置き、
-    **マーカーが無く空でもないディレクトリは fail-closed** にする。
-    """
-    if work.exists():
-        if not work.is_dir():
-            raise SystemExit(f"--work-dir {work} はディレクトリではない")
-        if not (work / WORK_OWNER_MARKER).exists() and any(work.iterdir()):
-            raise SystemExit(
-                f"--work-dir {work} は checker が作ったディレクトリではない"
-                f"（所有マーカー {WORK_OWNER_MARKER} が無く、中身がある）。"
-                f"無関係なファイルを消さないため中断する。空の場所を指すこと")
-    work.mkdir(parents=True, exist_ok=True)
-    (work / WORK_OWNER_MARKER).write_text(
-        "vgl0_reproducibility_check が所有する作業ディレクトリ。"
-        "このファイルがあるディレクトリの中だけ checker は削除・再作成する。\n",
-        encoding="utf-8")
-    return work
-
-
 def run_probe(
     py: str, model_args: Sequence[str], out_dir: Path, result_json: Path,
-    *, owned_work_dir: Path, only: Optional[str] = None, reverse: bool = False,
+    *, only: Optional[str] = None, reverse: bool = False,
 ) -> Tuple[dict, int]:
     """probe を 1 プロセス起動し、(結果 payload, 終了コード) を返す。
 
@@ -112,12 +82,6 @@ def run_probe(
     `errored_labels` では拾えず、WAV hash が一致しているだけで PASS に
     なりうる（レビュー指摘 P1）。
     """
-    # 消してよいのは **checker が所有する work ディレクトリの中**だけ
-    # （レビュー指摘 P2・7 巡目）。所有マーカーは `claim_work_dir` が置く。
-    if result_json.resolve().parent != owned_work_dir.resolve():
-        raise SystemExit(
-            f"結果ファイル {result_json} が所有 work ディレクトリ "
-            f"{owned_work_dir} の直下にない — 消してよいか判定できないため中断する")
     if result_json.exists():
         result_json.unlink()
     cmd = [py, str(PROBE), *model_args,
@@ -204,27 +168,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ]
     work = Path(a.work_dir)
     # probe と同じ衝突ガードを checker 側の出力にも通す（--work-dir /
-    # --result-json が入力を指していたら書く前に止める）。
-    #
-    # **保護対象は probe の `ProbeConfig.protected_inputs()` をそのまま流用する**
-    # （レビュー指摘 P2・7 巡目）。checker 側で列挙を書き写すと、`--acoustic-onnx`
-    # が `--acoustic-dir` の外にある場合の派生ファイル
-    # （`*.phonemes.json` / `*.<spk>.emb`）のように、probe 側だけが知っている
-    # 入力が抜ける。単一ソース化しておけば probe に入力が増えたとき自動で追随する。
-    probe_cfg = probe_mod.ProbeConfig(argparse.Namespace(
-        canon_dir=a.canon_dir, vocoder_dir=a.vocoder_dir,
-        acoustic_dir=a.acoustic_dir, acoustic_onnx=a.acoustic_onnx,
-        speaker=a.speaker, song=a.song, notes_limit=a.notes_limit,
-        # checker は --singer-dir を probe へ渡さないので、各サブプロセスは
-        # probe の既定値を使う。保護対象もその既定値で解決する。
-        singer_dir=str(probe_mod.DEFAULT_SINGER_DIR),
-        out_dir=str(work),
-    ))
+    # --result-json が入力を指していたら書く前に止める）
     probe_mod.assert_writes_do_not_touch_inputs(
         write_paths=[work, Path(a.result_json)],
-        protected_inputs=[SELF, *probe_cfg.protected_inputs()],
+        protected_inputs=[
+            SELF, PROBE, probe_mod.GATE_SYNTH_PATH,
+            Path(a.acoustic_onnx), Path(a.acoustic_dir),
+            Path(a.canon_dir), Path(a.vocoder_dir),
+            # 各サブプロセスは既定の singer ディレクトリから score.py /
+            # phoneme_jp.py を実行する。これを入れないと
+            # `--result-json .../singer/score.py` が全 probe 完走後に
+            # 楽譜を上書きする（レビュー指摘 P2）
+            probe_mod.DEFAULT_SINGER_DIR,
+        ],
     )
-    claim_work_dir(work)
+    work.mkdir(parents=True, exist_ok=True)
 
     unknown = sorted(set(REPLAY_LABELS) - EXPECTED_LABELS)
     if unknown:
@@ -247,8 +205,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for rep in ("procA", "procB"):
             tag = f"replay_{label}_{rep}"
             payload, rc = run_probe(
-                a.python, model_args, work / tag, work / f"{tag}.json",
-                owned_work_dir=work, only=label)
+                a.python, model_args, work / tag, work / f"{tag}.json", only=label)
             exec_profiles.append(payload["execution_profile"])
             tag_name = f"replay {label} ({rep})"
             run_failures = probe_run_failures(payload, rc, tag_name)
@@ -274,10 +231,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # --- 検査 2: 実行順の非依存性 -------------------------------------------
     fwd, fwd_rc = run_probe(a.python, model_args, work / "order_forward",
-                            work / "order_forward.json", owned_work_dir=work)
+                            work / "order_forward.json")
     rev, rev_rc = run_probe(a.python, model_args, work / "order_reverse",
-                            work / "order_reverse.json", owned_work_dir=work,
-                            reverse=True)
+                            work / "order_reverse.json", reverse=True)
     exec_profiles += [fwd["execution_profile"], rev["execution_profile"]]
     for name, payload, rc in (("forward", fwd, fwd_rc), ("reverse", rev, rev_rc)):
         tag_name = f"order_independence {name}"

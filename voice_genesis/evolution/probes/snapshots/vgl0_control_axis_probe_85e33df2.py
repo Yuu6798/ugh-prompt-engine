@@ -340,16 +340,8 @@ def synth_once(
 ) -> dict:
     """1 条件を合成し、実測値を返す。gate_synth 本体は無改変で、
     モジュール定数 / `build_inputs` / dur 出力のみ monkeypatch する。"""
-    build_fn, beats_to_seconds, tempo, _p, module_shas = gs.load_song_module(
+    build_fn, beats_to_seconds, tempo, _p, _shas = gs.load_song_module(
         cfg.song, cfg.singer_dir)
-    # **この合成が実際に実行した楽譜バイト**の digest（レビュー指摘 P2・7 巡目）。
-    # `collect_pins` は実行前に 1 度だけ楽譜を読む。長い多条件走行の途中で
-    # `score.py` / `phoneme_jp.py` が書き換わると、`load_song_module` は
-    # **新しいバイトを実行**するのに結果は古い pin を記録したまま success を
-    # 返しうる。gate_synth は per-call で消費 digest を返しているので、
-    # read-only I/O を変えずに条件ごとに突き合わせられる（§9 member 5 の
-    # 境界宣言のうち「楽譜モジュール分」はこれで閉じる）。
-    consumed_score = {key: digest for key, (_path, digest) in module_shas.items()}
     model_bytes, _ = gs.load_model_bundle_bytes(
         cfg.canon, cfg.vocoder, cfg.acoustic_onnx, cfg.acoustic_dsconfig)
     # **推論へ実際に渡ったバイト列**そのものを hash する（レビュー指摘）。
@@ -470,7 +462,6 @@ def synth_once(
         "notes_scaled": build_patch.scaled_notes,
         "note_region_energy": regions,
         "consumed_model_sha256": consumed,
-        "consumed_score_sha256": consumed_score,
         "phone_frame_invariant": phone_frame_invariant(
             captured.get("acoustic_durations") or [],
             captured.get("note_target_frames") or [],
@@ -728,46 +719,7 @@ def verify_consumed_bytes(results: List[dict], pins: dict) -> dict:
         "distinct_bundles": len(seen),
         "covered_keys": sorted(_CONSUMED_TO_PIN),
         "not_covered": ["speaker_embed", "canon_phonemes",
-                        "acoustic_phonemes_json"],
-        # 楽譜モジュールは `load_song_module` の戻り値で条件ごとに閉じた
-        # （7 巡目レビュー指摘）。射程がどこへ移ったかを機械可読に残す。
-        "covered_elsewhere": {"score_module": "consumed_score_bytes_check"},
-        "mismatches": mismatches,
-        "ok": not mismatches,
-    }
-
-
-def verify_consumed_score_bytes(results: List[dict], pins: dict) -> dict:
-    """全条件が同じ楽譜バイト列を実行し、かつそれが pin と一致するか。
-
-    `verify_consumed_bytes` がモデル 6 バッファについて閉じている窓を、
-    楽譜モジュール（`score.py` + 推移的依存）へ広げる。`collect_pins` の
-    パス read と、各条件の `load_song_module` が実行したバイトの間に
-    差し替えが起きても黙って通さない（レビュー指摘 P2・7 巡目）。
-
-    pins 側のキーは `load_song_module` が返すキーそのもの
-    （`score_module_<song>` / `score_module_<song>_dep_<module>`）で、
-    `collect_pins` がそのまま pins へ載せている。
-    """
-    seen = {json.dumps(r["consumed_score_sha256"], sort_keys=True)
-            for r in results if "consumed_score_sha256" in r}
-    mismatches = []
-    if len(seen) > 1:
-        mismatches.append(f"条件間で楽譜バイト列が異なる (distinct={len(seen)})")
-    for r in results:
-        for key, digest in (r.get("consumed_score_sha256") or {}).items():
-            pinned = pins.get(key, {}).get("sha256")
-            if pinned is None:
-                mismatches.append(
-                    f"{r['label']}: 実行した楽譜 {key} が pins に無い")
-            elif pinned != digest:
-                mismatches.append(
-                    f"{r['label']}: 実行した楽譜 {key} が pins.{key} と不一致")
-    covered = sorted({k for r in results
-                      for k in (r.get("consumed_score_sha256") or {})})
-    return {
-        "distinct_bundles": len(seen),
-        "covered_keys": covered,
+                        "acoustic_phonemes_json", "score_module"],
         "mismatches": mismatches,
         "ok": not mismatches,
     }
@@ -827,12 +779,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"|   FAILED: {exc!r}"[:300], flush=True)
 
     consumed_check = verify_consumed_bytes(results, pins)
-    score_check = verify_consumed_score_bytes(results, pins)
     impl_check = implementation_pin_check()
     payload = {
         "song": cfg.song, "notes_limit": cfg.notes_limit, "speaker": cfg.speaker,
         "consumed_model_bytes_check": consumed_check,
-        "consumed_score_bytes_check": score_check,
         "order": "reverse" if a.reverse else "forward",
         "single_condition": a.only,
         "pins": pins, "execution_profile": execution_profile(),
@@ -867,9 +817,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     if not consumed_check["ok"]:
         print(f"\nCONSUMED BYTES MISMATCH: {consumed_check['mismatches']}")
-        return 1
-    if not score_check["ok"]:
-        print(f"\nCONSUMED SCORE MISMATCH: {score_check['mismatches']}")
         return 1
     if not impl_check["ok"]:
         print(f"\nIMPLEMENTATION CHANGED DURING RUN: {impl_check['changed_during_run']}")

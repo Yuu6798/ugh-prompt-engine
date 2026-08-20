@@ -1,9 +1,14 @@
 # VG-L0 制御軸表現力の実測（2026-08-20）
 
-> **STATUS: PROVISIONAL / REVIEW_PENDING**（PR #289 レビュー中）。
-> 本記録の結論は**レビュー通過後に accepted へ変更**する。それまで
-> STATUS.md / memory の対応記述も provisional 扱いとし、他セッションは
-> 本記録の結論を**確定した前提として採用しない**こと（§8 昇格フロー）。
+> **STATUS: accepted**（2026-08-20 昇格。PR #289 マージ + フォローアップ PR で
+> 7/9 巡目の残指摘を反映済み）。§8 の昇格フロー
+> `experiment → self-review → PR review → accepted record → STATUS` を完了した。
+>
+> **accepted の射程**: §0 の三分類（確定 / 未判定 / 撤回）**そのものが accepted**
+> であって、「全部が確定した」ではない。U1–U6 は未判定のままで、他セッションが
+> 確定事項として採用してよいのは §0-1 の C1–C7 だけ。§1 の checkpoint 逸脱の
+> 限定（run 6 代替が許されるのは入力 I/F・介入点の探索まで）も accepted の
+> 一部として持ち回ること。
 
 - 位置づけ: [`../DESIGN_VG_L0.md`](../DESIGN_VG_L0.md) §6 の**実装第 1 タスク**
   = 「現行 gate_synth の入力でどこまで表現できるかの実測」の実施記録。
@@ -682,8 +687,15 @@ STATUS canonical summary
 - レビュー前に STATUS へ載せる場合は **`[PROVISIONAL]` / `[REVIEW_PENDING]`
   の明示を必須**とする
 - レビューで意味が確定した後に `accepted` へ変更する
-- 本記録は現在 **PROVISIONAL**（冒頭）。PR #289 マージ時に accepted へ更新し、
-  STATUS の該当行から `[PROVISIONAL]` を外す
+- 本記録は **accepted**（冒頭・2026-08-20 昇格）。STATUS の該当行からも
+  `[PROVISIONAL]` を外した
+
+> **昇格が 1 手番遅れた（正直会計）**: PR #289 は 2026-08-20 にマージされたが、
+> 冒頭の PROVISIONAL 表記と STATUS の `[PROVISIONAL]` はその場で外しておらず、
+> 次セッションまで「マージ済みなのに provisional」という状態が残った。
+> **昇格フローを新設した当の PR が、そのフローの最終段を実行していなかった**。
+> フォローアップ PR で実行し、以後は**マージと同じ PR の中で昇格を済ませる**
+> （マージ後の別作業にすると、いま起きたとおり落ちる）。
 
 ## 9. pin / provenance ファミリーの終端宣言（2026-08-20・4 巡目）
 
@@ -705,7 +717,7 @@ checker sha → プロセス間 pin と、同じファミリーの穴が 1 件�
 | 2 | 検査スクリプト（checker） | **ロード時** pin + 実行後の再 hash 一致を検査 |
 | 2b | gate_synth 本体 | **import 前** pin + 実行後の再 hash 一致（コミット実体との照合はしない = §9-2 の据え置き項目） |
 | 3 | acoustic / dsconfig / canon 3 onnx / vocoder | pin + **消費バッファそのものの hash と照合**（fail-closed） |
-| 4 | 楽譜モジュール（score.py + 依存） | pin（gate_synth の `load_song_module` provenance 機構を流用） |
+| 4 | 楽譜モジュール（score.py + 依存） | pin + **条件ごとに `load_song_module` が返した消費 digest と照合**（fail-closed）。2026-08-20 フォローアップで昇格（§9-3） |
 | 5 | 話者 embed / 音素辞書 | pin のみ（**射程外** — 下記） |
 | 6 | ExecutionProfile | 全プロセスで一致を検査 |
 | 7 | プロセス間の pin 不変性 | 10 プロセス全ての pin セットを突き合わせ |
@@ -725,6 +737,16 @@ checker sha → プロセス間 pin と、同じファミリーの穴が 1 件�
 閉じるには gate_synth の I/O 構造変更（`load_model_bundle_bytes` 相当への集約）が
 必要で、本 PR の read-only 契約に反する。射程は結果 JSON の
 `consumed_model_bytes_check.not_covered` に機械可読な形で残した。
+
+> **境界宣言を 1 件分だけ撤回した（2026-08-20 フォローアップ・§9-3）**: 当初の
+> 5 は「話者 embed / 音素辞書 / **楽譜モジュール**」の 3 つを一括で射程外に
+> していたが、**楽譜モジュールについては前提が誤っていた** — `load_song_module`
+> は消費した digest を per-call で返しており、gate_synth を一切変えずに照合
+> できる（7 巡目レビュー指摘）。**「gate_synth の I/O 構造変更が要る」という
+> 共通理由を、実際には確かめずに 3 つへ一括適用していた**のが誤りの機構で、
+> 本記録が 3 度撤回したのと同型（機構から因果を組み立てて実測しない）。
+> 境界宣言はメンバーごとに理由を実地確認してから引く。残る 5 は
+> 話者 embed / 音素辞書の 2 つで、理由は上のとおり変わらない。
 
 **再開条件**（`AGENTS.md` §3-3 の宣言様式）: 本宣言を根拠に据え置くのは
 「宣言済み範囲の再指摘で、新しい実害経路を示さないもの」に限る。
@@ -748,7 +770,48 @@ Codex 自動レビューは **6 巡目で打ち切り**（User 裁定）。1〜6
 
 3 件目は §9 の「member 5 は gate_synth の I/O 構造変更が必要」という境界宣言の
 うち**楽譜モジュール分については前提が誤っていた**可能性を示す。
-フォローアップで再検証し、必要なら §9 の表を改訂する。
+→ **再検証の結果、指摘が正しかった**。§9 の表を改訂し、member 4 を消費
+digest 照合まで昇格した（§9-3）。
+
+## 9-3. フォローアップ PR（2026-08-20・7/9 巡目の 4 件 + 昇格）
+
+§9-1 で送りにした 3 件と、9 巡目の 1 件を閉じた。あわせて §8 の昇格フローの
+最終段（PROVISIONAL → accepted）を実行した — **フローを新設した PR 自身が
+最終段を実行していなかった**ため（冒頭の正直会計）。
+
+| # | 指摘 | 対応 |
+|---|---|---|
+| 1 | Verify the score bytes returned by each synthesis（7 巡目 P2） | **採用**。`synth_once` が `load_song_module` の戻り値 digest を保持し、条件ごとに `consumed_score_sha256` として記録。`verify_consumed_score_bytes` で pin と突き合わせ、不一致は rc=1（fail-closed）。→ §9 member 4 を昇格 |
+| 2 | Protect every derived acoustic input in the checker（7 巡目 P2） | **採用**。checker が保護リストを書き写すのをやめ、`ProbeConfig.protected_inputs()` を流用する単一ソースへ。`--acoustic-onnx` が `--acoustic-dir` の外にある場合の `*.phonemes.json` / `*.<spk>.emb` が自動で覆われる |
+| 3 | Refuse to unlink unowned checker result files（7 巡目 P2） | **採用**。work ディレクトリに所有マーカー `.vgl0_checker_workdir` を導入（probe の条件ディレクトリと同じ様式）。マーカーが無く空でもないディレクトリは fail-closed。`run_probe` は所有 work 直下の結果ファイルしか unlink しない |
+| 4 | Enforce each canonical result's full geometry（9 巡目 P2） | **採用**。正本 3 本に「条件集合が測定版の `CONDITIONS` と完全一致 / `single_condition is None` / `order == "forward"` / ファイル別 `notes_limit` 6・8・10」を機械検査。ラベル重複も落とす |
+
+**ガードは実測なしで検査する**: 2 と 3 は「合成が終わってから入力を壊す」型で、
+起動前に落ちれば足りる。`tests/test_vgl0_probe_guards.py` が onnxruntime を
+import 用にスタブして preflight だけを叩く（ONNX 資産不要・CI で回る）。
+
+### 実測を生んだ版の凍結（snapshot 機構）
+
+上の 3 件はいずれも probe / checker 本体の編集なので、`pins.probe_script` /
+`checker_script` の sha が正本 4 本とずれる。従来の検査は「pin == live 実装」
+だったため、**再実測しない限り probe の欠陥を直せない**構造になっていた。
+再実測の入力は run 6 の 40K ONNX + canon + vocoder で、いずれも repo に入らない
+（Pod / Drive 律速）。
+
+そこで `probes/snapshots/` に**実測を生んだ版をバイト同一で凍結**し、検査を
+「pin は live か snapshot のどちらかで必ず実体へ解決できる」へ改めた
+（運用 = `probes/snapshots/README.md`）。fixture drift の検知は失われていない —
+編集して凍結も登録もしなければテストは落ちる。
+
+**これは再実測の免除ではない**。live 実装は現在どの正本からも pin されていない
+= **実測証拠が無い**。`index.json` の `live_unmeasured` に理由と再検証条件を
+書くことをテストで強制し、`test_live_scripts_are_measured_or_declared_unmeasured`
+が宣言漏れと（再実測後の）宣言残りの両方を落とす。
+
+**未実測のまま「出力は変わらない」とは書かない**: 追加したのは検査と preflight
+だけで合成経路には触れていないが、それを**実測で確かめてはいない**。機構から
+因果を組み立てて実測しない誤りは本記録が 3 度撤回した型なので、`live_unmeasured`
+の `reason` にもそのまま書いた。再実測の手順は同ファイルの `revalidation`。
 
 ## 9-2. レビュー採否の基準
 
