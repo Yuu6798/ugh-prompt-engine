@@ -52,9 +52,9 @@ _SELF_SHA_AT_LOAD = hashlib.sha256(SELF.read_bytes()).hexdigest()
 # 揃って落とした」場合、突き合わせだけでは検出できない（レビュー指摘）ので、
 # **期待集合そのもの**と照合する。
 sys.path.insert(0, str(PROBE.parent))
-from vgl0_control_axis_probe import CONDITIONS as _PROBE_CONDITIONS  # noqa: E402
+import vgl0_control_axis_probe as probe_mod  # noqa: E402
 
-EXPECTED_LABELS = {label for label, _ in _PROBE_CONDITIONS}
+EXPECTED_LABELS = {label for label, _ in probe_mod.CONDITIONS}
 
 # fresh-process 反復の対象。**制御軸を有効にした条件を必ず含める**
 # （baseline だけでは patch 経路を一度も通らない — 1 巡目の指摘）。
@@ -167,6 +167,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--notes-limit", str(a.notes_limit),
     ]
     work = Path(a.work_dir)
+    # probe と同じ衝突ガードを checker 側の出力にも通す（--work-dir /
+    # --result-json が入力を指していたら書く前に止める）
+    probe_mod.assert_writes_do_not_touch_inputs(
+        write_paths=[work, Path(a.result_json)],
+        protected_inputs=[
+            SELF, PROBE, probe_mod.GATE_SYNTH_PATH,
+            Path(a.acoustic_onnx), Path(a.acoustic_dir),
+            Path(a.canon_dir), Path(a.vocoder_dir),
+        ],
+    )
     work.mkdir(parents=True, exist_ok=True)
 
     unknown = sorted(set(REPLAY_LABELS) - EXPECTED_LABELS)

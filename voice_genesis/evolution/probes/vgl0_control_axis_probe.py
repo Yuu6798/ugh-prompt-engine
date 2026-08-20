@@ -62,8 +62,8 @@ REPO = Path(__file__).resolve().parents[3]
 FOUNDRY = REPO / "voice_genesis" / "foundry"
 DEFAULT_SINGER_DIR = REPO / "voice_genesis" / "singer"
 
-sys.path.insert(0, str(FOUNDRY / "s1_gate"))
-import gate_synth as gs  # noqa: E402
+SELF_PATH = Path(__file__).resolve()
+GATE_SYNTH_PATH = FOUNDRY / "s1_gate" / "gate_synth.py"
 
 
 def sha256_bytes(b: bytes) -> str:
@@ -72,6 +72,18 @@ def sha256_bytes(b: bytes) -> str:
 
 def sha256_path(p: Path) -> str:
     return sha256_bytes(p.read_bytes())
+
+
+# **import より前に実装バイトを固定する**（レビュー指摘 P2 / AGENTS.md
+# 「hash を あらゆる import・ロードより前に確定する」）。import 後にディスクから
+# 読むと、その間に編集されたファイルは「実行は旧 in-memory 定義 / 記録は新 hash」
+# となり、fixture テストが**実行されていないコード**に対する PASS を検証する。
+# 実行後の再 hash 一致も `implementation_pin_check` で検査してこの窓を閉じる。
+_SELF_SHA_AT_LOAD = sha256_path(SELF_PATH)
+_GATE_SYNTH_SHA_AT_LOAD = sha256_path(GATE_SYNTH_PATH)
+
+sys.path.insert(0, str(FOUNDRY / "s1_gate"))
+import gate_synth as gs  # noqa: E402
 
 
 # --- 介入点 1: duration 予測の後段（子音時間配分） ---------------------------
@@ -547,6 +559,15 @@ class ProbeConfig:
         self.notes_limit = a.notes_limit
         self.out_dir = Path(a.out_dir)
 
+    def protected_inputs(self) -> List[Path]:
+        """壊してはならない入力の全数（衝突ガードへ渡す）。"""
+        return [
+            SELF_PATH, GATE_SYNTH_PATH,
+            self.acoustic_onnx, self.acoustic_dsconfig,
+            self.acoustic_phonemes_json, self.speaker_emb,
+            self.canon, self.vocoder, self.acoustic_dir, self.singer_dir,
+        ]
+
 
 def collect_pins(cfg: "ProbeConfig") -> dict:
     """**この probe が実際に読んだバイト列**の sha256 を全部束ねる。
@@ -557,15 +578,16 @@ def collect_pins(cfg: "ProbeConfig") -> dict:
     （レビュー指摘）。実行環境も同じ理由で記録する（決定論は環境を固定した
     上でしか主張できない）。
     """
-    gate_synth_path = FOUNDRY / "s1_gate" / "gate_synth.py"
-    self_path = Path(__file__).resolve()
+    # probe / gate_synth は **ロード時に固定した** sha を使う（ここで read し直すと
+    # import 後の編集を拾い、実行されたコードと記録がずれる）
+    gate_synth_path, self_path = GATE_SYNTH_PATH, SELF_PATH
     # 楽譜側は gate_synth 自身の provenance 機構（`load_song_module` の
     # 5 番目の戻り値 = 本体 + 推移的依存の sha）をそのまま流用する。
     _, _, _, _, module_shas = gs.load_song_module(cfg.song, cfg.singer_dir)
     pins = {
-        "probe_script": {"path": str(self_path), "sha256": sha256_path(self_path)},
+        "probe_script": {"path": str(self_path), "sha256": _SELF_SHA_AT_LOAD},
         "gate_synth": {"path": str(gate_synth_path),
-                       "sha256": sha256_path(gate_synth_path)},
+                       "sha256": _GATE_SYNTH_SHA_AT_LOAD},
         "acoustic_onnx": {"path": str(cfg.acoustic_onnx),
                           "sha256": sha256_path(cfg.acoustic_onnx)},
         "acoustic_dsconfig": {"path": str(cfg.acoustic_dsconfig),
@@ -588,6 +610,48 @@ def collect_pins(cfg: "ProbeConfig") -> dict:
     for key, (path, digest) in module_shas.items():
         pins[key] = {"path": str(path), "sha256": digest}
     return pins
+
+
+def implementation_pin_check() -> dict:
+    """ロード時に固定した実装 sha と、実行後の再 hash が一致するか。
+
+    一致しなければ「判定を出したコード」と「記録された hash」が食い違って
+    いるので、その結果で fixture を検証してはならない（レビュー指摘 P2）。
+    """
+    after = {"probe_script": sha256_path(SELF_PATH),
+             "gate_synth": sha256_path(GATE_SYNTH_PATH)}
+    at_load = {"probe_script": _SELF_SHA_AT_LOAD,
+               "gate_synth": _GATE_SYNTH_SHA_AT_LOAD}
+    changed = sorted(k for k in at_load if at_load[k] != after[k])
+    return {"sha_at_load": at_load, "sha_after_run": after,
+            "changed_during_run": changed, "ok": not changed}
+
+
+def assert_writes_do_not_touch_inputs(
+    *, write_paths: Sequence[Path], protected_inputs: Sequence[Path],
+) -> None:
+    """書き込み先が入力を壊さないことを実行前に検査する。
+
+    `protected_inputs` は**デフォルトなしの必須引数**（AGENTS.md
+    「衝突ガードは必須引数」）— 渡し忘れを呼び出し時エラーで検出するため。
+
+    `--result-json` が acoustic ONNX や `score.py`、probe 自身を指していると
+    `write_text` がその入力を切り詰める。`--out-dir` は条件ディレクトリを
+    `rmtree` するので、入力を含むディレクトリを指していても破壊が起きる
+    （レビュー指摘 P2）。どちらも**書き込む前に** fail-closed で弾く。
+    """
+    resolved_inputs = [q.resolve() for q in protected_inputs]
+    for raw in write_paths:
+        w = raw.resolve()
+        for inp in resolved_inputs:
+            if w == inp:
+                raise SystemExit(
+                    f"出力先 {w} は保護対象の入力そのものを指している。"
+                    f"実行すると入力を破壊するため中断する")
+            if w in inp.parents:
+                raise SystemExit(
+                    f"出力先 {w} は保護対象の入力 {inp} を含むディレクトリ。"
+                    f"条件ディレクトリの再作成で入力を破壊するため中断する")
 
 
 def execution_profile() -> dict:
@@ -677,6 +741,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     a = build_argparser().parse_args(argv)
 
     cfg = ProbeConfig(a)
+    # **書き込む前に**衝突ガードを通す（出力が入力を壊さないこと）
+    assert_writes_do_not_touch_inputs(
+        write_paths=[cfg.out_dir, Path(a.result_json)],
+        protected_inputs=cfg.protected_inputs(),
+    )
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     pins = collect_pins(cfg)
 
@@ -698,12 +767,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"|   FAILED: {exc!r}"[:300], flush=True)
 
     consumed_check = verify_consumed_bytes(results, pins)
+    impl_check = implementation_pin_check()
     payload = {
         "song": cfg.song, "notes_limit": cfg.notes_limit, "speaker": cfg.speaker,
         "consumed_model_bytes_check": consumed_check,
         "order": "reverse" if a.reverse else "forward",
         "single_condition": a.only,
         "pins": pins, "execution_profile": execution_profile(),
+        "implementation_pin_check": impl_check,
         "conditions": results,
     }
     Path(a.result_json).write_text(
@@ -734,6 +805,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     if not consumed_check["ok"]:
         print(f"\nCONSUMED BYTES MISMATCH: {consumed_check['mismatches']}")
+        return 1
+    if not impl_check["ok"]:
+        print(f"\nIMPLEMENTATION CHANGED DURING RUN: {impl_check['changed_during_run']}")
         return 1
     return 0
 

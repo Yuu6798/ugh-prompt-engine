@@ -273,6 +273,25 @@ def test_pins_identical_across_every_subprocess() -> None:
         f"pin を比較したプロセス数が 10 でない: {finding['n_compared']}")
 
 
+@pytest.mark.parametrize("result_json", RESULT_JSONS, ids=lambda p: p.stem)
+def test_implementation_pins_are_load_time_and_stable(result_json: Path) -> None:
+    """probe / gate_synth の sha が **import 前に固定**され、実行後も不変。
+
+    import 後に read すると、その間の編集で「実行は旧 in-memory 定義 / 記録は
+    新 hash」になり、この fixture が**実行されていないコード**に対する PASS を
+    検証してしまう（レビュー指摘 P2）。
+    """
+    check = _load(result_json)["implementation_pin_check"]
+    assert check["ok"], (
+        f"{result_json.name}: 実行中に実装が変化した {check['changed_during_run']}")
+    assert check["sha_at_load"]["probe_script"] == _sha256(PROBE_SCRIPT)
+    assert check["sha_after_run"]["probe_script"] == _sha256(PROBE_SCRIPT)
+    # gate_synth はロード時と実行後で一致していることだけ見る（コミット済み
+    # 実体との照合はしない — 活発に変更されるため偽陽性になる）
+    assert (check["sha_at_load"]["gate_synth"]
+            == check["sha_after_run"]["gate_synth"])
+
+
 def test_reproducibility_result_is_fresh_process_based() -> None:
     """Render Reproducibility は **独立プロセス間**で確認されていること。
 

@@ -701,15 +701,26 @@ checker sha → プロセス間 pin と、同じファミリーの穴が 1 件�
 
 | # | メンバー | 状態 |
 |---|---|---|
-| 1 | probe 実装 | pin 済み + コミット済み実体との一致を CI 検査 |
+| 1 | probe 実装 | **ロード時（import 前）** pin + 実行後の再 hash 一致 + コミット済み実体との一致を CI 検査 |
 | 2 | 検査スクリプト（checker） | **ロード時** pin + 実行後の再 hash 一致を検査 |
+| 2b | gate_synth 本体 | **import 前** pin + 実行後の再 hash 一致（コミット実体との照合はしない = §9-2 の据え置き項目） |
 | 3 | acoustic / dsconfig / canon 3 onnx / vocoder | pin + **消費バッファそのものの hash と照合**（fail-closed） |
 | 4 | 楽譜モジュール（score.py + 依存） | pin（gate_synth の `load_song_module` provenance 機構を流用） |
 | 5 | 話者 embed / 音素辞書 | pin のみ（**射程外** — 下記） |
 | 6 | ExecutionProfile | 全プロセスで一致を検査 |
 | 7 | プロセス間の pin 不変性 | 10 プロセス全ての pin セットを突き合わせ |
+| 8 | 出力先が入力を壊さないこと | `--out-dir` / `--result-json` を全入力と突き合わせる**書き込み前**の衝突ガード（probe / checker 両方）。protected_inputs は**必須引数** |
+| 9 | 条件ディレクトリの破壊的再作成 | 所有マーカー `.vgl0_probe_output` のあるディレクトリのみ削除 |
 
-**終端宣言**: 上表 1〜4・6・7 は閉じた。**5 は本 PR の射程外として境界を宣言する** —
+> **掃討が 1 巡で閉じきらなかった（5 巡目・正直会計）**: 4 巡目で「終端」と
+> 宣言したが、その時点で **probe / gate_synth の pin は import 後に read して
+> いた**（checker には同じ巡でロード時 pin を入れたのに、probe 側へ横展開して
+> いなかった）。加えて `--result-json` / `--out-dir` が入力を指した場合の
+> **書き込み衝突ガード**も欠けていた。5 巡目でこの 2 件を閉じ、下表を更新した。
+> 「ファミリー全数掃討」を宣言するときは、**同じ検査を全メンバーへ機械的に
+> 横展開したかを確認してから**宣言すること（本件の反省）。
+
+**終端宣言**: 上表 1〜4・6〜9 は閉じた。**5 は本 PR の射程外として境界を宣言する** —
 話者 embed / 音素辞書は `gate_synth` がパス read するため、消費バイト照合まで
 閉じるには gate_synth の I/O 構造変更（`load_model_bundle_bytes` 相当への集約）が
 必要で、本 PR の read-only 契約に反する。射程は結果 JSON の

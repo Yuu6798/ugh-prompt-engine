@@ -26,7 +26,7 @@
   "pins": {
     "probe_script": {
       "path": "/workspace/ugh-prompt-engine/voice_genesis/evolution/probes/vgl0_control_axis_probe.py",
-      "sha256": "deef11992b5e1aa0b553681408be79c48e2946fbc4887c7c76e387f35909d1b0"
+      "sha256": "22bcec64227e45a20be6d4ac9375798276f8074c1755f66d3c78a8662a20f60a"
     },
     "gate_synth": {
       "path": "/workspace/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth.py",
@@ -89,6 +89,18 @@
     ],
     "soundfile": "0.14.0",
     "gate_synth_seed": 42
+  },
+  "implementation_pin_check": {
+    "sha_at_load": {
+      "probe_script": "22bcec64227e45a20be6d4ac9375798276f8074c1755f66d3c78a8662a20f60a",
+      "gate_synth": "423c4d81fff39d511161d1032fb6ad648b25c8077937977a899bb3d920d063f7"
+    },
+    "sha_after_run": {
+      "probe_script": "22bcec64227e45a20be6d4ac9375798276f8074c1755f66d3c78a8662a20f60a",
+      "gate_synth": "423c4d81fff39d511161d1032fb6ad648b25c8077937977a899bb3d920d063f7"
+    },
+    "changed_during_run": [],
+    "ok": true
   },
   "conditions": [
     {
@@ -210,9 +222,9 @@
         "wav_rms": 0.06886498010578998,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.010007143020629883,
-        "stage2_elapsed_sec": 1.3013942241668701,
-        "stage3_elapsed_sec": 8.787320852279663
+        "stage1_elapsed_sec": 0.009615182876586914,
+        "stage2_elapsed_sec": 1.294983148574829,
+        "stage3_elapsed_sec": 9.107092380523682
       }
     },
     {
@@ -334,9 +346,9 @@
         "wav_rms": 0.06886498010578998,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.017763614654541016,
-        "stage2_elapsed_sec": 1.1913766860961914,
-        "stage3_elapsed_sec": 8.488674879074097
+        "stage1_elapsed_sec": 0.010252714157104492,
+        "stage2_elapsed_sec": 1.1636412143707275,
+        "stage3_elapsed_sec": 8.72599744796753
       }
     },
     {
@@ -464,9 +476,9 @@
         "wav_rms": 0.10026770203508507,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.009511709213256836,
-        "stage2_elapsed_sec": 1.2011089324951172,
-        "stage3_elapsed_sec": 8.399787425994873
+        "stage1_elapsed_sec": 0.009138345718383789,
+        "stage2_elapsed_sec": 1.1183061599731445,
+        "stage3_elapsed_sec": 8.561936616897583
       }
     },
     {
@@ -594,9 +606,9 @@
         "wav_rms": 0.05483272185201161,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.009485483169555664,
-        "stage2_elapsed_sec": 1.1459689140319824,
-        "stage3_elapsed_sec": 8.378254413604736
+        "stage1_elapsed_sec": 0.009373664855957031,
+        "stage2_elapsed_sec": 1.1941118240356445,
+        "stage3_elapsed_sec": 8.530875444412231
       }
     },
     {
@@ -724,9 +736,9 @@
         "wav_rms": 0.11059995743442742,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.00949549674987793,
-        "stage2_elapsed_sec": 1.1472582817077637,
-        "stage3_elapsed_sec": 8.498505353927612
+        "stage1_elapsed_sec": 0.009794950485229492,
+        "stage2_elapsed_sec": 1.1437430381774902,
+        "stage3_elapsed_sec": 8.452603101730347
       }
     },
     {
@@ -854,9 +866,9 @@
         "wav_rms": 0.08924822100352607,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.009511470794677734,
-        "stage2_elapsed_sec": 1.1648297309875488,
-        "stage3_elapsed_sec": 8.339970111846924
+        "stage1_elapsed_sec": 0.009426116943359375,
+        "stage2_elapsed_sec": 1.125194787979126,
+        "stage3_elapsed_sec": 8.549545049667358
       }
     },
     {
@@ -984,9 +996,9 @@
         "wav_rms": 0.09027726031955981,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.010548591613769531,
-        "stage2_elapsed_sec": 1.143855333328247,
-        "stage3_elapsed_sec": 8.610940933227539
+        "stage1_elapsed_sec": 0.009900808334350586,
+        "stage2_elapsed_sec": 1.1279892921447754,
+        "stage3_elapsed_sec": 8.426196098327637
       }
     },
     {
@@ -1114,9 +1126,9 @@
         "wav_rms": 0.08924822100352607,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.873106575963718,
-        "stage1_elapsed_sec": 0.00980234146118164,
-        "stage2_elapsed_sec": 1.1540281772613525,
-        "stage3_elapsed_sec": 8.837149381637573
+        "stage1_elapsed_sec": 0.01137232780456543,
+        "stage2_elapsed_sec": 1.1688580513000488,
+        "stage3_elapsed_sec": 8.491270542144775
       }
     },
     {
@@ -1238,9 +1250,9 @@
         "wav_rms": 0.05402464806575237,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.244625850340136,
-        "stage1_elapsed_sec": 0.010586023330688477,
-        "stage2_elapsed_sec": 1.3090531826019287,
-        "stage3_elapsed_sec": 9.26149845123291
+        "stage1_elapsed_sec": 0.009940385818481445,
+        "stage2_elapsed_sec": 1.2153890132904053,
+        "stage3_elapsed_sec": 9.045910120010376
       }
     },
     {
@@ -1362,9 +1374,9 @@
         "wav_rms": 0.10532166950881346,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.244625850340136,
-        "stage1_elapsed_sec": 0.009740352630615234,
-        "stage2_elapsed_sec": 1.199193000793457,
-        "stage3_elapsed_sec": 8.932603597640991
+        "stage1_elapsed_sec": 0.00961160659790039,
+        "stage2_elapsed_sec": 1.2261266708374023,
+        "stage3_elapsed_sec": 9.033793687820435
       }
     },
     {
@@ -1495,9 +1507,9 @@
         "wav_rms": 0.09289773827433484,
         "wav_peak": 0.6,
         "wav_duration_sec": 6.989206349206349,
-        "stage1_elapsed_sec": 0.009955883026123047,
-        "stage2_elapsed_sec": 1.214548110961914,
-        "stage3_elapsed_sec": 8.955505132675171
+        "stage1_elapsed_sec": 0.010520458221435547,
+        "stage2_elapsed_sec": 1.2835578918457031,
+        "stage3_elapsed_sec": 8.73619294166565
       }
     },
     {
@@ -1628,9 +1640,9 @@
         "wav_rms": 0.10120583386268357,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.1053061224489795,
-        "stage1_elapsed_sec": 0.009516477584838867,
-        "stage2_elapsed_sec": 1.2734708786010742,
-        "stage3_elapsed_sec": 8.883313417434692
+        "stage1_elapsed_sec": 0.010429143905639648,
+        "stage2_elapsed_sec": 1.2331950664520264,
+        "stage3_elapsed_sec": 9.333853483200073
       }
     },
     {
@@ -1761,9 +1773,9 @@
         "wav_rms": 0.10120583386268357,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.1053061224489795,
-        "stage1_elapsed_sec": 0.00975799560546875,
-        "stage2_elapsed_sec": 1.2256195545196533,
-        "stage3_elapsed_sec": 8.945619344711304
+        "stage1_elapsed_sec": 0.010458946228027344,
+        "stage2_elapsed_sec": 1.3135874271392822,
+        "stage3_elapsed_sec": 8.963541269302368
       }
     },
     {
@@ -1885,9 +1897,9 @@
         "wav_rms": 0.07566808711753871,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.7090249433106575,
-        "stage1_elapsed_sec": 0.010241031646728516,
-        "stage2_elapsed_sec": 1.3221540451049805,
-        "stage3_elapsed_sec": 9.849804401397705
+        "stage1_elapsed_sec": 0.009877443313598633,
+        "stage2_elapsed_sec": 1.402008295059204,
+        "stage3_elapsed_sec": 9.628493309020996
       }
     },
     {
@@ -2009,9 +2021,9 @@
         "wav_rms": 0.06784641258667723,
         "wav_peak": 0.6,
         "wav_duration_sec": 8.544943310657596,
-        "stage1_elapsed_sec": 0.010357379913330078,
-        "stage2_elapsed_sec": 1.579103708267212,
-        "stage3_elapsed_sec": 11.522081136703491
+        "stage1_elapsed_sec": 0.012234926223754883,
+        "stage2_elapsed_sec": 1.5097625255584717,
+        "stage3_elapsed_sec": 10.871240854263306
       }
     },
     {
@@ -2133,9 +2145,9 @@
         "wav_rms": 0.06703626390772136,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.7090249433106575,
-        "stage1_elapsed_sec": 0.010225772857666016,
-        "stage2_elapsed_sec": 1.304182529449463,
-        "stage3_elapsed_sec": 9.380619525909424
+        "stage1_elapsed_sec": 0.009991168975830078,
+        "stage2_elapsed_sec": 1.3149430751800537,
+        "stage3_elapsed_sec": 9.63941478729248
       }
     },
     {
@@ -2272,9 +2284,9 @@
         "wav_rms": 0.1113022727182771,
         "wav_peak": 0.6,
         "wav_duration_sec": 7.1053061224489795,
-        "stage1_elapsed_sec": 0.00985860824584961,
-        "stage2_elapsed_sec": 1.2372198104858398,
-        "stage3_elapsed_sec": 8.911734819412231
+        "stage1_elapsed_sec": 0.009959697723388672,
+        "stage2_elapsed_sec": 1.252573013305664,
+        "stage3_elapsed_sec": 8.792632341384888
       }
     }
   ]
