@@ -291,9 +291,21 @@ ritsu VCV は `convert_ritsu.py` が `name` / `ph_seq` / `ph_dur` しか出さ�
 ritsu を 6 層のどこへ入れるかが実装ごとに変わり、H-TTD の母集団が変わる:
 
 ```
-pitch_bin の決め方（コーパス種別ごと）:
-  譜面あり : 譜面の MIDI から直接割り当てる
-  譜面なし : 有声区間の f0 中央値を測り、話者内の分布で三分位に割る
+pitch_bin の決め方（**量を MIDI へ揃え、規則も話者内三分位で揃える**）:
+  # ★ 2026-08-20 訂正: 譜面ありを「MIDI から直接割り当てる」とだけ書いていたが、
+  #   境界も話者相対かどうかも未定義だった。pjs は note_seq を出すので、
+  #   **唯一許される同 modality 比較（pjs vs user）で、pjs は未定義の規則・
+  #   user は f0 三分位**という非対称になり、同じ事象が別の層へ入って
+  #   H-TTD の裁定が反転しうる。両者を同じ量・同じ規則へ揃える。
+  1. 量を MIDI 数へ統一する
+       譜面あり : note_seq の MIDI をそのまま使う
+       譜面なし : 有声区間の f0 中央値 -> MIDI = 69 + 12*log2(f0/440)
+  2. 境界は**話者内の三分位**で切る（絶対値で切らない）
+       low  : 話者内 33.3 パーセンタイル未満
+       mid  : 33.3 以上 66.7 パーセンタイル未満
+       high : 66.7 パーセンタイル以上
+  3. 実際に使った**カット点（MIDI 値）を話者ごとに台帳へ記帳する**
+       （後から別実装が同じ層割りを再現できるようにする）
              測定器 = ANALYSIS_STACK_PIN の librosa（convert_user T2 と同じ
              経路。新しい抽出器を持ち込まない）
              有声フレームが閾値未満 / f0 が取れない行:
@@ -779,14 +791,21 @@ P1 主効果（user・§6-1 A1 と同条件で三つ組にする）:
         P-RI-FINAL/b4/p57, P-RI-FINAL/b2/p57, P-RI-FINAL/b4/p62,
         P-I-FINAL/b4/p57,  P-N-FINAL/b4/p57 }                    -> 15
 P2 回帰対照（未処置話者・§9 の「悪化」判定の材料）:
-    {run7, run8-B} × {ritsu, pjs} × {P-RI-FINAL/b4/p57,
-                                     P-N-FINAL/b4/p57}           ->  8
+    {run7, run8-R, run8-B} × {ritsu, pjs} × {P-RI-FINAL/b4/p57,
+                                             P-N-FINAL/b4/p57}   -> 12
+    # ★ run8-R を必ず含める（2026-08-20・P1 訂正）。初版は {run7, run8-B} だけで、
+    #   **未処置話者の知覚上のドリフトが一度もラベルされない**構成だった。
+    #   §9 は bit 一致しなくても k>=2 なら package-level の因果裁定を許すので、
+    #   その経路では ritsu/pjs の severity_shift が「走行が変わっただけの差」を
+    #   置換パッケージの効果として拾ってしまう。
+    #   8-R が実施されない場合は、この block の人手による改善/回帰の裁定を
+    #   **provisional 固定**とする（§9-0 と同じ扱い）
 P3 語彙一般化（**訓練に一度も入らない語**の /ri/ 終端 = §8-5-5 primary）:
     {run7, run8-B} × user × {P-RI-FINAL-HELDOUT/b4/p57,
                              P-RI-FINAL-HELDOUT/b4/p62}          ->  4
                      ※ 語は `みのり` / `たより`（§8-1 の held-out 語彙から
                        文字コード昇順で 2 語）
--> unique 27 + 重複提示 6（20%・P1/P2/P3 から cell_id 昇順で 2 件ずつ）
+-> unique 31 + 重複提示 6（20%・P1/P2/P3 から cell_id 昇順で 2 件ずつ）
 ```
 
 **規約は §6-1 と同一**: ランダム順・**世代とモデル名を伏せる**（`expected_terminal`
@@ -890,6 +909,30 @@ z'_axis      = orient(axis) * z_axis      # 「大きいほど break」へ正規
 **事前登録された期待符号との照合**: §5 で期待符号を宣言済みの軸について、
 校正で得た `orient` が期待と**食い違った場合は黙って反転させない** —
 `status = orientation_conflict` を立てて記帳する（期待が外れたこと自体が所見）。
+
+**(2b) 候補軸は「B-1 で凍結された軸」に限る**（2026-08-20 追加）。§12-0-B の
+B-1 は **`primary` の 4 値だけ**を凍結対象にしているのに、本節は
+**全ての機械軸**を z 化して `argmax` を取っていた。すると
+`hnr_delta_db` / `N_similarity_delta` / `vowel_drift_l1` / `energy_decay_slope`
+のような**測定仕様が未凍結の補助軸が primary に選ばれ、有料 Gate の合否を
+決めてしまう**。§12-0-A-3 が「物理的に一番信用できる測定法を選ぶ」と定めた
+規律とも矛盾する（校正していない軸は信用度が測れない）。
+
+```
+不変条件:
+  Gate の primary 候補になれるのは
+  `TRF measurement spec / 1.0` で**測定仕様が凍結された軸のみ**
+
+既定の候補集合（= B-1 の既定スコープ）:
+  excess_tail_voiced_ms / release_after_score_boundary_ms /
+  tail_f0_persistence / terminal_mel_persistence
+
+補助軸を候補に入れたい場合:
+  B-1 のスコープへ明示的に追加し、同じ様式（式 + 単位 + worked example +
+  reference output）で凍結してからでないと候補にしない
+```
+
+未凍結の軸は**診断レポートには残すが Gate には入れない**。
 
 **(3) primary 軸の選定**（校正セットのみで実行・hold-out は見ない）:
 
@@ -1002,15 +1045,18 @@ rater_self_consistency_binary
 
 **独立検算できる worked example**（数値は**説明用の架空値**）:
 
-| セル | 耳 | `z(excess_tail_voiced_ms)` | `z(hnr_delta_db)` |
+| セル | 耳 | `z'(excess_tail_voiced_ms)` | `z'(tail_f0_persistence)` |
 |---|---|---|---|
 | A | break | +1.8 | −0.4 |
 | B | break | +1.4 | +0.9 |
 | C | ok | −0.9 | +0.2 |
 | D | ok | −1.1 | −0.7 |
 
-`margin(excess_tail_voiced) = |median(+1.8,+1.4) − median(−0.9,−1.1)| = |1.6 − (−1.0)| = 2.6`、
-`margin(hnr_delta) = |median(−0.4,+0.9) − median(+0.2,−0.7)| = |0.25 − (−0.25)| = 0.5`。
+（**両方とも `primary` の 4 値から採っている** — 上記 (2b) より、未凍結の
+補助軸は候補に入らない）
+
+`margin(excess_tail_voiced) = median(+1.8,+1.4) − median(−0.9,−1.1) = 1.6 − (−1.0) = 2.6`、
+`margin(tail_f0_persistence) = median(−0.4,+0.9) − median(+0.2,−0.7) = 0.25 − (−0.25) = 0.5`。
 よって primary = `excess_tail_voiced_ms`。Youden's J 最大点は
 `θ = 0.25`（break 2/2・ok 0/2 → J = 1.0）。この `θ` を hold-out へ持ち込む。
 
