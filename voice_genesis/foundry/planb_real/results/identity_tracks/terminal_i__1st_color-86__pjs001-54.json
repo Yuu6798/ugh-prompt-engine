@@ -1,36 +1,176 @@
 {
   "source_id": "ritsu_singing_db",
-  "identity_sha256": "4411f48caf0d1b315f8806ff56c870f723584943c0e19a7404e9042112f10287",
+  "identity_sha256": "891f1313fa88b58b0dc8c6c9b16e599a444f2f24a828730c3a52ee97402b96d1",
   "units": [
     {
-      "label": "o",
-      "vowel": "o",
+      "label": "i",
+      "vowel": "i",
       "start_s": 0.6,
-      "end_s": 1.1561,
+      "end_s": 0.776,
+      "is_terminal": false
+    },
+    {
+      "label": "t",
+      "vowel": "C",
+      "start_s": 0.776,
+      "end_s": 0.9014,
+      "is_terminal": false
+    },
+    {
+      "label": "a",
+      "vowel": "a",
+      "start_s": 0.9014,
+      "end_s": 1.1851,
+      "is_terminal": false
+    },
+    {
+      "label": "h",
+      "vowel": "C",
+      "start_s": 1.1851,
+      "end_s": 1.2241,
+      "is_terminal": false
+    },
+    {
+      "label": "a",
+      "vowel": "a",
+      "start_s": 1.2241,
+      "end_s": 1.3187,
       "is_terminal": false
     },
     {
       "label": "n",
       "vowel": "C",
-      "start_s": 1.1561,
-      "end_s": 1.2344,
+      "start_s": 1.3187,
+      "end_s": 1.359,
+      "is_terminal": false
+    },
+    {
+      "label": "a",
+      "vowel": "a",
+      "start_s": 1.359,
+      "end_s": 2.303,
+      "is_terminal": false
+    },
+    {
+      "label": "t",
+      "vowel": "C",
+      "start_s": 2.303,
+      "end_s": 2.4,
+      "is_terminal": false
+    },
+    {
+      "label": "a",
+      "vowel": "a",
+      "start_s": 2.4,
+      "end_s": 2.52,
+      "is_terminal": false
+    },
+    {
+      "label": "b",
+      "vowel": "C",
+      "start_s": 2.52,
+      "end_s": 2.5603,
+      "is_terminal": false
+    },
+    {
+      "label": "a",
+      "vowel": "a",
+      "start_s": 2.5603,
+      "end_s": 4.0436,
+      "is_terminal": false
+    },
+    {
+      "label": "pau",
+      "vowel": "sil",
+      "start_s": 4.0436,
+      "end_s": 5.0926,
+      "is_terminal": false
+    },
+    {
+      "label": "a",
+      "vowel": "a",
+      "start_s": 5.0926,
+      "end_s": 6.1242,
+      "is_terminal": false
+    },
+    {
+      "label": "pau",
+      "vowel": "sil",
+      "start_s": 6.1242,
+      "end_s": 6.2955,
+      "is_terminal": false
+    },
+    {
+      "label": "a",
+      "vowel": "a",
+      "start_s": 6.2955,
+      "end_s": 6.6,
       "is_terminal": false
     },
     {
       "label": "i",
       "vowel": "i",
-      "start_s": 1.2344,
-      "end_s": 2.0326,
+      "start_s": 6.6,
+      "end_s": 6.843,
+      "is_terminal": false
+    },
+    {
+      "label": "n",
+      "vowel": "C",
+      "start_s": 6.843,
+      "end_s": 6.9,
+      "is_terminal": false
+    },
+    {
+      "label": "o",
+      "vowel": "o",
+      "start_s": 6.9,
+      "end_s": 7.1753,
+      "is_terminal": false
+    },
+    {
+      "label": "y",
+      "vowel": "C",
+      "start_s": 7.1753,
+      "end_s": 7.2884,
+      "is_terminal": false
+    },
+    {
+      "label": "o",
+      "vowel": "o",
+      "start_s": 7.2884,
+      "end_s": 7.781,
+      "is_terminal": false
+    },
+    {
+      "label": "o",
+      "vowel": "o",
+      "start_s": 7.781,
+      "end_s": 8.3371,
+      "is_terminal": false
+    },
+    {
+      "label": "n",
+      "vowel": "C",
+      "start_s": 8.3371,
+      "end_s": 8.4154,
+      "is_terminal": false
+    },
+    {
+      "label": "i",
+      "vowel": "i",
+      "start_s": 8.4154,
+      "end_s": 9.2135,
       "is_terminal": true
     },
     {
       "label": "pau",
       "vowel": "sil",
-      "start_s": 2.0326,
-      "end_s": 2.396,
+      "start_s": 9.2135,
+      "end_s": 9.577,
       "is_terminal": false
     }
   ],
-  "probe_unit_index": 2,
+  "probe_unit_index": 22,
   "nasal_envelope_source": "measured:N@32.10s"
 }

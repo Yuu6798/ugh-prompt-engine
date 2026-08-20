@@ -177,7 +177,8 @@ def cmd_ladder(args) -> int:
                                "corpus の配置（wav と lab の stem 一致）を確認すること")
             r_lab, p_lab = pr_lab.read_lab(r_lab_path), pr_lab.read_lab(p_lab_path)
             bank, probe_pos = pr_identity.build_identity_for_probe(
-                r_wav, r_lab, r_ev["phone_index"], source_id="ritsu_singing_db")
+                r_wav, r_lab, r_ev["phone_index"], source_id="ritsu_singing_db",
+                context=int(getattr(args, "context", pr_identity.DEFAULT_CONTEXT_PHONES)))
             # PJS 側も probe 周辺だけを解析する（全長解析は不要かつ遅い）
             p_idx = p_ev["phone_index"]
             p_lo = p_lab.phones[max(0, p_idx - 2)].start_s
@@ -221,6 +222,7 @@ def cmd_ladder(args) -> int:
         LADDER_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
         LADDER_MANIFEST.write_text(json.dumps({
             "environment": environment(),
+            "context_phones": int(getattr(args, "context", pr_identity.DEFAULT_CONTEXT_PHONES)),
             "ladder": [n for n, _ in pr_ladder.LADDER],
             "pairs": [p.as_dict() for p in pairs_out],
             "trf_gate_frozen": frozen,
@@ -351,11 +353,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         p = sub.add_parser(name, help=helptext)
         p.add_argument("--max-pairs", type=int, default=10)
         p.add_argument("--per-kind", type=int, default=2)
+        p.add_argument("--context", type=int, default=pr_identity.DEFAULT_CONTEXT_PHONES)
         p.set_defaults(func=fn)
 
     p = sub.add_parser("ladder", help="§7 R0–R4 + P0")
     p.add_argument("--max-pairs", type=int, default=10)
     p.add_argument("--per-kind", type=int, default=2)
+    p.add_argument("--context", type=int, default=pr_identity.DEFAULT_CONTEXT_PHONES,
+                   help="probe の前に含める音素数（耳判定が成立する長さが要る）")
     p.set_defaults(func=cmd_ladder)
 
     args = ap.parse_args(argv)

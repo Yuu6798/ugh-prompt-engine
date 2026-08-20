@@ -29,6 +29,13 @@ import pr_lab  # noqa: E402
 #: 母音コアの既定範囲（lab に音素境界があるので unit 内の相対で十分）
 CORE_FRAC = (0.35, 0.85)
 
+#: probe の前に含める音素数の既定。
+#: 2 音素だと出力が 1 秒程度にしかならず**耳判定が成立しない**（実測: User 判定
+#: 「サンプルが 1 秒しかないから両方とも判定できない」）。フレーズとして
+#: 聞き取れる長さを既定にする。計測は probe unit のみを見るので、文脈を伸ばしても
+#: 測る対象は変わらない。
+DEFAULT_CONTEXT_PHONES = 22
+
 
 #: 実 DB の 1 ファイルは最長 266 秒（44.1kHz）。全長を WORLD 解析すると 1 probe
 #: あたり数十秒かかるため、probe の周辺だけを切り出して解析する。
@@ -76,7 +83,7 @@ def units_from_phones(
 
 
 def probe_unit_indices(phones: Sequence[pr_lab.Phone], vowel_index: int,
-                       *, context: int = 2) -> Tuple[List[int], List[bool], int]:
+                       *, context: int = DEFAULT_CONTEXT_PHONES) -> Tuple[List[int], List[bool], int]:
     """probe 母音とその直前文脈（子音・先行モーラ）+ 後続無音の index 列を返す。
 
     戻り値 = (index 列, terminal フラグ列, index 列内での probe 母音の位置)。
@@ -134,7 +141,7 @@ def _shift_units(units: Sequence[Unit], offset_s: float) -> Tuple[Unit, ...]:
 
 def build_identity_for_probe(
     wav_path: Path, lab: pr_lab.LabFile, vowel_index: int, *, source_id: str,
-    context: int = 2, pad_s: float = SLICE_PAD_S,
+    context: int = DEFAULT_CONTEXT_PHONES, pad_s: float = SLICE_PAD_S,
 ) -> Tuple[IdentityBank, int]:
     """Ritsu の 1 発話から probe 周辺の IdentityBank を作る（当該区間のみ解析）。
 

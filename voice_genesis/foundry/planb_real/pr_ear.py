@@ -43,8 +43,16 @@ EAR_DIR = _HERE / "results" / "ear_set"
 BLIND_KEY = _HERE / "results" / "ear_blind_key.json"
 TEMPLATE = _HERE / "results" / "ear_answers.template.json"
 
-CONTEXT_PHONES = 2
 PAD_S = 0.6
+
+
+def _context_phones() -> int:
+    """原音の切り出しは、合成側と同じ文脈長にそろえる（比較の土俵を合わせる）。"""
+    try:
+        data = json.loads(LADDER_MANIFEST.read_text(encoding="utf-8"))
+        return int(data.get("context_phones", pr_identity.DEFAULT_CONTEXT_PHONES))
+    except Exception:  # noqa: BLE001
+        return pr_identity.DEFAULT_CONTEXT_PHONES
 
 
 def _write_pcm16(path: Path, x: np.ndarray, sr: int) -> None:
@@ -61,7 +69,7 @@ def _slice_original(lab_path: Path, phone_index: int) -> Optional[tuple]:
         return None
     lab = pr_lab.read_lab(lab_path)
     idx, _flags, _pos = pr_identity.probe_unit_indices(
-        lab.phones, phone_index, context=CONTEXT_PHONES)
+        lab.phones, phone_index, context=_context_phones())
     lo = min(lab.phones[i].start_s for i in idx)
     hi = max(lab.phones[i].end_s for i in idx)
     x, sr, _off = pr_identity.load_wav_mono(wav, start_s=lo - PAD_S, end_s=hi + PAD_S)
