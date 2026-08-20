@@ -132,6 +132,15 @@ def _assert_registry_is_unambiguous(index: dict) -> None:
     bad = _dupes([(e["script"], e["sha256"]) for e in snaps])
     assert not bad, f"snapshots に同じ (script, sha256) の行が複数ある: {bad}"
 
+    # **1 スクリプトにつき凍結は 1 世代まで**（User 承認の枠・2026-08-20）。
+    # 2 世代目を作りたくなったという事実自体が「再実測を構造的に先送りして
+    # いる」合図なので、凍結ではなく再実測を選ぶ。ここで機械的に止める。
+    bad = _dupes([e["script"] for e in snaps])
+    assert not bad, (
+        f"1 スクリプトに複数世代の snapshot がある: {bad}。"
+        " 凍結は 1 世代まで — 2 世代目が要るなら、それは再実測すべき合図"
+        "（probes/snapshots/README.md「時限措置としての枠」）")
+
     owners: dict[str, list[str]] = {}
     for entry in snaps:
         bad = _dupes(entry["measured_results"])
@@ -750,3 +759,35 @@ def test_checker_binds_the_probe_module_version_it_imported() -> None:
     src = REPRO_SCRIPT.read_text(encoding="utf-8")
     for token in ("_PROBE_SHA_AT_IMPORT", "checker_probe_module_pinned"):
         assert token in src, f"checker から {token} が消えている"
+
+
+def test_snapshot_policy_is_declared_and_time_boxed() -> None:
+    """凍結が **時限措置**として宣言されていること（User 承認の枠・2026-08-20）。
+
+    snapshot 機構は恒久パターンではない。採用の条件は
+    (1) 期限（再実測で自動消滅）、(2) 1 スクリプト 1 世代、(3) CI が履歴を
+    持てるようになったら git 履歴方式へ置換、の 3 点。台帳がこの枠を
+    **自分で宣言している**ことを固定する（宣言が消えたら枠も消える）。
+    """
+    policy = _snapshot_index().get("policy")
+    assert policy, "index.json に policy（時限措置の枠）が無い"
+    for key in ("time_boxed", "retirement", "max_generations_per_script",
+                "replacement_plan", "approved"):
+        assert policy.get(key), f"policy.{key} が空"
+    assert policy["max_generations_per_script"] == 1
+
+
+def test_snapshots_retire_automatically_on_remeasurement() -> None:
+    """再実測すれば凍結が **機械的に不要になる**こと（出口の存在）。
+
+    出口が運用者の善意に依存していると時限措置にならない。実際には:
+    再実測 → 正本が live sha を pin → snapshot の `measured_results` 帰属が
+    崩れる → 名前を外す → `measured_results` が空になり検査が落ちる →
+    行ごと削除 → ディレクトリと index の突き合わせで実体も削除。
+    この連鎖が成立するために必要な検査が揃っていることを確認する。
+    """
+    src = Path(__file__).read_text(encoding="utf-8")
+    for guard in ("test_snapshot_index_matches_its_files",
+                  "test_no_orphan_snapshots",
+                  "この版が生んだ結果が 1 件も登録されていない"):
+        assert guard in src, f"退場を強制する検査 {guard} が無い"

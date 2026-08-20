@@ -1,6 +1,20 @@
 {
   "schema": "vgl0-probe-snapshot/0.1",
   "purpose": "結果 JSON が pin する probe / checker の sha を、live 実装が先へ進んだ後も repo 内の実体へ解決できるようにする凍結台帳。再実測は run 6 の 40K ONNX 等 repo 外資産に律速されるため、『編集したら必ず再実測』だけでは probe の 欠陥修正が詰む（PR #289 7 巡目の 3 件）。運用は snapshots/README.md が正本。",
+  "policy": {
+    "approved": "User 承認 2026-08-20（PR #291）— 恒久パターンではなく時限措置として採用",
+    "time_boxed": "run 6 の 40K ONNX + canon + vocoder が再用意でき次第、live 実装で正本を再生成する。凍結はその時点で不要になる。",
+    "retirement": "**出口は機械強制で、運用者の善意に依存しない**: 再実測 → 正本が live sha を pin → snapshot の measured_results 帰属が崩れる → 名前を外す → measured_results が空になり検査が落ちる → 行ごと削除 → ディレクトリと index の突き合わせで実体も削除。tests/test_vgl0_probe_result_pins.py がこの連鎖を強制する。",
+    "max_generations_per_script": 1,
+    "max_generations_rationale": "2 世代目を作りたくなったという事実自体が「再実測を構造的に先送りしている」合図。凍結ではなく再実測を選ぶこと。台帳検査が 2 世代目を弾く。",
+    "replacement_plan": "CI が履歴を取得できるようになったら（actions/checkout の fetch-depth を深くできたら）、凍結コピーを廃して **pin された sha を named commit の git blob と照合する方式**へ置換する。重複バイトがゼロになり、保守対象外のコピーも消える。現状は fetch-depth: 1 のため不可。",
+    "known_costs": [
+      "検査の比重が「実測の健全さ」から「台帳の整合」へ寄る（緑 = 帳簿が整合、の意味に近づく）",
+      "本 PR のレビュー指摘 18 件のうち約 8 件は本機構自体の穴だった（持ち込んだ欠陥がある）",
+      "凍結コピーは lint 対象外・リファクタ対象外（pyproject の extend-exclude）",
+      "未実測の live 実装が正本に居座る（live_unmeasured で可視化するが、ラベルは読み飛ばされうる）"
+    ]
+  },
   "frozen_from_commit": "7f529da",
   "snapshots": [
     {
