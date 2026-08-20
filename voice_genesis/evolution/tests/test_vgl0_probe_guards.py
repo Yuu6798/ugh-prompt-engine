@@ -444,3 +444,54 @@ def test_checker_executes_the_probe_bytes_it_hashed(chk) -> None:
     assert chk._PROBE_SHA_AT_IMPORT == live
     assert chk.probe_mod.__name__ == "vgl0_control_axis_probe"
     assert hasattr(chk.probe_mod, "ProbeConfig")
+
+
+def test_own_marker_rejects_a_hard_link_to_another_valid_marker(
+    probe, tmp_path: Path,
+) -> None:
+    """**正当な別マーカーへの hard link** を所有と認めないこと。
+
+    判別子だけで判定していた頃は、他の checker 所有ディレクトリのマーカーを
+    hard link すれば中身が判別子どおりなので通り、無関係なディレクトリが
+    「所有済み」と見なされて固定名ファイルが unlink された（レビュー指摘 P2）。
+    リンク数と所属ディレクトリの両方で弾く。
+    """
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    probe.write_own_marker(owned / probe.OWNER_MARKER, "owned\n")
+    assert probe.is_own_marker(owned / probe.OWNER_MARKER)
+
+    stranger = tmp_path / "stranger"
+    stranger.mkdir()
+    (stranger / probe.OWNER_MARKER).hardlink_to(owned / probe.OWNER_MARKER)
+    assert not probe.is_own_marker(stranger / probe.OWNER_MARKER)
+
+
+def test_own_marker_rejects_a_copy_placed_in_another_directory(
+    probe, tmp_path: Path,
+) -> None:
+    """コピーも同様（リンク数は 1 でも所属ディレクトリが違う）。"""
+    import shutil  # noqa: PLC0415
+
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    probe.write_own_marker(owned / probe.OWNER_MARKER, "owned\n")
+    stranger = tmp_path / "stranger"
+    stranger.mkdir()
+    shutil.copy2(owned / probe.OWNER_MARKER, stranger / probe.OWNER_MARKER)
+    assert not probe.is_own_marker(stranger / probe.OWNER_MARKER)
+
+
+def test_checker_rejects_a_work_dir_owned_by_another_directory(
+    chk, tmp_path: Path,
+) -> None:
+    """借り物のマーカーを置いた work ディレクトリでは固定名を消さないこと。"""
+    owned = chk.claim_work_dir(tmp_path / "owned")
+    stranger = tmp_path / "stranger"
+    stranger.mkdir()
+    (stranger / chk.WORK_OWNER_MARKER).hardlink_to(owned / chk.WORK_OWNER_MARKER)
+    victim = stranger / "order_forward.json"
+    victim.write_text("大事なデータ", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        chk.claim_work_dir(stranger)
+    assert victim.read_text(encoding="utf-8") == "大事なデータ"

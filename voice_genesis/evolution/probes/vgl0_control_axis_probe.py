@@ -303,34 +303,52 @@ def note_region_energy(
 OWNER_MARKER = ".vgl0_probe_output"
 
 
-# 所有マーカーの 1 行目に必ず入る判別子。**内容で所有を判定する**ため、
-# 保護対象入力への hard link（symlink と違い lstat では通常ファイルに見え、
-# `O_NOFOLLOW` でも弾けない）をマーカーと誤認しない（レビュー指摘 P2）。
+# 所有マーカーの 1 行目に必ず入る判別子。2 行目に **そのマーカーが属する
+# ディレクトリの絶対パス**を書く。所有判定を「型」だけでなく「内容」と
+# 「場所」で行うため（レビュー指摘 P2）。
 MARKER_SENTINEL = "vgl0-owner-marker/1\n"
+_MARKER_DIR_PREFIX = "dir="
 
 
 def is_own_marker(path: Path) -> bool:
-    """所有マーカーが **自分が書いた実体**か。
+    """所有マーカーが **このディレクトリのために自分が書いた実体**か。
 
-    3 つを要求する:
+    「マーカーを騙る」経路はいくつもあり、**1 つずつ塞ぐと必ず取り残す**
+    （本 PR で 3 巡かけて symlink → hard link → 別マーカーへの hard link と
+    露呈した）。型・リンク数・内容・場所の 4 点を全部要求して系統ごと閉じる:
 
     1. `lstat` が通常ファイル — `Path.exists()` はリンクを追うので、保護対象
-       入力への **symlink** を「所有」と誤判定しないため
-    2. 先頭が `MARKER_SENTINEL` — **hard link** は lstat でも通常ファイルに
-       見えるので、型では区別できない。中身で判定すれば、モデルや楽譜への
-       別名をマーカーと取り違えない
-    3. 読めること（読めないものは所有していないと見なす）
+       入力への **symlink** を「所有」と誤判定しない
+    2. **`st_nlink == 1`** — hard link された実体は所有物と見なさない
+       （型では区別できない）
+    3. 先頭が `MARKER_SENTINEL` — モデルや楽譜への別名を取り違えない
+    4. 2 行目の `dir=` が **自分の親ディレクトリ**と一致 — *正当な別マーカー*
+       への hard link / コピーは判別子を保つので、3 だけでは通ってしまう。
+       場所に束縛して「よそのディレクトリのマーカー」を弾く
+
+    4 の副作用として、work ディレクトリを**移動・改名すると所有が外れる**。
+    fail-closed 側（消さずに止まる）なので安全側だが、その場合は空の場所を
+    指すか、残ったマーカーを手で消すこと。
     """
     try:
         st = path.lstat()
     except OSError:
         return False
-    if not stat.S_ISREG(st.st_mode):
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
         return False
-    want = MARKER_SENTINEL.encode("utf-8")
     try:
         with open(path, "rb") as fh:
-            return fh.read(len(want)) == want
+            head = fh.read(4096).decode("utf-8", "replace")
+    except OSError:
+        return False
+    if not head.startswith(MARKER_SENTINEL):
+        return False
+    lines = head.splitlines()
+    if len(lines) < 2 or not lines[1].startswith(_MARKER_DIR_PREFIX):
+        return False
+    recorded = lines[1][len(_MARKER_DIR_PREFIX):]
+    try:
+        return recorded == str(path.parent.resolve())
     except OSError:
         return False
 
@@ -343,10 +361,14 @@ def write_own_marker(path: Path, text: str) -> None:
     切り詰める**。`O_NOFOLLOW` は symlink しか弾かないので、hard link は
     「そもそも既存を開かない」ことでしか防げない。既存があれば
     `FileExistsError`。
+
+    2 行目に所属ディレクトリを記録し、`is_own_marker` が場所を照合できる
+    ようにする。
     """
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(MARKER_SENTINEL)
+        fh.write(f"{_MARKER_DIR_PREFIX}{path.parent.resolve()}\n")
         fh.write(text)
 
 
