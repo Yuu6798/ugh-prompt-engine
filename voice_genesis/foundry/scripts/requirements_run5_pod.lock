@@ -7,9 +7,9 @@
 #
 # 会計（正直会計）: run 5（2026-08-19 完走・pin 9899f3c）は pip freeze を
 # 捕獲しておらず、学習側 venv の完全な実測版一覧は存在しない。本ファイルの
-# 確定 pin は run 5 で実測検証済みの範囲のみ。run 6 以降は bootstrap が
-# gates/pip-freeze・binarize/pip-freeze を cmdlog として salvage するため、
-# その実測 freeze から本ファイルを完全化する（PENDING の解消 PR を伴う）。
+# 確定 pin は run 5 で実測検証済みの範囲のみだった。**run 6（2026-08-19
+# 完走）で gates/binarize 両段の pip freeze を実測捕獲し、PENDING は解消
+# 済み**（下部の解消節）。run 7 以降も同経路で毎走行の実測が残る。
 #
 # [render / gates 環境 — run 5 実測・gate1 で毎回検証される]
 # run5_bootstrap.py の NUMERIC_STACK_PIN と同期必須
@@ -19,9 +19,8 @@ scipy==1.17.1
 pyworld==0.3.5
 soundfile==0.14.0
 #
-# [学習側 venv — run 5 実測は部分のみ（binarize_numeric_stack heartbeat）]
-# numpy==1.26.4  # DiffSinger requirements 導入後の実測値（info 記帳のみ・
-#                # 学習側は gate 対象外 = run5_bootstrap.py binarize 段の注記）
+# [学習側の実測 — run 6 freeze で確定（§下部の PENDING 解消節。venv は無く、
+#  同一インタプリタが binarize 段で in-place 降格される点に注意）]
 #
 # [f0 解析系 — 2026-08-19 実測で確定（run 6 pin 生成時）]
 # numba 0.67.0 は numpy 2.4.6 と組むと librosa.pyin（guvectorize）が SIGSEGV
@@ -34,7 +33,53 @@ librosa==0.11.0
 # pyloudnorm = run 6 正規化の数値を決める依存（run6 pin は 0.2.0 で生成）
 pyloudnorm==0.2.0
 #
-# [PENDING — run 6 の pip freeze 捕獲で確定させる]
-# praat-parselmouth==?   # pod_entry.sh で実行時解決（run 5 の実測版は未捕獲）
-# (DiffSinger requirements.txt の全依存)  # 上流 pin は repo commit e2307b1 で
-#                                         # 間接固定・解決結果の実測は未捕獲
+# ===========================================================================
+# [PENDING 解消 — run 6（2026-08-19 完走・pin 038165b）の実測 freeze]
+# ===========================================================================
+#
+# 捕獲元 = bootstrap が salvage した 2 段の cmdlog（Drive run6/cmdlogs/）:
+#   gates_pip-freeze.log     sha256 b2be3ff4fec3902aed3767528007759c42518f7deef10dcddead66b42d7fdc6f（181 パッケージ）
+#   binarize_pip-freeze.log  sha256 8170eab7ae4f9042e5317ece262c89ac561e8c78b8f2a1a9534a35695f276223（216 パッケージ）
+#
+# **重要な実測（正直会計）**: この 2 本は**別環境ではなく、同一インタプリタ
+# （両ログのヘッダとも `/usr/bin/python -m pip freeze`）の時系列 2 断面**である。
+# bootstrap は venv を作らず全段を `sys.executable` で実行しており、binarize 段の
+# `pip install -r <DiffSinger>/requirements.txt` が**同じ環境を in-place で
+# 書き換える**（numpy 2.4.6 → 1.26.4 / librosa 0.11.0 → 0.9.2 /
+# praat-parselmouth 0.4.7 → 0.4.3 の降格が実測されている）。
+#
+# したがって**バイト pin 済み成果物の決定論**は「環境の分離」ではなく
+# **段の順序不変条件**に依存する:
+#   D3 render・user 正規化・その pin 照合（datasets 段）は binarize 段より
+#   **前に完了している**ため、降格後の版はそれらの成果物に影響しない。
+# STAGE_PLAN がこの順序を固定していることが実質的な安全装置になっている
+# （順序を入れ替える改修は、この不変条件を壊す変更として扱うこと）。
+#
+# **射程の限定（正直会計）**: 上の保証が及ぶのは pin 照合済みのデータ成果物
+# だけである。binarize / 学習そのものは降格後のスタック（librosa 0.9.2 /
+# praat-parselmouth 0.4.3 / pyworld 0.3.4 等）で走り、**この降格後の版に対する
+# gate 再検査は存在しない**（binarize 段は numeric stack を info 記帳するのみ）。
+# また順序不変条件を強制するテストも現時点では無い（STAGE_PLAN の並びが
+# 事実上の唯一の担保）。両方とも将来の強化候補として残す。
+#
+# --- 断面 1: gates 直後（変換系が支配・上部 pin と一致することを確認済み）---
+# numpy==2.4.6 / scipy==1.17.1 / pyworld==0.3.5 / soundfile==0.14.0
+# numba==0.66.0 / librosa==0.11.0 / pyloudnorm==0.2.0 / praat-parselmouth==0.4.7
+#   ※ praat-parselmouth は `run5_pod_entry.sh` が版指定なしで install する
+#      （gate 非対象）。0.4.7 は run 6 の**観測値**であって強制 pin ではない —
+#      強制するなら ANALYSIS_STACK_PIN への追加 + gate 実装を伴う別 PR が要る。
+#
+# --- 断面 2: binarize 直後（DiffSinger e2307b1 requirements の解決結果）---
+# 学習側は runtime gate の対象外（bootstrap binarize 段の注記）。以下は
+# 「この版で 40K 完走・NaN ゼロ・ONNX export 成功」の実測記録であり、
+# 強制ではなく**再現の基準線**として記帳する:
+#   numpy==1.26.4          scipy==1.17.1        librosa==0.9.2
+#   numba==0.66.0          praat-parselmouth==0.4.3   pyworld==0.3.4
+#   soundfile==0.14.0      h5py==3.16.0         einops==0.8.2
+#   torch==2.4.1+cu124     torchaudio==2.4.1+cu124    torchvision==0.19.1+cu124
+#   lightning==2.3.3       pytorch-lightning==2.6.5   torchmetrics==1.9.0
+#   onnx==1.22.0           onnxsim==0.7.3       matplotlib==3.11.1
+#   tensorboard==2.21.0    tensorboardX==2.6.5  PyYAML==6.0.2
+#   click==8.4.2           tqdm==4.70.0         protobuf==7.35.1
+#   packaging==24.1
+# 全 216 パッケージの一覧は上記 cmdlog（sha256 で pin 済み）が正本。

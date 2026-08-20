@@ -2442,10 +2442,12 @@ def main():
                         help="score.py/score_umi.py の所在 (既定: このスクリプトから見た "
                              f"'voice_genesis/singer/' = {DEFAULT_SINGER_DIR})")
     # run 7 修正（DESIGN_S6_run7.md §3-4）: choices を全話者へ拡張する。
-    # run 5 の判定材料生成（s4_record §5.4）は `--speaker user`/`--speaker
-    # d3synth` を使ったが、当時の repo 実装は choices=["ritsu","pjs"] のまま
-    # で、ローカル作業コピーの場当たり改変で回避されていた（再現性ギャップ
-    # の正直会計 — record のコマンド対応表を repo コードで再現可能にする）。
+    # **訂正（2026-08-20・s5_record §5.4）**: 当初この注記は「run 5 の判定
+    # 材料はローカル改変で生成された」と書いていたが誤り。run 5/6 の判定
+    # 材料は `gate_synth_run4.py`（pin 9899f3c 時点で既に 4 話者 choices）
+    # 経由であり、repo 正本のまま再現可能だった。本ファイルの choices が
+    # 2 話者だったのは判定材料経路では未使用だったためで、ここでの拡張は
+    # 将来 `gate_synth.py` 側を使う場合に備えた整合措置。
     # amitaro は run 7 の教師単独枠（d3synth 枠の後継）。emb の解決は
     # `find_speaker_embed` が名前ベースで行うため choices 追加のみでよい。
     p_run.add_argument("--speaker",
