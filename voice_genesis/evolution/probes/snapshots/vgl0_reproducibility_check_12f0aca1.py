@@ -29,7 +29,6 @@ import hashlib
 import json
 import subprocess
 import sys
-import types
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -52,26 +51,8 @@ _SELF_SHA_AT_LOAD = hashlib.sha256(SELF.read_bytes()).hexdigest()
 # 期待条件集合は probe 本体の定義を単一ソースとして読む。両実行が「同じ条件を
 # 揃って落とした」場合、突き合わせだけでは検出できない（レビュー指摘）ので、
 # **期待集合そのもの**と照合する。
-# **hash したバイト列そのものを実行する**（レビュー指摘 P2・6 巡目）。
-#
-# checker は `probe_mod` の `ProbeConfig` / 衝突ガードを **自プロセスの
-# in-memory 定義**で使う一方、結果に載る probe sha は**サブプロセスが報告した
-# 値**である。したがって「checker 側の検証を行ったバイト列」を pin しないと、
-# 旧定義で検証した PASS が別の sha へ帰属しうる。
-#
-# ここで `read_bytes()` して `import` すると **2 回 read する窓**が残る
-# （hash した版と import された版が違い、その後で元に戻されると 3 つの hash が
-# 揃って PASS になる）。so: 読んだバッファを compile/exec して**同一バイト列**を
-# モジュール化する。`sys.modules` へ登録するので、以後の `import
-# vgl0_control_axis_probe` もこの実体を指す。
-_PROBE_SOURCE = PROBE.read_bytes()
-_PROBE_SHA_AT_IMPORT = hashlib.sha256(_PROBE_SOURCE).hexdigest()
-
 sys.path.insert(0, str(PROBE.parent))
-probe_mod = types.ModuleType("vgl0_control_axis_probe")
-probe_mod.__file__ = str(PROBE)
-sys.modules["vgl0_control_axis_probe"] = probe_mod
-exec(compile(_PROBE_SOURCE, str(PROBE), "exec"), probe_mod.__dict__)
+import vgl0_control_axis_probe as probe_mod  # noqa: E402
 
 EXPECTED_LABELS = {label for label, _ in probe_mod.CONDITIONS}
 
@@ -85,47 +66,9 @@ REPLAY_LABELS = [
 ]
 
 
-WORK_OWNER_MARKER = ".vgl0_checker_workdir"
-
-
-def claim_work_dir(work: Path) -> Path:
-    """作業ディレクトリを **checker の所有物として確保する**。
-
-    checker は `order_forward.json` / `replay_baseline_procA.json` のような
-    **固定名**のファイルを work ディレクトリ直下へ書き、起動ごとに消す。
-    既存の無関係なディレクトリを `--work-dir` に指定すると、同名ファイルが
-    所有検査なしに消える（レビュー指摘 P2・7 巡目 / AGENTS.md「per-run パス」）。
-
-    そこで probe の条件ディレクトリと同じ様式で所有マーカーを置き、
-    **マーカーが無く空でもないディレクトリは fail-closed** にする。
-    """
-    if work.exists():
-        if not work.is_dir():
-            raise SystemExit(f"--work-dir {work} はディレクトリではない")
-        # マーカーは **symlink でない通常ファイル**であること。`exists()` は
-        # リンクを追うので、保護対象入力への symlink を置かれると「所有して
-        # いる」と誤判定し、下の書き込みがリンク先を切り詰める（レビュー指摘 P2）。
-        if not probe_mod.is_own_marker(work / WORK_OWNER_MARKER) and any(work.iterdir()):
-            raise SystemExit(
-                f"--work-dir {work} は checker が作ったディレクトリではない"
-                f"（所有マーカー {WORK_OWNER_MARKER} が自分の書いた実体として"
-                f"無く、中身がある）。無関係なファイルを消さないため中断する。"
-                f"空の場所を指すこと")
-    work.mkdir(parents=True, exist_ok=True)
-    marker = work / WORK_OWNER_MARKER
-    # 既存の自前マーカーは**書き換えない**（再実行を妨げない / hard link 経由の
-    # 切り詰めを構造的に不可能にする）。無い場合だけ新規作成する。
-    if not probe_mod.is_own_marker(marker):
-        probe_mod.write_own_marker(
-            marker,
-            "vgl0_reproducibility_check が所有する作業ディレクトリ。"
-            "このファイルがあるディレクトリの中だけ checker は削除・再作成する。\n")
-    return work
-
-
 def run_probe(
     py: str, model_args: Sequence[str], out_dir: Path, result_json: Path,
-    *, owned_work_dir: Path, only: Optional[str] = None, reverse: bool = False,
+    *, only: Optional[str] = None, reverse: bool = False,
 ) -> Tuple[dict, int]:
     """probe を 1 プロセス起動し、(結果 payload, 終了コード) を返す。
 
@@ -139,12 +82,6 @@ def run_probe(
     `errored_labels` では拾えず、WAV hash が一致しているだけで PASS に
     なりうる（レビュー指摘 P1）。
     """
-    # 消してよいのは **checker が所有する work ディレクトリの中**だけ
-    # （レビュー指摘 P2・7 巡目）。所有マーカーは `claim_work_dir` が置く。
-    if result_json.resolve().parent != owned_work_dir.resolve():
-        raise SystemExit(
-            f"結果ファイル {result_json} が所有 work ディレクトリ "
-            f"{owned_work_dir} の直下にない — 消してよいか判定できないため中断する")
     if result_json.exists():
         result_json.unlink()
     cmd = [py, str(PROBE), *model_args,
@@ -182,16 +119,11 @@ def probe_run_failures(payload: dict, rc: int, tag: str) -> List[str]:
     bad = errored_labels(payload)
     if bad:
         out.append(f"{tag}: 条件が失敗 {bad}")
-    for key, label in (("consumed_model_bytes_check", "消費モデルバイト"),
-                       ("consumed_score_bytes_check", "実行された楽譜バイト"),
-                       ("consumed_input_bytes_check", "消費入力バイト")):
-        check = payload.get(key)
-        if check is None:
-            # 欠落は fail（probe は常に両方を出す）。「検査が無い」を
-            # 「検査に通った」と読み替えないための fail-closed。
-            out.append(f"{tag}: {key} が結果に無い")
-        elif not check.get("ok"):
-            out.append(f"{tag}: {label}が pin と不一致 {check.get('mismatches')}")
+    check = payload.get("consumed_model_bytes_check")
+    if check is None:
+        out.append(f"{tag}: consumed_model_bytes_check が結果に無い")
+    elif not check.get("ok"):
+        out.append(f"{tag}: 消費バイトが pin と不一致 {check.get('mismatches')}")
     return out
 
 
@@ -236,27 +168,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ]
     work = Path(a.work_dir)
     # probe と同じ衝突ガードを checker 側の出力にも通す（--work-dir /
-    # --result-json が入力を指していたら書く前に止める）。
-    #
-    # **保護対象は probe の `ProbeConfig.protected_inputs()` をそのまま流用する**
-    # （レビュー指摘 P2・7 巡目）。checker 側で列挙を書き写すと、`--acoustic-onnx`
-    # が `--acoustic-dir` の外にある場合の派生ファイル
-    # （`*.phonemes.json` / `*.<spk>.emb`）のように、probe 側だけが知っている
-    # 入力が抜ける。単一ソース化しておけば probe に入力が増えたとき自動で追随する。
-    probe_cfg = probe_mod.ProbeConfig(argparse.Namespace(
-        canon_dir=a.canon_dir, vocoder_dir=a.vocoder_dir,
-        acoustic_dir=a.acoustic_dir, acoustic_onnx=a.acoustic_onnx,
-        speaker=a.speaker, song=a.song, notes_limit=a.notes_limit,
-        # checker は --singer-dir を probe へ渡さないので、各サブプロセスは
-        # probe の既定値を使う。保護対象もその既定値で解決する。
-        singer_dir=str(probe_mod.DEFAULT_SINGER_DIR),
-        out_dir=str(work),
-    ))
+    # --result-json が入力を指していたら書く前に止める）
     probe_mod.assert_writes_do_not_touch_inputs(
         write_paths=[work, Path(a.result_json)],
-        protected_inputs=[SELF, *probe_cfg.protected_inputs()],
+        protected_inputs=[
+            SELF, PROBE, probe_mod.GATE_SYNTH_PATH,
+            Path(a.acoustic_onnx), Path(a.acoustic_dir),
+            Path(a.canon_dir), Path(a.vocoder_dir),
+            # 各サブプロセスは既定の singer ディレクトリから score.py /
+            # phoneme_jp.py を実行する。これを入れないと
+            # `--result-json .../singer/score.py` が全 probe 完走後に
+            # 楽譜を上書きする（レビュー指摘 P2）
+            probe_mod.DEFAULT_SINGER_DIR,
+        ],
     )
-    claim_work_dir(work)
+    work.mkdir(parents=True, exist_ok=True)
 
     unknown = sorted(set(REPLAY_LABELS) - EXPECTED_LABELS)
     if unknown:
@@ -279,8 +205,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for rep in ("procA", "procB"):
             tag = f"replay_{label}_{rep}"
             payload, rc = run_probe(
-                a.python, model_args, work / tag, work / f"{tag}.json",
-                owned_work_dir=work, only=label)
+                a.python, model_args, work / tag, work / f"{tag}.json", only=label)
             exec_profiles.append(payload["execution_profile"])
             tag_name = f"replay {label} ({rep})"
             run_failures = probe_run_failures(payload, rc, tag_name)
@@ -288,10 +213,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             probe_runs.append({
                 "tag": tag_name, "returncode": rc,
                 "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
-                "consumed_score_ok": (
-                    payload.get("consumed_score_bytes_check") or {}).get("ok"),
-                "consumed_input_ok": (
-                    payload.get("consumed_input_bytes_check") or {}).get("ok"),
                 "failures": run_failures,
             })
             pin_maps.append((tag_name, pin_map(payload)))
@@ -310,10 +231,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # --- 検査 2: 実行順の非依存性 -------------------------------------------
     fwd, fwd_rc = run_probe(a.python, model_args, work / "order_forward",
-                            work / "order_forward.json", owned_work_dir=work)
+                            work / "order_forward.json")
     rev, rev_rc = run_probe(a.python, model_args, work / "order_reverse",
-                            work / "order_reverse.json", owned_work_dir=work,
-                            reverse=True)
+                            work / "order_reverse.json", reverse=True)
     exec_profiles += [fwd["execution_profile"], rev["execution_profile"]]
     for name, payload, rc in (("forward", fwd, fwd_rc), ("reverse", rev, rev_rc)):
         tag_name = f"order_independence {name}"
@@ -322,10 +242,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         probe_runs.append({
             "tag": tag_name, "returncode": rc,
             "consumed_ok": (payload.get("consumed_model_bytes_check") or {}).get("ok"),
-            "consumed_score_ok": (
-                payload.get("consumed_score_bytes_check") or {}).get("ok"),
-            "consumed_input_ok": (
-                payload.get("consumed_input_bytes_check") or {}).get("ok"),
             "failures": run_failures,
         })
         pin_maps.append((tag_name, pin_map(payload)))
@@ -374,27 +290,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     findings.append({"check": "pins_identical_across_processes",
                      "n_compared": len(pin_maps), "diffs": pin_diffs,
                      "match": not pin_diffs})
-
-    # --- 検査 4b: checker が import した probe の版 ---------------------------
-    # checker 側の検証（衝突ガード・期待条件集合）は import 時の in-memory 定義で
-    # 走る。その版が「実行後の実体」とも「サブプロセスが pin した版」とも一致して
-    # 初めて、PASS を probe のバイト列へ帰属できる（レビュー指摘 P2）。
-    probe_sha_after = sha256_path(PROBE)
-    subprocess_probe_pin = (fwd.get("pins") or {}).get("probe_script", {}).get("sha256")
-    probe_import_ok = (
-        _PROBE_SHA_AT_IMPORT == probe_sha_after == subprocess_probe_pin)
-    findings.append({
-        "check": "checker_probe_module_pinned",
-        "sha_at_import": _PROBE_SHA_AT_IMPORT,
-        "sha_after_run": probe_sha_after,
-        "sha_subprocess_pin": subprocess_probe_pin,
-        "match": probe_import_ok,
-    })
-    if not probe_import_ok:
-        failures.append(
-            "checker が import した probe の版と、実行後の実体 / サブプロセスの "
-            "pin が一致しない — checker 側の検証を行ったバイト列へ PASS を "
-            "帰属できない")
 
     # --- 検査 5: 検査スクリプト自身が実行中に書き換わっていないか -------------
     self_sha_after = hashlib.sha256(SELF.read_bytes()).hexdigest()

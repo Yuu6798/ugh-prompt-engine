@@ -131,6 +131,14 @@ markers = [
 line-length = 100
 target-version = "py311"
 
+# voice_genesis/evolution/probes/snapshots/ は「実測を生んだ版」の**バイト同一の
+# 凍結物**（probes/snapshots/README.md）。結果 JSON が pin する sha は、この
+# ディレクトリの実体と一致することを CI が検査している。lint 由来の自動修正や
+# ruff のルール追加でバイトが 1 文字でも変わると **pin が実体と一致しなくなり
+# provenance が壊れる**（しかも「直せば直すほど壊れる」形で詰む）。凍結物は
+# 実行されないコードでもあるため、lint 対象から外す。
+extend-exclude = ["voice_genesis/evolution/probes/snapshots"]
+
 # Pin the lint rule SET to ruff's classic stable defaults so linting is
 # version-independent. The CI `dev` extra installs `ruff>=0.1` unpinned, and
 # newer ruff releases expand the *default* selection (FURB / UP / PERF / ...),
