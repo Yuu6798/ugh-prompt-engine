@@ -79,6 +79,35 @@
         "qualifier": "3 段いずれも原音比でノイズあり。段間の差は明確に区別できるほどではない"
       },
       "localization": "**WORLD 往復そのものが支配的な原因**。F0 平坦化の寄与はほぼ無し、ユニット分割・warp の寄与は有意と言えるほどではない。identity を WORLD 経路で運ぶ設計自体が音質の天井を作っている"
+    },
+    {
+      "item": 5,
+      "question": "Q4/Q1 — R4 vs P0_pjs / R4 はリツとして通るか",
+      "answer_raw": "1: どちらでもない。歌い方を全く移植できてない / 2: 通らない",
+      "findings": {
+        "q4_pjs_voice_leak": "なし（G4 の機械判定と一致）",
+        "q4_style_transplanted": "移植できていない（耳）",
+        "q1_r4_passes_as_ritsu": false
+      },
+      "machine_cross_check": {
+        "components_actually_applied": true,
+        "evidence": {
+          "probe_unit_f0_std_Hz": {
+            "R0": 2.07,
+            "R1": 22.43,
+            "R4": 23.48
+          },
+          "probe_unit_f0_p2p_Hz": {
+            "R0": 13.7,
+            "R1": 95.14,
+            "R4": 94.35
+          },
+          "R0_vs_R1_rms_cents_in_probe_unit": 88.4,
+          "R0_vs_R4_gain_p2p_dB_in_probe_unit": 52.62,
+          "timing_shift_ms": 8.6
+        },
+        "interpretation": "成分は確かに出力へ届いている（F0 の揺れも利得も大きく変わっている）。にもかかわらず『歌い方が移植できていない』と聞こえるのは、**Performance を probe ノート 1 個にしか当てていない**ため。3.6 秒の抜粋は約 11 音節あり、そのうち最後の 1 音節だけが PJS 由来で、残りは素のリツ。設計上の意図（G3 の帰属を曖昧にしないため介入を probe に限定）だったが、その代償として知覚上の『歌い方の移植』は成立しない。このペアの timing 移植量は ±8.6ms で、そもそも可聴域下"
+      }
     }
   ]
 }
