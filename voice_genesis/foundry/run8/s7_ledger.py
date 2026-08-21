@@ -348,6 +348,9 @@ class SpeakerInput:
     #: `s7_ledger_inputs.json` の canonical sha256。**必須**（None のままでは集計しない）。
     expected_sha256: Optional[str] = None
     expected_row_count: Optional[int] = None
+    #: `r_ratio` の出所（`s7_ledger_inputs.json` の r_ratio_provenance）。
+    #: `imputed_fixed_allocation` を実測値として使わないための表示（User 裁定 §6）。
+    r_ratio_provenance: Optional[Dict[str, str]] = None
 
 
 def _stratum_key(e: TerminalEvent, modality: str) -> str:
@@ -384,6 +387,12 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
             e.midi = inp.midi_by_event.get(e.event_id, _midi_from_note_seq(row, e.phone_index))
             events.append(e)
     pitch_meta = assign_pitch_bins(events)
+    ratios = [e.r_ratio for e in events if e.r_ratio is not None]
+    constant_r_ratio = (
+        {"detected": True, "value": round(ratios[0], 6), "n_events": len(ratios)}
+        if ratios and len(set(round(r, 9) for r in ratios)) == 1
+        else {"detected": False, "n_events": len(ratios)}
+    )
     silence_token_counts: Dict[str, int] = {}
     for e in events:
         silence_token_counts[e.silence_token] = silence_token_counts.get(e.silence_token, 0) + 1
@@ -437,10 +446,13 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
         "source_csv_pin_verified": True,
         "source_csv_pin_source": "results_s7/s7_ledger_inputs.json（canonical = run7/assembly_manifest.json）",
         "row_count": len(rows),
-        "local_voiced_seconds": round(voiced_s, 6),
-        "local_voiced_seconds_note": (
-            "transcriptions.csv の非 SP/AP トークンの ph_dur 合計"
-            "（convert_ritsu の total_voiced_s と同じ数え方）。**modality を問わない**"
+        "voiced_non_SP_AP_seconds": round(voiced_s, 6),
+        "voiced_non_SP_AP_seconds_note": (
+            "SP と AP の**両方**を除いた ph_dur 合計（modality を問わない）。"
+            "run7 assembly_manifest の per_speaker_voiced_seconds は **SP のみ除外**"
+            "（= AP を含む `non_SP_ph_dur_seconds`）で、pjs で 49.959 s 差が出る。"
+            "同じ『voiced』という語が別の量を指すため、名前で分離する"
+            "（User 裁定 2026-08-21・過去 manifest は遡及修正しない）"
         ),
         # VCV / speech / synthetic_song の発声秒を「実歌唱秒」と呼ぶと、
         # 8-B の収録量を決める量が汚染される（PR #300 Codex P2）。
@@ -453,6 +465,8 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
         "terminal_events": terminal_events,
         "denominator": denominator,
         "pitch_bin_assignment": pitch_meta,
+        "r_ratio_provenance": inp.r_ratio_provenance,
+        "constant_r_ratio_detected": constant_r_ratio,
         "silence_token_counts": silence_token_counts,
         "silence_token_note": (
             "終端イベントを取った無音トークンの内訳。AP（breath）も終端として数えるが、"
@@ -695,16 +709,37 @@ def httd_verdict(
             per_stratum[label] = v
 
     scored = [v for v in per_stratum.values() if v["verdict"] != sp.Verdict.UNDETERMINED.value]
+    # 「標本不足で 1 層も裁定できなかった」を undetermined と同じ語で終わらせない
+    # （User 裁定 2026-08-21）。閾値を下げる / d3+d4 を合算する / pitch 層を潰す、
+    # といった救済はしない。仮説が反証されたという意味でもない。
+    reasons = {v.get("reason") for v in per_stratum.values()}
+    insufficient_only = not scored and reasons <= {
+        "insufficient_sample",
+        "fewer_than_two_speakers_in_stratum",
+        "no_same_modality_comparison",
+        "insufficient_prereg_classification",
+        "all_zero_density",
+        None,
+    } and "insufficient_sample" in reasons
     n_sup = sum(1 for v in scored if v["verdict"] == sp.Verdict.SUPPORTED.value)
     n_ref = sum(1 for v in scored if v["verdict"] == sp.Verdict.REFUTED.value)
     if len(scored) >= sp.MIN_SCORED_STRATA and n_sup >= sp.MAJORITY_FRACTION * len(scored) and n_ref == 0:
         overall = sp.Verdict.SUPPORTED.value
     elif len(scored) >= sp.MIN_SCORED_STRATA and n_ref >= sp.MAJORITY_FRACTION * len(scored):
         overall = sp.Verdict.REFUTED.value
+    elif insufficient_only:
+        overall = sp.NOT_EVALUABLE_INSUFFICIENT_SUPPORT
     else:
         overall = sp.Verdict.UNDETERMINED.value
     return {
         "per_stratum": per_stratum,
+        "overall_note": (
+            "NOT_EVALUABLE_INSUFFICIENT_SUPPORT = 現在の corpus に裁定できるだけの"
+            "標的イベントが存在しなかった、という結果。**TTD 仮説の反証ではない**。"
+            "閾値 20 を下げない / d3・d4 を合算しない / pitch 層を潰して水増ししない"
+            "（User 裁定 2026-08-21）"
+        ),
+        "minimum_eligible_terminal_count": sp.MIN_ELIGIBLE_TERMINAL_COUNT,
         "scored_strata": len(scored),
         "supported_strata": n_sup,
         "refuted_strata": n_ref,
@@ -758,18 +793,19 @@ def render_table(ledger: Dict[str, Any]) -> str:
     lines.append("## speakers")
     lines.append("")
     lines.append(
-        "| speaker | modality | rows | voiced_s | real_singing_s | ri_medial | "
-        "pitch cut points (MIDI) | unknown pitch events | source sha256 |"
+        "| speaker | modality | rows | voiced(SP,AP除外)_s | real_singing_s | ri_medial | "
+        "pitch cut points (MIDI) | unknown pitch | r_ratio source | source sha256 |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for speaker, section in sorted(ledger["speakers"].items()):
         pb = section["pitch_bin_assignment"]
         real_s = section["local_real_singing_seconds"]
         lines.append(
             f"| {speaker} | {section['modality']} | {section['row_count']} | "
-            f"{section['local_voiced_seconds']:.3f} | "
+            f"{section['voiced_non_SP_AP_seconds']:.3f} | "
             f"{'—' if real_s is None else f'{real_s:.3f}'} | {section['ri_medial_count']} | "
             f"{pb.get('cut_points_midi')} | {pb.get('unknown_events')} | "
+            f"{(section.get('r_ratio_provenance') or {}).get('r_ratio_source', '—')} | "
             f"{section['source_csv_sha256'][:12]} |"
         )
     return "\n".join(lines) + "\n"
@@ -821,6 +857,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         inp.expected_sha256 = str(pinned["transcriptions_csv_sha256"])
         inp.expected_row_count = int(pinned["row_count"])
+        inp.r_ratio_provenance = pinned.get("r_ratio_provenance")
         if pinned.get("modality") and pinned["modality"] != inp.modality:
             raise InputPinMismatch(
                 f"{inp.speaker}: modality が pin と食い違う "

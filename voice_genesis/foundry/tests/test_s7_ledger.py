@@ -279,7 +279,7 @@ def test_non_song_modalities_do_not_report_real_singing_seconds(tmp_path: Path):
     assert speech["local_real_singing_seconds"] is None
     # 発声秒そのものは modality を問わず残る（数え直しができるように）
     for section in (song, vcv, speech):
-        assert section["local_voiced_seconds"] == pytest.approx(1.9)
+        assert section["voiced_non_SP_AP_seconds"] == pytest.approx(1.9)
 
 
 def test_duplicate_speakers_are_rejected(tmp_path: Path):
@@ -413,4 +413,60 @@ def test_canonical_inputs_pin_matches_run7_assembly_manifest():
         == doc["canonical_source"]["chain"]["run_execution_manifest"][
             "dataset_hashes.assembly_manifest"
         ]
+    )
+
+
+# --- User 裁定 2026-08-21（STEP 4 所見への裁定）------------------------------
+
+
+def test_h_ttd_closes_as_not_evaluable_when_support_is_structurally_short():
+    """標本不足で 1 層も裁定できない場合を undetermined と別の語で閉じる。
+
+    「TTD 仮説が反証された」ではなく「現在の corpus に裁定できるだけの標的
+    イベントが存在しなかった」という結果を名前で残す（User 裁定 §1）。
+    """
+    speakers = {
+        "pjs": _section("real_song", {"d3": {"count": 1, "eligible": 9}}),
+        "user": _section("real_song", {"d3": {"count": 0, "eligible": 1}}),
+    }
+    v = L.httd_verdict(speakers, breaking=["user"], non_breaking=["pjs"])
+    assert v["per_stratum"]["mid/d3"]["reason"] == "insufficient_sample"
+    assert v["overall"] == sp.NOT_EVALUABLE_INSUFFICIENT_SUPPORT
+    assert "反証ではない" in v["overall_note"]
+    assert v["minimum_eligible_terminal_count"] == 20
+
+
+def test_threshold_is_not_lowered_and_bins_are_not_merged():
+    """救済（閾値を下げる / d3+d4 合算 / pitch 層を潰す）が実装に無いこと。"""
+    assert sp.MIN_ELIGIBLE_TERMINAL_COUNT == 20
+    assert sp.PRIMARY_DURATION_BINS == ("d3", "d4")     # 合算しない
+    assert sp.PITCH_BINS == ("low", "mid", "high")      # 潰さない
+
+
+def test_constant_r_ratio_is_detected_and_provenance_is_recorded(tmp_path: Path):
+    """定率配分（user の 0.300）を実測値と取り違えないための機械検出。"""
+    rows = [
+        "u1,SP k a r i SP,0.1 0.2 0.2 0.3 0.7 0.2",
+        "u2,SP h i r i SP,0.1 0.2 0.2 0.6 1.4 0.2",
+    ]
+    path = _write_csv(tmp_path, "user", rows, HEADER_MIN)
+    inp = _pinned_input("user", "real_song", path)
+    inp.r_ratio_provenance = {"r_ratio_source": "imputed_fixed_allocation"}
+    section = L.build_speaker_section(inp)
+    assert section["constant_r_ratio_detected"]["detected"] is True
+    assert section["constant_r_ratio_detected"]["value"] == pytest.approx(0.3)
+    assert section["r_ratio_provenance"]["r_ratio_source"] == "imputed_fixed_allocation"
+
+
+def test_canonical_pin_records_r_ratio_provenance_for_every_speaker():
+    import json
+
+    doc = json.loads(
+        (Path(__file__).resolve().parent.parent / "results_s7" / "s7_ledger_inputs.json")
+        .read_text(encoding="utf-8")
+    )
+    for speaker in ("ritsu", "pjs", "user", "amitaro"):
+        assert doc["speakers"][speaker]["r_ratio_provenance"]["r_ratio_source"]
+    assert doc["speakers"]["user"]["r_ratio_provenance"]["r_ratio_source"] == (
+        "imputed_fixed_allocation"
     )

@@ -30,6 +30,13 @@ class Verdict(str, Enum):
     UNDETERMINED = "undetermined"
 
 
+#: H-TTD の**閉じ方**（User 裁定 2026-08-21）。`undetermined`（判定に至らなかった）と
+#: 区別して、「現在の corpus には裁定できるだけの標的イベントが存在しなかった」ことを
+#: 名前で残す。**仮説が反証されたという意味ではない**。
+#: 救済（閾値を下げる / d3+d4 を合算する / pitch 層を潰す）は禁止。
+NOT_EVALUABLE_INSUFFICIENT_SUPPORT: Final = "NOT_EVALUABLE_INSUFFICIENT_SUPPORT"
+
+
 # --- §3 台帳 ---------------------------------------------------------------
 #: 先行尺 bin は**秒**で切る（beats を使わない・§3 の 2026-08-20 訂正）。
 DURATION_BINS: Final[Tuple[Tuple[str, float, float], ...]] = (

@@ -66,6 +66,10 @@
             "pyworld": "0.3.5"
           }
         }
+      },
+      "r_ratio_provenance": {
+        "r_ratio_source": "oto_ini_consonant",
+        "note": "UTAU oto.ini の consonant 値から子音/母音境界を引く（convert_ritsu §境界導出規則 4）。素材固有の実測値"
       }
     },
     "pjs": {
@@ -92,6 +96,10 @@
             "row_count": 287
           }
         }
+      },
+      "r_ratio_provenance": {
+        "r_ratio_source": "alignment_derived",
+        "note": "nnsvs-db-converter の音素アラインメント由来（convert_pjs）。実音との対応がある"
       }
     },
     "user": {
@@ -106,6 +114,10 @@
         "result": "canonical pin と完全一致（fc3a760c…fd7deb3b）",
         "source": "Drive run4_prep.tar（file id 1zhnNNRMeL1DXnGpg6BFlQcsJ9riqiNq_ / 914,688,000 bytes / sha256 e6a75c18e6bf7eab1da982ec857ee900c05171ac788e35c67d01474e7944546f）内の run4_prep/user_dataset/transcriptions.csv",
         "note": "run4/6/7 で内容不変の pin と同値。再生成不要"
+      },
+      "r_ratio_provenance": {
+        "r_ratio_source": "imputed_fixed_allocation",
+        "note": "convert_user の CONSONANT_FRACTION = 0.3 による**定率配分**。実音から測った子音比ではない（User 裁定 2026-08-21）。baseline_r_ratio として実測値のように扱わない"
       }
     },
     "amitaro": {
@@ -114,7 +126,11 @@
       "row_count": 299,
       "ph_dur_total_seconds": 1124.511,
       "transcriptions_csv_sha256": "08d67e817110bf965254b48ffe72b787bddfd58ad7ec53d06bd74c081ed3e366",
-      "cross_check": "results_s3/run7_dataset_pins.json の amitaro.transcriptions_csv_sha256 と同値"
+      "cross_check": "results_s3/run7_dataset_pins.json の amitaro.transcriptions_csv_sha256 と同値",
+      "r_ratio_provenance": {
+        "r_ratio_source": "converter_defined",
+        "note": "convert_amitaro の配分規則に従う（実測 / 定率の別は台帳の constant_r_ratio_detected で機械判定する）"
+      }
     }
   },
   "retrieval_status": {
@@ -129,5 +145,10 @@
     "pjs": "regenerated_and_verified",
     "user": "recovered_and_verified（run4_prep.tar から回収）",
     "amitaro": "pending（Drive amitaro_sources の 324 wav + pinned ffmpeg が要る）"
+  },
+  "r_ratio_policy": {
+    "authority": "User 裁定 2026-08-21 §6",
+    "rule": "baseline_r_ratio の source を必ず明示する。imputed_fixed_allocation を『User が実際に歌った Duration 形質』として扱わない",
+    "machine_check": "台帳が話者ごとに constant_r_ratio_detected（全イベントの r_ratio が同一値か）を計算して記帳する"
   }
 }
