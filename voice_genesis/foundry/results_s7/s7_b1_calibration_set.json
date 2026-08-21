@@ -1,0 +1,48 @@
+{
+  "schema": "s7-b1-calibration-set/0.1",
+  "frozen_at": "2026-08-21",
+  "authority": "DESIGN_S7_run8.md 12-0-A-1",
+  "separation_rule": "Completely disjoint from the 360 production cells. No run5/6/7 material and no run5/6/7 good/bad judgement is used to select B-1 (that path is structurally severed).",
+  "source": {
+    "kind": "synthetic_controlled_stimuli",
+    "generator": "voice_genesis/foundry/run8/s7_b1_calibration.py::build_calibration_set",
+    "why": "The 12-0-A-3 selection criteria are all measurement-side physical properties (reproducibility / gain invariance / silence -> 0 / monotone response to a controlled perturbation / cross-process reproducibility / numerical stability). They require stimuli whose ground truth is known by construction. No trained checkpoint is required, so the set is reproducible at GPU $0 by any executor.",
+    "declared_limitation": "No vocoder-output audio passes through B-1 under this source. The frozen spec's behaviour on real DiffSinger/vocoder renders is therefore unverified by calibration. This limitation is recorded, not hidden; see results_s7/s7_record_2026-08-21.md."
+  },
+  "sample_rate_hz": 44100,
+  "dtype": "float64 internally; float32 on wav export",
+  "rng": {"bit_generator": "PCG64", "seed": 20260821, "used_for": "band-limited noise of the /r/-like onset only"},
+  "common": {
+    "total_seconds": 1.6,
+    "note_onset_s": 0.2,
+    "commanded_note_end_s": 0.96,
+    "score_boundary_s": 1.0,
+    "f0_hz": 220.0,
+    "n_harmonics": 12,
+    "release_taper_ms": 20.0,
+    "tail_window_ms": 300.0
+  },
+  "stimuli": [
+    {"id": "clean_terminal_ri", "family": "clean", "onset_kind": "noise_burst", "onset_ms": 60.0, "spectral_tilt": "vowel_i", "tail_voiced_ms": 0.0, "gain": 1.0},
+    {"id": "clean_i", "family": "clean", "onset_kind": "none", "onset_ms": 0.0, "spectral_tilt": "vowel_i", "tail_voiced_ms": 0.0, "gain": 1.0},
+    {"id": "clean_N", "family": "clean", "onset_kind": "none", "onset_ms": 0.0, "spectral_tilt": "nasal_N", "tail_voiced_ms": 0.0, "gain": 1.0},
+    {"id": "long_tail_000", "family": "forced_long_tail", "onset_kind": "none", "onset_ms": 0.0, "spectral_tilt": "vowel_i", "tail_voiced_ms": 0.0, "gain": 1.0},
+    {"id": "long_tail_040", "family": "forced_long_tail", "onset_kind": "none", "onset_ms": 0.0, "spectral_tilt": "vowel_i", "tail_voiced_ms": 40.0, "gain": 1.0},
+    {"id": "long_tail_080", "family": "forced_long_tail", "onset_kind": "none", "onset_ms": 0.0, "spectral_tilt": "vowel_i", "tail_voiced_ms": 80.0, "gain": 1.0},
+    {"id": "long_tail_160", "family": "forced_long_tail", "onset_kind": "none", "onset_ms": 0.0, "spectral_tilt": "vowel_i", "tail_voiced_ms": 160.0, "gain": 1.0},
+    {"id": "dur_perturb_r020", "family": "forced_duration_perturbation", "onset_kind": "noise_burst", "onset_ratio": 0.2, "spectral_tilt": "vowel_i", "tail_voiced_ms": 0.0, "gain": 1.0},
+    {"id": "dur_perturb_r035", "family": "forced_duration_perturbation", "onset_kind": "noise_burst", "onset_ratio": 0.35, "spectral_tilt": "vowel_i", "tail_voiced_ms": 0.0, "gain": 1.0},
+    {"id": "dur_perturb_r050", "family": "forced_duration_perturbation", "onset_kind": "noise_burst", "onset_ratio": 0.5, "spectral_tilt": "vowel_i", "tail_voiced_ms": 0.0, "gain": 1.0},
+    {"id": "silence", "family": "silence", "onset_kind": "none", "onset_ms": 0.0, "spectral_tilt": "none", "tail_voiced_ms": 0.0, "gain": 0.0},
+    {"id": "gain_x100", "family": "gain_pair", "onset_kind": "none", "onset_ms": 0.0, "spectral_tilt": "vowel_i", "tail_voiced_ms": 80.0, "gain": 1.0},
+    {"id": "gain_x050", "family": "gain_pair", "onset_kind": "none", "onset_ms": 0.0, "spectral_tilt": "vowel_i", "tail_voiced_ms": 80.0, "gain": 0.5}
+  ],
+  "roles": {
+    "reproducibility": ["clean_terminal_ri", "clean_i", "clean_N", "long_tail_080", "dur_perturb_r035"],
+    "gain_invariance": [["gain_x100", "gain_x050"]],
+    "silence_zero": ["silence"],
+    "monotone_ladder": {"axis_expectation": "increasing", "order": ["long_tail_000", "long_tail_040", "long_tail_080", "long_tail_160"]},
+    "cross_process_reproducibility": ["clean_terminal_ri", "long_tail_080", "gain_x050"],
+    "numerical_stability": "all stimuli"
+  }
+}

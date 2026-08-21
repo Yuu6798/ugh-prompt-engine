@@ -1,0 +1,63 @@
+{
+  "schema": "s7-b1-candidate-space/0.1",
+  "frozen_at": "2026-08-21",
+  "authority": "DESIGN_S7_run8.md 12-0-A-2 / 12-0-C2",
+  "rule": "This file is committed BEFORE the calibration harness is run even once. Candidates are never added after calibration. Adding one is a revision of DESIGN_S7_run8.md and must record the addition and its reason.",
+  "analysis_stack_pin": {
+    "librosa": "0.11.0",
+    "numba": "0.66.0",
+    "numpy": "2.4.6",
+    "note": "ANALYSIS_STACK_PIN as enforced by scripts/run5_bootstrap.py (gates stage). No new extractor is introduced by B-1."
+  },
+  "sample_rate_hz": 44100,
+  "axis_dimension_map": {
+    "excess_tail_voiced_ms": ["voicing", "window_ms", "hop_ms"],
+    "release_after_score_boundary_ms": ["voicing", "window_ms", "hop_ms"],
+    "tail_f0_persistence": ["voicing", "window_ms", "hop_ms"],
+    "terminal_mel_persistence": ["mel"]
+  },
+  "window_ms": [100.0, 200.0, 300.0],
+  "hop_ms": [5.0, 10.0],
+  "voicing": [
+    {
+      "id": "A_pyin_voiced_flag",
+      "implementation": "librosa.pyin",
+      "library_version": "librosa==0.11.0",
+      "call": "librosa.pyin(y, sr=44100, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C6'), frame_length=round(window_ms*sr/1000), hop_length=round(hop_ms*sr/1000), center=True)",
+      "voiced_from": "voiced_flag",
+      "f0_from": "f0 (nan on unvoiced frames)",
+      "provenance": "same call shape as s1_dataprep/convert_user.py::_f0_median_hz (T1/T2 note assignment)"
+    },
+    {
+      "id": "B_rms_autocorr_gate",
+      "implementation": "voice_genesis/foundry/run8/s7_b1_calibration.py::voicing_rms_autocorr",
+      "library_version": "numpy==2.4.6",
+      "call": "frame RMS >= 1e-3 AND normalized autocorrelation peak r > 0.35 over lag range [sr/700, sr/80]",
+      "voiced_from": "both gates true",
+      "f0_from": "sr / argmax-lag of the normalized autocorrelation",
+      "provenance": "identical voicing mechanism to scripts/measure_bands.py::hnr_median_db (absolute RMS floor 1e-3, r > 0.35). No new mechanism is introduced."
+    }
+  ],
+  "mel": [
+    {"id": "M1_1024_256_80", "n_fft": 1024, "hop_length": 256, "n_mels": 80},
+    {"id": "M2_2048_512_80", "n_fft": 2048, "hop_length": 512, "n_mels": 80},
+    {"id": "M3_1024_128_128", "n_fft": 1024, "hop_length": 128, "n_mels": 128}
+  ],
+  "mel_call": "librosa.feature.melspectrogram(y=y, sr=44100, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels, power=2.0, htk=False, fmin=0.0, fmax=22050.0)",
+  "candidate_counts": {
+    "time_and_f0_axes": 12,
+    "terminal_mel_persistence": 3
+  },
+  "out_of_scope": {
+    "rule": "DESIGN_S7_run8.md 7-0-(2b): only axes frozen by TRF measurement spec / 1.0 may become the Gate primary axis.",
+    "axes_not_in_b1_scope": [
+      "N_similarity_delta",
+      "i_reference_distance",
+      "hnr_median_db_p1",
+      "hnr_median_db_p2",
+      "hnr_delta_db",
+      "vowel_drift_l1",
+      "energy_decay_slope"
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schema": "s7-b1-selection-rule/0.1",
+  "frozen_at": "2026-08-21",
+  "authority": "DESIGN_S7_run8.md 12-0-A-3 (AUC maximisation is forbidden) / 12-0-C (epsilon comes from measurement-side properties only)",
+  "prohibition": {
+    "rule": "Separation performance between break/ok labels must never enter candidate selection. B-1 receives no label input at all.",
+    "machine_check": "s7_b1_calibration.py::select_candidates accepts calibration measurements only; the harness asserts that no listening label / production cell is reachable from its inputs."
+  },
+  "hard_requirements": [
+    {"id": "reproducibility", "definition": "Two in-process repeats of the same stimulus under the same candidate produce identical values.", "tolerance": {"all_axes": 0.0}},
+    {"id": "gain_invariance", "definition": "|value(gain_x100) - value(gain_x050)| for the same material at 1.0 and 0.5 linear gain (-6.02 dB).", "tolerance": {"ms_axes": "1 hop duration (hop_ms)", "ratio_axes": 0.02}},
+    {"id": "silence_zero", "definition": "|value(silence)|.", "tolerance": {"ms_axes": 0.0, "ratio_axes": 0.01}},
+    {"id": "monotone_response", "definition": "Values along the forced_long_tail ladder (0/40/80/160 ms) must be non-decreasing (each step >= -reproducibility_bound) and the total span (last - first) must reach the minimum below.", "tolerance": {"ms_axes_min_span": 80.0, "ratio_axes_min_span": 0.05}},
+    {"id": "cross_process_reproducibility", "definition": "Values recomputed in an independent OS process are identical.", "tolerance": {"all_axes": 0.0}},
+    {"id": "numerical_stability", "definition": "Every measured value is finite (no NaN / inf) on every calibration stimulus.", "tolerance": {"all_axes": "finite"}}
+  ],
+  "fail_closed": "If no candidate for an axis satisfies every hard requirement, that axis is frozen as UNAVAILABLE with the failing requirement recorded. Requirements are never loosened to obtain a survivor.",
+  "ranking_among_survivors": {
+    "kind": "lexicographic, first key decides",
+    "keys": [
+      {"key": "gain_invariance_error", "order": "asc"},
+      {"key": "silence_residual", "order": "asc"},
+      {"key": "monotone_min_step", "order": "desc", "why": "response margin to a controlled PHYSICAL perturbation, not to labels"},
+      {"key": "hop_ms", "order": "asc", "why": "finer frame grid = lower quantisation floor"},
+      {"key": "window_ms", "order": "asc"},
+      {"key": "candidate_id", "order": "asc", "why": "deterministic final tie-break"}
+    ]
+  },
+  "epsilon_derivation_for_b2": {
+    "formula": "epsilon_axis = max(numerical_floor_axis, reproducibility_bound_axis)",
+    "numerical_floor": {"ms_axes": "hop duration in ms of the selected candidate", "ratio_axes": "1 / (number of analysis frames inside the tail window)"},
+    "reproducibility_bound": "max |delta| over in-process repeats and independent-process repeats of the selected candidate across every calibration stimulus",
+    "prohibition": "Production labels (\"ritsu is bad\", \"pjs is good\") must not be consulted when setting epsilon."
+  }
+}
