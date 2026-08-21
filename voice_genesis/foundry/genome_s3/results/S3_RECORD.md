@@ -1,7 +1,8 @@
 # S3 RECORD — Performance Gene Isolation & Independent Transplant
 
 - schema: `voicegenesis-genome-s3/1.1`
-- source_commit: `7366a943f2aa2407f0649b21bd6083ba0205cf91` (clean worktree)
+- source_commit: `df97e79a2ed448daa9a2fdd1137aad21a591ba7c` (clean worktree)
+- source_digest: `d2312a95e18201c65ba3b1b7ce928edf98d12d737b34205f30b2759cd39f6540` （s3_spec.py, s3_runner.py, s3_gates.py, s3_report.py の内容 digest。git object の有無に依らず手元で照合できる）
 - input_manifest_sha256: `78fcd8cc6e3f2b7c9edae72e0894f552b9cdfb0087d44b1df0d45402063fec4f`
 - pairs: 8 / conditions: B0, D, E, F, R
 - context_phones: 22 / identity_ap_scale: 0.25
