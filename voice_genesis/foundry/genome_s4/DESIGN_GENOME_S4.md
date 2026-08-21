@@ -70,6 +70,16 @@ python voice_genesis/foundry/genome_s4/s4_report.py --phase-c
 
 終了コード: `0` = PASS / `1` = 不成立 / `3` = BLOCKED。
 
+### 素材の所在（Phase A の前提）
+
+`planb_real/results/ladder_manifest.json` は S2 走行機の **絶対パス**で
+Ritsu / PJS の lab・wav を指す。Phase A は G0-4（source pin 照合）でこの実体を
+読むため、**そのパスが解決できる環境**でしか走らない。別マシンで回す場合は、
+`source_manifest.json` に pin されたアーカイブ（`archive_sha256` 一致）を取得し、
+manifest が指す位置へ展開する。素材が無い環境では設計どおり `BLOCKED` で止まり、
+S4 の結果は出さない（契約 §4 / §24）。素材の取得・配置は machine 依存作業であり、
+S4 実装側で母集団を縮小して回避しない。
+
 ## 6. 解釈ノート（契約に明示が無い箇所の fail-closed な読み）
 
 実装が独自判断で契約を広げた箇所は無い。以下は**書かれていない細部を
