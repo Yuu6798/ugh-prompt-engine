@@ -71,7 +71,7 @@
       "compared_pair": "P-ANCHOR「かぎり」 対 同一話者・同一世代の P-RI-FINAL（4 拍・低）（§4-2 の事前登録。ここで条件を選び直さない）",
       "contradiction_rule": "|Δz'| <= eps_z を refuted とする（一致 = 文脈非依存）",
       "direction": "two-sided |Δz'|",
-      "final_aggregation": "(話者×世代) ごとに対で引いてから集約する（プールして median を取らない）。群が 1 つならその裁定をそのまま採る。low_power フラグを必ず立てる",
+      "final_aggregation": "単一対の比較。low_power フラグを必ず立てる",
       "minimum_supporting_cells": 1,
       "participating_axes": [
         "primary (z')"
@@ -82,7 +82,7 @@
       "claim": "持続長が閾値を超えると解放が失敗する",
       "contradiction_rule": "|span| <= eps_z の系列は refuted",
       "direction": "尺ラダー昇順で増加",
-      "final_aggregation": "系列（話者 × **世代** × pitch_bin）ごとに三値 -> §3 と同型の多数決",
+      "final_aggregation": "系列（話者 × pitch_bin）ごとに三値 -> §3 と同型の多数決",
       "minimum_supporting_cells": 3,
       "participating_axes": [
         "primary (z')"
@@ -91,14 +91,14 @@
     },
     "H2": {
       "claim": "低音側で失敗する（音域被覆の欠落）",
-      "contradiction_rule": "delta <= eps_z の系列は refuted。逆向き（high の方が悪い）も H2 の主張の支持にはならないので refuted 側に置き、reason に opposite_direction を残す",
-      "direction": "one-sided: delta = z'(low) - z'(high)（低音側が悪いほど正）",
-      "final_aggregation": "系列（話者 × **世代** × 尺水準）ごとに三値 -> 多数決",
+      "contradiction_rule": "|Δz'| <= eps_z の系列は refuted",
+      "direction": "two-sided（high と low の差）",
+      "final_aggregation": "系列（話者 × 尺水準）ごとに三値 -> 多数決",
       "minimum_supporting_cells": 2,
       "participating_axes": [
         "primary (z')"
       ],
-      "tolerance": "delta > eps_z"
+      "tolerance": "|Δz'| > eps_z"
     },
     "H3": {
       "claim": "音素 /ri/ に固有（/i/・/su/・/N/ では起きない）",
@@ -115,7 +115,7 @@
       "claim": "話者で崩壊境界が動く",
       "contradiction_rule": "全話者で境界が同一なら refuted",
       "direction": "境界 = z' >= theta を最初に満たすラダー水準",
-      "final_aggregation": "**同一世代内**で比較する。世代をまたいだ比較はしない。複数世代があるときは `evaluate_h4_all_generations` が世代ごとに裁定してから多数決へ上げる",
+      "final_aggregation": "**同一世代内**で比較する。世代をまたいだ比較はしない",
       "minimum_supporting_cells": 3,
       "participating_axes": [
         "primary (z')",
@@ -143,68 +143,20 @@
   "schema": "s7-b2-verdict-algebra/0.1",
   "worked_example": {
     "H0": {
-      "detail": {
-        "ritsu/run7": {
-          "delta_z": 1.2000000000000002,
-          "eps_z": 0.3
-        }
-      },
+      "delta_z": 1.2000000000000002,
+      "eps_z": 0.3,
       "excluded": {},
       "low_power": true,
-      "low_power_note": "アンカーは (話者×世代) ごとに 1 個しか存在しないので、各群の裁定は 1 対の比較に依る。群が 1 つだけのときはその群の裁定をそのまま採る（多数決の最小 2 系列に満たなくても、H0 は本来 1 対の比較として事前登録されている）",
-      "series": {
-        "ritsu/run7": "supported"
-      },
+      "low_power_note": "アンカーは 1 個しか存在しないので、この裁定は 1 対の比較に依る",
       "verdict": "supported"
     },
     "H1": {
-      "eps_z_by_series": {
-        "pjs/run7/mid": 0.3,
-        "ritsu/run7/low": 0.3,
-        "user/run7/mid": 0.3
-      },
+      "eps_z": 0.3,
       "excluded": {},
       "series": {
-        "pjs/run7/mid": "refuted",
-        "ritsu/run7/low": "undetermined",
-        "user/run7/mid": "supported"
-      },
-      "verdict": "undetermined"
-    },
-    "H2": {
-      "detail": {
-        "pjs/run7/L1": {
-          "reason": "low_or_high_missing"
-        },
-        "pjs/run7/L2": {
-          "reason": "low_or_high_missing"
-        },
-        "pjs/run7/L4": {
-          "reason": "low_or_high_missing"
-        },
-        "ritsu/run7/L4": {
-          "reason": "low_or_high_missing"
-        },
-        "user/run7/L1": {
-          "reason": "low_or_high_missing"
-        },
-        "user/run7/L2": {
-          "reason": "low_or_high_missing"
-        },
-        "user/run7/L4": {
-          "reason": "low_or_high_missing"
-        }
-      },
-      "direction": "one-sided: supported only when low pitch is the worse side",
-      "excluded": {},
-      "series": {
-        "pjs/run7/L1": "undetermined",
-        "pjs/run7/L2": "undetermined",
-        "pjs/run7/L4": "undetermined",
-        "ritsu/run7/L4": "undetermined",
-        "user/run7/L1": "undetermined",
-        "user/run7/L2": "undetermined",
-        "user/run7/L4": "undetermined"
+        "pjs/mid": "refuted",
+        "ritsu/low": "undetermined",
+        "user/mid": "supported"
       },
       "verdict": "undetermined"
     },
@@ -222,10 +174,9 @@
     },
     "inputs": {
       "eps_z": 0.3,
-      "eps_z_kind": "uniform (worked example は 1 世代（run7）だけの架空セルなので群が 1 つしか無い)",
       "n_cells": 8,
       "theta": 0.5
     },
-    "note": "H0: |1.60 - 0.40| = 1.20 > 0.30 -> supported（文脈で違う）。H1: user/run7/mid 系列 span 1.30 > 0.30 で supported / pjs/run7/mid 系列 span 0.07 <= 0.30 で refuted（系列キーは 話者/世代/pitch_bin）。2 系列とも scored だが refuted が 0 でないため overall = undetermined （多数決規則が『supported は refuted 0 が条件』であることの検算）。H4: user 境界 = 2（0.70 >= 0.50 の最初の水準）/ pjs 境界 = inf（一度も超えない）-> 境界が異なるので supported。"
+    "note": "H0: |1.60 - 0.40| = 1.20 > 0.30 -> supported（文脈で違う）。H1: user 系列 span 1.30 > 0.30 で supported / pjs 系列 span 0.07 <= 0.30 で refuted。2 系列とも scored だが refuted が 0 でないため overall = undetermined （多数決規則が『supported は refuted 0 が条件』であることの検算）。H4: user 境界 = 2（0.70 >= 0.50 の最初の水準）/ pjs 境界 = inf（一度も超えない）-> 境界が異なるので supported。"
   }
 }

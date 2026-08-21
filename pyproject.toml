@@ -125,7 +125,6 @@ testpaths = [
     "voice_genesis/foundry/tests/test_s7_ledger.py",
     "voice_genesis/foundry/tests/test_s7_b1_calibration.py",
     "voice_genesis/foundry/tests/test_s7_b2_algebra.py",
-    "voice_genesis/foundry/tests/test_s7_io_guards.py",
 ]
 pythonpath = ["src", "."]
 markers = [

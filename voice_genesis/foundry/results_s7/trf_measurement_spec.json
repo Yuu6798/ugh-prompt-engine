@@ -1,18 +1,4 @@
 {
-  "analysis_stack": {
-    "declared": {
-      "librosa": "0.11.0",
-      "numba": "0.66.0",
-      "numpy": "2.4.6"
-    },
-    "observed": {
-      "librosa": "0.11.0",
-      "numba": "0.66.0",
-      "numpy": "2.4.6"
-    },
-    "rule": "測定前に fail-closed で照合する（verify_analysis_stack）。不一致なら測らない。",
-    "verified": true
-  },
   "authority": "DESIGN_S7_run8.md 12-0-B",
   "auxiliary_axes_not_in_gate": [
     "N_similarity_delta",
