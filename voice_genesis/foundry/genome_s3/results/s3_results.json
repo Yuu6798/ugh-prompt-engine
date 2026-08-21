@@ -1,0 +1,2710 @@
+{
+  "schema": "voicegenesis-genome-s3/1.1",
+  "source_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c",
+  "input_manifest_sha256": "78fcd8cc6e3f2b7c9edae72e0894f552b9cdfb0087d44b1df0d45402063fec4f",
+  "code_state": {
+    "commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c",
+    "dirty": false,
+    "dirty_digest": null,
+    "source_digest": "d2312a95e18201c65ba3b1b7ce928edf98d12d737b34205f30b2759cd39f6540"
+  },
+  "context_phones": 22,
+  "identity_ap_scale": 0.25,
+  "pair_count": 8,
+  "conditions": [
+    "B0",
+    "D",
+    "E",
+    "F",
+    "R"
+  ],
+  "criteria": {
+    "min_evaluable_pairs": 3,
+    "min_evaluable_contexts": 2,
+    "min_supported_contexts": 2,
+    "min_support_ratio": 0.75,
+    "min_supported_genes": 2
+  },
+  "genes": {
+    "f0": {
+      "evaluable_pairs": 8,
+      "supported_pairs": 6,
+      "support_ratio": 0.75,
+      "evaluable_contexts": [
+        "medial_ri",
+        "terminal_N",
+        "terminal_i",
+        "terminal_ri"
+      ],
+      "supported_contexts": [
+        "medial_ri",
+        "terminal_i",
+        "terminal_ri"
+      ],
+      "distinct_evaluable_context_count": 4,
+      "distinct_supported_context_count": 3,
+      "structural_failures": 0,
+      "determinism_failures": 0,
+      "pairs": {
+        "terminal_ri|2018#215|pjs003#65": {
+          "pair_key": "terminal_ri|2018#215|pjs003#65",
+          "context_id": "terminal_ri",
+          "gene": "f0",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "f0",
+              "performance_payload_1d": true,
+              "identity_sha256": "38ebf35e77a1e4e5",
+              "performance_sha256": "aecf69d27d54cb4e",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "f0_dev_cents",
+                "f0_dev_unit_index",
+                "f0_dev_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 273.75635063191504,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "f0_dev_rmse_cents",
+              "direction": "lower",
+              "b0": 95.270953,
+              "gene_condition": 19.871224,
+              "delta": -75.399729
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "0b7d43d0df693d4f",
+                "same_process_sha": "0b7d43d0df693d4f",
+                "cross_process_sha": "0b7d43d0df693d4f"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "1cdf3e2b4f2c253a",
+                "same_process_sha": "1cdf3e2b4f2c253a",
+                "cross_process_sha": "1cdf3e2b4f2c253a"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_i|1st_color#86|pjs001#54": {
+          "pair_key": "terminal_i|1st_color#86|pjs001#54",
+          "context_id": "terminal_i",
+          "gene": "f0",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "f0",
+              "performance_payload_1d": true,
+              "identity_sha256": "075f58286353e622",
+              "performance_sha256": "027b99eccb5f5223",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "f0_dev_cents",
+                "f0_dev_unit_index",
+                "f0_dev_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 264.1336737465817,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "f0_dev_rmse_cents",
+              "direction": "lower",
+              "b0": 71.946823,
+              "gene_condition": 26.568582,
+              "delta": -45.378241
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "8289f9efe57a06eb",
+                "same_process_sha": "8289f9efe57a06eb",
+                "cross_process_sha": "8289f9efe57a06eb"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "06c9b125161e4851",
+                "same_process_sha": "06c9b125161e4851",
+                "cross_process_sha": "06c9b125161e4851"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_N|1st_color#478|pjs002#61": {
+          "pair_key": "terminal_N|1st_color#478|pjs002#61",
+          "context_id": "terminal_N",
+          "gene": "f0",
+          "verdict": "UNSUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": false,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "f0",
+              "performance_payload_1d": true,
+              "identity_sha256": "3499029bc543fb1b",
+              "performance_sha256": "a77680bdfe8a3f51",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "f0_dev_cents",
+                "f0_dev_unit_index",
+                "f0_dev_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 15.903559722176958,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": false,
+              "metric": "f0_dev_rmse_cents",
+              "direction": "lower",
+              "b0": 28.529325,
+              "gene_condition": 29.818529,
+              "delta": 1.289204
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "ddfd22575dc29eb3",
+                "same_process_sha": "ddfd22575dc29eb3",
+                "cross_process_sha": "ddfd22575dc29eb3"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "41bd4c763ba0573e",
+                "same_process_sha": "41bd4c763ba0573e",
+                "cross_process_sha": "41bd4c763ba0573e"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "medial_ri|1st_color#104|pjs002#42": {
+          "pair_key": "medial_ri|1st_color#104|pjs002#42",
+          "context_id": "medial_ri",
+          "gene": "f0",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "f0",
+              "performance_payload_1d": true,
+              "identity_sha256": "efb55205489dcbc5",
+              "performance_sha256": "65e4e5e301582b86",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "f0_dev_cents",
+                "f0_dev_unit_index",
+                "f0_dev_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 256.5482270579917,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "f0_dev_rmse_cents",
+              "direction": "lower",
+              "b0": 80.340606,
+              "gene_condition": 32.81971,
+              "delta": -47.520896
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "9d647efacd98919f",
+                "same_process_sha": "9d647efacd98919f",
+                "cross_process_sha": "9d647efacd98919f"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5cedc96a0254dc74",
+                "same_process_sha": "5cedc96a0254dc74",
+                "cross_process_sha": "5cedc96a0254dc74"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_ri|2018#598|pjs065#29": {
+          "pair_key": "terminal_ri|2018#598|pjs065#29",
+          "context_id": "terminal_ri",
+          "gene": "f0",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "f0",
+              "performance_payload_1d": true,
+              "identity_sha256": "93a6e5a54aa6801f",
+              "performance_sha256": "a4bdbfbbd618391e",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "f0_dev_cents",
+                "f0_dev_unit_index",
+                "f0_dev_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 203.8756891901243,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "f0_dev_rmse_cents",
+              "direction": "lower",
+              "b0": 43.28133,
+              "gene_condition": 16.3844,
+              "delta": -26.89693
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "3e69931d8ea78949",
+                "same_process_sha": "3e69931d8ea78949",
+                "cross_process_sha": "3e69931d8ea78949"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5cb3dcf4bde7261e",
+                "same_process_sha": "5cb3dcf4bde7261e",
+                "cross_process_sha": "5cb3dcf4bde7261e"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_i|1st_color#218|pjs001#73": {
+          "pair_key": "terminal_i|1st_color#218|pjs001#73",
+          "context_id": "terminal_i",
+          "gene": "f0",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "f0",
+              "performance_payload_1d": true,
+              "identity_sha256": "9dfa33332d4c4ce3",
+              "performance_sha256": "1be5bc8d6a8b1934",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "f0_dev_cents",
+                "f0_dev_unit_index",
+                "f0_dev_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 351.06930921889773,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "f0_dev_rmse_cents",
+              "direction": "lower",
+              "b0": 134.414381,
+              "gene_condition": 50.094464,
+              "delta": -84.319917
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "f7042fcd668df433",
+                "same_process_sha": "f7042fcd668df433",
+                "cross_process_sha": "f7042fcd668df433"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "133202a0c9f0cb4a",
+                "same_process_sha": "133202a0c9f0cb4a",
+                "cross_process_sha": "133202a0c9f0cb4a"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_N|BRD#664|pjs017#27": {
+          "pair_key": "terminal_N|BRD#664|pjs017#27",
+          "context_id": "terminal_N",
+          "gene": "f0",
+          "verdict": "UNSUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": false,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "f0",
+              "performance_payload_1d": true,
+              "identity_sha256": "33e9f82cbe542ec8",
+              "performance_sha256": "c382df9a5dcad18f",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "f0_dev_cents",
+                "f0_dev_unit_index",
+                "f0_dev_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 75.33663907912046,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": false,
+              "metric": "f0_dev_rmse_cents",
+              "direction": "lower",
+              "b0": 49.01277,
+              "gene_condition": 53.668913,
+              "delta": 4.656143
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "b56e65ac6c89403e",
+                "same_process_sha": "b56e65ac6c89403e",
+                "cross_process_sha": "b56e65ac6c89403e"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "3c2f66cc9f32c61b",
+                "same_process_sha": "3c2f66cc9f32c61b",
+                "cross_process_sha": "3c2f66cc9f32c61b"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "medial_ri|1st_color#357|pjs002#54": {
+          "pair_key": "medial_ri|1st_color#357|pjs002#54",
+          "context_id": "medial_ri",
+          "gene": "f0",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "f0",
+              "performance_payload_1d": true,
+              "identity_sha256": "70a01f55d1630a19",
+              "performance_sha256": "cb4da93d2b85c26c",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "f0_dev_cents",
+                "f0_dev_unit_index",
+                "f0_dev_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 354.00266411298867,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "f0_dev_rmse_cents",
+              "direction": "lower",
+              "b0": 98.936939,
+              "gene_condition": 47.006263,
+              "delta": -51.930676
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "bc324e2d3d249648",
+                "same_process_sha": "bc324e2d3d249648",
+                "cross_process_sha": "bc324e2d3d249648"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "c9f9cf09c85fea2c",
+                "same_process_sha": "c9f9cf09c85fea2c",
+                "cross_process_sha": "c9f9cf09c85fea2c"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        }
+      },
+      "verdict": "SUPPORTED"
+    },
+    "duration": {
+      "evaluable_pairs": 6,
+      "supported_pairs": 6,
+      "support_ratio": 1.0,
+      "evaluable_contexts": [
+        "medial_ri",
+        "terminal_i",
+        "terminal_ri"
+      ],
+      "supported_contexts": [
+        "medial_ri",
+        "terminal_i",
+        "terminal_ri"
+      ],
+      "distinct_evaluable_context_count": 3,
+      "distinct_supported_context_count": 3,
+      "structural_failures": 0,
+      "determinism_failures": 0,
+      "pairs": {
+        "terminal_ri|2018#215|pjs003#65": {
+          "pair_key": "terminal_ri|2018#215|pjs003#65",
+          "context_id": "terminal_ri",
+          "gene": "duration",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "duration",
+              "performance_payload_1d": true,
+              "identity_sha256": "38ebf35e77a1e4e5",
+              "performance_sha256": "aecf69d27d54cb4e",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "unit_durations_s"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 8.654668439628054,
+              "unit": "ms",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "note_split_mae_ms",
+              "direction": "lower",
+              "b0": 9.725968,
+              "gene_condition": 0.9026,
+              "delta": -8.823368
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "72eb1307c95af235",
+                "same_process_sha": "72eb1307c95af235",
+                "cross_process_sha": "72eb1307c95af235"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "1cdf3e2b4f2c253a",
+                "same_process_sha": "1cdf3e2b4f2c253a",
+                "cross_process_sha": "1cdf3e2b4f2c253a"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_i|1st_color#86|pjs001#54": {
+          "pair_key": "terminal_i|1st_color#86|pjs001#54",
+          "context_id": "terminal_i",
+          "gene": "duration",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "duration",
+              "performance_payload_1d": true,
+              "identity_sha256": "075f58286353e622",
+              "performance_sha256": "027b99eccb5f5223",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "unit_durations_s"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 26.60074324324059,
+              "unit": "ms",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "note_split_mae_ms",
+              "direction": "lower",
+              "b0": 26.670143,
+              "gene_condition": 0.829857,
+              "delta": -25.840286
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "3bca79a4038e816f",
+                "same_process_sha": "3bca79a4038e816f",
+                "cross_process_sha": "3bca79a4038e816f"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "06c9b125161e4851",
+                "same_process_sha": "06c9b125161e4851",
+                "cross_process_sha": "06c9b125161e4851"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_N|1st_color#478|pjs002#61": {
+          "pair_key": "terminal_N|1st_color#478|pjs002#61",
+          "context_id": "terminal_N",
+          "gene": "duration",
+          "verdict": "NOT_EVALUABLE",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": false,
+          "P3_realized_in_output": false,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "duration",
+              "performance_payload_1d": true,
+              "identity_sha256": "3499029bc543fb1b",
+              "performance_sha256": "a77680bdfe8a3f51",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "unit_durations_s"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": false,
+              "amount": 0.0,
+              "unit": "ms",
+              "structural_noop": true
+            },
+            "P3": {
+              "pass": false,
+              "metric": "note_split_mae_ms",
+              "direction": "lower",
+              "b0": 1.7705,
+              "gene_condition": 1.7705,
+              "delta": 0.0
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "41bd4c763ba0573e",
+                "same_process_sha": "41bd4c763ba0573e",
+                "cross_process_sha": "41bd4c763ba0573e"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "41bd4c763ba0573e",
+                "same_process_sha": "41bd4c763ba0573e",
+                "cross_process_sha": "41bd4c763ba0573e"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "medial_ri|1st_color#104|pjs002#42": {
+          "pair_key": "medial_ri|1st_color#104|pjs002#42",
+          "context_id": "medial_ri",
+          "gene": "duration",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "duration",
+              "performance_payload_1d": true,
+              "identity_sha256": "efb55205489dcbc5",
+              "performance_sha256": "65e4e5e301582b86",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "unit_durations_s"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 27.093619797194574,
+              "unit": "ms",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "note_split_mae_ms",
+              "direction": "lower",
+              "b0": 27.91342,
+              "gene_condition": 1.6802,
+              "delta": -26.23322
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "514bec3c29a10245",
+                "same_process_sha": "514bec3c29a10245",
+                "cross_process_sha": "514bec3c29a10245"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5cedc96a0254dc74",
+                "same_process_sha": "5cedc96a0254dc74",
+                "cross_process_sha": "5cedc96a0254dc74"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_ri|2018#598|pjs065#29": {
+          "pair_key": "terminal_ri|2018#598|pjs065#29",
+          "context_id": "terminal_ri",
+          "gene": "duration",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "duration",
+              "performance_payload_1d": true,
+              "identity_sha256": "93a6e5a54aa6801f",
+              "performance_sha256": "a4bdbfbbd618391e",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "unit_durations_s"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 37.69812380952165,
+              "unit": "ms",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "note_split_mae_ms",
+              "direction": "lower",
+              "b0": 37.559524,
+              "gene_condition": 0.5,
+              "delta": -37.059524
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "e98c8539fc11096e",
+                "same_process_sha": "e98c8539fc11096e",
+                "cross_process_sha": "e98c8539fc11096e"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5cb3dcf4bde7261e",
+                "same_process_sha": "5cb3dcf4bde7261e",
+                "cross_process_sha": "5cb3dcf4bde7261e"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_i|1st_color#218|pjs001#73": {
+          "pair_key": "terminal_i|1st_color#218|pjs001#73",
+          "context_id": "terminal_i",
+          "gene": "duration",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "duration",
+              "performance_payload_1d": true,
+              "identity_sha256": "9dfa33332d4c4ce3",
+              "performance_sha256": "1be5bc8d6a8b1934",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "unit_durations_s"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 53.90359399999568,
+              "unit": "ms",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "note_split_mae_ms",
+              "direction": "lower",
+              "b0": 54.031344,
+              "gene_condition": 1.531344,
+              "delta": -52.5
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "53af13b63eace104",
+                "same_process_sha": "53af13b63eace104",
+                "cross_process_sha": "53af13b63eace104"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "133202a0c9f0cb4a",
+                "same_process_sha": "133202a0c9f0cb4a",
+                "cross_process_sha": "133202a0c9f0cb4a"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_N|BRD#664|pjs017#27": {
+          "pair_key": "terminal_N|BRD#664|pjs017#27",
+          "context_id": "terminal_N",
+          "gene": "duration",
+          "verdict": "NOT_EVALUABLE",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": false,
+          "P3_realized_in_output": false,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "duration",
+              "performance_payload_1d": true,
+              "identity_sha256": "33e9f82cbe542ec8",
+              "performance_sha256": "c382df9a5dcad18f",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "unit_durations_s"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": false,
+              "amount": 0.0,
+              "unit": "ms",
+              "structural_noop": true
+            },
+            "P3": {
+              "pass": false,
+              "metric": "note_split_mae_ms",
+              "direction": "lower",
+              "b0": 1.8454,
+              "gene_condition": 1.8454,
+              "delta": 0.0
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "3c2f66cc9f32c61b",
+                "same_process_sha": "3c2f66cc9f32c61b",
+                "cross_process_sha": "3c2f66cc9f32c61b"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "3c2f66cc9f32c61b",
+                "same_process_sha": "3c2f66cc9f32c61b",
+                "cross_process_sha": "3c2f66cc9f32c61b"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "medial_ri|1st_color#357|pjs002#54": {
+          "pair_key": "medial_ri|1st_color#357|pjs002#54",
+          "context_id": "medial_ri",
+          "gene": "duration",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "duration",
+              "performance_payload_1d": true,
+              "identity_sha256": "70a01f55d1630a19",
+              "performance_sha256": "cb4da93d2b85c26c",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "unit_durations_s"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 43.29845940801922,
+              "unit": "ms",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "note_split_mae_ms",
+              "direction": "lower",
+              "b0": 43.025459,
+              "gene_condition": 0.525459,
+              "delta": -42.5
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "600b3fee96d66653",
+                "same_process_sha": "600b3fee96d66653",
+                "cross_process_sha": "600b3fee96d66653"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "c9f9cf09c85fea2c",
+                "same_process_sha": "c9f9cf09c85fea2c",
+                "cross_process_sha": "c9f9cf09c85fea2c"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        }
+      },
+      "verdict": "SUPPORTED"
+    },
+    "energy": {
+      "evaluable_pairs": 8,
+      "supported_pairs": 8,
+      "support_ratio": 1.0,
+      "evaluable_contexts": [
+        "medial_ri",
+        "terminal_N",
+        "terminal_i",
+        "terminal_ri"
+      ],
+      "supported_contexts": [
+        "medial_ri",
+        "terminal_N",
+        "terminal_i",
+        "terminal_ri"
+      ],
+      "distinct_evaluable_context_count": 4,
+      "distinct_supported_context_count": 4,
+      "structural_failures": 0,
+      "determinism_failures": 0,
+      "pairs": {
+        "terminal_ri|2018#215|pjs003#65": {
+          "pair_key": "terminal_ri|2018#215|pjs003#65",
+          "context_id": "terminal_ri",
+          "gene": "energy",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "energy",
+              "performance_payload_1d": true,
+              "identity_sha256": "38ebf35e77a1e4e5",
+              "performance_sha256": "aecf69d27d54cb4e",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "energy_db",
+                "energy_unit_index",
+                "energy_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 29.757210948043593,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "energy_corr",
+              "direction": "higher",
+              "b0": 0.360389,
+              "gene_condition": 0.952881,
+              "delta": 0.592492
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "1ff958000503aa3f",
+                "same_process_sha": "1ff958000503aa3f",
+                "cross_process_sha": "1ff958000503aa3f"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "1cdf3e2b4f2c253a",
+                "same_process_sha": "1cdf3e2b4f2c253a",
+                "cross_process_sha": "1cdf3e2b4f2c253a"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_i|1st_color#86|pjs001#54": {
+          "pair_key": "terminal_i|1st_color#86|pjs001#54",
+          "context_id": "terminal_i",
+          "gene": "energy",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "energy",
+              "performance_payload_1d": true,
+              "identity_sha256": "075f58286353e622",
+              "performance_sha256": "027b99eccb5f5223",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "energy_db",
+                "energy_unit_index",
+                "energy_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 9.002762058937869,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "energy_corr",
+              "direction": "higher",
+              "b0": 0.429737,
+              "gene_condition": 0.902142,
+              "delta": 0.472405
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "9db3422ddbe417c9",
+                "same_process_sha": "9db3422ddbe417c9",
+                "cross_process_sha": "9db3422ddbe417c9"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "06c9b125161e4851",
+                "same_process_sha": "06c9b125161e4851",
+                "cross_process_sha": "06c9b125161e4851"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_N|1st_color#478|pjs002#61": {
+          "pair_key": "terminal_N|1st_color#478|pjs002#61",
+          "context_id": "terminal_N",
+          "gene": "energy",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "energy",
+              "performance_payload_1d": true,
+              "identity_sha256": "3499029bc543fb1b",
+              "performance_sha256": "a77680bdfe8a3f51",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "energy_db",
+                "energy_unit_index",
+                "energy_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 4.457237352239206,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "energy_corr",
+              "direction": "higher",
+              "b0": 0.208385,
+              "gene_condition": 0.759939,
+              "delta": 0.551554
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "7c35a0f828df83da",
+                "same_process_sha": "7c35a0f828df83da",
+                "cross_process_sha": "7c35a0f828df83da"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "41bd4c763ba0573e",
+                "same_process_sha": "41bd4c763ba0573e",
+                "cross_process_sha": "41bd4c763ba0573e"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "medial_ri|1st_color#104|pjs002#42": {
+          "pair_key": "medial_ri|1st_color#104|pjs002#42",
+          "context_id": "medial_ri",
+          "gene": "energy",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "energy",
+              "performance_payload_1d": true,
+              "identity_sha256": "efb55205489dcbc5",
+              "performance_sha256": "65e4e5e301582b86",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "energy_db",
+                "energy_unit_index",
+                "energy_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 5.583408190308119,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "energy_corr",
+              "direction": "higher",
+              "b0": -0.142562,
+              "gene_condition": 0.557012,
+              "delta": 0.699574
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "bc7c604a336a1cb4",
+                "same_process_sha": "bc7c604a336a1cb4",
+                "cross_process_sha": "bc7c604a336a1cb4"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5cedc96a0254dc74",
+                "same_process_sha": "5cedc96a0254dc74",
+                "cross_process_sha": "5cedc96a0254dc74"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_ri|2018#598|pjs065#29": {
+          "pair_key": "terminal_ri|2018#598|pjs065#29",
+          "context_id": "terminal_ri",
+          "gene": "energy",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "energy",
+              "performance_payload_1d": true,
+              "identity_sha256": "93a6e5a54aa6801f",
+              "performance_sha256": "a4bdbfbbd618391e",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "energy_db",
+                "energy_unit_index",
+                "energy_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 9.07806055631408,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "energy_corr",
+              "direction": "higher",
+              "b0": 0.754868,
+              "gene_condition": 0.852429,
+              "delta": 0.097561
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "e1f9cd35f09c0026",
+                "same_process_sha": "e1f9cd35f09c0026",
+                "cross_process_sha": "e1f9cd35f09c0026"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5cb3dcf4bde7261e",
+                "same_process_sha": "5cb3dcf4bde7261e",
+                "cross_process_sha": "5cb3dcf4bde7261e"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_i|1st_color#218|pjs001#73": {
+          "pair_key": "terminal_i|1st_color#218|pjs001#73",
+          "context_id": "terminal_i",
+          "gene": "energy",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "energy",
+              "performance_payload_1d": true,
+              "identity_sha256": "9dfa33332d4c4ce3",
+              "performance_sha256": "1be5bc8d6a8b1934",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "energy_db",
+                "energy_unit_index",
+                "energy_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 4.661359569838271,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "energy_corr",
+              "direction": "higher",
+              "b0": 0.298194,
+              "gene_condition": 0.645201,
+              "delta": 0.347007
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "ed2cd6d937901ec1",
+                "same_process_sha": "ed2cd6d937901ec1",
+                "cross_process_sha": "ed2cd6d937901ec1"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "133202a0c9f0cb4a",
+                "same_process_sha": "133202a0c9f0cb4a",
+                "cross_process_sha": "133202a0c9f0cb4a"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_N|BRD#664|pjs017#27": {
+          "pair_key": "terminal_N|BRD#664|pjs017#27",
+          "context_id": "terminal_N",
+          "gene": "energy",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "energy",
+              "performance_payload_1d": true,
+              "identity_sha256": "33e9f82cbe542ec8",
+              "performance_sha256": "c382df9a5dcad18f",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "energy_db",
+                "energy_unit_index",
+                "energy_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 4.051869138754498,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "energy_corr",
+              "direction": "higher",
+              "b0": 0.06729,
+              "gene_condition": 0.815012,
+              "delta": 0.747722
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "b59108607cdb06d1",
+                "same_process_sha": "b59108607cdb06d1",
+                "cross_process_sha": "b59108607cdb06d1"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "3c2f66cc9f32c61b",
+                "same_process_sha": "3c2f66cc9f32c61b",
+                "cross_process_sha": "3c2f66cc9f32c61b"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "medial_ri|1st_color#357|pjs002#54": {
+          "pair_key": "medial_ri|1st_color#357|pjs002#54",
+          "context_id": "medial_ri",
+          "gene": "energy",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "energy",
+              "performance_payload_1d": true,
+              "identity_sha256": "70a01f55d1630a19",
+              "performance_sha256": "cb4da93d2b85c26c",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "energy_db",
+                "energy_unit_index",
+                "energy_unit_pos",
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 27.318779450241497,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "energy_corr",
+              "direction": "higher",
+              "b0": 0.273657,
+              "gene_condition": 0.980227,
+              "delta": 0.70657
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "bbfa9c1ebc8fbfa4",
+                "same_process_sha": "bbfa9c1ebc8fbfa4",
+                "cross_process_sha": "bbfa9c1ebc8fbfa4"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "c9f9cf09c85fea2c",
+                "same_process_sha": "c9f9cf09c85fea2c",
+                "cross_process_sha": "c9f9cf09c85fea2c"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        }
+      },
+      "verdict": "SUPPORTED"
+    },
+    "release": {
+      "evaluable_pairs": 6,
+      "supported_pairs": 6,
+      "support_ratio": 1.0,
+      "evaluable_contexts": [
+        "terminal_N",
+        "terminal_i",
+        "terminal_ri"
+      ],
+      "supported_contexts": [
+        "terminal_N",
+        "terminal_i",
+        "terminal_ri"
+      ],
+      "distinct_evaluable_context_count": 3,
+      "distinct_supported_context_count": 3,
+      "structural_failures": 0,
+      "determinism_failures": 0,
+      "pairs": {
+        "terminal_ri|2018#215|pjs003#65": {
+          "pair_key": "terminal_ri|2018#215|pjs003#65",
+          "context_id": "terminal_ri",
+          "gene": "release",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "release",
+              "performance_payload_1d": true,
+              "identity_sha256": "38ebf35e77a1e4e5",
+              "performance_sha256": "aecf69d27d54cb4e",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "release",
+                "release.hold_core",
+                "release.taper_db",
+                "release.window_frac"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 7.160847634665062,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "taper_rmse_db",
+              "direction": "lower",
+              "b0": 10.795888,
+              "gene_condition": 2.725179,
+              "delta": -8.070709
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "a154a9f8b449a596",
+                "same_process_sha": "a154a9f8b449a596",
+                "cross_process_sha": "a154a9f8b449a596"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "1cdf3e2b4f2c253a",
+                "same_process_sha": "1cdf3e2b4f2c253a",
+                "cross_process_sha": "1cdf3e2b4f2c253a"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_i|1st_color#86|pjs001#54": {
+          "pair_key": "terminal_i|1st_color#86|pjs001#54",
+          "context_id": "terminal_i",
+          "gene": "release",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "release",
+              "performance_payload_1d": true,
+              "identity_sha256": "075f58286353e622",
+              "performance_sha256": "027b99eccb5f5223",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "release",
+                "release.hold_core",
+                "release.taper_db",
+                "release.window_frac"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 8.728828136676618,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "taper_rmse_db",
+              "direction": "lower",
+              "b0": 8.406466,
+              "gene_condition": 1.48099,
+              "delta": -6.925476
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "ef2347303d4e28b6",
+                "same_process_sha": "ef2347303d4e28b6",
+                "cross_process_sha": "ef2347303d4e28b6"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "06c9b125161e4851",
+                "same_process_sha": "06c9b125161e4851",
+                "cross_process_sha": "06c9b125161e4851"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_N|1st_color#478|pjs002#61": {
+          "pair_key": "terminal_N|1st_color#478|pjs002#61",
+          "context_id": "terminal_N",
+          "gene": "release",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "release",
+              "performance_payload_1d": true,
+              "identity_sha256": "3499029bc543fb1b",
+              "performance_sha256": "a77680bdfe8a3f51",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "release",
+                "release.hold_core",
+                "release.taper_db",
+                "release.window_frac"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 0.4774385809107119,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "taper_rmse_db",
+              "direction": "lower",
+              "b0": 9.472599,
+              "gene_condition": 0.859993,
+              "delta": -8.612606
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "04e5d28db136e6ac",
+                "same_process_sha": "04e5d28db136e6ac",
+                "cross_process_sha": "04e5d28db136e6ac"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "41bd4c763ba0573e",
+                "same_process_sha": "41bd4c763ba0573e",
+                "cross_process_sha": "41bd4c763ba0573e"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "medial_ri|1st_color#104|pjs002#42": {
+          "pair_key": "medial_ri|1st_color#104|pjs002#42",
+          "context_id": "medial_ri",
+          "gene": "release",
+          "verdict": "NOT_EVALUABLE",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": false,
+          "P3_realized_in_output": false,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "release",
+              "performance_payload_1d": true,
+              "identity_sha256": "efb55205489dcbc5",
+              "performance_sha256": "65e4e5e301582b86",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": false,
+              "amount": 7.156124907913706,
+              "unit": "dB",
+              "structural_noop": true
+            },
+            "P3": {
+              "pass": false,
+              "metric": "taper_rmse_db",
+              "direction": "lower",
+              "b0": 2.518567,
+              "gene_condition": 2.518567,
+              "delta": 0.0
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5cedc96a0254dc74",
+                "same_process_sha": "5cedc96a0254dc74",
+                "cross_process_sha": "5cedc96a0254dc74"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5cedc96a0254dc74",
+                "same_process_sha": "5cedc96a0254dc74",
+                "cross_process_sha": "5cedc96a0254dc74"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_ri|2018#598|pjs065#29": {
+          "pair_key": "terminal_ri|2018#598|pjs065#29",
+          "context_id": "terminal_ri",
+          "gene": "release",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "release",
+              "performance_payload_1d": true,
+              "identity_sha256": "93a6e5a54aa6801f",
+              "performance_sha256": "a4bdbfbbd618391e",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "release",
+                "release.hold_core",
+                "release.taper_db",
+                "release.window_frac"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 11.568760212651348,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "taper_rmse_db",
+              "direction": "lower",
+              "b0": 10.345963,
+              "gene_condition": 2.7311,
+              "delta": -7.614863
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5b125205566f0b77",
+                "same_process_sha": "5b125205566f0b77",
+                "cross_process_sha": "5b125205566f0b77"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "5cb3dcf4bde7261e",
+                "same_process_sha": "5cb3dcf4bde7261e",
+                "cross_process_sha": "5cb3dcf4bde7261e"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_i|1st_color#218|pjs001#73": {
+          "pair_key": "terminal_i|1st_color#218|pjs001#73",
+          "context_id": "terminal_i",
+          "gene": "release",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "release",
+              "performance_payload_1d": true,
+              "identity_sha256": "9dfa33332d4c4ce3",
+              "performance_sha256": "1be5bc8d6a8b1934",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "release",
+                "release.hold_core",
+                "release.taper_db",
+                "release.window_frac"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 2.75212508885513,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "taper_rmse_db",
+              "direction": "lower",
+              "b0": 9.33549,
+              "gene_condition": 0.610612,
+              "delta": -8.724878
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "d859a44939be4c0c",
+                "same_process_sha": "d859a44939be4c0c",
+                "cross_process_sha": "d859a44939be4c0c"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "133202a0c9f0cb4a",
+                "same_process_sha": "133202a0c9f0cb4a",
+                "cross_process_sha": "133202a0c9f0cb4a"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "terminal_N|BRD#664|pjs017#27": {
+          "pair_key": "terminal_N|BRD#664|pjs017#27",
+          "context_id": "terminal_N",
+          "gene": "release",
+          "verdict": "SUPPORTED",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": true,
+          "P3_realized_in_output": true,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "release",
+              "performance_payload_1d": true,
+              "identity_sha256": "33e9f82cbe542ec8",
+              "performance_sha256": "c382df9a5dcad18f",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units",
+                "release",
+                "release.hold_core",
+                "release.taper_db",
+                "release.window_frac"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": true,
+              "amount": 2.0874011256638587,
+              "unit": "dB",
+              "structural_noop": false
+            },
+            "P3": {
+              "pass": true,
+              "metric": "taper_rmse_db",
+              "direction": "lower",
+              "b0": 3.131826,
+              "gene_condition": 0.19942,
+              "delta": -2.932406
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "4b3aa7a2a28f1ce9",
+                "same_process_sha": "4b3aa7a2a28f1ce9",
+                "cross_process_sha": "4b3aa7a2a28f1ce9"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "3c2f66cc9f32c61b",
+                "same_process_sha": "3c2f66cc9f32c61b",
+                "cross_process_sha": "3c2f66cc9f32c61b"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        },
+        "medial_ri|1st_color#357|pjs002#54": {
+          "pair_key": "medial_ri|1st_color#357|pjs002#54",
+          "context_id": "medial_ri",
+          "gene": "release",
+          "verdict": "NOT_EVALUABLE",
+          "P1_structural_isolation": true,
+          "P2_intervention_nonzero": false,
+          "P3_realized_in_output": false,
+          "P4_determinism": true,
+          "detail": {
+            "P1": {
+              "pass": true,
+              "only_target_toggle_on": true,
+              "toggles": "release",
+              "performance_payload_1d": true,
+              "identity_sha256": "70a01f55d1630a19",
+              "performance_sha256": "cb4da93d2b85c26c",
+              "tripwire_status": [
+                "pass",
+                "pass"
+              ],
+              "tripwire_accessed": [
+                "n_units"
+              ],
+              "no_two_dimensional_payload": true
+            },
+            "P2": {
+              "pass": false,
+              "amount": 15.208885215500667,
+              "unit": "dB",
+              "structural_noop": true
+            },
+            "P3": {
+              "pass": false,
+              "metric": "taper_rmse_db",
+              "direction": "lower",
+              "b0": 8.261105,
+              "gene_condition": 8.261105,
+              "delta": 0.0
+            },
+            "P4": {
+              "pass": true,
+              "gene_condition": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "c9f9cf09c85fea2c",
+                "same_process_sha": "c9f9cf09c85fea2c",
+                "cross_process_sha": "c9f9cf09c85fea2c"
+              },
+              "baseline_B0": {
+                "pass": true,
+                "same_process": true,
+                "cross_process": true,
+                "recorded": "c9f9cf09c85fea2c",
+                "same_process_sha": "c9f9cf09c85fea2c",
+                "cross_process_sha": "c9f9cf09c85fea2c"
+              },
+              "same_process": true,
+              "cross_process": true
+            }
+          }
+        }
+      },
+      "verdict": "SUPPORTED"
+    }
+  },
+  "overall": {
+    "supported_gene_count": 4,
+    "supported_genes": [
+      "duration",
+      "energy",
+      "f0",
+      "release"
+    ],
+    "verdict": "PASS"
+  },
+  "reproducibility": [
+    {
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "context_id": "terminal_ri",
+      "gene": null,
+      "condition": "B0",
+      "toggle_state": "none",
+      "identity_sha256": "38ebf35e77a1e4e50c02e2f463484d8c30228195052ec0eda0d58a1014967fbd",
+      "performance_sha256": "aecf69d27d54cb4e5bd9b0f08c8cdd17703f1c3809a4537673cb87ef558c9b26",
+      "sample_sha256": "1cdf3e2b4f2c253a4c4b75e4b81e0c789c6bf8d21ed19854efbee502470bebfb",
+      "wav_sha256": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "context_id": "terminal_ri",
+      "gene": "f0",
+      "condition": "F",
+      "toggle_state": "f0",
+      "identity_sha256": "38ebf35e77a1e4e50c02e2f463484d8c30228195052ec0eda0d58a1014967fbd",
+      "performance_sha256": "aecf69d27d54cb4e5bd9b0f08c8cdd17703f1c3809a4537673cb87ef558c9b26",
+      "sample_sha256": "0b7d43d0df693d4fc5f30b5e24d4e184db0ddd4b1cfe53c0e6b71b492860fdd2",
+      "wav_sha256": "999b7fb25a653a40f509dfb8ce7cce295d5c36668476777412c5a7ca8a6059b4",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "context_id": "terminal_ri",
+      "gene": "duration",
+      "condition": "D",
+      "toggle_state": "duration",
+      "identity_sha256": "38ebf35e77a1e4e50c02e2f463484d8c30228195052ec0eda0d58a1014967fbd",
+      "performance_sha256": "aecf69d27d54cb4e5bd9b0f08c8cdd17703f1c3809a4537673cb87ef558c9b26",
+      "sample_sha256": "72eb1307c95af235a804a3b4c0b4852018970fadf85c8ecf571c2a225ff8dcd0",
+      "wav_sha256": "31a76993b135b71bd4867ee8a2bd5ae103a2c530e838e10db1a77cc88455f8a0",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "context_id": "terminal_ri",
+      "gene": "energy",
+      "condition": "E",
+      "toggle_state": "energy",
+      "identity_sha256": "38ebf35e77a1e4e50c02e2f463484d8c30228195052ec0eda0d58a1014967fbd",
+      "performance_sha256": "aecf69d27d54cb4e5bd9b0f08c8cdd17703f1c3809a4537673cb87ef558c9b26",
+      "sample_sha256": "1ff958000503aa3fab7054dfac8d22a6060486847663e59a269d575d7c449a0e",
+      "wav_sha256": "3f7df33eb449b50c12b63cac087d83705557ae1f6084ad573d299ff6aa16203d",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "context_id": "terminal_ri",
+      "gene": "release",
+      "condition": "R",
+      "toggle_state": "release",
+      "identity_sha256": "38ebf35e77a1e4e50c02e2f463484d8c30228195052ec0eda0d58a1014967fbd",
+      "performance_sha256": "aecf69d27d54cb4e5bd9b0f08c8cdd17703f1c3809a4537673cb87ef558c9b26",
+      "sample_sha256": "a154a9f8b449a596ed27cf339bd71d490cc9d422a0594c6edb74178467b96666",
+      "wav_sha256": "f197bc9311803b02389d4c1fcb52e91eed9fb7f2e7ae8f7a32bdc7a73c4aa67a",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#86|pjs001#54",
+      "context_id": "terminal_i",
+      "gene": null,
+      "condition": "B0",
+      "toggle_state": "none",
+      "identity_sha256": "075f58286353e622c28b69f7a1f26b613752b75a58a8526c95cc85da9bf29f2c",
+      "performance_sha256": "027b99eccb5f522399cdee919f7c1d65e69e0b91d8d633e4d4aa555ee5b6c37e",
+      "sample_sha256": "06c9b125161e4851ac2b4411e27ab3fbb440c74a6023620ef3725ca85f4b3fa9",
+      "wav_sha256": "f8938d2dc9fe0321b8cce10e4a038480398fa5484e34d25b68fb1010f27f6a71",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#86|pjs001#54",
+      "context_id": "terminal_i",
+      "gene": "f0",
+      "condition": "F",
+      "toggle_state": "f0",
+      "identity_sha256": "075f58286353e622c28b69f7a1f26b613752b75a58a8526c95cc85da9bf29f2c",
+      "performance_sha256": "027b99eccb5f522399cdee919f7c1d65e69e0b91d8d633e4d4aa555ee5b6c37e",
+      "sample_sha256": "8289f9efe57a06ebde1de429006264ebe7267093ca734fcfd333b7ecd4a100d0",
+      "wav_sha256": "5a7c3a8a1e043df95e9e41771e7666ac19ad63012f2f47c3393da1b2eddc1db4",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#86|pjs001#54",
+      "context_id": "terminal_i",
+      "gene": "duration",
+      "condition": "D",
+      "toggle_state": "duration",
+      "identity_sha256": "075f58286353e622c28b69f7a1f26b613752b75a58a8526c95cc85da9bf29f2c",
+      "performance_sha256": "027b99eccb5f522399cdee919f7c1d65e69e0b91d8d633e4d4aa555ee5b6c37e",
+      "sample_sha256": "3bca79a4038e816f2b10582cd0338952d5686406f77e60c088ec1ae484ddb0e3",
+      "wav_sha256": "2581957061731840d9ff85b378279bd608ed86927360eb54e675d2fe390554ac",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#86|pjs001#54",
+      "context_id": "terminal_i",
+      "gene": "energy",
+      "condition": "E",
+      "toggle_state": "energy",
+      "identity_sha256": "075f58286353e622c28b69f7a1f26b613752b75a58a8526c95cc85da9bf29f2c",
+      "performance_sha256": "027b99eccb5f522399cdee919f7c1d65e69e0b91d8d633e4d4aa555ee5b6c37e",
+      "sample_sha256": "9db3422ddbe417c977a2d22ef22a0a7be6f9276e603d965b95f45fb8e0429b56",
+      "wav_sha256": "bec87ea18ebdf5c65a89c29a3da1677ae28ccee521e7f0a4373e0f3cefabd161",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#86|pjs001#54",
+      "context_id": "terminal_i",
+      "gene": "release",
+      "condition": "R",
+      "toggle_state": "release",
+      "identity_sha256": "075f58286353e622c28b69f7a1f26b613752b75a58a8526c95cc85da9bf29f2c",
+      "performance_sha256": "027b99eccb5f522399cdee919f7c1d65e69e0b91d8d633e4d4aa555ee5b6c37e",
+      "sample_sha256": "ef2347303d4e28b6f2e9a873e971acd60212a56dd8c1711cf3e7abb9d5e4da1c",
+      "wav_sha256": "0bec733b007eaf643765de6b4f7d431b4c47c7fe6d3730e32995e67dafaf9bc1",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|1st_color#478|pjs002#61",
+      "context_id": "terminal_N",
+      "gene": null,
+      "condition": "B0",
+      "toggle_state": "none",
+      "identity_sha256": "3499029bc543fb1b63273572a8ff3c7ea90e9a5ce0e3ef9ccd75e5adc55ce026",
+      "performance_sha256": "a77680bdfe8a3f51deb76c505fe3ca477786eda3433e3caf519ed8c9eede5fc7",
+      "sample_sha256": "41bd4c763ba0573e84cb62fef30b7f62823fe8a9eca25d7cdd40234b721ea97e",
+      "wav_sha256": "e491f9c84455517583e24ff995944ba20f18785e7998a054623ed9347fd8c407",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|1st_color#478|pjs002#61",
+      "context_id": "terminal_N",
+      "gene": "f0",
+      "condition": "F",
+      "toggle_state": "f0",
+      "identity_sha256": "3499029bc543fb1b63273572a8ff3c7ea90e9a5ce0e3ef9ccd75e5adc55ce026",
+      "performance_sha256": "a77680bdfe8a3f51deb76c505fe3ca477786eda3433e3caf519ed8c9eede5fc7",
+      "sample_sha256": "ddfd22575dc29eb3ae76c58f8d76f136f8100a507d47c1aaa7d6f55569be764b",
+      "wav_sha256": "3e2835cc9feb9d27e586dbd486c8fa91bdada64f3aa35d23f3c7178fc3501857",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|1st_color#478|pjs002#61",
+      "context_id": "terminal_N",
+      "gene": "duration",
+      "condition": "D",
+      "toggle_state": "duration",
+      "identity_sha256": "3499029bc543fb1b63273572a8ff3c7ea90e9a5ce0e3ef9ccd75e5adc55ce026",
+      "performance_sha256": "a77680bdfe8a3f51deb76c505fe3ca477786eda3433e3caf519ed8c9eede5fc7",
+      "sample_sha256": "41bd4c763ba0573e84cb62fef30b7f62823fe8a9eca25d7cdd40234b721ea97e",
+      "wav_sha256": "684db6b5552942759f39b9b5acfcd921a34e34f3bdedc21530a33d36f2b01929",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|1st_color#478|pjs002#61",
+      "context_id": "terminal_N",
+      "gene": "energy",
+      "condition": "E",
+      "toggle_state": "energy",
+      "identity_sha256": "3499029bc543fb1b63273572a8ff3c7ea90e9a5ce0e3ef9ccd75e5adc55ce026",
+      "performance_sha256": "a77680bdfe8a3f51deb76c505fe3ca477786eda3433e3caf519ed8c9eede5fc7",
+      "sample_sha256": "7c35a0f828df83da3bc6cfff6292e34b9d58a9bc22aa6afe987f695d94b6f914",
+      "wav_sha256": "5fdb4d0d63874efac7a35481ff4104228ea3497ccec896d396e2a3eeb9eea9d4",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|1st_color#478|pjs002#61",
+      "context_id": "terminal_N",
+      "gene": "release",
+      "condition": "R",
+      "toggle_state": "release",
+      "identity_sha256": "3499029bc543fb1b63273572a8ff3c7ea90e9a5ce0e3ef9ccd75e5adc55ce026",
+      "performance_sha256": "a77680bdfe8a3f51deb76c505fe3ca477786eda3433e3caf519ed8c9eede5fc7",
+      "sample_sha256": "04e5d28db136e6acfcaea5be584e9c4c9799023ceea833ce467e1a3d7ef2e614",
+      "wav_sha256": "3a7131f61f0ac9f43648bbb0d89ad0a66236b764c13cd4baf5e0a7c0e1c33f6d",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#104|pjs002#42",
+      "context_id": "medial_ri",
+      "gene": null,
+      "condition": "B0",
+      "toggle_state": "none",
+      "identity_sha256": "efb55205489dcbc5e7f970dc077ce761614a2ed2d7b72b9858e1285d8e4f0a9b",
+      "performance_sha256": "65e4e5e301582b86eb7a07eb8602cf6cd0f24fcad3141a40079d483c80ba23cc",
+      "sample_sha256": "5cedc96a0254dc74d19d76f1d7fc093728dffc1f9cd017b3220ae42d19b7a508",
+      "wav_sha256": "34fb1aab062a297d2b20211a7ca3b8568ec7528c681bf6923d97f3eabccd268b",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#104|pjs002#42",
+      "context_id": "medial_ri",
+      "gene": "f0",
+      "condition": "F",
+      "toggle_state": "f0",
+      "identity_sha256": "efb55205489dcbc5e7f970dc077ce761614a2ed2d7b72b9858e1285d8e4f0a9b",
+      "performance_sha256": "65e4e5e301582b86eb7a07eb8602cf6cd0f24fcad3141a40079d483c80ba23cc",
+      "sample_sha256": "9d647efacd98919f0f5f7257bff0b8eeb175aa5a99f4ef4441fab709288636b5",
+      "wav_sha256": "3410ad8d972edd7304162e8d322c908747cc4a7085830093df1a4e15f63dd399",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#104|pjs002#42",
+      "context_id": "medial_ri",
+      "gene": "duration",
+      "condition": "D",
+      "toggle_state": "duration",
+      "identity_sha256": "efb55205489dcbc5e7f970dc077ce761614a2ed2d7b72b9858e1285d8e4f0a9b",
+      "performance_sha256": "65e4e5e301582b86eb7a07eb8602cf6cd0f24fcad3141a40079d483c80ba23cc",
+      "sample_sha256": "514bec3c29a102451da3fc1d95189cfb7881a024fe51616ae01009161b9e81fe",
+      "wav_sha256": "1c29fda823dda7774260331d9b6fb35688d4659144a1039946c8bbe11f660610",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#104|pjs002#42",
+      "context_id": "medial_ri",
+      "gene": "energy",
+      "condition": "E",
+      "toggle_state": "energy",
+      "identity_sha256": "efb55205489dcbc5e7f970dc077ce761614a2ed2d7b72b9858e1285d8e4f0a9b",
+      "performance_sha256": "65e4e5e301582b86eb7a07eb8602cf6cd0f24fcad3141a40079d483c80ba23cc",
+      "sample_sha256": "bc7c604a336a1cb400a3d38e3e0ef8d7103ec6b773310c2622238dd15b83dbd3",
+      "wav_sha256": "d52128ac0192d8d3ce20733ec9e2c7da871d440ac3e845ce5553ed2cf4c0e155",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#104|pjs002#42",
+      "context_id": "medial_ri",
+      "gene": "release",
+      "condition": "R",
+      "toggle_state": "release",
+      "identity_sha256": "efb55205489dcbc5e7f970dc077ce761614a2ed2d7b72b9858e1285d8e4f0a9b",
+      "performance_sha256": "65e4e5e301582b86eb7a07eb8602cf6cd0f24fcad3141a40079d483c80ba23cc",
+      "sample_sha256": "5cedc96a0254dc74d19d76f1d7fc093728dffc1f9cd017b3220ae42d19b7a508",
+      "wav_sha256": "7700206d0f96ee9cf2423a82abadd2022c222a576c93528ad03d6dd3b243de56",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "context_id": "terminal_ri",
+      "gene": null,
+      "condition": "B0",
+      "toggle_state": "none",
+      "identity_sha256": "93a6e5a54aa6801f873fd6ddfa0d03a8e3734d99abb3555b0128682c66a5ca33",
+      "performance_sha256": "a4bdbfbbd618391e65ad622cf78fbe6390deef2ce87512a2a150802afaf4de30",
+      "sample_sha256": "5cb3dcf4bde7261e16ef124beac382a5b6731600d36e43bfdd8192b5d7b35be7",
+      "wav_sha256": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "context_id": "terminal_ri",
+      "gene": "f0",
+      "condition": "F",
+      "toggle_state": "f0",
+      "identity_sha256": "93a6e5a54aa6801f873fd6ddfa0d03a8e3734d99abb3555b0128682c66a5ca33",
+      "performance_sha256": "a4bdbfbbd618391e65ad622cf78fbe6390deef2ce87512a2a150802afaf4de30",
+      "sample_sha256": "3e69931d8ea789495c7edebb6d0fa682d20de8ffe9371ebde860f187cb10fc43",
+      "wav_sha256": "e51fe6a217910bd88813eba5f5b3a13cb793d919ab902375bfbb62abee3949c0",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "context_id": "terminal_ri",
+      "gene": "duration",
+      "condition": "D",
+      "toggle_state": "duration",
+      "identity_sha256": "93a6e5a54aa6801f873fd6ddfa0d03a8e3734d99abb3555b0128682c66a5ca33",
+      "performance_sha256": "a4bdbfbbd618391e65ad622cf78fbe6390deef2ce87512a2a150802afaf4de30",
+      "sample_sha256": "e98c8539fc11096e9e6181fe56d39ec2b4fd81bf2836ada1d38d3a646b441e2e",
+      "wav_sha256": "c6b051c57fe65b3f8a6a3352250c53bd8235616b20f87c209e08ddb74e7020b9",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "context_id": "terminal_ri",
+      "gene": "energy",
+      "condition": "E",
+      "toggle_state": "energy",
+      "identity_sha256": "93a6e5a54aa6801f873fd6ddfa0d03a8e3734d99abb3555b0128682c66a5ca33",
+      "performance_sha256": "a4bdbfbbd618391e65ad622cf78fbe6390deef2ce87512a2a150802afaf4de30",
+      "sample_sha256": "e1f9cd35f09c002689b9ac32948ee2b4e34172ef7c9292673959227207283db1",
+      "wav_sha256": "ca67b61c452745ab8ab70f3e6a792e8752bc2b85053b630bffa3fde7e077d183",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "context_id": "terminal_ri",
+      "gene": "release",
+      "condition": "R",
+      "toggle_state": "release",
+      "identity_sha256": "93a6e5a54aa6801f873fd6ddfa0d03a8e3734d99abb3555b0128682c66a5ca33",
+      "performance_sha256": "a4bdbfbbd618391e65ad622cf78fbe6390deef2ce87512a2a150802afaf4de30",
+      "sample_sha256": "5b125205566f0b77122b48833d11dacef170d64441165d0b990f85081f80bb0c",
+      "wav_sha256": "6e6f6dbbdfc428ed7d5d17b2123587aaf1bd007a3bb326bd3f37f0f531486daa",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "context_id": "terminal_i",
+      "gene": null,
+      "condition": "B0",
+      "toggle_state": "none",
+      "identity_sha256": "9dfa33332d4c4ce31665b46989f374c1b539b718c35f525ae9c02c7e135e5a8a",
+      "performance_sha256": "1be5bc8d6a8b193473eef3684aa98bdaa70c6dffe171b2ff8c909d4d246e8809",
+      "sample_sha256": "133202a0c9f0cb4a8ee4efee72ffd4cc3ec68ca0fb93808642d4e7d12d7d416b",
+      "wav_sha256": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "context_id": "terminal_i",
+      "gene": "f0",
+      "condition": "F",
+      "toggle_state": "f0",
+      "identity_sha256": "9dfa33332d4c4ce31665b46989f374c1b539b718c35f525ae9c02c7e135e5a8a",
+      "performance_sha256": "1be5bc8d6a8b193473eef3684aa98bdaa70c6dffe171b2ff8c909d4d246e8809",
+      "sample_sha256": "f7042fcd668df433974a66e0851dcddd8e52e83325377f7dc712c04d98eaf78a",
+      "wav_sha256": "76e94d9fc2550bda198b42a248624d2007ee7eb0ceb59e277490a330ab7e4c6d",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "context_id": "terminal_i",
+      "gene": "duration",
+      "condition": "D",
+      "toggle_state": "duration",
+      "identity_sha256": "9dfa33332d4c4ce31665b46989f374c1b539b718c35f525ae9c02c7e135e5a8a",
+      "performance_sha256": "1be5bc8d6a8b193473eef3684aa98bdaa70c6dffe171b2ff8c909d4d246e8809",
+      "sample_sha256": "53af13b63eace104bb37fa9016f648f24c72f55de09d23f67a2377dd3e5b6907",
+      "wav_sha256": "b46ab380ec95f4c528db3585a3664a01a11fd476d6728cf4e04c59d85ac69ed1",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "context_id": "terminal_i",
+      "gene": "energy",
+      "condition": "E",
+      "toggle_state": "energy",
+      "identity_sha256": "9dfa33332d4c4ce31665b46989f374c1b539b718c35f525ae9c02c7e135e5a8a",
+      "performance_sha256": "1be5bc8d6a8b193473eef3684aa98bdaa70c6dffe171b2ff8c909d4d246e8809",
+      "sample_sha256": "ed2cd6d937901ec1e446299269606ab311cc4345ca8718e9bee12f647cefb28e",
+      "wav_sha256": "fa0008bff9a0c80df896c3b4cb2ed1daa176da2a7fd4cd866881f90a8b3ed534",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "context_id": "terminal_i",
+      "gene": "release",
+      "condition": "R",
+      "toggle_state": "release",
+      "identity_sha256": "9dfa33332d4c4ce31665b46989f374c1b539b718c35f525ae9c02c7e135e5a8a",
+      "performance_sha256": "1be5bc8d6a8b193473eef3684aa98bdaa70c6dffe171b2ff8c909d4d246e8809",
+      "sample_sha256": "d859a44939be4c0c376dd73ce13d1d3d1714e5165037191aeb9e469a18953719",
+      "wav_sha256": "fceb01b94d2a808d810e311a85a1b3be6617d7a1c75c4c19f19564bfec5d8e00",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "context_id": "terminal_N",
+      "gene": null,
+      "condition": "B0",
+      "toggle_state": "none",
+      "identity_sha256": "33e9f82cbe542ec8447d8668ccb941d55f05ac3a990e1f5e9f064a6a6b29873b",
+      "performance_sha256": "c382df9a5dcad18f6c06c713fa8264e73279b6e725f144bb4d0bd23c2879e438",
+      "sample_sha256": "3c2f66cc9f32c61bffa43f887c49ae1bb30d4b2ef49003529b81046db584b5d6",
+      "wav_sha256": "99005b5c29a97e760afb0e4a6d34c0e44ee376d7f80b403de692a1b79b52de56",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "context_id": "terminal_N",
+      "gene": "f0",
+      "condition": "F",
+      "toggle_state": "f0",
+      "identity_sha256": "33e9f82cbe542ec8447d8668ccb941d55f05ac3a990e1f5e9f064a6a6b29873b",
+      "performance_sha256": "c382df9a5dcad18f6c06c713fa8264e73279b6e725f144bb4d0bd23c2879e438",
+      "sample_sha256": "b56e65ac6c89403e8645dd933333de552b47eba8a6d6c8758ae5a3f97c576faa",
+      "wav_sha256": "760c8ac6230f5c9df0e68b7d4221cf3d0383b9405adca7886c2d1118c663a7c7",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "context_id": "terminal_N",
+      "gene": "duration",
+      "condition": "D",
+      "toggle_state": "duration",
+      "identity_sha256": "33e9f82cbe542ec8447d8668ccb941d55f05ac3a990e1f5e9f064a6a6b29873b",
+      "performance_sha256": "c382df9a5dcad18f6c06c713fa8264e73279b6e725f144bb4d0bd23c2879e438",
+      "sample_sha256": "3c2f66cc9f32c61bffa43f887c49ae1bb30d4b2ef49003529b81046db584b5d6",
+      "wav_sha256": "d847792ac190932204da8546aeac51afd2c29e070fc0082d51fec2de7b972f4b",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "context_id": "terminal_N",
+      "gene": "energy",
+      "condition": "E",
+      "toggle_state": "energy",
+      "identity_sha256": "33e9f82cbe542ec8447d8668ccb941d55f05ac3a990e1f5e9f064a6a6b29873b",
+      "performance_sha256": "c382df9a5dcad18f6c06c713fa8264e73279b6e725f144bb4d0bd23c2879e438",
+      "sample_sha256": "b59108607cdb06d14bac2805d5e1c71e88160b106fa0177f3d77ea2cf6f8cf10",
+      "wav_sha256": "9e623c2a48412878f4469d96fde5c1eed6a9156faa2245677e40582bc189e7dc",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "context_id": "terminal_N",
+      "gene": "release",
+      "condition": "R",
+      "toggle_state": "release",
+      "identity_sha256": "33e9f82cbe542ec8447d8668ccb941d55f05ac3a990e1f5e9f064a6a6b29873b",
+      "performance_sha256": "c382df9a5dcad18f6c06c713fa8264e73279b6e725f144bb4d0bd23c2879e438",
+      "sample_sha256": "4b3aa7a2a28f1ce908640a42e69add07c1508472103178ea2e04c5378ed7782f",
+      "wav_sha256": "f12e847729c632c58692f84733085f07e0cbfac42cb1f67ad65c0720aed53bb0",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "context_id": "medial_ri",
+      "gene": null,
+      "condition": "B0",
+      "toggle_state": "none",
+      "identity_sha256": "70a01f55d1630a19bf4bfa4b2021c4916b05780c1b9d61581a6f82aebe5845e8",
+      "performance_sha256": "cb4da93d2b85c26ccdd36bbde8974445e47799fd3beb17b20126f208db816a1a",
+      "sample_sha256": "c9f9cf09c85fea2cad46bfd02c978b63d760cf5dd1c066d5d06f0397d61dda26",
+      "wav_sha256": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "context_id": "medial_ri",
+      "gene": "f0",
+      "condition": "F",
+      "toggle_state": "f0",
+      "identity_sha256": "70a01f55d1630a19bf4bfa4b2021c4916b05780c1b9d61581a6f82aebe5845e8",
+      "performance_sha256": "cb4da93d2b85c26ccdd36bbde8974445e47799fd3beb17b20126f208db816a1a",
+      "sample_sha256": "bc324e2d3d249648f7145f984622f1a356c1bf533bdc80f6de3e26175c540048",
+      "wav_sha256": "bb1fce6643605091f05bc0dbfa57e7f212c49adf2072f25edc8f0d78b1859841",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "context_id": "medial_ri",
+      "gene": "duration",
+      "condition": "D",
+      "toggle_state": "duration",
+      "identity_sha256": "70a01f55d1630a19bf4bfa4b2021c4916b05780c1b9d61581a6f82aebe5845e8",
+      "performance_sha256": "cb4da93d2b85c26ccdd36bbde8974445e47799fd3beb17b20126f208db816a1a",
+      "sample_sha256": "600b3fee96d6665336058e25700780c254c045138e8994089186d2c55bbad5ce",
+      "wav_sha256": "d1f3c22b88538f89a41cfc7fa128f02bffb8fa3c7ea735ad73f18438840a92ad",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "context_id": "medial_ri",
+      "gene": "energy",
+      "condition": "E",
+      "toggle_state": "energy",
+      "identity_sha256": "70a01f55d1630a19bf4bfa4b2021c4916b05780c1b9d61581a6f82aebe5845e8",
+      "performance_sha256": "cb4da93d2b85c26ccdd36bbde8974445e47799fd3beb17b20126f208db816a1a",
+      "sample_sha256": "bbfa9c1ebc8fbfa405c30195b760d59e9c486b04e8f510ee8d95a40d608f4cdd",
+      "wav_sha256": "6e3dbea4c0c39425edac0942d6cdb5f848266d7d95fac83cab7612367ba371c4",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    },
+    {
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "context_id": "medial_ri",
+      "gene": "release",
+      "condition": "R",
+      "toggle_state": "release",
+      "identity_sha256": "70a01f55d1630a19bf4bfa4b2021c4916b05780c1b9d61581a6f82aebe5845e8",
+      "performance_sha256": "cb4da93d2b85c26ccdd36bbde8974445e47799fd3beb17b20126f208db816a1a",
+      "sample_sha256": "c9f9cf09c85fea2cad46bfd02c978b63d760cf5dd1c066d5d06f0397d61dda26",
+      "wav_sha256": "4308172a38951608c7ed1f367b66fff74572a06dee0111f16ac02a3e98a33f27",
+      "code_commit": "df97e79a2ed448daa9a2fdd1137aad21a591ba7c"
+    }
+  ],
+  "out_of_scope_observations": []
+}

@@ -1,0 +1,7 @@
+# S3 の出力音声は repository に commit しない（設計書 §17）。
+# 波音リツ 歌声データベース利用規約 第3条1（転載禁止）にも抵触するため恒久除外。
+wav/
+*.wav
+*.flac
+ear_set/
+ear_excerpts/

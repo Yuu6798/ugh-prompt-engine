@@ -202,6 +202,8 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 | `foundry/planb_real/DESIGN_PLANB_REAL_poc.md` | Real-Corpus PoC の実験契約（Ritsu 歌声DB Ver2.0.2 × PJS ver1.1・停止規則・実ラベル規約） |
 | `foundry/planb_real/NEXT_VERIFICATION_PLAN.md` | 第 1 走行を受けた検証計画の再構築（事前登録した TRF 主軸が人間の自然な歌唱を「破綻」と読んでいた実測を起点に、P0–P3 で優先順位づけ） |
 | `foundry/planb_real/REAL_CORPUS_POC_RECORD.md` | Real-Corpus PoC 第 1 走行（実コーパス取得〜R0–R4〜ゲート。TRF 主軸は終端 /ri/ でだけ立ち R4 でのみ動く。到達 = S1_REAL_RENDER） |
+| `foundry/genome_s3/DESIGN_GENOME_S3.md` | Genome S3 の実装対応表（B0/F/D/E/R の 5 条件・pair/gene/overall の 3 段判定・凍結閾値・停止規則）|
+| `foundry/genome_s3/results/S3_RECORD.md` | S3 走行記録（F0 / Duration / Energy / Release のうち何個が独立 gene として操作・実現・再現できたか）|
 
 各 `results_s*/underspec_log_s*.md` にサイクルごとの仕様逸脱・補充判断が
 記録されている。
