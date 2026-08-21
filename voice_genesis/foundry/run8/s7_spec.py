@@ -20,6 +20,8 @@ B2_SCHEMA: Final = "s7-b2-verdict-algebra/0.1"
 CANDIDATE_SPACE_SCHEMA: Final = "s7-b1-candidate-space/0.1"
 CALIBRATION_SET_SCHEMA: Final = "s7-b1-calibration-set/0.1"
 SELECTION_RULE_SCHEMA: Final = "s7-b1-selection-rule/0.1"
+#: 校正専用 real-render セットのレンダ結果 manifest（`s7_calib_render.py` 出力）。
+REAL_RENDER_MANIFEST_SCHEMA: Final = "s7_b1_real_render_manifest/0.1"
 
 
 class Verdict(str, Enum):

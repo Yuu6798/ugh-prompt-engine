@@ -319,6 +319,38 @@ def padded_word_div_dur(ph_dur: List[int], is_vowel_flags: List[bool]) -> Tuple[
     return word_div, word_dur
 
 
+def compute_final_phone_dur(
+    ph_dur_pred: np.ndarray,
+    note_phone_counts: List[int],
+    note_target_frames: List[int],
+) -> List[int]:
+    """Stage 1 の `ph_dur_pred`（先頭の lead SP を含む）をノート単位で
+    `note_target_frames` に合わせて再スケールし、フレーム整数列にする。
+
+    `run_pipeline` の Stage 1 内にインラインで書かれていた算術をそのまま
+    関数として括り出したもの（挙動不変。run 8 の校正レンダで override を
+    差し込む口を作るための抽出であって、丸め方・残差の寄せ先は 1 文字も
+    変えていない — `tests/test_s7_calib_render.py` の golden ベクタと、
+    `gate_sakura_n4.wav` の sha256 一致で拘束する）。
+    """
+    final_phone_dur: List[int] = []
+    offset = 1
+    for count, target in zip(note_phone_counts, note_target_frames):
+        pred_slice = ph_dur_pred[offset: offset + count]
+        pred_sum = float(pred_slice.sum())
+        if pred_sum <= 0:
+            rescaled = [target / count] * count
+        else:
+            ratio = target / pred_sum
+            rescaled = [float(x) * ratio for x in pred_slice]
+        rounded = [int(round(x)) for x in rescaled]
+        resid = target - sum(rounded)
+        rounded[-1] += resid
+        final_phone_dur.extend(rounded)
+        offset += count
+    return final_phone_dur
+
+
 def fit_duration_sum(durations: List[int], total: int) -> List[int]:
     result = list(durations)
     delta = total - sum(result)
@@ -1062,6 +1094,7 @@ def run_pipeline(
     record: dict,
     speaker_name: Optional[str] = None,
     speaker_embed_vector: Optional[np.ndarray] = None,
+    final_phone_dur_override: Optional[Callable[[List[int], dict], List[int]]] = None,
 ) -> np.ndarray:
     """`model_bytes` は `load_model_bundle_bytes` が 1 回だけ read したモデル束
     + dsconfig.yaml のバッファ（`canon_linguistic_onnx`/`canon_variance_dur_onnx`/
@@ -1078,6 +1111,17 @@ def run_pipeline(
     そのまま `InferenceSession`/`yaml.safe_load` へ渡すことで、hash と
     load が同一バッファ由来であることを構造的に保証する
     （`_read_and_exec_module` と同型パターン）。
+
+    `final_phone_dur_override`（run 8 追加・**既定 None**）は Stage 1 が
+    予測した音素フレーム配分を差し替えるフックで、run 8 B-1 の「校正専用
+    real-render セット」が事前登録した `rr_long_tail_*`（終端フレームの
+    延長）/ `rr_dur_perturb_*`（終端 /ri/ の r:i 配分固定）を、譜面では
+    命令できない粒度で実現するためだけに使う。None のとき本関数は
+    run5/6/7 と 1 命令も変わらない（`assert sum(final_phone_dur) ==
+    sum(note_target_frames)` も含めて同一経路）。override 使用時のみ
+    総和がノート命令と一致しなくなり得るため、その assert に代えて
+    「音素数一致・全フレーム 1 以上」を検査し、予測値と適用値の双方を
+    `record` へ記帳する（どちらの命令で鳴らしたかを後から復元できる）。
     """
     ort.set_seed(SEED)
     record["seed"] = SEED
@@ -1148,23 +1192,36 @@ def run_pipeline(
     dur_names = [o.name for o in sess_dur.get_outputs()]
     ph_dur_pred1 = dur_out[dur_names.index("ph_dur_pred")][0]
 
-    final_phone_dur = []
-    offset = 1
-    for count, target in zip(note_phone_counts, note_target_frames):
-        pred_slice = ph_dur_pred1[offset: offset + count]
-        pred_sum = float(pred_slice.sum())
-        if pred_sum <= 0:
-            rescaled = [target / count] * count
-        else:
-            ratio = target / pred_sum
-            rescaled = [float(x) * ratio for x in pred_slice]
-        rounded = [int(round(x)) for x in rescaled]
-        resid = target - sum(rounded)
-        rounded[-1] += resid
-        final_phone_dur.extend(rounded)
-        offset += count
+    final_phone_dur = compute_final_phone_dur(
+        ph_dur_pred1, note_phone_counts, note_target_frames
+    )
     assert len(final_phone_dur) == n_real
-    assert sum(final_phone_dur) == sum(note_target_frames)
+    if final_phone_dur_override is None:
+        # 本番経路（run5/6/7 と同一）。命令フレーム総和はノート命令と一致する。
+        assert sum(final_phone_dur) == sum(note_target_frames)
+    else:
+        # run 8 B-1 の校正レンダ専用経路（既定 None = 本番と完全に同じ）。
+        record["stage1_final_phone_dur_predicted"] = list(final_phone_dur)
+        overridden = final_phone_dur_override(
+            list(final_phone_dur),
+            {
+                "real_phones": list(real_phones),
+                "note_phone_counts": list(note_phone_counts),
+                "note_target_frames": list(note_target_frames),
+                "frame_ms": frame_ms,
+            },
+        )
+        overridden = [int(v) for v in overridden]
+        if len(overridden) != n_real:
+            raise ValueError(
+                f"final_phone_dur_override returned {len(overridden)} frames != {n_real} phones"
+            )
+        if any(v < 1 for v in overridden):
+            raise ValueError(f"final_phone_dur_override returned non-positive frames: {overridden}")
+        final_phone_dur = overridden
+        record["stage1_final_phone_dur_override_applied"] = True
+        record["stage1_final_phone_dur"] = list(final_phone_dur)
+        record["stage1_note_target_frames"] = list(note_target_frames)
     record["stage1_elapsed_sec"] = time.time() - t0
 
     # --- Stage 2: pitch predictor (variance 系、canon 符号化) ---

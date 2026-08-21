@@ -168,10 +168,32 @@ python voice_genesis/foundry/run8/s7_ledger.py \
     gain 対・無音を 1:1 で写像できるように設計する）
 - 校正専用 label-free render であって「本番 360 セルを見る」ことではない
 
-## 7. STEP 6 — 校正レンダと B-1 再校正
+## 7. STEP 6 — 校正レンダと B-1 再校正（2026-08-21 実施済み）
+
+事前登録 pin（`d4ee992`）の**後に**生成した。所要 ≈ 60 s（11 レンダ）+ B-1 数分。
 
 ```bash
-# 事前登録 pin の後に生成 -> 校正 -> spec 再生成
+# 7-1. 校正専用 real-render セットを生成（本番 360 セルとは完全分離）
+python voice_genesis/foundry/run8/s7_calib_render.py \
+  --canon-model-dir  $S7/extracted/ds/NamineRitsu_DiffSinger \
+  --vocoder-dir      $S7/materials/vocoder_onnx \
+  --acoustic-onnx    $S7/out/onnx_export/s6_run7_acoustic.onnx \
+  --acoustic-dsconfig $S7/out/onnx_export/dsconfig.yaml \
+  --acoustic-phonemes-json $S7/out/onnx_export/s6_run7_acoustic.phonemes.json \
+  --canon-phonemes-txt $S7/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt \
+  --speaker ritsu --speaker-emb $S7/out/onnx_export/s6_run7_acoustic.ritsu.emb \
+  --ckpt $S7/materials/model_ckpt_steps_40000.ckpt \
+  --canon-zip $S7/materials/NamineRitsu_DiffSinger.zip \
+  --vocoder-container $S7/materials/nsf_hifigan.oudep \
+  --out-dir $S7/out/b1_real_render \
+  --manifest-out $S7/out/b1_real_render/s7_b1_real_render_manifest.json
+
+# 7-2. 実レンダ校正で B-1 を回す（合成 spec は上書きしない）
+python voice_genesis/foundry/run8/s7_b1_calibration.py \
+  --real-render $S7/out/b1_real_render/s7_b1_real_render_manifest.json \
+  --out $S7/out/b1_real_render/trf_measurement_spec_realrender.json
+
+# 7-3. 合成校正の spec（比較用）を再生成する場合
 python voice_genesis/foundry/run8/s7_b1_calibration.py \
   --out voice_genesis/foundry/results_s7/trf_measurement_spec.json
 ```
@@ -179,6 +201,9 @@ python voice_genesis/foundry/run8/s7_b1_calibration.py \
 - `verify_analysis_stack()` が `ANALYSIS_STACK_PIN` を fail-closed で照合する
 - 独立プロセス反復（`cross_process_reproducibility`）は必須。スキップすると
   どの軸も frozen にならない
+- 容器 pin（ckpt / canon zip / vocoder 容器）は**レンダ前**に照合する（不一致なら回さない）
+- 結果 = **0/4 軸 frozen・`1.0-rc2` / `blocked`**。原因と裁定要求は
+  [`s7_b1_real_render_record.md`](s7_b1_real_render_record.md)
 
 ## 8. STEP 7 — `measurement spec 1.0` の凍結条件
 

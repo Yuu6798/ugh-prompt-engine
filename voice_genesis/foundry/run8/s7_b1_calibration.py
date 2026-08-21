@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.metadata
+import io
 import json
 import math
 import os
@@ -250,6 +251,128 @@ def build_calibration_set(prereg: Prereg) -> Dict[str, Stimulus]:
     return out
 
 
+# --- 校正音源（合成 / 実レンダ）の切り替え ---------------------------------
+
+
+@dataclass(frozen=True)
+class CalibrationSource:
+    """B-1 が測る校正音源 1 式。合成刺激と実レンダ校正を同じ形で扱う。
+
+    `roles` は事前登録側（合成 = `roles` / 実レンダ = `real_render_set.roles`）
+    をそのまま使う。役割の割り当てを測定側で作り替えない（作り替えると
+    「事前登録どおりに測った」と言えなくなる）。
+    """
+
+    name: str
+    stimuli: Dict[str, Stimulus]
+    roles: Dict[str, Any]
+    boundaries: Dict[str, float]
+    sample_rate_hz: int
+    worked_example_stim: str
+    extra_pins: Dict[str, str]
+    manifest_path: Optional[str] = None
+
+
+def synthetic_source(prereg: Prereg) -> CalibrationSource:
+    cal = prereg.calibration_set
+    common = cal["common"]
+    return CalibrationSource(
+        name="synthetic_v1",
+        stimuli=build_calibration_set(prereg),
+        roles=cal["roles"],
+        boundaries={
+            "note_onset_s": float(common["note_onset_s"]),
+            "commanded_note_end_s": float(common["commanded_note_end_s"]),
+            "score_boundary_s": float(common["score_boundary_s"]),
+            "tail_window_ms": float(common["tail_window_ms"]),
+        },
+        sample_rate_hz=int(cal["sample_rate_hz"]),
+        worked_example_stim="long_tail_080",
+        extra_pins={},
+    )
+
+
+class RealRenderManifestError(RuntimeError):
+    """実レンダ manifest が事前登録／実ファイルと食い違った（fail-closed）。"""
+
+
+def real_render_source(prereg: Prereg, manifest_path: Path) -> CalibrationSource:
+    """`s7_calib_render.py` が書いた manifest から実レンダ校正音源を読む。
+
+    照合は 3 段:「manifest が指す事前登録 sha == いま読んだ事前登録 sha」
+    「manifest の条件集合 == 事前登録 `real_render_set` の条件集合」
+    「各 WAV の sha256 == manifest の記録」。1 つでも外れたら測らない。
+    """
+    import soundfile as sf
+
+    manifest, manifest_sha, _ = s7_io.read_json_with_pin(manifest_path)
+    if manifest.get("schema") != sp.REAL_RENDER_MANIFEST_SCHEMA:
+        raise RealRenderManifestError(
+            f"schema {manifest.get('schema')!r} != {sp.REAL_RENDER_MANIFEST_SCHEMA!r}"
+        )
+    prereg_sha = prereg.pins[CALIBRATION_SET_PATH.name]
+    if str(manifest["prereg"]["sha256"]) != prereg_sha:
+        raise RealRenderManifestError(
+            "manifest がレンダ時に見た事前登録 "
+            f"{manifest['prereg']['sha256']} と現在の {prereg_sha} が違う"
+        )
+    rrs = prereg.calibration_set["real_render_set"]
+    expected_ids = [str(c["id"]) for c in rrs["conditions"]]
+    got_ids = [str(c["condition_id"]) for c in manifest["conditions"]]
+    if sorted(expected_ids) != sorted(got_ids):
+        raise RealRenderManifestError(
+            f"条件集合が事前登録と違う: {sorted(got_ids)} != {sorted(expected_ids)}"
+        )
+
+    out_dir = Path(str(manifest["out_dir"]))
+    stimuli: Dict[str, Stimulus] = {}
+    sample_rates = set()
+    for entry in manifest["conditions"]:
+        cid = str(entry["condition_id"])
+        wav_path = out_dir / str(entry["wav"])
+        raw, wav_sha, _ = s7_io.read_bytes_with_pin(wav_path)
+        if wav_sha != str(entry["wav_sha256"]):
+            raise RealRenderManifestError(f"{cid}: {wav_path} sha256 {wav_sha} != manifest 記録")
+        y, sr = sf.read(io.BytesIO(raw), dtype="float64", always_2d=False)
+        sample_rates.add(int(sr))
+        stimuli[cid] = Stimulus(
+            stim_id=cid,
+            family=str(entry["maps_to"]),
+            samples=np.asarray(y, dtype=np.float64),
+            sr=int(sr),
+            note_onset_s=float(entry["note_onset_s"]),
+            commanded_note_end_s=float(entry["commanded_note_end_s"]),
+            score_boundary_s=float(entry["score_boundary_s"]),
+            tail_window_ms=float(entry["tail_window_ms"]),
+        )
+    if len(sample_rates) != 1:
+        raise RealRenderManifestError(f"標本化周波数が混在している: {sorted(sample_rates)}")
+
+    ref = manifest["conditions"][0]
+    return CalibrationSource(
+        name="real_render_v1",
+        stimuli=stimuli,
+        roles=rrs["roles"],
+        boundaries={
+            "note_onset_s": float(ref["note_onset_s"]),
+            "commanded_note_end_s": float(ref["commanded_note_end_s"]),
+            "score_boundary_s": float(ref["score_boundary_s"]),
+            "tail_window_ms": float(ref["tail_window_ms"]),
+            "note": "レンダ命令から算出（波形から推定していない）。全条件で同一。",
+        },
+        sample_rate_hz=int(next(iter(sample_rates))),
+        worked_example_stim="rr_long_tail_080",
+        extra_pins={"s7_b1_real_render_manifest.json": manifest_sha},
+        manifest_path=str(manifest_path.resolve()),
+    )
+
+
+def build_source(prereg: Prereg, real_render_manifest: Optional[Path]) -> CalibrationSource:
+    if real_render_manifest is None:
+        return synthetic_source(prereg)
+    return real_render_source(prereg, Path(real_render_manifest))
+
+
 # --- voicing 実装（候補 A / B） --------------------------------------------
 
 
@@ -459,11 +582,13 @@ def run_measurements(
     stimuli: Dict[str, Stimulus],
     candidates: Sequence[Candidate],
     cross_process: bool = True,
+    roles: Optional[Dict[str, Any]] = None,
+    real_render_manifest: Optional[str] = None,
 ) -> Dict[str, Any]:
     """全候補 × 全刺激 + 反復（同一プロセス / 独立プロセス）を測る。"""
-    cal = prereg.calibration_set
-    repeat_ids = list(cal["roles"]["reproducibility"])
-    cross_ids = list(cal["roles"]["cross_process_reproducibility"])
+    roles = prereg.calibration_set["roles"] if roles is None else roles
+    repeat_ids = list(roles["reproducibility"])
+    cross_ids = list(roles["cross_process_reproducibility"])
 
     table: Dict[str, Any] = {}
     for cand in candidates:
@@ -475,7 +600,9 @@ def run_measurements(
         for stim_id in repeat_ids:
             repeat[stim_id] = measure_candidate(cand, stimuli[stim_id])
         if cross_process:
-            cross = _measure_in_subprocess(cand.candidate_id, cross_ids)
+            cross = _measure_in_subprocess(
+                cand.candidate_id, cross_ids, real_render_manifest=real_render_manifest
+            )
         table[cand.candidate_id] = {
             "candidate": cand,
             "first": first,
@@ -486,7 +613,9 @@ def run_measurements(
 
 
 def _measure_in_subprocess(
-    candidate_id: str, stim_ids: Sequence[str]
+    candidate_id: str,
+    stim_ids: Sequence[str],
+    real_render_manifest: Optional[str] = None,
 ) -> Dict[str, Dict[str, float]]:
     """独立 OS プロセスで同じ測定を再計算する（§12-0-A-3 の 5 番目の要件）。
 
@@ -496,14 +625,17 @@ def _measure_in_subprocess(
     """
     env = dict(os.environ)
     env["PYTHONHASHSEED"] = "0"
+    argv = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--probe",
+        candidate_id,
+        ",".join(stim_ids),
+    ]
+    if real_render_manifest is not None:
+        argv += ["--real-render", str(real_render_manifest)]
     proc = subprocess.run(
-        [
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--probe",
-            candidate_id,
-            ",".join(stim_ids),
-        ],
+        argv,
         capture_output=True,
         text=True,
         env=env,
@@ -534,11 +666,12 @@ def _tolerances(rule: Dict[str, Any], axis: str, cand: Candidate) -> Dict[str, f
 
 
 def evaluate_axis_candidate(
-    axis: str, entry: Dict[str, Any], prereg: Prereg
+    axis: str, entry: Dict[str, Any], prereg: Prereg, roles: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """1 軸 × 1 候補について 6 つの hard requirement を評価する。"""
     cand: Candidate = entry["candidate"]
     cal = prereg.calibration_set
+    roles = cal["roles"] if roles is None else roles
     rule = prereg.selection_rule
     tol = _tolerances(rule, axis, cand)
 
@@ -551,11 +684,11 @@ def evaluate_axis_candidate(
     cross_err = max((abs(first[k] - cross[k]) for k in cross), default=0.0)
     repro_bound = max(repro_err, cross_err)
 
-    gain_pairs = cal["roles"]["gain_invariance"]
+    gain_pairs = roles["gain_invariance"]
     gain_err = max(abs(first[a] - first[b]) for a, b in gain_pairs)
-    silence_res = abs(first[str(cal["roles"]["silence_zero"][0])])
+    silence_res = abs(first[str(roles["silence_zero"][0])])
 
-    ladder = list(cal["roles"]["monotone_ladder"]["order"])
+    ladder = list(roles["monotone_ladder"]["order"])
     values = [first[s] for s in ladder]
     steps = [values[i + 1] - values[i] for i in range(len(values) - 1)]
     span = values[-1] - values[0]
@@ -618,10 +751,12 @@ def rank_key(record: Dict[str, Any]) -> Tuple[float, float, float, float, float,
     )
 
 
-def select_for_axis(axis: str, table: Dict[str, Any], prereg: Prereg) -> Dict[str, Any]:
+def select_for_axis(
+    axis: str, table: Dict[str, Any], prereg: Prereg, roles: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     kind = sp.AXIS_CANDIDATE_KIND[axis]
     records = [
-        evaluate_axis_candidate(axis, entry, prereg)
+        evaluate_axis_candidate(axis, entry, prereg, roles=roles)
         for entry in table.values()
         if entry["candidate"].kind == kind
     ]
@@ -650,13 +785,22 @@ def select_for_axis(axis: str, table: Dict[str, Any], prereg: Prereg) -> Dict[st
 # --- ε 導出（B-2 への入力・§12-0-C） --------------------------------------
 
 
-def epsilon_for_axis(axis: str, selection: Dict[str, Any], prereg: Prereg) -> Dict[str, Any]:
+def epsilon_for_axis(
+    axis: str,
+    selection: Dict[str, Any],
+    prereg: Prereg,
+    source: Optional[CalibrationSource] = None,
+) -> Dict[str, Any]:
     """ε = max(numerical_floor, reproducibility_bound)。本番ラベルは一切見ない。"""
     if selection["status"] != sp.AxisStatus.FROZEN.value:
         return {"axis": axis, "epsilon": None, "reason": "axis_unavailable"}
     rec = selection["selected_record"]
-    tail_window_ms = float(prereg.calibration_set["common"]["tail_window_ms"])
-    sr = int(prereg.calibration_set["sample_rate_hz"])
+    if source is None:
+        tail_window_ms = float(prereg.calibration_set["common"]["tail_window_ms"])
+        sr = int(prereg.calibration_set["sample_rate_hz"])
+    else:
+        tail_window_ms = float(source.boundaries["tail_window_ms"])
+        sr = int(source.sample_rate_hz)
     if sp.AXIS_KIND[axis] == "ms":
         floor = float(rec["hop_ms"])
         floor_note = "選定候補の hop 長（フレーム格子の量子化幅）"
@@ -708,6 +852,46 @@ AXIS_FORMULAS: Dict[str, Dict[str, str]] = {
 }
 
 
+def _freeze_state(source: CalibrationSource, selections: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    """spec の版と凍結状態。**実レンダ校正で全 4 軸が生き残った場合のみ 1.0**。
+
+    User 裁定 2026-08-21（裁定 1 = (b)）: 合成校正だけでは 1.0 へ昇格しない。
+    実レンダで 1 軸でも落ちたら昇格させず、PR-2 は BLOCKED を維持する。
+    """
+    all_frozen = all(
+        sel["status"] == sp.AxisStatus.FROZEN.value for sel in selections.values()
+    )
+    if source.name != "real_render_v1":
+        return {
+            "spec_version": SPEC_VERSION,
+            "freeze_status": SPEC_FREEZE_STATUS,
+            "freeze_status_note": (
+                "校正音源が合成刺激のみ（vocoder 出力を 1 本も通していない）。"
+                "User 裁定 2026-08-21 = (b) により、この音源では 1.0 へ昇格しない。"
+                "昇格には校正専用 real-render セット（事前登録済み）での再校正が要る。"
+            ),
+        }
+    if all_frozen:
+        return {
+            "spec_version": "1.0",
+            "freeze_status": "frozen",
+            "freeze_status_note": (
+                "校正専用 real-render セット（同じ DiffSinger / vocoder 経路・本番 360 セル"
+                "とは完全分離）で 4 軸とも 6 要件を通過した。§12-0-D の PR-2 開始 Gate を"
+                "再確認する。"
+            ),
+        }
+    return {
+        "spec_version": "1.0-rc2",
+        "freeze_status": "blocked",
+        "freeze_status_note": (
+            "実レンダ校正で 6 要件を通過しない軸がある。事前登録 acceptance.on_failure "
+            "のとおり 1.0 へ昇格させず、PR-2 は BLOCKED を維持する（刺激の追加は"
+            "**別 amendment**でのみ検討する）。"
+        ),
+    }
+
+
 def build_spec(
     prereg: Prereg,
     selections: Dict[str, Dict[str, Any]],
@@ -715,7 +899,10 @@ def build_spec(
     stimuli: Dict[str, Stimulus],
     table: Dict[str, Any],
     analysis_stack_observed: Optional[Dict[str, str]] = None,
+    source: Optional[CalibrationSource] = None,
 ) -> Dict[str, Any]:
+    source = synthetic_source(prereg) if source is None else source
+    freeze = _freeze_state(source, selections)
     worked: Dict[str, Any] = {}
     reference_output: Dict[str, Any] = {}
     for axis, sel in selections.items():
@@ -725,8 +912,8 @@ def build_spec(
         first = table[cid]["first"]
         worked[axis] = {
             "candidate_id": cid,
-            "stimulus": "long_tail_080",
-            "value": first["long_tail_080"][axis],
+            "stimulus": source.worked_example_stim,
+            "value": first[source.worked_example_stim][axis],
             "why": "終端窓に 80 ms の有声継続を注入した刺激。手計算で追える単調ラダーの中点。",
         }
         reference_output[axis] = {
@@ -734,17 +921,22 @@ def build_spec(
         }
     return {
         "schema": sp.TRF_SPEC_SCHEMA,
-        "spec_version": SPEC_VERSION,
-        "freeze_status": SPEC_FREEZE_STATUS,
-        "freeze_status_note": (
-            "校正音源が合成刺激のみ（vocoder 出力を 1 本も通していない）である点について "
-            "User 裁定を要する。裁定で合成のみを妥当と認めれば 1.0 へ昇格し、実レンダでの "
-            "再校正を要するなら同じハーネスを Pod 側音源で回して 1.0 を作る。"
-            "PR-2 の開始 Gate（§12-0-D）はこの昇格をもって満たされる。"
-        ),
+        "spec_version": freeze["spec_version"],
+        "freeze_status": freeze["freeze_status"],
+        "freeze_status_note": freeze["freeze_status_note"],
         "authority": "DESIGN_S7_run8.md 12-0-B",
         "generated_by": "voice_genesis/foundry/run8/s7_b1_calibration.py",
-        "prereg_pins": prereg.pins,
+        "calibration_source": {
+            "name": source.name,
+            "manifest": source.manifest_path,
+            "roles": source.roles,
+            "stimulus_ids": sorted(source.stimuli),
+            "note": (
+                "実レンダ校正は本番 360 セルを 1 セルも通さない（音高 C4 / 0.75・1.5・3.0 拍 "
+                "は本番の帯と交わらない）。ラベル・P-ANCHOR 結果は入力していない。"
+            ),
+        },
+        "prereg_pins": dict(prereg.pins) | dict(source.extra_pins),
         "analysis_stack": {
             "declared": {
                 k: v
@@ -755,13 +947,8 @@ def build_spec(
             "verified": analysis_stack_observed is not None,
             "rule": "測定前に fail-closed で照合する（verify_analysis_stack）。不一致なら測らない。",
         },
-        "sample_rate_hz": int(prereg.calibration_set["sample_rate_hz"]),
-        "boundaries": {
-            "note_onset_s": float(prereg.calibration_set["common"]["note_onset_s"]),
-            "commanded_note_end_s": float(prereg.calibration_set["common"]["commanded_note_end_s"]),
-            "score_boundary_s": float(prereg.calibration_set["common"]["score_boundary_s"]),
-            "tail_window_ms": float(prereg.calibration_set["common"]["tail_window_ms"]),
-        },
+        "sample_rate_hz": int(source.sample_rate_hz),
+        "boundaries": source.boundaries,
         "measured_on": "raw pre-normalisation waveform (DESIGN_S7_run8.md 5-2)",
         "axes": {
             axis: {
@@ -818,15 +1005,37 @@ def _canonical_json(doc: Dict[str, Any]) -> str:
     return json.dumps(doc, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
-def run_b1(cross_process: bool = True) -> Dict[str, Any]:
+def run_b1(
+    cross_process: bool = True, real_render_manifest: Optional[Path] = None
+) -> Dict[str, Any]:
     prereg = load_prereg()
     observed = verify_analysis_stack(prereg)   # 測定前に fail-closed
-    stimuli = build_calibration_set(prereg)
+    source = build_source(prereg, real_render_manifest)
     candidates = enumerate_candidates(prereg)
-    table = run_measurements(prereg, stimuli, candidates, cross_process=cross_process)
-    selections = {axis: select_for_axis(axis, table, prereg) for axis in sp.PRIMARY_AXES}
-    epsilons = {axis: epsilon_for_axis(axis, selections[axis], prereg) for axis in sp.PRIMARY_AXES}
-    return build_spec(prereg, selections, epsilons, stimuli, table, analysis_stack_observed=observed)
+    table = run_measurements(
+        prereg,
+        source.stimuli,
+        candidates,
+        cross_process=cross_process,
+        roles=source.roles,
+        real_render_manifest=(None if real_render_manifest is None else str(real_render_manifest)),
+    )
+    selections = {
+        axis: select_for_axis(axis, table, prereg, roles=source.roles) for axis in sp.PRIMARY_AXES
+    }
+    epsilons = {
+        axis: epsilon_for_axis(axis, selections[axis], prereg, source=source)
+        for axis in sp.PRIMARY_AXES
+    }
+    return build_spec(
+        prereg,
+        selections,
+        epsilons,
+        source.stimuli,
+        table,
+        analysis_stack_observed=observed,
+        source=source,
+    )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -839,6 +1048,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "独立プロセス反復を回さない（開発用）。この場合 hard requirement の "
             "cross_process_reproducibility は**未検証 = 不合格**として扱われ、"
             "どの軸も frozen にならない"
+        ),
+    )
+    parser.add_argument(
+        "--real-render",
+        type=Path,
+        default=None,
+        help=(
+            "校正専用 real-render セットの manifest（`s7_calib_render.py` の出力）で"
+            "校正する。指定時のみ spec は 1.0 / frozen へ昇格し得る"
         ),
     )
     parser.add_argument(
@@ -855,25 +1073,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.probe:
         prereg = load_prereg()
         verify_analysis_stack(prereg)   # 独立プロセス側でも同じ pin を強制する
-        stimuli = build_calibration_set(prereg)
+        source = build_source(prereg, args.real_render)
         cand = next(c for c in enumerate_candidates(prereg) if c.candidate_id == args.probe[0])
         payload = {
-            stim_id: measure_candidate(cand, stimuli[stim_id])
+            stim_id: measure_candidate(cand, source.stimuli[stim_id])
             for stim_id in args.probe[1].split(",")
         }
         print(json.dumps(payload, sort_keys=True))
         return 0
 
-    reject_output_collision(
-        [args.out],
-        [CANDIDATE_SPACE_PATH, CALIBRATION_SET_PATH, SELECTION_RULE_PATH],
+    protected = [CANDIDATE_SPACE_PATH, CALIBRATION_SET_PATH, SELECTION_RULE_PATH]
+    if args.real_render is not None:
+        # 校正音源の manifest も入力である（spec の出力先に指定させない）。
+        protected.append(Path(args.real_render))
+    reject_output_collision([args.out], protected)
+    spec = run_b1(
+        cross_process=not args.no_cross_process, real_render_manifest=args.real_render
     )
-    spec = run_b1(cross_process=not args.no_cross_process)
     s7_io.assert_json_finite(spec)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(_canonical_json(spec), encoding="utf-8")
     frozen = [a for a, v in spec["axes"].items() if v["status"] == sp.AxisStatus.FROZEN.value]
-    print(f"wrote {args.out} ({len(frozen)}/{len(sp.PRIMARY_AXES)} axes frozen)")
+    print(
+        f"wrote {args.out} ({len(frozen)}/{len(sp.PRIMARY_AXES)} axes frozen) "
+        f"source={spec['calibration_source']['name']} "
+        f"version={spec['spec_version']} status={spec['freeze_status']}"
+    )
     for axis, v in spec["axes"].items():
         print(f"  {axis}: {v['status']} {v['selected_candidate']} eps={v['epsilon']}")
     return 0

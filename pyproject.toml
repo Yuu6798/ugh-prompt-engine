@@ -126,6 +126,9 @@ testpaths = [
     "voice_genesis/foundry/tests/test_s7_b1_calibration.py",
     "voice_genesis/foundry/tests/test_s7_b2_algebra.py",
     "voice_genesis/foundry/tests/test_s7_io_guards.py",
+    # run 8 STEP 6: 校正専用 real-render セットの譜面/命令/manifest 照合。
+    # import 閉包は numpy + soundfile（どちらも本体の必須依存）。
+    "voice_genesis/foundry/tests/test_s7_calib_score.py",
 ]
 pythonpath = ["src", "."]
 markers = [
