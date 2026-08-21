@@ -1,24 +1,39 @@
-"""genome_s4/s4b_confirm.py — S4b Perceptual Coexpression Confirmation（User 指示 2026-08-21）。
+"""genome_s4/s4b_confirm.py — S4b Salience-Controlled Coexpression Gate。
+
+（User 指示 2026-08-21 / 設計者と相談のうえ改訂）
 
 目的は 1 つだけ。
 
-> 複合発現時に F0 / Duration の差が **別 pair でも**耳へ残るかを確認する。
+> F0 + Duration 複合発現時にも、**各 gene が十分強く発現した条件なら**
+> 人間に知覚可能かを確認する。
 
-**S4 本体の結果は変更しない。** 出力は `results/s4b/` に隔離し、
-`s4_results.json` / `S4_RECORD.md` / freeze 判定には一切触れない。
+**S4 本体の結果（NOT_ESTABLISHED）は変更しない。** 出力は `results/s4b/` に隔離し、
+`s4_results.json` / `S4_RECORD.md` / `key_reveal.json` / freeze 判定には触れない。
+
+pair 選択は **耳では選ばない**。S3 / S4 の既存機械値だけを使って事前選択する。
+
+    F0 / Duration 共通:
+      1. S3 で当該 gene が SUPPORTED
+      2. S4 で COMBINABLE
+      3. identity_margin_db(FD) > 0
+      4. 当該 gene の intervention amount が最大
+
+    可能なら **別 context** でもう 1 pair（= gene あたり最大 2 pair）。
+
+聴取:
+
+    D vs FD -> F0 追加を識別できるか
+    F vs FD -> Duration 追加を識別できるか
+
+最大 4 問。
 
 制約:
 
 - 使用音源は **S4 canonical WAV のみ**。再生成・補正・normalize は行わない
-  （コピー前後で `s4_results.json` が記録した `wav_sha256` と突き合わせる）
-- 対象 context は `terminal_i` / `terminal_ri`
-- pair は S4 耳判定で**使わなかった** SUPPORTED(=COMBINABLE) pair を各 context から
-  決定論的に 1 件
-- 4 問（context 2 × gene 2）。blind 規律は S4 §14 と同じ commitment 方式
+- blind 規律は S4 §14 と同じ commitment 方式
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -37,12 +52,13 @@ from s4_runner import S4Stop  # noqa: E402
 SCHEMA = "voicegenesis-genome-s4b/1.0"
 ANSWERS_SCHEMA = "voicegenesis-s4b-answers/1.0"
 
-#: pair 選択ハッシュの領域分離プレフィクス。S4 本体（`voicegenesis-s4-ear-v1`）と
-#: 分けることで、同じ正本でも S4b は別の順序で選ぶ（同じ pair を引き当てない）。
-SELECTION_DOMAIN = "voicegenesis-s4b-ear-v1"
+#: 選択規則の識別子。S4b は hash ではなく **機械値（intervention amount）順**で
+#: 選ぶ。耳・音質・聞きやすさ・S4 での使用有無は入力に含めない。
+SELECTION_RULE = "s4b-salience-v1: S3 SUPPORTED & S4 COMBINABLE & identity_margin>0 " \
+                 "のうち intervention amount 最大（同値は pair_key 昇順）"
 
 S4_RESULTS = _HERE / "results" / "s4_results.json"
-S4_KEY_REVEAL = _HERE / "results" / "key_reveal.json"
+S3_RESULTS = _HERE.parent / "genome_s3" / "results" / "s3_results.json"
 S4_WAV_DIR = _HERE / "results" / "wav"
 
 RESULTS = _HERE / "results" / "s4b"
@@ -54,20 +70,15 @@ ANSWERS = RESULTS / "answers.json"
 JSON_PATH = RESULTS / "s4b_results.json"
 RECORD_PATH = RESULTS / "S4B_RECORD.md"
 
-#: User 指示の 4 問。(gene, 背景条件, 複合条件)。差は対象 gene の追加だけ。
-QUESTIONS: Tuple[Tuple[str, str, str], ...] = (
-    ("f0", "D", "FD"),          # D vs FD -> F0 追加を識別できるか
-    ("duration", "F", "FD"),    # F vs FD -> Duration 追加を識別できるか
-)
-CONTEXTS: Tuple[str, ...] = ("terminal_i", "terminal_ri")
-TOTAL = len(CONTEXTS) * len(QUESTIONS)
-
-
-def selection_hash(s3_sha: str, s35_sha: str, context_id: str, pair_key: str) -> str:
-    h = hashlib.sha256()
-    h.update((SELECTION_DOMAIN + s3_sha + s35_sha + context_id + pair_key)
-             .encode("utf-8"))
-    return h.hexdigest()
+#: gene -> (背景条件, 複合条件)。差は対象 gene の追加だけ。
+GENE_CONTRAST: Dict[str, Tuple[str, str]] = {
+    "f0": ("D", "FD"),          # D vs FD -> F0 追加を識別できるか
+    "duration": ("F", "FD"),    # F vs FD -> Duration 追加を識別できるか
+}
+#: gene あたり最大 2 pair（最大 salience + 別 context の最大 salience）。
+MAX_PAIRS_PER_GENE = 2
+#: 上限問数。
+MAX_TRIALS = len(GENE_CONTRAST) * MAX_PAIRS_PER_GENE
 
 
 def _load(path: Path, what: str) -> Dict[str, Any]:
@@ -79,59 +90,109 @@ def _load(path: Path, what: str) -> Dict[str, Any]:
 
 
 def load_inputs() -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """S4 正本と S4 の key_reveal（= 耳判定で使った pair）を読む。"""
+    """S4 正本と S3 正本を読む。**耳判定の結果（key_reveal）は選択に使わない。**"""  # noqa: E501
     s4 = _load(S4_RESULTS, "S4 正本 s4_results.json")
     if (s4.get("mechanistic") or {}).get("verdict") != "PASS":
         raise S4Stop(
             cause=f"S4 の機械 Gate が {(s4.get('mechanistic') or {}).get('verdict')!r}",
             impact="canonical WAV が機械 Gate を通っていない条件で耳判定を足すことになる",
             minimal_fix="S4 の Phase A を完了させる")
-    reveal = _load(S4_KEY_REVEAL, "S4 key_reveal.json")
-    return s4, reveal
+    s3 = _load(S3_RESULTS, "S3 正本 s3_results.json")
+    return s4, s3
 
 
-def select_pairs(s4: Dict[str, Any], reveal: Dict[str, Any]) -> Dict[str, str]:
-    """各 context から **S4 で使わなかった** COMBINABLE pair を決定論的に 1 件選ぶ。"""
-    used = set((reveal.get("selected_pairs") or {}).values())
-    s3_sha = str(s4["s3_results_sha256"])
-    s35_sha = str(s4["s35_results_sha256"])
-    out: Dict[str, str] = {}
-    for ctx in CONTEXTS:
-        cands = [pk for pk, r in (s4["mechanistic"]["pairs"]).items()
-                 if r.get("context_id") == ctx
-                 and r.get("verdict") == sp.PairVerdict.COMBINABLE.value
-                 and pk not in used]
-        if not cands:
-            raise S4Stop(
-                cause=f"{ctx}: S4 耳判定で未使用の COMBINABLE pair が無い",
-                impact="別 pair での確認という S4b の目的が成立しない",
-                minimal_fix="対象 context を勝手に差し替えず User 裁定へ戻す")
-        out[ctx] = min(cands, key=lambda pk: selection_hash(s3_sha, s35_sha, ctx, pk))
+def qualify(s4: Dict[str, Any], s3: Dict[str, Any], gene: str) -> List[Dict[str, Any]]:
+    """基準 1〜3 を満たす pair を集め、基準 4 用の機械値を添える。
+
+    1. S3 で当該 gene が SUPPORTED
+    2. S4 で COMBINABLE
+    3. identity_margin_db(FD) > 0
+
+    **耳・音質・聞きやすさ・S4 での使用有無は入力に含めない。**
+    """
+    s3_pairs = ((s3.get("genes") or {}).get(gene) or {}).get("pairs") or {}
+    if not s3_pairs:
+        raise S4Stop(cause=f"S3 正本に {gene} の pairs が無い",
+                     impact="基準 1 を検査できず、事前選択が成立しない",
+                     minimal_fix="s3_results.json を確認する")
+    out: List[Dict[str, Any]] = []
+    for pk, r in (s4["mechanistic"]["pairs"]).items():
+        if r.get("verdict") != sp.PairVerdict.COMBINABLE.value:
+            continue                                     # 基準 2
+        if (s3_pairs.get(pk) or {}).get("verdict") != sp.S3_SUPPORTED:
+            continue                                     # 基準 1
+        margin = ((r.get("combination") or {}).get("identity") or {}).get("fd_value")
+        if margin is None or float(margin) <= 0.0:
+            continue                                     # 基準 3
+        info = ((r.get("intervention") or {}).get("genes") or {}).get(gene) or {}
+        amount = info.get("amount")
+        if amount is None or not info.get("nonzero", False):
+            continue                       # 介入量ゼロは salience を語れない
+        out.append({"pair_key": pk, "context_id": r["context_id"],
+                    "identity_margin_db": float(margin),
+                    "intervention_amount": float(amount),
+                    "intervention_unit": info.get("unit")})
     return out
 
 
-def build_trials(selected: Dict[str, str], salt: bytes) -> List[Dict[str, Any]]:
+def select_by_salience(qualified: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """基準 4: intervention amount 最大。可能なら **別 context** でもう 1 pair。
+
+    同値は `pair_key` 昇順で割る（走行ごとに揺れない）。
+    """
+    if not qualified:
+        return []
+    ordered = sorted(qualified, key=lambda c: (-c["intervention_amount"], c["pair_key"]))
+    picked = [dict(ordered[0], rank="max_salience")]
+    other = next((c for c in ordered[1:]
+                  if c["context_id"] != picked[0]["context_id"]), None)
+    if other is not None:
+        picked.append(dict(other, rank="max_salience_other_context"))
+    return picked[:MAX_PAIRS_PER_GENE]
+
+
+def plan(s4: Dict[str, Any], s3: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """gene ごとに事前選択し、聴取セル（gene × pair）を組む。"""
+    cells: List[Dict[str, Any]] = []
+    for gene in GENE_CONTRAST:
+        chosen = select_by_salience(qualify(s4, s3, gene))
+        if not chosen:
+            raise S4Stop(
+                cause=f"{gene}: 基準 1〜3 を満たす pair が無い",
+                impact="salience 制御下の確認という S4b の目的が成立しない",
+                minimal_fix="基準を緩めず User 裁定へ戻す")
+        for c in chosen:
+            cells.append(dict(c, gene=gene))
+    if len(cells) > MAX_TRIALS:
+        raise S4Stop(cause=f"聴取セルが {len(cells)}（上限 {MAX_TRIALS}）",
+                     impact="事前に決めた上限問数を超える",
+                     minimal_fix="上限を変えない。原因を User 裁定へ戻す")
+    return cells
+
+
+def build_trials(cells: Sequence[Dict[str, Any]], salt: bytes) -> List[Dict[str, Any]]:
+    """セルから ABX trial を作る。gene / context を跨いで決定論シャッフルする。"""
     trials: List[Dict[str, Any]] = []
-    for ctx in CONTEXTS:
-        pair_key = selected[ctx]
-        for gene, background, combined in QUESTIONS:
-            uid = f"s4b|{gene}|{ctx}|{pair_key}"
-            a_is_bg = sb._bit(salt, "ab|" + uid) == 0
-            x_is_bg = sb._bit(salt, "x|" + uid) == 0
-            a_cond = background if a_is_bg else combined
-            b_cond = combined if a_is_bg else background
-            x_cond = background if x_is_bg else combined
-            trials.append({"kind": "ABX", "gene": gene, "context_id": ctx,
-                           "pair_key": pair_key, "a_condition": a_cond,
-                           "b_condition": b_cond, "x_condition": x_cond,
-                           "correct": "A" if a_cond == x_cond else "B", "_uid": uid})
+    for c in cells:
+        gene = c["gene"]
+        background, combined = GENE_CONTRAST[gene]
+        uid = f"s4b|{gene}|{c['context_id']}|{c['pair_key']}"
+        a_is_bg = sb._bit(salt, "ab|" + uid) == 0
+        x_is_bg = sb._bit(salt, "x|" + uid) == 0
+        a_cond = background if a_is_bg else combined
+        b_cond = combined if a_is_bg else background
+        x_cond = background if x_is_bg else combined
+        trials.append({"kind": "ABX", "gene": gene, "context_id": c["context_id"],
+                       "pair_key": c["pair_key"], "rank": c["rank"],
+                       "intervention_amount": c["intervention_amount"],
+                       "intervention_unit": c["intervention_unit"],
+                       "identity_margin_db": c["identity_margin_db"],
+                       "a_condition": a_cond, "b_condition": b_cond,
+                       "x_condition": x_cond,
+                       "correct": "A" if a_cond == x_cond else "B", "_uid": uid})
     trials.sort(key=lambda t: sb._order_key(salt, t["_uid"]))
     for i, t in enumerate(trials, start=1):
         t["trial_id"] = f"Q{i:03d}"
-    if len(trials) != TOTAL:
-        raise S4Stop(cause=f"S4b の問数が {len(trials)}（要求 {TOTAL}）",
-                     impact="事前に決めた問数と違う pack は確認に使えない",
-                     minimal_fix="問数を変えない。原因を User 裁定へ戻す")
     return trials
 
 
@@ -139,9 +200,7 @@ def build_trials(selected: Dict[str, str], salt: bytes) -> List[Dict[str, Any]]:
 #: （`ConditionOutput.wav_sha256` は runner の中間表現に留まり、§21 の出力
 #: スキーマへ載らない）。したがって S4b は「S4 が pin した digest との突き合わせ」
 #: を行えない。ここで採るのは **S4b が実際に読んだ bytes の self-pin** であり、
-#: S4 側の pin との cross-check ではない。偽の検証を作らずに範囲を明示する。
-#: S4 の記録を後付けで書き換えるのは「S4 本体の結果は変更しない」に反するため
-#: 行わない（次回 S4 走行で `wav_sha256` を §21 へ載せるのが本来の是正）。
+#: S4 側 pin との cross-check ではない。偽の検証を作らずに範囲を明示する。
 WAV_PIN_NOTE = ("s4_results.json は per-file の wav_sha256 を記録していないため、"
                 "S4b が記録するのは実際に読んだ bytes の self-pin であり、"
                 "S4 側 pin との cross-check ではない")
@@ -185,10 +244,10 @@ def clip_names(trial: Dict[str, Any]) -> List[Tuple[str, str]]:
 
 
 def prepare() -> int:
-    s4, reveal = load_inputs()
-    selected = select_pairs(s4, reveal)
+    s4, s3 = load_inputs()
+    cells = plan(s4, s3)
     salt = os.urandom(32)
-    trials = build_trials(selected, salt)
+    trials = build_trials(cells, salt)
     resolved = canonical_sources(s4, trials)
     source_pins = {f"{pk}|{cond}": sha for (pk, cond), (_p, sha) in sorted(resolved.items())}
 
@@ -197,7 +256,8 @@ def prepare() -> int:
     key = {"schema": SCHEMA, "s3_results_sha256": s4["s3_results_sha256"],
            "s35_results_sha256": s4["s35_results_sha256"],
            "source_wav_sha256": source_pins, "source_wav_pin_note": WAV_PIN_NOTE,
-           "salt_hex": salt.hex(), "selected_pairs": dict(sorted(selected.items())),
+           "selection_rule": SELECTION_RULE, "salt_hex": salt.hex(),
+           "cells": cells,
            "trials": {t["trial_id"]: {k: t[k] for k in sorted(t) if k != "_uid"}
                       for t in trials}}
     key_raw = sb.canonical_bytes(key)
@@ -216,7 +276,7 @@ def prepare() -> int:
                (ANSWERS.with_name("answers.template.json"),
                 srep._dumps(template).encode("utf-8"))],
         dir_swaps=[(staging, AUDIO_DIR)], secret=[PRIVATE_KEY])
-    print(f"S4b pack ready: {TOTAL} 問 / {AUDIO_DIR}")
+    print(f"S4b pack ready: {len(trials)} 問 / {AUDIO_DIR}")
     for t in trials:
         print(f"  {t['trial_id']}  (blind)")
     return 0
@@ -262,16 +322,23 @@ def score() -> int:
     sb.verify_answer_binding(answers_doc, manifest)
     scored = sb.score(trials, answers)
 
+    by_id = {t["trial_id"]: t for t in trials}
     per_cell = [{"trial_id": r["trial_id"], "gene": r["gene"],
                  "context_id": r["context_id"], "answer": r["answer"],
-                 "correct": r["correct"]} for r in scored["abx"]]
+                 "correct": r["correct"],
+                 "pair_key": by_id[r["trial_id"]]["pair_key"],
+                 "rank": by_id[r["trial_id"]]["rank"],
+                 "intervention_amount": by_id[r["trial_id"]]["intervention_amount"],
+                 "intervention_unit": by_id[r["trial_id"]]["intervention_unit"]}
+                for r in scored["abx"]]
     correct = scored["abx_correct"]
     res = {
         "schema": SCHEMA,
         "purpose": "複合発現時に F0 / Duration の差が別 pair でも耳へ残るかの確認。"
                    "S4 本体の結果は変更しない。",
         "s4_results_sha256": manifest["s4_results_sha256"],
-        "selected_pairs": key["selected_pairs"],
+        "selection_rule": key["selection_rule"],
+        "selection": key["cells"],
         "audio_source": "S4 canonical WAV の byte copy（再生成・補正・normalize なし）",
         "source_wav_sha256": key.get("source_wav_sha256", {}),
         "source_wav_pin_note": WAV_PIN_NOTE,
@@ -280,7 +347,8 @@ def score() -> int:
         "by_gene": {g: sum(1 for r in per_cell if r["gene"] == g and r["correct"])
                     for g in ("f0", "duration")},
         "by_context": {c: sum(1 for r in per_cell if r["context_id"] == c
-                              and r["correct"]) for c in CONTEXTS},
+                              and r["correct"])
+                       for c in sorted({r["context_id"] for r in per_cell})},
         "answers_sha256": answers_sha,
         "key_commitment": manifest["key_commitment"],
         "commitment_verified": True, "pack_audio_verified": True,
@@ -290,8 +358,8 @@ def score() -> int:
         "s4_overall_unchanged": True,
     }
     reveal = {"schema": SCHEMA, "answers_sha256": answers_sha,
-              "salt_hex": key["salt_hex"], "selected_pairs": key["selected_pairs"],
-              "trials": key["trials"], "scored": scored}
+              "salt_hex": key["salt_hex"], "selection_rule": key["selection_rule"],
+              "cells": key["cells"], "trials": key["trials"], "scored": scored}
     srep.publish(files=[(JSON_PATH, srep._dumps(res).encode("utf-8")),
                         (RECORD_PATH, render(res, key).encode("utf-8")),
                         (KEY_REVEAL, srep._dumps(reveal).encode("utf-8"))])
@@ -323,13 +391,21 @@ def render(res: Dict[str, Any], key: Dict[str, Any]) -> str:
             f"| {t['a_condition']} vs {t['b_condition']} | {t['correct']} "
             f"| {r['answer']} | {'OK' if r['correct'] else 'MISS'} |")
     lines += ["",
-              f"- gene 別正解: f0 {res['by_gene']['f0']}/2 / "
-              f"duration {res['by_gene']['duration']}/2",
+              "- gene 別正解: "
+              + " / ".join(f"{g} {res['by_gene'][g]}" for g in sorted(res["by_gene"])),
               "- context 別正解: "
-              + " / ".join(f"{c} {res['by_context'][c]}/2" for c in CONTEXTS), "",
-              "## 対象 pair（S4 耳判定で未使用）", ""]
-    for ctx, pk in sorted(res["selected_pairs"].items()):
-        lines.append(f"- `{ctx}`: `{pk.replace('|', chr(92) + '|')}`")
+              + " / ".join(f"{c} {res['by_context'][c]}"
+                           for c in sorted(res["by_context"])), "",
+              "## 事前選択（耳では選ばない）", "",
+              f"選択規則: `{res['selection_rule']}`", "",
+              "| gene | rank | context | pair | intervention | identity margin |",
+              "|---|---|---|---|---|---|"]
+    for c in res["selection"]:
+        lines.append(
+            f"| {c['gene']} | {c['rank']} | {c['context_id']} "
+            f"| `{c['pair_key'].replace('|', chr(92) + '|')}` "
+            f"| {c['intervention_amount']:.3f} {c['intervention_unit']} "
+            f"| {c['identity_margin_db']:+.3f} dB |")
     lines += ["", "## Notes", "",
               "- 各セル 1 問・偶然一致 1/2。統計的検定ではなく確認である。",
               "- WAV / private key / answers は commit しない。",
