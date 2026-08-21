@@ -11,3 +11,6 @@ audio.prev/
 # blind 規律: 正解鍵と回答は git に載せない（§14 / §22）。
 answer_key.private.json
 answers.json
+# 素材の再配置定義は machine 固有の絶対パスを持つ。正本としての記録は
+# s4_results.json の material_provenance が持つので、入力側は commit しない。
+material_roots.json

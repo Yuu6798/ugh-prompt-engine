@@ -1,0 +1,14 @@
+{
+  "schema": "voicegenesis-s4-material-roots/1.0",
+  "note": "S4 relocatable rematerialization の配置定義（雛形）。実体は repository 外に置き、S4_MATERIAL_ROOTS 環境変数で指すか results/material_roots.json へ置く（後者は gitignore 済み）。old_root は source_manifest.json の extracted_path から機械導出するので書かない。",
+  "sources": {
+    "ritsu_singing_db": {
+      "archive_path": "<scratch>/acq/ritsu_db/ritsu.zip",
+      "new_root": "<scratch>/voicegenesis_materials/ritsu_ex/<展開された最上位ディレクトリ>"
+    },
+    "pjs_corpus": {
+      "archive_path": "<scratch>/acq/pjs_corpus_ver1.1.zip",
+      "new_root": "<scratch>/voicegenesis_materials/pjs_ex/PJS_corpus_ver1.1"
+    }
+  }
+}
