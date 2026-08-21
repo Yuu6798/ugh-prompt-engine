@@ -2136,7 +2136,32 @@ baseline 9 row の除去かは分離されていない**（尺を揃えた非標
     run 8-R が run 7 と **bit 一致**（= 学習が決定論）
       -> ドリフト 0 が実証されるので d_ref = 0 として経路 1 を適用してよい
     bit 一致せず k >= 2
-      -> d_ref = median over k 本（上記）で経路 1 を適用してよい
+      -> **median では通さない**（2026-08-21・Codex P1 指摘を採用。
+         median は位置推定であって**走行間ドリフトの上界ではない** — 反復距離が
+         0.05 と 0.95 なら median 0.50 となり、0.50 + ε_id までの identity 移動を
+         許してしまう。`ε_id` は**同一 checkpoint のレンダ再現性**の幅であって
+         **学習走行間のドリフト**ではないので、この穴を塞がない）。
+         §7-1 の MDC95 と同じ様式で**上界**を作る:
+
+           drift_bound(cell, axis)
+             = mean_r d_r + t(0.975, df=k-1) * sd_r * sqrt(1 + 1/k)
+
+           判定: d_B(cell, axis) <= drift_bound(cell, axis) + ε_id
+
+         **k = 2 では t = 12.706 で bound が極端に広くなる**。これは
+         「2 本では抑えられない」という事実の表現であって、広い bound で
+         通すための道具ではない。よって**識別可能性の検査を併置する**:
+
+           d_between(cell, axis)
+             = 同一セル・同一軸で測った**別話者間**の cosine distance の median
+               （= この計器が「別人」と呼ぶ距離のスケール。既存の S2 T1 の
+                 識別軸をそのまま使い、新しい量を定義しない）
+
+           drift_bound + ε_id >= 0.25 * d_between
+             -> **その (cell, axis) は識別不能**。経路 1 を適用せず
+                **経路 2**（identity 保存は undetermined）とし、
+                bound と d_between の実数値を記帳する
+                （「広い bound を通った」を「保存された」と読み替えない）
     bit 一致せず k = 1 / 8-R 未実施 / 計器が適用できない
       -> **経路 2**（identity 保存は undetermined）。
          k = 1 の値は診断として記帳するが判定には使わない
