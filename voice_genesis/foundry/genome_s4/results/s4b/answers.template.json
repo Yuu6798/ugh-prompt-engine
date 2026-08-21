@@ -1,0 +1,10 @@
+{
+  "schema": "voicegenesis-s4b-answers/1.0",
+  "key_commitment": "493ca1c4ea0014a281e36bbf0bf8f4458d68ed4ff4780ca04c3b7f4ea7f95795",
+  "answers": {
+    "Q001": "A|B|UNSURE",
+    "Q002": "A|B|UNSURE",
+    "Q003": "A|B|UNSURE",
+    "Q004": "A|B|UNSURE"
+  }
+}

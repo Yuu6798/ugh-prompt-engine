@@ -14,3 +14,9 @@ answers.json
 # 素材の再配置定義は machine 固有の絶対パスを持つ。正本としての記録は
 # s4_results.json の material_provenance が持つので、入力側は commit しない。
 material_roots.json
+# S4b 確認走行（S4 canonical WAV の byte copy）も同じ扱い。
+s4b/audio/
+s4b/audio.staging/
+s4b/audio.prev/
+s4b/answer_key.private.json
+s4b/answers.json
