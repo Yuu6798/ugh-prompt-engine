@@ -506,8 +506,49 @@ def write_blind_manifest(stage_trials: Dict[int, List[Dict[str, Any]]],
                    for st, trials in sorted(stage_trials.items())},
         "key_commitment": commitment,
     }
-    BLIND_MANIFEST.write_text(_dumps(manifest), encoding="utf-8")
+    BLIND_MANIFEST.write_bytes(_dumps(manifest).encode("utf-8"))
     return sha256_file(BLIND_MANIFEST)
+
+
+def manifest_stage_block(manifest: Dict[str, Any], stage: int) -> Dict[str, Any]:
+    """manifest の stage block を、**入れ子の形まで確かめて**返す。
+
+    根が object でも `{"stages": [1]}` のように入れ子が壊れていると
+    `.get()` が `AttributeError` を投げ、`S35Stop` でないので BLOCKED 記録が
+    出せない。根・器・値に続く最後の階層なので、ここで同じ穴を終わらせる。
+    """
+    stages = manifest.get("stages")
+    if stages is None:
+        stages = {}
+    if not isinstance(stages, dict):
+        raise S35Stop(reason=f"manifest の stages が object でない: {type(stages).__name__}",
+                      required_action="Stage 1 の成果物を復元する")
+    block = stages.get(str(stage))
+    if block is None:
+        return {}
+    if not isinstance(block, dict):
+        raise S35Stop(
+            reason=f"manifest の stage {stage} block が object でない: {type(block).__name__}",
+            required_action="Stage 1 の成果物を復元する")
+    ids = block.get("trial_ids")
+    if ids is not None and (not isinstance(ids, list)
+                            or not all(isinstance(t, str) for t in ids)):
+        raise S35Stop(reason=f"manifest の stage {stage} trial_ids が文字列の配列でない",
+                      required_action="Stage 1 の成果物を復元する")
+    table = block.get("audio_sha256")
+    if table is not None:
+        if not isinstance(table, dict):
+            raise S35Stop(
+                reason=f"manifest の stage {stage} audio_sha256 が object でない: "
+                       f"{type(table).__name__}",
+                required_action="Stage 1 の成果物を復元する")
+        bad = sorted(t for t, per in table.items() if not isinstance(per, dict))
+        if bad:
+            raise S35Stop(
+                reason=f"manifest の stage {stage} audio_sha256 に object でない entry: "
+                       f"{bad[:3]}",
+                required_action="Stage 1 の成果物を復元する")
+    return block
 
 
 def load_manifest() -> Dict[str, Any]:
@@ -612,7 +653,7 @@ def prepare_stage2(advancing: Sequence[str]) -> Dict[str, Any]:
         manifest["stages"][str(sp.STAGE2)] = {
             "trial_ids": [t["trial_id"] for t in t2], "audio_sha256": sha2}
         tmp = BLIND_MANIFEST.with_suffix(BLIND_MANIFEST.suffix + ".tmp")
-        tmp.write_text(_dumps(manifest), encoding="utf-8")
+        tmp.write_bytes(_dumps(manifest).encode("utf-8"))
         os.replace(tmp, BLIND_MANIFEST)
 
     publish_stage(sp.STAGE2, t2, resolved, _write_manifest)

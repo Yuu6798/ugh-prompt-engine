@@ -95,7 +95,7 @@ def verify_stage_audio(manifest: Dict[str, Any], stage: int) -> Tuple[bool, Dict
     取りこぼしていると、ループが 0 回または部分的に回っただけで "verified" に
     なってしまう（WAV を全部消しても true が出る）。
     """
-    block = (manifest.get("stages") or {}).get(str(stage)) or {}
+    block = prep.manifest_stage_block(manifest, stage)
     trial_ids = list(block.get("trial_ids") or [])
     table = block.get("audio_sha256") or {}
     bad: List[str] = []
@@ -142,7 +142,7 @@ def assert_stage_block_matches_key(manifest: Dict[str, Any], key: Dict[str, Any]
     stage 帰属・gene の一意性・pair/probe_kind の一致まで commit 済み plan と
     突き合わせる。
     """
-    block = (manifest.get("stages") or {}).get(str(stage)) or {}
+    block = prep.manifest_stage_block(manifest, stage)
     ids = list(block.get("trial_ids") or [])
     trials = key.get("trials") or {}
     plans = key.get("plans") or {}
@@ -196,7 +196,7 @@ def score_stage(stage: int, path: Optional[Path] = None) -> Dict[str, Any]:
     key, key_sha = prep.load_private_key()
     commitment_ok = manifest.get("key_commitment") == key_sha
 
-    block = (manifest.get("stages") or {}).get(str(stage))
+    block = prep.manifest_stage_block(manifest, stage) or None
     if not block:
         raise prep.S35Stop(reason=f"Stage {stage} が manifest に無い",
                            required_action=f"Stage {stage} の pack を先に生成する")
@@ -319,7 +319,7 @@ def finalize(stage1_path: Optional[Path] = None,
     advancing = advancing_from_stage1(s1)
 
     s2: Optional[Dict[str, Any]] = None
-    has_stage2_block = bool((manifest.get("stages") or {}).get(str(sp.STAGE2)))
+    has_stage2_block = bool(prep.manifest_stage_block(manifest, sp.STAGE2))
     plans_early = key.get("plans") or {}
     # **別 context が無い gene は Stage 2 を配布できない**（配布しないのが正しい）。
     # これを「Stage 2 待ち」に数えると、正常な走行が false BLOCKED で終わる。
@@ -328,7 +328,7 @@ def finalize(stage1_path: Optional[Path] = None,
         # **部分的な Stage 2 pack を受け付けない。** 一部の gene を欠いたまま
         # 採点すると、欠けた gene が INVALID になる一方で残りが S4_READY を作り、
         # プロトコル的に不完全な走行が「成功」で終わる。
-        block2 = (manifest.get("stages") or {}).get(str(sp.STAGE2)) or {}
+        block2 = prep.manifest_stage_block(manifest, sp.STAGE2)
         covered = {(key["trials"].get(t) or {}).get("gene")
                    for t in (block2.get("trial_ids") or [])}
         # 検査するのは**欠落**（owed ⊆ covered）。過剰被覆は無害で、

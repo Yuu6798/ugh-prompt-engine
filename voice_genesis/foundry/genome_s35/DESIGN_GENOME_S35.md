@@ -269,6 +269,32 @@ reveal だけから `sha256(canonical_bytes(key_preimage)) == key_commitment` �
   push した値と一致することを確認した。ただし**第三者はこれを追試できない**
   ので、本 session に限りこの一致は attestation であって proof ではない
 
+### 第 10 巡 = bot レビュー上限。未対応 1 件を User へ渡す（2026-08-21）
+
+`CLAUDE.md`「bot レビュー対応の運用」の**上限 10 ラウンドに到達**した。
+第 10 巡の 3 件のうち 2 件（manifest 入れ子形状 / publish の改行翻訳）は
+採用済み。残る 1 件は**私の裁量では決められない**ので境界宣言として渡す。
+
+**未対応 = 確定済み `key_reveal.json` に `key_preimage` が無いこと。**
+
+指摘は正しい。本 session の `key_reveal.json` は `commitment_verified: true`
+と書いているが、clean checkout の第三者はその digest を再計算できない
+（`salt_hex` / `s3_results_sha256` が公開物に無い）。第 9 巡で実装した
+`key_preimage` は**次の session から**効き、本 session には効かない。
+
+**私が決めなかった理由**: 解決策が 2 つあり、どちらも「実験記録の意味」を
+変えるため、実験の所有者の判断が要る。
+
+| 案 | 内容 | 代償 |
+|---|---|---|
+| **A. 新 session として再実施** | protocol どおり事前登録し直して回す | 聴取をやり直す。本記録はそのまま残る |
+| **B. 原像を別ファイルで併載** | 凍結物に触れず `key_preimage` を sidecar として公開 | `results/.gitignore` の「blind key は回答後も commit しない」と衝突する（このルール自体は本 session で私が書いたもの） |
+| **C. 現状維持** | §13 の開示のみ | 本 session の commitment は attestation 止まり |
+
+**現状は C。** どれを採るかは User の判断とし、勝手に A/B へ動かさない。
+確定記録を私の判断で書き換えないという §13 の線は、成果物を良くする方向でも
+維持する（第 9 巡で同じ判断をしている）。
+
 ### 見送るときの手順
 
 指摘が (A)(B)(C) のどれにも当たらないと判断したら、**resolve せず**本節への

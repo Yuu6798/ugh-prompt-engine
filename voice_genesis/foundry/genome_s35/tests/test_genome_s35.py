@@ -1393,3 +1393,62 @@ def test_manifest_commitment_matches_published_reveal_preimage(s35) -> None:
     reveal = json.loads(scoring.KEY_REVEAL.read_text(encoding="utf-8"))
     assert hashlib.sha256(
         prep.canonical_bytes(reveal["key_preimage"])).hexdigest() == committed
+
+
+@pytest.mark.parametrize("broken", [
+    {"stages": [1]},
+    {"stages": {"1": ["S1T01"]}},
+    {"stages": {"1": {"trial_ids": "S1T01"}}},
+    {"stages": {"1": {"trial_ids": [1, 2]}}},
+    {"stages": {"1": {"trial_ids": ["S1T01"], "audio_sha256": []}}},
+    {"stages": {"1": {"trial_ids": ["S1T01"], "audio_sha256": {"S1T01": "x"}}}},
+])
+def test_broken_nested_manifest_is_blocked(s35, broken) -> None:
+    """manifest の**入れ子**が壊れていても BLOCKED を出す（根と器の次の階層）。"""
+    _out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    prep.BLIND_MANIFEST.write_text(json.dumps(broken), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        prep.manifest_stage_block(prep.load_manifest(), sp.STAGE1)
+    assert "manifest" in exc.value.as_dict()["reason"]
+
+
+def test_broken_nested_manifest_still_emits_blocked_record(s35) -> None:
+    """壊れた入れ子でも `finalize_or_blocked()` が BLOCKED を返す（例外で落ちない）。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.BLIND_MANIFEST.write_text(json.dumps({"stages": [1]}), encoding="utf-8")
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+def test_published_bundle_bytes_match_the_hashed_text(s35) -> None:
+    """publish した実ファイルの SHA が、hash 対象の text と一致すること。
+
+    text mode で書くと Windows で `\\n` -> `\\r\\n` になり、
+    `key_reveal_sha256` が実ファイルと食い違う（正常な確定走行が来歴の
+    壊れた束を publish する）。hash した bytes をそのまま書く。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    s1 = scoring.score_stage(sp.STAGE1)
+    prep.prepare_stage2(scoring.advancing_from_stage1(s1))
+    _answer(out, 2, _correct)
+    report.main()
+
+    doc = json.loads(report.JSON_PATH.read_text(encoding="utf-8"))
+    assert prep.sha256_file(scoring.KEY_REVEAL) == doc["key_reveal_sha256"]
+    # 改行が翻訳されていない（LF のまま）
+    assert b"\r\n" not in scoring.KEY_REVEAL.read_bytes()
+    assert b"\r\n" not in report.JSON_PATH.read_bytes()
+
+
+def test_publish_bundle_writes_exact_bytes(tmp_path) -> None:
+    """`publish_bundle` は渡された text の UTF-8 bytes をそのまま書く。"""
+    target = tmp_path / "x.json"
+    text = '{\n  "a": 1\n}'
+    report.publish_bundle(((target, text),))
+    assert target.read_bytes() == text.encode("utf-8")
+    assert prep.sha256_bytes(text.encode("utf-8")) == prep.sha256_file(target)

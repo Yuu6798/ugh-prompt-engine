@@ -47,8 +47,12 @@ def publish_bundle(pairs: Tuple[Tuple[Path, str], ...]) -> None:
     try:
         for path, text in pairs:
             tmp = path.with_suffix(path.suffix + ".tmp")
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(text)
+            # **hash した bytes をそのまま書く。** text mode だと Windows で
+            # `\n` が `\r\n` に変換され、`key_reveal_sha256` などの
+            # 「hash 済みの text から計算した digest」が実ファイルと一致しなく
+            # なる（正常な確定走行が来歴の壊れた束を publish してしまう）。
+            with open(tmp, "wb") as fh:
+                fh.write(text.encode("utf-8"))
                 fh.flush()
                 os.fsync(fh.fileno())
             staged.append((tmp, path))
