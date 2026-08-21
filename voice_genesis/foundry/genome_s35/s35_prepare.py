@@ -535,7 +535,16 @@ def prepare_stage1(salt: Optional[bytes] = None) -> Dict[str, Any]:
         holder["sha"] = write_blind_manifest({sp.STAGE1: t1}, {sp.STAGE1: sha1},
                                              s3_sha, commitment)
 
-    publish_stage(sp.STAGE1, t1, resolved, _write_manifest)
+    # **private key も Stage 1 トランザクションの一部。** `publish_stage` が落ちると
+    # pack は巻き戻るのに key だけ残り、再実行は必ず「既に存在する」ガードで止まる。
+    # 一度も出題していない session が、security-sensitive な状態を手で消さないと
+    # 回復できなくなる（しかもその手順は blind 破壊と同じ操作になる）。
+    # 直前に非存在を確認しているので、失敗時の削除は呼び出し前の状態への復元。
+    try:
+        publish_stage(sp.STAGE1, t1, resolved, _write_manifest)
+    except BaseException:
+        PRIVATE_KEY.unlink(missing_ok=True)
+        raise
     manifest_sha = holder["sha"]
     return {
         "stage": sp.STAGE1,

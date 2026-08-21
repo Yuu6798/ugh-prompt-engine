@@ -56,6 +56,14 @@ def load_answers(stage: int, path: Optional[Path] = None) -> Tuple[Dict[str, Any
             raise prep.S35Stop(
                 reason=f"Stage {stage} の {field} が空または欠落: {v!r}",
                 required_action="回答ファイルに listener_id / session_id を書く")
+    # `answers` は**必ず dict**。真値の非 dict（`"A"` や非空 list）は
+    # `check_complete()` の `.get()` / `.items()` で `AttributeError` を投げ、
+    # `finalize_or_blocked()` が拾えず BLOCKED 記録を出せなくなる。
+    answers = data.get("answers")
+    if not isinstance(answers, dict):
+        raise prep.S35Stop(
+            reason=f"Stage {stage} の answers が dict でない: {type(answers).__name__}",
+            required_action="answers を {trial_id: A/B/UNSURE} の object にする")
     return data, prep.sha256_bytes(raw)
 
 
@@ -189,7 +197,7 @@ def score_stage(stage: int, path: Optional[Path] = None) -> Dict[str, Any]:
                            required_action=f"Stage {stage} の pack を先に生成する")
     assert_stage_block_matches_key(manifest, key, stage)
     doc, ans_sha = load_answers(stage, path)
-    answers = doc.get("answers") or {}
+    answers = doc["answers"]          # `load_answers` が dict を保証済み
     check_complete(answers, block["trial_ids"], stage)
     audio_ok, audio_detail = verify_stage_audio(manifest, stage)
 

@@ -1203,3 +1203,56 @@ def test_malformed_answer_stage_is_blocked(s35, bad) -> None:
     # finalize_or_blocked が BLOCKED を出せること（例外で素通りしない）
     scored, blocked = scoring.finalize_or_blocked()
     assert scored is None and blocked["status"] == "BLOCKED"
+
+
+@pytest.mark.parametrize("bad", [None, "A", ["S1T01"], 1, "", 0])
+def test_malformed_answers_container_is_blocked(s35, bad) -> None:
+    """`answers` が dict でなければ BLOCKED を出す（`AttributeError` で落ちない）。
+
+    真値の非 dict（`"A"` / 非空 list）は `or {}` を素通りして
+    `check_complete()` の `.get()` に届き、`S35Stop` 以外の例外になっていた。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    p1 = _answer(out, 1, _correct)
+    d = json.loads(p1.read_text(encoding="utf-8"))
+    if bad is None:
+        d.pop("answers")
+    else:
+        d["answers"] = bad
+    p1.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)
+    assert "answers" in exc.value.as_dict()["reason"]
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+def test_stage1_failure_leaves_no_orphan_private_key(s35, monkeypatch) -> None:
+    """Stage 1 公開が落ちたら private key も残さない（再実行が詰まらない）。
+
+    key だけ残ると再実行が「既に存在する」ガードで必ず止まり、一度も出題して
+    いない session が手動削除なしに回復不能になる。
+    """
+    out, _doc = s35()
+    boom = RuntimeError("disk full")
+
+    def _explode(*a, **k):
+        raise boom
+
+    real_ui = prep.write_stage_ui
+    monkeypatch.setattr(prep, "write_stage_ui", _explode)
+    with pytest.raises(RuntimeError):
+        prep.prepare_stage1(salt=SALT)
+    assert not prep.PRIVATE_KEY.exists()
+    assert not prep.BLIND_MANIFEST.exists()
+    assert not prep.stage_dir(sp.STAGE1).exists()
+
+    # 呼び出し前の状態に戻っているので、そのまま再実行できる。
+    # `monkeypatch.undo()` は fixture 側の results パス差し替えまで巻き戻して
+    # **実物の results/ を触りに行く**ので、自分が当てた patch だけ戻す。
+    monkeypatch.setattr(prep, "write_stage_ui", real_ui)
+    info = prep.prepare_stage1(salt=SALT)
+    assert info["trial_count"] == len(info["genes"])
+    assert prep.PRIVATE_KEY.exists()
+    assert out  # fixture の出力先を使っていることの明示
