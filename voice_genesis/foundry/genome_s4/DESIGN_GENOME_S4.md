@@ -108,6 +108,30 @@ S4 実装側で母集団を縮小して回避しない。
    （契約冒頭「複合発現だけを `NOT_ESTABLISHED` とする」）。
 6. **private key を最終 transaction に載せた** — 先に書くと後段失敗時に
    「新しい key + 古い manifest」が残り commitment 検証が通らなくなる（§22）。
+7. **G0-4b: donor 側スペクトルを凍結 manifest へ接続した**（`assert_donor_pin`）—
+   契約 §5 G0-4 が要求する pin は `identity_sha256`（Ritsu の sp/ap）と
+   `performance_sha256`（設計上スペクトルを持たない 1-D 制御）だけで、
+   `identity_margin_db` のもう一方の入力である **donor 側包絡（`donor_core`）が
+   どちらにも入らない**。donor 素材が変われば §9.5 の `identity_margin_db(FD) > 0`
+   が反転し、`COMBINABLE` と S4 PASS が偽になる。凍結 manifest は同じトグル状態で
+   測った `identity_lsd_db` / `donor_lsd_db` を rung として持つので、
+   **toggle label で引いて**突き合わせる（rung 名の並びに依存しない）。
+   比較精度は manifest 自身の記録精度（4 桁）であり、新しい許容誤差ではない。
+   pin が無い条件は検証スキップにせず BLOCKED。metric は増やしていない
+   （記録するのは §8 が既に定義している差の内訳）。
+8. **回答を「聴いた pack」へ結び付けた**（`verify_answer_binding`）— trial_id は
+   `T001`…と固定なので、Phase A を回し直して salt と正解対応が変わっても
+   **古い `answers.json` がそのまま採点できてしまう**（偽の不成立、確率次第で
+   偽の PASS）。`answers.template.json` に `key_commitment` を刻み、Phase C が
+   一致を要求する。
+9. **採点前に pack の音を再ハッシュする**（`verify_pack_audio`）— commitment が
+   守るのは「実験者が回答後に正解を変えないこと」だけで、Phase A の後に WAV が
+   差し替わった・壊れた・消えた場合は素通りする。`blind_manifest.audio_sha256` の
+   全ファイルを読み直して突き合わせ、欠落・不一致・pin 自体の欠落は BLOCKED。
+
+7〜9 は PR #299 の自動レビュー（P1 × 3）由来。いずれも契約 §25 A（verdict が
+誤る具体経路）/ B（source・output・record の食い違い）/ E（blind 破壊）に当たるため
+**実害基準で採用**した。閾値・母集団・対象 gene / context・問数・metric は変えていない。
 
 ## 7. 既知の範囲外事象（`observed_but_out_of_scope`）
 

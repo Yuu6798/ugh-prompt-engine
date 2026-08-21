@@ -33,6 +33,10 @@ import s4_spec as sp  # noqa: E402
 from s4_spec import Gene, PairVerdict  # noqa: E402
 
 
+#: 実素材が要る経路は manifest が揃っているときだけ走る。
+_HAVE_MATERIAL = sr.S3_INPUT_MANIFEST.exists()
+
+
 @pytest.fixture(autouse=True)
 def _reset_caches():
     sr.reset_read_cache()
@@ -756,6 +760,137 @@ def test_38b_s4_overall_needs_both_human_gates():
 
 
 # ===========================================================================
+# レビュー由来の追加検査（§25 A / B / E — verdict が誤る具体経路）
+# ===========================================================================
+def test_44_answers_are_bound_to_the_pack_they_came_from():
+    """Phase A を回し直すと salt と正解対応が変わる。古い回答を流用させない。"""
+    trials, selected = _trials()
+    _k, raw = sb.build_private_key(trials, b"\x01" * 32, _S3SHA, _S35SHA, selected)
+    manifest = sb.build_blind_manifest(trials, {}, _S3SHA, _S35SHA,
+                                       sb.sha256_bytes(raw))
+    tmpl = sb.answers_template(trials, manifest["key_commitment"])
+    assert tmpl["key_commitment"] == manifest["key_commitment"]
+    sb.verify_answer_binding(tmpl, manifest)                 # 同じ pack は通る
+
+    # 別 salt で作り直した pack = 別 commitment。trial_id は同じでも通さない
+    trials2, _sel2 = _trials(salt=b"\x02" * 32)
+    _k2, raw2 = sb.build_private_key(trials2, b"\x02" * 32, _S3SHA, _S35SHA, selected)
+    manifest2 = sb.build_blind_manifest(trials2, {}, _S3SHA, _S35SHA,
+                                        sb.sha256_bytes(raw2))
+    assert manifest2["key_commitment"] != manifest["key_commitment"]
+    assert [t["trial_id"] for t in trials2] == [t["trial_id"] for t in trials]
+    with pytest.raises(sr.S4Stop):
+        sb.verify_answer_binding(tmpl, manifest2)
+    with pytest.raises(sr.S4Stop):
+        sb.verify_answer_binding({"answers": {}}, manifest)  # 識別子なしは通さない
+
+
+def test_44b_load_answers_returns_doc_and_rejects_malformed(tmp_path):
+    path = tmp_path / "answers.json"
+    path.write_text(json.dumps({"key_commitment": "c" * 64,
+                                "answers": {"T001": "A"}}), encoding="utf-8")
+    doc, ans, sha = sb.load_answers(path)
+    assert doc["key_commitment"] == "c" * 64 and ans == {"T001": "A"} and len(sha) == 64
+    for bad in (b"[1,2]", b"{}", b"{not json"):
+        path.write_bytes(bad)
+        with pytest.raises(sr.S4Stop):
+            sb.load_answers(path)
+
+
+def test_45_pack_audio_is_rehashed_before_scoring(tmp_path):
+    """commitment は正解の差し替えしか守らない。音の差し替え・欠落は別途落とす。"""
+    audio = tmp_path / "audio"
+    audio.mkdir()
+    (audio / "T001_A.wav").write_bytes(b"aaa")
+    (audio / "T001_X.wav").write_bytes(b"xxx")
+    manifest = {"audio_sha256": {"T001": {
+        "T001_A.wav": sb.sha256_bytes(b"aaa"), "T001_X.wav": sb.sha256_bytes(b"xxx")}}}
+    sb.verify_pack_audio(manifest, audio)                    # 一致すれば通る
+
+    (audio / "T001_X.wav").write_bytes(b"swapped")           # 差し替え
+    with pytest.raises(sr.S4Stop):
+        sb.verify_pack_audio(manifest, audio)
+    (audio / "T001_X.wav").unlink()                          # 欠落
+    with pytest.raises(sr.S4Stop):
+        sb.verify_pack_audio(manifest, audio)
+    # pin 自体が無いのは検証スキップにせず fail-closed
+    for empty in ({}, {"audio_sha256": {}}, {"audio_sha256": {"T001": {}}}):
+        with pytest.raises(sr.S4Stop):
+            sb.verify_pack_audio(empty, audio)
+
+
+def test_45b_phase_c_verifies_audio_and_binding():
+    import inspect
+    src = inspect.getsource(srep.phase_c)
+    assert "verify_pack_audio" in src and "verify_answer_binding" in src
+    # commitment 検証より後、採点より前に置かれている
+    assert src.index("verify_commitment") < src.index("verify_pack_audio")
+    assert src.index("verify_pack_audio") < src.index("sb.score(")
+    assert src.index("verify_answer_binding") < src.index("sb.score(")
+
+
+def test_46_donor_spectrum_is_pinned_to_frozen_manifest():
+    """`identity_margin_db` の入力（donor 側包絡）を来歴へ接続する。
+
+    `identity_sha256` は Ritsu の sp/ap しか覆わず、`performance_sha256` は設計上
+    スペクトルを持たない。donor 側が変われば COMBINABLE / PASS が反転しうる。
+    """
+    pair = {"rungs": {
+        "R0": {"toggles": "none", "identity_lsd_db": 3.419, "donor_lsd_db": 18.8708},
+        "R1": {"toggles": "f0", "identity_lsd_db": 3.3949, "donor_lsd_db": 19.0232},
+        "R2": {"toggles": "duration", "identity_lsd_db": 3.3858,
+               "donor_lsd_db": 18.8778},
+        "R3": {"toggles": "f0+duration", "identity_lsd_db": 3.3729,
+               "donor_lsd_db": 18.8798},
+        "R4": {"toggles": "f0+duration+energy+release", "identity_lsd_db": 5.3801,
+               "donor_lsd_db": 20.4812}}}
+    pins = sr.manifest_rung_pins(pair)
+    # rung 名ではなく toggle label で引く（4 条件すべてに pin がある）
+    assert set(pins) >= {tg.label for tg in sp.CONDITIONS.values()}
+
+    ok = sr.assert_donor_pin("pk", "FD", "f0+duration",
+                             {"identity_lsd_db": 3.372912, "donor_lsd_db": 18.879804},
+                             pins)
+    assert ok["measured"]["donor_lsd_db"] == 18.8798
+
+    # donor 側だけが動いた場合（1-D performance も identity も同じ）を落とす
+    with pytest.raises(sr.S4Stop):
+        sr.assert_donor_pin("pk", "FD", "f0+duration",
+                            {"identity_lsd_db": 3.3729, "donor_lsd_db": 17.5},
+                            pins)
+    # identity 側が動いた場合も落とす
+    with pytest.raises(sr.S4Stop):
+        sr.assert_donor_pin("pk", "FD", "f0+duration",
+                            {"identity_lsd_db": 4.0, "donor_lsd_db": 18.8798},
+                            pins)
+    # pin が無い / 測れないは検証スキップにせず BLOCKED
+    with pytest.raises(sr.S4Stop):
+        sr.assert_donor_pin("pk", "FD", "f0+duration", {"identity_lsd_db": 3.3729,
+                                                        "donor_lsd_db": 18.8798}, {})
+    with pytest.raises(sr.S4Stop):
+        sr.assert_donor_pin("pk", "FD", "f0+duration",
+                            {"identity_lsd_db": None, "donor_lsd_db": 18.8798}, pins)
+
+
+def test_46b_manifest_rung_pins_ignores_incomplete_rungs():
+    pair = {"rungs": {"R0": {"toggles": "none", "identity_lsd_db": 1.0},
+                      "R1": {"toggles": "f0", "identity_lsd_db": 1.0,
+                             "donor_lsd_db": None},
+                      "R2": {"toggles": "duration", "identity_lsd_db": 1.0,
+                             "donor_lsd_db": 2.0}}}
+    assert set(sr.manifest_rung_pins(pair)) == {"duration"}
+
+
+@pytest.mark.skipif(not _HAVE_MATERIAL, reason="S3 input manifest が無い")
+def test_46c_real_manifest_pins_every_s4_condition():
+    """凍結 manifest が S4 の 4 条件すべてに rung metric を持つこと。"""
+    manifest, _sha = sr.load_input_manifest()
+    wanted = {tg.label for tg in sp.CONDITIONS.values()}
+    for pair in manifest["pairs"]:
+        assert set(sr.manifest_rung_pins(pair)) >= wanted, pair["pair_key"]
+
+
+# ===========================================================================
 # §23 公開
 # ===========================================================================
 def test_39_bundle_rolls_back_entirely(tmp_path, monkeypatch):
@@ -918,9 +1053,6 @@ def test_43e_s4_condition_names_match_s3():
 # ===========================================================================
 # integration — 実素材が揃っているときだけ
 # ===========================================================================
-_HAVE_MATERIAL = sr.S3_INPUT_MANIFEST.exists()
-
-
 @pytest.mark.skipif(not _HAVE_MATERIAL, reason="S3 input manifest が無い")
 def test_integration_candidate_pairs_from_real_canonical():
     s3, s3_sha = sr.load_s3()

@@ -400,7 +400,7 @@ def _stage_ear_pack(meta: Dict[str, Any], runs: Sequence[sr.PairRun],
     return [(sb.PRIVATE_KEY, key_raw),
             (sb.BLIND_MANIFEST, _dumps(manifest).encode("utf-8")),
             (sb.ANSWERS.with_name("answers.template.json"),
-             _dumps(sb.answers_template(trials)).encode("utf-8"))]
+             _dumps(sb.answers_template(trials, commitment)).encode("utf-8"))]
 
 
 # ---------------------------------------------------------------------------
@@ -431,9 +431,13 @@ def phase_c() -> int:
                 cause="answer_key の SHA が blind_manifest の key_commitment と一致しない",
                 impact="回答後に正解が差し替えられていないことを保証できない（blind 破壊）",
                 minimal_fix="耳 pack を作り直し、回答をやり直す")
+        # commitment が守るのは「回答後に正解が差し替わらないこと」だけ。
+        # 聴いた音そのものと、回答がどの pack のものかは別途 pin する。
+        sb.verify_pack_audio(manifest)
         key = json.loads(key_raw.decode("utf-8"))
         trials = [dict(v, trial_id=k) for k, v in key["trials"].items()]
-        answers, answers_sha = sb.load_answers()
+        answers_doc, answers, answers_sha = sb.load_answers()
+        sb.verify_answer_binding(answers_doc, manifest)
         scored = sb.score(trials, answers)
         abx_v = sg.abx_verdict(scored["abx_correct"], scored["abx_total"])
         id_v = sg.identity_verdict(scored["identity_yes"], scored["identity_total"])
@@ -444,6 +448,8 @@ def phase_c() -> int:
                "answers_sha256": answers_sha,
                "key_commitment": manifest["key_commitment"],
                "commitment_verified": True,
+               "pack_audio_verified": True,
+               "answer_binding_verified": True,
                "verdict": sg.perceptual_verdict(abx_v, id_v),
                "trials": scored["abx"] + scored["identity"]}
         overall = sg.s4_overall(mech["verdict"], abx_v, id_v,

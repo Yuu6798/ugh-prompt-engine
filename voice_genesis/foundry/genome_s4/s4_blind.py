@@ -248,8 +248,14 @@ def build_blind_manifest(trials: Sequence[Dict[str, Any]],
     }
 
 
-def answers_template(trials: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+def answers_template(trials: Sequence[Dict[str, Any]], commitment: str) -> Dict[str, Any]:
+    """回答用紙。**どの pack を聴いた回答か**を回答側の成果物にも刻む。
+
+    これが無いと、Phase A を回し直して salt / 正解対応が変わった後の pack に対して
+    古い回答をそのまま採点でき、偽の不成立（と確率次第で偽の PASS）を作れる。
+    """
     return {"schema": sp.ANSWERS_SCHEMA,
+            "key_commitment": commitment,
             "answers": {t["trial_id"]: ("A|B|UNSURE" if t["kind"] == "ABX"
                                         else "YES|NO|UNSURE")
                         for t in sorted(trials, key=lambda x: x["trial_id"])}}
@@ -262,8 +268,64 @@ def verify_commitment(key_raw: bytes, manifest: Dict[str, Any]) -> bool:
     return sha256_bytes(key_raw) == manifest.get("key_commitment")
 
 
-def load_answers(path: Path = ANSWERS) -> Tuple[Dict[str, str], str]:
-    """回答を 1 回だけ bytes で読み、その bytes の SHA を凍結値として返す。"""
+def verify_pack_audio(manifest: Dict[str, Any], audio_dir: Path = EAR_AUDIO) -> None:
+    """採点の前に **pack の音そのもの**を再ハッシュして pin と突き合わせる。
+
+    commitment が守るのは「実験者が回答後に正解を変えないこと」だけで、Phase A の
+    後に WAV が差し替わった・壊れた・消えた場合は素通りする。それを許すと、
+    pin された音とは別の音についての回答で PASS を凍結できてしまう。
+    """
+    listed = manifest.get("audio_sha256")
+    if not isinstance(listed, dict) or not listed:
+        raise S4Stop(
+            cause="blind manifest に audio_sha256 が無い（または空）",
+            impact="聴いた音が Phase A で pin した音と同じかを確認できない",
+            minimal_fix="Phase A を実行して耳 pack を作り直す")
+    for trial_id, per in sorted(listed.items()):
+        if not isinstance(per, dict) or not per:
+            raise S4Stop(
+                cause=f"blind manifest の audio_sha256[{trial_id}] が空",
+                impact="当該問の音を pin と突き合わせられない",
+                minimal_fix="Phase A を実行して耳 pack を作り直す")
+        for name, want in sorted(per.items()):
+            path = audio_dir / name
+            if not path.is_file():
+                raise S4Stop(
+                    cause=f"耳 pack の音が無い: {path}",
+                    impact="pin された音とは別の（あるいは欠けた）pack についての"
+                           "回答を採点することになる",
+                    minimal_fix="Phase A を実行して耳 pack を作り直し、聴き直す")
+            got = sha256_file(path)
+            if got != want:
+                raise S4Stop(
+                    cause=f"耳 pack の音が pin と一致しない: {name} "
+                          f"({got[:16]}… != {str(want)[:16]}…)",
+                    impact="Phase A で pin した音とは別の音についての回答で"
+                           "S4 の判定を凍結することになる",
+                    minimal_fix="Phase A を実行して耳 pack を作り直し、聴き直す")
+
+
+def verify_answer_binding(answers_doc: Dict[str, Any], manifest: Dict[str, Any]) -> None:
+    """回答が **その pack** に対して集められたことを確認する。"""
+    want = manifest.get("key_commitment")
+    got = answers_doc.get("key_commitment")
+    if not got:
+        raise S4Stop(
+            cause="回答ファイルに key_commitment が無い",
+            impact="どの耳 pack に対する回答かを確認できず、"
+                   "作り直した pack へ古い回答を当てて採点できてしまう",
+            minimal_fix="results/answers.template.json を写して回答し直す")
+    if got != want:
+        raise S4Stop(
+            cause=f"回答ファイルの key_commitment が blind manifest と一致しない "
+                  f"({str(got)[:16]}… != {str(want)[:16]}…)",
+            impact="別の耳 pack（別の salt・別の正解対応）で集めた回答を"
+                   "現在の pack の正解で採点することになる",
+            minimal_fix="現在の pack を聴いて回答し直す。古い回答を流用しない")
+
+
+def load_answers(path: Path = ANSWERS) -> Tuple[Dict[str, Any], Dict[str, str], str]:
+    """回答を 1 回だけ bytes で読み、doc / 回答 / bytes の SHA を返す。"""
     if not path.exists():
         raise S4Stop(
             cause=f"回答ファイルが無い（{path}）",
@@ -276,12 +338,16 @@ def load_answers(path: Path = ANSWERS) -> Tuple[Dict[str, str], str]:
         raise S4Stop(cause=f"回答ファイルが JSON として読めない: {exc}",
                      impact="人間 Gate を採点できない",
                      minimal_fix="answers.json の形式を確認する") from exc
-    ans = data.get("answers") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        raise S4Stop(cause=f"回答ファイルの根が object でない: {type(data).__name__}",
+                     impact="人間 Gate を採点できない",
+                     minimal_fix="answers.json の形式を確認する")
+    ans = data.get("answers")
     if not isinstance(ans, dict):
         raise S4Stop(cause="回答ファイルに answers object が無い",
                      impact="人間 Gate を採点できない",
                      minimal_fix="answers.json の形式を確認する")
-    return {str(k): str(v) for k, v in ans.items()}, sha256_bytes(raw)
+    return data, {str(k): str(v) for k, v in ans.items()}, sha256_bytes(raw)
 
 
 def score(trials: Sequence[Dict[str, Any]], answers: Dict[str, str]) -> Dict[str, Any]:

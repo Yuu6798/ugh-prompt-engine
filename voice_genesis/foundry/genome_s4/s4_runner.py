@@ -432,13 +432,18 @@ class ConditionOutput:
     metrics: Dict[str, Optional[float]]
     tripwire_status: str = ""
     tripwire_accessed: List[str] = field(default_factory=list)
+    #: `identity_margin_db` の内訳と、その凍結 pin との突き合わせ結果（G0-4b）。
+    identity_components: Dict[str, Optional[float]] = field(default_factory=dict)
+    donor_pin: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
         return {"condition": self.condition, "toggles": self.toggles,
                 "sample_sha256": self.sample_sha256, "wav_sha256": self.wav_sha256,
                 "wav_path": self.wav_path, "metrics": self.metrics,
                 "tripwire_status": self.tripwire_status,
-                "tripwire_accessed": list(self.tripwire_accessed)}
+                "tripwire_accessed": list(self.tripwire_accessed),
+                "identity_components": self.identity_components,
+                "donor_pin": self.donor_pin}
 
 
 @dataclass
@@ -452,6 +457,8 @@ class PairRun:
     intervention: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     repeat_sample_sha256: Dict[str, str] = field(default_factory=dict)
     s3_replay: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    #: metric 入力である donor 側包絡の内容 digest（来歴接続用。判定には使わない）。
+    donor_core_sha256: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return {"pair_key": self.pair_key, "context_id": self.context_id,
@@ -461,7 +468,8 @@ class PairRun:
                 "conditions": {k: v.as_dict() for k, v in self.conditions.items()},
                 "intervention": self.intervention,
                 "repeat_sample_sha256": self.repeat_sample_sha256,
-                "s3_replay": self.s3_replay}
+                "s3_replay": self.s3_replay,
+                "donor_core_sha256": self.donor_core_sha256}
 
 
 def _clean(v: float) -> Optional[float]:
@@ -469,13 +477,89 @@ def _clean(v: float) -> Optional[float]:
 
 
 def measure(condition: str, result: pc.ComposeResult, wav_path: Path, bank, pos,
-            perf, donor_core, track) -> Dict[str, Optional[float]]:
-    """§8 の既存 metric **だけ**を記録する。新しい acoustic metric は足さない。"""
+            perf, donor_core, track) -> Tuple[Dict[str, Optional[float]],
+                                              Dict[str, Optional[float]]]:
+    """§8 の既存 metric **だけ**を記録する。新しい acoustic metric は足さない。
+
+    2 つ目の戻り値は `identity_margin_db` の**構成要素**（`donor_lsd_db -
+    identity_lsd_db`）。新しい計器ではなく、§8 が既に定義している差の内訳であり、
+    donor 側スペクトル（`donor_core`）を来歴へ接続するための pin 材料として使う。
+    """
     m = pr_ladder.measure_rung(condition, result, wav_path, bank, pos, perf,
                                donor_core, track)
-    return {"f0_dev_rmse_cents": _clean(m.f0_dev_rmse_cents),
-            "note_split_mae_ms": _clean(m.note_split_mae_ms),
-            sp.IDENTITY_METRIC: _clean(m.identity_margin_db)}
+    metrics = {"f0_dev_rmse_cents": _clean(m.f0_dev_rmse_cents),
+               "note_split_mae_ms": _clean(m.note_split_mae_ms),
+               sp.IDENTITY_METRIC: _clean(m.identity_margin_db)}
+    components = {"identity_lsd_db": _clean(m.identity_lsd_db),
+                  "donor_lsd_db": _clean(m.donor_lsd_db)}
+    return metrics, components
+
+
+#: 凍結 manifest が rung metric を記録している桁数（`RungMeasurement.as_dict` の
+#: `round(v, 4)`）。**新しい許容誤差ではなく**、pin 側が持っている精度そのもの。
+MANIFEST_PIN_PRECISION = 4
+
+
+def manifest_rung_pins(pair: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+    """凍結 manifest の rung から `{toggle label: {identity/donor lsd}}` を作る。
+
+    rung 名（R0/R1/…）ではなく **toggle label** で引く。ラダーの並びが変わっても
+    「同じトグル状態の測定」を取り違えない。
+    """
+    out: Dict[str, Dict[str, float]] = {}
+    for rung in (pair.get("rungs") or {}).values():
+        if not isinstance(rung, dict):
+            continue
+        label = rung.get("toggles")
+        vals = {k: rung.get(k) for k in ("identity_lsd_db", "donor_lsd_db")}
+        if isinstance(label, str) and all(isinstance(v, (int, float))
+                                          and not isinstance(v, bool)
+                                          for v in vals.values()):
+            out[label] = {k: float(v) for k, v in vals.items()}
+    return out
+
+
+def assert_donor_pin(pair_key: str, condition: str, label: str,
+                     components: Dict[str, Optional[float]],
+                     pins: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
+    """`identity_margin_db` の**入力**を凍結 manifest へ接続する（G0-4b）。
+
+    `identity_sha256` は Ritsu 側 sp/ap しか覆わず、`performance_sha256` は設計上
+    スペクトルを持たない。donor 側の包絡（`donor_core`）はどちらの pin にも入らない
+    のに `identity_margin_db` を動かし、`COMBINABLE` / S4 PASS を反転させうる。
+    凍結 manifest は同じトグル状態で測った `identity_lsd_db` / `donor_lsd_db` を
+    持っているので、それと突き合わせて donor 側の素材変化を検出する。
+
+    pin が無い条件は**検証スキップにせず** BLOCKED（AGENTS.md の
+    「pin の欠落は stale と同扱いの fail-closed」）。
+    """
+    frozen = pins.get(label)
+    if frozen is None:
+        raise S4Stop(
+            cause=f"{pair_key}: 凍結 manifest にトグル {label!r}（条件 {condition}）の "
+                  f"rung metric が無く、donor 側スペクトルを pin できない",
+            impact="identity_margin_db の入力が来歴へ接続されず、"
+                   "donor 素材が変わっても COMBINABLE / PASS が反転しうる",
+            minimal_fix="ladder_manifest.json の rungs に当該トグルの測定があるか確認する")
+    detail: Dict[str, Any] = {"toggles": label, "frozen": frozen, "measured": {}}
+    for key, want in frozen.items():
+        got = components.get(key)
+        if got is None:
+            raise S4Stop(
+                cause=f"{pair_key}/{condition}: {key} を測定できなかった",
+                impact="identity_margin_db の内訳を凍結 pin と突き合わせられない",
+                minimal_fix="measure_rung が有限値を返さない原因を確認する")
+        rounded = round(float(got), MANIFEST_PIN_PRECISION)
+        detail["measured"][key] = rounded
+        if rounded != round(float(want), MANIFEST_PIN_PRECISION):
+            raise S4Stop(
+                cause=f"{pair_key}/{condition}: {key} が凍結 manifest と一致しない "
+                      f"(got {rounded} / pin {want})",
+                impact="identity_margin_db の入力（donor 側スペクトル等）が S2/S3 走行時"
+                       "から変わっており、identity 判定の来歴が偽になる",
+                minimal_fix="PJS / Ritsu の参照素材と WORLD 解析環境が"
+                            "凍結時から変わっていないかを確認する")
+    return detail
 
 
 def assert_pins(pair_key: str, bank_sha: str, perf_sha: str,
@@ -511,6 +595,10 @@ def run_pair(pair: Dict[str, Any], ctx: int, canonical_shas: Dict[str, str],
                   identity_sha256=bank.content_sha256(),
                   performance_sha256=perf.content_sha256())
     run.intervention = s3r.intervention_amounts(bank, pos, track, perf)
+    if donor_core is not None:
+        run.donor_core_sha256 = hashlib.sha256(
+            np.ascontiguousarray(donor_core, dtype=np.float64).tobytes()).hexdigest()
+    rung_pins = manifest_rung_pins(pair)
     leaf = pair_key.replace("|", "__").replace("#", "-")
     out_dir = (wav_root or WAV_DIR) / leaf
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -529,13 +617,20 @@ def run_pair(pair: Dict[str, Any], ctx: int, canonical_shas: Dict[str, str],
         else:
             wav_sha = ""
         tw = pbg.gate_tripwire(pc.compose, bank, track, toggles)
+        if write_wav:
+            metrics, components = measure(cond, res, wav_path, bank, pos, perf,
+                                          donor_core, track)
+            donor_pin = assert_donor_pin(pair_key, cond, toggles.label, components,
+                                         rung_pins)
+        else:
+            metrics, components, donor_pin = {}, {}, {}
         run.conditions[cond] = ConditionOutput(
             condition=cond, toggles=toggles.label, sample_sha256=res.sha256(),
             wav_sha256=wav_sha, wav_path=str(published_dir / f"{cond}.wav"),
-            metrics=(measure(cond, res, wav_path, bank, pos, perf, donor_core, track)
-                     if write_wav else {}),
+            metrics=metrics,
             tripwire_status=tw.status,
-            tripwire_accessed=list(tw.evidence.get("accessed", [])))
+            tripwire_accessed=list(tw.evidence.get("accessed", [])),
+            identity_components=components, donor_pin=donor_pin)
         run.repeat_sample_sha256[cond] = pc.compose(bank, track, toggles).sha256()
     run.s3_replay = replay_check(run, canonical_shas)
     return run
