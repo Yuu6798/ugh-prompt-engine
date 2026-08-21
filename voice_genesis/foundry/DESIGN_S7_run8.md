@@ -1691,11 +1691,14 @@ run 8-B は単一介入のまま保たれる（§8-3）。
 だけ**、blind A/B を 2 問行う。
 
 ```
-提示ペア（cell_id 昇順で事前登録し、聴取前に
-          s7_0g_listening_pair.json へ書き出して sha256 を pin する）:
+提示ペア（**選択規則を事前登録し、機械判定から決定論的に導く**。導いた結果を
+          聴取前に s7_0g_listening_pair.json へ書き出して sha256 を pin する）:
   Q1  run7/ritsu/P-ANCHOR/sakura-kagiri : B0  vs  primary lever（primary level）
-  Q2  別 context の target              : B0  vs  同上
-      = run7/ritsu/P-RI-FINAL/b2/p62（anchor と譜面も尺も音高も異なる固定セル）
+  Q2  **§7G-5 の条件 C を満たしたセル**（非 anchor で break→ok に flip した
+      target）のうち **cell_id 昇順で先頭**            : B0  vs  同上
+      ※ 条件 C により flip 集合は**非空が保証される**
+      ※ R-rescue（機械判定に参加しない = §7G-4）を聴く場合は、
+        T のうち machine_break(c, B0) == True のセルから cell_id 昇順で先頭
 
 規約は §6-1 と同一: 提示順ランダム・**どちらが介入側かを伏せる**・
 モデル名 / アーム名を伏せる。質問文は 1 つだけ:
@@ -1705,6 +1708,14 @@ run 8-B は単一介入のまま保たれる（§8-3）。
   2/2 で介入側     -> HUMAN_CONFIRMED   -> 8-0D へ
   それ以外          -> machine_effect_only -> **8-B BLOCKED**
 ```
+
+**Q2 を固定セルにしない理由**（2026-08-21・Codex P2 指摘を採用）: 条件 C は
+「anchor + 非 anchor 1 セル」で満たせるので、**あらかじめ選んだ固定セルが
+B0 で break でない / 当該アームで flip していない**ことが正当に起こる。その
+セルを Q2 に据えると、**改善が存在しないペアを聴かせて 2/2 を要求する**ことに
+なり、有効なレバーを `machine_effect_only` で誤ってブロックしうる。選択規則
+（= flip 集合から cell_id 昇順）は事前登録され、選択自体は機械結果から
+決定論的に決まるので、「動いたセルを人が選んだ」経路にはならない。
 
 **これは統計的証明ではない**（帰無仮説のもとで 2/2 が偶然出る確率は 0.25）。
 GPU 学習へ進むための**最低限の人間 Gate**としてのみ機能し、§9 の因果裁定にも
@@ -1802,6 +1813,40 @@ S2 / S3 : Voice / Performance を（部分的に）分解できる
 
 > 特定の Performance / transition 形質への単一教育介入によって、
 > Identity を変更せず TRF を再現可能に改善した。
+
+### 7G-12. 「Identity を変更せず」を名乗る条件（2026-08-21・Codex P1 指摘を採用）
+
+上の宣言文の **`Identity を変更せず` は、本書のどの Gate によっても支えられて
+いなかった**。8-0G は inference-time で `spk_embed` を触らないが、**8-B は
+40K の fine-tune で共有デコーダを動かす**ので、TRF が改善しつつ**実現された
+声が別人へ寄る**ことは起こりうる。その場合、全ての Gate を通ったまま宣言文が
+偽の成功を報告する。よって宣言の条件を事前登録する:
+
+```
+経路 1（実測して名乗る）— identity preservation check:
+  対象セル : §6-2 の P2 回帰対照と同一（{run7, 全未処置反復, run8-B}
+             × {ritsu, pjs} × {P-RI-FINAL/b4/p57, P-N-FINAL/b4/p57}）
+  計器     : **既存計器のみ**。`singer/identity_metrics.py` の
+             正規化 E1/E2（`normalized_e1_e2`）と `cosine_distance`
+             （S2 T1 の識別軸。**新しい identity 計器は作らない** = §0-5 の
+               単一スコア禁止・§12-0-A-3 の「分離性能で計器を選ばない」と同型）
+  判定     : d(run7, 8-B) <= d(run7, 8-R) + ε_id
+             （= 処置による identity 移動が**未処置ドリフトの幅を超えない**）
+  ε_id     : §7-1 の閾値と**同時に**（8-B 開始前に）凍結する。事後に決めない
+  未処置反復が 0 本（8-R 未実施）の場合は d(run7, 8-R) が定義できないので
+  経路 1 は使えない -> 経路 2 へ落ちる（§9-0 と同じ扱い）
+
+経路 2（名乗らない）— 実測が無い / 計器が適用できない場合:
+  宣言文を次へ**縮退**させ、実現された identity の不変は undetermined と記帳:
+  > 特定の Performance / transition 形質への単一教育介入によって、
+  > **Identity 入力（spk_embed / 話者構成 / dosage）を変更せず**
+  > TRF を再現可能に改善した（実現された identity の保存は undetermined）。
+```
+
+**適用可否の未確認事項（正直な記述）**: `identity_metrics` は `render_song` 系の
+`RenderResult` を前提にしており、**`gate_synth` 出力へそのまま適用できるかは
+未確認**である。適用できない場合に新しい計器を起こして経路 1 を通そうとしない —
+**既定は経路 2（宣言の縮退）**であり、計器の新設は本 memo の改訂として扱う。
 
 ## 8. Run 8-B — **dosage-fixed targeted partial replacement**
 
@@ -2518,8 +2563,13 @@ speaker-local である」ことではない**（package-level の限定より�
       で記帳されている（8-0B の AC と同じ様式 — 「全部レンダされたこと」ではなく
       「全部の帰結が記帳されたこと」が達成条件）
 - [ ] `D` の ladder 1.0 と `F` の ladder 0 が **B0 とバイト一致**している（no-op 検算）
-- [ ] 各アームの A〜F 判定が**個別に**記帳され、EFFECTIVE_LEVER / NOT_EFFECTIVE /
-      `nonspecific_response` / `duration_confounded` のいずれかで確定している
+- [ ] **因果アーム（D / F / S / S-frames-only）**の A〜F 判定が**個別に**記帳され、
+      `EFFECTIVE_LEVER` / `NOT_EFFECTIVE` / `nonspecific_response` /
+      `duration_confounded` / **`undetermined`（`ringing_uncorrected_group` 等の
+      事前登録された理由コード付き）** のいずれかで確定している。
+      **R-rescue は A〜F に参加せず**（§7G-4）、`rescue_confirmed` /
+      `rescue_not_confirmed` で記帳される（機械値は `instrument_coupled` 付きの
+      参考値）— fail-closed した走行が AC を満たせなくなる語彙にしない
 - [ ] **新しい TRF metric を作っていない**こと（primary axis・θ・ε が B-1/B-2 の
       凍結値と一致することの機械照合）
 - [ ] 複数成立時の primary lever が §7G-6 の 3 段規則で**再現可能に**決まっている
@@ -2565,7 +2615,11 @@ speaker-local である」ことではない**（package-level の限定より�
 - [ ] **8-B が教育した形質が §7G-6 の primary lever と一致している**
       （8-0G が選んだレバーと違うものを教育していない）
 - [ ] **効果で終端宣言**されている（「投入した」で終わらせない）。宣言文は
-      §7G-11 の 1 文を超えない（Identity 不変・単一教育介入・再現可能な改善）
+      §7G-11 の 1 文を超えない（単一教育介入・再現可能な改善）
+- [ ] **`Identity を変更せず` を宣言する場合、§7G-12 の経路 1（identity
+      preservation check・`ε_id` は 8-B 開始前に凍結）が実測で通っている**。
+      通っていない場合は §7G-12 経路 2 の縮退した宣言文を使い、実現された
+      identity の保存を `undetermined` で記帳する
 - [ ] **主張範囲が §8-5-6 の表のどの行かが明記されている**（dosage 固定の
       部分置換 / (a) への退化 / (c) 量増加のいずれか）
 - [ ] 費用 ≤ $4
