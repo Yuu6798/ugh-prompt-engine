@@ -46,6 +46,7 @@ import s4_spec as sp  # noqa: E402
 S3_RESULTS = _FOUNDRY / "genome_s3" / "results" / "s3_results.json"
 S35_RESULTS = _FOUNDRY / "genome_s35" / "results" / "s35_results.json"
 S3_INPUT_MANIFEST = _FOUNDRY / "planb_real" / "results" / "ladder_manifest.json"
+S3_SOURCE_MANIFEST = _FOUNDRY / "planb_real" / "results" / "source_manifest.json"
 
 RESULTS = _HERE / "results"
 WAV_DIR = RESULTS / "wav"
@@ -139,6 +140,204 @@ def load_s35() -> Tuple[Dict[str, Any], str]:
 def load_input_manifest() -> Tuple[Dict[str, Any], str]:
     return read_once(S3_INPUT_MANIFEST, "S3 input manifest ladder_manifest.json",
                      "planb_real の ladder を実行して results/ladder_manifest.json を用意する")
+
+
+def load_source_manifest() -> Tuple[Dict[str, Any], str]:
+    return read_once(S3_SOURCE_MANIFEST, "S2 source manifest source_manifest.json",
+                     "planb_real の acquire を実行して results/source_manifest.json を用意する")
+
+
+# ---------------------------------------------------------------------------
+# relocatable rematerialization（User 裁定 2026-08-21）
+#
+# 裁定 7:「同じ絶対パス」は再現条件ではない。「同じ archive と同じ再構築 pair」が
+# 再現条件である。凍結 manifest は S2 走行機の絶対パスを持つが、**それを書き換えず**、
+# 走行時メモリ上でだけ新 root へ写像する。
+# ---------------------------------------------------------------------------
+MATERIAL_ROOTS_SCHEMA = "voicegenesis-s4-material-roots/1.0"
+#: 配置定義の既定位置。`S4_MATERIAL_ROOTS` 環境変数で上書きできる。
+MATERIAL_ROOTS_PATH = RESULTS / "material_roots.json"
+
+
+def material_roots_path() -> Path:
+    env = os.environ.get("S4_MATERIAL_ROOTS")
+    return Path(env) if env else MATERIAL_ROOTS_PATH
+
+
+def load_material_roots() -> Optional[Dict[str, Any]]:
+    """再配置定義を読む。無ければ `None`（= 凍結 manifest の絶対パスをそのまま使う）。"""
+    path = material_roots_path()
+    if not path.exists():
+        return None
+    data, _sha = read_once(path, f"material roots 定義 ({path.name})",
+                           "S4 の再配置定義を確認する")
+    if data.get("schema") != MATERIAL_ROOTS_SCHEMA:
+        raise S4Stop(
+            cause=f"material roots 定義の schema が {data.get('schema')!r}"
+                  f"（要求 {MATERIAL_ROOTS_SCHEMA!r}）",
+            impact="素材の再配置定義を解釈できず、pair を再構築できない",
+            minimal_fix=f"{path} の schema を確認する")
+    sources = data.get("sources")
+    if not isinstance(sources, dict) or not sources:
+        raise S4Stop(
+            cause="material roots 定義に sources が無い（または空）",
+            impact="旧 root -> 新 root の写像を作れない",
+            minimal_fix=f"{path} の sources を確認する")
+    return data
+
+
+def _sha_dir_consumed(root: Path) -> Tuple[str, int]:
+    """`pr_manifest.aggregate_extracted_sha256` と同じ集約（相対パス + 内容）。
+
+    絶対パスを含まないので、**別 root へ展開しても同じ値**になる。
+    再配置後の木が S2 走行時と同一であることを、この 1 値で検査できる。
+    """
+    import pr_manifest  # noqa: PLC0415  — read-only import（planb_real は変更しない）
+    digest, count = pr_manifest.aggregate_extracted_sha256(root)
+    return str(digest), int(count)
+
+
+def resolve_material_roots(config: Dict[str, Any], source_manifest: Dict[str, Any],
+                           ) -> Dict[str, Any]:
+    """裁定 4 の開始条件を検査し、`old_root -> new_root` の写像を作る。
+
+    1 件でも不一致なら BLOCKED（裁定 5「合理的推測で続行しない」）。
+    """
+    entries = source_manifest.get("entries")
+    if not isinstance(entries, dict) or not entries:
+        raise S4Stop(
+            cause="source_manifest.json に entries が無い",
+            impact="archive SHA / 展開物 SHA の正本を引けず、再配置を検証できない",
+            minimal_fix="planb_real/results/source_manifest.json を確認する")
+    mapping: List[Dict[str, Any]] = []
+    for source, spec in sorted(config["sources"].items()):
+        entry = entries.get(source)
+        if not isinstance(entry, dict):
+            raise S4Stop(
+                cause=f"source_manifest.json に {source!r} の記録が無い",
+                impact="再配置した素材が S2 の正本素材と同一かを確認できない",
+                minimal_fix="material roots 定義の source 名を source_manifest に合わせる")
+        old_root = entry.get("extracted_path")
+        if not isinstance(old_root, str) or not old_root:
+            raise S4Stop(
+                cause=f"{source}: source_manifest に extracted_path が無い",
+                impact="旧 root を正本から導出できず、写像が推測になる",
+                minimal_fix="source_manifest.json の extracted_path を確認する")
+        new_root = spec.get("new_root")
+        if not isinstance(new_root, str) or not new_root:
+            raise S4Stop(
+                cause=f"{source}: material roots 定義に new_root が無い",
+                impact="再配置先が分からず素材を読めない",
+                minimal_fix="material roots 定義に new_root を書く")
+        new_path = Path(new_root).resolve()
+        if not new_path.is_dir():
+            raise S4Stop(
+                cause=f"{source}: new_root が存在しない（{new_path}）",
+                impact="再配置先に素材が無く、pair を再構築できない",
+                minimal_fix="archive を new_root へ展開する")
+        # 裁定 4: raw corpus は repository 外であること（規約 第3条1 の転載禁止）
+        if new_path == _REPO or _REPO in new_path.parents:
+            raise S4Stop(
+                cause=f"{source}: new_root が repository 内にある（{new_path}）",
+                impact="raw corpus が repository へ入り、歌声データベース利用規約"
+                       "第3条1（転載禁止）に抵触する",
+                minimal_fix="repository 外の scratch 領域へ展開し直す")
+        row: Dict[str, Any] = {"source": source, "old_root": old_root,
+                               "new_root": str(new_path)}
+        row.update(_verify_archive(source, spec, entry))
+        row.update(_verify_extracted(source, new_path, entry))
+        mapping.append(row)
+    return {"schema": MATERIAL_ROOTS_SCHEMA, "sources": mapping}
+
+
+def _verify_archive(source: str, spec: Dict[str, Any],
+                    entry: Dict[str, Any]) -> Dict[str, Any]:
+    """裁定 4「archive SHA 一致」。archive を提示しない運用も明示的に記録する。"""
+    want = entry.get("archive_sha256")
+    archive = spec.get("archive_path")
+    if not archive:
+        # 展開物の集約 SHA（相対パス + 内容）が一致していれば「同じ archive から
+        # 出た木」であることは示せるが、archive そのものは検査していない。
+        # 黙って通さず、記録に残す。
+        return {"archive_sha256": want, "archive_verified": False,
+                "archive_path": None,
+                "archive_note": "archive_path 未提示。展開物の集約 SHA でのみ同一性を確認"}
+    path = Path(archive)
+    if not path.is_file():
+        raise S4Stop(
+            cause=f"{source}: archive が存在しない（{path}）",
+            impact="裁定 4 の開始条件「archive SHA 一致」を検査できない",
+            minimal_fix="source_manifest に記録された archive を取得する")
+    got = _sha_bytes_of_file(path)
+    if got != want:
+        raise S4Stop(
+            cause=f"{source}: archive SHA が S2 正本と一致しない "
+                  f"(got {got[:16]}… / pin {str(want)[:16]}…)",
+            impact="S2 が使ったのと別の配布物から素材を作ることになる",
+            minimal_fix="source_manifest に記録された版の archive を取得する")
+    return {"archive_sha256": got, "archive_verified": True, "archive_path": str(path)}
+
+
+def _verify_extracted(source: str, new_root: Path,
+                      entry: Dict[str, Any]) -> Dict[str, Any]:
+    """展開物の集約 SHA（相対パス + 内容）が S2 正本と一致すること。
+
+    archive SHA だけでは展開後の 1 ファイル差し替えを検出できない。集約 SHA は
+    絶対パスを含まないので、**別 root でも同じ値**になる = 再配置の正しい検査。
+    """
+    want_sha = entry.get("extracted_sha256")
+    want_n = entry.get("extracted_file_count")
+    if not want_sha:
+        raise S4Stop(
+            cause=f"{source}: source_manifest に extracted_sha256 が無い",
+            impact="再配置した木が S2 走行時と同一かを検査できない",
+            minimal_fix="source_manifest.json を確認する")
+    got_sha, got_n = _sha_dir_consumed(new_root)
+    if got_sha != want_sha:
+        raise S4Stop(
+            cause=f"{source}: 展開物の集約 SHA が S2 正本と一致しない "
+                  f"(got {got_sha[:16]}…/{got_n} files / "
+                  f"pin {str(want_sha)[:16]}…/{want_n} files)",
+            impact="再配置した木が S2 走行時と別物であり、pair の再構築が別素材になる",
+            minimal_fix="archive から展開し直す（除外規則も S2 と揃える）")
+    return {"extracted_sha256": got_sha, "extracted_file_count": got_n,
+            "extracted_verified": True}
+
+
+def remap_pair(pair: Dict[str, Any], mapping: Dict[str, Any]) -> Dict[str, Any]:
+    """pair の素材パスを新 root へ写像した **コピー**を返す。
+
+    凍結 manifest の dict は書き換えない（正本は変更しない = 裁定 3d）。
+    """
+    rows = mapping.get("sources") or []
+    out = dict(pair)
+    for field_name in ("ritsu_file", "pjs_file"):
+        old = pair.get(field_name)
+        if not isinstance(old, str):
+            continue
+        for row in rows:
+            old_root = row["old_root"].rstrip("/")
+            if old == old_root or old.startswith(old_root + "/"):
+                out[field_name] = row["new_root"].rstrip("/") + old[len(old_root):]
+                break
+        else:
+            raise S4Stop(
+                cause=f"{pair.get('pair_key')}: {field_name} が どの old_root にも"
+                      f"当てはまらない（{old}）",
+                impact="素材の写像先を決められず、推測で別ファイルを読む危険がある",
+                minimal_fix="material roots 定義の source を増やす（推測で補完しない）")
+    return out
+
+
+def assert_pair_materials(pair: Dict[str, Any]) -> None:
+    """裁定 4「必須 wav/lab 存在」。読む前に存在を確かめ、原因を明示して止める。"""
+    for field_name in ("ritsu_file", "pjs_file"):
+        lab = Path(str(pair.get(field_name)))
+        if not lab.is_file():
+            raise S4Stop(
+                cause=f"{pair.get('pair_key')}: {field_name} が読めない（{lab}）",
+                impact="candidate pair を再構築できず、母集団が縮小する",
+                minimal_fix="new_root への展開が完全かを確認する（母集団は縮小しない）")
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +618,50 @@ def s3_canonical_pins(s3: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
     return out
 
 
+def assert_canonical_unchanged() -> None:
+    """裁定 4「S2/S3 正本を一切変更していない」を走行の**最後**に再確認する。
+
+    一回読み（G0-6）は走行中の読み直しを防ぐが、記録を書く直前に正本が
+    書き換わっていた場合を検出しない。読んだ bytes の digest と現物を突き合わせる。
+    """
+    for path, (_data, digest) in list(_READ_ONCE.items()):
+        if not path.is_file():
+            raise S4Stop(
+                cause=f"走行中に正本が消えた: {path}",
+                impact="記録が主張する来歴と実際の入力が食い違う",
+                minimal_fix="走行中に results/ を書き換えない")
+        now = _sha_bytes_of_file(path)
+        if now != digest:
+            raise S4Stop(
+                cause=f"走行中に正本が変わった: {path} "
+                      f"({digest[:16]}… -> {now[:16]}…)",
+                impact="S2/S3 正本を変更しないという裁定 4 の開始条件を満たさない",
+                minimal_fix="走行中に正本を書き換えない。変更の意図を User 裁定へ戻す")
+
+
+def machine_info() -> Dict[str, Any]:
+    """裁定 6「実行 machine 情報」。判定には使わない記録専用。"""
+    import platform  # noqa: PLC0415
+    info: Dict[str, Any] = {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+    }
+    for mod in ("numpy", "pyworld", "soundfile"):
+        try:
+            info[mod] = __import__(mod).__version__
+        except Exception:  # noqa: BLE001
+            info[mod] = None
+    return info
+
+
+def material_provenance(material: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """裁定 6 の記録: archive SHA / 新 root / 写像 / machine 情報。"""
+    return {"relocated": material is not None,
+            "sources": (material or {}).get("sources", []),
+            "machine": machine_info()}
+
+
 # ---------------------------------------------------------------------------
 # 生成
 # ---------------------------------------------------------------------------
@@ -689,11 +932,18 @@ def recompute_sample_shas() -> Dict[str, Dict[str, str]]:
     ctx = int(manifest["context_phones"])
     wanted = {pk for pk, _c in candidate_pairs(s3)}
     by_key = {p["pair_key"]: p for p in manifest["pairs"]}
+    roots_cfg = load_material_roots()
+    material = None
+    if roots_cfg is not None:
+        source_manifest, _sm = load_source_manifest()
+        material = resolve_material_roots(roots_cfg, source_manifest)
     out: Dict[str, Dict[str, str]] = {}
     for pk in sorted(wanted):
         pair = by_key.get(pk)
         if pair is None:
             continue
+        if material is not None:
+            pair = remap_pair(pair, material)
         bank, _pos, track, _perf, _dc = s3r.build_inputs(pair, ctx)
         out[pk] = {c: pc.compose(bank, track, tg).sha256()
                    for c, tg in sp.CONDITIONS.items()}
@@ -754,6 +1004,14 @@ def run_all(*, write_wav: bool = True, require_clean: bool = True,
             cause=f"S3 input manifest の context_phones が無い/不正: {ctx!r}",
             impact="S3 と同じ context 条件で素材を組み直せず、replay が成立しない",
             minimal_fix="ladder_manifest.json の context_phones を確認する")
+    roots_cfg = load_material_roots()
+    material: Optional[Dict[str, Any]] = None
+    if roots_cfg is not None:
+        source_manifest, _sm_sha = load_source_manifest()
+        material = resolve_material_roots(roots_cfg, source_manifest)
+        _PREFLIGHT["material_relocation"] = "pass"
+        _PREFLIGHT["material_roots"] = {r["source"]: r["new_root"]
+                                        for r in material["sources"]}
     cands = candidate_pairs(s3)
     _PREFLIGHT["candidate_pairs"] = len(cands)
     _PREFLIGHT["candidate_pair_keys"] = [pk for pk, _c in cands]
@@ -774,7 +1032,9 @@ def run_all(*, write_wav: bool = True, require_clean: bool = True,
         shutil.rmtree(WAV_STAGING)
     runs: List[PairRun] = []
     for pk, _ctx_id in cands:
-        runs.append(run_pair(by_key[pk], ctx, canonical.get(pk, {}), pins.get(pk, {}),
+        pair = by_key[pk] if material is None else remap_pair(by_key[pk], material)
+        assert_pair_materials(pair)
+        runs.append(run_pair(pair, ctx, canonical.get(pk, {}), pins.get(pk, {}),
                              write_wav=write_wav,
                              wav_root=WAV_STAGING if write_wav else None))
     # §6: S3 replay が 1 件でも不一致なら **S4 の結果を出さない**。
@@ -788,7 +1048,9 @@ def run_all(*, write_wav: bool = True, require_clean: bool = True,
             minimal_fix="S3 正本・凍結素材・実装 closure のどれが変わったかを"
                         "特定して User 裁定へ戻す")
     backup = publish_wav() if write_wav else None
+    assert_canonical_unchanged()
     meta = {
+        "material_provenance": material_provenance(material),
         "s3_results_sha256": s3_sha,
         "s35_results_sha256": s35_sha,
         "input_manifest_sha256": manifest_sha,

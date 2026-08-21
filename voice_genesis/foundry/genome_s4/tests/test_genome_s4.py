@@ -891,6 +891,178 @@ def test_46c_real_manifest_pins_every_s4_condition():
 
 
 # ===========================================================================
+# relocatable rematerialization（User 裁定 2026-08-21）
+# ===========================================================================
+def _material_tree(tmp_path: Path, name: str = "ritsu_ex") -> Path:
+    """`aggregate_extracted_sha256` が拾う拡張子だけを持つ最小の木。"""
+    root = tmp_path / name / "DB"
+    (root / "2018").mkdir(parents=True)
+    (root / "2018" / "2018.lab").write_bytes(b"0 100 a\n")
+    (root / "2018" / "2018.wav").write_bytes(b"RIFFfake")
+    return tmp_path / name
+
+
+def _entry_for(root: Path, old_root: str, archive: Path = None) -> dict:
+    import pr_manifest
+    sha, n = pr_manifest.aggregate_extracted_sha256(root)
+    e = {"extracted_path": old_root, "extracted_sha256": sha,
+         "extracted_file_count": n}
+    if archive is not None:
+        e["archive_sha256"] = sr._sha_bytes_of_file(archive)
+    return e
+
+
+def test_47_remap_maps_roots_without_touching_the_frozen_manifest():
+    """裁定 3e: 旧 root は書き換えず、走行時メモリ上でだけ写像する。"""
+    mapping = {"sources": [
+        {"source": "ritsu_singing_db", "old_root": "/old/ritsu_ex/DB",
+         "new_root": "/new/ritsu"},
+        {"source": "pjs_corpus", "old_root": "/old/pjs_ex/PJS",
+         "new_root": "/new/pjs"}]}
+    pair = {"pair_key": "k", "ritsu_file": "/old/ritsu_ex/DB/2018/2018.lab",
+            "pjs_file": "/old/pjs_ex/PJS/pjs003/pjs003.lab", "probe_kind": "terminal_ri"}
+    out = sr.remap_pair(pair, mapping)
+    assert out["ritsu_file"] == "/new/ritsu/2018/2018.lab"
+    assert out["pjs_file"] == "/new/pjs/pjs003/pjs003.lab"
+    assert out["probe_kind"] == "terminal_ri"
+    # 元 dict は不変（正本は変更しない = 裁定 3d）
+    assert pair["ritsu_file"] == "/old/ritsu_ex/DB/2018/2018.lab"
+    # どの old_root にも当てはまらないパスは推測で補完せず止める（裁定 5）
+    with pytest.raises(sr.S4Stop):
+        sr.remap_pair({"pair_key": "k", "ritsu_file": "/elsewhere/x.lab",
+                       "pjs_file": "/new/pjs/a.lab"}, mapping)
+    # prefix の部分一致で誤爆しない（/old/ritsu_ex/DB2 は別 root）
+    with pytest.raises(sr.S4Stop):
+        sr.remap_pair({"pair_key": "k", "ritsu_file": "/old/ritsu_ex/DB2/x.lab",
+                       "pjs_file": "/old/pjs_ex/PJS/a.lab"}, mapping)
+
+
+def test_48_relocation_requires_matching_archive_and_extracted_sha(tmp_path):
+    root = _material_tree(tmp_path)
+    archive = tmp_path / "ritsu.zip"
+    archive.write_bytes(b"archive-bytes")
+    entry = _entry_for(root, "/old/ritsu_ex", archive)
+    sm = {"entries": {"ritsu_singing_db": entry}}
+    cfg = {"schema": sr.MATERIAL_ROOTS_SCHEMA, "sources": {
+        "ritsu_singing_db": {"new_root": str(root), "archive_path": str(archive)}}}
+
+    got = sr.resolve_material_roots(cfg, sm)
+    row = got["sources"][0]
+    assert row["old_root"] == "/old/ritsu_ex" and row["new_root"] == str(root.resolve())
+    assert row["archive_verified"] is True and row["extracted_verified"] is True
+
+    # archive SHA 不一致 -> BLOCKED
+    bad_sm = {"entries": {"ritsu_singing_db": {**entry, "archive_sha256": "z" * 64}}}
+    with pytest.raises(sr.S4Stop):
+        sr.resolve_material_roots(cfg, bad_sm)
+    # 展開物の 1 ファイル差し替え -> BLOCKED（archive SHA だけでは検出できない経路）
+    (root / "DB" / "2018" / "2018.lab").write_bytes(b"0 200 a\n")
+    with pytest.raises(sr.S4Stop):
+        sr.resolve_material_roots(cfg, sm)
+
+
+def test_48b_relocation_rejects_repo_internal_and_missing_roots(tmp_path):
+    root = _material_tree(tmp_path)
+    entry = _entry_for(root, "/old/ritsu_ex")
+    sm = {"entries": {"ritsu_singing_db": entry}}
+
+    # raw corpus が repository 内 -> BLOCKED（利用規約 第3条1）
+    inside = {"schema": sr.MATERIAL_ROOTS_SCHEMA, "sources": {
+        "ritsu_singing_db": {"new_root": str(sr._REPO / "voice_genesis")}}}
+    with pytest.raises(sr.S4Stop):
+        sr.resolve_material_roots(inside, sm)
+    # new_root が無い / 存在しない
+    for spec in ({}, {"new_root": str(tmp_path / "nope")}):
+        cfg = {"schema": sr.MATERIAL_ROOTS_SCHEMA,
+               "sources": {"ritsu_singing_db": spec}}
+        with pytest.raises(sr.S4Stop):
+            sr.resolve_material_roots(cfg, sm)
+    # source_manifest に無い source
+    cfg = {"schema": sr.MATERIAL_ROOTS_SCHEMA,
+           "sources": {"unknown_source": {"new_root": str(root)}}}
+    with pytest.raises(sr.S4Stop):
+        sr.resolve_material_roots(cfg, sm)
+    # extracted_sha256 が正本に無い -> 検証スキップにせず BLOCKED
+    with pytest.raises(sr.S4Stop):
+        sr.resolve_material_roots(
+            {"schema": sr.MATERIAL_ROOTS_SCHEMA,
+             "sources": {"ritsu_singing_db": {"new_root": str(root)}}},
+            {"entries": {"ritsu_singing_db": {"extracted_path": "/old"}}})
+
+
+def test_48c_archive_not_supplied_is_recorded_not_silently_passed(tmp_path):
+    """archive を出さない運用も「検証していない」ことを記録に残す。"""
+    root = _material_tree(tmp_path)
+    sm = {"entries": {"ritsu_singing_db": _entry_for(root, "/old/ritsu_ex")}}
+    cfg = {"schema": sr.MATERIAL_ROOTS_SCHEMA,
+           "sources": {"ritsu_singing_db": {"new_root": str(root)}}}
+    row = sr.resolve_material_roots(cfg, sm)["sources"][0]
+    assert row["archive_verified"] is False and row["archive_note"]
+
+
+def test_49_material_roots_schema_and_absence(tmp_path, monkeypatch):
+    monkeypatch.setenv("S4_MATERIAL_ROOTS", str(tmp_path / "absent.json"))
+    assert sr.load_material_roots() is None          # 無ければ従来どおり
+    cfg = tmp_path / "roots.json"
+    cfg.write_text(json.dumps({"schema": "wrong/9.9", "sources": {}}),
+                   encoding="utf-8")
+    monkeypatch.setenv("S4_MATERIAL_ROOTS", str(cfg))
+    sr.reset_read_cache()
+    with pytest.raises(sr.S4Stop):
+        sr.load_material_roots()
+    cfg.write_text(json.dumps({"schema": sr.MATERIAL_ROOTS_SCHEMA, "sources": {}}),
+                   encoding="utf-8")
+    sr.reset_read_cache()
+    with pytest.raises(sr.S4Stop):
+        sr.load_material_roots()                     # sources 空も通さない
+
+
+def test_50_missing_material_files_block_without_shrinking_population(tmp_path):
+    lab = tmp_path / "a.lab"
+    lab.write_bytes(b"x")
+    sr.assert_pair_materials({"pair_key": "k", "ritsu_file": str(lab),
+                              "pjs_file": str(lab)})
+    with pytest.raises(sr.S4Stop) as exc:
+        sr.assert_pair_materials({"pair_key": "k", "ritsu_file": str(lab),
+                                  "pjs_file": str(tmp_path / "missing.lab")})
+    assert "母集団は縮小しない" in exc.value.minimal_fix
+
+
+def test_51_canonical_change_during_run_is_blocked(tmp_path):
+    doc = tmp_path / "s3.json"
+    doc.write_bytes(b'{"a": 1}')
+    sr.read_once(doc, "doc", "fix")
+    sr.assert_canonical_unchanged()                  # 変わっていなければ通る
+    doc.write_bytes(b'{"a": 2}')
+    with pytest.raises(sr.S4Stop):
+        sr.assert_canonical_unchanged()
+    doc.unlink()
+    with pytest.raises(sr.S4Stop):
+        sr.assert_canonical_unchanged()
+
+
+def test_52_material_provenance_is_recorded():
+    """裁定 6: archive SHA / 新 root / 写像 / machine 情報を正本へ残す。"""
+    none = sr.material_provenance(None)
+    assert none["relocated"] is False and none["machine"]["python"]
+    mapped = sr.material_provenance({"sources": [
+        {"source": "ritsu_singing_db", "old_root": "/old", "new_root": "/new",
+         "archive_sha256": "a" * 64, "archive_verified": True,
+         "extracted_sha256": "b" * 64, "extracted_file_count": 220}]})
+    assert mapped["relocated"] is True
+    row = mapped["sources"][0]
+    assert row["old_root"] == "/old" and row["new_root"] == "/new"
+    assert mapped["machine"]["numpy"]
+
+    meta = {"s3_results_sha256": "a" * 64, "s35_results_sha256": "b" * 64,
+            "input_manifest_sha256": "c" * 64, "code_state": {},
+            "candidate_pairs": [], "material_provenance": mapped}
+    res = srep.build_results(meta, sg.overall_gate(_verdicts(_pop(5))))
+    assert res["material_provenance"]["relocated"] is True
+    assert "relocatable rematerialization" in srep.render_record(res)
+
+
+# ===========================================================================
 # §23 公開
 # ===========================================================================
 def test_39_bundle_rolls_back_entirely(tmp_path, monkeypatch):

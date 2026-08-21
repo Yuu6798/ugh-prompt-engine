@@ -172,6 +172,7 @@ def build_results(meta: Dict[str, Any], mech: Dict[str, Any],
         "s35_results_sha256": meta["s35_results_sha256"],
         "input_manifest_sha256": meta["input_manifest_sha256"],
         "code_state": meta["code_state"],
+        "material_provenance": meta.get("material_provenance", {"relocated": False}),
         "context_phones": meta.get("context_phones"),
         "identity_ap_scale": meta.get("identity_ap_scale"),
         "candidate_pairs": mech["candidate_pairs"],
@@ -205,6 +206,19 @@ def render_record(res: Dict[str, Any]) -> str:
     closure = cs.get("closure") or {}
     lines.append(f"- closure digest: `{closure.get('digest', '')}` "
                  f"({closure.get('file_count', 0)} files)")
+    mp = res.get("material_provenance") or {}
+    if mp.get("relocated"):
+        lines.append("- 素材: **relocatable rematerialization**（凍結 manifest の"
+                     "絶対パスは変更せず、走行時メモリ上でのみ新 root へ写像）")
+        for row in mp.get("sources", []):
+            lines.append(
+                f"  - `{row['source']}`: archive `{str(row.get('archive_sha256'))[:16]}…`"
+                f"（検証 {'済' if row.get('archive_verified') else '未'}） / "
+                f"展開物集約 `{str(row.get('extracted_sha256'))[:16]}…` "
+                f"({row.get('extracted_file_count')} files) / "
+                f"new_root `{_cell(row['new_root'])}`")
+    else:
+        lines.append("- 素材: 凍結 manifest の絶対パスをそのまま使用")
     lines.append(f"- conditions: {', '.join(res['conditions'])} "
                  f"/ candidate pairs: {res['candidate_pairs']}")
     lines.append("")
