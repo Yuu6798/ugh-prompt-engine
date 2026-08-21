@@ -879,6 +879,12 @@ def test_43c2_blocked_record_carries_preflight():
     assert body["preflight"]["candidate_pairs"] == 6
     md = files[1][1].decode("utf-8")
     assert "停止までに通過した Gate" in md and "terminal_ri" in md
+    # pair_key は `|` を含む。列区切りと衝突させない
+    sr._PREFLIGHT["candidate_pair_keys"] = ["terminal_i|a#1|b#2"]
+    md2 = srep.blocked_bundle(
+        sr.S4Stop(cause="c", impact="i", minimal_fix="f"))[1][1].decode("utf-8")
+    row = next(ln for ln in md2.splitlines() if "candidate_pair_keys" in ln)
+    assert row.count("|") - row.count("\\|") == 3      # 行頭 / 区切り / 行末のみ
     sr.reset_preflight()
     plain = srep.blocked_bundle(sr.S4Stop(cause="c", impact="i", minimal_fix="f"))
     assert "停止までに通過した Gate" not in plain[1][1].decode("utf-8")

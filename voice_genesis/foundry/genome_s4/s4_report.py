@@ -49,6 +49,11 @@ OUT_OF_SCOPE_OBSERVATIONS: Tuple[str, ...] = (
 )
 
 
+def _cell(value: Any) -> str:
+    """Markdown 表のセル。pair_key は `|` を含むので列区切りと衝突させない。"""
+    return str(value).replace("|", "\\|")
+
+
 def _dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2, allow_nan=False, sort_keys=False)
 
@@ -140,7 +145,9 @@ def blocked_bundle(stop: S4Stop) -> Tuple[Tuple[Path, bytes], ...]:
                   "| 項目 | 値 |", "|---|---|"]
         for k, v in pre.items():
             if isinstance(v, list):
-                v = ", ".join(f"`{x}`" for x in v) or "—"
+                v = ", ".join(f"`{_cell(x)}`" for x in v) or "—"
+            else:
+                v = _cell(v)
             lines.append(f"| {k} | {v} |")
         lines.append("")
     md = "\n".join(lines)

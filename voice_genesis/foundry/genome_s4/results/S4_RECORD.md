@@ -7,3 +7,24 @@
 S4 の結果は出さない。修正実装は行わない（設計書 §24）。
 
 S2 PASS / S3 PASS / S3.5 の結果は変更しない（設計書 §16）。
+
+## 停止までに通過した Gate
+
+判定には使わない。**どこまで進んで何で止まったか**を記録だけで追えるようにするための証拠。
+
+| 項目 | 値 |
+|---|---|
+| G0-1_s3_canonical | pass |
+| G0-2_s35_canonical | pass |
+| G0-3_provenance_chain | pass |
+| G0-5_clean_worktree | pass |
+| G0-5_closure_digest | 7938ce20467c96d8154d074f3c0e167ad2634ba07232299a61d2c074697edbd8 |
+| G0-5_closure_file_count | 21 |
+| commit | c3e302457e6a5fb9cbd1f73a0194b3f94864a230 |
+| s3_results_sha256 | 65b91402f2b6ead2b8d3269455413e6bd0ae575d66a33a52f0a2367c91e55cd0 |
+| s35_results_sha256 | 5dcbc4329d9e7343e0f48d96665be5faa0f9406425a6552249eb9b5fcebb95ba |
+| input_manifest_sha256 | 78fcd8cc6e3f2b7c9edae72e0894f552b9cdfb0087d44b1df0d45402063fec4f |
+| candidate_pairs | 6 |
+| candidate_pair_keys | `terminal_ri|2018#215|pjs003#65`, `terminal_i|1st_color#86|pjs001#54`, `medial_ri|1st_color#104|pjs002#42`, `terminal_ri|2018#598|pjs065#29`, `terminal_i|1st_color#218|pjs001#73`, `medial_ri|1st_color#357|pjs002#54` |
+| candidate_contexts | `medial_ri`, `terminal_i`, `terminal_ri` |
+| §4_candidate_derivation | pass |
