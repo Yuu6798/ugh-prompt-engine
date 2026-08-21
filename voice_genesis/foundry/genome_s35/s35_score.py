@@ -263,7 +263,10 @@ def _assert_not_rescoring_after_reveal(answers_sha: Dict[int, str], key_sha: str
             required_action="開示済み成果物を復元するか、session 全体をやり直す") from exc
     now = {str(k): v for k, v in sorted(answers_sha.items())}
     was = prev.get("revealed_after_answers_sha256") or {}
-    if was != now:
+    # 手元にある stage 分だけで先に比較できる（Stage 2 を採点する前に、
+    # Stage 1 の書き換えを検出したい）。両方揃っていれば全体比較になる。
+    was_subset = {k: v for k, v in was.items() if k in now}
+    if was_subset != now or (len(now) == len(was) and was != now):
         raise prep.S35Stop(
             reason="正解開示後に回答が変わっている（再採点は禁止）: "
                    f"開示時 {was} -> 現在 {now}",
@@ -283,6 +286,9 @@ def finalize(stage1_path: Optional[Path] = None,
     commitment = manifest.get("key_commitment", "")
 
     s1 = score_stage(sp.STAGE1, stage1_path)
+    # 開示後に Stage 1 の回答が書き換わっていれば、Stage 2 へ進む前に止める
+    # （後段の被覆検査より先に、根本原因を報告するため）。
+    _assert_not_rescoring_after_reveal({sp.STAGE1: s1["answers_sha256"]}, key_sha)
     advancing = advancing_from_stage1(s1)
 
     s2: Optional[Dict[str, Any]] = None
@@ -292,6 +298,22 @@ def finalize(stage1_path: Optional[Path] = None,
     # これを「Stage 2 待ち」に数えると、正常な走行が false BLOCKED で終わる。
     owed = [g for g in advancing if (plans_early.get(g) or {}).get("stage2")]
     if owed and has_stage2_block:
+        # **部分的な Stage 2 pack を受け付けない。** 一部の gene を欠いたまま
+        # 採点すると、欠けた gene が INVALID になる一方で残りが S4_READY を作り、
+        # プロトコル的に不完全な走行が「成功」で終わる。
+        block2 = (manifest.get("stages") or {}).get(str(sp.STAGE2)) or {}
+        covered = {(key["trials"].get(t) or {}).get("gene")
+                   for t in (block2.get("trial_ids") or [])}
+        # 検査するのは**欠落**（owed ⊆ covered）。過剰被覆は無害で、
+        # Stage 1 を落ちた gene に Stage 2 結果が付いても verdict は
+        # NOT_ESTABLISHED のまま変わらない（鍵の改竄は commitment 検査が拾う）。
+        missing = sorted(set(owed) - covered)
+        if missing:
+            raise prep.S35Stop(
+                reason=f"Stage 2 pack が owed gene を覆っていない（欠落 {missing}）: "
+                       f"owed={sorted(owed)} / covered={sorted(c for c in covered if c)}",
+                required_action="prepare_stage2() へ advancing gene を全て渡して"
+                                "配布し直す。部分 pack での採点はしない")
         s2 = score_stage(sp.STAGE2, stage2_path)
     elif owed and not has_stage2_block:
         raise prep.S35Stop(

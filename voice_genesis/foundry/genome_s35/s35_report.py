@@ -234,14 +234,21 @@ def existing_finalized() -> bool:
     return load_finalized() is not None
 
 
+#: 確定記録の同一性を決めるフィールド。**判定だけでなく来歴も含める。**
+#: 判定が同じでも来歴（どの S3 正本・どのプロトコル・どの manifest で出たか）が
+#: 違えば、それは別の実験の結果であって同じ記録ではない。
+_FINGERPRINT_FIELDS = (
+    "overall", "answers_sha256", "key_commitment", "key_reveal_sha256",
+    "s3_results_sha256", "protocol_version", "blind_manifest_sha256",
+    "commitment_verified", "audio_verified", "listener_id", "session_id",
+)
+
+
 def _verdict_fingerprint(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """記録の**判定としての中身**。フィールドが増えても変わらない部分だけ取る。"""
-    return {
-        "overall": doc.get("overall"),
-        "answers_sha256": doc.get("answers_sha256"),
-        "key_commitment": doc.get("key_commitment"),
-        "genes": {g: v.get("verdict") for g, v in (doc.get("genes") or {}).items()},
-    }
+    """記録の**判定 + 来歴**。フィールドが増えただけでは変わらない部分を取る。"""
+    fp: Dict[str, Any] = {k: doc.get(k) for k in _FINGERPRINT_FIELDS}
+    fp["genes"] = {g: v.get("verdict") for g, v in (doc.get("genes") or {}).items()}
+    return fp
 
 
 def conflicting_with_finalized(res: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -950,3 +950,75 @@ def test_no_stage2_pair_for_all_advancing_genes_is_not_blocked(s35) -> None:
     assert all(v["verdict"] == sp.GeneVerdict.NOT_EVALUABLE_S35.value
                for v in res["genes"].values())
     assert res["overall"]["verdict"] == "S4_NOT_READY"
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 4 巡（採用 2 件。1 件は §13 境界宣言で見送り）
+# ---------------------------------------------------------------------------
+def test_partial_stage2_pack_is_rejected(s35) -> None:
+    """owed gene を欠いた Stage 2 pack で採点しない。
+
+    欠けた gene が INVALID になる一方で残りが S4_READY を作ると、
+    プロトコル的に不完全な走行が「成功」で終わる。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    assert len(adv) == 4
+    prep.prepare_stage2(adv[:3])          # 1 gene 落として配布
+    _answer(out, 2, _correct)
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    d = exc.value.as_dict()
+    assert "覆っていない" in d["reason"]
+    assert adv[3] in d["reason"]
+    assert not (out / "key_reveal.json").exists()
+
+
+def test_full_stage2_pack_passes_coverage(s35) -> None:
+    """全 owed gene が揃っていれば通る（過剰被覆も無害）。"""
+    out, _doc = s35()
+    res = _run_full(out, _correct, _correct)
+    assert res["overall"]["verdict"] == "S4_READY"
+
+
+def test_provenance_change_blocks_republish(s35) -> None:
+    """判定が同じでも来歴が違えば、確定記録を上書きしない。
+
+    それは同じ記録ではなく別の実験の結果なので、差し替えは来歴の汚染になる。
+    """
+    out, _doc = s35()
+    assert _finish(out) == 0
+    good_json = (out / "s35_results.json").read_bytes()
+    good_md = (out / "S3_5_RECORD.md").read_bytes()
+
+    mp = out / "blind_manifest.json"
+    m = json.loads(mp.read_text(encoding="utf-8"))
+    m["s3_results_sha256"] = "0" * 64        # 判定は変えず来歴だけ差し替える
+    mp.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    assert report.main() == 3
+    assert (out / "s35_results.json").read_bytes() == good_json
+    assert (out / "S3_5_RECORD.md").read_bytes() == good_md
+    err = json.loads((out / "last_error.json").read_text(encoding="utf-8"))
+    assert err["conflict"]["was"]["s3_results_sha256"] != \
+        err["conflict"]["now"]["s3_results_sha256"]
+
+
+def test_fingerprint_covers_provenance_fields() -> None:
+    """fingerprint に来歴が含まれていること（判定だけでは不足）。"""
+    for field in ("s3_results_sha256", "protocol_version", "blind_manifest_sha256",
+                  "key_reveal_sha256", "commitment_verified", "audio_verified",
+                  "listener_id", "session_id"):
+        assert field in report._FINGERPRINT_FIELDS, field
+
+
+def test_rescoring_guard_fires_before_stage2_checks(s35) -> None:
+    """開示後に Stage 1 が書き換わったら、Stage 2 の被覆検査より先に止める。"""
+    out, _doc = s35()
+    assert _finish(out, _only({"f0"})) == 1      # f0 のみ通過 = S4_NOT_READY
+    _answer(out, 1, _correct)                    # 開示後に全問正解へ書き換え
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    assert "再採点は禁止" in exc.value.as_dict()["reason"]
