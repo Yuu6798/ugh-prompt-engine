@@ -146,6 +146,10 @@ def render_record(res: Dict[str, Any]) -> str:
     else:
         code_note = " (clean worktree)"
     lines.append(f"- source_commit: `{res['source_commit']}`{code_note}")
+    if cs.get("source_digest"):
+        lines.append(f"- source_digest: `{cs['source_digest']}` "
+                     f"（{', '.join(sr.SOURCE_FILES)} の内容 digest。"
+                     "git object の有無に依らず手元で照合できる）")
     lines.append(f"- input_manifest_sha256: `{res['input_manifest_sha256']}`")
     lines.append(f"- pairs: {res['pair_count']} / conditions: {', '.join(res['conditions'])}")
     lines.append(f"- context_phones: {res.get('context_phones')} / "

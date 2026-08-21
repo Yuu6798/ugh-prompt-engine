@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -56,6 +57,10 @@ REQUIRED_PAIR_FIELDS = ("pair_key", "probe_kind", "ritsu_file", "pjs_file",
                         "identity_sha256", "performance_sha256")
 RESULTS = _HERE / "results"
 WAV_DIR = RESULTS / "wav"
+#: 全 pair が成功してから初めて WAV_DIR へ差し替える。途中で落ちたときに
+#: 「新しい wav の断片 + 前回の記録」という一貫して見える成果物を残さない
+#: （`planb_real` の WAV_STAGING と同じ扱い）。
+WAV_STAGING = RESULTS / "wav.staging"
 
 
 #: 走行中に読み直さないための凍結キャッシュ（parse した bytes とその digest）。
@@ -267,8 +272,28 @@ def code_state() -> Dict[str, Any]:
                 h.update(f"<unreadable:{exc.errno}>".encode("utf-8"))
         state["dirty"] = True
         state["dirty_digest"] = h.hexdigest()
+    # commit ID は「その object を持つクローン」でしか検証できない。
+    # S3 の実装ファイルそのものの digest なら、履歴の形（squash / merge）や
+    # object の有無に依らず、記録だけを見た人が手元で照合できる。
+    state["source_digest"] = source_digest()
     _CODE_STATE = state
     return dict(state)
+
+
+#: `source_digest` が覆う実装ファイル（判定に関与するモジュールのみ）。
+SOURCE_FILES = ("s3_spec.py", "s3_runner.py", "s3_gates.py", "s3_report.py")
+
+
+def source_digest() -> str:
+    """S3 実装ファイルの内容 digest。git object に依存せず照合できる pin。"""
+    h = hashlib.sha256()
+    for name in SOURCE_FILES:
+        h.update(name.encode("utf-8"))
+        try:
+            h.update(hashlib.sha256((_HERE / name).read_bytes()).digest())
+        except OSError as exc:
+            h.update(f"<unreadable:{exc.errno}>".encode("utf-8"))
+    return h.hexdigest()
 
 
 def source_commit() -> str:
@@ -386,14 +411,37 @@ def intervention_amounts(bank, pos, track, perf) -> Dict[str, Dict[str, Any]]:
     }
 
 
-def run_pair(pair: Dict[str, Any], ctx: int, *, write_wav: bool = True) -> PairRun:
+def publish_wav(staging: Path = WAV_STAGING, dest: Path = WAV_DIR) -> None:
+    """staging に出来上がった WAV 群を丸ごと公開する（全 pair 成功後に 1 回）。"""
+    if not staging.exists():
+        return
+    backup = dest.with_name(dest.name + ".prev")
+    if backup.exists():
+        shutil.rmtree(backup)
+    try:
+        if dest.exists():
+            os.replace(dest, backup)
+        os.replace(staging, dest)
+    except BaseException:
+        if backup.exists() and not dest.exists():
+            os.replace(backup, dest)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
+
+
+def run_pair(pair: Dict[str, Any], ctx: int, *, write_wav: bool = True,
+             wav_root: Optional[Path] = None) -> PairRun:
     bank, pos, track, perf, donor_core = build_inputs(pair, ctx)
     run = PairRun(pair_key=pair["pair_key"], context_id=sp.context_id(pair),
                   identity_sha256=bank.content_sha256(),
                   performance_sha256=perf.content_sha256())
     run.intervention = intervention_amounts(bank, pos, track, perf)
-    out_dir = WAV_DIR / run.pair_key.replace("|", "__").replace("#", "-")
+    leaf = run.pair_key.replace("|", "__").replace("#", "-")
+    out_dir = (wav_root or WAV_DIR) / leaf
     out_dir.mkdir(parents=True, exist_ok=True)
+    # 記録には **公開後の** パスを載せる（staging はこの走行だけの一時領域）。
+    published_dir = WAV_DIR / leaf
     try:
         prp.assert_no_spectral_payload(perf)
         run.performance_payload_1d = True
@@ -411,7 +459,7 @@ def run_pair(pair: Dict[str, Any], ctx: int, *, write_wav: bool = True) -> PairR
         tw = pbg.gate_tripwire(pc.compose, bank, track, toggles)
         run.conditions[cond] = ConditionOutput(
             condition=cond, toggles=toggles.label, sample_sha256=res.sha256(),
-            wav_sha256=wav_sha, wav_path=str(wav_path),
+            wav_sha256=wav_sha, wav_path=str(published_dir / f"{cond}.wav"),
             metrics=measure(cond, res, wav_path, bank, pos, perf, donor_core, track)
             if write_wav else {},
             tripwire_status=tw.status,
@@ -459,7 +507,13 @@ def run_all(*, write_wav: bool = True) -> Tuple[List[PairRun], Dict[str, Any]]:
     code_state()          # 実験の**前**に確定させる（走行中に HEAD が動いても揺れない）
     data = load_frozen()
     ctx = int(data["context_phones"])      # load_frozen が存在と型を保証する
-    runs = [run_pair(p, ctx, write_wav=write_wav) for p in data["pairs"]]
+    if write_wav and WAV_STAGING.exists():
+        shutil.rmtree(WAV_STAGING)
+    runs = [run_pair(p, ctx, write_wav=write_wav,
+                     wav_root=WAV_STAGING if write_wav else None)
+            for p in data["pairs"]]
+    if write_wav:
+        publish_wav()          # 全 pair が成功して初めて差し替える
     cs = code_state()
     meta = {"context_phones": ctx,
             "identity_ap_scale": data.get("identity_ap_scale"),

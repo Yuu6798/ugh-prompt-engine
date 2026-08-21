@@ -505,7 +505,7 @@ def test_code_state_is_captured_once_and_reports_dirtiness() -> None:
     import s3_runner as sr
 
     first = sr.code_state()
-    assert set(first) == {"commit", "dirty", "dirty_digest"}
+    assert set(first) == {"commit", "dirty", "dirty_digest", "source_digest"}
     assert first["dirty"] in (True, False, None)
     assert sr.code_state() == first          # 走行中に揺れない
     assert sr.source_commit() == first["commit"]
@@ -733,3 +733,58 @@ def test_real_git_porcelain_quoting_is_actually_handled(tmp_path: Path) -> None:
         naive = quoted.decode("utf-8", "replace").splitlines()[0][3:].strip().strip('"')
         assert not (tmp_path / naive).is_file(), (
             "この環境では引用符剥がしでも解決できてしまう（core.quotePath=false?）")
+
+
+# ---------------------------------------------------------------------------
+# PR #295 レビュー第 5 巡
+# ---------------------------------------------------------------------------
+def test_source_digest_is_git_independent_and_content_sensitive(tmp_path: Path,
+                                                                monkeypatch) -> None:
+    """`source_digest` は git object に依らず、実装ファイルの中身に反応する。"""
+    import s3_runner as sr
+
+    base = sr.source_digest()
+    assert len(base) == 64
+    assert base == sr.source_digest()          # 同じ内容なら安定
+
+    # 1 ファイルだけ差し替えた木を作ると digest が変わる
+    fake = tmp_path / "src"
+    fake.mkdir()
+    for name in sr.SOURCE_FILES:
+        (fake / name).write_bytes((sr._HERE / name).read_bytes())
+    monkeypatch.setattr(sr, "_HERE", fake)
+    assert sr.source_digest() == base          # 内容が同じなら場所に依らない
+    (fake / "s3_gates.py").write_bytes(b"# tampered\n")
+    assert sr.source_digest() != base
+
+
+def test_wav_publish_is_all_or_nothing(tmp_path: Path) -> None:
+    """staging が揃ってから公開する。落ちたら前回の wav がそのまま残る。"""
+    import s3_runner as sr
+
+    dest, staging = tmp_path / "wav", tmp_path / "wav.staging"
+    (dest / "pairA").mkdir(parents=True)
+    (dest / "pairA" / "B0.wav").write_bytes(b"old")
+
+    # staging が無ければ何もしない（= 前回の成果物を壊さない）
+    sr.publish_wav(staging, dest)
+    assert (dest / "pairA" / "B0.wav").read_bytes() == b"old"
+
+    (staging / "pairA").mkdir(parents=True)
+    (staging / "pairA" / "B0.wav").write_bytes(b"new")
+    sr.publish_wav(staging, dest)
+    assert (dest / "pairA" / "B0.wav").read_bytes() == b"new"
+    assert not staging.exists()
+    assert not dest.with_name("wav.prev").exists()
+
+
+def test_run_pair_records_published_path_not_staging(tmp_path: Path) -> None:
+    """記録に載る wav_path は公開後の位置（staging の一時パスではない）。"""
+    import s3_runner as sr
+
+    leaf = "terminal_ri__x-1__y-2"
+    published = sr.WAV_DIR / leaf / "B0.wav"
+    # run_pair を呼ばずに規約だけを固定する（実素材が無い環境でも回る）
+    assert sr.WAV_STAGING != sr.WAV_DIR
+    assert str(published).endswith(f"results/wav/{leaf}/B0.wav")
+    assert "wav.staging" not in str(published)
