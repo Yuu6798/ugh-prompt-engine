@@ -1,6 +1,6 @@
 {
   "schema": "voicegenesis-s4-answers/1.0",
-  "key_commitment": "7167f7a5b5e803f94950be977402318aa0f0e0a12cd39f70c2b77a093f6e03d9",
+  "key_commitment": "20f1a0182c3ff763709f3d1eb5f59ac436e57d569648f9be460a6d505dedaf73",
   "answers": {
     "I001": "YES|NO|UNSURE",
     "I002": "YES|NO|UNSURE",

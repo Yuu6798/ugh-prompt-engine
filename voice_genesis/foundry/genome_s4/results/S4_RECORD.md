@@ -4,8 +4,8 @@
 - s3_results_sha256: `65b91402f2b6ead2b8d3269455413e6bd0ae575d66a33a52f0a2367c91e55cd0`
 - s35_results_sha256: `5dcbc4329d9e7343e0f48d96665be5faa0f9406425a6552249eb9b5fcebb95ba`
 - input_manifest_sha256: `78fcd8cc6e3f2b7c9edae72e0894f552b9cdfb0087d44b1df0d45402063fec4f`
-- commit: `8a8901e5ddfbf4e26196229f94433e9272678472` (clean worktree: True)
-- closure digest: `78e538ff9ffb32af9a1a32c4473c4cc649bad6d7a7d723e8d3f73bf8dbca43a0` (21 files)
+- commit: `b6596db68c88422f776c6de061471d86754196f9` (clean worktree: True)
+- closure digest: `9e00aa6412f6d4ee5a7ab3bd5e7cceb7f0fc1dba39eb861b3a9964b76620907c` (21 files)
 - 素材: **relocatable rematerialization**（凍結 manifest の絶対パスは変更せず、走行時メモリ上でのみ新 root へ写像）
   - `pjs_corpus`: archive `683c00253ee35a62…`（検証 済） / 展開物集約 `60c5a31cf9e9bc3e…` (303 files) / new_root `/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/pjs_ex/PJS_corpus_ver1.1`
   - `ritsu_singing_db`: archive `3bb2e8e287a5cc88…`（検証 済） / 展開物集約 `f634340640b80881…` (220 files) / new_root `/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/ritsu_ex/üuögë╣âèâcüvë╠É║âfü[â^âxü[âXVer2.0.2`
@@ -15,7 +15,9 @@
 
 **BLOCKED**
 
-> **S4 BLOCKED — 入力・素材・正本が不足し、判定を実行できない。**
+> **S4 READY_FOR_LISTENING — 機械 Gate は通過した。人間 Gate（§13 の 6 問）が未了のため S4 の verdict はまだ出せない。**
+
+verdict 語彙は §16 の 4 状態しか無いので `BLOCKED` と記録するが、これは「入力・素材・正本が不足」の BLOCKED ではない。
 
 どの結果でも S2 PASS / S3 PASS / S3.5 の結果は変更しない（§16）。
 
@@ -64,3 +66,4 @@ contexts: medial_ri, terminal_i, terminal_ri / supported contexts: medial_ri, te
 
 - ABX の X は A か B と byte-identical なので、聴取者が 3 ファイルを sha256 で突き合わせれば聴かずに正答できる。commitment 方式が守るのは「実験者が回答後に正解を変えないこと」であって聴取者の自己申告ではない（S3.5 と同じ既知の性質）。プロトコル変更は §24 で禁じられているため実装では手を付けず、記録にのみ残す。
 - ABX 4 問の偶然一致確率は 1/16。本 Gate は統計的有意差ではなく工学的進行 Gate である（設計書 §15.1 が明記）。
+- 第 1 走行の実測: `note_split_mae_ms` は F0 トグルに対して**完全に不感**で、全 6 pair で metric(B0) == metric(F) かつ metric(D) == metric(FD) が厳密に成立した。したがって §9.2 の Duration 側増分 (metric(F) - metric(FD)) は §9.1 の単独増分 (metric(B0) - metric(D)) と数値的に同一で、duration_retention は構造上つねに 1.000 になる。つまり **Duration 軸の機械 Gate は「F0 背景でも残るか」を実質的に検定していない**（合成経路上、F0 トグルは note の尺に触れないため）。F0 軸は同一でない（例: 75.400 -> 74.240, retention 0.985）ので、機械側で共発現を実測しているのは F0 軸のみ。Duration 軸の共発現は §13.2 の ABX が担う。metric の変更は §24 で禁止されているため実装では手を付けず記録に残す。

@@ -4,7 +4,7 @@
   "s35_results_sha256": "5dcbc4329d9e7343e0f48d96665be5faa0f9406425a6552249eb9b5fcebb95ba",
   "input_manifest_sha256": "78fcd8cc6e3f2b7c9edae72e0894f552b9cdfb0087d44b1df0d45402063fec4f",
   "code_state": {
-    "commit": "8a8901e5ddfbf4e26196229f94433e9272678472",
+    "commit": "b6596db68c88422f776c6de061471d86754196f9",
     "worktree": {
       "clean": true,
       "entries": [],
@@ -13,7 +13,7 @@
       ]
     },
     "closure": {
-      "digest": "78e538ff9ffb32af9a1a32c4473c4cc649bad6d7a7d723e8d3f73bf8dbca43a0",
+      "digest": "9e00aa6412f6d4ee5a7ab3bd5e7cceb7f0fc1dba39eb861b3a9964b76620907c",
       "file_count": 21,
       "files": {
         "genome_s3/s3_gates.py": "b3f78a34a11c2a5d0fa103cbe5f5dbc130f75b348fb19cdf652cf83300d8d68f",
@@ -21,7 +21,7 @@
         "genome_s3/s3_spec.py": "660522a36351a0a8e7ab0ee715a6fb465c77131909af28d8abf32f6b37757c57",
         "genome_s4/s4_blind.py": "af5b149508fcfa53df141df679546f0479aeaddade1b97ec664f1d8fa6fb3f48",
         "genome_s4/s4_gates.py": "b57c775b0ac3ad390e53301a3c1ddbe9e0fddb1cb05deb6f57c48741d073fc79",
-        "genome_s4/s4_report.py": "898a88d0e4dde47cd3a418367c95b15237c004861f21571048c897f12133d79d",
+        "genome_s4/s4_report.py": "958e6b0003d6f05aece4e094729117c9fe84fe0a82f46e7a6fa880a0bda38e24",
         "genome_s4/s4_runner.py": "74c1d0566aeafd99a3f31276ae8c3971e531f0f93b5c5cb61a69a0fb7b6bd42e",
         "genome_s4/s4_spec.py": "a83d080adfe6b9df29071f9e775d00f8b94f5c3a2be60927c9061ed7806c2918",
         "planb/pb_compose.py": "09e6ec5ab811525faafa6f2c0834e8f7305ae7a482eb3e06ee4de00678ebce9d",
@@ -1407,10 +1407,12 @@
     "verdict": "BLOCKED"
   },
   "overall": {
-    "verdict": "BLOCKED"
+    "verdict": "BLOCKED",
+    "awaiting": "perceptual_gate"
   },
   "out_of_scope_observations": [
     "ABX の X は A か B と byte-identical なので、聴取者が 3 ファイルを sha256 で突き合わせれば聴かずに正答できる。commitment 方式が守るのは「実験者が回答後に正解を変えないこと」であって聴取者の自己申告ではない（S3.5 と同じ既知の性質）。プロトコル変更は §24 で禁じられているため実装では手を付けず、記録にのみ残す。",
-    "ABX 4 問の偶然一致確率は 1/16。本 Gate は統計的有意差ではなく工学的進行 Gate である（設計書 §15.1 が明記）。"
+    "ABX 4 問の偶然一致確率は 1/16。本 Gate は統計的有意差ではなく工学的進行 Gate である（設計書 §15.1 が明記）。",
+    "第 1 走行の実測: `note_split_mae_ms` は F0 トグルに対して**完全に不感**で、全 6 pair で metric(B0) == metric(F) かつ metric(D) == metric(FD) が厳密に成立した。したがって §9.2 の Duration 側増分 (metric(F) - metric(FD)) は §9.1 の単独増分 (metric(B0) - metric(D)) と数値的に同一で、duration_retention は構造上つねに 1.000 になる。つまり **Duration 軸の機械 Gate は「F0 背景でも残るか」を実質的に検定していない**（合成経路上、F0 トグルは note の尺に触れないため）。F0 軸は同一でない（例: 75.400 -> 74.240, retention 0.985）ので、機械側で共発現を実測しているのは F0 軸のみ。Duration 軸の共発現は §13.2 の ABX が担う。metric の変更は §24 で禁止されているため実装では手を付けず記録に残す。"
   ]
 }
