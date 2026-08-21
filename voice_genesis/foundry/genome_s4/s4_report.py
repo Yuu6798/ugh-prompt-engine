@@ -400,6 +400,10 @@ def phase_a(*, write_wav: bool = True, require_clean: bool = True) -> int:
         runs, meta, backup = sr.run_all(write_wav=write_wav, require_clean=require_clean)
         published = write_wav
         cross = sr.cross_process_shas()
+        # `run_all()` の検査は cross-process 再計算の**前**に終わっている。
+        # 別プロセスが走っている間に正本が差し替わると、記録が「もう存在しない
+        # bytes の digest」を来歴として主張したまま公開されうる。公開直前にもう一度見る。
+        sr.assert_canonical_unchanged()
         results = [sg.pair_verdict(r, cross) for r in runs]
         mech = sg.overall_gate(results)
         res = build_results(meta, mech)

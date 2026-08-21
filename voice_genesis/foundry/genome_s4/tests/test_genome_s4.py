@@ -1291,6 +1291,17 @@ def test_38g_pr_manifest_is_pinned_before_the_closure_is_frozen():
 
 
 @requires_world
+def test_38h_canonical_is_rechecked_after_cross_process_replay():
+    """cross-process 再計算中の正本差し替えを、公開前にもう一度捕まえる。"""
+    import inspect
+    src = inspect.getsource(srep.phase_a)
+    assert src.count("assert_canonical_unchanged") >= 1
+    # 再計算の**後**に置かれていること（run_all 内の 1 回だけでは窓が開く）
+    assert src.index("cross_process_shas") < src.index("assert_canonical_unchanged")
+    assert src.index("assert_canonical_unchanged") < src.index("publish(")
+
+
+@requires_world
 def test_39_bundle_rolls_back_entirely(tmp_path, monkeypatch):
     a, b = tmp_path / "a.json", tmp_path / "b.md"
     a.write_bytes(b"old-a")

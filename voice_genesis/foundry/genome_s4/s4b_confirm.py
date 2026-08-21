@@ -368,6 +368,11 @@ def score() -> int:
                      impact="回答後に正解が差し替えられていないことを保証できない",
                      minimal_fix="pack を作り直して回答をやり直す")
     key = json.loads(key_raw.decode("utf-8"))
+    # prepare() と --score の間に S4 が回し直されている可能性がある。採点時点の
+    # S4 正本を読み直し、pack が作られたときの digest と outcome の両方を確認する。
+    # これをしないと「S4 の NOT_ESTABLISHED は不変」と記録しながら、現在の S4 が
+    # PASS / BLOCKED / 別走行という状態を作れる。
+    _assert_s4_unchanged_at_score_time(key)
     sb.verify_pack_audio(key, AUDIO_DIR)      # 期待値は key 側（manifest は可変）
     trials = [dict(v, trial_id=k) for k, v in key["trials"].items()]
     answers_doc, answers, answers_sha = sb.load_answers(ANSWERS)
@@ -423,6 +428,34 @@ def score() -> int:
         print(f"  {r['trial_id']} {r['gene']:8s} {r['context_id']:12s} "
               f"{'OK' if r['correct'] else 'MISS'}")
     return 0 if res["verdict"] == "CONFIRMED" else 1
+
+
+def _assert_s4_unchanged_at_score_time(key: Dict[str, Any]) -> None:
+    """採点時点の S4 正本が、pack を作ったときと同一であること。
+
+    `s4b_results.json` は `s4_overall_unchanged: true` を主張し、`render()` は
+    「S4 本体の結果（NOT_ESTABLISHED）」と書く。その主張は**採点時点でも**成り立って
+    いなければならない。
+    """
+    s4, s4_sha = _load(S4_RESULTS, "S4 正本 s4_results.json")
+    want = key.get("s4_results_sha256")
+    if not want:
+        raise S4Stop(
+            cause="commitment 済み key に s4_results_sha256 が無い",
+            impact="この pack がどの S4 走行に対応するかを採点時点で確認できない",
+            minimal_fix="pack を作り直す")
+    if s4_sha != want:
+        raise S4Stop(
+            cause=f"採点時点の S4 正本が pack 作成時と違う "
+                  f"({s4_sha[:16]}… != {str(want)[:16]}…)",
+            impact="別走行の S4 に対して「NOT_ESTABLISHED は不変」と記録することになる",
+            minimal_fix="pack 作成時の s4_results.json を復元するか、pack を作り直す")
+    overall = (s4.get("overall") or {}).get("verdict")
+    if overall != REQUIRED_S4_OVERALL:
+        raise S4Stop(
+            cause=f"採点時点の S4 overall が {overall!r}（要求 {REQUIRED_S4_OVERALL!r}）",
+            impact="S4b の記録が S4 の実際の結果と矛盾する",
+            minimal_fix="S4 の状態を確認して User 裁定へ戻す")
 
 
 def _assert_reveal_idempotent(answers_sha: str, manifest: Dict[str, Any]) -> None:
