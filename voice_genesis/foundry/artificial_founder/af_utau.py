@@ -54,6 +54,61 @@ README_TXT_LINES: Tuple[str, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class ParsedOtoEntry:
+    """oto.ini 1 行の解析結果（`adapter.donor_bank_utau.OtoEntry` と同一フィールド）。"""
+
+    wav_filename: str
+    alias: str
+    offset_ms: float
+    consonant_ms: float
+    blank_ms: float
+    preutterance_ms: float
+    overlap_ms: float
+
+
+def decode_oto_bytes(data: bytes) -> str:
+    """oto.ini のデコード（cp932 既定・UTF-8 フォールバック）。"""
+    try:
+        return data.decode(OTO_ENCODING)
+    except UnicodeDecodeError:
+        return data.decode("utf-8")
+
+
+def parse_oto_text(text: str) -> List[ParsedOtoEntry]:
+    """`filename=alias,offset,consonant,blank,preutterance,overlap` を解析する。
+
+    **`adapter/donor_bank_utau.parse_oto_text` と同一規則**（フィールド数不一致・
+    非数値の行は黙って skip）を、依存フリーで再実装したもの。共有実装を直接
+    import しないのは、`donor_bank_utau` -> `donor_bank` -> `import pyworld` の
+    連鎖で **G3（UTAU 構造検査）が WORLD 依存になってしまう**ため。G3 は
+    「compiler が正しい形の Body を出したか」の検査であって取り込み経路の検査
+    ではなく、pyworld 未導入環境（CI）でも評価できなければならない（§19 / §20 の
+    BLOCKED 分類が dependency 欠落と構造不良を取り違える）。
+
+    共有実装との同値は `tests/test_artificial_founder_p0.py::
+    test_oto_parser_matches_adapter` が pyworld 導入環境で pin する。
+    """
+    entries: List[ParsedOtoEntry] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        wav_filename, _, rest = line.partition("=")
+        parts = rest.split(",")
+        if len(parts) != 6:
+            continue
+        alias, offset, consonant, blank, preutt, overlap = parts
+        try:
+            entries.append(ParsedOtoEntry(
+                wav_filename=wav_filename, alias=alias, offset_ms=float(offset),
+                consonant_ms=float(consonant), blank_ms=float(blank),
+                preutterance_ms=float(preutt), overlap_ms=float(overlap)))
+        except ValueError:
+            continue
+    return entries
+
+
 def _fmt(value: float) -> str:
     """oto.ini の数値表記（小数 3 桁固定）。丸めを 1 箇所へ集約する（§27）。"""
     return f"{value:.3f}"
@@ -153,13 +208,6 @@ def write_body(genome: FounderGenome, staging_root: str | Path) -> BodyBuild:
 def validate_body(genome: FounderGenome, root: str | Path) -> Dict[str, Any]:
     """`pitch dirs = 1 / entries = 25 / WAV = 25 / missing = 0 / orphan = 0 /
     malformed = 0` を fail-closed 検査する（§19 G3）。"""
-    import sys as _sys
-
-    _adapter = Path(__file__).resolve().parents[1] / "adapter"
-    if str(_adapter) not in _sys.path:
-        _sys.path.insert(0, str(_adapter))
-    from donor_bank_utau import decode_oto_bytes, parse_oto_text  # noqa: E402
-
     root = Path(root)
     detail: Dict[str, Any] = {}
     pitch_dirs = sorted(p.name for p in root.iterdir() if p.is_dir() and (p / "oto.ini").exists())

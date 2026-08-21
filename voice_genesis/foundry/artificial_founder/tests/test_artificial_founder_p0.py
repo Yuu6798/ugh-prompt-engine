@@ -618,12 +618,21 @@ def test_t58_existing_adapter_modules_untouched():
 
 
 def test_t59_convert_ritsu_unchanged():
-    """`convert_ritsu.py` の公開 API が残っている（AF0 変換器は別ファイル）。"""
-    import convert_ritsu  # noqa: E402  (s1_dataprep)
+    """`convert_ritsu.py` の公開 API が残っている（AF0 変換器は別ファイル）。
 
-    assert hasattr(convert_ritsu, "convert")
-    assert hasattr(convert_ritsu, "build_segment_for_wav")
-    assert convert_founder.__file__ != convert_ritsu.__file__
+    import ではなく **静的検査** で見る。`convert_ritsu` は `donor_bank_utau` ->
+    `donor_bank` -> `pyworld` を引くため、import すると pyworld 未導入環境で
+    この非回帰テストごと落ちる（検査したいのは「既存ファイルを壊していないか」
+    であって WORLD の有無ではない）。
+    """
+    import ast
+
+    src = _PKG.parents[1] / "foundry" / "s1_dataprep" / "convert_ritsu.py"
+    assert src.exists()
+    tree = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+    names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert {"convert", "build_segment_for_wav"} <= names
+    assert convert_founder.__file__ != str(src)
 
 
 @pytest.mark.slow
@@ -791,3 +800,37 @@ def test_publication_withheld_when_prerequisites_fail():
              if g.gate_id != "G14"] + [withheld]
     v = af_gates.overall_verdict(gates)
     assert v["verdict"] == "FAILED"  # G0 違反が verdict を決める（G14 は SKIPPED）
+
+
+@requires_world
+def test_oto_parser_matches_adapter(genome, body):
+    """依存フリーの oto パーサが共有実装と同値であることを pin する。
+
+    `af_utau.parse_oto_text` は `adapter/donor_bank_utau.parse_oto_text` の写しで、
+    G3 を WORLD 非依存に保つためだけに分離している。規則が食い違うと G3 の
+    malformed 行検出（黙殺の検出）が共有実装とずれるので、pyworld 導入環境で
+    同値を固定する。
+    """
+    from donor_bank_utau import decode_oto_bytes as adapter_decode
+    from donor_bank_utau import parse_oto_text as adapter_parse
+
+    raw = (body / genome.pitch_dir / "oto.ini").read_bytes()
+    assert af_utau.decode_oto_bytes(raw) == adapter_decode(raw)
+
+    cases = [
+        af_utau.decode_oto_bytes(raw),
+        "a.wav=\u3042,20,0,80,0,0\r\nbroken.wav=x,1,2\r\n",
+        "no_equals_line\r\n\r\nb.wav=,,,,,\r\n",
+        "c.wav=x,nan,inf,-inf,0,0\r\nd.wav=y,1,2,3,4,5,6\r\n",
+    ]
+    for text in cases:
+        mine = af_utau.parse_oto_text(text)
+        theirs = adapter_parse(text)
+        assert len(mine) == len(theirs)
+        for a, b in zip(mine, theirs):
+            assert (a.wav_filename, a.alias) == (b.wav_filename, b.alias)
+            assert repr(a.offset_ms) == repr(b.offset_ms)
+            assert repr(a.consonant_ms) == repr(b.consonant_ms)
+            assert repr(a.blank_ms) == repr(b.blank_ms)
+            assert repr(a.preutterance_ms) == repr(b.preutterance_ms)
+            assert repr(a.overlap_ms) == repr(b.overlap_ms)
