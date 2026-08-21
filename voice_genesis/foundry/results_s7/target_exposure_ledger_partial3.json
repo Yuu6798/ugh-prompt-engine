@@ -1,0 +1,830 @@
+{
+  "authority": "DESIGN_S7_run8.md 3",
+  "duration_bins_seconds": {
+    "d0": [
+      0.0,
+      0.5
+    ],
+    "d1": [
+      0.5,
+      1.0
+    ],
+    "d2": [
+      1.0,
+      1.5
+    ],
+    "d3": [
+      1.5,
+      2.5
+    ],
+    "d4": [
+      2.5,
+      null
+    ]
+  },
+  "generated_by": "voice_genesis/foundry/run8/s7_ledger.py",
+  "h_ttd": {
+    "overall": "undetermined",
+    "per_stratum": {
+      "high/d3": {
+        "ratio": null,
+        "reason": "no_same_modality_comparison",
+        "rows": {
+          "pjs": {
+            "count": 0,
+            "density": 0.0,
+            "duration_seconds": 0.0,
+            "eligible": 14,
+            "eligible_seconds": 23.275421,
+            "modality": "real_song"
+          },
+          "user": {
+            "count": 0,
+            "density": 0.0,
+            "duration_seconds": 0.0,
+            "eligible": 1,
+            "eligible_seconds": 2.374286,
+            "modality": "real_song"
+          }
+        },
+        "verdict": "undetermined"
+      },
+      "high/d4": {
+        "ratio": null,
+        "reason": "no_same_modality_comparison",
+        "rows": {
+          "pjs": {
+            "count": 0,
+            "density": 0.0,
+            "duration_seconds": 0.0,
+            "eligible": 3,
+            "eligible_seconds": 8.805205,
+            "modality": "real_song"
+          },
+          "user": {
+            "count": 1,
+            "density": 0.2,
+            "duration_seconds": 3.0,
+            "eligible": 5,
+            "eligible_seconds": 22.56,
+            "modality": "real_song"
+          }
+        },
+        "verdict": "undetermined"
+      },
+      "low/d3": {
+        "ratio": null,
+        "reason": "no_same_modality_comparison",
+        "rows": {
+          "pjs": {
+            "count": 1,
+            "density": 0.1111111111111111,
+            "duration_seconds": 1.528,
+            "eligible": 9,
+            "eligible_seconds": 15.580952,
+            "modality": "real_song"
+          },
+          "user": {
+            "count": 0,
+            "density": 0.0,
+            "duration_seconds": 0.0,
+            "eligible": 1,
+            "eligible_seconds": 2.43,
+            "modality": "real_song"
+          }
+        },
+        "verdict": "undetermined"
+      },
+      "low/d4": {
+        "ratio": null,
+        "reason": "fewer_than_two_speakers_in_stratum",
+        "rows": {},
+        "verdict": "undetermined"
+      },
+      "mid/d3": {
+        "ratio": null,
+        "reason": "fewer_than_two_speakers_in_stratum",
+        "rows": {
+          "pjs": {
+            "count": 0,
+            "density": 0.0,
+            "duration_seconds": 0.0,
+            "eligible": 8,
+            "eligible_seconds": 14.926905,
+            "modality": "real_song"
+          }
+        },
+        "verdict": "undetermined"
+      },
+      "mid/d4": {
+        "ratio": null,
+        "reason": "fewer_than_two_speakers_in_stratum",
+        "rows": {
+          "pjs": {
+            "count": 0,
+            "density": 0.0,
+            "duration_seconds": 0.0,
+            "eligible": 1,
+            "eligible_seconds": 2.609,
+            "modality": "real_song"
+          }
+        },
+        "verdict": "undetermined"
+      }
+    },
+    "refuted_strata": 0,
+    "scored_strata": 0,
+    "supported_strata": 0
+  },
+  "inputs_pin": {
+    "canonical_source": "run7/assembly_manifest.json",
+    "canonical_source_sha256": "4e5614d5218657a8f5f6ca2827c52c929581416021f56c054dee754cef1ad99c",
+    "path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/results_s7/s7_ledger_inputs.json",
+    "sha256": "4dca5212c15e69e1ca3d5ec38801f767c1e428c381b77fe2a537a6c1ab0b5ffc"
+  },
+  "midi_json": null,
+  "prereg_speaker_classification": {
+    "breaking": [
+      "ritsu"
+    ],
+    "non_breaking": [
+      "pjs"
+    ],
+    "note": "§3 判定分岐 3/4 の「順序（破綻しない話者 > 破綻する話者）」に使う事前登録入力。台帳生成器はこの分類を内蔵しない。"
+  },
+  "primary_stratum": {
+    "pitch_bin": [
+      "low",
+      "mid",
+      "high"
+    ],
+    "position": "utterance_final",
+    "preceding_duration_bin": [
+      "d3",
+      "d4"
+    ],
+    "transition": "ri_to_SP"
+  },
+  "schema": "target_exposure_ledger/0.1",
+  "speakers": {
+    "pjs": {
+      "denominator": {
+        "real_song|utterance_final|high|d0": {
+          "eligible_terminal_count": 59,
+          "eligible_terminal_seconds": 15.578539
+        },
+        "real_song|utterance_final|high|d1": {
+          "eligible_terminal_count": 30,
+          "eligible_terminal_seconds": 18.988536
+        },
+        "real_song|utterance_final|high|d2": {
+          "eligible_terminal_count": 6,
+          "eligible_terminal_seconds": 7.797846
+        },
+        "real_song|utterance_final|high|d3": {
+          "eligible_terminal_count": 14,
+          "eligible_terminal_seconds": 23.275421
+        },
+        "real_song|utterance_final|high|d4": {
+          "eligible_terminal_count": 3,
+          "eligible_terminal_seconds": 8.805205
+        },
+        "real_song|utterance_final|low|d0": {
+          "eligible_terminal_count": 32,
+          "eligible_terminal_seconds": 9.150228
+        },
+        "real_song|utterance_final|low|d1": {
+          "eligible_terminal_count": 30,
+          "eligible_terminal_seconds": 20.971894
+        },
+        "real_song|utterance_final|low|d2": {
+          "eligible_terminal_count": 6,
+          "eligible_terminal_seconds": 7.242598
+        },
+        "real_song|utterance_final|low|d3": {
+          "eligible_terminal_count": 9,
+          "eligible_terminal_seconds": 15.580952
+        },
+        "real_song|utterance_final|mid|d0": {
+          "eligible_terminal_count": 40,
+          "eligible_terminal_seconds": 11.069939
+        },
+        "real_song|utterance_final|mid|d1": {
+          "eligible_terminal_count": 32,
+          "eligible_terminal_seconds": 21.823264
+        },
+        "real_song|utterance_final|mid|d2": {
+          "eligible_terminal_count": 10,
+          "eligible_terminal_seconds": 12.243157
+        },
+        "real_song|utterance_final|mid|d3": {
+          "eligible_terminal_count": 8,
+          "eligible_terminal_seconds": 14.926905
+        },
+        "real_song|utterance_final|mid|d4": {
+          "eligible_terminal_count": 1,
+          "eligible_terminal_seconds": 2.609
+        }
+      },
+      "local_real_singing_seconds": 1137.24599,
+      "local_real_singing_seconds_note": "modality == real_song のときのみ値を持つ。それ以外は null （この話者の modality = real_song）",
+      "local_voiced_seconds": 1137.24599,
+      "local_voiced_seconds_note": "transcriptions.csv の非 SP/AP トークンの ph_dur 合計（convert_ritsu の total_voiced_s と同じ数え方）。**modality を問わない**",
+      "modality": "real_song",
+      "note_duration_bin": null,
+      "note_duration_bin_reason": "1 | 2 | 4 beats の参考値は tempo を要するため本台帳では算出しない（§3 で参考値・単独では判定に使わないと事前登録されている）",
+      "pitch_bin_assignment": {
+        "cut_points_midi": [
+          54.0,
+          58.0
+        ],
+        "method": "speaker-internal tertiles (linear percentile)",
+        "unknown_events": 0
+      },
+      "ri_medial_count": 47,
+      "row_count": 287,
+      "silence_token_counts": {
+        "AP": 49,
+        "SP": 231
+      },
+      "silence_token_note": "終端イベントを取った無音トークンの内訳。AP（breath）も終端として数えるが、AP 由来だけを後から分離できるよう内訳を残す（遷移名は *_to_SP のまま）",
+      "source_csv": "/home/user/s7work/out/pjs_staging/diffsinger_db/transcriptions.csv",
+      "source_csv_bytes": 152078,
+      "source_csv_pin_source": "results_s7/s7_ledger_inputs.json（canonical = run7/assembly_manifest.json）",
+      "source_csv_pin_verified": true,
+      "source_csv_sha256": "4e96a4f63d51186ff05b4595219e90ace28a18ef4367bc5932ae29b2ae1952ef",
+      "speaker": "pjs",
+      "stratum_key_order": [
+        "modality",
+        "position",
+        "pitch_bin",
+        "preceding_duration_bin"
+      ],
+      "terminal_events": {
+        "real_song|utterance_final|high|d0": {
+          "N_to_SP": {
+            "count": 3,
+            "duration_seconds": 0.594814
+          },
+          "i_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.250769
+          },
+          "other_to_SP": {
+            "count": 55,
+            "duration_seconds": 14.732955
+          }
+        },
+        "real_song|utterance_final|high|d1": {
+          "i_to_SP": {
+            "count": 3,
+            "duration_seconds": 1.951667
+          },
+          "other_to_SP": {
+            "count": 27,
+            "duration_seconds": 17.03687
+          }
+        },
+        "real_song|utterance_final|high|d2": {
+          "other_to_SP": {
+            "count": 6,
+            "duration_seconds": 7.797846
+          }
+        },
+        "real_song|utterance_final|high|d3": {
+          "i_to_SP": {
+            "count": 2,
+            "duration_seconds": 3.133
+          },
+          "other_to_SP": {
+            "count": 12,
+            "duration_seconds": 20.142421
+          }
+        },
+        "real_song|utterance_final|high|d4": {
+          "other_to_SP": {
+            "count": 3,
+            "duration_seconds": 8.805205
+          }
+        },
+        "real_song|utterance_final|low|d0": {
+          "N_to_SP": {
+            "count": 2,
+            "duration_seconds": 0.359577
+          },
+          "i_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.194667
+          },
+          "other_to_SP": {
+            "count": 29,
+            "duration_seconds": 8.595985
+          }
+        },
+        "real_song|utterance_final|low|d1": {
+          "other_to_SP": {
+            "count": 29,
+            "duration_seconds": 20.417894
+          },
+          "su_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.554
+          }
+        },
+        "real_song|utterance_final|low|d2": {
+          "other_to_SP": {
+            "count": 6,
+            "duration_seconds": 7.242598
+          }
+        },
+        "real_song|utterance_final|low|d3": {
+          "other_to_SP": {
+            "count": 8,
+            "duration_seconds": 14.052952
+          },
+          "ri_to_SP": {
+            "count": 1,
+            "duration_seconds": 1.528,
+            "events": [
+              {
+                "event_id": "pjs/pjs094_seg006/10",
+                "onset_phone_seconds": 0.061,
+                "r_ratio": 0.039921,
+                "silence_token": "SP",
+                "vowel_phone_seconds": 1.467
+              }
+            ]
+          }
+        },
+        "real_song|utterance_final|mid|d0": {
+          "N_to_SP": {
+            "count": 2,
+            "duration_seconds": 0.353167
+          },
+          "other_to_SP": {
+            "count": 38,
+            "duration_seconds": 10.716773
+          }
+        },
+        "real_song|utterance_final|mid|d1": {
+          "i_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.598
+          },
+          "other_to_SP": {
+            "count": 30,
+            "duration_seconds": 20.64981
+          },
+          "ri_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.575455,
+            "events": [
+              {
+                "event_id": "pjs/pjs003_seg002/19",
+                "onset_phone_seconds": 0.043,
+                "r_ratio": 0.074724,
+                "silence_token": "SP",
+                "vowel_phone_seconds": 0.532455
+              }
+            ]
+          }
+        },
+        "real_song|utterance_final|mid|d2": {
+          "i_to_SP": {
+            "count": 1,
+            "duration_seconds": 1.482
+          },
+          "other_to_SP": {
+            "count": 9,
+            "duration_seconds": 10.761157
+          }
+        },
+        "real_song|utterance_final|mid|d3": {
+          "other_to_SP": {
+            "count": 8,
+            "duration_seconds": 14.926905
+          }
+        },
+        "real_song|utterance_final|mid|d4": {
+          "other_to_SP": {
+            "count": 1,
+            "duration_seconds": 2.609
+          }
+        }
+      }
+    },
+    "ritsu": {
+      "denominator": {
+        "VCV|utterance_final|unknown|d1": {
+          "eligible_terminal_count": 33,
+          "eligible_terminal_seconds": 24.054943
+        },
+        "VCV|utterance_final|unknown|d2": {
+          "eligible_terminal_count": 220,
+          "eligible_terminal_seconds": 298.781296
+        },
+        "VCV|utterance_final|unknown|d3": {
+          "eligible_terminal_count": 203,
+          "eligible_terminal_seconds": 342.802824
+        }
+      },
+      "local_real_singing_seconds": null,
+      "local_real_singing_seconds_note": "modality == real_song のときのみ値を持つ。それ以外は null （この話者の modality = VCV）",
+      "local_voiced_seconds": 2006.667563,
+      "local_voiced_seconds_note": "transcriptions.csv の非 SP/AP トークンの ph_dur 合計（convert_ritsu の total_voiced_s と同じ数え方）。**modality を問わない**",
+      "modality": "VCV",
+      "note_duration_bin": null,
+      "note_duration_bin_reason": "1 | 2 | 4 beats の参考値は tempo を要するため本台帳では算出しない（§3 で参考値・単独では判定に使わないと事前登録されている）",
+      "pitch_bin_assignment": {
+        "cut_points_midi": null,
+        "reason": "insufficient_midi_values",
+        "unknown_events": 456
+      },
+      "ri_medial_count": 12,
+      "row_count": 456,
+      "silence_token_counts": {
+        "SP": 456
+      },
+      "silence_token_note": "終端イベントを取った無音トークンの内訳。AP（breath）も終端として数えるが、AP 由来だけを後から分離できるよう内訳を残す（遷移名は *_to_SP のまま）",
+      "source_csv": "/home/user/s7work/out/ritsu_diffsinger_db/transcriptions.csv",
+      "source_csv_bytes": 56725,
+      "source_csv_pin_source": "results_s7/s7_ledger_inputs.json（canonical = run7/assembly_manifest.json）",
+      "source_csv_pin_verified": true,
+      "source_csv_sha256": "fb01a936fa2435204b57958bf2611ae5b05b538f1b79b2a3919a0280efd13a5c",
+      "speaker": "ritsu",
+      "stratum_key_order": [
+        "modality",
+        "position",
+        "pitch_bin",
+        "preceding_duration_bin"
+      ],
+      "terminal_events": {
+        "VCV|utterance_final|unknown|d1": {
+          "N_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.704
+          },
+          "other_to_SP": {
+            "count": 32,
+            "duration_seconds": 23.350943
+          }
+        },
+        "VCV|utterance_final|unknown|d2": {
+          "N_to_SP": {
+            "count": 2,
+            "duration_seconds": 2.758394
+          },
+          "i_to_SP": {
+            "count": 2,
+            "duration_seconds": 2.741902
+          },
+          "other_to_SP": {
+            "count": 215,
+            "duration_seconds": 291.856107
+          },
+          "ri_to_SP": {
+            "count": 1,
+            "duration_seconds": 1.424893,
+            "events": [
+              {
+                "event_id": "ritsu/ritsu_F4_167/14",
+                "onset_phone_seconds": 0.385,
+                "r_ratio": 0.270196,
+                "silence_token": "SP",
+                "vowel_phone_seconds": 1.039893
+              }
+            ]
+          }
+        },
+        "VCV|utterance_final|unknown|d3": {
+          "other_to_SP": {
+            "count": 200,
+            "duration_seconds": 337.751909
+          },
+          "ri_to_SP": {
+            "count": 1,
+            "duration_seconds": 1.564011,
+            "events": [
+              {
+                "event_id": "ritsu/ritsu_A3_167/13",
+                "onset_phone_seconds": 0.411,
+                "r_ratio": 0.262786,
+                "silence_token": "SP",
+                "vowel_phone_seconds": 1.153011
+              }
+            ]
+          },
+          "su_to_SP": {
+            "count": 2,
+            "duration_seconds": 3.486904
+          }
+        }
+      }
+    },
+    "user": {
+      "denominator": {
+        "real_song|internal|high|d0": {
+          "eligible_terminal_count": 2,
+          "eligible_terminal_seconds": 0.409
+        },
+        "real_song|internal|high|d1": {
+          "eligible_terminal_count": 8,
+          "eligible_terminal_seconds": 5.066143
+        },
+        "real_song|internal|high|d2": {
+          "eligible_terminal_count": 2,
+          "eligible_terminal_seconds": 2.15
+        },
+        "real_song|internal|high|d3": {
+          "eligible_terminal_count": 4,
+          "eligible_terminal_seconds": 8.434
+        },
+        "real_song|internal|high|d4": {
+          "eligible_terminal_count": 3,
+          "eligible_terminal_seconds": 13.41
+        },
+        "real_song|internal|low|d0": {
+          "eligible_terminal_count": 4,
+          "eligible_terminal_seconds": 0.914984
+        },
+        "real_song|internal|low|d1": {
+          "eligible_terminal_count": 2,
+          "eligible_terminal_seconds": 1.078667
+        },
+        "real_song|internal|low|d3": {
+          "eligible_terminal_count": 1,
+          "eligible_terminal_seconds": 1.8
+        },
+        "real_song|internal|low|d4": {
+          "eligible_terminal_count": 1,
+          "eligible_terminal_seconds": 2.66
+        },
+        "real_song|internal|mid|d0": {
+          "eligible_terminal_count": 2,
+          "eligible_terminal_seconds": 0.6
+        },
+        "real_song|internal|mid|d1": {
+          "eligible_terminal_count": 2,
+          "eligible_terminal_seconds": 1.509
+        },
+        "real_song|internal|mid|d2": {
+          "eligible_terminal_count": 2,
+          "eligible_terminal_seconds": 2.186667
+        },
+        "real_song|internal|mid|d3": {
+          "eligible_terminal_count": 1,
+          "eligible_terminal_seconds": 1.96
+        },
+        "real_song|internal|mid|d4": {
+          "eligible_terminal_count": 5,
+          "eligible_terminal_seconds": 17.8
+        },
+        "real_song|utterance_final|high|d1": {
+          "eligible_terminal_count": 1,
+          "eligible_terminal_seconds": 0.704
+        },
+        "real_song|utterance_final|high|d3": {
+          "eligible_terminal_count": 1,
+          "eligible_terminal_seconds": 2.374286
+        },
+        "real_song|utterance_final|high|d4": {
+          "eligible_terminal_count": 5,
+          "eligible_terminal_seconds": 22.56
+        },
+        "real_song|utterance_final|low|d0": {
+          "eligible_terminal_count": 2,
+          "eligible_terminal_seconds": 0.673
+        },
+        "real_song|utterance_final|low|d1": {
+          "eligible_terminal_count": 2,
+          "eligible_terminal_seconds": 1.376667
+        },
+        "real_song|utterance_final|low|d2": {
+          "eligible_terminal_count": 1,
+          "eligible_terminal_seconds": 1.268571
+        },
+        "real_song|utterance_final|low|d3": {
+          "eligible_terminal_count": 1,
+          "eligible_terminal_seconds": 2.43
+        },
+        "real_song|utterance_final|mid|d1": {
+          "eligible_terminal_count": 1,
+          "eligible_terminal_seconds": 0.7
+        }
+      },
+      "local_real_singing_seconds": 171.88,
+      "local_real_singing_seconds_note": "modality == real_song のときのみ値を持つ。それ以外は null （この話者の modality = real_song）",
+      "local_voiced_seconds": 171.88,
+      "local_voiced_seconds_note": "transcriptions.csv の非 SP/AP トークンの ph_dur 合計（convert_ritsu の total_voiced_s と同じ数え方）。**modality を問わない**",
+      "modality": "real_song",
+      "note_duration_bin": null,
+      "note_duration_bin_reason": "1 | 2 | 4 beats の参考値は tempo を要するため本台帳では算出しない（§3 で参考値・単独では判定に使わないと事前登録されている）",
+      "pitch_bin_assignment": {
+        "cut_points_midi": [
+          47.0,
+          51.0
+        ],
+        "method": "speaker-internal tertiles (linear percentile)",
+        "unknown_events": 0
+      },
+      "ri_medial_count": 2,
+      "row_count": 15,
+      "silence_token_counts": {
+        "SP": 53
+      },
+      "silence_token_note": "終端イベントを取った無音トークンの内訳。AP（breath）も終端として数えるが、AP 由来だけを後から分離できるよう内訳を残す（遷移名は *_to_SP のまま）",
+      "source_csv": "/home/user/s7work/recovered/run4_prep/user_dataset/transcriptions.csv",
+      "source_csv_bytes": 6471,
+      "source_csv_pin_source": "results_s7/s7_ledger_inputs.json（canonical = run7/assembly_manifest.json）",
+      "source_csv_pin_verified": true,
+      "source_csv_sha256": "fc3a760c4c45c37760b8a846f90672acf7db39bc43ff1b3a02908fe9fd7deb3b",
+      "speaker": "user",
+      "stratum_key_order": [
+        "modality",
+        "position",
+        "pitch_bin",
+        "preceding_duration_bin"
+      ],
+      "terminal_events": {
+        "real_song|internal|high|d0": {
+          "other_to_SP": {
+            "count": 2,
+            "duration_seconds": 0.409
+          }
+        },
+        "real_song|internal|high|d1": {
+          "other_to_SP": {
+            "count": 7,
+            "duration_seconds": 4.409
+          },
+          "ri_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.657143
+          }
+        },
+        "real_song|internal|high|d2": {
+          "other_to_SP": {
+            "count": 2,
+            "duration_seconds": 2.15
+          }
+        },
+        "real_song|internal|high|d3": {
+          "other_to_SP": {
+            "count": 3,
+            "duration_seconds": 6.474
+          },
+          "su_to_SP": {
+            "count": 1,
+            "duration_seconds": 1.96
+          }
+        },
+        "real_song|internal|high|d4": {
+          "other_to_SP": {
+            "count": 3,
+            "duration_seconds": 13.41
+          }
+        },
+        "real_song|internal|low|d0": {
+          "N_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.3
+          },
+          "other_to_SP": {
+            "count": 3,
+            "duration_seconds": 0.614984
+          }
+        },
+        "real_song|internal|low|d1": {
+          "other_to_SP": {
+            "count": 2,
+            "duration_seconds": 1.078667
+          }
+        },
+        "real_song|internal|low|d3": {
+          "other_to_SP": {
+            "count": 1,
+            "duration_seconds": 1.8
+          }
+        },
+        "real_song|internal|low|d4": {
+          "i_to_SP": {
+            "count": 1,
+            "duration_seconds": 2.66
+          }
+        },
+        "real_song|internal|mid|d0": {
+          "other_to_SP": {
+            "count": 2,
+            "duration_seconds": 0.6
+          }
+        },
+        "real_song|internal|mid|d1": {
+          "N_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.845
+          },
+          "other_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.664
+          }
+        },
+        "real_song|internal|mid|d2": {
+          "other_to_SP": {
+            "count": 2,
+            "duration_seconds": 2.186667
+          }
+        },
+        "real_song|internal|mid|d3": {
+          "other_to_SP": {
+            "count": 1,
+            "duration_seconds": 1.96
+          }
+        },
+        "real_song|internal|mid|d4": {
+          "i_to_SP": {
+            "count": 1,
+            "duration_seconds": 3.82
+          },
+          "other_to_SP": {
+            "count": 4,
+            "duration_seconds": 13.98
+          }
+        },
+        "real_song|utterance_final|high|d1": {
+          "other_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.704
+          }
+        },
+        "real_song|utterance_final|high|d3": {
+          "other_to_SP": {
+            "count": 1,
+            "duration_seconds": 2.374286
+          }
+        },
+        "real_song|utterance_final|high|d4": {
+          "i_to_SP": {
+            "count": 1,
+            "duration_seconds": 4.28
+          },
+          "other_to_SP": {
+            "count": 3,
+            "duration_seconds": 15.28
+          },
+          "ri_to_SP": {
+            "count": 1,
+            "duration_seconds": 3.0,
+            "events": [
+              {
+                "event_id": "user/UC-001/44",
+                "onset_phone_seconds": 0.9,
+                "r_ratio": 0.3,
+                "silence_token": "SP",
+                "vowel_phone_seconds": 2.1
+              }
+            ]
+          }
+        },
+        "real_song|utterance_final|low|d0": {
+          "other_to_SP": {
+            "count": 2,
+            "duration_seconds": 0.673
+          }
+        },
+        "real_song|utterance_final|low|d1": {
+          "other_to_SP": {
+            "count": 2,
+            "duration_seconds": 1.376667
+          }
+        },
+        "real_song|utterance_final|low|d2": {
+          "ri_to_SP": {
+            "count": 1,
+            "duration_seconds": 1.268571,
+            "events": [
+              {
+                "event_id": "user/UC-015/30",
+                "onset_phone_seconds": 0.380571,
+                "r_ratio": 0.3,
+                "silence_token": "SP",
+                "vowel_phone_seconds": 0.888
+              }
+            ]
+          }
+        },
+        "real_song|utterance_final|low|d3": {
+          "other_to_SP": {
+            "count": 1,
+            "duration_seconds": 2.43
+          }
+        },
+        "real_song|utterance_final|mid|d1": {
+          "other_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.7
+          }
+        }
+      }
+    }
+  }
+}

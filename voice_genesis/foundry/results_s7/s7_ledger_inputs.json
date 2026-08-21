@@ -81,7 +81,17 @@
           "pjs_corpus_zip": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",
           "pjs_corpus_zip_drive_file_id": "1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_"
         },
-        "log": "run7 cmdlogs/datasets_convert-pjs.log"
+        "log": "run7 cmdlogs/datasets_convert-pjs.log",
+        "verified": {
+          "date": "2026-08-21",
+          "result": "canonical pin と完全一致（4e96a4f6…ae1952ef）",
+          "extra_dependency": "praat-parselmouth 0.4.7（db_converter.py の依存・run7 では未 pin）",
+          "converter_commit": "nnsvs-db-converter 185ada6",
+          "stats": {
+            "n_song_staged": 100,
+            "row_count": 287
+          }
+        }
       }
     },
     "user": {
@@ -90,7 +100,13 @@
       "row_count": 15,
       "ph_dur_total_seconds": 233.395,
       "transcriptions_csv_sha256": "fc3a760c4c45c37760b8a846f90672acf7db39bc43ff1b3a02908fe9fd7deb3b",
-      "cross_check": "results_s3/run4_dataset_pins.json / run6_dataset_pins.json / run7_dataset_pins.json の user.transcriptions_csv_sha256 と同値（run4 以降 内容不変）"
+      "cross_check": "results_s3/run4_dataset_pins.json / run6_dataset_pins.json / run7_dataset_pins.json の user.transcriptions_csv_sha256 と同値（run4 以降 内容不変）",
+      "recovery": {
+        "date": "2026-08-21",
+        "result": "canonical pin と完全一致（fc3a760c…fd7deb3b）",
+        "source": "Drive run4_prep.tar（file id 1zhnNNRMeL1DXnGpg6BFlQcsJ9riqiNq_ / 914,688,000 bytes / sha256 e6a75c18e6bf7eab1da982ec857ee900c05171ac788e35c67d01474e7944546f）内の run4_prep/user_dataset/transcriptions.csv",
+        "note": "run4/6/7 で内容不変の pin と同値。再生成不要"
+      }
     },
     "amitaro": {
       "modality": "speech",
@@ -109,6 +125,9 @@
       "run7 フォルダ直下の全ファイル列挙 → transcriptions.csv は無し（manifest / status / logs / checkpoints のみ）"
     ],
     "interpretation": "CSV は Pod 上の /root/s4work/s4_data/ 配下で生成され salvage 対象に含まれなかったと見られる。所在不明でも canonical sha が pin されているため、再生成物を照合して同一性を機械判定できる。",
-    "ritsu": "regenerated_and_verified（実体回収は不要になった）"
+    "ritsu": "regenerated_and_verified（実体回収は不要になった）",
+    "pjs": "regenerated_and_verified",
+    "user": "recovered_and_verified（run4_prep.tar から回収）",
+    "amitaro": "pending（Drive amitaro_sources の 324 wav + pinned ffmpeg が要る）"
   }
 }
