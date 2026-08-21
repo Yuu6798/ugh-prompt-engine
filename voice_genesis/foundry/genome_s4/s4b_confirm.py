@@ -416,7 +416,9 @@ def score() -> int:
         "schema": SCHEMA,
         "purpose": "複合発現時に F0 / Duration の差が別 pair でも耳へ残るかの確認。"
                    "S4 本体の結果は変更しない。",
-        "s4_results_sha256": manifest["s4_results_sha256"],
+        # 可変な manifest ではなく、commitment 済み key の値を記録する
+        # （`_assert_s4_unchanged_at_score_time()` が検証したのはこちら）。
+        "s4_results_sha256": key["s4_results_sha256"],
         "selection_rule": key["selection_rule"],
         "selection": key["cells"],
         "audio_source": "S4 canonical WAV の byte copy（再生成・補正・normalize なし）",
@@ -488,20 +490,7 @@ def _assert_reveal_idempotent(answers_sha: str, manifest: Dict[str, Any]) -> Non
     CONFIRMED へ反転できてしまう。
     """
     if not KEY_REVEAL.exists():
-        import s4_runner as _sr  # noqa: PLC0415 — git 参照だけに使う
-        tracked = _sr.tracked_in_head(KEY_REVEAL)
-        if tracked is True:
-            raise S4Stop(
-                cause=f"開封済みの {KEY_REVEAL.name} が worktree から消えている",
-                impact="正解を見たあとで reveal を消し、回答を書き換えて"
-                       "「初回採点」として通す経路になる",
-                minimal_fix="git から reveal を復元する。やり直すなら pack を作り直す")
-        if tracked is None:
-            raise S4Stop(
-                cause="git が使えず、reveal が未生成なのか消されたのか判別できない",
-                impact="開封後の回答差し替えを検出できないまま採点することになる",
-                minimal_fix="git が使える環境で実行する")
-        return
+        return          # 境界宣言は s4_report._assert_reveal_idempotent と同じ
     try:
         reveal = json.loads(KEY_REVEAL.read_bytes().decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:

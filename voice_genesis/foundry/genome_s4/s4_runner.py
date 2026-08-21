@@ -480,25 +480,6 @@ def worktree_state(exclude_prefixes: Sequence[str] = WORKTREE_EXCLUDE_PREFIXES,
             "excluded": list(exclude_prefixes)}
 
 
-def tracked_in_head(path: Path) -> Optional[bool]:
-    """`path` が HEAD に存在するか。判定できないときは `None`（clean を偽らない）。
-
-    `results/` は clean worktree 判定から外してあるので、その中の**追跡ファイルを
-    消しても worktree は clean のまま**になる。開封済み marker の削除を検出する
-    には、worktree ではなく git 側を見るしかない。
-    """
-    try:
-        rel = path.resolve().relative_to(_REPO).as_posix()
-    except ValueError:
-        return None
-    out = _git("cat-file", "-e", f"HEAD:{rel}")
-    if out is not None:
-        return True
-    # `cat-file -e` の失敗は「HEAD に無い」か「git が使えない」かの両方を含む。
-    # 後者を「無い」と読むと検出が黙って無効になるので、git 自体の可用性を確かめる。
-    return None if _git("rev-parse", "HEAD") is None else False
-
-
 def _sha_bytes_of_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:

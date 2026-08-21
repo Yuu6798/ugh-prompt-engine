@@ -133,6 +133,37 @@ S4 実装側で母集団を縮小して回避しない。
 誤る具体経路）/ B（source・output・record の食い違い）/ E（blind 破壊）に当たるため
 **実害基準で採用**した。閾値・母集団・対象 gene / context・問数・metric は変えていない。
 
+## 6.5 blind 規律が守る範囲（境界宣言）
+
+commitment 方式が保証するのは **「実験者が回答を見たあとで正解を差し替えないこと」**
+だけである。`results/` へ書ける主体に対する防御ではない。具体的には次が残る。
+
+- `key_reveal.json` を消して `answers.json` を書き換え、再採点する経路は塞げていない。
+  `results/` は clean worktree 判定の対象外で、かつ Phase A の PASS 経路が前回の
+  reveal を同 transaction で削除するため、**「HEAD に在るか」を開封の証拠にできない**
+  （それを実装すると正規の初回 Phase C が必ず BLOCKED になる。PR #299 第 10 巡で実測し撤回）
+- 聴取者が A/B/X の sha256 を突き合わせれば聴かずに正答できる（S3.5 と同じ既知の性質）
+
+いずれも「聴取者の自己申告を機械で強制することはできない」という同じ限界に帰着する。
+pack を作り直さずに再採点した痕跡は、`s4_results.json` の `code_state.commit` と
+`perceptual.phase_c_closure` から追える。
+
+## 6.6 記録が主張する検証水準の読み方
+
+`results/` に commit された記録は、**その走行時点の実装**が行った検証の結果である。
+本 PR では走行後にレビュー由来の強化（`mechanistic_binding_verified` /
+`phase_c_closure` / key への audio digest 封入など）を入れたため、committed の
+`s4_results.json` / `s4b_results.json` にはそれらのフィールドが**無い**。
+
+これは記録の欠陥ではなく pin の設計どおりである。どの検証コードが走ったかは
+`code_state.commit` と `code_state.closure.digest` が特定する。読み手はその commit を
+checkout すれば、当時有効だった guard を正確に確認できる。
+
+**再生成はしない。** Phase A を回し直すと salt が変わって新しい耳 pack になり、
+凍結済みの回答（`answers_sha256`）が無効化されて、完了済みの人間 Gate を破棄する
+ことになる。S 系列は User 裁定で閉じているため、強化後の契約で測り直すなら別走行
+として計画する。
+
 ## 7. 既知の範囲外事象（`observed_but_out_of_scope`）
 
 修正しない。記録だけ行う（契約 §2）。
