@@ -1,0 +1,130 @@
+{
+  "schema": "voicegenesis-genome-s4/1.0",
+  "answers_sha256": "b6d8e4b7738235f8e0802c3d91a9c6fb8251e01e4a3a6a714c3dc5cf685f4ea6",
+  "salt_hex": "9738632febccb07441b09221ec7c827c771a6af573d532129fc85648914cd3d5",
+  "selected_pairs": {
+    "terminal_i": "terminal_i|1st_color#86|pjs001#54",
+    "terminal_ri": "terminal_ri|2018#215|pjs003#65"
+  },
+  "trials": {
+    "I001": {
+      "context_id": "terminal_i",
+      "gene": null,
+      "kind": "IDENTITY",
+      "pair_key": "terminal_i|1st_color#86|pjs001#54",
+      "slot1_condition": "B0",
+      "slot2_condition": "FD",
+      "trial_id": "I001"
+    },
+    "I002": {
+      "context_id": "terminal_ri",
+      "gene": null,
+      "kind": "IDENTITY",
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "slot1_condition": "FD",
+      "slot2_condition": "B0",
+      "trial_id": "I002"
+    },
+    "T001": {
+      "a_condition": "F",
+      "b_condition": "FD",
+      "context_id": "terminal_i",
+      "correct": "B",
+      "gene": "duration",
+      "kind": "ABX",
+      "pair_key": "terminal_i|1st_color#86|pjs001#54",
+      "trial_id": "T001",
+      "x_condition": "FD"
+    },
+    "T002": {
+      "a_condition": "FD",
+      "b_condition": "D",
+      "context_id": "terminal_ri",
+      "correct": "A",
+      "gene": "f0",
+      "kind": "ABX",
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "trial_id": "T002",
+      "x_condition": "FD"
+    },
+    "T003": {
+      "a_condition": "FD",
+      "b_condition": "D",
+      "context_id": "terminal_i",
+      "correct": "B",
+      "gene": "f0",
+      "kind": "ABX",
+      "pair_key": "terminal_i|1st_color#86|pjs001#54",
+      "trial_id": "T003",
+      "x_condition": "D"
+    },
+    "T004": {
+      "a_condition": "FD",
+      "b_condition": "F",
+      "context_id": "terminal_ri",
+      "correct": "B",
+      "gene": "duration",
+      "kind": "ABX",
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "trial_id": "T004",
+      "x_condition": "F"
+    }
+  },
+  "scored": {
+    "abx": [
+      {
+        "trial_id": "T001",
+        "gene": "duration",
+        "context_id": "terminal_i",
+        "answer": "B",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "T002",
+        "gene": "f0",
+        "context_id": "terminal_ri",
+        "answer": "A",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "T003",
+        "gene": "f0",
+        "context_id": "terminal_i",
+        "answer": "A",
+        "valid": true,
+        "correct": false
+      },
+      {
+        "trial_id": "T004",
+        "gene": "duration",
+        "context_id": "terminal_ri",
+        "answer": "B",
+        "valid": true,
+        "correct": true
+      }
+    ],
+    "identity": [
+      {
+        "trial_id": "I001",
+        "context_id": "terminal_i",
+        "answer": "YES",
+        "valid": true,
+        "yes": true
+      },
+      {
+        "trial_id": "I002",
+        "context_id": "terminal_ri",
+        "answer": "YES",
+        "valid": true,
+        "yes": true
+      }
+    ],
+    "abx_correct": 3,
+    "abx_total": 4,
+    "identity_yes": 2,
+    "identity_total": 2,
+    "unanswered": []
+  }
+}

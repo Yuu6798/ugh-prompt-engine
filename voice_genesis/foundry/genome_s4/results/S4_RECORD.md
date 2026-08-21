@@ -13,11 +13,9 @@
 
 ## Overall
 
-**BLOCKED**
+**NOT_ESTABLISHED**
 
-> **S4 READY_FOR_LISTENING — 機械 Gate は通過した。人間 Gate（§13 の 6 問）が未了のため S4 の verdict はまだ出せない。**
-
-verdict 語彙は §16 の 4 状態しか無いので `BLOCKED` と記録するが、これは「入力・素材・正本が不足」の BLOCKED ではない。
+> **S4 NOT ESTABLISHED — gene 単独成立は維持されるが、複合発現時の知覚または Identity 保持を本条件では確認できなかった。**
 
 どの結果でも S2 PASS / S3 PASS / S3.5 の結果は変更しない（§16）。
 
@@ -55,7 +53,10 @@ contexts: medial_ri, terminal_i, terminal_ri / supported contexts: medial_ri, te
 
 ## Perceptual Gate（§13〜§15）
 
-**BLOCKED** — ABX 0/4 正解 / Identity 0/2 YES
+**NOT_ESTABLISHED** — ABX 3/4 正解 / Identity 2/2 YES
+
+- gene retention: PERCEPTUAL_COEXPRESSION_NOT_ESTABLISHED
+- identity: IDENTITY_PRESERVED
 
 ## Notes
 

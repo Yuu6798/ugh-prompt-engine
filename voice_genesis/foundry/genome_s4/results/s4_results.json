@@ -1400,15 +1400,69 @@
     }
   },
   "perceptual": {
-    "abx_correct": 0,
+    "abx_correct": 3,
     "abx_total": 4,
-    "identity_yes": 0,
+    "identity_yes": 2,
     "identity_total": 2,
-    "verdict": "BLOCKED"
+    "abx_verdict": "PERCEPTUAL_COEXPRESSION_NOT_ESTABLISHED",
+    "identity_verdict": "IDENTITY_PRESERVED",
+    "answers_sha256": "b6d8e4b7738235f8e0802c3d91a9c6fb8251e01e4a3a6a714c3dc5cf685f4ea6",
+    "key_commitment": "20f1a0182c3ff763709f3d1eb5f59ac436e57d569648f9be460a6d505dedaf73",
+    "commitment_verified": true,
+    "pack_audio_verified": true,
+    "answer_binding_verified": true,
+    "verdict": "NOT_ESTABLISHED",
+    "trials": [
+      {
+        "trial_id": "T001",
+        "gene": "duration",
+        "context_id": "terminal_i",
+        "answer": "B",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "T002",
+        "gene": "f0",
+        "context_id": "terminal_ri",
+        "answer": "A",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "T003",
+        "gene": "f0",
+        "context_id": "terminal_i",
+        "answer": "A",
+        "valid": true,
+        "correct": false
+      },
+      {
+        "trial_id": "T004",
+        "gene": "duration",
+        "context_id": "terminal_ri",
+        "answer": "B",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "I001",
+        "context_id": "terminal_i",
+        "answer": "YES",
+        "valid": true,
+        "yes": true
+      },
+      {
+        "trial_id": "I002",
+        "context_id": "terminal_ri",
+        "answer": "YES",
+        "valid": true,
+        "yes": true
+      }
+    ]
   },
   "overall": {
-    "verdict": "BLOCKED",
-    "awaiting": "perceptual_gate"
+    "verdict": "NOT_ESTABLISHED"
   },
   "out_of_scope_observations": [
     "ABX の X は A か B と byte-identical なので、聴取者が 3 ファイルを sha256 で突き合わせれば聴かずに正答できる。commitment 方式が守るのは「実験者が回答後に正解を変えないこと」であって聴取者の自己申告ではない（S3.5 と同じ既知の性質）。プロトコル変更は §24 で禁じられているため実装では手を付けず、記録にのみ残す。",
