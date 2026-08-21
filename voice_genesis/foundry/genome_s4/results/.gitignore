@@ -1,0 +1,13 @@
+# S4 の出力音声は repository に commit しない（設計書 §22）。
+# 波音リツ 歌声データベース利用規約 第3条1（転載禁止）にも抵触するため恒久除外。
+wav/
+wav.staging/
+wav.prev/
+*.wav
+*.flac
+ear_pack/
+audio.staging/
+audio.prev/
+# blind 規律: 正解鍵と回答は git に載せない（§14 / §22）。
+answer_key.private.json
+answers.json
