@@ -217,15 +217,48 @@ def render_record(res: Dict[str, Any]) -> str:
     return "\n".join(L)
 
 
-def existing_finalized() -> bool:
-    """既に確定済みの記録（BLOCKED でない s35_results.json）があるか。"""
+def load_finalized() -> Optional[Dict[str, Any]]:
+    """既に確定済みの記録（BLOCKED でない s35_results.json）を返す。無ければ None。"""
     if not JSON_PATH.exists():
-        return False
+        return None
     try:
         doc = json.loads(JSON_PATH.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return False
-    return doc.get("status") != "BLOCKED" and "overall" in doc
+        return None
+    if doc.get("status") == "BLOCKED" or "overall" not in doc:
+        return None
+    return doc
+
+
+def existing_finalized() -> bool:
+    return load_finalized() is not None
+
+
+def _verdict_fingerprint(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """記録の**判定としての中身**。フィールドが増えても変わらない部分だけ取る。"""
+    return {
+        "overall": doc.get("overall"),
+        "answers_sha256": doc.get("answers_sha256"),
+        "key_commitment": doc.get("key_commitment"),
+        "genes": {g: v.get("verdict") for g, v in (doc.get("genes") or {}).items()},
+    }
+
+
+def conflicting_with_finalized(res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """確定済み記録と**判定が食い違う**なら、その差分を返す。
+
+    音声の欠落・改変は `verify_stage_audio` が例外ではなく `False` を返すので、
+    `finalize()` は「全 gene INVALID」で**成功**してしまう。そのまま publish すると
+    確定済みの S4_READY が S4_NOT_READY で上書きされる（前巡のガードは BLOCKED
+    経路しか塞いでいなかった）。フィールドが増えただけの再描画は通す。
+    """
+    prev = load_finalized()
+    if prev is None:
+        return None
+    was, now = _verdict_fingerprint(prev), _verdict_fingerprint(res)
+    if was == now:
+        return None
+    return {"was": was, "now": now}
 
 
 def main(stage1_path: Optional[Path] = None, stage2_path: Optional[Path] = None) -> int:
@@ -254,6 +287,19 @@ def main(stage1_path: Optional[Path] = None, stage2_path: Optional[Path] = None)
         return 3
     assert scored is not None
     res = build_results(scored)
+    conflict = conflicting_with_finalized(res)
+    if conflict is not None:
+        # 確定済み session の判定は不変。作り直すなら新規 session として実施する。
+        LAST_ERROR.write_text(prep._dumps({
+            "schema": sp.SCHEMA, "status": "BLOCKED",
+            "reason": "確定済み記録と判定が食い違う再実行を拒否した",
+            "affected_gene": None,
+            "required_action": "確定済み session の結果はそのまま残す。"
+                               "やり直すなら新規に事前登録した別 session として実施する",
+            "conflict": conflict}), encoding="utf-8")
+        print("BLOCKED: 確定済み記録と判定が食い違う再実行を拒否した")
+        print(f"確定済みの記録は保持した（詳細は {LAST_ERROR.name}）")
+        return 3
     publish_bundle(((JSON_PATH, prep._dumps(res)), (RECORD_PATH, render_record(res))))
     LAST_ERROR.unlink(missing_ok=True)      # 成功したら古いエラーを残さない
 

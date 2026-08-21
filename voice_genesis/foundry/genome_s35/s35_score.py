@@ -114,6 +114,65 @@ def verify_stage_audio(manifest: Dict[str, Any], stage: int) -> Tuple[bool, Dict
                        "problems": bad[:5], "problem_count": len(bad)}
 
 
+def assert_stage_block_matches_key(manifest: Dict[str, Any], key: Dict[str, Any],
+                                   stage: int) -> None:
+    """manifest の stage block が、**commit 済み key のその stage の trial** だけを
+    指していることを検査する。
+
+    `trial_ids` を引いて `key["trials"][tid]` を見るだけだと、stage の帰属を
+    確かめていないので、Stage 2 の枠に Stage 1 の trial を並べて音声をコピーすれば
+    「1 文脈しか無いのに 2 文脈で識別した」という記録が作れてしまう。
+    stage 帰属・gene の一意性・pair/probe_kind の一致まで commit 済み plan と
+    突き合わせる。
+    """
+    block = (manifest.get("stages") or {}).get(str(stage)) or {}
+    ids = list(block.get("trial_ids") or [])
+    trials = key.get("trials") or {}
+    plans = key.get("plans") or {}
+
+    committed = {tid for tid, spec in trials.items() if spec.get("stage") == stage}
+    unknown = [t for t in ids if t not in trials]
+    if unknown:
+        raise prep.S35Stop(
+            reason=f"Stage {stage} の manifest に key へ無い trial がある: {unknown[:3]}",
+            required_action="manifest を commit 済みの key に合わせる")
+    wrong_stage = [t for t in ids if trials[t].get("stage") != stage]
+    if wrong_stage:
+        raise prep.S35Stop(
+            reason=f"Stage {stage} の manifest に別 stage の trial が混ざっている: "
+                   f"{wrong_stage[:3]}",
+            required_action="manifest の stage block を commit 済みの stage 帰属へ戻す")
+    extra = [t for t in ids if t not in committed]
+    if extra:
+        raise prep.S35Stop(
+            reason=f"Stage {stage} の manifest に commit 外の trial がある: {extra[:3]}",
+            required_action="manifest を commit 済みの key に合わせる")
+    if len(set(ids)) != len(ids):
+        raise prep.S35Stop(reason=f"Stage {stage} の trial_ids に重複がある",
+                           required_action="manifest の trial_ids を一意にする")
+    genes = [trials[t]["gene"] for t in ids]
+    if len(set(genes)) != len(genes):
+        raise prep.S35Stop(
+            reason=f"Stage {stage} で同じ gene が複数回出題されている: {sorted(genes)}",
+            required_action="1 stage 1 gene 1 問に戻す")
+    if stage == sp.STAGE1 and set(ids) != committed:
+        raise prep.S35Stop(
+            reason=f"Stage 1 の trial_ids が commit 済み集合と一致しない "
+                   f"(欠落 {sorted(committed - set(ids))[:3]})",
+            required_action="Stage 1 は全 gene 分を出題する")
+    # 各 trial が commit 済み plan の pair / probe_kind と一致すること
+    for tid in ids:
+        spec = trials[tid]
+        want = (plans.get(spec["gene"]) or {}).get(f"stage{stage}") or {}
+        for field in ("pair_key", "probe_kind"):
+            if want.get(field) != spec.get(field):
+                raise prep.S35Stop(
+                    reason=f"{tid}: {field} が commit 済み plan と違う "
+                           f"({spec.get(field)!r} != {want.get(field)!r})",
+                    required_action="commit 済みの plan へ戻す。差し替えは blind の破壊",
+                    affected_gene=spec.get("gene"))
+
+
 def score_stage(stage: int, path: Optional[Path] = None) -> Dict[str, Any]:
     """1 stage を採点する。`UNSURE` は正答に数えない。"""
     manifest = prep.load_manifest()
@@ -124,6 +183,7 @@ def score_stage(stage: int, path: Optional[Path] = None) -> Dict[str, Any]:
     if not block:
         raise prep.S35Stop(reason=f"Stage {stage} が manifest に無い",
                            required_action=f"Stage {stage} の pack を先に生成する")
+    assert_stage_block_matches_key(manifest, key, stage)
     doc, ans_sha = load_answers(stage, path)
     answers = doc.get("answers") or {}
     check_complete(answers, block["trial_ids"], stage)
@@ -227,11 +287,16 @@ def finalize(stage1_path: Optional[Path] = None,
 
     s2: Optional[Dict[str, Any]] = None
     has_stage2_block = bool((manifest.get("stages") or {}).get(str(sp.STAGE2)))
-    if advancing and has_stage2_block:
+    plans_early = key.get("plans") or {}
+    # **別 context が無い gene は Stage 2 を配布できない**（配布しないのが正しい）。
+    # これを「Stage 2 待ち」に数えると、正常な走行が false BLOCKED で終わる。
+    owed = [g for g in advancing if (plans_early.get(g) or {}).get("stage2")]
+    if owed and has_stage2_block:
         s2 = score_stage(sp.STAGE2, stage2_path)
-    elif advancing and not has_stage2_block:
+    elif owed and not has_stage2_block:
         raise prep.S35Stop(
-            reason=f"Stage 1 を通過した gene があるのに Stage 2 pack が無い: {advancing}",
+            reason=f"Stage 1 を通過し Stage 2 pair も確定している gene があるのに "
+                   f"Stage 2 pack が無い: {owed}",
             required_action="prepare_stage2() で Stage 2 を配布し、回答を得る")
 
     answers_sha = {sp.STAGE1: s1["answers_sha256"]}

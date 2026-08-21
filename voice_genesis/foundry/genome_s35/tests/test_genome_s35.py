@@ -834,3 +834,119 @@ def test_empty_listener_provenance_is_blocked(s35, field, value) -> None:
         scoring.score_stage(sp.STAGE1)     # 回答ファイルを読んだ時点で弾く
     assert field in exc.value.as_dict()["reason"]
     assert not (out / "key_reveal.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 3 巡
+# ---------------------------------------------------------------------------
+def _finish(out: Path, stage1_mode=_correct, stage2_mode=_correct) -> int:
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, stage1_mode)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    if adv:
+        prep.prepare_stage2(adv)
+        _answer(out, 2, stage2_mode)
+    return report.main()
+
+
+def test_stage2_block_cannot_reuse_stage1_trials(s35) -> None:
+    """Stage 2 の枠へ Stage 1 の trial を並べ替えて 2 文脈を偽装できないこと。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.prepare_stage2(scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1)))
+
+    mp = out / "blind_manifest.json"
+    m = json.loads(mp.read_text(encoding="utf-8"))
+    s1_ids = m["stages"]["1"]["trial_ids"][:2]
+    # Stage 1 の trial を Stage 2 の枠へ差し替え、音声もコピーする
+    m["stages"]["2"] = {"trial_ids": s1_ids,
+                        "audio_sha256": {t: m["stages"]["1"]["audio_sha256"][t]
+                                         for t in s1_ids}}
+    mp.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    for t in s1_ids:
+        for slot in ("A", "B", "X"):
+            src = out / "stage1" / "audio" / f"{t}_{slot}.wav"
+            (out / "stage2" / "audio" / f"{t}_{slot}.wav").write_bytes(src.read_bytes())
+
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE2)
+    assert "別 stage の trial" in exc.value.as_dict()["reason"]
+
+
+def test_stage_block_rejects_unknown_and_duplicate_and_swapped_pairs(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    mp = out / "blind_manifest.json"
+    good = mp.read_text(encoding="utf-8")
+    key = _key(out)
+
+    def _write(mutate):
+        m = json.loads(good)
+        mutate(m)
+        mp.write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+
+    ids = json.loads(good)["stages"]["1"]["trial_ids"]
+    sha = json.loads(good)["stages"]["1"]["audio_sha256"]
+
+    _write(lambda m: m["stages"]["1"].update(
+        {"trial_ids": ids + ["S1T99"], "audio_sha256": {**sha, "S1T99": sha[ids[0]]}}))
+    with pytest.raises(prep.S35Stop) as e:
+        scoring.score_stage(sp.STAGE1)
+    assert "key へ無い trial" in e.value.as_dict()["reason"]
+
+    _write(lambda m: m["stages"]["1"].update({"trial_ids": ids[:-1]}))
+    with pytest.raises(prep.S35Stop) as e:
+        scoring.score_stage(sp.STAGE1)
+    assert "commit 済み集合と一致しない" in e.value.as_dict()["reason"]
+
+    # commit 済み plan と違う pair を key 側で名乗らせる
+    mp.write_text(good, encoding="utf-8")
+    kp = out / "answer_key.private.json"
+    k = json.loads(kp.read_text(encoding="utf-8"))
+    tid = ids[0]
+    k["trials"][tid]["pair_key"] = "terminal_ri|bogus#1|bogus#2"
+    kp.write_bytes(prep.canonical_bytes(k))
+    with pytest.raises(prep.S35Stop) as e:
+        scoring.score_stage(sp.STAGE1)
+    assert "commit 済み plan と違う" in e.value.as_dict()["reason"]
+    assert key["trials"][tid]["pair_key"] != "terminal_ri|bogus#1|bogus#2"
+
+
+def test_finalized_record_survives_audio_loss_on_rerun(s35) -> None:
+    """音声が消えた再実行は「全 gene INVALID で成功」する。確定済み記録を守る。"""
+    out, _doc = s35()
+    assert _finish(out) == 0
+    good_json = (out / "s35_results.json").read_bytes()
+    good_md = (out / "S3_5_RECORD.md").read_bytes()
+
+    for w in (out / "stage1" / "audio").glob("*.wav"):
+        w.unlink()
+    assert report.main() == 3
+    assert (out / "s35_results.json").read_bytes() == good_json
+    assert (out / "S3_5_RECORD.md").read_bytes() == good_md
+    err = json.loads((out / "last_error.json").read_text(encoding="utf-8"))
+    assert err["status"] == "BLOCKED"
+    assert err["conflict"]["was"]["overall"]["verdict"] == "S4_READY"
+
+
+def test_identical_rerun_still_allowed_after_finalize(s35) -> None:
+    """判定が同じ再実行は通す（フィールドが増えた再描画を塞がない）。"""
+    out, _doc = s35()
+    assert _finish(out) == 0
+    assert report.main() == 0
+    assert not (out / "last_error.json").exists()
+
+
+def test_no_stage2_pair_for_all_advancing_genes_is_not_blocked(s35) -> None:
+    """Stage 2 pair を持たない gene だけが Stage 1 を通っても false BLOCKED にしない。"""
+    out, _doc = s35(genes={g: ["terminal_ri"] * 3 for g in sp.GENE_CONDITION})
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)          # 全 gene 正解だが Stage 2 pair は無い
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    assert adv == sorted(sp.GENE_CONDITION)
+    assert prep.prepare_stage2(adv)["trial_count"] == 0
+    res = scoring.finalize()           # BLOCKED にならない
+    assert all(v["verdict"] == sp.GeneVerdict.NOT_EVALUABLE_S35.value
+               for v in res["genes"].values())
+    assert res["overall"]["verdict"] == "S4_NOT_READY"
