@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import sys
@@ -52,6 +53,10 @@ class Row:
     ph_num: Optional[Tuple[int, ...]] = None
     note_seq: Optional[Tuple[str, ...]] = None
     note_dur: Optional[Tuple[float, ...]] = None
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def parse_rows(csv_path: Path) -> List[Row]:
@@ -367,15 +372,28 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
             denominator[k]["eligible_terminal_seconds"], 6
         )
 
+    is_real_song = inp.modality == "real_song"
     return {
         "speaker": inp.speaker,
         "modality": inp.modality,
         "source_csv": str(inp.csv_path),
+        # 入力の**バイト**を pin する。パス文字列だけでは、同じパスの中身が
+        # 差し替わったときにどのバイトがこの台帳の count / H-TTD を作ったのかを
+        # 後から言えない（PR #300 Codex P1）。
+        "source_csv_sha256": sha256_file(inp.csv_path),
+        "source_csv_bytes": inp.csv_path.stat().st_size,
         "row_count": len(rows),
-        "local_real_singing_seconds": round(voiced_s, 6),
-        "local_real_singing_seconds_note": (
+        "local_voiced_seconds": round(voiced_s, 6),
+        "local_voiced_seconds_note": (
             "transcriptions.csv の非 SP/AP トークンの ph_dur 合計"
-            "（convert_ritsu の total_voiced_s と同じ数え方）"
+            "（convert_ritsu の total_voiced_s と同じ数え方）。**modality を問わない**"
+        ),
+        # VCV / speech / synthetic_song の発声秒を「実歌唱秒」と呼ぶと、
+        # 8-B の収録量を決める量が汚染される（PR #300 Codex P2）。
+        "local_real_singing_seconds": (round(voiced_s, 6) if is_real_song else None),
+        "local_real_singing_seconds_note": (
+            "modality == real_song のときのみ値を持つ。それ以外は null "
+            f"（この話者の modality = {inp.modality}）"
         ),
         "stratum_key_order": ["modality", "position", "pitch_bin", "preceding_duration_bin"],
         "terminal_events": terminal_events,
@@ -399,6 +417,7 @@ def build_ledger(
     inputs: Sequence[SpeakerInput],
     breaking: Sequence[str],
     non_breaking: Sequence[str],
+    midi_json_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     speakers = {inp.speaker: build_speaker_section(inp) for inp in inputs}
     verdict = httd_verdict(speakers, breaking, non_breaking)
@@ -423,6 +442,15 @@ def build_ledger(
                 "事前登録入力。台帳生成器はこの分類を内蔵しない。"
             ),
         },
+        "midi_json": (
+            None
+            if midi_json_path is None
+            else {
+                "path": str(midi_json_path),
+                "sha256": sha256_file(midi_json_path),
+                "bytes": midi_json_path.stat().st_size,
+            }
+        ),
         "speakers": speakers,
         "h_ttd": verdict,
     }
@@ -633,14 +661,20 @@ def render_table(ledger: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("## speakers")
     lines.append("")
-    lines.append("| speaker | modality | rows | voiced_s | ri_medial | pitch cut points (MIDI) | unknown pitch events |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append(
+        "| speaker | modality | rows | voiced_s | real_singing_s | ri_medial | "
+        "pitch cut points (MIDI) | unknown pitch events | source sha256 |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for speaker, section in sorted(ledger["speakers"].items()):
         pb = section["pitch_bin_assignment"]
+        real_s = section["local_real_singing_seconds"]
         lines.append(
             f"| {speaker} | {section['modality']} | {section['row_count']} | "
-            f"{section['local_real_singing_seconds']:.3f} | {section['ri_medial_count']} | "
-            f"{pb.get('cut_points_midi')} | {pb.get('unknown_events')} |"
+            f"{section['local_voiced_seconds']:.3f} | "
+            f"{'—' if real_s is None else f'{real_s:.3f}'} | {section['ri_medial_count']} | "
+            f"{pb.get('cut_points_midi')} | {pb.get('unknown_events')} | "
+            f"{section['source_csv_sha256'][:12]} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -676,7 +710,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             inp.midi_by_event = {
                 k: float(v) for k, v in table.items() if k.startswith(f"{inp.speaker}/")
             }
-    ledger = build_ledger(inputs, args.breaking, args.non_breaking)
+    ledger = build_ledger(
+        inputs, args.breaking, args.non_breaking, midi_json_path=args.midi_json
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"

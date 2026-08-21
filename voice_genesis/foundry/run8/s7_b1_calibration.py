@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import math
 import os
@@ -90,6 +91,37 @@ def load_prereg(
             selection_rule_path.name: sha256_file(selection_rule_path),
         },
     )
+
+
+class AnalysisStackMismatch(RuntimeError):
+    """宣言された `ANALYSIS_STACK_PIN` と実行時の版が食い違った（fail-closed）。"""
+
+
+def verify_analysis_stack(prereg: Prereg) -> Dict[str, str]:
+    """**測定前に**実行時の解析スタック版が事前登録の宣言と一致するか検査する。
+
+    事前登録は `numba` / `librosa` / `numpy` の版を実名で宣言しているのに対し、
+    `pyproject.toml` は広い範囲を許すので、**普通に互換な環境で走らせただけで
+    宣言と違う実装が測った値を「宣言 pin の産物」として記帳してしまう**
+    （PR #300 Codex P1）。しかも repo には
+    「numba 0.67.0 × numpy 2.4.6 は `librosa.pyin` が SIGSEGV・0.66.0 で解消」
+    という実測記録がある（`scripts/run5_bootstrap.py` の `ANALYSIS_STACK_PIN`）。
+    したがって不一致は**警告ではなく停止**にする。
+    """
+    declared = {
+        k: str(v)
+        for k, v in prereg.candidate_space["analysis_stack_pin"].items()
+        if k != "note"
+    }
+    observed = {pkg: importlib.metadata.version(pkg) for pkg in sorted(declared)}
+    mismatch = {k: (declared[k], observed[k]) for k in declared if declared[k] != observed[k]}
+    if mismatch:
+        detail = ", ".join(f"{k}: declared {d} != installed {o}" for k, (d, o) in sorted(mismatch.items()))
+        raise AnalysisStackMismatch(
+            f"analysis stack pin mismatch ({detail}). "
+            "B-1 は宣言 pin 以外で測らない（測ると provenance が壊れる）。"
+        )
+    return observed
 
 
 # --- 校正刺激の合成（決定論） ----------------------------------------------
@@ -533,7 +565,10 @@ def evaluate_axis_candidate(
         "gain_invariance": gain_err <= tol["gain_tol"],
         "silence_zero": silence_res <= tol["silence_tol"],
         "monotone_response": monotone_ok,
-        "cross_process_reproducibility": cross_err == 0.0 or not cross,
+        # 独立プロセス反復を**回していない**場合は「未検証」であって「合格」ではない。
+        # `--no-cross-process` で走らせた結果が frozen 扱いになると、要件を
+        # 満たさない spec が凍結できてしまう（PR #300 Codex P2）。
+        "cross_process_reproducibility": bool(cross) and cross_err == 0.0,
         "numerical_stability": finite,
     }
     return {
@@ -678,6 +713,7 @@ def build_spec(
     epsilons: Dict[str, Dict[str, Any]],
     stimuli: Dict[str, Stimulus],
     table: Dict[str, Any],
+    analysis_stack_observed: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     worked: Dict[str, Any] = {}
     reference_output: Dict[str, Any] = {}
@@ -708,6 +744,16 @@ def build_spec(
         "authority": "DESIGN_S7_run8.md 12-0-B",
         "generated_by": "voice_genesis/foundry/run8/s7_b1_calibration.py",
         "prereg_pins": prereg.pins,
+        "analysis_stack": {
+            "declared": {
+                k: v
+                for k, v in prereg.candidate_space["analysis_stack_pin"].items()
+                if k != "note"
+            },
+            "observed": analysis_stack_observed,
+            "verified": analysis_stack_observed is not None,
+            "rule": "測定前に fail-closed で照合する（verify_analysis_stack）。不一致なら測らない。",
+        },
         "sample_rate_hz": int(prereg.calibration_set["sample_rate_hz"]),
         "boundaries": {
             "note_onset_s": float(prereg.calibration_set["common"]["note_onset_s"]),
@@ -773,18 +819,27 @@ def _canonical_json(doc: Dict[str, Any]) -> str:
 
 def run_b1(cross_process: bool = True) -> Dict[str, Any]:
     prereg = load_prereg()
+    observed = verify_analysis_stack(prereg)   # 測定前に fail-closed
     stimuli = build_calibration_set(prereg)
     candidates = enumerate_candidates(prereg)
     table = run_measurements(prereg, stimuli, candidates, cross_process=cross_process)
     selections = {axis: select_for_axis(axis, table, prereg) for axis in sp.PRIMARY_AXES}
     epsilons = {axis: epsilon_for_axis(axis, selections[axis], prereg) for axis in sp.PRIMARY_AXES}
-    return build_spec(prereg, selections, epsilons, stimuli, table)
+    return build_spec(prereg, selections, epsilons, stimuli, table, analysis_stack_observed=observed)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="B-1 calibration harness (DESIGN_S7_run8 12-0-B)")
     parser.add_argument("--out", type=Path, default=RESULTS_DIR / "trf_measurement_spec.json")
-    parser.add_argument("--no-cross-process", action="store_true")
+    parser.add_argument(
+        "--no-cross-process",
+        action="store_true",
+        help=(
+            "独立プロセス反復を回さない（開発用）。この場合 hard requirement の "
+            "cross_process_reproducibility は**未検証 = 不合格**として扱われ、"
+            "どの軸も frozen にならない"
+        ),
+    )
     parser.add_argument(
         "--probe",
         nargs=2,
@@ -798,6 +853,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.probe:
         prereg = load_prereg()
+        verify_analysis_stack(prereg)   # 独立プロセス側でも同じ pin を強制する
         stimuli = build_calibration_set(prereg)
         cand = next(c for c in enumerate_candidates(prereg) if c.candidate_id == args.probe[0])
         payload = {

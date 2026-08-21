@@ -224,3 +224,40 @@ def test_breath_token_counts_as_terminal_but_stays_separable(tmp_path: Path):
         for event in cell.get("events", [])
     }
     assert tokens == {"SP"}      # AP 直前の /ri/ は internal なので主層に入らない
+
+
+def test_ledger_pins_the_bytes_of_its_inputs(tmp_path: Path):
+    """パス文字列だけでなく入力バイトの sha を残す（PR #300 Codex P1）。"""
+    import hashlib
+
+    path = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
+    section = L.build_speaker_section(L.SpeakerInput("user", "real_song", path))
+    assert section["source_csv_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert section["source_csv_bytes"] == path.stat().st_size
+
+    midi = tmp_path / "midi.json"
+    midi.write_text('{"user/u1/2": 62}', encoding="utf-8")
+    ledger = L.build_ledger(
+        [L.SpeakerInput("user", "real_song", path)], ["user"], ["pjs"], midi_json_path=midi
+    )
+    assert ledger["midi_json"]["sha256"] == hashlib.sha256(midi.read_bytes()).hexdigest()
+
+
+def test_non_song_modalities_do_not_report_real_singing_seconds(tmp_path: Path):
+    """VCV / speech の発声秒を「実歌唱秒」として出さない（PR #300 Codex P2）。"""
+    rows = ["x1,SP r i SP,0.1 0.3 1.6 0.2"]
+    song = L.build_speaker_section(
+        L.SpeakerInput("user", "real_song", _write_csv(tmp_path, "user", rows, HEADER_MIN))
+    )
+    vcv = L.build_speaker_section(
+        L.SpeakerInput("ritsu", "VCV", _write_csv(tmp_path, "ritsu", rows, HEADER_MIN))
+    )
+    speech = L.build_speaker_section(
+        L.SpeakerInput("amitaro", "speech", _write_csv(tmp_path, "amitaro", rows, HEADER_MIN))
+    )
+    assert song["local_real_singing_seconds"] == pytest.approx(1.9)
+    assert vcv["local_real_singing_seconds"] is None
+    assert speech["local_real_singing_seconds"] is None
+    # 発声秒そのものは modality を問わず残る（数え直しができるように）
+    for section in (song, vcv, speech):
+        assert section["local_voiced_seconds"] == pytest.approx(1.9)

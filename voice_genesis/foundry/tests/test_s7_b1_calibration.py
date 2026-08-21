@@ -137,6 +137,55 @@ def test_selection_rule_forbids_auc(prereg):
     assert not (keys & {"auc", "accuracy", "margin", "youden_j"})
 
 
+def test_analysis_stack_pin_is_enforced_before_measuring(prereg, monkeypatch):
+    """宣言 pin と実行時の版が違えば**測る前に**停止する（PR #300 Codex P1）。
+
+    repo には「numba 0.67.0 x numpy 2.4.6 は librosa.pyin が SIGSEGV・0.66.0 で解消」
+    という実測記録があり（scripts/run5_bootstrap.py の ANALYSIS_STACK_PIN）、
+    宣言と違う実装が測った値を宣言 pin の産物として記帳するのは provenance の破壊。
+    """
+    observed = b1.verify_analysis_stack(prereg)
+    declared = {
+        k: v for k, v in prereg.candidate_space["analysis_stack_pin"].items() if k != "note"
+    }
+    assert observed == declared
+
+    monkeypatch.setattr(b1.importlib.metadata, "version", lambda pkg: "0.0.0")
+    with pytest.raises(b1.AnalysisStackMismatch):
+        b1.verify_analysis_stack(prereg)
+
+
+def test_spec_records_the_observed_analysis_stack(spec):
+    stack = spec["analysis_stack"]
+    assert stack["verified"] is True
+    assert stack["observed"] == stack["declared"]
+
+
+def test_skipped_cross_process_check_is_not_a_pass():
+    """`--no-cross-process` が hard requirement を通してしまわない（PR #300 Codex P2）。"""
+    entry = {
+        "candidate": b1.Candidate(
+            candidate_id="fake", kind="voicing", voicing_id="B_rms_autocorr_gate",
+            window_ms=100.0, hop_ms=5.0,
+        ),
+        "first": {},
+        "repeat": {},
+        "cross": {},
+    }
+    axis = "excess_tail_voiced_ms"
+    stims = ("clean_terminal_ri", "clean_i", "clean_N", "long_tail_000", "long_tail_040",
+             "long_tail_080", "long_tail_160", "dur_perturb_r020", "dur_perturb_r035",
+             "dur_perturb_r050", "silence", "gain_x100", "gain_x050")
+    values = {"long_tail_000": 0.0, "long_tail_040": 40.0, "long_tail_080": 80.0,
+              "long_tail_160": 160.0, "silence": 0.0, "gain_x100": 80.0, "gain_x050": 80.0}
+    for s in stims:
+        entry["first"][s] = {axis: values.get(s, 10.0)}
+    prereg_local = b1.load_prereg()
+    record = b1.evaluate_axis_candidate(axis, entry, prereg_local)
+    assert record["checks"]["cross_process_reproducibility"] is False
+    assert record["survives"] is False
+
+
 # --- 測定の物理的性質（軽い候補で常時検査） --------------------------------
 
 

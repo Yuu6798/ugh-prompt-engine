@@ -53,6 +53,53 @@ MIN_CELLS_PER_GROUP = 3
 
 
 @dataclass(frozen=True)
+class Epsilon:
+    """`eps_z` は **(話者 × 世代) ごと**に決まる（凍結規則 `eps_raw / (1.4826 * MAD_group)`）。
+
+    スカラー 1 個を全群・全仮説へ当てると、MAD が群で違う以上ある系列は
+    厳しすぎ / ある系列は緩すぎになり H0–H5 の裁定が変わる（PR #300 Codex P1）。
+    そこで **群→値の写像を必須**にし、素の `float` は受け付けない。
+    群が 1 つしか無い場合や worked example では `Epsilon.uniform(v, reason=...)` を
+    使う（なぜ一様で良いのかを明示的に書かせる）。
+    """
+
+    by_group: Dict[Tuple[str, str], float]
+    uniform_value: Optional[float] = None
+    uniform_reason: Optional[str] = None
+
+    @classmethod
+    def uniform(cls, value: float, *, reason: str) -> "Epsilon":
+        if not reason:
+            raise ValueError("Epsilon.uniform には reason（一様で良い理由）が要る")
+        return cls(by_group={}, uniform_value=float(value), uniform_reason=reason)
+
+    @classmethod
+    def per_group(cls, mapping: Dict[Tuple[str, str], float]) -> "Epsilon":
+        return cls(by_group={(str(s), str(g)): float(v) for (s, g), v in mapping.items()})
+
+    def for_group(self, speaker: str, generation: str) -> Optional[float]:
+        if (speaker, generation) in self.by_group:
+            return self.by_group[(speaker, generation)]
+        return self.uniform_value
+
+    def for_groups(self, groups: Sequence[Tuple[str, str]]) -> Optional[float]:
+        """複数群にまたがる比較では**最大の ε**を当てる（supported を主張しにくい側）。"""
+        values = [self.for_group(s, g) for s, g in groups]
+        if not values or any(v is None for v in values):
+            return None
+        return max(v for v in values if v is not None)
+
+
+def _as_epsilon(eps: Any) -> Epsilon:
+    if isinstance(eps, Epsilon):
+        return eps
+    raise TypeError(
+        "eps_z には Epsilon を渡す（(話者×世代) ごとに違うため）。"
+        "一様値を使う場合は Epsilon.uniform(value, reason=...) で理由を明示する。"
+    )
+
+
+@dataclass(frozen=True)
 class Cell:
     """1 セルの観測（PR-2 の probe 結果 JSON から作る）。"""
 
@@ -113,7 +160,7 @@ H0_ANCHOR_KEY = "kagiri"
 
 
 def evaluate_h0(
-    cells: Sequence[Cell], eps_z: float, anchor_key: str = H0_ANCHOR_KEY
+    cells: Sequence[Cell], eps_z: Epsilon, anchor_key: str = H0_ANCHOR_KEY
 ) -> Dict[str, Any]:
     """実曲アンカーと同条件 probe セルの `z'` が **一致するなら反証**（§2-3 / §4-2）。
 
@@ -137,13 +184,21 @@ def evaluate_h0(
             "reason": "anchor_or_matched_cell_missing",
             "excluded": _excluded(cells),
         }
+    eps = _as_epsilon(eps_z).for_groups(sorted(keys))
+    if eps is None:
+        return {
+            "verdict": sp.Verdict.UNDETERMINED.value,
+            "reason": "epsilon_missing_for_group",
+            "groups": sorted(keys),
+            "excluded": _excluded(cells),
+        }
     delta = abs(_median([c.z_primary for c in anchor]) - _median([c.z_primary for c in matched]))
     return {
         "verdict": (
-            sp.Verdict.SUPPORTED.value if delta > eps_z else sp.Verdict.REFUTED.value
+            sp.Verdict.SUPPORTED.value if delta > eps else sp.Verdict.REFUTED.value
         ),
         "delta_z": delta,
-        "eps_z": eps_z,
+        "eps_z": eps,
         "low_power": True,
         "low_power_note": "アンカーは 1 個しか存在しないので、この裁定は 1 対の比較に依る",
         "excluded": _excluded(cells),
@@ -168,43 +223,79 @@ def _series_ladder_verdict(series_cells: Sequence[Cell], eps_z: float) -> str:
     return sp.Verdict.UNDETERMINED.value
 
 
-def evaluate_h1(cells: Sequence[Cell], eps_z: float) -> Dict[str, Any]:
-    """尺ラダーで単調性が出なければ反証（§2-3 H1）。系列 = 話者 × pitch_bin。"""
+def evaluate_h1(cells: Sequence[Cell], eps_z: Epsilon) -> Dict[str, Any]:
+    """尺ラダーで単調性が出なければ反証（§2-3 H1）。
+
+    系列 = **話者 × 世代 × pitch_bin**。世代を混ぜると別モデルのセルが同じ
+    ラダーに並び、`span` / `steps` がモデル間比較になってしまう（PR #300 Codex P1）。
+    §2-3 H5 が「世代は絶対値で裁定しない」と定めているのと同じ理由で、
+    世代内で裁定してから多数決へ上げる。
+    """
+    eps = _as_epsilon(eps_z)
     series: Dict[str, List[Cell]] = {}
     for c in cells:
         if c.probe != "P-RI-FINAL" or c.ladder_level is None:
             continue
-        series.setdefault(f"{c.speaker}/{c.pitch_bin}", []).append(c)
-    verdicts = {k: _series_ladder_verdict(v, eps_z) for k, v in sorted(series.items())}
-    return {
-        "verdict": _majority(list(verdicts.values())),
-        "series": verdicts,
-        "eps_z": eps_z,
-        "excluded": _excluded(cells),
-    }
-
-
-def evaluate_h2(cells: Sequence[Cell], eps_z: float) -> Dict[str, Any]:
-    """音高ラダーで差が出なければ反証（§2-3 H2）。系列 = 話者 × 尺ラダー水準。"""
-    series: Dict[str, Dict[str, List[float]]] = {}
-    for c in cells:
-        if c.probe != "P-RI-FINAL" or c.pitch_bin is None or not c.usable:
-            continue
-        key = f"{c.speaker}/L{c.ladder_level}"
-        series.setdefault(key, {}).setdefault(c.pitch_bin, []).append(c.z_primary)
+        series.setdefault(f"{c.speaker}/{c.generation}/{c.pitch_bin}", []).append(c)
     verdicts: Dict[str, str] = {}
-    for key, bins in sorted(series.items()):
-        if "low" not in bins or "high" not in bins:
-            verdicts[key] = sp.Verdict.UNDETERMINED.value
-            continue
-        delta = _median(bins["high"]) - _median(bins["low"])
+    eps_used: Dict[str, Optional[float]] = {}
+    for key, group_cells in sorted(series.items()):
+        speaker, generation = group_cells[0].speaker, group_cells[0].generation
+        e = eps.for_group(speaker, generation)
+        eps_used[key] = e
         verdicts[key] = (
-            sp.Verdict.SUPPORTED.value if abs(delta) > eps_z else sp.Verdict.REFUTED.value
+            sp.Verdict.UNDETERMINED.value if e is None else _series_ladder_verdict(group_cells, e)
         )
     return {
         "verdict": _majority(list(verdicts.values())),
         "series": verdicts,
-        "eps_z": eps_z,
+        "eps_z_by_series": eps_used,
+        "excluded": _excluded(cells),
+    }
+
+
+def evaluate_h2(cells: Sequence[Cell], eps_z: Epsilon) -> Dict[str, Any]:
+    """音高ラダーで差が出なければ反証（§2-3 H2）。系列 = 話者 × 世代 × 尺ラダー水準。
+
+    **方向は片側**である。H2 の主張は「**低音側で**失敗する（音域被覆の欠落）」
+    なので、`high` の方が悪い差は H2 の支持にならない（PR #300 Codex P2）。
+    `delta = z'(low) - z'(high)` が `eps` を超えたときだけ supported、
+    それ以外は refuted（差が無い / 逆向き）とし、どちらだったかを記帳する。
+    """
+    eps = _as_epsilon(eps_z)
+    series: Dict[str, Dict[str, List[float]]] = {}
+    meta: Dict[str, Tuple[str, str]] = {}
+    for c in cells:
+        if c.probe != "P-RI-FINAL" or c.pitch_bin is None or not c.usable:
+            continue
+        key = f"{c.speaker}/{c.generation}/L{c.ladder_level}"
+        series.setdefault(key, {}).setdefault(c.pitch_bin, []).append(c.z_primary)
+        meta[key] = (c.speaker, c.generation)
+    verdicts: Dict[str, str] = {}
+    detail: Dict[str, Any] = {}
+    for key, bins in sorted(series.items()):
+        if "low" not in bins or "high" not in bins:
+            verdicts[key] = sp.Verdict.UNDETERMINED.value
+            detail[key] = {"reason": "low_or_high_missing"}
+            continue
+        e = eps.for_group(*meta[key])
+        if e is None:
+            verdicts[key] = sp.Verdict.UNDETERMINED.value
+            detail[key] = {"reason": "epsilon_missing_for_group"}
+            continue
+        delta = _median(bins["low"]) - _median(bins["high"])   # 低音側が悪いほど正
+        if delta > e:
+            verdicts[key] = sp.Verdict.SUPPORTED.value
+            reason = "low_side_worse"
+        else:
+            verdicts[key] = sp.Verdict.REFUTED.value
+            reason = "opposite_direction" if -delta > e else "no_difference"
+        detail[key] = {"delta_z_low_minus_high": delta, "eps_z": e, "reason": reason}
+    return {
+        "verdict": _majority(list(verdicts.values())),
+        "series": verdicts,
+        "detail": detail,
+        "direction": "one-sided: supported only when low pitch is the worse side",
         "excluded": _excluded(cells),
     }
 
@@ -214,16 +305,18 @@ def evaluate_h2(cells: Sequence[Cell], eps_z: float) -> Dict[str, Any]:
 H3_CONTROL_PROBES: Tuple[str, ...] = ("P-I-FINAL", "P-SU-FINAL", "P-N-FINAL")
 
 
-def evaluate_h3(cells: Sequence[Cell], eps_z: float) -> Dict[str, Any]:
+def evaluate_h3(cells: Sequence[Cell], eps_z: Epsilon) -> Dict[str, Any]:
     """対照 probe で同等に崩れるなら反証（§2-3 H3）。群 = 話者 × 世代。"""
+    eps = _as_epsilon(eps_z)
     groups: Dict[str, Dict[str, List[float]]] = {}
+    meta: Dict[str, Tuple[str, str]] = {}
     for c in cells:
         if not c.usable:
             continue
         if c.probe == "P-RI-FINAL" or c.probe in H3_CONTROL_PROBES:
-            groups.setdefault(f"{c.speaker}/{c.generation}", {}).setdefault(
-                c.probe, []
-            ).append(c.z_primary)
+            key = f"{c.speaker}/{c.generation}"
+            groups.setdefault(key, {}).setdefault(c.probe, []).append(c.z_primary)
+            meta[key] = (c.speaker, c.generation)
     verdicts: Dict[str, str] = {}
     details: Dict[str, Any] = {}
     for key, probes in sorted(groups.items()):
@@ -234,16 +327,20 @@ def evaluate_h3(cells: Sequence[Cell], eps_z: float) -> Dict[str, Any]:
             verdicts[key] = sp.Verdict.UNDETERMINED.value
             details[key] = {"reason": "insufficient_cells", "n_cells": n_cells}
             continue
+        e = eps.for_group(*meta[key])
+        if e is None:
+            verdicts[key] = sp.Verdict.UNDETERMINED.value
+            details[key] = {"reason": "epsilon_missing_for_group"}
+            continue
         contrast = _median(target) - _median(controls)
         verdicts[key] = (
-            sp.Verdict.SUPPORTED.value if contrast > eps_z else sp.Verdict.REFUTED.value
+            sp.Verdict.SUPPORTED.value if contrast > e else sp.Verdict.REFUTED.value
         )
-        details[key] = {"contrast_z": contrast, "n_cells": n_cells}
+        details[key] = {"contrast_z": contrast, "n_cells": n_cells, "eps_z": e}
     return {
         "verdict": _majority(list(verdicts.values())),
         "series": verdicts,
         "detail": details,
-        "eps_z": eps_z,
         "excluded": _excluded(cells),
     }
 
@@ -313,8 +410,12 @@ def _contrast(cells: Sequence[Cell]) -> Optional[float]:
     return _median(target) - _median(control)
 
 
-def evaluate_h5(cells: Sequence[Cell], eps_z: float) -> Dict[str, Any]:
-    """世代で境界が動くか。**差分軸のみ**で裁定する（§2-3 H5・絶対値は使わない）。"""
+def evaluate_h5(cells: Sequence[Cell], eps_z: Epsilon) -> Dict[str, Any]:
+    """世代で境界が動くか。**差分軸のみ**で裁定する（§2-3 H5・絶対値は使わない）。
+
+    世代をまたぐ比較なので ε は参加群の**最大**を当てる（`Epsilon.for_groups`）。
+    """
+    eps = _as_epsilon(eps_z)
     by_speaker_gen: Dict[str, Dict[str, List[Cell]]] = {}
     for c in cells:
         by_speaker_gen.setdefault(c.speaker, {}).setdefault(c.generation, []).append(c)
@@ -327,22 +428,26 @@ def evaluate_h5(cells: Sequence[Cell], eps_z: float) -> Dict[str, Any]:
             verdicts[speaker] = sp.Verdict.UNDETERMINED.value
             details[speaker] = {"reason": "fewer_than_two_generations", "contrasts": contrasts}
             continue
+        e = eps.for_groups([(speaker, g) for g in sorted(usable)])
+        if e is None:
+            verdicts[speaker] = sp.Verdict.UNDETERMINED.value
+            details[speaker] = {"reason": "epsilon_missing_for_group", "contrasts": contrasts}
+            continue
         spread = max(usable.values()) - min(usable.values())
         verdicts[speaker] = (
-            sp.Verdict.SUPPORTED.value if spread > eps_z else sp.Verdict.REFUTED.value
+            sp.Verdict.SUPPORTED.value if spread > e else sp.Verdict.REFUTED.value
         )
-        details[speaker] = {"contrasts": contrasts, "spread_z": spread}
+        details[speaker] = {"contrasts": contrasts, "spread_z": spread, "eps_z": e}
     return {
         "verdict": _majority(list(verdicts.values())),
         "series": verdicts,
         "detail": details,
-        "eps_z": eps_z,
         "measured_on": "within-speaker 3-contrast difference only (absolute levels never used)",
         "excluded": _excluded(cells),
     }
 
 
-def evaluate_all(cells: Sequence[Cell], eps_z: float, theta: float) -> Dict[str, Any]:
+def evaluate_all(cells: Sequence[Cell], eps_z: Epsilon, theta: float) -> Dict[str, Any]:
     return {
         "H0": evaluate_h0(cells, eps_z),
         "H1": evaluate_h1(cells, eps_z),
@@ -376,16 +481,19 @@ DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "tolerance": "span > eps_z かつ 各ステップ >= -eps_z",
         "minimum_supporting_cells": MIN_LADDER_POINTS,
         "contradiction_rule": "|span| <= eps_z の系列は refuted",
-        "final_aggregation": "系列（話者 × pitch_bin）ごとに三値 -> §3 と同型の多数決",
+        "final_aggregation": "系列（話者 × **世代** × pitch_bin）ごとに三値 -> §3 と同型の多数決",
     },
     "H2": {
         "claim": "低音側で失敗する（音域被覆の欠落）",
         "participating_axes": ["primary (z')"],
-        "direction": "two-sided（high と low の差）",
-        "tolerance": "|Δz'| > eps_z",
+        "direction": "one-sided: delta = z'(low) - z'(high)（低音側が悪いほど正）",
+        "tolerance": "delta > eps_z",
         "minimum_supporting_cells": 2,
-        "contradiction_rule": "|Δz'| <= eps_z の系列は refuted",
-        "final_aggregation": "系列（話者 × 尺水準）ごとに三値 -> 多数決",
+        "contradiction_rule": (
+            "delta <= eps_z の系列は refuted。逆向き（high の方が悪い）も H2 の主張の"
+            "支持にはならないので refuted 側に置き、reason に opposite_direction を残す"
+        ),
+        "final_aggregation": "系列（話者 × **世代** × 尺水準）ごとに三値 -> 多数決",
     },
     "H3": {
         "claim": "音素 /ri/ に固有（/i/・/su/・/N/ では起きない）",
@@ -419,7 +527,11 @@ DEFINITIONS: Dict[str, Dict[str, Any]] = {
 
 def _worked_example() -> Dict[str, Any]:
     """実装が必ず通す独立検算例（数値は説明用の架空値）。"""
-    eps_z, theta = 0.30, 0.50
+    eps_z = Epsilon.uniform(
+        0.30,
+        reason="worked example は 1 世代（run7）だけの架空セルなので群が 1 つしか無い",
+    )
+    theta = 0.50
     cells = [
         Cell("P-ANCHOR/kagiri/ritsu/run7", "ritsu", "run7", "P-ANCHOR", 1.60),
         Cell(
@@ -440,13 +552,20 @@ def _worked_example() -> Dict[str, Any]:
         Cell("p_l4", "pjs", "run7", "P-RI-FINAL", 0.12, ladder_level=4, pitch_bin="mid"),
     ]
     return {
-        "inputs": {"eps_z": eps_z, "theta": theta, "n_cells": len(cells)},
+        "inputs": {
+            "eps_z": eps_z.uniform_value,
+            "eps_z_kind": f"uniform ({eps_z.uniform_reason})",
+            "theta": theta,
+            "n_cells": len(cells),
+        },
         "H0": evaluate_h0(cells, eps_z),
         "H1": evaluate_h1(cells, eps_z),
+        "H2": evaluate_h2(cells, eps_z),
         "H4": evaluate_h4(cells, theta, generation="run7"),
         "note": (
             "H0: |1.60 - 0.40| = 1.20 > 0.30 -> supported（文脈で違う）。"
-            "H1: user 系列 span 1.30 > 0.30 で supported / pjs 系列 span 0.07 <= 0.30 で refuted。"
+            "H1: user/run7/mid 系列 span 1.30 > 0.30 で supported / pjs/run7/mid 系列 "
+            "span 0.07 <= 0.30 で refuted（系列キーは 話者/世代/pitch_bin）。"
             "2 系列とも scored だが refuted が 0 でないため overall = undetermined "
             "（多数決規則が『supported は refuted 0 が条件』であることの検算）。"
             "H4: user 境界 = 2（0.70 >= 0.50 の最初の水準）/ pjs 境界 = inf（一度も超えない）"
