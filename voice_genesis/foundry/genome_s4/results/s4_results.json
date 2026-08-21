@@ -1,0 +1,1472 @@
+{
+  "schema": "voicegenesis-genome-s4/1.0",
+  "s3_results_sha256": "65b91402f2b6ead2b8d3269455413e6bd0ae575d66a33a52f0a2367c91e55cd0",
+  "s35_results_sha256": "5dcbc4329d9e7343e0f48d96665be5faa0f9406425a6552249eb9b5fcebb95ba",
+  "input_manifest_sha256": "78fcd8cc6e3f2b7c9edae72e0894f552b9cdfb0087d44b1df0d45402063fec4f",
+  "code_state": {
+    "commit": "b6596db68c88422f776c6de061471d86754196f9",
+    "worktree": {
+      "clean": true,
+      "entries": [],
+      "excluded": [
+        "voice_genesis/foundry/genome_s4/results/"
+      ]
+    },
+    "closure": {
+      "digest": "9e00aa6412f6d4ee5a7ab3bd5e7cceb7f0fc1dba39eb861b3a9964b76620907c",
+      "file_count": 21,
+      "files": {
+        "genome_s3/s3_gates.py": "b3f78a34a11c2a5d0fa103cbe5f5dbc130f75b348fb19cdf652cf83300d8d68f",
+        "genome_s3/s3_runner.py": "9b5a92c0542145d59bc99f826a70b61f9b819bef85a3af5f2e45cbd6f2a9b2da",
+        "genome_s3/s3_spec.py": "660522a36351a0a8e7ab0ee715a6fb465c77131909af28d8abf32f6b37757c57",
+        "genome_s4/s4_blind.py": "af5b149508fcfa53df141df679546f0479aeaddade1b97ec664f1d8fa6fb3f48",
+        "genome_s4/s4_gates.py": "b57c775b0ac3ad390e53301a3c1ddbe9e0fddb1cb05deb6f57c48741d073fc79",
+        "genome_s4/s4_report.py": "958e6b0003d6f05aece4e094729117c9fe84fe0a82f46e7a6fa880a0bda38e24",
+        "genome_s4/s4_runner.py": "74c1d0566aeafd99a3f31276ae8c3971e531f0f93b5c5cb61a69a0fb7b6bd42e",
+        "genome_s4/s4_spec.py": "a83d080adfe6b9df29071f9e775d00f8b94f5c3a2be60927c9061ed7806c2918",
+        "planb/pb_compose.py": "09e6ec5ab811525faafa6f2c0834e8f7305ae7a482eb3e06ee4de00678ebce9d",
+        "planb/pb_extract.py": "e414456f4cf04ef88f69e54f29839179d457d96dc356939ab26da894401d60a8",
+        "planb/pb_gates.py": "cbb84260a39c4131072cc3596f129ed783ff5a0cc9a093e072b8397bfa62ad92",
+        "planb/pb_metrics.py": "aab8df6a46ebeb2d6844a09b7a0fa39ccf0c0c8f0e9526f31e2d6e5bf3bd0c13",
+        "planb/pb_tracks.py": "550b142edfb165b5a3f8a888b3e5bc91346987e81e8e0ea0d4a92578af7354fd",
+        "planb/pb_world.py": "4edf16df91e8ff05aef6482028a5eda32ce0b39b854620e66b181f8a7d870843",
+        "planb_real/pr_census.py": "d7282b8aa83d3b21941c4c0f291b5bd40ea23a36018476aa4d09c8f1d49236e0",
+        "planb_real/pr_identity.py": "efca1d868a3df7e928701069af70226bcdd47bf6f73f3550105d16594ca049fe",
+        "planb_real/pr_lab.py": "f9900c91250357425eaf9553cbf7d4c2a29ce7f7cb0a98036f466dc91ef5688d",
+        "planb_real/pr_ladder.py": "cd408279a9540125a3598992d27d0cd25ae1186586b1d0d3fadbaa054cb39639",
+        "planb_real/pr_match.py": "48390cb4ebbb1287dee5c15b043a2af35b72e134c20e642aa217a87d5d742dac",
+        "planb_real/pr_performance.py": "590b12000ff183e8e63dedd7c54549d72019f6a92d6398255b095dd744b7808e",
+        "planb_real/pr_status.py": "df5e236a56d3e0ed13ea7a88da932bffc390be062a8ed4f51ee68987b4902deb"
+      },
+      "min_closure": [
+        "genome_s4/s4_spec.py",
+        "genome_s4/s4_runner.py",
+        "genome_s4/s4_gates.py",
+        "genome_s4/s4_blind.py",
+        "genome_s4/s4_report.py",
+        "genome_s3/s3_spec.py",
+        "genome_s3/s3_runner.py",
+        "genome_s3/s3_gates.py",
+        "planb/pb_compose.py",
+        "planb/pb_tracks.py",
+        "planb/pb_world.py",
+        "planb_real/pr_identity.py",
+        "planb_real/pr_performance.py",
+        "planb_real/pr_match.py",
+        "planb_real/pr_ladder.py"
+      ]
+    }
+  },
+  "material_provenance": {
+    "relocated": true,
+    "sources": [
+      {
+        "source": "pjs_corpus",
+        "old_root": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1",
+        "new_root": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/pjs_ex/PJS_corpus_ver1.1",
+        "archive_sha256": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",
+        "archive_verified": true,
+        "archive_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/acq/pjs_corpus_ver1.1.zip",
+        "extracted_sha256": "60c5a31cf9e9bc3e6bb634d99abd485feada8fdeca7188c6b75d88c1ba48b66d",
+        "extracted_file_count": 303,
+        "extracted_verified": true
+      },
+      {
+        "source": "ritsu_singing_db",
+        "old_root": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/ritsu_ex/「波音リツ」歌声データベースVer2.0.2",
+        "new_root": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/ritsu_ex/üuögë╣âèâcüvë╠É║âfü[â^âxü[âXVer2.0.2",
+        "archive_sha256": "3bb2e8e287a5cc888b49e46ee95dec60f7b20a5755c8a6f72b722d6a3da69168",
+        "archive_verified": true,
+        "archive_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/acq/ritsu_db/ritsu.zip",
+        "extracted_sha256": "f634340640b8088146165d6926eb68b0f0db5692f0b0731d928dc1414f842418",
+        "extracted_file_count": 220,
+        "extracted_verified": true
+      }
+    ],
+    "performance_labels_canonicalized": [
+      {
+        "read_from": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/pjs_ex/PJS_corpus_ver1.1/pjs003/pjs003.lab",
+        "labelled_as": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs003/pjs003.lab"
+      },
+      {
+        "read_from": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001.lab",
+        "labelled_as": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001.lab"
+      },
+      {
+        "read_from": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab",
+        "labelled_as": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab"
+      },
+      {
+        "read_from": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/pjs_ex/PJS_corpus_ver1.1/pjs065/pjs065.lab",
+        "labelled_as": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs065/pjs065.lab"
+      },
+      {
+        "read_from": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001.lab",
+        "labelled_as": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs001/pjs001.lab"
+      },
+      {
+        "read_from": "/tmp/claude-0/-home-user-ugh-prompt-engine/0af06e53-6f38-53ad-9662-a107f94f5678/scratchpad/voicegenesis_materials/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab",
+        "labelled_as": "/tmp/claude-0/-home-user-ugh-prompt-engine/2710359b-a183-5f31-be12-c2db053062f4/scratchpad/acq/pjs_ex/PJS_corpus_ver1.1/pjs002/pjs002.lab"
+      }
+    ],
+    "machine": {
+      "python": "3.11.15",
+      "platform": "Linux-6.18.44-fc-v21-x86_64-with-glibc2.39",
+      "machine": "x86_64",
+      "numpy": "2.4.6",
+      "pyworld": "0.3.5",
+      "soundfile": "0.14.0"
+    }
+  },
+  "context_phones": 22,
+  "identity_ap_scale": 0.25,
+  "candidate_pairs": 6,
+  "candidate_pair_keys": [
+    "terminal_ri|2018#215|pjs003#65",
+    "terminal_i|1st_color#86|pjs001#54",
+    "medial_ri|1st_color#104|pjs002#42",
+    "terminal_ri|2018#598|pjs065#29",
+    "terminal_i|1st_color#218|pjs001#73",
+    "medial_ri|1st_color#357|pjs002#54"
+  ],
+  "conditions": [
+    "B0",
+    "F",
+    "D",
+    "FD"
+  ],
+  "mechanistic": {
+    "candidate_pairs": 6,
+    "evaluable_pairs": 6,
+    "combinable_pairs": 6,
+    "support_ratio": 1.0,
+    "contexts": [
+      "medial_ri",
+      "terminal_i",
+      "terminal_ri"
+    ],
+    "supported_contexts": [
+      "medial_ri",
+      "terminal_i",
+      "terminal_ri"
+    ],
+    "distinct_context_count": 3,
+    "supported_context_count": 3,
+    "structural_failures": 0,
+    "determinism_failures": 0,
+    "s3_replay_mismatches": 0,
+    "checks": {
+      "candidate_pairs": true,
+      "distinct_contexts": true,
+      "support_ratio": true,
+      "supported_contexts": true,
+      "no_structural_failures": true,
+      "no_determinism_failures": true,
+      "no_s3_replay_mismatches": true
+    },
+    "hard_failure": false,
+    "criteria": {
+      "min_candidate_pairs": 4,
+      "min_contexts": 2,
+      "min_support_ratio": 0.75,
+      "min_supported_contexts": 2
+    },
+    "verdict": "PASS",
+    "pairs": {
+      "terminal_ri|2018#215|pjs003#65": {
+        "pair_key": "terminal_ri|2018#215|pjs003#65",
+        "context_id": "terminal_ri",
+        "verdict": "COMBINABLE",
+        "structure": {
+          "pass": true,
+          "no_energy_release_access": true,
+          "all_tripwires_pass": true,
+          "toggles_exact": true,
+          "B0_toggles": "none",
+          "F_toggles": "f0",
+          "D_toggles": "duration",
+          "FD_toggles": "f0+duration",
+          "fd_is_exact_f0_duration": true,
+          "tripwire_accessed": {
+            "B0": [
+              "n_units"
+            ],
+            "F": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units"
+            ],
+            "D": [
+              "n_units",
+              "unit_durations_s"
+            ],
+            "FD": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units",
+              "unit_durations_s"
+            ]
+          },
+          "tripwire_status": {
+            "B0": "pass",
+            "F": "pass",
+            "D": "pass",
+            "FD": "pass"
+          },
+          "energy_release_accessed": {},
+          "identity_sha256": "38ebf35e77a1e4e5",
+          "performance_sha256": "aecf69d27d54cb4e",
+          "identity_shared_across_conditions": true,
+          "performance_shared_across_conditions": true,
+          "performance_payload_1d": true
+        },
+        "determinism": {
+          "pass": true,
+          "conditions": {
+            "B0": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "1cdf3e2b4f2c253a",
+              "same_process_sha": "1cdf3e2b4f2c253a",
+              "cross_process_sha": "1cdf3e2b4f2c253a"
+            },
+            "F": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "0b7d43d0df693d4f",
+              "same_process_sha": "0b7d43d0df693d4f",
+              "cross_process_sha": "0b7d43d0df693d4f"
+            },
+            "D": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "72eb1307c95af235",
+              "same_process_sha": "72eb1307c95af235",
+              "cross_process_sha": "72eb1307c95af235"
+            },
+            "FD": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "928d47a7a51cd452",
+              "same_process_sha": "928d47a7a51cd452",
+              "cross_process_sha": "928d47a7a51cd452"
+            }
+          }
+        },
+        "s3_replay": {
+          "pass": true,
+          "mismatched_conditions": [],
+          "detail": {
+            "B0": {
+              "match": true,
+              "s3_sample_sha256": "1cdf3e2b4f2c253a",
+              "s4_sample_sha256": "1cdf3e2b4f2c253a",
+              "s3_recorded": true
+            },
+            "F": {
+              "match": true,
+              "s3_sample_sha256": "0b7d43d0df693d4f",
+              "s4_sample_sha256": "0b7d43d0df693d4f",
+              "s3_recorded": true
+            },
+            "D": {
+              "match": true,
+              "s3_sample_sha256": "72eb1307c95af235",
+              "s4_sample_sha256": "72eb1307c95af235",
+              "s3_recorded": true
+            }
+          }
+        },
+        "intervention": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "nonzero": true,
+              "amount": 273.75635063191504,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "duration": {
+              "nonzero": true,
+              "amount": 8.654668439628054,
+              "unit": "ms",
+              "structural_noop": false
+            }
+          }
+        },
+        "combination": {
+          "genes": {
+            "f0": {
+              "metric": "f0_dev_rmse_cents",
+              "alone": {
+                "from": "B0",
+                "to": "F",
+                "effect": 75.399729,
+                "positive": true
+              },
+              "with_background": {
+                "from": "D",
+                "to": "FD",
+                "effect": 74.240384,
+                "positive": true
+              },
+              "retention": 0.984624,
+              "values": {
+                "B0": 95.270953,
+                "F": 19.871224,
+                "D": 94.684973,
+                "FD": 20.444589
+              }
+            },
+            "duration": {
+              "metric": "note_split_mae_ms",
+              "alone": {
+                "from": "B0",
+                "to": "D",
+                "effect": 8.823368,
+                "positive": true
+              },
+              "with_background": {
+                "from": "F",
+                "to": "FD",
+                "effect": 8.823368,
+                "positive": true
+              },
+              "retention": 1.0,
+              "values": {
+                "B0": 9.725968,
+                "F": 9.725968,
+                "D": 0.9026,
+                "FD": 0.9026
+              }
+            }
+          },
+          "distinctness": {
+            "B0": true,
+            "F": true,
+            "D": true,
+            "pass": true
+          },
+          "identity": {
+            "metric": "identity_margin_db",
+            "fd_value": 15.506983,
+            "positive": true
+          }
+        },
+        "s3_consistency": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "from": "B0",
+              "to": "F",
+              "effect": 75.399729,
+              "positive": true
+            },
+            "duration": {
+              "from": "B0",
+              "to": "D",
+              "effect": 8.823368,
+              "positive": true
+            }
+          }
+        }
+      },
+      "terminal_i|1st_color#86|pjs001#54": {
+        "pair_key": "terminal_i|1st_color#86|pjs001#54",
+        "context_id": "terminal_i",
+        "verdict": "COMBINABLE",
+        "structure": {
+          "pass": true,
+          "no_energy_release_access": true,
+          "all_tripwires_pass": true,
+          "toggles_exact": true,
+          "B0_toggles": "none",
+          "F_toggles": "f0",
+          "D_toggles": "duration",
+          "FD_toggles": "f0+duration",
+          "fd_is_exact_f0_duration": true,
+          "tripwire_accessed": {
+            "B0": [
+              "n_units"
+            ],
+            "F": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units"
+            ],
+            "D": [
+              "n_units",
+              "unit_durations_s"
+            ],
+            "FD": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units",
+              "unit_durations_s"
+            ]
+          },
+          "tripwire_status": {
+            "B0": "pass",
+            "F": "pass",
+            "D": "pass",
+            "FD": "pass"
+          },
+          "energy_release_accessed": {},
+          "identity_sha256": "075f58286353e622",
+          "performance_sha256": "027b99eccb5f5223",
+          "identity_shared_across_conditions": true,
+          "performance_shared_across_conditions": true,
+          "performance_payload_1d": true
+        },
+        "determinism": {
+          "pass": true,
+          "conditions": {
+            "B0": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "06c9b125161e4851",
+              "same_process_sha": "06c9b125161e4851",
+              "cross_process_sha": "06c9b125161e4851"
+            },
+            "F": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "8289f9efe57a06eb",
+              "same_process_sha": "8289f9efe57a06eb",
+              "cross_process_sha": "8289f9efe57a06eb"
+            },
+            "D": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "3bca79a4038e816f",
+              "same_process_sha": "3bca79a4038e816f",
+              "cross_process_sha": "3bca79a4038e816f"
+            },
+            "FD": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "23d9a0800add2465",
+              "same_process_sha": "23d9a0800add2465",
+              "cross_process_sha": "23d9a0800add2465"
+            }
+          }
+        },
+        "s3_replay": {
+          "pass": true,
+          "mismatched_conditions": [],
+          "detail": {
+            "B0": {
+              "match": true,
+              "s3_sample_sha256": "06c9b125161e4851",
+              "s4_sample_sha256": "06c9b125161e4851",
+              "s3_recorded": true
+            },
+            "F": {
+              "match": true,
+              "s3_sample_sha256": "8289f9efe57a06eb",
+              "s4_sample_sha256": "8289f9efe57a06eb",
+              "s3_recorded": true
+            },
+            "D": {
+              "match": true,
+              "s3_sample_sha256": "3bca79a4038e816f",
+              "s4_sample_sha256": "3bca79a4038e816f",
+              "s3_recorded": true
+            }
+          }
+        },
+        "intervention": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "nonzero": true,
+              "amount": 264.1336737465817,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "duration": {
+              "nonzero": true,
+              "amount": 26.60074324324059,
+              "unit": "ms",
+              "structural_noop": false
+            }
+          }
+        },
+        "combination": {
+          "genes": {
+            "f0": {
+              "metric": "f0_dev_rmse_cents",
+              "alone": {
+                "from": "B0",
+                "to": "F",
+                "effect": 45.378241,
+                "positive": true
+              },
+              "with_background": {
+                "from": "D",
+                "to": "FD",
+                "effect": 43.062089,
+                "positive": true
+              },
+              "retention": 0.948959,
+              "values": {
+                "B0": 71.946823,
+                "F": 26.568582,
+                "D": 72.069021,
+                "FD": 29.006932
+              }
+            },
+            "duration": {
+              "metric": "note_split_mae_ms",
+              "alone": {
+                "from": "B0",
+                "to": "D",
+                "effect": 25.840286,
+                "positive": true
+              },
+              "with_background": {
+                "from": "F",
+                "to": "FD",
+                "effect": 25.840286,
+                "positive": true
+              },
+              "retention": 1.0,
+              "values": {
+                "B0": 26.670143,
+                "F": 26.670143,
+                "D": 0.829857,
+                "FD": 0.829857
+              }
+            }
+          },
+          "distinctness": {
+            "B0": true,
+            "F": true,
+            "D": true,
+            "pass": true
+          },
+          "identity": {
+            "metric": "identity_margin_db",
+            "fd_value": 8.373782,
+            "positive": true
+          }
+        },
+        "s3_consistency": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "from": "B0",
+              "to": "F",
+              "effect": 45.378241,
+              "positive": true
+            },
+            "duration": {
+              "from": "B0",
+              "to": "D",
+              "effect": 25.840286,
+              "positive": true
+            }
+          }
+        }
+      },
+      "medial_ri|1st_color#104|pjs002#42": {
+        "pair_key": "medial_ri|1st_color#104|pjs002#42",
+        "context_id": "medial_ri",
+        "verdict": "COMBINABLE",
+        "structure": {
+          "pass": true,
+          "no_energy_release_access": true,
+          "all_tripwires_pass": true,
+          "toggles_exact": true,
+          "B0_toggles": "none",
+          "F_toggles": "f0",
+          "D_toggles": "duration",
+          "FD_toggles": "f0+duration",
+          "fd_is_exact_f0_duration": true,
+          "tripwire_accessed": {
+            "B0": [
+              "n_units"
+            ],
+            "F": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units"
+            ],
+            "D": [
+              "n_units",
+              "unit_durations_s"
+            ],
+            "FD": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units",
+              "unit_durations_s"
+            ]
+          },
+          "tripwire_status": {
+            "B0": "pass",
+            "F": "pass",
+            "D": "pass",
+            "FD": "pass"
+          },
+          "energy_release_accessed": {},
+          "identity_sha256": "efb55205489dcbc5",
+          "performance_sha256": "65e4e5e301582b86",
+          "identity_shared_across_conditions": true,
+          "performance_shared_across_conditions": true,
+          "performance_payload_1d": true
+        },
+        "determinism": {
+          "pass": true,
+          "conditions": {
+            "B0": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "5cedc96a0254dc74",
+              "same_process_sha": "5cedc96a0254dc74",
+              "cross_process_sha": "5cedc96a0254dc74"
+            },
+            "F": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "9d647efacd98919f",
+              "same_process_sha": "9d647efacd98919f",
+              "cross_process_sha": "9d647efacd98919f"
+            },
+            "D": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "514bec3c29a10245",
+              "same_process_sha": "514bec3c29a10245",
+              "cross_process_sha": "514bec3c29a10245"
+            },
+            "FD": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "b8d5e21cac0b4c25",
+              "same_process_sha": "b8d5e21cac0b4c25",
+              "cross_process_sha": "b8d5e21cac0b4c25"
+            }
+          }
+        },
+        "s3_replay": {
+          "pass": true,
+          "mismatched_conditions": [],
+          "detail": {
+            "B0": {
+              "match": true,
+              "s3_sample_sha256": "5cedc96a0254dc74",
+              "s4_sample_sha256": "5cedc96a0254dc74",
+              "s3_recorded": true
+            },
+            "F": {
+              "match": true,
+              "s3_sample_sha256": "9d647efacd98919f",
+              "s4_sample_sha256": "9d647efacd98919f",
+              "s3_recorded": true
+            },
+            "D": {
+              "match": true,
+              "s3_sample_sha256": "514bec3c29a10245",
+              "s4_sample_sha256": "514bec3c29a10245",
+              "s3_recorded": true
+            }
+          }
+        },
+        "intervention": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "nonzero": true,
+              "amount": 256.5482270579917,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "duration": {
+              "nonzero": true,
+              "amount": 27.093619797194574,
+              "unit": "ms",
+              "structural_noop": false
+            }
+          }
+        },
+        "combination": {
+          "genes": {
+            "f0": {
+              "metric": "f0_dev_rmse_cents",
+              "alone": {
+                "from": "B0",
+                "to": "F",
+                "effect": 47.520896,
+                "positive": true
+              },
+              "with_background": {
+                "from": "D",
+                "to": "FD",
+                "effect": 52.461898,
+                "positive": true
+              },
+              "retention": 1.103975,
+              "values": {
+                "B0": 80.340606,
+                "F": 32.81971,
+                "D": 81.454797,
+                "FD": 28.992899
+              }
+            },
+            "duration": {
+              "metric": "note_split_mae_ms",
+              "alone": {
+                "from": "B0",
+                "to": "D",
+                "effect": 26.23322,
+                "positive": true
+              },
+              "with_background": {
+                "from": "F",
+                "to": "FD",
+                "effect": 26.23322,
+                "positive": true
+              },
+              "retention": 1.0,
+              "values": {
+                "B0": 27.91342,
+                "F": 27.91342,
+                "D": 1.6802,
+                "FD": 1.6802
+              }
+            }
+          },
+          "distinctness": {
+            "B0": true,
+            "F": true,
+            "D": true,
+            "pass": true
+          },
+          "identity": {
+            "metric": "identity_margin_db",
+            "fd_value": 11.921928,
+            "positive": true
+          }
+        },
+        "s3_consistency": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "from": "B0",
+              "to": "F",
+              "effect": 47.520896,
+              "positive": true
+            },
+            "duration": {
+              "from": "B0",
+              "to": "D",
+              "effect": 26.23322,
+              "positive": true
+            }
+          }
+        }
+      },
+      "terminal_ri|2018#598|pjs065#29": {
+        "pair_key": "terminal_ri|2018#598|pjs065#29",
+        "context_id": "terminal_ri",
+        "verdict": "COMBINABLE",
+        "structure": {
+          "pass": true,
+          "no_energy_release_access": true,
+          "all_tripwires_pass": true,
+          "toggles_exact": true,
+          "B0_toggles": "none",
+          "F_toggles": "f0",
+          "D_toggles": "duration",
+          "FD_toggles": "f0+duration",
+          "fd_is_exact_f0_duration": true,
+          "tripwire_accessed": {
+            "B0": [
+              "n_units"
+            ],
+            "F": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units"
+            ],
+            "D": [
+              "n_units",
+              "unit_durations_s"
+            ],
+            "FD": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units",
+              "unit_durations_s"
+            ]
+          },
+          "tripwire_status": {
+            "B0": "pass",
+            "F": "pass",
+            "D": "pass",
+            "FD": "pass"
+          },
+          "energy_release_accessed": {},
+          "identity_sha256": "93a6e5a54aa6801f",
+          "performance_sha256": "a4bdbfbbd618391e",
+          "identity_shared_across_conditions": true,
+          "performance_shared_across_conditions": true,
+          "performance_payload_1d": true
+        },
+        "determinism": {
+          "pass": true,
+          "conditions": {
+            "B0": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "5cb3dcf4bde7261e",
+              "same_process_sha": "5cb3dcf4bde7261e",
+              "cross_process_sha": "5cb3dcf4bde7261e"
+            },
+            "F": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "3e69931d8ea78949",
+              "same_process_sha": "3e69931d8ea78949",
+              "cross_process_sha": "3e69931d8ea78949"
+            },
+            "D": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "e98c8539fc11096e",
+              "same_process_sha": "e98c8539fc11096e",
+              "cross_process_sha": "e98c8539fc11096e"
+            },
+            "FD": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "f7935c955ad0fa3e",
+              "same_process_sha": "f7935c955ad0fa3e",
+              "cross_process_sha": "f7935c955ad0fa3e"
+            }
+          }
+        },
+        "s3_replay": {
+          "pass": true,
+          "mismatched_conditions": [],
+          "detail": {
+            "B0": {
+              "match": true,
+              "s3_sample_sha256": "5cb3dcf4bde7261e",
+              "s4_sample_sha256": "5cb3dcf4bde7261e",
+              "s3_recorded": true
+            },
+            "F": {
+              "match": true,
+              "s3_sample_sha256": "3e69931d8ea78949",
+              "s4_sample_sha256": "3e69931d8ea78949",
+              "s3_recorded": true
+            },
+            "D": {
+              "match": true,
+              "s3_sample_sha256": "e98c8539fc11096e",
+              "s4_sample_sha256": "e98c8539fc11096e",
+              "s3_recorded": true
+            }
+          }
+        },
+        "intervention": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "nonzero": true,
+              "amount": 203.8756891901243,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "duration": {
+              "nonzero": true,
+              "amount": 37.69812380952165,
+              "unit": "ms",
+              "structural_noop": false
+            }
+          }
+        },
+        "combination": {
+          "genes": {
+            "f0": {
+              "metric": "f0_dev_rmse_cents",
+              "alone": {
+                "from": "B0",
+                "to": "F",
+                "effect": 26.89693,
+                "positive": true
+              },
+              "with_background": {
+                "from": "D",
+                "to": "FD",
+                "effect": 29.359179,
+                "positive": true
+              },
+              "retention": 1.091544,
+              "values": {
+                "B0": 43.28133,
+                "F": 16.3844,
+                "D": 44.212027,
+                "FD": 14.852848
+              }
+            },
+            "duration": {
+              "metric": "note_split_mae_ms",
+              "alone": {
+                "from": "B0",
+                "to": "D",
+                "effect": 37.059524,
+                "positive": true
+              },
+              "with_background": {
+                "from": "F",
+                "to": "FD",
+                "effect": 37.059524,
+                "positive": true
+              },
+              "retention": 1.0,
+              "values": {
+                "B0": 37.559524,
+                "F": 37.559524,
+                "D": 0.5,
+                "FD": 0.5
+              }
+            }
+          },
+          "distinctness": {
+            "B0": true,
+            "F": true,
+            "D": true,
+            "pass": true
+          },
+          "identity": {
+            "metric": "identity_margin_db",
+            "fd_value": 7.330514,
+            "positive": true
+          }
+        },
+        "s3_consistency": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "from": "B0",
+              "to": "F",
+              "effect": 26.89693,
+              "positive": true
+            },
+            "duration": {
+              "from": "B0",
+              "to": "D",
+              "effect": 37.059524,
+              "positive": true
+            }
+          }
+        }
+      },
+      "terminal_i|1st_color#218|pjs001#73": {
+        "pair_key": "terminal_i|1st_color#218|pjs001#73",
+        "context_id": "terminal_i",
+        "verdict": "COMBINABLE",
+        "structure": {
+          "pass": true,
+          "no_energy_release_access": true,
+          "all_tripwires_pass": true,
+          "toggles_exact": true,
+          "B0_toggles": "none",
+          "F_toggles": "f0",
+          "D_toggles": "duration",
+          "FD_toggles": "f0+duration",
+          "fd_is_exact_f0_duration": true,
+          "tripwire_accessed": {
+            "B0": [
+              "n_units"
+            ],
+            "F": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units"
+            ],
+            "D": [
+              "n_units",
+              "unit_durations_s"
+            ],
+            "FD": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units",
+              "unit_durations_s"
+            ]
+          },
+          "tripwire_status": {
+            "B0": "pass",
+            "F": "pass",
+            "D": "pass",
+            "FD": "pass"
+          },
+          "energy_release_accessed": {},
+          "identity_sha256": "9dfa33332d4c4ce3",
+          "performance_sha256": "1be5bc8d6a8b1934",
+          "identity_shared_across_conditions": true,
+          "performance_shared_across_conditions": true,
+          "performance_payload_1d": true
+        },
+        "determinism": {
+          "pass": true,
+          "conditions": {
+            "B0": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "133202a0c9f0cb4a",
+              "same_process_sha": "133202a0c9f0cb4a",
+              "cross_process_sha": "133202a0c9f0cb4a"
+            },
+            "F": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "f7042fcd668df433",
+              "same_process_sha": "f7042fcd668df433",
+              "cross_process_sha": "f7042fcd668df433"
+            },
+            "D": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "53af13b63eace104",
+              "same_process_sha": "53af13b63eace104",
+              "cross_process_sha": "53af13b63eace104"
+            },
+            "FD": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "6adf28ede8a0f3d5",
+              "same_process_sha": "6adf28ede8a0f3d5",
+              "cross_process_sha": "6adf28ede8a0f3d5"
+            }
+          }
+        },
+        "s3_replay": {
+          "pass": true,
+          "mismatched_conditions": [],
+          "detail": {
+            "B0": {
+              "match": true,
+              "s3_sample_sha256": "133202a0c9f0cb4a",
+              "s4_sample_sha256": "133202a0c9f0cb4a",
+              "s3_recorded": true
+            },
+            "F": {
+              "match": true,
+              "s3_sample_sha256": "f7042fcd668df433",
+              "s4_sample_sha256": "f7042fcd668df433",
+              "s3_recorded": true
+            },
+            "D": {
+              "match": true,
+              "s3_sample_sha256": "53af13b63eace104",
+              "s4_sample_sha256": "53af13b63eace104",
+              "s3_recorded": true
+            }
+          }
+        },
+        "intervention": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "nonzero": true,
+              "amount": 351.06930921889773,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "duration": {
+              "nonzero": true,
+              "amount": 53.90359399999568,
+              "unit": "ms",
+              "structural_noop": false
+            }
+          }
+        },
+        "combination": {
+          "genes": {
+            "f0": {
+              "metric": "f0_dev_rmse_cents",
+              "alone": {
+                "from": "B0",
+                "to": "F",
+                "effect": 84.319917,
+                "positive": true
+              },
+              "with_background": {
+                "from": "D",
+                "to": "FD",
+                "effect": 82.352651,
+                "positive": true
+              },
+              "retention": 0.976669,
+              "values": {
+                "B0": 134.414381,
+                "F": 50.094464,
+                "D": 131.463542,
+                "FD": 49.110891
+              }
+            },
+            "duration": {
+              "metric": "note_split_mae_ms",
+              "alone": {
+                "from": "B0",
+                "to": "D",
+                "effect": 52.5,
+                "positive": true
+              },
+              "with_background": {
+                "from": "F",
+                "to": "FD",
+                "effect": 52.5,
+                "positive": true
+              },
+              "retention": 1.0,
+              "values": {
+                "B0": 54.031344,
+                "F": 54.031344,
+                "D": 1.531344,
+                "FD": 1.531344
+              }
+            }
+          },
+          "distinctness": {
+            "B0": true,
+            "F": true,
+            "D": true,
+            "pass": true
+          },
+          "identity": {
+            "metric": "identity_margin_db",
+            "fd_value": 8.218385,
+            "positive": true
+          }
+        },
+        "s3_consistency": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "from": "B0",
+              "to": "F",
+              "effect": 84.319917,
+              "positive": true
+            },
+            "duration": {
+              "from": "B0",
+              "to": "D",
+              "effect": 52.5,
+              "positive": true
+            }
+          }
+        }
+      },
+      "medial_ri|1st_color#357|pjs002#54": {
+        "pair_key": "medial_ri|1st_color#357|pjs002#54",
+        "context_id": "medial_ri",
+        "verdict": "COMBINABLE",
+        "structure": {
+          "pass": true,
+          "no_energy_release_access": true,
+          "all_tripwires_pass": true,
+          "toggles_exact": true,
+          "B0_toggles": "none",
+          "F_toggles": "f0",
+          "D_toggles": "duration",
+          "FD_toggles": "f0+duration",
+          "fd_is_exact_f0_duration": true,
+          "tripwire_accessed": {
+            "B0": [
+              "n_units"
+            ],
+            "F": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units"
+            ],
+            "D": [
+              "n_units",
+              "unit_durations_s"
+            ],
+            "FD": [
+              "f0_dev_cents",
+              "f0_dev_unit_index",
+              "f0_dev_unit_pos",
+              "n_units",
+              "unit_durations_s"
+            ]
+          },
+          "tripwire_status": {
+            "B0": "pass",
+            "F": "pass",
+            "D": "pass",
+            "FD": "pass"
+          },
+          "energy_release_accessed": {},
+          "identity_sha256": "70a01f55d1630a19",
+          "performance_sha256": "cb4da93d2b85c26c",
+          "identity_shared_across_conditions": true,
+          "performance_shared_across_conditions": true,
+          "performance_payload_1d": true
+        },
+        "determinism": {
+          "pass": true,
+          "conditions": {
+            "B0": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "c9f9cf09c85fea2c",
+              "same_process_sha": "c9f9cf09c85fea2c",
+              "cross_process_sha": "c9f9cf09c85fea2c"
+            },
+            "F": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "bc324e2d3d249648",
+              "same_process_sha": "bc324e2d3d249648",
+              "cross_process_sha": "bc324e2d3d249648"
+            },
+            "D": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "600b3fee96d66653",
+              "same_process_sha": "600b3fee96d66653",
+              "cross_process_sha": "600b3fee96d66653"
+            },
+            "FD": {
+              "pass": true,
+              "same_process": true,
+              "cross_process": true,
+              "recorded": "8c2c5aa6c6d501d8",
+              "same_process_sha": "8c2c5aa6c6d501d8",
+              "cross_process_sha": "8c2c5aa6c6d501d8"
+            }
+          }
+        },
+        "s3_replay": {
+          "pass": true,
+          "mismatched_conditions": [],
+          "detail": {
+            "B0": {
+              "match": true,
+              "s3_sample_sha256": "c9f9cf09c85fea2c",
+              "s4_sample_sha256": "c9f9cf09c85fea2c",
+              "s3_recorded": true
+            },
+            "F": {
+              "match": true,
+              "s3_sample_sha256": "bc324e2d3d249648",
+              "s4_sample_sha256": "bc324e2d3d249648",
+              "s3_recorded": true
+            },
+            "D": {
+              "match": true,
+              "s3_sample_sha256": "600b3fee96d66653",
+              "s4_sample_sha256": "600b3fee96d66653",
+              "s3_recorded": true
+            }
+          }
+        },
+        "intervention": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "nonzero": true,
+              "amount": 354.00266411298867,
+              "unit": "cent",
+              "structural_noop": false
+            },
+            "duration": {
+              "nonzero": true,
+              "amount": 43.29845940801922,
+              "unit": "ms",
+              "structural_noop": false
+            }
+          }
+        },
+        "combination": {
+          "genes": {
+            "f0": {
+              "metric": "f0_dev_rmse_cents",
+              "alone": {
+                "from": "B0",
+                "to": "F",
+                "effect": 51.930676,
+                "positive": true
+              },
+              "with_background": {
+                "from": "D",
+                "to": "FD",
+                "effect": 56.064355,
+                "positive": true
+              },
+              "retention": 1.0796,
+              "values": {
+                "B0": 98.936939,
+                "F": 47.006263,
+                "D": 98.62138,
+                "FD": 42.557025
+              }
+            },
+            "duration": {
+              "metric": "note_split_mae_ms",
+              "alone": {
+                "from": "B0",
+                "to": "D",
+                "effect": 42.5,
+                "positive": true
+              },
+              "with_background": {
+                "from": "F",
+                "to": "FD",
+                "effect": 42.5,
+                "positive": true
+              },
+              "retention": 1.0,
+              "values": {
+                "B0": 43.025459,
+                "F": 43.025459,
+                "D": 0.525459,
+                "FD": 0.525459
+              }
+            }
+          },
+          "distinctness": {
+            "B0": true,
+            "F": true,
+            "D": true,
+            "pass": true
+          },
+          "identity": {
+            "metric": "identity_margin_db",
+            "fd_value": 9.315004,
+            "positive": true
+          }
+        },
+        "s3_consistency": {
+          "pass": true,
+          "genes": {
+            "f0": {
+              "from": "B0",
+              "to": "F",
+              "effect": 51.930676,
+              "positive": true
+            },
+            "duration": {
+              "from": "B0",
+              "to": "D",
+              "effect": 42.5,
+              "positive": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "perceptual": {
+    "abx_correct": 3,
+    "abx_total": 4,
+    "identity_yes": 2,
+    "identity_total": 2,
+    "abx_verdict": "PERCEPTUAL_COEXPRESSION_NOT_ESTABLISHED",
+    "identity_verdict": "IDENTITY_PRESERVED",
+    "answers_sha256": "b6d8e4b7738235f8e0802c3d91a9c6fb8251e01e4a3a6a714c3dc5cf685f4ea6",
+    "key_commitment": "20f1a0182c3ff763709f3d1eb5f59ac436e57d569648f9be460a6d505dedaf73",
+    "commitment_verified": true,
+    "pack_audio_verified": true,
+    "answer_binding_verified": true,
+    "verdict": "NOT_ESTABLISHED",
+    "trials": [
+      {
+        "trial_id": "T001",
+        "gene": "duration",
+        "context_id": "terminal_i",
+        "answer": "B",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "T002",
+        "gene": "f0",
+        "context_id": "terminal_ri",
+        "answer": "A",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "T003",
+        "gene": "f0",
+        "context_id": "terminal_i",
+        "answer": "A",
+        "valid": true,
+        "correct": false
+      },
+      {
+        "trial_id": "T004",
+        "gene": "duration",
+        "context_id": "terminal_ri",
+        "answer": "B",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "I001",
+        "context_id": "terminal_i",
+        "answer": "YES",
+        "valid": true,
+        "yes": true
+      },
+      {
+        "trial_id": "I002",
+        "context_id": "terminal_ri",
+        "answer": "YES",
+        "valid": true,
+        "yes": true
+      }
+    ]
+  },
+  "overall": {
+    "verdict": "NOT_ESTABLISHED"
+  },
+  "out_of_scope_observations": [
+    "ABX の X は A か B と byte-identical なので、聴取者が 3 ファイルを sha256 で突き合わせれば聴かずに正答できる。commitment 方式が守るのは「実験者が回答後に正解を変えないこと」であって聴取者の自己申告ではない（S3.5 と同じ既知の性質）。プロトコル変更は §24 で禁じられているため実装では手を付けず、記録にのみ残す。",
+    "ABX 4 問の偶然一致確率は 1/16。本 Gate は統計的有意差ではなく工学的進行 Gate である（設計書 §15.1 が明記）。",
+    "第 1 走行の実測: `note_split_mae_ms` は F0 トグルに対して**完全に不感**で、全 6 pair で metric(B0) == metric(F) かつ metric(D) == metric(FD) が厳密に成立した。したがって §9.2 の Duration 側増分 (metric(F) - metric(FD)) は §9.1 の単独増分 (metric(B0) - metric(D)) と数値的に同一で、duration_retention は構造上つねに 1.000 になる。つまり **Duration 軸の機械 Gate は「F0 背景でも残るか」を実質的に検定していない**（合成経路上、F0 トグルは note の尺に触れないため）。F0 軸は同一でない（例: 75.400 -> 74.240, retention 0.985）ので、機械側で共発現を実測しているのは F0 軸のみ。Duration 軸の共発現は §13.2 の ABX が担う。metric の変更は §24 で禁止されているため実装では手を付けず記録に残す。"
+  ]
+}

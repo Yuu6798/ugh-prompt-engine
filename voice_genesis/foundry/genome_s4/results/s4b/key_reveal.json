@@ -1,0 +1,148 @@
+{
+  "schema": "voicegenesis-genome-s4b/1.0",
+  "answers_sha256": "818d17e71b96c63d2a7a6c8606277e1696a51e50314519ff618c0edebd398fae",
+  "salt_hex": "8e08b7431b3d75dbb08135503ba1a84f8ccd7233eb3a2fccaeabc2c3a0951e8a",
+  "selection_rule": "s4b-salience-v1: S3 SUPPORTED & S4 COMBINABLE & identity_margin>0 のうち intervention amount 最大（同値は pair_key 昇順）",
+  "cells": [
+    {
+      "context_id": "medial_ri",
+      "gene": "f0",
+      "identity_margin_db": 9.315004,
+      "intervention_amount": 354.00266411298867,
+      "intervention_unit": "cent",
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "rank": "max_salience"
+    },
+    {
+      "context_id": "terminal_i",
+      "gene": "f0",
+      "identity_margin_db": 8.218385,
+      "intervention_amount": 351.06930921889773,
+      "intervention_unit": "cent",
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "rank": "max_salience_other_context"
+    },
+    {
+      "context_id": "terminal_i",
+      "gene": "duration",
+      "identity_margin_db": 8.218385,
+      "intervention_amount": 53.90359399999568,
+      "intervention_unit": "ms",
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "rank": "max_salience"
+    },
+    {
+      "context_id": "medial_ri",
+      "gene": "duration",
+      "identity_margin_db": 9.315004,
+      "intervention_amount": 43.29845940801922,
+      "intervention_unit": "ms",
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "rank": "max_salience_other_context"
+    }
+  ],
+  "trials": {
+    "Q001": {
+      "a_condition": "F",
+      "b_condition": "FD",
+      "context_id": "medial_ri",
+      "correct": "A",
+      "gene": "duration",
+      "identity_margin_db": 9.315004,
+      "intervention_amount": 43.29845940801922,
+      "intervention_unit": "ms",
+      "kind": "ABX",
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "rank": "max_salience_other_context",
+      "trial_id": "Q001",
+      "x_condition": "F"
+    },
+    "Q002": {
+      "a_condition": "FD",
+      "b_condition": "D",
+      "context_id": "terminal_i",
+      "correct": "B",
+      "gene": "f0",
+      "identity_margin_db": 8.218385,
+      "intervention_amount": 351.06930921889773,
+      "intervention_unit": "cent",
+      "kind": "ABX",
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "rank": "max_salience_other_context",
+      "trial_id": "Q002",
+      "x_condition": "D"
+    },
+    "Q003": {
+      "a_condition": "FD",
+      "b_condition": "F",
+      "context_id": "terminal_i",
+      "correct": "A",
+      "gene": "duration",
+      "identity_margin_db": 8.218385,
+      "intervention_amount": 53.90359399999568,
+      "intervention_unit": "ms",
+      "kind": "ABX",
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "rank": "max_salience",
+      "trial_id": "Q003",
+      "x_condition": "FD"
+    },
+    "Q004": {
+      "a_condition": "FD",
+      "b_condition": "D",
+      "context_id": "medial_ri",
+      "correct": "B",
+      "gene": "f0",
+      "identity_margin_db": 9.315004,
+      "intervention_amount": 354.00266411298867,
+      "intervention_unit": "cent",
+      "kind": "ABX",
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "rank": "max_salience",
+      "trial_id": "Q004",
+      "x_condition": "D"
+    }
+  },
+  "scored": {
+    "abx": [
+      {
+        "trial_id": "Q001",
+        "gene": "duration",
+        "context_id": "medial_ri",
+        "answer": "B",
+        "valid": true,
+        "correct": false
+      },
+      {
+        "trial_id": "Q002",
+        "gene": "f0",
+        "context_id": "terminal_i",
+        "answer": "B",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "Q003",
+        "gene": "duration",
+        "context_id": "terminal_i",
+        "answer": "A",
+        "valid": true,
+        "correct": true
+      },
+      {
+        "trial_id": "Q004",
+        "gene": "f0",
+        "context_id": "medial_ri",
+        "answer": "B",
+        "valid": true,
+        "correct": true
+      }
+    ],
+    "identity": [],
+    "abx_correct": 3,
+    "abx_total": 4,
+    "identity_yes": 0,
+    "identity_total": 0,
+    "unanswered": []
+  }
+}

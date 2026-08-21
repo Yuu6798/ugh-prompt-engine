@@ -120,6 +120,12 @@ testpaths = [
     # (2026-08-19 セルフレビュー: 台帳の番人が CI 未収集だった)
     "voice_genesis/foundry/tests/test_genome_ledger_shape.py",
     "voice_genesis/foundry/tests/test_genome_ledger_s4_shape.py",
+    # genome_s4 の不変条件（gate 判定 / blind 規律 / rollback / 再配置）。
+    # spec / gates / blind は WORLD 非依存に切り出してあるので、pyworld を
+    # 入れていない CI でも判定ロジック側は実際に実行される（生成・公開経路の
+    # テストだけが skip される）。収集しないと「緑なのに何も検査していない」
+    # 状態になる (PR #299 Codex レビュー P2)
+    "voice_genesis/foundry/genome_s4/tests/test_genome_s4.py",
 ]
 pythonpath = ["src", "."]
 markers = [

@@ -1,0 +1,22 @@
+# S4 の出力音声は repository に commit しない（設計書 §22）。
+# 波音リツ 歌声データベース利用規約 第3条1（転載禁止）にも抵触するため恒久除外。
+wav/
+wav.staging/
+wav.prev/
+*.wav
+*.flac
+ear_pack/
+audio.staging/
+audio.prev/
+# blind 規律: 正解鍵と回答は git に載せない（§14 / §22）。
+answer_key.private.json
+answers.json
+# 素材の再配置定義は machine 固有の絶対パスを持つ。正本としての記録は
+# s4_results.json の material_provenance が持つので、入力側は commit しない。
+material_roots.json
+# S4b 確認走行（S4 canonical WAV の byte copy）も同じ扱い。
+s4b/audio/
+s4b/audio.staging/
+s4b/audio.prev/
+s4b/answer_key.private.json
+s4b/answers.json
