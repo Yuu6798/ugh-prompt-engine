@@ -204,6 +204,8 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 | `foundry/planb_real/REAL_CORPUS_POC_RECORD.md` | Real-Corpus PoC 第 1 走行（実コーパス取得〜R0–R4〜ゲート。TRF 主軸は終端 /ri/ でだけ立ち R4 でのみ動く。到達 = S1_REAL_RENDER） |
 | `foundry/genome_s3/DESIGN_GENOME_S3.md` | Genome S3 の実装対応表（B0/F/D/E/R の 5 条件・pair/gene/overall の 3 段判定・凍結閾値・停止規則）|
 | `foundry/genome_s3/results/S3_RECORD.md` | S3 走行記録（F0 / Duration / Energy / Release のうち何個が独立 gene として操作・実現・再現できたか）|
+| `foundry/genome_s35/DESIGN_GENOME_S35.md` | Genome S3.5 知覚ゲート（人間負担軽量版）の実装対応表: 2 段階・最大 8 問・決定論 pair 選択・blind commitment・4 状態 verdict |
+| `foundry/genome_s35/results/S3_5_RECORD.md` | S3.5 走行記録（S3 で成立した gene のうち、人間がブラインドで差を識別できたのは何個か）|
 
 各 `results_s*/underspec_log_s*.md` にサイクルごとの仕様逸脱・補充判断が
 記録されている。

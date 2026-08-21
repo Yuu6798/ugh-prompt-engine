@@ -1,0 +1,55 @@
+{
+  "protocol_version": "voicegenesis-s35-v2",
+  "s3_results_sha256": "65b91402f2b6ead2b8d3269455413e6bd0ae575d66a33a52f0a2367c91e55cd0",
+  "stages": {
+    "1": {
+      "trial_ids": [
+        "S1T01",
+        "S1T02",
+        "S1T03",
+        "S1T04"
+      ],
+      "audio_sha256": {
+        "S1T01": {
+          "A": "f12e847729c632c58692f84733085f07e0cbfac42cb1f67ad65c0720aed53bb0",
+          "B": "99005b5c29a97e760afb0e4a6d34c0e44ee376d7f80b403de692a1b79b52de56",
+          "X": "99005b5c29a97e760afb0e4a6d34c0e44ee376d7f80b403de692a1b79b52de56"
+        },
+        "S1T02": {
+          "A": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
+          "B": "76e94d9fc2550bda198b42a248624d2007ee7eb0ceb59e277490a330ab7e4c6d",
+          "X": "76e94d9fc2550bda198b42a248624d2007ee7eb0ceb59e277490a330ab7e4c6d"
+        },
+        "S1T03": {
+          "A": "ca67b61c452745ab8ab70f3e6a792e8752bc2b85053b630bffa3fde7e077d183",
+          "B": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1",
+          "X": "ca67b61c452745ab8ab70f3e6a792e8752bc2b85053b630bffa3fde7e077d183"
+        },
+        "S1T04": {
+          "A": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
+          "B": "b46ab380ec95f4c528db3585a3664a01a11fd476d6728cf4e04c59d85ac69ed1",
+          "X": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72"
+        }
+      }
+    },
+    "2": {
+      "trial_ids": [
+        "S2T02",
+        "S2T03"
+      ],
+      "audio_sha256": {
+        "S2T02": {
+          "A": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1",
+          "B": "999b7fb25a653a40f509dfb8ce7cce295d5c36668476777412c5a7ca8a6059b4",
+          "X": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1"
+        },
+        "S2T03": {
+          "A": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1",
+          "B": "c6b051c57fe65b3f8a6a3352250c53bd8235616b20f87c209e08ddb74e7020b9",
+          "X": "c6b051c57fe65b3f8a6a3352250c53bd8235616b20f87c209e08ddb74e7020b9"
+        }
+      }
+    }
+  },
+  "key_commitment": "d4fadda8c6d1f09a44289bd56aff47e237bb8cef03f6dadf8207d5447abd15da"
+}

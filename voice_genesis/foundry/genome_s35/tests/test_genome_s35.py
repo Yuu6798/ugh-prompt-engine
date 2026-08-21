@@ -1,0 +1,1541 @@
+"""test_genome_s35.py — S3.5 軽量版（2 段階・最大 8 問）の検証。
+
+unit は実コーパス・実 WAV を必要としない（合成した最小 S3 正本で配管を通す）。
+integration は `genome_s3/results/` の実正本が揃っているときだけ走る。
+
+実行:
+    python -m pytest voice_genesis/foundry/genome_s35/tests -q
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import pytest
+
+_HERE = Path(__file__).resolve().parent.parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+import s35_prepare as prep  # noqa: E402
+import s35_report as report  # noqa: E402
+import s35_score as scoring  # noqa: E402
+import s35_spec as sp  # noqa: E402
+
+SALT = bytes(range(32))
+CONTEXTS = ["terminal_ri", "terminal_i", "terminal_N", "medial_ri"]
+
+
+# ---------------------------------------------------------------------------
+# 合成 S3 正本
+# ---------------------------------------------------------------------------
+def _pair_key(ctx: str, i: int) -> str:
+    return f"{ctx}|src{i}#1{i}|pjs{i:03d}#2{i}"
+
+
+def make_s3(tmp: Path, *, genes: Optional[Dict[str, List[str]]] = None,
+            overall: str = "PASS", supported_count: int = 4,
+            corrupt_wav: bool = False) -> Tuple[Path, Path, Dict[str, Any]]:
+    """`genes` = gene -> SUPPORTED pair の probe_kind 列。"""
+    genes = genes or {g: CONTEXTS + CONTEXTS[:2] for g in sp.GENE_CONDITION}
+    res_dir = tmp / "genome_s3" / "results"
+    wav_dir = res_dir / "wav"
+    wav_dir.mkdir(parents=True, exist_ok=True)
+
+    gene_blocks: Dict[str, Any] = {}
+    repro: List[Dict[str, Any]] = []
+    seen: Dict[Tuple[str, str], str] = {}
+    for gene, kinds in genes.items():
+        pairs: Dict[str, Any] = {}
+        for i, ctx in enumerate(kinds):
+            pk = _pair_key(ctx, i)
+            pairs[pk] = {"pair_key": pk, "context_id": ctx, "gene": gene,
+                         "verdict": "SUPPORTED"}
+        # 非候補も混ぜる（選ばれないことを確認する）
+        for bad_ctx, idx, verdict in (("terminal_ri", 90, "UNSUPPORTED"),
+                                      ("medial_ri", 91, "NOT_EVALUABLE")):
+            pk = _pair_key(bad_ctx, idx)
+            pairs[pk] = {"pair_key": pk, "context_id": bad_ctx, "gene": gene,
+                         "verdict": verdict}
+        gene_blocks[gene] = {"verdict": "SUPPORTED", "pairs": pairs}
+
+        for pk in pairs:
+            for cond in ("B0", sp.GENE_CONDITION[gene]):
+                if (pk, cond) in seen:
+                    continue
+                payload = f"WAV:{pk}:{cond}".encode()
+                p = wav_dir / prep.pair_leaf(pk) / f"{cond}.wav"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(payload)
+                digest = hashlib.sha256(payload).hexdigest()
+                seen[(pk, cond)] = digest
+                repro.append({"pair_key": pk, "condition": cond, "gene": gene,
+                              "wav_sha256": digest, "sample_sha256": digest})
+
+    doc = {"schema": "voicegenesis-genome-s3/1.1", "genes": gene_blocks,
+           "overall": {"verdict": overall, "supported_gene_count": supported_count,
+                       "supported_genes": sorted(genes)},
+           "reproducibility": repro}
+    path = res_dir / "s3_results.json"
+    path.write_bytes(json.dumps(doc, ensure_ascii=False, indent=2).encode("utf-8"))
+    if corrupt_wav:
+        victim = next(iter(seen))
+        (wav_dir / prep.pair_leaf(victim[0]) / f"{victim[1]}.wav").write_bytes(b"TAMPERED")
+    return path, wav_dir, doc
+
+
+@pytest.fixture()
+def s35(tmp_path: Path, monkeypatch):
+    def _setup(**kw):
+        s3_path, wav_dir, doc = make_s3(tmp_path, **kw)
+        out = tmp_path / "s35"
+        monkeypatch.setattr(prep, "S3_RESULTS", s3_path)
+        monkeypatch.setattr(prep, "S3_WAV_DIR", wav_dir)
+        monkeypatch.setattr(prep, "RESULTS", out)
+        monkeypatch.setattr(prep, "BLIND_MANIFEST", out / "blind_manifest.json")
+        monkeypatch.setattr(prep, "PRIVATE_KEY", out / "answer_key.private.json")
+        monkeypatch.setattr(scoring, "RESULTS", out)
+        monkeypatch.setattr(scoring, "KEY_REVEAL", out / "key_reveal.json")
+        monkeypatch.setattr(report, "RESULTS", out)
+        monkeypatch.setattr(report, "JSON_PATH", out / "s35_results.json")
+        monkeypatch.setattr(report, "RECORD_PATH", out / "S3_5_RECORD.md")
+        monkeypatch.setattr(report, "LAST_ERROR", out / "last_error.json")
+        return out, doc
+    return _setup
+
+
+def _key(out: Path) -> Dict[str, Any]:
+    return json.loads((out / "answer_key.private.json").read_text(encoding="utf-8"))
+
+
+def _answer(out: Path, stage: int, mode) -> Path:
+    """`mode(gene, spec) -> "A"/"B"/"UNSURE"` で stage の回答を作る。"""
+    key = _key(out)
+    manifest = json.loads((out / "blind_manifest.json").read_text(encoding="utf-8"))
+    ids = manifest["stages"][str(stage)]["trial_ids"]
+    answers = {tid: mode(key["trials"][tid]["gene"], key["trials"][tid]) for tid in ids}
+    p = out / f"answers_stage{stage}.json"
+    p.write_text(json.dumps({"schema": sp.ANSWERS_SCHEMA, "stage": stage,
+                             "listener_id": "listener-01", "session_id": "s1",
+                             "answers": answers}, ensure_ascii=False, indent=2),
+                 encoding="utf-8")
+    return p
+
+
+def _correct(_g, spec):
+    return spec["correct"]
+
+
+def _wrong(_g, spec):
+    return "B" if spec["correct"] == "A" else "A"
+
+
+def _only(genes):
+    def _m(g, spec):
+        return spec["correct"] if g in genes else ("B" if spec["correct"] == "A" else "A")
+    return _m
+
+
+def _finish(out: Path, stage1_mode=_correct, stage2_mode=_correct) -> int:
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, stage1_mode)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    if adv:
+        prep.prepare_stage2(adv)
+        _answer(out, 2, stage2_mode)
+    return report.main()
+
+
+def _run_full(out: Path, stage1_mode, stage2_mode=_correct) -> Dict[str, Any]:
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, stage1_mode)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    if adv:
+        prep.prepare_stage2(adv)
+        _answer(out, 2, stage2_mode)
+    return scoring.finalize()
+
+
+# ---------------------------------------------------------------------------
+# 入力ゲート
+# ---------------------------------------------------------------------------
+def test_non_pass_s3_is_blocked(s35) -> None:
+    for kw in ({"overall": "FAIL"}, {"supported_count": 1}):
+        _out, _doc = s35(**kw)
+        with pytest.raises(prep.S35Stop) as exc:
+            prep.prepare_stage1(salt=SALT)
+        assert exc.value.as_dict()["status"] == "BLOCKED"
+
+
+def test_wav_sha_mismatch_is_blocked(s35) -> None:
+    _out, _doc = s35(corrupt_wav=True)
+    with pytest.raises(prep.S35Stop) as exc:
+        prep.prepare_stage1(salt=SALT)
+    d = exc.value.as_dict()
+    assert d["status"] == "BLOCKED"
+    assert "SHA" in d["reason"] or "欠落" in d["reason"]
+    assert "再生成" in d["required_action"]
+
+
+def test_missing_wav_is_blocked(s35) -> None:
+    _out, _doc = s35()
+    # Stage 1 が実際に使う WAV を消す（無関係な pair を消しても検出対象外）
+    res, s3_sha = prep.load_s3_results()
+    gene = prep.candidate_genes(res)[0]
+    pk = prep.plan_gene(res, s3_sha, gene)["stage1"]["pair_key"]
+    (prep.S3_WAV_DIR / prep.pair_leaf(pk) / "B0.wav").unlink()
+    with pytest.raises(prep.S35Stop) as exc:
+        prep.prepare_stage1(salt=SALT)
+    assert "欠落" in exc.value.as_dict()["reason"]
+
+
+def test_existing_private_key_blocks_regeneration(s35) -> None:
+    _out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    with pytest.raises(prep.S35Stop) as exc:
+        prep.prepare_stage1(salt=SALT)
+    assert "private key" in exc.value.as_dict()["reason"]
+
+
+# ---------------------------------------------------------------------------
+# 負担: Stage 1 = gene 数、合計 <= 8
+# ---------------------------------------------------------------------------
+def test_stage1_is_one_trial_per_gene(s35) -> None:
+    out, _doc = s35()
+    info = prep.prepare_stage1(salt=SALT)
+    assert info["trial_count"] == 4
+    key = _key(out)
+    s1 = [t for t in key["trials"].values() if t["stage"] == 1]
+    assert len(s1) == 4
+    assert len({t["gene"] for t in s1}) == 4
+    assert len(list((out / "stage1" / "audio").glob("*.wav"))) == 12   # 4 × A/B/X
+
+
+def test_total_trials_never_exceed_eight(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    key = _key(out)
+    assert len(key["trials"]) <= sp.MAX_TOTAL_TRIALS == 8
+    assert len([t for t in key["trials"].values() if t["stage"] == 2]) == 4
+
+
+def test_stage2_only_for_genes_that_passed_stage1(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _only({"f0", "energy"}))
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    assert adv == ["energy", "f0"]
+    info = prep.prepare_stage2(adv)
+    assert info["trial_count"] == 2
+    assert info["genes"] == ["energy", "f0"]
+    assert len(list((out / "stage2" / "audio").glob("*.wav"))) == 6
+
+
+def test_no_stage2_when_nothing_passes(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _wrong)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    assert adv == []
+    assert prep.prepare_stage2(adv)["trial_count"] == 0
+    res = scoring.finalize()
+    assert all(v["verdict"] == sp.GeneVerdict.NOT_ESTABLISHED.value
+               for v in res["genes"].values())
+    assert res["overall"]["verdict"] == "S4_NOT_READY"
+
+
+# ---------------------------------------------------------------------------
+# pair 選択
+# ---------------------------------------------------------------------------
+def test_unsupported_pairs_are_never_selected(s35) -> None:
+    out, doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    chosen = {t["pair_key"] for t in _key(out)["trials"].values()}
+    for gene, blk in doc["genes"].items():
+        for pk, p in blk["pairs"].items():
+            if p["verdict"] != "SUPPORTED":
+                assert pk not in chosen, f"{gene}: 非 SUPPORTED の {pk} が選ばれた"
+
+
+def test_stage2_uses_different_pair_and_context(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    key = _key(out)
+    for gene, plan in key["plans"].items():
+        assert plan["stage1"] and plan["stage2"], gene
+        assert plan["stage1"]["pair_key"] != plan["stage2"]["pair_key"], gene
+        assert plan["stage1"]["probe_kind"] != plan["stage2"]["probe_kind"], gene
+
+
+def test_selection_is_deterministic_and_effect_size_independent() -> None:
+    cands = [(_pair_key(CONTEXTS[i % 4], i), CONTEXTS[i % 4]) for i in range(6)]
+    a = sp.select_two_stage_pairs(cands, "sha-A", "f0")
+    b = sp.select_two_stage_pairs(list(reversed(cands)), "sha-A", "f0")
+    assert a == b                       # 候補の並び順に依存しない
+    assert a == sp.select_two_stage_pairs(cands, "sha-A", "f0")
+    assert a[0] is not None and a[1] is not None
+    assert a[0][1] != a[1][1]
+
+
+def test_single_context_gene_is_not_evaluable(s35) -> None:
+    """Stage 2 用の別 context が無い gene は NOT_EVALUABLE_S35。"""
+    out, _doc = s35(genes={"f0": ["terminal_ri"] * 4,
+                           "duration": CONTEXTS, "energy": CONTEXTS, "release": CONTEXTS})
+    info = prep.prepare_stage1(salt=SALT)
+    assert "f0" in info["not_evaluable"]
+    key = _key(out)
+    assert key["plans"]["f0"]["stage2"] is None
+    assert "別 context" in key["plans"]["f0"]["not_evaluable_reason"]
+
+    _answer(out, 1, _correct)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    prep.prepare_stage2(adv)
+    _answer(out, 2, _correct)
+    res = scoring.finalize()
+    assert res["genes"]["f0"]["verdict"] == sp.GeneVerdict.NOT_EVALUABLE_S35.value
+    # f0 が Stage 1 に正解していても PERCEPTIBLE_CANDIDATE にはならない
+    assert "f0" not in res["overall"]["perceptible_candidates"]
+
+
+# ---------------------------------------------------------------------------
+# 判定規則
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(("s1", "s2", "has2", "expected"), [
+    (True, True, True, sp.GeneVerdict.PERCEPTIBLE_CANDIDATE),
+    (True, False, True, sp.GeneVerdict.NOT_ESTABLISHED),
+    (False, None, True, sp.GeneVerdict.NOT_ESTABLISHED),
+    (True, None, False, sp.GeneVerdict.NOT_EVALUABLE_S35),
+    (False, None, False, sp.GeneVerdict.NOT_EVALUABLE_S35),   # 構造的欠落が優先
+])
+def test_gene_verdict_rules(s1, s2, has2, expected) -> None:
+    assert sp.gene_verdict(s1, s2, has_stage2_pair=has2) is expected
+
+
+def test_unsure_counts_as_incorrect(s35) -> None:
+    out, _doc = s35()
+    res = _run_full(out, lambda g, s: "UNSURE")
+    for gene, v in res["genes"].items():
+        assert v["stage1"]["answer"] == "UNSURE", gene
+        assert v["stage1"]["correct"] is False, gene
+        assert v["verdict"] == sp.GeneVerdict.NOT_ESTABLISHED.value, gene
+    assert res["overall"]["verdict"] == "S4_NOT_READY"
+
+
+def test_unsure_in_stage2_is_not_established(s35) -> None:
+    out, _doc = s35()
+    res = _run_full(out, _correct, lambda g, s: "UNSURE")
+    assert all(v["verdict"] == sp.GeneVerdict.NOT_ESTABLISHED.value
+               for v in res["genes"].values())
+
+
+def test_both_stages_correct_is_perceptible_candidate(s35) -> None:
+    out, _doc = s35()
+    res = _run_full(out, _correct, _correct)
+    for gene, v in res["genes"].items():
+        assert v["verdict"] == sp.GeneVerdict.PERCEPTIBLE_CANDIDATE.value, gene
+        assert len(v["contexts"]) == sp.REQUIRED_CONTEXTS, gene
+    assert res["overall"]["perceptible_candidate_count"] == 4
+    assert res["overall"]["verdict"] == "S4_READY"
+
+
+# ---------------------------------------------------------------------------
+# S4 Gate
+# ---------------------------------------------------------------------------
+def test_s4_gate_thresholds() -> None:
+    assert sp.s4_gate(2) == "S4_READY"
+    assert sp.s4_gate(4) == "S4_READY"
+    assert sp.s4_gate(1) == "S4_NOT_READY"
+    assert sp.s4_gate(0) == "S4_NOT_READY"
+
+
+def test_two_candidates_is_ready_one_is_not(s35) -> None:
+    out, _doc = s35()
+    res = _run_full(out, _only({"f0", "energy"}), _correct)
+    assert res["overall"]["perceptible_candidates"] == ["energy", "f0"]
+    assert res["overall"]["verdict"] == "S4_READY"
+
+
+def test_one_candidate_is_not_ready(s35) -> None:
+    out, _doc = s35()
+    res = _run_full(out, _only({"f0"}), _correct)
+    assert res["overall"]["perceptible_candidate_count"] == 1
+    assert res["overall"]["verdict"] == "S4_NOT_READY"
+
+
+# ---------------------------------------------------------------------------
+# blind
+# ---------------------------------------------------------------------------
+def test_blind_filenames_and_manifest_carry_no_gene_information(s35) -> None:
+    out, doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    names = [p.name for p in (out / "stage1" / "audio").glob("*.wav")]
+    assert names
+    leak = set(doc["genes"]) | {"B0", "terminal_ri", "terminal_i", "terminal_N",
+                                "medial_ri", "pjs", "src"}
+    for n in names:
+        assert re.fullmatch(r"S1T\d{2}_[ABX]\.wav", n), n
+        for token in leak:
+            assert token not in n, f"{n} に {token} が漏れている"
+    # manifest は構造ごと固定（sha256 hex に "f0" が偶然含まれるため部分文字列走査は不可）
+    manifest = json.loads((out / "blind_manifest.json").read_text(encoding="utf-8"))
+    assert set(manifest) == {"protocol_version", "s3_results_sha256", "stages",
+                             "key_commitment"}
+    assert set(manifest["stages"]) == {"1"}          # Stage 2 はまだ載せない
+    block = manifest["stages"]["1"]
+    assert set(block) == {"trial_ids", "audio_sha256"}
+    assert all(re.fullmatch(r"S1T\d{2}", t) for t in block["trial_ids"])
+    for tid, per in block["audio_sha256"].items():
+        assert set(per) == {"A", "B", "X"}, tid
+        assert all(re.fullmatch(r"[0-9a-f]{64}", v) for v in per.values()), tid
+    assert re.fullmatch(r"[0-9a-f]{64}", manifest["key_commitment"])
+
+
+def test_listening_ui_has_no_answer_key(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    html = (out / "stage1" / "index.html").read_text(encoding="utf-8")
+    key = _key(out)
+    # 鍵のフィールド名・gene 名・正解そのものが漏れていないこと。
+    # 素朴な部分文字列走査は "voicegenesis" の中の "gene" を誤検出するので、
+    # 実際に秘匿すべきトークンだけを挙げる。
+    for token in ("correct", "x_side", "a_side", "b_side", "pair_key",
+                  "probe_kind", "salt_hex", key["salt_hex"]):
+        assert token not in html, f"UI に {token} が埋め込まれている"
+    for gene in key["plans"]:
+        assert gene not in html, f"UI に gene 名 {gene} が漏れている"
+    for spec in key["trials"].values():
+        assert spec["pair_key"] not in html
+
+
+def test_stage2_pairs_are_committed_before_stage1_answers(s35) -> None:
+    """Stage 1 の結果を見てから Stage 2 の pair を選べない。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    before = {g: p["stage2"]["pair_key"] for g, p in _key(out)["plans"].items()}
+    commitment_before = json.loads(
+        (out / "blind_manifest.json").read_text(encoding="utf-8"))["key_commitment"]
+    _answer(out, 1, _correct)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    prep.prepare_stage2(adv)
+    after = {g: p["stage2"]["pair_key"] for g, p in _key(out)["plans"].items()}
+    assert before == after
+    assert json.loads((out / "blind_manifest.json").read_text(
+        encoding="utf-8"))["key_commitment"] == commitment_before
+
+
+def test_commitment_matches_and_tampering_yields_invalid(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    raw = (out / "answer_key.private.json").read_bytes()
+    manifest = json.loads((out / "blind_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["key_commitment"] == hashlib.sha256(raw).hexdigest()
+    assert prep.canonical_bytes(json.loads(raw.decode("utf-8"))) == raw
+
+    _answer(out, 1, _correct)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    prep.prepare_stage2(adv)
+    _answer(out, 2, _correct)
+
+    key = json.loads(raw.decode("utf-8"))
+    tid = sorted(key["trials"])[0]
+    key["trials"][tid]["correct"] = "B" if key["trials"][tid]["correct"] == "A" else "A"
+    (out / "answer_key.private.json").write_bytes(prep.canonical_bytes(key))
+    res = scoring.finalize()
+    assert res["commitment_verified"] is False
+    assert all(v["verdict"] == sp.GeneVerdict.INVALID.value for v in res["genes"].values())
+    assert res["overall"]["verdict"] == "S4_NOT_READY"
+
+
+def test_tampered_pack_audio_is_invalid(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    victim = sorted((out / "stage1" / "audio").glob("*.wav"))[0]
+    victim.write_bytes(victim.read_bytes() + b"\x00")
+    s1 = scoring.score_stage(sp.STAGE1)
+    assert s1["audio_verified"] is False
+
+
+# ---------------------------------------------------------------------------
+# 音声の byte 同一性
+# ---------------------------------------------------------------------------
+def test_audio_bytes_are_copied_verbatim(s35) -> None:
+    out, doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    src_sha = {(r["pair_key"], r["condition"]): r["wav_sha256"]
+               for r in doc["reproducibility"]}
+    key = _key(out)
+    for tid, spec in key["trials"].items():
+        if spec["stage"] != 1:
+            continue
+        for slot in ("A", "B", "X"):
+            side = spec["x_side"] if slot == "X" else spec[f"{slot.lower()}_side"]
+            cond = "B0" if side == sp.SIDE_B0 else sp.GENE_CONDITION[spec["gene"]]
+            got = hashlib.sha256(
+                (out / "stage1" / "audio" / f"{tid}_{slot}.wav").read_bytes()).hexdigest()
+            assert got == src_sha[(spec["pair_key"], cond)], (tid, slot)
+        a = (out / "stage1" / "audio" / f"{tid}_A.wav").read_bytes()
+        b = (out / "stage1" / "audio" / f"{tid}_B.wav").read_bytes()
+        x = (out / "stage1" / "audio" / f"{tid}_X.wav").read_bytes()
+        assert a != b and (x == a or x == b), tid
+
+
+def test_copy_sha_verified_against_s3_digest(s35) -> None:
+    out, _doc = s35()
+    import shutil as _sh
+    orig = prep.shutil.copyfile
+
+    def bad_copy(src, dst):
+        orig(src, dst)
+        Path(dst).write_bytes(Path(dst).read_bytes() + b"\x00")
+
+    prep.shutil = type("S", (), {"copyfile": staticmethod(bad_copy),
+                                 "rmtree": staticmethod(_sh.rmtree)})()
+    try:
+        with pytest.raises(prep.S35Stop) as exc:
+            prep.prepare_stage1(salt=SALT)
+        assert "検証済み digest と一致しない" in exc.value.as_dict()["reason"]
+    finally:
+        prep.shutil = _sh
+
+
+# ---------------------------------------------------------------------------
+# 回答検証
+# ---------------------------------------------------------------------------
+def test_partial_or_invalid_answers_are_blocked(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    p = _answer(out, 1, _correct)
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    for mutate, needle in (
+        (lambda d: d["answers"].update({sorted(d["answers"])[0]: ""}), "未回答"),
+        (lambda d: d["answers"].update({sorted(d["answers"])[0]: "MAYBE"}), "UNSURE 以外"),
+        (lambda d: d["answers"].update({"S1T99": "A"}), "manifest に無い"),
+        (lambda d: d.update({"schema": "wrong"}), "schema"),
+        (lambda d: d.update({"stage": 2}), "stage"),
+    ):
+        d = json.loads(json.dumps(doc))
+        mutate(d)
+        p.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        with pytest.raises(prep.S35Stop) as exc:
+            scoring.score_stage(sp.STAGE1)
+        assert needle in exc.value.as_dict()["reason"], needle
+        assert exc.value.as_dict()["status"] == "BLOCKED"
+
+
+def test_finalize_blocks_when_stage2_owed_but_missing(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    assert "Stage 2 pack が無い" in exc.value.as_dict()["reason"]
+
+
+# ---------------------------------------------------------------------------
+# 凍結定数と削除された旧設計
+# ---------------------------------------------------------------------------
+def test_frozen_constants_and_removed_v1_elements() -> None:
+    assert sp.TRIALS_PER_GENE_PER_STAGE == 1
+    assert sp.STAGES == 2
+    assert sp.MAX_TOTAL_TRIALS == 8
+    assert sp.MIN_PERCEPTIBLE_GENES_FOR_S4 == 2
+    assert sp.MAX_REPLAYS_PER_CLIP == 3
+    assert sp.REQUIRED_CONTEXTS == 2
+    assert {v.value for v in sp.GeneVerdict} == {
+        "PERCEPTIBLE_CANDIDATE", "NOT_ESTABLISHED", "NOT_EVALUABLE_S35", "INVALID"}
+    # 旧 v1 の要素は削除されている
+    for gone in ("PAIRS_PER_GENE", "REPEATS_PER_PAIR", "TRIALS_PER_GENE",
+                 "PERCEPTIBLE_CORRECT", "MIN_CONTEXTS"):
+        assert not hasattr(sp, gone), f"{gone} が残っている"
+    assert not hasattr(sp.GeneVerdict, "PERCEPTIBLE")
+
+
+def test_gene_condition_matches_s3() -> None:
+    s3_spec_path = _HERE.parent / "genome_s3" / "s3_spec.py"
+    if not s3_spec_path.exists():
+        pytest.skip("genome_s3 が無い")
+    sys.path.insert(0, str(_HERE.parent / "genome_s3"))
+    pytest.importorskip("pyworld")
+    import s3_spec  # noqa: PLC0415
+    assert {g.value: c for g, c in s3_spec.GENE_CONDITION.items()} == sp.GENE_CONDITION
+
+
+def test_wavs_and_private_key_are_gitignored() -> None:
+    gi = (_HERE / "results" / ".gitignore").read_text(encoding="utf-8")
+    for pat in ("*.wav", "answer_key.private.json"):
+        assert pat in gi, pat
+    repo = _HERE.parent.parent.parent
+    for probe in ("voice_genesis/foundry/genome_s35/results/stage1/audio/S1T01_A.wav",
+                  "voice_genesis/foundry/genome_s35/results/answer_key.private.json",
+                  "voice_genesis/foundry/genome_s35/results/answers_stage1.json"):
+        r = subprocess.run(["git", "check-ignore", "-q", probe], cwd=str(repo))
+        assert r.returncode == 0, f"{probe} が git 管理外になっていない"
+    tracked = subprocess.run(["git", "ls-files", "voice_genesis/foundry/genome_s35"],
+                             cwd=str(repo), capture_output=True, text=True).stdout
+    assert ".wav" not in tracked
+    assert "answer_key.private.json" not in tracked
+
+
+# ---------------------------------------------------------------------------
+# 記録
+# ---------------------------------------------------------------------------
+def test_report_renders_and_serializes(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.prepare_stage2(scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1)))
+    _answer(out, 2, _correct)
+    assert report.main() == 0
+    res = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert res["schema"] == sp.SCHEMA
+    assert res["protocol"] == sp.Protocol().as_dict()
+    assert res["overall"]["verdict"] == "S4_READY"
+    assert res["out_of_scope_observations"]
+    json.dumps(res, allow_nan=False)
+    md = (out / "S3_5_RECORD.md").read_text(encoding="utf-8")
+    assert "# S3.5 RECORD" in md
+    assert "S4_READY" in md
+    assert "統計的有意差・知覚閾値・完全独立は主張しない" in md
+    assert (out / "key_reveal.json").exists()
+
+
+def test_report_blocked_path(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    assert report.main() == 3          # Stage 1 の回答がまだ無い
+    res = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert res["status"] == "BLOCKED"
+    assert "BLOCKED" in (out / "S3_5_RECORD.md").read_text(encoding="utf-8")
+
+
+def test_key_reveal_only_after_answers(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    assert not (out / "key_reveal.json").exists()
+    _answer(out, 1, _wrong)            # 全問不正解 = Stage 2 なし
+    scoring.finalize()
+    # finalize は開示文書を**作るだけ**。ディスクへ出るのは report のガード通過後。
+    assert not (out / "key_reveal.json").exists()
+    assert report.main() == 1
+    reveal = json.loads((out / "key_reveal.json").read_text(encoding="utf-8"))
+    assert reveal["commitment_verified"] is True
+    assert "1" in reveal["revealed_after_answers_sha256"]
+
+
+# ---------------------------------------------------------------------------
+# integration（実 S3 正本があるときのみ）
+# ---------------------------------------------------------------------------
+def _real_s3_ready() -> bool:
+    if not prep.S3_RESULTS.exists() or not prep.S3_WAV_DIR.exists():
+        return False
+    return any(prep.S3_WAV_DIR.rglob("*.wav"))
+
+
+@pytest.mark.skipif(not _real_s3_ready(), reason="S3 実正本 / WAV が無い")
+def test_integration_real_s3_plan_is_deterministic() -> None:
+    """実 S3 正本で 2 段階 plan が決定論・別 context になることを確認（副作用なし）。"""
+    res, s3_sha = prep.load_s3_results()
+    prep.gate_s3(res)
+    genes = prep.candidate_genes(res)
+    assert genes
+    first = {g: prep.plan_gene(res, s3_sha, g) for g in genes}
+    second = {g: prep.plan_gene(res, s3_sha, g) for g in genes}
+    assert first == second
+    for g, plan in first.items():
+        sup = {pk for pk, _ in prep.candidate_pairs(res, g)}
+        assert plan["stage1"] is not None, g
+        assert plan["stage1"]["pair_key"] in sup, g
+        if plan["stage2"] is not None:
+            assert plan["stage2"]["pair_key"] in sup, g
+            assert plan["stage1"]["pair_key"] != plan["stage2"]["pair_key"], g
+            assert plan["stage1"]["probe_kind"] != plan["stage2"]["probe_kind"], g
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー（Codex）で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def test_rescoring_after_reveal_is_blocked(s35) -> None:
+    """正解開示後に回答を書き換えての再採点を拒否する。
+
+    これができると、開示済み session から S4_NOT_READY を S4_READY へ
+    作り替えられる（commitment も audio も true のまま）。
+    """
+    out, _doc = s35()
+    # まず 1 gene だけ正解 = S4_NOT_READY で確定・開示させる（実フロー経由）
+    assert _finish(out, _only({"f0"}), _correct) == 1
+    assert (out / "key_reveal.json").exists()
+    before = (out / "key_reveal.json").read_bytes()
+
+    # 開示後に Stage 1 の回答を全問正解へ書き換える
+    _answer(out, 1, _correct)
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    d = exc.value.as_dict()
+    assert d["status"] == "BLOCKED"
+    assert "再採点は禁止" in d["reason"]
+    assert (out / "key_reveal.json").read_bytes() == before   # 開示物を上書きしない
+
+
+def test_identical_rerun_after_reveal_is_allowed(s35) -> None:
+    """同一回答・同一鍵での再実行は冪等な再描画として通す。"""
+    out, _doc = s35()
+    first = _run_full(out, _correct, _correct)
+    again = scoring.finalize()
+    assert again["overall"] == first["overall"]
+    assert again["answers_sha256"] == first["answers_sha256"]
+
+
+def test_tampered_key_after_reveal_is_blocked(s35) -> None:
+    out, _doc = s35()
+    assert _finish(out, _correct, _correct) == 0
+    kp = out / "answer_key.private.json"
+    key = json.loads(kp.read_text(encoding="utf-8"))
+    tid = sorted(key["trials"])[0]
+    key["trials"][tid]["correct"] = "B" if key["trials"][tid]["correct"] == "A" else "A"
+    kp.write_bytes(prep.canonical_bytes(key))
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    assert "private key が変わっている" in exc.value.as_dict()["reason"]
+
+
+def test_empty_or_partial_audio_manifest_is_not_verified(s35) -> None:
+    """被覆が欠けた manifest を "verified" にしない（WAV 全消しでも true が出た）。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    mp = out / "blind_manifest.json"
+    full = json.loads(mp.read_text(encoding="utf-8"))
+    assert scoring.verify_stage_audio(full, 1)[0] is True
+
+    # (a) audio_sha256 を空にして WAV も全消し
+    empty = json.loads(json.dumps(full))
+    empty["stages"]["1"]["audio_sha256"] = {}
+    for w in (out / "stage1" / "audio").glob("*.wav"):
+        w.unlink()
+    ok, detail = scoring.verify_stage_audio(empty, 1)
+    assert ok is False
+    assert "被覆" in detail["problems"][0]
+
+    # (b) trial を 1 つ落とす
+    partial = json.loads(json.dumps(full))
+    partial["stages"]["1"]["audio_sha256"].pop(full["stages"]["1"]["trial_ids"][0])
+    assert scoring.verify_stage_audio(partial, 1)[0] is False
+
+    # (c) slot を 1 つ落とす
+    slot = json.loads(json.dumps(full))
+    slot["stages"]["1"]["audio_sha256"][full["stages"]["1"]["trial_ids"][0]].pop("X")
+    assert scoring.verify_stage_audio(slot, 1)[0] is False
+
+    # (d) trial_ids ごと空
+    none = json.loads(json.dumps(full))
+    none["stages"]["1"] = {"trial_ids": [], "audio_sha256": {}}
+    assert scoring.verify_stage_audio(none, 1)[0] is False
+
+
+def test_mixed_listener_across_stages_is_blocked(s35) -> None:
+    """別人が 1 文脈ずつ答えて PERCEPTIBLE_CANDIDATE を作れないこと。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.prepare_stage2(scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1)))
+    p2 = _answer(out, 2, _correct)
+
+    clean = p2.read_text(encoding="utf-8")
+    for field, value in (("listener_id", "listener-02"), ("session_id", "s2")):
+        d = json.loads(clean)          # 毎回きれいな状態から 1 項目だけ壊す
+        d[field] = value
+        p2.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        with pytest.raises(prep.S35Stop) as exc:
+            scoring.finalize()
+        assert field in exc.value.as_dict()["reason"]
+        assert not (out / "key_reveal.json").exists()   # 開示まで進まない
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 2 巡
+# ---------------------------------------------------------------------------
+def test_blocked_rerun_does_not_destroy_finalized_record(s35) -> None:
+    """開示後の再採点ガードが発火しても、確定済みの記録を潰さない。
+
+    ガードが守ったはずの S4_READY 正本を、ガードの副作用で失わないこと。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.prepare_stage2(scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1)))
+    _answer(out, 2, _correct)
+    assert report.main() == 0
+    good_json = (out / "s35_results.json").read_bytes()
+    good_md = (out / "S3_5_RECORD.md").read_bytes()
+
+    # 開示後に回答を書き換えて再実行 → BLOCKED だが正本は残る
+    _answer(out, 1, _wrong)
+    assert report.main() == 3
+    assert (out / "s35_results.json").read_bytes() == good_json
+    assert (out / "S3_5_RECORD.md").read_bytes() == good_md
+    err = json.loads((out / "last_error.json").read_text(encoding="utf-8"))
+    assert err["status"] == "BLOCKED"
+    assert "再採点は禁止" in err["reason"]
+
+
+def test_blocked_first_run_still_publishes_blocked_bundle(s35) -> None:
+    """確定済み記録が無いときは従来どおり BLOCKED 文書を出す。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    assert report.main() == 3          # 回答がまだ無い
+    doc = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert doc["status"] == "BLOCKED"
+    assert not (out / "last_error.json").exists()
+
+
+def test_missing_stage2_context_dominates_stage1_answer() -> None:
+    """別 context が無い gene は、Stage 1 の正誤に関係なく NOT_EVALUABLE_S35。"""
+    for s1 in (True, False, None):
+        assert sp.gene_verdict(s1, None, has_stage2_pair=False) is \
+            sp.GeneVerdict.NOT_EVALUABLE_S35, s1
+
+
+def test_single_context_gene_is_not_evaluable_regardless_of_stage1(s35) -> None:
+    """実データ経路でも、Stage 1 を外した単一 context gene は NOT_EVALUABLE_S35。"""
+    out, _doc = s35(genes={"f0": ["terminal_ri"] * 4,
+                           "duration": CONTEXTS, "energy": CONTEXTS, "release": CONTEXTS})
+    res = _run_full(out, _wrong)       # f0 も含め全問不正解
+    assert res["genes"]["f0"]["verdict"] == sp.GeneVerdict.NOT_EVALUABLE_S35.value
+    for g in ("duration", "energy", "release"):
+        assert res["genes"][g]["verdict"] == sp.GeneVerdict.NOT_ESTABLISHED.value
+
+
+def test_committed_stage2_pair_is_recorded_even_when_not_presented(s35) -> None:
+    """出題しなかった Stage 2 pair も記録に残す（記録の自己矛盾を作らない）。"""
+    out, _doc = s35()
+    res = _run_full(out, _only({"f0", "duration"}), _correct)
+    assert report.main() == 0
+    doc = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    key = _key(out)
+    for gene, v in doc["genes"].items():
+        committed = key["plans"][gene]["stage2"]["pair_key"]
+        assert v["stage2_committed_pair"] == committed, gene
+        assert v["has_stage2_pair"] is True, gene
+        if gene in ("energy", "release"):
+            assert v["stage2_presented"] is False, gene
+            assert v["stage2_presented_pair"] is None, gene
+    md = (out / "S3_5_RECORD.md").read_text(encoding="utf-8")
+    assert "事前 commit 済み・**出題せず**" in md
+    assert res["overall"]["verdict"] == "S4_READY"
+
+
+@pytest.mark.parametrize("field", ["listener_id", "session_id"])
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_empty_listener_provenance_is_blocked(s35, field, value) -> None:
+    """誰が聴いたか記録に無い session を canonical にしない。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    p1 = _answer(out, 1, _correct)
+    d = json.loads(p1.read_text(encoding="utf-8"))
+    if value is None:
+        d.pop(field)
+    else:
+        d[field] = value
+    p1.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)     # 回答ファイルを読んだ時点で弾く
+    assert field in exc.value.as_dict()["reason"]
+    assert not (out / "key_reveal.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 3 巡
+# ---------------------------------------------------------------------------
+def test_stage2_block_cannot_reuse_stage1_trials(s35) -> None:
+    """Stage 2 の枠へ Stage 1 の trial を並べ替えて 2 文脈を偽装できないこと。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.prepare_stage2(scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1)))
+
+    mp = out / "blind_manifest.json"
+    m = json.loads(mp.read_text(encoding="utf-8"))
+    s1_ids = m["stages"]["1"]["trial_ids"][:2]
+    # Stage 1 の trial を Stage 2 の枠へ差し替え、音声もコピーする
+    m["stages"]["2"] = {"trial_ids": s1_ids,
+                        "audio_sha256": {t: m["stages"]["1"]["audio_sha256"][t]
+                                         for t in s1_ids}}
+    mp.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    for t in s1_ids:
+        for slot in ("A", "B", "X"):
+            src = out / "stage1" / "audio" / f"{t}_{slot}.wav"
+            (out / "stage2" / "audio" / f"{t}_{slot}.wav").write_bytes(src.read_bytes())
+
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE2)
+    assert "別 stage の trial" in exc.value.as_dict()["reason"]
+
+
+def test_stage_block_rejects_unknown_and_duplicate_and_swapped_pairs(s35) -> None:
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    mp = out / "blind_manifest.json"
+    good = mp.read_text(encoding="utf-8")
+    key = _key(out)
+
+    def _write(mutate):
+        m = json.loads(good)
+        mutate(m)
+        mp.write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+
+    ids = json.loads(good)["stages"]["1"]["trial_ids"]
+    sha = json.loads(good)["stages"]["1"]["audio_sha256"]
+
+    _write(lambda m: m["stages"]["1"].update(
+        {"trial_ids": ids + ["S1T99"], "audio_sha256": {**sha, "S1T99": sha[ids[0]]}}))
+    with pytest.raises(prep.S35Stop) as e:
+        scoring.score_stage(sp.STAGE1)
+    assert "key へ無い trial" in e.value.as_dict()["reason"]
+
+    _write(lambda m: m["stages"]["1"].update({"trial_ids": ids[:-1]}))
+    with pytest.raises(prep.S35Stop) as e:
+        scoring.score_stage(sp.STAGE1)
+    assert "commit 済み集合と一致しない" in e.value.as_dict()["reason"]
+
+    # commit 済み plan と違う pair を key 側で名乗らせる
+    mp.write_text(good, encoding="utf-8")
+    kp = out / "answer_key.private.json"
+    k = json.loads(kp.read_text(encoding="utf-8"))
+    tid = ids[0]
+    k["trials"][tid]["pair_key"] = "terminal_ri|bogus#1|bogus#2"
+    kp.write_bytes(prep.canonical_bytes(k))
+    with pytest.raises(prep.S35Stop) as e:
+        scoring.score_stage(sp.STAGE1)
+    assert "commit 済み plan と違う" in e.value.as_dict()["reason"]
+    assert key["trials"][tid]["pair_key"] != "terminal_ri|bogus#1|bogus#2"
+
+
+def test_finalized_record_survives_audio_loss_on_rerun(s35) -> None:
+    """音声が消えた再実行は「全 gene INVALID で成功」する。確定済み記録を守る。"""
+    out, _doc = s35()
+    assert _finish(out) == 0
+    good_json = (out / "s35_results.json").read_bytes()
+    good_md = (out / "S3_5_RECORD.md").read_bytes()
+
+    for w in (out / "stage1" / "audio").glob("*.wav"):
+        w.unlink()
+    assert report.main() == 3
+    assert (out / "s35_results.json").read_bytes() == good_json
+    assert (out / "S3_5_RECORD.md").read_bytes() == good_md
+    err = json.loads((out / "last_error.json").read_text(encoding="utf-8"))
+    assert err["status"] == "BLOCKED"
+    assert err["conflict"]["was"]["overall"]["verdict"] == "S4_READY"
+
+
+def test_identical_rerun_still_allowed_after_finalize(s35) -> None:
+    """判定が同じ再実行は通す（フィールドが増えた再描画を塞がない）。"""
+    out, _doc = s35()
+    assert _finish(out) == 0
+    assert report.main() == 0
+    assert not (out / "last_error.json").exists()
+
+
+def test_no_stage2_pair_for_all_advancing_genes_is_not_blocked(s35) -> None:
+    """Stage 2 pair を持たない gene だけが Stage 1 を通っても false BLOCKED にしない。"""
+    out, _doc = s35(genes={g: ["terminal_ri"] * 3 for g in sp.GENE_CONDITION})
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)          # 全 gene 正解だが Stage 2 pair は無い
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    assert adv == sorted(sp.GENE_CONDITION)
+    assert prep.prepare_stage2(adv)["trial_count"] == 0
+    res = scoring.finalize()           # BLOCKED にならない
+    assert all(v["verdict"] == sp.GeneVerdict.NOT_EVALUABLE_S35.value
+               for v in res["genes"].values())
+    assert res["overall"]["verdict"] == "S4_NOT_READY"
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 4 巡（採用 2 件。1 件は §13 境界宣言で見送り）
+# ---------------------------------------------------------------------------
+def test_partial_stage2_pack_is_rejected(s35) -> None:
+    """owed gene を欠いた Stage 2 pack で採点しない。
+
+    欠けた gene が INVALID になる一方で残りが S4_READY を作ると、
+    プロトコル的に不完全な走行が「成功」で終わる。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    assert len(adv) == 4
+    prep.prepare_stage2(adv[:3])          # 1 gene 落として配布
+    _answer(out, 2, _correct)
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    d = exc.value.as_dict()
+    assert "覆っていない" in d["reason"]
+    assert adv[3] in d["reason"]
+    assert not (out / "key_reveal.json").exists()
+
+
+def test_full_stage2_pack_passes_coverage(s35) -> None:
+    """全 owed gene が揃っていれば通る（過剰被覆も無害）。"""
+    out, _doc = s35()
+    res = _run_full(out, _correct, _correct)
+    assert res["overall"]["verdict"] == "S4_READY"
+
+
+def test_provenance_change_blocks_republish(s35) -> None:
+    """判定が同じでも来歴が違えば、確定記録を上書きしない。
+
+    それは同じ記録ではなく別の実験の結果なので、差し替えは来歴の汚染になる。
+    """
+    out, _doc = s35()
+    assert _finish(out) == 0
+    good_json = (out / "s35_results.json").read_bytes()
+    good_md = (out / "S3_5_RECORD.md").read_bytes()
+
+    mp = out / "blind_manifest.json"
+    m = json.loads(mp.read_text(encoding="utf-8"))
+    m["s3_results_sha256"] = "0" * 64        # 判定は変えず来歴だけ差し替える
+    mp.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    assert report.main() == 3
+    assert (out / "s35_results.json").read_bytes() == good_json
+    assert (out / "S3_5_RECORD.md").read_bytes() == good_md
+    err = json.loads((out / "last_error.json").read_text(encoding="utf-8"))
+    assert err["conflict"]["was"]["s3_results_sha256"] != \
+        err["conflict"]["now"]["s3_results_sha256"]
+
+
+def test_fingerprint_covers_provenance_fields() -> None:
+    """fingerprint に来歴が含まれていること（判定だけでは不足）。"""
+    for field in ("s3_results_sha256", "protocol_version", "blind_manifest_sha256",
+                  "key_reveal_sha256", "commitment_verified", "audio_verified",
+                  "listener_id", "session_id"):
+        assert field in report._FINGERPRINT_FIELDS, field
+
+
+def test_rescoring_guard_fires_before_stage2_checks(s35) -> None:
+    """開示後に Stage 1 が書き換わったら、Stage 2 の被覆検査より先に止める。"""
+    out, _doc = s35()
+    assert _finish(out, _only({"f0"})) == 1      # f0 のみ通過 = S4_NOT_READY
+    _answer(out, 1, _correct)                    # 開示後に全問正解へ書き換え
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    assert "再採点は禁止" in exc.value.as_dict()["reason"]
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 5 巡
+# ---------------------------------------------------------------------------
+def test_key_reveal_is_published_only_with_the_bundle(s35) -> None:
+    """開示文書は確定記録ガードを通ってから、束で publish される。
+
+    ガードより前に書くと、拒否された再実行でも開示が差し替わり、
+    保持された記録の `key_reveal_sha256` が実物を指さなくなる。
+    """
+    out, _doc = s35()
+    assert _finish(out) == 0
+    reveal_before = (out / "key_reveal.json").read_bytes()
+    doc = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert doc["key_reveal_sha256"] == hashlib.sha256(reveal_before).hexdigest()
+
+    # 判定が変わる再実行 → 拒否される。開示は 1 バイトも動かない
+    mp = out / "blind_manifest.json"
+    m = json.loads(mp.read_text(encoding="utf-8"))
+    m["key_commitment"] = "0" * 64
+    mp.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert report.main() == 3
+    assert (out / "key_reveal.json").read_bytes() == reveal_before
+    doc2 = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert doc2["key_reveal_sha256"] == hashlib.sha256(
+        (out / "key_reveal.json").read_bytes()).hexdigest()
+
+
+def test_finalize_does_not_write_reveal(s35) -> None:
+    """`finalize()` は開示文書を作るだけで、ディスクへ出さない。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.prepare_stage2(scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1)))
+    _answer(out, 2, _correct)
+    res = scoring.finalize()
+    assert not (out / "key_reveal.json").exists()
+    assert res["_key_reveal_text"]
+    assert res["key_reveal_sha256"] == hashlib.sha256(
+        res["_key_reveal_text"].encode("utf-8")).hexdigest()
+    assert report.main() == 0
+    assert (out / "key_reveal.json").read_text(encoding="utf-8") == res["_key_reveal_text"]
+
+
+def test_internal_fields_are_not_in_the_record(s35) -> None:
+    out, _doc = s35()
+    assert _finish(out) == 0
+    doc = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert not [k for k in doc if k.startswith("_")]
+
+
+def test_stage_audio_failure_preserves_previous_pack(s35) -> None:
+    """staging で落ちても、前回の公開済み音声を壊さない。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    audio = out / "stage1" / "audio"
+    before = {p.name: p.read_bytes() for p in audio.glob("*.wav")}
+    assert before
+
+    import shutil as _sh
+    orig = prep.shutil.copyfile
+    state = {"n": 0}
+
+    def flaky(src, dst):
+        state["n"] += 1
+        if state["n"] == 4:            # 途中で落とす
+            raise OSError("disk full")
+        return orig(src, dst)
+
+    prep.shutil = type("S", (), {"copyfile": staticmethod(flaky),
+                                 "rmtree": staticmethod(_sh.rmtree)})()
+    try:
+        _answer(out, 1, _correct)
+        adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+        with pytest.raises(OSError):
+            prep.prepare_stage2(adv)
+    finally:
+        prep.shutil = _sh
+
+    # Stage 1 の公開済み音声は無傷、staging も残っていない
+    assert {p.name: p.read_bytes() for p in audio.glob("*.wav")} == before
+    assert not list((out / "stage2").glob("audio.staging")) if (out / "stage2").exists() else True
+    assert not (out / "stage1" / "audio.staging").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 6 巡
+# ---------------------------------------------------------------------------
+def test_s3_replaced_mid_flight_is_blocked(s35) -> None:
+    """`verify_audio()` の後に S3 の WAV が差し替わったら BLOCKED。
+
+    copy 時に src を読み直すと差し替わった bytes 同士で一致してしまい、
+    非正本の音声が verified として公開される。S3.5 の成果物を一切触らず、
+    **S3 の並行再生成だけ**で踏める経路。
+    """
+    out, _doc = s35()
+    real_verify = prep.verify_audio
+
+    def verify_then_replace(res, needed):
+        resolved = real_verify(res, needed)
+        for path, _sha in resolved.values():      # 検証直後に S3 側を差し替える
+            path.write_bytes(path.read_bytes() + b"\x00")
+        return resolved
+
+    prep.verify_audio = verify_then_replace
+    try:
+        with pytest.raises(prep.S35Stop) as exc:
+            prep.prepare_stage1(salt=SALT)
+    finally:
+        prep.verify_audio = real_verify
+    d = exc.value.as_dict()
+    assert "検証済み digest と一致しない" in d["reason"]
+    assert "S3 正本が走行中に変わっていないか" in d["required_action"]
+    assert not (out / "stage1").exists()          # 公開先に触れていない
+
+
+def test_manifest_write_failure_rolls_back_stage_bundle(s35) -> None:
+    """manifest 書き込みが落ちたら、stage ディレクトリごと巻き戻す。
+
+    音声だけ守っても、その後で落ちると「旧 manifest が別 pack を指したまま、
+    前回の音声は消えている」状態になる。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+
+    stage1_before = {p.name: p.read_bytes() for p in (out / "stage1" / "audio").glob("*.wav")}
+    manifest_before = (out / "blind_manifest.json").read_bytes()
+
+    real_pub = prep.publish_stage
+
+    def boom(stage, trials, resolved, write_manifest):
+        def failing(_sha):
+            raise OSError("disk full")
+        return real_pub(stage, trials, resolved, failing)
+
+    prep.publish_stage = boom
+    try:
+        with pytest.raises(OSError):
+            prep.prepare_stage2(adv)
+    finally:
+        prep.publish_stage = real_pub
+
+    assert (out / "blind_manifest.json").read_bytes() == manifest_before
+    assert {p.name: p.read_bytes()
+            for p in (out / "stage1" / "audio").glob("*.wav")} == stage1_before
+    assert not (out / "stage2").exists()
+    assert not (out / "stage2.staging").exists()
+    assert not (out / "stage2.prev").exists()
+
+
+def test_stage_bundle_publish_leaves_no_temp_dirs(s35) -> None:
+    out, _doc = s35()
+    assert _finish(out) == 0
+    leftovers = [p.name for p in out.iterdir()
+                 if p.name.endswith((".staging", ".prev", ".tmp"))]
+    assert leftovers == [], leftovers
+
+
+@pytest.mark.parametrize("bad", [None, "one", {"a": 1}, [], 2])
+def test_malformed_answer_stage_is_blocked(s35, bad) -> None:
+    """`stage` の欠落・型不正で BLOCKED を出す（例外で落ちない）。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    p1 = _answer(out, 1, _correct)
+    d = json.loads(p1.read_text(encoding="utf-8"))
+    if bad is None:
+        d.pop("stage")
+    else:
+        d["stage"] = bad
+    p1.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)
+    assert "stage" in exc.value.as_dict()["reason"]
+    # finalize_or_blocked が BLOCKED を出せること（例外で素通りしない）
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+@pytest.mark.parametrize("bad", [None, "A", ["S1T01"], 1, "", 0])
+def test_malformed_answers_container_is_blocked(s35, bad) -> None:
+    """`answers` が dict でなければ BLOCKED を出す（`AttributeError` で落ちない）。
+
+    真値の非 dict（`"A"` / 非空 list）は `or {}` を素通りして
+    `check_complete()` の `.get()` に届き、`S35Stop` 以外の例外になっていた。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    p1 = _answer(out, 1, _correct)
+    d = json.loads(p1.read_text(encoding="utf-8"))
+    if bad is None:
+        d.pop("answers")
+    else:
+        d["answers"] = bad
+    p1.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)
+    assert "answers" in exc.value.as_dict()["reason"]
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+def test_stage1_failure_leaves_no_orphan_private_key(s35, monkeypatch) -> None:
+    """Stage 1 公開が落ちたら private key も残さない（再実行が詰まらない）。
+
+    key だけ残ると再実行が「既に存在する」ガードで必ず止まり、一度も出題して
+    いない session が手動削除なしに回復不能になる。
+    """
+    out, _doc = s35()
+    boom = RuntimeError("disk full")
+
+    def _explode(*a, **k):
+        raise boom
+
+    real_ui = prep.write_stage_ui
+    monkeypatch.setattr(prep, "write_stage_ui", _explode)
+    with pytest.raises(RuntimeError):
+        prep.prepare_stage1(salt=SALT)
+    assert not prep.PRIVATE_KEY.exists()
+    assert not prep.BLIND_MANIFEST.exists()
+    assert not prep.stage_dir(sp.STAGE1).exists()
+
+    # 呼び出し前の状態に戻っているので、そのまま再実行できる。
+    # `monkeypatch.undo()` は fixture 側の results パス差し替えまで巻き戻して
+    # **実物の results/ を触りに行く**ので、自分が当てた patch だけ戻す。
+    monkeypatch.setattr(prep, "write_stage_ui", real_ui)
+    info = prep.prepare_stage1(salt=SALT)
+    assert info["trial_count"] == len(info["genes"])
+    assert prep.PRIVATE_KEY.exists()
+    assert out  # fixture の出力先を使っていることの明示
+
+
+@pytest.mark.parametrize("root", ["[]", '"A"', "1", "null", '["S1T01"]'])
+def test_non_object_answer_root_is_blocked(s35, root) -> None:
+    """回答 JSON の**根**が object でなくても BLOCKED を出す。
+
+    `json.loads` は list / str / int / null でも成功するので、根を確かめずに
+    `.get()` すると `S35Stop` 以外の例外になり、BLOCKED 記録が出せなくなる。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct).write_text(root, encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)
+    assert "object" in exc.value.as_dict()["reason"]
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+@pytest.mark.parametrize("loader", ["manifest", "private_key", "s3_results"])
+def test_non_object_json_root_is_blocked_everywhere(s35, loader) -> None:
+    """S3.5 が読む JSON は**全数** `json_object()` を通す（同型穴の全数掃討）。"""
+    _out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    target = {"manifest": prep.BLIND_MANIFEST,
+              "private_key": prep.PRIVATE_KEY,
+              "s3_results": prep.S3_RESULTS}[loader]
+    target.write_text("[]", encoding="utf-8")
+    call = {"manifest": prep.load_manifest,
+            "private_key": prep.load_private_key,
+            "s3_results": prep.load_s3_results}[loader]
+    with pytest.raises(prep.S35Stop) as exc:
+        call()
+    assert "object" in exc.value.as_dict()["reason"]
+
+
+def test_no_json_loads_outside_the_shared_gate() -> None:
+    """`json.loads` の直後に `.get()` する新しい経路を増やさないための固定。
+
+    許すのは helper 本体と、非 dict を `None` で弾く `load_finalized()` だけ。
+    """
+    root = Path(prep.__file__).parent
+    hits = []
+    for name in ("s35_prepare.py", "s35_score.py", "s35_report.py"):
+        where = "?"
+        for line in (root / name).read_text(encoding="utf-8").splitlines():
+            m = re.match(r"def (\w+)", line)
+            if m:
+                where = m.group(1)
+            if re.search(r"\bjson\.loads\(", line):
+                hits.append(f"{name}:{where}")
+    assert sorted(hits) == ["s35_prepare.py:json_object",
+                            "s35_report.py:load_finalized"], hits
+
+
+def test_private_key_write_failure_leaves_nothing(s35, monkeypatch) -> None:
+    """key の書き込み自体が落ちても、部分的な key も temp も残さない。"""
+    _out, _doc = s35()
+    real_chmod = os.chmod
+
+    def _explode(path, mode):
+        if str(path).endswith(".tmp"):
+            raise OSError("permission denied")
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(os, "chmod", _explode)
+    with pytest.raises(OSError):
+        prep.prepare_stage1(salt=SALT)
+    assert not prep.PRIVATE_KEY.exists()
+    leftovers = sorted(p.name for p in prep.RESULTS.glob("*.tmp"))
+    assert leftovers == [], leftovers
+
+    monkeypatch.setattr(os, "chmod", real_chmod)
+    info = prep.prepare_stage1(salt=SALT)
+    assert prep.PRIVATE_KEY.exists() and info["trial_count"] > 0
+
+
+@pytest.mark.parametrize("bad", [["A"], {"answer": "A"}, 1, None, True])
+def test_non_string_answer_value_is_blocked(s35, bad) -> None:
+    """回答**値**が文字列でなければ BLOCKED を出す。
+
+    `v not in {"A","B","UNSURE"}` は list / dict で `TypeError`（unhashable）に
+    なり、`S35Stop` でないので BLOCKED 記録が出せなくなる。器の形だけでなく
+    中身の型まで見る。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    p1 = _answer(out, 1, _correct)
+    d = json.loads(p1.read_text(encoding="utf-8"))
+    d["answers"][sorted(d["answers"])[0]] = bad
+    p1.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)
+    assert "回答値" in exc.value.as_dict()["reason"]
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+def test_reveal_alone_reproduces_the_commitment(s35) -> None:
+    """**公開された reveal だけ**から commitment を再計算できること。
+
+    これが成り立たないと `commitment_verified: true` は検証不能な自己申告で、
+    commitment 方式の目的（第三者検証）を満たさない。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    s1 = scoring.score_stage(sp.STAGE1)
+    adv = scoring.advancing_from_stage1(s1)
+    prep.prepare_stage2(adv)
+    _answer(out, 2, _correct)
+    report.main()
+
+    reveal = json.loads(scoring.KEY_REVEAL.read_text(encoding="utf-8"))
+    # private key ファイルを一切参照せずに再計算する
+    recomputed = hashlib.sha256(prep.canonical_bytes(reveal["key_preimage"])).hexdigest()
+    assert recomputed == reveal["key_commitment"], "reveal だけで commitment を再現できない"
+    assert reveal["commitment_verified"] is True
+    # 原像は private key と同じ鍵集合（欠けていたら再計算が偶然一致しても無意味）
+    key, _sha = prep.load_private_key()
+    assert set(reveal["key_preimage"]) == set(key)
+
+
+def test_manifest_commitment_matches_published_reveal_preimage(s35) -> None:
+    """回答前に commit した manifest の `key_commitment` と、開示後の原像が一致する。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    committed = prep.load_manifest()["key_commitment"]
+    _answer(out, 1, _correct)
+    s1 = scoring.score_stage(sp.STAGE1)
+    prep.prepare_stage2(scoring.advancing_from_stage1(s1))
+    _answer(out, 2, _correct)
+    report.main()
+    reveal = json.loads(scoring.KEY_REVEAL.read_text(encoding="utf-8"))
+    assert hashlib.sha256(
+        prep.canonical_bytes(reveal["key_preimage"])).hexdigest() == committed
+
+
+@pytest.mark.parametrize("broken", [
+    {"stages": [1]},
+    {"stages": {"1": ["S1T01"]}},
+    {"stages": {"1": {"trial_ids": "S1T01"}}},
+    {"stages": {"1": {"trial_ids": [1, 2]}}},
+    {"stages": {"1": {"trial_ids": ["S1T01"], "audio_sha256": []}}},
+    {"stages": {"1": {"trial_ids": ["S1T01"], "audio_sha256": {"S1T01": "x"}}}},
+])
+def test_broken_nested_manifest_is_blocked(s35, broken) -> None:
+    """manifest の**入れ子**が壊れていても BLOCKED を出す（根と器の次の階層）。"""
+    _out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    prep.BLIND_MANIFEST.write_text(json.dumps(broken), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        prep.manifest_stage_block(prep.load_manifest(), sp.STAGE1)
+    assert "manifest" in exc.value.as_dict()["reason"]
+
+
+def test_broken_nested_manifest_still_emits_blocked_record(s35) -> None:
+    """壊れた入れ子でも `finalize_or_blocked()` が BLOCKED を返す（例外で落ちない）。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.BLIND_MANIFEST.write_text(json.dumps({"stages": [1]}), encoding="utf-8")
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+def test_published_bundle_bytes_match_the_hashed_text(s35) -> None:
+    """publish した実ファイルの SHA が、hash 対象の text と一致すること。
+
+    text mode で書くと Windows で `\\n` -> `\\r\\n` になり、
+    `key_reveal_sha256` が実ファイルと食い違う（正常な確定走行が来歴の
+    壊れた束を publish する）。hash した bytes をそのまま書く。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    s1 = scoring.score_stage(sp.STAGE1)
+    prep.prepare_stage2(scoring.advancing_from_stage1(s1))
+    _answer(out, 2, _correct)
+    report.main()
+
+    doc = json.loads(report.JSON_PATH.read_text(encoding="utf-8"))
+    assert prep.sha256_file(scoring.KEY_REVEAL) == doc["key_reveal_sha256"]
+    # 改行が翻訳されていない（LF のまま）
+    assert b"\r\n" not in scoring.KEY_REVEAL.read_bytes()
+    assert b"\r\n" not in report.JSON_PATH.read_bytes()
+
+
+def test_publish_bundle_writes_exact_bytes(tmp_path) -> None:
+    """`publish_bundle` は渡された text の UTF-8 bytes をそのまま書く。"""
+    target = tmp_path / "x.json"
+    text = '{\n  "a": 1\n}'
+    report.publish_bundle(((target, text),))
+    assert target.read_bytes() == text.encode("utf-8")
+    assert prep.sha256_bytes(text.encode("utf-8")) == prep.sha256_file(target)
+
+
+# --- 入れ子形状ゲートの全数掃討（第 11 巡） -------------------------------
+# S3.5 が外部から読む JSON は 5 つ。根 / 器 / 値 / 入れ子のどこが壊れていても
+# `S35Stop` になり BLOCKED 記録が出せること（例外で落ちないこと）を全数で固定する。
+
+@pytest.mark.parametrize("mutate", [
+    {"trials": [1]},
+    {"trials": {"S1T01": 1}},
+    {"trials": "x"},
+    {"plans": [1]},
+    {"plans": {"f0": "x"}},
+])
+def test_broken_nested_private_key_is_blocked(s35, mutate) -> None:
+    """private key の入れ子が壊れていたら読み込みの絞り点で止まる。"""
+    _out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    key = json.loads(prep.PRIVATE_KEY.read_text(encoding="utf-8"))
+    key.update(mutate)
+    prep.PRIVATE_KEY.write_text(json.dumps(key), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        prep.load_private_key()
+    assert "private key" in exc.value.as_dict()["reason"]
+
+
+def test_broken_nested_private_key_still_emits_blocked_record(s35) -> None:
+    """壊れた key でも `finalize_or_blocked()` が BLOCKED を返す。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    key = json.loads(prep.PRIVATE_KEY.read_text(encoding="utf-8"))
+    key["trials"] = [1]
+    prep.PRIVATE_KEY.write_text(json.dumps(key), encoding="utf-8")
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+@pytest.mark.parametrize("mutate", [
+    {"overall": [1]},
+    {"overall": "PASS"},
+    {"reproducibility": {"a": 1}},
+    {"reproducibility": [1, 2]},
+])
+def test_broken_nested_s3_results_is_blocked(s35, mutate) -> None:
+    """S3 正本の入れ子が壊れていたら gate で止まる。"""
+    _out, _doc = s35()
+    res = json.loads(prep.S3_RESULTS.read_text(encoding="utf-8"))
+    res.update(mutate)
+    prep.S3_RESULTS.write_text(json.dumps(res), encoding="utf-8")
+    with pytest.raises(prep.S35Stop):
+        prep.gate_s3(prep.load_s3_results()[0])
+
+
+def test_broken_nested_reveal_is_blocked(s35) -> None:
+    """既存 key_reveal.json の入れ子が壊れていても S35Stop。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    s1 = scoring.score_stage(sp.STAGE1)
+    prep.prepare_stage2(scoring.advancing_from_stage1(s1))
+    _answer(out, 2, _correct)
+    report.main()
+    rev = json.loads(scoring.KEY_REVEAL.read_text(encoding="utf-8"))
+    rev["revealed_after_answers_sha256"] = [1]
+    scoring.KEY_REVEAL.write_text(json.dumps(rev), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    assert "revealed_after_answers_sha256" in exc.value.as_dict()["reason"]
+
+
+def test_every_external_json_has_a_shape_gate() -> None:
+    """外部から読む JSON 5 つが、すべて形状ゲートを通っていることの棚卸し。
+
+    このリストが実装と乖離したら落ちる。新しい読み込み口を足すときは、
+    ゲートを通してからここに追記する。
+    """
+    src = (Path(prep.__file__).parent / "s35_prepare.py").read_text(encoding="utf-8")
+    score_src = (Path(prep.__file__).parent / "s35_score.py").read_text(encoding="utf-8")
+    # 根: 全数 json_object 経由（既存テストが出現箇所を固定済み）
+    assert src.count("json_object(") >= 4
+    # 入れ子: 各ファイルの絞り点にゲートがある
+    assert 'require_mapping_of_mappings(key.get("trials")' in src
+    assert 'require_mapping_of_mappings(key.get("plans")' in src
+    assert 'require_mapping(res.get("overall")' in src
+    assert "def manifest_stage_block" in src
+    assert "prep.require_mapping(" in score_src        # key_reveal
+    assert "bad_types = sorted(" in score_src          # answers の値
