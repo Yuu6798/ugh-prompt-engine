@@ -43,6 +43,30 @@ B-1 校正は `ANALYSIS_STACK_PIN` を **fail-closed で検査**する
 **Drive を直接マウント / `rclone` / ブラウザ取得できる machine で行う**。
 公開 URL（canon-voice.com / GitHub release）は HTTP で直接取得できる。
 
+## 1b. 本セッションで実際に確保・照合できた資産（2026-08-21 実測）
+
+| 資産 | サイズ | pin 照合 |
+|---|---|---|
+| ritsu voicebank zip | 189,261,648 B | **一致** `88c7b3ef…` |
+| NamineRitsu_DiffSinger zip | 421,940,274 B | **一致** `5c7b8c32…` |
+| PJS corpus zip | 275,179,158 B | **一致** `683c0025…` |
+| nnsvs-db-converter | — | clone commit `185ada6`（run7 は commit 未 pin） |
+| amitaro staged wav × 324 | 117.7 MB | **324/324 一致**（run7 `staged_source_sha256` 全数） |
+| ffmpeg static n6.1.2 | 106,454,476 B | **一致** tarball `16ab3dbb…` / bin `1aabfcf5…` / `libavformat 60. 16.100` |
+| **run7 Phase-B 40K checkpoint** | 556,022,498 B | **一致** `518df090…` |
+| vocoder pc_nsf_hifigan 2025.02 | — | **一致** zip `9d98ba73…` / model.ckpt `d6dd2890…` |
+| run4_prep.tar（user CSV 実体） | 914,688,000 B | tar sha `e6a75c18…`・中の CSV が **一致** `fc3a760c…` |
+
+**取得経路の実測**: Drive の非公開見えするファイルも
+`https://drive.usercontent.google.com/download?id=<ID>&export=download&confirm=t`
+で直接取得できた（MCP の base64 経路は context 上限に当たるため使わない）。
+`amitaro_sources` の 324 件は `cmdlogs/datasets_amitaro-sources-lsjson.log`
+（rclone lsjson・file id 付き）を正本として ID を回収した。
+
+**追加で必要だった依存**（run7 では未 pin のもの）:
+`pyworld==0.3.5`（ritsu / adapter 経路）・`praat-parselmouth 0.4.7`（`db_converter.py`）・
+`pyloudnorm==0.2.0`（`ANALYSIS_STACK_PIN` どおり）。
+
 ## 2. 実行順（User 指示 2026-08-21）
 
 ```
