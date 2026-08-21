@@ -783,6 +783,24 @@ def test_34_key_commitment_verified():
         assert t["context_id"] not in blob
 
 
+def test_34b_reveal_lets_a_third_party_recompute_the_commitment():
+    """private key は gitignore。preimage を公開しないと commitment は検証不能。"""
+    trials, selected = _trials()
+    key, raw = sb.build_private_key(trials, b"\x01" * 32, _S3SHA, _S35SHA, selected,
+                                    audio_sha256={t["trial_id"]: {"x.wav": "d" * 64}
+                                                  for t in trials},
+                                    mechanistic_digest="m" * 64)
+    commitment = sb.sha256_bytes(raw)
+    reveal = sb.build_key_reveal(key, "a" * 64, {"abx": [], "identity": []})
+    # committed な reveal だけから commitment を再計算できる
+    assert sb.sha256_bytes(
+        sb.canonical_bytes(reveal["key_preimage"])) == commitment
+    # 封入済みフィールドが欠けていない（欠けると再計算できない）
+    for field in ("mechanistic_digest", "audio_sha256", "s3_results_sha256",
+                  "s35_results_sha256", "salt_hex", "trials", "selected_pairs"):
+        assert field in reveal["key_preimage"], field
+
+
 def _answer_all(trials, abx_answer, identity_answer, wrong: int = 0, no: int = 0):
     ans: Dict[str, str] = {}
     n_wrong, n_no = wrong, no
@@ -1295,7 +1313,7 @@ def test_38d_non_pass_phase_a_removes_outcome_artifacts():
                      "answers.template.json"}
     src = inspect.getsource(srep.phase_a)
     assert "removals += list(OUTCOME_ARTIFACTS)" in src
-    assert "blocked_bundle(stop), removals=list(OUTCOME_ARTIFACTS)" in src
+    assert "removals=list(OUTCOME_ARTIFACTS) + list(S4B_DEPENDENT_ARTIFACTS)" in src
 
 
 @requires_world
@@ -1343,6 +1361,20 @@ def test_38j_s4b_pins_its_execution_code():
         assert "_closure()" in inspect.getsource(fn), fn.__name__
     src = inspect.getsource(s4b._closure)
     assert "clean worktree" in src and "closure_digest" in src
+
+
+@requires_world
+def test_38d2_phase_a_invalidates_dependent_s4b_outcomes():
+    """S4b は S4 の結果に従属する。S4 を差し替えたら S4b の判定も無効化する。"""
+    import inspect
+    names = {p.name for p in srep.S4B_DEPENDENT_ARTIFACTS}
+    assert names == {"s4b_results.json", "S4B_RECORD.md", "key_reveal.json",
+                     "blind_manifest.json", "answer_key.private.json",
+                     "answers.template.json"}
+    assert all(p.parent.name == "s4b" for p in srep.S4B_DEPENDENT_ARTIFACTS)
+    src = inspect.getsource(srep.phase_a)
+    # PASS / 非 PASS / BLOCKED のどの経路でも落とす
+    assert src.count("S4B_DEPENDENT_ARTIFACTS") >= 3
 
 
 @requires_world

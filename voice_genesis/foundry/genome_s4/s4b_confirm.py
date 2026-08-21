@@ -443,6 +443,10 @@ def score() -> int:
     }
     reveal = {"schema": SCHEMA, "answers_sha256": answers_sha,
               "key_commitment": manifest["key_commitment"],
+              # 第三者が commitment を再計算できるよう preimage をそのまま載せる
+              "key_preimage": {k: key[k] for k in sorted(key)},
+              "key_preimage_note": ("sha256(canonical_bytes(key_preimage)) == "
+                                    "key_commitment を再計算して検証できる"),
               "salt_hex": key["salt_hex"], "selection_rule": key["selection_rule"],
               "cells": key["cells"], "trials": key["trials"], "scored": scored}
     srep.publish(files=[(JSON_PATH, srep._dumps(res).encode("utf-8")),

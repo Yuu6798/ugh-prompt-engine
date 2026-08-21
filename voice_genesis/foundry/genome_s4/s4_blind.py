@@ -441,7 +441,17 @@ def score(trials: Sequence[Dict[str, Any]], answers: Dict[str, str]) -> Dict[str
 
 def build_key_reveal(key: Dict[str, Any], answers_sha: str,
                      scored: Dict[str, Any]) -> Dict[str, Any]:
-    """回答凍結**後**にだけ作る（§14）。"""
+    """回答凍結**後**にだけ作る（§14）。
+
+    private key は gitignore なので、抜粋だけを公開すると第三者は
+    `sha256(canonical_bytes(key)) == key_commitment` を再計算できず、
+    `commitment_verified: true` が検証不能な自己申告になる。開封後の key は
+    秘匿価値がゼロ（全正解は `trials` で公開済み）なので **preimage をそのまま
+    載せる**（`genome_s35` の `key_preimage` と同じ方式）。
+    """
     return {"schema": sp.SCHEMA, "answers_sha256": answers_sha,
+            "key_preimage": {k: key[k] for k in sorted(key)},
+            "key_preimage_note": ("sha256(canonical_bytes(key_preimage)) == "
+                                  "key_commitment を再計算して検証できる"),
             "salt_hex": key["salt_hex"], "selected_pairs": key["selected_pairs"],
             "trials": key["trials"], "scored": scored}

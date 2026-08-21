@@ -141,6 +141,18 @@ def publish(files: Sequence[Tuple[Path, bytes]] = (),
         sr.drop_backup(backup)
 
 
+#: S4b は S4 の結果に従属する（`s4_overall_unchanged` と S4 digest を pin する）。
+#: Phase A が s4_results.json を差し替えたら、**どの verdict であっても**
+#: S4b の判定成果物は古い S4 を指したままになるので同じ transaction で落とす。
+S4B_DEPENDENT_ARTIFACTS: Tuple[Path, ...] = (
+    RESULTS / "s4b" / "s4b_results.json",
+    RESULTS / "s4b" / "S4B_RECORD.md",
+    RESULTS / "s4b" / "key_reveal.json",
+    RESULTS / "s4b" / "blind_manifest.json",
+    RESULTS / "s4b" / "answer_key.private.json",
+    RESULTS / "s4b" / "answers.template.json",
+)
+
 #: 走行結果に紐づく成果物。**Phase A が PASS 以外で終わったら残してはならない。**
 #: 残すと「NOT_ESTABLISHED / BLOCKED の正本」と「S4 完了を主張する freeze・鍵・
 #: pack」が同居し、記録が自分自身と矛盾する。
@@ -415,16 +427,18 @@ def phase_a(*, write_wav: bool = True, require_clean: bool = True) -> int:
             files += _stage_ear_pack(meta, runs, res, dir_swaps)
             # 新しい pack を出すので、前回の reveal と freeze は同じ transaction で消す
             removals += [FREEZE_JSON, FREEZE_MD, sb.KEY_REVEAL]
+            removals += list(S4B_DEPENDENT_ARTIFACTS)
         else:
             # 機械 FAIL / BLOCKED では pack を作らない（§13）。前回走行の
             # freeze・鍵・pack が残ると、正本と矛盾する成果物が同居する。
-            removals += list(OUTCOME_ARTIFACTS)
+            removals += list(OUTCOME_ARTIFACTS) + list(S4B_DEPENDENT_ARTIFACTS)
             dir_swaps.append((_empty_dir(), sb.EAR_AUDIO))
         publish(files=files, dir_swaps=dir_swaps, removals=removals,
                 secret=[sb.PRIVATE_KEY])
     except S4Stop as stop:
         _rollback_wav_if_published(published, backup)
-        publish(files=blocked_bundle(stop), removals=list(OUTCOME_ARTIFACTS))
+        publish(files=blocked_bundle(stop),
+                removals=list(OUTCOME_ARTIFACTS) + list(S4B_DEPENDENT_ARTIFACTS))
         print(f"{stop.status}: {stop.cause}")
         return 3
     except BaseException:
