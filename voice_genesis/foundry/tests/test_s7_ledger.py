@@ -31,6 +31,22 @@ def _write_csv(tmp_path: Path, name: str, rows: list[str], header: str) -> Path:
     return path
 
 
+def _pinned_input(speaker: str, modality: str, path: Path) -> "L.SpeakerInput":
+    """canonical pin 照合を通すため、実ファイルの sha を expected として束ねる。
+
+    実運用では `--inputs-pin`（results_s7/s7_ledger_inputs.json）から入る値で、
+    テストでは「pin と一致する CSV」を作るための等価物。
+    """
+    import hashlib
+
+    return L.SpeakerInput(
+        speaker=speaker,
+        modality=modality,
+        csv_path=path,
+        expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+
+
 HEADER_FULL = "name,ph_seq,ph_dur,ph_num,note_seq,note_dur"
 HEADER_MIN = "name,ph_seq,ph_dur"
 
@@ -86,7 +102,7 @@ def test_numerator_and_denominator_share_the_same_stratum_key(tmp_path: Path):
         ],
         HEADER_FULL,
     )
-    section = L.build_speaker_section(L.SpeakerInput("user", "real_song", path))
+    section = L.build_speaker_section(_pinned_input("user", "real_song", path))
     assert set(section["terminal_events"]) <= set(section["denominator"])
     for key, transitions in section["terminal_events"].items():
         total = sum(cell["count"] for cell in transitions.values())
@@ -105,7 +121,7 @@ def test_pitch_bin_unknown_is_recorded_not_folded_into_mid(tmp_path: Path):
         ["v1,SP r i SP,0.1 0.3 1.6 0.2", "v2,SP r i SP,0.1 0.3 1.7 0.2"],
         HEADER_MIN,
     )
-    section = L.build_speaker_section(L.SpeakerInput("ritsu", "VCV", path))
+    section = L.build_speaker_section(_pinned_input("ritsu", "VCV", path))
     assert section["pitch_bin_assignment"]["unknown_events"] == 2
     assert all("|unknown|" in key for key in section["denominator"])
 
@@ -215,7 +231,7 @@ def test_breath_token_counts_as_terminal_but_stays_separable(tmp_path: Path):
         ],
         HEADER_MIN,
     )
-    section = L.build_speaker_section(L.SpeakerInput("pjs", "real_song", path))
+    section = L.build_speaker_section(_pinned_input("pjs", "real_song", path))
     assert section["silence_token_counts"] == {"AP": 1, "SP": 2}
     tokens = {
         event["silence_token"]
@@ -231,14 +247,14 @@ def test_ledger_pins_the_bytes_of_its_inputs(tmp_path: Path):
     import hashlib
 
     path = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
-    section = L.build_speaker_section(L.SpeakerInput("user", "real_song", path))
+    section = L.build_speaker_section(_pinned_input("user", "real_song", path))
     assert section["source_csv_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert section["source_csv_bytes"] == path.stat().st_size
 
     midi = tmp_path / "midi.json"
     midi.write_text('{"user/u1/2": 62}', encoding="utf-8")
     ledger = L.build_ledger(
-        [L.SpeakerInput("user", "real_song", path)],
+        [_pinned_input("user", "real_song", path)],
         ["user"],
         [],
         midi_table=L.MidiTable.load(midi),
@@ -250,13 +266,13 @@ def test_non_song_modalities_do_not_report_real_singing_seconds(tmp_path: Path):
     """VCV / speech の発声秒を「実歌唱秒」として出さない（PR #300 Codex P2）。"""
     rows = ["x1,SP r i SP,0.1 0.3 1.6 0.2"]
     song = L.build_speaker_section(
-        L.SpeakerInput("user", "real_song", _write_csv(tmp_path, "user", rows, HEADER_MIN))
+        _pinned_input("user", "real_song", _write_csv(tmp_path, "user", rows, HEADER_MIN))
     )
     vcv = L.build_speaker_section(
-        L.SpeakerInput("ritsu", "VCV", _write_csv(tmp_path, "ritsu", rows, HEADER_MIN))
+        _pinned_input("ritsu", "VCV", _write_csv(tmp_path, "ritsu", rows, HEADER_MIN))
     )
     speech = L.build_speaker_section(
-        L.SpeakerInput("amitaro", "speech", _write_csv(tmp_path, "amitaro", rows, HEADER_MIN))
+        _pinned_input("amitaro", "speech", _write_csv(tmp_path, "amitaro", rows, HEADER_MIN))
     )
     assert song["local_real_singing_seconds"] == pytest.approx(1.9)
     assert vcv["local_real_singing_seconds"] is None
@@ -272,7 +288,7 @@ def test_duplicate_speakers_are_rejected(tmp_path: Path):
     b = _write_csv(tmp_path, "user_b", ["u2,SP r i SP,0.1 0.3 1.7 0.2"], HEADER_MIN)
     with pytest.raises(ValueError, match="複数回"):
         L.build_ledger(
-            [L.SpeakerInput("user", "real_song", a), L.SpeakerInput("user", "real_song", b)],
+            [_pinned_input("user", "real_song", a), _pinned_input("user", "real_song", b)],
             ["user"],
             [],
         )
@@ -303,7 +319,7 @@ def test_contradictory_or_unknown_speaker_classification_is_rejected(tmp_path: P
     """breaking と non-breaking の重複・未知話者を裁定前に止める（PR #300 第 3 巡 P2）。"""
     a = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
     b = _write_csv(tmp_path, "pjs", ["p1,SP r i SP,0.1 0.3 1.7 0.2"], HEADER_MIN)
-    inputs = [L.SpeakerInput("user", "real_song", a), L.SpeakerInput("pjs", "real_song", b)]
+    inputs = [_pinned_input("user", "real_song", a), _pinned_input("pjs", "real_song", b)]
     with pytest.raises(ValueError, match="両方"):
         L.build_ledger(inputs, ["user", "pjs"], ["pjs"])
     with pytest.raises(ValueError, match="存在しない"):
@@ -335,3 +351,66 @@ def test_identical_output_paths_are_rejected(tmp_path: Path):
     with pytest.raises(L.OutputCollisionError):
         L.reject_duplicate_outputs([same, same])
     L.reject_duplicate_outputs([same, tmp_path / "ledger.md"])
+
+
+# --- canonical pin 照合（User 裁定 2 訂正の方針 3〜5）------------------------
+
+
+def test_unpinned_csv_is_refused(tmp_path: Path):
+    """canonical sha が渡されていない CSV は集計しない。"""
+    path = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
+    with pytest.raises(L.InputPinMismatch, match="canonical sha256"):
+        L.build_speaker_section(L.SpeakerInput("user", "real_song", path))
+
+
+def test_sha_mismatch_is_blocked(tmp_path: Path):
+    """再生成物が canonical pin と 1 バイトでも違えば BLOCKED。"""
+    path = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
+    inp = _pinned_input("user", "real_song", path)
+    inp.expected_sha256 = "0" * 64
+    with pytest.raises(L.InputPinMismatch, match="一致しない"):
+        L.build_speaker_section(inp)
+
+
+def test_row_count_mismatch_is_blocked(tmp_path: Path):
+    path = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
+    inp = _pinned_input("user", "real_song", path)
+    inp.expected_row_count = 15
+    with pytest.raises(L.InputPinMismatch, match="row_count"):
+        L.build_speaker_section(inp)
+
+
+def test_verified_section_records_the_pin(tmp_path: Path):
+    path = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
+    section = L.build_speaker_section(_pinned_input("user", "real_song", path))
+    assert section["source_csv_pin_verified"] is True
+
+
+def test_canonical_inputs_pin_matches_run7_assembly_manifest():
+    """repo に pin した 4 話者の canonical sha が run7 manifest の実測値と一致すること。
+
+    値の出所は Drive `run7/assembly_manifest.json`（sha256
+    4e5614d5218657a8f5f6ca2827c52c929581416021f56c054dee754cef1ad99c）を
+    2026-08-21 に実際に取得して読み出したもの。
+    """
+    import json
+
+    doc = json.loads(
+        (Path(__file__).resolve().parent.parent / "results_s7" / "s7_ledger_inputs.json")
+        .read_text(encoding="utf-8")
+    )
+    expected = {
+        "ritsu": ("fb01a936fa2435204b57958bf2611ae5b05b538f1b79b2a3919a0280efd13a5c", 456),
+        "pjs": ("4e96a4f63d51186ff05b4595219e90ace28a18ef4367bc5932ae29b2ae1952ef", 287),
+        "user": ("fc3a760c4c45c37760b8a846f90672acf7db39bc43ff1b3a02908fe9fd7deb3b", 15),
+        "amitaro": ("08d67e817110bf965254b48ffe72b787bddfd58ad7ec53d06bd74c081ed3e366", 299),
+    }
+    for speaker, (sha, rows) in expected.items():
+        assert doc["speakers"][speaker]["transcriptions_csv_sha256"] == sha
+        assert doc["speakers"][speaker]["row_count"] == rows
+    assert (
+        doc["canonical_source"]["sha256"]
+        == doc["canonical_source"]["chain"]["run_execution_manifest"][
+            "dataset_hashes.assembly_manifest"
+        ]
+    )

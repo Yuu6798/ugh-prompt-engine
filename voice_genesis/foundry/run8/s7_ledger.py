@@ -335,12 +335,19 @@ def _percentile(sorted_vals: Sequence[float], pct: float) -> float:
 # --- 台帳の組み立て --------------------------------------------------------
 
 
+class InputPinMismatch(RuntimeError):
+    """回収 / 再生成した CSV が canonical pin と一致しない（fail-closed）。"""
+
+
 @dataclass
 class SpeakerInput:
     speaker: str
     modality: str
     csv_path: Path
     midi_by_event: Dict[str, float] = field(default_factory=dict)
+    #: `s7_ledger_inputs.json` の canonical sha256。**必須**（None のままでは集計しない）。
+    expected_sha256: Optional[str] = None
+    expected_row_count: Optional[int] = None
 
 
 def _stratum_key(e: TerminalEvent, modality: str) -> str:
@@ -349,6 +356,24 @@ def _stratum_key(e: TerminalEvent, modality: str) -> str:
 
 def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
     rows, source_sha256, source_bytes = read_and_parse(inp.csv_path)
+    # canonical pin 照合（User 裁定 2 訂正の方針 3〜5）。
+    # 「完全一致したものだけ台帳入力として使う。不一致なら BLOCKED」。
+    if not inp.expected_sha256:
+        raise InputPinMismatch(
+            f"{inp.speaker}: canonical sha256 が渡されていない。"
+            "results_s7/s7_ledger_inputs.json を --inputs-pin で渡す（未 pin の CSV は使わない）"
+        )
+    if source_sha256 != inp.expected_sha256:
+        raise InputPinMismatch(
+            f"{inp.speaker}: transcriptions.csv の sha256 が canonical pin と一致しない "
+            f"(expected {inp.expected_sha256}, got {source_sha256})。BLOCKED — "
+            "run7 と同じ入力・同じ converter で再生成したものだけを使う"
+        )
+    if inp.expected_row_count is not None and len(rows) != inp.expected_row_count:
+        raise InputPinMismatch(
+            f"{inp.speaker}: row_count が canonical pin と一致しない "
+            f"(expected {inp.expected_row_count}, got {len(rows)})"
+        )
     events: List[TerminalEvent] = []
     ri_medial = 0
     voiced_s = 0.0
@@ -409,6 +434,8 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
         # 後から言えない（PR #300 Codex P1）。
         "source_csv_sha256": source_sha256,
         "source_csv_bytes": source_bytes,
+        "source_csv_pin_verified": True,
+        "source_csv_pin_source": "results_s7/s7_ledger_inputs.json（canonical = run7/assembly_manifest.json）",
         "row_count": len(rows),
         "local_voiced_seconds": round(voiced_s, 6),
         "local_voiced_seconds_note": (
@@ -754,6 +781,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--breaking", action="append", default=[])
     parser.add_argument("--non-breaking", action="append", default=[])
     parser.add_argument(
+        "--inputs-pin",
+        type=Path,
+        default=_HERE.parent / "results_s7" / "s7_ledger_inputs.json",
+        help=(
+            "canonical な transcriptions.csv pin（既定 = results_s7/s7_ledger_inputs.json）。"
+            "ここに無い話者・sha 不一致の CSV は fail-closed で拒否する"
+        ),
+    )
+    parser.add_argument(
         "--midi-json",
         type=Path,
         default=None,
@@ -773,6 +809,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     inputs: List[SpeakerInput] = list(args.speaker)
+
+    pin_doc, pin_sha, _pin_bytes = s7_io.read_json_with_pin(args.inputs_pin)
+    if pin_doc.get("schema") != "s7-ledger-inputs/0.1":
+        raise ValueError(f"{args.inputs_pin}: unexpected schema {pin_doc.get('schema')!r}")
+    for inp in inputs:
+        pinned = pin_doc["speakers"].get(inp.speaker)
+        if pinned is None:
+            raise InputPinMismatch(
+                f"{inp.speaker}: canonical pin に載っていない話者（{args.inputs_pin}）"
+            )
+        inp.expected_sha256 = str(pinned["transcriptions_csv_sha256"])
+        inp.expected_row_count = int(pinned["row_count"])
+        if pinned.get("modality") and pinned["modality"] != inp.modality:
+            raise InputPinMismatch(
+                f"{inp.speaker}: modality が pin と食い違う "
+                f"(pin {pinned['modality']} != 指定 {inp.modality})"
+            )
+
     midi_table: Optional[MidiTable] = None
     if args.midi_json:
         midi_table = MidiTable.load(Path(args.midi_json))
@@ -792,6 +846,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     reject_output_collision([args.out, table_path], protected)
 
     ledger = build_ledger(inputs, args.breaking, args.non_breaking, midi_table=midi_table)
+    ledger["inputs_pin"] = {
+        "path": str(args.inputs_pin),
+        "sha256": pin_sha,
+        "canonical_source": pin_doc["canonical_source"]["file"],
+        "canonical_source_sha256": pin_doc["canonical_source"]["sha256"],
+    }
     s7_io.assert_json_finite(ledger)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
