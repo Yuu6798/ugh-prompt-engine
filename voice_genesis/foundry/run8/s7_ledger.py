@@ -37,7 +37,12 @@ if str(_HERE) not in sys.path:
 
 import s7_io  # noqa: E402
 import s7_spec as sp  # noqa: E402
-from s7_io import OutputCollisionError, reject_output_collision, sha256_bytes  # noqa: E402,F401
+from s7_io import (  # noqa: E402,F401
+    OutputCollisionError,
+    reject_duplicate_outputs,
+    reject_output_collision,
+    sha256_bytes,
+)
 
 SILENCE_TOKENS = frozenset({"SP", "AP"})
 VOWELS = frozenset({"a", "i", "u", "e", "o", "A", "I", "U", "E", "O"})
@@ -780,9 +785,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     protected = [inp.csv_path for inp in inputs] + (
         [midi_table.path] if midi_table is not None else []
     )
+    # 入力との衝突に加えて、**出力先どうし**の衝突も拒否する
+    # （--out == --table-out だと台帳 JSON を表 markdown が上書きする。
+    #  PR #300 最終巡の未適用指摘 3 / User 裁定 3）。
+    reject_duplicate_outputs([args.out, table_path])
     reject_output_collision([args.out, table_path], protected)
 
     ledger = build_ledger(inputs, args.breaking, args.non_breaking, midi_table=midi_table)
+    s7_io.assert_json_finite(ledger)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"

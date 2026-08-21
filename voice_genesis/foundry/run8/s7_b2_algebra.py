@@ -370,18 +370,33 @@ def evaluate_h3(cells: Sequence[Cell], eps_z: Epsilon) -> Dict[str, Any]:
 # --- H4 / H5: 境界の移動 ---------------------------------------------------
 
 
-def _boundary_level(series_cells: Sequence[Cell], theta: float) -> Optional[float]:
-    """`z' >= theta` を最初に満たすラダー水準（§7-0-(4) の分類規則と同じ向き）。"""
+#: 境界の status 語彙。**`Infinity` を成果物へ書かない**ための表現
+#: （PR #300 最終巡の未適用指摘 1 / User 裁定 3）。
+BOUNDARY_CROSSED = "crossed"
+BOUNDARY_NEVER_CROSSED = "never_crossed"
+BOUNDARY_INSUFFICIENT_LADDER = "insufficient_ladder"
+
+
+def _boundary_level(
+    series_cells: Sequence[Cell], theta: float
+) -> Tuple[Optional[float], str]:
+    """`z' >= theta` を最初に満たすラダー水準と、その status を返す。
+
+    一度も越えない系列は **`inf` ではなく `(None, never_crossed)`** で表す。
+    `float("inf")` は `json.dumps` が `Infinity` として書き出し、厳格な JSON
+    パーサで読めない成果物になるため（`s7_io.assert_json_finite` が書き込み前に
+    停止させる）。
+    """
     usable = sorted(
         (c for c in series_cells if c.usable and c.ladder_level is not None),
         key=lambda c: (c.ladder_level, c.cell_id),
     )
     if len({c.ladder_level for c in usable}) < MIN_LADDER_POINTS:
-        return None
+        return None, BOUNDARY_INSUFFICIENT_LADDER
     for c in usable:
         if c.z_primary >= theta:
-            return float(c.ladder_level)
-    return float("inf")
+            return float(c.ladder_level), BOUNDARY_CROSSED
+    return None, BOUNDARY_NEVER_CROSSED
 
 
 def evaluate_h4(cells: Sequence[Cell], theta: float, generation: Optional[str] = None) -> Dict[str, Any]:
@@ -399,13 +414,22 @@ def evaluate_h4(cells: Sequence[Cell], theta: float, generation: Optional[str] =
         if c.generation != gen or c.probe != "P-RI-FINAL":
             continue
         by_speaker.setdefault(c.speaker, []).append(c)
-    boundaries = {s: _boundary_level(v, theta) for s, v in sorted(by_speaker.items())}
-    defined = {s: b for s, b in boundaries.items() if b is not None}
+    resolved = {s: _boundary_level(v, theta) for s, v in sorted(by_speaker.items())}
+    boundaries = {s: level for s, (level, _status) in resolved.items()}
+    boundary_status = {s: status for s, (_level, status) in resolved.items()}
+    # 「越えなかった」は定義済みの境界として数える（`never_crossed` は水準が
+    # 大きい側の極限であって、欠測ではない）。ラダー不足だけが未定義。
+    defined = {
+        s: (level, status)
+        for s, (level, status) in resolved.items()
+        if status != BOUNDARY_INSUFFICIENT_LADDER
+    }
     if len(defined) < 2:
         return {
             "verdict": sp.Verdict.UNDETERMINED.value,
             "reason": "fewer_than_two_speakers_with_defined_boundary",
             "boundaries": boundaries,
+            "boundary_status": boundary_status,
             "generation": gen,
         }
     verdict = (
@@ -416,6 +440,7 @@ def evaluate_h4(cells: Sequence[Cell], theta: float, generation: Optional[str] =
     return {
         "verdict": verdict,
         "boundaries": boundaries,
+        "boundary_status": boundary_status,
         "generation": gen,
         "theta": theta,
         "reach_limit": "言えるのは『境界は話者で動く』までで、原因は識別されない（§2-3 H4）",
@@ -627,12 +652,28 @@ def _worked_example() -> Dict[str, Any]:
     }
 
 
-def build_algebra_doc(spec: Dict[str, Any]) -> Dict[str, Any]:
+def build_algebra_doc(
+    spec: Dict[str, Any], spec_path: Path, spec_sha256: str, spec_bytes: int
+) -> Dict[str, Any]:
+    """B-2 の凍結ドキュメントを作る。
+
+    **消費した B-1 spec の sha256 を必須記録**する（PR #300 最終巡の未適用指摘 2 /
+    User 裁定 3）。ε の数値は spec 由来なので、どのバイト列の spec から作った
+    代数なのかが残らないと、後から同じ ε を再現できたか検算できない。
+    """
+    if not spec_sha256:
+        raise ValueError("consumed B-1 spec の sha256 が無い状態で B-2 を凍結しない")
     axes = spec["axes"]
     return {
         "schema": sp.B2_SCHEMA,
         "authority": "DESIGN_S7_run8.md 12-0-C",
         "generated_by": "voice_genesis/foundry/run8/s7_b2_algebra.py",
+        "consumed_b1_spec": {
+            "path": str(spec_path),
+            "sha256": spec_sha256,
+            "bytes": spec_bytes,
+            "why": "この代数の ε は spec 由来。どのバイト列から作ったかを pin する",
+        },
         "frozen_after": {
             "b1_spec_version": spec["spec_version"],
             "b1_freeze_status": spec["freeze_status"],
@@ -679,10 +720,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     reject_output_collision([args.out], [args.spec])
-    spec, _spec_sha, _ = s7_io.read_json_with_pin(args.spec)
+    spec, spec_sha, spec_bytes = s7_io.read_json_with_pin(args.spec)
     if spec.get("schema") != sp.TRF_SPEC_SCHEMA:
         raise ValueError(f"{args.spec}: unexpected schema {spec.get('schema')!r}")
-    doc = build_algebra_doc(spec)
+    doc = build_algebra_doc(spec, args.spec, spec_sha, spec_bytes)
+    s7_io.assert_json_finite(doc)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps(doc, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"

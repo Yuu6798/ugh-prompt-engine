@@ -20,6 +20,8 @@ if str(_RUN8) not in sys.path:
 import s7_b2_algebra as b2  # noqa: E402
 import s7_spec as sp  # noqa: E402
 
+_ARTIFACTS = Path(__file__).resolve().parent.parent / "results_s7"
+
 VALID = {v.value for v in sp.Verdict}
 EPS = b2.Epsilon.uniform(0.3, reason="テストは 1 世代・1 群だけの合成セルを使う")
 
@@ -42,7 +44,10 @@ def test_worked_example_is_reproducible():
     assert doc["H1"]["verdict"] == sp.Verdict.UNDETERMINED.value
     assert doc["H4"]["verdict"] == sp.Verdict.SUPPORTED.value
     assert doc["H4"]["boundaries"]["user"] == 2.0
-    assert doc["H4"]["boundaries"]["pjs"] == float("inf")
+    # 「一度も越えない」は Infinity ではなく null + status 語彙で表す
+    assert doc["H4"]["boundaries"]["pjs"] is None
+    assert doc["H4"]["boundary_status"]["pjs"] == b2.BOUNDARY_NEVER_CROSSED
+    assert doc["H4"]["boundary_status"]["user"] == b2.BOUNDARY_CROSSED
 
 
 def test_h0_is_undetermined_without_the_prereg_matched_condition():
@@ -222,3 +227,48 @@ def test_h4_is_adjudicated_per_generation_in_evaluate_all():
     out = b2.evaluate_all(cells, eps_z=EPS, theta=0.5)["H4"]
     assert set(out["per_generation"]) == {"run5", "run6", "run7"}
     assert out["verdict"] == sp.Verdict.SUPPORTED.value
+
+
+def test_artifacts_never_contain_infinity_or_nan():
+    """canonical JSON へ非有限値を書かない（PR #300 最終巡 未適用指摘 1）。"""
+    import json
+
+    import s7_io
+
+    doc = b2.build_algebra_doc(
+        json.loads((_ARTIFACTS / "trf_measurement_spec.json").read_text(encoding="utf-8")),
+        _ARTIFACTS / "trf_measurement_spec.json",
+        "0" * 64,
+        123,
+    )
+    s7_io.assert_json_finite(doc)                     # 走査して例外が出ないこと
+    assert "Infinity" not in json.dumps(doc)
+    assert "NaN" not in json.dumps(doc)
+
+    with pytest.raises(s7_io.NonFiniteArtifactError):
+        s7_io.assert_json_finite({"a": [1.0, float("inf")]})
+
+
+def test_b2_artifact_requires_the_consumed_spec_sha():
+    """ε の出どころ（B-1 spec のバイト列）を pin しないと凍結しない（未適用指摘 2）。"""
+    import json
+
+    spec = json.loads((_ARTIFACTS / "trf_measurement_spec.json").read_text(encoding="utf-8"))
+    with pytest.raises(ValueError, match="sha256"):
+        b2.build_algebra_doc(spec, _ARTIFACTS / "trf_measurement_spec.json", "", 0)
+
+    doc = b2.build_algebra_doc(spec, _ARTIFACTS / "trf_measurement_spec.json", "a" * 64, 42)
+    assert doc["consumed_b1_spec"]["sha256"] == "a" * 64
+    assert doc["consumed_b1_spec"]["bytes"] == 42
+
+
+def test_frozen_b2_artifact_pins_the_spec_on_disk():
+    """コミット済みの B-2 成果物が、実在する spec のバイト列を指していること。"""
+    import json
+
+    import s7_io
+
+    doc = json.loads((_ARTIFACTS / "s7_b2_verdict_algebra.json").read_text(encoding="utf-8"))
+    _spec, sha, n = s7_io.read_json_with_pin(_ARTIFACTS / "trf_measurement_spec.json")
+    assert doc["consumed_b1_spec"]["sha256"] == sha
+    assert doc["consumed_b1_spec"]["bytes"] == n

@@ -869,6 +869,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         [CANDIDATE_SPACE_PATH, CALIBRATION_SET_PATH, SELECTION_RULE_PATH],
     )
     spec = run_b1(cross_process=not args.no_cross_process)
+    s7_io.assert_json_finite(spec)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(_canonical_json(spec), encoding="utf-8")
     frozen = [a for a, v in spec["axes"].items() if v["status"] == sp.AxisStatus.FROZEN.value]

@@ -15,12 +15,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
 
 class OutputCollisionError(RuntimeError):
-    """出力先が保護対象の入力と衝突した（fail-closed）。"""
+    """出力先が保護対象の入力と衝突した / 出力先どうしが衝突した（fail-closed）。"""
+
+
+class NonFiniteArtifactError(ValueError):
+    """canonical JSON へ非有限値（Infinity / NaN）を書こうとした（fail-closed）。"""
 
 
 def sha256_bytes(raw: bytes) -> str:
@@ -37,6 +42,43 @@ def reject_output_collision(
             raise OutputCollisionError(
                 f"出力先 ({out}) が入力と衝突しています（fail-closed で拒否）"
             )
+
+
+def reject_duplicate_outputs(out_paths: Iterable[Path]) -> None:
+    """出力先どうしが同一パスなら停止する（片方が他方を上書きするため）。"""
+    seen: Dict[Path, Path] = {}
+    for out in out_paths:
+        resolved = Path(out).resolve()
+        if resolved in seen:
+            raise OutputCollisionError(
+                f"2 つの出力先が同じパスを指しています: {seen[resolved]} と {out}"
+            )
+        seen[resolved] = Path(out)
+
+
+def assert_json_finite(doc: Any, path: str = "$") -> None:
+    """`Infinity` / `NaN` を canonical JSON へ書かせない（RFC 8259 非準拠のため）。
+
+    `json.dumps` は既定で `Infinity` / `NaN` をそのまま出力するが、これは**厳格な
+    JSON パーサでは読めない**。下流（別実装の検算・外部ツール）が読めない成果物を
+    正本として置かないよう、書き込み前に全ノードを走査して停止する。
+    非有限値は「値」ではなく **status 語彙**で表現する（例: 境界を一度も越えない
+    = level は null で status = never_crossed）。
+    """
+    if isinstance(doc, float):
+        if not math.isfinite(doc):
+            raise NonFiniteArtifactError(
+                f"{path}: 非有限値 {doc!r} は canonical JSON へ書けない"
+                "（null + status 語彙で表現する）"
+            )
+        return
+    if isinstance(doc, dict):
+        for k, v in doc.items():
+            assert_json_finite(v, f"{path}.{k}")
+        return
+    if isinstance(doc, (list, tuple)):
+        for i, v in enumerate(doc):
+            assert_json_finite(v, f"{path}[{i}]")
 
 
 def read_bytes_with_pin(path: Path) -> Tuple[bytes, str, int]:

@@ -38,6 +38,12 @@ def _source(name: str) -> str:
 
 
 @pytest.mark.parametrize("module", CLI_MODULES)
+def test_every_writer_module_guards_against_non_finite_artifacts(module: str):
+    """全 CLI が書き込み前に `assert_json_finite` を通す（Infinity / NaN を書かない）。"""
+    assert "assert_json_finite(" in _source(module), f"{module} に非有限値ガードが無い"
+
+
+@pytest.mark.parametrize("module", CLI_MODULES)
 def test_every_writer_module_guards_against_output_collision(module: str):
     source = _source(module)
     n_writes = len(WRITE_PATTERN.findall(source))

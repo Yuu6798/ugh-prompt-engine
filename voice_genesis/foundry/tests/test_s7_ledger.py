@@ -327,3 +327,11 @@ def test_pitch_is_unknown_when_the_terminal_phone_cannot_be_aligned(tmp_path: Pa
         note_seq=("rest", "C4", "G5", "rest"),   # ph_num が無いので対応が取れない
     )
     assert L._midi_from_note_seq(row, 2) is None
+
+
+def test_identical_output_paths_are_rejected(tmp_path: Path):
+    """`--out == --table-out` を fail-closed（PR #300 最終巡 未適用指摘 3）。"""
+    same = tmp_path / "ledger.json"
+    with pytest.raises(L.OutputCollisionError):
+        L.reject_duplicate_outputs([same, same])
+    L.reject_duplicate_outputs([same, tmp_path / "ledger.md"])

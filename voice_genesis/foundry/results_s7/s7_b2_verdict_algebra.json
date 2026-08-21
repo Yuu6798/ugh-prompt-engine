@@ -6,6 +6,12 @@
     "supported_requires_zero_refuted": true
   },
   "authority": "DESIGN_S7_run8.md 12-0-C",
+  "consumed_b1_spec": {
+    "bytes": 46658,
+    "path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/results_s7/trf_measurement_spec.json",
+    "sha256": "603d494a9dec8d60c813eb7d409af9daab5126fb65bb713d7730f6afe991f675",
+    "why": "この代数の ε は spec 由来。どのバイト列から作ったかを pin する"
+  },
   "epsilon_raw_from_b1": {
     "excess_tail_voiced_ms": {
       "derivation": {
@@ -210,9 +216,14 @@
     },
     "H4": {
       "boundaries": {
-        "pjs": Infinity,
+        "pjs": null,
         "ritsu": null,
         "user": 2.0
+      },
+      "boundary_status": {
+        "pjs": "never_crossed",
+        "ritsu": "insufficient_ladder",
+        "user": "crossed"
       },
       "excluded": {},
       "generation": "run7",
