@@ -1,0 +1,144 @@
+{
+  "schema": "s7-b1-pipeline-silence-diagnostic/0.1",
+  "id": "pipeline_silence_residual",
+  "authority": "User 裁定 2026-08-21 / STEP 6 = (A)（rr_silence を diagnostic へ降格）",
+  "used_for_pass_fail": false,
+  "why": "SP-only render は無入力ではない。detector の false positive （zero_input_false_positive）とは別物として、経路が SP 区間に残す音を記録する。",
+  "stimulus": "rr_silence",
+  "prereg_pins": {
+    "s7_b1_candidate_space.json": "47e2f77155058a45aff2d76e44aa08803abea53c39bd5d19fc08316ce1cf6a5b",
+    "s7_b1_calibration_set.json": "79b209b52ed3994f8abe2634bf7f7484cc770fcc0dc22b70ebdf25484fcb6d8b",
+    "s7_b1_selection_rule.json": "7cbe3909390264481bb856903f61ed340a422f157813b6837d9801bdbde7a461",
+    "s7_b1_real_render_manifest.json": "bde66f3f8599ea48d6e8ff8fdc63a362c6aed5f846655189bf3b52c5628d3343"
+  },
+  "waveform": {
+    "sample_rate_hz": 44100,
+    "n_samples": 74656,
+    "n_samples_rendered": 63488,
+    "rms_rendered": 0.001460894098136716,
+    "rms_core": 0.0014586905535337834,
+    "rms_tail_window": 0.0004570510279140234,
+    "peak_rendered": 0.005456015933305025,
+    "samples_sha256": "7cc5cca8062b91d4f5f0e2aabe5f7f3cde3743d216468530bbd1aa8799c915b7"
+  },
+  "f0": {
+    "dominant_hz_tail_window": 256.6666666666667,
+    "dominant_hz_core": 259.9926049177297,
+    "median_hz_voiced_frames": 257.13099468347406,
+    "voiced_frame_fraction": 0.8588235294117647,
+    "method": "librosa.pyin (win 100 ms / hop 10 ms) — 診断であって候補選定ではない"
+  },
+  "commanded": {
+    "pitch_midi": 60.0,
+    "pitch_hz": 261.6255653005986,
+    "pitch_midi_prereg": null,
+    "phones": [
+      "SP"
+    ],
+    "note_target_frames": [
+      108
+    ],
+    "head_frames": 8,
+    "tail_frames": 8,
+    "sp_frame_count": 124,
+    "frame_ms": 11.609977324263038,
+    "note": "フレーム勘定は命令から算出（波形から推定していない）。SP のみの譜面なので head + note + tail の全フレームが SP トークンである。"
+  },
+  "trf_axis_values_per_candidate": {
+    "A_pyin_voiced_flag|win100|hop5": {
+      "excess_tail_voiced_ms": 130.0,
+      "release_after_score_boundary_ms": 128.77551020408174,
+      "tail_f0_persistence": 0.43333333333333335
+    },
+    "A_pyin_voiced_flag|win100|hop10": {
+      "excess_tail_voiced_ms": 130.0,
+      "release_after_score_boundary_ms": 127.12018140589576,
+      "tail_f0_persistence": 0.43333333333333335
+    },
+    "A_pyin_voiced_flag|win200|hop5": {
+      "excess_tail_voiced_ms": 185.0,
+      "release_after_score_boundary_ms": 183.65079365079384,
+      "tail_f0_persistence": 0.6166666666666667
+    },
+    "A_pyin_voiced_flag|win200|hop10": {
+      "excess_tail_voiced_ms": 180.0,
+      "release_after_score_boundary_ms": 177.1201814058958,
+      "tail_f0_persistence": 0.6
+    },
+    "A_pyin_voiced_flag|win300|hop5": {
+      "excess_tail_voiced_ms": 235.0,
+      "release_after_score_boundary_ms": 233.53741496598656,
+      "tail_f0_persistence": 0.7833333333333333
+    },
+    "A_pyin_voiced_flag|win300|hop10": {
+      "excess_tail_voiced_ms": 230.0,
+      "release_after_score_boundary_ms": 227.12018140589583,
+      "tail_f0_persistence": 0.7666666666666667
+    },
+    "B_rms_autocorr_gate|win100|hop5": {
+      "excess_tail_voiced_ms": 25.0,
+      "release_after_score_boundary_ms": 24.0136054421769,
+      "tail_f0_persistence": 0.08333333333333333
+    },
+    "B_rms_autocorr_gate|win100|hop10": {
+      "excess_tail_voiced_ms": 30.0,
+      "release_after_score_boundary_ms": 27.12018140589589,
+      "tail_f0_persistence": 0.1
+    },
+    "B_rms_autocorr_gate|win200|hop5": {
+      "excess_tail_voiced_ms": 20.0,
+      "release_after_score_boundary_ms": 19.02494331065774,
+      "tail_f0_persistence": 0.06666666666666667
+    },
+    "B_rms_autocorr_gate|win200|hop10": {
+      "excess_tail_voiced_ms": 20.0,
+      "release_after_score_boundary_ms": 17.120181405895885,
+      "tail_f0_persistence": 0.06666666666666667
+    },
+    "B_rms_autocorr_gate|win300|hop5": {
+      "excess_tail_voiced_ms": 10.0,
+      "release_after_score_boundary_ms": 9.047619047619193,
+      "tail_f0_persistence": 0.03333333333333333
+    },
+    "B_rms_autocorr_gate|win300|hop10": {
+      "excess_tail_voiced_ms": 10.0,
+      "release_after_score_boundary_ms": 7.120181405895876,
+      "tail_f0_persistence": 0.03333333333333333
+    },
+    "M1_1024_256_80": {
+      "terminal_mel_persistence": 0.08075929555465022
+    },
+    "M2_2048_512_80": {
+      "terminal_mel_persistence": 0.08577498063732662
+    },
+    "M3_1024_128_128": {
+      "terminal_mel_persistence": 0.08558642312026217
+    }
+  },
+  "provenance": {
+    "acoustic_onnx": "f0e71f06b16e448622f3e0d9b977a26fbaa306bb608a08ed26efeb871332a7d1",
+    "pitch_predictor_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+    "duration_predictor_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+    "linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+    "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+    "speaker": "ritsu",
+    "containers": {
+      "checkpoint": {
+        "path": "/home/user/s7work/materials/model_ckpt_steps_40000.ckpt",
+        "sha256": "518df090a8154e61f28b529f731418f4f97d47c3b56d1326d354e6be4629fa93",
+        "bytes": "556022498"
+      },
+      "canon_models": {
+        "path": "/home/user/s7work/materials/NamineRitsu_DiffSinger.zip",
+        "sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+        "bytes": "421940274"
+      },
+      "vocoder": {
+        "path": "/home/user/s7work/materials/nsf_hifigan.oudep",
+        "sha256": "e22f84009804da2e5916e7a2000f4c30278148796376e49368ec5ff8f9f58830",
+        "bytes": "52847838"
+      }
+    }
+  },
+  "mechanistic_note": "SP → duration → pitch predictor（SP フレームにも非ゼロ F0）→ acoustic → NSF source（F0 で励振）→ vocoder という経路が存在するため、『score boundary 後の voicing』を『acoustic が release に失敗した』へ直結させてはならない。predicted-F0-on-SP contribution を交絡候補として記帳する。"
+}

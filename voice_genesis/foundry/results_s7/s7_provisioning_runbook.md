@@ -202,16 +202,31 @@ python voice_genesis/foundry/run8/s7_b1_calibration.py \
 - 独立プロセス反復（`cross_process_reproducibility`）は必須。スキップすると
   どの軸も frozen にならない
 - 容器 pin（ckpt / canon zip / vocoder 容器）は**レンダ前**に照合する（不一致なら回さない）
-- 結果 = **0/4 軸 frozen・`1.0-rc2` / `blocked`**。原因と裁定要求は
+- 第 1 回の結果 = **0/4 軸 frozen・`1.0-rc2` / `blocked`**（原因 = `rr_silence` が
+  無音でない）。User 裁定 (A) の amendment を単独 pin してから**全候補を再測定**し、
+  第 2 回で **4/4 frozen・`1.0` / `frozen`** へ昇格した。経緯は
   [`s7_b1_real_render_record.md`](s7_b1_real_render_record.md)
 
-## 8. STEP 7 — `measurement spec 1.0` の凍結条件
+```bash
+# 7-4. amendment 後の再レンダ（zero buffer を含む）と再測定、および降格した観測の記録
+python voice_genesis/foundry/run8/s7_calib_render.py ... --out-dir $S7/out/b1_real_render_v2 \
+  --manifest-out $S7/out/b1_real_render_v2/s7_b1_real_render_manifest.json
+python voice_genesis/foundry/run8/s7_b1_calibration.py \
+  --real-render $S7/out/b1_real_render_v2/s7_b1_real_render_manifest.json \
+  --out voice_genesis/foundry/results_s7/trf_measurement_spec.json
+python voice_genesis/foundry/run8/s7_pipeline_silence_diagnostic.py \
+  --real-render $S7/out/b1_real_render_v2/s7_b1_real_render_manifest.json
+python voice_genesis/foundry/run8/s7_b2_algebra.py     # spec sha を追随させる
+```
 
-- 4 軸それぞれで 6 つの hard requirement を実レンダ校正音で評価する
-- **候補選別が実際に働いたか**を記帳する（合成刺激では 12/12・3/3 が通過し、
-  選別が働かなかった = `1.0-rc1` に留めた理由の 1 つ）
-- 通れば `spec_version = 1.0` / `freeze_status = frozen` へ更新し、
-  §12-0-D の PR-2 開始 Gate を再確認する（9 項目）
+## 8. STEP 7 — `measurement spec 1.0` の凍結（**完了**）
+
+- 4 軸それぞれで 6 つの hard requirement を実レンダ校正音で評価した
+- 候補選別は実際に働いた（生存 4/12・4/12・6/12・3/3）。落とした要件は
+  `gain_invariance`（候補族 B 全滅）と `monotone_response`（win300）
+- `spec_version = 1.0` / `freeze_status = frozen` へ更新し、§12-0-D の
+  PR-2 開始 Gate 9 項目を再照合して **9/9 充足**を確認した
+- User 裁定の昇格条件 7 項目も個別に照合（`s7_b1_real_render_record.md` §5b）
 
 ## 9. 本セッションで実施した分（2026-08-21）
 

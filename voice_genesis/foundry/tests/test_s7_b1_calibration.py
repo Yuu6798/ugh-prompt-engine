@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -72,8 +73,20 @@ def test_enumerated_candidates_match_the_pinned_space(prereg):
 
 
 def test_spec_pins_match_the_prereg_files_on_disk(spec, prereg):
-    """spec が記録した sha が実体と一致する（校正前 pin をすり替えていない）。"""
-    assert spec["prereg_pins"] == prereg.pins
+    """spec が記録した sha が実体と一致する（校正前 pin をすり替えていない）。
+
+    2026-08-21 の実レンダ校正以降、`prereg_pins` には事前登録 3 点に加えて
+    **校正音源 manifest の sha** が入る。3 点ぶんは実体と厳密一致し、増えてよいのは
+    その 1 件だけであることを固定する（別の pin を後から紛れ込ませる経路の閉塞）。
+    """
+    for name, sha in prereg.pins.items():
+        assert spec["prereg_pins"][name] == sha, name
+    extra = set(spec["prereg_pins"]) - set(prereg.pins)
+    assert extra <= {"s7_b1_real_render_manifest.json"}, extra
+    manifest = spec.get("calibration_source", {}).get("manifest")
+    if extra and manifest and Path(manifest).exists():
+        got = hashlib.sha256(Path(manifest).read_bytes()).hexdigest()
+        assert got == spec["prereg_pins"]["s7_b1_real_render_manifest.json"]
 
 
 def test_spec_contains_no_candidate_outside_the_pinned_space(spec, prereg):
@@ -191,7 +204,25 @@ def test_skipped_cross_process_check_is_not_a_pass():
 
 @pytest.fixture(scope="module")
 def stimuli(prereg):
+    """合成校正刺激（要件の意味論の参照。spec の音源が実レンダでも残す）。"""
     return b1.build_calibration_set(prereg)
+
+
+@pytest.fixture(scope="module")
+def spec_stimuli(spec, prereg):
+    """**spec を実際に作った校正音源**の刺激。
+
+    実レンダ音源は machine-local（波形はリポジトリに入らない）なので、manifest が
+    無い環境では skip する。`reference_output` の再現検査を「音源が無いから通った」
+    に化けさせないため、skip は明示理由つきで行う。
+    """
+    src = spec.get("calibration_source", {})
+    if src.get("name") != "real_render_v1":
+        return b1.build_calibration_set(prereg)
+    manifest = src.get("manifest")
+    if not manifest or not Path(manifest).exists():
+        pytest.skip(f"real-render 校正音源が無い（machine-local）: {manifest}")
+    return b1.real_render_source(prereg, Path(manifest)).stimuli
 
 
 @pytest.fixture(scope="module")
@@ -203,7 +234,13 @@ def light_candidate(prereg):
     )
 
 
-def test_silence_measures_zero(stimuli, light_candidate):
+def test_zero_input_measures_zero(stimuli, light_candidate):
+    """`zero_input_false_positive`: 厳密ゼロ入力に対して測定値が 0。
+
+    合成側の担当刺激 `silence` は元から bit-exact zero なので、2026-08-21 の
+    改称（silence_zero -> zero_input_false_positive）で値は変わらない。
+    """
+    assert not stimuli["silence"].samples.any()
     out = b1.measure_candidate(light_candidate, stimuli["silence"])
     assert out["excess_tail_voiced_ms"] == 0.0
     assert out["release_after_score_boundary_ms"] == 0.0
@@ -231,7 +268,7 @@ def test_mel_axis_is_gain_invariant(stimuli, prereg):
     assert hi == pytest.approx(lo, abs=1e-9)
 
 
-def test_reference_output_reproduces_for_the_mel_axis(spec, stimuli, prereg):
+def test_reference_output_reproduces_for_the_mel_axis(spec, spec_stimuli, prereg):
     entry = spec["axes"]["terminal_mel_persistence"]
     if entry["status"] != sp.AxisStatus.FROZEN.value:
         pytest.skip("mel axis is not frozen")
@@ -239,12 +276,12 @@ def test_reference_output_reproduces_for_the_mel_axis(spec, stimuli, prereg):
         c for c in b1.enumerate_candidates(prereg) if c.candidate_id == entry["selected_candidate"]
     )
     for stim_id, expected in spec["reference_output"]["terminal_mel_persistence"].items():
-        got = b1.measure_candidate(cand, stimuli[stim_id])["terminal_mel_persistence"]
+        got = b1.measure_candidate(cand, spec_stimuli[stim_id])["terminal_mel_persistence"]
         assert round(got, 9) == pytest.approx(expected, abs=1e-9), stim_id
 
 
 @pytest.mark.slow
-def test_reference_output_reproduces_for_every_frozen_axis(spec, stimuli, prereg):
+def test_reference_output_reproduces_for_every_frozen_axis(spec, spec_stimuli, prereg):
     """選定候補が pyin 側でも `reference_output` が再現することを確かめる（重い）。"""
     for axis, entry in spec["axes"].items():
         if entry["status"] != sp.AxisStatus.FROZEN.value:
@@ -255,7 +292,7 @@ def test_reference_output_reproduces_for_every_frozen_axis(spec, stimuli, prereg
             if c.candidate_id == entry["selected_candidate"]
         )
         for stim_id, expected in spec["reference_output"][axis].items():
-            got = b1.measure_candidate(cand, stimuli[stim_id])[axis]
+            got = b1.measure_candidate(cand, spec_stimuli[stim_id])[axis]
             assert round(got, 9) == pytest.approx(expected, abs=1e-9), f"{axis}/{stim_id}"
 
 
@@ -264,7 +301,9 @@ def test_b1_has_no_path_to_production_or_label_data():
 
     `s7_b1_selection_rule.json` の `prohibition.machine_check` に対応する検査で、
     実体は**このテスト**である（`select_candidates` 内の実行時 assert ではない）。
-    読み込む実ファイルが事前登録 3 点だけであることを固定する。
+    読み込む実ファイルが**事前登録 3 点 + 校正音源 manifest + その manifest が
+    列挙する WAV** だけであることを固定する（manifest 経路は User 裁定
+    2026-08-21 = 実レンダ校正で追加された唯一の入力口）。
     """
     source = (_RUN8 / "s7_b1_calibration.py").read_text(encoding="utf-8")
     forbidden_paths = (
@@ -280,10 +319,56 @@ def test_b1_has_no_path_to_production_or_label_data():
     )
     hits = [token for token in forbidden_paths if token in source]
     assert hits == [], f"B-1 が参照してはならないパスを含む: {hits}"
-    # 実ファイルを読むのは load_prereg の 3 呼び出し（事前登録 3 点）だけで、
-    # いずれも s7_io の「一度読んで parse と sha を同じバイト列から作る」経路
-    assert source.count("read_json_with_pin(") == 3
+    # JSON を読むのは load_prereg の 3 呼び出し（事前登録 3 点）と、実レンダ校正の
+    # manifest 1 呼び出しだけ。いずれも s7_io の「一度読んで parse と sha を同じ
+    # バイト列から作る」経路を通る
+    assert source.count("read_json_with_pin(") == 4
     for name in ("candidate_space_path", "calibration_set_path", "selection_rule_path"):
         assert f"read_json_with_pin({name})" in source
+    assert "read_json_with_pin(manifest_path)" in source
+    # バイト列を読むのは manifest が列挙した WAV だけ
+    assert source.count("read_bytes_with_pin(") == 1
+    assert "read_bytes_with_pin(wav_path)" in source
     assert "read_text(" not in source
     assert "read_bytes(" not in source
+    assert "open(" not in source
+
+
+# --- 2026-08-21 amendment 後の spec が満たすべき条件 -------------------------
+
+
+def test_spec_uses_the_amended_requirement_id(spec):
+    for axis, entry in spec["axes"].items():
+        checks = entry.get("hard_requirement_checks")
+        if checks is None:
+            continue
+        assert sp.ZERO_INPUT_REQUIREMENT in checks, axis
+        assert "silence_zero" not in checks, axis
+
+
+def test_frozen_spec_records_its_calibration_source(spec):
+    """1.0 / frozen へ昇格できるのは実レンダ校正だけ（User 裁定 2026-08-21）。"""
+    if spec["freeze_status"] != "frozen":
+        pytest.skip("spec is not frozen")
+    assert spec["spec_version"] == "1.0"
+    src = spec["calibration_source"]
+    assert src["name"] == "real_render_v1"
+    assert "s7_b1_real_render_manifest.json" in spec["prereg_pins"]
+    for axis, entry in spec["axes"].items():
+        assert entry["status"] == sp.AxisStatus.FROZEN.value, axis
+        assert all(entry["hard_requirement_checks"].values()), axis
+        m = entry["selection_metrics"]
+        assert m["reproducibility_error"] == 0.0, axis
+        assert m["cross_process_error"] == 0.0, axis
+
+
+def test_frozen_winner_is_uniquely_determined_by_the_frozen_ranking(spec, prereg):
+    """勝者が順位付け規則で一意に決まること（結果を見てから決めていない）。"""
+    if spec["freeze_status"] != "frozen":
+        pytest.skip("spec is not frozen")
+    for axis, entry in spec["axes"].items():
+        order = entry["rank_order"]
+        survivors = [c for c, ok in entry["candidate_survival"].items() if ok]
+        assert sorted(order) == sorted(survivors), axis
+        assert order[0] == entry["selected_candidate"], axis
+        assert len(set(order)) == len(order), axis

@@ -7,20 +7,20 @@
   },
   "authority": "DESIGN_S7_run8.md 12-0-C",
   "consumed_b1_spec": {
-    "bytes": 46658,
+    "bytes": 48399,
     "path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/results_s7/trf_measurement_spec.json",
-    "sha256": "603d494a9dec8d60c813eb7d409af9daab5126fb65bb713d7730f6afe991f675",
+    "sha256": "e1ed1a89fffe059a70bfd367fc797e51aadaafcc7694f62ef38662d1b6565a68",
     "why": "この代数の ε は spec 由来。どのバイト列から作ったかを pin する"
   },
   "epsilon_raw_from_b1": {
     "excess_tail_voiced_ms": {
       "derivation": {
         "derived_from": "measurement-side only (calibration repeats + frame quantisation)",
-        "numerical_floor": 5.0,
+        "numerical_floor": 10.0,
         "numerical_floor_note": "選定候補の hop 長（フレーム格子の量子化幅）",
         "reproducibility_bound": 0.0
       },
-      "epsilon": 5.0,
+      "epsilon": 10.0,
       "unit": "ms"
     },
     "release_after_score_boundary_ms": {
@@ -36,21 +36,21 @@
     "tail_f0_persistence": {
       "derivation": {
         "derived_from": "measurement-side only (calibration repeats + frame quantisation)",
-        "numerical_floor": 0.016666666666666666,
+        "numerical_floor": 0.03333333333333333,
         "numerical_floor_note": "終端窓に入るフレーム数の逆数（比の量子化幅）",
         "reproducibility_bound": 0.0
       },
-      "epsilon": 0.016666666666666666,
+      "epsilon": 0.03333333333333333,
       "unit": "ratio (0..1)"
     },
     "terminal_mel_persistence": {
       "derivation": {
         "derived_from": "measurement-side only (calibration repeats + frame quantisation)",
-        "numerical_floor": 0.019349962207105064,
+        "numerical_floor": 0.03869992441421013,
         "numerical_floor_note": "終端窓に入る mel フレーム数の逆数（比の量子化幅）",
         "reproducibility_bound": 0.0
       },
-      "epsilon": 0.019349962207105064,
+      "epsilon": 0.03869992441421013,
       "unit": "ratio (>= 0)"
     }
   },
@@ -66,8 +66,8 @@
     "ringing_uncorrected_group"
   ],
   "frozen_after": {
-    "b1_freeze_status": "candidate",
-    "b1_spec_version": "1.0-rc1",
+    "b1_freeze_status": "frozen",
+    "b1_spec_version": "1.0",
     "note": "B-2 は B-1 の直後に閉じる（§12-0-C）。B-1 が rc の間は B-2 の ε 数値も rc に従属する。"
   },
   "generated_by": "voice_genesis/foundry/run8/s7_b2_algebra.py",

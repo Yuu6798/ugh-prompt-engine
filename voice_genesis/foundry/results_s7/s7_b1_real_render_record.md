@@ -7,8 +7,15 @@ spec を 1.0 へ昇格させない。本番 360 セルとは完全分離した�
 事前登録: `s7_b1_calibration_set.json` の `real_render_set`
 （sha256 `c001f6e6…`。commit `d4ee992` = **レンダ実行より前**）。
 
-結論: **`spec_version = 1.0-rc2` / `freeze_status = blocked`。4 軸すべて `unavailable`。
-1.0 へ昇格させない。PR-2 は BLOCKED を維持する**（事前登録 `acceptance.on_failure`）。
+結論（2 段階。§5b で更新）:
+
+1. **第 1 回（amendment 前）= `1.0-rc2` / `blocked`。4 軸すべて `unavailable`**
+   （事前登録 `acceptance.on_failure` どおり昇格させず、`trf_measurement_spec_real_render_rc2.json`
+   として保存。書き換えていない）
+2. **第 2 回（User 裁定 (A) の amendment を単独 pin した後の全候補再測定）
+   = `1.0` / `frozen`。4 軸すべて凍結**（§5b）
+
+§1–§4 は第 1 回の記録、§5 は裁定に上げた論点、§5b が最終結果である。
 
 ---
 
@@ -91,7 +98,7 @@ f0 が乗るため、**譜面境界の後の有声は acoustic の release 挙�
 - 本番 360 セルを 1 セルも通していない。ラベル / P-ANCHOR 結果も入力していない。
 - spec を 1.0 へ昇格させていない。
 
-## 5. User 裁定が要る 1 点
+## 5. User 裁定に上げた 1 点（裁定済み: (A) 採用）
 
 事前登録 `acceptance` は「昇格しない」までを規定しているが、**次の一手**は規定していない。
 `rr_silence` の不合格は候補の欠陥ではなく**刺激の操作化のミスマッチ**（許容 0.0 は
@@ -111,13 +118,70 @@ commit/pin** する必要がある。選択肢:
 **(A) を推す**（要件の意味 =「無音に対して 0 を返すか」を保ったまま、
 経路の物理（SP でも調波音源が鳴る）と要件の混同だけを解く）。
 
+→ **User 裁定 2026-08-21: (A) 採用**（名称は `zero_input_false_positive` へ明確化、
+`rr_silence` は `pipeline_silence_residual` として保存、(B)(C) は不採用）。
+実施内容は `s7_b1_amendment_zero_input.md`、結果は §5b。
+
+## 5b. 再測定の結果（amendment 後・2026-08-21）
+
+User 裁定は (A) を採用した。amendment（`s7_b1_amendment_zero_input.md`）を**単独 commit /
+pin**（`07d90fe`）してから、**全候補を最初から**再測定した。
+
+| 軸 | 生存 | 勝者 | ε | 決着したキー |
+|---|---|---|---|---|
+| `excess_tail_voiced_ms` | 4/12 | `A_pyin_voiced_flag\|win100\|hop10` | 10 ms | #3 → #5 |
+| `release_after_score_boundary_ms` | 4/12 | 同上 | 10 ms | #3 → #5 |
+| `tail_f0_persistence` | 6/12 | 同上 | 0.0333 | #3 → #5 |
+| `terminal_mel_persistence` | 3/3 | `M2_2048_512_80` | 0.0387 | #3 |
+
+**4 軸すべてが 6 要件を PASS。`spec_version = 1.0` / `freeze_status = frozen` へ昇格した。**
+
+落ちた候補と理由（実レンダ校正が実際に選別した）:
+
+- 候補族 B（RMS + 自己相関ゲート）= **全滅 / `gain_invariance`**。絶対 RMS 閾値が
+  線形ゲインに不変でない（誤差 15–30 ms / 比 0.05–0.10）
+- 候補 A の `win300` = **`monotone_response`**。300 ms 窓が 300 ms の終端窓を飽和させ、
+  梯子の最終段の増分が 0 になる（ms 軸 2 本）
+
+`zero_input_false_positive` は**全候補が 0.0 で通過**した。すなわちこの要件は今回
+**1 つも候補を落としていない**。これは要件が働かなかったのではなく、
+「測定器が無から有声を作らない」という**床の検査**として設計どおりの結果である
+（旧 `silence_zero` が全滅させていたのは、刺激が無入力でなかったからである = §3）。
+
+決着キーの正直な内訳: ms 2 軸と比 1 軸は、まずキー #3（`monotone_min_step` 降順）で
+`hop10` 族が `hop5` 族に勝ち、最後の `win100` vs `win200` は**キー #5（`window_ms` 昇順）**
+で割れた。つまり最終差は応答余裕ではなく**測定設定の選好**（狭い窓を先に採る）である。
+凍結済みの順位付け規則どおりだが、「物理的信用度で決まった」とは言わない。
+`terminal_mel_persistence` はキー #3（応答余裕）で決着した。
+**どの軸も最終手段の `candidate_id` までは落ちていない。**
+
+昇格条件（User 裁定 7 項目）の照合:
+
+| 条件 | 実測 |
+|---|---|
+| 6 要件 PASS（4 軸とも） | ✅ |
+| winner が機械規則で一意 | ✅（`rank_order` 先頭 = 選定候補・重複なし） |
+| same-process reproducible | ✅ 誤差 0.0 |
+| cross-process reproducible | ✅ 誤差 0.0（独立プロセス実測） |
+| analysis stack pin 一致 | ✅ numba 0.66.0 / librosa 0.11.0 / numpy 2.4.6 |
+| prereg SHA 一致 | ✅ 3 点 + manifest。manifest がレンダ時に見た事前登録 sha も現在と一致 |
+| 360-cell contamination | ✅ 0（ラベル入力も 0） |
+
+§12-0-D（PR-2 開始 Gate）9 項目も再照合し、**9/9 充足**した。
+
 ## 6. 生成物
 
 | ファイル | 内容 |
 |---|---|
 | `s7_b1_real_render_manifest.json` | 11 レンダ + 2 派生の sha256・境界・命令フレーム・容器 pin |
 | `trf_measurement_spec_real_render_rc2.json` | 実レンダ校正の結果 spec（`1.0-rc2` / `blocked`、全候補の実測値つき） |
-| `trf_measurement_spec.json` | 合成校正の spec（`1.0-rc1` / `candidate`。**昇格していない**） |
+| `trf_measurement_spec.json` | **`1.0` / `frozen`**（実レンダ校正・amendment 後の再測定） |
+| `trf_measurement_spec_synthetic_rc1.json` | 合成校正の spec（`1.0-rc1`。歴史的成果物として保存） |
+| `s7_b1_amendment_zero_input.md` | `zero_input_false_positive` への改訂（再測定前に単独 pin） |
+| `s7_b1_pipeline_silence_diagnostic.json` | 降格した `rr_silence` の観測記録（pass/fail に使わない） |
 
-波形（13 本・計 ~4 MB）は `/home/user/s7work/out/b1_real_render/` に置いた。
-sha256 は manifest に全件記録してあるので、同じ pin から再生成すれば照合できる。
+波形（14 本・計 ~4 MB）は `/home/user/s7work/out/b1_real_render_v2/` に置いた
+（amendment 後の再レンダ。v1 は `/home/user/s7work/out/b1_real_render/`）。
+sha256 は manifest に全件記録してある。**決定論の照合は `samples_sha256`（標本列）で行う**:
+float WAV の容器 sha は libsndfile が PEAK チャンクへ書き出し時刻を入れるため再現しない
+（v1 と v2 で標本列は完全一致・容器 sha のみ相違、を実測）。
