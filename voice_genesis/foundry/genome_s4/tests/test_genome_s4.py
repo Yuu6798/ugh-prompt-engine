@@ -1208,6 +1208,22 @@ def test_43b_schema_matches_design_minimal_form():
     assert "S4 RECORD" in srep.render_record(res)
 
 
+def test_43b2_mechanistic_pass_awaiting_listening_is_not_material_blocked():
+    """機械 PASS + 耳未了の BLOCKED を「素材不足」と読ませない。"""
+    meta = {"s3_results_sha256": "a" * 64, "s35_results_sha256": "b" * 64,
+            "input_manifest_sha256": "c" * 64, "code_state": {},
+            "candidate_pairs": []}
+    res = srep.build_results(meta, sg.overall_gate(_verdicts(_pop(5))))
+    assert res["overall"]["verdict"] == "BLOCKED"          # 4 状態語彙は変えない
+    assert res["overall"]["awaiting"] == "perceptual_gate"
+    md = srep.render_record(res)
+    assert "READY_FOR_LISTENING" in md
+    assert "入力・素材・正本が不足し、判定を実行できない" not in md
+    # 機械 FAIL では awaiting を付けない
+    fail = srep.build_results(meta, sg.overall_gate(_verdicts(_pop(4))))
+    assert "awaiting" not in fail["overall"]
+
+
 def test_43c_blocked_bundle_is_renderable():
     stop = sr.S4Stop(cause="c", impact="i", minimal_fix="f")
     files = srep.blocked_bundle(stop)

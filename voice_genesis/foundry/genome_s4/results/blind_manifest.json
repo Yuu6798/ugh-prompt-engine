@@ -1,0 +1,50 @@
+{
+  "schema": "voicegenesis-genome-s4/1.0",
+  "s3_results_sha256": "65b91402f2b6ead2b8d3269455413e6bd0ae575d66a33a52f0a2367c91e55cd0",
+  "s35_results_sha256": "5dcbc4329d9e7343e0f48d96665be5faa0f9406425a6552249eb9b5fcebb95ba",
+  "abx_trial_ids": [
+    "T001",
+    "T002",
+    "T003",
+    "T004"
+  ],
+  "identity_trial_ids": [
+    "I001",
+    "I002"
+  ],
+  "audio_sha256": {
+    "T001": {
+      "T001_A.wav": "6a8a8c739f55e3df5dd1c8c72513efd21eddae16c3ed4ed5c8f7866a15895948",
+      "T001_B.wav": "0a26ea8d074c80cb4f1aab02639da82f8aa75a2cd3b9705db74dc020902965d4",
+      "T001_X.wav": "6a8a8c739f55e3df5dd1c8c72513efd21eddae16c3ed4ed5c8f7866a15895948"
+    },
+    "T002": {
+      "T002_A.wav": "5f33e4886948b180779e4ca8b02367c352ed369d810c23905453b1f6df8d04d3",
+      "T002_B.wav": "6a8a8c739f55e3df5dd1c8c72513efd21eddae16c3ed4ed5c8f7866a15895948",
+      "T002_X.wav": "6a8a8c739f55e3df5dd1c8c72513efd21eddae16c3ed4ed5c8f7866a15895948"
+    },
+    "T003": {
+      "T003_A.wav": "ae7a774fb0ac4ae6aa5bebcd2c755280e5135a8674e5ade9aa5127ed7f1feb34",
+      "T003_B.wav": "817ae7bfe80eafede8878f09ee36e38ede21423c93625e56cdd25d170d8cae32",
+      "T003_X.wav": "ae7a774fb0ac4ae6aa5bebcd2c755280e5135a8674e5ade9aa5127ed7f1feb34"
+    },
+    "T004": {
+      "T004_A.wav": "939fa22f038e0bda44f1d751f4cbdd9e042a2230a9dbc24ae947a07d33abb5ed",
+      "T004_B.wav": "817ae7bfe80eafede8878f09ee36e38ede21423c93625e56cdd25d170d8cae32",
+      "T004_X.wav": "817ae7bfe80eafede8878f09ee36e38ede21423c93625e56cdd25d170d8cae32"
+    },
+    "I001": {
+      "I001_1.wav": "71c05dbb3a5754fa33e164fb0dec84a29f3e8bb83b4400294eb327618029f5f2",
+      "I001_2.wav": "817ae7bfe80eafede8878f09ee36e38ede21423c93625e56cdd25d170d8cae32"
+    },
+    "I002": {
+      "I002_1.wav": "6a8a8c739f55e3df5dd1c8c72513efd21eddae16c3ed4ed5c8f7866a15895948",
+      "I002_2.wav": "039b18286735c9378634d054c1739e647db7ca46109e480eed515ea00b0037b5"
+    }
+  },
+  "key_commitment": "7167f7a5b5e803f94950be977402318aa0f0e0a12cd39f70c2b77a093f6e03d9",
+  "instructions": {
+    "ABX": "A と B を聴き、X が A と B のどちらと同じかを答える（A / B / UNSURE）。",
+    "IDENTITY": "2 つが同じ Ritsu 系の歌い手に聞こえるかを答える（YES / NO / UNSURE）。自然さ・品質・好みは問わない。"
+  }
+}

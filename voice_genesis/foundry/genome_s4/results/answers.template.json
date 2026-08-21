@@ -1,0 +1,12 @@
+{
+  "schema": "voicegenesis-s4-answers/1.0",
+  "key_commitment": "7167f7a5b5e803f94950be977402318aa0f0e0a12cd39f70c2b77a093f6e03d9",
+  "answers": {
+    "I001": "YES|NO|UNSURE",
+    "I002": "YES|NO|UNSURE",
+    "T001": "A|B|UNSURE",
+    "T002": "A|B|UNSURE",
+    "T003": "A|B|UNSURE",
+    "T004": "A|B|UNSURE"
+  }
+}

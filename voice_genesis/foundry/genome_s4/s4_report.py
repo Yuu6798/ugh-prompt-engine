@@ -46,6 +46,16 @@ OUT_OF_SCOPE_OBSERVATIONS: Tuple[str, ...] = (
     "プロトコル変更は §24 で禁じられているため実装では手を付けず、記録にのみ残す。",
     "ABX 4 問の偶然一致確率は 1/16。本 Gate は統計的有意差ではなく"
     "工学的進行 Gate である（設計書 §15.1 が明記）。",
+    "第 1 走行の実測: `note_split_mae_ms` は F0 トグルに対して**完全に不感**で、"
+    "全 6 pair で metric(B0) == metric(F) かつ metric(D) == metric(FD) が"
+    "厳密に成立した。したがって §9.2 の Duration 側増分 "
+    "(metric(F) - metric(FD)) は §9.1 の単独増分 (metric(B0) - metric(D)) と"
+    "数値的に同一で、duration_retention は構造上つねに 1.000 になる。"
+    "つまり **Duration 軸の機械 Gate は「F0 背景でも残るか」を実質的に検定して"
+    "いない**（合成経路上、F0 トグルは note の尺に触れないため）。"
+    "F0 軸は同一でない（例: 75.400 -> 74.240, retention 0.985）ので、機械側で"
+    "共発現を実測しているのは F0 軸のみ。Duration 軸の共発現は §13.2 の ABX が"
+    "担う。metric の変更は §24 で禁止されているため実装では手を付けず記録に残す。",
 )
 
 
@@ -166,6 +176,10 @@ def build_results(meta: Dict[str, Any], mech: Dict[str, Any],
                          "verdict": "BLOCKED"}
     verdict = overall_verdict or sg.s4_overall(
         mech["verdict"], None, None, hard_failure=mech.get("hard_failure", False))
+    # 機械 PASS 済みで耳判定が未了の BLOCKED は、§16 の「入力・素材・正本が不足」
+    # とは別物。verdict 語彙は 4 状態のまま、待ち先だけを記録に足す。
+    awaiting = ("perceptual_gate"
+                if verdict == "BLOCKED" and mech.get("verdict") == "PASS" else None)
     return {
         "schema": sp.SCHEMA,
         "s3_results_sha256": meta["s3_results_sha256"],
@@ -180,7 +194,8 @@ def build_results(meta: Dict[str, Any], mech: Dict[str, Any],
         "conditions": list(sp.CONDITIONS),
         "mechanistic": mech,
         "perceptual": per,
-        "overall": {"verdict": verdict},
+        "overall": ({"verdict": verdict, "awaiting": awaiting} if awaiting
+                    else {"verdict": verdict}),
         "out_of_scope_observations": list(OUT_OF_SCOPE_OBSERVATIONS),
     }
 
@@ -236,6 +251,12 @@ def render_record(res: Dict[str, Any]) -> str:
     elif ov == "FAILED":
         lines.append("> **S4 FAILED — 構造分離・決定論・入力 pin・S3 再現のいずれかに"
                      "違反した。**")
+    elif res["overall"].get("awaiting") == "perceptual_gate":
+        lines.append("> **S4 READY_FOR_LISTENING — 機械 Gate は通過した。"
+                     "人間 Gate（§13 の 6 問）が未了のため S4 の verdict はまだ出せない。**")
+        lines.append("")
+        lines.append("verdict 語彙は §16 の 4 状態しか無いので `BLOCKED` と記録するが、"
+                     "これは「入力・素材・正本が不足」の BLOCKED ではない。")
     else:
         lines.append("> **S4 BLOCKED — 入力・素材・正本が不足し、判定を実行できない。**")
     lines.append("")
