@@ -9,6 +9,7 @@ unit は実コーパスを必要としない（判定ロジックだけを対象
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import sys
@@ -31,20 +32,64 @@ import s4_gates as sg  # noqa: E402
 import s4_spec as sp  # noqa: E402
 from s4_spec import Gene, PairVerdict, S4Stop  # noqa: E402
 
-try:                    # 生成・公開経路だけが WORLD（pyworld）を必要とする
-    import s4_report as srep  # noqa: E402
-    import s4_runner as sr  # noqa: E402
-    _HAVE_WORLD = True
-except ModuleNotFoundError:  # pragma: no cover — pyworld 非導入環境
-    srep = sr = None  # type: ignore[assignment]
-    _HAVE_WORLD = False
-
-#: 生成・公開経路（`s4_runner` / `s4_report`）を触るテストだけを WORLD で括る。
+#: 生成・公開経路（`s4_runner` / `s4_report`）だけが WORLD（pyworld）を要する。
+#: **collection 時に import してはならない。** `pyworld` は `pkg_resources` を読み、
+#: `sys.meta_path` へ `VendorImporter` を挿す。本ファイルが testpaths に入ると
+#: collection 時点でそれが起き、`tests/test_m2_accuracy_harness.py::
+#: test_non_standard_import_hooks_clean_in_real_environment`（非標準 import hook は
+#: AssertionRewritingHook のみ、という repo の forensics 不変条件）を壊す。
+#: そのため実 import は**テスト実行時**まで遅らせる。
+_HAVE_WORLD = importlib.util.find_spec("pyworld") is not None
 requires_world = pytest.mark.skipif(not _HAVE_WORLD, reason="pyworld 未導入")
 
 
+#: プロキシが実モジュールへ転送してよい dunder。ここに無い dunder は
+#: 型判定プローブとみなして AttributeError にする（`__bases__` 等）。
+_FORWARDED_DUNDERS = frozenset({"__file__", "__name__", "__doc__"})
+
+
+class _LazyModule:
+    """属性アクセス時に初めて import するプロキシ（collection では読まない）。
+
+    `monkeypatch.setattr(sr, ...)` が実モジュールへ届くよう set/del も委譲する。
+    """
+
+    def __init__(self, name: str) -> None:
+        object.__setattr__(self, "_name", name)
+        object.__setattr__(self, "_mod", None)
+
+    def _load(self):
+        mod = object.__getattribute__(self, "_mod")
+        if mod is None:
+            mod = importlib.import_module(object.__getattribute__(self, "_name"))
+            object.__setattr__(self, "_mod", mod)
+        return mod
+
+    def __getattr__(self, attr):
+        # pytest の collection は module 大域に `issubclass(obj, TestCase)` を掛け、
+        # その過程で `__bases__` 等を引く。ここで転送すると **collection 時に**
+        # import が起きてしまい、遅延させた意味が消える（実測: pyworld が読まれて
+        # meta_path が汚れる）。型判定プローブには素直に AttributeError を返す。
+        if attr.startswith("__") and attr.endswith("__") \
+                and attr not in _FORWARDED_DUNDERS:
+            raise AttributeError(attr)
+        return getattr(self._load(), attr)
+
+    def __setattr__(self, attr, value):
+        setattr(self._load(), attr, value)
+
+    def __delattr__(self, attr):
+        delattr(self._load(), attr)
+
+
+sr = _LazyModule("s4_runner")
+srep = _LazyModule("s4_report")
+
+
 #: 実素材が要る経路は manifest が揃っているときだけ走る。
-_HAVE_MATERIAL = bool(_HAVE_WORLD and sr.S3_INPUT_MANIFEST.exists())
+#: `sr` を触ると import が起きるので、パスは直接組む。
+_HAVE_MATERIAL = bool(_HAVE_WORLD and (
+    _FOUNDRY / "planb_real" / "results" / "ladder_manifest.json").exists())
 
 
 @pytest.fixture(autouse=True)
