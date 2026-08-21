@@ -1265,7 +1265,7 @@
   "generated_by": "voice_genesis/foundry/run8/s7_b1_calibration.py",
   "measured_on": "raw pre-normalisation waveform (DESIGN_S7_run8.md 5-2)",
   "prereg_pins": {
-    "s7_b1_calibration_set.json": "5b3489d27059e29c783200242a743da71ba56569f2045588fb92bdcffb990ebd",
+    "s7_b1_calibration_set.json": "c001f6e69e7b46152d254069e82c2605829021fd15e895f5d47d56b57b733d8c",
     "s7_b1_candidate_space.json": "47e2f77155058a45aff2d76e44aa08803abea53c39bd5d19fc08316ce1cf6a5b",
     "s7_b1_selection_rule.json": "72aaa2853e2473ca1a368f2e925cca3569d2ac6155faa1d97ca276f978de8850"
   },
