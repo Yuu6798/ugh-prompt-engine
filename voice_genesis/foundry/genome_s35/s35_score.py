@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,11 +31,7 @@ def load_answers(stage: int, path: Optional[Path] = None) -> Tuple[Dict[str, Any
         raise prep.S35Stop(reason=f"Stage {stage} の回答ファイルが無い（{path}）",
                            required_action=f"聴取後の answers_stage{stage}.json を配置する")
     raw = path.read_bytes()
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise prep.S35Stop(reason=f"回答ファイルが JSON として読めない: {exc}",
-                           required_action="回答 JSON を確認する") from exc
+    data = prep.json_object(raw, f"Stage {stage} の回答ファイル", "回答 JSON を確認する")
     if data.get("schema") != sp.ANSWERS_SCHEMA:
         raise prep.S35Stop(reason=f"回答 schema が不正: {data.get('schema')!r}",
                            required_action=f"schema を {sp.ANSWERS_SCHEMA} にする")
@@ -271,12 +266,9 @@ def _assert_not_rescoring_after_reveal(answers_sha: Dict[int, str], key_sha: str
     """
     if not KEY_REVEAL.exists():
         return
-    try:
-        prev = json.loads(KEY_REVEAL.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise prep.S35Stop(
-            reason=f"既存の key_reveal.json が読めない: {exc}",
-            required_action="開示済み成果物を復元するか、session 全体をやり直す") from exc
+    prev = prep.json_object(
+        KEY_REVEAL.read_bytes(), "既存の key_reveal.json",
+        "開示済み成果物を復元するか、session 全体をやり直す")
     now = {str(k): v for k, v in sorted(answers_sha.items())}
     was = prev.get("revealed_after_answers_sha256") or {}
     # 手元にある stage 分だけで先に比較できる（Stage 2 を採点する前に、

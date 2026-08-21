@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1256,3 +1257,78 @@ def test_stage1_failure_leaves_no_orphan_private_key(s35, monkeypatch) -> None:
     assert info["trial_count"] == len(info["genes"])
     assert prep.PRIVATE_KEY.exists()
     assert out  # fixture の出力先を使っていることの明示
+
+
+@pytest.mark.parametrize("root", ["[]", '"A"', "1", "null", '["S1T01"]'])
+def test_non_object_answer_root_is_blocked(s35, root) -> None:
+    """回答 JSON の**根**が object でなくても BLOCKED を出す。
+
+    `json.loads` は list / str / int / null でも成功するので、根を確かめずに
+    `.get()` すると `S35Stop` 以外の例外になり、BLOCKED 記録が出せなくなる。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct).write_text(root, encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)
+    assert "object" in exc.value.as_dict()["reason"]
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+@pytest.mark.parametrize("loader", ["manifest", "private_key", "s3_results"])
+def test_non_object_json_root_is_blocked_everywhere(s35, loader) -> None:
+    """S3.5 が読む JSON は**全数** `json_object()` を通す（同型穴の全数掃討）。"""
+    _out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    target = {"manifest": prep.BLIND_MANIFEST,
+              "private_key": prep.PRIVATE_KEY,
+              "s3_results": prep.S3_RESULTS}[loader]
+    target.write_text("[]", encoding="utf-8")
+    call = {"manifest": prep.load_manifest,
+            "private_key": prep.load_private_key,
+            "s3_results": prep.load_s3_results}[loader]
+    with pytest.raises(prep.S35Stop) as exc:
+        call()
+    assert "object" in exc.value.as_dict()["reason"]
+
+
+def test_no_json_loads_outside_the_shared_gate() -> None:
+    """`json.loads` の直後に `.get()` する新しい経路を増やさないための固定。
+
+    許すのは helper 本体と、非 dict を `None` で弾く `load_finalized()` だけ。
+    """
+    root = Path(prep.__file__).parent
+    hits = []
+    for name in ("s35_prepare.py", "s35_score.py", "s35_report.py"):
+        where = "?"
+        for line in (root / name).read_text(encoding="utf-8").splitlines():
+            m = re.match(r"def (\w+)", line)
+            if m:
+                where = m.group(1)
+            if re.search(r"\bjson\.loads\(", line):
+                hits.append(f"{name}:{where}")
+    assert sorted(hits) == ["s35_prepare.py:json_object",
+                            "s35_report.py:load_finalized"], hits
+
+
+def test_private_key_write_failure_leaves_nothing(s35, monkeypatch) -> None:
+    """key の書き込み自体が落ちても、部分的な key も temp も残さない。"""
+    _out, _doc = s35()
+    real_chmod = os.chmod
+
+    def _explode(path, mode):
+        if str(path).endswith(".tmp"):
+            raise OSError("permission denied")
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(os, "chmod", _explode)
+    with pytest.raises(OSError):
+        prep.prepare_stage1(salt=SALT)
+    assert not prep.PRIVATE_KEY.exists()
+    leftovers = sorted(p.name for p in prep.RESULTS.glob("*.tmp"))
+    assert leftovers == [], leftovers
+
+    monkeypatch.setattr(os, "chmod", real_chmod)
+    info = prep.prepare_stage1(salt=SALT)
+    assert prep.PRIVATE_KEY.exists() and info["trial_count"] > 0

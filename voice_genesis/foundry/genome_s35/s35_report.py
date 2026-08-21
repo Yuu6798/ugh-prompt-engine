@@ -226,6 +226,9 @@ def load_finalized() -> Optional[Dict[str, Any]]:
         doc = json.loads(JSON_PATH.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
+    # 根が object でない記録は「確定済み」として扱えない（`.get()` が落ちる）。
+    if not isinstance(doc, dict):
+        return None
     if doc.get("status") == "BLOCKED" or "overall" not in doc:
         return None
     return doc

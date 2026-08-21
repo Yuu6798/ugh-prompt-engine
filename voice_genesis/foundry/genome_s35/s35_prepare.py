@@ -97,16 +97,31 @@ def stage_audio_dir(stage: int) -> Path:
 # ---------------------------------------------------------------------------
 # S3 正本の検証
 # ---------------------------------------------------------------------------
+def json_object(raw: bytes, what: str, required_action: str) -> Dict[str, Any]:
+    """JSON を読み、**根が object であること**まで確かめて返す。
+
+    `json.loads` は list / str / int / null でも成功するので、直後の `.get()` が
+    `AttributeError` を投げる。`finalize_or_blocked()` は `S35Stop` しか拾わないため、
+    それは「壊れた入力で BLOCKED 記録が出せない」= 停止規則の穴になる。
+    本 helper を通す形に S3.5 の JSON 読み込みを**全数**揃えてある。
+    """
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise S35Stop(reason=f"{what}が JSON として読めない: {exc}",
+                      required_action=required_action) from exc
+    if not isinstance(data, dict):
+        raise S35Stop(reason=f"{what}の根が object でない: {type(data).__name__}",
+                      required_action=required_action)
+    return data
+
+
 def load_s3_results() -> Tuple[Dict[str, Any], str]:
     if not S3_RESULTS.exists():
         raise S35Stop(reason=f"S3 正本が無い（{S3_RESULTS}）",
                       required_action="genome_s3 の s3_report.py を実行して正本を用意する")
     raw = S3_RESULTS.read_bytes()
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise S35Stop(reason=f"S3 正本が JSON として読めない: {exc}",
-                      required_action="s3_results.json の破損を確認する") from exc
+    data = json_object(raw, "S3 正本", "s3_results.json の破損を確認する")
     return data, sha256_bytes(raw)
 
 
@@ -460,8 +475,18 @@ def write_private_key(plans: Sequence[Dict[str, Any]], all_trials: Dict[int, Lis
     }
     raw = canonical_bytes(key)
     RESULTS.mkdir(parents=True, exist_ok=True)
-    PRIVATE_KEY.write_bytes(raw)
-    os.chmod(PRIVATE_KEY, 0o600)
+    # **原子的に置く。** 直接書くと、途中でディスク・権限・中断のどれかに当たった
+    # ときに**中途半端な key だけが残り**、次の正常な再実行が存在ガードで弾かれる。
+    # temp に書き切って 0600 を付けてから `os.replace` するので、key は
+    # 「完全な状態で在る」か「無い」かのどちらかにしかならない。
+    tmp = PRIVATE_KEY.with_suffix(PRIVATE_KEY.suffix + ".tmp")
+    try:
+        tmp.write_bytes(raw)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, PRIVATE_KEY)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return key, sha256_bytes(raw)
 
 
@@ -489,7 +514,8 @@ def load_manifest() -> Dict[str, Any]:
     if not BLIND_MANIFEST.exists():
         raise S35Stop(reason=f"blind manifest が無い（{BLIND_MANIFEST}）",
                       required_action="Stage 1 の準備を先に実行する")
-    return json.loads(BLIND_MANIFEST.read_text(encoding="utf-8"))
+    return json_object(BLIND_MANIFEST.read_bytes(), "blind manifest",
+                       "Stage 1 の成果物を復元する")
 
 
 def load_private_key() -> Tuple[Dict[str, Any], str]:
@@ -497,7 +523,8 @@ def load_private_key() -> Tuple[Dict[str, Any], str]:
         raise S35Stop(reason=f"private key が無い（{PRIVATE_KEY}）",
                       required_action="Stage 1 の成果物を復元する。再生成は blind の破壊")
     raw = PRIVATE_KEY.read_bytes()
-    return json.loads(raw.decode("utf-8")), sha256_bytes(raw)
+    return json_object(raw, "private key",
+                       "Stage 1 の成果物を復元する。再生成は blind の破壊"), sha256_bytes(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -527,20 +554,23 @@ def prepare_stage1(salt: Optional[bytes] = None) -> Dict[str, Any]:
                       required_action="候補 gene 数を確認する。上限は緩めない")
 
     resolved = verify_audio(res, needed_wavs(t1))
-    _key, commitment = write_private_key(usable, {sp.STAGE1: t1, sp.STAGE2: t2},
-                                         salt, s3_sha)
     holder: Dict[str, str] = {}
 
-    def _write_manifest(sha1: Dict[str, Dict[str, str]]) -> None:
-        holder["sha"] = write_blind_manifest({sp.STAGE1: t1}, {sp.STAGE1: sha1},
-                                             s3_sha, commitment)
-
-    # **private key も Stage 1 トランザクションの一部。** `publish_stage` が落ちると
-    # pack は巻き戻るのに key だけ残り、再実行は必ず「既に存在する」ガードで止まる。
-    # 一度も出題していない session が、security-sensitive な状態を手で消さないと
-    # 回復できなくなる（しかもその手順は blind 破壊と同じ操作になる）。
+    # **private key も Stage 1 トランザクションの一部。** key だけ残ると再実行は必ず
+    # 「既に存在する」ガードで止まり、一度も出題していない session が
+    # security-sensitive な状態を手で消さないと回復できなくなる（しかもその手順は
+    # blind 破壊と同じ操作なので、復旧手順として常用させたくない）。
     # 直前に非存在を確認しているので、失敗時の削除は呼び出し前の状態への復元。
+    # key の**書き込み自体**も try の内側に入れる（`write_private_key` は原子的だが、
+    # 巻き戻し範囲を呼び出し順に依存させない）。
     try:
+        _key, commitment = write_private_key(usable, {sp.STAGE1: t1, sp.STAGE2: t2},
+                                             salt, s3_sha)
+
+        def _write_manifest(sha1: Dict[str, Dict[str, str]]) -> None:
+            holder["sha"] = write_blind_manifest({sp.STAGE1: t1}, {sp.STAGE1: sha1},
+                                                 s3_sha, commitment)
+
         publish_stage(sp.STAGE1, t1, resolved, _write_manifest)
     except BaseException:
         PRIVATE_KEY.unlink(missing_ok=True)
