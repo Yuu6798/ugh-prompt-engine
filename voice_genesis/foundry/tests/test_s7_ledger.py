@@ -453,8 +453,10 @@ def test_constant_r_ratio_is_detected_and_provenance_is_recorded(tmp_path: Path)
     inp = _pinned_input("user", "real_song", path)
     inp.r_ratio_provenance = {"r_ratio_source": "imputed_fixed_allocation"}
     section = L.build_speaker_section(inp)
-    assert section["constant_r_ratio_detected"]["detected"] is True
-    assert section["constant_r_ratio_detected"]["value"] == pytest.approx(0.3)
+    assert section["constant_r_ratio_detected"]["all_events"]["detected"] is True
+    assert section["constant_r_ratio_detected"]["all_events"]["value"] == pytest.approx(0.3)
+    # baseline_r_ratio が取られる主層だけの検出も別に出る
+    assert section["constant_r_ratio_detected"]["primary_stratum_events"]["detected"] is True
     assert section["r_ratio_provenance"]["r_ratio_source"] == "imputed_fixed_allocation"
 
 
@@ -470,3 +472,23 @@ def test_canonical_pin_records_r_ratio_provenance_for_every_speaker():
     assert doc["speakers"]["user"]["r_ratio_provenance"]["r_ratio_source"] == (
         "imputed_fixed_allocation"
     )
+
+
+def test_h_ttd_support_audit_ignores_the_prereg_classification():
+    """標本の不足と分類の不足を混同しない（構造監査は分類を参照しない）。"""
+    speakers = {
+        "pjs": _section("real_song", {"d3": {"count": 1, "eligible": 9}}),
+        "user": _section("real_song", {"d3": {"count": 0, "eligible": 1}}),
+    }
+    audit = L.support_audit(speakers)
+    assert audit["any_stratum_can_support_a_pair"] is False
+    assert audit["per_stratum"]["mid/d3"]["eligible_by_speaker"] == {"pjs": 9, "user": 1}
+    # 分類を一切渡さなくても NOT_EVALUABLE で閉じる（分類待ちの undetermined にしない）
+    v = L.httd_verdict(speakers, breaking=[], non_breaking=[])
+    assert v["overall"] == sp.NOT_EVALUABLE_INSUFFICIENT_SUPPORT
+
+    rich = {
+        "pjs": _section("real_song", {"d3": {"count": 5, "eligible": 40}}),
+        "user": _section("real_song", {"d3": {"count": 1, "eligible": 30}}),
+    }
+    assert L.support_audit(rich)["any_stratum_can_support_a_pair"] is True

@@ -24,7 +24,9 @@
   },
   "generated_by": "voice_genesis/foundry/run8/s7_ledger.py",
   "h_ttd": {
-    "overall": "undetermined",
+    "minimum_eligible_terminal_count": 20,
+    "overall": "NOT_EVALUABLE_INSUFFICIENT_SUPPORT",
+    "overall_note": "NOT_EVALUABLE_INSUFFICIENT_SUPPORT = 現在の corpus に裁定できるだけの標的イベントが存在しなかった、という結果。**TTD 仮説の反証ではない**。閾値 20 を下げない / d3・d4 を合算しない / pitch 層を潰して水増ししない（User 裁定 2026-08-21）",
     "per_stratum": {
       "high/d3": {
         "ratio": null,
@@ -134,13 +136,80 @@
     },
     "refuted_strata": 0,
     "scored_strata": 0,
+    "support_audit": {
+      "any_stratum_can_support_a_pair": false,
+      "minimum_eligible_terminal_count": 20,
+      "note": "事前登録分類を参照せずに corpus の構造だけを見る監査。any_stratum_can_support_a_pair = false なら、分類が付いても H-TTD は裁定できない（= 標本の問題であって分類の問題ではない）",
+      "per_stratum": {
+        "high/d3": {
+          "can_support_a_same_modality_pair": false,
+          "eligible_by_speaker": {
+            "amitaro": 0,
+            "pjs": 14,
+            "ritsu": 0,
+            "user": 1
+          },
+          "speakers_meeting_minimum_by_modality": {}
+        },
+        "high/d4": {
+          "can_support_a_same_modality_pair": false,
+          "eligible_by_speaker": {
+            "amitaro": 0,
+            "pjs": 3,
+            "ritsu": 0,
+            "user": 5
+          },
+          "speakers_meeting_minimum_by_modality": {}
+        },
+        "low/d3": {
+          "can_support_a_same_modality_pair": false,
+          "eligible_by_speaker": {
+            "amitaro": 0,
+            "pjs": 9,
+            "ritsu": 0,
+            "user": 1
+          },
+          "speakers_meeting_minimum_by_modality": {}
+        },
+        "low/d4": {
+          "can_support_a_same_modality_pair": false,
+          "eligible_by_speaker": {
+            "amitaro": 0,
+            "pjs": 0,
+            "ritsu": 0,
+            "user": 0
+          },
+          "speakers_meeting_minimum_by_modality": {}
+        },
+        "mid/d3": {
+          "can_support_a_same_modality_pair": false,
+          "eligible_by_speaker": {
+            "amitaro": 0,
+            "pjs": 8,
+            "ritsu": 0,
+            "user": 0
+          },
+          "speakers_meeting_minimum_by_modality": {}
+        },
+        "mid/d4": {
+          "can_support_a_same_modality_pair": false,
+          "eligible_by_speaker": {
+            "amitaro": 0,
+            "pjs": 1,
+            "ritsu": 0,
+            "user": 0
+          },
+          "speakers_meeting_minimum_by_modality": {}
+        }
+      }
+    },
     "supported_strata": 0
   },
   "inputs_pin": {
     "canonical_source": "run7/assembly_manifest.json",
     "canonical_source_sha256": "4e5614d5218657a8f5f6ca2827c52c929581416021f56c054dee754cef1ad99c",
     "path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/results_s7/s7_ledger_inputs.json",
-    "sha256": "4dca5212c15e69e1ca3d5ec38801f767c1e428c381b77fe2a537a6c1ab0b5ffc"
+    "sha256": "4313420656858949ae9103ff898fe87f22487f0f175a72c38fa8fd69c62de158"
   },
   "midi_json": null,
   "prereg_speaker_classification": {
@@ -167,7 +236,211 @@
   },
   "schema": "target_exposure_ledger/0.1",
   "speakers": {
+    "amitaro": {
+      "constant_r_ratio_detected": {
+        "all_events": {
+          "detected": false,
+          "n_distinct": 2,
+          "n_events": 426
+        },
+        "note": "primary_stratum_events = utterance_final × ri_to_SP のみ。baseline_r_ratio はここから取られるので、定率配分（imputed_fixed_allocation）が実測値のように見える経路はこの行で検出する",
+        "primary_stratum_events": {
+          "detected": true,
+          "n_events": 2,
+          "value": 0.3
+        }
+      },
+      "denominator": {
+        "speech|internal|high|d0": {
+          "eligible_terminal_count": 62,
+          "eligible_terminal_seconds": 8.536881
+        },
+        "speech|internal|low|d0": {
+          "eligible_terminal_count": 41,
+          "eligible_terminal_seconds": 6.150946
+        },
+        "speech|internal|mid|d0": {
+          "eligible_terminal_count": 24,
+          "eligible_terminal_seconds": 3.215211
+        },
+        "speech|utterance_final|high|d0": {
+          "eligible_terminal_count": 186,
+          "eligible_terminal_seconds": 25.184255
+        },
+        "speech|utterance_final|low|d0": {
+          "eligible_terminal_count": 66,
+          "eligible_terminal_seconds": 8.77641
+        },
+        "speech|utterance_final|mid|d0": {
+          "eligible_terminal_count": 47,
+          "eligible_terminal_seconds": 6.404028
+        }
+      },
+      "local_real_singing_seconds": null,
+      "local_real_singing_seconds_note": "modality == real_song のときのみ値を持つ。それ以外は null （この話者の modality = speech）",
+      "modality": "speech",
+      "note_duration_bin": null,
+      "note_duration_bin_reason": "1 | 2 | 4 beats の参考値は tempo を要するため本台帳では算出しない（§3 で参考値・単独では判定に使わないと事前登録されている）",
+      "pitch_bin_assignment": {
+        "cut_points_midi": [
+          63.0,
+          64.0
+        ],
+        "method": "speaker-internal tertiles (linear percentile)",
+        "unknown_events": 0
+      },
+      "r_ratio_provenance": {
+        "corrected_on": "2026-08-21",
+        "note": "convert_amitaro は convert_user を import して同じ子音定率（CONSONANT_FRACTION = 0.3）で配分する。**2026-08-21 の台帳実測で確認**: 主層イベント 2 件とも r_ratio = 0.3 ちょうど（constant_r_ratio_detected.primary_stratum_events.detected = true）。当初 converter_defined と書いたのを実測に基づき訂正する",
+        "r_ratio_source": "imputed_fixed_allocation"
+      },
+      "ri_medial_count": 63,
+      "row_count": 299,
+      "silence_token_counts": {
+        "SP": 426
+      },
+      "silence_token_note": "終端イベントを取った無音トークンの内訳。AP（breath）も終端として数えるが、AP 由来だけを後から分離できるよう内訳を残す（遷移名は *_to_SP のまま）",
+      "source_csv": "/home/user/s7work/out/amitaro_db/transcriptions.csv",
+      "source_csv_bytes": 308621,
+      "source_csv_pin_source": "results_s7/s7_ledger_inputs.json（canonical = run7/assembly_manifest.json）",
+      "source_csv_pin_verified": true,
+      "source_csv_sha256": "08d67e817110bf965254b48ffe72b787bddfd58ad7ec53d06bd74c081ed3e366",
+      "speaker": "amitaro",
+      "stratum_key_order": [
+        "modality",
+        "position",
+        "pitch_bin",
+        "preceding_duration_bin"
+      ],
+      "terminal_events": {
+        "speech|internal|high|d0": {
+          "N_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.137931
+          },
+          "other_to_SP": {
+            "count": 60,
+            "duration_seconds": 8.273368
+          },
+          "su_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.125581
+          }
+        },
+        "speech|internal|low|d0": {
+          "N_to_SP": {
+            "count": 2,
+            "duration_seconds": 0.273333
+          },
+          "i_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.122963
+          },
+          "other_to_SP": {
+            "count": 38,
+            "duration_seconds": 5.75465
+          }
+        },
+        "speech|internal|mid|d0": {
+          "other_to_SP": {
+            "count": 24,
+            "duration_seconds": 3.215211
+          }
+        },
+        "speech|utterance_final|high|d0": {
+          "N_to_SP": {
+            "count": 4,
+            "duration_seconds": 0.531639
+          },
+          "i_to_SP": {
+            "count": 14,
+            "duration_seconds": 1.720218
+          },
+          "other_to_SP": {
+            "count": 138,
+            "duration_seconds": 19.118098
+          },
+          "ri_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.130667,
+            "events": [
+              {
+                "event_id": "amitaro/recitation200/28",
+                "onset_phone_seconds": 0.0392,
+                "r_ratio": 0.3,
+                "silence_token": "SP",
+                "vowel_phone_seconds": 0.091467
+              }
+            ]
+          },
+          "su_to_SP": {
+            "count": 29,
+            "duration_seconds": 3.683633
+          }
+        },
+        "speech|utterance_final|low|d0": {
+          "i_to_SP": {
+            "count": 7,
+            "duration_seconds": 0.868776
+          },
+          "other_to_SP": {
+            "count": 49,
+            "duration_seconds": 6.612505
+          },
+          "ri_to_SP": {
+            "count": 1,
+            "duration_seconds": 0.118333,
+            "events": [
+              {
+                "event_id": "amitaro/recitation115/37",
+                "onset_phone_seconds": 0.0355,
+                "r_ratio": 0.3,
+                "silence_token": "SP",
+                "vowel_phone_seconds": 0.082833
+              }
+            ]
+          },
+          "su_to_SP": {
+            "count": 9,
+            "duration_seconds": 1.176796
+          }
+        },
+        "speech|utterance_final|mid|d0": {
+          "N_to_SP": {
+            "count": 2,
+            "duration_seconds": 0.278333
+          },
+          "i_to_SP": {
+            "count": 2,
+            "duration_seconds": 0.240224
+          },
+          "other_to_SP": {
+            "count": 37,
+            "duration_seconds": 5.138334
+          },
+          "su_to_SP": {
+            "count": 6,
+            "duration_seconds": 0.747137
+          }
+        }
+      },
+      "voiced_non_SP_AP_seconds": 864.9,
+      "voiced_non_SP_AP_seconds_note": "SP と AP の**両方**を除いた ph_dur 合計（modality を問わない）。run7 assembly_manifest の per_speaker_voiced_seconds は **SP のみ除外**（= AP を含む `non_SP_ph_dur_seconds`）で、pjs で 49.959 s 差が出る。同じ『voiced』という語が別の量を指すため、名前で分離する（User 裁定 2026-08-21・過去 manifest は遡及修正しない）"
+    },
     "pjs": {
+      "constant_r_ratio_detected": {
+        "all_events": {
+          "detected": false,
+          "n_distinct": 214,
+          "n_events": 280
+        },
+        "note": "primary_stratum_events = utterance_final × ri_to_SP のみ。baseline_r_ratio はここから取られるので、定率配分（imputed_fixed_allocation）が実測値のように見える経路はこの行で検出する",
+        "primary_stratum_events": {
+          "detected": false,
+          "n_distinct": 2,
+          "n_events": 2
+        }
+      },
       "denominator": {
         "real_song|utterance_final|high|d0": {
           "eligible_terminal_count": 59,
@@ -228,8 +501,6 @@
       },
       "local_real_singing_seconds": 1137.24599,
       "local_real_singing_seconds_note": "modality == real_song のときのみ値を持つ。それ以外は null （この話者の modality = real_song）",
-      "local_voiced_seconds": 1137.24599,
-      "local_voiced_seconds_note": "transcriptions.csv の非 SP/AP トークンの ph_dur 合計（convert_ritsu の total_voiced_s と同じ数え方）。**modality を問わない**",
       "modality": "real_song",
       "note_duration_bin": null,
       "note_duration_bin_reason": "1 | 2 | 4 beats の参考値は tempo を要するため本台帳では算出しない（§3 で参考値・単独では判定に使わないと事前登録されている）",
@@ -240,6 +511,10 @@
         ],
         "method": "speaker-internal tertiles (linear percentile)",
         "unknown_events": 0
+      },
+      "r_ratio_provenance": {
+        "note": "nnsvs-db-converter の音素アラインメント由来（convert_pjs）。実音との対応がある",
+        "r_ratio_source": "alignment_derived"
       },
       "ri_medial_count": 47,
       "row_count": 287,
@@ -411,9 +686,24 @@
             "duration_seconds": 2.609
           }
         }
-      }
+      },
+      "voiced_non_SP_AP_seconds": 1137.24599,
+      "voiced_non_SP_AP_seconds_note": "SP と AP の**両方**を除いた ph_dur 合計（modality を問わない）。run7 assembly_manifest の per_speaker_voiced_seconds は **SP のみ除外**（= AP を含む `non_SP_ph_dur_seconds`）で、pjs で 49.959 s 差が出る。同じ『voiced』という語が別の量を指すため、名前で分離する（User 裁定 2026-08-21・過去 manifest は遡及修正しない）"
     },
     "ritsu": {
+      "constant_r_ratio_detected": {
+        "all_events": {
+          "detected": false,
+          "n_distinct": 442,
+          "n_events": 456
+        },
+        "note": "primary_stratum_events = utterance_final × ri_to_SP のみ。baseline_r_ratio はここから取られるので、定率配分（imputed_fixed_allocation）が実測値のように見える経路はこの行で検出する",
+        "primary_stratum_events": {
+          "detected": false,
+          "n_distinct": 2,
+          "n_events": 2
+        }
+      },
       "denominator": {
         "VCV|utterance_final|unknown|d1": {
           "eligible_terminal_count": 33,
@@ -430,8 +720,6 @@
       },
       "local_real_singing_seconds": null,
       "local_real_singing_seconds_note": "modality == real_song のときのみ値を持つ。それ以外は null （この話者の modality = VCV）",
-      "local_voiced_seconds": 2006.667563,
-      "local_voiced_seconds_note": "transcriptions.csv の非 SP/AP トークンの ph_dur 合計（convert_ritsu の total_voiced_s と同じ数え方）。**modality を問わない**",
       "modality": "VCV",
       "note_duration_bin": null,
       "note_duration_bin_reason": "1 | 2 | 4 beats の参考値は tempo を要するため本台帳では算出しない（§3 で参考値・単独では判定に使わないと事前登録されている）",
@@ -439,6 +727,10 @@
         "cut_points_midi": null,
         "reason": "insufficient_midi_values",
         "unknown_events": 456
+      },
+      "r_ratio_provenance": {
+        "note": "UTAU oto.ini の consonant 値から子音/母音境界を引く（convert_ritsu §境界導出規則 4）。素材固有の実測値",
+        "r_ratio_source": "oto_ini_consonant"
       },
       "ri_medial_count": 12,
       "row_count": 456,
@@ -519,9 +811,24 @@
             "duration_seconds": 3.486904
           }
         }
-      }
+      },
+      "voiced_non_SP_AP_seconds": 2006.667563,
+      "voiced_non_SP_AP_seconds_note": "SP と AP の**両方**を除いた ph_dur 合計（modality を問わない）。run7 assembly_manifest の per_speaker_voiced_seconds は **SP のみ除外**（= AP を含む `non_SP_ph_dur_seconds`）で、pjs で 49.959 s 差が出る。同じ『voiced』という語が別の量を指すため、名前で分離する（User 裁定 2026-08-21・過去 manifest は遡及修正しない）"
     },
     "user": {
+      "constant_r_ratio_detected": {
+        "all_events": {
+          "detected": false,
+          "n_distinct": 2,
+          "n_events": 53
+        },
+        "note": "primary_stratum_events = utterance_final × ri_to_SP のみ。baseline_r_ratio はここから取られるので、定率配分（imputed_fixed_allocation）が実測値のように見える経路はこの行で検出する",
+        "primary_stratum_events": {
+          "detected": true,
+          "n_events": 2,
+          "value": 0.3
+        }
+      },
       "denominator": {
         "real_song|internal|high|d0": {
           "eligible_terminal_count": 2,
@@ -614,8 +921,6 @@
       },
       "local_real_singing_seconds": 171.88,
       "local_real_singing_seconds_note": "modality == real_song のときのみ値を持つ。それ以外は null （この話者の modality = real_song）",
-      "local_voiced_seconds": 171.88,
-      "local_voiced_seconds_note": "transcriptions.csv の非 SP/AP トークンの ph_dur 合計（convert_ritsu の total_voiced_s と同じ数え方）。**modality を問わない**",
       "modality": "real_song",
       "note_duration_bin": null,
       "note_duration_bin_reason": "1 | 2 | 4 beats の参考値は tempo を要するため本台帳では算出しない（§3 で参考値・単独では判定に使わないと事前登録されている）",
@@ -626,6 +931,10 @@
         ],
         "method": "speaker-internal tertiles (linear percentile)",
         "unknown_events": 0
+      },
+      "r_ratio_provenance": {
+        "note": "convert_user の CONSONANT_FRACTION = 0.3 による**定率配分**。実音から測った子音比ではない（User 裁定 2026-08-21）。baseline_r_ratio として実測値のように扱わない",
+        "r_ratio_source": "imputed_fixed_allocation"
       },
       "ri_medial_count": 2,
       "row_count": 15,
@@ -824,7 +1133,9 @@
             "duration_seconds": 0.7
           }
         }
-      }
+      },
+      "voiced_non_SP_AP_seconds": 171.88,
+      "voiced_non_SP_AP_seconds_note": "SP と AP の**両方**を除いた ph_dur 合計（modality を問わない）。run7 assembly_manifest の per_speaker_voiced_seconds は **SP のみ除外**（= AP を含む `non_SP_ph_dur_seconds`）で、pjs で 49.959 s 差が出る。同じ『voiced』という語が別の量を指すため、名前で分離する（User 裁定 2026-08-21・過去 manifest は遡及修正しない）"
     }
   }
 }

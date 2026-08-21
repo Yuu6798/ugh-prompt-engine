@@ -128,8 +128,9 @@
       "transcriptions_csv_sha256": "08d67e817110bf965254b48ffe72b787bddfd58ad7ec53d06bd74c081ed3e366",
       "cross_check": "results_s3/run7_dataset_pins.json の amitaro.transcriptions_csv_sha256 と同値",
       "r_ratio_provenance": {
-        "r_ratio_source": "converter_defined",
-        "note": "convert_amitaro の配分規則に従う（実測 / 定率の別は台帳の constant_r_ratio_detected で機械判定する）"
+        "r_ratio_source": "imputed_fixed_allocation",
+        "note": "convert_amitaro は convert_user を import して同じ子音定率（CONSONANT_FRACTION = 0.3）で配分する。**2026-08-21 の台帳実測で確認**: 主層イベント 2 件とも r_ratio = 0.3 ちょうど（constant_r_ratio_detected.primary_stratum_events.detected = true）。当初 converter_defined と書いたのを実測に基づき訂正する",
+        "corrected_on": "2026-08-21"
       }
     }
   },
@@ -149,6 +150,17 @@
   "r_ratio_policy": {
     "authority": "User 裁定 2026-08-21 §6",
     "rule": "baseline_r_ratio の source を必ず明示する。imputed_fixed_allocation を『User が実際に歌った Duration 形質』として扱わない",
-    "machine_check": "台帳が話者ごとに constant_r_ratio_detected（全イベントの r_ratio が同一値か）を計算して記帳する"
+    "machine_check": "台帳が話者ごとに constant_r_ratio_detected（全イベントの r_ratio が同一値か）を計算して記帳する",
+    "measured_outcome_2026-08-21": {
+      "imputed_fixed_allocation": [
+        "user",
+        "amitaro"
+      ],
+      "measured_or_material_derived": {
+        "pjs": "alignment_derived",
+        "ritsu": "oto_ini_consonant"
+      },
+      "evidence": "target_exposure_ledger.json の constant_r_ratio_detected.primary_stratum_events（user / amitaro のみ detected=true, value=0.3）"
+    }
   }
 }

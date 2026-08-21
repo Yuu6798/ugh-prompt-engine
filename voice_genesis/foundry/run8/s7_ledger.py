@@ -387,12 +387,33 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
             e.midi = inp.midi_by_event.get(e.event_id, _midi_from_note_seq(row, e.phone_index))
             events.append(e)
     pitch_meta = assign_pitch_bins(events)
+    def _constant(rs: List[float]) -> Dict[str, Any]:
+        uniq = {round(r, 9) for r in rs}
+        return (
+            {"detected": True, "value": round(rs[0], 6), "n_events": len(rs)}
+            if rs and len(uniq) == 1
+            else {"detected": False, "n_events": len(rs), "n_distinct": len(uniq)}
+        )
+
     ratios = [e.r_ratio for e in events if e.r_ratio is not None]
-    constant_r_ratio = (
-        {"detected": True, "value": round(ratios[0], 6), "n_events": len(ratios)}
-        if ratios and len(set(round(r, 9) for r in ratios)) == 1
-        else {"detected": False, "n_events": len(ratios)}
-    )
+    # baseline_r_ratio が実際に取られるのは**主層**（utterance_final × ri_to_SP）なので、
+    # 全イベントの分布とは別に主層だけの定数検出も出す（User 裁定 §6）。
+    primary_ratios = [
+        e.r_ratio
+        for e in events
+        if e.r_ratio is not None
+        and e.position == sp.EVENT_DETAIL_REQUIRED_POSITION
+        and e.transition in sp.EVENT_DETAIL_REQUIRED_TRANSITIONS
+    ]
+    constant_r_ratio = {
+        "all_events": _constant(ratios),
+        "primary_stratum_events": _constant(primary_ratios),
+        "note": (
+            "primary_stratum_events = utterance_final × ri_to_SP のみ。"
+            "baseline_r_ratio はここから取られるので、定率配分（imputed_fixed_allocation）が"
+            "実測値のように見える経路はこの行で検出する"
+        ),
+    }
     silence_token_counts: Dict[str, int] = {}
     for e in events:
         silence_token_counts[e.silence_token] = silence_token_counts.get(e.silence_token, 0) + 1
@@ -670,6 +691,46 @@ def _compare_within_modality(
     }
 
 
+def support_audit(speakers: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """主層ごとに「同一 modality で `eligible >= 20` を満たす話者が 2 名以上いるか」を数える。
+
+    **事前登録分類（breaking / non_breaking）を一切参照しない**。分類が付いた場合でも
+    density 比を計算できる層が存在するかどうか、という corpus 側の構造だけを見る。
+    """
+    per_stratum: Dict[str, Any] = {}
+    any_ok = False
+    for dbin in sp.PRIMARY_DURATION_BINS:
+        for pbin in sp.PITCH_BINS:
+            by_modality: Dict[str, List[str]] = {}
+            eligible_by_speaker: Dict[str, int] = {}
+            for speaker, section in speakers.items():
+                key = "|".join((section["modality"], sp.PRIMARY_POSITION, pbin, dbin))
+                den = section["denominator"].get(key)
+                n = int(den["eligible_terminal_count"]) if den else 0
+                eligible_by_speaker[speaker] = n
+                if n >= sp.MIN_ELIGIBLE_TERMINAL_COUNT:
+                    by_modality.setdefault(section["modality"], []).append(speaker)
+            ok = any(len(v) >= 2 for v in by_modality.values())
+            any_ok = any_ok or ok
+            per_stratum[f"{pbin}/{dbin}"] = {
+                "eligible_by_speaker": eligible_by_speaker,
+                "speakers_meeting_minimum_by_modality": {
+                    m: sorted(v) for m, v in sorted(by_modality.items())
+                },
+                "can_support_a_same_modality_pair": ok,
+            }
+    return {
+        "minimum_eligible_terminal_count": sp.MIN_ELIGIBLE_TERMINAL_COUNT,
+        "per_stratum": per_stratum,
+        "any_stratum_can_support_a_pair": any_ok,
+        "note": (
+            "事前登録分類を参照せずに corpus の構造だけを見る監査。"
+            "any_stratum_can_support_a_pair = false なら、分類が付いても H-TTD は"
+            "裁定できない（= 標本の問題であって分類の問題ではない）"
+        ),
+    }
+
+
 def httd_verdict(
     speakers: Dict[str, Dict[str, Any]],
     breaking: Sequence[str],
@@ -709,18 +770,16 @@ def httd_verdict(
             per_stratum[label] = v
 
     scored = [v for v in per_stratum.values() if v["verdict"] != sp.Verdict.UNDETERMINED.value]
-    # 「標本不足で 1 層も裁定できなかった」を undetermined と同じ語で終わらせない
+    # 「標本不足で裁定できなかった」を undetermined と同じ語で終わらせない
     # （User 裁定 2026-08-21）。閾値を下げる / d3+d4 を合算する / pitch 層を潰す、
     # といった救済はしない。仮説が反証されたという意味でもない。
-    reasons = {v.get("reason") for v in per_stratum.values()}
-    insufficient_only = not scored and reasons <= {
-        "insufficient_sample",
-        "fewer_than_two_speakers_in_stratum",
-        "no_same_modality_comparison",
-        "insufficient_prereg_classification",
-        "all_zero_density",
-        None,
-    } and "insufficient_sample" in reasons
+    #
+    # ★ 判定は**事前登録分類に依らない構造**で行う: どの層にも「同一 modality で
+    #   eligible >= 20 を満たす話者が 2 名以上」存在しないなら、分類が付いても
+    #   付かなくても density 比は計算できない。分類の不足（no_same_modality_comparison）
+    #   と標本の不足を混同しないため、両方を support_audit に残す。
+    support = support_audit(speakers)
+    insufficient_only = not scored and not support["any_stratum_can_support_a_pair"]
     n_sup = sum(1 for v in scored if v["verdict"] == sp.Verdict.SUPPORTED.value)
     n_ref = sum(1 for v in scored if v["verdict"] == sp.Verdict.REFUTED.value)
     if len(scored) >= sp.MIN_SCORED_STRATA and n_sup >= sp.MAJORITY_FRACTION * len(scored) and n_ref == 0:
@@ -733,6 +792,7 @@ def httd_verdict(
         overall = sp.Verdict.UNDETERMINED.value
     return {
         "per_stratum": per_stratum,
+        "support_audit": support,
         "overall_note": (
             "NOT_EVALUABLE_INSUFFICIENT_SUPPORT = 現在の corpus に裁定できるだけの"
             "標的イベントが存在しなかった、という結果。**TTD 仮説の反証ではない**。"

@@ -1,7 +1,7 @@
 # target_exposure_ledger — primary stratum
 
 - primary stratum: `utterance_final` × `ri_to_SP` × ['d3', 'd4'] × ['low', 'mid', 'high']
-- overall H-TTD verdict: **undetermined** (scored 0 strata / supported 0 / refuted 0)
+- overall H-TTD verdict: **NOT_EVALUABLE_INSUFFICIENT_SUPPORT** (scored 0 strata / supported 0 / refuted 0)
 
 | stratum | speaker | modality | count | duration_s | eligible | density | verdict |
 |---|---|---|---|---|---|---|---|
@@ -17,8 +17,9 @@
 
 ## speakers
 
-| speaker | modality | rows | voiced_s | real_singing_s | ri_medial | pitch cut points (MIDI) | unknown pitch events | source sha256 |
-|---|---|---|---|---|---|---|---|---|
-| pjs | real_song | 287 | 1137.246 | 1137.246 | 47 | [54.0, 58.0] | 0 | 4e96a4f63d51 |
-| ritsu | VCV | 456 | 2006.668 | — | 12 | None | 456 | fb01a936fa24 |
-| user | real_song | 15 | 171.880 | 171.880 | 2 | [47.0, 51.0] | 0 | fc3a760c4c45 |
+| speaker | modality | rows | voiced(SP,AP除外)_s | real_singing_s | ri_medial | pitch cut points (MIDI) | unknown pitch | r_ratio source | source sha256 |
+|---|---|---|---|---|---|---|---|---|---|
+| amitaro | speech | 299 | 864.900 | — | 63 | [63.0, 64.0] | 0 | imputed_fixed_allocation | 08d67e817110 |
+| pjs | real_song | 287 | 1137.246 | 1137.246 | 47 | [54.0, 58.0] | 0 | alignment_derived | 4e96a4f63d51 |
+| ritsu | VCV | 456 | 2006.668 | — | 12 | None | 456 | oto_ini_consonant | fb01a936fa24 |
+| user | real_song | 15 | 171.880 | 171.880 | 2 | [47.0, 51.0] | 0 | imputed_fixed_allocation | fc3a760c4c45 |
