@@ -64,20 +64,46 @@ def check_complete(answers: Dict[str, str], trial_ids: List[str], stage: int) ->
 
 
 def verify_stage_audio(manifest: Dict[str, Any], stage: int) -> Tuple[bool, Dict[str, Any]]:
-    """配布した pack の WAV が manifest の SHA と一致することを確認する。"""
-    bad: List[str] = []
-    checked = 0
+    """配布した pack の WAV が manifest の SHA と一致することを確認する。
+
+    **被覆そのものを先に検査する。** `audio_sha256` が空だったり trial/slot を
+    取りこぼしていると、ループが 0 回または部分的に回っただけで "verified" に
+    なってしまう（WAV を全部消しても true が出る）。
+    """
     block = (manifest.get("stages") or {}).get(str(stage)) or {}
-    for tid, per in (block.get("audio_sha256") or {}).items():
+    trial_ids = list(block.get("trial_ids") or [])
+    table = block.get("audio_sha256") or {}
+    bad: List[str] = []
+
+    if not trial_ids:
+        return False, {"checked": 0, "problems": [f"stage {stage} に trial_ids が無い"],
+                       "problem_count": 1}
+    if set(table) != set(trial_ids):
+        missing = sorted(set(trial_ids) - set(table))
+        extra = sorted(set(table) - set(trial_ids))
+        return False, {"checked": 0,
+                       "problems": [f"audio_sha256 の被覆が trial_ids と一致しない "
+                                    f"(欠落 {missing[:3]} / 余分 {extra[:3]})"],
+                       "problem_count": 1}
+    for tid in trial_ids:
+        per = table.get(tid) or {}
+        if set(per) != {"A", "B", "X"}:
+            bad.append(f"{tid}: slot が A/B/X で揃っていない ({sorted(per)})")
+            continue
         for slot, want in per.items():
+            if not isinstance(want, str) or len(want) != 64:
+                bad.append(f"{tid}_{slot}: SHA の形式が不正")
+                continue
             p = prep.stage_audio_dir(stage) / f"{tid}_{slot}.wav"
             if not p.exists():
                 bad.append(f"{p.name} 欠落")
                 continue
-            checked += 1
             if prep.sha256_file(p) != want:
                 bad.append(f"{p.name} SHA 不一致")
-    return (not bad), {"checked": checked, "problems": bad[:5], "problem_count": len(bad)}
+    expected = len(trial_ids) * 3
+    checked = expected - len(bad)
+    return (not bad), {"checked": checked, "expected": expected,
+                       "problems": bad[:5], "problem_count": len(bad)}
 
 
 def score_stage(stage: int, path: Optional[Path] = None) -> Dict[str, Any]:
@@ -132,6 +158,54 @@ def write_key_reveal(key: Dict[str, Any], key_sha: str, commitment: str,
     return prep.sha256_file(path)
 
 
+def _assert_same_listener(s1: Dict[str, Any], s2: Optional[Dict[str, Any]]) -> None:
+    """Stage 間で聴取者が入れ替わっていないこと。
+
+    別人が 1 文脈ずつ正解して `PERCEPTIBLE_CANDIDATE` が立つと、記録は
+    `listener_count = 1` のまま「1 人が 2 文脈で識別した」と偽ることになる。
+    """
+    if s2 is None:
+        return
+    for field in ("listener_id", "session_id"):
+        if s1.get(field) != s2.get(field):
+            raise prep.S35Stop(
+                reason=f"Stage 間で {field} が違う: "
+                       f"stage1={s1.get(field)!r} / stage2={s2.get(field)!r}",
+                required_action="同一聴取者・同一 session の回答に揃える。"
+                                "別人が答えたなら session 全体を INVALID として"
+                                "新規 session でやり直す")
+
+
+def _assert_not_rescoring_after_reveal(answers_sha: Dict[int, str], key_sha: str) -> None:
+    """**正解が開示された後の採点し直しを拒否する。**
+
+    `key_reveal.json` は全問の正解を含む。これが既に存在する状態で回答を
+    書き換えて再採点できると、開示済みの session から `S4_NOT_READY` を
+    `S4_READY` へ作り替えられてしまう（commitment も audio も true のまま）。
+    同一の回答・同一の鍵での再実行だけは冪等な再描画として許す。
+    """
+    if not KEY_REVEAL.exists():
+        return
+    try:
+        prev = json.loads(KEY_REVEAL.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise prep.S35Stop(
+            reason=f"既存の key_reveal.json が読めない: {exc}",
+            required_action="開示済み成果物を復元するか、session 全体をやり直す") from exc
+    now = {str(k): v for k, v in sorted(answers_sha.items())}
+    was = prev.get("revealed_after_answers_sha256") or {}
+    if was != now:
+        raise prep.S35Stop(
+            reason="正解開示後に回答が変わっている（再採点は禁止）: "
+                   f"開示時 {was} -> 現在 {now}",
+            required_action="開示済み session の結果はそのまま残す。やり直すなら"
+                            "新規に事前登録した別 session として実施する")
+    if prev.get("key_sha256") not in (None, key_sha):
+        raise prep.S35Stop(
+            reason="正解開示後に private key が変わっている",
+            required_action="開示時の鍵を復元する。鍵の差し替えは blind の破壊")
+
+
 def finalize(stage1_path: Optional[Path] = None,
              stage2_path: Optional[Path] = None) -> Dict[str, Any]:
     """Stage 1 + Stage 2 を採点して gene verdict と S4 gate を出す。"""
@@ -150,6 +224,12 @@ def finalize(stage1_path: Optional[Path] = None,
         raise prep.S35Stop(
             reason=f"Stage 1 を通過した gene があるのに Stage 2 pack が無い: {advancing}",
             required_action="prepare_stage2() で Stage 2 を配布し、回答を得る")
+
+    answers_sha = {sp.STAGE1: s1["answers_sha256"]}
+    if s2:
+        answers_sha[sp.STAGE2] = s2["answers_sha256"]
+    _assert_same_listener(s1, s2)
+    _assert_not_rescoring_after_reveal(answers_sha, key_sha)
 
     plans = key.get("plans") or {}
     genes: Dict[str, Any] = {}
@@ -182,9 +262,6 @@ def finalize(stage1_path: Optional[Path] = None,
                        "not_evaluable_reason": plan.get("not_evaluable_reason"),
                        "contexts": []}
 
-    answers_sha = {sp.STAGE1: s1["answers_sha256"]}
-    if s2:
-        answers_sha[sp.STAGE2] = s2["answers_sha256"]
     reveal_sha = write_key_reveal(key, key_sha, commitment, answers_sha)
 
     candidates = sorted(g for g, v in genes.items()

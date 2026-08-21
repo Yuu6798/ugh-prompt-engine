@@ -641,3 +641,103 @@ def test_integration_real_s3_plan_is_deterministic() -> None:
             assert plan["stage2"]["pair_key"] in sup, g
             assert plan["stage1"]["pair_key"] != plan["stage2"]["pair_key"], g
             assert plan["stage1"]["probe_kind"] != plan["stage2"]["probe_kind"], g
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー（Codex）で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def test_rescoring_after_reveal_is_blocked(s35) -> None:
+    """正解開示後に回答を書き換えての再採点を拒否する。
+
+    これができると、開示済み session から S4_NOT_READY を S4_READY へ
+    作り替えられる（commitment も audio も true のまま）。
+    """
+    out, _doc = s35()
+    # まず 1 gene だけ正解 = S4_NOT_READY で確定・開示させる
+    res = _run_full(out, _only({"f0"}), _correct)
+    assert res["overall"]["verdict"] == "S4_NOT_READY"
+    assert (out / "key_reveal.json").exists()
+    before = (out / "key_reveal.json").read_bytes()
+
+    # 開示後に Stage 1 の回答を全問正解へ書き換える
+    _answer(out, 1, _correct)
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    d = exc.value.as_dict()
+    assert d["status"] == "BLOCKED"
+    assert "再採点は禁止" in d["reason"]
+    assert (out / "key_reveal.json").read_bytes() == before   # 開示物を上書きしない
+
+
+def test_identical_rerun_after_reveal_is_allowed(s35) -> None:
+    """同一回答・同一鍵での再実行は冪等な再描画として通す。"""
+    out, _doc = s35()
+    first = _run_full(out, _correct, _correct)
+    again = scoring.finalize()
+    assert again["overall"] == first["overall"]
+    assert again["answers_sha256"] == first["answers_sha256"]
+
+
+def test_tampered_key_after_reveal_is_blocked(s35) -> None:
+    out, _doc = s35()
+    _run_full(out, _correct, _correct)
+    kp = out / "answer_key.private.json"
+    key = json.loads(kp.read_text(encoding="utf-8"))
+    tid = sorted(key["trials"])[0]
+    key["trials"][tid]["correct"] = "B" if key["trials"][tid]["correct"] == "A" else "A"
+    kp.write_bytes(prep.canonical_bytes(key))
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    assert "private key が変わっている" in exc.value.as_dict()["reason"]
+
+
+def test_empty_or_partial_audio_manifest_is_not_verified(s35) -> None:
+    """被覆が欠けた manifest を "verified" にしない（WAV 全消しでも true が出た）。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    mp = out / "blind_manifest.json"
+    full = json.loads(mp.read_text(encoding="utf-8"))
+    assert scoring.verify_stage_audio(full, 1)[0] is True
+
+    # (a) audio_sha256 を空にして WAV も全消し
+    empty = json.loads(json.dumps(full))
+    empty["stages"]["1"]["audio_sha256"] = {}
+    for w in (out / "stage1" / "audio").glob("*.wav"):
+        w.unlink()
+    ok, detail = scoring.verify_stage_audio(empty, 1)
+    assert ok is False
+    assert "被覆" in detail["problems"][0]
+
+    # (b) trial を 1 つ落とす
+    partial = json.loads(json.dumps(full))
+    partial["stages"]["1"]["audio_sha256"].pop(full["stages"]["1"]["trial_ids"][0])
+    assert scoring.verify_stage_audio(partial, 1)[0] is False
+
+    # (c) slot を 1 つ落とす
+    slot = json.loads(json.dumps(full))
+    slot["stages"]["1"]["audio_sha256"][full["stages"]["1"]["trial_ids"][0]].pop("X")
+    assert scoring.verify_stage_audio(slot, 1)[0] is False
+
+    # (d) trial_ids ごと空
+    none = json.loads(json.dumps(full))
+    none["stages"]["1"] = {"trial_ids": [], "audio_sha256": {}}
+    assert scoring.verify_stage_audio(none, 1)[0] is False
+
+
+def test_mixed_listener_across_stages_is_blocked(s35) -> None:
+    """別人が 1 文脈ずつ答えて PERCEPTIBLE_CANDIDATE を作れないこと。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.prepare_stage2(scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1)))
+    p2 = _answer(out, 2, _correct)
+
+    clean = p2.read_text(encoding="utf-8")
+    for field, value in (("listener_id", "listener-02"), ("session_id", "s2")):
+        d = json.loads(clean)          # 毎回きれいな状態から 1 項目だけ壊す
+        d[field] = value
+        p2.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        with pytest.raises(prep.S35Stop) as exc:
+            scoring.finalize()
+        assert field in exc.value.as_dict()["reason"]
+        assert not (out / "key_reveal.json").exists()   # 開示まで進まない
