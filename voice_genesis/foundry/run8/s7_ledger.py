@@ -105,6 +105,7 @@ class TerminalEvent:
     onset_phone_seconds: float
     vowel_phone_seconds: float
     preceding_duration_seconds: float
+    silence_token: str = "SP"     # 実際にその位置にあった無音トークン（SP | AP）
     midi: Optional[float] = None
     pitch_bin: str = sp.PITCH_BIN_UNKNOWN
 
@@ -143,6 +144,10 @@ def extract_terminal_events(speaker: str, row: Row) -> List[TerminalEvent]:
 
     - `position` = `utterance_final`（当該 SP 以降が全て無音トークン）/ `internal`
     - 終端モーラ = 直前が母音なら (子音?, 母音)、`N` なら単独
+    - **`AP`（pjs の breath トークン）も終端として数える**。フレーズ末の息継ぎは
+      「語尾 → 無音」の実例であり、除くと pjs 側の終端が構造的に過少になる。
+      ただし遷移名は `*_to_SP` のままなので、**どちらの無音トークンだったかを
+      `silence_token` に残す**（後から AP 由来だけを分離できるようにする）。
     """
     events: List[TerminalEvent] = []
     n = len(row.ph_seq)
@@ -184,6 +189,7 @@ def extract_terminal_events(speaker: str, row: Row) -> List[TerminalEvent]:
                 onset_phone_seconds=onset_sec,
                 vowel_phone_seconds=vowel_sec,
                 preceding_duration_seconds=onset_sec + vowel_sec,
+                silence_token=tok,
             )
         )
     return events
@@ -321,6 +327,9 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
             e.midi = inp.midi_by_event.get(e.event_id, _midi_from_note_seq(row, e.phone_index))
             events.append(e)
     pitch_meta = assign_pitch_bins(events)
+    silence_token_counts: Dict[str, int] = {}
+    for e in events:
+        silence_token_counts[e.silence_token] = silence_token_counts.get(e.silence_token, 0) + 1
 
     terminal_events: Dict[str, Dict[str, Any]] = {}
     denominator: Dict[str, Dict[str, float]] = {}
@@ -347,6 +356,7 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
                     "onset_phone_seconds": round(e.onset_phone_seconds, 6),
                     "vowel_phone_seconds": round(e.vowel_phone_seconds, 6),
                     "r_ratio": (round(e.r_ratio, 6) if e.r_ratio is not None else None),
+                    "silence_token": e.silence_token,
                 }
             )
     for k in terminal_events:
@@ -371,6 +381,11 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
         "terminal_events": terminal_events,
         "denominator": denominator,
         "pitch_bin_assignment": pitch_meta,
+        "silence_token_counts": silence_token_counts,
+        "silence_token_note": (
+            "終端イベントを取った無音トークンの内訳。AP（breath）も終端として数えるが、"
+            "AP 由来だけを後から分離できるよう内訳を残す（遷移名は *_to_SP のまま）"
+        ),
         "ri_medial_count": ri_medial,
         "note_duration_bin": None,
         "note_duration_bin_reason": (

@@ -202,3 +202,25 @@ def test_unclassified_speakers_never_produce_a_verdict():
     }
     v = L.httd_verdict(speakers, breaking=[], non_breaking=["pjs"])["per_stratum"]["mid/d3"]
     assert v["verdict"] == sp.Verdict.UNDETERMINED.value
+
+
+def test_breath_token_counts_as_terminal_but_stays_separable(tmp_path: Path):
+    """`AP`（breath）も終端として数えるが、内訳で分離できることを固定する。"""
+    path = _write_csv(
+        tmp_path,
+        "pjs",
+        [
+            "p1,SP h i k a r i AP k a SP,0.1 0.2 0.2 0.2 0.2 0.3 1.6 0.2 0.2 0.2 0.2",
+            "p2,SP h i k a r i SP,0.1 0.2 0.2 0.2 0.2 0.3 1.7 0.2",
+        ],
+        HEADER_MIN,
+    )
+    section = L.build_speaker_section(L.SpeakerInput("pjs", "real_song", path))
+    assert section["silence_token_counts"] == {"AP": 1, "SP": 2}
+    tokens = {
+        event["silence_token"]
+        for transitions in section["terminal_events"].values()
+        for cell in transitions.values()
+        for event in cell.get("events", [])
+    }
+    assert tokens == {"SP"}      # AP 直前の /ri/ は internal なので主層に入らない
