@@ -1414,6 +1414,31 @@ def test_38f2_mechanistic_binding_survives_the_first_phase_c_write():
 
 
 @requires_world
+def test_38f3_producer_and_verifier_use_the_same_digest_function():
+    """pack を作る側と検証する側が **同じ payload と符号化**を hash すること。
+
+    第 12 巡で verifier を `mechanistic_digest()` へ変えたとき、producer 側が
+    `sha256(_dumps(res))` のまま残り、新規 pack の初回 Phase C が必ず落ちる状態に
+    なっていた（第 13 巡で指摘）。source 検査と実際の往復の両方で固定する。
+    """
+    import inspect
+    src = inspect.getsource(srep._stage_ear_pack)
+    assert "mechanistic_digest=mechanistic_digest(res)" in src
+    assert "_dumps(res)" not in src          # 旧式の残骸を許さない
+
+    # 往復: producer が入れた digest を verifier が受け入れる
+    res = {"schema": "voicegenesis-genome-s4/1.0",
+           "mechanistic": {"verdict": "PASS"},
+           "material_provenance": {"relocated": False}}
+    trials, selected = _trials()
+    key, _raw = sb.build_private_key(
+        trials, b"\x01" * 32, _S3SHA, _S35SHA, selected,
+        audio_sha256={t["trial_id"]: {"x.wav": "d" * 64} for t in trials},
+        mechanistic_digest=srep.mechanistic_digest(res))
+    srep._assert_mechanistic_binding(key, srep._dumps(res).encode("utf-8"))
+
+
+@requires_world
 def test_38k_canonical_is_validated_before_wav_publication():
     """公開後に raise すると巻き戻せない。検査は publish_wav の前に置く。"""
     import inspect

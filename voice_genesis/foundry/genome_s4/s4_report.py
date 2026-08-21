@@ -490,7 +490,7 @@ def _stage_ear_pack(meta: Dict[str, Any], runs: Sequence[sr.PairRun],
     # 機械 PASS と別 pack の回答を組み合わせて公開できる。
     _key, key_raw = sb.build_private_key(
         trials, salt, meta["s3_results_sha256"], meta["s35_results_sha256"], selected,
-        audio_sha256=audio_sha, mechanistic_digest=sb.sha256_bytes(_dumps(res).encode("utf-8")))
+        audio_sha256=audio_sha, mechanistic_digest=mechanistic_digest(res))
     # private key も **同じ transaction** で置く。先に書くと、後段が失敗したとき
     # 「新しい key + 古い manifest」が残り commitment 検証が通らなくなる。
     commitment = sb.sha256_bytes(key_raw)
