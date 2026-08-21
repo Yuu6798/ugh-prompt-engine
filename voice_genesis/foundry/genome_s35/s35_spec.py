@@ -134,12 +134,15 @@ def gene_verdict(stage1_correct: Optional[bool], stage2_correct: Optional[bool],
     """
     if not commitment_verified or not audio_verified:
         return GeneVerdict.INVALID
+    # **構造的な評価不能を Stage 1 の正誤より先に見る。** 別 context が無い gene は
+    # 第 1 問の答えに関係なく `NOT_EVALUABLE_S35`。後ろに置くと、同じ構造的欠落が
+    # 「たまたま当てたか外したか」で別の verdict に化ける。
+    if not has_stage2_pair:
+        return GeneVerdict.NOT_EVALUABLE_S35
     if stage1_correct is None:
         return GeneVerdict.INVALID          # Stage 1 の回答が無い
     if not stage1_correct:
         return GeneVerdict.NOT_ESTABLISHED  # Stage 2 へ進まない
-    if not has_stage2_pair:
-        return GeneVerdict.NOT_EVALUABLE_S35
     if stage2_correct is None:
         return GeneVerdict.INVALID          # 進んだのに回答が無い
     return (GeneVerdict.PERCEPTIBLE_CANDIDATE if stage2_correct

@@ -34,7 +34,9 @@
       "stage1_answer": "A",
       "stage2_answer": null,
       "stage1_pair": "terminal_N|BRD#664|pjs017#27",
-      "stage2_pair": null,
+      "stage2_presented_pair": null,
+      "stage2_committed_pair": "terminal_i|1st_color#218|pjs001#73",
+      "stage2_presented": false,
       "contexts": [
         "terminal_N"
       ],
@@ -48,7 +50,9 @@
       "stage1_answer": "B",
       "stage2_answer": "A",
       "stage1_pair": "terminal_i|1st_color#218|pjs001#73",
-      "stage2_pair": "terminal_ri|2018#215|pjs003#65",
+      "stage2_presented_pair": "terminal_ri|2018#215|pjs003#65",
+      "stage2_committed_pair": "terminal_ri|2018#215|pjs003#65",
+      "stage2_presented": true,
       "contexts": [
         "terminal_i",
         "terminal_ri"
@@ -63,7 +67,9 @@
       "stage1_answer": "B",
       "stage2_answer": null,
       "stage1_pair": "terminal_ri|2018#598|pjs065#29",
-      "stage2_pair": null,
+      "stage2_presented_pair": null,
+      "stage2_committed_pair": "medial_ri|1st_color#357|pjs002#54",
+      "stage2_presented": false,
       "contexts": [
         "terminal_ri"
       ],
@@ -77,7 +83,9 @@
       "stage1_answer": "A",
       "stage2_answer": "B",
       "stage1_pair": "terminal_i|1st_color#218|pjs001#73",
-      "stage2_pair": "terminal_ri|2018#598|pjs065#29",
+      "stage2_presented_pair": "terminal_ri|2018#598|pjs065#29",
+      "stage2_committed_pair": "terminal_ri|2018#598|pjs065#29",
+      "stage2_presented": true,
       "contexts": [
         "terminal_i",
         "terminal_ri"

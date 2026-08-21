@@ -36,22 +36,22 @@
 ### release
 
 - Stage 1: `terminal_N|BRD#664|pjs017#27`
-- Stage 2: `—`
+- Stage 2（事前 commit 済み・**出題せず**）: `terminal_i|1st_color#218|pjs001#73`
 
 ### f0
 
 - Stage 1: `terminal_i|1st_color#218|pjs001#73`
-- Stage 2: `terminal_ri|2018#215|pjs003#65`
+- Stage 2（出題）: `terminal_ri|2018#215|pjs003#65`
 
 ### energy
 
 - Stage 1: `terminal_ri|2018#598|pjs065#29`
-- Stage 2: `—`
+- Stage 2（事前 commit 済み・**出題せず**）: `medial_ri|1st_color#357|pjs002#54`
 
 ### duration
 
 - Stage 1: `terminal_i|1st_color#218|pjs001#73`
-- Stage 2: `terminal_ri|2018#598|pjs065#29`
+- Stage 2（出題）: `terminal_ri|2018#598|pjs065#29`
 
 ## S4 へ渡すもの
 

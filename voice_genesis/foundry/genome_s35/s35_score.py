@@ -44,6 +44,14 @@ def load_answers(stage: int, path: Optional[Path] = None) -> Tuple[Dict[str, Any
         raise prep.S35Stop(reason=f"回答ファイルの stage が違う: {data.get('stage')!r} "
                                   f"(期待 {stage})",
                            required_action="stage を合わせる")
+    # 誰が聴いたか記録に無い session を canonical にしない。`None == None` を
+    # 素通りさせると、匿名の回答が `listener_count = 1` を名乗れてしまう。
+    for field in ("listener_id", "session_id"):
+        v = data.get(field)
+        if not isinstance(v, str) or not v.strip():
+            raise prep.S35Stop(
+                reason=f"Stage {stage} の {field} が空または欠落: {v!r}",
+                required_action="回答ファイルに listener_id / session_id を書く")
     return data, prep.sha256_bytes(raw)
 
 
@@ -163,6 +171,7 @@ def _assert_same_listener(s1: Dict[str, Any], s2: Optional[Dict[str, Any]]) -> N
 
     別人が 1 文脈ずつ正解して `PERCEPTIBLE_CANDIDATE` が立つと、記録は
     `listener_count = 1` のまま「1 人が 2 文脈で識別した」と偽ることになる。
+    各 stage 単体の来歴（空・欠落）は `load_answers` が先に弾く。
     """
     if s2 is None:
         return
@@ -249,6 +258,11 @@ def finalize(stage1_path: Optional[Path] = None,
             "stage1": g1,
             "stage2": g2,
             "has_stage2_pair": has_s2_pair,
+            # 事前 commit 済みの Stage 2 pair。Stage 1 で落ちて**出題しなかった**
+            # gene でも key には入っているので、記録側でも残す
+            # （`has_stage2_pair: true` なのに pair が空だと記録が自己矛盾する）。
+            "stage2_committed": plan.get("stage2"),
+            "stage2_presented": g2 is not None,
             "not_evaluable_reason": plan.get("not_evaluable_reason"),
             "contexts": sorted({c for c in (g1["probe_kind"],
                                             (g2 or {}).get("probe_kind")) if c}),
@@ -259,6 +273,8 @@ def finalize(stage1_path: Optional[Path] = None,
             continue
         genes[gene] = {"verdict": sp.GeneVerdict.NOT_EVALUABLE_S35.value,
                        "stage1": None, "stage2": None, "has_stage2_pair": False,
+                       "stage2_committed": plan.get("stage2"),
+                       "stage2_presented": False,
                        "not_evaluable_reason": plan.get("not_evaluable_reason"),
                        "contexts": []}
 

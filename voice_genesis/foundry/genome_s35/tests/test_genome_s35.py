@@ -104,6 +104,7 @@ def s35(tmp_path: Path, monkeypatch):
         monkeypatch.setattr(report, "RESULTS", out)
         monkeypatch.setattr(report, "JSON_PATH", out / "s35_results.json")
         monkeypatch.setattr(report, "RECORD_PATH", out / "S3_5_RECORD.md")
+        monkeypatch.setattr(report, "LAST_ERROR", out / "last_error.json")
         return out, doc
     return _setup
 
@@ -299,7 +300,7 @@ def test_single_context_gene_is_not_evaluable(s35) -> None:
     (True, False, True, sp.GeneVerdict.NOT_ESTABLISHED),
     (False, None, True, sp.GeneVerdict.NOT_ESTABLISHED),
     (True, None, False, sp.GeneVerdict.NOT_EVALUABLE_S35),
-    (False, None, False, sp.GeneVerdict.NOT_ESTABLISHED),
+    (False, None, False, sp.GeneVerdict.NOT_EVALUABLE_S35),   # 構造的欠落が優先
 ])
 def test_gene_verdict_rules(s1, s2, has2, expected) -> None:
     assert sp.gene_verdict(s1, s2, has_stage2_pair=has2) is expected
@@ -741,3 +742,95 @@ def test_mixed_listener_across_stages_is_blocked(s35) -> None:
             scoring.finalize()
         assert field in exc.value.as_dict()["reason"]
         assert not (out / "key_reveal.json").exists()   # 開示まで進まない
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 2 巡
+# ---------------------------------------------------------------------------
+def test_blocked_rerun_does_not_destroy_finalized_record(s35) -> None:
+    """開示後の再採点ガードが発火しても、確定済みの記録を潰さない。
+
+    ガードが守ったはずの S4_READY 正本を、ガードの副作用で失わないこと。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.prepare_stage2(scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1)))
+    _answer(out, 2, _correct)
+    assert report.main() == 0
+    good_json = (out / "s35_results.json").read_bytes()
+    good_md = (out / "S3_5_RECORD.md").read_bytes()
+
+    # 開示後に回答を書き換えて再実行 → BLOCKED だが正本は残る
+    _answer(out, 1, _wrong)
+    assert report.main() == 3
+    assert (out / "s35_results.json").read_bytes() == good_json
+    assert (out / "S3_5_RECORD.md").read_bytes() == good_md
+    err = json.loads((out / "last_error.json").read_text(encoding="utf-8"))
+    assert err["status"] == "BLOCKED"
+    assert "再採点は禁止" in err["reason"]
+
+
+def test_blocked_first_run_still_publishes_blocked_bundle(s35) -> None:
+    """確定済み記録が無いときは従来どおり BLOCKED 文書を出す。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    assert report.main() == 3          # 回答がまだ無い
+    doc = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert doc["status"] == "BLOCKED"
+    assert not (out / "last_error.json").exists()
+
+
+def test_missing_stage2_context_dominates_stage1_answer() -> None:
+    """別 context が無い gene は、Stage 1 の正誤に関係なく NOT_EVALUABLE_S35。"""
+    for s1 in (True, False, None):
+        assert sp.gene_verdict(s1, None, has_stage2_pair=False) is \
+            sp.GeneVerdict.NOT_EVALUABLE_S35, s1
+
+
+def test_single_context_gene_is_not_evaluable_regardless_of_stage1(s35) -> None:
+    """実データ経路でも、Stage 1 を外した単一 context gene は NOT_EVALUABLE_S35。"""
+    out, _doc = s35(genes={"f0": ["terminal_ri"] * 4,
+                           "duration": CONTEXTS, "energy": CONTEXTS, "release": CONTEXTS})
+    res = _run_full(out, _wrong)       # f0 も含め全問不正解
+    assert res["genes"]["f0"]["verdict"] == sp.GeneVerdict.NOT_EVALUABLE_S35.value
+    for g in ("duration", "energy", "release"):
+        assert res["genes"][g]["verdict"] == sp.GeneVerdict.NOT_ESTABLISHED.value
+
+
+def test_committed_stage2_pair_is_recorded_even_when_not_presented(s35) -> None:
+    """出題しなかった Stage 2 pair も記録に残す（記録の自己矛盾を作らない）。"""
+    out, _doc = s35()
+    res = _run_full(out, _only({"f0", "duration"}), _correct)
+    assert report.main() == 0
+    doc = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    key = _key(out)
+    for gene, v in doc["genes"].items():
+        committed = key["plans"][gene]["stage2"]["pair_key"]
+        assert v["stage2_committed_pair"] == committed, gene
+        assert v["has_stage2_pair"] is True, gene
+        if gene in ("energy", "release"):
+            assert v["stage2_presented"] is False, gene
+            assert v["stage2_presented_pair"] is None, gene
+    md = (out / "S3_5_RECORD.md").read_text(encoding="utf-8")
+    assert "事前 commit 済み・**出題せず**" in md
+    assert res["overall"]["verdict"] == "S4_READY"
+
+
+@pytest.mark.parametrize("field", ["listener_id", "session_id"])
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_empty_listener_provenance_is_blocked(s35, field, value) -> None:
+    """誰が聴いたか記録に無い session を canonical にしない。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    p1 = _answer(out, 1, _correct)
+    d = json.loads(p1.read_text(encoding="utf-8"))
+    if value is None:
+        d.pop(field)
+    else:
+        d[field] = value
+    p1.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)     # 回答ファイルを読んだ時点で弾く
+    assert field in exc.value.as_dict()["reason"]
+    assert not (out / "key_reveal.json").exists()

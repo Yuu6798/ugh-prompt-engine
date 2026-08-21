@@ -10,6 +10,7 @@ raw WAV は commit しない。private key は commit しない。
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -26,6 +27,8 @@ import s35_spec as sp  # noqa: E402
 RESULTS = prep.RESULTS
 JSON_PATH = RESULTS / "s35_results.json"
 RECORD_PATH = RESULTS / "S3_5_RECORD.md"
+#: 確定済み記録を潰さずに停止理由を残す先。
+LAST_ERROR = RESULTS / "last_error.json"
 
 #: 別の問題を見つけても修正しない — 記録だけ残す。
 OUT_OF_SCOPE_OBSERVATIONS: Tuple[str, ...] = (
@@ -85,7 +88,10 @@ def build_results(scored: Dict[str, Any]) -> Dict[str, Any]:
             "stage1_answer": None if s1 is None else s1["answer"],
             "stage2_answer": None if s2 is None else s2["answer"],
             "stage1_pair": None if s1 is None else s1["pair_key"],
-            "stage2_pair": None if s2 is None else s2["pair_key"],
+            # 出題した pair と、事前 commit 済みだが出題しなかった pair を区別する
+            "stage2_presented_pair": None if s2 is None else s2["pair_key"],
+            "stage2_committed_pair": (v["stage2_committed"] or {}).get("pair_key"),
+            "stage2_presented": v["stage2_presented"],
             "contexts": v["contexts"],
             "has_stage2_pair": v["has_stage2_pair"],
             "not_evaluable_reason": v["not_evaluable_reason"],
@@ -167,7 +173,13 @@ def render_record(res: Dict[str, Any]) -> str:
         L.append(f"### {g}")
         L.append("")
         L.append(f"- Stage 1: `{v['stage1_pair'] or '—'}`")
-        L.append(f"- Stage 2: `{v['stage2_pair'] or '—'}`")
+        committed = v["stage2_committed_pair"]
+        if v["stage2_presented"]:
+            L.append(f"- Stage 2（出題）: `{v['stage2_presented_pair']}`")
+        elif committed:
+            L.append(f"- Stage 2（事前 commit 済み・**出題せず**）: `{committed}`")
+        else:
+            L.append("- Stage 2: — （別 context が無く選べなかった）")
         if v["not_evaluable_reason"]:
             L.append(f"- 備考: {v['not_evaluable_reason']}")
         L.append("")
@@ -205,10 +217,30 @@ def render_record(res: Dict[str, Any]) -> str:
     return "\n".join(L)
 
 
+def existing_finalized() -> bool:
+    """既に確定済みの記録（BLOCKED でない s35_results.json）があるか。"""
+    if not JSON_PATH.exists():
+        return False
+    try:
+        doc = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    return doc.get("status") != "BLOCKED" and "overall" in doc
+
+
 def main(stage1_path: Optional[Path] = None, stage2_path: Optional[Path] = None) -> int:
     RESULTS.mkdir(parents=True, exist_ok=True)
     scored, blocked = scoring.finalize_or_blocked(stage1_path, stage2_path)
     if blocked is not None:
+        # **確定済みの記録を BLOCKED 文書で潰さない。** 開示後の再採点ガードが
+        # 正しく発火しても、ここで上書きすると S4_READY の正本が消えてしまう
+        # （ガードが守ったはずのものを、ガードの副作用で失う）。
+        if existing_finalized():
+            LAST_ERROR.write_text(prep._dumps({"schema": sp.SCHEMA, **blocked}),
+                                  encoding="utf-8")
+            print("BLOCKED:", blocked["reason"])
+            print(f"確定済みの記録は保持した（詳細は {LAST_ERROR.name}）")
+            return 3
         publish_bundle((
             (JSON_PATH, prep._dumps({"schema": sp.SCHEMA, **blocked})),
             (RECORD_PATH,
@@ -223,6 +255,7 @@ def main(stage1_path: Optional[Path] = None, stage2_path: Optional[Path] = None)
     assert scored is not None
     res = build_results(scored)
     publish_bundle(((JSON_PATH, prep._dumps(res)), (RECORD_PATH, render_record(res))))
+    LAST_ERROR.unlink(missing_ok=True)      # 成功したら古いエラーを残さない
 
     ov = res["overall"]
     print(f"{'gene':11} {'stage1':9} {'stage2':9} verdict")
