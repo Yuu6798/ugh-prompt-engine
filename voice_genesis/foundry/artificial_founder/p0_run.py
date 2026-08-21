@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -56,6 +56,96 @@ DEFAULT_OUT = HERE / "results" / "AF0"
 
 def _log(phase: str, message: str) -> None:
     print(f"[{phase}] {message}", flush=True)
+
+
+#: 公開（旧 valid bundle の差し替え）を許す前提 Gate。§28「失敗時は旧 valid
+#: bundle を保持」を満たすため、Source-Free / spec / 決定論 / Body 構造の
+#: いずれかが落ちた候補で canonical 公開場所を上書きしない。
+PUBLICATION_PREREQUISITES: Tuple[str, ...] = ("G0", "G1", "G2", "G3")
+
+
+def prepare_output_tree(out_dir: Path) -> Dict[str, Any]:
+    """成果物ツリーを **run ごとに丸ごと作り直す**（§28 partial artifacts 禁止）。
+
+    以前は到達したファイルだけを上書きしていたため、(a) PASS 実行が残した
+    `freeze/` が後続の NOT_ESTABLISHED 実行後も canonical 位置に生き残り、
+    (b) spec 不正の早期 return が `p0_results.json` だけを書き換えて古い record /
+    manifest / measurements / SHA256SUMS を並べたまま残す、という矛盾した
+    canonical 成果物ができた。
+
+    既発行の voicebank（旧 valid bundle）だけは §28 に従って退避 -> 復元する。
+    今回の run が公開まで到達しなければ、旧 bundle がそのまま残る。
+    """
+    out_dir = Path(out_dir)
+    detail: Dict[str, Any] = {"cleared": False, "preserved_voicebank": False}
+    if not out_dir.exists():
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return detail
+    previous = out_dir / "voicebank"
+    holding: Optional[Path] = None
+    if previous.is_dir():
+        holding = out_dir.parent / f".{out_dir.name}.voicebank-hold"
+        if holding.exists():
+            shutil.rmtree(holding)
+        shutil.move(str(previous), str(holding))
+        detail["preserved_voicebank"] = True
+    shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    detail["cleared"] = True
+    if holding is not None:
+        shutil.move(str(holding), str(out_dir / "voicebank"))
+    return detail
+
+
+def _fill_skipped(evaluated: Sequence[af_gates.GateResult]) -> List[af_gates.GateResult]:
+    """未評価の Gate を `SKIPPED` で埋め、常に G0–G14 の全集合を返す。
+
+    `af_gates.overall_verdict` は集合の過不足を判定不能として弾くので、停止した
+    run でも「どこまで評価したか」を欠落ではなく SKIPPED で明示する。
+    """
+    names = {"G0": "SOURCE_FREE", "G1": "SPEC_VALID", "G2": "DETERMINISTIC_COMPILATION",
+             "G3": "UTAU_BODY", "G4": "VOICEGENESIS_INGESTION", "G5": "METER_CONTROL",
+             "G6": "STANDARD_IDENTITY", "G7": "FOUNDER_SOURCE_HL",
+             "G8": "FOUNDER_IDENTITY_AR", "G9": "F0", "G10": "DURATION", "G11": "ENERGY",
+             "G12": "RELEASE", "G13": "FOUNDER_EXPRESSION_AG",
+             "G14": "PROVENANCE_AND_PUBLICATION"}
+    have = {g.gate_id for g in evaluated}
+    out = list(evaluated)
+    for gid in af_gates.ALL_GATE_IDS:
+        if gid not in have:
+            out.append(af_gates.GateResult(gid, names[gid], "SKIPPED",
+                                           {"reason_code": "NOT_EVALUATED"}))
+    return sorted(out, key=lambda g: int(g.gate_id[1:]))
+
+
+def _finalize(out_dir: Path, genome: Optional[FounderGenome],
+              gates: Sequence[af_gates.GateResult], pins: Mapping[str, Any],
+              body_cmp: Mapping[str, Any], reexp_cmp: Optional[Mapping[str, Any]],
+              extra: Mapping[str, Any]) -> int:
+    """結果 JSON / record / freeze / SHA256SUMS を書き、exit code を返す。"""
+    gates = _fill_skipped(gates)
+    overall = af_gates.overall_verdict(gates)
+    if genome is None:
+        write_json(out_dir / "p0_results.json", {
+            "schema": "voicegenesis-artificial-founder-p0/1.1",
+            "gates": [g.as_dict() for g in gates], "pins": dict(pins),
+            "overall": overall})
+    else:
+        results = af_report.build_p0_results(genome, gates, overall, pins, body_cmp,
+                                             reexp_cmp, extra)
+        write_json(out_dir / "p0_results.json", results)
+        (out_dir / "AF_P0_RECORD.md").write_text(
+            af_report.build_record_md(genome, results, body_cmp, reexp_cmp, extra),
+            encoding="utf-8")
+        if overall["verdict"] == "PASS":
+            af_report.write_freeze(out_dir, genome, results)
+            _log("phase9", "freeze written (PASS only)")
+    rows = sha256_tree(out_dir, exclude_names=("SHA256SUMS.txt",))
+    (out_dir / "SHA256SUMS.txt").write_text(
+        "".join(f"{sha}  {rel}\n" for rel, sha in rows), encoding="utf-8")
+    _log("phase9", f"OVERALL = {overall['verdict']} reasons={overall['reason_codes']}")
+    _log("stop", "P0 はここで停止する。P1 mutation へ自動進行しない（§23）。")
+    return EXIT_CODES[overall["verdict"]]
 
 
 # ---------------------------------------------------------------------------
@@ -171,12 +261,12 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
         out_dir: Path) -> int:
     notes: List[str] = []
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    tree = prepare_output_tree(out_dir)
     meas_dir = out_dir / "measurements"
     meas_dir.mkdir(parents=True, exist_ok=True)
 
     # ---------------- Phase 0: Preregister + pin --------------------------
-    _log("phase0", "preregister + pin")
+    _log("phase0", f"preregister + pin (result tree rebuilt: {tree})")
     spec_raw = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     spec_errors = validate_founder_spec(spec_raw)
     gate_g1 = af_gates.gate_spec_valid(spec_errors)
@@ -186,13 +276,11 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
     closure_digest, closure_rows = af_gates.code_closure_digest(HERE)
 
     if spec_errors:
-        gates = [gate_g1]
-        overall = af_gates.overall_verdict(gates)
-        write_json(out_dir / "p0_results.json", {
-            "schema": "voicegenesis-artificial-founder-p0/1.1",
-            "gates": [g.as_dict() for g in gates], "overall": overall})
-        _log("phase9", f"verdict = {overall['verdict']} (spec invalid)")
-        return EXIT_CODES[overall["verdict"]]
+        _log("phase0", f"G1 SPEC_VALID = FAIL ({len(spec_errors)} errors) — 以降を実行しない")
+        return _finalize(out_dir, None, [gate_g1],
+                         {"criteria_sha256": criteria.sha256, "controls_sha256": controls_sha,
+                          "probes_sha256": probes_sha, "code_closure_sha256": closure_digest},
+                         {}, None, {"notes": ["spec invalid; no compilation attempted"]})
 
     genome = genome_from_dict(spec_raw)
     pins = {
@@ -226,6 +314,16 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
     gate_g5 = af_gates.gate_meter_control(control_results)
     _log("phase1", f"G5 METER_CONTROL = {gate_g5.verdict} "
                    f"(failed: {gate_g5.detail.get('failed_families')})")
+    if gate_g5.verdict != "PASS":
+        # §17: 計器が未校正なら **AF0 を評価せず BLOCKED**。ここで止めないと、
+        # 未校正の計器が出した AF0 の測定値を先に見てしまい、事前登録した順序
+        # （§23 Phase 1 -> Phase 5）が意味を失う。
+        notes.append("METER_NOT_CALIBRATED: AF0 was not compiled or measured (§17)")
+        _log("phase1", "METER_NOT_CALIBRATED — Phase 2 以降を実行しない（§17）")
+        return _finalize(out_dir, genome, [gate_g1, gate_g5], pins, {}, None,
+                         {"determinism": {"same_process": "SKIPPED",
+                                          "cross_process": "SKIPPED"},
+                          "notes": notes})
 
     # ---------------- Phase 2: Compile AF0 --------------------------------
     _log("phase2", "compile AF0 (source-free tripwire 有効)")
@@ -234,8 +332,11 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
     # 生成 staging 配下の read は §27 の禁止 read に当たらない（自分が今作った
     # WAV のハッシュを取り直すため）。同一プロセス決定論の比較用ディレクトリも
     # 生成物なので同じ扱いにする。
-    audit = af_gates.SourceFreeAudit(allowed_roots=[HERE],
-                                     staging_roots=[staging.parent, second_dir.parent])
+    audit = af_gates.SourceFreeAudit(
+        allowed_roots=[HERE, HERE.parent / "adapter", HERE.parents[1] / "singer"],
+        staging_roots=[staging.parent, second_dir.parent],
+        pinned_inputs=[Path(spec_path), Path(criteria_path), Path(controls_path),
+                       Path(probes_path)])
     with af_gates.source_free_tripwire(audit):
         first = compile_body(genome, staging)
         second = compile_body(genome, second_dir)
@@ -331,9 +432,31 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
 
     # ---------------- Phase 9: Publish verdict ----------------------------
     _log("phase9", "publish + verdict")
+    pins["body_identity_digest"] = first["digest"]
     published_root = out_dir / "voicebank" / "AF0"
     publication: Dict[str, Any] = {"published": None, "bundle_verified": False,
                                    "partial_artifacts": []}
+    prereq = {g.gate_id: g.verdict for g in (gate_g0, gate_g1, gate_g2, gate_g3)}
+    blocking = [gid for gid in PUBLICATION_PREREQUISITES if prereq.get(gid) != "PASS"]
+    if blocking:
+        # §28「失敗時は旧 valid bundle を保持」。Source-Free / 決定論 / Body 構造の
+        # いずれかが落ちた候補で canonical 公開場所を上書きしない。
+        publication["withheld_reason"] = f"publication prerequisites not met: {blocking}"
+        notes.append(publication["withheld_reason"])
+        _log("phase9", f"publication withheld ({blocking}); previous bundle kept intact")
+        gate_g14 = af_gates.GateResult(
+            "G14", "PROVENANCE_AND_PUBLICATION", "SKIPPED",
+            {"reason_code": "PUBLICATION_WITHHELD", "publication": publication,
+             "prerequisites": prereq})
+        shutil.rmtree(out_dir / "staging", ignore_errors=True)
+        gates = [gate_g0, gate_g1, gate_g2, gate_g3, gate_g4, gate_g5]
+        gates += af_gates.trait_gates(body_cmp, reexp_cmp)
+        gates.append(gate_g14)
+        return _finalize(out_dir, genome, gates, pins, body_cmp, reexp_cmp,
+                         {"determinism": {
+                             "same_process": "PASS" if same_process["match"] else "FAIL",
+                             "cross_process": "PASS" if cross_process["match"] else "FAIL"},
+                          "notes": notes})
     try:
         pub = af_utau.publish_atomically(staging, published_root)
         shutil.rmtree(out_dir / "staging", ignore_errors=True)
@@ -354,37 +477,19 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
         publication["error"] = f"{type(exc).__name__}: {exc}"
         notes.append(f"publication failed: {publication['error']}")
 
-    pins["body_identity_digest"] = first["digest"]
     gate_g14 = af_gates.gate_provenance(pins, publication)
+    if (published_root / "founder_manifest.json").exists():
+        write_json(out_dir / "founder_manifest.json",
+                   json.loads((published_root / "founder_manifest.json")
+                              .read_text(encoding="utf-8")))
     gates = [gate_g0, gate_g1, gate_g2, gate_g3, gate_g4, gate_g5]
     gates += af_gates.trait_gates(body_cmp, reexp_cmp)
     gates.append(gate_g14)
-    gates.sort(key=lambda g: int(g.gate_id[1:]))
-    overall = af_gates.overall_verdict(gates)
-
-    extra = {"determinism": {"same_process": "PASS" if same_process["match"] else "FAIL",
-                             "cross_process": "PASS" if cross_process["match"] else "FAIL"},
-             "notes": notes}
-    results = af_report.build_p0_results(genome, gates, overall, pins, body_cmp, reexp_cmp,
-                                         extra)
-    write_json(out_dir / "p0_results.json", results)
-    write_json(out_dir / "founder_manifest.json",
-               json.loads((published_root / "founder_manifest.json").read_text(encoding="utf-8"))
-               if (published_root / "founder_manifest.json").exists() else {})
-    (out_dir / "AF_P0_RECORD.md").write_text(
-        af_report.build_record_md(genome, results, body_cmp, reexp_cmp, extra), encoding="utf-8")
-
-    if overall["verdict"] == "PASS":
-        af_report.write_freeze(out_dir, genome, results)
-        _log("phase9", "freeze written (PASS only)")
-
-    rows = sha256_tree(out_dir, exclude_names=("SHA256SUMS.txt",))
-    (out_dir / "SHA256SUMS.txt").write_text(
-        "".join(f"{sha}  {rel}\n" for rel, sha in rows), encoding="utf-8")
-
-    _log("phase9", f"OVERALL = {overall['verdict']} reasons={overall['reason_codes']}")
-    _log("stop", "P0 はここで停止する。P1 mutation へ自動進行しない（§23）。")
-    return EXIT_CODES[overall["verdict"]]
+    return _finalize(out_dir, genome, gates, pins, body_cmp, reexp_cmp,
+                     {"determinism": {
+                         "same_process": "PASS" if same_process["match"] else "FAIL",
+                         "cross_process": "PASS" if cross_process["match"] else "FAIL"},
+                      "notes": notes})
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

@@ -19,8 +19,12 @@ G6..G13 trait gates      不成立 -> NOT_ESTABLISHED（reason code つき）
 """
 from __future__ import annotations
 
+import ast
 import builtins
+import site
 import socket
+import sys
+import sysconfig
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,12 +76,51 @@ class GateResult:
 # ---------------------------------------------------------------------------
 # G0 SOURCE_FREE — read-set tripwire（§19「宣言だけでなく read-set tripwire で検証」）
 # ---------------------------------------------------------------------------
-class SourceFreeAudit:
-    """コンパイル中に開かれた**全ファイルパス**と network 使用を記録する。"""
+def runtime_read_roots() -> List[Path]:
+    """Python / インストール済みパッケージのランタイム根（§27 の read whitelist）。"""
+    roots: List[Path] = []
+    for key in ("stdlib", "platstdlib", "purelib", "platlib", "data"):
+        try:
+            roots.append(Path(sysconfig.get_paths()[key]))
+        except KeyError:  # pragma: no cover - プラットフォーム差
+            continue
+    roots += [Path(sys.prefix), Path(sys.base_prefix)]
+    for entry in site.getsitepackages() if hasattr(site, "getsitepackages") else []:
+        roots.append(Path(entry))
+    out: List[Path] = []
+    for r in roots:
+        try:
+            out.append(r.resolve())
+        except OSError:  # pragma: no cover
+            continue
+    return sorted(set(out), key=lambda p: p.as_posix())
 
-    def __init__(self, allowed_roots: Sequence[Path], staging_roots: Sequence[Path]) -> None:
+
+class SourceFreeAudit:
+    """コンパイル中に開かれた**全ファイルパス**と network 使用を記録する。
+
+    判定は **allowlist を主、denylist を従** とする（fail-closed）。denylist だけに
+    頼ると、見慣れない拡張子の外部音源（`/tmp/speaker.npy` など）が素通りして
+    G0 PASS になりうる。許可されるのは次のいずれかに限る。
+
+    ```text
+    1. 生成 staging 配下（自分が今作った成果物の読み直し）
+    2. pinned inputs（AF0.json / criteria / controls / probes）そのもの
+    3. allowed_roots 配下 かつ 拡張子が ALLOWED_READ_SUFFIXES（ソースコード）
+    4. Python / パッケージのランタイム根 かつ 拡張子が ALLOWED_READ_SUFFIXES
+    ```
+
+    どれにも当たらない read は理由つきで violation にする。
+    """
+
+    def __init__(self, allowed_roots: Sequence[Path], staging_roots: Sequence[Path],
+                 pinned_inputs: Sequence[Path] = (),
+                 runtime_roots: Optional[Sequence[Path]] = None) -> None:
         self.allowed_roots = [Path(p).resolve() for p in allowed_roots]
         self.staging_roots = [Path(p).resolve() for p in staging_roots]
+        self.pinned_inputs = {Path(p).resolve() for p in pinned_inputs}
+        self.runtime_roots = ([Path(p).resolve() for p in runtime_roots]
+                              if runtime_roots is not None else runtime_read_roots())
         self.reads: List[str] = []
         self.network_attempts: List[str] = []
 
@@ -97,25 +140,50 @@ class SourceFreeAudit:
             return False
         return any(rp == r or r in rp.parents for r in roots)
 
-    def violations(self) -> List[str]:
-        """禁止 read を列挙する（生成 staging 配下の read は許可）。"""
-        bad: List[str] = []
+    def classify(self, raw: str) -> Optional[str]:
+        """許可なら `None`、禁止なら理由文字列を返す。"""
+        p = Path(raw)
+        low = p.as_posix().lower()
+        # denylist は allowlist より先に効かせる（staging 配下でも既存音源の
+        # 持ち込みは許さない）。
+        for frag in FORBIDDEN_PATH_FRAGMENTS:
+            if frag in low:
+                return f"forbidden path fragment {frag!r}"
+        if self._under(p, self.staging_roots):
+            return None
+        if p.suffix.lower() in FORBIDDEN_READ_SUFFIXES:
+            return f"forbidden suffix {p.suffix!r}"
+        try:
+            resolved = p.resolve()
+        except OSError:  # pragma: no cover - 解決できないパス
+            return "unresolvable path"
+        if resolved in self.pinned_inputs:
+            return None
+        in_allowed = self._under(p, self.allowed_roots)
+        in_runtime = self._under(p, self.runtime_roots)
+        if not (in_allowed or in_runtime):
+            return "outside the declared read allowlist"
+        if p.suffix.lower() not in ALLOWED_READ_SUFFIXES:
+            return f"suffix {p.suffix!r} is not in the declared read allowlist"
+        return None
+
+    def violations(self) -> List[Dict[str, str]]:
+        """禁止 read を理由つきで列挙する。"""
+        bad: Dict[str, str] = {}
         for raw in self.reads:
-            p = Path(raw)
-            if self._under(p, self.staging_roots):
-                continue
-            low = p.as_posix().lower()
-            if any(frag in low for frag in FORBIDDEN_PATH_FRAGMENTS):
-                bad.append(raw)
-                continue
-            if p.suffix.lower() in FORBIDDEN_READ_SUFFIXES:
-                bad.append(raw)
-        return sorted(set(bad))
+            reason = self.classify(raw)
+            if reason is not None:
+                bad.setdefault(raw, reason)
+        return [{"path": k, "reason": bad[k]} for k in sorted(bad)]
 
     def as_dict(self) -> Dict[str, Any]:
         return {
             "n_reads": len(self.reads),
             "n_unique_reads": len(set(self.reads)),
+            "allowed_roots": [p.as_posix() for p in self.allowed_roots],
+            "staging_roots": [p.as_posix() for p in self.staging_roots],
+            "n_runtime_roots": len(self.runtime_roots),
+            "pinned_inputs": sorted(p.as_posix() for p in self.pinned_inputs),
             "violations": self.violations(),
             "network_attempts": self.network_attempts,
         }
@@ -286,44 +354,139 @@ def gate_provenance(pins: Mapping[str, Any], publication: Mapping[str, Any]) -> 
 # ---------------------------------------------------------------------------
 # §20 Overall Verdict
 # ---------------------------------------------------------------------------
+#: §20 PASS は「G0–G14 all PASS」。この集合に**過不足があれば判定しない**。
+ALL_GATE_IDS: Tuple[str, ...] = tuple(f"G{i}" for i in range(15))
+
+
 def overall_verdict(gates: Sequence[GateResult]) -> Dict[str, Any]:
+    """§20 の Overall Verdict。
+
+    **まず Gate 集合の完全性を検査する。** 以前は欠けた Gate を各ループが黙って
+    読み飛ばし、`overall_verdict([])` すら PASS を返していた（部分集合でも
+    「全 Gate 通過」に見える偽の成功）。§20 の PASS は G0–G14 all PASS の意味
+    なので、ID の過不足・重複はそれ自体が判定不能（BLOCKED）である。
+
+    `SKIPPED` は PASS ではない。停止（例: G5 不成立で Phase 2 以降を実行しない）
+    のときに未評価の Gate が SKIPPED で並ぶが、その場合は先に落ちた Gate が
+    verdict を決める。
+    """
+    ids = [g.gate_id for g in gates]
+    missing = [gid for gid in ALL_GATE_IDS if gid not in set(ids)]
+    unknown = sorted(set(ids) - set(ALL_GATE_IDS))
+    duplicated = sorted({gid for gid in ids if ids.count(gid) > 1})
+    if missing or unknown or duplicated:
+        return {"verdict": "BLOCKED", "failed_gates": sorted(set(ids)) or [],
+                "reason_codes": ["INCOMPLETE_GATE_SET"],
+                "gate_set_error": {"missing": missing, "unknown": unknown,
+                                   "duplicated": duplicated}}
+
     by_id = {g.gate_id: g for g in gates}
     failed = [g.gate_id for g in gates if g.verdict != "PASS"]
     reasons: List[str] = []
 
     for gid in FAILED_GATES:
-        g = by_id.get(gid)
-        if g is not None and g.verdict != "PASS":
+        g = by_id[gid]
+        if g.verdict == "FAIL":
             reasons.append(g.detail.get("reason_code", f"{g.name}_VIOLATION"))
             return {"verdict": "FAILED", "failed_gates": failed, "reason_codes": reasons}
 
-    for gid in BLOCKED_GATES:
-        g = by_id.get(gid)
-        if g is not None and g.verdict != "PASS":
+    # 実際に落ちた Gate を、単に未評価（SKIPPED）の Gate より先に報告する。
+    # 停止した run では後続 Gate が軒並み SKIPPED になるため、順番に見ると
+    # 「NOT_EVALUATED」だけが理由として出て、真の原因（例 METER_NOT_CALIBRATED）
+    # が埋もれる。
+    blocked_failed = [gid for gid in BLOCKED_GATES if by_id[gid].verdict == "FAIL"]
+    blocked_skipped = [gid for gid in BLOCKED_GATES if by_id[gid].verdict == "SKIPPED"]
+    if blocked_failed or blocked_skipped:
+        for gid in blocked_failed + blocked_skipped:
+            g = by_id[gid]
             reasons.append(g.detail.get("reason_code", f"{g.name}_NOT_EVALUABLE"))
-            return {"verdict": "BLOCKED", "failed_gates": failed, "reason_codes": reasons}
+        return {"verdict": "BLOCKED", "failed_gates": failed, "reason_codes": reasons}
 
     for gid, reason in TRAIT_GATE_REASONS.items():
-        g = by_id.get(gid)
-        if g is not None and g.verdict != "PASS":
+        g = by_id[gid]
+        if g.verdict != "PASS":
             reasons.append(g.detail.get("reason_code", reason))
     if reasons:
         return {"verdict": "NOT_ESTABLISHED", "failed_gates": failed, "reason_codes": reasons}
 
-    if failed:  # pragma: no cover - 上の分類で拾い切れない Gate は保守的に BLOCKED
+    if failed:
+        # FAILED 系 Gate が SKIPPED（公開差し止め等）で残った場合。保守的に BLOCKED。
         return {"verdict": "BLOCKED", "failed_gates": failed,
-                "reason_codes": ["UNCLASSIFIED_GATE_FAILURE"]}
+                "reason_codes": ["UNCLASSIFIED_GATE_NOT_PASSED"]}
     return {"verdict": "PASS", "failed_gates": [], "reason_codes": []}
 
 
+def _module_search_roots(package_dir: Path) -> List[Tuple[str, Path]]:
+    """flat module 名を解決する探索根（実行時の `sys.path` 挿入と同じ並び）。
+
+    `adapter/donor_bank_utau.py` は `voice_genesis/singer` を `sys.path` へ入れて
+    `phoneme_jp` を import する。取り込み経路が実際に実行するのだから、閉包は
+    そこまで辿らないと pin が実体を代表しない。
+    """
+    foundry = package_dir.parent
+    voice_genesis = foundry.parent
+    return [
+        ("artificial_founder", package_dir),
+        ("adapter", foundry / "adapter"),
+        ("singer", voice_genesis / "singer"),
+        ("planb", foundry / "planb"),
+        ("s1_dataprep", foundry / "s1_dataprep"),
+    ]
+
+
+def _imported_module_names(path: Path) -> List[str]:
+    """1 ファイルが import する **トップレベル名** を静的に収集する。
+
+    実行順に依存しないよう `sys.modules` ではなく `ast` で静的に辿る（同じ
+    ソースツリーからは常に同じ閉包が出る = §27 決定論）。
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError):  # pragma: no cover - 読めないファイルは辿らない
+        return []
+    names: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names += [a.name.split(".")[0] for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                names.append(node.module.split(".")[0])
+    return names
+
+
 def code_closure_digest(package_dir: str | Path) -> Tuple[str, List[Tuple[str, str]]]:
-    """本パッケージ + 利用する adapter モジュールの import 閉包ハッシュ（§25 code_closure）。"""
+    """import 閉包（推移的）のハッシュ（§25 code_closure）。
+
+    本パッケージの全 `*.py` を起点に、リポジトリ内で解決できる import を再帰的に
+    辿る。`adapter/*.py` を丸ごと入れるだけでは、そこから実行される
+    `singer/phoneme_jp.py`（AF0 の alias 正規化を実際に行う）が pin から漏れ、
+    それを変えても `code_closure_sha256` が動かないまま G14 が PASS になる。
+    """
     from af_spec import aggregate_digest, sha256_file
 
-    pkg = Path(package_dir)
-    adapter = pkg.parent / "adapter"
-    rows: List[Tuple[str, str]] = []
-    for root, label in ((pkg, "artificial_founder"), (adapter, "adapter")):
-        for p in sorted(root.glob("*.py")):
-            rows.append((f"{label}/{p.name}", sha256_file(p)))
+    pkg = Path(package_dir).resolve()
+    roots = [(label, root.resolve()) for label, root in _module_search_roots(pkg)]
+    seen: Dict[str, Path] = {}
+    queue: List[Path] = sorted(pkg.glob("*.py"))
+
+    def _label_for(path: Path) -> Optional[str]:
+        for label, root in roots:
+            if path.parent == root:
+                return f"{label}/{path.name}"
+        return None
+
+    while queue:
+        path = queue.pop(0)
+        label = _label_for(path)
+        if label is None or label in seen:
+            continue
+        seen[label] = path
+        for name in _imported_module_names(path):
+            for _, root in roots:
+                candidate = root / f"{name}.py"
+                if candidate.exists():
+                    queue.append(candidate)
+                    break
+
+    rows = [(label, sha256_file(seen[label])) for label in sorted(seen)]
     return aggregate_digest(rows), rows

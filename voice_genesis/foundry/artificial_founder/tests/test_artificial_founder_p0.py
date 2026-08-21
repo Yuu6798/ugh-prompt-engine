@@ -673,3 +673,121 @@ def test_publish_rejects_missing_staging(tmp_path):
     with pytest.raises(af_spec.AFStop) as excinfo:
         af_utau.publish_atomically(tmp_path / "nope", tmp_path / "pub")
     assert excinfo.value.status == "FAILED"
+
+
+# ---------------------------------------------------------------------------
+# PR #301 Codex レビュー第 1 巡（P1 x7）で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def test_overall_verdict_rejects_incomplete_gate_set():
+    """欠けた Gate 集合を PASS にしない（`overall_verdict([])` は偽の成功だった）。"""
+    v = af_gates.overall_verdict([])
+    assert v["verdict"] == "BLOCKED"
+    assert "INCOMPLETE_GATE_SET" in v["reason_codes"]
+    assert v["gate_set_error"]["missing"] == list(af_gates.ALL_GATE_IDS)
+
+    full = _gates(_all_pass_body(), _all_pass_reexp())
+    assert af_gates.overall_verdict(full)["verdict"] == "PASS"
+    # 1 つ落とすだけで判定不能になる
+    partial = [g for g in full if g.gate_id != "G7"]
+    assert af_gates.overall_verdict(partial)["verdict"] == "BLOCKED"
+    # 重複も判定不能
+    assert af_gates.overall_verdict(list(full) + [full[0]])["verdict"] == "BLOCKED"
+
+
+def test_skipped_gate_is_not_pass():
+    full = _gates(_all_pass_body(), _all_pass_reexp())
+    skipped = [af_gates.GateResult(g.gate_id, g.name, "SKIPPED", {}) if g.gate_id == "G5" else g
+               for g in full]
+    assert af_gates.overall_verdict(skipped)["verdict"] == "BLOCKED"
+
+
+def test_code_closure_covers_transitive_modules():
+    """取り込み経路が実行する `singer/phoneme_jp.py` まで pin する。"""
+    digest, rows = af_gates.code_closure_digest(_PKG)
+    labels = {label for label, _ in rows}
+    assert "adapter/donor_bank_utau.py" in labels
+    assert "singer/phoneme_jp.py" in labels, "transitive import must be pinned"
+    assert "artificial_founder/af_measure.py" in labels
+    assert digest == af_gates.code_closure_digest(_PKG)[0]  # 決定論
+
+
+def test_source_free_audit_fails_closed_on_unknown_reads(tmp_path):
+    """denylist に無い拡張子でも、allowlist の外なら violation にする。"""
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    audit = af_gates.SourceFreeAudit(allowed_roots=[_PKG], staging_roots=[staging],
+                                     pinned_inputs=[SPEC_PATH], runtime_roots=[])
+    audit.record(staging / "AF0" / "a.wav")          # 生成物 -> 許可
+    audit.record(SPEC_PATH)                          # pinned input -> 許可
+    audit.record(_PKG / "af_source.py")              # 自パッケージのソース -> 許可
+    audit.record(tmp_path / "speaker.npy")           # 未知拡張子 + 範囲外 -> 拒否
+    audit.record(tmp_path / "model.pkl")             # 同上
+    audit.record(tmp_path / "external.wav")          # denylist 拡張子 -> 拒否
+    paths = {v["path"] for v in audit.violations()}
+    assert str(tmp_path / "speaker.npy") in paths
+    assert str(tmp_path / "model.pkl") in paths
+    assert str(tmp_path / "external.wav") in paths
+    assert str(_PKG / "af_source.py") not in paths
+    assert str(SPEC_PATH) not in paths
+    assert af_gates.gate_source_free(
+        {"human_audio_used": False, "speaker_specific_parameters_used": False,
+         "pretrained_voice_model_used": False, "external_voicebank_used": False},
+        audit.as_dict()).verdict == "FAIL"
+
+
+def test_prepare_output_tree_clears_stale_artifacts_but_keeps_voicebank(tmp_path):
+    """PASS 実行の freeze が後続実行に生き残らない。旧 voicebank は §28 で保持。"""
+    import p0_run
+
+    out = tmp_path / "AF0"
+    (out / "freeze").mkdir(parents=True)
+    (out / "freeze" / "ARTIFICIAL_FOUNDER_AF0_FREEZE.json").write_text("{}", encoding="utf-8")
+    (out / "AF_P0_RECORD.md").write_text("stale", encoding="utf-8")
+    (out / "voicebank" / "AF0").mkdir(parents=True)
+    (out / "voicebank" / "AF0" / "marker.txt").write_text("v1", encoding="utf-8")
+
+    detail = p0_run.prepare_output_tree(out)
+    assert detail["cleared"] and detail["preserved_voicebank"]
+    assert not (out / "freeze").exists()
+    assert not (out / "AF_P0_RECORD.md").exists()
+    assert (out / "voicebank" / "AF0" / "marker.txt").read_text(encoding="utf-8") == "v1"
+
+
+def test_meter_failure_blocks_before_compiling_af0(tmp_path, monkeypatch):
+    """§17: control が落ちたら AF0 を compile / 測定せず BLOCKED で止まる。"""
+    import af_controls
+    import p0_run
+
+    monkeypatch.setattr(af_controls, "run_controls", lambda *a, **k: {
+        "families": [{"family": "hl_even_odd_ratio", "metric": "hl_even_odd_ratio",
+                      "verdict": "FAIL"}], "n_failed": 1})
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("AF0 must not be compiled while the meter is uncalibrated")
+
+    monkeypatch.setattr(p0_run, "compile_body", _explode)
+    out = tmp_path / "AF0"
+    code = p0_run.run(SPEC_PATH, CRITERIA_PATH, CONTROLS_PATH, PROBES_PATH, out)
+    assert code == af_spec.EXIT_CODES["BLOCKED"]
+    results = json.loads((out / "p0_results.json").read_text(encoding="utf-8"))
+    assert results["overall"]["verdict"] == "BLOCKED"
+    assert "METER_NOT_CALIBRATED" in results["overall"]["reason_codes"]
+    assert not (out / "voicebank").exists()
+    assert not (out / "freeze").exists()
+    # 未評価の Gate は欠落ではなく SKIPPED で並ぶ（集合は常に G0-G14）。
+    verdicts = {g["gate"]: g["verdict"] for g in results["gates"]}
+    assert set(verdicts) == set(af_gates.ALL_GATE_IDS)
+    assert verdicts["G5"] == "FAIL" and verdicts["G0"] == "SKIPPED"
+
+
+def test_publication_withheld_when_prerequisites_fail():
+    """G0/G2 が落ちた候補で canonical 公開場所を上書きしない（§28）。"""
+    import p0_run
+
+    assert p0_run.PUBLICATION_PREREQUISITES == ("G0", "G1", "G2", "G3")
+    withheld = af_gates.GateResult("G14", "PROVENANCE_AND_PUBLICATION", "SKIPPED",
+                                   {"reason_code": "PUBLICATION_WITHHELD"})
+    gates = [g for g in _gates(_all_pass_body(), _all_pass_reexp(), G0="FAIL")
+             if g.gate_id != "G14"] + [withheld]
+    v = af_gates.overall_verdict(gates)
+    assert v["verdict"] == "FAILED"  # G0 違反が verdict を決める（G14 は SKIPPED）
