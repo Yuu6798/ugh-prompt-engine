@@ -31,6 +31,24 @@
           "X": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72"
         }
       }
+    },
+    "2": {
+      "trial_ids": [
+        "S2T02",
+        "S2T03"
+      ],
+      "audio_sha256": {
+        "S2T02": {
+          "A": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1",
+          "B": "999b7fb25a653a40f509dfb8ce7cce295d5c36668476777412c5a7ca8a6059b4",
+          "X": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1"
+        },
+        "S2T03": {
+          "A": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1",
+          "B": "c6b051c57fe65b3f8a6a3352250c53bd8235616b20f87c209e08ddb74e7020b9",
+          "X": "c6b051c57fe65b3f8a6a3352250c53bd8235616b20f87c209e08ddb74e7020b9"
+        }
+      }
     }
   },
   "key_commitment": "d4fadda8c6d1f09a44289bd56aff47e237bb8cef03f6dadf8207d5447abd15da"
