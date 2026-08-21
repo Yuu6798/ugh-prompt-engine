@@ -421,9 +421,12 @@ def test_baseline_b0_instability_fails_determinism() -> None:
         assert sg.gene_verdict([res])["verdict"] == GeneVerdict.FAILED.value, kw
 
 
-def _write_manifest(tmp_path: Path, pairs: List[Dict[str, Any]]) -> Path:
+def _write_manifest(tmp_path: Path, pairs: List[Dict[str, Any]],
+                    **extra: Any) -> Path:
     m = tmp_path / "ladder_manifest.json"
-    m.write_text(json.dumps({"context_phones": 22, "pairs": pairs}), encoding="utf-8")
+    body: Dict[str, Any] = {"context_phones": 22, "pairs": pairs}
+    body.update(extra)
+    m.write_text(json.dumps(body), encoding="utf-8")
     return m
 
 
@@ -587,3 +590,67 @@ def test_unreadable_frozen_lab_becomes_blocked(tmp_path: Path, monkeypatch) -> N
     assert "lab/wav" in exc.value.cause
     assert exc.value.as_dict()["status"] == "BLOCKED"
     monkeypatch.setattr(sr, "_FROZEN", None)
+
+
+# ---------------------------------------------------------------------------
+# PR #295 レビュー第 3 巡（来歴ファミリの終端）
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("bad", [None, 0, -1, "22", 22.0, True],
+                         ids=["missing", "zero", "negative", "str", "float", "bool"])
+def test_missing_or_invalid_context_phones_is_blocked(tmp_path: Path, monkeypatch,
+                                                     bad: Any) -> None:
+    """欠落を既定値で埋めない。埋めると凍結入力が記録していない値を主張する。"""
+    import s3_runner as sr
+
+    body: Dict[str, Any] = {"pairs": [_pair("a")]}
+    if bad is not None:
+        body["context_phones"] = bad
+    m = tmp_path / "ladder_manifest.json"
+    m.write_text(json.dumps(body), encoding="utf-8")
+    monkeypatch.setattr(sr, "FROZEN_MANIFEST", m)
+    with pytest.raises(sr.S3Stop) as exc:
+        sr.load_frozen()
+    assert "context_phones" in exc.value.cause
+    assert exc.value.as_dict()["status"] == "BLOCKED"
+
+
+def test_valid_context_phones_passes(tmp_path: Path, monkeypatch) -> None:
+    import s3_runner as sr
+
+    monkeypatch.setattr(sr, "FROZEN_MANIFEST", _write_manifest(tmp_path, [_pair("a")]))
+    assert sr.load_frozen()["context_phones"] == 22
+
+
+def test_dirty_digest_covers_untracked_file_contents(tmp_path: Path, monkeypatch) -> None:
+    """未追跡ファイルは **中身**まで digest に入る（パスだけでは同一視される）。
+
+    `git diff HEAD` は未追跡の中身を含まず porcelain はパスしか出さないので、
+    中身の違う 2 回の走行が同じ pin を主張しうる。
+    """
+    import s3_runner as sr
+
+    helper = tmp_path / "helper.py"
+    porcelain = f" M a/b.py\n?? {helper}\n"
+
+    def fake_git(*args: str):
+        if args[:2] == ("status", "--porcelain"):
+            return porcelain
+        if args[:2] == ("diff", "HEAD"):
+            return "diff --git a/b.py b/b.py\n"
+        if args[:2] == ("rev-parse", "HEAD"):
+            return "cafe\n"
+        return ""
+
+    def run_with(content: str) -> str:
+        monkeypatch.setattr(sr, "_CODE_STATE", None)
+        helper.write_text(content, encoding="utf-8")
+        monkeypatch.setattr(sr.subprocess, "run",
+                            lambda cmd, **kw: type("P", (), {"stdout": fake_git(*cmd[1:])})())
+        st = sr.code_state()
+        assert st["dirty"] is True
+        return st["dirty_digest"]
+
+    # porcelain も diff も同じ。違うのは未追跡ファイルの中身だけ。
+    assert run_with("VERSION = 1\n") != run_with("VERSION = 2\n")
+    assert run_with("VERSION = 1\n") == run_with("VERSION = 1\n")
+    monkeypatch.setattr(sr, "_CODE_STATE", None)

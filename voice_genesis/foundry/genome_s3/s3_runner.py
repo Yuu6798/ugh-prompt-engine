@@ -155,6 +155,16 @@ def load_frozen() -> Dict[str, Any]:
             cause="frozen manifest に pairs が無い（または空）",
             impact="判定対象が 0 件になり、gene verdict を出せない",
             minimal_fix="planb_real の ladder を再実行して pair を生成する")
+    ctx = data.get("context_phones")
+    # 欠落時に現在の DEFAULT_CONTEXT_PHONES で埋めると、凍結入力が記録して
+    # いない context 値を記録が主張することになる（しかも既定値が将来動けば
+    # 同じ manifest の挙動が変わる）。埋めずに止める。
+    if not isinstance(ctx, int) or isinstance(ctx, bool) or ctx <= 0:
+        raise S3Stop(
+            cause=f"frozen manifest の context_phones が無い/不正: {ctx!r}",
+            impact="凍結入力が記録していない context 値を既定値で埋めることになり、"
+                   "記録の来歴が実際の凍結条件と一致しなくなる",
+            minimal_fix="ladder_manifest.json に走行時の context_phones を記録する")
     seen: set = set()
     for i, pair in enumerate(pairs):
         missing = [f for f in REQUIRED_PAIR_FIELDS if not pair.get(f)]
@@ -225,6 +235,18 @@ def code_state() -> Dict[str, Any]:
         h = hashlib.sha256()
         h.update(porcelain.encode("utf-8"))
         h.update(diff.encode("utf-8"))
+        # `git diff HEAD` は **未追跡ファイルの中身を含まない**。porcelain も
+        # パスしか出さないので、追跡側の変更が新しい未追跡ヘルパを import する
+        # ような場合、中身の違う 2 回の走行が同じ digest になる。中身も混ぜる。
+        for line in porcelain.splitlines():
+            if not line.startswith("?? "):
+                continue
+            path = _HERE.parent.parent.parent / line[3:].strip().strip('"')
+            h.update(line.encode("utf-8"))
+            try:
+                h.update(path.read_bytes() if path.is_file() else b"<not-a-file>")
+            except OSError as exc:      # 読めないことも記録に混ぜる（黙って飛ばさない）
+                h.update(f"<unreadable:{exc.errno}>".encode("utf-8"))
         state["dirty"] = True
         state["dirty_digest"] = h.hexdigest()
     _CODE_STATE = state
@@ -418,7 +440,7 @@ def cross_process_shas() -> Dict[str, Dict[str, str]]:
 def run_all(*, write_wav: bool = True) -> Tuple[List[PairRun], Dict[str, Any]]:
     code_state()          # 実験の**前**に確定させる（走行中に HEAD が動いても揺れない）
     data = load_frozen()
-    ctx = int(data.get("context_phones", pr_identity.DEFAULT_CONTEXT_PHONES))
+    ctx = int(data["context_phones"])      # load_frozen が存在と型を保証する
     runs = [run_pair(p, ctx, write_wav=write_wav) for p in data["pairs"]]
     cs = code_state()
     meta = {"context_phones": ctx,
@@ -432,8 +454,7 @@ def run_all(*, write_wav: bool = True) -> Tuple[List[PairRun], Dict[str, Any]]:
 if __name__ == "__main__":
     if "--recompute" in sys.argv:
         d = load_frozen()
-        print(json.dumps(recompute_sample_shas(
-            int(d.get("context_phones", pr_identity.DEFAULT_CONTEXT_PHONES)))))
+        print(json.dumps(recompute_sample_shas(int(d["context_phones"]))))
     else:
         rs, meta = run_all()
         print(json.dumps({"meta": meta, "pairs": [r.as_dict() for r in rs]},
