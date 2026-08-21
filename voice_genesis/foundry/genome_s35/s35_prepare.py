@@ -124,11 +124,17 @@ def gate_s3(res: Dict[str, Any]) -> None:
                       required_action="S3 正本を最終コードで再生成する")
 
 
-def verify_audio(res: Dict[str, Any],
-                 needed: Sequence[Tuple[str, str]]) -> Dict[Tuple[str, str], Path]:
-    """各 WAV の `actual_sha256 == 記録 SHA` を確認する。S3.5 側で再生成しない。"""
+def verify_audio(res: Dict[str, Any], needed: Sequence[Tuple[str, str]],
+                 ) -> Dict[Tuple[str, str], Tuple[Path, str]]:
+    """各 WAV の `actual_sha256 == 記録 SHA` を確認する。S3.5 側で再生成しない。
+
+    **検証済みの digest も返す。** copy 時に読み直すと、その間に S3 が再生成
+    されていた場合に「差し替わった bytes 同士が一致する」だけになり、
+    非正本の音声が verified として公開されてしまう（S3.5 の成果物を一切
+    触らなくても、S3 の並行再生成だけで踏める）。
+    """
     rows = {(r["pair_key"], r["condition"]): r for r in res["reproducibility"]}
-    resolved: Dict[Tuple[str, str], Path] = {}
+    resolved: Dict[Tuple[str, str], Tuple[Path, str]] = {}
     missing: List[str] = []
     mismatched: List[str] = []
     for key in needed:
@@ -144,7 +150,7 @@ def verify_audio(res: Dict[str, Any],
         if got != row["wav_sha256"]:
             mismatched.append(f"{key[0]}/{key[1]}: {got[:16]}… != {row['wav_sha256'][:16]}…")
             continue
-        resolved[key] = path
+        resolved[key] = (path, got)      # 記録と一致した digest を持ち回る
     if missing:
         raise S35Stop(reason=f"canonical WAV が欠落: {len(missing)} 件 (例 {missing[:2]})",
                       required_action="S3 の走行成果物を復元する。S3.5 で再合成しない")
@@ -251,7 +257,8 @@ def needed_wavs(trials: Sequence[Dict[str, Any]]) -> List[Tuple[str, str]]:
 
 
 def materialize_stage(trials: Sequence[Dict[str, Any]], stage: int,
-                      resolved: Dict[Tuple[str, str], Path]) -> Dict[str, Dict[str, str]]:
+                      resolved: Dict[Tuple[str, str], Tuple[Path, str]],
+                      audio_dir: Optional[Path] = None) -> Dict[str, Dict[str, str]]:
     """元 WAV の byte copy。コピー前後の SHA 一致を確認する。
 
     **公開先を先に消さない。** staging へ全部作り切ってから入れ替える。
@@ -259,8 +266,7 @@ def materialize_stage(trials: Sequence[Dict[str, Any]], stage: int,
     部分的な置き換えを指したまま復旧経路が無くなる（`genome_s3` の
     WAV_STAGING と同じ扱い）。
     """
-    audio_dir = stage_audio_dir(stage)
-    staging = audio_dir.with_name(audio_dir.name + ".staging")
+    staging = audio_dir if audio_dir is not None else stage_audio_dir(stage)
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True, exist_ok=True)
@@ -270,42 +276,91 @@ def materialize_stage(trials: Sequence[Dict[str, Any]], stage: int,
             per: Dict[str, str] = {}
             for slot in ("A", "B", "X"):
                 side = t["x_side"] if slot == "X" else t[f"{slot.lower()}_side"]
-                src = resolved[(t["pair_key"], _condition_for(t["gene"], side))]
-                before = sha256_file(src)
+                src, want = resolved[(t["pair_key"], _condition_for(t["gene"], side))]
                 dst = staging / f"{t['trial_id']}_{slot}.wav"
                 shutil.copyfile(src, dst)
                 after = sha256_file(dst)
-                if before != after:
+                # 比較対象は **S3 正本記録と照合済みの digest**。ここで src を
+                # 読み直すと、S3 が並行再生成された場合に差し替わった bytes 同士で
+                # 一致してしまう。
+                if after != want:
                     raise S35Stop(
-                        reason=f"{dst.name}: byte copy 前後で SHA が変わった "
-                               f"({before[:16]}… -> {after[:16]}…)",
-                        required_action="コピー経路を確認する。正規化・変換を挟まない",
+                        reason=f"{dst.name}: copy 後の SHA が S3 正本の検証済み "
+                               f"digest と一致しない ({after[:16]}… != {want[:16]}…)",
+                        required_action="S3 正本が走行中に変わっていないか確認する。"
+                                        "S3.5 側で再生成・補正しない",
                         affected_gene=t["gene"])
                 per[slot] = after
             audio_sha[t["trial_id"]] = per
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise                       # 公開先は触っていないので前回の pack が残る
-    _swap_audio_dir(staging, audio_dir)
     return audio_sha
 
 
-def _swap_audio_dir(staging: Path, dest: Path) -> None:
-    """出来上がった staging を公開先へ入れ替える（失敗時は元へ戻す）。"""
+def _swap_dir(staging: Path, dest: Path) -> Optional[Path]:
+    """出来上がった staging を公開先へ入れ替え、旧版の退避先を返す。
+
+    返した `.prev` は、後続（manifest 書き込み等）が失敗したときに
+    `_rollback_dir()` で戻すために呼び出し側が保持する。
+    """
     backup = dest.with_name(dest.name + ".prev")
     if backup.exists():
         shutil.rmtree(backup)
+    had_dest = dest.exists()
     try:
-        if dest.exists():
+        if had_dest:
             os.replace(dest, backup)
         os.replace(staging, dest)
     except BaseException:
-        if backup.exists() and not dest.exists():
+        if had_dest and backup.exists() and not dest.exists():
             os.replace(backup, dest)
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    if backup.exists():
+    return backup if had_dest else None
+
+
+def _rollback_dir(dest: Path, backup: Optional[Path]) -> None:
+    """`_swap_dir` を巻き戻す（後続が失敗したとき用）。"""
+    shutil.rmtree(dest, ignore_errors=True)
+    if backup is not None and backup.exists():
+        os.replace(backup, dest)
+
+
+def _drop_backup(backup: Optional[Path]) -> None:
+    if backup is not None and backup.exists():
         shutil.rmtree(backup)
+
+
+def publish_stage(stage: int, trials: Sequence[Dict[str, Any]],
+                  resolved: Dict[Tuple[str, str], Tuple[Path, str]],
+                  write_manifest) -> Dict[str, Dict[str, str]]:
+    """**stage 一式を 1 トランザクションで公開する。**
+
+    音声・UI・回答用紙を staging の stage ディレクトリへ作り切り、丸ごと入れ替え、
+    最後に manifest を書く。manifest 書き込みが失敗したら stage ディレクトリごと
+    巻き戻す。音声だけを守っても、その後の UI / manifest 書き込みで落ちると
+    「旧 manifest が別の pack を指したまま、前回の音声は消えている」状態になる。
+    """
+    dest = stage_dir(stage)
+    staging = dest.with_name(dest.name + ".staging")
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True, exist_ok=True)
+    try:
+        audio_sha = materialize_stage(trials, stage, resolved, staging / "audio")
+        write_stage_ui(trials, stage, staging)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise                        # 公開先に触れていない
+    backup = _swap_dir(staging, dest)
+    try:
+        write_manifest(audio_sha)
+    except BaseException:
+        _rollback_dir(dest, backup)
+        raise
+    _drop_backup(backup)
+    return audio_sha
 
 
 _UI_TEMPLATE = """<meta charset="utf-8"><title>S3.5 ABX — Stage __STAGE__</title>
@@ -361,16 +416,19 @@ render();
 """
 
 
-def write_stage_ui(trials: Sequence[Dict[str, Any]], stage: int) -> None:
+def write_stage_ui(trials: Sequence[Dict[str, Any]], stage: int,
+                   out_dir: Optional[Path] = None) -> None:
     """最小 UI。**answer key を JS へ埋め込まない**（trial_id だけ）。"""
+    out_dir = stage_dir(stage) if out_dir is None else out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
     html = (_UI_TEMPLATE
             .replace("__IDS__", json.dumps([t["trial_id"] for t in trials]))
             .replace("__MAXREPLAY__", str(sp.MAX_REPLAYS_PER_CLIP))
             .replace("__STAGE__", str(stage))
             .replace("__COUNT__", str(len(trials)))
             .replace("__ANSWERSCHEMA__", sp.ANSWERS_SCHEMA))
-    (stage_dir(stage) / "index.html").write_text(html, encoding="utf-8")
-    (stage_dir(stage) / "answer_sheet.template.json").write_text(_dumps({
+    (out_dir / "index.html").write_text(html, encoding="utf-8")
+    (out_dir / "answer_sheet.template.json").write_text(_dumps({
         "schema": sp.ANSWERS_SCHEMA, "stage": stage,
         "listener_id": "listener-01", "session_id": "REPLACE_ME",
         "answers": {t["trial_id"]: "" for t in trials},
@@ -469,13 +527,16 @@ def prepare_stage1(salt: Optional[bytes] = None) -> Dict[str, Any]:
                       required_action="候補 gene 数を確認する。上限は緩めない")
 
     resolved = verify_audio(res, needed_wavs(t1))
-    stage_dir(sp.STAGE1).mkdir(parents=True, exist_ok=True)
-    sha1 = materialize_stage(t1, sp.STAGE1, resolved)
-    write_stage_ui(t1, sp.STAGE1)
     _key, commitment = write_private_key(usable, {sp.STAGE1: t1, sp.STAGE2: t2},
                                          salt, s3_sha)
-    manifest_sha = write_blind_manifest({sp.STAGE1: t1}, {sp.STAGE1: sha1},
-                                        s3_sha, commitment)
+    holder: Dict[str, str] = {}
+
+    def _write_manifest(sha1: Dict[str, Dict[str, str]]) -> None:
+        holder["sha"] = write_blind_manifest({sp.STAGE1: t1}, {sp.STAGE1: sha1},
+                                             s3_sha, commitment)
+
+    publish_stage(sp.STAGE1, t1, resolved, _write_manifest)
+    manifest_sha = holder["sha"]
     return {
         "stage": sp.STAGE1,
         "s3_results_sha256": s3_sha,
@@ -506,14 +567,16 @@ def prepare_stage2(advancing: Sequence[str]) -> Dict[str, Any]:
                 "note": "Stage 2 へ進む gene が無い"}
 
     resolved = verify_audio(res, needed_wavs(t2))
-    stage_dir(sp.STAGE2).mkdir(parents=True, exist_ok=True)
-    sha2 = materialize_stage(t2, sp.STAGE2, resolved)
-    write_stage_ui(t2, sp.STAGE2)
 
-    manifest = load_manifest()
-    manifest["stages"][str(sp.STAGE2)] = {
-        "trial_ids": [t["trial_id"] for t in t2], "audio_sha256": sha2}
-    BLIND_MANIFEST.write_text(_dumps(manifest), encoding="utf-8")
+    def _write_manifest(sha2: Dict[str, Dict[str, str]]) -> None:
+        manifest = load_manifest()
+        manifest["stages"][str(sp.STAGE2)] = {
+            "trial_ids": [t["trial_id"] for t in t2], "audio_sha256": sha2}
+        tmp = BLIND_MANIFEST.with_suffix(BLIND_MANIFEST.suffix + ".tmp")
+        tmp.write_text(_dumps(manifest), encoding="utf-8")
+        os.replace(tmp, BLIND_MANIFEST)
+
+    publish_stage(sp.STAGE2, t2, resolved, _write_manifest)
     return {
         "stage": sp.STAGE2,
         "s3_results_sha256": s3_sha,

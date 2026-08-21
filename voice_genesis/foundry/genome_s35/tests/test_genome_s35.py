@@ -485,7 +485,7 @@ def test_audio_bytes_are_copied_verbatim(s35) -> None:
         assert a != b and (x == a or x == b), tid
 
 
-def test_copy_sha_verified_before_and_after(s35) -> None:
+def test_copy_sha_verified_against_s3_digest(s35) -> None:
     out, _doc = s35()
     import shutil as _sh
     orig = prep.shutil.copyfile
@@ -499,7 +499,7 @@ def test_copy_sha_verified_before_and_after(s35) -> None:
     try:
         with pytest.raises(prep.S35Stop) as exc:
             prep.prepare_stage1(salt=SALT)
-        assert "byte copy" in exc.value.as_dict()["reason"]
+        assert "検証済み digest と一致しない" in exc.value.as_dict()["reason"]
     finally:
         prep.shutil = _sh
 
@@ -1108,3 +1108,98 @@ def test_stage_audio_failure_preserves_previous_pack(s35) -> None:
     assert {p.name: p.read_bytes() for p in audio.glob("*.wav")} == before
     assert not list((out / "stage2").glob("audio.staging")) if (out / "stage2").exists() else True
     assert not (out / "stage1" / "audio.staging").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 6 巡
+# ---------------------------------------------------------------------------
+def test_s3_replaced_mid_flight_is_blocked(s35) -> None:
+    """`verify_audio()` の後に S3 の WAV が差し替わったら BLOCKED。
+
+    copy 時に src を読み直すと差し替わった bytes 同士で一致してしまい、
+    非正本の音声が verified として公開される。S3.5 の成果物を一切触らず、
+    **S3 の並行再生成だけ**で踏める経路。
+    """
+    out, _doc = s35()
+    real_verify = prep.verify_audio
+
+    def verify_then_replace(res, needed):
+        resolved = real_verify(res, needed)
+        for path, _sha in resolved.values():      # 検証直後に S3 側を差し替える
+            path.write_bytes(path.read_bytes() + b"\x00")
+        return resolved
+
+    prep.verify_audio = verify_then_replace
+    try:
+        with pytest.raises(prep.S35Stop) as exc:
+            prep.prepare_stage1(salt=SALT)
+    finally:
+        prep.verify_audio = real_verify
+    d = exc.value.as_dict()
+    assert "検証済み digest と一致しない" in d["reason"]
+    assert "S3 正本が走行中に変わっていないか" in d["required_action"]
+    assert not (out / "stage1").exists()          # 公開先に触れていない
+
+
+def test_manifest_write_failure_rolls_back_stage_bundle(s35) -> None:
+    """manifest 書き込みが落ちたら、stage ディレクトリごと巻き戻す。
+
+    音声だけ守っても、その後で落ちると「旧 manifest が別 pack を指したまま、
+    前回の音声は消えている」状態になる。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+
+    stage1_before = {p.name: p.read_bytes() for p in (out / "stage1" / "audio").glob("*.wav")}
+    manifest_before = (out / "blind_manifest.json").read_bytes()
+
+    real_pub = prep.publish_stage
+
+    def boom(stage, trials, resolved, write_manifest):
+        def failing(_sha):
+            raise OSError("disk full")
+        return real_pub(stage, trials, resolved, failing)
+
+    prep.publish_stage = boom
+    try:
+        with pytest.raises(OSError):
+            prep.prepare_stage2(adv)
+    finally:
+        prep.publish_stage = real_pub
+
+    assert (out / "blind_manifest.json").read_bytes() == manifest_before
+    assert {p.name: p.read_bytes()
+            for p in (out / "stage1" / "audio").glob("*.wav")} == stage1_before
+    assert not (out / "stage2").exists()
+    assert not (out / "stage2.staging").exists()
+    assert not (out / "stage2.prev").exists()
+
+
+def test_stage_bundle_publish_leaves_no_temp_dirs(s35) -> None:
+    out, _doc = s35()
+    assert _finish(out) == 0
+    leftovers = [p.name for p in out.iterdir()
+                 if p.name.endswith((".staging", ".prev", ".tmp"))]
+    assert leftovers == [], leftovers
+
+
+@pytest.mark.parametrize("bad", [None, "one", {"a": 1}, [], 2])
+def test_malformed_answer_stage_is_blocked(s35, bad) -> None:
+    """`stage` の欠落・型不正で BLOCKED を出す（例外で落ちない）。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    p1 = _answer(out, 1, _correct)
+    d = json.loads(p1.read_text(encoding="utf-8"))
+    if bad is None:
+        d.pop("stage")
+    else:
+        d["stage"] = bad
+    p1.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)
+    assert "stage" in exc.value.as_dict()["reason"]
+    # finalize_or_blocked が BLOCKED を出せること（例外で素通りしない）
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"

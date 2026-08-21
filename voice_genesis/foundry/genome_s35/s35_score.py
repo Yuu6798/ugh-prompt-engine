@@ -40,10 +40,14 @@ def load_answers(stage: int, path: Optional[Path] = None) -> Tuple[Dict[str, Any
     if data.get("schema") != sp.ANSWERS_SCHEMA:
         raise prep.S35Stop(reason=f"回答 schema が不正: {data.get('schema')!r}",
                            required_action=f"schema を {sp.ANSWERS_SCHEMA} にする")
-    if int(data.get("stage", stage)) != stage:
-        raise prep.S35Stop(reason=f"回答ファイルの stage が違う: {data.get('stage')!r} "
-                                  f"(期待 {stage})",
-                           required_action="stage を合わせる")
+    # `stage` は**実際の整数**を要求する。欠落を要求 stage で補うと壊れた来歴を
+    # 黙って受け入れ、null / dict / 非数値文字列だと `int()` が S35Stop 以外の
+    # 例外を投げて BLOCKED 記録が出せなくなる。
+    got_stage = data.get("stage")
+    if not isinstance(got_stage, int) or isinstance(got_stage, bool) or got_stage != stage:
+        raise prep.S35Stop(
+            reason=f"回答ファイルの stage が不正: {got_stage!r} (期待 {stage} / int)",
+            required_action="回答ファイルに stage を整数で書く")
     # 誰が聴いたか記録に無い session を canonical にしない。`None == None` を
     # 素通りさせると、匿名の回答が `listener_count = 1` を名乗れてしまう。
     for field in ("listener_id", "session_id"):
