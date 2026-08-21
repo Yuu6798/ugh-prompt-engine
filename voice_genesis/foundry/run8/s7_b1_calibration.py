@@ -36,7 +36,9 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import s7_io  # noqa: E402
 import s7_spec as sp  # noqa: E402
+from s7_io import OutputCollisionError, reject_output_collision  # noqa: E402,F401
 
 RESULTS_DIR = _HERE.parent / "results_s7"
 CANDIDATE_SPACE_PATH = RESULTS_DIR / "s7_b1_candidate_space.json"
@@ -53,10 +55,6 @@ _MS = 1000.0
 # --- 事前登録の読み込み（pin 照合つき） ------------------------------------
 
 
-def sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 @dataclass(frozen=True)
 class Prereg:
     candidate_space: Dict[str, Any]
@@ -71,9 +69,12 @@ def load_prereg(
     selection_rule_path: Path = SELECTION_RULE_PATH,
 ) -> Prereg:
     """事前登録 3 点を読み、schema を確認し、sha256 を pin として返す。"""
-    cs = json.loads(candidate_space_path.read_text(encoding="utf-8"))
-    cal = json.loads(calibration_set_path.read_text(encoding="utf-8"))
-    rule = json.loads(selection_rule_path.read_text(encoding="utf-8"))
+    # **一度だけ読み**、その同じバイト列から parse と sha256 の両方を作る
+    # （読み直すと、間に差し替わったとき「古い文書で選んだ候補」を「新しい
+    #  バイトの sha」で pin してしまう = PR #300 Codex 第 3 巡 P2）。
+    cs, cs_sha, _ = s7_io.read_json_with_pin(candidate_space_path)
+    cal, cal_sha, _ = s7_io.read_json_with_pin(calibration_set_path)
+    rule, rule_sha, _ = s7_io.read_json_with_pin(selection_rule_path)
     for doc, expected, path in (
         (cs, sp.CANDIDATE_SPACE_SCHEMA, candidate_space_path),
         (cal, sp.CALIBRATION_SET_SCHEMA, calibration_set_path),
@@ -86,9 +87,9 @@ def load_prereg(
         calibration_set=cal,
         selection_rule=rule,
         pins={
-            candidate_space_path.name: sha256_file(candidate_space_path),
-            calibration_set_path.name: sha256_file(calibration_set_path),
-            selection_rule_path.name: sha256_file(selection_rule_path),
+            candidate_space_path.name: cs_sha,
+            calibration_set_path.name: cal_sha,
+            selection_rule_path.name: rule_sha,
         },
     )
 
@@ -863,6 +864,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps(payload, sort_keys=True))
         return 0
 
+    reject_output_collision(
+        [args.out],
+        [CANDIDATE_SPACE_PATH, CALIBRATION_SET_PATH, SELECTION_RULE_PATH],
+    )
     spec = run_b1(cross_process=not args.no_cross_process)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(_canonical_json(spec), encoding="utf-8")

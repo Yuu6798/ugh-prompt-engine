@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import io
 import json
 import math
@@ -36,7 +35,9 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import s7_io  # noqa: E402
 import s7_spec as sp  # noqa: E402
+from s7_io import OutputCollisionError, reject_output_collision, sha256_bytes  # noqa: E402,F401
 
 SILENCE_TOKENS = frozenset({"SP", "AP"})
 VOWELS = frozenset({"a", "i", "u", "e", "o", "A", "I", "U", "E", "O"})
@@ -56,14 +57,6 @@ class Row:
     note_dur: Optional[Tuple[float, ...]] = None
 
 
-class OutputCollisionError(RuntimeError):
-    """出力先が入力（`transcriptions.csv` / MIDI 対応表）と衝突した（fail-closed）。"""
-
-
-def sha256_bytes(raw: bytes) -> str:
-    return hashlib.sha256(raw).hexdigest()
-
-
 def read_and_parse(csv_path: Path) -> Tuple[List[Row], str, int]:
     """入力を**一度だけ**読み、その同じバイト列を parse と sha256 の両方に使う。
 
@@ -71,8 +64,8 @@ def read_and_parse(csv_path: Path) -> Tuple[List[Row], str, int]:
     「古いバイトから数えた count」を「新しいバイトの sha」で pin してしまう
     （PR #300 Codex 第 2 巡 P2）。
     """
-    raw = csv_path.read_bytes()
-    return parse_text(raw.decode("utf-8"), source=str(csv_path)), sha256_bytes(raw), len(raw)
+    raw, sha, n = s7_io.read_bytes_with_pin(csv_path)
+    return parse_text(raw.decode("utf-8"), source=str(csv_path)), sha, n
 
 
 def parse_rows(csv_path: Path) -> List[Row]:
@@ -87,6 +80,14 @@ def parse_text(text: str, source: str = "<text>") -> List[Row]:
     for raw in reader:
         ph_seq = tuple(str(raw["ph_seq"]).split())
         ph_dur = tuple(float(x) for x in str(raw["ph_dur"]).split())
+        # `nan` / `inf` / 負値は float() を通ってしまう。放置すると duration_bin()
+        # の走査を素通りして最長層 d4 に入り、H-TTD を動かす（PR #300 Codex
+        # 第 3 巡 P2）。黙って数えず fail-closed で止める。
+        bad = [d for d in ph_dur if not math.isfinite(d) or d < 0.0]
+        if bad:
+            raise ValueError(
+                f"{source}: row {raw.get('name')!r} has non-finite or negative ph_dur: {bad}"
+            )
         if len(ph_seq) != len(ph_dur):
             raise ValueError(
                 f"{source}: row {raw.get('name')!r} has "
@@ -250,18 +251,19 @@ def _note_index_of_phone(row: Row, phone_index: int) -> Optional[int]:
 
 
 def _midi_from_note_seq(row: Row, phone_index: int) -> Optional[float]:
-    """譜面ありの行: 終端モーラが載るノートの MIDI をそのまま使う（§3-1）。"""
+    """譜面ありの行: 終端モーラが**載るノート**の MIDI をそのまま使う（§3-1）。
+
+    `ph_num` が無い / 終端音素を覆っていない行では **`None`（unknown）を返す**。
+    行全体の中央値で埋めると、それは推定であって観測ではなく（§3 末尾「推定ではなく
+    既知の境界から数える」）、しかもその推定値が話者内三分位に参加して露出を
+    別の pitch 層へ動かしうる（PR #300 Codex 第 3 巡 P1）。
+    """
     if not row.note_seq:
         return None
     note_i = _note_index_of_phone(row, phone_index)
-    tokens = row.note_seq
-    if note_i is None:
-        candidates = [_note_token_to_midi(t) for t in tokens]
-        vals = [v for v in candidates if v is not None]
-        return float(sorted(vals)[len(vals) // 2]) if vals else None
-    if note_i >= len(tokens):
+    if note_i is None or note_i >= len(row.note_seq):
         return None
-    return _note_token_to_midi(tokens[note_i])
+    return _note_token_to_midi(row.note_seq[note_i])
 
 
 def _note_token_to_midi(token: str) -> Optional[float]:
@@ -444,12 +446,11 @@ class MidiTable:
 
     @classmethod
     def load(cls, path: Path) -> "MidiTable":
-        raw = path.read_bytes()
-        table = json.loads(raw.decode("utf-8"))
+        table, sha, n = s7_io.read_json_with_pin(path)
         return cls(
             path=path,
-            sha256=sha256_bytes(raw),
-            n_bytes=len(raw),
+            sha256=sha,
+            n_bytes=n,
             mapping={str(k): float(v) for k, v in table.items()},
         )
 
@@ -468,6 +469,19 @@ def build_ledger(
         raise ValueError(
             f"同じ話者が複数回指定されている: {duplicates}。"
             "1 話者 = 1 つの transcriptions.csv で渡す（黙って上書きしない）"
+        )
+    # 同じ話者を breaking と non_breaking の両方へ入れると、両群に同じ密度が入り
+    # 順序判定が必ず偽になって「無効な事前登録から refuted が出る」（PR #300
+    # Codex 第 3 巡 P2）。分類の矛盾と未知話者は裁定前に止める。
+    contradictory = sorted(set(breaking) & set(non_breaking))
+    if contradictory:
+        raise ValueError(
+            f"同じ話者が breaking と non-breaking の両方に指定されている: {contradictory}"
+        )
+    unknown = sorted((set(breaking) | set(non_breaking)) - set(seen))
+    if unknown:
+        raise ValueError(
+            f"入力に存在しない話者が分類に指定されている: {unknown}（誤記の可能性）"
         )
     speakers = {inp.speaker: build_speaker_section(inp) for inp in inputs}
     verdict = httd_verdict(speakers, breaking, non_breaking)
@@ -677,21 +691,6 @@ def _parse_speaker_arg(value: str) -> SpeakerInput:
     if modality not in sp.MODALITIES:
         raise argparse.ArgumentTypeError(f"unknown modality {modality!r} (許容 = {sp.MODALITIES})")
     return SpeakerInput(speaker=name, modality=modality, csv_path=Path(path))
-
-
-def reject_output_collision(out_paths: Sequence[Path], input_paths: Sequence[Path]) -> None:
-    """出力先が入力と衝突していたら**書く前に**停止する（PR #300 Codex 第 2 巡 P1）。
-
-    `--out` に入力の `transcriptions.csv` を渡すと、解析後の書き込みで入力そのものを
-    破壊する。`scripts/measure_bands.py::_reject_output_collision` と同じ
-    resolved 比較（symlink 解決後の完全一致）で判定する。
-    """
-    resolved_inputs = {p.resolve() for p in input_paths if p.exists()}
-    for out in out_paths:
-        if out.resolve() in resolved_inputs:
-            raise OutputCollisionError(
-                f"出力先 ({out}) が入力と衝突しています（fail-closed で拒否）"
-            )
 
 
 def render_table(ledger: Dict[str, Any]) -> str:

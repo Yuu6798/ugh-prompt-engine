@@ -240,7 +240,7 @@ def test_ledger_pins_the_bytes_of_its_inputs(tmp_path: Path):
     ledger = L.build_ledger(
         [L.SpeakerInput("user", "real_song", path)],
         ["user"],
-        ["pjs"],
+        [],
         midi_table=L.MidiTable.load(midi),
     )
     assert ledger["midi_json"]["sha256"] == hashlib.sha256(midi.read_bytes()).hexdigest()
@@ -274,7 +274,7 @@ def test_duplicate_speakers_are_rejected(tmp_path: Path):
         L.build_ledger(
             [L.SpeakerInput("user", "real_song", a), L.SpeakerInput("user", "real_song", b)],
             ["user"],
-            ["pjs"],
+            [],
         )
 
 
@@ -297,3 +297,33 @@ def test_parse_and_hash_come_from_the_same_bytes(tmp_path: Path):
     assert sha == hashlib.sha256(raw).hexdigest()
     assert nbytes == len(raw)
     assert [r.name for r in rows] == ["u1"]
+
+
+def test_contradictory_or_unknown_speaker_classification_is_rejected(tmp_path: Path):
+    """breaking と non-breaking の重複・未知話者を裁定前に止める（PR #300 第 3 巡 P2）。"""
+    a = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
+    b = _write_csv(tmp_path, "pjs", ["p1,SP r i SP,0.1 0.3 1.7 0.2"], HEADER_MIN)
+    inputs = [L.SpeakerInput("user", "real_song", a), L.SpeakerInput("pjs", "real_song", b)]
+    with pytest.raises(ValueError, match="両方"):
+        L.build_ledger(inputs, ["user", "pjs"], ["pjs"])
+    with pytest.raises(ValueError, match="存在しない"):
+        L.build_ledger(inputs, ["user"], ["amitaro"])
+
+
+def test_non_finite_or_negative_durations_are_rejected(tmp_path: Path):
+    """nan / inf / 負値が黙って d4 層へ入る経路を塞ぐ（PR #300 第 3 巡 P2）。"""
+    for bad in ("nan", "inf", "-0.5"):
+        path = _write_csv(tmp_path, f"bad_{bad}", [f"x1,SP r i SP,0.1 0.3 {bad} 0.2"], HEADER_MIN)
+        with pytest.raises(ValueError, match="non-finite or negative"):
+            L.parse_rows(path)
+
+
+def test_pitch_is_unknown_when_the_terminal_phone_cannot_be_aligned(tmp_path: Path):
+    """`ph_num` が無い行で行全体の中央値を当てない（PR #300 第 3 巡 P1）。"""
+    row = L.Row(
+        name="r1",
+        ph_seq=("SP", "r", "i", "SP"),
+        ph_dur=(0.1, 0.3, 1.6, 0.2),
+        note_seq=("rest", "C4", "G5", "rest"),   # ph_num が無いので対応が取れない
+    )
+    assert L._midi_from_note_seq(row, 2) is None

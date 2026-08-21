@@ -31,7 +31,9 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import s7_io  # noqa: E402
 import s7_spec as sp  # noqa: E402
+from s7_io import reject_output_collision  # noqa: E402
 
 RESULTS_DIR = _HERE.parent / "results_s7"
 SPEC_PATH = RESULTS_DIR / "trf_measurement_spec.json"
@@ -676,7 +678,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--out", type=Path, default=RESULTS_DIR / "s7_b2_verdict_algebra.json")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    reject_output_collision([args.out], [args.spec])
+    spec, _spec_sha, _ = s7_io.read_json_with_pin(args.spec)
     if spec.get("schema") != sp.TRF_SPEC_SCHEMA:
         raise ValueError(f"{args.spec}: unexpected schema {spec.get('schema')!r}")
     doc = build_algebra_doc(spec)

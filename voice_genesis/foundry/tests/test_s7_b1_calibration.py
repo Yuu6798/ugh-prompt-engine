@@ -280,8 +280,10 @@ def test_b1_has_no_path_to_production_or_label_data():
     )
     hits = [token for token in forbidden_paths if token in source]
     assert hits == [], f"B-1 が参照してはならないパスを含む: {hits}"
-    # 実ファイルを読むのは load_prereg の 3 呼び出し（事前登録 3 点）だけ
-    assert source.count("read_text(") == 3
+    # 実ファイルを読むのは load_prereg の 3 呼び出し（事前登録 3 点）だけで、
+    # いずれも s7_io の「一度読んで parse と sha を同じバイト列から作る」経路
+    assert source.count("read_json_with_pin(") == 3
     for name in ("candidate_space_path", "calibration_set_path", "selection_rule_path"):
-        assert f"{name}.read_text(" in source
-    assert source.count("read_bytes(") == 1         # sha256_file の pin 計算だけ
+        assert f"read_json_with_pin({name})" in source
+    assert "read_text(" not in source
+    assert "read_bytes(" not in source
