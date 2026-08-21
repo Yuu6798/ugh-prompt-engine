@@ -213,6 +213,17 @@ Stage 2 pack が無い / trial 総数が 8 を超える。
 無害なので**そのまま残す**（撤去コストの方が高い）。以降の同型指摘は本節を引いて
 見送る。
 
+### 全数掃討して終端したファミリー（2026-08-21・第 8 巡）
+
+`AGENTS.md` §3「同型穴はファミリー単位で全数掃討して終端宣言」に従い、
+以下 2 ファミリーは**個別指摘ではなく全数**を塞いだ。以降、同型の指摘は
+本節を引いて見送る（新しい**別型**の経路なら §13 の A/B/C 基準で採否する）。
+
+| ファミリー | 掃討内容 | 固定テスト |
+|---|---|---|
+| **壊れた JSON で BLOCKED が出せない** | S3.5 が読む JSON を**全数** `prep.json_object()` 経由にし、根が object でなければ `S35Stop`。対象 = S3 正本 / blind manifest / private key / 回答 / 既存 key_reveal。`load_finalized()` のみ非 dict を `None` 扱い | `test_no_json_loads_outside_the_shared_gate` が `json.loads` の出現箇所を helper と `load_finalized` の 2 つに固定 |
+| **Stage 1 失敗で private key が孤児化** | key 書き込みを temp + `chmod 0600` + `os.replace` の原子操作にし、**書き込みを含む** Stage 1 全体を 1 つの巻き戻し scope に入れる。失敗時は呼び出し前の状態へ復元 | `test_private_key_write_failure_leaves_nothing` / `test_stage1_failure_leaves_no_orphan_private_key` |
+
 ### 見送るときの手順
 
 指摘が (A)(B)(C) のどれにも当たらないと判断したら、**resolve せず**本節への
