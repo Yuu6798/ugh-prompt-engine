@@ -18,9 +18,9 @@ S2 PASS / S3 PASS / S3.5 の結果は変更しない（設計書 §16）。
 | G0-2_s35_canonical | pass |
 | G0-3_provenance_chain | pass |
 | G0-5_clean_worktree | pass |
-| G0-5_closure_digest | 80ea1961e5aa6520cb3590f5ade3e13ed983d2fd0f778c0f58586888ee79490d |
+| G0-5_closure_digest | 00f9376e53b6506e03a194669a505272a32dd68faca1b6f4a3ccd4213eb272c8 |
 | G0-5_closure_file_count | 21 |
-| commit | 4362cc29b81d0a276415eb0e996e6386f9efb698 |
+| commit | ec773d9638b871f21f3df65c8d71a36ac7f72412 |
 | s3_results_sha256 | 65b91402f2b6ead2b8d3269455413e6bd0ae575d66a33a52f0a2367c91e55cd0 |
 | s35_results_sha256 | 5dcbc4329d9e7343e0f48d96665be5faa0f9406425a6552249eb9b5fcebb95ba |
 | input_manifest_sha256 | 78fcd8cc6e3f2b7c9edae72e0894f552b9cdfb0087d44b1df0d45402063fec4f |
