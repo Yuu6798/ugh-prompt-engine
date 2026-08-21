@@ -129,6 +129,8 @@ testpaths = [
     # run 8 STEP 6: 校正専用 real-render セットの譜面/命令/manifest 照合。
     # import 閉包は numpy + soundfile（どちらも本体の必須依存）。
     "voice_genesis/foundry/tests/test_s7_calib_score.py",
+    # run 8 PR-2: 8-0b probe set の事前登録（36 セル / 360 展開 / 測定仕様 pin）。
+    "voice_genesis/foundry/tests/test_s7_0b_probe_spec.py",
 ]
 pythonpath = ["src", "."]
 markers = [

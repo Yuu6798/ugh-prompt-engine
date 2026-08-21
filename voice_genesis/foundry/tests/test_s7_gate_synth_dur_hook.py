@@ -1,4 +1,4 @@
-"""test_s7_gate_synth_dur_hook.py — Stage 1 フレーム配分フックの番人。
+"""test_s7_gate_synth_dur_hook.py — Stage 1 フックと 8-0b 診断ローダの番人。
 
 run 8 の校正レンダのために `run_pipeline` へ足した `final_phone_dur_override`
 （既定 None）が、**off のとき本番経路を 1 命令も変えない**ことと、on のときの
@@ -10,6 +10,7 @@ run 8 の校正レンダのために `run_pipeline` へ足した `final_phone_du
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import inspect
 import sys
@@ -179,3 +180,60 @@ def test_override_rejects_bad_shapes(gs):
         gs.resolve_final_phone_dur(pred, counts, targets, phones, 11.6, {}, lambda d, c: [11])
     with pytest.raises(ValueError):
         gs.resolve_final_phone_dur(pred, counts, targets, phones, 11.6, {}, lambda d, c: [0, 11])
+
+
+# --- PR-2: 診断スコアモジュールのローダ拡張（既存 sakura/umi は不変） --------
+
+
+def test_sakura_and_umi_loading_is_unchanged(gs, tmp_path):
+    """既存 2 曲は返り値の形も provenance sha も従来どおり。"""
+    singer = Path(gs.DEFAULT_SINGER_DIR)
+    build, b2s, tempo, path, shas = gs.load_song_module("sakura", singer)
+    assert path == (singer / "score.py").resolve()
+    assert tempo == 72.0
+    assert set(shas) == {"score_module_sakura", "score_module_sakura_dep_phoneme_jp"}
+    assert len(build()) > 0
+    build_u, _, tempo_u, path_u, shas_u = gs.load_song_module("umi", singer)
+    assert path_u == (singer / "score_umi.py").resolve()
+    assert tempo_u == 88.0
+    assert set(shas_u) == {
+        "score_module_umi",
+        "score_module_umi_dep_score",
+        "score_module_umi_dep_phoneme_jp",
+    }
+    assert len(build_u()) > 0
+    for _, (p, sha) in list(shas.items()) + list(shas_u.items()):
+        assert hashlib.sha256(Path(p).read_bytes()).hexdigest() == sha
+
+
+def test_diagnostic_song_loads_a_single_cell(gs):
+    singer = Path(gs.DEFAULT_SINGER_DIR)
+    song = gs.DIAGNOSTIC_SONG_PREFIX + "P-RI-FINAL|low|b4"
+    build, b2s, tempo, path, shas = gs.load_song_module(song, singer)
+    assert path.name == gs.DIAGNOSTIC_SCORE_MODULE
+    assert tempo == 72.0
+    notes = build()
+    assert len(notes) == 1
+    assert notes[0].midi == 57.0 and notes[0].duration_beats == 4.0
+    assert notes[0].mora.onset == "r" and notes[0].mora.vowel == "i"
+    # provenance のキー命名は既存規約と同型で、実体と一致する
+    assert f"score_module_{song}" in shas
+    for _, (p, sha) in shas.items():
+        assert hashlib.sha256(Path(p).read_bytes()).hexdigest() == sha
+
+
+def test_unknown_song_and_unknown_cell_are_rejected(gs):
+    singer = Path(gs.DEFAULT_SINGER_DIR)
+    with pytest.raises(ValueError):
+        gs.load_song_module("kagome", singer)
+    with pytest.raises(ValueError):
+        gs.load_song_module(gs.DIAGNOSTIC_SONG_PREFIX + "NOT-A-CELL", singer)
+    with pytest.raises(ValueError):
+        gs.load_song_module(gs.DIAGNOSTIC_SONG_PREFIX, singer)
+
+
+def test_measurement_out_defaults_to_none(gs):
+    sig = inspect.signature(gs.run_pipeline)
+    assert sig.parameters["measurement_out"].default is None
+    src = inspect.getsource(gs.synth_song)
+    assert "measurement_out" not in src

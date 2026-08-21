@@ -140,6 +140,12 @@ import yaml  # noqa: E402
 # スクリプト自身の位置から相対導出する（`--singer-dir` で明示上書きも可能）。
 DEFAULT_SINGER_DIR = Path(__file__).resolve().parents[2] / "singer"
 
+#: run 8-0b 診断 probe の song id 接頭辞（`--song diag:<cell_id>`）。
+#: 既存の sakura / umi 経路には一切触れない（`load_song_module` の分岐は
+#: この接頭辞を持つ song だけを拾う）。
+DIAGNOSTIC_SONG_PREFIX = "diag:"
+DIAGNOSTIC_SCORE_MODULE = "score_diag_pf.py"
+
 SEED = 42
 HEAD_FRAMES = 8
 TAIL_FRAMES = 8
@@ -249,7 +255,7 @@ def load_song_module(
     という 4 段の別読み込みも、本関数 1 回の呼び出しへ統合する（`synth_song`
     は本関数が返す `build_fn` 等をそのまま使い、内部で再ロードしない）。
     """
-    if song not in ("sakura", "umi"):
+    if song not in ("sakura", "umi") and not song.startswith(DIAGNOSTIC_SONG_PREFIX):
         raise ValueError(f"unknown song: {song}")
 
     module_shas: Dict[str, Tuple[Path, str]] = {}
@@ -260,6 +266,28 @@ def load_song_module(
 
     score_path = (singer_dir / "score.py").resolve()
     sc_score, score_sha = _read_and_exec_module("score", score_path)
+
+    if song.startswith(DIAGNOSTIC_SONG_PREFIX):
+        # run 8-0b の診断 probe（`DESIGN_S7_run8.md` §4-1）。1 セル = 1 譜面 = 1 レンダ。
+        # sakura/umi と**同じ single-read + compile/exec 経路**で読み、同じ命名規約で
+        # provenance sha を返す（診断だけ pin が緩む経路を作らない）。
+        cell_id = song[len(DIAGNOSTIC_SONG_PREFIX):]
+        if not cell_id:
+            raise ValueError(f"diagnostic song id is empty: {song!r}")
+        module_shas[f"score_module_{song}_dep_score"] = (score_path, score_sha)
+        diag_path = (singer_dir / DIAGNOSTIC_SCORE_MODULE).resolve()
+        sc_diag, diag_sha = _read_and_exec_module("score_diag_pf", diag_path)
+        module_shas[f"score_module_{song}"] = (diag_path, diag_sha)
+        known = {c["cell_id"] for c in sc_diag.enumerate_cells()}
+        if cell_id not in known:
+            raise ValueError(f"unknown diagnostic cell: {cell_id!r}")
+        return (
+            lambda: sc_diag.build_score_for_cell_id(cell_id),
+            sc_diag.beats_to_seconds,
+            sc_diag.TEMPO_BPM,
+            diag_path,
+            module_shas,
+        )
 
     if song == "sakura":
         module_shas[f"score_module_{song}"] = (score_path, score_sha)
@@ -1153,6 +1181,7 @@ def run_pipeline(
     speaker_name: Optional[str] = None,
     speaker_embed_vector: Optional[np.ndarray] = None,
     final_phone_dur_override: Optional[Callable[[List[int], dict], List[int]]] = None,
+    measurement_out: Optional[dict] = None,
 ) -> np.ndarray:
     """`model_bytes` は `load_model_bundle_bytes` が 1 回だけ read したモデル束
     + dsconfig.yaml のバッファ（`canon_linguistic_onnx`/`canon_variance_dur_onnx`/
@@ -1372,6 +1401,28 @@ def run_pipeline(
     waveform = vocoder_out[vocoder_names.index("waveform")]
     y = np.asarray(waveform, dtype=np.float64).reshape(-1)
     record["stage4_elapsed_sec"] = time.time() - t0
+    if measurement_out is not None:
+        # [run 8-0b] 測定経路（`DESIGN_S7_run8.md` §5-2）。**既定 None = 現行と同一**で、
+        # 渡されたときだけ「命令区間」と「正規化前の生波形・f0」を呼び出し側へ渡す。
+        # `synth_song` のピーク正規化を通さずに窓を切れることが要件なので、値を
+        # 作るだけで本関数の出力（返り値 y）には一切触れない。
+        measurement_out.update(
+            {
+                "real_phones": list(real_phones),
+                "note_phone_counts": list(note_phone_counts),
+                "note_target_frames": list(note_target_frames),
+                "final_phone_dur": list(final_phone_dur),
+                "head_frames": HEAD_FRAMES,
+                "tail_frames": TAIL_FRAMES,
+                "total_frames": int(total_frames),
+                "frame_ms": frame_ms,
+                "hop_size": hop_size,
+                "sample_rate": sample_rate,
+                "f0_hz": f0_hz.reshape(-1).copy(),
+                "raw_waveform": y,
+                "normalized": False,
+            }
+        )
     return y
 
 
