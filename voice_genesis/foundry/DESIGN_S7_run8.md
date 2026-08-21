@@ -1758,6 +1758,25 @@ z'_primary(cell, arm)
 全て満たす      -> EFFECTIVE_LEVER
 一つでも欠ける  -> NOT_EFFECTIVE（欠けた条件を理由コードで記帳）
 
+dropped セルの扱い（2026-08-21・Codex P1 指摘を採用。**事前登録しないと
+「不利なセルを落として C〜E を通す」実装と落とさない実装で判定が割れる**。
+`duration_floor_clipped` / `f0_window_too_short` / `ringing_uncorrected` は
+本書が明示的に許した帰結なので、必ず起こりうる）:
+
+  1. anchor が dropped
+       -> そのアームは **undetermined**（A / B が評価できない。
+          NOT_EFFECTIVE とも書かない）
+  2. T / C の非 anchor セルが dropped
+       -> そのセルは C の分子・D の median・E の分母から**除外**し、
+          **除外集合（cell_id と理由コード）を必ず記帳**する
+  3. 最小支持（**有利な生存者だけで通る経路を塞ぐ**）:
+       rendered な T セルが **8 未満**（= 10 セル中 2 セル超が脱落）
+       または rendered な C セルが **25 未満**（= 31 セル中 6 セル超が脱落）
+       -> そのアームは **undetermined**
+  4. F（独立プロセス再現）は判定と flip 集合に加えて
+       **dropped 集合の完全一致**も要求する（片方でだけ落ちるセルがあれば
+       再現とみなさない）
+
 特異性の検査（§7G-2 の対照から機械的に立てる）:
   D / F : 逆符号の桟でも**判定 D**（median の改善）が ε を超える
           -> status = nonspecific_response
