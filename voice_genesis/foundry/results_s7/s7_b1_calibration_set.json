@@ -159,7 +159,7 @@
         "gain_x050"
       ]
     ],
-    "silence_zero": [
+    "zero_input_false_positive": [
       "silence"
     ],
     "monotone_ladder": {
@@ -187,6 +187,16 @@
       "committed_before_generation": true,
       "not_changed": "hard requirement 6 件・辞書式順位付け・numeric_precision・候補空間（s7_b1_candidate_space.json）はいずれも変更しない。**変わるのは校正音源だけ**",
       "synthetic_set_retained": "既存 13 合成刺激は削除しない。real-render 側と**同じ 13 条件の対応**を持たせ、両方を測って差を記帳する（合成のみで見えていた性質がどこで崩れるかを残す）"
+    },
+    {
+      "date": "2026-08-21",
+      "pr": "STEP 6 amendment (User 裁定 2026-08-21 / (A) 採用)",
+      "what": "roles.silence_zero -> roles.zero_input_false_positive。実レンダ側の担当刺激を rr_silence（SP-only render）から rr_zero_buffer（厳密ゼロの合成緩衝）へ差し替える。rr_silence は削除せず diagnostics.pipeline_silence_residual として保存する。合成側は担当刺激 silence（既に厳密ゼロ）のまま名称のみ改称。",
+      "why": "旧 silence_zero は「測定器が無入力に対して 0 を返すか」を意図した要件だが、実レンダ側の操作化 rr_silence は無入力ではなかった（SP フレームにも予測 F0 が乗り NSF 音源が励振される）。要求の意味を実装していなかったので刺激を直す。",
+      "reason_is_not": "候補の成績を見て変えたのではない。1.0-rc2 の結果は書き換えず保存する。",
+      "not_changed": "条件 11 + 派生 2・音高・拍・延長 ms・r:i 配分・候補空間・window/hop/mel・ranking key・他 5 要件と全許容値は変更しない。",
+      "production_cells_seen": 0,
+      "committed_before_remeasurement": true
     }
   ],
   "real_render_set": {
@@ -355,8 +365,8 @@
           "rr_gain_x050"
         ]
       ],
-      "silence_zero": [
-        "rr_silence"
+      "zero_input_false_positive": [
+        "rr_zero_buffer"
       ],
       "monotone_ladder": {
         "axis_expectation": "increasing",
@@ -388,6 +398,38 @@
       "run5/6/7 の良し悪し・P-ANCHOR 結果を選定に使わない",
       "hard requirement / 順位付けキー / 候補空間を変更しない",
       "生成してから条件を足さない（追加は別 amendment）"
+    ],
+    "zero_buffers": [
+      {
+        "id": "rr_zero_buffer",
+        "kind": "synthetic_zero_buffer",
+        "samples": "bit-exact 0.0",
+        "sample_rate_hz": 44100,
+        "length": "同じ校正音源のレンダと同一（共通ゼロ詰め長）",
+        "boundaries": "同じ校正音源の条件と同一（測定窓の定義をそろえるため）",
+        "rendered": false,
+        "why": "zero_input_false_positive は**測定器**の性質を測る要件なので、刺激は合成経路にも実レンダ経路にも依存しない厳密ゼロでなければならない。"
+      }
+    ],
+    "diagnostics": [
+      {
+        "id": "pipeline_silence_residual",
+        "stimulus": "rr_silence",
+        "status": "diagnostic_observation_only",
+        "used_for_pass_fail": false,
+        "record_required": [
+          "waveform_rms",
+          "dominant_f0_hz",
+          "median_f0_hz",
+          "commanded_pitch_midi",
+          "commanded_pitch_hz",
+          "sp_frame_count",
+          "tail_frame_count",
+          "trf_axis_values_per_candidate",
+          "provenance (acoustic / pitch predictor / vocoder sha256)"
+        ],
+        "why": "SP-only render は無入力ではない。detector false positive（zero_input_false_positive）と、経路が生成した非ゼロ波形（本 diagnostic）を区別して記録する。"
+      }
     ]
   }
 }
