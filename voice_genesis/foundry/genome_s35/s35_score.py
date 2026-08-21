@@ -1,9 +1,7 @@
-"""genome_s35/s35_score.py — Phase D–E（設計書 v1.0 §21）。
+"""genome_s35/s35_score.py — Stage 1 / Stage 2 の採点。
 
 **回答凍結後だけ実行する。** 採点前に正解を表示しない。
-
-責務: answers SHA 固定 / key commitment 検証 / trial 採点 / gene 集約 /
-S4_READY 判定 / key_reveal 生成。
+各問終了時に正誤を出さない（stage 単位でまとめて採点する）。
 """
 from __future__ import annotations
 
@@ -21,49 +19,40 @@ import s35_spec as sp  # noqa: E402
 
 RESULTS = prep.RESULTS
 KEY_REVEAL = RESULTS / "key_reveal.json"
-ANSWERS = RESULTS / "answers.json"
 
 
-def load_answers(path: Optional[Path] = None) -> Tuple[Dict[str, Any], str]:
-    """§12 回答ファイルを読み、**そのままの bytes** の SHA を凍結する。"""
-    path = ANSWERS if path is None else path
+def answers_path(stage: int) -> Path:
+    return RESULTS / f"answers_stage{stage}.json"
+
+
+def load_answers(stage: int, path: Optional[Path] = None) -> Tuple[Dict[str, Any], str]:
+    """回答ファイルを読み、**そのままの bytes** の SHA を凍結する。"""
+    path = answers_path(stage) if path is None else path
     if not path.exists():
-        raise prep.S35Stop(reason=f"回答ファイルが無い（{path}）",
-                           required_action="聴取後の answers.json を配置する")
+        raise prep.S35Stop(reason=f"Stage {stage} の回答ファイルが無い（{path}）",
+                           required_action=f"聴取後の answers_stage{stage}.json を配置する")
     raw = path.read_bytes()
     try:
         data = json.loads(raw.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise prep.S35Stop(reason=f"回答ファイルが JSON として読めない: {exc}",
-                           required_action="answers.json を確認する") from exc
+                           required_action="回答 JSON を確認する") from exc
     if data.get("schema") != sp.ANSWERS_SCHEMA:
         raise prep.S35Stop(reason=f"回答 schema が不正: {data.get('schema')!r}",
                            required_action=f"schema を {sp.ANSWERS_SCHEMA} にする")
+    if int(data.get("stage", stage)) != stage:
+        raise prep.S35Stop(reason=f"回答ファイルの stage が違う: {data.get('stage')!r} "
+                                  f"(期待 {stage})",
+                           required_action="stage を合わせる")
     return data, prep.sha256_bytes(raw)
 
 
-def load_private_key(path: Optional[Path] = None) -> Tuple[Dict[str, Any], str]:
-    # 既定値を def 時に束縛しない（テスト・別 session で差し替えられるように）
-    path = prep.PRIVATE_KEY if path is None else path
-    if not path.exists():
-        raise prep.S35Stop(reason=f"private key が無い（{path}）",
-                           required_action="Phase C の成果物を復元する。再生成は blind の破壊")
-    raw = path.read_bytes()
-    return json.loads(raw.decode("utf-8")), prep.sha256_bytes(raw)
-
-
-def verify_commitment(manifest: Dict[str, Any], key_sha: str) -> bool:
-    """§9 commitment 一致検証。不一致は INVALID（回答後の正解変更を禁止する装置）。"""
-    return manifest.get("key_commitment") == key_sha
-
-
-def check_answers_complete(answers: Dict[str, str], trial_ids: List[str]) -> None:
-    """§25「回答ファイルが部分的」は即停止。空文字も未回答として扱う。"""
+def check_complete(answers: Dict[str, str], trial_ids: List[str], stage: int) -> None:
     missing = [t for t in trial_ids if not answers.get(t)]
     extra = [t for t in answers if t not in trial_ids]
     if missing:
-        raise prep.S35Stop(reason=f"未回答の trial がある: {len(missing)} 件 "
-                                  f"(例 {missing[:3]})",
+        raise prep.S35Stop(reason=f"Stage {stage} に未回答の trial がある: "
+                                  f"{len(missing)} 件 (例 {missing[:3]})",
                            required_action="全 trial に A / B / UNSURE を入れる")
     if extra:
         raise prep.S35Stop(reason=f"manifest に無い trial の回答がある: {extra[:3]}",
@@ -74,130 +63,168 @@ def check_answers_complete(answers: Dict[str, str], trial_ids: List[str]) -> Non
                            required_action="回答語彙を A / B / UNSURE に限定する")
 
 
-def score(answers: Dict[str, str], key: Dict[str, Any], *,
-          commitment_verified: bool, audio_verified: bool) -> Dict[str, Any]:
-    """§13 trial 採点 → gene 集約。`UNSURE` は正答に数えない。"""
-    per_gene: Dict[str, Dict[str, Any]] = {}
-    for tid, spec in key["trials"].items():
-        g = per_gene.setdefault(spec["gene"], {
-            "correct": 0, "total": 0, "unsure": 0,
-            "pairs": set(), "contexts": set(), "trials": {}})
-        given = answers.get(tid, "")
-        ok = given == spec["correct"]          # UNSURE は一致しない = incorrect
-        g["total"] += 1
-        g["correct"] += int(ok)
-        g["unsure"] += int(given == sp.Answer.UNSURE.value)
-        g["pairs"].add(spec["pair_key"])
-        g["contexts"].add(spec["probe_kind"])
-        g["trials"][tid] = {"answer": given, "correct": ok}
-
-    out: Dict[str, Any] = {}
-    for gene, g in per_gene.items():
-        verdict = sp.gene_verdict(
-            g["correct"], g["total"], len(g["pairs"]), len(g["contexts"]),
-            commitment_verified=commitment_verified, audio_verified=audio_verified)
-        out[gene] = {
-            "verdict": verdict.value,
-            "correct": g["correct"], "total": g["total"], "unsure": g["unsure"],
-            "distinct_pairs": len(g["pairs"]), "contexts": len(g["contexts"]),
-            "context_ids": sorted(g["contexts"]),
-            "pair_keys": sorted(g["pairs"]),
-            "trials": g["trials"],
-        }
-    return out
-
-
-def write_key_reveal(key: Dict[str, Any], key_sha: str, commitment: str,
-                     answers_sha: str, path: Optional[Path] = None) -> str:
-    """§9 回答凍結**後**にのみ生成する。"""
-    path = KEY_REVEAL if path is None else path
-    reveal = {
-        "protocol_version": key.get("protocol_version"),
-        "revealed_after_answers_sha256": answers_sha,
-        "key_commitment": commitment,
-        "key_sha256": key_sha,
-        "commitment_verified": commitment == key_sha,
-        "trials": key["trials"],
-    }
-    path.write_text(prep._dumps(reveal), encoding="utf-8")
-    return prep.sha256_file(path)
-
-
-def run(answers_path: Optional[Path] = None) -> Dict[str, Any]:
-    answers_path = ANSWERS if answers_path is None else answers_path
-    if not prep.BLIND_MANIFEST.exists():
-        raise prep.S35Stop(reason=f"blind manifest が無い（{prep.BLIND_MANIFEST}）",
-                           required_action="Phase C を先に実行する")
-    manifest = json.loads(prep.BLIND_MANIFEST.read_text(encoding="utf-8"))
-    manifest_sha = prep.sha256_file(prep.BLIND_MANIFEST)
-
-    answers_doc, answers_sha = load_answers(answers_path)     # §12 回答凍結
-    key, key_sha = load_private_key()
-    commitment_ok = verify_commitment(manifest, key_sha)
-
-    check_answers_complete(answers_doc.get("answers") or {}, manifest["trial_ids"])
-
-    # §3/§13 audio SHA verified — pack の実体を manifest と突き合わせる
-    audio_ok, audio_detail = verify_pack_audio(manifest)
-
-    genes = score(answers_doc.get("answers") or {}, key,
-                  commitment_verified=commitment_ok, audio_verified=audio_ok)
-    reveal_sha = write_key_reveal(key, key_sha, manifest.get("key_commitment", ""),
-                                  answers_sha)
-
-    perceptible = sorted(g for g, v in genes.items()
-                         if v["verdict"] == sp.GeneVerdict.PERCEPTIBLE.value)
-    return {
-        "s3_results_sha256": manifest.get("s3_results_sha256"),
-        "protocol_version": manifest.get("protocol_version"),
-        "blind_manifest_sha256": manifest_sha,
-        "answers_sha256": answers_sha,
-        "key_commitment": manifest.get("key_commitment"),
-        "key_sha256": key_sha,
-        "commitment_verified": commitment_ok,
-        "audio_verified": audio_ok,
-        "audio_detail": audio_detail,
-        "key_reveal_sha256": reveal_sha,
-        "listener_id": answers_doc.get("listener_id"),
-        "session_id": answers_doc.get("session_id"),
-        "genes": genes,
-        "overall": {"perceptible_gene_count": len(perceptible),
-                    "perceptible_genes": perceptible,
-                    "verdict": sp.s4_gate(len(perceptible))},
-    }
-
-
-def verify_pack_audio(manifest: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+def verify_stage_audio(manifest: Dict[str, Any], stage: int) -> Tuple[bool, Dict[str, Any]]:
     """配布した pack の WAV が manifest の SHA と一致することを確認する。"""
     bad: List[str] = []
     checked = 0
-    for tid, per in (manifest.get("audio_sha256") or {}).items():
+    block = (manifest.get("stages") or {}).get(str(stage)) or {}
+    for tid, per in (block.get("audio_sha256") or {}).items():
         for slot, want in per.items():
-            p = prep.PACK_AUDIO / f"{tid}_{slot}.wav"
+            p = prep.stage_audio_dir(stage) / f"{tid}_{slot}.wav"
             if not p.exists():
                 bad.append(f"{p.name} 欠落")
                 continue
             checked += 1
             if prep.sha256_file(p) != want:
                 bad.append(f"{p.name} SHA 不一致")
-    return (not bad), {"checked": checked, "problems": bad[:5],
-                       "problem_count": len(bad)}
+    return (not bad), {"checked": checked, "problems": bad[:5], "problem_count": len(bad)}
+
+
+def score_stage(stage: int, path: Optional[Path] = None) -> Dict[str, Any]:
+    """1 stage を採点する。`UNSURE` は正答に数えない。"""
+    manifest = prep.load_manifest()
+    key, key_sha = prep.load_private_key()
+    commitment_ok = manifest.get("key_commitment") == key_sha
+
+    block = (manifest.get("stages") or {}).get(str(stage))
+    if not block:
+        raise prep.S35Stop(reason=f"Stage {stage} が manifest に無い",
+                           required_action=f"Stage {stage} の pack を先に生成する")
+    doc, ans_sha = load_answers(stage, path)
+    answers = doc.get("answers") or {}
+    check_complete(answers, block["trial_ids"], stage)
+    audio_ok, audio_detail = verify_stage_audio(manifest, stage)
+
+    per_gene: Dict[str, Dict[str, Any]] = {}
+    for tid in block["trial_ids"]:
+        spec = key["trials"][tid]
+        given = answers.get(tid, "")
+        per_gene[spec["gene"]] = {
+            "trial_id": tid, "answer": given,
+            "correct": given == spec["correct"],      # UNSURE は一致しない
+            "pair_key": spec["pair_key"], "probe_kind": spec["probe_kind"],
+        }
+    return {"stage": stage, "answers_sha256": ans_sha,
+            "listener_id": doc.get("listener_id"), "session_id": doc.get("session_id"),
+            "commitment_verified": commitment_ok,
+            "audio_verified": audio_ok, "audio_detail": audio_detail,
+            "by_gene": per_gene}
+
+
+def advancing_from_stage1(stage1: Dict[str, Any]) -> List[str]:
+    return sp.advancing_genes({g: v["correct"] for g, v in stage1["by_gene"].items()})
+
+
+def write_key_reveal(key: Dict[str, Any], key_sha: str, commitment: str,
+                     answers_sha: Dict[int, str], path: Optional[Path] = None) -> str:
+    """全回答が凍結された**後**にのみ生成する。"""
+    path = KEY_REVEAL if path is None else path
+    reveal = {
+        "protocol_version": key.get("protocol_version"),
+        "revealed_after_answers_sha256": {str(k): v for k, v in sorted(answers_sha.items())},
+        "key_commitment": commitment,
+        "key_sha256": key_sha,
+        "commitment_verified": commitment == key_sha,
+        "plans": key.get("plans"),
+        "trials": key["trials"],
+    }
+    path.write_text(prep._dumps(reveal), encoding="utf-8")
+    return prep.sha256_file(path)
+
+
+def finalize(stage1_path: Optional[Path] = None,
+             stage2_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Stage 1 + Stage 2 を採点して gene verdict と S4 gate を出す。"""
+    manifest = prep.load_manifest()
+    key, key_sha = prep.load_private_key()
+    commitment = manifest.get("key_commitment", "")
+
+    s1 = score_stage(sp.STAGE1, stage1_path)
+    advancing = advancing_from_stage1(s1)
+
+    s2: Optional[Dict[str, Any]] = None
+    has_stage2_block = bool((manifest.get("stages") or {}).get(str(sp.STAGE2)))
+    if advancing and has_stage2_block:
+        s2 = score_stage(sp.STAGE2, stage2_path)
+    elif advancing and not has_stage2_block:
+        raise prep.S35Stop(
+            reason=f"Stage 1 を通過した gene があるのに Stage 2 pack が無い: {advancing}",
+            required_action="prepare_stage2() で Stage 2 を配布し、回答を得る")
+
+    plans = key.get("plans") or {}
+    genes: Dict[str, Any] = {}
+    for gene, g1 in s1["by_gene"].items():
+        plan = plans.get(gene) or {}
+        has_s2_pair = plan.get("stage2") is not None
+        g2 = (s2 or {}).get("by_gene", {}).get(gene)
+        verdict = sp.gene_verdict(
+            g1["correct"], (g2 or {}).get("correct"),
+            has_stage2_pair=has_s2_pair,
+            commitment_verified=s1["commitment_verified"] and (
+                s2["commitment_verified"] if s2 else True),
+            audio_verified=s1["audio_verified"] and (
+                s2["audio_verified"] if s2 else True))
+        genes[gene] = {
+            "verdict": verdict.value,
+            "stage1": g1,
+            "stage2": g2,
+            "has_stage2_pair": has_s2_pair,
+            "not_evaluable_reason": plan.get("not_evaluable_reason"),
+            "contexts": sorted({c for c in (g1["probe_kind"],
+                                            (g2 or {}).get("probe_kind")) if c}),
+        }
+    # Stage 1 すら作れなかった gene（plan に stage1 が無い）も記録に残す
+    for gene, plan in plans.items():
+        if gene in genes or plan.get("stage1") is not None:
+            continue
+        genes[gene] = {"verdict": sp.GeneVerdict.NOT_EVALUABLE_S35.value,
+                       "stage1": None, "stage2": None, "has_stage2_pair": False,
+                       "not_evaluable_reason": plan.get("not_evaluable_reason"),
+                       "contexts": []}
+
+    answers_sha = {sp.STAGE1: s1["answers_sha256"]}
+    if s2:
+        answers_sha[sp.STAGE2] = s2["answers_sha256"]
+    reveal_sha = write_key_reveal(key, key_sha, commitment, answers_sha)
+
+    candidates = sorted(g for g, v in genes.items()
+                        if v["verdict"] == sp.GeneVerdict.PERCEPTIBLE_CANDIDATE.value)
+    return {
+        "s3_results_sha256": manifest.get("s3_results_sha256"),
+        "protocol_version": manifest.get("protocol_version"),
+        "blind_manifest_sha256": prep.sha256_file(prep.BLIND_MANIFEST),
+        "answers_sha256": {str(k): v for k, v in sorted(answers_sha.items())},
+        "key_commitment": commitment,
+        "key_sha256": key_sha,
+        "commitment_verified": s1["commitment_verified"] and (
+            s2["commitment_verified"] if s2 else True),
+        "audio_verified": s1["audio_verified"] and (s2["audio_verified"] if s2 else True),
+        "key_reveal_sha256": reveal_sha,
+        "listener_id": s1["listener_id"], "session_id": s1["session_id"],
+        "advancing_genes": advancing,
+        "genes": genes,
+        "overall": {"perceptible_candidate_count": len(candidates),
+                    "perceptible_candidates": candidates,
+                    "verdict": sp.s4_gate(len(candidates))},
+    }
+
+
+def finalize_or_blocked(stage1_path: Optional[Path] = None,
+                        stage2_path: Optional[Path] = None,
+                        ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    try:
+        return finalize(stage1_path, stage2_path), None
+    except prep.S35Stop as stop:
+        return None, stop.as_dict()
 
 
 if __name__ == "__main__":
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else ANSWERS
+    # Stage 1 だけを採点して、Stage 2 へ進む gene を出す（正誤は gene 単位）。
     try:
-        result = run(path)
+        res = score_stage(sp.STAGE1)
     except prep.S35Stop as stop:
         print(prep._dumps(stop.as_dict()))
         raise SystemExit(3) from None
-    print(prep._dumps(result["overall"]))
-
-
-def scored_or_blocked(answers_path: Optional[Path] = None,
-                      ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """report 側から使うラッパ。BLOCKED を例外でなく値で返す。"""
-    try:
-        return run(answers_path), None
-    except prep.S35Stop as stop:
-        return None, stop.as_dict()
+    print(prep._dumps({"stage": 1, "advancing": advancing_from_stage1(res),
+                       "commitment_verified": res["commitment_verified"],
+                       "audio_verified": res["audio_verified"]}))

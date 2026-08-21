@@ -1,9 +1,10 @@
-# S3.5 の音声・秘匿鍵は repository に commit しない（設計書 §22）。
+# S3.5 の音声・秘匿鍵・回答は repository に commit しない。
 # 波音リツ 歌声データベース利用規約 第3条1（転載禁止）にも該当するため恒久除外。
-abx/
+stage1/
+stage2/
 *.wav
 *.flac
 
-# blind key は回答前に commit しない。回答後も private key 本体は置かない。
+# blind key は commit しない（回答前も回答後も）。回答ファイル本体も置かない。
 answer_key.private.json
-answers.json
+answers_stage*.json

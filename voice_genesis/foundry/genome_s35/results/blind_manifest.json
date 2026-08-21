@@ -1,201 +1,37 @@
 {
-  "protocol_version": "voicegenesis-s35-v1",
+  "protocol_version": "voicegenesis-s35-v2",
   "s3_results_sha256": "65b91402f2b6ead2b8d3269455413e6bd0ae575d66a33a52f0a2367c91e55cd0",
-  "trial_ids": [
-    "T001",
-    "T002",
-    "T003",
-    "T004",
-    "T005",
-    "T006",
-    "T007",
-    "T008",
-    "T009",
-    "T010",
-    "T011",
-    "T012",
-    "T013",
-    "T014",
-    "T015",
-    "T016",
-    "T017",
-    "T018",
-    "T019",
-    "T020",
-    "T021",
-    "T022",
-    "T023",
-    "T024",
-    "T025",
-    "T026",
-    "T027",
-    "T028",
-    "T029",
-    "T030",
-    "T031",
-    "T032"
-  ],
-  "audio_sha256": {
-    "T001": {
-      "A": "3410ad8d972edd7304162e8d322c908747cc4a7085830093df1a4e15f63dd399",
-      "B": "34fb1aab062a297d2b20211a7ca3b8568ec7528c681bf6923d97f3eabccd268b",
-      "X": "34fb1aab062a297d2b20211a7ca3b8568ec7528c681bf6923d97f3eabccd268b"
-    },
-    "T002": {
-      "A": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1",
-      "B": "999b7fb25a653a40f509dfb8ce7cce295d5c36668476777412c5a7ca8a6059b4",
-      "X": "999b7fb25a653a40f509dfb8ce7cce295d5c36668476777412c5a7ca8a6059b4"
-    },
-    "T003": {
-      "A": "f12e847729c632c58692f84733085f07e0cbfac42cb1f67ad65c0720aed53bb0",
-      "B": "99005b5c29a97e760afb0e4a6d34c0e44ee376d7f80b403de692a1b79b52de56",
-      "X": "99005b5c29a97e760afb0e4a6d34c0e44ee376d7f80b403de692a1b79b52de56"
-    },
-    "T004": {
-      "A": "5fdb4d0d63874efac7a35481ff4104228ea3497ccec896d396e2a3eeb9eea9d4",
-      "B": "e491f9c84455517583e24ff995944ba20f18785e7998a054623ed9347fd8c407",
-      "X": "5fdb4d0d63874efac7a35481ff4104228ea3497ccec896d396e2a3eeb9eea9d4"
-    },
-    "T005": {
-      "A": "d1f3c22b88538f89a41cfc7fa128f02bffb8fa3c7ea735ad73f18438840a92ad",
-      "B": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b",
-      "X": "d1f3c22b88538f89a41cfc7fa128f02bffb8fa3c7ea735ad73f18438840a92ad"
-    },
-    "T006": {
-      "A": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
-      "B": "fceb01b94d2a808d810e311a85a1b3be6617d7a1c75c4c19f19564bfec5d8e00",
-      "X": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72"
-    },
-    "T007": {
-      "A": "31a76993b135b71bd4867ee8a2bd5ae103a2c530e838e10db1a77cc88455f8a0",
-      "B": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1",
-      "X": "31a76993b135b71bd4867ee8a2bd5ae103a2c530e838e10db1a77cc88455f8a0"
-    },
-    "T008": {
-      "A": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1",
-      "B": "ca67b61c452745ab8ab70f3e6a792e8752bc2b85053b630bffa3fde7e077d183",
-      "X": "ca67b61c452745ab8ab70f3e6a792e8752bc2b85053b630bffa3fde7e077d183"
-    },
-    "T009": {
-      "A": "3a7131f61f0ac9f43648bbb0d89ad0a66236b764c13cd4baf5e0a7c0e1c33f6d",
-      "B": "e491f9c84455517583e24ff995944ba20f18785e7998a054623ed9347fd8c407",
-      "X": "e491f9c84455517583e24ff995944ba20f18785e7998a054623ed9347fd8c407"
-    },
-    "T010": {
-      "A": "999b7fb25a653a40f509dfb8ce7cce295d5c36668476777412c5a7ca8a6059b4",
-      "B": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1",
-      "X": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1"
-    },
-    "T011": {
-      "A": "6e3dbea4c0c39425edac0942d6cdb5f848266d7d95fac83cab7612367ba371c4",
-      "B": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b",
-      "X": "6e3dbea4c0c39425edac0942d6cdb5f848266d7d95fac83cab7612367ba371c4"
-    },
-    "T012": {
-      "A": "34fb1aab062a297d2b20211a7ca3b8568ec7528c681bf6923d97f3eabccd268b",
-      "B": "3410ad8d972edd7304162e8d322c908747cc4a7085830093df1a4e15f63dd399",
-      "X": "3410ad8d972edd7304162e8d322c908747cc4a7085830093df1a4e15f63dd399"
-    },
-    "T013": {
-      "A": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b",
-      "B": "bb1fce6643605091f05bc0dbfa57e7f212c49adf2072f25edc8f0d78b1859841",
-      "X": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b"
-    },
-    "T014": {
-      "A": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b",
-      "B": "d1f3c22b88538f89a41cfc7fa128f02bffb8fa3c7ea735ad73f18438840a92ad",
-      "X": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b"
-    },
-    "T015": {
-      "A": "e491f9c84455517583e24ff995944ba20f18785e7998a054623ed9347fd8c407",
-      "B": "5fdb4d0d63874efac7a35481ff4104228ea3497ccec896d396e2a3eeb9eea9d4",
-      "X": "e491f9c84455517583e24ff995944ba20f18785e7998a054623ed9347fd8c407"
-    },
-    "T016": {
-      "A": "e491f9c84455517583e24ff995944ba20f18785e7998a054623ed9347fd8c407",
-      "B": "3a7131f61f0ac9f43648bbb0d89ad0a66236b764c13cd4baf5e0a7c0e1c33f6d",
-      "X": "3a7131f61f0ac9f43648bbb0d89ad0a66236b764c13cd4baf5e0a7c0e1c33f6d"
-    },
-    "T017": {
-      "A": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
-      "B": "b46ab380ec95f4c528db3585a3664a01a11fd476d6728cf4e04c59d85ac69ed1",
-      "X": "b46ab380ec95f4c528db3585a3664a01a11fd476d6728cf4e04c59d85ac69ed1"
-    },
-    "T018": {
-      "A": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1",
-      "B": "c6b051c57fe65b3f8a6a3352250c53bd8235616b20f87c209e08ddb74e7020b9",
-      "X": "c6b051c57fe65b3f8a6a3352250c53bd8235616b20f87c209e08ddb74e7020b9"
-    },
-    "T019": {
-      "A": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b",
-      "B": "6e3dbea4c0c39425edac0942d6cdb5f848266d7d95fac83cab7612367ba371c4",
-      "X": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b"
-    },
-    "T020": {
-      "A": "fceb01b94d2a808d810e311a85a1b3be6617d7a1c75c4c19f19564bfec5d8e00",
-      "B": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
-      "X": "fceb01b94d2a808d810e311a85a1b3be6617d7a1c75c4c19f19564bfec5d8e00"
-    },
-    "T021": {
-      "A": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1",
-      "B": "31a76993b135b71bd4867ee8a2bd5ae103a2c530e838e10db1a77cc88455f8a0",
-      "X": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1"
-    },
-    "T022": {
-      "A": "ca67b61c452745ab8ab70f3e6a792e8752bc2b85053b630bffa3fde7e077d183",
-      "B": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1",
-      "X": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1"
-    },
-    "T023": {
-      "A": "f197bc9311803b02389d4c1fcb52e91eed9fb7f2e7ae8f7a32bdc7a73c4aa67a",
-      "B": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1",
-      "X": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1"
-    },
-    "T024": {
-      "A": "bb1fce6643605091f05bc0dbfa57e7f212c49adf2072f25edc8f0d78b1859841",
-      "B": "d6a0decc53950e0af93325172103c439df1a2fd5cddb335658f1ee67e0856e1b",
-      "X": "bb1fce6643605091f05bc0dbfa57e7f212c49adf2072f25edc8f0d78b1859841"
-    },
-    "T025": {
-      "A": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
-      "B": "fa0008bff9a0c80df896c3b4cb2ed1daa176da2a7fd4cd866881f90a8b3ed534",
-      "X": "fa0008bff9a0c80df896c3b4cb2ed1daa176da2a7fd4cd866881f90a8b3ed534"
-    },
-    "T026": {
-      "A": "b46ab380ec95f4c528db3585a3664a01a11fd476d6728cf4e04c59d85ac69ed1",
-      "B": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
-      "X": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72"
-    },
-    "T027": {
-      "A": "c6b051c57fe65b3f8a6a3352250c53bd8235616b20f87c209e08ddb74e7020b9",
-      "B": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1",
-      "X": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1"
-    },
-    "T028": {
-      "A": "76e94d9fc2550bda198b42a248624d2007ee7eb0ceb59e277490a330ab7e4c6d",
-      "B": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
-      "X": "76e94d9fc2550bda198b42a248624d2007ee7eb0ceb59e277490a330ab7e4c6d"
-    },
-    "T029": {
-      "A": "fa0008bff9a0c80df896c3b4cb2ed1daa176da2a7fd4cd866881f90a8b3ed534",
-      "B": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
-      "X": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72"
-    },
-    "T030": {
-      "A": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
-      "B": "76e94d9fc2550bda198b42a248624d2007ee7eb0ceb59e277490a330ab7e4c6d",
-      "X": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72"
-    },
-    "T031": {
-      "A": "99005b5c29a97e760afb0e4a6d34c0e44ee376d7f80b403de692a1b79b52de56",
-      "B": "f12e847729c632c58692f84733085f07e0cbfac42cb1f67ad65c0720aed53bb0",
-      "X": "f12e847729c632c58692f84733085f07e0cbfac42cb1f67ad65c0720aed53bb0"
-    },
-    "T032": {
-      "A": "1946246247a075f08a894cb3433e09d679af487ae484f21f2eaf36c8f995fbc1",
-      "B": "f197bc9311803b02389d4c1fcb52e91eed9fb7f2e7ae8f7a32bdc7a73c4aa67a",
-      "X": "f197bc9311803b02389d4c1fcb52e91eed9fb7f2e7ae8f7a32bdc7a73c4aa67a"
+  "stages": {
+    "1": {
+      "trial_ids": [
+        "S1T01",
+        "S1T02",
+        "S1T03",
+        "S1T04"
+      ],
+      "audio_sha256": {
+        "S1T01": {
+          "A": "f12e847729c632c58692f84733085f07e0cbfac42cb1f67ad65c0720aed53bb0",
+          "B": "99005b5c29a97e760afb0e4a6d34c0e44ee376d7f80b403de692a1b79b52de56",
+          "X": "99005b5c29a97e760afb0e4a6d34c0e44ee376d7f80b403de692a1b79b52de56"
+        },
+        "S1T02": {
+          "A": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
+          "B": "76e94d9fc2550bda198b42a248624d2007ee7eb0ceb59e277490a330ab7e4c6d",
+          "X": "76e94d9fc2550bda198b42a248624d2007ee7eb0ceb59e277490a330ab7e4c6d"
+        },
+        "S1T03": {
+          "A": "ca67b61c452745ab8ab70f3e6a792e8752bc2b85053b630bffa3fde7e077d183",
+          "B": "9df3fb40be5b44434e0ef225efcc655dd408c4b722028dd2e236ce1b9488dfb1",
+          "X": "ca67b61c452745ab8ab70f3e6a792e8752bc2b85053b630bffa3fde7e077d183"
+        },
+        "S1T04": {
+          "A": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72",
+          "B": "b46ab380ec95f4c528db3585a3664a01a11fd476d6728cf4e04c59d85ac69ed1",
+          "X": "fd381d04663232e2cc463814cc6b55a85eba58d1da16ac65554bd01e300ecd72"
+        }
+      }
     }
   },
-  "key_commitment": "6ed9daa32b9b0dfb6e6f28cb78dea7411fff1b5e85e04119bd8a213e466f21a7"
+  "key_commitment": "d4fadda8c6d1f09a44289bd56aff47e237bb8cef03f6dadf8207d5447abd15da"
 }
