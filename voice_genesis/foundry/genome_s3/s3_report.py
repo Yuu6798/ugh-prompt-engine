@@ -14,7 +14,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 _HERE = Path(__file__).resolve().parent
 _FOUNDRY = _HERE.parent
@@ -40,8 +40,13 @@ def publish_bundle(pairs: Tuple[Tuple[Path, str], ...]) -> None:
 
     この 2 つは同じ実験結果の 2 つの見え方なので、片方だけ新しい状態
     （途中で落ちた・ディスクが埋まった）を露出させると会計が壊れる。
-    全部を temp へ書き切ってから rename する。書き込み中に落ちた場合、
-    既存の束はそのまま残る。
+
+    2 段構え:
+
+    1. 全部を temp へ書き切る。書き込み中に落ちたら temp を捨てて既存を残す
+    2. rename する。**2 本目以降が落ちたら、既に置き換えた分を書き戻す**
+       （`os.replace` は個々には原子的だが、複数ファイルにまたがる原子性は
+       無いので、旧内容のスナップショットから巻き戻す）
     """
     staged: List[Tuple[Path, Path]] = []
     try:
@@ -56,8 +61,25 @@ def publish_bundle(pairs: Tuple[Tuple[Path, str], ...]) -> None:
         for tmp, _dest in staged:
             tmp.unlink(missing_ok=True)
         raise
-    for tmp, dest in staged:
-        os.replace(tmp, dest)
+
+    # 旧内容のスナップショット（存在しなかったものは None = 巻き戻し時に削除）
+    previous: Dict[Path, Optional[bytes]] = {
+        dest: (dest.read_bytes() if dest.exists() else None) for _tmp, dest in staged}
+    done: List[Path] = []
+    try:
+        for tmp, dest in staged:
+            os.replace(tmp, dest)
+            done.append(dest)
+    except BaseException:
+        for dest in done:
+            old = previous[dest]
+            if old is None:
+                dest.unlink(missing_ok=True)
+            else:
+                dest.write_bytes(old)
+        for tmp, _dest in staged:
+            tmp.unlink(missing_ok=True)
+        raise
 
 
 def reproducibility_records(runs: List[sr.PairRun]) -> List[Dict[str, Any]]:

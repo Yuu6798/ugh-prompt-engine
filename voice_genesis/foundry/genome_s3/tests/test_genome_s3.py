@@ -30,6 +30,15 @@ import s3_spec as sp  # noqa: E402
 from s3_spec import Gene, GeneVerdict, PairVerdict  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _reset_frozen_cache():
+    """`s3_runner` の凍結キャッシュをテスト間で持ち越さない。"""
+    import s3_runner as sr
+    sr._FROZEN = None
+    yield
+    sr._FROZEN = None
+
+
 # ---------------------------------------------------------------------------
 # 判定ロジック用の最小スタブ（音を作らずに verdict の分岐だけを踏む）
 # ---------------------------------------------------------------------------
@@ -497,3 +506,84 @@ def test_code_state_is_captured_once_and_reports_dirtiness() -> None:
     assert sr.source_commit() == first["commit"]
     if first["dirty"]:
         assert first["dirty_digest"]
+
+
+# ---------------------------------------------------------------------------
+# PR #295 レビュー第 2 巡で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def test_bundle_rollback_when_a_rename_fails(tmp_path: Path, monkeypatch) -> None:
+    """staging は通ったが 2 本目の rename が落ちた場合、旧い束へ巻き戻す。"""
+    import s3_report as srep
+
+    a, b = tmp_path / "a.json", tmp_path / "b.md"
+    srep.publish_bundle(((a, "old-json"), (b, "old-md")))
+
+    real_replace = srep.os.replace
+    calls = {"n": 0}
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("rename failed midway")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(srep.os, "replace", flaky)
+    with pytest.raises(OSError):
+        srep.publish_bundle(((a, "new-json"), (b, "new-md")))
+    # 1 本目は置き換わっていたが巻き戻る = 新旧が混ざった束を露出しない
+    assert (a.read_text(), b.read_text()) == ("old-json", "old-md")
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_bundle_rollback_removes_files_that_did_not_exist(tmp_path: Path, monkeypatch) -> None:
+    """旧い束が無かった場合、巻き戻しは「作られた分を消す」。"""
+    import s3_report as srep
+
+    a, b = tmp_path / "a.json", tmp_path / "b.md"
+    real_replace = srep.os.replace
+    calls = {"n": 0}
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("rename failed midway")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(srep.os, "replace", flaky)
+    with pytest.raises(OSError):
+        srep.publish_bundle(((a, "new-json"), (b, "new-md")))
+    assert not a.exists() and not b.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_manifest_digest_is_of_the_parsed_bytes(tmp_path: Path, monkeypatch) -> None:
+    """走行中に manifest が書き換わっても、digest は parse した bytes のもの。"""
+    import s3_runner as sr
+
+    monkeypatch.setattr(sr, "_FROZEN", None)
+    m = _write_manifest(tmp_path, [_pair("a")])
+    monkeypatch.setattr(sr, "FROZEN_MANIFEST", m)
+    parsed_digest = __import__("hashlib").sha256(m.read_bytes()).hexdigest()
+    sr.load_frozen()
+    assert sr.manifest_sha256() == parsed_digest
+
+    m.write_text(json.dumps({"context_phones": 22, "pairs": [_pair("a")], "x": 1}),
+                 encoding="utf-8")
+    assert sr.manifest_sha256() == parsed_digest      # 読み直さない
+    assert sr.load_frozen()["pairs"][0]["pair_key"] == "a"
+    monkeypatch.setattr(sr, "_FROZEN", None)
+
+
+def test_unreadable_frozen_lab_becomes_blocked(tmp_path: Path, monkeypatch) -> None:
+    """凍結 manifest の絶対パスがこの環境に無い場合も BLOCKED（traceback でない）。"""
+    import s3_runner as sr
+
+    monkeypatch.setattr(sr, "_FROZEN", None)
+    pair = {**_pair("terminal_ri|2018#215|pjs003#65"),
+            "ritsu_file": str(tmp_path / "nope" / "2018.lab"),
+            "pjs_file": str(tmp_path / "nope" / "pjs003.lab")}
+    with pytest.raises(sr.S3Stop) as exc:
+        sr.build_inputs(pair, 22)
+    assert "lab/wav" in exc.value.cause
+    assert exc.value.as_dict()["status"] == "BLOCKED"
+    monkeypatch.setattr(sr, "_FROZEN", None)

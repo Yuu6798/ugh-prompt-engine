@@ -57,6 +57,10 @@ RESULTS = _HERE / "results"
 WAV_DIR = RESULTS / "wav"
 
 
+#: 走行中に読み直さないための凍結キャッシュ（parse した bytes とその digest）。
+_FROZEN: Optional[Tuple[Dict[str, Any], str]] = None
+
+
 class S3Stop(Exception):
     """設計書 §20 の停止条件。原因・影響・最小修正案だけを持つ。"""
 
@@ -123,15 +127,24 @@ def load_frozen() -> Dict[str, Any]:
     検証に落ちた入力は例外を投げっぱなしにせず S3Stop（= BLOCKED、exit 3）へ
     変換する。設計書 §20 の停止は「記録を残して止まる」ことなので、
     未処理トレースバックで落ちてはならない。
+
+    読んだ bytes とその digest は凍結してキャッシュする。走行中に manifest が
+    書き換わった場合、**parse したのと違う bytes のハッシュ**を来歴として
+    記録してしまうため。
     """
+    global _FROZEN
+    if _FROZEN is not None:
+        return _FROZEN[0]
     if not FROZEN_MANIFEST.exists():
         raise S3Stop(
             cause=f"S2 frozen manifest が無い（{FROZEN_MANIFEST}）",
             impact="S3 は S2 の凍結 pair set を正本とするため、入力が確定できず開始できない",
             minimal_fix="planb_real の ladder を実行して results/ladder_manifest.json を用意する")
+    raw = FROZEN_MANIFEST.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
     try:
-        data = json.loads(FROZEN_MANIFEST.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise S3Stop(
             cause=f"frozen manifest が JSON として読めない: {exc}",
             impact="凍結 pair set を確定できず S3 を開始できない",
@@ -168,11 +181,15 @@ def load_frozen() -> Dict[str, Any]:
                        "記録に表示される distinct な証拠より緩い判定になる",
                 minimal_fix="ladder_manifest.json の重複 pair を取り除く")
         seen.add(key)
+    _FROZEN = (data, digest)
     return data
 
 
 def manifest_sha256() -> str:
-    return _sha_file(FROZEN_MANIFEST)
+    """**parse したのと同じ bytes**の digest を返す（走行中の読み直しをしない）。"""
+    load_frozen()
+    assert _FROZEN is not None
+    return _FROZEN[1]
 
 
 _CODE_STATE: Optional[Dict[str, Any]] = None
@@ -227,14 +244,25 @@ def build_inputs(pair: Dict[str, Any], ctx: int):
     評価し、manifest のハッシュを来歴として提示したまま PASS を出せてしまう。
     """
     pk = pair["pair_key"]
-    r_lab_path = Path(pair["ritsu_file"])
-    r_lab = pr_lab.read_lab(r_lab_path)
+    r_lab_path, p_lab_path = Path(pair["ritsu_file"]), Path(pair["pjs_file"])
+    # 凍結 manifest は取得時の**絶対パス**を持つ。別マシン・別セッションでは
+    # 存在しないため read_lab がここで例外を上げる。他の凍結入力の失敗と同じく
+    # BLOCKED（exit 3 + 記録）へ変換する — 未処理トレースバックでは記録が残らない。
+    r_lab, p_lab, r_wav, p_wav = None, None, None, None
+    try:
+        r_lab, p_lab = pr_lab.read_lab(r_lab_path), pr_lab.read_lab(p_lab_path)
+        r_wav, p_wav = pr_census.wav_for_lab(r_lab_path), pr_census.wav_for_lab(p_lab_path)
+    except S3Stop:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise S3Stop(
+            cause=f"{pk}: 凍結 pair の lab/wav を読めない ({type(exc).__name__}: {exc})",
+            impact="凍結素材にアクセスできず、その pair を評価できない。"
+                   "manifest は取得時の絶対パスを持つため、別マシンでは再現できない",
+            minimal_fix="ladder_manifest.json の ritsu_file / pjs_file が"
+                        "この環境で読めるかを確認する") from exc
     r_idx = int(pk.split("|")[1].split("#")[1])
-    r_wav = pr_census.wav_for_lab(r_lab_path)
-    p_lab_path = Path(pair["pjs_file"])
-    p_lab = pr_lab.read_lab(p_lab_path)
     p_idx = int(pk.split("|")[2].split("#")[1])
-    p_wav = pr_census.wav_for_lab(p_lab_path)
     if r_wav is None or p_wav is None:
         raise S3Stop(
             cause=f"{pk}: lab に対応する wav が見つからない",
