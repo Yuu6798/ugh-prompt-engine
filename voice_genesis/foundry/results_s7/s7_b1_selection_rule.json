@@ -24,8 +24,28 @@
       {"key": "hop_ms", "order": "asc", "why": "finer frame grid = lower quantisation floor"},
       {"key": "window_ms", "order": "asc"},
       {"key": "candidate_id", "order": "asc", "why": "deterministic final tie-break"}
-    ]
+    ],
+    "numeric_precision": {
+      "rule": "Round every numeric ranking key to 9 decimal places before comparing; equal rounded values fall through to the next key.",
+      "why": "Without it, ties are decided by float noise at the 1e-16 level, which is not a physical property and is not stable across BLAS / numpy builds."
+    }
   },
+  "amendments": [
+    {
+      "date": "2026-08-21",
+      "pr": "PR-1 (run 8 implementation)",
+      "what": "Added ranking_among_survivors.numeric_precision (round to 9 decimals before comparing keys).",
+      "observed": "The first B-1 run showed monotone_min_step values tying at 0.13333333333333341 / ...36 / ...30 for tail_f0_persistence, i.e. the winner was selected by a 5e-17 difference.",
+      "chosen_from": "the magnitude of float noise, not from any candidate's outcome",
+      "winners_before_amendment": {
+        "excess_tail_voiced_ms": "B_rms_autocorr_gate|win100|hop5",
+        "release_after_score_boundary_ms": "B_rms_autocorr_gate|win300|hop10",
+        "tail_f0_persistence": "B_rms_autocorr_gate|win300|hop10",
+        "terminal_mel_persistence": "M1_1024_256_80"
+      },
+      "not_changed": "No candidate, stimulus, hard requirement, tolerance or ranking key was added, removed or reordered."
+    }
+  ],
   "epsilon_derivation_for_b2": {
     "formula": "epsilon_axis = max(numerical_floor_axis, reproducibility_bound_axis)",
     "numerical_floor": {"ms_axes": "hop duration in ms of the selected candidate", "ratio_axes": "1 / (number of analysis frames inside the tail window)"},

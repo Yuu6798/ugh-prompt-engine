@@ -1,0 +1,182 @@
+{
+  "aggregation_rule": {
+    "majority_fraction": 0.6666666666666666,
+    "same_as": "DESIGN_S7_run8.md 3 の overall H-TTD verdict",
+    "scored_minimum": 2,
+    "supported_requires_zero_refuted": true
+  },
+  "authority": "DESIGN_S7_run8.md 12-0-C",
+  "epsilon_raw_from_b1": {
+    "excess_tail_voiced_ms": {
+      "derivation": {
+        "derived_from": "measurement-side only (calibration repeats + frame quantisation)",
+        "numerical_floor": 5.0,
+        "numerical_floor_note": "選定候補の hop 長（フレーム格子の量子化幅）",
+        "reproducibility_bound": 0.0
+      },
+      "epsilon": 5.0,
+      "unit": "ms"
+    },
+    "release_after_score_boundary_ms": {
+      "derivation": {
+        "derived_from": "measurement-side only (calibration repeats + frame quantisation)",
+        "numerical_floor": 10.0,
+        "numerical_floor_note": "選定候補の hop 長（フレーム格子の量子化幅）",
+        "reproducibility_bound": 0.0
+      },
+      "epsilon": 10.0,
+      "unit": "ms"
+    },
+    "tail_f0_persistence": {
+      "derivation": {
+        "derived_from": "measurement-side only (calibration repeats + frame quantisation)",
+        "numerical_floor": 0.016666666666666666,
+        "numerical_floor_note": "終端窓に入るフレーム数の逆数（比の量子化幅）",
+        "reproducibility_bound": 0.0
+      },
+      "epsilon": 0.016666666666666666,
+      "unit": "ratio (0..1)"
+    },
+    "terminal_mel_persistence": {
+      "derivation": {
+        "derived_from": "measurement-side only (calibration repeats + frame quantisation)",
+        "numerical_floor": 0.019349962207105064,
+        "numerical_floor_note": "終端窓に入る mel フレーム数の逆数（比の量子化幅）",
+        "reproducibility_bound": 0.0
+      },
+      "epsilon": 0.019349962207105064,
+      "unit": "ratio (>= 0)"
+    }
+  },
+  "epsilon_unit_conversion": {
+    "degenerate": "MAD == 0 の (話者×世代) は degenerate_axis として primary 候補から外す（§7-0-(0)）",
+    "rule": "eps_z(axis, group) = eps_raw(axis) / (1.4826 * MAD_group(axis))",
+    "why": "裁定は §7-0-(0) の z'（話者 × 世代内で中心化・向き正規化）で行うが、B-1 の ε は生単位で凍結される。換算に使う定数は z 化に使うものと同一で、新しい自由度を持ち込まない。MAD は本番集団から出るので数値は PR-2 で当てる。"
+  },
+  "excluded_statuses": [
+    "degenerate_axis",
+    "dropped",
+    "ringing_uncorrected",
+    "ringing_uncorrected_group"
+  ],
+  "frozen_after": {
+    "b1_freeze_status": "candidate",
+    "b1_spec_version": "1.0-rc1",
+    "note": "B-2 は B-1 の直後に閉じる（§12-0-C）。B-1 が rc の間は B-2 の ε 数値も rc に従属する。"
+  },
+  "generated_by": "voice_genesis/foundry/run8/s7_b2_algebra.py",
+  "hypotheses": {
+    "H0": {
+      "claim": "破綻は文脈依存（フル譜面と短い診断セルで挙動が違う）",
+      "compared_pair": "P-ANCHOR「かぎり」 対 同一話者・同一世代の P-RI-FINAL（4 拍・低）（§4-2 の事前登録。ここで条件を選び直さない）",
+      "contradiction_rule": "|Δz'| <= eps_z を refuted とする（一致 = 文脈非依存）",
+      "direction": "two-sided |Δz'|",
+      "final_aggregation": "単一対の比較。low_power フラグを必ず立てる",
+      "minimum_supporting_cells": 1,
+      "participating_axes": [
+        "primary (z')"
+      ],
+      "tolerance": "eps_z"
+    },
+    "H1": {
+      "claim": "持続長が閾値を超えると解放が失敗する",
+      "contradiction_rule": "|span| <= eps_z の系列は refuted",
+      "direction": "尺ラダー昇順で増加",
+      "final_aggregation": "系列（話者 × pitch_bin）ごとに三値 -> §3 と同型の多数決",
+      "minimum_supporting_cells": 3,
+      "participating_axes": [
+        "primary (z')"
+      ],
+      "tolerance": "span > eps_z かつ 各ステップ >= -eps_z"
+    },
+    "H2": {
+      "claim": "低音側で失敗する（音域被覆の欠落）",
+      "contradiction_rule": "|Δz'| <= eps_z の系列は refuted",
+      "direction": "two-sided（high と low の差）",
+      "final_aggregation": "系列（話者 × 尺水準）ごとに三値 -> 多数決",
+      "minimum_supporting_cells": 2,
+      "participating_axes": [
+        "primary (z')"
+      ],
+      "tolerance": "|Δz'| > eps_z"
+    },
+    "H3": {
+      "claim": "音素 /ri/ に固有（/i/・/su/・/N/ では起きない）",
+      "contradiction_rule": "contrast <= eps_z の群は refuted（対照が同等に崩れている）",
+      "direction": "one-sided（target - control > 0）",
+      "final_aggregation": "群（話者 × 世代）ごとに三値 -> 多数決",
+      "minimum_supporting_cells": 3,
+      "participating_axes": [
+        "primary (z')"
+      ],
+      "tolerance": "contrast > eps_z"
+    },
+    "H4": {
+      "claim": "話者で崩壊境界が動く",
+      "contradiction_rule": "全話者で境界が同一なら refuted",
+      "direction": "境界 = z' >= theta を最初に満たすラダー水準",
+      "final_aggregation": "**同一世代内**で比較する。世代をまたいだ比較はしない",
+      "minimum_supporting_cells": 3,
+      "participating_axes": [
+        "primary (z')",
+        "theta (Gate の閾値)"
+      ],
+      "tolerance": "ラダー 1 段（水準が異なること自体）"
+    },
+    "H5": {
+      "claim": "世代（データ構成）で境界が動く",
+      "contradiction_rule": "spread <= eps_z なら refuted",
+      "direction": "two-sided（世代間の contrast の広がり）",
+      "final_aggregation": "話者ごとに三値 -> 多数決。**絶対値は使わない**（§2-3 H5）",
+      "minimum_supporting_cells": 3,
+      "participating_axes": [
+        "within-speaker 3-contrast difference of primary (z')"
+      ],
+      "tolerance": "spread > eps_z"
+    }
+  },
+  "prohibitions": {
+    "absolute_levels_for_h5": "H5 は差分軸のみ。絶対値では裁定しない（§2-3 H5）",
+    "no_group_separating_epsilon": "『群を一番綺麗に分ける ε』にしない",
+    "no_production_labels": "ε の決定に本番ラベルを使わない（§12-0-C）"
+  },
+  "schema": "s7-b2-verdict-algebra/0.1",
+  "worked_example": {
+    "H0": {
+      "delta_z": 1.2000000000000002,
+      "eps_z": 0.3,
+      "excluded": {},
+      "low_power": true,
+      "low_power_note": "アンカーは 1 個しか存在しないので、この裁定は 1 対の比較に依る",
+      "verdict": "supported"
+    },
+    "H1": {
+      "eps_z": 0.3,
+      "excluded": {},
+      "series": {
+        "pjs/mid": "refuted",
+        "ritsu/low": "undetermined",
+        "user/mid": "supported"
+      },
+      "verdict": "undetermined"
+    },
+    "H4": {
+      "boundaries": {
+        "pjs": Infinity,
+        "ritsu": null,
+        "user": 2.0
+      },
+      "excluded": {},
+      "generation": "run7",
+      "reach_limit": "言えるのは『境界は話者で動く』までで、原因は識別されない（§2-3 H4）",
+      "theta": 0.5,
+      "verdict": "supported"
+    },
+    "inputs": {
+      "eps_z": 0.3,
+      "n_cells": 8,
+      "theta": 0.5
+    },
+    "note": "H0: |1.60 - 0.40| = 1.20 > 0.30 -> supported（文脈で違う）。H1: user 系列 span 1.30 > 0.30 で supported / pjs 系列 span 0.07 <= 0.30 で refuted。2 系列とも scored だが refuted が 0 でないため overall = undetermined （多数決規則が『supported は refuted 0 が条件』であることの検算）。H4: user 境界 = 2（0.70 >= 0.50 の最初の水準）/ pjs 境界 = inf（一度も超えない）-> 境界が異なるので supported。"
+  }
+}

@@ -120,6 +120,11 @@ testpaths = [
     # (2026-08-19 セルフレビュー: 台帳の番人が CI 未収集だった)
     "voice_genesis/foundry/tests/test_genome_ledger_shape.py",
     "voice_genesis/foundry/tests/test_genome_ledger_s4_shape.py",
+    # run 8 (S7) PR-1: 台帳 / B-1 校正 / B-2 裁定代数。import 閉包は numpy + librosa
+    # （どちらも本体の必須依存）だけなので onnxruntime 等の環境依存に触れない
+    "voice_genesis/foundry/tests/test_s7_ledger.py",
+    "voice_genesis/foundry/tests/test_s7_b1_calibration.py",
+    "voice_genesis/foundry/tests/test_s7_b2_algebra.py",
 ]
 pythonpath = ["src", "."]
 markers = [
