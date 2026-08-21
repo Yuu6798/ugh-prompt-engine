@@ -58,6 +58,19 @@ WORKTREE_EXCLUDE_PREFIXES: Tuple[str, ...] = (
     "voice_genesis/foundry/genome_s4/results/",)
 
 
+#: 走行中に通過した Gate の記録。**判定には使わない**（BLOCKED 記録の可読性のため
+#: だけに残す）。どこまで進んで何で止まったかを、記録だけを見た人が追えるようにする。
+_PREFLIGHT: Dict[str, Any] = {}
+
+
+def preflight_record() -> Dict[str, Any]:
+    return dict(_PREFLIGHT)
+
+
+def reset_preflight() -> None:
+    _PREFLIGHT.clear()
+
+
 class S4Stop(Exception):
     """§16 BLOCKED / FAILED の停止条件。原因・影響・最小修正案だけを持つ。"""
 
@@ -623,10 +636,22 @@ def run_all(*, write_wav: bool = True, require_clean: bool = True,
     s3, s3_sha = load_s3()
     s35, s35_sha = load_s35()
     manifest, manifest_sha = load_input_manifest()
+    reset_preflight()
     gate_s3(s3)
+    _PREFLIGHT["G0-1_s3_canonical"] = "pass"
     gate_s35(s35)
+    _PREFLIGHT["G0-2_s35_canonical"] = "pass"
     gate_chain(s3_sha, s35, manifest_sha, s3)
+    _PREFLIGHT["G0-3_provenance_chain"] = "pass"
     cs = code_state(require_clean=require_clean)
+    _PREFLIGHT["G0-5_clean_worktree"] = (
+        "pass" if (cs["worktree"] or {}).get("clean") else "not-required")
+    _PREFLIGHT["G0-5_closure_digest"] = cs["closure"]["digest"]
+    _PREFLIGHT["G0-5_closure_file_count"] = cs["closure"]["file_count"]
+    _PREFLIGHT["commit"] = cs["commit"]
+    _PREFLIGHT["s3_results_sha256"] = s3_sha
+    _PREFLIGHT["s35_results_sha256"] = s35_sha
+    _PREFLIGHT["input_manifest_sha256"] = manifest_sha
 
     ctx = manifest.get("context_phones")
     if not isinstance(ctx, int) or isinstance(ctx, bool) or ctx <= 0:
@@ -635,10 +660,14 @@ def run_all(*, write_wav: bool = True, require_clean: bool = True,
             impact="S3 と同じ context 条件で素材を組み直せず、replay が成立しない",
             minimal_fix="ladder_manifest.json の context_phones を確認する")
     cands = candidate_pairs(s3)
+    _PREFLIGHT["candidate_pairs"] = len(cands)
+    _PREFLIGHT["candidate_pair_keys"] = [pk for pk, _c in cands]
+    _PREFLIGHT["candidate_contexts"] = sorted({c for _pk, c in cands})
     canonical = s3_canonical_shas(s3)
     pins = s3_canonical_pins(s3)
     by_key = {p["pair_key"]: p for p in manifest.get("pairs", [])
               if isinstance(p, dict) and isinstance(p.get("pair_key"), str)}
+    _PREFLIGHT["§4_candidate_derivation"] = "pass"
     missing = [pk for pk, _c in cands if pk not in by_key]
     if missing:
         raise S4Stop(

@@ -126,12 +126,24 @@ def publish(files: Sequence[Tuple[Path, bytes]] = (),
 
 
 def blocked_bundle(stop: S4Stop) -> Tuple[Tuple[Path, bytes], ...]:
-    body = {"schema": sp.SCHEMA, **stop.as_dict()}
-    md = ("# S4 RECORD — " + stop.status + "\n\n"
-          f"- 原因: {stop.cause}\n- 影響: {stop.impact}\n"
-          f"- 最小修正案: {stop.minimal_fix}\n\n"
-          "S4 の結果は出さない。修正実装は行わない（設計書 §24）。\n\n"
-          "S2 PASS / S3 PASS / S3.5 の結果は変更しない（設計書 §16）。\n")
+    pre = sr.preflight_record()
+    body = {"schema": sp.SCHEMA, **stop.as_dict(), "preflight": pre}
+    lines = ["# S4 RECORD — " + stop.status, "",
+             f"- 原因: {stop.cause}", f"- 影響: {stop.impact}",
+             f"- 最小修正案: {stop.minimal_fix}", "",
+             "S4 の結果は出さない。修正実装は行わない（設計書 §24）。", "",
+             "S2 PASS / S3 PASS / S3.5 の結果は変更しない（設計書 §16）。", ""]
+    if pre:
+        lines += ["## 停止までに通過した Gate", "",
+                  "判定には使わない。**どこまで進んで何で止まったか**を記録だけで"
+                  "追えるようにするための証拠。", "",
+                  "| 項目 | 値 |", "|---|---|"]
+        for k, v in pre.items():
+            if isinstance(v, list):
+                v = ", ".join(f"`{x}`" for x in v) or "—"
+            lines.append(f"| {k} | {v} |")
+        lines.append("")
+    md = "\n".join(lines)
     return ((JSON_PATH, _dumps(body).encode("utf-8")),
             (RECORD_PATH, md.encode("utf-8")))
 

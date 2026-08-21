@@ -37,6 +37,7 @@ from s4_spec import Gene, PairVerdict  # noqa: E402
 def _reset_caches():
     sr.reset_read_cache()
     sr.reset_code_state()
+    sr.reset_preflight()
     yield
     sr.reset_read_cache()
     sr.reset_code_state()
@@ -866,6 +867,21 @@ def test_43c_blocked_bundle_is_renderable():
     body = json.loads(files[0][1].decode("utf-8"))
     assert body["status"] == "BLOCKED" and body["schema"] == sp.SCHEMA
     assert "BLOCKED" in files[1][1].decode("utf-8")
+
+
+def test_43c2_blocked_record_carries_preflight():
+    """BLOCKED 記録は「どこまで進んで何で止まったか」を残す（判定には使わない）。"""
+    sr.reset_preflight()
+    sr._PREFLIGHT.update({"G0-1_s3_canonical": "pass", "candidate_pairs": 6,
+                          "candidate_contexts": ["terminal_i", "terminal_ri"]})
+    files = srep.blocked_bundle(sr.S4Stop(cause="c", impact="i", minimal_fix="f"))
+    body = json.loads(files[0][1].decode("utf-8"))
+    assert body["preflight"]["candidate_pairs"] == 6
+    md = files[1][1].decode("utf-8")
+    assert "停止までに通過した Gate" in md and "terminal_ri" in md
+    sr.reset_preflight()
+    plain = srep.blocked_bundle(sr.S4Stop(cause="c", impact="i", minimal_fix="f"))
+    assert "停止までに通過した Gate" not in plain[1][1].decode("utf-8")
 
 
 def test_43d_frozen_thresholds_match_design():
