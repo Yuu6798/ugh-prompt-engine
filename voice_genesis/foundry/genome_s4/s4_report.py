@@ -505,6 +505,22 @@ def _stage_ear_pack(meta: Dict[str, Any], runs: Sequence[sr.PairRun],
 # ---------------------------------------------------------------------------
 # §20 Phase C — Final
 # ---------------------------------------------------------------------------
+#: Phase C が書き換えるキー。結合対象から外さないと、**同じ回答での冪等な再実行**が
+#: `_assert_mechanistic_binding` で落ちる（初回 Phase C が結果を書き換えるため）。
+_PHASE_C_KEYS = ("perceptual", "overall")
+
+
+def mechanistic_digest(res: Dict[str, Any]) -> str:
+    """Phase A が確定させる部分（= Phase C が触らない部分）の digest。
+
+    ファイル全体を覆うと、初回 Phase C が `perceptual` / `overall` を書き足した
+    時点で digest が動き、`_assert_reveal_idempotent` が許すはずの
+    「同じ回答での再実行」が手前で落ちる。
+    """
+    stable = {k: v for k, v in res.items() if k not in _PHASE_C_KEYS}
+    return sb.sha256_bytes(sb.canonical_bytes(stable))
+
+
 def _assert_mechanistic_binding(key: Dict[str, Any], res_raw: bytes) -> None:
     """pack が **この** 機械結果に対して作られたことを確認する。
 
@@ -517,7 +533,13 @@ def _assert_mechanistic_binding(key: Dict[str, Any], res_raw: bytes) -> None:
             cause="commitment 済み key に mechanistic_digest が無い",
             impact="この耳 pack がどの機械結果に対応するかを確認できない",
             minimal_fix="Phase A を実行して耳 pack を作り直す")
-    got = sb.sha256_bytes(res_raw)
+    try:
+        parsed = json.loads(res_raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise S4Stop(cause=f"s4_results.json が JSON として読めない: {exc}",
+                     impact="pack と機械結果の対応を確認できない",
+                     minimal_fix="Phase A からやり直す") from exc
+    got = mechanistic_digest(parsed)
     if got != want:
         raise S4Stop(
             cause=f"s4_results.json の digest が key の pin と一致しない "

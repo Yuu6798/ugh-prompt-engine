@@ -1097,9 +1097,22 @@ def run_all(*, write_wav: bool = True, require_clean: bool = True,
                    "結果 bytes で確認できないため、S4 の結果を出さない",
             minimal_fix="S3 正本・凍結素材・実装 closure のどれが変わったかを"
                         "特定して User 裁定へ戻す")
-    backup = publish_wav() if write_wav else None
+    # **公開の前に**検査する。publish_wav() の後で raise すると `run_all` は
+    # backup を返せず、呼び出し側は「公開済みだが巻き戻せない」状態になる
+    # （新しい WAV が正典パスに残り、直前の正当な集合は .prev に取り残される）。
     assert_canonical_unchanged()
-    meta = {
+    backup = publish_wav() if write_wav else None
+    try:
+        meta = _build_meta(material, s3_sha, s35_sha, manifest_sha, ctx, manifest,
+                           cands, cs)
+    except BaseException:
+        rollback_wav(WAV_DIR, backup)
+        raise
+    return runs, meta, backup
+
+
+def _build_meta(material, s3_sha, s35_sha, manifest_sha, ctx, manifest, cands, cs):
+    return {
         "material_provenance": material_provenance(material),
         "s3_results_sha256": s3_sha,
         "s35_results_sha256": s35_sha,
@@ -1109,7 +1122,6 @@ def run_all(*, write_wav: bool = True, require_clean: bool = True,
         "candidate_pairs": [{"pair_key": pk, "context_id": c} for pk, c in cands],
         "code_state": cs,
     }
-    return runs, meta, backup
 
 
 if __name__ == "__main__":

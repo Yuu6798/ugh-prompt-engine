@@ -1380,13 +1380,47 @@ def test_38d2_phase_a_invalidates_dependent_s4b_outcomes():
 @requires_world
 def test_38f_mechanistic_result_is_bound_to_the_pack():
     """verdict 文字列だけでなく、結果 bytes の digest で pack と結び付ける。"""
-    raw = b'{"mechanistic": {"verdict": "PASS"}}'
-    key = {"mechanistic_digest": srep.sb.sha256_bytes(raw)}
+    doc = {"mechanistic": {"verdict": "PASS"}}
+    raw = json.dumps(doc).encode("utf-8")
+    key = {"mechanistic_digest": srep.mechanistic_digest(doc)}
     srep._assert_mechanistic_binding(key, raw)
+    # 整形の違いでは落ちない（正規形で比べるため）が、中身が変われば落ちる
+    srep._assert_mechanistic_binding(key, json.dumps(doc, indent=2).encode("utf-8"))
     with pytest.raises(S4Stop):
-        srep._assert_mechanistic_binding(key, b'{"mechanistic": {"verdict": "PASS"} }')
+        srep._assert_mechanistic_binding(
+            key, json.dumps({"mechanistic": {"verdict": "FAIL"}}).encode("utf-8"))
     with pytest.raises(S4Stop):
         srep._assert_mechanistic_binding({}, raw)            # pin 欠落は fail-closed
+    with pytest.raises(S4Stop):
+        srep._assert_mechanistic_binding(key, b"{not json")  # 壊れた入力も fail-closed
+
+
+@requires_world
+def test_38f2_mechanistic_binding_survives_the_first_phase_c_write():
+    """初回 Phase C が perceptual/overall を書き足しても、同じ回答での再実行は通る。"""
+    phase_a = {"schema": "x", "mechanistic": {"verdict": "PASS"},
+               "material_provenance": {"relocated": False}}
+    digest = srep.mechanistic_digest(phase_a)
+    after_phase_c = dict(phase_a, perceptual={"abx_correct": 3},
+                         overall={"verdict": "NOT_ESTABLISHED"})
+    assert srep.mechanistic_digest(after_phase_c) == digest      # 冪等再実行が通る
+    srep._assert_mechanistic_binding({"mechanistic_digest": digest},
+                                     json.dumps(after_phase_c).encode("utf-8"))
+    # Phase A 側の中身が変われば落ちる（結合は効いたまま）
+    tampered = dict(after_phase_c, mechanistic={"verdict": "FAIL"})
+    with pytest.raises(S4Stop):
+        srep._assert_mechanistic_binding({"mechanistic_digest": digest},
+                                         json.dumps(tampered).encode("utf-8"))
+
+
+@requires_world
+def test_38k_canonical_is_validated_before_wav_publication():
+    """公開後に raise すると巻き戻せない。検査は publish_wav の前に置く。"""
+    import inspect
+    src = inspect.getsource(sr.run_all)
+    assert src.index("assert_canonical_unchanged()") < src.index("backup = publish_wav")
+    # 公開後の失敗経路にも巻き戻しがある
+    assert "rollback_wav(WAV_DIR, backup)" in src
 
 
 @requires_world
