@@ -1,8 +1,15 @@
-# DESIGN S7 — run 8（り→ん破綻の専用調査: **観測子先行の 2 段**）
+# DESIGN S7 — run 8（り→ん破綻の専用調査: **観測子先行の 3 段**）
 
 - 起草: 2026-08-20（Claude 設計）。**User 裁定 2026-08-20（第 3 次）まで反映**。
   本書は初版（診断単発・追加収録なし）を**上書き**し、第 3 次裁定で
   観測子の定義・量交絡の除去法・耳判定集合・回帰閾値を確定した
+- **改訂 vNext（2026-08-21・User 改修設計を反映）**: S3（Genome Architecture）の
+  4 gene 知見を受け、**Gate 通過後・8-B 着手前**に `Run 8-0G`（Genome-informed
+  Native Intervention Gate）/ `Run 8-0D`（教育可能性の判定）/ `Run 8-0E`
+  （収録・dosage の最終確定）を新設した（**§7G**）。**run 8 の目的は変えていない** —
+  `terminal_release_failure` 観測子・360 セル・校正→hold-out・
+  `dosage-fixed targeted partial replacement`・8-R 再現性裁定はいずれも維持し、
+  Genome 知見を**「どこを教育するか」の選択器**として 8-B の手前へ挿入する
 - 位置づけ: S 系列の第 7 設計書。**り→ん破綻は S3 以来の最古の未解決課題**で、
   `results_s6/s6_record_2026-08-20.md` §6-4 が「単一介入 run の副題として
   扱うより専用の調査に値する」と申し送った件の実施回
@@ -11,28 +18,43 @@
   [`DESIGN_S3_backfill.md`](DESIGN_S3_backfill.md)（原因仮説の初出）/
   [`../evolution/records/vgl0_control_axis_probe_2026-08-20.md`](../evolution/records/vgl0_control_axis_probe_2026-08-20.md)
   （CPU レンダ probe の実証済み経路）/
-  [`recording_kit/cards.md`](recording_kit/cards.md)（収録カード規約）
+  [`recording_kit/cards.md`](recording_kit/cards.md)（収録カード規約）/
+  [`genome_s3/results/S3_RECORD.md`](genome_s3/results/S3_RECORD.md)
+  （S3 = PASS・F0 / Duration / Energy / Release の 4 gene。**vNext の入力**）
 
 ## 0. 裁定（本書で凍結する設計判断）
 
-1. **run 8 は観測子先行の 2 段構成**。観測だけで 1 run を消費せず、同一計画内で
-   Gate を挟んで学習まで到達する:
+1. **run 8 は観測子先行の 3 段構成**（vNext で 2 段 → 3 段）。観測だけで 1 run を
+   消費せず、同一計画内で **2 つの Gate** を挟んで学習まで到達する:
 
    ```
    Run 8-0（GPU $0・**run 番号を消費しない**）
-     a. 終端遷移台帳（SP/遷移密度の機械集計）
-     b. 固定 Probe Set 360 セル（**1 target event = 1 render**）
-     c. 観測子 terminal_release_failure/0.1 の全セル機械評価
-     d. 層化ブラインド耳校正（40 unique + 8 duplicate）
-     e. duration / SP / spk_embed の 3 レバー診断
-      ↓ Gate（§7 合格条件）
+     A. 終端遷移台帳（SP/遷移密度の機械集計）                     = 旧 8-0a
+     B. 固定 Probe Set 360 セル（**1 target event = 1 render**）  = 旧 8-0b/c/d
+        + 観測子 terminal_release_failure/0.1 の全セル機械評価
+        + 層化ブラインド耳校正（40 unique + 8 duplicate）
+      ↓ **Gate 1**（§7 合格条件 = TRF 観測子の成立）
+     G. **Genome-informed Native Intervention Gate**（§7G・vNext 新設）
+        B0 / D（duration）/ F（f0）/ S（SP）/ R-rescue を
+        **一度に 1 つだけ**介入し、TRF を実際に動かす native レバーを選定
+      ↓ **Gate 2**（§7G-5 の機械判定 + §7G-7 の 2 問人間確認）
+     D. **教育可能性の判定** — 選ばれたレバーが 8-B で教育できるか（§7G-8）
+     E. **target recording / dosage dry-run の最終確定**（§7G-9）
+      ↓
    Run 8-B  User 実歌唱の標的構成だけを単一介入として 40K 学習
+      ↓
+   Run 8-R  未処置の同一契約反復（§9-0）
       ↓
    観測子 + ブラインド A/B + 回帰対照 → **効果で終端宣言**
    ```
 
    **第 3 次裁定で「Run 8-A」の呼称は Run 8-0 へ統合された**（観測段は
-   一つの GPU $0 ブロックとして扱う）。本書中の 8-0a/8-0b… は上記の細目を指す
+   一つの GPU $0 ブロックとして扱う）。本書中の 8-0a/8-0b… は上記の細目を指す。
+   **vNext の 8-0A/8-0B/8-0G/8-0D/8-0E は同じ GPU $0 ブロック内の段階名**で、
+   旧 8-0a → 8-0A、旧 8-0b/c/d → 8-0B に対応する。**旧細目 e（duration / SP /
+   spk_embed の 3 レバー診断）は §7-2 に残り**、Gate 1 が**不成立のとき**の
+   $0 成果物として機能する。Gate 1 が成立した場合は上位互換の §7G が走り、
+   **spk_embed は原因候補から Identity control へ降格**する（§7G-1）
 
    直接 8-B へ進めば、改善しても「実歌唱時間」「語尾 /ri/ の標的被覆」
    「長音符」「User 話者へのローカル効果」のどれが効いたか分からない
@@ -70,13 +92,43 @@
 9. **観測子の呼称**は `terminal_release_failure`（TRF）とする。「り→ん」は
    User の percept であって機構名ではない。TRF の下位軸は §5 で 5 系統に分ける
 
+10. **S3 の 4 gene を run 8 へそのまま持ち込まない**（vNext）。S3 が成立させた
+    のは **WORLD 領域（sp / ap / f0）の凍結 pair 上の移植**であって、run 8 の
+    実推論経路（Stage 1 dur → Stage 2 pitch → Stage 3 acoustic → Stage 4
+    vocoder）に同じ入力があるとは限らない。**native 入力の有無**で
+    Primary causal candidate / Diagnostic only / Identity control の 3 つへ
+    振り分ける（§7G-1 の対応表が正）
+
+11. **Energy は既定の実験系から外す**（診断のみ）。mel や waveform の gain を
+    直接動かすと、TRF の energy 系観測値（`energy_decay_slope`・絶対 RMS 閾値で
+    有声判定する `excess_tail_voiced_ms` / `hnr_*`）が**破綻の有無と無関係に**
+    動く。「計器を操作して計器が改善した」という循環になるため。同じ理由で
+    **R-rescue の機械 TRF 値には `instrument_coupled` を立てる**（§7G-4）
+
+12. **Release は原因 probe ではなく rescue probe である**。S3 の Release は
+    完全な release genome ではなく主として terminal taper なので、効いても
+    言えるのは「**終端出力を適切に減衰させれば症状を救済可能**」=
+    **phenotypic rescue** までである。**原因の同定には使わない**
+
+13. **8-0G は新しい TRF metric を作らない**。primary axis と `θ` は B-1 / B-2 で
+    凍結したものをそのまま使う。**介入セルの z' は B0 アームの (話者 × 世代)
+    統計で凍結して当てる** — アームごとに z 化し直すと、アーム全体が一様に
+    動いた介入効果が正規化で消える（§7-0 (7) が Gate 3 で踏み抜いたのと同型の穴）
+
+14. **人間確認は 2 問だけ**（§7G-7）。360 セルを聞き直さない。機械 Gate で
+    primary lever を 1 つに絞った後にだけ blind A/B を 2 問行い、2/2 一致で
+    `HUMAN_CONFIRMED`、不一致なら `machine_effect_only` = **8-B BLOCKED**。
+    **これは統計的証明ではない**（帰無仮説下で 2/2 が偶然出る確率は 0.25）。
+    GPU 学習へ進む最低限の人間 Gate としてのみ使い、§9 の因果裁定にも §11 の
+    終端宣言にも用いない
+
 7. 予算: **cap $4 は「1 走行あたり」であって実験全体ではない**
    （2026-08-20 訂正 — 従来の書き方だと、非決定論だった場合の完了経路が
    自分の予算 AC に必ず違反していた）。
 
    | 経路 | 走行 | 合計 | 位置づけ |
    |---|---|---|---|
-   | **Run 8-0** | なし（CPU のみ） | **$0** | 観測段 |
+   | **Run 8-0** | なし（CPU のみ） | **$0** | 観測段（vNext の 8-0A / 8-0B / **8-0G / 8-0D / 8-0E** を全て含む。8-0G の追加レンダは CPU 300 本前後 = §7G-0） |
    | **決定論だった場合** | 8-B + 8-R | **≈$2.80** | **因果裁定まで到達**（既定の完了経路） |
    | 非決定論だった場合（既定） | 8-B + 8-R | ≈$2.80 | **探索的 / `provisional`** として記帳（再裁定 8）。**走行としては正当な停止点だが、AC の「効果で終端宣言」は充足しない**（= run 8 は終端しない・§9-0 / §11 と同一の扱い） |
    | 非決定論 + 形式的な因果裁定を要求する場合 | + 8-R2 | ≈$4.20 | **実験全体予算の User 承認が要る** |
@@ -84,7 +136,8 @@
    **各走行は cap $4 以内**（run 7 実績 ≈$1.40）。**実験全体で $3 を超える
    見込みになった時点で User 承認を取る**。User の負担は
    **ブラインド耳ラベル 2 回**（§6-1 の Gate 前 40+8 セル / §6-2 の処置後
-   27+6 セル）と**8-B の候補プール収録 5〜8 分**
+   27+6 セル）+ **8-0G の 2 問**（§7G-7・vNext で追加）と
+   **8-B の候補プール収録 5〜8 分**
    8-R は §9-0 のとおり**因果裁定の前提**であり、無い場合は全行が
    `confounded / provisional` になって run 8 は終端しない。User の負担は
    **ブラインド耳ラベル 1 回**と**8-B の候補プール収録 5〜8 分**
@@ -206,6 +259,9 @@ run 8-R が無ければ `confounded / provisional` である = §9-0）。
 | H5 | 世代（データ構成）で境界が動く | run5/6/7 で境界が同一 |
 | **H-TTD** | **関連終端イベント密度**（`terminal transition density`）が効く | 台帳の密度順と破綻順が対応しない |
 | **H-dur** | duration conditioning が有効な因果レバーである | `/r/`-`/i/` 配分を振っても TRF 軸が動かない |
+| **H-f0**（vNext） | pitch conditioning が有効な因果レバーである | note-relative contour を振っても TRF 軸が動かない |
+| **H-SP**（vNext） | 終端遷移 cue（語末 `/ri/`→SP の明示）が有効な因果レバーである | 明示 SP を入れても TRF 軸が動かない／`S-frames-only` と差が出ない |
+| **H-rescue**（vNext） | 終端出力の taper で症状を**救済**できる | taper を掛けても耳判定が改善しない |
 
 **H-TTD の集計単位（第 3 次裁定）**: 初版が想定した「総 SP 数」では測れない。
 ritsu VCV には**孤立録音の頭尾 SP が大量に入り得る**が、それは
@@ -213,6 +269,17 @@ ritsu VCV には**孤立録音の頭尾 SP が大量に入り得る**が、そ�
 `modality` × `preceding_phoneme` × `preceding_duration_bin` ×
 `utterance_final / internal` × 遷移種別 × `pitch_bin` の
 **関連終端イベント密度**で比較する。
+
+**H-f0 / H-SP / H-rescue は vNext で新設**され、それぞれ §7G-2 の F / S /
+R-rescue アームに対応する。3 本とも到達限界は H-dur と同型で、**言えるのは
+「有効な因果レバーである」まで**である。加えて:
+
+- **H-SP は stage 分離されていない** — 語末に SP トークンを足すと Stage 1 の
+  入力自体が変わるので、効果は「終端遷移 cue」と「終端母音が短くなったこと」の
+  和になる。`S-frames-only` 対照に勝てない場合は `duration_confounded` として
+  **D 側の証拠に計上する**（§7G-3）
+- **H-rescue は原因仮説ではない** — 出力後処理なので `instrument_coupled` を
+  立て、phenotypic rescue までしか言わない（§0-12 / §7G-4）
 
 **H-dur の到達限界（明記）**: `/r/`-`/i/` の時間配分を振って改善が出ても、
 **「破綻の原因は duration であって acoustic ではない」とは断定しない**。
@@ -256,6 +323,19 @@ terminal_events:
   value:
     count
     duration_seconds
+    # --- event-level の内訳（2026-08-21 追加・Codex P2 指摘を採用）---
+    # ★ 集計値（count / duration_seconds）だけでは §7G-9 の Duration 受け入れ
+    #   規則が使う baseline_r_ratio を**この台帳から計算できない**。
+    #   台帳を pin した意味が消えるので、主層に限り**イベント単位の内訳**を持つ。
+    events:                  # position=utterance_final かつ
+                             # transition ∈ {ri_to_SP} の層に限り必須。
+                             # 他の層では省略可（膨張を避ける）
+      - event_id             # <speaker>/<row_id>/<phone_index>
+        onset_phone_seconds  # 終端モーラの子音 /r/ の ph_dur 秒
+        vowel_phone_seconds  # 同 母音 /i/ の ph_dur 秒
+        r_ratio              # onset / (onset + vowel)（導出値も併記する）
+    # 抽出元は本節冒頭のとおり transcriptions.csv の音素列 + ph_dur であり、
+    # **新しい抽出器を持ち込まない**（同じ行から内訳を落とさず書き出すだけ）
 
 # --- 密度の分母（層別に必ず記録する） ---
   denominator:
@@ -1329,12 +1409,831 @@ k = 2 では現実的な効果量がまず届かない。§7-1 の「k=2 は形�
 「ritsu が治った」のではなく「**別の声になった**」であり、
 **修復策ではなく診断限定**である（第三の声の議論と混同しない）。
 
+**vNext での位置づけ（2026-08-21）**: 本節は **Gate 1 が不成立のとき**の
+GPU $0 成果物として残る。Gate 1 が成立した場合は、同じ CPU 経路の上位互換として
+**§7G（Run 8-0G）が走る**:
+
+| §7-2 のレバー | §7G での扱い |
+|---|---|
+| 1. `/r/`-`/i/` duration 再配分 | **D アーム**（事前登録の ladder・primary level・判定代数を持つ = §7G-2 / §7G-5） |
+| 2. 明示 SP 挿入 | **S アーム**（+ 必須対照 `S-frames-only` = §7G-3） |
+| 3. `spk_embed` 補間 | **原因候補から降格し Identity control 扱い**。identity を動かす操作は 8-B の教育対象へ写像できず、「別の声になった」以上のことを言えないため（§7G-1） |
+| （新設） | **F アーム**（`pitch_pred` の note-relative contour）/ **R-rescue アーム**（出力終端 taper・原因判定に不参加） |
+
+## 7G. Run 8-0G / 8-0D / 8-0E — Genome-informed Native Intervention Gate（vNext 新設・2026-08-21）
+
+**章番号に letter suffix を使うのは、既存の §8〜§12 への参照（§8-5-2b 等が
+本書内外から多数引かれている）を壊さないため**である。実行順は
+§7（TRF 観測子の Gate）の直後・§8（Run 8-B）の直前。
+
+```
+Run 8-0A  exposure ledger（= §3）
+   ↓
+Run 8-0B  360-cell probe + TRF observer calibration（= §4〜§6・§12-0）
+   ↓ Gate 1 : TRF observer 成立（= §7）
+Run 8-0G  Genome-informed Native Intervention Gate（本節）
+   ↓ 「TRF を実際に動かす因果レバー」を選定（§7G-5 / §7G-6 / §7G-7）
+Run 8-0D  8-B で教育可能なレバーかの判定（§7G-8）
+   ↓
+Run 8-0E  target recording / dosage dry-run の最終確定（§7G-9）
+   ↓
+Run 8-B   単一介入 40K 学習（= §8）
+   ↓
+Run 8-R   再現性 + 因果裁定（= §9）
+```
+
+**run 8 の目的は変えていない。** TRF 観測子・360 セル・校正→hold-out・
+`dosage-fixed targeted partial replacement`・8-R 再現性裁定はいずれも維持し、
+S3（Genome Architecture）で得た知見を **「どこを教育するか」の選択器**として
+8-B の手前へ挿入するだけである。**8-0G が不成立なら 8-B へ進まない**という
+構造も §0-6 のまま変わらない（進まない条件が 1 つ増える）。
+
+### 7G-0. 前提条件（全て満たすまで 8-0G に着手しない）
+
+```
+[ ] P0  8-0B が完了し、§7-0b の合格条件 6 項目が全て成立している
+        （不成立の場合に走るのは §7-2 の 3 レバー診断であって 8-0G ではない）
+[ ] P1  介入は run 7 の**同一 ONNX 束**（acoustic / pitch / linguistic / dur /
+        vocoder / emb）の上で行い、sha256 が 8-0B と一致することを assert する。
+        ExecutionProfile も 8-0B と同一
+[ ] P2  **B0 アームの出力 wav sha256 が 8-0B の対応セルと一致する**。
+        これが「介入注入口は既定 off でバイト同一」を主張できる唯一の機械証拠で
+        あり、一致しない時点で 8-0G の結果は全て無効（fail-closed）
+[ ] P3  介入は canonical 経路への monkeypatch では実装しない
+        （VG-L0 BLOCKER 7「monkeypatch の canonical 経路禁止」）。§10 PR-2-2 と
+        同じ流儀の**既定 off の注入口**を通す
+[ ] P4  ladder・primary level・判定代数（§7G-2 / §7G-5）を**1 レンダも走らせる
+        前に** `s7_0g_arm_spec.json` へ書き出し sha256 を pin する
+        （§12-0-C2 と同じ様式。走らせてから水準を足さない）
+```
+
+費用は CPU レンダのみで **GPU $0**（§0-7 の Run 8-0 行に含まれる）。
+レンダ本数の見積り:
+
+```
+primary level : レンダを要する 5 アーム（B0 / D / F / S / S-frames-only）
+                × 対象セル 41（§7G-5 の T 10 + C 31）              = 205
+                ※ R-rescue は B0 出力の後処理なのでレンダ不要
+ladder        : target 群 T の 10 セルのみ × レンダを要する桟 8
+                （D 3 = 0.5/1.0/1.5 / F 3 = -100/0/+100 / S 2 = 2,4）  =  80
+                ※ R の桟 {50, 200} ms も後処理
+合計           : 285 レンダ + 後処理 30 = 8-0B の 360 本と同オーダー
+```
+
+VG-L0 probe が同経路で 51 条件 × 3 走行 = 153 レンダを完走している（§4-3）。
+
+### 7G-1. S3 の 4 gene を run 8 へそのまま持ち込まない
+
+S3 が gene として成立させたのは **WORLD 領域（sp / ap / f0）の凍結 pair 上での
+移植**であって（`genome_s3/DESIGN_GENOME_S3.md` §3 の B0/F/D/E/R）、run 8 の
+実推論経路とは**入力の集合が違う**。run 8 の経路は実装上こうなっている
+（`s1_gate/gate_synth.py` `run_pipeline`）:
+
+```
+Stage 1  duration predictor   -> ph_dur_pred1 -> final_phone_dur   (:1151-1167)
+   ↓ ph_dur2 = [HEAD_FRAMES] + final_phone_dur + [TAIL_FRAMES]     (:1174)
+Stage 2  pitch predictor      -> pitch_pred -> f0_hz               (:1204,1215)
+Stage 3  acoustic model       入力 = tokens / durations / f0 / spk_embed
+                              -> mel                               (:1238-1246)
+Stage 4  vocoder              入力 = mel / f0 -> waveform          (:1276)
+```
+
+**Duration は Stage 1 から後段すべてへ入り、F0 は Stage 2 から acoustic と
+vocoder の両方へ入る。一方 energy に相当する native 入力はどの Stage にも無い**
+（Stage 3 は `tokens / durations / f0 / spk_embed / depth / steps`、Stage 4 は
+`mel / f0` のみ）。したがって S3 の 4 gene は次のように振り分ける:
+
+| S3 形質 | run 8 での位置づけ | 8-B の原因候補 | 根拠 |
+|---|---|---|---|
+| **Duration** | native causal intervention | **YES** | `final_phone_dur` / `ph_dur2` が実在の介入点 |
+| **F0** | native causal intervention | **条件付き** | `pitch_pred` は実在の介入点だが、教育データへの符号化が未定義（§7G-8） |
+| **Energy** | **native 入力が無い** | **NO・診断のみ** | mel / waveform の gain を直接動かす以外に経路が無く、それは計器の循環（§7G-4） |
+| **Release** | S3 では partial taper 中心 | **NO・rescue probe のみ** | 完全な release genome ではないため原因主張に使わない（§0-12） |
+| **SP / terminal transition** | gene ではないが native 構造要因 | **YES** | 語尾 `/ri/`→SP の遷移そのもの。8-B の transcription 操作へ直結 |
+| **spk_embed** | Identity 側 | **control へ降格** | identity を動かす操作は教育対象へ写像できない（§7-2 レバー 3 の正直会計） |
+
+```
+Primary causal candidates      Diagnostic only        Identity control
+├─ Duration                    ├─ Energy              └─ spk_embed
+├─ SP / terminal transition    └─ Partial Release
+└─ F0
+```
+
+### 7G-2. アーム定義（同一 checkpoint・同一 probe・**一度に 1 つだけ**介入）
+
+各アームは **primary level 1 点で判定**し、ladder は単調性・特異性の evidence
+専用とする（**ladder を掃いて通った水準を後から primary にしない**）。
+**特異性の対照は必ず 1 本置く**（摂動そのものへの反応を「レバーが効いた」と
+読まないため = §7G-5 の `nonspecific_response`）。ただし対照の形はアームごとに
+違う:
+
+```
+D / F   : 向きが定義できるので **逆符号の桟**を ladder に含める
+S       : 逆符号が定義できないので **S-frames-only 対照**が特異性検査を兼ねる（§7G-3）
+R-rescue: 因果主張をしないので特異性桟を要求しない（§7G-4）
+```
+
+| アーム | 介入点 | primary level | ladder（単調性 / 特異性） |
+|---|---|---|---|
+| **B0** | なし | — | — |
+| **D** | Stage 1 の `final_phone_dur`（終端モーラの `/r/`:`/i/` 配分） | `r_share_scale = 2.0`（= 終端母音を短くする向き） | `{0.5, 1.0, 1.5, 2.0}`。**1.0 は B0 とバイト一致でなければならない**（no-op 検算）。0.5 が逆符号の桟 |
+| **F** | Stage 2 の `pitch_pred`（終端ノート内の note-relative contour） | 終端ノート後半 25% に**平均保存**の線形 contour `-200 cents` | `{-200, -100, 0, +100}`。0 は B0 とバイト一致。`+100` が逆符号の桟 |
+| **S** | 音素列（語末 `/ri/`→**明示 SP トークン**）+ frame 収支 | `sp_frames = 8`（= `TAIL_FRAMES` と同尺） | `{2, 4, 8}` + **必須の対照 `S-frames-only`**（§7G-3） |
+| **R-rescue** | Stage 4 出力波形の終端 taper | cosine fade `100 ms` | `{50, 100, 200} ms`。**原因判定には使わない**（§0-12） |
+
+**F アームは絶対 Hz を PJS からコピーしない**（他話者の f0 をコピーすると
+identity を動かし、かつ「破綻しない側を見て介入を決めた」ことになる）。
+動かすのは **note-relative contour のみ**で、**ノート内平均 f0 を保存する**。
+
+**F アームの変換式を凍結する（2026-08-21・Codex P2 指摘を採用）**: 「後半 25% に
+線形 contour `-200 cents`」だけでは実装が割れる（`-200` は終点か・全振幅か・
+定数オフセットか / 平均保存の補償を窓の内側でやるか外側でやるか）。同じ
+`s7_0g_arm_spec.json` から違う TRF 値・違う A〜F 判定が出るので、**フレーム単位の
+式・境界処理・平均復元規則**を事前登録する:
+
+```
+入力 : pitch_pred（MIDI 半音・float32。Stage 2 出力。f0_hz へ変換する前に当てる）
+対象 : 終端ノートが占める frame 区間 [n0, n1)（ph_dur2 の HEAD_FRAMES 分を
+       オフセットして note_target_frames から決定論的に導く）
+L = n1 - n0
+W = floor(L * 0.25)                      # 窓は**末尾 W frame** = [n1-W, n1)
+
+1. ランプ（窓内のみ・窓外は 0）:
+     i ∈ [n1-W, n1) について
+       t(i)     = (i - (n1 - W) + 1) / W          # t ∈ (0, 1]、最終 frame で 1
+       delta(i) = depth_cents * t(i) / 100.0      # 半音単位
+     ※ **depth_cents は「最終 frame における深さ（終点値）」**である。
+       全振幅でも定数オフセットでもない
+     ※ i ∉ 窓 について delta(i) = 0
+
+2. 平均復元（**ノート全体で**行う。窓の内外どちらにも同じ量を当てる）:
+     m = mean_{i ∈ [n0, n1)} delta(i)
+     pitch_pred'(i) = pitch_pred(i) + delta(i) - m     for i ∈ [n0, n1)
+     ノート外の frame は**触らない**
+     -> 構成上ノート内平均は厳密に保存される（残差は float 丸めのみ）
+
+3. 境界処理:
+     W < 4          -> セルを dropped: f0_window_too_short として記帳
+     depth_cents = 0 -> delta ≡ 0・m = 0 なので **B0 とバイト一致**（no-op 検算）
+
+4. ガード（保存が壊れていないことの検算・事後の言い訳に使わない）:
+     |mean(pitch_pred') - mean(pitch_pred)| を cents で記帳し、
+     5 cents を超えたら fail-closed
+```
+
+ladder の `{-200, -100, 0, +100}` は**すべて `depth_cents`（終点値）**として
+解釈する。
+
+**フレーム下限**: D / S は総 frame を固定したまま配分を動かすため、音素が
+潰れうる。VG-L0 が「`notes_limit=10` で最小子音 2 frame = 下限まで残り 1」を
+実測しているので、**下限 2 frame を事前登録**し、下回るセルは
+`dropped: duration_floor_clipped` として記帳する（黙って丸めない）。
+
+### 7G-3. 各アームの拘束と、**stage 局在を主張しない**理由
+
+```
+D アーム : spk_embed / 譜面 / model / SP 構成 は不変。
+           **「F0 unchanged」は「直接介入しない」という意味であって、
+             出力 f0 が不変という意味ではない** — ph_dur2 は Stage 2 の入力
+             なので pitch_pred は当然動く。そこを固定したら
+             「duration を変えた結果が後段へ伝わる」因果経路そのものを切る
+F アーム : **Duration byte-identical**（`final_phone_dur` / `ph_dur2` が B0 と
+           一致することを assert する。Stage 1 は決定論なので構造的に成立）。
+           SP 構成・spk_embed・acoustic / vocoder も不変
+S アーム : spk_embed / model / 譜面の音高・総 frame は不変。
+           **ただし音素列が変わるので Stage 1 の配分も動く**（下記）
+R-rescue : Stage 1〜4 は完全に B0 と同一。触るのは出力波形だけ
+全アーム共通 : `spk_embed` のバイト一致・ONNX 束 sha 一致を assert する
+```
+
+**S アームは stage 分離されていない（重要）**。語末に SP トークンを足すと
+`v_tokens1` が変わり、**duration predictor の入力自体が変わる**ので、S の効果は
+「終端遷移 cue の効果」と「終端母音が短くなった効果」の和になる。したがって:
+
+```
+必須の対照 S-frames-only（**S の実配分から構成する** = 2026-08-21・
+                          Codex P2 指摘を採用）:
+  ★ 独立に Stage 1 を走らせて「同じ frame 数だけ削る」のでは対照にならない。
+    SP トークンを足すと encoder 出力が変わり、duration predictor は
+    sp_frames の固定移動を**超えて** /r/ と /i/ を再配分しうる
+    （`s1_gate/gate_synth.py:1129-1167`）。その場合 S と対照は
+    **SP cue ではなく配分そのものが違う**ので、S が勝っても cue の証拠にならない
+
+  構成手順（2026-08-21 訂正 — 初版は「SP 分を /r/ へ加える」と「全非 SP 音素が
+            S と完全一致」を同時に要求しており、**どの正の sp_frames でも
+            assert が成立しない内部矛盾**だった。Codex 指摘を採用）:
+    1. S アームを走らせ、その Stage 1 出力 final_phone_dur^S を取得する
+    2. **frame sink を 1 音素に固定する** = 終端モーラの `/r/`
+       （SP エントリの frame 数はここへ、ここへだけ加える）
+    3. **sink 以外の全非 SP 音素**の frame 数は final_phone_dur^S のコピーを
+       そのまま使う（対照側で Stage 1 を再実行しない）
+    4. assert（**sink を除いた**等値検査。ここが前提を機械で縛る箇所）:
+         for ph in 非 SP 音素 \ {sink}:  dur^ctrl[ph] == dur^S[ph]
+         dur^ctrl[sink] == dur^S[sink] + sp_frames
+         sum(dur^ctrl) == sum(dur^S) == 総 frame 数
+       いずれか不成立なら対照として無効（fail-closed）
+
+  残る既知の交絡（明示する）:
+    sink を 1 音素に固定した代償として、**sp_frames が「末尾の SP」に置かれるか
+    「sink = 先頭側の /r/」に加わるか**の差は残る（これは構成上消せない —
+    総 frame を固定したまま SP を消せば、その frame は必ずどこかへ行く）。
+    D アームの ladder が同程度の /r/ 伸長に感度を示した場合、S の優位は
+    SP cue に帰属できない -> verdict = duration_confounded
+
+S が EFFECTIVE_LEVER を名乗れるのは、S が §7G-5 を満たし
+**かつ S-frames-only が同じ判定を満たさない**場合だけである。
+両方満たした場合 -> verdict = duration_confounded
+```
+
+**`duration_confounded` のときの昇格代数（2026-08-21・Codex P2 指摘を採用）**:
+「D アーム側の証拠として計上する」だけでは **D の status も flip 集合も median も
+変わらない**ため、`S-frames-only` が A〜F を満たしているのに D（`r_share_scale`
+という別パラメータ化）が満たさない場合、**§7G-6 に候補が 1 つも残らず primary
+lever を選べない**（教育可能な duration 介入が実証されているのに 8-B が止まる）。
+よって Duration を**ファミリ**として扱い、昇格を機械的に定義する:
+
+```
+Duration ファミリ = { D（r_share_scale） , S-frames-only }
+  ※ どちらも「終端母音の frame を削って前へ回す」介入の別パラメータ化である
+
+ファミリ代表の決定（§7G-6 と同じ順序をファミリ内で先に適用する）:
+  1. A〜F を満たしたメンバのみ候補
+  2. T 上の break→ok flip 数が多い方
+  3. median Δz'_primary が大きい（負に大きい）方
+  4. 同点なら固定順（D > S-frames-only。実装既存の介入点が先）
+  -> 代表が存在すれば **Duration は EFFECTIVE_LEVER として §7G-6 に参加**する
+     （代表の flip 集合と median を Duration の値として使う）
+  -> 候補が空なら Duration は NOT_EFFECTIVE
+
+primary lever が Duration になり、その代表が S-frames-only だった場合:
+  8-0D / 8-0E で教育対象として記述する形質は
+  「終端母音から差し引いた frame 数（= 終端母音を短くする配分）」であり、
+  **SP トークンの明示ではない**（S は duration_confounded で落ちている）
+```
+
+`S` 自身は `duration_confounded` のまま EFFECTIVE_LEVER にならないが、
+**その frame 収支ぶんの効果は Duration ファミリを通じて回収される**。
+
+同様に **D アームで改善が出ても「原因は duration であって acoustic ではない」
+とは言わない**（§2-3 H-dur の到達限界がそのまま適用される）。8-0G が示せるのは
+**「その入力を動かすと TRF が動く」= 有効な因果レバーである**までである。
+
+### 7G-4. Energy を既定の実験系から外す理由と、R-rescue の `instrument_coupled`
+
+TRF の機械軸には **RMS / エネルギーに直接依存する量**が含まれる
+（`energy_decay_slope`、絶対 RMS 閾値 `1e-3` で有声判定する
+`excess_tail_voiced_ms` / `hnr_median_db_*`）。mel や waveform の gain を
+動かすと、これらは**破綻の有無と無関係に**動く。「計器を操作して計器が
+改善した」という循環になるので、**Energy アームは既定の実験系に置かない**
+（§0-11）。
+
+**同じ理屈は R-rescue にも一部かかる。** 終端 taper は出力振幅を直接下げる
+ので、機械 TRF 値は必ず「改善方向」へ動く。したがって:
+
+```
+R-rescue の機械 TRF 値には status = instrument_coupled を立てる
+R-rescue は §7G-5 の EFFECTIVE_LEVER 判定に**参加しない**
+R-rescue の一次証拠は §7G-7 の耳側（2 問）であり、
+言えるのは「終端出力を適切に減衰させれば症状を救済可能」= **phenotypic
+rescue** まで。**「Release が原因」とは言わない**
+
+R-rescue の「効いた」の定義（§7G-10 の分岐で使う）:
+  §7G-7 の 2 問が 2/2 で R-rescue 側    -> rescue_confirmed
+  それ以外                              -> rescue_not_confirmed
+  機械 TRF 値は instrument_coupled 付きの**参考値**として併記するだけで、
+  判定には使わない
+```
+
+### 7G-5. 機械判定（**新しい TRF metric を作らない**）
+
+primary axis と `θ` は **B-1 / B-2 で凍結したものをそのまま使う**（§12-0）。
+`ε` は §12-0-C の `ε_axis`（primary 軸のもの）をそのまま使う。
+
+**z 化の基準は B0 アームで凍結する（§0-13）**:
+
+```
+z'_primary(cell, arm)
+  = orient(primary) * ( x(cell, arm) - median_ref ) / ( 1.4826 * MAD_ref )
+
+  median_ref / MAD_ref = **8-0B の当該 (話者 × 世代) 母集団**から取った定数
+                         （B0 アームはその母集団と byte 一致する部分集合なので、
+                           B0 を基準にすることと同義）
+  orient(primary) / θ  = B-1 / B-2 の凍結値をそのまま使う
+```
+
+アームごとに z 化し直してはならない。**アーム全体が一様に動いた効果は
+再中心化で完全に消える** — §7-0 (7) が Gate 3 で踏み抜いたのと同型の穴で、
+介入が効いているほど「効果 0」と報告されてしまう。
+
+**ringing 補正（§5-0）はアーム内で独立に適用する**。介入は出力波形を変えるので、
+無声対照の母集団も B0 のものを流用できない。§5-0 の比較群を
+「同一話者 × 同一世代 × **同一アーム**」と読み替えて leave-one-out を適用し、
+補正不能な群が出たアームは **NOT_EFFECTIVE ではなく `undetermined`**
+（`ringing_uncorrected_group`）として記帳する — 生値と差分を混ぜた比較で
+レバーの合否を決めない。
+
+```
+機械判定ラベル（耳の break/ok とは別物なので記号を分ける）:
+  machine_break(cell, arm) := [ z'_primary(cell, arm) >= θ ]
+
+対象集合（事前登録・cell_id で列挙して pin する）:
+  target 群  T = ritsu × run7 × { P-RI-FINAL 9 セル（b∈{b1,b2,b4} × p∈{p57,p62,p65}）}
+                 ∪ { run7/ritsu/P-ANCHOR/sakura-kagiri }              -> 10
+  control 群 C = ritsu × run7 × { P-N-FINAL 9 / P-I-FINAL 9 / P-RI-MEDIAL 3
+                                  / P-ANCHOR の「うみ」セル }
+                 ∪ pjs × run7 × { P-RI-FINAL 9 }                      -> 31
+  ※ C は「介入を当てるが良化を期待しない」held-out 対照であり、
+    §8-4 の**学習** held-out とは別物
+
+判定（全て primary level で評価する）:
+  A  machine_break(anchor, B0) == True     # baseline が break（anchor =
+                                           #   run7/ritsu/P-ANCHOR/sakura-kagiri）
+  B  machine_break(anchor, arm) == False   # 介入で ok へ flip
+  C  #{ c ∈ T\{anchor} : machine_break(c,B0) ∧ ¬machine_break(c,arm) } >= 1
+  D  median_{T} z'_primary(arm) - median_{T} z'_primary(B0) <= -ε
+  E  #{ c ∈ C : ¬machine_break(c,B0) ∧ machine_break(c,arm) } == 0
+  F  独立プロセスでの再実行で A–E の判定と flip 集合が**完全一致**
+     （同一プロセス内反復は independent replay の証拠にならない = §7-0b 6）
+
+全て満たす      -> EFFECTIVE_LEVER
+一つでも欠ける  -> NOT_EFFECTIVE（欠けた条件を理由コードで記帳）
+
+dropped セルの扱い（2026-08-21・Codex P1 指摘を採用。**事前登録しないと
+「不利なセルを落として C〜E を通す」実装と落とさない実装で判定が割れる**。
+`duration_floor_clipped` / `f0_window_too_short` / `ringing_uncorrected` は
+本書が明示的に許した帰結なので、必ず起こりうる）:
+
+  1. anchor が dropped
+       -> そのアームは **undetermined**（A / B が評価できない。
+          NOT_EFFECTIVE とも書かない）
+  2. T / C の非 anchor セルが dropped
+       -> そのセルは C の分子・D の median・E の分母から**除外**し、
+          **除外集合（cell_id と理由コード）を必ず記帳**する
+  3. 最小支持（**有利な生存者だけで通る経路を塞ぐ**）:
+       rendered な T セルが **8 未満**（= 10 セル中 2 セル超が脱落）
+       または rendered な C セルが **25 未満**（= 31 セル中 6 セル超が脱落）
+       -> そのアームは **undetermined**
+  4. F（独立プロセス再現）は判定と flip 集合に加えて
+       **dropped 集合の完全一致**も要求する（片方でだけ落ちるセルがあれば
+       再現とみなさない）
+
+特異性の検査（§7G-2 の対照から機械的に立てる）:
+  D / F : 逆符号の桟でも**判定 D**（median の改善）が ε を超える
+          -> status = nonspecific_response
+  S     : S-frames-only も A〜F を満たす -> status = duration_confounded
+          （効果は D アーム側の証拠として計上する = §7G-3）
+  いずれも当該アームを EFFECTIVE_LEVER にしない（undetermined として記帳）
+  ※ 「摂動なら何でも良かった」を「レバーが効いた」と読み替えないため
+```
+
+**閾値・ladder・primary level・対象集合を事後に変更して通し直さない**
+（§0-6 と同じ規律）。変更が要ると判断した場合は**本 memo の改訂**として扱い、
+変更前後の判定を両方記帳する。
+
+**検出力の正直な記述**: T は 10 セルであり、`C` は 1 セルの flip で満たされる。
+**8-0G は「効かない」を積極的に示す設計ではない** — 全アーム NOT_EFFECTIVE は
+`undetermined`（検出力不足を排除できない）であって「native レバーは存在
+しない」ではない（§9-0b と同じ規律）。
+
+### 7G-6. 複数アームが通った場合の primary lever 選定（事後判断を避ける）
+
+```
+1. T 上の break→ok flip 数が多いアーム
+2. median Δz'_primary が大きい（負に大きい）アーム
+3. 同点なら固定優先順位  SP > Duration > F0
+```
+
+**この優先順位は「優れている順」ではなく、8-B の教育データへ直接写像できる順**
+である（SP は transcription の音素列そのもの、Duration は発声指示と
+アラインメント、F0 は符号化未定義 = §7G-8）。選ばれるのは **1 つだけ**で、
+run 8-B は単一介入のまま保たれる（§8-3）。
+
+### 7G-7. 人間確認は 2 問だけ
+
+360 セルをもう一度聞かない。**機械 Gate で primary lever を 1 つに絞った後に
+だけ**、blind A/B を 2 問行う。
+
+```
+提示ペア（**選択規則を事前登録し、機械判定から決定論的に導く**。導いた結果を
+          聴取前に s7_0g_listening_pair.json へ書き出して sha256 を pin する）:
+  Q1  run7/ritsu/P-ANCHOR/sakura-kagiri : B0  vs  primary lever（primary level）
+  Q2  **§7G-5 の条件 C を満たしたセル**（非 anchor で break→ok に flip した
+      target）のうち **cell_id 昇順で先頭**            : B0  vs  同上
+      ※ 条件 C により flip 集合は**非空が保証される**
+      ※ R-rescue（機械判定に参加しない = §7G-4）を聴く場合は、
+        T のうち machine_break(c, B0) == True のセルから cell_id 昇順で先頭
+
+規約は §6-1 と同一: 提示順ランダム・**どちらが介入側かを伏せる**・
+モデル名 / アーム名を伏せる。質問文は 1 つだけ:
+  「どちらが終端破綻が弱いか？」
+
+判定:
+  2/2 で介入側     -> HUMAN_CONFIRMED   -> 8-0D へ
+  それ以外          -> machine_effect_only -> **8-B BLOCKED**
+```
+
+**Q2 を固定セルにしない理由**（2026-08-21・Codex P2 指摘を採用）: 条件 C は
+「anchor + 非 anchor 1 セル」で満たせるので、**あらかじめ選んだ固定セルが
+B0 で break でない / 当該アームで flip していない**ことが正当に起こる。その
+セルを Q2 に据えると、**改善が存在しないペアを聴かせて 2/2 を要求する**ことに
+なり、有効なレバーを `machine_effect_only` で誤ってブロックしうる。選択規則
+（= flip 集合から cell_id 昇順）は事前登録され、選択自体は機械結果から
+決定論的に決まるので、「動いたセルを人が選んだ」経路にはならない。
+
+**これは統計的証明ではない**（帰無仮説のもとで 2/2 が偶然出る確率は 0.25）。
+GPU 学習へ進むための**最低限の人間 Gate**としてのみ機能し、§9 の因果裁定にも
+§11 の終端宣言にも使わない。R-rescue のみが効いた場合も同じ 2 問を行うが、
+その結果は **phenotypic rescue の記録**であって 8-B の解錠には使わない
+（§7G-10）。
+
+### 7G-8. Run 8-0D — 8-B で教育可能なレバーかの判定
+
+EFFECTIVE_LEVER かつ HUMAN_CONFIRMED になったレバーについてのみ行う。
+**8-0G は inference-time の介入で、8-B は data-time の教育である** — 両者を
+繋ぐのは写像仮説であり、それが立たないレバーは因果的でも教育できない。
+
+| 軸 | 内容 | SP | Duration | F0 |
+|---|---|---|---|---|
+| **T1** 写像先の存在 | 学習データ側の操作へ写像できるか | `transcriptions` の音素列で `/ri/`→SP を明示（**現行 8-B が既に行う操作** = §8-5-2） | 収録カードの発声指示 + アラインメント由来の `ph_dur` 配分 | **未定義**（note-relative contour を録音の何で教えるかが決まっていない） |
+| **T2** 機械検証可能性 | 「教えたい形質が入っている」ことを dataset 組み立て時に機械検査できるか | §8-5-4 の選抜 5 項目でそのまま検査可 | 配分の事前登録が要る（どの `/r/:/i/` 比を「教育」と呼ぶか） | T1 が無いので評価不能 |
+| **T3** dosage 固定との両立 | 15 row・±1% の枠内で実現できるか（§8-3） | 現行設計で充足済み | 同左（構成のみ変更） | 同上 |
+
+```
+判定:
+  T1–T3 すべて充足     -> trainable                      -> 8-0E へ
+  T1 を欠く            -> causal_but_not_trainable_yet   -> **8-B へ進まない**。
+                          符号化 mini-spec を凍結してから再入する（§12 OQ4）
+  T2 / T3 を欠く       -> not_trainable_under_current_contract -> run 9 候補
+```
+
+**F0 の既定経路は `causal_but_not_trainable_yet` である。** 「F0 を変えたら
+TRF が動いた」は「TRF は pitch trajectory に因果感度を持つ」までしか言わず、
+**それだけでは 8-B の録音設計へ直結させない**。
+
+### 7G-9. Run 8-0E — target recording / dosage dry-run の最終確定
+
+`trainable` と判定されたレバーについて、**User に実収録を発注する前に**
+（= User の実作業を空振りさせない）次を確定する。ここまで GPU $0。
+
+**2 つのゲートに分ける（2026-08-21・Codex P1 指摘を採用）**: 初版は
+「受け入れ規則の**検証**まで収録発注前に閉じる」と書いており、**アラインメント
+後のテイクが要る検証を、テイクを録る前に要求する順序デッドロック**になっていた
+（どの Duration テイクもゲートを満たせない）。**規則の凍結**と**規則の適用**を
+分ける:
+
+```
+8-0E-a（収録発注 **前**・GPU $0）      : 規則と設計を凍結する
+8-0E-b（収録 **後**・学習 **前**・$0） : 凍結した規則を実テイクへ適用する
+```
+
+#### 8-0E-a. 収録発注前に凍結する（GPU $0）
+
+```
+[ ] §8-1 の収録カード 16 枚を、選ばれたレバーに合わせて確定する
+      SP       -> 現行カードのまま（/ri/→SP 明示の指示）
+      Duration -> 8-0G の primary level の**向き**に対応する発声指示を追加
+                  （成功した配分側へ寄せる。数値そのものを読み上げさせない）
+[ ] **選ばれたレバーの形質受け入れ規則を `s7_0e_pack_spec.json` へ凍結する**
+    （2026-08-21・Codex P1 指摘を採用。**発声指示だけでは T2「機械検証可能性」を
+      満たさない** — 歌い手のテイクが実際に配分を動かしていなくても §8-5-4 の
+      選抜は通り、**選ばれたレバーを含まないパックで 40K 学習が回る**）
+      SP       -> 既存: 各 target row の `/ri/` 終端が `transcriptions` 上で
+                  SP へ接続していること（§8-5-2・すでに機械検証可）
+      Duration -> **規則の本文をここで凍結する**（実テイクへの適用は 8-0E-b）:
+                  比較量 = 当該 row の終端モーラの `/r/` frame 比
+                           r_ratio = r / (r + i)
+                  **baseline の母集団を §3 の台帳から取る**（2026-08-21 訂正 —
+                    初版は「baseline 15 row の中央値」と書いたが、**その 15 row
+                    には終端 `/ri/` を持たない row が多数含まれ**
+                    〔`recording_kit/cards.md` の母音単独 row 等〕、
+                    median の母集団が実装ごとに変わって T2 の機械性が崩れる。
+                    Codex 指摘を採用）:
+                      eligible baseline events
+                        = §3 `target_exposure_ledger` の
+                          **`terminal_events[...].events`**（`position =
+                          utterance_final` かつ `transition = ri_to_SP` の層に
+                          限り必須のイベント単位内訳）を同一話者で列挙したもの
+                          （抽出元は §3 と同一の transcriptions.csv + ph_dur。
+                            ここで新しい抽出器を持ち込まない）
+                      baseline_r_ratio = median over eligible baseline events
+                                         の `r_ratio`
+                  方向規則 = row の r_ratio > baseline_r_ratio
+                             （= 8-0G の primary level の向きと同符号）
+                  **eligible baseline events が 5 件未満なら規則を定義できない**
+                    -> Duration は `not_trainable_under_current_contract`
+                       （§7G-8）。median を薄い標本で作って通さない
+                  絶対閾値を足す場合も**選抜を 1 度も走らせる前に**この JSON へ書く
+                  検証単位 = row。満たさない row は**選抜から落とす**（適用は 8-0E-b）
+      F0       -> §7G-8 のとおり符号化 mini-spec が凍結されるまで受け入れ規則を
+                  定義できない -> `causal_but_not_trainable_yet` のまま進まない
+[ ] §8-5-2c の E=3 承認条件 7 項目のうち未充足分（2/3/5/6）を閉じる
+[ ] §8-5-2b の**収録前ゲート**（決定論選抜の空回しで voiced と total ph_dur の
+    両方が ±1% に入る 6 row 部分集合の存在を確認）を通す
+[ ] dosage dry-run: target 9 row + retained baseline 6 row = 15 row の選抜を
+    **候補プール未収録のまま**、既存 user 15 row の実測値で空回しする
+[ ] 出力 `s7_0e_pack_spec.json` を sha256 で pin する（§8-5-7 の会計へ接続）
+```
+
+#### 8-0E-b. 収録後・学習前に適用する（GPU $0）
+
+```
+[ ] 収録した候補プールをアラインメントし、**8-0E-a で pin 済みの受け入れ規則**を
+    target row へ適用する（規則をここで作らない・緩めない。
+    適用前に pin した JSON の sha256 を再照合する）
+[ ] 規則を満たす target row が **9 本に満たない場合は fail-closed** —
+    8-B へ進まない。dosage を埋めるために規則を満たさない row を混ぜない
+    （混ぜた時点で「その形質を教育した」という主張が成立しなくなる）
+[ ] 落ちた row と判定値（`r_ratio` 等）を**全数記帳**する（黙って落とさない）
+[ ] `user_ri_pack_selection.json` を確定して pin する（§8-5-7）
+```
+
+**8-0E-a を通るまで収録を発注せず、8-0E-b を通るまで 40K 学習を起動しない。**
+逆に、通った時点で
+「何を教育するか」「その形質が入ったことをどう機械検証するか」「dosage を
+どう固定するか」の 3 つが揃っており、8-B は**設計判断ゼロで実行できる**。
+
+### 7G-10. 8-B への接続（結果別の分岐）
+
+| 8-0G の結果 | 8-B の扱い |
+|---|---|
+| **S が primary** | 現行の transition-density 設計を**そのまま採用**（`/ri/`→SP 明示・E=3・target 9 + retained baseline 6・dosage 固定）。設計変更なしで 8-B へ |
+| **D が primary** | 同じ dosage 固定構造を維持し、target 9 セルを「**duration 形質を教育する pack**」として使う。`/r/ : /i/` 配分は 8-0G で成功した側へ寄せた発声指示にする。**ただし SP exposure を run 7 と揃える**（下記の追加拘束。揃えられない場合は単一介入と呼ばない） |
+| **F が primary** | **即 8-B へ行かない**。F0 形質を training data へどう符号化するかを別 mini-spec で凍結してから 8-B（既定は `causal_but_not_trainable_yet` = §7G-8） |
+| **R-rescue だけ効く** | **8-B へ進まない**。原因は未同定。ただし「出力側で救済可能」を記録し、推論後処理トラックとして run 9 候補へ回す |
+| **何も効かない** | **8-B へ進まない**。現行 target recording を**発注しない**。全アームの結果を診断レポートとして残し、裁定は `undetermined`（§7G-5 の検出力の但し書き） |
+
+**Duration 経路の追加拘束（2026-08-21・Codex P1 指摘を採用）**: §8-5-2 は
+target 9 row の `/ri/` 終端を **`transcriptions` 上で明示的に SP へ接続する**ことを
+要求する。これは **S アームの操作点そのもの**なので、Duration 経路でそのまま
+適用すると **8-B が duration 形質と終端遷移 cue の両方を同時に教育**してしまい、
+SP 由来の改善でも「primary lever を教育した」という AC を満たしてしまう。
+
+```
+Duration 経路では:
+  1. §8-5-2 の「/ri/→SP を明示接続する」要求は **SP 経路固有**として扱い、
+     Duration 経路には適用しない
+  2. 代わりに **SP exposure を run 7 と揃える**ことを機械検証する:
+       target 9 row の終端遷移の構成（§3 台帳の transition 種別 × position の
+       分布）が、置換前の baseline 9 row と**同一の層に収まる**こと
+  3. 揃えられない場合（標的語彙が必然的に `ri_to_SP` を増やす等）:
+       **既定は fail-closed = 8-B を起動しない**（2026-08-21・Codex P1 指摘を
+       採用。初版は「`combined intervention` として記帳する」とだけ書いており、
+       **記帳したうえで学習を回し、SP 由来の改善を Duration の成功として
+       終端宣言できる**経路が空いていた）。
+       ```
+       status = combined_intervention_blocked
+         -> 既定: **8-B へ進まない**。収録構成を組み直すか run 9 候補へ回す
+         -> User が「複合介入として回す」ことを明示的に承認した場合のみ実行可。
+            その走行は:
+              - §11 の「教育した形質が primary lever と一致」を**充足しない**
+              - §7G-11 の終端宣言を**使えない**（単一介入の主張をしない）
+              - 結果は §8-5-6 の主張範囲表に
+                「duration 形質 + 終端遷移 exposure の複合介入」として記帳する
+       ```
+```
+
+**SP 経路ではこの拘束は要らない**（そこでは終端遷移の明示が primary lever
+そのものであり、duration 側は 8-0E の受け入れ規則で縛らない）。
+
+**下流のゲートも経路条件付きにする**（2026-08-21・Codex P1 指摘を採用 —
+分岐側に例外を書いただけでは、§8-5-2 / §8-5-2c/d と §11 の AC が
+**全 target row の SP 明示**を要求したままで、実装は「AC を満たせない」か
+「combined intervention を再導入する」かの二択になる）:
+
+```
+§8-5-2（各 row の /ri/→SP 明示接続）
+§8-5-2c/d（27 イベントの SP 遷移）
+§11 AC の「各 target row の /ri/ 終端が SP へ接続」
+  -> いずれも **S 経路でのみ適用**する
+
+Duration 経路で代わりに適用するもの:
+  - 終端遷移構成が置換前 baseline と同一層（上記 2）
+  - §8-5-3 の**イベント数の均等性は経路に依らず適用**する
+    （標的イベントの定義だけが経路で変わる: S 経路 = ri_to_SP、
+      Duration 経路 = 当該 row の終端モーラ `/ri/` の出現）
+```
+
+これにより「**録音して GPU 学習したが、そもそも何を教育していたのか分からない**」
+を構造的に防ぐ。
+
+### 7G-11. 8-0G の到達限界（言えること / 言えないこと）
+
+```
+言える  : 「run 7 checkpoint 上で、この native 入力を動かすと TRF 観測値が
+           θ を跨いで動く」= 有効な因果レバーである
+言えない: 「学習データ中のその形質が破綻の原因である」
+           （8-0G は inference-time の介入であり、data-time の主張をしない）
+言えない: 「破綻は Stage N に局在する」
+           （D は下流全段へ伝播し、S は Stage 1 から効く = §7G-3）
+言えない: 「Release が原因」（phenotypic rescue まで = §0-12）
+言えない: 「native レバーは存在しない」（全アーム NOT_EFFECTIVE は
+           undetermined = §7G-5）
+```
+
+改修後の run 8 は次の一本の因果鎖になる:
+
+```
+S2 / S3 : Voice / Performance を（部分的に）分解できる
+   ↓
+8-0G    : そのうちどの native 形質が TRF を動かすか
+   ↓
+8-B     : その形質を狙った単一の教育介入
+   ↓
+8-R     : 教育前後で本当に TRF が変わったか（ドリフトを差し引いて）
+```
+
+**最終的な成功宣言は次の 1 文に限定する**（§8-5-6 の主張範囲表と §11 の
+終端宣言を上書きしない）:
+
+> **dosage 固定の標的置換パッケージ**（§7G-6 の primary lever が指す形質を
+> 狙って構成したもの）による単一介入によって、**非標的終端文脈で測る限り
+> Identity を変更せず**、TRF を再現可能に改善した。
+
+**帰属は package-level に留める**（2026-08-21 改訂・Codex P1 指摘を採用）。
+初版の宣言文は「**特定の Performance / transition 形質への**単一教育介入」と
+書いており、**§8-5-6 / §9 が `undetermined` と定めた機構レベルの帰属を
+終端宣言の側で先取りしていた**。8-0G が示すのは inference-time の感度であって、
+**8-B で実際に効いたのが標的素材か・収録セッション差か・語彙分布の変化か・
+baseline 9 row の除去かは分離されていない**（尺を揃えた非標的置換対照が
+無い限り = §8-5-6 の 3）。形質レベルの帰属を名乗るには run 9 のその対照が要る。
+
+**Identity 句は無条件では名乗れない**（2026-08-21 改訂）。上は **§7G-12 経路 1
+（identity preservation check を per (cell, axis) で全 pass）を通した場合の
+最大限**であり、射程は**非標的終端文脈で測った identity**に限られる。
+測定が成立しない場合（経路 2）と実測して超過した場合（経路 3）の宣言文は
+**§7G-12 が正**である。**無条件の `Identity を変更せず` はどの経路でも
+名乗れない**。
+
+### 7G-12. 「Identity を変更せず」を名乗る条件（2026-08-21・Codex P1 指摘を採用）
+
+上の宣言文の **`Identity を変更せず` は、本書のどの Gate によっても支えられて
+いなかった**。8-0G は inference-time で `spk_embed` を触らないが、**8-B は
+40K の fine-tune で共有デコーダを動かす**ので、TRF が改善しつつ**実現された
+声が別人へ寄る**ことは起こりうる。その場合、全ての Gate を通ったまま宣言文が
+偽の成功を報告する。よって宣言の条件を事前登録する:
+
+```
+経路 1（実測して名乗る）— identity preservation check:
+  射程     : **非標的終端文脈（`/i/` `/N/` 系）で測った identity のみ**。
+             標的 `/ri/` 文脈は TRF 変化と分離できないため射程外（下記 ※ 2 つ目）
+  対象セル : **被処置話者 user を必ず含む**（2026-08-21・Codex P1 指摘を採用。
+             初版は §6-2 の P2 = {ritsu, pjs} だけを見ており、
+             **8-B が user の声だけを動かした場合にゲートが素通りする**）
+             未処置側 : {run7, 全未処置反復, run8-B}
+                        × {ritsu, pjs} × {P-RI-FINAL/b4/p57, P-N-FINAL/b4/p57}
+                        （= §6-2 の P2 と同一）
+             被処置側 : {run7, 全未処置反復, run8-B}
+                        × user × {P-I-FINAL/b4/p57, P-N-FINAL/b4/p57}
+                        （= §6-2 の P1 のうち **標的でない終端**の 2 セル）
+             ※ user の `/ri/` 終端セルを identity 判定に**入れない**理由:
+               そこは 8-B が**意図して変える**場所であり、identity 距離が
+               「意図した TRF 変化」と交絡する。値は診断として併記するが
+               判定には使わない（意図した改善を identity 逸脱として罰しない）
+             ※ **その代償として、経路 1 が保証する射程は「非標的終端文脈で
+               測った identity」に限られる**（2026-08-21・Codex P1 指摘を採用）。
+               標的 `/ri/` 文脈で identity だけが動いた場合、本ゲートは
+               検出しない。よって**宣言文の側で射程を明示する**（下記）と同時に、
+               標的文脈の identity 保存は **`undetermined` と記帳する**
+  計器     : **既存計器のみ**。`singer/identity_metrics.py` の
+             正規化 E1/E2（`normalized_e1_e2`）と `cosine_distance`
+             （S2 T1 の識別軸。**新しい identity 計器は作らない** = §0-5 の
+               単一スコア禁止・§12-0-A-3 の「分離性能で計器を選ばない」と同型）
+
+  集約規則（2026-08-21・Codex P2 指摘を採用。**スカラー `d_spk` を作らない**）:
+             計器は **cell ごと・軸ごと（E1 / E2）に別々の距離**を出すので、
+             どこで平均を取るかで同じ実測から違う裁定が出る。よって
+             **軸もセルも潰さず、per (cell, axis) で判定して連言を取る**:
+
+               d_B(cell, axis)   = cosine_distance( E_axis(run7, cell),
+                                                    E_axis(8-B,  cell) )
+               d_ref(cell, axis) = median over 全未処置反復 r of
+                                   cosine_distance( E_axis(run7,  cell),
+                                                    E_axis(8-R_r, cell) )
+                 ※ 反復の集約が median なのは §6-2 の Δsev_ctrl と同じ流儀
+                   （k = 1 ならその 1 本の値）
+
+               pass(cell, axis) := d_B(cell, axis) <= d_ref(cell, axis) + ε_id
+
+             **軸間・セル間の平均や max を取らない**（1 つでも落ちれば落ちる
+             = fail-closed）。落ちた (cell, axis) と両辺の値を必ず記帳する
+
+  判定     : **全話者（user を含む）× 全対象セル × 両軸が pass のときのみ**
+             経路 1 で宣言可。**1 つでも超えたら経路 3**（= 実測された逸脱で
+             あり「証拠が無い」ではない・2026-08-21・Codex P2 指摘を採用）
+  ε_id     : §7-1 の閾値と**同時に**（8-B 開始前に）凍結する。事後に決めない。
+             **導出規則も凍結する**（2026-08-21・Codex P1 指摘を採用 —
+             初版は「いつ凍結するか」しか書いておらず、**寛大な ε_id を置けば
+             どんな identity 移動も経路 1 を通る**状態だった）。
+             §12-0-C の `ε_axis` と**同じ様式**で、**測定側の性質だけ**から出す:
+
+               ε_id = max( numerical_floor_id , reproducibility_bound_id )
+
+                 numerical_floor_id
+                   = 同一バイトの wav に対する `normalized_e1_e2` ->
+                     `cosine_distance` の数値量子化誤差
+                 reproducibility_bound_id
+                   = **同一 checkpoint・同一条件**で独立プロセス再レンダした
+                     ペア間の cosine distance の**上側 95 パーセンタイル**
+                     （= 「何も変えなくても出る距離」の幅。母集団は
+                       §7G-12 の対象セルと同一）
+
+             **「群を一番綺麗に分ける ε_id」にしない**（§12-0-A-3 と同型）。
+             導出に使った反復・母集団・数値を worked example として記帳する
+  未処置反復の要件（2026-08-21・Codex P1 指摘を採用。**k = 1 の d_ref で
+  経路 1 を通さない** — §9-0 が「k = 1 では sigma_between が推定できない」と
+  定めているのに、identity 側だけ 1 本の距離を基準に採用していた。その 1 本が
+  たまたま大きく動いていれば、本物の identity 移動が pass する）:
+
+    run 8-R が run 7 と **bit 一致**（= 学習が決定論）
+      -> ドリフト 0 が実証されるので d_ref = 0 として経路 1 を適用してよい
+    bit 一致せず k >= 2
+      -> **median では通さない**（2026-08-21・Codex P1 指摘を採用。
+         median は位置推定であって**走行間ドリフトの上界ではない** — 反復距離が
+         0.05 と 0.95 なら median 0.50 となり、0.50 + ε_id までの identity 移動を
+         許してしまう。`ε_id` は**同一 checkpoint のレンダ再現性**の幅であって
+         **学習走行間のドリフト**ではないので、この穴を塞がない）。
+         §7-1 の MDC95 と同じ様式で**上界**を作る:
+
+           drift_bound(cell, axis)
+             = mean_r d_r + t(0.975, df=k-1) * sd_r * sqrt(1 + 1/k)
+
+           判定: d_B(cell, axis) <= drift_bound(cell, axis) + ε_id
+
+         **k = 2 では t = 12.706 で bound が極端に広くなる**。これは
+         「2 本では抑えられない」という事実の表現であって、広い bound で
+         通すための道具ではない。よって**識別可能性の検査を併置する**:
+
+           d_between(cell, axis)
+             = 同一セル・同一軸で測った**別話者間**の cosine distance の median
+               （= この計器が「別人」と呼ぶ距離のスケール。既存の S2 T1 の
+                 識別軸をそのまま使い、新しい量を定義しない）
+
+           drift_bound + ε_id >= 0.25 * d_between
+             -> **その (cell, axis) は識別不能**。経路 1 を適用せず
+                **経路 2**（identity 保存は undetermined）とし、
+                bound と d_between の実数値を記帳する
+                （「広い bound を通った」を「保存された」と読み替えない）
+    bit 一致せず k = 1 / 8-R 未実施 / 計器が適用できない
+      -> **経路 2**（identity 保存は undetermined）。
+         k = 1 の値は診断として記帳するが判定には使わない
+
+経路 2（名乗らない）— **測定が成立しない場合に限る**
+  （実測を試みていない / 計器が適用できない / 8-R が無く d_ref が定義できない）。
+  **実測して超えた場合はここへ来ない**（それは経路 3）:
+  宣言文を次へ**縮退**させ、実現された identity の不変は undetermined と記帳:
+  > **dosage 固定の標的置換パッケージ**による単一介入によって、
+  > **Identity 入力（spk_embed / 話者構成 / dosage）を変更せず**
+  > TRF を再現可能に改善した（実現された identity の保存は undetermined）。
+
+経路 3（実測して**超えた**場合・1 つでも pass しなかったら必ずここ）—
+  「未実測」と同じ扱いにしない:
+  status = identity_not_preserved
+           （超えた (speaker, cell, axis) と d_B / d_ref / ε_id を記帳）
+  宣言文から **Identity 句を落とす**（入力側の不変も主張しない）:
+  > **dosage 固定の標的置換パッケージ**による単一介入によって、
+  > TRF を再現可能に改善した。**ただし実現された identity は保存されなかった**
+  > （話者 <spk> で d(run7, 8-B) が未処置ドリフト + ε_id を超過）。
+  ※ この場合 run 8 は「TRF は改善したが Identity 代償を伴う」結果であり、
+    §8-5-6 の主張範囲表にもその旨を記帳する
+```
+
+**経路 1 で名乗ってよい宣言文（射程を文中に残す・2026-08-21 追加）**:
+
+> **dosage 固定の標的置換パッケージ**（§7G-6 の primary lever が指す形質を
+> 狙って構成したもの）による単一介入によって、**非標的終端文脈で測る限り
+> Identity を変更せず**、TRF を再現可能に改善した
+> （標的 `/ri/` 文脈の identity 保存は `undetermined`）。
+
+**無条件の `Identity を変更せず` は本設計のどの経路でも名乗れない。** 標的文脈で
+identity と TRF を分離するには、終端窓を除いたノート核で測る変種
+（`identity_metrics._vowel_core` 相当の窓）を **B-1 と同じ様式（式 + 単位 +
+worked example + reference output）で凍結する**必要があり、本走行の射程外である
+（§12 OQ6）。**射程を広げたいという理由で計器を後から作らない。**
+
+**適用可否の未確認事項（正直な記述）**: `identity_metrics` は `render_song` 系の
+`RenderResult` を前提にしており、**`gate_synth` 出力へそのまま適用できるかは
+未確認**である。適用できない場合に新しい計器を起こして経路 1 を通そうとしない —
+**既定は経路 2（宣言の縮退）**であり、計器の新設は本 memo の改訂として扱う。
+
 ## 8. Run 8-B — **dosage-fixed targeted partial replacement**
 
 **正式名称 = `dosage-fixed targeted partial replacement`**（User 裁定 2026-08-20
 第 4 次で確定）。**「5〜8 分を全部学習投入する設計ではない」**ことを名称に
 含める。5〜8 分は**候補プール**であり、学習投入量は run 7 と同一に固定される
 （§8-1 / §8-3）。
+
+**vNext の前提（2026-08-21）**: 本節の構造（dosage 固定・target 9 + retained
+baseline 6・単一介入）は**変更しない**。変わるのは **何を教育するかが §7G-6 の
+primary lever で決まる**ことと、**8-0E（§7G-9）を通るまで収録を発注しない**
+ことの 2 点だけである。レバー別の接続は §7G-10 の分岐表が正:
+
+```
+S が primary  -> 本節をそのまま採用（/ri/→SP 明示の transition-density 設計）
+D が primary  -> 同じ dosage 固定構造のまま、target 9 セルを
+                 「duration 形質を教育する pack」として使う（変更は指示文のみ）
+F が primary  -> 符号化 mini-spec を凍結するまで 8-B へ進まない（§12 OQ4）
+R-rescue のみ / 何も効かない -> **8-B へ進まない**（収録を発注しない）
+```
 
 ### 8-1. 候補プールの収録設計（`capture_pool` = 300–480 s・16 カード）
 
@@ -1973,6 +2872,24 @@ speaker-local である」ことではない**（package-level の限定より�
 5. **観測ベクトル実装**（§5）+ 結果 JSON（セルごとに因子水準・wav sha256・
    命令区間・全軸値・`status`・pins・`execution_profile`）+ 形状テスト
 
+### PR-2G（8-0G/0D/0E: native intervention harness・vNext 新設）
+
+1. **アーム注入口**（§7G-0 P3）— `run_pipeline` の Stage 1 出力
+   （`final_phone_dur`）/ Stage 2 出力（`pitch_pred`）/ 音素列 / 出力波形に対する
+   **既定 off の差し込み口**。off のとき現行とバイト同一であることをテストで縛る
+   （monkeypatch は使わない）。PR-2-2 の測定経路と同じ流儀・同じ差し込み方
+2. **`s7_0g_arm_spec.json`**（§7G-0 P4）— アーム定義・ladder・primary level・
+   対象セル（T / C の `cell_id` 全列挙）・判定代数を**1 レンダも走らせる前に**
+   コミットし sha256 を pin する。§12-0-C2 と同じ運用規律
+3. **B0 一致検査**（§7G-0 P2）— B0 アーム出力 wav sha256 が 8-0B の対応セルと
+   一致することを assert（不一致は fail-closed で全結果無効）
+4. **判定器**（§7G-5）— `machine_break` / A〜F 判定 / `nonspecific_response` /
+   `duration_confounded` / EFFECTIVE_LEVER / primary lever 選定（§7G-6）を
+   **純ロジックとして実装**し、worked example つきの形状テストを持たせる
+   （B-1/B-2 の凍結値は入力として受け取り、**新しい metric を定義しない**）
+5. **`s7_0g_listening_pair.json`**（§7G-7）— 2 問の提示ペアを聴取前に pin
+6. **`s7_0e_pack_spec.json`**（§7G-9）— 8-0D / 8-0E の判定結果と収録発注仕様
+
 ### PR-3（8-B: 収録と学習）
 
 1. `recording_kit/cards.md` へ標的カード 16 枚を追加（§8-1: target 9 /
@@ -2004,16 +2921,57 @@ speaker-local である」ことではない**（package-level の限定より�
       交絡が残る項目は **undetermined のまま**記帳される
 - [ ] GPU 費用 $0
 
-### Run 8-B（Gate 通過時のみ）
+### Run 8-0G / 8-0D / 8-0E（Gate 1 通過時のみ・vNext）
+
+- [ ] §7G-0 の前提 P0–P4 が全て記帳されている（特に **B0 アームと 8-0B の
+      wav sha256 一致**と、`s7_0g_arm_spec.json` が**校正済み結果を見る前に**
+      pin されていること）
+- [ ] 全アーム × 全対象セルの帰結が `rendered` / `dropped`（事前登録の理由コード）
+      で記帳されている（8-0B の AC と同じ様式 — 「全部レンダされたこと」ではなく
+      「全部の帰結が記帳されたこと」が達成条件）
+- [ ] `D` の ladder 1.0 と `F` の ladder 0 が **B0 とバイト一致**している（no-op 検算）
+- [ ] **因果アーム（D / F / S / S-frames-only）**の A〜F 判定が**個別に**記帳され、
+      `EFFECTIVE_LEVER` / `NOT_EFFECTIVE` / `nonspecific_response` /
+      `duration_confounded` / **`undetermined`（`ringing_uncorrected_group` 等の
+      事前登録された理由コード付き）** のいずれかで確定している。
+      **R-rescue は A〜F に参加せず**（§7G-4）、`rescue_confirmed` /
+      `rescue_not_confirmed` で記帳される（機械値は `instrument_coupled` 付きの
+      参考値）— fail-closed した走行が AC を満たせなくなる語彙にしない
+- [ ] **新しい TRF metric を作っていない**こと（primary axis・θ・ε が B-1/B-2 の
+      凍結値と一致することの機械照合）
+- [ ] 複数成立時の primary lever が §7G-6 の 3 段規則で**再現可能に**決まっている
+- [ ] §7G-7 の 2 問が**聴取前に pin された提示ペア**で行われ、
+      `HUMAN_CONFIRMED` / `machine_effect_only` が記帳されている
+- [ ] 8-0D の判定（`trainable` / `causal_but_not_trainable_yet` /
+      `not_trainable_under_current_contract`）が T1–T3 の軸別に記帳されている
+- [ ] `trainable` の場合のみ **8-0E-a** の項目が全て閉じ、
+      `s7_0e_pack_spec.json`（形質受け入れ規則を含む）が pin されている。
+      **収録の発注はこの pin より後**
+- [ ] **8-0E-b**: pin 済み規則を**アラインメント後の target row へ適用**し、
+      落ちた row と判定値が全数記帳されている（§7G-9）。規則を満たす row が
+      9 本に満たない場合は fail-closed で 8-B へ進まない。
+      **規則を収録後に作らない・緩めない**（適用前に JSON の sha256 を再照合する）
+- [ ] 全アーム NOT_EFFECTIVE の場合、裁定が **`undetermined`** で記帳されている
+      （「native レバーは存在しない」と書いていない = §7G-5 / §9-0b）
+- [ ] GPU 費用 $0
+
+### Run 8-B（Gate 1 + Gate 2 通過時のみ）
 
 - [ ] §8-3 の「変えないもの」が実測で確認されている（pins 差分が標的パックのみ）
 - [ ] **dosage 固定の機械検証**: `voiced` / `total ph_dur` が run 7 比 **±1% 以内**、
       `row_count` == **15**（§8-5-4）。到達しない場合は fail-closed で停止し、
       差分を記帳する（黙って枠外の dosage で学習しない）
-- [ ] **構成の機械検証**: target 9 row + retained baseline 6 row（§8-5-2）。
-      各 target row の `/ri/` 終端が `transcriptions` 上で **SP へ接続**されている
-- [ ] **イベント数の均等性**: 9 セルの `/ri/`→SP イベント数が**セル間で同一**
-      （秒数ではなくイベント数で均等 = §8-5-3）
+- [ ] **構成の機械検証**: target 9 row + retained baseline 6 row（§8-5-2）
+- [ ] **経路別の終端遷移要件**（2026-08-21 改訂・§7G-10 の Duration 追加拘束と
+      整合させる。**SP 系の要求は S 経路条件付き**）:
+      **S 経路** = 各 target row の `/ri/` 終端が `transcriptions` 上で
+      **SP へ接続**されている（§8-5-2）かつ 9 セルの `/ri/`→SP イベント数が
+      **セル間で同一**（§8-5-3）/
+      **Duration 経路** = SP 明示接続は**要求しない**。代わりに target 9 row の
+      終端遷移構成が置換前 baseline 9 row と**同一層に収まる**こと（§7G-10）。
+      収まらない場合は `combined intervention` と分類して記帳する/
+      **どちらの経路でも** 9 セルの**標的イベント数はセル間で同一**（§8-5-3 の
+      均等性は遷移種別に依らず適用する）
 - [ ] **選抜が機械 5 項目のみで決まっている**（§8-5-4）。耳を使った形跡がなく、
       同順位の tie-break が固定規則で再現する
 - [ ] `user_ri_pack_selection.json` が capture_pool / train_user_dose /
@@ -2033,7 +2991,21 @@ speaker-local である」ことではない**（package-level の限定より�
 - [ ] 8-R が無い、または k = 1 のまま因果を断定していないこと — §9 の全行を
       `confounded / provisional` で記帳した場合、**本 AC の「効果で終端宣言」は
       充足しない**（§9-0）
-- [ ] **効果で終端宣言**されている（「投入した」で終わらせない）
+- [ ] **8-B が教育した形質が §7G-6 の primary lever と一致している**
+      （8-0G が選んだレバーと違うものを教育していない）。
+      Duration 経路で SP exposure が揃わなかった場合は
+      `combined_intervention_blocked` であり、**既定では 8-B を起動しない**。
+      User 承認のもと複合介入として回した場合、**本項目と §7G-11 の終端宣言は
+      充足しない**（§7G-10 の追加拘束 3）
+- [ ] **効果で終端宣言**されている（「投入した」で終わらせない）。宣言文は
+      §7G-11 の 1 文を超えない（単一教育介入・再現可能な改善）
+- [ ] **Identity に言及する場合、§7G-12 の 3 経路のどれに該当するかが
+      記帳されている**（`ε_id` は 8-B 開始前に凍結）:
+      経路 1 = per (cell, axis) の全 pass -> **射程つき**の宣言文
+      （「非標的終端文脈で測る限り」）/ 経路 2 = **測定が成立しない**場合のみ
+      （未実測・計器不適用・8-R 無し）-> 縮退した宣言文 + `undetermined` /
+      経路 3 = **実測して 1 つでも超過** -> `identity_not_preserved` を記帳し
+      Identity 句を落とす。**超過を経路 2（undetermined）へ流さない**
 - [ ] **主張範囲が §8-5-6 の表のどの行かが明記されている**（dosage 固定の
       部分置換 / (a) への退化 / (c) 量増加のいずれか）
 - [ ] 費用 ≤ $4
@@ -2215,3 +3187,24 @@ PR-2 開始 Gate の「B-1 候補空間 固定」はこの JSON の存在と pin
    **§5-1 の見出しから「articulation 側に限り達成」も撤回**し、事前登録の
    articulation 測度（さ行 onset）が未判定である以上 `undetermined` へ
    格下げした。正典 3 面（s6_record §5-1 / §4-2 表 / STATUS.md）を同期済み
+
+4. **F0 形質の教育データ符号化 mini-spec（vNext・OQ4）**: F アームが
+   EFFECTIVE_LEVER になった場合、8-0D は既定で
+   `causal_but_not_trainable_yet` を返す（§7G-8 の T1 が空）。8-B へ入れるには
+   「note-relative contour を**収録の何で教えるか**」（発声指示 / 譜面側の
+   表現 / アラインメント後の f0 分布のどれを教育対象と呼ぶか）と、
+   「入ったことを dataset 組み立て時にどう機械検査するか」を別 memo で
+   凍結する必要がある。**この mini-spec が無い状態で F を 8-B の設計へ
+   流し込まない**
+
+6. **標的文脈で identity と TRF を分離する計器（vNext・OQ6）**: §7G-12 経路 1 は
+   非標的終端文脈でしか identity を測らないので、**標的 `/ri/` 文脈で identity
+   だけが動いた場合を検出しない**。分離には「終端窓を除いたノート核」で測る
+   変種（`identity_metrics._vowel_core` 相当）を B-1 と同じ様式で凍結する必要が
+   あり、本走行の射程外（run 9 候補）。**それまで無条件の `Identity を変更せず`
+   は名乗らない**
+
+5. **8-0G の検出力（vNext・OQ5）**: target 群は 10 セルで、条件 C は 1 セルの
+   flip で満たされる。**「効かない」を積極的に示す設計ではない**ので、全アーム
+   NOT_EFFECTIVE は `undetermined` である（§7G-5）。同等性を主張したい場合は
+   §9-0b と同じく Δ_eq を事前に置く必要があり、それは本走行の射程外（run 9 候補）
