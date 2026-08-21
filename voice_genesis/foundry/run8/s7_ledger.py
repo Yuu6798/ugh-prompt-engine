@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import math
 import sys
@@ -34,7 +35,9 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import s7_io  # noqa: E402
 import s7_spec as sp  # noqa: E402
+from s7_io import OutputCollisionError, reject_output_collision, sha256_bytes  # noqa: E402,F401
 
 SILENCE_TOKENS = frozenset({"SP", "AP"})
 VOWELS = frozenset({"a", "i", "u", "e", "o", "A", "I", "U", "E", "O"})
@@ -54,40 +57,63 @@ class Row:
     note_dur: Optional[Tuple[float, ...]] = None
 
 
+def read_and_parse(csv_path: Path) -> Tuple[List[Row], str, int]:
+    """入力を**一度だけ**読み、その同じバイト列を parse と sha256 の両方に使う。
+
+    読み直すと、`parse_rows()` と `sha256_file()` の間で中身が差し替わった場合に
+    「古いバイトから数えた count」を「新しいバイトの sha」で pin してしまう
+    （PR #300 Codex 第 2 巡 P2）。
+    """
+    raw, sha, n = s7_io.read_bytes_with_pin(csv_path)
+    return parse_text(raw.decode("utf-8"), source=str(csv_path)), sha, n
+
+
 def parse_rows(csv_path: Path) -> List[Row]:
-    """`transcriptions.csv` を読む。ph_seq と ph_dur の長さ不一致は fail-closed。"""
+    """`transcriptions.csv` を読む（テスト・単体利用向けの薄いラッパ）。"""
+    return read_and_parse(csv_path)[0]
+
+
+def parse_text(text: str, source: str = "<text>") -> List[Row]:
+    """CSV テキストから行を作る。ph_seq と ph_dur の長さ不一致は fail-closed。"""
     rows: List[Row] = []
-    with csv_path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for raw in reader:
-            ph_seq = tuple(str(raw["ph_seq"]).split())
-            ph_dur = tuple(float(x) for x in str(raw["ph_dur"]).split())
-            if len(ph_seq) != len(ph_dur):
-                raise ValueError(
-                    f"{csv_path}: row {raw.get('name')!r} has "
-                    f"{len(ph_seq)} phones but {len(ph_dur)} durations"
-                )
-            ph_num = (
-                tuple(int(x) for x in str(raw["ph_num"]).split())
-                if raw.get("ph_num")
-                else None
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    for raw in reader:
+        ph_seq = tuple(str(raw["ph_seq"]).split())
+        ph_dur = tuple(float(x) for x in str(raw["ph_dur"]).split())
+        # `nan` / `inf` / 負値は float() を通ってしまう。放置すると duration_bin()
+        # の走査を素通りして最長層 d4 に入り、H-TTD を動かす（PR #300 Codex
+        # 第 3 巡 P2）。黙って数えず fail-closed で止める。
+        bad = [d for d in ph_dur if not math.isfinite(d) or d < 0.0]
+        if bad:
+            raise ValueError(
+                f"{source}: row {raw.get('name')!r} has non-finite or negative ph_dur: {bad}"
             )
-            note_seq = tuple(str(raw["note_seq"]).split()) if raw.get("note_seq") else None
-            note_dur = (
-                tuple(float(x) for x in str(raw["note_dur"]).split())
-                if raw.get("note_dur")
-                else None
+        if len(ph_seq) != len(ph_dur):
+            raise ValueError(
+                f"{source}: row {raw.get('name')!r} has "
+                f"{len(ph_seq)} phones but {len(ph_dur)} durations"
             )
-            rows.append(
-                Row(
-                    name=str(raw["name"]),
-                    ph_seq=ph_seq,
-                    ph_dur=ph_dur,
-                    ph_num=ph_num,
-                    note_seq=note_seq,
-                    note_dur=note_dur,
-                )
+        ph_num = (
+            tuple(int(x) for x in str(raw["ph_num"]).split())
+            if raw.get("ph_num")
+            else None
+        )
+        note_seq = tuple(str(raw["note_seq"]).split()) if raw.get("note_seq") else None
+        note_dur = (
+            tuple(float(x) for x in str(raw["note_dur"]).split())
+            if raw.get("note_dur")
+            else None
+        )
+        rows.append(
+            Row(
+                name=str(raw["name"]),
+                ph_seq=ph_seq,
+                ph_dur=ph_dur,
+                ph_num=ph_num,
+                note_seq=note_seq,
+                note_dur=note_dur,
             )
+        )
     return rows
 
 
@@ -225,18 +251,19 @@ def _note_index_of_phone(row: Row, phone_index: int) -> Optional[int]:
 
 
 def _midi_from_note_seq(row: Row, phone_index: int) -> Optional[float]:
-    """譜面ありの行: 終端モーラが載るノートの MIDI をそのまま使う（§3-1）。"""
+    """譜面ありの行: 終端モーラが**載るノート**の MIDI をそのまま使う（§3-1）。
+
+    `ph_num` が無い / 終端音素を覆っていない行では **`None`（unknown）を返す**。
+    行全体の中央値で埋めると、それは推定であって観測ではなく（§3 末尾「推定ではなく
+    既知の境界から数える」）、しかもその推定値が話者内三分位に参加して露出を
+    別の pitch 層へ動かしうる（PR #300 Codex 第 3 巡 P1）。
+    """
     if not row.note_seq:
         return None
     note_i = _note_index_of_phone(row, phone_index)
-    tokens = row.note_seq
-    if note_i is None:
-        candidates = [_note_token_to_midi(t) for t in tokens]
-        vals = [v for v in candidates if v is not None]
-        return float(sorted(vals)[len(vals) // 2]) if vals else None
-    if note_i >= len(tokens):
+    if note_i is None or note_i >= len(row.note_seq):
         return None
-    return _note_token_to_midi(tokens[note_i])
+    return _note_token_to_midi(row.note_seq[note_i])
 
 
 def _note_token_to_midi(token: str) -> Optional[float]:
@@ -316,7 +343,7 @@ def _stratum_key(e: TerminalEvent, modality: str) -> str:
 
 
 def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
-    rows = parse_rows(inp.csv_path)
+    rows, source_sha256, source_bytes = read_and_parse(inp.csv_path)
     events: List[TerminalEvent] = []
     ri_medial = 0
     voiced_s = 0.0
@@ -367,15 +394,28 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
             denominator[k]["eligible_terminal_seconds"], 6
         )
 
+    is_real_song = inp.modality == "real_song"
     return {
         "speaker": inp.speaker,
         "modality": inp.modality,
         "source_csv": str(inp.csv_path),
+        # 入力の**バイト**を pin する。パス文字列だけでは、同じパスの中身が
+        # 差し替わったときにどのバイトがこの台帳の count / H-TTD を作ったのかを
+        # 後から言えない（PR #300 Codex P1）。
+        "source_csv_sha256": source_sha256,
+        "source_csv_bytes": source_bytes,
         "row_count": len(rows),
-        "local_real_singing_seconds": round(voiced_s, 6),
-        "local_real_singing_seconds_note": (
+        "local_voiced_seconds": round(voiced_s, 6),
+        "local_voiced_seconds_note": (
             "transcriptions.csv の非 SP/AP トークンの ph_dur 合計"
-            "（convert_ritsu の total_voiced_s と同じ数え方）"
+            "（convert_ritsu の total_voiced_s と同じ数え方）。**modality を問わない**"
+        ),
+        # VCV / speech / synthetic_song の発声秒を「実歌唱秒」と呼ぶと、
+        # 8-B の収録量を決める量が汚染される（PR #300 Codex P2）。
+        "local_real_singing_seconds": (round(voiced_s, 6) if is_real_song else None),
+        "local_real_singing_seconds_note": (
+            "modality == real_song のときのみ値を持つ。それ以外は null "
+            f"（この話者の modality = {inp.modality}）"
         ),
         "stratum_key_order": ["modality", "position", "pitch_bin", "preceding_duration_bin"],
         "terminal_events": terminal_events,
@@ -395,11 +435,54 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class MidiTable:
+    """MIDI 対応表を**一度だけ**読んだ結果（parse と sha を同じバイト列から取る）。"""
+
+    path: Path
+    sha256: str
+    n_bytes: int
+    mapping: Dict[str, float]
+
+    @classmethod
+    def load(cls, path: Path) -> "MidiTable":
+        table, sha, n = s7_io.read_json_with_pin(path)
+        return cls(
+            path=path,
+            sha256=sha,
+            n_bytes=n,
+            mapping={str(k): float(v) for k, v in table.items()},
+        )
+
+
 def build_ledger(
     inputs: Sequence[SpeakerInput],
     breaking: Sequence[str],
     non_breaking: Sequence[str],
+    midi_table: Optional[MidiTable] = None,
 ) -> Dict[str, Any]:
+    # 同じ話者を 2 回渡すと dict 内包で片方が黙って消え、露出が過少に数えられて
+    # H-TTD が変わる（PR #300 Codex 第 2 巡 P2）。fail-closed で弾く。
+    seen: List[str] = [inp.speaker for inp in inputs]
+    duplicates = sorted({s for s in seen if seen.count(s) > 1})
+    if duplicates:
+        raise ValueError(
+            f"同じ話者が複数回指定されている: {duplicates}。"
+            "1 話者 = 1 つの transcriptions.csv で渡す（黙って上書きしない）"
+        )
+    # 同じ話者を breaking と non_breaking の両方へ入れると、両群に同じ密度が入り
+    # 順序判定が必ず偽になって「無効な事前登録から refuted が出る」（PR #300
+    # Codex 第 3 巡 P2）。分類の矛盾と未知話者は裁定前に止める。
+    contradictory = sorted(set(breaking) & set(non_breaking))
+    if contradictory:
+        raise ValueError(
+            f"同じ話者が breaking と non-breaking の両方に指定されている: {contradictory}"
+        )
+    unknown = sorted((set(breaking) | set(non_breaking)) - set(seen))
+    if unknown:
+        raise ValueError(
+            f"入力に存在しない話者が分類に指定されている: {unknown}（誤記の可能性）"
+        )
     speakers = {inp.speaker: build_speaker_section(inp) for inp in inputs}
     verdict = httd_verdict(speakers, breaking, non_breaking)
     return {
@@ -423,6 +506,15 @@ def build_ledger(
                 "事前登録入力。台帳生成器はこの分類を内蔵しない。"
             ),
         },
+        "midi_json": (
+            None
+            if midi_table is None
+            else {
+                "path": str(midi_table.path),
+                "sha256": midi_table.sha256,
+                "bytes": midi_table.n_bytes,
+            }
+        ),
         "speakers": speakers,
         "h_ttd": verdict,
     }
@@ -633,14 +725,20 @@ def render_table(ledger: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("## speakers")
     lines.append("")
-    lines.append("| speaker | modality | rows | voiced_s | ri_medial | pitch cut points (MIDI) | unknown pitch events |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append(
+        "| speaker | modality | rows | voiced_s | real_singing_s | ri_medial | "
+        "pitch cut points (MIDI) | unknown pitch events | source sha256 |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for speaker, section in sorted(ledger["speakers"].items()):
         pb = section["pitch_bin_assignment"]
+        real_s = section["local_real_singing_seconds"]
         lines.append(
             f"| {speaker} | {section['modality']} | {section['row_count']} | "
-            f"{section['local_real_singing_seconds']:.3f} | {section['ri_medial_count']} | "
-            f"{pb.get('cut_points_midi')} | {pb.get('unknown_events')} |"
+            f"{section['local_voiced_seconds']:.3f} | "
+            f"{'—' if real_s is None else f'{real_s:.3f}'} | {section['ri_medial_count']} | "
+            f"{pb.get('cut_points_midi')} | {pb.get('unknown_events')} | "
+            f"{section['source_csv_sha256'][:12]} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -670,18 +768,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     inputs: List[SpeakerInput] = list(args.speaker)
+    midi_table: Optional[MidiTable] = None
     if args.midi_json:
-        table = json.loads(Path(args.midi_json).read_text(encoding="utf-8"))
+        midi_table = MidiTable.load(Path(args.midi_json))
         for inp in inputs:
             inp.midi_by_event = {
-                k: float(v) for k, v in table.items() if k.startswith(f"{inp.speaker}/")
+                k: v for k, v in midi_table.mapping.items() if k.startswith(f"{inp.speaker}/")
             }
-    ledger = build_ledger(inputs, args.breaking, args.non_breaking)
+
+    table_path = args.table_out or args.out.with_suffix(".md")
+    protected = [inp.csv_path for inp in inputs] + (
+        [midi_table.path] if midi_table is not None else []
+    )
+    reject_output_collision([args.out, table_path], protected)
+
+    ledger = build_ledger(inputs, args.breaking, args.non_breaking, midi_table=midi_table)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    table_path = args.table_out or args.out.with_suffix(".md")
     table_path.write_text(render_table(ledger), encoding="utf-8")
     print(f"wrote {args.out}")
     print(f"wrote {table_path}")

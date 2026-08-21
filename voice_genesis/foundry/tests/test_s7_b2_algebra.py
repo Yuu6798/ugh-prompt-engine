@@ -21,6 +21,7 @@ import s7_b2_algebra as b2  # noqa: E402
 import s7_spec as sp  # noqa: E402
 
 VALID = {v.value for v in sp.Verdict}
+EPS = b2.Epsilon.uniform(0.3, reason="テストは 1 世代・1 群だけの合成セルを使う")
 
 
 def _ladder(speaker: str, values, generation: str = "run7", pitch_bin: str = "mid"):
@@ -34,9 +35,9 @@ def _ladder(speaker: str, values, generation: str = "run7", pitch_bin: str = "mi
 def test_worked_example_is_reproducible():
     doc = b2._worked_example()
     assert doc["H0"]["verdict"] == sp.Verdict.SUPPORTED.value
-    assert doc["H0"]["delta_z"] == pytest.approx(1.20, abs=1e-9)
-    assert doc["H1"]["series"]["user/mid"] == sp.Verdict.SUPPORTED.value
-    assert doc["H1"]["series"]["pjs/mid"] == sp.Verdict.REFUTED.value
+    assert doc["H0"]["detail"]["ritsu/run7"]["delta_z"] == pytest.approx(1.20, abs=1e-9)
+    assert doc["H1"]["series"]["user/run7/mid"] == sp.Verdict.SUPPORTED.value
+    assert doc["H1"]["series"]["pjs/run7/mid"] == sp.Verdict.REFUTED.value
     # supported は「refuted が 0」を要求するので overall は undetermined
     assert doc["H1"]["verdict"] == sp.Verdict.UNDETERMINED.value
     assert doc["H4"]["verdict"] == sp.Verdict.SUPPORTED.value
@@ -51,12 +52,12 @@ def test_h0_is_undetermined_without_the_prereg_matched_condition():
         # 4 拍・低ではない（2 拍・中）ので対にならない
         b2.Cell("P-RI-FINAL/x", "ritsu", "run7", "P-RI-FINAL", 0.4, ladder_level=2, pitch_bin="mid"),
     ]
-    out = b2.evaluate_h0(cells, eps_z=0.3)
+    out = b2.evaluate_h0(cells, eps_z=EPS)
     assert out["verdict"] == sp.Verdict.UNDETERMINED.value
 
 
 def test_all_hypotheses_return_three_valued_verdicts_on_empty_input():
-    out = b2.evaluate_all([], eps_z=0.3, theta=0.5)
+    out = b2.evaluate_all([], eps_z=EPS, theta=0.5)
     assert set(out) == set(sp.B2_HYPOTHESES)
     assert all(v["verdict"] in VALID for v in out.values())
     assert all(v["verdict"] == sp.Verdict.UNDETERMINED.value for v in out.values())
@@ -68,9 +69,9 @@ def test_excluded_cells_are_counted_not_silently_dropped():
         b2.Cell("u_bad", "user", "run7", "P-RI-FINAL", 9.9, ladder_level=8, pitch_bin="mid",
                 status=sp.STATUS_RINGING_UNCORRECTED_GROUP)
     )
-    out = b2.evaluate_h1(cells, eps_z=0.3)
+    out = b2.evaluate_h1(cells, eps_z=EPS)
     assert out["excluded"] == {sp.STATUS_RINGING_UNCORRECTED_GROUP: 1}
-    assert out["series"]["user/mid"] == sp.Verdict.SUPPORTED.value
+    assert out["series"]["user/run7/mid"] == sp.Verdict.SUPPORTED.value
 
 
 def test_h1_refuted_when_span_within_epsilon():
@@ -93,7 +94,7 @@ def test_h3_refuted_when_controls_break_equally():
     cells = []
     for speaker in ("user", "pjs"):
         cells += group(speaker, 1.0, [("P-I-FINAL", 1.0), ("P-N-FINAL", 0.95), ("P-SU-FINAL", 1.05)])
-    out = b2.evaluate_h3(cells, eps_z=0.3)
+    out = b2.evaluate_h3(cells, eps_z=EPS)
     assert out["verdict"] == sp.Verdict.REFUTED.value
 
 
@@ -108,14 +109,14 @@ def test_h5_uses_contrast_not_absolute_level():
         return out
 
     uniform = speaker_cells("run5", 0.0) + speaker_cells("run7", 5.0)
-    out = b2.evaluate_h5(uniform, eps_z=0.3)
+    out = b2.evaluate_h5(uniform, eps_z=EPS)
     assert out["detail"]["user"]["spread_z"] == pytest.approx(0.0)
     assert out["series"]["user"] == sp.Verdict.REFUTED.value
 
     moved = speaker_cells("run5", 0.0)
     moved += [b2.Cell(f"t7{i}", "user", "run7", "P-RI-FINAL", 2.0) for i in range(3)]
     moved += [b2.Cell(f"c7{i}", "user", "run7", "P-N-FINAL", 0.0) for i in range(3)]
-    out2 = b2.evaluate_h5(moved, eps_z=0.3)
+    out2 = b2.evaluate_h5(moved, eps_z=EPS)
     assert out2["detail"]["user"]["spread_z"] == pytest.approx(1.0)
     assert out2["series"]["user"] == sp.Verdict.SUPPORTED.value
 
@@ -141,3 +142,83 @@ def test_majority_rule_matches_section_3():
         b2._majority([sp.Verdict.REFUTED.value] * 2 + [sp.Verdict.SUPPORTED.value])
         == sp.Verdict.REFUTED.value
     )
+
+
+def test_scalar_epsilon_is_rejected():
+    """スカラー 1 個を全群へ当てる誤用を型で塞ぐ（PR #300 Codex P1）。"""
+    with pytest.raises(TypeError):
+        b2.evaluate_h1(_ladder("user", [(1, 0.1), (2, 0.7), (4, 1.4)]), eps_z=0.3)
+    with pytest.raises(ValueError):
+        b2.Epsilon.uniform(0.3, reason="")
+
+
+def test_epsilon_is_looked_up_per_speaker_generation_group():
+    eps = b2.Epsilon.per_group({("user", "run7"): 0.30, ("user", "run5"): 5.00})
+    cells = _ladder("user", [(1, 0.1), (2, 0.7), (4, 1.4)], generation="run7")
+    cells += _ladder("user", [(1, 0.1), (2, 0.7), (4, 1.4)], generation="run5")
+    out = b2.evaluate_h1(cells, eps_z=eps)
+    # 同じ数値の系列でも、群ごとの ε が違えば裁定が変わる
+    assert out["series"]["user/run7/mid"] == sp.Verdict.SUPPORTED.value
+    assert out["series"]["user/run5/mid"] == sp.Verdict.REFUTED.value
+    assert out["eps_z_by_series"]["user/run5/mid"] == 5.0
+
+
+def test_missing_group_epsilon_is_undetermined_not_a_default():
+    eps = b2.Epsilon.per_group({("pjs", "run7"): 0.30})
+    out = b2.evaluate_h1(_ladder("user", [(1, 0.1), (2, 0.7), (4, 1.4)]), eps_z=eps)
+    assert out["series"]["user/run7/mid"] == sp.Verdict.UNDETERMINED.value
+
+
+def test_h1_series_do_not_merge_generations():
+    """run5 と run7 が 1 本のラダーに混ざらない（PR #300 Codex P1）。"""
+    cells = _ladder("user", [(1, 0.1), (2, 0.7), (4, 1.4)], generation="run5")
+    cells += _ladder("user", [(1, 0.2), (2, 0.8), (4, 1.5)], generation="run7")
+    out = b2.evaluate_h1(cells, eps_z=EPS)
+    assert set(out["series"]) == {"user/run5/mid", "user/run7/mid"}
+
+
+def test_h2_supports_only_when_low_pitch_is_the_worse_side():
+    """high の方が悪いケースを supported にしない（PR #300 Codex P2）。"""
+
+    def pair(low_z: float, high_z: float):
+        return [
+            b2.Cell("lo", "user", "run7", "P-RI-FINAL", low_z, ladder_level=2, pitch_bin="low"),
+            b2.Cell("hi", "user", "run7", "P-RI-FINAL", high_z, ladder_level=2, pitch_bin="high"),
+        ]
+
+    low_worse = b2.evaluate_h2(pair(2.0, 0.0), eps_z=EPS)
+    assert low_worse["series"]["user/run7/L2"] == sp.Verdict.SUPPORTED.value
+
+    high_worse = b2.evaluate_h2(pair(0.0, 2.0), eps_z=EPS)
+    assert high_worse["series"]["user/run7/L2"] == sp.Verdict.REFUTED.value
+    assert high_worse["detail"]["user/run7/L2"]["reason"] == "opposite_direction"
+
+    flat = b2.evaluate_h2(pair(0.1, 0.0), eps_z=EPS)
+    assert flat["detail"]["user/run7/L2"]["reason"] == "no_difference"
+
+
+def test_h0_is_adjudicated_per_group_not_pooled():
+    """対称な 2 群がプールで打ち消し合う偽 refuted を塞ぐ（PR #300 Codex 第 2 巡 P1）。"""
+    cells = [
+        b2.Cell("P-ANCHOR/kagiri/a", "spk_a", "run7", "P-ANCHOR", +2.0),
+        b2.Cell("P-RI-FINAL/a", "spk_a", "run7", "P-RI-FINAL", +1.0, ladder_level=4, pitch_bin="low"),
+        b2.Cell("P-ANCHOR/kagiri/b", "spk_b", "run7", "P-ANCHOR", -2.0),
+        b2.Cell("P-RI-FINAL/b", "spk_b", "run7", "P-RI-FINAL", -1.0, ladder_level=4, pitch_bin="low"),
+    ]
+    out = b2.evaluate_h0(cells, eps_z=b2.Epsilon.uniform(0.5, reason="単一世代の合成例"))
+    assert out["series"] == {
+        "spk_a/run7": sp.Verdict.SUPPORTED.value,
+        "spk_b/run7": sp.Verdict.SUPPORTED.value,
+    }
+    assert out["verdict"] == sp.Verdict.SUPPORTED.value
+
+
+def test_h4_is_adjudicated_per_generation_in_evaluate_all():
+    """世代を束ねて渡しても H4 が構造的 undetermined にならない（PR #300 Codex 第 2 巡 P1）。"""
+    cells = []
+    for gen in ("run5", "run6", "run7"):
+        cells += _ladder("user", [(1, 0.1), (2, 0.7), (4, 1.4)], generation=gen)
+        cells += _ladder("pjs", [(1, 0.0), (2, 0.1), (4, 0.2)], generation=gen)
+    out = b2.evaluate_all(cells, eps_z=EPS, theta=0.5)["H4"]
+    assert set(out["per_generation"]) == {"run5", "run6", "run7"}
+    assert out["verdict"] == sp.Verdict.SUPPORTED.value
