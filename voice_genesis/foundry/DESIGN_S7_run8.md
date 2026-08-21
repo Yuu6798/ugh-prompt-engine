@@ -323,6 +323,19 @@ terminal_events:
   value:
     count
     duration_seconds
+    # --- event-level の内訳（2026-08-21 追加・Codex P2 指摘を採用）---
+    # ★ 集計値（count / duration_seconds）だけでは §7G-9 の Duration 受け入れ
+    #   規則が使う baseline_r_ratio を**この台帳から計算できない**。
+    #   台帳を pin した意味が消えるので、主層に限り**イベント単位の内訳**を持つ。
+    events:                  # position=utterance_final かつ
+                             # transition ∈ {ri_to_SP} の層に限り必須。
+                             # 他の層では省略可（膨張を避ける）
+      - event_id             # <speaker>/<row_id>/<phone_index>
+        onset_phone_seconds  # 終端モーラの子音 /r/ の ph_dur 秒
+        vowel_phone_seconds  # 同 母音 /i/ の ph_dur 秒
+        r_ratio              # onset / (onset + vowel)（導出値も併記する）
+    # 抽出元は本節冒頭のとおり transcriptions.csv の音素列 + ph_dur であり、
+    # **新しい抽出器を持ち込まない**（同じ行から内訳を落とさず書き出すだけ）
 
 # --- 密度の分母（層別に必ず記録する） ---
   denominator:
@@ -1864,12 +1877,14 @@ TRF が動いた」は「TRF は pitch trajectory に因果感度を持つ」ま
                     median の母集団が実装ごとに変わって T2 の機械性が崩れる。
                     Codex 指摘を採用）:
                       eligible baseline events
-                        = §3 `target_exposure_ledger` が同一話者について
-                          列挙する **`position = utterance_final` かつ
-                          `transition = ri_to_SP`** のイベント
-                          （抽出規則は §3 で既に凍結済み。ここで新しい抽出を
-                            定義しない）
+                        = §3 `target_exposure_ledger` の
+                          **`terminal_events[...].events`**（`position =
+                          utterance_final` かつ `transition = ri_to_SP` の層に
+                          限り必須のイベント単位内訳）を同一話者で列挙したもの
+                          （抽出元は §3 と同一の transcriptions.csv + ph_dur。
+                            ここで新しい抽出器を持ち込まない）
                       baseline_r_ratio = median over eligible baseline events
+                                         の `r_ratio`
                   方向規則 = row の r_ratio > baseline_r_ratio
                              （= 8-0G の primary level の向きと同符号）
                   **eligible baseline events が 5 件未満なら規則を定義できない**
@@ -1925,6 +1940,24 @@ Duration 経路では:
 
 **SP 経路ではこの拘束は要らない**（そこでは終端遷移の明示が primary lever
 そのものであり、duration 側は 8-0E の受け入れ規則で縛らない）。
+
+**下流のゲートも経路条件付きにする**（2026-08-21・Codex P1 指摘を採用 —
+分岐側に例外を書いただけでは、§8-5-2 / §8-5-2c/d と §11 の AC が
+**全 target row の SP 明示**を要求したままで、実装は「AC を満たせない」か
+「combined intervention を再導入する」かの二択になる）:
+
+```
+§8-5-2（各 row の /ri/→SP 明示接続）
+§8-5-2c/d（27 イベントの SP 遷移）
+§11 AC の「各 target row の /ri/ 終端が SP へ接続」
+  -> いずれも **S 経路でのみ適用**する
+
+Duration 経路で代わりに適用するもの:
+  - 終端遷移構成が置換前 baseline と同一層（上記 2）
+  - §8-5-3 の**イベント数の均等性は経路に依らず適用**する
+    （標的イベントの定義だけが経路で変わる: S 経路 = ri_to_SP、
+      Duration 経路 = 当該 row の終端モーラ `/ri/` の出現）
+```
 
 これにより「**録音して GPU 学習したが、そもそも何を教育していたのか分からない**」
 を構造的に防ぐ。
@@ -2847,10 +2880,17 @@ speaker-local である」ことではない**（package-level の限定より�
 - [ ] **dosage 固定の機械検証**: `voiced` / `total ph_dur` が run 7 比 **±1% 以内**、
       `row_count` == **15**（§8-5-4）。到達しない場合は fail-closed で停止し、
       差分を記帳する（黙って枠外の dosage で学習しない）
-- [ ] **構成の機械検証**: target 9 row + retained baseline 6 row（§8-5-2）。
-      各 target row の `/ri/` 終端が `transcriptions` 上で **SP へ接続**されている
-- [ ] **イベント数の均等性**: 9 セルの `/ri/`→SP イベント数が**セル間で同一**
-      （秒数ではなくイベント数で均等 = §8-5-3）
+- [ ] **構成の機械検証**: target 9 row + retained baseline 6 row（§8-5-2）
+- [ ] **経路別の終端遷移要件**（2026-08-21 改訂・§7G-10 の Duration 追加拘束と
+      整合させる。**SP 系の要求は S 経路条件付き**）:
+      **S 経路** = 各 target row の `/ri/` 終端が `transcriptions` 上で
+      **SP へ接続**されている（§8-5-2）かつ 9 セルの `/ri/`→SP イベント数が
+      **セル間で同一**（§8-5-3）/
+      **Duration 経路** = SP 明示接続は**要求しない**。代わりに target 9 row の
+      終端遷移構成が置換前 baseline 9 row と**同一層に収まる**こと（§7G-10）。
+      収まらない場合は `combined intervention` と分類して記帳する/
+      **どちらの経路でも** 9 セルの**標的イベント数はセル間で同一**（§8-5-3 の
+      均等性は遷移種別に依らず適用する）
 - [ ] **選抜が機械 5 項目のみで決まっている**（§8-5-4）。耳を使った形跡がなく、
       同順位の tie-break が固定規則で再現する
 - [ ] `user_ri_pack_selection.json` が capture_pool / train_user_dose /
