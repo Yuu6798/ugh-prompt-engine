@@ -291,7 +291,10 @@ reveal だけから `sha256(canonical_bytes(key_preimage)) == key_commitment` �
 | **B. 原像を別ファイルで併載** | 凍結物に触れず `key_preimage` を sidecar として公開 | `results/.gitignore` の「blind key は回答後も commit しない」と衝突する（このルール自体は本 session で私が書いたもの） |
 | **C. 現状維持** | §13 の開示のみ | 本 session の commitment は attestation 止まり |
 
-**現状は C。** どれを採るかは User の判断とし、勝手に A/B へ動かさない。
+**User 裁定 = C（2026-08-21）。** 本 session の確定記録はそのまま残し、
+`key_preimage` は次の session から適用する。したがって本 session の commitment は
+**attestation であって proof ではない**ことを確定の限界として記録する
+（第三者は clean checkout から digest を再計算できない）。A / B へは動かさない。
 確定記録を私の判断で書き換えないという §13 の線は、成果物を良くする方向でも
 維持する（第 9 巡で同じ判断をしている）。
 
