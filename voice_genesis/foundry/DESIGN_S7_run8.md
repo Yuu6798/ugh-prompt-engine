@@ -1530,8 +1530,46 @@ R-rescue: 因果主張をしないので特異性桟を要求しない（§7G-4�
 
 **F アームは絶対 Hz を PJS からコピーしない**（他話者の f0 をコピーすると
 identity を動かし、かつ「破綻しない側を見て介入を決めた」ことになる）。
-動かすのは **note-relative contour のみ**で、**ノート内平均 f0 を保存する**
-（保存後の残差 cents を記帳し、`|Δ mean| > 5 cents` なら fail-closed）。
+動かすのは **note-relative contour のみ**で、**ノート内平均 f0 を保存する**。
+
+**F アームの変換式を凍結する（2026-08-21・Codex P2 指摘を採用）**: 「後半 25% に
+線形 contour `-200 cents`」だけでは実装が割れる（`-200` は終点か・全振幅か・
+定数オフセットか / 平均保存の補償を窓の内側でやるか外側でやるか）。同じ
+`s7_0g_arm_spec.json` から違う TRF 値・違う A〜F 判定が出るので、**フレーム単位の
+式・境界処理・平均復元規則**を事前登録する:
+
+```
+入力 : pitch_pred（MIDI 半音・float32。Stage 2 出力。f0_hz へ変換する前に当てる）
+対象 : 終端ノートが占める frame 区間 [n0, n1)（ph_dur2 の HEAD_FRAMES 分を
+       オフセットして note_target_frames から決定論的に導く）
+L = n1 - n0
+W = floor(L * 0.25)                      # 窓は**末尾 W frame** = [n1-W, n1)
+
+1. ランプ（窓内のみ・窓外は 0）:
+     i ∈ [n1-W, n1) について
+       t(i)     = (i - (n1 - W) + 1) / W          # t ∈ (0, 1]、最終 frame で 1
+       delta(i) = depth_cents * t(i) / 100.0      # 半音単位
+     ※ **depth_cents は「最終 frame における深さ（終点値）」**である。
+       全振幅でも定数オフセットでもない
+     ※ i ∉ 窓 について delta(i) = 0
+
+2. 平均復元（**ノート全体で**行う。窓の内外どちらにも同じ量を当てる）:
+     m = mean_{i ∈ [n0, n1)} delta(i)
+     pitch_pred'(i) = pitch_pred(i) + delta(i) - m     for i ∈ [n0, n1)
+     ノート外の frame は**触らない**
+     -> 構成上ノート内平均は厳密に保存される（残差は float 丸めのみ）
+
+3. 境界処理:
+     W < 4          -> セルを dropped: f0_window_too_short として記帳
+     depth_cents = 0 -> delta ≡ 0・m = 0 なので **B0 とバイト一致**（no-op 検算）
+
+4. ガード（保存が壊れていないことの検算・事後の言い訳に使わない）:
+     |mean(pitch_pred') - mean(pitch_pred)| を cents で記帳し、
+     5 cents を超えたら fail-closed
+```
+
+ladder の `{-200, -100, 0, +100}` は**すべて `depth_cents`（終点値）**として
+解釈する。
 
 **フレーム下限**: D / S は総 frame を固定したまま配分を動かすため、音素が
 潰れうる。VG-L0 が「`notes_limit=10` で最小子音 2 frame = 下限まで残り 1」を
@@ -1566,9 +1604,37 @@ R-rescue : Stage 1〜4 は完全に B0 と同一。触るのは出力波形だ�
 
 S が EFFECTIVE_LEVER を名乗れるのは、S が §7G-5 を満たし
 **かつ S-frames-only が同じ判定を満たさない**場合だけである。
-両方満たした場合 -> verdict = duration_confounded とし、
-                    その効果は **D アーム側の証拠として計上**する
+両方満たした場合 -> verdict = duration_confounded
 ```
+
+**`duration_confounded` のときの昇格代数（2026-08-21・Codex P2 指摘を採用）**:
+「D アーム側の証拠として計上する」だけでは **D の status も flip 集合も median も
+変わらない**ため、`S-frames-only` が A〜F を満たしているのに D（`r_share_scale`
+という別パラメータ化）が満たさない場合、**§7G-6 に候補が 1 つも残らず primary
+lever を選べない**（教育可能な duration 介入が実証されているのに 8-B が止まる）。
+よって Duration を**ファミリ**として扱い、昇格を機械的に定義する:
+
+```
+Duration ファミリ = { D（r_share_scale） , S-frames-only }
+  ※ どちらも「終端母音の frame を削って前へ回す」介入の別パラメータ化である
+
+ファミリ代表の決定（§7G-6 と同じ順序をファミリ内で先に適用する）:
+  1. A〜F を満たしたメンバのみ候補
+  2. T 上の break→ok flip 数が多い方
+  3. median Δz'_primary が大きい（負に大きい）方
+  4. 同点なら固定順（D > S-frames-only。実装既存の介入点が先）
+  -> 代表が存在すれば **Duration は EFFECTIVE_LEVER として §7G-6 に参加**する
+     （代表の flip 集合と median を Duration の値として使う）
+  -> 候補が空なら Duration は NOT_EFFECTIVE
+
+primary lever が Duration になり、その代表が S-frames-only だった場合:
+  8-0D / 8-0E で教育対象として記述する形質は
+  「終端母音から差し引いた frame 数（= 終端母音を短くする配分）」であり、
+  **SP トークンの明示ではない**（S は duration_confounded で落ちている）
+```
+
+`S` 自身は `duration_confounded` のまま EFFECTIVE_LEVER にならないが、
+**その frame 収支ぶんの効果は Duration ファミリを通じて回収される**。
 
 同様に **D アームで改善が出ても「原因は duration であって acoustic ではない」
 とは言わない**（§2-3 H-dur の到達限界がそのまま適用される）。8-0G が示せるのは
@@ -1827,23 +1893,47 @@ S2 / S3 : Voice / Performance を（部分的に）分解できる
 
 ```
 経路 1（実測して名乗る）— identity preservation check:
-  対象セル : §6-2 の P2 回帰対照と同一（{run7, 全未処置反復, run8-B}
-             × {ritsu, pjs} × {P-RI-FINAL/b4/p57, P-N-FINAL/b4/p57}）
+  対象セル : **被処置話者 user を必ず含む**（2026-08-21・Codex P1 指摘を採用。
+             初版は §6-2 の P2 = {ritsu, pjs} だけを見ており、
+             **8-B が user の声だけを動かした場合にゲートが素通りする**）
+             未処置側 : {run7, 全未処置反復, run8-B}
+                        × {ritsu, pjs} × {P-RI-FINAL/b4/p57, P-N-FINAL/b4/p57}
+                        （= §6-2 の P2 と同一）
+             被処置側 : {run7, 全未処置反復, run8-B}
+                        × user × {P-I-FINAL/b4/p57, P-N-FINAL/b4/p57}
+                        （= §6-2 の P1 のうち **標的でない終端**の 2 セル）
+             ※ user の `/ri/` 終端セルを identity 判定に**入れない**理由:
+               そこは 8-B が**意図して変える**場所であり、identity 距離が
+               「意図した TRF 変化」と交絡する。値は診断として併記するが
+               判定には使わない（意図した改善を identity 逸脱として罰しない）
   計器     : **既存計器のみ**。`singer/identity_metrics.py` の
              正規化 E1/E2（`normalized_e1_e2`）と `cosine_distance`
              （S2 T1 の識別軸。**新しい identity 計器は作らない** = §0-5 の
                単一スコア禁止・§12-0-A-3 の「分離性能で計器を選ばない」と同型）
-  判定     : d(run7, 8-B) <= d(run7, 8-R) + ε_id
+  判定     : **話者ごとに独立に**適用し、**全話者（user を含む）が通ったときのみ**
+             宣言可:
+               for spk in {user, ritsu, pjs}:
+                 d_spk(run7, 8-B) <= d_spk(run7, 8-R) + ε_id
              （= 処置による identity 移動が**未処置ドリフトの幅を超えない**）
+             1 話者でも超えたら経路 2 へ落ちる（どの話者で超えたかを記帳する）
   ε_id     : §7-1 の閾値と**同時に**（8-B 開始前に）凍結する。事後に決めない
   未処置反復が 0 本（8-R 未実施）の場合は d(run7, 8-R) が定義できないので
   経路 1 は使えない -> 経路 2 へ落ちる（§9-0 と同じ扱い）
 
-経路 2（名乗らない）— 実測が無い / 計器が適用できない場合:
+経路 2（名乗らない）— 実測が無い / 計器が適用できない / 8-R が無い場合:
   宣言文を次へ**縮退**させ、実現された identity の不変は undetermined と記帳:
   > 特定の Performance / transition 形質への単一教育介入によって、
   > **Identity 入力（spk_embed / 話者構成 / dosage）を変更せず**
   > TRF を再現可能に改善した（実現された identity の保存は undetermined）。
+
+経路 3（実測して**超えた**場合）— 「未実測」と同じ扱いにしない:
+  status = identity_not_preserved（超えた話者と距離を記帳）
+  宣言文から **Identity 句を落とす**（入力側の不変も主張しない）:
+  > 特定の Performance / transition 形質への単一教育介入によって、
+  > TRF を再現可能に改善した。**ただし実現された identity は保存されなかった**
+  > （話者 <spk> で d(run7, 8-B) が未処置ドリフト + ε_id を超過）。
+  ※ この場合 run 8 は「TRF は改善したが Identity 代償を伴う」結果であり、
+    §8-5-6 の主張範囲表にもその旨を記帳する
 ```
 
 **適用可否の未確認事項（正直な記述）**: `identity_metrics` は `render_song` 系の
