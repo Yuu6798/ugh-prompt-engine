@@ -289,7 +289,10 @@ def _assert_not_rescoring_after_reveal(answers_sha: Dict[int, str], key_sha: str
         KEY_REVEAL.read_bytes(), "既存の key_reveal.json",
         "開示済み成果物を復元するか、session 全体をやり直す")
     now = {str(k): v for k, v in sorted(answers_sha.items())}
-    was = prev.get("revealed_after_answers_sha256") or {}
+    was = prep.require_mapping(
+        prev.get("revealed_after_answers_sha256"),
+        "既存 key_reveal.json の revealed_after_answers_sha256",
+        "開示済み成果物を復元するか、session 全体をやり直す")
     # 手元にある stage 分だけで先に比較できる（Stage 2 を採点する前に、
     # Stage 1 の書き換えを検出したい）。両方揃っていれば全体比較になる。
     was_subset = {k: v for k, v in was.items() if k in now}

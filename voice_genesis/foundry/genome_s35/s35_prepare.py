@@ -126,7 +126,13 @@ def load_s3_results() -> Tuple[Dict[str, Any], str]:
 
 
 def gate_s3(res: Dict[str, Any]) -> None:
-    overall = res.get("overall") or {}
+    action = "S3 側へ戻す。S3.5 は S3 を再裁定しない"
+    overall = require_mapping(res.get("overall"), "S3 正本の overall", action)
+    rows = res.get("reproducibility")
+    if rows is not None and (not isinstance(rows, list)
+                             or not all(isinstance(r, dict) for r in rows)):
+        raise S35Stop(reason="S3 正本の reproducibility が object の配列でない",
+                      required_action="S3 正本を最終コードで再生成する")
     if overall.get("verdict") != "PASS":
         raise S35Stop(reason=f"S3 overall が PASS でない: {overall.get('verdict')!r}",
                       required_action="S3 側へ戻す。S3.5 は S3 を再裁定しない")
@@ -148,7 +154,8 @@ def verify_audio(res: Dict[str, Any], needed: Sequence[Tuple[str, str]],
     非正本の音声が verified として公開されてしまう（S3.5 の成果物を一切
     触らなくても、S3 の並行再生成だけで踏める）。
     """
-    rows = {(r["pair_key"], r["condition"]): r for r in res["reproducibility"]}
+    rows = {(r["pair_key"], r["condition"]): r for r in res["reproducibility"]
+            if isinstance(r, dict) and "pair_key" in r and "condition" in r}
     resolved: Dict[Tuple[str, str], Tuple[Path, str]] = {}
     missing: List[str] = []
     mismatched: List[str] = []
@@ -510,6 +517,33 @@ def write_blind_manifest(stage_trials: Dict[int, List[Dict[str, Any]]],
     return sha256_file(BLIND_MANIFEST)
 
 
+def require_mapping(value: Any, what: str, required_action: str) -> Dict[str, Any]:
+    """入れ子コンテナが object であることを要求する。"""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise S35Stop(reason=f"{what}が object でない: {type(value).__name__}",
+                      required_action=required_action)
+    return value
+
+
+def require_mapping_of_mappings(value: Any, what: str,
+                                required_action: str) -> Dict[str, Any]:
+    """object かつ**各 entry も object**であることを要求する。
+
+    `{"trials": [1]}` や `{"trials": {"S1T01": 1}}` は根の検査を通るが、
+    後段の `.items()` / `.get()` で `AttributeError` になり、`S35Stop` でない
+    ので BLOCKED 記録が出せない。読み込みの絞り点で潰して、下流の
+    参照箇所すべてを一度に守る。
+    """
+    table = require_mapping(value, what, required_action)
+    bad = sorted(k for k, v in table.items() if not isinstance(v, dict))
+    if bad:
+        raise S35Stop(reason=f"{what}に object でない entry がある: {bad[:3]}",
+                      required_action=required_action)
+    return table
+
+
 def manifest_stage_block(manifest: Dict[str, Any], stage: int) -> Dict[str, Any]:
     """manifest の stage block を、**入れ子の形まで確かめて**返す。
 
@@ -564,8 +598,13 @@ def load_private_key() -> Tuple[Dict[str, Any], str]:
         raise S35Stop(reason=f"private key が無い（{PRIVATE_KEY}）",
                       required_action="Stage 1 の成果物を復元する。再生成は blind の破壊")
     raw = PRIVATE_KEY.read_bytes()
-    return json_object(raw, "private key",
-                       "Stage 1 の成果物を復元する。再生成は blind の破壊"), sha256_bytes(raw)
+    action = "Stage 1 の成果物を復元する。再生成は blind の破壊"
+    key = json_object(raw, "private key", action)
+    # **絞り点で入れ子まで見る。** ここを通せば `key["trials"]` / `key["plans"]` を
+    # 参照する下流 8 箇所すべてが守られる。
+    require_mapping_of_mappings(key.get("trials"), "private key の trials", action)
+    require_mapping_of_mappings(key.get("plans"), "private key の plans", action)
+    return key, sha256_bytes(raw)
 
 
 # ---------------------------------------------------------------------------

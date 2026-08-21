@@ -295,6 +295,28 @@ reveal だけから `sha256(canonical_bytes(key_preimage)) == key_commitment` �
 確定記録を私の判断で書き換えないという §13 の線は、成果物を良くする方向でも
 維持する（第 9 巡で同じ判断をしている）。
 
+### 形状ゲートの全数掃討を完了した（2026-08-21・第 11 巡）
+
+**第 8 巡・第 10 巡の 2 度、範囲不足のまま「掃討完了」と宣言した。** 8 巡は
+根と器だけ、10 巡は manifest の入れ子だけで、いずれも「同型穴を全数潰した」
+とは言えない状態で終端宣言を書いた。第 11 巡で残り全部を一度に潰す。
+
+S3.5 が外部から読む JSON は 5 つ。それぞれ **根 / 器 / 値 / 入れ子**の
+4 階層すべてにゲートを置いた。棚卸しは
+`test_every_external_json_has_a_shape_gate` が固定する。
+
+| ファイル | 根 | 入れ子の絞り点 |
+|---|---|---|
+| `s3_results.json` | `json_object()` | `gate_s3()` が `overall` / `reproducibility` |
+| `blind_manifest.json` | `json_object()` | `manifest_stage_block()` が stages / block / trial_ids / audio_sha256 |
+| `answer_key.private.json` | `json_object()` | `load_private_key()` が `trials` / `plans`（絞り点なので下流 8 箇所を一度に守る） |
+| `answers_stage*.json` | `json_object()` | `load_answers()` が器と**各値の型** |
+| `key_reveal.json`（既存） | `json_object()` | `require_mapping()` が `revealed_after_answers_sha256` |
+
+**教訓（今後の終端宣言に適用する）**: 「1 ファイル分を直したので同型は終わり」
+は終端宣言として無効。**同じ形の参照が他のファイル・他の階層に残っていないか
+grep で数え、残数 0 を示してから**宣言する。示せないなら宣言しない。
+
 ### 見送るときの手順
 
 指摘が (A)(B)(C) のどれにも当たらないと判断したら、**resolve せず**本節への

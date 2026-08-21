@@ -1452,3 +1452,90 @@ def test_publish_bundle_writes_exact_bytes(tmp_path) -> None:
     report.publish_bundle(((target, text),))
     assert target.read_bytes() == text.encode("utf-8")
     assert prep.sha256_bytes(text.encode("utf-8")) == prep.sha256_file(target)
+
+
+# --- 入れ子形状ゲートの全数掃討（第 11 巡） -------------------------------
+# S3.5 が外部から読む JSON は 5 つ。根 / 器 / 値 / 入れ子のどこが壊れていても
+# `S35Stop` になり BLOCKED 記録が出せること（例外で落ちないこと）を全数で固定する。
+
+@pytest.mark.parametrize("mutate", [
+    {"trials": [1]},
+    {"trials": {"S1T01": 1}},
+    {"trials": "x"},
+    {"plans": [1]},
+    {"plans": {"f0": "x"}},
+])
+def test_broken_nested_private_key_is_blocked(s35, mutate) -> None:
+    """private key の入れ子が壊れていたら読み込みの絞り点で止まる。"""
+    _out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    key = json.loads(prep.PRIVATE_KEY.read_text(encoding="utf-8"))
+    key.update(mutate)
+    prep.PRIVATE_KEY.write_text(json.dumps(key), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        prep.load_private_key()
+    assert "private key" in exc.value.as_dict()["reason"]
+
+
+def test_broken_nested_private_key_still_emits_blocked_record(s35) -> None:
+    """壊れた key でも `finalize_or_blocked()` が BLOCKED を返す。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    key = json.loads(prep.PRIVATE_KEY.read_text(encoding="utf-8"))
+    key["trials"] = [1]
+    prep.PRIVATE_KEY.write_text(json.dumps(key), encoding="utf-8")
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+@pytest.mark.parametrize("mutate", [
+    {"overall": [1]},
+    {"overall": "PASS"},
+    {"reproducibility": {"a": 1}},
+    {"reproducibility": [1, 2]},
+])
+def test_broken_nested_s3_results_is_blocked(s35, mutate) -> None:
+    """S3 正本の入れ子が壊れていたら gate で止まる。"""
+    _out, _doc = s35()
+    res = json.loads(prep.S3_RESULTS.read_text(encoding="utf-8"))
+    res.update(mutate)
+    prep.S3_RESULTS.write_text(json.dumps(res), encoding="utf-8")
+    with pytest.raises(prep.S35Stop):
+        prep.gate_s3(prep.load_s3_results()[0])
+
+
+def test_broken_nested_reveal_is_blocked(s35) -> None:
+    """既存 key_reveal.json の入れ子が壊れていても S35Stop。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    s1 = scoring.score_stage(sp.STAGE1)
+    prep.prepare_stage2(scoring.advancing_from_stage1(s1))
+    _answer(out, 2, _correct)
+    report.main()
+    rev = json.loads(scoring.KEY_REVEAL.read_text(encoding="utf-8"))
+    rev["revealed_after_answers_sha256"] = [1]
+    scoring.KEY_REVEAL.write_text(json.dumps(rev), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.finalize()
+    assert "revealed_after_answers_sha256" in exc.value.as_dict()["reason"]
+
+
+def test_every_external_json_has_a_shape_gate() -> None:
+    """外部から読む JSON 5 つが、すべて形状ゲートを通っていることの棚卸し。
+
+    このリストが実装と乖離したら落ちる。新しい読み込み口を足すときは、
+    ゲートを通してからここに追記する。
+    """
+    src = (Path(prep.__file__).parent / "s35_prepare.py").read_text(encoding="utf-8")
+    score_src = (Path(prep.__file__).parent / "s35_score.py").read_text(encoding="utf-8")
+    # 根: 全数 json_object 経由（既存テストが出現箇所を固定済み）
+    assert src.count("json_object(") >= 4
+    # 入れ子: 各ファイルの絞り点にゲートがある
+    assert 'require_mapping_of_mappings(key.get("trials")' in src
+    assert 'require_mapping_of_mappings(key.get("plans")' in src
+    assert 'require_mapping(res.get("overall")' in src
+    assert "def manifest_stage_block" in src
+    assert "prep.require_mapping(" in score_src        # key_reveal
+    assert "bad_types = sorted(" in score_src          # answers の値
