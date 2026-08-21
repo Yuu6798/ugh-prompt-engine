@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -138,6 +139,25 @@ def publish(files: Sequence[Tuple[Path, bytes]] = (),
         raise
     for _dest, backup in swapped:
         sr.drop_backup(backup)
+
+
+#: 走行結果に紐づく成果物。**Phase A が PASS 以外で終わったら残してはならない。**
+#: 残すと「NOT_ESTABLISHED / BLOCKED の正本」と「S4 完了を主張する freeze・鍵・
+#: pack」が同居し、記録が自分自身と矛盾する。
+OUTCOME_ARTIFACTS: Tuple[Path, ...] = (
+    FREEZE_JSON, FREEZE_MD, sb.KEY_REVEAL, sb.BLIND_MANIFEST, sb.PRIVATE_KEY,
+    sb.ANSWERS.with_name("answers.template.json"))
+
+
+def _rollback_wav_if_published(published: bool, backup: Optional[Path]) -> None:
+    """**公開に到達した場合だけ**巻き戻す。
+
+    `run_all` が publish_wav の前に止まったとき（素材欠落・pin 不一致・replay
+    不一致など）は `backup` が None のままで、無条件に巻き戻すと
+    `rmtree(WAV_DIR)` だけが走って**前回の正当な成果物を復元不能に破壊する**。
+    """
+    if published:
+        sr.rollback_wav(sr.WAV_DIR, backup)
 
 
 def blocked_bundle(stop: S4Stop) -> Tuple[Tuple[Path, bytes], ...]:
@@ -375,8 +395,10 @@ def render_freeze(payload: Dict[str, Any], res: Dict[str, Any]) -> str:
 def phase_a(*, write_wav: bool = True, require_clean: bool = True) -> int:
     RESULTS.mkdir(parents=True, exist_ok=True)
     backup: Optional[Path] = None
+    published = False        # publish_wav まで到達したか（未到達なら消すものは無い）
     try:
         runs, meta, backup = sr.run_all(write_wav=write_wav, require_clean=require_clean)
+        published = write_wav
         cross = sr.cross_process_shas()
         results = [sg.pair_verdict(r, cross) for r in runs]
         mech = sg.overall_gate(results)
@@ -384,16 +406,25 @@ def phase_a(*, write_wav: bool = True, require_clean: bool = True) -> int:
         files = [(JSON_PATH, _dumps(res).encode("utf-8")),
                  (RECORD_PATH, render_record(res).encode("utf-8"))]
         dir_swaps: List[Tuple[Path, Path]] = []
+        removals: List[Path] = []
         if mech["verdict"] == "PASS":
-            files += _stage_ear_pack(meta, runs, dir_swaps)
-        publish(files=files, dir_swaps=dir_swaps, secret=[sb.PRIVATE_KEY])
+            files += _stage_ear_pack(meta, runs, res, dir_swaps)
+            # 新しい pack を出すので、前回の reveal と freeze は同じ transaction で消す
+            removals += [FREEZE_JSON, FREEZE_MD, sb.KEY_REVEAL]
+        else:
+            # 機械 FAIL / BLOCKED では pack を作らない（§13）。前回走行の
+            # freeze・鍵・pack が残ると、正本と矛盾する成果物が同居する。
+            removals += list(OUTCOME_ARTIFACTS)
+            dir_swaps.append((_empty_dir(), sb.EAR_AUDIO))
+        publish(files=files, dir_swaps=dir_swaps, removals=removals,
+                secret=[sb.PRIVATE_KEY])
     except S4Stop as stop:
-        sr.rollback_wav(sr.WAV_DIR, backup)
-        publish(files=blocked_bundle(stop))
+        _rollback_wav_if_published(published, backup)
+        publish(files=blocked_bundle(stop), removals=list(OUTCOME_ARTIFACTS))
         print(f"{stop.status}: {stop.cause}")
         return 3
     except BaseException:
-        sr.rollback_wav(sr.WAV_DIR, backup)
+        _rollback_wav_if_published(published, backup)
         raise
     sr.drop_backup(backup)
     print(f"S4 mechanistic {mech['verdict']}: "
@@ -409,7 +440,16 @@ def phase_a(*, write_wav: bool = True, require_clean: bool = True) -> int:
     return 1
 
 
+def _empty_dir() -> Path:
+    """`dir_swaps` で公開先を空へ置き換えるための staging。"""
+    staging = sb.EAR_AUDIO.with_name(sb.EAR_AUDIO.name + ".staging")
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    return staging
+
+
 def _stage_ear_pack(meta: Dict[str, Any], runs: Sequence[sr.PairRun],
+                    res: Dict[str, Any],
                     dir_swaps: List[Tuple[Path, Path]]) -> List[Tuple[Path, bytes]]:
     """機械 PASS 後の耳 pack を staging に作り、最終 transaction へ載せる（§13 / §22）。"""
     cands = [(c["pair_key"], c["context_id"]) for c in meta["candidate_pairs"]]
@@ -425,8 +465,14 @@ def _stage_ear_pack(meta: Dict[str, Any], runs: Sequence[sr.PairRun],
     staging = sb.EAR_AUDIO.with_name(sb.EAR_AUDIO.name + ".staging")
     audio_sha = sb.materialize(trials, resolved, staging)
     dir_swaps.append((staging, sb.EAR_AUDIO))
-    _key, key_raw = sb.build_private_key(trials, salt, meta["s3_results_sha256"],
-                                         meta["s35_results_sha256"], selected)
+    # **期待クリップ digest と機械結果の digest を key へ封じる。**
+    # manifest は commitment に覆われない可変ファイルなので、そこに載せた digest を
+    # Phase C が信用すると「WAV を差し替えて manifest も書き換える」で全検査が通る。
+    # 同様に、Phase C が s4_results.json の verdict だけを見ると、別走行の
+    # 機械 PASS と別 pack の回答を組み合わせて公開できる。
+    _key, key_raw = sb.build_private_key(
+        trials, salt, meta["s3_results_sha256"], meta["s35_results_sha256"], selected,
+        audio_sha256=audio_sha, mechanistic_digest=sb.sha256_bytes(_dumps(res).encode("utf-8")))
     # private key も **同じ transaction** で置く。先に書くと、後段が失敗したとき
     # 「新しい key + 古い manifest」が残り commitment 検証が通らなくなる。
     commitment = sb.sha256_bytes(key_raw)
@@ -441,6 +487,75 @@ def _stage_ear_pack(meta: Dict[str, Any], runs: Sequence[sr.PairRun],
 # ---------------------------------------------------------------------------
 # §20 Phase C — Final
 # ---------------------------------------------------------------------------
+def _assert_mechanistic_binding(key: Dict[str, Any], res_raw: bytes) -> None:
+    """pack が **この** 機械結果に対して作られたことを確認する。
+
+    verdict の文字列だけを見ると、別走行の機械 PASS と別 pack の回答を組み合わせて
+    公開できる。Phase A は結果 bytes の digest を key へ封じてあるので突き合わせる。
+    """
+    want = key.get("mechanistic_digest")
+    if not want:
+        raise S4Stop(
+            cause="commitment 済み key に mechanistic_digest が無い",
+            impact="この耳 pack がどの機械結果に対応するかを確認できない",
+            minimal_fix="Phase A を実行して耳 pack を作り直す")
+    got = sb.sha256_bytes(res_raw)
+    if got != want:
+        raise S4Stop(
+            cause=f"s4_results.json の digest が key の pin と一致しない "
+                  f"({got[:16]}… != {str(want)[:16]}…)",
+            impact="別走行の機械結果と、別 pack で集めた回答を組み合わせて"
+                   "S4 の判定を公開することになる",
+            minimal_fix="Phase A からやり直す。機械結果を手で差し替えない")
+
+
+def _assert_reveal_idempotent(answers_sha: str, manifest: Dict[str, Any]) -> None:
+    """既に key を開封済みなら、**同じ回答での再実行しか許さない**。
+
+    `key_reveal.json` は全問の正解を露出する。開封後に `answers.json` を書き換えて
+    再採点できると、正当な不成立を PASS へ反転できてしまう。
+    """
+    if not sb.KEY_REVEAL.exists():
+        return
+    try:
+        reveal = json.loads(sb.KEY_REVEAL.read_bytes().decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise S4Stop(cause=f"既存の key_reveal.json が読めない: {exc}",
+                     impact="開封後の回答差し替えを検出できない",
+                     minimal_fix="key_reveal.json の破損を確認する") from exc
+    prev = reveal.get("answers_sha256")
+    if prev and prev != answers_sha:
+        raise S4Stop(
+            cause=f"key 開封後に回答が変わっている "
+                  f"({str(prev)[:16]}… -> {answers_sha[:16]}…)",
+            impact="正解を見たあとで回答を書き換え、不成立を PASS へ反転できてしまう",
+            minimal_fix="この pack の判定は確定済み。やり直すなら Phase A から"
+                        "新しい pack を作る")
+    if reveal.get("key_commitment") and \
+            reveal["key_commitment"] != manifest.get("key_commitment"):
+        raise S4Stop(
+            cause="既存 key_reveal が別の pack のものである",
+            impact="開封済み pack と現在の pack が食い違ったまま再採点される",
+            minimal_fix="Phase A からやり直す")
+
+
+def _phase_c_closure() -> Dict[str, Any]:
+    """採点に使う実装を Phase C 時点で pin する。
+
+    Phase A の closure だけを記録すると、pack 生成後に採点コード（閾値・採点関数）
+    を書き換えて、別のコードで出した判定を Phase A の来歴で公開できる。
+    """
+    wt = sr.worktree_state()
+    if wt["clean"] is not True:
+        reason = ("git 状態を確認できない" if wt["clean"] is None
+                  else f"未コミットの変更がある: {wt['entries'][:5]}")
+        raise S4Stop(
+            cause=f"Phase C も clean worktree を要求する（{reason}）",
+            impact="採点した実装と記録する closure が対応せず、判定が再現不能になる",
+            minimal_fix="変更を commit してから Phase C を実行する")
+    return {"worktree": wt, "closure": sr.closure_digest()}
+
+
 def phase_c() -> int:
     try:
         res_raw = JSON_PATH.read_bytes() if JSON_PATH.exists() else b""
@@ -466,13 +581,17 @@ def phase_c() -> int:
                 cause="answer_key の SHA が blind_manifest の key_commitment と一致しない",
                 impact="回答後に正解が差し替えられていないことを保証できない（blind 破壊）",
                 minimal_fix="耳 pack を作り直し、回答をやり直す")
-        # commitment が守るのは「回答後に正解が差し替わらないこと」だけ。
-        # 聴いた音そのものと、回答がどの pack のものかは別途 pin する。
-        sb.verify_pack_audio(manifest)
         key = json.loads(key_raw.decode("utf-8"))
+        # commitment が守るのは「回答後に正解が差し替わらないこと」だけ。
+        # 聴いた音・回答の帰属・機械結果の帰属・採点コードは別途 pin する。
+        _assert_mechanistic_binding(key, res_raw)
+        sb.verify_pack_audio(key)                 # 期待値は key 側（manifest は可変）
         trials = [dict(v, trial_id=k) for k, v in key["trials"].items()]
         answers_doc, answers, answers_sha = sb.load_answers()
         sb.verify_answer_binding(answers_doc, manifest)
+        _assert_reveal_idempotent(answers_sha, manifest)
+        sb.assert_answers_complete(trials, answers)
+        phase_c_closure = _phase_c_closure()
         scored = sb.score(trials, answers)
         abx_v = sg.abx_verdict(scored["abx_correct"], scored["abx_total"])
         id_v = sg.identity_verdict(scored["identity_yes"], scored["identity_total"])
@@ -485,6 +604,8 @@ def phase_c() -> int:
                "commitment_verified": True,
                "pack_audio_verified": True,
                "answer_binding_verified": True,
+               "mechanistic_binding_verified": True,
+               "phase_c_closure": phase_c_closure,
                "verdict": sg.perceptual_verdict(abx_v, id_v),
                "trials": scored["abx"] + scored["identity"]}
         overall = sg.s4_overall(mech["verdict"], abx_v, id_v,
@@ -492,6 +613,7 @@ def phase_c() -> int:
         res["perceptual"] = per
         res["overall"] = {"verdict": overall}
         reveal = sb.build_key_reveal(key, answers_sha, scored)
+        reveal["key_commitment"] = manifest["key_commitment"]
         files = [(JSON_PATH, _dumps(res).encode("utf-8")),
                  (RECORD_PATH, render_record(res).encode("utf-8")),
                  (sb.KEY_REVEAL, _dumps(reveal).encode("utf-8"))]

@@ -243,9 +243,14 @@ def overall_gate(results: Sequence[PairResult],
                  if r.verdict in (PairVerdict.COMBINABLE.value,
                                   PairVerdict.UNSUPPORTED.value)]
     combinable = [r for r in evaluable if r.verdict == PairVerdict.COMBINABLE.value]
+    # FAILED は evaluable の分母から外れるので、これを数えないと
+    # 「5 COMBINABLE + 1 FAILED」で ratio 5/5 = 1.0 が立ち、S3 と矛盾する pair を
+    # 抱えたまま PASS が出る。pair verdict そのものを hard failure として数える。
+    failed_pairs = [r for r in results if r.verdict == PairVerdict.FAILED.value]
     structural_failures = sum(1 for r in results if not r.structure.get("pass"))
     determinism_failures = sum(1 for r in results if not r.determinism.get("pass"))
     replay_mismatches = sum(1 for r in results if not r.replay.get("pass"))
+    s3_contradictions = sum(1 for r in results if not r.s3_consistency.get("pass", True))
     contexts = sorted({r.context_id for r in results})
     sup_ctx = sorted({r.context_id for r in combinable})
     ratio = (len(combinable) / len(evaluable)) if evaluable else 0.0
@@ -257,12 +262,14 @@ def overall_gate(results: Sequence[PairResult],
         "no_structural_failures": structural_failures == 0,
         "no_determinism_failures": determinism_failures == 0,
         "no_s3_replay_mismatches": replay_mismatches == 0,
+        "no_failed_pairs": not failed_pairs,
     }
     # 構造 / 決定論 / replay の違反は「不足」ではなく **違反** なので FAIL と
     # 区別できるように理由を残す（§7 は S4 全体を FAILED にする）。
     hard_fail = not (checks["no_structural_failures"]
                      and checks["no_determinism_failures"]
-                     and checks["no_s3_replay_mismatches"])
+                     and checks["no_s3_replay_mismatches"]
+                     and checks["no_failed_pairs"])
     verdict = "PASS" if all(checks.values()) else "FAIL"
     return {
         "candidate_pairs": len(results),
@@ -273,9 +280,12 @@ def overall_gate(results: Sequence[PairResult],
         "supported_contexts": sup_ctx,
         "distinct_context_count": len(contexts),
         "supported_context_count": len(sup_ctx),
+        "failed_pairs": len(failed_pairs),
+        "failed_pair_keys": [r.pair_key for r in failed_pairs],
         "structural_failures": structural_failures,
         "determinism_failures": determinism_failures,
         "s3_replay_mismatches": replay_mismatches,
+        "s3_contradictions": s3_contradictions,
         "checks": checks,
         "hard_failure": hard_fail,
         "criteria": criteria.as_dict(),

@@ -39,10 +39,14 @@ import pb_compose as pc  # noqa: E402
 import pb_gates as pbg  # noqa: E402
 
 import pr_ladder  # noqa: E402
+# **遅延 import にしない。** `closure_digest()` は `sys.modules` を走査するので、
+# 再配置検証で初めて読み込むと「素材の同一性を決める実装」が pin から漏れる。
+import pr_manifest  # noqa: E402
 import pr_performance as prp  # noqa: E402
 
 import s3_runner as s3r  # noqa: E402
 import s4_spec as sp  # noqa: E402
+from s4_spec import S4Stop  # noqa: E402  — 後方互換の再エクスポート
 
 S3_RESULTS = _FOUNDRY / "genome_s3" / "results" / "s3_results.json"
 S35_RESULTS = _FOUNDRY / "genome_s35" / "results" / "s35_results.json"
@@ -71,20 +75,6 @@ def preflight_record() -> Dict[str, Any]:
 
 def reset_preflight() -> None:
     _PREFLIGHT.clear()
-
-
-class S4Stop(Exception):
-    """§16 BLOCKED / FAILED の停止条件。原因・影響・最小修正案だけを持つ。"""
-
-    def __init__(self, cause: str, impact: str, minimal_fix: str,
-                 status: str = "BLOCKED") -> None:
-        super().__init__(cause)
-        self.cause, self.impact, self.minimal_fix = cause, impact, minimal_fix
-        self.status = status
-
-    def as_dict(self) -> Dict[str, str]:
-        return {"status": self.status, "cause": self.cause,
-                "impact": self.impact, "minimal_fix": self.minimal_fix}
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +183,6 @@ def _sha_dir_consumed(root: Path) -> Tuple[str, int]:
     絶対パスを含まないので、**別 root へ展開しても同じ値**になる。
     再配置後の木が S2 走行時と同一であることを、この 1 値で検査できる。
     """
-    import pr_manifest  # noqa: PLC0415  — read-only import（planb_real は変更しない）
     digest, count = pr_manifest.aggregate_extracted_sha256(root)
     return str(digest), int(count)
 

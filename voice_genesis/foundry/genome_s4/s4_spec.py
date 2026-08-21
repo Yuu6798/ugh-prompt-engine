@@ -30,6 +30,25 @@ FREEZE_SCHEMA = "voicegenesis-genome-architecture/0.1"
 EAR_SELECTION_DOMAIN = "voicegenesis-s4-ear-v1"
 
 
+class S4Stop(Exception):
+    """§16 BLOCKED / FAILED の停止条件。原因・影響・最小修正案だけを持つ。
+
+    **`s4_spec` に置く。** `s4_runner` に置くと、判定ロジックだけを検査したい側が
+    WORLD（`pyworld`）を含む import 閉包を引き込むことになり、その依存が無い環境
+    （CI）で不変条件テストが丸ごと skip される。
+    """
+
+    def __init__(self, cause: str, impact: str, minimal_fix: str,
+                 status: str = "BLOCKED") -> None:
+        super().__init__(cause)
+        self.cause, self.impact, self.minimal_fix = cause, impact, minimal_fix
+        self.status = status
+
+    def as_dict(self) -> Dict[str, str]:
+        return {"status": self.status, "cause": self.cause,
+                "impact": self.impact, "minimal_fix": self.minimal_fix}
+
+
 class Gene(str, Enum):
     F0 = "f0"
     DURATION = "duration"
@@ -130,6 +149,8 @@ MIN_CLOSURE_FILES: Tuple[str, ...] = (
     "planb_real/pr_performance.py",
     "planb_real/pr_match.py",
     "planb_real/pr_ladder.py",
+    # 再配置素材の同一性（展開物の集約 SHA）を決める実装。pin から漏らさない。
+    "planb_real/pr_manifest.py",
 )
 
 

@@ -50,6 +50,8 @@ import s4_spec as sp  # noqa: E402
 from s4_runner import S4Stop  # noqa: E402
 
 SCHEMA = "voicegenesis-genome-s4b/1.0"
+#: S4b は S4 の判定が確定した後にしか走らせない（記録が S4 の結果を断言するため）。
+REQUIRED_S4_OVERALL = "NOT_ESTABLISHED"
 ANSWERS_SCHEMA = "voicegenesis-s4b-answers/1.0"
 
 #: 選択規則の識別子。S4b は hash ではなく **機械値（intervention amount）順**で
@@ -81,24 +83,63 @@ MAX_PAIRS_PER_GENE = 2
 MAX_TRIALS = len(GENE_CONTRAST) * MAX_PAIRS_PER_GENE
 
 
-def _load(path: Path, what: str) -> Dict[str, Any]:
+def _load(path: Path, what: str) -> Tuple[Dict[str, Any], str]:
+    """**1 回だけ** bytes を読み、その同じ bytes から parse と digest を作る。
+
+    読み直すと、走行中に差し替わった場合に「parse したのと違う bytes の digest」を
+    来歴として記録してしまう。
+    """
     if not path.exists():
         raise S4Stop(cause=f"{what} が無い（{path}）",
                      impact="S4b の入力を確定できない",
                      minimal_fix="先に S4 の Phase A / Phase C を完了させる")
-    return json.loads(path.read_bytes().decode("utf-8"))
+    raw = path.read_bytes()
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise S4Stop(cause=f"{what} が JSON として読めない: {exc}",
+                     impact="S4b の入力を確定できない",
+                     minimal_fix=f"{path} を確認する") from exc
+    if not isinstance(data, dict):
+        raise S4Stop(cause=f"{what} の根が object でない",
+                     impact="S4b の入力を確定できない",
+                     minimal_fix=f"{path} を確認する")
+    return data, sb.sha256_bytes(raw)
 
 
-def load_inputs() -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """S4 正本と S3 正本を読む。**耳判定の結果（key_reveal）は選択に使わない。**"""  # noqa: E501
-    s4 = _load(S4_RESULTS, "S4 正本 s4_results.json")
-    if (s4.get("mechanistic") or {}).get("verdict") != "PASS":
+def load_inputs() -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
+    """S4 正本と S3 正本を読む。**耳判定の結果（key_reveal）は選択に使わない。**
+
+    S4 の overall が確定していること（NOT_ESTABLISHED）を要求する。機械 PASS だけを
+    見ると、Phase C 未了（overall = BLOCKED）や S4 PASS の状態でも S4b を走らせられ、
+    「S4 は NOT_ESTABLISHED」と断言する記録が実際の S4 結果と矛盾する。
+    """
+    s4, s4_sha = _load(S4_RESULTS, "S4 正本 s4_results.json")
+    mech = (s4.get("mechanistic") or {}).get("verdict")
+    if mech != "PASS":
         raise S4Stop(
-            cause=f"S4 の機械 Gate が {(s4.get('mechanistic') or {}).get('verdict')!r}",
+            cause=f"S4 の機械 Gate が {mech!r}",
             impact="canonical WAV が機械 Gate を通っていない条件で耳判定を足すことになる",
             minimal_fix="S4 の Phase A を完了させる")
-    s3 = _load(S3_RESULTS, "S3 正本 s3_results.json")
-    return s4, s3
+    overall = (s4.get("overall") or {}).get("verdict")
+    if overall != REQUIRED_S4_OVERALL:
+        raise S4Stop(
+            cause=f"S4 の overall が {overall!r}（要求 {REQUIRED_S4_OVERALL!r}）",
+            impact="S4b の記録は「S4 = NOT_ESTABLISHED」を前提に書かれるため、"
+                   "確定前・別結果の S4 と組み合わせると記録が矛盾する",
+            minimal_fix="S4 の Phase C を完了させてから S4b を実行する")
+    s3, s3_sha = _load(S3_RESULTS, "S3 正本 s3_results.json")
+    # S4 が pin した S3 と同じ bytes であること。別の S3 で母集団を選びながら
+    # S4 の digest を来歴として書くと、確認の provenance が偽になる。
+    want = s4.get("s3_results_sha256")
+    if s3_sha != want:
+        raise S4Stop(
+            cause=f"S3 正本の digest が S4 の pin と一致しない "
+                  f"({s3_sha[:16]}… != {str(want)[:16]}…)",
+            impact="S4 と別の S3 で candidate 母集団を選びながら、S4 の digest を"
+                   "来歴として記録することになる",
+            minimal_fix="S4 走行時の s3_results.json を復元する")
+    return s4, s4_sha, s3
 
 
 def qualify(s4: Dict[str, Any], s3: Dict[str, Any], gene: str) -> List[Dict[str, Any]]:
@@ -244,7 +285,7 @@ def clip_names(trial: Dict[str, Any]) -> List[Tuple[str, str]]:
 
 
 def prepare() -> int:
-    s4, s3 = load_inputs()
+    s4, s4_sha, s3 = load_inputs()
     cells = plan(s4, s3)
     salt = os.urandom(32)
     trials = build_trials(cells, salt)
@@ -255,14 +296,20 @@ def prepare() -> int:
     audio_sha: Dict[str, Dict[str, str]] = _materialize(trials, resolved, staging)
     key = {"schema": SCHEMA, "s3_results_sha256": s4["s3_results_sha256"],
            "s35_results_sha256": s4["s35_results_sha256"],
+           "s4_results_sha256": s4_sha,
            "source_wav_sha256": source_pins, "source_wav_pin_note": WAV_PIN_NOTE,
+           # 期待クリップ digest は **key 側**に置く。manifest は commitment に
+           # 覆われない可変ファイルなので、そこの digest を採点が信用すると
+           # 「WAV 差し替え + manifest 書き換え」で全検査が通る。
+           "audio_sha256": {k: dict(sorted(v.items()))
+                            for k, v in sorted(audio_sha.items())},
            "selection_rule": SELECTION_RULE, "salt_hex": salt.hex(),
            "cells": cells,
            "trials": {t["trial_id"]: {k: t[k] for k in sorted(t) if k != "_uid"}
                       for t in trials}}
     key_raw = sb.canonical_bytes(key)
     commitment = sb.sha256_bytes(key_raw)
-    manifest = {"schema": SCHEMA, "s4_results_sha256": sb.sha256_file(S4_RESULTS),
+    manifest = {"schema": SCHEMA, "s4_results_sha256": s4_sha,
                 "trial_ids": [t["trial_id"] for t in trials],
                 "audio_sha256": audio_sha, "key_commitment": commitment,
                 "instructions": {"ABX": "A と B を聴き、X が A と B のどちらと同じかを"
@@ -270,12 +317,17 @@ def prepare() -> int:
     template = {"schema": ANSWERS_SCHEMA, "key_commitment": commitment,
                 "answers": {t["trial_id"]: "A|B|UNSURE" for t in trials}}
     RESULTS.mkdir(parents=True, exist_ok=True)
+    # 新しい pack を出すので、前回走行の判定成果物は同じ transaction で消す。
+    # 残すと「別 commitment の CONFIRMED/NOT_CONFIRMED」が未回答の pack の隣に
+    # 並んだままになる。
     srep.publish(
         files=[(PRIVATE_KEY, key_raw),
                (BLIND_MANIFEST, srep._dumps(manifest).encode("utf-8")),
                (ANSWERS.with_name("answers.template.json"),
                 srep._dumps(template).encode("utf-8"))],
-        dir_swaps=[(staging, AUDIO_DIR)], secret=[PRIVATE_KEY])
+        dir_swaps=[(staging, AUDIO_DIR)],
+        removals=[JSON_PATH, RECORD_PATH, KEY_REVEAL],
+        secret=[PRIVATE_KEY])
     print(f"S4b pack ready: {len(trials)} 問 / {AUDIO_DIR}")
     for t in trials:
         print(f"  {t['trial_id']}  (blind)")
@@ -309,17 +361,19 @@ def _materialize(trials, resolved, staging) -> Dict[str, Dict[str, str]]:
 
 
 def score() -> int:
-    manifest = _load(BLIND_MANIFEST, "S4b blind_manifest.json")
+    manifest, _mf_sha = _load(BLIND_MANIFEST, "S4b blind_manifest.json")
     key_raw = PRIVATE_KEY.read_bytes() if PRIVATE_KEY.exists() else b""
     if not key_raw or not sb.verify_commitment(key_raw, manifest):
         raise S4Stop(cause="S4b の key commitment が検証できない",
                      impact="回答後に正解が差し替えられていないことを保証できない",
                      minimal_fix="pack を作り直して回答をやり直す")
-    sb.verify_pack_audio(manifest, AUDIO_DIR)
     key = json.loads(key_raw.decode("utf-8"))
+    sb.verify_pack_audio(key, AUDIO_DIR)      # 期待値は key 側（manifest は可変）
     trials = [dict(v, trial_id=k) for k, v in key["trials"].items()]
     answers_doc, answers, answers_sha = sb.load_answers(ANSWERS)
     sb.verify_answer_binding(answers_doc, manifest)
+    _assert_reveal_idempotent(answers_sha, manifest)
+    sb.assert_answers_complete(trials, answers)
     scored = sb.score(trials, answers)
 
     by_id = {t["trial_id"]: t for t in trials}
@@ -358,6 +412,7 @@ def score() -> int:
         "s4_overall_unchanged": True,
     }
     reveal = {"schema": SCHEMA, "answers_sha256": answers_sha,
+              "key_commitment": manifest["key_commitment"],
               "salt_hex": key["salt_hex"], "selection_rule": key["selection_rule"],
               "cells": key["cells"], "trials": key["trials"], "scored": scored}
     srep.publish(files=[(JSON_PATH, srep._dumps(res).encode("utf-8")),
@@ -368,6 +423,35 @@ def score() -> int:
         print(f"  {r['trial_id']} {r['gene']:8s} {r['context_id']:12s} "
               f"{'OK' if r['correct'] else 'MISS'}")
     return 0 if res["verdict"] == "CONFIRMED" else 1
+
+
+def _assert_reveal_idempotent(answers_sha: str, manifest: Dict[str, Any]) -> None:
+    """既に key を開封済みなら、**同じ回答での再実行しか許さない**。
+
+    開封後に `answers.json` を書き換えて再採点できると、正当な NOT_CONFIRMED を
+    CONFIRMED へ反転できてしまう。
+    """
+    if not KEY_REVEAL.exists():
+        return
+    try:
+        reveal = json.loads(KEY_REVEAL.read_bytes().decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise S4Stop(cause=f"既存の S4b key_reveal.json が読めない: {exc}",
+                     impact="開封後の回答差し替えを検出できない",
+                     minimal_fix="key_reveal.json の破損を確認する") from exc
+    prev = reveal.get("answers_sha256")
+    if prev and prev != answers_sha:
+        raise S4Stop(
+            cause=f"key 開封後に回答が変わっている "
+                  f"({str(prev)[:16]}… -> {answers_sha[:16]}…)",
+            impact="正解を見たあとで回答を書き換え、NOT_CONFIRMED を CONFIRMED へ"
+                   "反転できてしまう",
+            minimal_fix="この pack の判定は確定済み。やり直すなら pack を作り直す")
+    if reveal.get("key_commitment") and \
+            reveal["key_commitment"] != manifest.get("key_commitment"):
+        raise S4Stop(cause="既存 key_reveal が別の pack のものである",
+                     impact="開封済み pack と現在の pack が食い違ったまま再採点される",
+                     minimal_fix="pack を作り直す")
 
 
 def render(res: Dict[str, Any], key: Dict[str, Any]) -> str:

@@ -16,14 +16,14 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import s4_spec as sp  # noqa: E402
-from s4_runner import S4Stop  # noqa: E402
+from s4_spec import S4Stop  # noqa: E402
 
 RESULTS = _HERE / "results"
 EAR_DIR = RESULTS / "ear_pack"
@@ -213,13 +213,23 @@ def materialize(trials: Sequence[Dict[str, Any]],
 
 
 def build_private_key(trials: Sequence[Dict[str, Any]], salt: bytes,
-                      s3_sha: str, s35_sha: str,
-                      selected: Dict[str, str]) -> Tuple[Dict[str, Any], bytes]:
-    """**6 問すべての正解を最初に確定して commit する**（§14）。"""
+                      s3_sha: str, s35_sha: str, selected: Dict[str, str],
+                      *, audio_sha256: Optional[Dict[str, Dict[str, str]]] = None,
+                      mechanistic_digest: Optional[str] = None,
+                      ) -> Tuple[Dict[str, Any], bytes]:
+    """**6 問すべての正解を最初に確定して commit する**（§14）。
+
+    正解に加えて、**聴かせるクリップの digest** と **その pack が対応する機械結果の
+    digest** も封じる。どちらも可変ファイル（`blind_manifest.json` /
+    `s4_results.json`）側にしか無いと、回答収集後に差し替えて全検査を通せる。
+    """
     key = {
         "schema": sp.SCHEMA,
         "s3_results_sha256": s3_sha,
         "s35_results_sha256": s35_sha,
+        "mechanistic_digest": mechanistic_digest,
+        "audio_sha256": {k: dict(sorted(v.items()))
+                         for k, v in sorted((audio_sha256 or {}).items())},
         "salt_hex": salt.hex(),
         "selected_pairs": dict(sorted(selected.items())),
         "trials": {t["trial_id"]: {k: t[k] for k in sorted(t) if k != "_uid"}
@@ -268,23 +278,44 @@ def verify_commitment(key_raw: bytes, manifest: Dict[str, Any]) -> bool:
     return sha256_bytes(key_raw) == manifest.get("key_commitment")
 
 
-def verify_pack_audio(manifest: Dict[str, Any], audio_dir: Path = EAR_AUDIO) -> None:
+def expected_audio(key: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    """**commitment 済みの key** から、期待するクリップ digest 表を取り出す。
+
+    `blind_manifest.json` は commitment に覆われていない可変ファイルなので、
+    そこに載っている digest を信用してはならない（WAV を差し替えて manifest の
+    digest も書き換えれば、全ての検査が通ってしまう）。期待値は key 側に置き、
+    key は commitment で固定する。
+    """
+    listed = key.get("audio_sha256")
+    if not isinstance(listed, dict) or not listed:
+        raise S4Stop(
+            cause="commitment 済み key に audio_sha256 が無い（または空）",
+            impact="聴いた音が Phase A で pin した音と同じかを確認できない",
+            minimal_fix="Phase A を実行して耳 pack を作り直す")
+    trials = key.get("trials")
+    if not isinstance(trials, dict) or set(listed) != set(trials):
+        raise S4Stop(
+            cause=f"key の audio_sha256 が全 trial を覆っていない "
+                  f"(audio {sorted(listed)} / trials {sorted(trials or {})})",
+            impact="欠けた問の音を検査しないまま採点し、差し替え・欠落を見逃す",
+            minimal_fix="Phase A を実行して耳 pack を作り直す")
+    return {str(k): {str(n): str(v) for n, v in per.items()}
+            for k, per in listed.items()}
+
+
+def verify_pack_audio(key: Dict[str, Any], audio_dir: Path = EAR_AUDIO) -> None:
     """採点の前に **pack の音そのもの**を再ハッシュして pin と突き合わせる。
 
     commitment が守るのは「実験者が回答後に正解を変えないこと」だけで、Phase A の
     後に WAV が差し替わった・壊れた・消えた場合は素通りする。それを許すと、
     pin された音とは別の音についての回答で PASS を凍結できてしまう。
+
+    期待値は **key（commitment 済み）**から取る。可変な manifest は信用しない。
     """
-    listed = manifest.get("audio_sha256")
-    if not isinstance(listed, dict) or not listed:
-        raise S4Stop(
-            cause="blind manifest に audio_sha256 が無い（または空）",
-            impact="聴いた音が Phase A で pin した音と同じかを確認できない",
-            minimal_fix="Phase A を実行して耳 pack を作り直す")
-    for trial_id, per in sorted(listed.items()):
-        if not isinstance(per, dict) or not per:
+    for trial_id, per in sorted(expected_audio(key).items()):
+        if not per:
             raise S4Stop(
-                cause=f"blind manifest の audio_sha256[{trial_id}] が空",
+                cause=f"key の audio_sha256[{trial_id}] が空",
                 impact="当該問の音を pin と突き合わせられない",
                 minimal_fix="Phase A を実行して耳 pack を作り直す")
         for name, want in sorted(per.items()):
@@ -348,6 +379,33 @@ def load_answers(path: Path = ANSWERS) -> Tuple[Dict[str, Any], Dict[str, str], 
                      impact="人間 Gate を採点できない",
                      minimal_fix="answers.json の形式を確認する")
     return data, {str(k): str(v) for k, v in ans.items()}, sha256_bytes(raw)
+
+
+def assert_answers_complete(trials: Sequence[Dict[str, Any]],
+                            answers: Dict[str, str]) -> None:
+    """採点の**前**に、回答が committed trial 集合と正確に一致することを要求する。
+
+    欠落・テンプレート値・語彙外の値を「不正解」として数えると、**未完成の回答用紙が
+    偽の実験失敗**に化ける。それは NOT_ESTABLISHED ではなく BLOCKED である。
+    """
+    want = {t["trial_id"] for t in trials}
+    got = set(answers)
+    if want != got:
+        raise S4Stop(
+            cause=f"回答が committed trial 集合と一致しない "
+                  f"(欠落 {sorted(want - got)} / 余分 {sorted(got - want)})",
+            impact="未回答を不正解として数えると、未完成の回答用紙が偽の実験失敗になる",
+            minimal_fix="results/answers.template.json を写して全問に回答する")
+    allowed = {"ABX": {a.value for a in sp.Answer},
+               "IDENTITY": {a.value for a in sp.IdentityAnswer}}
+    for t in sorted(trials, key=lambda x: x["trial_id"]):
+        value = answers[t["trial_id"]]
+        ok = allowed[t["kind"] if t["kind"] in allowed else "ABX"]
+        if value not in ok:
+            raise S4Stop(
+                cause=f"{t['trial_id']}: 回答 {value!r} が語彙外（許容 {sorted(ok)}）",
+                impact="テンプレート値や誤入力を不正解として数えると偽の実験失敗になる",
+                minimal_fix="当該問に有効な値で回答し直す")
 
 
 def score(trials: Sequence[Dict[str, Any]], answers: Dict[str, str]) -> Dict[str, Any]:
