@@ -105,6 +105,17 @@ def _sha256_of(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _samples_sha256(y32: np.ndarray) -> str:
+    """**標本そのもの**の sha256（決定論 pin）。
+
+    WAV 容器の sha は再現しない: libsndfile は float WAV に PEAK チャンクを付け、
+    そこに**書き出し時刻**が入る（同一音・別時刻のレンダで容器 sha が変わることを
+    実測。2026-08-21）。したがって決定論の主張は標本列の sha で行い、`wav_sha256`
+    は「その場のファイル実体」の照合にとどめる。
+    """
+    return hashlib.sha256(np.ascontiguousarray(y32, dtype=np.float32).tobytes()).hexdigest()
+
+
 def render_conditions(
     gate_synth,
     renders: Sequence[cs.CalibrationRender],
@@ -144,13 +155,15 @@ def render_conditions(
             )
         y = np.concatenate([y, np.zeros(n_total - n_rendered, dtype=np.float64)])
         wav_path = out_dir / f"{r.condition_id}.wav"
-        sf.write(str(wav_path), y.astype(np.float32), cs.SAMPLE_RATE, subtype="FLOAT")
+        y32 = y.astype(np.float32)
+        sf.write(str(wav_path), y32, cs.SAMPLE_RATE, subtype="FLOAT")
         entry = r.command_summary()
         entry.update(
             {
                 "derived": False,
                 "wav": wav_path.name,
                 "wav_sha256": _sha256_of(wav_path),
+                "samples_sha256": _samples_sha256(y32),
                 "sample_rate_hz": cs.SAMPLE_RATE,
                 "n_samples": int(y.size),
                 "n_samples_rendered": n_rendered,
@@ -165,6 +178,9 @@ def render_conditions(
                 ),
                 "stage1_final_phone_dur_applied": record.get("stage1_final_phone_dur"),
                 "stage3_mode": record.get("stage3_mode"),
+                "calibration_only_intervention": bool(
+                    record.get("stage1_calibration_only_intervention", False)
+                ),
                 "render_elapsed_sec": elapsed,
             }
         )
@@ -174,6 +190,73 @@ def render_conditions(
             f"peak={entry['peak_raw']:.4f} sha={entry['wav_sha256'][:12]} ({elapsed:.1f}s)"
         )
     return entries
+
+
+def write_zero_buffers(
+    zero_buffers: Sequence[Dict[str, Any]],
+    entries: List[Dict[str, Any]],
+    out_dir: Path,
+) -> List[Dict[str, Any]]:
+    """`zero_input_false_positive` 用の**厳密ゼロ**緩衝を書く（レンダではない）。
+
+    2026-08-21 amendment: 要件が測るのは**測定器**の性質なので、刺激は経路に
+    依存しない厳密ゼロでなければならない（SP-only render は経路が生成した
+    非ゼロ波形であり、これとは別物 = `diagnostics.pipeline_silence_residual`）。
+    長さ・標本化周波数・境界はレンダ条件とそろえる（測定窓の定義を共有するため）。
+    """
+    if not entries:
+        raise ValueError("zero buffer は先にレンダ条件が要る（長さと境界を共有する）")
+    ref = entries[0]
+    out: List[Dict[str, Any]] = []
+    for spec_entry in zero_buffers:
+        zid = str(spec_entry["id"])
+        n = int(ref["n_samples"])
+        sr = int(ref["sample_rate_hz"])
+        y = np.zeros(n, dtype=np.float32)
+        wav_path = out_dir / f"{zid}.wav"
+        sf.write(str(wav_path), y, sr, subtype="FLOAT")
+        samples_sha = _samples_sha256(y)
+        check, _ = sf.read(str(wav_path), dtype="float64", always_2d=False)
+        if np.any(np.asarray(check) != 0.0):
+            raise ValueError(f"{zid}: 書き出した緩衝が厳密ゼロでない")
+        entry = {
+            k: ref[k]
+            for k in (
+                "tempo_bpm",
+                "beats",
+                "note_target_frames",
+                "frame_ms",
+                "head_frames",
+                "note_onset_s",
+                "commanded_note_end_s",
+                "score_boundary_s",
+                "tail_window_ms",
+                "sample_rate_hz",
+            )
+        }
+        entry.update(
+            {
+                "condition_id": zid,
+                "maps_to": str(spec_entry.get("kind", "synthetic_zero_buffer")),
+                "kind": "synthetic_zero_buffer",
+                "rendered": False,
+                "derived": False,
+                "wav": wav_path.name,
+                "wav_sha256": _sha256_of(wav_path),
+                "samples_sha256": samples_sha,
+                "n_samples": n,
+                "duration_s": float(n) / sr,
+                "peak_raw": 0.0,
+                "rms_raw": 0.0,
+                "normalized": False,
+                "override_kind": None,
+                "calibration_only_intervention": False,
+                "note": "bit-exact zeros。事前登録 real_render_set.zero_buffers に基づく",
+            }
+        )
+        out.append(entry)
+        print(f"  {zid}: zero buffer ({n} samples) sha={entry['wav_sha256'][:12]}")
+    return out
 
 
 def render_derived(
@@ -196,6 +279,7 @@ def render_derived(
         y = np.asarray(y, dtype=np.float32) * np.float32(gain)
         wav_path = out_dir / f"{cid}.wav"
         sf.write(str(wav_path), y, int(sr), subtype="FLOAT")
+        samples_sha = _samples_sha256(y)
         entry = {
             k: base[k]
             for k in (
@@ -221,6 +305,7 @@ def render_derived(
                 "n_samples_rendered",
                 "zero_padded_to_s",
                 "rendered_duration_s",
+                "calibration_only_intervention",
             )
         }
         entry.update(
@@ -232,6 +317,7 @@ def render_derived(
                 "gain": gain,
                 "wav": wav_path.name,
                 "wav_sha256": _sha256_of(wav_path),
+                "samples_sha256": samples_sha,
                 "n_samples": int(y.size),
                 "duration_s": float(y.size) / int(sr),
                 "peak_raw": float(np.max(np.abs(y))) if y.size else 0.0,
@@ -279,8 +365,11 @@ def build_manifest(
         }
         | {"python": platform.python_version()},
         "out_dir": str(out_dir.resolve()),
-        "n_rendered": sum(1 for e in entries if not e["derived"]),
+        "n_rendered": sum(
+            1 for e in entries if not e["derived"] and e.get("kind") != "synthetic_zero_buffer"
+        ),
         "n_derived": sum(1 for e in entries if e["derived"]),
+        "n_zero_buffers": sum(1 for e in entries if e.get("kind") == "synthetic_zero_buffer"),
         "conditions": entries,
     }
 
@@ -375,6 +464,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         out_dir,
     )
     entries.extend(render_derived(derived, entries, out_dir))
+    entries.extend(write_zero_buffers(rrs.get("zero_buffers", []), entries, out_dir))
 
     manifest = build_manifest(
         prereg_sha, containers, model_shas, aux_shas, entries, str(args.speaker), out_dir

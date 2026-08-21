@@ -318,6 +318,8 @@ def real_render_source(prereg: Prereg, manifest_path: Path) -> CalibrationSource
         )
     rrs = prereg.calibration_set["real_render_set"]
     expected_ids = [str(c["id"]) for c in rrs["conditions"]]
+    zero_ids = {str(z["id"]) for z in rrs.get("zero_buffers", [])}
+    expected_ids += sorted(zero_ids)
     got_ids = [str(c["condition_id"]) for c in manifest["conditions"]]
     if sorted(expected_ids) != sorted(got_ids):
         raise RealRenderManifestError(
@@ -335,6 +337,21 @@ def real_render_source(prereg: Prereg, manifest_path: Path) -> CalibrationSource
             raise RealRenderManifestError(f"{cid}: {wav_path} sha256 {wav_sha} != manifest 記録")
         y, sr = sf.read(io.BytesIO(raw), dtype="float64", always_2d=False)
         sample_rates.add(int(sr))
+        # 容器 sha（上）に加えて**標本そのもの**の sha を照合する。float WAV の
+        # 容器は libsndfile の PEAK チャンクに書き出し時刻を含むため再現しない。
+        expected_samples = entry.get("samples_sha256")
+        if expected_samples is not None:
+            got = hashlib.sha256(
+                np.ascontiguousarray(y, dtype=np.float32).tobytes()
+            ).hexdigest()
+            if got != str(expected_samples):
+                raise RealRenderManifestError(
+                    f"{cid}: 標本 sha256 {got} != manifest 記録 {expected_samples}"
+                )
+        if cid in zero_ids and np.any(np.asarray(y) != 0.0):
+            # `zero_input_false_positive` の刺激は**厳密ゼロ**でなければならない
+            # （2026-08-21 amendment）。非ゼロなら測らない。
+            raise RealRenderManifestError(f"{cid}: zero buffer に非ゼロ標本がある")
         stimuli[cid] = Stimulus(
             stim_id=cid,
             family=str(entry["maps_to"]),
@@ -656,11 +673,11 @@ def _tolerances(rule: Dict[str, Any], axis: str, cand: Candidate) -> Dict[str, f
     reqs = {r["id"]: r for r in rule["hard_requirements"]}
     if kind == "ms":
         gain_tol = float(cand.hop_ms) if cand.hop_ms is not None else 0.0
-        silence_tol = float(reqs["silence_zero"]["tolerance"]["ms_axes"])
+        silence_tol = float(reqs[sp.ZERO_INPUT_REQUIREMENT]["tolerance"]["ms_axes"])
         min_span = float(reqs["monotone_response"]["tolerance"]["ms_axes_min_span"])
     else:
         gain_tol = float(reqs["gain_invariance"]["tolerance"]["ratio_axes"])
-        silence_tol = float(reqs["silence_zero"]["tolerance"]["ratio_axes"])
+        silence_tol = float(reqs[sp.ZERO_INPUT_REQUIREMENT]["tolerance"]["ratio_axes"])
         min_span = float(reqs["monotone_response"]["tolerance"]["ratio_axes_min_span"])
     return {"gain_tol": gain_tol, "silence_tol": silence_tol, "min_span": min_span}
 
@@ -686,7 +703,7 @@ def evaluate_axis_candidate(
 
     gain_pairs = roles["gain_invariance"]
     gain_err = max(abs(first[a] - first[b]) for a, b in gain_pairs)
-    silence_res = abs(first[str(roles["silence_zero"][0])])
+    silence_res = abs(first[str(roles[sp.ZERO_INPUT_REQUIREMENT][0])])
 
     ladder = list(roles["monotone_ladder"]["order"])
     values = [first[s] for s in ladder]
@@ -697,7 +714,7 @@ def evaluate_axis_candidate(
     checks = {
         "reproducibility": repro_err == 0.0,
         "gain_invariance": gain_err <= tol["gain_tol"],
-        "silence_zero": silence_res <= tol["silence_tol"],
+        sp.ZERO_INPUT_REQUIREMENT: silence_res <= tol["silence_tol"],
         "monotone_response": monotone_ok,
         # 独立プロセス反復を**回していない**場合は「未検証」であって「合格」ではない。
         # `--no-cross-process` で走らせた結果が frozen 扱いになると、要件を

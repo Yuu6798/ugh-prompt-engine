@@ -156,8 +156,9 @@ def _fake_manifest(tmp_path: Path, prereg_sha: str, rrs) -> Path:
     out_dir = tmp_path / "wav"
     out_dir.mkdir()
     conditions = []
-    for cond in rrs["conditions"]:
-        cid = str(cond["id"])
+    ids = [(str(c["id"]), str(c["maps_to"])) for c in rrs["conditions"]]
+    ids += [(str(z["id"]), "synthetic_zero_buffer") for z in rrs.get("zero_buffers", [])]
+    for cid, maps_to in ids:
         y = np.zeros(1024, dtype=np.float32)
         wav = out_dir / f"{cid}.wav"
         sf.write(str(wav), y, cs.SAMPLE_RATE, subtype="FLOAT")
@@ -165,7 +166,7 @@ def _fake_manifest(tmp_path: Path, prereg_sha: str, rrs) -> Path:
         conditions.append(
             {
                 "condition_id": cid,
-                "maps_to": str(cond["maps_to"]),
+                "maps_to": maps_to,
                 "wav": wav.name,
                 "wav_sha256": sha,
                 "note_onset_s": 0.1,
@@ -190,7 +191,9 @@ def test_real_render_source_accepts_a_consistent_manifest(tmp_path, rrs):
     path = _fake_manifest(tmp_path, prereg.pins[CALIBRATION_SET_PATH.name], rrs)
     source = b1.real_render_source(prereg, path)
     assert source.name == "real_render_v1"
-    assert set(source.stimuli) == {str(c["id"]) for c in rrs["conditions"]}
+    expected = {str(c["id"]) for c in rrs["conditions"]}
+    expected |= {str(z["id"]) for z in rrs["zero_buffers"]}
+    assert set(source.stimuli) == expected
     assert source.roles is rrs["roles"] or source.roles == rrs["roles"]
     assert CALIBRATION_SET_PATH.name in source.extra_pins or source.extra_pins
 
@@ -217,6 +220,67 @@ def test_real_render_source_rejects_missing_condition(tmp_path, rrs):
     path = _fake_manifest(tmp_path, prereg.pins[CALIBRATION_SET_PATH.name], rrs)
     doc = json.loads(path.read_text(encoding="utf-8"))
     doc["conditions"] = doc["conditions"][:-1]
+    path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(b1.RealRenderManifestError):
+        b1.real_render_source(prereg, path)
+
+
+# --- 2026-08-21 amendment: zero_input_false_positive -------------------------
+
+
+def test_zero_input_requirement_replaced_silence_zero(rrs):
+    """hard requirement と役割の改称が事前登録側で完了していること。"""
+    rule = json.loads((_FOUNDRY / "results_s7" / "s7_b1_selection_rule.json").read_text("utf-8"))
+    ids = [r["id"] for r in rule["hard_requirements"]]
+    assert sp.ZERO_INPUT_REQUIREMENT in ids
+    assert "silence_zero" not in ids
+    cal = json.loads((_FOUNDRY / "results_s7" / "s7_b1_calibration_set.json").read_text("utf-8"))
+    for roles in (cal["roles"], cal["real_render_set"]["roles"]):
+        assert sp.ZERO_INPUT_REQUIREMENT in roles
+        assert "silence_zero" not in roles
+
+
+def test_ranking_keys_were_not_touched_by_the_amendment():
+    """ranking key は改称に巻き込まない（User 裁定「ranking key も従来どおり」）。"""
+    rule = json.loads((_FOUNDRY / "results_s7" / "s7_b1_selection_rule.json").read_text("utf-8"))
+    keys = [k["key"] for k in rule["ranking_among_survivors"]["keys"]]
+    assert keys == [
+        "gain_invariance_error",
+        "silence_residual",
+        "monotone_min_step",
+        "hop_ms",
+        "window_ms",
+        "candidate_id",
+    ]
+
+
+def test_rr_silence_is_a_diagnostic_not_a_requirement(rrs):
+    """`rr_silence` は削除せず、pass/fail から外れていること。"""
+    ids = {str(c["id"]) for c in rrs["conditions"]}
+    assert "rr_silence" in ids
+    assert rrs["roles"][sp.ZERO_INPUT_REQUIREMENT] == ["rr_zero_buffer"]
+    for role, members in rrs["roles"].items():
+        flat = members if isinstance(members, list) else []
+        flat = [m for grp in flat for m in (grp if isinstance(grp, list) else [grp])]
+        assert "rr_silence" not in flat, role
+    diag = {d["id"]: d for d in rrs["diagnostics"]}
+    assert diag[sp.PIPELINE_SILENCE_DIAGNOSTIC]["stimulus"] == "rr_silence"
+    assert diag[sp.PIPELINE_SILENCE_DIAGNOSTIC]["used_for_pass_fail"] is False
+
+
+def test_zero_buffer_must_be_bit_exact_zero(tmp_path, rrs):
+    """厳密ゼロでない緩衝を掴まされたら測らない（fail-closed）。"""
+    prereg = b1.load_prereg()
+    path = _fake_manifest(tmp_path, prereg.pins[CALIBRATION_SET_PATH.name], rrs)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    victim = Path(doc["out_dir"]) / "rr_zero_buffer.wav"
+    y = np.zeros(1024, dtype=np.float32)
+    y[500] = 1e-9
+    sf.write(str(victim), y, cs.SAMPLE_RATE, subtype="FLOAT")
+    for cond in doc["conditions"]:
+        if cond["condition_id"] == "rr_zero_buffer":
+            _, sha, _ = s7_io.read_bytes_with_pin(victim)
+            cond["wav_sha256"] = sha
     path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     with pytest.raises(b1.RealRenderManifestError):
         b1.real_render_source(prereg, path)

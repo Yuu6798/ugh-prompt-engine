@@ -9,9 +9,11 @@ run 8 の校正レンダのために `run_pipeline` へ足した `final_phone_du
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import inspect
 import sys
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -89,6 +91,91 @@ def test_override_is_the_only_added_parameter(gs):
 
 def test_strict_sum_assert_still_guards_the_production_path(gs):
     """override 無しの経路では総和一致 assert が残っていること（規律の明文化）。"""
-    src = inspect.getsource(gs.run_pipeline)
-    assert "if final_phone_dur_override is None:" in src
+    src = inspect.getsource(gs.resolve_final_phone_dur)
+    assert "if override is None:" in src
     assert "assert sum(final_phone_dur) == sum(note_target_frames)" in src
+
+
+# --- default-off path が介入を受けないことのコードレベル拘束 -----------------
+# User 裁定 2026-08-21 STEP 6:「gate_sakura_n4.wav の単発 SHA 一致だけでなく、
+# default-off path が intervention を受けないことをコードレベルでも assert する」
+
+
+def _fn_ast(fn):
+    return ast.parse(textwrap.dedent(inspect.getsource(fn))).body[0]
+
+
+def _binding_nodes(fn_ast, name):
+    """`name` を束縛する代入（通常 / 拡張 / 注釈 / for / with as / walrus）を集める。"""
+    out = []
+    for node in ast.walk(fn_ast):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        elif isinstance(node, ast.For):
+            targets = [node.target]
+        elif isinstance(node, ast.NamedExpr):
+            targets = [node.target]
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            targets = [node.optional_vars]
+        for t in targets:
+            for sub in ast.walk(t):
+                if isinstance(sub, ast.Name) and sub.id == name:
+                    out.append(node)
+                elif isinstance(sub, ast.Subscript):
+                    base = sub.value
+                    if isinstance(base, ast.Name) and base.id == name:
+                        out.append(node)
+    return out
+
+
+def test_run_pipeline_binds_final_phone_dur_exactly_once(gs):
+    """`run_pipeline` 内で `final_phone_dur` を作るのは 1 箇所だけ。
+
+    ここが 1 箇所である限り、override=None の戻り値（= 予測どおりの配分）が
+    後段で書き換えられる経路は構文上存在しない。
+    """
+    fn = _fn_ast(gs.run_pipeline)
+    bindings = _binding_nodes(fn, "final_phone_dur")
+    assert len(bindings) == 1, [ast.dump(b)[:120] for b in bindings]
+    node = bindings[0]
+    assert isinstance(node, ast.Assign)
+    assert isinstance(node.value, ast.Call)
+    assert isinstance(node.value.func, ast.Name)
+    assert node.value.func.id == "resolve_final_phone_dur"
+
+
+def test_default_off_returns_prediction_untouched_and_writes_no_record(gs):
+    """override=None のとき、戻り値は予測そのもので `record` は空のまま。"""
+    pred = np.asarray([0.5, 3.1, 7.9, 2.0, 6.0], dtype=np.float64)
+    counts, targets, phones = [2, 2], [11, 8], ["r", "i", "s", "a"]
+    record = {}
+    got = gs.resolve_final_phone_dur(pred, counts, targets, phones, 11.6, record, None)
+    assert got == gs.compute_final_phone_dur(pred, counts, targets)
+    assert record == {}
+
+
+def test_override_on_is_recorded_as_calibration_only_intervention(gs):
+    pred = np.asarray([0.5, 3.1, 7.9], dtype=np.float64)
+    counts, targets, phones = [2], [11], ["r", "i"]
+    record = {}
+    got = gs.resolve_final_phone_dur(
+        pred, counts, targets, phones, 11.6, record, lambda d, ctx: [4, 7]
+    )
+    assert got == [4, 7]
+    assert record["stage1_calibration_only_intervention"] is True
+    assert record["stage1_final_phone_dur_predicted"] == gs.compute_final_phone_dur(
+        pred, counts, targets
+    )
+    assert record["stage1_final_phone_dur"] == [4, 7]
+
+
+def test_override_rejects_bad_shapes(gs):
+    pred = np.asarray([0.5, 3.1, 7.9], dtype=np.float64)
+    counts, targets, phones = [2], [11], ["r", "i"]
+    with pytest.raises(ValueError):
+        gs.resolve_final_phone_dur(pred, counts, targets, phones, 11.6, {}, lambda d, c: [11])
+    with pytest.raises(ValueError):
+        gs.resolve_final_phone_dur(pred, counts, targets, phones, 11.6, {}, lambda d, c: [0, 11])

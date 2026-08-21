@@ -351,6 +351,64 @@ def compute_final_phone_dur(
     return final_phone_dur
 
 
+def resolve_final_phone_dur(
+    ph_dur_pred: np.ndarray,
+    note_phone_counts: List[int],
+    note_target_frames: List[int],
+    real_phones: List[str],
+    frame_ms: float,
+    record: dict,
+    override: Optional[Callable[[List[int], dict], List[int]]] = None,
+) -> List[int]:
+    """Stage 1 の命令フレーム配分を確定する唯一の関数。
+
+    `override is None`（**本番の既定**）のときの戻り値は
+    `compute_final_phone_dur()` の出力そのもので、`record` にも 1 キーも
+    書かない。すなわち **既定経路は介入を受けない**（`run_pipeline` 内で
+    `final_phone_dur` を束縛するのは本関数の呼び出し 1 箇所だけであることを
+    `tests/test_s7_gate_synth_dur_hook.py` が AST で拘束する。User 裁定
+    2026-08-21 STEP 6「default-off path が intervention を受けないことを
+    コードレベルでも assert する」）。
+
+    `override` を渡すのは run 8 B-1 の**校正専用**レンダだけで、その場合は
+    介入があった事実（`stage1_calibration_only_intervention`）と、予測値・
+    適用値の双方を `record` へ残す。
+    """
+    final_phone_dur = compute_final_phone_dur(
+        ph_dur_pred, note_phone_counts, note_target_frames
+    )
+    n_real = len(real_phones)
+    assert len(final_phone_dur) == n_real
+    if override is None:
+        # 本番経路（run5/6/7 と同一）。命令フレーム総和はノート命令と一致する。
+        assert sum(final_phone_dur) == sum(note_target_frames)
+        return final_phone_dur
+
+    predicted = list(final_phone_dur)
+    overridden = override(
+        list(final_phone_dur),
+        {
+            "real_phones": list(real_phones),
+            "note_phone_counts": list(note_phone_counts),
+            "note_target_frames": list(note_target_frames),
+            "frame_ms": frame_ms,
+        },
+    )
+    overridden = [int(v) for v in overridden]
+    if len(overridden) != n_real:
+        raise ValueError(
+            f"final_phone_dur_override returned {len(overridden)} frames != {n_real} phones"
+        )
+    if any(v < 1 for v in overridden):
+        raise ValueError(f"final_phone_dur_override returned non-positive frames: {overridden}")
+    record["stage1_calibration_only_intervention"] = True
+    record["stage1_final_phone_dur_override_applied"] = True
+    record["stage1_final_phone_dur_predicted"] = predicted
+    record["stage1_final_phone_dur"] = list(overridden)
+    record["stage1_note_target_frames"] = list(note_target_frames)
+    return overridden
+
+
 def fit_duration_sum(durations: List[int], total: int) -> List[int]:
     result = list(durations)
     delta = total - sum(result)
@@ -1192,36 +1250,15 @@ def run_pipeline(
     dur_names = [o.name for o in sess_dur.get_outputs()]
     ph_dur_pred1 = dur_out[dur_names.index("ph_dur_pred")][0]
 
-    final_phone_dur = compute_final_phone_dur(
-        ph_dur_pred1, note_phone_counts, note_target_frames
+    final_phone_dur = resolve_final_phone_dur(
+        ph_dur_pred1,
+        note_phone_counts,
+        note_target_frames,
+        real_phones,
+        frame_ms,
+        record,
+        final_phone_dur_override,
     )
-    assert len(final_phone_dur) == n_real
-    if final_phone_dur_override is None:
-        # 本番経路（run5/6/7 と同一）。命令フレーム総和はノート命令と一致する。
-        assert sum(final_phone_dur) == sum(note_target_frames)
-    else:
-        # run 8 B-1 の校正レンダ専用経路（既定 None = 本番と完全に同じ）。
-        record["stage1_final_phone_dur_predicted"] = list(final_phone_dur)
-        overridden = final_phone_dur_override(
-            list(final_phone_dur),
-            {
-                "real_phones": list(real_phones),
-                "note_phone_counts": list(note_phone_counts),
-                "note_target_frames": list(note_target_frames),
-                "frame_ms": frame_ms,
-            },
-        )
-        overridden = [int(v) for v in overridden]
-        if len(overridden) != n_real:
-            raise ValueError(
-                f"final_phone_dur_override returned {len(overridden)} frames != {n_real} phones"
-            )
-        if any(v < 1 for v in overridden):
-            raise ValueError(f"final_phone_dur_override returned non-positive frames: {overridden}")
-        final_phone_dur = overridden
-        record["stage1_final_phone_dur_override_applied"] = True
-        record["stage1_final_phone_dur"] = list(final_phone_dur)
-        record["stage1_note_target_frames"] = list(note_target_frames)
     record["stage1_elapsed_sec"] = time.time() - t0
 
     # --- Stage 2: pitch predictor (variance 系、canon 符号化) ---
