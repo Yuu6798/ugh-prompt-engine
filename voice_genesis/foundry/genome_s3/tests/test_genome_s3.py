@@ -52,14 +52,17 @@ class _Run:
                  payload_1d: bool = True,
                  tripwire_status: str = "pass",
                  same_process_mismatch: str = "",
-                 cross_process_mismatch: str = "") -> None:
+                 cross_process_mismatch: str = "",
+                 b0_same_process_mismatch: str = "",
+                 b0_cross_process_mismatch: str = "") -> None:
         self.pair_key = pair_key
         self.context_id = context_id
         self.identity_sha256 = "i" * 64
         self.performance_sha256 = "p" * 64
         self.performance_payload_1d = payload_1d
         self.conditions = {"B0": _Cond("sha-B0", base, tripwire_status)}
-        self.repeat_sample_sha256 = {"B0": "sha-B0"}
+        self.repeat_sample_sha256 = {"B0": b0_same_process_mismatch or "sha-B0"}
+        self._b0_cross_mismatch = b0_cross_process_mismatch
         for gene, cond in sp.GENE_CONDITION.items():
             sha = f"sha-{cond}"
             self.conditions[cond] = _Cond(sha, gene_metrics[gene.value], tripwire_status)
@@ -73,6 +76,8 @@ class _Run:
         out = {c: co.sample_sha256 for c, co in self.conditions.items()}
         if self._cross_mismatch:
             out["F"] = self._cross_mismatch
+        if self._b0_cross_mismatch:
+            out["B0"] = self._b0_cross_mismatch
         return {self.pair_key: out}
 
 
@@ -385,3 +390,110 @@ def test_integration_single_pair_five_conditions(tmp_path: Path) -> None:
     assert set(res["genes"]) == {g.value for g in Gene}
     json.dumps(res, allow_nan=False)
     assert (tmp_path / "sentinel").parent.exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #295 レビュー（Codex）で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def test_baseline_b0_instability_fails_determinism() -> None:
+    """B0 が非決定論なら、gene 条件が再現しても P4 は落ちる。
+
+    P3 は B0 との比較なので、揺れている baseline に対する SUPPORTED は
+    偽の S3 PASS になりうる。
+    """
+    for kw in ({"b0_same_process_mismatch": "sha-B0-DIFFERENT"},
+               {"b0_cross_process_mismatch": "sha-B0-OTHER-PROCESS"}):
+        run = _run("a", "terminal_ri", **kw)
+        res = sg.pair_verdict(Gene.F0, run, run.cross())
+        assert res.p4_determinism is False, kw
+        assert res.detail["P4"]["gene_condition"]["pass"] is True, kw
+        assert res.detail["P4"]["baseline_B0"]["pass"] is False, kw
+        assert res.verdict == PairVerdict.UNSUPPORTED.value, kw
+        assert sg.gene_verdict([res])["verdict"] == GeneVerdict.FAILED.value, kw
+
+
+def _write_manifest(tmp_path: Path, pairs: List[Dict[str, Any]]) -> Path:
+    m = tmp_path / "ladder_manifest.json"
+    m.write_text(json.dumps({"context_phones": 22, "pairs": pairs}), encoding="utf-8")
+    return m
+
+
+def _pair(key: str, kind: str = "terminal_ri") -> Dict[str, Any]:
+    return {"pair_key": key, "probe_kind": kind, "ritsu_file": "/x/a.lab",
+            "pjs_file": "/x/b.lab", "identity_sha256": "i" * 64,
+            "performance_sha256": "p" * 64}
+
+
+def test_malformed_frozen_input_becomes_blocked(tmp_path: Path, monkeypatch) -> None:
+    """probe_kind 欠落・pair_key 重複・必須欠落は BLOCKED（exit 3）であって
+    未処理トレースバックではない。"""
+    import s3_runner as sr
+
+    cases = [
+        ([{**_pair("a"), "probe_kind": ""}], "probe_kind"),
+        ([_pair("a"), _pair("a", "terminal_i")], "重複"),
+        ([{k: v for k, v in _pair("a").items() if k != "identity_sha256"}], "必須"),
+        ([], "pairs"),
+    ]
+    for pairs, needle in cases:
+        monkeypatch.setattr(sr, "FROZEN_MANIFEST", _write_manifest(tmp_path, pairs))
+        with pytest.raises(sr.S3Stop) as exc:
+            sr.load_frozen()
+        assert needle in exc.value.cause, (needle, exc.value.cause)
+        assert exc.value.as_dict()["status"] == "BLOCKED"
+
+
+def test_pin_mismatch_stops_before_composing() -> None:
+    """再構築ハッシュが凍結 pin と違えば、合成へ進まず止まる。"""
+    import s3_runner as sr
+
+    with pytest.raises(sr.S3Stop) as exc:
+        sr._assert_matches_pin("pk", "identity", "a" * 64, "b" * 64)
+    assert "pin" in exc.value.cause
+    assert "provenance" in exc.value.impact
+    sr._assert_matches_pin("pk", "identity", "a" * 64, "a" * 64)   # 一致なら素通り
+
+
+def test_frozen_source_ids_reproduce_the_manifest_pins() -> None:
+    """S3 が使う source_id ラベルは推測ではなく表明。
+
+    実素材が無い環境ではラベル定数そのものだけを固定する（`_rebuild` の
+    "ritsu"/"pjs" では pin を再現できないことが PR #295 で判明した）。
+    """
+    import s3_runner as sr
+
+    assert sr.RITSU_SOURCE_ID == "ritsu_singing_db"
+    assert sr.PJS_SOURCE_ID == "pjs_corpus"
+
+
+def test_bundle_publish_is_all_or_nothing(tmp_path: Path) -> None:
+    """片方の書き込みが落ちたら、既存の束をそのまま残す。"""
+    import s3_report as srep
+
+    a, b = tmp_path / "a.json", tmp_path / "b.md"
+    srep.publish_bundle(((a, "old-json"), (b, "old-md")))
+    assert (a.read_text(), b.read_text()) == ("old-json", "old-md")
+
+    # 2 つ目の temp を書けなくする（ディスクが埋まった / 途中で落ちた相当）
+    blocker = b.with_suffix(b.suffix + ".tmp")
+    blocker.mkdir()
+    with pytest.raises(OSError):
+        srep.publish_bundle(((a, "new-json"), (b, "new-md")))
+    assert (a.read_text(), b.read_text()) == ("old-json", "old-md")
+    assert not list(tmp_path.glob("*.json.tmp"))
+    blocker.rmdir()
+
+    srep.publish_bundle(((a, "new-json"), (b, "new-md")))
+    assert (a.read_text(), b.read_text()) == ("new-json", "new-md")
+
+
+def test_code_state_is_captured_once_and_reports_dirtiness() -> None:
+    import s3_runner as sr
+
+    first = sr.code_state()
+    assert set(first) == {"commit", "dirty", "dirty_digest"}
+    assert first["dirty"] in (True, False, None)
+    assert sr.code_state() == first          # 走行中に揺れない
+    assert sr.source_commit() == first["commit"]
+    if first["dirty"]:
+        assert first["dirty_digest"]

@@ -50,7 +50,10 @@
 | P1 STRUCTURAL_ISOLATION | `p1_structural_isolation()` | 対象トグルのみ ON + `pb_gates.gate_tripwire` の proxy 記録（条件ごとに `s3_runner.run_pair` で採取）+ `pr_performance.assert_no_spectral_payload` |
 | P2 INTERVENTION_NONZERO | `p2_intervention_nonzero()` | `s3_runner.intervention_amounts()` が測る **control 側**の移植量 |
 | P3 REALIZED_IN_OUTPUT | `p3_realized_in_output()` | B0 と gene 条件の **既存 4 metric** の比較のみ |
-| P4 DETERMINISM | `p4_determinism()` | same-process 反復 + 別プロセス（`s3_runner.py --recompute`）の sample sha256 |
+| P4 DETERMINISM | `p4_determinism()` | **gene 条件と B0 の両方**について、same-process 反復 + 別プロセス（`s3_runner.py --recompute`）の sample sha256 |
+
+P4 が B0 も見るのは、P3 が「B0 との比較」だから。B0 が揺れていれば比較自体が
+再現せず、gene 条件だけ安定していても偽の SUPPORTED が立ちうる。
 
 P3 で使う metric は `s3_spec.GENE_METRIC` に凍結。新しい計器は足さない（§8, §19）。
 
@@ -60,6 +63,34 @@ P3 で使う metric は `s3_spec.GENE_METRIC` に凍結。新しい計器は足�
 | duration | `note_split_mae_ms` | lower |
 | energy | `energy_corr` | higher |
 | release | `taper_rmse_db` | lower |
+
+## 4.1 入力の検証（PR #295 レビューで追加）
+
+判定に入る前に、凍結入力そのものを検証する。落ちたものは例外を投げっぱなしに
+せず **BLOCKED（exit 3）** に変換する（§20 の停止は「記録を残して止まる」）。
+
+| 検査 | 落ちたときの意味 |
+|---|---|
+| `pairs` が非空 / 必須フィールドが揃う | 判定対象を確定できない |
+| `probe_kind` が非空文字列 | `context_id` を確定できず distinct context 集計が成立しない |
+| `pair_key` が一意 | 同一観測が `evaluable_pairs` / `support_ratio` を二重計上する |
+| 再構築ハッシュ == manifest の `identity_sha256` / `performance_sha256` | S2 と別素材を評価しながら manifest のハッシュを来歴として提示する（provenance の偽装） |
+
+最後の pin 照合のため、S3 は `pr_attribution._rebuild` を使わず
+**自前で組み立てる**。`_rebuild` は `source_id` に `"ritsu"` / `"pjs"` を使うが、
+凍結走行（`pr_run`）は `"ritsu_singing_db"` / `"pjs_corpus"` を使っており、
+`content_sha256()` が `source_id` を含むため pin を再現できない
+（波形・sp・ap・f0 は同一。ラベルだけの差）。`s3_runner.RITSU_SOURCE_ID` /
+`PJS_SOURCE_ID` はこのラベルの **表明**であって推測ではない — 一致しなければ止まる。
+
+`planb_real` は read-only のまま（`_rebuild` 側は直していない）。
+
+## 4.2 コード状態の pin
+
+`rev-parse HEAD` だけでは、worktree が dirty なとき・実験中に HEAD が動いたときに
+「その commit に無いコード」を来歴として書いてしまう。`s3_runner.code_state()` は
+**実験の前に 1 回だけ**確定し、commit に加えて未コミット差分のダイジェストを持つ。
+記録には clean / dirty が明示される。
 
 ## 5. Verdict（§9–§11）
 
@@ -103,12 +134,17 @@ genome_s3/
 
 ## 7. 再現性記録（§17）
 
-`results/s3_results.json` の `reproducibility[]` に 1 出力 = 1 行で保存する:
+`results/s3_results.json` の `code_state` に実験時のコード状態を、
+`reproducibility[]` に 1 出力 = 1 行で保存する:
 `pair_key` / `context_id` / `gene` / `condition` / `toggle_state` /
 `identity_sha256` / `performance_sha256` / `sample_sha256` / `wav_sha256` / `code_commit`。
 
 WAV 本体は commit しない（`results/.gitignore`）。
 波音リツ 歌声データベース利用規約 第3条1（転載禁止）にも該当するため恒久除外。
+
+`s3_results.json` と `S3_RECORD.md` は同じ結果の 2 つの見え方なので、
+`s3_report.publish_bundle()` が **束ごと**差し替える（全部を temp へ書き切って
+から rename）。途中で落ちても、新旧が混ざった束は露出しない。
 
 ## 8. 実行
 

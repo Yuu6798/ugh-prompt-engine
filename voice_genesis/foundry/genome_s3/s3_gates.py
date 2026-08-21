@@ -118,8 +118,8 @@ def p3_realized_in_output(gene: Gene, run) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # §8 P4 — DETERMINISM
 # ---------------------------------------------------------------------------
-def p4_determinism(gene: Gene, run, cross_process: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
-    cond = sp.GENE_CONDITION[gene]
+def _condition_determinism(run, cond: str,
+                           cross_process: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
     recorded = run.conditions[cond].sample_sha256
     same_proc = run.repeat_sample_sha256.get(cond)
     cross = cross_process.get(run.pair_key, {}).get(cond)
@@ -129,6 +129,23 @@ def p4_determinism(gene: Gene, run, cross_process: Dict[str, Dict[str, str]]) ->
             "same_process": bool(same_ok), "cross_process": bool(cross_ok),
             "recorded": recorded[:16], "same_process_sha": (same_proc or "")[:16],
             "cross_process_sha": (cross or "")[:16]}
+
+
+def p4_determinism(gene: Gene, run, cross_process: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+    """gene 条件 **と B0** の両方が再現すること。
+
+    P3 は「B0 との比較」なので、B0 が非決定論なら比較そのものが再現しない。
+    gene 条件だけを見ていると、揺れている baseline に対して SUPPORTED が立ち、
+    偽の S3 PASS まで通ってしまう。両方を見る。
+    """
+    cond = sp.GENE_CONDITION[gene]
+    d_gene = _condition_determinism(run, cond, cross_process)
+    d_base = _condition_determinism(run, "B0", cross_process)
+    return {"pass": bool(d_gene["pass"] and d_base["pass"]),
+            "gene_condition": d_gene, "baseline_B0": d_base,
+            # 後方互換の要約（記録の読み手が 1 行で見るため）
+            "same_process": bool(d_gene["same_process"] and d_base["same_process"]),
+            "cross_process": bool(d_gene["cross_process"] and d_base["cross_process"])}
 
 
 # ---------------------------------------------------------------------------

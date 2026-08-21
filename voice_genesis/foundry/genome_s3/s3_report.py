@@ -11,9 +11,10 @@ WAV 本体は repository に commit しない（`results/.gitignore` で除外�
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 _HERE = Path(__file__).resolve().parent
 _FOUNDRY = _HERE.parent
@@ -32,6 +33,31 @@ RECORD_PATH = RESULTS / "S3_RECORD.md"
 
 def _dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2, allow_nan=False, sort_keys=False)
+
+
+def publish_bundle(pairs: Tuple[Tuple[Path, str], ...]) -> None:
+    """JSON と Markdown を **1 つの束**として差し替える。
+
+    この 2 つは同じ実験結果の 2 つの見え方なので、片方だけ新しい状態
+    （途中で落ちた・ディスクが埋まった）を露出させると会計が壊れる。
+    全部を temp へ書き切ってから rename する。書き込み中に落ちた場合、
+    既存の束はそのまま残る。
+    """
+    staged: List[Tuple[Path, Path]] = []
+    try:
+        for path, text in pairs:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            staged.append((tmp, path))
+    except BaseException:
+        for tmp, _dest in staged:
+            tmp.unlink(missing_ok=True)
+        raise
+    for tmp, dest in staged:
+        os.replace(tmp, dest)
 
 
 def reproducibility_records(runs: List[sr.PairRun]) -> List[Dict[str, Any]]:
@@ -66,6 +92,7 @@ def build_results(runs: List[sr.PairRun], meta: Dict[str, Any],
         "schema": sp.SCHEMA,
         "source_commit": meta.get("source_commit", "unknown"),
         "input_manifest_sha256": meta.get("input_manifest_sha256", ""),
+        "code_state": meta.get("code_state", sr.code_state()),
         "context_phones": meta.get("context_phones"),
         "identity_ap_scale": meta.get("identity_ap_scale"),
         "pair_count": len(runs),
@@ -88,7 +115,15 @@ def render_record(res: Dict[str, Any]) -> str:
     lines.append("# S3 RECORD — Performance Gene Isolation & Independent Transplant")
     lines.append("")
     lines.append(f"- schema: `{res['schema']}`")
-    lines.append(f"- source_commit: `{res['source_commit']}`")
+    cs = res.get("code_state") or {}
+    dirty = cs.get("dirty")
+    if dirty is True:
+        code_note = f" **(worktree dirty — 差分ダイジェスト `{cs.get('dirty_digest', '')[:16]}`)**"
+    elif dirty is None:
+        code_note = " *(git 状態を確認できず、clean かどうか不明)*"
+    else:
+        code_note = " (clean worktree)"
+    lines.append(f"- source_commit: `{res['source_commit']}`{code_note}")
     lines.append(f"- input_manifest_sha256: `{res['input_manifest_sha256']}`")
     lines.append(f"- pairs: {res['pair_count']} / conditions: {', '.join(res['conditions'])}")
     lines.append(f"- context_phones: {res.get('context_phones')} / "
@@ -166,7 +201,7 @@ def render_only() -> int:
     if res.get("status") == "BLOCKED":
         print("BLOCKED な results からは記録を再描画しない")
         return 3
-    RECORD_PATH.write_text(render_record(res), encoding="utf-8")
+    publish_bundle(((RECORD_PATH, render_record(res)),))
     print(f"re-rendered {RECORD_PATH}")
     return 0 if res["overall"]["verdict"] == "PASS" else 1
 
@@ -177,16 +212,18 @@ def main(*, write_wav: bool = True) -> int:
         runs, meta = sr.run_all(write_wav=write_wav)
         cross = sr.cross_process_shas()
     except sr.S3Stop as stop:
-        JSON_PATH.write_text(_dumps({"schema": sp.SCHEMA, **stop.as_dict()}), encoding="utf-8")
-        RECORD_PATH.write_text(
-            "# S3 RECORD — BLOCKED\n\n"
-            f"- 原因: {stop.cause}\n- 影響: {stop.impact}\n- 最小修正案: {stop.minimal_fix}\n\n"
-            "修正実装は行わない（設計書 §20）。\n", encoding="utf-8")
+        publish_bundle((
+            (JSON_PATH, _dumps({"schema": sp.SCHEMA, **stop.as_dict()})),
+            (RECORD_PATH,
+             "# S3 RECORD — BLOCKED\n\n"
+             f"- 原因: {stop.cause}\n- 影響: {stop.impact}\n"
+             f"- 最小修正案: {stop.minimal_fix}\n\n"
+             "修正実装は行わない（設計書 §20）。\n"),
+        ))
         print("BLOCKED:", stop.cause)
         return 3
     res = build_results(runs, meta, cross)
-    JSON_PATH.write_text(_dumps(res), encoding="utf-8")
-    RECORD_PATH.write_text(render_record(res), encoding="utf-8")
+    publish_bundle(((JSON_PATH, _dumps(res)), (RECORD_PATH, render_record(res))))
     ov = res["overall"]
     print(f"S3 {ov['verdict']}: supported_gene_count={ov['supported_gene_count']} "
           f"({', '.join(ov['supported_genes']) or 'なし'})")

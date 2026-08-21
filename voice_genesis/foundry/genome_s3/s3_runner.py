@@ -32,7 +32,6 @@ for _p in (_HERE, _FOUNDRY / "planb", _FOUNDRY / "planb_real"):
 import pb_compose as pc  # noqa: E402
 import pb_gates as pbg  # noqa: E402
 
-import pr_attribution as pa  # noqa: E402  (planb_real、read-only)
 import pr_census  # noqa: E402
 import pr_identity  # noqa: E402
 import pr_ladder  # noqa: E402
@@ -42,6 +41,18 @@ import pr_performance as prp  # noqa: E402
 import s3_spec as sp  # noqa: E402
 
 FROZEN_MANIFEST = _FOUNDRY / "planb_real" / "results" / "ladder_manifest.json"
+
+#: 凍結走行（S2 の `pr_run`）が使った source_id ラベル。
+#: **推測ではなく表明** — これで組み直したハッシュを manifest の pin と
+#: 突き合わせ、一致しなければ S3Stop で止める（§20-2）。
+#: `pr_attribution._rebuild` は別ラベル（"ritsu"/"pjs"）を使うため pin を
+#: 再現できない。`planb_real` は read-only なので S3 側で組み立てる（§14）。
+RITSU_SOURCE_ID = "ritsu_singing_db"
+PJS_SOURCE_ID = "pjs_corpus"
+
+#: manifest の各 pair に必須のフィールド。
+REQUIRED_PAIR_FIELDS = ("pair_key", "probe_kind", "ritsu_file", "pjs_file",
+                        "identity_sha256", "performance_sha256")
 RESULTS = _HERE / "results"
 WAV_DIR = RESULTS / "wav"
 
@@ -107,14 +118,56 @@ def _sha_file(path: Path) -> str:
 
 
 def load_frozen() -> Dict[str, Any]:
+    """S2 の凍結 manifest を読み、**使う前に**構造を検証する。
+
+    検証に落ちた入力は例外を投げっぱなしにせず S3Stop（= BLOCKED、exit 3）へ
+    変換する。設計書 §20 の停止は「記録を残して止まる」ことなので、
+    未処理トレースバックで落ちてはならない。
+    """
     if not FROZEN_MANIFEST.exists():
         raise S3Stop(
             cause=f"S2 frozen manifest が無い（{FROZEN_MANIFEST}）",
             impact="S3 は S2 の凍結 pair set を正本とするため、入力が確定できず開始できない",
             minimal_fix="planb_real の ladder を実行して results/ladder_manifest.json を用意する")
-    data = json.loads(FROZEN_MANIFEST.read_text(encoding="utf-8"))
-    for pair in data.get("pairs", []):
-        sp.context_id(pair)   # probe_kind 欠落は即 BLOCKED（§5）
+    try:
+        data = json.loads(FROZEN_MANIFEST.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise S3Stop(
+            cause=f"frozen manifest が JSON として読めない: {exc}",
+            impact="凍結 pair set を確定できず S3 を開始できない",
+            minimal_fix="ladder_manifest.json の破損を確認する") from exc
+    pairs = data.get("pairs")
+    if not isinstance(pairs, list) or not pairs:
+        raise S3Stop(
+            cause="frozen manifest に pairs が無い（または空）",
+            impact="判定対象が 0 件になり、gene verdict を出せない",
+            minimal_fix="planb_real の ladder を再実行して pair を生成する")
+    seen: set = set()
+    for i, pair in enumerate(pairs):
+        missing = [f for f in REQUIRED_PAIR_FIELDS if not pair.get(f)]
+        if missing:
+            raise S3Stop(
+                cause=f"pairs[{i}] に必須フィールドが無い/空: {missing}",
+                impact="context 集計または pin 照合ができず、判定の前提が崩れる",
+                minimal_fix="ladder_manifest.json の当該 pair を確認する")
+        try:
+            sp.context_id(pair)   # probe_kind の exact string を要求（§5）
+        except KeyError as exc:
+            raise S3Stop(
+                cause=f"pairs[{i}] の probe_kind が使えない: {exc}",
+                impact="context_id を確定できず、distinct context の集計が成立しない",
+                minimal_fix="ladder_manifest.json の probe_kind を確認する") from exc
+        key = pair["pair_key"]
+        if key in seen:
+            # 重複 pair は evaluable_pairs と support_ratio を二重計上する一方、
+            # 記録側の pairs dict は 1 行に潰れる。表示される証拠より多い母数で
+            # gene verdict が出てしまうので、集計前に止める。
+            raise S3Stop(
+                cause=f"frozen manifest に pair_key の重複がある: {key}",
+                impact="同一観測が evaluable_pairs / support_ratio を二重計上し、"
+                       "記録に表示される distinct な証拠より緩い判定になる",
+                minimal_fix="ladder_manifest.json の重複 pair を取り除く")
+        seen.add(key)
     return data
 
 
@@ -122,32 +175,101 @@ def manifest_sha256() -> str:
     return _sha_file(FROZEN_MANIFEST)
 
 
+_CODE_STATE: Optional[Dict[str, Any]] = None
+
+
+def code_state() -> Dict[str, Any]:
+    """実際に走ったコードの状態を **1 回だけ**確定して使い回す。
+
+    `rev-parse HEAD` だけでは、worktree が dirty なとき / 実験中に HEAD が
+    動いたときに「その commit には無いコード」を来歴として書いてしまう。
+    そこで commit に加えて **未コミット差分のダイジェスト**も採る。
+    測定の前後で別々に呼んで別の値を得ることが無いよう、初回の値を凍結する。
+    """
+    global _CODE_STATE
+    if _CODE_STATE is not None:
+        return dict(_CODE_STATE)
+
+    def _git(*args: str) -> Optional[str]:
+        try:
+            proc = subprocess.run(["git", *args], cwd=str(_HERE),
+                                  capture_output=True, text=True, check=True)
+            return proc.stdout
+        except Exception:  # noqa: BLE001
+            return None
+
+    commit = (_git("rev-parse", "HEAD") or "").strip() or "unknown"
+    porcelain = _git("status", "--porcelain", "--untracked-files=all")
+    diff = _git("diff", "HEAD")
+    state: Dict[str, Any] = {"commit": commit, "dirty": False, "dirty_digest": None}
+    if porcelain is None or diff is None:
+        state["dirty"] = None          # git が使えない = 判定不能を偽らない
+    elif porcelain.strip():
+        h = hashlib.sha256()
+        h.update(porcelain.encode("utf-8"))
+        h.update(diff.encode("utf-8"))
+        state["dirty"] = True
+        state["dirty_digest"] = h.hexdigest()
+    _CODE_STATE = state
+    return dict(state)
+
+
 def source_commit() -> str:
-    try:
-        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(_HERE),
-                              capture_output=True, text=True, check=True).stdout.strip()
-    except Exception:  # noqa: BLE001
-        return "unknown"
+    return str(code_state()["commit"])
 
 
 def build_inputs(pair: Dict[str, Any], ctx: int):
     """frozen pair から bank / probe 位置 / compose track / performance / donor 参照を作る。
 
-    すべて `planb_real` の既存関数を read-only に呼ぶだけ（新しい前処理を足さない）。
+    `planb_real` の既存関数を read-only に呼ぶだけで、新しい前処理は足さない。
+    組み上げたあと **manifest の pin と突き合わせ**、一致しなければ止める（§20-2）。
+    pin を照合しないと、参照先の lab/wav が差し替わっていても黙って別素材を
+    評価し、manifest のハッシュを来歴として提示したまま PASS を出せてしまう。
     """
-    bank, pos, track, perf = pa._rebuild(pair, ctx, want_performance=True)
+    pk = pair["pair_key"]
+    r_lab_path = Path(pair["ritsu_file"])
+    r_lab = pr_lab.read_lab(r_lab_path)
+    r_idx = int(pk.split("|")[1].split("#")[1])
+    r_wav = pr_census.wav_for_lab(r_lab_path)
     p_lab_path = Path(pair["pjs_file"])
     p_lab = pr_lab.read_lab(p_lab_path)
-    p_idx = int(pair["pair_key"].split("|")[2].split("#")[1])
+    p_idx = int(pk.split("|")[2].split("#")[1])
     p_wav = pr_census.wav_for_lab(p_lab_path)
+    if r_wav is None or p_wav is None:
+        raise S3Stop(
+            cause=f"{pk}: lab に対応する wav が見つからない",
+            impact="凍結 pair の素材を読めず、その pair を評価できない",
+            minimal_fix="corpus の配置（wav と lab の stem 一致）を確認する")
+
+    bank, pos = pr_identity.build_identity_for_probe(
+        r_wav, r_lab, r_idx, source_id=RITSU_SOURCE_ID, context=ctx)
     lo = p_lab.phones[max(0, p_idx - 2)].start_s
     hi = p_lab.phones[min(len(p_lab.phones) - 1, p_idx + 1)].end_s
-    an, _pw, off = pr_identity.analyze_for_performance(
+    an, pw, off = pr_identity.analyze_for_performance(
         p_wav, start_s=lo - pr_identity.SLICE_PAD_S, end_s=hi + pr_identity.SLICE_PAD_S)
+    p_phones = pr_identity.shift_phones(p_lab.phones, off)
+    perf = prp.extract_performance(
+        f0=an.f0, power_db=pw, frame_period_ms=an.frame_period_ms, phones=p_phones,
+        vowel_index=p_idx, source_id=PJS_SOURCE_ID, source_file=str(p_lab_path),
+        probe_kind=pair["probe_kind"])
+    _assert_matches_pin(pk, "identity", bank.content_sha256(), pair["identity_sha256"])
+    _assert_matches_pin(pk, "performance", perf.content_sha256(), pair["performance_sha256"])
+
+    track = pr_match.build_compose_track(bank, pos, perf)
     donor_core = pr_ladder.donor_core_envelope(
-        an, pr_identity.shift_phones(p_lab.phones, off), p_idx,
-        target_sr=bank.sr, target_bins=bank.sp[pos].shape[1])
+        an, p_phones, p_idx, target_sr=bank.sr, target_bins=bank.sp[pos].shape[1])
     return bank, pos, track, perf, donor_core
+
+
+def _assert_matches_pin(pair_key: str, what: str, got: str, want: str) -> None:
+    if got == want:
+        return
+    raise S3Stop(
+        cause=f"{pair_key}: {what} の再構築ハッシュが凍結 pin と一致しない "
+              f"(got {got[:16]}… / pin {want[:16]}…)",
+        impact="S2 と別の素材を評価しながら manifest のハッシュを来歴として"
+               "提示することになり、PASS の provenance が偽になる",
+        minimal_fix="参照先の lab/wav が S2 走行時から変わっていないかを確認する")
 
 
 def _clean(v: float) -> Optional[float]:
@@ -266,13 +388,16 @@ def cross_process_shas() -> Dict[str, Dict[str, str]]:
 
 
 def run_all(*, write_wav: bool = True) -> Tuple[List[PairRun], Dict[str, Any]]:
+    code_state()          # 実験の**前**に確定させる（走行中に HEAD が動いても揺れない）
     data = load_frozen()
     ctx = int(data.get("context_phones", pr_identity.DEFAULT_CONTEXT_PHONES))
     runs = [run_pair(p, ctx, write_wav=write_wav) for p in data["pairs"]]
+    cs = code_state()
     meta = {"context_phones": ctx,
             "identity_ap_scale": data.get("identity_ap_scale"),
             "input_manifest_sha256": manifest_sha256(),
-            "source_commit": source_commit()}
+            "source_commit": cs["commit"],
+            "code_state": cs}
     return runs, meta
 
 
