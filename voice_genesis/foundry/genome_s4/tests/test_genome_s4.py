@@ -1041,6 +1041,45 @@ def test_51_canonical_change_during_run_is_blocked(tmp_path):
         sr.assert_canonical_unchanged()
 
 
+def test_51b_canonical_label_shim_substitutes_and_restores():
+    """凍結 pin は source_file（絶対パス）を含む。bytes は新 root、ラベルは正本。"""
+    import pr_performance as prp
+    mapping = {"sources": [{"source": "pjs_corpus", "old_root": "/old/pjs",
+                            "new_root": "/new/pjs"}]}
+    assert sr.to_canonical_path("/new/pjs/a/b.lab", mapping) == "/old/pjs/a/b.lab"
+    assert sr.to_canonical_path("/elsewhere/x.lab", mapping) == "/elsewhere/x.lab"
+    # prefix の部分一致で誤爆しない
+    assert sr.to_canonical_path("/new/pjs2/x.lab", mapping) == "/new/pjs2/x.lab"
+
+    original = prp.extract_performance
+    seen = {}
+
+    def _fake(*a, **kw):
+        seen.update(kw)
+        return "perf"
+
+    prp.extract_performance = _fake
+    try:
+        with sr.canonical_source_labels(mapping) as applied:
+            assert prp.extract_performance is not _fake      # shim が被さっている
+            prp.extract_performance(source_file="/new/pjs/a/b.lab", source_id="pjs")
+            assert seen["source_file"] == "/old/pjs/a/b.lab"  # ラベルは正本
+            assert seen["source_id"] == "pjs"                # 他の引数は素通し
+            assert applied == [{"read_from": "/new/pjs/a/b.lab",
+                                "labelled_as": "/old/pjs/a/b.lab"}]
+        assert prp.extract_performance is _fake              # 必ず元へ戻す
+        # 例外が出ても戻す
+        with pytest.raises(RuntimeError):
+            with sr.canonical_source_labels(mapping):
+                raise RuntimeError("boom")
+        assert prp.extract_performance is _fake
+        # 再配置していないときは何もしない
+        with sr.canonical_source_labels(None) as noop:
+            assert prp.extract_performance is _fake and noop == []
+    finally:
+        prp.extract_performance = original
+
+
 def test_52_material_provenance_is_recorded():
     """裁定 6: archive SHA / 新 root / 写像 / machine 情報を正本へ残す。"""
     none = sr.material_provenance(None)
@@ -1050,6 +1089,7 @@ def test_52_material_provenance_is_recorded():
          "archive_sha256": "a" * 64, "archive_verified": True,
          "extracted_sha256": "b" * 64, "extracted_file_count": 220}]})
     assert mapped["relocated"] is True
+    assert mapped["performance_labels_canonicalized"] == []
     row = mapped["sources"][0]
     assert row["old_root"] == "/old" and row["new_root"] == "/new"
     assert mapped["machine"]["numpy"]

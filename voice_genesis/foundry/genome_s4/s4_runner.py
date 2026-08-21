@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -327,6 +328,58 @@ def remap_pair(pair: Dict[str, Any], mapping: Dict[str, Any]) -> Dict[str, Any]:
                 impact="素材の写像先を決められず、推測で別ファイルを読む危険がある",
                 minimal_fix="material roots 定義の source を増やす（推測で補完しない）")
     return out
+
+
+def to_canonical_path(path: str, mapping: Dict[str, Any]) -> str:
+    """新 root のパスを **正本（S2）の絶対パス**へ戻す（`remap_pair` の逆写像）。"""
+    for row in mapping.get("sources") or []:
+        new_root = row["new_root"].rstrip("/")
+        if path == new_root or path.startswith(new_root + "/"):
+            return row["old_root"].rstrip("/") + path[len(new_root):]
+    return path
+
+
+@contextlib.contextmanager
+def canonical_source_labels(mapping: Optional[Dict[str, Any]]):
+    """再配置時、Performance digest に入る `source_file` を正本のパスへ戻す shim。
+
+    `RealPerformanceTrack.content_sha256()` は
+    `source_id|source_file|probe_kind` をハッシュに含む
+    （`planb_real/pr_performance.py`）。つまり **凍結 pin は絶対パスを
+    埋め込んでいる**。素材を別 root へ再配置すると、中身が 1 bit も違わなくても
+    `performance_sha256` は必ず外れる。
+
+    User 裁定 7「『同じ絶対パス』は再現条件ではない。『同じ archive と同じ
+    再構築 pair』が再現条件である」に従い、**bytes は新 root から読み、
+    ラベルだけを正本のパスへ戻す**。
+
+    ラベル以外（f0 逸脱・尺・energy・release の全配列とスカラ、音素ラベル列）は
+    一切触らないので、pin 照合の強度は落ちない。むしろ pin が一致することが
+    「path 以外は完全に同一」の証明になる。
+
+    `planb_real` のファイルは変更しない（read-only）。この shim は再配置が
+    有効なときだけ、この with ブロックの中でだけ効き、必ず元へ戻す。
+    """
+    if mapping is None:
+        yield []
+        return
+    original = prp.extract_performance
+    applied: List[Dict[str, str]] = []
+
+    def _shim(*args: Any, **kwargs: Any):
+        src = kwargs.get("source_file")
+        if isinstance(src, str):
+            canonical = to_canonical_path(src, mapping)
+            if canonical != src:
+                applied.append({"read_from": src, "labelled_as": canonical})
+                kwargs["source_file"] = canonical
+        return original(*args, **kwargs)
+
+    prp.extract_performance = _shim
+    try:
+        yield applied
+    finally:
+        prp.extract_performance = original
 
 
 def assert_pair_materials(pair: Dict[str, Any]) -> None:
@@ -659,6 +712,10 @@ def material_provenance(material: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """裁定 6 の記録: archive SHA / 新 root / 写像 / machine 情報。"""
     return {"relocated": material is not None,
             "sources": (material or {}).get("sources", []),
+            # Performance digest は source_file（絶対パス）を含むため、
+            # 再配置時はラベルだけ正本へ戻している。何を戻したかを記録に残す。
+            "performance_labels_canonicalized":
+                (material or {}).get("performance_labels_canonicalized", []),
             "machine": machine_info()}
 
 
@@ -938,15 +995,16 @@ def recompute_sample_shas() -> Dict[str, Dict[str, str]]:
         source_manifest, _sm = load_source_manifest()
         material = resolve_material_roots(roots_cfg, source_manifest)
     out: Dict[str, Dict[str, str]] = {}
-    for pk in sorted(wanted):
-        pair = by_key.get(pk)
-        if pair is None:
-            continue
-        if material is not None:
-            pair = remap_pair(pair, material)
-        bank, _pos, track, _perf, _dc = s3r.build_inputs(pair, ctx)
-        out[pk] = {c: pc.compose(bank, track, tg).sha256()
-                   for c, tg in sp.CONDITIONS.items()}
+    with canonical_source_labels(material):
+        for pk in sorted(wanted):
+            pair = by_key.get(pk)
+            if pair is None:
+                continue
+            if material is not None:
+                pair = remap_pair(pair, material)
+            bank, _pos, track, _perf, _dc = s3r.build_inputs(pair, ctx)
+            out[pk] = {c: pc.compose(bank, track, tg).sha256()
+                       for c, tg in sp.CONDITIONS.items()}
     return out
 
 
@@ -1031,12 +1089,15 @@ def run_all(*, write_wav: bool = True, require_clean: bool = True,
     if write_wav and WAV_STAGING.exists():
         shutil.rmtree(WAV_STAGING)
     runs: List[PairRun] = []
-    for pk, _ctx_id in cands:
-        pair = by_key[pk] if material is None else remap_pair(by_key[pk], material)
-        assert_pair_materials(pair)
-        runs.append(run_pair(pair, ctx, canonical.get(pk, {}), pins.get(pk, {}),
-                             write_wav=write_wav,
-                             wav_root=WAV_STAGING if write_wav else None))
+    with canonical_source_labels(material) as relabelled:
+        for pk, _ctx_id in cands:
+            pair = by_key[pk] if material is None else remap_pair(by_key[pk], material)
+            assert_pair_materials(pair)
+            runs.append(run_pair(pair, ctx, canonical.get(pk, {}), pins.get(pk, {}),
+                                 write_wav=write_wav,
+                                 wav_root=WAV_STAGING if write_wav else None))
+    if material is not None:
+        material["performance_labels_canonicalized"] = relabelled
     # §6: S3 replay が 1 件でも不一致なら **S4 の結果を出さない**。
     mismatched = [(r.pair_key, c) for r in runs for c in sp.REPLAY_CONDITIONS
                   if not (r.s3_replay.get(c) or {}).get("match", False)]
