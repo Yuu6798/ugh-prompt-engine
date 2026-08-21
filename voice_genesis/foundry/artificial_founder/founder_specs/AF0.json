@@ -1,0 +1,110 @@
+{
+  "schema": "voicegenesis-artificial-founder/0.2",
+  "founder_id": "AF0",
+  "phenotype_codename": "Dual Resonance / Afterglow",
+
+  "origin": {
+    "kind": "procedural_source_filter",
+    "human_audio_used": false,
+    "speaker_specific_parameters_used": false,
+    "pretrained_voice_model_used": false,
+    "external_voicebank_used": false,
+    "generic_phonetic_topology_used": true
+  },
+
+  "generator": {
+    "sample_rate_hz": 44100,
+    "channels": 1,
+    "pcm_format": "s16le",
+    "canonical_pitch_name": "C4",
+    "canonical_pitch_hz": 261.625565,
+    "harmonic_count": 40,
+    "harmonic_rolloff_power": 1.15,
+    "global_seed": 0,
+    "harmonic_phase_scheme": "schroeder",
+    "breath_noise_db_rel_sustain": -42.0
+  },
+
+  "founder_source_traits": {
+    "HL-alpha": {
+      "kind": "odd_even_harmonic_lattice",
+      "odd_multiplier": 1.0,
+      "even_multiplier": 0.72,
+      "scope": "all_voiced_source"
+    }
+  },
+
+  "identity_signature": {
+    "vowels": {
+      "a": [720.0, 1350.0, 2600.0],
+      "i": [280.0, 2450.0, 3300.0],
+      "u": [340.0, 950.0, 2500.0],
+      "e": [500.0, 2050.0, 2850.0],
+      "o": [500.0, 820.0, 2500.0]
+    },
+    "vowel_formant_bandwidths_hz": [70.0, 95.0, 140.0],
+
+    "founder_resonances": {
+      "AR-alpha": {
+        "center_hz": 3400.0,
+        "bandwidth_hz": 220.0,
+        "gain_db": 6.0
+      },
+      "AR-beta": {
+        "center_hz": 5100.0,
+        "bandwidth_hz": 300.0,
+        "beta_alpha_energy_ratio": 0.35
+      }
+    }
+  },
+
+  "performance_genes": {
+    "f0": {
+      "core_f0_hz": 261.625565,
+      "vibrato_depth_cents": 0.0,
+      "jitter_cents": 0.0
+    },
+    "duration": {
+      "target_sequence": ["r", "i"],
+      "articulation_ms": 200.0,
+      "r_onset_ms": 40.0,
+      "i_vowel_ms": 160.0,
+      "r_onset_share": 0.20
+    },
+    "energy": {
+      "attack_ms": 30.0,
+      "sustain_dbfs": -12.0,
+      "sustain_ripple_db": 0.0
+    },
+    "release": {
+      "main_taper_ms": 120.0,
+      "curve": "half_cosine"
+    }
+  },
+
+  "founder_expression_traits": {
+    "AG-alpha": {
+      "terminal_window_ms": 80.0,
+      "terminal_f0_delta_cents": -100.0,
+      "ar_alpha_afterglow_extra_ms": 35.0,
+      "terminal_zero_hold_ms": 80.0
+    }
+  },
+
+  "body": {
+    "format": "utau-classic-cv",
+    "pitch_dirs": ["C4"],
+    "lead_zero_ms": 20.0,
+    "tail_zero_ms": 80.0
+  },
+
+  "inventory": {
+    "aliases": [
+      "あ", "い", "う", "え", "お",
+      "か", "き", "く", "け", "こ",
+      "さ", "し", "す", "せ", "そ",
+      "な", "に", "ぬ", "ね", "の",
+      "ら", "り", "る", "れ", "ろ"
+    ]
+  }
+}

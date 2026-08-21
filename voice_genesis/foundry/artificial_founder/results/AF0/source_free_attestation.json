@@ -1,0 +1,1 @@
+{"audit":{"n_reads":120,"n_unique_reads":60,"network_attempts":[],"violations":[]},"declared":{"external_voicebank_used":false,"generic_phonetic_topology_used":true,"human_audio_used":false,"kind":"procedural_source_filter","pretrained_voice_model_used":false,"speaker_specific_parameters_used":false},"verdict":"PASS"}

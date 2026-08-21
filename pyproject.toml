@@ -126,6 +126,11 @@ testpaths = [
     # テストだけが skip される）。収集しないと「緑なのに何も検査していない」
     # 状態になる (PR #299 Codex レビュー P2)
     "voice_genesis/foundry/genome_s4/tests/test_genome_s4.py",
+    # Artificial Founder AF-P0 の最低テスト要件（DESIGN_AF_P0.md §29 の 1-61）。
+    # schema / source / filter / expression / UTAU / verdict は依存フリーで走る。
+    # WORLD（pyworld）を要する ingestion テストだけが skip され、判定ロジックと
+    # 決定論・計器分離の不変条件は pyworld 無しの CI でも実際に実行される。
+    "voice_genesis/foundry/artificial_founder/tests/test_artificial_founder_p0.py",
 ]
 pythonpath = ["src", "."]
 markers = [

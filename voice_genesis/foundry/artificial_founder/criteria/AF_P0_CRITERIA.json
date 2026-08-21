@@ -1,0 +1,253 @@
+{
+  "schema": "voicegenesis-artificial-founder-criteria/1.1",
+  "experiment_id": "AF-P0",
+  "founder_id": "AF0",
+  "metric_definitions": {
+    "_note": "af_measure が読んでよいのはこの部分木だけ。AF0 の設計値（答え）は一切含めない。ここにあるのは『どう測るか』のみ。",
+    "analysis": {
+      "_note": "spectral probe は plateau 開始から articulation 終端までの前半 (core_region_fraction) だけを使う（後半は terminal F0 fall が入りスペクトルが滲む）。plateau は『95 パーセンタイル包絡の plateau_threshold 倍以上が続く最長区間』。閾値を 0.9 まで上げると、WORLD 再表現のように sustain が僅かに右上がりになる信号で plateau が後半へ張り付き、core 区間が terminal 窓へ 食い込む。閾値を下げたぶん sustain_probe_fraction を内側へ寄せて taper を巻き込まない。",
+      "core_region_fraction": [
+        0.0,
+        0.5
+      ],
+      "sustain_probe_fraction": [
+        0.2,
+        0.6
+      ],
+      "plateau_threshold": 0.75,
+      "plateau_peak_percentile": 95.0,
+      "fft_window": "blackmanharris",
+      "spectrum_nfft": 8192
+    },
+    "f0": {
+      "search_hz": [
+        80.0,
+        600.0
+      ],
+      "frame_ms": 40.0,
+      "hop_ms": 5.0,
+      "voiced_autocorr_min": 0.3,
+      "core_region": "pre_terminal",
+      "harmonic_refine_index_range": [
+        2,
+        20
+      ],
+      "terminal_probe_after_articulation_ms": [
+        2.0,
+        42.0
+      ]
+    },
+    "harmonic_lattice": {
+      "_note": "HL-alpha は envelope_model の parity 係数 D から回収する: even/odd = 10^(-2D/20)。局所近傍法 (neighbour_offsets) は診断用の交差確認として併記する。",
+      "harmonic_index_range": [
+        3,
+        24
+      ],
+      "neighbour_offsets": [
+        -2,
+        -1,
+        1,
+        2
+      ],
+      "measured_on_aliases": [
+        "a",
+        "i",
+        "u",
+        "e",
+        "o"
+      ]
+    },
+    "founder_resonance": {
+      "alpha_search_hz": [
+        2850.0,
+        3950.0
+      ],
+      "beta_search_hz": [
+        4600.0,
+        5600.0
+      ],
+      "afterglow_probe_ms": 20.0,
+      "afterglow_probe_min_prominence_db": 12.0,
+      "afterglow_probe_reference_band_hz": [
+        1000.0,
+        8000.0
+      ],
+      "ratio_aggregate": "median_over_vowels"
+    },
+    "formants": {
+      "search_hz": [
+        [
+          180.0,
+          1100.0
+        ],
+        [
+          700.0,
+          2700.0
+        ],
+        [
+          2200.0,
+          3700.0
+        ]
+      ],
+      "min_separation_hz": 200.0,
+      "n_formants": 3
+    },
+    "duration": {
+      "silence_threshold_dbfs": -80.0,
+      "onset_boundary_fraction": 0.5,
+      "envelope_hop_ms": 0.25,
+      "envelope_window_ms": 2.0,
+      "measured_on_aliases": [
+        "ra",
+        "ri",
+        "ru",
+        "re",
+        "ro"
+      ]
+    },
+    "energy": {
+      "envelope_hop_ms": 0.5,
+      "envelope_window_ms": 4.0,
+      "attack_low_high": [
+        0.1,
+        0.9
+      ],
+      "measured_on_aliases": [
+        "a",
+        "i",
+        "u",
+        "e",
+        "o"
+      ]
+    },
+    "release": {
+      "_note": "半コサインを u = acos(2*env/level - 1)/pi で線形化し、u 対 t の最小二乗直線から (taper_start, T) を閉形式で解く。2 点交差法は包絡リップルに対して t90/t10 が浅い勾配で滑るため使わない。",
+      "curve_family": "half_cosine",
+      "fit_range_fraction": [
+        0.3,
+        0.95
+      ],
+      "envelope_hop_ms": 0.5,
+      "envelope_window_ms": 3.0
+    },
+    "afterglow": {
+      "main_band_hz": [
+        150.0,
+        2000.0
+      ],
+      "alpha_band_half_width_hz": 200.0,
+      "disappearance_threshold_db": -60.0,
+      "envelope_hop_ms": 0.25,
+      "envelope_window_ms": 2.0
+    },
+    "spectral_identity": {
+      "compare_band_hz": [
+        200.0,
+        7000.0
+      ],
+      "n_log_bands": 48,
+      "mean_removed_cosine": true
+    },
+    "envelope_model": {
+      "_note": "設計書 §15.2/§15.3 の『複数倍音の band-normalized aggregation』『既知の局所 band model』をひとつの事前登録モデルで実装する。倍音振幅(dB)を『源ロールオフ + parity 段差 + 並列 formant バンク(generic phonetic topology) + AR-alpha/AR-beta の peaking 山』へ当てる。線形係数(C/D/p/A_alpha/A_beta)は最小二乗で厳密解、非線形(中心/帯域)は決定論的な座標降下グリッドで解く。AF0 の設計値は一切入っていない（模型族と探索範囲のみ）。",
+      "kind": "parallel_formant_bank_plus_ar_peaks",
+      "harmonic_index_range": [
+        1,
+        38
+      ],
+      "formant_bandwidth_bounds_hz": [
+        40.0,
+        400.0
+      ],
+      "ar_alpha_bandwidth_bounds_hz": [
+        80.0,
+        600.0
+      ],
+      "ar_beta_bandwidth_bounds_hz": [
+        100.0,
+        800.0
+      ],
+      "sweeps": 7,
+      "grid_points": 25,
+      "parallel_polarity": [
+        1.0,
+        -1.0,
+        1.0
+      ],
+      "init_candidates_per_band": [
+        4,
+        4,
+        3
+      ],
+      "refine_top_k": 4,
+      "screen_shrink": 0.25,
+      "refine_shrink": 0.35,
+      "init_candidate_min_gap_hz": 250.0,
+      "measured_on_aliases": [
+        "a",
+        "i",
+        "u",
+        "e",
+        "o"
+      ]
+    }
+  },
+  "body_gates": {
+    "vowel_formant_tolerance_hz": 40.0,
+    "vowel_formant_tolerance_rel": 0.03,
+    "vowel_formant_min_pass_peaks": 13,
+    "vowel_formant_total_peaks": 15,
+    "hl_even_odd_ratio_tol": 0.08,
+    "ar_alpha_center_tol_hz": 50.0,
+    "ar_alpha_required_contexts": 5,
+    "ar_beta_center_tol_hz": 90.0,
+    "beta_alpha_ratio_tol": 0.08,
+    "f0_core_tol_cents": 5.0,
+    "terminal_f0_delta_tol_cents": 15.0,
+    "duration_onset_tol_ms": 2.0,
+    "r_share_tol": 0.02,
+    "energy_sustain_tol_db": 0.5,
+    "energy_attack_tol_ms": 5.0,
+    "release_tol_ms": 2.0,
+    "afterglow_extra_tol_ms": 5.0,
+    "terminal_zero_exact": true
+  },
+  "reexpression_gates": {
+    "spectral_identity_cosine_each_min": 0.85,
+    "spectral_identity_cosine_median_min": 0.9,
+    "hl_even_odd_ratio_delta_max": 0.15,
+    "ar_alpha_center_delta_hz_max": 150.0,
+    "ar_alpha_required_contexts": 4,
+    "ar_beta_center_delta_hz_max": 220.0,
+    "beta_alpha_ratio_delta_max": 0.15,
+    "f0_core_tol_cents": 25.0,
+    "terminal_f0_delta_tol_cents": 50.0,
+    "duration_onset_tol_ms": 15.0,
+    "r_share_tol": 0.08,
+    "energy_sustain_tol_db": 2.0,
+    "release_tol_ms": 30.0,
+    "afterglow_extra_delta_ms_max": 20.0
+  },
+  "ingestion": {
+    "required_onsets": [
+      "k",
+      "s",
+      "n",
+      "r"
+    ],
+    "required_vowels": [
+      "a",
+      "i",
+      "u",
+      "e",
+      "o"
+    ],
+    "expected_wav_count": 25,
+    "expected_oto_entries": 25,
+    "join_smoke_sequence": [
+      "か",
+      "り",
+      "あ"
+    ]
+  }
+}
