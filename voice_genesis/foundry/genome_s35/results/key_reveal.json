@@ -1,0 +1,150 @@
+{
+  "protocol_version": "voicegenesis-s35-v2",
+  "revealed_after_answers_sha256": {
+    "1": "7054b9ead09ac8e52113d2b89df6c88c2ddbc40fcb241b50155cfa526dbb94a4",
+    "2": "a5d5550493d9ff723d590ccffb88fb6ff19ce04e1bba1b69a277649d6a123fc4"
+  },
+  "key_commitment": "d4fadda8c6d1f09a44289bd56aff47e237bb8cef03f6dadf8207d5447abd15da",
+  "key_sha256": "d4fadda8c6d1f09a44289bd56aff47e237bb8cef03f6dadf8207d5447abd15da",
+  "commitment_verified": true,
+  "plans": {
+    "duration": {
+      "not_evaluable_reason": null,
+      "stage1": {
+        "pair_key": "terminal_i|1st_color#218|pjs001#73",
+        "probe_kind": "terminal_i",
+        "selection_hash": "3f3bb88e2df7e6960f57f49c7a74aa6024d7ad60ab2495c444df07d802bdf04f"
+      },
+      "stage2": {
+        "pair_key": "terminal_ri|2018#598|pjs065#29",
+        "probe_kind": "terminal_ri",
+        "selection_hash": "55d213d51dfe79db265ee59751cdd8d08b2bf4c06854308834918ca4a7d92f9c"
+      },
+      "verdict": null
+    },
+    "energy": {
+      "not_evaluable_reason": null,
+      "stage1": {
+        "pair_key": "terminal_ri|2018#598|pjs065#29",
+        "probe_kind": "terminal_ri",
+        "selection_hash": "166742140c17979ff6cc90cc965128a1195a4ba9b4dc8a5f89225bcc0ad87121"
+      },
+      "stage2": {
+        "pair_key": "medial_ri|1st_color#357|pjs002#54",
+        "probe_kind": "medial_ri",
+        "selection_hash": "18b05900a76007971ae03270db2e420b206c97d002006b0a72aa7600aa1990c7"
+      },
+      "verdict": null
+    },
+    "f0": {
+      "not_evaluable_reason": null,
+      "stage1": {
+        "pair_key": "terminal_i|1st_color#218|pjs001#73",
+        "probe_kind": "terminal_i",
+        "selection_hash": "14502e02079fba154244ca5b582b6fbe2d670a838032d6fbe589c839804b0b95"
+      },
+      "stage2": {
+        "pair_key": "terminal_ri|2018#215|pjs003#65",
+        "probe_kind": "terminal_ri",
+        "selection_hash": "41a57424c93f86f69462aeff49e91cbc2a5a3ea79ac2a7caa6a9d1b2e206b88c"
+      },
+      "verdict": null
+    },
+    "release": {
+      "not_evaluable_reason": null,
+      "stage1": {
+        "pair_key": "terminal_N|BRD#664|pjs017#27",
+        "probe_kind": "terminal_N",
+        "selection_hash": "753ca6bdc874c7b79868dee2bdf418116484a1dfac336abe977308e5923a0397"
+      },
+      "stage2": {
+        "pair_key": "terminal_i|1st_color#218|pjs001#73",
+        "probe_kind": "terminal_i",
+        "selection_hash": "95fc6f18aed560b833d6f9c3b5414c40cd6a17410caf37839d6fbfe3133bb51d"
+      },
+      "verdict": null
+    }
+  },
+  "trials": {
+    "S1T01": {
+      "a_side": "gene",
+      "b_side": "B0",
+      "correct": "B",
+      "gene": "release",
+      "pair_key": "terminal_N|BRD#664|pjs017#27",
+      "probe_kind": "terminal_N",
+      "stage": 1,
+      "x_side": "B0"
+    },
+    "S1T02": {
+      "a_side": "B0",
+      "b_side": "gene",
+      "correct": "B",
+      "gene": "f0",
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "probe_kind": "terminal_i",
+      "stage": 1,
+      "x_side": "gene"
+    },
+    "S1T03": {
+      "a_side": "gene",
+      "b_side": "B0",
+      "correct": "A",
+      "gene": "energy",
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "probe_kind": "terminal_ri",
+      "stage": 1,
+      "x_side": "gene"
+    },
+    "S1T04": {
+      "a_side": "B0",
+      "b_side": "gene",
+      "correct": "A",
+      "gene": "duration",
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "probe_kind": "terminal_i",
+      "stage": 1,
+      "x_side": "B0"
+    },
+    "S2T01": {
+      "a_side": "gene",
+      "b_side": "B0",
+      "correct": "A",
+      "gene": "release",
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "probe_kind": "terminal_i",
+      "stage": 2,
+      "x_side": "gene"
+    },
+    "S2T02": {
+      "a_side": "B0",
+      "b_side": "gene",
+      "correct": "A",
+      "gene": "f0",
+      "pair_key": "terminal_ri|2018#215|pjs003#65",
+      "probe_kind": "terminal_ri",
+      "stage": 2,
+      "x_side": "B0"
+    },
+    "S2T03": {
+      "a_side": "B0",
+      "b_side": "gene",
+      "correct": "B",
+      "gene": "duration",
+      "pair_key": "terminal_ri|2018#598|pjs065#29",
+      "probe_kind": "terminal_ri",
+      "stage": 2,
+      "x_side": "gene"
+    },
+    "S2T04": {
+      "a_side": "gene",
+      "b_side": "B0",
+      "correct": "B",
+      "gene": "energy",
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "probe_kind": "medial_ri",
+      "stage": 2,
+      "x_side": "B0"
+    }
+  }
+}
