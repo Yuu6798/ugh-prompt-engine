@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -165,6 +166,19 @@ def load_frozen() -> Dict[str, Any]:
             impact="凍結入力が記録していない context 値を既定値で埋めることになり、"
                    "記録の来歴が実際の凍結条件と一致しなくなる",
             minimal_fix="ladder_manifest.json に走行時の context_phones を記録する")
+    ap = data.get("identity_ap_scale")
+    # 記録には manifest の値をそのまま載せる一方、実際の bank は
+    # `pr_identity.AP_SCALE` で作られる。manifest 側が欠落・陳腐化していても
+    # pin は通りうるので（メタデータだけの変更では素材が変わらない）、
+    # 「使っていない生成設定」を正本が主張できてしまう。実装値と突き合わせる。
+    if not isinstance(ap, (int, float)) or isinstance(ap, bool) \
+            or float(ap) != float(pr_identity.AP_SCALE):
+        raise S3Stop(
+            cause=f"frozen manifest の identity_ap_scale ({ap!r}) が"
+                  f"実装値 pr_identity.AP_SCALE ({pr_identity.AP_SCALE}) と一致しない",
+            impact="実際には使っていない生成設定を正本が来歴として主張することになる",
+            minimal_fix="ladder_manifest.json の identity_ap_scale と "
+                        "pr_identity.AP_SCALE のどちらが正かを確認する")
     seen: set = set()
     for i, pair in enumerate(pairs):
         missing = [f for f in REQUIRED_PAIR_FIELDS if not pair.get(f)]
@@ -217,32 +231,36 @@ def code_state() -> Dict[str, Any]:
     if _CODE_STATE is not None:
         return dict(_CODE_STATE)
 
-    def _git(*args: str) -> Optional[str]:
+    def _git(*args: str) -> Optional[bytes]:
         try:
             proc = subprocess.run(["git", *args], cwd=str(_HERE),
-                                  capture_output=True, text=True, check=True)
+                                  capture_output=True, check=True)
             return proc.stdout
         except Exception:  # noqa: BLE001
             return None
 
-    commit = (_git("rev-parse", "HEAD") or "").strip() or "unknown"
-    porcelain = _git("status", "--porcelain", "--untracked-files=all")
+    head = _git("rev-parse", "HEAD")
+    commit = head.decode("utf-8", "replace").strip() if head else "unknown"
+    # `-z` は NUL 区切りで **C クォートをしない**。非 ASCII を含むパス
+    # （本リポジトリの Ritsu コーパスなど）を `"\346\227\245..."` の形で
+    # 受け取ると、外側の引用符を剥がしただけでは実パスに戻らず、中身を
+    # ハッシュし損ねて pin が実装を特定できなくなる。
+    porcelain = _git("status", "--porcelain=v1", "-z", "--untracked-files=all")
     diff = _git("diff", "HEAD")
     state: Dict[str, Any] = {"commit": commit, "dirty": False, "dirty_digest": None}
-    if porcelain is None or diff is None:
+    if porcelain is None or diff is None or head is None:
         state["dirty"] = None          # git が使えない = 判定不能を偽らない
-    elif porcelain.strip():
+    elif porcelain.strip(b"\x00").strip():
         h = hashlib.sha256()
-        h.update(porcelain.encode("utf-8"))
-        h.update(diff.encode("utf-8"))
-        # `git diff HEAD` は **未追跡ファイルの中身を含まない**。porcelain も
-        # パスしか出さないので、追跡側の変更が新しい未追跡ヘルパを import する
-        # ような場合、中身の違う 2 回の走行が同じ digest になる。中身も混ぜる。
-        for line in porcelain.splitlines():
-            if not line.startswith("?? "):
+        h.update(porcelain)
+        h.update(diff)
+        repo_root = _HERE.parent.parent.parent
+        for entry in porcelain.split(b"\x00"):
+            if not entry.startswith(b"?? "):
                 continue
-            path = _HERE.parent.parent.parent / line[3:].strip().strip('"')
-            h.update(line.encode("utf-8"))
+            # bytes のままパスを組む（decode で壊れる名前があるため）
+            path = Path(os.fsdecode(bytes(repo_root) + b"/" + entry[3:]))
+            h.update(entry)
             try:
                 h.update(path.read_bytes() if path.is_file() else b"<not-a-file>")
             except OSError as exc:      # 読めないことも記録に混ぜる（黙って飛ばさない）

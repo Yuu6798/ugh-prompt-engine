@@ -10,6 +10,7 @@ integration は `planb_real/results/ladder_manifest.json` と実素材が
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -424,7 +425,8 @@ def test_baseline_b0_instability_fails_determinism() -> None:
 def _write_manifest(tmp_path: Path, pairs: List[Dict[str, Any]],
                     **extra: Any) -> Path:
     m = tmp_path / "ladder_manifest.json"
-    body: Dict[str, Any] = {"context_phones": 22, "pairs": pairs}
+    body: Dict[str, Any] = {"context_phones": 22, "identity_ap_scale": 0.25,
+                            "pairs": pairs}
     body.update(extra)
     m.write_text(json.dumps(body), encoding="utf-8")
     return m
@@ -602,7 +604,7 @@ def test_missing_or_invalid_context_phones_is_blocked(tmp_path: Path, monkeypatc
     """欠落を既定値で埋めない。埋めると凍結入力が記録していない値を主張する。"""
     import s3_runner as sr
 
-    body: Dict[str, Any] = {"pairs": [_pair("a")]}
+    body: Dict[str, Any] = {"identity_ap_scale": 0.25, "pairs": [_pair("a")]}
     if bad is not None:
         body["context_phones"] = bad
     m = tmp_path / "ladder_manifest.json"
@@ -629,17 +631,28 @@ def test_dirty_digest_covers_untracked_file_contents(tmp_path: Path, monkeypatch
     """
     import s3_runner as sr
 
-    helper = tmp_path / "helper.py"
-    porcelain = f" M a/b.py\n?? {helper}\n"
+    return _assert_untracked_content_changes_digest(sr, monkeypatch, tmp_path, "helper.py")
 
-    def fake_git(*args: str):
-        if args[:2] == ("status", "--porcelain"):
+
+def _assert_untracked_content_changes_digest(sr, monkeypatch, tmp_path: Path,
+                                             name: str) -> None:
+    helper = tmp_path / name
+    repo_root = Path(sr._HERE).parent.parent.parent
+    # tmp_path はリポジトリ外なので `..` を含む相対パスにする。
+    # 本番と同じ「repo_root + porcelain のパス」の連結で解決できること自体も検証する。
+    rel = os.path.relpath(helper, repo_root)
+    assert Path(os.fsdecode(os.fsencode(repo_root) + b"/" + os.fsencode(rel))).exists() \
+        or not helper.exists()
+    porcelain = b" M a/b.py\x00?? " + os.fsencode(rel) + b"\x00"
+
+    def fake_git(*args: str) -> bytes:
+        if args[0] == "status":
             return porcelain
-        if args[:2] == ("diff", "HEAD"):
-            return "diff --git a/b.py b/b.py\n"
-        if args[:2] == ("rev-parse", "HEAD"):
-            return "cafe\n"
-        return ""
+        if args[0] == "diff":
+            return b"diff --git a/b.py b/b.py\n"
+        if args[0] == "rev-parse":
+            return b"cafe\n"
+        return b""
 
     def run_with(content: str) -> str:
         monkeypatch.setattr(sr, "_CODE_STATE", None)
@@ -654,3 +667,69 @@ def test_dirty_digest_covers_untracked_file_contents(tmp_path: Path, monkeypatch
     assert run_with("VERSION = 1\n") != run_with("VERSION = 2\n")
     assert run_with("VERSION = 1\n") == run_with("VERSION = 1\n")
     monkeypatch.setattr(sr, "_CODE_STATE", None)
+
+
+# ---------------------------------------------------------------------------
+# PR #295 レビュー第 4 巡
+# ---------------------------------------------------------------------------
+def test_dirty_digest_handles_non_ascii_untracked_paths(tmp_path: Path, monkeypatch) -> None:
+    """非 ASCII 名の未追跡ファイルでも中身が digest に入る。
+
+    `--porcelain` は非 ASCII を C クォート (`"\\346\\227\\245…"`) で出すため、
+    引用符を剥がすだけでは実パスに戻らない。`-z` で受けることで解決する。
+    本リポジトリの Ritsu コーパスのように日本語パスが実在する環境で効く。
+    """
+    import s3_runner as sr
+
+    _assert_untracked_content_changes_digest(
+        sr, monkeypatch, tmp_path, "「波音リツ」ヘルパ.py")
+
+
+@pytest.mark.parametrize("bad", [None, 1.0, 0.5, "0.25", True],
+                         ids=["missing", "one", "half", "str", "bool"])
+def test_ap_scale_mismatch_is_blocked(tmp_path: Path, monkeypatch, bad: Any) -> None:
+    """記録に載る生成設定は、実装が実際に使う値と一致していなければ止める。"""
+    import pr_identity
+    import s3_runner as sr
+
+    body: Dict[str, Any] = {"context_phones": 22, "pairs": [_pair("a")]}
+    if bad is not None:
+        body["identity_ap_scale"] = bad
+    m = tmp_path / "ladder_manifest.json"
+    m.write_text(json.dumps(body), encoding="utf-8")
+    monkeypatch.setattr(sr, "FROZEN_MANIFEST", m)
+    with pytest.raises(sr.S3Stop) as exc:
+        sr.load_frozen()
+    assert "identity_ap_scale" in exc.value.cause
+    assert exc.value.as_dict()["status"] == "BLOCKED"
+    assert pr_identity.AP_SCALE == 0.25      # 実装値そのものの固定
+
+
+def test_real_git_porcelain_quoting_is_actually_handled(tmp_path: Path) -> None:
+    """実際の git 出力で、非 ASCII 名が `--porcelain` では C クォートされ、
+    `-z` では生のまま出ることを確認する（本修正の前提そのものの検証）。"""
+    import subprocess
+
+    def git(*args: str, **kw: Any):
+        return subprocess.run(["git", *args], cwd=str(tmp_path),
+                              capture_output=True, check=False, **kw)
+
+    if git("init", "-q").returncode != 0:
+        pytest.skip("git を実行できない")
+    name = "「波音リツ」ヘルパ.py"
+    (tmp_path / name).write_text("VERSION = 1\n", encoding="utf-8")
+
+    quoted = git("status", "--porcelain", "--untracked-files=all").stdout
+    zero = git("status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
+    encoded = os.fsencode(name)
+
+    # -z なら生のパスが得られる = repo_root と連結して読める
+    entry = next(e for e in zero.split(b"\x00") if e.startswith(b"?? "))
+    assert entry[3:] == encoded
+    assert (tmp_path / os.fsdecode(entry[3:])).is_file()
+
+    # --porcelain 側が C クォートしているなら、引用符を剥がすだけでは戻らない
+    if b'"' in quoted:
+        naive = quoted.decode("utf-8", "replace").splitlines()[0][3:].strip().strip('"')
+        assert not (tmp_path / naive).is_file(), (
+            "この環境では引用符剥がしでも解決できてしまう（core.quotePath=false?）")
