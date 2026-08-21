@@ -23,6 +23,8 @@ for _p in (_HERE, _FOUNDRY / "planb", _FOUNDRY / "planb_real"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+pytest.importorskip("pyworld")   # 判定ロジックは純粋だが import 閉包が WORLD に触れる
+
 import s3_gates as sg  # noqa: E402
 import s3_spec as sp  # noqa: E402
 from s3_spec import Gene, GeneVerdict, PairVerdict  # noqa: E402

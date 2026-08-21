@@ -137,11 +137,14 @@ def render_record(res: Dict[str, Any]) -> str:
             d = r["detail"]
             amt = d["P2"].get("amount")
             unit = d["P2"].get("unit") or ""
+            # 構造的に適用先が無い pair（note span 1 unit / terminal unit 無し）は
+            # 移植量が非ゼロでも「適用できない」ので、量だけ見て誤読しないよう明示する。
+            noop = " *(構造的 no-op)*" if d["P2"].get("structural_noop") else ""
             p3 = d["P3"]
             lines.append(
                 f"| `{pk}` | {r['context_id']} | {r['verdict']} "
                 f"| {'pass' if r['P1_structural_isolation'] else 'FAIL'} "
-                f"| {_fmt(amt)} {unit} "
+                f"| {_fmt(amt)} {unit}{noop} "
                 f"| {_fmt(p3.get('b0'))} → {_fmt(p3.get('gene_condition'))} "
                 f"| {'pass' if r['P4_determinism'] else 'FAIL'} |")
         lines.append("")
@@ -152,6 +155,20 @@ def render_record(res: Dict[str, Any]) -> str:
                  "範囲外の品質問題は修正も測定もしていない。")
     lines.append("")
     return "\n".join(lines)
+
+
+def render_only() -> int:
+    """既存の `s3_results.json` から `S3_RECORD.md` だけを作り直す。
+
+    判定値は一切再計算しない（読み方の表示を直すためだけの経路）。
+    """
+    res = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+    if res.get("status") == "BLOCKED":
+        print("BLOCKED な results からは記録を再描画しない")
+        return 3
+    RECORD_PATH.write_text(render_record(res), encoding="utf-8")
+    print(f"re-rendered {RECORD_PATH}")
+    return 0 if res["overall"]["verdict"] == "PASS" else 1
 
 
 def main(*, write_wav: bool = True) -> int:
@@ -184,4 +201,4 @@ def main(*, write_wav: bool = True) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(render_only() if "--render-only" in sys.argv else main())
