@@ -184,23 +184,43 @@ def evaluate_h0(
             "reason": "anchor_or_matched_cell_missing",
             "excluded": _excluded(cells),
         }
-    eps = _as_epsilon(eps_z).for_groups(sorted(keys))
-    if eps is None:
-        return {
-            "verdict": sp.Verdict.UNDETERMINED.value,
-            "reason": "epsilon_missing_for_group",
-            "groups": sorted(keys),
-            "excluded": _excluded(cells),
-        }
-    delta = abs(_median([c.z_primary for c in anchor]) - _median([c.z_primary for c in matched]))
+    # **群ごとに対で引く**。全群の anchor と全群の matched をまとめて median を
+    # 取ると、上で強制した対応付けが消えて対称な群が打ち消し合う（PR #300
+    # Codex 第 2 巡 P1: anchors +2/-2 と matched +1/-1 は各群 |Δ|=1 なのに
+    # プールすると両方 0 になり H0 が偽 refuted になる）。
+    eps = _as_epsilon(eps_z)
+    verdicts: Dict[str, str] = {}
+    detail: Dict[str, Any] = {}
+    for speaker, generation in sorted(keys):
+        a = [c.z_primary for c in anchor if (c.speaker, c.generation) == (speaker, generation)]
+        m = [c.z_primary for c in matched if (c.speaker, c.generation) == (speaker, generation)]
+        key = f"{speaker}/{generation}"
+        if not a or not m:
+            verdicts[key] = sp.Verdict.UNDETERMINED.value
+            detail[key] = {"reason": "anchor_or_matched_cell_missing"}
+            continue
+        e = eps.for_group(speaker, generation)
+        if e is None:
+            verdicts[key] = sp.Verdict.UNDETERMINED.value
+            detail[key] = {"reason": "epsilon_missing_for_group"}
+            continue
+        delta = abs(_median(a) - _median(m))
+        verdicts[key] = (
+            sp.Verdict.SUPPORTED.value if delta > e else sp.Verdict.REFUTED.value
+        )
+        detail[key] = {"delta_z": delta, "eps_z": e}
+    single = len(verdicts) == 1
+    overall = next(iter(verdicts.values())) if single else _majority(list(verdicts.values()))
     return {
-        "verdict": (
-            sp.Verdict.SUPPORTED.value if delta > eps else sp.Verdict.REFUTED.value
-        ),
-        "delta_z": delta,
-        "eps_z": eps,
+        "verdict": overall,
+        "series": verdicts,
+        "detail": detail,
         "low_power": True,
-        "low_power_note": "アンカーは 1 個しか存在しないので、この裁定は 1 対の比較に依る",
+        "low_power_note": (
+            "アンカーは (話者×世代) ごとに 1 個しか存在しないので、各群の裁定は 1 対の比較に依る。"
+            "群が 1 つだけのときはその群の裁定をそのまま採る（多数決の最小 2 系列に満たなくても、"
+            "H0 は本来 1 対の比較として事前登録されている）"
+        ),
         "excluded": _excluded(cells),
     }
 
@@ -447,13 +467,38 @@ def evaluate_h5(cells: Sequence[Cell], eps_z: Epsilon) -> Dict[str, Any]:
     }
 
 
+def evaluate_h4_all_generations(cells: Sequence[Cell], theta: float) -> Dict[str, Any]:
+    """H4 を**世代ごとに**裁定してから多数決へ上げる。
+
+    `evaluate_h4` は世代が pin されていないと `undetermined` を返す（世代をまたいだ
+    話者比較をしないため）。本番 360 セルは run5/6/7 を含むので、束ねて渡すと
+    H4 が構造的に必ず `undetermined` になっていた（PR #300 Codex 第 2 巡 P1）。
+    """
+    generations = sorted({c.generation for c in cells if c.usable})
+    if not generations:
+        return {
+            "verdict": sp.Verdict.UNDETERMINED.value,
+            "reason": "no_usable_cells",
+            "per_generation": {},
+        }
+    per_generation = {g: evaluate_h4(cells, theta, generation=g) for g in generations}
+    verdicts = [v["verdict"] for v in per_generation.values()]
+    overall = verdicts[0] if len(verdicts) == 1 else _majority(verdicts)
+    return {
+        "verdict": overall,
+        "per_generation": per_generation,
+        "theta": theta,
+        "reach_limit": "言えるのは『境界は話者で動く』までで、原因は識別されない（§2-3 H4）",
+    }
+
+
 def evaluate_all(cells: Sequence[Cell], eps_z: Epsilon, theta: float) -> Dict[str, Any]:
     return {
         "H0": evaluate_h0(cells, eps_z),
         "H1": evaluate_h1(cells, eps_z),
         "H2": evaluate_h2(cells, eps_z),
         "H3": evaluate_h3(cells, eps_z),
-        "H4": evaluate_h4(cells, theta),
+        "H4": evaluate_h4_all_generations(cells, theta),
         "H5": evaluate_h5(cells, eps_z),
     }
 
@@ -472,7 +517,10 @@ DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "tolerance": "eps_z",
         "minimum_supporting_cells": 1,
         "contradiction_rule": "|Δz'| <= eps_z を refuted とする（一致 = 文脈非依存）",
-        "final_aggregation": "単一対の比較。low_power フラグを必ず立てる",
+        "final_aggregation": (
+            "(話者×世代) ごとに対で引いてから集約する（プールして median を取らない）。"
+            "群が 1 つならその裁定をそのまま採る。low_power フラグを必ず立てる"
+        ),
     },
     "H1": {
         "claim": "持続長が閾値を超えると解放が失敗する",
@@ -511,7 +559,10 @@ DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "tolerance": "ラダー 1 段（水準が異なること自体）",
         "minimum_supporting_cells": MIN_LADDER_POINTS,
         "contradiction_rule": "全話者で境界が同一なら refuted",
-        "final_aggregation": "**同一世代内**で比較する。世代をまたいだ比較はしない",
+        "final_aggregation": (
+            "**同一世代内**で比較する。世代をまたいだ比較はしない。複数世代があるときは "
+            "`evaluate_h4_all_generations` が世代ごとに裁定してから多数決へ上げる"
+        ),
     },
     "H5": {
         "claim": "世代（データ構成）で境界が動く",

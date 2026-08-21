@@ -35,7 +35,7 @@ def _ladder(speaker: str, values, generation: str = "run7", pitch_bin: str = "mi
 def test_worked_example_is_reproducible():
     doc = b2._worked_example()
     assert doc["H0"]["verdict"] == sp.Verdict.SUPPORTED.value
-    assert doc["H0"]["delta_z"] == pytest.approx(1.20, abs=1e-9)
+    assert doc["H0"]["detail"]["ritsu/run7"]["delta_z"] == pytest.approx(1.20, abs=1e-9)
     assert doc["H1"]["series"]["user/run7/mid"] == sp.Verdict.SUPPORTED.value
     assert doc["H1"]["series"]["pjs/run7/mid"] == sp.Verdict.REFUTED.value
     # supported は「refuted が 0」を要求するので overall は undetermined
@@ -195,3 +195,30 @@ def test_h2_supports_only_when_low_pitch_is_the_worse_side():
 
     flat = b2.evaluate_h2(pair(0.1, 0.0), eps_z=EPS)
     assert flat["detail"]["user/run7/L2"]["reason"] == "no_difference"
+
+
+def test_h0_is_adjudicated_per_group_not_pooled():
+    """対称な 2 群がプールで打ち消し合う偽 refuted を塞ぐ（PR #300 Codex 第 2 巡 P1）。"""
+    cells = [
+        b2.Cell("P-ANCHOR/kagiri/a", "spk_a", "run7", "P-ANCHOR", +2.0),
+        b2.Cell("P-RI-FINAL/a", "spk_a", "run7", "P-RI-FINAL", +1.0, ladder_level=4, pitch_bin="low"),
+        b2.Cell("P-ANCHOR/kagiri/b", "spk_b", "run7", "P-ANCHOR", -2.0),
+        b2.Cell("P-RI-FINAL/b", "spk_b", "run7", "P-RI-FINAL", -1.0, ladder_level=4, pitch_bin="low"),
+    ]
+    out = b2.evaluate_h0(cells, eps_z=b2.Epsilon.uniform(0.5, reason="単一世代の合成例"))
+    assert out["series"] == {
+        "spk_a/run7": sp.Verdict.SUPPORTED.value,
+        "spk_b/run7": sp.Verdict.SUPPORTED.value,
+    }
+    assert out["verdict"] == sp.Verdict.SUPPORTED.value
+
+
+def test_h4_is_adjudicated_per_generation_in_evaluate_all():
+    """世代を束ねて渡しても H4 が構造的 undetermined にならない（PR #300 Codex 第 2 巡 P1）。"""
+    cells = []
+    for gen in ("run5", "run6", "run7"):
+        cells += _ladder("user", [(1, 0.1), (2, 0.7), (4, 1.4)], generation=gen)
+        cells += _ladder("pjs", [(1, 0.0), (2, 0.1), (4, 0.2)], generation=gen)
+    out = b2.evaluate_all(cells, eps_z=EPS, theta=0.5)["H4"]
+    assert set(out["per_generation"]) == {"run5", "run6", "run7"}
+    assert out["verdict"] == sp.Verdict.SUPPORTED.value

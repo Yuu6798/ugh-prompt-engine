@@ -238,7 +238,10 @@ def test_ledger_pins_the_bytes_of_its_inputs(tmp_path: Path):
     midi = tmp_path / "midi.json"
     midi.write_text('{"user/u1/2": 62}', encoding="utf-8")
     ledger = L.build_ledger(
-        [L.SpeakerInput("user", "real_song", path)], ["user"], ["pjs"], midi_json_path=midi
+        [L.SpeakerInput("user", "real_song", path)],
+        ["user"],
+        ["pjs"],
+        midi_table=L.MidiTable.load(midi),
     )
     assert ledger["midi_json"]["sha256"] == hashlib.sha256(midi.read_bytes()).hexdigest()
 
@@ -261,3 +264,36 @@ def test_non_song_modalities_do_not_report_real_singing_seconds(tmp_path: Path):
     # 発声秒そのものは modality を問わず残る（数え直しができるように）
     for section in (song, vcv, speech):
         assert section["local_voiced_seconds"] == pytest.approx(1.9)
+
+
+def test_duplicate_speakers_are_rejected(tmp_path: Path):
+    """同じ話者を 2 回渡すと黙って片方が消える経路を塞ぐ（PR #300 Codex 第 2 巡 P2）。"""
+    a = _write_csv(tmp_path, "user_a", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
+    b = _write_csv(tmp_path, "user_b", ["u2,SP r i SP,0.1 0.3 1.7 0.2"], HEADER_MIN)
+    with pytest.raises(ValueError, match="複数回"):
+        L.build_ledger(
+            [L.SpeakerInput("user", "real_song", a), L.SpeakerInput("user", "real_song", b)],
+            ["user"],
+            ["pjs"],
+        )
+
+
+def test_output_colliding_with_an_input_is_rejected(tmp_path: Path):
+    """`--out` が入力 CSV を上書きする経路を書き込み前に止める（PR #300 Codex 第 2 巡 P1）。"""
+    csv_path = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
+    with pytest.raises(L.OutputCollisionError):
+        L.reject_output_collision([csv_path], [csv_path])
+    # 衝突しない組み合わせは通る
+    L.reject_output_collision([tmp_path / "ledger.json"], [csv_path])
+
+
+def test_parse_and_hash_come_from_the_same_bytes(tmp_path: Path):
+    """parse と sha が同じバイト列から出ることを固定（PR #300 Codex 第 2 巡 P2）。"""
+    import hashlib
+
+    csv_path = _write_csv(tmp_path, "user", ["u1,SP r i SP,0.1 0.3 1.6 0.2"], HEADER_MIN)
+    raw = csv_path.read_bytes()
+    rows, sha, nbytes = L.read_and_parse(csv_path)
+    assert sha == hashlib.sha256(raw).hexdigest()
+    assert nbytes == len(raw)
+    assert [r.name for r in rows] == ["u1"]

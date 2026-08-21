@@ -71,7 +71,7 @@
       "compared_pair": "P-ANCHOR「かぎり」 対 同一話者・同一世代の P-RI-FINAL（4 拍・低）（§4-2 の事前登録。ここで条件を選び直さない）",
       "contradiction_rule": "|Δz'| <= eps_z を refuted とする（一致 = 文脈非依存）",
       "direction": "two-sided |Δz'|",
-      "final_aggregation": "単一対の比較。low_power フラグを必ず立てる",
+      "final_aggregation": "(話者×世代) ごとに対で引いてから集約する（プールして median を取らない）。群が 1 つならその裁定をそのまま採る。low_power フラグを必ず立てる",
       "minimum_supporting_cells": 1,
       "participating_axes": [
         "primary (z')"
@@ -115,7 +115,7 @@
       "claim": "話者で崩壊境界が動く",
       "contradiction_rule": "全話者で境界が同一なら refuted",
       "direction": "境界 = z' >= theta を最初に満たすラダー水準",
-      "final_aggregation": "**同一世代内**で比較する。世代をまたいだ比較はしない",
+      "final_aggregation": "**同一世代内**で比較する。世代をまたいだ比較はしない。複数世代があるときは `evaluate_h4_all_generations` が世代ごとに裁定してから多数決へ上げる",
       "minimum_supporting_cells": 3,
       "participating_axes": [
         "primary (z')",
@@ -143,11 +143,18 @@
   "schema": "s7-b2-verdict-algebra/0.1",
   "worked_example": {
     "H0": {
-      "delta_z": 1.2000000000000002,
-      "eps_z": 0.3,
+      "detail": {
+        "ritsu/run7": {
+          "delta_z": 1.2000000000000002,
+          "eps_z": 0.3
+        }
+      },
       "excluded": {},
       "low_power": true,
-      "low_power_note": "アンカーは 1 個しか存在しないので、この裁定は 1 対の比較に依る",
+      "low_power_note": "アンカーは (話者×世代) ごとに 1 個しか存在しないので、各群の裁定は 1 対の比較に依る。群が 1 つだけのときはその群の裁定をそのまま採る（多数決の最小 2 系列に満たなくても、H0 は本来 1 対の比較として事前登録されている）",
+      "series": {
+        "ritsu/run7": "supported"
+      },
       "verdict": "supported"
     },
     "H1": {

@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 import math
 import sys
@@ -55,44 +56,63 @@ class Row:
     note_dur: Optional[Tuple[float, ...]] = None
 
 
-def sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+class OutputCollisionError(RuntimeError):
+    """出力先が入力（`transcriptions.csv` / MIDI 対応表）と衝突した（fail-closed）。"""
+
+
+def sha256_bytes(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def read_and_parse(csv_path: Path) -> Tuple[List[Row], str, int]:
+    """入力を**一度だけ**読み、その同じバイト列を parse と sha256 の両方に使う。
+
+    読み直すと、`parse_rows()` と `sha256_file()` の間で中身が差し替わった場合に
+    「古いバイトから数えた count」を「新しいバイトの sha」で pin してしまう
+    （PR #300 Codex 第 2 巡 P2）。
+    """
+    raw = csv_path.read_bytes()
+    return parse_text(raw.decode("utf-8"), source=str(csv_path)), sha256_bytes(raw), len(raw)
 
 
 def parse_rows(csv_path: Path) -> List[Row]:
-    """`transcriptions.csv` を読む。ph_seq と ph_dur の長さ不一致は fail-closed。"""
+    """`transcriptions.csv` を読む（テスト・単体利用向けの薄いラッパ）。"""
+    return read_and_parse(csv_path)[0]
+
+
+def parse_text(text: str, source: str = "<text>") -> List[Row]:
+    """CSV テキストから行を作る。ph_seq と ph_dur の長さ不一致は fail-closed。"""
     rows: List[Row] = []
-    with csv_path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for raw in reader:
-            ph_seq = tuple(str(raw["ph_seq"]).split())
-            ph_dur = tuple(float(x) for x in str(raw["ph_dur"]).split())
-            if len(ph_seq) != len(ph_dur):
-                raise ValueError(
-                    f"{csv_path}: row {raw.get('name')!r} has "
-                    f"{len(ph_seq)} phones but {len(ph_dur)} durations"
-                )
-            ph_num = (
-                tuple(int(x) for x in str(raw["ph_num"]).split())
-                if raw.get("ph_num")
-                else None
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    for raw in reader:
+        ph_seq = tuple(str(raw["ph_seq"]).split())
+        ph_dur = tuple(float(x) for x in str(raw["ph_dur"]).split())
+        if len(ph_seq) != len(ph_dur):
+            raise ValueError(
+                f"{source}: row {raw.get('name')!r} has "
+                f"{len(ph_seq)} phones but {len(ph_dur)} durations"
             )
-            note_seq = tuple(str(raw["note_seq"]).split()) if raw.get("note_seq") else None
-            note_dur = (
-                tuple(float(x) for x in str(raw["note_dur"]).split())
-                if raw.get("note_dur")
-                else None
+        ph_num = (
+            tuple(int(x) for x in str(raw["ph_num"]).split())
+            if raw.get("ph_num")
+            else None
+        )
+        note_seq = tuple(str(raw["note_seq"]).split()) if raw.get("note_seq") else None
+        note_dur = (
+            tuple(float(x) for x in str(raw["note_dur"]).split())
+            if raw.get("note_dur")
+            else None
+        )
+        rows.append(
+            Row(
+                name=str(raw["name"]),
+                ph_seq=ph_seq,
+                ph_dur=ph_dur,
+                ph_num=ph_num,
+                note_seq=note_seq,
+                note_dur=note_dur,
             )
-            rows.append(
-                Row(
-                    name=str(raw["name"]),
-                    ph_seq=ph_seq,
-                    ph_dur=ph_dur,
-                    ph_num=ph_num,
-                    note_seq=note_seq,
-                    note_dur=note_dur,
-                )
-            )
+        )
     return rows
 
 
@@ -321,7 +341,7 @@ def _stratum_key(e: TerminalEvent, modality: str) -> str:
 
 
 def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
-    rows = parse_rows(inp.csv_path)
+    rows, source_sha256, source_bytes = read_and_parse(inp.csv_path)
     events: List[TerminalEvent] = []
     ri_medial = 0
     voiced_s = 0.0
@@ -380,8 +400,8 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
         # 入力の**バイト**を pin する。パス文字列だけでは、同じパスの中身が
         # 差し替わったときにどのバイトがこの台帳の count / H-TTD を作ったのかを
         # 後から言えない（PR #300 Codex P1）。
-        "source_csv_sha256": sha256_file(inp.csv_path),
-        "source_csv_bytes": inp.csv_path.stat().st_size,
+        "source_csv_sha256": source_sha256,
+        "source_csv_bytes": source_bytes,
         "row_count": len(rows),
         "local_voiced_seconds": round(voiced_s, 6),
         "local_voiced_seconds_note": (
@@ -413,12 +433,42 @@ def build_speaker_section(inp: SpeakerInput) -> Dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class MidiTable:
+    """MIDI 対応表を**一度だけ**読んだ結果（parse と sha を同じバイト列から取る）。"""
+
+    path: Path
+    sha256: str
+    n_bytes: int
+    mapping: Dict[str, float]
+
+    @classmethod
+    def load(cls, path: Path) -> "MidiTable":
+        raw = path.read_bytes()
+        table = json.loads(raw.decode("utf-8"))
+        return cls(
+            path=path,
+            sha256=sha256_bytes(raw),
+            n_bytes=len(raw),
+            mapping={str(k): float(v) for k, v in table.items()},
+        )
+
+
 def build_ledger(
     inputs: Sequence[SpeakerInput],
     breaking: Sequence[str],
     non_breaking: Sequence[str],
-    midi_json_path: Optional[Path] = None,
+    midi_table: Optional[MidiTable] = None,
 ) -> Dict[str, Any]:
+    # 同じ話者を 2 回渡すと dict 内包で片方が黙って消え、露出が過少に数えられて
+    # H-TTD が変わる（PR #300 Codex 第 2 巡 P2）。fail-closed で弾く。
+    seen: List[str] = [inp.speaker for inp in inputs]
+    duplicates = sorted({s for s in seen if seen.count(s) > 1})
+    if duplicates:
+        raise ValueError(
+            f"同じ話者が複数回指定されている: {duplicates}。"
+            "1 話者 = 1 つの transcriptions.csv で渡す（黙って上書きしない）"
+        )
     speakers = {inp.speaker: build_speaker_section(inp) for inp in inputs}
     verdict = httd_verdict(speakers, breaking, non_breaking)
     return {
@@ -444,11 +494,11 @@ def build_ledger(
         },
         "midi_json": (
             None
-            if midi_json_path is None
+            if midi_table is None
             else {
-                "path": str(midi_json_path),
-                "sha256": sha256_file(midi_json_path),
-                "bytes": midi_json_path.stat().st_size,
+                "path": str(midi_table.path),
+                "sha256": midi_table.sha256,
+                "bytes": midi_table.n_bytes,
             }
         ),
         "speakers": speakers,
@@ -629,6 +679,21 @@ def _parse_speaker_arg(value: str) -> SpeakerInput:
     return SpeakerInput(speaker=name, modality=modality, csv_path=Path(path))
 
 
+def reject_output_collision(out_paths: Sequence[Path], input_paths: Sequence[Path]) -> None:
+    """出力先が入力と衝突していたら**書く前に**停止する（PR #300 Codex 第 2 巡 P1）。
+
+    `--out` に入力の `transcriptions.csv` を渡すと、解析後の書き込みで入力そのものを
+    破壊する。`scripts/measure_bands.py::_reject_output_collision` と同じ
+    resolved 比較（symlink 解決後の完全一致）で判定する。
+    """
+    resolved_inputs = {p.resolve() for p in input_paths if p.exists()}
+    for out in out_paths:
+        if out.resolve() in resolved_inputs:
+            raise OutputCollisionError(
+                f"出力先 ({out}) が入力と衝突しています（fail-closed で拒否）"
+            )
+
+
 def render_table(ledger: Dict[str, Any]) -> str:
     """§3 が要求する「人間可読の表」。主層を層別に並べ、生値を必ず併記する。"""
     lines = [
@@ -704,20 +769,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     inputs: List[SpeakerInput] = list(args.speaker)
+    midi_table: Optional[MidiTable] = None
     if args.midi_json:
-        table = json.loads(Path(args.midi_json).read_text(encoding="utf-8"))
+        midi_table = MidiTable.load(Path(args.midi_json))
         for inp in inputs:
             inp.midi_by_event = {
-                k: float(v) for k, v in table.items() if k.startswith(f"{inp.speaker}/")
+                k: v for k, v in midi_table.mapping.items() if k.startswith(f"{inp.speaker}/")
             }
-    ledger = build_ledger(
-        inputs, args.breaking, args.non_breaking, midi_json_path=args.midi_json
+
+    table_path = args.table_out or args.out.with_suffix(".md")
+    protected = [inp.csv_path for inp in inputs] + (
+        [midi_table.path] if midi_table is not None else []
     )
+    reject_output_collision([args.out, table_path], protected)
+
+    ledger = build_ledger(inputs, args.breaking, args.non_breaking, midi_table=midi_table)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    table_path = args.table_out or args.out.with_suffix(".md")
     table_path.write_text(render_table(ledger), encoding="utf-8")
     print(f"wrote {args.out}")
     print(f"wrote {table_path}")
