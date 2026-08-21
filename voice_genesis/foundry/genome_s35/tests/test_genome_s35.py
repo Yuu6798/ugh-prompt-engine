@@ -141,6 +141,16 @@ def _only(genes):
     return _m
 
 
+def _finish(out: Path, stage1_mode=_correct, stage2_mode=_correct) -> int:
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, stage1_mode)
+    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+    if adv:
+        prep.prepare_stage2(adv)
+        _answer(out, 2, stage2_mode)
+    return report.main()
+
+
 def _run_full(out: Path, stage1_mode, stage2_mode=_correct) -> Dict[str, Any]:
     prep.prepare_stage1(salt=SALT)
     _answer(out, 1, stage1_mode)
@@ -610,6 +620,9 @@ def test_key_reveal_only_after_answers(s35) -> None:
     assert not (out / "key_reveal.json").exists()
     _answer(out, 1, _wrong)            # 全問不正解 = Stage 2 なし
     scoring.finalize()
+    # finalize は開示文書を**作るだけ**。ディスクへ出るのは report のガード通過後。
+    assert not (out / "key_reveal.json").exists()
+    assert report.main() == 1
     reveal = json.loads((out / "key_reveal.json").read_text(encoding="utf-8"))
     assert reveal["commitment_verified"] is True
     assert "1" in reveal["revealed_after_answers_sha256"]
@@ -654,9 +667,8 @@ def test_rescoring_after_reveal_is_blocked(s35) -> None:
     作り替えられる（commitment も audio も true のまま）。
     """
     out, _doc = s35()
-    # まず 1 gene だけ正解 = S4_NOT_READY で確定・開示させる
-    res = _run_full(out, _only({"f0"}), _correct)
-    assert res["overall"]["verdict"] == "S4_NOT_READY"
+    # まず 1 gene だけ正解 = S4_NOT_READY で確定・開示させる（実フロー経由）
+    assert _finish(out, _only({"f0"}), _correct) == 1
     assert (out / "key_reveal.json").exists()
     before = (out / "key_reveal.json").read_bytes()
 
@@ -681,7 +693,7 @@ def test_identical_rerun_after_reveal_is_allowed(s35) -> None:
 
 def test_tampered_key_after_reveal_is_blocked(s35) -> None:
     out, _doc = s35()
-    _run_full(out, _correct, _correct)
+    assert _finish(out, _correct, _correct) == 0
     kp = out / "answer_key.private.json"
     key = json.loads(kp.read_text(encoding="utf-8"))
     tid = sorted(key["trials"])[0]
@@ -839,16 +851,6 @@ def test_empty_listener_provenance_is_blocked(s35, field, value) -> None:
 # ---------------------------------------------------------------------------
 # PR #296 レビュー第 3 巡
 # ---------------------------------------------------------------------------
-def _finish(out: Path, stage1_mode=_correct, stage2_mode=_correct) -> int:
-    prep.prepare_stage1(salt=SALT)
-    _answer(out, 1, stage1_mode)
-    adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
-    if adv:
-        prep.prepare_stage2(adv)
-        _answer(out, 2, stage2_mode)
-    return report.main()
-
-
 def test_stage2_block_cannot_reuse_stage1_trials(s35) -> None:
     """Stage 2 の枠へ Stage 1 の trial を並べ替えて 2 文脈を偽装できないこと。"""
     out, _doc = s35()
@@ -1022,3 +1024,87 @@ def test_rescoring_guard_fires_before_stage2_checks(s35) -> None:
     with pytest.raises(prep.S35Stop) as exc:
         scoring.finalize()
     assert "再採点は禁止" in exc.value.as_dict()["reason"]
+
+
+# ---------------------------------------------------------------------------
+# PR #296 レビュー第 5 巡
+# ---------------------------------------------------------------------------
+def test_key_reveal_is_published_only_with_the_bundle(s35) -> None:
+    """開示文書は確定記録ガードを通ってから、束で publish される。
+
+    ガードより前に書くと、拒否された再実行でも開示が差し替わり、
+    保持された記録の `key_reveal_sha256` が実物を指さなくなる。
+    """
+    out, _doc = s35()
+    assert _finish(out) == 0
+    reveal_before = (out / "key_reveal.json").read_bytes()
+    doc = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert doc["key_reveal_sha256"] == hashlib.sha256(reveal_before).hexdigest()
+
+    # 判定が変わる再実行 → 拒否される。開示は 1 バイトも動かない
+    mp = out / "blind_manifest.json"
+    m = json.loads(mp.read_text(encoding="utf-8"))
+    m["key_commitment"] = "0" * 64
+    mp.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert report.main() == 3
+    assert (out / "key_reveal.json").read_bytes() == reveal_before
+    doc2 = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert doc2["key_reveal_sha256"] == hashlib.sha256(
+        (out / "key_reveal.json").read_bytes()).hexdigest()
+
+
+def test_finalize_does_not_write_reveal(s35) -> None:
+    """`finalize()` は開示文書を作るだけで、ディスクへ出さない。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    prep.prepare_stage2(scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1)))
+    _answer(out, 2, _correct)
+    res = scoring.finalize()
+    assert not (out / "key_reveal.json").exists()
+    assert res["_key_reveal_text"]
+    assert res["key_reveal_sha256"] == hashlib.sha256(
+        res["_key_reveal_text"].encode("utf-8")).hexdigest()
+    assert report.main() == 0
+    assert (out / "key_reveal.json").read_text(encoding="utf-8") == res["_key_reveal_text"]
+
+
+def test_internal_fields_are_not_in_the_record(s35) -> None:
+    out, _doc = s35()
+    assert _finish(out) == 0
+    doc = json.loads((out / "s35_results.json").read_text(encoding="utf-8"))
+    assert not [k for k in doc if k.startswith("_")]
+
+
+def test_stage_audio_failure_preserves_previous_pack(s35) -> None:
+    """staging で落ちても、前回の公開済み音声を壊さない。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    audio = out / "stage1" / "audio"
+    before = {p.name: p.read_bytes() for p in audio.glob("*.wav")}
+    assert before
+
+    import shutil as _sh
+    orig = prep.shutil.copyfile
+    state = {"n": 0}
+
+    def flaky(src, dst):
+        state["n"] += 1
+        if state["n"] == 4:            # 途中で落とす
+            raise OSError("disk full")
+        return orig(src, dst)
+
+    prep.shutil = type("S", (), {"copyfile": staticmethod(flaky),
+                                 "rmtree": staticmethod(_sh.rmtree)})()
+    try:
+        _answer(out, 1, _correct)
+        adv = scoring.advancing_from_stage1(scoring.score_stage(sp.STAGE1))
+        with pytest.raises(OSError):
+            prep.prepare_stage2(adv)
+    finally:
+        prep.shutil = _sh
+
+    # Stage 1 の公開済み音声は無傷、staging も残っていない
+    assert {p.name: p.read_bytes() for p in audio.glob("*.wav")} == before
+    assert not list((out / "stage2").glob("audio.staging")) if (out / "stage2").exists() else True
+    assert not (out / "stage1" / "audio.staging").exists()

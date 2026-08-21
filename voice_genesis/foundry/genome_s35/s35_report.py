@@ -78,6 +78,7 @@ def publish_bundle(pairs: Tuple[Tuple[Path, str], ...]) -> None:
 
 
 def build_results(scored: Dict[str, Any]) -> Dict[str, Any]:
+    """記録本体を組む。`_` 始まりの内部フィールドは出力へ含めない。"""
     genes = {}
     for g, v in scored["genes"].items():
         s1, s2 = v["stage1"], v["stage2"]
@@ -307,7 +308,10 @@ def main(stage1_path: Optional[Path] = None, stage2_path: Optional[Path] = None)
         print("BLOCKED: 確定済み記録と判定が食い違う再実行を拒否した")
         print(f"確定済みの記録は保持した（詳細は {LAST_ERROR.name}）")
         return 3
-    publish_bundle(((JSON_PATH, prep._dumps(res)), (RECORD_PATH, render_record(res))))
+    # 開示文書も同じ束で publish する（ガードを通ってから初めてディスクへ出る）
+    publish_bundle(((JSON_PATH, prep._dumps(res)),
+                    (RECORD_PATH, render_record(res)),
+                    (scoring.KEY_REVEAL, scored["_key_reveal_text"])))
     LAST_ERROR.unlink(missing_ok=True)      # 成功したら古いエラーを残さない
 
     ov = res["overall"]

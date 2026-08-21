@@ -209,10 +209,14 @@ def advancing_from_stage1(stage1: Dict[str, Any]) -> List[str]:
     return sp.advancing_genes({g: v["correct"] for g, v in stage1["by_gene"].items()})
 
 
-def write_key_reveal(key: Dict[str, Any], key_sha: str, commitment: str,
-                     answers_sha: Dict[int, str], path: Optional[Path] = None) -> str:
-    """全回答が凍結された**後**にのみ生成する。"""
-    path = KEY_REVEAL if path is None else path
+def build_key_reveal(key: Dict[str, Any], key_sha: str, commitment: str,
+                     answers_sha: Dict[int, str]) -> Tuple[Dict[str, Any], str, str]:
+    """開示文書を**作るだけ**（書かない）。`(doc, text, sha256)` を返す。
+
+    書き込みは `s35_report.main()` が確定記録ガードを通した**後**に、
+    JSON / Markdown と同じ束で行う。公開の可否を決めるガードより前に
+    成果物を書くと、拒否された再実行でも開示が差し替わってしまう。
+    """
     reveal = {
         "protocol_version": key.get("protocol_version"),
         "revealed_after_answers_sha256": {str(k): v for k, v in sorted(answers_sha.items())},
@@ -222,8 +226,8 @@ def write_key_reveal(key: Dict[str, Any], key_sha: str, commitment: str,
         "plans": key.get("plans"),
         "trials": key["trials"],
     }
-    path.write_text(prep._dumps(reveal), encoding="utf-8")
-    return prep.sha256_file(path)
+    text = prep._dumps(reveal)
+    return reveal, text, prep.sha256_bytes(text.encode("utf-8"))
 
 
 def _assert_same_listener(s1: Dict[str, Any], s2: Optional[Dict[str, Any]]) -> None:
@@ -365,7 +369,8 @@ def finalize(stage1_path: Optional[Path] = None,
                        "not_evaluable_reason": plan.get("not_evaluable_reason"),
                        "contexts": []}
 
-    reveal_sha = write_key_reveal(key, key_sha, commitment, answers_sha)
+    _reveal, reveal_text, reveal_sha = build_key_reveal(
+        key, key_sha, commitment, answers_sha)
 
     candidates = sorted(g for g, v in genes.items()
                         if v["verdict"] == sp.GeneVerdict.PERCEPTIBLE_CANDIDATE.value)
@@ -380,6 +385,8 @@ def finalize(stage1_path: Optional[Path] = None,
             s2["commitment_verified"] if s2 else True),
         "audio_verified": s1["audio_verified"] and (s2["audio_verified"] if s2 else True),
         "key_reveal_sha256": reveal_sha,
+        # 書き込みは report 側の確定記録ガードを通ってから（束で公開する）
+        "_key_reveal_text": reveal_text,
         "listener_id": s1["listener_id"], "session_id": s1["session_id"],
         "advancing_genes": advancing,
         "genes": genes,

@@ -252,30 +252,60 @@ def needed_wavs(trials: Sequence[Dict[str, Any]]) -> List[Tuple[str, str]]:
 
 def materialize_stage(trials: Sequence[Dict[str, Any]], stage: int,
                       resolved: Dict[Tuple[str, str], Path]) -> Dict[str, Dict[str, str]]:
-    """元 WAV の byte copy。コピー前後の SHA 一致を確認する。"""
+    """元 WAV の byte copy。コピー前後の SHA 一致を確認する。
+
+    **公開先を先に消さない。** staging へ全部作り切ってから入れ替える。
+    直接書くと、途中で落ちた瞬間に前回の音声が失われ、既存 manifest が
+    部分的な置き換えを指したまま復旧経路が無くなる（`genome_s3` の
+    WAV_STAGING と同じ扱い）。
+    """
     audio_dir = stage_audio_dir(stage)
-    if audio_dir.exists():
-        shutil.rmtree(audio_dir)
-    audio_dir.mkdir(parents=True, exist_ok=True)
+    staging = audio_dir.with_name(audio_dir.name + ".staging")
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True, exist_ok=True)
     audio_sha: Dict[str, Dict[str, str]] = {}
-    for t in trials:
-        per: Dict[str, str] = {}
-        for slot in ("A", "B", "X"):
-            side = t["x_side"] if slot == "X" else t[f"{slot.lower()}_side"]
-            src = resolved[(t["pair_key"], _condition_for(t["gene"], side))]
-            before = sha256_file(src)
-            dst = audio_dir / f"{t['trial_id']}_{slot}.wav"
-            shutil.copyfile(src, dst)
-            after = sha256_file(dst)
-            if before != after:
-                raise S35Stop(
-                    reason=f"{dst.name}: byte copy 前後で SHA が変わった "
-                           f"({before[:16]}… -> {after[:16]}…)",
-                    required_action="コピー経路を確認する。正規化・変換を挟まない",
-                    affected_gene=t["gene"])
-            per[slot] = after
-        audio_sha[t["trial_id"]] = per
+    try:
+        for t in trials:
+            per: Dict[str, str] = {}
+            for slot in ("A", "B", "X"):
+                side = t["x_side"] if slot == "X" else t[f"{slot.lower()}_side"]
+                src = resolved[(t["pair_key"], _condition_for(t["gene"], side))]
+                before = sha256_file(src)
+                dst = staging / f"{t['trial_id']}_{slot}.wav"
+                shutil.copyfile(src, dst)
+                after = sha256_file(dst)
+                if before != after:
+                    raise S35Stop(
+                        reason=f"{dst.name}: byte copy 前後で SHA が変わった "
+                               f"({before[:16]}… -> {after[:16]}…)",
+                        required_action="コピー経路を確認する。正規化・変換を挟まない",
+                        affected_gene=t["gene"])
+                per[slot] = after
+            audio_sha[t["trial_id"]] = per
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise                       # 公開先は触っていないので前回の pack が残る
+    _swap_audio_dir(staging, audio_dir)
     return audio_sha
+
+
+def _swap_audio_dir(staging: Path, dest: Path) -> None:
+    """出来上がった staging を公開先へ入れ替える（失敗時は元へ戻す）。"""
+    backup = dest.with_name(dest.name + ".prev")
+    if backup.exists():
+        shutil.rmtree(backup)
+    try:
+        if dest.exists():
+            os.replace(dest, backup)
+        os.replace(staging, dest)
+    except BaseException:
+        if backup.exists() and not dest.exists():
+            os.replace(backup, dest)
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
 
 
 _UI_TEMPLATE = """<meta charset="utf-8"><title>S3.5 ABX — Stage __STAGE__</title>
