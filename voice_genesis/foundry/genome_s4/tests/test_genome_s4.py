@@ -1303,6 +1303,8 @@ def test_38e_reveal_makes_answer_edits_non_scorable(tmp_path, monkeypatch):
     """key 開封後は同じ回答での再実行しか許さない（不成立 -> PASS の反転を塞ぐ）。"""
     reveal = tmp_path / "key_reveal.json"
     monkeypatch.setattr(srep.sb, "KEY_REVEAL", reveal)
+    # 「まだ生成していない」= HEAD にも無い状態を明示する（消された場合は別テスト）
+    monkeypatch.setattr(srep.sr, "tracked_in_head", lambda p: False)
     manifest = {"key_commitment": "c" * 64}
     srep._assert_reveal_idempotent("a" * 64, manifest)       # reveal 未生成なら通る
     reveal.write_text(json.dumps({"answers_sha256": "a" * 64,
@@ -1314,6 +1316,51 @@ def test_38e_reveal_makes_answer_edits_non_scorable(tmp_path, monkeypatch):
                                   "key_commitment": "d" * 64}), encoding="utf-8")
     with pytest.raises(S4Stop):
         srep._assert_reveal_idempotent("a" * 64, manifest)   # 別 pack -> 拒否
+
+
+@requires_world
+def test_38e2_deleting_the_reveal_does_not_reset_to_first_score(tmp_path, monkeypatch):
+    """`results/` は clean 判定の対象外なので、reveal を消せば「初回採点」に化けた。
+
+    worktree ではなく git 側（HEAD に在るか）を見て stale として落とす。
+    """
+    reveal = tmp_path / "key_reveal.json"          # 実体は無い
+    monkeypatch.setattr(srep.sb, "KEY_REVEAL", reveal)
+    manifest = {"key_commitment": "c" * 64}
+
+    monkeypatch.setattr(srep.sr, "tracked_in_head", lambda p: False)
+    srep._assert_reveal_idempotent("a" * 64, manifest)   # 未生成なら初回として通る
+
+    monkeypatch.setattr(srep.sr, "tracked_in_head", lambda p: True)
+    with pytest.raises(S4Stop):                          # HEAD に在る = 消された
+        srep._assert_reveal_idempotent("a" * 64, manifest)
+
+    monkeypatch.setattr(srep.sr, "tracked_in_head", lambda p: None)
+    with pytest.raises(S4Stop):                          # 判別不能は clean を偽らない
+        srep._assert_reveal_idempotent("a" * 64, manifest)
+
+
+@requires_world
+def test_38i_tracked_in_head_reports_unknown_without_git(monkeypatch):
+    monkeypatch.setattr(sr, "_git", lambda *a: None)
+    assert sr.tracked_in_head(sr.RESULTS / "key_reveal.json") is None
+    monkeypatch.setattr(sr, "_git", lambda *a: b"" if a[0] == "rev-parse" else None)
+    assert sr.tracked_in_head(sr.RESULTS / "nope.json") is False
+    # repo 外のパスは判定対象にしない
+    monkeypatch.undo()
+    assert sr.tracked_in_head(Path("/tmp/elsewhere.json")) is None
+
+
+@requires_world
+def test_38j_s4b_pins_its_execution_code():
+    """S4b も prepare / score の両方で clean worktree と closure を pin する。"""
+    import importlib
+    import inspect
+    s4b = importlib.import_module("s4b_confirm")
+    for fn in (s4b.prepare, s4b.score):
+        assert "_closure()" in inspect.getsource(fn), fn.__name__
+    src = inspect.getsource(s4b._closure)
+    assert "clean worktree" in src and "closure_digest" in src
 
 
 @requires_world

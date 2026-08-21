@@ -284,7 +284,27 @@ def clip_names(trial: Dict[str, Any]) -> List[Tuple[str, str]]:
             (f"{tid}_X.wav", trial["x_condition"])]
 
 
+def _closure() -> Dict[str, Any]:
+    """S4b も実行コードを pin する（S4 Phase A/C と同じ規律）。
+
+    これが無いと、pack 生成と採点の間に `plan()` / `sb.score()` / verdict 判定を
+    書き換えても、記録には入力と音の hash しか残らず「どのコードが走ったか」を
+    示せない。
+    """
+    import s4_runner as _sr  # noqa: PLC0415
+    wt = _sr.worktree_state()
+    if wt["clean"] is not True:
+        reason = ("git 状態を確認できない" if wt["clean"] is None
+                  else f"未コミットの変更がある: {wt['entries'][:5]}")
+        raise S4Stop(
+            cause=f"S4b も clean worktree を要求する（{reason}）",
+            impact="選択・採点した実装と記録が対応せず、確認結果が再現不能になる",
+            minimal_fix="変更を commit してから実行する")
+    return {"worktree": wt, "closure": _sr.closure_digest()}
+
+
 def prepare() -> int:
+    prepare_closure = _closure()
     s4, s4_sha, s3 = load_inputs()
     cells = plan(s4, s3)
     salt = os.urandom(32)
@@ -304,7 +324,7 @@ def prepare() -> int:
            "audio_sha256": {k: dict(sorted(v.items()))
                             for k, v in sorted(audio_sha.items())},
            "selection_rule": SELECTION_RULE, "salt_hex": salt.hex(),
-           "cells": cells,
+           "prepare_closure": prepare_closure, "cells": cells,
            "trials": {t["trial_id"]: {k: t[k] for k in sorted(t) if k != "_uid"}
                       for t in trials}}
     key_raw = sb.canonical_bytes(key)
@@ -361,6 +381,7 @@ def _materialize(trials, resolved, staging) -> Dict[str, Dict[str, str]]:
 
 
 def score() -> int:
+    score_closure = _closure()
     manifest, _mf_sha = _load(BLIND_MANIFEST, "S4b blind_manifest.json")
     key_raw = PRIVATE_KEY.read_bytes() if PRIVATE_KEY.exists() else b""
     if not key_raw or not sb.verify_commitment(key_raw, manifest):
@@ -412,6 +433,8 @@ def score() -> int:
         "key_commitment": manifest["key_commitment"],
         "commitment_verified": True, "pack_audio_verified": True,
         "answer_binding_verified": True,
+        "prepare_closure": key.get("prepare_closure"),
+        "score_closure": score_closure,
         # 閾値は S4 §15.1 の写し。**新しい裁定ではない**（S4 の verdict は変えない）。
         "verdict": "CONFIRMED" if correct == len(per_cell) else "NOT_CONFIRMED",
         "s4_overall_unchanged": True,
@@ -465,6 +488,19 @@ def _assert_reveal_idempotent(answers_sha: str, manifest: Dict[str, Any]) -> Non
     CONFIRMED へ反転できてしまう。
     """
     if not KEY_REVEAL.exists():
+        import s4_runner as _sr  # noqa: PLC0415 — git 参照だけに使う
+        tracked = _sr.tracked_in_head(KEY_REVEAL)
+        if tracked is True:
+            raise S4Stop(
+                cause=f"開封済みの {KEY_REVEAL.name} が worktree から消えている",
+                impact="正解を見たあとで reveal を消し、回答を書き換えて"
+                       "「初回採点」として通す経路になる",
+                minimal_fix="git から reveal を復元する。やり直すなら pack を作り直す")
+        if tracked is None:
+            raise S4Stop(
+                cause="git が使えず、reveal が未生成なのか消されたのか判別できない",
+                impact="開封後の回答差し替えを検出できないまま採点することになる",
+                minimal_fix="git が使える環境で実行する")
         return
     try:
         reveal = json.loads(KEY_REVEAL.read_bytes().decode("utf-8"))

@@ -520,6 +520,22 @@ def _assert_reveal_idempotent(answers_sha: str, manifest: Dict[str, Any]) -> Non
     再採点できると、正当な不成立を PASS へ反転できてしまう。
     """
     if not sb.KEY_REVEAL.exists():
+        # **消えているだけ**かもしれない。`results/` は clean worktree 判定の
+        # 対象外なので、開封後に reveal を消して回答を書き換え、「初回採点」として
+        # 通す経路が残る。git 側に痕跡があれば stale として落とす。
+        tracked = sr.tracked_in_head(sb.KEY_REVEAL)
+        if tracked is True:
+            raise S4Stop(
+                cause=f"開封済みの {sb.KEY_REVEAL.name} が worktree から消えている",
+                impact="正解を見たあとで reveal を消し、回答を書き換えて"
+                       "「初回採点」として通す経路になる",
+                minimal_fix="git から reveal を復元する。やり直すなら Phase A から"
+                            "新しい pack を作る")
+        if tracked is None:
+            raise S4Stop(
+                cause="git が使えず、reveal が未生成なのか消されたのか判別できない",
+                impact="開封後の回答差し替えを検出できないまま採点することになる",
+                minimal_fix="git が使える環境で実行する")
         return
     try:
         reveal = json.loads(sb.KEY_REVEAL.read_bytes().decode("utf-8"))
