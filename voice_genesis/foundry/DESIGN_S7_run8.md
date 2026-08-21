@@ -1606,16 +1606,24 @@ R-rescue : Stage 1〜4 は完全に B0 と同一。触るのは出力波形だ�
     （`s1_gate/gate_synth.py:1129-1167`）。その場合 S と対照は
     **SP cue ではなく配分そのものが違う**ので、S が勝っても cue の証拠にならない
 
-  構成手順:
+  構成手順（2026-08-21 訂正 — 初版は「SP 分を /r/ へ加える」と「全非 SP 音素が
+            S と完全一致」を同時に要求しており、**どの正の sp_frames でも
+            assert が成立しない内部矛盾**だった。Codex 指摘を採用）:
     1. S アームを走らせ、その Stage 1 出力 final_phone_dur^S を取得する
-    2. SP エントリを取り除き、その frame 数を直前の /r/ へ加える
-    3. **残る全音素の frame 数は final_phone_dur^S のコピーをそのまま使う**
-       （対照側で Stage 1 を再実行しない）
-    4. assert: 非 SP 音素の frame 配分が S と**完全一致**する
-       （一致しない実装は対照として無効・fail-closed）
+    2. **frame sink を 1 音素に固定する** = 終端モーラの `/r/`
+       （SP エントリの frame 数はここへ、ここへだけ加える）
+    3. **sink 以外の全非 SP 音素**の frame 数は final_phone_dur^S のコピーを
+       そのまま使う（対照側で Stage 1 を再実行しない）
+    4. assert（**sink を除いた**等値検査。ここが前提を機械で縛る箇所）:
+         for ph in 非 SP 音素 \ {sink}:  dur^ctrl[ph] == dur^S[ph]
+         dur^ctrl[sink] == dur^S[sink] + sp_frames
+         sum(dur^ctrl) == sum(dur^S) == 総 frame 数
+       いずれか不成立なら対照として無効（fail-closed）
 
   残る既知の交絡（明示する）:
-    sp_frames が「末尾の SP」に置かれるか「先頭側の /r/」に加わるかの差は残る。
+    sink を 1 音素に固定した代償として、**sp_frames が「末尾の SP」に置かれるか
+    「sink = 先頭側の /r/」に加わるか**の差は残る（これは構成上消せない —
+    総 frame を固定したまま SP を消せば、その frame は必ずどこかへ行く）。
     D アームの ladder が同程度の /r/ 伸長に感度を示した場合、S の優位は
     SP cue に帰属できない -> verdict = duration_confounded
 
@@ -1847,12 +1855,27 @@ TRF が動いた」は「TRF は pitch trajectory に因果感度を持つ」ま
       SP       -> 既存: 各 target row の `/ri/` 終端が `transcriptions` 上で
                   SP へ接続していること（§8-5-2・すでに機械検証可）
       Duration -> **アラインメント後の target row で数値規則を検証する**:
-                  方向規則 = 当該 row の終端モーラの `/r/` frame 比
-                             r_ratio = r / (r + i) が、**同一話者の
-                             baseline 15 row の中央値より大きい**こと
-                             （= 8-0G の primary level の向きと同符号。
-                               絶対閾値は候補プール実測後に凍結してよいが、
-                               **選抜を 1 度も走らせる前に**この JSON へ書く）
+                  比較量 = 当該 row の終端モーラの `/r/` frame 比
+                           r_ratio = r / (r + i)
+                  **baseline の母集団を §3 の台帳から取る**（2026-08-21 訂正 —
+                    初版は「baseline 15 row の中央値」と書いたが、**その 15 row
+                    には終端 `/ri/` を持たない row が多数含まれ**
+                    〔`recording_kit/cards.md` の母音単独 row 等〕、
+                    median の母集団が実装ごとに変わって T2 の機械性が崩れる。
+                    Codex 指摘を採用）:
+                      eligible baseline events
+                        = §3 `target_exposure_ledger` が同一話者について
+                          列挙する **`position = utterance_final` かつ
+                          `transition = ri_to_SP`** のイベント
+                          （抽出規則は §3 で既に凍結済み。ここで新しい抽出を
+                            定義しない）
+                      baseline_r_ratio = median over eligible baseline events
+                  方向規則 = row の r_ratio > baseline_r_ratio
+                             （= 8-0G の primary level の向きと同符号）
+                  **eligible baseline events が 5 件未満なら規則を定義できない**
+                    -> Duration は `not_trainable_under_current_contract`
+                       （§7G-8）。median を薄い標本で作って通さない
+                  絶対閾値を足す場合も**選抜を 1 度も走らせる前に**この JSON へ書く
                   検証単位 = row。満たさない row は**選抜から落とす**
       F0       -> §7G-8 のとおり符号化 mini-spec が凍結されるまで受け入れ規則を
                   定義できない -> `causal_but_not_trainable_yet` のまま進まない
@@ -1988,7 +2011,25 @@ baseline 9 row の除去かは分離されていない**（尺を揃えた非標
   判定     : **全話者（user を含む）× 全対象セル × 両軸が pass のときのみ**
              経路 1 で宣言可。**1 つでも超えたら経路 3**（= 実測された逸脱で
              あり「証拠が無い」ではない・2026-08-21・Codex P2 指摘を採用）
-  ε_id     : §7-1 の閾値と**同時に**（8-B 開始前に）凍結する。事後に決めない
+  ε_id     : §7-1 の閾値と**同時に**（8-B 開始前に）凍結する。事後に決めない。
+             **導出規則も凍結する**（2026-08-21・Codex P1 指摘を採用 —
+             初版は「いつ凍結するか」しか書いておらず、**寛大な ε_id を置けば
+             どんな identity 移動も経路 1 を通る**状態だった）。
+             §12-0-C の `ε_axis` と**同じ様式**で、**測定側の性質だけ**から出す:
+
+               ε_id = max( numerical_floor_id , reproducibility_bound_id )
+
+                 numerical_floor_id
+                   = 同一バイトの wav に対する `normalized_e1_e2` ->
+                     `cosine_distance` の数値量子化誤差
+                 reproducibility_bound_id
+                   = **同一 checkpoint・同一条件**で独立プロセス再レンダした
+                     ペア間の cosine distance の**上側 95 パーセンタイル**
+                     （= 「何も変えなくても出る距離」の幅。母集団は
+                       §7G-12 の対象セルと同一）
+
+             **「群を一番綺麗に分ける ε_id」にしない**（§12-0-A-3 と同型）。
+             導出に使った反復・母集団・数値を worked example として記帳する
   未処置反復が 0 本（8-R 未実施）/ 計器が適用できない場合は d_ref が定義できず
   **測定そのものが成立しない** -> 経路 2（§9-0 と同じ扱い）
 
