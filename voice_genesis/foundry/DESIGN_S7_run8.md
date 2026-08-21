@@ -1598,9 +1598,26 @@ R-rescue : Stage 1〜4 は完全に B0 と同一。触るのは出力波形だ�
 「終端遷移 cue の効果」と「終端母音が短くなった効果」の和になる。したがって:
 
 ```
-必須の対照 S-frames-only:
-  SP トークンを入れず、同じ frame 数だけ終端母音から削り、削った分を
-  直前の /r/ へ回す（総 frame 固定）
+必須の対照 S-frames-only（**S の実配分から構成する** = 2026-08-21・
+                          Codex P2 指摘を採用）:
+  ★ 独立に Stage 1 を走らせて「同じ frame 数だけ削る」のでは対照にならない。
+    SP トークンを足すと encoder 出力が変わり、duration predictor は
+    sp_frames の固定移動を**超えて** /r/ と /i/ を再配分しうる
+    （`s1_gate/gate_synth.py:1129-1167`）。その場合 S と対照は
+    **SP cue ではなく配分そのものが違う**ので、S が勝っても cue の証拠にならない
+
+  構成手順:
+    1. S アームを走らせ、その Stage 1 出力 final_phone_dur^S を取得する
+    2. SP エントリを取り除き、その frame 数を直前の /r/ へ加える
+    3. **残る全音素の frame 数は final_phone_dur^S のコピーをそのまま使う**
+       （対照側で Stage 1 を再実行しない）
+    4. assert: 非 SP 音素の frame 配分が S と**完全一致**する
+       （一致しない実装は対照として無効・fail-closed）
+
+  残る既知の交絡（明示する）:
+    sp_frames が「末尾の SP」に置かれるか「先頭側の /r/」に加わるかの差は残る。
+    D アームの ladder が同程度の /r/ 伸長に感度を示した場合、S の優位は
+    SP cue に帰属できない -> verdict = duration_confounded
 
 S が EFFECTIVE_LEVER を名乗れるのは、S が §7G-5 を満たし
 **かつ S-frames-only が同じ判定を満たさない**場合だけである。
@@ -1823,6 +1840,25 @@ TRF が動いた」は「TRF は pitch trajectory に因果感度を持つ」ま
       SP       -> 現行カードのまま（/ri/→SP 明示の指示）
       Duration -> 8-0G の primary level の**向き**に対応する発声指示を追加
                   （成功した配分側へ寄せる。数値そのものを読み上げさせない）
+[ ] **選ばれたレバーの形質受け入れ規則を `s7_0e_pack_spec.json` へ凍結する**
+    （2026-08-21・Codex P1 指摘を採用。**発声指示だけでは T2「機械検証可能性」を
+      満たさない** — 歌い手のテイクが実際に配分を動かしていなくても §8-5-4 の
+      選抜は通り、**選ばれたレバーを含まないパックで 40K 学習が回る**）
+      SP       -> 既存: 各 target row の `/ri/` 終端が `transcriptions` 上で
+                  SP へ接続していること（§8-5-2・すでに機械検証可）
+      Duration -> **アラインメント後の target row で数値規則を検証する**:
+                  方向規則 = 当該 row の終端モーラの `/r/` frame 比
+                             r_ratio = r / (r + i) が、**同一話者の
+                             baseline 15 row の中央値より大きい**こと
+                             （= 8-0G の primary level の向きと同符号。
+                               絶対閾値は候補プール実測後に凍結してよいが、
+                               **選抜を 1 度も走らせる前に**この JSON へ書く）
+                  検証単位 = row。満たさない row は**選抜から落とす**
+      F0       -> §7G-8 のとおり符号化 mini-spec が凍結されるまで受け入れ規則を
+                  定義できない -> `causal_but_not_trainable_yet` のまま進まない
+[ ] **受け入れ規則を満たす target row が 9 本に満たない場合は fail-closed**。
+    dosage を埋めるために規則を満たさない row を混ぜない（混ぜた時点で
+    「その形質を教育した」という主張が成立しなくなる）
 [ ] §8-5-2c の E=3 承認条件 7 項目のうち未充足分（2/3/5/6）を閉じる
 [ ] §8-5-2b の**収録前ゲート**（決定論選抜の空回しで voiced と total ph_dur の
     両方が ±1% に入る 6 row 部分集合の存在を確認）を通す
@@ -1960,7 +1996,7 @@ baseline 9 row の除去かは分離されていない**（尺を揃えた非標
   （実測を試みていない / 計器が適用できない / 8-R が無く d_ref が定義できない）。
   **実測して超えた場合はここへ来ない**（それは経路 3）:
   宣言文を次へ**縮退**させ、実現された identity の不変は undetermined と記帳:
-  > 特定の Performance / transition 形質への単一教育介入によって、
+  > **dosage 固定の標的置換パッケージ**による単一介入によって、
   > **Identity 入力（spk_embed / 話者構成 / dosage）を変更せず**
   > TRF を再現可能に改善した（実現された identity の保存は undetermined）。
 
@@ -1969,7 +2005,7 @@ baseline 9 row の除去かは分離されていない**（尺を揃えた非標
   status = identity_not_preserved
            （超えた (speaker, cell, axis) と d_B / d_ref / ε_id を記帳）
   宣言文から **Identity 句を落とす**（入力側の不変も主張しない）:
-  > 特定の Performance / transition 形質への単一教育介入によって、
+  > **dosage 固定の標的置換パッケージ**による単一介入によって、
   > TRF を再現可能に改善した。**ただし実現された identity は保存されなかった**
   > （話者 <spk> で d(run7, 8-B) が未処置ドリフト + ε_id を超過）。
   ※ この場合 run 8 は「TRF は改善したが Identity 代償を伴う」結果であり、
@@ -1978,8 +2014,9 @@ baseline 9 row の除去かは分離されていない**（尺を揃えた非標
 
 **経路 1 で名乗ってよい宣言文（射程を文中に残す・2026-08-21 追加）**:
 
-> 特定の Performance / transition 形質への単一教育介入によって、
-> **非標的終端文脈で測る限り Identity を変更せず**、TRF を再現可能に改善した
+> **dosage 固定の標的置換パッケージ**（§7G-6 の primary lever が指す形質を
+> 狙って構成したもの）による単一介入によって、**非標的終端文脈で測る限り
+> Identity を変更せず**、TRF を再現可能に改善した
 > （標的 `/ri/` 文脈の identity 保存は `undetermined`）。
 
 **無条件の `Identity を変更せず` は本設計のどの経路でも名乗れない。** 標的文脈で
@@ -2722,8 +2759,11 @@ speaker-local である」ことではない**（package-level の限定より�
       `HUMAN_CONFIRMED` / `machine_effect_only` が記帳されている
 - [ ] 8-0D の判定（`trainable` / `causal_but_not_trainable_yet` /
       `not_trainable_under_current_contract`）が T1–T3 の軸別に記帳されている
-- [ ] `trainable` の場合のみ 8-0E の 5 項目が全て閉じ、`s7_0e_pack_spec.json` が
+- [ ] `trainable` の場合のみ 8-0E の項目が全て閉じ、`s7_0e_pack_spec.json` が
       pin されている。**収録の発注はこの pin より後**
+- [ ] **選ばれたレバーの形質受け入れ規則が `s7_0e_pack_spec.json` に凍結され、
+      アラインメント後の target row で機械検証されている**（§7G-9）。
+      規則を満たす row が 9 本に満たない場合は fail-closed で 8-B へ進まない
 - [ ] 全アーム NOT_EFFECTIVE の場合、裁定が **`undetermined`** で記帳されている
       （「native レバーは存在しない」と書いていない = §7G-5 / §9-0b）
 - [ ] GPU 費用 $0
