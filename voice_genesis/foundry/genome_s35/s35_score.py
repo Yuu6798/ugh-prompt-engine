@@ -59,6 +59,16 @@ def load_answers(stage: int, path: Optional[Path] = None) -> Tuple[Dict[str, Any
         raise prep.S35Stop(
             reason=f"Stage {stage} の answers が dict でない: {type(answers).__name__}",
             required_action="answers を {trial_id: A/B/UNSURE} の object にする")
+    # **各値の型まで見る。** 器の形だけ見て中身を見ないと、`["A"]` や `{"answer":"A"}`
+    # が `check_complete()` の集合判定に届き、unhashable で `TypeError` になる
+    # （`S35Stop` でないので BLOCKED 記録が出せない）。器と中身は同じ穴の
+    # 別の深さであって、別のファミリーではない。
+    bad_types = sorted(t for t, v in answers.items() if not isinstance(v, str))
+    if bad_types:
+        raise prep.S35Stop(
+            reason=f"Stage {stage} の回答値が文字列でない: "
+                   f"{[(t, type(answers[t]).__name__) for t in bad_types[:3]]}",
+            required_action="各回答を A / B / UNSURE の文字列にする")
     return data, prep.sha256_bytes(raw)
 
 
@@ -230,6 +240,15 @@ def build_key_reveal(key: Dict[str, Any], key_sha: str, commitment: str,
         "key_commitment": commitment,
         "key_sha256": key_sha,
         "commitment_verified": commitment == key_sha,
+        # **commitment の原像そのもの。** これが無いと第三者は
+        # `sha256(canonical_bytes(key)) == key_commitment` を再計算できず、
+        # `commitment_verified: true` が検証不能な自己申告のまま下流へ流れる
+        # （commitment 方式の目的は第三者検証なので、それでは意味を成さない）。
+        # `salt_hex` / `s3_results_sha256` は開示後の秘匿価値がゼロ —
+        # 全正解は下の `trials` で既に公開されている。
+        "key_preimage": {k: key[k] for k in sorted(key)},
+        "key_preimage_note": ("sha256(canonical_bytes(key_preimage)) == key_commitment "
+                              "を再計算して検証できる"),
         "plans": key.get("plans"),
         "trials": key["trials"],
     }

@@ -224,6 +224,51 @@ Stage 2 pack が無い / trial 総数が 8 を超える。
 | **壊れた JSON で BLOCKED が出せない** | S3.5 が読む JSON を**全数** `prep.json_object()` 経由にし、根が object でなければ `S35Stop`。対象 = S3 正本 / blind manifest / private key / 回答 / 既存 key_reveal。`load_finalized()` のみ非 dict を `None` 扱い | `test_no_json_loads_outside_the_shared_gate` が `json.loads` の出現箇所を helper と `load_finalized` の 2 つに固定 |
 | **Stage 1 失敗で private key が孤児化** | key 書き込みを temp + `chmod 0600` + `os.replace` の原子操作にし、**書き込みを含む** Stage 1 全体を 1 つの巻き戻し scope に入れる。失敗時は呼び出し前の状態へ復元 | `test_private_key_write_failure_leaves_nothing` / `test_stage1_failure_leaves_no_orphan_private_key` |
 
+### 第 8 巡の終端宣言は範囲不足だった（2026-08-21・第 9 巡で訂正）
+
+第 8 巡で「壊れた JSON で BLOCKED が出せない」を全数掃討したと宣言したが、
+**掃討したのは JSON の根と器の形だけ**で、`answers` の**各値の型**は見て
+いなかった。`["A"]` / `{"answer":"A"}` は `check_complete()` の集合判定に
+届いて unhashable の `TypeError` になり、同じく BLOCKED 記録が出せない。
+器と中身は同じ穴の別の深さであって別ファミリーではないので、第 9 巡で
+値の型検査を足して掃討を完了させた（`test_non_string_answer_value_is_blocked`）。
+
+**終端宣言は「実際に全数を潰したこと」が前提であり、宣言したこと自体を
+根拠に同型指摘を見送ってはならない。** 宣言の範囲を超えた同型指摘が来たら、
+宣言が不足していたと認めて掃討を完了させる。
+
+### commitment の第三者検証（2026-08-21・第 9 巡）
+
+`key_reveal.json` は `key_sha256 == key_commitment` を主張するだけで、
+`canonical_bytes` に含まれる `salt_hex` / `s3_results_sha256` を載せていな
+かった。private key は恒久 gitignore なので、**公開物だけでは commitment を
+再計算できず**、`commitment_verified: true` が検証不能な自己申告になる。
+commitment 方式の目的は第三者検証なので、これは目的未達にあたる。
+
+対応として reveal に `key_preimage`（private key の全鍵）を載せた。
+開示後なので秘匿価値はゼロ（全正解は `trials` で既に公開済み）。
+`test_reveal_alone_reproduces_the_commitment` が、private key を一切参照せず
+reveal だけから `sha256(canonical_bytes(key_preimage)) == key_commitment` を
+再計算できることを検査する。
+
+**本 session の確定済み記録には遡及適用しない。** 適用すると
+`key_reveal_sha256` が変わり、`conflicting_with_finalized()` が正しく拒否する
+（第 9 巡で実測: 差分は `key_reveal_sha256` の 1 フィールドのみ、verdict・
+`answers_sha256`・`key_commitment`・`blind_manifest_sha256` は全一致）。
+コード自身が出す `required_action` が「確定済み session の結果はそのまま残す。
+やり直すなら新規に事前登録した別 session として実施する」である以上、
+**成果物を良くするためであっても確定記録を書き換えない。**
+
+本 session の commitment を検証する手段は現時点で以下に限られる（開示）:
+
+- `7ffb568`（Stage 1 出題前）で push 済みの `blind_manifest.json` に
+  `key_commitment` が入っており、GitHub の push 時刻は `results/` の write
+  権限では書き換えられない
+- 原像の再計算には手元の `answer_key.private.json` が要る。これは
+  第 9 巡で実測し `sha256(canonical_bytes(key)) == d4fadda8…` = 回答前に
+  push した値と一致することを確認した。ただし**第三者はこれを追試できない**
+  ので、本 session に限りこの一致は attestation であって proof ではない
+
 ### 見送るときの手順
 
 指摘が (A)(B)(C) のどれにも当たらないと判断したら、**resolve せず**本節への

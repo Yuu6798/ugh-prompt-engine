@@ -1332,3 +1332,64 @@ def test_private_key_write_failure_leaves_nothing(s35, monkeypatch) -> None:
     monkeypatch.setattr(os, "chmod", real_chmod)
     info = prep.prepare_stage1(salt=SALT)
     assert prep.PRIVATE_KEY.exists() and info["trial_count"] > 0
+
+
+@pytest.mark.parametrize("bad", [["A"], {"answer": "A"}, 1, None, True])
+def test_non_string_answer_value_is_blocked(s35, bad) -> None:
+    """回答**値**が文字列でなければ BLOCKED を出す。
+
+    `v not in {"A","B","UNSURE"}` は list / dict で `TypeError`（unhashable）に
+    なり、`S35Stop` でないので BLOCKED 記録が出せなくなる。器の形だけでなく
+    中身の型まで見る。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    p1 = _answer(out, 1, _correct)
+    d = json.loads(p1.read_text(encoding="utf-8"))
+    d["answers"][sorted(d["answers"])[0]] = bad
+    p1.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(prep.S35Stop) as exc:
+        scoring.score_stage(sp.STAGE1)
+    assert "回答値" in exc.value.as_dict()["reason"]
+    scored, blocked = scoring.finalize_or_blocked()
+    assert scored is None and blocked["status"] == "BLOCKED"
+
+
+def test_reveal_alone_reproduces_the_commitment(s35) -> None:
+    """**公開された reveal だけ**から commitment を再計算できること。
+
+    これが成り立たないと `commitment_verified: true` は検証不能な自己申告で、
+    commitment 方式の目的（第三者検証）を満たさない。
+    """
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    _answer(out, 1, _correct)
+    s1 = scoring.score_stage(sp.STAGE1)
+    adv = scoring.advancing_from_stage1(s1)
+    prep.prepare_stage2(adv)
+    _answer(out, 2, _correct)
+    report.main()
+
+    reveal = json.loads(scoring.KEY_REVEAL.read_text(encoding="utf-8"))
+    # private key ファイルを一切参照せずに再計算する
+    recomputed = hashlib.sha256(prep.canonical_bytes(reveal["key_preimage"])).hexdigest()
+    assert recomputed == reveal["key_commitment"], "reveal だけで commitment を再現できない"
+    assert reveal["commitment_verified"] is True
+    # 原像は private key と同じ鍵集合（欠けていたら再計算が偶然一致しても無意味）
+    key, _sha = prep.load_private_key()
+    assert set(reveal["key_preimage"]) == set(key)
+
+
+def test_manifest_commitment_matches_published_reveal_preimage(s35) -> None:
+    """回答前に commit した manifest の `key_commitment` と、開示後の原像が一致する。"""
+    out, _doc = s35()
+    prep.prepare_stage1(salt=SALT)
+    committed = prep.load_manifest()["key_commitment"]
+    _answer(out, 1, _correct)
+    s1 = scoring.score_stage(sp.STAGE1)
+    prep.prepare_stage2(scoring.advancing_from_stage1(s1))
+    _answer(out, 2, _correct)
+    report.main()
+    reveal = json.loads(scoring.KEY_REVEAL.read_text(encoding="utf-8"))
+    assert hashlib.sha256(
+        prep.canonical_bytes(reveal["key_preimage"])).hexdigest() == committed

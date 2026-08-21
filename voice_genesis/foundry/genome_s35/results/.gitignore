@@ -8,3 +8,6 @@ stage2/
 # blind key は commit しない（回答前も回答後も）。回答ファイル本体も置かない。
 answer_key.private.json
 answers_stage*.json
+
+# 拒否された再実行の診断出力。走行ごとに変わる一時状態で、記録の一部ではない。
+last_error.json
