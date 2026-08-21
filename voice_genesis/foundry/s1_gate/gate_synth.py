@@ -1419,6 +1419,7 @@ def run_pipeline(
                 "hop_size": hop_size,
                 "sample_rate": sample_rate,
                 "f0_hz": f0_hz.reshape(-1).copy(),
+                "mel": np.asarray(mel).copy(),
                 "raw_waveform": y,
                 "normalized": False,
             }
