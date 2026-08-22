@@ -157,6 +157,10 @@ claims:
   causal_evidence_strength: descriptive
   rationale: 'OBS: record 自身の第 2 版時点の残存記述'
   notes: s4_record 第 3 版の残骸で同一文書 §6.2（4/4 viability PASS）と矛盾。正本は §6.2。record は無改変のまま本台帳で erratum 記録
+  superseded_by:
+  - R5-C21
+  - R5-C22
+  - R5-C25
 - claim_id: R5-C11
   source:
     file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
