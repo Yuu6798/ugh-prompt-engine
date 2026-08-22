@@ -131,6 +131,15 @@ testpaths = [
     # WORLD（pyworld）を要する ingestion テストだけが skip され、判定ロジックと
     # 決定論・計器分離の不変条件は pyworld 無しの CI でも実際に実行される。
     "voice_genesis/foundry/artificial_founder/tests/test_artificial_founder_p0.py",
+    # Phase D0 セルフレビュー修正（2026-08-22, Codex bot レビュー #6）: 依存フリーな
+    # D0 ガード3ファイルを個別収集する。debt_ledger_shape / run_contract_conformance
+    # は yaml/json のみで完全依存フリー。check_checkpoint_finite は torch 依存経路を
+    # pytest.importorskip("torch") で分離しており、CI（torch 非同梱）でも torch 不要
+    # 部分（sha256・fail-closed 経路・pin 照合・--out 衝突拒否・atomic write 等）は
+    # 実際に実行される。
+    "voice_genesis/foundry/tests/test_debt_ledger_shape.py",
+    "voice_genesis/foundry/tests/test_run_contract_conformance.py",
+    "voice_genesis/foundry/tests/test_check_checkpoint_finite.py",
 ]
 pythonpath = ["src", "."]
 markers = [

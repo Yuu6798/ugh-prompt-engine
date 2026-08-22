@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "voicegenesis-run-contract-projection/1",
   "title": "VoiceGenesis Run Contract — hash-bound machine projection",
-  "description": "DESIGN_<run>.md が実験契約の正本。本 schema はその正本から派生する machine projection (DESIGN_<run>.contract_projection.json) が満たすべき形状を定義する。DEBT_ADJUDICATION_v1.1.md 裁定4 / DEBT_REPAYMENT_PLAN_v1.0.md §6 Run Contract に対応する。各フィールドは未凍結を正直に表現するため {value, source, status} の object を許す。",
+  "description": "DESIGN_<run>.md が実験契約の正本。本 schema はその正本から派生する machine projection (DESIGN_<run>.contract_projection.json) が満たすべき形状を定義する。DEBT_ADJUDICATION_v1.1.md 裁定4 / DEBT_REPAYMENT_PLAN_v1.0.md §6 Run Contract に対応する。各フィールドは未凍結を正直に表現するため {value, source, status} の object を許す。x-gate-class（pre_run/post_run。properties 内の該当フィールドに直接付与）: main_training_gate == OPEN の判定条件が pre_run と post_run で異なる（Phase D0 セルフレビュー修正5）。pre_run（実行前に確定できる契約欄）は gate OPEN に PINNED（かつ value/source が非 null の実質 PINNED）を必須とする。post_run（実行後にのみ実測が存在し得る証拠欄: checkpoint_sha256 / artifact_manifest / cost_record）は gate OPEN 時に PENDING までは許容し BLOCKED は不可 — この欄の PINNED 化自体は run record closure 側（実行結果の記帳）の要件であり、gate OPEN の前提条件ではない。cost_record は「予算宣言は pre、実測記帳は post」の二面性があるが、v1.0 §6 の Run Contract 必須欄としては実測記帳の枠なので post_run に分類する（予算宣言自体は failure_abort_criteria 同様 pre 側の値として projection に残ってよい）。",
   "type": "object",
   "definitions": {
     "pinned_field": {
@@ -45,6 +45,7 @@
     },
     "single_intervention": {
       "type": "object",
+      "x-gate-class": "pre_run",
       "properties": {
         "declared": { "type": "boolean" },
         "intervention": { "type": "string" },
@@ -53,26 +54,39 @@
       "required": ["declared", "intervention", "count"],
       "additionalProperties": false
     },
-    "baseline_run": { "$ref": "#/definitions/pinned_field" },
-    "parent_run": { "$ref": "#/definitions/pinned_field" },
-    "code_commit_sha": { "$ref": "#/definitions/pinned_field" },
-    "dataset_manifest_sha256": { "$ref": "#/definitions/pinned_field" },
-    "dataset_row_order": { "$ref": "#/definitions/pinned_field" },
-    "config_sha256": { "$ref": "#/definitions/pinned_field" },
-    "dependency_pins": { "$ref": "#/definitions/pinned_field" },
-    "execution_profile": { "$ref": "#/definitions/pinned_field" },
-    "seed_sampler_settings": { "$ref": "#/definitions/pinned_field" },
-    "expected_speaker_map": { "$ref": "#/definitions/pinned_field" },
-    "checkpoint_sha256": { "$ref": "#/definitions/pinned_field" },
-    "artifact_manifest": { "$ref": "#/definitions/pinned_field" },
-    "fixed_probe_set": { "$ref": "#/definitions/pinned_field" },
-    "measurement_spec_version": { "$ref": "#/definitions/pinned_field" },
-    "hypothesis_algebra_version": { "$ref": "#/definitions/pinned_field" },
-    "human_evaluation_protocol": { "$ref": "#/definitions/pinned_field" },
-    "cost_record": { "$ref": "#/definitions/pinned_field" },
-    "failure_abort_criteria": { "$ref": "#/definitions/pinned_field" },
+    "baseline_run": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "parent_run": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "code_commit_sha": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "dataset_manifest_sha256": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "dataset_row_order": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "config_sha256": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "dependency_pins": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "execution_profile": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "seed_sampler_settings": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "expected_speaker_map": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "checkpoint_sha256": {
+      "$ref": "#/definitions/pinned_field",
+      "x-gate-class": "post_run",
+      "description": "実行後にのみ存在し得る証拠欄（run record closure 側の要件）。main_training_gate == OPEN 時は status PENDING まで許容し BLOCKED は不可。"
+    },
+    "artifact_manifest": {
+      "$ref": "#/definitions/pinned_field",
+      "x-gate-class": "post_run",
+      "description": "実行後にのみ存在し得る証拠欄（run record closure 側の要件）。main_training_gate == OPEN 時は status PENDING まで許容し BLOCKED は不可。"
+    },
+    "fixed_probe_set": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "measurement_spec_version": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "hypothesis_algebra_version": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "human_evaluation_protocol": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "cost_record": {
+      "$ref": "#/definitions/pinned_field",
+      "x-gate-class": "post_run",
+      "description": "実行後にのみ存在し得る証拠欄（run record closure 側の要件）。main_training_gate == OPEN 時は status PENDING まで許容し BLOCKED は不可。予算宣言（cap 額等）は pre 側の値として value に残ってよい — post_run 分類は『実測記帳の枠』であることの分類であり、値の中身が予算宣言であることを禁じない。"
+    },
+    "failure_abort_criteria": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
     "claim_strength_target": {
       "type": "object",
+      "x-gate-class": "pre_run",
       "properties": {
         "value": {
           "type": ["string", "null"],
