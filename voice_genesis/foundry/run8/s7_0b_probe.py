@@ -371,8 +371,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     gate_synth = load_gate_synth()
 
     out_path = Path(args.result_out)
+    # 結果 JSON の書き込み先が**レンダ入力のどれか**と衝突すると、`run_group` が
+    # 先に読み込んだ後で `write_text` がそれを上書きし、モデルや音素表を壊したまま
+    # 「成功」に見える（PR #303 第 12 巡 P1）。事前登録 3 点だけでなく、
+    # **実際に解決する入力を全部**保護対象に入れる。
     s7_io.reject_output_collision(
-        [out_path], [SPEC_PATH, trf.TRF_SPEC_PATH, Path(args.export_manifest)]
+        [out_path, Path(args.out_dir)],
+        [
+            SPEC_PATH, trf.TRF_SPEC_PATH, Path(args.export_manifest),
+            xm.INPUT_PINS_PATH, GATE_SYNTH_PATH,
+            acoustic_dir / f"{stem}.onnx",
+            acoustic_dir / "dsconfig.yaml",
+            acoustic_dir / f"{stem}.phonemes.json",
+            acoustic_dir / f"{stem}.{args.speaker}.emb",
+            Path(args.canon_model_dir), Path(args.vocoder_dir),
+            Path(args.canon_phonemes_txt),
+        ],
     )
     doc = run_group(
         gate_synth, spec, frozen, spec_sha, args.generation, args.speaker,

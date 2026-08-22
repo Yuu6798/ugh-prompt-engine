@@ -282,24 +282,24 @@ fi
 
 echo "| result: OK=$OK SKIP=$SKIP FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || { echo "| fail-closed: pin 不一致があるので止める" >&2; exit 1; }
-cat <<'NEXT'
+cat <<NEXT
 | 次: export → 校正レンダ再生成 → samples_sha256 照合
 |
-| export は **s7_export_manifest.py 経由で回す**。checkpoint と config.yaml を
-| --ckpt-dir から一度読み、その同じバイト列を checkpoints/<exp>/ へ staging して
+| export は **s7_export_manifest.py 経由で回す**。checkpoint と補助入力を --ckpt-dir
+| から一度読み、pin と照合し、その同じバイト列を checkpoints/<exp>/ へ staging して
 | から exporter を起動するので、「exporter が開く物」と「manifest が名乗る物」が
-| 構造的に一致する（PR #303 第 3–5 巡）:
+| 構造的に一致する（PR #303 第 3–8 巡）。**checkpoint / config の期待値は
+| --generation から引くので、コマンドラインには書かない**:
 |
-|   "$ROOT/venv_export/bin/python" \
-|     voice_genesis/foundry/run8/s7_export_manifest.py \
-|     --generation run7 \
-|     --exporter-root "$M/DiffSinger" --exp <checkpoints/ 配下の厳密なフォルダ名> \
-|     --ckpt-steps 40000 --ckpt-dir "$M/run7_ckpt" \
-|     --expected-checkpoint-sha256 518df090a8154e61f28b529f731418f4f97d47c3b56d1326d354e6be4629fa93 \
-|     --expected-config-sha256 e14ac2fde724998db05070550e86391c9090e582b1539747faa58356ae18d411 \
-|     --out-dir "$ROOT/out/onnx_export_s6_run7_acoustic" \
-|     --artifact acoustic_onnx=s6_run7_acoustic.onnx \
-|     --artifact acoustic_dsconfig=dsconfig.yaml \
-|     --artifact acoustic_phonemes_json=s6_run7_acoustic.phonemes.json \
-|     --out "$ROOT/out/onnx_export_s6_run7_acoustic/export_manifest.json"
+  "$ROOT/venv_export/bin/python" \\
+    voice_genesis/foundry/run8/s7_export_manifest.py \\
+    --generation run7 \\
+    --exporter-root "$M/DiffSinger" --exp s6_run7_acoustic \\
+    --ckpt-steps 40000 --ckpt-dir "$M/run7_ckpt" \\
+    --out-dir "$ROOT/out/onnx_export_s6_run7_acoustic" \\
+    --artifact acoustic_onnx=s6_run7_acoustic.onnx \\
+    --artifact acoustic_dsconfig=dsconfig.yaml \\
+    --artifact acoustic_phonemes_json=s6_run7_acoustic.phonemes.json \\
+    --artifact speaker_embed=s6_run7_acoustic.ritsu.emb \\
+    --out "$ROOT/out/onnx_export_s6_run7_acoustic/export_manifest.json"
 NEXT

@@ -154,17 +154,27 @@ def enumerate_validated_groups(group_dir: Path):
     """
     spec, spec_sha, _ = s7_io.read_json_with_pin(agg.SPEC_PATH)
     cell_ids = [str(c["cell_id"]) for c in spec["cells"]]
-    out = []
+    out, missing = [], []
     for gen, info in spec["expansion"]["generations"].items():
         for speaker in info["speakers"]:
             path = Path(group_dir) / f"{gen}_{speaker}.json"
             if not path.exists():
+                # **黙って飛ばさない**（PR #303 第 12 巡 P1）。落とすと群が
+                # `n_groups` と eligibility 会計から消え、下流（聴取セット /
+                # Gate pre-flight）は短くなった成果物を「完全」と扱う。
+                # eligible 群や陽性対照の欠落が**判定材料の不足を捏造**しうる。
+                missing.append(f"{gen}_{speaker}")
                 continue
             doc, sha, _ = s7_io.read_json_with_pin(path)
             agg.validate_group_document(
                 doc, path, gen, speaker, cell_ids, spec_sha, spec["measurement"]
             )
             out.append((path, doc, sha))
+    if missing:
+        raise agg.GroupFileError(
+            f"事前登録された群が {len(missing)} 件欠けている: {sorted(missing)}"
+            "（欠落は会計から静かに消えるので、判定材料の不足を捏造しうる）"
+        )
     validated = {path for path, _, _ in out}
     stray = sorted(
         p.name for p in Path(group_dir).glob("*.json")

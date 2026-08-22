@@ -169,3 +169,38 @@ def test_the_aggregate_epsilon_comes_from_the_preregistration_not_the_last_group
     doc = agg.aggregate(spec, GROUPS_DIR, sha)
     want = {a: float(v["epsilon"]) for a, v in spec["measurement"]["primary_axes"].items()}
     assert doc["epsilon"] == want
+
+
+# --- 第 12 巡 P1: 事前登録された群の欠落を拒否する ---------------------------
+
+
+def _remeasure_modules():
+    import s7_0b_remeasure as r11
+    import s7_0b_remeasure_12 as r12
+
+    return {"1.1": r11, "1.2": r12}
+
+
+@pytest.mark.parametrize("series", ["1.1", "1.2"])
+def test_a_missing_preregistered_group_is_rejected(tmp_path: Path, series: str):
+    """群が 1 つ欠けたまま通すと、`n_groups` と eligibility 会計から静かに消える。
+
+    下流（聴取セット / Gate pre-flight）は短くなった成果物を「完全」と扱うので、
+    eligible 群や陽性対照の欠落が**判定材料の不足を捏造**しうる — つまり
+    Gate 1 を UNDETERMINED で閉じさせられる。
+    """
+    import shutil
+
+    mod = _remeasure_modules()[series]
+    files = sorted(GROUPS_DIR.glob("*.json"))
+    assert len(files) == 10
+    for f in files[:-1]:
+        shutil.copy(f, tmp_path)
+    with pytest.raises(agg.GroupFileError):
+        mod.enumerate_validated_groups(tmp_path)
+
+
+@pytest.mark.parametrize("series", ["1.1", "1.2"])
+def test_the_complete_group_set_is_accepted(tmp_path: Path, series: str):
+    mod = _remeasure_modules()[series]
+    assert len(mod.enumerate_validated_groups(GROUPS_DIR)) == 10

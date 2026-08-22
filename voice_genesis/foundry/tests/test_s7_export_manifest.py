@@ -595,3 +595,32 @@ def test_the_committed_pins_cover_every_exporter_input():
         assert set(inputs) == {
             "config.yaml", "spk_map.json", "lang_map.json", "dictionary-ja.txt"
         }, gen
+
+
+def test_the_recovery_command_printed_by_provision_is_executable():
+    """`provision.sh` が最後に出す復旧レシピが**そのまま実行できる**か。
+
+    第 6・7・12 巡で 3 回、実行不能なレシピを出していた（存在しないパス /
+    必須引数の欠落 / 廃止フラグと `<...>` プレースホルダ）。目視をやめて、
+    出力を実際に `shlex` で割り、全フラグを argparse の `--help` と突き合わせる。
+    """
+    import re
+    import shlex
+    import subprocess
+
+    provision = (_RUN8 / "provision.sh").read_text(encoding="utf-8")
+    body = provision[provision.index("cat <<NEXT"):]
+    lines = [ln for ln in body.splitlines() if ln.startswith("  ") and ln.strip()]
+    assert lines, "レシピ行が見つからない（banner の書式が変わった？）"
+    cmd = " ".join(ln.strip().rstrip("\\") for ln in lines)
+    cmd = re.sub(r"\$\{?ROOT\}?|\$\{?M\}?", "/tmp/x", cmd)
+
+    argv = shlex.split(cmd)   # `<...>` が残っていればここで壊れる
+    assert "<" not in cmd and ">" not in cmd, f"プレースホルダが残っている: {cmd}"
+
+    script = _RUN8 / Path(argv[1]).name
+    help_txt = subprocess.run(
+        [sys.executable, str(script), "--help"], capture_output=True, text=True
+    ).stdout
+    unknown = sorted({a for a in argv if a.startswith("--")} - set(re.findall(r"--[\w-]+", help_txt)))
+    assert unknown == [], f"argparse に無いフラグを案内している: {unknown}"
