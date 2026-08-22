@@ -322,7 +322,7 @@ claims:
     section: §7 Open Questions
     approx_line: 380
   claim_text: 'Q8（無人停止保証）: 初回実走の範囲では成立 — 完走1+fail-closed3 の全4起動でself-stop が API 実測 EXITED として確認された。「スクリプト自体が死ぬと効かない」構造的露出は残存（設計上の受容のまま）'
-  source_verdict: none
+  source_verdict: 「成立」（初回実走の範囲では成立 — 完走1+fail-closed3の全4起動でself-stopがAPI実測EXITEDとして確認された）
   claim_class: mechanical_verification
   intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
   baseline: run 4（D3 を spk_id=0 へ併合していた学習）
@@ -334,7 +334,7 @@ claims:
     section: §7 Open Questions
     approx_line: 389
   claim_text: run5 の DESIGN_S4 §5 AC は全充足（④まで完了）。VG-E1 への引き渡し = founding 個体は interior 3 体のみ（VG-S3-001/002/003・出生 PASS。VG-S3-004は hidden control のため個体として台帳接続しない）
-  source_verdict: none
+  source_verdict: 「全充足」（run5のDESIGN_S4 §5 ACは全充足）
   claim_class: process
   intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
   baseline: run 4（D3 を spk_id=0 へ併合していた学習）
@@ -346,7 +346,7 @@ claims:
     section: §7 Open Questions
     approx_line: 399
   claim_text: 'run6 への送り（Q7 裁定を反映した再裁定入力）: user 宅録の投入前ラウドネス正規化 + T3 追加収録は維持 — ただし目的は「ノイズ対策」から「音量交絡の根治 + ②確定判定の阻害除去」へ絞られた。DX（run7）の Q7 分岐は「D3 有罪」側が有力になった'
-  source_verdict: none
+  source_verdict: 「維持」（投入前ラウドネス正規化+T3追加収録）／「D3有罪」側が有力になった
   claim_class: adjudication
   intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
   baseline: run 4（D3 を spk_id=0 へ併合していた学習）
@@ -419,7 +419,7 @@ claims:
     section: §5.4 判定材料
     approx_line: 210
   claim_text: 'この表の読み方は否定的: user の縮小 −2.67 LU に対し、データを一切変えていない ritsu が −2.88 LU と同等以上に縮んでいる。つまり user の縮小幅は走行間変動の幅に埋もれており、介入効果として取り出せない。「正規化で1ファイル内の揺れが縮んだ」とは本 run のデータからは言えない'
-  source_verdict: none
+  source_verdict: 「この表の読み方は否定的」
   claim_class: adjudication
   intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
   baseline: run 5（user 宅録を正規化せずに投入した学習）
@@ -431,7 +431,7 @@ claims:
     section: §5.6 正直会計の訂正
     approx_line: 234
   claim_text: '正直会計の訂正（2026-08-20・セルフレビュー2巡目）: run5/run6 の判定材料はいずれも `gate_synth_run4.py` 経由で生成しており、同スクリプトは run5 の pin `9899f3c` 時点で既に4話者 choices を持っていた。run7 実装 PR のコミットメッセージに「run5 は場当たり改変に依存」と書いたのは誤りで、本 record で訂正する'
-  source_verdict: none
+  source_verdict: 「誤りで、本recordで訂正する」
   claim_class: process
   intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
   baseline: run 5（user 宅録を正規化せずに投入した学習）
@@ -507,7 +507,7 @@ claims:
     section: §6.2 Q10 裁定 材料説明
     approx_line: 278
   claim_text: '留保の実体との関係: ②のプロトコルが揃えるのは各クリップの統合ラウドネスであって、s4_record が留保の実体として記録した区間内の時間変動は線形ゲインでは消えない。「材料側で音量手がかりが消えたから留保が外れた」という説明は成立しない — 材料の作り方は2回とも同じである。本 record が記帳できるのは「User の聴取判断として run6 では留保が外れた」という事実までであり、その理由を材料側の測定量で説明する記述は意図的に置かない'
-  source_verdict: none
+  source_verdict: 「成立しない」／「意図的に置かない」
   claim_class: adjudication
   intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
   baseline: run 5（user 宅録を正規化せずに投入した学習）
@@ -519,7 +519,7 @@ claims:
     section: §6.3 Q11 裁定
     approx_line: 297
   claim_text: Q11（④セル不安定の消長）= 直接判定は未了（④を run6 では生成しないため — DESIGN_S5 §4-4）。ただし③の実測から「入口の水準正規化では消えない」方向で決着
-  source_verdict: none
+  source_verdict: 「直接判定は未了」／「入口の水準正規化では消えない」方向で決着
   claim_class: adjudication
   intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
   baseline: run 5（user 宅録を正規化せずに投入した学習）
@@ -531,7 +531,7 @@ claims:
     section: §6.3 Q11 裁定
     approx_line: 300
   claim_text: ③の逐語「音量交絡が区間ごとにバラバラで安定せず・ここは変わり無し」は聴感の報告。実測は (i) 縮小幅が小さく聴感で拾える水準に達していない、(ii) 同時に ritsu も縮んでおり走行間変動と分離できない、の2点から「聴感・実測とも『交絡が解消した』とは言えない」が正確な記述になる
-  source_verdict: none
+  source_verdict: 「聴感・実測とも『交絡が解消した』とは言えない」
   claim_class: adjudication
   intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
   baseline: run 5（user 宅録を正規化せずに投入した学習）
@@ -543,7 +543,7 @@ claims:
     section: §6.3 Q11 裁定
     approx_line: 306
   claim_text: run6 の正規化はカード単位の統合ラウドネスを揃える設計で、カード内の時間変動（T1の3段強弱など意図されたダイナミクス）は保存する仕様（DESIGN_S5 §1.1）。残存する区間間の揺れは設計上の想定内であり、発生源は (a) user 収録のカード内ダイナミクス、(b) モデル/曲側の合成時変動、のいずれか — 入口の水準正規化の射程外と確定した
-  source_verdict: none
+  source_verdict: 「入口の水準正規化の射程外」（と確定した）
   claim_class: adjudication
   intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
   baseline: run 5（user 宅録を正規化せずに投入した学習）
@@ -555,7 +555,7 @@ claims:
     section: §6.3 Q11 裁定
     approx_line: 311
   claim_text: ④の原因仮説については、本 run は判定材料を提供していない（④を run6 では生成していない・仮説の実体である「カード内の音量ムラ」は §1.1 の仕様上そのまま保存される）。よって「音量ムラ説の可能性が低下した」とは言えない— 仮説は run6 前と同じ未検証のまま VG-E1 の founding 再評価へ持ち越す
-  source_verdict: none
+  source_verdict: 「音量ムラ説の可能性が低下した」とは言えない
   claim_class: adjudication
   intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
   baseline: run 5（user 宅録を正規化せずに投入した学習）
@@ -593,7 +593,7 @@ claims:
     section: §6.4 ①③の裁定 帰属未確定
     approx_line: 327
   claim_text: 'd3synth 改善の帰属は未確定（2説が交絡）: (i) 走行間変動（run6 で d3synth のデータ・spk_id・学習レシピは一切変えていない）、(ii) 共有デコーダ経由の間接効果（user wav は 15/15 変化しており、同一デコーダを共有する以上他話者の出力が動きうる）。単走行では (i)(ii) を分離できない'
-  source_verdict: none
+  source_verdict: 「d3synth 改善の帰属は未確定（2説が交絡）」
   claim_class: adjudication
   intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
   baseline: run 5（user 宅録を正規化せずに投入した学習）
@@ -788,7 +788,7 @@ claims:
     section: §4-2 整理表 取り消し線訂正
     approx_line: 160
   claim_text: 'user行「総合」欄の ~~最も改善が顕著~~ ← §5-1 で訂正: 聴取上の印象は記録どおりだが、その主要因（音量交絡解消）は run6 の介入効果であり run7 の教師交代に帰属できない（user 入力は run6→run7 で 15/15 バイト同一）'
-  source_verdict: none
+  source_verdict: 「~~最も改善が顕著~~ ← §5-1 で訂正」
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -802,7 +802,7 @@ claims:
     section: §5-1 Q12 二段階撤回（1）
     approx_line: 171
   claim_text: 初版は「達成」+「実録音教師は合成教師の代替として機能する」と書いた。→ 後段を撤回（代替性の主張には反復走行が要る）
-  source_verdict: none
+  source_verdict: 「達成」+「実録音教師は合成教師の代替として機能する」→ 撤回
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -816,7 +816,7 @@ claims:
     section: §5-1 Q12 二段階撤回（2）
     approx_line: 173
   claim_text: 第1訂正は「articulation側に限り達成」とした。→ これも撤回する。下に挙げる実測はいずれも語尾（終端）の局所所見であって、DESIGN_S6 §1.2 が事前登録した articulation 測度（さ行onset明瞭性）は §5-1b のとおり判定されていない
-  source_verdict: none
+  source_verdict: 「articulation側に限り達成」→ これも撤回する
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -842,7 +842,7 @@ claims:
     section: §5-1 観測された局所所見
     approx_line: 184
   claim_text: '観測された局所所見（これ自体は確か）: ritsuの「みわたす」語尾「す」は run7 で改善（run6は「維持」）。pjs は改善のみ（副作用なし）。この範囲で、合成教師（d3synth）を外しても①の破綻矯正は失われなかった'
-  source_verdict: none
+  source_verdict: 「改善」（ritsu、run6は「維持」）／「改善のみ」（pjs、副作用なし）
   claim_class: intervention_effect
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -856,7 +856,7 @@ claims:
     section: §5-1 最終裁定表
     approx_line: 188
   claim_text: '裁定: 語尾「す」の局所退行（事前登録1/2）= 改善（観測）/ さ行onset明瞭性 = articulation測度（事前登録2/2）= undetermined（未判定）/ sustain・終端解放の保存 = 非改善 / 「実録音教師は合成教師の代替として機能する」= 撤回。したがって「articulationが保存された」とは書かない'
-  source_verdict: none
+  source_verdict: 「改善（観測）」「`undetermined`（未判定・§5-1b）」「非改善（下記 2）」「撤回」
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -868,7 +868,7 @@ claims:
     section: §5-1 言える範囲
     approx_line: 197
   claim_text: 言えるのは「事前登録した局所退行2点のうち『す』は改善した」までである
-  source_verdict: none
+  source_verdict: 「事前登録した局所退行2点のうち『す』は改善した」
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -880,7 +880,7 @@ claims:
     section: §5-1 言えない範囲1
     approx_line: 202
   claim_text: 「代替として機能する」は言い過ぎ。正確には「run7でritsuの語尾「す」とpjsに改善が観測された」までである。観測されたのは終端の所見だけで、事前登録のarticulation測度（さ行onset）は未判定だからである。さらに代替性の主張には同一契約の反復走行が要る
-  source_verdict: none
+  source_verdict: 「代替として機能する」は言い過ぎ／「run7でritsuの語尾「す」とpjsに改善が観測された」まで
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -892,7 +892,7 @@ claims:
     section: §5-1 言えない範囲2
     approx_line: 211
   claim_text: sustain側は1つも動いていない。り→んはrun5→7一貫して未解決・pjsの連続発声は残存・userでは「みわたす」語尾に連続発声が新規発生した。これは「あみたろ = recitationのみで持続音ゼロ・曲素材ゼロ」から予測される向きと整合する
-  source_verdict: none
+  source_verdict: 「sustain側は1つも動いていない」
   claim_class: intervention_effect
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -904,7 +904,7 @@ claims:
     section: §5-1 言えない範囲3
     approx_line: 216
   claim_text: userの改善の主要部分はamitaroに帰属できない。Userが挙げた「音量交絡は解消」はrun6の介入（投入前ラウドネス正規化）の効果であり、userの入力はrun6とrun7で15/15バイト同一である（wav_sha256等が全て一致）。いずれにせよ「達成」ではなく「改善と退行の併存」が正しい記述になる
-  source_verdict: none
+  source_verdict: 「達成」ではなく「改善と退行の併存」
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -918,7 +918,7 @@ claims:
     section: §5-1 帰属強度の対称的な注記
     approx_line: 226
   claim_text: '帰属強度の対称的な注記（弱める側にだけ書かない）: 判定は非ブラインド・単一聴取者・n=1だが、run5→run6では耳判定が「dssynthは改善・ほかは改善無し」で動かなかった実績がある。粗い2値の耳判定は走行間変動に対して比較的ロバストだったと言えるため、run6→run7で動いたこと自体は教師交代に帰属できる可能性を残す'
-  source_verdict: none
+  source_verdict: 「教師交代に帰属できる可能性を残す」
   claim_class: intervention_effect
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -930,7 +930,7 @@ claims:
     section: §5-1b 事前登録項目の充足
     approx_line: 233
   claim_text: 'DESIGN_S6 §1.2 は主判定として局所退行2点を事前登録していた: みわたす語尾「す」= 裁定済み（改善）/ 教師由来のさ→あ傾向（さ行onset明瞭性）= 未裁定。したがって事前登録2点の充足は1/2である'
-  source_verdict: none
+  source_verdict: '「裁定済み」（§5-1: 改善）／「未裁定」'
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -942,7 +942,7 @@ claims:
     section: §5-1b 方法論指摘
     approx_line: 246
   claim_text: §5-2で裁定したり→んはrun7の事前登録項目ではない（③の三世代比較から浮上した項目）。事前登録項目を落として事後の項目で埋めた形になっているため、run8以降は事前登録項目の裁定を出口条件に明示的に含める
-  source_verdict: none
+  source_verdict: 「事前登録項目を落として事後の項目で埋めた」
   claim_class: process
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -954,7 +954,7 @@ claims:
     section: §5-2 り→ん副作用説の撤回
     approx_line: 253
   claim_text: 当初この記録は「り→ん破綻はrun7の副作用」と書きかけたが、撤回した。③の三世代判定で「run5から7で根本解決にならず」が確認され、d3synthを投入していたrun5/run6の時点で既に未解決だったことが判明したため
-  source_verdict: none
+  source_verdict: 「り→ん破綻はrun7の副作用」と書きかけたが、撤回した
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -966,7 +966,7 @@ claims:
     section: §5-2 投入≠効果
     approx_line: 262
   claim_text: すなわち DESIGN_S3_backfill の対策は「投入した」だけで「効いた」ことが検証されないまま対策済みとして扱われていた
-  source_verdict: none
+  source_verdict: 「DESIGN_S3_backfillの対策は「投入した」だけで「効いた」ことが検証されないまま対策済みとして扱われていた」
   claim_class: process
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -978,7 +978,7 @@ claims:
     section: §5-2 d3_sustain 帰属限定
     approx_line: 265
   claim_text: '帰属の限定（正直会計）: 上記は「d3_sustainが無効だった」ことまでは示さない。示せるのは「d3_sustainを投入したrun5でもり→ん破綻はUserの聴取で残っていた」までである。投入しなかった場合にもっと悪化していた可能性は排除できない（対照が無い）'
-  source_verdict: none
+  source_verdict: 「d3_sustainを投入したrun5でもり→ん破綻はUserの聴取で残っていた」
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -990,7 +990,7 @@ claims:
     section: §5-3 話者依存
     approx_line: 272
   claim_text: り→ん破綻は話者依存。破綻を起こさないのはpjs系のみ。ritsuはrun5〜7を通じて破綻し、userも「みわたす」語尾で連続発声を起こす。話者をまたいで一様でない以上、共有デコーダ側の一般的欠陥だけでは説明できず、話者データ側の特性が効いている可能性が高い（本記録では未判定）
-  source_verdict: none
+  source_verdict: 「話者依存」
   claim_class: observation
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -1002,7 +1002,7 @@ claims:
     section: §5-4 さくら/うみの非対称
     approx_line: 279
   claim_text: 全話者でうみは成立・さくらで破綻が出る。さくらは2拍・4拍の長い音符を持ち、うみは短い。持続音長との相関が疑われるが、曲は2曲しかなく交絡要因（音域・音素構成・フレーズ数）を分離できていないため未判定
-  source_verdict: none
+  source_verdict: 「未判定」
   claim_class: observation
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -1014,7 +1014,7 @@ claims:
     section: §5-5 教師適格性
     approx_line: 283
   claim_text: あみたろは教師話者であってIdentity頂点ではない（DESIGN_DONOR_EXPANSION §0裁定）。その単体レンダの破綻は「教師が歌えない」ことを示すに過ぎず、教師としての適格性を否定しない。教師の役割は音素明瞭性の供給であり、実際他話者の①改善は達成されている
-  source_verdict: none
+  source_verdict: 「教師としての適格性を否定しない」
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -1026,7 +1026,7 @@ claims:
     section: §6 設計への申し送り(1)
     approx_line: 292
   claim_text: 教師交代の等価性はdosageだけでは足りない。DESIGN_S6は投入時間を1200.5s→1124.5sと厳密に合わせたが、素材種別の被覆は合わせていない（あみたろ=recitationのみで持続音ゼロ・曲素材ゼロ）。次の教師交代では「時間」と「素材種別の被覆」を両方宣言する
-  source_verdict: none
+  source_verdict: 「教師交代の等価性はdosageだけでは足りない」
   claim_class: process
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -1038,7 +1038,7 @@ claims:
     section: §6 設計への申し送り(2)
     approx_line: 299
   claim_text: 対策データは「投入」ではなく「効果」で終端を宣言する（5-2の教訓）。DESIGN_S3_backfillのり→ん対策は投入のみで検証されないまま対策済み扱いになっていた
-  source_verdict: none
+  source_verdict: 「対策データは「投入」ではなく「効果」で終端を宣言する」
   claim_class: process
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）
@@ -1050,7 +1050,7 @@ claims:
     section: §7 DESIGN_S6 §6 AC の充足
     approx_line: 315
   claim_text: 'Q12の裁定記帳（DESIGN_S6 §6 AC）— 部分充足（2026-08-20訂正）: ①矯正保存は§5-1のとおり局所所見（語尾「す」の改善）までの部分裁定で、事前登録のarticulation測度（さ行onset）はundetermined。局所退行は2点中1点（「す」）のみ裁定でさ→あは未裁定'
-  source_verdict: none
+  source_verdict: 「部分充足」
   claim_class: adjudication
   intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
   baseline: run 6（d3synth 合成教師を使用した学習）

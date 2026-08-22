@@ -100,15 +100,47 @@
       "path": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json",
       "sha256": "c4856fde84c8e46edfbfc1232fef288559595207ea4f088016375c9c39404639"
     },
+    "d4_runner_sha256": "e24eb68cb6175b4c6dab6dd860620cf14931d280bad80850c67dfba3a8f959d5",
     "instrument_sha256": "f5d136744b24ad6562668b0f604a737d23798e8744e0c23fc19b2afca8418eb4",
     "render_harness_sha256": "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894",
+    "s7_0b_probe_sha256": "1b32ed729097337744b4a4f22df40ab34c9eed3b71633c81e250af3f7bc22aac",
+    "s7_b1_calibration_sha256": "580a821e054041cfadd9096a9ed1b4c86650032d13b2b522dfac4eb96c7d1857",
+    "s7_b1_v11_sha256": "a80c13e0baa305bf3fceffc873779391abf063ea81ecb6757ce564f1e39b1191",
     "sources": {
+      "d4_runner_sha256": "voice_genesis/foundry/debt/d4/d4_runner.py",
       "instrument_sha256": "voice_genesis/foundry/run8/s7_b1_v12.py",
       "render_harness_sha256": "voice_genesis/foundry/s1_gate/gate_synth.py",
+      "s7_0b_probe_sha256": "voice_genesis/foundry/run8/s7_0b_probe.py",
+      "s7_b1_calibration_sha256": "voice_genesis/foundry/run8/s7_b1_calibration.py",
+      "s7_b1_v11_sha256": "voice_genesis/foundry/run8/s7_b1_v11.py",
       "trf_measurement_spec_1_2_sha256": "voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json"
     },
     "trf_measurement_spec_1_2_sha256": "1f7ff569b4ae27043a822e688c8e5fe621f2ebd666e54cd99e53599c4f38ea5b"
   },
   "purpose": "1.0 で測定済みの run5-7 本番360セル（10群 x 36セル）を、凍結済み TRF measurement spec 1.2（voicing 3軸）で再測定する。1.0 値の上書きはしない （結果は d4_results.json という別ファイルへ記帳し、s7_0b_results.json / probe_0b_groups/*.json は不変のまま残す）。",
-  "schema": "vg-d4-remeasure-spec/0.1"
+  "schema": "vg-d4-remeasure-spec/0.2",
+  "amendments": [
+    {
+      "date": "2026-08-22",
+      "authority": "Fable 5 設計裁定 2026-08-22（PR #306 レビュー第 1 巡 P1-3・二層証明方式）",
+      "what_changed": "pins.sources を 3 キーから 7 キーへ拡張（測定ロジック本体 s7_b1_v11.py・計器 s7_b1_calibration.py・render ハーネス補助 s7_0b_probe.py・runner 自己参照 d4_runner.py を追加）。schema を 0.1 → 0.2 へ改訂。",
+      "why": "v0.1 の pin 閉包は測定候補選定（s7_b1_v12.py）・render ハーネス（gate_synth.py）・凍結済み TRF spec の 3 点に限られ、D4 が実際に呼ぶ他の実装本体（1.1 校正ロジック s7_b1_v11.py・ANALYSIS_STACK_PIN 検査+Stimulus 定義の s7_b1_calibration.py・render 群 JSON 構造を定める s7_0b_probe.py・runner 自身 d4_runner.py）は起動時に照合されていなかった。二層証明: (1) 今後の実行は v0.2 の 7 点 pin で fail-closed 照合される。(2) 2026-08-22 実測（v0.1 下で実行）については、当時実際に走った 4 実装のバイトを事後に repo コミットへ紐付けて記録する（下記 post_hoc_attestation）。",
+      "note": "2026-08-22 実測は v0.1（sha 702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca）下で実行。v0.1 の pin 閉包は狭かったが、実行時の上記 4 実装のバイトはコミット d19d601 時点の repo バイトと同一（sha256 を列挙）であることを事後 attestation として記録する。",
+      "version_at_execution": {
+        "schema": "vg-d4-remeasure-spec/0.1",
+        "sha256": "702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca"
+      },
+      "post_hoc_attestation": {
+        "commit": "d19d6017c2245fdd26a515c1d1c472c48b67098c",
+        "evidence_class": "post_hoc（2 つの値を事後に並べて比較した記録。exporter の witnessed_export のような『実行プロセス自身が出した記録』ではない）",
+        "files": {
+          "voice_genesis/foundry/run8/s7_b1_v11.py": "a80c13e0baa305bf3fceffc873779391abf063ea81ecb6757ce564f1e39b1191",
+          "voice_genesis/foundry/run8/s7_b1_calibration.py": "580a821e054041cfadd9096a9ed1b4c86650032d13b2b522dfac4eb96c7d1857",
+          "voice_genesis/foundry/run8/s7_0b_probe.py": "1b32ed729097337744b4a4f22df40ab34c9eed3b71633c81e250af3f7bc22aac",
+          "voice_genesis/foundry/debt/d4/d4_runner.py": "ddbc3b4c31e9a57e62f294dd9cb1bef488c1ca814b38c519e0928f9b78fda06d"
+        },
+        "caveat": "commit d19d601 時点の d4_runner.py の sha256（上表）は、本 v0.2 改訂で pins.d4_runner_sha256 に pin した現行バイト（e24eb68cb6175b4c6dab6dd860620cf14931d280bad80850c67dfba3a8f959d5）とは**別物**である — 本 PR（PR #306 対応）で d4_runner.py 自身に runtime_stack 記帳・完全性検査・検証順の是正を加えたため、2026-08-22 実測時点のバイトからは変わっている。post_hoc_attestation の d4_runner.py sha256 は『2026-08-22 に実際に走ったバイト』を指し、pins.d4_runner_sha256 は『これ以降の実行が自己照合すべき現行バイト』を指す — 両者を混同しない。"
+      }
+    }
+  ]
 }

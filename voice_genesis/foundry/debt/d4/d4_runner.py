@@ -11,10 +11,18 @@
 - `run8/s7_0b_probe.py`（`verify_spec` / `load_gate_synth` / `run_group` を
   そのまま呼ぶ — render の契約は 8-0b probe と同一にする）
 - `run8/s7_b1_v12.py`（`measure_candidate_12` を経由して 1.2 の測定ロジック
-  = `analyse_shape` / `voiced_mask_12` を呼ぶ）
+  = `analyse_shape` / `voiced_mask_12` を呼ぶ。内部で `run8/s7_b1_v11.py`
+  を transitively import する — 1.1 の候補・測定基盤を再利用しているため）
 - `run8/s7_b1_calibration.py`（`Stimulus` / `measure_voicing_axes` /
   `verify_analysis_stack`）
 - `run8/s7_io.py` / `s7_export_manifest.py` / `s7_trf.py` の pin ガード群
+
+**pin 閉包（v0.2・PR #306 レビュー第 1 巡 P1-3）**: `d4_remeasure_spec.json`
+の `pins.sources` は上記のうち実際に import 再利用する実装モジュール本体
+（`s7_b1_v11.py` / `s7_b1_calibration.py` / `s7_0b_probe.py`）と、このモジュール
+自身（`d4_runner.py`。起動時に自分自身のバイト列を読み、spec の pin と照合する
+自己参照）を照合対象へ含む。凍結済み 1.2 spec・render ハーネス（gate_synth.py）・
+1.2 候補選定本体（s7_b1_v12.py）と合わせて計 7 点。
 
 サブコマンド 2 つ:
 
@@ -52,8 +60,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata as _md
 import json
 import os
+import platform
 import sys
 import tempfile
 from pathlib import Path
@@ -80,7 +90,7 @@ import s7_io  # noqa: E402
 import s7_trf as trf  # noqa: E402
 import s7_0b_probe as probe0b  # noqa: E402
 
-SPEC_SCHEMA = "vg-d4-remeasure-spec/0.1"
+SPEC_SCHEMA = "vg-d4-remeasure-spec/0.2"
 RENDER_SCHEMA = "vg-d4-render-group-result/0.1"
 RESULTS_SCHEMA = "vg-d4-remeasure-results/0.1"
 DEBT_REF = "VG-DEBT-004"
@@ -102,10 +112,18 @@ class D4SpecMismatch(RuntimeError):
 
 
 #: `pins.sources` が持つべきキー集合（厳密一致。欠落・余剰とも abort）。
+#: v0.2（PR #306 レビュー指摘 #3・二層証明方式）で、D4 が実行時に読む実装
+#: モジュール本体（測定ロジック / 計器 / render ハーネス / runner 自身）を
+#: 閉包へ追加した。`d4_runner_sha256` は**自己参照**（このモジュールが起動時に
+#: 自分自身のバイト列を読み、spec の pin と照合する）— 循環にはならない:
+#: spec 側は「runner のあるべき sha」を主張するだけで runner の内容そのものを
+#: 内包しないため、runner が spec を読んで自分の sha を確認する経路は素直に
+#: 成立する。
 EXPECTED_PIN_SOURCE_KEYS = frozenset({
     "trf_measurement_spec_1_2_sha256", "instrument_sha256", "render_harness_sha256",
+    "s7_b1_v11_sha256", "s7_b1_calibration_sha256", "s7_0b_probe_sha256", "d4_runner_sha256",
 })
-#: `pins` トップレベルが持つべきキー集合（上記3キー + cell_definition_source +
+#: `pins` トップレベルが持つべきキー集合（上記 7 キー + cell_definition_source +
 #: sources 自身。厳密一致）。
 EXPECTED_PIN_KEYS = EXPECTED_PIN_SOURCE_KEYS | {"cell_definition_source", "sources"}
 
@@ -238,6 +256,30 @@ def _resolve_axis_candidates(spec: Dict[str, Any]) -> Dict[str, "v12.Cand12"]:
     return out
 
 
+# --- runtime_stack（PR #306 レビュー指摘: render stack の実測を結果へ埋め込む） --
+
+
+#: `runtime_stack` に記録するパッケージ。`s7_b1_real_render_manifest.json` の
+#: `render_stack`（numpy/onnxruntime/soundfile/PyYAML/python）と同じ語彙にする
+#: （2026-08-22 の D4 実測はこの記録先が無く、`d4_exec_report_2026-08-22.md`
+#: 側にしか残せなかった。以後の実行分は結果 JSON 自身に機械可読で残す）。
+_RUNTIME_STACK_PACKAGES: Tuple[str, ...] = ("numpy", "onnxruntime", "soundfile", "PyYAML")
+
+
+def _runtime_stack() -> Dict[str, Optional[str]]:
+    """実行時のパッケージ版 + python 版を返す。`onnxruntime` は render 時にしか
+    要らない任意依存のため、未導入でも例外にせず `None` を記録する（measure 側
+    には元々不要な依存だが、render/measure 双方で同一関数を使い語彙を揃える）。
+    `PyYAML` はディストリビューション名（import 名は `yaml`）。"""
+    out: Dict[str, Optional[str]] = {"python": platform.python_version()}
+    for pkg in _RUNTIME_STACK_PACKAGES:
+        try:
+            out[pkg] = _md.version(pkg)
+        except _md.PackageNotFoundError:
+            out[pkg] = None
+    return out
+
+
 # --- 出力ガード（D0 器具と同型: 衝突拒否 + atomic write） -------------------
 
 
@@ -325,6 +367,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     doc["d4_schema"] = RENDER_SCHEMA
     doc["d4_remeasure_spec_sha256"] = d4_spec_sha
     doc["d4_remeasure_spec_path"] = str(SPEC_PATH.relative_to(_REPO_ROOT))
+    doc["runtime_stack"] = _runtime_stack()
     _atomic_write_json(out_path, doc)
     print(
         f"| {args.generation}/{args.speaker}: {doc['n_rendered']} rendered / "
@@ -467,7 +510,6 @@ def _measure_group(
 def cmd_measure(args: argparse.Namespace) -> int:
     d4_spec, d4_spec_sha = load_and_verify_d4_spec(expected_sha256=args.spec_sha256)
     axis_candidates = _resolve_axis_candidates(d4_spec)
-    analysis_stack = b1.verify_analysis_stack(b1.load_prereg())
 
     valid_group_ids = frozenset(g["group_id"] for g in d4_spec["groups"])
     cell_def = _load_cell_definition(d4_spec)
@@ -475,7 +517,14 @@ def cmd_measure(args: argparse.Namespace) -> int:
 
     out_path = Path(args.out)
     render_docs = [Path(p) for p in args.render_doc]
+    # 出力衝突検査は analysis stack 検証より**前**に行う（PR #306 レビュー指摘:
+    # 衝突だけを検査したい呼び出しが、無関係な ANALYSIS_STACK_PIN 不一致
+    # （実行環境のパッケージ版）で先に落ちていた。凍結物破壊の防止は最優先の
+    # fail-closed であり、環境のパッケージ版検査より先に評価するのが正しい
+    # 順序 — analysis stack 検証自体は緩めない・そのまま維持する）。
     s7_io.reject_output_collision([out_path], [SPEC_PATH, *render_docs])
+
+    analysis_stack = b1.verify_analysis_stack(b1.load_prereg())
 
     groups: Dict[str, Any] = {}
     for render_doc_path in render_docs:
@@ -490,6 +539,23 @@ def cmd_measure(args: argparse.Namespace) -> int:
     n_total_cells = sum(g["n_cells"] for g in groups.values())
     n_total_measured = sum(g["n_measured"] for g in groups.values())
     n_total_error = sum(g["n_error"] for g in groups.values())
+
+    # 完全性検査（PR #306 レビュー指摘 #4）: 事前登録された 10 群すべてが
+    # `--render-doc` に揃っており、かつ全群が「規定セル数ぶん measured
+    # （missing=0・error=0）」であることを既定の「完了」条件にする。満たさない
+    # 場合も結果は書き切る（failure_policy の「隔離して全セル記帳する」は
+    # 維持する）が、`complete: false` を明記して exit を非ゼロにし、部分実行が
+    # 「静かな成功」に見えることを防ぐ。`--allow-partial` は abort/書き込み拒否
+    # を解除する意味は持たない（既定でも書き切る）— 意図的な部分実行であることを
+    # `partial: true` で記帳するためのものであり、exit は不完全なら常に非ゼロ。
+    groups_complete = frozenset(groups) == valid_group_ids
+    cells_complete = all(
+        g["n_measured"] == g["n_cells"] and g["n_missing"] == 0 and g["n_error"] == 0
+        for g in groups.values()
+    )
+    complete = groups_complete and cells_complete
+    allow_partial = bool(getattr(args, "allow_partial", False))
+
     doc = {
         "schema": RESULTS_SCHEMA,
         "debt_ref": DEBT_REF,
@@ -500,22 +566,28 @@ def cmd_measure(args: argparse.Namespace) -> int:
         "instrument_sha256": d4_spec["pins"]["instrument_sha256"],
         "candidate_ids": {axis: cand.candidate_id for axis, cand in axis_candidates.items()},
         "analysis_stack": analysis_stack,
+        "runtime_stack": _runtime_stack(),
         "n_groups": len(groups),
         "n_total_cells": n_total_cells,
         "n_total_measured": n_total_measured,
         "n_total_error": n_total_error,
+        "complete": complete,
         "groups": groups,
     }
+    if allow_partial:
+        doc["partial"] = not complete
     # failure_policy「落ちたセルは隔離して全セル記帳する」の後半 = 結果は必ず
-    # 書き切る。ただしエラーが 1 件でもあれば「静かな成功」を騙らせないため
-    # exit を非ゼロにする（呼び出し側 / CI がエラー混入を見落とさない）。
+    # 書き切る。ただしエラーが 1 件でも、群/セルが事前登録の規定数に満たなくても
+    # 「静かな成功」を騙らせないため exit を非ゼロにする（呼び出し側 / CI が
+    # エラー混入・部分実行を見落とさない）。
     _atomic_write_json(out_path, doc)
+    status = "complete" if complete else ("partial (--allow-partial)" if allow_partial else "INCOMPLETE")
     print(
         f"| wrote {out_path} ({len(groups)} groups, "
         f"{n_total_measured}/{n_total_cells} cells measured, "
-        f"{n_total_error} errored)"
+        f"{n_total_error} errored, {status})"
     )
-    return 1 if n_total_error else 0
+    return 0 if complete else 1
 
 
 # --- CLI ---------------------------------------------------------------
@@ -556,6 +628,13 @@ def _add_measure_parser(sub: "argparse._SubParsersAction") -> None:
         "--spec-sha256", required=True,
         help="operator が束縛する d4_remeasure_spec.json の期待 sha256（コミット済みの"
              "はずの版）。実ファイルの sha256 と一致しなければ abort する",
+    )
+    ap.add_argument(
+        "--allow-partial", action="store_true", dest="allow_partial",
+        help="事前登録の10群・規定セル数に満たない部分実行を明示的に許可する意図を"
+             "結果へ記帳する（`partial: true`）。既定でも部分実行は abort せず結果を"
+             "書き切るため exit の非ゼロ化は変わらない — 意図的な部分実行であることの"
+             "記帳だけが違う",
     )
     ap.set_defaults(func=cmd_measure)
 

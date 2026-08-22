@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+import dataclasses
+import importlib.metadata as _md
 import json
 import sys
 from pathlib import Path
@@ -57,6 +59,45 @@ BOUNDARIES = {
     "note_onset_s": 0.1, "commanded_note_end_s": 1.0,
     "score_boundary_s": 1.0, "tail_window_ms": 300.0,
 }
+
+
+# --- PR #306 CI 指摘: ANALYSIS_STACK_PIN 不一致環境（例: CI の numba 0.67.0
+# vs 宣言 pin 0.66.0）で、実測定を経由するテストだけを skip するための判定 ---
+#
+# `s7_b1_calibration.verify_analysis_stack` の fail-closed 自体は正しい挙動
+# （緩めない）。ただし宣言 pin と違う版がインストールされた CI では、実測定を
+# 経由するテストが「テストの不具合」ではなく「計器が意図どおり止まった」こと
+# で落ちる。これは実行環境の問題であり、テストの合否から computed 済みの
+# skip 条件として切り離す。
+
+
+def _analysis_stack_mismatch_detail(prereg: Optional["d4.b1.Prereg"] = None) -> Optional[str]:
+    """宣言 ANALYSIS_STACK_PIN と実行時インストール版の不一致detailを返す
+    （一致なら None）。`s7_b1_calibration.verify_analysis_stack` と同じ判定を
+    **例外を投げずに**行う（skipif 条件の計算はテスト収集時に評価されるため、
+    ここで例外を投げると収集そのものが壊れる）。"""
+    if prereg is None:
+        prereg = d4.b1.load_prereg()
+    declared = {
+        k: str(v) for k, v in prereg.candidate_space["analysis_stack_pin"].items() if k != "note"
+    }
+    observed = {pkg: _md.version(pkg) for pkg in sorted(declared)}
+    mismatch = {k: (declared[k], observed[k]) for k in declared if declared[k] != observed[k]}
+    if not mismatch:
+        return None
+    return ", ".join(f"{k}: declared {d} != installed {o}" for k, (d, o) in sorted(mismatch.items()))
+
+
+#: モジュール読み込み時に 1 回だけ評価する（各テストの skipif がここを参照）。
+_STACK_MISMATCH_DETAIL = _analysis_stack_mismatch_detail()
+
+requires_pinned_analysis_stack = pytest.mark.skipif(
+    _STACK_MISMATCH_DETAIL is not None,
+    reason=(
+        "ANALYSIS_STACK_PIN 不一致環境のため実測定を伴うテストを skip する"
+        f"（fail-closed は正当な挙動・緩めない）: {_STACK_MISMATCH_DETAIL}"
+    ),
+)
 
 
 @pytest.fixture(scope="module")
@@ -94,7 +135,7 @@ def expected_cell_ids(all_cell_ids: List[str]):
 
 
 def test_spec_schema_and_debt_ref(raw_spec: Dict[str, Any]) -> None:
-    assert raw_spec["schema"] == "vg-d4-remeasure-spec/0.1"
+    assert raw_spec["schema"] == "vg-d4-remeasure-spec/0.2"
     assert raw_spec["debt_ref"] == "VG-DEBT-004"
 
 
@@ -539,12 +580,84 @@ def test_measure_group_rejects_duplicate_cell_id(
 # --- 5. セル毎例外の隔離 + exit 非ゼロ（cmd_measure 経由の end-to-end） -------
 
 
+def test_analysis_stack_mismatch_detail_detects_tampered_pin() -> None:
+    """skipif 条件の計算ロジック自体の単体テスト（PR #306 対応）: 宣言 pin を
+    偽装した場合に不一致を検出できることを、実行環境の実際の版に依存せず
+    確認する（CI の numba 0.67.0 のような不一致環境で `requires_pinned_
+    analysis_stack` が確実に skip 側へ倒れることの保証）。"""
+    prereg = d4.b1.load_prereg()
+    tampered_cs = copy.deepcopy(prereg.candidate_space)
+    tampered_cs["analysis_stack_pin"]["numba"] = "0.0.0-tampered-for-test"
+    tampered_prereg = dataclasses.replace(prereg, candidate_space=tampered_cs)
+
+    detail = _analysis_stack_mismatch_detail(tampered_prereg)
+    assert detail is not None
+    assert "numba" in detail
+    assert "0.0.0-tampered-for-test" in detail
+
+    # 偽装していない実プレレジは、このテスト実行環境の実測とモジュール読み込み
+    # 時の記録が一致するはず（環境非依存にするため実値そのものとは比較しない）。
+    assert _analysis_stack_mismatch_detail(prereg) == _STACK_MISMATCH_DETAIL
+
+
+def test_cmd_measure_isolates_broken_cell_and_exits_nonzero_stack_independent(
+    tmp_path: Path, spec_and_sha, all_cell_ids, monkeypatch,
+) -> None:
+    """セルフレビュー #6 の回帰検査を ANALYSIS_STACK_PIN の版に依存せず常時
+    実行する変種（PR #306 対応）: `verify_analysis_stack` と実測定候補
+    （`measure_candidate_12`）を monkeypatch で置き換え、隔離ロジック・
+    exit 非ゼロ・欠測記帳だけを検査する。CI の numba が宣言 pin と違っても
+    skip されない。"""
+    spec, spec_sha = spec_and_sha
+    out_dir = tmp_path / "out"
+    ok_id, broken_id = all_cell_ids[0], all_cell_ids[1]
+    ok_wav = dict(_write_wav(out_dir, "ok.wav", _sustained_tail_wave()))
+    broken_wav = dict(_write_wav(out_dir, "broken.wav", _hard_cut_wave()))
+    (out_dir / "broken.wav").unlink()
+    render_doc = _full_render_doc(
+        out_dir, all_cell_ids, {ok_id: ok_wav, broken_id: broken_wav},
+    )
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+
+    fake_stack = {"fake_pkg": "0.0.0"}
+    fake_axes = {
+        "excess_tail_voiced_ms": 1.0, "release_after_score_boundary_ms": 2.0,
+        "tail_f0_persistence": 0.5,
+    }
+    monkeypatch.setattr(d4.b1, "verify_analysis_stack", lambda prereg: dict(fake_stack))
+    monkeypatch.setattr(d4.v12, "measure_candidate_12", lambda cand, stim: dict(fake_axes))
+
+    out_path = tmp_path / "d4_results.json"
+    ns = argparse.Namespace(
+        render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
+    )
+    rc = d4.cmd_measure(ns)
+
+    assert rc != 0
+    doc = json.loads(out_path.read_text(encoding="utf-8"))
+    assert doc["analysis_stack"] == fake_stack
+    group = doc["groups"]["run5_pjs"]
+    assert group["n_error"] == 1
+    assert group["n_measured"] == 1
+    ok_entry = group["cells"][ok_id]
+    assert ok_entry["outcome"] == "measured"
+    assert ok_entry["axes"] == fake_axes
+    broken_entry = group["cells"][broken_id]
+    assert broken_entry["outcome"] == "error"
+    assert broken_entry["status"] == "error"
+    assert broken_entry["reason"]
+    assert doc["n_total_error"] == 1
+
+
+@requires_pinned_analysis_stack
 def test_cmd_measure_isolates_broken_cell_and_exits_nonzero(
     tmp_path: Path, spec_and_sha, all_cell_ids,
 ) -> None:
     """セルフレビュー #6: 1 セルの入力破壊（wav 実体の欠落）が他セルの測定を
     止めず、結果に error セルとして記帳されたうえで `cmd_measure` が非ゼロを
-    返す。"""
+    返す。ANALYSIS_STACK_PIN が宣言と一致する環境でのみ実行する（不一致環境
+    向けの常時実行変種 = 直前の `..._stack_independent`）。"""
     spec, spec_sha = spec_and_sha
     out_dir = tmp_path / "out"
     ok_id, broken_id = all_cell_ids[0], all_cell_ids[1]
@@ -578,6 +691,125 @@ def test_cmd_measure_isolates_broken_cell_and_exits_nonzero(
     assert broken_entry["status"] == "error"
     assert broken_entry["reason"]
     assert doc["n_total_error"] == 1
+
+
+# --- 5b. 完全性検査（PR #306 レビュー指摘 #4） ------------------------------
+#
+# 実測定（ANALYSIS_STACK_PIN）に依存させないため、いずれも `verify_analysis_stack`
+# / `measure_candidate_12` を monkeypatch で置き換える（§5 の `..._stack_independent`
+# と同じ方式）。
+
+
+def test_cmd_measure_marks_incomplete_for_single_group_input(
+    tmp_path: Path, spec_and_sha, all_cell_ids, monkeypatch,
+) -> None:
+    """事前登録10群のうち1群だけを渡すと、その1群が規定セル数ぶんエラー無く
+    測定できても `complete: false` + exit 非ゼロになる（群が事前登録に満たない）。"""
+    spec, spec_sha = spec_and_sha
+    out_dir = tmp_path / "out"
+    wav = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
+    rendered = {cid: dict(wav) for cid in all_cell_ids}
+    render_doc = _full_render_doc(out_dir, all_cell_ids, rendered)
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+
+    fake_axes = {
+        "excess_tail_voiced_ms": 1.0, "release_after_score_boundary_ms": 2.0,
+        "tail_f0_persistence": 0.5,
+    }
+    monkeypatch.setattr(d4.b1, "verify_analysis_stack", lambda prereg: {"fake": "stack"})
+    monkeypatch.setattr(d4.v12, "measure_candidate_12", lambda cand, stim: dict(fake_axes))
+
+    out_path = tmp_path / "d4_results.json"
+    ns = argparse.Namespace(
+        render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
+    )
+    rc = d4.cmd_measure(ns)
+
+    assert rc != 0
+    doc = json.loads(out_path.read_text(encoding="utf-8"))
+    assert doc["complete"] is False
+    assert doc["n_groups"] == 1
+    assert doc["n_total_error"] == 0
+    assert doc["groups"]["run5_pjs"]["n_measured"] == 36
+    assert "partial" not in doc  # --allow-partial を渡していない既定経路
+
+
+def test_cmd_measure_allow_partial_records_partial_flag(
+    tmp_path: Path, spec_and_sha, all_cell_ids, monkeypatch,
+) -> None:
+    """`--allow-partial` を渡すと、不完全な結果に `partial: true` が記帳される
+    （exit の非ゼロ化自体は変わらない — 既定でも部分実行は abort せず書き切る）。"""
+    spec, spec_sha = spec_and_sha
+    out_dir = tmp_path / "out"
+    wav = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
+    rendered = {cid: dict(wav) for cid in all_cell_ids}
+    render_doc = _full_render_doc(out_dir, all_cell_ids, rendered)
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+
+    fake_axes = {
+        "excess_tail_voiced_ms": 1.0, "release_after_score_boundary_ms": 2.0,
+        "tail_f0_persistence": 0.5,
+    }
+    monkeypatch.setattr(d4.b1, "verify_analysis_stack", lambda prereg: {"fake": "stack"})
+    monkeypatch.setattr(d4.v12, "measure_candidate_12", lambda cand, stim: dict(fake_axes))
+
+    out_path = tmp_path / "d4_results.json"
+    ns = argparse.Namespace(
+        render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
+        allow_partial=True,
+    )
+    rc = d4.cmd_measure(ns)
+
+    assert rc != 0
+    doc = json.loads(out_path.read_text(encoding="utf-8"))
+    assert doc["complete"] is False
+    assert doc["partial"] is True
+
+
+def test_cmd_measure_marks_complete_for_all_ten_groups(
+    tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, monkeypatch,
+) -> None:
+    """事前登録の10群すべてを規定セル数（36）ぶん揃えて渡すと `complete: true` +
+    exit 0 になる。"""
+    spec, spec_sha = spec_and_sha
+    out_dir = tmp_path / "out"
+    wav = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
+    rendered = {cid: dict(wav) for cid in all_cell_ids}
+
+    fake_axes = {
+        "excess_tail_voiced_ms": 1.0, "release_after_score_boundary_ms": 2.0,
+        "tail_f0_persistence": 0.5,
+    }
+    monkeypatch.setattr(d4.b1, "verify_analysis_stack", lambda prereg: {"fake": "stack"})
+    monkeypatch.setattr(d4.v12, "measure_candidate_12", lambda cand, stim: dict(fake_axes))
+
+    render_doc_paths: List[str] = []
+    for group_id in sorted(valid_group_ids):
+        generation, speaker = group_id.split("_", 1)
+        render_doc = _full_render_doc(
+            out_dir, all_cell_ids, rendered, generation=generation, speaker=speaker,
+        )
+        path = tmp_path / f"{group_id}.json"
+        path.write_text(json.dumps(render_doc), encoding="utf-8")
+        render_doc_paths.append(str(path))
+
+    out_path = tmp_path / "d4_results.json"
+    ns = argparse.Namespace(render_doc=render_doc_paths, out=str(out_path), spec_sha256=spec_sha)
+    rc = d4.cmd_measure(ns)
+
+    assert rc == 0
+    doc = json.loads(out_path.read_text(encoding="utf-8"))
+    assert doc["complete"] is True
+    assert doc["n_groups"] == 10
+    assert doc["n_total_cells"] == 360
+    assert doc["n_total_measured"] == 360
+    assert doc["n_total_error"] == 0
+    assert "partial" not in doc
+    # runtime_stack（PR #306 対応 #1）: measure が実行時のパッケージ版を記帳する。
+    assert doc["runtime_stack"]["python"]
+    assert set(doc["runtime_stack"]) == {"python", *d4._RUNTIME_STACK_PACKAGES}
 
 
 # --- 6. 実際にコミットされている render 群 JSON との形状整合 -----------------
