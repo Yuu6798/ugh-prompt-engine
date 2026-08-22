@@ -213,7 +213,7 @@ def permissive_window_expectations(all_cell_ids: List[str]):
 
 
 def test_spec_schema_and_debt_ref(raw_spec: Dict[str, Any]) -> None:
-    assert raw_spec["schema"] == "vg-d4-remeasure-spec/0.3"
+    assert raw_spec["schema"] == "vg-d4-remeasure-spec/0.4"
     assert raw_spec["debt_ref"] == "VG-DEBT-004"
 
 
@@ -379,6 +379,51 @@ def test_load_and_verify_rejects_tampered_cell_definition_source(
     path = tmp_path / "spec.json"
     path.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(d4.D4SpecMismatch):
+        d4.load_and_verify_d4_spec(path)
+
+
+def test_data_inputs_pin_exists_and_matches_expected_keys(raw_spec: Dict[str, Any]) -> None:
+    """`pins.data_inputs`（PR #306 レビュー第7巡 P1・データ入力閉包）が存在し、
+    全数確認で見つかった 8 点のキー集合と厳密一致することを確認する。"""
+    data_inputs = raw_spec["pins"]["data_inputs"]
+    assert set(data_inputs) == d4.EXPECTED_DATA_INPUT_KEYS
+    for key, entry in data_inputs.items():
+        assert isinstance(entry["path"], str) and entry["path"], key
+        assert isinstance(entry["sha256"], str) and len(entry["sha256"]) == 64, key
+
+
+def test_data_inputs_pin_sha256_matches_real_files(raw_spec: Dict[str, Any]) -> None:
+    """`pins.data_inputs` の各エントリの sha256 が実ファイルの実バイトと一致する
+    （`test_spec_verifies_against_live_files` が起動経路で既に確認しているが、
+    ここでは `_sha_file` を直接使い pin 対象そのものを単体で確認する）。"""
+    data_inputs = raw_spec["pins"]["data_inputs"]
+    for key, entry in data_inputs.items():
+        got = d4._sha_file(d4._REPO_ROOT / entry["path"])
+        assert got == entry["sha256"], key
+
+
+def test_load_and_verify_rejects_tampered_data_input(
+    tmp_path: Path, raw_spec: Dict[str, Any]
+) -> None:
+    """`pins.data_inputs` の 1 エントリの sha256 を改竄すると abort する。"""
+    tampered = copy.deepcopy(raw_spec)
+    tampered["pins"]["data_inputs"]["s7_exporter_input_pins"]["sha256"] = "2" * 64
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(d4.D4SpecMismatch, match="s7_exporter_input_pins"):
+        d4.load_and_verify_d4_spec(path)
+
+
+def test_load_and_verify_rejects_missing_data_input_key(
+    tmp_path: Path, raw_spec: Dict[str, Any]
+) -> None:
+    """`pins.data_inputs` からキーが 1 つでも欠ければ（キー集合の厳密検査）abort
+    する（新規追加データ入力の取りこぼしを構造的に防止する）。"""
+    tampered = copy.deepcopy(raw_spec)
+    del tampered["pins"]["data_inputs"]["trf_measurement_spec_1_0"]
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(d4.D4SpecMismatch, match="data_inputs"):
         d4.load_and_verify_d4_spec(path)
 
 

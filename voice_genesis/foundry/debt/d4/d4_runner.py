@@ -28,6 +28,20 @@
 は起動のたびに `pins.sources`（特別枠を除く）と実際の import 閉包の完全一致も
 検査する（`_verify_closure_matches_declared_pins`。取りこぼしの構造的防止）。
 
+**データ入力閉包（v0.4・PR #306 レビュー第7巡 P1）**: 上記はコード（import
+閉包）だけを機械的に網羅する。データファイル側は `cell_definition_source`
+（`s7_0b_probe_spec.json`）と `trf_measurement_spec_1_2_sha256`
+（`trf_measurement_spec_1_2.json`）の 2 点しか pin されておらず、
+`cmd_render` / `cmd_measure` の実行経路を全数確認したところ、他に 8 点の
+未 pin データ入力（`s7_exporter_input_pins.json` / `trf_measurement_spec.json`
+[1.0] / B-1 事前登録 3 点 × 1.0・1.2 の 2 系列）が見つかった
+（`EXPECTED_DATA_INPUT_KEYS` の docstring に内訳を記載）。`pins.data_inputs`
+としてこれらも pin し、`load_and_verify_d4_spec` が起動のたびに実ファイルと
+照合する（`_verify_data_inputs`）。コード閉包は AST で機械列挙できるが、
+データ入力は「どの関数がどのパス定数を読むか」を辿る必要があり機械列挙は
+していない（手動の全数確認。将来の呼び出し経路追加で同種の漏れが再発しうる
+点は残存する既知の限界として明記する）。
+
 **脅威モデルと境界**（PR #306 レビュー第3巡 P2・`docs/DESIGN_M2_extraction_
 accuracy.md` §6「Scorer pin の脅威モデルと境界」と同型の切り分け）: pin 検証
 + pre-bind（`_bind_pinned_modules`）が**守る**のは、受動的な取り違え・pin
@@ -44,6 +58,24 @@ lambda ...` のような差し替え）で、pin 検証をすり抜けて任意�
 では証明できない）。したがって in-memory 系の防御は「preloaded module の
 拒否」までで**終端**する。それ以上の防御（メモリ改竄検知・プロセス隔離等）
 は本 runner のスコープ外とし、際限ない実装細部の追跡はしない。
+
+**same-path preload の免除**（PR #306 レビュー第7巡 P2・見送り境界宣言）:
+`_bind_pinned_modules` は「preload 済みだが `__file__` が期待パスと一致する」
+場合は拒否しない（同一プロセス内で他のテストファイル等が既に正規ファイルを
+import 済みなだけ、という区別。上記「守る/守らない」節で既述）。この免除は
+**テストハーネス（pytest が全テストファイルを 1 プロセスへ集めて収集する）
+との共存のための意図的な緩和**である——免除を撤廃すると、d4_runner.py を
+複数回・複数経路から呼ぶテストスイート自体が preloaded_pinned_module で
+落ちる。immune な経路として残るのは「long-lived プロセスで、検証が通った
+**後**にソースファイルが in-place で書き換わり、`sys.modules` にはまだ
+古いコードオブジェクトが residing している」ケース——`__file__` は変わらない
+ので same-path 免除がこれを通してしまう。しかしこれは第3巡で宣言した
+in-memory 系の境界（`.pyc` 差し替え・インタプリタ改竄・import 後のモジュール
+属性改変と同種の「プロセス生存期間中の in-memory 改変」）の**範囲内**であり、
+本 runner の脅威モデル**外**として扱う。本番経路は CLI 起動（`svprpe` 相当の
+1 コマンド = fresh process）を前提とし、long-lived プロセスでの再入は
+テストハーネスのみが行う運用だからである。したがってコード変更は行わない
+（見送り）。
 
 **render doc 改変系の終端**（PR #306 第4巡 P1）: render 群 JSON（`--render-doc`）
 に対する改変検出も同じ理由で「個別フィールドの逐次検証」を打ち切り、
@@ -218,7 +250,7 @@ def _bind_pinned_modules() -> None:
     _pinned_modules_bound = True
 
 
-SPEC_SCHEMA = "vg-d4-remeasure-spec/0.3"
+SPEC_SCHEMA = "vg-d4-remeasure-spec/0.4"
 RENDER_SCHEMA = "vg-d4-render-group-result/0.1"
 RESULTS_SCHEMA = "vg-d4-remeasure-results/0.1"
 #: PR #306 レビュー第4巡 P1（方式 a・窓系ファミリー終端）: `cmd_render` が
@@ -272,8 +304,34 @@ EXPECTED_PIN_SOURCE_KEYS = frozenset({
     "s7_io_sha256", "s7_export_manifest_sha256", "s7_trf_sha256", "s7_spec_sha256",
 })
 #: `pins` トップレベルが持つべきキー集合（上記 11 キー + cell_definition_source +
-#: sources 自身。厳密一致）。
-EXPECTED_PIN_KEYS = EXPECTED_PIN_SOURCE_KEYS | {"cell_definition_source", "sources"}
+#: sources 自身 + data_inputs（PR #306 レビュー第7巡 P1）。厳密一致。
+EXPECTED_PIN_KEYS = EXPECTED_PIN_SOURCE_KEYS | {"cell_definition_source", "sources", "data_inputs"}
+
+#: `pins.data_inputs` が持つべきキー集合（PR #306 レビュー第7巡 P1・データ入力
+#: 閉包・厳密一致）。コード閉包（`pins.sources`）とは別に、`d4_runner.py` の
+#: 実行経路（`cmd_render` / `cmd_measure`）が起動時に読む JSON データファイルを
+#: 全数確認した結果——`cell_definition_source`（`s7_0b_probe_spec.json`）と
+#: `trf_measurement_spec_1_2_sha256`（`trf_measurement_spec_1_2.json`）は既に
+#: 別枠で pin 済みだが、それ以外に 8 点の未 pin データ入力が見つかった:
+#:
+#: - `s7_exporter_input_pins` — `cmd_render` → `xm.verify_export_manifest()` →
+#:   `load_input_pins()` が読む（checkpoint/config の世代別 pin 台帳）
+#: - `trf_measurement_spec_1_0` — `cmd_render` → `trf.load_frozen_measurement()`
+#:   が読む（凍結済み 1.0 測定値。D4 の `measure` 自体は消費しないが、
+#:   `render` 経路が実際に読む以上データ入力閉包の対象に含める）
+#: - `s7_b1_candidate_space_1_0` / `s7_b1_calibration_set_1_0` /
+#:   `s7_b1_selection_rule_1_0` — `cmd_measure` → `b1.verify_analysis_stack(
+#:   b1.load_prereg())` が読む（1.0 の B-1 事前登録 3 点。analysis stack pin
+#:   の宣言元）
+#: - `s7_b1_candidate_space_1_2` / `s7_b1_calibration_set_1_2` /
+#:   `s7_b1_selection_rule_1_2` — `cmd_measure` → `_resolve_axis_candidates()`
+#:   → `v12.load_prereg_12()` が読む（1.2 の B-1 事前登録 3 点。候補空間の
+#:   定義元）
+EXPECTED_DATA_INPUT_KEYS = frozenset({
+    "s7_exporter_input_pins", "trf_measurement_spec_1_0",
+    "s7_b1_candidate_space_1_0", "s7_b1_calibration_set_1_0", "s7_b1_selection_rule_1_0",
+    "s7_b1_candidate_space_1_2", "s7_b1_calibration_set_1_2", "s7_b1_selection_rule_1_2",
+})
 
 #: `pins.sources` のうち、AST の静的 import 解析では辿れない特別枠。
 #: `render_harness_sha256`（`s1_gate/gate_synth.py`）は `s7_0b_probe.
@@ -414,6 +472,30 @@ def _verify_pins_key_shape(pins: Dict[str, Any]) -> None:
             f"missing={sorted(EXPECTED_PIN_SOURCE_KEYS - got_sources)} "
             f"extra={sorted(got_sources - EXPECTED_PIN_SOURCE_KEYS)}"
         )
+    got_data_inputs = set(pins.get("data_inputs", {}).keys())
+    if got_data_inputs != EXPECTED_DATA_INPUT_KEYS:
+        raise D4SpecMismatch(
+            f"pins.data_inputs のキー集合が期待と違う: "
+            f"missing={sorted(EXPECTED_DATA_INPUT_KEYS - got_data_inputs)} "
+            f"extra={sorted(got_data_inputs - EXPECTED_DATA_INPUT_KEYS)}"
+        )
+
+
+def _verify_data_inputs(data_inputs: Dict[str, Any]) -> None:
+    """`pins.data_inputs`（PR #306 レビュー第7巡 P1・データ入力閉包）の各エントリ
+    （`{"path": ..., "sha256": ...}`）を実ファイルと照合する。キー集合の厳密
+    一致は `_verify_pins_key_shape` が先に済ませている（値の照合より前）。"""
+    for key, entry in data_inputs.items():
+        path = entry.get("path")
+        want = entry.get("sha256")
+        if not isinstance(path, str) or not path or not isinstance(want, str) or not want:
+            raise D4SpecMismatch(f"pins.data_inputs.{key} に path/sha256 が欠けている")
+        got = _sha_file(_REPO_ROOT / path)
+        if got != want:
+            raise D4SpecMismatch(
+                f"{path}: sha256 {got} が spec pin data_inputs.{key}={want} と違う"
+                "（凍結物が pin 後に変わったか、pin 自体が陳腐化している）"
+            )
 
 
 def _verify_closure_matches_declared_pins(sources: Dict[str, str]) -> None:
@@ -497,6 +579,8 @@ def load_and_verify_d4_spec(
         raise D4SpecMismatch(
             f"{cds_path}: sha256 {got_cds} が spec pin cell_definition_source と違う"
         )
+
+    _verify_data_inputs(pins["data_inputs"])
 
     _verify_closure_matches_declared_pins(sources)
 
