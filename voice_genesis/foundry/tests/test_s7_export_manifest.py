@@ -78,7 +78,7 @@ def test_a_manifest_from_another_checkpoint_is_rejected(bundle, monkeypatch):
     manifest, ckpt, artifacts = bundle
     monkeypatch.setattr(
         xm, "load_input_pins",
-        lambda generation: {"checkpoint_sha256": "0" * 64, "config_sha256": "0" * 64},
+        lambda generation: _synthetic_pins(checkpoint_sha256="0" * 64),
     )
     with pytest.raises(xm.ExportManifestError):
         xm.verify_export_manifest(manifest, GEN, artifacts)
@@ -163,6 +163,13 @@ def test_a_post_hoc_manifest_is_rejected_by_default(tmp_path: Path):
 
 CKPT_BYTES = b"the-pinned-checkpoint"
 CONFIG_BYTES = b"the-pinned-config"
+#: exporter が読む補助入力。checkpoint と config.yaml だけでは export は走らない
+#: （`base_exporter.build_spk_map` が spk_map.json を要求する = results_s5 §5.6）。
+AUX_BYTES = {
+    "spk_map.json": b'{"ritsu": 0}',
+    "lang_map.json": b'{"ja": 1}',
+    "dictionary-ja.txt": b"a AA\n",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -170,13 +177,20 @@ def _pins(monkeypatch):
     """入力 pin は本番の pin ファイルから引かれる。合成 checkpoint では一致しないので、
     テスト中だけ**合成側の値**へ差し替える。`export_diffsinger_acoustic` が
     「呼び出し側から期待値を受け取らない」性質はそのまま保たれる。"""
-    monkeypatch.setattr(
-        xm, "load_input_pins",
-        lambda generation: {
-            "checkpoint_sha256": s7_io.sha256_bytes(CKPT_BYTES),
-            "config_sha256": s7_io.sha256_bytes(CONFIG_BYTES),
+    monkeypatch.setattr(xm, "load_input_pins", lambda generation: _synthetic_pins())
+
+
+def _synthetic_pins(**override):
+    pins = {
+        "checkpoint_sha256": s7_io.sha256_bytes(CKPT_BYTES),
+        "config_sha256": s7_io.sha256_bytes(CONFIG_BYTES),
+        "inputs": {
+            "config.yaml": s7_io.sha256_bytes(CONFIG_BYTES),
+            **{k: s7_io.sha256_bytes(v) for k, v in AUX_BYTES.items()},
         },
-    )
+    }
+    pins.update(override)
+    return pins
 
 
 def _fake_diffsinger(tmp_path: Path, exp: str = "run7_phase_b", steps: int = 40000):
@@ -199,6 +213,8 @@ def _fake_diffsinger(tmp_path: Path, exp: str = "run7_phase_b", steps: int = 400
     ckpt = ckpt_dir / f"model_ckpt_steps_{steps}.ckpt"
     ckpt.write_bytes(CKPT_BYTES)
     (ckpt_dir / "config.yaml").write_bytes(CONFIG_BYTES)
+    for name, raw in AUX_BYTES.items():
+        (ckpt_dir / name).write_bytes(raw)
     # export.py の代わりに「--out へ成果物を置くだけ」の台本を置く
     (root / "scripts" / "export.py").write_text(
         "import pathlib, sys\n"
@@ -246,10 +262,7 @@ def test_a_checkpoint_that_does_not_match_the_pin_is_rejected_before_exporting(
     root, exp, steps, _, ckpt_dir, head = _fake_diffsinger(tmp_path)
     monkeypatch.setattr(
         xm, "load_input_pins",
-        lambda generation: {
-            "checkpoint_sha256": "0" * 64,
-            "config_sha256": s7_io.sha256_bytes(CONFIG_BYTES),
-        },
+        lambda generation: _synthetic_pins(checkpoint_sha256="0" * 64),
     )
     with pytest.raises(xm.ExportManifestError):
         xm.export_diffsinger_acoustic(
@@ -437,10 +450,7 @@ def test_the_config_pin_is_mandatory_at_verification(tmp_path: Path, monkeypatch
     # **config pin は任意ではない**。pin 側が違えば、checkpoint が合っていても通らない
     monkeypatch.setattr(
         xm, "load_input_pins",
-        lambda generation: {
-            "checkpoint_sha256": s7_io.sha256_bytes(CKPT_BYTES),
-            "config_sha256": "0" * 64,
-        },
+        lambda generation: _synthetic_pins(config_sha256="0" * 64),
     )
     with pytest.raises(xm.ExportManifestError):
         xm.verify_export_manifest(manifest, GEN, artifacts)
@@ -505,3 +515,83 @@ def test_the_committed_input_pins_agree_with_the_preregistration():
         pins = xm.load_input_pins(gen)
         assert len(pins["checkpoint_sha256"]) == 64
         assert len(pins["config_sha256"]) == 64
+
+
+# --- 第 8 巡 P1: exporter の入力を全部運ぶ ------------------------------------
+
+
+def test_every_exporter_input_is_staged_and_recorded(tmp_path: Path):
+    """checkpoint と config.yaml だけでは export は走らない。
+
+    `base_exporter.build_spk_map` が `checkpoints/<exp>/spk_map.json` を要求する
+    （`results_s5/s5_record_2026-08-20.md` §5.6 の実地記録）。束を全部運び、
+    全部 manifest へ載せる。
+    """
+    root, exp, steps, ckpt, ckpt_dir, head = _fake_diffsinger(tmp_path)
+    doc = xm.export_diffsinger_acoustic(
+        GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+        {"acoustic_onnx": "a.onnx"}, sys.executable, head,
+    )
+    staged = root / "checkpoints" / exp
+    for name in ("config.yaml", *AUX_BYTES):
+        assert (staged / name).is_file(), f"{name} が staging されていない"
+        assert name in doc["source_inputs"], f"{name} が manifest に無い"
+    assert doc["source_inputs"]["spk_map.json"]["sha256"] == s7_io.sha256_bytes(
+        AUX_BYTES["spk_map.json"]
+    )
+
+
+@pytest.mark.parametrize("missing", sorted(AUX_BYTES))
+def test_a_missing_auxiliary_input_is_rejected(tmp_path: Path, missing: str):
+    """束が欠けたまま export を走らせない（走らせても落ちるか、古い物を読む）。"""
+    root, exp, steps, _, ckpt_dir, head = _fake_diffsinger(tmp_path)
+    (ckpt_dir / missing).unlink()
+    with pytest.raises(xm.ExportManifestError):
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+            {"acoustic_onnx": "a.onnx"}, sys.executable, head,
+        )
+
+
+@pytest.mark.parametrize("altered", sorted(AUX_BYTES))
+def test_an_altered_auxiliary_input_is_rejected(tmp_path: Path, altered: str):
+    """補助入力も pin と照合する（config だけ見ても足りない）。"""
+    root, exp, steps, _, ckpt_dir, head = _fake_diffsinger(tmp_path)
+    (ckpt_dir / altered).write_bytes(b"stale or edited")
+    with pytest.raises(xm.ExportManifestError):
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+            {"acoustic_onnx": "a.onnx"}, sys.executable, head,
+        )
+
+
+def test_stale_files_left_in_the_staging_directory_are_removed(tmp_path: Path):
+    """staging 先に残っていた**古い補助ファイル**は exporter に読ませない。
+
+    残すと manifest に載らないまま成果物の由来を汚す（第 8 巡 P1 の後半）。
+    """
+    root, exp, steps, ckpt, ckpt_dir, head = _fake_diffsinger(tmp_path)
+    staged = root / "checkpoints" / exp
+    staged.mkdir(parents=True, exist_ok=True)
+    stale = staged / "spk_map.json"
+    stale.write_bytes(b'{"someone-else": 7}')
+    orphan = staged / "leftover_from_an_older_run.json"
+    orphan.write_bytes(b"{}")
+
+    doc = xm.export_diffsinger_acoustic(
+        GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+        {"acoustic_onnx": "a.onnx"}, sys.executable, head,
+    )
+    assert not orphan.exists(), "束に属さない残置ファイルが消えていない"
+    assert stale.read_bytes() == AUX_BYTES["spk_map.json"], "古い spk_map が残っている"
+    assert set(doc["source_inputs"]) == {"config.yaml", *AUX_BYTES,
+                                         f"model_ckpt_steps_{steps}.ckpt"}
+
+
+def test_the_committed_pins_cover_every_exporter_input():
+    """pin ファイルが 3 世代とも束を全部 pin しているか（部分 pin を残さない）。"""
+    for gen in ("run5", "run6", "run7"):
+        inputs = xm.load_input_pins(gen)["inputs"]
+        assert set(inputs) == {
+            "config.yaml", "spk_map.json", "lang_map.json", "dictionary-ja.txt"
+        }, gen

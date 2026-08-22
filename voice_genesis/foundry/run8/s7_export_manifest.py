@@ -108,6 +108,7 @@ def load_input_pins(generation: str) -> Dict[str, str]:
     return {
         "checkpoint_sha256": str(entry["checkpoint_sha256"]),
         "config_sha256": str(entry["config_sha256"]),
+        "inputs": {str(k): str(v) for k, v in entry["inputs"].items()},
     }
 
 
@@ -353,11 +354,13 @@ def export_diffsinger_acoustic(
 ) -> Dict[str, Any]:
     """DiffSinger acoustic を export し、**exporter が消費する入力全部**を束縛する。
 
-    exporter の入力は checkpoint だけではない。`config.yaml` が checkpoint の隣に
-    置かれ、同じく exporter に読まれる（`s1_gate/gate_synth.py` の staging と同型）。
-    したがって正しい checkpoint の隣に**古い / 書き換えられた config** を置けば、
-    別の成果物が出るのに manifest は事前登録 checkpoint を名乗る
-    （PR #303 第 5 巡 P1）。
+    exporter の入力は checkpoint だけではない。`config.yaml` / `spk_map.json` /
+    `lang_map.json` / `dictionary-ja.txt` が checkpoint の隣に置かれ、同じく
+    exporter に読まれる（`s1_gate/gate_synth.py` の staging と同型。
+    `spk_map.json` の要求は `results_s5/s5_record_2026-08-20.md` §5.6 に実地記録がある）。
+    したがって正しい checkpoint の隣に**古い / 書き換えられた補助入力**を置けば、
+    別の成果物が出るのに manifest は pin された checkpoint を名乗る
+    （PR #303 第 5・8 巡 P1）。
 
     そこで staging をこの関数が行い、**一度読んだバイト列**を
 
@@ -375,48 +378,58 @@ def export_diffsinger_acoustic(
     # 入力 pin は**任意ではない**。記録するだけでは「期待した物が使われた」ことに
     # ならない（PR #303 第 7 巡 P1）。世代から引いて必ず照合する。
     pins = load_input_pins(generation)
-    expected_checkpoint_sha256 = pins["checkpoint_sha256"]
-    expected_config_sha256 = pins["config_sha256"]
     # exporter の実装そのものも起動前に照合する（同 P1）。
     exporter = verify_exporter_tree(exporter_root, exporter_revision)
-    src_ckpt = ckpt_dir / f"model_ckpt_steps_{int(ckpt_steps)}.ckpt"
-    src_config = ckpt_dir / "config.yaml"
-    for path in (src_ckpt, src_config):
-        if not path.is_file():
-            raise ExportManifestError(f"{path} が無い（exporter の入力が揃っていない）")
 
-    ckpt_bytes, ckpt_sha, _ = s7_io.read_bytes_with_pin(src_ckpt)
-    config_bytes, config_sha, _ = s7_io.read_bytes_with_pin(src_config)
-    for label, observed, expected in (
-        ("checkpoint", ckpt_sha, expected_checkpoint_sha256),
-        ("config.yaml", config_sha, expected_config_sha256),
-    ):
-        if observed != str(expected):
+    # exporter が消費する入力を**全部**運ぶ（第 8 巡 P1）。checkpoint と config.yaml
+    # だけでは export は走らない — `base_exporter.build_spk_map` が
+    # `checkpoints/<exp>/spk_map.json` を要求する（results_s5 §5.6 の実地記録）。
+    ckpt_name = f"model_ckpt_steps_{int(ckpt_steps)}.ckpt"
+    wanted = {ckpt_name: pins["checkpoint_sha256"], **pins["inputs"]}
+    staged_bytes: Dict[str, bytes] = {}
+    for name, expected in sorted(wanted.items()):
+        src = s7_io.child_path(ckpt_dir, name)
+        if not src.is_file():
             raise ExportManifestError(
-                f"{label}: sha256 {observed} != pin {expected}"
+                f"{src} が無い（exporter の入力が揃っていない）"
             )
+        raw, observed, _ = s7_io.read_bytes_with_pin(src)
+        if observed != str(expected):
+            raise ExportManifestError(f"{name}: sha256 {observed} != pin {expected}")
+        staged_bytes[name] = raw
 
     staged = _exp_dir(exporter_root, exp)
     staged.mkdir(parents=True, exist_ok=True)
-    staged_ckpt = staged / src_ckpt.name
+    # 古い補助ファイルが残っていると、manifest に載らないまま exporter に読まれる。
+    # staging 先は**この起動で置いた物だけ**にする。
+    for leftover in sorted(staged.iterdir()):
+        if leftover.is_file() and leftover.name not in staged_bytes:
+            leftover.unlink()
+    for name, raw in sorted(staged_bytes.items()):
+        (staged / name).write_bytes(raw)
+    staged_ckpt = staged / ckpt_name
     staged_config = staged / "config.yaml"
-    staged_ckpt.write_bytes(ckpt_bytes)
-    staged_config.write_bytes(config_bytes)
 
     command = [
         str(python_executable), str(exporter_root / "scripts" / "export.py"), "acoustic",
         "--exp", str(exp), "--ckpt", str(int(ckpt_steps)), "--out", str(out_dir),
     ]
-    return _run_witnessed_export(
+    doc = _run_witnessed_export(
         generation, staged_ckpt, out_dir, artifact_names, command,
         checkpoint_derivation=(
-            f"この関数が {src_ckpt} と {src_config} を一度読み、その同じバイト列を "
-            f"checkpoints/{exp}/ へ書き出してから "
+            f"この関数が {ckpt_dir} の {sorted(staged_bytes)} を一度読み、pin と照合し、"
+            f"その同じバイト列を checkpoints/{exp}/ へ書き出してから "
             f"scripts/export.py acoustic --exp {exp} --ckpt {ckpt_steps} を起動した。"
-            "記録した sha256 は exporter が開いた実体そのもの"
+            "staging 先はこの起動で置いた物だけにしてある"
         ),
         exporter=exporter, cwd=exporter_root, source_config=staged_config,
     )
+    # exporter が読みうる入力を**全部**記録する（一部だけ載せると、載らなかった物が
+    # 差し替わっても manifest 上は同じに見える）。
+    doc["source_inputs"] = {
+        name: _entry(staged / name) for name in sorted(staged_bytes)
+    }
+    return doc
 
 
 def verify_export_manifest(
