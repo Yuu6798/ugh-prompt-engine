@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from af_schema import SpecError, require_valid_founder_spec  # noqa: F401  (再輸出)
+from af_schema import SpecError, is_safe_name, require_valid_founder_spec, validate_criteria  # noqa: F401,E501  (再輸出)
 
 HERE = Path(__file__).resolve().parent
 
@@ -331,10 +331,20 @@ def _load_pinned(path: str | Path, expect_schema: str) -> Tuple[Dict[str, Any], 
 
 
 def load_criteria(path: str | Path) -> Criteria:
+    """criteria を読み、**AF-P0 の凍結契約と一致すること**まで検査する。
+
+    pin されたハッシュは「どの文書だったか」を残すだけで「正しい文書か」は
+    保証しない。同じ schema の別文書を渡せば §18 の許容値を無効化して偽の
+    PASS を作れるので、identity と閾値の一致を fail-closed で確かめる
+    （`af_schema.validate_criteria`）。
+    """
     obj, sha = _load_pinned(path, CRITERIA_SCHEMA)
     for key in ("metric_definitions", "body_gates", "reexpression_gates", "ingestion"):
         if key not in obj:
             raise SpecError([f"criteria: missing '{key}'"])
+    errors = validate_criteria(obj)
+    if errors:
+        raise SpecError(errors)
     return Criteria(raw=obj, sha256=sha)
 
 
@@ -345,8 +355,39 @@ def load_controls(path: str | Path) -> Tuple[Dict[str, Any], str]:
     return obj, sha
 
 
+#: probe が参照してよい alias（Body の ASCII ファイル名幹）。
+#:
+#: probe の alias は `wav_dir / f"{stem}.wav"` の **読み取りパス**にも
+#: `spectrum_{stem}.json` の **書き出しパス**にもなる。自由文字列のままだと
+#: `../../../etc/passwd` のような値で staging の外を読み書きできる。
+def frozen_probe_aliases() -> Tuple[str, ...]:
+    return tuple(u.stem for u in ALIAS_UNITS)
+
+
 def load_probes(path: str | Path) -> Tuple[Dict[str, Any], str]:
-    return _load_pinned(path, PROBES_SCHEMA)
+    """probes を読み、alias が凍結された Body の unit 名だけであることを検査する。"""
+    obj, sha = _load_pinned(path, PROBES_SCHEMA)
+    allowed = set(frozen_probe_aliases())
+    errors: List[str] = []
+    for section, value in obj.items():
+        if not isinstance(value, dict):
+            continue
+        aliases = value.get("aliases")
+        if aliases is None:
+            continue
+        if not isinstance(aliases, list):
+            errors.append(f"probes.{section}.aliases: expected list")
+            continue
+        for alias in aliases:
+            if not is_safe_name(alias):
+                errors.append(
+                    f"probes.{section}.aliases: {alias!r} is not a single-component name")
+            elif alias not in allowed:
+                errors.append(
+                    f"probes.{section}.aliases: {alias!r} is not an AF-P0 body unit")
+    if errors:
+        raise SpecError(errors)
+    return obj, sha
 
 
 def apply_patch(spec: Mapping[str, Any], patch: Mapping[str, Any]) -> Dict[str, Any]:

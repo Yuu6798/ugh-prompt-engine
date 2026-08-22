@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import shutil
@@ -1207,3 +1208,101 @@ def test_shipped_controls_match_the_frozen_values():
         assert float(c["min_separation"]) == want["min_separation"]
         assert c["low"]["patch"] == want["low"]
         assert c["high"]["patch"] == want["high"]
+
+
+# ---------------------------------------------------------------------------
+# PR #301 Codex レビュー第 6 巡（P1 x2）で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def _write_json(path: Path, obj: Any) -> Path:
+    path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_criteria_must_match_the_frozen_af_p0_contract(tmp_path):
+    """pin されたハッシュだけでは『正しい criteria か』を保証できない。"""
+    base = json.loads(CRITERIA_PATH.read_text(encoding="utf-8"))
+    assert af_schema.validate_criteria(base) == []
+
+    # 許容値を無効化した文書は拒否する（偽 PASS の freeze を防ぐ）
+    for section, key, value in (("body_gates", "vowel_formant_min_pass_peaks", 0),
+                                ("body_gates", "release_tol_ms", 1e9),
+                                ("reexpression_gates", "spectral_identity_cosine_each_min",
+                                 -1.0),
+                                ("ingestion", "expected_wav_count", 1)):
+        tampered = json.loads(json.dumps(base))
+        tampered[section][key] = value
+        errs = af_schema.validate_criteria(tampered)
+        assert any(f"criteria.{section}.{key}" in e for e in errs)
+        with pytest.raises(af_spec.SpecError):
+            af_spec.load_criteria(_write_json(tmp_path / f"{section}_{key}.json", tampered))
+
+    # identity（experiment_id / founder_id）の差し替えも拒否する
+    for key in ("experiment_id", "founder_id"):
+        tampered = json.loads(json.dumps(base))
+        tampered[key] = "SOMETHING-ELSE"
+        assert any(f"criteria.{key}" in e for e in af_schema.validate_criteria(tampered))
+
+    # 未知キー / 欠落キーも拒否する
+    tampered = json.loads(json.dumps(base))
+    tampered["body_gates"]["made_up_tol"] = 1.0
+    assert any("unknown key" in e for e in af_schema.validate_criteria(tampered))
+    tampered = json.loads(json.dumps(base))
+    del tampered["body_gates"]["release_tol_ms"]
+    assert any("missing key" in e for e in af_schema.validate_criteria(tampered))
+
+
+def test_pitch_dir_rejects_path_escape():
+    """`body.pitch_dirs` の絶対パス / `..` を G1 で止める。"""
+    for bad in ("../escaped", "/tmp/escaped", "C4/../../x", "a/b"):
+        spec = _spec()
+        spec["body"]["pitch_dirs"] = [bad]
+        errs = af_schema.validate_founder_spec(spec)
+        assert any("single-component" in e or "frozen AF-P0 value" in e for e in errs), bad
+    spec = _spec()
+    spec["body"]["pitch_dirs"] = ["D5"]  # 安全な名前でも凍結値と違えば拒否
+    assert any("frozen AF-P0 value" in e for e in af_schema.validate_founder_spec(spec))
+    assert af_schema.is_safe_name("C4") and not af_schema.is_safe_name("../C4")
+
+
+def test_write_body_refuses_to_escape_the_staging_root(tmp_path, monkeypatch):
+    """書き込み境界でも独立に containment を確認する（G1 を通り抜けた場合の保険）。"""
+    genome = af_spec.load_genome(SPEC_PATH)
+    escaped = dataclasses.replace(genome, pitch_dir="../escaped") \
+        if dataclasses.is_dataclass(genome) else None
+    assert escaped is not None
+    with pytest.raises(af_spec.AFStop) as excinfo:
+        af_utau.write_body(escaped, tmp_path / "staging" / "AF0")
+    assert excinfo.value.reason_code == "PATH_ESCAPE"
+    assert not (tmp_path / "escaped").exists()
+
+
+def test_probe_aliases_are_restricted_to_body_units(tmp_path):
+    """probe の alias は読み書き両方のパスになるので凍結 unit 名に限る。"""
+    base = json.loads(PROBES_PATH.read_text(encoding="utf-8"))
+    af_spec.load_probes(PROBES_PATH)  # 同梱ファイルは通る
+
+    for bad in ("../../../etc/passwd", "/tmp/x", "a/b", "not_a_unit"):
+        tampered = json.loads(json.dumps(base))
+        tampered["spectrum_probes"]["aliases"] = [bad]
+        with pytest.raises(af_spec.SpecError):
+            af_spec.load_probes(_write_json(tmp_path / "p.json", tampered))
+
+    assert set(base["spectrum_probes"]["aliases"]) <= set(af_spec.frozen_probe_aliases())
+
+
+def test_pinned_input_contract_failure_blocks_the_run(tmp_path):
+    """契約違反の criteria を渡した run は BLOCKED で止まり、何も compile しない。"""
+    import p0_run
+
+    base = json.loads(CRITERIA_PATH.read_text(encoding="utf-8"))
+    base["body_gates"]["release_tol_ms"] = 1e9
+    bad_criteria = _write_json(tmp_path / "bad_criteria.json", base)
+    out = tmp_path / "AF0"
+    code = p0_run.run(SPEC_PATH, bad_criteria, CONTROLS_PATH, PROBES_PATH, out)
+    assert code == af_spec.EXIT_CODES["BLOCKED"]
+    results = json.loads((out / "p0_results.json").read_text(encoding="utf-8"))
+    assert results["overall"]["verdict"] == "BLOCKED"
+    g1 = next(g for g in results["gates"] if g["gate"] == "G1")
+    assert g1["verdict"] == "FAIL"
+    assert any("pinned input rejected" in e for e in g1["detail"]["errors"])
+    assert not (out / "voicebank").exists()

@@ -42,6 +42,7 @@ import af_report  # noqa: E402
 import af_utau  # noqa: E402
 import convert_founder  # noqa: E402
 from af_schema import validate_founder_spec  # noqa: E402
+from af_spec import SpecError  # noqa: E402
 from af_spec import EXIT_CODES, AFStop, FounderGenome  # noqa: E402
 from af_spec import aggregate_digest, canonical_json, genome_from_dict  # noqa: E402
 from af_spec import load_controls, load_criteria, load_probes  # noqa: E402
@@ -289,9 +290,23 @@ def dump_probes(wav_dir: Path, out_dir: Path, probes: Mapping[str, Any],
     ap = probes["afterglow_probes"]
     written: List[str] = []
 
+    def _contained(path: Path, root: Path) -> Path:
+        """probe の alias 由来パスが root の外へ出ていないことを確かめる。
+
+        alias は `load_probes` が凍結 unit 名へ制限しているが、読み書きの境界でも
+        独立に確認する（config 由来の名前がパスになる箇所は二重に閉じる）。
+        """
+        resolved, base = path.resolve(), root.resolve()
+        if base not in resolved.parents and resolved != base:
+            raise AFStop(cause=f"probe path {path} escapes {root}",
+                         impact="probes would read or write outside the result tree",
+                         minimal_fix="use frozen AF-P0 body unit names as probe aliases",
+                         status="FAILED", reason_code="PATH_ESCAPE")
+        return path
+
     for stem in sp["aliases"]:
         m = measurements.get(stem)
-        wav = wav_dir / f"{stem}.wav"
+        wav = _contained(wav_dir / f"{stem}.wav", wav_dir)
         if m is None or not wav.exists() or m.get("core_probe_ms") is None:
             continue
         x, sr = af_measure.read_wav_mono(wav)
@@ -308,16 +323,16 @@ def dump_probes(wav_dir: Path, out_dir: Path, probes: Mapping[str, Any],
             "freq_hz": [round(float(v), sp["round_decimals"]) for v in freqs[mask][idx]],
             "mag_db": [round(float(v), sp["round_decimals"]) for v in mag[mask][idx]],
         }
-        write_json(out_dir / f"spectrum_{stem}.json", payload)
+        write_json(_contained(out_dir / f"spectrum_{stem}.json", out_dir), payload)
         written.append(f"spectrum_{stem}.json")
 
     for stem in ep["aliases"]:
-        wav = wav_dir / f"{stem}.wav"
+        wav = _contained(wav_dir / f"{stem}.wav", wav_dir)
         if not wav.exists():
             continue
         x, sr = af_measure.read_wav_mono(wav)
         t, e = af_measure.rms_envelope(x, sr, float(ep["hop_ms"]), 4.0)
-        write_json(out_dir / f"envelope_{stem}.json", {
+        write_json(_contained(out_dir / f"envelope_{stem}.json", out_dir), {
             "stem": stem, "sr": sr, "hop_ms": ep["hop_ms"],
             "t_ms": [round(float(v), 3) for v in t],
             "rms": [round(float(v), ep["round_decimals"]) for v in e]})
@@ -325,7 +340,7 @@ def dump_probes(wav_dir: Path, out_dir: Path, probes: Mapping[str, Any],
 
     for stem in ap["aliases"]:
         m = measurements.get(stem)
-        wav = wav_dir / f"{stem}.wav"
+        wav = _contained(wav_dir / f"{stem}.wav", wav_dir)
         if m is None or not wav.exists() or not m.get("ar_alpha_center_hz"):
             continue
         x, sr = af_measure.read_wav_mono(wav)
@@ -337,7 +352,7 @@ def dump_probes(wav_dir: Path, out_dir: Path, probes: Mapping[str, Any],
         t_a, e_a = af_measure.band_envelope(x, sr, (center - half, center + half),
                                             float(ap["hop_ms"]),
                                             float(mag["envelope_window_ms"]), order=6)
-        write_json(out_dir / f"afterglow_{stem}.json", {
+        write_json(_contained(out_dir / f"afterglow_{stem}.json", out_dir), {
             "stem": stem, "sr": sr, "ar_alpha_center_hz": center,
             "t_ms": [round(float(v), 3) for v in t_m],
             "main_rms": [round(float(v), ap["round_decimals"]) for v in e_m],
@@ -381,19 +396,32 @@ def _run_phases(spec_path: Path, criteria_path: Path, controls_path: Path,
     # ---------------- Phase 0: Preregister + pin --------------------------
     _log("phase0", f"preregister + pin (result tree rebuilt: {tree})")
     spec_raw = json.loads(Path(spec_path).read_text(encoding="utf-8"))
-    spec_errors = validate_founder_spec(spec_raw)
-    gate_g1 = af_gates.gate_spec_valid(spec_errors)
-    criteria = load_criteria(criteria_path)
-    controls, controls_sha = load_controls(controls_path)
-    probes, probes_sha = load_probes(probes_path)
+    spec_errors = list(validate_founder_spec(spec_raw))
     closure_digest, closure_rows = af_gates.code_closure_digest(HERE)
+
+    # pinned input（criteria / controls / probes）の契約違反も G1 で止める。
+    # ハッシュを残すだけでは「正しい文書か」を保証できないため、identity と
+    # 凍結値の不一致は spec 不正と同じ扱いにする（判定不能 = BLOCKED）。
+    criteria = None
+    controls: Dict[str, Any] = {}
+    controls_sha = probes_sha = ""
+    probes: Dict[str, Any] = {}
+    try:
+        criteria = load_criteria(criteria_path)
+        controls, controls_sha = load_controls(controls_path)
+        probes, probes_sha = load_probes(probes_path)
+    except SpecError as exc:
+        spec_errors += [f"pinned input rejected: {e}" for e in exc.errors]
+    gate_g1 = af_gates.gate_spec_valid(spec_errors)
 
     if spec_errors:
         _log("phase0", f"G1 SPEC_VALID = FAIL ({len(spec_errors)} errors) — 以降を実行しない")
         return _finalize(out_dir, None, [gate_g1],
-                         {"criteria_sha256": criteria.sha256, "controls_sha256": controls_sha,
+                         {"criteria_sha256": criteria.sha256 if criteria else None,
+                          "controls_sha256": controls_sha,
                           "probes_sha256": probes_sha, "code_closure_sha256": closure_digest},
-                         {}, None, {"notes": ["spec invalid; no compilation attempted"]})
+                         {}, None,
+                         {"notes": ["inputs invalid; no compilation attempted"]})
 
     genome = genome_from_dict(spec_raw)
     pins = {

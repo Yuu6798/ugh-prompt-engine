@@ -18,6 +18,7 @@ fail-closed の原則:
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 SPEC_SCHEMA = "voicegenesis-artificial-founder/0.2"
@@ -117,6 +118,97 @@ FROZEN_ALIASES: Tuple[str, ...] = (
 )
 _RELEASE_CURVES: Tuple[str, ...] = ("half_cosine",)
 _PHASE_SCHEMES: Tuple[str, ...] = ("schroeder", "zero")
+
+
+#: §8 `body.pitch_dirs` の凍結値。**単一構成要素のディレクトリ名**に限る。
+#:
+#: 絶対パスや `..` を含む値を通すと、`write_body` の `root / genome.pitch_dir` が
+#: staging の外を指し、G3 が落ちる前に固定名の WAV / oto.ini を外部へ書き出す
+#: （しかもその書き込みは成果物ツリーの rollback では戻らない）。
+FROZEN_PITCH_DIRS: Tuple[str, ...] = ("C4",)
+
+#: §18 の許容値と §12 の取り込み要件の凍結値。**criteria ファイルはこの契約に
+#: 一致しなければならない。**
+#:
+#: pin されたハッシュがあることだけを確認しても、`--criteria` に同じ schema の
+#: 別文書を渡せば `vowel_formant_min_pass_peaks: 0`・巨大な許容値・負の cosine 下限
+#: といった値で比較 Gate を素通りさせ、AF0 に帰属する偽の PASS を freeze まで
+#: 通せてしまう。ハッシュは「どの文書だったか」を残すだけで「正しい文書か」は
+#: 保証しない。
+#:
+#: `metric_definitions`（どう測るか）はここで凍結しない。測定方法の妥当性は
+#: §17 の meter control が凍結値で弁別を実測して担保する（`af_gates.
+#: REQUIRED_CONTROL_CONTRACT`）。凍結するのは「合否を決める閾値」だけ。
+FROZEN_CRITERIA_IDENTITY: Dict[str, str] = {
+    "schema": "voicegenesis-artificial-founder-criteria/1.1",
+    "experiment_id": "AF-P0",
+    "founder_id": "AF0",
+}
+
+FROZEN_BODY_GATES: Dict[str, Any] = {
+    "vowel_formant_tolerance_hz": 40.0, "vowel_formant_tolerance_rel": 0.03,
+    "vowel_formant_min_pass_peaks": 13, "vowel_formant_total_peaks": 15,
+    "hl_even_odd_ratio_tol": 0.08, "ar_alpha_center_tol_hz": 50.0,
+    "ar_alpha_required_contexts": 5, "ar_beta_center_tol_hz": 90.0,
+    "beta_alpha_ratio_tol": 0.08, "f0_core_tol_cents": 5.0,
+    "terminal_f0_delta_tol_cents": 15.0, "duration_onset_tol_ms": 2.0,
+    "r_share_tol": 0.02, "energy_sustain_tol_db": 0.5, "energy_attack_tol_ms": 5.0,
+    "release_tol_ms": 2.0, "afterglow_extra_tol_ms": 5.0, "terminal_zero_exact": True,
+}
+
+FROZEN_REEXPRESSION_GATES: Dict[str, Any] = {
+    "spectral_identity_cosine_each_min": 0.85, "spectral_identity_cosine_median_min": 0.9,
+    "hl_even_odd_ratio_delta_max": 0.15, "ar_alpha_center_delta_hz_max": 150.0,
+    "ar_alpha_required_contexts": 4, "ar_beta_center_delta_hz_max": 220.0,
+    "beta_alpha_ratio_delta_max": 0.15, "f0_core_tol_cents": 25.0,
+    "terminal_f0_delta_tol_cents": 50.0, "duration_onset_tol_ms": 15.0,
+    "r_share_tol": 0.08, "energy_sustain_tol_db": 2.0, "release_tol_ms": 30.0,
+    "afterglow_extra_delta_ms_max": 20.0,
+}
+
+FROZEN_INGESTION: Dict[str, Any] = {
+    "required_onsets": ["k", "s", "n", "r"],
+    "required_vowels": ["a", "i", "u", "e", "o"],
+    "expected_wav_count": 25, "expected_oto_entries": 25,
+    "join_smoke_sequence": ["か", "り", "あ"],
+}
+
+
+def is_safe_name(name: Any) -> bool:
+    """パス区切り・`..`・絶対パスを含まない単一構成要素名か。"""
+    if not isinstance(name, str) or not name or name in (".", ".."):
+        return False
+    if "/" in name or "\\" in name or "\x00" in name:
+        return False
+    return Path(name).name == name and not Path(name).is_absolute()
+
+
+def validate_criteria(criteria: Any) -> List[str]:
+    """criteria が AF-P0 の凍結契約と一致するか検査し、**全件**返す（空 = 合格）。"""
+    errors: List[str] = []
+    if not isinstance(criteria, dict):
+        return [f"criteria: expected object, got {type(criteria).__name__}"]
+    for key, want in FROZEN_CRITERIA_IDENTITY.items():
+        if criteria.get(key) != want:
+            errors.append(f"criteria.{key}: expected {want!r}, got {criteria.get(key)!r}")
+    for section, frozen in (("body_gates", FROZEN_BODY_GATES),
+                            ("reexpression_gates", FROZEN_REEXPRESSION_GATES),
+                            ("ingestion", FROZEN_INGESTION)):
+        got = criteria.get(section)
+        if not isinstance(got, dict):
+            errors.append(f"criteria.{section}: expected object")
+            continue
+        for key in sorted(set(frozen) | set(got)):
+            if key not in frozen:
+                errors.append(f"criteria.{section}.{key}: unknown key")
+            elif key not in got:
+                errors.append(f"criteria.{section}.{key}: missing key")
+            elif got[key] != frozen[key]:
+                errors.append(
+                    f"criteria.{section}.{key}: expected {frozen[key]!r}, got {got[key]!r}")
+    if "metric_definitions" not in criteria:
+        errors.append("criteria.metric_definitions: missing section")
+    return errors
 
 
 class SpecError(ValueError):
@@ -386,6 +478,14 @@ def validate_founder_spec(spec: Dict[str, Any]) -> List[str]:
     _require(isinstance(pdirs, list) and len(pdirs) == 1
              and isinstance(pdirs[0], str) and pdirs[0],
              "root.body.pitch_dirs: P0 requires exactly 1 pitch dir (§19 G3)", errors)
+    if isinstance(pdirs, list):
+        unsafe = [d for d in pdirs if not is_safe_name(d)]
+        _require(not unsafe,
+                 f"root.body.pitch_dirs: must be single-component directory names "
+                 f"(no separators, no '..', no absolute paths); got {unsafe}", errors)
+        _require(tuple(pdirs) == FROZEN_PITCH_DIRS,
+                 f"root.body.pitch_dirs: must equal the frozen AF-P0 value "
+                 f"{list(FROZEN_PITCH_DIRS)}, got {pdirs}", errors)
     lead = _num(body, "lead_zero_ms", "root.body", errors)
     tail = _num(body, "tail_zero_ms", "root.body", errors)
     _require(lead > 0.0, "root.body.lead_zero_ms: must be > 0", errors)

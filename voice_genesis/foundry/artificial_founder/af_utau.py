@@ -152,6 +152,15 @@ def write_body(genome: FounderGenome, staging_root: str | Path) -> BodyBuild:
     if root.exists():
         shutil.rmtree(root)
     pitch_dir = root / genome.pitch_dir
+    # config 由来の名前が staging の外を指していないことを **書く直前に** 確かめる
+    # （G1 でも凍結値を要求しているが、書き込み境界でも独立に確認する）。
+    resolved_root = root.resolve()
+    if not (pitch_dir.resolve() == resolved_root
+            or resolved_root in pitch_dir.resolve().parents):
+        raise AFStop(cause=f"pitch dir {genome.pitch_dir!r} escapes the staging root",
+                     impact="the compiler would write body files outside the staging tree",
+                     minimal_fix="use the frozen single-component pitch dir name",
+                     status="FAILED", reason_code="PATH_ESCAPE")
     pitch_dir.mkdir(parents=True, exist_ok=True)
 
     units = synthesize_body(genome)
