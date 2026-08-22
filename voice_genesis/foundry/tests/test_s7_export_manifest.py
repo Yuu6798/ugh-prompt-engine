@@ -43,7 +43,7 @@ def bundle(tmp_path: Path):
         f.write_bytes(content)
         artifacts[name] = f
     manifest = tmp_path / "export_manifest.json"
-    doc = xm.build_manifest(GEN, ckpt, artifacts)
+    doc = xm.build_manifest(GEN, ckpt, artifacts, binding_evidence=xm.WITNESSED)
     manifest.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     return manifest, ckpt, artifacts
 
@@ -124,3 +124,90 @@ def test_both_render_entry_points_require_an_export_manifest():
             "--out-dir", "x", "--manifest-out", "x",
         ])
     assert "--export-manifest" in (_RUN8 / "s7_0b_probe.py").read_text(encoding="utf-8")
+
+
+# --- 束縛の**由来**（PR #303 第 3 巡 P1） --------------------------------------
+
+
+def test_a_post_hoc_manifest_is_rejected_by_default(tmp_path: Path):
+    """2 つのパスを**別々に hash して並べただけ**の記録は、観測していない関係を
+    証明したことにする。正しい ckpt と無関係な ONNX を渡せば作れてしまうので、
+    レンダ側は既定で受け付けない。"""
+    ckpt = tmp_path / "ckpt"
+    ckpt.write_bytes(b"ckpt")
+    onnx = tmp_path / "unrelated.onnx"
+    onnx.write_bytes(b"an-onnx-that-never-came-from-that-ckpt")
+    doc = xm.build_manifest(GEN, ckpt, {"acoustic_onnx": onnx})
+    assert doc["binding_evidence"] == xm.UNWITNESSED
+    manifest = tmp_path / "m.json"
+    manifest.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(xm.ExportManifestError):
+        xm.verify_export_manifest(manifest, GEN, _ckpt_sha(ckpt), {"acoustic_onnx": onnx})
+    # 明示的に許したときだけ通る（移行用の逃げ道は残すが既定では閉じる）
+    out = xm.verify_export_manifest(
+        manifest, GEN, _ckpt_sha(ckpt), {"acoustic_onnx": onnx}, allow_unwitnessed=True
+    )
+    assert out["binding_evidence"] == xm.UNWITNESSED
+
+
+def test_a_witnessed_export_records_the_command_that_produced_the_artifacts(tmp_path: Path):
+    """exporter を**このプロセスが起動**し、その実行で現れた物だけを記録する。"""
+    ckpt = tmp_path / "ckpt"
+    ckpt.write_bytes(b"ckpt")
+    out_dir = tmp_path / "exported"
+    cmd = [
+        sys.executable, "-c",
+        f"import pathlib;p=pathlib.Path({str(out_dir)!r});"
+        "p.mkdir(parents=True,exist_ok=True);(p/'a.onnx').write_bytes(b'produced')",
+    ]
+    doc = xm.run_witnessed_export(GEN, ckpt, out_dir, {"acoustic_onnx": "a.onnx"}, cmd)
+    assert doc["binding_evidence"] == xm.WITNESSED
+    assert doc["export_command"] == [str(c) for c in cmd]
+    assert doc["artifacts"]["acoustic_onnx"]["sha256"] == s7_io.sha256_bytes(b"produced")
+
+
+def test_a_witnessed_export_refuses_a_non_empty_output_directory(tmp_path: Path):
+    """既に在る物を『今 export した産物』と名乗らせない。"""
+    ckpt = tmp_path / "ckpt"
+    ckpt.write_bytes(b"ckpt")
+    out_dir = tmp_path / "exported"
+    out_dir.mkdir()
+    (out_dir / "a.onnx").write_bytes(b"left over from an older export")
+    with pytest.raises(xm.ExportManifestError):
+        xm.run_witnessed_export(
+            GEN, ckpt, out_dir, {"acoustic_onnx": "a.onnx"}, [sys.executable, "-c", ""]
+        )
+
+
+def test_a_witnessed_export_fails_when_the_exporter_fails(tmp_path: Path):
+    ckpt = tmp_path / "ckpt"
+    ckpt.write_bytes(b"ckpt")
+    with pytest.raises(xm.ExportManifestError):
+        xm.run_witnessed_export(
+            GEN, ckpt, tmp_path / "e", {"acoustic_onnx": "a.onnx"},
+            [sys.executable, "-c", "raise SystemExit(3)"],
+        )
+
+
+def test_a_witnessed_export_fails_when_an_artifact_never_appears(tmp_path: Path):
+    """exporter は成功したが宣言した物が出てこない = 因果を主張できない。"""
+    ckpt = tmp_path / "ckpt"
+    ckpt.write_bytes(b"ckpt")
+    with pytest.raises(xm.ExportManifestError):
+        xm.run_witnessed_export(
+            GEN, ckpt, tmp_path / "e2", {"acoustic_onnx": "a.onnx"},
+            [sys.executable, "-c", "pass"],
+        )
+
+
+def test_the_cli_refuses_to_write_a_manifest_without_running_an_exporter(tmp_path: Path):
+    """`--` の後ろにコマンドが無い呼び出しは、後付け記録の生成になるので拒否する。"""
+    ckpt = tmp_path / "ckpt"
+    ckpt.write_bytes(b"ckpt")
+    with pytest.raises(SystemExit):
+        xm.main([
+            "--generation", GEN, "--checkpoint", str(ckpt),
+            "--out-dir", str(tmp_path / "e3"), "--artifact", "acoustic_onnx=a.onnx",
+            "--out", str(tmp_path / "m.json"),
+        ])

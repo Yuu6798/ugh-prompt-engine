@@ -92,21 +92,55 @@ while IFS='|' read -r name dest src want; do
   fetch "$name" "$dest" "$src" "$want"
 done <<< "$ASSETS"
 
-echo "| 2. 展開（展開後の実体も照合する）"
+echo "| 2. 展開（**全メンバを検証済み zip と照合**して、違う物だけ入れ直す）"
+# 「acoustic.onnx が在るから展開済み」という**存在検査だけの再利用**は使わない
+# （PR #303 第 3 巡 P1）。古い / 壊れた展開が残っていると、容器 zip の sha は
+# 合っているのに **中身が別物の linguistic / dur / pitch モデル**で測ってしまう。
+# zip 自体は step 1 で sha 照合済みなので、そのメンバのバイト列を正本として使える。
 mkdir -p "$M/extracted/ds" "$M/vocoder_onnx"
-DS_ACOUSTIC="$M/extracted/ds/NamineRitsu_DiffSinger/acoustic.onnx"
-if [ ! -f "$DS_ACOUSTIC" ]; then
-  ( cd "$M/extracted/ds" && unzip -o -q "$M/NamineRitsu_DiffSinger.zip" ) \
-    || { echo "  canon zip        FAIL 展開に失敗" >&2; FAIL=$((FAIL+1)); }
-fi
-if [ -f "$DS_ACOUSTIC" ]; then
-  echo "  canon zip        OK   acoustic.onnx"
+extract_verified () {
+  local archive="$1" dest="$2"
+  python - "$archive" "$dest" <<'PY'
+import hashlib, os, sys, tempfile, zipfile
+
+archive, dest = sys.argv[1], sys.argv[2]
+verified = repaired = 0
+with zipfile.ZipFile(archive) as z:
+    for info in z.infolist():
+        if info.is_dir():
+            os.makedirs(os.path.join(dest, info.filename), exist_ok=True)
+            continue
+        want = hashlib.sha256(z.read(info)).hexdigest()
+        out = os.path.join(dest, info.filename)
+        got = None
+        if os.path.isfile(out) and os.path.getsize(out) == info.file_size:
+            h = hashlib.sha256()
+            with open(out, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            got = h.hexdigest()
+        if got == want:
+            verified += 1
+            continue
+        # 違うメンバだけを差し替える（一時ファイル -> rename で途中状態を残さない）
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out) or ".")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(z.read(info))
+        os.replace(tmp, out)
+        repaired += 1
+print(f"verified={verified} repaired={repaired}")
+PY
+}
+if EXTRACT_OUT="$(extract_verified "$M/NamineRitsu_DiffSinger.zip" "$M/extracted/ds" 2>&1)"; then
+  echo "  canon zip        OK   $EXTRACT_OUT"
 else
-  echo "  canon zip        FAIL 展開後に acoustic.onnx が無い" >&2; FAIL=$((FAIL+1))
+  echo "  canon zip        FAIL 展開/照合に失敗: $EXTRACT_OUT" >&2; FAIL=$((FAIL+1))
 fi
-if [ ! -f "$M/vocoder_onnx/nsf_hifigan.onnx" ]; then
-  ( cd "$M/vocoder_onnx" && unzip -o -q "$M/nsf_hifigan.oudep" ) \
-    || { echo "  vocoder oudep    FAIL 展開に失敗" >&2; FAIL=$((FAIL+1)); }
+if EXTRACT_OUT="$(extract_verified "$M/nsf_hifigan.oudep" "$M/vocoder_onnx" 2>&1)"; then
+  echo "  vocoder oudep    OK   $EXTRACT_OUT"
+else
+  echo "  vocoder oudep    FAIL 展開/照合に失敗: $EXTRACT_OUT" >&2; FAIL=$((FAIL+1))
 fi
 VOC_WANT=a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4
 VOC_GOT="$(sha_of "$M/vocoder_onnx/nsf_hifigan.onnx")"
@@ -114,6 +148,10 @@ if [ "$VOC_GOT" != "$VOC_WANT" ]; then
   echo "  nsf_hifigan.onnx FAIL sha ${VOC_GOT:0:16} != ${VOC_WANT:0:16}" >&2; FAIL=$((FAIL+1))
 else
   echo "  nsf_hifigan.onnx OK   ${VOC_GOT:0:16}"
+fi
+DS_ACOUSTIC="$M/extracted/ds/NamineRitsu_DiffSinger/acoustic.onnx"
+if [ ! -f "$DS_ACOUSTIC" ]; then
+  echo "  canon zip        FAIL 展開後に acoustic.onnx が無い" >&2; FAIL=$((FAIL+1))
 fi
 
 echo "| 3. DiffSinger (openvpi e2307b1)"
@@ -184,4 +222,20 @@ fi
 
 echo "| result: OK=$OK SKIP=$SKIP FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || { echo "| fail-closed: pin 不一致があるので止める" >&2; exit 1; }
-echo "| 次: export（venv_export）→ 校正レンダ再生成 → samples_sha256 照合"
+cat <<'NEXT'
+| 次: export → 校正レンダ再生成 → samples_sha256 照合
+|
+| export は **s7_export_manifest.py 経由で回す**（PR #303 第 3 巡 P1）。後から
+| ckpt と ONNX を別々に hash した記録は「観測していない関係」を証明したことになり、
+| レンダ側が既定で拒否する:
+|
+|   "$ROOT/venv_export/bin/python" \
+|     voice_genesis/foundry/run8/s7_export_manifest.py \
+|     --generation run7 --checkpoint "$M/ckpts/run7_40k.ckpt" \
+|     --out-dir "$ROOT/out/onnx_export_s6_run7_acoustic" \
+|     --artifact acoustic_onnx=s6_run7_acoustic.onnx \
+|     --artifact acoustic_dsconfig=dsconfig.yaml \
+|     --artifact acoustic_phonemes_json=s6_run7_acoustic.phonemes.json \
+|     --out "$ROOT/out/onnx_export_s6_run7_acoustic/export_manifest.json" \
+|     -- <exporter のコマンド>
+NEXT
