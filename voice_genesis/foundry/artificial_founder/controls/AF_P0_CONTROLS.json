@@ -1,0 +1,86 @@
+{
+  "schema": "voicegenesis-artificial-founder-controls/1.1",
+  "experiment_id": "AF-P0",
+  "_note": "§17 Meter Controls。AF0 の測定結果を見る前に、測定器が各 metric family の低/高方向を弁別できることを検証する。patch は AF0 genome への上書き（dotted path）。",
+
+  "controls": [
+    {
+      "family": "hl_even_odd_ratio",
+      "metric": "hl_even_odd_ratio",
+      "unit_alias": "a",
+      "min_separation": 0.15,
+      "low": {"label": "even=0.45", "patch": {"founder_source_traits.HL-alpha.even_multiplier": 0.45}},
+      "high": {"label": "even=1.00", "patch": {"founder_source_traits.HL-alpha.even_multiplier": 1.0}}
+    },
+    {
+      "family": "ar_alpha_center",
+      "metric": "ar_alpha_center_hz",
+      "unit_alias": "a",
+      "min_separation": 400.0,
+      "low": {"label": "AR-a=3000Hz", "patch": {"identity_signature.founder_resonances.AR-alpha.center_hz": 3000.0}},
+      "high": {"label": "AR-a=3900Hz", "patch": {"identity_signature.founder_resonances.AR-alpha.center_hz": 3900.0}}
+    },
+    {
+      "family": "beta_alpha_ratio",
+      "metric": "beta_alpha_ratio",
+      "unit_alias": "a",
+      "min_separation": 0.20,
+      "low": {"label": "ratio=0.10", "patch": {"identity_signature.founder_resonances.AR-beta.beta_alpha_energy_ratio": 0.10}},
+      "high": {"label": "ratio=0.70", "patch": {"identity_signature.founder_resonances.AR-beta.beta_alpha_energy_ratio": 0.70}}
+    },
+    {
+      "family": "terminal_f0_delta",
+      "metric": "terminal_f0_delta_cents_abs",
+      "unit_alias": "a",
+      "min_separation": 100.0,
+      "low": {"label": "0 cent", "patch": {"founder_expression_traits.AG-alpha.terminal_f0_delta_cents": 0.0}},
+      "high": {"label": "-200 cent", "patch": {"founder_expression_traits.AG-alpha.terminal_f0_delta_cents": -200.0}}
+    },
+    {
+      "family": "duration_r_share",
+      "metric": "r_onset_share",
+      "unit_alias": "ra",
+      "min_separation": 0.20,
+      "low": {
+        "label": "share=0.10",
+        "patch": {
+          "performance_genes.duration.r_onset_share": 0.10,
+          "performance_genes.duration.r_onset_ms": 20.0,
+          "performance_genes.duration.i_vowel_ms": 180.0
+        }
+      },
+      "high": {
+        "label": "share=0.40",
+        "patch": {
+          "performance_genes.duration.r_onset_share": 0.40,
+          "performance_genes.duration.r_onset_ms": 80.0,
+          "performance_genes.duration.i_vowel_ms": 120.0
+        }
+      }
+    },
+    {
+      "family": "energy_sustain",
+      "metric": "sustain_dbfs",
+      "unit_alias": "a",
+      "min_separation": 8.0,
+      "low": {"label": "-18 dBFS", "patch": {"performance_genes.energy.sustain_dbfs": -18.0}},
+      "high": {"label": "-6 dBFS", "patch": {"performance_genes.energy.sustain_dbfs": -6.0}}
+    },
+    {
+      "family": "release",
+      "metric": "main_release_ms",
+      "unit_alias": "a",
+      "min_separation": 100.0,
+      "low": {"label": "40 ms", "patch": {"performance_genes.release.main_taper_ms": 40.0}},
+      "high": {"label": "200 ms", "patch": {"performance_genes.release.main_taper_ms": 200.0}}
+    },
+    {
+      "family": "afterglow",
+      "metric": "afterglow_extra_ms",
+      "unit_alias": "a",
+      "min_separation": 40.0,
+      "low": {"label": "0 ms", "patch": {"founder_expression_traits.AG-alpha.ar_alpha_afterglow_extra_ms": 0.0}},
+      "high": {"label": "80 ms", "patch": {"founder_expression_traits.AG-alpha.ar_alpha_afterglow_extra_ms": 80.0}}
+    }
+  ]
+}

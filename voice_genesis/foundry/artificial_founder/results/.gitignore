@@ -1,0 +1,26 @@
+# AF-P0 の成果物置き場（設計書 §25）。
+#
+# 生成物のうち **判定と provenance の記録だけ**を版管理へ載せる。voicebank WAV /
+# dataset / re-expression / probes は決定論的に再生成できる（G2 が同一 SHA を保証
+# する）ため、リポジトリには入れない。
+*
+!.gitignore
+!AF0/
+AF0/*
+!AF0/AF_P0_RECORD.md
+!AF0/p0_results.json
+!AF0/comparison.json
+!AF0/input_pins.json
+!AF0/code_closure.json
+!AF0/source_free_attestation.json
+!AF0/founder_manifest.json
+!AF0/SHA256SUMS.txt
+!AF0/measurements/
+AF0/measurements/*
+!AF0/measurements/controls.json
+!AF0/measurements/founder_traits.json
+!AF0/measurements/ingestion.json
+!AF0/measurements/body.json
+!AF0/measurements/reexpressed.json
+!AF0/freeze/
+!AF0/freeze/*
