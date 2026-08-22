@@ -29,18 +29,31 @@ fail-closed 契約（2026-08-22 セルフレビュー修正1-4 + Codex bot レ�
   衝突する場合、読み込み前に即エラー終了し何も書き込まない（Codex bot
   レビュー #8: 入力の上書き事故防止）。report JSON の書き出しは同一
   ディレクトリの一時ファイル + `os.replace` による atomic 方式。
+- checkpoint は sha256 算出と torch.load のデシリアライズで同一バイト列を
+  使う（Codex 第2巡 P1: TOCTOU）。`read_bytes()` で1回だけ読み、sha256は
+  そのバッファから計算し、torch.load は `io.BytesIO(同バッファ)` から
+  deserialize する。2回 read すると間でファイルが差し替わった場合に
+  「旧バイトの hash × 新バイトの finite 判定」が対になり得た。
+- `--expect` 指定時、渡された checkpoint 群の basename 集合（重複除去後）が
+  期待集合と厳密一致しなければ fail-closed（Codex 第3巡 3-2）。checkpoint
+  引数の重複指定（resolve 後同一パス）は `--expect` の有無に関わらず常に
+  エラーにする。
+- pin 照合は同一ファイル名に対する全マッチを収集し、矛盾する（distinct な）
+  sha256 が2つ以上見つかれば `pin_conflict` として fail-closed にする
+  （Codex 第3巡 3-3。従来は再帰探索の先勝ちで順序依存だった）。
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class CheckpointReadError(RuntimeError):
@@ -145,30 +158,54 @@ def check_one_checkpoint(path: Path, torch_module: Any) -> Dict[str, Any]:
     """1 checkpoint を検査し、結果 dict を返す。読み込み失敗時は
     `CheckpointReadError` を投げる（fail-closed。呼び出し側が捕捉して
     error エントリへ変換する）。
+
+    TOCTOU 対策（Codex 第2巡 P1）: sha256 算出対象と torch.load で
+    deserialize する対象が同一バイト列であることを保証するため、checkpoint
+    は `read_bytes()` で1回だけ読み、(a) sha256 はそのバッファから計算し、
+    (b) torch.load は `io.BytesIO(同バッファ)` から deserialize する
+    （weights_only 非対応の旧 torch フォールバック経路も同様）。str パスを
+    2回目以降 open し直すと、間でファイルが差し替わった場合に「旧バイトの
+    hash × 新バイトの finite 判定」が対になり得た。
     """
     if not path.exists():
         raise CheckpointReadError(f"checkpoint が存在しません: {path}")
 
-    sha256 = _sha256_of_file(path)
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise CheckpointReadError(
+            f"checkpoint の読み込みに失敗しました: {path}: {exc}",
+            reason="checkpoint_read_os_error",
+        ) from exc
+
+    sha256 = hashlib.sha256(data).hexdigest()
 
     try:
-        loaded = torch_module.load(str(path), map_location="cpu", weights_only=False)
-    except TypeError:
-        # 旧 torch は weights_only 引数を持たない。フォールバック経路自体の
-        # 例外も fail-closed で CheckpointReadError に包む（修正3: 従来は
-        # ここが素通しで、run() の except CheckpointReadError に捕捉されず
-        # --out 未書き込みのままクラッシュし得た）。
         try:
-            loaded = torch_module.load(str(path), map_location="cpu")
+            loaded = torch_module.load(io.BytesIO(data), map_location="cpu", weights_only=False)
+        except TypeError:
+            # 旧 torch は weights_only 引数を持たない。フォールバック経路自体の
+            # 例外も fail-closed で CheckpointReadError に包む（修正3: 従来は
+            # ここが素通しで、run() の except CheckpointReadError に捕捉されず
+            # --out 未書き込みのままクラッシュし得た）。同一バッファから新規
+            # BytesIO を作り直す（先の呼び出しでストリーム位置が進んでいる
+            # 可能性があるため使い回さない。ディスクは一切再読込しない）。
+            try:
+                loaded = torch_module.load(io.BytesIO(data), map_location="cpu")
+            except Exception as exc:  # noqa: BLE001 - fail-closed で理由を記録するため捕捉
+                raise CheckpointReadError(
+                    f"torch.load（フォールバック経路）に失敗しました: {exc}",
+                    reason="torch_load_fallback_failed",
+                ) from exc
         except Exception as exc:  # noqa: BLE001 - fail-closed で理由を記録するため捕捉
             raise CheckpointReadError(
-                f"torch.load（フォールバック経路）に失敗しました: {exc}",
-                reason="torch_load_fallback_failed",
+                f"torch.load に失敗しました: {exc}", reason="torch_load_failed"
             ) from exc
-    except Exception as exc:  # noqa: BLE001 - fail-closed で理由を記録するため捕捉
-        raise CheckpointReadError(
-            f"torch.load に失敗しました: {exc}", reason="torch_load_failed"
-        ) from exc
+    finally:
+        # 大きいバッファを速やかに解放できるよう明示的に参照を切る
+        # （関数スコープ終了でも解放されるが、この後の tensor 走査が
+        # 続くため早期に手放す）。
+        del data
 
     state_dict = _extract_state_dict(loaded)
 
@@ -254,6 +291,42 @@ def _collides_with_inputs(
     return None
 
 
+def _compute_checked_set(checkpoints: List[Path]) -> List[str]:
+    """渡された checkpoint 引数の basename 集合（重複除去・ソート済み）。"""
+    return sorted({ckpt.name for ckpt in checkpoints})
+
+
+def _detect_duplicate_basenames(checkpoints: List[Path]) -> List[str]:
+    """resolve 後同一パスとなる checkpoint 引数の重複を basename で報告する
+    （Codex 第3巡 3-2。`--expect` の有無に関わらず常にエラー扱いにする —
+    同一ファイルを2回検査しても意味のある追加情報は増えず、コマンドラインの
+    typo/コピペミスの兆候であることが多いため）。"""
+    resolved_counts: Dict[Path, int] = {}
+    for ckpt in checkpoints:
+        resolved = ckpt.resolve()
+        resolved_counts[resolved] = resolved_counts.get(resolved, 0) + 1
+    return sorted({resolved.name for resolved, count in resolved_counts.items() if count > 1})
+
+
+def _compute_expect_diff(
+    checked_set: List[str], expect: Optional[List[str]]
+) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[List[str]]]:
+    """`--expect` との厳密一致検証（Codex 第3巡 3-2）。
+    `(expected_set, missing, extra)` を返す（`expect` が `None`
+    = `--expect` 未指定の場合は3つとも `None`）。`missing` は期待したが
+    渡されなかった checkpoint、`extra` は渡されたが期待されていなかった
+    checkpoint（どちらも basename・重複除去・ソート済み）。
+    """
+    if expect is None:
+        return None, None, None
+    expected_set = sorted(set(expect))
+    expected_as_set = set(expected_set)
+    checked_as_set = set(checked_set)
+    missing = sorted(expected_as_set - checked_as_set)
+    extra = sorted(checked_as_set - expected_as_set)
+    return expected_set, missing, extra
+
+
 def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """`path` と同一ディレクトリの一時ファイルへ書いてから `os.replace` で
     atomic に置き換える（Codex bot レビュー #8）。voice_genesis は src/ の
@@ -307,7 +380,30 @@ def run(argv: Optional[List[str]] = None) -> int:
         required=True,
         help="結果 JSON の出力先パス",
     )
+    parser.add_argument(
+        "--expect",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help=(
+            "期待する checkpoint ファイル名の集合（複数指定可: --expect a.ckpt --expect"
+            " b.ckpt）。指定時、渡された checkpoint 群の basename 集合（重複除去後）が"
+            " 期待集合と厳密一致しなければ all_ok: false・exit 非ゼロになる"
+            "（report に expected_set/checked_set/missing/extra を記録）。未指定時は"
+            " 従来動作（report の expected_set は null）。checkpoint 引数の重複指定"
+            "（resolve 後同一パス）は --expect の有無に関わらず常にエラーになる。"
+        ),
+    )
     args = parser.parse_args(argv)
+
+    # --expect / 重複指定の検証（Codex 第3巡 3-2）。torch を要さないため
+    # 早期に計算し、report には常に記録する（--expect 未指定時も
+    # expected_set: null / duplicates: [] の形で記録し形状を安定させる）。
+    checked_set = _compute_checked_set(args.checkpoints)
+    duplicate_basenames = _detect_duplicate_basenames(args.checkpoints)
+    expected_set, missing, extra = _compute_expect_diff(checked_set, args.expect)
+    expect_mismatch = expected_set is not None and bool(missing or extra)
+    setup_error = bool(duplicate_basenames) or expect_mismatch
 
     collision = _collides_with_inputs(args.out, args.checkpoints, args.pins)
     if collision is not None:
@@ -335,7 +431,7 @@ def run(argv: Optional[List[str]] = None) -> int:
         return 1
 
     results: List[Dict[str, Any]] = []
-    any_error = False
+    any_error = setup_error
     for ckpt_path in args.checkpoints:
         try:
             result = check_one_checkpoint(ckpt_path, torch_module)
@@ -356,6 +452,15 @@ def run(argv: Optional[List[str]] = None) -> int:
         if pins is not None:
             try:
                 match = _match_pin(ckpt_path, result["sha256"], pins)
+            except CheckpointReadError as exc:
+                # pin_conflict（修正3-3: 矛盾する重複 pin エントリ）等、
+                # _match_pin 自身が理由付きで fail-closed 送出したケース。
+                any_error = True
+                result["status"] = "error"
+                result["reason"] = exc.reason or "pin_check_error"
+                result["error"] = str(exc)
+                results.append(result)
+                continue
             except Exception as exc:  # noqa: BLE001 - pin 照合自体の予期しない失敗も fail-closed
                 any_error = True
                 result["status"] = "error"
@@ -385,6 +490,11 @@ def run(argv: Optional[List[str]] = None) -> int:
         "schema": "voicegenesis-checkpoint-finite-report/0.1",
         "torch_version": str(torch_module.__version__),
         "pin_verification": "requested" if pins is not None else "not_requested",
+        "expected_set": expected_set,
+        "checked_set": checked_set,
+        "missing": missing,
+        "extra": extra,
+        "duplicates": duplicate_basenames,
         "checkpoints": results,
         "all_ok": (not any_error) and all(r.get("all_finite", False) for r in results if r["status"] == "ok"),
     }
@@ -411,12 +521,19 @@ def _match_pin(ckpt_path: Path, actual_sha256: str, pins: Dict[str, Any]) -> Opt
       この形。`{"5K": {"file": "model_ckpt_steps_5000.ckpt", "sha256": "..."}}`）
 
     どちらの形も再帰的に走査する（pins の構造は運用次第で揺れうるため）。
+
+    pin_conflict 検出（Codex 第3巡 3-3）: 同一ファイル名に対する全マッチを
+    収集し、distinct な sha256 が2つ以上見つかれば `CheckpointReadError`
+    （reason="pin_conflict"）を送出する。従来は再帰探索の「先勝ち」で
+    どちらの値を採用するかが走査順序に依存していた（矛盾する pin エントリ
+    が黙って片方だけ使われ得た）。distinct な値が1つだけなら（同一 hash が
+    複数箇所に重複記載されていても）通常どおり照合する。
     """
 
-    def _search(node: Any) -> Optional[str]:
+    def _collect(node: Any, found: List[str]) -> None:
         if isinstance(node, dict):
             if ckpt_path.name in node and isinstance(node[ckpt_path.name], str):
-                return node[ckpt_path.name]
+                found.append(node[ckpt_path.name])
             file_field = node.get("file")
             sha_field = node.get("sha256")
             if (
@@ -424,17 +541,23 @@ def _match_pin(ckpt_path: Path, actual_sha256: str, pins: Dict[str, Any]) -> Opt
                 and file_field == ckpt_path.name
                 and isinstance(sha_field, str)
             ):
-                return sha_field
+                found.append(sha_field)
             for value in node.values():
-                found = _search(value)
-                if found is not None:
-                    return found
-        return None
+                _collect(value, found)
 
-    pinned_sha256 = _search(pins)
-    if pinned_sha256 is None:
+    found: List[str] = []
+    _collect(pins, found)
+    distinct_sha256 = sorted(set(found))
+
+    if not distinct_sha256:
         return None
-    return pinned_sha256 == actual_sha256
+    if len(distinct_sha256) > 1:
+        raise CheckpointReadError(
+            f"--pins 内に {ckpt_path.name} に対する矛盾する sha256 が複数見つかりました: "
+            f"{distinct_sha256}",
+            reason="pin_conflict",
+        )
+    return distinct_sha256[0] == actual_sha256
 
 
 def main() -> None:

@@ -48,7 +48,11 @@
       "x-gate-class": "pre_run",
       "properties": {
         "declared": { "type": "boolean" },
-        "intervention": { "type": "string" },
+        "intervention": {
+          "type": "string",
+          "minLength": 1,
+          "description": "declared==true のとき、実際に何を単一介入としたかを記述する非空文字列（Codex 第3巡 3-1: 空文字列/null は declared を実質的に無意味化するため許容しない）。"
+        },
         "count": { "type": "integer" }
       },
       "required": ["declared", "intervention", "count"],

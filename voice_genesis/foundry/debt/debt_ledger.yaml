@@ -138,7 +138,7 @@ debts:
       affected_claims:
         - "run4「40K完走・NaNゼロ」の主張範囲（ログ文字列走査までであってstate_dict検査ではない）"
     repayment:
-      method: scripts/check_checkpoint_finite.py を checkpoint 保管環境で実行し JSON 報告を pin
+      method: "scripts/check_checkpoint_finite.py を checkpoint 保管環境で実行し JSON 報告を pin（--expect で 5K/10K/20K/40K の4マイルストーン集合を指定して実行する。実行対象の過不足・重複指定を機械検証してから all_finite 判定を行う）"
       evidence_required:
         - 4 checkpoint（5K/10K/20K/40K）それぞれの all_finite 判定 JSON
       note: "checkpoint 実体は repo 非同梱のため実行環境は machine-dependent"

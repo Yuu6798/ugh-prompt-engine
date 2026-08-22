@@ -1,7 +1,10 @@
 """test_check_checkpoint_finite.py — `scripts/check_checkpoint_finite.py` の
 単体テスト（Phase D0 run4 残債①。2026-08-22 セルフレビュー修正1-4 +
 Codex bot レビュー #8 で拡張: ゼロ検査の偽成功防止 / pin fail-closed / 例外
-ラップ漏れ / 実 pin 形式対応 / --out 衝突拒否 / atomic write）。
+ラップ漏れ / 実 pin 形式対応 / --out 衝突拒否 / atomic write。Codex 第2巡 P1 で
+さらに拡張: sha256 算出と torch.load デシリアライズの単一バッファ化
+（TOCTOU 対策）。Codex 第3巡 3-2/3-3 でさらに拡張: `--expect` 厳密一致 /
+checkpoint 重複指定エラー / pin_conflict（矛盾する重複 pin エントリの検出）。
 
 torch を必要としない経路（sha256 計算・報告 JSON の形状・checkpoint 不在時の
 fail-closed・--pins 未指定時の挙動・--out 親ディレクトリ未存在時の fail-closed・
@@ -52,6 +55,56 @@ class _RaisingTorchModule:
         raise RuntimeError("fallback load failed (fake)")
 
 
+class _AlwaysFiniteResult:
+    """`torch_module.isfinite(value)` の戻り値をシミュレートするフェイク。
+    `~result` (要素反転) → `.sum()` → `.item()` の呼び出し連鎖で「非有限値0個」
+    を返す（全要素 finite）。"""
+
+    def __invert__(self) -> "_ZeroCountResult":
+        return _ZeroCountResult()
+
+
+class _ZeroCountResult:
+    def sum(self) -> "_ZeroCountResult":
+        return self
+
+    def item(self) -> int:
+        return 0
+
+
+class _RecordingSuccessTorchModule:
+    """`torch.load` が受け取った引数（`io.BytesIO` であって str/Path の再指定
+    ではないこと・中身が期待したバイト列と一致すること）を記録しつつ、
+    finite 判定は常に成功で通す最小限のフェイク torch module。Codex 第2巡
+    P1（TOCTOU: sha256 算出と torch.load デシリアライズが同一バイト列を
+    使うことの回帰検証）専用。実 tensor 演算をしないため torch 不要で使える。
+    """
+
+    __version__ = "fake"
+
+    def __init__(self, expected_bytes: bytes) -> None:
+        self.expected_bytes = expected_bytes
+        self.received_source: Any = None
+
+    def load(self, source: Any, map_location: Any = None, weights_only: Any = None) -> Any:
+        self.received_source = source
+        assert not isinstance(source, (str, Path)), (
+            "torch.load が str/Path で呼ばれています（path 再読込 = TOCTOU 再発）"
+        )
+        data = source.read()
+        assert data == self.expected_bytes, (
+            "torch.load に渡されたバイト列が read_bytes() の結果と不一致です"
+            "（sha256 とロード対象が別バイト列になっている = TOCTOU 再発）"
+        )
+        return {"state_dict": {"w": _FakeTensor()}}
+
+    def is_floating_point(self, value: Any) -> bool:
+        return True
+
+    def isfinite(self, value: Any) -> _AlwaysFiniteResult:
+        return _AlwaysFiniteResult()
+
+
 def test_sha256_of_file_matches_hashlib_reference(tmp_path: Path) -> None:
     p = tmp_path / "sample.bin"
     p.write_bytes(b"voice genesis checkpoint finite check")
@@ -88,6 +141,57 @@ def test_check_one_checkpoint_wraps_fallback_torch_load_exception(tmp_path: Path
     with pytest.raises(ccf.CheckpointReadError) as exc_info:
         ccf.check_one_checkpoint(ckpt, _RaisingTorchModule())
     assert exc_info.value.reason == "torch_load_fallback_failed"
+
+
+def test_check_one_checkpoint_hash_and_load_use_identical_bytes_despite_disk_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex 第2巡 P1（TOCTOU）: sha256 算出と torch.load のデシリアライズ
+    対象が同一バイト列であることを保証する回帰テスト。checkpoint は
+    `read_bytes()` で1回だけ読み、そのバッファから sha256 を計算し、同じ
+    バッファを `io.BytesIO()` 経由で torch.load に渡す（str パスの再オープン
+    による2回目の読み込みをしない）。`read_bytes()` が値を返した直後に
+    ディスク上の内容を差し替える（TOCTOU レースのシミュレーション）ことで、
+    実装が本当に単一バッファを使い回しており「旧バイトの hash × 新バイトの
+    finite 判定」という偽成功をしないことを検証する。`read_bytes()` が
+    checkpoint に対し2回以上呼ばれた場合も検出する。
+    """
+    ckpt = tmp_path / "toctou.ckpt"
+    original_payload = b"original-bytes-must-be-used-consistently"
+    swapped_payload = b"SWAPPED-bytes-must-never-leak-into-the-check!!"
+    ckpt.write_bytes(original_payload)
+
+    call_count = {"n": 0}
+    real_read_bytes = Path.read_bytes
+
+    def _swap_after_read(self: Path) -> bytes:
+        data = real_read_bytes(self)
+        if self == ckpt:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # read_bytes() が値を返した直後にディスク上の内容を差し替える
+                # （TOCTOU レースのシミュレーション）。
+                ckpt.write_bytes(swapped_payload)
+            else:
+                raise AssertionError(
+                    "read_bytes() が checkpoint に対し2回以上呼ばれました"
+                    "（TOCTOU 再発: sha256 とロードで別バイト列を読んでいる）"
+                )
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", _swap_after_read)
+
+    fake_torch = _RecordingSuccessTorchModule(expected_bytes=original_payload)
+    result = ccf.check_one_checkpoint(ckpt, fake_torch)
+
+    assert call_count["n"] == 1
+    assert not isinstance(fake_torch.received_source, (str, Path))
+    assert result["sha256"] == hashlib.sha256(original_payload).hexdigest()
+    assert result["sha256"] != hashlib.sha256(swapped_payload).hexdigest()
+    assert result["status"] == "ok"
+    # ディスク上は実際に差し替わっている（テスト前提の検査）。monkeypatch 済みの
+    # read_bytes ではなく素の実装で読む（さらなる呼び出しでカウンタを汚さない）。
+    assert real_read_bytes(ckpt) == swapped_payload
 
 
 def test_run_fails_closed_when_out_parent_dir_missing(tmp_path: Path) -> None:
@@ -180,6 +284,32 @@ def test_match_pin_returns_none_when_not_found(tmp_path: Path) -> None:
     ckpt_path = tmp_path / "unrelated.ckpt"
     pins = {"checkpoints": {"model_ckpt_steps_5000.ckpt": "abc123"}}
     assert ccf._match_pin(ckpt_path, "abc123", pins) is None
+
+
+def test_match_pin_raises_pin_conflict_for_distinct_duplicate_entries(tmp_path: Path) -> None:
+    """Codex 第3巡 3-3: 同一ファイル名に対し矛盾する（distinct な）sha256 が
+    複数見つかれば pin_conflict として fail-closed になる（従来の「先勝ち」
+    による順序依存を解消）。"""
+    ckpt_path = tmp_path / "model_ckpt_steps_5000.ckpt"
+    pins = {
+        "branch_a": {"model_ckpt_steps_5000.ckpt": "hash-from-branch-a"},
+        "branch_b": {"model_ckpt_steps_5000.ckpt": "hash-from-branch-b"},
+    }
+    with pytest.raises(ccf.CheckpointReadError) as exc_info:
+        ccf._match_pin(ckpt_path, "hash-from-branch-a", pins)
+    assert exc_info.value.reason == "pin_conflict"
+
+
+def test_match_pin_does_not_conflict_on_duplicate_identical_hash(tmp_path: Path) -> None:
+    """Codex 第3巡 3-3: 同一 hash が複数箇所に重複記載されているだけなら
+    （distinct な値が1つ）conflict 扱いにせず通常どおり照合する。"""
+    ckpt_path = tmp_path / "model_ckpt_steps_5000.ckpt"
+    pins = {
+        "branch_a": {"model_ckpt_steps_5000.ckpt": "same-hash"},
+        "branch_b": {"5K": {"file": "model_ckpt_steps_5000.ckpt", "sha256": "same-hash"}},
+    }
+    assert ccf._match_pin(ckpt_path, "same-hash", pins) is True
+    assert ccf._match_pin(ckpt_path, "different-hash", pins) is False
 
 
 def test_extract_state_dict_from_wrapped_dict() -> None:
@@ -419,3 +549,160 @@ def test_run_without_pins_reports_not_requested(tmp_path: Path) -> None:
     report = json.loads(out_path.read_text(encoding="utf-8"))
     assert report["pin_verification"] == "not_requested"
     assert "pin_sha256_match" not in report["checkpoints"][0]
+
+
+# --- Codex 第3巡 3-2: --expect / 重複指定検証（純粋ロジック、torch 不要） ---
+
+
+def test_compute_checked_set_dedupes_and_sorts_basenames(tmp_path: Path) -> None:
+    checkpoints = [tmp_path / "b.ckpt", tmp_path / "a.ckpt", tmp_path / "sub" / "a.ckpt"]
+    assert ccf._compute_checked_set(checkpoints) == ["a.ckpt", "b.ckpt"]
+
+
+def test_detect_duplicate_basenames_finds_same_resolved_path(tmp_path: Path) -> None:
+    ckpt = tmp_path / "model.ckpt"
+    ckpt.write_bytes(b"x")
+    checkpoints = [ckpt, tmp_path / "." / "model.ckpt", tmp_path / "other.ckpt"]
+    assert ccf._detect_duplicate_basenames(checkpoints) == ["model.ckpt"]
+
+
+def test_detect_duplicate_basenames_empty_when_no_duplicates(tmp_path: Path) -> None:
+    checkpoints = [tmp_path / "a.ckpt", tmp_path / "b.ckpt"]
+    assert ccf._detect_duplicate_basenames(checkpoints) == []
+
+
+def test_compute_expect_diff_returns_all_none_when_expect_not_specified() -> None:
+    expected_set, missing, extra = ccf._compute_expect_diff(["a.ckpt", "b.ckpt"], None)
+    assert (expected_set, missing, extra) == (None, None, None)
+
+
+def test_compute_expect_diff_exact_match_has_no_missing_or_extra() -> None:
+    expected_set, missing, extra = ccf._compute_expect_diff(
+        ["a.ckpt", "b.ckpt"], ["b.ckpt", "a.ckpt"]
+    )
+    assert expected_set == ["a.ckpt", "b.ckpt"]
+    assert missing == []
+    assert extra == []
+
+
+def test_compute_expect_diff_detects_missing_and_extra() -> None:
+    expected_set, missing, extra = ccf._compute_expect_diff(
+        checked_set=["a.ckpt", "c.ckpt"], expect=["a.ckpt", "b.ckpt"]
+    )
+    assert expected_set == ["a.ckpt", "b.ckpt"]
+    assert missing == ["b.ckpt"]
+    assert extra == ["c.ckpt"]
+
+
+def test_run_expect_exact_match_succeeds(tmp_path: Path) -> None:
+    """Codex 第3巡 3-2: --expect が渡された checkpoint の basename 集合と
+    厳密一致すれば成功する。"""
+    torch = pytest.importorskip("torch")
+    ckpt = tmp_path / "model_ckpt_steps_5000.ckpt"
+    torch.save({"state_dict": {"w": torch.tensor([1.0, 2.0])}}, str(ckpt))
+    out_path = tmp_path / "report.json"
+
+    exit_code = ccf.run(
+        [str(ckpt), "--expect", "model_ckpt_steps_5000.ckpt", "--out", str(out_path)]
+    )
+
+    assert exit_code == 0
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    assert report["expected_set"] == ["model_ckpt_steps_5000.ckpt"]
+    assert report["checked_set"] == ["model_ckpt_steps_5000.ckpt"]
+    assert report["missing"] == []
+    assert report["extra"] == []
+    assert report["duplicates"] == []
+    assert report["all_ok"] is True
+
+
+def test_run_expect_mismatch_fails_closed(tmp_path: Path) -> None:
+    """Codex 第3巡 3-2: --expect と実際の checkpoint 集合が食い違えば
+    all_ok: false・exit 非ゼロになり、missing/extra が report に記録される。
+    per-checkpoint 自体の finite 判定は正常に完了することも確認する
+    （--expect 不一致とは独立した軸のエラーであることの確認）。"""
+    torch = pytest.importorskip("torch")
+    ckpt = tmp_path / "model_ckpt_steps_5000.ckpt"
+    torch.save({"state_dict": {"w": torch.tensor([1.0, 2.0])}}, str(ckpt))
+    out_path = tmp_path / "report.json"
+
+    exit_code = ccf.run(
+        [
+            str(ckpt),
+            "--expect",
+            "model_ckpt_steps_10000.ckpt",
+            "--out",
+            str(out_path),
+        ]
+    )
+
+    assert exit_code == 1
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    assert report["expected_set"] == ["model_ckpt_steps_10000.ckpt"]
+    assert report["missing"] == ["model_ckpt_steps_10000.ckpt"]
+    assert report["extra"] == ["model_ckpt_steps_5000.ckpt"]
+    assert report["all_ok"] is False
+    assert report["checkpoints"][0]["status"] == "ok"
+    assert report["checkpoints"][0]["all_finite"] is True
+
+
+def test_run_without_expect_reports_expected_set_null(tmp_path: Path) -> None:
+    """Codex 第3巡 3-2: --expect 未指定時は従来動作（report の
+    expected_set/missing/extra は null、duplicates は空リスト）。"""
+    torch = pytest.importorskip("torch")
+    ckpt = tmp_path / "ok.ckpt"
+    torch.save({"state_dict": {"w": torch.tensor([1.0, 2.0])}}, str(ckpt))
+    out_path = tmp_path / "report.json"
+
+    exit_code = ccf.run([str(ckpt), "--out", str(out_path)])
+
+    assert exit_code == 0
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    assert report["expected_set"] is None
+    assert report["missing"] is None
+    assert report["extra"] is None
+    assert report["duplicates"] == []
+
+
+def test_run_rejects_duplicate_checkpoint_argument_regardless_of_expect(tmp_path: Path) -> None:
+    """Codex 第3巡 3-2: 同一ファイルの複数回指定（resolve 後同一パス）は
+    --expect の有無に関わらずエラーになる。"""
+    torch = pytest.importorskip("torch")
+    ckpt = tmp_path / "model_ckpt_steps_5000.ckpt"
+    torch.save({"state_dict": {"w": torch.tensor([1.0, 2.0])}}, str(ckpt))
+    out_path = tmp_path / "report.json"
+
+    exit_code = ccf.run([str(ckpt), str(ckpt), "--out", str(out_path)])
+
+    assert exit_code == 1
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    assert report["duplicates"] == ["model_ckpt_steps_5000.ckpt"]
+    assert report["all_ok"] is False
+
+
+def test_run_marks_pin_conflict_as_error_and_nonzero_exit(tmp_path: Path) -> None:
+    """Codex 第3巡 3-3: run() 経由でも pin_conflict は error エントリになり、
+    exit が非ゼロになる。"""
+    torch = pytest.importorskip("torch")
+    ckpt = tmp_path / "model_ckpt_steps_5000.ckpt"
+    torch.save({"state_dict": {"w": torch.tensor([1.0, 2.0])}}, str(ckpt))
+    pins_path = tmp_path / "pins.json"
+    pins_path.write_text(
+        json.dumps(
+            {
+                "branch_a": {"model_ckpt_steps_5000.ckpt": "hash-a"},
+                "branch_b": {"model_ckpt_steps_5000.ckpt": "hash-b"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "report.json"
+
+    exit_code = ccf.run([str(ckpt), "--pins", str(pins_path), "--out", str(out_path)])
+
+    assert exit_code == 1
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    entry = report["checkpoints"][0]
+    assert entry["status"] == "error"
+    assert entry["reason"] == "pin_conflict"
+    assert report["all_ok"] is False

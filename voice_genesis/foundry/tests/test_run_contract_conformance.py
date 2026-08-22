@@ -129,6 +129,19 @@ def _is_effectively_pinned(field: Any) -> bool:
     )
 
 
+def _is_single_intervention_substantively_declared(field: Any) -> bool:
+    """single_intervention の実質検証（Codex 第3巡 3-1）: `declared: true` を
+    名乗るだけで `intervention` が null/空文字/欠落なら、`_is_effectively_pinned`
+    が PINNED を名乗るだけで value/source が null なフィールドを未 PIN 扱いに
+    するのと同じ理由で、実質未宣言として扱う。"""
+    if not isinstance(field, dict):
+        return False
+    if field.get("declared") is not True or field.get("count") != 1:
+        return False
+    intervention = field.get("intervention")
+    return isinstance(intervention, str) and intervention.strip() != ""
+
+
 def _is_pre_run_field_satisfied(name: str, field: Any) -> bool:
     """pre_run フィールドが gate OPEN の要件を満たすか判定する。
     single_intervention のみ {value,source,status} 形でなく
@@ -136,7 +149,7 @@ def _is_pre_run_field_satisfied(name: str, field: Any) -> bool:
     if not isinstance(field, dict):
         return False
     if name == "single_intervention":
-        return field.get("declared") is True and field.get("count") == 1
+        return _is_single_intervention_substantively_declared(field)
     return _is_effectively_pinned(field)
 
 
@@ -176,9 +189,29 @@ def _check_design_doc_sha256(projection: Dict[str, Any], repo_root: Path) -> Non
     """design_doc_sha256 と実ファイル sha256 の照合ロジック本体。
     `test_design_doc_sha256_matches_actual_file` /
     `test_design_doc_sha256_mismatch_is_detected` の両方から呼ばれる共有関数
-    （修正7: テスト自体を空虚にしない — 実際にこの関数へ食わせて検査する）。"""
+    （修正7: テスト自体を空虚にしない — 実際にこの関数へ食わせて検査する）。
+
+    Codex 第2巡 P2: `projection["design_doc"]` は信頼できない文字列である
+    ため、repo 外ファイルを読み込ませる経路（絶対パス指定 / `..` による
+    親ディレクトリ越境）を読み込み前に拒否する。resolve 後のパスが
+    `repo_root` 配下であることも検証してから hash する。
+    """
     design_doc_rel = projection["design_doc"]
-    design_doc_path = repo_root / design_doc_rel
+    design_doc_rel_path = Path(design_doc_rel)
+    assert not design_doc_rel_path.is_absolute(), (
+        f"design_doc は repo 相対パスのみ許容します（絶対パスは拒否）: {design_doc_rel!r}"
+    )
+    assert ".." not in design_doc_rel_path.parts, (
+        f"design_doc に親ディレクトリ越境（'..'）は許容しません: {design_doc_rel!r}"
+    )
+
+    repo_root_resolved = repo_root.resolve()
+    design_doc_path = (repo_root / design_doc_rel_path).resolve()
+    assert design_doc_path.is_relative_to(repo_root_resolved), (
+        "design_doc の解決後パスが repo_root 配下ではありません: "
+        f"{design_doc_path} (repo_root={repo_root_resolved})"
+    )
+
     assert design_doc_path.exists(), f"design_doc not found: {design_doc_path}"
     actual_sha256 = _sha256_of_file(design_doc_path)
     assert actual_sha256 == projection["design_doc_sha256"], (
@@ -203,6 +236,24 @@ def test_design_doc_sha256_mismatch_is_detected(projection: Dict[str, Any]) -> N
     # (b) design_doc_sha256 を改竄した projection dict は検出されて fail する。
     tampered = dict(projection)
     tampered["design_doc_sha256"] = "0" * 64
+    with pytest.raises(AssertionError):
+        _check_design_doc_sha256(tampered, REPO_ROOT)
+
+
+def test_check_design_doc_sha256_rejects_absolute_path(projection: Dict[str, Any]) -> None:
+    """Codex 第2巡 P2 負例: design_doc が絶対パスの projection は repo 外
+    参照とみなし読み込み前に即 fail する。"""
+    tampered = dict(projection)
+    tampered["design_doc"] = "/etc/passwd"
+    with pytest.raises(AssertionError):
+        _check_design_doc_sha256(tampered, REPO_ROOT)
+
+
+def test_check_design_doc_sha256_rejects_parent_directory_escape(projection: Dict[str, Any]) -> None:
+    """Codex 第2巡 P2 負例: design_doc が '..' で repo_root の外へ越境する
+    projection は読み込み前に即 fail する。"""
+    tampered = dict(projection)
+    tampered["design_doc"] = "../../../../../../../../etc/passwd"
     with pytest.raises(AssertionError):
         _check_design_doc_sha256(tampered, REPO_ROOT)
 
@@ -246,6 +297,63 @@ def test_single_intervention_count_is_one(projection: Dict[str, Any]) -> None:
     single_intervention = projection["single_intervention"]
     assert single_intervention["declared"] is True
     assert single_intervention["count"] == 1
+
+
+def test_single_intervention_intervention_is_substantively_declared(
+    projection: Dict[str, Any],
+) -> None:
+    """Codex 第3巡 3-1: declared==true を名乗るなら intervention は実際に
+    何を単一介入としたかを記述する非空文字列であること。"""
+    assert _is_single_intervention_substantively_declared(projection["single_intervention"])
+
+
+def test_schema_single_intervention_intervention_requires_nonempty_string(
+    schema: Dict[str, Any],
+) -> None:
+    """Codex 第3巡 3-1: schema 側で intervention に type/minLength 制約が
+    入っていること。"""
+    intervention_schema = schema["properties"]["single_intervention"]["properties"]["intervention"]
+    assert intervention_schema.get("type") == "string"
+    assert intervention_schema.get("minLength", 0) >= 1
+
+
+def test_single_intervention_rejects_null_empty_or_missing_intervention() -> None:
+    """Codex 第3巡 3-1 負例: declared==true でも intervention が null / 空文字
+    （空白のみ含む）/ 欠落なら実質未宣言として拒否される。"""
+    base = {"declared": True, "intervention": "some real intervention", "count": 1}
+    assert _is_single_intervention_substantively_declared(base)
+
+    null_intervention = dict(base)
+    null_intervention["intervention"] = None
+    assert not _is_single_intervention_substantively_declared(null_intervention)
+
+    empty_intervention = dict(base)
+    empty_intervention["intervention"] = ""
+    assert not _is_single_intervention_substantively_declared(empty_intervention)
+
+    whitespace_only_intervention = dict(base)
+    whitespace_only_intervention["intervention"] = "   "
+    assert not _is_single_intervention_substantively_declared(whitespace_only_intervention)
+
+    missing_intervention = {"declared": True, "count": 1}
+    assert not _is_single_intervention_substantively_declared(missing_intervention)
+
+
+def test_gate_treats_single_intervention_with_empty_intervention_as_unsatisfied() -> None:
+    """Codex 第3巡 3-1: gate 判定へ実際に配線されていること
+    （declared==true・count==1 だが intervention が空文字の pre_run フィールドは
+    gate を BLOCKED にする）。"""
+    schema = {
+        "properties": {
+            "single_intervention": {"x-gate-class": "pre_run"},
+        },
+        "definitions": {},
+    }
+    fake_projection = {
+        "single_intervention": {"declared": True, "intervention": "", "count": 1},
+    }
+    assert _expected_gate(schema, fake_projection) == "BLOCKED"
+    assert _unsatisfied_pre_run_fields(schema, fake_projection) == ["single_intervention"]
 
 
 # --- (d) runbook_may_override_design == false -----------------------------
