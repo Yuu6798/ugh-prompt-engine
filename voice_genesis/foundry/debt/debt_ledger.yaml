@@ -96,8 +96,11 @@ debts:
       evidence_required:
         - run5/run6/run7 各 checkpoint からの再生成 wav sha256
         - "TRF measurement spec 1.2 適用後の軸値（voicing 3軸のみ。terminal_mel_persistence は unavailable のためスコープ外）"
-      note: "checkpoint 実体は repo 非同梱（voice_genesis/README.md『WAV は非同梱』節と同型の運用）のため実測実行自体が machine-dependent。B-1（1.2 として凍結。VG-DEBT-002 参照）により unblocked — 実行の前提はもはや欠けていない。実行は checkpoint 実体依存で machine-dependent のまま。計画時点（DEBT_REPAYMENT_PLAN_v1.0.md §4）の『current TRF v1.0』は『凍結済み測定仕様』を指す想定表記であり、実現形態は 1.2（v1.0 の検出器は本番セルで 3–8/10 群縮退のため棄却された = voice_genesis/foundry/results_s7/s7_run8_closeout.md §2-1）。terminal_mel_persistence は現行観測設計では unavailable（closeout §2-2）であるため、再測定のスコープは voicing 3軸に限る。"
-    status: open
+      note: "checkpoint 実体は repo 非同梱（voice_genesis/README.md『WAV は非同梱』節と同型の運用）のため実測実行自体が machine-dependent。B-1（1.2 として凍結。VG-DEBT-002 参照）により unblocked — 実行の前提はもはや欠けていない。実行は checkpoint 実体依存で machine-dependent のまま。計画時点（DEBT_REPAYMENT_PLAN_v1.0.md §4）の『current TRF v1.0』は『凍結済み測定仕様』を指す想定表記であり、実現形態は 1.2（v1.0 の検出器は本番セルで 3–8/10 群縮退のため棄却された = voice_genesis/foundry/results_s7/s7_run8_closeout.md §2-1）。terminal_mel_persistence は現行観測設計では unavailable（closeout §2-2）であるため、再測定のスコープは voicing 3軸に限る。実行後注記（2026-08-22）: render_stack（numpy/onnxruntime/soundfile/PyYAML/python）は s7_b1_real_render_manifest.json の render_stack pin と完全一致（差分なし。onnxruntime のみ実行環境に未導入だったため pin と同一の 1.29.0 を追加導入した）。run5/run6/run7 の acoustic ONNX sha256 は本実測での export により再生成したが、3世代とも results_s7/probe_0b_groups/*.json（run 8-0b 1.0 測定時の既存記帳）の model_sha256.acoustic_onnx と完全一致した（新規 pin ではなく既存値の再現確認。1件も新規事実ではない）。"
+    status: repaid
+    adjudication_ref: "voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json"
+    evidence_delivered:
+      - "voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json（sha256 6b820a2a27744b9ed4f6e873231aa103b57dd622f993982a112063e5b4bacfa7。schema vg-d4-remeasure-results/0.1。10群（run5/6/7 × 話者。run7 のみ amitaro を含み4話者）× 36セル = 360/360 cells measured・n_total_error 0。d4_remeasure_spec_sha256 = 702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca に束縛（fail-closed 起動ガード通過）。全セルに wav_sha256 + samples_sha256 の2段WAV pin、voicing 3軸（excess_tail_voiced_ms / release_after_score_boundary_ms / tail_f0_persistence）の実測値を記帳。checkpoint / config / DiffSinger e2307b1 / witnessed export manifest / render_stack をすべて sha256 or バージョン一致で束縛。実行 2026-08-22・CPU onnxruntime レンダ・render_stack は s7_b1_real_render_manifest.json の pin と完全一致（numpy 2.4.6 / onnxruntime 1.29.0 / soundfile 0.14.0 / PyYAML 6.0.1 / python 3.11.15）。run5/run6/run7 の acoustic ONNX sha256 は results_s7/probe_0b_groups/*.json の既存記帳と完全一致（新規 pin 化ではなく既存値の再現確認）"
     close_condition:
       - "run5-7 全てで凍結済み TRF measurement spec 1.2（voicing 3軸）再測定が完了し軸値が記帳されている"
 
