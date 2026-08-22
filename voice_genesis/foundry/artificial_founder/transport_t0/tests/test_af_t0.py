@@ -1471,14 +1471,26 @@ def test_r8_provenance_gate_requires_the_source_free_audit():
         assert t0_gates.gate_provenance(pins, pub, binding, bad).verdict == "FAIL"
 
 
-def test_r8_source_free_allowlist_covers_the_section29_extras():
-    """§29 の追加許可 4 種類が allowlist に載っている。"""
+def test_r8_source_free_allowlist_covers_the_section29_extras(tmp_path):
+    """§29 の追加許可 4 種類が allowlist に載っている。
+
+    p0_root は **tmp_path 上に組み立てる**。`_build_source_free_audit` は
+    `af_p0_body_files` をディスクから列挙するので、リポジトリ内の実 voicebank
+    に依存させると「手元にはあるが版管理されていない」成果物の有無でテストの
+    結果が変わる（実際 CI では voicebank が存在せず allowlist が空になり、
+    P0 の `voicebank` denylist が勝って落ちていた）。
+    """
     import t0_run
+    p0_root = tmp_path / "AF0"
+    wav = p0_root / "voicebank" / "AF0" / "C4" / "a.wav"
+    wav.parent.mkdir(parents=True)
+    wav.write_bytes(b"RIFF....WAVE")
     audit = t0_run._build_source_free_audit(
-        _AF / "results" / "AF0", T0_CRITERIA, Path("/tmp/stg"), Path("/tmp/tmp"))
-    # AF-P0 の Body（.wav）は staging_roots 側で許可される（suffix 検査より先）
-    wav = _AF / "results" / "AF0" / "voicebank" / "AF0" / "C4" / "a.wav"
+        p0_root, T0_CRITERIA, tmp_path / "stg", tmp_path / "tmp")
+    # AF-P0 の Body（.wav）は §29 の追加許可で通る（P0 の denylist より先）
     assert audit.classify(str(wav)) is None, "AF-P0 generated body は §29 で許可"
+    # 列挙されなかった voicebank 配下の .wav は P0 の denylist どおり拒否される
+    assert audit.classify(str(wav.parent / "unlisted.wav")) is not None
     # 宣言外の外部音源は拒否
     assert audit.classify("/tmp/speaker.wav") is not None
     assert audit.classify("/tmp/speaker.npy") is not None
