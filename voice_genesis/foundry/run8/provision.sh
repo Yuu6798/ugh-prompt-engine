@@ -204,15 +204,30 @@ if [ "$DS_OK" -ne 1 ]; then
   # 依存を入れると、export 環境の由来が言えなくなる。
   echo "  export venv    SKIP（DiffSinger が e2307b1 に pin されていないので組まない）" >&2
 else
+VENV_FAIL=0
 if [ ! -x "$VENV/bin/python" ]; then
-  python -m venv "$VENV"
-  "$VENV/bin/pip" -q install --upgrade pip >/dev/null 2>&1
-  "$VENV/bin/pip" -q install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu >/dev/null 2>&1
+  python -m venv "$VENV" || VENV_FAIL=1
+  "$VENV/bin/pip" -q install --upgrade pip >/dev/null 2>&1 || VENV_FAIL=1
+  "$VENV/bin/pip" -q install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu \
+    >/dev/null 2>&1 || VENV_FAIL=1
 fi
-"$VENV/bin/pip" -q install -r "$M/DiffSinger/requirements.txt" >/dev/null 2>&1
-"$VENV/bin/pip" -q install "numpy==1.26.4" >/dev/null 2>&1
-VENV_CHECK="$("$VENV/bin/python" -c 'import numpy,torch,lightning;assert numpy.__version__.startswith("1.26"),numpy.__version__;print(f"numpy {numpy.__version__} / torch {torch.__version__} / lightning {lightning.__version__}")' 2>/dev/null)"
-if [ -n "$VENV_CHECK" ]; then
+# この 2 つは既存 venv でも毎回走る。**終了コードを捨てない**（PR #303 第 4 巡 P2:
+# 失敗しても import 検査が 3 つしか見ていなかったため、onnx が欠けたまま exit 0 に
+# なりうる = 由来の言えない環境で export できてしまう）。
+"$VENV/bin/pip" -q install -r "$M/DiffSinger/requirements.txt" >/dev/null 2>&1 || VENV_FAIL=1
+"$VENV/bin/pip" -q install "numpy==1.26.4" >/dev/null 2>&1 || VENV_FAIL=1
+# 検査は「export に要る依存を全部」import する（numpy の版も pin どおりか見る）。
+VENV_CHECK="$("$VENV/bin/python" - <<'VPY' 2>/dev/null
+import numpy, torch, lightning, onnx, onnxsim
+assert numpy.__version__.startswith("1.26"), numpy.__version__
+print(f"numpy {numpy.__version__} / torch {torch.__version__} / "
+      f"lightning {lightning.__version__} / onnx {onnx.__version__}")
+VPY
+)"
+if [ "$VENV_FAIL" -ne 0 ]; then
+  echo "  export venv    FAIL（依存のインストールが失敗した）" >&2
+  FAIL=$((FAIL+1))
+elif [ -n "$VENV_CHECK" ]; then
   echo "  export venv    OK   $VENV_CHECK"
 else
   echo "  export venv    FAIL（numpy<2 で torch/lightning/onnx が揃っていない）" >&2
@@ -225,17 +240,20 @@ echo "| result: OK=$OK SKIP=$SKIP FAIL=$FAIL"
 cat <<'NEXT'
 | 次: export → 校正レンダ再生成 → samples_sha256 照合
 |
-| export は **s7_export_manifest.py 経由で回す**（PR #303 第 3 巡 P1）。後から
-| ckpt と ONNX を別々に hash した記録は「観測していない関係」を証明したことになり、
-| レンダ側が既定で拒否する:
+| export は **s7_export_manifest.py 経由で回す**。checkpoint のパスを独立に渡す口は
+| 無い — exporter と同じ規則（checkpoints/<exp>/model_ckpt_steps_<N>.ckpt）で導出する
+| ので、「exporter が開く物」と「manifest が名乗る物」が構造的に一致する
+| （PR #303 第 3–4 巡）:
 |
 |   "$ROOT/venv_export/bin/python" \
 |     voice_genesis/foundry/run8/s7_export_manifest.py \
-|     --generation run7 --checkpoint "$M/ckpts/run7_40k.ckpt" \
+|     --generation run7 \
+|     --exporter-root "$M/DiffSinger" --exp <checkpoints/ 配下の厳密なフォルダ名> \
+|     --ckpt-steps 40000 \
+|     --expected-checkpoint-sha256 518df090a8154e61f28b529f731418f4f97d47c3b56d1326d354e6be4629fa93 \
 |     --out-dir "$ROOT/out/onnx_export_s6_run7_acoustic" \
 |     --artifact acoustic_onnx=s6_run7_acoustic.onnx \
 |     --artifact acoustic_dsconfig=dsconfig.yaml \
 |     --artifact acoustic_phonemes_json=s6_run7_acoustic.phonemes.json \
-|     --out "$ROOT/out/onnx_export_s6_run7_acoustic/export_manifest.json" \
-|     -- <exporter のコマンド>
+|     --out "$ROOT/out/onnx_export_s6_run7_acoustic/export_manifest.json"
 NEXT

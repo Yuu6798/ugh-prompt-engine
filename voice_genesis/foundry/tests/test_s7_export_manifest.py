@@ -151,63 +151,104 @@ def test_a_post_hoc_manifest_is_rejected_by_default(tmp_path: Path):
     assert out["binding_evidence"] == xm.UNWITNESSED
 
 
-def test_a_witnessed_export_records_the_command_that_produced_the_artifacts(tmp_path: Path):
-    """exporter を**このプロセスが起動**し、その実行で現れた物だけを記録する。"""
-    ckpt = tmp_path / "ckpt"
-    ckpt.write_bytes(b"ckpt")
-    out_dir = tmp_path / "exported"
-    cmd = [
-        sys.executable, "-c",
-        f"import pathlib;p=pathlib.Path({str(out_dir)!r});"
-        "p.mkdir(parents=True,exist_ok=True);(p/'a.onnx').write_bytes(b'produced')",
-    ]
-    doc = xm.run_witnessed_export(GEN, ckpt, out_dir, {"acoustic_onnx": "a.onnx"}, cmd)
+def _fake_diffsinger(tmp_path: Path, exp: str = "run7_phase_b", steps: int = 40000):
+    """DiffSinger checkout の最小形（checkpoints/<exp>/model_ckpt_steps_<N>.ckpt）。"""
+    root = tmp_path / "DiffSinger"
+    (root / "checkpoints" / exp).mkdir(parents=True)
+    (root / "scripts").mkdir(parents=True)
+    ckpt = xm.diffsinger_checkpoint_path(root, exp, steps)
+    ckpt.write_bytes(b"the-pinned-checkpoint")
+    # export.py の代わりに「--out へ成果物を置くだけ」の台本を置く
+    (root / "scripts" / "export.py").write_text(
+        "import pathlib, sys\n"
+        "out = pathlib.Path(sys.argv[sys.argv.index('--out') + 1])\n"
+        "out.mkdir(parents=True, exist_ok=True)\n"
+        "(out / 'a.onnx').write_bytes(b'produced')\n",
+        encoding="utf-8",
+    )
+    return root, exp, steps, ckpt
+
+
+def test_the_checkpoint_is_derived_from_the_exporter_invocation(tmp_path: Path):
+    """ckpt と command を**別々に受け取らない**（PR #303 第 4 巡 P1）。
+
+    DiffSinger の exporter は checkpoint のパスを受け取らず `--exp` / `--ckpt` から
+    自分で解決する。したがって manifest が名乗る checkpoint も**同じ規則で導出**し、
+    「command が読む物」と「manifest が名乗る物」を構造的に一致させる。
+    """
+    root, exp, steps, ckpt = _fake_diffsinger(tmp_path)
+    doc = xm.export_diffsinger_acoustic(
+        GEN, root, exp, steps, tmp_path / "out", {"acoustic_onnx": "a.onnx"},
+        sys.executable, _ckpt_sha(ckpt),
+    )
     assert doc["binding_evidence"] == xm.WITNESSED
-    assert doc["export_command"] == [str(c) for c in cmd]
+    assert doc["source_checkpoint"]["sha256"] == _ckpt_sha(ckpt)
     assert doc["artifacts"]["acoustic_onnx"]["sha256"] == s7_io.sha256_bytes(b"produced")
+    # command には --exp / --ckpt が入っており、そこから ckpt を導出したと書いてある
+    assert "--exp" in doc["export_command"] and exp in doc["export_command"]
+    assert f"model_ckpt_steps_{steps}.ckpt" in doc["checkpoint_derivation"]
+
+
+def test_a_checkpoint_that_does_not_match_the_pin_is_rejected_before_exporting(tmp_path):
+    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    with pytest.raises(xm.ExportManifestError):
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, tmp_path / "out", {"acoustic_onnx": "a.onnx"},
+            sys.executable, "0" * 64,
+        )
+    assert not (tmp_path / "out").exists(), "pin 不一致なら export を走らせない"
+
+
+def test_a_missing_experiment_folder_is_rejected(tmp_path: Path):
+    """DiffSinger の `find_exp` は名前が合わないと**前方一致で別の実験へ落ちる**。
+    厳密なフォルダ名を要求しないと、別の checkpoint から export されうる。"""
+    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    with pytest.raises(xm.ExportManifestError):
+        xm.export_diffsinger_acoustic(
+            GEN, root, "run7", steps, tmp_path / "out2", {"acoustic_onnx": "a.onnx"},
+            sys.executable,
+        )
 
 
 def test_a_witnessed_export_refuses_a_non_empty_output_directory(tmp_path: Path):
     """既に在る物を『今 export した産物』と名乗らせない。"""
-    ckpt = tmp_path / "ckpt"
-    ckpt.write_bytes(b"ckpt")
-    out_dir = tmp_path / "exported"
+    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    out_dir = tmp_path / "out"
     out_dir.mkdir()
     (out_dir / "a.onnx").write_bytes(b"left over from an older export")
     with pytest.raises(xm.ExportManifestError):
-        xm.run_witnessed_export(
-            GEN, ckpt, out_dir, {"acoustic_onnx": "a.onnx"}, [sys.executable, "-c", ""]
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, out_dir, {"acoustic_onnx": "a.onnx"}, sys.executable,
         )
 
 
 def test_a_witnessed_export_fails_when_the_exporter_fails(tmp_path: Path):
-    ckpt = tmp_path / "ckpt"
-    ckpt.write_bytes(b"ckpt")
+    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    (root / "scripts" / "export.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
     with pytest.raises(xm.ExportManifestError):
-        xm.run_witnessed_export(
-            GEN, ckpt, tmp_path / "e", {"acoustic_onnx": "a.onnx"},
-            [sys.executable, "-c", "raise SystemExit(3)"],
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, tmp_path / "out", {"acoustic_onnx": "a.onnx"},
+            sys.executable,
         )
 
 
 def test_a_witnessed_export_fails_when_an_artifact_never_appears(tmp_path: Path):
     """exporter は成功したが宣言した物が出てこない = 因果を主張できない。"""
-    ckpt = tmp_path / "ckpt"
-    ckpt.write_bytes(b"ckpt")
+    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    (root / "scripts" / "export.py").write_text("pass\n", encoding="utf-8")
     with pytest.raises(xm.ExportManifestError):
-        xm.run_witnessed_export(
-            GEN, ckpt, tmp_path / "e2", {"acoustic_onnx": "a.onnx"},
-            [sys.executable, "-c", "pass"],
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, tmp_path / "out", {"acoustic_onnx": "a.onnx"},
+            sys.executable,
         )
 
 
-def test_the_cli_refuses_to_write_a_manifest_without_running_an_exporter(tmp_path: Path):
-    """`--` の後ろにコマンドが無い呼び出しは、後付け記録の生成になるので拒否する。"""
-    ckpt = tmp_path / "ckpt"
-    ckpt.write_bytes(b"ckpt")
-    with pytest.raises(SystemExit):
-        xm.main([
-            "--generation", GEN, "--checkpoint", str(ckpt),
-            "--out-dir", str(tmp_path / "e3"), "--artifact", "acoustic_onnx=a.onnx",
-            "--out", str(tmp_path / "m.json"),
-        ])
+def test_the_module_exposes_no_way_to_pair_an_arbitrary_command_with_a_checkpoint():
+    """任意の command と任意の ckpt を独立に渡せる公開 API を**残さない**。
+
+    残すと「ckpt を一切読まないコマンド」でも witnessed を名乗れてしまう
+    （第 4 巡の指摘そのもの）。導出型の入口だけを公開する。
+    """
+    public = {n for n in dir(xm) if not n.startswith("_")}
+    assert "run_witnessed_export" not in public
+    assert "export_diffsinger_acoustic" in public

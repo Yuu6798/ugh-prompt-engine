@@ -32,9 +32,10 @@
 本モジュールは束縛の由来を `binding_evidence` として記録し、レンダ側は既定で
 `witnessed_export` しか受け付けない:
 
-- `witnessed_export` — `export` サブコマンドが、**空の出力先**に対して exporter を
-  起動し、その実行で**現れたファイル**を hash した。ckpt → 生成物の因果を
-  このプロセスが見ている
+- `witnessed_export` — **空の出力先**に対して exporter を起動し、その実行で
+  **現れたファイル**を hash した。さらに `source_checkpoint` は独立に渡された
+  パスではなく、**exporter がその起動で開くファイルとして導出した**もの
+  （PR #303 第 4 巡 P1）。ckpt と生成物が別々の主張にならない
 - `unwatched_post_hoc` — 既に在るファイル群を後から hash しただけ。
   **レンダ側は既定で拒否する**（`allow_unwitnessed=True` を明示したときだけ通る）
 
@@ -130,16 +131,22 @@ def build_manifest(
     return doc
 
 
-def run_witnessed_export(
+def _run_witnessed_export(
     generation: str,
     checkpoint: Path,
     out_dir: Path,
     artifact_names: Mapping[str, str],
     command: Sequence[str],
+    checkpoint_derivation: str,
     exporter: Optional[Mapping[str, str]] = None,
     cwd: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """**exporter をこのプロセスが起動して**、その実行で現れた物を記録する。
+
+    **private**。公開の入口は `export_diffsinger_acoustic()` だけである
+    （PR #303 第 4 巡 P1: 任意の `command` と任意の `checkpoint` を独立に受け取ると、
+    ckpt を一切読まないコマンドでも `witnessed_export` を名乗れてしまう。
+    呼び出し側が両方を勝手に組み合わせられる限り、束縛は主張のままになる）。
 
     因果を見たと言うために 3 つ課す:
 
@@ -148,9 +155,8 @@ def run_witnessed_export(
     2. `command` の実行が成功すること
     3. 実行後に `artifact_names` が指す全ファイルが**現れている**こと
 
-    3 が揃って初めて「この ckpt を渡した export がこの生成物を作った」と言える。
-    それでも「exporter が本当にその ckpt を読んだか」までは保証できないので、
-    `export_command` を丸ごと記録して人が読めるようにする。
+    `checkpoint_derivation` は「なぜこの checkpoint がこの command の入力だと
+    言えるのか」を人が読める形で残す。導出できない呼び出しは公開しない。
     """
     import subprocess
 
@@ -177,9 +183,77 @@ def run_witnessed_export(
         raise ExportManifestError(
             f"export 後に現れなかった生成物がある: {missing}（因果を主張できない）"
         )
-    return build_manifest(
+    doc = build_manifest(
         generation, Path(checkpoint), artifacts, exporter,
         binding_evidence=WITNESSED, export_command=list(command),
+    )
+    doc["checkpoint_derivation"] = checkpoint_derivation
+    return doc
+
+
+# --- 公開の入口: DiffSinger acoustic ------------------------------------------
+
+
+def diffsinger_checkpoint_path(exporter_root: Path, exp: str, ckpt_steps: int) -> Path:
+    """`scripts/export.py acoustic --exp EXP --ckpt STEPS` が**開くファイル**。
+
+    DiffSinger の exporter は checkpoint の**パスを受け取らない**。`--exp`（
+    `<root>/checkpoints/` 配下のフォルダ名）と `--ckpt`（ステップ数）から自分で
+    解決する。したがって「checkpoint を command へ渡す」ことはできず、代わりに
+    **exporter と同じ規則で解決した先**を `source_checkpoint` にする。
+    """
+    return Path(exporter_root) / "checkpoints" / str(exp) / f"model_ckpt_steps_{int(ckpt_steps)}.ckpt"
+
+
+def export_diffsinger_acoustic(
+    generation: str,
+    exporter_root: Path,
+    exp: str,
+    ckpt_steps: int,
+    out_dir: Path,
+    artifact_names: Mapping[str, str],
+    python_executable: str,
+    expected_checkpoint_sha256: Optional[str] = None,
+    exporter: Optional[Mapping[str, str]] = None,
+) -> Dict[str, Any]:
+    """DiffSinger acoustic を export し、**開かれる ckpt** を束縛して記録する。
+
+    ckpt と command を別々に受け取らない。両方を `(exporter_root, exp, ckpt_steps)`
+    という**同一の入力から導出**するので、「command が読む物」と「manifest が名乗る物」
+    が構造的に一致する。
+
+    `--exp` のフォルダが**厳密に存在する**ことも確かめる。DiffSinger の `find_exp`
+    は名前が一致しないとき**前方一致で別のフォルダへ落ちる**ので、存在検査を
+    省くと別の実験の checkpoint から export されうる。
+    """
+    exporter_root = Path(exporter_root)
+    exp_dir = exporter_root / "checkpoints" / str(exp)
+    if not exp_dir.is_dir():
+        raise ExportManifestError(
+            f"{exp_dir} が無い。DiffSinger の find_exp は前方一致で**別の実験**へ"
+            "落ちるので、厳密なフォルダ名を要求する"
+        )
+    ckpt = diffsinger_checkpoint_path(exporter_root, exp, ckpt_steps)
+    if not ckpt.is_file():
+        raise ExportManifestError(f"{ckpt} が無い（exporter が開く先に checkpoint が無い）")
+    if expected_checkpoint_sha256 is not None:
+        _, observed, _ = s7_io.read_bytes_with_pin(ckpt)
+        if observed != str(expected_checkpoint_sha256):
+            raise ExportManifestError(
+                f"{ckpt} の sha256 {observed} != 事前登録 pin {expected_checkpoint_sha256}"
+            )
+    command = [
+        str(python_executable), str(exporter_root / "scripts" / "export.py"), "acoustic",
+        "--exp", str(exp), "--ckpt", str(int(ckpt_steps)), "--out", str(Path(out_dir)),
+    ]
+    return _run_witnessed_export(
+        generation, ckpt, Path(out_dir), artifact_names, command,
+        checkpoint_derivation=(
+            f"scripts/export.py acoustic --exp {exp} --ckpt {ckpt_steps} が "
+            f"root_dir/checkpoints/{exp}/model_ckpt_steps_{ckpt_steps}.ckpt を開く。"
+            "checkpoint は command と同じ入力から導出しており、独立に渡していない"
+        ),
+        exporter=exporter, cwd=exporter_root,
     )
 
 
@@ -255,32 +329,36 @@ def verify_export_manifest(
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
-        description="exporter をこのプロセスから起動し、その産物を ckpt へ縛る",
+        description="DiffSinger acoustic を export し、開かれる ckpt へ束縛して記録する",
         epilog=(
-            "例: s7_export_manifest.py --generation run7 --checkpoint ckpt "
-            "--out-dir out --artifact acoustic_onnx=x.onnx --out out/export.json "
-            "-- venv/bin/python scripts/export.py acoustic --exp run7"
+            "例: venv/bin/python s7_export_manifest.py --generation run7 "
+            "--exporter-root materials/DiffSinger --exp run7_phase_b --ckpt-steps 40000 "
+            "--expected-checkpoint-sha256 518df090... --out-dir out/onnx_run7 "
+            "--artifact acoustic_onnx=s6_run7_acoustic.onnx --out out/onnx_run7/export.json"
         ),
     )
     ap.add_argument("--generation", required=True)
-    ap.add_argument("--checkpoint", required=True)
+    ap.add_argument(
+        "--exporter-root", required=True,
+        help="DiffSinger の checkout。checkpoint はここから **exporter と同じ規則で** "
+             "導出する（独立にパスを受け取らない = PR #303 第 4 巡 P1）",
+    )
+    ap.add_argument("--exp", required=True, help="checkpoints/ 配下の**厳密な**フォルダ名")
+    ap.add_argument("--ckpt-steps", required=True, type=int)
+    ap.add_argument(
+        "--expected-checkpoint-sha256", default=None,
+        help="事前登録が pin する checkpoint の sha256（照合してから export する）",
+    )
     ap.add_argument(
         "--out-dir", required=True,
-        help="exporter の出力先。**存在しないか空**でなければ止める"
-             "（既存物を『今 export した物』と名乗らせないため）",
+        help="exporter の出力先。**存在しないか空**でなければ止める",
     )
     ap.add_argument("--exporter-revision", default=DEFAULT_EXPORTER["revision"])
     ap.add_argument(
         "--artifact", action="append", default=[], metavar="NAME=RELPATH",
-        help="出力先からの相対パスで、export が作るはずの物を宣言する"
-             "（例: acoustic_onnx=s6_run7_acoustic.onnx）。複数可",
+        help="出力先からの相対パスで、export が作るはずの物を宣言する。複数可",
     )
-    ap.add_argument("--cwd", default=None, help="exporter を起動する作業ディレクトリ")
     ap.add_argument("--out", required=True, help="書き出す export manifest")
-    ap.add_argument(
-        "command", nargs=argparse.REMAINDER,
-        help="`--` の後ろに exporter のコマンドを丸ごと書く",
-    )
     args = ap.parse_args(argv)
 
     names: Dict[str, str] = {}
@@ -291,21 +369,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         names[name] = rel
     if not names:
         ap.error("--artifact を 1 つ以上指定すること")
-    command = [c for c in args.command if c != "--"]
-    if not command:
-        ap.error("`--` の後ろに exporter のコマンドを指定すること"
-                 "（後付けで hash するだけの記録は作らない）")
 
     out = Path(args.out)
-    s7_io.reject_output_collision([out], [Path(args.checkpoint)])
-    doc = run_witnessed_export(
+    ckpt = diffsinger_checkpoint_path(Path(args.exporter_root), args.exp, args.ckpt_steps)
+    s7_io.reject_output_collision([out], [ckpt])
+    doc = export_diffsinger_acoustic(
         args.generation,
-        Path(args.checkpoint),
+        Path(args.exporter_root),
+        args.exp,
+        args.ckpt_steps,
         Path(args.out_dir),
         names,
-        command,
+        sys.executable,
+        args.expected_checkpoint_sha256,
         {**DEFAULT_EXPORTER, "revision": args.exporter_revision},
-        Path(args.cwd) if args.cwd else None,
     )
     s7_io.assert_json_finite(doc)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -314,6 +391,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"| export manifest: {out}  evidence={doc['binding_evidence']}  "
         f"ckpt={doc['source_checkpoint']['sha256'][:16]}"
     )
+    print(f"  derivation: {doc['checkpoint_derivation']}")
     for name, e in doc["artifacts"].items():
         print(f"  {name:24s} {e['sha256'][:16]}")
     return 0
