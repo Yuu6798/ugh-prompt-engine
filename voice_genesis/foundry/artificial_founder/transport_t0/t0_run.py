@@ -129,6 +129,27 @@ def _p0_paths_changed_since_base() -> Optional[List[str]]:
     return [ln for ln in out.stdout.splitlines() if ln.strip()]
 
 
+def _p0_artifacts_drifted(p0_root: Path, pins_base: Mapping[str, Any]) -> List[str]:
+    """G0 が hash した P0 成果物 / criteria が run 中に変わっていないか。
+
+    `measurements/body.json` は baseline 照合で、`AF_P0_CRITERIA.json` は全測定で
+    独立に開き直される。G0 の 1 回きりの hash だけでは、その間の差し替えを
+    検出できない（凍結 digest を報告したまま別内容を消費できてしまう）。
+    """
+    out: List[str] = []
+    recorded = pins_base.get("p0_artifacts") or {}
+    for name, want in recorded.items():
+        path = Path(p0_root) / name
+        got = sha256_file(path) if path.exists() else None
+        if got != want:
+            out.append(f"{name}: {want} -> {got}")
+    want_criteria = pins_base.get("p0_criteria_sha256")
+    got_criteria = sha256_file(P0_CRITERIA) if P0_CRITERIA.exists() else None
+    if got_criteria != want_criteria:
+        out.append(f"criteria/AF_P0_CRITERIA.json: {want_criteria} -> {got_criteria}")
+    return out
+
+
 def _module_version(name: str) -> Optional[str]:
     """依存の版（未導入なら None）。"""
     try:
@@ -280,6 +301,16 @@ def _publish(staging: Path, out_dir: Path) -> Dict[str, Any]:
     rename 前に SHA256SUMS を作って **staging を自己検証**し、壊れた束を
     公開しないようにする（§30「staging -> verify -> atomic rename」）。
     """
+    # §30「freeze は PASS 時のみ」。PASS でない run が過去の PASS run の freeze を
+    # 消してはならないので引き継ぐ。ただし **manifest 生成より前** に置く。
+    # 後から足すと、公開ツリーに manifest 未収載のファイルが混ざり、
+    # `_verify_tree` が「妥当」と言う混成束ができる（第 9 巡の指摘）。
+    prev_freeze = Path(out_dir) / "freeze"
+    inherited = False
+    if prev_freeze.is_dir() and not (staging / "freeze").exists():
+        shutil.copytree(prev_freeze, staging / "freeze")
+        inherited = True
+
     rows = sha256_tree(staging, exclude_names=("SHA256SUMS.txt",))
     (staging / "SHA256SUMS.txt").write_text(sha256sums_text(rows), encoding="utf-8")
     verify = _verify_tree(staging)
@@ -293,11 +324,6 @@ def _publish(staging: Path, out_dir: Path) -> Dict[str, Any]:
         shutil.rmtree(hold)
     if out_dir.exists():
         os.rename(str(out_dir), str(hold))          # 原子的
-        # §30「freeze は PASS 時のみ」。PASS でない run が、過去の PASS run の
-        # freeze を消してはならない。今回 freeze が無い場合に限り引き継ぐ。
-        prev_freeze = hold / "freeze"
-        if prev_freeze.is_dir() and not (staging / "freeze").exists():
-            shutil.copytree(prev_freeze, staging / "freeze")
     try:
         os.rename(str(staging), str(out_dir))       # 原子的
     except OSError:
@@ -307,7 +333,8 @@ def _publish(staging: Path, out_dir: Path) -> Dict[str, Any]:
     if hold.exists():
         shutil.rmtree(hold, ignore_errors=True)
     return {"published": af_gates.repo_relative(out_dir), "n_files": len(rows),
-            "verified": True, "method": "atomic_rename"}
+            "verified": True, "method": "atomic_rename",
+            "inherited_previous_freeze": inherited}
 
 
 def _verify_tree(root: Path) -> Dict[str, Any]:
@@ -504,6 +531,14 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path,
                      f"AF0 voicebank changed during the run: G0 saw "
                      f"{pins_base['af0_body_identity_digest']}, final read sees "
                      f"{body_digest_after}")
+
+    # G0 が hash した P0 成果物と criteria も、run 中に独立して開き直される
+    # （`measurements/body.json` は baseline 照合で、criteria は全測定で）。
+    # 最終再ハッシュして G0 時点と食い違えば fail-closed にする。
+    drifted = _p0_artifacts_drifted(p0_root, pins_base)
+    if drifted:
+        raise T0Stop("FAILED", "P0_ARTIFACT_DRIFT_DURING_RUN",
+                     f"AF-P0 inputs changed during the run: {drifted}")
 
     closure_digest, closure_rows = t0_gates.code_closure_digest(_HERE)
     write_json(out / "code_closure.json",

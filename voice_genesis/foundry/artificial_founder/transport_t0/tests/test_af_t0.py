@@ -1485,3 +1485,70 @@ def test_r8_source_free_allowlist_covers_the_section29_extras():
     # pinned inputs は許可
     assert audit.classify(str(SPEC_PATH)) is None
     assert audit.classify(str(T0_CRITERIA)) is None
+
+
+# ---------------------------------------------------------------------------
+# レビュー第 9 巡の回帰
+# ---------------------------------------------------------------------------
+def test_r9_p0_artifact_drift_during_the_run_is_detected(tmp_path):
+    """G0 が hash した P0 成果物 / criteria の run 中の差し替えを検出する。
+
+    `measurements/body.json` は baseline 照合で、criteria は全測定で独立に
+    開き直される。G0 の 1 回きりの hash では、その間の差し替えを検出できない。
+    """
+    import t0_run
+    root = tmp_path / "AF0"
+    (root / "measurements").mkdir(parents=True)
+    body = root / "measurements" / "body.json"
+    body.write_text('{"a": 1}', encoding="utf-8")
+    from af_spec import sha256_file
+    pins = {"p0_artifacts": {"measurements/body.json": sha256_file(body)},
+            "p0_criteria_sha256": sha256_file(P0_CRITERIA)}
+    assert t0_run._p0_artifacts_drifted(root, pins) == []
+    # run 中に差し替わった
+    body.write_text('{"a": 2}', encoding="utf-8")
+    drift = t0_run._p0_artifacts_drifted(root, pins)
+    assert drift and "measurements/body.json" in drift[0]
+    # 消えた場合も検出する
+    body.unlink()
+    assert t0_run._p0_artifacts_drifted(root, pins)
+    # criteria の drift も見る
+    pins2 = {"p0_artifacts": {}, "p0_criteria_sha256": "0" * 64}
+    assert any("AF_P0_CRITERIA" in d for d in
+               t0_run._p0_artifacts_drifted(root, pins2))
+
+
+def test_r9_inherited_freeze_is_covered_by_the_manifest(tmp_path):
+    """継承した freeze も manifest に載る（未収載の混成束を作らない）。
+
+    以前は manifest を作って検証した **後** に freeze を copy していたため、
+    公開ツリーに manifest 未収載のファイルが混ざり、`_verify_tree` が
+    それを「妥当」と言う状態になっていた。
+    """
+    import t0_run
+    out = tmp_path / "AF_T0"
+    (out / "freeze").mkdir(parents=True)
+    (out / "freeze" / "af_t0_freeze.json").write_text('{"v":1}', encoding="utf-8")
+    (out / "t0_results.json").write_text('{"old":true}', encoding="utf-8")
+    staging = tmp_path / f".AF_T0.staging.{__import__('os').getpid()}"
+    staging.mkdir()
+    (staging / "t0_results.json").write_text('{"overall":"NOT_ESTABLISHED"}',
+                                             encoding="utf-8")
+    info = t0_run._publish(staging, out)
+    assert info["inherited_previous_freeze"] is True
+
+    # 継承した freeze が manifest に載っていること
+    sums = (out / "SHA256SUMS.txt").read_text(encoding="utf-8")
+    listed = {ln.partition("  ")[2].strip() for ln in sums.splitlines() if ln.strip()}
+    assert "freeze/af_t0_freeze.json" in listed, listed
+    # 出荷物が全て manifest に載っていること（逆向き）
+    shipped = {str(q.relative_to(out)) for q in out.rglob("*")
+               if q.is_file() and q.name != "SHA256SUMS.txt"}
+    assert shipped <= listed, shipped - listed
+    # 実体とも一致する
+    from af_spec import sha256_file
+    for line in sums.splitlines():
+        if not line.strip():
+            continue
+        digest, _, name = line.partition("  ")
+        assert sha256_file(out / name.strip()) == digest.strip(), name
