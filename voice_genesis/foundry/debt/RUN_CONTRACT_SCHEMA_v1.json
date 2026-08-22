@@ -118,6 +118,11 @@
       "type": "string",
       "description": "main_training_gate == CLOSED のとき必須（それ以外では省略可）。CLOSED は終端状態であり、pin の充足によって OPEN/BLOCKED へ戻ることはない（closeout 記録の User 裁定のみが正）。closeout 記録への repo 相対パス（例: voice_genesis/foundry/results_s7/s7_run8_closeout.md）。"
     },
+    "closeout_ref_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "gate == CLOSED のとき closeout_ref と共に必須（それ以外では省略可）。closeout_ref が指す参照先ファイルの実バイトの sha256。conformance test がこれと実ファイルの sha256 を照合し、closeout 記録の改変時に projection 更新を強制する（design_doc_sha256 と同機構）。"
+    },
     "reason": {
       "type": "string",
       "description": "main_training_gate == CLOSED のとき、closeout 記録が定める終端理由コードを逐語転記する（例: INSUFFICIENT_GATE_ADJUDICATION_EVIDENCE）。それ以外の gate では省略可。"

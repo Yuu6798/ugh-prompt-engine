@@ -723,7 +723,17 @@ def _check_closeout_ref(projection: Dict[str, Any], repo_root: Path) -> None:
     ファイルを指すことを検証する。CLOSED でない projection には no-op
     （closeout_ref は CLOSED 以外では省略可）。design_doc の repo外束縛拒否
     （修正2/P2 = `_check_design_doc_sha256`）と同じ絶対パス/親ディレクトリ
-    越境拒否を適用する。"""
+    越境拒否を適用する。
+
+    Codex 第7巡 7-2 でバイト束縛 + 内容照合の二層を追加しファミリー終端する
+    （偽 CLOSE 経路の閉塞）:
+    (a) closeout_ref_sha256 が closeout_ref 実ファイルの sha256 と一致する
+        こと（design_doc_sha256 と同機構。closeout 記録の改変を検出する）。
+    (b) closeout 本文に終端裁定マーカー（run_id から動的に導出した
+        `Run <N>\\s*=\\s*CLOSED`）と projection.reason の文字列が実在する
+        こと（sha256 一致だけでは「別内容だが同じ参照先パスを指すファイル」
+        を検出できないため、内容そのものが終端裁定を裏付けることも検査する）。
+    """
     if projection.get("main_training_gate") != "CLOSED":
         return
 
@@ -745,6 +755,39 @@ def _check_closeout_ref(projection: Dict[str, Any], repo_root: Path) -> None:
         f"closeout_ref の解決後パスが repo_root 配下ではありません: {resolved}"
     )
     assert resolved.exists(), f"closeout_ref が指すファイルが存在しません: {resolved}"
+
+    # (a) バイト束縛: closeout_ref_sha256 が実ファイルと一致すること。
+    closeout_ref_sha256 = projection.get("closeout_ref_sha256")
+    assert isinstance(closeout_ref_sha256, str) and closeout_ref_sha256, (
+        "main_training_gate == CLOSED のとき closeout_ref_sha256 が必須です"
+    )
+    actual_sha256 = _sha256_of_file(resolved)
+    assert actual_sha256 == closeout_ref_sha256, (
+        "closeout 記録が改変されたのに projection の closeout_ref_sha256 が"
+        f"追随していません: actual={actual_sha256} projection={closeout_ref_sha256}"
+    )
+
+    # (b) 内容照合: 終端裁定マーカーと reason の文字列が本文に実在すること。
+    body = resolved.read_text(encoding="utf-8")
+    run_id = projection.get("run_id", "")
+    run_number_match = re.search(r"run(\d+)", str(run_id), re.IGNORECASE)
+    assert run_number_match, (
+        f"run_id {run_id!r} から run 番号を抽出できません（終端裁定マーカー照合に必要）"
+    )
+    run_label = f"Run {run_number_match.group(1)}"
+    marker_pattern = re.compile(re.escape(run_label) + r"\s*=\s*CLOSED")
+    assert marker_pattern.search(body), (
+        f"closeout 本文に終端裁定マーカー（pattern={marker_pattern.pattern!r}）が"
+        f"見つかりません: {resolved}"
+    )
+
+    reason = projection.get("reason")
+    assert isinstance(reason, str) and reason, (
+        "main_training_gate == CLOSED のとき reason が必須です"
+    )
+    assert reason in body, (
+        f"closeout 本文に projection.reason（{reason!r}）が見つかりません: {resolved}"
+    )
 
 
 def test_closeout_ref_exists_when_gate_is_closed(projection: Dict[str, Any]) -> None:
@@ -786,6 +829,46 @@ def test_check_closeout_ref_is_noop_when_gate_not_closed() -> None:
     適用されない（省略可であることの直接確認）。"""
     non_closed_projection = {"main_training_gate": "BLOCKED"}
     _check_closeout_ref(non_closed_projection, REPO_ROOT)  # 例外を投げないことの確認
+
+
+def test_check_closeout_ref_rejects_sha256_mismatch(projection: Dict[str, Any]) -> None:
+    """(i)(a) Codex 第7巡 7-2 負例: closeout_ref_sha256 が実ファイルと
+    不一致なら検出される。"""
+    tampered = dict(projection)
+    tampered["closeout_ref_sha256"] = "0" * 64
+    with pytest.raises(AssertionError):
+        _check_closeout_ref(tampered, REPO_ROOT)
+
+
+def test_check_closeout_ref_rejects_ref_swapped_to_different_file(
+    projection: Dict[str, Any],
+) -> None:
+    """(i)(a) Codex 第7巡 7-2 負例: closeout_ref を別の実在ファイルへ
+    差し替えると、そのファイルの実 sha256 が pin と一致しないため検出
+    される（バイト束縛の実効性 — パス存在検査だけでは通ってしまう）。"""
+    tampered = dict(projection)
+    tampered["closeout_ref"] = "voice_genesis/foundry/results_s7/s7_reproducibility_finding.md"
+    with pytest.raises(AssertionError):
+        _check_closeout_ref(tampered, REPO_ROOT)
+
+
+def test_check_closeout_ref_rejects_fabricated_reason(projection: Dict[str, Any]) -> None:
+    """(i)(b) Codex 第7巡 7-2 負例: reason を closeout 本文に存在しない
+    文字列へ差し替えると内容照合で検出される（sha256 一致だけでは
+    reason の捏造を検出できないため、内容照合が必要な理由の実証）。"""
+    tampered = dict(projection)
+    tampered["reason"] = "FABRICATED_REASON_NOT_IN_CLOSEOUT_BODY"
+    with pytest.raises(AssertionError):
+        _check_closeout_ref(tampered, REPO_ROOT)
+
+
+def test_check_closeout_ref_rejects_missing_terminal_marker_in_body() -> None:
+    """(i)(b) Codex 第7巡 7-2 負例: closeout 本文に終端裁定マーカー
+    （`Run <N> = CLOSED`）が存在しなければ検出される（マーカー抽出ロジック
+    自体の健全性を、実 closeout ファイルに依存しない合成データで確認）。"""
+    marker_pattern = re.compile(re.escape("Run 8") + r"\s*=\s*CLOSED")
+    body_without_marker = "Run 8 は依然として議論中であり、まだ結論していない。"
+    assert marker_pattern.search(body_without_marker) is None
 
 
 # --- (h) 汎用スキーマバリデータ（Codex 第5巡採用 P2） -----------------------

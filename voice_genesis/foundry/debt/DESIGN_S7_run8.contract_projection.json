@@ -122,5 +122,6 @@
   "runbook_may_override_design": false,
   "main_training_gate": "CLOSED",
   "closeout_ref": "voice_genesis/foundry/results_s7/s7_run8_closeout.md",
+  "closeout_ref_sha256": "f58e4f970409d2da7d379d6e5e8fcb0b3bc1a4899248e0616f40b69380e2d626",
   "reason": "INSUFFICIENT_GATE_ADJUDICATION_EVIDENCE"
 }

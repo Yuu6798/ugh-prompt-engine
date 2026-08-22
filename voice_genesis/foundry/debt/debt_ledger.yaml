@@ -43,7 +43,7 @@ debts:
         - run8-0 Gate 1 判定
         - run5-7 の現行測定規約による再測定（VG-DEBT-004 の前提）
     repayment:
-      method: PR-1 の calibration harness で校正音源のみを通し TRF measurement spec / 1.0 として凍結
+      method: "PR-1 の calibration harness で校正音源のみを通し TRF measurement spec / 1.0 として凍結（達成形態: spec 1.2。1.0 表記は策定時の想定版数 = note 参照）"
       evidence_required:
         - calibration set の構成記録
         - 凍結された analysis window / hop / F0判定 等の値一式（DEBT_REPAYMENT_PLAN_v1.0.md §3 A-1 の凍結対象リスト）
@@ -55,7 +55,7 @@ debts:
     status: repaid
     adjudication_ref: "voice_genesis/foundry/results_s7/s7_run8_closeout.md §2-1/§2-2、voice_genesis/foundry/results_s7/s7_trf_spec_1_2_applicability.json"
     close_condition:
-      - "TRF measurement spec / 1.0 が pin され、本番360セルを1セルも見ずに確定したことが記帳されている"
+      - "TRF measurement spec / 1.0 が pin され、本番360セルを1セルも見ずに確定したことが記帳されている（達成形態: spec 1.2。1.0 表記は策定時の想定版数 = note 参照）"
 
   - debt_id: VG-DEBT-003
     scope: run8-B2
@@ -93,14 +93,14 @@ debts:
         - run5-7 各 run の因果主張
         - run 間比較（run8-0 台帳の H-TTD 等）
     repayment:
-      method: B-1 凍結後の測定仕様で run5-7 の fixed probe を再測定
+      method: "凍結済み TRF measurement spec 1.2（voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json。voicing 3軸: excess_tail_voiced_ms / release_after_score_boundary_ms / tail_f0_persistence）で run5-7 の fixed probe を再測定"
       evidence_required:
         - run5/run6/run7 各 checkpoint からの再生成 wav sha256
-        - TRF v1.0 適用後の軸値
-      note: "checkpoint 実体は repo 非同梱（voice_genesis/README.md『WAV は非同梱』節と同型の運用）のため実測実行自体が machine-dependent。B-1（1.2 として凍結。VG-DEBT-002 参照）により unblocked — 実行の前提はもはや欠けていない。実行は checkpoint 実体依存で machine-dependent のまま。"
+        - "TRF measurement spec 1.2 適用後の軸値（voicing 3軸のみ。terminal_mel_persistence は unavailable のためスコープ外）"
+      note: "checkpoint 実体は repo 非同梱（voice_genesis/README.md『WAV は非同梱』節と同型の運用）のため実測実行自体が machine-dependent。B-1（1.2 として凍結。VG-DEBT-002 参照）により unblocked — 実行の前提はもはや欠けていない。実行は checkpoint 実体依存で machine-dependent のまま。計画時点（DEBT_REPAYMENT_PLAN_v1.0.md §4）の『current TRF v1.0』は『凍結済み測定仕様』を指す想定表記であり、実現形態は 1.2（v1.0 の検出器は本番セルで 3–8/10 群縮退のため棄却された = voice_genesis/foundry/results_s7/s7_run8_closeout.md §2-1）。terminal_mel_persistence は現行観測設計では unavailable（closeout §2-2）であるため、再測定のスコープは voicing 3軸に限る。"
     status: open
     close_condition:
-      - run5-7 全てで TRF v1.0 再測定が完了し軸値が記帳されている
+      - "run5-7 全てで凍結済み TRF measurement spec 1.2（voicing 3軸）再測定が完了し軸値が記帳されている"
 
   - debt_id: VG-DEBT-005
     scope: run5-7
@@ -250,6 +250,11 @@ debts:
       method: 現状は設計上の意図的な同一データ運用（DESIGN_S4 §1.1）であることを確認済み。P1として残すのは「run5固有のpin検証記録」が本ledger作成時点で見つからないため、run5実行時にrun4_dataset_pins.jsonとの一致を実際に検証した記録の所在を確認する
       evidence_required:
         - run5 実行時の run4_dataset_pins.json 照合ログまたは同等の検証記録
-    status: open
+      evidence_delivered:
+        - "voice_genesis/foundry/results_s4/s4_record_2026-08-19.md L41-42（完走 Pod 40uz9z5svjykbr のタイムライン）: 『01:16:46 | datasets ok（D3 その場 render → run 4 pin と 40/40 一致・convert 4 系統）』『01:16:49 | assemble ok（4話者・run4-assembly-manifest/0.4）』。同記録 §2 に『datasets ok は pin 不一致で fail-closed する設計なので、ok 自体が照合成立の証跡』と明記されている"
+        - "voice_genesis/foundry/scripts/run5_bootstrap.py（コードパスを実読して確認）: RUN_PROFILES['run5']['dataset_pins'] = 'run4_dataset_pins.json'（L157）。datasets 段は verify_dataset_against_pins() が d3/amitaro/user 各データセットを dataset_pins と照合し不一致なら PinMismatchError を送出する（L1733-1735 d3 / L1803-1807 amitaro / L1849-1853 user）実装になっており、その後にのみ heartbeat.mark('datasets', 'ok')（L1871）へ到達する。assemble 段も verify_assembly_against_run4_pins() の照合成功（L1892-1894）後にのみ heartbeat.mark('assemble', 'ok')（L1901）へ到達する。すなわち 'ok' マーカーは run4_dataset_pins.json との照合成功後にのみ emit される実装であることをコードで確認した"
+      note: "Codex 第7巡 7-3: s4_record_2026-08-19.md の成功記録と run5_bootstrap.py のコードパスの両方を実際に開いて照合した。record 単独では claim に過ぎないが、実装が fail-closed（不一致は PinMismatchError で例外送出しマーカーへ到達しない）であることをコード側で確認できたため、記録の ok は実照合成立の証跡として成立する。"
+    status: repaid
+    adjudication_ref: "voice_genesis/foundry/results_s4/s4_record_2026-08-19.md §1/§2、voice_genesis/foundry/scripts/run5_bootstrap.py"
     close_condition:
       - run5 実行時の run4_dataset_pins.json 照合結果（一致/不一致）が記録として確認できる
