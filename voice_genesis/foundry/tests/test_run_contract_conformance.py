@@ -142,16 +142,30 @@ def _sha256_named_field_names(schema: Dict[str, Any]) -> List[str]:
     return [name for name in schema["properties"] if name.endswith("_sha256")]
 
 
+def _is_meaningfully_present(value: Any) -> bool:
+    """value が None でなく、文字列の場合は strip 後非空であることを要求する
+    （Codex 第9巡 9-1: 空文字・空白のみの value/source は「値が入っている」を
+    名乗るだけで実質は未記入と同じであり、null 検査だけでは通ってしまって
+    いた述語を完結させる）。非文字列の正当な falsey 値（0 / False / [] 等）は
+    None チェックのみで足り、strip 判定の対象外。"""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    return True
+
+
 def _is_effectively_pinned(field: Any) -> bool:
-    """status が "PINNED" を名乗っていても value/source が null なら実質未 PIN
-    として扱う（Codex bot レビュー #7「PINNED の実質検証」）。gate 判定は
-    status 文字列だけでなくこの関数の結果を使う。"""
+    """status が "PINNED" を名乗っていても value/source が null、または
+    空文字・空白のみの文字列なら実質未 PIN として扱う（Codex bot レビュー #7
+    「PINNED の実質検証」+ Codex 第9巡 9-1 で文字列の空/空白判定を追加）。
+    gate 判定は status 文字列だけでなくこの関数の結果を使う。"""
     if not isinstance(field, dict):
         return False
     return (
         field.get("status") == "PINNED"
-        and field.get("value") is not None
-        and field.get("source") is not None
+        and _is_meaningfully_present(field.get("value"))
+        and _is_meaningfully_present(field.get("source"))
     )
 
 
@@ -577,6 +591,27 @@ def test_effectively_pinned_rejects_pinned_status_with_null_value_or_source() ->
     assert _is_effectively_pinned({"status": "PINNED", "value": "x", "source": "y"})
     # PENDING/BLOCKED は value/source の有無に関わらず実質 PIN とは認めない。
     assert not _is_effectively_pinned({"status": "PENDING", "value": "x", "source": "y"})
+
+
+def test_effectively_pinned_rejects_empty_or_whitespace_only_strings() -> None:
+    """Codex 第9巡 9-1 負例: value/source が空文字・空白のみの文字列なら、
+    null ではなくても実質未 PIN として拒否される。"""
+    assert not _is_effectively_pinned({"status": "PINNED", "value": "", "source": "x"})
+    assert not _is_effectively_pinned({"status": "PINNED", "value": "x", "source": "   "})
+    assert not _is_effectively_pinned({"status": "PINNED", "value": "\t\n", "source": "x"})
+    assert _is_effectively_pinned({"status": "PINNED", "value": " x ", "source": "y"})
+
+
+def test_is_meaningfully_present_allows_non_string_falsey_values() -> None:
+    """Codex 第9巡 9-1: 非文字列の正当な falsey 値（0 / False / [] 等）は
+    None チェックのみで足り、strip 判定の対象外として有効に扱われる。"""
+    assert _is_meaningfully_present(0)
+    assert _is_meaningfully_present(False)
+    assert _is_meaningfully_present([])
+    assert _is_meaningfully_present({})
+    assert not _is_meaningfully_present(None)
+    assert not _is_meaningfully_present("")
+    assert not _is_meaningfully_present("   ")
 
 
 def test_gate_treats_pinned_status_with_null_value_as_unpinned() -> None:

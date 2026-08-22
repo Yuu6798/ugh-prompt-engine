@@ -259,7 +259,7 @@ def test_atomic_write_text_writes_full_content_and_leaves_no_tmp_file(tmp_path: 
 
 
 def test_load_pins_returns_none_when_not_specified() -> None:
-    assert ccf._load_pins(None) is None
+    assert ccf._load_pins(None) == (None, None)
 
 
 def test_load_pins_raises_for_missing_pins_file(tmp_path: Path) -> None:
@@ -271,8 +271,9 @@ def test_load_pins_raises_for_missing_pins_file(tmp_path: Path) -> None:
 def test_load_pins_reads_json(tmp_path: Path) -> None:
     pins_path = tmp_path / "pins.json"
     pins_path.write_text(json.dumps({"a": {"b.ckpt": "deadbeef"}}), encoding="utf-8")
-    loaded = ccf._load_pins(pins_path)
+    loaded, sha256 = ccf._load_pins(pins_path)
     assert loaded == {"a": {"b.ckpt": "deadbeef"}}
+    assert sha256 == hashlib.sha256(pins_path.read_bytes()).hexdigest()
 
 
 def test_match_pin_finds_nested_filename_key(tmp_path: Path) -> None:
@@ -580,6 +581,33 @@ def test_run_pin_match_ok_keeps_status_ok(tmp_path: Path) -> None:
     assert entry["pin_sha256_match"] is True
     assert report["all_ok"] is True
     assert report["pin_verification"] == "requested"
+    # Codex 第9巡 9-2: report に入力 pin ファイル自体の同一性を記録する。
+    assert report["pins_path"] == str(pins_path.resolve())
+    assert report["pins_sha256"] == hashlib.sha256(pins_path.read_bytes()).hexdigest()
+
+
+def test_run_records_pins_path_and_pins_sha256_in_report(tmp_path: Path) -> None:
+    """Codex 第9巡 9-2 専用テスト: report の pins_path/pins_sha256 が
+    実際に渡した --pins ファイルの解決済みパス・実バイトの sha256 と一致する
+    こと（自作 pin ファイルによる偽証拠を排除するための、どの pin ファイルで
+    照合したかの自己記述）。"""
+    torch = pytest.importorskip("torch")
+    ckpt = tmp_path / "model_ckpt_steps_5000.ckpt"
+    torch.save({"state_dict": {"w": torch.tensor([1.0, 2.0])}}, str(ckpt))
+    actual_sha256 = ccf._sha256_of_file(ckpt)
+    pins_path = tmp_path / "run4_anchor_provenance_like_pins.json"
+    pins_content = json.dumps({"checkpoints": {"5K": {"file": ckpt.name, "sha256": actual_sha256}}})
+    pins_path.write_text(pins_content, encoding="utf-8")
+    out_path = tmp_path / "report.json"
+
+    exit_code = ccf.run([str(ckpt), "--pins", str(pins_path), "--out", str(out_path)])
+
+    assert exit_code == 0
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    assert report["pins_path"] == str(pins_path.resolve())
+    assert report["pins_sha256"] == hashlib.sha256(pins_content.encode("utf-8")).hexdigest()
+    # 別の pin ファイル内容なら別の sha256 になる（記録が中身依存であることの確認）。
+    assert report["pins_sha256"] != hashlib.sha256(b"{}").hexdigest()
 
 
 def test_run_without_pins_reports_not_requested(tmp_path: Path) -> None:
@@ -596,6 +624,9 @@ def test_run_without_pins_reports_not_requested(tmp_path: Path) -> None:
     report = json.loads(out_path.read_text(encoding="utf-8"))
     assert report["pin_verification"] == "not_requested"
     assert "pin_sha256_match" not in report["checkpoints"][0]
+    # Codex 第9巡 9-2: --pins 未指定時は pins_path/pins_sha256 とも null。
+    assert report["pins_path"] is None
+    assert report["pins_sha256"] is None
 
 
 # --- Codex 第3巡 3-2: --expect / 重複指定検証（純粋ロジック、torch 不要） ---

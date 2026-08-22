@@ -47,6 +47,12 @@ fail-closed 契約（2026-08-22 セルフレビュー修正1-4 + Codex bot レ�
   `weights_only=True`（安全側）を維持し、旧 torch の TypeError フォール
   バック経路（weights_only 非対応 = 事実上の unsafe pickle 実行）へは、
   pin 照合済み（または `--pins` 未指定）のバイト列に限って進む。
+- `--pins` 指定時、report に入力 pin ファイル自体の同一性を記録する
+  （Codex 第9巡 9-2: `pins_path` = 解決済みパス、`pins_sha256` = pin
+  ファイル実バイトの sha256。未指定時はどちらも null）。どの pin ファイルで
+  照合したかを report 自体から検証できるようにし、自作 pin ファイルによる
+  偽証拠を排除する（debt_ledger.yaml VG-DEBT-007 の証拠要件が正準
+  `results_s3/run4_anchor_provenance.json` の sha256 一致を要求する）。
 """
 from __future__ import annotations
 
@@ -297,12 +303,27 @@ def check_one_checkpoint(
     return result
 
 
-def _load_pins(pins_path: Optional[Path]) -> Optional[Dict[str, Any]]:
+def _load_pins(pins_path: Optional[Path]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """`--pins` ファイルを読み `(parsed pins dict, sha256)` を返す
+    （未指定なら `(None, None)`）。sha256 は `read_bytes()` の同一バッファ
+    から算出する（TOCTOU 対策 = 修正1/Codex 第2巡 4-1 と同じ思想: パース対象
+    と sha256 算出対象を分離しない）。Codex 第9巡 9-2: この sha256 は report
+    の `pins_sha256` にそのまま転記し、どの pin ファイルで照合したかを
+    report 自体から検証できるようにする。"""
     if pins_path is None:
-        return None
+        return None, None
     if not pins_path.exists():
         raise CheckpointReadError(f"--pins で指定されたファイルが存在しません: {pins_path}")
-    return json.loads(pins_path.read_text(encoding="utf-8"))
+    try:
+        data = pins_path.read_bytes()
+    except OSError as exc:
+        raise CheckpointReadError(
+            f"--pins ファイルの読み込みに失敗しました: {pins_path}: {exc}",
+            reason="pins_read_os_error",
+        ) from exc
+    pins_sha256 = hashlib.sha256(data).hexdigest()
+    pins = json.loads(data.decode("utf-8"))
+    return pins, pins_sha256
 
 
 def _error_entry(ckpt_path: Path, exc: CheckpointReadError) -> Dict[str, Any]:
@@ -466,11 +487,14 @@ def run(argv: Optional[List[str]] = None) -> int:
     torch_module = _load_torch()
 
     pins: Optional[Dict[str, Any]] = None
+    pins_sha256: Optional[str] = None
     try:
-        pins = _load_pins(args.pins)
+        pins, pins_sha256 = _load_pins(args.pins)
     except CheckpointReadError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+    pins_path_str = str(args.pins.resolve()) if args.pins is not None else None
 
     results: List[Dict[str, Any]] = []
     any_error = setup_error
@@ -503,6 +527,8 @@ def run(argv: Optional[List[str]] = None) -> int:
         "schema": "voicegenesis-checkpoint-finite-report/0.1",
         "torch_version": str(torch_module.__version__),
         "pin_verification": "requested" if pins is not None else "not_requested",
+        "pins_path": pins_path_str,
+        "pins_sha256": pins_sha256,
         "expected_set": expected_set,
         "checked_set": checked_set,
         "missing": missing,
