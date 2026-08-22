@@ -1,0 +1,27 @@
+{
+  "schema": "voicegenesis-af-t0-fixtures/1.0",
+  "role": "holdout",
+  "_note": "§12。AF0 target（r_share 0.20 / -12 dBFS / 35 ms）はcandidate fitting に使わない。ここに現れたら t0_schema が拒否する。",
+  "fixtures": {
+    "duration": [
+      {
+        "id": "dur_holdout",
+        "r_onset_share": 0.3,
+        "r_onset_ms": 60.0,
+        "i_vowel_ms": 140.0
+      }
+    ],
+    "energy": [
+      {
+        "id": "en_holdout",
+        "sustain_dbfs": -9.0
+      }
+    ],
+    "afterglow": [
+      {
+        "id": "ag_holdout",
+        "ar_alpha_afterglow_extra_ms": 55.0
+      }
+    ]
+  }
+}
