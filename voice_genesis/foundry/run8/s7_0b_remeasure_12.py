@@ -149,7 +149,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         g = groups[-1]
         print(
             f"| {g['generation']}/{g['speaker']}: unvoiced-ref 1.0={g['n_unvoiced_reference_1_0']} "
-            f"-> 1.1={g['n_unvoiced_reference_1_1']} obtainable={g['ringing_reference_obtainable']}"
+            f"-> 1.2={g['n_unvoiced_reference_1_2']} obtainable={g['ringing_reference_obtainable']}"
         )
     doc = {
         "schema": DIAG_SCHEMA,
