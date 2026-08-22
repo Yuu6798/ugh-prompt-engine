@@ -41,6 +41,12 @@ fail-closed 契約（2026-08-22 セルフレビュー修正1-4 + Codex bot レ�
 - pin 照合は同一ファイル名に対する全マッチを収集し、矛盾する（distinct な）
   sha256 が2つ以上見つかれば `pin_conflict` として fail-closed にする
   （Codex 第3巡 3-3。従来は再帰探索の先勝ちで順序依存だった）。
+- `--pins` 指定時、pin 照合は sha256 算出の直後・torch.load を呼ぶ**前**に
+  行う（Codex 第4巡 4-1）。不一致・pin 未検出・pin_conflict のいずれも
+  deserialize せず fail-closed にする。primary の torch.load は
+  `weights_only=True`（安全側）を維持し、旧 torch の TypeError フォール
+  バック経路（weights_only 非対応 = 事実上の unsafe pickle 実行）へは、
+  pin 照合済み（または `--pins` 未指定）のバイト列に限って進む。
 """
 from __future__ import annotations
 
@@ -154,7 +160,9 @@ def _extract_state_dict(loaded: Any) -> Dict[str, Any]:
     return candidate
 
 
-def check_one_checkpoint(path: Path, torch_module: Any) -> Dict[str, Any]:
+def check_one_checkpoint(
+    path: Path, torch_module: Any, *, pins: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """1 checkpoint を検査し、結果 dict を返す。読み込み失敗時は
     `CheckpointReadError` を投げる（fail-closed。呼び出し側が捕捉して
     error エントリへ変換する）。
@@ -166,6 +174,17 @@ def check_one_checkpoint(path: Path, torch_module: Any) -> Dict[str, Any]:
     （weights_only 非対応の旧 torch フォールバック経路も同様）。str パスを
     2回目以降 open し直すと、間でファイルが差し替わった場合に「旧バイトの
     hash × 新バイトの finite 判定」が対になり得た。
+
+    pin 照合の順序（Codex 第4巡 4-1）: `pins` が渡された場合、sha256 算出の
+    直後・torch.load を呼ぶ**前**に pin 照合する。不一致
+    （reason="pin_sha256_mismatch"）・pin 未検出（reason="pin_not_found"）・
+    矛盾する重複 pin（reason="pin_conflict"、`_match_pin` 自身が送出）の
+    いずれも deserialize せず fail-closed で送出する。pin と一致しない
+    （＝信頼できない）バイト列に対して torch.load
+    （weights_only 非対応の旧 torch フォールバック経路は事実上の unsafe
+    pickle 実行）が一切呼ばれないようにするため。`pins` が `None`
+    （`--pins` 未指定）の場合は従来どおり pin 照合なしで deserialize する。
+    primary の torch.load は `weights_only=True`（安全側）を維持する。
     """
     if not path.exists():
         raise CheckpointReadError(f"checkpoint が存在しません: {path}")
@@ -180,9 +199,27 @@ def check_one_checkpoint(path: Path, torch_module: Any) -> Dict[str, Any]:
 
     sha256 = hashlib.sha256(data).hexdigest()
 
+    pin_sha256_match: Optional[bool] = None
+    if pins is not None:
+        # deserialize（torch.load）より前に pin 照合する（Codex 第4巡 4-1）。
+        # `_match_pin` は矛盾する重複 pin を見つけた場合
+        # CheckpointReadError(reason="pin_conflict") を自ら送出する
+        # （呼び出し元まで素通しで伝播させる）。
+        match = _match_pin(path, sha256, pins)
+        if match is None:
+            raise CheckpointReadError(
+                f"--pins に {path.name} (sha256={sha256}) に対応する pin が見つかりません",
+                reason="pin_not_found",
+            )
+        if match is False:
+            raise CheckpointReadError(
+                f"pin と実測 sha256 ({sha256}) が一致しません", reason="pin_sha256_mismatch"
+            )
+        pin_sha256_match = True
+
     try:
         try:
-            loaded = torch_module.load(io.BytesIO(data), map_location="cpu", weights_only=False)
+            loaded = torch_module.load(io.BytesIO(data), map_location="cpu", weights_only=True)
         except TypeError:
             # 旧 torch は weights_only 引数を持たない。フォールバック経路自体の
             # 例外も fail-closed で CheckpointReadError に包む（修正3: 従来は
@@ -190,6 +227,8 @@ def check_one_checkpoint(path: Path, torch_module: Any) -> Dict[str, Any]:
             # --out 未書き込みのままクラッシュし得た）。同一バッファから新規
             # BytesIO を作り直す（先の呼び出しでストリーム位置が進んでいる
             # 可能性があるため使い回さない。ディスクは一切再読込しない）。
+            # ここに到達するのは pins が None、または pin 照合を通過した
+            # バイト列に限る（4-1）。
             try:
                 loaded = torch_module.load(io.BytesIO(data), map_location="cpu")
             except Exception as exc:  # noqa: BLE001 - fail-closed で理由を記録するため捕捉
@@ -240,7 +279,7 @@ def check_one_checkpoint(path: Path, torch_module: Any) -> Dict[str, Any]:
             reason="no_tensors_inspected",
         )
 
-    return {
+    result: Dict[str, Any] = {
         "path": str(path),
         "sha256": sha256,
         "checked_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -253,6 +292,9 @@ def check_one_checkpoint(path: Path, torch_module: Any) -> Dict[str, Any]:
         "all_finite": total_non_finite == 0,
         "status": "ok",
     }
+    if pin_sha256_match is not None:
+        result["pin_sha256_match"] = pin_sha256_match
+    return result
 
 
 def _load_pins(pins_path: Optional[Path]) -> Optional[Dict[str, Any]]:
@@ -434,7 +476,13 @@ def run(argv: Optional[List[str]] = None) -> int:
     any_error = setup_error
     for ckpt_path in args.checkpoints:
         try:
-            result = check_one_checkpoint(ckpt_path, torch_module)
+            # pin 照合（--pins 指定時）は check_one_checkpoint 内部で
+            # torch.load の前に行われる（Codex 第4巡 4-1）。不一致・
+            # pin 未検出・pin_conflict はすべて CheckpointReadError として
+            # ここに伝播し、下の except 節が error エントリへ変換する
+            # （run() 側での後付け pin 照合は行わない — deserialize 前に
+            # 弾くのが目的のため）。
+            result = check_one_checkpoint(ckpt_path, torch_module, pins=pins)
         except CheckpointReadError as exc:
             any_error = True
             results.append(_error_entry(ckpt_path, exc))
@@ -448,41 +496,6 @@ def run(argv: Optional[List[str]] = None) -> int:
                 )
             )
             continue
-
-        if pins is not None:
-            try:
-                match = _match_pin(ckpt_path, result["sha256"], pins)
-            except CheckpointReadError as exc:
-                # pin_conflict（修正3-3: 矛盾する重複 pin エントリ）等、
-                # _match_pin 自身が理由付きで fail-closed 送出したケース。
-                any_error = True
-                result["status"] = "error"
-                result["reason"] = exc.reason or "pin_check_error"
-                result["error"] = str(exc)
-                results.append(result)
-                continue
-            except Exception as exc:  # noqa: BLE001 - pin 照合自体の予期しない失敗も fail-closed
-                any_error = True
-                result["status"] = "error"
-                result["reason"] = "pin_check_unexpected_error"
-                result["error"] = f"pin 照合中に予期しないエラー: {exc}"
-                results.append(result)
-                continue
-
-            result["pin_sha256_match"] = match
-            if match is None:
-                # --pins 指定時に pin が見つからない checkpoint も fail-closed。
-                any_error = True
-                result["status"] = "error"
-                result["reason"] = "pin_not_found"
-                result["error"] = (
-                    f"--pins に {ckpt_path.name} に対応する sha256 が見つかりません"
-                )
-            elif match is False:
-                any_error = True
-                result["status"] = "error"
-                result["reason"] = "pin_sha256_mismatch"
-                result["error"] = "pin と実測 sha256 が一致しません"
 
         results.append(result)
 

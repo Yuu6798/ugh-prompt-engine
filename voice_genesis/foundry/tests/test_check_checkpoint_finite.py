@@ -105,6 +105,27 @@ class _RecordingSuccessTorchModule:
         return _AlwaysFiniteResult()
 
 
+class _LoadCallRecordingTorchModule:
+    """`torch.load` が呼ばれたかどうかだけを記録する最小限のフェイク
+    torch module。Codex 第4巡 4-1（pin 照合を deserialize より前に行う）の
+    回帰テスト専用: pin 不一致/未検出/conflict のとき load が一度も
+    呼ばれないことを検証する。呼ばれたこと自体が契約違反なので、呼ばれた
+    場合は明示的に例外も送出する（フラグの確認漏れを防ぐ二重の安全網）。
+    """
+
+    __version__ = "fake"
+
+    def __init__(self) -> None:
+        self.load_called = False
+
+    def load(self, *args: Any, **kwargs: Any) -> Any:
+        self.load_called = True
+        raise AssertionError(
+            "torch.load が呼ばれました（pin 照合より前に deserialize している = "
+            "Codex 第4巡 4-1 再発）"
+        )
+
+
 def test_sha256_of_file_matches_hashlib_reference(tmp_path: Path) -> None:
     p = tmp_path / "sample.bin"
     p.write_bytes(b"voice genesis checkpoint finite check")
@@ -469,7 +490,10 @@ def test_run_reports_error_entry_for_zero_tensors_checked(tmp_path: Path) -> Non
 
 
 def test_run_marks_pin_mismatch_as_error_and_nonzero_exit(tmp_path: Path) -> None:
-    """修正2: pin_sha256_match == False は fail-closed で error 扱いになる。"""
+    """修正2: pin 不一致は fail-closed で error 扱いになる。Codex 第4巡 4-1
+    以降、pin 照合は deserialize より前に行われるため、mismatch エントリは
+    finite 判定フィールド（pin_sha256_match 含む）を持たない
+    （`_error_entry` の一般形のみ — deserialize 自体が実行されていない）。"""
     torch = pytest.importorskip("torch")
     ckpt = tmp_path / "model_ckpt_steps_5000.ckpt"
     torch.save({"state_dict": {"w": torch.tensor([1.0, 2.0])}}, str(ckpt))
@@ -486,13 +510,15 @@ def test_run_marks_pin_mismatch_as_error_and_nonzero_exit(tmp_path: Path) -> Non
     entry = report["checkpoints"][0]
     assert entry["status"] == "error"
     assert entry["reason"] == "pin_sha256_mismatch"
-    assert entry["pin_sha256_match"] is False
+    assert "pin_sha256_match" not in entry
+    assert "all_finite" not in entry
     assert report["all_ok"] is False
     assert report["pin_verification"] == "requested"
 
 
 def test_run_marks_pin_not_found_as_error_and_nonzero_exit(tmp_path: Path) -> None:
-    """修正2: --pins 指定時に pin が見つからない checkpoint も fail-closed。"""
+    """修正2: --pins 指定時に pin が見つからない checkpoint も fail-closed。
+    Codex 第4巡 4-1 以降、こちらも deserialize より前に弾かれる。"""
     torch = pytest.importorskip("torch")
     ckpt = tmp_path / "unrelated.ckpt"
     torch.save({"state_dict": {"w": torch.tensor([1.0, 2.0])}}, str(ckpt))
@@ -507,7 +533,28 @@ def test_run_marks_pin_not_found_as_error_and_nonzero_exit(tmp_path: Path) -> No
     entry = report["checkpoints"][0]
     assert entry["status"] == "error"
     assert entry["reason"] == "pin_not_found"
-    assert entry["pin_sha256_match"] is None
+    assert "pin_sha256_match" not in entry
+    assert "all_finite" not in entry
+
+
+def test_check_one_checkpoint_does_not_call_load_on_pin_mismatch(tmp_path: Path) -> None:
+    """Codex 第4巡 4-1: pin 不一致のとき torch.load（フェイク）が一度も
+    呼ばれないことを、フェイク torch module の呼び出し記録で検証する
+    （deserialize より前に pin 照合する回帰テスト。weights_only=False
+    フォールバック経路の unsafe pickle 実行が悪性/不一致バイトに到達しない
+    ことの直接証拠）。"""
+    ckpt = tmp_path / "model_ckpt_steps_5000.ckpt"
+    ckpt.write_bytes(b"arbitrary-checkpoint-bytes-that-should-never-be-deserialized")
+    actual_sha256 = ccf._sha256_of_file(ckpt)
+    mismatched_pins = {"checkpoints": {ckpt.name: "0" * 64}}
+    assert mismatched_pins["checkpoints"][ckpt.name] != actual_sha256
+
+    fake_torch = _LoadCallRecordingTorchModule()
+    with pytest.raises(ccf.CheckpointReadError) as exc_info:
+        ccf.check_one_checkpoint(ckpt, fake_torch, pins=mismatched_pins)
+
+    assert exc_info.value.reason == "pin_sha256_mismatch"
+    assert fake_torch.load_called is False
 
 
 def test_run_pin_match_ok_keeps_status_ok(tmp_path: Path) -> None:
