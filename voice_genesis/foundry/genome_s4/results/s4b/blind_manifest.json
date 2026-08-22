@@ -1,0 +1,36 @@
+{
+  "schema": "voicegenesis-genome-s4b/1.0",
+  "s4_results_sha256": "af7ddbde5c154eacf8f5da2aa360d8d9eaed39d007cb73ba2b9f1db2f340ea05",
+  "trial_ids": [
+    "Q001",
+    "Q002",
+    "Q003",
+    "Q004"
+  ],
+  "audio_sha256": {
+    "Q001": {
+      "Q001_A.wav": "3289e357071dcae55c7e5ea6f1bee37ec70b597678277502f412dfe4ff43060e",
+      "Q001_B.wav": "44b5316ddbc70b23cdf63abe9661c190ed46862dbd177b98a7880e1ef3743882",
+      "Q001_X.wav": "3289e357071dcae55c7e5ea6f1bee37ec70b597678277502f412dfe4ff43060e"
+    },
+    "Q002": {
+      "Q002_A.wav": "d391aa008e540bf410c2c19c26a404323291a6f835af785ec1849e357323a494",
+      "Q002_B.wav": "97ac3315d7e3cfc85aec37cb36d65536d3cf297207eb6d826159536742178ce9",
+      "Q002_X.wav": "97ac3315d7e3cfc85aec37cb36d65536d3cf297207eb6d826159536742178ce9"
+    },
+    "Q003": {
+      "Q003_A.wav": "d391aa008e540bf410c2c19c26a404323291a6f835af785ec1849e357323a494",
+      "Q003_B.wav": "08d2c82b75f78c94ee5627d6bae9472ab887c8405cd2e3747f1c5af2b1d457a7",
+      "Q003_X.wav": "d391aa008e540bf410c2c19c26a404323291a6f835af785ec1849e357323a494"
+    },
+    "Q004": {
+      "Q004_A.wav": "44b5316ddbc70b23cdf63abe9661c190ed46862dbd177b98a7880e1ef3743882",
+      "Q004_B.wav": "f9f19a7699fba0ad171d2af791d18da5b2dc41a4de52b5aaf93e6da388d29424",
+      "Q004_X.wav": "f9f19a7699fba0ad171d2af791d18da5b2dc41a4de52b5aaf93e6da388d29424"
+    }
+  },
+  "key_commitment": "1c1142b3d38195666991362d89c0d0120927b6026b74973c66c6732c14340fa9",
+  "instructions": {
+    "ABX": "A と B を聴き、X が A と B のどちらと同じかを答える（A / B / UNSURE）。"
+  }
+}

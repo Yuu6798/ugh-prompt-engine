@@ -1,0 +1,117 @@
+{
+  "schema": "voicegenesis-genome-s4b/1.0",
+  "purpose": "複合発現時に F0 / Duration の差が別 pair でも耳へ残るかの確認。S4 本体の結果は変更しない。",
+  "s4_results_sha256": "af7ddbde5c154eacf8f5da2aa360d8d9eaed39d007cb73ba2b9f1db2f340ea05",
+  "selection_rule": "s4b-salience-v1: S3 SUPPORTED & S4 COMBINABLE & identity_margin>0 のうち intervention amount 最大（同値は pair_key 昇順）",
+  "selection": [
+    {
+      "context_id": "medial_ri",
+      "gene": "f0",
+      "identity_margin_db": 9.315004,
+      "intervention_amount": 354.00266411298867,
+      "intervention_unit": "cent",
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "rank": "max_salience"
+    },
+    {
+      "context_id": "terminal_i",
+      "gene": "f0",
+      "identity_margin_db": 8.218385,
+      "intervention_amount": 351.06930921889773,
+      "intervention_unit": "cent",
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "rank": "max_salience_other_context"
+    },
+    {
+      "context_id": "terminal_i",
+      "gene": "duration",
+      "identity_margin_db": 8.218385,
+      "intervention_amount": 53.90359399999568,
+      "intervention_unit": "ms",
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "rank": "max_salience"
+    },
+    {
+      "context_id": "medial_ri",
+      "gene": "duration",
+      "identity_margin_db": 9.315004,
+      "intervention_amount": 43.29845940801922,
+      "intervention_unit": "ms",
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "rank": "max_salience_other_context"
+    }
+  ],
+  "audio_source": "S4 canonical WAV の byte copy（再生成・補正・normalize なし）",
+  "source_wav_sha256": {
+    "medial_ri|1st_color#357|pjs002#54|D": "f9f19a7699fba0ad171d2af791d18da5b2dc41a4de52b5aaf93e6da388d29424",
+    "medial_ri|1st_color#357|pjs002#54|F": "3289e357071dcae55c7e5ea6f1bee37ec70b597678277502f412dfe4ff43060e",
+    "medial_ri|1st_color#357|pjs002#54|FD": "44b5316ddbc70b23cdf63abe9661c190ed46862dbd177b98a7880e1ef3743882",
+    "terminal_i|1st_color#218|pjs001#73|D": "97ac3315d7e3cfc85aec37cb36d65536d3cf297207eb6d826159536742178ce9",
+    "terminal_i|1st_color#218|pjs001#73|F": "08d2c82b75f78c94ee5627d6bae9472ab887c8405cd2e3747f1c5af2b1d457a7",
+    "terminal_i|1st_color#218|pjs001#73|FD": "d391aa008e540bf410c2c19c26a404323291a6f835af785ec1849e357323a494"
+  },
+  "source_wav_pin_note": "s4_results.json は per-file の wav_sha256 を記録していないため、S4b が記録するのは実際に読んだ bytes の self-pin であり、S4 側 pin との cross-check ではない",
+  "abx_correct": 3,
+  "abx_total": 4,
+  "cells": [
+    {
+      "trial_id": "Q001",
+      "gene": "duration",
+      "context_id": "medial_ri",
+      "answer": "B",
+      "correct": false,
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "rank": "max_salience_other_context",
+      "intervention_amount": 43.29845940801922,
+      "intervention_unit": "ms"
+    },
+    {
+      "trial_id": "Q002",
+      "gene": "f0",
+      "context_id": "terminal_i",
+      "answer": "B",
+      "correct": true,
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "rank": "max_salience_other_context",
+      "intervention_amount": 351.06930921889773,
+      "intervention_unit": "cent"
+    },
+    {
+      "trial_id": "Q003",
+      "gene": "duration",
+      "context_id": "terminal_i",
+      "answer": "A",
+      "correct": true,
+      "pair_key": "terminal_i|1st_color#218|pjs001#73",
+      "rank": "max_salience",
+      "intervention_amount": 53.90359399999568,
+      "intervention_unit": "ms"
+    },
+    {
+      "trial_id": "Q004",
+      "gene": "f0",
+      "context_id": "medial_ri",
+      "answer": "B",
+      "correct": true,
+      "pair_key": "medial_ri|1st_color#357|pjs002#54",
+      "rank": "max_salience",
+      "intervention_amount": 354.00266411298867,
+      "intervention_unit": "cent"
+    }
+  ],
+  "by_gene": {
+    "f0": 2,
+    "duration": 1
+  },
+  "by_context": {
+    "medial_ri": 1,
+    "terminal_i": 2
+  },
+  "answers_sha256": "818d17e71b96c63d2a7a6c8606277e1696a51e50314519ff618c0edebd398fae",
+  "key_commitment": "1c1142b3d38195666991362d89c0d0120927b6026b74973c66c6732c14340fa9",
+  "commitment_verified": true,
+  "pack_audio_verified": true,
+  "answer_binding_verified": true,
+  "verdict": "NOT_CONFIRMED",
+  "s4_overall_unchanged": true
+}

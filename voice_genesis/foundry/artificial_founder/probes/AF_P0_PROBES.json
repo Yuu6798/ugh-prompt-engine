@@ -1,0 +1,27 @@
+{
+  "schema": "voicegenesis-artificial-founder-probes/1.1",
+  "experiment_id": "AF-P0",
+  "_note": "§25 probes/。Body と re-expression の両方で、同じ probe 定義から決定論的に診断ダンプを作る。probe は判定に使わない（診断専用）。",
+
+  "spectrum_probes": {
+    "aliases": ["a", "i", "u", "e", "o", "ri"],
+    "region": "sustain",
+    "nfft": 8192,
+    "band_hz": [0.0, 8000.0],
+    "n_points": 512,
+    "round_decimals": 4
+  },
+
+  "envelope_probes": {
+    "aliases": ["a", "ri"],
+    "hop_ms": 1.0,
+    "round_decimals": 6
+  },
+
+  "afterglow_probes": {
+    "aliases": ["a", "i"],
+    "bands": ["main", "ar_alpha"],
+    "hop_ms": 0.5,
+    "round_decimals": 6
+  }
+}
