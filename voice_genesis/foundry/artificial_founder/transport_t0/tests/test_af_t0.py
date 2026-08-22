@@ -1182,17 +1182,28 @@ def test_closeout_sha256sums_match_the_published_tree():
     """C-6。SHA256SUMS と版管理下の実体が一致する。"""
     from af_spec import sha256_file
     sums = (RESULTS / "SHA256SUMS.txt").read_text(encoding="utf-8")
-    checked = 0
+    entries = {}
     for line in sums.splitlines():
         if not line.strip():
             continue
         digest, _, name = line.partition("  ")
-        path = RESULTS / name.strip()
-        if not path.exists():
-            continue          # probes / sidecars は版管理外（.gitignore）
-        assert sha256_file(path) == digest.strip(), name
-        checked += 1
-    assert checked >= 10
+        entries[name.strip()] = digest.strip()
+    assert entries, "manifest is empty"
+
+    # **マニフェストが名指しした全ファイルが存在し、一致すること。**
+    # 以前は存在しないものを黙って読み飛ばし `checked >= 10` を見ていたが、
+    # それでは「62 件一致」という記録の主張を検証できず、クリーン
+    # チェックアウトでは件数不足で落ちた（レビュー第 7 巡）。
+    missing = [n for n in entries if not (RESULTS / n).exists()]
+    assert not missing, f"manifest names files that are not shipped: {missing}"
+    for name, digest in sorted(entries.items()):
+        assert sha256_file(RESULTS / name) == digest, name
+
+    # 逆向き: 出荷したファイルがマニフェストに載っていること
+    shipped = {str(p.relative_to(RESULTS)) for p in RESULTS.rglob("*")
+               if p.is_file() and p.name != "SHA256SUMS.txt"}
+    unlisted = sorted(shipped - set(entries))
+    assert not unlisted, f"shipped files missing from the manifest: {unlisted}"
 
 
 @requires_results

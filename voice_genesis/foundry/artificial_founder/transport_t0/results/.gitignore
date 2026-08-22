@@ -1,17 +1,12 @@
-# AF-T0 の判定・provenance だけを版管理へ載せる。
-# 輸送後 WAV / 段台帳の生波形は T0-G8 が同一ダイジェストを保証するため除外する。
-*
-!.gitignore
-!AF_T0/
-AF_T0/*
-!AF_T0/t0_results.json
-!AF_T0/AF_T0_RECORD.md
-!AF_T0/localization_report.json
-!AF_T0/transport_registry.json
-!AF_T0/combined_comparison.json
-!AF_T0/fresh_confirmation.json
-!AF_T0/input_pins.json
-!AF_T0/code_closure.json
-!AF_T0/source_free_attestation.json
-!AF_T0/SHA256SUMS.txt
-!AF_T0/freeze/
+# AF-T0 の canonical 成果物ツリーは **SHA256SUMS.txt が名指しする全ファイルを
+# 出荷する**。マニフェストと出荷範囲が食い違うと、クリーンチェックアウトで
+# `sha256sum -c SHA256SUMS.txt` が失敗し、記録の「全エントリ一致」という主張が
+# 偽になる（レビュー第 7 巡の指摘）。
+#
+# 実測サイズ: JSON 記録 約 412K（sidecars 104K / stage_ledger 300K /
+# measurements 8K）+ 輸送後 WAV 約 552K = 約 1MB。自己検証可能な記録の価値に
+# 対して十分小さい。
+#
+# 除外するのは run 中の一時ツリーだけ。
+.AF_T0.staging*
+.AF_T0.previous*
