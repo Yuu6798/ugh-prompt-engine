@@ -275,8 +275,12 @@ def render_derived(
         base = by_id[base_id]
         gain = float(cond.get("gain", 1.0))
         base_path = out_dir / str(base["wav"])
-        y, sr = sf.read(str(base_path), dtype="float32", always_2d=False)
-        y = np.asarray(y, dtype=np.float32) * np.float32(gain)
+        # 直前に自分が書いた WAV でも、記録した pin と照合してから読む
+        # （PR #303 レビュー指摘: WAV を測る/派生させる全経路を s7_io へ集約）。
+        y64, sr = s7_io.read_wav_with_pins(
+            base_path, base["wav_sha256"], base["samples_sha256"]
+        )
+        y = np.asarray(y64, dtype=np.float32) * np.float32(gain)
         wav_path = out_dir / f"{cid}.wav"
         sf.write(str(wav_path), y, int(sr), subtype="FLOAT")
         samples_sha = _samples_sha256(y)

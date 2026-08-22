@@ -13,7 +13,15 @@
 #
 # 性質:
 #   - **冪等**: 既に在って sha が一致するファイルは再取得しない（照合だけする）
-#   - **fail-closed**: sha が食い違ったら**その場で停止**する。差し替えない・続行しない
+#   - **fail-closed**: 失敗は 1 件残らず `FAIL` へ計上し、**最後に exit 1 で止める**。
+#     途中の工程を静かに素通りさせない（PR #303 レビュー指摘: errexit が無いうえに
+#     展開・clone/checkout・スタック復元の失敗が `FAIL` に計上されず、
+#     **pin されていない checkout のまま最終行の成功文言へ到達できた**）。
+#     即時 abort ではなく計上して続けるのは意図的で、1 回の実行で壊れている資産を
+#     全部並べるため。ただし後段が前段の成功を前提にする箇所（export venv は
+#     pin された DiffSinger を前提にする）は、その前段が落ちたら実行しない。
+#   - **staging 経由**: 取得は `.part` へ落とし、**sha が一致したものだけ**正規の
+#     名前へ移す（失敗した取得が、既に在る照合済みファイルを壊さない）
 #   - **推測しない**: 取得元と期待 sha は下表に固定。表に無い資産は取りに行かない
 set -uo pipefail
 
@@ -55,17 +63,25 @@ fetch () {
   if [ -f "$dest" ] && [ "$(sha_of "$dest")" = "$want" ]; then
     printf '  %-14s SKIP (already pinned)\n' "$name"; SKIP=$((SKIP+1)); return 0
   fi
+  # staging へ落とす。失敗した取得が、既に在る照合済みファイルを壊さないため。
+  local part="$dest.part" rc=0
+  rm -f "$part"
   case "$src" in
-    url:*)   curl -sS -L -o "$dest" "${src#url:}" ;;
-    drive:*) curl -sS -L -o "$dest" \
-               "https://drive.usercontent.google.com/download?id=${src#drive:}&export=download&confirm=t" ;;
+    url:*)   curl -fsS -L -o "$part" "${src#url:}" || rc=$? ;;
+    drive:*) curl -fsS -L -o "$part" \
+               "https://drive.usercontent.google.com/download?id=${src#drive:}&export=download&confirm=t" || rc=$? ;;
     *) echo "  $name: unknown source $src" >&2; FAIL=$((FAIL+1)); return 1 ;;
   esac
-  local got; got="$(sha_of "$dest")"
+  if [ "$rc" -ne 0 ] || [ ! -s "$part" ]; then
+    printf '  %-14s FAIL 取得できなかった (curl rc=%s)\n' "$name" "$rc" >&2
+    rm -f "$part"; FAIL=$((FAIL+1)); return 1
+  fi
+  local got; got="$(sha_of "$part")"
   if [ "$got" != "$want" ]; then
     printf '  %-14s FAIL sha %s != %s\n' "$name" "${got:0:16}" "${want:0:16}" >&2
-    FAIL=$((FAIL+1)); return 1
+    rm -f "$part"; FAIL=$((FAIL+1)); return 1
   fi
+  mv -f "$part" "$dest"
   printf '  %-14s OK   %s\n' "$name" "${got:0:16}"; OK=$((OK+1))
 }
 
@@ -78,11 +94,19 @@ done <<< "$ASSETS"
 
 echo "| 2. 展開（展開後の実体も照合する）"
 mkdir -p "$M/extracted/ds" "$M/vocoder_onnx"
-if [ ! -f "$M/extracted/ds/NamineRitsu_DiffSinger/acoustic.onnx" ]; then
-  ( cd "$M/extracted/ds" && unzip -o -q "$M/NamineRitsu_DiffSinger.zip" )
+DS_ACOUSTIC="$M/extracted/ds/NamineRitsu_DiffSinger/acoustic.onnx"
+if [ ! -f "$DS_ACOUSTIC" ]; then
+  ( cd "$M/extracted/ds" && unzip -o -q "$M/NamineRitsu_DiffSinger.zip" ) \
+    || { echo "  canon zip        FAIL 展開に失敗" >&2; FAIL=$((FAIL+1)); }
+fi
+if [ -f "$DS_ACOUSTIC" ]; then
+  echo "  canon zip        OK   acoustic.onnx"
+else
+  echo "  canon zip        FAIL 展開後に acoustic.onnx が無い" >&2; FAIL=$((FAIL+1))
 fi
 if [ ! -f "$M/vocoder_onnx/nsf_hifigan.onnx" ]; then
-  ( cd "$M/vocoder_onnx" && unzip -o -q "$M/nsf_hifigan.oudep" )
+  ( cd "$M/vocoder_onnx" && unzip -o -q "$M/nsf_hifigan.oudep" ) \
+    || { echo "  vocoder oudep    FAIL 展開に失敗" >&2; FAIL=$((FAIL+1)); }
 fi
 VOC_WANT=a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4
 VOC_GOT="$(sha_of "$M/vocoder_onnx/nsf_hifigan.onnx")"
@@ -93,10 +117,22 @@ else
 fi
 
 echo "| 3. DiffSinger (openvpi e2307b1)"
+DS_OK=0
 if [ ! -d "$M/DiffSinger/.git" ]; then
-  git clone -q https://github.com/openvpi/DiffSinger.git "$M/DiffSinger"
+  git clone -q https://github.com/openvpi/DiffSinger.git "$M/DiffSinger" \
+    || { echo "  DiffSinger     FAIL clone できなかった" >&2; FAIL=$((FAIL+1)); }
 fi
-( cd "$M/DiffSinger" && git checkout -q e2307b1 && echo "  DiffSinger     OK   $(git rev-parse --short HEAD)" )
+# checkout が落ちたまま先へ進むと、**pin されていない版から export** してしまう。
+if ( cd "$M/DiffSinger" && git checkout -q e2307b1 ) 2>/dev/null; then
+  DS_REV="$( cd "$M/DiffSinger" && git rev-parse --short HEAD )"
+  if [ "$DS_REV" = "e2307b1" ]; then
+    echo "  DiffSinger     OK   $DS_REV"; DS_OK=1
+  else
+    echo "  DiffSinger     FAIL HEAD $DS_REV != e2307b1" >&2; FAIL=$((FAIL+1))
+  fi
+else
+  echo "  DiffSinger     FAIL checkout e2307b1 に失敗" >&2; FAIL=$((FAIL+1))
+fi
 
 echo "| 4. ANALYSIS_STACK_PIN（測定側インタプリタ）"
 python - <<'PY'
@@ -108,16 +144,28 @@ if not bad:
 else:
     print(f"  analysis stack MISMATCH {bad} -> 復元する（pin は差し替えない）")
     for p in bad:
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", f"{p}=={PIN[p]}"], check=True)
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", f"{p}=={PIN[p]}"])
+        if r.returncode != 0:
+            print(f"  analysis stack FAIL {p}=={PIN[p]} を入れられなかった", file=sys.stderr)
+            raise SystemExit(1)
     still = {p: md.version(p) for p in PIN if md.version(p) != PIN[p]}
-    print("  analysis stack " + ("RESTORED" if not still else f"STILL BAD {still}"))
+    if still:
+        print(f"  analysis stack STILL BAD {still}", file=sys.stderr)
+        raise SystemExit(1)
+    print("  analysis stack RESTORED")
 PY
+[ "$?" -eq 0 ] || { echo "  analysis stack FAIL 復元できなかった" >&2; FAIL=$((FAIL+1)); }
 
 echo "| 5. export 用の隔離 venv（DiffSinger は numpy<2 を要求する）"
 # 測定側インタプリタ（numpy 2.4.6 / librosa 0.11.0）とは **別** に保つ。
 # 2026-08-22 実測: 再構築後に requirements を入れ直すと numpy が 2.x へ引き上げられて
 # export が壊れる。requirements.txt を入れた **後で** numpy を pin へ戻す順序が要る。
 VENV="$ROOT/venv_export"
+if [ "$DS_OK" -ne 1 ]; then
+  # requirements.txt は DiffSinger の checkout に属する。pin されていない版から
+  # 依存を入れると、export 環境の由来が言えなくなる。
+  echo "  export venv    SKIP（DiffSinger が e2307b1 に pin されていないので組まない）" >&2
+else
 if [ ! -x "$VENV/bin/python" ]; then
   python -m venv "$VENV"
   "$VENV/bin/pip" -q install --upgrade pip >/dev/null 2>&1
@@ -131,6 +179,7 @@ if [ -n "$VENV_CHECK" ]; then
 else
   echo "  export venv    FAIL（numpy<2 で torch/lightning/onnx が揃っていない）" >&2
   FAIL=$((FAIL+1))
+fi
 fi
 
 echo "| result: OK=$OK SKIP=$SKIP FAIL=$FAIL"

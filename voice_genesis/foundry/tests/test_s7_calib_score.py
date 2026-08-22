@@ -169,6 +169,9 @@ def _fake_manifest(tmp_path: Path, prereg_sha: str, rrs) -> Path:
                 "maps_to": maps_to,
                 "wav": wav.name,
                 "wav_sha256": sha,
+                # 標本 sha は**必須**（PR #303 レビュー対応で optional をやめた。
+                # キーが無いだけで最強の照合が黙って飛ぶのは穴だった）。
+                "samples_sha256": s7_io.sha256_bytes(np.ascontiguousarray(y).tobytes()),
                 "note_onset_s": 0.1,
                 "commanded_note_end_s": 1.0,
                 "score_boundary_s": 1.0,
@@ -281,6 +284,23 @@ def test_zero_buffer_must_be_bit_exact_zero(tmp_path, rrs):
         if cond["condition_id"] == "rr_zero_buffer":
             _, sha, _ = s7_io.read_bytes_with_pin(victim)
             cond["wav_sha256"] = sha
+    path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(b1.RealRenderManifestError):
+        b1.real_render_source(prereg, path)
+
+
+def test_real_render_source_rejects_a_manifest_without_sample_pins(tmp_path, rrs):
+    """`samples_sha256` が無い manifest は測らない。
+
+    以前はこのキーを optional 扱いしていたので、**キーを消すだけで**標本照合を
+    回避できた（容器 sha は再レンダで必ず変わるので、実質「照合なし」になる）。
+    PR #303 レビュー対応で必須にした。
+    """
+    prereg = b1.load_prereg()
+    path = _fake_manifest(tmp_path, prereg.pins[CALIBRATION_SET_PATH.name], rrs)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    for c in doc["conditions"]:
+        c.pop("samples_sha256")
     path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     with pytest.raises(b1.RealRenderManifestError):
         b1.real_render_source(prereg, path)

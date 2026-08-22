@@ -178,29 +178,81 @@ def measure_candidate_12(cand: Cand12, stim: b1.Stimulus) -> Dict[str, float]:
 # --- 校正音源（1.2 manifest。振幅 rung を含む） ------------------------------
 
 
-def source_12(manifest_path: Path, cal: Dict[str, Any]) -> Any:
-    """1.2 manifest を読み、刺激辞書と境界を作る（1.0 の照合規律を踏襲）。"""
-    import io as _io
-    import soundfile as sf
+class Manifest12Error(ValueError):
+    """1.2 manifest が事前登録と結びついていない（fail-closed）。"""
 
+
+def _expected_condition_ids_12(cal: Dict[str, Any], cal_1_0: Dict[str, Any]) -> List[str]:
+    """1.2 で測るべき条件 ID の**厳密集合**を事前登録から組み立てる。
+
+    = 1.0 `real_render_set` の条件 + 派生 + zero buffer + 1.2 の振幅 rung。
+    """
+    rrs = cal_1_0["real_render_set"]
+    ids = [str(c["id"]) for c in rrs["conditions"]]
+    ids += [str(d["id"]) for d in rrs.get("derived", [])]
+    ids += [str(z["id"]) for z in rrs.get("zero_buffers", [])]
+    ids += [str(r["id"]) for r in cal["amplitude_ladder"]["rungs"]]
+    return ids
+
+
+def source_12(manifest_path: Path, cal: Dict[str, Any]) -> Any:
+    """1.2 manifest を読み、刺激辞書と境界を作る（1.0 の照合規律を踏襲）。
+
+    照合は 1.0 `real_render_source` と**同じ 4 段**にする（PR #303 レビュー指摘:
+    ここだけ「rung ID が含まれていれば良い」という部分集合検査で、schema・
+    事前登録 sha・条件集合の厳密一致・重複 ID を見ていなかった。手編集や
+    古い manifest でも通ってしまい、**別の条件で測った値に現行の事前登録 pin を
+    貼った成果物**が出る）。"""
     man, man_sha, _ = s7_io.read_json_with_pin(manifest_path)
-    rung_ids = {str(r["id"]) for r in cal["amplitude_ladder"]["rungs"]}
-    got = {str(c["condition_id"]) for c in man["conditions"]}
-    if not rung_ids <= got:
-        raise ValueError(f"振幅 rung が manifest に無い: {sorted(rung_ids - got)}")
+
+    # (1) schema
+    if str(man.get("schema")) != sp.REAL_RENDER_MANIFEST_SCHEMA_1_2:
+        raise Manifest12Error(f"schema {man.get('schema')!r} != {sp.REAL_RENDER_MANIFEST_SCHEMA_1_2!r}")
+
+    # (2) この manifest が生成時に見た事前登録 == いま読んでいる事前登録
+    cal_1_0, cal_1_0_sha, _ = s7_io.read_json_with_pin(b1.CALIBRATION_SET_PATH)
+    _, cal_1_2_sha, _ = s7_io.read_json_with_pin(CALIBRATION_SET_PATH)
+    if str(man.get("calibration_set_1_2", {}).get("sha256")) != cal_1_2_sha:
+        raise Manifest12Error(
+            f"manifest がレンダ時に見た 1.2 事前登録 "
+            f"{man.get('calibration_set_1_2', {}).get('sha256')} と現在の {cal_1_2_sha} が違う"
+        )
+    inherit = cal["inherits"]
+    if cal_1_0_sha != str(inherit["calibration_set_1_0"]["sha256"]):
+        raise Manifest12Error(
+            f"1.0 事前登録 {cal_1_0_sha} が 1.2 の inherits pin と違う"
+        )
+    if str(man.get("extends", {}).get("sha256")) != str(inherit["real_render_manifest"]["sha256"]):
+        raise Manifest12Error(
+            f"manifest の親 {man.get('extends', {}).get('sha256')} が "
+            f"1.2 の inherits pin {inherit['real_render_manifest']['sha256']} と違う"
+        )
+
+    # (3) 条件集合の**厳密一致**（部分集合ではない）+ 重複 ID の拒否
+    got_ids = [str(c["condition_id"]) for c in man["conditions"]]
+    if len(set(got_ids)) != len(got_ids):
+        dupes = sorted({i for i in got_ids if got_ids.count(i) > 1})
+        raise Manifest12Error(f"manifest に重複した condition_id がある: {dupes}")
+    expected_ids = _expected_condition_ids_12(cal, cal_1_0)
+    if sorted(got_ids) != sorted(expected_ids):
+        raise Manifest12Error(
+            f"条件集合が事前登録と違う: {sorted(got_ids)} != {sorted(expected_ids)}"
+        )
+
+    # (4) 各 WAV の pin（容器 sha + 標本 sha）は s7_io で照合する
     out_dir = Path(str(man["out_dir"]))
+    zero_ids = {str(z["id"]) for z in cal_1_0["real_render_set"].get("zero_buffers", [])}
     stimuli: Dict[str, b1.Stimulus] = {}
     for e in man["conditions"]:
         cid = str(e["condition_id"])
-        raw, wav_sha, _ = s7_io.read_bytes_with_pin(out_dir / str(e["wav"]))
-        if wav_sha != str(e["wav_sha256"]):
-            raise ValueError(f"{cid}: wav sha 不一致")
-        y, sr = sf.read(_io.BytesIO(raw), dtype="float64", always_2d=False)
-        got_s = hashlib.sha256(np.ascontiguousarray(y, dtype=np.float32).tobytes()).hexdigest()
-        if got_s != str(e["samples_sha256"]):
-            raise ValueError(f"{cid}: 標本 sha 不一致")
-        if cid == "rr_zero_buffer" and np.any(np.asarray(y) != 0.0):
-            raise ValueError("rr_zero_buffer に非ゼロ標本がある")
+        try:
+            y, sr = s7_io.read_wav_with_pins(
+                out_dir / str(e["wav"]), e.get("wav_sha256"), e.get("samples_sha256")
+            )
+        except s7_io.WavPinMismatch as exc:
+            raise Manifest12Error(f"{cid}: {exc}") from exc
+        if cid in zero_ids and np.any(np.asarray(y) != 0.0):
+            raise Manifest12Error(f"{cid}: zero buffer に非ゼロ標本がある")
         stimuli[cid] = b1.Stimulus(
             stim_id=cid, family=str(e.get("maps_to", "")), samples=np.asarray(y, dtype=np.float64),
             sr=int(sr), note_onset_s=float(e["note_onset_s"]),

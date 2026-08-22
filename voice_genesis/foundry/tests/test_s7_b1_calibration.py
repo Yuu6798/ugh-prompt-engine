@@ -340,9 +340,12 @@ def test_b1_has_no_path_to_production_or_label_data():
     for name in ("candidate_space_path", "calibration_set_path", "selection_rule_path"):
         assert f"read_json_with_pin({name})" in source
     assert "read_json_with_pin(manifest_path)" in source
-    # バイト列を読むのは manifest が列挙した WAV だけ
-    assert source.count("read_bytes_with_pin(") == 1
-    assert "read_bytes_with_pin(wav_path)" in source
+    # バイト列を読むのは manifest が列挙した WAV だけ。PR #303 レビュー対応で
+    # 「読む + 容器 sha 照合 + 標本 sha 照合」を s7_io.read_wav_with_pins へ 1 本化
+    # したので、このモジュールに生のバイト読みは残っていない
+    assert source.count("read_bytes_with_pin(") == 0
+    assert source.count("read_wav_with_pins(") == 1
+    assert "read_wav_with_pins(\n                wav_path," in source
     assert "read_text(" not in source
     assert "read_bytes(" not in source
     assert "open(" not in source

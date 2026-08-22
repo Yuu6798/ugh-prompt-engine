@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.metadata
-import io
 import json
 import math
 import os
@@ -303,8 +302,6 @@ def real_render_source(prereg: Prereg, manifest_path: Path) -> CalibrationSource
     「manifest の条件集合 == 事前登録 `real_render_set` の条件集合」
     「各 WAV の sha256 == manifest の記録」。1 つでも外れたら測らない。
     """
-    import soundfile as sf
-
     manifest, manifest_sha, _ = s7_io.read_json_with_pin(manifest_path)
     if manifest.get("schema") != sp.REAL_RENDER_MANIFEST_SCHEMA:
         raise RealRenderManifestError(
@@ -332,22 +329,17 @@ def real_render_source(prereg: Prereg, manifest_path: Path) -> CalibrationSource
     for entry in manifest["conditions"]:
         cid = str(entry["condition_id"])
         wav_path = out_dir / str(entry["wav"])
-        raw, wav_sha, _ = s7_io.read_bytes_with_pin(wav_path)
-        if wav_sha != str(entry["wav_sha256"]):
-            raise RealRenderManifestError(f"{cid}: {wav_path} sha256 {wav_sha} != manifest 記録")
-        y, sr = sf.read(io.BytesIO(raw), dtype="float64", always_2d=False)
+        # 容器 sha に加えて**標本そのもの**の sha も照合する（float WAV の容器は
+        # libsndfile の PEAK チャンクに書き出し時刻を含むため再現しない）。
+        # 照合の実装は s7_io に 1 本だけ置く（PR #303 レビューで、同じ照合を
+        # 持たない読み口が 4 箇所残っていると指摘された）。
+        try:
+            y, sr = s7_io.read_wav_with_pins(
+                wav_path, entry.get("wav_sha256"), entry.get("samples_sha256")
+            )
+        except s7_io.WavPinMismatch as exc:
+            raise RealRenderManifestError(f"{cid}: {exc}") from exc
         sample_rates.add(int(sr))
-        # 容器 sha（上）に加えて**標本そのもの**の sha を照合する。float WAV の
-        # 容器は libsndfile の PEAK チャンクに書き出し時刻を含むため再現しない。
-        expected_samples = entry.get("samples_sha256")
-        if expected_samples is not None:
-            got = hashlib.sha256(
-                np.ascontiguousarray(y, dtype=np.float32).tobytes()
-            ).hexdigest()
-            if got != str(expected_samples):
-                raise RealRenderManifestError(
-                    f"{cid}: 標本 sha256 {got} != manifest 記録 {expected_samples}"
-                )
         if cid in zero_ids and np.any(np.asarray(y) != 0.0):
             # `zero_input_false_positive` の刺激は**厳密ゼロ**でなければならない
             # （2026-08-21 amendment）。非ゼロなら測らない。

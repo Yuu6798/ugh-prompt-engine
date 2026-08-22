@@ -81,3 +81,97 @@ def test_collision_check_resolves_symlinks(tmp_path: Path):
     link.symlink_to(src)
     with pytest.raises(s7_io.OutputCollisionError):
         s7_io.reject_output_collision([link], [src])
+
+
+# --- WAV を測る前の pin 照合（PR #303 レビュー第 1 巡 P1） --------------------
+
+#: WAV を復号する行のうち、`s7_io.read_wav_with_pins` を通さなくてよい唯一の場所。
+#: **書いた直後に自分で読み返す自己検査**であり、pin はまさにここで作られるので
+#: 「照合すべき記録済み pin」がまだ存在しない。
+WAV_READ_ALLOWLIST = {
+    "s7_io.py": 1,            # 単一実装そのもの（ここが唯一の復号口）
+    "s7_calib_render.py": 1,  # zero buffer を書いた直後の厳密ゼロ検査
+}
+
+SF_READ_PATTERN = re.compile(r"\bsf\.read\(")
+
+
+def _run8_modules():
+    return sorted(p.name for p in _RUN8.glob("*.py"))
+
+
+@pytest.mark.parametrize("module", _run8_modules())
+def test_every_wav_consumer_verifies_recorded_pins_before_decoding(module: str):
+    """記録済み pin を持つ WAV を**照合せずに**復号する経路を run8 全体で 0 にする。
+
+    PR #303 のレビューは `s7_0b_remeasure_12.py` 1 箇所を指したが、数えたら同型が
+    4 箇所（remeasure ×2 / amp_rungs / calib_render の派生条件）あった。1 箇所
+    直して終わりにしないため、**モジュールを固定列挙せず glob で全数を数える**
+    （新しい reader を足すとここが落ちる = 再発防止）。
+    """
+    n_raw = len(SF_READ_PATTERN.findall(_source(module)))
+    allowed = WAV_READ_ALLOWLIST.get(module, 0)
+    assert n_raw <= allowed, (
+        f"{module}: pin 照合を通さない sf.read が {n_raw} 個ある"
+        f"（許容 {allowed}）。s7_io.read_wav_with_pins を使うこと"
+    )
+
+
+def _write_float_wav(path: Path, y):
+    import soundfile as sf
+
+    sf.write(str(path), y, 44100, subtype="FLOAT")
+
+
+def test_read_wav_with_pins_accepts_matching_pins_and_returns_float64(tmp_path: Path):
+    import numpy as np
+
+    y = np.linspace(-0.5, 0.5, 512, dtype=np.float32)
+    wav = tmp_path / "a.wav"
+    _write_float_wav(wav, y)
+    container = s7_io.sha256_bytes(wav.read_bytes())
+    samples = s7_io.sha256_bytes(np.ascontiguousarray(y).tobytes())
+
+    got, sr = s7_io.read_wav_with_pins(wav, container, samples)
+    assert sr == 44100
+    assert got.dtype == np.float64
+    # float32 -> float64 の拡大は厳密。直接 float64 で読んだ場合とビット一致する。
+    import soundfile as sf
+
+    direct, _ = sf.read(str(wav), dtype="float64", always_2d=False)
+    assert np.array_equal(got, np.asarray(direct))
+
+
+def test_read_wav_with_pins_rejects_a_swapped_file(tmp_path: Path):
+    """**標本が違う**ファイルに差し替わったら測らせない（容器 sha で先に落ちる）。"""
+    import numpy as np
+
+    y = np.linspace(-0.5, 0.5, 512, dtype=np.float32)
+    wav = tmp_path / "a.wav"
+    _write_float_wav(wav, y)
+    container = s7_io.sha256_bytes(wav.read_bytes())
+    samples = s7_io.sha256_bytes(np.ascontiguousarray(y).tobytes())
+
+    _write_float_wav(wav, y * np.float32(0.5))  # 別バッチに差し替わった
+    with pytest.raises(s7_io.WavPinMismatch):
+        s7_io.read_wav_with_pins(wav, container, samples)
+
+
+def test_read_wav_with_pins_rejects_a_rerender_that_only_matches_the_container(
+    tmp_path: Path,
+):
+    """容器 sha だけ合わせても、**標本 sha が違えば**測らせない。
+
+    float WAV の容器は libsndfile の PEAK チャンクに書き出し時刻を含むため、
+    同じ標本の再レンダでも容器 sha は変わる。逆に容器 sha だけを信じると、
+    再 export で 1e-8 ずれた標本を「同一」と記帳してしまう。
+    """
+    import numpy as np
+
+    y = np.linspace(-0.5, 0.5, 512, dtype=np.float32)
+    wav = tmp_path / "a.wav"
+    _write_float_wav(wav, y)
+    container = s7_io.sha256_bytes(wav.read_bytes())
+    other = s7_io.sha256_bytes(np.ascontiguousarray(y * np.float32(1.0000001)).tobytes())
+    with pytest.raises(s7_io.WavPinMismatch):
+        s7_io.read_wav_with_pins(wav, container, other)

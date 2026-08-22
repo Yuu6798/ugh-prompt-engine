@@ -131,6 +131,9 @@ testpaths = [
     "voice_genesis/foundry/tests/test_s7_calib_score.py",
     # run 8 PR-2: 8-0b probe set の事前登録（36 セル / 360 展開 / 測定仕様 pin）。
     "voice_genesis/foundry/tests/test_s7_0b_probe_spec.py",
+    # run 8 PR #303 レビュー対応: 1.2 校正音源 manifest の事前登録への結び付け。
+    # import 閉包は numpy + librosa + soundfile（いずれも本体の必須依存）。
+    "voice_genesis/foundry/tests/test_s7_b1_v12_manifest.py",
 ]
 pythonpath = ["src", "."]
 markers = [

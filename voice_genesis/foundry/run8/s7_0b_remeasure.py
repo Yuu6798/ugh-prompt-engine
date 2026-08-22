@@ -61,8 +61,6 @@ def load_winners(spec_path: Path = SPEC_1_1_PATH):
 
 
 def remeasure_group(path: Path, winners) -> Dict[str, Any]:
-    import soundfile as sf
-
     doc, sha, _ = s7_io.read_json_with_pin(path)
     out_dir = Path(str(doc["out_dir"]))
     cells: List[Dict[str, Any]] = []
@@ -71,7 +69,12 @@ def remeasure_group(path: Path, winners) -> Dict[str, Any]:
             cells.append({"cell_id": c["cell_id"], "outcome": c["outcome"]})
             continue
         meta = c["input_meta"]
-        y, sr = sf.read(str(out_dir / c["wav"]), dtype="float64", always_2d=False)
+        # 測る前に**記録済み pin を照合する**（PR #303 レビュー指摘）。out_dir は
+        # 機械ローカルなので、再生成・編集・別バッチ差し替えが起こりうる。照合
+        # しないと「元の 360 セル由来」と名乗ったまま別の音を測った成果物が出る。
+        y, sr = s7_io.read_wav_with_pins(
+            out_dir / c["wav"], c["wav_sha256"], c["samples_sha256"]
+        )
         stim = b1.Stimulus(
             stim_id=str(c["cell_id"]), family="production_cell",
             samples=np.asarray(y, dtype=np.float64), sr=int(sr),

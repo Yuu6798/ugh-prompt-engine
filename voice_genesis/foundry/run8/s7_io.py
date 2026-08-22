@@ -1,7 +1,7 @@
 """run8/s7_io.py — run 8 の入出力ガード（同型穴をここ 1 箇所へ集約する）。
 
-塞いでいる穴は 2 系統で、どちらも **PR #300 のレビューで同型の再発が指摘された**
-ため、モジュールごとに書かず**単一実装 + 全書き込み口からの呼び出し**にする。
+塞いでいる穴は 3 系統で、いずれも **レビューで同型の再発が指摘された**（1–2 = PR #300、
+3 = PR #303）ため、モジュールごとに書かず**単一実装 + 全呼び出し口からの利用**にする。
 
 1. `reject_output_collision` — 出力先が入力（事前登録 JSON / `transcriptions.csv` /
    MIDI 対応表 / 測定 spec）と一致していたら**書く前に**停止する。
@@ -10,6 +10,10 @@
    その同じバイト列から parse と sha256 の両方を作る（読み直すと、
    parse と hash の間で差し替わったときに「古いバイトで計算した結果」を
    「新しいバイトの sha」で pin してしまう）。
+3. `read_wav_with_pins` — **記録済みの pin を持つ WAV** を測る前に、容器 sha と
+   標本 sha の両方をその場で照合する（PR #303 レビュー指摘）。照合しないと、
+   機械ローカルの出力ディレクトリが再生成・編集・別バッチ差し替えを受けたとき、
+   「元の 360 セル由来」と名乗ったまま**別の音**を測った成果物が出る。
 """
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Any, Dict, Iterable, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 
 class OutputCollisionError(RuntimeError):
@@ -26,6 +30,10 @@ class OutputCollisionError(RuntimeError):
 
 class NonFiniteArtifactError(ValueError):
     """canonical JSON へ非有限値（Infinity / NaN）を書こうとした（fail-closed）。"""
+
+
+class WavPinMismatch(ValueError):
+    """測ろうとした WAV が記録済み pin と一致しない（fail-closed）。"""
 
 
 def sha256_bytes(raw: bytes) -> str:
@@ -91,3 +99,48 @@ def read_json_with_pin(path: Path) -> Tuple[Dict[str, Any], str, int]:
     """JSON を**一度だけ読んだバイト列**から parse し、その sha256 とともに返す。"""
     raw, sha, n = read_bytes_with_pin(path)
     return json.loads(raw.decode("utf-8")), sha, n
+
+
+def read_wav_with_pins(
+    path: Path, wav_sha256: Optional[str], samples_sha256: Optional[str]
+) -> Tuple[Any, int]:
+    """記録済み pin を照合してから WAV を復号する（**一度読み**）。
+
+    2 本の sha は別々の問いなので**両方**照合する:
+
+    - `wav_sha256` = 容器のバイト列。float WAV の容器は libsndfile の PEAK
+      チャンクに**書き出し時刻**を含むため、同じ標本を再レンダしても一致しない。
+      つまりこれは「ディスク上のこのファイルが**記録した当のファイルか**」を見る。
+    - `samples_sha256` = 標本列そのもの。容器が違っても標本が同じなら一致する。
+      つまりこれは「**同じ音か**」を見る。
+
+    復号は float32（= FLOAT subtype の格納型）で行い、float64 へ拡大して返す。
+    32→64 の拡大は厳密なので、`dtype="float64"` で直接読んだ場合と**ビット一致**
+    する（run8 の全 WAV 54 本で実測確認済み）。標本 sha は float32 の
+    バイト列に対して定義されているため、この順序でしか照合できない。
+    """
+    import io as _io
+
+    import numpy as np
+    import soundfile as sf
+
+    # 記録が**片方でも欠けていたら**測らない。以前は `samples_sha256` を optional に
+    # していたので、キーを消すだけで最強の照合を回避できた（容器 sha は再レンダで
+    # 必ず変わるため、実質「照合なし」になる）。
+    if not wav_sha256 or not samples_sha256:
+        raise WavPinMismatch(
+            f"{path}: pin が欠けている"
+            f"（wav_sha256={wav_sha256!r} / samples_sha256={samples_sha256!r}）"
+        )
+    raw, got_container, _ = read_bytes_with_pin(Path(path))
+    if got_container != str(wav_sha256):
+        raise WavPinMismatch(
+            f"{path}: 容器 sha256 {got_container} != 記録 {wav_sha256}"
+        )
+    y32, sr = sf.read(_io.BytesIO(raw), dtype="float32", always_2d=False)
+    got_samples = sha256_bytes(np.ascontiguousarray(y32).tobytes())
+    if got_samples != str(samples_sha256):
+        raise WavPinMismatch(
+            f"{path}: 標本 sha256 {got_samples} != 記録 {samples_sha256}"
+        )
+    return np.asarray(y32, dtype=np.float64), int(sr)

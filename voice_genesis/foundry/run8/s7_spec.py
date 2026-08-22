@@ -22,6 +22,8 @@ CALIBRATION_SET_SCHEMA: Final = "s7-b1-calibration-set/0.1"
 SELECTION_RULE_SCHEMA: Final = "s7-b1-selection-rule/0.1"
 #: 校正専用 real-render セットのレンダ結果 manifest（`s7_calib_render.py` 出力）。
 REAL_RENDER_MANIFEST_SCHEMA: Final = "s7_b1_real_render_manifest/0.1"
+#: 1.2 系列は 1.0 manifest を **継承して拡張する**（振幅 rung を足す）ので別 schema。
+REAL_RENDER_MANIFEST_SCHEMA_1_2: Final = "s7_b1_real_render_manifest/0.2"
 #: `zero_input_false_positive`（旧 `silence_zero`）の役割名。
 #: 2026-08-21 amendment: 刺激は「サンプル値が厳密に 0.0 の合成緩衝」で、
 #: SP-only real render（= 経路が生成した非ゼロ波形）とは別物として扱う。

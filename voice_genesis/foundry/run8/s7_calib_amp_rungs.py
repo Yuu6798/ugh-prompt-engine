@@ -25,10 +25,11 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import s7_io  # noqa: E402
+import s7_spec as sp  # noqa: E402
 
 RESULTS_DIR = _HERE.parent / "results_s7"
 CAL_1_2_PATH = RESULTS_DIR / "s7_b1_calibration_set_1_2.json"
-MANIFEST_SCHEMA_1_2 = "s7_b1_real_render_manifest/0.2"
+MANIFEST_SCHEMA_1_2 = sp.REAL_RENDER_MANIFEST_SCHEMA_1_2
 
 
 def _sha_file(p: Path) -> str:
@@ -51,8 +52,12 @@ def build_rungs(manifest_path: Path, out_dir: Path) -> Dict[str, Any]:
     base = by_id[base_id]
     src_dir = Path(str(man["out_dir"]))
 
-    y, sr = sf.read(str(src_dir / str(base["wav"])), dtype="float64", always_2d=False)
-    y = np.asarray(y, dtype=np.float64)
+    # 派生 rung は base レンダの標本に定数ゲインを掛けて作る。base が差し替わると
+    # rung 全体の由来が黙って変わるので、**読む前に manifest の pin を照合する**
+    # （PR #303 レビュー指摘。同型穴を s7_io へ集約）。
+    y, sr = s7_io.read_wav_with_pins(
+        src_dir / str(base["wav"]), base["wav_sha256"], base["samples_sha256"]
+    )
     boundary_s = float(base["score_boundary_s"])
     i0 = int(round(boundary_s * sr))
 
