@@ -351,12 +351,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # **貼るだけ**だった（PR #303 第 2 巡 P1）。事前登録は世代ごとに
     # `checkpoint_sha256` を pin しているので、export 時の記録で ONNX をそこへ縛る。
     acoustic_dir, stem = Path(args.acoustic_dir), args.acoustic_stem
+    # checkpoint / config の期待値は verify 側が世代から引く（渡し忘れの余地を作らない）
     export_binding = xm.verify_export_manifest(
         Path(args.export_manifest),
         generation=str(args.generation),
-        expected_checkpoint_sha256=str(
-            spec["expansion"]["generations"][args.generation]["checkpoint_sha256"]
-        ),
         artifacts={
             "acoustic_onnx": acoustic_dir / f"{stem}.onnx",
             "acoustic_dsconfig": acoustic_dir / "dsconfig.yaml",

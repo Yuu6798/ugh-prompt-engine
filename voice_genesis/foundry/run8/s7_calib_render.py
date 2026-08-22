@@ -462,10 +462,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # 容器 pin だけでは「読み込む ONNX」が checkpoint と無関係のままになる
     # （PR #303 第 2 巡 P1）。export 時の記録で両者を縛ってからレンダする。
+    # checkpoint / config の期待値は verify 側が世代から引く（渡し忘れの余地を作らない）。
+    # 世代は事前登録が pin する checkpoint の sha から導出する。
     export_binding = xm.verify_export_manifest(
         Path(args.export_manifest),
         generation=calibration_generation(containers["checkpoint"]["sha256"]),
-        expected_checkpoint_sha256=containers["checkpoint"]["sha256"],
         artifacts={
             "acoustic_onnx": Path(args.acoustic_onnx),
             "acoustic_dsconfig": Path(args.acoustic_dsconfig),

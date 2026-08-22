@@ -204,29 +204,39 @@ python voice_genesis/foundry/run8/s7_ledger.py \
 事前登録 pin（`d4ee992`）の**後に**生成した。所要 ≈ 60 s（11 レンダ）+ B-1 数分。
 
 ```bash
+# 7-0. ONNX を **witnessed export** で作る（PR #303 第 3–7 巡）。
+#      checkpoint / config は --generation の pin から引いて照合し、exporter の
+#      checkout（HEAD と worktree の清浄さ）も起動前に照合する。後から 2 つのパスを
+#      hash しただけの記録はレンダ側が拒否する。
+$S7/venv_export/bin/python voice_genesis/foundry/run8/s7_export_manifest.py \
+  --generation run7 \
+  --exporter-root $S7/materials/DiffSinger \
+  --exp <checkpoints/ 配下の厳密なフォルダ名> --ckpt-steps 40000 \
+  --ckpt-dir $S7/materials/run7_ckpt \
+  --out-dir $S7/out/onnx_export_s6_run7_acoustic \
+  --artifact acoustic_onnx=s6_run7_acoustic.onnx \
+  --artifact acoustic_dsconfig=dsconfig.yaml \
+  --artifact acoustic_phonemes_json=s6_run7_acoustic.phonemes.json \
+  --artifact speaker_embed=s6_run7_acoustic.ritsu.emb \
+  --out $S7/out/onnx_export_s6_run7_acoustic/export_manifest.json
+
 # 7-1. 校正専用 real-render セットを生成（本番 360 セルとは完全分離）
+#      --export-manifest は **必須**（7-0 が書いたもの）。省くと引数解析で止まる。
 python voice_genesis/foundry/run8/s7_calib_render.py \
-  --canon-model-dir  $S7/extracted/ds/NamineRitsu_DiffSinger \
+  --canon-model-dir  $S7/materials/extracted/ds/NamineRitsu_DiffSinger \
   --vocoder-dir      $S7/materials/vocoder_onnx \
-  --acoustic-onnx    $S7/out/onnx_export/s6_run7_acoustic.onnx \
-  --acoustic-dsconfig $S7/out/onnx_export/dsconfig.yaml \
-  --acoustic-phonemes-json $S7/out/onnx_export/s6_run7_acoustic.phonemes.json \
-  --canon-phonemes-txt $S7/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt \
-  --speaker ritsu --speaker-emb $S7/out/onnx_export/s6_run7_acoustic.ritsu.emb \
-  --ckpt $S7/materials/model_ckpt_steps_40000.ckpt \
+  --acoustic-onnx    $S7/out/onnx_export_s6_run7_acoustic/s6_run7_acoustic.onnx \
+  --acoustic-dsconfig $S7/out/onnx_export_s6_run7_acoustic/dsconfig.yaml \
+  --acoustic-phonemes-json $S7/out/onnx_export_s6_run7_acoustic/s6_run7_acoustic.phonemes.json \
+  --canon-phonemes-txt $S7/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt \
+  --speaker ritsu \
+  --speaker-emb $S7/out/onnx_export_s6_run7_acoustic/s6_run7_acoustic.ritsu.emb \
+  --ckpt $S7/materials/run7_ckpt/model_ckpt_steps_40000.ckpt \
   --canon-zip $S7/materials/NamineRitsu_DiffSinger.zip \
   --vocoder-container $S7/materials/nsf_hifigan.oudep \
+  --export-manifest $S7/out/onnx_export_s6_run7_acoustic/export_manifest.json \
   --out-dir $S7/out/b1_real_render \
   --manifest-out $S7/out/b1_real_render/s7_b1_real_render_manifest.json
-
-# 7-2. 実レンダ校正で B-1 を回す（合成 spec は上書きしない）
-python voice_genesis/foundry/run8/s7_b1_calibration.py \
-  --real-render $S7/out/b1_real_render/s7_b1_real_render_manifest.json \
-  --out $S7/out/b1_real_render/trf_measurement_spec_realrender.json
-
-# 7-3. 合成校正の spec（比較用）を再生成する場合
-python voice_genesis/foundry/run8/s7_b1_calibration.py \
-  --out voice_genesis/foundry/results_s7/trf_measurement_spec.json
 ```
 
 - `verify_analysis_stack()` が `ANALYSIS_STACK_PIN` を fail-closed で照合する

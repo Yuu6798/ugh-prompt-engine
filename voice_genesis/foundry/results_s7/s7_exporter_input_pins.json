@@ -1,0 +1,31 @@
+{
+  "schema": "s7-exporter-input-pins/0.1",
+  "created_at": "2026-08-22",
+  "authority": "PR #303 レビュー第 7 巡 P1（config pin を検証で必須にする）",
+  "what_this_is": "export の入力（checkpoint と config.yaml）の世代別 pin を**機械可読な 1 箇所**に置く。これは事前登録ではない — 値はすべて既にリポジトリ内にあり（provision.sh の資産表 / s7_0b_probe_spec.json の generations 表）、ここはその参照点を作っただけである。新しい主張を足していない",
+  "why": "manifest に config の sha を**記録**しても、本番の消費側が期待値と突き合わせなければ 『期待した config が使われた』ことにはならない。正しい checkpoint の隣に古い config を 置いた export が、事前登録 checkpoint の帰属を保ったまま通る",
+  "checkpoint_cross_check": "checkpoint_sha256 は `s7_0b_probe_spec.json` の expansion.generations[*].checkpoint_sha256 と**同一でなければならない**。読み込み時に機械照合し、食い違えば停止する",
+  "config_provenance": "provision.sh の資産表（run5_config / run6_config / run7_config）",
+  "generations": {
+    "run5": {
+      "checkpoint_sha256": "d3c51399cb1c3914981d4a11da8391a4e344130c84b263f0ef9774f60c3f8da5",
+      "config_sha256": "0b627cc9113ce38f46f5c0b9a4c19c58dbb8b928318226a93e12a04ad624b833",
+      "bundle": "materials/ckpts/run5_bundle"
+    },
+    "run6": {
+      "checkpoint_sha256": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+      "config_sha256": "3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9",
+      "bundle": "materials/ckpts/run6_bundle"
+    },
+    "run7": {
+      "checkpoint_sha256": "518df090a8154e61f28b529f731418f4f97d47c3b56d1326d354e6be4629fa93",
+      "config_sha256": "e14ac2fde724998db05070550e86391c9090e582b1539747faa58356ae18d411",
+      "bundle": "materials/run7_ckpt"
+    }
+  },
+  "exporter": {
+    "repo": "openvpi/DiffSinger",
+    "revision": "e2307b1",
+    "note": "checkout の HEAD と worktree の清浄さを起動前に照合する（第 7 巡 P1）"
+  }
+}

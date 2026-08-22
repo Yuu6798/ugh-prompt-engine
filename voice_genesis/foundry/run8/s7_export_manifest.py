@@ -70,6 +70,9 @@ if str(_HERE) not in sys.path:
 import s7_io  # noqa: E402
 
 EXPORT_MANIFEST_SCHEMA = "s7_onnx_export_manifest/0.1"
+RESULTS_DIR = _HERE.parent / "results_s7"
+INPUT_PINS_PATH = RESULTS_DIR / "s7_exporter_input_pins.json"
+PROBE_SPEC_PATH = RESULTS_DIR / "s7_0b_probe_spec.json"
 
 #: `--exporter-revision` の既定。run 8 の全 export はこの版で行った。
 DEFAULT_EXPORTER = {"repo": "openvpi/DiffSinger", "revision": "e2307b1"}
@@ -77,6 +80,96 @@ DEFAULT_EXPORTER = {"repo": "openvpi/DiffSinger", "revision": "e2307b1"}
 
 class ExportManifestError(ValueError):
     """export manifest が checkpoint と生成物を結び付けていない（fail-closed）。"""
+
+
+def load_input_pins(generation: str) -> Dict[str, str]:
+    """世代ごとの export 入力 pin（checkpoint / config）を返す。
+
+    `checkpoint_sha256` は事前登録（`s7_0b_probe_spec.json`）の値と**機械照合**する。
+    pin ファイルは事前登録ではなく参照点なので、事前登録と食い違ったら止める
+    （食い違ったまま使うと、新しい主張をこっそり足したことになる）。
+    """
+    pins, _, _ = s7_io.read_json_with_pin(INPUT_PINS_PATH)
+    spec, _, _ = s7_io.read_json_with_pin(PROBE_SPEC_PATH)
+    gens = pins["generations"]
+    if str(generation) not in gens:
+        raise ExportManifestError(
+            f"{INPUT_PINS_PATH.name} に世代 {generation!r} の pin が無い"
+        )
+    entry = gens[str(generation)]
+    prereg = spec["expansion"]["generations"].get(str(generation))
+    if prereg is None:
+        raise ExportManifestError(f"事前登録に世代 {generation!r} が無い")
+    if str(entry["checkpoint_sha256"]) != str(prereg["checkpoint_sha256"]):
+        raise ExportManifestError(
+            f"{generation}: pin ファイルの checkpoint {entry['checkpoint_sha256']} が "
+            f"事前登録 {prereg['checkpoint_sha256']} と違う"
+        )
+    return {
+        "checkpoint_sha256": str(entry["checkpoint_sha256"]),
+        "config_sha256": str(entry["config_sha256"]),
+    }
+
+
+def verify_exporter_tree(exporter_root: Path, revision: str) -> Dict[str, Any]:
+    """exporter の**実装そのもの**を起動前に照合する（PR #303 第 7 巡 P1）。
+
+    従来は `--exporter-root` の中身を一切見ず、manifest には呼び出し側が渡した
+    （既定の）revision を書いていた。**ローカルで書き換えた exporter や別物の
+    スクリプト**でも `e2307b1` を名乗れる。私自身の fake exporter テストが
+    その実例だった。
+
+    照合するのは 3 点:
+
+    1. git checkout であること
+    2. HEAD が宣言 revision であること（観測値を記録する。呼び出し側の主張は使わない）
+    3. worktree に未コミットの変更が無いこと（`git status --porcelain` が空）
+
+    加えて、実際に起動するスクリプト（`scripts/export.py`）のバイト列を hash して
+    記録する。3 が通っていれば HEAD と一致するはずだが、記録しておくと後から
+    「何を走らせたか」を単体で言える。
+    """
+    import subprocess
+
+    root = Path(exporter_root)
+    if not (root / ".git").exists():
+        raise ExportManifestError(
+            f"{root} が git checkout でない（実装の由来を言えないので export しない）"
+        )
+
+    def _git(*args: str) -> str:
+        proc = subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True
+        )
+        if proc.returncode != 0:
+            raise ExportManifestError(
+                f"git {' '.join(args)} が失敗した: {proc.stderr.strip()}"
+            )
+        return proc.stdout.strip()
+
+    head = _git("rev-parse", "HEAD")
+    if not head.startswith(str(revision)):
+        raise ExportManifestError(
+            f"exporter の HEAD {head[:12]} が宣言 revision {revision} と違う"
+        )
+    dirty = _git("status", "--porcelain")
+    if dirty:
+        raise ExportManifestError(
+            "exporter の worktree に未コミットの変更がある"
+            f"（{len(dirty.splitlines())} 件）。宣言 revision の実装と言えない"
+        )
+    entry = root / "scripts" / "export.py"
+    if not entry.is_file():
+        raise ExportManifestError(f"{entry} が無い")
+    _, entry_sha, _ = s7_io.read_bytes_with_pin(entry)
+    return {
+        "repo": DEFAULT_EXPORTER["repo"],
+        "revision": str(revision),
+        "observed_head": head,
+        "worktree_clean": True,
+        "entry_script": str(entry.resolve()),
+        "entry_script_sha256": entry_sha,
+    }
 
 
 def _entry(path: Path) -> Dict[str, Any]:
@@ -256,9 +349,7 @@ def export_diffsinger_acoustic(
     out_dir: Path,
     artifact_names: Mapping[str, str],
     python_executable: str,
-    expected_checkpoint_sha256: Optional[str] = None,
-    expected_config_sha256: Optional[str] = None,
-    exporter: Optional[Mapping[str, str]] = None,
+    exporter_revision: str = DEFAULT_EXPORTER["revision"],
 ) -> Dict[str, Any]:
     """DiffSinger acoustic を export し、**exporter が消費する入力全部**を束縛する。
 
@@ -281,6 +372,13 @@ def export_diffsinger_acoustic(
     しか通らないようにする。
     """
     exporter_root, ckpt_dir, out_dir = Path(exporter_root), Path(ckpt_dir), Path(out_dir)
+    # 入力 pin は**任意ではない**。記録するだけでは「期待した物が使われた」ことに
+    # ならない（PR #303 第 7 巡 P1）。世代から引いて必ず照合する。
+    pins = load_input_pins(generation)
+    expected_checkpoint_sha256 = pins["checkpoint_sha256"]
+    expected_config_sha256 = pins["config_sha256"]
+    # exporter の実装そのものも起動前に照合する（同 P1）。
+    exporter = verify_exporter_tree(exporter_root, exporter_revision)
     src_ckpt = ckpt_dir / f"model_ckpt_steps_{int(ckpt_steps)}.ckpt"
     src_config = ckpt_dir / "config.yaml"
     for path in (src_ckpt, src_config):
@@ -293,9 +391,9 @@ def export_diffsinger_acoustic(
         ("checkpoint", ckpt_sha, expected_checkpoint_sha256),
         ("config.yaml", config_sha, expected_config_sha256),
     ):
-        if expected is not None and observed != str(expected):
+        if observed != str(expected):
             raise ExportManifestError(
-                f"{label}: sha256 {observed} != 事前登録 pin {expected}"
+                f"{label}: sha256 {observed} != pin {expected}"
             )
 
     staged = _exp_dir(exporter_root, exp)
@@ -324,31 +422,38 @@ def export_diffsinger_acoustic(
 def verify_export_manifest(
     manifest_path: Path,
     generation: str,
-    expected_checkpoint_sha256: str,
     artifacts: Mapping[str, Path],
     allow_unwitnessed: bool = False,
-    expected_config_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     """**レンダ前に**呼ぶ。1 つでも外れたらレンダしない。
 
-    照合するのは 5 点:
+    照合するのは 6 点:
 
     1. schema
     2. `binding_evidence` == `witnessed_export`（`allow_unwitnessed=True` のときだけ
        後付け記録を通す。既定で拒否するのは、2 つのパスを別々に hash しただけの
        記録が「観測していない関係」を証明したことにするため = PR #303 第 3 巡 P1）
     3. `generation` == 呼び出し側が名乗る世代（ラベルの貼り替えを止める）
-    4. `source_checkpoint.sha256` == 事前登録が pin する checkpoint の sha
-    5. 実際に読み込む各ファイルの sha == manifest の記録
+    4. `source_checkpoint.sha256` == その世代の pin
+    5. `source_config.sha256` == その世代の pin。**任意ではない**（第 7 巡 P1:
+       manifest が config の sha を記録しても、消費側が期待値と突き合わせなければ
+       「期待した config が使われた」ことにならない）
+    6. 実際に読み込む各ファイルの sha == manifest の記録
 
-    5 は「manifest に書いてあること」ではなく「**いまディスクに在るバイト列**」を
+    6 は「manifest に書いてあること」ではなく「**いまディスクに在るバイト列**」を
     数える。manifest を持ってきても中身が別物なら止まる。
+
+    checkpoint / config の期待値は呼び出し側から受け取らず、`generation` から
+    `load_input_pins()` で引く（消費側が pin を渡し忘れる余地を作らない）。
     """
     doc, manifest_sha, _ = s7_io.read_json_with_pin(Path(manifest_path))
     if str(doc.get("schema")) != EXPORT_MANIFEST_SCHEMA:
         raise ExportManifestError(
             f"schema {doc.get('schema')!r} != {EXPORT_MANIFEST_SCHEMA!r}"
         )
+    pins = load_input_pins(generation)
+    expected_checkpoint_sha256 = pins["checkpoint_sha256"]
+    expected_config_sha256 = pins["config_sha256"]
     evidence = str(doc.get("binding_evidence"))
     if evidence != WITNESSED and not allow_unwitnessed:
         raise ExportManifestError(
@@ -367,13 +472,11 @@ def verify_export_manifest(
             f"export 元 checkpoint {got_ckpt} が事前登録の pin "
             f"{expected_checkpoint_sha256} と違う"
         )
-    if expected_config_sha256 is not None:
-        got_config = str((doc.get("source_config") or {}).get("sha256"))
-        if got_config != str(expected_config_sha256):
-            raise ExportManifestError(
-                f"export 時の config.yaml {got_config} が pin "
-                f"{expected_config_sha256} と違う"
-            )
+    got_config = str((doc.get("source_config") or {}).get("sha256"))
+    if got_config != str(expected_config_sha256):
+        raise ExportManifestError(
+            f"export 時の config.yaml {got_config} が pin {expected_config_sha256} と違う"
+        )
     recorded = doc.get("artifacts") or {}
     for name, path in sorted(artifacts.items()):
         if name not in recorded:
@@ -403,19 +506,18 @@ def verify_export_manifest(
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
-        description="DiffSinger acoustic を export し、開かれる ckpt へ束縛して記録する",
+        description="DiffSinger acoustic を export し、開かれる ckpt / config へ束縛して記録する",
         epilog=(
             "例: venv/bin/python s7_export_manifest.py --generation run7 "
             "--exporter-root materials/DiffSinger --exp run7_phase_b --ckpt-steps 40000 "
-            "--expected-checkpoint-sha256 518df090... --out-dir out/onnx_run7 "
+            "--ckpt-dir materials/run7_ckpt --out-dir out/onnx_run7 "
             "--artifact acoustic_onnx=s6_run7_acoustic.onnx --out out/onnx_run7/export.json"
         ),
     )
-    ap.add_argument("--generation", required=True)
+    ap.add_argument("--generation", required=True, help="この世代の入力 pin を pin ファイルから引く")
     ap.add_argument(
         "--exporter-root", required=True,
-        help="DiffSinger の checkout。checkpoint はここから **exporter と同じ規則で** "
-             "導出する（独立にパスを受け取らない = PR #303 第 4 巡 P1）",
+        help="DiffSinger の checkout。HEAD と worktree の清浄さを起動前に照合する",
     )
     ap.add_argument("--exp", required=True, help="checkpoints/ 配下の**厳密な**フォルダ名")
     ap.add_argument("--ckpt-steps", required=True, type=int)
@@ -423,11 +525,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--ckpt-dir", required=True,
         help="model_ckpt_steps_<N>.ckpt と config.yaml が在るディレクトリ。"
              "この 2 つを一度読み、同じバイト列を checkpoints/<exp>/ へ staging する",
-    )
-    ap.add_argument("--expected-config-sha256", default=None)
-    ap.add_argument(
-        "--expected-checkpoint-sha256", default=None,
-        help="事前登録が pin する checkpoint の sha256（照合してから export する）",
     )
     ap.add_argument(
         "--out-dir", required=True,
@@ -464,9 +561,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         Path(args.out_dir),
         names,
         sys.executable,
-        args.expected_checkpoint_sha256,
-        args.expected_config_sha256,
-        {**DEFAULT_EXPORTER, "revision": args.exporter_revision},
+        args.exporter_revision,
     )
     s7_io.assert_json_finite(doc)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -475,7 +570,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"| export manifest: {out}  evidence={doc['binding_evidence']}  "
         f"ckpt={doc['source_checkpoint']['sha256'][:16]}"
     )
-    print(f"  derivation: {doc['checkpoint_derivation']}")
+    print(f"  exporter: {doc['exporter']['observed_head'][:12]} (worktree clean)")
+    print(f"  config:   {doc['source_config']['sha256'][:16]}")
     for name, e in doc["artifacts"].items():
         print(f"  {name:24s} {e['sha256'][:16]}")
     return 0
