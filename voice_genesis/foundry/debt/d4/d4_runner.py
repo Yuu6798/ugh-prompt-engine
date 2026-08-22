@@ -17,12 +17,16 @@
   `verify_analysis_stack`）
 - `run8/s7_io.py` / `s7_export_manifest.py` / `s7_trf.py` の pin ガード群
 
-**pin 閉包（v0.2・PR #306 レビュー第 1 巡 P1-3）**: `d4_remeasure_spec.json`
-の `pins.sources` は上記のうち実際に import 再利用する実装モジュール本体
-（`s7_b1_v11.py` / `s7_b1_calibration.py` / `s7_0b_probe.py`）と、このモジュール
-自身（`d4_runner.py`。起動時に自分自身のバイト列を読み、spec の pin と照合する
-自己参照）を照合対象へ含む。凍結済み 1.2 spec・render ハーネス（gate_synth.py）・
-1.2 候補選定本体（s7_b1_v12.py）と合わせて計 7 点。
+**pin 閉包（v0.3・PR #306 レビュー第 2 巡 P1・ファミリー終端）**:
+`d4_remeasure_spec.json` の `pins.sources` は、このモジュールを起点に
+`enumerate_repo_import_closure()` が AST で機械列挙した推移 import 閉包
+（`s7_b1_v12.py` / `s7_b1_v11.py` / `s7_b1_calibration.py` / `s7_0b_probe.py` /
+`s7_io.py` / `s7_export_manifest.py` / `s7_trf.py` / `s7_spec.py` の 8 ファイル +
+このモジュール自身 `d4_runner.py` の自己参照）と、機械列挙では辿れない特別枠
+2 点（動的 load される render ハーネス `gate_synth.py` / データファイルの
+凍結済み 1.2 spec）を合わせた計 11 点で構成される。`load_and_verify_d4_spec`
+は起動のたびに `pins.sources`（特別枠を除く）と実際の import 閉包の完全一致も
+検査する（`_verify_closure_matches_declared_pins`。取りこぼしの構造的防止）。
 
 サブコマンド 2 つ:
 
@@ -59,7 +63,9 @@ probe 群 JSON）でも必ず通す。セル単位の測定失敗は `outcome: "
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
+import importlib
 import importlib.metadata as _md
 import json
 import os
@@ -80,17 +86,46 @@ _REPO_ROOT = _FOUNDRY_DIR.parents[1]
 if str(_RUN8_DIR) not in sys.path:
     sys.path.insert(0, str(_RUN8_DIR))
 
-# run8/ のモジュール群。numpy + librosa + soundfile はいずれも本体の必須依存
-# なので、ここまでは常時 import してよい（onnxruntime を要するのは
-# `s7_0b_probe.load_gate_synth()` 内だけで、これはレンダ実行時にしか呼ばない）。
-import s7_b1_calibration as b1  # noqa: E402
-import s7_b1_v12 as v12  # noqa: E402
-import s7_export_manifest as xm  # noqa: E402
-import s7_io  # noqa: E402
-import s7_trf as trf  # noqa: E402
-import s7_0b_probe as probe0b  # noqa: E402
+# --- pinned module 群（pre-bind 原則: PR #217 と同型・PR #306 レビュー第2巡
+# P2） ------------------------------------------------------------------
+#
+# 以前は run8/ のモジュール群をここでモジュール top-level import していた。
+# それだと「pin 検証」より**前**に実装コードが import＝実行されてしまい、
+# 「検証した bytes」と「実際に走る実装」の同一性を import 時点では言えない
+# （検証と import の間に何かが割り込める in-memory 窓が開いている）。
+#
+# 代わりに、実際の import は `_bind_pinned_modules()`（`load_and_verify_d4_spec`
+# が pin 検証を**全て通過した後**にだけ呼ぶ）まで遅延する。検証前は
+# `sys.modules` に一切現れない（`test_load_and_verify_does_not_import_
+# pinned_modules_before_verification_passes` が回帰検査する）。
+#
+# numpy + librosa + soundfile はいずれも本体の必須依存であり pin 対象では
+# ないため、この遅延の対象外（onnxruntime を要するのは
+# `s7_0b_probe.load_gate_synth()` 内だけで、レンダ実行時にしか呼ばない）。
+#
+# 型チェッカ/読者向けの前方宣言（実行時は必ず `_bind_pinned_modules()` が
+# 束縛する。束縛前に参照すると None のままの属性エラーで気づける）。
+b1 = v12 = xm = s7_io = trf = probe0b = None
 
-SPEC_SCHEMA = "vg-d4-remeasure-spec/0.2"
+#: 束縛対象の import 名（`sys.modules` のキーと一致する）。
+_PINNED_MODULE_NAMES: Tuple[str, ...] = (
+    "s7_b1_calibration", "s7_b1_v12", "s7_export_manifest", "s7_io", "s7_trf", "s7_0b_probe",
+)
+
+
+def _bind_pinned_modules() -> None:
+    """pin 検証を通過した**後にのみ**呼ぶ: pinned module 群を import して
+    module globals（`b1`/`v12`/`xm`/`s7_io`/`trf`/`probe0b`）へ束縛する。"""
+    global b1, v12, xm, s7_io, trf, probe0b
+    b1 = importlib.import_module("s7_b1_calibration")
+    v12 = importlib.import_module("s7_b1_v12")
+    xm = importlib.import_module("s7_export_manifest")
+    s7_io = importlib.import_module("s7_io")
+    trf = importlib.import_module("s7_trf")
+    probe0b = importlib.import_module("s7_0b_probe")
+
+
+SPEC_SCHEMA = "vg-d4-remeasure-spec/0.3"
 RENDER_SCHEMA = "vg-d4-render-group-result/0.1"
 RESULTS_SCHEMA = "vg-d4-remeasure-results/0.1"
 DEBT_REF = "VG-DEBT-004"
@@ -112,20 +147,33 @@ class D4SpecMismatch(RuntimeError):
 
 
 #: `pins.sources` が持つべきキー集合（厳密一致。欠落・余剰とも abort）。
-#: v0.2（PR #306 レビュー指摘 #3・二層証明方式）で、D4 が実行時に読む実装
-#: モジュール本体（測定ロジック / 計器 / render ハーネス / runner 自身）を
-#: 閉包へ追加した。`d4_runner_sha256` は**自己参照**（このモジュールが起動時に
-#: 自分自身のバイト列を読み、spec の pin と照合する）— 循環にはならない:
-#: spec 側は「runner のあるべき sha」を主張するだけで runner の内容そのものを
-#: 内包しないため、runner が spec を読んで自分の sha を確認する経路は素直に
-#: 成立する。
+#: v0.3（PR #306 レビュー第2巡 P1・ファミリー終端）で、hand-list の逐次追加を
+#: 打ち切り、`d4_runner.py` を起点とした AST 推移 import 閉包の**機械列挙**に
+#: 揃えた（`enumerate_repo_import_closure` / `NON_IMPORT_PIN_SOURCE_KEYS` 参照。
+#: PR #216 の前例と同型）。`s7_io_sha256` / `s7_export_manifest_sha256` /
+#: `s7_trf_sha256` / `s7_spec_sha256` は v0.2 まで手動で追加できていなかった
+#: 依存（機械列挙で初めて判明した）。`d4_runner_sha256` は**自己参照**
+#: （このモジュールが起動時に自分自身のバイト列を読み、spec の pin と照合
+#: する）— 循環にはならない: spec 側は「runner のあるべき sha」を主張する
+#: だけで runner の内容そのものを内包しないため、runner が spec を読んで
+#: 自分の sha を確認する経路は素直に成立する。
 EXPECTED_PIN_SOURCE_KEYS = frozenset({
     "trf_measurement_spec_1_2_sha256", "instrument_sha256", "render_harness_sha256",
     "s7_b1_v11_sha256", "s7_b1_calibration_sha256", "s7_0b_probe_sha256", "d4_runner_sha256",
+    "s7_io_sha256", "s7_export_manifest_sha256", "s7_trf_sha256", "s7_spec_sha256",
 })
-#: `pins` トップレベルが持つべきキー集合（上記 7 キー + cell_definition_source +
+#: `pins` トップレベルが持つべきキー集合（上記 11 キー + cell_definition_source +
 #: sources 自身。厳密一致）。
 EXPECTED_PIN_KEYS = EXPECTED_PIN_SOURCE_KEYS | {"cell_definition_source", "sources"}
+
+#: `pins.sources` のうち、AST の静的 import 解析では辿れない特別枠。
+#: `render_harness_sha256`（`s1_gate/gate_synth.py`）は `s7_0b_probe.
+#: load_gate_synth()` が `importlib.util.spec_from_file_location` で動的に
+#: 読む（文字列の import 名を経由しないため機械列挙の対象外）。
+#: `trf_measurement_spec_1_2_sha256` は python モジュールではなく凍結済み
+#: JSON データファイルそのもの。いずれも `enumerate_repo_import_closure` との
+#: 適合検査（下記）から除外し、手動管理のまま残す。
+NON_IMPORT_PIN_SOURCE_KEYS = frozenset({"render_harness_sha256", "trf_measurement_spec_1_2_sha256"})
 
 
 # --- fail-closed: 事前登録 spec の pin を実ファイルと照合 -------------------
@@ -133,6 +181,88 @@ EXPECTED_PIN_KEYS = EXPECTED_PIN_SOURCE_KEYS | {"cell_definition_source", "sourc
 
 def _sha_file(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _read_json_pure(path: Path) -> Tuple[Dict[str, Any], str, int]:
+    """`s7_io.read_json_with_pin` と同じ契約（doc, sha256, バイト数）を、
+    `s7_io` を import せず標準ライブラリだけで実装したもの。
+
+    pin 検証がまだ完了していない段階（= pinned module をまだ import して
+    いない段階）で使う（pre-bind 原則。PR #217 と同型）。検証を担う本関数
+    自身が、検証対象のはずの `s7_io.py` に依存してはいけない — 依存すると
+    「s7_io.py の bytes を検証する前に s7_io.py の実装を実行する」窓が開く。
+    """
+    raw = Path(path).read_bytes()
+    sha = hashlib.sha256(raw).hexdigest()
+    return json.loads(raw.decode("utf-8")), sha, len(raw)
+
+
+# --- import 閉包の機械導出（PR #306 レビュー第2巡 P1・PR #216 の前例と同型） --
+
+
+def _ast_import_edges(tree: ast.AST) -> FrozenSet[str]:
+    """1 ファイルの AST から、repo 内モジュールへ辿りうる edge（トップレベル
+    モジュール名）を集める。静的 `import X` / `from X import Y` に加え、
+    `_bind_pinned_modules` のような `importlib.import_module("X")`（文字列
+    リテラル引数）も検出する — pre-bind 原則（PR #217）で import が文字列
+    経由になった箇所を、閉包列挙が見失わないため。"""
+    names: set = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                names.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Call):
+            func = node.func
+            is_import_module_call = (
+                (isinstance(func, ast.Attribute) and func.attr == "import_module")
+                or (isinstance(func, ast.Name) and func.id == "import_module")
+            )
+            if is_import_module_call and node.args:
+                arg0 = node.args[0]
+                if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
+                    names.add(arg0.value.split(".")[0])
+    return frozenset(names)
+
+
+def enumerate_repo_import_closure(
+    entry_files: Sequence[Path], search_dirs: Sequence[Path], repo_root: Path,
+) -> FrozenSet[Path]:
+    """`entry_files` を起点に、repo 内モジュールへの推移 import 閉包を AST で
+    機械列挙する（PR #216 の前例と同型。hand-list の逐次追加を打ち切る）。
+
+    標準ライブラリ・外部パッケージ（numpy・librosa 等）は `search_dirs` 配下に
+    実ファイルが無いため自然に除外される。動的 import（`importlib.util.
+    spec_from_file_location` 経由の gate_synth.py 等）は辿らない —
+    `NON_IMPORT_PIN_SOURCE_KEYS` として手動管理する別枠になる。
+
+    戻り値は `repo_root` 基準の相対 `Path` の集合（`entry_files` 自身を含む）。
+    """
+    def _resolve(name: str) -> Optional[Path]:
+        for d in search_dirs:
+            cand = Path(d) / f"{name}.py"
+            if cand.is_file():
+                return cand.resolve()
+        return None
+
+    repo_root = Path(repo_root).resolve()
+    visited: set = set()
+    queue = [Path(f).resolve() for f in entry_files]
+    while queue:
+        path = queue.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        for name in _ast_import_edges(tree):
+            resolved = _resolve(name)
+            if resolved is not None and resolved not in visited:
+                queue.append(resolved)
+    return frozenset(p.relative_to(repo_root) for p in visited)
 
 
 def _verify_pins_key_shape(pins: Dict[str, Any]) -> None:
@@ -153,6 +283,32 @@ def _verify_pins_key_shape(pins: Dict[str, Any]) -> None:
         )
 
 
+def _verify_closure_matches_declared_pins(sources: Dict[str, str]) -> None:
+    """`pins.sources`（`NON_IMPORT_PIN_SOURCE_KEYS` を除く）の相対パス集合が、
+    `d4_runner.py` を起点に AST で機械列挙した実際の import 閉包と**完全一致**
+    することを検査する（PR #306 レビュー第2巡 P1・ファミリー終端）。
+
+    取りこぼしの構造的防止: 将来 `d4_runner.py` やその依存が新しい repo 内
+    モジュールを import するようになったら、spec 側の pin 追加を忘れている
+    限りこの検査で必ず落ちる（CI テストだけでなく起動時にも効く）。
+    """
+    declared = {
+        Path(rel_path) for key, rel_path in sources.items()
+        if key not in NON_IMPORT_PIN_SOURCE_KEYS
+    }
+    closure = enumerate_repo_import_closure(
+        [Path(__file__)], [_HERE, _RUN8_DIR], _REPO_ROOT,
+    )
+    if declared != closure:
+        raise D4SpecMismatch(
+            "pins.sources（render_harness / trf_measurement_spec_1_2 を除く）が、"
+            "d4_runner.py を起点に AST 機械列挙した実際の import 閉包と違う: "
+            f"missing={sorted(str(p) for p in closure - declared)} "
+            f"extra={sorted(str(p) for p in declared - closure)}"
+            "（依存が増減したら pins.sources の更新を忘れずに）"
+        )
+
+
 def load_and_verify_d4_spec(
     spec_path: Path = SPEC_PATH, *, expected_sha256: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str]:
@@ -162,8 +318,14 @@ def load_and_verify_d4_spec(
     `expected_sha256` を渡すと、operator が明示した期待 spec sha256（CLI の
     `--spec-sha256`）と実ファイルの sha256 を照合する（不一致は abort）。
     省略時（テスト等）はこの照合をスキップする。
+
+    **pre-bind 原則**（PR #217 と同型・PR #306 レビュー第2巡 P2）: 本関数は
+    pinned module（`s7_b1_calibration` 等）を一切 import しない
+    （`_read_json_pure` で完結する）。全検証を通過した**後にのみ**
+    `_bind_pinned_modules()` を呼んで import する — 検証と import の間に
+    他コードが割り込める窓を構造的に閉じる。
     """
-    spec, spec_sha, _ = s7_io.read_json_with_pin(spec_path)
+    spec, spec_sha, _ = _read_json_pure(spec_path)
     if expected_sha256 is not None and spec_sha != expected_sha256:
         raise D4SpecMismatch(
             f"--spec-sha256 {expected_sha256!r} が {spec_path} の実 sha256 "
@@ -203,7 +365,14 @@ def load_and_verify_d4_spec(
             f"{cds_path}: sha256 {got_cds} が spec pin cell_definition_source と違う"
         )
 
+    _verify_closure_matches_declared_pins(sources)
+
     _verify_axes_match_frozen_spec_1_2(axes, _REPO_ROOT / sources["trf_measurement_spec_1_2_sha256"])
+
+    # ここまで到達 = 全 pin が実ファイルと一致した。**ここで初めて** pinned
+    # module を import する（pre-bind 原則。上記のどこかで raise していれば
+    # この行には到達せず、`sys.modules` に一切現れない）。
+    _bind_pinned_modules()
 
     return spec, spec_sha
 
@@ -212,8 +381,11 @@ def _verify_axes_match_frozen_spec_1_2(axes: Dict[str, Any], trf12_path: Path) -
     """D4 spec の `axes[].selected_candidate` が、凍結済み
     `trf_measurement_spec_1_2.json` の同軸 `selected_candidate` と逐語一致する
     ことを検査する（不一致 = D4 spec 側の typo として abort。凍結物は読むだけ）。
+    pre-bind 原則により `s7_io` ではなく `_read_json_pure` で読む
+    （`load_and_verify_d4_spec` からしか呼ばれず、その時点ではまだ pinned
+    module を import していないため）。
     """
-    trf12, _, _ = s7_io.read_json_with_pin(trf12_path)
+    trf12, _, _ = _read_json_pure(trf12_path)
     for axis, cfg in axes.items():
         want = cfg.get("selected_candidate")
         got = trf12.get("axes", {}).get(axis, {}).get("selected_candidate")
@@ -231,7 +403,7 @@ def _load_cell_definition(spec: Dict[str, Any]) -> Dict[str, Any]:
     経路が増えても壊れないよう独立にも確認する。"""
     cds = spec["pins"]["cell_definition_source"]
     path = _REPO_ROOT / cds["path"]
-    doc, sha, _ = s7_io.read_json_with_pin(path)
+    doc, sha, _ = _read_json_pure(path)
     if sha != cds["sha256"]:
         raise D4SpecMismatch(f"{path}: sha256 {sha} が spec pin と違う")
     return doc
@@ -492,6 +664,21 @@ def _measure_group(
         }
         n_measured += 1
 
+    # render doc 側の runtime_stack（render 実行時のパッケージ版）を群結果へ
+    # 逐語転記する（PR #306 レビュー第2巡 P2）。measure 側の runtime_stack
+    # （`d4_results.json` トップレベル・cmd_measure が付す）とは**別環境の
+    # provenance**なので混同せず両方残す — render は CPU onnxruntime、
+    # measure は ANALYSIS_STACK_PIN 側の別プロセスで走ることが多く、両者の
+    # パッケージ版が食い違いうる。PR #306 第1巡以前に render された旧形式の
+    # 群 JSON は `runtime_stack` を持たないため、その場合は null + 注記を残す
+    # （欠落を「未計測」ではなく「旧形式だから無い」と区別できるようにする）。
+    render_runtime_stack = doc.get("runtime_stack")
+    render_runtime_stack_note = (
+        None if render_runtime_stack is not None else
+        "render 済み群 JSON に runtime_stack が無い（PR #306 第1巡以前の render "
+        "出力 = 旧形式）。render 実行時のパッケージ版は記帳されていない。"
+    )
+
     return {
         "generation": generation, "speaker": speaker,
         "render_doc_path": str(render_doc_path),
@@ -503,6 +690,8 @@ def _measure_group(
             "aux_sha256": doc.get("aux_sha256"),
             "export_binding": doc.get("export_binding"),
         },
+        "render_runtime_stack": render_runtime_stack,
+        "render_runtime_stack_note": render_runtime_stack_note,
         "cells": cells_out,
     }
 

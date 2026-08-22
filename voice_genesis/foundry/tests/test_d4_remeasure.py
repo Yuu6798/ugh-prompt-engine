@@ -52,6 +52,16 @@ import s7_0b_probe as probe0b  # noqa: E402
 import s7_b1_v12 as v12  # noqa: E402
 import s7_io  # noqa: E402
 
+# `d4_runner` は pre-bind 原則（PR #306 レビュー第2巡 P2）により、pinned
+# module（`d4.b1` 等）を import 時点では束縛しない — pin 検証を通過した後に
+# `load_and_verify_d4_spec()` の内部でだけ束縛する。本テストモジュールは
+# 収集時点（下の `_STACK_MISMATCH_DETAIL` 計算・多数のテストが `d4.b1` /
+# `d4.v12` を直接参照する）で束縛済みであることを前提とするため、ここで
+# 正規経路（`load_and_verify_d4_spec()`）を 1 回明示的に走らせて束縛させる
+# （委譲先の fixture 順序に依存しない・collection 自体が実 spec の健全性の
+# 最初のスモークテストにもなる）。
+d4.load_and_verify_d4_spec()
+
 GROUPS_DIR = _FOUNDRY / "results_s7" / "probe_0b_groups"
 REPO_ROOT = _FOUNDRY.parents[1]
 
@@ -135,7 +145,7 @@ def expected_cell_ids(all_cell_ids: List[str]):
 
 
 def test_spec_schema_and_debt_ref(raw_spec: Dict[str, Any]) -> None:
-    assert raw_spec["schema"] == "vg-d4-remeasure-spec/0.2"
+    assert raw_spec["schema"] == "vg-d4-remeasure-spec/0.3"
     assert raw_spec["debt_ref"] == "VG-DEBT-004"
 
 
@@ -209,6 +219,42 @@ def test_load_and_verify_rejects_wrong_schema(tmp_path: Path, raw_spec: Dict[str
     path.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(d4.D4SpecMismatch):
         d4.load_and_verify_d4_spec(path)
+
+
+def test_load_and_verify_does_not_import_pinned_modules_before_verification_passes(
+    tmp_path: Path, raw_spec: Dict[str, Any], monkeypatch,
+) -> None:
+    """pre-bind 原則（PR #217 と同型・PR #306 レビュー第2巡 P2）の回帰検査:
+    pin を改竄した spec では、pinned module（`s7_b1_calibration` 等）は
+    import されない（= `sys.modules` に現れない）ことを確認する。対照として、
+    改竄していない実 spec なら検証を通過して import される。
+
+    モジュール収集時点で他のテストが既に `sys.modules` へ登録している
+    可能性があるため、`monkeypatch.delitem` で明示的に取り除いてから検査する
+    （テスト順序に依存しない）。
+    """
+    for name in d4._PINNED_MODULE_NAMES:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    tampered = copy.deepcopy(raw_spec)
+    tampered["pins"]["instrument_sha256"] = "0" * 64
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(tampered), encoding="utf-8")
+
+    with pytest.raises(d4.D4SpecMismatch):
+        d4.load_and_verify_d4_spec(path)
+
+    still_absent = [name for name in d4._PINNED_MODULE_NAMES if name in sys.modules]
+    assert not still_absent, (
+        f"検証が失敗したにもかかわらず import されたモジュールがある: {still_absent}"
+        "（pre-bind 原則違反）"
+    )
+
+    # 対照: 改竄していない実 spec は検証を通過し、通過した結果として import
+    # される（binding が「検証通過後にのみ」起こることの積極側の確認）。
+    d4.load_and_verify_d4_spec()
+    now_missing = [name for name in d4._PINNED_MODULE_NAMES if name not in sys.modules]
+    assert not now_missing, f"検証通過後も import されていないモジュールがある: {now_missing}"
 
 
 def test_load_and_verify_rejects_tampered_pin(tmp_path: Path, raw_spec: Dict[str, Any]) -> None:
@@ -371,11 +417,14 @@ def _full_render_doc(
     out_dir: Path, all_ids: List[str], rendered: Dict[str, Dict[str, Any]],
     *, generation: str = "run5", speaker: str = "pjs",
     spec_sha256: Optional[str] = None,
+    runtime_stack: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """36 セル規定数を満たす render 群 JSON を組み立てる（`rendered` に入って
     いないセルは `dropped` として記帳する）。事前登録照合（セルフレビュー #2）
     は cell_id 集合の**厳密一致**を要求するため、テスト用の疑似 doc も実際の
-    36 セル全部を持たせる。"""
+    36 セル全部を持たせる。`runtime_stack` 省略時（既定）は render doc に
+    キー自体を持たせない — PR #306 第1巡以前の旧形式 render 出力を模す
+    （`render_runtime_stack` 転記テストの対照）。"""
     cells = []
     for cid in all_ids:
         if cid in rendered:
@@ -391,7 +440,7 @@ def _full_render_doc(
                 "cell_id": cid, "outcome": "dropped",
                 "status": "render_failed", "error": "RuntimeError: not rendered in this test",
             })
-    return {
+    doc = {
         "generation": generation, "speaker": speaker,
         "out_dir": str(out_dir.resolve()),
         "d4_remeasure_spec_sha256": spec_sha256,
@@ -400,6 +449,9 @@ def _full_render_doc(
         "export_binding": {"source_checkpoint_sha256": "deadbeef"},
         "cells": cells,
     }
+    if runtime_stack is not None:
+        doc["runtime_stack"] = runtime_stack
+    return doc
 
 
 def test_measure_group_computes_voicing_axes_on_synthetic_wav(
@@ -435,6 +487,40 @@ def test_measure_group_computes_voicing_axes_on_synthetic_wav(
     missing = group_doc["cells"][other_id]
     assert missing["outcome"] == "missing"
     assert missing["reason"] == "render_failed"
+
+    # render_runtime_stack（PR #306 レビュー第2巡 P2）: 旧形式（runtime_stack
+    # キーを持たない render doc）は null + 注記になる。
+    assert group_doc["render_runtime_stack"] is None
+    assert group_doc["render_runtime_stack_note"]
+    assert "旧形式" in group_doc["render_runtime_stack_note"]
+
+
+def test_measure_group_transcribes_render_runtime_stack_verbatim(
+    tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+) -> None:
+    """render doc に `runtime_stack` があれば、群結果へ `render_runtime_stack`
+    として逐語転記される（PR #306 レビュー第2巡 P2）。"""
+    spec, spec_sha = spec_and_sha
+    axis_candidates = d4._resolve_axis_candidates(spec)
+    out_dir = tmp_path / "out"
+    target = all_cell_ids[0]
+    wav_meta = _write_wav(out_dir, "cell.wav", _sustained_tail_wave())
+    fake_render_stack = {
+        "python": "3.11.15", "numpy": "2.4.6", "onnxruntime": "1.29.0",
+        "soundfile": "0.14.0", "PyYAML": "6.0.1",
+    }
+    render_doc = _full_render_doc(
+        out_dir, all_cell_ids, {target: dict(wav_meta)}, runtime_stack=fake_render_stack,
+    )
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+
+    group_doc = d4._measure_group(
+        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+    )
+
+    assert group_doc["render_runtime_stack"] == fake_render_stack
+    assert group_doc["render_runtime_stack_note"] is None
 
 
 def test_measure_cell_axes_differ_between_distinct_wavs(

@@ -100,12 +100,16 @@
       "path": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json",
       "sha256": "c4856fde84c8e46edfbfc1232fef288559595207ea4f088016375c9c39404639"
     },
-    "d4_runner_sha256": "e24eb68cb6175b4c6dab6dd860620cf14931d280bad80850c67dfba3a8f959d5",
+    "d4_runner_sha256": "8025c52f26a239f9c74e1fe12d8c8b0a0a35ae610512f3eb7e4896e327fd5ae2",
     "instrument_sha256": "f5d136744b24ad6562668b0f604a737d23798e8744e0c23fc19b2afca8418eb4",
     "render_harness_sha256": "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894",
     "s7_0b_probe_sha256": "1b32ed729097337744b4a4f22df40ab34c9eed3b71633c81e250af3f7bc22aac",
     "s7_b1_calibration_sha256": "580a821e054041cfadd9096a9ed1b4c86650032d13b2b522dfac4eb96c7d1857",
     "s7_b1_v11_sha256": "a80c13e0baa305bf3fceffc873779391abf063ea81ecb6757ce564f1e39b1191",
+    "s7_export_manifest_sha256": "47eacb63da306fc5a0d4df00209075090846f34d01e97f116e1fd708879c0b53",
+    "s7_io_sha256": "f5564ad491af0557156d4feeb2736032fac4e219f84fb99bb76b12deef18cb3a",
+    "s7_spec_sha256": "6fac5d749533d2b287dec915c9dd9e67bc82c5c443c40204782e0a71c4b02e77",
+    "s7_trf_sha256": "a128510ced6aa21007a2623804e9a89eea87a1a85a888abc0026fad3c00bafed",
     "sources": {
       "d4_runner_sha256": "voice_genesis/foundry/debt/d4/d4_runner.py",
       "instrument_sha256": "voice_genesis/foundry/run8/s7_b1_v12.py",
@@ -113,12 +117,16 @@
       "s7_0b_probe_sha256": "voice_genesis/foundry/run8/s7_0b_probe.py",
       "s7_b1_calibration_sha256": "voice_genesis/foundry/run8/s7_b1_calibration.py",
       "s7_b1_v11_sha256": "voice_genesis/foundry/run8/s7_b1_v11.py",
+      "s7_export_manifest_sha256": "voice_genesis/foundry/run8/s7_export_manifest.py",
+      "s7_io_sha256": "voice_genesis/foundry/run8/s7_io.py",
+      "s7_spec_sha256": "voice_genesis/foundry/run8/s7_spec.py",
+      "s7_trf_sha256": "voice_genesis/foundry/run8/s7_trf.py",
       "trf_measurement_spec_1_2_sha256": "voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json"
     },
     "trf_measurement_spec_1_2_sha256": "1f7ff569b4ae27043a822e688c8e5fe621f2ebd666e54cd99e53599c4f38ea5b"
   },
   "purpose": "1.0 で測定済みの run5-7 本番360セル（10群 x 36セル）を、凍結済み TRF measurement spec 1.2（voicing 3軸）で再測定する。1.0 値の上書きはしない （結果は d4_results.json という別ファイルへ記帳し、s7_0b_results.json / probe_0b_groups/*.json は不変のまま残す）。",
-  "schema": "vg-d4-remeasure-spec/0.2",
+  "schema": "vg-d4-remeasure-spec/0.3",
   "amendments": [
     {
       "date": "2026-08-22",
@@ -139,7 +147,29 @@
           "voice_genesis/foundry/run8/s7_0b_probe.py": "1b32ed729097337744b4a4f22df40ab34c9eed3b71633c81e250af3f7bc22aac",
           "voice_genesis/foundry/debt/d4/d4_runner.py": "ddbc3b4c31e9a57e62f294dd9cb1bef488c1ca814b38c519e0928f9b78fda06d"
         },
-        "caveat": "commit d19d601 時点の d4_runner.py の sha256（上表）は、本 v0.2 改訂で pins.d4_runner_sha256 に pin した現行バイト（e24eb68cb6175b4c6dab6dd860620cf14931d280bad80850c67dfba3a8f959d5）とは**別物**である — 本 PR（PR #306 対応）で d4_runner.py 自身に runtime_stack 記帳・完全性検査・検証順の是正を加えたため、2026-08-22 実測時点のバイトからは変わっている。post_hoc_attestation の d4_runner.py sha256 は『2026-08-22 に実際に走ったバイト』を指し、pins.d4_runner_sha256 は『これ以降の実行が自己照合すべき現行バイト』を指す — 両者を混同しない。"
+        "caveat": "commit d19d601 時点の d4_runner.py の sha256（上表）は、pins.d4_runner_sha256 の現行値（本ファイル冒頭の pins.d4_runner_sha256。PR #306 のレビュー対応が進むたびに d4_runner.py 自身が変わるので都度更新される）とは**別物**である — PR #306 対応で d4_runner.py 自身に runtime_stack 記帳・完全性検査・検証順の是正・pre-bind 化・閉包機械列挙を加えたため、2026-08-22 実測時点のバイトからは変わっている。post_hoc_attestation の d4_runner.py sha256 は『2026-08-22 に実際に走ったバイト』を指す固定値であり、pins.d4_runner_sha256 は『これ以降の実行が自己照合すべき現行バイト』を指す可変値— 両者を混同しない。"
+      }
+    },
+    {
+      "date": "2026-08-22",
+      "authority": "Fable 5 設計裁定 2026-08-22（PR #306 レビュー第 2 巡 P1・ファミリー終端）",
+      "what_changed": "pins.sources を 7 キーから 11 キーへ拡張（s7_io.py・s7_export_manifest.py・s7_trf.py・s7_spec.py を追加）。schema を 0.2 → 0.3 へ改訂。hand-list の逐次追加を打ち切り、以後 `d4_runner.py` の `enumerate_repo_import_closure()`（AST 推移 import 閉包の機械列挙。PR #216 の前例と同型）が起動時にも `pins.sources`（`render_harness_sha256` / `trf_measurement_spec_1_2_sha256` を除く）と実際の import 閉包の完全一致を検査する（`_verify_closure_matches_declared_pins`）。",
+      "why": "v0.2 は s7_b1_v11.py / s7_b1_calibration.py / s7_0b_probe.py / d4_runner.py 自己参照の 4 点を手動で pin したが、これらのファイルがさらに import する s7_io.py / s7_export_manifest.py / s7_trf.py / s7_spec.py（s7_b1_calibration.py・s7_b1_v12.py・s7_0b_probe.py 経由で transitively 読まれる）は未 pin のままだった。同種の取りこぼしが将来また起きうるため、手動追加ではなく機械列挙へ切り替える（ファミリー終端）。",
+      "note": "2026-08-22 実測は v0.1（sha 702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca）下で実行。実行時の追加 4 実装（s7_io.py / s7_export_manifest.py / s7_trf.py / s7_spec.py）のバイトも、直前の amendment と同様にコミット d19d601 時点の repo バイトと同一（sha256 を列挙）であることを事後 attestation として記録する（この 4 ファイルは 2026-08-22 実測から本 PR まで一切変更されていない — 実測時点と d19d601 時点のバイトは実際には同一）。",
+      "version_at_execution": {
+        "schema": "vg-d4-remeasure-spec/0.1",
+        "sha256": "702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca"
+      },
+      "post_hoc_attestation": {
+        "commit": "d19d6017c2245fdd26a515c1d1c472c48b67098c",
+        "evidence_class": "post_hoc（2 つの値を事後に並べて比較した記録。exporter の witnessed_export のような『実行プロセス自身が出した記録』ではない）",
+        "files": {
+          "voice_genesis/foundry/run8/s7_io.py": "f5564ad491af0557156d4feeb2736032fac4e219f84fb99bb76b12deef18cb3a",
+          "voice_genesis/foundry/run8/s7_export_manifest.py": "47eacb63da306fc5a0d4df00209075090846f34d01e97f116e1fd708879c0b53",
+          "voice_genesis/foundry/run8/s7_trf.py": "a128510ced6aa21007a2623804e9a89eea87a1a85a888abc0026fad3c00bafed",
+          "voice_genesis/foundry/run8/s7_spec.py": "6fac5d749533d2b287dec915c9dd9e67bc82c5c443c40204782e0a71c4b02e77"
+        },
+        "caveat": "この 4 ファイルは pins.sources の現行値（本 v0.3 改訂で pin した値）と d19d601 時点のバイトが**同一**である（run8/ 配下の python は今回の PR で改変していないため）。d4_runner.py の attestation（直前の amendment）とは異なり、ここでは post_hoc 値と現行 pin 値の間に caveat は無い。"
       }
     }
   ]

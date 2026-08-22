@@ -169,6 +169,10 @@ testpaths = [
     # VG-DEBT-005 (D5) run5-7 の 83 claims へ causal_evidence_strength を付与した
     # claim 単位台帳の形状テスト。依存は PyYAML のみ（本体の必須依存）。
     "voice_genesis/foundry/tests/test_d5_claim_strength.py",
+    # PR #306 レビュー第2巡 P2: 確定 artifact（d4_results_2026-08-22.json /
+    # run4_finite_report_2026-08-22.json）の機械保護。台帳記帳 sha256 との一致 +
+    # 構造 invariant。依存は PyYAML のみ（本体の必須依存）。
+    "voice_genesis/foundry/tests/test_committed_artifacts_immutable.py",
 ]
 pythonpath = ["src", "."]
 markers = [
