@@ -30,6 +30,16 @@
 (g) pinned_field 形 object / single_intervention の許容キー外のフィールドが
     無いこと、design_doc_sha256 の hex64 pattern、claim_strength_target.value
     の禁止記号（"C0"〜"C3" 等）非混入、main_training_gate の許容値
+(h) RUN_CONTRACT_SCHEMA_v1.json を再帰的に歩く汎用バリデータで projection
+    全体を一括検証する（Codex 第5巡採用 P2: (a)-(g) の個別スポットチェック
+    の継ぎ足しを止め、schema 制約の全数強制へファミリー終端。§3-4）
+
+Codex 第5巡見送り（P1: pre-run pin の実 artifact 照合）— 境界宣言:
+projection は宣言の repo 側形状検査に留める。pin と実際に消費される
+artifact（checkpoint 実体等）の束縛は実行時 bootstrap の fail-closed の
+責務（run5-7 の PIN_COMMIT/manifest 照合で実装済みの既存分界。run8 は
+PR-1/PR-3 で同配線）。conformance test 領域はレビュー3巡目につき本節で
+終端する。
 """
 from __future__ import annotations
 
@@ -636,3 +646,265 @@ def test_schema_main_training_gate_enum_is_open_blocked_only(schema: Dict[str, A
 def test_main_training_gate_projection_value_is_open_or_blocked(projection: Dict[str, Any]) -> None:
     """(e) 実データが許容値内であること。"""
     assert projection["main_training_gate"] in {"OPEN", "BLOCKED"}
+
+
+# --- (h) 汎用スキーマバリデータ（Codex 第5巡採用 P2） -----------------------
+#
+# 上の (a)-(g) は個別制約のスポットチェックの積み重ねだった。これを止め、
+# RUN_CONTRACT_SCHEMA_v1.json を再帰的に歩く小型汎用バリデータ（外部
+# jsonschema 依存なし・純 Python）で projection 全体を一括検証する。
+# 対応キーワード: type / const / enum / pattern / required / properties /
+# additionalProperties / minLength / $ref（#/definitions/ 内参照の解決）/
+# items（あれば）。
+#
+# 未対応キーワードに遭遇したら黙って無視せず fail する
+# （`_UNSUPPORTED_KEYWORD_MARKER` 経由で AssertionError）。これにより、
+# 将来 schema に新しい制約キーワード（例: maxLength, oneOf, if/then/else）
+# が追加されたのに本バリデータが追随し忘れた場合に、検証漏れが偽 green の
+# まま埋もれることを防ぐ。
+#
+# `description` / `title` / `x-gate-class` / `$schema` / `$id` / `definitions`
+# は instance を検証しない既知のメタキーワードとして明示的に許可する
+# （実 schema 全体に遍在するドキュメンテーション/自己記述/vendor extension
+# キーワードであり、これらまで「未対応」扱いにすると実 schema に対して
+# バリデータが即座に動かなくなってしまうため）。
+#
+# 既知の未実装範囲（本 schema では未使用のため対象外。境界宣言）:
+# additionalProperties がスキーマ object 値を取る形（拡張プロパティ自体を
+# 別 schema で検証する JSON Schema の一形態）はサポートしない
+# （本 schema は真偽値の false しか使わない）。
+
+_KNOWN_METADATA_KEYWORDS = {"description", "title", "x-gate-class", "$schema", "$id", "definitions"}
+_SUPPORTED_VALIDATION_KEYWORDS = {
+    "type",
+    "const",
+    "enum",
+    "pattern",
+    "required",
+    "properties",
+    "additionalProperties",
+    "minLength",
+    "$ref",
+    "items",
+}
+_RECOGNIZED_SCHEMA_KEYWORDS = _SUPPORTED_VALIDATION_KEYWORDS | _KNOWN_METADATA_KEYWORDS
+
+
+def _resolve_definitions_ref(root_schema: Dict[str, Any], ref: str) -> Dict[str, Any]:
+    assert ref.startswith("#/definitions/"), f"unsupported $ref target: {ref!r}"
+    return root_schema["definitions"][ref.split("/")[-1]]
+
+
+def _instance_matches_json_type(instance: Any, type_spec: Any) -> bool:
+    type_names = type_spec if isinstance(type_spec, list) else [type_spec]
+    for type_name in type_names:
+        if type_name == "object" and isinstance(instance, dict):
+            return True
+        if type_name == "string" and isinstance(instance, str):
+            return True
+        if type_name == "array" and isinstance(instance, list):
+            return True
+        if type_name == "boolean" and isinstance(instance, bool):
+            return True
+        # bool は int のサブクラスなので integer/number からは明示的に除外する。
+        if type_name == "integer" and isinstance(instance, int) and not isinstance(instance, bool):
+            return True
+        if (
+            type_name == "number"
+            and isinstance(instance, (int, float))
+            and not isinstance(instance, bool)
+        ):
+            return True
+        if type_name == "null" and instance is None:
+            return True
+    return False
+
+
+def _validate_instance(
+    root_schema: Dict[str, Any],
+    schema_node: Dict[str, Any],
+    instance: Any,
+    path: str,
+    errors: List[str],
+) -> None:
+    """`schema_node` に対して `instance` を再帰的に検証し、違反メッセージを
+    `errors` へ蓄積する（instance データの不正は fail ではなく errors への
+    蓄積 — 呼び出し元がまとめて assert する）。schema_node 自体が未対応の
+    キーワードを含む場合はデータの正誤に関わらず即座に AssertionError で
+    fail する（バリデータ・schema 間の追随漏れは instance の問題ではない
+    ため、区別してハード失敗させる）。
+    """
+    unknown_keywords = set(schema_node.keys()) - _RECOGNIZED_SCHEMA_KEYWORDS
+    assert not unknown_keywords, (
+        f"{path}: バリデータが対応していない schema キーワードがあります: "
+        f"{sorted(unknown_keywords)}（RUN_CONTRACT_SCHEMA_v1.json に新しい制約"
+        "キーワードを追加したら、test_run_contract_conformance.py の"
+        "_validate_instance にも対応を追加すること）"
+    )
+
+    if "$ref" in schema_node:
+        resolved = _resolve_definitions_ref(root_schema, schema_node["$ref"])
+        _validate_instance(root_schema, resolved, instance, path, errors)
+        # $ref の兄弟キー（x-gate-class/description 等）は instance を検証
+        # しないメタキーワードのみを許容する契約（本 schema はそれ以外を
+        # $ref と併用しない）。$ref 自体の検証はここで完了。
+        return
+
+    if "const" in schema_node and instance != schema_node["const"]:
+        errors.append(f"{path}: expected const {schema_node['const']!r}, got {instance!r}")
+
+    if "enum" in schema_node and instance not in schema_node["enum"]:
+        errors.append(f"{path}: {instance!r} not in enum {schema_node['enum']!r}")
+
+    if "type" in schema_node and not _instance_matches_json_type(instance, schema_node["type"]):
+        errors.append(
+            f"{path}: expected type {schema_node['type']!r}, got "
+            f"{type(instance).__name__} ({instance!r})"
+        )
+
+    if "pattern" in schema_node:
+        if not isinstance(instance, str) or re.search(schema_node["pattern"], instance) is None:
+            errors.append(
+                f"{path}: value {instance!r} does not match pattern {schema_node['pattern']!r}"
+            )
+
+    if "minLength" in schema_node:
+        if not isinstance(instance, str) or len(instance) < schema_node["minLength"]:
+            errors.append(
+                f"{path}: value {instance!r} shorter than minLength {schema_node['minLength']}"
+            )
+
+    if "required" in schema_node:
+        if isinstance(instance, dict):
+            for required_key in schema_node["required"]:
+                if required_key not in instance:
+                    errors.append(f"{path}: missing required key {required_key!r}")
+        else:
+            errors.append(f"{path}: 'required' constraint applied to non-object instance {instance!r}")
+
+    if "properties" in schema_node and isinstance(instance, dict):
+        for prop_name, prop_schema in schema_node["properties"].items():
+            if prop_name in instance:
+                _validate_instance(
+                    root_schema, prop_schema, instance[prop_name], f"{path}.{prop_name}", errors
+                )
+
+    if schema_node.get("additionalProperties") is False and isinstance(instance, dict):
+        allowed = set(schema_node.get("properties", {}).keys())
+        extra = set(instance.keys()) - allowed
+        if extra:
+            errors.append(f"{path}: unexpected additional properties {sorted(extra)}")
+
+    if "items" in schema_node and isinstance(instance, list):
+        for idx, item in enumerate(instance):
+            _validate_instance(root_schema, schema_node["items"], item, f"{path}[{idx}]", errors)
+
+
+def _schema_validation_errors(root_schema: Dict[str, Any], instance: Any) -> List[str]:
+    """`root_schema` に対する `instance` の全違反メッセージ一覧を返す
+    （空リスト = 完全準拠）。schema_node 自体が未対応キーワードを含む場合は
+    ここで AssertionError が伝播する（`_validate_instance` 参照）。"""
+    errors: List[str] = []
+    _validate_instance(root_schema, root_schema, instance, "$", errors)
+    return errors
+
+
+def test_projection_validates_fully_against_schema_generic_validator(
+    schema: Dict[str, Any], projection: Dict[str, Any]
+) -> None:
+    """(h) Codex 第5巡採用 P2: 個別スポットチェックの積み重ねを止め、schema
+    全体に対する汎用バリデータで projection を一括検証する。(a)-(g) の
+    個別テストは重複のまま残す（削除不要。冗長でも実害はない）。"""
+    errors = _schema_validation_errors(schema, projection)
+    assert not errors, "projection が schema 制約に違反しています:\n" + "\n".join(errors)
+
+
+def test_generic_validator_detects_tampered_schema_const(
+    schema: Dict[str, Any], projection: Dict[str, Any]
+) -> None:
+    """(h) 負例: `schema` フィールド（const 制約）の改変が検出されること。"""
+    tampered = dict(projection)
+    tampered["schema"] = "wrong-schema-id/999"
+    errors = _schema_validation_errors(schema, tampered)
+    assert any(e.startswith("$.schema:") for e in errors), errors
+
+
+def test_generic_validator_detects_non_string_run_id(
+    schema: Dict[str, Any], projection: Dict[str, Any]
+) -> None:
+    """(h) 負例: `run_id`（type: string 制約）が非文字列なら検出されること。"""
+    tampered = dict(projection)
+    tampered["run_id"] = 12345
+    errors = _schema_validation_errors(schema, tampered)
+    assert any(e.startswith("$.run_id:") for e in errors), errors
+
+
+def test_generic_validator_detects_missing_required_field(
+    schema: Dict[str, Any], projection: Dict[str, Any]
+) -> None:
+    """(h) 負例: 必須フィールドの欠落が検出されること。"""
+    tampered = dict(projection)
+    del tampered["baseline_run"]
+    errors = _schema_validation_errors(schema, tampered)
+    assert any("baseline_run" in e for e in errors), errors
+
+
+def test_generic_validator_accepts_valid_synthetic_instance() -> None:
+    """(h) 汎用バリデータ自体の健全性: $ref 解決・properties 再帰・
+    additionalProperties・minLength・enum・pattern・items が実際に正しい
+    instance を通すことを、schema 実データに依存しない最小合成例で確認する。"""
+    mini_schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "pattern": "^[0-9a-f]{4}$"},
+            "label": {"type": "string", "minLength": 1},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "pinned": {"$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run"},
+            "status": {"type": "string", "enum": ["OPEN", "BLOCKED"]},
+        },
+        "required": ["id", "label", "pinned", "status"],
+        "additionalProperties": False,
+        "definitions": {
+            "pinned_field": {
+                "type": "object",
+                "properties": {"value": {}, "status": {"type": "string"}},
+                "required": ["value", "status"],
+                "additionalProperties": False,
+            }
+        },
+    }
+    valid_instance = {
+        "id": "abcd",
+        "label": "x",
+        "tags": ["a", "b"],
+        "pinned": {"value": "x", "status": "PINNED"},
+        "status": "OPEN",
+    }
+    assert _schema_validation_errors(mini_schema, valid_instance) == []
+
+    invalid_instance = dict(valid_instance)
+    invalid_instance["id"] = "not-hex"
+    invalid_instance["tags"] = ["a", 1]
+    invalid_instance["extra"] = "should not be allowed"
+    del invalid_instance["label"]
+    errors = _schema_validation_errors(mini_schema, invalid_instance)
+    assert any(e.startswith("$.id:") for e in errors)
+    assert any(e.startswith("$.tags[1]:") for e in errors)
+    assert any("extra" in e for e in errors)
+    assert any("label" in e for e in errors)
+
+
+def test_generic_validator_fails_on_unsupported_schema_keyword() -> None:
+    """(h) バリデータの未対応キーワードに遭遇したら黙って無視せず fail する
+    ことを、架空の未対応キーワード（maxLength）を含む合成 schema で検証する
+    （将来 RUN_CONTRACT_SCHEMA_v1.json に新しい制約キーワードが増えたのに
+    バリデータが追随し忘れた場合の偽 green 防止）。"""
+    schema_with_unsupported_keyword: Dict[str, Any] = {
+        "type": "object",
+        "properties": {"name": {"type": "string", "maxLength": 10}},
+        "required": ["name"],
+        "additionalProperties": False,
+        "definitions": {},
+    }
+    with pytest.raises(AssertionError, match="maxLength"):
+        _schema_validation_errors(schema_with_unsupported_keyword, {"name": "x"})
