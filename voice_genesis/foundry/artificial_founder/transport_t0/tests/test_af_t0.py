@@ -1069,3 +1069,139 @@ def test_rev2_written_records_are_json_serializable():
              "config": transport.TransportConfig("D1", "E0", "A0").as_dict()}
     t0_run.require_json_safe(fresh, "fresh")
     json.dumps(fresh)
+
+
+# ---------------------------------------------------------------------------
+# Closeout: rev2 canonical の凍結（DESIGN_AF_T0.md Appendix C）
+# ---------------------------------------------------------------------------
+RESULTS = _T0 / "results" / "AF_T0"
+requires_results = pytest.mark.skipif(
+    not (RESULTS / "t0_results.json").exists(),
+    reason="AF-T0 canonical results not present")
+
+
+@requires_results
+def test_closeout_verdict_and_gates_are_frozen():
+    """C-1 / C-2。凍結した判定と Gate 一覧が動いていないこと。"""
+    res = json.loads((RESULTS / "t0_results.json").read_text(encoding="utf-8"))
+    assert res["experiment_id"] == "AF-T0"
+    assert res["revision"] == 2
+    assert res["overall"]["verdict"] == "NOT_ESTABLISHED"
+    assert sorted(res["overall"]["reason_codes"]) == [
+        "AFTERGLOW_NOT_TRANSPORTED", "COMBINATION_NOT_ESTABLISHED",
+        "ENERGY_NOT_TRANSPORTED", "FRESH_CONFIRMATION_FAILED"]
+    want = {"T0-G0": "PASS", "T0-G1": "PASS", "T0-G2": "PASS", "T0-G3": "PASS",
+            "T0-G4": "FAIL", "T0-G5": "FAIL", "T0-G6": "PASS", "T0-G7": "FAIL",
+            "T0-G8": "PASS", "T0-G9": "PASS", "T0-G10": "FAIL"}
+    got = {g["gate"]: g["verdict"] for g in res["gates"]}
+    assert got == want, got
+
+
+@requires_results
+def test_closeout_af_p0_verdict_is_unchanged():
+    """C-1。AF-P0 の歴史的判定は変わらない（記録に必ず併記される）。"""
+    import t0_report
+    res = json.loads((RESULTS / "t0_results.json").read_text(encoding="utf-8"))
+    assert res["p0_reference"]["verdict"] == "NOT_ESTABLISHED"
+    for line in t0_report.P0_INVARIANT:
+        assert line in res["p0_reference"]["note"]
+    assert res["claim_ceiling"]["always"] == t0_report.P0_INVARIANT
+    # PASS でないので主張してよいことは無い
+    assert res["claim_ceiling"]["allowed"] == []
+    # AF-P0 側の成果物は T0 が触っていない
+    p0 = json.loads((_AF / "results" / "AF0" / "p0_results.json")
+                    .read_text(encoding="utf-8"))
+    assert p0["overall"]["verdict"] == "NOT_ESTABLISHED"
+
+
+@requires_results
+def test_closeout_transport_modes_are_frozen():
+    """C-4。Duration のみ sidecar で輸送、Energy / AG-alpha は未成立。"""
+    res = json.loads((RESULTS / "t0_results.json").read_text(encoding="utf-8"))
+    assert res["transport"]["duration"] == {"operator": "D1", "mode": "sidecar"}
+    assert res["transport"]["energy"] == {"operator": None, "mode": None}
+    assert res["transport"]["afterglow"] == {"operator": None, "mode": None}
+    reg = json.loads((RESULTS / "transport_registry.json").read_text(encoding="utf-8"))
+    assert reg["uses_sidecar"] is True and reg["all_native"] is False
+
+
+@requires_results
+def test_closeout_a1_and_d2_were_not_selected():
+    """C-8。A1 / D2 は選択されていない（設計留保が判定に影響しない根拠）。"""
+    res = json.loads((RESULTS / "t0_results.json").read_text(encoding="utf-8"))
+    selected = {t: res["transport"][t]["operator"]
+                for t in ("duration", "energy", "afterglow")}
+    assert "D2" not in selected.values()
+    assert "A1" not in selected.values()
+    assert "A2" not in selected.values()
+    gates = {g["gate"]: g["detail"] for g in res["gates"]}
+    # D2 は D1 が通ったため到達していない（§11 最小介入優先）
+    assert gates["T0-G3"]["candidates_tried"] == ["D0", "D1"]
+    # A2 は §10 の前提条件で遮断されている
+    assert gates["T0-G5"]["candidates_tried"] == ["A0", "A1"]
+
+
+@requires_results
+def test_closeout_d1_ag_improvement_is_an_observation_not_a_claim():
+    """C-9。D1 による AG-α 改善は観察であり、成立主張ではない。
+
+    Stage D（combined）で afterglow が通っていても、判定は Stage C が担う
+    T0-G5 = FAIL のままでなければならない。ここが逆転していたら、
+    「結果を見て Gate を読み替えた」ことになる。
+    """
+    res = json.loads((RESULTS / "t0_results.json").read_text(encoding="utf-8"))
+    comb = json.loads((RESULTS / "combined_comparison.json").read_text(encoding="utf-8"))
+    # Stage D では afterglow が許容内
+    ag = comb["comparison"]["afterglow"]
+    assert ag["verdict"] == "PASS" and ag["worst"] <= ag["tolerance"]
+    # それでも T0-G5 は FAIL、transport mode も未成立のまま
+    gates = {g["gate"]: g["verdict"] for g in res["gates"]}
+    assert gates["T0-G5"] == "FAIL", "Stage D の観察で G5 を上書きしてはならない"
+    assert res["transport"]["afterglow"]["operator"] is None
+    assert "AFTERGLOW_NOT_TRANSPORTED" in res["overall"]["reason_codes"]
+    # 設計書に観察であることが明記されている
+    design = (_T0 / "DESIGN_AF_T0.md").read_text(encoding="utf-8")
+    assert "「観察」であって「成立主張」ではない" in design
+
+
+@requires_results
+def test_closeout_code_closure_matches_the_committed_code():
+    """C-7。凍結した閉包ダイジェストが、いまのコードから再計算した値と一致する。"""
+    rec = json.loads((RESULTS / "code_closure.json").read_text(encoding="utf-8"))
+    pins = json.loads((RESULTS / "input_pins.json").read_text(encoding="utf-8"))
+    current, rows = t0_gates.code_closure_digest(_T0)
+    assert rec["digest"] == current, "記録された閉包と現在のコードが食い違う"
+    assert pins["t0_code_closure_sha256"] == current
+    assert pins["t0_code_closure_verified"] is True
+    recorded = {r["path"]: r["sha256"] for r in rec["files"]}
+    assert recorded == dict(rows)
+    assert "singer/phoneme_jp.py" in recorded
+
+
+@requires_results
+def test_closeout_sha256sums_match_the_published_tree():
+    """C-6。SHA256SUMS と版管理下の実体が一致する。"""
+    from af_spec import sha256_file
+    sums = (RESULTS / "SHA256SUMS.txt").read_text(encoding="utf-8")
+    checked = 0
+    for line in sums.splitlines():
+        if not line.strip():
+            continue
+        digest, _, name = line.partition("  ")
+        path = RESULTS / name.strip()
+        if not path.exists():
+            continue          # probes / sidecars は版管理外（.gitignore）
+        assert sha256_file(path) == digest.strip(), name
+        checked += 1
+    assert checked >= 10
+
+
+@requires_results
+def test_closeout_pins_are_frozen():
+    """C-6。AF0 spec / calibration / holdout の pin が凍結値と一致する。"""
+    pins = json.loads((RESULTS / "input_pins.json").read_text(encoding="utf-8"))
+    assert pins["af0_spec_sha256"] == t0_schema.FROZEN_AF0_SPEC_SHA256
+    assert pins["calibration_sha256"] == t0_schema.FROZEN_CALIBRATION_SHA256
+    assert pins["holdout_sha256"] == t0_schema.FROZEN_HOLDOUT_SHA256
+    assert pins["p0_artifacts"] == dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256)
+    assert pins["p0_paths_unmodified"] is True

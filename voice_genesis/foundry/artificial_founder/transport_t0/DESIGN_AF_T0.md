@@ -1410,3 +1410,196 @@ Stage B は「どの段でどれだけ動くか」を測るために設計され
   （§11 最小介入優先）
 - いずれも **run 記録に由来を明記**したうえで AF-T0 rev2 の候補として扱う。
   この留保を承知で読むことが、rev2 の判定を解釈する前提になる
+
+---
+
+# Appendix C — Closeout（AF-T0 rev2 canonical 凍結記録）
+
+本 Appendix は **AF-T0 rev2 の canonical run を凍結した記録**である。以降この
+実験の判定・測定値・pin は変更しない。再測定や候補の追加を行う場合は、
+**実験 ID を増やさず revision を上げる**（本文 Appendix B の運用方針）。
+
+## C-1 判定
+
+```text
+experiment_id = AF-T0
+revision      = 2
+founder_id    = AF0
+OVERALL       = NOT_ESTABLISHED
+reason_codes  = ['AFTERGLOW_NOT_TRANSPORTED', 'COMBINATION_NOT_ESTABLISHED', 'ENERGY_NOT_TRANSPORTED', 'FRESH_CONFIRMATION_FAILED']
+exit code     = 1
+```
+
+> **AF-P0 の歴史的判定は変わらない。**
+> AF-P0 historical verdict remains NOT_ESTABLISHED.
+> AF-T0 does not retroactively alter AF-P0.
+
+主張上限（§2）: `claim_ceiling.allowed` は **空**。PASS でないため、
+AF-T0 について主張してよいことは無い。
+
+## C-2 Gate 一覧
+
+| Gate | 名称 | 判定 |
+|---|---|---|
+| `T0-G0` | INPUT_FREEZE | **PASS** |
+| `T0-G1` | BASELINE_REPLAY | **PASS** |
+| `T0-G2` | STAGE_LEDGER_COMPLETE | **PASS** |
+| `T0-G3` | DURATION_TRANSPORT | **PASS** |
+| `T0-G4` | ENERGY_TRANSPORT | **FAIL** |
+| `T0-G5` | AG_TRANSPORT | **FAIL** |
+| `T0-G6` | SENTINEL_NON_REGRESSION | **PASS** |
+| `T0-G7` | COMBINED_TRANSPORT | **FAIL** |
+| `T0-G8` | DETERMINISM | **PASS** |
+| `T0-G9` | PROVENANCE | **PASS** |
+| `T0-G10` | FRESH_CONFIRMATION | **FAIL** |
+
+## C-3 Localization（§6）
+
+| trait | first_divergence_stage | worst total delta |
+|---|---|---|
+| duration | `WORLD_SYNTHESIS` | 22.314 |
+| energy | `WORLD_SYNTHESIS` | 3.003 |
+| afterglow | `PCM_PUBLICATION` | 59.361 |
+
+## C-4 Transport（§7 / §22）
+
+| trait | operator | mode | 試行 |
+|---|---|---|---|
+| duration | `D1` | `sidecar` | ['D0', 'D1'] |
+| energy | `—` | `—` | ['E0', 'E1', 'E2'] |
+| afterglow | `—` | `—` | ['A0', 'A1'] |
+
+## C-5 測定値
+
+### Duration transport（T0-G3 = PASS / D1 sidecar）
+
+| fixture | onset 誤差 (tol 15 ms) | r_share 誤差 (tol 0.08) |
+|---|---|---|
+| dur_lo | 3.172 | 0.0172 |
+| dur_hi | 3.796 | 0.0233 |
+| dur_holdout | 3.878 | 0.0229 |
+| AF0 (freeze 後 final confirmation) | 3.855 | 0.0218 |
+
+### Energy transport（T0-G4 = FAIL）
+
+calibration から求めた global gain = **-0.3431 dB**（`-18 / -6 dBFS` の 2 行のみ・AF0 除外）。
+一方 AF0（`-12 dBFS`）の実誤差は **2.99 dB**。
+**WORLD のゲイン差は水準依存で定数ではない**ため、E1 の設計前提
+（global gain を 1 個決める）が成立しない。
+
+| fixture | sustain 誤差 (tol 2.0 dB) | 判定 |
+|---|---|---|
+| en_lo | 0.1348 | PASS |
+| en_hi | 1.2743 | FAIL |
+| en_holdout | 0.3755 | FAIL |
+
+### AG-alpha transport（T0-G5 = FAIL）
+
+| fixture | afterglow 誤差 (tol 20 ms) | 判定 |
+|---|---|---|
+| ag_lo | 81.567 | FAIL |
+| ag_hi | 83.059 | FAIL |
+| ag_holdout | 83.858 | FAIL |
+
+### Combined package（AF0 / freeze 済み config `D1 + E0 + A0`）
+
+| family | 判定 | worst | tolerance |
+|---|---|---|---|
+| afterglow | PASS | 0.8797 | 20.0 |
+| ar_alpha | PASS | 0.0764 | 150.0 |
+| ar_beta | PASS | 67.1313 | 220.0 |
+| duration_onset | PASS | 3.8547 | 15.0 |
+| duration_share | PASS | 0.0218 | 0.08 |
+| energy_sustain | FAIL | 2.9942 | 2.0 |
+| f0_core | PASS | 0.2451 | 25.0 |
+| hl_alpha | PASS | 0.0476 | 0.15 |
+| release | PASS | 19.7032 | 30.0 |
+| spectral_identity | PASS | — | — |
+| terminal_f0 | PASS | 3.3824 | 50.0 |
+
+## C-6 Pin / SHA
+
+```text
+experiment_id              = AF-T0
+revision                   = 2
+af0_spec_sha256            = c477fd5a9ec2ac3dd97f2c7ea076568acce19b53c28eed5c10175cc807b5e8d4
+p0_code_closure_sha256     = eb3575fdc3ba95a09711005a86db01c4b39f5c61d4a4d0a7f3516b358f2e917a
+t0_code_closure_sha256     = 2e5441bba1dab467b1abb6858894e013c6ae6efcc1a31f2082f7b6609757a3c1
+t0_criteria_sha256         = 1e3053849fa2fb1606b54cdc63906a0965f488774f7ad0cf5eb9691b693d1554
+calibration_sha256         = 10dcdb53cfe89f31a898f70c1c158562a92b3fd42876174dd5442073b2223e41
+holdout_sha256             = f45cedda70150344b84ac91eb62a757032334583f5b7a443e20fb63e502c1c00
+sidecar_digest             = 899f23eed69dca371a24d7b00b25013d7f7ac422af778198fa8d19ef0949c8a7
+transport_config_digest    = 8ce2a183534f3bab28ef1a246b3659c4c16576e00644b0321a9667d450e3aedd
+base_commit                = 5f8bb29accc6fe4fc81d89e961962a531838286f
+python                     = 3.11.15
+numpy                      = 2.4.6
+soundfile                  = 0.14.0
+libsndfile                 = 1.2.2
+```
+
+AF-P0 成果物 6 点は凍結 SHA と 1 件ずつ照合済み（T0-G0 = PASS）。
+`p0_paths_unmodified = True`
+（凍結 base `adcf67b` 以降、AF-P0 の入力パスは未変更）。
+
+## C-7 Code closure（§28）
+
+推移的閉包 **29 ファイル**、
+aggregate digest = `2e5441bba1dab467b1abb6858894e013c6ae6efcc1a31f2082f7b6609757a3c1`。
+`transport_t0/` を起点に `artificial_founder/af_*.py` → `adapter/*.py` →
+`singer/phoneme_jp.py` まで到達している（§28 の「最低」条件を満たす）。
+
+**記録と実装の一致を確認済み**: 凍結時点で記録された閉包ダイジェストと、
+コミット済みコードから再計算した閉包ダイジェストが一致し、
+構成ファイルにも drift が無い。`SHA256SUMS.txt`（62 エントリ）と実体も一致。
+## C-8 未使用候補と設計留保（A1 / D2）
+
+**A1 と D2 は rev2 canonical run で選択されていない。** したがって本判定に
+両者の留保は影響しない。ただし記録として保存する。
+
+| 候補 | rev2 での状態 | 留保 |
+|---|---|---|
+| `D1` | **選択**（duration / sidecar） | なし |
+| `D2` | 未使用（D1 が通ったため §11 最小介入優先で到達せず） | `_ONSET_FRAME_SHIFT = 4`（20 ms）は Stage B の局在化実測に由来する。事前登録文書には無い定数 |
+| `A1` | 試行したが不成立（選択されず） | (a) 実装の実態が設計文言と異なる。§10 A1 は「residual を再注入」だが、実装は AR-α 帯の乗算包絡による **減衰のみ**（`attenuation_only: True`）。失われた残光を足すのではなく、伸びすぎた残光を sidecar の正典長で切る operator である。(b) 実装過程で AF0 の afterglow 誤差を見て 2 度設計変更している（帯域幅係数・residual 形式） |
+| `A2` | 未使用（§10 の前提条件「A1 が sentinel regression で落ちた場合のみ」を満たさず遮断） | なし |
+| `E1` / `E2` | 試行したが不成立 | なし |
+
+**留保の意味**: A1 / D2 は §12 の calibration/holdout 分離では吸収されない
+経路（AF0 の測定を見た設計判断）を含む。rev2 では選択されていないため判定は
+汚れていないが、**将来の revision でこれらを採用する場合は、この由来を承知の
+うえで扱う必要がある**。そのまま「事前登録済み候補」として扱ってはならない。
+
+## C-9 D1 による AG-α 改善は「観察」であって「成立主張」ではない
+
+rev2 で次の非対称が観測された。
+
+```text
+Stage C（trait-by-trait、他 2 形質は baseline）
+  A0 / A1 とも fixture で afterglow 誤差 81-84 ms  -> T0-G5 FAIL
+
+Stage D（combined package D1 + E0 + A0 を AF0 へ）
+  afterglow worst 0.88 ms（許容 20 ms）           -> PASS
+```
+
+D1 の境界保存分割が、副次的に残光の滲みも抑えていると **読める**。
+
+**ただしこれは観察であり、AG-α transport の成立主張ではない。** 理由:
+
+1. **判定は Stage C が担う。** §18 は形質ごとに 1 つずつ評価すると定めており、
+   T0-G5 はその結果で FAIL している。Stage D の値で G5 を上書きしない
+2. **fixture で確認されていない。** 上記の PASS は AF0 1 点の観測。
+   calibration / holdout で D1+A0 の組を評価していないため、
+   §12 が要求する「AF0 に過適合していないこと」の検証が無い
+3. **この観察を根拠に候補を作り直すことは AF-T0 では行わない。**
+   結果を見てからの候補追加・変更は §36 の禁止事項
+
+したがって AF-T0 rev2 の記録上、**AG-α は「輸送不能」**である。
+Duration transport と AG-α の結合は **次 revision の設計材料**として残す。
+
+## C-10 タスク終了時の扱い
+
+- 本 PR をマージする場合、**成功実装としてではなく
+  「AF-T0 = NOT_ESTABLISHED の実験記録」としてマージする**
+- AF-T0 が PASS していない以上、§24 の既定に従い **AF-P1 Controlled Mutation
+  へは進まない**（partial PASS で P1 先行するには User 裁定が要る）
+- 本 run は §34-15 に従い P1 へ自動進行せず停止している
