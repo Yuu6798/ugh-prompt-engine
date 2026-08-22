@@ -27,6 +27,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import s7_export_manifest as xm  # noqa: E402
 import s7_io  # noqa: E402
 import s7_spec as sp  # noqa: E402
 import s7_trf as trf  # noqa: E402
@@ -35,7 +36,7 @@ RESULTS_DIR = _HERE.parent / "results_s7"
 SPEC_PATH = RESULTS_DIR / "s7_0b_probe_spec.json"
 GATE_SYNTH_PATH = _HERE.parent / "s1_gate" / "gate_synth.py"
 SINGER_DIR = _HERE.parents[1] / "singer"
-GROUP_SCHEMA = "s7-0b-probe-group-result/0.1"
+GROUP_SCHEMA = sp.PROBE_GROUP_SCHEMA
 
 
 class ProbeSpecMismatch(RuntimeError):
@@ -320,6 +321,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--speaker", required=True)
     ap.add_argument("--acoustic-dir", required=True)
     ap.add_argument("--acoustic-stem", required=True)
+    ap.add_argument(
+        "--export-manifest", required=True,
+        help="`s7_export_manifest.py` が export 時に書いた記録。--acoustic-dir の "
+             "生成物を、事前登録が世代ごとに pin する checkpoint へ縛る",
+    )
     ap.add_argument("--canon-model-dir", required=True)
     ap.add_argument("--vocoder-dir", required=True)
     ap.add_argument("--canon-phonemes-txt", required=True)
@@ -333,16 +339,42 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise ProbeSpecMismatch(
             f"{args.generation} に話者 {args.speaker} は事前登録されていない"
         )
+    # 従来は「任意の acoustic ディレクトリ + stem」に `--generation` ラベルを
+    # **貼るだけ**だった（PR #303 第 2 巡 P1）。事前登録は世代ごとに
+    # `checkpoint_sha256` を pin しているので、export 時の記録で ONNX をそこへ縛る。
+    acoustic_dir, stem = Path(args.acoustic_dir), args.acoustic_stem
+    export_binding = xm.verify_export_manifest(
+        Path(args.export_manifest),
+        generation=str(args.generation),
+        expected_checkpoint_sha256=str(
+            spec["expansion"]["generations"][args.generation]["checkpoint_sha256"]
+        ),
+        artifacts={
+            "acoustic_onnx": acoustic_dir / f"{stem}.onnx",
+            "acoustic_dsconfig": acoustic_dir / "dsconfig.yaml",
+            "acoustic_phonemes_json": acoustic_dir / f"{stem}.phonemes.json",
+            "speaker_embed": acoustic_dir / f"{stem}.{args.speaker}.emb",
+        },
+    )
+    print(
+        f"| export binding verified: {args.generation} <- ckpt "
+        f"{export_binding['source_checkpoint_sha256'][:16]}"
+    )
+
     frozen = trf.load_frozen_measurement()
     gate_synth = load_gate_synth()
 
     out_path = Path(args.result_out)
-    s7_io.reject_output_collision([out_path], [SPEC_PATH, trf.TRF_SPEC_PATH])
+    s7_io.reject_output_collision(
+        [out_path], [SPEC_PATH, trf.TRF_SPEC_PATH, Path(args.export_manifest)]
+    )
     doc = run_group(
         gate_synth, spec, frozen, args.generation, args.speaker,
         Path(args.acoustic_dir), args.acoustic_stem, Path(args.canon_model_dir),
         Path(args.vocoder_dir), Path(args.canon_phonemes_txt), Path(args.out_dir),
     )
+    # 検証した束縛を成果物へ残す（検証したが記録しない、では後から言えない）
+    doc["export_binding"] = export_binding
     s7_io.assert_json_finite(doc)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

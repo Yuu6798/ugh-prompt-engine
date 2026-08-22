@@ -61,8 +61,37 @@ v2 と v3 の差は **ONNX 再 export のノイズだけ**である（`peak_raw`
 - または v2 バッチを復元して測り直す（`provision.sh` + 再 export では v2 の
   `samples_sha256` は再現しないので、事実上は前者しか取れない）
 
-## 5. 一般化（次の系列への申し送り）
+## 5. 同型の 2 件目: `s7_0b_results.json` が現在の群 JSON から再生成できない
+
+PR #303 レビュー第 2 巡で集計器に不変条件検査を入れたとき、ついでに
+「コミット済みの 10 群から再集計したら同じ物が出るか」を実測した。**出なかった。**
+
+| | 一致 |
+|---|---|
+| voicing 3 軸（`excess_tail_voiced_ms` / `release_after_score_boundary_ms` / `tail_f0_persistence`） | **max\|Δ\| = 0（360 セル全数）** |
+| `terminal_mel_persistence` | max\|Δ\| = 1.43e-04（ε = 0.0387 の約 1/270） |
+| `acoustic`（HNR / vowel drift） | max\|Δ\| = 2.7e-05 〜 1.9e-03 |
+| `gate_eligible_groups` / `h0_summary` / `epsilon` / `in_gate` / `ringing_status` / `degenerate_axis` | **全一致** |
+| `wav_sha256` / `samples_sha256` / `group_file_sha256` | 不一致 |
+
+原因は §1 と同じで、コミット済みの `s7_0b_results.json` は**コンテナ消失前**の群
+ファイルから集計したもの、コミット済みの `probe_0b_groups/*.json` は**復旧後の
+再レンダ**である。**判定に使う量はすべて一致する**（Gate 会計・縮退判定・ε・H0 は
+1 つも動かない）が、成果物どうしのバイト単位の系譜は繋がっていない。
+
+これも書き換えない。`s7_0b_results.json` を再集計して上書きすれば sha は揃うが、
+それは「凍結後に成果物を作り直す」ことであり、Run 8 = CLOSED の裁定に反する。
+
+## 6. 一般化（次の系列への申し送り）
 
 事前登録に外部成果物の sha を書くときは、**repo にコミットされたコピー**ではなく
 **測定に渡す実体**を pin する。両者が同じである保証は無い（再 export・再レンダ・
 コンテナ再構築のたびに割れる）。今回は「repo にある方を pin した」ことが原因である。
+
+さらに一般に、**再生成できない成果物（ONNX・レンダ WAV・集計 JSON）は、生成した
+その場で由来を記録しなければ後から言えない**。PR #303 第 2 巡で入れた
+`s7_export_manifest.py`（ckpt → ONNX の束縛）と `validate_group_document`
+（群 JSON の不変条件）は、この 2 件が示した穴を将来側で塞ぐためのものである。
+**過去の run 8 成果物についてはこの記録が存在しない** — ONNX が pin 済み
+checkpoint 由来であることは、機械照合可能な artifact ではなくセッション履歴に
+よってしか裏付けられない。これは正直に書いておく。

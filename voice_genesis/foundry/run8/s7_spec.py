@@ -24,6 +24,13 @@ SELECTION_RULE_SCHEMA: Final = "s7-b1-selection-rule/0.1"
 REAL_RENDER_MANIFEST_SCHEMA: Final = "s7_b1_real_render_manifest/0.1"
 #: 1.2 系列は 1.0 manifest を **継承して拡張する**（振幅 rung を足す）ので別 schema。
 REAL_RENDER_MANIFEST_SCHEMA_1_2: Final = "s7_b1_real_render_manifest/0.2"
+#: 8-0b probe の群単位結果（`s7_0b_probe.py` が書き、`s7_0b_aggregate.py` が読む）。
+PROBE_GROUP_SCHEMA_0_1: Final = "s7-0b-probe-group-result/0.1"
+#: 0.2 = `export_binding`（ONNX を export 元 checkpoint へ縛る記録）を必須にした版。
+#: PR #303 第 2 巡 P1。0.1 の既存 10 群は**その記録を持たない**ので、読み手は
+#: 両方を受け付けつつ「0.1 は由来を機械照合できない」ことを区別できるようにする。
+PROBE_GROUP_SCHEMA: Final = "s7-0b-probe-group-result/0.2"
+PROBE_GROUP_SCHEMAS: Final = (PROBE_GROUP_SCHEMA_0_1, PROBE_GROUP_SCHEMA)
 #: `zero_input_false_positive`（旧 `silence_zero`）の役割名。
 #: 2026-08-21 amendment: 刺激は「サンプル値が厳密に 0.0 の合成緩衝」で、
 #: SP-only real render（= 経路が生成した非ゼロ波形）とは別物として扱う。

@@ -41,11 +41,13 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import s7_calib_score as cs  # noqa: E402
+import s7_export_manifest as xm  # noqa: E402
 import s7_io  # noqa: E402
 import s7_spec  # noqa: E402
 
 RESULTS_DIR = _HERE.parent / "results_s7"
 CALIBRATION_SET_PATH = RESULTS_DIR / "s7_b1_calibration_set.json"
+PROBE_SPEC_PATH = RESULTS_DIR / "s7_0b_probe_spec.json"
 GATE_SYNTH_PATH = _HERE.parent / "s1_gate" / "gate_synth.py"
 MANIFEST_SCHEMA = s7_spec.REAL_RENDER_MANIFEST_SCHEMA
 
@@ -99,6 +101,27 @@ def verify_container_pins(
             )
         out[name] = {"path": str(Path(path).resolve()), "sha256": observed, "bytes": str(size)}
     return out
+
+
+def calibration_generation(checkpoint_sha256: str) -> str:
+    """校正レンダの**世代名**を、事前登録が pin する checkpoint の sha から引く。
+
+    `real_render_set.render_path` は checkpoint の sha は持つが世代名フィールドを
+    持たない（凍結済みなので足せない）。世代名を手で書くと、それ自体が照合されない
+    主張になる。`s7_0b_probe_spec.json` は世代 → `checkpoint_sha256` の対応を
+    pin しているので、**そこから引く**（見つからなければ止める）。
+    """
+    spec, _, _ = s7_io.read_json_with_pin(PROBE_SPEC_PATH)
+    hits = [
+        gen for gen, info in spec["expansion"]["generations"].items()
+        if str(info["checkpoint_sha256"]) == str(checkpoint_sha256)
+    ]
+    if len(hits) != 1:
+        raise PinMismatch(
+            f"checkpoint {checkpoint_sha256} に対応する世代が "
+            f"{PROBE_SPEC_PATH.name} に {len(hits)} 件（1 件でなければ世代を名乗れない）"
+        )
+    return hits[0]
 
 
 def _sha256_of(path: Path) -> str:
@@ -342,9 +365,13 @@ def build_manifest(
     entries: List[Dict[str, Any]],
     speaker_name: str,
     out_dir: Path,
+    export_binding: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return {
         "schema": MANIFEST_SCHEMA,
+        # レンダに使った ONNX が、事前登録 pin の checkpoint から export された
+        # ものであることの照合結果（PR #303 第 2 巡 P1）
+        "export_binding": export_binding,
         "authority": "User 裁定 2026-08-21 §1（裁定 1 = (b)）/ STEP 6",
         "prereg": {
             "path": str(CALIBRATION_SET_PATH.relative_to(_HERE.parents[2])),
@@ -389,6 +416,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--speaker", default="ritsu")
     ap.add_argument("--speaker-emb", required=True)
     ap.add_argument("--ckpt", required=True, help="事前登録 pin 照合用（読み込みはしない）")
+    ap.add_argument(
+        "--export-manifest", required=True,
+        help="`s7_export_manifest.py` が export 時に書いた記録。--acoustic-onnx を "
+             "--ckpt へ縛る（無いと『事前登録 ckpt で測った』と名乗れない）",
+    )
     ap.add_argument("--canon-zip", required=True, help="事前登録 pin 照合用")
     ap.add_argument("--vocoder-container", required=True, help="事前登録 pin 照合用（.oudep）")
     ap.add_argument("--out-dir", required=True)
@@ -412,6 +444,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             Path(args.ckpt),
             Path(args.canon_zip),
             Path(args.vocoder_container),
+            Path(args.export_manifest),
         ],
     )
 
@@ -426,6 +459,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         },
     )
     print("| container pins verified:", ", ".join(sorted(containers)))
+
+    # 容器 pin だけでは「読み込む ONNX」が checkpoint と無関係のままになる
+    # （PR #303 第 2 巡 P1）。export 時の記録で両者を縛ってからレンダする。
+    export_binding = xm.verify_export_manifest(
+        Path(args.export_manifest),
+        generation=calibration_generation(containers["checkpoint"]["sha256"]),
+        expected_checkpoint_sha256=containers["checkpoint"]["sha256"],
+        artifacts={
+            "acoustic_onnx": Path(args.acoustic_onnx),
+            "acoustic_dsconfig": Path(args.acoustic_dsconfig),
+            "acoustic_phonemes_json": Path(args.acoustic_phonemes_json),
+            "speaker_embed": Path(args.speaker_emb),
+        },
+    )
+    print(
+        "| export binding verified:",
+        f"ckpt {export_binding['source_checkpoint_sha256'][:16]}"
+        f" -> {', '.join(export_binding['verified_artifacts'])}",
+    )
 
     renders = cs.build_all_renders(rrs)
     derived = cs.derived_conditions(rrs)
@@ -471,7 +523,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     entries.extend(write_zero_buffers(rrs.get("zero_buffers", []), entries, out_dir))
 
     manifest = build_manifest(
-        prereg_sha, containers, model_shas, aux_shas, entries, str(args.speaker), out_dir
+        prereg_sha, containers, model_shas, aux_shas, entries, str(args.speaker), out_dir,
+        export_binding=export_binding,
     )
     s7_io.assert_json_finite(manifest)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)

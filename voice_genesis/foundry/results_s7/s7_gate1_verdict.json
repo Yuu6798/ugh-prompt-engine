@@ -8,10 +8,6 @@
     "run_8_0G": "BLOCKED（Gate 1 未通過のため）"
   },
   "reason_codes": [
-    "ringing_reference_unobtainable",
-    "primary_axis_degeneracy",
-    "production_resolution_insufficient",
-    "control_contrast_below_epsilon",
     "INSUFFICIENT_GATE_ADJUDICATION_EVIDENCE"
   ],
   "what_this_is_not": [
@@ -21,7 +17,7 @@
     "「TRF が存在しない / 観測できない」ではない — 計器は 1.2 で成立し、閉じたのは Gate 判定の材料である",
     "「1.2 が失敗した」ではない — production-range resolution は eligible 群で成立している"
   ],
-  "what_this_is": "TRF measurement spec / 1.0 が、本番 360-cell 分布において Gate 判定に必要な分解能を提供できなかった、という結果である。",
+  "what_this_is": "事前登録された聴取セットが、§5-0 が選ぶ 7 つの production-eligible 群と整合していないため、**Gate 1 の合否を出すための判定材料が無い**、という結果である。計器の失敗ではない — 本番分解能は 1.2 の voicing 3 軸で eligible 群において成立している。",
   "evidence": {
     "probe_results": {
       "path": "voice_genesis/foundry/results_s7/s7_0b_results.json",
@@ -30,8 +26,10 @@
       "outcomes": {
         "rendered": 360
       },
-      "gate_eligible_groups": 0,
-      "n_groups": 10
+      "n_groups": 10,
+      "gate_eligible_groups_under_spec_1_0": 0,
+      "gate_eligible_groups_under_spec_1_2": 7,
+      "note_on_eligible_groups": "1.0 では §5-0 の無声基準を満たすセルが取れず Gate 対象群 0/10。1.2 の voicing 検出器では 7/10 群で無声基準が再取得できた（診断: s7_0b_remeasure_1_2.json）。Gate を通したわけではない"
     },
     "measurement_spec": {
       "path": "voice_genesis/foundry/results_s7/trf_measurement_spec.json",
@@ -39,11 +37,11 @@
       "spec_version": "1.0",
       "freeze_status": "frozen"
     },
-    "per_reason": {
-      "ringing_reference_unobtainable": "§5-0 の無声基準を満たすのは 360 中 4 セル（すべて P-ANCHOR|umi|final）。1 セルしか無い群では leave-one-out でそのセル自身が基準を失い、群ごと除外。Gate 対象群 0/10",
-      "primary_axis_degeneracy": "tail_f0_persistence は 8/10 群で MAD = 0、excess_tail_voiced_ms は 3/10 群で MAD = 0（§7-0 (0) の degenerate_axis）",
-      "production_resolution_insufficient": "release_after_score_boundary_ms は全 10 群で MAD ≤ ε。terminal_mel_persistence も群内 MAD が ε を超えるのは 2/10 群",
-      "control_contrast_below_epsilon": "話者内 3 対照の最大差 median(ri) − median(N) = −0.029 が ε = 0.0387 未満"
+    "measurement_spec_1_2": {
+      "path": "voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json",
+      "spec_version": "1.2-rc1",
+      "freeze_status": "blocked",
+      "note": "voicing 3 軸のみ凍結（本番分解能 = ESTABLISHED for the eligible groups）。terminal_mel_persistence は本観測設計では UNAVAILABLE。overall は BLOCKED のまま"
     }
   },
   "next_action": {
@@ -123,5 +121,27 @@
         "note": "4 話者・NOT_EVALUABLE_INSUFFICIENT_SUPPORT を証拠つきで閉じた"
       }
     ]
+  },
+  "superseded_reason_codes": {
+    "status": "historical_evidence_only",
+    "why": "これらは **TRF measurement spec / 1.0** で測ったときの所見である。1.2 の voicing 3 軸で eligible 群 7/10 の本番分解能が成立したため、`production_resolution_insufficient` と `ringing_reference_unobtainable` は**現在の閉鎖理由ではない**。閉じた理由は 1 本だけで、それが上の `reason` である。自動要約が `reason_codes` を読んで閉鎖原因を取り違えないよう、active と historical を分けた（PR #303 レビュー第 2 巡 P2）。値そのものは 1.0 の実測なので書き換えていない。",
+    "codes": [
+      "ringing_reference_unobtainable",
+      "primary_axis_degeneracy",
+      "production_resolution_insufficient",
+      "control_contrast_below_epsilon"
+    ],
+    "measured_under": {
+      "spec_version": "1.0",
+      "path": "voice_genesis/foundry/results_s7/trf_measurement_spec.json",
+      "sha256": "e1ed1a89fffe059a70bfd367fc797e51aadaafcc7694f62ef38662d1b6565a68"
+    },
+    "per_reason": {
+      "ringing_reference_unobtainable": "§5-0 の無声基準を満たすのは 360 中 4 セル（すべて P-ANCHOR|umi|final）。1 セルしか無い群では leave-one-out でそのセル自身が基準を失い、群ごと除外。Gate 対象群 0/10",
+      "primary_axis_degeneracy": "tail_f0_persistence は 8/10 群で MAD = 0、excess_tail_voiced_ms は 3/10 群で MAD = 0（§7-0 (0) の degenerate_axis）",
+      "production_resolution_insufficient": "release_after_score_boundary_ms は全 10 群で MAD ≤ ε。terminal_mel_persistence も群内 MAD が ε を超えるのは 2/10 群",
+      "control_contrast_below_epsilon": "話者内 3 対照の最大差 median(ri) − median(N) = −0.029 が ε = 0.0387 未満"
+    },
+    "what_this_was_under_spec_1_0": "TRF measurement spec / 1.0 が、本番 360-cell 分布において Gate 判定に必要な分解能を提供できなかった、という結果である。"
   }
 }

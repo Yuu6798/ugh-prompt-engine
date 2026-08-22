@@ -16,7 +16,6 @@ AC（§11）が要求するのは「360 セル全てがレンダされたこと�
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -45,7 +44,67 @@ def _mad(values: Sequence[float]) -> float:
     return float(np.median(np.abs(arr - np.median(arr))))
 
 
-def aggregate(spec: Dict[str, Any], group_dir: Path) -> Dict[str, Any]:
+class GroupFileError(ValueError):
+    """群 JSON が事前登録と結び付いていない（fail-closed）。"""
+
+
+def validate_group_document(
+    doc: Dict[str, Any],
+    path: Path,
+    generation: str,
+    speaker: str,
+    cell_ids: Sequence[str],
+    spec_sha256: str,
+) -> None:
+    """**セルを消費する前に**群 JSON の不変条件を検査する（PR #303 レビュー第 2 巡 P1）。
+
+    この関数が無いと、群 JSON は**ファイル名だけ**で (世代, 話者) が決まる。改名・
+    取り違え・古い probe spec での実行が起きると、集計側は中身を見ずに
+    「ファイル名から導いた群」としてセルを**貼り替えて**しまい、Gate 会計が別の
+    モデル / 話者の観測を根拠にできてしまう。
+
+    検査する不変条件:
+
+    1. schema（0.1 = 由来記録なしの履歴形式 / 0.2 = `export_binding` 必須）
+    2. 埋め込まれた `generation` / `speaker` == ファイル名から導いた群
+    3. `probe_spec_sha256` == **いま読んでいる** probe spec の sha256
+       （従来は「群どうしで一致するか」しか見ておらず、10 群すべてが同じ古い spec で
+       回っていれば素通りした）
+    4. `cell_id` の重複が無い（`by_id` は後勝ちで黙って畳むため）
+    5. 事前登録に**無いセルが混ざっていない**（混ざると MAD / 縮退判定へ黙って参加する）。
+       事前登録にあるセルの**欠落は許す** — 部分実行は `cell_absent_from_group_file`
+       として記帳する正当な状態だから
+    """
+    schema = str(doc.get("schema"))
+    if schema not in sp.PROBE_GROUP_SCHEMAS:
+        raise GroupFileError(
+            f"{path.name}: schema {doc.get('schema')!r} は "
+            f"{list(sp.PROBE_GROUP_SCHEMAS)!r} のいずれでもない"
+        )
+    if schema == sp.PROBE_GROUP_SCHEMA and not doc.get("export_binding"):
+        # 0.2 を名乗るなら ONNX の由来を機械照合した記録がある（0.1 は持たない）
+        raise GroupFileError(f"{path.name}: {schema} なのに export_binding が無い")
+    if str(doc.get("generation")) != generation or str(doc.get("speaker")) != speaker:
+        raise GroupFileError(
+            f"{path.name}: 中身の群 "
+            f"({doc.get('generation')!r}, {doc.get('speaker')!r}) が "
+            f"ファイル名の群 ({generation!r}, {speaker!r}) と違う"
+        )
+    if str(doc.get("probe_spec_sha256")) != spec_sha256:
+        raise GroupFileError(
+            f"{path.name}: 実行時 probe spec {doc.get('probe_spec_sha256')} が "
+            f"現在の {spec_sha256} と違う"
+        )
+    got = [str(c["cell_id"]) for c in doc["cells"]]
+    dupes = sorted({cid for cid in got if got.count(cid) > 1})
+    if dupes:
+        raise GroupFileError(f"{path.name}: cell_id が重複している: {dupes}")
+    extra = sorted(set(got) - set(cell_ids))
+    if extra:
+        raise GroupFileError(f"{path.name}: 事前登録に無いセルが混ざっている: {extra}")
+
+
+def aggregate(spec: Dict[str, Any], group_dir: Path, spec_sha256: str) -> Dict[str, Any]:
     cell_ids = [str(c["cell_id"]) for c in spec["cells"]]
     groups: List[Dict[str, Any]] = []
     all_cells: List[Dict[str, Any]] = []
@@ -69,6 +128,7 @@ def aggregate(spec: Dict[str, Any], group_dir: Path) -> Dict[str, Any]:
                 )
                 continue
             doc, sha, _ = s7_io.read_json_with_pin(path)
+            validate_group_document(doc, path, gen, speaker, cell_ids, spec_sha256)
             spec_shas.add(str(doc["probe_spec_sha256"]))
             epsilon = {k: float(v) for k, v in doc["measurement_spec"]["epsilon"].items()}
             by_id = {str(c["cell_id"]): c for c in doc["cells"]}
@@ -132,10 +192,9 @@ def aggregate(spec: Dict[str, Any], group_dir: Path) -> Dict[str, Any]:
     return {
         "schema": AGG_SCHEMA,
         "authority": "DESIGN_S7_run8.md §4 / §5 / §11 AC（帰結の全数記帳）",
-        "probe_spec_sha256": (
-            spec_shas.pop() if spec_shas
-            else hashlib.sha256(SPEC_PATH.read_bytes()).hexdigest()
-        ),
+        # 群が 1 つも走っていなくても、集計が名乗る spec は**いま読んだバイト列**の
+        # sha である（生の read_bytes で読み直すと parse と hash が別バイト由来になる）。
+        "probe_spec_sha256": spec_sha256,
         "n_cells_expected": len(cell_ids) * len(groups),
         "n_cells_recorded": len(all_cells),
         "outcomes": outcomes,
@@ -199,8 +258,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--out", type=Path, default=RESULTS_DIR / "s7_0b_results.json")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
-    spec, _, _ = s7_io.read_json_with_pin(SPEC_PATH)
-    doc = aggregate(spec, Path(args.group_dir))
+    spec, spec_sha, _ = s7_io.read_json_with_pin(SPEC_PATH)
+    doc = aggregate(spec, Path(args.group_dir), spec_sha)
     s7_io.assert_json_finite(doc)
     s7_io.reject_output_collision([args.out], [SPEC_PATH])
     args.out.parent.mkdir(parents=True, exist_ok=True)
