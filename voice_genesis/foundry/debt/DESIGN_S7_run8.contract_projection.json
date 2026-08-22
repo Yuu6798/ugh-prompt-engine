@@ -86,16 +86,14 @@
     "reason": "debt_ledger.yaml VG-DEBT-006（fixed probe の pinned_regenerable 凍結未整備）に依存。wav sha256 等の実 pin が無い"
   },
   "measurement_spec_version": {
-    "value": null,
-    "source": null,
-    "status": "BLOCKED",
-    "reason": "B-1（TRF 主観測4値の測定仕様）が未凍結。debt_ledger.yaml VG-DEBT-002 / voice_genesis/foundry/DESIGN_S7_run8.md §12-0"
+    "value": "1.2-rc1",
+    "source": "voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json（spec_version フィールド。schema: s7-trf-measurement-spec/1.0。excess_tail_voiced_ms / release_after_score_boundary_ms / tail_f0_persistence の3軸が status: frozen） + voice_genesis/foundry/results_s7/s7_run8_closeout.md §2-1/§2-2（凍結の境界: voicing 3軸は production-range resolution ESTABLISHED、terminal_mel_persistence は現行観測設計では unavailable）",
+    "status": "PINNED"
   },
   "hypothesis_algebra_version": {
-    "value": null,
-    "source": null,
-    "status": "BLOCKED",
-    "reason": "B-2（H0–H5 裁定代数）が未凍結。debt_ledger.yaml VG-DEBT-003 / voice_genesis/foundry/DESIGN_S7_run8.md §12-0（B-1 凍結後にのみ着手可能）"
+    "value": "s7-b2-verdict-algebra/0.1",
+    "source": "voice_genesis/foundry/results_s7/s7_b2_verdict_algebra.json（schema フィールド。H0–H5 の participating_axes/contradiction_rule/tolerance/minimum_supporting_cells/final_aggregation を凍結、worked_example つき） + voice_genesis/foundry/results_s7/s7_run8_closeout.md §3（B-1/B-2 の凍結を達成として記帳。H0–H5 の裁定実施自体は未達）",
+    "status": "PINNED"
   },
   "human_evaluation_protocol": {
     "value": "ブラインド耳校正: 40 unique + 8 duplicate、nasalization/continuous_voicing/intelligibility の3軸0〜3判定、20%重複提示で自己一致率を記録",
@@ -122,5 +120,7 @@
     "reason": "run8-B 開始前のため未設定。DEBT_ADJUDICATION_v1.1.md 裁定1の causal_evidence_strength 語彙（descriptive/suggestive/moderate/strong）を適用予定"
   },
   "runbook_may_override_design": false,
-  "main_training_gate": "BLOCKED"
+  "main_training_gate": "CLOSED",
+  "closeout_ref": "voice_genesis/foundry/results_s7/s7_run8_closeout.md",
+  "reason": "INSUFFICIENT_GATE_ADJUDICATION_EVIDENCE"
 }

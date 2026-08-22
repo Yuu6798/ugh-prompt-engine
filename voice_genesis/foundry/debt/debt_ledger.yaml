@@ -24,7 +24,9 @@ debts:
         - run8-R ONNX sha256
         - run8-R fixed probe wav sha256
         - digest(8-R.dataset) == digest(run7.dataset) の assert
+      note: "Run 8 は 2026-08-22 User 裁定で CLOSED（8-B/8-R とも未実行のまま。voice_genesis/foundry/results_s7/s7_run8_closeout.md §3『未達: Run 8-B（有料の学習）への進行 — BLOCKED のまま』）。再入は Run 8 継続版としてではなく、別の観測研究としての再事前登録経由（closeout §5『1.3 は作らない。層化設計の再実装にも進まない […] Run 8 の継続版ではなく別の観測研究として再事前登録する』）。関連所見: voice_genesis/foundry/results_s7/s7_reproducibility_finding.md（reference_output 再測定 > samples_sha256 > wav_sha256 という pin 意味論の訂正。ONNX 再 export はグラフシリアライズ差で samples_sha256 は不一致になるが、測定値は全軸 ε 内で再現する）"
     status: open
+    adjudication_ref: "voice_genesis/foundry/results_s7/s7_run8_closeout.md §3/§5"
     close_condition:
       - bit一致 または sigma_between 推定済みの k>=2 再現走行が完了
       - DESIGN_S7_run8.md §9-0 の裁定表の該当行が確定
@@ -45,7 +47,13 @@ debts:
       evidence_required:
         - calibration set の構成記録
         - 凍結された analysis window / hop / F0判定 等の値一式（DEBT_REPAYMENT_PLAN_v1.0.md §3 A-1 の凍結対象リスト）
-    status: open
+      evidence_delivered:
+        - "voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json（spec_version: 1.2-rc1、schema: s7-trf-measurement-spec/1.0。excess_tail_voiced_ms / release_after_score_boundary_ms / tail_f0_persistence の3軸が status: frozen。frozen_parameters: threshold=0.2, window_ms=100, hop_ms=10, retuning=禁止）"
+        - "voice_genesis/foundry/results_s7/s7_trf_spec_1_2_applicability.json（ruling.voicing_3_axes = 『production resolution 成立。Gate 1 の人間検証へ進行可能』、production_applicability.voicing_3_axes = ESTABLISHED）"
+        - "voice_genesis/foundry/results_s7/s7_run8_closeout.md §2-1"
+      note: "1.0 では凍結条件（production_range_resolution）に到達せず、1.1 を経て 1.2（形状ベース・振幅不変の検出器 = S_melshape_core_distance）で初めて凍結が成立した（closeout §2-1『Run 8 の核心だった「本番セルを分解できる計器」は、3系列目で初めて成立した』）。凍結は次の境界つきで成立する: (a) voicing 3軸（excess_tail_voiced_ms / release_after_score_boundary_ms / tail_f0_persistence）は production-range resolution が ESTABLISHED（本番縮退群 1–2/10。1.0 は 3–8/10、1.1 は 8/10 だった）。(b) terminal_mel_persistence は現行観測設計では unavailable（closeout §2-2: 終端窓 mel パワー比は相対エネルギー量そのものであり、経路床 0.319 が本番中央値 0.207 を上回る逆転を相続し、3 mel 候補とも production_range_resolution の分離が負（−0.030〜−0.037）。1.0/1.1 の『mel 軸は非縮退』は振幅のばらつきを測っていただけだったとの訂正記録つき）。spec 全体の trf_measurement_spec_1_2.json 内 freeze_status フィールドはこの境界のため blocked のままだが、本 debt のスコープ（voicing 主観測の数値凍結）はこの境界つきで充足する。当初の想定バージョン『1.0』は 1.2 へ置き換わった。"
+    status: repaid
+    adjudication_ref: "voice_genesis/foundry/results_s7/s7_run8_closeout.md §2-1/§2-2、voice_genesis/foundry/results_s7/s7_trf_spec_1_2_applicability.json"
     close_condition:
       - "TRF measurement spec / 1.0 が pin され、本番360セルを1セルも見ずに確定したことが記帳されている"
 
@@ -64,8 +72,12 @@ debts:
       evidence_required:
         - tolerance の導出根拠（同一条件反復誤差・process間再現誤差・数値量子化誤差からの導出）
         - worked example
-    status: open
-    blocked_by: [VG-DEBT-002]
+      evidence_delivered:
+        - "voice_genesis/foundry/results_s7/s7_b2_verdict_algebra.json（schema: s7-b2-verdict-algebra/0.1。H0–H5 それぞれの participating_axes/contradiction_rule/direction/tolerance/minimum_supporting_cells/final_aggregation を凍結。epsilon_raw_from_b1 に4軸の ε 導出根拠（measurement-side only: 反復誤差+量子化幅）、worked_example に検算例を記載）"
+        - "voice_genesis/foundry/results_s7/s7_run8_closeout.md §3（『B-1 / B-2 の凍結（事前登録の順序規律を3系列すべてで維持）』を達成として記帳）"
+      note: "H0–H5 の裁定の実施そのもの（supported/refuted/undetermined の実際の判定）は未達（closeout §3『未達: H0–H5 の裁定』）。本 debt のスコープは代数（判定規則・tolerance・集約規則）の凍結であり裁定の実施ではないため、worked example つきで pin されている本状態で充足する。"
+    status: repaid
+    adjudication_ref: "voice_genesis/foundry/results_s7/s7_run8_closeout.md §3、voice_genesis/foundry/results_s7/s7_b2_verdict_algebra.json"
     close_condition:
       - B-2（H0–H5 裁定代数）が worked example つきで pin されている
 
@@ -85,9 +97,8 @@ debts:
       evidence_required:
         - run5/run6/run7 各 checkpoint からの再生成 wav sha256
         - TRF v1.0 適用後の軸値
-      note: "checkpoint 実体は repo 非同梱（voice_genesis/README.md『WAV は非同梱』節と同型の運用）のため実測実行自体が machine-dependent"
+      note: "checkpoint 実体は repo 非同梱（voice_genesis/README.md『WAV は非同梱』節と同型の運用）のため実測実行自体が machine-dependent。B-1（1.2 として凍結。VG-DEBT-002 参照）により unblocked — 実行の前提はもはや欠けていない。実行は checkpoint 実体依存で machine-dependent のまま。"
     status: open
-    blocked_by: [VG-DEBT-002]
     close_condition:
       - run5-7 全てで TRF v1.0 再測定が完了し軸値が記帳されている
 

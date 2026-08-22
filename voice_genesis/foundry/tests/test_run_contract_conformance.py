@@ -18,21 +18,29 @@
 検査内容:
 (a) projection の design_doc_sha256 が実ファイルの sha256 と一致
 (b) schema 必須フィールドが projection に全て存在
-(c) single_intervention.count == 1
+(c) single_intervention.count == 1（かつ intervention が実質宣言されている
+    こと。Codex 第3巡 3-1）
 (d) runbook_may_override_design == false
-(e) pre_run フィールドが1つでも未 PINNED（または post_run フィールドが
-    BLOCKED）であれば main_training_gate == "BLOCKED"
+(e) main_training_gate == "CLOSED" は closeout 記録による終端宣言として
+    sticky（pre_run/post_run の充足状況に関わらず優先し、pin の充足で
+    OPEN/BLOCKED へ自動的に戻らない。CLOSED でないとき、pre_run フィールド
+    が1つでも未 PINNED（または post_run フィールドが BLOCKED）であれば
+    main_training_gate == "BLOCKED"（Codex 第6巡 6-2）
 (f) main_training_gate == "OPEN" は 全 pre_run フィールドが実質 PINNED
     （status PINNED かつ value/source が非 null）かつ 全 post_run フィールドが
     BLOCKED でない（PENDING までは許容）ときのみ許される
-    （現状データでは pre_run に BLOCKED/PENDING があるため引き続き BLOCKED
-    であることを実証する）
+    （現状データは main_training_gate == "CLOSED"。closeout 記録による
+    終端宣言で、pre_run にはなお BLOCKED/PENDING が残る）
 (g) pinned_field 形 object / single_intervention の許容キー外のフィールドが
     無いこと、design_doc_sha256 の hex64 pattern、claim_strength_target.value
     の禁止記号（"C0"〜"C3" 等）非混入、main_training_gate の許容値
+    （{"OPEN", "BLOCKED", "CLOSED"}）
 (h) RUN_CONTRACT_SCHEMA_v1.json を再帰的に歩く汎用バリデータで projection
     全体を一括検証する（Codex 第5巡採用 P2: (a)-(g) の個別スポットチェック
     の継ぎ足しを止め、schema 制約の全数強制へファミリー終端。§3-4）
+(i) main_training_gate == "CLOSED" のとき closeout_ref が repo 内の実在
+    ファイルを指すこと。CLOSED は pin 充足の合成 projection でも sticky
+    であること（Codex 第6巡 6-2）
 
 Codex 第5巡見送り（P1: pre-run pin の実 artifact 照合）— 境界宣言:
 projection は宣言の repo 側形状検査に留める。pin と実際に消費される
@@ -40,6 +48,14 @@ artifact（checkpoint 実体等）の束縛は実行時 bootstrap の fail-close
 責務（run5-7 の PIN_COMMIT/manifest 照合で実装済みの既存分界。run8 は
 PR-1/PR-3 で同配線）。conformance test 領域はレビュー3巡目につき本節で
 終端する。
+
+Codex 第6巡（2026-08-22）データ正確性訂正: 別セッションの PR #303 により
+Run 8 は実行済みで `results_s7/` に成果が正典化された
+（`s7_run8_closeout.md`: Gate 1 = UNDETERMINED / Run 8 = CLOSED /
+B-1・B-2 は境界つきで凍結済み）。本 conformance test はこの正典に合わせて
+main_training_gate の終端状態 CLOSED を追加した（schema 側の変更は
+`RUN_CONTRACT_SCHEMA_v1.json`、projection 側の変更は
+`DESIGN_S7_run8.contract_projection.json` を参照）。
 """
 from __future__ import annotations
 
@@ -185,8 +201,15 @@ def _blocked_post_run_fields(schema: Dict[str, Any], projection: Dict[str, Any])
 
 def _expected_gate(schema: Dict[str, Any], projection: Dict[str, Any]) -> str:
     """schema の x-gate-class 意味論を素直に実装した参照ロジック:
-    全 pre_run フィールドが実質 PINNED、かつ全 post_run フィールドが
-    BLOCKED でなければ OPEN。それ以外は BLOCKED。"""
+    main_training_gate が既に "CLOSED"（closeout 記録による終端宣言）なら、
+    pre_run/post_run の充足状況に関わらず CLOSED を返す（sticky。Codex 第6巡
+    6-2: pin の充足によって OPEN/BLOCKED へ自動的に戻ることはない — CLOSED
+    を解除できるのは closeout 記録を書き換える User 裁定のみで、この参照
+    ロジックの管轄外）。CLOSED でなければ、全 pre_run フィールドが実質
+    PINNED、かつ全 post_run フィールドが BLOCKED でなければ OPEN、それ
+    以外は BLOCKED。"""
+    if projection.get("main_training_gate") == "CLOSED":
+        return "CLOSED"
     if _unsatisfied_pre_run_fields(schema, projection) or _blocked_post_run_fields(schema, projection):
         return "BLOCKED"
     return "OPEN"
@@ -376,20 +399,29 @@ def test_runbook_may_not_override_design(projection: Dict[str, Any]) -> None:
 # --- (e)/(f) main_training_gate の fail-closed ロジック (pre_run/post_run) -
 
 
-def test_main_training_gate_is_blocked_when_pre_run_or_post_run_unsatisfied(
+def test_main_training_gate_is_closed_via_closeout_sticky_override(
     schema: Dict[str, Any], projection: Dict[str, Any]
 ) -> None:
+    """Codex 第6巡 6-2: 現状データ（run8-B 準備状態）は
+    main_training_gate == "CLOSED"（`results_s7/s7_run8_closeout.md` の
+    User 裁定による終端宣言）。pre_run/post_run の一部フィールド
+    （dataset_manifest_sha256 / config_sha256 / fixed_probe_set 等）は
+    依然として未充足のままだが、CLOSED はそれらの状態に関わらず優先される
+    （sticky）。もし CLOSED でなければ BLOCKED になっていたはずの未充足
+    フィールドが実在することとあわせて確認する（旧
+    test_main_training_gate_is_blocked_when_pre_run_or_post_run_unsatisfied
+    の後継 — main_training_gate が BLOCKED から CLOSED へ変わったため
+    改名・改訂）。"""
     unsatisfied_pre = _unsatisfied_pre_run_fields(schema, projection)
     blocked_post = _blocked_post_run_fields(schema, projection)
     assert unsatisfied_pre or blocked_post, (
-        "この検査は『現状データでは BLOCKED 側を通る』ことを実証する目的のため、"
-        "少なくとも1つの未充足 pre_run または BLOCKED な post_run フィールドが"
-        "存在するはずです"
+        "この検査は『CLOSED でなければ BLOCKED 側を通っていたはず』ことを"
+        "実証する目的のため、少なくとも1つの未充足 pre_run または BLOCKED な"
+        "post_run フィールドが存在するはずです"
     )
-    assert projection["main_training_gate"] == "BLOCKED", (
-        f"未充足の pre_run ({unsatisfied_pre}) / BLOCKED な post_run ({blocked_post}) が"
-        f"存在するのに main_training_gate が {projection['main_training_gate']!r} です。"
-        "BLOCKED であるべきです。"
+    assert projection["main_training_gate"] == "CLOSED", (
+        f"main_training_gate が {projection['main_training_gate']!r} です。"
+        "closeout 記録による終端宣言のため CLOSED であるべきです。"
     )
 
 
@@ -469,6 +501,39 @@ def test_open_gate_requires_all_pre_run_pinned_and_no_post_run_blocked() -> None
     }
     assert _unsatisfied_pre_run_fields(schema, fake_open_projection) == []
     assert _blocked_post_run_fields(schema, fake_open_projection) == []
+
+
+def test_gate_closed_is_sticky_even_when_all_pre_run_fields_are_pinned() -> None:
+    """Codex 第6巡 6-2(b): main_training_gate が既に "CLOSED"（closeout 記録
+    による終端宣言）なら、pre_run 全フィールドを実質 PINNED に書き換えた
+    合成 projection でも参照ロジックは CLOSED を返す（pin の充足によって
+    OPEN へ自動的に再開しない — sticky）。"""
+    schema = {
+        "properties": {
+            "single_intervention": {"x-gate-class": "pre_run"},
+            "baseline_run": {"$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run"},
+            "checkpoint_sha256": {"$ref": "#/definitions/pinned_field", "x-gate-class": "post_run"},
+        },
+        "definitions": {"pinned_field": {"required": ["value", "source", "status"]}},
+    }
+    all_pinned_fields = {
+        "single_intervention": {"declared": True, "intervention": "x", "count": 1},
+        "baseline_run": {"value": "x", "source": "y", "status": "PINNED"},
+        "checkpoint_sha256": {"value": "x", "source": "y", "status": "PINNED"},
+    }
+
+    # main_training_gate が CLOSED を宣言している場合は、全 pre_run/post_run
+    # が満たされていても CLOSED のまま（sticky）。
+    closed_projection = dict(all_pinned_fields)
+    closed_projection["main_training_gate"] = "CLOSED"
+    assert _expected_gate(schema, closed_projection) == "CLOSED"
+
+    # 比較対象: main_training_gate フィールド自体が存在しない（= CLOSED を
+    # 宣言していない）場合、同じ pin 充足状況なら通常どおり OPEN になる
+    # （sticky が「pin が全部揃っているから」ではなく「CLOSED を宣言して
+    # いるから」で発動していることの対照実験）。
+    not_closed_projection = dict(all_pinned_fields)
+    assert _expected_gate(schema, not_closed_projection) == "OPEN"
 
 
 # --- 修正6: 動的導出そのものの単体検査（schema へのフィールド追加が自動追随）--
@@ -637,15 +702,90 @@ def test_claim_strength_target_projection_value_is_within_allowed_enum(
     assert projection["claim_strength_target"]["value"] in allowed_values
 
 
-def test_schema_main_training_gate_enum_is_open_blocked_only(schema: Dict[str, Any]) -> None:
-    """(e) main_training_gate の schema enum が {"OPEN", "BLOCKED"} のみで
-    あること。"""
-    assert set(schema["properties"]["main_training_gate"]["enum"]) == {"OPEN", "BLOCKED"}
+def test_schema_main_training_gate_enum_is_open_blocked_closed_only(schema: Dict[str, Any]) -> None:
+    """(e) main_training_gate の schema enum が {"OPEN", "BLOCKED", "CLOSED"}
+    のみであること（Codex 第6巡 6-2: 終端状態 CLOSED を追加）。"""
+    assert set(schema["properties"]["main_training_gate"]["enum"]) == {"OPEN", "BLOCKED", "CLOSED"}
 
 
-def test_main_training_gate_projection_value_is_open_or_blocked(projection: Dict[str, Any]) -> None:
+def test_main_training_gate_projection_value_is_open_blocked_or_closed(
+    projection: Dict[str, Any],
+) -> None:
     """(e) 実データが許容値内であること。"""
-    assert projection["main_training_gate"] in {"OPEN", "BLOCKED"}
+    assert projection["main_training_gate"] in {"OPEN", "BLOCKED", "CLOSED"}
+
+
+# --- (i) closeout_ref（Codex 第6巡 6-2(a)）----------------------------------
+
+
+def _check_closeout_ref(projection: Dict[str, Any], repo_root: Path) -> None:
+    """main_training_gate == "CLOSED" のとき closeout_ref が repo 内の実在
+    ファイルを指すことを検証する。CLOSED でない projection には no-op
+    （closeout_ref は CLOSED 以外では省略可）。design_doc の repo外束縛拒否
+    （修正2/P2 = `_check_design_doc_sha256`）と同じ絶対パス/親ディレクトリ
+    越境拒否を適用する。"""
+    if projection.get("main_training_gate") != "CLOSED":
+        return
+
+    closeout_ref = projection.get("closeout_ref")
+    assert isinstance(closeout_ref, str) and closeout_ref, (
+        "main_training_gate == CLOSED のとき closeout_ref が必須です"
+    )
+    closeout_ref_path = Path(closeout_ref)
+    assert not closeout_ref_path.is_absolute(), (
+        f"closeout_ref は repo 相対パスのみ許容します（絶対パスは拒否）: {closeout_ref!r}"
+    )
+    assert ".." not in closeout_ref_path.parts, (
+        f"closeout_ref に親ディレクトリ越境（'..'）は許容しません: {closeout_ref!r}"
+    )
+
+    repo_root_resolved = repo_root.resolve()
+    resolved = (repo_root / closeout_ref_path).resolve()
+    assert resolved.is_relative_to(repo_root_resolved), (
+        f"closeout_ref の解決後パスが repo_root 配下ではありません: {resolved}"
+    )
+    assert resolved.exists(), f"closeout_ref が指すファイルが存在しません: {resolved}"
+
+
+def test_closeout_ref_exists_when_gate_is_closed(projection: Dict[str, Any]) -> None:
+    """(i) 現状データ（main_training_gate == CLOSED）で closeout_ref が
+    実在の repo 内ファイルを指すこと。"""
+    assert projection["main_training_gate"] == "CLOSED"
+    _check_closeout_ref(projection, REPO_ROOT)
+
+
+def test_check_closeout_ref_rejects_missing_ref_when_gate_closed(
+    projection: Dict[str, Any],
+) -> None:
+    """(i) 負例: CLOSED なのに closeout_ref が欠落していれば検出される。"""
+    tampered = dict(projection)
+    del tampered["closeout_ref"]
+    with pytest.raises(AssertionError):
+        _check_closeout_ref(tampered, REPO_ROOT)
+
+
+def test_check_closeout_ref_rejects_nonexistent_path(projection: Dict[str, Any]) -> None:
+    """(i) 負例: closeout_ref が存在しないファイルを指せば検出される。"""
+    tampered = dict(projection)
+    tampered["closeout_ref"] = "voice_genesis/foundry/results_s7/does_not_exist.md"
+    with pytest.raises(AssertionError):
+        _check_closeout_ref(tampered, REPO_ROOT)
+
+
+def test_check_closeout_ref_rejects_absolute_path(projection: Dict[str, Any]) -> None:
+    """(i) 負例: closeout_ref が絶対パスなら検出される（design_doc と同型の
+    repo外束縛拒否）。"""
+    tampered = dict(projection)
+    tampered["closeout_ref"] = "/etc/passwd"
+    with pytest.raises(AssertionError):
+        _check_closeout_ref(tampered, REPO_ROOT)
+
+
+def test_check_closeout_ref_is_noop_when_gate_not_closed() -> None:
+    """(i) CLOSED でない projection には closeout_ref 検査そのものが
+    適用されない（省略可であることの直接確認）。"""
+    non_closed_projection = {"main_training_gate": "BLOCKED"}
+    _check_closeout_ref(non_closed_projection, REPO_ROOT)  # 例外を投げないことの確認
 
 
 # --- (h) 汎用スキーマバリデータ（Codex 第5巡採用 P2） -----------------------

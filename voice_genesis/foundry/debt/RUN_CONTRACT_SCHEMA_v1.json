@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "voicegenesis-run-contract-projection/1",
   "title": "VoiceGenesis Run Contract — hash-bound machine projection",
-  "description": "DESIGN_<run>.md が実験契約の正本。本 schema はその正本から派生する machine projection (DESIGN_<run>.contract_projection.json) が満たすべき形状を定義する。DEBT_ADJUDICATION_v1.1.md 裁定4 / DEBT_REPAYMENT_PLAN_v1.0.md §6 Run Contract に対応する。各フィールドは未凍結を正直に表現するため {value, source, status} の object を許す。x-gate-class（pre_run/post_run。properties 内の該当フィールドに直接付与）: main_training_gate == OPEN の判定条件が pre_run と post_run で異なる（Phase D0 セルフレビュー修正5）。pre_run（実行前に確定できる契約欄）は gate OPEN に PINNED（かつ value/source が非 null の実質 PINNED）を必須とする。post_run（実行後にのみ実測が存在し得る証拠欄: checkpoint_sha256 / artifact_manifest / cost_record）は gate OPEN 時に PENDING までは許容し BLOCKED は不可 — この欄の PINNED 化自体は run record closure 側（実行結果の記帳）の要件であり、gate OPEN の前提条件ではない。cost_record は「予算宣言は pre、実測記帳は post」の二面性があるが、v1.0 §6 の Run Contract 必須欄としては実測記帳の枠なので post_run に分類する（予算宣言自体は failure_abort_criteria 同様 pre 側の値として projection に残ってよい）。",
+  "description": "DESIGN_<run>.md が実験契約の正本。本 schema はその正本から派生する machine projection (DESIGN_<run>.contract_projection.json) が満たすべき形状を定義する。DEBT_ADJUDICATION_v1.1.md 裁定4 / DEBT_REPAYMENT_PLAN_v1.0.md §6 Run Contract に対応する。各フィールドは未凍結を正直に表現するため {value, source, status} の object を許す。x-gate-class（pre_run/post_run。properties 内の該当フィールドに直接付与）: main_training_gate == OPEN の判定条件が pre_run と post_run で異なる（Phase D0 セルフレビュー修正5）。pre_run（実行前に確定できる契約欄）は gate OPEN に PINNED（かつ value/source が非 null の実質 PINNED）を必須とする。post_run（実行後にのみ実測が存在し得る証拠欄: checkpoint_sha256 / artifact_manifest / cost_record）は gate OPEN 時に PENDING までは許容し BLOCKED は不可 — この欄の PINNED 化自体は run record closure 側（実行結果の記帳）の要件であり、gate OPEN の前提条件ではない。cost_record は「予算宣言は pre、実測記帳は post」の二面性があるが、v1.0 §6 の Run Contract 必須欄としては実測記帳の枠なので post_run に分類する（予算宣言自体は failure_abort_criteria 同様 pre 側の値として projection に残ってよい）。main_training_gate は Codex 第6巡で終端状態 CLOSED を追加（OPEN/BLOCKED いずれとも異なる sticky な状態 — closeout_ref/reason 参照）。",
   "type": "object",
   "definitions": {
     "pinned_field": {
@@ -111,7 +111,16 @@
     },
     "main_training_gate": {
       "type": "string",
-      "enum": ["OPEN", "BLOCKED"]
+      "enum": ["OPEN", "BLOCKED", "CLOSED"],
+      "description": "CLOSED は終端状態（Codex 第6巡導入）。closeout 記録（User 裁定）による確定であり、pre_run/post_run フィールドの充足状況（PINNED/PENDING/BLOCKED）が事後にどう変化しても OPEN/BLOCKED へ自動的に戻ることはない（sticky — 参照ロジックは CLOSED を pre_run/post_run の評価より優先する）。CLOSED のとき closeout_ref は必須。"
+    },
+    "closeout_ref": {
+      "type": "string",
+      "description": "main_training_gate == CLOSED のとき必須（それ以外では省略可）。CLOSED は終端状態であり、pin の充足によって OPEN/BLOCKED へ戻ることはない（closeout 記録の User 裁定のみが正）。closeout 記録への repo 相対パス（例: voice_genesis/foundry/results_s7/s7_run8_closeout.md）。"
+    },
+    "reason": {
+      "type": "string",
+      "description": "main_training_gate == CLOSED のとき、closeout 記録が定める終端理由コードを逐語転記する（例: INSUFFICIENT_GATE_ADJUDICATION_EVIDENCE）。それ以外の gate では省略可。"
     }
   },
   "required": [
