@@ -157,13 +157,27 @@ def test_analysis_stack_pin_is_enforced_before_measuring(prereg, monkeypatch):
     という実測記録があり（scripts/run5_bootstrap.py の ANALYSIS_STACK_PIN）、
     宣言と違う実装が測った値を宣言 pin の産物として記帳するのは provenance の破壊。
     """
-    observed = b1.verify_analysis_stack(prereg)
     declared = {
         k: v for k, v in prereg.candidate_space["analysis_stack_pin"].items() if k != "note"
     }
-    assert observed == declared
+
+    # **周囲の環境に依存させない**。検査すべきは `verify_analysis_stack` の挙動であって、
+    # テスト実行環境がたまたま pin どおりかではない（CI は `pip install -e ".[dev]"` が
+    # librosa 経由で numba を 0.67.0 へ引き上げるため、環境依存にすると本テストだけが
+    # 落ちる。pin の実効的な強制は「測る直前に fail-closed で止める」ことであり、
+    # それは下の 2 ケースで担保される）。
+    monkeypatch.setattr(b1.importlib.metadata, "version", lambda pkg: declared[pkg])
+    assert b1.verify_analysis_stack(prereg) == declared
 
     monkeypatch.setattr(b1.importlib.metadata, "version", lambda pkg: "0.0.0")
+    with pytest.raises(b1.AnalysisStackMismatch):
+        b1.verify_analysis_stack(prereg)
+
+    # 1 パッケージだけずれても止まること（全一致でなければ通さない）
+    def _one_off(pkg: str) -> str:
+        return "0.0.0" if pkg == sorted(declared)[0] else declared[pkg]
+
+    monkeypatch.setattr(b1.importlib.metadata, "version", _one_off)
     with pytest.raises(b1.AnalysisStackMismatch):
         b1.verify_analysis_stack(prereg)
 
