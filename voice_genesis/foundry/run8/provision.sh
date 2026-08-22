@@ -189,19 +189,31 @@ STAGETABLE
 while IFS='|' read -r gen bundle ckpt steps; do
   [ -z "${gen:-}" ] && continue
   src="$M/$ckpt"; dst="$M/$bundle/model_ckpt_steps_${steps}.ckpt"
+  # 置いた実体は**資産表の pin と直接**照合する。`src` と比べるだけだと
+  # (a) hardlink では同一 inode なので照合が空振りし、(b) step 1 が先に走った
+  # という**順序への依存**が残る。表を単一の正本にする。
+  want="$(printf '%s\n' "$ASSETS" | awk -F'|' -v d="$ckpt" '$2 == d {print $4}')"
+  if [ -z "$want" ]; then
+    echo "  $gen            FAIL（資産表に $ckpt の pin が無い）" >&2; FAIL=$((FAIL+1)); continue
+  fi
   if [ ! -f "$src" ]; then
     echo "  $gen            SKIP（$ckpt が無い）" >&2; continue
   fi
-  if [ ! -f "$dst" ] || [ "$(sha_of "$dst")" != "$(sha_of "$src")" ]; then
+  note="verified"
+  if [ "$(sha_of "$dst")" != "$want" ]; then
     # 同一 FS なら hardlink（556 MB x 3 の複製を避ける）。駄目ならコピー。
     rm -f "$dst"
     ln "$src" "$dst" 2>/dev/null || cp "$src" "$dst"
+    note="restaged"
   fi
-  if [ "$(sha_of "$dst")" = "$(sha_of "$src")" ] && [ -f "$M/$bundle/config.yaml" ]; then
-    printf '  %-14s OK   %s/{model_ckpt_steps_%s.ckpt, config.yaml}\n' "$gen" "$bundle" "$steps"
+  got="$(sha_of "$dst")"
+  if [ "$got" = "$want" ] && [ -f "$M/$bundle/config.yaml" ]; then
+    printf '  %-14s OK   %-9s %s/{model_ckpt_steps_%s.ckpt, config.yaml}\n' \
+      "$gen" "$note" "$bundle" "$steps"
+  elif [ "$got" != "$want" ]; then
+    echo "  $gen            FAIL sha ${got:0:16} != pin ${want:0:16}" >&2; FAIL=$((FAIL+1))
   else
-    echo "  $gen            FAIL（$bundle に ckpt と config.yaml が揃わない）" >&2
-    FAIL=$((FAIL+1))
+    echo "  $gen            FAIL（$bundle に config.yaml が無い）" >&2; FAIL=$((FAIL+1))
   fi
 done <<< "$STAGE"
 
