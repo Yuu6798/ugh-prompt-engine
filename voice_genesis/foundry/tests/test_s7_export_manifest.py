@@ -43,7 +43,10 @@ def bundle(tmp_path: Path):
         f.write_bytes(content)
         artifacts[name] = f
     manifest = tmp_path / "export_manifest.json"
-    doc = xm.build_manifest(GEN, ckpt, artifacts, binding_evidence=xm.WITNESSED)
+    doc = xm.build_manifest(GEN, ckpt, artifacts)
+    # 検証側の他の検査を試すための足場。**由来は後付けのままにできない**ので、
+    # ここだけ witnessed へ書き換える（第 5 巡 P1 でこの経路は公開 API から消えた）。
+    doc["binding_evidence"] = xm.WITNESSED
     manifest.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     return manifest, ckpt, artifacts
 
@@ -152,12 +155,15 @@ def test_a_post_hoc_manifest_is_rejected_by_default(tmp_path: Path):
 
 
 def _fake_diffsinger(tmp_path: Path, exp: str = "run7_phase_b", steps: int = 40000):
-    """DiffSinger checkout の最小形（checkpoints/<exp>/model_ckpt_steps_<N>.ckpt）。"""
+    """DiffSinger checkout の最小形 + exporter の入力（ckpt と config.yaml）。"""
     root = tmp_path / "DiffSinger"
-    (root / "checkpoints" / exp).mkdir(parents=True)
+    (root / "checkpoints").mkdir(parents=True)
     (root / "scripts").mkdir(parents=True)
-    ckpt = xm.diffsinger_checkpoint_path(root, exp, steps)
+    ckpt_dir = tmp_path / "bundle"
+    ckpt_dir.mkdir()
+    ckpt = ckpt_dir / f"model_ckpt_steps_{steps}.ckpt"
     ckpt.write_bytes(b"the-pinned-checkpoint")
+    (ckpt_dir / "config.yaml").write_bytes(b"the-pinned-config")
     # export.py の代わりに「--out へ成果物を置くだけ」の台本を置く
     (root / "scripts" / "export.py").write_text(
         "import pathlib, sys\n"
@@ -166,7 +172,7 @@ def _fake_diffsinger(tmp_path: Path, exp: str = "run7_phase_b", steps: int = 400
         "(out / 'a.onnx').write_bytes(b'produced')\n",
         encoding="utf-8",
     )
-    return root, exp, steps, ckpt
+    return root, exp, steps, ckpt, ckpt_dir
 
 
 def test_the_checkpoint_is_derived_from_the_exporter_invocation(tmp_path: Path):
@@ -176,10 +182,10 @@ def test_the_checkpoint_is_derived_from_the_exporter_invocation(tmp_path: Path):
     自分で解決する。したがって manifest が名乗る checkpoint も**同じ規則で導出**し、
     「command が読む物」と「manifest が名乗る物」を構造的に一致させる。
     """
-    root, exp, steps, ckpt = _fake_diffsinger(tmp_path)
+    root, exp, steps, ckpt, ckpt_dir = _fake_diffsinger(tmp_path)
     doc = xm.export_diffsinger_acoustic(
-        GEN, root, exp, steps, tmp_path / "out", {"acoustic_onnx": "a.onnx"},
-        sys.executable, _ckpt_sha(ckpt),
+        GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+        {"acoustic_onnx": "a.onnx"}, sys.executable, _ckpt_sha(ckpt),
     )
     assert doc["binding_evidence"] == xm.WITNESSED
     assert doc["source_checkpoint"]["sha256"] == _ckpt_sha(ckpt)
@@ -190,11 +196,11 @@ def test_the_checkpoint_is_derived_from_the_exporter_invocation(tmp_path: Path):
 
 
 def test_a_checkpoint_that_does_not_match_the_pin_is_rejected_before_exporting(tmp_path):
-    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    root, exp, steps, _, ckpt_dir = _fake_diffsinger(tmp_path)
     with pytest.raises(xm.ExportManifestError):
         xm.export_diffsinger_acoustic(
-            GEN, root, exp, steps, tmp_path / "out", {"acoustic_onnx": "a.onnx"},
-            sys.executable, "0" * 64,
+            GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+            {"acoustic_onnx": "a.onnx"}, sys.executable, "0" * 64,
         )
     assert not (tmp_path / "out").exists(), "pin 不一致なら export を走らせない"
 
@@ -202,44 +208,45 @@ def test_a_checkpoint_that_does_not_match_the_pin_is_rejected_before_exporting(t
 def test_a_missing_experiment_folder_is_rejected(tmp_path: Path):
     """DiffSinger の `find_exp` は名前が合わないと**前方一致で別の実験へ落ちる**。
     厳密なフォルダ名を要求しないと、別の checkpoint から export されうる。"""
-    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    root, exp, steps, _, ckpt_dir = _fake_diffsinger(tmp_path)
     with pytest.raises(xm.ExportManifestError):
         xm.export_diffsinger_acoustic(
-            GEN, root, "run7", steps, tmp_path / "out2", {"acoustic_onnx": "a.onnx"},
-            sys.executable,
+            GEN, root, "run7", steps, ckpt_dir / "missing", tmp_path / "out2",
+            {"acoustic_onnx": "a.onnx"}, sys.executable,
         )
 
 
 def test_a_witnessed_export_refuses_a_non_empty_output_directory(tmp_path: Path):
     """既に在る物を『今 export した産物』と名乗らせない。"""
-    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    root, exp, steps, _, ckpt_dir = _fake_diffsinger(tmp_path)
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     (out_dir / "a.onnx").write_bytes(b"left over from an older export")
     with pytest.raises(xm.ExportManifestError):
         xm.export_diffsinger_acoustic(
-            GEN, root, exp, steps, out_dir, {"acoustic_onnx": "a.onnx"}, sys.executable,
+            GEN, root, exp, steps, ckpt_dir, out_dir,
+            {"acoustic_onnx": "a.onnx"}, sys.executable,
         )
 
 
 def test_a_witnessed_export_fails_when_the_exporter_fails(tmp_path: Path):
-    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    root, exp, steps, _, ckpt_dir = _fake_diffsinger(tmp_path)
     (root / "scripts" / "export.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
     with pytest.raises(xm.ExportManifestError):
         xm.export_diffsinger_acoustic(
-            GEN, root, exp, steps, tmp_path / "out", {"acoustic_onnx": "a.onnx"},
-            sys.executable,
+            GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+            {"acoustic_onnx": "a.onnx"}, sys.executable,
         )
 
 
 def test_a_witnessed_export_fails_when_an_artifact_never_appears(tmp_path: Path):
     """exporter は成功したが宣言した物が出てこない = 因果を主張できない。"""
-    root, exp, steps, _ = _fake_diffsinger(tmp_path)
+    root, exp, steps, _, ckpt_dir = _fake_diffsinger(tmp_path)
     (root / "scripts" / "export.py").write_text("pass\n", encoding="utf-8")
     with pytest.raises(xm.ExportManifestError):
         xm.export_diffsinger_acoustic(
-            GEN, root, exp, steps, tmp_path / "out", {"acoustic_onnx": "a.onnx"},
-            sys.executable,
+            GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+            {"acoustic_onnx": "a.onnx"}, sys.executable,
         )
 
 
@@ -252,3 +259,96 @@ def test_the_module_exposes_no_way_to_pair_an_arbitrary_command_with_a_checkpoin
     public = {n for n in dir(xm) if not n.startswith("_")}
     assert "run_witnessed_export" not in public
     assert "export_diffsinger_acoustic" in public
+
+
+# --- 第 5 巡 P1 × 3 --------------------------------------------------------
+
+
+def test_build_manifest_cannot_mint_a_witnessed_record(tmp_path: Path):
+    """公開 API から `witnessed_export` を名乗れない。
+
+    `_run_witnessed_export` を private にしても、`build_manifest` が
+    `binding_evidence` を引数で受け取る限り、任意の ckpt と任意の ONNX で
+    偽の由来を作れた（私自身のテスト fixture がそうしていた）。
+    """
+    ckpt = tmp_path / "ckpt"
+    ckpt.write_bytes(b"ckpt")
+    onnx = tmp_path / "unrelated.onnx"
+    onnx.write_bytes(b"unrelated")
+
+    doc = xm.build_manifest(GEN, ckpt, {"acoustic_onnx": onnx})
+    assert doc["binding_evidence"] == xm.UNWITNESSED
+    with pytest.raises(TypeError):
+        xm.build_manifest(  # type: ignore[call-arg]
+            GEN, ckpt, {"acoustic_onnx": onnx}, binding_evidence=xm.WITNESSED
+        )
+
+
+@pytest.mark.parametrize("rel", ["/etc/passwd", "../outside.onnx", "sub/../../outside.onnx"])
+def test_a_declared_artifact_outside_the_fresh_output_directory_is_rejected(tmp_path, rel):
+    """絶対パスや `../` を許すと、export と無関係な既存ファイルが
+    `is_file()` を満たして witnessed 成果物として認証される。"""
+    root, exp, steps, _, ckpt_dir = _fake_diffsinger(tmp_path)
+    (tmp_path / "outside.onnx").write_bytes(b"pre-existing and unrelated")
+    with pytest.raises(xm.ExportManifestError):
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+            {"acoustic_onnx": rel}, sys.executable,
+        )
+
+
+def test_the_config_beside_the_checkpoint_is_bound_too(tmp_path: Path):
+    """exporter の入力は checkpoint だけではない。`config.yaml` が隣に staging され、
+    同じく読まれる。正しい ckpt の隣に古い config を置けば別の成果物が出る。"""
+    root, exp, steps, ckpt, ckpt_dir = _fake_diffsinger(tmp_path)
+    doc = xm.export_diffsinger_acoustic(
+        GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+        {"acoustic_onnx": "a.onnx"}, sys.executable,
+        _ckpt_sha(ckpt), s7_io.sha256_bytes(b"the-pinned-config"),
+    )
+    assert doc["source_config"]["sha256"] == s7_io.sha256_bytes(b"the-pinned-config")
+    # staging 先の実体が、記録した sha と一致する（= exporter が開くバイト列）
+    staged = root / "checkpoints" / exp / "config.yaml"
+    assert s7_io.sha256_bytes(staged.read_bytes()) == doc["source_config"]["sha256"]
+
+
+def test_an_altered_config_beside_the_pinned_checkpoint_is_rejected(tmp_path: Path):
+    root, exp, steps, ckpt, ckpt_dir = _fake_diffsinger(tmp_path)
+    (ckpt_dir / "config.yaml").write_bytes(b"a stale or altered config")
+    with pytest.raises(xm.ExportManifestError):
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+            {"acoustic_onnx": "a.onnx"}, sys.executable,
+            _ckpt_sha(ckpt), s7_io.sha256_bytes(b"the-pinned-config"),
+        )
+    assert not (tmp_path / "out").exists(), "config 不一致なら export を走らせない"
+
+
+def test_a_missing_config_beside_the_checkpoint_is_rejected(tmp_path: Path):
+    root, exp, steps, ckpt, ckpt_dir = _fake_diffsinger(tmp_path)
+    (ckpt_dir / "config.yaml").unlink()
+    with pytest.raises(xm.ExportManifestError):
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+            {"acoustic_onnx": "a.onnx"}, sys.executable,
+        )
+
+
+def test_verify_can_also_check_the_config_pin(tmp_path: Path):
+    root, exp, steps, ckpt, ckpt_dir = _fake_diffsinger(tmp_path)
+    out_dir = tmp_path / "out"
+    doc = xm.export_diffsinger_acoustic(
+        GEN, root, exp, steps, ckpt_dir, out_dir,
+        {"acoustic_onnx": "a.onnx"}, sys.executable,
+    )
+    manifest = tmp_path / "m.json"
+    manifest.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    artifacts = {"acoustic_onnx": out_dir / "a.onnx"}
+    xm.verify_export_manifest(
+        manifest, GEN, _ckpt_sha(ckpt), artifacts,
+        expected_config_sha256=s7_io.sha256_bytes(b"the-pinned-config"),
+    )
+    with pytest.raises(xm.ExportManifestError):
+        xm.verify_export_manifest(
+            manifest, GEN, _ckpt_sha(ckpt), artifacts, expected_config_sha256="0" * 64
+        )

@@ -175,3 +175,62 @@ def test_read_wav_with_pins_rejects_a_rerender_that_only_matches_the_container(
     other = s7_io.sha256_bytes(np.ascontiguousarray(y * np.float32(1.0000001)).tobytes())
     with pytest.raises(s7_io.WavPinMismatch):
         s7_io.read_wav_with_pins(wav, container, other)
+
+
+# --- 文書由来の名前をディレクトリへ連結する（PR #303 第 5 巡 P1 と同型） -------
+
+#: 事前登録 JSON / manifest / 群 JSON から来た名前を連結する全モジュール。
+#: レビューは export 側 1 箇所を指したが、数えたら run8 に 7 箇所あった。
+DOCUMENT_JOIN_MODULES = (
+    "s7_0b_remeasure.py",
+    "s7_0b_remeasure_12.py",
+    "s7_b1_calibration.py",
+    "s7_b1_v12.py",
+    "s7_calib_amp_rungs.py",
+    "s7_calib_render.py",
+    "s7_export_manifest.py",
+)
+
+def _raw_document_joins(source: str):
+    """`<なにか>_dir / doc[...]` 形の**素の連結**を AST で数える。
+
+    正規表現だと docstring 内の説明まで拾ってしまうので、構文木で見る
+    （コメント・文字列は最初から対象外になる）。
+    """
+    import ast
+
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)):
+            continue
+        left = node.left
+        if not (isinstance(left, ast.Name) and left.id.endswith("_dir")):
+            continue
+        right = node.right
+        # str(...) を剥がしてから、文書由来（添字アクセス）かどうかを見る
+        if isinstance(right, ast.Call) and getattr(right.func, "id", None) == "str":
+            right = right.args[0] if right.args else right
+        if isinstance(right, ast.Subscript):
+            hits.append(f"line {node.lineno}")
+    return hits
+
+
+@pytest.mark.parametrize("module", DOCUMENT_JOIN_MODULES)
+def test_document_supplied_names_are_never_joined_without_containment(module: str):
+    """`"wav": "../../x.wav"` のような値で、pin 照合の対象が外のファイルにならない。"""
+    source = _source(module)
+    assert "child_path(" in source, f"{module} が s7_io.child_path を使っていない"
+    raw = _raw_document_joins(source)
+    assert raw == [], f"{module} に封じ込め無しの連結が残っている: {raw}"
+
+
+def test_child_path_accepts_a_plain_relative_name(tmp_path: Path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "a.wav").write_bytes(b"x")
+    assert s7_io.child_path(tmp_path, "sub/a.wav") == (tmp_path / "sub" / "a.wav").resolve()
+
+
+@pytest.mark.parametrize("name", ["/etc/passwd", "../a.wav", "sub/../../a.wav"])
+def test_child_path_rejects_names_that_escape(tmp_path: Path, name: str):
+    with pytest.raises(s7_io.PathEscapeError):
+        s7_io.child_path(tmp_path, name)

@@ -47,8 +47,13 @@ def group(spec_and_sha):
     return copy.deepcopy(doc), path
 
 
-def _check(doc, path, cell_ids, sha, generation="run5", speaker="pjs"):
-    agg.validate_group_document(doc, path, generation, speaker, cell_ids, sha)
+@pytest.fixture(scope="module")
+def measurement(spec_and_sha):
+    return spec_and_sha[0]["measurement"]
+
+
+def _check(doc, path, cell_ids, sha, meas, generation="run5", speaker="pjs"):
+    agg.validate_group_document(doc, path, generation, speaker, cell_ids, sha, meas)
 
 
 def test_every_committed_group_file_passes(spec_and_sha, cell_ids):
@@ -61,61 +66,106 @@ def test_every_committed_group_file_passes(spec_and_sha, cell_ids):
             if not path.exists():
                 continue
             doc, _, _ = s7_io.read_json_with_pin(path)
-            agg.validate_group_document(doc, path, gen, speaker, cell_ids, sha)
+            agg.validate_group_document(
+                doc, path, gen, speaker, cell_ids, sha, spec["measurement"]
+            )
             n += 1
     assert n == 10, f"検査した群が {n} 個（10 群あるはず）"
 
 
-def test_a_foreign_schema_is_rejected(group, cell_ids, spec_and_sha):
+def test_a_foreign_schema_is_rejected(group, cell_ids, spec_and_sha, measurement):
     doc, path = group
     doc["schema"] = sp.PROBE_GROUP_SCHEMA + "x"
     with pytest.raises(agg.GroupFileError):
-        _check(doc, path, cell_ids, spec_and_sha[1])
+        _check(doc, path, cell_ids, spec_and_sha[1], measurement)
 
 
-def test_a_file_renamed_to_another_speaker_is_rejected(group, cell_ids, spec_and_sha):
+def test_a_file_renamed_to_another_speaker_is_rejected(group, cell_ids, spec_and_sha, measurement):
     """中身は run5/pjs のまま `run5_ritsu.json` へ改名した、という取り違え。"""
     doc, path = group
     with pytest.raises(agg.GroupFileError):
-        _check(doc, path, cell_ids, spec_and_sha[1], speaker="ritsu")
+        _check(doc, path, cell_ids, spec_and_sha[1], measurement, speaker="ritsu")
 
 
-def test_a_file_relabeled_to_another_generation_is_rejected(group, cell_ids, spec_and_sha):
+def test_a_file_relabeled_to_another_generation_is_rejected(group, cell_ids, spec_and_sha, measurement):
     doc, path = group
     with pytest.raises(agg.GroupFileError):
-        _check(doc, path, cell_ids, spec_and_sha[1], generation="run7")
+        _check(doc, path, cell_ids, spec_and_sha[1], measurement, generation="run7")
 
 
-def test_a_group_run_against_an_older_probe_spec_is_rejected(group, cell_ids, spec_and_sha):
+def test_a_group_run_against_an_older_probe_spec_is_rejected(group, cell_ids, spec_and_sha, measurement):
     """従来は「群どうしで一致するか」しか見ておらず、10 群すべてが同じ古い spec で
     回っていれば素通りした。"""
     doc, path = group
     doc["probe_spec_sha256"] = "0" * 64
     with pytest.raises(agg.GroupFileError):
-        _check(doc, path, cell_ids, spec_and_sha[1])
+        _check(doc, path, cell_ids, spec_and_sha[1], measurement)
 
 
-def test_a_duplicated_cell_id_is_rejected(group, cell_ids, spec_and_sha):
+def test_a_duplicated_cell_id_is_rejected(group, cell_ids, spec_and_sha, measurement):
     """`by_id` は後勝ちで畳むので、重複を許すとどちらを集計したか言えなくなる。"""
     doc, path = group
     doc["cells"].append(copy.deepcopy(doc["cells"][0]))
     with pytest.raises(agg.GroupFileError):
-        _check(doc, path, cell_ids, spec_and_sha[1])
+        _check(doc, path, cell_ids, spec_and_sha[1], measurement)
 
 
-def test_a_cell_absent_from_the_preregistration_is_rejected(group, cell_ids, spec_and_sha):
+def test_a_cell_absent_from_the_preregistration_is_rejected(group, cell_ids, spec_and_sha, measurement):
     """事前登録に無いセルは MAD / 縮退判定へ黙って参加してしまう。"""
     doc, path = group
     extra = copy.deepcopy(doc["cells"][0])
     extra["cell_id"] = "HAND-ADDED|low|b1"
     doc["cells"].append(extra)
     with pytest.raises(agg.GroupFileError):
-        _check(doc, path, cell_ids, spec_and_sha[1])
+        _check(doc, path, cell_ids, spec_and_sha[1], measurement)
 
 
-def test_a_partially_run_group_is_still_accepted(group, cell_ids, spec_and_sha):
+def test_a_partially_run_group_is_still_accepted(group, cell_ids, spec_and_sha, measurement):
     """**欠落は許す** — 部分実行は `cell_absent_from_group_file` として記帳する
     正当な状態であって、取り違えではない。"""
     doc, path = group
     doc["cells"].pop()
-    _check(doc, path, cell_ids, spec_and_sha[1])
+    _check(doc, path, cell_ids, spec_and_sha[1], measurement)
+
+
+# --- 第 5 巡 P1: 群の測定 spec 束縛 -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mutate, why",
+    [
+        (lambda ms: ms.__setitem__("sha256", "0" * 64), "凍結 spec の sha が違う"),
+        (lambda ms: ms.__setitem__("spec_version", "9.9"), "spec の版が違う"),
+        (
+            lambda ms: ms["selected_candidates"].__setitem__(
+                "excess_tail_voiced_ms", "OTHER_detector|win50|hop5"
+            ),
+            "別の検出器で測っている",
+        ),
+        (
+            lambda ms: ms["epsilon"].__setitem__("excess_tail_voiced_ms", 999.0),
+            "別の許容で測っている",
+        ),
+    ],
+)
+def test_a_group_measured_with_another_instrument_is_rejected(
+    group, cell_ids, spec_and_sha, measurement, mutate, why
+):
+    """probe spec の sha が合っていても、群が別の計器・別の許容で測っていれば
+    H0 は別の計器の結果になる。集計は「現行の凍結計器で出た」と名乗るので、
+    ここが食い違ったまま通すと計器の主張そのものが壊れる。"""
+    doc, path = group
+    mutate(doc["measurement_spec"])
+    with pytest.raises(agg.GroupFileError):
+        _check(doc, path, cell_ids, spec_and_sha[1], measurement)
+
+
+def test_the_aggregate_epsilon_comes_from_the_preregistration_not_the_last_group(
+    spec_and_sha,
+):
+    """以前は群ごとに `epsilon` を上書きしていて、**最後に読んだ群**の値が集計全体の
+    `epsilon` として出ていた。事前登録から 1 度だけ取る。"""
+    spec, sha = spec_and_sha
+    doc = agg.aggregate(spec, GROUPS_DIR, sha)
+    want = {a: float(v["epsilon"]) for a, v in spec["measurement"]["primary_axes"].items()}
+    assert doc["epsilon"] == want

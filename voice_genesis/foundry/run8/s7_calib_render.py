@@ -297,7 +297,7 @@ def render_derived(
             raise KeyError(f"{cid}: derived_from {base_id!r} が未レンダ")
         base = by_id[base_id]
         gain = float(cond.get("gain", 1.0))
-        base_path = out_dir / str(base["wav"])
+        base_path = s7_io.child_path(out_dir, base["wav"])
         # 直前に自分が書いた WAV でも、記録した pin と照合してから読む
         # （PR #303 レビュー指摘: WAV を測る/派生させる全経路を s7_io へ集約）。
         y64, sr = s7_io.read_wav_with_pins(

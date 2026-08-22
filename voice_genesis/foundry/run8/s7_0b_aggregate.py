@@ -55,6 +55,7 @@ def validate_group_document(
     speaker: str,
     cell_ids: Sequence[str],
     spec_sha256: str,
+    measurement: Dict[str, Any],
 ) -> None:
     """**セルを消費する前に**群 JSON の不変条件を検査する（PR #303 レビュー第 2 巡 P1）。
 
@@ -71,7 +72,12 @@ def validate_group_document(
        （従来は「群どうしで一致するか」しか見ておらず、10 群すべてが同じ古い spec で
        回っていれば素通りした）
     4. `cell_id` の重複が無い（`by_id` は後勝ちで黙って畳むため）
-    5. 事前登録に**無いセルが混ざっていない**（混ざると MAD / 縮退判定へ黙って参加する）。
+    5. `measurement_spec` が probe spec の `measurement` と**完全に一致する**
+       （sha256 / spec_version / 軸ごとの selected_candidate と epsilon）。
+       probe spec の sha が合っていても、群が別の検出器・別の許容で測っていれば
+       H0 は別の計器の結果になる。集計は「現行の凍結計器で出た」と名乗るので、
+       ここが食い違ったまま通すと計器の主張が壊れる（PR #303 第 5 巡 P1）
+    6. 事前登録に**無いセルが混ざっていない**（混ざると MAD / 縮退判定へ黙って参加する）。
        事前登録にあるセルの**欠落は許す** — 部分実行は `cell_absent_from_group_file`
        として記帳する正当な状態だから
     """
@@ -95,6 +101,31 @@ def validate_group_document(
             f"{path.name}: 実行時 probe spec {doc.get('probe_spec_sha256')} が "
             f"現在の {spec_sha256} と違う"
         )
+    ms = doc.get("measurement_spec") or {}
+    frozen = measurement["trf_measurement_spec"]
+    if str(ms.get("sha256")) != str(frozen["sha256"]):
+        raise GroupFileError(
+            f"{path.name}: 測定 spec {ms.get('sha256')} が "
+            f"probe spec の pin {frozen['sha256']} と違う"
+        )
+    if str(ms.get("spec_version")) != str(frozen["spec_version"]):
+        raise GroupFileError(
+            f"{path.name}: 測定 spec の版 {ms.get('spec_version')!r} != "
+            f"{frozen['spec_version']!r}"
+        )
+    want_cand = {a: str(v["selected_candidate"]) for a, v in measurement["primary_axes"].items()}
+    want_eps = {a: float(v["epsilon"]) for a, v in measurement["primary_axes"].items()}
+    got_cand = {str(k): str(v) for k, v in (ms.get("selected_candidates") or {}).items()}
+    got_eps = {str(k): float(v) for k, v in (ms.get("epsilon") or {}).items()}
+    if got_cand != want_cand:
+        raise GroupFileError(
+            f"{path.name}: 選定候補が probe spec と違う: {got_cand} != {want_cand}"
+        )
+    if got_eps != want_eps:
+        raise GroupFileError(
+            f"{path.name}: epsilon が probe spec と違う: {got_eps} != {want_eps}"
+        )
+
     got = [str(c["cell_id"]) for c in doc["cells"]]
     dupes = sorted({cid for cid in got if got.count(cid) > 1})
     if dupes:
@@ -106,9 +137,15 @@ def validate_group_document(
 
 def aggregate(spec: Dict[str, Any], group_dir: Path, spec_sha256: str) -> Dict[str, Any]:
     cell_ids = [str(c["cell_id"]) for c in spec["cells"]]
+    measurement = spec["measurement"]
+    # ε は**事前登録から 1 度だけ**取る。以前は群ごとに上書きしていて、最後に読んだ
+    # 群の値が集計全体の `epsilon` として出ていた（PR #303 第 5 巡 P1）。群の値が
+    # 事前登録と一致することは `validate_group_document` が保証する。
+    epsilon: Dict[str, float] = {
+        a: float(v["epsilon"]) for a, v in measurement["primary_axes"].items()
+    }
     groups: List[Dict[str, Any]] = []
     all_cells: List[Dict[str, Any]] = []
-    epsilon: Optional[Dict[str, float]] = None
     spec_shas = set()
 
     for gen, info in spec["expansion"]["generations"].items():
@@ -128,9 +165,10 @@ def aggregate(spec: Dict[str, Any], group_dir: Path, spec_sha256: str) -> Dict[s
                 )
                 continue
             doc, sha, _ = s7_io.read_json_with_pin(path)
-            validate_group_document(doc, path, gen, speaker, cell_ids, spec_sha256)
+            validate_group_document(
+                doc, path, gen, speaker, cell_ids, spec_sha256, measurement
+            )
             spec_shas.add(str(doc["probe_spec_sha256"]))
-            epsilon = {k: float(v) for k, v in doc["measurement_spec"]["epsilon"].items()}
             by_id = {str(c["cell_id"]): c for c in doc["cells"]}
             missing = [cid for cid in cell_ids if cid not in by_id]
             for cid in missing:

@@ -328,7 +328,7 @@ def real_render_source(prereg: Prereg, manifest_path: Path) -> CalibrationSource
     sample_rates = set()
     for entry in manifest["conditions"]:
         cid = str(entry["condition_id"])
-        wav_path = out_dir / str(entry["wav"])
+        wav_path = s7_io.child_path(out_dir, entry["wav"])
         # 容器 sha に加えて**標本そのもの**の sha も照合する（float WAV の容器は
         # libsndfile の PEAK チャンクに書き出し時刻を含むため再現しない）。
         # 照合の実装は s7_io に 1 本だけ置く（PR #303 レビューで、同じ照合を

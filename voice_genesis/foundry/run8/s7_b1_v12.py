@@ -247,7 +247,8 @@ def source_12(manifest_path: Path, cal: Dict[str, Any]) -> Any:
         cid = str(e["condition_id"])
         try:
             y, sr = s7_io.read_wav_with_pins(
-                out_dir / str(e["wav"]), e.get("wav_sha256"), e.get("samples_sha256")
+                s7_io.child_path(out_dir, e["wav"]),
+                e.get("wav_sha256"), e.get("samples_sha256"),
             )
         except s7_io.WavPinMismatch as exc:
             raise Manifest12Error(f"{cid}: {exc}") from exc

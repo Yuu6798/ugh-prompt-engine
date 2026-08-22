@@ -240,17 +240,18 @@ echo "| result: OK=$OK SKIP=$SKIP FAIL=$FAIL"
 cat <<'NEXT'
 | 次: export → 校正レンダ再生成 → samples_sha256 照合
 |
-| export は **s7_export_manifest.py 経由で回す**。checkpoint のパスを独立に渡す口は
-| 無い — exporter と同じ規則（checkpoints/<exp>/model_ckpt_steps_<N>.ckpt）で導出する
-| ので、「exporter が開く物」と「manifest が名乗る物」が構造的に一致する
-| （PR #303 第 3–4 巡）:
+| export は **s7_export_manifest.py 経由で回す**。checkpoint と config.yaml を
+| --ckpt-dir から一度読み、その同じバイト列を checkpoints/<exp>/ へ staging して
+| から exporter を起動するので、「exporter が開く物」と「manifest が名乗る物」が
+| 構造的に一致する（PR #303 第 3–5 巡）:
 |
 |   "$ROOT/venv_export/bin/python" \
 |     voice_genesis/foundry/run8/s7_export_manifest.py \
 |     --generation run7 \
 |     --exporter-root "$M/DiffSinger" --exp <checkpoints/ 配下の厳密なフォルダ名> \
-|     --ckpt-steps 40000 \
+|     --ckpt-steps 40000 --ckpt-dir "$M/run7_ckpt" \
 |     --expected-checkpoint-sha256 518df090a8154e61f28b529f731418f4f97d47c3b56d1326d354e6be4629fa93 \
+|     --expected-config-sha256 e14ac2fde724998db05070550e86391c9090e582b1539747faa58356ae18d411 \
 |     --out-dir "$ROOT/out/onnx_export_s6_run7_acoustic" \
 |     --artifact acoustic_onnx=s6_run7_acoustic.onnx \
 |     --artifact acoustic_dsconfig=dsconfig.yaml \

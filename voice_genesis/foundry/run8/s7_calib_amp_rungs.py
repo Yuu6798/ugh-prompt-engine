@@ -56,7 +56,7 @@ def build_rungs(manifest_path: Path, out_dir: Path) -> Dict[str, Any]:
     # rung 全体の由来が黙って変わるので、**読む前に manifest の pin を照合する**
     # （PR #303 レビュー指摘。同型穴を s7_io へ集約）。
     y, sr = s7_io.read_wav_with_pins(
-        src_dir / str(base["wav"]), base["wav_sha256"], base["samples_sha256"]
+        s7_io.child_path(src_dir, base["wav"]), base["wav_sha256"], base["samples_sha256"]
     )
     boundary_s = float(base["score_boundary_s"])
     i0 = int(round(boundary_s * sr))
@@ -114,8 +114,8 @@ def build_rungs(manifest_path: Path, out_dir: Path) -> Dict[str, Any]:
 
     # 既存条件の wav を新 out_dir へ複製する（1 つの manifest で完結させるため）
     for cid, c in by_id.items():
-        src = src_dir / str(c["wav"])
-        dst = out_dir / str(c["wav"])
+        src = s7_io.child_path(src_dir, c["wav"])
+        dst = s7_io.child_path(out_dir, c["wav"])
         if src.resolve() != dst.resolve():
             dst.write_bytes(src.read_bytes())
 

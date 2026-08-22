@@ -73,7 +73,7 @@ def remeasure_group(path: Path, winners) -> Dict[str, Any]:
         # 機械ローカルなので、再生成・編集・別バッチ差し替えが起こりうる。照合
         # しないと「元の 360 セル由来」と名乗ったまま別の音を測った成果物が出る。
         y, sr = s7_io.read_wav_with_pins(
-            out_dir / c["wav"], c["wav_sha256"], c["samples_sha256"]
+            s7_io.child_path(out_dir, c["wav"]), c["wav_sha256"], c["samples_sha256"]
         )
         stim = b1.Stimulus(
             stim_id=str(c["cell_id"]), family="production_cell",

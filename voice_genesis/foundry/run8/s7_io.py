@@ -10,7 +10,11 @@
    その同じバイト列から parse と sha256 の両方を作る（読み直すと、
    parse と hash の間で差し替わったときに「古いバイトで計算した結果」を
    「新しいバイトの sha」で pin してしまう）。
-3. `read_wav_with_pins` — **記録済みの pin を持つ WAV** を測る前に、容器 sha と
+3. `child_path` — 文書が持ってきた名前をディレクトリへ連結するとき、**その
+   ディレクトリの中に閉じている**ことを課す（PR #303 第 5 巡 P1 と同型）。
+   `"wav": "../../x.wav"` のような値を許すと、pin 照合の対象が意図した
+   ディレクトリの外のファイルになる。
+4. `read_wav_with_pins` — **記録済みの pin を持つ WAV** を測る前に、容器 sha と
    標本 sha の両方をその場で照合する（PR #303 レビュー指摘）。照合しないと、
    機械ローカルの出力ディレクトリが再生成・編集・別バッチ差し替えを受けたとき、
    「元の 360 セル由来」と名乗ったまま**別の音**を測った成果物が出る。
@@ -30,6 +34,10 @@ class OutputCollisionError(RuntimeError):
 
 class NonFiniteArtifactError(ValueError):
     """canonical JSON へ非有限値（Infinity / NaN）を書こうとした（fail-closed）。"""
+
+
+class PathEscapeError(ValueError):
+    """文書が持ってきた名前が、連結先ディレクトリの外を指した（fail-closed）。"""
 
 
 class WavPinMismatch(ValueError):
@@ -87,6 +95,27 @@ def assert_json_finite(doc: Any, path: str = "$") -> None:
     if isinstance(doc, (list, tuple)):
         for i, v in enumerate(doc):
             assert_json_finite(v, f"{path}[{i}]")
+
+
+def child_path(directory: Path, name: str) -> Path:
+    """`directory / name` を返す。ただし **directory の中に閉じている**ときだけ。
+
+    `name` は事前登録 JSON / manifest / 群 JSON など**文書から来た値**であり、
+    絶対パスや `../` を含みうる。素直に連結すると、pin 照合の対象が意図した
+    ディレクトリの外のファイルになる（PR #303 第 5 巡 P1 が export 側で指摘した
+    のと同型）。字句（絶対 / 親参照）と解決後の両方で検査する。
+    """
+    rel = Path(str(name))
+    if rel.is_absolute() or ".." in rel.parts:
+        raise PathEscapeError(
+            f"{name!r} は {directory} からの相対パスでなければならない"
+            "（絶対パス / 親参照は連結先の外を指しうる）"
+        )
+    root = Path(directory).resolve()
+    path = (root / rel).resolve()
+    if root != path and root not in path.parents:
+        raise PathEscapeError(f"{name!r} が {root} の外を指している")
+    return path
 
 
 def read_bytes_with_pin(path: Path) -> Tuple[bytes, str, int]:
