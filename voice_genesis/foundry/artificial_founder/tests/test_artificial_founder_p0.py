@@ -943,13 +943,15 @@ def test_reject_output_collision_guards_destructive_out(tmp_path):
     """`--out` が入力・パッケージ・リポジトリを消す構成を削除前に拒否する。"""
     import p0_run
 
-    protected = [SPEC_PATH, CRITERIA_PATH, CONTROLS_PATH, PROBES_PATH, _PKG, _PKG.parents[2]]
+    # 第 9 巡でシグネチャを inputs（双方向）/ containers（片方向）へ分割した。
+    # パッケージ・リポジトリは containers 側（既定値）に載る。
+    inputs = [SPEC_PATH, CRITERIA_PATH, CONTROLS_PATH, PROBES_PATH]
     # 既定の出力先（パッケージ配下だが何も内包しない）は通る
-    p0_run.reject_output_collision(_PKG / "results" / "AF0", protected)
-    p0_run.reject_output_collision(tmp_path / "anywhere", protected)
+    p0_run.reject_output_collision(_PKG / "results" / "AF0", inputs)
+    p0_run.reject_output_collision(tmp_path / "anywhere", inputs)
     for bad in (SPEC_PATH.parent, _PKG, _PKG.parents[2], _PKG / "criteria"):
         with pytest.raises(p0_run.OutputCollisionError):
-            p0_run.reject_output_collision(bad, protected)
+            p0_run.reject_output_collision(bad, inputs)
 
 
 @pytest.mark.slow
@@ -1523,3 +1525,92 @@ def test_prepare_records_snapshot_before_it_can_fail(tmp_path):
     p0_run.prepare_output_tree(out, state)
     assert state["snapshot"] == str(p0_run.output_snapshot_path(out))
     assert Path(state["snapshot"]).joinpath("old.txt").exists()
+
+
+# ---------------------------------------------------------------------------
+# 第 9 巡レビュー回帰
+# ---------------------------------------------------------------------------
+def test_output_inside_an_input_directory_is_rejected(tmp_path):
+    """`--out` が入力ディレクトリの **内側** を指す構成も止める（双方向検査）。
+
+    第 8 巡のガードは片方向（出力先が入力を内包する場合のみ）だったため、
+    `--voicebank /tmp/bank --out /tmp/bank/C4` が素通りし、
+    `convert_from_genome` が読み元の pitch dir そのものを rmtree していた。
+    """
+    import convert_founder
+    from af_spec import OutputCollisionError
+
+    bank = tmp_path / "bank"
+    (bank / "C4").mkdir(parents=True)
+    (bank / "C4" / "keep.wav").write_bytes(b"RIFF")
+
+    # 読み元の pitch dir そのもの
+    with pytest.raises(OutputCollisionError):
+        convert_founder.main(["--spec", str(SPEC_PATH), "--voicebank", str(bank),
+                              "--out", str(bank / "C4")])
+    # voicebank 配下の任意の位置
+    with pytest.raises(OutputCollisionError):
+        convert_founder.main(["--spec", str(SPEC_PATH), "--voicebank", str(bank),
+                              "--out", str(bank / "nested" / "out")])
+    assert (bank / "C4" / "keep.wav").exists()
+
+
+def test_collision_guard_is_directional(tmp_path):
+    """向きの違いを固定する: container は片方向、input は双方向。
+
+    両方向にすると既定の `--out`（リポジトリ **配下**）が弾かれ、片方向のままだと
+    入力の内側への出力を見逃す。どちらの退行も落とせるようにしておく。
+    """
+    from af_spec import PROTECTED_TREE_ROOTS, OutputCollisionError, reject_output_collision
+
+    repo_root = Path(PROTECTED_TREE_ROOTS[1])
+
+    # container の内側へ出力するのは正規（既定の results/AF0 がこれ）
+    reject_output_collision(repo_root / "voice_genesis" / "x" / "results", [])
+    # container 自身 / container を内包する側は拒否
+    with pytest.raises(OutputCollisionError):
+        reject_output_collision(repo_root, [])
+    with pytest.raises(OutputCollisionError):
+        reject_output_collision(repo_root.parent, [])
+
+    # input は双方向
+    inp = tmp_path / "bank"
+    inp.mkdir()
+    with pytest.raises(OutputCollisionError):
+        reject_output_collision(inp / "inside", [inp])
+    with pytest.raises(OutputCollisionError):
+        reject_output_collision(inp, [inp])
+    with pytest.raises(OutputCollisionError):
+        reject_output_collision(tmp_path, [inp])
+    # 重ならなければ通る
+    reject_output_collision(tmp_path / "elsewhere", [inp])
+
+
+def test_canonical_invocation_still_passes_the_guard():
+    """正規フロー（既定の --spec/--criteria/--controls/--probes/--out）が通る。
+
+    AGENTS.md §3 採否方針 5「防御追加時は正規フローをテストで固定する」。
+    ガードの向きを間違えると既定の `--out` がリポジトリ配下であるために
+    弾かれ、AF-P0 が一切実行できなくなる。
+    """
+    import p0_run
+    from af_spec import reject_output_collision
+
+    reject_output_collision(
+        Path(p0_run.DEFAULT_OUT).resolve(),
+        [Path(p0_run.DEFAULT_SPEC), Path(p0_run.DEFAULT_CRITERIA),
+         Path(p0_run.DEFAULT_CONTROLS), Path(p0_run.DEFAULT_PROBES)])
+
+
+def test_pins_record_the_wav_codec():
+    """WAV を書く soundfile / libsndfile を provenance に記録する。
+
+    body・dataset・re-expression の全 WAV がこの実装を通るのに、pin は
+    NumPy/SciPy/pyworld までしか無かった。G2 は同一環境内のプロセス間比較
+    しかしないので、実装差は G14 PASS のまま素通りしていた。
+    """
+    pins = json.loads(
+        (_PKG / "results" / "AF0" / "input_pins.json").read_text(encoding="utf-8"))
+    for key in ("soundfile", "libsndfile"):
+        assert key in pins, f"{key} must be pinned in the provenance record"
+        assert pins[key] and pins[key] != "unknown"

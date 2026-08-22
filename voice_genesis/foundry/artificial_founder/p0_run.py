@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
+import soundfile as sf
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -372,8 +373,7 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
     """
     out_dir = Path(out_dir)
     reject_output_collision(out_dir, [Path(spec_path), Path(criteria_path),
-                                      Path(controls_path), Path(probes_path),
-                                      HERE, HERE.parents[2]])
+                                      Path(controls_path), Path(probes_path)])
     # prepare 自体を rollback 範囲に含める（旧ツリーを退避したあと copytree や
     # mkdir が落ちる窓がある）。状態は先に作って prepare へ渡す。
     tree = new_tree_state()
@@ -445,6 +445,12 @@ def _run_phases(spec_path: Path, criteria_path: Path, controls_path: Path,
         pins["pyworld"] = getattr(pyworld, "__version__", "unknown")
     except ModuleNotFoundError:
         pins["pyworld"] = None
+    # WAV のバイト列を実際に書くのは soundfile / libsndfile であり、body・
+    # dataset・re-expression の **全 WAV** がこの実装を通る。ここを記録しないと
+    # G14 は「どの実装が生成したか特定できない provenance」に PASS を出す
+    # （G2 は同一環境内のプロセス間比較しかしないので差を検出できない）。
+    pins["soundfile"] = getattr(sf, "__version__", "unknown")
+    pins["libsndfile"] = getattr(sf, "__libsndfile_version__", "unknown")
     write_json(out_dir / "input_pins.json", {**pins, "code_closure_files": len(closure_rows)})
     write_json(out_dir / "code_closure.json",
                {"digest": closure_digest,
@@ -697,9 +703,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # 通常 run と同じ削除ガードを **削除前に** かける。dataset は
         # `compile_artifacts` が staging の **兄弟** に作るので両方を検査する。
         staging = Path(args.out).resolve()
-        protected = [Path(args.spec), *PROTECTED_TREE_ROOTS]
-        reject_output_collision(staging, protected)
-        reject_output_collision(staging.parent / "dataset", protected)
+        reject_output_collision(staging, [Path(args.spec)])
+        reject_output_collision(staging.parent / "dataset", [Path(args.spec)])
         spec_raw = json.loads(Path(args.spec).read_text(encoding="utf-8"))
         genome = genome_from_dict(spec_raw)
         build = compile_artifacts(genome, Path(args.out))

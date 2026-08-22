@@ -38,33 +38,56 @@ def output_snapshot_path(out_dir: Path) -> Path:
     return out.parent / f".{out.name}.previous"
 
 
-def reject_output_collision(out_dir: Path, protected: Sequence[Path]) -> None:
-    """**削除前に** 出力先が保護対象を消す構成を拒否する。
+def reject_output_collision(out_dir: Path, inputs: Sequence[Path],
+                            containers: Sequence[Path] = PROTECTED_TREE_ROOTS) -> None:
+    """**削除前に** 出力先が入力や保護ツリーを消す構成を拒否する。
 
     AF-P0 で出力先を消してから書く writer は 3 つある:
     `p0_run.prepare_output_tree` / `af_utau.write_body` (`--compile-only` 経由) /
-    `convert_founder.convert_from_genome`。いずれも `rmtree` するので、
-    `--out .` や `founder_specs/`、パッケージ / リポジトリのルートを渡すと
-    spec 本体やリポジトリ内容を消してから失敗する。出力先が保護対象と同一、
-    あるいは保護対象を **内包** する場合は着手前に止める（既定の
-    `results/AF0` はパッケージ配下だが何も内包しないので通る）。
+    `convert_founder.convert_from_genome`。いずれも `rmtree` する。
+
+    検査の向きは 2 種類あり、混ぜると正規フローを壊す:
+
+    * `containers`（パッケージ / リポジトリのルート）は **片方向**。出力先が
+      それらと同一か、それらを内包する場合だけ拒否する。既定の `--out`
+      (`results/AF0`) はリポジトリ **配下** にあるため、両方向で検査すると
+      正規フローそのものが弾かれる。
+    * `inputs`（spec / criteria / controls / probes / voicebank）は **双方向**。
+      出力先が入力を内包する場合に加え、**入力の内側に出力先がある場合も**
+      拒否する。`convert_founder --voicebank /tmp/bank --out /tmp/bank/C4` が
+      後者で、`convert_from_genome` が読み元の pitch dir そのものを rmtree する。
 
     `prepare_output_tree` が実際に触る派生パス（スナップショット）も同じ規則で
     検査する。派生パス名は `output_snapshot_path` **1 箇所** から取る。
     """
     out = Path(out_dir).resolve()
     candidates = [out, output_snapshot_path(out)]
-    for prot in protected:
+
+    def _fail(target: Path, why: str) -> None:
+        raise OutputCollisionError(
+            f"--out {out} would delete {why} ({target}); choose an output directory "
+            "that neither is, contains, nor sits inside an input, the package "
+            "directory, or the repository root")
+
+    for prot in containers:
         try:
             target = Path(prot).resolve()
         except OSError:  # pragma: no cover
             continue
         for cand in candidates:
             if cand == target or cand in target.parents:
-                raise OutputCollisionError(
-                    f"--out {out} would delete a protected path ({target}); "
-                    "choose an output directory that neither is nor contains an input, "
-                    "the package directory, or the repository root")
+                _fail(target, "a protected tree")
+    for prot in inputs:
+        try:
+            target = Path(prot).resolve()
+        except OSError:  # pragma: no cover
+            continue
+        for cand in candidates:
+            if cand == target or cand in target.parents:
+                _fail(target, "an input")
+            if target in cand.parents:
+                _fail(target, "data inside an input directory")
+
 
 P0_SCHEMA = "voicegenesis-artificial-founder-p0/1.1"
 CRITERIA_SCHEMA = "voicegenesis-artificial-founder-criteria/1.1"
