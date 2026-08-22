@@ -486,6 +486,37 @@ def test_reverify_data_inputs_after_consumption_passes_when_unchanged(
     d4._reverify_data_inputs_after_consumption(data_inputs, ["fake_key"], source="test")
 
 
+def test_verify_consumed_cell_definition_digest_detects_file_swapped_after_verification(
+    tmp_path: Path,
+) -> None:
+    """検証→消費 TOCTOU 閉塞の回帰（`cell_definition_source`。第8巡の自主検出
+    残件を先回りで閉じる）: 起動時検証で計算した sha256 を pin として与えた
+    **後**に probe spec が差し替わり、`cmd_render` が消費時に読んだ digest が
+    それと食い違えば abort する（spec 検証後に probe spec を差し替える
+    シナリオをそのまま再現する）。"""
+    real_path = tmp_path / "probe_spec.json"
+    real_path.write_text('{"v": 1}', encoding="utf-8")
+    verified_sha256 = d4._sha_file(real_path)  # 起動時検証（差し替え前）の digest。
+    spec = {"pins": {"cell_definition_source": {
+        "path": "probe_spec.json", "sha256": verified_sha256,
+    }}}
+
+    # 検証通過後・消費前に probe spec が差し替わる（TOCTOU のシミュレーション）。
+    real_path.write_text('{"v": 2}', encoding="utf-8")
+    consumed_sha256 = d4._sha_file(real_path)  # cmd_render が実際に消費時に読む digest。
+
+    with pytest.raises(d4.D4SpecMismatch, match="TOCTOU"):
+        d4._verify_consumed_cell_definition_digest(spec, consumed_sha256)
+
+
+def test_verify_consumed_cell_definition_digest_passes_when_matching(
+    raw_spec: Dict[str, Any],
+) -> None:
+    """対照: 消費時に読んだ digest が pin と一致すれば通過する。"""
+    real_sha = raw_spec["pins"]["cell_definition_source"]["sha256"]
+    d4._verify_consumed_cell_definition_digest(raw_spec, real_sha)
+
+
 def test_resolve_axis_candidates_rejects_consumed_digest_mismatch(
     spec_and_sha, monkeypatch,
 ) -> None:

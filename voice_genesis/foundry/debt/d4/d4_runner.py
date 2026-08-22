@@ -50,7 +50,12 @@ load_prereg_12()` / `b1.load_prereg()` / `trf.load_frozen_measurement()` /
 inputs_after_consumption`）で pin と再照合し、この窓は data-input の消費時
 digest 照合まで防御する（同一プロセス内でのファイルシステム外の改変 =
 メモリ改竄は、上記「脅威モデルと境界」節と同じ理由で境界外——この系統も
-これで終端する）。
+これで終端する）。**残件の先回り閉塞**: 第8巡完了報告で境界外として明示した
+`cell_definition_source`（`s7_0b_probe_spec.json`。`cmd_render` が
+`probe0b.run_group()` の消費前に読む）も同じ TOCTOU ファミリーに属するため、
+`_verify_consumed_cell_definition_digest` で同様に閉じた——`pins.data_inputs`
+とは別枠の pin だが、消費時 digest 照合という意味では対象範囲外に残す理由が
+無いため。
 
 **脅威モデルと境界**（PR #306 レビュー第3巡 P2・`docs/DESIGN_M2_extraction_
 accuracy.md` §6「Scorer pin の脅威モデルと境界」と同型の切り分け）: pin 検証
@@ -704,6 +709,31 @@ def _load_cell_definition(spec: Dict[str, Any]) -> Dict[str, Any]:
     return doc
 
 
+def _verify_consumed_cell_definition_digest(spec: Dict[str, Any], got_sha256: str) -> None:
+    """**検証→消費 TOCTOU 閉塞**（PR #306 レビュー第8巡の自主検出残件・先回り
+    対応）: `cmd_render` が `probe0b.SPEC_PATH`（`s7_0b_probe_spec.json` =
+    `pins.cell_definition_source`）を消費のために読んだ直後、その digest を
+    起動時検証済みの pin と再照合する。
+
+    `load_and_verify_d4_spec` の起動時検証と `cmd_render` 内の別読み
+    （`s7_io.read_json_with_pin(probe0b.SPEC_PATH)`）の間には時間窓があり、
+    `pins.data_inputs` の 8 点（第8巡 P2・`_verify_consumed_digests` /
+    `_reverify_data_inputs_after_consumption`）と同じ理由でこの窓も閉じる
+    必要がある——`cell_definition_source` は `data_inputs` とは別枠の pin
+    （セル定義・群構成の正本）だが、消費時 digest 照合の対象という点では
+    同じ TOCTOU ファミリーに属する（第8巡完了報告で境界外として明示した
+    残件をここで閉じる）。`probe0b.run_group()`（実消費）より**前**に呼ぶ。
+    """
+    cds = spec["pins"]["cell_definition_source"]
+    want = cds["sha256"]
+    if got_sha256 != want:
+        raise D4SpecMismatch(
+            f"{cds['path']}: 消費時に読んだ sha256 {got_sha256} が "
+            f"pins.cell_definition_source.sha256={want} と違う（起動時検証と実消費の間に "
+            "差し替えられた疑い = 検証→消費 TOCTOU）"
+        )
+
+
 #: `score_boundary_s - note_onset_s` の許容誤差（秒）。float 丸め誤差のみを
 #: 吸収する（`windows_from_command` の演算は frame_ms 由来の乗除算のみで、
 #: 2026-08-22 実測 360 セル全数で 1e-9 未満の誤差だった。тamper 検出の感度を
@@ -857,6 +887,10 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     # 8-0b probe と**同じ**事前登録 + verify（凍結物は読むだけ）。
     probe_spec, probe_spec_sha, _ = s7_io.read_json_with_pin(probe0b.SPEC_PATH)
+    # 検証→消費 TOCTOU 閉塞（PR #306 レビュー第8巡の自主検出残件・先回り対応）:
+    # `probe0b.run_group()`（実消費）より前に、いま読んだ digest を起動時検証
+    # 済みの `pins.cell_definition_source` と再照合する。
+    _verify_consumed_cell_definition_digest(d4_spec, probe_spec_sha)
     probe0b.verify_spec(probe_spec)
     if args.speaker not in probe_spec["expansion"]["generations"][args.generation]["speakers"]:
         raise probe0b.ProbeSpecMismatch(
