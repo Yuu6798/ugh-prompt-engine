@@ -92,7 +92,7 @@ debts:
         - run5-7 各 run の因果主張
         - run 間比較（run8-0 台帳の H-TTD 等）
     repayment:
-      method: "凍結済み TRF measurement spec 1.2（voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json。voicing 3軸: excess_tail_voiced_ms / release_after_score_boundary_ms / tail_f0_persistence）で run5-7 の fixed probe を再測定。実行手順は voice_genesis/foundry/debt/d4/d4_remeasure_spec.json（1.2/計器/ハーネス/セル定義を sha256 pin した事前登録。measurement より前にコミット済み）+ d4_runner.py（render/measure 二相・起動時に spec 自身と pins 全件を実ファイルと照合し不一致は abort・結果 JSON に spec sha256 を束縛）として machine-independent 部分の配線は完了。実測実行そのもの（render サブコマンド。checkpoint 実体依存）は machine-dependent のため別途"
+      method: "凍結済み TRF measurement spec 1.2（voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json。voicing 3軸: excess_tail_voiced_ms / release_after_score_boundary_ms / tail_f0_persistence）で run5-7 の fixed probe を再測定。実行手順は voice_genesis/foundry/debt/d4/d4_remeasure_spec.json（1.2/計器/ハーネス/セル定義を sha256 pin した事前登録。measurement より前にコミット済み）+ d4_runner.py（render/measure 二相・起動時に pins のキー集合と値を実ファイルと照合し `--spec-sha256` で operator が期待 hash を束縛・不一致は abort・measure は候補解決を `enumerate_candidates_12` 経由に統一し軸ごとの測定キャッシュをセル単位に隔離・render 群 JSON の事前登録照合〔群 ID/36 セル規定数/cell_id 集合〕・セル単位の測定失敗を隔離し全セル記帳のうえ exit 非ゼロ・結果 JSON に spec sha256 を束縛）として machine-independent 部分の配線は完了。実測実行そのもの（render サブコマンド。checkpoint 実体依存）は machine-dependent のため別途"
       evidence_required:
         - run5/run6/run7 各 checkpoint からの再生成 wav sha256
         - "TRF measurement spec 1.2 適用後の軸値（voicing 3軸のみ。terminal_mel_persistence は unavailable のためスコープ外）"

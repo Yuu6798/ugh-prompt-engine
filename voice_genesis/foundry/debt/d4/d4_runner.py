@@ -30,7 +30,23 @@
 fail-closed 起動ガード: 両サブコマンドとも、実行の**前**に本 spec
 (`d4_remeasure_spec.json`) 自身と、その `pins` が指す 3 ファイル + セル定義
 source の sha256 を実ファイルと照合する。1 つでも不一致なら `D4SpecMismatch`
-で abort する（本番値を見て仕様を書き換える経路を構造的に閉じる）。
+で abort する（本番値を見て仕様を書き換える経路を構造的に閉じる）。加えて
+`pins` のキー集合そのもの（欠落・余剰）と、D4 spec の `axes[].selected_candidate`
+が凍結済み `trf_measurement_spec_1_2.json` の同軸 `selected_candidate` と逐語
+一致することも検査する。
+
+`--spec-sha256`（両サブコマンド必須）: operator が渡す「コミット済みのはずの
+spec sha256」の期待値。実ファイルから計算した sha256 と一致しなければ abort
+する — スクリプトの sha256 自己計算だけでは「operator が意図した版」までは
+束縛できない（例えばコミット前の作業コピーを誤って指す事故）ため、期待値を
+呼び出し側から明示的に渡させる。
+
+`measure` は追加で、渡された render 群 JSON が D4 spec の登録内容（群 ID・
+36 セルという規定数・cell_id 集合の欠落/重複なし）と一致することを検査する。
+これは `d4_remeasure_spec_sha256` が None（= D4 render を経由しない生の 8-0b
+probe 群 JSON）でも必ず通す。セル単位の測定失敗は `outcome: "error"` として
+隔離し、他セルの測定は継続する（fail-closed = 全滅させない代わりに、1 件でも
+エラーがあれば `d4_results.json` を書き切った上で非ゼロ終了する）。
 """
 from __future__ import annotations
 
@@ -38,11 +54,10 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, Optional, Sequence, Tuple
 
 _HERE = Path(__file__).resolve().parent                 # .../debt/d4
 _DEBT_DIR = _HERE.parent                                 # .../debt
@@ -86,6 +101,15 @@ class D4SpecMismatch(RuntimeError):
     （fail-closed）。"""
 
 
+#: `pins.sources` が持つべきキー集合（厳密一致。欠落・余剰とも abort）。
+EXPECTED_PIN_SOURCE_KEYS = frozenset({
+    "trf_measurement_spec_1_2_sha256", "instrument_sha256", "render_harness_sha256",
+})
+#: `pins` トップレベルが持つべきキー集合（上記3キー + cell_definition_source +
+#: sources 自身。厳密一致）。
+EXPECTED_PIN_KEYS = EXPECTED_PIN_SOURCE_KEYS | {"cell_definition_source", "sources"}
+
+
 # --- fail-closed: 事前登録 spec の pin を実ファイルと照合 -------------------
 
 
@@ -93,10 +117,40 @@ def _sha_file(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def load_and_verify_d4_spec(spec_path: Path = SPEC_PATH) -> Tuple[Dict[str, Any], str]:
+def _verify_pins_key_shape(pins: Dict[str, Any]) -> None:
+    """`pins` / `pins.sources` のキー集合を先に厳密検査する（値の照合より前）。
+    欠落・余剰のどちらも spec の陳腐化・改竄の兆候として abort する。"""
+    got_top = set(pins.keys())
+    if got_top != EXPECTED_PIN_KEYS:
+        raise D4SpecMismatch(
+            f"pins のキー集合が期待と違う: missing={sorted(EXPECTED_PIN_KEYS - got_top)} "
+            f"extra={sorted(got_top - EXPECTED_PIN_KEYS)}"
+        )
+    got_sources = set(pins.get("sources", {}).keys())
+    if got_sources != EXPECTED_PIN_SOURCE_KEYS:
+        raise D4SpecMismatch(
+            f"pins.sources のキー集合が期待と違う: "
+            f"missing={sorted(EXPECTED_PIN_SOURCE_KEYS - got_sources)} "
+            f"extra={sorted(got_sources - EXPECTED_PIN_SOURCE_KEYS)}"
+        )
+
+
+def load_and_verify_d4_spec(
+    spec_path: Path = SPEC_PATH, *, expected_sha256: Optional[str] = None,
+) -> Tuple[Dict[str, Any], str]:
     """`d4_remeasure_spec.json` を読み、schema・軸集合・pins 全件を実ファイルと
-    照合してから返す。**測定より前に必ず呼ぶ**（両サブコマンドの入口)。"""
+    照合してから返す。**測定より前に必ず呼ぶ**（両サブコマンドの入口)。
+
+    `expected_sha256` を渡すと、operator が明示した期待 spec sha256（CLI の
+    `--spec-sha256`）と実ファイルの sha256 を照合する（不一致は abort）。
+    省略時（テスト等）はこの照合をスキップする。
+    """
     spec, spec_sha, _ = s7_io.read_json_with_pin(spec_path)
+    if expected_sha256 is not None and spec_sha != expected_sha256:
+        raise D4SpecMismatch(
+            f"--spec-sha256 {expected_sha256!r} が {spec_path} の実 sha256 "
+            f"{spec_sha!r} と違う（operator が束縛した期待版と現物が食い違う）"
+        )
     if spec.get("schema") != SPEC_SCHEMA:
         raise D4SpecMismatch(f"schema {spec.get('schema')!r} != {SPEC_SCHEMA!r}")
     if spec.get("debt_ref") != DEBT_REF:
@@ -107,7 +161,8 @@ def load_and_verify_d4_spec(spec_path: Path = SPEC_PATH) -> Tuple[Dict[str, Any]
         raise D4SpecMismatch(f"axes {sorted(axes)} != {sorted(D4_AXES)}（voicing 3軸のみ）")
 
     pins = spec.get("pins", {})
-    sources = pins.get("sources", {})
+    _verify_pins_key_shape(pins)
+    sources = pins["sources"]
     for key, rel_path in sources.items():
         want = pins.get(key)
         if not isinstance(want, str) or not want:
@@ -130,38 +185,57 @@ def load_and_verify_d4_spec(spec_path: Path = SPEC_PATH) -> Tuple[Dict[str, Any]
             f"{cds_path}: sha256 {got_cds} が spec pin cell_definition_source と違う"
         )
 
+    _verify_axes_match_frozen_spec_1_2(axes, _REPO_ROOT / sources["trf_measurement_spec_1_2_sha256"])
+
     return spec, spec_sha
 
 
-def _axis_candidates(spec: Dict[str, Any]) -> Dict[str, "v12.Cand12"]:
-    return {axis: parse_voicing_candidate_id(str(cfg["selected_candidate"]))
-            for axis, cfg in spec["axes"].items()}
+def _verify_axes_match_frozen_spec_1_2(axes: Dict[str, Any], trf12_path: Path) -> None:
+    """D4 spec の `axes[].selected_candidate` が、凍結済み
+    `trf_measurement_spec_1_2.json` の同軸 `selected_candidate` と逐語一致する
+    ことを検査する（不一致 = D4 spec 側の typo として abort。凍結物は読むだけ）。
+    """
+    trf12, _, _ = s7_io.read_json_with_pin(trf12_path)
+    for axis, cfg in axes.items():
+        want = cfg.get("selected_candidate")
+        got = trf12.get("axes", {}).get(axis, {}).get("selected_candidate")
+        if got != want:
+            raise D4SpecMismatch(
+                f"axis {axis!r}: D4 spec の selected_candidate {want!r} が "
+                f"凍結済み trf_measurement_spec_1_2.json の {got!r} と違う"
+                "（D4 spec 側の typo の可能性）"
+            )
 
 
-# --- 1.2 候補 ID の再構成 ----------------------------------------------------
+def _load_cell_definition(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """D4 spec が pin する `cell_definition_source`（`s7_0b_probe_spec.json`）
+    を読む。sha256 は `load_and_verify_d4_spec` が既に照合済みだが、呼び出し
+    経路が増えても壊れないよう独立にも確認する。"""
+    cds = spec["pins"]["cell_definition_source"]
+    path = _REPO_ROOT / cds["path"]
+    doc, sha, _ = s7_io.read_json_with_pin(path)
+    if sha != cds["sha256"]:
+        raise D4SpecMismatch(f"{path}: sha256 {sha} が spec pin と違う")
+    return doc
 
-#: `s7_b1_v12.enumerate_candidates_12` の生成規則
-#: (`f"{fam}|thr{thr:g}|win{win:g}|hop{hop:g}"`) の逆変換。
-_CAND_ID_RE = re.compile(
-    r"^(?P<family>[^|]+)\|thr(?P<thr>[^|]+)\|win(?P<win>[^|]+)\|hop(?P<hop>[^|]+)$"
-)
 
-
-def parse_voicing_candidate_id(candidate_id: str) -> "v12.Cand12":
-    """凍結済み 1.2 spec が pin する `selected_candidate` 文字列から、
-    `s7_b1_v12.voiced_mask_12` / `measure_candidate_12` に渡せる `Cand12` を
-    再構成する（voicing 候補専用。1.2 の 3 軸はすべて voicing 候補）。"""
-    m = _CAND_ID_RE.match(candidate_id)
-    if not m:
-        raise D4SpecMismatch(f"未知の voicing candidate_id 形式: {candidate_id!r}")
-    family = m.group("family")
-    if family not in ("S_melshape_core_distance", "P_mel_peakiness"):
-        raise D4SpecMismatch(f"未知の voicing family: {family!r}")
-    return v12.Cand12(
-        candidate_id=candidate_id, kind="voicing", family=family,
-        threshold=float(m.group("thr")), window_ms=float(m.group("win")),
-        hop_ms=float(m.group("hop")),
-    )
+def _resolve_axis_candidates(spec: Dict[str, Any]) -> Dict[str, "v12.Cand12"]:
+    """D4 spec の `axes[].selected_candidate`（文字列）を、`s7_b1_v12` が実際に
+    列挙する候補（`enumerate_candidates_12`）から candidate_id 一致で解決する
+    （`s7_0b_remeasure_12.load_winners` と同じ方式。文字列から `Cand12` を
+    独自に再構成しない — 候補空間の定義は常に `s7_b1_v12` 側が正）。"""
+    cs, _cal, _rule, _pins = v12.load_prereg_12()
+    by_id = {c.candidate_id: c for c in v12.enumerate_candidates_12(cs)}
+    out: Dict[str, "v12.Cand12"] = {}
+    for axis, cfg in spec["axes"].items():
+        cid = str(cfg["selected_candidate"])
+        if cid not in by_id:
+            raise D4SpecMismatch(
+                f"axis {axis!r}: candidate_id {cid!r} が s7_b1_v12 の 1.2 候補"
+                "空間（enumerate_candidates_12）に無い"
+            )
+        out[axis] = by_id[cid]
+    return out
 
 
 # --- 出力ガード（D0 器具と同型: 衝突拒否 + atomic write） -------------------
@@ -193,7 +267,7 @@ def _atomic_write_json(path: Path, doc: Dict[str, Any]) -> None:
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    d4_spec, d4_spec_sha = load_and_verify_d4_spec()
+    d4_spec, d4_spec_sha = load_and_verify_d4_spec(expected_sha256=args.spec_sha256)
     group_ids = {g["group_id"] for g in d4_spec["groups"]}
     group_id = f"{args.generation}_{args.speaker}"
     if group_id not in group_ids:
@@ -264,8 +338,15 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 def _measure_cell_axes(
     stim: "b1.Stimulus", axis_candidates: Dict[str, "v12.Cand12"],
-    cache: Dict[str, Dict[str, float]],
 ) -> Dict[str, float]:
+    """1 セルぶんの 3 軸を測る。`cache` は**このセル専用**（呼び出し側が毎セル
+    新しい dict を渡す）— 目的は同一セル内で複数軸が同じ candidate_id（例:
+    excess_tail_voiced_ms と tail_f0_persistence が同じ hop10 候補を使う）を
+    共有するときの重複計算を避けることだけであり、セルをまたいで使い回すと
+    2 セル目以降が 1 セル目の軸値を再利用する致命バグになる（セルフレビュー
+    #1・実音源で再現: 300ms voiced tail のセル A の値が 0.9s カットのセル B に
+    そのまま記帳された）。"""
+    cache: Dict[str, Dict[str, float]] = {}
     out: Dict[str, float] = {}
     for axis, cand in axis_candidates.items():
         if cand.candidate_id not in cache:
@@ -274,10 +355,47 @@ def _measure_cell_axes(
     return out
 
 
+def _verify_group_doc_registration(
+    doc: Dict[str, Any], render_doc_path: Path,
+    valid_group_ids: FrozenSet[str], expected_cell_ids: FrozenSet[str],
+) -> None:
+    """render 群 JSON が D4 spec の事前登録内容と一致することを検査する。
+
+    `d4_remeasure_spec_sha256` が None（= D4 render を経由しない生の 8-0b
+    probe 群 JSON をそのまま `--render-doc` に渡した場合）でも**必ず**この
+    検査を通す — spec 束縛の有無で緩めると、由来不明の群 JSON がすり抜ける。
+    """
+    generation, speaker = str(doc.get("generation")), str(doc.get("speaker"))
+    group_id = f"{generation}_{speaker}"
+    if group_id not in valid_group_ids:
+        raise D4SpecMismatch(
+            f"{render_doc_path}: 群 {group_id!r} は D4 spec の groups に無い"
+            f"（有効: {sorted(valid_group_ids)}）"
+        )
+    cells = doc.get("cells", [])
+    ids = [str(c["cell_id"]) for c in cells]
+    if len(ids) != len(expected_cell_ids):
+        raise D4SpecMismatch(
+            f"{render_doc_path}: セル数 {len(ids)} が事前登録の規定 "
+            f"{len(expected_cell_ids)} と違う"
+        )
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    if dupes:
+        raise D4SpecMismatch(f"{render_doc_path}: 重複した cell_id がある: {dupes}")
+    got = set(ids)
+    if got != expected_cell_ids:
+        raise D4SpecMismatch(
+            f"{render_doc_path}: cell_id 集合が事前登録と違う "
+            f"(missing={sorted(expected_cell_ids - got)}, extra={sorted(got - expected_cell_ids)})"
+        )
+
+
 def _measure_group(
     render_doc_path: Path, d4_spec_sha: str, axis_candidates: Dict[str, "v12.Cand12"],
+    valid_group_ids: FrozenSet[str], expected_cell_ids: FrozenSet[str],
 ) -> Dict[str, Any]:
     doc, doc_sha, _ = s7_io.read_json_with_pin(render_doc_path)
+    _verify_group_doc_registration(doc, render_doc_path, valid_group_ids, expected_cell_ids)
     bound_sha = doc.get("d4_remeasure_spec_sha256")
     if bound_sha is not None and bound_sha != d4_spec_sha:
         raise D4SpecMismatch(
@@ -289,7 +407,6 @@ def _measure_group(
 
     cells_out: Dict[str, Any] = {}
     n_measured = n_missing = n_error = 0
-    cache: Dict[str, Dict[str, float]] = {}
     for cell in doc["cells"]:
         cid = str(cell["cell_id"])
         if cell.get("outcome") != "rendered":
@@ -313,9 +430,15 @@ def _measure_group(
                 score_boundary_s=float(meta["score_boundary_s"]),
                 tail_window_ms=float(meta["tail_window_ms"]),
             )
-            axes = _measure_cell_axes(stim, axis_candidates, cache)
-        except (s7_io.WavPinMismatch, s7_io.PathEscapeError, KeyError, ValueError) as exc:
-            cells_out[cid] = {"outcome": "error", "error": f"{type(exc).__name__}: {exc}"}
+            axes = _measure_cell_axes(stim, axis_candidates)
+        except Exception as exc:  # noqa: BLE001 — fail-closed: 隔離して全セル記帳を続ける
+            # KeyboardInterrupt / SystemExit は Exception のサブクラスではない
+            # ため、ここでは捕まらず素通りする（意図どおり）。
+            cells_out[cid] = {
+                "outcome": "error", "status": "error",
+                "reason": type(exc).__name__,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
             n_error += 1
             continue
         cells_out[cid] = {
@@ -342,9 +465,13 @@ def _measure_group(
 
 
 def cmd_measure(args: argparse.Namespace) -> int:
-    d4_spec, d4_spec_sha = load_and_verify_d4_spec()
-    axis_candidates = _axis_candidates(d4_spec)
+    d4_spec, d4_spec_sha = load_and_verify_d4_spec(expected_sha256=args.spec_sha256)
+    axis_candidates = _resolve_axis_candidates(d4_spec)
     analysis_stack = b1.verify_analysis_stack(b1.load_prereg())
+
+    valid_group_ids = frozenset(g["group_id"] for g in d4_spec["groups"])
+    cell_def = _load_cell_definition(d4_spec)
+    expected_cell_ids = frozenset(str(c["cell_id"]) for c in cell_def["cells"])
 
     out_path = Path(args.out)
     render_docs = [Path(p) for p in args.render_doc]
@@ -352,7 +479,9 @@ def cmd_measure(args: argparse.Namespace) -> int:
 
     groups: Dict[str, Any] = {}
     for render_doc_path in render_docs:
-        group_doc = _measure_group(render_doc_path, d4_spec_sha, axis_candidates)
+        group_doc = _measure_group(
+            render_doc_path, d4_spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+        )
         group_id = f"{group_doc['generation']}_{group_doc['speaker']}"
         if group_id in groups:
             raise D4SpecMismatch(f"群 {group_id!r} が複数の --render-doc に現れている")
@@ -360,6 +489,7 @@ def cmd_measure(args: argparse.Namespace) -> int:
 
     n_total_cells = sum(g["n_cells"] for g in groups.values())
     n_total_measured = sum(g["n_measured"] for g in groups.values())
+    n_total_error = sum(g["n_error"] for g in groups.values())
     doc = {
         "schema": RESULTS_SCHEMA,
         "debt_ref": DEBT_REF,
@@ -373,14 +503,19 @@ def cmd_measure(args: argparse.Namespace) -> int:
         "n_groups": len(groups),
         "n_total_cells": n_total_cells,
         "n_total_measured": n_total_measured,
+        "n_total_error": n_total_error,
         "groups": groups,
     }
+    # failure_policy「落ちたセルは隔離して全セル記帳する」の後半 = 結果は必ず
+    # 書き切る。ただしエラーが 1 件でもあれば「静かな成功」を騙らせないため
+    # exit を非ゼロにする（呼び出し側 / CI がエラー混入を見落とさない）。
     _atomic_write_json(out_path, doc)
     print(
         f"| wrote {out_path} ({len(groups)} groups, "
-        f"{n_total_measured}/{n_total_cells} cells measured)"
+        f"{n_total_measured}/{n_total_cells} cells measured, "
+        f"{n_total_error} errored)"
     )
-    return 0
+    return 1 if n_total_error else 0
 
 
 # --- CLI ---------------------------------------------------------------
@@ -400,6 +535,11 @@ def _add_render_parser(sub: "argparse._SubParsersAction") -> None:
     ap.add_argument("--canon-phonemes-txt", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--result-out", required=True)
+    ap.add_argument(
+        "--spec-sha256", required=True,
+        help="operator が束縛する d4_remeasure_spec.json の期待 sha256（コミット済みの"
+             "はずの版）。実ファイルの sha256 と一致しなければ abort する",
+    )
     ap.set_defaults(func=cmd_render)
 
 
@@ -412,6 +552,11 @@ def _add_measure_parser(sub: "argparse._SubParsersAction") -> None:
         help="render サブコマンド（または s7_0b_probe.py）が書いた群 JSON。複数指定可",
     )
     ap.add_argument("--out", required=True, help="d4_results.json の出力先")
+    ap.add_argument(
+        "--spec-sha256", required=True,
+        help="operator が束縛する d4_remeasure_spec.json の期待 sha256（コミット済みの"
+             "はずの版）。実ファイルの sha256 と一致しなければ abort する",
+    )
     ap.set_defaults(func=cmd_measure)
 
 
