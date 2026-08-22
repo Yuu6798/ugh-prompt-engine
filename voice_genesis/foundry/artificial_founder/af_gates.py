@@ -46,12 +46,47 @@ FORBIDDEN_PATH_FRAGMENTS: Tuple[str, ...] = (
     "musdb", "voicebank", "checkpoints", "pretrained",
 )
 
+#: §17 の metric family 契約（family -> 測る metric と patch する genome パス）。
+#:
+#: family 名と行の verdict だけを見ると、controls JSON が各行の metric と patch を
+#: 自由に選べるぶん **ラベルだけ合っていれば PASS を作れる**。例えば `afterglow`
+#: と名乗る行が energy の patch を当てて `sustain_dbfs` を測っても、8 行そろえば
+#: G5 PASS になり、実際の afterglow は一度も校正されない。ラベルではなく契約
+#: （何を動かして何を測るか）を検査する。
+REQUIRED_CONTROL_CONTRACT: Dict[str, Dict[str, Any]] = {
+    "hl_even_odd_ratio": {
+        "metric": "hl_even_odd_ratio",
+        "patch_paths": ("founder_source_traits.HL-alpha.even_multiplier",)},
+    "ar_alpha_center": {
+        "metric": "ar_alpha_center_hz",
+        "patch_paths": ("identity_signature.founder_resonances.AR-alpha.center_hz",)},
+    "beta_alpha_ratio": {
+        "metric": "beta_alpha_ratio",
+        "patch_paths": (
+            "identity_signature.founder_resonances.AR-beta.beta_alpha_energy_ratio",)},
+    "terminal_f0_delta": {
+        "metric": "terminal_f0_delta_cents_abs",
+        "patch_paths": ("founder_expression_traits.AG-alpha.terminal_f0_delta_cents",)},
+    "duration_r_share": {
+        "metric": "r_onset_share",
+        "patch_paths": ("performance_genes.duration.i_vowel_ms",
+                        "performance_genes.duration.r_onset_ms",
+                        "performance_genes.duration.r_onset_share")},
+    "energy_sustain": {
+        "metric": "sustain_dbfs",
+        "patch_paths": ("performance_genes.energy.sustain_dbfs",)},
+    "release": {
+        "metric": "main_release_ms",
+        "patch_paths": ("performance_genes.release.main_taper_ms",)},
+    "afterglow": {
+        "metric": "afterglow_extra_ms",
+        "patch_paths": (
+            "founder_expression_traits.AG-alpha.ar_alpha_afterglow_extra_ms",)},
+}
+
 #: §17 の metric family 完全集合。controls ファイルが部分集合でも G5 が PASS に
 #: なると、難しい family を落とすだけで overall PASS を作れてしまう。
-REQUIRED_CONTROL_FAMILIES: Tuple[str, ...] = (
-    "hl_even_odd_ratio", "ar_alpha_center", "beta_alpha_ratio", "terminal_f0_delta",
-    "duration_r_share", "energy_sustain", "release", "afterglow",
-)
+REQUIRED_CONTROL_FAMILIES: Tuple[str, ...] = tuple(REQUIRED_CONTROL_CONTRACT)
 
 
 def repo_root() -> Path:
@@ -322,12 +357,26 @@ def gate_meter_control(controls: Mapping[str, Any]) -> GateResult:
     unknown = sorted({n for n in names if n not in set(REQUIRED_CONTROL_FAMILIES)})
     duplicated = sorted({n for n in names if names.count(n) > 1})
     failed = [c["family"] for c in families if c.get("verdict") != "PASS"]
-    ok = not (missing or unknown or duplicated or failed)
+    # ラベルだけでなく「何を動かして何を測ったか」を凍結契約と照合する。
+    contract_violations: List[Dict[str, Any]] = []
+    for c in families:
+        want = REQUIRED_CONTROL_CONTRACT.get(c.get("family"))
+        if want is None:
+            continue
+        got_metric = c.get("metric")
+        got_paths = tuple(sorted(c.get("patch_paths") or ()))
+        if got_metric != want["metric"] or got_paths != tuple(sorted(want["patch_paths"])):
+            contract_violations.append({
+                "family": c.get("family"), "measured_metric": got_metric,
+                "required_metric": want["metric"], "patched_paths": list(got_paths),
+                "required_patch_paths": list(want["patch_paths"])})
+    ok = not (missing or unknown or duplicated or failed or contract_violations)
     detail: Dict[str, Any] = {
         "families": families, "failed_families": failed,
         "required_families": list(REQUIRED_CONTROL_FAMILIES),
         "missing_families": missing, "unknown_families": unknown,
         "duplicated_families": duplicated,
+        "contract_violations": contract_violations,
     }
     if not ok:
         detail["reason_code"] = "METER_NOT_CALIBRATED"
@@ -391,8 +440,11 @@ def trait_gates(body: Mapping[str, Any],
         _trait_gate("G11", "ENERGY", body, reexp, ("energy_sustain",),
                     body_only_keys=("energy_attack",)),
         _trait_gate("G12", "RELEASE", body, reexp, ("release",)),
-        _trait_gate("G13", "FOUNDER_EXPRESSION_AG", body, reexp, ("afterglow",),
-                    body_only_keys=("terminal_zero",)),
+        # §19 G13 は「Afterglow + terminal fall の複合形質」。terminal fall を
+        # 外すと、terminal F0 が許容を外れても `founder_traits.AG-alpha` が PASS と
+        # 記録される（overall は G9 が落とすが、形質別の帰属が誤りになる）。
+        _trait_gate("G13", "FOUNDER_EXPRESSION_AG", body, reexp,
+                    ("afterglow", "terminal_f0"), body_only_keys=("terminal_zero",)),
     ]
 
 

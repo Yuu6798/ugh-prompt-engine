@@ -109,5 +109,5 @@ PASS でも言ってはいけないこと:
 ## Environment / pins
 
 ```json
-{"body_identity_digest":"5a5702cb453768265c390fc2eeabd3a07dad6194c0a6a426eedc0df239a7d6ec","code_closure_sha256":"684807c169dbb18fd190547ec31605857c17b4df5ff895eacdaf60a6c603dd02","controls_sha256":"b4bcd0278099fb485741b0529c4f166a7f578321d88d20f1b62f4ba279da4079","criteria_sha256":"3d6ea665fb426ad0edf19433327de4b9c9df3a576f7ebe92f3881bcab827858a","numpy":"2.4.6","probes_sha256":"6061b71adc57af6e8b7cc39b27735e2818f12b4fa2822613c665f0e2b927d60c","python":"3.11.15","pyworld":"0.3.5","scipy":"1.17.1","spec_sha256":"c477fd5a9ec2ac3dd97f2c7ea076568acce19b53c28eed5c10175cc807b5e8d4"}
+{"body_identity_digest":"5a5702cb453768265c390fc2eeabd3a07dad6194c0a6a426eedc0df239a7d6ec","code_closure_sha256":"56fe3f873ff557c53a3fa815b5b09559e25e9f735aa90ade8631007b2c51b7ea","controls_sha256":"b4bcd0278099fb485741b0529c4f166a7f578321d88d20f1b62f4ba279da4079","criteria_sha256":"3d6ea665fb426ad0edf19433327de4b9c9df3a576f7ebe92f3881bcab827858a","numpy":"2.4.6","probes_sha256":"6061b71adc57af6e8b7cc39b27735e2818f12b4fa2822613c665f0e2b927d60c","python":"3.11.15","pyworld":"0.3.5","scipy":"1.17.1","spec_sha256":"c477fd5a9ec2ac3dd97f2c7ea076568acce19b53c28eed5c10175cc807b5e8d4"}
 ```

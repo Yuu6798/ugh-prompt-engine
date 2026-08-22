@@ -486,6 +486,19 @@ def _all_pass_reexp() -> Dict[str, Any]:
     return {k: {"verdict": "PASS"} for k in keys}
 
 
+def _control_row(family: str, **over: Any) -> Dict[str, Any]:
+    """凍結契約どおりの control 行（family / metric / patch_paths / verdict）。"""
+    want = af_gates.REQUIRED_CONTROL_CONTRACT[family]
+    row = {"family": family, "metric": want["metric"],
+           "patch_paths": list(want["patch_paths"]), "verdict": "PASS"}
+    row.update(over)
+    return row
+
+
+def _passing_controls() -> Dict[str, Any]:
+    return {"families": [_control_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]}
+
+
 def _gates(body: Dict[str, Any], reexp: Dict[str, Any], **overrides: str):
     base = {
         "G0": af_gates.gate_source_free(
@@ -497,9 +510,7 @@ def _gates(body: Dict[str, Any], reexp: Dict[str, Any], **overrides: str):
         "G3": af_gates.gate_utau_body({"verdict": "PASS"}, {"verdict": "PASS"}),
         "G4": af_gates.gate_ingestion({"verdict": "PASS"}, {"verdict": "PASS"},
                                       {"all_finite": True}, {"verdict": "PASS"}),
-        "G5": af_gates.gate_meter_control(
-            {"families": [{"family": f, "verdict": "PASS"}
-                          for f in af_gates.REQUIRED_CONTROL_FAMILIES]}),
+        "G5": af_gates.gate_meter_control(_passing_controls()),
         "G14": af_gates.gate_provenance(
             {k: "x" for k in ("spec_sha256", "criteria_sha256", "controls_sha256",
                               "probes_sha256", "code_closure_sha256", "body_identity_digest")},
@@ -876,7 +887,7 @@ def test_validate_body_expects_the_frozen_unit_count(genome, body, tmp_path):
 
 def test_meter_control_requires_every_family():
     """部分集合の controls で G5 PASS を作れない。"""
-    full = [{"family": f, "verdict": "PASS"} for f in af_gates.REQUIRED_CONTROL_FAMILIES]
+    full = [_control_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]
     assert af_gates.gate_meter_control({"families": full}).verdict == "PASS"
 
     partial = af_gates.gate_meter_control({"families": full[:1]})
@@ -885,7 +896,8 @@ def test_meter_control_requires_every_family():
     assert partial.detail["reason_code"] == "METER_NOT_CALIBRATED"
 
     unknown = af_gates.gate_meter_control(
-        {"families": full + [{"family": "made_up", "verdict": "PASS"}]})
+        {"families": full + [{"family": "made_up", "metric": "x", "patch_paths": [],
+                              "verdict": "PASS"}]})
     assert unknown.verdict == "FAIL" and unknown.detail["unknown_families"] == ["made_up"]
 
     dup = af_gates.gate_meter_control({"families": full + [full[0]]})
@@ -983,3 +995,115 @@ def test_committed_results_pin_the_current_code_closure():
                  "measurements/ingestion.json"):
         text = (results_dir / name).read_text(encoding="utf-8")
         assert root not in text, f"{name} pins an absolute checkout path"
+
+
+# ---------------------------------------------------------------------------
+# PR #301 Codex レビュー第 4 巡（P1 x3 + P2 x1）で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def test_meter_control_binds_family_to_its_metric_contract():
+    """family ラベルだけでなく「何を動かして何を測ったか」を検査する。"""
+    _row = _control_row
+    full = [_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]
+    assert af_gates.gate_meter_control({"families": full}).verdict == "PASS"
+
+    # afterglow と名乗りながら energy を測る行（8 行そろっても PASS にしない）
+    mislabelled = [_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]
+    mislabelled[-1] = _row("afterglow", metric="sustain_dbfs",
+                           patch_paths=["performance_genes.energy.sustain_dbfs"])
+    result = af_gates.gate_meter_control({"families": mislabelled})
+    assert result.verdict == "FAIL"
+    assert result.detail["contract_violations"][0]["family"] == "afterglow"
+    assert result.detail["contract_violations"][0]["measured_metric"] == "sustain_dbfs"
+
+    # metric は正しいが patch する genome パスが違う行も拒否する
+    wrong_patch = [_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]
+    wrong_patch[0] = _row("hl_even_odd_ratio",
+                          patch_paths=["performance_genes.energy.sustain_dbfs"])
+    assert af_gates.gate_meter_control({"families": wrong_patch}).verdict == "FAIL"
+
+
+def test_shipped_controls_satisfy_the_frozen_contract():
+    """同梱 controls が凍結契約どおりの family / metric / patch を持つ。"""
+    controls, _ = af_spec.load_controls(CONTROLS_PATH)
+    got = {c["family"]: (c["metric"],
+                         tuple(sorted(set(c["low"]["patch"]) | set(c["high"]["patch"]))))
+           for c in controls["controls"]}
+    assert set(got) == set(af_gates.REQUIRED_CONTROL_FAMILIES)
+    for family, want in af_gates.REQUIRED_CONTROL_CONTRACT.items():
+        assert got[family] == (want["metric"], tuple(sorted(want["patch_paths"])))
+
+
+def test_g13_covers_terminal_fall():
+    """§19 G13 は Afterglow + terminal fall の複合形質。"""
+    body = _all_pass_body()
+    body["terminal_f0"] = {"verdict": "FAIL"}
+    gates = {g.gate_id: g for g in af_gates.trait_gates(body, _all_pass_reexp())}
+    assert gates["G13"].verdict == "FAIL"
+    assert gates["G9"].verdict == "FAIL"
+    reexp = _all_pass_reexp()
+    reexp["terminal_f0"] = {"verdict": "FAIL"}
+    gates = {g.gate_id: g for g in af_gates.trait_gates(_all_pass_body(), reexp)}
+    assert gates["G13"].verdict == "FAIL"
+
+
+def test_publication_rolls_back_when_post_publish_verification_fails(tmp_path):
+    """公開後検証が落ちたら旧 valid bundle を復元する（未検証 bundle を残さない）。"""
+    published = tmp_path / "published"
+    first = tmp_path / "stage1" / "AF0"
+    first.mkdir(parents=True)
+    (first / "marker.txt").write_text("v1", encoding="utf-8")
+    af_utau.publish_atomically(first, published)
+    assert (published / "marker.txt").read_text(encoding="utf-8") == "v1"
+
+    second = tmp_path / "stage2" / "AF0"
+    second.mkdir(parents=True)
+    (second / "marker.txt").write_text("v2", encoding="utf-8")
+    pub = af_utau.publish_atomically(second, published, keep_rollback=True)
+    assert pub["rollback_path"] and Path(pub["rollback_path"]).exists()
+    assert (published / "marker.txt").read_text(encoding="utf-8") == "v2"
+
+    # 検証失敗 -> 旧世代へ戻す
+    assert af_utau.rollback_publication(published, pub["rollback_path"]) is True
+    assert (published / "marker.txt").read_text(encoding="utf-8") == "v1"
+    assert not Path(pub["rollback_path"]).exists()
+
+
+def test_publication_commit_drops_the_snapshot(tmp_path):
+    published = tmp_path / "published"
+    first = tmp_path / "s1" / "AF0"
+    first.mkdir(parents=True)
+    (first / "m.txt").write_text("v1", encoding="utf-8")
+    af_utau.publish_atomically(first, published)
+    second = tmp_path / "s2" / "AF0"
+    second.mkdir(parents=True)
+    (second / "m.txt").write_text("v2", encoding="utf-8")
+    pub = af_utau.publish_atomically(second, published, keep_rollback=True)
+    assert af_utau.commit_publication(pub["rollback_path"]) is True
+    assert not Path(pub["rollback_path"]).exists()
+    assert (published / "m.txt").read_text(encoding="utf-8") == "v2"
+
+
+def test_failed_run_restores_the_previous_result_tree(tmp_path, monkeypatch):
+    """run が途中で落ちても直前の成果物ツリーを失わない。"""
+    import p0_run
+
+    out = tmp_path / "AF0"
+    (out / "measurements").mkdir(parents=True)
+    (out / "AF_P0_RECORD.md").write_text("previous record", encoding="utf-8")
+    (out / "measurements" / "body.json").write_text("{}", encoding="utf-8")
+    (out / "voicebank" / "AF0").mkdir(parents=True)
+    (out / "voicebank" / "AF0" / "marker.txt").write_text("v1", encoding="utf-8")
+
+    boom = RuntimeError("simulated mid-run failure")
+
+    def _explode(*args, **kwargs):
+        raise boom
+
+    monkeypatch.setattr(p0_run.af_controls, "run_controls", _explode)
+    with pytest.raises(RuntimeError):
+        p0_run.run(SPEC_PATH, CRITERIA_PATH, CONTROLS_PATH, PROBES_PATH, out)
+
+    assert (out / "AF_P0_RECORD.md").read_text(encoding="utf-8") == "previous record"
+    assert (out / "measurements" / "body.json").exists()
+    assert (out / "voicebank" / "AF0" / "marker.txt").read_text(encoding="utf-8") == "v1"
+    assert not (out.parent / f".{out.name}.previous").exists()

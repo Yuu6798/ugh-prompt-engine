@@ -50,8 +50,11 @@ def run_controls(spec: Mapping[str, Any], controls: Mapping[str, Any],
         metric = ctrl["metric"]
         extract = METRIC_EXTRACTORS.get(metric)
         if extract is None:
-            families.append({"family": family, "metric": metric, "verdict": "FAIL",
-                             "error": f"no extractor registered for metric {metric!r}"})
+            families.append({
+                "family": family, "metric": metric,
+                "patch_paths": sorted(set(ctrl["low"]["patch"]) | set(ctrl["high"]["patch"])),
+                "verdict": "FAIL",
+                "error": f"no extractor registered for metric {metric!r}"})
             continue
         stem = ctrl["unit_alias"]
         lo = extract(_measure_fixture(spec, ctrl["low"]["patch"], stem, metric_definitions))
@@ -59,8 +62,10 @@ def run_controls(spec: Mapping[str, Any], controls: Mapping[str, Any],
         sep = float(ctrl["min_separation"])
         ok = (lo is not None and hi is not None and np.isfinite(lo) and np.isfinite(hi)
               and (hi - lo) >= sep)
+        patch_paths = sorted(set(ctrl["low"]["patch"]) | set(ctrl["high"]["patch"]))
         families.append({
             "family": family, "metric": metric, "unit_alias": stem,
+            "patch_paths": patch_paths,
             "low_label": ctrl["low"]["label"], "high_label": ctrl["high"]["label"],
             "low": lo, "high": hi, "separation": (hi - lo) if (lo is not None
                                                                and hi is not None) else None,

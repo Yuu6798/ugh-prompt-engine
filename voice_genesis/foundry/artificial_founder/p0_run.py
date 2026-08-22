@@ -104,28 +104,57 @@ def prepare_output_tree(out_dir: Path) -> Dict[str, Any]:
     manifest / measurements / SHA256SUMS を並べたまま残す、という矛盾した
     canonical 成果物ができた。
 
-    既発行の voicebank（旧 valid bundle）だけは §28 に従って退避 -> 復元する。
+    ただし **消してから作る** だけだと、spec 不正・依存欠落・中断で run が
+    途中で落ちたときに、空または partial なツリーだけが残り、直前の record /
+    measurements / freeze / checksums が復元不能に失われる。そこで旧ツリー全体を
+    スナップショットへ退避し、`restore_output_tree` で戻せるようにする
+    （呼び出し側が `BaseException` で必ず戻す）。
+
+    既発行の voicebank（旧 valid bundle）は §28 に従って新ツリーへ即復元する。
     今回の run が公開まで到達しなければ、旧 bundle がそのまま残る。
     """
     out_dir = Path(out_dir)
-    detail: Dict[str, Any] = {"cleared": False, "preserved_voicebank": False}
+    detail: Dict[str, Any] = {"cleared": False, "preserved_voicebank": False,
+                              "snapshot": None}
     if not out_dir.exists():
         out_dir.mkdir(parents=True, exist_ok=True)
         return detail
-    previous = out_dir / "voicebank"
-    holding: Optional[Path] = None
-    if previous.is_dir():
-        holding = out_dir.parent / f".{out_dir.name}.voicebank-hold"
-        if holding.exists():
-            shutil.rmtree(holding)
-        shutil.move(str(previous), str(holding))
-        detail["preserved_voicebank"] = True
-    shutil.rmtree(out_dir)
+    snapshot = out_dir.parent / f".{out_dir.name}.previous"
+    if snapshot.exists():
+        shutil.rmtree(snapshot)
+    shutil.move(str(out_dir), str(snapshot))
     out_dir.mkdir(parents=True, exist_ok=True)
     detail["cleared"] = True
-    if holding is not None:
-        shutil.move(str(holding), str(out_dir / "voicebank"))
+    detail["snapshot"] = str(snapshot)
+    previous_bank = snapshot / "voicebank"
+    if previous_bank.is_dir():
+        shutil.copytree(previous_bank, out_dir / "voicebank")
+        detail["preserved_voicebank"] = True
     return detail
+
+
+def restore_output_tree(out_dir: Path, snapshot: Optional[str | Path]) -> bool:
+    """run が落ちたとき、退避しておいた直前の成果物ツリーを丸ごと戻す。"""
+    if not snapshot:
+        return False
+    snap, out_dir = Path(snapshot), Path(out_dir)
+    if not snap.exists():
+        return False
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    shutil.move(str(snap), str(out_dir))
+    return True
+
+
+def discard_output_snapshot(snapshot: Optional[str | Path]) -> bool:
+    """run が最後まで到達したのでスナップショットを破棄する。"""
+    if not snapshot:
+        return False
+    snap = Path(snapshot)
+    if not snap.exists():
+        return False
+    shutil.rmtree(snap)
+    return True
 
 
 def _fill_skipped(evaluated: Sequence[af_gates.GateResult]) -> List[af_gates.GateResult]:
@@ -309,12 +338,30 @@ def dump_probes(wav_dir: Path, out_dir: Path, probes: Mapping[str, Any],
 # ---------------------------------------------------------------------------
 def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: Path,
         out_dir: Path) -> int:
-    notes: List[str] = []
+    """§23 の Phase 0-9 を実行する。
+
+    途中で落ちた場合は **直前の成果物ツリーを丸ごと戻してから** 送出する
+    （空/partial なツリーだけを canonical 位置に残さない = §28）。
+    """
     out_dir = Path(out_dir)
     reject_output_collision(out_dir, [Path(spec_path), Path(criteria_path),
                                       Path(controls_path), Path(probes_path),
                                       HERE, HERE.parents[2]])
     tree = prepare_output_tree(out_dir)
+    try:
+        code = _run_phases(spec_path, criteria_path, controls_path, probes_path, out_dir,
+                           tree)
+    except BaseException:
+        if restore_output_tree(out_dir, tree.get("snapshot")):
+            _log("abort", "run aborted; previous result tree restored")
+        raise
+    discard_output_snapshot(tree.get("snapshot"))
+    return code
+
+
+def _run_phases(spec_path: Path, criteria_path: Path, controls_path: Path,
+                probes_path: Path, out_dir: Path, tree: Mapping[str, Any]) -> int:
+    notes: List[str] = []
     meas_dir = out_dir / "measurements"
     meas_dir.mkdir(parents=True, exist_ok=True)
 
@@ -525,25 +572,42 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
                              "same_process": "PASS" if same_process["match"] else "FAIL",
                              "cross_process": "PASS" if cross_process["match"] else "FAIL"},
                           "notes": notes})
+    pub: Dict[str, Any] = {}
     try:
-        pub = af_utau.publish_atomically(staging, published_root)
+        # 旧世代は **公開後の検証が通るまで** 残す（`keep_rollback=True`）。
+        pub = af_utau.publish_atomically(staging, published_root, keep_rollback=True)
         shutil.rmtree(out_dir / "staging", ignore_errors=True)
         verify = af_utau.check_sha256sums(published_root)
         rows = sha256_tree(published_root, exclude_names=("SHA256SUMS.txt",))
+        digest = aggregate_digest(rows)
         publication = {
             "published": af_gates.repo_relative(pub["published"]),
             "rolled_over_previous": pub["rolled_over_previous"],
-            "bundle_verified": verify["verdict"] == "PASS",
-            "published_identity_digest": aggregate_digest(rows),
-            "matches_compiled_digest": aggregate_digest(rows) == first["digest"],
+            "bundle_verified": verify["verdict"] == "PASS" and digest == first["digest"],
+            "published_identity_digest": digest,
+            "matches_compiled_digest": digest == first["digest"],
+            "sha256sums_verdict": verify["verdict"],
             "partial_artifacts": sorted(p.name for p in (out_dir / "staging").glob("*"))
             if (out_dir / "staging").exists() else [],
         }
-        if not publication["matches_compiled_digest"]:
-            publication["bundle_verified"] = False
-    except Exception as exc:  # noqa: BLE001 - 公開失敗は provenance 違反として記録する
+        if publication["bundle_verified"]:
+            af_utau.commit_publication(pub.get("rollback_path"))
+        else:
+            restored = af_utau.rollback_publication(published_root,
+                                                    pub.get("rollback_path"))
+            publication["rolled_back"] = restored
+            publication["published"] = None
+            notes.append("post-publish verification failed; "
+                         + ("previous valid bundle restored" if restored
+                            else "no previous bundle to restore"))
+    except BaseException as exc:  # noqa: BLE001 - 公開失敗は provenance 違反として記録する
+        restored = af_utau.rollback_publication(published_root, pub.get("rollback_path"))
         publication["error"] = f"{type(exc).__name__}: {exc}"
-        notes.append(f"publication failed: {publication['error']}")
+        publication["rolled_back"] = restored
+        notes.append(f"publication failed: {publication['error']}"
+                     + ("; previous valid bundle restored" if restored else ""))
+        if not isinstance(exc, Exception):
+            raise
 
     gate_g14 = af_gates.gate_provenance(pins, publication)
     if (published_root / "founder_manifest.json").exists():

@@ -276,12 +276,20 @@ def check_sha256sums(root: str | Path) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # §28 原子的公開 / rollback
 # ---------------------------------------------------------------------------
-def publish_atomically(staging: str | Path, published: str | Path) -> Dict[str, Any]:
+def publish_atomically(staging: str | Path, published: str | Path,
+                       keep_rollback: bool = False) -> Dict[str, Any]:
     """staging を published へ原子的に差し替える。失敗したら旧世代を復元する。
 
     2 段 rename（published -> .old、staging -> published）。2 段目で落ちたら
     退避した旧世代を元へ戻してから送出するので、`published` が「無い」状態や
     partial な状態で残ることはない。
+
+    `keep_rollback=True` のときは退避した旧世代を **消さずに残し**、
+    `rollback_path` として返す。呼び出し側は公開後の検証（SHA256SUMS 照合・
+    ダイジェスト一致）が通ってから `commit_publication` で捨て、落ちたら
+    `rollback_publication` で戻す。旧世代を rename 直後に消してしまうと、
+    検証が落ちたときに **未検証の新 bundle が canonical 位置に残り、直前の
+    valid bundle は復元不能** になる（§28 に反する）。
     """
     staging, published = Path(staging), Path(published)
     if not staging.is_dir():
@@ -303,9 +311,35 @@ def publish_atomically(staging: str | Path, published: str | Path) -> Dict[str, 
         if rotated:
             os.rename(old, published)
         raise
-    if rotated:
+    if rotated and not keep_rollback:
         shutil.rmtree(old)
-    return {"published": str(published), "rolled_over_previous": rotated}
+    return {"published": str(published), "rolled_over_previous": rotated,
+            "rollback_path": str(old) if (rotated and keep_rollback) else None}
+
+
+def commit_publication(rollback_path: Optional[str | Path]) -> bool:
+    """公開後検証が通ったので退避世代を破棄する。"""
+    if not rollback_path:
+        return False
+    old = Path(rollback_path)
+    if not old.exists():
+        return False
+    shutil.rmtree(old)
+    return True
+
+
+def rollback_publication(published: str | Path,
+                         rollback_path: Optional[str | Path]) -> bool:
+    """公開後検証が落ちたので、退避しておいた旧 valid bundle を戻す。"""
+    if not rollback_path:
+        return False
+    old, published = Path(rollback_path), Path(published)
+    if not old.exists():
+        return False
+    if published.exists():
+        shutil.rmtree(published)
+    os.rename(old, published)
+    return True
 
 
 def rollback_marker(published: str | Path) -> Optional[Path]:
