@@ -131,6 +131,10 @@ testpaths = [
     # WORLD（pyworld）を要する ingestion テストだけが skip され、判定ロジックと
     # 決定論・計器分離の不変条件は pyworld 無しの CI でも実際に実行される。
     "voice_genesis/foundry/artificial_founder/tests/test_artificial_founder_p0.py",
+    # AF-T0 Trait Transport Fidelity の最低テスト要件（DESIGN_AF_T0.md §32 の 1-41）。
+    # 凍結契約 / 候補順 / sentinel / Gate 集合 / 主張上限は依存フリーで走る。
+    # WORLD 往復を伴う段観測テストだけが slow かつ pyworld 必須で skip される。
+    "voice_genesis/foundry/artificial_founder/transport_t0/tests/test_af_t0.py",
 ]
 pythonpath = ["src", "."]
 markers = [

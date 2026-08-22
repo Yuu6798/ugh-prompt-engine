@@ -1,0 +1,43 @@
+{
+  "schema": "voicegenesis-af-t0-criteria/1.0",
+  "experiment_id": "AF-T0",
+  "founder_id": "AF0",
+  "_note": "final_tolerances は AF-P0 original tolerance の写しであり、T0 で緩和してはならない（§13）。判定は af_compare.compare_reexpression をそのまま呼んで AF-P0 criteria 側の値で行う。ここに書いた値は「P0 と一致していること」を検査するための照合用。",
+  "final_tolerances": {
+    "duration_onset_tol_ms": 15.0,
+    "r_share_tol": 0.08,
+    "energy_sustain_tol_db": 2.0,
+    "afterglow_extra_delta_ms_max": 20.0
+  },
+  "localization_epsilon": {
+    "duration": 5.0,
+    "energy": 0.75,
+    "afterglow": 7.5
+  },
+  "candidate_order": {
+    "duration": [
+      "D0",
+      "D1",
+      "D2"
+    ],
+    "energy": [
+      "E0",
+      "E1",
+      "E2"
+    ],
+    "afterglow": [
+      "A0",
+      "A1",
+      "A2"
+    ]
+  },
+  "sentinel_families": [
+    "spectral_identity",
+    "hl_alpha",
+    "ar_alpha",
+    "ar_beta",
+    "f0_core",
+    "terminal_f0",
+    "release"
+  ]
+}

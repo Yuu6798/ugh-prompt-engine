@@ -82,6 +82,21 @@ CLAUDE.md「設計ドキュメント索引」（日本語詳細要約）を参�
 - [M2e Design — V-remix Real Bed Band](DESIGN_M2e_vremix_real_bed.md) — the integrated single source of truth for the M2e band (supersedes the parent design, amendments 1–2 and corrections 1–4; retraction history preserved in appendix A): deterministically mix vocadito's annotated singing (ground truth unchanged by additive mixing) with a MUSDB18-HQ `drums+bass+other` bed, sweep a 4-point RMS ladder (+12/+6/0/−6 dB) and measure where pitch tracking breaks in two arms (`V_remix_real_direct` = `crepe_direct` on the full mix / `V_remix_real_stem` = `demucs_vocals_then_crepe`). The primary product is the direct arm's breakdown curve, not a pass/fail; bars exist only as a single-point trip-wire at `gate_level: "+12dB"` and promote nothing (M4 G2 stays locked, since voice and bed are different songs). Bed selection is a frozen deterministic procedure (lexical order = UTF-8 byte order, first 2 passing a 20 dB residual-vocal invariant), the cell ledger (1280 cells) is set by the science while the shard map is set by the scheduler (≤2 h per run, checkpoint/resume by `env_digest`)
 - [M2e Provisioning Runbook](m2e_provisioning_runbook.md) — the executor-independent provisioning runbook for the M2e band (design §10 M2e-r0): demucs/crepe weight provisioning and digest recording, reuse of the frozen vocadito pins (re-fetch forbidden), MUSDB18-HQ acquisition and the three pin layers (published md5 / local archive hash as a declared hole / per-stem canonical-decode sha256), bed screening, deterministic mix generation, and the environment lockfile + `env_digest` procedure
 
+## Artificial Founder Series (VoiceGenesis)
+
+パッケージ内に置いた事前登録設計（`voice_genesis/foundry/artificial_founder/`）。
+CLAUDE.md の索引表は 400 行キャップのためここから辿る。
+
+- [DESIGN_AF_P0.md](../voice_genesis/foundry/artificial_founder/DESIGN_AF_P0.md) —
+  AF-P0 人工始祖 AF0 の設計・実行契約 v1.1 + Appendix A（実装追補）。
+  canonical run = `NOT_ESTABLISHED`（Body は全 13 形質 family PASS、
+  WORLD 再表現でのみ Duration / Energy / AG-α が不成立）
+- [DESIGN_AF_T0.md](../voice_genesis/foundry/artificial_founder/transport_t0/DESIGN_AF_T0.md) —
+  AF-T0 Trait Transport Fidelity。P0 で落ちた 3 形質を AF0 Body の設計値を変えずに
+  VoiceGenesis 経路で輸送できるかの独立 PoC。段 S0–S5 の失敗局在化、
+  Trait Sidecar、候補 D/E/A の first-pass 選択、sentinel 非回帰、
+  calibration/holdout 分離。**AF-T0 が PASS しても AF-P0 の判定は変わらない**
+
 ## Orchestration
 
 - [AGENTS.md](../AGENTS.md) — Claude × Codex orchestration protocol (Task Brief / Completion Summary templates)
