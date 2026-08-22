@@ -16,8 +16,8 @@ exit code は §33: 0 PASS / 1 NOT_ESTABLISHED / 3 BLOCKED / 4 FAILED。
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -48,7 +48,8 @@ from af_spec import (ALIAS_BY_STEM, apply_patch, canonical_json,  # noqa: E402
                      genome_from_dict, load_criteria, sha256_file, sha256_tree,
                      sha256sums_text, write_json)
 from t0_energy import assert_no_af0_in_calibration, fit_global_gain_db  # noqa: E402
-from t0_schema import (EXIT_CODES, STAGE_IDS,  # noqa: E402
+from t0_schema import (EXIT_CODES, STAGE_IDS, T0_REVISION,  # noqa: E402
+                       FROZEN_BASE_COMMIT,
                        FROZEN_CALIBRATION_SHA256, FROZEN_HOLDOUT_SHA256,
                        FROZEN_P0_ARTIFACTS, FROZEN_P0_FAILED_FAMILIES,
                        canonical_digest, validate_criteria,
@@ -88,8 +89,36 @@ def verify_frozen_p0(p0_root: Path) -> Dict[str, Any]:
         path = p0_root / name
         if path.exists():
             artifacts[name] = sha256_file(path)
+    changed = _p0_paths_changed_since_base()
     return {"af0_spec_sha256": spec_sha, "p0_artifacts": artifacts,
-            "p0_root": af_gates.repo_relative(p0_root)}
+            "p0_root": af_gates.repo_relative(p0_root),
+            "p0_paths_unmodified": None if changed is None else not changed,
+            "p0_paths_changed": changed}
+
+
+#: §4 が pin する AF-P0 の入力パス（凍結 base 以降変更されていないこと）。
+P0_FROZEN_PATHS: Tuple[str, ...] = (
+    "voice_genesis/foundry/artificial_founder/founder_specs",
+    "voice_genesis/foundry/artificial_founder/criteria",
+    "voice_genesis/foundry/artificial_founder/results/AF0",
+)
+
+
+def _p0_paths_changed_since_base() -> Optional[List[str]]:
+    """凍結 base 以降に P0 の入力パスが変更されていないか（git 由来の補助証拠）。
+
+    git が使えない環境では `None`（G0 の一次条件は凍結 SHA 一致なので、
+    ここが取れなくても判定は成立する）。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--name-only", FROZEN_BASE_COMMIT, "--", *P0_FROZEN_PATHS],
+            capture_output=True, text=True, cwd=str(af_gates.repo_root()), timeout=60)
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover
+        return None
+    if out.returncode != 0:
+        return None
+    return [ln for ln in out.stdout.splitlines() if ln.strip()]
 
 
 def _base_commit() -> Optional[str]:
@@ -159,10 +188,17 @@ def capture_bodies(wavs: Mapping[str, Path], md: Mapping[str, Any],
 def evaluate_config(genome: Any, p0_criteria: Any, md: Mapping[str, Any],
                     captures: Mapping[str, Any], sidecars: Mapping[str, Any],
                     body_meas: Mapping[str, Any], config: transport.TransportConfig,
-                    energy_cal: Optional[Mapping[str, Any]] = None
+                    energy_cal: Optional[Mapping[str, Any]] = None,
+                    publish_dir: Optional[Path] = None
                     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """`config` で輸送して AF-P0 original criteria で判定する。"""
-    tr = transport.transport_body(captures, sidecars, config, energy_cal)
+    """`config` で輸送して AF-P0 original criteria で判定する。
+
+    判定対象は **PCM16 で書き出して読み直した実体**（`transport_body` が
+    その形で返す）。メモリ上の float を測ると、公開物では落ちる形質を
+    PASS にしてしまう（afterglow の first divergence = `PCM_PUBLICATION`）。
+    """
+    tr = transport.transport_body(captures, sidecars, config, energy_cal,
+                                  publish_dir=publish_dir)
     meas = transport.measure_transported(tr, md, af_measure.measure_unit)
     cmp_ = t0_compare.compare_transported(genome, p0_criteria, body_meas, meas)
     return cmp_, {"transported": tr, "measurements": meas}
@@ -188,19 +224,60 @@ def run(p0_root: Path, criteria_path: Path, out_dir: Path) -> int:
             shutil.rmtree(staging, ignore_errors=True)
 
 
-def _publish(staging: Path, out_dir: Path) -> None:
-    """§30。staging -> verify -> atomic rename。"""
+def _publish(staging: Path, out_dir: Path) -> Dict[str, Any]:
+    """§30。staging -> verify -> **atomic rename**。
+
+    以前は `copytree(staging, out_dir)` で公開していた。copy は原子的ではなく、
+    途中で失敗すれば partial tree が canonical 位置に露出する。同一ファイル
+    システム上の `os.rename` は原子的なので、rename で差し替える。
+
+    rename 前に SHA256SUMS を作って **staging を自己検証**し、壊れた束を
+    公開しないようにする（§30「staging -> verify -> atomic rename」）。
+    """
     rows = sha256_tree(staging, exclude_names=("SHA256SUMS.txt",))
     (staging / "SHA256SUMS.txt").write_text(sha256sums_text(rows), encoding="utf-8")
+    verify = _verify_tree(staging)
+    if verify["mismatched"] or verify["missing"]:
+        raise T0Stop("FAILED", "PUBLICATION_VERIFY_FAILED",
+                     f"staging tree failed self-verification: {verify}")
+
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
     hold = out_dir.parent / f".{out_dir.name}.previous"
     if hold.exists():
         shutil.rmtree(hold)
-    out_dir.parent.mkdir(parents=True, exist_ok=True)
     if out_dir.exists():
-        shutil.move(str(out_dir), str(hold))
-    shutil.copytree(staging, out_dir)
+        os.rename(str(out_dir), str(hold))          # 原子的
+    try:
+        os.rename(str(staging), str(out_dir))       # 原子的
+    except OSError:
+        if hold.exists():                            # 旧束を戻す
+            os.rename(str(hold), str(out_dir))
+        raise
     if hold.exists():
         shutil.rmtree(hold, ignore_errors=True)
+    return {"published": af_gates.repo_relative(out_dir), "n_files": len(rows),
+            "verified": True, "method": "atomic_rename"}
+
+
+def _verify_tree(root: Path) -> Dict[str, Any]:
+    """`SHA256SUMS.txt` と実体を突き合わせる。"""
+    sums = root / "SHA256SUMS.txt"
+    if not sums.exists():
+        return {"missing": ["SHA256SUMS.txt"], "mismatched": []}
+    want: Dict[str, str] = {}
+    for line in sums.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        digest, _, name = line.partition("  ")
+        want[name.strip()] = digest.strip()
+    missing, mismatched = [], []
+    for name, digest in sorted(want.items()):
+        path = root / name
+        if not path.exists():
+            missing.append(name)
+        elif sha256_file(path) != digest:
+            mismatched.append(name)
+    return {"missing": missing, "mismatched": mismatched, "n": len(want)}
 
 
 def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int:
@@ -291,9 +368,8 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
     _log("phase7", "trait-by-trait transport (§18 Stage C), first-pass selection (§11)")
     selections: Dict[str, Any] = {}
     for trait in transport.COMPOSITION_ORDER:
-        selections[trait] = _select_for_trait(
-            trait, genome, p0_criteria, md, captures, sidecars, body_meas,
-            fixtures, energy_cal)
+        selections[trait] = _select_for_trait(trait, p0_criteria, md, fixtures,
+                                              energy_cal)
         sel = selections[trait]
         _log("phase7", f"  {trait}: selected={sel.get('selected')} "
                        f"mode={sel.get('mode')} tried="
@@ -308,7 +384,8 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
     _log("phase8", f"freeze combined package: {config.as_dict()}")
 
     combined_cmp, combined_art = evaluate_config(
-        genome, p0_criteria, md, captures, sidecars, body_meas, config, energy_cal)
+        genome, p0_criteria, md, captures, sidecars, body_meas, config, energy_cal,
+        publish_dir=tmp / "combined_pcm")
     combined = t0_compare.combined_result(combined_cmp)
     sentinels = t0_compare.sentinel_verdict(combined_cmp)
     write_json(out / "combined_comparison.json",
@@ -320,8 +397,8 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
 
     # ---------------- Phase 10-11: fresh confirmation ---------------------
     _log("phase10", "fresh holdout + AF0 confirmation (after freeze) (§20)")
-    fresh = _fresh_confirmation(genome, p0_criteria, md, fixtures, config, energy_cal,
-                                combined_cmp)
+    fresh = _fresh_confirmation(spec_raw, genome, p0_criteria, md, hol_doc, config,
+                                energy_cal, voicebank, af0_wavs, tmp, config_digest)
     write_json(out / "fresh_confirmation.json", fresh)
     _log("phase11", f"fresh confirmation = {fresh['verdict']}")
 
@@ -339,6 +416,8 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
                 "files": [{"path": p, "sha256": s} for p, s in closure_rows]})
     pins = {
         **pins_base,
+        "experiment_id": "AF-T0",
+        "revision": T0_REVISION,
         "base_commit": base_commit,
         "p0_code_closure_sha256": (pins_base["p0_artifacts"] or {}).get(
             "code_closure.json"),
@@ -358,7 +437,7 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
     write_json(out / "input_pins.json", pins)
     write_json(out / "source_free_attestation.json", _source_free_attestation(pins))
 
-    publication = _write_probes(out, combined_art, config)
+    publication = _write_probes(out, fresh["af0_artifacts"], config)
     sidecar_binding = {"verdict": "PASS", "n_sidecars": len(sidecars),
                        "digest": sc_digest,
                        "bound_to_body": True}
@@ -411,11 +490,13 @@ def _parts(selection: Mapping[str, Any], fresh: Mapping[str, Any],
            trait: str) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """T0-G3/G4/G5 に渡す calibration / holdout / AF0 の 3 点。"""
     detail = (selection.get("attempts") or [{}])[-1].get("detail") or {}
-    # AF0 部分は **その形質の** 判定を使う。combined（3 形質同時）の verdict を
-    # 流用すると、別形質の失敗で T0-G3/G4/G5 が連鎖的に落ちて原因が読めなくなる。
+    # AF0 部分は **freeze 後に実行した** final confirmation から取る（§20）。
+    # 候補選択側に AF0 は存在しない（§12）。
+    af0 = ((fresh.get("af0_per_trait") or {}).get(trait)
+           or {"verdict": "FAIL", "reason": "af0 confirmation missing"})
     return (detail.get("calibration") or {"verdict": selection.get("verdict")},
             detail.get("holdout") or {"verdict": selection.get("verdict")},
-            detail.get("af0") or {"verdict": selection.get("verdict")})
+            af0)
 
 
 #: §16 Body measurement 再現の照合対象と許容差。計器・環境が同じなら一致する
@@ -531,21 +612,23 @@ def _fit_energy(fixtures: Mapping[str, Any], af0_genome: Any,
     return fit_global_gain_db(rows)
 
 
-def _select_for_trait(trait: str, genome: Any, p0_criteria: Any,
-                      md: Mapping[str, Any], captures: Mapping[str, Any],
-                      sidecars: Mapping[str, Any], body_meas: Mapping[str, Any],
+def _select_for_trait(trait: str, p0_criteria: Any, md: Mapping[str, Any],
                       fixtures: Mapping[str, Any],
                       energy_cal: Mapping[str, Any]) -> Dict[str, Any]:
     """§18 Stage C。1 形質だけ動かし、他 2 形質は baseline のまま評価する。
 
-    候補は calibration -> holdout -> AF0 の **すべて** で PASS しなければ採用しない
-    （§21 T0-G3/G4/G5）。
+    **AF0 は一切見ない。** 候補の採否は calibration と事前登録 holdout だけで
+    閉じる（§12「AF0 target を補正量決定に使わない」）。AF0 は package を
+    freeze した後の final confirmation でのみ登場する（§20）。以前は AF0 の
+    verdict を採用条件に入れており、「AF0 だけ落ちたので次候補へ」という
+    経路が開いていた = 実質的な candidate fitting だった。
     """
     def evaluate(op: str) -> Dict[str, Any]:
         cfg = transport.TransportConfig(**{trait: op})
         parts: Dict[str, Any] = {}
+        kinds: List[str] = []
         for role in ("calibration", "holdout"):
-            worst_ok = True
+            role_ok = True
             details = []
             for fx in fixtures[role].get(trait, []):
                 cmp_, _ = evaluate_config(fx["genome"], p0_criteria, md,
@@ -555,44 +638,88 @@ def _select_for_trait(trait: str, genome: Any, p0_criteria: Any,
                 details.append({"id": fx["id"], "verdict": r["verdict"],
                                 "target": _strip_rows(r["target"]),
                                 "sentinels_verdict": r["sentinels"]["verdict"]})
-                worst_ok = worst_ok and r["verdict"] == "PASS"
-            parts[role] = {"verdict": "PASS" if worst_ok else "FAIL",
+                if r["verdict"] != "PASS":
+                    role_ok = False
+                    # §10 の遷移前提条件で使う失敗の種類。
+                    kinds.append("sentinel"
+                                 if r.get("reason") == "REJECTED_BY_REGRESSION"
+                                 else role)
+            parts[role] = {"verdict": "PASS" if role_ok else "FAIL",
                            "fixtures": details}
-        cmp_af0, _ = evaluate_config(genome, p0_criteria, md, captures, sidecars,
-                                     body_meas, cfg, energy_cal)
-        r_af0 = t0_compare.candidate_result(cmp_af0, trait)
-        parts["af0"] = {"verdict": r_af0["verdict"],
-                        "target": _strip_rows(r_af0["target"]),
-                        "sentinels_verdict": r_af0["sentinels"]["verdict"]}
-        ok = all(parts[k]["verdict"] == "PASS" for k in ("calibration", "holdout",
-                                                         "af0"))
-        return {"verdict": "PASS" if ok else "FAIL", **parts}
+        ok = all(parts[k]["verdict"] == "PASS" for k in ("calibration", "holdout"))
+        # sentinel regression を最優先で報告する（A2 の前提条件がこれを見る）。
+        kind = None
+        if not ok:
+            kind = "sentinel" if "sentinel" in kinds else (
+                "holdout" if parts["holdout"]["verdict"] != "PASS" else "calibration")
+        return {"verdict": "PASS" if ok else "FAIL", "failure_kind": kind, **parts}
 
     return transport.select_first_passing(trait, evaluate)
 
 
-def _fresh_confirmation(genome: Any, p0_criteria: Any, md: Mapping[str, Any],
-                        fixtures: Mapping[str, Any],
+def _fresh_confirmation(spec_raw: Mapping[str, Any], genome: Any, p0_criteria: Any,
+                        md: Mapping[str, Any], hol_doc: Mapping[str, Any],
                         config: transport.TransportConfig,
-                        energy_cal: Mapping[str, Any],
-                        af0_combined_cmp: Mapping[str, Any]) -> Dict[str, Any]:
-    """§20 Stage E。freeze 済み combined package を holdout と AF0 で確認する。"""
-    holdout_rows = []
+                        energy_cal: Mapping[str, Any], voicebank: Path,
+                        af0_wavs: Mapping[str, Path], tmp: Path,
+                        frozen_config_digest: str) -> Dict[str, Any]:
+    """§20 Stage E。**freeze 後に、fixture を作り直してから**確認する。
+
+    以前は候補選択の前に作った holdout capture を使い回し、AF0 も Phase 9 の
+    combined 結果を渡し直して `after_freeze: True` のフラグだけ立てていた。
+    それは「freeze 後の新鮮な確認」ではない。ここでは:
+
+    * holdout fixture の Body を **新規に合成し直し**、段観測からやり直す
+    * AF0 canonical Body も **この時点で改めて** 輸送・測定する
+    * 使う config は凍結済みのものだけ（`frozen_config_digest` で同一性を確認）
+
+    §20「freeze 後の operator 変更禁止」を、config のダイジェスト照合で示す。
+    """
+    if canonical_digest(config.as_dict()) != frozen_config_digest:
+        raise T0Stop("FAILED", "CONFIG_CHANGED_AFTER_FREEZE",
+                     "transport config changed after the package was frozen (§20)")
+
+    all_stems = [u.stem for u in genome.units]
+    holdout_rows: List[Dict[str, Any]] = []
     ok = True
-    for trait in transport.COMPOSITION_ORDER:
-        for fx in fixtures["holdout"].get(trait, []):
-            cmp_, _ = evaluate_config(fx["genome"], p0_criteria, md, fx["captures"],
-                                      fx["sidecars"], fx["body"], config, energy_cal)
+    for trait, rows in (hol_doc["fixtures"] or {}).items():
+        for row in rows:
+            g = fixture_genome(spec_raw, row)
+            d = tmp / "fresh" / trait / str(row["id"])
+            wavs = synthesize_fixture_body(g, d, all_stems)
+            caps, ledger = capture_bodies(wavs, md, d / "_stages")
+            bmeas = {s: ledger["units"][s]["measurements"]["S0_BODY_44K"]
+                     for s in ledger["units"]}
+            scs = {s: build_sidecar(g, ALIAS_BY_STEM[s], wavs[s], bmeas[s])
+                   for s in wavs}
+            cmp_, _ = evaluate_config(g, p0_criteria, md, caps, scs, bmeas, config,
+                                      energy_cal, publish_dir=d / "_pcm")
             r = t0_compare.candidate_result(cmp_, trait)
-            holdout_rows.append({"trait": trait, "id": fx["id"],
+            holdout_rows.append({"trait": trait, "id": row["id"],
                                  "verdict": r["verdict"],
+                                 "regenerated": True,
                                  "target": _strip_rows(r["target"]),
                                  "sentinels_verdict": r["sentinels"]["verdict"]})
             ok = ok and r["verdict"] == "PASS"
-    af0 = t0_compare.combined_result(af0_combined_cmp)
-    ok = ok and af0["verdict"] == "PASS"
+
+    # AF0 final confirmation（§12「AF0 は candidate fitting に使わない」）。
+    af0_caps, af0_ledger = capture_bodies(af0_wavs, md, tmp / "fresh" / "af0_stages")
+    af0_body = {s: af0_ledger["units"][s]["measurements"]["S0_BODY_44K"]
+                for s in af0_ledger["units"]}
+    af0_scs = build_sidecars(genome, voicebank, af0_body)
+    af0_cmp, af0_art = evaluate_config(genome, p0_criteria, md, af0_caps, af0_scs,
+                                       af0_body, config, energy_cal,
+                                       publish_dir=tmp / "fresh" / "af0_pcm")
+    af0_combined = t0_compare.combined_result(af0_cmp)
+    per_trait = {t: _strip_rows(t0_compare.trait_verdict(af0_cmp, t))
+                 for t in transport.COMPOSITION_ORDER}
+    ok = ok and af0_combined["verdict"] == "PASS"
     return {"after_freeze": True, "config": config.as_dict(),
-            "holdout": holdout_rows, "af0": _strip_rows(af0),
+            "frozen_config_digest": frozen_config_digest,
+            "holdout": holdout_rows, "af0": _strip_rows(af0_combined),
+            "af0_per_trait": per_trait,
+            "af0_comparison": t0_compare.summarize(af0_cmp),
+            "af0_artifacts": af0_art,
             "verdict": "PASS" if ok else "FAIL"}
 
 
@@ -651,11 +778,13 @@ def _compare_run(a: Mapping[str, Any], b: Mapping[str, Any], sc_a: str, sc_b: st
 
 
 def _wav_digest(transported: Mapping[str, Any]) -> str:
-    rows = []
-    for stem in sorted(transported):
-        y = np.asarray(transported[stem]["signal"], dtype=np.float64)
-        pcm = np.clip(np.round(y * 32767.0), -32768, 32767).astype(np.int16)
-        rows.append((stem, hashlib.sha256(pcm.tobytes()).hexdigest()))
+    """§21 T0-G8 の "output WAV SHA"。**実 WAV ファイル**のハッシュを使う。
+
+    以前は float を自前で int16 へ丸めた raw PCM バイト列を hash しており、
+    soundfile が実際に書いた WAV（ヘッダ・チャンク構成を含む）とは別物だった。
+    公開物そのものの同一性を見ないと determinism の証拠にならない。
+    """
+    rows = [(stem, transported[stem]["wav_sha256"]) for stem in sorted(transported)]
     return canonical_digest(rows)
 
 
@@ -707,18 +836,30 @@ def _source_free_attestation(pins: Mapping[str, Any]) -> Dict[str, Any]:
 
 def _write_probes(out: Path, art: Mapping[str, Any],
                   config: transport.TransportConfig) -> Dict[str, Any]:
-    """§30 probes/。輸送後の WAV を書き出して公開の実体を作る。"""
+    """§30 probes/。**判定に使った実体そのもの**を公開し、検証する。
+
+    以前はここで float から WAV を書き直し、`bundle_verified: True` を無条件に
+    返していた。それでは「測ったもの」と「公開したもの」が別物になりうるし、
+    verified を名乗る根拠も無い。いまは `transport_body` が判定前に PCM16 を
+    書いており、その実体を staging へ移して **SHA を測り直して照合** する。
+    """
     probes = out / "probes" / "transported"
     probes.mkdir(parents=True, exist_ok=True)
     written: List[str] = []
+    mismatched: List[str] = []
     for stem in sorted(art["transported"]):
         row = art["transported"][stem]
-        p = probes / f"{stem}.wav"
-        sf.write(str(p), np.asarray(row["signal"], dtype=np.float64), int(row["sr"]),
-                 subtype="PCM_16", format="WAV")
-        written.append(p.name)
-    return {"published": af_gates.repo_relative(probes), "bundle_verified": True,
-            "partial_artifacts": [], "n_files": len(written),
+        src = Path(row["wav_path"])
+        dst = probes / f"{stem}.wav"
+        shutil.copyfile(src, dst)
+        if sha256_file(dst) != row["wav_sha256"]:
+            mismatched.append(stem)
+        written.append(dst.name)
+    return {"published": af_gates.repo_relative(probes),
+            "bundle_verified": not mismatched and bool(written),
+            "partial_artifacts": mismatched,
+            "n_files": len(written),
+            "measured_artifact_is_published_artifact": True,
             "config": config.as_dict()}
 
 
@@ -741,8 +882,7 @@ def _digest_only(p0_root: Path, criteria_path: Path) -> int:
         fixtures = _build_fixture_sets(spec_raw, cal_doc, hol_doc, md, tmp / "fx",
                                        genome)
         energy_cal = _fit_energy(fixtures, genome, md)
-        selections = {t: _select_for_trait(t, genome, p0_criteria, md, captures,
-                                           sidecars, body_meas, fixtures, energy_cal)
+        selections = {t: _select_for_trait(t, p0_criteria, md, fixtures, energy_cal)
                       for t in transport.COMPOSITION_ORDER}
         config = transport.config_from_selections(selections)
         cmp_, art = evaluate_config(genome, p0_criteria, md, captures, sidecars,

@@ -126,11 +126,11 @@ def test_t32_01_af0_spec_drift_is_rejected():
     """1. AF0 spec drift -> FAILED（T0-G0 が落ちる）。"""
     ok = t0_gates.gate_input_freeze({
         "af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
-        "p0_artifacts": {k: "x" for k in t0_schema.FROZEN_P0_ARTIFACTS}})
+        "p0_artifacts": dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256)})
     assert ok.verdict == "PASS"
     drift = t0_gates.gate_input_freeze({
         "af0_spec_sha256": "d" * 64,
-        "p0_artifacts": {k: "x" for k in t0_schema.FROZEN_P0_ARTIFACTS}})
+        "p0_artifacts": dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256)})
     assert drift.verdict == "FAIL"
     assert drift.detail["reason_code"] == "AF0_INPUT_DRIFT"
 
@@ -723,10 +723,18 @@ def test_first_passing_stops_at_first_pass():
 
 
 def test_exhausted_candidates_are_reported():
-    """§36-6。候補が尽きたら報告する（事後追加しない）。"""
-    out = transport.select_first_passing("energy", lambda op: {"verdict": "FAIL"})
+    """§36-6。候補が尽きたら報告する（事後追加しない）。
+
+    duration は §10 に遷移前提条件が無い（D2 は「D1 FAIL 時のみ」= any）ので、
+    全候補を試し切って exhausted に到達する。energy / afterglow は前提条件が
+    あるため、条件を満たさない失敗では `blocked_by_precondition` で終わる
+    （`test_rev2_candidate_transition_preconditions` が担当）。
+    """
+    out = transport.select_first_passing(
+        "duration", lambda op: {"verdict": "FAIL", "failure_kind": "calibration"})
     assert out["selected"] is None and out["exhausted"]
     assert "candidate list exhausted" in out["reason"]
+    assert [a["operator"] for a in out["attempts"]] == ["D0", "D1", "D2"]
 
 
 def test_t32_shared_paths_are_not_modified():
@@ -800,3 +808,231 @@ def test_localize_unit_picks_the_transition_that_crosses():
              "S5_PCM16_ROUNDTRIP": {"onset_ms": 70.0}}
     assert t0_localize.localize_unit(multi, "duration", 5.0)[
         "first_divergence_stage"] == "MULTI_STAGE"
+
+
+# ---------------------------------------------------------------------------
+# レビュー第 1 巡（PR #302 非正典 run）で指摘された 8 件の回帰
+# ---------------------------------------------------------------------------
+def test_rev2_gate_g0_is_fail_closed_on_p0_artifacts():
+    """#8。P0 成果物は「存在するか」ではなく **凍結 SHA** と照合する。"""
+    good = {"af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
+            "p0_artifacts": dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256)}
+    assert t0_gates.gate_input_freeze(good).verdict == "PASS"
+    # 内容が変わったら落ちる（以前は素通りした）
+    tampered = {"af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
+                "p0_artifacts": {**t0_schema.FROZEN_P0_ARTIFACT_SHA256,
+                                 "p0_results.json": "0" * 64}}
+    bad = t0_gates.gate_input_freeze(tampered)
+    assert bad.verdict == "FAIL" and bad.detail["reason_code"] == "AF0_INPUT_DRIFT"
+    assert any("artifact drift" in p for p in bad.detail["problems"])
+    # 欠落も落ちる
+    missing = {"af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
+               "p0_artifacts": {}}
+    assert t0_gates.gate_input_freeze(missing).verdict == "FAIL"
+
+
+def test_rev2_gate_g0_does_not_require_head_to_equal_frozen_base():
+    """#8。§4 が pin するのは P0 入力の出所で、作業ツリーの HEAD ではない。
+
+    HEAD 一致を要求すると T0 は自分の PR head で原理的に PASS できない。
+    """
+    pins = {"af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
+            "p0_artifacts": dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256),
+            "base_commit": "deadbeef" * 5, "p0_paths_unmodified": True}
+    assert t0_gates.gate_input_freeze(pins).verdict == "PASS"
+    # ただし P0 のパスが base 以降変更されていたら落ちる
+    changed = dict(pins, p0_paths_unmodified=False,
+                   p0_paths_changed=["results/AF0/p0_results.json"])
+    assert t0_gates.gate_input_freeze(changed).verdict == "FAIL"
+
+
+def test_rev2_candidate_transition_preconditions():
+    """#7。E2 は E1 の holdout FAIL 時のみ / A2 は A1 の sentinel regression 時のみ。"""
+    tried = []
+
+    def make(kinds):
+        def evaluate(op):
+            tried.append(op)
+            return {"verdict": "FAIL", "failure_kind": kinds.get(op)}
+        return evaluate
+
+    # E1 が calibration で落ちた -> E2 へ進めない
+    tried.clear()
+    out = transport.select_first_passing(
+        "energy", make({"E0": "calibration", "E1": "calibration"}))
+    assert tried == ["E0", "E1"], tried
+    assert out["blocked_by_precondition"]["operator"] == "E2"
+    assert out["blocked_by_precondition"]["requires_previous_failure"] == "holdout"
+
+    # E1 が holdout で落ちた -> E2 へ進める
+    tried.clear()
+    transport.select_first_passing(
+        "energy", make({"E0": "calibration", "E1": "holdout", "E2": "holdout"}))
+    assert tried == ["E0", "E1", "E2"], tried
+
+    # A1 が target で落ちた -> A2 へ進めない
+    tried.clear()
+    out = transport.select_first_passing(
+        "afterglow", make({"A0": "calibration", "A1": "calibration"}))
+    assert tried == ["A0", "A1"]
+    assert out["blocked_by_precondition"]["requires_previous_failure"] == "sentinel"
+
+    # A1 が sentinel regression で落ちた -> A2 へ進める
+    tried.clear()
+    transport.select_first_passing(
+        "afterglow", make({"A0": "calibration", "A1": "sentinel", "A2": "sentinel"}))
+    assert tried == ["A0", "A1", "A2"]
+
+
+def test_rev2_a2_actually_operates_with_body_shape():
+    """#5。A2 は sidecar の形状ベクトルで実際に動く（以前は常に no-op だった）。"""
+    from t0_afterglow import apply_a2
+    sc = _synthetic_sidecar()
+    # 形状が無ければ no-op（契約どおり）
+    out, info = apply_a2(np.zeros(1200), 24000, sc)
+    assert info["changed"] is False and "envelope" in info["reason"]
+    # 形状があれば動く
+    sc["founder_expression"]["ar_alpha_band_envelope_shape"] = [
+        max(0.0, 1.0 - i / 31.0) for i in range(32)]
+    sr, n = 24000, 12000
+    t = np.arange(n) / sr
+    y = 0.2 * np.sin(2 * np.pi * 500 * t) + 0.05 * np.sin(2 * np.pi * 3400 * t)
+    out, info = apply_a2(y, sr, sc)
+    assert info["changed"] is True and info["shape_points"] == 32
+    assert info["attenuation_only"] is True
+    assert not np.array_equal(out, y)
+    chk = assert_band_limited(y, out, sr, 3400.0, 220.0)
+    assert chk["out_of_band_energy_ratio"] <= 1.01, chk
+
+
+@requires_body
+def test_rev2_build_sidecar_carries_the_a2_shape():
+    """#5。通常生成される sidecar が A2 の入力を実際に持っている。"""
+    sc, _ = _sidecar("u")
+    shape = sc["founder_expression"]["ar_alpha_band_envelope_shape"]
+    assert shape is not None and len(shape) == 32
+    assert shape[0] == pytest.approx(1.0, abs=1e-6), "開始値で正規化されている"
+    assert t0_schema.validate_sidecar(sc) == []
+
+
+def test_rev2_wav_digest_uses_the_real_file_hash():
+    """#G8。output WAV SHA は実 WAV ファイルのハッシュ（自前 int16 丸めではない）。"""
+    import t0_run
+    transported = {"a": {"wav_sha256": "aa" * 32}, "b": {"wav_sha256": "bb" * 32}}
+    d1 = t0_run._wav_digest(transported)
+    d2 = t0_run._wav_digest({"a": {"wav_sha256": "aa" * 32},
+                             "b": {"wav_sha256": "cc" * 32}})
+    assert d1 != d2
+    # signal を変えても wav_sha256 が同じなら digest は動かない（= ファイル基準）
+    same = {"a": {"wav_sha256": "aa" * 32, "signal": np.zeros(10)},
+            "b": {"wav_sha256": "bb" * 32, "signal": np.ones(10)}}
+    assert t0_run._wav_digest(same) == d1
+
+
+def test_rev2_publish_uses_atomic_rename_and_verifies(tmp_path):
+    """#G9。staging -> verify -> atomic rename。壊れた束は公開しない。"""
+    import t0_run
+    out = tmp_path / "AF_T0"
+    out.mkdir()
+    (out / "old.json").write_text("{}", encoding="utf-8")
+    staging = tmp_path / ".AF_T0.staging"
+    staging.mkdir()
+    (staging / "t0_results.json").write_text('{"v":2}', encoding="utf-8")
+    info = t0_run._publish(staging, out)
+    assert info["method"] == "atomic_rename" and info["verified"]
+    assert (out / "t0_results.json").exists() and not (out / "old.json").exists()
+    assert not staging.exists(), "rename なので staging は残らない"
+    assert not (tmp_path / ".AF_T0.previous").exists()
+
+
+def test_rev2_publish_refuses_a_corrupted_staging_tree(tmp_path):
+    """#G9。SHA256SUMS と実体が食い違う束は公開しない。"""
+    import t0_run
+    out = tmp_path / "AF_T0"
+    out.mkdir()
+    (out / "keep.json").write_text('{"prev":1}', encoding="utf-8")
+    staging = tmp_path / ".AF_T0.staging"
+    staging.mkdir()
+    (staging / "t0_results.json").write_text('{"v":2}', encoding="utf-8")
+
+    real = t0_run._verify_tree
+    def _broken(root):
+        return {"missing": [], "mismatched": ["t0_results.json"], "n": 1}
+    t0_run._verify_tree = _broken
+    try:
+        with pytest.raises(t0_run.T0Stop) as ei:
+            t0_run._publish(staging, out)
+        assert ei.value.reason_code == "PUBLICATION_VERIFY_FAILED"
+    finally:
+        t0_run._verify_tree = real
+    # 旧束が canonical に残っている
+    assert (out / "keep.json").read_text(encoding="utf-8") == '{"prev":1}'
+
+
+def test_rev2_fresh_confirmation_requires_the_frozen_config():
+    """#2。freeze 後に config が変わっていたら FAILED。"""
+    import t0_run
+    cfg = transport.TransportConfig("D1", "E1", "A1")
+    wrong = t0_schema.canonical_digest(
+        transport.TransportConfig("D0", "E0", "A0").as_dict())
+    with pytest.raises(t0_run.T0Stop) as ei:
+        t0_run._fresh_confirmation({}, None, None, {}, {"fixtures": {}}, cfg, {},
+                                   Path("."), {}, Path("."), wrong)
+    assert ei.value.reason_code == "CONFIG_CHANGED_AFTER_FREEZE"
+
+
+def test_rev2_candidate_selection_never_sees_af0():
+    """#3。候補選択の実装が AF0 を参照していない（ast で識別子を検査）。"""
+    import ast
+    import inspect
+
+    import t0_run
+    src = inspect.getsource(t0_run._select_for_trait)
+    tree = ast.parse(src.lstrip())
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            names.add(node.value)
+    assert "af0" not in names, "候補選択に AF0 が現れてはならない（§12）"
+    params = set(inspect.signature(t0_run._select_for_trait).parameters)
+    assert not (params & {"genome", "captures", "sidecars", "body_meas"}), params
+
+
+def test_rev2_transport_body_publishes_pcm16_before_measuring():
+    """#1。判定対象は PCM16 write/readback を通った実体である。"""
+    import inspect
+    src = inspect.getsource(transport.transport_body)
+    assert "sf.write" in src and "sf.read" in src
+    assert "wav_sha256" in src
+    # evaluate_config は transport_body の戻り値をそのまま測る
+    import t0_run
+    ev = inspect.getsource(t0_run.evaluate_config)
+    assert "transport_body" in ev and "measure_transported" in ev
+
+
+@requires_world
+@requires_body
+@pytest.mark.slow
+def test_rev2_measured_signal_is_the_published_wav(tmp_path):
+    """#1（実測）。measure に渡る signal が公開 WAV の読み直しと一致する。"""
+    from t0_stage_capture import capture_unit_stages
+    sc, wav = _sidecar("ri")
+    cap = capture_unit_stages(wav, tmp_path / "stages")
+    tr = transport.transport_body({"ri": cap}, {"ri": sc},
+                                  transport.TransportConfig("D0", "E0", "A0"),
+                                  None, publish_dir=tmp_path / "pcm")
+    row = tr["ri"]
+    import soundfile as sf
+    back, sr = sf.read(row["wav_path"], dtype="float64", always_2d=False)
+    assert np.array_equal(row["signal"], back)
+    assert row["info"]["pcm16_roundtrip"] is True
+    from af_spec import sha256_file
+    assert row["wav_sha256"] == sha256_file(row["wav_path"])
+
+
+def test_rev2_revision_is_recorded():
+    """revision 運用: 実験 ID は増やさず revision を上げる。"""
+    assert t0_schema.EXPERIMENT_ID == "AF-T0"
+    assert t0_schema.T0_REVISION >= 2

@@ -1338,3 +1338,75 @@ Stage B は「どの段でどれだけ動くか」を測るために設計され
 `t0_localize` は criteria の `final_tolerances` を **受け取らない**、`t0_compare` は
 `localization_epsilon` を **参照しない**。この分離自体をテストで固定している
 （`test_localization_epsilon_is_not_a_pass_threshold`、`ast` で識別子の不在を検査）。
+
+---
+
+# Appendix B — Revision History
+
+**運用方針（User 裁定 2026-08-22）: 実験 ID は増やさず、revision と run 履歴だけ
+増やす。** 失敗した試行は AF-T0b のような別実験に分岐させず、**非正典の run 履歴**
+として残し、修正版を AF-T0 の新しい canonical revision とする。
+
+| revision | 状態 | 内容 |
+|---|---|---|
+| 1 | **非正典（withdrawn）** | PR #302 初版。canonical run は完走させず撤回した |
+| 2 | canonical | 下記 8 件を修正した版 |
+
+## rev1 が非正典である理由
+
+第 1 巡レビューで、**判定を正当化できない構造的欠陥が 8 件**指摘された。いずれも
+実コードで再現確認済み。rev1 の run は仮に PASS を出しても設計契約上受理できない
+ため、canonical run を完走させずに撤回した。
+
+| # | 欠陥 | 影響した Gate |
+|---|---|---|
+| 1 | 判定が最終 PCM16 公開物ではなくメモリ上の float を測っていた。`_write_probes` が後段で初めて PCM16 化し、`bundle_verified: True` を無条件に返していた。**afterglow の first divergence が `PCM_PUBLICATION` と実測されている以上、この段を判定経路から外すことは偽陽性を許すことに等しい** | G3–G7 / G10 |
+| 2 | fresh confirmation が fresh でなかった。候補選択前に作った holdout capture を再利用し、AF0 も Phase 9 の combined 結果を渡し直して `after_freeze: True` のフラグだけ立てていた | G10 |
+| 3 | AF0 が候補選択に混入していた（`ok = calibration && holdout && af0`）。「AF0 だけ落ちたので次候補へ」= 実質的な candidate fitting | G3–G5 |
+| 4 | A1 が設計と別物だった。`ref_amp` を計算するが出力に使わず、実体は attenuation/truncation only。「失われた afterglow を再注入する」候補定義と不一致 | G5 |
+| 5 | A2 が実質未実装。`ar_alpha_band_envelope_shape` を要求するのに `build_sidecar` がそれを格納せず、通常生成される sidecar では常に no-op。実動作テストも無かった | G5 |
+| 6 | D2 が raw WORLD synth ではなく S5 を入力にしていた。source onset を実測せず 4 フレーム（20 ms）固定補正で、由来を calibration から証明できない | §15 |
+| 7 | 候補遷移が設計より緩く、理由を問わず FAIL したら次候補へ進んでいた。§10 は E2 を「E1 が holdout FAIL のときのみ」、A2 を「A1 が sentinel regression で落ちたときのみ」と限定している | G4 / G5 |
+| 8 | G0 が fail-closed でなかった。P0 成果物を「存在するか」だけで見ており、`base_commit` も値があるときだけ照合。さらに `git rev-parse HEAD` と凍結 base を比較していたため、**T0 は自分の PR head では原理的に PASS できない**構造だった | G0 |
+| 補 | G8 の "output WAV SHA" が実 WAV ファイルではなく自前 int16 丸めの raw PCM を hash していた。G9 の公開が `copytree` で、atomic rename ではなかった | G8 / G9 |
+
+## rev2 で入れた修正
+
+1. **判定対象を公開物にした** — `transport_body` が輸送 → PCM16 write → readback
+   までを 1 単位で行い、`signal` に読み直した実体を入れる。`_write_probes` は
+   その実体を staging へ複製し、SHA を測り直して照合してから
+   `bundle_verified` を立てる（測ったものと公開したものが同一）
+2. **freeze 順序を実際のものにした** — `_fresh_confirmation` は凍結 config の
+   ダイジェストを照合したうえで、holdout fixture の Body を **新規に合成し直し**、
+   AF0 も **この時点で改めて**輸送・測定する。config が freeze 後に変わっていたら
+   `CONFIG_CHANGED_AFTER_FREEZE` で FAILED
+3. **候補選択から AF0 を排除** — `_select_for_trait` は genome / captures / sidecars /
+   body_meas を引数に取らない。AF0 は freeze 後の final confirmation にのみ登場する
+4. **A1 を実態どおりに記述**（下記「rev2 における A1 / D2 の位置づけ」参照）
+5. **A2 を実装** — `build_sidecar` が Body の AR-α 帯包絡の正規化形状（32 点）を
+   格納し、A2 がそれで実際に動く。実動作テストを追加
+6. **D2 の入力と定数**（下記参照）
+7. **遷移前提条件を凍結** — `FROZEN_CANDIDATE_PRECONDITION` で E2/A2 の前提を型に
+   し、満たさない失敗では `blocked_by_precondition` として候補列を終える
+8. **G0 を fail-closed に** — P0 成果物 6 点を凍結 SHA と 1 件ずつ照合。
+   `base_commit` の意味を是正し、「P0 成果物が凍結 base のバイト列と一致する」を
+   一次条件、git 由来の「P0 パスが base 以降未変更」を補助証拠にした
+9. G8 は実 WAV ファイルの SHA256、G9 は `os.rename` による atomic 差し替え +
+   staging の自己検証（壊れた束は公開しない・失敗時は旧束を戻す）
+
+## rev2 における A1 / D2 の位置づけ
+
+**A1 と D2 は、AF0 の実測を見て設計された経緯がある**（A1 は帯域幅と residual 形式を
+2 回変更、D2 は 4 フレーム定数）。この事実は §12 の calibration/holdout 分離では
+吸収されない。rev2 では以下の扱いとする。
+
+- **A1** は「AR-α 帯の乗算包絡による減衰」であり、設計 §10 A1 の文言
+  「residual を再注入」とは厳密には異なる。実装は `attenuation_only: True` を
+  記録しており、**失われた残光を足すのではなく、伸びすぎた残光を sidecar の
+  正典長で切る** operator である。この差は記録に明示し、判定を読むときの留保とする
+- **D2** の `_ONSET_FRAME_SHIFT` は Stage B（§17）の局在化実測に由来する。
+  Stage B は「どの段でどれだけ動くか」を測るために設計された段であり、その出力を
+  候補設計に使うのは §6 → §10 の流れに沿う。ただし D1 が通れば D2 は選択されない
+  （§11 最小介入優先）
+- いずれも **run 記録に由来を明記**したうえで AF-T0 rev2 の候補として扱う。
+  この留保を承知で読むことが、rev2 の判定を解釈する前提になる

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Sequence
 
-from t0_schema import FROZEN_P0_VERDICT, T0_SCHEMA
+from t0_schema import FROZEN_P0_VERDICT, T0_REVISION, T0_SCHEMA
 
 #: §22 PASS 時の宣言。
 PASS_DECLARATION = (
@@ -57,6 +57,9 @@ def build_t0_results(*, pins: Mapping[str, Any], localization: Mapping[str, Any]
     out: Dict[str, Any] = {
         "schema": T0_SCHEMA,
         "experiment_id": "AF-T0",
+        # 実験 ID は増やさず revision を上げる運用（失敗した試行は非正典の
+        # run 履歴として残す）。履歴の正本は DESIGN_AF_T0.md Appendix B。
+        "revision": T0_REVISION,
         "founder_id": "AF0",
         "p0_reference": {
             "verdict": FROZEN_P0_VERDICT,
@@ -126,6 +129,8 @@ def build_record_md(results: Mapping[str, Any], localization: Mapping[str, Any],
         "# AF-T0 Trait Transport Fidelity — 実行記録",
         "",
         "- experiment_id: `AF-T0` / founder_id: `AF0`",
+        f"- revision: **{results.get('revision')}**"
+        "（実験 ID は増やさず revision を上げる運用）",
         f"- overall verdict: **{overall.get('verdict')}**",
     ]
     if overall.get("reason_codes"):

@@ -12,19 +12,26 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
+import soundfile as sf
 
 _HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
+_AF = _HERE.parent
+for _p in (str(_HERE), str(_AF)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from t0_afterglow import AFTERGLOW_OPERATORS  # noqa: E402
 from t0_duration import DURATION_OPERATORS  # noqa: E402
 from t0_energy import ENERGY_OPERATORS  # noqa: E402
-from t0_schema import FROZEN_CANDIDATE_MODES, FROZEN_CANDIDATES  # noqa: E402
+from af_spec import sha256_file  # noqa: E402
+
+from t0_schema import (FROZEN_CANDIDATE_MODES,  # noqa: E402
+                       FROZEN_CANDIDATE_PRECONDITION, FROZEN_CANDIDATES)
 
 #: §21 T0-G8。合成順は固定（実行ごとに変わってはならない）。
 COMPOSITION_ORDER: Tuple[str, ...] = ("duration", "energy", "afterglow")
@@ -99,14 +106,36 @@ def transport_unit(capture: Mapping[str, Any], sidecar: Mapping[str, Any],
 def transport_body(captures: Mapping[str, Mapping[str, Any]],
                    sidecars: Mapping[str, Mapping[str, Any]],
                    config: TransportConfig,
-                   energy_calibration: Optional[Mapping[str, Any]] = None
-                   ) -> Dict[str, Any]:
-    """Body 全 unit を輸送する。**stem 昇順**で回す（決定論）。"""
+                   energy_calibration: Optional[Mapping[str, Any]] = None,
+                   publish_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Body 全 unit を輸送し、**PCM16 で書き出して読み直した実体**を返す。
+
+    §5 の最終段は `S5_PCM16_ROUNDTRIP`（sf.write 後の実体を再 read）。判定を
+    メモリ上の float に対して行うと、**公開物では落ちる形質を PASS にしてしまう**。
+    実際 afterglow の first divergence は `PCM_PUBLICATION` と実測されており、
+    この段を判定経路から外すことは偽陽性を許すことに等しい。
+
+    したがって輸送 -> PCM16 write -> readback までを 1 つの単位にし、
+    `signal` には **読み直した実体** を入れる。`wav_path` / `wav_sha256` は
+    その公開物そのものを指す（T0-G8 の WAV SHA は実ファイルから取る）。
+    """
     out: Dict[str, Any] = {}
+    root = Path(publish_dir) if publish_dir is not None else Path(
+        tempfile.mkdtemp(prefix="t0_pcm_"))
+    root.mkdir(parents=True, exist_ok=True)
     for stem in sorted(captures):
         y, sr, info = transport_unit(captures[stem], sidecars[stem], config,
                                      energy_calibration)
-        out[stem] = {"signal": y, "sr": sr, "info": info}
+        path = root / f"{stem}.wav"
+        sf.write(str(path), y, int(sr), subtype="PCM_16", format="WAV")
+        back, sr_back = sf.read(str(path), dtype="float64", always_2d=False)
+        info["pcm16_roundtrip"] = True
+        out[stem] = {
+            "signal": np.ascontiguousarray(np.asarray(back, dtype=np.float64)),
+            "sr": int(sr_back), "info": info, "wav_path": str(path),
+            "wav_sha256": sha256_file(path),
+            "pre_pcm_peak": float(np.max(np.abs(y))) if y.size else 0.0,
+        }
     return out
 
 
@@ -124,21 +153,45 @@ def select_first_passing(trait: str,
                          ) -> Dict[str, Any]:
     """§11。凍結順で候補を試し、**最初に全条件 PASS した候補で停止**する。
 
-    `evaluate(op)` は `{"verdict": "PASS"|"FAIL", ...}` を返す。PASS を見つけたら
-    その場で返し、後続候補は **試さない**。「全候補を回して最良を選ぶ」形には
-    しない（§11 末尾）。
+    `evaluate(op)` は `{"verdict", "failure_kind", ...}` を返す。PASS を見つけたら
+    その場で返し、後続候補は **試さない**（全候補を回して最良を選ぶ形にしない）。
+
+    さらに §10 の **遷移前提条件** を守る。「理由を問わず FAIL したら次候補」は
+    preregistered search space の実質拡張になる:
+
+    ```text
+    E2 は E1 が holdout FAIL の場合のみ
+    A2 は A1 が sentinel regression で落ちた場合のみ
+    ```
+
+    前提を満たさない失敗で止まった場合は `blocked_by_precondition` として
+    候補列を終える（次候補へは進まない）。
     """
     order = list(allowed) if allowed is not None else list(FROZEN_CANDIDATES[trait])
     attempts: List[Dict[str, Any]] = []
-    for op in order:
+    prev_failure: Optional[str] = None
+    for i, op in enumerate(order):
+        need = FROZEN_CANDIDATE_PRECONDITION.get(op, "any")
+        if i > 0 and need != "any" and prev_failure != need:
+            return {
+                "trait": trait, "selected": None, "mode": None, "attempts": attempts,
+                "exhausted": True, "verdict": "FAIL",
+                "blocked_by_precondition": {
+                    "operator": op, "requires_previous_failure": need,
+                    "observed_previous_failure": prev_failure},
+                "reason": (f"{trait}: {op} は直前候補が {need} で落ちた場合のみ"
+                           f"許される（実際は {prev_failure}）— §10"),
+            }
         result = evaluate(op)
         attempts.append({"operator": op, "verdict": result.get("verdict"),
+                         "failure_kind": result.get("failure_kind"),
                          "detail": result})
         if result.get("verdict") == "PASS":
             return {"trait": trait, "selected": op,
                     "mode": FROZEN_CANDIDATE_MODES[op],
                     "attempts": attempts, "exhausted": False,
                     "verdict": "PASS"}
+        prev_failure = result.get("failure_kind")
     return {"trait": trait, "selected": None, "mode": None, "attempts": attempts,
             "exhausted": True, "verdict": "FAIL",
             "reason": f"{trait}: candidate list exhausted (§36-6)"}

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 _AF = Path(__file__).resolve().parent.parent
 if str(_AF) not in sys.path:
@@ -84,11 +84,52 @@ def build_sidecar(genome: FounderGenome, unit: AliasUnit, body_wav: str | Path,
             "body_realized_afterglow_ms": _opt_round(ag_realized),
             "ar_alpha_center_hz": round(float(genome.ar_alpha_center_hz), 6),
             "ar_alpha_bandwidth_hz": round(float(genome.ar_alpha_bandwidth_hz), 6),
+            # §10 A2 の入力。Body の AR-alpha 帯包絡を afterglow 区間で切り出し、
+            # 開始値で正規化した **形状ベクトル**。A1 が使う 3 スカラーには
+            # 含まれない情報で、A2 だけがこれを使う。
+            "ar_alpha_band_envelope_shape": body_ar_alpha_envelope_shape(
+                genome, unit, body_wav),
         },
     }
     sidecar["sidecar_sha256"] = canonical_digest(
         {k: v for k, v in sidecar.items() if k != "sidecar_sha256"})
     return sidecar
+
+
+#: A2 が運ぶ形状ベクトルの点数（事前登録の定数）。
+BAND_ENVELOPE_SHAPE_POINTS = 32
+
+
+def body_ar_alpha_envelope_shape(genome: FounderGenome, unit: AliasUnit,
+                                 body_wav: str | Path) -> Optional[List[float]]:
+    """Body の AR-alpha 帯包絡（afterglow 区間）の正規化形状。
+
+    Body 側の事実だけから作る（再表現側は見ない = §15）。afterglow 区間が
+    取れない unit では `None`。
+    """
+    import soundfile as sf
+
+    from t0_afterglow import ar_alpha_band_envelope
+
+    x, sr = sf.read(str(body_wav), dtype="float64", always_2d=False)
+    if getattr(x, "ndim", 1) > 1:  # pragma: no cover - Body は mono
+        x = x.mean(axis=1)
+    tl = timeline_for(genome, unit)
+    if tl.ag_end <= tl.main_end or tl.main_end >= x.size:
+        return None
+    env = ar_alpha_band_envelope(
+        x, int(sr), float(genome.ar_alpha_center_hz),
+        float(genome.ar_alpha_bandwidth_hz))
+    seg = env[tl.main_end:min(tl.ag_end, env.size)]
+    if seg.size < 2:
+        return None
+    head = float(seg[0])
+    if head <= 0.0:
+        return None
+    import numpy as np
+    idx = np.linspace(0, seg.size - 1, BAND_ENVELOPE_SHAPE_POINTS)
+    shape = np.interp(idx, np.arange(seg.size, dtype=float), seg) / head
+    return [round(float(v), 6) for v in np.clip(shape, 0.0, 4.0)]
 
 
 def _opt_round(v: Any, ndigits: int = 6) -> Optional[float]:

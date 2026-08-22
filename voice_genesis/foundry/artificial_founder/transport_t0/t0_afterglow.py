@@ -81,6 +81,15 @@ def _band_rms(x: np.ndarray, sr: int, lo: float, hi: float) -> float:
     return float(np.sqrt(np.mean(b ** 2))) if b.size else 0.0
 
 
+def ar_alpha_band_envelope(x: np.ndarray, sr: int, center: float,
+                           bandwidth: float,
+                           factor: float = BAND_HALF_WIDTH_FACTOR) -> np.ndarray:
+    """AR-alpha 帯の振幅包絡（A2 の形状ベクトルと operator が共有する定義）。"""
+    lo, hi = max(0.0, center - bandwidth * factor), center + bandwidth * factor
+    return _amplitude_envelope(_bandpass(np.asarray(x, dtype=np.float64), sr, lo, hi),
+                               sr)
+
+
 def apply_a0(y: np.ndarray, sr: int, sidecar: Mapping[str, Any]
              ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """A0 Native baseline。"""
@@ -202,13 +211,19 @@ def _amplitude_envelope(x: np.ndarray, sr: int, smooth_ms: float = 2.0) -> np.nd
 
 def apply_a2(y: np.ndarray, sr: int, sidecar: Mapping[str, Any]
              ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """A2 AR-alpha Band Envelope Restoration（A1 が sentinel で落ちた場合のみ）。
+    """A2 AR-alpha Band Envelope Restoration。
 
-    Body の AR-α 帯包絡の **正規化形状** を sidecar が運ぶ前提で、WORLD 出力の
-    AR-α 帯へ固定 operator（形状の掛け合わせ）で適用する。帯域外は触らない。
+    A1 との違いは **入力情報**。A1 は 3 スカラー（center / 振幅参照 / duration）
+    しか使わないが、A2 は sidecar が運ぶ **Body の AR-alpha 帯包絡の正規化形状**
+    を使う。afterglow 区間の帯域包絡を、その形状へ固定 operator で寄せる。
+
+    A1 と同じく減衰方向のみ（`gain <= 1`）。増幅を許すと「metric が合うまで
+    残光を足す」形に近づく（§10 の禁止事項）。
     """
     y = np.asarray(y, dtype=np.float64)
+    n = y.size
     fe = sidecar.get("founder_expression") or {}
+    dur = sidecar.get("duration") or {}
     center = _finite(fe.get("ar_alpha_center_hz"))
     bw = _finite(fe.get("ar_alpha_bandwidth_hz"))
     shape = fe.get("ar_alpha_band_envelope_shape")
@@ -217,23 +232,41 @@ def apply_a2(y: np.ndarray, sr: int, sidecar: Mapping[str, Any]
     if not shape:
         return y.copy(), {"operator": "A2", "mode": "sidecar", "changed": False,
                           "reason": "sidecar carries no normalized band envelope"}
-    lo, hi = max(0.0, center - bw / 2.0), center + bw / 2.0
-    band = _bandpass(y, sr, lo, hi)
-    residual = y - band
-    target = np.interp(np.linspace(0.0, 1.0, band.size),
-                       np.linspace(0.0, 1.0, len(shape)),
-                       np.asarray(shape, dtype=np.float64))
-    cur = np.abs(band)
-    peak = float(cur.max()) if cur.size else 0.0
-    if peak <= 0.0:
+
+    lead = _finite(dur.get("lead_zero_ms")) or 0.0
+    onset = _finite(dur.get("onset_ms")) or 0.0
+    vowel = _finite(dur.get("vowel_ms")) or 0.0
+    taper = _finite(dur.get("main_taper_ms")) or 0.0
+    main_end = min(n, _ms_to_samples(lead + onset + vowel + taper, sr))
+    realized = _finite(fe.get("body_realized_afterglow_ms"))
+    extra = _finite(fe.get("ar_alpha_afterglow_extra_ms")) or 0.0
+    target_ms = realized if realized is not None and realized > 0.0 else extra
+    if main_end >= n or target_ms <= 0.0:
         return y.copy(), {"operator": "A2", "mode": "sidecar", "changed": False,
-                          "reason": "no AR-alpha energy"}
-    scale = np.divide(target, np.maximum(cur / peak, 1e-6),
-                      out=np.ones_like(target), where=target > 0)
-    scale = np.clip(scale, 0.0, 4.0)
-    return np.ascontiguousarray(residual + band * scale), {
+                          "reason": "no afterglow region"}
+
+    lo, hi = max(0.0, center - bw * BAND_HALF_WIDTH_FACTOR), \
+        center + bw * BAND_HALF_WIDTH_FACTOR
+    band = _bandpass(y, sr, lo, hi)
+    ag_end = min(n, main_end + _ms_to_samples(target_ms, sr))
+
+    gain = np.ones(n, dtype=np.float64)
+    if ag_end > main_end:
+        k = ag_end - main_end
+        want = np.interp(np.linspace(0.0, 1.0, k),
+                         np.linspace(0.0, 1.0, len(shape)),
+                         np.asarray(shape, dtype=np.float64))
+        gain[main_end:ag_end] = np.clip(want, 0.0, 1.0)
+    gain[ag_end:] = 0.0
+
+    delta = band * (gain - 1.0)
+    return np.ascontiguousarray(y + delta), {
         "operator": "A2", "mode": "sidecar", "changed": True,
-        "band_hz": [round(lo, 3), round(hi, 3)], "band_limited": True}
+        "band_hz": [round(lo, 3), round(hi, 3)],
+        "afterglow_ms": float(target_ms),
+        "shape_points": len(shape),
+        "residual_form": "multiplicative_band_envelope_from_body_shape",
+        "attenuation_only": True, "band_limited": True}
 
 
 def assert_band_limited(before: np.ndarray, after: np.ndarray, sr: int,

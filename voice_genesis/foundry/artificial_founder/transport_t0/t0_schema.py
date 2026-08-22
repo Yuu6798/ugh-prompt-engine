@@ -35,7 +35,14 @@ FROZEN_BASE_COMMIT = "adcf67bc3e70006afb86edad730e1da261209e33"
 FROZEN_AF0_SPEC_SHA256 = (
     "c477fd5a9ec2ac3dd97f2c7ea076568acce19b53c28eed5c10175cc807b5e8d4")
 
-#: §4。pin 対象の AF-P0 成果物（この 6 つが揃わなければ baseline を語れない）。
+#: AF-T0 の canonical revision。**実験 ID は増やさず revision を上げる**運用。
+#: 失敗した試行は非正典の run 履歴として残し、experiment_id は `AF-T0` のまま。
+#: 履歴は DESIGN_AF_T0.md Appendix B（Revision History）が正本。
+T0_REVISION = 2
+
+#: §4。pin 対象の AF-P0 成果物と **凍結 SHA256**。
+#: 「存在するか」だけでは pin にならない（内容が変わっても素通りする）ので、
+#: base commit `adcf67b` 時点の実バイト列のハッシュと突き合わせる。
 FROZEN_P0_ARTIFACTS: Tuple[str, ...] = (
     "p0_results.json",
     "comparison.json",
@@ -44,6 +51,20 @@ FROZEN_P0_ARTIFACTS: Tuple[str, ...] = (
     "founder_manifest.json",
     "code_closure.json",
 )
+FROZEN_P0_ARTIFACT_SHA256: Dict[str, str] = {
+    "p0_results.json":
+        "c23407411d263bad9fedf4d52ca1364e59066e28e78cc83091d14578aa2b96dd",
+    "comparison.json":
+        "7b2d3c488169aa602ea894f1b76ca10e05f9492cd508ceb455c510f598ea345e",
+    "measurements/body.json":
+        "b8343b22d1ad65dcb09aba6be9ad17643a2899d0e6af33faf503251c779db1ce",
+    "measurements/reexpressed.json":
+        "afba48964497a4f4ae740793c00427e879b269ebcfad8b32fb10b9626ef398a1",
+    "founder_manifest.json":
+        "0feb4731880a7ec5ecf09226f03d865f2be07eb4d7d17d2f23836bdbdb5680ec",
+    "code_closure.json":
+        "eb3575fdc3ba95a09711005a86db01c4b39f5c61d4a4d0a7f3516b358f2e917a",
+}
 
 #: §0。T0 が前提とする AF-P0 の historical verdict と失敗 3 形質。
 FROZEN_P0_VERDICT = "NOT_ESTABLISHED"
@@ -84,6 +105,21 @@ FROZEN_CANDIDATES: Dict[str, Tuple[str, ...]] = {
     "energy": ("E0", "E1", "E2"),
     "afterglow": ("A0", "A1", "A2"),
 }
+#: §10。後続候補へ進める **前提条件**。「理由を問わず FAIL したら次」は
+#: preregistered search space の実質拡張になるので、設計が書いた条件だけを許す。
+#: 値は「直前候補のどの失敗なら次へ進めるか」。
+FROZEN_CANDIDATE_PRECONDITION: Dict[str, str] = {
+    # D2 は D1 FAIL 時のみ（§10 D2「D1 FAIL 時のみ」）
+    "D1": "any",          # D0 が通らなければ D1 へ
+    "D2": "any",          # §10 は D1 FAIL とだけ書いている
+    # E2 は E1 が **holdout FAIL** の場合のみ（§10 E2）
+    "E1": "any",
+    "E2": "holdout",
+    # A2 は A1 が **sentinel regression** で落ちた場合のみ（§10 A2）
+    "A1": "any",
+    "A2": "sentinel",
+}
+
 #: 各候補の transport mode。native baseline 以外は sidecar。
 FROZEN_CANDIDATE_MODES: Dict[str, str] = {
     "D0": "native", "D1": "sidecar", "D2": "sidecar",

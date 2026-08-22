@@ -22,8 +22,8 @@ for _p in (str(_AF), str(_HERE)):
 from af_spec import aggregate_digest, sha256_file  # noqa: E402
 
 from t0_schema import (ALL_GATE_IDS, FROZEN_AF0_SPEC_SHA256,  # noqa: E402
-                       FROZEN_BASE_COMMIT, FROZEN_P0_ARTIFACTS,
-                       FROZEN_SENTINEL_FAMILIES)
+                       FROZEN_BASE_COMMIT, FROZEN_P0_ARTIFACT_SHA256,
+                       FROZEN_P0_ARTIFACTS, FROZEN_SENTINEL_FAMILIES)
 
 
 @dataclass(frozen=True)
@@ -113,10 +113,18 @@ def code_closure_digest(t0_dir: str | Path) -> Tuple[str, List[Tuple[str, str]]]
 # Gates
 # ---------------------------------------------------------------------------
 def gate_input_freeze(pins: Mapping[str, Any]) -> GateResult:
-    """T0-G0 INPUT_FREEZE（§4 / §21）。
+    """T0-G0 INPUT_FREEZE（§4 / §21）。**fail-closed**。
 
-    AF0 spec SHA / base commit / P0 成果物の存在が pin と一致すること。
-    不一致は `AF0_INPUT_DRIFT`。
+    以前は P0 成果物を「存在するか」だけで見ており、内容が変わっても素通り
+    した（pin として機能していなかった）。凍結 SHA と 1 件ずつ突き合わせる。
+
+    `base_commit` の扱いも是正した。§4 が pin しているのは **P0 の入力が
+    どの時点のものか** であって、T0 を動かす作業ツリーの HEAD ではない。
+    T0 のコード自体は base より後のコミットに載るので、HEAD 一致を要求すると
+    T0 は自分の PR head では原理的に PASS できない。よって
+    「P0 成果物が凍結 base のバイト列と一致する」ことを一次条件にし、
+    HEAD は provenance として記録するだけにする（`p0_paths_unmodified` が
+    git 由来の補助証拠）。
     """
     detail: Dict[str, Any] = dict(pins)
     problems: List[str] = []
@@ -124,13 +132,29 @@ def gate_input_freeze(pins: Mapping[str, Any]) -> GateResult:
         problems.append(
             f"AF0 spec sha256 drift: expected {FROZEN_AF0_SPEC_SHA256}, "
             f"got {pins.get('af0_spec_sha256')}")
-    base = pins.get("base_commit")
-    if base and base != FROZEN_BASE_COMMIT:
-        problems.append(f"base commit drift: expected {FROZEN_BASE_COMMIT}, got {base}")
-    missing = [name for name in FROZEN_P0_ARTIFACTS
-               if name not in (pins.get("p0_artifacts") or {})]
-    if missing:
-        problems.append(f"missing pinned AF-P0 artifacts: {missing}")
+
+    got = pins.get("p0_artifacts") or {}
+    for name in FROZEN_P0_ARTIFACTS:
+        want = FROZEN_P0_ARTIFACT_SHA256[name]
+        have = got.get(name)
+        if have is None:
+            problems.append(f"missing pinned AF-P0 artifact: {name}")
+        elif have != want:
+            problems.append(
+                f"AF-P0 artifact drift: {name} expected {want}, got {have}")
+    unexpected = sorted(set(got) - set(FROZEN_P0_ARTIFACTS))
+    if unexpected:
+        problems.append(f"unexpected pinned artifacts: {unexpected}")
+
+    # git が使える環境では「凍結 base 以降 P0 の入力パスが変更されていない」
+    # ことも要求する。使えない場合は None（凍結 SHA 一致が一次条件なので、
+    # ここは補助）。
+    unmodified = pins.get("p0_paths_unmodified")
+    if unmodified is False:
+        problems.append(
+            f"AF-P0 input paths changed since the frozen base {FROZEN_BASE_COMMIT}: "
+            f"{pins.get('p0_paths_changed')}")
+    detail["frozen_base_commit"] = FROZEN_BASE_COMMIT
     detail["problems"] = problems
     detail["reason_code"] = "AF0_INPUT_DRIFT" if problems else None
     return GateResult("T0-G0", "INPUT_FREEZE", _verdict(not problems), detail)
