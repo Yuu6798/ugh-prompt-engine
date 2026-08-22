@@ -161,6 +161,11 @@ testpaths = [
     # 凍結契約 / 候補順 / sentinel / Gate 集合 / 主張上限は依存フリーで走る。
     # WORLD 往復を伴う段観測テストだけが slow かつ pyworld 必須で skip される。
     "voice_genesis/foundry/artificial_founder/transport_t0/tests/test_af_t0.py",
+    # VG-DEBT-004 (D4) run5-7 TRF 1.2 再測定: 事前登録 spec の pin 照合 + runner の
+    # fail-closed 経路 + 合成 WAV での 1.2 測定ロジック検証。依存は numpy + librosa +
+    # soundfile（すべて本体の必須依存）のみで onnxruntime は要らない（レンダ実行時
+    # にしか s7_0b_probe.load_gate_synth() を呼ばないため import 時点では触れない）。
+    "voice_genesis/foundry/tests/test_d4_remeasure.py",
 ]
 pythonpath = ["src", "."]
 markers = [

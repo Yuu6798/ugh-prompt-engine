@@ -1,0 +1,114 @@
+{
+  "authority": "Fable 5 設計裁定 2026-08-22（VG-DEBT-004 の machine-independent 部分 = 1.2 計器の配線 + 測定 spec の事前登録）",
+  "axes": {
+    "excess_tail_voiced_ms": {
+      "selected_candidate": "S_melshape_core_distance|thr0.2|win100|hop10",
+      "unit": "ms"
+    },
+    "release_after_score_boundary_ms": {
+      "selected_candidate": "S_melshape_core_distance|thr0.2|win100|hop5",
+      "unit": "ms"
+    },
+    "tail_f0_persistence": {
+      "selected_candidate": "S_melshape_core_distance|thr0.2|win100|hop10",
+      "unit": "ratio (0..1)"
+    }
+  },
+  "axes_out_of_scope": {
+    "terminal_mel_persistence": "closeout §2-2 により現行観測設計では unavailable（trf_measurement_spec_1_2.json の該当軸 status も unavailable）。D4 では測らない。"
+  },
+  "debt_ref": "VG-DEBT-004",
+  "execution": {
+    "failure_policy": "落ちたセルは outcome/status 付きで隔離し欠測として記帳する（fail-closed。結果を捏造せず、達成条件は『全セルの帰結が記帳されたこと』とする）。",
+    "materials": "checkpoint / 音響モデル / vocoder 等の取得元・sha256 は voice_genesis/foundry/run8/provision.sh の資産表を正とする（machine-dependent。本 spec は取得元を再定義しない）。",
+    "order_discipline": "本 spec はいかなる D4 測定よりも前にコミットされる。runner (d4_runner.py) は起動時に本 spec 自身の sha256 と pins の全 sha256 を実ファイルと照合し、不一致は即 abort する。結果 JSON (d4_results.json) には本 spec の sha256 を束縛する。本番値を見て仕様を変える経路を構造的に閉じるための規律であり、事後に spec を測定結果へ合わせて書き換えることは禁止する。",
+    "render_stack": "CPU onnxruntime（gate_synth.py の既定経路。GPU は使わない）。",
+    "wav_pin_policy": "全 WAV に wav_sha256（容器バイト列）と samples_sha256（標本列）の両方を記帳する（s7_io.read_wav_with_pins と同型の 2 段照合。片方でも欠けたら fail-closed）。"
+  },
+  "groups": [
+    {
+      "generation": "run5",
+      "group_id": "run5_ritsu",
+      "n_cells": 36,
+      "speaker": "ritsu"
+    },
+    {
+      "generation": "run5",
+      "group_id": "run5_pjs",
+      "n_cells": 36,
+      "speaker": "pjs"
+    },
+    {
+      "generation": "run5",
+      "group_id": "run5_user",
+      "n_cells": 36,
+      "speaker": "user"
+    },
+    {
+      "generation": "run6",
+      "group_id": "run6_ritsu",
+      "n_cells": 36,
+      "speaker": "ritsu"
+    },
+    {
+      "generation": "run6",
+      "group_id": "run6_pjs",
+      "n_cells": 36,
+      "speaker": "pjs"
+    },
+    {
+      "generation": "run6",
+      "group_id": "run6_user",
+      "n_cells": 36,
+      "speaker": "user"
+    },
+    {
+      "generation": "run7",
+      "group_id": "run7_ritsu",
+      "n_cells": 36,
+      "speaker": "ritsu"
+    },
+    {
+      "generation": "run7",
+      "group_id": "run7_pjs",
+      "n_cells": 36,
+      "speaker": "pjs"
+    },
+    {
+      "generation": "run7",
+      "group_id": "run7_user",
+      "n_cells": 36,
+      "speaker": "user"
+    },
+    {
+      "generation": "run7",
+      "group_id": "run7_amitaro",
+      "n_cells": 36,
+      "speaker": "amitaro"
+    }
+  ],
+  "n_total_cells": 360,
+  "non_goals": [
+    "Gate 1 / H0-H5 の裁定は行わない（証拠品質のための軸値記帳のみ）。Run 8 closeout（s7_run8_closeout.md）の再入禁止と非衝突である。",
+    "凍結済み TRF measurement spec 1.2（trf_measurement_spec_1_2.json）の凍結値は変更しない（pin 照合のうえ読み取り専用で参照する）。",
+    "terminal_mel_persistence は測らない（closeout §2-2 により unavailable）。",
+    "1.0 台帳（results_s7/s7_0b_results.json / probe_0b_groups/*.json）は不変。D4 の結果は別ファイル（d4_results.json）へ記帳する。"
+  ],
+  "pins": {
+    "cell_definition_source": {
+      "note": "セル定義（診断33セル + フル譜面アンカー3セル = 群あたり36セル）・group 構成（世代x話者の10群）・checkpoint_sha256（世代ごと）は、本 spec の `expansion` セクションを継承すると宣言する。D4 は cell / group / checkpoint の定義を独自に再定義しない — 常に この source の `expansion.matrix` / `expansion.generations` を正本とする。",
+      "path": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json",
+      "sha256": "c4856fde84c8e46edfbfc1232fef288559595207ea4f088016375c9c39404639"
+    },
+    "instrument_sha256": "f5d136744b24ad6562668b0f604a737d23798e8744e0c23fc19b2afca8418eb4",
+    "render_harness_sha256": "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894",
+    "sources": {
+      "instrument_sha256": "voice_genesis/foundry/run8/s7_b1_v12.py",
+      "render_harness_sha256": "voice_genesis/foundry/s1_gate/gate_synth.py",
+      "trf_measurement_spec_1_2_sha256": "voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json"
+    },
+    "trf_measurement_spec_1_2_sha256": "1f7ff569b4ae27043a822e688c8e5fe621f2ebd666e54cd99e53599c4f38ea5b"
+  },
+  "purpose": "1.0 で測定済みの run5-7 本番360セル（10群 x 36セル）を、凍結済み TRF measurement spec 1.2（voicing 3軸）で再測定する。1.0 値の上書きはしない （結果は d4_results.json という別ファイルへ記帳し、s7_0b_results.json / probe_0b_groups/*.json は不変のまま残す）。",
+  "schema": "vg-d4-remeasure-spec/0.1"
+}
