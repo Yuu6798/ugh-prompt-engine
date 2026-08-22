@@ -186,7 +186,7 @@ def run_group(
             entry.update(
                 _measure_cell(frozen, cell, measurement, 0, float(cell["duration_beats"]), tempo)
             )
-            entry["score_module_sha256"] = {k: v[1] for k, v in module_shas.items()}
+            entry["score_module_sha256"] = {Path(v[0]).name: v[1] for v in module_shas.values()}
         except Exception as exc:  # fail-closed: 帰結は必ず記帳する
             entry["outcome"] = "dropped"
             entry["status"] = "render_failed"
@@ -233,7 +233,7 @@ def run_group(
                 "duration_key": a["duration_key"], "position": a["position"],
                 "expected_terminal": a["expected_terminal"], "outcome": "rendered",
                 "song": song_name, "render_elapsed_sec": elapsed,
-                "score_module_sha256": {k: v[1] for k, v in module_shas.items()},
+                "score_module_sha256": {Path(v[0]).name: v[1] for v in module_shas.values()},
             }
             entry.update(wav_meta)
             try:
@@ -258,6 +258,18 @@ def run_group(
     trf.add_contrast_axes(results)
     ringing = trf.apply_ringing_correction(results)
 
+    # `terminal_mel`（128 次元）は 3 対照距離を作るための**中間生成物**で、その結果
+    # （i_reference_distance / N_reference_distance / N_similarity_delta）は各セルに
+    # 残っている。群 JSON は git に入れる成果物なので、消費済みの中間ベクトルは
+    # 落とす（1 群 220 KB のうち 90 KB = 40% がこれだった）。§5-1 の 3 対照は
+    # **話者内 = 群内**で閉じているため、群を跨いで再計算する用途は無い。
+    for cell in results:
+        cell.pop("terminal_mel", None)
+    # score モジュールの sha は全セルで同一なので群レベルへ畳む（36 重複を 1 つに）。
+    module_shas_all = {}
+    for cell in results:
+        module_shas_all.update(cell.pop("score_module_sha256", {}) or {})
+
     missing = set(cells_by_id) - {r["cell_id"] for r in results}
     if missing:
         raise ProbeSpecMismatch(f"帰結が記帳されていないセルがある: {sorted(missing)}")
@@ -280,6 +292,14 @@ def run_group(
             "axes_without_machine_measure": list(trf.AXES_WITHOUT_MACHINE_MEASURE),
         },
         "probe_spec_sha256": hashlib.sha256(SPEC_PATH.read_bytes()).hexdigest(),
+        "score_module_sha256": module_shas_all,
+        "dropped_from_cells": {
+            "terminal_mel": (
+                "3 対照距離を作る中間生成物。結果（i_reference_distance / "
+                "N_reference_distance / N_similarity_delta）は各セルに残っている"
+            ),
+            "score_module_sha256": "全セル同一なので群レベルへ畳んだ（上のキー）",
+        },
         "model_sha256": dict(model_shas),
         "aux_sha256": {
             "canon_phonemes_txt": canon_sha,
