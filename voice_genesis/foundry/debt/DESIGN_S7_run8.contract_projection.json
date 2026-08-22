@@ -1,0 +1,127 @@
+{
+  "schema": "voicegenesis-run-contract-projection/1",
+  "design_doc": "voice_genesis/foundry/DESIGN_S7_run8.md",
+  "design_doc_sha256": "ce36c48d07cd69dc47e2130dc0888fe9ead4aa81c324ce1d4dc7c11b98aa9f16",
+  "run_id": "run8-B",
+  "single_intervention": {
+    "declared": true,
+    "intervention": "user 実歌唱の標的構成のみを単一介入とする（dosage-fixed targeted partial replacement）",
+    "count": 1
+  },
+  "baseline_run": {
+    "value": "run7",
+    "source": "voice_genesis/foundry/DESIGN_S7_run8.md §9-0（run 8-B と run 7 の比較を package-level の裁定表として読む契約）",
+    "status": "PINNED"
+  },
+  "parent_run": {
+    "value": null,
+    "source": null,
+    "status": "PENDING",
+    "reason": "DESIGN_S7_run8.md に run8-B の学習初期状態（checkpoint 継続かゼロからか）を明記した箇所が確認できなかった（missing のまま推測しない）"
+  },
+  "code_commit_sha": {
+    "value": null,
+    "source": null,
+    "status": "PENDING",
+    "reason": "run8-B は未実行のため、実行時に使われる commit がまだ確定していない"
+  },
+  "dataset_manifest_sha256": {
+    "value": null,
+    "source": null,
+    "status": "BLOCKED",
+    "reason": "run8_dataset_pins.json は voice_genesis/foundry/DESIGN_S7_run8.md §10 PR-3 で作成予定の未作成ファイル"
+  },
+  "dataset_row_order": {
+    "value": "target 9 row + retained baseline 6 row（構成のみ確定。行順序の sha256 は未 pin）",
+    "source": "voice_genesis/foundry/DESIGN_S7_run8.md §11 Run 8-B Acceptance Criteria「構成の機械検証: target 9 row + retained baseline 6 row（§8-5-2）」",
+    "status": "PENDING",
+    "reason": "row_count(15) と構成比率は AC で宣言済みだが、行順序を束縛する sha256 は run8_dataset_pins.json 作成後に確定する"
+  },
+  "config_sha256": {
+    "value": null,
+    "source": null,
+    "status": "BLOCKED",
+    "reason": "run8 用 config はまだ生成されていない（DESIGN_S7_run8.md §10 PR-3）"
+  },
+  "dependency_pins": {
+    "value": null,
+    "source": null,
+    "status": "PENDING",
+    "reason": "DESIGN_S7_run8.md 内に run8 専用の dependency pin 表が無い。run5-7 と同一の依存（voice_genesis/foundry/results_s3/run5_material_pins.json 等）を再利用する可能性はあるが、本書は明記していない"
+  },
+  "execution_profile": {
+    "value": "run7 と同一（変更しない）",
+    "source": "voice_genesis/foundry/DESIGN_S7_run8.md §8-3「変えないもの」列挙（seed・ExecutionProfile / 40K 手順 / sampler weighting）",
+    "status": "PENDING",
+    "reason": "『run7 と同一』という契約は宣言済みだが、run7 側の ExecutionProfile 実体 sha256 が run8 projection にはまだ転記されていない"
+  },
+  "seed_sampler_settings": {
+    "value": "run7 と同一（変更しない）",
+    "source": "voice_genesis/foundry/DESIGN_S7_run8.md §8-3「変えないもの」列挙（seed・ExecutionProfile / sampler weighting）",
+    "status": "PENDING",
+    "reason": "契約は宣言済みだが実体値の転記が未了"
+  },
+  "expected_speaker_map": {
+    "value": "run7 と同一（変更しない、spk_id は不変）",
+    "source": "voice_genesis/foundry/DESIGN_S7_run8.md §8-3「変えないもの」列挙（spk_id）",
+    "status": "PENDING",
+    "reason": "『spk_id は変えない』という契約は宣言済みだが、run7 側の spk_id 対応表（voice_genesis/foundry/results_s3/run7_dataset_pins.json）からの逐語転記が未了"
+  },
+  "checkpoint_sha256": {
+    "value": null,
+    "source": null,
+    "status": "BLOCKED",
+    "reason": "run8-B は未実行のため checkpoint が存在しない"
+  },
+  "artifact_manifest": {
+    "value": null,
+    "source": null,
+    "status": "BLOCKED",
+    "reason": "run8-B は未実行のため artifact manifest が存在しない"
+  },
+  "fixed_probe_set": {
+    "value": "計画のみ確定（36セル probe 割付 + 40 unique/8 duplicate 耳校正セル。構造は §4/§6 に記載）",
+    "source": "voice_genesis/foundry/DESIGN_S7_run8.md §4-1（36セル割付）/ §6-1（40 unique + 8 duplicate の cell_id 割付）",
+    "status": "BLOCKED",
+    "reason": "debt_ledger.yaml VG-DEBT-006（fixed probe の pinned_regenerable 凍結未整備）に依存。wav sha256 等の実 pin が無い"
+  },
+  "measurement_spec_version": {
+    "value": "1.2-rc1",
+    "source": "voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json（spec_version フィールド。schema: s7-trf-measurement-spec/1.0。excess_tail_voiced_ms / release_after_score_boundary_ms / tail_f0_persistence の3軸が status: frozen） + voice_genesis/foundry/results_s7/s7_run8_closeout.md §2-1/§2-2（凍結の境界: voicing 3軸は production-range resolution ESTABLISHED、terminal_mel_persistence は現行観測設計では unavailable）",
+    "status": "PINNED"
+  },
+  "hypothesis_algebra_version": {
+    "value": "s7-b2-verdict-algebra/0.1",
+    "source": "voice_genesis/foundry/results_s7/s7_b2_verdict_algebra.json（schema フィールド。H0–H5 の participating_axes/contradiction_rule/tolerance/minimum_supporting_cells/final_aggregation を凍結、worked_example つき） + voice_genesis/foundry/results_s7/s7_run8_closeout.md §3（B-1/B-2 の凍結を達成として記帳。H0–H5 の裁定実施自体は未達）",
+    "status": "PINNED"
+  },
+  "human_evaluation_protocol": {
+    "value": "ブラインド耳校正: 40 unique + 8 duplicate、nasalization/continuous_voicing/intelligibility の3軸0〜3判定、20%重複提示で自己一致率を記録",
+    "source": "voice_genesis/foundry/DESIGN_S7_run8.md §6（ブラインド耳校正）/ §6-1（対象集合の事前固定）",
+    "status": "PENDING",
+    "reason": "プロトコルの構造は事前登録済みだが、提示セットの sha256 pin（§6-2 の処置後セット含む）は 8-B 学習開始前の未来イベントとして未確定"
+  },
+  "cost_record": {
+    "value": "各走行 cap $4。決定論だった場合 8-B+8-R ≈$2.80、非決定論+8-R2 で ≈$4.20（実験全体 $3 超過見込み時は User 承認）",
+    "source": "voice_genesis/foundry/DESIGN_S7_run8.md §0-7（予算表）",
+    "status": "PENDING",
+    "reason": "予算上限と見積りは宣言済みだが、run8-B 実測のダッシュボード確定値はまだ存在しない"
+  },
+  "failure_abort_criteria": {
+    "value": "dosage 固定の機械検証（voiced/total ph_dur が run7比±1%以内・row_count==15）を満たさない場合は fail-closed で停止",
+    "source": "voice_genesis/foundry/DESIGN_S7_run8.md §11 Run 8-B Acceptance Criteria「dosage 固定の機械検証」",
+    "status": "PENDING",
+    "reason": "AC としては宣言済みだが、run8 専用の閾値パラメータ一式を単一の failure_abort_criteria pin としてまとめた資料はまだ無い"
+  },
+  "claim_strength_target": {
+    "value": null,
+    "source": null,
+    "status": "PENDING",
+    "reason": "run8-B 開始前のため未設定。DEBT_ADJUDICATION_v1.1.md 裁定1の causal_evidence_strength 語彙（descriptive/suggestive/moderate/strong）を適用予定"
+  },
+  "runbook_may_override_design": false,
+  "main_training_gate": "CLOSED",
+  "closeout_ref": "voice_genesis/foundry/results_s7/s7_run8_closeout.md",
+  "closeout_ref_sha256": "f58e4f970409d2da7d379d6e5e8fcb0b3bc1a4899248e0616f40b69380e2d626",
+  "reason": "INSUFFICIENT_GATE_ADJUDICATION_EVIDENCE"
+}

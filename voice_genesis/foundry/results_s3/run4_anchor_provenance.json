@@ -1,0 +1,204 @@
+{
+  "schema": "voicegenesis-run4-anchor-provenance/0.1",
+  "note": "本ファイルは results_s3/s3_record_2026-08-17.md 既存記録からの転記のみで構成する。新規実測は一切行っていない。閉じないリンクは値を創作せず missing のまま残す（debt_ledger.yaml VG-DEBT-008 の裁定材料）。",
+  "generated_by": "Phase D0 debt repayment（DEBT_ADJUDICATION_v1.1.md §5 裁定5）",
+  "checkpoints": {
+    "5K": {
+      "file": "model_ckpt_steps_5000.ckpt",
+      "sha256": "0778cf2d0046ffe7f50dd068264ccc562b422252d39c70c99caafce151b9e72d",
+      "verification": "sha256sum -c で OK（実体照合済み）",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-1"
+    },
+    "10K": {
+      "file": "model_ckpt_steps_10000.ckpt",
+      "sha256": "afbc3d3d4605e3c6715f37dbfd3dcdddd32422017e49b5d4d45dd2215a336cfd",
+      "verification": "sha256sum -c で OK（実体照合済み）",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-1"
+    },
+    "20K": {
+      "file": "model_ckpt_steps_20000.ckpt",
+      "sha256": "5e0137b6c2cdeab29417654e4a1901d16895b1da03d8ba28b5b4a13d2bac0ca5",
+      "verification": "sha256sum -c で OK（実体照合済み）",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-1"
+    },
+    "40K": {
+      "file": "model_ckpt_steps_40000.ckpt",
+      "sha256": "3921f96ac19a9cf5bc8ab246a147cf778044cf5949dd24cd87246f24e52c76ec",
+      "verification": "sha256sum -c で OK（実体照合済み）",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-1",
+      "caveat": "サイドカー記載値と実体バイトの一致は確認済みだが、Pod 上で export に食われた実体と同一バイトであるという証拠は無い（ログに ckpt の sha が記録されていないため）。source = 同 record §7.4-3 の入力状態表"
+    }
+  },
+  "acoustic_onnx": {
+    "run4_onnx_gate_40000": {
+      "artifact": "gate40k_run4/onnx_gate_40000（run4 の 1 本目 export で生成、pjs/user はこの出力を --skip-export --acoustic-dir で再利用）",
+      "sha256": "missing",
+      "checkpoint_provenance": "established（run4 6 本のみ）",
+      "provenance_basis": "同一ログ（gate40k.log）内に `--ckpt-dir DiffSinger/checkpoints/s3_run4_acoustic --step 40000` の export 行があり、その出力ディレクトリを後続 2 起動が再利用している系列で確立",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-3"
+    },
+    "run3_onnx_export41": {
+      "artifact": "gate40k_run3_anchor/onnx_export41（run3 4 本が --skip-export --acoustic-dir で消費）",
+      "sha256": "missing",
+      "checkpoint_provenance": "not_established",
+      "provenance_basis": "消費した onnx_export41/ の export 記録が両ログ（gate40k.log / gate_run3_anchor_v2.log）の射程外。ディレクトリ名・exp 名は 40K を示唆するが命名は証拠にならない",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-3"
+    }
+  },
+  "canon_model": {
+    "namine_ritsu_diffsinger": {
+      "artifact": "NamineRitsu_DiffSinger（--canon-model-dir）",
+      "sha256": "missing",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-3（『acoustic ONNX / canon / vocoder | pin 無し（§7.4-3の注記）』）"
+    }
+  },
+  "vocoder": {
+    "vocoder_onnx": {
+      "artifact": "vocoder_onnx（--vocoder-dir）",
+      "sha256": "missing",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-3（同上）"
+    }
+  },
+  "config_and_dict": {
+    "run4_config_yaml": {
+      "sha256": "419baf782ea8a3b4b5e9ab37d94f738883a98bfff25ead4e5ae671f18b954ef7",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1"
+    },
+    "run4_dictionary_ja_txt": {
+      "sha256": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1"
+    },
+    "run3_export_config_yaml": {
+      "sha256": "7aa9fbcbd16ae991ef6987e8dcc19a9a2cff38eed6cc7298b3fb810347c177b0",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1"
+    },
+    "run3_dict_merged_ja_dict_run3_txt": {
+      "sha256": "d44bbf291eca05bffd4b997f19a4910d974295d3f78b37f840a264c2b15830c9",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1"
+    }
+  },
+  "generation_script": {
+    "gate_synth_run4_py": {
+      "artifact": "voice_genesis/foundry/s1_gate/gate_synth_run4.py（実行時バイト）",
+      "sha256": "missing",
+      "caveat": "実行時のバイトが現 HEAD の同名ファイルと同一とは限らない",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-3"
+    }
+  },
+  "anchor_wavs": {
+    "run4_gate_sakura_ritsu.wav": {
+      "sha256": "55bd14c28437dbfcf06b564343f4bcff02b9bea6c9c1f752a72dbf78f3ec9ef9",
+      "speaker": "ritsu",
+      "spk_id": 0,
+      "consumed_onnx": "onnx_gate_40000（同一起動で export）",
+      "given_step": 40000,
+      "checkpoint_provenance": "established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --diffsinger-repo /root/s1work/DiffSinger --ckpt-dir /root/s1work/DiffSinger/checkpoints/s3_run4_acoustic --exp-name s3_run4_acoustic --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run4 --song sakura,umi --speaker ritsu",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    },
+    "run4_gate_umi_ritsu.wav": {
+      "sha256": "a12ef548d9649f86854804f9676e88aa8ed76528ea0592859f752fed9064bb9e",
+      "speaker": "ritsu",
+      "spk_id": 0,
+      "consumed_onnx": "onnx_gate_40000（同一起動で export）",
+      "given_step": 40000,
+      "checkpoint_provenance": "established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --diffsinger-repo /root/s1work/DiffSinger --ckpt-dir /root/s1work/DiffSinger/checkpoints/s3_run4_acoustic --exp-name s3_run4_acoustic --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run4 --song sakura,umi --speaker ritsu",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    },
+    "run4_gate_sakura_pjs.wav": {
+      "sha256": "b9ce3454854e870075ee001fa5cdf937dc11891f047c497a1e40fcf44aabf279",
+      "speaker": "pjs",
+      "spk_id": 1,
+      "consumed_onnx": "gate40k_run4/onnx_gate_40000（ritsu 起動が同ログ内で作った出力を再利用）",
+      "given_step": 40000,
+      "checkpoint_provenance": "established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --skip-export --acoustic-dir /root/s1work/gate40k_run4/onnx_gate_40000 --exp-name s3_run4_acoustic --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run4_pjs --song sakura,umi --speaker pjs",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    },
+    "run4_gate_umi_pjs.wav": {
+      "sha256": "43d6bff14b1eebdd6e8f9e8aa58bde6bae21e2c23df21e29205974f2d491150f",
+      "speaker": "pjs",
+      "spk_id": 1,
+      "consumed_onnx": "gate40k_run4/onnx_gate_40000（ritsu 起動が同ログ内で作った出力を再利用）",
+      "given_step": 40000,
+      "checkpoint_provenance": "established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --skip-export --acoustic-dir /root/s1work/gate40k_run4/onnx_gate_40000 --exp-name s3_run4_acoustic --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run4_pjs --song sakura,umi --speaker pjs",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    },
+    "run4_gate_sakura_user.wav": {
+      "sha256": "e2f7b270c2840012178e50147491a7db1f38f47aee9d4ff487ace60e12c94ea0",
+      "speaker": "user",
+      "spk_id": 2,
+      "consumed_onnx": "gate40k_run4/onnx_gate_40000（ritsu 起動が同ログ内で作った出力を再利用）",
+      "given_step": 40000,
+      "checkpoint_provenance": "established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --skip-export --acoustic-dir /root/s1work/gate40k_run4/onnx_gate_40000 --exp-name s3_run4_acoustic --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run4_user --song sakura,umi --speaker user",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    },
+    "run4_gate_umi_user.wav": {
+      "sha256": "ac8b3455b4204a6e55d34b7db2e81709f1e6f8bc6f20d6d7462767a4dcf28979",
+      "speaker": "user",
+      "spk_id": 2,
+      "consumed_onnx": "gate40k_run4/onnx_gate_40000（ritsu 起動が同ログ内で作った出力を再利用）",
+      "given_step": 40000,
+      "checkpoint_provenance": "established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --skip-export --acoustic-dir /root/s1work/gate40k_run4/onnx_gate_40000 --exp-name s3_run4_acoustic --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run4_user --song sakura,umi --speaker user",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    },
+    "run3_gate_sakura_ritsu.wav": {
+      "sha256": "92acb23d40c3112d954ed909e936929e62f67417e04d0a6e976faff2441cdd86",
+      "speaker": "ritsu",
+      "spk_id": 0,
+      "consumed_onnx": "gate40k_run3_anchor/onnx_export41",
+      "given_step": 40000,
+      "checkpoint_provenance": "not_established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --skip-export --acoustic-dir /root/s1work/gate40k_run3_anchor/onnx_export41 --exp-name s3_run3_acoustic_export41 --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run3_anchor_ritsu --song sakura,umi --speaker ritsu",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    },
+    "run3_gate_umi_ritsu.wav": {
+      "sha256": "ec8b2f603fc1eeb7f7944f4e7e0b6abc35ae770676cc650475eeca16646181cf",
+      "speaker": "ritsu",
+      "spk_id": 0,
+      "consumed_onnx": "gate40k_run3_anchor/onnx_export41",
+      "given_step": 40000,
+      "checkpoint_provenance": "not_established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --skip-export --acoustic-dir /root/s1work/gate40k_run3_anchor/onnx_export41 --exp-name s3_run3_acoustic_export41 --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run3_anchor_ritsu --song sakura,umi --speaker ritsu",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    },
+    "run3_gate_sakura_pjs.wav": {
+      "sha256": "9e3320e534ed6d5b6af50cec73097b60abfa1969af41657a1740eb8524e51c67",
+      "speaker": "pjs",
+      "spk_id": 1,
+      "consumed_onnx": "gate40k_run3_anchor/onnx_export41",
+      "given_step": 40000,
+      "checkpoint_provenance": "not_established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --skip-export --acoustic-dir /root/s1work/gate40k_run3_anchor/onnx_export41 --exp-name s3_run3_acoustic_export41 --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run3_anchor_pjs --song sakura,umi --speaker pjs",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    },
+    "run3_gate_umi_pjs.wav": {
+      "sha256": "75e7c1b3b6cdbed5d18a633750262877f88b1f994a9fd82f0f97d54dcf832a6c",
+      "speaker": "pjs",
+      "spk_id": 1,
+      "consumed_onnx": "gate40k_run3_anchor/onnx_export41",
+      "given_step": 40000,
+      "checkpoint_provenance": "not_established",
+      "generation_command": "python3 /root/s1work/ugh-prompt-engine/voice_genesis/foundry/s1_gate/gate_synth_run4.py run --skip-export --acoustic-dir /root/s1work/gate40k_run3_anchor/onnx_export41 --exp-name s3_run3_acoustic_export41 --step 40000 --canon-model-dir /root/s1work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger --vocoder-dir /root/s1work/vocoder_onnx --out-dir /root/s1work/gate40k_run3_anchor_pjs --song sakura,umi --speaker pjs",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1 / §7.4-3"
+    }
+  },
+  "distribution_archive": {
+    "run3_run4_40k_anchors_tar_gz": {
+      "sha256": "6e65374adc95609824cbcc490035858ea4d18208b63ec3484fe57889fa12553c",
+      "source": "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.1"
+    }
+  },
+  "unclosed_links_summary": [
+    "acoustic ONNX（run4/run3 とも）の sha256 は pin 無し",
+    "canon model（NamineRitsu_DiffSinger）の sha256 は pin 無し",
+    "vocoder（vocoder_onnx）の sha256 は pin 無し",
+    "gate_synth_run4.py の実行時バイト sha256 は pin 無し",
+    "run3 側 4 本は『ONNX が run3 の 40K checkpoint に由来する』こと自体が未確立（onnx_export41 の export 記録が両ログの射程外）",
+    "checkpoint（.ckpt）自体は sha 照合済みだが、Pod 上で export に食われた実体と同一バイトである証拠は無い（ログに ckpt の sha が無い）"
+  ]
+}

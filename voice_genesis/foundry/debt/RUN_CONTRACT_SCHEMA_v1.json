@@ -1,0 +1,160 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "voicegenesis-run-contract-projection/1",
+  "title": "VoiceGenesis Run Contract — hash-bound machine projection",
+  "description": "DESIGN_<run>.md が実験契約の正本。本 schema はその正本から派生する machine projection (DESIGN_<run>.contract_projection.json) が満たすべき形状を定義する。DEBT_ADJUDICATION_v1.1.md 裁定4 / DEBT_REPAYMENT_PLAN_v1.0.md §6 Run Contract に対応する。各フィールドは未凍結を正直に表現するため {value, source, status} の object を許す。x-gate-class（pre_run/post_run。properties 内の該当フィールドに直接付与）: main_training_gate == OPEN の判定条件が pre_run と post_run で異なる（Phase D0 セルフレビュー修正5）。pre_run（実行前に確定できる契約欄）は gate OPEN に PINNED（かつ value/source が非 null の実質 PINNED）を必須とする。post_run（実行後にのみ実測が存在し得る証拠欄: checkpoint_sha256 / artifact_manifest / cost_record）は gate OPEN 時に PENDING までは許容し BLOCKED は不可 — この欄の PINNED 化自体は run record closure 側（実行結果の記帳）の要件であり、gate OPEN の前提条件ではない。cost_record は「予算宣言は pre、実測記帳は post」の二面性があるが、v1.0 §6 の Run Contract 必須欄としては実測記帳の枠なので post_run に分類する（予算宣言自体は failure_abort_criteria 同様 pre 側の値として projection に残ってよい）。main_training_gate は Codex 第6巡で終端状態 CLOSED を追加（OPEN/BLOCKED いずれとも異なる sticky な状態 — closeout_ref/reason 参照）。",
+  "type": "object",
+  "definitions": {
+    "pinned_field": {
+      "type": "object",
+      "description": "値が未凍結の場合も status で正直に表現するフィールド。value は status=PINNED のときのみ実データを持つ。status=PENDING/BLOCKED のとき value は null または部分情報でよい。",
+      "properties": {
+        "value": {},
+        "source": {
+          "type": ["string", "null"],
+          "description": "repo 相対パス + 可能なら節/キー名。値の出典。status が PENDING/BLOCKED で値が無い場合は null。"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PINNED", "PENDING", "BLOCKED"]
+        },
+        "reason": {
+          "type": "string",
+          "description": "status が PENDING/BLOCKED のときの理由（任意だが推奨）。"
+        }
+      },
+      "required": ["value", "source", "status"],
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "schema": {
+      "const": "voicegenesis-run-contract-projection/1"
+    },
+    "design_doc": {
+      "type": "string",
+      "description": "正本 DESIGN_<run>.md への repo 相対パス"
+    },
+    "design_doc_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "design_doc 実バイトの sha256。conformance test がこれと実ファイルの sha256 を照合し、DESIGN 改変時に projection 更新を強制する。"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "single_intervention": {
+      "type": "object",
+      "x-gate-class": "pre_run",
+      "properties": {
+        "declared": { "type": "boolean" },
+        "intervention": {
+          "type": "string",
+          "minLength": 1,
+          "description": "declared==true のとき、実際に何を単一介入としたかを記述する非空文字列（Codex 第3巡 3-1: 空文字列/null は declared を実質的に無意味化するため許容しない）。"
+        },
+        "count": { "type": "integer" }
+      },
+      "required": ["declared", "intervention", "count"],
+      "additionalProperties": false
+    },
+    "baseline_run": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "parent_run": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "code_commit_sha": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "dataset_manifest_sha256": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "dataset_row_order": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "config_sha256": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "dependency_pins": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "execution_profile": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "seed_sampler_settings": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "expected_speaker_map": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "checkpoint_sha256": {
+      "$ref": "#/definitions/pinned_field",
+      "x-gate-class": "post_run",
+      "description": "実行後にのみ存在し得る証拠欄（run record closure 側の要件）。main_training_gate == OPEN 時は status PENDING まで許容し BLOCKED は不可。"
+    },
+    "artifact_manifest": {
+      "$ref": "#/definitions/pinned_field",
+      "x-gate-class": "post_run",
+      "description": "実行後にのみ存在し得る証拠欄（run record closure 側の要件）。main_training_gate == OPEN 時は status PENDING まで許容し BLOCKED は不可。"
+    },
+    "fixed_probe_set": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "measurement_spec_version": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "hypothesis_algebra_version": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "human_evaluation_protocol": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "cost_record": {
+      "$ref": "#/definitions/pinned_field",
+      "x-gate-class": "post_run",
+      "description": "実行後にのみ存在し得る証拠欄（run record closure 側の要件）。main_training_gate == OPEN 時は status PENDING まで許容し BLOCKED は不可。予算宣言（cap 額等）は pre 側の値として value に残ってよい — post_run 分類は『実測記帳の枠』であることの分類であり、値の中身が予算宣言であることを禁じない。"
+    },
+    "failure_abort_criteria": { "$ref": "#/definitions/pinned_field", "x-gate-class": "pre_run" },
+    "claim_strength_target": {
+      "type": "object",
+      "x-gate-class": "pre_run",
+      "properties": {
+        "value": {
+          "type": ["string", "null"],
+          "enum": ["descriptive", "suggestive", "moderate", "strong", null]
+        },
+        "source": { "type": ["string", "null"] },
+        "status": {
+          "type": "string",
+          "enum": ["PINNED", "PENDING", "BLOCKED"]
+        },
+        "reason": { "type": "string" }
+      },
+      "required": ["value", "source", "status"],
+      "additionalProperties": false
+    },
+    "runbook_may_override_design": {
+      "const": false
+    },
+    "main_training_gate": {
+      "type": "string",
+      "enum": ["OPEN", "BLOCKED", "CLOSED"],
+      "description": "CLOSED は終端状態（Codex 第6巡導入）。closeout 記録（User 裁定）による確定であり、pre_run/post_run フィールドの充足状況（PINNED/PENDING/BLOCKED）が事後にどう変化しても OPEN/BLOCKED へ自動的に戻ることはない（sticky — 参照ロジックは CLOSED を pre_run/post_run の評価より優先する）。CLOSED のとき closeout_ref は必須。"
+    },
+    "closeout_ref": {
+      "type": "string",
+      "description": "main_training_gate == CLOSED のとき必須（それ以外では省略可）。CLOSED は終端状態であり、pin の充足によって OPEN/BLOCKED へ戻ることはない（closeout 記録の User 裁定のみが正）。closeout 記録への repo 相対パス（例: voice_genesis/foundry/results_s7/s7_run8_closeout.md）。"
+    },
+    "closeout_ref_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "gate == CLOSED のとき closeout_ref と共に必須（それ以外では省略可）。closeout_ref が指す参照先ファイルの実バイトの sha256。conformance test がこれと実ファイルの sha256 を照合し、closeout 記録の改変時に projection 更新を強制する（design_doc_sha256 と同機構）。"
+    },
+    "reason": {
+      "type": "string",
+      "description": "main_training_gate == CLOSED のとき、closeout 記録が定める終端理由コードを逐語転記する（例: INSUFFICIENT_GATE_ADJUDICATION_EVIDENCE）。それ以外の gate では省略可。"
+    }
+  },
+  "required": [
+    "schema",
+    "design_doc",
+    "design_doc_sha256",
+    "run_id",
+    "single_intervention",
+    "baseline_run",
+    "parent_run",
+    "code_commit_sha",
+    "dataset_manifest_sha256",
+    "dataset_row_order",
+    "config_sha256",
+    "dependency_pins",
+    "execution_profile",
+    "seed_sampler_settings",
+    "expected_speaker_map",
+    "checkpoint_sha256",
+    "artifact_manifest",
+    "fixed_probe_set",
+    "measurement_spec_version",
+    "hypothesis_algebra_version",
+    "human_evaluation_protocol",
+    "cost_record",
+    "failure_abort_criteria",
+    "claim_strength_target",
+    "runbook_may_override_design",
+    "main_training_gate"
+  ],
+  "additionalProperties": false
+}
