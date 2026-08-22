@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import copy
 import dataclasses
+import hashlib
 import importlib.metadata as _md
 import json
 import sys
@@ -103,6 +104,29 @@ def _real_boundaries_for(cid: str, probe_spec_doc: Dict[str, Any]) -> Dict[str, 
         "note_onset_s": onset, "commanded_note_end_s": onset + span,
         "score_boundary_s": onset + span, "tail_window_ms": 300.0,
     }
+
+
+def _sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _manifest_shas_for(render_doc_path: Path, group_id: str) -> Dict[str, str]:
+    """`render_doc_path` の実バイト sha256 から、`_measure_group` の
+    render_manifest digest 束縛（PR #306 第4巡 P1）を通す `manifest_shas` を
+    組み立てる（`_measure_group` が直接受け取る dict 形。ファイルとしての
+    manifest が要る `cmd_measure` 経由のテストは `_write_render_manifest` を
+    使う）。"""
+    return {group_id: _sha256_of(render_doc_path)}
+
+
+def _write_render_manifest(path: Path, entries: Dict[str, Dict[str, Any]]) -> Path:
+    """`render_manifest.json`（PR #306 第4巡 P1）と同形の manifest ファイルを
+    書く。`entries` は `{group_id: {"render_doc_sha256": ..., "path": ...}}`。"""
+    path.write_text(
+        json.dumps({"schema": d4.RENDER_MANIFEST_SCHEMA, "groups": entries}),
+        encoding="utf-8",
+    )
+    return path
 
 
 # --- PR #306 CI 指摘: ANALYSIS_STACK_PIN 不一致環境（例: CI の numba 0.67.0
@@ -419,7 +443,9 @@ def test_load_and_verify_rejects_mismatching_operator_spec_sha256() -> None:
 
 def test_measure_out_collision_with_spec_is_rejected(spec_and_sha) -> None:
     spec, sha = spec_and_sha
-    ns = argparse.Namespace(render_doc=[], out=str(d4.SPEC_PATH), spec_sha256=sha)
+    ns = argparse.Namespace(
+        render_doc=[], out=str(d4.SPEC_PATH), spec_sha256=sha, render_manifest=[],
+    )
     with pytest.raises(s7_io.OutputCollisionError):
         d4.cmd_measure(ns)
     # 何も書き込まれていない（spec が壊れていない）ことも確認する。
@@ -528,10 +554,11 @@ def test_measure_group_computes_voicing_axes_on_synthetic_wav(
     render_doc = _full_render_doc(out_dir, all_cell_ids, {target: dict(wav_meta)})
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     group_doc = d4._measure_group(
         render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
-        *permissive_window_expectations,
+        *permissive_window_expectations, manifest_shas,
     )
 
     assert group_doc["generation"] == "run5"
@@ -579,10 +606,11 @@ def test_measure_group_transcribes_render_runtime_stack_verbatim(
     )
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     group_doc = d4._measure_group(
         render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
-        *permissive_window_expectations,
+        *permissive_window_expectations, manifest_shas,
     )
 
     assert group_doc["render_runtime_stack"] == fake_render_stack
@@ -612,10 +640,11 @@ def test_measure_cell_axes_differ_between_distinct_wavs(
     )
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     group_doc = d4._measure_group(
         render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
-        *permissive_window_expectations,
+        *permissive_window_expectations, manifest_shas,
     )
 
     axes_a = group_doc["cells"][cell_a]["axes"]
@@ -642,10 +671,11 @@ def test_measure_group_rejects_wav_pin_mismatch(
     render_doc = _full_render_doc(out_dir, all_cell_ids, {target: wav_meta})
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     group_doc = d4._measure_group(
         render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
-        *permissive_window_expectations,
+        *permissive_window_expectations, manifest_shas,
     )
     entry = group_doc["cells"][target]
     assert entry["outcome"] == "error"
@@ -667,11 +697,15 @@ def test_measure_group_rejects_stale_spec_binding(
     )
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    # manifest 束縛（第4巡）は bound_sha 検査より前段のため、この early-abort
+    # 経路を試すには manifest 自体は一致させておく必要がある。
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     with pytest.raises(d4.D4SpecMismatch):
         d4._measure_group(
             render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
             {}, 300.0,  # 早期 abort 経路のため window 引数は未使用（プレースホルダ）
+            manifest_shas,
         )
 
 
@@ -692,11 +726,15 @@ def test_measure_group_registration_check_applies_even_without_spec_binding(
     )
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    # manifest 束縛（第4巡）は群登録検査より前段のため、捏造した group_id
+    # （run5_nonexistent_speaker）に対しても manifest 自体は一致させておく。
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_nonexistent_speaker")
 
     with pytest.raises(d4.D4SpecMismatch, match="groups"):
         d4._measure_group(
             render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
             {}, 300.0,  # 早期 abort 経路のため window 引数は未使用（プレースホルダ）
+            manifest_shas,
         )
 
 
@@ -710,11 +748,13 @@ def test_measure_group_rejects_wrong_cell_count(
     render_doc["cells"] = render_doc["cells"][:35]  # 1 セル欠落
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     with pytest.raises(d4.D4SpecMismatch, match="セル数"):
         d4._measure_group(
             render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
             {}, 300.0,  # 早期 abort 経路のため window 引数は未使用（プレースホルダ）
+            manifest_shas,
         )
 
 
@@ -729,11 +769,13 @@ def test_measure_group_rejects_duplicate_cell_id(
     render_doc["cells"] = [render_doc["cells"][0]] + render_doc["cells"][:35]
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     with pytest.raises(d4.D4SpecMismatch, match="重複"):
         d4._measure_group(
             render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
             {}, 300.0,  # 早期 abort 経路のため window 引数は未使用（プレースホルダ）
+            manifest_shas,
         )
 
 
@@ -756,10 +798,11 @@ def test_measure_group_accepts_window_matching_pinned_cell_definition(
     render_doc = _full_render_doc(out_dir, all_cell_ids, {target: wav_meta})
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     group_doc = d4._measure_group(
         render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
-        window_expectations, expected_tail_window_ms,
+        window_expectations, expected_tail_window_ms, manifest_shas,
     )
 
     entry = group_doc["cells"][target]
@@ -787,10 +830,11 @@ def test_measure_group_rejects_tampered_window(
     render_doc = _full_render_doc(out_dir, all_cell_ids, {target: wav_meta})
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     group_doc = d4._measure_group(
         render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
-        window_expectations, expected_tail_window_ms,
+        window_expectations, expected_tail_window_ms, manifest_shas,
     )
 
     entry = group_doc["cells"][target]
@@ -818,15 +862,60 @@ def test_measure_group_rejects_tampered_tail_window_ms(
     render_doc = _full_render_doc(out_dir, all_cell_ids, {target: wav_meta})
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = _manifest_shas_for(render_doc_path, "run5_pjs")
 
     group_doc = d4._measure_group(
         render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
-        window_expectations, expected_tail_window_ms,
+        window_expectations, expected_tail_window_ms, manifest_shas,
     )
 
     entry = group_doc["cells"][target]
     assert entry["outcome"] == "error"
     assert entry["status"] == "window_mismatch"
+
+
+def test_measure_group_rejects_render_manifest_mismatch(
+    tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+    permissive_window_expectations,
+) -> None:
+    """render doc の実バイトが --render-manifest に記載された sha256 と食い違えば
+    window 検査より前に abort する（PR #306 レビュー第4巡 P1: render doc 全体を
+    改変する経路 — 例えば窓 2 点だけでなく他フィールドも一括改竄する経路 — を
+    doc 全体の digest 束縛で終端する）。"""
+    spec, spec_sha = spec_and_sha
+    axis_candidates = d4._resolve_axis_candidates(spec)
+    out_dir = tmp_path / "out"
+    render_doc = _full_render_doc(out_dir, all_cell_ids, {})
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas = {"run5_pjs": "0" * 64}  # 実バイトと絶対に一致しない偽 sha256
+
+    with pytest.raises(d4.D4SpecMismatch, match="改変された疑い"):
+        d4._measure_group(
+            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+            *permissive_window_expectations, manifest_shas,
+        )
+
+
+def test_measure_group_rejects_missing_render_manifest_entry(
+    tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+    permissive_window_expectations,
+) -> None:
+    """群 ID が --render-manifest に一件も記載されていなければ abort する
+    （manifest に無い doc は測らない、という fail-closed 方針の回帰）。"""
+    spec, spec_sha = spec_and_sha
+    axis_candidates = d4._resolve_axis_candidates(spec)
+    out_dir = tmp_path / "out"
+    render_doc = _full_render_doc(out_dir, all_cell_ids, {})
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_shas: Dict[str, str] = {}  # run5_pjs のエントリが無い
+
+    with pytest.raises(d4.D4SpecMismatch, match="記載されていない"):
+        d4._measure_group(
+            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+            *permissive_window_expectations, manifest_shas,
+        )
 
 
 def test_verify_cell_window_matches_all_360_real_cells() -> None:
@@ -912,9 +1001,16 @@ def test_cmd_measure_isolates_broken_cell_and_exits_nonzero_stack_independent(
     monkeypatch.setattr(d4.b1, "verify_analysis_stack", lambda prereg: dict(fake_stack))
     monkeypatch.setattr(d4.v12, "measure_candidate_12", lambda cand, stim: dict(fake_axes))
 
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    _write_render_manifest(
+        manifest_path,
+        {"run5_pjs": {"render_doc_sha256": _sha256_of(render_doc_path), "path": render_doc_path.name}},
+    )
+
     out_path = tmp_path / "d4_results.json"
     ns = argparse.Namespace(
         render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
+        render_manifest=[str(manifest_path)],
     )
     rc = d4.cmd_measure(ns)
 
@@ -958,9 +1054,16 @@ def test_cmd_measure_isolates_broken_cell_and_exits_nonzero(
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
 
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    _write_render_manifest(
+        manifest_path,
+        {"run5_pjs": {"render_doc_sha256": _sha256_of(render_doc_path), "path": render_doc_path.name}},
+    )
+
     out_path = tmp_path / "d4_results.json"
     ns = argparse.Namespace(
         render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
+        render_manifest=[str(manifest_path)],
     )
     rc = d4.cmd_measure(ns)
 
@@ -1008,9 +1111,16 @@ def test_cmd_measure_marks_incomplete_for_single_group_input(
     monkeypatch.setattr(d4.b1, "verify_analysis_stack", lambda prereg: {"fake": "stack"})
     monkeypatch.setattr(d4.v12, "measure_candidate_12", lambda cand, stim: dict(fake_axes))
 
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    _write_render_manifest(
+        manifest_path,
+        {"run5_pjs": {"render_doc_sha256": _sha256_of(render_doc_path), "path": render_doc_path.name}},
+    )
+
     out_path = tmp_path / "d4_results.json"
     ns = argparse.Namespace(
         render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
+        render_manifest=[str(manifest_path)],
     )
     rc = d4.cmd_measure(ns)
 
@@ -1046,10 +1156,16 @@ def test_cmd_measure_allow_partial_records_partial_flag(
     monkeypatch.setattr(d4.b1, "verify_analysis_stack", lambda prereg: {"fake": "stack"})
     monkeypatch.setattr(d4.v12, "measure_candidate_12", lambda cand, stim: dict(fake_axes))
 
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    _write_render_manifest(
+        manifest_path,
+        {"run5_pjs": {"render_doc_sha256": _sha256_of(render_doc_path), "path": render_doc_path.name}},
+    )
+
     out_path = tmp_path / "d4_results.json"
     ns = argparse.Namespace(
         render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
-        allow_partial=True,
+        allow_partial=True, render_manifest=[str(manifest_path)],
     )
     rc = d4.cmd_measure(ns)
 
@@ -1080,6 +1196,7 @@ def test_cmd_measure_marks_complete_for_all_ten_groups(
     monkeypatch.setattr(d4.v12, "measure_candidate_12", lambda cand, stim: dict(fake_axes))
 
     render_doc_paths: List[str] = []
+    manifest_entries: Dict[str, Dict[str, Any]] = {}
     for group_id in sorted(valid_group_ids):
         generation, speaker = group_id.split("_", 1)
         render_doc = _full_render_doc(
@@ -1088,9 +1205,17 @@ def test_cmd_measure_marks_complete_for_all_ten_groups(
         path = tmp_path / f"{group_id}.json"
         path.write_text(json.dumps(render_doc), encoding="utf-8")
         render_doc_paths.append(str(path))
+        manifest_entries[group_id] = {
+            "render_doc_sha256": _sha256_of(path), "path": path.name,
+        }
+    manifest_path = tmp_path / "render_manifest.json"
+    _write_render_manifest(manifest_path, manifest_entries)
 
     out_path = tmp_path / "d4_results.json"
-    ns = argparse.Namespace(render_doc=render_doc_paths, out=str(out_path), spec_sha256=spec_sha)
+    ns = argparse.Namespace(
+        render_doc=render_doc_paths, out=str(out_path), spec_sha256=spec_sha,
+        render_manifest=[str(manifest_path)],
+    )
     rc = d4.cmd_measure(ns)
 
     assert rc == 0

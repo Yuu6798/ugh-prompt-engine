@@ -45,6 +45,16 @@ lambda ...` のような差し替え）で、pin 検証をすり抜けて任意�
 拒否」までで**終端**する。それ以上の防御（メモリ改竄検知・プロセス隔離等）
 は本 runner のスコープ外とし、際限ない実装細部の追跡はしない。
 
+**render doc 改変系の終端**（PR #306 第4巡 P1）: render 群 JSON（`--render-doc`）
+に対する改変検出も同じ理由で「個別フィールドの逐次検証」を打ち切り、
+**doc バイト全体の digest 束縛**（`render_manifest.json` / `--render-manifest`）
+を主防御にする。窓値 2 点の検証（`_verify_cell_window`。第3巡）はこの主防御の
+**下の層**として残す（多層防御。manifest 未使用の生 8-0b probe 群 JSON を
+`--render-doc` に直接渡す経路など、manifest 検査を経ない使い方が将来増えても
+最低限の tamper-evidence を残すため）が、doc 全体が manifest の記録と一致すれば
+窓値を含む全フィールドの整合は自動的に保証されるので、equal-shift のような
+「窓値だけを個別に整合させた改竄」への対策を都度追加することはしない。
+
 サブコマンド 2 つ:
 
 - `render` — `s7_0b_probe.run_group` を直接呼び、1 群（話者 x 世代）ぶんの
@@ -195,6 +205,14 @@ def _bind_pinned_modules() -> None:
 SPEC_SCHEMA = "vg-d4-remeasure-spec/0.3"
 RENDER_SCHEMA = "vg-d4-render-group-result/0.1"
 RESULTS_SCHEMA = "vg-d4-remeasure-results/0.1"
+#: PR #306 レビュー第4巡 P1（方式 a・窓系ファミリー終端）: `cmd_render` が
+#: 群 doc と同階層へ書く digest 束縛台帳。`cmd_measure` は `--render-manifest`
+#: （複数可・必須）でこれを読み、`--render-doc` の実バイト sha256 と group_id
+#: 単位で照合する。群単位の窓値検証（3巡・多層防御として残置）とは別に、
+#: doc バイト**全体**を束縛することで「窓値だけを個別に整合させた改竄」を
+#: 含む doc 全体の改変を一括で検出する（equal-shift 等、窓値検証の抜け穴を
+#: 都度塞ぐ個別対応の打ち切り）。
+RENDER_MANIFEST_SCHEMA = "vg-d4-render-manifest/0.1"
 DEBT_REF = "VG-DEBT-004"
 
 SPEC_PATH = _HERE / "d4_remeasure_spec.json"
@@ -659,8 +677,10 @@ def cmd_render(args: argparse.Namespace) -> int:
     gate_synth = probe0b.load_gate_synth()
 
     out_path = Path(args.result_out)
+    # render_manifest は out_path と同階層・stem 由来の名前（PR #306 第4巡 P1）。
+    manifest_path = out_path.parent / f"{out_path.stem}_render_manifest.json"
     s7_io.reject_output_collision(
-        [out_path, Path(args.out_dir)],
+        [out_path, manifest_path, Path(args.out_dir)],
         [
             SPEC_PATH, probe0b.SPEC_PATH, trf.TRF_SPEC_PATH, Path(args.export_manifest),
             xm.INPUT_PINS_PATH, probe0b.GATE_SYNTH_PATH,
@@ -680,9 +700,23 @@ def cmd_render(args: argparse.Namespace) -> int:
     doc["d4_remeasure_spec_path"] = str(SPEC_PATH.relative_to(_REPO_ROOT))
     doc["runtime_stack"] = _runtime_stack()
     _atomic_write_json(out_path, doc)
+    # render_manifest.json（PR #306 第4巡 P1・方式 a）: 群 doc の実バイト
+    # sha256 を group_id 単位で記録する。measure 側はこれを --render-manifest
+    # で読み、--render-doc の実バイトと照合する（doc 全体の digest 束縛 =
+    # 窓値だけを個別に整合させた改竄を含む doc 全体の改変を一括検出する）。
+    manifest_doc = {
+        "schema": RENDER_MANIFEST_SCHEMA,
+        "groups": {
+            group_id: {
+                "render_doc_sha256": _sha_file(out_path),
+                "path": out_path.name,
+            },
+        },
+    }
+    _atomic_write_json(manifest_path, manifest_doc)
     print(
         f"| {args.generation}/{args.speaker}: {doc['n_rendered']} rendered / "
-        f"{doc['n_dropped']} dropped -> {out_path}"
+        f"{doc['n_dropped']} dropped -> {out_path} (manifest: {manifest_path})"
     )
     return 0
 
@@ -748,8 +782,26 @@ def _measure_group(
     render_doc_path: Path, d4_spec_sha: str, axis_candidates: Dict[str, "v12.Cand12"],
     valid_group_ids: FrozenSet[str], expected_cell_ids: FrozenSet[str],
     window_expectations: Dict[str, Tuple[float, float]], expected_tail_window_ms: float,
+    manifest_shas: Dict[str, str],
 ) -> Dict[str, Any]:
     doc, doc_sha, _ = s7_io.read_json_with_pin(render_doc_path)
+    # render_manifest digest 束縛（PR #306 第4巡 P1・方式 a・主防御）: doc
+    # バイト**全体**を group_id 単位で照合する。個別の窓値検証（3巡・下記の
+    # `_verify_cell_window`）より前に検査する — byte digest が一致すれば
+    # 窓値もその他フィールドも自動的に一致するため、こちらが先に落ちるのが
+    # 自然な順序（多層防御: manifest が主防御・窓値検証はその下の層）。
+    manifest_group_id = f"{doc.get('generation')}_{doc.get('speaker')}"
+    manifest_sha = manifest_shas.get(manifest_group_id)
+    if manifest_sha is None:
+        raise D4SpecMismatch(
+            f"{render_doc_path}: 群 {manifest_group_id!r} が --render-manifest に"
+            "記載されていない（render_manifest.json に無い doc は測らない）"
+        )
+    if manifest_sha != doc_sha:
+        raise D4SpecMismatch(
+            f"{render_doc_path}: 実 sha256 {doc_sha} が --render-manifest の記載 "
+            f"{manifest_sha} と違う（render 後に doc が改変された疑い）"
+        )
     _verify_group_doc_registration(doc, render_doc_path, valid_group_ids, expected_cell_ids)
     bound_sha = doc.get("d4_remeasure_spec_sha256")
     if bound_sha is not None and bound_sha != d4_spec_sha:
@@ -858,12 +910,31 @@ def cmd_measure(args: argparse.Namespace) -> int:
 
     out_path = Path(args.out)
     render_docs = [Path(p) for p in args.render_doc]
+    manifest_paths = [Path(p) for p in args.render_manifest]
     # 出力衝突検査は analysis stack 検証より**前**に行う（PR #306 レビュー指摘:
     # 衝突だけを検査したい呼び出しが、無関係な ANALYSIS_STACK_PIN 不一致
     # （実行環境のパッケージ版）で先に落ちていた。凍結物破壊の防止は最優先の
     # fail-closed であり、環境のパッケージ版検査より先に評価するのが正しい
     # 順序 — analysis stack 検証自体は緩めない・そのまま維持する）。
-    s7_io.reject_output_collision([out_path], [SPEC_PATH, *render_docs])
+    s7_io.reject_output_collision([out_path], [SPEC_PATH, *render_docs, *manifest_paths])
+
+    # render_manifest 読み込み（PR #306 第4巡 P1・方式 a）: `--render-manifest`
+    # は必須・複数指定可（render は 1 群 = 1 呼び出しのため、通常は群の数だけ
+    # 渡す）。group_id 単位で digest を集約する — 重複 group_id は abort。
+    manifest_shas: Dict[str, str] = {}
+    for manifest_path in manifest_paths:
+        manifest_doc, _, _ = s7_io.read_json_with_pin(manifest_path)
+        if manifest_doc.get("schema") != RENDER_MANIFEST_SCHEMA:
+            raise D4SpecMismatch(
+                f"{manifest_path}: schema {manifest_doc.get('schema')!r} != "
+                f"{RENDER_MANIFEST_SCHEMA!r}"
+            )
+        for gid, entry in (manifest_doc.get("groups") or {}).items():
+            if gid in manifest_shas:
+                raise D4SpecMismatch(
+                    f"群 {gid!r} が複数の --render-manifest に重複して現れている"
+                )
+            manifest_shas[str(gid)] = str(entry["render_doc_sha256"])
 
     analysis_stack = b1.verify_analysis_stack(b1.load_prereg())
 
@@ -871,7 +942,7 @@ def cmd_measure(args: argparse.Namespace) -> int:
     for render_doc_path in render_docs:
         group_doc = _measure_group(
             render_doc_path, d4_spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
-            window_expectations, expected_tail_window_ms,
+            window_expectations, expected_tail_window_ms, manifest_shas,
         )
         group_id = f"{group_doc['generation']}_{group_doc['speaker']}"
         if group_id in groups:
@@ -964,6 +1035,13 @@ def _add_measure_parser(sub: "argparse._SubParsersAction") -> None:
     ap.add_argument(
         "--render-doc", action="append", required=True, dest="render_doc",
         help="render サブコマンド（または s7_0b_probe.py）が書いた群 JSON。複数指定可",
+    )
+    ap.add_argument(
+        "--render-manifest", action="append", required=True, dest="render_manifest",
+        help="render サブコマンドが書いた render_manifest.json（group_id ごとの doc "
+             "sha256 台帳）。複数指定可・必須。各 --render-doc の実バイト sha256 を "
+             "ここに記載された値と group_id 単位で照合し、不一致・未記載は abort する"
+             "（PR #306 第4巡 P1・doc 全体の digest 束縛が主防御）",
     )
     ap.add_argument("--out", required=True, help="d4_results.json の出力先")
     ap.add_argument(

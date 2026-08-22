@@ -1020,6 +1020,11 @@ claims:
   baseline: run 6（d3synth 合成教師を使用した学習）
   causal_evidence_strength: descriptive
   rationale: 'OBS: 教師適格性についての設計裁定の適用'
+  superseded_by:
+  - R7-C14
+  - R7-C15
+  - R7-C30
+  notes: '本 claim 中の「他話者の①改善は達成されている」は §5-1 最終裁定により限定済み（改善は語尾「す」の局所所見まで・事前登録 articulation 測度は undetermined）。教師適格性の主張部分（あみたろは Identity 頂点でなく教師話者・単体レンダ破綻は適格性を否定しない）は有効なまま'
 - claim_id: R7-C28
   source:
     file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
