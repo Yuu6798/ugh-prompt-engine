@@ -1036,3 +1036,26 @@ def test_rev2_revision_is_recorded():
     """revision 運用: 実験 ID は増やさず revision を上げる。"""
     assert t0_schema.EXPERIMENT_ID == "AF-T0"
     assert t0_schema.T0_REVISION >= 2
+
+
+def test_rev2_written_records_are_json_serializable():
+    """記録へ書く辞書は必ず JSON 化できること。
+
+    rev2 の初回実行は、`fresh_confirmation.json` に numpy 波形を含む
+    `af0_artifacts` を混ぜていたため **Phase 10 まで走ってから** 落ちた。
+    高価な run を最後で捨てないよう、書き出し対象の形を固定する。
+    """
+    import inspect
+
+    import t0_run
+    src = inspect.getsource(t0_run._run_phases)
+    # fresh_confirmation.json へは af0_artifacts を出さない
+    assert 'k != "af0_artifacts"' in src
+    # 代表的な記録が JSON 化できることを実際に確認する
+    fresh = {"after_freeze": True, "verdict": "PASS",
+             "af0_artifacts": {"transported": {"a": {"signal": np.zeros(4)}}},
+             "holdout": [{"trait": "duration", "verdict": "PASS"}]}
+    safe = {k: v for k, v in fresh.items() if k != "af0_artifacts"}
+    json.dumps(safe)          # 例外が出ないこと
+    with pytest.raises(TypeError):
+        json.dumps(fresh)

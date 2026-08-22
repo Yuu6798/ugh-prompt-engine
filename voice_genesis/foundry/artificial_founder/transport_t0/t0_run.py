@@ -399,7 +399,11 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
     _log("phase10", "fresh holdout + AF0 confirmation (after freeze) (§20)")
     fresh = _fresh_confirmation(spec_raw, genome, p0_criteria, md, hol_doc, config,
                                 energy_cal, voicebank, af0_wavs, tmp, config_digest)
-    write_json(out / "fresh_confirmation.json", fresh)
+    # `af0_artifacts` は numpy 波形を含む（公開物の複製にだけ使う）。記録へは
+    # 出さない。JSON 化できないものを記録に混ぜると、実行の最後で落ちて
+    # 高価な run 全体を捨てることになる（rev2 の初回実行で実際に踏んだ）。
+    write_json(out / "fresh_confirmation.json",
+               {k: v for k, v in fresh.items() if k != "af0_artifacts"})
     _log("phase11", f"fresh confirmation = {fresh['verdict']}")
 
     # ---------------- Phase 12: determinism -------------------------------
