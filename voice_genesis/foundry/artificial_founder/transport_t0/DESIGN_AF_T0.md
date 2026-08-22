@@ -1599,7 +1599,17 @@ tripwire を走らせた最初の run** が第 3 回だった。T0-G9 が violat
 読み直しが「宣言外パスの `.wav`」として数えられていた。**allowlist を広げず、
 書き出し先を監査済み tmp 配下へ寄せる**方向で是正した（監査境界を緩めない）。
 後者は `*.egg-info/` `*.dist-info/` 配下の既知メタデータ名に限って許可し、
-attestation の `additional_allowed_reads` に明示宣言した。
+attestation の **`audit.additional_allowed_reads`** に明示宣言した。
+
+> **既知の欠陥（次 revision で是正・レビュー第 13 巡）**: 宣言が入っているのは
+> `audit.additional_allowed_reads`（5 項目）**だけ**で、attestation の
+> **top-level `additional_allowed_reads` は 4 項目のまま**であり
+> `python_distribution_metadata` を含んでいない。top-level だけを読む下流の
+> provenance 検査は、**G9 の PASS に必要だった免除を見落とす**。
+> canonical 記録が内部で食い違っている状態なので、次 revision では top-level を
+> audit 側から導出する（定数の二重管理をやめる）。本 revision で是正しなかった
+> のは、`t0_run.py` の変更が code closure を動かし canonical run の再実行を
+> 強制するためで、**判定そのもの（`NOT_ESTABLISHED`）には影響しない**。
 
 ### これは「PASS するまでの調整」ではない
 
