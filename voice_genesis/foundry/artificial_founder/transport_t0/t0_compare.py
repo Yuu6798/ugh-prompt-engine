@@ -132,13 +132,18 @@ def baseline_reproduces_p0(comparison: Mapping[str, Any],
                 if (comparison.get(f) or {}).get("verdict") != "PASS"]
     want = set(expected_failures)
     got = set(observed)
+    # **等号**を要求する。包含（`want <= got`）だと、P0 では通っていた
+    # `duration_share` が新たに落ちても PASS になり、環境差やパス差を
+    # 後段の operator が覆い隠す。「P0 と同じ 3 つが落ちる」ことが baseline
+    # 再現の意味なので、増えても減っても再現していない。
+    ok = want == got
     return {
         "expected_failing_families": sorted(want),
         "observed_failing_families": sorted(got),
         "missing": sorted(want - got),
         "unexpected": sorted(got - want),
-        "verdict": "PASS" if want <= got else "FAIL",
-        "reason": None if want <= got else "BASELINE_NOT_REPRODUCED",
+        "verdict": "PASS" if ok else "FAIL",
+        "reason": None if ok else "BASELINE_NOT_REPRODUCED",
     }
 
 

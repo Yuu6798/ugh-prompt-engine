@@ -21,9 +21,11 @@ for _p in (str(_AF), str(_HERE)):
 
 from af_spec import aggregate_digest, sha256_file  # noqa: E402
 
-from t0_schema import (ALL_GATE_IDS, FROZEN_AF0_SPEC_SHA256,  # noqa: E402
+from t0_schema import (ALL_GATE_IDS,  # noqa: E402
+                       FROZEN_AF0_BODY_IDENTITY_DIGEST, FROZEN_AF0_SPEC_SHA256,
                        FROZEN_BASE_COMMIT, FROZEN_P0_ARTIFACT_SHA256,
-                       FROZEN_P0_ARTIFACTS, FROZEN_SENTINEL_FAMILIES)
+                       FROZEN_P0_ARTIFACTS, FROZEN_P0_CRITERIA_SHA256,
+                       FROZEN_SENTINEL_FAMILIES)
 
 
 @dataclass(frozen=True)
@@ -145,6 +147,20 @@ def gate_input_freeze(pins: Mapping[str, Any]) -> GateResult:
     unexpected = sorted(set(got) - set(FROZEN_P0_ARTIFACTS))
     if unexpected:
         problems.append(f"unexpected pinned artifacts: {unexpected}")
+
+    # AF-P0 criteria のバイト列。全測定・全比較がこの文書を読むので、
+    # metric_definitions や sentinel 許容値が動けば canonical verdict が変わる。
+    if pins.get("p0_criteria_sha256") != FROZEN_P0_CRITERIA_SHA256:
+        problems.append(
+            f"AF-P0 criteria drift: expected {FROZEN_P0_CRITERIA_SHA256}, "
+            f"got {pins.get('p0_criteria_sha256')}")
+
+    # 実 voicebank の identity digest。JSON 成果物だけ照合しても、WAV が
+    # 差し替わっていれば汚染された Body を canonical AF0 として受け入れる。
+    if pins.get("af0_body_identity_digest") != FROZEN_AF0_BODY_IDENTITY_DIGEST:
+        problems.append(
+            f"AF0 body identity drift: expected {FROZEN_AF0_BODY_IDENTITY_DIGEST}, "
+            f"got {pins.get('af0_body_identity_digest')}")
 
     # git が使える環境では「凍結 base 以降 P0 の入力パスが変更されていない」
     # ことも要求する。使えない場合は None（凍結 SHA 一致が一次条件なので、
@@ -278,9 +294,14 @@ def gate_determinism(same_process: Mapping[str, Any],
 def gate_provenance(pins: Mapping[str, Any], publication: Mapping[str, Any],
                     sidecar_binding: Mapping[str, Any]) -> GateResult:
     """T0-G9 PROVENANCE（§21 / §27 / §30）。"""
+    # 輸送出力は scipy のフィルタと pyworld の分析・合成に直接依存する。
+    # 版が違えば別実装になりうるので、provenance に無ければ PASS にしない。
     required_pins = ("af0_spec_sha256", "p0_code_closure_sha256",
+                     "p0_criteria_sha256", "af0_body_identity_digest",
                      "t0_code_closure_sha256", "t0_criteria_sha256",
-                     "calibration_sha256", "holdout_sha256", "sidecar_digest")
+                     "calibration_sha256", "holdout_sha256", "sidecar_digest",
+                     "scipy", "pyworld", "soundfile", "libsndfile", "numpy",
+                     "python")
     missing = [k for k in required_pins if not pins.get(k)]
     detail: Dict[str, Any] = {
         "missing_pins": missing, "publication": dict(publication),

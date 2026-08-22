@@ -51,6 +51,19 @@ FROZEN_P0_ARTIFACTS: Tuple[str, ...] = (
     "founder_manifest.json",
     "code_closure.json",
 )
+#: §4 / T0-G0。**AF-P0 criteria のバイト列**も pin する。全測定・全比較が
+#: この文書を読むので、metric_definitions や sentinel 許容値を書き換えれば
+#: canonical verdict が変わる。git 由来の drift 検査は git が無い環境で `None`
+#: を許すため、それだけでは pin にならない。
+FROZEN_P0_CRITERIA_SHA256 = (
+    "3d6ea665fb426ad0edf19433327de4b9c9df3a576f7ebe92f3881bcab827858a")
+
+#: §4 / T0-G0。**実 voicebank の identity digest**（`p0_results.pins` に
+#: 記録されている値）。JSON 成果物だけを照合しても、WAV が差し替わっていれば
+#: 汚染された Body を canonical AF0 として受け入れてしまう。
+FROZEN_AF0_BODY_IDENTITY_DIGEST = (
+    "5a5702cb453768265c390fc2eeabd3a07dad6194c0a6a426eedc0df239a7d6ec")
+
 FROZEN_P0_ARTIFACT_SHA256: Dict[str, str] = {
     "p0_results.json":
         "c23407411d263bad9fedf4d52ca1364e59066e28e78cc83091d14578aa2b96dd",
@@ -255,6 +268,12 @@ def validate_criteria(criteria: Any, p0_reexpression_gates: Mapping[str, Any]) -
             got = tol.get(key)
             if got is None:
                 errors.append(f"criteria.final_tolerances.{key}: missing")
+            elif isinstance(got, bool) or not isinstance(got, (int, float)):
+                # `float()` へ渡す前に型を見る。非数値で例外を投げると
+                # `T0Stop` を経由せず traceback + exit 1 になり、CLI が
+                # NOT_ESTABLISHED に予約している終了コードと衝突する。
+                errors.append(f"criteria.final_tolerances.{key}: expected number, "
+                              f"got {type(got).__name__}")
             elif float(got) != want:
                 errors.append(
                     f"criteria.final_tolerances.{key}: AF-P0 original tolerance を"
@@ -274,7 +293,10 @@ def validate_criteria(criteria: Any, p0_reexpression_gates: Mapping[str, Any]) -
     else:
         for key, want in FROZEN_LOCALIZATION_EPSILON.items():
             got = eps.get(key)
-            if got is None or float(got) != want:
+            if got is None or isinstance(got, bool) or not isinstance(got, (int, float)):
+                errors.append(f"criteria.localization_epsilon.{key}: expected number, "
+                              f"got {type(got).__name__}")
+            elif float(got) != want:
                 errors.append(f"criteria.localization_epsilon.{key}: "
                               f"expected {want}, got {got!r}")
         for key in sorted(set(eps) - set(FROZEN_LOCALIZATION_EPSILON)):
@@ -288,6 +310,9 @@ def validate_criteria(criteria: Any, p0_reexpression_gates: Mapping[str, Any]) -
             got = cand.get(trait)
             if got is None:
                 errors.append(f"criteria.candidate_order.{trait}: missing")
+            elif not isinstance(got, (list, tuple)):
+                errors.append(f"criteria.candidate_order.{trait}: expected list, "
+                              f"got {type(got).__name__}")
             elif tuple(got) != want_seq:
                 errors.append(
                     f"criteria.candidate_order.{trait}: 候補と探索順は凍結されている"
@@ -298,6 +323,9 @@ def validate_criteria(criteria: Any, p0_reexpression_gates: Mapping[str, Any]) -
     sent = criteria.get("sentinel_families")
     if sent is None:
         errors.append("criteria.sentinel_families: missing")
+    elif not isinstance(sent, (list, tuple)):
+        errors.append(f"criteria.sentinel_families: expected list, "
+                      f"got {type(sent).__name__}")
     elif tuple(sent) != FROZEN_SENTINEL_FAMILIES:
         errors.append(f"criteria.sentinel_families: expected "
                       f"{list(FROZEN_SENTINEL_FAMILIES)}, got {sent}")

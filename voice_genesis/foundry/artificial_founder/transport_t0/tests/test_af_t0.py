@@ -105,6 +105,17 @@ def _synthetic_sidecar(stem: str = "ri"):
     }
 
 
+def _g0_pins(**over):
+    """T0-G0 が要求する pin 一式（必須項目が増えたら 1 箇所で追随する）。"""
+    base = {"af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
+            "p0_artifacts": dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256),
+            "p0_criteria_sha256": t0_schema.FROZEN_P0_CRITERIA_SHA256,
+            "af0_body_identity_digest":
+                t0_schema.FROZEN_AF0_BODY_IDENTITY_DIGEST}
+    base.update(over)
+    return base
+
+
 def _gates(**overrides):
     """全 Gate PASS の集合を作り、指定 ID だけ差し替える。"""
     out = []
@@ -124,13 +135,8 @@ def _gates(**overrides):
 # ---------------------------------------------------------------------------
 def test_t32_01_af0_spec_drift_is_rejected():
     """1. AF0 spec drift -> FAILED（T0-G0 が落ちる）。"""
-    ok = t0_gates.gate_input_freeze({
-        "af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
-        "p0_artifacts": dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256)})
-    assert ok.verdict == "PASS"
-    drift = t0_gates.gate_input_freeze({
-        "af0_spec_sha256": "d" * 64,
-        "p0_artifacts": dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256)})
+    assert t0_gates.gate_input_freeze(_g0_pins()).verdict == "PASS"
+    drift = t0_gates.gate_input_freeze(_g0_pins(af0_spec_sha256="d" * 64))
     assert drift.verdict == "FAIL"
     assert drift.detail["reason_code"] == "AF0_INPUT_DRIFT"
 
@@ -815,20 +821,15 @@ def test_localize_unit_picks_the_transition_that_crosses():
 # ---------------------------------------------------------------------------
 def test_rev2_gate_g0_is_fail_closed_on_p0_artifacts():
     """#8。P0 成果物は「存在するか」ではなく **凍結 SHA** と照合する。"""
-    good = {"af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
-            "p0_artifacts": dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256)}
-    assert t0_gates.gate_input_freeze(good).verdict == "PASS"
+    assert t0_gates.gate_input_freeze(_g0_pins()).verdict == "PASS"
     # 内容が変わったら落ちる（以前は素通りした）
-    tampered = {"af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
-                "p0_artifacts": {**t0_schema.FROZEN_P0_ARTIFACT_SHA256,
-                                 "p0_results.json": "0" * 64}}
-    bad = t0_gates.gate_input_freeze(tampered)
+    bad = t0_gates.gate_input_freeze(_g0_pins(
+        p0_artifacts={**t0_schema.FROZEN_P0_ARTIFACT_SHA256,
+                      "p0_results.json": "0" * 64}))
     assert bad.verdict == "FAIL" and bad.detail["reason_code"] == "AF0_INPUT_DRIFT"
     assert any("artifact drift" in p for p in bad.detail["problems"])
     # 欠落も落ちる
-    missing = {"af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
-               "p0_artifacts": {}}
-    assert t0_gates.gate_input_freeze(missing).verdict == "FAIL"
+    assert t0_gates.gate_input_freeze(_g0_pins(p0_artifacts={})).verdict == "FAIL"
 
 
 def test_rev2_gate_g0_does_not_require_head_to_equal_frozen_base():
@@ -836,9 +837,7 @@ def test_rev2_gate_g0_does_not_require_head_to_equal_frozen_base():
 
     HEAD 一致を要求すると T0 は自分の PR head で原理的に PASS できない。
     """
-    pins = {"af0_spec_sha256": t0_schema.FROZEN_AF0_SPEC_SHA256,
-            "p0_artifacts": dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256),
-            "base_commit": "deadbeef" * 5, "p0_paths_unmodified": True}
+    pins = _g0_pins(base_commit="deadbeef" * 5, p0_paths_unmodified=True)
     assert t0_gates.gate_input_freeze(pins).verdict == "PASS"
     # ただし P0 のパスが base 以降変更されていたら落ちる
     changed = dict(pins, p0_paths_unmodified=False,
@@ -1205,3 +1204,166 @@ def test_closeout_pins_are_frozen():
     assert pins["holdout_sha256"] == t0_schema.FROZEN_HOLDOUT_SHA256
     assert pins["p0_artifacts"] == dict(t0_schema.FROZEN_P0_ARTIFACT_SHA256)
     assert pins["p0_paths_unmodified"] is True
+
+
+# ---------------------------------------------------------------------------
+# レビュー第 2-6 巡（Codex）で指摘された残件の回帰
+# ---------------------------------------------------------------------------
+def test_r6_g0_pins_the_p0_criteria_bytes():
+    """P0 criteria のバイト列も凍結する（全測定・全比較がこれを読む）。"""
+    assert t0_gates.gate_input_freeze(_g0_pins()).verdict == "PASS"
+    bad = t0_gates.gate_input_freeze(_g0_pins(p0_criteria_sha256="0" * 64))
+    assert bad.verdict == "FAIL"
+    assert any("criteria drift" in p for p in bad.detail["problems"])
+    # 実ファイルが凍結値と一致していること
+    from af_spec import sha256_file
+    assert sha256_file(P0_CRITERIA) == t0_schema.FROZEN_P0_CRITERIA_SHA256
+
+
+def test_r6_g0_pins_the_live_voicebank_identity():
+    """JSON 成果物だけでなく **実 WAV** の identity digest も照合する。"""
+    bad = t0_gates.gate_input_freeze(_g0_pins(af0_body_identity_digest="0" * 64))
+    assert bad.verdict == "FAIL"
+    assert any("body identity drift" in p for p in bad.detail["problems"])
+
+
+@requires_body
+def test_r6_live_body_identity_matches_the_frozen_digest():
+    """実 voicebank の digest が P0 記録の凍結値と一致する。"""
+    import t0_run
+    from af_spec import load_genome
+    g = load_genome(SPEC_PATH)
+    got = t0_run._body_identity_digest(_AF / "results" / "AF0" / "voicebank" / "AF0", g)
+    assert got == t0_schema.FROZEN_AF0_BODY_IDENTITY_DIGEST
+    p0 = json.loads((_AF / "results" / "AF0" / "p0_results.json")
+                    .read_text(encoding="utf-8"))
+    assert got == p0["pins"]["body_identity_digest"], "P0 の記録と同じ定義で取る"
+
+
+def test_r6_baseline_replay_requires_equality_not_superset():
+    """P0 の失敗集合と **等しい** ことを要求する（増えても再現ではない）。"""
+    frozen = t0_schema.FROZEN_P0_FAILED_FAMILIES
+    exact = {f: {"verdict": "FAIL"} for f in frozen}
+    exact["duration_share"] = {"verdict": "PASS"}
+    assert t0_compare.baseline_reproduces_p0(exact, frozen)["verdict"] == "PASS"
+    # 新たに duration_share も落ちたら再現していない（以前は PASS だった）
+    extra = {f: {"verdict": "FAIL"} for f in frozen}
+    extra["duration_share"] = {"verdict": "FAIL"}
+    out = t0_compare.baseline_reproduces_p0(extra, frozen)
+    assert out["verdict"] == "FAIL" and out["reason"] == "BASELINE_NOT_REPRODUCED"
+    assert out["unexpected"] == ["duration_share"]
+
+
+def test_r6_provenance_requires_scipy_and_pyworld_pins():
+    """輸送出力が依存する scipy / pyworld を provenance に必須化する。"""
+    full = {"af0_spec_sha256": "x", "p0_code_closure_sha256": "x",
+            "p0_criteria_sha256": "x", "af0_body_identity_digest": "x",
+            "t0_code_closure_sha256": "x", "t0_criteria_sha256": "x",
+            "calibration_sha256": "x", "holdout_sha256": "x",
+            "sidecar_digest": "x", "scipy": "1.0", "pyworld": "0.3",
+            "soundfile": "0.1", "libsndfile": "1.0", "numpy": "2.0",
+            "python": "3.11", "t0_code_closure_verified": True}
+    pub = {"published": "p", "bundle_verified": True, "partial_artifacts": []}
+    binding = {"verdict": "PASS"}
+    assert t0_gates.gate_provenance(full, pub, binding).verdict == "PASS"
+    for missing in ("scipy", "pyworld"):
+        pins = {k: v for k, v in full.items() if k != missing}
+        out = t0_gates.gate_provenance(pins, pub, binding)
+        assert out.verdict == "FAIL", missing
+        assert missing in out.detail["missing_pins"]
+
+
+def test_r6_output_collision_guard_protects_experiment_inputs(tmp_path):
+    """`--out` が実験の入力と重なる構成を、読み書き前に止める。"""
+    import t0_run
+    from af_spec import OutputCollisionError
+    p0_root = _AF / "results" / "AF0"
+    # --out が p0_root そのもの -> 公開が P0 成果物ツリーを置き換えてしまう
+    with pytest.raises(OutputCollisionError):
+        t0_run.run(p0_root, T0_CRITERIA, p0_root)
+    # --out が p0_root を内包する
+    with pytest.raises(OutputCollisionError):
+        t0_run.run(p0_root, T0_CRITERIA, _AF / "results")
+    # main() 経由では BLOCKED（3）へ翻訳される
+    code = t0_run.main(["--p0-root", str(p0_root), "--criteria", str(T0_CRITERIA),
+                        "--out", str(p0_root)])
+    assert code == t0_schema.EXIT_CODES["BLOCKED"]
+
+
+def test_r6_afstop_is_translated_to_blocked(monkeypatch):
+    """`AFStop`（依存欠落など）を BLOCKED/3 へ翻訳する。
+
+    捕まえないと traceback + exit 1 になり、CLI が NOT_ESTABLISHED に
+    予約している終了コードと衝突する（§20 が禁じる混同）。
+    """
+    import t0_run
+    from af_spec import AFStop
+
+    def _boom(*a, **k):
+        raise AFStop(cause="pyworld is not installed", impact="x",
+                     minimal_fix="pip install pyworld",
+                     status="BLOCKED", reason_code="DEPENDENCY_MISSING")
+
+    monkeypatch.setattr(t0_run, "run", _boom)
+    code = t0_run.main(["--p0-root", str(_AF / "results" / "AF0"),
+                        "--criteria", str(T0_CRITERIA), "--out", "/tmp/af_t0_x"])
+    assert code == t0_schema.EXIT_CODES["BLOCKED"] == 3
+
+
+def test_r6_malformed_criteria_values_are_validation_errors_not_exceptions():
+    """非数値 criteria は例外ではなく検証エラーにする（BLOCKED へ落とすため）。"""
+    p0 = json.loads(P0_CRITERIA.read_text(encoding="utf-8"))
+    base = json.loads(T0_CRITERIA.read_text(encoding="utf-8"))
+    for path, value in (("final_tolerances", {"duration_onset_tol_ms": "invalid"}),
+                        ("localization_epsilon", {"duration": {"nested": 1}}),
+                        ("candidate_order", {"duration": 5}),
+                        ("sentinel_families", 7)):
+        bad = json.loads(json.dumps(base))
+        if isinstance(value, dict):
+            bad[path].update(value)
+        else:
+            bad[path] = value
+        errs = t0_schema.validate_criteria(bad, p0["reexpression_gates"])
+        assert errs, f"{path} should produce validation errors, not raise"
+        assert any("expected" in e for e in errs), errs
+
+
+def test_r6_staging_is_process_unique_and_probe_path_is_final():
+    """staging は同時実行で衝突せず、記録する probe パスは公開後の位置。"""
+    import inspect
+
+    import t0_run
+    src = inspect.getsource(t0_run.run)
+    assert "os.getpid()" in src, "staging はプロセス固有にする"
+    probes_src = inspect.getsource(t0_run._write_probes)
+    assert "_final_publish_path" in probes_src
+    # staging 配下のパスが canonical 位置へ写る
+    staging = Path("/x/.AF_T0.staging.4242")
+    got = t0_run._final_publish_path(staging / "probes" / "transported", staging)
+    assert got == Path("/x/AF_T0/probes/transported")
+
+
+def test_r6_previous_freeze_is_preserved_when_a_rerun_does_not_pass(tmp_path):
+    """PASS でない再実行が、過去の PASS run の freeze を壊さない（§30）。"""
+    import t0_run
+    out = tmp_path / "AF_T0"
+    (out / "freeze").mkdir(parents=True)
+    (out / "freeze" / "af_t0_freeze.json").write_text('{"v":1}', encoding="utf-8")
+    staging = tmp_path / f".AF_T0.staging.{__import__('os').getpid()}"
+    staging.mkdir()
+    (staging / "t0_results.json").write_text('{"overall":"NOT_ESTABLISHED"}',
+                                             encoding="utf-8")
+    t0_run._publish(staging, out)
+    assert (out / "t0_results.json").exists()
+    assert (out / "freeze" / "af_t0_freeze.json").read_text(encoding="utf-8") == '{"v":1}'
+
+
+def test_r6_af0_spec_is_read_once():
+    """genome を組んだバイト列と digest を取るバイト列を分けない。"""
+    import inspect
+
+    import t0_run
+    sig = inspect.signature(t0_run.verify_frozen_p0)
+    assert "spec_raw" in sig.parameters, "呼び出し側が読んだ buffer を受け取る"
+    src = inspect.getsource(t0_run.verify_frozen_p0)
+    assert "P0_SPEC.read_text" not in src, "内部で読み直さない"

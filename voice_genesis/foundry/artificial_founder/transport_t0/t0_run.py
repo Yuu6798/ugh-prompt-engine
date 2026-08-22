@@ -44,8 +44,10 @@ import t0_localize  # noqa: E402
 import t0_report  # noqa: E402
 import t0_stage_capture as stagecap  # noqa: E402
 import t0_transport as transport  # noqa: E402
-from af_spec import (ALIAS_BY_STEM, apply_patch, canonical_json,  # noqa: E402
-                     genome_from_dict, load_criteria, sha256_file, sha256_tree,
+from af_spec import (ALIAS_BY_STEM, AFStop, OutputCollisionError,  # noqa: E402
+                     aggregate_digest,
+                     apply_patch, canonical_json, genome_from_dict, load_criteria,
+                     reject_output_collision, sha256_file, sha256_tree,
                      sha256sums_text, write_json)
 from t0_energy import assert_no_af0_in_calibration, fit_global_gain_db  # noqa: E402
 from t0_schema import (EXIT_CODES, STAGE_IDS, T0_REVISION,  # noqa: E402
@@ -80,9 +82,13 @@ class T0Stop(Exception):
 # ---------------------------------------------------------------------------
 # Phase 0: frozen P0 の検証
 # ---------------------------------------------------------------------------
-def verify_frozen_p0(p0_root: Path) -> Dict[str, Any]:
-    """§4 / §16。AF0 spec SHA と P0 成果物を pin する。"""
-    spec_raw = json.loads(P0_SPEC.read_text(encoding="utf-8"))
+def verify_frozen_p0(p0_root: Path, spec_raw: Mapping[str, Any]) -> Dict[str, Any]:
+    """§4 / §16。AF0 spec SHA と P0 成果物・criteria・実 Body を pin する。
+
+    `spec_raw` は呼び出し側が **1 度だけ読んだ** バッファを渡す。ここで読み直すと、
+    genome を組んだバイト列と digest を取ったバイト列が別になりうる
+    （途中で差し替えれば、改変 genome を使いながら凍結 digest を報告できる）。
+    """
     spec_sha = canonical_digest(spec_raw)
     artifacts: Dict[str, str] = {}
     for name in FROZEN_P0_ARTIFACTS:
@@ -91,6 +97,7 @@ def verify_frozen_p0(p0_root: Path) -> Dict[str, Any]:
             artifacts[name] = sha256_file(path)
     changed = _p0_paths_changed_since_base()
     return {"af0_spec_sha256": spec_sha, "p0_artifacts": artifacts,
+            "p0_criteria_sha256": sha256_file(P0_CRITERIA),
             "p0_root": af_gates.repo_relative(p0_root),
             "p0_paths_unmodified": None if changed is None else not changed,
             "p0_paths_changed": changed}
@@ -119,6 +126,30 @@ def _p0_paths_changed_since_base() -> Optional[List[str]]:
     if out.returncode != 0:
         return None
     return [ln for ln in out.stdout.splitlines() if ln.strip()]
+
+
+def _module_version(name: str) -> Optional[str]:
+    """依存の版（未導入なら None）。"""
+    try:
+        mod = __import__(name)
+    except ModuleNotFoundError:
+        return None
+    return getattr(mod, "__version__", "unknown")
+
+
+def _body_identity_digest(voicebank: Path, genome: Any) -> Optional[str]:
+    """実 voicebank の identity digest。
+
+    **AF-P0 自身の定義をそのまま使う**（`af_utau.write_body` の
+    `identity_digest` = `aggregate_digest(sha256_tree(root, exclude SHA256SUMS))`）。
+    ここで独自の集約を定義すると、`p0_results.pins.body_identity_digest` と
+    比較できない値になる（実装中に一度踏んだ）。
+    """
+    root = Path(voicebank)
+    if not (root / genome.pitch_dir).is_dir():
+        return None
+    rows = sha256_tree(root, exclude_names=("SHA256SUMS.txt",))
+    return aggregate_digest(rows) if rows else None
 
 
 def _base_commit() -> Optional[str]:
@@ -208,8 +239,16 @@ def evaluate_config(genome: Any, p0_criteria: Any, md: Mapping[str, Any],
 # 本体
 # ---------------------------------------------------------------------------
 def run(p0_root: Path, criteria_path: Path, out_dir: Path) -> int:
-    out_dir = Path(out_dir)
-    staging = out_dir.parent / f".{out_dir.name}.staging"
+    out_dir = Path(out_dir).resolve()
+    # `--out` が実験の入力と重なると、公開（旧ツリー退避 -> rename）が
+    # **入力そのものを退避して消す**。例えば `--out <p0_root>` は AF-P0 の
+    # 成果物ツリーを T0 の結果で置き換えてしまう。読み書きを始める前に止める。
+    reject_output_collision(out_dir, [Path(p0_root), Path(criteria_path),
+                                      _HERE / "fixtures", _HERE / "criteria",
+                                      P0_SPEC, P0_CRITERIA])
+    # staging はプロセス固有にする。固定名だと、同じ `--out` への同時実行が
+    # 互いの作業ツリーを消し合い、別 run のファイルが混ざった束を公開しうる。
+    staging = out_dir.parent / f".{out_dir.name}.staging.{os.getpid()}"
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True, exist_ok=True)
@@ -242,11 +281,16 @@ def _publish(staging: Path, out_dir: Path) -> Dict[str, Any]:
                      f"staging tree failed self-verification: {verify}")
 
     out_dir.parent.mkdir(parents=True, exist_ok=True)
-    hold = out_dir.parent / f".{out_dir.name}.previous"
+    hold = out_dir.parent / f".{out_dir.name}.previous.{os.getpid()}"
     if hold.exists():
         shutil.rmtree(hold)
     if out_dir.exists():
         os.rename(str(out_dir), str(hold))          # 原子的
+        # §30「freeze は PASS 時のみ」。PASS でない run が、過去の PASS run の
+        # freeze を消してはならない。今回 freeze が無い場合に限り引き継ぐ。
+        prev_freeze = hold / "freeze"
+        if prev_freeze.is_dir() and not (staging / "freeze").exists():
+            shutil.copytree(prev_freeze, staging / "freeze")
     try:
         os.rename(str(staging), str(out_dir))       # 原子的
     except OSError:
@@ -289,6 +333,8 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
     _log("phase0", "verify frozen P0 inputs (§4)")
     p0_criteria = load_criteria(P0_CRITERIA)
     md = p0_criteria.metric_definitions
+    # AF0 spec は **1 度だけ** 読む。genome を組んだバイト列と digest を取った
+    # バイト列が別になりうる経路を残さない。
     spec_raw = json.loads(P0_SPEC.read_text(encoding="utf-8"))
     genome = genome_from_dict(spec_raw)
 
@@ -301,15 +347,18 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
     if errors:
         raise T0Stop("BLOCKED", "T0_CONTRACT_INVALID", "; ".join(errors))
 
-    pins_base = verify_frozen_p0(p0_root)
+    pins_base = verify_frozen_p0(p0_root, spec_raw)
     base_commit = _base_commit()
+    # 実 voicebank の identity digest。JSON 成果物だけ照合しても、WAV が
+    # 差し替わっていれば汚染された Body を canonical AF0 として受け入れる。
+    voicebank = p0_root / "voicebank" / "AF0"
+    pins_base["af0_body_identity_digest"] = _body_identity_digest(voicebank, genome)
     gate_g0 = t0_gates.gate_input_freeze({**pins_base, "base_commit": base_commit})
     _log("phase0", f"T0-G0 INPUT_FREEZE = {gate_g0.verdict}")
     if gate_g0.verdict != "PASS":
         raise T0Stop("BLOCKED", "AF0_INPUT_DRIFT",
                      json.dumps(gate_g0.detail.get("problems"), ensure_ascii=False))
 
-    voicebank = p0_root / "voicebank" / "AF0"
     if not (voicebank / genome.pitch_dir).is_dir():
         raise T0Stop("BLOCKED", "AF0_BODY_MISSING",
                      f"AF-P0 body not found under {voicebank}; run p0_run.py first")
@@ -433,6 +482,10 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
         "numpy": np.__version__,
         "soundfile": getattr(sf, "__version__", "unknown"),
         "libsndfile": getattr(sf, "__libsndfile_version__", "unknown"),
+        # 輸送出力は scipy のフィルタ（AR-alpha 帯）と pyworld の分析・合成に
+        # 直接依存する。版が違えば別実装になりうるので provenance に必須。
+        "scipy": _module_version("scipy"),
+        "pyworld": _module_version("pyworld"),
     }
     pins["t0_code_closure_verified"] = (
         t0_gates.code_closure_digest(_HERE)[0] == closure_digest)
@@ -862,6 +915,20 @@ def _source_free_attestation(pins: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _final_publish_path(path: Path, staging: Path) -> Path:
+    """staging 配下のパスを、公開後の canonical 位置へ写す。"""
+    staging = Path(staging)
+    name = staging.name
+    # `.AF_T0.staging.<pid>` -> `AF_T0`
+    if name.startswith(".") and ".staging." in name:
+        final_name = name[1:name.index(".staging.")]
+    elif name.startswith(".") and name.endswith(".staging"):
+        final_name = name[1:-len(".staging")]
+    else:  # pragma: no cover - staging 以外は写さない
+        return Path(path)
+    return staging.parent / final_name / Path(path).relative_to(staging)
+
+
 def _write_probes(out: Path, art: Mapping[str, Any],
                   config: transport.TransportConfig) -> Dict[str, Any]:
     """§30 probes/。**判定に使った実体そのもの**を公開し、検証する。
@@ -883,7 +950,12 @@ def _write_probes(out: Path, art: Mapping[str, Any],
         if sha256_file(dst) != row["wav_sha256"]:
             mismatched.append(stem)
         written.append(dst.name)
-    return {"published": af_gates.repo_relative(probes),
+    # 記録するのは **公開後の最終位置**。staging 配下のパスを記録すると、
+    # `_publish` の rename 後に存在しないパスが provenance に残る
+    # （G9 は PASS なのに consumer が probes を辿れない）。
+    final = _final_publish_path(probes, out)
+    return {"published": af_gates.repo_relative(final),
+            "staging_path": af_gates.repo_relative(probes),
             "bundle_verified": not mismatched and bool(written),
             "partial_artifacts": mismatched,
             "n_files": len(written),
@@ -947,6 +1019,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except T0Stop as stop:
         _log("stop", f"{stop.status} ({stop.reason_code}): {stop}")
         return EXIT_CODES[stop.status]
+    except AFStop as stop:
+        # 共有経路（`af_ingest.require_pyworld` など）は `AFStop` を投げる。
+        # 捕まえないと traceback + exit 1 になり、CLI が NOT_ESTABLISHED に
+        # 予約している終了コードと衝突する（依存欠落を「形質不成立」と
+        # 取り違える = §20 が禁じている混同）。P0 runner と同じく翻訳する。
+        status = getattr(stop, "status", "BLOCKED") or "BLOCKED"
+        _log("stop", f"{status} ({getattr(stop, 'reason_code', None)}): {stop}")
+        return EXIT_CODES.get(status, EXIT_CODES["BLOCKED"])
+    except OutputCollisionError as exc:
+        _log("stop", f"BLOCKED (OUTPUT_COLLISION): {exc}")
+        return EXIT_CODES["BLOCKED"]
 
 
 if __name__ == "__main__":
