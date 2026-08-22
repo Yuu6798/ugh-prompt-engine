@@ -275,6 +275,12 @@ def run(p0_root: Path, criteria_path: Path, out_dir: Path) -> int:
         shutil.rmtree(staging)
     staging.mkdir(parents=True, exist_ok=True)
     tmp_root = Path(tempfile.mkdtemp(prefix="af_t0_"))
+    # §28。code closure は **実験を走らせる前** に採る。run の最後で初めて
+    # hash すると、走行中に T0 モジュールを書き換えた場合に「既に import 済みの
+    # 古いコードが実行され、記録は新しい bytes」という食い違いが起き、
+    # provenance が結果を生んでいないコードを保証してしまう。開始時に pin し、
+    # 終了時に採り直して差があれば fail-closed にする。
+    closure_at_start = t0_gates.code_closure_digest(_HERE)
     try:
         # §29 Source-Free は **宣言ではなく測定**。AF-P0 と同じ tripwire で
         # 実際に開いたパスと network 使用を採取し、G9 で violation ゼロを
@@ -282,7 +288,8 @@ def run(p0_root: Path, criteria_path: Path, out_dir: Path) -> int:
         # PASS になり、attestation が「そんなアクセスは無かった」と嘘をつく。
         audit = _build_source_free_audit(p0_root, criteria_path, staging, tmp_root)
         with af_gates.source_free_tripwire(audit):
-            code = _run_phases(p0_root, criteria_path, staging, tmp_root, audit)
+            code = _run_phases(p0_root, criteria_path, staging, tmp_root, audit,
+                               closure_at_start)
         _publish(staging, out_dir)
         return code
     finally:
@@ -326,8 +333,13 @@ def _publish(staging: Path, out_dir: Path) -> Dict[str, Any]:
         os.rename(str(out_dir), str(hold))          # 原子的
     try:
         os.rename(str(staging), str(out_dir))       # 原子的
-    except OSError:
-        if hold.exists():                            # 旧束を戻す
+    except BaseException:
+        # `OSError` だけを捕まえると、旧束を `hold` に退避した直後の
+        # `KeyboardInterrupt` / `SystemExit` で復旧を素通りする。その場合
+        # `run()` の finally が staging を消すので、canonical 位置は空のまま、
+        # 旧束は隠しパスに取り残される（= 過去の PASS run の消失）。
+        # 中断も含めて必ず戻してから再送出する。
+        if hold.exists() and not out_dir.exists():   # 旧束を戻す
             os.rename(str(hold), str(out_dir))
         raise
     if hold.exists():
@@ -384,7 +396,9 @@ def _build_source_free_audit(p0_root: Path, criteria_path: Path, staging: Path,
 
 
 def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path,
-                audit: Any = None) -> int:
+                audit: Any = None,
+                closure_at_start: Optional[Tuple[str, List[Tuple[str, str]]]] = None
+                ) -> int:
     notes: List[str] = []
     meas_dir = out / "measurements"
     meas_dir.mkdir(parents=True, exist_ok=True)
@@ -540,7 +554,17 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path,
         raise T0Stop("FAILED", "P0_ARTIFACT_DRIFT_DURING_RUN",
                      f"AF-P0 inputs changed during the run: {drifted}")
 
-    closure_digest, closure_rows = t0_gates.code_closure_digest(_HERE)
+    # §28。pin 対象は **走行前** に採った閉包（`run()` が渡す）。ここで採り直した
+    # 値と食い違うなら、走行中に T0 のソースが書き換わったということで、
+    # 実行されたのは import 済みの旧コード = 記録と結果が対応しない。
+    if closure_at_start is None:                    # 直接呼び出し（テスト）用
+        closure_at_start = t0_gates.code_closure_digest(_HERE)
+    closure_digest, closure_rows = closure_at_start
+    closure_after = t0_gates.code_closure_digest(_HERE)
+    if closure_after[0] != closure_digest:
+        raise T0Stop("FAILED", "T0_CODE_DRIFT_DURING_RUN",
+                     f"transport_t0 sources changed during the run: closure was "
+                     f"{closure_digest} at start, {closure_after[0]} at end")
     write_json(out / "code_closure.json",
                {"digest": closure_digest,
                 "files": [{"path": p, "sha256": s} for p, s in closure_rows]})
@@ -567,8 +591,10 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path,
         "scipy": _module_version("scipy"),
         "pyworld": _module_version("pyworld"),
     }
-    pins["t0_code_closure_verified"] = (
-        t0_gates.code_closure_digest(_HERE)[0] == closure_digest)
+    # 走行前 pin と走行後再ハッシュが一致していることを表す（上で drift を
+    # 検出済みなので、ここに到達した時点で必ず一致している）。
+    pins["t0_code_closure_verified"] = True
+    pins["t0_code_closure_pinned_before_run"] = True
     write_json(out / "input_pins.json", pins)
     attestation = _source_free_attestation(pins, audit)
     write_json(out / "source_free_attestation.json", attestation)

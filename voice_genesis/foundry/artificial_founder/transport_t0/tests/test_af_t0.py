@@ -1552,3 +1552,74 @@ def test_r9_inherited_freeze_is_covered_by_the_manifest(tmp_path):
             continue
         digest, _, name = line.partition("  ")
         assert sha256_file(out / name.strip()) == digest.strip(), name
+
+
+# ---------------------------------------------------------------------------
+# レビュー第 10 巡の回帰
+# ---------------------------------------------------------------------------
+def test_r10_code_closure_is_pinned_before_the_experiment_runs():
+    """closure は走行 **前** に採り、走行後の再ハッシュとの差で fail-closed。
+
+    走行の最後で初めて hash すると、走行中に T0 モジュールを書き換えた場合に
+    「実行されたのは import 済みの旧コード / 記録は新しい bytes」となり、
+    provenance が結果を生んでいないコードを保証してしまう。
+    """
+    import inspect
+
+    import t0_run
+    run_src = inspect.getsource(t0_run.run)
+    # `run()` が phase を呼ぶ前に closure を採っていること
+    assert "closure_at_start = t0_gates.code_closure_digest(_HERE)" in run_src
+    assert run_src.index("closure_at_start = t0_gates.code_closure_digest") < \
+        run_src.index("_run_phases("), "closure must be pinned before execution"
+    # `_run_phases` は渡された pin を使い、走行後の差を FAILED にすること
+    phases_src = inspect.getsource(t0_run._run_phases)
+    assert "closure_digest, closure_rows = closure_at_start" in phases_src
+    assert "T0_CODE_DRIFT_DURING_RUN" in phases_src
+
+
+def test_r10_code_closure_digest_is_not_memoized(tmp_path):
+    """drift 検出は「毎回ディスクを読み直す」ことに依存する。"""
+    import t0_gates
+    d = tmp_path / "pkg"
+    d.mkdir()
+    (d / "a.py").write_text("x = 1\n", encoding="utf-8")
+    first = t0_gates.code_closure_digest(d)[0]
+    (d / "a.py").write_text("x = 2\n", encoding="utf-8")
+    assert t0_gates.code_closure_digest(d)[0] != first
+
+
+def test_r10_publish_restores_the_previous_bundle_on_interruption(tmp_path,
+                                                                  monkeypatch):
+    """`KeyboardInterrupt` でも旧束を canonical 位置へ戻してから再送出する。
+
+    `except OSError` だけだと、旧束を hold へ退避した直後の中断で復旧を
+    素通りし、canonical 位置が空のまま旧束が隠しパスに取り残される。
+    """
+    import os as _os
+
+    import t0_run
+    out = tmp_path / "AF_T0"
+    out.mkdir()
+    (out / "t0_results.json").write_text('{"old":true}', encoding="utf-8")
+    staging = tmp_path / f".AF_T0.staging.{_os.getpid()}"
+    staging.mkdir()
+    (staging / "t0_results.json").write_text('{"new":true}', encoding="utf-8")
+
+    real_rename = _os.rename
+
+    def _boom(src, dst):
+        if Path(src) == staging:
+            raise KeyboardInterrupt("interrupted mid-publish")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(t0_run.os, "rename", _boom)
+    with pytest.raises(KeyboardInterrupt):
+        t0_run._publish(staging, out)
+
+    # canonical 位置に旧束が戻っていること
+    assert out.is_dir(), "previous bundle was not restored"
+    assert json.loads((out / "t0_results.json").read_text(encoding="utf-8")) == {
+        "old": True}
+    # hold（隠しパス）に取り残されていないこと
+    assert not list(tmp_path.glob(".AF_T0.previous.*"))
