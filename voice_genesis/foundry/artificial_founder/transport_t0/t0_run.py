@@ -492,7 +492,7 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path,
     selections: Dict[str, Any] = {}
     for trait in transport.COMPOSITION_ORDER:
         selections[trait] = _select_for_trait(trait, p0_criteria, md, fixtures,
-                                              energy_cal)
+                                              energy_cal, tmp / "select")
         sel = selections[trait]
         _log("phase7", f"  {trait}: selected={sel.get('selected')} "
                        f"mode={sel.get('mode')} tried="
@@ -532,7 +532,7 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path,
     determinism = _determinism_check(genome, p0_criteria, md, captures, sidecars,
                                      body_meas, config, energy_cal, sc_digest,
                                      config_digest, combined_art, p0_root,
-                                     criteria_path)
+                                     criteria_path, tmp)
 
     # ---------------- Phase 13: provenance --------------------------------
     # §4 / T0-G0 と同じ digest を **最終読み取りの後に** 測り直す。
@@ -798,7 +798,8 @@ def _fit_energy(fixtures: Mapping[str, Any], af0_genome: Any,
 
 def _select_for_trait(trait: str, p0_criteria: Any, md: Mapping[str, Any],
                       fixtures: Mapping[str, Any],
-                      energy_cal: Mapping[str, Any]) -> Dict[str, Any]:
+                      energy_cal: Mapping[str, Any],
+                      tmp: Path) -> Dict[str, Any]:
     """§18 Stage C。1 形質だけ動かし、他 2 形質は baseline のまま評価する。
 
     **AF0 は一切見ない。** 候補の採否は calibration と事前登録 holdout だけで
@@ -815,9 +816,15 @@ def _select_for_trait(trait: str, p0_criteria: Any, md: Mapping[str, Any],
             role_ok = True
             details = []
             for fx in fixtures[role].get(trait, []):
+                # PCM16 の書き出し先は **監査済みの tmp 配下**に置く。既定の
+                # `tempfile.mkdtemp` に落ちると、§29 の source-free 監査から見て
+                # 「宣言外のパスに置かれた .wav を読んだ」ことになり、自分が
+                # 数ミリ秒前に書いた往復ファイルが violation として数えられる。
                 cmp_, _ = evaluate_config(fx["genome"], p0_criteria, md,
                                           fx["captures"], fx["sidecars"],
-                                          fx["body"], cfg, energy_cal)
+                                          fx["body"], cfg, energy_cal,
+                                          publish_dir=tmp / trait / op / role
+                                          / str(fx["id"]))
                 r = t0_compare.candidate_result(cmp_, trait)
                 details.append({"id": fx["id"], "verdict": r["verdict"],
                                 "target": _strip_rows(r["target"]),
@@ -918,10 +925,12 @@ def _determinism_check(genome: Any, p0_criteria: Any, md: Mapping[str, Any],
                        config: transport.TransportConfig,
                        energy_cal: Mapping[str, Any], sc_digest: str,
                        config_digest: str, art_a: Mapping[str, Any],
-                       p0_root: Path, criteria_path: Path) -> Dict[str, Any]:
+                       p0_root: Path, criteria_path: Path,
+                       tmp: Path) -> Dict[str, Any]:
     """§21 T0-G8。sidecar / config / WAV SHA / measurements / verdict の一致。"""
     cmp_b, art_b = evaluate_config(genome, p0_criteria, md, captures, sidecars,
-                                   body_meas, config, energy_cal)
+                                   body_meas, config, energy_cal,
+                                   publish_dir=tmp / "determinism_pcm")
     same = _compare_run(art_a, art_b, sc_digest, sc_digest, config_digest,
                         config_digest,
                         t0_compare.combined_result(
@@ -1106,11 +1115,13 @@ def _digest_only(p0_root: Path, criteria_path: Path) -> int:
         fixtures = _build_fixture_sets(spec_raw, cal_doc, hol_doc, md, tmp / "fx",
                                        genome)
         energy_cal = _fit_energy(fixtures, genome, md)
-        selections = {t: _select_for_trait(t, p0_criteria, md, fixtures, energy_cal)
+        selections = {t: _select_for_trait(t, p0_criteria, md, fixtures, energy_cal,
+                                           tmp / "select")
                       for t in transport.COMPOSITION_ORDER}
         config = transport.config_from_selections(selections)
         cmp_, art = evaluate_config(genome, p0_criteria, md, captures, sidecars,
-                                    body_meas, config, energy_cal)
+                                    body_meas, config, energy_cal,
+                                    publish_dir=tmp / "final_pcm")
         payload = {
             "sidecar_digest": sidecar_digest(sidecars),
             "transport_config_digest": canonical_digest(config.as_dict()),

@@ -112,6 +112,27 @@ def code_closure_digest(t0_dir: str | Path) -> Tuple[str, List[Tuple[str, str]]]
     return aggregate_digest(rows), rows
 
 
+#: Python 配布メタデータのファイル名。`pkg_resources` が import 時に
+#: インストール済み配布を走査して読む（pyworld が pkg_resources を使う）。
+#: 音源でもネットワークでもない純粋なメタデータなので §29 の対象外だが、
+#: **黙って通さず明示的に宣言する**（attestation の
+#: `additional_allowed_reads` に載る）。
+DISTRIBUTION_METADATA_NAMES = frozenset({"PKG-INFO", "METADATA", "RECORD",
+                                         "entry_points.txt", "top_level.txt"})
+DISTRIBUTION_METADATA_DIR_SUFFIXES = (".egg-info", ".dist-info")
+
+
+def _is_distribution_metadata(raw: str) -> bool:
+    """`*.egg-info/` `*.dist-info/` 配下の配布メタデータか。
+
+    ファイル名と **親ディレクトリの接尾辞の両方**を要求する。名前だけで
+    通すと、任意の場所に置いた `PKG-INFO` が素通りしてしまう。
+    """
+    path = Path(raw)
+    return (path.name in DISTRIBUTION_METADATA_NAMES
+            and path.parent.name.endswith(DISTRIBUTION_METADATA_DIR_SUFFIXES))
+
+
 class T0SourceFreeAudit(af_gates.SourceFreeAudit):
     """§29 の T0 版 read allowlist。
 
@@ -137,13 +158,16 @@ class T0SourceFreeAudit(af_gates.SourceFreeAudit):
             resolved = None
         if resolved is not None and resolved in self.af_p0_body_files:
             return None                     # §29 追加許可: AF-P0 generated Body
+        if _is_distribution_metadata(raw):
+            return None                     # §29 追加許可: 配布メタデータ
         return super().classify(raw)
 
     def as_dict(self) -> Dict[str, Any]:
         out = super().as_dict()
         out["af_p0_body_files"] = len(self.af_p0_body_files)
         out["additional_allowed_reads"] = [
-            "af_p0_generated_body", "af_p0_result_json", "t0_fixture", "t0_sidecar"]
+            "af_p0_generated_body", "af_p0_result_json", "t0_fixture", "t0_sidecar",
+            "python_distribution_metadata"]
         return out
 
 

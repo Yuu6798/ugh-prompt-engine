@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import re
 import json
 import subprocess
 import sys
@@ -1635,3 +1636,74 @@ def test_r10_publish_restores_the_previous_bundle_on_interruption(tmp_path,
         "old": True}
     # hold（隠しパス）に取り残されていないこと
     assert not list(tmp_path.glob(".AF_T0.previous.*"))
+
+
+# ---------------------------------------------------------------------------
+# 第 3 回 canonical run で露見した計器欠陥（source-free の偽陽性）の回帰
+# ---------------------------------------------------------------------------
+def test_r13_every_evaluate_config_call_writes_pcm_into_the_audited_tmp():
+    """`evaluate_config` の全呼び出しが `publish_dir` を渡している。
+
+    渡さないと `transport_body` が `tempfile.mkdtemp(prefix="t0_pcm_")` に
+    落ち、§5 が要求する PCM16 往復の読み直しが「宣言外パスの .wav を読んだ」
+    として source-free violation に数えられる。第 3 回 canonical run では
+    これが 550 件積み上がり、G9 が FAIL して OVERALL=FAILED になった。
+    """
+    import inspect
+
+    import t0_run
+    src = inspect.getsource(t0_run)
+    calls = [m for m in re.finditer(r"evaluate_config\(", src)]
+    # 定義 1 件 + 呼び出し 6 件
+    assert len(calls) >= 6, len(calls)
+    for m in calls:
+        # 呼び出しごとに、対応する閉じ括弧までに publish_dir があること
+        depth, i = 0, m.end() - 1
+        while i < len(src):
+            if src[i] == "(":
+                depth += 1
+            elif src[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        chunk = src[m.end():i]
+        if chunk.lstrip().startswith("genome: Any"):
+            continue                            # def 行そのもの
+        assert "publish_dir" in chunk, f"publish_dir を渡していない: {chunk[:120]!r}"
+
+
+def test_r13_pcm_roundtrip_paths_are_not_source_free_violations(tmp_path):
+    """監査済み tmp 配下へ書いた PCM16 は violation にならない。"""
+    import t0_run
+    p0_root = tmp_path / "AF0"
+    (p0_root / "voicebank").mkdir(parents=True)
+    audit = t0_run._build_source_free_audit(
+        p0_root, T0_CRITERIA, tmp_path / "stg", tmp_path / "tmp")
+    # 監査済み tmp 配下（= 現在の書き出し先）
+    assert audit.classify(str(tmp_path / "tmp" / "select" / "d" / "D1" / "a.wav")) is None
+    # 宣言外の temp（= 以前の mkdtemp フォールバック）は従来どおり violation
+    assert audit.classify("/tmp/t0_pcm_abc123/a.wav") is not None
+
+
+def test_r13_distribution_metadata_reads_are_declared_and_allowed(tmp_path):
+    """`pkg_resources` の配布メタデータ読みは宣言のうえで許可する。
+
+    pyworld が `pkg_resources` を使うため、import 時に
+    `*.egg-info/PKG-INFO` が走査される。音源でもネットワークでもないが、
+    黙って通さず `additional_allowed_reads` に明示する。
+    """
+    import t0_run
+    p0_root = tmp_path / "AF0"
+    (p0_root / "voicebank").mkdir(parents=True)
+    audit = t0_run._build_source_free_audit(
+        p0_root, T0_CRITERIA, tmp_path / "stg", tmp_path / "tmp")
+    assert audit.classify("src/svp_rpe.egg-info/PKG-INFO") is None
+    assert audit.classify("/usr/lib/python3/dist-packages/six-1.16.0.egg-info/PKG-INFO") \
+        is None
+    assert audit.classify("/x/numpy-2.4.6.dist-info/METADATA") is None
+    # 名前だけでは通さない（親ディレクトリの接尾辞も要求する）
+    assert audit.classify("/tmp/anywhere/PKG-INFO") is not None
+    # .egg-info 配下でも音源は拒否
+    assert audit.classify("/x/foo.egg-info/sneaky.wav") is not None
+    assert "python_distribution_metadata" in audit.as_dict()["additional_allowed_reads"]
