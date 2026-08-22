@@ -20,6 +20,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from af_spec import PROTECTED_TREE_ROOTS, reject_output_collision
 from af_spec import (AliasUnit, FounderGenome, UnitTimeline, load_genome, sha256_file,
                      timeline_for, write_json)
 
@@ -132,6 +133,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--voicebank", required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
+    # `convert_from_genome` は出力先を rmtree してから書く。`--out` が spec や
+    # `--voicebank`、パッケージ / リポジトリのルートと重なる構成を削除前に止める。
+    reject_output_collision(Path(args.out).resolve(),
+                            [Path(args.spec), Path(args.voicebank), *PROTECTED_TREE_ROOTS])
     result = convert(args.spec, args.voicebank, args.out)
     print(result)
     return 0 if result["verdict"] == "PASS" else 1

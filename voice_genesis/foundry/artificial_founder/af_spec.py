@@ -20,6 +20,52 @@ from af_schema import SpecError, is_safe_name, require_valid_founder_spec, valid
 
 HERE = Path(__file__).resolve().parent
 
+#: 削除を伴う書き出しで **絶対に消してはならない** ツリー（パッケージ / リポジトリ）。
+PROTECTED_TREE_ROOTS: Tuple[Path, ...] = (HERE, HERE.parents[2])
+
+
+class OutputCollisionError(ValueError):
+    """出力先が保護対象（入力・パッケージ・リポジトリ）と重なっている。"""
+
+
+def output_snapshot_path(out_dir: Path) -> Path:
+    """`p0_run.prepare_output_tree` が直前ツリーを退避する先。**唯一の定義**。
+
+    削除ガードと実装が別々にこの名前を綴ると、片方だけ変えた瞬間に保護が外れる。
+    両者はこの関数を通す。
+    """
+    out = Path(out_dir)
+    return out.parent / f".{out.name}.previous"
+
+
+def reject_output_collision(out_dir: Path, protected: Sequence[Path]) -> None:
+    """**削除前に** 出力先が保護対象を消す構成を拒否する。
+
+    AF-P0 で出力先を消してから書く writer は 3 つある:
+    `p0_run.prepare_output_tree` / `af_utau.write_body` (`--compile-only` 経由) /
+    `convert_founder.convert_from_genome`。いずれも `rmtree` するので、
+    `--out .` や `founder_specs/`、パッケージ / リポジトリのルートを渡すと
+    spec 本体やリポジトリ内容を消してから失敗する。出力先が保護対象と同一、
+    あるいは保護対象を **内包** する場合は着手前に止める（既定の
+    `results/AF0` はパッケージ配下だが何も内包しないので通る）。
+
+    `prepare_output_tree` が実際に触る派生パス（スナップショット）も同じ規則で
+    検査する。派生パス名は `output_snapshot_path` **1 箇所** から取る。
+    """
+    out = Path(out_dir).resolve()
+    candidates = [out, output_snapshot_path(out)]
+    for prot in protected:
+        try:
+            target = Path(prot).resolve()
+        except OSError:  # pragma: no cover
+            continue
+        for cand in candidates:
+            if cand == target or cand in target.parents:
+                raise OutputCollisionError(
+                    f"--out {out} would delete a protected path ({target}); "
+                    "choose an output directory that neither is nor contains an input, "
+                    "the package directory, or the repository root")
+
 P0_SCHEMA = "voicegenesis-artificial-founder-p0/1.1"
 CRITERIA_SCHEMA = "voicegenesis-artificial-founder-criteria/1.1"
 CONTROLS_SCHEMA = "voicegenesis-artificial-founder-controls/1.1"

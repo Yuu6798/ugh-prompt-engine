@@ -41,11 +41,13 @@ import af_measure  # noqa: E402
 import af_report  # noqa: E402
 import af_utau  # noqa: E402
 import convert_founder  # noqa: E402
-from af_schema import validate_founder_spec  # noqa: E402
+from af_schema import validate_pinned_founder_spec  # noqa: E402
 from af_spec import SpecError  # noqa: E402
 from af_spec import EXIT_CODES, AFStop, FounderGenome  # noqa: E402
 from af_spec import aggregate_digest, canonical_json, genome_from_dict  # noqa: E402
 from af_spec import load_controls, load_criteria, load_probes  # noqa: E402
+from af_spec import PROTECTED_TREE_ROOTS, OutputCollisionError  # noqa: E402,F401
+from af_spec import output_snapshot_path, reject_output_collision  # noqa: E402
 from af_spec import round_floats, sha256_tree, write_json  # noqa: E402
 
 DEFAULT_SPEC = HERE / "founder_specs" / "AF0.json"
@@ -65,51 +67,21 @@ def _log(phase: str, message: str) -> None:
 PUBLICATION_PREREQUISITES: Tuple[str, ...] = ("G0", "G1", "G2", "G3")
 
 
-def output_snapshot_path(out_dir: Path) -> Path:
-    """`prepare_output_tree` が直前ツリーを退避する先。**唯一の定義**。
+def new_tree_state() -> Dict[str, Any]:
+    """`prepare_output_tree` の進捗を **呼び出し側が持つ** ための状態。
 
-    削除ガード（`reject_output_collision`）と実装が別々にこの名前を綴ると、
-    片方だけ変えた瞬間に保護が外れる。両者はこの関数を通す。
+    prepare 自身が旧ツリーを退避したあとで落ちうる（mkdir 失敗・copytree 失敗・
+    中断）。戻り値でしか snapshot を伝えられないと、その窓で落ちたとき呼び出し側は
+    退避先を知らないまま partial な canonical ツリーを残し、次回 run が
+    `.previous` を削除して直前の valid な結果を恒久的に失う。状態を先に渡して
+    **move が成功した瞬間に記録** することで、prepare 自体も rollback 範囲に入る。
     """
-    out = Path(out_dir)
-    return out.parent / f".{out.name}.previous"
+    return {"cleared": False, "preserved_voicebank": False,
+            "snapshot": None, "first_run": False}
 
 
-class OutputCollisionError(ValueError):
-    """`--out` が保護対象（入力・パッケージ・リポジトリ）と重なっている。"""
-
-
-def reject_output_collision(out_dir: Path, protected: Sequence[Path]) -> None:
-    """`prepare_output_tree` が保護対象を消す構成を **削除前に** 拒否する。
-
-    `prepare_output_tree` はツリーを `rmtree` するので、`--out` に
-    `founder_specs/` やパッケージ/リポジトリのルートを渡すと、spec 本体や
-    リポジトリ内容を消してから失敗する。出力ディレクトリが保護対象と同一、
-    あるいは保護対象を **内包** する場合は着手前に止める（既定の
-    `results/AF0` はパッケージ配下だが何も内包しないので通る）。
-
-    `prepare_output_tree` が実際に触る派生パス（スナップショット）も同じ規則で
-    検査する。派生パス名は `output_snapshot_path` **1 箇所** から取る。以前は
-    ガード側が旧名 `.voicebank-hold` を、実装側が `.previous` を使っており、
-    `--out /tmp/AF0` と `--spec /tmp/.AF0.previous` の組み合わせで preflight を
-    素通りして spec を消していた（名前がずれた瞬間に穴が開く形だった）。
-    """
-    out = Path(out_dir).resolve()
-    candidates = [out, output_snapshot_path(out)]
-    for prot in protected:
-        try:
-            target = Path(prot).resolve()
-        except OSError:  # pragma: no cover
-            continue
-        for cand in candidates:
-            if cand == target or cand in target.parents:
-                raise OutputCollisionError(
-                    f"--out {out} would delete a protected path ({target}); "
-                    "choose an output directory that neither is nor contains an input, "
-                    "the package directory, or the repository root")
-
-
-def prepare_output_tree(out_dir: Path) -> Dict[str, Any]:
+def prepare_output_tree(out_dir: Path,
+                        state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """成果物ツリーを **run ごとに丸ごと作り直す**（§28 partial artifacts 禁止）。
 
     以前は到達したファイルだけを上書きしていたため、(a) PASS 実行が残した
@@ -128,8 +100,7 @@ def prepare_output_tree(out_dir: Path) -> Dict[str, Any]:
     今回の run が公開まで到達しなければ、旧 bundle がそのまま残る。
     """
     out_dir = Path(out_dir)
-    detail: Dict[str, Any] = {"cleared": False, "preserved_voicebank": False,
-                              "snapshot": None, "first_run": False}
+    detail = new_tree_state() if state is None else state
     if not out_dir.exists():
         # 初回 run。戻す先が無いので、落ちたときは **partial なツリーを消す**
         # （`restore_or_clear_output_tree`）。staging へ作って最後に rename する
@@ -142,9 +113,11 @@ def prepare_output_tree(out_dir: Path) -> Dict[str, Any]:
     if snapshot.exists():
         shutil.rmtree(snapshot)
     shutil.move(str(out_dir), str(snapshot))
+    # move が通った時点で canonical は空。ここから先で落ちても戻せるよう、
+    # mkdir/copytree より **前に** 退避先を呼び出し側へ記録する。
+    detail["snapshot"] = str(snapshot)
     out_dir.mkdir(parents=True, exist_ok=True)
     detail["cleared"] = True
-    detail["snapshot"] = str(snapshot)
     previous_bank = snapshot / "voicebank"
     if previous_bank.is_dir():
         shutil.copytree(previous_bank, out_dir / "voicebank")
@@ -401,8 +374,11 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
     reject_output_collision(out_dir, [Path(spec_path), Path(criteria_path),
                                       Path(controls_path), Path(probes_path),
                                       HERE, HERE.parents[2]])
-    tree = prepare_output_tree(out_dir)
+    # prepare 自体を rollback 範囲に含める（旧ツリーを退避したあと copytree や
+    # mkdir が落ちる窓がある）。状態は先に作って prepare へ渡す。
+    tree = new_tree_state()
     try:
+        prepare_output_tree(out_dir, tree)
         code = _run_phases(spec_path, criteria_path, controls_path, probes_path, out_dir,
                            tree)
     except BaseException:
@@ -422,7 +398,7 @@ def _run_phases(spec_path: Path, criteria_path: Path, controls_path: Path,
     # ---------------- Phase 0: Preregister + pin --------------------------
     _log("phase0", f"preregister + pin (result tree rebuilt: {tree})")
     spec_raw = json.loads(Path(spec_path).read_text(encoding="utf-8"))
-    spec_errors = list(validate_founder_spec(spec_raw))
+    spec_errors = list(validate_pinned_founder_spec(spec_raw))
     closure_digest, closure_rows = af_gates.code_closure_digest(HERE)
 
     # pinned input（criteria / controls / probes）の契約違反も G1 で止める。
@@ -716,6 +692,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     if args.compile_only:
+        # `--compile-only` は run() を通らないが、その先の `write_body` /
+        # `convert_from_genome` はどちらも出力先を rmtree してから書く。
+        # 通常 run と同じ削除ガードを **削除前に** かける。dataset は
+        # `compile_artifacts` が staging の **兄弟** に作るので両方を検査する。
+        staging = Path(args.out).resolve()
+        protected = [Path(args.spec), *PROTECTED_TREE_ROOTS]
+        reject_output_collision(staging, protected)
+        reject_output_collision(staging.parent / "dataset", protected)
         spec_raw = json.loads(Path(args.spec).read_text(encoding="utf-8"))
         genome = genome_from_dict(spec_raw)
         build = compile_artifacts(genome, Path(args.out))

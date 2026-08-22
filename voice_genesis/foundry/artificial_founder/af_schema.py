@@ -192,6 +192,24 @@ FROZEN_INGESTION: Dict[str, Any] = {
     "join_smoke_sequence": ["か", "り", "あ"],
 }
 
+#: §2 で凍結された AF0 の同一性。`p0_run` の公開先は `voicebank/AF0` に **固定**
+#: されており、比較層は「spec に書かれた値」をそのまま目標値に使う。したがって
+#: ここを縛らないと、別 founder_id・別表現型の `--spec` が G1–G3 を通り、
+#: 自分自身を目標にして全 Body 比較へ PASS し、canonical な AF0 公開場所を
+#: 置き換えたうえで「Artificial Founder AF0 ESTABLISHED」を凍結できてしまう。
+FROZEN_FOUNDER_IDENTITY: Dict[str, str] = {
+    "schema": SPEC_SCHEMA,
+    "founder_id": "AF0",
+    "phenotype_codename": "Dual Resonance / Afterglow",
+}
+
+#: 凍結 AF0 spec（`founder_specs/AF0.json`）の正準ダイジェスト。
+#: §16 前文「結果を見て AF0 特徴・候補・許容値・Gate を都合よく変更しては
+#: ならない」を **数値 1 個単位で** 効かせる唯一の形。criteria の
+#: `metric_definitions`（§A-8）と同じ扱いで、表現型を動かすには
+#: この定数の意図的な更新を伴わなければならない。
+FROZEN_SPEC_SHA256 = "c477fd5a9ec2ac3dd97f2c7ea076568acce19b53c28eed5c10175cc807b5e8d4"
+
 
 def is_safe_name(name: Any) -> bool:
     """パス区切り・`..`・絶対パスを含まない単一構成要素名か。"""
@@ -202,11 +220,21 @@ def is_safe_name(name: Any) -> bool:
     return Path(name).name == name and not Path(name).is_absolute()
 
 
-def metric_definitions_digest(metric_definitions: Any) -> str:
-    """`metric_definitions` 部分木の正準ダイジェスト（キー順非依存）。"""
-    canon = json.dumps(metric_definitions, sort_keys=True, ensure_ascii=False,
+def _canonical_digest(payload: Any) -> str:
+    """JSON 部分木の正準ダイジェスト（キー順・空白非依存）。"""
+    canon = json.dumps(payload, sort_keys=True, ensure_ascii=False,
                        separators=(",", ":"))
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def metric_definitions_digest(metric_definitions: Any) -> str:
+    """`metric_definitions` 部分木の正準ダイジェスト（キー順非依存）。"""
+    return _canonical_digest(metric_definitions)
+
+
+def founder_spec_digest(spec: Any) -> str:
+    """Founder spec 文書全体の正準ダイジェスト（整形差では変わらない）。"""
+    return _canonical_digest(spec)
 
 
 def validate_criteria(criteria: Any) -> List[str]:
@@ -324,10 +352,15 @@ def validate_founder_spec(spec: Dict[str, Any]) -> List[str]:
         # 構造が壊れている状態で値検査へ進むと KeyError で全件収集できない。
         return errors
 
-    if spec["schema"] != SPEC_SCHEMA:
-        errors.append(f"root.schema: expected {SPEC_SCHEMA!r}, got {spec['schema']!r}")
-    if not isinstance(spec["founder_id"], str) or not spec["founder_id"]:
-        errors.append("root.founder_id: expected non-empty string")
+    # --- 凍結 AF0 同一性 ------------------------------------------------------
+    # 公開先が `voicebank/AF0` 固定である以上、「どの Founder の spec か」は
+    # 任意入力にしてはならない（別個体を AF0 として公開できてしまう）。
+    for key, want in FROZEN_FOUNDER_IDENTITY.items():
+        got = spec.get(key)
+        if got != want:
+            errors.append(
+                f"root.{key}: AF-P0 は凍結 AF0 の spec のみ受け付ける "
+                f"(expected {want!r}, got {got!r})")
 
     # --- origin (§19 G0 の宣言部。tripwire 側の検証は af_gates) ---------------
     origin = spec["origin"]
@@ -544,6 +577,34 @@ def validate_founder_spec(spec: Dict[str, Any]) -> List[str]:
             "root.inventory.aliases: must equal the frozen AF-P0 inventory in order "
             f"(missing={missing}, unexpected={extra}, n={len(aliases)}/{len(FROZEN_ALIASES)})")
 
+    return errors
+
+
+def validate_pinned_founder_spec(spec: Dict[str, Any]) -> List[str]:
+    """**run の pinned `--spec`** を検査する（構造 + 凍結表現型）。
+
+    `validate_founder_spec` との違いは凍結ダイジェストの有無。範囲検査は
+    「壊れていないこと」しか見ず、比較層は spec の値をそのまま目標値に使うため、
+    範囲内で AR-alpha を 3400 -> 2500 Hz に動かした spec は自分自身に一致して
+    Body 比較を全 PASS し、`voicebank/AF0`（公開先は固定）を置き換えて
+    「AF0 ESTABLISHED」を凍結できてしまう。§16 前文を効かせるには文書全体を縛る。
+
+    ダイジェストを `validate_founder_spec` 側に置いてはならない: §17 の計器較正は
+    **spec を意図的に patch した** fixture を `genome_from_dict` に通すので、
+    そこで凍結を要求すると較正そのものが不可能になる。凍結は「この run の被験体
+    そのものか」を問う入口の検査であり、派生 fixture の検査ではない。
+    """
+    errors = validate_founder_spec(spec)
+    if errors:
+        # 構造が壊れているならダイジェスト不一致は自明。原因だけを返す。
+        return errors
+    got = founder_spec_digest(spec)
+    if got != FROZEN_SPEC_SHA256:
+        errors.append(
+            "root: does not match the frozen AF-P0 founder spec "
+            f"(expected sha256 {FROZEN_SPEC_SHA256}, got {got}); "
+            "AF0 の表現型を動かすには af_schema.FROZEN_SPEC_SHA256 の意図的な "
+            "更新を伴わなければならない（§16 前文 / §2）")
     return errors
 
 

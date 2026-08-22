@@ -1385,3 +1385,141 @@ def test_provenance_gate_requires_the_closure_recheck():
     assert drifted.detail["code_closure_verified"] is False
     # pin そのものが無い場合も PASS にしない
     assert af_gates.gate_provenance(pins, publication).verdict == "FAIL"
+
+
+# ---------------------------------------------------------------------------
+# 第 8 巡レビュー回帰
+# ---------------------------------------------------------------------------
+def test_spec_is_bound_to_the_frozen_af0_contract():
+    """`--spec` は凍結 AF0 のみ。別 founder / 別表現型は G1 で止める。
+
+    公開先は `voicebank/AF0` 固定で、比較層は spec の値をそのまま目標値に使う。
+    縛らないと別個体が「自分自身に一致」して Body 比較を全 PASS し、AF0 として
+    公開・凍結できてしまう（§16 前文）。
+    """
+    import af_schema
+
+    canonical = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    assert af_schema.validate_pinned_founder_spec(canonical) == []
+    # 整形差ではダイジェストは動かない（キー順・空白非依存）
+    assert af_schema.founder_spec_digest(canonical) == af_schema.FROZEN_SPEC_SHA256
+
+    # 別 Founder を名乗る spec
+    other = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    other["founder_id"] = "AF1"
+    errs = af_schema.validate_pinned_founder_spec(other)
+    assert any("founder_id" in e for e in errs)
+
+    # 範囲内だが表現型を動かした spec（AR-alpha を 3400 -> 2500 Hz）。
+    # 範囲検査 (`validate_founder_spec`) は通ってしまうことも同時に固定する。
+    moved = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    moved["identity_signature"]["founder_resonances"]["AR-alpha"]["center_hz"] = 2500.0
+    assert af_schema.validate_founder_spec(moved) == []
+    errs = af_schema.validate_pinned_founder_spec(moved)
+    assert errs, "範囲検査だけでは通ってしまう改変を凍結ダイジェストで止める"
+    assert any("frozen AF-P0 founder spec" in e for e in errs)
+
+
+def test_meter_control_fixtures_are_not_blocked_by_the_spec_freeze():
+    """凍結は pinned `--spec` にのみ効く。§17 の patch 済み fixture は通る。
+
+    ダイジェストを `validate_founder_spec` 側へ置くと、計器較正が使う patch 済み
+    spec が全て弾かれて §17 の較正自体が不可能になる（第 8 巡の修正で一度踏んだ）。
+    """
+    import af_schema
+    from af_spec import apply_patch, genome_from_dict
+
+    spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    patched = apply_patch(spec, {"performance_genes.energy.sustain_dbfs": -18.0})
+    assert af_schema.validate_founder_spec(patched) == []
+    assert af_schema.validate_pinned_founder_spec(patched) != []
+    assert genome_from_dict(patched).sustain_dbfs == pytest.approx(-18.0)
+
+
+def test_compile_only_rejects_destructive_output(tmp_path):
+    """`--compile-only` も削除ガードを通る（`write_body` は out を rmtree する）。"""
+    import p0_run
+    from af_spec import OutputCollisionError
+
+    victim = tmp_path / "inputs"
+    victim.mkdir()
+    (victim / "AF0.json").write_text("{}", encoding="utf-8")
+
+    # --out がパッケージ（= リポジトリ）を内包する構成
+    with pytest.raises(OutputCollisionError):
+        p0_run.main(["--compile-only", "--spec", str(SPEC_PATH),
+                     "--out", str(Path(p0_run.HERE).parents[3])])
+    # --out が spec のディレクトリそのもの
+    with pytest.raises(OutputCollisionError):
+        p0_run.main(["--compile-only", "--spec", str(victim / "AF0.json"),
+                     "--out", str(victim)])
+    assert (victim / "AF0.json").exists(), "ガードは削除より前に効く"
+
+    # dataset は staging の **兄弟** に作られる。`--out` 自身は無害でも、
+    # 兄弟 `dataset/` が入力を内包する構成があるので、そちらも削除前に止める。
+    nested = tmp_path / "nested"
+    (nested / "dataset").mkdir(parents=True)
+    (nested / "dataset" / "AF0.json").write_text(
+        SPEC_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(OutputCollisionError):
+        p0_run.main(["--compile-only", "--spec", str(nested / "dataset" / "AF0.json"),
+                     "--out", str(nested / "staging")])
+    assert (nested / "dataset" / "AF0.json").exists()
+
+
+def test_convert_founder_cli_rejects_destructive_output(tmp_path):
+    """`convert_founder --out` が `--voicebank` を消す構成を削除前に止める。"""
+    import convert_founder
+    from af_spec import OutputCollisionError
+
+    bank = tmp_path / "voicebank"
+    (bank / "C4").mkdir(parents=True)
+    (bank / "C4" / "keep.wav").write_bytes(b"RIFF")
+
+    with pytest.raises(OutputCollisionError):
+        convert_founder.main(["--spec", str(SPEC_PATH), "--voicebank", str(bank),
+                              "--out", str(bank)])
+    with pytest.raises(OutputCollisionError):
+        convert_founder.main(["--spec", str(SPEC_PATH), "--voicebank", str(bank),
+                              "--out", str(tmp_path)])
+    assert (bank / "C4" / "keep.wav").exists()
+
+
+def test_prepare_output_tree_failure_is_inside_the_rollback_scope(tmp_path, monkeypatch):
+    """prepare が旧ツリー退避後に落ちても、直前の結果は復元できる。
+
+    以前は `prepare_output_tree()` が `try` の外で走っていたため、move 後の
+    mkdir / copytree が落ちると退避先が呼び出し側に伝わらず、canonical に
+    partial が残り、次回 run が `.previous` を消して valid な結果を恒久喪失した。
+    """
+    import p0_run
+
+    out = tmp_path / "AF0"
+    (out / "voicebank" / "AF0").mkdir(parents=True)
+    (out / "voicebank" / "AF0" / "character.txt").write_text("v1", encoding="utf-8")
+    (out / "p0_results.json").write_text('{"verdict": "PASS"}', encoding="utf-8")
+
+    def _explode(*args, **kwargs):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(p0_run.shutil, "copytree", _explode)
+    with pytest.raises(OSError):
+        p0_run.run(SPEC_PATH, CRITERIA_PATH, CONTROLS_PATH, PROBES_PATH, out)
+
+    # 直前の結果が canonical 位置に戻っている
+    assert json.loads((out / "p0_results.json").read_text(encoding="utf-8"))["verdict"] == "PASS"
+    assert (out / "voicebank" / "AF0" / "character.txt").read_text(encoding="utf-8") == "v1"
+    assert not p0_run.output_snapshot_path(out).exists()
+
+
+def test_prepare_records_snapshot_before_it_can_fail(tmp_path):
+    """move が通った瞬間に退避先が state へ入る（呼び出し側が rollback できる）。"""
+    import p0_run
+
+    out = tmp_path / "AF0"
+    out.mkdir()
+    (out / "old.txt").write_text("v1", encoding="utf-8")
+    state = p0_run.new_tree_state()
+    p0_run.prepare_output_tree(out, state)
+    assert state["snapshot"] == str(p0_run.output_snapshot_path(out))
+    assert Path(state["snapshot"]).joinpath("old.txt").exists()
