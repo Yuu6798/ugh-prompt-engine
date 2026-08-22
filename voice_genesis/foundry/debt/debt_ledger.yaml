@@ -1,0 +1,243 @@
+schema: voicegenesis-debt-ledger/0.1
+# スキーマ定義元 = DEBT_REPAYMENT_PLAN_v1.0.md §7「Debt Ledger」
+# status 語彙は {open, in_progress, repaid, accepted_residual, unrecoverable} のみ
+# （v1.0 §7 逐語。unrecoverable は失敗ではなく証拠境界の明示）
+# 任意フィールド: blocked_by（他 debt_id への参照）/ adjudication_ref（裁定文書内の節）/
+#                 source_verdict（causal_evidence_strength と併存する既存ラベルの原文保存）
+
+debts:
+  - debt_id: VG-DEBT-001
+    scope: run7
+    class: research
+    priority: P0
+    problem:
+      summary: run-level determinism unknown（run7 の bit 一致再現性が未検査）
+      source: "voice_genesis/foundry/DESIGN_S7_run8.md §9-0（run 8-R = run 7 の完全同一設定での反復走行。bit 一致/非一致で因果裁定の可否が分岐する契約）"
+    impact:
+      affected_claims:
+        - run8-B 由来の効果と学習ドリフトの分離
+        - run5-7 世代間比較（H5）の走行間変動評価
+    repayment:
+      method: run8-R（未処置の同一契約反復）で run7 との bit 一致を検査
+      evidence_required:
+        - run8-R checkpoint sha256
+        - run8-R ONNX sha256
+        - run8-R fixed probe wav sha256
+        - digest(8-R.dataset) == digest(run7.dataset) の assert
+    status: open
+    close_condition:
+      - bit一致 または sigma_between 推定済みの k>=2 再現走行が完了
+      - DESIGN_S7_run8.md §9-0 の裁定表の該当行が確定
+
+  - debt_id: VG-DEBT-002
+    scope: run8-B1
+    class: research
+    priority: P0
+    problem:
+      summary: B-1（TRF 主観測4値の測定仕様）が未凍結
+      source: "voice_genesis/foundry/DESIGN_S7_run8.md §12-0-A/§12-0（B-1/B-2 の二段階凍結。meta-contract freeze は本 memo で完了・数値凍結は PR-1 の校正実測が未実施）"
+    impact:
+      affected_claims:
+        - run8-0 Gate 1 判定
+        - run5-7 の現行測定規約による再測定（VG-DEBT-004 の前提）
+    repayment:
+      method: PR-1 の calibration harness で校正音源のみを通し TRF measurement spec / 1.0 として凍結
+      evidence_required:
+        - calibration set の構成記録
+        - 凍結された analysis window / hop / F0判定 等の値一式（DEBT_REPAYMENT_PLAN_v1.0.md §3 A-1 の凍結対象リスト）
+    status: open
+    close_condition:
+      - "TRF measurement spec / 1.0 が pin され、本番360セルを1セルも見ずに確定したことが記帳されている"
+
+  - debt_id: VG-DEBT-003
+    scope: run8-B2
+    class: research
+    priority: P0
+    problem:
+      summary: B-2（H0–H5 の裁定代数）が未凍結
+      source: "voice_genesis/foundry/DESIGN_S7_run8.md §12-0-A/§12-0（B-2 は B-1 凍結後・同一 PR 内で凍結する契約）"
+    impact:
+      affected_claims:
+        - H0–H5 の supported/refuted/undetermined 裁定
+    repayment:
+      method: B-1 凍結直後に participating axes / direction / tolerance / minimum supporting cells 等を凍結
+      evidence_required:
+        - tolerance の導出根拠（同一条件反復誤差・process間再現誤差・数値量子化誤差からの導出）
+        - worked example
+    status: open
+    blocked_by: [VG-DEBT-002]
+    close_condition:
+      - B-2（H0–H5 裁定代数）が worked example つきで pin されている
+
+  - debt_id: VG-DEBT-004
+    scope: run5-7
+    class: research
+    priority: P0
+    problem:
+      summary: run5–7 の TRF v1.0 による再測定が未実施
+      source: "DEBT_REPAYMENT_PLAN_v1.0.md §4 Tier1「返済内容: current TRF v1.0で再測定」"
+    impact:
+      affected_claims:
+        - run5-7 各 run の因果主張
+        - run 間比較（run8-0 台帳の H-TTD 等）
+    repayment:
+      method: B-1 凍結後の測定仕様で run5-7 の fixed probe を再測定
+      evidence_required:
+        - run5/run6/run7 各 checkpoint からの再生成 wav sha256
+        - TRF v1.0 適用後の軸値
+      note: "checkpoint 実体は repo 非同梱（voice_genesis/README.md『WAV は非同梱』節と同型の運用）のため実測実行自体が machine-dependent"
+    status: open
+    blocked_by: [VG-DEBT-002]
+    close_condition:
+      - run5-7 全てで TRF v1.0 再測定が完了し軸値が記帳されている
+
+  - debt_id: VG-DEBT-005
+    scope: run5-7
+    class: research
+    priority: P0
+    problem:
+      summary: run5-7 の claim に causal_evidence_strength が未付与
+      source: "debt_adjudication_v1.1.yaml vocabulary（裁定1: causal_evidence_strength の4値語彙）"
+    impact:
+      affected_claims:
+        - run5-7 の全既存 claim（S3/S4/S5/S6 record 記載の因果主張）
+    repayment:
+      method: claim 単位で causal_evidence_strength を付与。既存 verdict は source_verdict として原文保存
+      evidence_required:
+        - claim ごとの causal_evidence_strength 値と根拠
+    status: open
+    close_condition:
+      - run5-7 の全既存 claim に causal_evidence_strength と source_verdict が併記されている
+
+  - debt_id: VG-DEBT-006
+    scope: cross-run
+    class: technical
+    priority: P0
+    problem:
+      summary: fixed probe の pinned_regenerable 凍結が未整備
+      source: "debt_adjudication_v1.1.yaml fixed_probe（裁定2: WAV本体のGit保存は要求せずpinned_regenerableで固定）"
+    impact:
+      affected_claims:
+        - run8-0 の校正・本番セル群の再現性検証
+    repayment:
+      method: WAV sha256 / PCM sha256 / checkpoint sha256 / ONNX・config・input sha256 / commit / seed / execution profile / 再生成コマンド / 再生成後hash一致を全て記帳
+      evidence_required:
+        - 上記固定対象一式のpinファイル
+    status: open
+    close_condition:
+      - pinned_regenerable の固定対象一式が run8-0 の校正セット・本番セルの双方で記帳されている
+
+  - debt_id: VG-DEBT-007
+    scope: run4
+    class: technical
+    priority: P1
+    problem:
+      summary: run4 checkpoint state_dict の非有限値検査が未実施
+      source: "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-2（S3_RUN4_RUNBOOK.md:388-390 が定める節目ゲート。未実施のまま。学習ログの文字列走査『NaNゼロ』はstate_dict自体の検査ではないと明記）"
+    impact:
+      affected_claims:
+        - "run4「40K完走・NaNゼロ」の主張範囲（ログ文字列走査までであってstate_dict検査ではない）"
+    repayment:
+      method: scripts/check_checkpoint_finite.py を checkpoint 保管環境で実行し JSON 報告を pin
+      evidence_required:
+        - 4 checkpoint（5K/10K/20K/40K）それぞれの all_finite 判定 JSON
+      note: "checkpoint 実体は repo 非同梱のため実行環境は machine-dependent"
+    status: open
+    adjudication_ref: "DEBT_ADJUDICATION_v1.1.md §5 裁定5"
+    close_condition:
+      - 4 checkpoint（5K/10K/20K/40K）すべてで all_finite: true が記帳されている
+
+  - debt_id: VG-DEBT-008
+    scope: run4
+    class: technical
+    priority: P1
+    problem:
+      summary: run4 anchor WAV producer provenance の一部が未閉鎖
+      source: "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-3（acoustic ONNX / canon / vocoder のバイトpin、gate_synth_run4.py実行時バイトのpinが無い。run3側4本はONNXのcheckpoint由来自体も未確立）"
+    impact:
+      affected_claims:
+        - "run4 anchor wav 10本のうち run3由来4本の checkpoint provenance"
+    repayment:
+      method: results_s3/run4_anchor_provenance.json へ既存記録から逐語転記し、閉じないリンクは missing のまま明示
+      evidence_required:
+        - run4_anchor_provenance.json（本転記で作成）
+    status: in_progress
+    adjudication_ref: "DEBT_ADJUDICATION_v1.1.md §5 裁定5"
+    close_condition:
+      - results_s3/run4_anchor_provenance.json の全リンクが missing 無しで閉じている
+        （閉じ切らない場合は accepted_residual として明示的に確定させる）
+
+  - debt_id: VG-DEBT-009
+    scope: run4
+    class: technical
+    priority: P2
+    problem:
+      summary: run4 の exact cost record が欠落
+      source: "voice_genesis/foundry/results_s3/s3_record_2026-08-17.md §7.4-4（費用の最終実測値『未取得』。概算 ≈$2.95のみ）"
+    impact:
+      affected_claims: []
+    repayment:
+      method: Runpod 課金ダッシュボードへのログイン済みアクセスで確定値を取得
+      evidence_required:
+        - ダッシュボード実測値のスクリーンショットまたはエクスポート
+      note: "v1.1裁定でP3相当・研究結論に影響しないと位置づけ"
+    status: open
+    adjudication_ref: "DEBT_ADJUDICATION_v1.1.md §5 裁定5"
+    close_condition:
+      - Runpod ダッシュボード実測値が記帳されている（P3相当のため急がない）
+
+  - debt_id: VG-DEBT-010
+    scope: run4
+    class: research
+    priority: P2
+    problem:
+      summary: run4 は D3追加+User追加の複数介入交絡により個別因果を主張できない
+      source: "DEBT_REPAYMENT_PLAN_v1.0.md §4 Tier2「run4で禁止する主張」（『D3が改善させた』『Userが改善させた』を単体から断定しない。許容は『run4で改善が観測された』まで）"
+    impact:
+      affected_claims:
+        - run4 の D3 単独効果
+        - run4 の User 単独効果
+    repayment:
+      method: 返済不能（文書整理では因果を復元しない）。必要なら将来別の対照実験として再構成
+      evidence_required: []
+    status: accepted_residual
+    adjudication_ref: "DEBT_ADJUDICATION_v1.1.md §5 裁定5（claim_ceiling: descriptive_observation_only）"
+    close_condition:
+      - "該当なし（accepted_residual。返済ではなく証拠境界の明示として確定済み）"
+
+  - debt_id: VG-DEBT-011
+    scope: track-c
+    class: research
+    priority: P2
+    problem:
+      summary: Track C（Genome Architecture PoC）で複数 gene の知覚的共発現が未解決
+      source: "debt_adjudication_v1.1.yaml track_c.unresolved（裁定3。Genome S3=4 gene SUPPORTED・S3.5=f0/duration知覚差確認・S4=Identity保持+機械GatePASSだがABX3/4でNOT_ESTABLISHED）"
+    impact:
+      affected_claims:
+        - Track C PoC 成立条件2（PJS由来Performance要素の交換で明瞭な変化）の複数gene同時運用時の挙動
+    repayment:
+      method: 新しい experiment ID での事前登録のみ（旧S4上書き禁止）。R0-R4の新規実行は禁止
+      evidence_required:
+        - 新experiment IDの事前登録記録（着手する場合のみ）
+    status: open
+    adjudication_ref: "DEBT_ADJUDICATION_v1.1.md §3 裁定3"
+    close_condition:
+      - "該当なし（新規追実験が必要になった場合のみ、新experiment IDでの事前登録を close_condition とする）"
+
+  - debt_id: VG-DEBT-012
+    scope: run5
+    class: technical
+    priority: P1
+    problem:
+      summary: run5 dataset pin が独自 pin を持たず run4 pin への間接参照になっている
+      source: "voice_genesis/foundry/results_s3/run5_material_pins.json dataset_pins_ref（『run4_dataset_pins.json（D3/user再生成の照合先。run5はデータ内容がrun4と同一 = DESIGN_S4 §1.1のため同じpinを使う）』）/ voice_genesis/foundry/DESIGN_S4_run5.md §1.1「データ内容は run 4 と同一」"
+    impact:
+      affected_claims:
+        - run5 dataset identity の独立検証可能性（run4 pinの照合が唯一の経路）
+    repayment:
+      method: 現状は設計上の意図的な同一データ運用（DESIGN_S4 §1.1）であることを確認済み。P1として残すのは「run5固有のpin検証記録」が本ledger作成時点で見つからないため、run5実行時にrun4_dataset_pins.jsonとの一致を実際に検証した記録の所在を確認する
+      evidence_required:
+        - run5 実行時の run4_dataset_pins.json 照合ログまたは同等の検証記録
+    status: open
+    close_condition:
+      - run5 実行時の run4_dataset_pins.json 照合結果（一致/不一致）が記録として確認できる

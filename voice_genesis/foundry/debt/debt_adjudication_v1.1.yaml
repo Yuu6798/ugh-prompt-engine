@@ -1,0 +1,39 @@
+schema: voicegenesis-debt-adjudication/1.1
+date: "2026-08-22"
+adjudicator: User
+supersedes: DEBT_REPAYMENT_PLAN_v1.0.md  # 乖離時は本記録が勝つ
+
+vocabulary:
+  c0_c3_symbols: prohibited
+  canonical_field: causal_evidence_strength
+  values: [descriptive, suggestive, moderate, strong]
+  classification_unit: claim
+  historical_labels: preserve_verbatim
+
+fixed_probe:
+  default_freeze_mode: pinned_regenerable
+  git_wav_required: false
+  exact_hash_verification_required: true
+
+track_c:
+  initial_scope_status: PASS_WITH_RESIDUAL
+  disposition: subsumed_by_existing_evidence
+  duplicate_r0_r4_execution: prohibited
+  s_series_status: frozen
+  unresolved:
+    - perceptual_multi_gene_coexpression
+
+run_contract:
+  experiment_contract_canonical: DESIGN_document
+  parallel_contract_canonical: prohibited
+  machine_layer: [schema, hash_bound_projection, conformance_tests]
+  runbook_may_override_design: false
+
+run4:
+  status: PASS_WITH_RESIDUAL
+  rerun_required: false
+  claim_ceiling: descriptive_observation_only
+  open:
+    - checkpoint_state_dict_finite_check
+    - partial_anchor_producer_provenance
+    - exact_cost_record

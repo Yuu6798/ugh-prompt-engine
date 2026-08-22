@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "voicegenesis-run-contract-projection/1",
+  "title": "VoiceGenesis Run Contract — hash-bound machine projection",
+  "description": "DESIGN_<run>.md が実験契約の正本。本 schema はその正本から派生する machine projection (DESIGN_<run>.contract_projection.json) が満たすべき形状を定義する。DEBT_ADJUDICATION_v1.1.md 裁定4 / DEBT_REPAYMENT_PLAN_v1.0.md §6 Run Contract に対応する。各フィールドは未凍結を正直に表現するため {value, source, status} の object を許す。",
+  "type": "object",
+  "definitions": {
+    "pinned_field": {
+      "type": "object",
+      "description": "値が未凍結の場合も status で正直に表現するフィールド。value は status=PINNED のときのみ実データを持つ。status=PENDING/BLOCKED のとき value は null または部分情報でよい。",
+      "properties": {
+        "value": {},
+        "source": {
+          "type": ["string", "null"],
+          "description": "repo 相対パス + 可能なら節/キー名。値の出典。status が PENDING/BLOCKED で値が無い場合は null。"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PINNED", "PENDING", "BLOCKED"]
+        },
+        "reason": {
+          "type": "string",
+          "description": "status が PENDING/BLOCKED のときの理由（任意だが推奨）。"
+        }
+      },
+      "required": ["value", "source", "status"],
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "schema": {
+      "const": "voicegenesis-run-contract-projection/1"
+    },
+    "design_doc": {
+      "type": "string",
+      "description": "正本 DESIGN_<run>.md への repo 相対パス"
+    },
+    "design_doc_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "design_doc 実バイトの sha256。conformance test がこれと実ファイルの sha256 を照合し、DESIGN 改変時に projection 更新を強制する。"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "single_intervention": {
+      "type": "object",
+      "properties": {
+        "declared": { "type": "boolean" },
+        "intervention": { "type": "string" },
+        "count": { "type": "integer" }
+      },
+      "required": ["declared", "intervention", "count"],
+      "additionalProperties": false
+    },
+    "baseline_run": { "$ref": "#/definitions/pinned_field" },
+    "parent_run": { "$ref": "#/definitions/pinned_field" },
+    "code_commit_sha": { "$ref": "#/definitions/pinned_field" },
+    "dataset_manifest_sha256": { "$ref": "#/definitions/pinned_field" },
+    "dataset_row_order": { "$ref": "#/definitions/pinned_field" },
+    "config_sha256": { "$ref": "#/definitions/pinned_field" },
+    "dependency_pins": { "$ref": "#/definitions/pinned_field" },
+    "execution_profile": { "$ref": "#/definitions/pinned_field" },
+    "seed_sampler_settings": { "$ref": "#/definitions/pinned_field" },
+    "expected_speaker_map": { "$ref": "#/definitions/pinned_field" },
+    "checkpoint_sha256": { "$ref": "#/definitions/pinned_field" },
+    "artifact_manifest": { "$ref": "#/definitions/pinned_field" },
+    "fixed_probe_set": { "$ref": "#/definitions/pinned_field" },
+    "measurement_spec_version": { "$ref": "#/definitions/pinned_field" },
+    "hypothesis_algebra_version": { "$ref": "#/definitions/pinned_field" },
+    "human_evaluation_protocol": { "$ref": "#/definitions/pinned_field" },
+    "cost_record": { "$ref": "#/definitions/pinned_field" },
+    "failure_abort_criteria": { "$ref": "#/definitions/pinned_field" },
+    "claim_strength_target": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": ["string", "null"],
+          "enum": ["descriptive", "suggestive", "moderate", "strong", null]
+        },
+        "source": { "type": ["string", "null"] },
+        "status": {
+          "type": "string",
+          "enum": ["PINNED", "PENDING", "BLOCKED"]
+        },
+        "reason": { "type": "string" }
+      },
+      "required": ["value", "source", "status"],
+      "additionalProperties": false
+    },
+    "runbook_may_override_design": {
+      "const": false
+    },
+    "main_training_gate": {
+      "type": "string",
+      "enum": ["OPEN", "BLOCKED"]
+    }
+  },
+  "required": [
+    "schema",
+    "design_doc",
+    "design_doc_sha256",
+    "run_id",
+    "single_intervention",
+    "baseline_run",
+    "parent_run",
+    "code_commit_sha",
+    "dataset_manifest_sha256",
+    "dataset_row_order",
+    "config_sha256",
+    "dependency_pins",
+    "execution_profile",
+    "seed_sampler_settings",
+    "expected_speaker_map",
+    "checkpoint_sha256",
+    "artifact_manifest",
+    "fixed_probe_set",
+    "measurement_spec_version",
+    "hypothesis_algebra_version",
+    "human_evaluation_protocol",
+    "cost_record",
+    "failure_abort_criteria",
+    "claim_strength_target",
+    "runbook_may_override_design",
+    "main_training_gate"
+  ],
+  "additionalProperties": false
+}

@@ -206,6 +206,7 @@ S6〜S9 は耳判定→機械診断→単一機序修正→検出力証明→非
 | `foundry/genome_s3/results/S3_RECORD.md` | S3 走行記録（F0 / Duration / Energy / Release のうち何個が独立 gene として操作・実現・再現できたか）|
 | `foundry/genome_s35/DESIGN_GENOME_S35.md` | Genome S3.5 知覚ゲート（人間負担軽量版）の実装対応表: 2 段階・最大 8 問・決定論 pair 選択・blind commitment・4 状態 verdict |
 | `foundry/genome_s35/results/S3_5_RECORD.md` | S3.5 走行記録（S3 で成立した gene のうち、人間がブラインドで差を識別できたのは何個か）|
+| `foundry/debt/DEBT_REPAYMENT_PLAN_v1.0.md` + `foundry/debt/DEBT_ADJUDICATION_v1.1.md` | VoiceGenesis 技術・研究負債返済計画の正本（v1.0 無改変収載）+ v1.1 訂正記録。台帳 = `foundry/debt/debt_ledger.yaml`、Run Contract 機械層 = `foundry/debt/RUN_CONTRACT_SCHEMA_v1.json` |
 
 各 `results_s*/underspec_log_s*.md` にサイクルごとの仕様逸脱・補充判断が
 記録されている。
