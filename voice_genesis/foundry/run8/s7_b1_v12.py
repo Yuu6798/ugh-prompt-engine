@@ -44,6 +44,8 @@ import s7_spec as sp  # noqa: E402
 RESULTS_DIR = _HERE.parent / "results_s7"
 CANDIDATE_SPACE_PATH = RESULTS_DIR / "s7_b1_candidate_space_1_2.json"
 CALIBRATION_SET_PATH = RESULTS_DIR / "s7_b1_calibration_set_1_2.json"
+#: 1.2 が継承する親 manifest の repo コミット版（sha は 1.2 事前登録が pin）。
+PARENT_MANIFEST_PATH = RESULTS_DIR / "s7_b1_real_render_manifest.json"
 SELECTION_RULE_PATH = RESULTS_DIR / "s7_b1_selection_rule_1_2.json"
 
 SERIES = "TRF measurement spec / 1.2"
@@ -204,35 +206,64 @@ COMMAND_KEYS = ("beats", "tempo_bpm")
 def _verify_boundaries(
     man: Dict[str, Any], cal: Dict[str, Any], cal_1_0: Dict[str, Any]
 ) -> None:
-    """全条件の測定窓が**単一の命令から出ている**ことを課す。
+    """測定窓を**pin された親 manifest**へ縛る。
 
     `note_onset_s` / `commanded_note_end_s` はレンダ命令（dur モデル出力）から取る
-    設計なので事前登録に直接 pin できない（`real_render_set.boundaries` の note）。
-    代わりに次を課す:
+    設計なので、事前登録には直接 pin できない（`real_render_set.boundaries` の note）。
+    しかし **親 manifest は sha で pin されている**ので、そこに記録された値が正本に
+    なる。第 9 巡で「全条件が同一か」だけを見たのは不十分だった — **全条件を一様に
+    同じ嘘の値へ書き換えれば相互一致は保たれる**（第 10 巡 P1）。私はそのとき
+    「系譜検査が先に落ちる」と書いたが、系譜検査は親の **sha しか**見ておらず、
+    親の境界を読んでいなかった。誤りだったので直す。
 
-    1. `tail_window_ms` == 事前登録が pin する値（唯一 pin されている境界）
-    2. 全条件が**同一の**測定窓・命令を持つ（同じ譜面を 1 回レンダし、派生は
-       ゲイン倍・振幅 rung は後処理なので、時間構造は条件間で動かない）
-    3. 振幅 rung の窓 == その `derived_from` 条件の窓
+    課すのは 4 点:
 
-    2 が破れているということは、誰かが個別条件のメタデータに手を入れたということで、
-    そのとき B-1 は条件ごとに別の区間を測る。
+    1. `tail_window_ms` == 事前登録が pin する値（全条件）
+    2. 継承条件の測定窓・命令 == **pin された親 manifest** の同条件の値
+    3. 全条件が同一の測定窓・命令を持つ（同じ譜面の 1 レンダとその派生なので、
+       時間構造は条件間で動かない）
+    4. 振幅 rung の窓 == その `derived_from` 条件の窓
+
+    `beats` / `tempo_bpm` は**存在を要求**する（一様に欠けていると 3 の相互一致だけ
+    通ってしまう）。
     """
     by_id = {str(c["condition_id"]): c for c in man["conditions"]}
     want_tail = float(cal_1_0["real_render_set"]["boundaries"]["tail_window_ms"])
 
+    # pin された親 manifest（repo にコミットされた正本）を読む。sha は 1.2 事前登録の
+    # `inherits` が pin しており、`source_12` の系譜検査が manifest 側の申告と
+    # 突き合わせ済み。ここでは**中身の境界**を正本として使う。
+    parent, parent_sha, _ = s7_io.read_json_with_pin(PARENT_MANIFEST_PATH)
+    want_parent = str(cal["inherits"]["real_render_manifest"]["sha256"])
+    if parent_sha != want_parent:
+        raise Manifest12Error(
+            f"{PARENT_MANIFEST_PATH.name} の sha {parent_sha} が "
+            f"1.2 の inherits pin {want_parent} と違う"
+        )
+    parent_by_id = {str(c["condition_id"]): c for c in parent["conditions"]}
+
     windows = {}
     for cid, entry in sorted(by_id.items()):
-        missing = [k for k in BOUNDARY_KEYS if entry.get(k) is None]
+        missing = [k for k in (*BOUNDARY_KEYS, *COMMAND_KEYS) if entry.get(k) is None]
         if missing:
             raise Manifest12Error(f"{cid}: 測定窓のフィールドが欠けている: {missing}")
         if float(entry["tail_window_ms"]) != want_tail:
             raise Manifest12Error(
                 f"{cid}: tail_window_ms {entry['tail_window_ms']} != 事前登録 {want_tail}"
             )
-        windows[cid] = tuple(
-            float(entry[k]) for k in BOUNDARY_KEYS
-        ) + tuple(entry.get(k) for k in COMMAND_KEYS)
+        windows[cid] = tuple(float(entry[k]) for k in BOUNDARY_KEYS) + tuple(
+            float(entry[k]) for k in COMMAND_KEYS
+        )
+        base = parent_by_id.get(cid)
+        if base is not None:
+            for key in (*BOUNDARY_KEYS, *COMMAND_KEYS):
+                if base.get(key) is None:
+                    continue
+                if float(entry[key]) != float(base[key]):
+                    raise Manifest12Error(
+                        f"{cid}: {key} {entry[key]} が pin 済み親 manifest の "
+                        f"{base[key]} と違う（継承条件は親の窓をそのまま使う）"
+                    )
 
     distinct = sorted(set(windows.values()))
     if len(distinct) != 1:

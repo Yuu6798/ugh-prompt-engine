@@ -41,6 +41,20 @@ def cal_1_0():
     return doc, sha
 
 
+def _parent_window() -> Dict[str, Any]:
+    """pin 済み親 manifest の測定窓（継承条件はこれと一致しなければならない）。"""
+    parent, _, _ = s7_io.read_json_with_pin(v12.PARENT_MANIFEST_PATH)
+    c = parent["conditions"][0]
+    return {
+        k: c[k] for k in
+        ("note_onset_s", "commanded_note_end_s", "score_boundary_s",
+         "tail_window_ms", "beats", "tempo_bpm")
+    }
+
+
+_PARENT_WINDOW = _parent_window()
+
+
 def _build_manifest(tmp_path: Path, cal: Dict[str, Any], cal_1_0_doc) -> Path:
     """事前登録どおりの条件集合を持つ、**合成波形の** 1.2 manifest を組む。"""
     import soundfile as sf
@@ -66,10 +80,7 @@ def _build_manifest(tmp_path: Path, cal: Dict[str, Any], cal_1_0_doc) -> Path:
             "wav_sha256": s7_io.sha256_bytes(wav.read_bytes()),
             "samples_sha256": s7_io.sha256_bytes(np.ascontiguousarray(y).tobytes()),
             "maps_to": "synthetic_for_test",
-            "note_onset_s": 0.0,
-            "commanded_note_end_s": 0.05,
-            "score_boundary_s": 0.05,
-            "tail_window_ms": 300.0,
+            **_PARENT_WINDOW,
         })
 
     doc = {
@@ -218,3 +229,46 @@ def test_a_missing_boundary_field_is_rejected(tmp_path, prereg, cal_1_0):
     _rewrite(path, lambda d: d["conditions"][0].pop("score_boundary_s"))
     with pytest.raises(v12.Manifest12Error):
         v12.source_12(path, prereg)
+
+
+def test_a_uniformly_edited_window_is_rejected_against_the_pinned_parent(
+    tmp_path, prereg, cal_1_0
+):
+    """**全条件を一様に**書き換えても、pin された親 manifest とは食い違う。
+
+    第 9 巡の相互一致検査だけでは通ってしまう経路（第 10 巡 P1）。私はそのとき
+    「系譜検査が先に落ちる」と書いたが、系譜検査は親の sha しか見ておらず、
+    親の境界を読んでいなかった。
+    """
+    path = _build_manifest(tmp_path, prereg, cal_1_0[0])
+
+    def _shift(d):
+        for c in d["conditions"]:
+            c["score_boundary_s"] = float(c["score_boundary_s"]) + 0.25
+            c["commanded_note_end_s"] = float(c["commanded_note_end_s"]) + 0.25
+
+    _rewrite(path, _shift)
+    with pytest.raises(v12.Manifest12Error):
+        v12.source_12(path, prereg)
+
+
+@pytest.mark.parametrize("key", ["beats", "tempo_bpm"])
+def test_uniformly_missing_command_fields_are_rejected(tmp_path, prereg, cal_1_0, key):
+    """一様に欠けていると、相互一致だけは成立してしまう。存在を要求する。"""
+    path = _build_manifest(tmp_path, prereg, cal_1_0[0])
+    _rewrite(path, lambda d: [c.pop(key, None) for c in d["conditions"]])
+    with pytest.raises(v12.Manifest12Error):
+        v12.source_12(path, prereg)
+
+
+def test_a_parent_manifest_that_drifted_from_the_pin_is_rejected(tmp_path, prereg, cal_1_0):
+    """正本として読む親 manifest 自身も、1.2 事前登録の pin と一致していること。"""
+    path = _build_manifest(tmp_path, prereg, cal_1_0[0])
+    v12.source_12(path, prereg)   # 素の状態では通る
+    import unittest.mock as mock
+
+    fake = tmp_path / "parent.json"
+    fake.write_text('{"conditions": []}', encoding="utf-8")
+    with mock.patch.object(v12, "PARENT_MANIFEST_PATH", fake):
+        with pytest.raises(v12.Manifest12Error):
+            v12.source_12(path, prereg)
