@@ -205,15 +205,51 @@ def test_a_checkpoint_that_does_not_match_the_pin_is_rejected_before_exporting(t
     assert not (tmp_path / "out").exists(), "pin 不一致なら export を走らせない"
 
 
-def test_a_missing_experiment_folder_is_rejected(tmp_path: Path):
-    """DiffSinger の `find_exp` は名前が合わないと**前方一致で別の実験へ落ちる**。
-    厳密なフォルダ名を要求しないと、別の checkpoint から export されうる。"""
+def test_a_missing_exporter_input_is_rejected(tmp_path: Path):
+    """`--ckpt-dir` に exporter の入力が揃っていなければ staging しない。"""
     root, exp, steps, _, ckpt_dir = _fake_diffsinger(tmp_path)
     with pytest.raises(xm.ExportManifestError):
         xm.export_diffsinger_acoustic(
-            GEN, root, "run7", steps, ckpt_dir / "missing", tmp_path / "out2",
+            GEN, root, exp, steps, ckpt_dir / "missing", tmp_path / "out2",
             {"acoustic_onnx": "a.onnx"}, sys.executable,
         )
+
+
+def test_the_exact_experiment_folder_is_created_so_find_exp_cannot_prefix_match(tmp_path):
+    """DiffSinger の `find_exp` は名前が合わないと**前方一致で別の実験へ落ちる**。
+
+    staging 先を**厳密な名前で自分が作る**ので、exporter は exact-name 分岐しか
+    通らない。紛らわしい前方一致候補が隣に在っても選ばれない。
+    """
+    root, exp, steps, ckpt, ckpt_dir = _fake_diffsinger(tmp_path)
+    decoy = root / "checkpoints" / f"{exp}_OLD"
+    decoy.mkdir(parents=True)
+    (decoy / f"model_ckpt_steps_{steps}.ckpt").write_bytes(b"a different experiment")
+
+    doc = xm.export_diffsinger_acoustic(
+        GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+        {"acoustic_onnx": "a.onnx"}, sys.executable, _ckpt_sha(ckpt),
+    )
+    staged = root / "checkpoints" / exp / f"model_ckpt_steps_{steps}.ckpt"
+    assert staged.is_file()
+    assert doc["source_checkpoint"]["sha256"] == _ckpt_sha(ckpt)
+    assert doc["source_checkpoint"]["path"] == str(staged.resolve())
+
+
+@pytest.mark.parametrize("exp", ["/tmp/elsewhere", "../outside", "a/../../outside"])
+def test_an_experiment_name_that_escapes_the_checkpoints_directory_is_rejected(tmp_path, exp):
+    """`--exp` が絶対パス / `../` を含むと staging の書き込みが checkpoints の外へ出て、
+    **無関係な checkpoint と config を上書き**する。"""
+    root, good_exp, steps, _, ckpt_dir = _fake_diffsinger(tmp_path)
+    victim = tmp_path / "outside"
+    victim.mkdir(exist_ok=True)
+    (victim / f"model_ckpt_steps_{steps}.ckpt").write_bytes(b"someone else's checkpoint")
+    with pytest.raises(xm.ExportManifestError):
+        xm.export_diffsinger_acoustic(
+            GEN, root, exp, steps, ckpt_dir, tmp_path / "out",
+            {"acoustic_onnx": "a.onnx"}, sys.executable,
+        )
+    assert (victim / f"model_ckpt_steps_{steps}.ckpt").read_bytes() == b"someone else's checkpoint"
 
 
 def test_a_witnessed_export_refuses_a_non_empty_output_directory(tmp_path: Path):

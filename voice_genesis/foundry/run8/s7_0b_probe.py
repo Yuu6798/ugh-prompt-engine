@@ -128,6 +128,7 @@ def run_group(
     gate_synth,
     spec: Dict[str, Any],
     frozen: trf.FrozenMeasurement,
+    spec_sha256: str,
     generation: str,
     speaker: str,
     acoustic_dir: Path,
@@ -137,7 +138,14 @@ def run_group(
     canon_phonemes_txt: Path,
     out_dir: Path,
 ) -> Dict[str, Any]:
-    """1 群（話者 × 世代）= 診断 33 セル + フル譜面 2 本（アンカー 3 セル）。"""
+    """1 群（話者 × 世代）= 診断 33 セル + フル譜面 2 本（アンカー 3 セル）。
+
+    `spec_sha256` は**起動時に読んだバイト列**の sha を受け取る。ここで
+    `SPEC_PATH` を読み直すと、レンダ中に事前登録が再生成 / 編集された場合に
+    「古い spec で測った値」を「新しい spec の sha」で名乗る（PR #303 第 6 巡 P1）。
+    集計側の `validate_group_document` はこの digest を突き合わせるので、
+    ずれた digest は誤った受理を生む。
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     acoustic_onnx = acoustic_dir / f"{acoustic_stem}.onnx"
     dsconfig = acoustic_dir / "dsconfig.yaml"
@@ -292,7 +300,7 @@ def run_group(
             "epsilon": dict(frozen.epsilons),
             "axes_without_machine_measure": list(trf.AXES_WITHOUT_MACHINE_MEASURE),
         },
-        "probe_spec_sha256": hashlib.sha256(SPEC_PATH.read_bytes()).hexdigest(),
+        "probe_spec_sha256": spec_sha256,
         "score_module_sha256": module_shas_all,
         "dropped_from_cells": {
             "terminal_mel": (
@@ -369,7 +377,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         [out_path], [SPEC_PATH, trf.TRF_SPEC_PATH, Path(args.export_manifest)]
     )
     doc = run_group(
-        gate_synth, spec, frozen, args.generation, args.speaker,
+        gate_synth, spec, frozen, spec_sha, args.generation, args.speaker,
         Path(args.acoustic_dir), args.acoustic_stem, Path(args.canon_model_dir),
         Path(args.vocoder_dir), Path(args.canon_phonemes_txt), Path(args.out_dir),
     )

@@ -172,6 +172,39 @@ else
   echo "  DiffSinger     FAIL checkout e2307b1 に失敗" >&2; FAIL=$((FAIL+1))
 fi
 
+echo "| 3.5 export 入力の組み立て（ckpt を bundle へ exporter が要る名前で置く）"
+# 表は checkpoint を `ckpts/run7_40k.ckpt` として落とし、config.yaml 等は別の
+# bundle ディレクトリへ落とす。ところが `s7_export_manifest.py --ckpt-dir` は
+# **同じディレクトリに `model_ckpt_steps_<N>.ckpt` と `config.yaml` が揃っている**
+# ことを要求する。従来この段が無く、下の復旧レシピは必ず「入力が無い」で止まった
+# （PR #303 第 6 巡 P2）。ここで bundle 側へ置き直して、レシピを実際に通す。
+#
+#   世代 | bundle(相対 $M) | ckpt(相対 $M) | ステップ数
+STAGE=$(cat <<'STAGETABLE'
+run5|ckpts/run5_bundle|ckpts/run5_40k.ckpt|40000
+run6|ckpts/run6_bundle|ckpts/run6_40k.ckpt|40000
+run7|run7_ckpt|ckpts/run7_40k.ckpt|40000
+STAGETABLE
+)
+while IFS='|' read -r gen bundle ckpt steps; do
+  [ -z "${gen:-}" ] && continue
+  src="$M/$ckpt"; dst="$M/$bundle/model_ckpt_steps_${steps}.ckpt"
+  if [ ! -f "$src" ]; then
+    echo "  $gen            SKIP（$ckpt が無い）" >&2; continue
+  fi
+  if [ ! -f "$dst" ] || [ "$(sha_of "$dst")" != "$(sha_of "$src")" ]; then
+    # 同一 FS なら hardlink（556 MB x 3 の複製を避ける）。駄目ならコピー。
+    rm -f "$dst"
+    ln "$src" "$dst" 2>/dev/null || cp "$src" "$dst"
+  fi
+  if [ "$(sha_of "$dst")" = "$(sha_of "$src")" ] && [ -f "$M/$bundle/config.yaml" ]; then
+    printf '  %-14s OK   %s/{model_ckpt_steps_%s.ckpt, config.yaml}\n' "$gen" "$bundle" "$steps"
+  else
+    echo "  $gen            FAIL（$bundle に ckpt と config.yaml が揃わない）" >&2
+    FAIL=$((FAIL+1))
+  fi
+done <<< "$STAGE"
+
 echo "| 4. ANALYSIS_STACK_PIN（測定側インタプリタ）"
 python - <<'PY'
 import importlib.metadata as md, subprocess, sys

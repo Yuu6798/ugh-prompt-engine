@@ -229,7 +229,22 @@ def diffsinger_checkpoint_path(exporter_root: Path, exp: str, ckpt_steps: int) -
     解決する。したがって「checkpoint を command へ渡す」ことはできず、代わりに
     **exporter と同じ規則で解決した先**を `source_checkpoint` にする。
     """
-    return Path(exporter_root) / "checkpoints" / str(exp) / f"model_ckpt_steps_{int(ckpt_steps)}.ckpt"
+    return _exp_dir(Path(exporter_root), exp) / f"model_ckpt_steps_{int(ckpt_steps)}.ckpt"
+
+
+def _exp_dir(exporter_root: Path, exp: str) -> Path:
+    """`<root>/checkpoints/<exp>` を返す。ただし **checkpoints の中に閉じている**ときだけ。
+
+    `--exp` が絶対パスや `../` を含むと連結が checkpoints の外へ出て、staging の
+    書き込みが**無関係な `model_ckpt_steps_<N>.ckpt` と `config.yaml` を上書き**
+    する（PR #303 第 6 巡 P1）。CLI は「厳密なフォルダ名」と説明していたのに、
+    その不変条件を強制していなかった。封じ込めは `s7_io.child_path` に 1 本化
+    してあるのでそれを使う。
+    """
+    try:
+        return s7_io.child_path(Path(exporter_root) / "checkpoints", exp)
+    except s7_io.PathEscapeError as exc:
+        raise ExportManifestError(f"--exp {exp!r}: {exc}") from exc
 
 
 def export_diffsinger_acoustic(
@@ -283,7 +298,7 @@ def export_diffsinger_acoustic(
                 f"{label}: sha256 {observed} != 事前登録 pin {expected}"
             )
 
-    staged = exporter_root / "checkpoints" / str(exp)
+    staged = _exp_dir(exporter_root, exp)
     staged.mkdir(parents=True, exist_ok=True)
     staged_ckpt = staged / src_ckpt.name
     staged_config = staged / "config.yaml"
