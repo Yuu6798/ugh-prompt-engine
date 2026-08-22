@@ -29,6 +29,11 @@ import s7_io  # noqa: E402
 import s7_spec as sp  # noqa: E402
 
 
+def _pins():
+    """`load_prereg_12` が返す digest（読み直さず渡す規律 = 第 11 巡 P1）。"""
+    return v12.load_prereg_12()[3]
+
+
 @pytest.fixture(scope="module")
 def prereg():
     cs, cal, rule, pins = v12.load_prereg_12()
@@ -108,7 +113,7 @@ def _rewrite(path: Path, mutate) -> Path:
 
 def test_a_manifest_matching_the_preregistration_is_accepted(tmp_path, prereg, cal_1_0):
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
-    src = v12.source_12(path, prereg)
+    src = v12.source_12(path, prereg, _pins())
     expected = v12._expected_condition_ids_12(prereg, cal_1_0[0])
     assert sorted(src["stimuli"]) == sorted(expected)
 
@@ -117,7 +122,7 @@ def test_a_foreign_schema_is_rejected(tmp_path, prereg, cal_1_0):
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: d.update(schema=sp.REAL_RENDER_MANIFEST_SCHEMA))
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_manifest_rendered_against_another_preregistration_is_rejected(
@@ -126,7 +131,7 @@ def test_a_manifest_rendered_against_another_preregistration_is_rejected(
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: d["calibration_set_1_2"].update(sha256="f" * 64))
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_manifest_extending_another_parent_batch_is_rejected(tmp_path, prereg, cal_1_0):
@@ -134,7 +139,7 @@ def test_a_manifest_extending_another_parent_batch_is_rejected(tmp_path, prereg,
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: d["extends"].update(sha256="a" * 64))
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_hand_edited_extra_condition_is_rejected(tmp_path, prereg, cal_1_0):
@@ -149,14 +154,14 @@ def test_a_hand_edited_extra_condition_is_rejected(tmp_path, prereg, cal_1_0):
 
     _rewrite(path, _add)
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_missing_base_condition_is_rejected(tmp_path, prereg, cal_1_0):
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: d["conditions"].pop(0))
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_duplicated_condition_id_is_rejected(tmp_path, prereg, cal_1_0):
@@ -164,7 +169,7 @@ def test_a_duplicated_condition_id_is_rejected(tmp_path, prereg, cal_1_0):
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: d["conditions"].append(dict(d["conditions"][0])))
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_swapped_wav_is_rejected(tmp_path, prereg, cal_1_0):
@@ -176,7 +181,7 @@ def test_a_swapped_wav_is_rejected(tmp_path, prereg, cal_1_0):
     sf.write(str(Path(doc["out_dir"]) / target["wav"]),
              np.zeros(4410, dtype=np.float32), 44100, subtype="FLOAT")
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 # --- 第 9 巡 P1: 測定窓のメタデータ -------------------------------------------
@@ -188,7 +193,7 @@ def test_a_hand_edited_score_boundary_is_rejected(tmp_path, prereg, cal_1_0):
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: d["conditions"][0].update(score_boundary_s=0.9))
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 @pytest.mark.parametrize("key", ["note_onset_s", "commanded_note_end_s"])
@@ -196,7 +201,7 @@ def test_a_hand_edited_command_window_is_rejected(tmp_path, prereg, cal_1_0, key
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: d["conditions"][1].update({key: 0.123}))
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_tail_window_that_differs_from_the_preregistration_is_rejected(
@@ -206,7 +211,7 @@ def test_a_tail_window_that_differs_from_the_preregistration_is_rejected(
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: [c.update(tail_window_ms=999.0) for c in d["conditions"]])
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_rung_whose_window_drifts_from_its_base_is_rejected(tmp_path, prereg, cal_1_0):
@@ -221,14 +226,14 @@ def test_a_rung_whose_window_drifts_from_its_base_is_rejected(tmp_path, prereg, 
 
     _rewrite(path, _drift)
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_missing_boundary_field_is_rejected(tmp_path, prereg, cal_1_0):
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: d["conditions"][0].pop("score_boundary_s"))
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_uniformly_edited_window_is_rejected_against_the_pinned_parent(
@@ -249,7 +254,7 @@ def test_a_uniformly_edited_window_is_rejected_against_the_pinned_parent(
 
     _rewrite(path, _shift)
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 @pytest.mark.parametrize("key", ["beats", "tempo_bpm"])
@@ -258,17 +263,31 @@ def test_uniformly_missing_command_fields_are_rejected(tmp_path, prereg, cal_1_0
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
     _rewrite(path, lambda d: [c.pop(key, None) for c in d["conditions"]])
     with pytest.raises(v12.Manifest12Error):
-        v12.source_12(path, prereg)
+        v12.source_12(path, prereg, _pins())
 
 
 def test_a_parent_manifest_that_drifted_from_the_pin_is_rejected(tmp_path, prereg, cal_1_0):
     """正本として読む親 manifest 自身も、1.2 事前登録の pin と一致していること。"""
     path = _build_manifest(tmp_path, prereg, cal_1_0[0])
-    v12.source_12(path, prereg)   # 素の状態では通る
+    v12.source_12(path, prereg, _pins())   # 素の状態では通る
     import unittest.mock as mock
 
     fake = tmp_path / "parent.json"
     fake.write_text('{"conditions": []}', encoding="utf-8")
     with mock.patch.object(v12, "PARENT_MANIFEST_PATH", fake):
         with pytest.raises(v12.Manifest12Error):
-            v12.source_12(path, prereg)
+            v12.source_12(path, prereg, _pins())
+
+
+def test_the_preregistration_digest_comes_from_the_loaded_bytes(tmp_path, prereg, cal_1_0):
+    """事前登録の digest は**呼び出し側が読んだそのバイト列**のものを使う。
+
+    パスを読み直すと、`cal` を読んだ後に差し替えが起きたとき「古い文書の条件・
+    閾値で測った結果」を「新しい文書の sha」で名乗る（第 11 巡 P1）。
+    渡された digest が manifest の申告と違えば止まる、という形で固定する。
+    """
+    path = _build_manifest(tmp_path, prereg, cal_1_0[0])
+    stale = dict(_pins())
+    stale[v12.CALIBRATION_SET_PATH.name] = "0" * 64
+    with pytest.raises(v12.Manifest12Error):
+        v12.source_12(path, prereg, stale)

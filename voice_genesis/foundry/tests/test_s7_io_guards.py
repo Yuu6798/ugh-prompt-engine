@@ -234,3 +234,28 @@ def test_child_path_accepts_a_plain_relative_name(tmp_path: Path):
 def test_child_path_rejects_names_that_escape(tmp_path: Path, name: str):
     with pytest.raises(s7_io.PathEscapeError):
         s7_io.child_path(tmp_path, name)
+
+
+def test_no_run8_module_reads_the_same_path_twice(tmp_path: Path):
+    """同一パスを**2 度読む**経路を run8 から無くす（PR #303 第 11 巡 P1）。
+
+    1 度目で検査し 2 度目で使うと、その間に差し替わったとき「検査を通した文書」と
+    「実際に使った文書」が別物になる。レビューは 1 箇所を指したが、AST で数えたら
+    3 箇所あった（1.2 の事前登録 + remeasure 2 本の群 JSON）。
+    """
+    import ast
+    import collections
+
+    offenders = {}
+    for module in _run8_modules():
+        tree = ast.parse(_source(module))
+        reads: collections.Counter = collections.Counter()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                name = getattr(node.func, "attr", getattr(node.func, "id", None))
+                if name == "read_json_with_pin" and node.args:
+                    reads[ast.unparse(node.args[0])] += 1
+        dupes = {k: v for k, v in reads.items() if v > 1}
+        if dupes:
+            offenders[module] = dupes
+    assert offenders == {}, f"同一パスの二重読みが残っている: {offenders}"

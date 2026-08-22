@@ -285,7 +285,7 @@ def _verify_boundaries(
             )
 
 
-def source_12(manifest_path: Path, cal: Dict[str, Any]) -> Any:
+def source_12(manifest_path: Path, cal: Dict[str, Any], pins: Dict[str, str]) -> Any:
     """1.2 manifest を読み、刺激辞書と境界を作る（1.0 の照合規律を踏襲）。
 
     照合は 1.0 `real_render_source` と**同じ 4 段**にする（PR #303 レビュー指摘:
@@ -300,8 +300,12 @@ def source_12(manifest_path: Path, cal: Dict[str, Any]) -> Any:
         raise Manifest12Error(f"schema {man.get('schema')!r} != {sp.REAL_RENDER_MANIFEST_SCHEMA_1_2!r}")
 
     # (2) この manifest が生成時に見た事前登録 == いま読んでいる事前登録
+    # 事前登録の digest は**呼び出し側が読んだそのバイト列**のものを使う。ここで
+    # パスを読み直すと、`cal` を読んだ後に差し替えが起きたとき「古い文書の条件・
+    # 閾値で測った結果」を「新しい文書の sha」で名乗る（PR #303 第 11 巡 P1。
+    # 第 6 巡で probe 側の同型を直したのに、ここに残っていた）。
     cal_1_0, cal_1_0_sha, _ = s7_io.read_json_with_pin(b1.CALIBRATION_SET_PATH)
-    _, cal_1_2_sha, _ = s7_io.read_json_with_pin(CALIBRATION_SET_PATH)
+    cal_1_2_sha = pins[CALIBRATION_SET_PATH.name]
     if str(man.get("calibration_set_1_2", {}).get("sha256")) != cal_1_2_sha:
         raise Manifest12Error(
             f"manifest がレンダ時に見た 1.2 事前登録 "
@@ -454,7 +458,7 @@ def _probe_subprocess(candidate_id: str, stim_ids: Sequence[str], manifest: str)
 def run_b1_12(manifest: Path, cross_process: bool = True) -> Dict[str, Any]:
     cs, cal, rule, pins = load_prereg_12()
     b1.verify_analysis_stack(b1.load_prereg())
-    src = source_12(manifest, cal)
+    src = source_12(manifest, cal, pins)
     roles = cal["roles"]
     cands = enumerate_candidates_12(cs)
     table: Dict[str, Any] = {}
@@ -549,9 +553,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(list(argv) if argv is not None else None)
 
     if args.probe:
-        cs, cal, _rule, _pins = load_prereg_12()
+        cs, cal, _rule, pins = load_prereg_12()
         b1.verify_analysis_stack(b1.load_prereg())
-        src = source_12(Path(args.manifest), cal)
+        src = source_12(Path(args.manifest), cal, pins)
         cand = next(c for c in enumerate_candidates_12(cs) if c.candidate_id == args.probe[0])
         print(json.dumps({sid: measure_candidate_12(cand, src["stimuli"][sid])
                           for sid in args.probe[1].split(",")}, sort_keys=True))

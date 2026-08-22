@@ -61,8 +61,12 @@ def load_winners(spec_path: Path = SPEC_1_1_PATH):
     return spec, sha, winners
 
 
-def remeasure_group(path: Path, winners) -> Dict[str, Any]:
-    doc, sha, _ = s7_io.read_json_with_pin(path)
+def remeasure_group(path: Path, winners, doc: Dict[str, Any], sha: str) -> Dict[str, Any]:
+    """`doc` / `sha` は `enumerate_validated_groups` が**検査に使ったそのバイト列**の
+    ものを受け取る。ここで読み直すと、検査と測定の間に差し替わったとき
+    「検査を通った文書」と「実際に測った文書」が別物になる
+    （PR #303 第 11 巡 P1 の同型。同一巡で 3 箇所を掃討した）。
+    """
     out_dir = Path(str(doc["out_dir"]))
     cells: List[Dict[str, Any]] = []
     for c in doc["cells"]:
@@ -150,14 +154,15 @@ def enumerate_validated_groups(group_dir: Path):
             path = Path(group_dir) / f"{gen}_{speaker}.json"
             if not path.exists():
                 continue
-            doc, _, _ = s7_io.read_json_with_pin(path)
+            doc, sha, _ = s7_io.read_json_with_pin(path)
             agg.validate_group_document(
                 doc, path, gen, speaker, cell_ids, spec_sha, spec["measurement"]
             )
-            out.append(path)
+            out.append((path, doc, sha))
+    validated = {path for path, _, _ in out}
     stray = sorted(
         p.name for p in Path(group_dir).glob("*.json")
-        if p not in out and not p.name.startswith(("s7_", "trf_"))
+        if p not in validated and not p.name.startswith(("s7_", "trf_"))
     )
     if stray:
         raise agg.GroupFileError(
@@ -175,8 +180,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     spec, spec_sha, winners = load_winners()
     groups = []
-    for path in enumerate_validated_groups(Path(args.group_dir)):
-        groups.append(remeasure_group(path, winners))
+    for path, doc, sha in enumerate_validated_groups(Path(args.group_dir)):
+        groups.append(remeasure_group(path, winners, doc, sha))
         g = groups[-1]
         print(
             f"| {g['generation']}/{g['speaker']}: unvoiced-ref 1.0={g['n_unvoiced_reference_1_0']} "
