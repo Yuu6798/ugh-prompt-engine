@@ -1,0 +1,733 @@
+{
+  "schema": "s7-0b-probe-spec/0.1",
+  "frozen_at": "2026-08-21",
+  "authority": "DESIGN_S7_run8.md §4 / §4-3 / §5 と PR-2。事前登録（レンダ前に pin）",
+  "order_discipline": "本文書を commit / pin してから 1 セル目をレンダする（§12-0-C2 と同じ規律）。レンダ後に条件を足さない。追加は別 amendment。",
+  "measurement": {
+    "trf_measurement_spec": {
+      "path": "voice_genesis/foundry/results_s7/trf_measurement_spec.json",
+      "sha256": "e1ed1a89fffe059a70bfd367fc797e51aadaafcc7694f62ef38662d1b6565a68",
+      "spec_version": "1.0",
+      "freeze_status": "frozen"
+    },
+    "primary_axes": {
+      "excess_tail_voiced_ms": {
+        "selected_candidate": "A_pyin_voiced_flag|win100|hop10",
+        "epsilon": 10.0,
+        "unit": "ms"
+      },
+      "release_after_score_boundary_ms": {
+        "selected_candidate": "A_pyin_voiced_flag|win100|hop10",
+        "epsilon": 10.0,
+        "unit": "ms"
+      },
+      "tail_f0_persistence": {
+        "selected_candidate": "A_pyin_voiced_flag|win100|hop10",
+        "epsilon": 0.03333333333333333,
+        "unit": "ratio (0..1)"
+      },
+      "terminal_mel_persistence": {
+        "selected_candidate": "M2_2048_512_80",
+        "epsilon": 0.03869992441421013,
+        "unit": "ratio (>= 0)"
+      }
+    },
+    "raw_waveform_rule": "一次指標は**正規化前の生波形**で測る（§5-2）。probe は `synth_song` のピーク正規化を通さず `run_pipeline` の出力を直接測る。",
+    "boundaries_rule": "命令区間（`final_phone_dur`）から算出する。波形から推定しない。",
+    "ringing_correction": {
+      "rule": "§5-0。無声対照との差分で報告する",
+      "unvoiced_reference_test": "終端窓の voiced_frames == 0 を機械検査で満たしたレンダのみ",
+      "leave_one_out": true,
+      "su_is_not_assumed_unvoiced": true,
+      "empty_reference": "status = ringing_uncorrected で生値のまま報告する",
+      "group_rule": "比較群（同一話者 × 同一世代）で 1 つでも補正不能なら群ごと Gate から除外し status = ringing_uncorrected_group を立てる"
+    },
+    "status_vocabulary": {
+      "ok": "全軸を無声対照との差分で報告できた",
+      "ringing_uncorrected": "無声対照の母集団が空で、生値のまま報告した（§5-0-3）",
+      "ringing_uncorrected_group": "同一話者 × 同一世代の群に補正不能セルがあるため、群ごと Gate から除外した（§5-0）",
+      "dictionary_uncovered": "音素辞書に未収載のモーラがあり、代用せず除外した（§4-4）",
+      "render_failed": "レンダ自体が失敗した（fail-closed。結果を捏造しない）",
+      "degenerate_axis": "その (話者 × 世代) で MAD == 0 の軸（§7-0 (0)。Gate 側で使う）"
+    }
+  },
+  "render_contract": {
+    "one_target_event_per_render": true,
+    "why": "レンダラにフレーズの概念が無く SP は発話末にしか付かない（§4-0）。連結すると最後の 1 セル以外が黙って無効になる。",
+    "anchors_rerendered_in_same_batch": true,
+    "anchor_why": "既存 wav の流用ではドリフト由来か文脈由来かを分離できない（§4-2）",
+    "normalization": "none（生波形のまま測る）",
+    "harness": "voice_genesis/foundry/s1_gate/gate_synth.py::run_pipeline",
+    "song_ids": {
+      "diagnostic": "diag:<cell_id>（`load_song_module` の診断分岐。sha pin つき）",
+      "anchor": "sakura / umi（フル譜面。既存経路と同一）"
+    }
+  },
+  "score_modules": {
+    "score_diag_pf.py": "540b6060de2b821bf60599030ef406ce61acc4fa03354eeaefee9f6fe2f1e20f",
+    "score.py": "24a6004daeb0b5d02c55c87642c6eac2cb2ca931c97570d1be666b6a57ade116",
+    "score_umi.py": "59106e629bd523d8f6272e768ff6b96a4fcb22756314f382c865da2e1c68561e",
+    "phoneme_jp.py": "9cbc7e1d34771bb0db9a44a2fa1dbd3bbdc96e837afc497b3ca97dade55e70fc"
+  },
+  "factor_levels": {
+    "pitch_bank": {
+      "low": 57.0,
+      "mid": 62.0,
+      "high": 65.0
+    },
+    "duration_bank": {
+      "b1": 1.0,
+      "b2": 2.0,
+      "b4": 4.0
+    },
+    "tempo_bpm_diagnostic": 72.0,
+    "reduced_probes_pitch": "mid",
+    "medial_filler_kana": "か",
+    "medial_filler_beats": 1.0,
+    "underspecified_resolutions": [
+      {
+        "what": "P-RI-MEDIAL / P-SU-FINAL の 3 条件の取り方",
+        "design_says": "§4-1 は条件数 3 だけを規定し、水準を特定していない",
+        "resolution": "音高を中央 (D4) に固定し尺 3 水準を動かす。位置・音素の分離が目的なので 同音高・同尺の P-RI-FINAL と 1:1 で対にできることを優先した"
+      },
+      {
+        "what": "語中条件の充填モーラ",
+        "resolution": "「か」1 拍・同音高（標的終端に有声で連続しない無声子音始まり）"
+      },
+      {
+        "what": "P-ANCHOR 3 番目「うみ」の標的モーラ",
+        "resolution": "うみ譜面の発話末「な」（後続 SP を持つのは発話末だけ = §4-0）",
+        "alternative_reading": "語「うみ」の /mi/（medial になる）。差し替えは 1 セルで足りる"
+      }
+    ]
+  },
+  "cells": [
+    {
+      "cell_id": "P-RI-FINAL|low|b1",
+      "probe": "P-RI-FINAL",
+      "kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "pitch_key": "low",
+      "pitch_midi": 57.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-FINAL|low|b2",
+      "probe": "P-RI-FINAL",
+      "kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "pitch_key": "low",
+      "pitch_midi": 57.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-FINAL|low|b4",
+      "probe": "P-RI-FINAL",
+      "kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "pitch_key": "low",
+      "pitch_midi": 57.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-FINAL|mid|b1",
+      "probe": "P-RI-FINAL",
+      "kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-FINAL|mid|b2",
+      "probe": "P-RI-FINAL",
+      "kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-FINAL|mid|b4",
+      "probe": "P-RI-FINAL",
+      "kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-FINAL|high|b1",
+      "probe": "P-RI-FINAL",
+      "kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "pitch_key": "high",
+      "pitch_midi": 65.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-FINAL|high|b2",
+      "probe": "P-RI-FINAL",
+      "kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "pitch_key": "high",
+      "pitch_midi": 65.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-FINAL|high|b4",
+      "probe": "P-RI-FINAL",
+      "kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "pitch_key": "high",
+      "pitch_midi": 65.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-I-FINAL|low|b1",
+      "probe": "P-I-FINAL",
+      "kana": "い",
+      "position": "final",
+      "expected_terminal": "i",
+      "pitch_key": "low",
+      "pitch_midi": 57.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-I-FINAL|low|b2",
+      "probe": "P-I-FINAL",
+      "kana": "い",
+      "position": "final",
+      "expected_terminal": "i",
+      "pitch_key": "low",
+      "pitch_midi": 57.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-I-FINAL|low|b4",
+      "probe": "P-I-FINAL",
+      "kana": "い",
+      "position": "final",
+      "expected_terminal": "i",
+      "pitch_key": "low",
+      "pitch_midi": 57.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-I-FINAL|mid|b1",
+      "probe": "P-I-FINAL",
+      "kana": "い",
+      "position": "final",
+      "expected_terminal": "i",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-I-FINAL|mid|b2",
+      "probe": "P-I-FINAL",
+      "kana": "い",
+      "position": "final",
+      "expected_terminal": "i",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-I-FINAL|mid|b4",
+      "probe": "P-I-FINAL",
+      "kana": "い",
+      "position": "final",
+      "expected_terminal": "i",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-I-FINAL|high|b1",
+      "probe": "P-I-FINAL",
+      "kana": "い",
+      "position": "final",
+      "expected_terminal": "i",
+      "pitch_key": "high",
+      "pitch_midi": 65.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-I-FINAL|high|b2",
+      "probe": "P-I-FINAL",
+      "kana": "い",
+      "position": "final",
+      "expected_terminal": "i",
+      "pitch_key": "high",
+      "pitch_midi": 65.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-I-FINAL|high|b4",
+      "probe": "P-I-FINAL",
+      "kana": "い",
+      "position": "final",
+      "expected_terminal": "i",
+      "pitch_key": "high",
+      "pitch_midi": 65.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-N-FINAL|low|b1",
+      "probe": "P-N-FINAL",
+      "kana": "ん",
+      "position": "final",
+      "expected_terminal": "N",
+      "pitch_key": "low",
+      "pitch_midi": 57.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-N-FINAL|low|b2",
+      "probe": "P-N-FINAL",
+      "kana": "ん",
+      "position": "final",
+      "expected_terminal": "N",
+      "pitch_key": "low",
+      "pitch_midi": 57.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-N-FINAL|low|b4",
+      "probe": "P-N-FINAL",
+      "kana": "ん",
+      "position": "final",
+      "expected_terminal": "N",
+      "pitch_key": "low",
+      "pitch_midi": 57.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-N-FINAL|mid|b1",
+      "probe": "P-N-FINAL",
+      "kana": "ん",
+      "position": "final",
+      "expected_terminal": "N",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-N-FINAL|mid|b2",
+      "probe": "P-N-FINAL",
+      "kana": "ん",
+      "position": "final",
+      "expected_terminal": "N",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-N-FINAL|mid|b4",
+      "probe": "P-N-FINAL",
+      "kana": "ん",
+      "position": "final",
+      "expected_terminal": "N",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-N-FINAL|high|b1",
+      "probe": "P-N-FINAL",
+      "kana": "ん",
+      "position": "final",
+      "expected_terminal": "N",
+      "pitch_key": "high",
+      "pitch_midi": 65.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-N-FINAL|high|b2",
+      "probe": "P-N-FINAL",
+      "kana": "ん",
+      "position": "final",
+      "expected_terminal": "N",
+      "pitch_key": "high",
+      "pitch_midi": 65.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-N-FINAL|high|b4",
+      "probe": "P-N-FINAL",
+      "kana": "ん",
+      "position": "final",
+      "expected_terminal": "N",
+      "pitch_key": "high",
+      "pitch_midi": 65.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-MEDIAL|mid|b1",
+      "probe": "P-RI-MEDIAL",
+      "kana": "り",
+      "position": "medial",
+      "expected_terminal": "ri",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": false,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-MEDIAL|mid|b2",
+      "probe": "P-RI-MEDIAL",
+      "kana": "り",
+      "position": "medial",
+      "expected_terminal": "ri",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": false,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-RI-MEDIAL|mid|b4",
+      "probe": "P-RI-MEDIAL",
+      "kana": "り",
+      "position": "medial",
+      "expected_terminal": "ri",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": false,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-SU-FINAL|mid|b1",
+      "probe": "P-SU-FINAL",
+      "kana": "す",
+      "position": "final",
+      "expected_terminal": "su",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b1",
+      "duration_beats": 1.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-SU-FINAL|mid|b2",
+      "probe": "P-SU-FINAL",
+      "kana": "す",
+      "position": "final",
+      "expected_terminal": "su",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b2",
+      "duration_beats": 2.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-SU-FINAL|mid|b4",
+      "probe": "P-SU-FINAL",
+      "kana": "す",
+      "position": "final",
+      "expected_terminal": "su",
+      "pitch_key": "mid",
+      "pitch_midi": 62.0,
+      "duration_key": "b4",
+      "duration_beats": 4.0,
+      "tempo_bpm": 72.0,
+      "has_following_sp": true,
+      "source": "diagnostic_score"
+    },
+    {
+      "cell_id": "P-ANCHOR|sakura|kagiri",
+      "probe": "P-ANCHOR",
+      "song": "sakura",
+      "phrase_index": 5,
+      "phrase_kana": "かぎり",
+      "target_mora_index_in_phrase": 2,
+      "target_kana": "り",
+      "position": "final",
+      "expected_terminal": "ri",
+      "has_following_sp": true,
+      "pitch_midi": 57.0,
+      "pitch_key": "low",
+      "duration_beats": 4.0,
+      "duration_key": "b4",
+      "role": "positive_control",
+      "why": "User の耳判定で破綻が確定している唯一の実体（§4-2）。同条件の P-RI-FINAL|low|b4 との差が H0 そのもの。",
+      "source": "full_song_render_excerpt",
+      "tempo_bpm": 72.0
+    },
+    {
+      "cell_id": "P-ANCHOR|sakura|miwatasu",
+      "probe": "P-ANCHOR",
+      "song": "sakura",
+      "phrase_index": 4,
+      "phrase_kana": "みわたす",
+      "target_mora_index_in_phrase": 3,
+      "target_kana": "す",
+      "position": "medial",
+      "expected_terminal": "su",
+      "has_following_sp": false,
+      "pitch_midi": 62.0,
+      "pitch_key": "mid",
+      "duration_beats": 2.0,
+      "duration_key": "b2",
+      "role": "real_song_context",
+      "why": "フル譜面の中では発話末ではないので**後続 SP を持たない**（§4-0）。position=medial として記帳し、終端解放の期待を課さない。",
+      "source": "full_song_render_excerpt",
+      "tempo_bpm": 72.0
+    },
+    {
+      "cell_id": "P-ANCHOR|umi|final",
+      "probe": "P-ANCHOR",
+      "song": "umi",
+      "phrase_index": 2,
+      "phrase_kana": "おおきいな",
+      "target_mora_index_in_phrase": 4,
+      "target_kana": "な",
+      "position": "final",
+      "expected_terminal": "a",
+      "has_following_sp": true,
+      "pitch_midi": 62.0,
+      "pitch_key": "mid",
+      "duration_beats": 3.0,
+      "duration_key": "b3",
+      "role": "real_song_context",
+      "underspecified_in_design": true,
+      "resolution": "§4-1 は 3 番目のアンカーを「うみ」とだけ書き、標的モーラを特定していない。P-ANCHOR の役割は**実曲文脈の終端事象**であり、フル譜面で後続 SP を持つのは発話末だけ（§4-0）なので、うみ譜面の発話末「な」を標的に採る。",
+      "alternative_reading": "語「うみ」の /mi/（うみは の 2 モーラ目）。後続に「は」が続くので position=medial になる。User が後者を意図していたなら本セルのみ差し替えで足りる。",
+      "source": "full_song_render_excerpt",
+      "tempo_bpm": 88.0
+    }
+  ],
+  "n_cells": 36,
+  "expansion": {
+    "generations": {
+      "run5": {
+        "checkpoint_sha256": "d3c51399cb1c3914981d4a11da8391a4e344130c84b263f0ef9774f60c3f8da5",
+        "checkpoint_bytes": 556013282,
+        "speakers": [
+          "ritsu",
+          "pjs",
+          "user"
+        ],
+        "sha_source": "results_s4/s4_record_2026-08-19.md（phase B 40K = run 5 最終）"
+      },
+      "run6": {
+        "checkpoint_sha256": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+        "checkpoint_bytes": null,
+        "speakers": [
+          "ritsu",
+          "pjs",
+          "user"
+        ],
+        "sha_source": "results_s5/s5_record_2026-08-20.md（phase_b/checkpoints/40000 = 判定の正本）"
+      },
+      "run7": {
+        "checkpoint_sha256": "518df090a8154e61f28b529f731418f4f97d47c3b56d1326d354e6be4629fa93",
+        "checkpoint_bytes": 556022498,
+        "speakers": [
+          "ritsu",
+          "pjs",
+          "user",
+          "amitaro"
+        ],
+        "sha_source": "results_s6/s6_record_2026-08-20.md"
+      }
+    },
+    "matrix": [
+      {
+        "generation": "run5",
+        "speaker": "ritsu",
+        "cells": 36
+      },
+      {
+        "generation": "run5",
+        "speaker": "pjs",
+        "cells": 36
+      },
+      {
+        "generation": "run5",
+        "speaker": "user",
+        "cells": 36
+      },
+      {
+        "generation": "run6",
+        "speaker": "ritsu",
+        "cells": 36
+      },
+      {
+        "generation": "run6",
+        "speaker": "pjs",
+        "cells": 36
+      },
+      {
+        "generation": "run6",
+        "speaker": "user",
+        "cells": 36
+      },
+      {
+        "generation": "run7",
+        "speaker": "ritsu",
+        "cells": 36
+      },
+      {
+        "generation": "run7",
+        "speaker": "pjs",
+        "cells": 36
+      },
+      {
+        "generation": "run7",
+        "speaker": "user",
+        "cells": 36
+      },
+      {
+        "generation": "run7",
+        "speaker": "amitaro",
+        "cells": 36
+      }
+    ],
+    "n_total_cells": 360,
+    "design_total": 360,
+    "checkpoint_rule": "ONNX 実体が無い世代は 40K checkpoint から再 export し、記録済み sha256 と照合する。不一致は fail-closed（§4-3）"
+  },
+  "not_decided_here": [
+    "耳ラベル（§6）とその 2 値化",
+    "Gate 1 の閾値と合否（§7-0b）",
+    "軸の向き orient（§7-0 (2)）— 校正データが要る",
+    "z 化（§7-0 (0)）— Gate 側で (話者 × 世代) 内に対して行う"
+  ],
+  "prohibitions": [
+    "レンダ後にセルや水準を足さない（追加は別 amendment）",
+    "測定仕様（凍結済み 1.0）の候補・窓・hop をここで変えない",
+    "計測不能を黙って落とさない（status を立てて記帳する）",
+    "P-ANCHOR に既存 wav を流用しない"
+  ]
+}

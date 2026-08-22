@@ -1,0 +1,166 @@
+{
+  "schema": "s7-ledger-inputs/0.1",
+  "frozen_at": "2026-08-21",
+  "authority": "User 裁定 2 訂正（2026-08-21）: run7/assembly_manifest.json を canonical source とする",
+  "policy": [
+    "1. CSV 実体が Drive / Pod に残っていれば回収する",
+    "2. 無ければ run7 と同じ入力・同じ converter で再生成する",
+    "3. 再生成物の sha256 を下記 canonical pin と照合する",
+    "4. 完全一致したものだけ run 8 台帳の入力として使う",
+    "5. 不一致なら BLOCKED（推測した CSV を使わない）"
+  ],
+  "canonical_source": {
+    "file": "run7/assembly_manifest.json",
+    "schema": "run4-assembly-manifest/0.5",
+    "drive_folder_id": "1ko59Uxl3V8QTwbFr6VX5dcE8sKB3fPgg",
+    "drive_file_id": "1vs1UDdSlOCGLsQEblkDJ1NLXpbEFeKe6",
+    "sha256": "4e5614d5218657a8f5f6ca2827c52c929581416021f56c054dee754cef1ad99c",
+    "verified_by": "2026-08-21 に Drive から実体を取得して sha256 を再計算し、4 話者の pin を直接読み出した（本セッション実測）",
+    "chain": {
+      "run_execution_manifest": {
+        "drive_file_id": "1tmyDxMv2QrbzTqK8B7cgfdJNNdqNTBV7",
+        "run_id": "s6_run7",
+        "repo_commit": "7df3a5fe5e34129218d5f3f0cc33ce332eebfff3",
+        "dataset_hashes.assembly_manifest": "4e5614d5218657a8f5f6ca2827c52c929581416021f56c054dee754cef1ad99c",
+        "note": "上の assembly_manifest sha と一致することを本セッションで実測照合した（provenance 連鎖が閉じている）"
+      }
+    }
+  },
+  "speakers": {
+    "ritsu": {
+      "modality": "VCV",
+      "spk_id": 0,
+      "row_count": 456,
+      "ph_dur_total_seconds": 2622.586,
+      "transcriptions_csv_sha256": "fb01a936fa2435204b57958bf2611ae5b05b538f1b79b2a3919a0280efd13a5c",
+      "regeneration": {
+        "converter": "s1_dataprep/convert_ritsu.py",
+        "run7_command": "convert_ritsu.py --voicebank-root /root/s4work/ritsu_extracted/波音リツ強連続音Ver1.5.1 --dsdict /root/s4work/ritsu_diffsinger_extracted/NamineRitsu_DiffSinger/dsdur/dsdict.yaml --out-dir /root/s4work/s4_data/ritsu_diffsinger_db",
+        "source_material": {
+          "ritsu_voicebank_zip": "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76",
+          "namine_ritsu_diffsinger_zip": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530"
+        },
+        "log": "run7 cmdlogs/datasets_convert-ritsu.log（n_segments=456 / total_voiced_s=2006.67）",
+        "verified": {
+          "date": "2026-08-21",
+          "result": "canonical pin と完全一致（fb01a936…efd13a5c）",
+          "where": "本セッションの実行環境（CPU のみ・GPU 不要）",
+          "materials_verified": {
+            "ritsu_voicebank_zip": "88c7b3ef… 一致（公開 URL から取得）",
+            "namine_ritsu_diffsinger_zip": "5c7b8c32… 一致（公開 URL から取得）"
+          },
+          "extraction_note": "voicebank zip の entry 名は cp932（UTF-8 フラグ無し）。cp437 誤デコードを生バイトへ戻して cp932 で読み直して展開した",
+          "converter_stats": {
+            "n_wav_total": 456,
+            "n_entries_total": 2459,
+            "n_unmapped_total": 0,
+            "total_audio_s": 2622.66,
+            "total_voiced_s": 2006.67,
+            "total_sp_s": 615.92
+          },
+          "cross_check": "total_voiced_s 2006.67 が run7 cmdlog の実測値と一致 / total_audio_s 2622.66 が manifest の ph_dur_total_seconds 2622.586 と整合",
+          "environment": {
+            "python": "3.11.15（run7 は 3.11.10 — patch 差があっても CSV はバイト一致した）",
+            "numpy": "2.4.6",
+            "soundfile": "0.14.0",
+            "pyworld": "0.3.5"
+          }
+        }
+      },
+      "r_ratio_provenance": {
+        "r_ratio_source": "oto_ini_consonant",
+        "note": "UTAU oto.ini の consonant 値から子音/母音境界を引く（convert_ritsu §境界導出規則 4）。素材固有の実測値"
+      }
+    },
+    "pjs": {
+      "modality": "real_song",
+      "spk_id": 1,
+      "row_count": 287,
+      "ph_dur_total_seconds": 1621.132,
+      "transcriptions_csv_sha256": "4e96a4f63d51186ff05b4595219e90ace28a18ef4367bc5932ae29b2ae1952ef",
+      "regeneration": {
+        "converter": "s1_dataprep/convert_pjs.py",
+        "run7_command": "convert_pjs.py --pjs-root /root/s4work/pjs_extracted/PJS_corpus_ver1.1 --converter-dir /root/s4work/nnsvs-db-converter --staging-dir /root/s4work/s4_data/pjs_staging",
+        "source_material": {
+          "pjs_corpus_zip": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",
+          "pjs_corpus_zip_drive_file_id": "1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_"
+        },
+        "log": "run7 cmdlogs/datasets_convert-pjs.log",
+        "verified": {
+          "date": "2026-08-21",
+          "result": "canonical pin と完全一致（4e96a4f6…ae1952ef）",
+          "extra_dependency": "praat-parselmouth 0.4.7（db_converter.py の依存・run7 では未 pin）",
+          "converter_commit": "nnsvs-db-converter 185ada6",
+          "stats": {
+            "n_song_staged": 100,
+            "row_count": 287
+          }
+        }
+      },
+      "r_ratio_provenance": {
+        "r_ratio_source": "alignment_derived",
+        "note": "nnsvs-db-converter の音素アラインメント由来（convert_pjs）。実音との対応がある"
+      }
+    },
+    "user": {
+      "modality": "real_song",
+      "spk_id": 2,
+      "row_count": 15,
+      "ph_dur_total_seconds": 233.395,
+      "transcriptions_csv_sha256": "fc3a760c4c45c37760b8a846f90672acf7db39bc43ff1b3a02908fe9fd7deb3b",
+      "cross_check": "results_s3/run4_dataset_pins.json / run6_dataset_pins.json / run7_dataset_pins.json の user.transcriptions_csv_sha256 と同値（run4 以降 内容不変）",
+      "recovery": {
+        "date": "2026-08-21",
+        "result": "canonical pin と完全一致（fc3a760c…fd7deb3b）",
+        "source": "Drive run4_prep.tar（file id 1zhnNNRMeL1DXnGpg6BFlQcsJ9riqiNq_ / 914,688,000 bytes / sha256 e6a75c18e6bf7eab1da982ec857ee900c05171ac788e35c67d01474e7944546f）内の run4_prep/user_dataset/transcriptions.csv",
+        "note": "run4/6/7 で内容不変の pin と同値。再生成不要"
+      },
+      "r_ratio_provenance": {
+        "r_ratio_source": "imputed_fixed_allocation",
+        "note": "convert_user の CONSONANT_FRACTION = 0.3 による**定率配分**。実音から測った子音比ではない（User 裁定 2026-08-21）。baseline_r_ratio として実測値のように扱わない"
+      }
+    },
+    "amitaro": {
+      "modality": "speech",
+      "spk_id": 4,
+      "row_count": 299,
+      "ph_dur_total_seconds": 1124.511,
+      "transcriptions_csv_sha256": "08d67e817110bf965254b48ffe72b787bddfd58ad7ec53d06bd74c081ed3e366",
+      "cross_check": "results_s3/run7_dataset_pins.json の amitaro.transcriptions_csv_sha256 と同値",
+      "r_ratio_provenance": {
+        "r_ratio_source": "imputed_fixed_allocation",
+        "note": "convert_amitaro は convert_user を import して同じ子音定率（CONSONANT_FRACTION = 0.3）で配分する。**2026-08-21 の台帳実測で確認**: 主層イベント 2 件とも r_ratio = 0.3 ちょうど（constant_r_ratio_detected.primary_stratum_events.detected = true）。当初 converter_defined と書いたのを実測に基づき訂正する",
+        "corrected_on": "2026-08-21"
+      }
+    }
+  },
+  "retrieval_status": {
+    "as_of": "2026-08-21",
+    "csv_files_found_in_drive_run7_folder": false,
+    "searched": [
+      "Drive 全体で title contains 'transcriptions' → 0 件",
+      "run7 フォルダ直下の全ファイル列挙 → transcriptions.csv は無し（manifest / status / logs / checkpoints のみ）"
+    ],
+    "interpretation": "CSV は Pod 上の /root/s4work/s4_data/ 配下で生成され salvage 対象に含まれなかったと見られる。所在不明でも canonical sha が pin されているため、再生成物を照合して同一性を機械判定できる。",
+    "ritsu": "regenerated_and_verified（実体回収は不要になった）",
+    "pjs": "regenerated_and_verified",
+    "user": "recovered_and_verified（run4_prep.tar から回収）",
+    "amitaro": "pending（Drive amitaro_sources の 324 wav + pinned ffmpeg が要る）"
+  },
+  "r_ratio_policy": {
+    "authority": "User 裁定 2026-08-21 §6",
+    "rule": "baseline_r_ratio の source を必ず明示する。imputed_fixed_allocation を『User が実際に歌った Duration 形質』として扱わない",
+    "machine_check": "台帳が話者ごとに constant_r_ratio_detected（全イベントの r_ratio が同一値か）を計算して記帳する",
+    "measured_outcome_2026-08-21": {
+      "imputed_fixed_allocation": [
+        "user",
+        "amitaro"
+      ],
+      "measured_or_material_derived": {
+        "pjs": "alignment_derived",
+        "ritsu": "oto_ini_consonant"
+      },
+      "evidence": "target_exposure_ledger.json の constant_r_ratio_detected.primary_stratum_events（user / amitaro のみ detected=true, value=0.3）"
+    }
+  }
+}

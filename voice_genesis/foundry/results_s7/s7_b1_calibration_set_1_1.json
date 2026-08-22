@@ -1,0 +1,77 @@
+{
+  "schema": "s7-b1-calibration-set/0.1",
+  "series": "TRF measurement spec / 1.1",
+  "frozen_at": "2026-08-21",
+  "authority": "User 裁定 2026-08-21（Option C）",
+  "source_rule": "校正音源は**新規生成しない**。1.0 で事前登録・生成済みの real-render セットをそのまま使う（同じ DiffSinger / vocoder 経路・本番 360 セルとは完全分離）",
+  "inherits": {
+    "calibration_set_1_0": {
+      "path": "voice_genesis/foundry/results_s7/s7_b1_calibration_set.json",
+      "sha256": "79b209b52ed3994f8abe2634bf7f7484cc770fcc0dc22b70ebdf25484fcb6d8b",
+      "section": "real_render_set"
+    },
+    "real_render_manifest": {
+      "path": "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json",
+      "sha256": "bde66f3f8599ea48d6e8ff8fdc63a362c6aed5f846655189bf3b52c5628d3343",
+      "n_renders": 11,
+      "n_derived": 2,
+      "n_zero_buffers": 1
+    }
+  },
+  "roles": {
+    "reproducibility": [
+      "rr_clean_terminal_ri",
+      "rr_clean_i",
+      "rr_clean_N",
+      "rr_long_tail_080",
+      "rr_dur_perturb_r035"
+    ],
+    "gain_invariance": [
+      [
+        "rr_gain_x100",
+        "rr_gain_x050"
+      ]
+    ],
+    "zero_input_false_positive": [
+      "rr_zero_buffer"
+    ],
+    "monotone_ladder": {
+      "axis_expectation": "increasing",
+      "order": [
+        "rr_long_tail_000",
+        "rr_long_tail_040",
+        "rr_long_tail_080",
+        "rr_long_tail_160"
+      ]
+    },
+    "cross_process_reproducibility": [
+      "rr_clean_terminal_ri",
+      "rr_long_tail_080",
+      "rr_dur_perturb_r050"
+    ],
+    "numerical_stability": "all conditions",
+    "production_range_resolution": {
+      "production_floor": "rr_silence",
+      "terminal_tail_response": "rr_long_tail_160"
+    }
+  },
+  "role_change_from_1_0": {
+    "what": "`rr_silence`（SP のみの実レンダ）を 1.0 の diagnostic から、1.1 では production_range_resolution の要件刺激へ昇格させる",
+    "why": "1.0 の amendment は rr_silence を zero_input_false_positive の担当から外した。それは正しい — SP-only render は**無入力ではない**からである。1.1 が課すのは別の要件で、「経路が床として出す低エネルギー励振を全て voiced にしてしまわないこと」を測る。同じ刺激だが問う内容が違う",
+    "not_changed": "zero_input_false_positive の担当は rr_zero_buffer（厳密ゼロ）のまま。1.0 の意味論は変えない"
+  },
+  "production_floor_measured_properties_from_1_0": {
+    "source": "s7_b1_pipeline_silence_diagnostic.json（1.0 の diagnostic 記録）",
+    "rms_core": 0.0014586905535337834,
+    "rms_tail_window": 0.0004570510279140234,
+    "dominant_hz_tail_window": 256.6666666666667,
+    "commanded_pitch_hz": 261.6255653005986,
+    "voiced_frame_fraction_pyin": 0.8588235294117647,
+    "note": "これは**旧 1.0 の検出器で測った値**であり、1.1 の候補がこの刺激に対して返す値は本文書の pin 時点では存在しない（検出器が未実装）。したがって production_range_resolution の許容をこれらの値から逆算していない"
+  },
+  "prohibitions": [
+    "校正刺激を新規に足さない（追加は別 amendment）",
+    "本番 360 セルを 1 セルも通さない",
+    "run5/6/7 の good/bad ラベル・P-ANCHOR 結果を選定に使わない"
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "schema": "s7-trf-spec-applicability/0.1",
+  "authority": "User 裁定 2026-08-22（(α) 採用）",
+  "applies_to": {
+    "path": "voice_genesis/foundry/results_s7/trf_measurement_spec_1_2.json",
+    "sha256": "1f7ff569b4ae27043a822e688c8e5fe621f2ebd666e54cd99e53599c4f38ea5b",
+    "spec_version": "1.2-rc1",
+    "freeze_status": "blocked"
+  },
+  "ruling": {
+    "spec_overall": "**BLOCKED のまま凍結する。PASS へ書き換えない**",
+    "terminal_mel_persistence": "この観測設計では UNAVAILABLE。Gate 判定から除外（参考値として記録）",
+    "voicing_3_axes": "production resolution 成立。Gate 1 の人間検証へ進行可能",
+    "gate1": "現時点では UNDETERMINED。耳ラベル取得後に初めて最終判定",
+    "reason": "Run 8 の核心だった「本番セルを分解できる計器」は voicing 3 軸で初めて実現している。一方 mel 軸は相対エネルギーの逆転を測っており終端破綻の識別軸として構成妥当性を失う。mel 軸の不成立だけを理由に Run 8 全体を閉じると 1.2 の主要成果まで捨てることになる"
+  },
+  "calibration_applicability": "PARTIAL（voicing 3 軸のみ 7 要件通過。mel 軸は不成立）",
+  "production_applicability": {
+    "voicing_3_axes": "ESTABLISHED（縮退群 1–2/10。1.0 は 3–8/10、1.1 は 8/10 だった）",
+    "terminal_mel_persistence": "NOT_ESTABLISHED / INVALID_CONSTRUCT"
+  },
+  "frozen_parameters": {
+    "threshold": 0.2,
+    "window_ms": 100,
+    "retuning": "禁止（耳判定後も含む）"
+  },
+  "gate_scope": {
+    "eligible_groups": 7,
+    "excluded_groups": 3,
+    "excluded": [
+      "run5/ritsu",
+      "run6/ritsu",
+      "run7/ritsu"
+    ]
+  },
+  "preflight_result": {
+    "any_axis_evaluable": false,
+    "blockers": [
+      "calibration_scored=10 < 12（§7-0 (4b)）",
+      "positive_control_absent（§7-0b 条件 1 が評価不能）"
+    ],
+    "record": "s7_gate1_human_verification_prereg.json"
+  }
+}

@@ -1,0 +1,4111 @@
+{
+  "authority": "User 裁定 2026-08-22（(A)+(B) 併用 / 1.2 で打ち切り）",
+  "axes": {
+    "excess_tail_voiced_ms": {
+      "candidate_records": {
+        "P_mel_peakiness|thr16|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 250.0,
+              "rr_amp_p25": 250.0,
+              "rr_amp_p50": 260.0,
+              "rr_amp_p75": 270.0,
+              "rr_amp_p95": 270.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              110.0,
+              130.0,
+              190.0,
+              270.0
+            ],
+            "production_floor_value": 90.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 260.0
+          }
+        },
+        "P_mel_peakiness|thr16|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 245.0,
+              "rr_amp_p25": 255.0,
+              "rr_amp_p50": 270.0,
+              "rr_amp_p75": 270.0,
+              "rr_amp_p95": 270.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              105.0,
+              130.0,
+              190.0,
+              270.0
+            ],
+            "production_floor_value": 85.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 185.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 270.0
+          }
+        },
+        "P_mel_peakiness|thr16|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 300.0,
+              "rr_amp_p75": 300.0,
+              "rr_amp_p95": 300.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.0,
+            "monotone_span": 140.0,
+            "monotone_values": [
+              160.0,
+              180.0,
+              240.0,
+              300.0
+            ],
+            "production_floor_value": 140.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 160.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 300.0
+          }
+        },
+        "P_mel_peakiness|thr16|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 305.0,
+              "rr_amp_p75": 305.0,
+              "rr_amp_p95": 305.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 150.0,
+            "monotone_values": [
+              155.0,
+              180.0,
+              240.0,
+              305.0
+            ],
+            "production_floor_value": 135.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 305.0
+          }
+        },
+        "P_mel_peakiness|thr2|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 250.0,
+              "rr_amp_p25": 250.0,
+              "rr_amp_p50": 260.0,
+              "rr_amp_p75": 270.0,
+              "rr_amp_p95": 270.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              110.0,
+              130.0,
+              190.0,
+              270.0
+            ],
+            "production_floor_value": 90.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 260.0
+          }
+        },
+        "P_mel_peakiness|thr2|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 245.0,
+              "rr_amp_p25": 255.0,
+              "rr_amp_p50": 270.0,
+              "rr_amp_p75": 270.0,
+              "rr_amp_p95": 270.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              105.0,
+              130.0,
+              190.0,
+              270.0
+            ],
+            "production_floor_value": 85.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 185.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 270.0
+          }
+        },
+        "P_mel_peakiness|thr2|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 300.0,
+              "rr_amp_p75": 300.0,
+              "rr_amp_p95": 300.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.0,
+            "monotone_span": 140.0,
+            "monotone_values": [
+              160.0,
+              180.0,
+              240.0,
+              300.0
+            ],
+            "production_floor_value": 140.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 160.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 300.0
+          }
+        },
+        "P_mel_peakiness|thr2|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 305.0,
+              "rr_amp_p75": 305.0,
+              "rr_amp_p95": 305.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 150.0,
+            "monotone_values": [
+              155.0,
+              180.0,
+              240.0,
+              305.0
+            ],
+            "production_floor_value": 135.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 305.0
+          }
+        },
+        "P_mel_peakiness|thr4|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 250.0,
+              "rr_amp_p25": 250.0,
+              "rr_amp_p50": 260.0,
+              "rr_amp_p75": 270.0,
+              "rr_amp_p95": 270.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              110.0,
+              130.0,
+              190.0,
+              270.0
+            ],
+            "production_floor_value": 90.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 260.0
+          }
+        },
+        "P_mel_peakiness|thr4|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 245.0,
+              "rr_amp_p25": 255.0,
+              "rr_amp_p50": 270.0,
+              "rr_amp_p75": 270.0,
+              "rr_amp_p95": 270.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              105.0,
+              130.0,
+              190.0,
+              270.0
+            ],
+            "production_floor_value": 85.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 185.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 270.0
+          }
+        },
+        "P_mel_peakiness|thr4|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 300.0,
+              "rr_amp_p75": 300.0,
+              "rr_amp_p95": 300.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.0,
+            "monotone_span": 140.0,
+            "monotone_values": [
+              160.0,
+              180.0,
+              240.0,
+              300.0
+            ],
+            "production_floor_value": 140.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 160.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 300.0
+          }
+        },
+        "P_mel_peakiness|thr4|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 305.0,
+              "rr_amp_p75": 305.0,
+              "rr_amp_p95": 305.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 150.0,
+            "monotone_values": [
+              155.0,
+              180.0,
+              240.0,
+              305.0
+            ],
+            "production_floor_value": 135.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 305.0
+          }
+        },
+        "P_mel_peakiness|thr8|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 250.0,
+              "rr_amp_p25": 250.0,
+              "rr_amp_p50": 260.0,
+              "rr_amp_p75": 270.0,
+              "rr_amp_p95": 270.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              110.0,
+              130.0,
+              190.0,
+              270.0
+            ],
+            "production_floor_value": 90.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 260.0
+          }
+        },
+        "P_mel_peakiness|thr8|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 245.0,
+              "rr_amp_p25": 255.0,
+              "rr_amp_p50": 270.0,
+              "rr_amp_p75": 270.0,
+              "rr_amp_p95": 270.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              105.0,
+              130.0,
+              190.0,
+              270.0
+            ],
+            "production_floor_value": 85.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 185.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 270.0
+          }
+        },
+        "P_mel_peakiness|thr8|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 300.0,
+              "rr_amp_p75": 300.0,
+              "rr_amp_p95": 300.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.0,
+            "monotone_span": 140.0,
+            "monotone_values": [
+              160.0,
+              180.0,
+              240.0,
+              300.0
+            ],
+            "production_floor_value": 140.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 160.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 300.0
+          }
+        },
+        "P_mel_peakiness|thr8|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 305.0,
+              "rr_amp_p75": 305.0,
+              "rr_amp_p95": 305.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 150.0,
+            "monotone_values": [
+              155.0,
+              180.0,
+              240.0,
+              305.0
+            ],
+            "production_floor_value": 135.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 305.0
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 230.0,
+              "rr_amp_p25": 230.0,
+              "rr_amp_p50": 240.0,
+              "rr_amp_p75": 250.0,
+              "rr_amp_p95": 250.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -80.0,
+            "monotone_span": 170.0,
+            "monotone_values": [
+              80.0,
+              120.0,
+              40.0,
+              250.0
+            ],
+            "production_floor_value": 70.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 240.0
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 220.0,
+              "rr_amp_p25": 230.0,
+              "rr_amp_p50": 245.0,
+              "rr_amp_p75": 245.0,
+              "rr_amp_p95": 245.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -75.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              85.0,
+              115.0,
+              40.0,
+              245.0
+            ],
+            "production_floor_value": 70.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 175.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 245.0
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 230.0,
+              "rr_amp_p25": 240.0,
+              "rr_amp_p50": 260.0,
+              "rr_amp_p75": 260.0,
+              "rr_amp_p95": 260.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -140.0,
+            "monotone_span": 140.0,
+            "monotone_values": [
+              120.0,
+              160.0,
+              20.0,
+              260.0
+            ],
+            "production_floor_value": 90.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 260.0
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 225.0,
+              "rr_amp_p25": 235.0,
+              "rr_amp_p50": 250.0,
+              "rr_amp_p75": 250.0,
+              "rr_amp_p95": 250.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -130.0,
+            "monotone_span": 125.0,
+            "monotone_values": [
+              125.0,
+              155.0,
+              25.0,
+              250.0
+            ],
+            "production_floor_value": 90.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 160.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 250.0
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 230.0,
+              "rr_amp_p25": 230.0,
+              "rr_amp_p50": 240.0,
+              "rr_amp_p75": 250.0,
+              "rr_amp_p95": 250.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -40.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              90.0,
+              120.0,
+              80.0,
+              250.0
+            ],
+            "production_floor_value": 70.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 240.0
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 225.0,
+              "rr_amp_p25": 235.0,
+              "rr_amp_p50": 250.0,
+              "rr_amp_p75": 250.0,
+              "rr_amp_p95": 250.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -45.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              90.0,
+              120.0,
+              75.0,
+              250.0
+            ],
+            "production_floor_value": 70.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 250.0
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 270.0,
+              "rr_amp_p25": 280.0,
+              "rr_amp_p50": 290.0,
+              "rr_amp_p75": 290.0,
+              "rr_amp_p95": 290.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -60.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              130.0,
+              160.0,
+              100.0,
+              290.0
+            ],
+            "production_floor_value": 100.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 190.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 290.0
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 270.0,
+              "rr_amp_p25": 280.0,
+              "rr_amp_p50": 295.0,
+              "rr_amp_p75": 295.0,
+              "rr_amp_p95": 295.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -65.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              130.0,
+              160.0,
+              95.0,
+              295.0
+            ],
+            "production_floor_value": 95.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 200.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 295.0
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 240.0,
+              "rr_amp_p25": 240.0,
+              "rr_amp_p50": 250.0,
+              "rr_amp_p75": 260.0,
+              "rr_amp_p95": 260.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.0,
+            "monotone_span": 170.0,
+            "monotone_values": [
+              90.0,
+              120.0,
+              120.0,
+              260.0
+            ],
+            "production_floor_value": 70.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 250.0
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 230.0,
+              "rr_amp_p25": 240.0,
+              "rr_amp_p50": 255.0,
+              "rr_amp_p75": 255.0,
+              "rr_amp_p95": 255.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -5.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              90.0,
+              125.0,
+              120.0,
+              255.0
+            ],
+            "production_floor_value": 75.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 255.0
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 300.0,
+              "rr_amp_p75": 300.0,
+              "rr_amp_p95": 300.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -10.0,
+            "monotone_span": 170.0,
+            "monotone_values": [
+              130.0,
+              160.0,
+              150.0,
+              300.0
+            ],
+            "production_floor_value": 100.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 200.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 300.0
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 275.0,
+              "rr_amp_p25": 285.0,
+              "rr_amp_p50": 300.0,
+              "rr_amp_p75": 300.0,
+              "rr_amp_p95": 300.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -15.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              135.0,
+              165.0,
+              150.0,
+              300.0
+            ],
+            "production_floor_value": 105.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 195.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 300.0
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 240.0,
+              "rr_amp_p25": 240.0,
+              "rr_amp_p50": 250.0,
+              "rr_amp_p75": 260.0,
+              "rr_amp_p95": 260.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 40.0,
+            "monotone_span": 170.0,
+            "monotone_values": [
+              90.0,
+              130.0,
+              180.0,
+              260.0
+            ],
+            "production_floor_value": 80.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 170.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 250.0
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 235.0,
+              "rr_amp_p25": 245.0,
+              "rr_amp_p50": 260.0,
+              "rr_amp_p75": 260.0,
+              "rr_amp_p95": 260.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 30.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              95.0,
+              125.0,
+              175.0,
+              260.0
+            ],
+            "production_floor_value": 80.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 260.0
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 300.0,
+              "rr_amp_p75": 300.0,
+              "rr_amp_p95": 300.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 30.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              140.0,
+              170.0,
+              220.0,
+              300.0
+            ],
+            "production_floor_value": 110.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 190.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 300.0
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 280.0,
+              "rr_amp_p25": 290.0,
+              "rr_amp_p50": 305.0,
+              "rr_amp_p75": 305.0,
+              "rr_amp_p95": 305.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 30.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              140.0,
+              170.0,
+              220.0,
+              305.0
+            ],
+            "production_floor_value": 110.0,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 195.0,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 305.0
+          }
+        }
+      },
+      "candidate_survival": {
+        "P_mel_peakiness|thr16|win100|hop10": false,
+        "P_mel_peakiness|thr16|win100|hop5": false,
+        "P_mel_peakiness|thr16|win200|hop10": false,
+        "P_mel_peakiness|thr16|win200|hop5": false,
+        "P_mel_peakiness|thr2|win100|hop10": false,
+        "P_mel_peakiness|thr2|win100|hop5": false,
+        "P_mel_peakiness|thr2|win200|hop10": false,
+        "P_mel_peakiness|thr2|win200|hop5": false,
+        "P_mel_peakiness|thr4|win100|hop10": false,
+        "P_mel_peakiness|thr4|win100|hop5": false,
+        "P_mel_peakiness|thr4|win200|hop10": false,
+        "P_mel_peakiness|thr4|win200|hop5": false,
+        "P_mel_peakiness|thr8|win100|hop10": false,
+        "P_mel_peakiness|thr8|win100|hop5": false,
+        "P_mel_peakiness|thr8|win200|hop10": false,
+        "P_mel_peakiness|thr8|win200|hop5": false,
+        "S_melshape_core_distance|thr0.05|win100|hop10": false,
+        "S_melshape_core_distance|thr0.05|win100|hop5": false,
+        "S_melshape_core_distance|thr0.05|win200|hop10": false,
+        "S_melshape_core_distance|thr0.05|win200|hop5": false,
+        "S_melshape_core_distance|thr0.1|win100|hop10": false,
+        "S_melshape_core_distance|thr0.1|win100|hop5": false,
+        "S_melshape_core_distance|thr0.1|win200|hop10": false,
+        "S_melshape_core_distance|thr0.1|win200|hop5": false,
+        "S_melshape_core_distance|thr0.2|win100|hop10": true,
+        "S_melshape_core_distance|thr0.2|win100|hop5": false,
+        "S_melshape_core_distance|thr0.2|win200|hop10": false,
+        "S_melshape_core_distance|thr0.2|win200|hop5": false,
+        "S_melshape_core_distance|thr0.35|win100|hop10": false,
+        "S_melshape_core_distance|thr0.35|win100|hop5": false,
+        "S_melshape_core_distance|thr0.35|win200|hop10": false,
+        "S_melshape_core_distance|thr0.35|win200|hop5": false
+      },
+      "epsilon": 10.0,
+      "epsilon_derivation": {
+        "derived_from": "measurement-side only",
+        "numerical_floor": 10.0,
+        "numerical_floor_note": "選定候補の hop 長",
+        "reproducibility_bound": 0.0
+      },
+      "failing_requirements": null,
+      "formula": "hop_ms * |{ i : commanded_note_end < t_i <= commanded_note_end + tail_window and voiced_i }|",
+      "hard_requirement_checks": {
+        "cross_process_reproducibility": true,
+        "gain_invariance": true,
+        "monotone_response": true,
+        "numerical_stability": true,
+        "production_range_resolution": true,
+        "reproducibility": true,
+        "zero_input_false_positive": true
+      },
+      "rank_order": [
+        "S_melshape_core_distance|thr0.2|win100|hop10"
+      ],
+      "selected_candidate": "S_melshape_core_distance|thr0.2|win100|hop10",
+      "selection_metrics": {
+        "amplitude_ladder_values": {
+          "rr_amp_p05": 240.0,
+          "rr_amp_p25": 240.0,
+          "rr_amp_p50": 250.0,
+          "rr_amp_p75": 260.0,
+          "rr_amp_p95": 260.0
+        },
+        "cross_process_error": 0.0,
+        "floor_non_saturation_ok": true,
+        "gain_invariance_error": 0.0,
+        "monotone_min_step": 0.0,
+        "monotone_span": 170.0,
+        "monotone_values": [
+          90.0,
+          120.0,
+          120.0,
+          260.0
+        ],
+        "production_floor_value": 70.0,
+        "reproducibility_bound": 0.0,
+        "reproducibility_error": 0.0,
+        "separation_from_floor": 180.0,
+        "silence_residual": 0.0,
+        "terminal_tail_value": 250.0
+      },
+      "status": "frozen",
+      "unit": "ms"
+    },
+    "release_after_score_boundary_ms": {
+      "candidate_records": {
+        "P_mel_peakiness|thr16|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 267.1201814058959,
+              "rr_amp_p25": 267.1201814058959,
+              "rr_amp_p50": 267.1201814058959,
+              "rr_amp_p75": 267.1201814058959,
+              "rr_amp_p95": 267.1201814058959
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.000000000000014,
+            "monotone_span": 160.00000000000014,
+            "monotone_values": [
+              107.12018140589575,
+              127.12018140589576,
+              187.1201814058958,
+              267.1201814058959
+            ],
+            "production_floor_value": 87.12018140589572,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.00000000000017,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 267.1201814058959
+          }
+        },
+        "P_mel_peakiness|thr16|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 268.4580498866214,
+              "rr_amp_p25": 268.4580498866214,
+              "rr_amp_p50": 268.4580498866214,
+              "rr_amp_p75": 268.4580498866214,
+              "rr_amp_p95": 268.4580498866214
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.943310657596484,
+            "monotone_span": 164.62585034013614,
+            "monotone_values": [
+              103.83219954648526,
+              128.77551020408174,
+              188.639455782313,
+              268.4580498866214
+            ],
+            "production_floor_value": 83.87755102040816,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 184.58049886621322,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 268.4580498866214
+          }
+        },
+        "P_mel_peakiness|thr16|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 297.12018140589566,
+              "rr_amp_p25": 297.12018140589566,
+              "rr_amp_p50": 297.12018140589566,
+              "rr_amp_p75": 297.12018140589566,
+              "rr_amp_p95": 297.12018140589566
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.00000000000003,
+            "monotone_span": 139.9999999999999,
+            "monotone_values": [
+              157.12018140589578,
+              177.1201814058958,
+              237.12018140589586,
+              297.12018140589566
+            ],
+            "production_floor_value": 137.12018140589578,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 159.9999999999999,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 297.12018140589566
+          }
+        },
+        "P_mel_peakiness|thr16|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 298.390022675737,
+              "rr_amp_p25": 298.390022675737,
+              "rr_amp_p50": 298.390022675737,
+              "rr_amp_p75": 298.390022675737,
+              "rr_amp_p95": 298.390022675737
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.943310657596243,
+            "monotone_span": 144.67120181405878,
+            "monotone_values": [
+              153.7188208616782,
+              178.66213151927445,
+              238.52607709750572,
+              298.390022675737
+            ],
+            "production_floor_value": 133.7641723356009,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 164.62585034013608,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 298.390022675737
+          }
+        },
+        "P_mel_peakiness|thr2|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 267.1201814058959,
+              "rr_amp_p25": 267.1201814058959,
+              "rr_amp_p50": 267.1201814058959,
+              "rr_amp_p75": 267.1201814058959,
+              "rr_amp_p95": 267.1201814058959
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.000000000000014,
+            "monotone_span": 160.00000000000014,
+            "monotone_values": [
+              107.12018140589575,
+              127.12018140589576,
+              187.1201814058958,
+              267.1201814058959
+            ],
+            "production_floor_value": 87.12018140589572,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.00000000000017,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 267.1201814058959
+          }
+        },
+        "P_mel_peakiness|thr2|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 268.4580498866214,
+              "rr_amp_p25": 268.4580498866214,
+              "rr_amp_p50": 268.4580498866214,
+              "rr_amp_p75": 268.4580498866214,
+              "rr_amp_p95": 268.4580498866214
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.943310657596484,
+            "monotone_span": 164.62585034013614,
+            "monotone_values": [
+              103.83219954648526,
+              128.77551020408174,
+              188.639455782313,
+              268.4580498866214
+            ],
+            "production_floor_value": 83.87755102040816,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 184.58049886621322,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 268.4580498866214
+          }
+        },
+        "P_mel_peakiness|thr2|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 297.12018140589566,
+              "rr_amp_p25": 297.12018140589566,
+              "rr_amp_p50": 297.12018140589566,
+              "rr_amp_p75": 297.12018140589566,
+              "rr_amp_p95": 297.12018140589566
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.00000000000003,
+            "monotone_span": 139.9999999999999,
+            "monotone_values": [
+              157.12018140589578,
+              177.1201814058958,
+              237.12018140589586,
+              297.12018140589566
+            ],
+            "production_floor_value": 137.12018140589578,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 159.9999999999999,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 297.12018140589566
+          }
+        },
+        "P_mel_peakiness|thr2|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 298.390022675737,
+              "rr_amp_p25": 298.390022675737,
+              "rr_amp_p50": 298.390022675737,
+              "rr_amp_p75": 298.390022675737,
+              "rr_amp_p95": 298.390022675737
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.943310657596243,
+            "monotone_span": 144.67120181405878,
+            "monotone_values": [
+              153.7188208616782,
+              178.66213151927445,
+              238.52607709750572,
+              298.390022675737
+            ],
+            "production_floor_value": 133.7641723356009,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 164.62585034013608,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 298.390022675737
+          }
+        },
+        "P_mel_peakiness|thr4|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 267.1201814058959,
+              "rr_amp_p25": 267.1201814058959,
+              "rr_amp_p50": 267.1201814058959,
+              "rr_amp_p75": 267.1201814058959,
+              "rr_amp_p95": 267.1201814058959
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.000000000000014,
+            "monotone_span": 160.00000000000014,
+            "monotone_values": [
+              107.12018140589575,
+              127.12018140589576,
+              187.1201814058958,
+              267.1201814058959
+            ],
+            "production_floor_value": 87.12018140589572,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.00000000000017,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 267.1201814058959
+          }
+        },
+        "P_mel_peakiness|thr4|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 268.4580498866214,
+              "rr_amp_p25": 268.4580498866214,
+              "rr_amp_p50": 268.4580498866214,
+              "rr_amp_p75": 268.4580498866214,
+              "rr_amp_p95": 268.4580498866214
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.943310657596484,
+            "monotone_span": 164.62585034013614,
+            "monotone_values": [
+              103.83219954648526,
+              128.77551020408174,
+              188.639455782313,
+              268.4580498866214
+            ],
+            "production_floor_value": 83.87755102040816,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 184.58049886621322,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 268.4580498866214
+          }
+        },
+        "P_mel_peakiness|thr4|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 297.12018140589566,
+              "rr_amp_p25": 297.12018140589566,
+              "rr_amp_p50": 297.12018140589566,
+              "rr_amp_p75": 297.12018140589566,
+              "rr_amp_p95": 297.12018140589566
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.00000000000003,
+            "monotone_span": 139.9999999999999,
+            "monotone_values": [
+              157.12018140589578,
+              177.1201814058958,
+              237.12018140589586,
+              297.12018140589566
+            ],
+            "production_floor_value": 137.12018140589578,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 159.9999999999999,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 297.12018140589566
+          }
+        },
+        "P_mel_peakiness|thr4|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 298.390022675737,
+              "rr_amp_p25": 298.390022675737,
+              "rr_amp_p50": 298.390022675737,
+              "rr_amp_p75": 298.390022675737,
+              "rr_amp_p95": 298.390022675737
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.943310657596243,
+            "monotone_span": 144.67120181405878,
+            "monotone_values": [
+              153.7188208616782,
+              178.66213151927445,
+              238.52607709750572,
+              298.390022675737
+            ],
+            "production_floor_value": 133.7641723356009,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 164.62585034013608,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 298.390022675737
+          }
+        },
+        "P_mel_peakiness|thr8|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 267.1201814058959,
+              "rr_amp_p25": 267.1201814058959,
+              "rr_amp_p50": 267.1201814058959,
+              "rr_amp_p75": 267.1201814058959,
+              "rr_amp_p95": 267.1201814058959
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.000000000000014,
+            "monotone_span": 160.00000000000014,
+            "monotone_values": [
+              107.12018140589575,
+              127.12018140589576,
+              187.1201814058958,
+              267.1201814058959
+            ],
+            "production_floor_value": 87.12018140589572,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.00000000000017,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 267.1201814058959
+          }
+        },
+        "P_mel_peakiness|thr8|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 268.4580498866214,
+              "rr_amp_p25": 268.4580498866214,
+              "rr_amp_p50": 268.4580498866214,
+              "rr_amp_p75": 268.4580498866214,
+              "rr_amp_p95": 268.4580498866214
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.943310657596484,
+            "monotone_span": 164.62585034013614,
+            "monotone_values": [
+              103.83219954648526,
+              128.77551020408174,
+              188.639455782313,
+              268.4580498866214
+            ],
+            "production_floor_value": 83.87755102040816,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 184.58049886621322,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 268.4580498866214
+          }
+        },
+        "P_mel_peakiness|thr8|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 297.12018140589566,
+              "rr_amp_p25": 297.12018140589566,
+              "rr_amp_p50": 297.12018140589566,
+              "rr_amp_p75": 297.12018140589566,
+              "rr_amp_p95": 297.12018140589566
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 20.00000000000003,
+            "monotone_span": 139.9999999999999,
+            "monotone_values": [
+              157.12018140589578,
+              177.1201814058958,
+              237.12018140589586,
+              297.12018140589566
+            ],
+            "production_floor_value": 137.12018140589578,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 159.9999999999999,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 297.12018140589566
+          }
+        },
+        "P_mel_peakiness|thr8|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 298.390022675737,
+              "rr_amp_p25": 298.390022675737,
+              "rr_amp_p50": 298.390022675737,
+              "rr_amp_p75": 298.390022675737,
+              "rr_amp_p95": 298.390022675737
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.943310657596243,
+            "monotone_span": 144.67120181405878,
+            "monotone_values": [
+              153.7188208616782,
+              178.66213151927445,
+              238.52607709750572,
+              298.390022675737
+            ],
+            "production_floor_value": 133.7641723356009,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 164.62585034013608,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 298.390022675737
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 247.12018140589586,
+              "rr_amp_p25": 247.12018140589586,
+              "rr_amp_p50": 247.12018140589586,
+              "rr_amp_p75": 247.12018140589586,
+              "rr_amp_p95": 247.12018140589586
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -80.00000000000007,
+            "monotone_span": 170.00000000000014,
+            "monotone_values": [
+              77.12018140589572,
+              117.12018140589575,
+              37.12018140589568,
+              247.12018140589586
+            ],
+            "production_floor_value": 67.1201814058957,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.00000000000017,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 247.12018140589586
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 243.5147392290251,
+              "rr_amp_p25": 243.5147392290251,
+              "rr_amp_p50": 243.5147392290251,
+              "rr_amp_p75": 243.5147392290251,
+              "rr_amp_p95": 243.5147392290251
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -74.82993197278898,
+            "monotone_span": 159.63718820861695,
+            "monotone_values": [
+              83.87755102040816,
+              113.80952380952381,
+              38.979591836734826,
+              243.5147392290251
+            ],
+            "production_floor_value": 68.91156462585046,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 174.60317460317464,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 243.5147392290251
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 287.12018140589566,
+              "rr_amp_p25": 287.12018140589566,
+              "rr_amp_p50": 287.12018140589566,
+              "rr_amp_p75": 287.12018140589566,
+              "rr_amp_p95": 287.12018140589566
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -139.9999999999999,
+            "monotone_span": 169.99999999999991,
+            "monotone_values": [
+              117.12018140589575,
+              157.12018140589578,
+              17.120181405895885,
+              287.12018140589566
+            ],
+            "production_floor_value": 87.12018140589572,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 199.99999999999994,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 287.12018140589566
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 283.42403628117927,
+              "rr_amp_p25": 283.42403628117927,
+              "rr_amp_p50": 283.42403628117927,
+              "rr_amp_p75": 283.42403628117927,
+              "rr_amp_p95": 283.42403628117927
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -129.70521541950131,
+            "monotone_span": 159.63718820861692,
+            "monotone_values": [
+              123.78684807256235,
+              153.7188208616782,
+              24.0136054421769,
+              283.42403628117927
+            ],
+            "production_floor_value": 88.86621315192755,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 194.55782312925172,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 283.42403628117927
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 247.12018140589586,
+              "rr_amp_p25": 247.12018140589586,
+              "rr_amp_p50": 247.12018140589586,
+              "rr_amp_p75": 247.12018140589586,
+              "rr_amp_p95": 247.12018140589586
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -40.00000000000003,
+            "monotone_span": 160.00000000000014,
+            "monotone_values": [
+              87.12018140589572,
+              117.12018140589575,
+              77.12018140589572,
+              247.12018140589586
+            ],
+            "production_floor_value": 67.1201814058957,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.00000000000017,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 247.12018140589586
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 248.50340136054427,
+              "rr_amp_p25": 248.50340136054427,
+              "rr_amp_p50": 248.50340136054427,
+              "rr_amp_p75": 248.50340136054427,
+              "rr_amp_p95": 248.50340136054427
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -44.897959183673564,
+            "monotone_span": 159.63718820861672,
+            "monotone_values": [
+              88.86621315192755,
+              118.79818594104319,
+              73.90022675736962,
+              248.50340136054427
+            ],
+            "production_floor_value": 68.91156462585046,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 179.5918367346938,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 248.50340136054427
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 287.12018140589566,
+              "rr_amp_p25": 287.12018140589566,
+              "rr_amp_p50": 287.12018140589566,
+              "rr_amp_p75": 287.12018140589566,
+              "rr_amp_p95": 287.12018140589566
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -60.00000000000004,
+            "monotone_span": 159.9999999999999,
+            "monotone_values": [
+              127.12018140589576,
+              157.12018140589578,
+              97.12018140589574,
+              287.12018140589566
+            ],
+            "production_floor_value": 97.12018140589574,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 189.99999999999994,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 287.12018140589566
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 293.4013605442178,
+              "rr_amp_p25": 293.4013605442178,
+              "rr_amp_p50": 293.4013605442178,
+              "rr_amp_p75": 293.4013605442178,
+              "rr_amp_p95": 293.4013605442178
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -64.85260770975066,
+            "monotone_span": 164.62585034013608,
+            "monotone_values": [
+              128.77551020408174,
+              158.70748299319737,
+              93.85487528344672,
+              293.4013605442178
+            ],
+            "production_floor_value": 93.85487528344672,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 199.5464852607711,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 293.4013605442178
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 257.1201814058959,
+              "rr_amp_p25": 257.1201814058959,
+              "rr_amp_p50": 257.1201814058959,
+              "rr_amp_p75": 257.1201814058959,
+              "rr_amp_p95": 257.1201814058959
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 30.00000000000003,
+            "monotone_span": 170.00000000000017,
+            "monotone_values": [
+              87.12018140589572,
+              117.12018140589575,
+              167.1201814058958,
+              257.1201814058959
+            ],
+            "production_floor_value": 67.1201814058957,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 190.00000000000017,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 257.1201814058959
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 253.49206349206366,
+              "rr_amp_p25": 253.49206349206366,
+              "rr_amp_p50": 253.49206349206366,
+              "rr_amp_p75": 253.49206349206366,
+              "rr_amp_p95": 253.49206349206366
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 34.9206349206348,
+            "monotone_span": 164.6258503401361,
+            "monotone_values": [
+              88.86621315192755,
+              123.78684807256235,
+              168.6848072562359,
+              253.49206349206366
+            ],
+            "production_floor_value": 73.90022675736962,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 179.59183673469403,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 253.49206349206366
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 297.12018140589566,
+              "rr_amp_p25": 297.12018140589566,
+              "rr_amp_p50": 297.12018140589566,
+              "rr_amp_p75": 297.12018140589566,
+              "rr_amp_p95": 297.12018140589566
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 30.000000000000014,
+            "monotone_span": 169.9999999999999,
+            "monotone_values": [
+              127.12018140589576,
+              157.12018140589578,
+              207.12018140589583,
+              297.12018140589566
+            ],
+            "production_floor_value": 97.12018140589574,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 199.99999999999994,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 297.12018140589566
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 298.390022675737,
+              "rr_amp_p25": 298.390022675737,
+              "rr_amp_p50": 298.390022675737,
+              "rr_amp_p75": 298.390022675737,
+              "rr_amp_p95": 298.390022675737
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 29.93197278911586,
+            "monotone_span": 164.62585034013608,
+            "monotone_values": [
+              133.7641723356009,
+              163.69614512471676,
+              208.5941043083901,
+              298.390022675737
+            ],
+            "production_floor_value": 103.83219954648526,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 194.55782312925174,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 298.390022675737
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 257.1201814058959,
+              "rr_amp_p25": 257.1201814058959,
+              "rr_amp_p50": 257.1201814058959,
+              "rr_amp_p75": 257.1201814058959,
+              "rr_amp_p95": 257.1201814058959
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 40.00000000000004,
+            "monotone_span": 170.00000000000017,
+            "monotone_values": [
+              87.12018140589572,
+              127.12018140589576,
+              177.1201814058958,
+              257.1201814058959
+            ],
+            "production_floor_value": 77.12018140589572,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 180.00000000000017,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 257.1201814058959
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 258.4807256235828,
+              "rr_amp_p25": 258.4807256235828,
+              "rr_amp_p50": 258.4807256235828,
+              "rr_amp_p75": 258.4807256235828,
+              "rr_amp_p95": 258.4807256235828
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 29.931972789115633,
+            "monotone_span": 164.6258503401361,
+            "monotone_values": [
+              93.85487528344672,
+              123.78684807256235,
+              173.6734693877553,
+              258.4807256235828
+            ],
+            "production_floor_value": 78.88888888888901,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 179.5918367346938,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 258.4807256235828
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 297.12018140589566,
+              "rr_amp_p25": 297.12018140589566,
+              "rr_amp_p50": 297.12018140589566,
+              "rr_amp_p75": 297.12018140589566,
+              "rr_amp_p95": 297.12018140589566
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 30.00000000000003,
+            "monotone_span": 159.9999999999999,
+            "monotone_values": [
+              137.12018140589578,
+              167.1201814058958,
+              217.12018140589583,
+              297.12018140589566
+            ],
+            "production_floor_value": 107.12018140589575,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 189.99999999999991,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 297.12018140589566
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 298.390022675737,
+              "rr_amp_p25": 298.390022675737,
+              "rr_amp_p50": 298.390022675737,
+              "rr_amp_p75": 298.390022675737,
+              "rr_amp_p95": 298.390022675737
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 29.931972789115633,
+            "monotone_span": 159.63718820861672,
+            "monotone_values": [
+              138.75283446712027,
+              168.6848072562359,
+              218.57142857142864,
+              298.390022675737
+            ],
+            "production_floor_value": 108.82086167800465,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 189.56916099773235,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 298.390022675737
+          }
+        }
+      },
+      "candidate_survival": {
+        "P_mel_peakiness|thr16|win100|hop10": false,
+        "P_mel_peakiness|thr16|win100|hop5": false,
+        "P_mel_peakiness|thr16|win200|hop10": false,
+        "P_mel_peakiness|thr16|win200|hop5": false,
+        "P_mel_peakiness|thr2|win100|hop10": false,
+        "P_mel_peakiness|thr2|win100|hop5": false,
+        "P_mel_peakiness|thr2|win200|hop10": false,
+        "P_mel_peakiness|thr2|win200|hop5": false,
+        "P_mel_peakiness|thr4|win100|hop10": false,
+        "P_mel_peakiness|thr4|win100|hop5": false,
+        "P_mel_peakiness|thr4|win200|hop10": false,
+        "P_mel_peakiness|thr4|win200|hop5": false,
+        "P_mel_peakiness|thr8|win100|hop10": false,
+        "P_mel_peakiness|thr8|win100|hop5": false,
+        "P_mel_peakiness|thr8|win200|hop10": false,
+        "P_mel_peakiness|thr8|win200|hop5": false,
+        "S_melshape_core_distance|thr0.05|win100|hop10": false,
+        "S_melshape_core_distance|thr0.05|win100|hop5": false,
+        "S_melshape_core_distance|thr0.05|win200|hop10": false,
+        "S_melshape_core_distance|thr0.05|win200|hop5": false,
+        "S_melshape_core_distance|thr0.1|win100|hop10": false,
+        "S_melshape_core_distance|thr0.1|win100|hop5": false,
+        "S_melshape_core_distance|thr0.1|win200|hop10": false,
+        "S_melshape_core_distance|thr0.1|win200|hop5": false,
+        "S_melshape_core_distance|thr0.2|win100|hop10": true,
+        "S_melshape_core_distance|thr0.2|win100|hop5": true,
+        "S_melshape_core_distance|thr0.2|win200|hop10": false,
+        "S_melshape_core_distance|thr0.2|win200|hop5": false,
+        "S_melshape_core_distance|thr0.35|win100|hop10": false,
+        "S_melshape_core_distance|thr0.35|win100|hop5": false,
+        "S_melshape_core_distance|thr0.35|win200|hop10": false,
+        "S_melshape_core_distance|thr0.35|win200|hop5": false
+      },
+      "epsilon": 5.0,
+      "epsilon_derivation": {
+        "derived_from": "measurement-side only",
+        "numerical_floor": 5.0,
+        "numerical_floor_note": "選定候補の hop 長",
+        "reproducibility_bound": 0.0
+      },
+      "failing_requirements": null,
+      "formula": "max(0, 1000 * (max{ t_i : voiced_i and score_boundary < t_i <= score_boundary + tail_window } - score_boundary))",
+      "hard_requirement_checks": {
+        "cross_process_reproducibility": true,
+        "gain_invariance": true,
+        "monotone_response": true,
+        "numerical_stability": true,
+        "production_range_resolution": true,
+        "reproducibility": true,
+        "zero_input_false_positive": true
+      },
+      "rank_order": [
+        "S_melshape_core_distance|thr0.2|win100|hop5",
+        "S_melshape_core_distance|thr0.2|win100|hop10"
+      ],
+      "selected_candidate": "S_melshape_core_distance|thr0.2|win100|hop5",
+      "selection_metrics": {
+        "amplitude_ladder_values": {
+          "rr_amp_p05": 253.49206349206366,
+          "rr_amp_p25": 253.49206349206366,
+          "rr_amp_p50": 253.49206349206366,
+          "rr_amp_p75": 253.49206349206366,
+          "rr_amp_p95": 253.49206349206366
+        },
+        "cross_process_error": 0.0,
+        "floor_non_saturation_ok": true,
+        "gain_invariance_error": 0.0,
+        "monotone_min_step": 34.9206349206348,
+        "monotone_span": 164.6258503401361,
+        "monotone_values": [
+          88.86621315192755,
+          123.78684807256235,
+          168.6848072562359,
+          253.49206349206366
+        ],
+        "production_floor_value": 73.90022675736962,
+        "reproducibility_bound": 0.0,
+        "reproducibility_error": 0.0,
+        "separation_from_floor": 179.59183673469403,
+        "silence_residual": 0.0,
+        "terminal_tail_value": 253.49206349206366
+      },
+      "status": "frozen",
+      "unit": "ms"
+    },
+    "tail_f0_persistence": {
+      "candidate_records": {
+        "P_mel_peakiness|thr16|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8333333333333334,
+              "rr_amp_p25": 0.8333333333333334,
+              "rr_amp_p50": 0.8666666666666667,
+              "rr_amp_p75": 0.9,
+              "rr_amp_p95": 0.9
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06666666666666671,
+            "monotone_span": 0.5333333333333334,
+            "monotone_values": [
+              0.36666666666666664,
+              0.43333333333333335,
+              0.6333333333333333,
+              0.9
+            ],
+            "production_floor_value": 0.3,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5666666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8666666666666667
+          }
+        },
+        "P_mel_peakiness|thr16|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8166666666666667,
+              "rr_amp_p25": 0.85,
+              "rr_amp_p50": 0.9,
+              "rr_amp_p75": 0.9,
+              "rr_amp_p95": 0.9
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333337,
+            "monotone_span": 0.55,
+            "monotone_values": [
+              0.35,
+              0.43333333333333335,
+              0.6333333333333333,
+              0.9
+            ],
+            "production_floor_value": 0.2833333333333333,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6166666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.9
+          }
+        },
+        "P_mel_peakiness|thr16|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9333333333333333,
+              "rr_amp_p25": 0.9666666666666667,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06666666666666665,
+            "monotone_span": 0.4666666666666667,
+            "monotone_values": [
+              0.5333333333333333,
+              0.6,
+              0.8,
+              1.0
+            ],
+            "production_floor_value": 0.4666666666666667,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5333333333333333,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "P_mel_peakiness|thr16|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9166666666666666,
+              "rr_amp_p25": 0.95,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333326,
+            "monotone_span": 0.4833333333333333,
+            "monotone_values": [
+              0.5166666666666667,
+              0.6,
+              0.8,
+              1.0
+            ],
+            "production_floor_value": 0.45,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.55,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "P_mel_peakiness|thr2|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8333333333333334,
+              "rr_amp_p25": 0.8333333333333334,
+              "rr_amp_p50": 0.8666666666666667,
+              "rr_amp_p75": 0.9,
+              "rr_amp_p95": 0.9
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06666666666666671,
+            "monotone_span": 0.5333333333333334,
+            "monotone_values": [
+              0.36666666666666664,
+              0.43333333333333335,
+              0.6333333333333333,
+              0.9
+            ],
+            "production_floor_value": 0.3,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5666666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8666666666666667
+          }
+        },
+        "P_mel_peakiness|thr2|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8166666666666667,
+              "rr_amp_p25": 0.85,
+              "rr_amp_p50": 0.9,
+              "rr_amp_p75": 0.9,
+              "rr_amp_p95": 0.9
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333337,
+            "monotone_span": 0.55,
+            "monotone_values": [
+              0.35,
+              0.43333333333333335,
+              0.6333333333333333,
+              0.9
+            ],
+            "production_floor_value": 0.2833333333333333,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6166666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.9
+          }
+        },
+        "P_mel_peakiness|thr2|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9333333333333333,
+              "rr_amp_p25": 0.9666666666666667,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06666666666666665,
+            "monotone_span": 0.4666666666666667,
+            "monotone_values": [
+              0.5333333333333333,
+              0.6,
+              0.8,
+              1.0
+            ],
+            "production_floor_value": 0.4666666666666667,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5333333333333333,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "P_mel_peakiness|thr2|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9166666666666666,
+              "rr_amp_p25": 0.95,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333326,
+            "monotone_span": 0.4833333333333333,
+            "monotone_values": [
+              0.5166666666666667,
+              0.6,
+              0.8,
+              1.0
+            ],
+            "production_floor_value": 0.45,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.55,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "P_mel_peakiness|thr4|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8333333333333334,
+              "rr_amp_p25": 0.8333333333333334,
+              "rr_amp_p50": 0.8666666666666667,
+              "rr_amp_p75": 0.9,
+              "rr_amp_p95": 0.9
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06666666666666671,
+            "monotone_span": 0.5333333333333334,
+            "monotone_values": [
+              0.36666666666666664,
+              0.43333333333333335,
+              0.6333333333333333,
+              0.9
+            ],
+            "production_floor_value": 0.3,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5666666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8666666666666667
+          }
+        },
+        "P_mel_peakiness|thr4|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8166666666666667,
+              "rr_amp_p25": 0.85,
+              "rr_amp_p50": 0.9,
+              "rr_amp_p75": 0.9,
+              "rr_amp_p95": 0.9
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333337,
+            "monotone_span": 0.55,
+            "monotone_values": [
+              0.35,
+              0.43333333333333335,
+              0.6333333333333333,
+              0.9
+            ],
+            "production_floor_value": 0.2833333333333333,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6166666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.9
+          }
+        },
+        "P_mel_peakiness|thr4|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9333333333333333,
+              "rr_amp_p25": 0.9666666666666667,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06666666666666665,
+            "monotone_span": 0.4666666666666667,
+            "monotone_values": [
+              0.5333333333333333,
+              0.6,
+              0.8,
+              1.0
+            ],
+            "production_floor_value": 0.4666666666666667,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5333333333333333,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "P_mel_peakiness|thr4|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9166666666666666,
+              "rr_amp_p25": 0.95,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333326,
+            "monotone_span": 0.4833333333333333,
+            "monotone_values": [
+              0.5166666666666667,
+              0.6,
+              0.8,
+              1.0
+            ],
+            "production_floor_value": 0.45,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.55,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "P_mel_peakiness|thr8|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8333333333333334,
+              "rr_amp_p25": 0.8333333333333334,
+              "rr_amp_p50": 0.8666666666666667,
+              "rr_amp_p75": 0.9,
+              "rr_amp_p95": 0.9
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06666666666666671,
+            "monotone_span": 0.5333333333333334,
+            "monotone_values": [
+              0.36666666666666664,
+              0.43333333333333335,
+              0.6333333333333333,
+              0.9
+            ],
+            "production_floor_value": 0.3,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5666666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8666666666666667
+          }
+        },
+        "P_mel_peakiness|thr8|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8166666666666667,
+              "rr_amp_p25": 0.85,
+              "rr_amp_p50": 0.9,
+              "rr_amp_p75": 0.9,
+              "rr_amp_p95": 0.9
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333337,
+            "monotone_span": 0.55,
+            "monotone_values": [
+              0.35,
+              0.43333333333333335,
+              0.6333333333333333,
+              0.9
+            ],
+            "production_floor_value": 0.2833333333333333,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6166666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.9
+          }
+        },
+        "P_mel_peakiness|thr8|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9333333333333333,
+              "rr_amp_p25": 0.9666666666666667,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06666666666666665,
+            "monotone_span": 0.4666666666666667,
+            "monotone_values": [
+              0.5333333333333333,
+              0.6,
+              0.8,
+              1.0
+            ],
+            "production_floor_value": 0.4666666666666667,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5333333333333333,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "P_mel_peakiness|thr8|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9166666666666666,
+              "rr_amp_p25": 0.95,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333326,
+            "monotone_span": 0.4833333333333333,
+            "monotone_values": [
+              0.5166666666666667,
+              0.6,
+              0.8,
+              1.0
+            ],
+            "production_floor_value": 0.45,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.55,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.7666666666666667,
+              "rr_amp_p25": 0.7666666666666667,
+              "rr_amp_p50": 0.8,
+              "rr_amp_p75": 0.8333333333333334,
+              "rr_amp_p95": 0.8333333333333334
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.2666666666666667,
+            "monotone_span": 0.5666666666666667,
+            "monotone_values": [
+              0.26666666666666666,
+              0.4,
+              0.13333333333333333,
+              0.8333333333333334
+            ],
+            "production_floor_value": 0.23333333333333334,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5666666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.7333333333333333,
+              "rr_amp_p25": 0.7666666666666667,
+              "rr_amp_p50": 0.8166666666666667,
+              "rr_amp_p75": 0.8166666666666667,
+              "rr_amp_p95": 0.8166666666666667
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.25,
+            "monotone_span": 0.5333333333333333,
+            "monotone_values": [
+              0.2833333333333333,
+              0.38333333333333336,
+              0.13333333333333333,
+              0.8166666666666667
+            ],
+            "production_floor_value": 0.23333333333333334,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5833333333333333,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8166666666666667
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.7666666666666667,
+              "rr_amp_p25": 0.8,
+              "rr_amp_p50": 0.8666666666666667,
+              "rr_amp_p75": 0.8666666666666667,
+              "rr_amp_p95": 0.8666666666666667
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.4666666666666667,
+            "monotone_span": 0.4666666666666667,
+            "monotone_values": [
+              0.4,
+              0.5333333333333333,
+              0.06666666666666667,
+              0.8666666666666667
+            ],
+            "production_floor_value": 0.3,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5666666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8666666666666667
+          }
+        },
+        "S_melshape_core_distance|thr0.05|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.75,
+              "rr_amp_p25": 0.7833333333333333,
+              "rr_amp_p50": 0.8333333333333334,
+              "rr_amp_p75": 0.8333333333333334,
+              "rr_amp_p95": 0.8333333333333334
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.4333333333333334,
+            "monotone_span": 0.4166666666666667,
+            "monotone_values": [
+              0.4166666666666667,
+              0.5166666666666667,
+              0.08333333333333333,
+              0.8333333333333334
+            ],
+            "production_floor_value": 0.3,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5333333333333334,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8333333333333334
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.7666666666666667,
+              "rr_amp_p25": 0.7666666666666667,
+              "rr_amp_p50": 0.8,
+              "rr_amp_p75": 0.8333333333333334,
+              "rr_amp_p95": 0.8333333333333334
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.13333333333333336,
+            "monotone_span": 0.5333333333333334,
+            "monotone_values": [
+              0.3,
+              0.4,
+              0.26666666666666666,
+              0.8333333333333334
+            ],
+            "production_floor_value": 0.23333333333333334,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5666666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.75,
+              "rr_amp_p25": 0.7833333333333333,
+              "rr_amp_p50": 0.8333333333333334,
+              "rr_amp_p75": 0.8333333333333334,
+              "rr_amp_p95": 0.8333333333333334
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.15000000000000002,
+            "monotone_span": 0.5333333333333334,
+            "monotone_values": [
+              0.3,
+              0.4,
+              0.25,
+              0.8333333333333334
+            ],
+            "production_floor_value": 0.23333333333333334,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6000000000000001,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8333333333333334
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9,
+              "rr_amp_p25": 0.9333333333333333,
+              "rr_amp_p50": 0.9666666666666667,
+              "rr_amp_p75": 0.9666666666666667,
+              "rr_amp_p95": 0.9666666666666667
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.2,
+            "monotone_span": 0.5333333333333333,
+            "monotone_values": [
+              0.43333333333333335,
+              0.5333333333333333,
+              0.3333333333333333,
+              0.9666666666666667
+            ],
+            "production_floor_value": 0.3333333333333333,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6333333333333333,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.9666666666666667
+          }
+        },
+        "S_melshape_core_distance|thr0.1|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9,
+              "rr_amp_p25": 0.9333333333333333,
+              "rr_amp_p50": 0.9833333333333333,
+              "rr_amp_p75": 0.9833333333333333,
+              "rr_amp_p95": 0.9833333333333333
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.21666666666666667,
+            "monotone_span": 0.5499999999999999,
+            "monotone_values": [
+              0.43333333333333335,
+              0.5333333333333333,
+              0.31666666666666665,
+              0.9833333333333333
+            ],
+            "production_floor_value": 0.31666666666666665,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6666666666666666,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.9833333333333333
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8,
+              "rr_amp_p25": 0.8,
+              "rr_amp_p50": 0.8333333333333334,
+              "rr_amp_p75": 0.8666666666666667,
+              "rr_amp_p95": 0.8666666666666667
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.0,
+            "monotone_span": 0.5666666666666667,
+            "monotone_values": [
+              0.3,
+              0.4,
+              0.4,
+              0.8666666666666667
+            ],
+            "production_floor_value": 0.23333333333333334,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6000000000000001,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8333333333333334
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": true,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.7666666666666667,
+              "rr_amp_p25": 0.8,
+              "rr_amp_p50": 0.85,
+              "rr_amp_p75": 0.85,
+              "rr_amp_p95": 0.85
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.016666666666666663,
+            "monotone_span": 0.55,
+            "monotone_values": [
+              0.3,
+              0.4166666666666667,
+              0.4,
+              0.85
+            ],
+            "production_floor_value": 0.25,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.85
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9333333333333333,
+              "rr_amp_p25": 0.9666666666666667,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.033333333333333326,
+            "monotone_span": 0.5666666666666667,
+            "monotone_values": [
+              0.43333333333333335,
+              0.5333333333333333,
+              0.5,
+              1.0
+            ],
+            "production_floor_value": 0.3333333333333333,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6666666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "S_melshape_core_distance|thr0.2|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9166666666666666,
+              "rr_amp_p25": 0.95,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": -0.050000000000000044,
+            "monotone_span": 0.55,
+            "monotone_values": [
+              0.45,
+              0.55,
+              0.5,
+              1.0
+            ],
+            "production_floor_value": 0.35,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.65,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.8,
+              "rr_amp_p25": 0.8,
+              "rr_amp_p50": 0.8333333333333334,
+              "rr_amp_p75": 0.8666666666666667,
+              "rr_amp_p95": 0.8666666666666667
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.13333333333333336,
+            "monotone_span": 0.5666666666666667,
+            "monotone_values": [
+              0.3,
+              0.43333333333333335,
+              0.6,
+              0.8666666666666667
+            ],
+            "production_floor_value": 0.26666666666666666,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.5666666666666667,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8333333333333334
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.7833333333333333,
+              "rr_amp_p25": 0.8166666666666667,
+              "rr_amp_p50": 0.8666666666666667,
+              "rr_amp_p75": 0.8666666666666667,
+              "rr_amp_p95": 0.8666666666666667
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.10000000000000003,
+            "monotone_span": 0.55,
+            "monotone_values": [
+              0.31666666666666665,
+              0.4166666666666667,
+              0.5833333333333334,
+              0.8666666666666667
+            ],
+            "production_floor_value": 0.26666666666666666,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6000000000000001,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.8666666666666667
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9333333333333333,
+              "rr_amp_p25": 0.9666666666666667,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.09999999999999998,
+            "monotone_span": 0.5333333333333333,
+            "monotone_values": [
+              0.4666666666666667,
+              0.5666666666666667,
+              0.7333333333333333,
+              1.0
+            ],
+            "production_floor_value": 0.36666666666666664,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6333333333333333,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        },
+        "S_melshape_core_distance|thr0.35|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.9166666666666666,
+              "rr_amp_p25": 0.95,
+              "rr_amp_p50": 1.0,
+              "rr_amp_p75": 1.0,
+              "rr_amp_p95": 1.0
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": false,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.09999999999999998,
+            "monotone_span": 0.5333333333333333,
+            "monotone_values": [
+              0.4666666666666667,
+              0.5666666666666667,
+              0.7333333333333333,
+              1.0
+            ],
+            "production_floor_value": 0.36666666666666664,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": 0.6333333333333333,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 1.0
+          }
+        }
+      },
+      "candidate_survival": {
+        "P_mel_peakiness|thr16|win100|hop10": false,
+        "P_mel_peakiness|thr16|win100|hop5": false,
+        "P_mel_peakiness|thr16|win200|hop10": false,
+        "P_mel_peakiness|thr16|win200|hop5": false,
+        "P_mel_peakiness|thr2|win100|hop10": false,
+        "P_mel_peakiness|thr2|win100|hop5": false,
+        "P_mel_peakiness|thr2|win200|hop10": false,
+        "P_mel_peakiness|thr2|win200|hop5": false,
+        "P_mel_peakiness|thr4|win100|hop10": false,
+        "P_mel_peakiness|thr4|win100|hop5": false,
+        "P_mel_peakiness|thr4|win200|hop10": false,
+        "P_mel_peakiness|thr4|win200|hop5": false,
+        "P_mel_peakiness|thr8|win100|hop10": false,
+        "P_mel_peakiness|thr8|win100|hop5": false,
+        "P_mel_peakiness|thr8|win200|hop10": false,
+        "P_mel_peakiness|thr8|win200|hop5": false,
+        "S_melshape_core_distance|thr0.05|win100|hop10": false,
+        "S_melshape_core_distance|thr0.05|win100|hop5": false,
+        "S_melshape_core_distance|thr0.05|win200|hop10": false,
+        "S_melshape_core_distance|thr0.05|win200|hop5": false,
+        "S_melshape_core_distance|thr0.1|win100|hop10": false,
+        "S_melshape_core_distance|thr0.1|win100|hop5": false,
+        "S_melshape_core_distance|thr0.1|win200|hop10": false,
+        "S_melshape_core_distance|thr0.1|win200|hop5": false,
+        "S_melshape_core_distance|thr0.2|win100|hop10": true,
+        "S_melshape_core_distance|thr0.2|win100|hop5": false,
+        "S_melshape_core_distance|thr0.2|win200|hop10": false,
+        "S_melshape_core_distance|thr0.2|win200|hop5": false,
+        "S_melshape_core_distance|thr0.35|win100|hop10": false,
+        "S_melshape_core_distance|thr0.35|win100|hop5": false,
+        "S_melshape_core_distance|thr0.35|win200|hop10": false,
+        "S_melshape_core_distance|thr0.35|win200|hop5": false
+      },
+      "epsilon": 0.03333333333333333,
+      "epsilon_derivation": {
+        "derived_from": "measurement-side only",
+        "numerical_floor": 0.03333333333333333,
+        "numerical_floor_note": "終端窓に入るフレーム数の逆数",
+        "reproducibility_bound": 0.0
+      },
+      "failing_requirements": null,
+      "formula": "|{ i in tail : voiced_i and isfinite(f0_i) }| / |{ i in tail }|,  tail = (score_boundary, score_boundary + tail_window]",
+      "hard_requirement_checks": {
+        "cross_process_reproducibility": true,
+        "gain_invariance": true,
+        "monotone_response": true,
+        "numerical_stability": true,
+        "production_range_resolution": true,
+        "reproducibility": true,
+        "zero_input_false_positive": true
+      },
+      "rank_order": [
+        "S_melshape_core_distance|thr0.2|win100|hop10"
+      ],
+      "selected_candidate": "S_melshape_core_distance|thr0.2|win100|hop10",
+      "selection_metrics": {
+        "amplitude_ladder_values": {
+          "rr_amp_p05": 0.8,
+          "rr_amp_p25": 0.8,
+          "rr_amp_p50": 0.8333333333333334,
+          "rr_amp_p75": 0.8666666666666667,
+          "rr_amp_p95": 0.8666666666666667
+        },
+        "cross_process_error": 0.0,
+        "floor_non_saturation_ok": true,
+        "gain_invariance_error": 0.0,
+        "monotone_min_step": 0.0,
+        "monotone_span": 0.5666666666666667,
+        "monotone_values": [
+          0.3,
+          0.4,
+          0.4,
+          0.8666666666666667
+        ],
+        "production_floor_value": 0.23333333333333334,
+        "reproducibility_bound": 0.0,
+        "reproducibility_error": 0.0,
+        "separation_from_floor": 0.6000000000000001,
+        "silence_residual": 0.0,
+        "terminal_tail_value": 0.8333333333333334
+      },
+      "status": "frozen",
+      "unit": "ratio (0..1)"
+    },
+    "terminal_mel_persistence": {
+      "candidate_records": {
+        "M1_1024_256_80": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.0031817235430057897,
+              "rr_amp_p25": 0.015160865576722653,
+              "rr_amp_p50": 0.04543681549047376,
+              "rr_amp_p75": 0.15067059612106828,
+              "rr_amp_p95": 0.39390634244851175
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06926925120590831,
+            "monotone_span": 0.4365537296786416,
+            "monotone_values": [
+              0.03698044829991723,
+              0.10624969950582554,
+              0.28452651286350955,
+              0.4735341779785588
+            ],
+            "production_floor_value": 0.0807593494196531,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": -0.03532253392917934,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.04543681549047376
+          }
+        },
+        "M2_2048_512_80": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.013231311976463423,
+              "rr_amp_p25": 0.025228455819917773,
+              "rr_amp_p50": 0.055534357534649706,
+              "rr_amp_p75": 0.1608555585863828,
+              "rr_amp_p95": 0.4042748400310206
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.07401477640143023,
+            "monotone_span": 0.4426620527980744,
+            "monotone_values": [
+              0.041298740496769605,
+              0.11531351689819982,
+              0.29783245683060655,
+              0.48396079329484404
+            ],
+            "production_floor_value": 0.08577503332680932,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": -0.03024067579215961,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.055534357534649706
+          }
+        },
+        "M3_1024_128_128": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "production_range_resolution": false,
+            "reproducibility": true,
+            "zero_input_false_positive": true
+          },
+          "metrics": {
+            "amplitude_ladder_values": {
+              "rr_amp_p05": 0.006277712125327851,
+              "rr_amp_p25": 0.018318565996058696,
+              "rr_amp_p50": 0.048739066998202005,
+              "rr_amp_p75": 0.1544630245940528,
+              "rr_amp_p95": 0.398818149847992
+            },
+            "cross_process_error": 0.0,
+            "floor_non_saturation_ok": true,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.07148291615976587,
+            "monotone_span": 0.43975764533750394,
+            "monotone_values": [
+              0.03905334591863597,
+              0.11053626207840185,
+              0.2910844207145542,
+              0.4788109912561399
+            ],
+            "production_floor_value": 0.08558647715352119,
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "separation_from_floor": -0.036847410155319185,
+            "silence_residual": 0.0,
+            "terminal_tail_value": 0.048739066998202005
+          }
+        }
+      },
+      "candidate_survival": {
+        "M1_1024_256_80": false,
+        "M2_2048_512_80": false,
+        "M3_1024_128_128": false
+      },
+      "epsilon": null,
+      "epsilon_derivation": {
+        "reason": "axis_unavailable"
+      },
+      "failing_requirements": [
+        "production_range_resolution"
+      ],
+      "formula": "mean_mel_power(tail) / mean_mel_power(core),  core = [note_onset + 0.10 s, commanded_note_end - 0.05 s]",
+      "hard_requirement_checks": null,
+      "rank_order": [],
+      "selected_candidate": null,
+      "selection_metrics": null,
+      "status": "unavailable",
+      "unit": "ratio (>= 0)"
+    }
+  },
+  "boundaries": {
+    "commanded_note_end_s": 1.3467573696145123,
+    "note_onset_s": 0.09287981859410431,
+    "score_boundary_s": 1.3428798185941042,
+    "tail_window_ms": 300.0
+  },
+  "calibration_source": {
+    "manifest": "/home/user/s7work/out/b1_cal_1_2/s7_b1_real_render_manifest_1_2.json",
+    "name": "real_render_v1_2",
+    "roles": {
+      "cross_process_reproducibility": [
+        "rr_clean_terminal_ri",
+        "rr_long_tail_080",
+        "rr_amp_p50"
+      ],
+      "gain_invariance": [
+        [
+          "rr_gain_x100",
+          "rr_gain_x050"
+        ]
+      ],
+      "monotone_ladder": {
+        "axis_expectation": "increasing",
+        "note": "**尺**への応答を見る梯子。1.0 / 1.1 と同一（変えない）",
+        "order": [
+          "rr_long_tail_000",
+          "rr_long_tail_040",
+          "rr_long_tail_080",
+          "rr_long_tail_160"
+        ]
+      },
+      "numerical_stability": "all conditions",
+      "production_range_resolution": {
+        "changed_from_1_1": "1.1 は terminal_tail_response に rr_long_tail_160（比 0.689 = 本番 p95 相当）を使っていた。**本番中央値 0.207 相当の rr_amp_p50 に変える**。『大きい終端には応答する』ではなく『**本番並みの終端に応答する**』を要求する",
+        "production_floor": "rr_silence",
+        "terminal_tail_response": "rr_amp_p50"
+      },
+      "reproducibility": [
+        "rr_clean_terminal_ri",
+        "rr_clean_i",
+        "rr_clean_N",
+        "rr_long_tail_080",
+        "rr_amp_p50"
+      ],
+      "zero_input_false_positive": [
+        "rr_zero_buffer"
+      ]
+    },
+    "stimulus_ids": [
+      "rr_amp_p05",
+      "rr_amp_p25",
+      "rr_amp_p50",
+      "rr_amp_p75",
+      "rr_amp_p95",
+      "rr_clean_N",
+      "rr_clean_i",
+      "rr_clean_terminal_ri",
+      "rr_dur_perturb_r020",
+      "rr_dur_perturb_r035",
+      "rr_dur_perturb_r050",
+      "rr_gain_x050",
+      "rr_gain_x100",
+      "rr_long_tail_000",
+      "rr_long_tail_040",
+      "rr_long_tail_080",
+      "rr_long_tail_160",
+      "rr_silence",
+      "rr_zero_buffer"
+    ]
+  },
+  "freeze_status": "blocked",
+  "freeze_status_note": "7 要件を通過しない軸がある。**停止条件により 1.3 は作らない**。Gate 1 = UNDETERMINED で Run 8 を閉じ、別の観測設計として再事前登録する",
+  "generated_by": "voice_genesis/foundry/run8/s7_b1_v12.py",
+  "measured_on": "raw pre-normalisation waveform (DESIGN_S7_run8.md 5-2)",
+  "prereg_pins": {
+    "s7_b1_calibration_set_1_2.json": "cde9ee9b0788fe5a9c4a21dd44b1f152d54daf5907601d4f4eed6506bc67fa5c",
+    "s7_b1_candidate_space_1_2.json": "ee2dcb64d656f17da3bf6eda18d9f8b8a51a2930efe0f1f5a3c0cc3efdc7b7ca",
+    "s7_b1_real_render_manifest_1_2.json": "7c9cdbd15f48395e51ba76eb1eadfb34c1197b48fccfc1f8aca79d882b7230e9",
+    "s7_b1_selection_rule_1_2.json": "0d6f76752dbf26b3602e7ab63a8ce4369eb7318bcbf5626291174e71a8cd034d"
+  },
+  "reference_output": {
+    "excess_tail_voiced_ms": {
+      "rr_amp_p05": 240.0,
+      "rr_amp_p25": 240.0,
+      "rr_amp_p50": 250.0,
+      "rr_amp_p75": 260.0,
+      "rr_amp_p95": 260.0,
+      "rr_clean_N": 100.0,
+      "rr_clean_i": 90.0,
+      "rr_clean_terminal_ri": 90.0,
+      "rr_dur_perturb_r020": 90.0,
+      "rr_dur_perturb_r035": 90.0,
+      "rr_dur_perturb_r050": 90.0,
+      "rr_gain_x050": 120.0,
+      "rr_gain_x100": 120.0,
+      "rr_long_tail_000": 90.0,
+      "rr_long_tail_040": 120.0,
+      "rr_long_tail_080": 120.0,
+      "rr_long_tail_160": 260.0,
+      "rr_silence": 70.0,
+      "rr_zero_buffer": 0.0
+    },
+    "release_after_score_boundary_ms": {
+      "rr_amp_p05": 253.492063492,
+      "rr_amp_p25": 253.492063492,
+      "rr_amp_p50": 253.492063492,
+      "rr_amp_p75": 253.492063492,
+      "rr_amp_p95": 253.492063492,
+      "rr_clean_N": 93.854875283,
+      "rr_clean_i": 88.866213152,
+      "rr_clean_terminal_ri": 88.866213152,
+      "rr_dur_perturb_r020": 83.87755102,
+      "rr_dur_perturb_r035": 88.866213152,
+      "rr_dur_perturb_r050": 83.87755102,
+      "rr_gain_x050": 168.684807256,
+      "rr_gain_x100": 168.684807256,
+      "rr_long_tail_000": 88.866213152,
+      "rr_long_tail_040": 123.786848073,
+      "rr_long_tail_080": 168.684807256,
+      "rr_long_tail_160": 253.492063492,
+      "rr_silence": 73.900226757,
+      "rr_zero_buffer": 0.0
+    },
+    "tail_f0_persistence": {
+      "rr_amp_p05": 0.8,
+      "rr_amp_p25": 0.8,
+      "rr_amp_p50": 0.833333333,
+      "rr_amp_p75": 0.866666667,
+      "rr_amp_p95": 0.866666667,
+      "rr_clean_N": 0.333333333,
+      "rr_clean_i": 0.3,
+      "rr_clean_terminal_ri": 0.3,
+      "rr_dur_perturb_r020": 0.3,
+      "rr_dur_perturb_r035": 0.3,
+      "rr_dur_perturb_r050": 0.3,
+      "rr_gain_x050": 0.4,
+      "rr_gain_x100": 0.4,
+      "rr_long_tail_000": 0.3,
+      "rr_long_tail_040": 0.4,
+      "rr_long_tail_080": 0.4,
+      "rr_long_tail_160": 0.866666667,
+      "rr_silence": 0.233333333,
+      "rr_zero_buffer": 0.0
+    }
+  },
+  "sample_rate_hz": 44100,
+  "schema": "s7-trf-measurement-spec/1.0",
+  "series": "TRF measurement spec / 1.2",
+  "spec_version": "1.2-rc1",
+  "stop_condition": {
+    "authority": "User 裁定 2026-08-22",
+    "on_fail": "1.2 でも飽和・縮退 → **Gate 1 = UNDETERMINED で Run 8 を閉じる**。その場合は『voicing detector の改良』を続けず、**別の観測設計**（HNR / vowel drift / mel persistence 等）として再事前登録する",
+    "on_pass": "production_range_resolution が成立 → Gate 1 を再判定する",
+    "rule": "**1.2 で打ち切る**。1.3 / 1.4 と増殖させない"
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "schema": "s7-b1-selection-rule/0.1",
+  "frozen_at": "2026-08-21",
+  "authority": "DESIGN_S7_run8.md 12-0-A-3 (AUC maximisation is forbidden) / 12-0-C (epsilon comes from measurement-side properties only)",
+  "prohibition": {
+    "rule": "Separation performance between break/ok labels must never enter candidate selection. B-1 receives no label input at all.",
+    "machine_check": "s7_b1_calibration.py::select_candidates accepts calibration measurements only; the harness asserts that no listening label / production cell is reachable from its inputs."
+  },
+  "hard_requirements": [
+    {
+      "id": "reproducibility",
+      "definition": "Two in-process repeats of the same stimulus under the same candidate produce identical values.",
+      "tolerance": {
+        "all_axes": 0.0
+      }
+    },
+    {
+      "id": "gain_invariance",
+      "definition": "|value(gain_x100) - value(gain_x050)| for the same material at 1.0 and 0.5 linear gain (-6.02 dB).",
+      "tolerance": {
+        "ms_axes": "1 hop duration (hop_ms)",
+        "ratio_axes": 0.02
+      }
+    },
+    {
+      "id": "zero_input_false_positive",
+      "definition": "|value(zero_buffer)|, where zero_buffer is a synthetic waveform whose samples are bit-exact 0.0, at the same sample rate and length as the other stimuli of the same calibration source. It measures whether the DETECTOR reports voicing / tail energy when nothing at all is present at its input.",
+      "tolerance": {
+        "ms_axes": 0.0,
+        "ratio_axes": 0.01
+      },
+      "renamed_from": "silence_zero",
+      "why_renamed": "The old id was operationalised on the real-render source as rr_silence (an SP-only render), which is NOT a zero input: the DiffSinger inference path gives SP frames a non-zero predicted F0, the NSF source is excited by it, and the vocoder emits a tonal waveform. A detector false positive and a pipeline-generated signal must not be conflated."
+    },
+    {
+      "id": "monotone_response",
+      "definition": "Values along the forced_long_tail ladder (0/40/80/160 ms) must be non-decreasing (each step >= -reproducibility_bound) and the total span (last - first) must reach the minimum below.",
+      "tolerance": {
+        "ms_axes_min_span": 80.0,
+        "ratio_axes_min_span": 0.05
+      }
+    },
+    {
+      "id": "cross_process_reproducibility",
+      "definition": "Values recomputed in an independent OS process are identical.",
+      "tolerance": {
+        "all_axes": 0.0
+      }
+    },
+    {
+      "id": "numerical_stability",
+      "definition": "Every measured value is finite (no NaN / inf) on every calibration stimulus.",
+      "tolerance": {
+        "all_axes": "finite"
+      }
+    }
+  ],
+  "fail_closed": "If no candidate for an axis satisfies every hard requirement, that axis is frozen as UNAVAILABLE with the failing requirement recorded. Requirements are never loosened to obtain a survivor.",
+  "ranking_among_survivors": {
+    "kind": "lexicographic, first key decides",
+    "keys": [
+      {
+        "key": "gain_invariance_error",
+        "order": "asc"
+      },
+      {
+        "key": "silence_residual",
+        "order": "asc"
+      },
+      {
+        "key": "monotone_min_step",
+        "order": "desc",
+        "why": "response margin to a controlled PHYSICAL perturbation, not to labels"
+      },
+      {
+        "key": "hop_ms",
+        "order": "asc",
+        "why": "finer frame grid = lower quantisation floor"
+      },
+      {
+        "key": "window_ms",
+        "order": "asc"
+      },
+      {
+        "key": "candidate_id",
+        "order": "asc",
+        "why": "deterministic final tie-break"
+      }
+    ],
+    "numeric_precision": {
+      "rule": "Round every numeric ranking key to 9 decimal places before comparing; equal rounded values fall through to the next key.",
+      "why": "Without it, ties are decided by float noise at the 1e-16 level, which is not a physical property and is not stable across BLAS / numpy builds."
+    }
+  },
+  "amendments": [
+    {
+      "date": "2026-08-21",
+      "pr": "PR-1 (run 8 implementation)",
+      "what": "Added ranking_among_survivors.numeric_precision (round to 9 decimals before comparing keys).",
+      "observed": "The first B-1 run showed monotone_min_step values tying at 0.13333333333333341 / ...36 / ...30 for tail_f0_persistence, i.e. the winner was selected by a 5e-17 difference.",
+      "chosen_from": "the magnitude of float noise, not from any candidate's outcome",
+      "winners_before_amendment": {
+        "excess_tail_voiced_ms": "B_rms_autocorr_gate|win100|hop5",
+        "release_after_score_boundary_ms": "B_rms_autocorr_gate|win300|hop10",
+        "tail_f0_persistence": "B_rms_autocorr_gate|win300|hop10",
+        "terminal_mel_persistence": "M1_1024_256_80"
+      },
+      "not_changed": "No candidate, stimulus, hard requirement, tolerance or ranking key was added, removed or reordered."
+    },
+    {
+      "date": "2026-08-21",
+      "pr": "STEP 6 amendment (User 裁定 2026-08-21 / (A) 採用)",
+      "what": "Renamed hard requirement silence_zero -> zero_input_false_positive and redefined its stimulus as a synthetic bit-exact zero buffer. Tolerances are unchanged (ms_axes 0.0 / ratio_axes 0.01).",
+      "why": "旧刺激が要求の意味を実装していなかった。要求の意味は「測定器が無入力に対して 0 を返すか」であり、SP-only real render は無入力ではない（下記 observed）。",
+      "reason_is_not": "候補の成績ではない。どの候補が通るかを理由にしていない。1.0-rc2 の実測は歴史的成果物として保存し、書き換えていない。",
+      "observed_on_rr_silence": {
+        "core_rms": 0.0015257425500787394,
+        "tail_window_rms": 0.0004570510279140234,
+        "tail_window_dominant_hz": 256.6666666666667,
+        "commanded_pitch_midi": 60.0,
+        "commanded_pitch_hz": 261.6255653005986,
+        "note": "SP しか命令していないのに命令音高の調波が出る。経路 = SP -> duration -> pitch predictor が SP フレームにも非ゼロ F0 -> acoustic -> NSF source -> vocoder。"
+      },
+      "rr_silence_demoted_to": "diagnostic observation (pipeline_silence_residual). pass/fail に使わない",
+      "not_changed": "候補空間 / window / hop / mel 設定 / ranking_among_survivors（キー名 silence_residual を含め byte 単位で不変）/ 他 5 要件と全許容値 / 校正条件 11 + 派生 2 のいずれも変更しない。",
+      "production_cells_seen": 0,
+      "pinned_before_remeasurement": true,
+      "requires": "この amendment を単独 commit/pin した後に、全候補を最初から再測定する"
+    }
+  ],
+  "epsilon_derivation_for_b2": {
+    "formula": "epsilon_axis = max(numerical_floor_axis, reproducibility_bound_axis)",
+    "numerical_floor": {
+      "ms_axes": "hop duration in ms of the selected candidate",
+      "ratio_axes": "1 / (number of analysis frames inside the tail window)"
+    },
+    "reproducibility_bound": "max |delta| over in-process repeats and independent-process repeats of the selected candidate across every calibration stimulus",
+    "prohibition": "Production labels (\"ritsu is bad\", \"pjs is good\") must not be consulted when setting epsilon."
+  }
+}

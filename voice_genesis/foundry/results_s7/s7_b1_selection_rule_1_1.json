@@ -1,0 +1,100 @@
+{
+  "schema": "s7-b1-selection-rule/0.1",
+  "series": "TRF measurement spec / 1.1",
+  "frozen_at": "2026-08-21",
+  "authority": "User 裁定 2026-08-21（Option C。従来 6 要件 + production_range_resolution を新設）",
+  "prohibition": {
+    "rule": "Separation performance between break/ok labels must never enter candidate selection. B-1 receives no label input at all.",
+    "machine_check": "tests/test_s7_b1_calibration.py の入力口検査（読む実ファイルは事前登録 + 校正音源 manifest + その manifest が列挙する WAV だけ）"
+  },
+  "hard_requirements": [
+    {
+      "id": "reproducibility",
+      "definition": "max |delta| over in-process repeats of the same stimulus.",
+      "tolerance": {"all_axes": 0.0}
+    },
+    {
+      "id": "gain_invariance",
+      "definition": "|value(gain_x100) - value(gain_x050)| for the same material at 1.0 and 0.5 linear gain (-6.02 dB).",
+      "tolerance": {"ms_axes": "1 hop duration (hop_ms)", "ratio_axes": 0.02}
+    },
+    {
+      "id": "zero_input_false_positive",
+      "definition": "|value(zero_buffer)|, where zero_buffer is a synthetic waveform whose samples are bit-exact 0.0.",
+      "tolerance": {"ms_axes": 0.0, "ratio_axes": 0.01}
+    },
+    {
+      "id": "monotone_response",
+      "definition": "Values along the forced_long_tail ladder (0/40/80/160 ms) must be non-decreasing (each step >= -reproducibility_bound) and the total span (last - first) must reach the minimum below.",
+      "tolerance": {"ms_axes_min_span": 80.0, "ratio_axes_min_span": 0.05}
+    },
+    {
+      "id": "cross_process_reproducibility",
+      "definition": "max |delta| over independent-process repeats of the same stimulus.",
+      "tolerance": {"all_axes": 0.0}
+    },
+    {
+      "id": "numerical_stability",
+      "definition": "All measured values are finite.",
+      "tolerance": {"all_axes": "finite"}
+    },
+    {
+      "id": "production_range_resolution",
+      "new_in": "1.1",
+      "why": "1.0 は校正では 4 軸とも 6 要件を通過したのに、本番 360 セルでは主観測 3 軸が飽和・縮退した。『校正で弁別できたこと』と『本番で分解能があること』が別であることが実測で分かれたので、後者を要件として明文化する",
+      "definition": "SP 上の低エネルギー pitch excitation を全て voiced として飽和させず、同時に実際の terminal voiced tail には応答すること。2 つの部分から成る",
+      "parts": {
+        "floor_non_saturation": {
+          "stimulus": "production_floor = rr_silence（SP のみの実レンダ = 経路床。無音ではない）",
+          "condition": "|value(production_floor)| <= tolerance",
+          "tolerance": {"ms_axes": 75.0, "ratio_axes": 0.25},
+          "tolerance_origin": "ms 側は終端窓 300 ms の 1/4、比側は 0.25。いずれも先験的に置いた分数であり、刺激の実測値から決めていない（1.1 の検出器は本文書の pin 時点でまだ実装されておらず、その値は存在しない）",
+          "applies_to": ["excess_tail_voiced_ms", "release_after_score_boundary_ms", "tail_f0_persistence"],
+          "exempt": ["terminal_mel_persistence"],
+          "exempt_reason": "mel 軸はノート核で正規化された比であり、核が有声でない床刺激に対しては『天井』が well-posed でない。よって床側の上限は課さず、下記 separation のみを課す"
+        },
+        "separation_from_floor": {
+          "condition": "value(terminal_tail_response) - value(production_floor) >= min_separation",
+          "terminal_tail_response": "rr_long_tail_160（終端に 160 ms の有声継続を注入した梯子の最上段）",
+          "min_separation": {"ms_axes": 80.0, "ratio_axes": 0.05},
+          "min_separation_origin": "既に凍結済みの monotone_response の最小 span と**同一の数値**を使う（新しい閾値を発明しない）",
+          "applies_to": ["excess_tail_voiced_ms", "release_after_score_boundary_ms", "tail_f0_persistence", "terminal_mel_persistence"]
+        }
+      }
+    }
+  ],
+  "fail_closed": "If no candidate for an axis satisfies every hard requirement, that axis is frozen as UNAVAILABLE with the failing requirement recorded. Requirements are never loosened to obtain a survivor.",
+  "ranking_among_survivors": {
+    "kind": "lexicographic, first key decides",
+    "keys": [
+      {"key": "gain_invariance_error", "order": "asc"},
+      {"key": "silence_residual", "order": "asc"},
+      {"key": "monotone_min_step", "order": "desc", "why": "response margin to a controlled PHYSICAL perturbation, not to labels"},
+      {"key": "hop_ms", "order": "asc", "why": "finer frame grid = lower quantisation floor"},
+      {"key": "window_ms", "order": "asc"},
+      {"key": "candidate_id", "order": "asc", "why": "deterministic final tie-break"}
+    ],
+    "numeric_precision": {
+      "rule": "Round every numeric ranking key to 9 decimal places before comparing; equal rounded values fall through to the next key.",
+      "why": "Without it, ties are decided by float noise at the 1e-16 level."
+    },
+    "unchanged_from_1_0": "順位付けキーは 1.0 と同一（キー名 silence_residual を含め変更しない）。1.1 で変わるのは候補空間と要件の数だけである"
+  },
+  "epsilon_derivation_for_b2": {
+    "formula": "epsilon_axis = max(numerical_floor_axis, reproducibility_bound_axis)",
+    "numerical_floor": {
+      "ms_axes": "hop duration in ms of the selected candidate",
+      "ratio_axes": "1 / (number of analysis frames inside the tail window)"
+    },
+    "reproducibility_bound": "max |delta| over in-process and independent-process repeats across every calibration stimulus",
+    "prohibition": "ε を 1.0 より縮めない。ε は測定側の性質からのみ導出し、本番ラベルを参照しない"
+  },
+  "prohibitions": [
+    "現 360 セルに合うよう閾値を後付けする",
+    "terminal_mel_persistence 1 本だけで Gate を強行する",
+    "MAD = 0 だった軸を primary へ戻す",
+    "ε を縮める",
+    "ringing 規則だけ変更して Gate を再実行する",
+    "1.0 の reference_output を書き換える"
+  ]
+}

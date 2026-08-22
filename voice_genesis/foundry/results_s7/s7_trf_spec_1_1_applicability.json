@@ -1,0 +1,66 @@
+{
+  "schema": "s7-trf-spec-applicability/0.1",
+  "authority": "User 裁定 2026-08-22（(A)+(B) 併用 / 1.2 で打ち切り）",
+  "applies_to": {
+    "path": "voice_genesis/foundry/results_s7/trf_measurement_spec_1_1.json",
+    "sha256": "68e0a21dab734d0170af1f40798e2e2cc90441462f482308667de0c86b7f832a",
+    "spec_version": "1.1",
+    "freeze_status": "frozen"
+  },
+  "why_a_sidecar": "凍結成果物は書き換えない。追加記録は外側に置き sha256 で結ぶ（1.0 と同じ扱い）",
+  "calibration_applicability": "ESTABLISHED（7 要件を 4 軸とも通過）",
+  "production_applicability": "NOT_ESTABLISHED / DEGENERATE（**床側**）",
+  "solved_by_1_1": {
+    "ringing_reference": "10/10 群で再取得可能（1.0 では 0/10）。§5-0 の意味論改訂は不要",
+    "groups_with_obtainable_reference": 10
+  },
+  "not_solved_by_1_1": {
+    "degenerate_axis_groups": {
+      "excess_tail_voiced_ms": 8,
+      "release_after_score_boundary_ms": 8,
+      "tail_f0_persistence": 8,
+      "terminal_mel_persistence": 0
+    },
+    "zero_valued_cells_of_360": {
+      "excess_tail_voiced_ms": 246,
+      "release_after_score_boundary_ms": 240,
+      "tail_f0_persistence": 240,
+      "terminal_mel_persistence": 0
+    },
+    "note": "1.0 は天井（全部 voiced）、1.1 は床（66–68% が 0）。飽和の向きが変わっただけ"
+  },
+  "root_cause_measured": {
+    "quantity": "終端窓 RMS / ノート核 RMS（同一レンダ内の比。線形 gain 不変）",
+    "production_final_cells": {
+      "n": 320,
+      "p05": 0.016,
+      "p25": 0.111,
+      "p50": 0.207,
+      "p75": 0.386,
+      "p95": 0.628
+    },
+    "calibration": {
+      "rr_clean_terminal_ri": 0.206,
+      "rr_long_tail_000": 0.222,
+      "rr_silence": 0.319,
+      "rr_long_tail_040": 0.351,
+      "rr_long_tail_080": 0.536,
+      "rr_long_tail_160": 0.689
+    },
+    "inversion": "経路床 0.319 > 本番中央値 0.207 かつ > 正常終端 /ri/ 0.206。順序が逆転している",
+    "consequence": "床を落とす τ > 0.319 は本番の 84%（270/320）を無声にする。τ を下げれば床が通り 1.0 の天井へ戻る。相対エネルギー 1 次元に逃げ場が無い",
+    "why_calibration_passed": "梯子 080/160 の比 0.536/0.689 は本番 p75–p95 相当の大振幅で、本番の終端破綻（減衰しながら残る）とは振幅の質が違う"
+  },
+  "consequences": [
+    "fresh confirmation set をこのまま作らない（同じ理由で Gate 1 が裁定不能になるだけ）",
+    "production_range_resolution 要件自体は妥当。妥当でなかったのは相対エネルギー 1 次元の候補空間"
+  ],
+  "record": "voice_genesis/foundry/results_s7/s7_relative_energy_finding.md",
+  "status_ruling": {
+    "frozen": "frozen のまま保存する。凍結値は変更しない",
+    "production_voicing_detector": "NOT_ESTABLISHED",
+    "sanctioned_operational_use": "**ringing 基準の判定専用**として利用可（§5-0 の無声検査）。本番 10 群すべてで基準セルが 2 件以上取得でき、leave-one-out が成立する",
+    "achievement_recorded": "ringing 判定 10/10 群成立（1.0 は 0/10）",
+    "not_sanctioned": "production voicing detector としての使用（Gate の primary 軸を駆動しない）"
+  }
+}

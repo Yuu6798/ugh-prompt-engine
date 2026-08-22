@@ -1,0 +1,157 @@
+{
+  "schema": "s7-gate1-human-verification-prereg/0.1",
+  "frozen_at": "2026-08-22",
+  "authority": "User 裁定 2026-08-22（(α) 採用。1.2 は BLOCKED のまま凍結）",
+  "order_discipline": "本文書を pin してから耳ラベルを取る。取得後に閾値・窓・対象群を変更しない",
+  "instrument": {
+    "spec": {
+      "path": "trf_measurement_spec_1_2.json",
+      "sha256": "1f7ff569b4ae27043a822e688c8e5fe621f2ebd666e54cd99e53599c4f38ea5b",
+      "spec_version": "1.2-rc1",
+      "freeze_status": "blocked",
+      "note": "**BLOCKED のまま凍結する。PASS へ書き換えない**"
+    },
+    "voicing_axes_used": {
+      "excess_tail_voiced_ms": {
+        "selected_candidate": "S_melshape_core_distance|thr0.2|win100|hop10",
+        "epsilon": 10.0
+      },
+      "release_after_score_boundary_ms": {
+        "selected_candidate": "S_melshape_core_distance|thr0.2|win100|hop5",
+        "epsilon": 5.0
+      },
+      "tail_f0_persistence": {
+        "selected_candidate": "S_melshape_core_distance|thr0.2|win100|hop10",
+        "epsilon": 0.03333333333333333
+      }
+    },
+    "retuning": "禁止。閾値 thr=0.2 / 窓 win=100 以外へ動かさない",
+    "terminal_mel_persistence": {
+      "status": "UNAVAILABLE（この観測設計では構成妥当性を失っている）",
+      "reason": "終端/核のパワー比 = 相対エネルギー量であり、床 0.319 > 本番中央値 0.207 の逆転を相続する",
+      "use": "参考値として記録する。**合否には使わない**"
+    }
+  },
+  "gate_scope": {
+    "rule": "§5-0 の群規則に従い ringing 補正が成立する群のみ",
+    "eligible_groups": [
+      "run5/pjs",
+      "run5/user",
+      "run6/pjs",
+      "run6/user",
+      "run7/amitaro",
+      "run7/pjs",
+      "run7/user"
+    ],
+    "excluded_groups": [
+      "run5/ritsu",
+      "run6/ritsu",
+      "run7/ritsu"
+    ],
+    "excluded_reason": "無声基準セルが 2 件未満で leave-one-out が成立しない",
+    "degenerate_note": "§7-0 (0): MAD = 0 の軸はその (話者 × 世代) で degenerate_axis とし当該群を外す"
+  },
+  "aggregation_rule": {
+    "why_frozen_now": "User 裁定「voicing 3 軸の集約規則と不一致時の扱いを先に凍結」",
+    "step_1": "3 軸すべてについて Gate 1–4 を独立に計算し、全て記録する",
+    "step_2": "primary = §7-0 (3) の規則（校正分割での margin argmax・辞書順タイブレーク）",
+    "step_3": "合否判定は primary 軸で行う（設計どおり）",
+    "disagreement": {
+      "all_agree": "3 軸の Gate 判定が一致 → その判定を採る（status = consistent）",
+      "primary_pass_others_fail": "primary が pass でも他 2 軸のいずれかが同じ Gate で fail → status = axis_disagreement。**Gate 1 を PASS にしない**（UNDETERMINED）",
+      "primary_fail": "primary が fail → その帰結に従う（PASS にしない）",
+      "why": "裁定「耳ラベルと voicing 3 軸が整合 → 最終判定 / 整合しない → UNDETERMINED」の直訳"
+    }
+  },
+  "listening_protocol": {
+    "set": {
+      "path": "s7_listening_set.json",
+      "sha256": "00d15a48585be78e91423956aba682aec0eabf11adf7a777985d12e9290ce784",
+      "n_unique": 40,
+      "n_duplicate": 8
+    },
+    "blind": "モデル名・話者・世代を伏せる。伏せないのは expected_terminal と position",
+    "order": "ランダム順。重複であることを被験者に知らせない",
+    "post_label_changes": "禁止（閾値・窓・対象群・集合のいずれも変更しない）"
+  },
+  "preflight": {
+    "purpose": "耳ラベルが付く前に決まる充足条件を、聴取の労力を払う前に検算する",
+    "requirements_checked": [
+      "§7-0 (4b) 校正 scored >= 12",
+      "§7-0 (4b) hold-out scored >= 12",
+      "§7-0 (7) user run5↔run7 対応 >= 5",
+      "§7-0b 条件 1 陽性対照の所在"
+    ],
+    "per_axis": {
+      "excess_tail_voiced_ms": {
+        "usable_groups": [
+          "run5/pjs",
+          "run5/user",
+          "run6/user",
+          "run7/amitaro",
+          "run7/pjs",
+          "run7/user"
+        ],
+        "n_usable_groups": 6,
+        "calibration_scored": 10,
+        "holdout_scored": 14,
+        "gate3_user_pairs": 5,
+        "positive_control_available": false,
+        "blockers": [
+          "calibration_scored=10 < 12（§7-0 (4b)）",
+          "positive_control_absent（§7-0b 条件 1 が評価不能）"
+        ],
+        "evaluable": false
+      },
+      "release_after_score_boundary_ms": {
+        "usable_groups": [
+          "run5/pjs",
+          "run5/user",
+          "run6/user",
+          "run7/amitaro",
+          "run7/pjs",
+          "run7/user"
+        ],
+        "n_usable_groups": 6,
+        "calibration_scored": 10,
+        "holdout_scored": 14,
+        "gate3_user_pairs": 5,
+        "positive_control_available": false,
+        "blockers": [
+          "calibration_scored=10 < 12（§7-0 (4b)）",
+          "positive_control_absent（§7-0b 条件 1 が評価不能）"
+        ],
+        "evaluable": false
+      },
+      "tail_f0_persistence": {
+        "usable_groups": [
+          "run5/pjs",
+          "run5/user",
+          "run6/user",
+          "run7/amitaro",
+          "run7/pjs",
+          "run7/user"
+        ],
+        "n_usable_groups": 6,
+        "calibration_scored": 10,
+        "holdout_scored": 14,
+        "gate3_user_pairs": 5,
+        "positive_control_available": false,
+        "blockers": [
+          "calibration_scored=10 < 12（§7-0 (4b)）",
+          "positive_control_absent（§7-0b 条件 1 が評価不能）"
+        ],
+        "evaluable": false
+      }
+    },
+    "any_axis_evaluable": false,
+    "verdict_if_not_evaluable": "裁定の停止条件「判定材料不足 → Gate 1 = UNDETERMINED → Run 8 終了」に該当する。**耳ラベルを取っても Gate 1 は最終判定できない**",
+    "prohibited_workaround": "§7-0 (4b):「不足が起きても耳ラベルの対象セルを事後に足して埋めない」。足すなら memo 改訂として層化設計をやり直す（別裁定）"
+  },
+  "stop_condition": {
+    "authority": "User 裁定 2026-08-22",
+    "consistent": "耳ラベルと voicing 3 軸が整合 → Gate 1 を最終判定して Run 8 終了",
+    "inconsistent_or_insufficient": "整合しない / 判定材料不足 → Gate 1 = UNDETERMINED → Run 8 終了",
+    "no_1_3": "1.3 は作らない。HNR / vowel drift 等は Run 8 の継続版ではなく別の観測研究として扱う"
+  }
+}

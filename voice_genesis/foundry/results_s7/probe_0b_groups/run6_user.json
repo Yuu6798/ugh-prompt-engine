@@ -1,0 +1,2863 @@
+{
+  "schema": "s7-0b-probe-group-result/0.1",
+  "generation": "run6",
+  "speaker": "user",
+  "n_cells": 36,
+  "n_rendered": 36,
+  "n_dropped": 0,
+  "ringing": {
+    "group_status": "ringing_uncorrected_group",
+    "unvoiced_reference_pool": [
+      "P-ANCHOR|umi|final"
+    ],
+    "in_gate": false
+  },
+  "measurement_spec": {
+    "sha256": "e1ed1a89fffe059a70bfd367fc797e51aadaafcc7694f62ef38662d1b6565a68",
+    "spec_version": "1.0",
+    "selected_candidates": {
+      "excess_tail_voiced_ms": "A_pyin_voiced_flag|win100|hop10",
+      "release_after_score_boundary_ms": "A_pyin_voiced_flag|win100|hop10",
+      "tail_f0_persistence": "A_pyin_voiced_flag|win100|hop10",
+      "terminal_mel_persistence": "M2_2048_512_80"
+    },
+    "epsilon": {
+      "excess_tail_voiced_ms": 10.0,
+      "release_after_score_boundary_ms": 10.0,
+      "tail_f0_persistence": 0.03333333333333333,
+      "terminal_mel_persistence": 0.03869992441421013
+    },
+    "axes_without_machine_measure": [
+      "intelligibility_loss"
+    ]
+  },
+  "probe_spec_sha256": "c4856fde84c8e46edfbfc1232fef288559595207ea4f088016375c9c39404639",
+  "model_sha256": {
+    "canon_linguistic_onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+    "canon_variance_dur_onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+    "canon_variance_pitch_onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+    "acoustic_onnx": "cdbd779c686504cd1277bf74036e5fb334e4fcdc88ab7612f435ced7c1d6687b",
+    "vocoder_onnx": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+    "acoustic_dsconfig_yaml": "78db9e9224829a17e366d23a7ebbc664c93f1f8cec01e0f96f52e37b4e58dc57"
+  },
+  "aux_sha256": {
+    "canon_phonemes_txt": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
+    "acoustic_phonemes_json": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+    "speaker_embed": "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0",
+    "gate_synth_py": "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894",
+    "s7_trf_py": "a128510ced6aa21007a2623804e9a89eea87a1a85a888abc0026fad3c00bafed",
+    "s7_0b_probe_py": "aa0d7ff412c8276c1d7d2aef5d9a5000b70dfcdbdea6a9ed1bc5b8ff2af41128"
+  },
+  "out_dir": "/home/user/s7work/out/probe_0b/run6_user",
+  "cells": [
+    {
+      "cell_id": "P-RI-FINAL|low|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "pitch_key": "low",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.6132798194885254,
+      "wav": "P-RI-FINAL_low_b1.wav",
+      "wav_sha256": "939722bd8e50a64d5ff44828ec1ee16d7245714961606eddc6465600372b2482",
+      "samples_sha256": "0da3b3495ecd096210eca3dab2bcee7bf64f0379cc6b1d9fa1a0d5ba47aaa194",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.07140135020017624,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          4,
+          68
+        ],
+        "real_phones": [
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.0005084144463589537
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 4,
+        "i_frames": 68,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.32099829280378,
+        "hnr_median_db_p2": 7.4366409791981924,
+        "hnr_delta_db": 0.11564268639441266,
+        "vowel_drift_l1": 93.04235109415922,
+        "i_reference_distance": 46.07357075551281,
+        "N_reference_distance": 166.5748482938262,
+        "N_similarity_delta": -120.50127753831339
+      },
+      "waveform": {
+        "energy_decay_slope": -117.69950975711255
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": -0.0011265276086370353
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-FINAL|low|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "pitch_key": "low",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.666261434555054,
+      "wav": "P-RI-FINAL_low_b2.wav",
+      "wav_sha256": "43fa9d734c1a157897cafa1e41fde7993984555edb26a22a1933a373aea38ad7",
+      "samples_sha256": "7e9039eace0b0dc08e1d488889ac627b452c395709e1d3b8b0e4d9c2ca8a07f8",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.07741715759038925,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          34,
+          110
+        ],
+        "real_phones": [
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.0003666566112556352
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 34,
+        "i_frames": 110,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.447633921752823,
+        "hnr_median_db_p2": 7.366623552602377,
+        "hnr_delta_db": -0.08101036915044624,
+        "vowel_drift_l1": 83.78394859366948,
+        "i_reference_distance": 20.684745462225365,
+        "N_reference_distance": 187.43041963942417,
+        "N_similarity_delta": -166.7456741771988
+      },
+      "waveform": {
+        "energy_decay_slope": -119.87969260105221
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": -0.0012682854437403538
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-FINAL|low|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "pitch_key": "low",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.7520647048950195,
+      "wav": "P-RI-FINAL_low_b4.wav",
+      "wav_sha256": "0d442ec7069ac4507ee0d511e8a06c2eda8b2bb9612758211584194be729da2d",
+      "samples_sha256": "16e6f3be5d3ca22cf32dd754e48797569b8fd0ae666e0c59504a45b5cd1d994f",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.11567241698503494,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          136,
+          151
+        ],
+        "real_phones": [
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.00026305346046593726
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 136,
+        "i_frames": 151,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.408770863535573,
+        "hnr_median_db_p2": 7.36187961567817,
+        "hnr_delta_db": -0.046891247857403506,
+        "vowel_drift_l1": 66.19680846214294,
+        "i_reference_distance": 31.39274713718423,
+        "N_reference_distance": 184.86729826047724,
+        "N_similarity_delta": -153.474551123293
+      },
+      "waveform": {
+        "energy_decay_slope": -126.35384023912798
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": -0.0013718885945300519
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-FINAL|mid|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.1557862758636475,
+      "wav": "P-RI-FINAL_mid_b1.wav",
+      "wav_sha256": "17fae0021451bdd8e438c3e990691ed7930e13e480f663bd0bd19aaebde36ba3",
+      "samples_sha256": "8f96ed5523c0685cff3df0333d4f67d7c548f14cb9f3acaa443198dc072e05f4",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.05978906899690628,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          4,
+          68
+        ],
+        "real_phones": [
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256232,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": 0.00024893362434419506
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 4,
+        "i_frames": 68,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.704328064966147,
+        "hnr_median_db_p2": 8.820858497588759,
+        "hnr_delta_db": 0.11653043262261242,
+        "vowel_drift_l1": 77.95355474948883,
+        "i_reference_distance": 22.366444381250844,
+        "N_reference_distance": 174.29875136674315,
+        "N_similarity_delta": -151.9323069854923
+      },
+      "waveform": {
+        "energy_decay_slope": -55.06778177981256
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256232,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": -0.001386008430651794
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-FINAL|mid|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.480860471725464,
+      "wav": "P-RI-FINAL_mid_b2.wav",
+      "wav_sha256": "7856c53abf93a6f489637b3a5022cf6f8b27ed510ad488210a7f3861982b0304",
+      "samples_sha256": "aa6a19207147f00e8404600e1f38d001b1e0e2ed05de5b617df2d20d871568de",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.040371526032686234,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          31,
+          113
+        ],
+        "real_phones": [
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 80.0,
+        "release_after_score_boundary_ms": 80.45351473922912,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": 0.0006786026827806056
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 31,
+        "i_frames": 113,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.799352615103231,
+        "hnr_median_db_p2": 8.781831545640127,
+        "hnr_delta_db": -0.017521069463104055,
+        "vowel_drift_l1": 170.75650088851518,
+        "i_reference_distance": 21.748253283793467,
+        "N_reference_distance": 185.52852191841396,
+        "N_similarity_delta": -163.78026863462048
+      },
+      "waveform": {
+        "energy_decay_slope": -75.93863437586117
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 80.0,
+        "release_after_score_boundary_ms": 80.45351473922912,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": -0.0009563393722153834
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-FINAL|mid|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.486858367919922,
+      "wav": "P-RI-FINAL_mid_b4.wav",
+      "wav_sha256": "e9b71b40f7a6bfe8f678b18acfebf129a7dfd8b42f4d2e3f37b30a298075f0be",
+      "samples_sha256": "9a4a8f8672a82cab3c9c2726a7de1662fe48f58ae1f9766d83a9e24e4448c5e6",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.06846968084573746,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          136,
+          151
+        ],
+        "real_phones": [
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.0003416437891894111
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 136,
+        "i_frames": 151,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.810613902481908,
+        "hnr_median_db_p2": 8.754403150120666,
+        "hnr_delta_db": -0.056210752361241845,
+        "vowel_drift_l1": 83.37220989227293,
+        "i_reference_distance": 21.63461101639504,
+        "N_reference_distance": 163.2050279808395,
+        "N_similarity_delta": -141.57041696444446
+      },
+      "waveform": {
+        "energy_decay_slope": -78.20655781887167
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": -0.001293298265806578
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-FINAL|high|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "pitch_key": "high",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.028745174407959,
+      "wav": "P-RI-FINAL_high_b1.wav",
+      "wav_sha256": "07315bf17f5bba0e5513ed5fe360a071bdd1e46f6812a99ba06b3fc27ef86005",
+      "samples_sha256": "9278c00faa647bbd8e02e320a79ec54cd212b7b1ea90b0b1bd538ceedf68f703",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.04906778782606125,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          4,
+          68
+        ],
+        "real_phones": [
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256232,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": 0.00013665296954299075
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 4,
+        "i_frames": 68,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 9.490767282611728,
+        "hnr_median_db_p2": 9.634990225562918,
+        "hnr_delta_db": 0.1442229429511901,
+        "vowel_drift_l1": 79.32262926751918,
+        "i_reference_distance": 23.79245672709699,
+        "N_reference_distance": 149.29022923327875,
+        "N_similarity_delta": -125.49777250618176
+      },
+      "waveform": {
+        "energy_decay_slope": -14.493043030418823
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256232,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": -0.0014982890854529983
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-FINAL|high|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "pitch_key": "high",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.52077317237854,
+      "wav": "P-RI-FINAL_high_b2.wav",
+      "wav_sha256": "0886b553877cc2d7f29e9e59cc32c3bad2d9fcfb290232d6c650dfac7ccf6d79",
+      "samples_sha256": "63e2ef5c5212b5eb2f7008999851c04b28d4e1e8172de758f3ddc79def77d0e5",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.029765041545033455,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          29,
+          115
+        ],
+        "real_phones": [
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 80.0,
+        "release_after_score_boundary_ms": 80.45351473922912,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": 0.000761821267422677
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 29,
+        "i_frames": 115,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 9.552726690216472,
+        "hnr_median_db_p2": 9.592144294231042,
+        "hnr_delta_db": 0.03941760401457017,
+        "vowel_drift_l1": 163.8974822257694,
+        "i_reference_distance": 24.397709274139157,
+        "N_reference_distance": 186.91211001116494,
+        "N_similarity_delta": -162.5144007370258
+      },
+      "waveform": {
+        "energy_decay_slope": -31.84897477238181
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 80.0,
+        "release_after_score_boundary_ms": 80.45351473922912,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": -0.000873120787573312
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-FINAL|high|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "pitch_key": "high",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.607524394989014,
+      "wav": "P-RI-FINAL_high_b4.wav",
+      "wav_sha256": "d7ee3429b647da40d2d3250cea0353bece09ae45ced1be9862f9f455db1e1402",
+      "samples_sha256": "d1074b25885d28ef6731ae22e878100a1d5a50c41ce43e60fdc86bc2cff77941",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.033867236226797104,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          136,
+          151
+        ],
+        "real_phones": [
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.00045349470856267254
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 136,
+        "i_frames": 151,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 9.636924456205847,
+        "hnr_median_db_p2": 9.655624671449514,
+        "hnr_delta_db": 0.018700215243667273,
+        "vowel_drift_l1": 170.14590128421787,
+        "i_reference_distance": 22.54057896853078,
+        "N_reference_distance": 186.21485595974852,
+        "N_similarity_delta": -163.67427699121774
+      },
+      "waveform": {
+        "energy_decay_slope": -43.223245337763366
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": -0.0011814473464333165
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-I-FINAL|low|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "pitch_key": "low",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "i",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.070120334625244,
+      "wav": "P-I-FINAL_low_b1.wav",
+      "wav_sha256": "5c2c340933034ef4d8a60b8b2661f30151ae62e8b9c95db47920120f045c493c",
+      "samples_sha256": "c948ebf1a6854b5349bb4d213e0bd971dd5b09de881b1a8c688b5bed03b43eb2",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.09166174381971359,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          72
+        ],
+        "real_phones": [
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 80.0,
+        "release_after_score_boundary_ms": 73.78684807256231,
+        "tail_f0_persistence": 0.8,
+        "terminal_mel_persistence": 4.816893703839885e-05
+      },
+      "tail_voiced_frames": 8,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 72,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.1800559439146925,
+        "hnr_median_db_p2": 7.426299958648248,
+        "hnr_delta_db": 0.24624401473355562,
+        "vowel_drift_l1": 65.59271728992462,
+        "i_reference_distance": 0.0,
+        "N_reference_distance": 172.11324506998062,
+        "N_similarity_delta": -172.11324506998062
+      },
+      "waveform": {
+        "energy_decay_slope": -30.99982754496133
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 80.0,
+        "release_after_score_boundary_ms": 73.78684807256231,
+        "tail_f0_persistence": 0.8,
+        "terminal_mel_persistence": -0.0015867731179575902
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-I-FINAL|low|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "pitch_key": "low",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "i",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.504685163497925,
+      "wav": "P-I-FINAL_low_b2.wav",
+      "wav_sha256": "5453975a9d19d591fd53e800e665fdd39ba9d453bfc720f075bdc03f4a0dc6fa",
+      "samples_sha256": "f89f3da252124ee8b5cdb9ae6e5912e8f6555304df48c62662ecf704c9553ce2",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.12246835231781006,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          144
+        ],
+        "real_phones": [
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 30.0,
+        "release_after_score_boundary_ms": 30.45351473922908,
+        "tail_f0_persistence": 0.4,
+        "terminal_mel_persistence": 1.351196606334927e-05
+      },
+      "tail_voiced_frames": 4,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 144,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.426861196236913,
+        "hnr_median_db_p2": 7.400679051800317,
+        "hnr_delta_db": -0.0261821444365955,
+        "vowel_drift_l1": 88.3525056739648,
+        "i_reference_distance": 0.0,
+        "N_reference_distance": 177.45130651692546,
+        "N_similarity_delta": -177.45130651692546
+      },
+      "waveform": {
+        "energy_decay_slope": -0.00886639340536747
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 30.0,
+        "release_after_score_boundary_ms": 30.45351473922908,
+        "tail_f0_persistence": 0.4,
+        "terminal_mel_persistence": -0.0016214300889326398
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-I-FINAL|low|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "pitch_key": "low",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "i",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.5084757804870605,
+      "wav": "P-I-FINAL_low_b4.wav",
+      "wav_sha256": "9b946dc612fe51b659da06aecb9436c528e3a07724045650d34bb1d1c4663337",
+      "samples_sha256": "fce9114b0fac6e8bb359b5fad693fa334589e76e7f71acdbed743cd5d1e25540",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.13888902962207794,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          287
+        ],
+        "real_phones": [
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 30.0,
+        "release_after_score_boundary_ms": 23.78684807256226,
+        "tail_f0_persistence": 0.3333333333333333,
+        "terminal_mel_persistence": 1.5311886308865987e-05
+      },
+      "tail_voiced_frames": 3,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 287,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.333794552942413,
+        "hnr_median_db_p2": 7.33495961974892,
+        "hnr_delta_db": 0.0011650668065072978,
+        "vowel_drift_l1": 76.4313240101463,
+        "i_reference_distance": 0.0,
+        "N_reference_distance": 183.21000490834314,
+        "N_similarity_delta": -183.21000490834314
+      },
+      "waveform": {
+        "energy_decay_slope": 0.8060200180724549
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 30.0,
+        "release_after_score_boundary_ms": 23.78684807256226,
+        "tail_f0_persistence": 0.3333333333333333,
+        "terminal_mel_persistence": -0.001619630168687123
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-I-FINAL|mid|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "i",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.1440460681915283,
+      "wav": "P-I-FINAL_mid_b1.wav",
+      "wav_sha256": "0975be8100f56e9934f9a2a4a4653b99b32c7bf9decf3ee58ab385213deeaea7",
+      "samples_sha256": "70e5eda025db82093d3a3f7a61beaa49823db1b64ddca6c34c45604fb2ea8f4e",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.07940021902322769,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          72
+        ],
+        "real_phones": [
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 60.0,
+        "release_after_score_boundary_ms": 53.786848072562286,
+        "tail_f0_persistence": 0.6,
+        "terminal_mel_persistence": 2.2274487702685776e-05
+      },
+      "tail_voiced_frames": 6,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 72,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.616702416319928,
+        "hnr_median_db_p2": 8.785929763710692,
+        "hnr_delta_db": 0.1692273473907644,
+        "vowel_drift_l1": 63.69053400556247,
+        "i_reference_distance": 0.0,
+        "N_reference_distance": 172.1400885283947,
+        "N_similarity_delta": -172.1400885283947
+      },
+      "waveform": {
+        "energy_decay_slope": -3.6345905209535743
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 60.0,
+        "release_after_score_boundary_ms": 53.786848072562286,
+        "tail_f0_persistence": 0.6,
+        "terminal_mel_persistence": -0.0016126675672933032
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-I-FINAL|mid|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "i",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.5783164501190186,
+      "wav": "P-I-FINAL_mid_b2.wav",
+      "wav_sha256": "3953686ec1900b39c1a0e861c5f29ba3d68bb5c82dfb2a31c4ee6e127b631b07",
+      "samples_sha256": "4e2a96164efb867e5fbd06a19d9fd6c55eac60086cf5d146b578f2699eef20e8",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.0721852108836174,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          144
+        ],
+        "real_phones": [
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 20.0,
+        "release_after_score_boundary_ms": 20.45351473922907,
+        "tail_f0_persistence": 0.3,
+        "terminal_mel_persistence": 2.861565793679888e-05
+      },
+      "tail_voiced_frames": 3,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 144,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.800860190508963,
+        "hnr_median_db_p2": 8.809096964436874,
+        "hnr_delta_db": 0.008236773927910335,
+        "vowel_drift_l1": 99.84040260314941,
+        "i_reference_distance": 0.0,
+        "N_reference_distance": 177.93325021862984,
+        "N_similarity_delta": -177.93325021862984
+      },
+      "waveform": {
+        "energy_decay_slope": 0.289402959335543
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 20.0,
+        "release_after_score_boundary_ms": 20.45351473922907,
+        "tail_f0_persistence": 0.3,
+        "terminal_mel_persistence": -0.0016063263970591901
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-I-FINAL|mid|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "i",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.576000452041626,
+      "wav": "P-I-FINAL_mid_b4.wav",
+      "wav_sha256": "cb9552e5933d4a76553308a4b9375b9fc0039ed122b08409e31c73a7d073f6a6",
+      "samples_sha256": "8dadb294cddafeea2f8f289d7b0bdea0436bb3d34f48a0ce3119bad0744f947b",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.1277359426021576,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          287
+        ],
+        "real_phones": [
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 20.0,
+        "release_after_score_boundary_ms": 13.78684807256203,
+        "tail_f0_persistence": 0.2222222222222222,
+        "terminal_mel_persistence": 1.4208427193829724e-05
+      },
+      "tail_voiced_frames": 2,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 287,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.76976576281628,
+        "hnr_median_db_p2": 8.74679829955793,
+        "hnr_delta_db": -0.022967463258350307,
+        "vowel_drift_l1": 74.71804771172373,
+        "i_reference_distance": 0.0,
+        "N_reference_distance": 152.56634422640005,
+        "N_similarity_delta": -152.56634422640005
+      },
+      "waveform": {
+        "energy_decay_slope": 0.8200831929563694
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 20.0,
+        "release_after_score_boundary_ms": 13.78684807256203,
+        "tail_f0_persistence": 0.2222222222222222,
+        "terminal_mel_persistence": -0.0016207336278021593
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-I-FINAL|high|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "pitch_key": "high",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "i",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.0766842365264893,
+      "wav": "P-I-FINAL_high_b1.wav",
+      "wav_sha256": "6fc4cf43d04d6e69e2cff1598e5a3acc755130c7d42c52b721c2f25c9955b5ce",
+      "samples_sha256": "11487408ab9eaaefeb41bfc60f50e6ea95797e33e0c833a4a6c89391484c68c3",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.07220420986413956,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          72
+        ],
+        "real_phones": [
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 40.0,
+        "release_after_score_boundary_ms": 33.78684807256227,
+        "tail_f0_persistence": 0.4,
+        "terminal_mel_persistence": 3.015277856516069e-05
+      },
+      "tail_voiced_frames": 4,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 72,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 9.418810766560608,
+        "hnr_median_db_p2": 9.625129887901206,
+        "hnr_delta_db": 0.2063191213405986,
+        "vowel_drift_l1": 59.409528195858,
+        "i_reference_distance": 0.0,
+        "N_reference_distance": 150.91411006450653,
+        "N_similarity_delta": -150.91411006450653
+      },
+      "waveform": {
+        "energy_decay_slope": -0.4669034349944887
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 40.0,
+        "release_after_score_boundary_ms": 33.78684807256227,
+        "tail_f0_persistence": 0.4,
+        "terminal_mel_persistence": -0.0016047892764308282
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-I-FINAL|high|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "pitch_key": "high",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "i",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.477487802505493,
+      "wav": "P-I-FINAL_high_b2.wav",
+      "wav_sha256": "7e9aad8c8de9d190225f0cfb34c432cbfe4720abe72e8b059a9bbcb44322c397",
+      "samples_sha256": "562cedef312252e04b71443ffd87a5f7ca4934b843faee4a011b5db71ea4ec6b",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.05013169348239899,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          144
+        ],
+        "real_phones": [
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 40.0,
+        "release_after_score_boundary_ms": 40.45351473922909,
+        "tail_f0_persistence": 0.5,
+        "terminal_mel_persistence": 5.023316202571967e-05
+      },
+      "tail_voiced_frames": 5,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 144,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 9.604277738680738,
+        "hnr_median_db_p2": 9.57949432278796,
+        "hnr_delta_db": -0.024783415892777327,
+        "vowel_drift_l1": 103.9467499256134,
+        "i_reference_distance": 0.0,
+        "N_reference_distance": 177.61437664926052,
+        "N_similarity_delta": -177.61437664926052
+      },
+      "waveform": {
+        "energy_decay_slope": 0.17469307532579606
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 40.0,
+        "release_after_score_boundary_ms": 40.45351473922909,
+        "tail_f0_persistence": 0.5,
+        "terminal_mel_persistence": -0.0015847088929702693
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-I-FINAL|high|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "pitch_key": "high",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "i",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.460007190704346,
+      "wav": "P-I-FINAL_high_b4.wav",
+      "wav_sha256": "9ec70eb31f29a150acc0a4f50adc3cfba8580348c1a17aab3fb5c204f93d54f4",
+      "samples_sha256": "e7dc424f556778b85848491fd89695b9550c71ce5db7b2d8de1a9a638fd4c48e",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.11245440691709518,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          287
+        ],
+        "real_phones": [
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 30.0,
+        "release_after_score_boundary_ms": 23.78684807256226,
+        "tail_f0_persistence": 0.3333333333333333,
+        "terminal_mel_persistence": 2.2428763750568654e-05
+      },
+      "tail_voiced_frames": 3,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 287,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 9.593360992477033,
+        "hnr_median_db_p2": 9.555839998792194,
+        "hnr_delta_db": -0.03752099368483819,
+        "vowel_drift_l1": 72.14424146100093,
+        "i_reference_distance": 0.0,
+        "N_reference_distance": 179.15100910266239,
+        "N_similarity_delta": -179.15100910266239
+      },
+      "waveform": {
+        "energy_decay_slope": 1.0240747871454015
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 30.0,
+        "release_after_score_boundary_ms": 23.78684807256226,
+        "tail_f0_persistence": 0.3333333333333333,
+        "terminal_mel_persistence": -0.0016125132912454205
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-N-FINAL|low|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "pitch_key": "low",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "N",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.0934035778045654,
+      "wav": "P-N-FINAL_low_b1.wav",
+      "wav_sha256": "0e61c615985d750bf13878ad32bdc0ed2f4a254c5dcfdab80aac468ff306dcf3",
+      "samples_sha256": "c12539ffc4dc0262edd39d1fb54b90903491f957c34f2edc50de916e3b5d448f",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.022688068449497223,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          72
+        ],
+        "real_phones": [
+          "N"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.0826289481459228
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 72,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.263517031770254,
+        "hnr_median_db_p2": 7.314548868457753,
+        "hnr_delta_db": 0.05103183668749889,
+        "vowel_drift_l1": 73.53894579410553,
+        "i_reference_distance": 172.11324506998062,
+        "N_reference_distance": 0.0,
+        "N_similarity_delta": 172.11324506998062
+      },
+      "waveform": {
+        "energy_decay_slope": -333.7906522635714
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.0809940060909268
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-N-FINAL|low|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "pitch_key": "low",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "N",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.630047559738159,
+      "wav": "P-N-FINAL_low_b2.wav",
+      "wav_sha256": "87eff37efbc87abc698563c7e5ecc9cbece3adaec08f58d95688f437e0c10aa1",
+      "samples_sha256": "13f25e0c193a1d84a550b71cc523323993387c93aa393744e8267228e6dbc16f",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.10733044892549515,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          144
+        ],
+        "real_phones": [
+          "N"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.00622457957929545
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 144,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.31980140319113,
+        "hnr_median_db_p2": 7.220690958269358,
+        "hnr_delta_db": -0.0991104449217719,
+        "vowel_drift_l1": 84.54895333945753,
+        "i_reference_distance": 177.45130651692546,
+        "N_reference_distance": 0.0,
+        "N_similarity_delta": 177.45130651692546
+      },
+      "waveform": {
+        "energy_decay_slope": -294.00021318172867
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.004589637524299461
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-N-FINAL|low|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "pitch_key": "low",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "N",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.434408903121948,
+      "wav": "P-N-FINAL_low_b4.wav",
+      "wav_sha256": "ca668daa58c0ec84937aa6a5940bceaaa081a8f8a5c92354447150d3821aeb49",
+      "samples_sha256": "57b5e503377bca614d77be2385f8e60694d8c62158f290dea1c578847aa61348",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.046644728630781174,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          287
+        ],
+        "real_phones": [
+          "N"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.009730600231814353
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 287,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.269510674204499,
+        "hnr_median_db_p2": 7.236506948977588,
+        "hnr_delta_db": -0.03300372522691042,
+        "vowel_drift_l1": 52.372409120358924,
+        "i_reference_distance": 183.21000490834314,
+        "N_reference_distance": 0.0,
+        "N_similarity_delta": 183.21000490834314
+      },
+      "waveform": {
+        "energy_decay_slope": -230.98288226900434
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.008095658176818364
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-N-FINAL|mid|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "N",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.1019186973571777,
+      "wav": "P-N-FINAL_mid_b1.wav",
+      "wav_sha256": "546d2baf27d1b2588d48539a80a65ac855d80fc14f4101eef7f414a0c4ecd56f",
+      "samples_sha256": "88cf97ae454e45c81ca2bc657e97dd468bf813511dd10204a277394b4412a23a",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.012401985004544258,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          72
+        ],
+        "real_phones": [
+          "N"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.25727922311776497
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 72,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.179330682590036,
+        "hnr_median_db_p2": 8.44061987185366,
+        "hnr_delta_db": 0.2612891892636231,
+        "vowel_drift_l1": 115.60979328552882,
+        "i_reference_distance": 172.1400885283947,
+        "N_reference_distance": 0.0,
+        "N_similarity_delta": 172.1400885283947
+      },
+      "waveform": {
+        "energy_decay_slope": -228.25624793652847
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.255644281062769
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-N-FINAL|mid|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "N",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.608576774597168,
+      "wav": "P-N-FINAL_mid_b2.wav",
+      "wav_sha256": "32e5fc12da7e2f6e7604de74e28acd277a0bcaee0cf395707fdb279102fb619b",
+      "samples_sha256": "537b6ccd274c0e7860373e4dc2215a26fbc5bf061600560d816645dd799e5e91",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.02363930270075798,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          144
+        ],
+        "real_phones": [
+          "N"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.03076076088332567
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 144,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.691486436997877,
+        "hnr_median_db_p2": 8.643026753014041,
+        "hnr_delta_db": -0.048459683983836044,
+        "vowel_drift_l1": 57.68862661719322,
+        "i_reference_distance": 177.93325021862984,
+        "N_reference_distance": 0.0,
+        "N_similarity_delta": 177.93325021862984
+      },
+      "waveform": {
+        "energy_decay_slope": -191.48446725026952
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.02912581882832968
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-N-FINAL|mid|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "N",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.625872611999512,
+      "wav": "P-N-FINAL_mid_b4.wav",
+      "wav_sha256": "155dfc4ba92510fc0b5aa3d0e9b118992cfd37a799119a6f50e72f366d115aea",
+      "samples_sha256": "7eddd72cf266de34634a4c4b140a66fb8ce34a4e5ae98538fec391c36c21e778",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.032191891223192215,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          287
+        ],
+        "real_phones": [
+          "N"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.002003090989031107
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 287,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.64725704175462,
+        "hnr_median_db_p2": 8.573285137656697,
+        "hnr_delta_db": -0.07397190409792387,
+        "vowel_drift_l1": 46.84748177528382,
+        "i_reference_distance": 152.56634422640005,
+        "N_reference_distance": 0.0,
+        "N_similarity_delta": 152.56634422640005
+      },
+      "waveform": {
+        "energy_decay_slope": -79.66148455461395
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.0003681489340351179
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-N-FINAL|high|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "pitch_key": "high",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "N",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.028550148010254,
+      "wav": "P-N-FINAL_high_b1.wav",
+      "wav_sha256": "05ae3c70e729c3574caf0e91780a6009420204cf403b968fa9020f8eb3aba676",
+      "samples_sha256": "1470b3a2eed8a9f97dfaef251286cf5829808614cedb31a1172d4026b040cb5a",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.08414871245622635,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          72
+        ],
+        "real_phones": [
+          "N"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 4.3397075098837676e-05
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 72,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 9.397983691578679,
+        "hnr_median_db_p2": 9.678393291237239,
+        "hnr_delta_db": 0.2804095996585598,
+        "vowel_drift_l1": 66.29603641231854,
+        "i_reference_distance": 150.91411006450653,
+        "N_reference_distance": 0.0,
+        "N_similarity_delta": 150.91411006450653
+      },
+      "waveform": {
+        "energy_decay_slope": -12.060685394306462
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": -0.0015915449798971513
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-N-FINAL|high|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "pitch_key": "high",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "N",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.580724000930786,
+      "wav": "P-N-FINAL_high_b2.wav",
+      "wav_sha256": "b6eb89b4b02788dbc0539af5e8548dd5954ff86b7ffa7eeff985907119f9b38a",
+      "samples_sha256": "bfb4ae6357c367d194739c03d30bd276404e80cfe51de7d901c3a0c2edf6d8b0",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.08561651408672333,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          144
+        ],
+        "real_phones": [
+          "N"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.00014299204989566555
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 144,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 9.68189315678184,
+        "hnr_median_db_p2": 9.400955868627271,
+        "hnr_delta_db": -0.2809372881545684,
+        "vowel_drift_l1": 88.53671177724998,
+        "i_reference_distance": 177.61437664926052,
+        "N_reference_distance": 0.0,
+        "N_similarity_delta": 177.61437664926052
+      },
+      "waveform": {
+        "energy_decay_slope": -45.54587407350803
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": -0.0014919500051003235
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-N-FINAL|high|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "pitch_key": "high",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "N",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.597602844238281,
+      "wav": "P-N-FINAL_high_b4.wav",
+      "wav_sha256": "b87259853ea9ef542692788b3636abf14c304c1eb650d991ccb961932d5d7207",
+      "samples_sha256": "d3a7daf1904e26147eeb5846552254fa34257ccb4610be5ed5da549b4f172146",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.08190219849348068,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          287
+        ],
+        "real_phones": [
+          "N"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 3.9368539437111665e-05
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 0,
+        "i_frames": 287,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 9.605771126569739,
+        "hnr_median_db_p2": 9.49489281751599,
+        "hnr_delta_db": -0.11087830905374929,
+        "vowel_drift_l1": 130.459492050974,
+        "i_reference_distance": 179.15100910266239,
+        "N_reference_distance": 0.0,
+        "N_similarity_delta": 179.15100910266239
+      },
+      "waveform": {
+        "energy_decay_slope": -7.55419372865287
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": -0.0015955735155588774
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-MEDIAL|mid|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-MEDIAL",
+      "pitch_key": "mid",
+      "duration_key": "b1",
+      "position": "medial",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.495883941650391,
+      "wav": "P-RI-MEDIAL_mid_b1.wav",
+      "wav_sha256": "621fec312ba9e7006425d79f9f9ebdf5aa81b3ddafc224343e0a3a86a6220eb6",
+      "samples_sha256": "2e906eebf23ce85e8c8e48eb2abe7d85f215c3b55c4e2948aed37328aed559d5",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.03677066043019295,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72,
+          72
+        ],
+        "final_phone_dur": [
+          3,
+          69,
+          20,
+          52
+        ],
+        "real_phones": [
+          "r",
+          "i",
+          "k",
+          "a"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 300.0,
+        "release_after_score_boundary_ms": 293.7868480725623,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 1.5005939266899646
+      },
+      "tail_voiced_frames": 30,
+      "duration": {
+        "r_frames": 3,
+        "i_frames": 69,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.832468532146018,
+        "hnr_median_db_p2": 8.510565118338665,
+        "hnr_delta_db": -0.32190341380735354,
+        "vowel_drift_l1": 201.41961945658147,
+        "i_reference_distance": 132.3216186079426,
+        "N_reference_distance": 112.3845053734123,
+        "N_similarity_delta": 19.937113234530315
+      },
+      "waveform": {
+        "energy_decay_slope": -75.40942168574935
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 300.0,
+        "release_after_score_boundary_ms": 293.7868480725623,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 1.4989589846349687
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-MEDIAL|mid|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-MEDIAL",
+      "pitch_key": "mid",
+      "duration_key": "b2",
+      "position": "medial",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 6.071542739868164,
+      "wav": "P-RI-MEDIAL_mid_b2.wav",
+      "wav_sha256": "b1630a5a01fba48c6681f0a9bdb760d0bece78c4de946fae2c757bc496f08b13",
+      "samples_sha256": "e946fbf5f0c1f242c7cf0ee5ed8132e2dfd2ed8178b5d63b77ebf6d85e7e92ef",
+      "n_samples": 118784,
+      "duration_s": 2.693514739229025,
+      "peak_raw": 0.05116036906838417,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144,
+          72
+        ],
+        "final_phone_dur": [
+          12,
+          132,
+          17,
+          55
+        ],
+        "real_phones": [
+          "r",
+          "i",
+          "k",
+          "a"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 270.0,
+        "release_after_score_boundary_ms": 290.45351473922886,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": 0.021428018184919316
+      },
+      "tail_voiced_frames": 27,
+      "duration": {
+        "r_frames": 12,
+        "i_frames": 132,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.692204946250648,
+        "hnr_median_db_p2": 8.796811835686993,
+        "hnr_delta_db": 0.10460688943634544,
+        "vowel_drift_l1": 183.83662563562393,
+        "i_reference_distance": 85.80574846990181,
+        "N_reference_distance": 124.4663482741876,
+        "N_similarity_delta": -38.66059980428578
+      },
+      "waveform": {
+        "energy_decay_slope": 88.70192925757094
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 270.0,
+        "release_after_score_boundary_ms": 290.45351473922886,
+        "tail_f0_persistence": 0.9,
+        "terminal_mel_persistence": 0.01979307612992333
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-RI-MEDIAL|mid|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-MEDIAL",
+      "pitch_key": "mid",
+      "duration_key": "b4",
+      "position": "medial",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "render_elapsed_sec": 9.412878036499023,
+      "wav": "P-RI-MEDIAL_mid_b4.wav",
+      "wav_sha256": "fb7ccb83b925453d85f9f6f7f285e1edb94938e93024218af6b58704af2f73ad",
+      "samples_sha256": "8d8f79da4768a2242c4a49328b61872182539f49502cb4ba57a2f98024d60085",
+      "n_samples": 192000,
+      "duration_s": 4.35374149659864,
+      "peak_raw": 0.06279445439577103,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287,
+          72
+        ],
+        "final_phone_dur": [
+          200,
+          87,
+          21,
+          51
+        ],
+        "real_phones": [
+          "r",
+          "i",
+          "k",
+          "a"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 260.0,
+        "release_after_score_boundary_ms": 293.7868480725623,
+        "tail_f0_persistence": 0.8666666666666667,
+        "terminal_mel_persistence": 0.0038511210940860396
+      },
+      "tail_voiced_frames": 26,
+      "duration": {
+        "r_frames": 200,
+        "i_frames": 87,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.676547722789145,
+        "hnr_median_db_p2": 8.594264891370669,
+        "hnr_delta_db": -0.08228283141847648,
+        "vowel_drift_l1": 232.18651021760087,
+        "i_reference_distance": 167.13579387979945,
+        "N_reference_distance": 93.45234861747288,
+        "N_similarity_delta": 73.68344526232657
+      },
+      "waveform": {
+        "energy_decay_slope": 58.59465466789962
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 260.0,
+        "release_after_score_boundary_ms": 293.7868480725623,
+        "tail_f0_persistence": 0.8666666666666667,
+        "terminal_mel_persistence": 0.0022161790390900506
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-SU-FINAL|mid|b1",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-SU-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b1",
+      "position": "final",
+      "expected_terminal": "su",
+      "outcome": "rendered",
+      "render_elapsed_sec": 3.090675115585327,
+      "wav": "P-SU-FINAL_mid_b1.wav",
+      "wav_sha256": "aaeff72dd0282c4d5e9c2b338914ee11881396ca2e5c3cb9f013c6eebee7256d",
+      "samples_sha256": "9198a97c1d205c0ab379676247298b3dcb9bfa14ccd06a07b9ac9f7168ae1310",
+      "n_samples": 45056,
+      "duration_s": 1.0216780045351475,
+      "peak_raw": 0.017442377284169197,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 72,
+        "note_target_frames": [
+          72
+        ],
+        "final_phone_dur": [
+          35,
+          37
+        ],
+        "real_phones": [
+          "s",
+          "u"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 0.9287981859410431,
+        "score_boundary_s": 0.9262131519274377,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.09104210669725003
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 35,
+        "i_frames": 37,
+        "target_note_frames": 72,
+        "duration_overshoot_ms": 2.585034013605436
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.891597585842488,
+        "hnr_median_db_p2": 8.674208771612168,
+        "hnr_delta_db": -0.2173888142303202,
+        "vowel_drift_l1": 57.735572715600334,
+        "i_reference_distance": 178.31727217252438,
+        "N_reference_distance": 109.58742856138792,
+        "N_similarity_delta": 68.72984361113646
+      },
+      "waveform": {
+        "energy_decay_slope": -304.2733047617366
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 100.0,
+        "release_after_score_boundary_ms": 93.78684807256232,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.08940716464225404
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-SU-FINAL|mid|b2",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-SU-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b2",
+      "position": "final",
+      "expected_terminal": "su",
+      "outcome": "rendered",
+      "render_elapsed_sec": 4.510097980499268,
+      "wav": "P-SU-FINAL_mid_b2.wav",
+      "wav_sha256": "14b52ed1f1f7bfad1b27e001d7eed069fd984a772b7c415d0ecc8a5e41287f67",
+      "samples_sha256": "1d081ed280323fcecc83a7efe0891ea7031b691778535aadbe3bd2df668dd729",
+      "n_samples": 81920,
+      "duration_s": 1.8575963718820863,
+      "peak_raw": 0.03183554485440254,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          144
+        ],
+        "final_phone_dur": [
+          68,
+          76
+        ],
+        "real_phones": [
+          "s",
+          "u"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 1.7647165532879818,
+        "score_boundary_s": 1.759546485260771,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.07102237558406606
+      },
+      "tail_voiced_frames": 10,
+      "duration": {
+        "r_frames": 68,
+        "i_frames": 76,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.170068027210872
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.703048054440622,
+        "hnr_median_db_p2": 8.800270289804306,
+        "hnr_delta_db": 0.09722223536368446,
+        "vowel_drift_l1": 78.50963656425475,
+        "i_reference_distance": 177.69406187457915,
+        "N_reference_distance": 108.56348930413907,
+        "N_similarity_delta": 69.13057257044008
+      },
+      "waveform": {
+        "energy_decay_slope": -352.2966177716406
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 90.45351473922913,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.06938743352907006
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-SU-FINAL|mid|b4",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-SU-FINAL",
+      "pitch_key": "mid",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "su",
+      "outcome": "rendered",
+      "render_elapsed_sec": 7.507277727127075,
+      "wav": "P-SU-FINAL_mid_b4.wav",
+      "wav_sha256": "8a54460af0d9e1fe2bd1fecfd24ad29d3dde3e90d833aa13e3ba0f0a7d08835a",
+      "samples_sha256": "9a787eb5431339818b1aae3c09b30fcd6dff25e545387781814a37181b47d147",
+      "n_samples": 155136,
+      "duration_s": 3.517823129251701,
+      "peak_raw": 0.03949106112122536,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          287
+        ],
+        "final_phone_dur": [
+          138,
+          149
+        ],
+        "real_phones": [
+          "s",
+          "u"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 0.09287981859410431,
+        "commanded_note_end_s": 3.4249433106575964,
+        "score_boundary_s": 3.426213151927438,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.016569747367673963
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 138,
+        "i_frames": 149,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698415318
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.762057356303707,
+        "hnr_median_db_p2": 8.776401862066075,
+        "hnr_delta_db": 0.014344505762368343,
+        "vowel_drift_l1": 66.48068307370555,
+        "i_reference_distance": 179.69216227034727,
+        "N_reference_distance": 160.51728538393976,
+        "N_similarity_delta": 19.174876886407503
+      },
+      "waveform": {
+        "energy_decay_slope": -266.17121201171466
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 83.78684807256187,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.014934805312677974
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-ANCHOR|sakura|kagiri",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-ANCHOR",
+      "pitch_key": "low",
+      "duration_key": "b4",
+      "position": "final",
+      "expected_terminal": "ri",
+      "outcome": "rendered",
+      "song": "sakura",
+      "render_elapsed_sec": 50.840224504470825,
+      "wav": "anchor_sakura.wav",
+      "wav_sha256": "131cf2cb415216acd1cd21aca07a4bd689cad4f9df62482cc0b1c8dce23f1058",
+      "samples_sha256": "1e12d7f49e224f329dc2f71a7486a3b2e4297a34e98feab2af3e29ea58ca3150",
+      "n_samples": 1039872,
+      "duration_s": 23.579863945578232,
+      "peak_raw": 0.12162726372480392,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 287,
+        "note_target_frames": [
+          72,
+          72,
+          144,
+          72,
+          72,
+          144,
+          72,
+          72,
+          72,
+          144,
+          72,
+          72,
+          144,
+          72,
+          72,
+          72,
+          144,
+          72,
+          72,
+          287
+        ],
+        "final_phone_dur": [
+          20,
+          52,
+          11,
+          61,
+          21,
+          123,
+          14,
+          58,
+          10,
+          62,
+          16,
+          128,
+          8,
+          64,
+          10,
+          62,
+          72,
+          26,
+          118,
+          12,
+          60,
+          5,
+          67,
+          49,
+          95,
+          7,
+          65,
+          8,
+          64,
+          10,
+          62,
+          76,
+          68,
+          9,
+          63,
+          8,
+          64,
+          138,
+          149
+        ],
+        "real_phones": [
+          "s",
+          "a",
+          "k",
+          "u",
+          "r",
+          "a",
+          "s",
+          "a",
+          "k",
+          "u",
+          "r",
+          "a",
+          "y",
+          "a",
+          "y",
+          "o",
+          "i",
+          "n",
+          "o",
+          "s",
+          "o",
+          "r",
+          "a",
+          "h",
+          "a",
+          "m",
+          "i",
+          "w",
+          "a",
+          "t",
+          "a",
+          "s",
+          "u",
+          "k",
+          "a",
+          "g",
+          "i",
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 20.154920634920636,
+        "commanded_note_end_s": 23.486984126984126,
+        "score_boundary_s": 23.488253968253968,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 81.74603174603234,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.0005274479350174583
+      },
+      "tail_voiced_frames": 9,
+      "duration": {
+        "r_frames": 138,
+        "i_frames": 149,
+        "target_note_frames": 287,
+        "duration_overshoot_ms": -1.2698412698419759
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 7.305624274654126,
+        "hnr_median_db_p2": 7.431897932085391,
+        "hnr_delta_db": 0.12627365743126528,
+        "vowel_drift_l1": 51.184970349681635,
+        "i_reference_distance": 31.781304643154137,
+        "N_reference_distance": 194.74605214069285,
+        "N_similarity_delta": -162.96474749753872
+      },
+      "waveform": {
+        "energy_decay_slope": -184.37299851247062
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 90.0,
+        "release_after_score_boundary_ms": 81.74603174603234,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": -0.0011074941199785307
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-ANCHOR|sakura|miwatasu",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-ANCHOR",
+      "pitch_key": "mid",
+      "duration_key": "b2",
+      "position": "medial",
+      "expected_terminal": "su",
+      "outcome": "rendered",
+      "song": "sakura",
+      "render_elapsed_sec": 50.840224504470825,
+      "wav": "anchor_sakura.wav",
+      "wav_sha256": "131cf2cb415216acd1cd21aca07a4bd689cad4f9df62482cc0b1c8dce23f1058",
+      "samples_sha256": "1e12d7f49e224f329dc2f71a7486a3b2e4297a34e98feab2af3e29ea58ca3150",
+      "n_samples": 1039872,
+      "duration_s": 23.579863945578232,
+      "peak_raw": 0.12162726372480392,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 144,
+        "note_target_frames": [
+          72,
+          72,
+          144,
+          72,
+          72,
+          144,
+          72,
+          72,
+          72,
+          144,
+          72,
+          72,
+          144,
+          72,
+          72,
+          72,
+          144,
+          72,
+          72,
+          287
+        ],
+        "final_phone_dur": [
+          20,
+          52,
+          11,
+          61,
+          21,
+          123,
+          14,
+          58,
+          10,
+          62,
+          16,
+          128,
+          8,
+          64,
+          10,
+          62,
+          72,
+          26,
+          118,
+          12,
+          60,
+          5,
+          67,
+          49,
+          95,
+          7,
+          65,
+          8,
+          64,
+          10,
+          62,
+          76,
+          68,
+          9,
+          63,
+          8,
+          64,
+          138,
+          149
+        ],
+        "real_phones": [
+          "s",
+          "a",
+          "k",
+          "u",
+          "r",
+          "a",
+          "s",
+          "a",
+          "k",
+          "u",
+          "r",
+          "a",
+          "y",
+          "a",
+          "y",
+          "o",
+          "i",
+          "n",
+          "o",
+          "s",
+          "o",
+          "r",
+          "a",
+          "h",
+          "a",
+          "m",
+          "i",
+          "w",
+          "a",
+          "t",
+          "a",
+          "s",
+          "u",
+          "k",
+          "a",
+          "g",
+          "i",
+          "r",
+          "i"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 16.81124716553288,
+        "commanded_note_end_s": 18.483083900226756,
+        "score_boundary_s": 18.477913832199548,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 300.0,
+        "release_after_score_boundary_ms": 292.086167800452,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.1252761137938109
+      },
+      "tail_voiced_frames": 30,
+      "duration": {
+        "r_frames": 76,
+        "i_frames": 68,
+        "target_note_frames": 144,
+        "duration_overshoot_ms": 5.17006802720843
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.719426916742476,
+        "hnr_median_db_p2": 5.871270901424255,
+        "hnr_delta_db": -2.848156015318221,
+        "vowel_drift_l1": 150.12212492119184,
+        "i_reference_distance": 150.54370550098625,
+        "N_reference_distance": 118.83949570897697,
+        "N_similarity_delta": 31.70420979200928
+      },
+      "waveform": {
+        "energy_decay_slope": 70.0245326220193
+      },
+      "primary_corrected": {
+        "excess_tail_voiced_ms": 300.0,
+        "release_after_score_boundary_ms": 292.086167800452,
+        "tail_f0_persistence": 1.0,
+        "terminal_mel_persistence": 0.1236411717388149
+      },
+      "ringing_reference_n": 1,
+      "status": "ok"
+    },
+    {
+      "cell_id": "P-ANCHOR|umi|final",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-ANCHOR",
+      "pitch_key": "mid",
+      "duration_key": "b3",
+      "position": "final",
+      "expected_terminal": "a",
+      "outcome": "rendered",
+      "song": "umi",
+      "render_elapsed_sec": 23.478658437728882,
+      "wav": "anchor_umi.wav",
+      "wav_sha256": "ef7334de36d9583d23336abc9905aa6fc7080260924eb8bca96ce0cf64e6f205",
+      "samples_sha256": "9730cb8ff79ff981804a244ca4bd3b067a33f19fa9bb48af7a0d00a28855f19b",
+      "n_samples": 489984,
+      "duration_s": 11.110748299319727,
+      "peak_raw": 0.08363371342420578,
+      "normalized": false,
+      "input_meta": {
+        "input_tail_sp_frames": 8,
+        "commanded_note_frames": 176,
+        "note_target_frames": [
+          59,
+          59,
+          117,
+          59,
+          59,
+          59,
+          117,
+          59,
+          59,
+          59,
+          59,
+          176
+        ],
+        "final_phone_dur": [
+          59,
+          6,
+          53,
+          41,
+          76,
+          10,
+          49,
+          5,
+          54,
+          59,
+          33,
+          84,
+          59,
+          59,
+          10,
+          49,
+          59,
+          81,
+          95
+        ],
+        "real_phones": [
+          "u",
+          "m",
+          "i",
+          "h",
+          "a",
+          "h",
+          "i",
+          "r",
+          "o",
+          "i",
+          "n",
+          "a",
+          "o",
+          "o",
+          "k",
+          "i",
+          "i",
+          "n",
+          "a"
+        ],
+        "frame_ms": 11.609977324263038,
+        "note_onset_s": 8.974512471655329,
+        "commanded_note_end_s": 11.017868480725625,
+        "score_boundary_s": 11.019967017109874,
+        "tail_window_ms": 300.0
+      },
+      "primary": {
+        "excess_tail_voiced_ms": 0.0,
+        "release_after_score_boundary_ms": 0.0,
+        "tail_f0_persistence": 0.0,
+        "terminal_mel_persistence": 0.001634942054995989
+      },
+      "tail_voiced_frames": 0,
+      "duration": {
+        "r_frames": 81,
+        "i_frames": 95,
+        "target_note_frames": 176,
+        "duration_overshoot_ms": -2.098536384249172
+      },
+      "acoustic": {
+        "hnr_median_db_p1": 8.642529889165706,
+        "hnr_median_db_p2": 8.606402096784523,
+        "hnr_delta_db": -0.036127792381183355,
+        "vowel_drift_l1": 128.52710100143187,
+        "i_reference_distance": null,
+        "N_reference_distance": null,
+        "N_similarity_delta": null
+      },
+      "waveform": {
+        "energy_decay_slope": 3.2855166716717976
+      },
+      "status": "ringing_uncorrected",
+      "primary_corrected": null
+    }
+  ],
+  "score_module_sha256": {
+    "phoneme_jp.py": "9cbc7e1d34771bb0db9a44a2fa1dbd3bbdc96e837afc497b3ca97dade55e70fc",
+    "score.py": "24a6004daeb0b5d02c55c87642c6eac2cb2ca931c97570d1be666b6a57ade116",
+    "score_diag_pf.py": "540b6060de2b821bf60599030ef406ce61acc4fa03354eeaefee9f6fe2f1e20f",
+    "score_umi.py": "59106e629bd523d8f6272e768ff6b96a4fcb22756314f382c865da2e1c68561e"
+  },
+  "dropped_from_cells": {
+    "terminal_mel": "3 対照距離を作る中間生成物。結果（i_reference_distance / N_reference_distance / N_similarity_delta）は各セルに残っている",
+    "score_module_sha256": "全セル同一なので群レベルへ畳んだ（上のキー）"
+  }
+}

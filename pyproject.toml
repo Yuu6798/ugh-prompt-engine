@@ -120,6 +120,23 @@ testpaths = [
     # (2026-08-19 セルフレビュー: 台帳の番人が CI 未収集だった)
     "voice_genesis/foundry/tests/test_genome_ledger_shape.py",
     "voice_genesis/foundry/tests/test_genome_ledger_s4_shape.py",
+    # run 8 (S7) PR-1: 台帳 / B-1 校正 / B-2 裁定代数。import 閉包は numpy + librosa
+    # （どちらも本体の必須依存）だけなので onnxruntime 等の環境依存に触れない
+    "voice_genesis/foundry/tests/test_s7_ledger.py",
+    "voice_genesis/foundry/tests/test_s7_b1_calibration.py",
+    "voice_genesis/foundry/tests/test_s7_b2_algebra.py",
+    "voice_genesis/foundry/tests/test_s7_io_guards.py",
+    # run 8 STEP 6: 校正専用 real-render セットの譜面/命令/manifest 照合。
+    # import 閉包は numpy + soundfile（どちらも本体の必須依存）。
+    "voice_genesis/foundry/tests/test_s7_calib_score.py",
+    # run 8 PR-2: 8-0b probe set の事前登録（36 セル / 360 展開 / 測定仕様 pin）。
+    "voice_genesis/foundry/tests/test_s7_0b_probe_spec.py",
+    # run 8 PR #303 レビュー対応: 1.2 校正音源 manifest の事前登録への結び付け。
+    # import 閉包は numpy + librosa + soundfile（いずれも本体の必須依存）。
+    "voice_genesis/foundry/tests/test_s7_b1_v12_manifest.py",
+    # run 8 PR #303 レビュー第 2 巡: 群 JSON の不変条件 + ONNX↔checkpoint の束縛。
+    "voice_genesis/foundry/tests/test_s7_0b_aggregate_guards.py",
+    "voice_genesis/foundry/tests/test_s7_export_manifest.py",
     # genome_s4 の不変条件（gate 判定 / blind 規律 / rollback / 再配置）。
     # spec / gates / blind は WORLD 非依存に切り出してあるので、pyworld を
     # 入れていない CI でも判定ロジック側は実際に実行される（生成・公開経路の
