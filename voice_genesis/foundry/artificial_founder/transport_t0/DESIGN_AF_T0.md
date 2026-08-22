@@ -1524,18 +1524,28 @@ experiment_id              = AF-T0
 revision                   = 2
 af0_spec_sha256            = c477fd5a9ec2ac3dd97f2c7ea076568acce19b53c28eed5c10175cc807b5e8d4
 p0_code_closure_sha256     = eb3575fdc3ba95a09711005a86db01c4b39f5c61d4a4d0a7f3516b358f2e917a
-t0_code_closure_sha256     = 2e5441bba1dab467b1abb6858894e013c6ae6efcc1a31f2082f7b6609757a3c1
+t0_code_closure_sha256     = 6834aa58961eb9788d080ccac68033fa04af03376a8e85803e8fb475b29a8ead
 t0_criteria_sha256         = 1e3053849fa2fb1606b54cdc63906a0965f488774f7ad0cf5eb9691b693d1554
 calibration_sha256         = 10dcdb53cfe89f31a898f70c1c158562a92b3fd42876174dd5442073b2223e41
 holdout_sha256             = f45cedda70150344b84ac91eb62a757032334583f5b7a443e20fb63e502c1c00
 sidecar_digest             = 899f23eed69dca371a24d7b00b25013d7f7ac422af778198fa8d19ef0949c8a7
 transport_config_digest    = 8ce2a183534f3bab28ef1a246b3659c4c16576e00644b0321a9667d450e3aedd
-base_commit                = 5f8bb29accc6fe4fc81d89e961962a531838286f
+af0_body_identity_digest   = 5a5702cb453768265c390fc2eeabd3a07dad6194c0a6a426eedc0df239a7d6ec
+base_commit                = a340c86736791c81c77391396f445793340e7a95
 python                     = 3.11.15
 numpy                      = 2.4.6
 soundfile                  = 0.14.0
 libsndfile                 = 1.2.2
+scipy                      = 1.17.1
+pyworld                    = 0.3.5
+t0_code_closure_pinned_before_run = True
+t0_code_closure_verified          = True
 ```
+
+`t0_code_closure_*` の 2 つは「閉包を **走行前** に pin し、走行後の再ハッシュと
+一致した」ことを表す（レビュー第 10 巡）。走行中に T0 のソースが変われば
+`T0_CODE_DRIFT_DURING_RUN` で FAILED になるので、**記録された閉包は結果を
+生んだコードそのもの**である。
 
 AF-P0 成果物 6 点は凍結 SHA と 1 件ずつ照合済み（T0-G0 = PASS）。
 `p0_paths_unmodified = True`
@@ -1544,7 +1554,7 @@ AF-P0 成果物 6 点は凍結 SHA と 1 件ずつ照合済み（T0-G0 = PASS）
 ## C-7 Code closure（§28）
 
 推移的閉包 **29 ファイル**、
-aggregate digest = `2e5441bba1dab467b1abb6858894e013c6ae6efcc1a31f2082f7b6609757a3c1`。
+aggregate digest = `6834aa58961eb9788d080ccac68033fa04af03376a8e85803e8fb475b29a8ead`。
 `transport_t0/` を起点に `artificial_founder/af_*.py` → `adapter/*.py` →
 `singer/phoneme_jp.py` まで到達している（§28 の「最低」条件を満たす）。
 
@@ -1560,6 +1570,48 @@ drift が無い。
 記録**の価値が上回ると判断した。closeout テストはマニフェストと出荷物の
 **双方向**（名指しされた全ファイルが存在し一致する / 出荷物が全て載っている）を
 検査する。
+## C-7b canonical run の実行履歴（計器欠陥 1 件の開示）
+
+canonical 判定を得るまでに run を 4 回要した。**実験側の観測は第 2 回以降すべて
+同一**で、差はいずれも計器（記録・監査）側にある。隠さず記録する。
+
+| run | 結果 | 差分の所在 |
+|---|---|---|
+| 1 | 中断（`ndarray` 非直列化） | 記録側。書き出し前ガード `require_json_safe()` で恒久化 |
+| 2 | `NOT_ESTABLISHED` | 実験側の観測がここで確定 |
+| 3 | `FAILED` / `PROVENANCE_FAILURE` | **計器欠陥**。下記 |
+| 4 | `NOT_ESTABLISHED`（**canonical**） | 計器欠陥を是正。実験側 Gate は 2 と同一 |
+
+### 第 3 回で露見した計器欠陥
+
+第 9 巡で source-free を「宣言」から「実測 tripwire」へ変えた後、**実際に
+tripwire を走らせた最初の run** が第 3 回だった。T0-G9 が violation 564 件を
+検出して FAILED になったが、全件を分類すると **外部音源ゼロ・
+`network_attempts` も空**で、2 種類の偽陽性だった。
+
+```text
+550 件  /tmp/t0_pcm_<rand>/*.wav   自分が数ミリ秒前に書いた PCM16 の読み直し
+ 14 件  *.egg-info/PKG-INFO        pkg_resources の配布メタデータ走査
+```
+
+前者は `evaluate_config` の 3 箇所が `publish_dir` を渡さず
+`tempfile.mkdtemp` にフォールバックしていたため、§5 が要求する S5 往復の
+読み直しが「宣言外パスの `.wav`」として数えられていた。**allowlist を広げず、
+書き出し先を監査済み tmp 配下へ寄せる**方向で是正した（監査境界を緩めない）。
+後者は `*.egg-info/` `*.dist-info/` 配下の既知メタデータ名に限って許可し、
+attestation の `additional_allowed_reads` に明示宣言した。
+
+### これは「PASS するまでの調整」ではない
+
+形質・operator・許容値・選択規律はいずれも変更していない。第 3 回と第 4 回で
+**実験側 Gate は完全に同一**（G3 PASS / G4 FAIL / G5 FAIL / G7 FAIL /
+G10 FAIL）で、差は G9 のみである。`FAILED` のまま凍結すると「実験機構が
+壊れた」という誤った記録になり、実際に得られている結論
+（Duration は輸送できる / Energy・AG-α は輸送できない）を偽ることになる。
+
+第 4 回の監査実測値: `enforced=True` / `n_violations=0` /
+`n_network_attempts=0` / `verdict=PASS`。
+
 ## C-8 未使用候補と設計留保（A1 / D2）
 
 **A1 と D2 は rev2 canonical run で選択されていない。** したがって本判定に

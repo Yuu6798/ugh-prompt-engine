@@ -1,0 +1,1 @@
+{"fit_inputs":"calibration_only","gain_db":-0.343148,"gain_linear":0.961263864,"n_rows":2,"operator":"E1","rows":[{"body_dbfs":-17.995291716438157,"delta_db":-1.580496,"id":"en_lo","reexpressed_dbfs":-16.41479595904308},{"body_dbfs":-6.239403856330574,"delta_db":0.8942,"id":"en_hi","reexpressed_dbfs":-7.133604280243944}],"spread_db":2.474696}
